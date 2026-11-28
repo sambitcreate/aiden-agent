@@ -15,7 +15,12 @@ export type AcpHarnessRuntimeStatus =
   | "update_available"
   | "failed";
 
-export type AcpHarnessInstallPhase = "downloading" | "verifying" | "extracting" | "validating" | "activating";
+export type AcpHarnessInstallPhase =
+  | "downloading"
+  | "verifying"
+  | "extracting"
+  | "validating"
+  | "activating";
 
 export interface AcpHarnessStatus {
   providerId: string;
@@ -47,10 +52,18 @@ const STATUSES: ReadonlySet<string> = new Set([
   "update_available",
   "failed",
 ]);
-const PHASES: ReadonlySet<string> = new Set(["downloading", "verifying", "extracting", "validating", "activating"]);
+const PHASES: ReadonlySet<string> = new Set([
+  "downloading",
+  "verifying",
+  "extracting",
+  "validating",
+  "activating",
+]);
 
 function record(value: unknown): Record<string, unknown> | undefined {
-  return value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : undefined;
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : undefined;
 }
 
 function count(value: unknown): number | undefined {
@@ -63,7 +76,10 @@ function text(value: unknown, limit: number): string | undefined {
 
 function hostname(value: unknown): string | undefined {
   const host = text(value, 253);
-  return host && /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)*$/u.test(host) ? host : undefined;
+  return host &&
+    /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)*$/u.test(host)
+    ? host
+    : undefined;
 }
 
 export function parseAcpHarnessStatus(value: unknown): AcpHarnessStatus | undefined {
@@ -73,7 +89,10 @@ export function parseAcpHarnessStatus(value: unknown): AcpHarnessStatus | undefi
   if (!input || !runtime || !providerId || !/^[a-z0-9-]+$/u.test(providerId)) return undefined;
   if (typeof runtime.status !== "string" || !STATUSES.has(runtime.status)) return undefined;
   if (typeof input.signedIn !== "boolean" || typeof input.busy !== "boolean") return undefined;
-  const phase = typeof runtime.phase === "string" && PHASES.has(runtime.phase) ? (runtime.phase as AcpHarnessInstallPhase) : undefined;
+  const phase =
+    typeof runtime.phase === "string" && PHASES.has(runtime.phase)
+      ? (runtime.phase as AcpHarnessInstallPhase)
+      : undefined;
   const optional = {
     version: text(runtime.version, 32),
     installedVersion: text(runtime.installedVersion, 32),
@@ -153,7 +172,9 @@ export function harnessRuntimeSummary(status: AcpHarnessStatus["runtime"]): stri
  * runtime, so sign-in waits for a current install. Nothing is said while the
  * status is still loading (the runtime section says it is checking).
  */
-export function harnessSignInHint(status: AcpHarnessStatus["runtime"] | null | undefined): string | undefined {
+export function harnessSignInHint(
+  status: AcpHarnessStatus["runtime"] | null | undefined,
+): string | undefined {
   switch (status?.status) {
     case undefined:
     case "installed":
@@ -177,7 +198,9 @@ const HARNESS_LABELS: Record<string, string> = { antigravity: "Google Antigravit
  * only in chats open on this computer, where someone can answer approvals:
  * never in Bots, scheduled tasks, Telegram, subagents, or phone-started runs.
  */
-export function acpHarnessUnavailableReason(providerId: string | undefined | null): string | undefined {
+export function acpHarnessUnavailableReason(
+  providerId: string | undefined | null,
+): string | undefined {
   if (!providerId || !isAcpHarnessProvider(providerId)) return undefined;
   const label = HARNESS_LABELS[providerId] ?? "This provider";
   return `${label} runs only in chats you have open on this computer. Choose another model here.`;
@@ -213,7 +236,8 @@ export function acpHarnessReadinessMessage(
   if (!isAcpHarnessProvider(provider.id)) return undefined;
   const blocked = acpHarnessChatReason(provider.id, provider.label, surface);
   if (blocked) return blocked;
-  if (provider.needsKey && !provider.hasKey) return `Sign in to ${provider.label} in Settings → Providers to use it.`;
+  if (provider.needsKey && !provider.hasKey)
+    return `Sign in to ${provider.label} in Settings → Providers to use it.`;
   return undefined;
 }
 
@@ -222,6 +246,8 @@ export function acpHarnessReadinessMessage(
  * surfaces (schedules, Telegram, dictation cleanup) fall back to it and must
  * never inherit a provider that cannot run without someone watching.
  */
-export function unattendedFallbackProviderId(lastProviderId: string | undefined | null): string | undefined {
+export function unattendedFallbackProviderId(
+  lastProviderId: string | undefined | null,
+): string | undefined {
   return lastProviderId && !isAcpHarnessProvider(lastProviderId) ? lastProviderId : undefined;
 }

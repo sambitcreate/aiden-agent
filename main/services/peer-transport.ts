@@ -116,9 +116,7 @@ export function peerTlsOptions(trust: PeerTrust): {
     rejectUnauthorized: true,
     ...(trust.caCertificateDerBase64
       ? {
-          ca: new X509Certificate(
-            Buffer.from(trust.caCertificateDerBase64, "base64"),
-          ).toString(),
+          ca: new X509Certificate(Buffer.from(trust.caCertificateDerBase64, "base64")).toString(),
         }
       : {}),
     checkServerIdentity: (hostname, certificate) => {
@@ -151,24 +149,16 @@ export class PeerEventFrames {
   private total = 0;
   private frames = 0;
   private decoder = new TextDecoder("utf-8", { fatal: true });
-  push(
-    chunk: Buffer,
-    onFrame: (frame: string) => void,
-    onBoundary: () => void,
-  ): void {
+  push(chunk: Buffer, onFrame: (frame: string) => void, onBoundary: () => void): void {
     for (const byte of chunk) {
-      if (++this.total > 16 * MAX_FRAME_BYTES)
-        throw new Error("Stream byte budget exceeded.");
-      if (this.length >= this.buffer.length)
-        throw new Error("Frame too large.");
+      if (++this.total > 16 * MAX_FRAME_BYTES) throw new Error("Stream byte budget exceeded.");
+      if (this.length >= this.buffer.length) throw new Error("Frame too large.");
       this.buffer[this.length++] = byte;
       if (byte === 10 && this.previousLf) {
-        if (++this.frames > 16_384)
-          throw new Error("Stream frame budget exceeded.");
+        if (++this.frames > 16_384) throw new Error("Stream frame budget exceeded.");
         const raw = this.buffer.subarray(0, this.length);
         const frame = this.decoder.decode(raw).replace(/\r?\n\r?\n$/u, "");
-        if (Buffer.byteLength(frame) > MAX_FRAME_BYTES)
-          throw new Error("Frame too large.");
+        if (Buffer.byteLength(frame) > MAX_FRAME_BYTES) throw new Error("Frame too large.");
         this.length = 0;
         this.previousLf = false;
         this.betweenCr = false;
@@ -222,7 +212,14 @@ export type PeerTransportErrorCode =
   | "unsupported_protocol";
 
 /** Only fixed categories leave the transport, never OS messages or endpoint text. */
-export type PeerConnectionFailure = "timeout" | "dns" | "refused" | "network" | "tls" | "unreachable" | "invalid_response";
+export type PeerConnectionFailure =
+  | "timeout"
+  | "dns"
+  | "refused"
+  | "network"
+  | "tls"
+  | "unreachable"
+  | "invalid_response";
 
 export function peerConnectionFailure(error: unknown): PeerConnectionFailure {
   if (isPeerIdentityTlsError(error)) return "tls";
@@ -231,7 +228,11 @@ export function peerConnectionFailure(error: unknown): PeerConnectionFailure {
   if (code === "ECONNREFUSED") return "refused";
   if (code === "ETIMEDOUT" || code === "ESOCKETTIMEDOUT") return "timeout";
   if (code === "ENETUNREACH" || code === "EHOSTUNREACH" || code === "ENETDOWN") return "network";
-  if (typeof code === "string" && (code.startsWith("ERR_TLS_") || code.startsWith("ERR_SSL_") || code.startsWith("CERT_"))) return "tls";
+  if (
+    typeof code === "string" &&
+    (code.startsWith("ERR_TLS_") || code.startsWith("ERR_SSL_") || code.startsWith("CERT_"))
+  )
+    return "tls";
   return "unreachable";
 }
 
@@ -265,12 +266,13 @@ export class PeerTransportError extends Error {
           ? "The other device's identity changed. Pair it again."
           : code === "unsupported_protocol"
             ? "The other device runs an incompatible Aiden version."
-          : code === "request_failed" && remote?.message
-            ? remote.message
-          : "The other device could not complete this request.",
+            : code === "request_failed" && remote?.message
+              ? remote.message
+              : "The other device could not complete this request.",
     );
     if (options?.identitySource !== undefined) this.identitySource = options.identitySource;
-    if (options?.retryableIdentity !== undefined) this.retryableIdentity = options.retryableIdentity;
+    if (options?.retryableIdentity !== undefined)
+      this.retryableIdentity = options.retryableIdentity;
   }
 
   withRetryableIdentity(retryable: boolean): PeerTransportError {
@@ -291,24 +293,18 @@ export function parsePeerErrorEnvelope(text: string): PeerRemoteError | undefine
     const error = value?.error;
     if (!error || typeof error !== "object") return undefined;
     const code = error.code;
-    if (
-      typeof code !== "string" ||
-      !(AIDEN_REMOTE_ERROR_CODES as readonly string[]).includes(code)
-    )
+    if (typeof code !== "string" || !(AIDEN_REMOTE_ERROR_CODES as readonly string[]).includes(code))
       return undefined;
     const raw =
       error.details && typeof error.details === "object"
         ? (error.details as Record<string, unknown>)
         : {};
     const details: NonNullable<PeerRemoteError["details"]> = {};
-    if (raw.decision === "allow" || raw.decision === "deny")
-      details.decision = raw.decision;
-    if (raw.outcome === "answered" || raw.outcome === "expired")
-      details.outcome = raw.outcome;
+    if (raw.decision === "allow" || raw.decision === "deny") details.decision = raw.decision;
+    if (raw.outcome === "answered" || raw.outcome === "expired") details.outcome = raw.outcome;
     for (const key of ["resolvedAt", "currentRevision"] as const) {
       const field = raw[key];
-      if (typeof field === "string" && /^[\x21-\x7e]{1,128}$/u.test(field))
-        details[key] = field;
+      if (typeof field === "string" && /^[\x21-\x7e]{1,128}$/u.test(field)) details[key] = field;
     }
     const retryAfter = raw.retryAfterSeconds;
     if (
@@ -320,7 +316,10 @@ export function parsePeerErrorEnvelope(text: string): PeerRemoteError | undefine
       details.retryAfterSeconds = retryAfter;
     const message =
       typeof error.message === "string"
-        ? error.message.replace(/[\p{Cc}\p{Cf}]+/gu, " ").replace(/\s+/gu, " ").trim()
+        ? error.message
+            .replace(/[\p{Cc}\p{Cf}]+/gu, " ")
+            .replace(/\s+/gu, " ")
+            .trim()
         : "";
     return {
       code,
@@ -375,9 +374,7 @@ export function validatePeerTrust(trust: PeerTrust): PeerTrust {
     ) {
       throw new Error("Invalid server trust certificate.");
     }
-    const cert = new X509Certificate(
-      Buffer.from(trust.caCertificateDerBase64, "base64"),
-    );
+    const cert = new X509Certificate(Buffer.from(trust.caCertificateDerBase64, "base64"));
     if (!cert.ca) throw new Error("Server trust certificate must be a CA.");
   }
   return { ...trust };
@@ -396,10 +393,7 @@ export function peerRequestUrl(endpoint: string, route: string): URL {
   }
   const result = new URL(`${endpoint}${route}`);
   const base = new URL(endpoint);
-  if (
-    result.origin !== base.origin ||
-    !result.pathname.startsWith(`${base.pathname}/`)
-  ) {
+  if (result.origin !== base.origin || !result.pathname.startsWith(`${base.pathname}/`)) {
     throw new Error("Peer operation escaped its API endpoint.");
   }
   return result;
@@ -430,8 +424,7 @@ function headers(input: PeerRequest, mode: ReadMode): Record<string, string> {
     ["Last-Event-ID", input.lastEventId],
   ] as const) {
     if (value !== undefined) {
-      if (!/^[\x21-\x7e]{1,128}$/u.test(value))
-        throw new Error("Invalid peer operation metadata.");
+      if (!/^[\x21-\x7e]{1,128}$/u.test(value)) throw new Error("Invalid peer operation metadata.");
       result[name] = value;
     }
   }
@@ -481,12 +474,8 @@ export class PeerTransport {
       : input.body === undefined
         ? undefined
         : Buffer.from(JSON.stringify(input.body));
-    const maxBodyBytes = Math.min(
-      input.maxBodyBytes ?? MAX_JSON_BYTES,
-      MAX_PEER_UPLOAD_BYTES,
-    );
-    if (body && body.length > maxBodyBytes)
-      throw new Error("Peer request is too large.");
+    const maxBodyBytes = Math.min(input.maxBodyBytes ?? MAX_JSON_BYTES, MAX_PEER_UPLOAD_BYTES);
+    if (body && body.length > maxBodyBytes) throw new Error("Peer request is too large.");
     if (body) {
       requestHeaders["Content-Type"] = raw?.contentType ?? "application/json";
       requestHeaders["Content-Length"] = String(body.length);
@@ -593,11 +582,9 @@ export class PeerTransport {
             if (settled) return;
             try {
               bytes += chunk.length;
-              if (mode === "json" && bytes > MAX_JSON_BYTES)
-                throw new Error("Response too large.");
+              if (mode === "json" && bytes > MAX_JSON_BYTES) throw new Error("Response too large.");
               if (mode === "binary") {
-                if (bytes > MAX_PEER_BINARY_BYTES)
-                  throw new Error("Response too large.");
+                if (bytes > MAX_PEER_BINARY_BYTES) throw new Error("Response too large.");
                 binary.push(chunk);
               } else if (frames && onFrame) {
                 frames.push(chunk, onFrame, frameBoundary);
@@ -630,12 +617,8 @@ export class PeerTransport {
               fail(new PeerTransportError("invalid_response", status));
             }
           });
-          response.on("error", () =>
-            finish(new PeerTransportError("unavailable")),
-          );
-          response.on("aborted", () =>
-            finish(new PeerTransportError("unavailable")),
-          );
+          response.on("error", () => finish(new PeerTransportError("unavailable")));
+          response.on("aborted", () => finish(new PeerTransportError("unavailable")));
         },
       );
       const abort = () => {
@@ -677,10 +660,7 @@ export class PeerTransport {
   binary(input: PeerRequest): Promise<PeerBinary> {
     return this.read(input, "binary") as Promise<PeerBinary>;
   }
-  events(
-    input: PeerRequest,
-    onFrame: (frame: string) => void,
-  ): Promise<PeerStreamEnd> {
+  events(input: PeerRequest, onFrame: (frame: string) => void): Promise<PeerStreamEnd> {
     return this.read(input, "events", onFrame) as Promise<PeerStreamEnd>;
   }
 }

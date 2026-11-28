@@ -111,7 +111,10 @@ export function parseChatForkLineageV1(value: unknown): ChatForkLineageV1 | unde
   if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
   const record = value as Record<string, unknown>;
   const keys = Object.keys(record).filter((key) => key !== "summary");
-  if (keys.length !== 4 || !["chatId", "messageId", "position", "at"].every((key) => keys.includes(key))) {
+  if (
+    keys.length !== 4 ||
+    !["chatId", "messageId", "position", "at"].every((key) => keys.includes(key))
+  ) {
     return undefined;
   }
   const chatId = lineageId(record.chatId);
@@ -168,11 +171,14 @@ export function nextForkTitle(sourceTitle: string, existingTitles: Iterable<stri
     const siblingBase = forkTitleBase(title);
     // A long base was cut to fit its suffix, so a full-length sibling still
     // counts when its base is a prefix of ours.
-    const truncated = Array.from(title).length >= MAX_CHAT_TITLE_CHARS && base.startsWith(siblingBase);
+    const truncated =
+      Array.from(title).length >= MAX_CHAT_TITLE_CHARS && base.startsWith(siblingBase);
     if (siblingBase !== base && !truncated) continue;
     highest = Math.max(highest, match[1] ? Number(match[1]) : 1);
   }
   const suffix = highest === 0 ? " (fork)" : ` (fork ${highest + 1})`;
   const maximumBaseLength = Math.max(1, MAX_CHAT_TITLE_CHARS - suffix.length);
-  return `${Array.from(base.slice(0, maximumBaseLength * 2)).slice(0, maximumBaseLength).join("")}${suffix}`;
+  return `${Array.from(base.slice(0, maximumBaseLength * 2))
+    .slice(0, maximumBaseLength)
+    .join("")}${suffix}`;
 }

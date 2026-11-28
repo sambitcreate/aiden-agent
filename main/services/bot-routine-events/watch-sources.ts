@@ -13,12 +13,32 @@
 
 import { promises as fs } from "node:fs";
 import path from "node:path";
-import { BOT_WATCH_LIMITS, parseBotWatchUrl, type BotWatchSource } from "../../../renderer/shared/bot-routine-trigger.js";
+import {
+  BOT_WATCH_LIMITS,
+  parseBotWatchUrl,
+  type BotWatchSource,
+} from "../../../renderer/shared/bot-routine-trigger.js";
 import { isPathInside } from "../../shared/path-containment.js";
 import { runScheduledScript, type ScriptProcessResult } from "../schedule-script.js";
 
-export interface BotWatchPublication { signal:AbortSignal; guard:import("./store.js").BotEventPublicationGuard; release():void }
-export type BotWatchCheck = { ok: true; publication?:BotWatchPublication; bytes: Uint8Array; connector?: { baseline: import("./connector-types.js").BotConnectorWatchBaseline; itemCount: number; changeCount: number; payload: string } } | { ok: false; error: string; pause?: boolean; skipped?: boolean };
+export interface BotWatchPublication {
+  signal: AbortSignal;
+  guard: import("./store.js").BotEventPublicationGuard;
+  release(): void;
+}
+export type BotWatchCheck =
+  | {
+      ok: true;
+      publication?: BotWatchPublication;
+      bytes: Uint8Array;
+      connector?: {
+        baseline: import("./connector-types.js").BotConnectorWatchBaseline;
+        itemCount: number;
+        changeCount: number;
+        payload: string;
+      };
+    }
+  | { ok: false; error: string; pause?: boolean; skipped?: boolean };
 
 type FetchLike = (url: string, init: RequestInit) => Promise<Response>;
 
@@ -55,11 +75,15 @@ export async function fetchBotWatchUrl(
         cache: "no-store",
         referrerPolicy: "no-referrer",
         headers: { accept: "*/*" },
-        signal: options.signal ? AbortSignal.any([controller.signal, options.signal]) : controller.signal,
+        signal: options.signal
+          ? AbortSignal.any([controller.signal, options.signal])
+          : controller.signal,
       });
     } catch (error) {
       if (error instanceof WatchAddressRefused) return failed(error.message);
-      return failed(timedOut ? "The check timed out after 30 seconds." : `Aiden couldn't reach ${host}.`);
+      return failed(
+        timedOut ? "The check timed out after 30 seconds." : `Aiden couldn't reach ${host}.`,
+      );
     }
     if (response.type === "opaqueredirect" || (response.status >= 300 && response.status < 400)) {
       await response.body?.cancel().catch(() => undefined);
@@ -91,7 +115,9 @@ export async function fetchBotWatchUrl(
         chunks.push(value);
       }
     } catch {
-      return failed(timedOut ? "The check timed out after 30 seconds." : `The answer from ${host} was cut off.`);
+      return failed(
+        timedOut ? "The check timed out after 30 seconds." : `The answer from ${host} was cut off.`,
+      );
     }
     const bytes = new Uint8Array(total);
     let offset = 0;
@@ -121,7 +147,10 @@ export type BotWatchScriptAuthorizer = () => Promise<BotWatchScriptGrant>;
  * The script's real path when it is a regular file inside the Bot's folder
  * after following links; otherwise why not.
  */
-export async function resolveBotWatchScript(home: string, script: string): Promise<{ path: string } | { error: string }> {
+export async function resolveBotWatchScript(
+  home: string,
+  script: string,
+): Promise<{ path: string } | { error: string }> {
   const missing = { error: `${script} isn't in the Bot's folder.` };
   let realHome: string;
   let realScript: string;
@@ -131,7 +160,8 @@ export async function resolveBotWatchScript(home: string, script: string): Promi
   } catch {
     return missing;
   }
-  if (!isPathInside(realHome, realScript, { allowRoot: false })) return { error: `${script} points outside the Bot's folder.` };
+  if (!isPathInside(realHome, realScript, { allowRoot: false }))
+    return { error: `${script} points outside the Bot's folder.` };
   const stat = await fs.stat(realScript).catch(() => undefined);
   if (!stat?.isFile()) return missing;
   return { path: realScript };
@@ -141,11 +171,18 @@ export async function resolveBotWatchScript(home: string, script: string): Promi
 export async function runBotWatchScript(
   home: string,
   script: string,
-  options: { authorize: BotWatchScriptAuthorizer; run?: BotWatchScriptRunner; timeoutMs?: number; maxBytes?: number; signal?: AbortSignal },
+  options: {
+    authorize: BotWatchScriptAuthorizer;
+    run?: BotWatchScriptRunner;
+    timeoutMs?: number;
+    maxBytes?: number;
+    signal?: AbortSignal;
+  },
 ): Promise<BotWatchCheck> {
   const resolved = await resolveBotWatchScript(home, script);
   if ("error" in resolved) return failed(resolved.error);
-  const run = options.run ?? ((scriptPath, runOptions) => runScheduledScript(scriptPath, runOptions));
+  const run =
+    options.run ?? ((scriptPath, runOptions) => runScheduledScript(scriptPath, runOptions));
   let grant: BotWatchScriptGrant;
   try {
     grant = await options.authorize();
@@ -167,12 +204,17 @@ export async function runBotWatchScript(
   } finally {
     grant.release();
   }
-  if (grant.signal.aborted) return failed(`${script} was stopped because the Bot's Shell access changed.`);
+  if (grant.signal.aborted)
+    return failed(`${script} was stopped because the Bot's Shell access changed.`);
   if (result.timedOut) return failed(`${script} ran longer than 60 seconds.`);
   if (result.outputLimitExceeded) return failed(`${script} printed more than 1 MB.`);
   if (result.aborted) return failed(`${script} was stopped.`);
   if (result.exitCode !== 0) {
-    return failed(result.exitCode === null ? `${script} was stopped by ${result.signal ?? "a signal"}.` : `${script} exited with code ${result.exitCode}.`);
+    return failed(
+      result.exitCode === null
+        ? `${script} was stopped by ${result.signal ?? "a signal"}.`
+        : `${script} exited with code ${result.exitCode}.`,
+    );
   }
   return { ok: true, bytes: new TextEncoder().encode(result.stdout) };
 }
@@ -181,12 +223,27 @@ export async function runBotWatchScript(
 export function checkBotWatchSource(
   source: BotWatchSource,
   home: () => Promise<string>,
-  options: { authorize: BotWatchScriptAuthorizer; fetch?: FetchLike; run?: BotWatchScriptRunner; signal?: AbortSignal },
+  options: {
+    authorize: BotWatchScriptAuthorizer;
+    fetch?: FetchLike;
+    run?: BotWatchScriptRunner;
+    signal?: AbortSignal;
+  },
 ): Promise<BotWatchCheck> {
-  if (source.type === "url") return fetchBotWatchUrl(source.url, { ...(options.fetch ? { fetch: options.fetch } : {}), signal: options.signal });
-  if (source.type === "connector") return Promise.resolve(failed("Connector watches need the computer that runs this Bot."));
+  if (source.type === "url")
+    return fetchBotWatchUrl(source.url, {
+      ...(options.fetch ? { fetch: options.fetch } : {}),
+      signal: options.signal,
+    });
+  if (source.type === "connector")
+    return Promise.resolve(failed("Connector watches need the computer that runs this Bot."));
   return home().then(
-    (folder) => runBotWatchScript(folder, source.script, { authorize: options.authorize, ...(options.run ? { run: options.run } : {}), signal: options.signal }),
+    (folder) =>
+      runBotWatchScript(folder, source.script, {
+        authorize: options.authorize,
+        ...(options.run ? { run: options.run } : {}),
+        signal: options.signal,
+      }),
     () => failed("Aiden couldn't find the Bot's folder."),
   );
 }

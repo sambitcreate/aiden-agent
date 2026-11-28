@@ -148,9 +148,7 @@ export function todoPanelHasVisibleChrome(snapshot: TodoSnapshotViewV1 | null): 
   if (snapshot.availability === "unavailable") {
     return snapshot.unavailableReason !== "storage_not_enabled";
   }
-  return snapshot.tasks.some(
-    (task) => task.status !== "deleted" && task.status !== "completed",
-  );
+  return snapshot.tasks.some((task) => task.status !== "deleted" && task.status !== "completed");
 }
 
 export function TodoPanel({
@@ -190,9 +188,7 @@ export function TodoPanel({
           </HoverCardTrigger>
           <HoverCardContent align="center" side="top" className="w-[min(28rem,calc(100vw-2rem))]">
             <p className="text-small-strong text-primary">{title}</p>
-            <p className="mt-1 text-small leading-relaxed text-secondary">
-              {explanation}
-            </p>
+            <p className="mt-1 text-small leading-relaxed text-secondary">{explanation}</p>
           </HoverCardContent>
         </HoverCard>
       </>,
@@ -249,7 +245,9 @@ export function TodoPanel({
             <span aria-hidden="true" className="text-tertiary">
               ·
             </span>
-            <span className="line-clamp-1 min-w-0 text-left text-secondary [overflow-wrap:anywhere]">{chipDetail}</span>
+            <span className="line-clamp-1 min-w-0 text-left text-secondary [overflow-wrap:anywhere]">
+              {chipDetail}
+            </span>
           </button>
         </HoverCardTrigger>
         <HoverCardContent

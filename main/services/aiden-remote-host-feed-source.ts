@@ -47,7 +47,8 @@ export function createAidenRemoteHostFeedSource(
         inputs.approvalMode ? inputs.approvalMode() : Promise.resolve("ask" as const),
       ]);
       const bots = botList?.bots ?? [];
-      const signals = bots.length > 0 && inputs.botSignals ? await inputs.botSignals(bots) : undefined;
+      const signals =
+        bots.length > 0 && inputs.botSignals ? await inputs.botSignals(bots) : undefined;
       return {
         summaries,
         botChatIds,

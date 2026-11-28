@@ -317,9 +317,7 @@ export class AuthenticatedBridgeTransport implements McpTransport {
   private readonly handleData = (chunk: Buffer) => {
     try {
       this.decoder.consume(chunk, (frame) => {
-        const message = parseJsonRpcMessage(
-          JSON.parse(frame.toString("utf8")),
-        );
+        const message = parseJsonRpcMessage(JSON.parse(frame.toString("utf8")));
         this.emitMessage(message);
       });
     } catch (error) {
@@ -413,10 +411,7 @@ export class CuaDriverSession {
     return this.tools.get(tool)?.capabilities.has(capability) ?? false;
   }
 
-  async connect(
-    signal?: AbortSignal,
-    deadline = Date.now() + CONNECT_TIMEOUT_MS,
-  ): Promise<void> {
+  async connect(signal?: AbortSignal, deadline = Date.now() + CONNECT_TIMEOUT_MS): Promise<void> {
     if (this.state !== "new") {
       if (this.state === "ready") return;
       throw new CuaDriverError(
@@ -429,7 +424,11 @@ export class CuaDriverSession {
       throw cancellationError(signal, "Computer Use startup was cancelled.");
     }
     this.state = "connecting";
-    const client = new McpClient({ name: "aiden-agent-computer-use", version: "1.0.0", capabilities: {} });
+    const client = new McpClient({
+      name: "aiden-agent-computer-use",
+      version: "1.0.0",
+      capabilities: {},
+    });
     client.onClose(() => {
       if (this.client !== client) return;
       this.client = null;
@@ -445,7 +444,12 @@ export class CuaDriverSession {
         }),
       );
       const listing = await withRequestSignal(signal, (requestSignal) =>
-        mcpRequest<unknown>(client, "tools/list", {}, { signal: requestSignal, timeoutMs: remainingMilliseconds(deadline) })
+        mcpRequest<unknown>(
+          client,
+          "tools/list",
+          {},
+          { signal: requestSignal, timeoutMs: remainingMilliseconds(deadline) },
+        )
           .then((listing) => CUA_LIST_TOOLS_RESULT_SCHEMA.parse(listing))
           .catch((error: unknown) => {
             if (

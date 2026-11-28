@@ -21,7 +21,10 @@ function canonical(value: unknown): string {
   }
   if (Array.isArray(value)) return `[${value.map(canonical).join(",")}]`;
   const record = value as Record<string, unknown>;
-  return `{${Object.keys(record).sort().map((key) => `${JSON.stringify(key)}:${canonical(record[key])}`).join(",")}}`;
+  return `{${Object.keys(record)
+    .sort()
+    .map((key) => `${JSON.stringify(key)}:${canonical(record[key])}`)
+    .join(",")}}`;
 }
 
 export function botCredentialSignature(key: Uint8Array, domain: string, value: unknown): string {
@@ -46,10 +49,7 @@ export function createBotProviderCredentialSignatureCore(
     if (provider.isBuiltin) {
       if (provider.needsKey === true) {
         const stored = await dependencies.readBuiltinCredential(provider.id);
-        if (
-          !stored ||
-          (stored.type === "api_key" && !stored.key?.trim())
-        ) return undefined;
+        if (!stored || (stored.type === "api_key" && !stored.key?.trim())) return undefined;
         // OAuth subscription logins refresh their access token in place; sign
         // the grant, not the token, so a refresh is not a credential change.
         credential = { source: "stored", value: piCredentialGrantIdentity(stored) };

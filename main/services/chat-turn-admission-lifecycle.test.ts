@@ -20,24 +20,21 @@ function run(events: ChatTurnEvent[], from = INITIAL_CHAT_TURN_LIFECYCLE) {
     const next = transitionChatTurn(state, event);
     state = next.state;
     for (const effect of next.effects) {
-      effects.push(effect.type === "budget"
-        ? `${effect.pool}:${effect.turns}:${effect.bytes}`
-        : effect.type);
+      effects.push(
+        effect.type === "budget" ? `${effect.pool}:${effect.turns}:${effect.bytes}` : effect.type,
+      );
     }
   }
   return { state, effects };
 }
 
 test("expiry before settlement refunds nothing until the admitted work settles", () => {
-  const revoked = run([
-    { type: "reserve-append", bytes: 10, pool: roomy },
-    { type: "revoke" },
-  ]);
+  const revoked = run([{ type: "reserve-append", bytes: 10, pool: roomy }, { type: "revoke" }]);
   assert.deepEqual(revoked.effects, ["append:1:10", "revoked"]);
-  assert.deepEqual(
-    run([{ type: "settle", retainAppend: false }], revoked.state).effects,
-    ["append:-1:-10", "finalize"],
-  );
+  assert.deepEqual(run([{ type: "settle", retainAppend: false }], revoked.state).effects, [
+    "append:-1:-10",
+    "finalize",
+  ]);
 });
 
 test("a retained receipt is refunded only when its lease ends", () => {
@@ -81,10 +78,7 @@ test("a revoke during registration waits for its outcome", () => {
     ["skill:-1:-50", "finalize"],
     "With no generation, the lease still holds the charge and refunds it",
   );
-  assert.deepEqual(
-    run([{ type: "registration-succeeded" }], revoked.state).effects,
-    ["finalize"],
-  );
+  assert.deepEqual(run([{ type: "registration-succeeded" }], revoked.state).effects, ["finalize"]);
 });
 
 test("slots are frozen during registration so custody bytes cannot go stale", () => {
@@ -120,7 +114,11 @@ test("handoff needs live authority and settled preparation", () => {
 test("reservations reject malformed bytes and full pools without a charge", () => {
   for (const bytes of [-1, 1.5, Number.NaN, Number.MAX_SAFE_INTEGER + 1]) {
     assert.equal(
-      transitionChatTurn(INITIAL_CHAT_TURN_LIFECYCLE, { type: "reserve-append", bytes, pool: roomy }).rejected,
+      transitionChatTurn(INITIAL_CHAT_TURN_LIFECYCLE, {
+        type: "reserve-append",
+        bytes,
+        pool: roomy,
+      }).rejected,
       "unavailable",
     );
   }
@@ -128,7 +126,11 @@ test("reservations reject malformed bytes and full pools without a charge", () =
     { ...roomy, turns: 4 },
     { ...roomy, bytes: 91 },
   ]) {
-    const result = transitionChatTurn(INITIAL_CHAT_TURN_LIFECYCLE, { type: "reserve-append", bytes: 10, pool });
+    const result = transitionChatTurn(INITIAL_CHAT_TURN_LIFECYCLE, {
+      type: "reserve-append",
+      bytes: 10,
+      pool,
+    });
     assert.equal(result.rejected, "capacity");
     assert.deepEqual(result.effects, []);
   }
@@ -203,7 +205,11 @@ function assertPoolIsWhole(admission: ChatTurnAdmission, label: string): void {
     begin(index).reserveAppendPayload(index === 0 ? MAX_APPEND_BYTES : 0);
   }
   const overAppend = begin(MAX_TURNS);
-  assert.throws(() => overAppend.reserveAppendPayload(0), /Too many messages/u, `${label}: append turns`);
+  assert.throws(
+    () => overAppend.reserveAppendPayload(0),
+    /Too many messages/u,
+    `${label}: append turns`,
+  );
   leases.splice(0).forEach(end);
   const byteProbe = begin(0);
   assert.throws(
@@ -302,20 +308,23 @@ test("generated event orders keep one owner per chat and exact pool accounting",
         const lease = anyLease();
         if (!lease) return;
         const mode = pick(["plain", "throws", "releases", "refunds", "nested"]);
-        attempt(() => admission.handoff(lease.chatId, lease.turnId, lease.ownerId, (_skill, refund) => {
-          registrationsByTurn.set(lease.turnId, (registrationsByTurn.get(lease.turnId) ?? 0) + 1);
-          if (mode === "throws") {
-            registrationsByTurn.set(lease.turnId, registrationsByTurn.get(lease.turnId)! - 1);
+        attempt(() =>
+          admission.handoff(lease.chatId, lease.turnId, lease.ownerId, (_skill, refund) => {
+            registrationsByTurn.set(lease.turnId, (registrationsByTurn.get(lease.turnId) ?? 0) + 1);
+            if (mode === "throws") {
+              registrationsByTurn.set(lease.turnId, registrationsByTurn.get(lease.turnId)! - 1);
+              generationRefunds.push(refund);
+              throw new Error("registration failed");
+            }
             generationRefunds.push(refund);
-            throw new Error("registration failed");
-          }
-          generationRefunds.push(refund);
-          if (mode === "releases") lease.release();
-          if (mode === "refunds") refund();
-          if (mode === "nested") admission.handoff(lease.chatId, lease.turnId, lease.ownerId, () => {
-            registrationsByTurn.set(lease.turnId, registrationsByTurn.get(lease.turnId)! + 1);
-          });
-        }));
+            if (mode === "releases") lease.release();
+            if (mode === "refunds") refund();
+            if (mode === "nested")
+              admission.handoff(lease.chatId, lease.turnId, lease.ownerId, () => {
+                registrationsByTurn.set(lease.turnId, registrationsByTurn.get(lease.turnId)! + 1);
+              });
+          }),
+        );
       },
     };
     const names = Object.keys(actions);

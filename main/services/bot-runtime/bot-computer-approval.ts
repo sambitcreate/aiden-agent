@@ -18,15 +18,32 @@
 // Command-Delete): its intent can make any class a click's can, and pressing
 // Return to send a message is sending.
 
-import type { BotComputerDriverFacts, BotComputerElement } from "../bot-computers/computer-elements.js";
-import { BOT_COMPUTER_MUTATING_ACTIONS, botComputerIntentOf, isBotComputerAction } from "../bot-computers/computer-schema.js";
-import { botComputerChordEditsText, botComputerChordErases } from "../bot-computers/computer-keystrokes.js";
+import type {
+  BotComputerDriverFacts,
+  BotComputerElement,
+} from "../bot-computers/computer-elements.js";
+import {
+  BOT_COMPUTER_MUTATING_ACTIONS,
+  botComputerIntentOf,
+  isBotComputerAction,
+} from "../bot-computers/computer-schema.js";
+import {
+  botComputerChordEditsText,
+  botComputerChordErases,
+} from "../bot-computers/computer-keystrokes.js";
 import type { BotToolCallCheck } from "./bot-extension.js";
 import type { BotLiveApproval } from "./bot-tool-assembly.js";
 
 const ELEMENT_CLICKS = new Set(["click", "double_click", "right_click"]);
 /** Roles that take typed text: text fields and areas (secure and search fields among them) and combo boxes. */
-const TEXT_ENTRY_ROLES = ["textfield", "textarea", "searchfield", "combobox", "textbox", "searchbox"];
+const TEXT_ENTRY_ROLES = [
+  "textfield",
+  "textarea",
+  "searchfield",
+  "combobox",
+  "textbox",
+  "searchbox",
+];
 
 function takesText(element: BotComputerElement | undefined): boolean {
   const role = (element?.role ?? "").toLowerCase().replace(/[^a-z]/gu, "");
@@ -64,18 +81,30 @@ function elementFacts(
  * `facts`: the Bot's newest capture with app on the guest driver lane
  * (`BotComputerToolState.driverFacts`), or `undefined` on the VNC lane.
  */
-export function botComputerAction(call: Pick<BotToolCallCheck, "args">, facts?: BotComputerDriverFacts): BotLiveApproval {
+export function botComputerAction(
+  call: Pick<BotToolCallCheck, "args">,
+  facts?: BotComputerDriverFacts,
+): BotLiveApproval {
   const args = (call.args ?? {}) as { action?: unknown; keys?: unknown; element?: unknown };
   const action = args.action;
   // Looking, waiting and invalid calls change nothing a rule covers; the tool refuses invalid ones.
-  if (!isBotComputerAction(action) || !BOT_COMPUTER_MUTATING_ACTIONS.has(action)) return { approval: null };
+  if (!isBotComputerAction(action) || !BOT_COMPUTER_MUTATING_ACTIONS.has(action))
+    return { approval: null };
   const intent = botComputerIntentOf(args);
   // A mutating call without an intent never runs: the tool refuses it before acting.
   if (intent === undefined) return { approval: null };
-  const classified = action === "key" && typeof args.keys === "string" && !editsText(args.keys, facts) ? "press" : action;
+  const classified =
+    action === "key" && typeof args.keys === "string" && !editsText(args.keys, facts)
+      ? "press"
+      : action;
   return {
     approval: null,
-    action: { surface: "computer", action: classified, intent, ...elementFacts(action, args, facts) },
+    action: {
+      surface: "computer",
+      action: classified,
+      intent,
+      ...elementFacts(action, args, facts),
+    },
     summary: intent,
   };
 }

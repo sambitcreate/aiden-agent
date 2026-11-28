@@ -3,7 +3,12 @@ import assert from "node:assert/strict";
 import { afterEach, test } from "node:test";
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { emitBotTestNotification, installBotTestIpc } from "../main/bots/test-dom";
-import { LinkOpenerProvider, useBrowserSurface, useBrowserSurfaceBlocker, useLinkOpener } from "./link-opener";
+import {
+  LinkOpenerProvider,
+  useBrowserSurface,
+  useBrowserSurfaceBlocker,
+  useLinkOpener,
+} from "./link-opener";
 import { Toaster } from "../components/ui";
 
 afterEach(cleanup);
@@ -25,7 +30,9 @@ function app({ surface = true, href = "https://example.com/", blocked = false } 
       {surface ? <Surface /> : null}
       {blocked ? <Blocker /> : null}
       <a href={href}>link</a>
-      <a href="https://accounts.example.com/" data-link-target="external">sign in</a>
+      <a href="https://accounts.example.com/" data-link-target="external">
+        sign in
+      </a>
       <a href="/settings">route</a>
       <a href="mailto:a@example.com">mail</a>
     </LinkOpenerProvider>
@@ -58,7 +65,10 @@ test("first click asks; remembered Aiden choice is saved and opens in the panel"
   await flush();
   assert.deepEqual(sent(calls), [
     { channel: "browser:set-link-preference", args: ["browser"] },
-    { channel: "browser:command", args: ["ws-1", { action: "open_link", url: "https://example.com/" }] },
+    {
+      channel: "browser:command",
+      args: ["ws-1", { action: "open_link", url: "https://example.com/" }],
+    },
   ]);
   // The saved choice applies to the next click with no prompt, and actually opens.
   fireEvent.click(screen.getByText("link"));
@@ -66,8 +76,14 @@ test("first click asks; remembered Aiden choice is saved and opens in the panel"
   assert.equal(screen.queryByRole("dialog"), null);
   assert.deepEqual(sent(calls), [
     { channel: "browser:set-link-preference", args: ["browser"] },
-    { channel: "browser:command", args: ["ws-1", { action: "open_link", url: "https://example.com/" }] },
-    { channel: "browser:command", args: ["ws-1", { action: "open_link", url: "https://example.com/" }] },
+    {
+      channel: "browser:command",
+      args: ["ws-1", { action: "open_link", url: "https://example.com/" }],
+    },
+    {
+      channel: "browser:command",
+      args: ["ws-1", { action: "open_link", url: "https://example.com/" }],
+    },
   ]);
 });
 
@@ -78,16 +94,25 @@ test("without a browser surface (Settings, Bots) links go out with no prompt and
   fireEvent.click(screen.getByText("link"));
   await flush();
   assert.equal(screen.queryByRole("dialog"), null);
-  assert.deepEqual(sent(calls), [{ channel: "browser:open-external", args: ["https://example.com/"] }]);
+  assert.deepEqual(sent(calls), [
+    { channel: "browser:open-external", args: ["https://example.com/"] },
+  ]);
 });
 
 test("a failed in-app open falls back to the system browser", async () => {
-  const calls = ipc("browser", { "browser:command": () => { throw new Error("Close a browser tab before opening more than 24."); } });
+  const calls = ipc("browser", {
+    "browser:command": () => {
+      throw new Error("Close a browser tab before opening more than 24.");
+    },
+  });
   render(app());
   await flush();
   fireEvent.click(screen.getByText("link"));
   await flush();
-  assert.deepEqual(sent(calls).map((call) => call.channel), ["browser:command", "browser:open-external"]);
+  assert.deepEqual(
+    sent(calls).map((call) => call.channel),
+    ["browser:command", "browser:open-external"],
+  );
 });
 
 test("loopback opens in Aiden even when the preference is external; auth links go out", async () => {
@@ -98,7 +123,10 @@ test("loopback opens in Aiden even when the preference is external; auth links g
   fireEvent.click(screen.getByText("sign in"));
   await flush();
   assert.deepEqual(sent(calls), [
-    { channel: "browser:command", args: ["ws-1", { action: "open_link", url: "http://localhost:5173/" }] },
+    {
+      channel: "browser:command",
+      args: ["ws-1", { action: "open_link", url: "http://localhost:5173/" }],
+    },
     { channel: "browser:open-external", args: ["https://accounts.example.com/"] },
   ]);
 });
@@ -127,7 +155,9 @@ test("a link-preference event updates how the next click routes, without relaunc
   fireEvent.click(screen.getByText("link"));
   await flush();
   assert.equal(screen.queryByRole("dialog"), null);
-  assert.deepEqual(sent(calls), [{ channel: "browser:open-external", args: ["https://example.com/"] }]);
+  assert.deepEqual(sent(calls), [
+    { channel: "browser:open-external", args: ["https://example.com/"] },
+  ]);
 });
 
 test("right-click offers both destinations and copy", async () => {
@@ -140,7 +170,9 @@ test("right-click offers both destinations and copy", async () => {
   assert.ok(screen.getByRole("menuitem", { name: "Copy link" }));
   fireEvent.click(item);
   await flush();
-  assert.deepEqual(sent(calls), [{ channel: "browser:open-external", args: ["https://example.com/"] }]);
+  assert.deepEqual(sent(calls), [
+    { channel: "browser:open-external", args: ["https://example.com/"] },
+  ]);
 });
 
 test("a link with a registered surface still goes external with no prompt while a blocker (onboarding) is active", async () => {
@@ -150,7 +182,9 @@ test("a link with a registered surface still goes external with no prompt while 
   fireEvent.click(screen.getByText("link"));
   await flush();
   assert.equal(screen.queryByRole("dialog"), null);
-  assert.deepEqual(sent(calls), [{ channel: "browser:open-external", args: ["https://example.com/"] }]);
+  assert.deepEqual(sent(calls), [
+    { channel: "browser:open-external", args: ["https://example.com/"] },
+  ]);
 });
 
 test("deactivating the browser surface sends later links out with no prompt", async () => {
@@ -160,7 +194,10 @@ test("deactivating the browser surface sends later links out with no prompt", as
   fireEvent.click(screen.getByText("link"));
   await flush();
   assert.deepEqual(sent(calls), [
-    { channel: "browser:command", args: ["ws-1", { action: "open_link", url: "https://example.com/" }] },
+    {
+      channel: "browser:command",
+      args: ["ws-1", { action: "open_link", url: "https://example.com/" }],
+    },
   ]);
 
   rerender(
@@ -173,7 +210,10 @@ test("deactivating the browser surface sends later links out with no prompt", as
   fireEvent.click(screen.getByText("link"));
   await flush();
   assert.deepEqual(sent(calls), [
-    { channel: "browser:command", args: ["ws-1", { action: "open_link", url: "https://example.com/" }] },
+    {
+      channel: "browser:command",
+      args: ["ws-1", { action: "open_link", url: "https://example.com/" }],
+    },
     { channel: "browser:open-external", args: ["https://example.com/"] },
   ]);
 });
@@ -185,7 +225,10 @@ test("unmounting the only registered surface sends later links out with no promp
   fireEvent.click(screen.getByText("link"));
   await flush();
   assert.deepEqual(sent(calls), [
-    { channel: "browser:command", args: ["ws-1", { action: "open_link", url: "https://example.com/" }] },
+    {
+      channel: "browser:command",
+      args: ["ws-1", { action: "open_link", url: "https://example.com/" }],
+    },
   ]);
 
   rerender(
@@ -197,7 +240,10 @@ test("unmounting the only registered surface sends later links out with no promp
   fireEvent.click(screen.getByText("link"));
   await flush();
   assert.deepEqual(sent(calls), [
-    { channel: "browser:command", args: ["ws-1", { action: "open_link", url: "https://example.com/" }] },
+    {
+      channel: "browser:command",
+      args: ["ws-1", { action: "open_link", url: "https://example.com/" }],
+    },
     { channel: "browser:open-external", args: ["https://example.com/"] },
   ]);
 });
@@ -224,7 +270,10 @@ test("with two registered surfaces, one unmounting leaves the panel available", 
   await flush();
   // Still one surface registered, so the panel is still used, not the system browser.
   assert.deepEqual(sent(calls), [
-    { channel: "browser:command", args: ["ws-1", { action: "open_link", url: "https://example.com/" }] },
+    {
+      channel: "browser:command",
+      args: ["ws-1", { action: "open_link", url: "https://example.com/" }],
+    },
   ]);
 });
 
@@ -242,11 +291,15 @@ test("useLinkOpener outside the provider sends http(s) and mailto out, and leave
 
   const http = await run("https://example.com/");
   assert.equal(http.handled, true);
-  assert.deepEqual(http.calls, [{ channel: "browser:open-external", args: ["https://example.com/"] }]);
+  assert.deepEqual(http.calls, [
+    { channel: "browser:open-external", args: ["https://example.com/"] },
+  ]);
 
   const mail = await run("mailto:a@example.com");
   assert.equal(mail.handled, true);
-  assert.deepEqual(mail.calls, [{ channel: "browser:open-external", args: ["mailto:a@example.com"] }]);
+  assert.deepEqual(mail.calls, [
+    { channel: "browser:open-external", args: ["mailto:a@example.com"] },
+  ]);
 
   const route = await run("/settings");
   assert.equal(route.handled, false);
@@ -286,7 +339,11 @@ test("openLink with forcePrompt asks even when a preference is saved, without re
   const calls = ipc("browser");
   function Caller() {
     const { openLink } = useLinkOpener();
-    return <button onClick={() => openLink("https://example.com/x", { forcePrompt: true })}>visual</button>;
+    return (
+      <button onClick={() => openLink("https://example.com/x", { forcePrompt: true })}>
+        visual
+      </button>
+    );
   }
   render(
     <LinkOpenerProvider workspaceId="ws-1">
@@ -300,14 +357,20 @@ test("openLink with forcePrompt asks even when a preference is saved, without re
   assert.equal(screen.queryByRole("checkbox"), null);
   fireEvent.click(screen.getByRole("button", { name: "Open in system browser" }));
   await flush();
-  assert.deepEqual(sent(calls), [{ channel: "browser:open-external", args: ["https://example.com/x"] }]);
+  assert.deepEqual(sent(calls), [
+    { channel: "browser:open-external", args: ["https://example.com/x"] },
+  ]);
 });
 
 test("chat links to local files: HTML previews in Aiden, other files and folders open in Files", async () => {
   const calls = ipc("ask");
   const opened: string[] = [];
   render(
-    <LinkOpenerProvider workspaceId="ws-1" workspaceFolder="/Users/me/prompt-lab" onOpenWorkspaceFile={(path) => opened.push(path)}>
+    <LinkOpenerProvider
+      workspaceId="ws-1"
+      workspaceFolder="/Users/me/prompt-lab"
+      onOpenWorkspaceFile={(path) => opened.push(path)}
+    >
       <Surface />
       <Toaster />
       <a href="file:///Users/me/prompt-lab/thermostat/index.html">index.html</a>
@@ -323,7 +386,10 @@ test("chat links to local files: HTML previews in Aiden, other files and folders
   await flush();
   assert.equal(screen.queryByRole("dialog"), null);
   assert.deepEqual(sent(calls), [
-    { channel: "browser:command", args: ["ws-1", { action: "open_file", path: "/Users/me/prompt-lab/thermostat/index.html" }] },
+    {
+      channel: "browser:command",
+      args: ["ws-1", { action: "open_file", path: "/Users/me/prompt-lab/thermostat/index.html" }],
+    },
   ]);
   assert.deepEqual(opened, ["thermostat/style.css", "thermostat"]);
 
@@ -338,7 +404,11 @@ test("right-click on a chat file link offers the Aiden browser, the system brows
   const calls = ipc("ask", { "browser:open-file-external": () => undefined });
   const opened: string[] = [];
   render(
-    <LinkOpenerProvider workspaceId="ws-1" workspaceFolder="/Users/me/prompt-lab" onOpenWorkspaceFile={(path) => opened.push(path)}>
+    <LinkOpenerProvider
+      workspaceId="ws-1"
+      workspaceFolder="/Users/me/prompt-lab"
+      onOpenWorkspaceFile={(path) => opened.push(path)}
+    >
       <Surface />
       <a href="file:///Users/me/prompt-lab/thermostat/index.html">index.html</a>
       <a href="thermostat/style.css">style.css</a>
@@ -354,7 +424,10 @@ test("right-click on a chat file link offers the Aiden browser, the system brows
   await flush();
   assert.deepEqual(sent(calls), [
     { channel: "browser:open-file-external", args: ["ws-1", "thermostat/index.html"] },
-    { channel: "browser:command", args: ["ws-1", { action: "open_file", path: "/Users/me/prompt-lab/thermostat/index.html" }] },
+    {
+      channel: "browser:command",
+      args: ["ws-1", { action: "open_file", path: "/Users/me/prompt-lab/thermostat/index.html" }],
+    },
   ]);
 
   // Non-HTML files open in Files; the system browser is offered only for documents it can show.

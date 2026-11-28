@@ -11,7 +11,13 @@ export function guideColumns(guide: DesignGuide): number | null {
   return guide.startsWith("columns-") ? Number(guide.slice("columns-".length)) : null;
 }
 
-export function LayoutGuide({ guide, scale }: { guide: DesignGuide; /** Canvas units per design pixel. */ scale: number }) {
+export function LayoutGuide({
+  guide,
+  scale,
+}: {
+  guide: DesignGuide;
+  /** Canvas units per design pixel. */ scale: number;
+}) {
   const columns = guideColumns(guide);
   if (columns !== null) {
     return (
@@ -22,7 +28,11 @@ export function LayoutGuide({ guide, scale }: { guide: DesignGuide; /** Canvas u
         style={{ gap: GUTTER * scale, paddingInline: GUTTER * scale }}
       >
         {Array.from({ length: columns }, (_, index) => (
-          <div key={index} className="h-full min-w-0 flex-1" style={{ background: "color-mix(in srgb, var(--chart-4) 12%, transparent)" }} />
+          <div
+            key={index}
+            className="h-full min-w-0 flex-1"
+            style={{ background: "color-mix(in srgb, var(--chart-4) 12%, transparent)" }}
+          />
         ))}
       </div>
     );

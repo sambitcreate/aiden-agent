@@ -6,35 +6,89 @@ import { build } from "esbuild";
 import { assistantUsageRecord } from "./usage-accounting.js";
 import { createEmptyUsageDatabase, createUsageStore } from "./usage-store-core.js";
 import { createPromptCacheTelemetry } from "./pi-cache-telemetry.js";
-import { createAssistantMessageEventStream, fauxAssistantMessage, normalizeContext, type Api, type Model, type SimpleStreamOptions } from "@earendil-works/pi-ai";
+import {
+  createAssistantMessageEventStream,
+  fauxAssistantMessage,
+  normalizeContext,
+  type Api,
+  type Model,
+  type SimpleStreamOptions,
+} from "@earendil-works/pi-ai";
 import { Type } from "typebox";
 import { desktopChatExecutionOptions } from "./chat-generation-start.js";
 import { createRemoteChatGenerationOwner } from "./chat-generation-owner.js";
-import { adoptChatCacheWarmer, canWarmForegroundChat, IDLE_WARM_LIMIT, PiCacheWarmer, releaseChatCacheWarmer, settleReplyCacheWarmer, withPiCacheWarming, cacheWarmingEconomics, stopAllPiCacheWarmers, type CacheWarmingClock } from "./pi-cache-warming.js";
+import {
+  adoptChatCacheWarmer,
+  canWarmForegroundChat,
+  IDLE_WARM_LIMIT,
+  PiCacheWarmer,
+  releaseChatCacheWarmer,
+  settleReplyCacheWarmer,
+  withPiCacheWarming,
+  cacheWarmingEconomics,
+  stopAllPiCacheWarmers,
+  type CacheWarmingClock,
+} from "./pi-cache-warming.js";
 import type { ResolvedModelRuntime } from "./model-runtime-core.js";
 
 class Clock implements CacheWarmingClock {
   time = 0;
   timers = new Map<object, { at: number; callback: () => void }>();
   now = () => this.time;
-  setTimeout(callback: () => void, delay: number) { const id = {}; this.timers.set(id, { at: this.time + delay, callback }); return id; }
-  clearTimeout(timer: unknown) { this.timers.delete(timer as object); }
+  setTimeout(callback: () => void, delay: number) {
+    const id = {};
+    this.timers.set(id, { at: this.time + delay, callback });
+    return id;
+  }
+  clearTimeout(timer: unknown) {
+    this.timers.delete(timer as object);
+  }
   async advance(ms: number) {
     this.time += ms;
-    for (const [id, timer] of this.timers) if (timer.at <= this.time) { this.timers.delete(id); timer.callback(); }
+    for (const [id, timer] of this.timers)
+      if (timer.at <= this.time) {
+        this.timers.delete(id);
+        timer.callback();
+      }
     for (let index = 0; index < 24; index++) await Promise.resolve();
   }
 }
 const model: Model<Api> = {
-  id: "priced", provider: "fixture", api: "openai-completions", baseUrl: "https://fixture.invalid", name: "Priced fixture",
-  input: ["text"], reasoning: false, contextWindow: 200_000, maxTokens: 8_192,
-  cost: { input: 10, output: 30, cacheRead: 1, cacheWrite: 12.5 }, promptCache: { short: 300 },
+  id: "priced",
+  provider: "fixture",
+  api: "openai-completions",
+  baseUrl: "https://fixture.invalid",
+  name: "Priced fixture",
+  input: ["text"],
+  reasoning: false,
+  contextWindow: 200_000,
+  maxTokens: 8_192,
+  cost: { input: 10, output: 30, cacheRead: 1, cacheWrite: 12.5 },
+  promptCache: { short: 300 },
 };
 function usageMessage() {
-  return { ...fauxAssistantMessage("ordinary response"), usage: { input: 100_000, output: 10, cacheRead: 0, cacheWrite: 0, totalTokens: 100_010, cost: { input: 1, output: 0.0003, cacheRead: 0, cacheWrite: 0, total: 1.0003 } } };
+  return {
+    ...fauxAssistantMessage("ordinary response"),
+    usage: {
+      input: 100_000,
+      output: 10,
+      cacheRead: 0,
+      cacheWrite: 0,
+      totalTokens: 100_010,
+      cost: { input: 1, output: 0.0003, cacheRead: 0, cacheWrite: 0, total: 1.0003 },
+    },
+  };
 }
 type WarmOutcome = "stop" | "length" | "error" | "aborted";
-function fixture(t: test.TestContext, settings: { documentId?: string; withinSpendingLimit?: () => Promise<boolean>; idleOnly?: boolean; approvedMemoryFacts?: () => Promise<readonly string[]> } = {}) {
+function fixture(
+  t: test.TestContext,
+  settings: {
+    documentId?: string;
+    withinSpendingLimit?: () => Promise<boolean>;
+    idleOnly?: boolean;
+    approvedMemoryFacts?: () => Promise<readonly string[]>;
+  } = {},
+) {
   const clock = new Clock();
   const signal = new AbortController();
   const requests: Array<SimpleStreamOptions | undefined> = [];
@@ -42,7 +96,12 @@ function fixture(t: test.TestContext, settings: { documentId?: string; withinSpe
   const recorded: unknown[] = [];
   const refreshedAt: number[] = [];
   let database = createEmptyUsageDatabase();
-  const usageStore = createUsageStore({ load: async () => structuredClone(database), save: async (value) => { database = structuredClone(value); } });
+  const usageStore = createUsageStore({
+    load: async () => structuredClone(database),
+    save: async (value) => {
+      database = structuredClone(value);
+    },
+  });
   let enabled = true;
   let current = true;
   let warmCost = 0.10003;
@@ -53,33 +112,110 @@ function fixture(t: test.TestContext, settings: { documentId?: string; withinSpe
   let resolutionBarrier: Promise<void> | undefined;
   let completeHeld: (reason: WarmOutcome) => void = () => {};
   const runtime = (): ResolvedModelRuntime => ({
-    model: runtimeModel, provider: { id: "fixture", label: "Fixture", kind: "openai", models: ["priced"], baseUrl: model.baseUrl, needsKey: true },
-    models: undefined as never, apiKey: key, headers: { Authorization: `Bearer ${key}` },
-    streams: { streamSimple: (_model, context, options) => {
-      requests.push(options); contexts.push(context);
-      const stream = createAssistantMessageEventStream();
-      completeHeld = (reason) => { const response = usageMessage();
-        const message = { ...response, stopReason: reason, usage: {
-          input: 0, output: 1, cacheRead: 100_000, cacheWrite: 0, totalTokens: 100_001,
-          cost: { input: 0, output: 0.00003, cacheRead: warmCost - 0.00003, cacheWrite: 0, total: warmCost },
-        } };
-        if (reason === "aborted" || reason === "error") stream.push({ type: "error", reason, error: message });
-        else stream.push({ type: "done", reason, message });
-        stream.end(message);
-      };
-      if (!hold) completeHeld("stop");
-      return stream;
-    } },
+    model: runtimeModel,
+    provider: {
+      id: "fixture",
+      label: "Fixture",
+      kind: "openai",
+      models: ["priced"],
+      baseUrl: model.baseUrl,
+      needsKey: true,
+    },
+    models: undefined as never,
+    apiKey: key,
+    headers: { Authorization: `Bearer ${key}` },
+    streams: {
+      streamSimple: (_model, context, options) => {
+        requests.push(options);
+        contexts.push(context);
+        const stream = createAssistantMessageEventStream();
+        completeHeld = (reason) => {
+          const response = usageMessage();
+          const message = {
+            ...response,
+            stopReason: reason,
+            usage: {
+              input: 0,
+              output: 1,
+              cacheRead: 100_000,
+              cacheWrite: 0,
+              totalTokens: 100_001,
+              cost: {
+                input: 0,
+                output: 0.00003,
+                cacheRead: warmCost - 0.00003,
+                cacheWrite: 0,
+                total: warmCost,
+              },
+            },
+          };
+          if (reason === "aborted" || reason === "error")
+            stream.push({ type: "error", reason, error: message });
+          else stream.push({ type: "done", reason, message });
+          stream.end(message);
+        };
+        if (!hold) completeHeld("stop");
+        return stream;
+      },
+    },
   });
-  const warmer = new PiCacheWarmer({ clock, signal: signal.signal, enabled: async () => enabled, isCurrent: () => current, resolveRuntime: async () => { resolutions++; await resolutionBarrier; return runtime(); }, recordUsage: async (message, freshRuntime) => { recorded.push(message); await usageStore.record(assistantUsageRecord({ message, provider: freshRuntime.provider, model: freshRuntime.model, source: "cache-warm" })); }, onCacheRefreshed: (at) => refreshedAt.push(at), ...(settings.documentId ? { documentId: settings.documentId } : {}), ...(settings.withinSpendingLimit ? { withinSpendingLimit: settings.withinSpendingLimit } : {}), ...(settings.idleOnly ? { idleOnly: true } : {}), ...(settings.approvedMemoryFacts ? { approvedMemoryFacts: settings.approvedMemoryFacts } : {}) });
+  const warmer = new PiCacheWarmer({
+    clock,
+    signal: signal.signal,
+    enabled: async () => enabled,
+    isCurrent: () => current,
+    resolveRuntime: async () => {
+      resolutions++;
+      await resolutionBarrier;
+      return runtime();
+    },
+    recordUsage: async (message, freshRuntime) => {
+      recorded.push(message);
+      await usageStore.record(
+        assistantUsageRecord({
+          message,
+          provider: freshRuntime.provider,
+          model: freshRuntime.model,
+          source: "cache-warm",
+        }),
+      );
+    },
+    onCacheRefreshed: (at) => refreshedAt.push(at),
+    ...(settings.documentId ? { documentId: settings.documentId } : {}),
+    ...(settings.withinSpendingLimit ? { withinSpendingLimit: settings.withinSpendingLimit } : {}),
+    ...(settings.idleOnly ? { idleOnly: true } : {}),
+    ...(settings.approvedMemoryFacts ? { approvedMemoryFacts: settings.approvedMemoryFacts } : {}),
+  });
   t.after(() => warmer.dispose());
   const start = (options: SimpleStreamOptions = {}, selected = model, system?: string) => {
-    const context = normalizeContext({ ...(system === undefined ? {} : { systemPrompt: system }), messages: [{ role: "user", content: "in-memory prompt", timestamp: 1 }] });
+    const context = normalizeContext({
+      ...(system === undefined ? {} : { systemPrompt: system }),
+      messages: [{ role: "user", content: "in-memory prompt", timestamp: 1 }],
+    });
     const response = warmer.requestStarted(selected, context, options);
     response(usageMessage());
     return context;
   };
-  return { refreshedAt, usageStore, setCurrent: (value: boolean) => current = value, setWarmCost: (value: number) => warmCost = value, warmer, clock, signal, requests, contexts, recorded, start, setEnabled: (value: boolean) => enabled = value, setKey: (value: string) => key = value, setModel: (value: Model<Api>) => runtimeModel = value, setHold: () => hold = true, completeHeld: (reason: WarmOutcome) => completeHeld(reason), setResolutionBarrier: (value: Promise<void>) => resolutionBarrier = value, resolutions: () => resolutions };
+  return {
+    refreshedAt,
+    usageStore,
+    setCurrent: (value: boolean) => (current = value),
+    setWarmCost: (value: number) => (warmCost = value),
+    warmer,
+    clock,
+    signal,
+    requests,
+    contexts,
+    recorded,
+    start,
+    setEnabled: (value: boolean) => (enabled = value),
+    setKey: (value: string) => (key = value),
+    setModel: (value: Model<Api>) => (runtimeModel = value),
+    setHold: () => (hold = true),
+    completeHeld: (reason: WarmOutcome) => completeHeld(reason),
+    setResolutionBarrier: (value: Promise<void>) => (resolutionBarrier = value),
+    resolutions: () => resolutions,
+  };
 }
 
 test("warming waits for real usage, snapshots the prefix and resolves fresh credentials at dispatch", async (t) => {
@@ -102,15 +238,35 @@ test("warming waits for real usage, snapshots the prefix and resolves fresh cred
 });
 
 test("off, unknown economics, unsafe replay and late wakeups never dispatch", async (t) => {
-  for (const scenario of ["off", "unpriced", "low-savings", "no-ttl", "late", "thinking", "payload", "headers"] as const) {
+  for (const scenario of [
+    "off",
+    "unpriced",
+    "low-savings",
+    "no-ttl",
+    "late",
+    "thinking",
+    "payload",
+    "headers",
+  ] as const) {
     const h = fixture(t);
     let selected = model;
     if (scenario === "off") h.setEnabled(false);
-    if (scenario === "unpriced") selected = { ...model, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } };
-    if (scenario === "low-savings") selected = { ...model, cost: { input: 0.1, output: 0.1, cacheRead: 0.05, cacheWrite: 0 } };
+    if (scenario === "unpriced")
+      selected = { ...model, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } };
+    if (scenario === "low-savings")
+      selected = { ...model, cost: { input: 0.1, output: 0.1, cacheRead: 0.05, cacheWrite: 0 } };
     if (scenario === "no-ttl") selected = { ...model, promptCache: undefined };
     if (scenario === "thinking") selected = { ...model, api: "anthropic-messages" };
-    h.start(scenario === "thinking" ? { reasoning: "high" } : scenario === "payload" ? { onPayload: () => ({}) } : scenario === "headers" ? { headers: { Authorization: "original-auth" } } : {}, selected);
+    h.start(
+      scenario === "thinking"
+        ? { reasoning: "high" }
+        : scenario === "payload"
+          ? { onPayload: () => ({}) }
+          : scenario === "headers"
+            ? { headers: { Authorization: "original-auth" } }
+            : {},
+      selected,
+    );
     await h.clock.advance(scenario === "late" ? 300_000 : 270_000);
     assert.equal(h.requests.length, 0, scenario);
     assert.equal(h.clock.timers.size, 0, scenario);
@@ -120,12 +276,24 @@ test("off, unknown economics, unsafe replay and late wakeups never dispatch", as
 test("foreground requests serialize the model only once warming is economical", async (t) => {
   let serialized = 0;
   // Identity hashing serializes the model; count it through toJSON.
-  const counted = (base: Model<Api>) => Object.defineProperty({ ...base }, "toJSON", { value: () => { serialized++; return base; } }) as Model<Api>;
+  const counted = (base: Model<Api>) =>
+    Object.defineProperty({ ...base }, "toJSON", {
+      value: () => {
+        serialized++;
+        return base;
+      },
+    }) as Model<Api>;
   const h = fixture(t);
-  h.start({}, counted({ ...model, cost: { input: 0.1, output: 0.1, cacheRead: 0.05, cacheWrite: 0 } }));
+  h.start(
+    {},
+    counted({ ...model, cost: { input: 0.1, output: 0.1, cacheRead: 0.05, cacheWrite: 0 } }),
+  );
   assert.equal(serialized, 0);
   assert.equal(h.clock.timers.size, 0);
-  const pending = h.warmer.requestStarted(counted(model), normalizeContext({ messages: [{ role: "user", content: "prefix", timestamp: 1 }] }));
+  const pending = h.warmer.requestStarted(
+    counted(model),
+    normalizeContext({ messages: [{ role: "user", content: "prefix", timestamp: 1 }] }),
+  );
   assert.equal(serialized, 0, "nothing is hashed before provider usage is known");
   pending(usageMessage());
   assert.equal(serialized, 1);
@@ -182,34 +350,55 @@ test("pricing uses the matching long-context tier and charges the warm read plus
   const basic = cacheWarmingEconomics(model, 100_000)!;
   assert.ok(Math.abs(basic.warmCost - 0.10003) < 1e-10);
   assert.ok(Math.abs(basic.expectedSavings - 1.04997) < 1e-10);
-  const tiered = { cost: { ...model.cost, tiers: [{ inputTokensAbove: 50_000, input: 20, output: 60, cacheRead: 2, cacheWrite: 25 }] } };
+  const tiered = {
+    cost: {
+      ...model.cost,
+      tiers: [{ inputTokensAbove: 50_000, input: 20, output: 60, cacheRead: 2, cacheWrite: 25 }],
+    },
+  };
   const estimate = cacheWarmingEconomics(tiered, 100_000)!;
   assert.ok(Math.abs(estimate.warmCost - 0.20006) < 1e-10);
   assert.ok(estimate.expectedSavings > 2);
 });
 
-
 test("the real Agent observes normalized tools and warms during a tool wait without executing extra tools", async (t) => {
   const h = fixture(t);
   let finishTool!: () => void;
   let startedTool!: () => void;
-  const waiting = new Promise<void>((resolve) => { finishTool = resolve; });
-  const started = new Promise<void>((resolve) => { startedTool = resolve; });
+  const waiting = new Promise<void>((resolve) => {
+    finishTool = resolve;
+  });
+  const started = new Promise<void>((resolve) => {
+    startedTool = resolve;
+  });
   let realRequests = 0;
   let toolCalls = 0;
   const agent = new Agent({
     initialState: {
       model,
       systemPrompt: "Unique system instructions",
-      tools: [{ name: "wait_fixture", label: "Wait", description: "Await an owned operation", parameters: Type.Object({}), execute: async () => {
-        toolCalls++; startedTool(); await waiting;
-        return { content: [{ type: "text", text: "finished" }], details: {} };
-      } }],
+      tools: [
+        {
+          name: "wait_fixture",
+          label: "Wait",
+          description: "Await an owned operation",
+          parameters: Type.Object({}),
+          execute: async () => {
+            toolCalls++;
+            startedTool();
+            await waiting;
+            return { content: [{ type: "text", text: "finished" }], details: {} };
+          },
+        },
+      ],
     },
     streamFn: withPiCacheWarming(() => {
       const message = usageMessage();
       realRequests++;
-      if (realRequests === 1) { message.content = [{ type: "toolCall", id: "wait-1", name: "wait_fixture", arguments: {} }]; message.stopReason = "toolUse"; }
+      if (realRequests === 1) {
+        message.content = [{ type: "toolCall", id: "wait-1", name: "wait_fixture", arguments: {} }];
+        message.stopReason = "toolUse";
+      }
       const stream = createAssistantMessageEventStream();
       stream.push({ type: "start", partial: message });
       stream.push({ type: "done", reason: message.stopReason as "stop" | "toolUse", message });
@@ -217,7 +406,9 @@ test("the real Agent observes normalized tools and warms during a tool wait with
       return stream;
     }, h.warmer),
   });
-  agent.subscribe((event) => { if (event.type === "agent_end") h.warmer.dispose(); });
+  agent.subscribe((event) => {
+    if (event.type === "agent_end") h.warmer.dispose();
+  });
   const running = agent.prompt("Run the waiting tool");
   await started;
   await h.clock.advance(270_000);
@@ -233,12 +424,15 @@ test("the real Agent observes normalized tools and warms during a tool wait with
   assert.equal(toolCalls, 1);
 });
 
-
 test("settings changes and cancellation are checked again after asynchronous credential resolution", async (t) => {
   for (const action of ["disable", "cancel", "replace"] as const) {
     const h = fixture(t);
     let release!: () => void;
-    h.setResolutionBarrier(new Promise<void>((resolve) => { release = resolve; }));
+    h.setResolutionBarrier(
+      new Promise<void>((resolve) => {
+        release = resolve;
+      }),
+    );
     h.start();
     await h.clock.advance(270_000);
     assert.equal(h.resolutions(), 1);
@@ -250,7 +444,6 @@ test("settings changes and cancellation are checked again after asynchronous cre
     assert.equal(h.requests.length, 0, action);
   }
 });
-
 
 test("provider usage arriving after cancellation is recorded once without restarting warming", async (t) => {
   for (const reason of ["stop", "aborted"] as const) {
@@ -271,7 +464,6 @@ test("provider usage arriving after cancellation is recorded once without restar
   }
 });
 
-
 test("ordinary desktop chat policy admits warming but remote and background accounting does not grant authority", async (t) => {
   const desktop = desktopChatExecutionOptions("turn-1", () => {});
   const owner = { id: 17, isDestroyed: () => false };
@@ -279,36 +471,56 @@ test("ordinary desktop chat policy admits warming but remote and background acco
   const h = fixture(t);
   if (canWarmForegroundChat(policy)) h.start();
   await h.clock.advance(270_000);
-  assert.equal(h.requests.length, 1, "the actual desktop caller's chat source must reach the warmer");
-  const remote = createRemoteChatGenerationOwner({ deviceId: "paired", streamId: "remote-1", publish: () => {} });
+  assert.equal(
+    h.requests.length,
+    1,
+    "the actual desktop caller's chat source must reach the warmer",
+  );
+  const remote = createRemoteChatGenerationOwner({
+    deviceId: "paired",
+    streamId: "remote-1",
+    publish: () => {},
+  });
   assert.equal(canWarmForegroundChat({ ...policy, owner: remote.owner }), false);
   for (const excluded of [
-    { enabled: false }, { local: true }, { bot: true },
+    { enabled: false },
+    { local: true },
+    { bot: true },
     { owner: { id: 0, isDestroyed: () => false } },
     { owner: { id: 17, isDestroyed: () => true } },
     { owner: { id: 17, kind: "remote" as const, isDestroyed: () => false } },
-    { usageSource: "scheduled" as const }, { usageSource: "subagent" as const },
-    { usageSource: "telegram" as const }, { interactionSurface: "telegram" as const },
+    { usageSource: "scheduled" as const },
+    { usageSource: "subagent" as const },
+    { usageSource: "telegram" as const },
+    { interactionSurface: "telegram" as const },
     { mode: "assistant-automation" as const },
-  ]) assert.equal(canWarmForegroundChat({ ...policy, ...excluded }), false);
+  ])
+    assert.equal(canWarmForegroundChat({ ...policy, ...excluded }), false);
 });
 
 test("repeated refreshes share the savings from one future cache hit", async (t) => {
-  const h = fixture(t); h.start();
+  const h = fixture(t);
+  h.start();
   for (let i = 0; i < 14; i++) await h.clock.advance(270_000);
   const spent = h.requests.length * 0.10003;
-  const oneAvoidedMiss = 1.25 - 0.10;
+  const oneAvoidedMiss = 1.25 - 0.1;
   assert.equal(h.requests.length, 10);
   assert.ok(oneAvoidedMiss - spent >= 0.05);
-  assert.ok(oneAvoidedMiss - spent - 0.10003 < 0.05, "one more refresh loses the minimum remaining savings");
+  assert.ok(
+    oneAvoidedMiss - spent - 0.10003 < 0.05,
+    "one more refresh loses the minimum remaining savings",
+  );
   assert.equal(h.clock.timers.size, 0);
   // A new real provider request establishes a new prefix and savings opportunity.
-  h.start(); await h.clock.advance(270_000);
+  h.start();
+  await h.clock.advance(270_000);
   assert.equal(h.requests.length, 11);
 });
 
 test("higher provider-reported charges consume the remaining refresh budget", async (t) => {
-  const h = fixture(t); h.setWarmCost(1.05); h.start();
+  const h = fixture(t);
+  h.setWarmCost(1.05);
+  h.start();
   await h.clock.advance(270_000);
   await h.clock.advance(270_000);
   assert.equal(h.requests.length, 1);
@@ -317,14 +529,24 @@ test("higher provider-reported charges consume the remaining refresh budget", as
 });
 
 test("lost foreground ownership fences refreshes before and after asynchronous auth resolution", async (t) => {
-  const detached = fixture(t); detached.start(); detached.setCurrent(false);
+  const detached = fixture(t);
+  detached.start();
+  detached.setCurrent(false);
   await detached.clock.advance(270_000);
   assert.equal(detached.resolutions(), 0);
   assert.equal(detached.requests.length, 0);
-  const pending = fixture(t); let release!: () => void;
-  pending.setResolutionBarrier(new Promise<void>((resolve) => { release = resolve; }));
-  pending.start(); await pending.clock.advance(270_000);
-  pending.setCurrent(false); release(); await pending.clock.advance(0);
+  const pending = fixture(t);
+  let release!: () => void;
+  pending.setResolutionBarrier(
+    new Promise<void>((resolve) => {
+      release = resolve;
+    }),
+  );
+  pending.start();
+  await pending.clock.advance(270_000);
+  pending.setCurrent(false);
+  release();
+  await pending.clock.advance(0);
   assert.equal(pending.requests.length, 0);
   assert.equal(pending.clock.timers.size, 0);
 });
@@ -349,7 +571,12 @@ async function cancellationHost() {
     "./chat-workspace-mutation-gate.js": { ChatWorkspaceMutationGate: UnusedService },
     "./chat-turn-admission.js": { ChatTurnAdmission: UnusedService },
     "./generation-delta-coalescer.js": { GenerationDeltaCoalescer: UnusedService },
-    "./chat-run-input-admission.js": { createChatRunInputAdmission: (ports: { active: Map<string, Entry> }) => { active = ports.active; return {}; } },
+    "./chat-run-input-admission.js": {
+      createChatRunInputAdmission: (ports: { active: Map<string, Entry> }) => {
+        active = ports.active;
+        return {};
+      },
+    },
     "./chat-owed-turns.js": await import("./chat-owed-turns.js"),
     "./chat-owed-turn-prompts.js": await import("./chat-owed-turn-prompts.js"),
     "./chat-prompt-cache-state.js": {
@@ -358,27 +585,50 @@ async function cancellationHost() {
       chatPromptPrefixCompacted() {},
       forgetChatPromptCacheState() {},
     },
-    "./subagents/child-agent-runtime.js": { subagentRuntimeRegistry: { setHealthMetrics() {}, setLimits() {}, setRuntimeFaultReporter() {}, abortGeneration: (id: string) => children.push(id) } },
-    "./tool-approval.js": { ToolApprovalCoordinator: class { cancelStream(id: string) { approvals.push(id); } } },
+    "./subagents/child-agent-runtime.js": {
+      subagentRuntimeRegistry: {
+        setHealthMetrics() {},
+        setLimits() {},
+        setRuntimeFaultReporter() {},
+        abortGeneration: (id: string) => children.push(id),
+      },
+    },
+    "./tool-approval.js": {
+      ToolApprovalCoordinator: class {
+        cancelStream(id: string) {
+          approvals.push(id);
+        }
+      },
+    },
     "./approval-gate/approval-analytics.js": { ApprovalAnalytics: UnusedService },
     "./ask-user-question-coordinator.js": { AskUserQuestionCoordinator: UnusedService },
     "./workspace-files-touched.js": { createWorkspaceFilesTouchedNotifier: () => () => {} },
-    "./acp/scratch-directory.js": { createAcpScratchDirectories: () => ({ directoryFor: async () => "", forget: async () => {} }) },
+    "./acp/scratch-directory.js": {
+      createAcpScratchDirectories: () => ({ directoryFor: async () => "", forget: async () => {} }),
+    },
     "./desktop-stream-handoff.js": {
       DesktopLiveStreamAccumulator: class {
         begin() {}
         finish() {}
-        snapshotForChat() { return null; }
+        snapshotForChat() {
+          return null;
+        }
       },
     },
   };
   const bundle = await build({
     entryPoints: [fileURLToPath(new URL("./llm-client.ts", import.meta.url))],
-    bundle: true, write: false, platform: "node", format: "cjs", external: ["*"],
+    bundle: true,
+    write: false,
+    platform: "node",
+    format: "cjs",
+    external: ["*"],
   });
   const module = { exports: {} as typeof import("./llm-client.js") };
   new Function("require", "module", "exports", bundle.outputFiles[0]!.text)(
-    (name: string) => mocks[name] ?? {}, module, module.exports,
+    (name: string) => mocks[name] ?? {},
+    module,
+    module.exports,
   );
   return { client: module.exports.llmClient, active, children, approvals };
 }
@@ -387,24 +637,38 @@ test("host Stop immediately aborts owned warming while an active Agent is still 
   const host = await cancellationHost();
   const owned = fixture(t);
   const other = fixture(t);
-  owned.setHold(); other.setHold();
-  owned.start(); other.start();
+  owned.setHold();
+  other.setHold();
+  owned.start();
+  other.start();
   await owned.clock.advance(270_000);
   await other.clock.advance(270_000);
   let agentAborts = 0;
   host.active.set("owned", {
-    owner: { documentId: "document-owned" }, cancelRequested: false,
+    owner: { documentId: "document-owned" },
+    cancelRequested: false,
     stopCacheWarming: () => owned.warmer.dispose(),
-    agent: { abort: () => { agentAborts++; assert.equal(owned.requests[0]?.signal?.aborted, true); } },
+    agent: {
+      abort: () => {
+        agentAborts++;
+        assert.equal(owned.requests[0]?.signal?.aborted, true);
+      },
+    },
   });
   host.active.set("other", {
-    owner: { documentId: "document-other" }, cancelRequested: false,
-    stopCacheWarming: () => other.warmer.dispose(), agent: { abort() {} },
+    owner: { documentId: "document-other" },
+    cancelRequested: false,
+    stopCacheWarming: () => other.warmer.dispose(),
+    agent: { abort() {} },
   });
   assert.equal(host.client.cancel("owned", "user_stop", "document-other"), false);
   assert.equal(owned.requests[0]?.signal?.aborted, false);
   assert.equal(host.client.cancel("owned", "user_stop", "document-owned"), true);
-  assert.equal(owned.signal.signal.aborted, false, "the initialization signal is not the active Agent lifetime");
+  assert.equal(
+    owned.signal.signal.aborted,
+    false,
+    "the initialization signal is not the active Agent lifetime",
+  );
   assert.equal(owned.requests[0]?.signal?.aborted, true);
   assert.equal(other.requests[0]?.signal?.aborted, false);
   assert.equal(host.client.cancel("owned", "user_stop", "document-owned"), false);
@@ -423,7 +687,8 @@ test("host Stop immediately aborts owned warming while an active Agent is still 
 test("one-token warming completion, provider errors and aborts retain distinct billed outcomes", async (t) => {
   for (const reason of ["length", "error", "aborted"] as const) {
     const h = fixture(t);
-    h.setHold(); h.start();
+    h.setHold();
+    h.start();
     await h.clock.advance(270_000);
     assert.equal(h.requests[0]?.maxTokens, 1);
     h.completeHeld(reason);
@@ -444,7 +709,14 @@ test("one-token warming completion, provider errors and aborts retain distinct b
 
 // A Claude model on Anthropic's API with no declared tier: Pi has no
 // lifetime for it, so the documented five-minute (or hour) lifetime applies.
-const claude: Model<Api> = { ...model, id: "claude-fixture-5", provider: "anthropic", api: "anthropic-messages", name: "Claude fixture", promptCache: undefined };
+const claude: Model<Api> = {
+  ...model,
+  id: "claude-fixture-5",
+  provider: "anthropic",
+  api: "anthropic-messages",
+  name: "Claude fixture",
+  promptCache: undefined,
+};
 
 test("warming uses the documented lifetime for the request's retention, refreshing ahead of expiry", async (t) => {
   const short = fixture(t);
@@ -463,7 +735,11 @@ test("warming uses the documented lifetime for the request's retention, refreshi
   assert.equal(long.requests.length, 0, "an hour-long cache does not need the five-minute refresh");
   await long.clock.advance(3_240_000 - 270_000);
   assert.equal(long.requests.length, 1);
-  assert.equal(long.requests[0]?.cacheRetention, "long", "the refresh keeps the hour-long entry it refreshes");
+  assert.equal(
+    long.requests[0]?.cacheRetention,
+    "long",
+    "the refresh keeps the hour-long entry it refreshes",
+  );
   await long.clock.advance(3_240_000);
   assert.equal(long.requests.length, 1, "a second refresh would pass the one-hour horizon");
 
@@ -539,12 +815,25 @@ test("idle warming stops when the window leaves the chat or the chat changed, be
   const changed = fixture(t);
   changed.start();
   let checks = 0;
-  assert.equal(changed.warmer.settle({ isCurrent: () => true, stillCurrent: async () => { checks++; return checks < 2; } }), true);
+  assert.equal(
+    changed.warmer.settle({
+      isCurrent: () => true,
+      stillCurrent: async () => {
+        checks++;
+        return checks < 2;
+      },
+    }),
+    true,
+  );
   await changed.clock.advance(270_000);
   assert.equal(changed.requests.length, 1);
   await changed.clock.advance(270_000);
   assert.equal(checks, 2);
-  assert.equal(changed.resolutions(), 1, "a changed chat never resolves credentials for the stale prefix");
+  assert.equal(
+    changed.resolutions(),
+    1,
+    "a changed chat never resolves credentials for the stale prefix",
+  );
   assert.equal(changed.requests.length, 1);
 
   const off = fixture(t);
@@ -582,7 +871,11 @@ test("no refresh is sent once the chat's spending limit refuses, while streaming
     assert.equal(h.requests.length, 1, `${phase}: a refused warmer stays ended`);
   }
   // A gate that fails to answer refuses too.
-  const failing = fixture(t, { withinSpendingLimit: async () => { throw new Error("store unavailable"); } });
+  const failing = fixture(t, {
+    withinSpendingLimit: async () => {
+      throw new Error("store unavailable");
+    },
+  });
   failing.start();
   await failing.clock.advance(270_000);
   assert.equal(failing.requests.length, 0);
@@ -634,7 +927,11 @@ test("each chat keeps one warmer, which a new reply replaces and only the window
 });
 
 test("a saved reply in an open window keeps warming until the chat is written again; other endings stop at once", async (t) => {
-  let chat: { summaryRevision: string; providerId: string; model: string } | null = { summaryRevision: "r1", providerId: "fixture", model: "priced" };
+  let chat: { summaryRevision: string; providerId: string; model: string } | null = {
+    summaryRevision: "r1",
+    providerId: "fixture",
+    model: "priced",
+  };
   let closed = false;
   const owner = { isDestroyed: () => closed };
   const kept = fixture(t);
@@ -644,7 +941,11 @@ test("a saved reply in an open window keeps warming until the chat is written ag
   assert.equal(kept.requests.length, 1);
   chat = { ...chat, summaryRevision: "r2" };
   await kept.clock.advance(270_000);
-  assert.equal(kept.requests.length, 1, "a new message, model switch or compaction rewrites the chat");
+  assert.equal(
+    kept.requests.length,
+    1,
+    "a new message, model switch or compaction rewrites the chat",
+  );
   assert.equal(kept.warmer.isDisposed, true);
 
   for (const [label, delivered, destroyed, stored] of [
@@ -663,7 +964,13 @@ test("a saved reply in an open window keeps warming until the chat is written ag
   closed = false;
   const unreadable = fixture(t);
   unreadable.start();
-  await settleReplyCacheWarmer(unreadable.warmer, { owner, delivered: true, chat: async () => { throw new Error("index locked"); } });
+  await settleReplyCacheWarmer(unreadable.warmer, {
+    owner,
+    delivered: true,
+    chat: async () => {
+      throw new Error("index locked");
+    },
+  });
   assert.equal(unreadable.warmer.isDisposed, true);
 });
 
@@ -687,7 +994,15 @@ test("a request stating a memory fact the person removed is never replayed, stre
     assert.equal(h.clock.timers.size, 0);
   }
   // Facts that cannot be confirmed are not sent: no reader, or one that fails.
-  for (const [label, reader] of [["no reader", undefined], ["unreadable store", async () => { throw new Error("store locked"); }]] as const) {
+  for (const [label, reader] of [
+    ["no reader", undefined],
+    [
+      "unreadable store",
+      async () => {
+        throw new Error("store locked");
+      },
+    ],
+  ] as const) {
     const h = fixture(t, reader ? { approvedMemoryFacts: reader } : {});
     h.start({}, model, system);
     await h.clock.advance(270_000);

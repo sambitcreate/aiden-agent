@@ -127,7 +127,9 @@ function providerFailureMessage(reason: string | undefined): string {
 }
 
 /** What the run reports before its save is attempted. */
-export function decideGenerationTerminal(input: GenerationTerminalInput): GenerationTerminalDecision {
+export function decideGenerationTerminal(
+  input: GenerationTerminalInput,
+): GenerationTerminalDecision {
   const { runtime } = input;
   const spendingError = runtime.kind === "provider_failed" ? input.spendingRefusal : undefined;
   const message =

@@ -20,9 +20,11 @@ export function parseChatStartedByV1(value: unknown): ChatStartedByV1 | undefine
   if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
   const record = value as Record<string, unknown>;
   const keys = Object.keys(record);
-  if (keys.length !== 4 || !["version", "kind", "chatId", "at"].every((key) => keys.includes(key))) return undefined;
+  if (keys.length !== 4 || !["version", "kind", "chatId", "at"].every((key) => keys.includes(key)))
+    return undefined;
   if (record.version !== 1 || record.kind !== "chat") return undefined;
   if (typeof record.chatId !== "string" || !SAFE_CHAT_ID.test(record.chatId)) return undefined;
-  if (typeof record.at !== "number" || !Number.isSafeInteger(record.at) || record.at < 0) return undefined;
+  if (typeof record.at !== "number" || !Number.isSafeInteger(record.at) || record.at < 0)
+    return undefined;
   return { version: 1, kind: "chat", chatId: record.chatId, at: record.at };
 }

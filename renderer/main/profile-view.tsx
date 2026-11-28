@@ -370,9 +370,7 @@ export function ProfileView() {
         title={`${capabilities.nativeShare ? "Share" : "Save"} profile`}
         description={`Preview and ${capabilities.nativeShare ? "share" : "save"} a PNG containing your name and aggregate model usage.`}
         size="large"
-        confirmLabel={
-          sharing ? "Preparing…" : capabilities.nativeShare ? "Share…" : "Save…"
-        }
+        confirmLabel={sharing ? "Preparing…" : capabilities.nativeShare ? "Share…" : "Save…"}
         confirmDisabled={sharing || !usage.data || !profile.data}
         cancelDisabled={sharing}
         busy={sharing}

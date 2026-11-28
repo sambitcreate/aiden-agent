@@ -9,7 +9,10 @@
 
 import { isRecord } from "../shared/guards.js";
 import { WebSearchError, webSearchError } from "./web-search-core.js";
-import { isWebSearchProviderId, type WebSearchProviderId } from "./web-search-provider-registry-core.js";
+import {
+  isWebSearchProviderId,
+  type WebSearchProviderId,
+} from "./web-search-provider-registry-core.js";
 import {
   MAX_WEB_SEARCH_KEY_POOL_ENTRIES,
   WEB_SEARCH_KEY_POOL_PRIMARY_ENTRY_ID,

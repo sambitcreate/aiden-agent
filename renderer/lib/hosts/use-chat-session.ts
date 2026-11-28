@@ -1,6 +1,10 @@
 import * as React from "react";
 import type { HostChatAdapter } from "./host-chat-adapter";
-import { ChatSessionControl, type ChatSessionRef, type ChatSessionSnapshot } from "./chat-session-control";
+import {
+  ChatSessionControl,
+  type ChatSessionRef,
+  type ChatSessionSnapshot,
+} from "./chat-session-control";
 
 export interface ChatSession {
   control: ChatSessionControl;
@@ -14,7 +18,10 @@ export interface ChatSession {
  */
 export function useChatSession(adapter: HostChatAdapter, ref: ChatSessionRef): ChatSession {
   const { hostId, chatId } = ref;
-  const control = React.useMemo(() => new ChatSessionControl(adapter, { hostId, chatId }), [adapter, hostId, chatId]);
+  const control = React.useMemo(
+    () => new ChatSessionControl(adapter, { hostId, chatId }),
+    [adapter, hostId, chatId],
+  );
   React.useEffect(() => control.attach(), [control]);
   const snapshot = React.useSyncExternalStore(
     React.useCallback((listener: () => void) => control.subscribe(listener), [control]),

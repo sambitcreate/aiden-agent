@@ -21,7 +21,12 @@ The inventory uses the Phase 16 schema and must be external to both payload and
 store. Store and source must not overlap. The strict approval record is:
 
 ```json
-{"schemaVersion":1,"kind":"local-staging-only","inventorySha256":"<SHA256 of exact inventory file bytes>","packageSha256":"<64 lowercase hex diagnostic operator value>"}
+{
+  "schemaVersion": 1,
+  "kind": "local-staging-only",
+  "inventorySha256": "<SHA256 of exact inventory file bytes>",
+  "packageSha256": "<64 lowercase hex diagnostic operator value>"
+}
 ```
 
 The package digest is diagnostic: this component establishes no cryptographic

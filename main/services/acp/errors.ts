@@ -32,14 +32,18 @@ const SECRET_PATTERNS: ReadonlyArray<[RegExp, string]> = [
   [/\bya29\.[A-Za-z0-9._-]+/gu, "[redacted-token]"],
   [/\b1\/\/[A-Za-z0-9._-]{20,}/gu, "[redacted-token]"],
   [/\bAIza[0-9A-Za-z_-]{20,}/gu, "[redacted-key]"],
-  [/("?(?:access_token|refresh_token|id_token|api[-_]?key|client_secret)"?\s*[:=]\s*"?)[^"\s,&]+/giu, "$1[redacted]"],
+  [
+    /("?(?:access_token|refresh_token|id_token|api[-_]?key|client_secret)"?\s*[:=]\s*"?)[^"\s,&]+/giu,
+    "$1[redacted]",
+  ],
   [/([?&](?:code|state|code_challenge|code_verifier|client_id)=)[^&\s"]+/giu, "$1[redacted]"],
 ];
 
 /** Remove credential-shaped substrings from text that may be shown or logged. */
 export function redactSecrets(text: string): string {
   let output = text;
-  for (const [pattern, replacement] of SECRET_PATTERNS) output = output.replace(pattern, replacement);
+  for (const [pattern, replacement] of SECRET_PATTERNS)
+    output = output.replace(pattern, replacement);
   return output;
 }
 

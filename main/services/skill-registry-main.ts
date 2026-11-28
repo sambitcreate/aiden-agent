@@ -15,17 +15,30 @@ import { designModeEnabled } from "./studio/feature-flags.js";
 export const skillRegistry = new SkillRegistry({
   listBuiltin: async () => [
     { ...AIDEN_APP_SKILL, stableId: "builtin:aiden-app", source: "builtin", enabled: true },
-    { ...AIDEN_ARTIFACTS_SKILL, stableId: AIDEN_ARTIFACTS_SKILL_ID, source: "builtin", enabled: true },
+    {
+      ...AIDEN_ARTIFACTS_SKILL,
+      stableId: AIDEN_ARTIFACTS_SKILL_ID,
+      source: "builtin",
+      enabled: true,
+    },
     { ...AIDEN_HOOKS_SKILL, stableId: AIDEN_HOOKS_SKILL_ID, source: "builtin", enabled: true },
     // Gone only while AIDEN_DESIGN_MODE=0 turns design mode off.
     ...(designModeEnabled()
-      ? [{ ...AIDEN_DESIGN_SKILL, stableId: AIDEN_DESIGN_SKILL_ID, source: "builtin" as const, enabled: true }]
+      ? [
+          {
+            ...AIDEN_DESIGN_SKILL,
+            stableId: AIDEN_DESIGN_SKILL_ID,
+            source: "builtin" as const,
+            enabled: true,
+          },
+        ]
       : []),
   ],
   isEnabled: async () => (await configStore.getSettings()).skillsEnabled !== false,
   getWorkspace: (id) => configStore.getWorkspace(id),
   listConfigured: () => configStore.listSkills(),
   discover: (workspaceRoot) => discoverSkillCandidates(workspaceRoot),
-  discoverWithCachedGlobals: (workspaceRoot) => discoverSkillCandidatesWithCachedGlobals(workspaceRoot),
+  discoverWithCachedGlobals: (workspaceRoot) =>
+    discoverSkillCandidatesWithCachedGlobals(workspaceRoot),
   onInvalidate: invalidateSkillDiscoveryCache,
 });

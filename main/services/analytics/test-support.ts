@@ -8,10 +8,15 @@ export interface CapturedAnalyticsEvent {
 }
 
 /** Records what a service reports for one test, filtered through the real registry. */
-export function captureAnalyticsEvents(t: { after(fn: () => void): void }): CapturedAnalyticsEvent[] {
+export function captureAnalyticsEvents(t: {
+  after(fn: () => void): void;
+}): CapturedAnalyticsEvent[] {
   const captured: CapturedAnalyticsEvent[] = [];
   setAnalyticsReporter((event, props) => {
-    captured.push({ event, props: pickValidProps(ANALYTICS_EVENTS[event], props as Record<string, unknown>) });
+    captured.push({
+      event,
+      props: pickValidProps(ANALYTICS_EVENTS[event], props as Record<string, unknown>),
+    });
   });
   t.after(() => setAnalyticsReporter(undefined));
   return captured;

@@ -9,13 +9,13 @@ A person asks "make me an artifact that shows the open PRs for this repo", and A
 
 How this differs from what ships today:
 
-| | Inline visuals (`render_ui`, `render_artifact`) | Workspace artifacts (this plan) |
-| --- | --- | --- |
-| Where | In the reply, in the transcript | Tools panel → Artifacts tab |
-| Owner | One chat response | The workspace |
-| Data | Frozen at render time | Re-read from declared sources |
-| Lifetime | Scrolls away with the chat | Until deleted |
-| Actions | send, set, open, copy | Those, plus compose and run |
+|          | Inline visuals (`render_ui`, `render_artifact`) | Workspace artifacts (this plan) |
+| -------- | ----------------------------------------------- | ------------------------------- |
+| Where    | In the reply, in the transcript                 | Tools panel → Artifacts tab     |
+| Owner    | One chat response                               | The workspace                   |
+| Data     | Frozen at render time                           | Re-read from declared sources   |
+| Lifetime | Scrolls away with the chat                      | Until deleted                   |
+| Actions  | send, set, open, copy                           | Those, plus compose and run     |
 
 ## As built (2026-10-19)
 
@@ -52,33 +52,33 @@ The name "artifact" is already used by `render_artifact` (inline HTML visuals) a
 
 ```ts
 interface WorkspaceArtifactV1 {
-  id: string;                 // stable, host-generated
+  id: string; // stable, host-generated
   workspaceId: string;
-  title: string;              // ≤ 80 chars, unique per workspace
-  description?: string;       // one line, shown in the switcher
-  tree: AidenUiNodeV1;        // compiled render_ui tree, same limits as ChatUiVisualV1
-  sources: ArtifactSourceV1[];   // ≤ 8
-  actions: ArtifactActionV1[];   // ≤ 16 named run actions
+  title: string; // ≤ 80 chars, unique per workspace
+  description?: string; // one line, shown in the switcher
+  tree: AidenUiNodeV1; // compiled render_ui tree, same limits as ChatUiVisualV1
+  sources: ArtifactSourceV1[]; // ≤ 8
+  actions: ArtifactActionV1[]; // ≤ 16 named run actions
   refresh: { onOpen: boolean; intervalSeconds?: number }; // interval ≥ 60, only while visible
-  state?: Record<string, unknown>;  // persisted local state, ≤ 4 KiB
-  createdByChatId?: string;  // provenance only; the chat may be deleted
+  state?: Record<string, unknown>; // persisted local state, ≤ 4 KiB
+  createdByChatId?: string; // provenance only; the chat may be deleted
   revision: number;
   createdAt: string;
   updatedAt: string;
 }
 
 type ArtifactSourceV1 = {
-  name: string;               // bound in markup as $name
+  name: string; // bound in markup as $name
   parse: "json" | "lines" | "text";
 } & (
-  | { kind: "shell"; command: string }          // runs in the workspace folder
-  | { kind: "file"; path: string }              // workspace-relative
+  | { kind: "shell"; command: string } // runs in the workspace folder
+  | { kind: "file"; path: string } // workspace-relative
   | { kind: "tool"; tool: string; input: unknown } // any tool the chat could call, e.g. an MCP tool
 );
 
 interface ArtifactActionV1 {
-  name: string;               // referenced as run("name", {…})
-  label: string;              // shown in the approval card
+  name: string; // referenced as run("name", {…})
+  label: string; // shown in the approval card
   kind: "shell" | "tool";
   template: string | unknown; // `{{param}}` placeholders, filled only from declared params
   params: { name: string; type: "string" | "number" }[];
@@ -131,12 +131,12 @@ A bundled skill, `resources/aiden-help/skills/aiden-artifacts/SKILL.md`, teaches
 
 ## Platforms
 
-| Surface | v1 |
-| --- | --- |
-| macOS desktop | Yes |
-| Linux desktop | Yes |
-| CLI | No. `workspace_artifact` is not registered; the skill is not bundled in the CLI. |
-| iOS, Android | No. The transcript card's fallback text ("Created artifact: Open PRs, open it in Aiden on your Mac") is all phones see. No Remote protocol revision. |
+| Surface       | v1                                                                                                                                                   |
+| ------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
+| macOS desktop | Yes                                                                                                                                                  |
+| Linux desktop | Yes                                                                                                                                                  |
+| CLI           | No. `workspace_artifact` is not registered; the skill is not bundled in the CLI.                                                                     |
+| iOS, Android  | No. The transcript card's fallback text ("Created artifact: Open PRs, open it in Aiden on your Mac") is all phones see. No Remote protocol revision. |
 
 `host-platform-capabilities.ts` gains a `workspaceArtifacts` capability so the claim stays checkable.
 

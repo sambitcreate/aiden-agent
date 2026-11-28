@@ -5,7 +5,10 @@ import path from "node:path";
 import test, { type TestContext } from "node:test";
 import { GitHubApi } from "./github/github-api.js";
 import { FakeGitHub, type FakePullRequest } from "./github/github-fake-server.js";
-import type { LocalGitHubRepository, LocalRepositoryResult } from "./github/github-local-repository.js";
+import type {
+  LocalGitHubRepository,
+  LocalRepositoryResult,
+} from "./github/github-local-repository.js";
 import { DirectPullRequestReader } from "./github/github-pull-request-graphql.js";
 import { BatchedPullRequestReader } from "./github/github-pull-request-reader.js";
 import { GitHubRateLimitGate } from "./github/github-request-gate.js";
@@ -21,30 +24,12 @@ import {
 import { processRunning } from "../shared/process-liveness-test-support.js";
 
 test("normalizes GitHub status checks and conclusions", () => {
-  assert.equal(
-    normalizeGitHubCheckStatus({ status: "IN_PROGRESS" }),
-    "pending",
-  );
-  assert.equal(
-    normalizeGitHubCheckStatus({ conclusion: "SUCCESS" }),
-    "success",
-  );
-  assert.equal(
-    normalizeGitHubCheckStatus({ conclusion: "ACTION_REQUIRED" }),
-    "action-required",
-  );
-  assert.equal(
-    normalizeGitHubCheckStatus({ conclusion: "TIMED_OUT" }),
-    "failure",
-  );
-  assert.equal(
-    normalizeGitHubCheckStatus({ conclusion: "CANCELLED" }),
-    "cancelled",
-  );
-  assert.equal(
-    normalizeGitHubCheckStatus({ conclusion: "SKIPPED" }),
-    "skipped",
-  );
+  assert.equal(normalizeGitHubCheckStatus({ status: "IN_PROGRESS" }), "pending");
+  assert.equal(normalizeGitHubCheckStatus({ conclusion: "SUCCESS" }), "success");
+  assert.equal(normalizeGitHubCheckStatus({ conclusion: "ACTION_REQUIRED" }), "action-required");
+  assert.equal(normalizeGitHubCheckStatus({ conclusion: "TIMED_OUT" }), "failure");
+  assert.equal(normalizeGitHubCheckStatus({ conclusion: "CANCELLED" }), "cancelled");
+  assert.equal(normalizeGitHubCheckStatus({ conclusion: "SKIPPED" }), "skipped");
   assert.equal(normalizeGitHubCheckStatus({ state: "EXPECTED" }), "pending");
   assert.equal(normalizeGitHubCheckStatus({ conclusion: "STALE" }), "neutral");
 });
@@ -132,22 +117,10 @@ test("qualifies same-named checks from different workflows", () => {
 
 test("rollup treats no checks as absent and cancelled checks as non-passing", () => {
   assert.equal(rollupGitHubChecksState([]), null);
-  assert.equal(
-    rollupGitHubChecksState([{ name: "lint", status: "success" }]),
-    "passing",
-  );
-  assert.equal(
-    rollupGitHubChecksState([{ name: "lint", status: "action-required" }]),
-    "pending",
-  );
-  assert.equal(
-    rollupGitHubChecksState([{ name: "lint", status: "failure" }]),
-    "failing",
-  );
-  assert.equal(
-    rollupGitHubChecksState([{ name: "lint", status: "cancelled" }]),
-    "failing",
-  );
+  assert.equal(rollupGitHubChecksState([{ name: "lint", status: "success" }]), "passing");
+  assert.equal(rollupGitHubChecksState([{ name: "lint", status: "action-required" }]), "pending");
+  assert.equal(rollupGitHubChecksState([{ name: "lint", status: "failure" }]), "failing");
+  assert.equal(rollupGitHubChecksState([{ name: "lint", status: "cancelled" }]), "failing");
   assert.equal(
     rollupGitHubChecksState([
       { name: "lint", status: "success" },
@@ -190,12 +163,7 @@ test("parses gh pr view statusCheckRollup into the renderer-safe summary", () =>
   assert.equal(pr.state, "open");
   assert.equal(pr.checksState, "failing");
   assert.deepEqual(
-    pr.checks.map((check) => [
-      check.name,
-      check.status,
-      check.description,
-      check.url,
-    ]),
+    pr.checks.map((check) => [check.name, check.status, check.description, check.url]),
     [
       ["typecheck", "success", undefined, "https://example.test/typecheck"],
       ["test", "failure", "Unit tests failed", undefined],
@@ -293,7 +261,9 @@ test("rollup uses every check even when the renderer row list is capped", () => 
 
 const T0 = Date.parse("2026-10-07T12:00:00Z");
 
-function pr(overrides: Partial<FakePullRequest> & Pick<FakePullRequest, "number">): FakePullRequest {
+function pr(
+  overrides: Partial<FakePullRequest> & Pick<FakePullRequest, "number">,
+): FakePullRequest {
   return {
     repository: "acme/app",
     title: `Change ${overrides.number}`,
@@ -309,17 +279,23 @@ function pr(overrides: Partial<FakePullRequest> & Pick<FakePullRequest, "number"
   };
 }
 
-function setup(options: {
-  pullRequests?: FakePullRequest[];
-  local?: Partial<LocalGitHubRepository> | LocalRepositoryResult;
-  tokens?: Record<string, string>;
-  runner?: ConstructorParameters<typeof GitHubPullRequestService>[0]["runner"];
-  binary?: string;
-  createTimeoutMs?: number;
-  maxBufferBytes?: number;
-} = {}) {
+function setup(
+  options: {
+    pullRequests?: FakePullRequest[];
+    local?: Partial<LocalGitHubRepository> | LocalRepositoryResult;
+    tokens?: Record<string, string>;
+    runner?: ConstructorParameters<typeof GitHubPullRequestService>[0]["runner"];
+    binary?: string;
+    createTimeoutMs?: number;
+    maxBufferBytes?: number;
+  } = {},
+) {
   let now = T0;
-  const github = new FakeGitHub({ repositories: ["acme/app", "me/app"], pullRequests: options.pullRequests ?? [], now: () => now });
+  const github = new FakeGitHub({
+    repositories: ["acme/app", "me/app"],
+    pullRequests: options.pullRequests ?? [],
+    now: () => now,
+  });
   const recorded = recordingFetch(github.responder);
   const gate = new GitHubRateLimitGate({ now: () => now });
   const api = new GitHubApi({
@@ -392,13 +368,20 @@ test("a branch with no pull request and a detached HEAD are both no-pull-request
   const none = setup();
   assert.equal((await none.service.currentPullRequest("/repo")).availability, "no-pull-request");
   const detached = setup({ local: { branch: undefined, headBranch: undefined } });
-  assert.equal((await detached.service.currentPullRequest("/repo")).availability, "no-pull-request");
+  assert.equal(
+    (await detached.service.currentPullRequest("/repo")).availability,
+    "no-pull-request",
+  );
   assert.equal(detached.requests.length, 0);
 });
 
 test("local repository failures surface without calling GitHub", async () => {
   const { service, requests } = setup({
-    local: { ok: false, availability: "not-github", message: "This repository's remote is not hosted on GitHub." },
+    local: {
+      ok: false,
+      availability: "not-github",
+      message: "This repository's remote is not hosted on GitHub.",
+    },
   });
   assert.deepEqual(await service.currentPullRequest("/repo"), {
     availability: "not-github",
@@ -434,7 +417,9 @@ test("a rate limit reports when reads resume and later reads wait for it locally
 
   github.script = undefined;
   advance(60_000);
-  const stillPaused = await service.getPullRequest("/repo", "acme/app", 7, undefined, { interactive: true });
+  const stillPaused = await service.getPullRequest("/repo", "acme/app", 7, undefined, {
+    interactive: true,
+  });
   assert.equal(stillPaused.availability, "rate-limited");
   assert.equal(stillPaused.retryAt, resetSeconds * 1000);
   assert.equal(requests.length, 1);
@@ -451,9 +436,20 @@ test("explicit selectors read the named repository, including on enterprise host
   });
 
   const repository = await service.resolveRepository("/repo", undefined, "github.com/me/app");
-  assert.deepEqual(repository, { availability: "ready", repository: { host: "github.com", nameWithOwner: "me/app" } });
-  const found = await service.findForBranch("/repo", "feature/login", undefined, "github.com/me/app");
-  assert.deepEqual(found.pullRequests?.map((entry) => entry.number), [9]);
+  assert.deepEqual(repository, {
+    availability: "ready",
+    repository: { host: "github.com", nameWithOwner: "me/app" },
+  });
+  const found = await service.findForBranch(
+    "/repo",
+    "feature/login",
+    undefined,
+    "github.com/me/app",
+  );
+  assert.deepEqual(
+    found.pullRequests?.map((entry) => entry.number),
+    [9],
+  );
   await service.getPullRequest("/repo", "ghe.example/acme/app", 1);
   const last = requests[requests.length - 1]!;
   assert.equal(last.url, "https://ghe.example/api/graphql");
@@ -464,16 +460,28 @@ test("a pasted URL is read by its repository and number; unknown PRs are errors"
   const { service, requests } = setup({ pullRequests: [pr({ number: 7 })] });
   const found = await service.getPullRequestByUrl("/repo", "https://github.com/Acme/App/pull/7");
   assert.equal(found.pullRequest?.url, "https://github.com/acme/app/pull/7");
-  const missing = await service.getPullRequestByUrl("/repo", "https://github.com/acme/app/pull/404");
-  assert.deepEqual(missing, { availability: "error", message: "GitHub could not find pull request #404 in acme/app." });
+  const missing = await service.getPullRequestByUrl(
+    "/repo",
+    "https://github.com/acme/app/pull/404",
+  );
+  assert.deepEqual(missing, {
+    availability: "error",
+    message: "GitHub could not find pull request #404 in acme/app.",
+  });
   assert.equal((await service.getPullRequestByUrl("/repo", "not a url")).availability, "error");
-  assert.equal((await service.getPullRequestByUrl("/repo", "https://unknown.example/acme/app/pull/7")).availability, "unauthenticated");
+  assert.equal(
+    (await service.getPullRequestByUrl("/repo", "https://unknown.example/acme/app/pull/7"))
+      .availability,
+    "unauthenticated",
+  );
   assert.equal(requests.length, 2);
 });
 
 test("a truncated branch listing is unavailable for reconciliation", async () => {
   const { service } = setup({
-    pullRequests: Array.from({ length: 30 }, (_, index) => pr({ number: index + 1, state: "CLOSED" })),
+    pullRequests: Array.from({ length: 30 }, (_, index) =>
+      pr({ number: index + 1, state: "CLOSED" }),
+    ),
   });
   assert.equal((await service.findForBranch("/workspace", "feature/login")).availability, "error");
 });
@@ -487,9 +495,15 @@ test("the chooser list filters by state and caps the page", async () => {
     ],
   });
   const open = await service.listPullRequests("/repo", { state: "open", limit: 1 });
-  assert.deepEqual(open.pullRequests?.map((entry) => entry.number), [1]);
+  assert.deepEqual(
+    open.pullRequests?.map((entry) => entry.number),
+    [1],
+  );
   const merged = await service.listPullRequests("/repo", { state: "merged", headBranch: "b" });
-  assert.deepEqual(merged.pullRequests?.map((entry) => entry.number), [2]);
+  assert.deepEqual(
+    merged.pullRequests?.map((entry) => entry.number),
+    [2],
+  );
 });
 
 test("creation shells out to gh with the explicit repository and reads the PR back from the API", async () => {
@@ -528,7 +542,10 @@ test("ambiguous create failures are unknown; missing tools are definite failures
   assert.equal(result.kind === "failed" && result.availability, "missing-tool");
 });
 
-async function fakeGitHubCli(t: TestContext, body: string): Promise<{ binary: string; dir: string }> {
+async function fakeGitHubCli(
+  t: TestContext,
+  body: string,
+): Promise<{ binary: string; dir: string }> {
   const dir = await mkdtemp(path.join(os.tmpdir(), "aiden-fake-gh-"));
   t.after(() => rm(dir, { recursive: true, force: true }));
   const binary = path.join(dir, "gh");
@@ -536,68 +553,116 @@ async function fakeGitHubCli(t: TestContext, body: string): Promise<{ binary: st
   return { binary, dir };
 }
 
-test("a timed-out gh create also stops the helpers it started", { skip: process.platform === "win32" }, async (t) => {
-  // gh starts a helper that ignores SIGTERM, then hangs; only the group kill reaches the helper.
-  const { binary, dir } = await fakeGitHubCli(
-    t,
-    `sh -c 'trap "" TERM; echo $$ > "${"$"}{0}/helper.pid"; while :; do sleep 0.05; done' "$(dirname "$0")" >/dev/null 2>&1 &\nsleep 30`,
-  );
-  const pidFile = path.join(dir, "helper.pid");
-  t.after(async () => {
-    const pid = Number(await readFile(pidFile, "utf8").catch(() => "0"));
-    if (pid) try { process.kill(pid, "SIGKILL"); } catch { /* gone */ }
-  });
-  const { service } = setup({ binary, createTimeoutMs: 500 });
+test(
+  "a timed-out gh create also stops the helpers it started",
+  { skip: process.platform === "win32" },
+  async (t) => {
+    // gh starts a helper that ignores SIGTERM, then hangs; only the group kill reaches the helper.
+    const { binary, dir } = await fakeGitHubCli(
+      t,
+      `sh -c 'trap "" TERM; echo $$ > "${"$"}{0}/helper.pid"; while :; do sleep 0.05; done' "$(dirname "$0")" >/dev/null 2>&1 &\nsleep 30`,
+    );
+    const pidFile = path.join(dir, "helper.pid");
+    t.after(async () => {
+      const pid = Number(await readFile(pidFile, "utf8").catch(() => "0"));
+      if (pid)
+        try {
+          process.kill(pid, "SIGKILL");
+        } catch {
+          /* gone */
+        }
+    });
+    const { service } = setup({ binary, createTimeoutMs: 500 });
 
-  const result = await service.createPullRequest("/tmp", { title: "T" });
+    const result = await service.createPullRequest("/tmp", { title: "T" });
 
-  assert.equal(result.kind, "unknown");
-  assert.match(result.kind === "unknown" ? result.message : "", /did not answer within 1 seconds/u);
-  const helper = Number(await readFile(pidFile, "utf8"));
-  assert.ok(helper > 0);
-  assert.equal(processRunning(helper), false, "the helper must not outlive the cancelled create");
-});
+    assert.equal(result.kind, "unknown");
+    assert.match(
+      result.kind === "unknown" ? result.message : "",
+      /did not answer within 1 seconds/u,
+    );
+    const helper = Number(await readFile(pidFile, "utf8"));
+    assert.ok(helper > 0);
+    assert.equal(processRunning(helper), false, "the helper must not outlive the cancelled create");
+  },
+);
 
-test("gh that exits 0 while a helper still holds its output reports the created PR, not a timeout", { skip: process.platform === "win32" }, async (t) => {
-  // The helper inherits stdout and outlives gh, so the pipe stays open past gh's exit.
-  const { binary, dir } = await fakeGitHubCli(
-    t,
-    `sleep 30 &\necho $! > "$(dirname "$0")/helper.pid"\necho https://github.com/me/app/pull/12\nexit 0`,
-  );
-  const pidFile = path.join(dir, "helper.pid");
-  t.after(async () => {
-    const pid = Number(await readFile(pidFile, "utf8").catch(() => "0"));
-    if (pid) try { process.kill(pid, "SIGKILL"); } catch { /* gone */ }
-  });
-  // Shorter than the drain plus the group's grace, so a timer left running would fire.
-  const { service, github } = setup({ binary, createTimeoutMs: 1_200 });
-  github.pullRequests.push(pr({ number: 12, repository: "me/app" }));
+test(
+  "gh that exits 0 while a helper still holds its output reports the created PR, not a timeout",
+  { skip: process.platform === "win32" },
+  async (t) => {
+    // The helper inherits stdout and outlives gh, so the pipe stays open past gh's exit.
+    const { binary, dir } = await fakeGitHubCli(
+      t,
+      `sleep 30 &\necho $! > "$(dirname "$0")/helper.pid"\necho https://github.com/me/app/pull/12\nexit 0`,
+    );
+    const pidFile = path.join(dir, "helper.pid");
+    t.after(async () => {
+      const pid = Number(await readFile(pidFile, "utf8").catch(() => "0"));
+      if (pid)
+        try {
+          process.kill(pid, "SIGKILL");
+        } catch {
+          /* gone */
+        }
+    });
+    // Shorter than the drain plus the group's grace, so a timer left running would fire.
+    const { service, github } = setup({ binary, createTimeoutMs: 1_200 });
+    github.pullRequests.push(pr({ number: 12, repository: "me/app" }));
 
-  const result = await service.createPullRequest("/tmp", { title: "T", repository: "github.com/me/app" });
+    const result = await service.createPullRequest("/tmp", {
+      title: "T",
+      repository: "github.com/me/app",
+    });
 
-  assert.equal(result.kind, "created", result.kind === "unknown" ? result.message : undefined);
-  const helper = Number(await readFile(pidFile, "utf8"));
-  assert.equal(processRunning(helper), false, "the helper holding the pipe is stopped with gh's group");
-});
+    assert.equal(result.kind, "created", result.kind === "unknown" ? result.message : undefined);
+    const helper = Number(await readFile(pidFile, "utf8"));
+    assert.equal(
+      processRunning(helper),
+      false,
+      "the helper holding the pipe is stopped with gh's group",
+    );
+  },
+);
 
-test("gh exit failures keep their stderr for classification", { skip: process.platform === "win32" }, async (t) => {
-  const unauthenticated = await fakeGitHubCli(t, `echo "To get started with GitHub CLI, please run:  gh auth login" >&2\nexit 4`);
-  const result = await setup({ binary: unauthenticated.binary }).service.createPullRequest("/tmp", { title: "T" });
-  assert.equal(result.kind === "failed" && result.availability, "unauthenticated");
+test(
+  "gh exit failures keep their stderr for classification",
+  { skip: process.platform === "win32" },
+  async (t) => {
+    const unauthenticated = await fakeGitHubCli(
+      t,
+      `echo "To get started with GitHub CLI, please run:  gh auth login" >&2\nexit 4`,
+    );
+    const result = await setup({ binary: unauthenticated.binary }).service.createPullRequest(
+      "/tmp",
+      { title: "T" },
+    );
+    assert.equal(result.kind === "failed" && result.availability, "unauthenticated");
 
-  const missing = await setup({ binary: "/nonexistent/aiden-gh" }).service.createPullRequest("/tmp", { title: "T" });
-  assert.equal(missing.kind === "failed" && missing.availability, "missing-tool");
-});
+    const missing = await setup({ binary: "/nonexistent/aiden-gh" }).service.createPullRequest(
+      "/tmp",
+      { title: "T" },
+    );
+    assert.equal(missing.kind === "failed" && missing.availability, "missing-tool");
+  },
+);
 
-test("a long stdout does not use up the budget for gh's stderr", { skip: process.platform === "win32" }, async (t) => {
-  // Each stream fits the cap on its own; together they would not.
-  const chatty = await fakeGitHubCli(
-    t,
-    `printf '%0900d' 0\nprintf 'please run:  gh auth login\\n%0200d' 0 >&2\nexit 4`,
-  );
-  const result = await setup({ binary: chatty.binary, maxBufferBytes: 1_000 }).service.createPullRequest("/tmp", { title: "T" });
-  assert.equal(result.kind === "failed" && result.availability, "unauthenticated");
-});
+test(
+  "a long stdout does not use up the budget for gh's stderr",
+  { skip: process.platform === "win32" },
+  async (t) => {
+    // Each stream fits the cap on its own; together they would not.
+    const chatty = await fakeGitHubCli(
+      t,
+      `printf '%0900d' 0\nprintf 'please run:  gh auth login\\n%0200d' 0 >&2\nexit 4`,
+    );
+    const result = await setup({
+      binary: chatty.binary,
+      maxBufferBytes: 1_000,
+    }).service.createPullRequest("/tmp", { title: "T" });
+    assert.equal(result.kind === "failed" && result.availability, "unauthenticated");
+  },
+);
 
 test("create failures shown to the renderer drop credentials and workspace paths", async () => {
   const { service } = setup({
@@ -663,7 +728,9 @@ test("an interactive current read sees CI that changed inside the background cac
   });
 
   const first = await service.currentPullRequest("/repo");
-  github.pullRequest("acme/app", 7).checks = [{ name: "test", status: "COMPLETED", conclusion: "FAILURE" }];
+  github.pullRequest("acme/app", 7).checks = [
+    { name: "test", status: "COMPLETED", conclusion: "FAILURE" },
+  ];
   const cached = await service.currentPullRequest("/repo");
   const refreshed = await service.currentPullRequest("/repo", undefined, { interactive: true });
 

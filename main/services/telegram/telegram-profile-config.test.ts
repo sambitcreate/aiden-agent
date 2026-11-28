@@ -19,17 +19,17 @@ test("named Telegram profiles project isolated settings and storage identities",
       work: { enabled: false, model: "work-model", workspaceId: "workspace-1" },
     },
   };
-  assert.equal(projectTelegramProfile(settings, DEFAULT_TELEGRAM_PROFILE).telegramModel, "default-model");
+  assert.equal(
+    projectTelegramProfile(settings, DEFAULT_TELEGRAM_PROFILE).telegramModel,
+    "default-model",
+  );
   const work = projectTelegramProfile(settings, "work");
   assert.equal(work.telegramEnabled, false);
   assert.equal(work.telegramModel, "work-model");
   assert.equal(work.telegramWorkspaceId, "workspace-1");
   assert.equal(telegramProfileTokenKey("work"), "telegram:work");
   assert.equal(telegramProfileRuntimeFile("work"), "telegram-runtime-work.json");
-  assert.equal(
-    telegramBotNoticeAudienceId(" Work ", 12345),
-    "telegram:work:owner:12345",
-  );
+  assert.equal(telegramBotNoticeAudienceId(" Work ", 12345), "telegram:work:owner:12345");
   assert.deepEqual(listTelegramProfileNames(settings), ["default", "work"]);
 });
 

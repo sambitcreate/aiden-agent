@@ -4,7 +4,11 @@ import assert from "node:assert/strict";
 import { afterEach, test } from "node:test";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { consumePendingDesignEntry } from "../lib/design-mode";
-import { DesignModeConsentCard, resetDesignModeConsentForTests, useDesignModeConsent } from "./design-mode-consent";
+import {
+  DesignModeConsentCard,
+  resetDesignModeConsentForTests,
+  useDesignModeConsent,
+} from "./design-mode-consent";
 
 afterEach(() => {
   cleanup();
@@ -13,10 +17,18 @@ afterEach(() => {
 
 function ChatSlot({ chatId }: { chatId: string }) {
   const request = useDesignModeConsent(chatId);
-  return request ? <DesignModeConsentCard key={request.requestId} request={request} /> : <p>No card</p>;
+  return request ? (
+    <DesignModeConsentCard key={request.requestId} request={request} />
+  ) : (
+    <p>No card</p>
+  );
 }
 
-function ask(requestId: string, chatId = "chat-1", reason = "Comparing three directions is easier side by side.") {
+function ask(
+  requestId: string,
+  chatId = "chat-1",
+  reason = "Comparing three directions is easier side by side.",
+) {
   act(() => emitBotTestNotification("designCanvas:consent", { requestId, chatId, reason }));
 }
 
@@ -44,7 +56,11 @@ test("Enter design mode answers enter and makes room for the canvas; the card go
     calls.filter((call) => call.channel === "designCanvas:consentAnswer").map((call) => call.args),
     [["r1", "enter"]],
   );
-  assert.equal(consumePendingDesignEntry("chat-1"), "card", "the layout makes room as for the Design toggle");
+  assert.equal(
+    consumePendingDesignEntry("chat-1"),
+    "card",
+    "the layout makes room as for the Design toggle",
+  );
 });
 
 test("Not now answers decline and leaves the layout alone", async () => {
@@ -66,7 +82,10 @@ test("the card closes when Aiden stops waiting, and a late Enter does not make r
   ask("r1");
   await screen.findByRole("group", { name: "Aiden asks to open design mode" });
   act(() => emitBotTestNotification("designCanvas:consentClosed", { requestId: "other" }));
-  assert.ok(screen.getByRole("group", { name: "Aiden asks to open design mode" }), "another card's close is not ours");
+  assert.ok(
+    screen.getByRole("group", { name: "Aiden asks to open design mode" }),
+    "another card's close is not ours",
+  );
   act(() => emitBotTestNotification("designCanvas:consentClosed", { requestId: "r1" }));
   assert.ok(screen.getByText("No card"));
 

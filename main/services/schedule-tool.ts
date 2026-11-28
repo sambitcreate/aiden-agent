@@ -1,5 +1,10 @@
 import { Type } from "typebox";
-import { formatScheduledTaskTriggerLabel, isPrivateWatchAddress, parseScheduledTaskTrigger, type ScheduledTaskTrigger } from "../../renderer/shared/scheduled-task-trigger.js";
+import {
+  formatScheduledTaskTriggerLabel,
+  isPrivateWatchAddress,
+  parseScheduledTaskTrigger,
+  type ScheduledTaskTrigger,
+} from "../../renderer/shared/scheduled-task-trigger.js";
 import { localComputerNoun } from "../../renderer/shared/computer-noun.js";
 import type { AgentTool, AgentToolResult } from "@earendil-works/pi-agent-core";
 import { mcpServerOffersTools } from "../../renderer/shared/mcp-exposure.js";
@@ -72,7 +77,7 @@ type ScheduleToolAction = "create" | "update" | "list" | "pause" | "resume" | "r
 const SCHEDULE_TRIGGER_PARAMETER = Type.Unsafe<Record<string, unknown>>({
   type: "object",
   description:
-    "Create only, instead of cron: run when something happens. Watch: {kind:\"watch\", source:{type:\"url\", url} or {type:\"script\", script}, everyMinutes 5-1440}; the task runs only when the page changes or the script prints something. Link: {kind:\"webhook\", gapMinutes 1-60, optional filters [{path, equals}], dedupePath, includeFields, signatureHeader}; the person creates the private link later from the task's details and you never see it, so tell them to do that. A task that runs when a connected app (Mail, Calendar) has news is set up by the person in the task editor, not here. What happened reaches the run as data.",
+    'Create only, instead of cron: run when something happens. Watch: {kind:"watch", source:{type:"url", url} or {type:"script", script}, everyMinutes 5-1440}; the task runs only when the page changes or the script prints something. Link: {kind:"webhook", gapMinutes 1-60, optional filters [{path, equals}], dedupePath, includeFields, signatureHeader}; the person creates the private link later from the task\'s details and you never see it, so tell them to do that. A task that runs when a connected app (Mail, Calendar) has news is set up by the person in the task editor, not here. What happened reaches the run as data.',
 });
 
 interface ScheduleToolParams {
@@ -166,9 +171,7 @@ function approvedMcpBindings(
   if (serverIds.length === 0) return [];
   const bindings =
     args && typeof args === "object" && !Array.isArray(args)
-      ? validateScheduledMcpServerBindings(
-          approvedMcpByArguments.get(args),
-        )
+      ? validateScheduledMcpServerBindings(approvedMcpByArguments.get(args))
       : undefined;
   if (
     bindings?.length !== serverIds.length ||
@@ -287,15 +290,21 @@ function toolTrigger(value: unknown, assistant: boolean): ScheduledTaskTrigger |
   const trigger = parseScheduledTaskTrigger(value);
   // A connected app's source is chosen by the person with Find sources in the task editor.
   if (trigger.kind === "connector") {
-    throw new Error("A task that runs when a connected app has news is set up in the task editor, where you choose its source with Find sources.");
+    throw new Error(
+      "A task that runs when a connected app has news is set up in the task editor, where you choose its source with Find sources.",
+    );
   }
   if (assistant && trigger.kind === "watch" && trigger.source.type === "script") {
-    throw new Error("Aiden Assistant automations can watch a web address or run from a link, not run a script.");
+    throw new Error(
+      "Aiden Assistant automations can watch a web address or run from a link, not run a script.",
+    );
   }
   // A proposed watch never points at this computer or a private network; the person can set one up in the editor.
   if (trigger.kind === "watch" && trigger.source.type === "url") {
     if (isPrivateWatchAddress(trigger.source.url)) {
-      throw new Error("A task Aiden proposes can't watch this computer or a private network address. The person can set that up in the task editor.");
+      throw new Error(
+        "A task Aiden proposes can't watch this computer or a private network address. The person can set that up in the task editor.",
+      );
     }
     // Its checks connect only to public addresses, wherever the name resolves.
     return { ...trigger, agentProposed: true };
@@ -564,11 +573,13 @@ export function prepareAssistantScheduleProposal(
     ASSISTANT_AUTOMATION_PROMPT_LIMIT,
   );
   const trigger = toolTrigger(record.trigger, true);
-  const cron = trigger ? "" : bounded(
-    required(typeof record.cron === "string" ? record.cron : undefined, "cron"),
-    "cron",
-    ASSISTANT_AUTOMATION_CRON_LIMIT,
-  );
+  const cron = trigger
+    ? ""
+    : bounded(
+        required(typeof record.cron === "string" ? record.cron : undefined, "cron"),
+        "cron",
+        ASSISTANT_AUTOMATION_CRON_LIMIT,
+      );
   const requestedTimezone = bounded(
     typeof record.timezone === "string" ? record.timezone.trim() : systemTimezone(),
     "timezone",
@@ -657,7 +668,9 @@ export function canonicalizeAssistantScheduleToolArguments(
   return {
     action: "create",
     name: proposal.input.name,
-    ...(proposal.input.trigger ? { trigger: proposal.input.trigger } : { cron: proposal.input.cron }),
+    ...(proposal.input.trigger
+      ? { trigger: proposal.input.trigger }
+      : { cron: proposal.input.cron }),
     timezone: proposal.input.timezone,
     prompt: proposal.input.prompt,
     ...(proposal.input.workspaceId ? { workspaceId: proposal.input.workspaceId } : {}),
@@ -695,7 +708,9 @@ export async function repairAssistantScheduleMcpTarget(
     {
       action: "create",
       name: proposal.input.name,
-      ...(proposal.input.trigger ? { trigger: proposal.input.trigger } : { cron: proposal.input.cron }),
+      ...(proposal.input.trigger
+        ? { trigger: proposal.input.trigger }
+        : { cron: proposal.input.cron }),
       timezone: proposal.input.timezone,
       prompt: proposal.input.prompt,
       permission: "full",
@@ -958,7 +973,10 @@ export async function resolveAssistantScheduleMcpServers(
     const server = byId.get(id);
     if (!server) throw new Error(`MCP server ${id} was not found.`);
     if (!server.enabled) throw new Error(`MCP server "${server.name}" is disabled.`);
-    if (!mcpServerOffersTools(server)) throw new Error(`MCP server "${server.name}" is off for the model and cannot be used by a scheduled task.`);
+    if (!mcpServerOffersTools(server))
+      throw new Error(
+        `MCP server "${server.name}" is off for the model and cannot be used by a scheduled task.`,
+      );
     const name = bounded(
       required(server.name, "MCP server name"),
       "MCP server name",
@@ -1051,7 +1069,11 @@ function standardDefaultSelection(defaults: StandardDefaultModel): AssistantSche
       "no-provider",
     ),
     providerName: appDefaultProviderLabel(defaults.providerLabel),
-    model: approvalDisplayValue(model ?? "app-default", ASSISTANT_AUTOMATION_MODEL_ID_LIMIT, "app-default"),
+    model: approvalDisplayValue(
+      model ?? "app-default",
+      ASSISTANT_AUTOMATION_MODEL_ID_LIMIT,
+      "app-default",
+    ),
     modelName: model
       ? approvalDisplayValue(
           defaults.modelLabel ?? model,
@@ -1092,7 +1114,11 @@ async function standardScope(
 }> {
   const workspace = await workspaceFor(input.workspaceId, dependencies);
   const workspaceName = workspace
-    ? bounded(required(workspace.name, "Project name"), "Project name", ASSISTANT_AUTOMATION_WORKSPACE_NAME_LIMIT)
+    ? bounded(
+        required(workspace.name, "Project name"),
+        "Project name",
+        ASSISTANT_AUTOMATION_WORKSPACE_NAME_LIMIT,
+      )
     : null;
   if (workspaceName) assertSafeDisplayText(workspaceName, "Project name");
   const ids = input.mcpServerIds ?? [];
@@ -1108,7 +1134,10 @@ async function standardScope(
     const server = byId.get(id);
     if (!server) throw new Error(`MCP server ${id} was not found.`);
     if (!server.enabled) throw new Error(`MCP server "${server.name}" is disabled.`);
-    if (!mcpServerOffersTools(server)) throw new Error(`MCP server "${server.name}" is off for the model and cannot be used by a scheduled task.`);
+    if (!mcpServerOffersTools(server))
+      throw new Error(
+        `MCP server "${server.name}" is off for the model and cannot be used by a scheduled task.`,
+      );
     const name = bounded(
       required(server.name, "MCP server name"),
       "MCP server name",
@@ -1156,7 +1185,11 @@ function standardApprovalSummary(details: ScheduledTaskApprovalDetails): string 
       : `${approvalDisplayValue(details.providerName, ASSISTANT_AUTOMATION_PROVIDER_NAME_LIMIT, "unknown")} / ${approvalDisplayValue(details.modelName, ASSISTANT_AUTOMATION_MODEL_NAME_LIMIT, "unknown")}`;
   const legacy = details.legacyGlobalMcp ? " · freezes legacy inherited MCP access" : "";
   const postsIn =
-    details.postsIn === "this_chat" ? " · posts in this chat" : details.postsIn === "own_chat" ? " · runs in its own chat" : "";
+    details.postsIn === "this_chat"
+      ? " · posts in this chat"
+      : details.postsIn === "own_chat"
+        ? " · runs in its own chat"
+        : "";
   return `${verb} scheduled task "${approvalDisplayValue(details.name, ASSISTANT_AUTOMATION_NAME_LIMIT, "Untitled")}" · ${cadence} · ${details.permission === "full" ? "Full" : "Read-only"} access · ${scope} · ${runtime}${legacy}${postsIn}`;
 }
 
@@ -1185,7 +1218,8 @@ function chatBindingForCreate(
   if (params.post_in_chat !== undefined && typeof params.post_in_chat !== "boolean") {
     throw new Error("post_in_chat must be true or false.");
   }
-  const sameWorkspace = Boolean(originChatId) && workspaceId !== undefined && workspaceId === chatWorkspaceId;
+  const sameWorkspace =
+    Boolean(originChatId) && workspaceId !== undefined && workspaceId === chatWorkspaceId;
   if (params.post_in_chat === true && !sameWorkspace) {
     throw new Error(
       originChatId
@@ -1235,7 +1269,9 @@ async function resolveStandardScheduleApproval(
   };
 
   if (action !== "create" && params.trigger !== undefined) {
-    throw new Error("trigger applies only when creating a task. Change when a task runs in its settings.");
+    throw new Error(
+      "trigger applies only when creating a task. Change when a task runs in its settings.",
+    );
   }
   if (action !== "create" && params.post_in_chat !== undefined) {
     throw new Error(
@@ -1266,7 +1302,9 @@ async function resolveStandardScheduleApproval(
     const mode = params.mode ?? existing?.mode ?? "llm";
     const workspaceId = params.clearWorkspace
       ? undefined
-      : params.workspaceId?.trim() || existing?.workspaceId || (action === "create" ? defaultWorkspaceId : undefined);
+      : params.workspaceId?.trim() ||
+        existing?.workspaceId ||
+        (action === "create" ? defaultWorkspaceId : undefined);
     const workspace = await workspaceFor(workspaceId, dependencies);
     let prompt: string | undefined;
     let script: string | undefined;
@@ -1276,7 +1314,8 @@ async function resolveStandardScheduleApproval(
       assertSafeDisplayText(prompt, "Task prompt", true);
       assertSafeScheduledPrompt(prompt);
     } else {
-      if (params.permission === "read-only") throw new Error("Script tasks require Full permission.");
+      if (params.permission === "read-only")
+        throw new Error("Script tasks require Full permission.");
       script = required(params.script ?? existing?.script, "script");
       bounded(script, "script", ASSISTANT_AUTOMATION_PROMPT_LIMIT);
       assertSafeDisplayText(script, "Script name");
@@ -1324,7 +1363,8 @@ async function resolveStandardScheduleApproval(
     }
     const selected = await standardSelection(existing, selection, defaultModel);
     const trigger = action === "create" ? toolTrigger(params.trigger, false) : undefined;
-    if (trigger && mode !== "llm") throw new Error("A task that runs from a trigger asks Aiden; use mode llm.");
+    if (trigger && mode !== "llm")
+      throw new Error("A task that runs from a trigger asks Aiden; use mode llm.");
     input = {
       id: existing?.id,
       name: bounded(
@@ -1334,11 +1374,13 @@ async function resolveStandardScheduleApproval(
       ),
       enabled: existing?.enabled ?? true,
       mode,
-      cron: trigger ? "" : bounded(
-        required(params.cron ?? existing?.cron, "cron"),
-        "cron",
-        ASSISTANT_AUTOMATION_CRON_LIMIT,
-      ),
+      cron: trigger
+        ? ""
+        : bounded(
+            required(params.cron ?? existing?.cron, "cron"),
+            "cron",
+            ASSISTANT_AUTOMATION_CRON_LIMIT,
+          ),
       ...(trigger ? { trigger } : {}),
       timezone: validateTimezone(params.timezone ?? existing?.timezone ?? systemTimezone()),
       workspaceId,
@@ -1473,7 +1515,13 @@ async function standardScheduleApprovalForExecution(
       ? preparedStandardByArguments.get(value)
       : undefined;
   if (attached) return structuredClone(attached);
-  return resolveStandardScheduleApproval(value, selection, dependencies, defaultWorkspaceId, originChatId);
+  return resolveStandardScheduleApproval(
+    value,
+    selection,
+    dependencies,
+    defaultWorkspaceId,
+    originChatId,
+  );
 }
 
 export function createAssistantScheduleListTool(
@@ -1634,10 +1682,12 @@ export function createScheduleTaskTool(
         {
           action: Type.Literal("create"),
           name: Type.String({ description: "Required task name." }),
-          cron: Type.Optional(Type.String({
-            description:
-              'Five- or six-part cron expression, required unless trigger is set. For every day at 9 AM use "0 9 * * *". The field name is cron, not schedule.',
-          })),
+          cron: Type.Optional(
+            Type.String({
+              description:
+                'Five- or six-part cron expression, required unless trigger is set. For every day at 9 AM use "0 9 * * *". The field name is cron, not schedule.',
+            }),
+          ),
           prompt: Type.String({
             description: "Required automation instruction.",
           }),
@@ -1761,7 +1811,8 @@ export function createScheduleTaskTool(
       name: Type.Optional(Type.String({ description: "Task name. Required for create." })),
       cron: Type.Optional(
         Type.String({
-          description: "Five- or six-part cron expression. Required for create unless trigger is set.",
+          description:
+            "Five- or six-part cron expression. Required for create unless trigger is set.",
         }),
       ),
       timezone: Type.Optional(
@@ -1845,15 +1896,13 @@ export function createScheduleTaskTool(
           });
         }
         throwIfScheduleToolAborted(signal);
-        const task = await dependencies.save(
-          prepared.input,
-          prepared.expectedUpdatedAt,
-          signal,
-        );
+        const task = await dependencies.save(prepared.input, prepared.expectedUpdatedAt, signal);
         return result({
           task: taskSummary(task),
           // A link task's link goes to the person from the task's details; the agent never sees it.
-          ...(task.trigger?.kind === "webhook" ? { status: "saved", link: "person_creates_in_task_details" } : {}),
+          ...(task.trigger?.kind === "webhook"
+            ? { status: "saved", link: "person_creates_in_task_details" }
+            : {}),
           permissionRecommendation:
             params.action === "create" &&
             prepared.input.mode === "llm" &&
@@ -1917,7 +1966,10 @@ export interface BotRoutinesToolDependencies {
   /** Turn one of this Bot's routines off. Throws when it is not this Bot's. */
   pause(botId: string, routineId: string): Promise<BotRoutine>;
   /** Store the proposal and show its card. */
-  propose(botId: string, input: BotRoutineProposalToolInput): Promise<BotRoutineProposalToolOutcome>;
+  propose(
+    botId: string,
+    input: BotRoutineProposalToolInput,
+  ): Promise<BotRoutineProposalToolOutcome>;
   /** Replace a card that still waits for an answer with a new one. */
   revise?(
     botId: string,
@@ -1928,9 +1980,14 @@ export interface BotRoutinesToolDependencies {
   pending?(botId: string): Promise<Array<{ proposalId: string; name: string; label: string }>>;
   /** This Bot's event routines (file change or link). Never includes a link or token. */
   eventRoutines?: {
-    list(botId: string): Promise<Array<{ id: string; name: string; label: string; enabled: boolean }>>;
+    list(
+      botId: string,
+    ): Promise<Array<{ id: string; name: string; label: string; enabled: boolean }>>;
     /** Turn one off. Returns undefined when it is not this Bot's event routine. */
-    pause(botId: string, routineId: string): Promise<{ id: string; name: string; label: string; enabled: boolean } | undefined>;
+    pause(
+      botId: string,
+      routineId: string,
+    ): Promise<{ id: string; name: string; label: string; enabled: boolean } | undefined>;
   };
   /** The newest answered suggestions, so the Bot learns what the person declined. */
   recentDecisions?(botId: string): Promise<BotRoutineProposalDecisionSummary[]>;
@@ -1944,7 +2001,11 @@ const BOT_ROUTINE_TIME = Type.String({
 const BOT_ROUTINE_SCHEDULE = Type.Union(
   [
     Type.Object(
-      { kind: Type.Literal("once"), date: Type.String({ description: "YYYY-MM-DD" }), time: BOT_ROUTINE_TIME },
+      {
+        kind: Type.Literal("once"),
+        date: Type.String({ description: "YYYY-MM-DD" }),
+        time: BOT_ROUTINE_TIME,
+      },
       { additionalProperties: false },
     ),
     Type.Object(
@@ -1988,19 +2049,41 @@ const BOT_ROUTINE_TRIGGER = Type.Object(
         `"file_change" (a file in your folder changes), "webhook" (the routine gets its own link on this ${localComputerNoun(process.platform)}'s network) ` +
         'or "watch" (Aiden checks a page or a script on an interval and wakes you only when its output changes).',
     }),
-    folder: Type.Optional(Type.String({ description: "file_change: a folder relative to your folder, for example \"inbox\"." })),
-    pattern: Type.Optional(Type.String({ description: "file_change: optional file pattern, for example \"*.pdf\"." })),
+    folder: Type.Optional(
+      Type.String({
+        description: 'file_change: a folder relative to your folder, for example "inbox".',
+      }),
+    ),
+    pattern: Type.Optional(
+      Type.String({ description: 'file_change: optional file pattern, for example "*.pdf".' }),
+    ),
     source: Type.Optional(
       Type.Object(
         {
           type: Type.String({ description: '"url" or "script".' }),
-          url: Type.Optional(Type.String({ description: "url: an https address (http only for localhost), read with no sign-in and no redirects." })),
-          script: Type.Optional(Type.String({ description: "script: a file relative to your folder, for example \"scripts/ci-status.sh\"." })),
+          url: Type.Optional(
+            Type.String({
+              description:
+                "url: an https address (http only for localhost), read with no sign-in and no redirects.",
+            }),
+          ),
+          script: Type.Optional(
+            Type.String({
+              description:
+                'script: a file relative to your folder, for example "scripts/ci-status.sh".',
+            }),
+          ),
         },
         { additionalProperties: true, description: "watch: what to check." },
       ),
     ),
-    everyMinutes: Type.Optional(Type.Integer({ minimum: 5, maximum: 1440, description: "watch: minutes between checks, 5 to 1440." })),
+    everyMinutes: Type.Optional(
+      Type.Integer({
+        minimum: 5,
+        maximum: 1440,
+        description: "watch: minutes between checks, 5 to 1440.",
+      }),
+    ),
   },
   { additionalProperties: true, description: "What starts the routine, instead of a schedule." },
 );
@@ -2040,8 +2123,13 @@ function routinesRequest(fields: Record<string, unknown>, allowed: readonly stri
  * to the current Bot and has no way to create, change or delete a routine
  * itself.
  */
-export function createBotRoutinesTool(botId: string, routines: BotRoutinesToolDependencies): AgentTool {
-  const actions = ["list", "propose", "pause", ...(routines.revise ? ["revise"] : [])].map((action) => Type.Literal(action));
+export function createBotRoutinesTool(
+  botId: string,
+  routines: BotRoutinesToolDependencies,
+): AgentTool {
+  const actions = ["list", "propose", "pause", ...(routines.revise ? ["revise"] : [])].map(
+    (action) => Type.Literal(action),
+  );
   const triggers = Boolean(routines.eventRoutines);
   return {
     name: BOT_ROUTINES_TOOL_NAME,
@@ -2049,7 +2137,9 @@ export function createBotRoutinesTool(botId: string, routines: BotRoutinesToolDe
     description:
       "This Bot's routines: future turns in this same conversation, at a time or when something happens. " +
       `Actions: list; propose (name, prompt, and a schedule${triggers ? " or a trigger" : ""}, optional reason) shows the person an Add routine card to approve or decline; ` +
-      (routines.revise ? "revise (proposalId from list or propose, plus the same fields) replaces a card that still waits for an answer, without taking another slot; " : "") +
+      (routines.revise
+        ? "revise (proposalId from list or propose, plus the same fields) replaces a card that still waits for an answer, without taking another slot; "
+        : "") +
       "pause (id from list) turns a routine off. " +
       "When the person asks for a future wake-up, reminder, check-in, or recurring task, propose it directly. Suggest an unrequested routine only when it would clearly help and the person has not declined it. " +
       "list also returns pendingSuggestions (cards still waiting) and recentDecisions: what the person accepted or declined, with why when they said. Don't suggest something like a declined routine, and when a reason was wrong_time, a different time may fit. " +
@@ -2060,16 +2150,31 @@ export function createBotRoutinesTool(botId: string, routines: BotRoutinesToolDe
         action: Type.Union(actions),
         id: Type.Optional(Type.String({ description: "Exact routine id from list (pause)." })),
         ...(routines.revise
-          ? { proposalId: Type.Optional(Type.String({ description: "Exact id of the waiting card to replace (revise)." })) }
+          ? {
+              proposalId: Type.Optional(
+                Type.String({ description: "Exact id of the waiting card to replace (revise)." }),
+              ),
+            }
           : {}),
-        name: Type.Optional(Type.String({ description: "Short routine name, for example \"Weekly meal prep\"." })),
+        name: Type.Optional(
+          Type.String({ description: 'Short routine name, for example "Weekly meal prep".' }),
+        ),
         schedule: Type.Optional(BOT_ROUTINE_SCHEDULE),
         ...(triggers ? { trigger: Type.Optional(BOT_ROUTINE_TRIGGER) } : {}),
-        prompt: Type.Optional(Type.String({ description: "What you should do each time the routine runs." })),
-        reason: Type.Optional(
-          Type.String({ maxLength: BOT_ROUTINE_PROPOSAL_REASON_LIMIT, description: "One line on why this would help them." }),
+        prompt: Type.Optional(
+          Type.String({ description: "What you should do each time the routine runs." }),
         ),
-        requested: Type.Optional(Type.Boolean({ description: "true only when the person asked for this routine in this conversation." })),
+        reason: Type.Optional(
+          Type.String({
+            maxLength: BOT_ROUTINE_PROPOSAL_REASON_LIMIT,
+            description: "One line on why this would help them.",
+          }),
+        ),
+        requested: Type.Optional(
+          Type.Boolean({
+            description: "true only when the person asked for this routine in this conversation.",
+          }),
+        ),
       },
       { additionalProperties: false },
     ),
@@ -2079,7 +2184,9 @@ export function createBotRoutinesTool(botId: string, routines: BotRoutinesToolDe
         throw new Error("Invalid routine request.");
       }
       const { action, ...fields } = rawParams as Record<string, unknown>;
-      const proposalFields = triggers ? PROPOSAL_FIELDS : PROPOSAL_FIELDS.filter((key) => key !== "trigger");
+      const proposalFields = triggers
+        ? PROPOSAL_FIELDS
+        : PROPOSAL_FIELDS.filter((key) => key !== "trigger");
       if (action === "list") {
         routinesRequest(fields, []);
         const eventRoutines = (await routines.eventRoutines?.list(botId)) ?? [];
@@ -2102,11 +2209,19 @@ export function createBotRoutinesTool(botId: string, routines: BotRoutinesToolDe
       }
       if (action === "pause") {
         routinesRequest(fields, ["id"]);
-        if (typeof fields.id !== "string" || !fields.id) throw new Error("Invalid routine request.");
+        if (typeof fields.id !== "string" || !fields.id)
+          throw new Error("Invalid routine request.");
         const event = await routines.eventRoutines?.pause(botId, fields.id);
         if (event) return result({ routine: { ...event, kind: "event" } });
         const paused = await routines.pause(botId, fields.id);
-        return result({ routine: { id: paused.id, name: paused.name, label: paused.label, enabled: paused.enabled } });
+        return result({
+          routine: {
+            id: paused.id,
+            name: paused.name,
+            label: paused.label,
+            enabled: paused.enabled,
+          },
+        });
       }
       if (action === "propose") {
         routinesRequest(fields, proposalFields);
@@ -2115,13 +2230,15 @@ export function createBotRoutinesTool(botId: string, routines: BotRoutinesToolDe
         return result({
           ok: true,
           proposalId: outcome.proposalId,
-          message: "I've shown the person an Add routine card. Don't ask again unless they bring it up; to change it before they answer, use revise.",
+          message:
+            "I've shown the person an Add routine card. Don't ask again unless they bring it up; to change it before they answer, use revise.",
         });
       }
       if (action === "revise" && routines.revise) {
         const { proposalId, ...rest } = fields;
         routinesRequest(rest, proposalFields);
-        if (typeof proposalId !== "string" || !proposalId) throw new Error("Invalid routine request.");
+        if (typeof proposalId !== "string" || !proposalId)
+          throw new Error("Invalid routine request.");
         const outcome = await routines.revise(botId, proposalId, proposalInput(rest));
         if (!outcome.ok) return refused(outcome);
         return result({
@@ -2134,7 +2251,6 @@ export function createBotRoutinesTool(botId: string, routines: BotRoutinesToolDe
     },
   };
 }
-
 
 export function scheduleTaskToolsForContext(context: {
   workspaceId?: string;

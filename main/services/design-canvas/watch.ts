@@ -152,7 +152,10 @@ export class DesignFileWatcher {
   async set(chatId: string, root: string, relativePaths: readonly string[]): Promise<void> {
     const generation = (this.generations.get(chatId) ?? 0) + 1;
     this.generations.set(chatId, generation);
-    const unique = [...new Set(relativePaths.filter(isDesignRelativePath))].slice(0, DESIGN_WATCH_LIMIT);
+    const unique = [...new Set(relativePaths.filter(isDesignRelativePath))].slice(
+      0,
+      DESIGN_WATCH_LIMIT,
+    );
     this.forgetUnwatchedWrites(chatId, unique);
     const byFolder = await this.groupByRealFolder(root, unique);
     // A newer `set` (or a `clear`) ran while we checked the disk.
@@ -161,13 +164,21 @@ export class DesignFileWatcher {
     // the pages that stay watched: a frame landing while Aiden edits another
     // page must not swallow that edit.
     const previous = this.chats.get(chatId);
-    const carried = previous && previous.root === root
-      ? [...previous.pending].filter(([relative]) => unique.includes(relative))
-      : [];
+    const carried =
+      previous && previous.root === root
+        ? [...previous.pending].filter(([relative]) => unique.includes(relative))
+        : [];
     this.close(chatId);
     if (!byFolder) return;
 
-    const entry: ChatWatch = { root, generation, paths: new Set(unique), folders: [], pending: new Map(), timer: null };
+    const entry: ChatWatch = {
+      root,
+      generation,
+      paths: new Set(unique),
+      folders: [],
+      pending: new Map(),
+      timer: null,
+    };
     for (const [folder, { paths, recursive }] of byFolder) {
       try {
         const handle = this.watch(folder, { recursive, persistent: false }, (_event, filename) => {
@@ -178,8 +189,16 @@ export class DesignFileWatcher {
           // (a stylesheet, an image, an unnamed event) may feed every page there.
           // An unnamed event may also be one of the pages changing by itself, so
           // each page it queues is checked against the canvas's own write.
-          const page = name === null ? undefined : paths.find((relative) => path.posix.basename(relative) === name);
-          this.queue(chatId, generation, page ? [page] : paths, page ? "page" : name === null ? "unnamed" : "beside");
+          const page =
+            name === null
+              ? undefined
+              : paths.find((relative) => path.posix.basename(relative) === name);
+          this.queue(
+            chatId,
+            generation,
+            page ? [page] : paths,
+            page ? "page" : name === null ? "unnamed" : "beside",
+          );
         });
         // A folder removed while watched errors once; the frame shows its own missing state.
         handle.on("error", () => handle.close());
@@ -234,7 +253,8 @@ export class DesignFileWatcher {
         else writes.set(relativePath, before);
       }
       // The page was just stamped by the clock that stamps the files beside it.
-      if (written && root !== undefined) write.fileClockOffset = fileClockOffset(path.join(root, relativePath), this.wallNow());
+      if (written && root !== undefined)
+        write.fileClockOffset = fileClockOffset(path.join(root, relativePath), this.wallNow());
       write.settledAt = this.now();
       settle();
       if (write.beside !== NOTHING_NOTED) this.letGoOfNoteAtDeadline(chatId, write);
@@ -243,7 +263,9 @@ export class DesignFileWatcher {
 
   /** How many of the chat's latest page writes still keep a note of the files beside their page. */
   heldNotes(chatId: string): number {
-    return [...(this.ownWrites.get(chatId)?.values() ?? [])].filter((write) => write.beside !== NOTHING_NOTED).length;
+    return [...(this.ownWrites.get(chatId)?.values() ?? [])].filter(
+      (write) => write.beside !== NOTHING_NOTED,
+    ).length;
   }
 
   /**
@@ -257,17 +279,22 @@ export class DesignFileWatcher {
     const until = write.settledAt + this.ownWriteWindowMs;
     const timers = this.noteTimers.get(chatId) ?? new Set<ReturnType<typeof setTimeout>>();
     this.noteTimers.set(chatId, timers);
-    const timer = setTimeout(() => {
-      timers.delete(timer);
-      if (timers.size === 0 && this.noteTimers.get(chatId) === timers) this.noteTimers.delete(chatId);
-      // One reading decides both what is let go and whether to wait again, so a
-      // window that closes between two readings can't leave the note held.
-      const now = this.now();
-      this.forgetStaleNotes(chatId, now);
-      // A timer may run a moment before the clock the window is measured on reaches its end.
-      const current = [...(this.ownWrites.get(chatId)?.values() ?? [])].includes(write);
-      if (current && write.beside !== NOTHING_NOTED && now <= until) this.letGoOfNoteAtDeadline(chatId, write);
-    }, Math.max(0, until - this.now()) + 1);
+    const timer = setTimeout(
+      () => {
+        timers.delete(timer);
+        if (timers.size === 0 && this.noteTimers.get(chatId) === timers)
+          this.noteTimers.delete(chatId);
+        // One reading decides both what is let go and whether to wait again, so a
+        // window that closes between two readings can't leave the note held.
+        const now = this.now();
+        this.forgetStaleNotes(chatId, now);
+        // A timer may run a moment before the clock the window is measured on reaches its end.
+        const current = [...(this.ownWrites.get(chatId)?.values() ?? [])].includes(write);
+        if (current && write.beside !== NOTHING_NOTED && now <= until)
+          this.letGoOfNoteAtDeadline(chatId, write);
+      },
+      Math.max(0, until - this.now()) + 1,
+    );
     timer.unref?.();
     timers.add(timer);
   }
@@ -285,12 +312,16 @@ export class DesignFileWatcher {
   private forgetUnwatchedWrites(chatId: string, watched: readonly string[]): void {
     const writes = this.ownWrites.get(chatId);
     if (!writes) return;
-    for (const relative of [...writes.keys()]) if (!watched.includes(relative)) writes.delete(relative);
+    for (const relative of [...writes.keys()])
+      if (!watched.includes(relative)) writes.delete(relative);
     if (writes.size === 0) this.ownWrites.delete(chatId);
   }
 
   /** The canvas's settled latest write to a page, waiting out one in progress. */
-  private async settledOwnWrite(chatId: string, relativePath: string): Promise<OwnWrite | undefined> {
+  private async settledOwnWrite(
+    chatId: string,
+    relativePath: string,
+  ): Promise<OwnWrite | undefined> {
     let write = this.ownWrites.get(chatId)?.get(relativePath);
     while (write) {
       await write.settled;
@@ -336,13 +367,21 @@ export class DesignFileWatcher {
     return byFolder.size > 0 ? byFolder : null;
   }
 
-  private queue(chatId: string, generation: number, paths: readonly string[], kind: "page" | "unnamed" | "beside"): void {
+  private queue(
+    chatId: string,
+    generation: number,
+    paths: readonly string[],
+    kind: "page" | "unnamed" | "beside",
+  ): void {
     const entry = this.chats.get(chatId);
     if (!entry || entry.generation !== generation) return;
     const at = kind === "unnamed" ? this.now() : null;
     for (const relative of paths) {
       const queued = entry.pending.get(relative) ?? { beside: false, unnamedAt: null };
-      entry.pending.set(relative, { beside: queued.beside || kind === "beside", unnamedAt: at ?? queued.unnamedAt });
+      entry.pending.set(relative, {
+        beside: queued.beside || kind === "beside",
+        unnamedAt: at ?? queued.unnamedAt,
+      });
     }
     if (entry.timer) clearTimeout(entry.timer);
     entry.timer = setTimeout(() => this.flush(chatId, entry), this.debounceMs);
@@ -366,7 +405,10 @@ export class DesignFileWatcher {
     // reported.
     const checks = pending.filter(([relative, queued]) => !queued.beside && writes?.has(relative));
     if (checks.length === 0) {
-      this.report(chatId, pending.map(([relative]) => relative));
+      this.report(
+        chatId,
+        pending.map(([relative]) => relative),
+      );
       this.forgetStaleNotes(chatId);
       return;
     }
@@ -376,7 +418,8 @@ export class DesignFileWatcher {
         const write = queued.beside ? undefined : await this.settledOwnWrite(chatId, relative);
         if (write === undefined) return relative;
         const { unnamedAt } = queued;
-        if (unnamedAt !== null && unnamedAt > (write.settledAt ?? 0) + this.ownWriteWindowMs) return relative;
+        if (unnamedAt !== null && unnamedAt > (write.settledAt ?? 0) + this.ownWriteWindowMs)
+          return relative;
         const now = await fsp.readFile(path.join(entry.root, relative)).then(digest, () => null);
         if (now !== write.digest) return relative;
         if (unnamedAt === null) return null;
@@ -384,10 +427,16 @@ export class DesignFileWatcher {
         // page. The canvas never writes those, so one touched since shortly
         // before its write began is someone else's change, even one the
         // noting walk took in.
-        const [then, beside, offset] = await Promise.all([write.beside, besidePage(entry.root, relative), write.fileClockOffset]);
+        const [then, beside, offset] = await Promise.all([
+          write.beside,
+          besidePage(entry.root, relative),
+          write.fileClockOffset,
+        ]);
         if (then === null || beside === null || beside.rows !== then.rows) return relative;
         // The files' times and the write's start are compared on the files' clock.
-        return beside.latest < write.startedAt + offset - this.neighbourLookbackMs ? null : relative;
+        return beside.latest < write.startedAt + offset - this.neighbourLookbackMs
+          ? null
+          : relative;
       }),
     )
       .then((paths) => {
@@ -400,7 +449,9 @@ export class DesignFileWatcher {
         }
         this.report(
           chatId,
-          paths.filter((relative): relative is string => relative !== null && current.paths.has(relative)),
+          paths.filter(
+            (relative): relative is string => relative !== null && current.paths.has(relative),
+          ),
         );
       })
       .finally(() => {
@@ -466,7 +517,11 @@ export class DesignFileWatcher {
  * way, which is why a report also compares the files' times with when the
  * canvas's write began.
  */
-async function besidePage(root: string, relativePath: string, noting?: () => Promise<void>): Promise<Neighbours | null> {
+async function besidePage(
+  root: string,
+  relativePath: string,
+  noting?: () => Promise<void>,
+): Promise<Neighbours | null> {
   const folder = path.join(root, path.posix.dirname(relativePath));
   const page = path.join(root, relativePath);
   const recursive = path.posix.dirname(relativePath) !== ".";

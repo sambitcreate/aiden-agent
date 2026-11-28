@@ -8,9 +8,7 @@ import {
   type FormFillBatchPlan,
 } from "./batch-core.js";
 
-function makePlan(
-  overrides: Partial<FormFillBatchPlan> = {},
-): FormFillBatchPlan {
+function makePlan(overrides: Partial<FormFillBatchPlan> = {}): FormFillBatchPlan {
   return {
     version: FORM_FILL_BATCH_VERSION,
     planId: "ffp-test-1",
@@ -111,13 +109,11 @@ test("consume rejects a second use and an unapproved call", () => {
   ledger.consume(token, plan);
   assert.throws(
     () => ledger.consume(token, plan),
-    (error: unknown) =>
-      error instanceof FormFillBatchError && error.code === "plan_consumed",
+    (error: unknown) => error instanceof FormFillBatchError && error.code === "plan_consumed",
   );
   assert.throws(
     () => ledger.consume("ffb-forged", plan),
-    (error: unknown) =>
-      error instanceof FormFillBatchError && error.code === "not_authorized",
+    (error: unknown) => error instanceof FormFillBatchError && error.code === "not_authorized",
   );
 });
 
@@ -127,8 +123,7 @@ test("authorize rejects a plan whose contents changed after review", () => {
   ledger.mint(plan);
   assert.throws(
     () => ledger.authorize(plan.planId, "0".repeat(64)),
-    (error: unknown) =>
-      error instanceof FormFillBatchError && error.code === "plan_mismatch",
+    (error: unknown) => error instanceof FormFillBatchError && error.code === "plan_mismatch",
   );
 });
 
@@ -143,8 +138,7 @@ test("consume rejects a tampered plan passed at execution", () => {
   };
   assert.throws(
     () => ledger.consume(token, tampered),
-    (error: unknown) =>
-      error instanceof FormFillBatchError && error.code === "plan_mismatch",
+    (error: unknown) => error instanceof FormFillBatchError && error.code === "plan_mismatch",
   );
 });
 
@@ -156,8 +150,7 @@ test("expiry, revocation, and generation revocation fail closed", () => {
   now = 2_000_000;
   assert.throws(
     () => ledger.authorize(expired.planId, ledger.digestOf(expired.planId)!),
-    (error: unknown) =>
-      error instanceof FormFillBatchError && error.code === "plan_expired",
+    (error: unknown) => error instanceof FormFillBatchError && error.code === "plan_expired",
   );
   assert.equal(ledger.statusOf(expired.planId), "expired");
 
@@ -167,8 +160,7 @@ test("expiry, revocation, and generation revocation fail closed", () => {
   ledger.revoke(revoked.planId);
   assert.throws(
     () => ledger.authorize(revoked.planId, revokedDigest),
-    (error: unknown) =>
-      error instanceof FormFillBatchError && error.code === "plan_revoked",
+    (error: unknown) => error instanceof FormFillBatchError && error.code === "plan_revoked",
   );
 
   const generationPlan = makePlan({ planId: "ffp-gen", generationId: "gen-9" });
@@ -176,8 +168,7 @@ test("expiry, revocation, and generation revocation fail closed", () => {
   ledger.revokeGeneration("gen-9");
   assert.throws(
     () => ledger.authorize(generationPlan.planId, generationDigest),
-    (error: unknown) =>
-      error instanceof FormFillBatchError && error.code === "plan_revoked",
+    (error: unknown) => error instanceof FormFillBatchError && error.code === "plan_revoked",
   );
 
   const otherGeneration = makePlan({
@@ -189,8 +180,7 @@ test("expiry, revocation, and generation revocation fail closed", () => {
   ledger.revokeAll();
   assert.throws(
     () => ledger.authorize(otherGeneration.planId, otherDigest),
-    (error: unknown) =>
-      error instanceof FormFillBatchError && error.code === "plan_revoked",
+    (error: unknown) => error instanceof FormFillBatchError && error.code === "plan_revoked",
   );
 });
 
@@ -202,14 +192,12 @@ test("an authorized plan that expires before execution cannot be consumed", () =
   now = plan.expiresAt;
   assert.throws(
     () => ledger.consume(token, plan),
-    (error: unknown) =>
-      error instanceof FormFillBatchError && error.code === "plan_expired",
+    (error: unknown) => error instanceof FormFillBatchError && error.code === "plan_expired",
   );
   now = 500_000;
   assert.throws(
     () => ledger.consume(token, plan),
-    (error: unknown) =>
-      error instanceof FormFillBatchError && error.code === "plan_expired",
+    (error: unknown) => error instanceof FormFillBatchError && error.code === "plan_expired",
     "a clock rollback must not revive it",
   );
   assert.equal(ledger.statusOf(plan.planId), "expired");
@@ -222,8 +210,7 @@ test("revoking an authorized plan closes its token, and a consumed plan stays co
   ledger.revoke(revoked.planId);
   assert.throws(
     () => ledger.consume(token, revoked),
-    (error: unknown) =>
-      error instanceof FormFillBatchError && error.code === "plan_revoked",
+    (error: unknown) => error instanceof FormFillBatchError && error.code === "plan_revoked",
   );
 
   const used = makePlan({ planId: "ffp-used" });
@@ -242,8 +229,7 @@ test("row deselection authorizes a strict subset with its own digest", () => {
   assert.notEqual(formFillPlanDigest(derived), digest);
   assert.throws(
     () => ledger.authorize(makePlan({ planId: "ffp-x" }).planId, digest, [9]),
-    (error: unknown) =>
-      error instanceof FormFillBatchError && error.code === "plan_unknown",
+    (error: unknown) => error instanceof FormFillBatchError && error.code === "plan_unknown",
   );
   ledger.consume(token, derived);
   // Token is bound to the derived digest — replaying the unfiltered plan fails.
@@ -253,17 +239,11 @@ test("row deselection authorizes a strict subset with its own digest", () => {
   const { token: token2 } = ledger2.authorize(plan2.planId, digest2, [0]);
   assert.throws(
     () => ledger2.consume(token2, plan2),
-    (error: unknown) =>
-      error instanceof FormFillBatchError && error.code === "plan_mismatch",
+    (error: unknown) => error instanceof FormFillBatchError && error.code === "plan_mismatch",
   );
   assert.throws(
-    () =>
-      new FormFillBatchLedger({ now: () => 500_000 }).authorize(
-        plan.planId,
-        digest,
-      ),
-    (error: unknown) =>
-      error instanceof FormFillBatchError && error.code === "plan_unknown",
+    () => new FormFillBatchLedger({ now: () => 500_000 }).authorize(plan.planId, digest),
+    (error: unknown) => error instanceof FormFillBatchError && error.code === "plan_unknown",
   );
 });
 
@@ -273,7 +253,6 @@ test("deselection of a row outside the plan is rejected", () => {
   const digest = ledger.mint(plan);
   assert.throws(
     () => ledger.authorize(plan.planId, digest, [7]),
-    (error: unknown) =>
-      error instanceof FormFillBatchError && error.code === "plan_mismatch",
+    (error: unknown) => error instanceof FormFillBatchError && error.code === "plan_mismatch",
   );
 });

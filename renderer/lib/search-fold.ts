@@ -8,7 +8,11 @@ const LATIN_DIACRITICS = /(\p{Script=Latin})\p{M}+/gu;
 const SEARCH_TEXT_LIMIT = 240;
 
 function foldForSearch(text: string): string {
-  return text.slice(0, SEARCH_TEXT_LIMIT).normalize("NFD").replace(LATIN_DIACRITICS, "$1").toLocaleLowerCase();
+  return text
+    .slice(0, SEARCH_TEXT_LIMIT)
+    .normalize("NFD")
+    .replace(LATIN_DIACRITICS, "$1")
+    .toLocaleLowerCase();
 }
 
 /** Whether any of `values` contains `query`, ignoring Latin accents and case. An empty query matches. */

@@ -65,7 +65,10 @@ test("forgetting a chat never removes the shared temp folder its fallback degrad
   await writeFile(blockedRoot, "not a directory");
   // A missing temp root makes mkdtemp fail too, so the fallback is the temp root itself.
   const sharedTemp = join(base, "missing-tmp");
-  const scratch = createAcpScratchDirectories({ root: () => blockedRoot, tempRoot: () => sharedTemp });
+  const scratch = createAcpScratchDirectories({
+    root: () => blockedRoot,
+    tempRoot: () => sharedTemp,
+  });
 
   assert.equal(await scratch.directoryFor("chat-a"), sharedTemp);
   await mkdir(sharedTemp);

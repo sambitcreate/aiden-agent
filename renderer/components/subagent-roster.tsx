@@ -95,9 +95,7 @@ function RosterNode({
     : null;
   return (
     <div data-subagent-tree-node={run.runId}>
-      <div
-        className={cn("flex min-w-0 items-center", node.level === 2 && "pl-5")}
-      >
+      <div className={cn("flex min-w-0 items-center", node.level === 2 && "pl-5")}>
         {node.children.length > 0 ? (
           <button
             type="button"
@@ -205,9 +203,13 @@ function RosterNode({
               stateTone(run.state),
               presentation?.state === "stale_active" && "text-support-warning",
             )}
-            title={activeDescendantLabel ? `${activeDescendantLabel} · ${displayState}` : displayState}
+            title={
+              activeDescendantLabel ? `${activeDescendantLabel} · ${displayState}` : displayState
+            }
           >
-            {activeDescendantLabel ? `${node.activeDescendantCount} active · ${displayState}` : displayState}
+            {activeDescendantLabel
+              ? `${node.activeDescendantCount} active · ${displayState}`
+              : displayState}
           </Text>
         </button>
       </div>
@@ -303,15 +305,12 @@ export function SubagentRoster({
     setFocusedRunId(runId);
     if (typeof window === "undefined") return;
     window.requestAnimationFrame(() => {
-      treeRef.current?.querySelector<HTMLButtonElement>(
-        `[data-subagent-run-id="${runId}"]`,
-      )?.focus();
+      treeRef.current
+        ?.querySelector<HTMLButtonElement>(`[data-subagent-run-id="${runId}"]`)
+        ?.focus();
     });
   };
-  const handleKeyDown = (
-    event: React.KeyboardEvent<HTMLButtonElement>,
-    runId: string,
-  ) => {
+  const handleKeyDown = (event: React.KeyboardEvent<HTMLButtonElement>, runId: string) => {
     if (event.key === "Enter" || event.key === " ") {
       event.preventDefault();
       onSelect(runId, event.currentTarget);
@@ -319,12 +318,7 @@ export function SubagentRoster({
     }
     if (!NAVIGATION_KEYS.has(event.key as SubagentTreeKey)) return;
     event.preventDefault();
-    const result = subagentTreeKeyResult(
-      groups,
-      expansion,
-      runId,
-      event.key as SubagentTreeKey,
-    );
+    const result = subagentTreeKeyResult(groups, expansion, runId, event.key as SubagentTreeKey);
     if (result.expansion) setExpansion(result.expansion);
     focusRun(result.focusRunId);
   };

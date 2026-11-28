@@ -19,8 +19,7 @@ const FormFillParameters = Type.Object(
       minimum: 1,
     }),
     window_id: Type.Integer({
-      description:
-        "Exact window id to fill (from computer_use list_windows/capture).",
+      description: "Exact window id to fill (from computer_use list_windows/capture).",
       minimum: 1,
     }),
   },
@@ -59,21 +58,14 @@ export function createFormFillAgentTool(
       "The attachment IDs you may use are listed in a note after the user's message.",
     parameters: FormFillParameters,
     executionMode: "sequential",
-    execute: async (
-      toolCallId,
-      params: Static<typeof FormFillParameters>,
-      signal,
-    ) => {
+    execute: async (toolCallId, params: Static<typeof FormFillParameters>, signal) => {
       const result = await service.execute(toolCallId, params, signal);
       return {
         content: [
           {
             type: "text" as const,
             text: JSON.stringify({
-              ok:
-                result.failed === 0 &&
-                !result.stoppedEarly &&
-                result.notAttempted === 0,
+              ok: result.failed === 0 && !result.stoppedEarly && result.notAttempted === 0,
               plan_id: result.planId,
               filled: result.filled,
               already_satisfied: result.alreadySatisfied,

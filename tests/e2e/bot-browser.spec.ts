@@ -7,8 +7,7 @@ import { build } from "esbuild";
 import playwrightTest from "@playwright/test";
 import type * as PlaywrightTestModule from "@playwright/test";
 
-const { expect, test } =
-  playwrightTest as unknown as typeof PlaywrightTestModule;
+const { expect, test } = playwrightTest as unknown as typeof PlaywrightTestModule;
 
 const RED = [255, 0, 0];
 
@@ -44,30 +43,36 @@ test("a Bot's browser keeps its own sign-ins, masks secret fields, honours holds
     // Keep exact pixel controls independent of the host display's color profile.
     // Chromium refuses to start as root (a container) unless its sandbox is off.
     const sandbox = process.getuid?.() === 0 ? ["--no-sandbox"] : [];
-    const run = await promisify(execFile)(electron, ["--disable-gpu", "--force-color-profile=srgb", ...sandbox, entry], {
-      timeout: 75_000,
-      killSignal: "SIGKILL",
-      env: {
-        PATH: process.env.PATH,
-        AIDEN_BOT_BROWSER_ROOT: root,
-        AIDEN_CONFIG_DIR: path.join(root, "config"),
-        ...(process.platform === "linux"
-          ? Object.fromEntries(
-              ["DISPLAY", "WAYLAND_DISPLAY", "XAUTHORITY", "XDG_RUNTIME_DIR", "XDG_SESSION_TYPE"]
-                .filter((name) => process.env[name] !== undefined)
-                .map((name) => [name, process.env[name]]),
-            )
-          : {}),
+    const run = await promisify(execFile)(
+      electron,
+      ["--disable-gpu", "--force-color-profile=srgb", ...sandbox, entry],
+      {
+        timeout: 75_000,
+        killSignal: "SIGKILL",
+        env: {
+          PATH: process.env.PATH,
+          AIDEN_BOT_BROWSER_ROOT: root,
+          AIDEN_CONFIG_DIR: path.join(root, "config"),
+          ...(process.platform === "linux"
+            ? Object.fromEntries(
+                ["DISPLAY", "WAYLAND_DISPLAY", "XAUTHORITY", "XDG_RUNTIME_DIR", "XDG_SESSION_TYPE"]
+                  .filter((name) => process.env[name] !== undefined)
+                  .map((name) => [name, process.env[name]]),
+              )
+            : {}),
+        },
       },
-    });
+    );
     output = `${run.stdout}${run.stderr}`;
   } finally {
     await rm(temporaryBuild, { recursive: true, force: true });
   }
-  const raw = await readFile(path.join(root, "result.json"), "utf8").catch((error: NodeJS.ErrnoException) => {
-    if (error.code !== "ENOENT") throw error;
-    throw new Error(`The Bot browser fixture exited without a result:\n${output}`);
-  });
+  const raw = await readFile(path.join(root, "result.json"), "utf8").catch(
+    (error: NodeJS.ErrnoException) => {
+      if (error.code !== "ENOENT") throw error;
+      throw new Error(`The Bot browser fixture exited without a result:\n${output}`);
+    },
+  );
   const result = JSON.parse(raw);
 
   // Separate sign-ins: neither browser sends the other's session cookie.
@@ -79,7 +84,8 @@ test("a Bot's browser keeps its own sign-ins, masks secret fields, honours holds
 
   // Secret fields are painted over in the image and left out of the text; an ordinary block stays red.
   expect(result.masking.note).toBe(result.expected.maskedNote);
-  for (const field of ["password", "otp", "card"]) expect(painted(result.masking[field]), field).toBe(true);
+  for (const field of ["password", "otp", "card"])
+    expect(painted(result.masking[field]), field).toBe(true);
   expect(result.masking.control).toEqual(RED);
   expect(result.masking.leaked).toEqual([]);
   expect(result.typing).toBe(result.expected.typingRefusal);
@@ -100,7 +106,9 @@ test("a Bot's browser keeps its own sign-ins, masks secret fields, honours holds
   expect(result.textLocators.xpath).toBe(result.expected.xpathRefusal);
   expect(result.textLocators.label).toBe("ran");
   expect(result.textLocators.button).toBe("ran");
-  expect(result.textLocators.both).toMatch(/strict mode violation: this locator matches 2 elements/u);
+  expect(result.textLocators.both).toMatch(
+    /strict mode violation: this locator matches 2 elements/u,
+  );
   expect(result.textLocators.both).not.toMatch(/4111|737/u);
   // Role names can't tell a password, code or card field's live value apart; the snapshot names nothing with one.
   expect(result.roleLocators.right).toEqual([timedOut, timedOut, timedOut, timedOut]);
@@ -109,7 +117,10 @@ test("a Bot's browser keeps its own sign-ins, masks secret fields, honours holds
   expect(result.roleLocators.cell).toBe("ran");
   expect(result.tableSeen.leaked).toEqual([]);
   expect(result.tableSeen.found.length).toBeGreaterThan(0);
-  expect(result.tableSeen.found.every((found: string) => found === "ran"), JSON.stringify(result.tableSeen.found)).toBe(true);
+  expect(
+    result.tableSeen.found.every((found: string) => found === "ran"),
+    JSON.stringify(result.tableSeen.found),
+  ).toBe(true);
   expect(result.tableSeen.probed.checkbox ?? "").not.toMatch(/5555/u);
   expect(result.tableSeen.probed.button).toBe("Pay");
   // A card field covering the target: Playwright's message quotes it; the Bot's doesn't.
@@ -127,7 +138,8 @@ test("a Bot's browser keeps its own sign-ins, masks secret fields, honours holds
   expect(result.hold.personMayUse).toBe(true);
   const afterRelease = result.hold.afterRelease;
   expect(typeof afterRelease, String(afterRelease)).toBe("object");
-  for (const field of ["password", "otp", "card"]) expect(painted(afterRelease[field]), `${field} after release`).toBe(true);
+  for (const field of ["password", "otp", "card"])
+    expect(painted(afterRelease[field]), `${field} after release`).toBe(true);
   expect(afterRelease.control).toEqual(RED);
   expect(afterRelease.leaked).toEqual([]);
   // The pages the person loaded and what they logged while holding the tab never reach the Bot.
@@ -144,9 +156,13 @@ test("a Bot's browser keeps its own sign-ins, masks secret fields, honours holds
   expect(result.reveal.shownType, "the page did show the field as text").toBe("text");
   expect(result.reveal.heldObservation).toEqual({ delayedRead: true, passwordObserved: true });
   expect(result.reveal.typingShownByBot).toBe(result.expected.typingRefusal);
-  expect(result.reveal.pressingShownByPerson, "a printable key into the focused field").toBe(result.expected.typingRefusal);
+  expect(result.reveal.pressingShownByPerson, "a printable key into the focused field").toBe(
+    result.expected.typingRefusal,
+  );
   expect(result.reveal.typingShownByPerson).toBe(result.expected.typingRefusal);
-  expect(result.reveal.probedShownByBot, "approvals and rules still read a password field").toBe("password");
+  expect(result.reveal.probedShownByBot, "approvals and rules still read a password field").toBe(
+    "password",
+  );
   expect(result.reveal.probedType, "also after the person showed it").toBe("password");
   // Each page the person opens on a held tab is read as it loads, however slow the read before it:
   // one opened while the next timed read was seconds away, and one that loaded during a read.
@@ -161,18 +177,31 @@ test("a Bot's browser keeps its own sign-ins, masks secret fields, honours holds
   // A remembered field the person showed as plain text: a Bot's wait and
   // scroll can't tell its value apart through the row around it, and the
   // snapshot's locators don't quote it, each on a page nothing marked first.
-  expect(result.remembered.shownAs, "the person showed the fields as text").toEqual(["text", "text", "text"]);
+  expect(result.remembered.shownAs, "the person showed the fields as text").toEqual([
+    "text",
+    "text",
+    "text",
+  ]);
   expect(result.remembered.wait).toEqual({ right: timedOut, wrong: timedOut });
   // Nor which option a server-rendered card-expiry list marked selected; role states still work.
   const stateRefusal = result.expected.stateRefusal;
-  expect(result.savedMonth).toEqual({ right: stateRefusal, wrong: stateRefusal, role: "ran", probe: stateRefusal });
+  expect(result.savedMonth).toEqual({
+    right: stateRefusal,
+    wrong: stateRefusal,
+    role: "ran",
+    probe: stateRefusal,
+  });
   expect(result.remembered.scroll.right).not.toBe("ran");
   expect(result.remembered.scroll.right).toBe(result.remembered.scroll.wrong);
   expect(result.remembered.snapshot.leaked).toBe(false);
   expect(result.remembered.snapshot.found.length).toBeGreaterThan(0);
-  expect(result.remembered.snapshot.found.every((found: string) => found === "ran"), JSON.stringify(result.remembered.snapshot.found)).toBe(true);
+  expect(
+    result.remembered.snapshot.found.every((found: string) => found === "ran"),
+    JSON.stringify(result.remembered.snapshot.found),
+  ).toBe(true);
 
-  const unobserved = "This tab's password protection was not ready when it was released. Ask the person to close it and open the page in a new tab.";
+  const unobserved =
+    "This tab's password protection was not ready when it was released. Ask the person to close it and open the page in a new tab.";
   expect(result.releaseBeforeRead.shownType).toBe("text");
   expect(result.releaseBeforeRead.unknownRelease).toBe(result.expected.heldRefusal);
   expect(result.releaseBeforeRead.beforeDrain).toEqual({ kind: "refused", message: unobserved });
@@ -198,5 +227,10 @@ test("a Bot's browser keeps its own sign-ins, masks secret fields, honours holds
   expect(result.releaseRecovery.botCookies).toEqual(["sid=bot"]);
 
   // Delete clears the Bot's sign-ins and tabs and leaves the person's alone.
-  expect(result.cleared).toEqual({ botCookies: [], personCookies: ["sid=person"], botTabs: 0, personTabs: 1 });
+  expect(result.cleared).toEqual({
+    botCookies: [],
+    personCookies: ["sid=person"],
+    botTabs: 0,
+    personTabs: 1,
+  });
 });

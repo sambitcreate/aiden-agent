@@ -21,7 +21,18 @@ function withNote(doc: DesignCanvas, id: string): DesignCanvas {
     ...doc,
     frames: [
       ...doc.frames,
-      { id, kind: "note", title: id, x: 0, y: 0, w: 200, h: 120, text: id, pageId: "page-1", createdBy: "person" },
+      {
+        id,
+        kind: "note",
+        title: id,
+        x: 0,
+        y: 0,
+        w: 200,
+        h: 120,
+        text: id,
+        pageId: "page-1",
+        createdBy: "person",
+      },
     ],
   };
 }
@@ -228,8 +239,14 @@ test("a canvas too large to read back is refused and the previous one stays", as
 test("a save that fits only without the pages remembered as taken off is refused, and the stored canvas still reads back", async (t) => {
   const root = await tempRoot(t);
   await fs.mkdir(root, { recursive: true });
-  const removedPagePaths = Array.from({ length: 30 }, (_, index) => `pages/${"p".repeat(80)}-${index}.html`);
-  await fs.writeFile(path.join(root, "chat-1.json"), JSON.stringify({ ...emptyDesignCanvas(), revision: 1, removedPagePaths }));
+  const removedPagePaths = Array.from(
+    { length: 30 },
+    (_, index) => `pages/${"p".repeat(80)}-${index}.html`,
+  );
+  await fs.writeFile(
+    path.join(root, "chat-1.json"),
+    JSON.stringify({ ...emptyDesignCanvas(), revision: 1, removedPagePaths }),
+  );
   const store = new DesignCanvasStore({ root: () => root, maxDocumentBytes: 4096 });
   let doc = await store.get("chat-1");
   assert.equal(doc.removedPagePaths?.length, 30);

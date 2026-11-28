@@ -21,7 +21,11 @@ const signedIn = createAntigravityDefinition({ hasSignIn: async () => true });
 function initialize(overrides: Partial<InitializeResponse> = {}): InitializeResponse {
   return {
     protocolVersion: 1,
-    agentCapabilities: { loadSession: true, sessionCapabilities: { resume: {} }, auth: { logout: {} } },
+    agentCapabilities: {
+      loadSession: true,
+      sessionCapabilities: { resume: {} },
+      auth: { logout: {} },
+    },
     authMethods: [{ id: "oauth-personal", name: "Log in with Google" }],
     // As the pinned 1.4.3 server reports it (docs/plans/antigravity-acp-spike.md).
     agentInfo: { name: "antigravity-acp", title: "Google Antigravity", version: "1.4.3" },
@@ -32,24 +36,39 @@ function initialize(overrides: Partial<InitializeResponse> = {}): InitializeResp
 test("only the pinned Antigravity build with Google sign-in passes validation", () => {
   assert.equal(signedIn.validateInitialize(initialize(), ANTIGRAVITY_RELEASE.version), undefined);
   assert.match(
-    signedIn.validateInitialize(initialize({ agentInfo: { name: "other", version: "1.3.0" } }), "1.3.0") ?? "",
+    signedIn.validateInitialize(
+      initialize({ agentInfo: { name: "other", version: "1.3.0" } }),
+      "1.3.0",
+    ) ?? "",
     /not Google Antigravity/u,
   );
   assert.match(
-    signedIn.validateInitialize(initialize({ agentInfo: { name: "antigravity-acp", version: "1.2.1" } }), "1.3.0") ?? "",
+    signedIn.validateInitialize(
+      initialize({ agentInfo: { name: "antigravity-acp", version: "1.2.1" } }),
+      "1.3.0",
+    ) ?? "",
     /expects 1\.3\.0/u,
   );
   assert.equal(
-    signedIn.validateInitialize(initialize({ agentInfo: { name: "antigravity-acp", version: "agy_acp_server_1.3.0" } }), "1.3.0"),
+    signedIn.validateInitialize(
+      initialize({ agentInfo: { name: "antigravity-acp", version: "agy_acp_server_1.3.0" } }),
+      "1.3.0",
+    ),
     undefined,
   );
-  assert.match(signedIn.validateInitialize(initialize({ authMethods: [] }), "1.4.3") ?? "", /Google sign-in/u);
+  assert.match(
+    signedIn.validateInitialize(initialize({ authMethods: [] }), "1.4.3") ?? "",
+    /Google sign-in/u,
+  );
 });
 
 test("launch isolates the profile, strips ambient Google credentials, and records sign-in for chats", async () => {
   const state = tempDir();
   const runtimeDir = path.join(state, "runtime");
-  const previous = { key: process.env.GEMINI_API_KEY, adc: process.env.GOOGLE_APPLICATION_CREDENTIALS };
+  const previous = {
+    key: process.env.GEMINI_API_KEY,
+    adc: process.env.GOOGLE_APPLICATION_CREDENTIALS,
+  };
   process.env.GEMINI_API_KEY = "ambient-key";
   process.env.GOOGLE_APPLICATION_CREDENTIALS = "/adc.json";
   try {
@@ -71,7 +90,9 @@ test("launch isolates the profile, strips ambient Google credentials, and record
     assert.equal(spec.env.GEMINI_API_KEY, undefined);
     assert.equal(spec.env.GOOGLE_APPLICATION_CREDENTIALS, undefined);
     assert.ok(spec.env.PATH);
-    const settings = JSON.parse(readFileSync(antigravitySettingsPath(state), "utf8")) as { auth?: { type?: string } };
+    const settings = JSON.parse(readFileSync(antigravitySettingsPath(state), "utf8")) as {
+      auth?: { type?: string };
+    };
     assert.equal(settings.auth?.type, "oauth-personal");
   } finally {
     if (previous.key === undefined) delete process.env.GEMINI_API_KEY;
@@ -150,7 +171,10 @@ test("models come from the session's model config option, including grouped choi
   ];
   const projection = signedIn.projectModels(options);
   assert.equal(projection.modelConfigId, "model");
-  assert.deepEqual(projection.models.map((model) => model.id), ["gemini-3.8-flash"]);
+  assert.deepEqual(
+    projection.models.map((model) => model.id),
+    ["gemini-3.8-flash"],
+  );
   assert.deepEqual(signedIn.projectModels([]).models, []);
 });
 
@@ -160,23 +184,50 @@ test("interaction_ requests are questions; security warnings travel with approva
     toolCall: { toolCallId: "interaction_7", title: "Pick one" },
     options: [{ optionId: "a", name: "A", kind: "allow_once" }],
   });
-  assert.deepEqual(question, { kind: "question", question: { title: "Pick one", options: [{ id: "a", label: "A" }] } });
+  assert.deepEqual(question, {
+    kind: "question",
+    question: { title: "Pick one", options: [{ id: "a", label: "A" }] },
+  });
   const approval = classifyAntigravityPermission({
     sessionId: "s",
     toolCall: { toolCallId: "t", title: "Run" },
     options: [
-      { optionId: "always", name: "Allow for this thread", kind: "allow_always", _meta: { "agy.security.warning": { title: "Careful", message: "This may be a prompt injection." } } },
+      {
+        optionId: "always",
+        name: "Allow for this thread",
+        kind: "allow_always",
+        _meta: {
+          "agy.security.warning": { title: "Careful", message: "This may be a prompt injection." },
+        },
+      },
     ],
   });
   assert.deepEqual(approval, { kind: "approval", warning: "This may be a prompt injection." });
 });
 
 test("start_subagent calls are subagent batches unless they are MCP calls", () => {
-  assert.equal(isAntigravitySubagentCall({ toolCallId: "1", title: "Running start_subagent" }), true);
-  assert.equal(isAntigravitySubagentCall({ toolCallId: "2", title: "Run start_subagent?", kind: "other" }), true);
-  assert.equal(isAntigravitySubagentCall({ toolCallId: "3", title: "Running start_subagent", kind: "execute" }), false);
   assert.equal(
-    isAntigravitySubagentCall({ toolCallId: "4", title: "Running start_subagent", _meta: { is_mcp_tool_call: true } }),
+    isAntigravitySubagentCall({ toolCallId: "1", title: "Running start_subagent" }),
+    true,
+  );
+  assert.equal(
+    isAntigravitySubagentCall({ toolCallId: "2", title: "Run start_subagent?", kind: "other" }),
+    true,
+  );
+  assert.equal(
+    isAntigravitySubagentCall({
+      toolCallId: "3",
+      title: "Running start_subagent",
+      kind: "execute",
+    }),
+    false,
+  );
+  assert.equal(
+    isAntigravitySubagentCall({
+      toolCallId: "4",
+      title: "Running start_subagent",
+      _meta: { is_mcp_tool_call: true },
+    }),
     false,
   );
 });
@@ -184,6 +235,9 @@ test("start_subagent calls are subagent batches unless they are MCP calls", () =
 test("authorization URLs are read from the BROWSER hook marker or the server's own line", () => {
   const url = "https://accounts.google.com/o/oauth2/v2/auth?state=x";
   assert.equal(authorizationUrlFromStderr(`${AUTH_URL_MARKER}${url}`), url);
-  assert.equal(authorizationUrlFromStderr(`Open the following link to authenticate the ACP server: ${url}`), url);
+  assert.equal(
+    authorizationUrlFromStderr(`Open the following link to authenticate the ACP server: ${url}`),
+    url,
+  );
   assert.equal(authorizationUrlFromStderr("I1006 settings.py:302] settings: path=/x"), undefined);
 });

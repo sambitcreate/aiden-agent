@@ -46,17 +46,27 @@ export class HookJsonFile<T> {
       value = this.sanitize(raw);
     } catch (error) {
       this.readFailed = true;
-      throw new Error(`${file} is not a hooks file (${(error as Error).message}); fix or remove it`);
+      throw new Error(
+        `${file} is not a hooks file (${(error as Error).message}); fix or remove it`,
+      );
     }
     this.readFailed = false;
     return value;
   }
 
   write(value: T): Promise<void> {
-    if (this.readFailed) return Promise.reject(new Error(`${this.filePath()} could not be loaded, so it was not changed.`));
+    if (this.readFailed)
+      return Promise.reject(
+        new Error(`${this.filePath()} could not be loaded, so it was not changed.`),
+      );
     const snapshot = JSON.parse(JSON.stringify(value)) as T;
     const next = this.writes.then(() =>
-      writeJsonAtomic(this.filePath(), snapshot, { space: 2, trailingNewline: true, mode: 0o600, mkdirMode: 0o700 }),
+      writeJsonAtomic(this.filePath(), snapshot, {
+        space: 2,
+        trailingNewline: true,
+        mode: 0o600,
+        mkdirMode: 0o700,
+      }),
     );
     this.writes = next.catch(() => undefined);
     return next;

@@ -22,12 +22,12 @@ The script reads the baseline sources from Git into a temporary directory (does 
 
 Latest unmodified-filesystem run after local native builds completed (single-run milliseconds):
 
-| Tree / operation | Before | After |
-| --- | ---: | ---: |
-| Wide / Gemini index | 571 | 517 |
-| Wide / legacy Remote | 1622 | 1202 |
-| Deep / Gemini index | 579 | 145 |
-| Deep / legacy Remote | 3090 | 1925 |
+| Tree / operation     | Before | After |
+| -------------------- | -----: | ----: |
+| Wide / Gemini index  |    571 |   517 |
+| Wide / legacy Remote |   1622 |  1202 |
+| Deep / Gemini index  |    579 |   145 |
+| Deep / legacy Remote |   3090 |  1925 |
 
 Wide index: 4001 stats, 1 realpath, 1 readdir in both versions. Wide legacy: 8001 stats, 8001 realpaths, 1 readdir in both. Deep index: 3981 stats, 1 realpath, 21 readdirs; deep legacy: 7981 stats, 8001 realpaths, 21 readdirs. Output4000 in each case; zero readFile/open calls. Peak stat and file-identity concurrency moves1→4. Timing is noisy under shared-host load: an earlier wide index sample regressed318→391ms while native compilation was active. Use counters/tests as structural evidence; do not claim a universal local-disk speedup.
 
@@ -44,7 +44,6 @@ No UI, onboarding, protocol, plan status, model catalog, deployment or provider 
 
 The optional1ms stat-delay sample returned wide index7455→1963ms, wide legacy15813→3218ms, deep index5504→1420ms, deep legacy14997→17999ms. The last sample was slower despite peak concurrency4; shared-host scheduling affects wall time even with simulated latency. No latency threshold is a test acceptance gate.
 
-
 ## Pullfrog aggregate-budget follow-up
 
 Pullfrog review5343514849 on56120a385 flagged that independent four-operation batches could multiply filesystem pressure across requests. Added shared FIFO admission with a64-batch waiting cap, prompt cancellation while queued, drain-before-handoff for started checks, and explicit overload rejection. Queue-full requests follow the existing workspace error path; handle capacity still uses429. Avoids caching/deduplication or authority reuse. Slow filesystem calls can hold the active batch; queued cancellation does not wait for them.
@@ -57,27 +56,25 @@ Benchmark now includes overlapping Files/Gemini/Remote requests and copies basel
 
 Comparison against initial published56120a385 (no injected latency): three overlapping requests peak at12 stats before versus4 after, on both wide and deep trees. Counts remain16003 wide /15943 deep stats, with identical projected outputs and no content reads/opens. Wide concurrent completion550→601ms and deep455→558ms: aggregate admission intentionally trades some concurrent throughput for bounded shared filesystem pressure. Single-request peaks remain4; this follow-up does not claim additional single-request speedup.
 
-
 ## Remote Bot follow-up and caller inventory
 
 Pullfrog review5343756347 found the Bot listing identity loop outside the shared budget. Bot listings now admit each identity check through the same gate, retain serial policy revalidation after admission, and issue handles only after the shared cancellation/drain check. Active and archived Bot authority/error mappings stay separate from workspace authority. The two new regressions fail on published6fc57fae: overlapping Bot/workspace stat peak6 exceeds4, and a revocation during identity inspection still issues1 handle. Both pass with the follow-up (peak<=4 and zero revoked handles).
 
 The budget covers **bulk metadata for recursive workspace file snapshots and their legacy file-handle issuance**, not all filesystem or opaque-handle work in the process:
 
-| Caller / operation | Budget coverage |
-| --- | --- |
-| Desktop Files (`main/handlers/workspaces.ts`) | Shared per-entry index metadata |
-| Eligible Gemini turn preparation (`llm-client.ts`) | Same shared per-entry index metadata |
-| Headless CLI `files list` (`packages/cli/src/git-commands.ts`) | Same per-entry index helper, with its own process-local budget |
-| Legacy Remote workspace file snapshot (`aiden-remote-files.ts`) | Index metadata and independently inspected file identities |
-| Legacy Remote Bot file snapshot (`aiden-remote-bot-files.ts`), active or archived authority | Index metadata and serial, policy-revalidated file identities |
-| Root admission, directory enumeration, sorting | Existing per-request behavior, outside this per-entry budget |
-| Secure native lazy Files browsing | Existing bounded native direct-child enumeration and reused confined identities; separate path, unchanged |
-| Approved-root workspace picker (`aiden-remote-workspace-browser.ts`) | Separate setup/registration authority surface; serial root/directory/breadcrumb identity checks retain their existing limits and are outside recursive file snapshots |
-| One-off handle validation for read/write, directory handles/cursors | Existing authority operations, outside bulk listing admission |
+| Caller / operation                                                                          | Budget coverage                                                                                                                                                       |
+| ------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Desktop Files (`main/handlers/workspaces.ts`)                                               | Shared per-entry index metadata                                                                                                                                       |
+| Eligible Gemini turn preparation (`llm-client.ts`)                                          | Same shared per-entry index metadata                                                                                                                                  |
+| Headless CLI `files list` (`packages/cli/src/git-commands.ts`)                              | Same per-entry index helper, with its own process-local budget                                                                                                        |
+| Legacy Remote workspace file snapshot (`aiden-remote-files.ts`)                             | Index metadata and independently inspected file identities                                                                                                            |
+| Legacy Remote Bot file snapshot (`aiden-remote-bot-files.ts`), active or archived authority | Index metadata and serial, policy-revalidated file identities                                                                                                         |
+| Root admission, directory enumeration, sorting                                              | Existing per-request behavior, outside this per-entry budget                                                                                                          |
+| Secure native lazy Files browsing                                                           | Existing bounded native direct-child enumeration and reused confined identities; separate path, unchanged                                                             |
+| Approved-root workspace picker (`aiden-remote-workspace-browser.ts`)                        | Separate setup/registration authority surface; serial root/directory/breadcrumb identity checks retain their existing limits and are outside recursive file snapshots |
+| One-off handle validation for read/write, directory handles/cursors                         | Existing authority operations, outside bulk listing admission                                                                                                         |
 
 Searched every production caller of `listWorkspaceFiles` and `inspectAidenFilesystemIdentity`. The only remaining bulk identity loop is the approved-root workspace picker listed above, deliberately excluded from this file-snapshot scope. This is not a process-wide syscall cap. Both native Bot Files models retain their generic error handling and opaque DTO validation; no route or wire changes are required.
-
 
 Fresh independent Astra medium caller/blast-radius review cleared the Bot follow-up; its43 tests passed with1 existing Linux-only skip. The CLI inventory omission it identified is corrected above. Final local reruns: full Remote537 passed/1 skipped; Android55 tests passed across workspace, Remote client and Bot contracts; iOS13 simulator tests passed (workspace11 plus Bot routes and scoped-grant revocation). TypeScript and scoped ESLint passed. Paginated recheck of38 other open PRs found no overlap in the Bot/identity/helper follow-up files (#85:295 files, #37:209). Latest-head hosted checks and bot re-review remain separate gates after push.
 

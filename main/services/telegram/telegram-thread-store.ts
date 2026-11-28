@@ -18,24 +18,30 @@ function normalizeThreadState(value: unknown): TelegramThreadState {
   if (!value || typeof value !== "object" || Array.isArray(value)) return {};
   const raw = (value as TelegramThreadState).targets;
   if (!Array.isArray(raw)) return {};
-  const targets = raw.filter((target): target is TelegramThreadTarget =>
-    Boolean(
-      target &&
-      typeof target === "object" &&
-      Number.isSafeInteger(target.threadId) && target.threadId > 0 &&
-      Number.isSafeInteger(target.chatId) &&
-      typeof target.name === "string" && target.name.length > 0 && target.name.length <= 128 &&
-      (target.workspaceId === undefined || typeof target.workspaceId === "string") &&
-      typeof target.createdAt === "number",
-    ),
-  ).slice(-256);
+  const targets = raw
+    .filter((target): target is TelegramThreadTarget =>
+      Boolean(
+        target &&
+        typeof target === "object" &&
+        Number.isSafeInteger(target.threadId) &&
+        target.threadId > 0 &&
+        Number.isSafeInteger(target.chatId) &&
+        typeof target.name === "string" &&
+        target.name.length > 0 &&
+        target.name.length <= 128 &&
+        (target.workspaceId === undefined || typeof target.workspaceId === "string") &&
+        typeof target.createdAt === "number",
+      ),
+    )
+    .slice(-256);
   return { targets };
 }
 
 export function createTelegramThreadStore(options: { root(): string; profile: string }) {
-  const fileName = options.profile === "default"
-    ? "telegram-threads.json"
-    : `telegram-threads-${options.profile}.json`;
+  const fileName =
+    options.profile === "default"
+      ? "telegram-threads.json"
+      : `telegram-threads-${options.profile}.json`;
   const store = new DataStore<TelegramThreadState>(fileName, {}, options.root, {
     maxBytes: 256 * 1024,
     normalize: normalizeThreadState,
@@ -55,8 +61,9 @@ export function createTelegramThreadStore(options: { root(): string; profile: st
     },
     async upsert(target: TelegramThreadTarget): Promise<void> {
       await store.update((draft) => {
-        draft.targets = (draft.targets ?? []).filter((candidate) =>
-          candidate.threadId !== target.threadId && candidate.workspaceId !== target.workspaceId,
+        draft.targets = (draft.targets ?? []).filter(
+          (candidate) =>
+            candidate.threadId !== target.threadId && candidate.workspaceId !== target.workspaceId,
         );
         draft.targets.push(target);
         draft.targets = draft.targets.slice(-256);
@@ -67,11 +74,17 @@ export function createTelegramThreadStore(options: { root(): string; profile: st
         draft.targets = (draft.targets ?? []).filter((target) => target.threadId !== threadId);
       });
     },
-    async retainWorkspaces(workspaceIds: ReadonlySet<string>, chatId: number): Promise<TelegramThreadTarget[]> {
+    async retainWorkspaces(
+      workspaceIds: ReadonlySet<string>,
+      chatId: number,
+    ): Promise<TelegramThreadTarget[]> {
       const removed: TelegramThreadTarget[] = [];
       await store.update((draft) => {
         draft.targets = (draft.targets ?? []).filter((target) => {
-          const keep = target.chatId === chatId && target.workspaceId !== undefined && workspaceIds.has(target.workspaceId);
+          const keep =
+            target.chatId === chatId &&
+            target.workspaceId !== undefined &&
+            workspaceIds.has(target.workspaceId);
           if (!keep) removed.push(target);
           return keep;
         });

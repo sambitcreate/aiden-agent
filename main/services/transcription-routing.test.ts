@@ -1,6 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { createCloudTranscriber, createTranscribeRouter, type TranscribeRouterDeps } from "./transcription-core.js";
+import {
+  createCloudTranscriber,
+  createTranscribeRouter,
+  type TranscribeRouterDeps,
+} from "./transcription-core.js";
 import type { VoiceProviderResolution } from "../../renderer/shared/voice-provider.js";
 
 function harness(resolution: VoiceProviderResolution) {
@@ -27,7 +31,10 @@ function harness(resolution: VoiceProviderResolution) {
   return { transcribe: createTranscribeRouter(deps), calls, decoded };
 }
 
-const voiceNote = { audioBase64: Buffer.from([79, 103, 103, 83]).toString("base64"), mimeType: "audio/ogg" };
+const voiceNote = {
+  audioBase64: Buffer.from([79, 103, 103, 83]).toString("base64"),
+  mimeType: "audio/ogg",
+};
 
 test("a local resolution sends Ogg/Opus bytes on-device and never calls the cloud", async () => {
   const h = harness({ kind: "ready", provider: "local", modelId: "parakeet-v3", automatic: true });
@@ -47,13 +54,18 @@ test("a local resolution refuses audio it cannot decode", async () => {
 
 test("needs-setup surfaces the setup message", async () => {
   const h = harness({ kind: "needs-setup", reason: "no-provider" });
-  await assert.rejects(h.transcribe(voiceNote), { message: "Set up a voice provider in Settings → Voice & Speech." });
+  await assert.rejects(h.transcribe(voiceNote), {
+    message: "Set up a voice provider in Settings → Voice & Speech.",
+  });
   assert.deepEqual(h.calls, []);
 });
 
 test("cloud resolutions keep their providers for every audio type", async () => {
   const openai = harness({ kind: "ready", provider: "openai", automatic: true });
-  assert.equal(await openai.transcribe({ audioBase64: "AA==", mimeType: "audio/mpeg" }), "openai words");
+  assert.equal(
+    await openai.transcribe({ audioBase64: "AA==", mimeType: "audio/mpeg" }),
+    "openai words",
+  );
   const gemini = harness({ kind: "ready", provider: "gemini", automatic: false });
   assert.equal(await gemini.transcribe(voiceNote), "gemini words");
   assert.deepEqual([...openai.calls, ...gemini.calls], ["openai", "gemini"]);
@@ -93,7 +105,9 @@ test("a stale or forged cloud provider is refused before any upload", async () =
   ];
   for (const [resolution, requested] of cases) {
     const h = cloudHarness(resolution);
-    await assert.rejects(h.transcribeCloud(voiceNote, requested), { message: "Voice settings changed. Try again." });
+    await assert.rejects(h.transcribeCloud(voiceNote, requested), {
+      message: "Voice settings changed. Try again.",
+    });
     assert.deepEqual(h.calls, ["resolve"]);
   }
 });

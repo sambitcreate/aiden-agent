@@ -4,7 +4,10 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import test from "node:test";
-import { createChatAttachmentRequestHandler, parseChatImageUrl } from "./chat-attachment-request-handler.js";
+import {
+  createChatAttachmentRequestHandler,
+  parseChatImageUrl,
+} from "./chat-attachment-request-handler.js";
 import { CHAT_IMAGES_DIRECTORY, createChatImageStore, imageSha256 } from "./chat-image-store.js";
 import { createChatStore } from "./chat-store-core.js";
 import type { Attachment } from "./types.js";
@@ -12,7 +15,8 @@ import { parseAttachments, withReadableImages } from "./attachment-contract.js";
 import { projectAidenChatExport } from "./chat-export.js";
 import { chatForRenderer } from "./visible-chat-projection.js";
 
-const PNG = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScL2aQAAAABJRU5ErkJggg==";
+const PNG =
+  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScL2aQAAAABJRU5ErkJggg==";
 const PNG_BYTES = Buffer.from(PNG, "base64");
 const DAY = 24 * 60 * 60 * 1000;
 
@@ -23,13 +27,22 @@ async function tempDir(t: test.TestContext): Promise<string> {
 }
 
 function image(id: string, data = PNG): Attachment {
-  return { id, name: `${id}.png`, mimeType: "image/png", kind: "image", size: Buffer.from(data, "base64").length, data };
+  return {
+    id,
+    name: `${id}.png`,
+    mimeType: "image/png",
+    kind: "image",
+    size: Buffer.from(data, "base64").length,
+    data,
+  };
 }
 
 async function imageFiles(directory: string): Promise<string[]> {
   const root = path.join(directory, CHAT_IMAGES_DIRECTORY);
   const names: string[] = [];
-  for (const shard of (await fs.readdir(root).catch(() => [])).filter((name) => /^[0-9a-f]{2}$/u.test(name))) {
+  for (const shard of (await fs.readdir(root).catch(() => [])).filter((name) =>
+    /^[0-9a-f]{2}$/u.test(name),
+  )) {
     for (const name of await fs.readdir(path.join(root, shard))) names.push(name);
   }
   return names.sort();
@@ -48,7 +61,11 @@ async function ageImageFiles(directory: string, ms: number): Promise<void> {
 async function chatWithImage(directory: string) {
   const store = createChatStore(async () => directory);
   const chat = await store.create({});
-  await store.appendMessage(chat.id, { role: "user", content: "Look", attachments: [image("photo")] });
+  await store.appendMessage(chat.id, {
+    role: "user",
+    content: "Look",
+    attachments: [image("photo")],
+  });
   return { store, chatId: chat.id };
 }
 
@@ -79,12 +96,20 @@ test("sweeping keeps referenced, recent and protected images and removes the res
   const guarded = await images.put(Buffer.from("guarded"));
   await ageImageFiles(directory, 2 * DAY);
   const recent = await images.put(Buffer.from("recent"));
-  const staging = path.join(directory, CHAT_IMAGES_DIRECTORY, unused.slice(0, 2), `.${unused}.00000000-0000-4000-8000-000000000000.tmp`);
+  const staging = path.join(
+    directory,
+    CHAT_IMAGES_DIRECTORY,
+    unused.slice(0, 2),
+    `.${unused}.00000000-0000-4000-8000-000000000000.tmp`,
+  );
   await fs.writeFile(staging, "partial");
   const old = new Date(Date.now() - 2 * DAY);
   await fs.utimes(staging, old, old);
 
-  const result = await images.sweep(new Set([kept]), { graceMs: DAY, isProtected: (sha) => sha === guarded });
+  const result = await images.sweep(new Set([kept]), {
+    graceMs: DAY,
+    isProtected: (sha) => sha === guarded,
+  });
 
   assert.equal(result.removed, 1);
   assert.deepEqual(await imageFiles(directory), [kept, guarded, recent].sort());
@@ -120,11 +145,21 @@ test("a saved chat keeps image references on disk and still returns the bytes to
 test("an exported chat carries its images inline and leaves out one whose file is gone", async (t) => {
   const directory = await tempDir(t);
   const { store, chatId } = await chatWithImage(directory);
-  await store.appendMessage(chatId, { role: "user", content: "Second", attachments: [image("lost", Buffer.from("lost").toString("base64"))] });
-  await fs.rm(path.join(directory, CHAT_IMAGES_DIRECTORY, imageSha256(Buffer.from("lost")).slice(0, 2)), { recursive: true });
+  await store.appendMessage(chatId, {
+    role: "user",
+    content: "Second",
+    attachments: [image("lost", Buffer.from("lost").toString("base64"))],
+  });
+  await fs.rm(
+    path.join(directory, CHAT_IMAGES_DIRECTORY, imageSha256(Buffer.from("lost")).slice(0, 2)),
+    { recursive: true },
+  );
 
   const exported = projectAidenChatExport((await store.get(chatId))!);
-  assert.deepEqual(exported.chat.messages.map((message) => message.attachments), [[image("photo")], undefined]);
+  assert.deepEqual(
+    exported.chat.messages.map((message) => message.attachments),
+    [[image("photo")], undefined],
+  );
 });
 
 test("an older chat with inline images moves them out the next time it is saved", async (t) => {
@@ -139,7 +174,10 @@ test("an older chat with inline images moves them out the next time it is saved"
 
   const reopened = createChatStore(async () => directory);
   assert.equal((await reopened.get(chatId))!.messages[0]!.attachments![0]!.data, PNG);
-  assert.ok((await fs.readFile(file, "utf8")).includes(PNG), "reading alone does not rewrite the chat");
+  assert.ok(
+    (await fs.readFile(file, "utf8")).includes(PNG),
+    "reading alone does not rewrite the chat",
+  );
 
   await reopened.rename(chatId, "Renamed");
   assert.ok(!(await fs.readFile(file, "utf8")).includes(PNG));
@@ -164,7 +202,11 @@ test("a chat whose image file is missing still loads, with that image's bytes ab
   await fs.rm(path.join(directory, CHAT_IMAGES_DIRECTORY), { recursive: true });
 
   let reports = 0;
-  const reopened = createChatStore(async () => directory, undefined, { onImageUnavailable: () => { reports += 1; } });
+  const reopened = createChatStore(async () => directory, undefined, {
+    onImageUnavailable: () => {
+      reports += 1;
+    },
+  });
   const message = (await reopened.get(chatId))!.messages[0]!;
   assert.equal(message.content, "Look");
   assert.equal(message.attachments?.length, 1);
@@ -186,7 +228,11 @@ test("images of a deleted chat are swept while images another chat still uses st
     content: "Keep",
     attachments: [image("photo"), image("second", otherBytes.toString("base64"))],
   });
-  await store.appendMessage(chatId, { role: "user", content: "Only here", attachments: [image("third", Buffer.from("only-here").toString("base64"))] });
+  await store.appendMessage(chatId, {
+    role: "user",
+    content: "Only here",
+    attachments: [image("third", Buffer.from("only-here").toString("base64"))],
+  });
   await store.remove(other.id);
   await ageImageFiles(directory, 2 * DAY);
 
@@ -202,10 +248,17 @@ test("images of a deleted chat are swept while images another chat still uses st
     [imageSha256(PNG_BYTES), imageSha256(Buffer.from("only-here"))].sort(),
   );
   const messages = (await restarted.get(chatId))!.messages;
-  assert.equal(messages[messages.length - 1]!.attachments![0]!.data, Buffer.from("only-here").toString("base64"));
+  assert.equal(
+    messages[messages.length - 1]!.attachments![0]!.data,
+    Buffer.from("only-here").toString("base64"),
+  );
 
   // Nothing was deleted since, so the next start reads no chats at all.
-  await store.appendMessage(chatId, { role: "user", content: "Orphan", attachments: [image("orphan", Buffer.from("orphan").toString("base64"))] });
+  await store.appendMessage(chatId, {
+    role: "user",
+    content: "Orphan",
+    attachments: [image("orphan", Buffer.from("orphan").toString("base64"))],
+  });
   await store.clearMessages(chatId);
   await ageImageFiles(directory, 2 * DAY);
   const quiet = createChatStore(async () => directory);
@@ -222,7 +275,11 @@ test("a delete that fails after the chat file is gone still leaves its images to
     },
   });
   const chat = await store.create({});
-  await store.appendMessage(chat.id, { role: "user", content: "Look", attachments: [image("photo")] });
+  await store.appendMessage(chat.id, {
+    role: "user",
+    content: "Look",
+    attachments: [image("photo")],
+  });
 
   failDirectorySync = true;
   await assert.rejects(store.remove(chat.id), /No space left/);
@@ -239,13 +296,19 @@ test("a sweep that overlaps a delete does not use up the deleted chat's cleanup"
   const directory = await tempDir(t);
   const store = createChatStore(async () => directory);
   const chat = await store.create({});
-  await store.appendMessage(chat.id, { role: "user", content: "Look", attachments: [image("photo")] });
+  await store.appendMessage(chat.id, {
+    role: "user",
+    content: "Look",
+    attachments: [image("photo")],
+  });
   await ageImageFiles(directory, 2 * DAY);
 
   // The sweep runs while the delete has started but the chat still names its image.
   let overlapping: Promise<unknown> | undefined;
   await store.remove(chat.id, async () => {
-    overlapping = createChatStore(async () => directory).sweepUnusedImages({ onlyWhenNeeded: true });
+    overlapping = createChatStore(async () => directory).sweepUnusedImages({
+      onlyWhenNeeded: true,
+    });
     assert.equal(((await overlapping) as { removed: number }).removed, 0);
   });
   assert.deepEqual(await imageFiles(directory), [imageSha256(PNG_BYTES)]);
@@ -261,7 +324,12 @@ test("a staging file left by an interrupted write is cleaned up once it is old e
   const sha = imageSha256(PNG_BYTES);
   await store.clearMessages(chatId);
   await ageImageFiles(directory, 2 * DAY);
-  const staging = path.join(directory, CHAT_IMAGES_DIRECTORY, sha.slice(0, 2), `.${sha}.${randomUUID()}.tmp`);
+  const staging = path.join(
+    directory,
+    CHAT_IMAGES_DIRECTORY,
+    sha.slice(0, 2),
+    `.${sha}.${randomUUID()}.tmp`,
+  );
   await fs.writeFile(staging, PNG_BYTES);
 
   // The unused image goes; the staging file is too young, so the cleanup
@@ -337,7 +405,11 @@ test("a put after a failed sync syncs the existing file again before it succeeds
   });
 
   await assert.rejects(images.put(PNG_BYTES), /I\/O error/);
-  assert.deepEqual(await imageFiles(directory), [sha], "the file was published before the sync failed");
+  assert.deepEqual(
+    await imageFiles(directory),
+    [sha],
+    "the file was published before the sync failed",
+  );
   synced.length = 0;
   assert.equal(await images.put(PNG_BYTES), sha);
   assert.deepEqual(synced, [`file ${sha}`, "shard"]);
@@ -360,17 +432,31 @@ test("a put after a failed sync syncs the existing file again before it succeeds
 
 test("unused images still inside their grace are swept once it runs out, without another delete", async (t) => {
   const directory = await tempDir(t);
-  const store = createChatStore(async () => directory, undefined, { imageSweepDelayMs: 20, imageSweepGraceMs: 300 });
+  const store = createChatStore(async () => directory, undefined, {
+    imageSweepDelayMs: 20,
+    imageSweepGraceMs: 300,
+  });
   const chat = await store.create({});
-  await store.appendMessage(chat.id, { role: "user", content: "Look", attachments: [image("photo")] });
+  await store.appendMessage(chat.id, {
+    role: "user",
+    content: "Look",
+    attachments: [image("photo")],
+  });
   await store.remove(chat.id);
   assert.deepEqual(await imageFiles(directory), [imageSha256(PNG_BYTES)]);
 
   // The sweep removes the file first and its marker after, so wait for both.
   const marker = path.join(directory, CHAT_IMAGES_DIRECTORY, ".sweep-needed");
-  const markerGone = async () => fs.access(marker).then(() => false, () => true);
+  const markerGone = async () =>
+    fs.access(marker).then(
+      () => false,
+      () => true,
+    );
   const deadline = Date.now() + 5_000;
-  while (((await imageFiles(directory)).length > 0 || !(await markerGone())) && Date.now() < deadline) {
+  while (
+    ((await imageFiles(directory)).length > 0 || !(await markerGone())) &&
+    Date.now() < deadline
+  ) {
     await new Promise((resolve) => setTimeout(resolve, 25));
   }
   assert.deepEqual(await imageFiles(directory), []);
@@ -387,17 +473,31 @@ test("a sweep that cannot finish is tried again later, without another delete", 
     }
     return directory;
   };
-  const store = createChatStore(resolveDirectory, undefined, { imageSweepDelayMs: 20, imageSweepGraceMs: 0 });
+  const store = createChatStore(resolveDirectory, undefined, {
+    imageSweepDelayMs: 20,
+    imageSweepGraceMs: 0,
+  });
   const chat = await store.create({});
-  await store.appendMessage(chat.id, { role: "user", content: "Look", attachments: [image("photo")] });
+  await store.appendMessage(chat.id, {
+    role: "user",
+    content: "Look",
+    attachments: [image("photo")],
+  });
   await store.remove(chat.id);
   // The sweep the delete scheduled fails before it can look at any file.
   failNextResolve = true;
 
   const marker = path.join(directory, CHAT_IMAGES_DIRECTORY, ".sweep-needed");
-  const markerGone = async () => fs.access(marker).then(() => false, () => true);
+  const markerGone = async () =>
+    fs.access(marker).then(
+      () => false,
+      () => true,
+    );
   const deadline = Date.now() + 5_000;
-  while (((await imageFiles(directory)).length > 0 || !(await markerGone())) && Date.now() < deadline) {
+  while (
+    ((await imageFiles(directory)).length > 0 || !(await markerGone())) &&
+    Date.now() < deadline
+  ) {
     await new Promise((resolve) => setTimeout(resolve, 25));
   }
   assert.equal(failNextResolve, false, "the first sweep ran and failed");
@@ -422,7 +522,9 @@ test("the window's image link serves the stored bytes and revalidates by hash", 
   assert.equal(response.headers.get("etag"), `"${imageSha256(PNG_BYTES)}"`);
   assert.deepEqual(Buffer.from(await response.arrayBuffer()), PNG_BYTES);
 
-  const revalidated = await handler(new Request(url, { headers: { "if-none-match": response.headers.get("etag")! } }));
+  const revalidated = await handler(
+    new Request(url, { headers: { "if-none-match": response.headers.get("etag")! } }),
+  );
   assert.equal(revalidated.status, 304);
   assert.equal((await revalidated.arrayBuffer()).byteLength, 0);
 
@@ -450,5 +552,8 @@ test("an image link only works for an image the chat still lists", async (t) => 
     ].map(async (url) => (await handler(new Request(url))).status),
   );
   assert.deepEqual(statuses, [404, 404, 404, 404, 404, 404]);
-  assert.equal((await handler(new Request(`${base}/${chatId}/${sha}`, { method: "POST" }))).status, 405);
+  assert.equal(
+    (await handler(new Request(`${base}/${chatId}/${sha}`, { method: "POST" }))).status,
+    405,
+  );
 });

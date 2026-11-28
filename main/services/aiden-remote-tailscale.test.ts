@@ -49,13 +49,14 @@ test("system Tailscale runner forces CLI mode for Finder-style production launch
         return { stdout: "The Tailscale GUI failed to start." };
       }
       return {
-        stdout: args[0] === "status"
-          ? JSON.stringify({
-            BackendState: "Running",
-            Self: { DNSName: "aiden.tailnet.ts.net.", Online: true },
-            CertDomains: ["aiden.tailnet.ts.net"],
-          })
-          : "{}",
+        stdout:
+          args[0] === "status"
+            ? JSON.stringify({
+                BackendState: "Running",
+                Self: { DNSName: "aiden.tailnet.ts.net.", Online: true },
+                CertDomains: ["aiden.tailnet.ts.net"],
+              })
+            : "{}",
       };
     },
   });
@@ -106,8 +107,7 @@ test("Linux Tailscale runner does not force the packaged macOS CLI environment",
 test("Linux operator denial maps to an actionable stable code", () => {
   assert.equal(
     tailscaleCommandErrorCode({
-      stderr:
-        "Access denied: serve config denied; run tailscale set --operator=$USER",
+      stderr: "Access denied: serve config denied; run tailscale set --operator=$USER",
     }),
     "tailscale_permission_denied",
   );
@@ -171,7 +171,9 @@ function fixture(options: { emptyServeStatus?: boolean; certDomains?: unknown } 
               Handlers: connected
                 ? {
                     "/api/aiden/v1": { Proxy: target },
-                    ...(options.emptyServeStatus ? {} : { "/other": { Proxy: "http://127.0.0.1:9" } }),
+                    ...(options.emptyServeStatus
+                      ? {}
+                      : { "/other": { Proxy: "http://127.0.0.1:9" } }),
                   }
                 : { "/other": { Proxy: "http://127.0.0.1:9" } },
             },
@@ -190,15 +192,25 @@ test("Tailscale controller connects and verifies only Aiden's route", async () =
   const app = fixture();
   const ownership = await app.controller.connect(target);
   assert.deepEqual(ownership, { path: "/api/aiden/v1", target });
-  assert.deepEqual(app.calls.find((args) => args.includes("--set-path=/api/aiden/v1") && !args.includes("off")), [
-    "serve", "--yes", "--bg", "--https=443", "--set-path=/api/aiden/v1", target,
-  ]);
-  assert.equal(app.calls.some((args) => args.includes("reset")), false);
-  assert.equal(app.calls.some((args) => args.includes("funnel")), false);
+  assert.deepEqual(
+    app.calls.find((args) => args.includes("--set-path=/api/aiden/v1") && !args.includes("off")),
+    ["serve", "--yes", "--bg", "--https=443", "--set-path=/api/aiden/v1", target],
+  );
+  assert.equal(
+    app.calls.some((args) => args.includes("reset")),
+    false,
+  );
+  assert.equal(
+    app.calls.some((args) => args.includes("funnel")),
+    false,
+  );
 
   await app.controller.disconnect(target, ownership);
   assert.deepEqual(app.calls[app.calls.length - 2], [
-    "serve", "--https=443", "--set-path=/api/aiden/v1", "off",
+    "serve",
+    "--https=443",
+    "--set-path=/api/aiden/v1",
+    "off",
   ]);
 });
 
@@ -221,10 +233,14 @@ test("Linux operator denial leaves the route untouched with a typed permission c
   const outcomes: unknown[] = [];
   const controller = new IsolatedTailscaleController(runner, {
     outcomeStore: {
-      begin: async (outcome) => { outcomes.push(outcome); },
+      begin: async (outcome) => {
+        outcomes.push(outcome);
+      },
       snapshot: async () => undefined,
       commit: async () => undefined,
-      clear: async () => { outcomes.length = 0; },
+      clear: async () => {
+        outcomes.length = 0;
+      },
     },
   });
   await assert.rejects(
@@ -232,7 +248,10 @@ test("Linux operator denial leaves the route untouched with a typed permission c
     (error: unknown) => error instanceof Error && error.message === "tailscale_permission_denied",
   );
   assert.equal(outcomes.length, 0);
-  assert.equal(calls.some((args) => args.includes("--set-path=/api/aiden/v1") && !args.includes("off")), true);
+  assert.equal(
+    calls.some((args) => args.includes("--set-path=/api/aiden/v1") && !args.includes("off")),
+    true,
+  );
 });
 
 test("Tailscale controller reports stable URL identity without mutating configuration", async () => {
@@ -251,9 +270,10 @@ test("Tailscale controller reports stable URL identity without mutating configur
     },
   });
   assert.equal(app.calls.length, 2);
-  assert.deepEqual(app.calls.find((args) => args[0] === "status"), [
-    "status", "--json", "--peers=false",
-  ]);
+  assert.deepEqual(
+    app.calls.find((args) => args[0] === "status"),
+    ["status", "--json", "--peers=false"],
+  );
 });
 
 test("combined route inspection uses one coherent node and Serve snapshot", async () => {
@@ -304,13 +324,16 @@ test("combined route inspection fails closed after bounded CLI retries", async (
     final: boolean;
     category: AidenTailscaleStatusReadFailureCategory;
   }> = [];
-  const controller = new IsolatedTailscaleController({
-    run: async (args) => {
-      calls.push([...args]);
-      if (args[0] === "status") throw new Error("transient node status failure");
-      return "{}";
+  const controller = new IsolatedTailscaleController(
+    {
+      run: async (args) => {
+        calls.push([...args]);
+        if (args[0] === "status") throw new Error("transient node status failure");
+        return "{}";
+      },
     },
-  }, { onStatusReadFailure: (input) => diagnostics.push(input) });
+    { onStatusReadFailure: (input) => diagnostics.push(input) },
+  );
   assert.deepEqual(await controller.inspectRoute(target), {
     connectionStatus: { installed: true, errorCode: "status_unavailable" },
     assessment: { state: "unavailable", errorCode: "status_unavailable" },
@@ -330,9 +353,12 @@ test("combined route inspection categorizes zero-exit non-JSON CLI output withou
     final: boolean;
     category: AidenTailscaleStatusReadFailureCategory;
   }> = [];
-  const controller = new IsolatedTailscaleController({
-    run: async () => "The Tailscale GUI failed to start with private details.",
-  }, { onStatusReadFailure: (input) => diagnostics.push(input) });
+  const controller = new IsolatedTailscaleController(
+    {
+      run: async () => "The Tailscale GUI failed to start with private details.",
+    },
+    { onStatusReadFailure: (input) => diagnostics.push(input) },
+  );
 
   assert.equal((await controller.inspectRoute(target)).assessment.errorCode, "status_unavailable");
   assert.deepEqual(diagnostics, [
@@ -356,13 +382,19 @@ test("combined route inspection categorizes both Node CLI timeout shapes", async
       final: boolean;
       category: AidenTailscaleStatusReadFailureCategory;
     }> = [];
-    const controller = new IsolatedTailscaleController({
-      run: async () => {
-        throw timeoutError;
+    const controller = new IsolatedTailscaleController(
+      {
+        run: async () => {
+          throw timeoutError;
+        },
       },
-    }, { onStatusReadFailure: (input) => diagnostics.push(input) });
+      { onStatusReadFailure: (input) => diagnostics.push(input) },
+    );
 
-    assert.equal((await controller.inspectRoute(target)).assessment.errorCode, "status_unavailable");
+    assert.equal(
+      (await controller.inspectRoute(target)).assessment.errorCode,
+      "status_unavailable",
+    );
     assert.deepEqual(diagnostics, [
       { phase: "node", attempt: 1, final: false, category: "timed-out" },
       { phase: "node", attempt: 2, final: false, category: "timed-out" },
@@ -387,9 +419,10 @@ test("Tailscale controller creates the first HTTPS listener only after exact cer
   const app = fixture({ emptyServeStatus: true });
   const ownership = await app.controller.connect(target);
   assert.deepEqual(ownership, { path: "/api/aiden/v1", target });
-  assert.deepEqual(app.calls.find((args) => args.includes("--set-path=/api/aiden/v1") && !args.includes("off")), [
-    "serve", "--yes", "--bg", "--https=443", "--set-path=/api/aiden/v1", target,
-  ]);
+  assert.deepEqual(
+    app.calls.find((args) => args.includes("--set-path=/api/aiden/v1") && !args.includes("off")),
+    ["serve", "--yes", "--bg", "--https=443", "--set-path=/api/aiden/v1", target],
+  );
 });
 
 test("first-listener verification rejects a route without explicit TCP 443 HTTPS state", async () => {
@@ -428,7 +461,9 @@ test("first-listener verification rejects a route without explicit TCP 443 HTTPS
   const controller = new IsolatedTailscaleController(runner);
   let persistCalls = 0;
   await assert.rejects(
-    controller.connect(target, undefined, async () => { persistCalls += 1; }),
+    controller.connect(target, undefined, async () => {
+      persistCalls += 1;
+    }),
     /tailscale_route_(verification|recovery)_failed/u,
   );
   assert.equal(persistCalls, 0);
@@ -438,7 +473,10 @@ test("Tailscale controller refuses first-listener mutation without exact HTTPS e
   for (const certDomains of [[], ["other.tailnet.ts.net"], ["aiden.tailnet.ts.net.evil"]]) {
     const app = fixture({ emptyServeStatus: true, certDomains });
     await assert.rejects(app.controller.connect(target), /tailscale_https_unavailable/u);
-    assert.equal(app.calls.some((args) => args.includes("--set-path=/api/aiden/v1")), false);
+    assert.equal(
+      app.calls.some((args) => args.includes("--set-path=/api/aiden/v1")),
+      false,
+    );
   }
 });
 
@@ -446,14 +484,10 @@ test("an owned handler without TCP 443 HTTPS is never accepted as a connected no
   const app = takeoverFixture({ incumbent: target });
   delete (app.serveStatus as { TCP?: unknown }).TCP;
   const ownership = { path: "/api/aiden/v1" as const, target };
-  assert.deepEqual(
-    await app.controller.assessRoute(target, ownership),
-    { state: "unrelated_conflict" },
-  );
-  await assert.rejects(
-    app.controller.connect(target, ownership),
-    /tailscale_route_conflict/u,
-  );
+  assert.deepEqual(await app.controller.assessRoute(target, ownership), {
+    state: "unrelated_conflict",
+  });
+  await assert.rejects(app.controller.connect(target, ownership), /tailscale_route_conflict/u);
 });
 
 test("missing Tailscale is explicit and cannot mutate routes", async () => {
@@ -465,12 +499,14 @@ test("missing Tailscale is explicit and cannot mutate routes", async () => {
   await assert.rejects(controller.connect(target), /tailscale_not_installed/u);
 });
 
-function takeoverFixture(options: {
-  incumbent?: string;
-  healthy?: boolean;
-  now?: number;
-  failMutation?: boolean;
-} = {}) {
+function takeoverFixture(
+  options: {
+    incumbent?: string;
+    healthy?: boolean;
+    now?: number;
+    failMutation?: boolean;
+  } = {},
+) {
   const incumbent = options.incumbent ?? "http://127.0.0.1:43179/api/aiden/v1";
   const calls: string[][] = [];
   let healthy = options.healthy ?? false;
@@ -482,7 +518,9 @@ function takeoverFixture(options: {
   let postMutationStatusFailures = 0;
   let mutationApplied = false;
   let mutateAfterNextStatusRead: string | undefined;
-  let pendingOutcome: import("./aiden-remote-tailscale.js").AidenTailscalePendingRouteOutcome | undefined;
+  let pendingOutcome:
+    | import("./aiden-remote-tailscale.js").AidenTailscalePendingRouteOutcome
+    | undefined;
   let reconciledOwnership: { path: "/api/aiden/v1"; target: string } | undefined;
   const serveStatus = {
     TCP: { "443": { HTTPS: true } },
@@ -512,7 +550,12 @@ function takeoverFixture(options: {
         }
         const serialized = JSON.stringify(serveStatus);
         if (mutateAfterNextStatusRead) {
-          (serveStatus.Web["aiden.tailnet.ts.net:443"].Handlers as Record<string, { Proxy: string }>)["/api/aiden/v1"] = {
+          (
+            serveStatus.Web["aiden.tailnet.ts.net:443"].Handlers as Record<
+              string,
+              { Proxy: string }
+            >
+          )["/api/aiden/v1"] = {
             Proxy: mutateAfterNextStatusRead,
           };
           mutateAfterNextStatusRead = undefined;
@@ -522,9 +565,13 @@ function takeoverFixture(options: {
       if (failMutation) throw new Error("command failed");
       const nextTarget = args[args.length - 1];
       if (nextTarget === "off") {
-        delete (serveStatus.Web["aiden.tailnet.ts.net:443"].Handlers as Record<string, { Proxy: string }>)["/api/aiden/v1"];
+        delete (
+          serveStatus.Web["aiden.tailnet.ts.net:443"].Handlers as Record<string, { Proxy: string }>
+        )["/api/aiden/v1"];
       } else {
-        (serveStatus.Web["aiden.tailnet.ts.net:443"].Handlers as Record<string, { Proxy: string }>)["/api/aiden/v1"] = { Proxy: nextTarget! };
+        (serveStatus.Web["aiden.tailnet.ts.net:443"].Handlers as Record<string, { Proxy: string }>)[
+          "/api/aiden/v1"
+        ] = { Proxy: nextTarget! };
       }
       mutationApplied = true;
       if (dropTcpAfterMutation) delete (serveStatus as { TCP?: unknown }).TCP;
@@ -538,13 +585,17 @@ function takeoverFixture(options: {
     randomToken: () => "A".repeat(32),
     probeHealth: async () => healthy,
     outcomeStore: {
-      begin: async (outcome) => { pendingOutcome = structuredClone(outcome); },
+      begin: async (outcome) => {
+        pendingOutcome = structuredClone(outcome);
+      },
       snapshot: async () => structuredClone(pendingOutcome),
       commit: async (ownership) => {
         reconciledOwnership = ownership;
         pendingOutcome = undefined;
       },
-      clear: async () => { pendingOutcome = undefined; },
+      clear: async () => {
+        pendingOutcome = undefined;
+      },
     },
   });
   return {
@@ -552,19 +603,38 @@ function takeoverFixture(options: {
     runner,
     calls,
     serveStatus,
-    setHealthy: (value: boolean) => { healthy = value; },
-    setNow: (value: number) => { now = value; monotonicNow = value; },
-    setWallClock: (value: number) => { now = value; },
-    setFailMutation: (value: boolean) => { failMutation = value; },
-    setFailAfterMutation: (value: boolean) => { failAfterMutation = value; },
-    setDropTcpAfterMutation: (value: boolean) => { dropTcpAfterMutation = value; },
-    failNextPostMutationStatusReads: (count: number) => { postMutationStatusFailures = count; },
+    setHealthy: (value: boolean) => {
+      healthy = value;
+    },
+    setNow: (value: number) => {
+      now = value;
+      monotonicNow = value;
+    },
+    setWallClock: (value: number) => {
+      now = value;
+    },
+    setFailMutation: (value: boolean) => {
+      failMutation = value;
+    },
+    setFailAfterMutation: (value: boolean) => {
+      failAfterMutation = value;
+    },
+    setDropTcpAfterMutation: (value: boolean) => {
+      dropTcpAfterMutation = value;
+    },
+    failNextPostMutationStatusReads: (count: number) => {
+      postMutationStatusFailures = count;
+    },
     pendingOutcome: () => structuredClone(pendingOutcome),
     reconciledOwnership: () => structuredClone(reconciledOwnership),
     setRouteTarget: (value: string) => {
-      (serveStatus.Web["aiden.tailnet.ts.net:443"].Handlers as Record<string, { Proxy: string }>)["/api/aiden/v1"] = { Proxy: value };
+      (serveStatus.Web["aiden.tailnet.ts.net:443"].Handlers as Record<string, { Proxy: string }>)[
+        "/api/aiden/v1"
+      ] = { Proxy: value };
     },
-    mutateRouteAfterNextStatusRead: (value: string) => { mutateAfterNextStatusRead = value; },
+    mutateRouteAfterNextStatusRead: (value: string) => {
+      mutateAfterNextStatusRead = value;
+    },
   };
 }
 
@@ -572,27 +642,42 @@ test("live Aiden route is classified and cannot produce a takeover review", asyn
   const app = takeoverFixture({ healthy: true });
   assert.deepEqual(await app.controller.assessRoute(target), { state: "other_aiden_live" });
   await assert.rejects(app.controller.reviewTakeover(target), /tailscale_route_live/u);
-  assert.equal(app.calls.some((args) => args.includes("--set-path=/api/aiden/v1")), false);
+  assert.equal(
+    app.calls.some((args) => args.includes("--set-path=/api/aiden/v1")),
+    false,
+  );
 });
 
 test("unrelated handlers and Funnel conflicts never offer takeover", async () => {
   const unrelated = takeoverFixture();
-  unrelated.serveStatus.Web["aiden.tailnet.ts.net:443"].Handlers["/api/aiden/v1"].Proxy = "http://127.0.0.1:43179/private";
+  unrelated.serveStatus.Web["aiden.tailnet.ts.net:443"].Handlers["/api/aiden/v1"].Proxy =
+    "http://127.0.0.1:43179/private";
   assert.deepEqual(await unrelated.controller.assessRoute(target), { state: "unrelated_conflict" });
-  await assert.rejects(unrelated.controller.reviewTakeover(target), /tailscale_takeover_unavailable/u);
+  await assert.rejects(
+    unrelated.controller.reviewTakeover(target),
+    /tailscale_takeover_unavailable/u,
+  );
 
   const funnel = takeoverFixture();
   (funnel.serveStatus.Web["aiden.tailnet.ts.net:443"] as { Funnel?: boolean }).Funnel = true;
   assert.deepEqual(await funnel.controller.assessRoute(target), { state: "funnel_conflict" });
   await assert.rejects(funnel.controller.reviewTakeover(target), /tailscale_takeover_unavailable/u);
-  assert.equal(funnel.calls.some((args) => args.includes("--set-path=/api/aiden/v1")), false);
+  assert.equal(
+    funnel.calls.some((args) => args.includes("--set-path=/api/aiden/v1")),
+    false,
+  );
 
   // The same exposure as Tailscale actually reports it: connect refuses without touching Serve.
   const allowed = takeoverFixture();
-  (allowed.serveStatus as Record<string, unknown>).AllowFunnel = { "aiden.tailnet.ts.net:443": true };
+  (allowed.serveStatus as Record<string, unknown>).AllowFunnel = {
+    "aiden.tailnet.ts.net:443": true,
+  };
   assert.deepEqual(await allowed.controller.assessRoute(target), { state: "funnel_conflict" });
   await assert.rejects(allowed.controller.connect(target));
-  assert.equal(allowed.calls.some((args) => args.includes("--set-path=/api/aiden/v1")), false);
+  assert.equal(
+    allowed.calls.some((args) => args.includes("--set-path=/api/aiden/v1")),
+    false,
+  );
 });
 
 test("stale Aiden route requires a one-use review and preserves unrelated Serve state", async () => {
@@ -616,7 +701,10 @@ test("stale Aiden route requires a one-use review and preserves unrelated Serve 
     JSON.stringify(app.serveStatus.Web["aiden.tailnet.ts.net:443"].Handlers["/other"]),
     unrelatedBefore,
   );
-  assert.equal(app.calls.some((args) => args.includes("reset") || args.includes("funnel")), false);
+  assert.equal(
+    app.calls.some((args) => args.includes("reset") || args.includes("funnel")),
+    false,
+  );
   await assert.rejects(
     app.controller.takeOver(target, review.token, async () => undefined),
     /tailscale_takeover_expired/u,
@@ -626,12 +714,16 @@ test("stale Aiden route requires a one-use review and preserves unrelated Serve 
 test("takeover fails closed when Serve state or incumbent health changes after review", async () => {
   const changed = takeoverFixture();
   const changedReview = await changed.controller.reviewTakeover(target);
-  changed.serveStatus.Web["aiden.tailnet.ts.net:443"].Handlers["/other"].Proxy = "http://127.0.0.1:10";
+  changed.serveStatus.Web["aiden.tailnet.ts.net:443"].Handlers["/other"].Proxy =
+    "http://127.0.0.1:10";
   await assert.rejects(
     changed.controller.takeOver(target, changedReview.token, async () => undefined),
     /tailscale_takeover_changed/u,
   );
-  assert.equal(changed.calls.some((args) => args.includes("--set-path=/api/aiden/v1")), false);
+  assert.equal(
+    changed.calls.some((args) => args.includes("--set-path=/api/aiden/v1")),
+    false,
+  );
 
   const revived = takeoverFixture();
   const revivedReview = await revived.controller.reviewTakeover(target);
@@ -640,7 +732,10 @@ test("takeover fails closed when Serve state or incumbent health changes after r
     revived.controller.takeOver(target, revivedReview.token, async () => undefined),
     /tailscale_route_live/u,
   );
-  assert.equal(revived.calls.some((args) => args.includes("--set-path=/api/aiden/v1")), false);
+  assert.equal(
+    revived.calls.some((args) => args.includes("--set-path=/api/aiden/v1")),
+    false,
+  );
 });
 
 test("expired takeover reviews and failed commands never persist ownership", async () => {
@@ -656,7 +751,9 @@ test("expired takeover reviews and failed commands never persist ownership", asy
   const failedReview = await failed.controller.reviewTakeover(target);
   let persistCalls = 0;
   await assert.rejects(
-    failed.controller.takeOver(target, failedReview.token, async () => { persistCalls += 1; }),
+    failed.controller.takeOver(target, failedReview.token, async () => {
+      persistCalls += 1;
+    }),
     /tailscale_route_outcome_unknown/u,
   );
   assert.equal(persistCalls, 0);
@@ -667,7 +764,9 @@ test("ownership persistence failure restores the exact stale incumbent route", a
   const app = takeoverFixture({ incumbent });
   const review = await app.controller.reviewTakeover(target);
   await assert.rejects(
-    app.controller.takeOver(target, review.token, async () => { throw new Error("disk full"); }),
+    app.controller.takeOver(target, review.token, async () => {
+      throw new Error("disk full");
+    }),
     /tailscale_ownership_commit_failed/u,
   );
   assert.equal(
@@ -680,36 +779,71 @@ test("persistence rollback never overwrites a route changed by an external succe
   const successor = "http://127.0.0.1:43183/api/aiden/v1";
 
   const connect = takeoverFixture();
-  delete (connect.serveStatus.Web["aiden.tailnet.ts.net:443"].Handlers as Record<string, { Proxy: string }>)["/api/aiden/v1"];
+  delete (
+    connect.serveStatus.Web["aiden.tailnet.ts.net:443"].Handlers as Record<
+      string,
+      { Proxy: string }
+    >
+  )["/api/aiden/v1"];
   await assert.rejects(
     connect.controller.connect(target, undefined, async () => {
-      await connect.runner.run(["serve", "--yes", "--bg", "--https=443", "--set-path=/api/aiden/v1", successor]);
+      await connect.runner.run([
+        "serve",
+        "--yes",
+        "--bg",
+        "--https=443",
+        "--set-path=/api/aiden/v1",
+        successor,
+      ]);
       throw new Error("disk full");
     }),
     /tailscale_route_recovery_failed/u,
   );
-  assert.equal(connect.serveStatus.Web["aiden.tailnet.ts.net:443"].Handlers["/api/aiden/v1"].Proxy, successor);
+  assert.equal(
+    connect.serveStatus.Web["aiden.tailnet.ts.net:443"].Handlers["/api/aiden/v1"].Proxy,
+    successor,
+  );
 
   const takeover = takeoverFixture();
   const takeoverReview = await takeover.controller.reviewTakeover(target);
   await assert.rejects(
     takeover.controller.takeOver(target, takeoverReview.token, async () => {
-      await takeover.runner.run(["serve", "--yes", "--bg", "--https=443", "--set-path=/api/aiden/v1", successor]);
+      await takeover.runner.run([
+        "serve",
+        "--yes",
+        "--bg",
+        "--https=443",
+        "--set-path=/api/aiden/v1",
+        successor,
+      ]);
       throw new Error("disk full");
     }),
     /tailscale_route_recovery_failed/u,
   );
-  assert.equal(takeover.serveStatus.Web["aiden.tailnet.ts.net:443"].Handlers["/api/aiden/v1"].Proxy, successor);
+  assert.equal(
+    takeover.serveStatus.Web["aiden.tailnet.ts.net:443"].Handlers["/api/aiden/v1"].Proxy,
+    successor,
+  );
 
   const disconnect = takeoverFixture({ incumbent: target });
   await assert.rejects(
     disconnect.controller.disconnect(target, { path: "/api/aiden/v1", target }, async () => {
-      await disconnect.runner.run(["serve", "--yes", "--bg", "--https=443", "--set-path=/api/aiden/v1", successor]);
+      await disconnect.runner.run([
+        "serve",
+        "--yes",
+        "--bg",
+        "--https=443",
+        "--set-path=/api/aiden/v1",
+        successor,
+      ]);
       throw new Error("disk full");
     }),
     /tailscale_route_recovery_failed/u,
   );
-  assert.equal(disconnect.serveStatus.Web["aiden.tailnet.ts.net:443"].Handlers["/api/aiden/v1"].Proxy, successor);
+  assert.equal(
+    disconnect.serveStatus.Web["aiden.tailnet.ts.net:443"].Handlers["/api/aiden/v1"].Proxy,
+    successor,
+  );
 });
 
 test("an ambiguous CLI error is reconciled when the exact route was safely applied", async () => {
@@ -717,9 +851,14 @@ test("an ambiguous CLI error is reconciled when the exact route was safely appli
   const review = await app.controller.reviewTakeover(target);
   app.setFailAfterMutation(true);
   let persisted = false;
-  await app.controller.takeOver(target, review.token, async () => { persisted = true; });
+  await app.controller.takeOver(target, review.token, async () => {
+    persisted = true;
+  });
   assert.equal(persisted, true);
-  assert.equal(app.serveStatus.Web["aiden.tailnet.ts.net:443"].Handlers["/api/aiden/v1"].Proxy, target);
+  assert.equal(
+    app.serveStatus.Web["aiden.tailnet.ts.net:443"].Handlers["/api/aiden/v1"].Proxy,
+    target,
+  );
 });
 
 test("post-mutation status retries transient failures and durably reconciles an unknown exact outcome", async () => {
@@ -737,7 +876,9 @@ test("post-mutation status retries transient failures and durably reconciles an 
   unknown.failNextPostMutationStatusReads(3);
   let persistCalls = 0;
   await assert.rejects(
-    unknown.controller.takeOver(target, unknownReview.token, async () => { persistCalls += 1; }),
+    unknown.controller.takeOver(target, unknownReview.token, async () => {
+      persistCalls += 1;
+    }),
     /tailscale_route_outcome_unknown/u,
   );
   assert.equal(persistCalls, 0);
@@ -885,7 +1026,9 @@ test("takeover verification rejects removal of TCP 443 needed by unrelated handl
   app.setDropTcpAfterMutation(true);
   let persistCalls = 0;
   await assert.rejects(
-    app.controller.takeOver(target, review.token, async () => { persistCalls += 1; }),
+    app.controller.takeOver(target, review.token, async () => {
+      persistCalls += 1;
+    }),
     /tailscale_route_(verification|recovery)_failed/u,
   );
   assert.equal(persistCalls, 0);
@@ -912,7 +1055,10 @@ test("takeover re-reads Serve immediately after the health probe", async () => {
     controller.takeOver(target, review.token, async () => undefined),
     /tailscale_takeover_changed/u,
   );
-  assert.equal(app.serveStatus.Web["aiden.tailnet.ts.net:443"].Handlers["/api/aiden/v1"].Proxy, successor);
+  assert.equal(
+    app.serveStatus.Web["aiden.tailnet.ts.net:443"].Handlers["/api/aiden/v1"].Proxy,
+    successor,
+  );
 });
 
 test("takeover expiry uses monotonic time even when the wall clock moves backward", async () => {
@@ -959,7 +1105,9 @@ test("separate Aiden controllers serialize competing takeovers across the Mac", 
     second.takeOver(
       "http://127.0.0.1:43181/api/aiden/v1",
       secondReview.token,
-      async (ownership) => { persisted.push(ownership.target); },
+      async (ownership) => {
+        persisted.push(ownership.target);
+      },
     ),
   ]);
   assert.equal(results.filter((result) => result.status === "fulfilled").length, 1);
@@ -975,12 +1123,19 @@ test("kernel-owned route lock blocks concurrent owners and releases cleanly", as
   const port = await availableLoopbackPort();
   let release!: () => void;
   let acquired!: () => void;
-  const held = new Promise<void>((resolve) => { release = resolve; });
-  const didAcquire = new Promise<void>((resolve) => { acquired = resolve; });
-  const holder = withAidenTailscaleRouteLock(async () => {
-    acquired();
-    return held;
-  }, { port, attempts: 1, retryMs: 1 });
+  const held = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const didAcquire = new Promise<void>((resolve) => {
+    acquired = resolve;
+  });
+  const holder = withAidenTailscaleRouteLock(
+    async () => {
+      acquired();
+      return held;
+    },
+    { port, attempts: 1, retryMs: 1 },
+  );
   await didAcquire;
   await assert.rejects(
     withAidenTailscaleRouteLock(async () => undefined, { port, attempts: 1, retryMs: 1 }),
@@ -1026,7 +1181,9 @@ test("a busy route lock closes every socket whose bind failed", async () => {
         createSocket: (options) => {
           const socket = createSocket(options);
           const attempt = { closed: false };
-          socket.once("close", () => { attempt.closed = true; });
+          socket.once("close", () => {
+            attempt.closed = true;
+          });
           attempts.push(attempt);
           return socket;
         },

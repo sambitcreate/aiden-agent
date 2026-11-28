@@ -20,7 +20,12 @@ const methods = [
     hint: "Sign in with ChatGPT or another service.",
     icon: UserRound,
   },
-  { id: "api_key", label: "I have an API key", hint: "Use a key from your AI provider.", icon: KeyRound },
+  {
+    id: "api_key",
+    label: "I have an API key",
+    hint: "Use a key from your AI provider.",
+    icon: KeyRound,
+  },
   { id: "local", label: "I run a local model", hint: "Connect LM Studio or Ollama.", icon: Laptop },
 ] as const;
 
@@ -108,7 +113,8 @@ export function GuidedProviderChooser({
                 ),
               )
             )}
-            {(method === "other" || (method === "oauth" && !choices.some((p) => p.id === "openai"))) &&
+            {(method === "other" ||
+              (method === "oauth" && !choices.some((p) => p.id === "openai"))) &&
               action("ChatGPT / Codex", { kind: "codex" }, "openai-codex")}
           </div>
           {method !== "local" && method !== "oauth" && choices.length === 0 && (
@@ -144,9 +150,12 @@ export function GuidedProviderChooser({
             open={advancedOpen}
             onToggle={(e) => setAdvancedOpen(e.currentTarget.open)}
           >
-            <summary className="cursor-pointer px-4 py-3 text-small-strong">Advanced connection</summary>
+            <summary className="cursor-pointer px-4 py-3 text-small-strong">
+              Advanced connection
+            </summary>
             <div className="grid gap-2 px-4 pb-3">
-              {showEndpoints && action("Custom endpoint", { kind: "endpoint", template: "custom" }, "custom")}
+              {showEndpoints &&
+                action("Custom endpoint", { kind: "endpoint", template: "custom" }, "custom")}
               {showEndpoints &&
                 action("Tailscale server", { kind: "endpoint", template: "tailnet" }, "tailscale")}
               <Button

@@ -8,9 +8,17 @@ function setup() {
   const doc = window.document as unknown as Document;
   const uninstall = installInputModality(doc);
   const modality = () => doc.documentElement.getAttribute(INPUT_MODALITY_ATTRIBUTE);
-  const key = (key: string, init: { metaKey?: boolean; ctrlKey?: boolean; altKey?: boolean; shiftKey?: boolean } = {}) =>
-    doc.body.dispatchEvent(new window.KeyboardEvent("keydown", { key, bubbles: true, ...init }) as unknown as Event);
-  const press = () => doc.body.dispatchEvent(new window.PointerEvent("pointerdown", { bubbles: true }) as unknown as Event);
+  const key = (
+    key: string,
+    init: { metaKey?: boolean; ctrlKey?: boolean; altKey?: boolean; shiftKey?: boolean } = {},
+  ) =>
+    doc.body.dispatchEvent(
+      new window.KeyboardEvent("keydown", { key, bubbles: true, ...init }) as unknown as Event,
+    );
+  const press = () =>
+    doc.body.dispatchEvent(
+      new window.PointerEvent("pointerdown", { bubbles: true }) as unknown as Event,
+    );
   return { window, modality, key, press, uninstall };
 }
 
@@ -50,9 +58,14 @@ test("uninstalling stops tracking", () => {
 test("moving the mouse over a menu hides rings, a still or outside pointer does not", () => {
   const { window, modality, key } = setup();
   const doc = window.document;
-  doc.body.innerHTML = '<div role="menu"><div role="menuitem" id="row">Row</div></div><button id="outside">Go</button>';
+  doc.body.innerHTML =
+    '<div role="menu"><div role="menuitem" id="row">Row</div></div><button id="outside">Go</button>';
   const move = (id: string, movementX: number) =>
-    doc.getElementById(id)!.dispatchEvent(new window.PointerEvent("pointermove", { bubbles: true, movementX, movementY: 0 }));
+    doc
+      .getElementById(id)!
+      .dispatchEvent(
+        new window.PointerEvent("pointermove", { bubbles: true, movementX, movementY: 0 }),
+      );
   key("ArrowDown");
   move("outside", 4);
   assert.equal(modality(), "keyboard", "a moving mouse outside menus keeps keyboard rings");

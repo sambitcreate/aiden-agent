@@ -34,14 +34,17 @@ const ACKNOWLEDGEMENT = {
   confirmedForeground: true as const,
 };
 
-function setup(options: {
-  profiles?: BotAccessTelegramProfile[];
-  createBot?: () => Promise<unknown>;
-  updateBotAccess?: () => Promise<unknown>;
-} = {}) {
+function setup(
+  options: {
+    profiles?: BotAccessTelegramProfile[];
+    createBot?: () => Promise<unknown>;
+    updateBotAccess?: () => Promise<unknown>;
+  } = {},
+) {
   const calls: Array<{ method: string; args: unknown[] }> = [];
   const warnings: string[] = [];
-  const record = (method: string, result: (...args: unknown[]) => unknown = () => ({ method })) =>
+  const record =
+    (method: string, result: (...args: unknown[]) => unknown = () => ({ method })) =>
     async (...args: unknown[]) => {
       calls.push({ method, args });
       return result(...args);
@@ -58,7 +61,10 @@ function setup(options: {
     modelSelection: record("modelSelection", () => ({ providerId: "p", modelId: "m" })),
     visionModelSelection: record("visionModelSelection", () => undefined),
     botWebSearchEnabled: record("botWebSearchEnabled", () => true),
-    updateBotAccess: record("updateBotAccess", options.updateBotAccess ?? (() => ({ revision: "next" }))),
+    updateBotAccess: record(
+      "updateBotAccess",
+      options.updateBotAccess ?? (() => ({ revision: "next" })),
+    ),
   };
   const handlers = new Map<string, (event: FakeEvent, ...args: unknown[]) => unknown>();
   registerBotAccessHandlers<FakeEvent>({
@@ -201,7 +207,10 @@ test("the desktop one-time notice is read and acknowledged only as the desktop a
     { ...ACKNOWLEDGEMENT, version: "bot-full-access-v0" },
     { ...ACKNOWLEDGEMENT, audienceId: "telegram:work:owner:1" },
   ]) {
-    await assert.rejects(invoke("bots:acknowledgeAccessNotice", malformed), /notice acknowledgement/u);
+    await assert.rejects(
+      invoke("bots:acknowledgeAccessNotice", malformed),
+      /notice acknowledgement/u,
+    );
   }
   await assert.rejects(
     invokeFrom({ document: null }, "bots:acknowledgeAccessNotice", ACKNOWLEDGEMENT),
@@ -258,7 +267,10 @@ test("onboarding's first-Bot acceptance asks main to keep a review-first choice,
   const call = calls.find((entry) => entry.method === "acknowledgeNotice");
   assert.equal(call?.args[0], DESKTOP);
   assert.deepEqual(call?.args[3], { keepReviewFirst: true });
-  await assert.rejects(invoke("bots:acceptFirstBotAccess", { ...ACKNOWLEDGEMENT, decision: "customize_first" }), /Invalid first Bot access/u);
+  await assert.rejects(
+    invoke("bots:acceptFirstBotAccess", { ...ACKNOWLEDGEMENT, decision: "customize_first" }),
+    /Invalid first Bot access/u,
+  );
   await assert.rejects(
     invokeFrom({ document: { destroyed: true } }, "bots:acceptFirstBotAccess", ACKNOWLEDGEMENT),
     /changed before Bot access was confirmed/u,

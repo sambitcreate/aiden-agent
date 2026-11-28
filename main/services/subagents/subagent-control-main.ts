@@ -36,8 +36,10 @@ export interface SubagentControlMainRegistrationV2 extends SubagentControlRegist
   currentSnapshot?(): SubagentRunSnapshotV2;
 }
 
-export interface SubagentRetryPreparationMainV2
-  extends Omit<SubagentRetryPreparationV2, "registration"> {
+export interface SubagentRetryPreparationMainV2 extends Omit<
+  SubagentRetryPreparationV2,
+  "registration"
+> {
   registration: SubagentControlMainRegistrationV2;
 }
 
@@ -96,10 +98,7 @@ export class SubagentControlMainV2 {
         });
         return {
           ...prepared,
-          registration: this.wrapRegistration(
-            prepared.registration,
-            settle,
-          ),
+          registration: this.wrapRegistration(prepared.registration, settle),
         };
       },
     });
@@ -224,11 +223,7 @@ export class SubagentControlMainV2 {
     runId: string,
   ): Promise<Extract<SubagentManagementResultV2, { action: "stop" }> | undefined> {
     const binding = this.bindings.get(runId);
-    if (
-      !binding ||
-      binding.chatId !== scope.chatId ||
-      binding.workspaceId !== scope.workspaceId
-    ) {
+    if (!binding || binding.chatId !== scope.chatId || binding.workspaceId !== scope.workspaceId) {
       return undefined;
     }
     const result = await this.executeForDocument(
@@ -293,16 +288,8 @@ export class SubagentControlMainV2 {
         if (!pendingRetry || pendingRetry.runId !== result.snapshot.runId) {
           throw new Error("Subagent retry durability is unavailable.");
         }
-        this.remember(
-          result.sourceSnapshot,
-          binding.ownerDocumentId,
-          binding.settle,
-        );
-        this.remember(
-          result.snapshot,
-          pendingRetry.ownerDocumentId,
-          pendingRetry.settle,
-        );
+        this.remember(result.sourceSnapshot, binding.ownerDocumentId, binding.settle);
+        this.remember(result.snapshot, pendingRetry.ownerDocumentId, pendingRetry.settle);
         await binding.settle();
         await pendingRetry.settle();
       } else {
@@ -363,9 +350,7 @@ export class SubagentControlMainV2 {
       updatedAt: snapshot.updatedAt,
       terminal: TERMINAL_STATES.has(snapshot.state),
       settle,
-      ...(retainedCurrentSnapshot
-        ? { currentSnapshot: retainedCurrentSnapshot }
-        : {}),
+      ...(retainedCurrentSnapshot ? { currentSnapshot: retainedCurrentSnapshot } : {}),
     });
   }
 }

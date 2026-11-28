@@ -40,7 +40,8 @@ let StorageSettings: typeof StorageSettingsView = () => {
 let toast: typeof Toast;
 
 before(async () => {
-  ({ assembleStorageReport, classifyThread, classifyWorktree, emptyStorageReport } = await import("../../shared/storage"));
+  ({ assembleStorageReport, classifyThread, classifyWorktree, emptyStorageReport } =
+    await import("../../shared/storage"));
   ({ StorageSettings } = await import("./storage-settings"));
   ({ toast } = await import("../ui"));
 });
@@ -86,11 +87,25 @@ function report(overrides: { truncated?: boolean; idleComplete?: boolean } = {})
     worktrees: [
       classifyWorktree({ ...WORKTREE, bytesComplete: overrides.idleComplete ?? true }, NOW),
       classifyWorktree(
-        { ...WORKTREE, workspaceId: "ws-dirty", name: "dirty-worktree", branch: "wip", bytes: 700_000_000, uncommitted: 2 },
+        {
+          ...WORKTREE,
+          workspaceId: "ws-dirty",
+          name: "dirty-worktree",
+          branch: "wip",
+          bytes: 700_000_000,
+          uncommitted: 2,
+        },
         NOW,
       ),
       classifyWorktree(
-        { ...WORKTREE, workspaceId: "ws-routine", name: "nightly-worktree", branch: "nightly", bytes: 300_000_000, routineCount: 1 },
+        {
+          ...WORKTREE,
+          workspaceId: "ws-routine",
+          name: "nightly-worktree",
+          branch: "nightly",
+          bytes: 300_000_000,
+          routineCount: 1,
+        },
         NOW,
       ),
     ],
@@ -137,14 +152,30 @@ function previewFor(request: StorageCleanupRequest): StorageCleanupPreview {
       if (request.targetIds) {
         return {
           ...base,
-          items: [{ id: "ws-idle", kind: "worktree", label: "idle-worktree", detail: "feature", bytes: 3_000_000_000 }],
+          items: [
+            {
+              id: "ws-idle",
+              kind: "worktree",
+              label: "idle-worktree",
+              detail: "feature",
+              bytes: 3_000_000_000,
+            },
+          ],
           skipped: [],
           totalBytes: 3_000_000_000,
         };
       }
       return {
         ...base,
-        items: [{ id: "ws-idle", kind: "worktree", label: "idle-worktree", detail: "feature", bytes: 3_000_000_000 }],
+        items: [
+          {
+            id: "ws-idle",
+            kind: "worktree",
+            label: "idle-worktree",
+            detail: "feature",
+            bytes: 3_000_000_000,
+          },
+        ],
         skipped: [
           { id: "ws-dirty", label: "dirty-worktree", reason: "uncommitted", bytes: 700_000_000 },
           { id: "ws-routine", label: "nightly-worktree", reason: "routine", bytes: 300_000_000 },
@@ -161,7 +192,14 @@ function previewFor(request: StorageCleanupRequest): StorageCleanupPreview {
     case "clear-browser-cache":
       return {
         ...base,
-        items: [{ id: "browser-cache", kind: "browser-cache", label: "Browser cache", bytes: 450_000_000 }],
+        items: [
+          {
+            id: "browser-cache",
+            kind: "browser-cache",
+            label: "Browser cache",
+            bytes: 450_000_000,
+          },
+        ],
         skipped: [],
         totalBytes: 450_000_000,
       };
@@ -222,12 +260,27 @@ test("the page shows the total and what is using space, with an action on each r
   const worktrees = screen.getByRole("group", { name: "Worktrees" });
   assert.ok(within(worktrees).getByText("4.00 GB"));
   assert.ok(within(worktrees).getByRole("button", { name: "Review…" }));
-  assert.ok(within(screen.getByRole("group", { name: "Browser data" })).getByRole("button", { name: "Clear cache…" }));
-  assert.ok(within(screen.getByRole("group", { name: "Logs and diagnostics" })).getByRole("button", { name: "Clear…" }));
-  assert.ok(within(screen.getByRole("group", { name: "Voice and helper models" })).getByRole("button", { name: /Manage/u }));
+  assert.ok(
+    within(screen.getByRole("group", { name: "Browser data" })).getByRole("button", {
+      name: "Clear cache…",
+    }),
+  );
+  assert.ok(
+    within(screen.getByRole("group", { name: "Logs and diagnostics" })).getByRole("button", {
+      name: "Clear…",
+    }),
+  );
+  assert.ok(
+    within(screen.getByRole("group", { name: "Voice and helper models" })).getByRole("button", {
+      name: /Manage/u,
+    }),
+  );
   // Chats are deleted one at a time from their own rows, so the category has no sweep.
   assert.equal(rowActions(screen.getByRole("group", { name: "Chats" })).length, 0);
-  assert.ok(screen.getByRole("button", { name: "About Browser data" }), "what a category holds is one hint away");
+  assert.ok(
+    screen.getByRole("button", { name: "About Browser data" }),
+    "what a category holds is one hint away",
+  );
   // A category with nothing on disk is not listed.
   assert.ok(!screen.queryByRole("group", { name: "Bot computers" }));
 });
@@ -263,7 +316,11 @@ test("reviewing worktrees lists what goes, what stays and why, then removes only
 
   fireEvent.click(within(dialog).getByRole("button", { name: "Remove 1 · 3.00 GB" }));
   await waitFor(() => assert.ok(cleanupCall(calls)));
-  assert.deepEqual(cleanupCall(calls), { action: "remove-worktrees", inactiveDays: 14, targetIds: ["ws-idle"] });
+  assert.deepEqual(cleanupCall(calls), {
+    action: "remove-worktrees",
+    inactiveDays: 14,
+    targetIds: ["ws-idle"],
+  });
 });
 
 test("a worktree row's Remove asks first, then removes exactly that worktree", async () => {
@@ -271,7 +328,10 @@ test("a worktree row's Remove asks first, then removes exactly that worktree", a
   fireEvent.click(await screen.findByRole("button", { name: "Remove idle-worktree" }));
   const dialog = await screen.findByRole("alertdialog");
   assert.match(dialog.textContent ?? "", /Remove this worktree\?/u);
-  assert.ok(!within(dialog).queryByRole("combobox", { name: "Unused for" }), "a single item has no time window");
+  assert.ok(
+    !within(dialog).queryByRole("combobox", { name: "Unused for" }),
+    "a single item has no time window",
+  );
   assert.equal(
     calls.filter((entry) => entry.channel === "storage:cleanup").length,
     0,
@@ -279,7 +339,11 @@ test("a worktree row's Remove asks first, then removes exactly that worktree", a
   );
   fireEvent.click(within(dialog).getByRole("button", { name: "Remove 1 · 3.00 GB" }));
   await waitFor(() => assert.ok(cleanupCall(calls)));
-  assert.deepEqual(cleanupCall(calls), { action: "remove-worktrees", inactiveDays: 14, targetIds: ["ws-idle"] });
+  assert.deepEqual(cleanupCall(calls), {
+    action: "remove-worktrees",
+    inactiveDays: 14,
+    targetIds: ["ws-idle"],
+  });
 });
 
 test("a chat is deleted only from its own row, one at a time", async () => {
@@ -290,7 +354,11 @@ test("a chat is deleted only from its own row, one at a time", async () => {
   assert.match(dialog.textContent ?? "", /“Old chat” and its pictures are deleted for good/u);
   fireEvent.click(within(dialog).getByRole("button", { name: "Delete · 900 MB" }));
   await waitFor(() => assert.ok(cleanupCall(calls)));
-  assert.deepEqual(cleanupCall(calls), { action: "delete-threads", inactiveDays: 14, targetIds: ["chat-old"] });
+  assert.deepEqual(cleanupCall(calls), {
+    action: "delete-threads",
+    inactiveDays: 14,
+    targetIds: ["chat-old"],
+  });
 });
 
 test("clearing the browser cache says sign-ins are kept", async () => {
@@ -300,7 +368,11 @@ test("clearing the browser cache says sign-ins are kept", async () => {
   const dialog = await screen.findByRole("alertdialog");
   assert.match(dialog.textContent ?? "", /Clear browser cache\?/u);
   assert.match(dialog.textContent ?? "", /You stay signed in to websites/u);
-  assert.match(dialog.textContent ?? "", /frees up to 450 MB/u, "a file in use stays, so the size is a ceiling");
+  assert.match(
+    dialog.textContent ?? "",
+    /frees up to 450 MB/u,
+    "a file in use stays, so the size is a ceiling",
+  );
   fireEvent.click(within(dialog).getByRole("button", { name: "Clear cache" }));
   await waitFor(() => assert.ok(cleanupCall(calls)));
   assert.equal((cleanupCall(calls) as StorageCleanupRequest).action, "clear-browser-cache");
@@ -342,12 +414,18 @@ test("a cleanup amount that was only partly measured is promised as a minimum", 
 test("Clear cache is off when the browser has nothing cached", async () => {
   mount({ report: { ...report(), browserCacheBytes: 0 } });
   const row = await screen.findByRole("group", { name: "Browser data" });
-  assert.equal(within(row).getByRole("button", { name: "Clear cache…" }).hasAttribute("disabled"), true);
+  assert.equal(
+    within(row).getByRole("button", { name: "Clear cache…" }).hasAttribute("disabled"),
+    true,
+  );
 });
 
 test("Manage opens the settings page that owns the data, and is hidden when that page is not available", async () => {
   const opened: SettingsSection[] = [];
-  mount({ onOpenSection: (section) => opened.push(section), canOpenSection: (section) => section === "voice" });
+  mount({
+    onOpenSection: (section) => opened.push(section),
+    canOpenSection: (section) => section === "voice",
+  });
   const row = await screen.findByRole("group", { name: "Voice and helper models" });
   fireEvent.click(within(row).getByRole("button", { name: /Manage/u }));
   assert.deepEqual(opened, ["voice"]);
@@ -360,12 +438,21 @@ test("Manage opens the settings page that owns the data, and is hidden when that
 
 test("a scan that is still running says so and keeps cleanup off", async () => {
   mount({
-    report: emptyStorageReport({ status: "scanning", scannedAt: null, error: null, truncated: false }),
+    report: emptyStorageReport({
+      status: "scanning",
+      scannedAt: null,
+      error: null,
+      truncated: false,
+    }),
   });
   await flush();
   await screen.findByText(/Measuring how much disk Aiden uses/u);
   assert.equal(screen.getByRole("button", { name: /Measuring/u }).hasAttribute("disabled"), true);
-  assert.equal(screen.queryAllByText("0 KB").length, 0, "nothing measured yet is not the same as nothing used");
+  assert.equal(
+    screen.queryAllByText("0 KB").length,
+    0,
+    "nothing measured yet is not the same as nothing used",
+  );
 });
 
 test("a scan that stopped early says sizes are a minimum", async () => {
@@ -373,7 +460,11 @@ test("a scan that stopped early says sizes are a minimum", async () => {
   await screen.findByText(/some sizes are a minimum/u);
   // Every partly measured category and worktree reads "At least"; a fully measured one does not.
   assert.ok(within(screen.getByRole("group", { name: "Worktrees" })).getByText("At least 4.00 GB"));
-  assert.ok(within(screen.getByRole("group", { name: "Logs and diagnostics" })).getByText("At least 500 KB"));
+  assert.ok(
+    within(screen.getByRole("group", { name: "Logs and diagnostics" })).getByText(
+      "At least 500 KB",
+    ),
+  );
   assert.ok(within(screen.getByRole("group", { name: "Chats" })).getByText("1.00 GB"));
   assert.ok(screen.getByText("At least 3.00 GB"));
 });
@@ -393,7 +484,10 @@ test("a scan that failed explains itself and offers no cleanup", async () => {
   for (const name of ["Review…", "Clear cache…", "Clear…"]) {
     assert.equal(screen.queryAllByRole("button", { name, hidden: true }).length, 0, name);
   }
-  assert.equal(screen.getByRole("button", { name: /Measure again/u }).hasAttribute("disabled"), false);
+  assert.equal(
+    screen.getByRole("button", { name: /Measure again/u }).hasAttribute("disabled"),
+    false,
+  );
 });
 
 test("a read that throws says the files are unchanged", async () => {
@@ -408,11 +502,18 @@ test("a read that throws says the files are unchanged", async () => {
   render(createElement(StorageSettings));
   await flush();
   assert.equal(await screen.findAllByText(/Nothing was changed/u).then((found) => found.length), 1);
-  assert.equal(screen.queryAllByText(/Checking how much disk/u).length, 0, "the page has stopped checking");
+  assert.equal(
+    screen.queryAllByText(/Checking how much disk/u).length,
+    0,
+    "the page has stopped checking",
+  );
 });
 
 /** Opens the worktree review and answers cleanup with `result`, or by throwing it. */
-async function reviewAndConfirm(result: unknown, handlers: Record<string, (...args: unknown[]) => unknown> = {}) {
+async function reviewAndConfirm(
+  result: unknown,
+  handlers: Record<string, (...args: unknown[]) => unknown> = {},
+) {
   const calls = installBotTestIpc({
     "storage:report": () => report(),
     "storage:refresh": () => report(),
@@ -444,7 +545,10 @@ test("a scan that starts behind the page turns cleanup off straight away", async
   current = { ...current, scan: { ...current.scan, status: "scanning" } };
   emitBotTestNotification("storage:changed", { kind: "scan-started" });
   await waitFor(() => assert.ok(screen.getByRole("button", { name: /Measuring/u })));
-  assert.equal(screen.getByRole("button", { name: "Remove idle-worktree" }).hasAttribute("disabled"), true);
+  assert.equal(
+    screen.getByRole("button", { name: "Remove idle-worktree" }).hasAttribute("disabled"),
+    true,
+  );
 });
 
 test("every worktree a review will remove is on the list, however long it is", async () => {
@@ -469,12 +573,15 @@ test("every worktree a review will remove is on the list, however long it is", a
   const row = await screen.findByRole("group", { name: "Worktrees" });
   fireEvent.click(within(row).getByRole("button", { name: "Review…" }));
   const dialog = await screen.findByRole("alertdialog");
-  const listed = within(within(dialog).getByRole("list", { name: "Worktrees to remove" })).getAllByRole("listitem");
+  const listed = within(
+    within(dialog).getByRole("list", { name: "Worktrees to remove" }),
+  ).getAllByRole("listitem");
   assert.equal(listed.length, 60);
 
   fireEvent.click(within(dialog).getByRole("button", { name: /Remove 60/u }));
   await waitFor(() => assert.ok(calls.some((entry) => entry.channel === "storage:cleanup")));
-  const sent = calls.find((entry) => entry.channel === "storage:cleanup")?.args[0] as StorageCleanupRequest;
+  const sent = calls.find((entry) => entry.channel === "storage:cleanup")
+    ?.args[0] as StorageCleanupRequest;
   assert.equal(sent.targetIds?.length, listed.length, "nothing goes that the person was not shown");
 });
 
@@ -491,7 +598,10 @@ test("an item kept at the last moment is reported, even when the review already 
   await waitFor(() => assert.equal(failure.mock.callCount(), 1));
   assert.equal(success.mock.callCount(), 0);
   assert.match(String(failure.mock.calls[0]!.arguments[0]), /Freed 3\.00 GB\. 1 item was kept/u);
-  assert.ok(await screen.findByRole("status"), "the outcome stays on the page after the toast fades");
+  assert.ok(
+    await screen.findByRole("status"),
+    "the outcome stays on the page after the toast fades",
+  );
 });
 
 test("a clear that freed nothing measurable does not claim a number", async () => {
@@ -520,7 +630,9 @@ test("a cleanup that fails closes the stale review and measures again", async ()
   const failure = mock.method(toast, "error", () => "");
   const calls = await reviewAndConfirm(new Error("Aiden is quitting."));
   await waitFor(() => assert.equal(failure.mock.callCount(), 1));
-  await waitFor(() => assert.ok(!screen.queryByRole("alertdialog"), "its list may name what is already gone"));
+  await waitFor(() =>
+    assert.ok(!screen.queryByRole("alertdialog"), "its list may name what is already gone"),
+  );
   await waitFor(() => assert.ok(calls.some((entry) => entry.channel === "storage:refresh")));
   assert.match((await screen.findByRole("status")).textContent ?? "", /could not finish/u);
 });
@@ -546,7 +658,9 @@ test("a review someone cancelled does not come back when a slower preview lands"
   const select = within(dialog).getByRole("combobox", { name: "Unused for" });
   fireEvent.click(select);
   fireEvent.click(await screen.findByRole("option", { name: "30 days" }));
-  await waitFor(() => assert.equal(calls.filter((entry) => entry.channel === "storage:preview").length, 2));
+  await waitFor(() =>
+    assert.equal(calls.filter((entry) => entry.channel === "storage:preview").length, 2),
+  );
 
   fireEvent.click(within(screen.getByRole("alertdialog")).getByRole("button", { name: "Cancel" }));
   await waitFor(() => assert.ok(!screen.queryByRole("alertdialog")));

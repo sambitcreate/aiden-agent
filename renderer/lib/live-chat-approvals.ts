@@ -99,7 +99,10 @@ function sameApprovals(a: readonly ApprovalPrompt[], b: readonly ApprovalPrompt[
     a.length === b.length &&
     a.every((prompt, index) => {
       const other = b[index];
-      return other !== undefined && (prompt === other || liveApprovalSignature(prompt) === liveApprovalSignature(other));
+      return (
+        other !== undefined &&
+        (prompt === other || liveApprovalSignature(prompt) === liveApprovalSignature(other))
+      );
     })
   );
 }
@@ -158,7 +161,8 @@ const SENSITIVE = new RegExp(
 );
 
 /* eslint-disable no-control-regex */
-const UNSAFE_CHARACTERS = /[\u0000-\u001f\u007f-\u009f\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069\u2028\u2029]/u;
+const UNSAFE_CHARACTERS =
+  /[\u0000-\u001f\u007f-\u009f\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069\u2028\u2029]/u;
 /* eslint-enable no-control-regex */
 
 /** An approval from an external agent harness (ACP), which maps its requests onto Aiden tool names. */
@@ -167,7 +171,10 @@ const HARNESS_SUMMARY =
 
 /** One line, no control or direction marks, clipped. For display and tap-only notes only. */
 export function liveSpokenText(value: string, limit = 80): string {
-  const line = value.replace(new RegExp(UNSAFE_CHARACTERS.source, "gu"), " ").replace(/\s+/gu, " ").trim();
+  const line = value
+    .replace(new RegExp(UNSAFE_CHARACTERS.source, "gu"), " ")
+    .replace(/\s+/gu, " ")
+    .trim();
   return line.length > limit ? `${line.slice(0, limit - 1).trimEnd()}…` : line;
 }
 
@@ -216,12 +223,17 @@ export function liveApprovalTarget(
 export function liveApprovalOffersAllowOnce(
   prompt: Pick<ApprovalPrompt, "toolName" | "details" | "canAllow">,
 ): boolean {
-  return prompt.canAllow !== false && prompt.details === undefined && prompt.toolName !== "classify";
+  return (
+    prompt.canAllow !== false && prompt.details === undefined && prompt.toolName !== "classify"
+  );
 }
 
 /** Whether speech may answer this approval; false means tap only. */
 export function liveApprovalVoiceAnswerable(
-  prompt: Pick<ApprovalPrompt, "toolName" | "summary" | "preview" | "details" | "canAllow" | "scopes" | "source">,
+  prompt: Pick<
+    ApprovalPrompt,
+    "toolName" | "summary" | "preview" | "details" | "canAllow" | "scopes" | "source"
+  >,
 ): boolean {
   if (!liveApprovalOffersAllowOnce(prompt)) return false;
   if (prompt.source === "remote") return false;
@@ -242,19 +254,29 @@ export function liveApprovalVoiceAnswerable(
 }
 
 /** Short ribbon title: "Run npm test", "Edit README.md". */
-export function liveApprovalTitle(prompt: Pick<ApprovalPrompt, "toolName" | "summary" | "preview" | "details">): string {
+export function liveApprovalTitle(
+  prompt: Pick<ApprovalPrompt, "toolName" | "summary" | "preview" | "details">,
+): string {
   const target = liveApprovalTarget(prompt);
   if (target) {
-    const name = target.verb === "run" || target.verb === "run_background"
-      ? target.target
-      : (target.target.split(/[\\/]/u).filter(Boolean).pop() ?? target.target);
-    const verb = { run: "Run", run_background: "Run in the background", edit: "Edit", write: "Write", share: "Share" }[target.verb];
+    const name =
+      target.verb === "run" || target.verb === "run_background"
+        ? target.target
+        : (target.target.split(/[\\/]/u).filter(Boolean).pop() ?? target.target);
+    const verb = {
+      run: "Run",
+      run_background: "Run in the background",
+      edit: "Edit",
+      write: "Write",
+      share: "Share",
+    }[target.verb];
     return `${verb} ${liveSpokenText(name, 60)}`;
   }
   const kind = (prompt.details as { kind?: unknown } | undefined)?.kind;
   if (kind === "scheduled-task" || kind === "assistant-automation") return "Save a scheduled task";
   if (kind === "form-fill-batch") return "Fill in a form";
-  if (kind === "computer-use-access" || prompt.toolName === "computer_use") return "Use your computer";
+  if (kind === "computer-use-access" || prompt.toolName === "computer_use")
+    return "Use your computer";
   const words = liveSpokenText(prompt.toolName.replace(/[_-]+/gu, " ").trim(), 40);
   return words ? `Use ${words}` : "Use a tool";
 }
@@ -418,7 +440,8 @@ export class LiveChatVoiceApprovals {
 
   /** The approval Live may answer now: the first one of the chat on screen. */
   private head(): { prompt: ApprovalPrompt; chatId: string; chatTitle: string } | null {
-    if (!this.enabled || this.starts === 0 || this.deps.bus.currentSessionId() === null) return null;
+    if (!this.enabled || this.starts === 0 || this.deps.bus.currentSessionId() === null)
+      return null;
     const open = this.deps.openChat.get();
     const published = this.deps.approvals.get();
     if (!open || !published || published.chatId !== open.chatId) return null;
@@ -548,7 +571,14 @@ export class LiveChatVoiceApprovals {
 
   private hear(input: LiveVoiceInput): void {
     const current = this.current;
-    if (!current || !current.armed || current.answering || current.answered || input.startedAt <= current.fence) return;
+    if (
+      !current ||
+      !current.armed ||
+      current.answering ||
+      current.answered ||
+      input.startedAt <= current.fence
+    )
+      return;
     const phrase = matchLiveVoicePhrase(input.text);
     if (phrase?.kind !== "allow" && phrase?.kind !== "deny") return;
     void this.answer(current, phrase.kind);
@@ -589,6 +619,8 @@ export const liveChatVoiceApprovals = new LiveChatVoiceApprovals({
 });
 
 /** Whether the stored settings let approvals be answered by voice; off until settings load. */
-export function liveVoiceApprovalsEnabled(settings: AidenLiveSettingsFields | null | undefined): boolean {
+export function liveVoiceApprovalsEnabled(
+  settings: AidenLiveSettingsFields | null | undefined,
+): boolean {
   return settings != null && aidenLivePreferences(settings).voiceApprovals;
 }

@@ -108,7 +108,13 @@ export function BotInstructionsDialog({
         />
         <div id={counterId} className="flex items-center justify-between gap-3">
           <Text as="p" variant="small" color={empty ? "status-red" : "secondary"}>
-            {empty ? "Instructions can’t be empty." : restored ? "Your unsaved edit is back." : changed ? "Unsaved changes" : null}
+            {empty
+              ? "Instructions can’t be empty."
+              : restored
+                ? "Your unsaved edit is back."
+                : changed
+                  ? "Unsaved changes"
+                  : null}
           </Text>
           <Text as="p" variant="small" color="tertiary" className="tabular-nums">
             {`${countFormatter.format(text.length)} / ${countFormatter.format(BOT_LIMITS.instructionsChars)}`}

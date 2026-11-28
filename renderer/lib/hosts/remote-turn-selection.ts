@@ -1,7 +1,12 @@
 import * as React from "react";
 import type { GenerationThinkingLevel } from "../../shared/generation-thinking";
 import type { HostTurnModel } from "./host-chat-adapter";
-import { findHostModel, type HostModel, type HostModelCatalog, type HostModelChoice } from "./host-resources";
+import {
+  findHostModel,
+  type HostModel,
+  type HostModelCatalog,
+  type HostModelChoice,
+} from "./host-resources";
 
 /**
  * The model and effort an open remote chat's next turn runs on. The host owns
@@ -38,11 +43,13 @@ export function resolveRemoteTurnSelection(
   pick: RemoteTurnPick,
 ): RemoteTurnSelection {
   // A pick the host no longer lists falls back to the chat's own model.
-  const picked = pick.model && (!catalog || findHostModel(catalog, pick.model)) ? pick.model : undefined;
+  const picked =
+    pick.model && (!catalog || findHostModel(catalog, pick.model)) ? pick.model : undefined;
   const model = picked ?? chatModel;
   const hostModel = findHostModel(catalog, model);
   const levels = hostModel?.thinkingLevels ?? [];
-  const pickedLevel = pick.thinkingLevel && levels.includes(pick.thinkingLevel) ? pick.thinkingLevel : undefined;
+  const pickedLevel =
+    pick.thinkingLevel && levels.includes(pick.thinkingLevel) ? pick.thinkingLevel : undefined;
   return {
     model,
     hostModel,
@@ -50,7 +57,9 @@ export function resolveRemoteTurnSelection(
     thinkingLevel: pickedLevel ?? hostModel?.defaultThinkingLevel ?? levels[0],
     canDisable: hostModel?.thinkingCanDisable ?? true,
     extras: {
-      ...(picked && !sameModel(picked, chatModel) ? { model: { providerId: picked.providerId, modelId: picked.modelId } } : {}),
+      ...(picked && !sameModel(picked, chatModel)
+        ? { model: { providerId: picked.providerId, modelId: picked.modelId } }
+        : {}),
       ...(pickedLevel ? { thinkingLevel: pickedLevel } : {}),
     },
   };
@@ -61,7 +70,9 @@ const picks = new Map<string, RemoteTurnPick>();
 
 /** The pick for one remote chat (keyed by host and chat), kept while Aiden runs. */
 export function useRemoteTurnPick(key: string | null) {
-  const [pick, setPickState] = React.useState<RemoteTurnPick>(() => (key ? (picks.get(key) ?? {}) : {}));
+  const [pick, setPickState] = React.useState<RemoteTurnPick>(() =>
+    key ? (picks.get(key) ?? {}) : {},
+  );
   const [pickKey, setPickKey] = React.useState(key);
   if (pickKey !== key) {
     setPickKey(key);

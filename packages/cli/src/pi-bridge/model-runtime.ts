@@ -11,29 +11,32 @@ import type { ResolvedModelRuntime } from "../../../../main/services/model-runti
 import type { StoredProvider } from "../../../../main/services/types.js";
 import { withoutMessageThreads } from "../../../../main/services/pi-message-threads.js";
 import {
-	adaptGoogleXHighStreamOptions,
-	withAidenPiCompatibility,
+  adaptGoogleXHighStreamOptions,
+  withAidenPiCompatibility,
 } from "../../../../main/services/pi-provider-compatibility.js";
 
 /** The parts of Pi's ExtensionContext the model bridge reads. */
 export interface ModelRuntimeContext {
-	scopedModels?: ReadonlyArray<{ model: Model<Api> }>;
-	model?: Model<Api>;
-	modelRegistry?: {
-		getProvider?(providerId: string): Provider | undefined;
-		find(providerId: string, modelId: string): Promise<Model<Api> | undefined> | Model<Api> | undefined;
-		getApiKeyAndHeaders(model: Model<Api>): Promise<{
-			ok: boolean;
-			apiKey?: string;
-			baseUrl?: string;
-			headers?: import("@earendil-works/pi-ai").ProviderHeaders;
-		}>;
-	};
-	sessionManager?: { getBranch?(): Array<Record<string, unknown>> };
+  scopedModels?: ReadonlyArray<{ model: Model<Api> }>;
+  model?: Model<Api>;
+  modelRegistry?: {
+    getProvider?(providerId: string): Provider | undefined;
+    find(
+      providerId: string,
+      modelId: string,
+    ): Promise<Model<Api> | undefined> | Model<Api> | undefined;
+    getApiKeyAndHeaders(model: Model<Api>): Promise<{
+      ok: boolean;
+      apiKey?: string;
+      baseUrl?: string;
+      headers?: import("@earendil-works/pi-ai").ProviderHeaders;
+    }>;
+  };
+  sessionManager?: { getBranch?(): Array<Record<string, unknown>> };
 }
 
 export function asModelRuntimeContext(ctx: object): ModelRuntimeContext {
-	return ctx as unknown as ModelRuntimeContext;
+  return ctx as unknown as ModelRuntimeContext;
 }
 
 /**
@@ -41,55 +44,55 @@ export function asModelRuntimeContext(ctx: object): ModelRuntimeContext {
  * identity, baseUrl, needsKey, and optional model metadata from it.
  */
 function storedProvider(providerId: string, modelId: string, baseUrl: string): StoredProvider {
-	return {
-		id: providerId,
-		kind: providerId,
-		label: providerId,
-		baseUrl,
-		models: [modelId],
-		needsKey: false,
-	} as unknown as StoredProvider;
+  return {
+    id: providerId,
+    kind: providerId,
+    label: providerId,
+    baseUrl,
+    models: [modelId],
+    needsKey: false,
+  } as unknown as StoredProvider;
 }
 
 export async function resolveRuntimeFromContext(
-	ctx: Pick<ModelRuntimeContext, "modelRegistry">,
-	providerId: string,
-	modelId: string,
+  ctx: Pick<ModelRuntimeContext, "modelRegistry">,
+  providerId: string,
+  modelId: string,
 ): Promise<ResolvedModelRuntime> {
-	const registry = ctx.modelRegistry;
-	if (!registry) throw new Error("The model registry is unavailable.");
-	const model = await registry.find(providerId, modelId);
-	if (!model) throw new Error(`The model ${providerId}/${modelId} is not available.`);
-	const auth = await registry.getApiKeyAndHeaders(model);
-	if (auth.ok === false) throw new Error(`No credentials for ${providerId}.`);
-	const models = createModels();
-	const provider = registry.getProvider?.(providerId);
-	if (provider) {
-		const compatible = withAidenPiCompatibility(provider);
-		models.setProvider({
-			...compatible,
-			streamSimple: (targetModel, context, options) =>
-				compatible.streamSimple(
-					targetModel,
-					context,
-					adaptGoogleXHighStreamOptions(targetModel, options),
-				),
-		});
-	}
-	return {
-		provider: storedProvider(providerId, modelId, model.baseUrl),
-		model: withoutMessageThreads(auth.baseUrl ? { ...model, baseUrl: auth.baseUrl } : model),
-		models,
-		apiKey: auth.apiKey,
-		headers: (auth.headers ?? undefined) as ResolvedModelRuntime["headers"],
-		streams: { streamSimple: models.streamSimple.bind(models) },
-	};
+  const registry = ctx.modelRegistry;
+  if (!registry) throw new Error("The model registry is unavailable.");
+  const model = await registry.find(providerId, modelId);
+  if (!model) throw new Error(`The model ${providerId}/${modelId} is not available.`);
+  const auth = await registry.getApiKeyAndHeaders(model);
+  if (auth.ok === false) throw new Error(`No credentials for ${providerId}.`);
+  const models = createModels();
+  const provider = registry.getProvider?.(providerId);
+  if (provider) {
+    const compatible = withAidenPiCompatibility(provider);
+    models.setProvider({
+      ...compatible,
+      streamSimple: (targetModel, context, options) =>
+        compatible.streamSimple(
+          targetModel,
+          context,
+          adaptGoogleXHighStreamOptions(targetModel, options),
+        ),
+    });
+  }
+  return {
+    provider: storedProvider(providerId, modelId, model.baseUrl),
+    model: withoutMessageThreads(auth.baseUrl ? { ...model, baseUrl: auth.baseUrl } : model),
+    models,
+    apiKey: auth.apiKey,
+    headers: (auth.headers ?? undefined) as ResolvedModelRuntime["headers"],
+    streams: { streamSimple: models.streamSimple.bind(models) },
+  };
 }
 
 export function liveMessages(ctx: ModelRuntimeContext): AgentMessage[] {
-	const entries = ctx.sessionManager?.getBranch?.() ?? [];
-	return entries
-		.filter((entry) => entry.type === "message")
-		.map((entry) => entry.message as AgentMessage)
-		.filter(Boolean);
+  const entries = ctx.sessionManager?.getBranch?.() ?? [];
+  return entries
+    .filter((entry) => entry.type === "message")
+    .map((entry) => entry.message as AgentMessage)
+    .filter(Boolean);
 }

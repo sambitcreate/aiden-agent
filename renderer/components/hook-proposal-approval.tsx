@@ -1,5 +1,8 @@
 import type * as React from "react";
-import type { HookProposalApprovalDetails, HookProposalApprovalHook } from "../shared/hook-proposal-approval";
+import type {
+  HookProposalApprovalDetails,
+  HookProposalApprovalHook,
+} from "../shared/hook-proposal-approval";
 import { hookEventUsesMatcher } from "../shared/hooks-settings";
 import { ApprovalCodeWell } from "./approval-code-well";
 import { HookScriptCoverage } from "./hook-script-coverage";
@@ -46,7 +49,12 @@ function Row({
   return (
     <>
       <dt className="text-tertiary">{label}</dt>
-      <dd className={mono ? "min-w-0 break-all font-mono text-primary" : "min-w-0 break-words text-primary"} data-hook-row-changed={changed ? "true" : undefined}>
+      <dd
+        className={
+          mono ? "min-w-0 break-all font-mono text-primary" : "min-w-0 break-words text-primary"
+        }
+        data-hook-row-changed={changed ? "true" : undefined}
+      >
         {changed ? (
           <>
             <del className="text-tertiary">
@@ -81,28 +89,58 @@ export function HookProposalApproval({
   const previous: HookProposalApprovalHook | undefined = details.previous ?? undefined;
   const commandChanged = previous !== undefined && previous.command !== details.command;
   return (
-    <div id={descriptionId} className="mt-2.5 space-y-2.5 text-left" data-hook-proposal-approval={details.action}>
+    <div
+      id={descriptionId}
+      className="mt-2.5 space-y-2.5 text-left"
+      data-hook-proposal-approval={details.action}
+    >
       <dl className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-3 gap-y-1 rounded-control bg-well px-3 py-2 text-small">
         <Row label="Name" value={details.name} />
         <Row label="Runs in" value={details.scopeLabel} />
         <Row label="Event" value={details.event} previous={previous?.event} mono />
         {/* Stop, UserPromptSubmit and the like run whatever the matcher says, so a narrow-looking one isn't shown. */}
-        {hookEventUsesMatcher(details.event) || (previous !== undefined && hookEventUsesMatcher(previous.event)) ? (
+        {hookEventUsesMatcher(details.event) ||
+        (previous !== undefined && hookEventUsesMatcher(previous.event)) ? (
           <Row
             label="Matches"
-            value={hookEventUsesMatcher(details.event) ? matcherLabel(details.matcher) : "Everything"}
-            previous={previous ? (hookEventUsesMatcher(previous.event) ? matcherLabel(previous.matcher) : "Everything") : undefined}
+            value={
+              hookEventUsesMatcher(details.event) ? matcherLabel(details.matcher) : "Everything"
+            }
+            previous={
+              previous
+                ? hookEventUsesMatcher(previous.event)
+                  ? matcherLabel(previous.matcher)
+                  : "Everything"
+                : undefined
+            }
             mono
           />
         ) : null}
-        <Row label="Time limit" value={timeoutLabel(details.timeoutSeconds)} previous={previous ? timeoutLabel(previous.timeoutSeconds) : undefined} />
+        <Row
+          label="Time limit"
+          value={timeoutLabel(details.timeoutSeconds)}
+          previous={previous ? timeoutLabel(previous.timeoutSeconds) : undefined}
+        />
         {details.async || previous?.async ? (
-          <Row label="Runs" value={runsLabel(details.async)} previous={previous ? runsLabel(previous.async) : undefined} />
+          <Row
+            label="Runs"
+            value={runsLabel(details.async)}
+            previous={previous ? runsLabel(previous.async) : undefined}
+          />
         ) : null}
         {details.event === "PreToolUse" || previous?.event === "PreToolUse" ? (
-          <Row label="If it fails" value={failureLabel(details.failClosed)} previous={previous ? failureLabel(previous.failClosed) : undefined} />
+          <Row
+            label="If it fails"
+            value={failureLabel(details.failClosed)}
+            previous={previous ? failureLabel(previous.failClosed) : undefined}
+          />
         ) : null}
-        <Row label="Environment" value={envLabel(details.envAllow)} previous={previous ? envLabel(previous.envAllow) : undefined} mono />
+        <Row
+          label="Environment"
+          value={envLabel(details.envAllow)}
+          previous={previous ? envLabel(previous.envAllow) : undefined}
+          mono
+        />
         <Row label="Digest" value={details.digestPrefix} mono />
       </dl>
       {commandChanged ? (
@@ -111,11 +149,18 @@ export function HookProposalApproval({
           <ApprovalCodeWell label="New command">{details.command}</ApprovalCodeWell>
         </>
       ) : (
-        <ApprovalCodeWell label={details.action === "delete" ? "Command to delete" : "Complete command"}>{details.command}</ApprovalCodeWell>
+        <ApprovalCodeWell
+          label={details.action === "delete" ? "Command to delete" : "Complete command"}
+        >
+          {details.command}
+        </ApprovalCodeWell>
       )}
       <HookScriptCoverage files={details.scriptFiles} coverage={details.scriptCoverage} />
       {details.warnings.length > 0 ? (
-        <ul className="space-y-1 rounded-control bg-status-warning-surface px-3 py-2 text-small text-status-warning" aria-label="Warnings">
+        <ul
+          className="space-y-1 rounded-control bg-status-warning-surface px-3 py-2 text-small text-status-warning"
+          aria-label="Warnings"
+        >
           {details.warnings.map((warning, index) => (
             <li key={index}>{warning}</li>
           ))}

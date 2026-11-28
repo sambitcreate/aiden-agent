@@ -13,7 +13,10 @@ import type { DeviceScreenSize } from "./device-stream";
 export type DeviceDisplayRotation = 0 | 90 | -90 | 180;
 
 /** How far to turn the raw frame so it shows upright for the reported orientation. */
-export function deviceDisplayRotation(platform: DevicePlatform, screen: DeviceScreenSize | null): DeviceDisplayRotation {
+export function deviceDisplayRotation(
+  platform: DevicePlatform,
+  screen: DeviceScreenSize | null,
+): DeviceDisplayRotation {
   if (platform !== "ios" || !screen || screen.width > screen.height) return 0;
   switch (screen.orientation) {
     case "landscape_left":
@@ -40,7 +43,9 @@ export function displayedAspect(screen: DeviceScreenSize, rotation: DeviceDispla
  * (`containerType: "size"`, see `DEVICE_SCREEN_CONTAINER_STYLE`) for the
  * `cqh`/`cqw` units to refer to it.
  */
-export function rotatedMediaStyle(rotation: DeviceDisplayRotation): React.CSSProperties | undefined {
+export function rotatedMediaStyle(
+  rotation: DeviceDisplayRotation,
+): React.CSSProperties | undefined {
   if (rotation === 0) return undefined;
   if (rotation === 180) return { transform: "rotate(180deg)" };
   return {

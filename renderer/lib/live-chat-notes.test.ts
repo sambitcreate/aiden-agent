@@ -9,7 +9,9 @@ import {
   type LiveChatTurn,
 } from "./live-chat-notes";
 
-function activity(input: { active?: string[]; approval?: string[]; input?: string[] } = {}): LiveChatActivity {
+function activity(
+  input: { active?: string[]; approval?: string[]; input?: string[] } = {},
+): LiveChatActivity {
   return {
     activeChatIds: new Set(input.active ?? []),
     approvalChatIds: new Set(input.approval ?? []),
@@ -22,7 +24,11 @@ function harness(turns: Record<string, Partial<LiveChatTurn>> = {}) {
   const notes: string[] = [];
   const watcher = new LiveChatNoteWatcher({
     note: (text) => notes.push(text),
-    turn: async (chatId) => ({ byVoice: true, ending: "finished" as LiveChatEnding, ...turns[chatId] }),
+    turn: async (chatId) => ({
+      byVoice: true,
+      ending: "finished" as LiveChatEnding,
+      ...turns[chatId],
+    }),
   });
   return { notes, watcher, settle: () => new Promise((resolve) => setImmediate(resolve)) };
 }
@@ -89,29 +95,47 @@ test("a read that lands after the session ended sends nothing", async () => {
 test("an ending is read from the newest reply", () => {
   assert.equal(liveChatEnding([]), null);
   assert.equal(liveChatEnding([{ role: "user" }, { role: "assistant" }]), "finished");
-  assert.equal(liveChatEnding([{ role: "assistant", providerFailure: { kind: "rate_limit" } }]), "failed");
-  assert.equal(liveChatEnding([{ role: "assistant", timeline: { status: "failed" } }]), "failed");
-  assert.equal(liveChatEnding([{ role: "assistant", timeline: { status: "cancelled" } }]), "stopped");
   assert.equal(
-    liveChatEnding([{ role: "assistant", providerFailure: {} }, { role: "assistant" }, { role: "user" }]),
+    liveChatEnding([{ role: "assistant", providerFailure: { kind: "rate_limit" } }]),
+    "failed",
+  );
+  assert.equal(liveChatEnding([{ role: "assistant", timeline: { status: "failed" } }]), "failed");
+  assert.equal(
+    liveChatEnding([{ role: "assistant", timeline: { status: "cancelled" } }]),
+    "stopped",
+  );
+  assert.equal(
+    liveChatEnding([
+      { role: "assistant", providerFailure: {} },
+      { role: "assistant" },
+      { role: "user" },
+    ]),
     "finished",
   );
 });
 
 test("the latest turn is Live's only when the newest user message came by voice", () => {
   assert.deepEqual(liveChatTurn([]), { byVoice: false, ending: null });
-  assert.deepEqual(
-    liveChatTurn([{ role: "user", inputSource: "voice" }, { role: "assistant" }]),
-    { byVoice: true, ending: "finished" },
-  );
+  assert.deepEqual(liveChatTurn([{ role: "user", inputSource: "voice" }, { role: "assistant" }]), {
+    byVoice: true,
+    ending: "finished",
+  });
   // The person typed after Live's message: that reply is theirs.
   assert.deepEqual(
-    liveChatTurn([{ role: "user", inputSource: "voice" }, { role: "assistant" }, { role: "user" }, { role: "assistant" }]),
+    liveChatTurn([
+      { role: "user", inputSource: "voice" },
+      { role: "assistant" },
+      { role: "user" },
+      { role: "assistant" },
+    ]),
     { byVoice: false, ending: "finished" },
   );
   // A notice row is not a message from the person; no reply yet means no ending.
   assert.deepEqual(
-    liveChatTurn([{ role: "user", inputSource: "voice" }, { role: "user", notice: { title: "x", summary: "y" } }]),
+    liveChatTurn([
+      { role: "user", inputSource: "voice" },
+      { role: "user", notice: { title: "x", summary: "y" } },
+    ]),
     { byVoice: true, ending: null },
   );
   // A hook refused Live's guidance while an earlier reply ran: that reply's end is not news about it.
@@ -124,7 +148,10 @@ test("the latest turn is Live's only when the newest user message came by voice"
     { byVoice: false, ending: null },
   );
   assert.deepEqual(
-    liveChatTurn([{ role: "user", inputSource: "voice", hookBlocked: { reason: "x" } }, { role: "assistant" }]),
+    liveChatTurn([
+      { role: "user", inputSource: "voice", hookBlocked: { reason: "x" } },
+      { role: "assistant" },
+    ]),
     { byVoice: false, ending: "finished" },
   );
 });

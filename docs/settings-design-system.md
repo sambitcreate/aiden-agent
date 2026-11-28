@@ -26,13 +26,13 @@ Write user-facing paths with page titles: `Settings → Voice & Speech → Text 
 
 `InfoHint` (`renderer/components/ui-info-hint.tsx`) explains one thing in at most two short sentences. Its panel is narrow, and focus stays on the trigger and closes on blur, so a link or button inside it can't be reached by keyboard.
 
-| Content | Where it goes |
-|---|---|
-| One fact, two short sentences at most, nothing to click | `InfoHint` |
-| Longer steps or reference text | `SettingsDisclosure` on the page, open by default when the user needs it |
-| Any button, link or control | On the page |
-| Privacy disclosure, data leaving the device, charges or unattended authority | Visible on the page, shortened where possible |
-| Text that changes with the current selection or status | Next to that control |
+| Content                                                                      | Where it goes                                                            |
+| ---------------------------------------------------------------------------- | ------------------------------------------------------------------------ |
+| One fact, two short sentences at most, nothing to click                      | `InfoHint`                                                               |
+| Longer steps or reference text                                               | `SettingsDisclosure` on the page, open by default when the user needs it |
+| Any button, link or control                                                  | On the page                                                              |
+| Privacy disclosure, data leaving the device, charges or unattended authority | Visible on the page, shortened where possible                            |
+| Text that changes with the current selection or status                       | Next to that control                                                     |
 
 These stay on the page for those reasons: the Text to Speech cloud processing notice and **Clear generated audio**, the Computer Use data disclosure, "What leaves this device" for web pages, **Manage Bot grants** and **Manage schedule grants**, the Approvals page's locked note, the Telegram security notice, Aiden Live's state, Beta badge, Scheduled tasks and Global shortcut rows, and the connector exposure help. Context & Limits keeps "may be sent to your chat model" visible while the compaction override detail sits in a hint.
 

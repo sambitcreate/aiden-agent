@@ -88,12 +88,12 @@ When this ships:
 
 ## Current Aiden state
 
-| Layer | Today | Gap |
-| --- | --- | --- |
-| Selectable hosted models | Pi `Models` plus Aiden's trusted pi.dev overlay are authoritative for built-ins | Shipped baseline remains the offline fallback; no release is required for compatible new remote records |
-| Capability metadata | Bundled `resources/model-capabilities.json` via `npm run models:refresh`; AA device cache on Connect & fetch | Offline by design; not the Opus-5 availability problem |
-| Pi registry | `ProviderRegistry` wraps static providers with a validated overlay, compatible transports, offline hydration, scoped setup refresh, TTL launch refresh, and explicit force refresh | A future full Pi package upgrade remains a separate Session/runtime migration |
-| Device-local store | `pi-models-store.ts` persists bounded normalized `ModelsStoreEntry` snapshots under Electron `userData` with mode `0600` | None for the implemented overlay scope |
+| Layer                    | Today                                                                                                                                                                              | Gap                                                                                                     |
+| ------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------- |
+| Selectable hosted models | Pi `Models` plus Aiden's trusted pi.dev overlay are authoritative for built-ins                                                                                                    | Shipped baseline remains the offline fallback; no release is required for compatible new remote records |
+| Capability metadata      | Bundled `resources/model-capabilities.json` via `npm run models:refresh`; AA device cache on Connect & fetch                                                                       | Offline by design; not the Opus-5 availability problem                                                  |
+| Pi registry              | `ProviderRegistry` wraps static providers with a validated overlay, compatible transports, offline hydration, scoped setup refresh, TTL launch refresh, and explicit force refresh | A future full Pi package upgrade remains a separate Session/runtime migration                           |
+| Device-local store       | `pi-models-store.ts` persists bounded normalized `ModelsStoreEntry` snapshots under Electron `userData` with mode `0600`                                                           | None for the implemented overlay scope                                                                  |
 
 Pi coding-agent reference (do not import the package; mirror the pattern):
 
@@ -111,11 +111,11 @@ Pi coding-agent reference (do not import the package; mirror the pattern):
 
 Three options. Prefer **A** for speed-to-parity with Pi; prefer **B** if Aiden must not depend on `pi.dev`.
 
-| Option | Source | Pros | Cons |
-| --- | --- | --- | --- |
-| **A. Consume pi.dev overlays** | Same endpoints Pi uses | Zero publish infra; Opus 5 appears when Pi publishes | Couples Aiden availability to Pi’s CDN/schema; User-Agent / attribution policy needed |
-| **B. Aiden-hosted catalog CDN** | Publish from Aiden CI (reuse `scripts/update-model-capabilities.mjs` + generated Pi model JSON) to an Aiden-controlled HTTPS origin | Privacy/product ownership; can ship Aiden-specific filtering | Ops, signing, cache headers, schema versioning |
-| **C. Live models.dev on explicit refresh** | `models.dev` only from a user-triggered “Fetch model catalog” path | Familiar to current release tooling | Requires amending `AGENTS.md`; couples to third-party uptime/shape; mixes inventory with capability snapshot |
+| Option                                     | Source                                                                                                                              | Pros                                                         | Cons                                                                                                         |
+| ------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------ |
+| **A. Consume pi.dev overlays**             | Same endpoints Pi uses                                                                                                              | Zero publish infra; Opus 5 appears when Pi publishes         | Couples Aiden availability to Pi’s CDN/schema; User-Agent / attribution policy needed                        |
+| **B. Aiden-hosted catalog CDN**            | Publish from Aiden CI (reuse `scripts/update-model-capabilities.mjs` + generated Pi model JSON) to an Aiden-controlled HTTPS origin | Privacy/product ownership; can ship Aiden-specific filtering | Ops, signing, cache headers, schema versioning                                                               |
+| **C. Live models.dev on explicit refresh** | `models.dev` only from a user-triggered “Fetch model catalog” path                                                                  | Familiar to current release tooling                          | Requires amending `AGENTS.md`; couples to third-party uptime/shape; mixes inventory with capability snapshot |
 
 **Recommendation:** Option **A** for an MVP that matches the tweet’s behavior, with a hard interface so Option **B** can replace the base URL and response parser later. Do **not** use Option C for inventory unless product explicitly revises the models.dev boundary.
 
@@ -273,13 +273,13 @@ Tasks:
 
 ## Mapping to Pi’s UX
 
-| Pi | Aiden |
-| --- | --- |
-| `pi update --models` | Settings **Refresh model catalogs** (+ optional `npm`/`npx` dev helper that calls the same main-process function in tests) |
-| `/model` soft refresh | Model picker open / focus soft refresh |
-| `~/.pi/agent/models-store.json` | `userData/pi-models-store.json` |
-| `https://pi.dev/api/models/providers/:id` | Same (Option A) or Aiden CDN (Option B) |
-| 4h TTL | Same default constant, configurable later |
+| Pi                                        | Aiden                                                                                                                      |
+| ----------------------------------------- | -------------------------------------------------------------------------------------------------------------------------- |
+| `pi update --models`                      | Settings **Refresh model catalogs** (+ optional `npm`/`npx` dev helper that calls the same main-process function in tests) |
+| `/model` soft refresh                     | Model picker open / focus soft refresh                                                                                     |
+| `~/.pi/agent/models-store.json`           | `userData/pi-models-store.json`                                                                                            |
+| `https://pi.dev/api/models/providers/:id` | Same (Option A) or Aiden CDN (Option B)                                                                                    |
+| 4h TTL                                    | Same default constant, configurable later                                                                                  |
 
 ## Test plan (minimum)
 

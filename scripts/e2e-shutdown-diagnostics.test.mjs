@@ -5,29 +5,56 @@ import os from "node:os";
 import path from "node:path";
 import process from "node:process";
 import test from "node:test";
-import { describeStuckShutdown, lifecycleRecords, procThreadLine, sampleMainThread, sampleOtherThreads } from "./e2e-shutdown-diagnostics.mjs";
+import {
+  describeStuckShutdown,
+  lifecycleRecords,
+  procThreadLine,
+  sampleMainThread,
+  sampleOtherThreads,
+} from "./e2e-shutdown-diagnostics.mjs";
 
 const record = (scope, message, at = "2026-11-17T14:28:37.838Z", level = "info") =>
-  JSON.stringify({ version: 1, at, level, area: "diagnostics", event: "legacy-log", fields: { legacyScope: scope, message } });
+  JSON.stringify({
+    version: 1,
+    at,
+    level,
+    area: "diagnostics",
+    event: "legacy-log",
+    fields: { legacyScope: scope, message },
+  });
 
 test("only the quit and shutdown records of a dev log are kept, oldest first", () => {
   const log = [
-    record("electron-lifecycle", "Application before-quit {\"lifecycleCheckInFlight\":true}", "t1"),
+    record("electron-lifecycle", 'Application before-quit {"lifecycleCheckInFlight":true}', "t1"),
     record("chat", "Generation started", "t2"),
-    record("renderer-lifecycle", "Main renderer process exited {\"reason\":\"crashed\"}", "t2b", "error"),
+    record(
+      "renderer-lifecycle",
+      'Main renderer process exited {"reason":"crashed"}',
+      "t2b",
+      "error",
+    ),
     "not json",
     record("main", "Storage cleanup did not finish within the shutdown budget.", "t3", "warn"),
-    JSON.stringify({ version: 1, at: "t4", level: "info", area: "diagnostics", event: "session-started", fields: {} }),
+    JSON.stringify({
+      version: 1,
+      at: "t4",
+      level: "info",
+      area: "diagnostics",
+      event: "session-started",
+      fields: {},
+    }),
   ].join("\n");
   assert.deepEqual(lifecycleRecords(log), [
-    "  t1 info electron-lifecycle Application before-quit {\"lifecycleCheckInFlight\":true}",
-    "  t2b error renderer-lifecycle Main renderer process exited {\"reason\":\"crashed\"}",
+    '  t1 info electron-lifecycle Application before-quit {"lifecycleCheckInFlight":true}',
+    '  t2b error renderer-lifecycle Main renderer process exited {"reason":"crashed"}',
     "  t3 warn main Storage cleanup did not finish within the shutdown budget.",
   ]);
 });
 
 test("a long dev log keeps its latest quit records and cuts each message", () => {
-  const log = Array.from({ length: 50 }, (_, index) => record("main", `${index} ${"x".repeat(400)}`, `t${index}`)).join("\n");
+  const log = Array.from({ length: 50 }, (_, index) =>
+    record("main", `${index} ${"x".repeat(400)}`, `t${index}`),
+  ).join("\n");
   const lines = lifecycleRecords(log, 3);
   assert.equal(lines.length, 3);
   assert.ok(lines[0].startsWith("  t47 info main 47 "));
@@ -92,12 +119,17 @@ test("every other thread reads as the innermost frames of its most-sampled leaf,
     "    +     600 open  (in libsystem_kernel.dylib) + 8  [0x8]",
     "",
   ].join("\n");
-  assert.deepEqual(sampleOtherThreads(split, 2), ["  Thread_1250: open (in libsystem_kernel.dylib) < uv__fs_work (in node)"]);
+  assert.deepEqual(sampleOtherThreads(split, 2), [
+    "  Thread_1250: open (in libsystem_kernel.dylib) < uv__fs_work (in node)",
+  ]);
   assert.deepEqual(sampleOtherThreads("no graph here"), []);
 });
 
 test("a /proc thread reads as its name, state and wait channel, even when the name holds a parenthesis", () => {
-  assert.equal(procThreadLine("8759", "8759 (electron) S 1 8759 8759 0 -1", "do_epoll_wait"), "  8759 electron S do_epoll_wait");
+  assert.equal(
+    procThreadLine("8759", "8759 (electron) S 1 8759 8759 0 -1", "do_epoll_wait"),
+    "  8759 electron S do_epoll_wait",
+  );
   assert.equal(procThreadLine("8761", "8761 (Chrome_(IO)) R 1 8759", "0"), "  8761 Chrome_(IO) R");
   assert.equal(procThreadLine("8762", "garbage", ""), "  8762 ?");
 });
@@ -106,7 +138,10 @@ test("a live process is described with its quit records and its threads", async 
   const dir = await mkdtemp(path.join(os.tmpdir(), "aiden-shutdown-diagnostics-"));
   t.after(() => rm(dir, { recursive: true, force: true }));
   const devLogPath = path.join(dir, "aiden-dev.log");
-  await writeFile(devLogPath, `${record("electron-lifecycle", "Application quit was not started {\"reason\":\"lifecycle-check-in-flight\"}")}\n`);
+  await writeFile(
+    devLogPath,
+    `${record("electron-lifecycle", 'Application quit was not started {"reason":"lifecycle-check-in-flight"}')}\n`,
+  );
   const child = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], { stdio: "ignore" });
   t.after(() => child.kill("SIGKILL"));
   const report = await describeStuckShutdown({ pid: child.pid, devLogPath });
@@ -116,15 +151,29 @@ test("a live process is described with its quit records and its threads", async 
     // A Node process always has worker threads beside its main one.
     assert.match(report, /Other threads, innermost frame first \(sample\):\n {2}Thread_\d+.*: \S/u);
   }
-  if (process.platform === "linux") assert.match(report, new RegExp(`Threads \\(tid name state wchan\\):\\n  ${child.pid} \\S+ [A-Z]`, "u"));
+  if (process.platform === "linux")
+    assert.match(
+      report,
+      new RegExp(`Threads \\(tid name state wchan\\):\\n  ${child.pid} \\S+ [A-Z]`, "u"),
+    );
 });
 
 test("a process that is already gone and a missing dev log still produce a report", async () => {
-  const report = await describeStuckShutdown({ pid: 2 ** 22 + 7, devLogPath: path.join(os.tmpdir(), "missing-aiden-dev.log"), platform: "linux" });
-  assert.equal(report, "Quit and shutdown records:\n  (none)\nThreads (tid name state wchan):\n  (unavailable)");
+  const report = await describeStuckShutdown({
+    pid: 2 ** 22 + 7,
+    devLogPath: path.join(os.tmpdir(), "missing-aiden-dev.log"),
+    platform: "linux",
+  });
+  assert.equal(
+    report,
+    "Quit and shutdown records:\n  (none)\nThreads (tid name state wchan):\n  (unavailable)",
+  );
 });
 
 test("a run without a development dev log says its quit records aren't kept", async () => {
   const report = await describeStuckShutdown({ pid: 2 ** 22 + 7, platform: "linux" });
-  assert.match(report, /^Quit and shutdown records:\n {2}\(only a development-profile dev log keeps them\)\n/u);
+  assert.match(
+    report,
+    /^Quit and shutdown records:\n {2}\(only a development-profile dev log keeps them\)\n/u,
+  );
 });

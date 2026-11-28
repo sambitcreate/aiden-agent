@@ -706,7 +706,11 @@ async function withExactRemoteTool<T>(input: {
   assertReadBinding(input.scope, input.binding);
   const server = await input.host.resolveServer(input.scope.serverId, input.signal);
   // A tool hidden after approval is refused before any remote dispatch.
-  if (!server?.enabled || server.transport === "stdio" || isMcpToolHidden(server, input.binding.toolName)) {
+  if (
+    !server?.enabled ||
+    server.transport === "stdio" ||
+    isMcpToolHidden(server, input.binding.toolName)
+  ) {
     return drift();
   }
   let connectionRevision: string | undefined;
@@ -876,12 +880,17 @@ function boundedResult(
   let body = textParts.map((part) => redactCredentialText(part.text)).join("\n\n");
   // Structured-only tools answer in structuredContent; keep it (bounded and
   // redacted) unless a text block already carries the same JSON.
-  if (result.structuredContent !== undefined && !textCarriesStructured(content, result.structuredContent)) {
+  if (
+    result.structuredContent !== undefined &&
+    !textCarriesStructured(content, result.structuredContent)
+  ) {
     const structured = redactStructuredContent(result.structuredContent, redactCredentialText);
     const json = structured === undefined ? undefined : JSON.stringify(structured);
-    body += `${body ? "\n\n" : ""}${json === undefined
-      ? "[Structured MCP content omitted: too large or invalid.]"
-      : `Structured content:\n${redactCredentialText(json)}`}`;
+    body += `${body ? "\n\n" : ""}${
+      json === undefined
+        ? "[Structured MCP content omitted: too large or invalid.]"
+        : `Structured content:\n${redactCredentialText(json)}`
+    }`;
   }
   if (!body) body = "[The approved MCP read returned no textual result.]";
   if (omittedParts > 0) {

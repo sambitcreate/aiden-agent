@@ -15,7 +15,9 @@ export function decideRendererRecovery(
   atMs: number,
 ): RendererRecoveryDecision {
   const recentCrashTimes = priorCrashTimes
-    .filter((value) => Number.isFinite(value) && value > atMs - RENDERER_CRASH_WINDOW_MS && value <= atMs)
+    .filter(
+      (value) => Number.isFinite(value) && value > atMs - RENDERER_CRASH_WINDOW_MS && value <= atMs,
+    )
     .concat(atMs)
     .slice(-(MAX_RENDERER_RECOVERIES_PER_WINDOW + 1));
   const attempt = recentCrashTimes.length;

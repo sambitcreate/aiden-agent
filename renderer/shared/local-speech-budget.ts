@@ -19,5 +19,8 @@ export function transcribeDeadlineMs(audioSeconds: number): number {
  */
 export function localSupervisedBudgetMs(audioSeconds: number): number {
   const seconds = Number.isFinite(audioSeconds) ? Math.max(0, audioSeconds) : 0;
-  return Math.min(MAX_TIMER_DELAY_MS, 2 * (LOAD_DEADLINE_MS + transcribeDeadlineMs(seconds)) + 15_000);
+  return Math.min(
+    MAX_TIMER_DELAY_MS,
+    2 * (LOAD_DEADLINE_MS + transcribeDeadlineMs(seconds)) + 15_000,
+  );
 }

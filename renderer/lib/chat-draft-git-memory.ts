@@ -2,7 +2,10 @@
 // checkout or a new worktree, from which base, and whether from origin.
 // A UI preference, so it lives in renderer storage and fails soft.
 
-import { resolveWorktreeDefaults, type DraftWorktreeRepositoryState } from "../shared/worktree-on-send";
+import {
+  resolveWorktreeDefaults,
+  type DraftWorktreeRepositoryState,
+} from "../shared/worktree-on-send";
 
 export type ChatDraftGitMode = "checkout" | "worktree";
 
@@ -32,7 +35,11 @@ function parseEntry(value: unknown): ChatDraftGitMemory | undefined {
   const record = value as Record<string, unknown>;
   if (record.gitMode !== "checkout" && record.gitMode !== "worktree") return undefined;
   const memory: ChatDraftGitMemory = { gitMode: record.gitMode };
-  if (typeof record.baseRef === "string" && record.baseRef && record.baseRef.length <= MAX_REF_LENGTH) {
+  if (
+    typeof record.baseRef === "string" &&
+    record.baseRef &&
+    record.baseRef.length <= MAX_REF_LENGTH
+  ) {
     memory.baseRef = record.baseRef;
   }
   if (typeof record.fromOrigin === "boolean") memory.fromOrigin = record.fromOrigin;

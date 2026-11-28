@@ -38,7 +38,8 @@ const ENDPOINT = /^[a-z0-9][a-z0-9._-]*(?:\/[a-z0-9][a-z0-9._-]*){1,5}$/iu;
 const isFalMedia = hostIs("fal.media");
 /** fal takes references inline as data URIs; their decoded total must stay within this. */
 export const FAL_INLINE_REFERENCE_BYTES = 8 * 1024 * 1024;
-export const FAL_REFERENCES_TOO_LARGE = "These reference images are too large for fal; use smaller images.";
+export const FAL_REFERENCES_TOO_LARGE =
+  "These reference images are too large for fal; use smaller images.";
 
 type FalAdapter = Extract<ImageModelAdapter, { kind: "fal" }>;
 
@@ -47,11 +48,14 @@ export interface FalImagesDeps extends AdapterDeps {
 }
 
 export function isFalEndpointId(value: string): boolean {
-  return ENDPOINT.test(value) && !value.split("/").some((segment) => segment === "." || segment === "..");
+  return (
+    ENDPOINT.test(value) && !value.split("/").some((segment) => segment === "." || segment === "..")
+  );
 }
 
 function queueUrl(value: unknown): string {
-  if (typeof value !== "string") throw new ImageAdapterError("fal returned an unexpected queue address.");
+  if (typeof value !== "string")
+    throw new ImageAdapterError("fal returned an unexpected queue address.");
   let url: URL;
   try {
     url = new URL(value);
@@ -83,7 +87,8 @@ function outputSources(value: unknown): string[] {
   if (!Array.isArray(images)) throw new ImageAdapterError("fal returned output Aiden can't read.");
   return images.map((image) => {
     const url = record(image)?.url;
-    if (typeof url !== "string") throw new ImageAdapterError("fal returned output Aiden can't read.");
+    if (typeof url !== "string")
+      throw new ImageAdapterError("fal returned output Aiden can't read.");
     return url;
   });
 }
@@ -116,12 +121,14 @@ export function falImagesApi(deps: FalImagesDeps): ProviderImages {
           const max = field === "image_url" ? 1 : Math.max(1, meta.maxReferences ?? 4);
           if (references.length > max) throw referenceLimitError(max);
           const total = references.reduce((sum, image) => sum + base64ByteLength(image.data), 0);
-          if (total > FAL_INLINE_REFERENCE_BYTES) throw new ImageAdapterError(FAL_REFERENCES_TOO_LARGE);
+          if (total > FAL_INLINE_REFERENCE_BYTES)
+            throw new ImageAdapterError(FAL_REFERENCES_TOO_LARGE);
           endpoint = meta.editEndpoint;
           const values = references.map(dataUri);
           body[field] = field === "image_url" ? values[0] : values;
         }
-        if (!isFalEndpointId(endpoint)) throw new ImageAdapterError("This fal model id isn't valid.");
+        if (!isFalEndpointId(endpoint))
+          throw new ImageAdapterError("This fal model id isn't valid.");
 
         const auth = { authorization: `Key ${key}` };
         const submitted = await scope.fetch(`${FAL_QUEUE_ORIGIN}/${endpoint}`, {
@@ -136,7 +143,8 @@ export function falImagesApi(deps: FalImagesDeps): ProviderImages {
         cancelUrl = queueUrl(queued?.cancel_url);
         const statusUrl = queueUrl(queued?.status_url);
         const responseUrl = queueUrl(queued?.response_url);
-        if (typeof queued?.request_id === "string") result.responseId = queued.request_id.slice(0, 128);
+        if (typeof queued?.request_id === "string")
+          result.responseId = queued.request_id.slice(0, 128);
 
         const activeScope = scope;
         for (;;) {

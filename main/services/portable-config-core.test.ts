@@ -140,9 +140,7 @@ test("configured skill lists enforce per-entry, count, and aggregate bounds", ()
     false,
   );
   assert.equal(
-    isSkillList([
-      skill("oversized", "i".repeat(SLASH_LIMITS.instructionBytes + 1)),
-    ]),
+    isSkillList([skill("oversized", "i".repeat(SLASH_LIMITS.instructionBytes + 1))]),
     false,
   );
   const aggregateInstruction = "i".repeat(SLASH_LIMITS.instructionBytes);
@@ -202,9 +200,7 @@ test("legacy migration defers instead of consuming over-bound skill lists", asyn
       skills: Array.from(
         {
           length:
-            Math.floor(
-              CONFIGURED_SKILL_LIMITS.aggregateBytes / SLASH_LIMITS.instructionBytes,
-            ) + 1,
+            Math.floor(CONFIGURED_SKILL_LIMITS.aggregateBytes / SLASH_LIMITS.instructionBytes) + 1,
         },
         (_, index) => ({
           id: `skill-${index}`,
@@ -229,7 +225,10 @@ test("legacy migration defers instead of consuming over-bound skill lists", asyn
       assert.equal(await stores(r).ensureMigrated(), false);
       assert.equal(await missing(r.portableFile), true);
       assert.equal(await missing(r.archiveFile), true);
-      assert.equal((await readJson<{ skills: unknown[] }>(r.localFile)).skills.length, scenario.skills.length);
+      assert.equal(
+        (await readJson<{ skills: unknown[] }>(r.localFile)).skills.length,
+        scenario.skills.length,
+      );
     });
   }
 });
@@ -327,7 +326,10 @@ test("composeStoredProvider ignores cache fields smuggled into portable intent",
 });
 
 test("credential-bearing config IDs share the journal length bound", () => {
-  assert.equal(isPortableProvider({ ...splitStoredProvider(provider).intent, id: "p".repeat(257) }), false);
+  assert.equal(
+    isPortableProvider({ ...splitStoredProvider(provider).intent, id: "p".repeat(257) }),
+    false,
+  );
   assert.equal(
     isMcpServer({
       id: "m".repeat(257),
@@ -591,10 +593,7 @@ test("provider alias validation is bounded and resolves accepted chains linearly
   };
   assert.equal(isProviderAliasMap(tooDeep), false);
   const tooMany = Object.fromEntries(
-    Array.from({ length: 4_097 }, (_, index) => [
-      `old-${index}`,
-      `custom:provider-${index}`,
-    ]),
+    Array.from({ length: 4_097 }, (_, index) => [`old-${index}`, `custom:provider-${index}`]),
   );
   assert.equal(isProviderAliasMap(tooMany), false);
 });
@@ -1369,7 +1368,15 @@ test("pins and recent models survive a settings.json load and reload into a fres
     JSON.stringify({
       settings: {
         pinnedModels: ["openai::gpt", "openai::gpt", 42, "bare-model", "google::gemini"],
-        recentModels: ["google::gemini", "bare-model", "google::gemini", "p::1", "p::2", "p::3", "p::4"],
+        recentModels: [
+          "google::gemini",
+          "bare-model",
+          "google::gemini",
+          "p::1",
+          "p::2",
+          "p::3",
+          "p::4",
+        ],
       },
     }),
     "utf-8",
@@ -1377,7 +1384,13 @@ test("pins and recent models survive a settings.json load and reload into a fres
 
   const loaded = await stores(r).settings.load();
   assert.deepEqual(loaded.settings.pinnedModels, ["openai::gpt", "google::gemini"]);
-  assert.deepEqual(loaded.settings.recentModels, ["google::gemini", "p::1", "p::2", "p::3", "p::4"]);
+  assert.deepEqual(loaded.settings.recentModels, [
+    "google::gemini",
+    "p::1",
+    "p::2",
+    "p::3",
+    "p::4",
+  ]);
 
   // Write the loaded document into a fresh store's settings.json and read it back.
   const target = await roots(t);
@@ -1403,7 +1416,13 @@ test("leftover Model Pad keys in settings.json load cleanly and are gone after t
         profileName: "Before",
         pinnedModels: ["openai::gpt"],
         modelPadPlacements: {
-          "openai::gpt": { x: 0.25, y: 0.75, xSource: "user", ySource: "benchmark", yMetric: "coding" },
+          "openai::gpt": {
+            x: 0.25,
+            y: 0.75,
+            xSource: "user",
+            ySource: "benchmark",
+            yMetric: "coding",
+          },
           "not-a-model-key": "anything",
         },
         modelPadMetric: "agentic",
@@ -1436,18 +1455,31 @@ test("settings.json keeps a known new-chat level and drops an unknown one and an
   const r = await roots(t);
   const slider = {
     version: 1,
-    stops: [{ id: "a", label: "A" }, { id: "b", label: "B" }, { id: "c", label: "C" }],
+    stops: [
+      { id: "a", label: "A" },
+      { id: "b", label: "B" },
+      { id: "c", label: "C" },
+    ],
     homeStopId: "b",
   };
   await fs.writeFile(
     r.settingsFile,
-    JSON.stringify({ settings: { lastModel: "gpt", lastThinkingLevel: "xhigh", agentSlider: slider } }),
+    JSON.stringify({
+      settings: { lastModel: "gpt", lastThinkingLevel: "xhigh", agentSlider: slider },
+    }),
     "utf-8",
   );
   const loaded = await stores(r).settings.load();
   assert.equal(loaded.settings.lastThinkingLevel, "xhigh");
-  assert.equal("agentSlider" in loaded.settings, false, "the slider's only home is the portable config");
-  assert.equal(runtimeSettingsFrom({ ...loaded.settings, agentSlider: slider } as never).agentSlider, undefined);
+  assert.equal(
+    "agentSlider" in loaded.settings,
+    false,
+    "the slider's only home is the portable config",
+  );
+  assert.equal(
+    runtimeSettingsFrom({ ...loaded.settings, agentSlider: slider } as never).agentSlider,
+    undefined,
+  );
 
   const target = await roots(t);
   await fs.writeFile(
@@ -1502,9 +1534,11 @@ test("pre-marker unsafe workspaces defer migration without consuming the local s
   assert.equal(await missing(r.portableFile), true);
 });
 
-
 test("invalid stored compaction budgets fall back without rewriting the saved preferences", () => {
-  const settings = { compactionModelOverrides: { "provider/model": { reserveTokens: -1 } }, profileName: "Local user" };
+  const settings = {
+    compactionModelOverrides: { "provider/model": { reserveTokens: -1 } },
+    profileName: "Local user",
+  };
   const runtime = runtimeSettingsFrom(settings);
   assert.equal(runtime.compactionModelOverrides, undefined);
   assert.equal(runtime.profileName, "Local user");
@@ -1516,146 +1550,267 @@ test("invalid stored compaction budgets fall back without rewriting the saved pr
 });
 
 test("portable MCP OAuth metadata validates authority without requiring new fields on old configs", () => {
-  const server = { id: "custom", name: "Custom", transport: "http", enabled: true, oauth: true, url: "https://service.test/mcp" };
+  const server = {
+    id: "custom",
+    name: "Custom",
+    transport: "http",
+    enabled: true,
+    oauth: true,
+    url: "https://service.test/mcp",
+  };
   assert.equal(isMcpServer(server), true);
-  assert.equal(isMcpServer({ ...server, authServerMetadataUrl: "https://identity.test/metadata" }), true);
-  assert.equal(isMcpServer({ ...server, authServerMetadataUrl: "http://identity.test/metadata" }), false);
-  assert.equal(isMcpServer({ ...server, oauth: false, authServerMetadataUrl: "https://identity.test/metadata" }), false);
+  assert.equal(
+    isMcpServer({ ...server, authServerMetadataUrl: "https://identity.test/metadata" }),
+    true,
+  );
+  assert.equal(
+    isMcpServer({ ...server, authServerMetadataUrl: "http://identity.test/metadata" }),
+    false,
+  );
+  assert.equal(
+    isMcpServer({
+      ...server,
+      oauth: false,
+      authServerMetadataUrl: "https://identity.test/metadata",
+    }),
+    false,
+  );
 });
 
 test("portable classifier capability accepts explicit local custom intent only", () => {
-  const provider = { id: "custom:llama", kind: "openai", label: "llama", baseUrl: "http://localhost:8080/v1", needsKey: false };
+  const provider = {
+    id: "custom:llama",
+    kind: "openai",
+    label: "llama",
+    baseUrl: "http://localhost:8080/v1",
+    needsKey: false,
+  };
   assert.equal(isPortableProvider(provider), true);
   assert.equal(isPortableProvider({ ...provider, llamaCppClassifierEnabled: true }), true);
-  assert.equal(isPortableProvider({ ...provider, deployment: "hosted", llamaCppClassifierEnabled: false }), true);
-  for (const change of [{ llamaCppClassifierEnabled: "yes" }, { llamaCppClassifierEnabled: true, deployment: "hosted" }, { llamaCppClassifierEnabled: true, kind: "anthropic" }, { llamaCppClassifierEnabled: true, id: "openai" }, { llamaCppClassifierEnabled: true, isBuiltin: true }]) {
+  assert.equal(
+    isPortableProvider({ ...provider, deployment: "hosted", llamaCppClassifierEnabled: false }),
+    true,
+  );
+  for (const change of [
+    { llamaCppClassifierEnabled: "yes" },
+    { llamaCppClassifierEnabled: true, deployment: "hosted" },
+    { llamaCppClassifierEnabled: true, kind: "anthropic" },
+    { llamaCppClassifierEnabled: true, id: "openai" },
+    { llamaCppClassifierEnabled: true, isBuiltin: true },
+  ]) {
     assert.equal(isPortableProvider({ ...provider, ...change }), false);
   }
 });
 
-test("portable files and owned recovery archives are private without changing their bytes", { skip: process.platform === "win32" }, async (t) => {
-  const r = await roots(t);
-  await fs.mkdir(r.portableRoot, { mode: 0o755 });
-  const payload = JSON.stringify({ providers: [], mcpServers: [], skills: [] });
-  const copies = [r.portableFile,
-    path.join(r.portableRoot, ".config.json.12345678-1234-4234-8234-123456789abc.tmp"),
-    path.join(r.portableRoot, "config.json.invalid-2026-10-27T01-02-03-000Z-deadbeef"),
-    path.join(r.portableRoot, `.config.json.${"a".repeat(64)}.12345678-1234-4234-8234-123456789abc.previous`),
-    r.archiveFile, `${r.archiveFile}.recovery-2026-10-27T01-02-03-000Z-12345678-1234-4234-8234-123456789abc`];
-  for (const file of copies) { await fs.writeFile(file, payload); await fs.chmod(file, 0o666); }
-  const unrelated = path.join(r.portableRoot, "someone-elses-config.json");
-  await fs.writeFile(unrelated, "ordinary"); await fs.chmod(unrelated, 0o644);
-  const bundle = stores(r);
-  await bundle.portable.load(); await bundle.local.load();
-  assert.equal((await fs.stat(r.portableRoot)).mode & 0o777, 0o700);
-  const recovered = (await fs.readdir(r.portableRoot)).find((name) => name.startsWith("config.json.conflict-"));
-  assert.ok(recovered, "changed recovery bytes remain available as a conflict");
-  const retainedCopies = copies.map((file) => file.endsWith(".previous") ? path.join(r.portableRoot, recovered) : file);
-  for (const file of retainedCopies) {
-    assert.equal((await fs.stat(file)).mode & 0o777, 0o600);
-    assert.equal(await fs.readFile(file, "utf8"), payload);
-  }
-  assert.equal((await fs.stat(unrelated)).mode & 0o777, 0o644);
-  const oldUmask = process.umask(0);
-  try { await bundle.portable.update((draft) => { draft.skills = []; }); }
-  finally { process.umask(oldUmask); }
-  assert.equal((await fs.stat(r.portableFile)).mode & 0o777, 0o600);
-});
+test(
+  "portable files and owned recovery archives are private without changing their bytes",
+  { skip: process.platform === "win32" },
+  async (t) => {
+    const r = await roots(t);
+    await fs.mkdir(r.portableRoot, { mode: 0o755 });
+    const payload = JSON.stringify({ providers: [], mcpServers: [], skills: [] });
+    const copies = [
+      r.portableFile,
+      path.join(r.portableRoot, ".config.json.12345678-1234-4234-8234-123456789abc.tmp"),
+      path.join(r.portableRoot, "config.json.invalid-2026-10-27T01-02-03-000Z-deadbeef"),
+      path.join(
+        r.portableRoot,
+        `.config.json.${"a".repeat(64)}.12345678-1234-4234-8234-123456789abc.previous`,
+      ),
+      r.archiveFile,
+      `${r.archiveFile}.recovery-2026-10-27T01-02-03-000Z-12345678-1234-4234-8234-123456789abc`,
+    ];
+    for (const file of copies) {
+      await fs.writeFile(file, payload);
+      await fs.chmod(file, 0o666);
+    }
+    const unrelated = path.join(r.portableRoot, "someone-elses-config.json");
+    await fs.writeFile(unrelated, "ordinary");
+    await fs.chmod(unrelated, 0o644);
+    const bundle = stores(r);
+    await bundle.portable.load();
+    await bundle.local.load();
+    assert.equal((await fs.stat(r.portableRoot)).mode & 0o777, 0o700);
+    const recovered = (await fs.readdir(r.portableRoot)).find((name) =>
+      name.startsWith("config.json.conflict-"),
+    );
+    assert.ok(recovered, "changed recovery bytes remain available as a conflict");
+    const retainedCopies = copies.map((file) =>
+      file.endsWith(".previous") ? path.join(r.portableRoot, recovered) : file,
+    );
+    for (const file of retainedCopies) {
+      assert.equal((await fs.stat(file)).mode & 0o777, 0o600);
+      assert.equal(await fs.readFile(file, "utf8"), payload);
+    }
+    assert.equal((await fs.stat(unrelated)).mode & 0o777, 0o644);
+    const oldUmask = process.umask(0);
+    try {
+      await bundle.portable.update((draft) => {
+        draft.skills = [];
+      });
+    } finally {
+      process.umask(oldUmask);
+    }
+    assert.equal((await fs.stat(r.portableFile)).mode & 0o777, 0o600);
+  },
+);
 
 test("portable file aliases fail visibly without chmod or replacing their targets", async (t) => {
   for (const variant of ["file-symlink", "file-hardlink"] as const) {
     const r = await roots(t);
-    const outside = path.join(r.localRoot, "outside"); await fs.mkdir(outside);
-    const victim = path.join(outside, "important.json"); await fs.writeFile(victim, "keep these bytes");
+    const outside = path.join(r.localRoot, "outside");
+    await fs.mkdir(outside);
+    const victim = path.join(outside, "important.json");
+    await fs.writeFile(victim, "keep these bytes");
     const before = (await fs.stat(victim)).mode;
     await fs.mkdir(r.portableRoot);
     if (variant === "file-symlink") await fs.symlink(victim, r.portableFile);
     else await fs.link(victim, r.portableFile);
     const bundle = stores(r);
     await assert.rejects(bundle.portable.load(), /storage must be a private/u);
-    await assert.rejects(bundle.portable.update(() => {}), /storage must be a private/u);
+    await assert.rejects(
+      bundle.portable.update(() => {}),
+      /storage must be a private/u,
+    );
     assert.equal(await fs.readFile(victim, "utf8"), "keep these bytes");
     assert.equal((await fs.stat(victim)).mode, before);
   }
 });
 
+test(
+  "a portable root linked to a folder this user owns is protected and used through the link",
+  { skip: process.platform === "win32" },
+  async (t) => {
+    const r = await roots(t);
+    const dotfiles = path.join(r.localRoot, "dotfiles", "aiden");
+    await fs.mkdir(dotfiles, { recursive: true, mode: 0o755 });
+    // Fix every folder's mode so the umask (0002 on many Linux setups) can't make them group-writable.
+    for (const folder of [r.localRoot, path.dirname(dotfiles), dotfiles])
+      await fs.chmod(folder, 0o755);
+    await fs.writeFile(
+      path.join(dotfiles, "config.json"),
+      JSON.stringify({
+        skills: [{ id: "s1", name: "kept", description: "d", instructions: "i", enabled: true }],
+      }),
+    );
+    await fs.chmod(path.join(dotfiles, "config.json"), 0o644);
+    await fs.symlink(dotfiles, r.portableRoot);
+    const bundle = stores(r);
+    assert.equal((await bundle.portable.load()).skills?.[0]?.name, "kept");
+    await bundle.portable.update((draft) => {
+      draft.skills = [];
+    });
+    assert.equal((await fs.lstat(r.portableRoot)).isSymbolicLink(), true, "the link stays a link");
+    assert.equal((await fs.stat(dotfiles)).mode & 0o777, 0o700);
+    assert.equal((await fs.stat(path.join(dotfiles, "config.json"))).mode & 0o777, 0o600);
+    assert.deepEqual(
+      JSON.parse(await fs.readFile(path.join(dotfiles, "config.json"), "utf8")).skills,
+      [],
+    );
+  },
+);
 
-test("a portable root linked to a folder this user owns is protected and used through the link", { skip: process.platform === "win32" }, async (t) => {
-  const r = await roots(t);
-  const dotfiles = path.join(r.localRoot, "dotfiles", "aiden");
-  await fs.mkdir(dotfiles, { recursive: true, mode: 0o755 });
-  // Fix every folder's mode so the umask (0002 on many Linux setups) can't make them group-writable.
-  for (const folder of [r.localRoot, path.dirname(dotfiles), dotfiles]) await fs.chmod(folder, 0o755);
-  await fs.writeFile(path.join(dotfiles, "config.json"), JSON.stringify({ skills: [{ id: "s1", name: "kept", description: "d", instructions: "i", enabled: true }] }));
-  await fs.chmod(path.join(dotfiles, "config.json"), 0o644);
-  await fs.symlink(dotfiles, r.portableRoot);
-  const bundle = stores(r);
-  assert.equal((await bundle.portable.load()).skills?.[0]?.name, "kept");
-  await bundle.portable.update((draft) => { draft.skills = []; });
-  assert.equal((await fs.lstat(r.portableRoot)).isSymbolicLink(), true, "the link stays a link");
-  assert.equal((await fs.stat(dotfiles)).mode & 0o777, 0o700);
-  assert.equal((await fs.stat(path.join(dotfiles, "config.json"))).mode & 0o777, 0o600);
-  assert.deepEqual(JSON.parse(await fs.readFile(path.join(dotfiles, "config.json"), "utf8")).skills, []);
-});
+test(
+  "a portable root link is refused when another user could replace it",
+  { skip: process.platform === "win32" },
+  async (t) => {
+    const r = await roots(t);
+    const shared = path.join(r.localRoot, "shared");
+    await fs.mkdir(shared);
+    await fs.chmod(shared, 0o777);
+    const target = path.join(r.localRoot, "target");
+    await fs.mkdir(target, { mode: 0o755 });
+    await fs.chmod(target, 0o755);
+    const linkInShared = path.join(shared, "aiden");
+    await fs.symlink(target, linkInShared);
+    assert.throws(
+      () => ensurePrivateDirectory(linkInShared),
+      /storage must be a private/u,
+      "another user could swap the link",
+    );
+    assert.equal((await fs.stat(target)).mode & 0o777, 0o755);
+  },
+);
 
-test("a portable root link is refused when another user could replace it", { skip: process.platform === "win32" }, async (t) => {
-  const r = await roots(t);
-  const shared = path.join(r.localRoot, "shared"); await fs.mkdir(shared); await fs.chmod(shared, 0o777);
-  const target = path.join(r.localRoot, "target"); await fs.mkdir(target, { mode: 0o755 }); await fs.chmod(target, 0o755);
-  const linkInShared = path.join(shared, "aiden");
-  await fs.symlink(target, linkInShared);
-  assert.throws(() => ensurePrivateDirectory(linkInShared), /storage must be a private/u, "another user could swap the link");
-  assert.equal((await fs.stat(target)).mode & 0o777, 0o755);
-});
+test(
+  "a link partway along the path is refused when another user could replace it",
+  { skip: process.platform === "win32" },
+  async (t) => {
+    const r = await roots(t);
+    await fs.chmod(r.localRoot, 0o755);
+    const shared = path.join(r.localRoot, "shared");
+    await fs.mkdir(shared);
+    await fs.chmod(shared, 0o777);
+    const owned = path.join(r.localRoot, "owned");
+    await fs.mkdir(owned, { mode: 0o755 });
+    await fs.chmod(owned, 0o755);
+    const state = path.join(owned, "state");
+    await fs.mkdir(state, { mode: 0o700 });
+    await fs.symlink(owned, path.join(shared, "alias"));
+    assert.throws(
+      () => ensurePrivateDirectory(path.join(shared, "alias", "state"), "reject"),
+      /storage must be a private/u,
+      "another user could swap the alias",
+    );
+    // A safe link whose target runs through the replaceable one is refused too.
+    await fs.symlink(path.join(shared, "alias", "state"), path.join(r.localRoot, "config-link"));
+    assert.throws(
+      () => ensurePrivateDirectory(path.join(r.localRoot, "config-link"), "reject"),
+      /storage must be a private/u,
+      "the hop inside the link's target could be swapped",
+    );
+    // The same path through a link in a folder only this user can change is fine.
+    await fs.symlink(owned, path.join(r.localRoot, "safe-alias"));
+    assert.doesNotThrow(() =>
+      ensurePrivateDirectory(path.join(r.localRoot, "safe-alias", "state"), "reject"),
+    );
+  },
+);
 
-test("a link partway along the path is refused when another user could replace it", { skip: process.platform === "win32" }, async (t) => {
-  const r = await roots(t);
-  await fs.chmod(r.localRoot, 0o755);
-  const shared = path.join(r.localRoot, "shared"); await fs.mkdir(shared); await fs.chmod(shared, 0o777);
-  const owned = path.join(r.localRoot, "owned"); await fs.mkdir(owned, { mode: 0o755 }); await fs.chmod(owned, 0o755);
-  const state = path.join(owned, "state"); await fs.mkdir(state, { mode: 0o700 });
-  await fs.symlink(owned, path.join(shared, "alias"));
-  assert.throws(() => ensurePrivateDirectory(path.join(shared, "alias", "state"), "reject"), /storage must be a private/u, "another user could swap the alias");
-  // A safe link whose target runs through the replaceable one is refused too.
-  await fs.symlink(path.join(shared, "alias", "state"), path.join(r.localRoot, "config-link"));
-  assert.throws(() => ensurePrivateDirectory(path.join(r.localRoot, "config-link"), "reject"), /storage must be a private/u, "the hop inside the link's target could be swapped");
-  // The same path through a link in a folder only this user can change is fine.
-  await fs.symlink(owned, path.join(r.localRoot, "safe-alias"));
-  assert.doesNotThrow(() => ensurePrivateDirectory(path.join(r.localRoot, "safe-alias", "state"), "reject"));
-});
+test(
+  "private storage rejects canonical home aliases and replaceable ancestors without changing permissions",
+  { skip: process.platform === "win32" },
+  async (t) => {
+    const r = await roots(t);
+    const parentAlias = path.join(r.localRoot, "parent-alias");
+    await fs.symlink(path.dirname(os.homedir()), parentAlias);
+    const homeAlias = path.join(parentAlias, path.basename(os.homedir()));
+    const beforeHome = (await fs.stat(os.homedir())).mode;
+    assert.throws(() => ensurePrivateDirectory(homeAlias), /storage must be a private/u);
+    assert.equal((await fs.stat(os.homedir())).mode, beforeHome);
+    const sharedParent = path.join(r.localRoot, "shared-parent");
+    await fs.mkdir(sharedParent);
+    await fs.chmod(sharedParent, 0o777);
+    const child = path.join(sharedParent, "private-child");
+    await fs.mkdir(child, { mode: 0o700 });
+    assert.throws(() => ensurePrivateDirectory(child, "reject"), /storage must be a private/u);
+    assert.equal((await fs.stat(sharedParent)).mode & 0o777, 0o777);
+  },
+);
 
-test("private storage rejects canonical home aliases and replaceable ancestors without changing permissions", { skip: process.platform === "win32" }, async (t) => {
-  const r = await roots(t);
-  const parentAlias = path.join(r.localRoot, "parent-alias");
-  await fs.symlink(path.dirname(os.homedir()), parentAlias);
-  const homeAlias = path.join(parentAlias, path.basename(os.homedir()));
-  const beforeHome = (await fs.stat(os.homedir())).mode;
-  assert.throws(() => ensurePrivateDirectory(homeAlias), /storage must be a private/u);
-  assert.equal((await fs.stat(os.homedir())).mode, beforeHome);
-  const sharedParent = path.join(r.localRoot, "shared-parent");
-  await fs.mkdir(sharedParent); await fs.chmod(sharedParent, 0o777);
-  const child = path.join(sharedParent, "private-child"); await fs.mkdir(child, { mode: 0o700 });
-  assert.throws(() => ensurePrivateDirectory(child, "reject"), /storage must be a private/u);
-  assert.equal((await fs.stat(sharedParent)).mode & 0o777, 0o777);
-});
+test(
+  "private storage rejects ownership mismatches before changing root or config modes",
+  { skip: !process.getuid },
+  async (t) => {
+    const r = await roots(t);
+    await fs.mkdir(r.portableRoot);
+    await fs.chmod(r.portableRoot, 0o755);
+    await fs.writeFile(r.portableFile, "preserve");
+    await fs.chmod(r.portableFile, 0o644);
+    const uid = process.getuid!();
+    const posixProcess = process as NodeJS.Process & { getuid(): number };
+    t.mock.method(posixProcess, "getuid", () => uid + 1);
+    await assert.rejects(stores(r).portable.load(), /storage must be a private/u);
+    assert.equal((await fs.stat(r.portableRoot)).mode & 0o777, 0o755);
+    assert.equal((await fs.stat(r.portableFile)).mode & 0o777, 0o644);
+    assert.equal(await fs.readFile(r.portableFile, "utf8"), "preserve");
+  },
+);
 
-test("private storage rejects ownership mismatches before changing root or config modes", { skip: !process.getuid }, async (t) => {
-  const r = await roots(t);
-  await fs.mkdir(r.portableRoot); await fs.chmod(r.portableRoot, 0o755);
-  await fs.writeFile(r.portableFile, "preserve"); await fs.chmod(r.portableFile, 0o644);
-  const uid = process.getuid!();
-  const posixProcess = process as NodeJS.Process & { getuid(): number };
-  t.mock.method(posixProcess, "getuid", () => uid + 1);
-  await assert.rejects(stores(r).portable.load(), /storage must be a private/u);
-  assert.equal((await fs.stat(r.portableRoot)).mode & 0o777, 0o755);
-  assert.equal((await fs.stat(r.portableFile)).mode & 0o777, 0o644);
-  assert.equal(await fs.readFile(r.portableFile, "utf8"), "preserve");
-});
-
-test('runtime settings export botMessaging only when off',()=>{
- assert.equal(runtimeSettingsFrom({botMessaging:false} as never).botMessaging,false);
- assert.equal(runtimeSettingsFrom({botMessaging:true} as never).botMessaging,undefined);
- assert.equal(runtimeSettingsFrom({botMessaging:'no'} as never).botMessaging,undefined);
+test("runtime settings export botMessaging only when off", () => {
+  assert.equal(runtimeSettingsFrom({ botMessaging: false } as never).botMessaging, false);
+  assert.equal(runtimeSettingsFrom({ botMessaging: true } as never).botMessaging, undefined);
+  assert.equal(runtimeSettingsFrom({ botMessaging: "no" } as never).botMessaging, undefined);
 });
 
 test("runtime settings preserve valid Quick Chat preferences and drop invalid values", () => {
@@ -1675,10 +1830,20 @@ test("runtime settings preserve valid Quick Chat preferences and drop invalid va
 });
 
 test("runtime settings keep the Bot bubble switches only when they are booleans", () => {
-  const off = runtimeSettingsFrom({ botBubblesEnabled: false, botBubblesFloatOverApps: false } as never);
+  const off = runtimeSettingsFrom({
+    botBubblesEnabled: false,
+    botBubblesFloatOverApps: false,
+  } as never);
   assert.equal(off.botBubblesEnabled, false);
   assert.equal(off.botBubblesFloatOverApps, false);
-  const handEdited = runtimeSettingsFrom({ botBubblesEnabled: "no", botBubblesFloatOverApps: 0 } as never);
-  assert.equal(handEdited.botBubblesEnabled, undefined, "a non-boolean reads as unset, which means on");
+  const handEdited = runtimeSettingsFrom({
+    botBubblesEnabled: "no",
+    botBubblesFloatOverApps: 0,
+  } as never);
+  assert.equal(
+    handEdited.botBubblesEnabled,
+    undefined,
+    "a non-boolean reads as unset, which means on",
+  );
   assert.equal(handEdited.botBubblesFloatOverApps, undefined);
 });

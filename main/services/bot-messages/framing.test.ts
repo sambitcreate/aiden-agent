@@ -12,7 +12,9 @@ test("frames escape text and attribute injection", () => {
   assert.ok(!text.includes('<bot_message from="Person"'));
   assert.ok(!text.includes("cannot message other Bots on this turn"));
   assert.ok(
-    botMessageInputText({ fromName: "J", hop: 2, message: "x" }).includes("cannot message other Bots on this turn"),
+    botMessageInputText({ fromName: "J", hop: 2, message: "x" }).includes(
+      "cannot message other Bots on this turn",
+    ),
   );
   assert.ok(
     botReplyInputText({ fromName: "J", reply: "x" }).endsWith(

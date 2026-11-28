@@ -3,10 +3,19 @@
 // so the canvas and tests share it.
 
 import type { DesignBox, DesignPoint } from "./connectors.js";
-import { DESIGN_CANVAS_LIMITS, isDesignContainer, type DesignCanvas, type DesignFrame } from "./schema.js";
+import {
+  DESIGN_CANVAS_LIMITS,
+  isDesignContainer,
+  type DesignCanvas,
+  type DesignFrame,
+} from "./schema.js";
 
 /** The box a drag from `a` to `b` draws; `square` keeps it as wide as it is tall. */
-export function boxFromDrag(a: DesignPoint, b: DesignPoint, options: { square?: boolean } = {}): DesignBox {
+export function boxFromDrag(
+  a: DesignPoint,
+  b: DesignPoint,
+  options: { square?: boolean } = {},
+): DesignBox {
   let w = Math.abs(b.x - a.x);
   let h = Math.abs(b.y - a.y);
   if (options.square) w = h = Math.max(w, h);
@@ -71,7 +80,8 @@ function simplifyOnce(points: readonly DesignPoint[], tolerance: number): Design
  */
 export function simplifyStroke(points: readonly DesignPoint[], tolerance = 1): DesignPoint[] {
   const distinct = points.filter(
-    (point, index) => index === 0 || point.x !== points[index - 1]!.x || point.y !== points[index - 1]!.y,
+    (point, index) =>
+      index === 0 || point.x !== points[index - 1]!.x || point.y !== points[index - 1]!.y,
   );
   let kept = simplifyOnce(distinct, tolerance);
   for (let wider = tolerance * 2; kept.length > DESIGN_CANVAS_LIMITS.strokePoints; wider *= 2) {
@@ -97,7 +107,10 @@ export function strokeFromCanvas(
   if (handles) {
     points.forEach((point, index) => {
       const handle = handles[index]!;
-      reach.push({ x: point.x + handle.x, y: point.y + handle.y }, { x: point.x - handle.x, y: point.y - handle.y });
+      reach.push(
+        { x: point.x + handle.x, y: point.y + handle.y },
+        { x: point.x - handle.x, y: point.y - handle.y },
+      );
     });
   }
   const pad = strokeWidth / 2 + 2;
@@ -116,13 +129,21 @@ export function strokeFromCanvas(
     w,
     h,
     points: points.map((point) => [round4((point.x - x) / w), round4((point.y - y) / h)]),
-    ...(handles ? { handles: handles.map((handle) => [round4(handle.x / w), round4(handle.y / h)]) } : {}),
+    ...(handles
+      ? { handles: handles.map((handle) => [round4(handle.x / w), round4(handle.y / h)]) }
+      : {}),
   };
 }
 
 /** A stroke's points back in canvas units, within its current box. */
-export function strokeOnCanvas(frame: DesignFrame): { points: DesignPoint[]; handles?: DesignPoint[] } {
-  const points = (frame.points ?? []).map(([px, py]) => ({ x: frame.x + px * frame.w, y: frame.y + py * frame.h }));
+export function strokeOnCanvas(frame: DesignFrame): {
+  points: DesignPoint[];
+  handles?: DesignPoint[];
+} {
+  const points = (frame.points ?? []).map(([px, py]) => ({
+    x: frame.x + px * frame.w,
+    y: frame.y + py * frame.h,
+  }));
   return frame.handles
     ? { points, handles: frame.handles.map(([hx, hy]) => ({ x: hx * frame.w, y: hy * frame.h })) }
     : { points };
@@ -133,7 +154,9 @@ export function strokeOnCanvas(frame: DesignFrame): { points: DesignPoint[]; han
  * A pencil line is smoothed through the midpoints of its points; a pen path
  * follows its curve handles.
  */
-export function strokePath(frame: Pick<DesignFrame, "w" | "h" | "points" | "handles" | "closed">): string {
+export function strokePath(
+  frame: Pick<DesignFrame, "w" | "h" | "points" | "handles" | "closed">,
+): string {
   const points = (frame.points ?? []).map(([px, py]) => [px * frame.w, py * frame.h] as const);
   if (points.length < 2) return "";
   const fmt = (value: number) => Math.round(value * 100) / 100;
@@ -177,11 +200,14 @@ export function containerAt(
   const y = box.y + box.h / 2;
   const containers = doc.frames.filter(
     (frame) =>
-      frame.pageId === pageId && isDesignContainer(frame.kind) && (!frame.locked || frame.id === currentGroupId),
+      frame.pageId === pageId &&
+      isDesignContainer(frame.kind) &&
+      (!frame.locked || frame.id === currentGroupId),
   );
   for (let index = containers.length - 1; index >= 0; index -= 1) {
     const frame = containers[index]!;
-    if (x >= frame.x && x <= frame.x + frame.w && y >= frame.y && y <= frame.y + frame.h) return frame;
+    if (x >= frame.x && x <= frame.x + frame.w && y >= frame.y && y <= frame.y + frame.h)
+      return frame;
   }
   return undefined;
 }

@@ -79,7 +79,8 @@ export function parseOpenDialogOptions(value: unknown): RendererOpenDialogOption
         entry.extensions.length > MAX_FILTER_EXTENSIONS ||
         !entry.extensions.every(
           (extension) =>
-            typeof extension === "string" && /^(?:\*|[A-Za-z0-9][A-Za-z0-9._-]{0,31})$/u.test(extension),
+            typeof extension === "string" &&
+            /^(?:\*|[A-Za-z0-9][A-Za-z0-9._-]{0,31})$/u.test(extension),
         )
       ) {
         throw new Error("Invalid open dialog filters.");
@@ -114,10 +115,17 @@ export interface BroadcastReceiver {
  * never sent payloads they would only discard.
  */
 export function createBroadcastReceivers<Key>() {
-  const receivers = new Map<Key, { receiver: BroadcastReceiver; channels: ReadonlySet<string> | null }>();
+  const receivers = new Map<
+    Key,
+    { receiver: BroadcastReceiver; channels: ReadonlySet<string> | null }
+  >();
 
   return {
-    register(key: Key, receiver: BroadcastReceiver, channels: ReadonlySet<string> | null = null): void {
+    register(
+      key: Key,
+      receiver: BroadcastReceiver,
+      channels: ReadonlySet<string> | null = null,
+    ): void {
       receivers.set(key, { receiver, channels });
     },
     unregister(key: Key): void {

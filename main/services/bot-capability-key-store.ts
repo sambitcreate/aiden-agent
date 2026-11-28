@@ -20,10 +20,7 @@ function assertPrivateRoot(candidate: string): string {
   return resolved;
 }
 
-function assertOwnedByCurrentUser(
-  info: Awaited<ReturnType<typeof fs.lstat>>,
-  label: string,
-): void {
+function assertOwnedByCurrentUser(info: Awaited<ReturnType<typeof fs.lstat>>, label: string): void {
   const getuid = process.getuid;
   if (typeof getuid === "function" && info.uid !== getuid()) {
     throw new Error(`${label} is not owned by the current user.`);
@@ -145,6 +142,4 @@ export function createBotCapabilityOpaqueKeyStore(options: {
   };
 }
 
-export type BotCapabilityOpaqueKeyStore = ReturnType<
-  typeof createBotCapabilityOpaqueKeyStore
->;
+export type BotCapabilityOpaqueKeyStore = ReturnType<typeof createBotCapabilityOpaqueKeyStore>;

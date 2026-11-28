@@ -82,8 +82,10 @@ function parseSimulator(value: unknown): PeerSimulator | null {
   const { id, name, version, booted, kind, platform } = value;
   if (typeof id !== "string" || !DEVICE_ID_PATTERN.test(id)) return null;
   if (typeof name !== "string" || name.length < 1 || name.length > 200) return null;
-  if (typeof version !== "string" || version.length > 40 || typeof booted !== "boolean") return null;
-  if (!isDevicePlatform(platform) || (kind !== "iphone" && kind !== "ipad" && kind !== "other")) return null;
+  if (typeof version !== "string" || version.length > 40 || typeof booted !== "boolean")
+    return null;
+  if (!isDevicePlatform(platform) || (kind !== "iphone" && kind !== "ipad" && kind !== "other"))
+    return null;
   return { id, name, platform, version, booted, kind };
 }
 
@@ -92,10 +94,12 @@ export function parsePeerSimulatorListing(value: unknown): PeerSimulatorListing 
     throw new PeerTransportError("invalid_response");
   }
   const status =
-    typeof value.status === "string" && (DEVICE_HOST_STATUSES as readonly string[]).includes(value.status)
+    typeof value.status === "string" &&
+    (DEVICE_HOST_STATUSES as readonly string[]).includes(value.status)
       ? (value.status as DeviceHostStatus)
       : null;
-  if (!status || value.devices.length > MAX_PEER_SIMULATORS) throw new PeerTransportError("invalid_response");
+  if (!status || value.devices.length > MAX_PEER_SIMULATORS)
+    throw new PeerTransportError("invalid_response");
   const devices: PeerSimulator[] = [];
   for (const entry of value.devices) {
     const parsed = parseSimulator(entry);
@@ -161,7 +165,12 @@ export function createPeerDevices(registry: PeerRegistryPort): DevicePeerPort {
     return pending;
   }
 
-  async function post(hostId: string, path: string, body: unknown, timeoutMs?: number): Promise<unknown> {
+  async function post(
+    hostId: string,
+    path: string,
+    body: unknown,
+    timeoutMs?: number,
+  ): Promise<unknown> {
     return registry.request(hostId, {
       method: "POST",
       path,
@@ -209,7 +218,10 @@ export function createPeerDevices(registry: PeerRegistryPort): DevicePeerPort {
       const device = isRecord(value) ? parseSimulator(value.device) : null;
       // A booted Android AVD answers under its emulator serial instead of its AVD name. Any other
       // changed id is refused; the device service also checks the AVD against its listing.
-      if (!device || (device.id !== deviceId && !(device.platform === "android" && isEmulatorSerial(device.id)))) {
+      if (
+        !device ||
+        (device.id !== deviceId && !(device.platform === "android" && isEmulatorSerial(device.id)))
+      ) {
         throw new PeerTransportError("invalid_response");
       }
       return device;
@@ -241,7 +253,9 @@ export function createPeerDevices(registry: PeerRegistryPort): DevicePeerPort {
             agent: false,
             headers: {
               ...upstream.headers,
-              ...(body ? { "content-type": "application/json", "content-length": String(body.length) } : {}),
+              ...(body
+                ? { "content-type": "application/json", "content-length": String(body.length) }
+                : {}),
             },
             ...upstream.tls,
           },
@@ -267,7 +281,9 @@ export function createPeerDevices(registry: PeerRegistryPort): DevicePeerPort {
             response.on("error", reject);
           },
         );
-        request.setTimeout(PEER_SCREENSHOT_TIMEOUT_MS, () => request.destroy(new Error("The simulator screenshot timed out.")));
+        request.setTimeout(PEER_SCREENSHOT_TIMEOUT_MS, () =>
+          request.destroy(new Error("The simulator screenshot timed out.")),
+        );
         request.on("error", () => reject(new Error("The simulator screenshot failed.")));
         request.end(body);
       });

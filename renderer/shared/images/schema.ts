@@ -76,7 +76,10 @@ interface WorkflowNodeBase<TType extends ImageNodeType, TData> {
 export type PromptNode = WorkflowNodeBase<"prompt", { text: string }>;
 export type ImageInputNode = WorkflowNodeBase<"image-input", { assetId?: string; label?: string }>;
 /** CI-1 owner cap: one provider request per Generate node. Widen `count` when batching lands. */
-export type GenerateImageNode = WorkflowNodeBase<"generate-image", { model?: ImageModelRef; count: 1 }>;
+export type GenerateImageNode = WorkflowNodeBase<
+  "generate-image",
+  { model?: ImageModelRef; count: 1 }
+>;
 export type OutputNode = WorkflowNodeBase<"output", { label?: string }>;
 export type WorkflowNode = PromptNode | ImageInputNode | GenerateImageNode | OutputNode;
 

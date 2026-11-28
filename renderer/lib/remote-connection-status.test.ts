@@ -9,11 +9,7 @@ import {
 
 const NOW = 2_000_000;
 
-function device(
-  id: string,
-  lastSeenAt: number,
-  revokedAt?: number,
-): AidenRemoteDeviceView {
+function device(id: string, lastSeenAt: number, revokedAt?: number): AidenRemoteDeviceView {
   return {
     id,
     name: id,
@@ -35,20 +31,50 @@ test("groups recent, inactive, and revoked devices without overstating an offlin
   ];
 
   const running = groupRemoteDevices(devices, { now: NOW, serviceRunning: true });
-  assert.deepEqual(running.active.map(({ id }) => id), ["recent"]);
-  assert.deepEqual(running.pending.map(({ id }) => id), ["pending"]);
-  assert.deepEqual(running.inactive.map(({ id }) => id), ["inactive"]);
-  assert.deepEqual(running.previous.map(({ id }) => id), ["revoked"]);
+  assert.deepEqual(
+    running.active.map(({ id }) => id),
+    ["recent"],
+  );
+  assert.deepEqual(
+    running.pending.map(({ id }) => id),
+    ["pending"],
+  );
+  assert.deepEqual(
+    running.inactive.map(({ id }) => id),
+    ["inactive"],
+  );
+  assert.deepEqual(
+    running.previous.map(({ id }) => id),
+    ["revoked"],
+  );
 
   const stopped = groupRemoteDevices(devices, { now: NOW, serviceRunning: false });
   assert.deepEqual(stopped.active, []);
-  assert.deepEqual(stopped.pending.map(({ id }) => id), ["pending"]);
-  assert.deepEqual(stopped.inactive.map(({ id }) => id), ["recent", "inactive"]);
+  assert.deepEqual(
+    stopped.pending.map(({ id }) => id),
+    ["pending"],
+  );
+  assert.deepEqual(
+    stopped.inactive.map(({ id }) => id),
+    ["recent", "inactive"],
+  );
 });
 
 test("connection summary favors actionable service state over device counts", () => {
-  assert.equal(remoteConnectionSummary({ enabled: false, running: false, activeDeviceCount: 2 }), "Off");
-  assert.equal(remoteConnectionSummary({ enabled: true, running: false, activeDeviceCount: 2 }), "Needs attention");
-  assert.equal(remoteConnectionSummary({ enabled: true, running: true, activeDeviceCount: 0 }), "Ready for a device");
-  assert.equal(remoteConnectionSummary({ enabled: true, running: true, activeDeviceCount: 2 }), "2 recently active");
+  assert.equal(
+    remoteConnectionSummary({ enabled: false, running: false, activeDeviceCount: 2 }),
+    "Off",
+  );
+  assert.equal(
+    remoteConnectionSummary({ enabled: true, running: false, activeDeviceCount: 2 }),
+    "Needs attention",
+  );
+  assert.equal(
+    remoteConnectionSummary({ enabled: true, running: true, activeDeviceCount: 0 }),
+    "Ready for a device",
+  );
+  assert.equal(
+    remoteConnectionSummary({ enabled: true, running: true, activeDeviceCount: 2 }),
+    "2 recently active",
+  );
 });

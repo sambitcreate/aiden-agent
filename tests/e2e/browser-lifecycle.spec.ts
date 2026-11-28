@@ -8,7 +8,13 @@ import type {
   BrowserCommandResult,
   BrowserState,
 } from "../../renderer/shared/browser";
-import { composerPrimaryButton, E2E_WORKSPACE_ID, expect, finishLmStudioOnboarding, test } from "./fixtures";
+import {
+  composerPrimaryButton,
+  E2E_WORKSPACE_ID,
+  expect,
+  finishLmStudioOnboarding,
+  test,
+} from "./fixtures";
 
 test.use({ workspaceSeed: true });
 type BrowserTestWindow = Window & {
@@ -134,7 +140,10 @@ test("disabling agent access during file acquisition prevents a late browser tab
         const result = await original(...args);
         // Preparation performs the first identity lookup. Hold the second lookup
         // inside the native service's actual lease acquisition, after tool admission.
-        if ((String(args[0]) === target || String(args[0]) === canonicalTarget) && ++state.reads === 2) {
+        if (
+          (String(args[0]) === target || String(args[0]) === canonicalTarget) &&
+          ++state.reads === 2
+        ) {
           state.entered = true;
           await gate;
         }
@@ -147,7 +156,10 @@ test("disabling agent access during file acquisition prevents a late browser tab
     const prompt = "Browser lifecycle scenario: open the delayed workspace document.";
     const scenario = lmStudio.enqueueToolScenario!({
       prompt,
-      calls: [{ name: "browser", arguments: {} }, { name: "browser_open", arguments: { path: file, open: true } }],
+      calls: [
+        { name: "browser", arguments: {} },
+        { name: "browser_open", arguments: { path: file, open: true } },
+      ],
       finalText: "Delayed preview request finished.",
     });
     await page.locator("textarea").first().fill(prompt);
@@ -237,15 +249,23 @@ type CrashRecoveryHarness = {
 };
 type CrashRecoveryGlobal = typeof globalThis & { __browserCrashRecovery: CrashRecoveryHarness };
 
-async function installCrashRecoveryHarness(aiden: { app: import("@playwright/test").ElectronApplication }, url: string) {
+async function installCrashRecoveryHarness(
+  aiden: { app: import("@playwright/test").ElectronApplication },
+  url: string,
+) {
   await aiden.app.evaluate(({ webContents }, target) => {
-    const guest = webContents.getAllWebContents().find((contents) => contents.getURL().startsWith(target));
+    const guest = webContents
+      .getAllWebContents()
+      .find((contents) => contents.getURL().startsWith(target));
     if (!guest) throw new Error("Browser guest missing");
     const originalReload = guest.reload.bind(guest);
     const callbacks: Array<() => void> = [];
     const handles: ReturnType<typeof setTimeout>[] = [];
     let reloads = 0;
-    guest.reload = () => { reloads += 1; originalReload(); };
+    guest.reload = () => {
+      reloads += 1;
+      originalReload();
+    };
     const harness: CrashRecoveryHarness = {
       crash() {
         // Hold only timers registered synchronously by the real crash handler.
@@ -256,14 +276,16 @@ async function installCrashRecoveryHarness(aiden: { app: import("@playwright/tes
         guest.isCrashed = () => true;
         guest.isLoadingMainFrame = () => false;
         globalThis.setTimeout = ((callback: () => void, delay: number) => {
-          if (![300, 1000, 2000].includes(delay)) throw new Error(`Unexpected crash timer: ${delay}`);
+          if (![300, 1000, 2000].includes(delay))
+            throw new Error(`Unexpected crash timer: ${delay}`);
           callbacks.push(callback);
           const handle = schedule(() => {}, 60_000);
           handles.push(handle);
           return handle;
         }) as typeof setTimeout;
-        try { guest.emit("render-process-gone", {}, { reason: "crashed", exitCode: 1 }); }
-        finally {
+        try {
+          guest.emit("render-process-gone", {}, { reason: "crashed", exitCode: 1 });
+        } finally {
           globalThis.setTimeout = schedule;
           guest.isCrashed = isCrashed;
           guest.isLoadingMainFrame = isLoadingMainFrame;
@@ -274,7 +296,10 @@ async function installCrashRecoveryHarness(aiden: { app: import("@playwright/tes
         guest.emit("did-start-navigation", {}, guest.getURL(), true, true);
         guest.emit("did-start-navigation", {}, guest.getURL(), false, false);
       },
-      fire(index) { callbacks[index](); return reloads; },
+      fire(index) {
+        callbacks[index]();
+        return reloads;
+      },
       reloads: () => reloads,
       restore() {
         for (const handle of handles) clearTimeout(handle);
@@ -285,29 +310,53 @@ async function installCrashRecoveryHarness(aiden: { app: import("@playwright/tes
   }, url);
 }
 
-async function restoreCrashRecoveryHarness(aiden: { app: import("@playwright/test").ElectronApplication }) {
-  await aiden.app.evaluate(() => (globalThis as CrashRecoveryGlobal).__browserCrashRecovery?.restore());
+async function restoreCrashRecoveryHarness(aiden: {
+  app: import("@playwright/test").ElectronApplication;
+}) {
+  await aiden.app.evaluate(() =>
+    (globalThis as CrashRecoveryGlobal).__browserCrashRecovery?.restore(),
+  );
 }
 
-test("superseded browser crash recovery cannot reload a new page or override user control", async ({ aiden }) => {
+test("superseded browser crash recovery cannot reload a new page or override user control", async ({
+  aiden,
+}) => {
   await finishLmStudioOnboarding(aiden.page);
-  await writeFile(path.join(aiden.workspaceDir, "recovery.html"), "<!doctype html><title>Recovery fixture</title>");
+  await writeFile(
+    path.join(aiden.workspaceDir, "recovery.html"),
+    "<!doctype html><title>Recovery fixture</title>",
+  );
   for (const action of ["navigate", "reload", "stop", "close"] as const) {
     const opened = await command(aiden.page, { action: "open_file", path: "recovery.html" });
     const tab = opened.state.tabs.find((candidate) => candidate.id === opened.tabId)!;
     await installCrashRecoveryHarness(aiden, tab.url);
     try {
-      expect(await aiden.app.evaluate(() => (globalThis as CrashRecoveryGlobal).__browserCrashRecovery.crash())).toBe(1);
-      const result = await command(aiden.page, action === "navigate"
-        ? { action, tabId: tab.id, url: "about:blank" }
-        : { action, tabId: tab.id });
+      expect(
+        await aiden.app.evaluate(() =>
+          (globalThis as CrashRecoveryGlobal).__browserCrashRecovery.crash(),
+        ),
+      ).toBe(1);
+      const result = await command(
+        aiden.page,
+        action === "navigate"
+          ? { action, tabId: tab.id, url: "about:blank" }
+          : { action, tabId: tab.id },
+      );
       if (action === "stop") {
         expect(result.state.tabs.find((candidate) => candidate.id === tab.id)).toMatchObject({
-          crashed: true, error: "The page crashed. Reload to recover.",
+          crashed: true,
+          error: "The page crashed. Reload to recover.",
         });
       }
-      const before = await aiden.app.evaluate(() => (globalThis as CrashRecoveryGlobal).__browserCrashRecovery.reloads());
-      expect(await aiden.app.evaluate(() => (globalThis as CrashRecoveryGlobal).__browserCrashRecovery.fire(0)), action).toBe(before);
+      const before = await aiden.app.evaluate(() =>
+        (globalThis as CrashRecoveryGlobal).__browserCrashRecovery.reloads(),
+      );
+      expect(
+        await aiden.app.evaluate(() =>
+          (globalThis as CrashRecoveryGlobal).__browserCrashRecovery.fire(0),
+        ),
+        action,
+      ).toBe(before);
     } finally {
       await restoreCrashRecoveryHarness(aiden);
       if (action !== "close") await command(aiden.page, { action: "close", tabId: tab.id });
@@ -315,9 +364,14 @@ test("superseded browser crash recovery cannot reload a new page or override use
   }
 });
 
-test("browser crash recovery has one current retry and respects the crash limit", async ({ aiden }) => {
+test("browser crash recovery has one current retry and respects the crash limit", async ({
+  aiden,
+}) => {
   await finishLmStudioOnboarding(aiden.page);
-  await writeFile(path.join(aiden.workspaceDir, "recovery.html"), "<!doctype html><title>Recovery fixture</title>");
+  await writeFile(
+    path.join(aiden.workspaceDir, "recovery.html"),
+    "<!doctype html><title>Recovery fixture</title>",
+  );
   const opened = await command(aiden.page, { action: "open_file", path: "recovery.html" });
   const tab = opened.state.tabs.find((candidate) => candidate.id === opened.tabId)!;
   await installCrashRecoveryHarness(aiden, tab.url);
@@ -351,64 +405,101 @@ type NativeCrashProbe = {
 };
 type NativeCrashGlobal = typeof globalThis & { __nativeCrashProbe: NativeCrashProbe };
 
-async function installNativeCrashProbe(aiden: { app: import("@playwright/test").ElectronApplication }, target: string | number) {
+async function installNativeCrashProbe(
+  aiden: { app: import("@playwright/test").ElectronApplication },
+  target: string | number,
+) {
   await aiden.app.evaluate(({ webContents }, target) => {
-        const guest = typeof target === "number" ? webContents.fromId(target)! : webContents.getAllWebContents().find((contents) => contents.getURL() === target)!;
-        const emit = guest.emit.bind(guest);
-        const reload = guest.reload.bind(guest);
-        const loadURL = guest.loadURL.bind(guest);
-        let notification: (() => void) | undefined;
-        let arrived: (() => void) | undefined;
-        let reloads = 0;
-        let firing = false;
-        const events: NativeCrashEvent[] = [];
-        const callbacks: Array<() => void> = [];
-        const handles: ReturnType<typeof setTimeout>[] = [];
-        guest.emit = ((event: string, ...args: unknown[]) => {
-          if (["did-stop-loading", "render-process-gone"].includes(event)) {
-            events.push({ event, crashed: guest.isCrashed(), loading: guest.isLoadingMainFrame(), osProcessId: guest.getOSProcessId() });
-          }
-          if (event !== "render-process-gone") return emit(event, ...args);
-          notification = () => { emit(event, ...args); };
-          arrived?.();
-          return true;
-        }) as typeof guest.emit;
-        guest.reload = () => { reloads += 1; reload(); };
-        guest.loadURL = (...args) => { if (firing) reloads += 1; return loadURL(...args); };
-        (globalThis as NativeCrashGlobal).__nativeCrashProbe = {
-          crash: () => new Promise<void>((resolve) => { arrived = resolve; guest.forcefullyCrashRenderer(); }),
-          deliver() {
-            const crashed = guest.isCrashed();
-            const loading = guest.isLoadingMainFrame();
-            const schedule = globalThis.setTimeout;
-            globalThis.setTimeout = ((callback: () => void, delay: number) => {
-              if (![300, 1000, 2000].includes(delay)) throw new Error(`Unexpected crash timer: ${delay}`);
-              callbacks.push(callback);
-              const handle = schedule(() => {}, 60_000);
-              handles.push(handle);
-              return handle;
-            }) as typeof setTimeout;
-            try { notification!(); notification = undefined; }
-            finally { globalThis.setTimeout = schedule; }
-            return { crashed, loading, timers: callbacks.length };
-          },
-          events: () => events,
-          fire() {
-            firing = true;
-            try { for (const callback of callbacks.splice(0)) callback(); }
-            finally { firing = false; }
-            return reloads;
-          },
-          restore() {
-            for (const handle of handles) clearTimeout(handle);
-            if (!guest.isDestroyed()) { guest.emit = emit; guest.reload = reload; guest.loadURL = loadURL; }
-          },
-        };
+    const guest =
+      typeof target === "number"
+        ? webContents.fromId(target)!
+        : webContents.getAllWebContents().find((contents) => contents.getURL() === target)!;
+    const emit = guest.emit.bind(guest);
+    const reload = guest.reload.bind(guest);
+    const loadURL = guest.loadURL.bind(guest);
+    let notification: (() => void) | undefined;
+    let arrived: (() => void) | undefined;
+    let reloads = 0;
+    let firing = false;
+    const events: NativeCrashEvent[] = [];
+    const callbacks: Array<() => void> = [];
+    const handles: ReturnType<typeof setTimeout>[] = [];
+    guest.emit = ((event: string, ...args: unknown[]) => {
+      if (["did-stop-loading", "render-process-gone"].includes(event)) {
+        events.push({
+          event,
+          crashed: guest.isCrashed(),
+          loading: guest.isLoadingMainFrame(),
+          osProcessId: guest.getOSProcessId(),
+        });
+      }
+      if (event !== "render-process-gone") return emit(event, ...args);
+      notification = () => {
+        emit(event, ...args);
+      };
+      arrived?.();
+      return true;
+    }) as typeof guest.emit;
+    guest.reload = () => {
+      reloads += 1;
+      reload();
+    };
+    guest.loadURL = (...args) => {
+      if (firing) reloads += 1;
+      return loadURL(...args);
+    };
+    (globalThis as NativeCrashGlobal).__nativeCrashProbe = {
+      crash: () =>
+        new Promise<void>((resolve) => {
+          arrived = resolve;
+          guest.forcefullyCrashRenderer();
+        }),
+      deliver() {
+        const crashed = guest.isCrashed();
+        const loading = guest.isLoadingMainFrame();
+        const schedule = globalThis.setTimeout;
+        globalThis.setTimeout = ((callback: () => void, delay: number) => {
+          if (![300, 1000, 2000].includes(delay))
+            throw new Error(`Unexpected crash timer: ${delay}`);
+          callbacks.push(callback);
+          const handle = schedule(() => {}, 60_000);
+          handles.push(handle);
+          return handle;
+        }) as typeof setTimeout;
+        try {
+          notification!();
+          notification = undefined;
+        } finally {
+          globalThis.setTimeout = schedule;
+        }
+        return { crashed, loading, timers: callbacks.length };
+      },
+      events: () => events,
+      fire() {
+        firing = true;
+        try {
+          for (const callback of callbacks.splice(0)) callback();
+        } finally {
+          firing = false;
+        }
+        return reloads;
+      },
+      restore() {
+        for (const handle of handles) clearTimeout(handle);
+        if (!guest.isDestroyed()) {
+          guest.emit = emit;
+          guest.reload = reload;
+          guest.loadURL = loadURL;
+        }
+      },
+    };
   }, target);
 }
 
 for (const delivery of ["pending", "committed"] as const) {
-  test(`queued native crash after ${delivery} replacement navigation cannot schedule a stale reload`, async ({ aiden }) => {
+  test(`queued native crash after ${delivery} replacement navigation cannot schedule a stale reload`, async ({
+    aiden,
+  }) => {
     let releaseNext: (() => void) | undefined;
     let nextRequests = 0;
     let stallResource = true;
@@ -419,7 +510,10 @@ for (const delivery of ["pending", "committed"] as const) {
         response.end('<!doctype html><title>Loading document</title><img src="/resource">');
         return;
       }
-      const reply = () => response.end(`<!doctype html><title>${request.url === "/next" ? "Next document" : "Original document"}</title>`);
+      const reply = () =>
+        response.end(
+          `<!doctype html><title>${request.url === "/next" ? "Next document" : "Original document"}</title>`,
+        );
       response.setHeader("content-type", "text/html");
       if (request.url === "/next" && nextRequests++ === 0) releaseNext = reply;
       else reply();
@@ -430,44 +524,105 @@ for (const delivery of ["pending", "committed"] as const) {
       await finishLmStudioOnboarding(aiden.page);
       const opened = await command(aiden.page, { action: "create", url: `${url}/start` });
       const tabId = opened.tabId!;
-      await expect.poll(async () => (await command(aiden.page, { action: "snapshot", tabId, includeImage: false })).state.tabs.find((tab) => tab.id === tabId)?.title).toBe("Original document");
+      await expect
+        .poll(
+          async () =>
+            (
+              await command(aiden.page, { action: "snapshot", tabId, includeImage: false })
+            ).state.tabs.find((tab) => tab.id === tabId)?.title,
+        )
+        .toBe("Original document");
       await installNativeCrashProbe(aiden, `${url}/start`);
       await aiden.app.evaluate(() => (globalThis as NativeCrashGlobal).__nativeCrashProbe.crash());
-      await command(aiden.page, { action: "navigate", tabId, url: `${url}/next`, readiness: "none" });
+      await command(aiden.page, {
+        action: "navigate",
+        tabId,
+        url: `${url}/next`,
+        readiness: "none",
+      });
       await expect.poll(() => Boolean(releaseNext)).toBe(true);
       if (delivery === "committed") {
         releaseNext!();
-        await expect.poll(() => aiden.app.evaluate(({ webContents }, target) => {
-          const guest = webContents.getAllWebContents().find((contents) => contents.getURL() === target);
-          return guest && !guest.isLoadingMainFrame() && guest.getTitle();
-        }, `${url}/next`)).toBe("Next document");
+        await expect
+          .poll(() =>
+            aiden.app.evaluate(({ webContents }, target) => {
+              const guest = webContents
+                .getAllWebContents()
+                .find((contents) => contents.getURL() === target);
+              return guest && !guest.isLoadingMainFrame() && guest.getTitle();
+            }, `${url}/next`),
+          )
+          .toBe("Next document");
       }
-      const late = await aiden.app.evaluate(() => (globalThis as NativeCrashGlobal).__nativeCrashProbe.deliver());
-      expect(late, `Native state at ${delivery} delivery`).toMatchObject({ loading: delivery === "pending", timers: 0 });
+      const late = await aiden.app.evaluate(() =>
+        (globalThis as NativeCrashGlobal).__nativeCrashProbe.deliver(),
+      );
+      expect(late, `Native state at ${delivery} delivery`).toMatchObject({
+        loading: delivery === "pending",
+        timers: 0,
+      });
       if (delivery === "pending") releaseNext!();
-      await expect.poll(() => aiden.app.evaluate(({ webContents }, target) => webContents.getAllWebContents().find((contents) => contents.getURL() === target)?.getTitle(), `${url}/next`)).toBe("Next document");
-      expect(await aiden.app.evaluate(() => (globalThis as NativeCrashGlobal).__nativeCrashProbe.fire())).toBe(0);
+      await expect
+        .poll(() =>
+          aiden.app.evaluate(
+            ({ webContents }, target) =>
+              webContents
+                .getAllWebContents()
+                .find((contents) => contents.getURL() === target)
+                ?.getTitle(),
+            `${url}/next`,
+          ),
+        )
+        .toBe("Next document");
+      expect(
+        await aiden.app.evaluate(() => (globalThis as NativeCrashGlobal).__nativeCrashProbe.fire()),
+      ).toBe(0);
       // Also cover a genuine crash after commit while subresources still load.
       const currentUrl = delivery === "committed" ? `${url}/loading` : `${url}/next`;
       const currentTitle = delivery === "committed" ? "Loading document" : "Next document";
       if (delivery === "committed") {
-        await command(aiden.page, { action: "navigate", tabId, url: currentUrl, readiness: "none" });
-        await expect.poll(() => aiden.app.evaluate(({ webContents }, target) => {
-          const guest = webContents.getAllWebContents().find((contents) => contents.getURL() === target);
-          return guest?.isLoadingMainFrame() && guest.getTitle();
-        }, currentUrl)).toBe(currentTitle);
+        await command(aiden.page, {
+          action: "navigate",
+          tabId,
+          url: currentUrl,
+          readiness: "none",
+        });
+        await expect
+          .poll(() =>
+            aiden.app.evaluate(({ webContents }, target) => {
+              const guest = webContents
+                .getAllWebContents()
+                .find((contents) => contents.getURL() === target);
+              return guest?.isLoadingMainFrame() && guest.getTitle();
+            }, currentUrl),
+          )
+          .toBe(currentTitle);
       }
       // A fresh crash of the current document still owns one working retry.
       await aiden.app.evaluate(() => (globalThis as NativeCrashGlobal).__nativeCrashProbe.crash());
-      expect(await aiden.app.evaluate(() => (globalThis as NativeCrashGlobal).__nativeCrashProbe.deliver())).toEqual({ crashed: true, loading: false, timers: 1 });
+      expect(
+        await aiden.app.evaluate(() =>
+          (globalThis as NativeCrashGlobal).__nativeCrashProbe.deliver(),
+        ),
+      ).toEqual({ crashed: true, loading: false, timers: 1 });
       stallResource = false;
-      expect(await aiden.app.evaluate(() => (globalThis as NativeCrashGlobal).__nativeCrashProbe.fire())).toBe(1);
-      await expect.poll(() => aiden.app.evaluate(({ webContents }, target) => {
-        const guest = webContents.getAllWebContents().find((contents) => contents.getURL() === target);
-        return guest && !guest.isCrashed() && !guest.isLoadingMainFrame() && guest.getTitle();
-      }, currentUrl)).toBe(currentTitle);
+      expect(
+        await aiden.app.evaluate(() => (globalThis as NativeCrashGlobal).__nativeCrashProbe.fire()),
+      ).toBe(1);
+      await expect
+        .poll(() =>
+          aiden.app.evaluate(({ webContents }, target) => {
+            const guest = webContents
+              .getAllWebContents()
+              .find((contents) => contents.getURL() === target);
+            return guest && !guest.isCrashed() && !guest.isLoadingMainFrame() && guest.getTitle();
+          }, currentUrl),
+        )
+        .toBe(currentTitle);
     } finally {
-      await aiden.app.evaluate(() => (globalThis as NativeCrashGlobal).__nativeCrashProbe?.restore());
+      await aiden.app.evaluate(() =>
+        (globalThis as NativeCrashGlobal).__nativeCrashProbe?.restore(),
+      );
       releaseNext?.();
       server.closeAllConnections();
       await new Promise<void>((resolve) => server.close(() => resolve()));
@@ -476,11 +631,16 @@ for (const delivery of ["pending", "committed"] as const) {
 }
 
 for (const boundary of ["ordinary", "global-stop", "same-url-replacement"]) {
-  test(`current native crash during a subsequent held main-frame response still recovers${boundary === "global-stop" ? " after an unrelated global stop" : boundary === "same-url-replacement" ? " after a same-URL replacement" : ""}`, async ({ aiden }) => {
+  test(`current native crash during a subsequent held main-frame response still recovers${boundary === "global-stop" ? " after an unrelated global stop" : boundary === "same-url-replacement" ? " after a same-URL replacement" : ""}`, async ({
+    aiden,
+  }) => {
     let heldRequests = 0;
     let hold = true;
     const server = createServer((request, response) => {
-      if (request.url === "/held" && hold) { heldRequests += 1; return; }
+      if (request.url === "/held" && hold) {
+        heldRequests += 1;
+        return;
+      }
       response.setHeader("content-type", "text/html");
       response.end("<!doctype html><title>Recovered document</title>");
     });
@@ -488,20 +648,43 @@ for (const boundary of ["ordinary", "global-stop", "same-url-replacement"]) {
     const url = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
     try {
       await finishLmStudioOnboarding(aiden.page);
-      const ids = await aiden.app.evaluate(({ webContents }) => webContents.getAllWebContents().map((contents) => contents.id));
+      const ids = await aiden.app.evaluate(({ webContents }) =>
+        webContents.getAllWebContents().map((contents) => contents.id),
+      );
       // Finish Playwright attachment before intentionally crashing the guest.
       const windowCount = aiden.app.windows().length;
       const opened = await command(aiden.page, { action: "create", url: `${url}/start` });
       await expect.poll(() => aiden.app.windows().length).toBe(windowCount + 1);
-      const id = await aiden.app.evaluate(({ webContents }, previous) => webContents.getAllWebContents().find((contents) => !previous.includes(contents.id))!.id, ids);
+      const id = await aiden.app.evaluate(
+        ({ webContents }, previous) =>
+          webContents.getAllWebContents().find((contents) => !previous.includes(contents.id))!.id,
+        ids,
+      );
       await installNativeCrashProbe(aiden, id);
-      await expect.poll(() => aiden.app.evaluate(({ webContents }, target) => webContents.fromId(target)?.getTitle(), id)).toBe("Recovered document");
-      await command(aiden.page, { action: "navigate", tabId: opened.tabId!, url: `${url}/held`, readiness: "none" });
+      await expect
+        .poll(() =>
+          aiden.app.evaluate(
+            ({ webContents }, target) => webContents.fromId(target)?.getTitle(),
+            id,
+          ),
+        )
+        .toBe("Recovered document");
+      await command(aiden.page, {
+        action: "navigate",
+        tabId: opened.tabId!,
+        url: `${url}/held`,
+        readiness: "none",
+      });
       await expect.poll(() => heldRequests).toBe(1);
       if (boundary === "same-url-replacement") {
         // Cancel the first request with another navigation to the same URL.
         // The old request error cannot abandon the new navigation's target.
-        await command(aiden.page, { action: "navigate", tabId: opened.tabId!, url: `${url}/held`, readiness: "none" });
+        await command(aiden.page, {
+          action: "navigate",
+          tabId: opened.tabId!,
+          url: `${url}/held`,
+          readiness: "none",
+        });
         await expect.poll(() => heldRequests).toBe(2);
       }
       if (boundary === "global-stop") {
@@ -511,39 +694,97 @@ for (const boundary of ["ordinary", "global-stop", "same-url-replacement"]) {
         // recovery HTTP request are native.
         await aiden.app.evaluate(({ webContents }, target) => {
           const guest = webContents.fromId(target)!;
-          if (guest.isCrashed() || guest.getOSProcessId() === 0) throw new Error("Expected a live committed renderer");
+          if (guest.isCrashed() || guest.getOSProcessId() === 0)
+            throw new Error("Expected a live committed renderer");
           const isLoadingMainFrame = guest.isLoadingMainFrame;
           guest.isLoadingMainFrame = () => false;
-          try { guest.emit("did-stop-loading"); }
-          finally { guest.isLoadingMainFrame = isLoadingMainFrame; }
+          try {
+            guest.emit("did-stop-loading");
+          } finally {
+            guest.isLoadingMainFrame = isLoadingMainFrame;
+          }
         }, id);
       }
       await aiden.app.evaluate(() => (globalThis as NativeCrashGlobal).__nativeCrashProbe.crash());
-      const crash = await aiden.app.evaluate(() => (globalThis as NativeCrashGlobal).__nativeCrashProbe.deliver());
+      const crash = await aiden.app.evaluate(() =>
+        (globalThis as NativeCrashGlobal).__nativeCrashProbe.deliver(),
+      );
       expect(crash).toMatchObject({ crashed: true, timers: 1 });
-      const nativeEvents = await aiden.app.evaluate(() => (globalThis as NativeCrashGlobal).__nativeCrashProbe.events());
-      expect(nativeEvents.some((event) => event.event === "did-stop-loading" && event.osProcessId === 0)).toBe(true);
-      await test.info().attach("native-crash-event-order", { body: JSON.stringify(nativeEvents, null, 2), contentType: "application/json" });
+      const nativeEvents = await aiden.app.evaluate(() =>
+        (globalThis as NativeCrashGlobal).__nativeCrashProbe.events(),
+      );
+      expect(
+        nativeEvents.some((event) => event.event === "did-stop-loading" && event.osProcessId === 0),
+      ).toBe(true);
+      await test
+        .info()
+        .attach("native-crash-event-order", {
+          body: JSON.stringify(nativeEvents, null, 2),
+          contentType: "application/json",
+        });
 
-      const state = await aiden.page.evaluate((workspaceId) =>
-        (window as unknown as BrowserTestWindow).aidenAPI.ipc.invoke<BrowserState>("browser:get-state", workspaceId), E2E_WORKSPACE_ID);
-      expect(state.tabs.find((tab) => tab.id === opened.tabId)).toMatchObject({ crashed: true, loading: false, error: "The page crashed. Restoring it…" });
+      const state = await aiden.page.evaluate(
+        (workspaceId) =>
+          (window as unknown as BrowserTestWindow).aidenAPI.ipc.invoke<BrowserState>(
+            "browser:get-state",
+            workspaceId,
+          ),
+        E2E_WORKSPACE_ID,
+      );
+      expect(state.tabs.find((tab) => tab.id === opened.tabId)).toMatchObject({
+        crashed: true,
+        loading: false,
+        error: "The page crashed. Restoring it…",
+      });
       hold = false;
-      expect(await aiden.app.evaluate(() => (globalThis as NativeCrashGlobal).__nativeCrashProbe.fire())).toBe(1);
-      await expect.poll(() => aiden.app.evaluate(({ webContents }, target) => {
-        const guest = webContents.fromId(target);
-        return guest && { crashed: guest.isCrashed(), loading: guest.isLoadingMainFrame(), title: guest.getTitle(), url: guest.getURL() };
-      }, id)).toEqual({ crashed: false, loading: false, title: "Recovered document", url: `${url}/held` });
-      expect(await aiden.app.evaluate(({ webContents }, target) => webContents.fromId(target)?.getURL(), id)).toBe(`${url}/held`);
+      expect(
+        await aiden.app.evaluate(() => (globalThis as NativeCrashGlobal).__nativeCrashProbe.fire()),
+      ).toBe(1);
+      await expect
+        .poll(() =>
+          aiden.app.evaluate(({ webContents }, target) => {
+            const guest = webContents.fromId(target);
+            return (
+              guest && {
+                crashed: guest.isCrashed(),
+                loading: guest.isLoadingMainFrame(),
+                title: guest.getTitle(),
+                url: guest.getURL(),
+              }
+            );
+          }, id),
+        )
+        .toEqual({
+          crashed: false,
+          loading: false,
+          title: "Recovered document",
+          url: `${url}/held`,
+        });
+      expect(
+        await aiden.app.evaluate(
+          ({ webContents }, target) => webContents.fromId(target)?.getURL(),
+          id,
+        ),
+      ).toBe(`${url}/held`);
     } finally {
-      await aiden.app.evaluate(() => (globalThis as NativeCrashGlobal).__nativeCrashProbe?.restore());
+      await aiden.app.evaluate(() =>
+        (globalThis as NativeCrashGlobal).__nativeCrashProbe?.restore(),
+      );
       server.closeAllConnections();
       await new Promise<void>((resolve) => server.close(() => resolve()));
     }
   });
 }
 
-for (const scenario of ["queued-before-abort", "queued-before-network-error", "queued-after-abort", "queued-after-network-error", "current-after-abort", "current-after-reset", "current-after-stop"] as const) {
+for (const scenario of [
+  "queued-before-abort",
+  "queued-before-network-error",
+  "queued-after-abort",
+  "queued-after-network-error",
+  "current-after-abort",
+  "current-after-reset",
+  "current-after-stop",
+] as const) {
   test(`native crash ${scenario} preserves the correct recovery document`, async ({ aiden }) => {
     let releaseFailure: (() => void) | undefined;
     let failing = false;
@@ -555,7 +796,10 @@ for (const scenario of ["queued-before-abort", "queued-before-network-error", "q
         const fail = () => {
           failing = true;
           if (scenario.endsWith("network-error")) response.destroy();
-          else { response.writeHead(scenario === "current-after-reset" ? 205 : 204); response.end(); }
+          else {
+            response.writeHead(scenario === "current-after-reset" ? 205 : 204);
+            response.end();
+          }
         };
         if (failing) fail();
         else releaseFailure = fail;
@@ -570,53 +814,151 @@ for (const scenario of ["queued-before-abort", "queued-before-network-error", "q
     try {
       await finishLmStudioOnboarding(aiden.page);
       const opened = await command(aiden.page, { action: "create", url: `${url}/original` });
-      await expect.poll(() => aiden.app.evaluate(({ webContents }, target) => webContents.getAllWebContents().some((contents) => contents.getURL() === target), `${url}/original`)).toBe(true);
-      const id = await aiden.app.evaluate(({ webContents }, target) => webContents.getAllWebContents().find((contents) => contents.getURL() === target)!.id, `${url}/original`);
-      await expect.poll(() => aiden.app.evaluate(({ webContents }, target) => webContents.fromId(target)?.getTitle(), id)).toBe("Original page");
+      await expect
+        .poll(() =>
+          aiden.app.evaluate(
+            ({ webContents }, target) =>
+              webContents.getAllWebContents().some((contents) => contents.getURL() === target),
+            `${url}/original`,
+          ),
+        )
+        .toBe(true);
+      const id = await aiden.app.evaluate(
+        ({ webContents }, target) =>
+          webContents.getAllWebContents().find((contents) => contents.getURL() === target)!.id,
+        `${url}/original`,
+      );
+      await expect
+        .poll(() =>
+          aiden.app.evaluate(
+            ({ webContents }, target) => webContents.fromId(target)?.getTitle(),
+            id,
+          ),
+        )
+        .toBe("Original page");
       await installNativeCrashProbe(aiden, id);
       await aiden.app.evaluate(({ webContents }, target) => {
         const guest = webContents.fromId(target)!;
         const events: string[] = [];
         guest.on("did-stop-loading", () => events.push("did-stop-loading"));
-        guest.on("did-fail-load", (_event, _code, _description, _url, main) => { if (main) events.push("did-fail-load"); });
+        guest.on("did-fail-load", (_event, _code, _description, _url, main) => {
+          if (main) events.push("did-fail-load");
+        });
         Object.assign(globalThis, { __failedReplacement: events });
       }, id);
       const laterCrash = scenario.startsWith("current-");
-      if (!laterCrash) await aiden.app.evaluate(() => (globalThis as NativeCrashGlobal).__nativeCrashProbe.crash());
-      await command(aiden.page, { action: "navigate", tabId: opened.tabId!, url: `${url}/replacement`, readiness: "none" });
+      if (!laterCrash)
+        await aiden.app.evaluate(() =>
+          (globalThis as NativeCrashGlobal).__nativeCrashProbe.crash(),
+        );
+      await command(aiden.page, {
+        action: "navigate",
+        tabId: opened.tabId!,
+        url: `${url}/replacement`,
+        readiness: "none",
+      });
       await expect.poll(() => Boolean(releaseFailure)).toBe(true);
-      if (scenario === "current-after-stop") await command(aiden.page, { action: "stop", tabId: opened.tabId! });
+      if (scenario === "current-after-stop")
+        await command(aiden.page, { action: "stop", tabId: opened.tabId! });
       if (scenario.startsWith("queued-before-")) {
-        expect(await aiden.app.evaluate(() => (globalThis as NativeCrashGlobal).__nativeCrashProbe.deliver())).toMatchObject({ loading: true, timers: 0 });
+        expect(
+          await aiden.app.evaluate(() =>
+            (globalThis as NativeCrashGlobal).__nativeCrashProbe.deliver(),
+          ),
+        ).toMatchObject({ loading: true, timers: 0 });
       }
       releaseFailure!();
-      await expect.poll(() => aiden.app.evaluate(() => (globalThis as typeof globalThis & { __failedReplacement: string[] }).__failedReplacement.includes("did-stop-loading"))).toBe(true);
-      await expect.poll(() => aiden.app.evaluate(({ webContents }, target) => webContents.fromId(target)?.isLoadingMainFrame(), id)).toBe(false);
+      await expect
+        .poll(() =>
+          aiden.app.evaluate(() =>
+            (
+              globalThis as typeof globalThis & { __failedReplacement: string[] }
+            ).__failedReplacement.includes("did-stop-loading"),
+          ),
+        )
+        .toBe(true);
+      await expect
+        .poll(() =>
+          aiden.app.evaluate(
+            ({ webContents }, target) => webContents.fromId(target)?.isLoadingMainFrame(),
+            id,
+          ),
+        )
+        .toBe(false);
       // Native terminal navigation recreates a live renderer even when no normal
       // document commits (204), or commits an error page (connection reset).
-      expect(await aiden.app.evaluate(({ webContents }, target) => webContents.fromId(target)?.isCrashed(), id)).toBe(false);
-      const terminalEvents = await aiden.app.evaluate(() => (globalThis as NativeCrashGlobal).__nativeCrashProbe.events());
-      expect(terminalEvents.some((event) => event.event === "did-stop-loading" && !event.crashed && !event.loading && event.osProcessId > 0)).toBe(true);
+      expect(
+        await aiden.app.evaluate(
+          ({ webContents }, target) => webContents.fromId(target)?.isCrashed(),
+          id,
+        ),
+      ).toBe(false);
+      const terminalEvents = await aiden.app.evaluate(() =>
+        (globalThis as NativeCrashGlobal).__nativeCrashProbe.events(),
+      );
+      expect(
+        terminalEvents.some(
+          (event) =>
+            event.event === "did-stop-loading" &&
+            !event.crashed &&
+            !event.loading &&
+            event.osProcessId > 0,
+        ),
+      ).toBe(true);
       if (laterCrash) {
-        expect(await aiden.app.evaluate(({ webContents }, target) => webContents.fromId(target)?.getURL(), id)).toBe(`${url}/original`);
-        await aiden.app.evaluate(() => (globalThis as NativeCrashGlobal).__nativeCrashProbe.crash());
+        expect(
+          await aiden.app.evaluate(
+            ({ webContents }, target) => webContents.fromId(target)?.getURL(),
+            id,
+          ),
+        ).toBe(`${url}/original`);
+        await aiden.app.evaluate(() =>
+          (globalThis as NativeCrashGlobal).__nativeCrashProbe.crash(),
+        );
       } else if (scenario.endsWith("network-error")) {
-        expect(await aiden.app.evaluate(() => (globalThis as typeof globalThis & { __failedReplacement: string[] }).__failedReplacement.includes("did-fail-load"))).toBe(true);
+        expect(
+          await aiden.app.evaluate(() =>
+            (
+              globalThis as typeof globalThis & { __failedReplacement: string[] }
+            ).__failedReplacement.includes("did-fail-load"),
+          ),
+        ).toBe(true);
       }
       if (!scenario.startsWith("queued-before-")) {
-        expect(await aiden.app.evaluate(() => (globalThis as NativeCrashGlobal).__nativeCrashProbe.deliver())).toEqual({ crashed: laterCrash, loading: false, timers: laterCrash ? 1 : 0 });
+        expect(
+          await aiden.app.evaluate(() =>
+            (globalThis as NativeCrashGlobal).__nativeCrashProbe.deliver(),
+          ),
+        ).toEqual({ crashed: laterCrash, loading: false, timers: laterCrash ? 1 : 0 });
       }
-      expect(await aiden.app.evaluate(() => (globalThis as NativeCrashGlobal).__nativeCrashProbe.fire())).toBe(laterCrash ? 1 : 0);
+      expect(
+        await aiden.app.evaluate(() => (globalThis as NativeCrashGlobal).__nativeCrashProbe.fire()),
+      ).toBe(laterCrash ? 1 : 0);
       if (laterCrash) {
         await expect.poll(() => originalRequests === 2 || replacementRequests === 2).toBe(true);
-        expect({ originalRequests, replacementRequests }).toEqual({ originalRequests: 2, replacementRequests: 1 });
-        await expect.poll(() => aiden.app.evaluate(({ webContents }, target) => {
-          const guest = webContents.fromId(target);
-          return guest && { crashed: guest.isCrashed(), url: guest.getURL(), title: guest.getTitle() };
-        }, id)).toEqual({ crashed: false, url: `${url}/original`, title: "Original page" });
+        expect({ originalRequests, replacementRequests }).toEqual({
+          originalRequests: 2,
+          replacementRequests: 1,
+        });
+        await expect
+          .poll(() =>
+            aiden.app.evaluate(({ webContents }, target) => {
+              const guest = webContents.fromId(target);
+              return (
+                guest && {
+                  crashed: guest.isCrashed(),
+                  url: guest.getURL(),
+                  title: guest.getTitle(),
+                }
+              );
+            }, id),
+          )
+          .toEqual({ crashed: false, url: `${url}/original`, title: "Original page" });
       } else expect(originalRequests).toBe(1);
     } finally {
-      await aiden.app.evaluate(() => (globalThis as NativeCrashGlobal).__nativeCrashProbe?.restore());
+      await aiden.app.evaluate(() =>
+        (globalThis as NativeCrashGlobal).__nativeCrashProbe?.restore(),
+      );
       server.closeAllConnections();
       await new Promise<void>((resolve) => server.close(() => resolve()));
     }
@@ -624,7 +966,9 @@ for (const scenario of ["queued-before-abort", "queued-before-network-error", "q
 }
 
 for (const abort of ["timeout", "expired-preview"] as const) {
-  test(`local ${abort} before request callbacks abandons its crash recovery target`, async ({ aiden }) => {
+  test(`local ${abort} before request callbacks abandons its crash recovery target`, async ({
+    aiden,
+  }) => {
     let requests = 0;
     const server = createServer((_request, response) => {
       requests += 1;
@@ -635,21 +979,58 @@ for (const abort of ["timeout", "expired-preview"] as const) {
     try {
       await finishLmStudioOnboarding(aiden.page);
       const opened = await command(aiden.page, { action: "create", url });
-      await expect.poll(() => aiden.app.evaluate(({ webContents }, target) => webContents.getAllWebContents().some((contents) => contents.getURL() === target), url)).toBe(true);
-      const id = await aiden.app.evaluate(({ webContents }, target) => webContents.getAllWebContents().find((contents) => contents.getURL() === target)!.id, url);
-      await expect.poll(() => aiden.app.evaluate(({ webContents }, target) => webContents.fromId(target)?.getTitle(), id)).toBe("Original local-abort document");
+      await expect
+        .poll(() =>
+          aiden.app.evaluate(
+            ({ webContents }, target) =>
+              webContents.getAllWebContents().some((contents) => contents.getURL() === target),
+            url,
+          ),
+        )
+        .toBe(true);
+      const id = await aiden.app.evaluate(
+        ({ webContents }, target) =>
+          webContents.getAllWebContents().find((contents) => contents.getURL() === target)!.id,
+        url,
+      );
+      await expect
+        .poll(() =>
+          aiden.app.evaluate(
+            ({ webContents }, target) => webContents.fromId(target)?.getTitle(),
+            id,
+          ),
+        )
+        .toBe("Original local-abort document");
       await installNativeCrashProbe(aiden, id);
       if (abort === "expired-preview") {
-        await writeFile(path.join(aiden.workspaceDir, "abort-preview.html"), "<!doctype html><title>Expiring preview</title>");
-        const preview = await command(aiden.page, { action: "open_file", path: "abort-preview.html" });
+        await writeFile(
+          path.join(aiden.workspaceDir, "abort-preview.html"),
+          "<!doctype html><title>Expiring preview</title>",
+        );
+        const preview = await command(aiden.page, {
+          action: "open_file",
+          path: "abort-preview.html",
+        });
         const target = preview.state.tabs.find((tab) => tab.id === preview.tabId)!.url;
         await command(aiden.page, { action: "close", tabId: preview.tabId! });
         // Drive the real local preview-admission failure before any request exists.
-        await aiden.app.evaluate(({ webContents }, { id, target }) => {
-          webContents.fromId(id)!.emit("did-start-navigation", {}, target, false, true);
-        }, { id, target });
-        const state = await aiden.page.evaluate((workspaceId) => (window as unknown as BrowserTestWindow).aidenAPI.ipc.invoke<BrowserState>("browser:get-state", workspaceId), E2E_WORKSPACE_ID);
-        expect(state.tabs.find((tab) => tab.id === opened.tabId)?.error).toContain("preview expired");
+        await aiden.app.evaluate(
+          ({ webContents }, { id, target }) => {
+            webContents.fromId(id)!.emit("did-start-navigation", {}, target, false, true);
+          },
+          { id, target },
+        );
+        const state = await aiden.page.evaluate(
+          (workspaceId) =>
+            (window as unknown as BrowserTestWindow).aidenAPI.ipc.invoke<BrowserState>(
+              "browser:get-state",
+              workspaceId,
+            ),
+          E2E_WORKSPACE_ID,
+        );
+        expect(state.tabs.find((tab) => tab.id === opened.tabId)?.error).toContain(
+          "preview expired",
+        );
       } else {
         // Hold native request admission at the documented pre-request boundary.
         // The real command deadline and local stop run without a request-error
@@ -663,29 +1044,49 @@ for (const abort of ["timeout", "expired-preview"] as const) {
             return new Promise<void>(() => {});
           };
         }, id);
-        await expect(command(aiden.page, { action: "navigate", tabId: opened.tabId!, url: `${url}/abandoned`, timeoutMs: 25 })).rejects.toThrow(/Browser action timed out/);
+        await expect(
+          command(aiden.page, {
+            action: "navigate",
+            tabId: opened.tabId!,
+            url: `${url}/abandoned`,
+            timeoutMs: 25,
+          }),
+        ).rejects.toThrow(/Browser action timed out/);
       }
       await aiden.app.evaluate(() => (globalThis as NativeCrashGlobal).__nativeCrashProbe.crash());
-      expect(await aiden.app.evaluate(() => (globalThis as NativeCrashGlobal).__nativeCrashProbe.deliver())).toMatchObject({ crashed: true, timers: 1 });
-      expect(await aiden.app.evaluate(() => (globalThis as NativeCrashGlobal).__nativeCrashProbe.fire())).toBe(1);
-      await expect.poll(() => aiden.app.evaluate(({ webContents }, target) => {
-        const guest = webContents.fromId(target)!;
-        return !guest.isCrashed() && !guest.isLoadingMainFrame() && guest.getURL();
-      }, id)).toBe(url);
+      expect(
+        await aiden.app.evaluate(() =>
+          (globalThis as NativeCrashGlobal).__nativeCrashProbe.deliver(),
+        ),
+      ).toMatchObject({ crashed: true, timers: 1 });
+      expect(
+        await aiden.app.evaluate(() => (globalThis as NativeCrashGlobal).__nativeCrashProbe.fire()),
+      ).toBe(1);
+      await expect
+        .poll(() =>
+          aiden.app.evaluate(({ webContents }, target) => {
+            const guest = webContents.fromId(target)!;
+            return !guest.isCrashed() && !guest.isLoadingMainFrame() && guest.getURL();
+          }, id),
+        )
+        .toBe(url);
       expect(requests).toBeGreaterThanOrEqual(2);
     } finally {
-      await aiden.app.evaluate(() => (globalThis as NativeCrashGlobal).__nativeCrashProbe?.restore());
+      await aiden.app.evaluate(() =>
+        (globalThis as NativeCrashGlobal).__nativeCrashProbe?.restore(),
+      );
       server.closeAllConnections();
       await new Promise<void>((resolve) => server.close(() => resolve()));
     }
   });
 }
 
-
 type NavigationDeadlineGlobal = typeof globalThis & {
   __navigationDeadline: { expire(): void; restore(): void };
 };
-async function holdNavigationDeadline(aiden: { app: import("@playwright/test").ElectronApplication }) {
+async function holdNavigationDeadline(aiden: {
+  app: import("@playwright/test").ElectronApplication;
+}) {
   await aiden.app.evaluate(() => {
     const schedule = globalThis.setTimeout;
     let expire: (() => void) | undefined;
@@ -698,90 +1099,204 @@ async function holdNavigationDeadline(aiden: { app: import("@playwright/test").E
       return handle;
     }) as typeof setTimeout;
     (globalThis as NavigationDeadlineGlobal).__navigationDeadline = {
-      expire() { if (!expire) throw new Error("Command deadline was not installed"); expire(); },
-      restore() { globalThis.setTimeout = schedule; if (handle) clearTimeout(handle); },
+      expire() {
+        if (!expire) throw new Error("Command deadline was not installed");
+        expire();
+      },
+      restore() {
+        globalThis.setTimeout = schedule;
+        if (handle) clearTimeout(handle);
+      },
     };
   });
 }
 
-for (const replacement of ["different-URL renderer", "same-URL renderer", "same-URL popup", "same-URL user"] as const) {
+for (const replacement of [
+  "different-URL renderer",
+  "same-URL renderer",
+  "same-URL popup",
+  "same-URL user",
+] as const) {
   test(`delayed command start cannot stop a newer ${replacement} navigation`, async ({ aiden }) => {
     let heldRequests = 0;
     const server = createServer((request, response) => {
       if (request.url === "/held" && ++heldRequests === 1) return;
-      response.end(`<!doctype html><title>${request.url === "/held" ? "Recovered newer target" : "Original document"}</title>`);
+      response.end(
+        `<!doctype html><title>${request.url === "/held" ? "Recovered newer target" : "Original document"}</title>`,
+      );
     });
     await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
     const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
     try {
       await finishLmStudioOnboarding(aiden.page);
       const opened = await command(aiden.page, { action: "create", url: `${base}/original` });
-      await expect.poll(() => aiden.app.evaluate(({ webContents }, url) => webContents.getAllWebContents().some((guest) => guest.getURL() === url && guest.getTitle() === "Original document"), `${base}/original`)).toBe(true);
-      const id = await aiden.app.evaluate(({ webContents }, url) => webContents.getAllWebContents().find((guest) => guest.getURL() === url)!.id, `${base}/original`);
+      await expect
+        .poll(() =>
+          aiden.app.evaluate(
+            ({ webContents }, url) =>
+              webContents
+                .getAllWebContents()
+                .some(
+                  (guest) => guest.getURL() === url && guest.getTitle() === "Original document",
+                ),
+            `${base}/original`,
+          ),
+        )
+        .toBe(true);
+      const id = await aiden.app.evaluate(
+        ({ webContents }, url) =>
+          webContents.getAllWebContents().find((guest) => guest.getURL() === url)!.id,
+        `${base}/original`,
+      );
       // The stubbed loadURL below creates no pending request, which Chromium would
       // count as loading. A stop still due from the original document would then
       // read as the command's own navigation ending, so let that document stop first.
-      await expect.poll(() => aiden.app.evaluate(({ webContents }, id) => webContents.fromId(id)!.isLoading(), id)).toBe(false);
+      await expect
+        .poll(() =>
+          aiden.app.evaluate(({ webContents }, id) => webContents.fromId(id)!.isLoading(), id),
+        )
+        .toBe(false);
       await installNativeCrashProbe(aiden, id);
       await holdNavigationDeadline(aiden);
-      await aiden.app.evaluate(({ webContents }, { id, target, replacement }) => {
-        const guest = webContents.fromId(id)!;
-        const loadURL = guest.loadURL;
-        const stop = guest.stop;
-        const probe = { started: false, stops: 0, restore: () => { guest.stop = stop; } };
-        (globalThis as typeof globalThis & { __navigationAbortProbe: typeof probe }).__navigationAbortProbe = probe;
-        guest.stop = () => { probe.stops += 1; stop.call(guest); };
-        // The command has no native start yet. A later independent native load
-        // starts first, while the original command's deadline remains pending.
-        guest.loadURL = () => {
-          guest.loadURL = loadURL;
-          probe.started = true;
-          if (replacement !== "same-URL user") setImmediate(() => {
-            const expression = replacement === "same-URL popup"
-              ? `(() => { const a = document.createElement('a'); a.href = ${JSON.stringify(target)}; a.target = '_blank'; document.body.append(a); a.click(); })()`
-              : `location.assign(${JSON.stringify(target)})`;
-            void guest.executeJavaScript(expression, true).catch(() => {});
-          });
-          return new Promise<void>(() => {});
-        };
-      }, { id, target: `${base}/held`, replacement });
-      const older = expect(command(aiden.page, { action: "navigate", tabId: opened.tabId!, url: `${base}/${replacement.startsWith("same-URL") ? "held" : "older"}`, timeoutMs: 12345 })).rejects.toThrow(replacement === "same-URL user" ? /interrupted/ : /Browser action timed out/);
+      await aiden.app.evaluate(
+        ({ webContents }, { id, target, replacement }) => {
+          const guest = webContents.fromId(id)!;
+          const loadURL = guest.loadURL;
+          const stop = guest.stop;
+          const probe = {
+            started: false,
+            stops: 0,
+            restore: () => {
+              guest.stop = stop;
+            },
+          };
+          (
+            globalThis as typeof globalThis & { __navigationAbortProbe: typeof probe }
+          ).__navigationAbortProbe = probe;
+          guest.stop = () => {
+            probe.stops += 1;
+            stop.call(guest);
+          };
+          // The command has no native start yet. A later independent native load
+          // starts first, while the original command's deadline remains pending.
+          guest.loadURL = () => {
+            guest.loadURL = loadURL;
+            probe.started = true;
+            if (replacement !== "same-URL user")
+              setImmediate(() => {
+                const expression =
+                  replacement === "same-URL popup"
+                    ? `(() => { const a = document.createElement('a'); a.href = ${JSON.stringify(target)}; a.target = '_blank'; document.body.append(a); a.click(); })()`
+                    : `location.assign(${JSON.stringify(target)})`;
+                void guest.executeJavaScript(expression, true).catch(() => {});
+              });
+            return new Promise<void>(() => {});
+          };
+        },
+        { id, target: `${base}/held`, replacement },
+      );
+      const older = expect(
+        command(aiden.page, {
+          action: "navigate",
+          tabId: opened.tabId!,
+          url: `${base}/${replacement.startsWith("same-URL") ? "held" : "older"}`,
+          timeoutMs: 12345,
+        }),
+      ).rejects.toThrow(
+        replacement === "same-URL user" ? /interrupted/ : /Browser action timed out/,
+      );
       if (replacement === "same-URL user") {
-        await expect.poll(() => aiden.app.evaluate(() => (globalThis as typeof globalThis & { __navigationAbortProbe: { started: boolean } }).__navigationAbortProbe.started)).toBe(true);
-        await command(aiden.page, { action: "navigate", tabId: opened.tabId!, url: `${base}/held`, readiness: "none" });
+        await expect
+          .poll(() =>
+            aiden.app.evaluate(
+              () =>
+                (globalThis as typeof globalThis & { __navigationAbortProbe: { started: boolean } })
+                  .__navigationAbortProbe.started,
+            ),
+          )
+          .toBe(true);
+        await command(aiden.page, {
+          action: "navigate",
+          tabId: opened.tabId!,
+          url: `${base}/held`,
+          readiness: "none",
+        });
         await expect.poll(() => heldRequests).toBe(1);
       }
       if (replacement !== "same-URL user") {
         await expect.poll(() => heldRequests).toBe(1);
-        await aiden.app.evaluate(() => (globalThis as NavigationDeadlineGlobal).__navigationDeadline.expire());
+        await aiden.app.evaluate(() =>
+          (globalThis as NavigationDeadlineGlobal).__navigationDeadline.expire(),
+        );
       }
       await older;
       expect(heldRequests).toBe(1);
-      expect(await aiden.app.evaluate(() => (globalThis as typeof globalThis & { __navigationAbortProbe: { stops: number } }).__navigationAbortProbe.stops)).toBe(0);
+      expect(
+        await aiden.app.evaluate(
+          () =>
+            (globalThis as typeof globalThis & { __navigationAbortProbe: { stops: number } })
+              .__navigationAbortProbe.stops,
+        ),
+      ).toBe(0);
       // For same-URL popup, window.open creates a new tab, so the original tab's loading and
       // recovery behavior differ from the other variants which load in the same tab.
       if (replacement !== "same-URL popup") {
-        expect(await aiden.app.evaluate(({ webContents }, id) => webContents.fromId(id)!.isLoadingMainFrame(), id)).toBe(true);
-        await aiden.app.evaluate(() => (globalThis as NativeCrashGlobal).__nativeCrashProbe.crash());
-        expect(await aiden.app.evaluate(() => (globalThis as NativeCrashGlobal).__nativeCrashProbe.deliver())).toMatchObject({ crashed: true, timers: 1 });
-        expect(await aiden.app.evaluate(() => (globalThis as NativeCrashGlobal).__nativeCrashProbe.fire())).toBe(1);
-        await expect.poll(() => aiden.app.evaluate(({ webContents }, id) => webContents.fromId(id)!.getTitle(), id)).toBe("Recovered newer target");
+        expect(
+          await aiden.app.evaluate(
+            ({ webContents }, id) => webContents.fromId(id)!.isLoadingMainFrame(),
+            id,
+          ),
+        ).toBe(true);
+        await aiden.app.evaluate(() =>
+          (globalThis as NativeCrashGlobal).__nativeCrashProbe.crash(),
+        );
+        expect(
+          await aiden.app.evaluate(() =>
+            (globalThis as NativeCrashGlobal).__nativeCrashProbe.deliver(),
+          ),
+        ).toMatchObject({ crashed: true, timers: 1 });
+        expect(
+          await aiden.app.evaluate(() =>
+            (globalThis as NativeCrashGlobal).__nativeCrashProbe.fire(),
+          ),
+        ).toBe(1);
+        await expect
+          .poll(() =>
+            aiden.app.evaluate(({ webContents }, id) => webContents.fromId(id)!.getTitle(), id),
+          )
+          .toBe("Recovered newer target");
         expect(heldRequests).toBe(2);
       } else {
         // For same-URL popup, the original tab is not affected by the window.open, so it
         // retains its original document and never recovers to "Recovered newer target".
         // The new tab created by window.open loads "/held" but is a separate tab.
-        await aiden.app.evaluate(() => (globalThis as NativeCrashGlobal).__nativeCrashProbe.crash());
-        expect(await aiden.app.evaluate(() => (globalThis as NativeCrashGlobal).__nativeCrashProbe.deliver())).toMatchObject({ crashed: true, timers: 1 });
-        expect(await aiden.app.evaluate(() => (globalThis as NativeCrashGlobal).__nativeCrashProbe.fire())).toBe(1);
+        await aiden.app.evaluate(() =>
+          (globalThis as NativeCrashGlobal).__nativeCrashProbe.crash(),
+        );
+        expect(
+          await aiden.app.evaluate(() =>
+            (globalThis as NativeCrashGlobal).__nativeCrashProbe.deliver(),
+          ),
+        ).toMatchObject({ crashed: true, timers: 1 });
+        expect(
+          await aiden.app.evaluate(() =>
+            (globalThis as NativeCrashGlobal).__nativeCrashProbe.fire(),
+          ),
+        ).toBe(1);
         // After crash, the original tab recovers to "Original document", not the newer target
-        await expect.poll(() => aiden.app.evaluate(({ webContents }, id) => webContents.fromId(id)!.getTitle(), id)).toBe("Original document");
+        await expect
+          .poll(() =>
+            aiden.app.evaluate(({ webContents }, id) => webContents.fromId(id)!.getTitle(), id),
+          )
+          .toBe("Original document");
         expect(heldRequests).toBe(1); // Still no new requests to "/held" on the original tab
       }
     } finally {
       await aiden.app.evaluate(() => {
         (globalThis as NavigationDeadlineGlobal).__navigationDeadline?.restore();
-        (globalThis as typeof globalThis & { __navigationAbortProbe?: { restore(): void } }).__navigationAbortProbe?.restore();
+        (
+          globalThis as typeof globalThis & { __navigationAbortProbe?: { restore(): void } }
+        ).__navigationAbortProbe?.restore();
         (globalThis as NativeCrashGlobal).__nativeCrashProbe?.restore();
       });
       server.closeAllConnections();
@@ -791,7 +1306,9 @@ for (const replacement of ["different-URL renderer", "same-URL renderer", "same-
 }
 
 for (const navigation of ["direct", "redirect", "beforeunload"] as const) {
-  test(`owned ${navigation} native navigation timeout still stops and retires its target`, async ({ aiden }) => {
+  test(`owned ${navigation} native navigation timeout still stops and retires its target`, async ({
+    aiden,
+  }) => {
     let originalRequests = 0;
     let heldRequests = 0;
     const server = createServer((request, response) => {
@@ -802,20 +1319,45 @@ for (const navigation of ["direct", "redirect", "beforeunload"] as const) {
       else if (request.url === "/original") {
         originalRequests += 1;
         response.end("<!doctype html><title>Original owned-timeout document</title>");
-      } else { response.writeHead(404); response.end(); }
+      } else {
+        response.writeHead(404);
+        response.end();
+      }
     });
     await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
     const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
     try {
       await finishLmStudioOnboarding(aiden.page);
       const opened = await command(aiden.page, { action: "create", url: `${base}/original` });
-      await expect.poll(() => aiden.app.evaluate(({ webContents }, url) => webContents.getAllWebContents().some((guest) => guest.getURL() === url && guest.getTitle() === "Original owned-timeout document"), `${base}/original`)).toBe(true);
-      const id = await aiden.app.evaluate(({ webContents }, url) => webContents.getAllWebContents().find((guest) => guest.getURL() === url)!.id, `${base}/original`);
+      await expect
+        .poll(() =>
+          aiden.app.evaluate(
+            ({ webContents }, url) =>
+              webContents
+                .getAllWebContents()
+                .some(
+                  (guest) =>
+                    guest.getURL() === url &&
+                    guest.getTitle() === "Original owned-timeout document",
+                ),
+            `${base}/original`,
+          ),
+        )
+        .toBe(true);
+      const id = await aiden.app.evaluate(
+        ({ webContents }, url) =>
+          webContents.getAllWebContents().find((guest) => guest.getURL() === url)!.id,
+        `${base}/original`,
+      );
       await installNativeCrashProbe(aiden, id);
       await holdNavigationDeadline(aiden);
       if (navigation === "beforeunload") {
         await aiden.app.evaluate(async ({ webContents }, id) => {
-          await webContents.fromId(id)!.executeJavaScript("addEventListener('beforeunload', () => { const end = Date.now() + 100; while (Date.now() < end) {} })");
+          await webContents
+            .fromId(id)!
+            .executeJavaScript(
+              "addEventListener('beforeunload', () => { const end = Date.now() + 100; while (Date.now() < end) {} })",
+            );
         }, id);
       }
       await aiden.app.evaluate(({ webContents }, id) => {
@@ -823,12 +1365,22 @@ for (const navigation of ["direct", "redirect", "beforeunload"] as const) {
         const loadURL = guest.loadURL;
         const stop = guest.stop;
         let inLoadURL = false;
-        const probe = { startsInsideCall: 0, startsAfterCall: 0, stops: 0, restore: () => {
-          guest.stop = stop;
-          guest.loadURL = loadURL;
-          guest.removeListener("did-start-navigation", observe);
-        } };
-        const observe = (_event: unknown, _url: string, sameDocument: boolean, mainFrame: boolean) => {
+        const probe = {
+          startsInsideCall: 0,
+          startsAfterCall: 0,
+          stops: 0,
+          restore: () => {
+            guest.stop = stop;
+            guest.loadURL = loadURL;
+            guest.removeListener("did-start-navigation", observe);
+          },
+        };
+        const observe = (
+          _event: unknown,
+          _url: string,
+          sameDocument: boolean,
+          mainFrame: boolean,
+        ) => {
           if (mainFrame && !sameDocument) {
             if (inLoadURL) probe.startsInsideCall += 1;
             else probe.startsAfterCall += 1;
@@ -837,43 +1389,103 @@ for (const navigation of ["direct", "redirect", "beforeunload"] as const) {
         guest.on("did-start-navigation", observe);
         guest.loadURL = (...args) => {
           inLoadURL = true;
-          try { return loadURL.apply(guest, args); }
-          finally { inLoadURL = false; }
+          try {
+            return loadURL.apply(guest, args);
+          } finally {
+            inLoadURL = false;
+          }
         };
-        guest.stop = () => { probe.stops += 1; stop.call(guest); };
-        (globalThis as typeof globalThis & { __ownedTimeoutProbe: typeof probe }).__ownedTimeoutProbe = probe;
+        guest.stop = () => {
+          probe.stops += 1;
+          stop.call(guest);
+        };
+        (
+          globalThis as typeof globalThis & { __ownedTimeoutProbe: typeof probe }
+        ).__ownedTimeoutProbe = probe;
       }, id);
-      const expired = expect(command(aiden.page, { action: "navigate", tabId: opened.tabId!, url: `${base}/${navigation === "redirect" ? "redirect" : "held"}`, timeoutMs: 12345 })).rejects.toThrow(/Browser action timed out/);
+      const expired = expect(
+        command(aiden.page, {
+          action: "navigate",
+          tabId: opened.tabId!,
+          url: `${base}/${navigation === "redirect" ? "redirect" : "held"}`,
+          timeoutMs: 12345,
+        }),
+      ).rejects.toThrow(/Browser action timed out/);
       await expect.poll(() => heldRequests).toBe(1);
       if (navigation === "direct") {
         // A rejected renderer intent never replaces the active native load.
-        expect(await aiden.app.evaluate(({ webContents }, id) => {
-          let prevented = false;
-          webContents.fromId(id)!.emit("will-navigate", { preventDefault() { prevented = true; } }, "file:///blocked-navigation");
-          return prevented;
-        }, id)).toBe(true);
+        expect(
+          await aiden.app.evaluate(({ webContents }, id) => {
+            let prevented = false;
+            webContents.fromId(id)!.emit(
+              "will-navigate",
+              {
+                preventDefault() {
+                  prevented = true;
+                },
+              },
+              "file:///blocked-navigation",
+            );
+            return prevented;
+          }, id),
+        ).toBe(true);
       }
-      await aiden.app.evaluate(() => (globalThis as NavigationDeadlineGlobal).__navigationDeadline.expire());
+      await aiden.app.evaluate(() =>
+        (globalThis as NavigationDeadlineGlobal).__navigationDeadline.expire(),
+      );
       await expired;
-      expect(await aiden.app.evaluate(() => {
-        const p = (globalThis as typeof globalThis & { __ownedTimeoutProbe: { startsInsideCall: number; startsAfterCall: number; stops: number } }).__ownedTimeoutProbe;
-        return { startsInsideCall: p.startsInsideCall, startsAfterCall: p.startsAfterCall, stops: p.stops };
-      })).toEqual({ startsInsideCall: 0, startsAfterCall: 1, stops: 1 });
+      expect(
+        await aiden.app.evaluate(() => {
+          const p = (
+            globalThis as typeof globalThis & {
+              __ownedTimeoutProbe: {
+                startsInsideCall: number;
+                startsAfterCall: number;
+                stops: number;
+              };
+            }
+          ).__ownedTimeoutProbe;
+          return {
+            startsInsideCall: p.startsInsideCall,
+            startsAfterCall: p.startsAfterCall,
+            stops: p.stops,
+          };
+        }),
+      ).toEqual({ startsInsideCall: 0, startsAfterCall: 1, stops: 1 });
       expect(heldRequests).toBe(1);
-      await expect.poll(() => aiden.app.evaluate(({ webContents }, id) => webContents.fromId(id)!.isLoadingMainFrame(), id)).toBe(false);
+      await expect
+        .poll(() =>
+          aiden.app.evaluate(
+            ({ webContents }, id) => webContents.fromId(id)!.isLoadingMainFrame(),
+            id,
+          ),
+        )
+        .toBe(false);
       await aiden.app.evaluate(() => (globalThis as NativeCrashGlobal).__nativeCrashProbe.crash());
-      expect(await aiden.app.evaluate(() => (globalThis as NativeCrashGlobal).__nativeCrashProbe.deliver())).toMatchObject({ crashed: true, timers: 1 });
-      expect(await aiden.app.evaluate(() => (globalThis as NativeCrashGlobal).__nativeCrashProbe.fire())).toBe(1);
-      await expect.poll(() => aiden.app.evaluate(({ webContents }, id) => {
-        const guest = webContents.fromId(id)!;
-        return !guest.isCrashed() && !guest.isLoadingMainFrame() && guest.getURL();
-      }, id)).toBe(`${base}/original`);
+      expect(
+        await aiden.app.evaluate(() =>
+          (globalThis as NativeCrashGlobal).__nativeCrashProbe.deliver(),
+        ),
+      ).toMatchObject({ crashed: true, timers: 1 });
+      expect(
+        await aiden.app.evaluate(() => (globalThis as NativeCrashGlobal).__nativeCrashProbe.fire()),
+      ).toBe(1);
+      await expect
+        .poll(() =>
+          aiden.app.evaluate(({ webContents }, id) => {
+            const guest = webContents.fromId(id)!;
+            return !guest.isCrashed() && !guest.isLoadingMainFrame() && guest.getURL();
+          }, id),
+        )
+        .toBe(`${base}/original`);
       expect(originalRequests).toBe(2);
       expect(heldRequests).toBe(1);
     } finally {
       await aiden.app.evaluate(() => {
         (globalThis as NavigationDeadlineGlobal).__navigationDeadline?.restore();
-        (globalThis as typeof globalThis & { __ownedTimeoutProbe?: { restore(): void } }).__ownedTimeoutProbe?.restore();
+        (
+          globalThis as typeof globalThis & { __ownedTimeoutProbe?: { restore(): void } }
+        ).__ownedTimeoutProbe?.restore();
         (globalThis as NativeCrashGlobal).__nativeCrashProbe?.restore();
       });
       server.closeAllConnections();
@@ -882,8 +1494,9 @@ for (const navigation of ["direct", "redirect", "beforeunload"] as const) {
   });
 }
 
-
-test("incognito cycles reuse the native session after clearing private site data", async ({ aiden }) => {
+test("incognito cycles reuse the native session after clearing private site data", async ({
+  aiden,
+}) => {
   await finishLmStudioOnboarding(aiden.page);
   const server = createServer((_request, response) => {
     response.writeHead(200, { "Content-Type": "text/html" });
@@ -895,69 +1508,118 @@ test("incognito cycles reuse the native session after clearing private site data
     for (let cycle = 0; cycle < 3; cycle++) {
       const opened = await command(aiden.page, { action: "create", url, profileId: "incognito" });
       const tabId = opened.tabId!;
-      await expect.poll(async () => {
-        const state = await aiden.page.evaluate((id) =>
-          (window as unknown as BrowserTestWindow).aidenAPI.ipc.invoke<BrowserState>("browser:get-state", id),
-        E2E_WORKSPACE_ID);
-        return state.tabs.find((tab) => tab.id === tabId)?.title;
-      }).toBe("Private lifecycle fixture");
+      await expect
+        .poll(async () => {
+          const state = await aiden.page.evaluate(
+            (id) =>
+              (window as unknown as BrowserTestWindow).aidenAPI.ipc.invoke<BrowserState>(
+                "browser:get-state",
+                id,
+              ),
+            E2E_WORKSPACE_ID,
+          );
+          return state.tabs.find((tab) => tab.id === tabId)?.title;
+        })
+        .toBe("Private lifecycle fixture");
       const sameSession = await aiden.app.evaluate(({ webContents }, url) => {
-        const current = webContents.getAllWebContents().find((contents) => contents.getURL() === url)!;
-        const state = globalThis as typeof globalThis & { privateLifecycleSession?: typeof current.session };
+        const current = webContents
+          .getAllWebContents()
+          .find((contents) => contents.getURL() === url)!;
+        const state = globalThis as typeof globalThis & {
+          privateLifecycleSession?: typeof current.session;
+        };
         state.privateLifecycleSession ??= current.session;
         return state.privateLifecycleSession === current.session;
       }, url);
       expect(sameSession).toBe(true);
-      expect((await command(aiden.page, { action: "evaluate", tabId,
-        expression: "({cookie:document.cookie, saved:localStorage.getItem('private')})",
-      })).value).toEqual({ cookie: "", saved: null });
-      await command(aiden.page, { action: "evaluate", tabId,
-        expression: "document.cookie='private=secret; path=/'; localStorage.setItem('private','secret')",
+      expect(
+        (
+          await command(aiden.page, {
+            action: "evaluate",
+            tabId,
+            expression: "({cookie:document.cookie, saved:localStorage.getItem('private')})",
+          })
+        ).value,
+      ).toEqual({ cookie: "", saved: null });
+      await command(aiden.page, {
+        action: "evaluate",
+        tabId,
+        expression:
+          "document.cookie='private=secret; path=/'; localStorage.setItem('private','secret')",
       });
       await command(aiden.page, { action: "close", tabId });
     }
   } finally {
     await aiden.app.evaluate(() => {
-      delete (globalThis as typeof globalThis & { privateLifecycleSession?: unknown }).privateLifecycleSession;
+      delete (globalThis as typeof globalThis & { privateLifecycleSession?: unknown })
+        .privateLifecycleSession;
     });
-    await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+    await new Promise<void>((resolve, reject) =>
+      server.close((error) => (error ? reject(error) : resolve())),
+    );
   }
 });
 
-test("a physical click during the person's pending navigation does not interrupt it", async ({ aiden }) => {
+test("a physical click during the person's pending navigation does not interrupt it", async ({
+  aiden,
+}) => {
   await finishLmStudioOnboarding(aiden.page);
   let received!: () => void;
-  const requested = new Promise<void>((resolve) => { received = resolve; });
+  const requested = new Promise<void>((resolve) => {
+    received = resolve;
+  });
   let finish: (() => void) | undefined;
   const server = createServer((request, response) => {
     const send = () => {
       response.writeHead(200, { "Content-Type": "text/html" });
-      response.end(`<!doctype html><title>${request.url === "/held" ? "Navigation finished" : "Navigation start"}</title>`);
+      response.end(
+        `<!doctype html><title>${request.url === "/held" ? "Navigation finished" : "Navigation start"}</title>`,
+      );
     };
-    if (request.url === "/held") { finish = () => { finish = undefined; send(); }; received(); }
-    else send();
+    if (request.url === "/held") {
+      finish = () => {
+        finish = undefined;
+        send();
+      };
+      received();
+    } else send();
   });
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
   const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
   try {
     const opened = await command(aiden.page, { action: "create", url: `${base}/start` });
     const tabId = opened.tabId!;
-    await expect.poll(() => aiden.app.evaluate(({ webContents }, url) =>
-      webContents.getAllWebContents().some((contents) => contents.getURL() === url), `${base}/start`)).toBe(true);
-    const navigation = command(aiden.page, { action: "navigate", tabId, url: `${base}/held` })
-      .then(() => "finished", (error: unknown) => String(error));
+    await expect
+      .poll(() =>
+        aiden.app.evaluate(
+          ({ webContents }, url) =>
+            webContents.getAllWebContents().some((contents) => contents.getURL() === url),
+          `${base}/start`,
+        ),
+      )
+      .toBe(true);
+    const navigation = command(aiden.page, { action: "navigate", tabId, url: `${base}/held` }).then(
+      () => "finished",
+      (error: unknown) => String(error),
+    );
     await requested;
     await aiden.app.evaluate(({ webContents }, url) => {
-      const contents = webContents.getAllWebContents().find((contents) => contents.getURL() === url)!;
+      const contents = webContents
+        .getAllWebContents()
+        .find((contents) => contents.getURL() === url)!;
       // Deliver an unmatched physical mouse event through BrowserService's real listener.
       contents.emit("before-mouse-event", {}, { type: "mouseDown", button: "left" });
     }, `${base}/start`);
     finish!();
     expect(await navigation).toBe("finished");
-    expect((await command(aiden.page, { action: "evaluate", tabId, expression: "document.title" })).value)
-      .toBe("Navigation finished");
+    expect(
+      (await command(aiden.page, { action: "evaluate", tabId, expression: "document.title" }))
+        .value,
+    ).toBe("Navigation finished");
   } finally {
     finish?.();
-    await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+    await new Promise<void>((resolve, reject) =>
+      server.close((error) => (error ? reject(error) : resolve())),
+    );
   }
 });

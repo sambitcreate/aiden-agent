@@ -4,10 +4,7 @@ import {
   createSubagentRunStoreDispatcher,
   type SubagentRunStoreSelection,
 } from "./subagent-run-store-dispatcher.js";
-import {
-  createSubagentRunStoreV2,
-  type SubagentRunStoreV2,
-} from "./subagent-run-store-v2-core.js";
+import { createSubagentRunStoreV2, type SubagentRunStoreV2 } from "./subagent-run-store-v2-core.js";
 import {
   migrateSubagentRunStoreV2,
   readSubagentRunStoreV1CheckpointV2,
@@ -42,15 +39,10 @@ export function productionSubagentRunStoreSelection(
  * reads share the exact same directories used by startup, projector writes,
  * history reads, deletion recovery, and shutdown flushing.
  */
-export function createProductionSubagentRunStore(
-  options: ProductionSubagentRunStoreOptions,
-) {
+export function createProductionSubagentRunStore(options: ProductionSubagentRunStoreOptions) {
   const selection = productionSubagentRunStoreSelection(options.environment);
-  const storageFactory =
-    options.storageFactory ?? createNativeSubagentRunStoreStorage;
-  let directoriesPromise:
-    | Promise<{ userData: string; v1: string; v2: string }>
-    | undefined;
+  const storageFactory = options.storageFactory ?? createNativeSubagentRunStoreStorage;
+  let directoriesPromise: Promise<{ userData: string; v1: string; v2: string }> | undefined;
 
   async function directories() {
     directoriesPromise ??= options.resolveUserDataDirectory().then((userData) => {
@@ -70,13 +62,10 @@ export function createProductionSubagentRunStore(
     storageFactory,
     now: options.now,
   });
-  const v2: SubagentRunStoreV2 = createSubagentRunStoreV2(
-    async () => (await directories()).v2,
-    {
-      storageFactory,
-      now: options.now,
-    },
-  );
+  const v2: SubagentRunStoreV2 = createSubagentRunStoreV2(async () => (await directories()).v2, {
+    storageFactory,
+    now: options.now,
+  });
 
   async function withRawStores<T>(
     operation: (
@@ -102,7 +91,9 @@ export function createProductionSubagentRunStore(
     projection: "native",
     v1,
     v2,
-    ...(options.deleteChatTranscripts ? { deleteChatTranscripts: options.deleteChatTranscripts } : {}),
+    ...(options.deleteChatTranscripts
+      ? { deleteChatTranscripts: options.deleteChatTranscripts }
+      : {}),
     ...(selection === "v2"
       ? {
           prepareV2: () =>
@@ -111,8 +102,7 @@ export function createProductionSubagentRunStore(
             ).then(() => undefined),
           checkpointV1Mutation: () =>
             withRawStores(async (v1Storage) => {
-              const checkpoint =
-                await readSubagentRunStoreV1CheckpointV2(v1Storage);
+              const checkpoint = await readSubagentRunStoreV1CheckpointV2(v1Storage);
               await v2.updateV1Checkpoint(checkpoint);
             }),
         }
@@ -122,6 +112,4 @@ export function createProductionSubagentRunStore(
   return dispatcher;
 }
 
-export type ProductionSubagentRunStore = ReturnType<
-  typeof createProductionSubagentRunStore
->;
+export type ProductionSubagentRunStore = ReturnType<typeof createProductionSubagentRunStore>;

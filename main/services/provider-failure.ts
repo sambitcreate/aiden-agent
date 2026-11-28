@@ -30,8 +30,7 @@ const QUOTA =
   /(?:insufficient[_ -]?quota|quota (?:exceeded|exhausted)|billing (?:limit|issue|required)|credit(?:s)? (?:exhausted|balance))/iu;
 const RATE_LIMIT =
   /(?:\b429\b|rate[_ -]?limit|usage[_ ]limit|too many requests|requests? per (?:minute|second|day))/iu;
-const TIMEOUT =
-  /(?:\bETIMEDOUT\b|timed? out|timeout|deadline[_ -]?exceeded|headers timeout)/iu;
+const TIMEOUT = /(?:\bETIMEDOUT\b|timed? out|timeout|deadline[_ -]?exceeded|headers timeout)/iu;
 const SERVICE_UNAVAILABLE =
   /(?:\b50[0234]\b|service unavailable|temporarily unavailable|bad gateway|gateway timeout|overloaded)/iu;
 const MODEL_UNAVAILABLE =
@@ -43,9 +42,7 @@ const CONTEXT_WINDOW =
 const INVALID_REQUEST =
   /(?:\b400\b|invalid[_ -]?request|malformed request|unprocessable (?:request|entity)|unsupported parameter)/iu;
 
-function requestFailureCategory(
-  message: string,
-): ProviderFailureV1["category"] {
+function requestFailureCategory(message: string): ProviderFailureV1["category"] {
   // More specific provider categories must win over their common HTTP status.
   if (AUTHENTICATION.test(message)) return "authentication";
   if (QUOTA.test(message)) return "quota";
@@ -63,8 +60,10 @@ function networkTransportCause(message: string): string {
   if (/\b(?:EAI_AGAIN|ENOTFOUND)\b|\bgetaddrinfo\b/iu.test(message)) return "dns";
   if (/\bECONNRESET\b|connection reset/iu.test(message)) return "connection-reset";
   if (/\bECONNREFUSED\b|connection refused/iu.test(message)) return "connection-refused";
-  if (/websocket[_ -]?(?:closed|error|connection[_ -]?limit[_ -]?reached)/iu.test(message)) return "websocket-closed";
-  if (/socket.{0,30}closed|socket hang up|other side closed/iu.test(message)) return "socket-closed";
+  if (/websocket[_ -]?(?:closed|error|connection[_ -]?limit[_ -]?reached)/iu.test(message))
+    return "websocket-closed";
+  if (/socket.{0,30}closed|socket hang up|other side closed/iu.test(message))
+    return "socket-closed";
   if (/\bfetch failed\b/iu.test(message)) return "fetch-failed";
   if (/\bconnection error\b/iu.test(message)) return "connection-error";
   return "network-unknown";
@@ -79,21 +78,16 @@ export function providerFailureFromTerminalOutcome(
   outcome: ProviderFailedTerminalOutcome,
 ): ProviderFailureV1 {
   const attempts = Number.isSafeInteger(outcome.attempts)
-    ? Math.min(
-        MAX_PROVIDER_FAILURE_ATTEMPTS,
-        Math.max(0, outcome.attempts),
-      )
+    ? Math.min(MAX_PROVIDER_FAILURE_ATTEMPTS, Math.max(0, outcome.attempts))
     : 0;
   const category: ProviderFailureV1["category"] =
     outcome.reason === "context-overflow"
       ? "context_window"
       : outcome.reason === "compaction-failed"
         ? "context_management"
-        : outcome.reason === "output-limit" ||
-            outcome.finalMessage?.stopReason === "length"
+        : outcome.reason === "output-limit" || outcome.finalMessage?.stopReason === "length"
           ? "output_limit"
-          : outcome.reason === "interrupted" ||
-              outcome.finalMessage?.stopReason === "aborted"
+          : outcome.reason === "interrupted" || outcome.finalMessage?.stopReason === "aborted"
             ? "interrupted"
             : requestFailureCategory(outcome.finalMessage?.errorMessage ?? "");
   return {
@@ -105,9 +99,9 @@ export function providerFailureFromTerminalOutcome(
 }
 
 /** Convenient append payload for the foreground persistence adapter. */
-export function providerFailureChatMetadata(
-  outcome: ProviderFailedTerminalOutcome,
-): { providerFailure: ProviderFailureV1 } {
+export function providerFailureChatMetadata(outcome: ProviderFailedTerminalOutcome): {
+  providerFailure: ProviderFailureV1;
+} {
   return { providerFailure: providerFailureFromTerminalOutcome(outcome) };
 }
 
@@ -117,17 +111,26 @@ export function providerFailureDiagnosticFields(
 ): DiagnosticSafeFields {
   const failure = providerFailureFromTerminalOutcome(outcome);
   const message = outcome.finalMessage?.errorMessage;
-  const providerCategory = failure.category === "invalid_request" &&
-    typeof message === "string" && MODEL_UNAVAILABLE.test(message)
-    ? "model_unavailable" : failure.category;
-  const failurePhase = outcome.reason === "compaction-failed" ? "provider-compaction" : "provider-request";
+  const providerCategory =
+    failure.category === "invalid_request" &&
+    typeof message === "string" &&
+    MODEL_UNAVAILABLE.test(message)
+      ? "model_unavailable"
+      : failure.category;
+  const failurePhase =
+    outcome.reason === "compaction-failed" ? "provider-compaction" : "provider-request";
   // Fingerprint only closed metadata, never low-entropy provider/request text.
   return {
     providerCategory,
     failurePhase,
     attempts: failure.attempts,
-    ...(failure.category === "network" ? { transportCause: networkTransportCause(message ?? "") } : {}),
-    fingerprint: createHash("sha256").update(`${failurePhase}:${providerCategory}`).digest("hex").slice(0, 16),
+    ...(failure.category === "network"
+      ? { transportCause: networkTransportCause(message ?? "") }
+      : {}),
+    fingerprint: createHash("sha256")
+      .update(`${failurePhase}:${providerCategory}`)
+      .digest("hex")
+      .slice(0, 16),
   };
 }
 
@@ -140,9 +143,7 @@ const CLOSED_NON_PROVIDER_ERRORS = new Set([
  * Recover the safe part of a pre-V1 persisted Pi terminal. Legacy payloads did
  * not retain the outer attempt count, so zero explicitly means unavailable.
  */
-export function providerFailureFromLegacyPiMessage(
-  value: unknown,
-): ProviderFailureV1 | undefined {
+export function providerFailureFromLegacyPiMessage(value: unknown): ProviderFailureV1 | undefined {
   if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
   const candidate = value as Record<string, unknown>;
   if (candidate.role !== "assistant") return undefined;

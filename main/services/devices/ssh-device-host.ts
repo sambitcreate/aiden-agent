@@ -21,8 +21,15 @@
  */
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
-import type { SshDeviceHostConfig, DeviceToolVersions, DeviceHostPlatformCheck } from "../../../renderer/shared/device-ssh-hosts.js";
-import { deviceToolInstallMessage, parseDeviceToolVersions } from "../../../renderer/shared/device-ssh-hosts.js";
+import type {
+  SshDeviceHostConfig,
+  DeviceToolVersions,
+  DeviceHostPlatformCheck,
+} from "../../../renderer/shared/device-ssh-hosts.js";
+import {
+  deviceToolInstallMessage,
+  parseDeviceToolVersions,
+} from "../../../renderer/shared/device-ssh-hosts.js";
 import {
   DeviceHostError,
   DeviceToolsMissingError,
@@ -76,7 +83,10 @@ export interface SshTunnelProcess {
 export interface SshDeviceHostDeps {
   /** Distinguishes this Aiden install's helpers on a host shared with other installs. */
   owner: string;
-  runSsh(args: readonly string[], options: { stdin?: string; timeoutMs: number }): Promise<SshCommandResult>;
+  runSsh(
+    args: readonly string[],
+    options: { stdin?: string; timeoutMs: number },
+  ): Promise<SshCommandResult>;
   spawnTunnel(args: readonly string[]): SshTunnelProcess;
   reservePort(): Promise<number>;
   fetch(url: string, init?: { signal?: AbortSignal }): Promise<{ ok: boolean; status: number }>;
@@ -128,7 +138,14 @@ export function sshBaseArgs(config: Pick<SshDeviceHostConfig, "port" | "identity
 
 /** `ssh … -- target sh -c '<script>'`: the remote login shell runs one quoted `sh -c`. */
 export function sshCommandArgs(config: SshDeviceHostConfig, remoteScript: string): string[] {
-  return [...sshBaseArgs(config), "--", config.target, "sh", "-c", quoteRemoteArg(remoteDeviceEnvironment + remoteScript)];
+  return [
+    ...sshBaseArgs(config),
+    "--",
+    config.target,
+    "sh",
+    "-c",
+    quoteRemoteArg(remoteDeviceEnvironment + remoteScript),
+  ];
 }
 
 /** The tunnel that forwards the host's loopback hub (and daemon) to this Mac's loopback. */
@@ -145,14 +162,21 @@ export function sshForwardArgs(
     "-o",
     "ServerAliveCountMax=3",
     "-N",
-    ...forwards.flatMap(({ localPort, remotePort }) => ["-L", `127.0.0.1:${localPort}:127.0.0.1:${remotePort}`]),
+    ...forwards.flatMap(({ localPort, remotePort }) => [
+      "-L",
+      `127.0.0.1:${localPort}:127.0.0.1:${remotePort}`,
+    ]),
     "--",
     config.target,
   ];
 }
 
 /** `exec`s one command on the host with only the given environment added. */
-export function remoteExecScript(command: string, args: readonly string[], env: Record<string, string> = {}): string {
+export function remoteExecScript(
+  command: string,
+  args: readonly string[],
+  env: Record<string, string> = {},
+): string {
   const exports = Object.entries(env)
     .filter(([key]) => /^[A-Z_][A-Z0-9_]*$/u.test(key))
     .map(([key, value]) => `export ${key}=${quoteRemoteArg(value)}\n`)
@@ -214,11 +238,22 @@ export function parseSshProbe(stdout: string): SshHostProbe | null {
   } catch {
     return null;
   }
-  if (!isRecord(value) || typeof value.nodePath !== "string" || typeof value.nodeVersion !== "string") return null;
+  if (
+    !isRecord(value) ||
+    typeof value.nodePath !== "string" ||
+    typeof value.nodeVersion !== "string"
+  )
+    return null;
   const platforms = parsePlatforms(value.platforms);
   if (!platforms) return null;
-  const tools = value.tools === undefined ? undefined : (parseDeviceToolVersions(value.tools) ?? undefined);
-  return { nodePath: value.nodePath, nodeVersion: value.nodeVersion, platforms, ...(tools ? { tools } : {}) };
+  const tools =
+    value.tools === undefined ? undefined : (parseDeviceToolVersions(value.tools) ?? undefined);
+  return {
+    nodePath: value.nodePath,
+    nodeVersion: value.nodeVersion,
+    platforms,
+    ...(tools ? { tools } : {}),
+  };
 }
 
 const isPort = (value: unknown): value is number =>
@@ -230,9 +265,13 @@ export function parseSshStarted(stdout: string): SshHostStarted | null {
   const value = JSON.parse(lastLine(stdout)) as Record<string, unknown>;
   if (!isPort(value.hubPort)) return null;
   const helpers = isRecord(value.helpers) ? value.helpers : {};
-  const helper = (key: string) => (typeof helpers[key] === "string" ? (helpers[key] as string) : null);
+  const helper = (key: string) =>
+    typeof helpers[key] === "string" ? (helpers[key] as string) : null;
   const agent =
-    isPort(value.daemonPort) && typeof value.token === "string" && value.token && typeof value.entryPath === "string"
+    isPort(value.daemonPort) &&
+    typeof value.token === "string" &&
+    value.token &&
+    typeof value.entryPath === "string"
       ? { daemonPort: value.daemonPort, token: value.token, entryPath: value.entryPath }
       : {};
   return {
@@ -248,7 +287,10 @@ interface Tunnel {
   localPort: number;
 }
 
-export function createSshDeviceHost(config: SshDeviceHostConfig, deps: SshDeviceHostDeps): SshDeviceHost {
+export function createSshDeviceHost(
+  config: SshDeviceHostConfig,
+  deps: SshDeviceHostDeps,
+): SshDeviceHost {
   const label = config.label;
   let ready: DeviceHostReady | null = null;
   let hubTunnel: Tunnel | null = null;
@@ -285,15 +327,24 @@ export function createSshDeviceHost(config: SshDeviceHostConfig, deps: SshDevice
         ...(options.stdin === undefined ? {} : { stdin: options.stdin }),
         timeoutMs: options.timeoutMs ?? DEFAULT_RUN_TIMEOUT_MS,
       })
-      .catch((error: unknown): SshCommandResult => ({
-        code: 127,
-        stdout: "",
-        stderr: error instanceof Error ? error.message : String(error),
-      }));
-    return { stdout: result.stdout, stderr: result.stderr, code: result.code } satisfies DeviceCommandResult;
+      .catch(
+        (error: unknown): SshCommandResult => ({
+          code: 127,
+          stdout: "",
+          stderr: error instanceof Error ? error.message : String(error),
+        }),
+      );
+    return {
+      stdout: result.stdout,
+      stderr: result.stderr,
+      code: result.code,
+    } satisfies DeviceCommandResult;
   };
 
-  async function bootstrap(mode: SshDeviceScriptMode, allowInstall = false): Promise<SshCommandResult> {
+  async function bootstrap(
+    mode: SshDeviceScriptMode,
+    allowInstall = false,
+  ): Promise<SshCommandResult> {
     const result = await deps.runSsh(sshCommandArgs(config, remoteNodeBootstrap), {
       stdin: remoteDeviceScript(deps.owner, mode, { allowInstall }),
       timeoutMs:
@@ -304,8 +355,11 @@ export function createSshDeviceHost(config: SshDeviceHostConfig, deps: SshDevice
             : SSH_STOP_TIMEOUT_MS,
     });
     if (result.code === SSH_MISSING_TOOL_EXIT) {
-      const line = result.stderr.split(/\r?\n/u).find((entry) => entry.startsWith(SSH_MISSING_TOOL_PREFIX));
-      if (line) throw new DeviceToolsMissingError(line.slice(SSH_MISSING_TOOL_PREFIX.length).trim());
+      const line = result.stderr
+        .split(/\r?\n/u)
+        .find((entry) => entry.startsWith(SSH_MISSING_TOOL_PREFIX));
+      if (line)
+        throw new DeviceToolsMissingError(line.slice(SSH_MISSING_TOOL_PREFIX.length).trim());
     }
     if (result.code !== 0) throw new Error(sshFailureMessage(label, result));
     return result;
@@ -314,7 +368,8 @@ export function createSshDeviceHost(config: SshDeviceHostConfig, deps: SshDevice
   async function inspect(): Promise<SshHostProbe> {
     const result = await bootstrap("probe");
     const probe = parseSshProbe(result.stdout);
-    if (!probe) throw new Error(`${label} answered the connection check with output Aiden could not read.`);
+    if (!probe)
+      throw new Error(`${label} answered the connection check with output Aiden could not read.`);
     lastProbe = probe;
     return probe;
   }
@@ -352,8 +407,13 @@ export function createSshDeviceHost(config: SshDeviceHostConfig, deps: SshDevice
         return tunnel;
       } catch (error) {
         if (attempt >= 2) {
-          const cause = error instanceof DeviceHostError ? (error.cause as Error | undefined)?.message : undefined;
-          throw new Error(`Could not forward ${label}'s device hub to this Mac${cause ? `: ${cause}` : "."}`);
+          const cause =
+            error instanceof DeviceHostError
+              ? (error.cause as Error | undefined)?.message
+              : undefined;
+          throw new Error(
+            `Could not forward ${label}'s device hub to this Mac${cause ? `: ${cause}` : "."}`,
+          );
         }
       }
     }
@@ -377,8 +437,14 @@ export function createSshDeviceHost(config: SshDeviceHostConfig, deps: SshDevice
     activated = true;
     const result = await bootstrap("start", allowInstall);
     const started = parseSshStarted(result.stdout);
-    if (!started) throw new Error(`${label} started its device hub but reported no port Aiden could use.`);
-    lastProbe = { nodePath: started.nodePath, nodeVersion: started.nodeVersion, platforms: started.platforms, ...(started.tools ? { tools: started.tools } : {}) };
+    if (!started)
+      throw new Error(`${label} started its device hub but reported no port Aiden could use.`);
+    lastProbe = {
+      nodePath: started.nodePath,
+      nodeVersion: started.nodeVersion,
+      platforms: started.platforms,
+      ...(started.tools ? { tools: started.tools } : {}),
+    };
     const tunnel = await forward(started.hubPort, "/readyz");
     if (isStale(captured)) {
       closeTunnel(tunnel);
@@ -428,7 +494,9 @@ export function createSshDeviceHost(config: SshDeviceHostConfig, deps: SshDevice
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), FORWARD_CHECK_TIMEOUT_MS);
     try {
-      const response = await deps.fetch(`http://127.0.0.1:${current.localPort}/readyz`, { signal: controller.signal });
+      const response = await deps.fetch(`http://127.0.0.1:${current.localPort}/readyz`, {
+        signal: controller.signal,
+      });
       return response.ok;
     } catch {
       return false;
@@ -456,7 +524,10 @@ export function createSshDeviceHost(config: SshDeviceHostConfig, deps: SshDevice
         const probe = await inspect();
         const hub = probe.tools?.hub;
         const missing = !hub || !hub.installedVersions.includes(hub.requiredVersion);
-        onPhase?.(missing ? "installing" : "starting", missing ? deviceToolInstallMessage("device hub", hub) : undefined);
+        onPhase?.(
+          missing ? "installing" : "starting",
+          missing ? deviceToolInstallMessage("device hub", hub) : undefined,
+        );
       } else {
         onPhase?.("starting", `Connecting to ${label}…`);
       }
@@ -464,7 +535,8 @@ export function createSshDeviceHost(config: SshDeviceHostConfig, deps: SshDevice
     });
   }
 
-  const ensureReady: DeviceHost["ensureReady"] = (onPhase, options = {}) => ensureReadyAt(generation, onPhase, options);
+  const ensureReady: DeviceHost["ensureReady"] = (onPhase, options = {}) =>
+    ensureReadyAt(generation, onPhase, options);
 
   return {
     id: config.id,
@@ -476,9 +548,15 @@ export function createSshDeviceHost(config: SshDeviceHostConfig, deps: SshDevice
       try {
         const probe = await withLock(inspect);
         const ios = probe.platforms.find((platform) => platform.platform === "ios");
-        return ios ?? { platform: "ios", available: false, reason: `${label} reported no iOS support.` };
+        return (
+          ios ?? { platform: "ios", available: false, reason: `${label} reported no iOS support.` }
+        );
       } catch (error) {
-        return { platform: "ios", available: false, reason: error instanceof Error ? error.message : String(error) };
+        return {
+          platform: "ios",
+          available: false,
+          reason: error instanceof Error ? error.message : String(error),
+        };
       }
     },
     hubInstalled: async () => {
@@ -494,9 +572,11 @@ export function createSshDeviceHost(config: SshDeviceHostConfig, deps: SshDevice
       const captured = generation;
       const hubReady = await ensureReadyAt(captured, onPhase, options);
       return withLock(async () => {
-        if (isStale(captured)) throw new Error(`${label} was disconnected while agent tools started.`);
+        if (isStale(captured))
+          throw new Error(`${label} was disconnected while agent tools started.`);
         const current = ready ?? hubReady;
-        if (agentDevice && agentTunnel && agentTunnel.process.exitCode === null) return { ...current, agentDevice };
+        if (agentDevice && agentTunnel && agentTunnel.process.exitCode === null)
+          return { ...current, agentDevice };
         closeTunnel(agentTunnel);
         agentTunnel = null;
         agentDevice = null;
@@ -504,21 +584,32 @@ export function createSshDeviceHost(config: SshDeviceHostConfig, deps: SshDevice
         const missing = !agent || !agent.installedVersions.includes(agent.requiredVersion);
         onPhase?.(
           missing && options.allowInstall ? "installing" : "starting",
-          missing && options.allowInstall ? deviceToolInstallMessage("agent tools", agent) : undefined,
+          missing && options.allowInstall
+            ? deviceToolInstallMessage("agent tools", agent)
+            : undefined,
         );
         const result = await bootstrap("agent-start", options.allowInstall === true);
         const started = parseSshStarted(result.stdout);
         if (!started?.daemonPort || !started.token || !started.entryPath) {
           throw new DeviceHostError(config.id, "starting agent-device");
         }
-        lastProbe = { nodePath: started.nodePath, nodeVersion: started.nodeVersion, platforms: started.platforms, ...(started.tools ? { tools: started.tools } : {}) };
+        lastProbe = {
+          nodePath: started.nodePath,
+          nodeVersion: started.nodeVersion,
+          platforms: started.platforms,
+          ...(started.tools ? { tools: started.tools } : {}),
+        };
         const tunnel = await forward(started.daemonPort, "/health");
         if (isStale(captured)) {
           closeTunnel(tunnel);
           throw new Error(`${label} was disconnected while agent tools started.`);
         }
         agentTunnel = tunnel;
-        agentDevice = { baseUrl: `http://127.0.0.1:${tunnel.localPort}`, token: started.token, entryPath: started.entryPath };
+        agentDevice = {
+          baseUrl: `http://127.0.0.1:${tunnel.localPort}`,
+          token: started.token,
+          entryPath: started.entryPath,
+        };
         tunnel.process.onExit(() => {
           if (agentTunnel !== tunnel) return;
           // The next agent call forwards the daemon again; the viewer keeps its own tunnel.
@@ -618,7 +709,9 @@ export function runSshCommand(
       clearTimeout(timer);
       resolve({ code, stdout, stderr });
     };
-    const child = spawn(sshPath, [...args], { stdio: [options.stdin === undefined ? "ignore" : "pipe", "pipe", "pipe"] });
+    const child = spawn(sshPath, [...args], {
+      stdio: [options.stdin === undefined ? "ignore" : "pipe", "pipe", "pipe"],
+    });
     const timer = setTimeout(() => {
       stderr += "\nThe SSH command timed out.";
       child.kill("SIGTERM");

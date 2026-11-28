@@ -21,7 +21,19 @@
  * Pure and Electron-free, like `workspace-artifacts.ts`, which uses it.
  */
 
-import { ghSlotSpec, gitSlotSpec, joinedOnlyForm, jqSlot, locateSlot, optionAfterFile, programSlotSpec, revisionsEnd, type OptionWords, type Slot, type SlotLookup } from "./workspace-artifact-slots.js";
+import {
+  ghSlotSpec,
+  gitSlotSpec,
+  joinedOnlyForm,
+  jqSlot,
+  locateSlot,
+  optionAfterFile,
+  programSlotSpec,
+  revisionsEnd,
+  type OptionWords,
+  type Slot,
+  type SlotLookup,
+} from "./workspace-artifact-slots.js";
 
 export const WORKSPACE_ARTIFACT_PLACEHOLDER = /\{\{\s*([A-Za-z_][A-Za-z0-9_]*)\s*\}\}/gu;
 const PLACEHOLDER_AT = /\{\{\s*([A-Za-z_][A-Za-z0-9_]*)\s*\}\}/uy;
@@ -107,16 +119,23 @@ export interface WorkspaceArtifactTemplateProblem {
   reason: string;
 }
 
-type Parsed = { ok: true; steps: TemplateStep[] } | { ok: false; problem: WorkspaceArtifactTemplateProblem };
+type Parsed =
+  | { ok: true; steps: TemplateStep[] }
+  | { ok: false; problem: WorkspaceArtifactTemplateProblem };
 
 const syntax = (reason: string): Parsed => ({ ok: false, problem: { kind: "syntax", reason } });
-const misplaced = (reason: string): Parsed => ({ ok: false, problem: { kind: "misplaced", reason } });
+const misplaced = (reason: string): Parsed => ({
+  ok: false,
+  problem: { kind: "misplaced", reason },
+});
 const PLACEHOLDER_NAME = /\{\{\s*([A-Za-z_][A-Za-z0-9_]*)\s*\}\}/u;
 
 /** A placeholder inside quotes: the quotes are not needed, since the value is one argument already. */
 function quotedPlaceholder(text: string, quotes: string): Parsed {
   const name = PLACEHOLDER_NAME.exec(text)![1]!;
-  return misplaced(`{{${name}}} cannot sit inside ${quotes} quotes. Leave the quotes off: each value is passed as exactly one argument, spaces and all (echo {{${name}}}).`);
+  return misplaced(
+    `{{${name}}} cannot sit inside ${quotes} quotes. Leave the quotes off: each value is passed as exactly one argument, spaces and all (echo {{${name}}}).`,
+  );
 }
 
 /** The first placeholder a word holds, written back as `{{name}}` for messages. */
@@ -133,24 +152,44 @@ const BREAK = /^[ \t\n;|&]$/u;
 /** What a refused character means to a shell, for the refusal message. */
 function refusedCharacter(char: string): string {
   switch (char) {
-    case "$": return "$ (variables, $(…) and $((…)))";
-    case "`": return "backticks";
-    case "(": case ")": return "( ) subshells or (( )) arithmetic";
-    case "{": case "}": return "{ } command groups or brace expansion";
-    case "[": case "]": return "[ ], [[ ]] or a [glob]";
-    case "*": case "?": return `an unquoted ${char}, which a shell expands as a glob`;
-    case "<": case ">": return "a redirection other than 2>&1, >/dev/null or 2>/dev/null";
-    case "#": return "# comments";
-    case "!": return "!";
-    case "\\": return "a backslash outside quotes";
-    case "~": return "~ at the start of a word (the home folder)";
-    default: return `the character ${JSON.stringify(char)}`;
+    case "$":
+      return "$ (variables, $(…) and $((…)))";
+    case "`":
+      return "backticks";
+    case "(":
+    case ")":
+      return "( ) subshells or (( )) arithmetic";
+    case "{":
+    case "}":
+      return "{ } command groups or brace expansion";
+    case "[":
+    case "]":
+      return "[ ], [[ ]] or a [glob]";
+    case "*":
+    case "?":
+      return `an unquoted ${char}, which a shell expands as a glob`;
+    case "<":
+    case ">":
+      return "a redirection other than 2>&1, >/dev/null or 2>/dev/null";
+    case "#":
+      return "# comments";
+    case "!":
+      return "!";
+    case "\\":
+      return "a backslash outside quotes";
+    case "~":
+      return "~ at the start of a word (the home folder)";
+    default:
+      return `the character ${JSON.stringify(char)}`;
   }
 }
 
 /** Reads a template into pipelines of words, refusing anything outside the grammar. */
 function parseTemplate(template: string): Parsed {
-  type Token = { kind: "word"; word: TemplateWord } | { kind: "op"; op: "|" | WorkspaceArtifactConnector | "\n" } | { kind: "redirect"; redirect: WorkspaceArtifactRedirect };
+  type Token =
+    | { kind: "word"; word: TemplateWord }
+    | { kind: "op"; op: "|" | WorkspaceArtifactConnector | "\n" }
+    | { kind: "redirect"; redirect: WorkspaceArtifactRedirect };
   const tokens: Token[] = [];
   let word: TemplateWord | undefined;
   const begin = (at: number) => (word ??= { parts: [], quoted: false, start: at, end: at });
@@ -201,7 +240,11 @@ function parseTemplate(template: string): Parsed {
       continue;
     }
     if (!word) {
-      const redirect = REDIRECTS.find((candidate) => template.startsWith(candidate, index) && BREAK.test(template[index + candidate.length] ?? " "));
+      const redirect = REDIRECTS.find(
+        (candidate) =>
+          template.startsWith(candidate, index) &&
+          BREAK.test(template[index + candidate.length] ?? " "),
+      );
       if (redirect) {
         tokens.push({ kind: "redirect", redirect });
         index += redirect.length - 1;
@@ -236,7 +279,8 @@ function parseTemplate(template: string): Parsed {
         if (inner === "`") return syntax("backticks");
         if (inner === "\\") {
           const next = template[at + 1];
-          if (next !== '"' && next !== "\\") return syntax("a backslash inside double quotes other than \\\" or \\\\");
+          if (next !== '"' && next !== "\\")
+            return syntax('a backslash inside double quotes other than \\" or \\\\');
           text += next;
           at += 1;
         } else text += inner;
@@ -264,7 +308,10 @@ function parseTemplate(template: string): Parsed {
   let pending: "|" | WorkspaceArtifactConnector | undefined;
   const commandEmpty = () => current.words.length === 0 && current.redirects.length === 0;
   const finishCommand = (): Parsed | undefined => {
-    if (current.words.length === 0) return syntax(current.redirects.length ? "a redirection without a command" : "an empty command");
+    if (current.words.length === 0)
+      return syntax(
+        current.redirects.length ? "a redirection without a command" : "an empty command",
+      );
     pipeline.push(current);
     current = { words: [], redirects: [] };
     return undefined;
@@ -278,7 +325,13 @@ function parseTemplate(template: string): Parsed {
       pending = undefined;
     } else if (token.op === "\n") {
       // A line break after |, && or || continues the command; on its own it ends one.
-      if (pending === "|" || pending === "&&" || pending === "||" || (commandEmpty() && pipeline.length === 0)) continue;
+      if (
+        pending === "|" ||
+        pending === "&&" ||
+        pending === "||" ||
+        (commandEmpty() && pipeline.length === 0)
+      )
+        continue;
       const problem = finishCommand();
       if (problem) return problem;
       steps.push({ connector, pipeline });
@@ -297,7 +350,8 @@ function parseTemplate(template: string): Parsed {
       pending = token.op;
     }
   }
-  if (pending === "|" || pending === "&&" || pending === "||") return syntax(`${pending} at the end, with no command after it`);
+  if (pending === "|" || pending === "&&" || pending === "||")
+    return syntax(`${pending} at the end, with no command after it`);
   if (!commandEmpty()) {
     const problem = finishCommand();
     if (problem) return problem;
@@ -333,15 +387,66 @@ function literal(word: TemplateWord | undefined): string | undefined {
  * placeholder every command in it, piped or chained, must start with one of
  * these, written as a plain word.
  */
-const ARGUMENT_TEXT_PROGRAMS = ["ls", "cat", "head", "tail", "wc", "grep", "rg", "jq", "echo", "printf", "date", "basename", "dirname", "sort", "uniq", "cut", "tr"];
+const ARGUMENT_TEXT_PROGRAMS = [
+  "ls",
+  "cat",
+  "head",
+  "tail",
+  "wc",
+  "grep",
+  "rg",
+  "jq",
+  "echo",
+  "printf",
+  "date",
+  "basename",
+  "dirname",
+  "sort",
+  "uniq",
+  "cut",
+  "tr",
+];
 const ARGUMENT_TEST_PROGRAMS = ["test", "true", "false"];
-const ARGUMENT_PROGRAMS = new Set(["git", "gh", ...ARGUMENT_TEXT_PROGRAMS, ...ARGUMENT_TEST_PROGRAMS]);
+const ARGUMENT_PROGRAMS = new Set([
+  "git",
+  "gh",
+  ...ARGUMENT_TEXT_PROGRAMS,
+  ...ARGUMENT_TEST_PROGRAMS,
+]);
 /** git subcommands that take page data; `worktree` and `remote` only in the forms `GIT_SUBCOMMAND_VERBS` gives. */
 const ARGUMENT_GIT_SUBCOMMANDS = [
-  "status", "log", "show", "diff", "branch", "switch", "checkout", "fetch", "pull", "push", "add", "commit", "restore", "reset", "tag", "stash",
-  "merge", "rebase", "cherry-pick", "revert", "worktree", "remote", "rev-parse", "grep", "blame", "ls-files", "config",
+  "status",
+  "log",
+  "show",
+  "diff",
+  "branch",
+  "switch",
+  "checkout",
+  "fetch",
+  "pull",
+  "push",
+  "add",
+  "commit",
+  "restore",
+  "reset",
+  "tag",
+  "stash",
+  "merge",
+  "rebase",
+  "cherry-pick",
+  "revert",
+  "worktree",
+  "remote",
+  "rev-parse",
+  "grep",
+  "blame",
+  "ls-files",
+  "config",
 ];
-const GIT_SUBCOMMAND_VERBS: Record<string, readonly string[]> = { worktree: ["list", "add", "remove"], remote: ["-v", "--verbose"] };
+const GIT_SUBCOMMAND_VERBS: Record<string, readonly string[]> = {
+  worktree: ["list", "add", "remove"],
+  remote: ["-v", "--verbose"],
+};
 /** git's options before the subcommand that a page may use; `-C`, `-c` and the rest change what runs or where. */
 const ARGUMENT_GIT_GLOBAL_OPTIONS = new Set(["--no-pager", "-P", "--no-optional-locks"]);
 /**
@@ -354,7 +459,22 @@ const ARGUMENT_GIT_GLOBAL_OPTIONS = new Set(["--no-pager", "-P", "--no-optional-
  * refused on every verb that has one.
  */
 const ARGUMENT_GH_VERBS: Record<string, readonly string[]> = {
-  pr: ["view", "list", "status", "diff", "checks", "checkout", "create", "edit", "ready", "merge", "comment", "review", "close", "reopen"],
+  pr: [
+    "view",
+    "list",
+    "status",
+    "diff",
+    "checks",
+    "checkout",
+    "create",
+    "edit",
+    "ready",
+    "merge",
+    "comment",
+    "review",
+    "close",
+    "reopen",
+  ],
   issue: ["view", "list", "status", "create", "edit", "comment", "close", "reopen"],
   run: ["view", "list", "watch", "rerun", "cancel"],
   repo: ["view", "list"],
@@ -366,7 +486,25 @@ const ARGUMENT_GH_COMMANDS = ["browse", "status"];
 /** A program written as a plain word: no quotes, expansions, globs or path. */
 const PLAIN_PROGRAM = /^[A-Za-z0-9_][A-Za-z0-9_.+-]*$/u;
 /** Words a shell reads as syntax, which this runner would run as a program instead. */
-const SHELL_KEYWORDS = new Set(["if", "then", "else", "elif", "fi", "do", "done", "while", "until", "for", "in", "case", "esac", "function", "select", "time", "coproc"]);
+const SHELL_KEYWORDS = new Set([
+  "if",
+  "then",
+  "else",
+  "elif",
+  "fi",
+  "do",
+  "done",
+  "while",
+  "until",
+  "for",
+  "in",
+  "case",
+  "esac",
+  "function",
+  "select",
+  "time",
+  "coproc",
+]);
 /** `NAME=value` (or `NAME[i]=`, `NAME+=`) before a command's name. */
 const ASSIGNMENT_WORD = /^[A-Za-z_][A-Za-z0-9_]*(?:\[[^\]]*\])?\+?=/u;
 
@@ -374,7 +512,9 @@ const ASSIGNMENT_WORD = /^[A-Za-z_][A-Za-z0-9_]*(?:\[[^\]]*\])?\+?=/u;
 export const WORKSPACE_ARTIFACT_ARGUMENT_PROGRAMS =
   `git ${ARGUMENT_GIT_SUBCOMMANDS.filter((sub) => sub !== "worktree" && sub !== "remote").join(", ")}, worktree list/add/remove or remote -v ` +
   `(with only --no-pager or --no-optional-locks before the subcommand); ` +
-  `${Object.entries(ARGUMENT_GH_VERBS).map(([group, verbs]) => `gh ${group} ${verbs.join("/")}`).join(", ")}, ` +
+  `${Object.entries(ARGUMENT_GH_VERBS)
+    .map(([group, verbs]) => `gh ${group} ${verbs.join("/")}`)
+    .join(", ")}, ` +
   `or gh ${ARGUMENT_GH_COMMANDS.join(" or ")}; ${[...ARGUMENT_TEXT_PROGRAMS, ...ARGUMENT_TEST_PROGRAMS].join(", ")}`;
 
 // ---------------------------------------------------------------------------
@@ -403,7 +543,12 @@ function readOptions(word: string, valued: string): WrittenOption[] {
   if (word === "-" || word === "--" || !word.startsWith("-")) return [];
   if (word.startsWith("--")) {
     const equals = word.indexOf("=");
-    return [{ long: word.slice(2, equals < 0 ? undefined : equals).toLowerCase(), value: equals < 0 ? "next" : "attached" }];
+    return [
+      {
+        long: word.slice(2, equals < 0 ? undefined : equals).toLowerCase(),
+        value: equals < 0 ? "next" : "attached",
+      },
+    ];
   }
   const letters = [...word.slice(1)];
   const options: WrittenOption[] = [];
@@ -430,7 +575,10 @@ function isOneOf(option: WrittenOption, set: OptionSet | undefined): boolean {
   if (!set) return false;
   if (option.short !== undefined) return set.short?.includes(option.short) === true;
   const name = option.long ?? "";
-  return name.length > 0 && set.long?.some((full) => (set.exact ? full === name : full.startsWith(name))) === true;
+  return (
+    name.length > 0 &&
+    set.long?.some((full) => (set.exact ? full === name : full.startsWith(name))) === true
+  );
 }
 
 /** The option whose value the next word is, when `word` ends with one that may take it. */
@@ -459,16 +607,30 @@ const PROGRAM_OPTIONS: Record<string, OptionSet> = {
  * `git config` keys a text value may set: none of them names a program,
  * a hook, a pager, an editor, an alias or other configuration to include.
  */
-const SAFE_GIT_CONFIG_KEY = /^(?:user\.(?:name|email)|init\.defaultbranch|pull\.(?:rebase|ff)|push\.(?:default|autosetupremote)|fetch\.prune|color\.ui|branch\.[A-Za-z0-9._/-]+\.description)$/iu;
+const SAFE_GIT_CONFIG_KEY =
+  /^(?:user\.(?:name|email)|init\.defaultbranch|pull\.(?:rebase|ff)|push\.(?:default|autosetupremote)|fetch\.prune|color\.ui|branch\.[A-Za-z0-9._/-]+\.description)$/iu;
 /** `git config` subcommand words (git 2.46) that come before the key. */
-const GIT_CONFIG_VERBS = new Set(["get", "set", "unset", "list", "edit", "rename-section", "remove-section"]);
+const GIT_CONFIG_VERBS = new Set([
+  "get",
+  "set",
+  "unset",
+  "list",
+  "edit",
+  "rename-section",
+  "remove-section",
+]);
 /** `git config` options that take the next word. */
-const GIT_CONFIG_VALUED: OptionSet = { short: "f", long: ["file", "blob", "type", "default", "comment", "value"] };
+const GIT_CONFIG_VALUED: OptionSet = {
+  short: "f",
+  long: ["file", "blob", "type", "default", "comment", "value"],
+};
 /** Plain text a placeholder may be joined to, as in `HEAD:{{branch}}` or `{{name}}.json`. */
 const JOINED_TEXT = /^[A-Za-z0-9_.,:@%+/=^~-]*$/u;
 
 /** The `git config` key among its arguments (literal words; a placeholder counts as a key too). */
-function gitConfigKey(after: readonly (string | undefined)[]): { key: string | undefined; index: number } | undefined {
+function gitConfigKey(
+  after: readonly (string | undefined)[],
+): { key: string | undefined; index: number } | undefined {
   for (let index = 0; index < after.length; index += 1) {
     const arg = after[index];
     if (arg !== undefined && arg.startsWith("-")) {
@@ -479,9 +641,11 @@ function gitConfigKey(after: readonly (string | undefined)[]): { key: string | u
   return undefined;
 }
 
-
 /** git's subcommand and where it is, past the global options a page may use. */
-function gitSubcommand(args: readonly (string | undefined)[]): { name: string | undefined; index: number } {
+function gitSubcommand(args: readonly (string | undefined)[]): {
+  name: string | undefined;
+  index: number;
+} {
   let index = 0;
   while (index < args.length && ARGUMENT_GIT_GLOBAL_OPTIONS.has(args[index] ?? "")) index += 1;
   return { name: args[index], index };
@@ -496,38 +660,79 @@ function gitSubcommand(args: readonly (string | undefined)[]): { name: string | 
 function commandProblem(command: TemplateCommand): WorkspaceArtifactTemplateProblem | undefined {
   const [first, ...rest] = command.words;
   const program = literal(first!);
-  const misplacedAs = (word: TemplateWord, what: string, fix: string): WorkspaceArtifactTemplateProblem => {
+  const misplacedAs = (
+    word: TemplateWord,
+    what: string,
+    fix: string,
+  ): WorkspaceArtifactTemplateProblem => {
     const name = placeholderIn(word);
-    return { kind: "misplaced", reason: `${name} cannot be ${what}. ${fix.replace(/\{\{x\}\}/gu, name)}` };
+    return {
+      kind: "misplaced",
+      reason: `${name} cannot be ${what}. ${fix.replace(/\{\{x\}\}/gu, name)}`,
+    };
   };
-  if (program === undefined) return misplacedAs(first!, "the command itself", "Write the program literally; page data may only be its arguments, as in gh pr view {{x}}.");
+  if (program === undefined)
+    return misplacedAs(
+      first!,
+      "the command itself",
+      "Write the program literally; page data may only be its arguments, as in gh pr view {{x}}.",
+    );
   if (first!.quoted || !PLAIN_PROGRAM.test(program)) {
     if (!first!.quoted && ASSIGNMENT_WORD.test(program)) {
-      return { kind: "syntax", reason: "a NAME=value prefix, which a shell reads as a variable for the command (this runner has no shell)" };
+      return {
+        kind: "syntax",
+        reason:
+          "a NAME=value prefix, which a shell reads as a variable for the command (this runner has no shell)",
+      };
     }
-    return { kind: "program", reason: `${program}, a program name with quotes, a path or other characters` };
+    return {
+      kind: "program",
+      reason: `${program}, a program name with quotes, a path or other characters`,
+    };
   }
-  if (SHELL_KEYWORDS.has(program)) return { kind: "syntax", reason: `${program}, a shell keyword (a command with {{params}} runs without a shell)` };
+  if (SHELL_KEYWORDS.has(program))
+    return {
+      kind: "syntax",
+      reason: `${program}, a shell keyword (a command with {{params}} runs without a shell)`,
+    };
   if (!ARGUMENT_PROGRAMS.has(program)) return { kind: "program", reason: program };
   const args = rest.map(literal);
-  const program_ = (reason: string): WorkspaceArtifactTemplateProblem => ({ kind: "program", reason });
+  const program_ = (reason: string): WorkspaceArtifactTemplateProblem => ({
+    kind: "program",
+    reason,
+  });
   if (program === "git") {
     const { name: sub, index } = gitSubcommand(args);
     if (index >= args.length) return program_("git without a subcommand");
-    if (sub === undefined) return misplacedAs(rest[index]!, "the git subcommand", "Write the subcommand literally, as in git show {{x}}.");
+    if (sub === undefined)
+      return misplacedAs(
+        rest[index]!,
+        "the git subcommand",
+        "Write the subcommand literally, as in git show {{x}}.",
+      );
     if (sub.startsWith("-")) return program_(`git ${sub} before the subcommand`);
     if (!ARGUMENT_GIT_SUBCOMMANDS.includes(sub)) return program_(`git ${sub}`);
     const after = args.slice(index + 1);
     const verbs = GIT_SUBCOMMAND_VERBS[sub];
-    if (sub === "remote" && !after.every((arg) => arg !== undefined && verbs!.includes(arg))) return program_("git remote other than git remote -v");
+    if (sub === "remote" && !after.every((arg) => arg !== undefined && verbs!.includes(arg)))
+      return program_("git remote other than git remote -v");
     if (sub === "worktree" && !(after[0] !== undefined && verbs!.includes(after[0]))) {
       return after[0] === undefined && after.length
-        ? misplacedAs(rest[index + 1]!, "the git worktree verb", "Write list, add or remove literally, as in git worktree add -b {{x}} ../review.")
+        ? misplacedAs(
+            rest[index + 1]!,
+            "the git worktree verb",
+            "Write list, add or remove literally, as in git worktree add -b {{x}} ../review.",
+          )
         : program_(`git worktree ${after[0] ?? ""}`.trim());
     }
-    if (after.some((arg) => writesOption(arg, "", { long: ["no-index"] }))) return program_(`git ${sub} --no-index, which reads files outside the repository`);
+    if (after.some((arg) => writesOption(arg, "", { long: ["no-index"] })))
+      return program_(`git ${sub} --no-index, which reads files outside the repository`);
     if (sub === "config") {
-      if (after.some((arg) => arg === "edit" || writesOption(arg, "f", { short: "e", long: ["edit"] }))) {
+      if (
+        after.some(
+          (arg) => arg === "edit" || writesOption(arg, "f", { short: "e", long: ["edit"] }),
+        )
+      ) {
         return program_("git config edit, which opens an editor");
       }
       const key = gitConfigKey(after)?.key;
@@ -537,12 +742,29 @@ function commandProblem(command: TemplateCommand): WorkspaceArtifactTemplateProb
   }
   if (program === "gh") {
     const [group, verb] = args;
-    if (group === undefined && rest.length) return misplacedAs(rest[0]!, "the gh command", "Write the command and its verb literally, as in gh pr view {{x}}.");
+    if (group === undefined && rest.length)
+      return misplacedAs(
+        rest[0]!,
+        "the gh command",
+        "Write the command and its verb literally, as in gh pr view {{x}}.",
+      );
     if (group !== undefined && ARGUMENT_GH_COMMANDS.includes(group)) return undefined;
-    const verbs = group !== undefined && Object.prototype.hasOwnProperty.call(ARGUMENT_GH_VERBS, group) ? ARGUMENT_GH_VERBS[group] : undefined;
-    if (group === undefined || verbs === undefined) return program_(group === "api" ? "gh api, which can send any request" : `gh ${group ?? ""}`.trim());
-    if (verb === undefined && rest.length > 1) return misplacedAs(rest[1]!, `the gh ${group} verb`, `Write the verb literally, as in gh ${group} ${verbs[0]} {{x}}.`);
-    if (verb === undefined || !verbs.includes(verb)) return program_(`gh ${group} ${verb ?? ""}`.trim());
+    const verbs =
+      group !== undefined && Object.prototype.hasOwnProperty.call(ARGUMENT_GH_VERBS, group)
+        ? ARGUMENT_GH_VERBS[group]
+        : undefined;
+    if (group === undefined || verbs === undefined)
+      return program_(
+        group === "api" ? "gh api, which can send any request" : `gh ${group ?? ""}`.trim(),
+      );
+    if (verb === undefined && rest.length > 1)
+      return misplacedAs(
+        rest[1]!,
+        `the gh ${group} verb`,
+        `Write the verb literally, as in gh ${group} ${verbs[0]} {{x}}.`,
+      );
+    if (verb === undefined || !verbs.includes(verb))
+      return program_(`gh ${group} ${verb ?? ""}`.trim());
     return undefined;
   }
   // These run a program for every file they read, so a template that uses them takes no page data.
@@ -557,7 +779,12 @@ function commandProblem(command: TemplateCommand): WorkspaceArtifactTemplateProb
  * in, from the program's table (`workspace-artifact-slots.ts`), or where it
  * sits when the table has no slot there, with the forms it does take.
  */
-function placeholderSlot(program: string, args: readonly (string | undefined)[], at: number, word: TemplateWord): SlotLookup {
+function placeholderSlot(
+  program: string,
+  args: readonly (string | undefined)[],
+  at: number,
+  word: TemplateWord,
+): SlotLookup {
   if (program === "jq") return jqSlot(args, at);
   if (program === "gh") {
     const [group, verb] = args;
@@ -571,13 +798,25 @@ function placeholderSlot(program: string, args: readonly (string | undefined)[],
     if (sub === "config") {
       const found = gitConfigKey(args.slice(git.index + 1));
       const value = found && found.key !== undefined ? found.index + git.index + 2 : undefined;
-      if (value !== at) return { problem: "as a git config key, option or option value. git config takes page data only as the value right after a key written literally (git config user.name {{name}})." };
-      if (!SAFE_GIT_CONFIG_KEY.test(found!.key!)) return { problem: `as a value for git config ${found!.key!}, which git may run or read as configuration.` };
+      if (value !== at)
+        return {
+          problem:
+            "as a git config key, option or option value. git config takes page data only as the value right after a key written literally (git config user.name {{name}}).",
+        };
+      if (!SAFE_GIT_CONFIG_KEY.test(found!.key!))
+        return {
+          problem: `as a value for git config ${found!.key!}, which git may run or read as configuration.`,
+        };
       return { slot: { rule: "text" } };
     }
     const found = locateSlot(gitSlotSpec(sub)!, args, git.index + 1, at);
     const head = word.parts[0]!;
-    if ("slot" in found && (sub === "push" || sub === "fetch" || sub === "pull") && "text" in head && head.text.startsWith(":")) {
+    if (
+      "slot" in found &&
+      (sub === "push" || sub === "fetch" || sub === "pull") &&
+      "text" in head &&
+      head.text.startsWith(":")
+    ) {
       return { problem: `joined after :, where git ${sub} deletes the branch it names` };
     }
     return found;
@@ -590,11 +829,17 @@ function placeholderSlot(program: string, args: readonly (string | undefined)[],
  * or joined only to plain text. `program` and `args` (the command's
  * arguments, undefined where a word holds a placeholder) only shape the advice.
  */
-function joinedProblem(word: TemplateWord, program: string, args: readonly (string | undefined)[], at: number): string | undefined {
+function joinedProblem(
+  word: TemplateWord,
+  program: string,
+  args: readonly (string | undefined)[],
+  at: number,
+): string | undefined {
   const before = at > 0 ? args[at - 1] : undefined;
   if (word.parts.length === 1) return undefined;
   const name = placeholderIn(word);
-  if (word.quoted) return `${name} cannot be joined to quoted text. Join it only to plain unquoted text, as in git show HEAD:${name}, or make it a word of its own.`;
+  if (word.quoted)
+    return `${name} cannot be joined to quoted text. Join it only to plain unquoted text, as in git show HEAD:${name}, or make it a word of its own.`;
   if (!word.parts.every((part) => !("text" in part) || JOINED_TEXT.test(part.text))) {
     return `${name} cannot be part of a word with characters other than letters, digits and _ . , : @ % + / = ^ ~ -. Join it only to such plain text, as in git show HEAD:${name}.`;
   }
@@ -603,8 +848,19 @@ function joinedProblem(word: TemplateWord, program: string, args: readonly (stri
     return `${name} cannot follow a bare -, where the program would read the value as options. The number needs its option as a separate word, for example -n ${name}.`;
   }
   // tail's +N (from line N), joined (`-n+{{n}}`) or apart (`-n +{{n}}`), has no checked form.
-  const plus = program === "tail" && "text" in head ? /^(-n|--lines|-c|--bytes)=?\+$/u.exec(head.text)?.[1] : undefined;
-  const tailOption = plus ?? (program === "tail" && "text" in head && head.text === "+" && before !== undefined && /^(?:-n|--lines|-c|--bytes)$/u.test(before) ? before : undefined);
+  const plus =
+    program === "tail" && "text" in head
+      ? /^(-n|--lines|-c|--bytes)=?\+$/u.exec(head.text)?.[1]
+      : undefined;
+  const tailOption =
+    plus ??
+    (program === "tail" &&
+    "text" in head &&
+    head.text === "+" &&
+    before !== undefined &&
+    /^(?:-n|--lines|-c|--bytes)$/u.test(before)
+      ? before
+      : undefined);
   if (tailOption !== undefined) {
     const unit = tailOption === "-n" || tailOption === "--lines" ? "line" : "byte";
     return `${name} cannot follow + there: use ${tailOption} ${name} (last N ${unit}s); starting from ${unit} N with page data is not supported.`;
@@ -612,7 +868,12 @@ function joinedProblem(word: TemplateWord, program: string, args: readonly (stri
   if ("text" in head && head.text.startsWith("-")) {
     const option = head.text.split("=")[0]!;
     // Some options take their value only joined (`-U5`), so written apart the advice would be refused too.
-    const spec = program === "git" ? gitSlotSpec(gitSubcommand(args).name ?? "") : program === "gh" ? undefined : programSlotSpec(program);
+    const spec =
+      program === "git"
+        ? gitSlotSpec(gitSubcommand(args).name ?? "")
+        : program === "gh"
+          ? undefined
+          : programSlotSpec(program);
     const lone = /^-[^-]/u.test(option) ? `-${option.slice(-1)}` : option;
     const fixed = spec && joinedOnlyForm(spec, lone);
     if (fixed !== undefined) {
@@ -622,9 +883,15 @@ function joinedProblem(word: TemplateWord, program: string, args: readonly (stri
     // as that option's value. An option whose value is optional (`--decorate`,
     // `--stat`) or already in its word (`-n+`) leaves the next word an operand.
     const apart = [...args.slice(0, at), option, undefined, ...args.slice(at + 1)];
-    const alone: TemplateWord = { parts: word.parts.filter((part) => "param" in part), quoted: false, start: word.start, end: word.end };
+    const alone: TemplateWord = {
+      parts: word.parts.filter((part) => "param" in part),
+      quoted: false,
+      start: word.start,
+      end: word.end,
+    };
     const found = placeholderSlot(program, apart, at + 1, alone);
-    if ("problem" in found) return `${name} cannot be joined to the option ${option}, and page data may not be passed ${found.problem}`;
+    if ("problem" in found)
+      return `${name} cannot be joined to the option ${option}, and page data may not be passed ${found.problem}`;
     if (found.valueFor === undefined) {
       return `${name} cannot be joined to the option ${option}: page data cannot fill its value, and as a separate word ${program} would read ${name} as an argument of its own, not as ${option}'s value. Write the option with a fixed value, or leave it out.`;
     }
@@ -641,7 +908,9 @@ function joinedProblem(word: TemplateWord, program: string, args: readonly (stri
  * Reads and checks a template that holds placeholders. Returns its pipelines
  * or what it uses that a command with page data may not.
  */
-export function checkWorkspaceArtifactTemplate(template: string): { ok: true; steps: TemplateStep[] } | { ok: false; problem: WorkspaceArtifactTemplateProblem } {
+export function checkWorkspaceArtifactTemplate(
+  template: string,
+): { ok: true; steps: TemplateStep[] } | { ok: false; problem: WorkspaceArtifactTemplateProblem } {
   const parsed = parseTemplate(template);
   if (!parsed.ok) return parsed;
   for (const step of parsed.steps) {
@@ -656,7 +925,8 @@ export function checkWorkspaceArtifactTemplate(template: string): { ok: true; st
         const joined = joinedProblem(word, program, args, at);
         if (joined) return { ok: false, problem: { kind: "misplaced", reason: joined } };
         const found = placeholderSlot(program, args, at, word);
-        if ("problem" in found) return { ok: false, problem: { kind: "slot", reason: found.problem } };
+        if ("problem" in found)
+          return { ok: false, problem: { kind: "slot", reason: found.problem } };
         for (const part of word.parts) {
           if ("param" in part) part.slot = found.slot;
         }
@@ -694,15 +964,23 @@ function endRefs(command: TemplateCommand, template: string): string | undefined
   const end = revisionsEnd(gitSlotSpec(git.name!)!, args, git.index + 1, last - 1);
   const written = (word: TemplateWord) => template.slice(word.start, word.end);
   // `args` index `i` is `command.words[i + 1]`.
-  const option = (at: OptionWords) => command.words.slice(at.index + 1, at.index + 1 + at.words).map(written).join(" ");
+  const option = (at: OptionWords) =>
+    command.words
+      .slice(at.index + 1, at.index + 1 + at.words)
+      .map(written)
+      .join(" ");
   if (end.optionAfter !== undefined) {
     const name = written(command.words[last]!);
     const moved = option(end.optionAfter);
     return `${moved} is written after the files of git ${git.name!}. Aiden adds -- before the files so git reads ${name} only as a revision, and git would then read ${moved} as ${end.optionAfter.words > 1 ? "file names" : "a file name"}. Write ${moved} before ${name}.`;
   }
   const at = command.words[end.at]!.end;
-  const revisions = command.words.filter((word) => word.parts.some((part) => "param" in part && part.slot?.refOnly));
-  const either = revisions.every((word) => word.parts.some((part) => "param" in part && part.slot?.fileToo));
+  const revisions = command.words.filter((word) =>
+    word.parts.some((part) => "param" in part && part.slot?.refOnly),
+  );
+  const either = revisions.every((word) =>
+    word.parts.some((part) => "param" in part && part.slot?.fileToo),
+  );
   if (either) {
     // A value that names a file goes without the --, and then git log and
     // show stop reading options at it.
@@ -714,7 +992,13 @@ function endRefs(command: TemplateCommand, template: string): string | undefined
       return `${moved} is written after ${value}. git ${git.name!} reads ${value} as a file when it names one in the workspace, and reads no option after a file. Write ${moved} before ${value}.`;
     }
   }
-  command.words.splice(end.at + 1, 0, { parts: [{ text: "--", insertedAt: at }], quoted: false, start: at, end: at, ...(either ? { unlessFiles: revisions } : {}) });
+  command.words.splice(end.at + 1, 0, {
+    parts: [{ text: "--", insertedAt: at }],
+    quoted: false,
+    start: at,
+    end: at,
+    ...(either ? { unlessFiles: revisions } : {}),
+  });
   return undefined;
 }
 
@@ -736,19 +1020,28 @@ function readBlobPath(word: TemplateWord, sub: string): string | undefined {
   const head = word.parts.find((part): part is TemplateParam => "param" in part)!;
   if (head.slot?.rule !== "rev" && head.slot?.rule !== "path") return undefined;
   const part = word.parts[colon] as TemplateText;
-  if (part.at === undefined) return "write the REV: before a file placeholder without quotes or backslashes, as in git show HEAD:{{file}}";
-  if (colon === 0 && part.text === ":" && word.parts.slice(1).some((later) => "text" in later && later.text.includes(":"))) {
+  if (part.at === undefined)
+    return "write the REV: before a file placeholder without quotes or backslashes, as in git show HEAD:{{file}}";
+  if (
+    colon === 0 &&
+    part.text === ":" &&
+    word.parts.slice(1).some((later) => "text" in later && later.text.includes(":"))
+  ) {
     const file = word.parts.filter((later): later is TemplateParam => "param" in later).pop()!;
     return `{{${head.param}}} as the index stage of :N:path, which git would read as part of the file name. Write the stage (0 to 3) literally, as in git show :0:{{${file.param}}}.`;
   }
   // Before the `:` is the revision, after it the file.
   word.parts.forEach((later, index) => {
-    if ("param" in later) later.slot = index > colon ? { rule: "path", blob: true } : { rule: "rev" };
+    if ("param" in later)
+      later.slot = index > colon ? { rule: "path", blob: true } : { rule: "rev" };
   });
   const split = blobStart(part.text, colon === 0);
   const rest = part.text.slice(split);
   if (rest.startsWith("./")) return undefined;
-  const inserted: TemplateText[] = [{ text: part.text.slice(0, split), at: part.at }, { text: "./", insertedAt: part.at! + split }];
+  const inserted: TemplateText[] = [
+    { text: part.text.slice(0, split), at: part.at },
+    { text: "./", insertedAt: part.at! + split },
+  ];
   if (rest) inserted.push({ text: rest, at: part.at! + split });
   word.parts.splice(colon, 1, ...inserted);
   return undefined;
@@ -761,7 +1054,8 @@ function blobStart(text: string, wordStart: boolean): number {
 }
 
 /** What `staysInside` refuses, as a refusal says it. */
-const OUTSIDE_PATHS = "no absolute path, drive letter (C:), home folder (~ or ~/…), or .. that leads out of it";
+const OUTSIDE_PATHS =
+  "no absolute path, drive letter (C:), home folder (~ or ~/…), or .. that leads out of it";
 
 /** Whether a template holds a placeholder, and so runs without a shell. */
 export function workspaceArtifactTemplateHasParams(template: string): boolean {
@@ -791,7 +1085,10 @@ function gitFileFits(filled: string): boolean {
 
 /** Whether a `--` the plan adds is left out for these values (see `TemplateWord.unlessFiles`). */
 function leftOut(word: TemplateWord, value: (name: string) => string): boolean {
-  return word.unlessFiles !== undefined && word.unlessFiles.every((file) => gitFileFits(filledWord(file, value)));
+  return (
+    word.unlessFiles !== undefined &&
+    word.unlessFiles.every((file) => gitFileFits(filledWord(file, value)))
+  );
 }
 
 function filledWord(word: TemplateWord, value: (name: string) => string): string {
@@ -811,16 +1108,24 @@ const STASH_NAME = /^(?:stash@\{\d+\}|\d+)$/u;
  */
 function refProblem(text: string, remote: boolean): string | undefined {
   if (text === "") return "it is empty";
-  if (/^[-+]/u.test(text)) return "no leading - or + (git reads them as an option or a forced push)";
+  if (/^[-+]/u.test(text))
+    return "no leading - or + (git reads them as an option or a forced push)";
   if (text.includes(":")) return "no : (git reads it as a mapping that renames or deletes a ref)";
   // eslint-disable-next-line no-control-regex
-  if (/[\u0000-\u0020\u007f*?[\\^~]/u.test(text)) return "no spaces, control characters or * ? [ \\ ^ ~ (globs and revision syntax)";
-  if (text.includes("..") || text.includes("@{") || text === "@") return "no .., @{ or a lone @ (revision syntax)";
-  if (text.startsWith("/") || text.endsWith("/") || text.includes("//")) return "no leading, trailing or doubled /";
-  if (text.split("/").some((component) => component.startsWith(".") || component.endsWith(".lock")) || text.endsWith(".")) {
+  if (/[\u0000-\u0020\u007f*?[\\^~]/u.test(text))
+    return "no spaces, control characters or * ? [ \\ ^ ~ (globs and revision syntax)";
+  if (text.includes("..") || text.includes("@{") || text === "@")
+    return "no .., @{ or a lone @ (revision syntax)";
+  if (text.startsWith("/") || text.endsWith("/") || text.includes("//"))
+    return "no leading, trailing or doubled /";
+  if (
+    text.split("/").some((component) => component.startsWith(".") || component.endsWith(".lock")) ||
+    text.endsWith(".")
+  ) {
     return "no part that starts with . or ends with .lock, and no trailing . (git reads . as a path)";
   }
-  if (remote && text.startsWith("refs/")) return "no full refs/… name, which could name any ref on the other side; write the branch name alone";
+  if (remote && text.startsWith("refs/"))
+    return "no full refs/… name, which could name any ref on the other side; write the branch name alone";
   return undefined;
 }
 
@@ -834,16 +1139,22 @@ function refProblem(text: string, remote: boolean): string | undefined {
 function revProblem(text: string): string | undefined {
   if (text === "") return "it is empty";
   if (/^[-+]/u.test(text)) return "no leading - or + (git reads them as an option)";
-  if (text.includes(":")) return "no : (git reads REV:path as a file from the repository root; write the file as its own value, as in git show HEAD:{{file}})";
+  if (text.includes(":"))
+    return "no : (git reads REV:path as a file from the repository root; write the file as its own value, as in git show HEAD:{{file}})";
   // eslint-disable-next-line no-control-regex
-  if (/[\u0000-\u0020\u007f*?[\\]/u.test(text)) return "no spaces, control characters or * ? [ \\ (globs)";
+  if (/[\u0000-\u0020\u007f*?[\\]/u.test(text))
+    return "no spaces, control characters or * ? [ \\ (globs)";
   if (/^[./]/u.test(text)) return "no leading . or / (git reads it as a path)";
   return undefined;
 }
 
 /** The path of a `REV:{{file}}` or `:N:{{file}}` word, as the template and value write it (without the plan's `./`). */
 function blobPath(word: TemplateWord, value: (name: string) => string): string {
-  const written = word.parts.map((part) => ("text" in part ? (part.insertedAt === undefined ? part.text : "") : value(part.param))).join("");
+  const written = word.parts
+    .map((part) =>
+      "text" in part ? (part.insertedAt === undefined ? part.text : "") : value(part.param),
+    )
+    .join("");
   return written.slice(blobStart(written, "text" in word.parts[0]!));
 }
 
@@ -853,7 +1164,10 @@ function blobPath(word: TemplateWord, value: (name: string) => string): string {
  * with "-" is read as an option, so only a slot the program always takes as
  * an option's value (`git commit -m {{msg}}`) may hold one.
  */
-export function workspaceArtifactValueProblem(steps: readonly TemplateStep[], value: (name: string) => string): string | undefined {
+export function workspaceArtifactValueProblem(
+  steps: readonly TemplateStep[],
+  value: (name: string) => string,
+): string | undefined {
   for (const step of steps) {
     for (const command of step.pipeline) {
       const git = literal(command.words[0]) === "git";
@@ -869,10 +1183,13 @@ export function workspaceArtifactValueProblem(steps: readonly TemplateStep[], va
         for (const part of params) {
           const text = value(part.param);
           const rule = part.slot?.rule ?? "text";
-          if (rule === "number" && !/^\d+$/u.test(text)) return `${part.param} must be a whole number there.`;
+          if (rule === "number" && !/^\d+$/u.test(text))
+            return `${part.param} must be a whole number there.`;
           if (rule === "ref" && !(part.slot?.stash && STASH_NAME.test(filled))) {
             const problem = refProblem(text, part.slot?.remote === true);
-            const expected = part.slot?.stash ? "a stash name (stash@{n} or n) or a branch or tag name" : "a branch or tag name";
+            const expected = part.slot?.stash
+              ? "a stash name (stash@{n} or n) or a branch or tag name"
+              : "a branch or tag name";
             if (problem) return `${part.param} must be ${expected} there: ${problem}.`;
           }
           if (rule === "rev") {
@@ -880,7 +1197,8 @@ export function workspaceArtifactValueProblem(steps: readonly TemplateStep[], va
             if (problem && part.slot?.fileToo && !gitFileFits(filled)) {
               return `${part.param} must be a git revision or a file inside the workspace there: as a revision, ${problem}; as a file, ${OUTSIDE_PATHS}, and no :.`;
             }
-            if (problem && !part.slot?.fileToo) return `${part.param} must be a git revision there: ${problem}.`;
+            if (problem && !part.slot?.fileToo)
+              return `${part.param} must be a git revision there: ${problem}.`;
           }
           // git runs with GIT_LITERAL_PATHSPECS=1, so `*`, `?` and `[` name themselves (`app/[id]/page.tsx`);
           // a `:` anywhere is refused: leading, it is pathspec magic (`:/`, `:(top)`); inside, git
@@ -896,7 +1214,8 @@ export function workspaceArtifactValueProblem(steps: readonly TemplateStep[], va
         if (slot.search && /(?<![\p{L}\p{N}_])(?:repo|org|user|owner):/iu.test(filled)) {
           return `${name} cannot hold a repo:, org:, user: or owner: qualifier there: it would search past this repository.`;
         }
-        if (slot.rule === "path" && !staysInside(filled)) return `${name} must name a file inside the workspace: ${OUTSIDE_PATHS}.`;
+        if (slot.rule === "path" && !staysInside(filled))
+          return `${name} must name a file inside the workspace: ${OUTSIDE_PATHS}.`;
         const blob = params.find((part) => part.slot?.blob);
         if (blob && !staysInside(blobPath(word, value))) {
           return `${blob.param} must name a file inside the workspace: ${OUTSIDE_PATHS}.`;
@@ -911,15 +1230,23 @@ export function workspaceArtifactValueProblem(steps: readonly TemplateStep[], va
 const GIT_ENV = { GIT_LITERAL_PATHSPECS: "1" } as const;
 
 /** The template's commands with each placeholder replaced by its value, one argument per word. */
-export function fillWorkspaceArtifactTemplate(steps: readonly TemplateStep[], value: (name: string) => string): WorkspaceArtifactArgvStep[] {
+export function fillWorkspaceArtifactTemplate(
+  steps: readonly TemplateStep[],
+  value: (name: string) => string,
+): WorkspaceArtifactArgvStep[] {
   return steps.map((step) => ({
     connector: step.connector,
     pipeline: step.pipeline.map((command) => {
       // Revisions that are files this run, with the `--` after them left out.
-      const files = new Set(command.words.flatMap((word) => (leftOut(word, value) ? word.unlessFiles! : [])));
+      const files = new Set(
+        command.words.flatMap((word) => (leftOut(word, value) ? word.unlessFiles! : [])),
+      );
       const words = command.words.filter((word) => !leftOut(word, value));
       const paths = words.flatMap((word, index) =>
-        files.has(word) || word.parts.some((part) => "param" in part && part.slot?.rule === "path" && !part.slot.blob) ? [index] : [],
+        files.has(word) ||
+        word.parts.some((part) => "param" in part && part.slot?.rule === "path" && !part.slot.blob)
+          ? [index]
+          : [],
       );
       return {
         argv: words.map((word) => filledWord(word, value)),
@@ -945,24 +1272,40 @@ export function previewWorkspaceArtifactTemplate(
 ): string {
   const edits: { at: number; end: number; text: string }[] = [];
   for (const match of template.matchAll(WORKSPACE_ARTIFACT_PLACEHOLDER)) {
-    edits.push({ at: match.index, end: match.index + match[0].length, text: quote(value(match[1]!)) });
+    edits.push({
+      at: match.index,
+      end: match.index + match[0].length,
+      text: quote(value(match[1]!)),
+    });
   }
   for (const step of steps) {
     for (const command of step.pipeline) {
       const first = command.words[0]!;
-      if (literal(first) === "git") edits.push({ at: first.start, end: first.start, text: Object.entries(GIT_ENV).map(([name, setting]) => `${name}=${setting} `).join("") });
+      if (literal(first) === "git")
+        edits.push({
+          at: first.start,
+          end: first.start,
+          text: Object.entries(GIT_ENV)
+            .map(([name, setting]) => `${name}=${setting} `)
+            .join(""),
+        });
       for (const word of command.words) {
         if (leftOut(word, value)) continue;
         // A word the plan adds (`--`) is written after a space; text it adds inside a word (`./`) is not.
         const added = word.parts.every((part) => "text" in part && part.insertedAt !== undefined);
         for (const part of word.parts) {
-          if ("text" in part && part.insertedAt !== undefined) edits.push({ at: part.insertedAt, end: part.insertedAt, text: added ? ` ${part.text}` : part.text });
+          if ("text" in part && part.insertedAt !== undefined)
+            edits.push({
+              at: part.insertedAt,
+              end: part.insertedAt,
+              text: added ? ` ${part.text}` : part.text,
+            });
         }
       }
     }
   }
   // Insertions before a replacement at the same place: `HEAD:` + `./` + the value.
-  edits.sort((a, b) => a.at - b.at || (a.end - a.at) - (b.end - b.at));
+  edits.sort((a, b) => a.at - b.at || a.end - a.at - (b.end - b.at));
   let out = "";
   let from = 0;
   for (const edit of edits) {

@@ -3,27 +3,54 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
-import type { DeviceToolVersions, SshDeviceHostConfig } from "../../../renderer/shared/device-ssh-hosts.js";
+import type {
+  DeviceToolVersions,
+  SshDeviceHostConfig,
+} from "../../../renderer/shared/device-ssh-hosts.js";
 import type { DeviceServiceState } from "../../../renderer/shared/devices.js";
-import { DeviceToolsMissingError, type DeviceHost, type DeviceHostHealth, type DeviceHostReady } from "./device-host.js";
+import {
+  DeviceToolsMissingError,
+  type DeviceHost,
+  type DeviceHostHealth,
+  type DeviceHostReady,
+} from "./device-host.js";
 import type { DeviceHubProxy, DeviceHubTarget } from "./device-hub-proxy.js";
 import { createDeviceService, type DeviceServiceDeps } from "./device-service.js";
 import { AGENT_DEVICE, DEVICE_HUB } from "./device-toolchain.js";
 import type { SshDeviceHost } from "./ssh-device-host.js";
 
 const MINI: SshDeviceHostConfig = { id: "ssh-mini01", label: "Mac mini", target: "me@mini.local" };
-const STUDIO: SshDeviceHostConfig = { id: "ssh-studio", label: "Studio", target: "studio", port: 2222 };
+const STUDIO: SshDeviceHostConfig = {
+  id: "ssh-studio",
+  label: "Studio",
+  target: "studio",
+  port: 2222,
+};
 const REMOTE_PHONE = "AAAAAAAA-0000-4000-8000-000000000001";
 const SIMCTL = JSON.stringify({
   devices: {
     "com.apple.CoreSimulator.SimRuntime.iOS-27-0": [
-      { udid: REMOTE_PHONE, name: "iPhone 17 Pro", state: "Shutdown", isAvailable: true, deviceTypeIdentifier: "iPhone-17-Pro" },
+      {
+        udid: REMOTE_PHONE,
+        name: "iPhone 17 Pro",
+        state: "Shutdown",
+        isAvailable: true,
+        deviceTypeIdentifier: "iPhone-17-Pro",
+      },
     ],
   },
 });
 const TOOLS: DeviceToolVersions = {
-  hub: { requiredVersion: DEVICE_HUB.version, installedVersions: [DEVICE_HUB.version], runningVersion: null },
-  agent: { requiredVersion: AGENT_DEVICE.version, installedVersions: [AGENT_DEVICE.version], runningVersion: null },
+  hub: {
+    requiredVersion: DEVICE_HUB.version,
+    installedVersions: [DEVICE_HUB.version],
+    runningVersion: null,
+  },
+  agent: {
+    requiredVersion: AGENT_DEVICE.version,
+    installedVersions: [AGENT_DEVICE.version],
+    runningVersion: null,
+  },
 };
 
 interface FakeSshOptions {
@@ -49,7 +76,12 @@ function fakeSshHost(config: SshDeviceHostConfig, options: FakeSshOptions) {
     async inspect() {
       log.push("inspect");
       if (options.probeFails) throw new Error(options.probeFails);
-      return { nodePath: "/opt/homebrew/bin/node", nodeVersion: "22.12.0", platforms: [{ platform: "ios", available: true }], tools: TOOLS };
+      return {
+        nodePath: "/opt/homebrew/bin/node",
+        nodeVersion: "22.12.0",
+        platforms: [{ platform: "ios", available: true }],
+        tools: TOOLS,
+      };
     },
     tools: () => TOOLS,
     platformAvailability: async () => ({ platform: "ios", available: true }),
@@ -78,9 +110,17 @@ function fakeSshHost(config: SshDeviceHostConfig, options: FakeSshOptions) {
     },
     async ensureAgentReady(_onPhase, start) {
       log.push(`ensureAgentReady:${start?.allowInstall === true}`);
-      if (options.agentMissing && !start?.allowInstall) throw new DeviceToolsMissingError("agent-device");
+      if (options.agentMissing && !start?.allowInstall)
+        throw new DeviceToolsMissingError("agent-device");
       const current = ready ?? (await host.ensureReady());
-      return { ...current, agentDevice: { baseUrl: "http://127.0.0.1:41002", token: "remote-token", entryPath: "/remote/agent.mjs" } };
+      return {
+        ...current,
+        agentDevice: {
+          baseUrl: "http://127.0.0.1:41002",
+          token: "remote-token",
+          entryPath: "/remote/agent.mjs",
+        },
+      };
     },
     current: () => ready,
     onHealth(listener) {
@@ -97,10 +137,16 @@ function fakeSshHost(config: SshDeviceHostConfig, options: FakeSshOptions) {
       ready = null;
     },
   };
-  return { host, log, health: (value: DeviceHostHealth, detail?: string) => health?.(value, detail) };
+  return {
+    host,
+    log,
+    health: (value: DeviceHostHealth, detail?: string) => health?.(value, detail),
+  };
 }
 
-function fakeLocalHost(options: { installed?: boolean; install?(tool: "hub" | "agent"): Promise<void> } = {}) {
+function fakeLocalHost(
+  options: { installed?: boolean; install?(tool: "hub" | "agent"): Promise<void> } = {},
+) {
   const calls: string[] = [];
   let ready: DeviceHostReady | null = null;
   let installed = options.installed ?? true;
@@ -145,9 +191,16 @@ function fakeLocalHost(options: { installed?: boolean; install?(tool: "hub" | "a
   return { host, calls };
 }
 
-async function installTool(baseDir: string, name: string, version: string, entry: string[]): Promise<void> {
+async function installTool(
+  baseDir: string,
+  name: string,
+  version: string,
+  entry: string[],
+): Promise<void> {
   const directory = path.join(baseDir, "tools", name, version);
-  await mkdir(path.join(directory, "node_modules", name, ...entry.slice(0, -1)), { recursive: true });
+  await mkdir(path.join(directory, "node_modules", name, ...entry.slice(0, -1)), {
+    recursive: true,
+  });
   await writeFile(path.join(directory, "node_modules", name, ...entry), "");
   await writeFile(path.join(directory, ".install-complete"), `${version}\n`);
 }
@@ -179,7 +232,8 @@ async function withService(
   } = {},
 ) {
   const baseDir = await mkdtemp(path.join(tmpdir(), "aiden-devices-ssh-"));
-  if (options.consent) await writeFile(path.join(baseDir, "consent.json"), JSON.stringify(options.consent));
+  if (options.consent)
+    await writeFile(path.join(baseDir, "consent.json"), JSON.stringify(options.consent));
   if (options.hosts) {
     await writeFile(
       path.join(baseDir, "ssh-hosts.json"),
@@ -193,7 +247,9 @@ async function withService(
   const hubCalls: string[] = [];
   const closedHosts: string[] = [];
   const maintenance: Context["maintenance"] = [];
-  let resolver: ((hostId: string) => DeviceHubTarget | null | Promise<DeviceHubTarget | null>) | null = null;
+  let resolver:
+    | ((hostId: string) => DeviceHubTarget | null | Promise<DeviceHubTarget | null>)
+    | null = null;
   const fetch: DeviceServiceDeps["fetch"] = async (url) => {
     hubCalls.push(url);
     const payload = Buffer.from(JSON.stringify({ ok: true }));
@@ -201,7 +257,8 @@ async function withService(
       ok: true,
       status: 200,
       headers: { get: () => "application/json" },
-      arrayBuffer: async () => payload.buffer.slice(payload.byteOffset, payload.byteOffset + payload.byteLength),
+      arrayBuffer: async () =>
+        payload.buffer.slice(payload.byteOffset, payload.byteOffset + payload.byteLength),
     };
   };
   const service = createDeviceService({
@@ -210,7 +267,10 @@ async function withService(
     fetch,
     nodePath: "/fake/electron",
     runMaintenance: async (input) => {
-      maintenance.push({ policy: input.policy, specs: input.specs.map((spec) => `${spec.name}@${spec.version}`) });
+      maintenance.push({
+        policy: input.policy,
+        specs: input.specs.map((spec) => `${spec.name}@${spec.version}`),
+      });
       return [];
     },
     ssh: {
@@ -226,7 +286,11 @@ async function withService(
       resolver = resolveHub;
       return {
         origin: "http://127.0.0.1:53000",
-        mintGrant: () => ({ origin: "http://127.0.0.1:53000", token: "T".repeat(43), expiresAt: 1 }),
+        mintGrant: () => ({
+          origin: "http://127.0.0.1:53000",
+          token: "T".repeat(43),
+          expiresAt: 1,
+        }),
         closeHost: (hostId) => closedHosts.push(hostId),
         close: async () => undefined,
       } satisfies DeviceHubProxy;
@@ -258,7 +322,8 @@ async function withService(
 const STREAMING = { version: 1, streaming: true, agentAccess: false, peerSharing: false };
 const AGENT = { version: 1, streaming: true, agentAccess: true, peerSharing: false };
 const sshLog = (context: Context, id: string) => context.ssh.get(id)!.log;
-const hostOf = (state: DeviceServiceState, id: string) => state.hosts.find((host) => host.id === id);
+const hostOf = (state: DeviceServiceState, id: string) =>
+  state.hosts.find((host) => host.id === id);
 
 test("saved SSH hosts load after This Mac without contacting them", async () => {
   await withService(
@@ -275,7 +340,11 @@ test("saved SSH hosts load after This Mac without contacting them", async () => 
       assert.match(hostOf(state, MINI.id)!.detail ?? "", /only when you ask/u);
       assert.deepEqual(state.sshHosts, [MINI, STUDIO]);
       await context.service.refreshLocal();
-      assert.deepEqual([...context.ssh.values()].flatMap((fake) => fake.log), [], "no host was contacted");
+      assert.deepEqual(
+        [...context.ssh.values()].flatMap((fake) => fake.log),
+        [],
+        "no host was contacted",
+      );
     },
     { consent: STREAMING, hosts: [MINI, STUDIO] },
   );
@@ -286,7 +355,10 @@ test("a full refresh connects SSH hosts and lists their simulators; this-Mac tar
     async (context) => {
       const state = await context.service.refresh();
       assert.equal(hostOf(state, MINI.id)?.status, "ready");
-      assert.deepEqual(sshLog(context, MINI.id), ["ensureReady:false", "run:xcrun simctl list devices --json"]);
+      assert.deepEqual(sshLog(context, MINI.id), [
+        "ensureReady:false",
+        "run:xcrun simctl list devices --json",
+      ]);
       assert.deepEqual(
         state.devices.filter((device) => device.hostId === MINI.id).map((device) => device.id),
         [REMOTE_PHONE],
@@ -308,13 +380,21 @@ test("a host the user never approved asks for Install, and an approved host upda
 
       state = await context.service.updateTool({ hostId: MINI.id, tool: "hub" });
       assert.equal(hostOf(state, MINI.id)?.status, "ready");
-      assert.ok(context.states.some((entry) => hostOf(entry, MINI.id)?.status === "installing"), "progress is visible");
-      const saved = JSON.parse(await readFile(path.join(context.baseDir, "ssh-hosts.json"), "utf8"));
+      assert.ok(
+        context.states.some((entry) => hostOf(entry, MINI.id)?.status === "installing"),
+        "progress is visible",
+      );
+      const saved = JSON.parse(
+        await readFile(path.join(context.baseDir, "ssh-hosts.json"), "utf8"),
+      );
       assert.deepEqual(saved.toolConsent, { [MINI.id]: { hub: true, agent: false } });
 
       // A new Aiden pins a newer hub: the approved host updates on the next explicit connect.
       await context.service.startHost(MINI.id);
-      assert.equal(sshLog(context, MINI.id).filter((entry) => entry === "ensureReady:true").length, 2);
+      assert.equal(
+        sshLog(context, MINI.id).filter((entry) => entry === "ensureReady:true").length,
+        2,
+      );
     },
     { consent: STREAMING, hosts: [MINI], ssh: { [MINI.id]: { missing: true } } },
   );
@@ -324,14 +404,27 @@ test("SSH simulators open through the forwarded hub, and the proxy forgets a hos
   await withService(
     async (context) => {
       await context.service.refresh();
-      const session = await context.service.open({ chatId: "chat-1", hostId: MINI.id, deviceId: REMOTE_PHONE, openedBy: "user" });
-      assert.deepEqual(session, { chatId: "chat-1", hostId: MINI.id, deviceId: REMOTE_PHONE, openedBy: "user" });
+      const session = await context.service.open({
+        chatId: "chat-1",
+        hostId: MINI.id,
+        deviceId: REMOTE_PHONE,
+        openedBy: "user",
+      });
+      assert.deepEqual(session, {
+        chatId: "chat-1",
+        hostId: MINI.id,
+        deviceId: REMOTE_PHONE,
+        openedBy: "user",
+      });
       // Refresh also reads this Mac's hub for Android emulators; the open itself goes only to the forwarded hub.
-      assert.deepEqual(context.hubCalls.filter((url) => url.startsWith("http://127.0.0.1:41001/")), [
-        "http://127.0.0.1:41001/vendor/serve-sim/readyz",
-        "http://127.0.0.1:41001/api/devices/boot",
-        "http://127.0.0.1:41001/vendor/serve-sim/grid/api/start",
-      ]);
+      assert.deepEqual(
+        context.hubCalls.filter((url) => url.startsWith("http://127.0.0.1:41001/")),
+        [
+          "http://127.0.0.1:41001/vendor/serve-sim/readyz",
+          "http://127.0.0.1:41001/api/devices/boot",
+          "http://127.0.0.1:41001/vendor/serve-sim/grid/api/start",
+        ],
+      );
       await context.service.streamGrant();
       assert.equal(await context.resolve(MINI.id), "http://127.0.0.1:41001");
       assert.equal(await context.resolve("ssh-unknown"), null);
@@ -354,7 +447,9 @@ test("turning streaming off disconnects SSH hosts and forgets their install appr
       await context.service.revokeConsent("streaming");
       assert.ok(sshLog(context, MINI.id).includes("stop"));
       assert.equal(hostOf(context.service.state(), MINI.id)?.status, "stopped");
-      const saved = JSON.parse(await readFile(path.join(context.baseDir, "ssh-hosts.json"), "utf8"));
+      const saved = JSON.parse(
+        await readFile(path.join(context.baseDir, "ssh-hosts.json"), "utf8"),
+      );
       assert.deepEqual(saved.toolConsent, {});
       await assert.rejects(context.service.startHost(MINI.id), /Set up simulator streaming first/u);
     },
@@ -376,8 +471,14 @@ test("removing a host stops its helpers there; editing its destination replaces 
       assert.deepEqual(saved.toolConsent, {}, "a new destination needs its own approval");
 
       const added = await context.service.saveSshHost(STUDIO);
-      assert.deepEqual(added.hosts.map((host) => host.id), ["local", MINI.id, STUDIO.id]);
-      await assert.rejects(context.service.saveSshHost({ ...STUDIO, id: "ssh-studi2" }), /already uses this destination/u);
+      assert.deepEqual(
+        added.hosts.map((host) => host.id),
+        ["local", MINI.id, STUDIO.id],
+      );
+      await assert.rejects(
+        context.service.saveSshHost({ ...STUDIO, id: "ssh-studi2" }),
+        /already uses this destination/u,
+      );
 
       await context.service.removeSshHost(STUDIO.id);
       assert.ok(sshLog(context, STUDIO.id).includes("stop"));
@@ -397,8 +498,15 @@ test("agents drive a connected SSH host through that host's own agent-device con
         /Connect Mac mini first/u,
       );
       await context.service.refresh();
-      const target = await context.service.agentTarget({ chatId: "chat-1", hostId: MINI.id, deviceId: REMOTE_PHONE });
-      assert.ok(sshLog(context, MINI.id).includes("ensureAgentReady:false"), "an agent call never installs on the host");
+      const target = await context.service.agentTarget({
+        chatId: "chat-1",
+        hostId: MINI.id,
+        deviceId: REMOTE_PHONE,
+      });
+      assert.ok(
+        sshLog(context, MINI.id).includes("ensureAgentReady:false"),
+        "an agent call never installs on the host",
+      );
       const config = target.args[target.args.indexOf("--config") + 1]!;
       assert.equal(path.dirname(config), path.join(context.baseDir, "hosts"));
       assert.deepEqual(JSON.parse(await readFile(config, "utf8")), {
@@ -410,7 +518,8 @@ test("agents drive a connected SSH host through that host's own agent-device con
     {
       consent: AGENT,
       hosts: [MINI],
-      prepare: (baseDir) => installTool(baseDir, AGENT_DEVICE.name, AGENT_DEVICE.version, ["bin", "agent-device.mjs"]),
+      prepare: (baseDir) =>
+        installTool(baseDir, AGENT_DEVICE.name, AGENT_DEVICE.version, ["bin", "agent-device.mjs"]),
     },
   );
 });
@@ -430,7 +539,8 @@ test("a host without agent tools sends the agent to the user instead of installi
       consent: AGENT,
       hosts: [MINI],
       ssh: { [MINI.id]: { agentMissing: true } },
-      prepare: (baseDir) => installTool(baseDir, AGENT_DEVICE.name, AGENT_DEVICE.version, ["bin", "agent-device.mjs"]),
+      prepare: (baseDir) =>
+        installTool(baseDir, AGENT_DEVICE.name, AGENT_DEVICE.version, ["bin", "agent-device.mjs"]),
     },
   );
 });
@@ -438,19 +548,28 @@ test("a host without agent tools sends the agent to the user instead of installi
 test("Test connection checks a host without starting anything, and reports this Mac or the failure", async () => {
   await withService(
     async (context) => {
-      assert.deepEqual(await context.service.testSshHost({ ...STUDIO, target: "localhost" }), { status: "local" });
+      assert.deepEqual(await context.service.testSshHost({ ...STUDIO, target: "localhost" }), {
+        status: "local",
+      });
       const connected = await context.service.testSshHost(MINI);
       assert.equal(connected.status, "connected");
       assert.deepEqual(sshLog(context, MINI.id), ["inspect"]);
       const draft = { id: "ssh-new001", label: "New", target: "new.local" };
       const failed = await context.service.testSshHost(draft);
-      assert.deepEqual(failed, { status: "failed", error: "Node.js was not found on the host's non-interactive SSH PATH." });
+      assert.deepEqual(failed, {
+        status: "failed",
+        error: "Node.js was not found on the host's non-interactive SSH PATH.",
+      });
       assert.deepEqual(context.service.state().sshHosts, [MINI], "testing never saves a host");
     },
     {
       hosts: [MINI],
       localTargets: ["localhost"],
-      ssh: { "ssh-new001": { probeFails: "Node.js was not found on the host's non-interactive SSH PATH." } },
+      ssh: {
+        "ssh-new001": {
+          probeFails: "Node.js was not found on the host's non-interactive SSH PATH.",
+        },
+      },
     },
   );
 });
@@ -459,11 +578,16 @@ test("checking versions is read-only and one host's failure never hides another'
   await withService(
     async (context) => {
       const state = await context.service.inspectTools();
-      assert.match(hostOf(state, MINI.id)?.toolInspectionError ?? "", /Could not check versions: .*refused.*not changed/u);
+      assert.match(
+        hostOf(state, MINI.id)?.toolInspectionError ?? "",
+        /Could not check versions: .*refused.*not changed/u,
+      );
       assert.equal(hostOf(state, STUDIO.id)?.toolInspectionError, undefined);
       assert.deepEqual(hostOf(state, STUDIO.id)?.tools, TOOLS);
       assert.deepEqual(hostOf(state, "local")?.tools?.hub.installedVersions, []);
-      assert.ok([...context.ssh.values()].every((fake) => fake.log.every((entry) => entry === "inspect")));
+      assert.ok(
+        [...context.ssh.values()].every((fake) => fake.log.every((entry) => entry === "inspect")),
+      );
       assert.deepEqual(context.maintenance, []);
     },
     { hosts: [MINI, STUDIO], ssh: { [MINI.id]: { probeFails: "Connection refused" } } },
@@ -475,7 +599,10 @@ test("an outdated local hub updates only on an explicit Start, with progress, th
     async (context) => {
       let state = await context.service.load();
       assert.equal(state.hostStatus, "stopped");
-      assert.match(state.hostStatuses.local?.detail ?? "", /replaces 0\.11\.0 when you choose Start/u);
+      assert.match(
+        state.hostStatuses.local?.detail ?? "",
+        /replaces 0\.11\.0 when you choose Start/u,
+      );
       await context.service.refreshLocal();
       assert.deepEqual(context.local.calls, [], "loading and refreshing never install");
 
@@ -483,14 +610,20 @@ test("an outdated local hub updates only on an explicit Start, with progress, th
       assert.equal(state.hostStatus, "ready");
       assert.deepEqual(context.local.calls, ["ensureReady:true"]);
       assert.ok(
-        context.states.some((entry) => entry.hostStatuses.local?.detail === "Updating the device hub from 0.11.0 to 0.12.0…"),
+        context.states.some(
+          (entry) =>
+            entry.hostStatuses.local?.detail === "Updating the device hub from 0.11.0 to 0.12.0…",
+        ),
       );
-      assert.deepEqual(context.maintenance, [{ policy: "reclaim", specs: [`${DEVICE_HUB.name}@${DEVICE_HUB.version}`] }]);
+      assert.deepEqual(context.maintenance, [
+        { policy: "reclaim", specs: [`${DEVICE_HUB.name}@${DEVICE_HUB.version}`] },
+      ]);
     },
     {
       consent: STREAMING,
       localInstalled: false,
-      prepare: (baseDir) => installTool(baseDir, DEVICE_HUB.name, "0.11.0", ["dist", "server", "cli.mjs"]),
+      prepare: (baseDir) =>
+        installTool(baseDir, DEVICE_HUB.name, "0.11.0", ["dist", "server", "cli.mjs"]),
     },
   );
 });
@@ -498,13 +631,19 @@ test("an outdated local hub updates only on an explicit Start, with progress, th
 test("manual updates need the matching permission, and Prune uses the locked maintenance pass", async () => {
   await withService(
     async (context) => {
-      await assert.rejects(context.service.updateTool({ hostId: "local", tool: "agent" }), /Turn on agent access/u);
+      await assert.rejects(
+        context.service.updateTool({ hostId: "local", tool: "agent" }),
+        /Turn on agent access/u,
+      );
       await context.service.updateTool({ hostId: "local", tool: "hub" });
       assert.ok(context.local.calls.includes("installTool:hub"));
       await context.service.pruneTools();
       assert.deepEqual(context.maintenance[context.maintenance.length - 1], {
         policy: "prune",
-        specs: [`${DEVICE_HUB.name}@${DEVICE_HUB.version}`, `${AGENT_DEVICE.name}@${AGENT_DEVICE.version}`],
+        specs: [
+          `${DEVICE_HUB.name}@${DEVICE_HUB.version}`,
+          `${AGENT_DEVICE.name}@${AGENT_DEVICE.version}`,
+        ],
       });
     },
     { consent: STREAMING },
@@ -537,7 +676,8 @@ function gate() {
 }
 
 const settled = () => new Promise<void>((resolve) => setImmediate(resolve));
-const localInstalls = (context: Context) => context.local.calls.filter((call) => call.startsWith("installTool:"));
+const localInstalls = (context: Context) =>
+  context.local.calls.filter((call) => call.startsWith("installTool:"));
 
 test("a queued local agent-tool update never installs after agent access is revoked", async () => {
   const first = gate();
@@ -553,7 +693,11 @@ test("a queued local agent-tool update never installs after agent access is revo
       first.release();
       await running;
       await assert.rejects(queued, /Agent access was turned off/u);
-      assert.deepEqual(localInstalls(context), ["installTool:agent"], "only the install already under way ran");
+      assert.deepEqual(
+        localInstalls(context),
+        ["installTool:agent"],
+        "only the install already under way ran",
+      );
     },
     {
       consent: AGENT,
@@ -603,12 +747,21 @@ test("an SSH agent-tool update that loses an agent-access revoke while connectin
       await context.service.revokeConsent("agentAccess");
       connecting.release();
       await assert.rejects(updating, /Agent access was turned off/u);
-      assert.ok(!sshLog(context, MINI.id).includes("ensureAgentReady:true"), sshLog(context, MINI.id).join(", "));
+      assert.ok(
+        !sshLog(context, MINI.id).includes("ensureAgentReady:true"),
+        sshLog(context, MINI.id).join(", "),
+      );
     },
     {
       consent: AGENT,
       hosts: [MINI],
-      ssh: { [MINI.id]: { agentMissing: true, hold: connecting.held, onEnsureReady: () => connecting.reached() } },
+      ssh: {
+        [MINI.id]: {
+          agentMissing: true,
+          hold: connecting.held,
+          onEnsureReady: () => connecting.reached(),
+        },
+      },
     },
   );
 });

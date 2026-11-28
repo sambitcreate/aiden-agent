@@ -1,6 +1,10 @@
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
-import type { BrowserCommand, BrowserCommandResult, BrowserState } from "../../renderer/shared/browser";
+import type {
+  BrowserCommand,
+  BrowserCommandResult,
+  BrowserState,
+} from "../../renderer/shared/browser";
 import { auditAccessibility } from "./axe-gate";
 import {
   expect,
@@ -13,9 +17,7 @@ import {
 const PRIMARY_MODIFIER = process.platform === "darwin" ? "Meta" : "Control";
 
 async function seedChat({ app, page }: AidenE2e): Promise<void> {
-  const workspaceId = await page.evaluate(() =>
-    localStorage.getItem("aiden-agent.workspaceId"),
-  );
+  const workspaceId = await page.evaluate(() => localStorage.getItem("aiden-agent.workspaceId"));
   expect(workspaceId).toBeTruthy();
   await app.evaluate(({ ipcMain }, workspaceId) => {
     const chat = {
@@ -58,9 +60,7 @@ test("core surfaces pass the WCAG A/AA axe gate and keep their accessible struct
   const problems: string[] = [];
 
   await test.step("main chat window with the composer", async () => {
-    problems.push(
-      ...(await auditAccessibility(page, { surface: "chat window" })),
-    );
+    problems.push(...(await auditAccessibility(page, { surface: "chat window" })));
     // An empty draft shows Aiden Live in Send's place on macOS and Linux.
     await expect(page.getByRole("main")).toMatchAriaSnapshot(`
       - main:
@@ -94,9 +94,7 @@ test("core surfaces pass the WCAG A/AA axe gate and keep their accessible struct
         - button "Customize slider…"
     `);
     await picker.getByRole("button", { name: /^Other models…/u }).click();
-    await expect(
-      picker.getByRole("combobox", { name: "Chat model" }),
-    ).toBeFocused();
+    await expect(picker.getByRole("combobox", { name: "Chat model" })).toBeFocused();
     problems.push(
       ...(await auditAccessibility(page, {
         surface: "model picker",
@@ -122,9 +120,7 @@ test("core surfaces pass the WCAG A/AA axe gate and keep their accessible struct
   await test.step("command palette", async () => {
     await page.keyboard.press(`${PRIMARY_MODIFIER}+K`);
     const palette = page.getByRole("dialog", { name: "Commands" });
-    await expect(
-      palette.getByRole("combobox", { name: "Search commands" }),
-    ).toBeFocused();
+    await expect(palette.getByRole("combobox", { name: "Search commands" })).toBeFocused();
     problems.push(
       ...(await auditAccessibility(page, {
         surface: "command palette",
@@ -143,9 +139,7 @@ test("core surfaces pass the WCAG A/AA axe gate and keep their accessible struct
 
   await test.step("confirm dialog", async () => {
     await seedChat(aiden);
-    await page
-      .locator("aside button", { hasText: "Accessibility chat" })
-      .click();
+    await page.locator("aside button", { hasText: "Accessibility chat" }).click();
     await expect(page.getByText("Audit me", { exact: true })).toBeVisible();
     await page.keyboard.press(`${PRIMARY_MODIFIER}+K`);
     const search = page.getByRole("combobox", { name: "Search commands" });
@@ -172,9 +166,7 @@ test("core surfaces pass the WCAG A/AA axe gate and keep their accessible struct
   });
 
   await test.step("browser grab chip & inspection popover", async () => {
-    const workspaceId = await page.evaluate(() =>
-      localStorage.getItem("aiden-agent.workspaceId"),
-    );
+    const workspaceId = await page.evaluate(() => localStorage.getItem("aiden-agent.workspaceId"));
     expect(workspaceId).toBeTruthy();
     const server = createServer((_request, response) => {
       response.writeHead(200, { "content-type": "text/html; charset=utf-8" });
@@ -257,9 +249,10 @@ test("core surfaces pass the WCAG A/AA axe gate and keep their accessible struct
       const popover = page.getByRole("dialog", { name: "Included with your message" });
       await expect(popover).toBeVisible();
       await popover.locator("[data-grabbed-element-details-toggle]").click();
-      await expect(
-        popover.locator("[data-grabbed-element-details-toggle]"),
-      ).toHaveAttribute("aria-expanded", "true");
+      await expect(popover.locator("[data-grabbed-element-details-toggle]")).toHaveAttribute(
+        "aria-expanded",
+        "true",
+      );
       problems.push(
         ...(await auditAccessibility(page, {
           surface: "browser grab inspection popover",
@@ -286,15 +279,9 @@ test("core surfaces pass the WCAG A/AA axe gate and keep their accessible struct
   await test.step("settings: Providers and Appearance", async () => {
     await page.getByRole("button", { name: "Settings", exact: true }).click();
     const navigation = page.getByRole("navigation", { name: "Settings" });
-    await navigation
-      .getByRole("button", { name: "Providers", exact: true })
-      .click();
-    await expect(
-      page.getByRole("heading", { name: "Your connections" }),
-    ).toBeVisible();
-    problems.push(
-      ...(await auditAccessibility(page, { surface: "settings providers" })),
-    );
+    await navigation.getByRole("button", { name: "Providers", exact: true }).click();
+    await expect(page.getByRole("heading", { name: "Your connections" })).toBeVisible();
+    problems.push(...(await auditAccessibility(page, { surface: "settings providers" })));
     await expect(navigation).toMatchAriaSnapshot(`
       - navigation "Settings":
         - button "Providers"
@@ -307,17 +294,10 @@ test("core surfaces pass the WCAG A/AA axe gate and keep their accessible struct
         - button "Connect another AI"
     `);
 
-    await navigation
-      .getByRole("button", { name: "Appearance", exact: true })
-      .click();
-    await expect(
-      page.getByRole("radiogroup", { name: "Themes", exact: true }),
-    ).toBeVisible();
-    problems.push(
-      ...(await auditAccessibility(page, { surface: "settings appearance" })),
-    );
-    await expect(page.getByRole("region", { name: "Theme" }))
-      .toMatchAriaSnapshot(`
+    await navigation.getByRole("button", { name: "Appearance", exact: true }).click();
+    await expect(page.getByRole("radiogroup", { name: "Themes", exact: true })).toBeVisible();
+    problems.push(...(await auditAccessibility(page, { surface: "settings appearance" })));
+    await expect(page.getByRole("region", { name: "Theme" })).toMatchAriaSnapshot(`
       - region "Theme":
         - heading "Theme" [level=2]
         - radiogroup "Theme mode":
@@ -331,9 +311,7 @@ test("core surfaces pass the WCAG A/AA axe gate and keep their accessible struct
 
   await test.step("settings: Agent Slider editor at narrow and wide widths", async () => {
     const navigation = page.getByRole("navigation", { name: "Settings" });
-    await navigation
-      .getByRole("button", { name: "Agent Slider", exact: true })
-      .click();
+    await navigation.getByRole("button", { name: "Agent Slider", exact: true }).click();
     for (const [label, width, height] of [
       ["wide", 1280, 800],
       ["narrow", 600, 720],
@@ -344,9 +322,7 @@ test("core surfaces pass the WCAG A/AA axe gate and keep their accessible struct
         },
         { width, height },
       );
-      await expect(
-        page.getByRole("slider", { name: "Agent Slider" }),
-      ).toBeVisible();
+      await expect(page.getByRole("slider", { name: "Agent Slider" })).toBeVisible();
       problems.push(
         ...(await auditAccessibility(page, {
           surface: `settings agent slider (${label})`,

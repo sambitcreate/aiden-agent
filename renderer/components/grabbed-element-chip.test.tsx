@@ -19,7 +19,9 @@ import type { Attachment } from "../lib/types";
 const ONE_PIXEL_PNG_B64 =
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScL2aQAAAABJRU5ErkJggg==";
 
-function sampleReactElement(overrides: Partial<GrabbedElementContextV1> = {}): GrabbedElementContextV1 {
+function sampleReactElement(
+  overrides: Partial<GrabbedElementContextV1> = {},
+): GrabbedElementContextV1 {
   const id = overrides.id ?? "el-hero";
   return {
     version: GRABBED_ELEMENT_SCHEMA_VERSION,
@@ -28,7 +30,11 @@ function sampleReactElement(overrides: Partial<GrabbedElementContextV1> = {}): G
     framework: "react",
     componentName: "LandingHeroClient",
     componentStack: [
-      { name: "LandingHeroClient", environment: "client", source: { filePath: "app/hero.tsx", line: 42, column: 5 } },
+      {
+        name: "LandingHeroClient",
+        environment: "client",
+        source: { filePath: "app/hero.tsx", line: 42, column: 5 },
+      },
       { name: "LandingPage", environment: "server" },
       { name: "Home" },
     ],
@@ -71,11 +77,19 @@ test("renders two sibling buttons per chip (zero nested interactive controls) an
     />,
   );
 
-  const chip = container.querySelector<HTMLLIElement>(`[data-grabbed-element-chip="${element.id}"]`);
+  const chip = container.querySelector<HTMLLIElement>(
+    `[data-grabbed-element-chip="${element.id}"]`,
+  );
   assert.ok(chip, "chip list item renders");
-  const trigger = screen.getByRole("button", { name: "Inspect browser element <LandingHeroClient />" });
+  const trigger = screen.getByRole("button", {
+    name: "Inspect browser element <LandingHeroClient />",
+  });
   const remove = screen.getByRole("button", { name: "Remove <LandingHeroClient />" });
-  assert.equal(trigger.contains(remove), false, "remove button is a sibling, not nested inside trigger");
+  assert.equal(
+    trigger.contains(remove),
+    false,
+    "remove button is a sibling, not nested inside trigger",
+  );
   assert.equal(remove.contains(trigger), false, "trigger is not nested inside remove button");
 
   fireEvent.click(remove);
@@ -92,7 +106,9 @@ test("hover previews after 250ms and closes after 140ms grace; clicking pins and
     />,
   );
 
-  const trigger = screen.getByRole("button", { name: "Inspect browser element <LandingHeroClient />" });
+  const trigger = screen.getByRole("button", {
+    name: "Inspect browser element <LandingHeroClient />",
+  });
   assert.equal(trigger.getAttribute("aria-expanded"), "false");
 
   // Hover preview opens after 250ms without pinning.
@@ -103,9 +119,15 @@ test("hover previews after 250ms and closes after 140ms grace; clicking pins and
     await new Promise((resolve) => setTimeout(resolve, GRAB_POPOVER_OPEN_DELAY_MS + 40));
   });
   assert.equal(trigger.getAttribute("aria-expanded"), "true");
-  const popover = document.querySelector<HTMLElement>(`[data-grabbed-element-popover="${element.id}"]`);
+  const popover = document.querySelector<HTMLElement>(
+    `[data-grabbed-element-popover="${element.id}"]`,
+  );
   assert.ok(popover, "popover renders on hover");
-  assert.equal(popover.getAttribute("data-slot"), "popover-content", "carries browser occluder slot");
+  assert.equal(
+    popover.getAttribute("data-slot"),
+    "popover-content",
+    "carries browser occluder slot",
+  );
   assert.equal(popover.getAttribute("data-pinned"), "false");
   const labelledBy = popover.getAttribute("aria-labelledby");
   assert.ok(labelledBy, "popover has an accessible name via aria-labelledby");
@@ -117,7 +139,9 @@ test("hover previews after 250ms and closes after 140ms grace; clicking pins and
   // Moving into popover and expanding details auto-pins so pointer leave keeps it open.
   fireEvent.pointerLeave(trigger, { pointerType: "mouse" });
   fireEvent.pointerEnter(popover, { pointerType: "mouse" });
-  const detailsToggle = popover.querySelector<HTMLButtonElement>("[data-grabbed-element-details-toggle]");
+  const detailsToggle = popover.querySelector<HTMLButtonElement>(
+    "[data-grabbed-element-details-toggle]",
+  );
   assert.ok(detailsToggle, "disclosure toggle renders");
   assert.equal(detailsToggle.getAttribute("aria-expanded"), "false");
 
@@ -132,7 +156,11 @@ test("hover previews after 250ms and closes after 140ms grace; clicking pins and
   await act(async () => {
     await new Promise((resolve) => setTimeout(resolve, GRAB_POPOVER_CLOSE_DELAY_MS + 40));
   });
-  assert.equal(trigger.getAttribute("aria-expanded"), "true", "pinned popover stays open after leave");
+  assert.equal(
+    trigger.getAttribute("aria-expanded"),
+    "true",
+    "pinned popover stays open after leave",
+  );
 
   // Clicking the trigger toggles the pinned popover closed.
   fireEvent.click(trigger);
@@ -143,7 +171,9 @@ test("unpinned hover popover closes after grace delay on pointer leave", async (
   const element = sampleReactElement({ id: "el-leave" });
   render(<GrabbedElementChips elements={[element]} onRemove={() => undefined} />);
 
-  const trigger = screen.getByRole("button", { name: "Inspect browser element <LandingHeroClient />" });
+  const trigger = screen.getByRole("button", {
+    name: "Inspect browser element <LandingHeroClient />",
+  });
   fireEvent.pointerEnter(trigger, { pointerType: "mouse" });
   await act(async () => {
     await new Promise((resolve) => setTimeout(resolve, GRAB_POPOVER_OPEN_DELAY_MS + 40));
@@ -171,7 +201,9 @@ test("copy context auto-pins and writes deterministic prompt text to clipboard",
   try {
     const element = sampleReactElement({ id: "el-copy" });
     render(<GrabbedElementChips elements={[element]} onRemove={() => undefined} />);
-    const trigger = screen.getByRole("button", { name: "Inspect browser element <LandingHeroClient />" });
+    const trigger = screen.getByRole("button", {
+      name: "Inspect browser element <LandingHeroClient />",
+    });
     fireEvent.pointerEnter(trigger, { pointerType: "mouse" });
     await act(async () => {
       await new Promise((resolve) => setTimeout(resolve, GRAB_POPOVER_OPEN_DELAY_MS + 40));
@@ -185,7 +217,9 @@ test("copy context auto-pins and writes deterministic prompt text to clipboard",
     assert.match(written[0]!, /<attached-browser-elements>/u);
     assert.match(written[0]!, /LandingHeroClient/u);
     assert.doesNotMatch(written[0]!, /1700000000000/u);
-    const popover = document.querySelector<HTMLElement>(`[data-grabbed-element-popover="${element.id}"]`);
+    const popover = document.querySelector<HTMLElement>(
+      `[data-grabbed-element-popover="${element.id}"]`,
+    );
     assert.equal(popover?.getAttribute("data-pinned"), "true", "copying auto-pins popover");
   } finally {
     Object.defineProperty(navigator, "clipboard", { configurable: true, value: originalClipboard });
@@ -219,17 +253,30 @@ test("text-only models show non-blocking note in composer and popover; transcrip
   fireEvent.click(trigger);
   const popover = document.querySelector<HTMLElement>('[data-grabbed-element-popover="el-dom"]');
   assert.ok(popover?.querySelector("[data-grabbed-element-text-only-note]"));
-  assert.ok(popover?.textContent?.includes("figure > img.hero-photo"), "plain DOM shows Selector row");
+  assert.ok(
+    popover?.textContent?.includes("figure > img.hero-photo"),
+    "plain DOM shows Selector row",
+  );
 
   rerender(<GrabbedElementChips elements={[domElement]} mode="transcript" />);
-  assert.equal(screen.queryByRole("button", { name: "Remove img" }), null, "transcript hides remove button");
+  assert.equal(
+    screen.queryByRole("button", { name: "Remove img" }),
+    null,
+    "transcript hides remove button",
+  );
   assert.equal(document.querySelector("[data-grabbed-elements-text-only-hint]"), null);
   assert.ok(popover?.textContent?.includes("Included with message"));
 });
 
 test("formatting helpers produce expected source location and hierarchy strings", () => {
-  assert.equal(formatGrabbedSourceLocation({ filePath: "src/App.tsx", line: 12, column: 3 }), "src/App.tsx:12:3");
-  assert.equal(formatGrabbedSourceLocation({ filePath: "src/App.tsx", line: 12 }), "src/App.tsx:12");
+  assert.equal(
+    formatGrabbedSourceLocation({ filePath: "src/App.tsx", line: 12, column: 3 }),
+    "src/App.tsx:12:3",
+  );
+  assert.equal(
+    formatGrabbedSourceLocation({ filePath: "src/App.tsx", line: 12 }),
+    "src/App.tsx:12",
+  );
   assert.equal(formatGrabbedSourceLocation({ filePath: "src/App.tsx" }), "src/App.tsx");
   assert.equal(
     formatGrabbedComponentHierarchy(sampleReactElement()),
@@ -253,11 +300,15 @@ test("Escape closes an open inspection popover and returns focus to the chip tri
   const element = sampleReactElement({ id: "el-esc" });
   render(<GrabbedElementChips elements={[element]} onRemove={() => undefined} />);
 
-  const trigger = screen.getByRole("button", { name: "Inspect browser element <LandingHeroClient />" });
+  const trigger = screen.getByRole("button", {
+    name: "Inspect browser element <LandingHeroClient />",
+  });
   fireEvent.click(trigger);
   assert.equal(trigger.getAttribute("aria-expanded"), "true");
 
-  const detailsToggle = document.querySelector<HTMLButtonElement>("[data-grabbed-element-details-toggle]");
+  const detailsToggle = document.querySelector<HTMLButtonElement>(
+    "[data-grabbed-element-details-toggle]",
+  );
   assert.ok(detailsToggle);
   detailsToggle.focus();
   fireEvent.keyDown(detailsToggle, { key: "Escape" });

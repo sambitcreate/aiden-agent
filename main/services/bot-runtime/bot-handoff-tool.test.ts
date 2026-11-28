@@ -7,7 +7,12 @@ import { after, test } from "node:test";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import { getCurrentTools, type ToolCall } from "@earendil-works/pi-ai";
 import { fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-ai/providers/faux";
-import { Harness, MemoryStorage, ToolResultEntry, type Conversation } from "@earendil-works/pi-durable";
+import {
+  Harness,
+  MemoryStorage,
+  ToolResultEntry,
+  type Conversation,
+} from "@earendil-works/pi-durable";
 import type { BotTranscriptEntry } from "../../../renderer/shared/bot-live.js";
 import { createBotRegistry, type BotRegistry } from "./bot-extension.js";
 import { createBotHarnessHost, type BotHarnessHost } from "./harness-host.js";
@@ -21,10 +26,18 @@ import { projectBotTranscript } from "./live-projection.js";
 import { spawnHarnessChild } from "./test-support/child.js";
 import { recordingDeps } from "./test-support/fixtures.js";
 import { createFauxModels, FAUX_MODEL_REF, waitFor, type FauxModels } from "./test-support/faux.js";
-import { HANDOFF_ARGS, HANDOFF_TOOL_NAME, handoffEntries } from "./test-support/handoff-fixtures.js";
+import {
+  HANDOFF_ARGS,
+  HANDOFF_TOOL_NAME,
+  handoffEntries,
+} from "./test-support/handoff-fixtures.js";
 
 const ctx = BACKGROUND_CONTEXT;
-const scenarioFile = path.join(path.dirname(fileURLToPath(import.meta.url)), "test-support", "handoff-scenario.ts");
+const scenarioFile = path.join(
+  path.dirname(fileURLToPath(import.meta.url)),
+  "test-support",
+  "handoff-scenario.ts",
+);
 const roots: string[] = [];
 function tempProfile(): string {
   const root = mkdtempSync(path.join(os.tmpdir(), "aiden-bot-handoff-"));
@@ -39,7 +52,12 @@ const ACTION = "Enter the 2FA code for your bank";
 const DONE_TEXT = `The person says they did this: ${ACTION}. Check the result before continuing.`;
 const SKIP_TEXT = `The person chose not to do this: ${ACTION}. Do not try another way to do it; say what you will do instead.`;
 
-type ToolResultModel = { isError: boolean; toolName: string; toolCallId: string; content: Array<{ text?: string }> };
+type ToolResultModel = {
+  isError: boolean;
+  toolName: string;
+  toolCallId: string;
+  content: Array<{ text?: string }>;
+};
 
 async function handoffResults(conversation: Conversation): Promise<ToolResultModel[]> {
   const view = await conversation.context(ctx);
@@ -50,22 +68,40 @@ async function handoffResults(conversation: Conversation): Promise<ToolResultMod
 }
 
 /** What the chat shows on the person's side for their answers. */
-async function answerRows(conversation: Conversation): Promise<Array<Extract<BotTranscriptEntry, { type: "handoff_result" }>>> {
+async function answerRows(
+  conversation: Conversation,
+): Promise<Array<Extract<BotTranscriptEntry, { type: "handoff_result" }>>> {
   const view = await conversation.context(ctx);
-  return projectBotTranscript(view.entries).flatMap((entry) => (entry.type === "handoff_result" ? [entry] : []));
+  return projectBotTranscript(view.entries).flatMap((entry) =>
+    entry.type === "handoff_result" ? [entry] : [],
+  );
 }
 
-async function memoryHarness(botId: string, handoffs: BotHandoffs, fauxModels: FauxModels, handoffDeps: BotHandoffDeps = {}) {
+async function memoryHarness(
+  botId: string,
+  handoffs: BotHandoffs,
+  fauxModels: FauxModels,
+  handoffDeps: BotHandoffDeps = {},
+) {
   const deps = recordingDeps({ tools: handoffEntries(handoffs, botId, handoffDeps) });
   const registry: BotRegistry = createBotRegistry(botId, deps);
   await registry.refresh();
-  const harness = await Harness.open(new MemoryStorage(), { models: fauxModels.models, registry }, ctx);
+  const harness = await Harness.open(
+    new MemoryStorage(),
+    { models: fauxModels.models, registry },
+    ctx,
+  );
   registry.attachHarness(harness);
   const root = await harness.root(ctx, { agent: { model: FAUX_MODEL_REF } });
   return { harness, root };
 }
 
-async function profileHost(profile: string, botId: string, handoffs: BotHandoffs, fauxModels: FauxModels) {
+async function profileHost(
+  profile: string,
+  botId: string,
+  handoffs: BotHandoffs,
+  fauxModels: FauxModels,
+) {
   const deps = recordingDeps({ tools: handoffEntries(handoffs, botId) });
   let registry: BotRegistry | undefined;
   const host = (await createBotHarnessHost({
@@ -79,7 +115,9 @@ async function profileHost(profile: string, botId: string, handoffs: BotHandoffs
 }
 
 const handOffOnce = (args: unknown = HANDOFF_ARGS) =>
-  fauxAssistantMessage([fauxToolCall(HANDOFF_TOOL_NAME, args as ToolCall["arguments"])], { stopReason: "toolUse" });
+  fauxAssistantMessage([fauxToolCall(HANDOFF_TOOL_NAME, args as ToolCall["arguments"])], {
+    stopReason: "toolUse",
+  });
 
 test("a Bot hands off a step, waits, and Done with a note becomes one tool result and one line on the person's side", async () => {
   const offered: string[][] = [];
@@ -93,12 +131,23 @@ test("a Bot hands off a step, waits, and Done with a note becomes one tool resul
   const handoffs = createBotHandoffs();
   const { harness, root } = await memoryHarness("bot-h", handoffs, fauxModels);
   try {
-    const settled = (await root.submit({ type: "input", content: "log in to my bank" }, ctx)).wait(ctx);
+    const settled = (await root.submit({ type: "input", content: "log in to my bank" }, ctx)).wait(
+      ctx,
+    );
     await waitFor(() => handoffs.pending("bot-h").length === 1, { what: "the hand-off card" });
     const [card] = handoffs.pending("bot-h");
-    assert.ok(offered[0]!.includes(HANDOFF_TOOL_NAME), "the hand-off tool is offered on an attended turn");
+    assert.ok(
+      offered[0]!.includes(HANDOFF_TOOL_NAME),
+      "the hand-off tool is offered on an attended turn",
+    );
     assert.deepEqual(
-      { kind: card!.kind, source: card!.source, action: card!.action, why: card!.why, open: card!.open },
+      {
+        kind: card!.kind,
+        source: card!.source,
+        action: card!.action,
+        why: card!.why,
+        open: card!.open,
+      },
       {
         kind: "action",
         source: "tool",
@@ -111,8 +160,15 @@ test("a Bot hands off a step, waits, and Done with a note becomes one tool resul
 
     assert.equal(handoffs.answer("bot-h", card!.waitId, { outcome: "maybe" }), "invalid");
     assert.equal(handoffs.pending("bot-h").length, 1, "an invalid answer keeps the card waiting");
-    assert.equal(handoffs.answer("bot-h", card!.waitId, { outcome: "done", note: "Entered 481 516." }), "answered");
-    assert.equal(handoffs.answer("bot-h", card!.waitId, { outcome: "skipped" }), "not_waiting", "the first answer wins");
+    assert.equal(
+      handoffs.answer("bot-h", card!.waitId, { outcome: "done", note: "Entered 481 516." }),
+      "answered",
+    );
+    assert.equal(
+      handoffs.answer("bot-h", card!.waitId, { outcome: "skipped" }),
+      "not_waiting",
+      "the first answer wins",
+    );
     assert.equal((await settled).status, "done");
 
     const results = await handoffResults(root);
@@ -122,7 +178,15 @@ test("a Bot hands off a step, waits, and Done with a note becomes one tool resul
     const rows = await answerRows(root);
     assert.deepEqual(
       rows.map(({ id, kind, outcome, action, note }) => ({ id, kind, outcome, action, note })),
-      [{ id: `handoff:${card!.toolCallId}`, kind: "action", outcome: "done", action: ACTION, note: "Entered 481 516." }],
+      [
+        {
+          id: `handoff:${card!.toolCallId}`,
+          kind: "action",
+          outcome: "done",
+          action: ACTION,
+          note: "Entered 481 516.",
+        },
+      ],
     );
     assert.equal(fauxModels.calls(), 2, "the model continues once, after the answer");
   } finally {
@@ -131,7 +195,10 @@ test("a Bot hands off a step, waits, and Done with a note becomes one tool resul
 });
 
 test("Skip tells the model not to find another way, and reads as skipped on the person's side", async () => {
-  const fauxModels = createFauxModels([handOffOnce({ action: ACTION }), fauxAssistantMessage("Okay, I'll leave it.")]);
+  const fauxModels = createFauxModels([
+    handOffOnce({ action: ACTION }),
+    fauxAssistantMessage("Okay, I'll leave it."),
+  ]);
   const handoffs = createBotHandoffs();
   const { harness, root } = await memoryHarness("bot-skip", handoffs, fauxModels);
   try {
@@ -165,7 +232,10 @@ test("Stop while a card waits withdraws it without recording an answer; a late a
     assert.equal((await settled).status, "unanswered");
     assert.deepEqual(handoffs.pending("bot-stop"), [], "the card is withdrawn");
     assert.equal(handoffs.answer("bot-stop", card!.waitId, { outcome: "done" }), "not_waiting");
-    assert.ok((await handoffResults(root)).every((result) => result.isError), "no answer was recorded");
+    assert.ok(
+      (await handoffResults(root)).every((result) => result.isError),
+      "no answer was recorded",
+    );
     assert.deepEqual(await answerRows(root), [], "nothing reads as the person's answer");
     assert.equal(fauxModels.calls(), 1, "the model is not asked to continue");
   } finally {
@@ -176,7 +246,10 @@ test("Stop while a card waits withdraws it without recording an answer; a late a
 test("two hand-offs in one round are shown one at a time", async () => {
   const fauxModels = createFauxModels([
     fauxAssistantMessage(
-      [fauxToolCall(HANDOFF_TOOL_NAME, { action: ACTION }), fauxToolCall(HANDOFF_TOOL_NAME, { action: "Approve the payment" })],
+      [
+        fauxToolCall(HANDOFF_TOOL_NAME, { action: ACTION }),
+        fauxToolCall(HANDOFF_TOOL_NAME, { action: "Approve the payment" }),
+      ],
       { stopReason: "toolUse" },
     ),
     fauxAssistantMessage("All set."),
@@ -192,7 +265,9 @@ test("two hand-offs in one round are shown one at a time", async () => {
     assert.equal(first!.action, ACTION);
     assert.equal(handoffs.answer("bot-two", first!.waitId, { outcome: "done" }), "answered");
 
-    await waitFor(() => handoffs.pending("bot-two")[0]?.action === "Approve the payment", { what: "the second card" });
+    await waitFor(() => handoffs.pending("bot-two")[0]?.action === "Approve the payment", {
+      what: "the second card",
+    });
     const [next] = handoffs.pending("bot-two");
     assert.notEqual(next!.waitId, first!.waitId);
     assert.equal(handoffs.answer("bot-two", next!.waitId, { outcome: "skipped" }), "answered");
@@ -214,8 +289,14 @@ test("a link that is not https, or a blank step, is an error result and never sh
   const fauxModels = createFauxModels([
     fauxAssistantMessage(
       [
-        fauxToolCall(HANDOFF_TOOL_NAME, { action: ACTION, open: { url: "http://bank.example/verify" } }),
-        fauxToolCall(HANDOFF_TOOL_NAME, { action: ACTION, open: { url: "https://ada:pw@bank.example/" } }),
+        fauxToolCall(HANDOFF_TOOL_NAME, {
+          action: ACTION,
+          open: { url: "http://bank.example/verify" },
+        }),
+        fauxToolCall(HANDOFF_TOOL_NAME, {
+          action: ACTION,
+          open: { url: "https://ada:pw@bank.example/" },
+        }),
         fauxToolCall(HANDOFF_TOOL_NAME, { action: "   " }),
       ],
       { stopReason: "toolUse" },
@@ -227,10 +308,16 @@ test("a link that is not https, or a blank step, is an error result and never sh
   handoffs.onChange(() => (shown += handoffs.pending().length));
   const { harness, root } = await memoryHarness("bot-bad", handoffs, fauxModels);
   try {
-    assert.equal((await (await root.submit({ type: "input", content: "log in" }, ctx)).wait(ctx)).status, "done");
+    assert.equal(
+      (await (await root.submit({ type: "input", content: "log in" }, ctx)).wait(ctx)).status,
+      "done",
+    );
     const results = await handoffResults(root);
     assert.equal(results.length, 3);
-    assert.ok(results.every((result) => result.isError), "each bad call failed");
+    assert.ok(
+      results.every((result) => result.isError),
+      "each bad call failed",
+    );
     assert.match(results[0]!.content.map((part) => part.text ?? "").join(""), /https:\/\//u);
     assert.match(results[2]!.content.map((part) => part.text ?? "").join(""), /needs an action/u);
     assert.equal(shown, 0, "no card was ever shown");
@@ -244,13 +331,21 @@ test("a step in the Bot's own browser is marked for its screen; a place the Bot 
   const offeredWhere: unknown[] = [];
   const fauxModels = createFauxModels([
     (context) => {
-      const tool = getCurrentTools(context.messages).find((entry) => entry.name === HANDOFF_TOOL_NAME);
-      offeredWhere.push((tool?.parameters as { properties?: Record<string, unknown> }).properties?.where);
+      const tool = getCurrentTools(context.messages).find(
+        (entry) => entry.name === HANDOFF_TOOL_NAME,
+      );
+      offeredWhere.push(
+        (tool?.parameters as { properties?: Record<string, unknown> }).properties?.where,
+      );
       return fauxAssistantMessage(
         [
           fauxToolCall(HANDOFF_TOOL_NAME, { action: ACTION, where: "computer" }),
           fauxToolCall(HANDOFF_TOOL_NAME, { action: ACTION, where: "phone" }),
-          fauxToolCall(HANDOFF_TOOL_NAME, { action: "Choose the delivery slot.", where: "browser", open: { url: "https://shop.example/checkout" } }),
+          fauxToolCall(HANDOFF_TOOL_NAME, {
+            action: "Choose the delivery slot.",
+            where: "browser",
+            open: { url: "https://shop.example/checkout" },
+          }),
         ],
         { stopReason: "toolUse" },
       );
@@ -258,23 +353,35 @@ test("a step in the Bot's own browser is marked for its screen; a place the Bot 
     fauxAssistantMessage("Thanks, the slot is booked."),
   ]);
   const handoffs = createBotHandoffs();
-  const { harness, root } = await memoryHarness("bot-where", handoffs, fauxModels, { targets: { browser: true, computer: false } });
+  const { harness, root } = await memoryHarness("bot-where", handoffs, fauxModels, {
+    targets: { browser: true, computer: false },
+  });
   try {
-    const settled = (await root.submit({ type: "input", content: "book my groceries" }, ctx)).wait(ctx);
+    const settled = (await root.submit({ type: "input", content: "book my groceries" }, ctx)).wait(
+      ctx,
+    );
     await waitFor(() => handoffs.pending("bot-where").length === 1, { what: "the hand-off card" });
     const [card] = handoffs.pending("bot-where");
     assert.deepEqual(
       { action: card!.action, target: card!.target, open: card!.open },
-      { action: "Choose the delivery slot", target: "browser", open: { url: "https://shop.example/checkout" } },
+      {
+        action: "Choose the delivery slot",
+        target: "browser",
+        open: { url: "https://shop.example/checkout" },
+      },
     );
     assert.ok(offeredWhere[0], "`where` is offered when the Bot has a browser");
     assert.equal(handoffs.answer("bot-where", card!.waitId, { outcome: "done" }), "answered");
     assert.equal((await settled).status, "done");
 
     const results = await handoffResults(root);
-    assert.deepEqual(results.map((result) => result.isError), [true, true, false]);
+    assert.deepEqual(
+      results.map((result) => result.isError),
+      [true, true, false],
+    );
     // The offered schema already refuses a place this Bot does not have.
-    for (const result of results.slice(0, 2)) assert.match(result.content.map((part) => part.text ?? "").join(""), /where/u);
+    for (const result of results.slice(0, 2))
+      assert.match(result.content.map((part) => part.text ?? "").join(""), /where/u);
   } finally {
     await harness.close(ctx);
   }
@@ -284,8 +391,12 @@ test("a Bot without its own browser or computer is not offered `where`", async (
   const offeredWhere: unknown[] = [];
   const fauxModels = createFauxModels([
     (context) => {
-      const tool = getCurrentTools(context.messages).find((entry) => entry.name === HANDOFF_TOOL_NAME);
-      offeredWhere.push((tool?.parameters as { properties?: Record<string, unknown> }).properties?.where);
+      const tool = getCurrentTools(context.messages).find(
+        (entry) => entry.name === HANDOFF_TOOL_NAME,
+      );
+      offeredWhere.push(
+        (tool?.parameters as { properties?: Record<string, unknown> }).properties?.where,
+      );
       return fauxAssistantMessage("Nothing to hand over.");
     },
   ]);
@@ -301,7 +412,12 @@ test("a Bot without its own browser or computer is not offered `where`", async (
 test("quitting while a card waits withdraws it; Resume shows it again under the same waitId and applies one answer", async () => {
   const profile = tempProfile();
   const firstRun = createBotHandoffs();
-  const before = await profileHost(profile, "bot-quit", firstRun, createFauxModels([handOffOnce()]));
+  const before = await profileHost(
+    profile,
+    "bot-quit",
+    firstRun,
+    createFauxModels([handOffOnce()]),
+  );
   await before.conversation.configure({ model: FAUX_MODEL_REF }, ctx);
   await before.conversation.submit({ type: "input", content: "log in", requestId: "quit-1" }, ctx);
   await waitFor(() => firstRun.pending("bot-quit").length === 1, { what: "the hand-off card" });
@@ -321,7 +437,10 @@ test("quitting while a card waits withdraws it; Resume shows it again under the 
     await waitFor(() => handoffs.pending("bot-quit").length === 1, { what: "the re-shown card" });
     assert.equal(handoffs.pending("bot-quit")[0]!.waitId, asked!.waitId);
     assert.equal(handoffs.answer("bot-quit", asked!.waitId, { outcome: "done" }), "answered");
-    assert.equal((await (await reopened.harness.submission(placed!.id, ctx))!.wait(ctx)).status, "done");
+    assert.equal(
+      (await (await reopened.harness.submission(placed!.id, ctx))!.wait(ctx)).status,
+      "done",
+    );
     const results = await handoffResults(reopened.conversation);
     assert.equal(results.filter((result) => !result.isError).length, 1);
     assert.equal(results.find((result) => !result.isError)!.content[0]!.text, DONE_TEXT);
@@ -333,20 +452,35 @@ test("quitting while a card waits withdraws it; Resume shows it again under the 
 
 test("after SIGKILL while a card waits, Resume shows it under the same waitId and applies one answer", async () => {
   const profile = tempProfile();
-  const child = spawnHarnessChild("scenario", [scenarioFile, JSON.stringify({ profileDir: profile, botId: "bot-h-kill" })]);
+  const child = spawnHarnessChild("scenario", [
+    scenarioFile,
+    JSON.stringify({ profileDir: profile, botId: "bot-h-kill" }),
+  ]);
   const childWaitId = await child.waitFor("HANDOFF");
   await child.kill();
 
   const handoffs = createBotHandoffs();
   const fauxModels = createFauxModels([fauxAssistantMessage("Thanks, I'll carry on.")]);
-  const { host, harness, conversation } = await profileHost(profile, "bot-h-kill", handoffs, fauxModels);
+  const { host, harness, conversation } = await profileHost(
+    profile,
+    "bot-h-kill",
+    handoffs,
+    fauxModels,
+  );
   try {
     const [placed] = (await harness.inspect(ctx)).submissions;
     harness.resume();
     await waitFor(() => handoffs.pending("bot-h-kill").length === 1, { what: "the re-shown card" });
-    assert.equal(handoffs.pending("bot-h-kill")[0]!.waitId, childWaitId, "the card keeps its waitId");
+    assert.equal(
+      handoffs.pending("bot-h-kill")[0]!.waitId,
+      childWaitId,
+      "the card keeps its waitId",
+    );
 
-    assert.equal(handoffs.answer("bot-h-kill", childWaitId, { outcome: "skipped", note: "Not this week." }), "answered");
+    assert.equal(
+      handoffs.answer("bot-h-kill", childWaitId, { outcome: "skipped", note: "Not this week." }),
+      "answered",
+    );
     assert.equal(handoffs.answer("bot-h-kill", childWaitId, { outcome: "done" }), "not_waiting");
     assert.equal((await (await harness.submission(placed!.id, ctx))!.wait(ctx)).status, "done");
 
@@ -362,7 +496,12 @@ test("after SIGKILL while a card waits, Resume shows it under the same waitId an
 test("deleting a Bot while its card waits withdraws the card", async () => {
   const profile = tempProfile();
   const handoffs = createBotHandoffs();
-  const { host, conversation } = await profileHost(profile, "bot-del", handoffs, createFauxModels([handOffOnce()]));
+  const { host, conversation } = await profileHost(
+    profile,
+    "bot-del",
+    handoffs,
+    createFauxModels([handOffOnce()]),
+  );
   try {
     await conversation.configure({ model: FAUX_MODEL_REF }, ctx);
     await conversation.submit({ type: "input", content: "log in" }, ctx);
@@ -386,31 +525,58 @@ test("hand-offs and questions are declared on every turn but refused at call tim
   const assembly = createBotToolAssembly({
     admit: async () => admission,
     sources: {
-      facts: async () => ({ mcpTools: async () => new Map(), skillToolNames: async () => new Set() }) as unknown as BotToolFacts,
+      facts: async () =>
+        ({
+          mcpTools: async () => new Map(),
+          skillToolNames: async () => new Set(),
+        }) as unknown as BotToolFacts,
       candidates: async () => ({
-        tools: [botQuestionCandidate("bot-gate", createBotQuestions()), botHandoffCandidate("bot-gate", createBotHandoffs())],
+        tools: [
+          botQuestionCandidate("bot-gate", createBotQuestions()),
+          botHandoffCandidate("bot-gate", createBotHandoffs()),
+        ],
       }),
     },
   });
   const names = async (requestId?: string) =>
-    (await assembly.currentTools("bot-gate", requestId === undefined ? {} : { requestId })).map((entry) => entry.tool.name);
+    (await assembly.currentTools("bot-gate", requestId === undefined ? {} : { requestId })).map(
+      (entry) => entry.tool.name,
+    );
 
   assert.deepEqual(await names(), ["ask_user_question", HANDOFF_TOOL_NAME]);
   assert.deepEqual(await names("desk-1"), ["ask_user_question", HANDOFF_TOOL_NAME]);
   assert.deepEqual(await names("remote:device:key"), ["ask_user_question", HANDOFF_TOOL_NAME]);
   // The same tool list on every turn, so the provider's cached prefix holds.
-  assert.deepEqual(await names("routine:task-1:2026-10-07T09:00:00.000Z"), ["ask_user_question", HANDOFF_TOOL_NAME]);
+  assert.deepEqual(await names("routine:task-1:2026-10-07T09:00:00.000Z"), [
+    "ask_user_question",
+    HANDOFF_TOOL_NAME,
+  ]);
   assert.deepEqual(await names("tg:1:2:0:3"), ["ask_user_question", HANDOFF_TOOL_NAME]);
 
   const call = { callId: "c1", args: { action: ACTION }, signal: new AbortController().signal };
-  assert.deepEqual(await assembly.checkPolicy("bot-gate", HANDOFF_TOOL_NAME, { ...call, requestIds: ["desk-1"] }), {
-    allowed: true,
-  });
-  for (const requestIds of [["routine:task-1:2026-10-07T09:00:00.000Z"], ["tg:1:2:0:3"], ["desk-1", "tg:1:2:0:3"]]) {
+  assert.deepEqual(
+    await assembly.checkPolicy("bot-gate", HANDOFF_TOOL_NAME, { ...call, requestIds: ["desk-1"] }),
+    {
+      allowed: true,
+    },
+  );
+  for (const requestIds of [
+    ["routine:task-1:2026-10-07T09:00:00.000Z"],
+    ["tg:1:2:0:3"],
+    ["desk-1", "tg:1:2:0:3"],
+  ]) {
     for (const name of [HANDOFF_TOOL_NAME, "ask_user_question"]) {
       const decision = await assembly.checkPolicy("bot-gate", name, { ...call, requestIds });
-      assert.equal(decision.allowed, false, `${name} refused at call time for ${requestIds.join(", ")}`);
-      assert.match(decision.allowed ? "" : decision.reason, /not available on this turn: nobody is here/u, "the refusal names its condition");
+      assert.equal(
+        decision.allowed,
+        false,
+        `${name} refused at call time for ${requestIds.join(", ")}`,
+      );
+      assert.match(
+        decision.allowed ? "" : decision.reason,
+        /not available on this turn: nobody is here/u,
+        "the refusal names its condition",
+      );
     }
   }
 });

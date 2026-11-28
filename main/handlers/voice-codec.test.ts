@@ -18,7 +18,11 @@ test("asString rejects empty and non-string input but preserves whitespace-only 
 
 test("pcm16FromIpc reads ArrayBuffer and Uint8Array audio as Int16 samples", () => {
   const source = new Int16Array([-32_768, -1, 0, 1, 32_767]);
-  for (const payload of [source.buffer.slice(0), new Uint8Array(source.buffer.slice(0)), Buffer.from(source.buffer)]) {
+  for (const payload of [
+    source.buffer.slice(0),
+    new Uint8Array(source.buffer.slice(0)),
+    Buffer.from(source.buffer),
+  ]) {
     const decoded = pcm16FromIpc(payload);
     assert.ok(decoded instanceof Int16Array);
     assert.deepEqual(Array.from(decoded), Array.from(source));

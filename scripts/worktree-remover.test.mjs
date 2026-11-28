@@ -30,13 +30,23 @@ const execFileAsync = promisify(execFile);
 test("native session audit sees a surviving member and clears after exit", async (t) => {
   if (process.platform !== "darwin" && process.platform !== "linux") return;
   const child = spawn("/bin/sleep", ["10"], { detached: true, stdio: "ignore" });
-  t.after(() => { try { child.kill("SIGKILL"); } catch { /* Already reaped. */ } });
+  t.after(() => {
+    try {
+      child.kill("SIGKILL");
+    } catch {
+      /* Already reaped. */
+    }
+  });
   assert.ok(Number.isSafeInteger(child.pid) && child.pid > 0);
-  const active = await execFileAsync(binary, ["audit-session", String(child.pid)], { encoding: "utf8" });
+  const active = await execFileAsync(binary, ["audit-session", String(child.pid)], {
+    encoding: "utf8",
+  });
   assert.equal(active.stdout, "active\n");
   child.kill("SIGKILL");
   await new Promise((resolve) => child.once("exit", resolve));
-  const empty = await execFileAsync(binary, ["audit-session", String(child.pid)], { encoding: "utf8" });
+  const empty = await execFileAsync(binary, ["audit-session", String(child.pid)], {
+    encoding: "utf8",
+  });
   assert.equal(empty.stdout, "empty\n");
 });
 
@@ -47,8 +57,9 @@ test("Linux session audit refuses a hidden process inventory instead of reportin
   t.after(() => rm(root, { recursive: true, force: true }));
   const mounts = path.join(root, "mounts");
   const hiddenOrIncomplete = [
-    ...["2", "invisible", "1", "ptraceable"].map((hidepid) =>
-      `proc /proc proc rw,relatime,hidepid=${hidepid} 0 0\n`),
+    ...["2", "invisible", "1", "ptraceable"].map(
+      (hidepid) => `proc /proc proc rw,relatime,hidepid=${hidepid} 0 0\n`,
+    ),
     "tmpfs /proc tmpfs rw 0 0\n",
     "proc /other proc rw 0 0\n",
     "proc /proc proc rw,pidns=/proc/1/ns/pid 0 0\n",
@@ -65,7 +76,13 @@ test("Linux session audit refuses a hidden process inventory instead of reportin
     );
   }
   const member = spawn("/bin/sleep", ["10"], { detached: true, stdio: "ignore" });
-  t.after(() => { try { member.kill("SIGKILL"); } catch { /* Already reaped. */ } });
+  t.after(() => {
+    try {
+      member.kill("SIGKILL");
+    } catch {
+      /* Already reaped. */
+    }
+  });
   assert.ok(Number.isSafeInteger(member.pid) && member.pid > 0);
   await writeFile(mounts, "proc /proc proc rw,relatime,hidepid=2 0 0\n");
   await assert.rejects(
@@ -259,9 +276,13 @@ test("main test lifecycle builds the native worktree remover before GitService t
     ...parseArguments(["--parallel"]),
     selection: { unit: { mode: "all" } },
   });
-  const gitLane = plan.unitCommands.find((command) => command.files.includes("main/services/git.test.ts"));
+  const gitLane = plan.unitCommands.find((command) =>
+    command.files.includes("main/services/git.test.ts"),
+  );
   assert.ok(gitLane, "GitService tests must run in the default npm test plan");
-  const builder = plan.prerequisites.find((step) => step.command.join(" ") === "npm run build:worktree-remover");
+  const builder = plan.prerequisites.find(
+    (step) => step.command.join(" ") === "npm run build:worktree-remover",
+  );
   assert.ok(builder, "the default plan must build the worktree remover");
   assert.ok(builder.for.includes(gitLane.lane));
 });

@@ -14,7 +14,15 @@ function Waiting({ botId }: { botId: string | undefined }) {
 const shown = () => screen.getByLabelText("waiting").textContent;
 
 test("approvals a Bot stopped listening for don't come back when it listens again", async () => {
-  let pending = [{ botId: "bot-1", waitId: "wait-1", toolCallId: "c1", toolName: "send_email", summary: "Email Sam." }];
+  let pending = [
+    {
+      botId: "bot-1",
+      waitId: "wait-1",
+      toolCallId: "c1",
+      toolName: "send_email",
+      summary: "Email Sam.",
+    },
+  ];
   installBotTestIpc({ "bots:pendingApprovals": () => pending });
   const view = render(<Waiting botId="bot-1" />);
   await waitFor(() => assert.equal(shown(), "wait-1"));
@@ -29,14 +37,24 @@ test("approvals a Bot stopped listening for don't come back when it listens agai
   });
   assert.equal(shown(), "");
   // New waits still arrive.
-  act(() => emitBotTestNotification("bots:approval", { botId: "bot-1", waitId: "wait-2", toolCallId: "c2", toolName: "x", summary: "y" }));
+  act(() =>
+    emitBotTestNotification("bots:approval", {
+      botId: "bot-1",
+      waitId: "wait-2",
+      toolCallId: "c2",
+      toolName: "x",
+      summary: "y",
+    }),
+  );
   assert.equal(shown(), "wait-2");
 });
 
 test("switching to another Bot drops the first Bot's waiting approvals", async () => {
   installBotTestIpc({
     "bots:pendingApprovals": (botId) =>
-      botId === "bot-1" ? [{ botId: "bot-1", waitId: "wait-1", toolCallId: "c1", toolName: "x", summary: "y" }] : [],
+      botId === "bot-1"
+        ? [{ botId: "bot-1", waitId: "wait-1", toolCallId: "c1", toolName: "x", summary: "y" }]
+        : [],
   });
   const view = render(<Waiting botId="bot-1" />);
   await waitFor(() => assert.equal(shown(), "wait-1"));

@@ -45,7 +45,8 @@ export function draftWorkInOptions(
   const managed = current.managedWorktree;
   const source = managed
     ? workspaces.find(
-        (workspace) => !workspace.managedWorktree && workspace.folderPath === managed.repositoryPath,
+        (workspace) =>
+          !workspace.managedWorktree && workspace.folderPath === managed.repositoryPath,
       )
     : current;
   const belongs = (workspace: Workspace): boolean => {

@@ -31,7 +31,8 @@ const SECRET_PROP_PATTERN =
 const VALUE_PROP_PATTERN = /^(?:default)?value$/iu;
 /** On a credential field only these describe the field rather than hold its contents. */
 const SENSITIVE_FIELD_SAFE_PROPS = new Set(["type", "autocomplete", "inputmode"]);
-const CREDENTIAL_AUTOCOMPLETE_PATTERN = /(?:^|\s)(?:current-password|new-password|one-time-code|cc-[a-z-]+)(?:\s|$)/iu;
+const CREDENTIAL_AUTOCOMPLETE_PATTERN =
+  /(?:^|\s)(?:current-password|new-password|one-time-code|cc-[a-z-]+)(?:\s|$)/iu;
 
 /** Whether props describe a password, one-time-code or payment-card field. */
 export function propsDescribeSensitiveField(props: object): boolean {
@@ -218,7 +219,11 @@ function extractDebugSource(node: unknown): RawGrabSourceHint | undefined {
     if (typeof lineNumber === "number" && Number.isSafeInteger(lineNumber) && lineNumber >= 1) {
       hint.lineNumber = lineNumber;
     }
-    if (typeof columnNumber === "number" && Number.isSafeInteger(columnNumber) && columnNumber >= 1) {
+    if (
+      typeof columnNumber === "number" &&
+      Number.isSafeInteger(columnNumber) &&
+      columnNumber >= 1
+    ) {
       hint.columnNumber = columnNumber;
     }
   }
@@ -261,7 +266,8 @@ function extractSafeProps(
     if (
       SECRET_PROP_PATTERN.test(key) ||
       VALUE_PROP_PATTERN.test(key) ||
-      (sensitive && (typeof value === "string" || typeof value === "number") &&
+      (sensitive &&
+        (typeof value === "string" || typeof value === "number") &&
         !SENSITIVE_FIELD_SAFE_PROPS.has(key.toLowerCase()))
     ) {
       props[key] = "[redacted]";
@@ -380,7 +386,10 @@ export function findReactComponentBoundaryElement(element: Element): Element | n
  * Extracts React 16–19 component hierarchy, source hints (`_debugSource`, `_debugStack`,
  * RSC `_debugOwner`/`_debugInfo`), and redacted primitive props from a mounted DOM element.
  */
-export function inspectReactElement(element: unknown, sensitiveTarget = false): ReactInspectionResult | null {
+export function inspectReactElement(
+  element: unknown,
+  sensitiveTarget = false,
+): ReactInspectionResult | null {
   const hostFiber = findReactFiberOnElement(element);
   if (!hostFiber) return null;
 
@@ -407,7 +416,11 @@ export function inspectReactElement(element: unknown, sensitiveTarget = false): 
 
   // First walk _debugOwner (preferred JSX logical owner chain, including React 19 RSC owners).
   let owner: unknown = safeOwnProp(hostFiber, "_debugOwner");
-  for (let steps = 0; owner && steps < MAX_WALK_STEPS && frames.length < MAX_STACK_FRAMES; steps += 1) {
+  for (
+    let steps = 0;
+    owner && steps < MAX_WALK_STEPS && frames.length < MAX_STACK_FRAMES;
+    steps += 1
+  ) {
     if (seenNodes.has(owner)) break;
     seenNodes.add(owner);
     const frame = extractFrameFromNode(owner);
@@ -421,7 +434,11 @@ export function inspectReactElement(element: unknown, sensitiveTarget = false): 
 
   // Merge with fiber.return chain to cover createPortal boundaries and production builds lacking _debugOwner.
   let parent: unknown = safeOwnProp(hostFiber, "return");
-  for (let steps = 0; parent && steps < MAX_WALK_STEPS && frames.length < MAX_STACK_FRAMES; steps += 1) {
+  for (
+    let steps = 0;
+    parent && steps < MAX_WALK_STEPS && frames.length < MAX_STACK_FRAMES;
+    steps += 1
+  ) {
     if (!seenNodes.has(parent)) {
       seenNodes.add(parent);
       const frame = extractFrameFromNode(parent);
@@ -438,7 +455,9 @@ export function inspectReactElement(element: unknown, sensitiveTarget = false): 
   const hostSource = extractDebugSource(hostFiber);
   const primaryFrame = frames.find((frame) => !frame.minified);
   const source = hostSource ?? primaryFrame?.source;
-  const props = immediateCompositeFiber ? extractSafeProps(immediateCompositeFiber, sensitiveTarget) : undefined;
+  const props = immediateCompositeFiber
+    ? extractSafeProps(immediateCompositeFiber, sensitiveTarget)
+    : undefined;
 
   return {
     ...(primaryFrame ? { componentName: primaryFrame.name } : {}),

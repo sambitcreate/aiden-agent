@@ -20,9 +20,13 @@
 .oa-tile:focus-visible {
   background: color-mix(in srgb, var(--oa-tint) 18%, var(--surface-popover));
 }
-.dark .oa-tile { background: color-mix(in srgb, var(--oa-tint) 10%, var(--surface-popover)); }
+.dark .oa-tile {
+  background: color-mix(in srgb, var(--oa-tint) 10%, var(--surface-popover));
+}
 .dark .oa-tile:hover,
-.dark .oa-tile:focus-visible { background: color-mix(in srgb, var(--oa-tint) 15%, var(--surface-popover)); }
+.dark .oa-tile:focus-visible {
+  background: color-mix(in srgb, var(--oa-tint) 15%, var(--surface-popover));
+}
 
 .oa-art {
   --oa-surface: color-mix(in srgb, var(--oa-tint) 7%, var(--surface-popover));
@@ -65,7 +69,10 @@
   background: var(--oa-surface);
   box-shadow: var(--elevation-control);
 }
-.oa-window[data-raised] { background: var(--surface-popover); box-shadow: var(--elevation-popover); }
+.oa-window[data-raised] {
+  background: var(--surface-popover);
+  box-shadow: var(--elevation-popover);
+}
 .oa-bar {
   display: block;
   flex: none;
@@ -73,9 +80,17 @@
   border-radius: 3px;
   background: var(--oa-bar);
 }
-.oa-bar[data-tone="soft"] { background: var(--oa-bar-soft); }
-.oa-bar[data-tone="ink"] { background: var(--oa-ink); }
-.oa-icon { width: 10px; height: 10px; flex: none; }
+.oa-bar[data-tone="soft"] {
+  background: var(--oa-bar-soft);
+}
+.oa-bar[data-tone="ink"] {
+  background: var(--oa-ink);
+}
+.oa-icon {
+  width: 10px;
+  height: 10px;
+  flex: none;
+}
 .oa-chip {
   display: inline-flex;
   align-items: center;
@@ -90,20 +105,61 @@
   font-weight: 500;
   white-space: nowrap;
 }
-.oa-chip .oa-icon { width: 8px; height: 8px; }
-.oa-mono { font-family: var(--font-code-family); }
-.oa-strong { color: var(--text-primary); font-weight: 600; }
-.oa-add { color: var(--status-green); font-weight: 650; }
-.oa-del { color: var(--status-red); font-weight: 650; }
-.oa-row { display: flex; align-items: center; gap: 4px; }
-.oa-stack { display: grid; gap: 4px; align-content: start; }
-.oa-grow { flex: 1; min-width: 0; }
-.oa-separator-bottom { box-shadow: inset 0 -1px var(--border-separator); }
-.oa-separator-left { box-shadow: inset 1px 0 var(--border-separator); }
-.oa-lights { display: flex; gap: 3px; }
-.oa-lights i { width: 6px; height: 6px; border-radius: 50%; background: #ff5f57; }
-.oa-lights i:nth-child(2) { background: #febc2e; }
-.oa-lights i:nth-child(3) { background: #28c840; }
+.oa-chip .oa-icon {
+  width: 8px;
+  height: 8px;
+}
+.oa-mono {
+  font-family: var(--font-code-family);
+}
+.oa-strong {
+  color: var(--text-primary);
+  font-weight: 600;
+}
+.oa-add {
+  color: var(--status-green);
+  font-weight: 650;
+}
+.oa-del {
+  color: var(--status-red);
+  font-weight: 650;
+}
+.oa-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.oa-stack {
+  display: grid;
+  gap: 4px;
+  align-content: start;
+}
+.oa-grow {
+  flex: 1;
+  min-width: 0;
+}
+.oa-separator-bottom {
+  box-shadow: inset 0 -1px var(--border-separator);
+}
+.oa-separator-left {
+  box-shadow: inset 1px 0 var(--border-separator);
+}
+.oa-lights {
+  display: flex;
+  gap: 3px;
+}
+.oa-lights i {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #ff5f57;
+}
+.oa-lights i:nth-child(2) {
+  background: #febc2e;
+}
+.oa-lights i:nth-child(3) {
+  background: #28c840;
+}
 .oa-button {
   display: inline-flex;
   align-items: center;
@@ -117,10 +173,22 @@
   font-weight: 600;
   white-space: nowrap;
 }
-.oa-button .oa-icon { width: 8px; height: 8px; }
-.oa-button[data-variant="primary"] { background: var(--fill-accent); color: var(--fill-accent-foreground); }
-.oa-button[data-variant="ghost"] { background: var(--oa-fill); color: var(--text-primary); }
-.oa-selected { background: var(--surface-list-selection); color: var(--text-primary); }
+.oa-button .oa-icon {
+  width: 8px;
+  height: 8px;
+}
+.oa-button[data-variant="primary"] {
+  background: var(--fill-accent);
+  color: var(--fill-accent-foreground);
+}
+.oa-button[data-variant="ghost"] {
+  background: var(--oa-fill);
+  color: var(--text-primary);
+}
+.oa-selected {
+  background: var(--surface-list-selection);
+  color: var(--text-primary);
+}
 .oa-radio {
   position: relative;
   width: 9px;
@@ -129,7 +197,10 @@
   border-radius: 50%;
   box-shadow: inset 0 0 0 1px var(--border-field);
 }
-.oa-radio[data-checked="true"] { background: var(--fill-accent); box-shadow: none; }
+.oa-radio[data-checked="true"] {
+  background: var(--fill-accent);
+  box-shadow: none;
+}
 .oa-radio[data-checked="true"]::after {
   content: "";
   position: absolute;
@@ -156,8 +227,12 @@
   background: #fff;
   box-shadow: 0 1px 2px rgb(0 0 0 / 0.25);
 }
-.oa-toggle[data-on="true"] { background: var(--fill-accent); }
-.oa-toggle[data-on="true"]::after { left: 8.5px; }
+.oa-toggle[data-on="true"] {
+  background: var(--fill-accent);
+}
+.oa-toggle[data-on="true"]::after {
+  left: 8.5px;
+}
 
 /* Composer */
 .oa-composer {
@@ -168,7 +243,11 @@
   background: var(--surface-popover);
   box-shadow: var(--elevation-composer);
 }
-.oa-composer-text { font-size: 8.5px; line-height: 10px; color: var(--text-tertiary); }
+.oa-composer-text {
+  font-size: 8.5px;
+  line-height: 10px;
+  color: var(--text-tertiary);
+}
 .oa-composer-bar {
   position: absolute;
   left: 9px;
@@ -179,7 +258,11 @@
   gap: 5px;
   color: var(--text-secondary);
 }
-.oa-composer-bar .oa-chip { height: 14px; padding: 0 5px; background: transparent; }
+.oa-composer-bar .oa-chip {
+  height: 14px;
+  padding: 0 5px;
+  background: transparent;
+}
 .oa-send {
   display: grid;
   place-items: center;
@@ -190,7 +273,10 @@
   background: var(--fill-accent);
   color: var(--fill-accent-foreground);
 }
-.oa-send .oa-icon { width: 9px; height: 9px; }
+.oa-send .oa-icon {
+  width: 9px;
+  height: 9px;
+}
 .oa-caret {
   display: inline-block;
   width: 1px;
@@ -204,13 +290,19 @@
  * Apply these classes (with an inline animationDelay to stagger) instead of
  * writing new keyframes. Each loop holds the still pose for most of its cycle. */
 :root:not([data-reduce-motion="true"]) .oa-art .oa-caret,
-:root:not([data-reduce-motion="true"]) .oa-art .oa-anim-blink { animation: oa-blink 1.1s steps(1) infinite; }
+:root:not([data-reduce-motion="true"]) .oa-art .oa-anim-blink {
+  animation: oa-blink 1.1s steps(1) infinite;
+}
 :root:not([data-reduce-motion="true"]) .oa-art .oa-anim-type {
   transform-origin: left center;
   animation: oa-type 7s var(--motion-easing) infinite both;
 }
-:root:not([data-reduce-motion="true"]) .oa-art .oa-anim-pop { animation: oa-pop 7s var(--motion-easing) infinite both; }
-:root:not([data-reduce-motion="true"]) .oa-art .oa-anim-float { animation: oa-float 5s ease-in-out infinite alternate; }
+:root:not([data-reduce-motion="true"]) .oa-art .oa-anim-pop {
+  animation: oa-pop 7s var(--motion-easing) infinite both;
+}
+:root:not([data-reduce-motion="true"]) .oa-art .oa-anim-float {
+  animation: oa-float 5s ease-in-out infinite alternate;
+}
 :root:not([data-reduce-motion="true"]) .oa-art .oa-anim-pulse {
   transform-box: fill-box;
   transform-origin: center;
@@ -220,30 +312,89 @@
   transform-origin: center bottom;
   animation: oa-bars 1.2s ease-in-out infinite alternate;
 }
-:root:not([data-reduce-motion="true"]) .oa-art .oa-anim-press { animation: oa-press 7s var(--motion-easing) infinite; }
+:root:not([data-reduce-motion="true"]) .oa-art .oa-anim-press {
+  animation: oa-press 7s var(--motion-easing) infinite;
+}
 /* A tile scrolled out of the gallery, or a hidden window, holds its frame
  * instead of repainting loops nobody can see (renderer/lib/offscreen-pause.ts). */
 .oa-tile[data-offscreen] .oa-art *,
-:root[data-document-hidden] .oa-art * { animation-play-state: paused !important; }
-@keyframes oa-blink { 50% { opacity: 0; } }
+:root[data-document-hidden] .oa-art * {
+  animation-play-state: paused !important;
+}
+@keyframes oa-blink {
+  50% {
+    opacity: 0;
+  }
+}
 @keyframes oa-type {
-  0% { opacity: 1; transform: scaleX(0); }
-  12%, 86% { opacity: 1; transform: scaleX(1); }
-  96%, 100% { opacity: 0; transform: scaleX(1); }
+  0% {
+    opacity: 1;
+    transform: scaleX(0);
+  }
+  12%,
+  86% {
+    opacity: 1;
+    transform: scaleX(1);
+  }
+  96%,
+  100% {
+    opacity: 0;
+    transform: scaleX(1);
+  }
 }
 @keyframes oa-pop {
-  0% { opacity: 0; transform: translateY(4px); }
-  9%, 86% { opacity: 1; transform: none; }
-  96%, 100% { opacity: 0; transform: none; }
+  0% {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  9%,
+  86% {
+    opacity: 1;
+    transform: none;
+  }
+  96%,
+  100% {
+    opacity: 0;
+    transform: none;
+  }
 }
-@keyframes oa-float { from { transform: translateY(0); } to { transform: translateY(-3px); } }
+@keyframes oa-float {
+  from {
+    transform: translateY(0);
+  }
+  to {
+    transform: translateY(-3px);
+  }
+}
 @keyframes oa-pulse {
-  0%, 100% { opacity: 1; transform: scale(1); }
-  50% { opacity: 0.55; transform: scale(1.3); }
+  0%,
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0.55;
+    transform: scale(1.3);
+  }
 }
-@keyframes oa-bars { from { transform: scaleY(0.35); } to { transform: scaleY(1); } }
+@keyframes oa-bars {
+  from {
+    transform: scaleY(0.35);
+  }
+  to {
+    transform: scaleY(1);
+  }
+}
 @keyframes oa-press {
-  0%, 52% { transform: scale(1); }
-  56% { transform: scale(0.94); }
-  62%, 100% { transform: scale(1); }
+  0%,
+  52% {
+    transform: scale(1);
+  }
+  56% {
+    transform: scale(0.94);
+  }
+  62%,
+  100% {
+    transform: scale(1);
+  }
 }

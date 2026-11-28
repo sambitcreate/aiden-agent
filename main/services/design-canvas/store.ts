@@ -84,7 +84,12 @@ export class DesignCanvasStore {
       const revision = baseRevision + 1;
       // A save comes from the person's canvas: a page they took off is remembered,
       // unless it was their undo that took it off.
-      const doc = withRemovedPagePaths(current, { ...parsed.doc, revision }, true, new Set(options.undone ?? []));
+      const doc = withRemovedPagePaths(
+        current,
+        { ...parsed.doc, revision },
+        true,
+        new Set(options.undone ?? []),
+      );
       // The pages remembered as taken off count too: what is written must read back.
       if (this.tooLarge(doc)) return tooLarge();
       await this.write(chatId, doc);

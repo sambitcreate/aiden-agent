@@ -8,17 +8,17 @@ A person with two Bots (for example Jester and COS) asks one to talk to the othe
 
 ## 2. What other projects do
 
-| Project | Mechanism | Sync or async | Loop guard | Who can talk to whom |
-| --- | --- | --- | --- | --- |
-| **Hermes Agent, Bot Mode** (closest to Aiden: a roster of Bots, one canonical chat each) | `message_agent(target, message)` in `tools/bot_mode_dm.py`. Server adds `Message from 🤖 Name:`; the message waits in the target's chat queue behind its running turn and queued human prompts | Async. Returns `queued` + `delivery_id`; the reply wakes the sender later. Relay capped at 10 min | One reply per message; 20 bot messages per 5 min per chat, then a 10 min cooldown; status chatter (`Working…`) never crosses; prompt rule "never ping-pong acknowledgements" | Only the canonical Bot Chat gets the tool (not subagents or routines); targets checked against the live roster; no self-messages |
-| **Hermes group rooms** | 2–6 Bots in one room, @mentions | Serial rounds | 3 rounds and 10 messages per human message; a Bot may pass; `@user` escalates to the person | Room members |
-| **OpenClaw** | `sessions_send({agentId, message, timeoutSeconds})`, plus `sessions_list` / `sessions_history` | `timeoutSeconds: 0` is fire-and-forget; a positive value waits inline, and a late reply still arrives as a new turn | Since 2026.9.8: exactly one reply per request. The old ping-pong loop (`maxPingPongTurns`, `REPLY_SKIP`, `ANNOUNCE_SKIP`) was removed after sentinels leaked and loops ran | `tools.agentToAgent.allow[]` (empty means everyone — a reported footgun); per-agent send-only grants; per-session Receive: Always / Ask / Never |
-| **rakazo** (pi-based Bots) | `message_bot{bot_id, message, intent: request|result|question|status|fyi}` | Async; the recipient's final answer returns to the sender automatically, failures too | Hop counter, max 6, reset by a human message; FYI may be silently ignored; idempotent delivery key | Same owner |
-| **omp** | `hub` tool over an in-process `IrcBus` | Optional `await` with a 120 s timeout | Relayed replies never wake anyone ("or two idle peers ping-pong forever") | Registry of running agents |
-| **Letta** | `send_message_to_agent_and_wait_for_reply`, `…_async`, by-tag broadcast | Both | None in the tools; group managers cap turns. Shared memory blocks preferred over chatter | Any agent |
-| **CrewAI / AutoGen / OpenAI Agents SDK** | Delegate-to-coworker, group chat, `transfer_to_<agent>` handoffs | Synchronous in one run | Turn caps and termination conditions. CrewAI #6414 reports A→B→A ping-pong "burning thousands of dollars" | Configured crew |
-| **Claude Code agent teams** | `SendMessage` into file mailboxes | Async | Teammates can't nest teams; a message from a peer can never grant permission or consent | Team members |
-| **Google A2A** | Agent cards, tasks (`input_required`, `auth_required`), `SendMessage`, SSE, webhooks | Both | None in the protocol | Over HTTP with auth |
+| Project                                                                                  | Mechanism                                                                                                                                                                                      | Sync or async                                                                                                       | Loop guard                                                                                                                                                                   | Who can talk to whom                                                                                                                            |
+| ---------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- | ----- | ------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------- | ---------- |
+| **Hermes Agent, Bot Mode** (closest to Aiden: a roster of Bots, one canonical chat each) | `message_agent(target, message)` in `tools/bot_mode_dm.py`. Server adds `Message from 🤖 Name:`; the message waits in the target's chat queue behind its running turn and queued human prompts | Async. Returns `queued` + `delivery_id`; the reply wakes the sender later. Relay capped at 10 min                   | One reply per message; 20 bot messages per 5 min per chat, then a 10 min cooldown; status chatter (`Working…`) never crosses; prompt rule "never ping-pong acknowledgements" | Only the canonical Bot Chat gets the tool (not subagents or routines); targets checked against the live roster; no self-messages                |
+| **Hermes group rooms**                                                                   | 2–6 Bots in one room, @mentions                                                                                                                                                                | Serial rounds                                                                                                       | 3 rounds and 10 messages per human message; a Bot may pass; `@user` escalates to the person                                                                                  | Room members                                                                                                                                    |
+| **OpenClaw**                                                                             | `sessions_send({agentId, message, timeoutSeconds})`, plus `sessions_list` / `sessions_history`                                                                                                 | `timeoutSeconds: 0` is fire-and-forget; a positive value waits inline, and a late reply still arrives as a new turn | Since 2026.9.8: exactly one reply per request. The old ping-pong loop (`maxPingPongTurns`, `REPLY_SKIP`, `ANNOUNCE_SKIP`) was removed after sentinels leaked and loops ran   | `tools.agentToAgent.allow[]` (empty means everyone — a reported footgun); per-agent send-only grants; per-session Receive: Always / Ask / Never |
+| **rakazo** (pi-based Bots)                                                               | `message_bot{bot_id, message, intent: request                                                                                                                                                  | result                                                                                                              | question                                                                                                                                                                     | status                                                                                                                                          | fyi}` | Async; the recipient's final answer returns to the sender automatically, failures too | Hop counter, max 6, reset by a human message; FYI may be silently ignored; idempotent delivery key | Same owner |
+| **omp**                                                                                  | `hub` tool over an in-process `IrcBus`                                                                                                                                                         | Optional `await` with a 120 s timeout                                                                               | Relayed replies never wake anyone ("or two idle peers ping-pong forever")                                                                                                    | Registry of running agents                                                                                                                      |
+| **Letta**                                                                                | `send_message_to_agent_and_wait_for_reply`, `…_async`, by-tag broadcast                                                                                                                        | Both                                                                                                                | None in the tools; group managers cap turns. Shared memory blocks preferred over chatter                                                                                     | Any agent                                                                                                                                       |
+| **CrewAI / AutoGen / OpenAI Agents SDK**                                                 | Delegate-to-coworker, group chat, `transfer_to_<agent>` handoffs                                                                                                                               | Synchronous in one run                                                                                              | Turn caps and termination conditions. CrewAI #6414 reports A→B→A ping-pong "burning thousands of dollars"                                                                    | Configured crew                                                                                                                                 |
+| **Claude Code agent teams**                                                              | `SendMessage` into file mailboxes                                                                                                                                                              | Async                                                                                                               | Teammates can't nest teams; a message from a peer can never grant permission or consent                                                                                      | Team members                                                                                                                                    |
+| **Google A2A**                                                                           | Agent cards, tasks (`input_required`, `auth_required`), `SendMessage`, SSE, webhooks                                                                                                           | Both                                                                                                                | None in the protocol                                                                                                                                                         | Over HTTP with auth                                                                                                                             |
 
 "OpenBots" is not a relevant project (an older RPA suite and small repos). A2A is too heavy for Bots in one process; Hermes and OpenClaw both say to use it only across machines or frameworks. Its task vocabulary is still worth borrowing.
 
@@ -89,16 +89,17 @@ All Bots of a profile live in one process (desktop or CLI daemon, `profile-lock.
 
 **Chain and hops.** Every input carries a hop count in its request id, `bot:<originBotId>:<hop>:<deliveryId>`.
 
-| Turn | Hop | Can it call `message_bot`? |
-| --- | --- | --- |
-| The person's own turn | 0 | Yes |
-| The asked Bot's turn | 1 | Yes, once per turn, but not back to a Bot already in the chain |
-| A third Bot's turn | 2 | No |
-| A reply turn (`botreply:`) | Same as the turn that sent the message | No. A reply ends the exchange, which prevents ping-pong |
+| Turn                       | Hop                                    | Can it call `message_bot`?                                     |
+| -------------------------- | -------------------------------------- | -------------------------------------------------------------- |
+| The person's own turn      | 0                                      | Yes                                                            |
+| The asked Bot's turn       | 1                                      | Yes, once per turn, but not back to a Bot already in the chain |
+| A third Bot's turn         | 2                                      | No                                                             |
+| A reply turn (`botreply:`) | Same as the turn that sent the message | No. A reply ends the exchange, which prevents ping-pong        |
 
 `routine:`, `tg:` and `intro:` turns can't message either in v1. A message from the person resets the chain.
 
 **Delivery and replies:**
+
 - `send(target, { requestId, label: "From Jester", whenBusy: "followUp", ifNotInterrupted: true })` queues the message behind the target's running turn.
 - A main-side courier records each delivery in a small per-profile ledger, so a quit or crash re-attaches to it: `delivered`, then `answered`, `failed` or `expired`.
 - The courier `awaitReply`s and then sends the target's final text into the sender's chat as a `botreply:<deliveryId>` turn labelled "COS replied". The sender Bot reads it and tells the person.
@@ -106,6 +107,7 @@ All Bots of a profile live in one process (desktop or CLI daemon, `profile-lock.
 - With nesting: when COS asked a third Bot during Jester's request, the reply to COS's `botreply:` turn is also forwarded to Jester, at most once.
 
 **Limits:**
+
 - At most 3 deliveries in flight per sender.
 - About 20 messages per Bot every 5 minutes, then a 10-minute cooldown (the same idea as Hermes's guard).
 - A daily cap per pair of Bots.
@@ -113,6 +115,7 @@ All Bots of a profile live in one process (desktop or CLI daemon, `profile-lock.
 - Only final replies cross between Bots: never status rows, tool steps or "Working…".
 
 **Provenance and privacy:**
+
 - The incoming message is framed as `<bot_message from="Jester" hop="1">…</bot_message>` and escaped. It is another Bot's words, never the person's consent: it can't approve a tool, answer a card, satisfy a rule or change settings.
 - Memory review and `bot_recall` skip `bot:` and `botreply:` turns, like routine turns.
 - Only the message and the reply text cross. Memory, `USER.md`, files and connections never do.
@@ -122,6 +125,7 @@ All Bots of a profile live in one process (desktop or CLI daemon, `profile-lock.
 **Settings.** Each Bot's profile gets "Other Bots can message <Bot>" and "<Bot> can message other Bots", both on by default. Settings → Bots gets a global switch. All three are on desktop and phones.
 
 **What the person sees:**
+
 - In Jester's chat: a quiet step "Messaged COS", then later a labelled row "COS replied" followed by Jester's answer.
 - In COS's chat: "Jester asked: …" followed by COS's answer, the same way a routine run shows.
 - If the person is away when the reply lands, the delivery funnel (banner, phone, quiet hours) handles it like a routine result.
@@ -133,6 +137,7 @@ All Bots of a profile live in one process (desktop or CLI daemon, `profile-lock.
 ## 9. Bot scope: its own workspace, with a way out
 
 **What exists today:**
+
 - **Access level.** Each Bot has Full access or Custom (`main/services/bot-runtime-authority.ts`).
 - **File scopes.** These are `bot_home` (the Bot's own folder), `approved_location` (folders the person picked) and `full_mac` (`bot-tool-authority.ts`, `bot-capability-catalog-core.ts`).
 - **Connectors.** A Custom Bot binds its own connector connections. Its "Add to this Bot" card grants one connection at a time under the policy revision (`.memory/bot-durable-runtime.md`).
@@ -144,6 +149,7 @@ So most of "own workspace, own connectors, own sign-ins" is already built.
 **The gap** is asking at run time to go outside the workspace. A Custom Bot limited to its home folder has no way to say "I need `~/Documents/Taxes` for this". It just fails.
 
 **Proposal** (could be its own plan in the same program):
+
 - **Tool.** `request_access({ path | "whole_mac", why })` raises a card in the Bot's chat with Allow once, Always for this folder, or Not now.
 - **Always** adds an `approved_location` to the Bot's Custom grants under the policy revision, the same path "Add to this Bot" uses for connections. **Allow once** is a grant for that run only.
 - **Whole Mac** is only ever offered as Allow once.
@@ -179,10 +185,12 @@ So most of "own workspace, own connectors, own sign-ins" is already built.
 - **Main validates `covers` against the Bot's current access.** A plan can never widen access. A folder outside the Bot's scope is a `request_access` item, shown on the same card.
 
 **Card.**
+
 - The card shows the title, the plain-language steps and one line per covered item ("Calendar · create up to 5 events").
 - Buttons: **Approve plan** and **Not now**. **Show details** reveals the exact actions, for people who want them.
 
 **After approval:**
+
 - An approval-gated call that falls inside a covered item runs without a card. It uses the existing `preapproved` path that "routines go ahead" already uses in `bot-tool-assembly.ts`.
 - A call outside the plan still gets its own card.
 - Code mode works the same way. The Bot can write one script for the whole plan, and each nested call in the script is checked against the plan, so the person approves the description, not the code.
@@ -190,6 +198,7 @@ So most of "own workspace, own connectors, own sign-ins" is already built.
 - **Stop** ends the plan.
 
 **Limits:**
+
 - A plan lasts for this run and its follow-up turns, at most 60 minutes. Each covered item has a call cap.
 - Locked rules (credentials, money) are never covered.
 - Computer Use on the person's own Mac keeps its own access card.
@@ -202,12 +211,14 @@ So most of "own workspace, own connectors, own sign-ins" is already built.
 **Counting is done by Aiden, not by a skill.** Aiden counts approvals per Bot and per action class in main, so the count is exact and never depends on the model remembering.
 
 **When the nudge appears.** Once the person has approved the same class 3 times in 14 days, with no recent denial, two things happen:
+
 - That card gets an extra choice: **Always allow for <Bot>**.
 - The tool result tells the Bot, so it can say "I've asked you about Calendar events 4 times this week — you can let me do this without asking in Settings" with a link to the list.
 
 The nudge also covers repeated `request_access` for the same folder.
 
 **Settings.**
+
 - Each Bot's profile gets an **Allowed without asking** list. Each entry shows the connector action, folder, site or shell scope, when it was added and how often it has been used, with **Remove**.
 - Settings → Bots shows the same lists across all Bots.
 - Entries reuse the remembered "always" approval scopes (`renderer/shared/tool-approval-scope.ts`). They never skip a locked rule or a rule-made ask, which matches today's rule.

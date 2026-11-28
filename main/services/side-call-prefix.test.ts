@@ -27,7 +27,10 @@ import {
   type AdvisorRuntimeDependencies,
 } from "./advisor-runtime.js";
 import { snapshotAdvisorRuntimeMessages } from "./advisor-context.js";
-import { chatPromptPrefixCompacted, forgetChatPromptCacheState } from "./chat-prompt-cache-state.js";
+import {
+  chatPromptPrefixCompacted,
+  forgetChatPromptCacheState,
+} from "./chat-prompt-cache-state.js";
 import type { ResolvedModelRuntime } from "./model-runtime-core.js";
 import {
   comparePromptRequests,
@@ -102,14 +105,21 @@ describe("side-call prefix ledger", () => {
       toolChoice: "auto",
       apiKey: "parent-secret",
     } as SimpleStreamOptions);
-    assert.equal(await ledger.latest(CHAT_ID), undefined, "a request with no reply yet is not a prefix");
+    assert.equal(
+      await ledger.latest(CHAT_ID),
+      undefined,
+      "a request with no reply yet is not a prefix",
+    );
     const parentReply = reply("Hi there.");
     finished(parentReply);
     const prefix = await ledger.latest(CHAT_ID);
     assert.ok(prefix);
 
     const question = { role: "user" as const, content: "Side question", timestamp: 9 };
-    const request = sideCallContinuation(prefix, [question], { apiKey: "side-secret", maxTokens: 64 });
+    const request = sideCallContinuation(prefix, [question], {
+      apiKey: "side-secret",
+      maxTokens: 64,
+    });
     // The system prompt travels as the context's first message.
     assert.deepEqual(request.context.messages, [...context.messages, parentReply, question]);
     assert.equal(request.options.sessionId, "session-a");
@@ -149,7 +159,11 @@ describe("side-call prefix ledger", () => {
     now += 30 * 60_000;
     const prefix = await ledger.latest(CHAT_ID);
     assert.ok(prefix, "half an hour on, the hour-long entry is still warm");
-    const request = sideCallContinuation(prefix, [{ role: "user", content: "Side question", timestamp: 9 }], {});
+    const request = sideCallContinuation(
+      prefix,
+      [{ role: "user", content: "Side question", timestamp: 9 }],
+      {},
+    );
     assert.equal(request.options.cacheRetention, "short");
     now += 30 * 60_000;
     assert.equal(await ledger.latest(CHAT_ID), undefined, "the entry lapses with the hour");
@@ -159,7 +173,11 @@ describe("side-call prefix ledger", () => {
     now += 5 * 60_000;
     assert.equal(await ledger.latest(CHAT_ID), undefined);
     // A model with no documented lifetime is never continued; its side calls stay isolated.
-    ledger.begin(CHAT_ID, model({ provider: "provider-a", api: "openai-completions" }), context)(reply("Hi."));
+    ledger.begin(
+      CHAT_ID,
+      model({ provider: "provider-a", api: "openai-completions" }),
+      context,
+    )(reply("Hi."));
     assert.equal(await ledger.latest(CHAT_ID), undefined);
   });
 
@@ -195,7 +213,10 @@ describe("side-call prefix ledger", () => {
   test("a reply to a superseded request does not overwrite the newer one", async () => {
     const ledger = createSideCallPrefixLedger({ ttlMs: LIVE_TTL });
     const first = ledger.begin(CHAT_ID, model(), context);
-    const newer = normalizeContext({ systemPrompt: "Newer.", messages: [{ role: "user", content: "Hello", timestamp: 1 }] });
+    const newer = normalizeContext({
+      systemPrompt: "Newer.",
+      messages: [{ role: "user", content: "Hello", timestamp: 1 }],
+    });
     const second = ledger.begin(CHAT_ID, model(), newer);
     const newerReply = reply("Newer reply.");
     second(newerReply);
@@ -220,7 +241,10 @@ describe("side-call prefix ledger", () => {
   });
 
   test("one-off options never write a cache", async () => {
-    assert.deepEqual(oneOffCallOptions({ maxTokens: 10 }), { maxTokens: 10, cacheRetention: "none" });
+    assert.deepEqual(oneOffCallOptions({ maxTokens: 10 }), {
+      maxTokens: 10,
+      cacheRetention: "none",
+    });
     assert.equal(oneOffCallOptions({ cacheRetention: "long" as const }).cacheRetention, "none");
   });
 });
@@ -233,7 +257,10 @@ const listFiles: AgentTool = {
   execute: async () => ({ content: [{ type: "text", text: "a.ts\nb.ts" }], details: undefined }),
 };
 
-function ledgerHarness(): { harness: ReturnType<typeof createPromptPrefixHarness>; ledger: SideCallPrefixLedger } {
+function ledgerHarness(): {
+  harness: ReturnType<typeof createPromptPrefixHarness>;
+  ledger: SideCallPrefixLedger;
+} {
   const ledger = createSideCallPrefixLedger({ ttlMs: LIVE_TTL });
   const harness = createPromptPrefixHarness({
     wrapStream: (streamFn) => withSideCallPrefixLedger(streamFn, { ledger, chatKey: CHAT_ID }),
@@ -241,7 +268,10 @@ function ledgerHarness(): { harness: ReturnType<typeof createPromptPrefixHarness
   return { harness, ledger };
 }
 
-function runtimeFor(target: Model<Api>, streamSimple: ResolvedModelRuntime["streams"]["streamSimple"]): ResolvedModelRuntime {
+function runtimeFor(
+  target: Model<Api>,
+  streamSimple: ResolvedModelRuntime["streams"]["streamSimple"],
+): ResolvedModelRuntime {
   return {
     provider: {
       id: target.provider,
@@ -267,15 +297,27 @@ type ScriptedAnswer = string | "throw" | "error" | "empty";
  * turn: a text, a thrown dispatch, a provider error, or an empty reply.
  */
 function scriptedStream(answers: ScriptedAnswer[], sent: SentRequest[]) {
-  return ((streamModel: Model<Api>, streamContext: PromptProviderContext, options?: SimpleStreamOptions) => {
+  return ((
+    streamModel: Model<Api>,
+    streamContext: PromptProviderContext,
+    options?: SimpleStreamOptions,
+  ) => {
     sent.push({ context: streamContext, options });
     const answer = answers[Math.min(sent.length, answers.length) - 1]!;
     if (answer === "throw") throw new Error("Provider dispatch failed.");
     const stream = createAssistantMessageEventStream();
-    const identity = { provider: streamModel.provider, model: streamModel.id, api: streamModel.api };
+    const identity = {
+      provider: streamModel.provider,
+      model: streamModel.id,
+      api: streamModel.api,
+    };
     queueMicrotask(() => {
       if (answer === "error") {
-        stream.push({ type: "error", reason: "error", error: reply("", { ...identity, stopReason: "error", errorMessage: "Upstream failed." }) });
+        stream.push({
+          type: "error",
+          reason: "error",
+          error: reply("", { ...identity, stopReason: "error", errorMessage: "Upstream failed." }),
+        });
         return;
       }
       const text = answer === "empty" ? "" : answer;
@@ -288,11 +330,22 @@ function scriptedStream(answers: ScriptedAnswer[], sent: SentRequest[]) {
 }
 
 /** A provider stream that answers `text` and keeps every request it was sent. */
-function capturingStream(text: string, sent: Array<{ context: PromptProviderContext; options: SimpleStreamOptions | undefined }>) {
-  return ((streamModel: Model<Api>, streamContext: PromptProviderContext, options?: SimpleStreamOptions) => {
+function capturingStream(
+  text: string,
+  sent: Array<{ context: PromptProviderContext; options: SimpleStreamOptions | undefined }>,
+) {
+  return ((
+    streamModel: Model<Api>,
+    streamContext: PromptProviderContext,
+    options?: SimpleStreamOptions,
+  ) => {
     sent.push({ context: streamContext, options });
     const stream = createAssistantMessageEventStream();
-    const message = reply(text, { provider: streamModel.provider, model: streamModel.id, api: streamModel.api });
+    const message = reply(text, {
+      provider: streamModel.provider,
+      model: streamModel.id,
+      api: streamModel.api,
+    });
     queueMicrotask(() => {
       stream.push({ type: "text_delta", contentIndex: 0, delta: text, partial: message });
       stream.push({ type: "done", reason: "stop", message });
@@ -303,14 +356,23 @@ function capturingStream(text: string, sent: Array<{ context: PromptProviderCont
 
 function assertExtends(parent: RecordedPromptRequest, side: RecordedPromptRequest): void {
   assert.equal(side.wire[0]?.kind, "tools", "the side call keeps the parent's tools declared");
-  assert.deepEqual(comparePromptRequests(parent, side).wire, undefined, "the side call extends the parent's request");
-  assert.ok(side.wire.length > parent.wire.length, "the side call appends after the parent's request");
+  assert.deepEqual(
+    comparePromptRequests(parent, side).wire,
+    undefined,
+    "the side call extends the parent's request",
+  );
+  assert.ok(
+    side.wire.length > parent.wire.length,
+    "the side call appends after the parent's request",
+  );
 }
 
 async function sideQuestion(service: BtwService, question: string): Promise<BtwEventV1[]> {
   const events: BtwEventV1[] = [];
   let ended!: () => void;
-  const terminal = new Promise<void>((resolve) => { ended = resolve; });
+  const terminal = new Promise<void>((resolve) => {
+    ended = resolve;
+  });
   const owner: BtwOwner = {
     documentId: "document-a",
     isDestroyed: () => false,
@@ -342,7 +404,10 @@ function btwService(
   ledger: SideCallPrefixLedger,
   parentReply: AssistantMessage | undefined,
   sent: Array<{ context: PromptProviderContext; options: SimpleStreamOptions | undefined }>,
-  streamSimple: ResolvedModelRuntime["streams"]["streamSimple"] = capturingStream("It lists the workspace.", sent),
+  streamSimple: ResolvedModelRuntime["streams"]["streamSimple"] = capturingStream(
+    "It lists the workspace.",
+    sent,
+  ),
 ): BtwService {
   const chat: Chat = {
     id: CHAT_ID,
@@ -354,7 +419,13 @@ function btwService(
     updatedAt: 2,
     messages: [
       { id: "user-a", role: "user", content: "Which files are there?", createdAt: 1 },
-      { id: "assistant-a", role: "assistant", content: "Two: a.ts and b.ts.", createdAt: 2, ...(parentReply ? { pi: parentReply } : {}) },
+      {
+        id: "assistant-a",
+        role: "assistant",
+        content: "Two: a.ts and b.ts.",
+        createdAt: 2,
+        ...(parentReply ? { pi: parentReply } : {}),
+      },
     ],
   };
   return new BtwService({
@@ -391,11 +462,16 @@ async function advisorTurn(input: {
       // A review at an effort needs a thinking model; the chat runs on the same one.
       return input.effort
         ? (streamModel, streamContext, options) =>
-          ledgered({ ...streamModel, reasoning: true }, streamContext, { ...options, reasoning: input.parentReasoning })
+            ledgered({ ...streamModel, reasoning: true }, streamContext, {
+              ...options,
+              reasoning: input.parentReasoning,
+            })
         : ledgered;
     },
   });
-  const target = input.effort ? ({ ...harness.model, reasoning: true } as Model<Api>) : harness.model;
+  const target = input.effort
+    ? ({ ...harness.model, reasoning: true } as Model<Api>)
+    : harness.model;
   const candidate: AdvisorCandidate = {
     providerId: target.provider,
     providerLabel: "Provider",
@@ -418,7 +494,13 @@ async function advisorTurn(input: {
     recordUnreportedUsage: async () => undefined,
   } as unknown as AdvisorRuntimeDependencies);
   let listRuns = 0;
-  const countedList: AgentTool = { ...listFiles, execute: async (...args) => { listRuns += 1; return listFiles.execute(...args); } };
+  const countedList: AgentTool = {
+    ...listFiles,
+    execute: async (...args) => {
+      listRuns += 1;
+      return listFiles.execute(...args);
+    },
+  };
   const extension = await advisor.extensionForGeneration({
     scope: {
       usageSource: "chat",
@@ -432,14 +514,20 @@ async function advisorTurn(input: {
     executorTools: [countedList],
     getLiveMessages: (toolCallId) => {
       const state = harness.agentState();
-      return input.liveMessages === false || !state ? [] : snapshotAdvisorRuntimeMessages(state, toolCallId);
+      return input.liveMessages === false || !state
+        ? []
+        : snapshotAdvisorRuntimeMessages(state, toolCallId);
     },
     sideCallPrefix: () => ledger.latest(CHAT_ID),
   });
   assert.ok(extension?.tools?.[0]);
   const calls = input.order.map((name) =>
     name === "advisor"
-      ? fauxToolCall("advisor", { providerId: target.provider, modelId: target.id, ...(input.effort ? { effort: input.effort } : {}) })
+      ? fauxToolCall("advisor", {
+          providerId: target.provider,
+          modelId: target.id,
+          ...(input.effort ? { effort: input.effort } : {}),
+        })
       : fauxToolCall("list_files", {}),
   );
   const requests = await harness.turn({
@@ -476,8 +564,14 @@ describe("side calls on the parent prefix", () => {
     const prefix = await ledger.latest(CHAT_ID);
     assert.ok(prefix, "the ledger holds the turn's last request");
 
-    const sent: Array<{ context: PromptProviderContext; options: SimpleStreamOptions | undefined }> = [];
-    const events = await sideQuestion(btwService(harness.model, ledger, prefix.response, sent), "What does list_files do?");
+    const sent: Array<{
+      context: PromptProviderContext;
+      options: SimpleStreamOptions | undefined;
+    }> = [];
+    const events = await sideQuestion(
+      btwService(harness.model, ledger, prefix.response, sent),
+      "What does list_files do?",
+    );
     const last = events[events.length - 1];
     assert.equal(last?.type === "terminal" && last.status, "completed");
     assert.equal(sent.length, 1);
@@ -501,7 +595,10 @@ describe("side calls on the parent prefix", () => {
     });
     const parentReply = (await ledger.latest(CHAT_ID))!.response;
     ledger.forget(CHAT_ID);
-    const sent: Array<{ context: PromptProviderContext; options: SimpleStreamOptions | undefined }> = [];
+    const sent: Array<{
+      context: PromptProviderContext;
+      options: SimpleStreamOptions | undefined;
+    }> = [];
     await sideQuestion(btwService(harness.model, ledger, parentReply, sent), "Why?");
     assert.equal(sent.length, 1);
     assert.equal(sent[0]!.options?.cacheRetention, "none");
@@ -517,21 +614,35 @@ describe("side calls on the parent prefix", () => {
       responses: [fauxAssistantMessage("Two: a.ts and b.ts.")],
     });
     // The chat's last reply is not the one the ledger recorded (an edit or a later turn).
-    const other = reply("A different reply.", { timestamp: 123, provider: harness.model.provider, model: harness.model.id });
-    const sent: Array<{ context: PromptProviderContext; options: SimpleStreamOptions | undefined }> = [];
+    const other = reply("A different reply.", {
+      timestamp: 123,
+      provider: harness.model.provider,
+      model: harness.model.id,
+    });
+    const sent: Array<{
+      context: PromptProviderContext;
+      options: SimpleStreamOptions | undefined;
+    }> = [];
     await sideQuestion(btwService(harness.model, ledger, other, sent), "Why?");
     assert.equal(sent[0]!.options?.cacheRetention, "none");
   });
 
   test("a same-model advisor review continues the executor's request and runs no tool", async () => {
     const sent: SentRequest[] = [];
-    const run = await advisorTurn({ answers: ["Check the boundary first."], sent, order: ["advisor", "list_files"] });
+    const run = await advisorTurn({
+      answers: ["Check the boundary first."],
+      sent,
+      order: ["advisor", "list_files"],
+    });
     assert.equal(sent.length, 1, "the review sent one request");
     const [request] = sent;
     const review = await run.harness.record(request!.context, { turn: 2, step: 1 });
     assertExtends(run.executorRequest, review);
     assert.ok(review.carries(ADVISOR_CONTINUATION_INSTRUCTION));
-    assert.ok(review.carries("Not run: the task is paused for an advisor review."), "a call after the advisor has not run");
+    assert.ok(
+      review.carries("Not run: the task is paused for an advisor review."),
+      "a call after the advisor has not run",
+    );
     assert.equal(request!.options?.cacheRetention, "short");
     assert.equal(request!.options?.disableContinuation, true);
     assert.equal(request!.options?.apiKey, "side-secret");
@@ -543,7 +654,11 @@ describe("side calls on the parent prefix", () => {
 
   test("an advisor review after a finished tool call carries that call's real result", async () => {
     const sent: SentRequest[] = [];
-    const run = await advisorTurn({ answers: ["Looks fine."], sent, order: ["list_files", "advisor"] });
+    const run = await advisorTurn({
+      answers: ["Looks fine."],
+      sent,
+      order: ["list_files", "advisor"],
+    });
     assert.equal(sent.length, 1);
     const [request] = sent;
     assert.equal(request!.options?.cacheRetention, "short");
@@ -556,7 +671,12 @@ describe("side calls on the parent prefix", () => {
 
   test("an advisor review whose earlier call has no result yet is a separate request", async () => {
     const sent: SentRequest[] = [];
-    const run = await advisorTurn({ answers: ["Looks fine."], sent, order: ["list_files", "advisor"], liveMessages: false });
+    const run = await advisorTurn({
+      answers: ["Looks fine."],
+      sent,
+      order: ["list_files", "advisor"],
+      liveMessages: false,
+    });
     assert.equal(sent.length, 1);
     assert.equal(sent[0]!.options?.cacheRetention, "none");
     assert.deepEqual((sent[0]!.context as { tools?: unknown[] }).tools ?? [], []);
@@ -574,11 +694,20 @@ describe("side calls on the parent prefix", () => {
 
   test("an advisor review at the executor's effort continues its request", async () => {
     const sent: SentRequest[] = [];
-    const run = await advisorTurn({ answers: ["Looks fine."], sent, order: ["advisor"], effort: "high", parentReasoning: "high" });
+    const run = await advisorTurn({
+      answers: ["Looks fine."],
+      sent,
+      order: ["advisor"],
+      effort: "high",
+      parentReasoning: "high",
+    });
     assert.equal(sent.length, 1);
     assert.equal(sent[0]!.options?.cacheRetention, "short");
     assert.equal(sent[0]!.options?.reasoning, "high");
-    assertExtends(run.executorRequest, await run.harness.record(sent[0]!.context, { turn: 2, step: 1 }));
+    assertExtends(
+      run.executorRequest,
+      await run.harness.record(sent[0]!.context, { turn: 2, step: 1 }),
+    );
   });
 
   const failureLabel = { throw: "throws", error: "errors", empty: "answers nothing" } as const;
@@ -586,7 +715,11 @@ describe("side calls on the parent prefix", () => {
   for (const failure of ["throw", "error", "empty"] as const) {
     test(`an advisor continuation that ${failureLabel[failure]} falls back to the separate review`, async () => {
       const sent: SentRequest[] = [];
-      const run = await advisorTurn({ answers: [failure, "Check the boundary first."], sent, order: ["advisor"] });
+      const run = await advisorTurn({
+        answers: [failure, "Check the boundary first."],
+        sent,
+        order: ["advisor"],
+      });
       assert.equal(sent.length, 2);
       assert.equal(sent[0]!.options?.cacheRetention, "short");
       assert.equal(sent[1]!.options?.cacheRetention, "none");
@@ -609,13 +742,22 @@ describe("side calls on the parent prefix", () => {
       assert.ok(prefix);
       const sent: SentRequest[] = [];
       const events = await sideQuestion(
-        btwService(harness.model, ledger, prefix.response, sent, scriptedStream([failure, "It lists the workspace."], sent)),
+        btwService(
+          harness.model,
+          ledger,
+          prefix.response,
+          sent,
+          scriptedStream([failure, "It lists the workspace."], sent),
+        ),
         "Why?",
       );
       assert.equal(sent.length, 2);
       assert.equal(sent[0]!.options?.cacheRetention, "short");
       assert.equal(sent[1]!.options?.cacheRetention, "none");
-      assert.ok(events.some((event) => event.type === "reset"), "the side panel drops the continuation's partial answer");
+      assert.ok(
+        events.some((event) => event.type === "reset"),
+        "the side panel drops the continuation's partial answer",
+      );
       const last = events[events.length - 1];
       assert.equal(last?.type === "terminal" && last.status, "completed");
       assert.equal(last?.type === "terminal" && last.answer, "It lists the workspace.");
@@ -630,7 +772,11 @@ describe("side calls on the parent prefix", () => {
         const ledgered = withSideCallPrefixLedger(streamFn, { ledger, chatKey: CHAT_ID });
         // The chat's own settings, as llm-client passes them.
         return (streamModel, streamContext, options) => {
-          const chatOptions = { ...options, reasoning: "high" as const, toolChoice: "auto" as const };
+          const chatOptions = {
+            ...options,
+            reasoning: "high" as const,
+            toolChoice: "auto" as const,
+          };
           parent = { context: streamContext as PromptProviderContext, options: chatOptions };
           return ledgered(streamModel, streamContext, chatOptions);
         };
@@ -647,17 +793,29 @@ describe("side calls on the parent prefix", () => {
     const sent: SentRequest[] = [];
     await sideQuestion(btwService(harness.model, ledger, prefix.response, sent), "Why?");
     assert.equal(sent.length, 1);
-    const parentRequest = await harness.record(parent.context, { turn: 1, step: 1 }, parent.options);
+    const parentRequest = await harness.record(
+      parent.context,
+      { turn: 1, step: 1 },
+      parent.options,
+    );
     const side = await harness.record(sent[0]!.context, { turn: 2, step: 1 }, sent[0]!.options);
     assertExtends(parentRequest, side);
     assert.ok(parentRequest.settings.thinking, "the parent request thinks");
     assert.ok(parentRequest.settings.tool_choice, "the parent request names its tool choice");
     const { max_tokens: _parentCap, ...parentSettings } = parentRequest.settings;
     const { max_tokens: sideCap, ...sideSettings } = side.settings;
-    assert.deepEqual(sideSettings, parentSettings, "thinking, tool choice and every cache-keyed setting match");
+    assert.deepEqual(
+      sideSettings,
+      parentSettings,
+      "thinking, tool choice and every cache-keyed setting match",
+    );
     assert.equal(typeof sideCap, "number");
     assert.ok(parentRequest.cacheMarkers.length > 0);
-    assert.deepEqual(side.cacheMarkers, parentRequest.cacheMarkers, "the same retention marks the request");
+    assert.deepEqual(
+      side.cacheMarkers,
+      parentRequest.cacheMarkers,
+      "the same retention marks the request",
+    );
   });
 });
 
@@ -678,10 +836,16 @@ describe("memory the parent prefix stated", () => {
     approved = [FACT];
     assert.equal(await ledger.latest(CHAT_ID), undefined, "the dropped prefix does not come back");
 
-    const unreadable = async (): Promise<string[]> => { throw new Error("store unreadable"); };
+    const unreadable = async (): Promise<string[]> => {
+      throw new Error("store unreadable");
+    };
     for (const reader of [undefined, unreadable]) {
       ledger.begin(CHAT_ID, model(), withFact, undefined, reader)(reply("Hi."));
-      assert.equal(await ledger.latest(CHAT_ID), undefined, "a fact nobody can confirm blocks the prefix");
+      assert.equal(
+        await ledger.latest(CHAT_ID),
+        undefined,
+        "a fact nobody can confirm blocks the prefix",
+      );
     }
     ledger.begin(CHAT_ID, model(), context)(reply("Hi."));
     assert.ok(await ledger.latest(CHAT_ID), "a prefix with no facts needs no confirmation");
@@ -691,7 +855,11 @@ describe("memory the parent prefix stated", () => {
     const ledger = createSideCallPrefixLedger({ ttlMs: LIVE_TTL });
     const harness = createPromptPrefixHarness({
       wrapStream: (streamFn) =>
-        withSideCallPrefixLedger(streamFn, { ledger, chatKey: CHAT_ID, approvedMemoryFacts: async () => approved.lines }),
+        withSideCallPrefixLedger(streamFn, {
+          ledger,
+          chatKey: CHAT_ID,
+          approvedMemoryFacts: async () => approved.lines,
+        }),
     });
     await harness.turn({
       prompt: "Which files are there?",
@@ -728,7 +896,9 @@ describe("memory the parent prefix stated", () => {
     const prefix = await ledger.latest(CHAT_ID);
     const declared = [
       ...((prefix?.context as { tools?: unknown[] }).tools ?? []),
-      ...(prefix?.context.messages ?? []).flatMap((message) => (message.role === "system" ? message.toolsAdded ?? [] : [])),
+      ...(prefix?.context.messages ?? []).flatMap((message) =>
+        message.role === "system" ? (message.toolsAdded ?? []) : [],
+      ),
     ] as Array<Record<string, unknown>>;
     assert.ok(declared.some((tool) => tool.name === "list_files"));
     for (const tool of declared) assert.equal(typeof tool.execute, "undefined", String(tool.name));

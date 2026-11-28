@@ -32,7 +32,11 @@ function watchDocumentVisibility(): void {
   const current = document;
   watchedDocument = current;
   const update = () =>
-    markAttribute(current.documentElement, "data-document-hidden", current.visibilityState === "hidden");
+    markAttribute(
+      current.documentElement,
+      "data-document-hidden",
+      current.visibilityState === "hidden",
+    );
   update();
   current.addEventListener("visibilitychange", update);
 }

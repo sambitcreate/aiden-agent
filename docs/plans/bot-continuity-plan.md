@@ -24,17 +24,17 @@ This is an Aiden implementation informed by Rakazo's behavior and tests. It does
 
 ## Owner decisions
 
-| ID | Decision | State |
-| --- | --- | --- |
-| D1 | Include connector watches, Open work, per-routine model/thinking, then Bot-to-Bot messaging. | Confirmed 2026-11-03 |
-| D2 | The person approves named Bot pairs; every recipient retains its own rules and access. | Confirmed 2026-11-03 |
-| D3 | An unavailable explicitly selected routine model stops with Needs you. A fallback may run only when the person configured it. | Confirmed 2026-11-03 |
-| D4 | Prove email and calendar workflows first, through verified connector tools. | Confirmed 2026-11-03 |
-| D5 | Full setup and management on desktop, iOS and Android. Existing host-owned connector sign-in hand-offs remain. | Confirmed 2026-11-03 |
-| D6 | Track explicit accepted tasks automatically; the person can edit, dismiss or undo. No per-item approval card is required. | Confirmed 2026-11-03 |
-| D7 | Poll accepted connector watches while Aiden runs and the computer is awake, including after leaving the Bots screen. This explicitly replaces the October D2 desktop-Bots-open restriction. | Confirmed 2026-11-03 |
-| D8 | Permit a restricted Composio adapter that constructs one verified read operation at a time and binds an exact account. Arbitrary batch/proxy/shell dispatch remains excluded. | Confirmed 2026-11-03 after live tool-inventory inspection |
-| D9 | Present Composio as one agent-facing tool with one connection-level allowance; the person manages its enabled apps/tools in Composio. Retain Aiden's action rules and each watch's exact account/read-operation binding. | Confirmed 2026-11-03 follow-up |
+| ID  | Decision                                                                                                                                                                                                                 | State                                                     |
+| --- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | --------------------------------------------------------- |
+| D1  | Include connector watches, Open work, per-routine model/thinking, then Bot-to-Bot messaging.                                                                                                                             | Confirmed 2026-11-03                                      |
+| D2  | The person approves named Bot pairs; every recipient retains its own rules and access.                                                                                                                                   | Confirmed 2026-11-03                                      |
+| D3  | An unavailable explicitly selected routine model stops with Needs you. A fallback may run only when the person configured it.                                                                                            | Confirmed 2026-11-03                                      |
+| D4  | Prove email and calendar workflows first, through verified connector tools.                                                                                                                                              | Confirmed 2026-11-03                                      |
+| D5  | Full setup and management on desktop, iOS and Android. Existing host-owned connector sign-in hand-offs remain.                                                                                                           | Confirmed 2026-11-03                                      |
+| D6  | Track explicit accepted tasks automatically; the person can edit, dismiss or undo. No per-item approval card is required.                                                                                                | Confirmed 2026-11-03                                      |
+| D7  | Poll accepted connector watches while Aiden runs and the computer is awake, including after leaving the Bots screen. This explicitly replaces the October D2 desktop-Bots-open restriction.                              | Confirmed 2026-11-03                                      |
+| D8  | Permit a restricted Composio adapter that constructs one verified read operation at a time and binds an exact account. Arbitrary batch/proxy/shell dispatch remains excluded.                                            | Confirmed 2026-11-03 after live tool-inventory inspection |
+| D9  | Present Composio as one agent-facing tool with one connection-level allowance; the person manages its enabled apps/tools in Composio. Retain Aiden's action rules and each watch's exact account/read-operation binding. | Confirmed 2026-11-03 follow-up                            |
 
 The owner's 2026-11-03 D7 answer amends the lifecycle part of [Bot autonomy D2](../superpowers/specs/2026-10-27-bot-autonomy-design.md): the Bots screen no longer has to stay open. Its other requirements remain binding: visible, person-created connector watches, no model call per poll, no more often than every 15 minutes, an awake owning desktop, and a spike proving deterministic read tools. The same running-and-awake lifecycle applies on Linux without starting a second scheduler or adding a keep-awake service. A Mac-app connector remains macOS-only. The older dated decision is preserved with a dated amendment in its source spec and plan.
 
@@ -52,16 +52,16 @@ The owner's 2026-11-03 D7 answer amends the lifecycle part of [Bot autonomy D2](
 
 Baseline reviewed: Aiden `286969201f5a51af0609c041e499a7a084d78d54`; local Rakazo `70b1fef42fb517f36bccede5b222e1df0df5cf33`. Recheck the touched surfaces against main before implementation.
 
-| Surface | Current home | Planned use |
-| --- | --- | --- |
-| Watch triggers and strict parsing | `renderer/shared/bot-routine-trigger.ts` | Add a typed connector watch beside URL/script; keep their existing intervals and behavior separate. |
-| Watch storage/checking/dispatch | `main/services/bot-routine-events/{store,watch,watch-sources,dispatcher,runner,sources-main}.ts` | Reuse scheduler, bounded state, failure pause, event receipts and delivery. |
-| Bot authority and connector joins | `main/services/bot-runtime-authority.ts`, `bot-capability-bindings.ts`, `bot-runtime/bot-tool-policy.ts` | Admit exact current connector/model authority; propagate revocation to in-flight work. |
-| Durable session and tool assembly | `main/services/bot-runtime/{bot-session-service,bot-extension,bot-tool-candidates,bot-models}.ts` | Add host-owned ingress provenance and submission-scoped execution choices. |
-| Routines and recovery | `main/services/{scheduled-bot-routines,bot-routine-proposals,schedule-store-core,bot-routine-recovery}.ts` | Persist choices on claimed fires; preserve stable request IDs and safe retries. |
-| Existing records with different purposes | `main/services/bot-commitments/`, `bot-routine-notes.ts`, `bot-memory/`, `bot-issues/` | Keep dated promises, run notes, durable facts and problems distinct from Open work. |
-| Bot UI | `renderer/main/bots/`, `renderer/components/bots/` | Extend Profile, routines, proposals and transcript rows using existing shared components. |
-| Remote/native contracts | `protocol/aiden-remote/v1/`, `main/services/aiden-remote-bot*`, native Bot models/controllers | Negotiate every new shape and implement complete feature management on both phones. |
+| Surface                                  | Current home                                                                                               | Planned use                                                                                         |
+| ---------------------------------------- | ---------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------- |
+| Watch triggers and strict parsing        | `renderer/shared/bot-routine-trigger.ts`                                                                   | Add a typed connector watch beside URL/script; keep their existing intervals and behavior separate. |
+| Watch storage/checking/dispatch          | `main/services/bot-routine-events/{store,watch,watch-sources,dispatcher,runner,sources-main}.ts`           | Reuse scheduler, bounded state, failure pause, event receipts and delivery.                         |
+| Bot authority and connector joins        | `main/services/bot-runtime-authority.ts`, `bot-capability-bindings.ts`, `bot-runtime/bot-tool-policy.ts`   | Admit exact current connector/model authority; propagate revocation to in-flight work.              |
+| Durable session and tool assembly        | `main/services/bot-runtime/{bot-session-service,bot-extension,bot-tool-candidates,bot-models}.ts`          | Add host-owned ingress provenance and submission-scoped execution choices.                          |
+| Routines and recovery                    | `main/services/{scheduled-bot-routines,bot-routine-proposals,schedule-store-core,bot-routine-recovery}.ts` | Persist choices on claimed fires; preserve stable request IDs and safe retries.                     |
+| Existing records with different purposes | `main/services/bot-commitments/`, `bot-routine-notes.ts`, `bot-memory/`, `bot-issues/`                     | Keep dated promises, run notes, durable facts and problems distinct from Open work.                 |
+| Bot UI                                   | `renderer/main/bots/`, `renderer/components/bots/`                                                         | Extend Profile, routines, proposals and transcript rows using existing shared components.           |
+| Remote/native contracts                  | `protocol/aiden-remote/v1/`, `main/services/aiden-remote-bot*`, native Bot models/controllers              | Negotiate every new shape and implement complete feature management on both phones.                 |
 
 `BOT_WAKE_SOURCES` is prompt guidance, not authorization. Current ingress distinguishes routines through `routine:` request IDs. A peer request must never acquire attended tools merely because it has a new request-ID prefix. Also inspect memory review/compaction, follow-up discovery, learning and transcript projection: peer content must remain identifiable after compaction and restart.
 
@@ -171,14 +171,14 @@ Keep new services free of Electron imports. Shared-core behavior changes must pa
 
 ## Delivery order and PR boundaries
 
-| Milestone | Reviewable changes | Release gate |
-| --- | --- | --- |
-| W0 | Verified connector templates and deterministic fixtures; separately, persistent watch-transition hand-off. | Real supported mail/calendar schemas and crash tests. |
-| W1 | Connector-watch service/authority/contract, then desktop + iOS + Android management in a coherent feature stack. | All three clients manage watches; lifecycle and account acceptance pass. |
-| O | Open-work store/tools/contract, then all-client management and durable Undo. | Automatic explicit-task tracking, provenance and concurrency/restart tests. |
-| M | Submission-scoped runtime binding, routine configuration/contract and all-client controls. | Pi API proof, queue/restart isolation and budget correctness. |
-| P | Typed ingress + pair authority; then delivery/results/budget integration; then all-client management/projection. | Existing unattended restrictions and cancellation/recovery invariants hold end to end. |
-| Acceptance | Integrated journey, docs/onboarding, packaged and physical-device evidence. | No advertised slice relies on missing client controls or a fake runtime. |
+| Milestone  | Reviewable changes                                                                                               | Release gate                                                                           |
+| ---------- | ---------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------- |
+| W0         | Verified connector templates and deterministic fixtures; separately, persistent watch-transition hand-off.       | Real supported mail/calendar schemas and crash tests.                                  |
+| W1         | Connector-watch service/authority/contract, then desktop + iOS + Android management in a coherent feature stack. | All three clients manage watches; lifecycle and account acceptance pass.               |
+| O          | Open-work store/tools/contract, then all-client management and durable Undo.                                     | Automatic explicit-task tracking, provenance and concurrency/restart tests.            |
+| M          | Submission-scoped runtime binding, routine configuration/contract and all-client controls.                       | Pi API proof, queue/restart isolation and budget correctness.                          |
+| P          | Typed ingress + pair authority; then delivery/results/budget integration; then all-client management/projection. | Existing unattended restrictions and cancellation/recovery invariants hold end to end. |
+| Acceptance | Integrated journey, docs/onboarding, packaged and physical-device evidence.                                      | No advertised slice relies on missing client controls or a fake runtime.               |
 
 Split PRs along real ownership boundaries without mixing unrelated feature changes. Backend pieces remain unadvertised until their client stack is complete; migrations and startup reads do no work. Run narrow local suites before hosted CI/review. Merge main into shared PR branches, recheck script-chain unions and Remote revisions, and require CI green on each exact head.
 

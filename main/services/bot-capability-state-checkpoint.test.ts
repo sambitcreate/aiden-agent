@@ -22,10 +22,7 @@ import {
   emptyBotCapabilityState,
   type BotCapabilityState,
 } from "./bot-capability-store-core.js";
-import {
-  createBotCapabilityStore,
-  type BotCapabilityPersistence,
-} from "./bot-capability-store.js";
+import { createBotCapabilityStore, type BotCapabilityPersistence } from "./bot-capability-store.js";
 import { BotRuntimeInventoryLeaseRegistry } from "./bot-runtime-inventory-lease.js";
 
 const stateFile = "bot-capabilities.json";
@@ -149,12 +146,8 @@ async function addFullPolicy(
   });
 }
 
-async function readHead(
-  root: string,
-): Promise<{ phase: string; sequence: number }> {
-  const value = JSON.parse(
-    await readFile(join(serviceRoot(root), headFile), "utf8"),
-  ) as {
+async function readHead(root: string): Promise<{ phase: string; sequence: number }> {
+  const value = JSON.parse(await readFile(join(serviceRoot(root), headFile), "utf8")) as {
     phase: string;
     sequence: number;
   };
@@ -164,11 +157,17 @@ async function readHead(
 test("checkpoint persistence forwards the inventory fence through its publication callback", async () => {
   let persisted = emptyBotCapabilityState();
   let commitEntered!: () => void;
-  const entered = new Promise<void>((resolve) => { commitEntered = resolve; });
+  const entered = new Promise<void>((resolve) => {
+    commitEntered = resolve;
+  });
   let releaseCommit!: () => void;
-  const released = new Promise<void>((resolve) => { releaseCommit = resolve; });
+  const released = new Promise<void>((resolve) => {
+    releaseCommit = resolve;
+  });
   const persistence: BotCapabilityPersistence = {
-    async load() { return structuredClone(persisted); },
+    async load() {
+      return structuredClone(persisted);
+    },
     async save(next, isCurrent = () => true) {
       if (!isCurrent()) throw new Error("inventory publication is stale");
       persisted = structuredClone(next);
@@ -183,9 +182,15 @@ test("checkpoint persistence forwards the inventory fence through its publicatio
       persisted = next;
       return result;
     },
-    async loadedFromCorruptFile() { return false; },
-    async loadedFromUnsafeFile() { return false; },
-    async loadedDiskContents() { return null; },
+    async loadedFromCorruptFile() {
+      return false;
+    },
+    async loadedFromUnsafeFile() {
+      return false;
+    },
+    async loadedDiskContents() {
+      return null;
+    },
   };
   const checkpoint: BotCapabilityStateCheckpoint = {
     async initialize() {},
@@ -195,19 +200,19 @@ test("checkpoint persistence forwards the inventory fence through its publicatio
       return publish();
     },
   };
-  const protectedPersistence = withBotCapabilityStateCheckpoint(
-    persistence,
-    checkpoint,
-  );
+  const protectedPersistence = withBotCapabilityStateCheckpoint(persistence, checkpoint);
   await protectedPersistence.load();
   const inventory = new BotRuntimeInventoryLeaseRegistry();
   const lease = inventory.acquire();
-  const update = protectedPersistence.update((draft) => {
-    draft.sequence += 1;
-  }, () => {
-    lease.assertCurrent();
-    return true;
-  });
+  const update = protectedPersistence.update(
+    (draft) => {
+      draft.sequence += 1;
+    },
+    () => {
+      lease.assertCurrent();
+      return true;
+    },
+  );
   await entered;
   inventory.invalidate("skill_content");
   releaseCommit();
@@ -256,15 +261,19 @@ test("incarnations share the protected high-water chain and ignore the retired s
   const anchor = memoryAnchor();
   const first = protectedStore(root, anchor);
   await first.initialize();
-  const [original] = await first.reconcileNamespace("provider", [{
-    sourceId: "provider-one",
-    credentialSignature: digest("credential-a"),
-  }]);
+  const [original] = await first.reconcileNamespace("provider", [
+    {
+      sourceId: "provider-one",
+      credentialSignature: digest("credential-a"),
+    },
+  ]);
   const originalState = await readFile(join(serviceRoot(root), stateFile));
-  const [rotated] = await first.reconcileNamespace("provider", [{
-    sourceId: "provider-one",
-    credentialSignature: digest("credential-b"),
-  }]);
+  const [rotated] = await first.reconcileNamespace("provider", [
+    {
+      sourceId: "provider-one",
+      credentialSignature: digest("credential-b"),
+    },
+  ]);
   assert.notEqual(rotated?.credentialIncarnation, original?.credentialIncarnation);
 
   await writeFile(
@@ -273,10 +282,14 @@ test("incarnations share the protected high-water chain and ignore the retired s
     { mode: 0o600 },
   );
   assert.deepEqual(
-    (await first.reconcileNamespace("provider", [{
-      sourceId: "provider-one",
-      credentialSignature: digest("credential-b"),
-    }]))[0],
+    (
+      await first.reconcileNamespace("provider", [
+        {
+          sourceId: "provider-one",
+          credentialSignature: digest("credential-b"),
+        },
+      ])
+    )[0],
     rotated,
   );
 
@@ -296,22 +309,26 @@ test("an interrupted incarnation commit recovers exactly the published generatio
   await first.initialize();
   anchor.failNextStore = true;
   await assert.rejects(
-    first.reconcileNamespace("skill", [{
-      sourceId: "skill-one",
-      credentialSignature: digest("absent"),
-    }]),
+    first.reconcileNamespace("skill", [
+      {
+        sourceId: "skill-one",
+        credentialSignature: digest("absent"),
+      },
+    ]),
     BotCapabilityCommitUncertainError,
   );
-  const published = JSON.parse(
-    await readFile(join(serviceRoot(root), stateFile), "utf8"),
-  ) as { incarnations: { skill: Array<{ resourceIncarnation: string }> } };
+  const published = JSON.parse(await readFile(join(serviceRoot(root), stateFile), "utf8")) as {
+    incarnations: { skill: Array<{ resourceIncarnation: string }> };
+  };
 
   const restarted = protectedStore(root, anchor);
   await restarted.initialize();
-  const [recovered] = await restarted.reconcileNamespace("skill", [{
-    sourceId: "skill-one",
-    credentialSignature: digest("absent"),
-  }]);
+  const [recovered] = await restarted.reconcileNamespace("skill", [
+    {
+      sourceId: "skill-one",
+      credentialSignature: digest("absent"),
+    },
+  ]);
   assert.equal(
     recovered?.resourceIncarnation,
     published.incarnations.skill[0]?.resourceIncarnation,
@@ -364,10 +381,7 @@ test("an unchanged incarnation reconcile answers without reading the rollback au
   assert.notEqual(returned?.resourceIncarnation, undefined);
   const restarted = protectedStore(root, anchor);
   await restarted.initialize();
-  assert.deepEqual(
-    await restarted.reconcileNamespace("mcp", resources.slice(1)),
-    [returned],
-  );
+  assert.deepEqual(await restarted.reconcileNamespace("mcp", resources.slice(1)), [returned]);
 });
 
 test("an unchanged incarnation reconcile still refuses after an uncertain commit", async (t) => {
@@ -379,14 +393,15 @@ test("an unchanged incarnation reconcile still refuses after an uncertain commit
   await store.reconcileNamespace("skill", resources);
   anchor.failNextStore = true;
   await assert.rejects(
-    store.reconcileNamespace("skill", [{ sourceId: "skill-one", credentialSignature: digest("two") }]),
+    store.reconcileNamespace("skill", [
+      { sourceId: "skill-one", credentialSignature: digest("two") },
+    ]),
     BotCapabilityCommitUncertainError,
   );
   await assert.rejects(
     store.reconcileNamespace("skill", resources),
     (error: unknown) =>
-      error instanceof BotCapabilityUnavailableError &&
-      /uncertain commit/u.test(error.message),
+      error instanceof BotCapabilityUnavailableError && /uncertain commit/u.test(error.message),
   );
 });
 
@@ -399,8 +414,7 @@ test("initial bootstrap supports clean and one-time legacy profiles but rejects 
   await assert.rejects(
     store.initialize(),
     (error: unknown) =>
-      error instanceof BotCapabilityUnavailableError &&
-      /authority is missing/u.test(error.message),
+      error instanceof BotCapabilityUnavailableError && /authority is missing/u.test(error.message),
   );
   assert.equal(anchor.value, null);
   assert.equal(anchor.marker.value, null);
@@ -490,11 +504,9 @@ test("key-bound bootstrap marker resumes crashes idempotently and mismatched key
     const anchor = memoryAnchor();
     anchor.marker.failAfterPhase = "pending";
     await assert.rejects(protectedStore(root, anchor).initialize());
-    await writeFile(
-      join(serviceRoot(root), "capability-opaque-key.bin"),
-      Buffer.alloc(32, 32),
-      { mode: 0o600 },
-    );
+    await writeFile(join(serviceRoot(root), "capability-opaque-key.bin"), Buffer.alloc(32, 32), {
+      mode: 0o600,
+    });
 
     await assert.rejects(
       protectedStore(root, anchor).initialize(),
@@ -516,11 +528,9 @@ test("restoring state, local head, seal, and opaque key together cannot roll bac
     decision: "continue_full",
     confirmedForeground: true,
   });
-  await writeFile(
-    join(serviceRoot(root), sealFile),
-    JSON.stringify({ version: 1, sealedAt: 42 }),
-    { mode: 0o600 },
-  );
+  await writeFile(join(serviceRoot(root), sealFile), JSON.stringify({ version: 1, sealedAt: 42 }), {
+    mode: 0o600,
+  });
   const snapshot = join(root, "old-bot-service-snapshot");
   await cp(serviceRoot(root), snapshot, { recursive: true });
 
@@ -553,8 +563,7 @@ test("an interrupted commit before state publication recovers only the previous 
   let crashOnPending = false;
   const first = protectedStore(root, anchor, {
     afterHeadWrite: async (phase) => {
-      if (phase === "pending" && crashOnPending)
-        throw new Error("simulated crash");
+      if (phase === "pending" && crashOnPending) throw new Error("simulated crash");
     },
   });
   await first.initialize();
@@ -563,10 +572,7 @@ test("an interrupted commit before state publication recovers only the previous 
 
   const restarted = protectedStore(root, anchor);
   await restarted.initialize();
-  await assert.rejects(
-    restarted.getBotPolicy("bot:one"),
-    BotCapabilityUnavailableError,
-  );
+  await assert.rejects(restarted.getBotPolicy("bot:one"), BotCapabilityUnavailableError);
   assert.deepEqual(await readHead(root), { phase: "committed", sequence: 0 });
 });
 
@@ -581,8 +587,7 @@ test("an interrupted commit after state publication recovers exactly the new aut
   await assert.rejects(
     first.getBotPolicy("bot:one"),
     (error: unknown) =>
-      error instanceof BotCapabilityUnavailableError &&
-      /restart Aiden/iu.test(error.message),
+      error instanceof BotCapabilityUnavailableError && /restart Aiden/iu.test(error.message),
   );
 
   const restarted = protectedStore(root, anchor);
@@ -596,9 +601,7 @@ test("checkpoint authentication is bound to the opaque key", async (t) => {
   const anchor = memoryAnchor();
   const first = protectedStore(root, anchor);
   await first.initialize();
-  const head = JSON.parse(
-    await readFile(join(serviceRoot(root), headFile), "utf8"),
-  ) as {
+  const head = JSON.parse(await readFile(join(serviceRoot(root), headFile), "utf8")) as {
     mac: string;
   };
   head.mac = `${head.mac.slice(0, -1)}${head.mac.endsWith("0") ? "1" : "0"}`;
@@ -643,10 +646,7 @@ test("record deletions advance the authenticated document commit sequence", asyn
       expectedBotPolicyRevision: policy.revision,
       catalog: testCatalog(),
     });
-    assert.equal(
-      await store.deleteChatPolicy({ chatId: "chat:one", botId: "bot:one" }),
-      true,
-    );
+    assert.equal(await store.deleteChatPolicy({ chatId: "chat:one", botId: "bot:one" }), true);
     assert.deepEqual(await readHead(root), { phase: "committed", sequence: 3 });
   });
 

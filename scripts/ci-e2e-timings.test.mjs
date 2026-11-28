@@ -15,20 +15,31 @@ import { FILE_SECONDS, planShards } from "./ci-e2e-shards.mjs";
 
 test("Playwright JSON reports become per-spec seconds and ignore skipped results", () => {
   const seconds = extractSpecSeconds({
-    suites: [{
-      file: "/checkout/tests/e2e/settings-unification.spec.ts",
-      specs: [{
-        file: "tests/e2e/settings-unification.spec.ts",
-        tests: [
-          { results: [{ status: "passed", duration: 4000 }, { status: "skipped", duration: 0 }] },
-          { results: [{ status: "passed", duration: 2500 }] },
+    suites: [
+      {
+        file: "/checkout/tests/e2e/settings-unification.spec.ts",
+        specs: [
+          {
+            file: "tests/e2e/settings-unification.spec.ts",
+            tests: [
+              {
+                results: [
+                  { status: "passed", duration: 4000 },
+                  { status: "skipped", duration: 0 },
+                ],
+              },
+              { results: [{ status: "passed", duration: 2500 }] },
+            ],
+          },
         ],
-      }],
-      suites: [{
-        file: "tests/e2e/chat-fork.spec.ts",
-        specs: [{ tests: [{ results: [{ status: "failed", duration: 1100 }] }] }],
-      }],
-    }],
+        suites: [
+          {
+            file: "tests/e2e/chat-fork.spec.ts",
+            specs: [{ tests: [{ results: [{ status: "failed", duration: 1100 }] }] }],
+          },
+        ],
+      },
+    ],
   });
   assert.equal(seconds["settings-unification.spec.ts"], 7);
   assert.equal(seconds["chat-fork.spec.ts"], 1);
@@ -36,10 +47,12 @@ test("Playwright JSON reports become per-spec seconds and ignore skipped results
 
 test("nested spec paths stay nested when Playwright omits the tests/e2e prefix", () => {
   const seconds = extractSpecSeconds({
-    suites: [{
-      file: "nested/future-flow.spec.ts",
-      specs: [{ tests: [{ results: [{ status: "passed", duration: 1500 }] }] }],
-    }],
+    suites: [
+      {
+        file: "nested/future-flow.spec.ts",
+        specs: [{ tests: [{ results: [{ status: "passed", duration: 1500 }] }] }],
+      },
+    ],
   });
   assert.equal(seconds["nested/future-flow.spec.ts"], 2);
 });
@@ -48,7 +61,10 @@ test("malformed or missing timing stores never fail planning", () => {
   assert.deepEqual(timingWeights(parseTimingsStore(null), "darwin"), {});
   assert.deepEqual(timingWeights(parseTimingsStore({ version: 2 }), "linux"), {});
   assert.equal(specWeight("missing.spec.ts", {}, FILE_SECONDS, 30), 30);
-  assert.equal(specWeight("chat-fork.spec.ts", {}, FILE_SECONDS, 30), FILE_SECONDS["chat-fork.spec.ts"]);
+  assert.equal(
+    specWeight("chat-fork.spec.ts", {}, FILE_SECONDS, 30),
+    FILE_SECONDS["chat-fork.spec.ts"],
+  );
 });
 
 test("recorded durations fill shards more evenly and still include a new spec", () => {
@@ -68,9 +84,21 @@ test("recorded durations fill shards more evenly and still include a new spec", 
 });
 
 test("merge keeps a median of recent samples per platform", () => {
-  const first = mergeTimings(null, { "chat-fork.spec.ts": 10, "chat-top-bar.spec.ts": 20 }, { platform: "darwin", recordedAt: "2026-01-01T00:00:00.000Z" });
-  const second = mergeTimings(first, { "chat-fork.spec.ts": 30 }, { platform: "darwin", recordedAt: "2026-01-02T00:00:00.000Z" });
-  const linux = mergeTimings(second, { "chat-fork.spec.ts": 8 }, { platform: "linux", recordedAt: "2026-01-02T00:00:00.000Z" });
+  const first = mergeTimings(
+    null,
+    { "chat-fork.spec.ts": 10, "chat-top-bar.spec.ts": 20 },
+    { platform: "darwin", recordedAt: "2026-01-01T00:00:00.000Z" },
+  );
+  const second = mergeTimings(
+    first,
+    { "chat-fork.spec.ts": 30 },
+    { platform: "darwin", recordedAt: "2026-01-02T00:00:00.000Z" },
+  );
+  const linux = mergeTimings(
+    second,
+    { "chat-fork.spec.ts": 8 },
+    { platform: "linux", recordedAt: "2026-01-02T00:00:00.000Z" },
+  );
   assert.equal(timingWeights(linux, "darwin")["chat-fork.spec.ts"], 20);
   assert.equal(timingWeights(linux, "linux")["chat-fork.spec.ts"], 8);
   assert.equal(timingWeights(linux, "darwin")["chat-top-bar.spec.ts"], 20);
@@ -83,8 +111,14 @@ test("shard timing artifacts merge from a directory without throwing on junk", (
     const linux = path.join(directory, "e2e-spec-timings-Linux-1");
     mkdirSync(macos, { recursive: true });
     mkdirSync(linux, { recursive: true });
-    writeFileSync(path.join(macos, "e2e-shard-timings.json"), JSON.stringify({ "chat-fork.spec.ts": 12 }));
-    writeFileSync(path.join(linux, "e2e-shard-timings.json"), JSON.stringify({ "chat-fork.spec.ts": 9 }));
+    writeFileSync(
+      path.join(macos, "e2e-shard-timings.json"),
+      JSON.stringify({ "chat-fork.spec.ts": 12 }),
+    );
+    writeFileSync(
+      path.join(linux, "e2e-shard-timings.json"),
+      JSON.stringify({ "chat-fork.spec.ts": 9 }),
+    );
     writeFileSync(path.join(directory, "notes.txt"), "ignore");
     const storePath = path.join(directory, "store.json");
     const out = path.join(directory, "out.json");

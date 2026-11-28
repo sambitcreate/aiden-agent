@@ -51,9 +51,7 @@ export interface PeerBootstrapClient {
   readonly observedSpki: string | undefined;
 }
 
-export type PeerBootstrapFactory = (
-  options: PeerBootstrapOptions,
-) => PeerBootstrapClient;
+export type PeerBootstrapFactory = (options: PeerBootstrapOptions) => PeerBootstrapClient;
 
 const MAX_BODY_BYTES = 262_144;
 const MAX_ERROR_BYTES = 16_384;
@@ -125,9 +123,7 @@ export class PeerBootstrapTransport implements PeerBootstrapClient {
       port: this.port,
       ...(isIP(this.host) ? {} : { servername: this.host }),
       rejectUnauthorized: this.options.mode === "webpki",
-      ...(this.options.mode === "webpki" && this.options.ca
-        ? { ca: this.options.ca }
-        : {}),
+      ...(this.options.mode === "webpki" && this.options.ca ? { ca: this.options.ca } : {}),
       ALPNProtocols: ["http/1.1"],
     });
     socket.on("error", (error) => done(error));
@@ -157,15 +153,10 @@ export class PeerBootstrapTransport implements PeerBootstrapClient {
 
   json(input: PeerBootstrapRequest): Promise<unknown> {
     const target = peerRequestUrl(this.options.endpoint, input.path);
-    const body =
-      input.body === undefined
-        ? undefined
-        : Buffer.from(JSON.stringify(input.body));
-    if (body && body.length > MAX_BODY_BYTES)
-      throw new Error("Peer request is too large.");
+    const body = input.body === undefined ? undefined : Buffer.from(JSON.stringify(input.body));
+    if (body && body.length > MAX_BODY_BYTES) throw new Error("Peer request is too large.");
     const headers = bootstrapHeaders(input, body);
-    if (input.signal?.aborted)
-      return Promise.reject(new PeerTransportError("unavailable"));
+    if (input.signal?.aborted) return Promise.reject(new PeerTransportError("unavailable"));
     const timeoutMs = Math.min(
       Math.max(1, Math.floor(input.timeoutMs ?? DEFAULT_TIMEOUT_MS)),
       MAX_TIMEOUT_MS,
@@ -245,9 +236,7 @@ export class PeerBootstrapTransport implements PeerBootstrapClient {
           response.on("end", () => {
             let text: string;
             try {
-              text = new TextDecoder("utf-8", { fatal: true }).decode(
-                Buffer.concat(chunks),
-              );
+              text = new TextDecoder("utf-8", { fatal: true }).decode(Buffer.concat(chunks));
             } catch {
               fail(new PeerTransportError("invalid_response", status));
               return;
@@ -262,12 +251,8 @@ export class PeerBootstrapTransport implements PeerBootstrapClient {
               finish(new PeerTransportError("invalid_response", status));
             }
           });
-          response.on("error", () =>
-            finish(new PeerTransportError("unavailable")),
-          );
-          response.on("aborted", () =>
-            finish(new PeerTransportError("unavailable")),
-          );
+          response.on("error", () => finish(new PeerTransportError("unavailable")));
+          response.on("aborted", () => finish(new PeerTransportError("unavailable")));
         },
       );
       const abort = () => {

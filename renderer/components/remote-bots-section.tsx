@@ -1,8 +1,16 @@
 import * as React from "react";
 import { Bot, Loader2 } from "lucide-react";
-import type { NewChatMachine, RemoteBotChoice, RemoteBotGroup } from "../lib/hosts/new-chat-targets";
+import type {
+  NewChatMachine,
+  RemoteBotChoice,
+  RemoteBotGroup,
+} from "../lib/hosts/new-chat-targets";
 import { useRemoteBotPhoto } from "../lib/hosts/remote-images";
-import { isRemoteBotUnread, markRemoteBotHostListed, useRemoteBotSeen } from "../lib/remote-bot-seen";
+import {
+  isRemoteBotUnread,
+  markRemoteBotHostListed,
+  useRemoteBotSeen,
+} from "../lib/remote-bot-seen";
 import { matchesSearch } from "../lib/search-fold";
 import { RemoteHostMarker } from "./sidebar-remote";
 import { cn } from "../lib/ui-utils";
@@ -18,7 +26,11 @@ import { BotAvatar } from "./bot-avatar";
 import { BotNeedsYouBadge } from "./bot-needs-you-badge";
 import { BotUnreadDot } from "./bot-unread-dot";
 
-type RemoteBotLine = { kind: "waiting" | "working" | "status" | "preview"; text: string; spoken: string };
+type RemoteBotLine = {
+  kind: "waiting" | "working" | "status" | "preview";
+  text: string;
+  spoken: string;
+};
 
 const STATUS_LINES = {
   paused: { text: BOT_PAUSED_ROW_LABEL, spoken: "paused" },
@@ -46,11 +58,19 @@ export function remoteBotLine(bot: RemoteBotChoice): RemoteBotLine | null {
  * left out. A Mac that lists no Bots only for a reason (an old pairing) shows
  * that reason until the person searches.
  */
-export function remoteBotGroupsMatching(groups: readonly RemoteBotGroup[], query: string): RemoteBotGroup[] {
+export function remoteBotGroupsMatching(
+  groups: readonly RemoteBotGroup[],
+  query: string,
+): RemoteBotGroup[] {
   const searching = query.trim().length > 0;
   return groups
-    .map(({ host, bots }) => ({ host, bots: bots.filter((bot) => matchesSearch([bot.name, bot.purpose ?? ""], query)) }))
-    .filter((group) => group.bots.length > 0 || (!searching && group.host.disabledReason !== undefined));
+    .map(({ host, bots }) => ({
+      host,
+      bots: bots.filter((bot) => matchesSearch([bot.name, bot.purpose ?? ""], query)),
+    }))
+    .filter(
+      (group) => group.bots.length > 0 || (!searching && group.host.disabledReason !== undefined),
+    );
 }
 
 /**
@@ -101,23 +121,25 @@ export function RemoteBotsSection({
               {host.disabledReason}
             </Text>
           ) : null}
-          {bots.length === 0 ? null : <ul className="flex flex-col gap-0.5">
-            {bots.map((bot) => {
-              const key = `${host.id}/${bot.id}`;
-              const current = selected === key;
-              return (
-                <RemoteBotRow
-                  key={bot.id}
-                  host={host}
-                  bot={bot}
-                  busy={opening === key}
-                  current={current}
-                  unread={!current && isRemoteBotUnread(seen, host.id, bot.id, bot.lastReplyAt)}
-                  onOpen={onOpen}
-                />
-              );
-            })}
-          </ul>}
+          {bots.length === 0 ? null : (
+            <ul className="flex flex-col gap-0.5">
+              {bots.map((bot) => {
+                const key = `${host.id}/${bot.id}`;
+                const current = selected === key;
+                return (
+                  <RemoteBotRow
+                    key={bot.id}
+                    host={host}
+                    bot={bot}
+                    busy={opening === key}
+                    current={current}
+                    unread={!current && isRemoteBotUnread(seen, host.id, bot.id, bot.lastReplyAt)}
+                    onOpen={onOpen}
+                  />
+                );
+              })}
+            </ul>
+          )}
         </section>
       ))}
     </div>
@@ -164,12 +186,25 @@ function RemoteBotRow({
         onClick={() => onOpen(host.id, bot.id)}
       >
         {busy || !bot.avatar ? (
-          <span className="grid size-9 shrink-0 place-items-center rounded-card bg-control text-secondary" aria-hidden="true">
-            {busy ? <Loader2 className="size-4 motion-safe:animate-spin" /> : <Bot className="size-4" />}
+          <span
+            className="grid size-9 shrink-0 place-items-center rounded-card bg-control text-secondary"
+            aria-hidden="true"
+          >
+            {busy ? (
+              <Loader2 className="size-4 motion-safe:animate-spin" />
+            ) : (
+              <Bot className="size-4" />
+            )}
           </span>
         ) : (
           <span aria-hidden="true" className="shrink-0">
-            <BotAvatar avatar={bot.avatar} name={bot.name} size="medium" photoUrl={photoUrl} working={working} />
+            <BotAvatar
+              avatar={bot.avatar}
+              name={bot.name}
+              size="medium"
+              photoUrl={photoUrl}
+              working={working}
+            />
           </span>
         )}
         <span className="min-w-0 flex-1">

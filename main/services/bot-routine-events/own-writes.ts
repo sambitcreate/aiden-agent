@@ -41,7 +41,11 @@ export function createBotOwnWrites(
       writes.set(key(botId, absolutePath), { at, fingerprint });
     },
     /** The version this Bot's file tools last left at `absolutePath`, when written at or after `since`. */
-    writtenSince(botId: string, absolutePath: string, since: number): BotFileFingerprint | undefined {
+    writtenSince(
+      botId: string,
+      absolutePath: string,
+      since: number,
+    ): BotFileFingerprint | undefined {
       const written = writes.get(key(botId, absolutePath));
       return written && written.at >= since ? written.fingerprint : undefined;
     },

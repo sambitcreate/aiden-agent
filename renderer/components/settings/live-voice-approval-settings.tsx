@@ -10,7 +10,9 @@ import { Field, FieldSet, SettingsDisclosure, Switch, Text, toast } from "../ui"
 /** "English, Spanish … and Chinese". */
 export function liveVoiceLanguageList(): string {
   const names = LIVE_VOICE_LANGUAGES.map((language) => language.name);
-  return names.length > 1 ? `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}` : (names[0] ?? "");
+  return names.length > 1
+    ? `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}`
+    : (names[0] ?? "");
 }
 
 function quoted(phrases: readonly string[]): string {
@@ -67,9 +69,9 @@ export function LiveVoiceApprovalSettings(): React.ReactElement {
           label="Answer approvals by voice"
           description={
             <>
-              When the chat on screen asks to run or change something, Live reads it out and you
-              can say allow or deny. Voice allows once only; passwords, payments and similar
-              requests still need a tap.
+              When the chat on screen asks to run or change something, Live reads it out and you can
+              say allow or deny. Voice allows once only; passwords, payments and similar requests
+              still need a tap.
               <span className="mt-1 block">Works in {liveVoiceLanguageList()}.</span>
             </>
           }

@@ -1,6 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { ImageQuitCoverage, imageRunQuitConfirmation, imageRunsAllowQuit } from "./quit-confirm-core.js";
+import {
+  ImageQuitCoverage,
+  imageRunQuitConfirmation,
+  imageRunsAllowQuit,
+} from "./quit-confirm-core.js";
 
 test("no prompt without in-flight image requests", () => {
   assert.equal(imageRunQuitConfirmation(0), null);
@@ -36,7 +40,11 @@ test("quitting is decided by the in-flight count and the pressed button", () => 
   assert.equal(decide(2, 0), false, "Keep Aiden Open");
   assert.equal(decide(2, 1), true, "Quit and Cancel Requests");
   assert.equal(decide(1, -1), false, "a dismissed prompt keeps Aiden open");
-  assert.deepEqual(shown, ["2 image requests in progress.", "2 image requests in progress.", "1 image request in progress."]);
+  assert.deepEqual(shown, [
+    "2 image requests in progress.",
+    "2 image requests in progress.",
+    "1 image request in progress.",
+  ]);
 });
 
 test("requests the user already agreed to cancel are not asked about again, new ones are", () => {
@@ -46,7 +54,11 @@ test("requests the user already agreed to cancel are not asked about again, new 
   assert.equal(decide(2, 2), true);
   assert.equal(decide(1, 2), true, "some finished since the confirmation");
   assert.deepEqual(shown, []);
-  assert.equal(decide(3, 2), true, "the answer was Quit, but a run started mid-close so it asks first");
+  assert.equal(
+    decide(3, 2),
+    true,
+    "the answer was Quit, but a run started mid-close so it asks first",
+  );
   assert.deepEqual(shown, ["3 image requests in progress."]);
 });
 

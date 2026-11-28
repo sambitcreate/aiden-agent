@@ -212,7 +212,6 @@ test("draft-07 dependencies normalize schemas while preserving property lists", 
   assert.equal(validate({ mode: true, retries: 255 }), true);
 });
 
-
 test("deep schemas normalize every numeric leaf without a recursive depth cutoff", () => {
   const leaf = { type: "integer", format: "uint32" };
   let schema: Record<string, unknown> = leaf;
@@ -235,7 +234,10 @@ test("two servers that send one schema in different key orders produce identical
       limit: { type: "integer", format: "uint8", default: 10 },
       filters: {
         type: "object",
-        properties: { since: { type: "string", format: "date-time" }, tags: { type: "array", items: { type: "string" } } },
+        properties: {
+          since: { type: "string", format: "date-time" },
+          tags: { type: "array", items: { type: "string" } },
+        },
       },
     },
     required: ["query"],
@@ -246,7 +248,10 @@ test("two servers that send one schema in different key orders produce identical
     required: ["query"],
     properties: {
       filters: {
-        properties: { tags: { items: { type: "string" }, type: "array" }, since: { format: "date-time", type: "string" } },
+        properties: {
+          tags: { items: { type: "string" }, type: "array" },
+          since: { format: "date-time", type: "string" },
+        },
         type: "object",
       },
       limit: { default: 10, format: "uint8", type: "integer" },
@@ -254,11 +259,17 @@ test("two servers that send one schema in different key orders produce identical
     },
     type: "object",
   };
-  const bytes = (schema: unknown) => JSON.stringify(Type.Unsafe(normalizeMcpToolInputSchema(schema as object)));
+  const bytes = (schema: unknown) =>
+    JSON.stringify(Type.Unsafe(normalizeMcpToolInputSchema(schema as object)));
   assert.equal(bytes(first), bytes(second));
   // The meaning is kept: the numeric format still becomes its range, and arrays keep their order.
   const normalized = normalizeMcpToolInputSchema(second);
-  assert.deepEqual(normalized.properties.limit, { default: 10, maximum: 255, minimum: 0, type: "integer" });
+  assert.deepEqual(normalized.properties.limit, {
+    default: 10,
+    maximum: 255,
+    minimum: 0,
+    type: "integer",
+  });
   assert.deepEqual(normalized.required, ["query"]);
   assert.equal(strictDraft07().compile(normalized)({ query: "x", limit: 256 }), false);
 });

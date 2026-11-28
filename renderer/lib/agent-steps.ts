@@ -43,7 +43,10 @@ const VERBS: Record<string, VerbPair> = {
   browser_open: { active: "Opening browser", complete: "Opened browser" },
   browser_navigate: { active: "Navigating browser", complete: "Navigated browser" },
   browser_resize: { active: "Resizing browser", complete: "Resized browser" },
-  browser_set_appearance: { active: "Setting browser appearance", complete: "Set browser appearance" },
+  browser_set_appearance: {
+    active: "Setting browser appearance",
+    complete: "Set browser appearance",
+  },
   browser_snapshot: { active: "Inspecting browser", complete: "Inspected browser" },
   browser_click: { active: "Clicking in browser", complete: "Clicked in browser" },
   browser_type: { active: "Typing in browser", complete: "Typed in browser" },
@@ -51,11 +54,20 @@ const VERBS: Record<string, VerbPair> = {
   browser_scroll: { active: "Scrolling browser", complete: "Scrolled browser" },
   browser_evaluate: { active: "Evaluating page", complete: "Evaluated page" },
   browser_wait_for: { active: "Waiting for page", complete: "Waited for page" },
-  browser_recording_start: { active: "Starting browser recording", complete: "Started browser recording" },
-  browser_recording_stop: { active: "Stopping browser recording", complete: "Stopped browser recording" },
+  browser_recording_start: {
+    active: "Starting browser recording",
+    complete: "Started browser recording",
+  },
+  browser_recording_stop: {
+    active: "Stopping browser recording",
+    complete: "Stopped browser recording",
+  },
   device_list: { active: "Listing simulators", complete: "Listed simulators" },
   device_open: { active: "Opening simulator", complete: "Opened simulator" },
-  device_screenshot: { active: "Taking simulator screenshot", complete: "Took simulator screenshot" },
+  device_screenshot: {
+    active: "Taking simulator screenshot",
+    complete: "Took simulator screenshot",
+  },
   device_close: { active: "Closing simulator", complete: "Closed simulator" },
   vcc_recall: { active: "Recalling chat history", complete: "Recalled chat history" },
   compact_context: { active: "Compacting context", complete: "Compacted context" },
@@ -65,7 +77,10 @@ const VERBS: Record<string, VerbPair> = {
   web_fetch: { active: "Fetching web page", complete: "Fetched web page" },
   agent_subagents: { active: "Running subagents", complete: "Ran subagents" },
   agent_tool: { active: "Using an agent tool", complete: "Used an agent tool" },
-  agent_context_rebuilt: { active: "Starting a fresh agent session", complete: "Started a fresh agent session" },
+  agent_context_rebuilt: {
+    active: "Starting a fresh agent session",
+    complete: "Started a fresh agent session",
+  },
 };
 
 /**
@@ -268,7 +283,9 @@ export function summarizeActivity(timeline: GenerationTimeline): string {
   const pages = countTools(steps, ["web_fetch"]);
   const mac = countTools(steps, ["computer_use"]);
   const compactions = countTools(steps, ["compact_context"]);
-  const other = steps.filter((step) => isToolStep(step) && !TALLIED_TOOLS.includes(step.toolName)).length;
+  const other = steps.filter(
+    (step) => isToolStep(step) && !TALLIED_TOOLS.includes(step.toolName),
+  ).length;
   const skippedNoun = skipped.every((step) => step.toolName === "run_command")
     ? "command"
     : skipped.every((step) => step.toolName === "write_file" || step.toolName === "edit_file")

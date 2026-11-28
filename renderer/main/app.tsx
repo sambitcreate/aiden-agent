@@ -103,4 +103,3 @@ export async function startApp(startup: StartupReads): Promise<void> {
     </React.StrictMode>,
   );
 }
-

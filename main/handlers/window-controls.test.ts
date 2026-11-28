@@ -22,19 +22,39 @@ class FakeWindow extends EventEmitter {
   minimized = false;
   fullScreen = false;
   closeRequests = 0;
-  isDestroyed() { return this.destroyed; }
-  isMaximized() { return this.maximized; }
-  isFullScreen() { return this.fullScreen; }
-  minimize() { this.minimized = true; this.emit("minimize"); }
-  maximize() { this.maximized = true; this.emit("maximize"); }
-  unmaximize() { this.maximized = false; this.emit("unmaximize"); }
-  close() { this.closeRequests += 1; }
+  isDestroyed() {
+    return this.destroyed;
+  }
+  isMaximized() {
+    return this.maximized;
+  }
+  isFullScreen() {
+    return this.fullScreen;
+  }
+  minimize() {
+    this.minimized = true;
+    this.emit("minimize");
+  }
+  maximize() {
+    this.maximized = true;
+    this.emit("maximize");
+  }
+  unmaximize() {
+    this.maximized = false;
+    this.emit("unmaximize");
+  }
+  close() {
+    this.closeRequests += 1;
+  }
 }
 
 function setup(options: { menu?: boolean } = {}) {
   const window = new FakeWindow();
   const menus: Array<{ x: number; y: number }> = [];
-  const handlers = new Map<string, (event: { sender: { id: number } }, ...args: unknown[]) => unknown>();
+  const handlers = new Map<
+    string,
+    (event: { sender: { id: number } }, ...args: unknown[]) => unknown
+  >();
   let current: FakeWindow | null = window;
   registerWindowControlHandlers<FakeWindow>({
     handle: (channel, handler) => handlers.set(channel, handler),
@@ -47,20 +67,40 @@ function setup(options: { menu?: boolean } = {}) {
   });
   const invoke = (senderId: number, channel: string, ...args: unknown[]) =>
     Promise.resolve(handlers.get(channel)!({ sender: { id: senderId } }, ...args));
-  return { window, menus, invoke, closeWindow: () => { current = null; } };
+  return {
+    window,
+    menus,
+    invoke,
+    closeWindow: () => {
+      current = null;
+    },
+  };
 }
 
 test("the main window's document can minimize, maximize, restore and close it", async () => {
   const { window, invoke } = setup();
-  assert.deepEqual(await invoke(7, WINDOW_GET_STATE_CHANNEL), { maximized: false, fullScreen: false });
-  assert.deepEqual(await invoke(7, WINDOW_TOGGLE_MAXIMIZE_CHANNEL), { maximized: true, fullScreen: false });
+  assert.deepEqual(await invoke(7, WINDOW_GET_STATE_CHANNEL), {
+    maximized: false,
+    fullScreen: false,
+  });
+  assert.deepEqual(await invoke(7, WINDOW_TOGGLE_MAXIMIZE_CHANNEL), {
+    maximized: true,
+    fullScreen: false,
+  });
   assert.equal(window.maximized, true);
-  assert.deepEqual(await invoke(7, WINDOW_TOGGLE_MAXIMIZE_CHANNEL), { maximized: false, fullScreen: false });
+  assert.deepEqual(await invoke(7, WINDOW_TOGGLE_MAXIMIZE_CHANNEL), {
+    maximized: false,
+    fullScreen: false,
+  });
   assert.equal(window.maximized, false);
   assert.equal(await invoke(7, WINDOW_MINIMIZE_CHANNEL), true);
   assert.equal(window.minimized, true);
   assert.equal(await invoke(7, WINDOW_CLOSE_CHANNEL), true);
-  assert.equal(window.closeRequests, 1, "close is a request the window's guarded close handler can refuse");
+  assert.equal(
+    window.closeRequests,
+    1,
+    "close is a request the window's guarded close handler can refuse",
+  );
 });
 
 test("other documents cannot drive the main window", async () => {
@@ -71,7 +111,12 @@ test("other documents cannot drive the main window", async () => {
   assert.equal(await invoke(99, WINDOW_CLOSE_CHANNEL), false);
   assert.equal(await invoke(99, WINDOW_SHOW_MENU_CHANNEL, { x: 10, y: 10 }), false);
   assert.deepEqual(
-    { maximized: window.maximized, minimized: window.minimized, closeRequests: window.closeRequests, menus: menus.length },
+    {
+      maximized: window.maximized,
+      minimized: window.minimized,
+      closeRequests: window.closeRequests,
+      menus: menus.length,
+    },
     { maximized: false, minimized: false, closeRequests: 0, menus: 0 },
   );
 });
@@ -97,11 +142,21 @@ test("the main menu opens at a whole-pixel point inside the window", async () =>
   const { invoke, menus } = setup();
   assert.equal(await invoke(7, WINDOW_SHOW_MENU_CHANNEL, { x: 12.4, y: 44.6 }), true);
   assert.deepEqual(menus, [{ x: 12, y: 45 }]);
-  for (const bad of [null, { x: -1, y: 4 }, { x: Number.NaN, y: 4 }, { x: "1", y: 4 }, { x: 1 }, { x: 1, y: 1e9 }]) {
+  for (const bad of [
+    null,
+    { x: -1, y: 4 },
+    { x: Number.NaN, y: 4 },
+    { x: "1", y: 4 },
+    { x: 1 },
+    { x: 1, y: 1e9 },
+  ]) {
     assert.equal(await invoke(7, WINDOW_SHOW_MENU_CHANNEL, bad), false, JSON.stringify(bad));
   }
   assert.equal(menus.length, 1);
-  assert.equal(await setup({ menu: false }).invoke(7, WINDOW_SHOW_MENU_CHANNEL, { x: 1, y: 1 }), false);
+  assert.equal(
+    await setup({ menu: false }).invoke(7, WINDOW_SHOW_MENU_CHANNEL, { x: 1, y: 1 }),
+    false,
+  );
 });
 
 test("state changes reach the document once each, and stop when tracking stops", () => {

@@ -3,7 +3,11 @@
 
 import { randomUUID } from "node:crypto";
 import { voiceSetupMessage } from "../../renderer/shared/voice-provider.js";
-import { LOAD_DEADLINE_MS, STATUS_DEADLINE_MS, transcribeDeadlineMs } from "../../renderer/shared/local-speech-budget.js";
+import {
+  LOAD_DEADLINE_MS,
+  STATUS_DEADLINE_MS,
+  transcribeDeadlineMs,
+} from "../../renderer/shared/local-speech-budget.js";
 import type { SpeechModelFamily, SpeechModelSpec } from "./local-speech-catalog.js";
 import {
   isLocalSpeechWorkerMessage,
@@ -118,7 +122,8 @@ export class LocalSpeechProcessClient {
 
   pushStderr(line: string): void {
     this.stderr.push(line);
-    if (this.stderr.length > STDERR_TAIL_LINES) this.stderr.splice(0, this.stderr.length - STDERR_TAIL_LINES);
+    if (this.stderr.length > STDERR_TAIL_LINES)
+      this.stderr.splice(0, this.stderr.length - STDERR_TAIL_LINES);
   }
 
   stderrTail(): string[] {
@@ -133,7 +138,11 @@ export class LocalSpeechProcessClient {
   private request(message: Outgoing, deadlineMs: number): Promise<LocalSpeechWorkerMessage> {
     if (this.closed) return Promise.reject(new Error("On-device transcription process is closed."));
     const requestId = randomUUID();
-    const payload = { ...message, requestId, version: LOCAL_SPEECH_PROTOCOL_VERSION } as LocalSpeechParentMessage;
+    const payload = {
+      ...message,
+      requestId,
+      version: LOCAL_SPEECH_PROTOCOL_VERSION,
+    } as LocalSpeechParentMessage;
     return new Promise<LocalSpeechWorkerMessage>((resolve, reject) => {
       const timer = setTimeout(() => {
         this.pending.delete(requestId);
@@ -160,7 +169,9 @@ export class LocalSpeechProcessClient {
     });
   }
 
-  private static unwrap(result: LocalSpeechWorkerMessage): Extract<LocalSpeechWorkerMessage, { kind: "result" }> {
+  private static unwrap(
+    result: LocalSpeechWorkerMessage,
+  ): Extract<LocalSpeechWorkerMessage, { kind: "result" }> {
     if (result.kind === "failure") throw new LocalSpeechWorkerError(result.message, result.code);
     return result;
   }
@@ -179,7 +190,10 @@ export class LocalSpeechProcessClient {
     language: string | null = null,
   ): Promise<{ loadMs: number }> {
     const result = LocalSpeechProcessClient.unwrap(
-      await this.request({ kind: "load", modelId, modelDirectory, spec, language }, this.deadlines.load),
+      await this.request(
+        { kind: "load", modelId, modelDirectory, spec, language },
+        this.deadlines.load,
+      ),
     );
     return { loadMs: result.loadMs ?? 0 };
   }
@@ -188,9 +202,16 @@ export class LocalSpeechProcessClient {
     input: LocalSpeechTranscribeInput,
   ): Promise<{ text: string; language: string | null; decodeMs: number }> {
     const result = LocalSpeechProcessClient.unwrap(
-      await this.request({ kind: "transcribe", ...input }, this.deadlines.transcribe(audioSeconds(input.audio))),
+      await this.request(
+        { kind: "transcribe", ...input },
+        this.deadlines.transcribe(audioSeconds(input.audio)),
+      ),
     );
-    return { text: result.text ?? "", language: result.language ?? null, decodeMs: result.decodeMs ?? 0 };
+    return {
+      text: result.text ?? "",
+      language: result.language ?? null,
+      decodeMs: result.decodeMs ?? 0,
+    };
   }
 
   async release(): Promise<void> {
@@ -207,7 +228,8 @@ export class LocalSpeechProcessClient {
   }
 }
 
-export const LOCAL_SPEECH_CRASH_MESSAGE = "On-device transcription couldn't finish (decode-failed). Try again.";
+export const LOCAL_SPEECH_CRASH_MESSAGE =
+  "On-device transcription couldn't finish (decode-failed). Try again.";
 
 /**
  * Runs `attempt` once, and once more in a fresh worker when the first attempt
@@ -215,7 +237,11 @@ export const LOCAL_SPEECH_CRASH_MESSAGE = "On-device transcription couldn't fini
  */
 export async function runWithCrashRetry<T>(
   attempt: (n: 1 | 2) => Promise<T>,
-  opts: { isCancelled(): boolean; isCrash(error: unknown): boolean; onCrash(error: unknown, n: 1 | 2): void },
+  opts: {
+    isCancelled(): boolean;
+    isCrash(error: unknown): boolean;
+    onCrash(error: unknown, n: 1 | 2): void;
+  },
 ): Promise<T> {
   try {
     return await attempt(1);

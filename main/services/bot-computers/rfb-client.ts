@@ -29,7 +29,11 @@ export const RFB_ENCODING_LAST_RECT = -224;
 export const RFB_ENCODING_CURSOR = -239;
 
 /** Requested in this order; Raw last as the universal fallback is not needed, since every server has it. */
-export const RFB_REQUESTED_ENCODINGS = [RFB_ENCODING_COPY_RECT, RFB_ENCODING_RAW, RFB_ENCODING_DESKTOP_SIZE] as const;
+export const RFB_REQUESTED_ENCODINGS = [
+  RFB_ENCODING_COPY_RECT,
+  RFB_ENCODING_RAW,
+  RFB_ENCODING_DESKTOP_SIZE,
+] as const;
 
 const BYTES_PER_PIXEL = 4;
 const MAX_REASON_BYTES = 4096;
@@ -109,7 +113,11 @@ export interface RfbClient {
    * The next update that satisfies `full` (default false: any update). A
    * full wait is answered only by an update covering the whole framebuffer.
    */
-  nextUpdate(options?: { full?: boolean; signal?: AbortSignal; timeoutMs?: number }): Promise<RfbUpdate>;
+  nextUpdate(options?: {
+    full?: boolean;
+    signal?: AbortSignal;
+    timeoutMs?: number;
+  }): Promise<RfbUpdate>;
   /** Framebuffer pixels, clamped inside the framebuffer; `buttons` is the RFB mask (1 left, 2 middle, 4 right, 8/16 wheel). */
   pointer(x: number, y: number, buttons: number): Promise<void>;
   key(keysym: number, down: boolean): Promise<void>;
@@ -245,7 +253,8 @@ class ByteReader {
   /** `deadline` is a wall-clock time; omitted, the read may wait forever (an idle server). */
   read(length: number, deadline: number | undefined, now: () => number): Promise<Buffer> {
     if (this.failure) return Promise.reject(this.failure);
-    if (this.pending) return Promise.reject(new RfbError("malformed", "Only one RFB read can be pending."));
+    if (this.pending)
+      return Promise.reject(new RfbError("malformed", "Only one RFB read can be pending."));
     if (length === 0) return Promise.resolve(Buffer.alloc(0));
     if (this.buffered >= length) return Promise.resolve(this.take(length));
     return new Promise<Buffer>((resolve, reject) => {
@@ -309,7 +318,10 @@ function validDimension(value: number, max: number): boolean {
  * a refused password, an unsupported server, a malformed or oversized reply,
  * a handshake slower than `handshakeTimeoutMs`, or an abort.
  */
-export async function connectRfb(socket: Duplex, options: RfbClientOptions = {}): Promise<RfbClient> {
+export async function connectRfb(
+  socket: Duplex,
+  options: RfbClientOptions = {},
+): Promise<RfbClient> {
   const now = options.now ?? Date.now;
   const maxDimension = Math.min(options.maxDimension ?? RFB_MAX_DIMENSION, RFB_MAX_DIMENSION);
   const messageTimeoutMs = options.messageTimeoutMs ?? 30_000;
@@ -317,7 +329,11 @@ export async function connectRfb(socket: Duplex, options: RfbClientOptions = {})
   const reader = new ByteReader();
   const updateListeners = new Set<(update: RfbUpdate) => void>();
   const closeListeners = new Set<(error: RfbError | undefined) => void>();
-  const waiters = new Set<{ full: boolean; resolve(update: RfbUpdate): void; reject(error: RfbError): void }>();
+  const waiters = new Set<{
+    full: boolean;
+    resolve(update: RfbUpdate): void;
+    reject(error: RfbError): void;
+  }>();
   let closed = false;
   let closeError: RfbError | undefined;
   let width = 0;
@@ -331,7 +347,8 @@ export async function connectRfb(socket: Duplex, options: RfbClientOptions = {})
     closeError = error;
     reader.fail(error ?? new RfbError("closed", "The computer's screen connection closed."));
     socket.destroy();
-    for (const waiter of [...waiters]) waiter.reject(error ?? new RfbError("closed", "The computer's screen connection closed."));
+    for (const waiter of [...waiters])
+      waiter.reject(error ?? new RfbError("closed", "The computer's screen connection closed."));
     waiters.clear();
     for (const listener of [...closeListeners]) {
       try {
@@ -343,9 +360,17 @@ export async function connectRfb(socket: Duplex, options: RfbClientOptions = {})
   };
 
   socket.on("data", (chunk: Buffer) => reader.push(chunk));
-  socket.once("error", () => finish(new RfbError("closed", "The computer's screen connection failed.")));
-  socket.once("close", () => finish(closed ? closeError : new RfbError("closed", "The computer's screen connection closed.")));
-  socket.once("end", () => finish(new RfbError("closed", "The computer's screen connection closed.")));
+  socket.once("error", () =>
+    finish(new RfbError("closed", "The computer's screen connection failed.")),
+  );
+  socket.once("close", () =>
+    finish(
+      closed ? closeError : new RfbError("closed", "The computer's screen connection closed."),
+    ),
+  );
+  socket.once("end", () =>
+    finish(new RfbError("closed", "The computer's screen connection closed.")),
+  );
 
   const write = (bytes: Buffer): Promise<void> =>
     new Promise<void>((resolve, reject) => {
@@ -353,10 +378,15 @@ export async function connectRfb(socket: Duplex, options: RfbClientOptions = {})
         reject(closeError ?? new RfbError("closed", "The computer's screen connection closed."));
         return;
       }
-      socket.write(bytes, (error) => (error ? reject(new RfbError("closed", "The computer's screen connection failed.")) : resolve()));
+      socket.write(bytes, (error) =>
+        error
+          ? reject(new RfbError("closed", "The computer's screen connection failed."))
+          : resolve(),
+      );
     });
 
-  const abort = () => finish(new RfbError("cancelled", "Connecting to the computer's screen was cancelled."));
+  const abort = () =>
+    finish(new RfbError("cancelled", "Connecting to the computer's screen was cancelled."));
   if (options.signal?.aborted) {
     abort();
     throw closeError;
@@ -368,7 +398,8 @@ export async function connectRfb(socket: Duplex, options: RfbClientOptions = {})
 
   async function readReason(): Promise<string> {
     const length = (await read(4)).readUInt32BE(0);
-    if (length > MAX_REASON_BYTES) throw new RfbError("too_large", "The computer's screen sent an oversized message.");
+    if (length > MAX_REASON_BYTES)
+      throw new RfbError("too_large", "The computer's screen sent an oversized message.");
     return (await read(length)).toString("utf8");
   }
 
@@ -378,7 +409,11 @@ export async function connectRfb(socket: Duplex, options: RfbClientOptions = {})
     if (!version) throw new RfbError("malformed", "The computer's screen did not speak RFB.");
     const major = Number(version[1]);
     const minor = Number(version[2]);
-    if (major !== 3) throw new RfbError("unsupported_version", `The computer's screen speaks an unsupported RFB version (${major}.${minor}).`);
+    if (major !== 3)
+      throw new RfbError(
+        "unsupported_version",
+        `The computer's screen speaks an unsupported RFB version (${major}.${minor}).`,
+      );
     // Unknown 3.x minors are 3.3 by the spec; Apple's 3.889 understands 3.8.
     const use = minor >= 8 ? 8 : minor === 7 ? 7 : 3;
     await write(Buffer.from(`RFB 003.00${use}\n`, "latin1"));
@@ -386,19 +421,30 @@ export async function connectRfb(socket: Duplex, options: RfbClientOptions = {})
     let security: number;
     if (use === 3) {
       security = (await read(4)).readUInt32BE(0);
-      if (security === 0) throw new RfbError("security", `The computer's screen refused the connection: ${await readReason()}`);
+      if (security === 0)
+        throw new RfbError(
+          "security",
+          `The computer's screen refused the connection: ${await readReason()}`,
+        );
     } else {
       const count = (await read(1))[0];
-      if (count === 0) throw new RfbError("security", `The computer's screen refused the connection: ${await readReason()}`);
+      if (count === 0)
+        throw new RfbError(
+          "security",
+          `The computer's screen refused the connection: ${await readReason()}`,
+        );
       const offered = [...(await read(count))];
       if (offered.includes(2) && options.password !== undefined) security = 2;
       else if (offered.includes(1)) security = 1;
-      else if (offered.includes(2)) throw new RfbError("security", "The computer's screen needs a password.");
-      else throw new RfbError("security", "The computer's screen offers no supported security type.");
+      else if (offered.includes(2))
+        throw new RfbError("security", "The computer's screen needs a password.");
+      else
+        throw new RfbError("security", "The computer's screen offers no supported security type.");
       await write(Buffer.from([security]));
     }
     if (security === 2) {
-      if (options.password === undefined) throw new RfbError("security", "The computer's screen needs a password.");
+      if (options.password === undefined)
+        throw new RfbError("security", "The computer's screen needs a password.");
       await write(vncAuthResponse(options.password, await read(16)));
     } else if (security !== 1) {
       throw new RfbError("security", "The computer's screen offers no supported security type.");
@@ -407,7 +453,12 @@ export async function connectRfb(socket: Duplex, options: RfbClientOptions = {})
       const result = (await read(4)).readUInt32BE(0);
       if (result !== 0) {
         const reason = use === 8 ? await readReason() : "";
-        throw new RfbError("auth_failed", reason ? `The computer's screen refused the password: ${reason}` : "The computer's screen refused the password.");
+        throw new RfbError(
+          "auth_failed",
+          reason
+            ? `The computer's screen refused the password: ${reason}`
+            : "The computer's screen refused the password.",
+        );
       }
     }
 
@@ -416,11 +467,15 @@ export async function connectRfb(socket: Duplex, options: RfbClientOptions = {})
     width = init.readUInt16BE(0);
     height = init.readUInt16BE(2);
     if (!validDimension(width, maxDimension) || !validDimension(height, maxDimension)) {
-      throw new RfbError("too_large", `The computer's screen is an unsupported size (${width}×${height}).`);
+      throw new RfbError(
+        "too_large",
+        `The computer's screen is an unsupported size (${width}×${height}).`,
+      );
     }
     const format = parsePixelFormat(init.subarray(4, 20));
     const nameLength = init.readUInt32BE(20);
-    if (nameLength > MAX_NAME_BYTES) throw new RfbError("too_large", "The computer's screen sent an oversized name.");
+    if (nameLength > MAX_NAME_BYTES)
+      throw new RfbError("too_large", "The computer's screen sent an oversized name.");
     name = (await read(nameLength)).toString("utf8");
     data = opaque(width, height);
 
@@ -429,7 +484,9 @@ export async function connectRfb(socket: Duplex, options: RfbClientOptions = {})
     await write(updateRequestMessage(false, width, height));
   } catch (error) {
     const failure =
-      error instanceof RfbError ? error : new RfbError("malformed", "The computer's screen sent an unexpected reply.");
+      error instanceof RfbError
+        ? error
+        : new RfbError("malformed", "The computer's screen sent an unexpected reply.");
     finish(closeError ?? failure);
     options.signal?.removeEventListener("abort", abort);
     throw closeError ?? failure;
@@ -443,7 +500,8 @@ export async function connectRfb(socket: Duplex, options: RfbClientOptions = {})
     for (let row = 0; row < rect.height; row += 1) {
       const target = ((rect.y + row) * width + rect.x) * BYTES_PER_PIXEL;
       pixels.copy(data, target, row * rowBytes, (row + 1) * rowBytes);
-      for (let alpha = target + 3; alpha < target + rowBytes; alpha += BYTES_PER_PIXEL) data[alpha] = 255;
+      for (let alpha = target + 3; alpha < target + rowBytes; alpha += BYTES_PER_PIXEL)
+        data[alpha] = 255;
     }
   }
 
@@ -456,14 +514,24 @@ export async function connectRfb(socket: Duplex, options: RfbClientOptions = {})
       data.copy(block, row * rowBytes, source, source + rowBytes);
     }
     for (let row = 0; row < rect.height; row += 1) {
-      block.copy(data, ((rect.y + row) * width + rect.x) * BYTES_PER_PIXEL, row * rowBytes, (row + 1) * rowBytes);
+      block.copy(
+        data,
+        ((rect.y + row) * width + rect.x) * BYTES_PER_PIXEL,
+        row * rowBytes,
+        (row + 1) * rowBytes,
+      );
     }
   }
 
   const inside = (rect: RfbRect) =>
-    rect.width >= 0 && rect.height >= 0 && rect.x + rect.width <= width && rect.y + rect.height <= height;
+    rect.width >= 0 &&
+    rect.height >= 0 &&
+    rect.x + rect.width <= width &&
+    rect.y + rect.height <= height;
 
-  async function framebufferUpdate(readMessage: (length: number) => Promise<Buffer>): Promise<void> {
+  async function framebufferUpdate(
+    readMessage: (length: number) => Promise<Buffer>,
+  ): Promise<void> {
     const header = await readMessage(3);
     const count = header.readUInt16BE(1);
     const rects: RfbRect[] = [];
@@ -480,8 +548,14 @@ export async function connectRfb(socket: Duplex, options: RfbClientOptions = {})
       const encoding = rectHeader.readInt32BE(8);
       if (encoding === RFB_ENCODING_LAST_RECT) break;
       if (encoding === RFB_ENCODING_DESKTOP_SIZE) {
-        if (!validDimension(rect.width, maxDimension) || !validDimension(rect.height, maxDimension)) {
-          throw new RfbError("too_large", `The computer's screen changed to an unsupported size (${rect.width}×${rect.height}).`);
+        if (
+          !validDimension(rect.width, maxDimension) ||
+          !validDimension(rect.height, maxDimension)
+        ) {
+          throw new RfbError(
+            "too_large",
+            `The computer's screen changed to an unsupported size (${rect.width}×${rect.height}).`,
+          );
         }
         width = rect.width;
         height = rect.height;
@@ -496,10 +570,16 @@ export async function connectRfb(socket: Duplex, options: RfbClientOptions = {})
         if (rect.width > MAX_CURSOR_DIMENSION || rect.height > MAX_CURSOR_DIMENSION) {
           throw new RfbError("too_large", "The computer's screen sent an oversized cursor.");
         }
-        await readMessage(rect.width * rect.height * BYTES_PER_PIXEL + Math.ceil(rect.width / 8) * rect.height);
+        await readMessage(
+          rect.width * rect.height * BYTES_PER_PIXEL + Math.ceil(rect.width / 8) * rect.height,
+        );
         continue;
       }
-      if (!inside(rect)) throw new RfbError("malformed", "The computer's screen sent a rectangle outside its framebuffer.");
+      if (!inside(rect))
+        throw new RfbError(
+          "malformed",
+          "The computer's screen sent a rectangle outside its framebuffer.",
+        );
       if (encoding === RFB_ENCODING_RAW) {
         copyRaw(await readMessage(rect.width * rect.height * BYTES_PER_PIXEL), rect);
       } else if (encoding === RFB_ENCODING_COPY_RECT) {
@@ -507,11 +587,17 @@ export async function connectRfb(socket: Duplex, options: RfbClientOptions = {})
         const sourceX = source.readUInt16BE(0);
         const sourceY = source.readUInt16BE(2);
         if (!inside({ x: sourceX, y: sourceY, width: rect.width, height: rect.height })) {
-          throw new RfbError("malformed", "The computer's screen copied from outside its framebuffer.");
+          throw new RfbError(
+            "malformed",
+            "The computer's screen copied from outside its framebuffer.",
+          );
         }
         copyRect(sourceX, sourceY, rect);
       } else {
-        throw new RfbError("malformed", `The computer's screen sent an unsupported encoding (${encoding}).`);
+        throw new RfbError(
+          "malformed",
+          `The computer's screen sent an unsupported encoding (${encoding}).`,
+        );
       }
       if (rect.width > 0 && rect.height > 0) {
         rects.push(rect);
@@ -558,21 +644,32 @@ export async function connectRfb(socket: Duplex, options: RfbClientOptions = {})
           const header = await readMessage(7);
           // Extended clipboard sends a negative length; both are skipped.
           const length = Math.abs(header.readInt32BE(3));
-          if (length > maxCutTextBytes) throw new RfbError("too_large", "The computer's screen sent oversized clipboard text.");
+          if (length > maxCutTextBytes)
+            throw new RfbError("too_large", "The computer's screen sent oversized clipboard text.");
           await readMessage(length);
           break;
         }
         default:
-          throw new RfbError("malformed", `The computer's screen sent an unknown message (${type}).`);
+          throw new RfbError(
+            "malformed",
+            `The computer's screen sent an unknown message (${type}).`,
+          );
       }
     }
   }
 
   void loop().catch((error: unknown) =>
-    finish(error instanceof RfbError ? (error.code === "closed" && closed ? closeError : error) : new RfbError("malformed", "The computer's screen sent an unexpected message.")),
+    finish(
+      error instanceof RfbError
+        ? error.code === "closed" && closed
+          ? closeError
+          : error
+        : new RfbError("malformed", "The computer's screen sent an unexpected message."),
+    ),
   );
 
-  const clampTo = (value: number, size: number) => Math.min(size - 1, Math.max(0, Math.round(value)));
+  const clampTo = (value: number, size: number) =>
+    Math.min(size - 1, Math.max(0, Math.round(value)));
 
   return {
     get name() {
@@ -590,8 +687,14 @@ export async function connectRfb(socket: Duplex, options: RfbClientOptions = {})
     framebuffer: () => ({ width, height, data }),
     requestUpdate: (incremental) => write(updateRequestMessage(incremental, width, height)),
     nextUpdate(waitOptions = {}) {
-      if (closed) return Promise.reject(closeError ?? new RfbError("closed", "The computer's screen connection closed."));
-      if (waitOptions.signal?.aborted) return Promise.reject(new RfbError("cancelled", "Waiting for the computer's screen was cancelled."));
+      if (closed)
+        return Promise.reject(
+          closeError ?? new RfbError("closed", "The computer's screen connection closed."),
+        );
+      if (waitOptions.signal?.aborted)
+        return Promise.reject(
+          new RfbError("cancelled", "Waiting for the computer's screen was cancelled."),
+        );
       return new Promise<RfbUpdate>((resolve, reject) => {
         let timer: ReturnType<typeof setTimeout> | undefined;
         const cleanup = () => {
@@ -610,17 +713,35 @@ export async function connectRfb(socket: Duplex, options: RfbClientOptions = {})
             reject(error);
           },
         };
-        const onAbort = () => waiter.reject(new RfbError("cancelled", "Waiting for the computer's screen was cancelled."));
+        const onAbort = () =>
+          waiter.reject(
+            new RfbError("cancelled", "Waiting for the computer's screen was cancelled."),
+          );
         waiters.add(waiter);
         waitOptions.signal?.addEventListener("abort", onAbort, { once: true });
         if (waitOptions.timeoutMs !== undefined) {
-          timer = setTimeout(() => waiter.reject(new RfbError("timeout", "The computer's screen did not send a picture in time.")), waitOptions.timeoutMs);
+          timer = setTimeout(
+            () =>
+              waiter.reject(
+                new RfbError("timeout", "The computer's screen did not send a picture in time."),
+              ),
+            waitOptions.timeoutMs,
+          );
         }
       });
     },
     pointer(x, y, buttons) {
-      if (![x, y].every(Number.isFinite) || !Number.isInteger(buttons) || buttons < 0 || buttons > 255) {
-        return Promise.reject(new RangeError("A pointer event needs finite coordinates and a button mask from 0 to 255."));
+      if (
+        ![x, y].every(Number.isFinite) ||
+        !Number.isInteger(buttons) ||
+        buttons < 0 ||
+        buttons > 255
+      ) {
+        return Promise.reject(
+          new RangeError(
+            "A pointer event needs finite coordinates and a button mask from 0 to 255.",
+          ),
+        );
       }
       const message = Buffer.alloc(6);
       message[0] = 5;

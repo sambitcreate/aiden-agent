@@ -73,7 +73,13 @@ function BotsIndex() {
     <ScrollArea
       scrollRestorationId="bots-home"
       title="Bots"
-      actions={<BotCreateMenu variant="toolbar" onNewBot={create.newBot} onTemplates={create.openTemplates} />}
+      actions={
+        <BotCreateMenu
+          variant="toolbar"
+          onNewBot={create.newBot}
+          onTemplates={create.openTemplates}
+        />
+      }
     >
       <main className="mx-auto w-full max-w-3xl px-5 pb-10 pt-4">
         {bots.isError ? (
@@ -118,7 +124,9 @@ function BotPage({ botId }: { botId: string }) {
   const navigate = useNavigate();
   const panel = useBotPanelActions();
   const bot = useBot(botId);
-  const target = botPageTarget(parseBotPageSearch(useSearch({ strict: false }) as Record<string, unknown>).page);
+  const target = botPageTarget(
+    parseBotPageSearch(useSearch({ strict: false }) as Record<string, unknown>).page,
+  );
   const targetKey = JSON.stringify(target);
   // The Profile and Advanced pages are gone: their links open the Bot's chat
   // with its settings in the side panel.
@@ -147,7 +155,12 @@ function BotPage({ botId }: { botId: string }) {
   }
   if (!bot.data) {
     return (
-      <BotPageShell scrollId={`bot-page:${botId}`} title="Bot" backLabel="All Bots" onBack={allBots}>
+      <BotPageShell
+        scrollId={`bot-page:${botId}`}
+        title="Bot"
+        backLabel="All Bots"
+        onBack={allBots}
+      >
         <EmptyState
           title="Bot not found"
           description="This Bot may have been deleted."

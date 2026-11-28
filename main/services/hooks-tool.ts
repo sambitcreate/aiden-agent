@@ -36,9 +36,20 @@ import {
   type HookProposalApprovalDetails,
   type HookProposalApprovalHook,
 } from "../../renderer/shared/hook-proposal-approval.js";
-import { clampHookTimeout, hookScopeKey, MAX_AGENT_HOOK_TIMEOUT_SECONDS, MAX_HOOK_COMMAND_LENGTH } from "./hooks/hook-config.js";
+import {
+  clampHookTimeout,
+  hookScopeKey,
+  MAX_AGENT_HOOK_TIMEOUT_SECONDS,
+  MAX_HOOK_COMMAND_LENGTH,
+} from "./hooks/hook-config.js";
 import type { HookProposal, HookService } from "./hooks/hook-service.js";
-import { HOOK_EVENTS, type HookCommandHandler, type HookListing, type HookRunRecord, type HookScope } from "./hooks/hook-types.js";
+import {
+  HOOK_EVENTS,
+  type HookCommandHandler,
+  type HookListing,
+  type HookRunRecord,
+  type HookScope,
+} from "./hooks/hook-types.js";
 import type { PiRuntimeTool } from "./pi-runtime-tool.js";
 import { toolApprovalBlockReason, type ToolApprovalOutcome } from "./tool-approval.js";
 import { workspaceChatHookScopes } from "./workspace-chat-hooks.js";
@@ -102,7 +113,10 @@ export function offersHooksTool(surface: HooksToolSurface): boolean {
  * remote turn refuses its calls, because only the owner's card on this
  * computer may approve a hook proposal.
  */
-export function hooksToolUnavailableReason(name: string, surface: HooksToolSurface): string | undefined {
+export function hooksToolUnavailableReason(
+  name: string,
+  surface: HooksToolSurface,
+): string | undefined {
   if (name !== HOOKS_TOOL_NAME) return undefined;
   if (surface.unattended) {
     return `${HOOKS_TOOL_NAME} is not available in this turn: nobody is watching this follow-up to approve a hook. Mention the hook in your reply instead.`;
@@ -127,7 +141,11 @@ export interface HooksToolDependencies {
    * Raise the owner's card for this tool call and wait for the answer. The
    * card is "once" only: implementations must not offer remembered scopes.
    */
-  requestApproval: (toolCallId: string, card: HooksToolApprovalCard, signal?: AbortSignal) => Promise<ToolApprovalOutcome>;
+  requestApproval: (
+    toolCallId: string,
+    card: HooksToolApprovalCard,
+    signal?: AbortSignal,
+  ) => Promise<ToolApprovalOutcome>;
 }
 
 interface HooksToolParams {
@@ -155,7 +173,13 @@ const DESCRIPTION = [
 const PARAMETERS = Type.Object(
   {
     action: Type.Union(
-      [Type.Literal("list"), Type.Literal("propose"), Type.Literal("disable"), Type.Literal("test"), Type.Literal("logs")],
+      [
+        Type.Literal("list"),
+        Type.Literal("propose"),
+        Type.Literal("disable"),
+        Type.Literal("test"),
+        Type.Literal("logs"),
+      ],
       { description: "What to do." },
     ),
     change: Type.Optional(
@@ -164,11 +188,16 @@ const PARAMETERS = Type.Object(
       }),
     ),
     hookId: Type.Optional(
-      Type.String({ maxLength: 300, description: 'The hook\'s id from "list". Required for disable, test, logs, and to update or delete.' }),
+      Type.String({
+        maxLength: 300,
+        description:
+          'The hook\'s id from "list". Required for disable, test, logs, and to update or delete.',
+      }),
     ),
     scope: Type.Optional(
       Type.Union([Type.Literal("workspace"), Type.Literal("chat")], {
-        description: 'propose create: "workspace" runs in every chat of this folder, "chat" only in this chat.',
+        description:
+          'propose create: "workspace" runs in every chat of this folder, "chat" only in this chat.',
       }),
     ),
     event: Type.Optional(
@@ -187,27 +216,41 @@ const PARAMETERS = Type.Object(
     command: Type.Optional(
       Type.String({
         maxLength: MAX_HOOK_COMMAND_LENGTH,
-        description: "propose: the shell command. It receives the event as JSON on stdin and runs in the workspace folder.",
+        description:
+          "propose: the shell command. It receives the event as JSON on stdin and runs in the workspace folder.",
       }),
     ),
     timeout: Type.Optional(
-      Type.Number({ minimum: 1, maximum: MAX_AGENT_HOOK_TIMEOUT_SECONDS, description: `propose: seconds, at most ${MAX_AGENT_HOOK_TIMEOUT_SECONDS}.` }),
+      Type.Number({
+        minimum: 1,
+        maximum: MAX_AGENT_HOOK_TIMEOUT_SECONDS,
+        description: `propose: seconds, at most ${MAX_AGENT_HOOK_TIMEOUT_SECONDS}.`,
+      }),
     ),
     failClosed: Type.Optional(
-      Type.Boolean({ description: "propose, PreToolUse only: block the tool when the hook crashes or times out." }),
+      Type.Boolean({
+        description: "propose, PreToolUse only: block the tool when the hook crashes or times out.",
+      }),
     ),
     async: Type.Optional(
       Type.Boolean({
-        description: "propose: run it in the background. Aiden doesn't wait for it, so it can't block or add context; its systemMessage reaches the person when it finishes. Not with failClosed.",
+        description:
+          "propose: run it in the background. Aiden doesn't wait for it, so it can't block or add context; its systemMessage reaches the person when it finishes. Not with failClosed.",
       }),
     ),
     envAllow: Type.Optional(
       Type.Array(Type.String({ maxLength: 128 }), {
         maxItems: 32,
-        description: "propose: extra environment variable names the command may read. Names only, never values.",
+        description:
+          "propose: extra environment variable names the command may read. Names only, never values.",
       }),
     ),
-    name: Type.Optional(Type.String({ maxLength: 80, description: "propose: a short name shown in Settings → Hooks." })),
+    name: Type.Optional(
+      Type.String({
+        maxLength: 80,
+        description: "propose: a short name shown in Settings → Hooks.",
+      }),
+    ),
   },
   { additionalProperties: false },
 );
@@ -218,7 +261,8 @@ function text(value: string): AgentToolResult<null> {
 
 // C0/C1 controls, bidi marks and overrides, and line/paragraph separators.
 /* eslint-disable no-control-regex */
-const UNSAFE_LINE_CHARACTERS = /[\u0000-\u001f\u007f-\u009f\u061c\u200e\u200f\u202a-\u202e\u2028\u2029\u2066-\u2069]+/gu;
+const UNSAFE_LINE_CHARACTERS =
+  /[\u0000-\u001f\u007f-\u009f\u061c\u200e\u200f\u202a-\u202e\u2028\u2029\u2066-\u2069]+/gu;
 /* eslint-enable no-control-regex */
 
 /** Control and bidi characters out, whitespace folded, trimmed and bounded: safe for one card line. */
@@ -227,7 +271,11 @@ function cardLine(value: string, limit: number): string {
   return cleaned.length <= limit ? cleaned : `${cleaned.slice(0, limit - 1).trimEnd()}…`;
 }
 
-function approvalHook(event: string, matcher: string, handler: HookCommandHandler): HookProposalApprovalHook {
+function approvalHook(
+  event: string,
+  matcher: string,
+  handler: HookCommandHandler,
+): HookProposalApprovalHook {
   return {
     event,
     matcher,
@@ -280,8 +328,12 @@ function describeListing(hook: HookListing): string {
     `  command: ${hook.handler.command}`,
     `  timeout: ${clampHookTimeout(hook.handler.timeout, hook.handler.async)} s${hook.handler.async ? ", runs in the background" : ""}${hook.handler.failClosed ? ", fail closed" : ""}${hook.handler.envAllow?.length ? `, env: ${hook.handler.envAllow.join(", ")}` : ""}`,
   ];
-  if (hook.scriptFiles?.length) lines.push(`  approval covers: ${hook.scriptFiles.join(", ")}${hook.scriptCoverage === "partial" ? " (not everything the command runs)" : ""}`);
-  else if (hook.scriptCoverage === "partial") lines.push("  approval covers: the command only, not everything it runs");
+  if (hook.scriptFiles?.length)
+    lines.push(
+      `  approval covers: ${hook.scriptFiles.join(", ")}${hook.scriptCoverage === "partial" ? " (not everything the command runs)" : ""}`,
+    );
+  else if (hook.scriptCoverage === "partial")
+    lines.push("  approval covers: the command only, not everything it runs");
   if (hook.unsupportedReason) lines.push(`  not supported: ${hook.unsupportedReason}`);
   if (hook.lastRun) lines.push(`  last run: ${describeRun(hook.lastRun)}`);
   return lines.join("\n");
@@ -292,11 +344,16 @@ function describeProposal(proposal: HookProposal): string {
 }
 
 function cappedExcerpt(excerpt: string): string {
-  return excerpt.length <= HOOKS_TOOL_LOG_EXCERPT_CHARS ? excerpt : `${excerpt.slice(0, HOOKS_TOOL_LOG_EXCERPT_CHARS)}… (truncated)`;
+  return excerpt.length <= HOOKS_TOOL_LOG_EXCERPT_CHARS
+    ? excerpt
+    : `${excerpt.slice(0, HOOKS_TOOL_LOG_EXCERPT_CHARS)}… (truncated)`;
 }
 
 export function createHooksTool(deps: HooksToolDependencies): PiRuntimeTool {
-  const scopes = workspaceChatHookScopes({ chatId: deps.chatId, ...(deps.workspaceRoot ? { workspaceRoot: deps.workspaceRoot } : {}) });
+  const scopes = workspaceChatHookScopes({
+    chatId: deps.chatId,
+    ...(deps.workspaceRoot ? { workspaceRoot: deps.workspaceRoot } : {}),
+  });
   const ownScopeKeys = new Set(scopes.filter((scope) => scope.kind !== "global").map(hookScopeKey));
   const allScopeKeys = new Set(scopes.map(hookScopeKey));
 
@@ -322,13 +379,19 @@ export function createHooksTool(deps: HooksToolDependencies): PiRuntimeTool {
   };
 
   /** A hook the agent may change or turn off: this chat's or its workspace's, stored by Aiden. */
-  const findOwn = async (service: HookService, hookId: string, verb: string): Promise<HookListing> => {
+  const findOwn = async (
+    service: HookService,
+    hookId: string,
+    verb: string,
+  ): Promise<HookListing> => {
     const listing = await findVisible(service, hookId);
     if (listing.scope.kind === "global") {
       throw new Error(`Global hooks can only be ${verb} by the owner in Settings → Hooks.`);
     }
     if (listing.source === "workspace-file") {
-      throw new Error(`Hooks in the repo's .aiden/hooks.json can't be ${verb} from a chat. The owner manages them in Settings → Hooks, or the file can be edited.`);
+      throw new Error(
+        `Hooks in the repo's .aiden/hooks.json can't be ${verb} from a chat. The owner manages them in Settings → Hooks, or the file can be edited.`,
+      );
     }
     if (!ownScopeKeys.has(hookScopeKey(listing.scope))) {
       throw new Error(`Hook ${hookId} does not belong to this chat or its workspace.`);
@@ -339,17 +402,33 @@ export function createHooksTool(deps: HooksToolDependencies): PiRuntimeTool {
   const list = async (): Promise<AgentToolResult<null>> => {
     const service = requireService();
     const listed = await service.listHooks(scopes);
-    const proposals = service.listProposals().filter((proposal) => ownScopeKeys.has(hookScopeKey(proposal.definition.scope)));
+    const proposals = service
+      .listProposals()
+      .filter((proposal) => ownScopeKeys.has(hookScopeKey(proposal.definition.scope)));
     const notes: string[] = [];
-    if (listed.disabledByEnvironment) notes.push(`Hooks are turned off on this ${localComputerNoun(process.platform)} (AIDEN_HOOKS=0), so none run.`);
-    else if (listed.paused) notes.push("The owner paused all hooks in Settings → Hooks, so none run until they resume them.");
-    if (!deps.workspaceRoot) notes.push("This chat has no folder, so only chat hooks can be proposed.");
+    if (listed.disabledByEnvironment)
+      notes.push(
+        `Hooks are turned off on this ${localComputerNoun(process.platform)} (AIDEN_HOOKS=0), so none run.`,
+      );
+    else if (listed.paused)
+      notes.push(
+        "The owner paused all hooks in Settings → Hooks, so none run until they resume them.",
+      );
+    if (!deps.workspaceRoot)
+      notes.push("This chat has no folder, so only chat hooks can be proposed.");
     for (const file of listed.workspaceFiles) {
-      if (file.problems.length > 0) notes.push(`The repo's .aiden/hooks.json has ${file.problems.length} problem(s); the owner sees them in Settings → Hooks.`);
+      if (file.problems.length > 0)
+        notes.push(
+          `The repo's .aiden/hooks.json has ${file.problems.length} problem(s); the owner sees them in Settings → Hooks.`,
+        );
     }
     const body = [
-      listed.hooks.length > 0 ? listed.hooks.map(describeListing).join("\n") : "No hooks apply to this chat.",
-      ...(proposals.length > 0 ? ["", "Pending proposals:", ...proposals.map(describeProposal)] : []),
+      listed.hooks.length > 0
+        ? listed.hooks.map(describeListing).join("\n")
+        : "No hooks apply to this chat.",
+      ...(proposals.length > 0
+        ? ["", "Pending proposals:", ...proposals.map(describeProposal)]
+        : []),
     ].join("\n");
     return text([...notes, fenceAsData("Hooks for this chat", body)].join("\n\n"));
   };
@@ -369,17 +448,26 @@ export function createHooksTool(deps: HooksToolDependencies): PiRuntimeTool {
       return text(`Hook ${hookId} is already off.`);
     }
     await service.setEnabled(hookId, false);
-    return text(`Turned off hook ${hookId}. Only the owner can turn it back on, from Settings → Hooks or by approving a new proposal.`);
+    return text(
+      `Turned off hook ${hookId}. Only the owner can turn it back on, from Settings → Hooks or by approving a new proposal.`,
+    );
   };
 
   const recentRuns = (service: HookService, hookId: string): HookRunRecord[] =>
-    [...service.getRunLog(hookId)].sort((a, b) => b.startedAt - a.startedAt).slice(0, HOOKS_TOOL_MAX_LOG_RECORDS);
+    [...service.getRunLog(hookId)]
+      .sort((a, b) => b.startedAt - a.startedAt)
+      .slice(0, HOOKS_TOOL_MAX_LOG_RECORDS);
 
   const fencedRuns = (runs: readonly HookRunRecord[]): string =>
     fenceAsData(
       "Hook runs",
       runs
-        .map((run) => [describeRun(run), run.outputExcerpt ? cappedExcerpt(run.outputExcerpt) : "(no output)"].join("\n"))
+        .map((run) =>
+          [
+            describeRun(run),
+            run.outputExcerpt ? cappedExcerpt(run.outputExcerpt) : "(no output)",
+          ].join("\n"),
+        )
         .join("\n\n"),
     );
 
@@ -390,7 +478,9 @@ export function createHooksTool(deps: HooksToolDependencies): PiRuntimeTool {
     // Never run the command from here: a test run is the owner's action.
     const [last] = recentRuns(service, hookId);
     const lead = `You can't run a hook. Ask the owner to press Test on hook ${hookId} in Settings → Hooks; it runs against a sample event and shows the result there.`;
-    return text(last ? `${lead}\n\nIts last run:\n\n${fencedRuns([last])}` : `${lead}\n\nIt has not run yet.`);
+    return text(
+      last ? `${lead}\n\nIts last run:\n\n${fencedRuns([last])}` : `${lead}\n\nIt has not run yet.`,
+    );
   };
 
   const logs = async (params: HooksToolParams): Promise<AgentToolResult<null>> => {
@@ -398,26 +488,40 @@ export function createHooksTool(deps: HooksToolDependencies): PiRuntimeTool {
     const hookId = requireHookId(params);
     await findVisible(service, hookId);
     const runs = recentRuns(service, hookId);
-    return text(runs.length > 0 ? `The last ${runs.length} run(s) of hook ${hookId}, newest first:\n\n${fencedRuns(runs)}` : `Hook ${hookId} has not run yet.`);
+    return text(
+      runs.length > 0
+        ? `The last ${runs.length} run(s) of hook ${hookId}, newest first:\n\n${fencedRuns(runs)}`
+        : `Hook ${hookId} has not run yet.`,
+    );
   };
 
   const proposalScope = (requested: HooksToolParams["scope"]): HookScope => {
     if (requested === "workspace") {
-      if (!deps.workspaceRoot) throw new Error("This chat has no folder, so it can't have workspace hooks. Propose a chat hook instead.");
+      if (!deps.workspaceRoot)
+        throw new Error(
+          "This chat has no folder, so it can't have workspace hooks. Propose a chat hook instead.",
+        );
       return { kind: "workspace", workspaceRoot: deps.workspaceRoot };
     }
     if (requested === "chat") return { kind: "chat", chatId: deps.chatId };
-    throw new Error('Say which scope: "workspace" (every chat in this folder) or "chat" (this chat only). Global hooks are added in Settings → Hooks.');
+    throw new Error(
+      'Say which scope: "workspace" (every chat in this folder) or "chat" (this chat only). Global hooks are added in Settings → Hooks.',
+    );
   };
 
-  const propose = async (toolCallId: string, params: HooksToolParams, signal?: AbortSignal): Promise<AgentToolResult<null>> => {
+  const propose = async (
+    toolCallId: string,
+    params: HooksToolParams,
+    signal?: AbortSignal,
+  ): Promise<AgentToolResult<null>> => {
     const service = requireService();
     const change = params.change ?? (params.hookId ? "update" : "create");
     let existing: HookListing | undefined;
     let proposed: Awaited<ReturnType<HookService["proposeHook"]>>;
     if (change === "create") {
       if (params.hookId) throw new Error('To change an existing hook use change "update".');
-      if (!params.event || !params.command) throw new Error("A new hook needs an event and a command.");
+      if (!params.event || !params.command)
+        throw new Error("A new hook needs an event and a command.");
       proposed = await service.proposeHook({
         origin: "agent",
         scope: proposalScope(params.scope),
@@ -429,10 +533,16 @@ export function createHooksTool(deps: HooksToolDependencies): PiRuntimeTool {
     } else {
       const hookId = requireHookId(params);
       existing = await findOwn(service, hookId, change === "delete" ? "deleted" : "changed");
-      if (params.scope && hookScopeKey(proposalScope(params.scope)) !== hookScopeKey(existing.scope)) {
+      if (
+        params.scope &&
+        hookScopeKey(proposalScope(params.scope)) !== hookScopeKey(existing.scope)
+      ) {
         throw new Error("A hook can't move to another scope. Propose a new one there instead.");
       }
-      if (existing.event === "unknown") throw new Error(`Hook ${hookId} uses an event Aiden does not support; the owner manages it in Settings → Hooks.`);
+      if (existing.event === "unknown")
+        throw new Error(
+          `Hook ${hookId} uses an event Aiden does not support; the owner manages it in Settings → Hooks.`,
+        );
       proposed = await service.proposeHook({
         origin: "agent",
         scope: existing.scope,
@@ -452,9 +562,12 @@ export function createHooksTool(deps: HooksToolDependencies): PiRuntimeTool {
     const details = approvalDetails(proposal, existing);
     if (!isHookProposalApprovalDetails(details)) {
       service.rejectProposal(proposal.id);
-      throw new Error("The owner couldn't review this hook safely: its command or matcher has control or invisible characters, or a field is too long. Rewrite it in plain text.");
+      throw new Error(
+        "The owner couldn't review this hook safely: its command or matcher has control or invisible characters, or a field is too long. Rewrite it in plain text.",
+      );
     }
-    const verb = proposal.action === "delete" ? "delete" : proposal.action === "update" ? "change" : "add";
+    const verb =
+      proposal.action === "delete" ? "delete" : proposal.action === "update" ? "change" : "add";
     const card: HooksToolApprovalCard = {
       // Phones and paired Macs see only this line and can't approve it.
       summary: `Aiden wants to ${verb} a hook. Review and approve it on the computer running this chat. ${cardLine(proposal.summary, 600)}`,
@@ -476,8 +589,10 @@ export function createHooksTool(deps: HooksToolDependencies): PiRuntimeTool {
       );
     }
     const applied = await service.approveProposal(proposal.id);
-    if (!applied.ok) return text(`The owner approved the hook, but it could not be saved: ${applied.reason}`);
-    if (proposal.action === "delete") return text(`The owner approved. Hook ${proposal.hookId} is deleted and won't run again.`);
+    if (!applied.ok)
+      return text(`The owner approved the hook, but it could not be saved: ${applied.reason}`);
+    if (proposal.action === "delete")
+      return text(`The owner approved. Hook ${proposal.hookId} is deleted and won't run again.`);
     const state = await service.listHooks(scopes);
     const pausedNote = state.disabledByEnvironment
       ? ` Hooks are turned off on this ${localComputerNoun(process.platform)} (AIDEN_HOOKS=0), so it won't run until they're turned back on.`
@@ -517,7 +632,10 @@ export function createHooksTool(deps: HooksToolDependencies): PiRuntimeTool {
   };
 }
 
-function handlerFrom(params: HooksToolParams, existing: HookCommandHandler | undefined): HookCommandHandler {
+function handlerFrom(
+  params: HooksToolParams,
+  existing: HookCommandHandler | undefined,
+): HookCommandHandler {
   const command = (params.command ?? existing?.command ?? "").trim();
   const timeout = params.timeout ?? existing?.timeout;
   const failClosed = params.failClosed ?? existing?.failClosed;
@@ -533,7 +651,10 @@ function handlerFrom(params: HooksToolParams, existing: HookCommandHandler | und
   };
 }
 
-function approvalDetails(proposal: HookProposal, existing: HookListing | undefined): HookProposalApprovalDetails {
+function approvalDetails(
+  proposal: HookProposal,
+  existing: HookListing | undefined,
+): HookProposalApprovalDetails {
   const { definition } = proposal;
   // Paths are display-only here (the digest already covers the files); clean them the way the card expects.
   const scriptFiles = (proposal.scriptFiles ?? [])

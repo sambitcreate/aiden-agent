@@ -156,7 +156,9 @@ function fieldError(error: GraphQlError): GitHubGraphQlFieldError {
   const type = typeof error.type === "string" ? error.type : undefined;
   const message = boundedMessage(error.message);
   const path = Array.isArray(error.path)
-    ? error.path.filter((part): part is string | number => typeof part === "string" || typeof part === "number")
+    ? error.path.filter(
+        (part): part is string | number => typeof part === "string" || typeof part === "number",
+      )
     : undefined;
   return { ...(type ? { type } : {}), ...(message ? { message } : {}), ...(path ? { path } : {}) };
 }
@@ -329,7 +331,12 @@ export class GitHubApi {
   async rest<T>(request: GitHubRestRequest): Promise<GitHubApiResult<T>> {
     const host = this.requireHost(request.host);
     const path = request.path;
-    if (!path.startsWith("/") || path.startsWith("//") || path.includes("://") || /(?:^|\/)\.\.(?:\/|$)/u.test(path)) {
+    if (
+      !path.startsWith("/") ||
+      path.startsWith("//") ||
+      path.includes("://") ||
+      /(?:^|\/)\.\.(?:\/|$)/u.test(path)
+    ) {
       throw new Error("GitHub REST paths must be relative to the API root.");
     }
     const credential = await this.credential(host);
@@ -380,21 +387,31 @@ export class GitHubApi {
 
   private async credential(
     host: string,
-  ): Promise<{ ok: true; credential: GitHubCredential } | { ok: false; result: GitHubApiResult<never> }> {
+  ): Promise<
+    { ok: true; credential: GitHubCredential } | { ok: false; result: GitHubApiResult<never> }
+  > {
     const resolved = await this.credentials.resolve(host);
     if (resolved.ok) {
       // A credential is pinned to the host it was issued for.
       if (resolved.credential.host !== host) {
         return {
           ok: false,
-          result: { kind: "unavailable", reason: "unauthenticated", message: "The GitHub credential belongs to another host." },
+          result: {
+            kind: "unavailable",
+            reason: "unauthenticated",
+            message: "The GitHub credential belongs to another host.",
+          },
         };
       }
       return { ok: true, credential: resolved.credential };
     }
     return {
       ok: false,
-      result: { kind: "unavailable", reason: resolved.missing.reason, message: resolved.missing.message },
+      result: {
+        kind: "unavailable",
+        reason: resolved.missing.reason,
+        message: resolved.missing.message,
+      },
     };
   }
 
@@ -411,7 +428,9 @@ export class GitHubApi {
     if (request.signal?.aborted) throw abortError();
     const scope = credential.fingerprint;
     const interactive = request.interactive === true;
-    const admission: GitHubAdmission = this.gate?.admit({ ...request, scope, kind }) ?? { ok: true };
+    const admission: GitHubAdmission = this.gate?.admit({ ...request, scope, kind }) ?? {
+      ok: true,
+    };
     if (!admission.ok) return admission.result;
     const observe = (
       result: GitHubApiResult<T>,
@@ -425,9 +444,13 @@ export class GitHubApi {
           operation: request.operation,
           kind,
           interactive,
-          ...(outcome ? { status: outcome.status, headers: readRateLimitHeaders(outcome.headers, this.now()) } : {}),
+          ...(outcome
+            ? { status: outcome.status, headers: readRateLimitHeaders(outcome.headers, this.now()) }
+            : {}),
           outcome: result.kind,
-          ...(result.kind === "rate-limited" && result.retryAt !== undefined ? { retryAt: result.retryAt } : {}),
+          ...(result.kind === "rate-limited" && result.retryAt !== undefined
+            ? { retryAt: result.retryAt }
+            : {}),
         },
         admission.ticket,
         parsed,
@@ -439,7 +462,9 @@ export class GitHubApi {
     const timeoutMs = request.timeoutMs ?? this.timeoutMs;
     const timeout = new AbortController();
     const timer = setTimeout(() => timeout.abort(), timeoutMs);
-    const signal = request.signal ? AbortSignal.any([request.signal, timeout.signal]) : timeout.signal;
+    const signal = request.signal
+      ? AbortSignal.any([request.signal, timeout.signal])
+      : timeout.signal;
     try {
       release = await this.concurrency.acquire(signal);
       const response = await this.fetchImpl(url, {
@@ -456,7 +481,8 @@ export class GitHubApi {
       const text = await readBounded(response, this.maxResponseBytes);
       const outcome = { status: response.status, headers: response.headers, text };
       const result = classify(outcome);
-      if (result.kind === "unauthorized") this.credentials.invalidate(request.host, credential.fingerprint);
+      if (result.kind === "unauthorized")
+        this.credentials.invalidate(request.host, credential.fingerprint);
       return observe(result, outcome, kind === "graphql" ? parseJson(text) : undefined);
     } catch (error) {
       if (request.signal?.aborted) {
@@ -464,7 +490,10 @@ export class GitHubApi {
         throw abortError();
       }
       if (error instanceof ResponseTooLargeError) {
-        return observe({ kind: "failed", message: "GitHub returned a response larger than Aiden accepts." });
+        return observe({
+          kind: "failed",
+          message: "GitHub returned a response larger than Aiden accepts.",
+        });
       }
       if (timeout.signal.aborted) {
         return observe({
@@ -472,7 +501,10 @@ export class GitHubApi {
           message: `GitHub did not answer within ${Math.max(1, Math.round(timeoutMs / 1000))} seconds.`,
         });
       }
-      return observe({ kind: "failed", message: "Aiden could not reach GitHub. Check the network connection." });
+      return observe({
+        kind: "failed",
+        message: "Aiden could not reach GitHub. Check the network connection.",
+      });
     } finally {
       clearTimeout(timer);
       release?.();
@@ -482,13 +514,16 @@ export class GitHubApi {
   private classifyRest<T>(outcome: SendOutcome, request: GitHubRestRequest): GitHubApiResult<T> {
     const { status, headers, text } = outcome;
     const etag = headers.get("etag") ?? undefined;
-    if (status === 304 && request.ifNoneMatch) return { kind: "not-modified", ...(etag ? { etag } : {}) };
+    if (status === 304 && request.ifNoneMatch)
+      return { kind: "not-modified", ...(etag ? { etag } : {}) };
     const parsed = parseJson(text);
     const message = isRecord(parsed) ? boundedMessage(parsed.message) : undefined;
     const rate = this.rateLimited<T>(status, headers, message ?? text);
     if (rate) return rate;
-    if (status === 401) return { kind: "unauthorized", message: message ?? "GitHub rejected the saved credential." };
-    if (status === 404) return { kind: "not-found", message: message ?? "GitHub could not find that resource." };
+    if (status === 401)
+      return { kind: "unauthorized", message: message ?? "GitHub rejected the saved credential." };
+    if (status === 404)
+      return { kind: "not-found", message: message ?? "GitHub could not find that resource." };
     if (status >= 200 && status < 300) {
       const data = (request.text || request.accept?.includes("diff") ? text : parsed) as T;
       return { kind: "ok", data, status, ...(etag ? { etag } : {}) };
@@ -501,13 +536,22 @@ export class GitHubApi {
     const parsed = parseJson(text);
     const errors: GraphQlError[] =
       isRecord(parsed) && Array.isArray(parsed.errors) ? parsed.errors.filter(isRecord) : [];
-    const firstMessage = errors.map((error) => boundedMessage(error.message)).find(Boolean)
-      ?? (isRecord(parsed) ? boundedMessage(parsed.message) : undefined);
+    const firstMessage =
+      errors.map((error) => boundedMessage(error.message)).find(Boolean) ??
+      (isRecord(parsed) ? boundedMessage(parsed.message) : undefined);
     const rate = this.rateLimited<T>(status, headers, firstMessage ?? text);
     if (rate) return rate;
-    if (status === 401) return { kind: "unauthorized", message: firstMessage ?? "GitHub rejected the saved credential." };
+    if (status === 401)
+      return {
+        kind: "unauthorized",
+        message: firstMessage ?? "GitHub rejected the saved credential.",
+      };
     if (status < 200 || status >= 300) {
-      return { kind: "failed", status, message: firstMessage ?? `GitHub answered with HTTP ${status}.` };
+      return {
+        kind: "failed",
+        status,
+        message: firstMessage ?? `GitHub answered with HTTP ${status}.`,
+      };
     }
     const data = (isRecord(parsed) ? parsed.data : undefined) as T | undefined;
     if (errors.length > 0) {
@@ -515,7 +559,9 @@ export class GitHubApi {
       if (
         errors.some((error) => error.type === "RATE_LIMITED") ||
         limitedHeaders.remaining === 0 ||
-        errors.some((error) => typeof error.message === "string" && UNTYPED_QUOTA_MESSAGE.test(error.message))
+        errors.some(
+          (error) => typeof error.message === "string" && UNTYPED_QUOTA_MESSAGE.test(error.message),
+        )
       ) {
         return this.rateLimitedResult(limitedHeaders, firstMessage);
       }
@@ -530,10 +576,18 @@ export class GitHubApi {
       }
       // Errors scoped to a field leave the rest of the answer usable; a batched
       // document reports each alias's failure on its own.
-      if (data !== undefined && data !== null && fieldErrors.every((error) => error.path && error.path.length > 0)) {
+      if (
+        data !== undefined &&
+        data !== null &&
+        fieldErrors.every((error) => error.path && error.path.length > 0)
+      ) {
         return { kind: "ok", data, status, errors: fieldErrors };
       }
-      return { kind: "failed", status, message: firstMessage ?? "GitHub returned a GraphQL error." };
+      return {
+        kind: "failed",
+        status,
+        message: firstMessage ?? "GitHub returned a GraphQL error.",
+      };
     }
     if (data === undefined || data === null) {
       return { kind: "failed", status, message: "GitHub returned an empty GraphQL response." };
@@ -541,12 +595,18 @@ export class GitHubApi {
     return { kind: "ok", data, status };
   }
 
-  private rateLimited<T>(status: number, headers: Headers, body: string): GitHubApiResult<T> | undefined {
+  private rateLimited<T>(
+    status: number,
+    headers: Headers,
+    body: string,
+  ): GitHubApiResult<T> | undefined {
     const limits = readRateLimitHeaders(headers, this.now());
     const limited =
       status === 429 ||
       (status === 403 &&
-        (limits.remaining === 0 || limits.retryAfterMs !== undefined || RATE_LIMIT_MESSAGE.test(body)));
+        (limits.remaining === 0 ||
+          limits.retryAfterMs !== undefined ||
+          RATE_LIMIT_MESSAGE.test(body)));
     return limited ? this.rateLimitedResult(limits, boundedMessage(body)) : undefined;
   }
 
@@ -555,7 +615,10 @@ export class GitHubApi {
     return {
       kind: "rate-limited",
       ...(retryAt !== undefined ? { retryAt } : {}),
-      message: message && RATE_LIMIT_MESSAGE.test(message) ? message : "GitHub's API rate limit was reached.",
+      message:
+        message && RATE_LIMIT_MESSAGE.test(message)
+          ? message
+          : "GitHub's API rate limit was reached.",
       sent: true,
     };
   }

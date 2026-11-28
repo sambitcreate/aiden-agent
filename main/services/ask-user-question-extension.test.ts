@@ -38,7 +38,11 @@ test("Ask User Question runs in attended desktop and paired-device chats, includ
   assert.equal(shouldEnableAskUserQuestionExtension({ ...base, assistantMode: true }), false);
   assert.equal(shouldEnableAskUserQuestionExtension({ ...base, botBound: true }), true);
   assert.equal(
-    shouldEnableAskUserQuestionExtension({ ...base, botBound: true, interactionSurface: "telegram" }),
+    shouldEnableAskUserQuestionExtension({
+      ...base,
+      botBound: true,
+      interactionSurface: "telegram",
+    }),
     false,
   );
 });
@@ -68,7 +72,13 @@ test("a Bot turn can offer five quick replies, but not six", async () => {
   const tool = extension.tools?.[0];
   assert.ok(tool);
   const option = (label: string) => ({ label, description: `${label} plan` });
-  const labels = ["This works", "Vegetarian", "No seafood", "Cooking for two", "Shorter Sunday cook"];
+  const labels = [
+    "This works",
+    "Vegetarian",
+    "No seafood",
+    "Cooking for two",
+    "Shorter Sunday cook",
+  ];
   const result = await tool.execute("call-bot", {
     questions: [
       {
@@ -207,7 +217,16 @@ test("attended owners wait unless asked; unattended owners always get a capped d
   assert.equal(resolveAskUserQuestionTimeoutMs(60, { unattended: true }), 60_000);
   assert.equal(resolveAskUserQuestionTimeoutMs(3_600, { unattended: true }), cap);
   // A lead chat's started chat waits up to 30 minutes for the person.
-  assert.equal(resolveAskUserQuestionTimeoutMs(undefined, { unattended: true, maxSeconds: 1_800 }), 1_800_000);
-  assert.equal(resolveAskUserQuestionTimeoutMs(3_600, { unattended: true, maxSeconds: 1_800 }), 1_800_000);
-  assert.equal(resolveAskUserQuestionTimeoutMs(60, { unattended: true, maxSeconds: 1_800 }), 60_000);
+  assert.equal(
+    resolveAskUserQuestionTimeoutMs(undefined, { unattended: true, maxSeconds: 1_800 }),
+    1_800_000,
+  );
+  assert.equal(
+    resolveAskUserQuestionTimeoutMs(3_600, { unattended: true, maxSeconds: 1_800 }),
+    1_800_000,
+  );
+  assert.equal(
+    resolveAskUserQuestionTimeoutMs(60, { unattended: true, maxSeconds: 1_800 }),
+    60_000,
+  );
 });

@@ -10,11 +10,18 @@ import { botMessageRowLabel, botMessageStatusLine } from "../../shared/bot-messa
 // A reply the person stopped ends with a "stopped" line that is derived here
 // and never stored.
 
-import { botRetryableFailedTurn, type BotQueuedMessage, type BotTranscriptEntry } from "../../shared/bot-live";
+import {
+  botRetryableFailedTurn,
+  type BotQueuedMessage,
+  type BotTranscriptEntry,
+} from "../../shared/bot-live";
 import { botHandoffResultLine, type BotHandoffOutcome } from "../../shared/bot-handoffs";
 import type { BotChatActivityLevel } from "../../shared/bots";
 import type { ConnectCardEntry } from "../../shared/bot-connections";
-import type { BotRoutineProposalEntryData, BotRoutineProposalStatus } from "../../shared/bot-routine-proposals";
+import type {
+  BotRoutineProposalEntryData,
+  BotRoutineProposalStatus,
+} from "../../shared/bot-routine-proposals";
 import { botRecapIssues, botSettleSteps, type BotRecapStep } from "./bot-activity-steps";
 import { walkBotTurns, type BotTurn } from "./bot-turns";
 
@@ -30,9 +37,23 @@ export type BotTranscriptRow =
   | { kind: "bot_message_status"; id: string; label: string; text?: string }
   | { kind: "user"; id: string; text: string }
   /** The person's answer to a hand-off card, on their side: "You did this: …" with their note below. */
-  | { kind: "handoff_result"; id: string; outcome: BotHandoffOutcome; signedIn: boolean; text: string; note?: string }
+  | {
+      kind: "handoff_result";
+      id: string;
+      outcome: BotHandoffOutcome;
+      signedIn: boolean;
+      text: string;
+      note?: string;
+    }
   | { kind: "routine"; id: string; label: string; text: string }
-  | { kind: "peer"; id: string; exchangeId: string; direction: "sent" | "received"; peerName: string; messageKind: "request" | "question" | "status" | "fyi" | "result" }
+  | {
+      kind: "peer";
+      id: string;
+      exchangeId: string;
+      direction: "sent" | "received";
+      peerName: string;
+      messageKind: "request" | "question" | "status" | "fyi" | "result";
+    }
   | { kind: "assistant"; id: string; text: string; streaming?: boolean }
   /** One turn's steps; `live` while the turn runs (Detailed only). */
   | { kind: "recap"; id: string; steps: BotRecapStep[]; durationMs: number; live: boolean }
@@ -105,7 +126,10 @@ export function botTranscriptRows(
       // a step failed or was blocked: that is something the person may need to act on.
       const issues = botRecapIssues(settled);
       const needsSaying = !live && (issues.failed > 0 || issues.blocked > 0);
-      if (steps.length > 0 && (level === "detailed" || (level === "summary" && !live) || needsSaying)) {
+      if (
+        steps.length > 0 &&
+        (level === "detailed" || (level === "summary" && !live) || needsSaying)
+      ) {
         const recap: BotTranscriptRow = {
           kind: "recap",
           id: `${turn.start.id}:recap`,
@@ -137,16 +161,36 @@ export function botTranscriptRows(
           });
           break;
         case "bot_message":
-          rows.push({kind: "bot_message", id: entry.id, label: botMessageRowLabel(entry.kind, entry.botName), botName: entry.botName, text: entry.text});
+          rows.push({
+            kind: "bot_message",
+            id: entry.id,
+            label: botMessageRowLabel(entry.kind, entry.botName),
+            botName: entry.botName,
+            text: entry.text,
+          });
           break;
         case "bot_message_status":
-          rows.push({kind: "bot_message_status", id: entry.id, label: botMessageStatusLine(entry.data), ...(entry.data.outcome === "replied_while_paused" && entry.data.text ? {text: entry.data.text} : {})});
+          rows.push({
+            kind: "bot_message_status",
+            id: entry.id,
+            label: botMessageStatusLine(entry.data),
+            ...(entry.data.outcome === "replied_while_paused" && entry.data.text
+              ? { text: entry.data.text }
+              : {}),
+          });
           break;
         case "routine":
           rows.push({ kind: "routine", id: entry.id, label: entry.label, text: entry.text });
           break;
         case "peer":
-          rows.push({ kind: "peer", id: entry.id, exchangeId: entry.exchangeId, direction: entry.direction, peerName: entry.peerName, messageKind: entry.messageKind });
+          rows.push({
+            kind: "peer",
+            id: entry.id,
+            exchangeId: entry.exchangeId,
+            direction: entry.direction,
+            peerName: entry.peerName,
+            messageKind: entry.messageKind,
+          });
           break;
         case "assistant":
           if (entry.text.trim()) {
@@ -158,7 +202,14 @@ export function botTranscriptRows(
           rows.push({ kind: "file", id: entry.id, path: entry.path, operation: entry.operation });
           break;
         case "shared_image":
-          rows.push({ kind: "image", id: entry.id, name: entry.name, mimeType: entry.mimeType, size: entry.size, data: entry.data });
+          rows.push({
+            kind: "image",
+            id: entry.id,
+            name: entry.name,
+            mimeType: entry.mimeType,
+            size: entry.size,
+            data: entry.data,
+          });
           break;
         case "notice":
           rows.push({ kind: "notice", id: entry.id, notice: entry.notice });
@@ -176,7 +227,8 @@ export function botTranscriptRows(
           break;
         case "memory_update":
           // Back-to-back saves read as one update.
-          if (rows[rows.length - 1]?.kind !== "memory_update") rows.push({ kind: "memory_update", id: entry.id });
+          if (rows[rows.length - 1]?.kind !== "memory_update")
+            rows.push({ kind: "memory_update", id: entry.id });
           break;
         case "routine_proposal":
           rows.push({
@@ -193,22 +245,50 @@ export function botTranscriptRows(
           rows.push({ kind: entry.type, id: entry.id, lesson: entry.lesson, status: entry.status });
           break;
         case "memory_tidy":
-          rows.push({ kind: "memory_tidy", id: entry.id, ...(entry.changeId ? { changeId: entry.changeId } : {}) });
+          rows.push({
+            kind: "memory_tidy",
+            id: entry.id,
+            ...(entry.changeId ? { changeId: entry.changeId } : {}),
+          });
           break;
         case "wake_up":
-          rows.push({ kind: "wake_up", id: entry.id, wakeUpId: entry.wakeUpId, fireAt: entry.fireAt });
+          rows.push({
+            kind: "wake_up",
+            id: entry.id,
+            wakeUpId: entry.wakeUpId,
+            fireAt: entry.fireAt,
+          });
           break;
         case "skill_proposal":
-          rows.push({ kind: "skill_proposal", id: entry.id, proposal: entry.proposal, status: entry.status });
+          rows.push({
+            kind: "skill_proposal",
+            id: entry.id,
+            proposal: entry.proposal,
+            status: entry.status,
+          });
           break;
         // A held change waits in the Needs-you slot; once applied it reads as a receipt.
         case "settings_change":
-          if (entry.change.mode === "applied" || entry.status === "applied" || entry.status === "edited") {
-            rows.push({ kind: "settings_change", id: entry.id, change: entry.change, status: entry.status });
+          if (
+            entry.change.mode === "applied" ||
+            entry.status === "applied" ||
+            entry.status === "edited"
+          ) {
+            rows.push({
+              kind: "settings_change",
+              id: entry.id,
+              change: entry.change,
+              status: entry.status,
+            });
           }
           break;
         case "routines_skipped":
-          rows.push({ kind: "routines_skipped", id: entry.id, since: entry.since, routines: entry.routines });
+          rows.push({
+            kind: "routines_skipped",
+            id: entry.id,
+            since: entry.since,
+            routines: entry.routines,
+          });
           break;
         // An open "Needs you" issue waits in the Needs-you slot above the
         // composer, like the phones show it; a settled one leaves no trace.
@@ -220,7 +300,12 @@ export function botTranscriptRows(
     },
   });
   if (partial !== null && partial.trim()) {
-    rows.push({ kind: "assistant", id: "partial", text: partial, ...(running ? { streaming: true } : {}) });
+    rows.push({
+      kind: "assistant",
+      id: "partial",
+      text: partial,
+      ...(running ? { streaming: true } : {}),
+    });
   }
   for (const message of queued ?? []) {
     const text = message.text.trim()
@@ -232,8 +317,15 @@ export function botTranscriptRows(
           : "";
     if (!text) continue;
     // A steer joins the running turn: it reads as sent right away.
-    if (message.mode === "steer") rows.push({ kind: "user", id: `queued:${message.submissionId}`, text });
-    else rows.push({ kind: "queued", id: `queued:${message.submissionId}`, submissionId: message.submissionId, text });
+    if (message.mode === "steer")
+      rows.push({ kind: "user", id: `queued:${message.submissionId}`, text });
+    else
+      rows.push({
+        kind: "queued",
+        id: `queued:${message.submissionId}`,
+        submissionId: message.submissionId,
+        text,
+      });
   }
   return rows;
 }

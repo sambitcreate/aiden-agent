@@ -1,10 +1,5 @@
 import { constants } from "node:fs";
-import {
-  createHash,
-  createHmac,
-  randomUUID,
-  timingSafeEqual,
-} from "node:crypto";
+import { createHash, createHmac, randomUUID, timingSafeEqual } from "node:crypto";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import type { BotCapabilityOpaqueKeyStore } from "./bot-capability-key-store.js";
@@ -43,10 +38,7 @@ interface PendingHead {
 type StateHead = CommittedHead | PendingHead;
 
 export interface BotCapabilityStateCheckpoint {
-  initialize(
-    state: BotCapabilityState,
-    stateFilePresent: boolean,
-  ): Promise<void>;
+  initialize(state: BotCapabilityState, stateFilePresent: boolean): Promise<void>;
   commit<Result>(
     previous: BotCapabilityState,
     next: BotCapabilityState,
@@ -74,8 +66,7 @@ export interface BotCapabilityBootstrapMarker {
   ): Promise<void>;
 }
 
-export type BotCapabilityInitialBootstrapDisposition =
-  "clean" | "legacy" | "deny";
+export type BotCapabilityInitialBootstrapDisposition = "clean" | "legacy" | "deny";
 
 export class BotCapabilityCommitUncertainError extends BotCapabilityUnavailableError {
   readonly commitCause: unknown;
@@ -116,9 +107,7 @@ function stateDigest(state: BotCapabilityState): string {
     .digest("hex");
 }
 
-function unsignedHead(
-  head: Omit<CommittedHead, "mac"> | Omit<PendingHead, "mac">,
-): string {
+function unsignedHead(head: Omit<CommittedHead, "mac"> | Omit<PendingHead, "mac">): string {
   return `${MAC_DOMAIN}${JSON.stringify(head)}`;
 }
 
@@ -134,14 +123,9 @@ function signHead(
 
 function verifyMac(head: StateHead, key: Uint8Array): void {
   const { mac, ...unsigned } = head;
-  const expected = createHmac("sha256", key)
-    .update(unsignedHead(unsigned))
-    .digest();
+  const expected = createHmac("sha256", key).update(unsignedHead(unsigned)).digest();
   const actual = Buffer.from(mac, "hex");
-  if (
-    actual.byteLength !== expected.byteLength ||
-    !timingSafeEqual(actual, expected)
-  ) {
+  if (actual.byteLength !== expected.byteLength || !timingSafeEqual(actual, expected)) {
     throw unavailable("Bot access rollback checkpoint authentication failed.");
   }
 }
@@ -184,10 +168,7 @@ function parseHead(bytes: Buffer, key: Uint8Array): StateHead {
   return head;
 }
 
-function assertOwned(
-  info: Awaited<ReturnType<fs.FileHandle["stat"]>>,
-  label: string,
-): void {
+function assertOwned(info: Awaited<ReturnType<fs.FileHandle["stat"]>>, label: string): void {
   const getuid = process.getuid;
   if (typeof getuid === "function" && info.uid !== getuid()) {
     throw unavailable(`${label} has the wrong owner.`);
@@ -195,21 +176,14 @@ function assertOwned(
 }
 
 async function privateRoot(candidate: string): Promise<string> {
-  if (
-    !path.isAbsolute(candidate) ||
-    path.resolve(candidate) === path.parse(candidate).root
-  ) {
-    throw unavailable(
-      "Bot access rollback checkpoint requires a private absolute root.",
-    );
+  if (!path.isAbsolute(candidate) || path.resolve(candidate) === path.parse(candidate).root) {
+    throw unavailable("Bot access rollback checkpoint requires a private absolute root.");
   }
   const requested = path.resolve(candidate);
   await fs.mkdir(requested, { recursive: true, mode: PRIVATE_DIRECTORY_MODE });
   const info = await fs.lstat(requested);
   if (!info.isDirectory() || info.isSymbolicLink()) {
-    throw unavailable(
-      "Bot access rollback checkpoint root is not a private directory.",
-    );
+    throw unavailable("Bot access rollback checkpoint root is not a private directory.");
   }
   assertOwned(info, "Bot access rollback checkpoint root");
   await fs.chmod(requested, PRIVATE_DIRECTORY_MODE);
@@ -222,25 +196,20 @@ async function readPrivateHead(file: string): Promise<Buffer> {
     handle = await fs.open(file, constants.O_RDONLY | constants.O_NOFOLLOW);
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ELOOP") {
-      throw unavailable(
-        "Bot access rollback checkpoint is not a private regular file.",
-      );
+      throw unavailable("Bot access rollback checkpoint is not a private regular file.");
     }
     throw error;
   }
   try {
     const info = await handle.stat();
     if (!info.isFile() || info.nlink !== 1) {
-      throw unavailable(
-        "Bot access rollback checkpoint is not a private regular file.",
-      );
+      throw unavailable("Bot access rollback checkpoint is not a private regular file.");
     }
     assertOwned(info, "Bot access rollback checkpoint");
     if (info.size === 0 || info.size > MAX_BYTES) {
       throw unavailable("Bot access rollback checkpoint is invalid.");
     }
-    if ((info.mode & 0o777) !== PRIVATE_FILE_MODE)
-      await handle.chmod(PRIVATE_FILE_MODE);
+    if ((info.mode & 0o777) !== PRIVATE_FILE_MODE) await handle.chmod(PRIVATE_FILE_MODE);
     return handle.readFile();
   } finally {
     await handle.close();
@@ -271,10 +240,7 @@ async function writePrivateHead(root: string, head: StateHead): Promise<void> {
   }
 }
 
-function committedFor(
-  state: BotCapabilityState,
-  key: Uint8Array,
-): CommittedHead {
+function committedFor(state: BotCapabilityState, key: Uint8Array): CommittedHead {
   return signHead(
     {
       version: VERSION,
@@ -286,11 +252,7 @@ function committedFor(
   ) as CommittedHead;
 }
 
-function headMatchesState(
-  sequence: number,
-  digest: string,
-  state: BotCapabilityState,
-): boolean {
+function headMatchesState(sequence: number, digest: string, state: BotCapabilityState): boolean {
   return state.sequence === sequence && stateDigest(state) === digest;
 }
 
@@ -316,10 +278,7 @@ export function createBotCapabilityStateCheckpoint(options: {
     await options.afterHeadWrite?.(head.phase);
   };
 
-  const loadHead = async (
-    root: string,
-    key: Uint8Array,
-  ): Promise<StateHead | undefined> => {
+  const loadHead = async (root: string, key: Uint8Array): Promise<StateHead | undefined> => {
     try {
       return parseHead(await readPrivateHead(path.join(root, FILE)), key);
     } catch (error) {
@@ -363,8 +322,7 @@ export function createBotCapabilityStateCheckpoint(options: {
         stateFilePresent ||
         state.sequence !== 0 ||
         existing ||
-        (initialMarker === null &&
-          (await options.inspectInitialBootstrap()) === "deny")
+        (initialMarker === null && (await options.inspectInitialBootstrap()) === "deny")
       ) {
         throw unavailable(
           "Bot access rollback authority is missing; access remains disabled for repair.",
@@ -383,10 +341,7 @@ export function createBotCapabilityStateCheckpoint(options: {
       // either side resumes only with the same local key; losing that key or a
       // consumed anchor fails closed instead of reopening legacy migration.
       await options.anchor.store(anchorValue, null);
-      await options.bootstrapMarker.store(
-        { phase: "consumed", keyProof },
-        pendingMarker,
-      );
+      await options.bootstrapMarker.store({ phase: "consumed", keyProof }, pendingMarker);
       await write(root, head);
       return { root, key, head, anchorValue };
     }
@@ -436,10 +391,7 @@ export function createBotCapabilityStateCheckpoint(options: {
       await options.anchor.store(anchorValue, storedAnchor);
     }
     if (initialMarker?.phase !== "consumed") {
-      await options.bootstrapMarker.store(
-        { phase: "consumed", keyProof },
-        pendingMarker,
-      );
+      await options.bootstrapMarker.store({ phase: "consumed", keyProof }, pendingMarker);
     }
     if (
       !existing ||
@@ -465,16 +417,11 @@ export function createBotCapabilityStateCheckpoint(options: {
       const current = await reconcile(previous, true);
       const previousDigest = stateDigest(previous);
       const nextDigest = stateDigest(next);
-      if (
-        previous.sequence === next.sequence &&
-        previousDigest === nextDigest
-      ) {
+      if (previous.sequence === next.sequence && previousDigest === nextDigest) {
         return publish();
       }
       if (next.sequence <= previous.sequence) {
-        throw unavailable(
-          "Bot access commit sequence did not advance monotonically.",
-        );
+        throw unavailable("Bot access commit sequence did not advance monotonically.");
       }
       const pending = signHead(
         {
@@ -517,9 +464,7 @@ export function withBotCapabilityStateCheckpoint(
   let poisoned = false;
   let tail: Promise<void> = Promise.resolve();
 
-  const serialized = <Result>(
-    operation: () => Promise<Result>,
-  ): Promise<Result> => {
+  const serialized = <Result>(operation: () => Promise<Result>): Promise<Result> => {
     const result = tail.then(operation, operation);
     tail = result.then(
       () => undefined,
@@ -536,10 +481,7 @@ export function withBotCapabilityStateCheckpoint(
     }
     const state = await persistence.load();
     if (!initialized) {
-      await checkpoint.initialize(
-        state,
-        (await persistence.loadedDiskContents()) !== null,
-      );
+      await checkpoint.initialize(state, (await persistence.loadedDiskContents()) !== null);
       initialized = true;
     }
     return state;
@@ -553,8 +495,7 @@ export function withBotCapabilityStateCheckpoint(
         try {
           await checkpoint.commit(previous, next, () => persistence.save(next, isCurrent));
         } catch (error) {
-          if (error instanceof BotCapabilityCommitUncertainError)
-            poisoned = true;
+          if (error instanceof BotCapabilityCommitUncertainError) poisoned = true;
           throw error;
         }
       }),
@@ -567,8 +508,7 @@ export function withBotCapabilityStateCheckpoint(
         try {
           await checkpoint.commit(previous, next, () => persistence.save(next, isCurrent));
         } catch (error) {
-          if (error instanceof BotCapabilityCommitUncertainError)
-            poisoned = true;
+          if (error instanceof BotCapabilityCommitUncertainError) poisoned = true;
           throw error;
         }
         return result;

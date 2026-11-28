@@ -13,7 +13,17 @@ interface Row {
 }
 
 /** A folder of chats like the sidebar's: the folder row, then its chats, each with a ••• button. */
-function List({ rows, current, onToggle, dir }: { rows: Row[]; current?: string; onToggle?: () => void; dir?: "rtl" }) {
+function List({
+  rows,
+  current,
+  onToggle,
+  dir,
+}: {
+  rows: Row[];
+  current?: string;
+  onToggle?: () => void;
+  dir?: "rtl";
+}) {
   const ref = React.useRef<HTMLDivElement>(null);
   useRovingRows(ref);
   const [open, setOpen] = React.useState(true);
@@ -39,7 +49,11 @@ function List({ rows, current, onToggle, dir }: { rows: Row[]; current?: string;
           {open
             ? rows.map((row) => (
                 <div key={row.id} data-roving-row>
-                  <button type="button" data-roving-item aria-current={row.id === current ? "page" : undefined}>
+                  <button
+                    type="button"
+                    data-roving-item
+                    aria-current={row.id === current ? "page" : undefined}
+                  >
                     {row.title}
                   </button>
                   <button type="button">{`More for ${row.title}`}</button>
@@ -154,7 +168,8 @@ test("in a right-to-left layout → and ← swap: → goes back to the folder an
   assert.equal(toggles, 2);
 });
 
-const typeaheadPause = () => act(() => new Promise((resolve) => setTimeout(resolve, TYPEAHEAD_TIMEOUT_MS + 20)));
+const typeaheadPause = () =>
+  act(() => new Promise((resolve) => setTimeout(resolve, TYPEAHEAD_TIMEOUT_MS + 20)));
 
 test("typing a title's first letters moves to it; the query clears after 500 ms", async () => {
   const rows = [...ROWS, { id: "e", title: "Écho" }, { id: "f", title: "Bravo two" }];
@@ -163,7 +178,8 @@ test("typing a title's first letters moves to it; the query clears after 500 ms"
   fireEvent.keyDown(document.activeElement!, { key: "b" });
   assert.equal(document.activeElement, button("Bravo"));
   // A longer query keeps the current match while it still fits, Space included.
-  for (const key of ["r", "a", "v", "o", " ", "t"]) fireEvent.keyDown(document.activeElement!, { key });
+  for (const key of ["r", "a", "v", "o", " ", "t"])
+    fireEvent.keyDown(document.activeElement!, { key });
   assert.equal(document.activeElement, button("Bravo two"));
   await typeaheadPause();
   // Accents and case are ignored.

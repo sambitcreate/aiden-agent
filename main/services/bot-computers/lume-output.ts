@@ -50,9 +50,11 @@ function parseVnc(value: unknown): LumeVmInfo["vnc"] {
 }
 
 function parseEntry(value: unknown): LumeVmInfo {
-  if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("Lume VM details were not an object.");
+  if (!value || typeof value !== "object" || Array.isArray(value))
+    throw new Error("Lume VM details were not an object.");
   const entry = value as Record<string, unknown>;
-  if (typeof entry.name !== "string" || entry.name.length === 0) throw new Error("Lume VM details had no name.");
+  if (typeof entry.name !== "string" || entry.name.length === 0)
+    throw new Error("Lume VM details had no name.");
   const status = typeof entry.status === "string" ? entry.status : "";
   let state: LumeVmInfo["state"] = "unknown";
   let stale = false;
@@ -69,7 +71,12 @@ function parseEntry(value: unknown): LumeVmInfo {
   const vnc = parseVnc(entry.vncUrl);
   if (vnc) info.vnc = vnc;
   const disk = entry.diskSize as { allocated?: unknown } | undefined;
-  if (disk && typeof disk.allocated === "number" && Number.isSafeInteger(disk.allocated) && disk.allocated >= 0) {
+  if (
+    disk &&
+    typeof disk.allocated === "number" &&
+    Number.isSafeInteger(disk.allocated) &&
+    disk.allocated >= 0
+  ) {
     info.diskAllocatedBytes = disk.allocated;
   }
   return info;
@@ -108,9 +115,12 @@ export function classifyLumeError(stderr: string, exitCode: number | null): Lume
   ) {
     return "vm_limit";
   }
-  if (/Virtual machine not found\b/u.test(text) || /\bVM '[^'\n]*' not found\b/u.test(text)) return "not_found";
-  if (/still being provisioned/iu.test(text) || /provisioning \(stale\)/u.test(text)) return "stale";
-  if (/Virtual machine not running\b/u.test(text) || /\bis not running\b/iu.test(text)) return "not_running";
+  if (/Virtual machine not found\b/u.test(text) || /\bVM '[^'\n]*' not found\b/u.test(text))
+    return "not_found";
+  if (/still being provisioned/iu.test(text) || /provisioning \(stale\)/u.test(text))
+    return "stale";
+  if (/Virtual machine not running\b/u.test(text) || /\bis not running\b/iu.test(text))
+    return "not_running";
   return "other";
 }
 

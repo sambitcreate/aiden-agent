@@ -34,7 +34,15 @@ function snapshot(overrides: Partial<BotLiveSnapshot> = {}): BotLiveSnapshot {
 }
 
 function summary(overrides: Partial<BotLiveSummary> = {}): BotLiveSummary {
-  return { botId: "bot-1", preview: null, updatedAt: null, state: { kind: "idle" }, needsYou: false, lastReplyAt: null, ...overrides };
+  return {
+    botId: "bot-1",
+    preview: null,
+    updatedAt: null,
+    state: { kind: "idle" },
+    needsYou: false,
+    lastReplyAt: null,
+    ...overrides,
+  };
 }
 
 const stateWith = (overrides: Partial<BotBubbleState>): BotBubbleState => ({
@@ -48,11 +56,20 @@ const stateWith = (overrides: Partial<BotBubbleState>): BotBubbleState => ({
 function seenUpTo(at: number) {
   localStorage.setItem(
     BOT_SIDEBAR_PREFERENCES_KEY,
-    JSON.stringify({ version: 1, since: 1, pinnedBotId: null, lastViewed: {}, seenReplyAt: { "bot-1": at } }),
+    JSON.stringify({
+      version: 1,
+      since: 1,
+      pinnedBotId: null,
+      lastViewed: {},
+      seenReplyAt: { "bot-1": at },
+    }),
   );
 }
 
-function mount(handlers: Record<string, (...args: unknown[]) => unknown>, props: Partial<React.ComponentProps<typeof BotBubbleHeads>> = {}) {
+function mount(
+  handlers: Record<string, (...args: unknown[]) => unknown>,
+  props: Partial<React.ComponentProps<typeof BotBubbleHeads>> = {},
+) {
   const calls = installBotTestIpc({
     "bots:get": () => botFixture({ name: "Penny" }),
     "bots:live:summary": () => summary(),
@@ -78,10 +95,31 @@ test("a closed head says how many replies are unread and that the Bot needs you"
     "bots:live:subscribe": () =>
       snapshot({
         entries: [
-          { id: "a1", type: "assistant", text: "Seen already.", toolCalls: [], stopReason: "stop", at: 90 },
+          {
+            id: "a1",
+            type: "assistant",
+            text: "Seen already.",
+            toolCalls: [],
+            stopReason: "stop",
+            at: 90,
+          },
           { id: "u1", type: "user", text: "Anything new?", imageCount: 0, at: 110 },
-          { id: "a2", type: "assistant", text: "Two flights found.", toolCalls: [], stopReason: "stop", at: 120 },
-          { id: "a3", type: "assistant", text: "Which one should I book?", toolCalls: [], stopReason: "stop", at: 130 },
+          {
+            id: "a2",
+            type: "assistant",
+            text: "Two flights found.",
+            toolCalls: [],
+            stopReason: "stop",
+            at: 120,
+          },
+          {
+            id: "a3",
+            type: "assistant",
+            text: "Which one should I book?",
+            toolCalls: [],
+            stopReason: "stop",
+            at: 130,
+          },
         ],
       }),
     "bots:live:summary": () => summary({ needsYou: true, lastReplyAt: 130 }),
@@ -92,20 +130,26 @@ test("a closed head says how many replies are unread and that the Bot needs you"
 test("a working head's drawn face is a live avatar in the thinking pose", async () => {
   mount({
     "bots:live:summary": () => summary({ state: { kind: "running" } as BotLiveSummary["state"] }),
-    "bots:live:subscribe": () => snapshot({ state: { kind: "running" } as BotLiveSnapshot["state"] }),
+    "bots:live:subscribe": () =>
+      snapshot({ state: { kind: "running" } as BotLiveSnapshot["state"] }),
   });
   const working = await head(/^Penny, working\./u);
   await waitFor(() => {
     const sprite = working.querySelector(".bot-sprite");
     assert.equal(sprite?.getAttribute("data-state"), "thinking");
-    assert.ok(sprite?.closest(".bot-avatar[data-live]"), "the sprite motion only runs inside a live .bot-avatar");
+    assert.ok(
+      sprite?.closest(".bot-avatar[data-live]"),
+      "the sprite motion only runs inside a live .bot-avatar",
+    );
   });
 });
 
 test("an idle head's drawn face is a still idle sprite", async () => {
   mount({});
   const idle = await head(/^Penny\. Enter opens/u);
-  await waitFor(() => assert.equal(idle.querySelector(".bot-sprite")?.getAttribute("data-state"), "idle"));
+  await waitFor(() =>
+    assert.equal(idle.querySelector(".bot-sprite")?.getAttribute("data-state"), "idle"),
+  );
   assert.equal(idle.querySelector(".bot-avatar[data-live]"), null);
 });
 
@@ -119,19 +163,72 @@ test("a head inside the Aiden window counts unread replies from the summary with
     { host: "window" },
   );
   assert.ok(await head(/^Penny, 2 unread\. Enter opens, Delete closes\.$/u));
-  assert.equal(calls.filter((call) => call.channel === "bots:live:subscribe").length, 0, "the Aiden window never marks the chat as on screen");
+  assert.equal(
+    calls.filter((call) => call.channel === "bots:live:subscribe").length,
+    0,
+    "the Aiden window never marks the chat as on screen",
+  );
 });
 
 test("a floating head counts a delegated turn as one reply, as the in-window head does", async () => {
   seenUpTo(5);
   const entries: BotLiveSnapshot["entries"] = [
     { id: "person", type: "user", text: "Please check the calendar", imageCount: 0, at: 10 },
-    { id: "ack", type: "assistant", text: "I will ask the calendar Bot", toolCalls: [], stopReason: "toolUse", at: 20 },
-    { id: "sent", type: "peer", exchangeId: "exchange", direction: "sent", peerBotId: "B", peerName: "Calendar", messageKind: "request", at: 25 },
-    { id: "waiting", type: "assistant", text: "Waiting for Calendar", toolCalls: [], stopReason: "stop", at: 30 },
-    { id: "received", type: "peer", exchangeId: "exchange", direction: "received", peerBotId: "B", peerName: "Calendar", messageKind: "result", at: 40 },
-    { id: "answer", type: "assistant", text: "Your meeting starts at 3pm", toolCalls: [], stopReason: "stop", at: 50 },
-    { id: "sealed", type: "peer", exchangeId: "exchange", direction: "received", peerBotId: "B", peerName: "Calendar", messageKind: "result", final: true, at: 60 },
+    {
+      id: "ack",
+      type: "assistant",
+      text: "I will ask the calendar Bot",
+      toolCalls: [],
+      stopReason: "toolUse",
+      at: 20,
+    },
+    {
+      id: "sent",
+      type: "peer",
+      exchangeId: "exchange",
+      direction: "sent",
+      peerBotId: "B",
+      peerName: "Calendar",
+      messageKind: "request",
+      at: 25,
+    },
+    {
+      id: "waiting",
+      type: "assistant",
+      text: "Waiting for Calendar",
+      toolCalls: [],
+      stopReason: "stop",
+      at: 30,
+    },
+    {
+      id: "received",
+      type: "peer",
+      exchangeId: "exchange",
+      direction: "received",
+      peerBotId: "B",
+      peerName: "Calendar",
+      messageKind: "result",
+      at: 40,
+    },
+    {
+      id: "answer",
+      type: "assistant",
+      text: "Your meeting starts at 3pm",
+      toolCalls: [],
+      stopReason: "stop",
+      at: 50,
+    },
+    {
+      id: "sealed",
+      type: "peer",
+      exchangeId: "exchange",
+      direction: "received",
+      peerBotId: "B",
+      peerName: "Calendar",
+      messageKind: "result",
+      final: true,
+      at: 60,
+    },
   ];
   mount({
     "bots:live:subscribe": () => snapshot({ entries }),
@@ -145,7 +242,11 @@ test("Delete on a focused head closes its bubble", async () => {
   const button = await head(/^Penny/u);
   button.focus();
   fireEvent.keyDown(button, { key: "Delete" });
-  await waitFor(() => assert.deepEqual(calls.find((call) => call.channel === "bots:bubbles:close")?.args, [{ botId: "bot-1" }]));
+  await waitFor(() =>
+    assert.deepEqual(calls.find((call) => call.channel === "bots:bubbles:close")?.args, [
+      { botId: "bot-1" },
+    ]),
+  );
 });
 
 test("dropping a dragged head on the × closes its bubble instead of moving it", async () => {
@@ -157,11 +258,21 @@ test("dropping a dragged head on the × closes its bubble instead of moving it",
   // The head starts at (934, 374); the × waits centred at (500, 708).
   fireEvent.pointerDown(button, { button: 0, pointerId: 1, clientX: 960, clientY: 400 });
   fireEvent.pointerMove(button, { pointerId: 1, clientX: 900, clientY: 450 });
-  assert.ok(document.querySelector("[data-bubble-close-target]"), "the × target rises while dragging");
+  assert.ok(
+    document.querySelector("[data-bubble-close-target]"),
+    "the × target rises while dragging",
+  );
   fireEvent.pointerMove(button, { pointerId: 1, clientX: 526, clientY: 734 });
   fireEvent.pointerUp(button, { pointerId: 1, clientX: 526, clientY: 734 });
-  await waitFor(() => assert.deepEqual(calls.find((call) => call.channel === "bots:bubbles:close")?.args, [{ botId: "bot-1" }]));
-  assert.equal(calls.some((call) => call.channel === "bots:bubbles:move"), false);
+  await waitFor(() =>
+    assert.deepEqual(calls.find((call) => call.channel === "bots:bubbles:close")?.args, [
+      { botId: "bot-1" },
+    ]),
+  );
+  assert.equal(
+    calls.some((call) => call.channel === "bots:bubbles:move"),
+    false,
+  );
 });
 
 test("a head dropped on the left half snaps to the left side", async () => {
@@ -185,28 +296,45 @@ test("an approval answered in the mini chat reaches the Bot by its wait id", asy
   const calls = mount(
     {
       "bots:pendingApprovals": () => [
-        { botId: "bot-1", waitId: "wait-9", toolCallId: "call-9", toolName: "send_email", summary: "Email the itinerary to Sam." },
+        {
+          botId: "bot-1",
+          waitId: "wait-9",
+          toolCallId: "call-9",
+          toolName: "send_email",
+          summary: "Email the itinerary to Sam.",
+        },
       ],
       "bots:approve": () => ({ decided: true }),
     },
     { openBotId: "bot-1" },
   );
   const chat = await screen.findByRole("region", { name: "Penny chat" });
-  const card = await within(chat).findByRole("region", { name: "Request from Penny: Review before Send email" });
+  const card = await within(chat).findByRole("region", {
+    name: "Request from Penny: Review before Send email",
+  });
   fireEvent.click(within(card).getByRole("button", { name: "Allow once" }));
   await waitFor(() =>
-    assert.deepEqual(calls.find((call) => call.channel === "bots:approve")?.args, [{ waitId: "wait-9", decision: "allow" }]),
+    assert.deepEqual(calls.find((call) => call.channel === "bots:approve")?.args, [
+      { waitId: "wait-9", decision: "allow" },
+    ]),
   );
 });
 
 test("sending from the mini chat sends the words to the Bot under a fresh request id", async () => {
-  const calls = mount({ "bots:send": () => ({ submissionId: "s-1", deduped: false }) }, { openBotId: "bot-1" });
+  const calls = mount(
+    { "bots:send": () => ({ submissionId: "s-1", deduped: false }) },
+    { openBotId: "bot-1" },
+  );
   const box = await screen.findByRole("textbox", { name: "Message Penny" });
   await waitFor(() => assert.equal((box as HTMLTextAreaElement).disabled, false));
   fireEvent.change(box, { target: { value: "Book the 9am one" } });
   fireEvent.keyDown(box, { key: "Enter" });
   await waitFor(() => assert.ok(calls.some((call) => call.channel === "bots:send")));
-  const sent = calls.find((call) => call.channel === "bots:send")!.args[0] as { botId: string; text: string; requestId: string };
+  const sent = calls.find((call) => call.channel === "bots:send")!.args[0] as {
+    botId: string;
+    text: string;
+    requestId: string;
+  };
   assert.equal(sent.botId, "bot-1");
   assert.equal(sent.text, "Book the 9am one");
   assert.match(sent.requestId, /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/u);
@@ -218,7 +346,18 @@ test("opening the mini chat marks the Bot's replies seen, and Shrink tucks it aw
   const calls = mount(
     {
       "bots:live:subscribe": () =>
-        snapshot({ entries: [{ id: "a2", type: "assistant", text: "Done.", toolCalls: [], stopReason: "stop", at: 150 }] }),
+        snapshot({
+          entries: [
+            {
+              id: "a2",
+              type: "assistant",
+              text: "Done.",
+              toolCalls: [],
+              stopReason: "stop",
+              at: 150,
+            },
+          ],
+        }),
       "bots:bubbles:open": () => stateWith({ openBotId: null }),
     },
     { openBotId: "bot-1" },
@@ -226,25 +365,42 @@ test("opening the mini chat marks the Bot's replies seen, and Shrink tucks it aw
   const chat = await screen.findByRole("region", { name: "Penny chat" });
   await within(chat).findByText("Done.");
   await waitFor(() => {
-    const stored = JSON.parse(localStorage.getItem(BOT_SIDEBAR_PREFERENCES_KEY) ?? "{}") as { seenReplyAt?: Record<string, number> };
+    const stored = JSON.parse(localStorage.getItem(BOT_SIDEBAR_PREFERENCES_KEY) ?? "{}") as {
+      seenReplyAt?: Record<string, number>;
+    };
     assert.equal(stored.seenReplyAt?.["bot-1"], 150);
   });
   assert.ok(await head(/^Penny\. Enter opens/u), "the open Bot's head shows nothing unread");
   act(() => {
     fireEvent.click(within(chat).getByRole("button", { name: "Shrink" }));
   });
-  await waitFor(() => assert.deepEqual(calls.find((call) => call.channel === "bots:bubbles:open")?.args, [{ botId: null }]));
+  await waitFor(() =>
+    assert.deepEqual(calls.find((call) => call.channel === "bots:bubbles:open")?.args, [
+      { botId: null },
+    ]),
+  );
 });
 
 function renderLayer(props: Partial<React.ComponentProps<typeof BotBubbleHeads>>) {
   const client = createBotTestQueryClient();
   const element = (next: Partial<React.ComponentProps<typeof BotBubbleHeads>>) => (
     <QueryClientProvider client={client}>
-      <BotBubbleHeads bubbles={[PENNY]} openBotId={null} area={AREA} host="overlay" {...props} {...next} />
+      <BotBubbleHeads
+        bubbles={[PENNY]}
+        openBotId={null}
+        area={AREA}
+        host="overlay"
+        {...props}
+        {...next}
+      />
     </QueryClientProvider>
   );
   const view = render(element({}));
-  return { ...view, update: (next: Partial<React.ComponentProps<typeof BotBubbleHeads>>) => view.rerender(element(next)) };
+  return {
+    ...view,
+    update: (next: Partial<React.ComponentProps<typeof BotBubbleHeads>>) =>
+      view.rerender(element(next)),
+  };
 }
 
 test("the layer tells its host it is not interactive when it mounts, and not interactive or dragging when it goes", async () => {
@@ -256,7 +412,10 @@ test("the layer tells its host it is not interactive when it mounts, and not int
   });
   const interactive: boolean[] = [];
   const dragging: boolean[] = [];
-  const view = renderLayer({ onInteractiveChange: (value) => interactive.push(value), onDraggingChange: (value) => dragging.push(value) });
+  const view = renderLayer({
+    onInteractiveChange: (value) => interactive.push(value),
+    onDraggingChange: (value) => dragging.push(value),
+  });
   await head(/^Penny/u);
   assert.deepEqual(interactive, [false]);
   view.unmount();
@@ -280,18 +439,26 @@ test("opening a mini chat puts the cursor in its message box, and closing it giv
 });
 
 test("a click in a dialog opened from the chat (an image's full view) doesn't tuck the chat away", async () => {
-  const calls = mount({ "bots:bubbles:open": () => stateWith({ openBotId: null }) }, { openBotId: "bot-1" });
+  const calls = mount(
+    { "bots:bubbles:open": () => stateWith({ openBotId: null }) },
+    { openBotId: "bot-1" },
+  );
   await screen.findByRole("region", { name: "Penny chat" });
   const dialog = document.createElement("div");
   dialog.setAttribute("role", "dialog");
   document.body.appendChild(dialog);
   fireEvent.pointerDown(dialog);
   dialog.remove();
-  assert.equal(calls.some((call) => call.channel === "bots:bubbles:open"), false);
+  assert.equal(
+    calls.some((call) => call.channel === "bots:bubbles:open"),
+    false,
+  );
   fireEvent.pointerDown(document.body);
   // The tuck names the chat it closes, so it can't close one another display opened meanwhile.
   await waitFor(() =>
-    assert.deepEqual(calls.find((call) => call.channel === "bots:bubbles:open")?.args, [{ botId: null, ifOpen: "bot-1" }]),
+    assert.deepEqual(calls.find((call) => call.channel === "bots:bubbles:open")?.args, [
+      { botId: null, ifOpen: "bot-1" },
+    ]),
   );
 });
 
@@ -307,7 +474,10 @@ test("a head closed elsewhere mid-drag ends the drag: the × goes and the overla
   installBotTestIpc(LAYER_IPC);
   const interactive: boolean[] = [];
   const dragging: boolean[] = [];
-  const view = renderLayer({ onInteractiveChange: (value) => interactive.push(value), onDraggingChange: (value) => dragging.push(value) });
+  const view = renderLayer({
+    onInteractiveChange: (value) => interactive.push(value),
+    onDraggingChange: (value) => dragging.push(value),
+  });
   const button = await head(/^Penny/u);
   fireEvent.pointerDown(button, { button: 0, pointerId: 5, clientX: 960, clientY: 400 });
   fireEvent.pointerMove(button, { pointerId: 5, clientX: 900, clientY: 450 });
@@ -319,7 +489,11 @@ test("a head closed elsewhere mid-drag ends the drag: the × goes and the overla
   assert.equal(dragging[dragging.length - 1], false);
   assert.equal(interactive[interactive.length - 1], false);
   fireEvent.mouseMove(document.body);
-  assert.equal(interactive[interactive.length - 1], false, "moving over empty overlay keeps it click-through");
+  assert.equal(
+    interactive[interactive.length - 1],
+    false,
+    "moving over empty overlay keeps it click-through",
+  );
 });
 
 test("losing pointer capture mid-drag ends the drag without moving the head", async () => {
@@ -330,7 +504,10 @@ test("losing pointer capture mid-drag ends the drag without moving the head", as
   assert.ok(document.querySelector("[data-bubble-close-target]"));
   fireEvent.lostPointerCapture(button, { pointerId: 6 });
   await waitFor(() => assert.equal(document.querySelector("[data-bubble-close-target]"), null));
-  assert.equal(calls.some((call) => call.channel === "bots:bubbles:move"), false);
+  assert.equal(
+    calls.some((call) => call.channel === "bots:bubbles:move"),
+    false,
+  );
 });
 
 test("dragging the head of an open chat keeps a half-written message", async () => {
@@ -340,12 +517,19 @@ test("dragging the head of an open chat keeps a half-written message", async () 
   const button = await head(/^Penny/u);
   fireEvent.pointerDown(button, { button: 0, pointerId: 7, clientX: 960, clientY: 400 });
   fireEvent.pointerMove(button, { pointerId: 7, clientX: 940, clientY: 300 });
-  assert.equal(screen.queryByRole("region", { name: "Penny chat" }), null, "the chat steps aside while its head moves");
+  assert.equal(
+    screen.queryByRole("region", { name: "Penny chat" }),
+    null,
+    "the chat steps aside while its head moves",
+  );
   fireEvent.pointerMove(button, { pointerId: 7, clientX: 950, clientY: 250 });
   fireEvent.pointerUp(button, { pointerId: 7, clientX: 950, clientY: 250 });
   await waitFor(() => assert.ok(calls.some((call) => call.channel === "bots:bubbles:move")));
   const chat = await screen.findByRole("region", { name: "Penny chat" });
-  assert.equal((within(chat).getByRole("textbox", { name: "Message Penny" }) as HTMLTextAreaElement).value, "Half a thought");
+  assert.equal(
+    (within(chat).getByRole("textbox", { name: "Message Penny" }) as HTMLTextAreaElement).value,
+    "Half a thought",
+  );
 });
 
 // Compared as booleans: a failed assertion that prints a DOM node stalls the run.
@@ -361,9 +545,16 @@ test("a tucked chat stays where it was, out of reach, until its exit has played;
 
   view.update({ openBotId: null });
   assert.ok(chatElement() === chat, "the same chat is still on the page while it leaves");
-  assert.equal(screen.queryByRole("region", { name: "Penny chat" }), null, "it is no longer offered as a chat");
+  assert.equal(
+    screen.queryByRole("region", { name: "Penny chat" }),
+    null,
+    "it is no longer offered as a chat",
+  );
   assert.equal(screen.queryByRole("textbox", { name: "Message Penny" }), null);
-  assert.ok(screen.getByRole("button", { name: /^Penny/u }) === button, "the head is the same element");
+  assert.ok(
+    screen.getByRole("button", { name: /^Penny/u }) === button,
+    "the head is the same element",
+  );
 
   // A message's own animation ending inside the chat is not the chat's exit.
   fireEvent.animationEnd(chat.querySelector("header")!);
@@ -382,7 +573,9 @@ test("a chat opened again while it leaves is the same chat, with its half-writte
   const again = await screen.findByRole("textbox", { name: "Message Penny" });
   assert.ok(again === box);
   assert.equal((again as HTMLTextAreaElement).value, "Half a thought");
-  await waitFor(() => assert.ok(document.activeElement === again, "the cursor is back in the message box"));
+  await waitFor(() =>
+    assert.ok(document.activeElement === again, "the cursor is back in the message box"),
+  );
   // The exit it had started must not take the open chat away later.
   await new Promise((resolve) => setTimeout(resolve, 450));
   assert.ok(screen.getByRole("region", { name: "Penny chat" }));
@@ -420,7 +613,11 @@ test("a head dropped on the × waits there until its bubble is gone, with clicks
   const onTarget = button.style.translate;
   assert.notEqual(onTarget, atSide);
   fireEvent.pointerUp(button, { pointerId: 8, clientX: 526, clientY: 734 });
-  assert.equal(button.style.translate, onTarget, "it doesn't spring back to its side before it closes");
+  assert.equal(
+    button.style.translate,
+    onTarget,
+    "it doesn't spring back to its side before it closes",
+  );
   assert.ok(document.querySelector("[data-bubble-close-target]"));
   assert.equal(dragging[dragging.length - 1], false, "the drag itself is over");
   view.update({ bubbles: [] });

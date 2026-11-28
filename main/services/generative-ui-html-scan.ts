@@ -64,7 +64,16 @@
 // Labels ("JavaScript: 41%"), comparisons in scripts ("i<base && i>0") and
 // plain strings pass.
 
-import { Parser, Token, defaultTreeAdapter, foreignContent, html as htmlSpec, type DefaultTreeAdapterMap, type DefaultTreeAdapterTypes, type TreeAdapter } from "parse5";
+import {
+  Parser,
+  Token,
+  defaultTreeAdapter,
+  foreignContent,
+  html as htmlSpec,
+  type DefaultTreeAdapterMap,
+  type DefaultTreeAdapterTypes,
+  type TreeAdapter,
+} from "parse5";
 
 type Element = DefaultTreeAdapterTypes.Element;
 
@@ -97,16 +106,19 @@ class StructureLimit extends Error {}
  * parse5 does not read as SVG or MathML, or an end tag that does not close an
  * SVG or MathML element there (or the <select> itself).
  */
-export const SELECT_FOREIGN_LIMIT = "inside an <svg> or <math> in a <select> is read differently by the browser and the check";
+export const SELECT_FOREIGN_LIMIT =
+  "inside an <svg> or <math> in a <select> is read differently by the browser and the check";
 
 /**
  * Refused (at the end tag): an end tag that parse5 matches to an SVG or
  * MathML element around an open HTML element, which Chromium ignores.
  */
-export const FOREIGN_END_LIMIT = "ends an SVG or MathML element around an open HTML element, which the browser leaves open";
+export const FOREIGN_END_LIMIT =
+  "ends an SVG or MathML element around an open HTML element, which the browser leaves open";
 
 /** Refused (at the start tag): a raw-text or RCDATA element in a <select>, which Chromium reads as text where parse5 reads markup. */
-export const SELECT_RAW_TEXT_LIMIT = "in a <select> has content the browser reads as text and the check reads as markup";
+export const SELECT_RAW_TEXT_LIMIT =
+  "in a <select> has content the browser reads as text and the check reads as markup";
 
 /**
  * Start tags whose content Chromium reads as text in a <select> (by its in-body
@@ -114,12 +126,36 @@ export const SELECT_RAW_TEXT_LIMIT = "in a <select> has content the browser read
  * comment opened there could hide an element Chromium builds. An <iframe> is
  * missing because it is refused as an embed wherever it is.
  */
-const SELECT_RAW_TEXT: ReadonlySet<string> = new Set(["xmp", "title", "noembed", "noframes", "noscript", "plaintext", "textarea"]);
+const SELECT_RAW_TEXT: ReadonlySet<string> = new Set([
+  "xmp",
+  "title",
+  "noembed",
+  "noframes",
+  "noscript",
+  "plaintext",
+  "textarea",
+]);
 
 /** Start tags parse5 drops inside a <select> that change how Chromium reads what follows. */
 const SELECT_BODY_CONTENT: ReadonlySet<string> = new Set(["svg", "math", "style"]);
-const EMBEDDING_TAGS: ReadonlySet<string> = new Set(["iframe", "object", "embed", "applet", "frame", "frameset", "base", "link"]);
-const URL_ATTRIBUTES: ReadonlySet<string> = new Set(["href", "src", "action", "formaction", "xlink:href", "data"]);
+const EMBEDDING_TAGS: ReadonlySet<string> = new Set([
+  "iframe",
+  "object",
+  "embed",
+  "applet",
+  "frame",
+  "frameset",
+  "base",
+  "link",
+]);
+const URL_ATTRIBUTES: ReadonlySet<string> = new Set([
+  "href",
+  "src",
+  "action",
+  "formaction",
+  "xlink:href",
+  "data",
+]);
 const SCRIPT_SOURCE_ATTRIBUTES: ReadonlySet<string> = new Set(["src", "href", "xlink:href"]);
 const SMIL_ELEMENTS: ReadonlySet<string> = new Set(["set", "animate"]);
 const SMIL_VALUE_ATTRIBUTES: ReadonlySet<string> = new Set(["to", "from", "by", "values"]);
@@ -140,7 +176,9 @@ const MAX_NESTED_HTML_DEPTH = 3;
 const NESTED_HTML_LIMIT = `a script writes markup or a handler more than ${MAX_NESTED_HTML_DEPTH} strings deep`;
 
 function attributeName(attribute: Token.Attribute): string {
-  return (attribute.prefix ? `${attribute.prefix}:${attribute.name}` : attribute.name).toLowerCase();
+  return (
+    attribute.prefix ? `${attribute.prefix}:${attribute.name}` : attribute.name
+  ).toLowerCase();
 }
 
 /**
@@ -182,8 +220,12 @@ export function findCssUnsafeUrl(css: string): string | undefined {
     let at = match.index + match[0].length;
     while (at < css.length && /\s/u.test(css[at]!)) at += 1;
     if (css[at] === '"' || css[at] === "'") at += 1;
-    const target = css.slice(at, at + 48).replace(/\s+/gu, "").toLowerCase();
-    if (/^(?:javascript:|data:text\/html)/u.test(target)) return css.slice(match.index, Math.min(css.length, at + 24)).replace(/[;}].*$/su, "");
+    const target = css
+      .slice(at, at + 48)
+      .replace(/\s+/gu, "")
+      .toLowerCase();
+    if (/^(?:javascript:|data:text\/html)/u.test(target))
+      return css.slice(match.index, Math.min(css.length, at + 24)).replace(/[;}].*$/su, "");
   }
   return undefined;
 }
@@ -212,18 +254,67 @@ interface JsToken {
 }
 
 const PUNCTUATORS = [
-  ">>>=", "...", "===", "!==", "**=", "<<=", ">>=", ">>>", "&&=", "||=", "??=",
-  "=>", "==", "!=", "<=", ">=", "&&", "||", "??", "?.", "++", "--", "+=", "-=", "*=", "%=", "&=", "|=", "^=", "**", "<<", ">>",
+  ">>>=",
+  "...",
+  "===",
+  "!==",
+  "**=",
+  "<<=",
+  ">>=",
+  ">>>",
+  "&&=",
+  "||=",
+  "??=",
+  "=>",
+  "==",
+  "!=",
+  "<=",
+  ">=",
+  "&&",
+  "||",
+  "??",
+  "?.",
+  "++",
+  "--",
+  "+=",
+  "-=",
+  "*=",
+  "%=",
+  "&=",
+  "|=",
+  "^=",
+  "**",
+  "<<",
+  ">>",
 ];
 /** Reserved words after which an expression, so a regex, starts. */
 const REGEX_AFTER_KEYWORDS: ReadonlySet<string> = new Set([
-  "return", "typeof", "case", "do", "else", "in", "instanceof", "new", "delete", "void", "throw", "extends", "default",
+  "return",
+  "typeof",
+  "case",
+  "do",
+  "else",
+  "in",
+  "instanceof",
+  "new",
+  "delete",
+  "void",
+  "throw",
+  "extends",
+  "default",
 ]);
 /** Words that are keywords in some code (generators, async functions, for-of heads) and plain names in other code. */
 const CONTEXTUAL_KEYWORDS: ReadonlySet<string> = new Set(["yield", "await", "of"]);
 /** Keywords whose parenthesized head is followed by a statement, where `/` starts a regex. */
 const HEAD_KEYWORDS: ReadonlySet<string> = new Set(["if", "while", "for", "with"]);
-const SIMPLE_ESCAPES: Readonly<Record<string, string>> = { n: "\n", t: "\t", r: "\r", b: "\b", f: "\f", v: "\v" };
+const SIMPLE_ESCAPES: Readonly<Record<string, string>> = {
+  n: "\n",
+  t: "\t",
+  r: "\r",
+  b: "\b",
+  f: "\f",
+  v: "\v",
+};
 const IDENTIFIER_START = /[\p{ID_Start}$_]/u;
 const IDENTIFIER_PART = /[\p{ID_Continue}$_‌‍]/u;
 const LINE_BREAK = /[\n\r\u2028\u2029]/u;
@@ -303,12 +394,14 @@ interface LexFork {
 const isOperandEnd = (token: JsToken | undefined): boolean => {
   if (token === undefined) return false;
   if (token.kind === "name") return !REGEX_AFTER_KEYWORDS.has(token.text);
-  if (token.kind === "punct") return token.text === ")" || token.text === "]" || token.closesTemplate === true;
+  if (token.kind === "punct")
+    return token.text === ")" || token.text === "]" || token.closesTemplate === true;
   return true;
 };
 
 /** `isOperandEnd` for the sink rules, which read `await` as the operator it is in async code: a value follows it, even on the next line. */
-const endsOperand = (token: JsToken | undefined): boolean => isOperandEnd(token) && !(token?.kind === "name" && token.text === "await");
+const endsOperand = (token: JsToken | undefined): boolean =>
+  isOperandEnd(token) && !(token?.kind === "name" && token.text === "await");
 
 /**
  * Splits JavaScript into tokens, linearly. Strings and regular expressions
@@ -354,7 +447,13 @@ class JsLexer {
   }
 
   private state(): LexState {
-    return { at: this.at, braces: this.braces, parens: this.parens, tail: [...this.tail], lineBreak: this.lineBreak };
+    return {
+      at: this.at,
+      braces: this.braces,
+      parens: this.parens,
+      tail: [...this.tail],
+      lineBreak: this.lineBreak,
+    };
   }
 
   /** Takes the likelier reading of an ambiguous place, or the other one at the fork being reread. */
@@ -396,7 +495,10 @@ class JsLexer {
       const lineComment =
         (char === "/" && code[this.at + 1] === "/") ||
         (char === "<" && code.startsWith("<!--", this.at) && this.choose(true)) ||
-        (char === "-" && code.startsWith("-->", this.at) && (this.lineBreak || this.tail.length === 0) && this.choose(true));
+        (char === "-" &&
+          code.startsWith("-->", this.at) &&
+          (this.lineBreak || this.tail.length === 0) &&
+          this.choose(true));
       if (lineComment) {
         while (this.at < code.length && !LINE_BREAK.test(code[this.at]!)) this.at += 1;
         continue;
@@ -522,10 +624,18 @@ class JsLexer {
       return;
     }
     if (char === "`") {
-      const token: JsToken = { kind: "template", text: "`", start, end: start + 1, value: "", parts: "" };
+      const token: JsToken = {
+        kind: "template",
+        text: "`",
+        start,
+        end: start + 1,
+        value: "",
+        parts: "",
+      };
       this.push(token);
       this.at = this.readTemplate(token, this.at + 1);
-      if (token.substituted && this.braces?.top === token) this.push({ kind: "punct", text: "${", start: token.end - 2, end: token.end });
+      if (token.substituted && this.braces?.top === token)
+        this.push({ kind: "punct", text: "${", start: token.end - 2, end: token.end });
       return;
     }
     if (char === "}" && this.braces !== undefined && this.braces.top !== null) {
@@ -536,19 +646,25 @@ class JsLexer {
       this.push(close);
       const below = this.braces;
       this.at = this.readTemplate(template, this.at + 1);
-      if (this.braces !== below) this.push({ kind: "punct", text: "${", start: template.end - 2, end: template.end });
+      if (this.braces !== below)
+        this.push({ kind: "punct", text: "${", start: template.end - 2, end: template.end });
       else close.closesTemplate = true;
       return;
     }
     // A private name (`#default`, `#if`) is one name token, so it never reads
     // as the keyword it spells: `this.#default/1` divides.
-    const privateName = char === "#" && (IDENTIFIER_START.test(code[this.at + 1] ?? "") || code[this.at + 1] === "\\");
+    const privateName =
+      char === "#" &&
+      (IDENTIFIER_START.test(code[this.at + 1] ?? "") || code[this.at + 1] === "\\");
     if (IDENTIFIER_START.test(char) || char === "\\" || privateName) {
       // A name may spell its characters as \u escapes (`\u{6F}pen` is open),
       // so its text is the name they spell.
       let at = this.at;
       let text = "";
-      while (at < code.length && (at === this.at || IDENTIFIER_PART.test(code[at]!) || code[at] === "\\")) {
+      while (
+        at < code.length &&
+        (at === this.at || IDENTIFIER_PART.test(code[at]!) || code[at] === "\\")
+      ) {
         if (code[at] === "\\") {
           const unicode = code[at + 1] === "u" ? readUnicodeEscape(code, at + 2) : undefined;
           if (unicode) {
@@ -592,7 +708,10 @@ class JsLexer {
       const head =
         last?.kind === "name" &&
         ((HEAD_KEYWORDS.has(last.text) && !followsDot(2)) ||
-          (last.text === "await" && before?.kind === "name" && before.text === "for" && !followsDot(3)));
+          (last.text === "await" &&
+            before?.kind === "name" &&
+            before.text === "for" &&
+            !followsDot(3)));
       this.parens = { top: head, below: this.parens };
     } else if (punctuator === ")") {
       if (this.parens?.top === true) token.closesHead = true;
@@ -645,9 +764,16 @@ function readOtherWay(code: string, first: JsLexer, fork: LexFork, budget: numbe
   const from = fork.state.at;
   const other = new JsLexer(code, fork.state, from);
   while (other.skipTrivia()) {
-    if (other.tokens.length === 1 && other.tokens[0]!.start === from && other.tokens[0]!.text === "regex" && !other.lineBreak) {
+    if (
+      other.tokens.length === 1 &&
+      other.tokens[0]!.start === from &&
+      other.tokens[0]!.text === "regex" &&
+      !other.lineBreak
+    ) {
       const char = code[other.at]!;
-      const word = IDENTIFIER_START.test(char) ? /^[\p{ID_Continue}$\u200c\u200d]*/u.exec(code.slice(other.at, other.at + 16))![0] : undefined;
+      const word = IDENTIFIER_START.test(char)
+        ? /^[\p{ID_Continue}$\u200c\u200d]*/u.exec(code.slice(other.at, other.at + 16))![0]
+        : undefined;
       if ((word !== undefined && !OPERATOR_WORDS.has(word)) || /[0-9"']/u.test(char)) {
         return { tokens: [], resume: fork.tokenIndex, cost: other.at - from + 1, dead: true };
       }
@@ -665,11 +791,16 @@ function readOtherWay(code: string, first: JsLexer, fork: LexFork, budget: numbe
       ) {
         return { tokens: other.tokens, resume: index, cost: other.at - from + other.tokens.length };
       }
-      if (other.at - from + other.tokens.length > budget) return { tokens: other.tokens, resume: index, cost: other.at - from + other.tokens.length };
+      if (other.at - from + other.tokens.length > budget)
+        return { tokens: other.tokens, resume: index, cost: other.at - from + other.tokens.length };
     }
     other.step();
   }
-  return { tokens: other.tokens, resume: first.tokens.length, cost: other.at - from + other.tokens.length };
+  return {
+    tokens: other.tokens,
+    resume: first.tokens.length,
+    cost: other.at - from + other.tokens.length,
+  };
 }
 
 function sameTail(tokens: readonly JsToken[], index: number, tail: readonly JsToken[]): boolean {
@@ -698,14 +829,20 @@ const HTML_CALLS: Readonly<Record<string, number | "any">> = {
  * other value makes it throw (see `parseFromStringType`).
  */
 const DOM_PARSER_HTML_TYPES: ReadonlySet<string> = new Set(["text/html"]);
-const DOM_PARSER_XML_TYPES: ReadonlySet<string> = new Set(["application/xhtml+xml", "image/svg+xml", "text/xml", "application/xml"]);
+const DOM_PARSER_XML_TYPES: ReadonlySet<string> = new Set([
+  "application/xhtml+xml",
+  "image/svg+xml",
+  "text/xml",
+  "application/xml",
+]);
 /** How far ahead a `parseFromString(` call's type argument is looked for; past it the type counts as computed. */
 const PARSE_TYPE_LOOKAHEAD = 4_096;
 /**
  * XML that names the XHTML, SVG or MathML namespace, or spells a namespace
  * with a character reference.
  */
-const XML_MARKUP_NAMESPACE = /www\.w3\.org\/(?:1999\/xhtml|2000\/svg|1998\/Math\/MathML)|xmlns(?::[^\s=:]+)?\s*=\s*(?:"[^"&]*&|'[^'&]*&)/iu;
+const XML_MARKUP_NAMESPACE =
+  /www\.w3\.org\/(?:1999\/xhtml|2000\/svg|1998\/Math\/MathML)|xmlns(?::[^\s=:]+)?\s*=\s*(?:"[^"&]*&|'[^'&]*&)/iu;
 /**
  * A DOCTYPE with an internal subset, an attribute-list or an entity
  * declaration: XML that can give an element a namespace by default, or
@@ -721,16 +858,19 @@ const XML_DECLARATIONS = /<!DOCTYPE(?:[^<>["']|"[^"]*"|'[^']*')*\[|<!ATTLIST|<!E
  * A start tag (any prefix) of an element whose content HTML reads as text,
  * where XML reads markup in it.
  */
-const XML_HTML_TEXT_ELEMENTS = /<(?:[^\s/>:<]+:)?(style|script|textarea|title|xmp|iframe|noembed|noframes|noscript|plaintext)(?=[\s/>])/giu;
+const XML_HTML_TEXT_ELEMENTS =
+  /<(?:[^\s/>:<]+:)?(style|script|textarea|title|xmp|iframe|noembed|noframes|noscript|plaintext)(?=[\s/>])/giu;
 /** An element's namespace prefix in a start or end tag (`<x:iframe>`, `</é:img>`). */
 const XML_ELEMENT_PREFIX = /<(\/?)[^\s/>:<]+:/gu;
 /**
  * A prefixed attribute whose local name is a URL attribute (`q:href` bound
  * to the XLink namespace is an SVG link, as `xlink:href` is).
  */
-const XML_PREFIXED_URL_ATTRIBUTE = /\s[^\s=/>:"'<]+:(?:href|src|action|formaction|data)\s*=\s*("[^"]*"|'[^']*')/giu;
+const XML_PREFIXED_URL_ATTRIBUTE =
+  /\s[^\s=/>:"'<]+:(?:href|src|action|formaction|data)\s*=\s*("[^"]*"|'[^']*')/giu;
 /** Refused: XML a script parses that declares a DOCTYPE internal subset, entities or attribute lists. */
-export const XML_DECLARATIONS_LIMIT = "a script parses XML with a DOCTYPE internal subset, an <!ENTITY> or an <!ATTLIST> declaration";
+export const XML_DECLARATIONS_LIMIT =
+  "a script parses XML with a DOCTYPE internal subset, an <!ENTITY> or an <!ATTLIST> declaration";
 /** Refused: namespaced XML a script parses that HTML would read part of as text. */
 export const XML_HTML_TEXT_LIMIT =
   "a script parses XML that names the XHTML, SVG or MathML namespace, so it is checked as HTML, and HTML would read part of it as text where XML reads markup: a <style>, <script>, <textarea>, <title>, <xmp>, <iframe>, <noembed>, <noframes> or <noscript> that is self-closed or holds markup (or, in <style> and <script>, a character reference), a <plaintext>, or a CDATA section that holds < or &";
@@ -797,7 +937,13 @@ function xmlAsHtml(markup: string): { text: string } | { limit: string } {
     } else if (match[0] === "<!--") {
       const end = comments ? markup.indexOf("-->", start + 4) : -1;
       const body = end === -1 ? "" : markup.slice(start + 4, end);
-      if (end === -1 || body.includes("--") || body.endsWith("-") || body.startsWith(">") || body.startsWith("->")) {
+      if (
+        end === -1 ||
+        body.includes("--") ||
+        body.endsWith("-") ||
+        body.startsWith(">") ||
+        body.startsWith("->")
+      ) {
         comments = false;
         opener.lastIndex = start + 4;
         continue;
@@ -811,7 +957,12 @@ function xmlAsHtml(markup: string): { text: string } | { limit: string } {
       // An internal subset can declare what the check does not read, so it
       // is refused as checkXml refuses one.
       if (doctypeEnd === "subset") return { limit: XML_DECLARATIONS_LIMIT };
-      const end = doctypeEnd === undefined ? markup.indexOf("?>", from) : doctypeEnd === "unterminated" ? -1 : doctypeEnd;
+      const end =
+        doctypeEnd === undefined
+          ? markup.indexOf("?>", from)
+          : doctypeEnd === "unterminated"
+            ? -1
+            : doctypeEnd;
       // Unterminated: XML rejects the document, and nothing after it is
       // dropped, so the rest is kept as text to be checked.
       if (end === -1) break;
@@ -825,12 +976,14 @@ function xmlAsHtml(markup: string): { text: string } | { limit: string } {
     if (name === "plaintext") return { limit: XML_HTML_TEXT_LIMIT };
     const close = text.indexOf(">", match.index);
     const next = text.indexOf("<", match.index + 1);
-    if (close === -1 || (next !== -1 && next < close) || text[close - 1] === "/") return { limit: XML_HTML_TEXT_LIMIT };
+    if (close === -1 || (next !== -1 && next < close) || text[close - 1] === "/")
+      return { limit: XML_HTML_TEXT_LIMIT };
     const end = text.indexOf("<", close);
     if (end === -1) return { limit: XML_HTML_TEXT_LIMIT };
     const endTag = /^<\/(?:[^\s/>:<]+:)?([^\s/>:<]+)[\s>]/u.exec(text.slice(end, end + 256));
     if (endTag?.[1]!.toLowerCase() !== name) return { limit: XML_HTML_TEXT_LIMIT };
-    if ((name === "style" || name === "script") && text.slice(close, end).includes("&")) return { limit: XML_HTML_TEXT_LIMIT };
+    if ((name === "style" || name === "script") && text.slice(close, end).includes("&"))
+      return { limit: XML_HTML_TEXT_LIMIT };
   }
   return { text };
 }
@@ -854,13 +1007,15 @@ function joinSinks(...sets: (SinkSet | undefined)[]): SinkSet | undefined {
   for (const set of sets) {
     if (set === undefined) continue;
     for (const kind of SINK_KINDS) {
-      if (set[kind] !== undefined && joined?.[kind] === undefined) (joined ??= {})[kind] = set[kind];
+      if (set[kind] !== undefined && joined?.[kind] === undefined)
+        (joined ??= {})[kind] = set[kind];
     }
   }
   return joined;
 }
 
-const sameSinks = (a: SinkSet | undefined, b: SinkSet | undefined) => SINK_KINDS.every((kind) => a?.[kind] === b?.[kind]);
+const sameSinks = (a: SinkSet | undefined, b: SinkSet | undefined) =>
+  SINK_KINDS.every((kind) => a?.[kind] === b?.[kind]);
 
 /** What an attribute of this name does with its value. */
 function attributeSink(name: string | undefined): SinkKind | undefined {
@@ -911,16 +1066,27 @@ interface CallFrame {
   urlTarget?: number;
 }
 
-const isLiteral = (token: JsToken | undefined): token is JsToken => token?.kind === "string" || token?.kind === "template";
-const isDot = (token: JsToken | undefined) => token?.kind === "punct" && (token.text === "." || token.text === "?.");
-const isPunct = (token: JsToken | undefined, text: string) => token?.kind === "punct" && token.text === text;
-const isName = (token: JsToken | undefined, text: string) => token?.kind === "name" && token.text === text;
+const isLiteral = (token: JsToken | undefined): token is JsToken =>
+  token?.kind === "string" || token?.kind === "template";
+const isDot = (token: JsToken | undefined) =>
+  token?.kind === "punct" && (token.text === "." || token.text === "?.");
+const isPunct = (token: JsToken | undefined, text: string) =>
+  token?.kind === "punct" && token.text === text;
+const isName = (token: JsToken | undefined, text: string) =>
+  token?.kind === "name" && token.text === text;
 
 /** How many leading arguments' literal values a call frame keeps: a sink is named by its first or second. */
 const LITERAL_ARGUMENTS = 2;
 
-const rootFrame = (): CallFrame => ({ call: false, start: 0, argument: 0, literals: [], root: true });
-const copyFrames = (stack: readonly CallFrame[]): CallFrame[] => stack.map((frame) => ({ ...frame, literals: [...frame.literals] }));
+const rootFrame = (): CallFrame => ({
+  call: false,
+  start: 0,
+  argument: 0,
+  literals: [],
+  root: true,
+});
+const copyFrames = (stack: readonly CallFrame[]): CallFrame[] =>
+  stack.map((frame) => ({ ...frame, literals: [...frame.literals] }));
 
 function sameFrame(a: CallFrame, b: CallFrame): boolean {
   return (
@@ -944,14 +1110,26 @@ function sameFrame(a: CallFrame, b: CallFrame): boolean {
 }
 
 /** The function or property name that the tokens ending at `at` read: `f`, `o.f`, `o?.f`, `o['f']` or `o?.['f']`. */
-function memberAt(tokens: readonly JsToken[], at: number): { name: string; start: number; object?: number } | undefined {
+function memberAt(
+  tokens: readonly JsToken[],
+  at: number,
+): { name: string; start: number; object?: number } | undefined {
   const last = tokens[at];
-  if (last?.kind === "name") return { name: last.text, start: last.start, object: isDot(tokens[at - 1]) ? at - 2 : undefined };
+  if (last?.kind === "name")
+    return {
+      name: last.text,
+      start: last.start,
+      object: isDot(tokens[at - 1]) ? at - 2 : undefined,
+    };
   if (isPunct(last, "]") && isLiteral(tokens[at - 1]) && isPunct(tokens[at - 2], "[")) {
     const object = isPunct(tokens[at - 3], "?.") ? at - 4 : at - 3;
     const before = tokens[object];
     const read = before !== undefined && isOperandEnd(before);
-    return { name: tokens[at - 1]!.value ?? "", start: (before?.kind === "name" ? before : tokens[at - 2]!).start, object: read ? object : undefined };
+    return {
+      name: tokens[at - 1]!.value ?? "",
+      start: (before?.kind === "name" ? before : tokens[at - 2]!).start,
+      object: read ? object : undefined,
+    };
   }
   return undefined;
 }
@@ -962,8 +1140,18 @@ function openingParen(tokens: readonly JsToken[], at: number): number | undefine
   for (let index = at - 1; index >= Math.max(0, at - MATCH_LOOKBEHIND); index -= 1) {
     const token = tokens[index]!;
     if (token.kind !== "punct") continue;
-    if (token.text === ")" || token.text === "]" || (token.text === "}" && token.closesTemplate !== true)) depth += 1;
-    else if (token.text === "(" || token.text === "[" || token.text === "{" || token.text === "${") {
+    if (
+      token.text === ")" ||
+      token.text === "]" ||
+      (token.text === "}" && token.closesTemplate !== true)
+    )
+      depth += 1;
+    else if (
+      token.text === "(" ||
+      token.text === "[" ||
+      token.text === "{" ||
+      token.text === "${"
+    ) {
       if (depth === 0) return token.text === "(" ? index : undefined;
       depth -= 1;
     }
@@ -978,7 +1166,8 @@ function holdsComma(tokens: readonly JsToken[], open: number, close: number): bo
   for (let index = open + 1; index < close; index += 1) {
     const token = tokens[index]!;
     if (token.kind !== "punct") continue;
-    if (token.text === "(" || token.text === "[" || token.text === "{" || token.text === "${") depth += 1;
+    if (token.text === "(" || token.text === "[" || token.text === "{" || token.text === "${")
+      depth += 1;
     else if (token.text === ")" || token.text === "]" || token.text === "}") depth -= 1;
     else if (token.text === "," && depth === 0) return true;
   }
@@ -1022,21 +1211,33 @@ function calleeBefore(tokens: readonly JsToken[], at: number, hops = 0): Callee 
     if (open === undefined) return undefined;
     const bound = memberAt(tokens, open - 1);
     if (bound?.name === "bind" && bound.object !== undefined) {
-      return holdsComma(tokens, open, index) ? undefined : calleeBefore(tokens, bound.object, hops + 1);
+      return holdsComma(tokens, open, index)
+        ? undefined
+        : calleeBefore(tokens, bound.object, hops + 1);
     }
     // A call's result names no function; parentheses (or a comma expression
     // in them) name the function their last value is.
     if (isOperandEnd(tokens[open - 1])) return undefined;
     return calleeBefore(tokens, index - 1, hops + 1);
   }
-  if (last?.kind === "name" && !isDot(tokens[index - 1]) && (REGEX_AFTER_KEYWORDS.has(last.text) || CONTEXTUAL_KEYWORDS.has(last.text))) return undefined;
+  if (
+    last?.kind === "name" &&
+    !isDot(tokens[index - 1]) &&
+    (REGEX_AFTER_KEYWORDS.has(last.text) || CONTEXTUAL_KEYWORDS.has(last.text))
+  )
+    return undefined;
   const member = memberAt(tokens, index);
   if (member === undefined) return undefined;
   const object = member.object === undefined ? undefined : tokens[member.object];
-  const named: Callee = { callee: member.name, receiver: object?.kind === "name" ? object.text : undefined, start: member.start };
+  const named: Callee = {
+    callee: member.name,
+    receiver: object?.kind === "name" ? object.text : undefined,
+    start: member.start,
+  };
   if (member.name === "call" && member.object !== undefined && hops < 2) {
     const target = calleeBefore(tokens, member.object, hops + 1);
-    if (target !== undefined && isSinkFunction(target.callee)) return { ...target, shift: (target.shift ?? 0) + 1 };
+    if (target !== undefined && isSinkFunction(target.callee))
+      return { ...target, shift: (target.shift ?? 0) + 1 };
   }
   return named;
 }
@@ -1062,7 +1263,8 @@ function parseFromStringType(tokens: readonly JsToken[], open: number, skip = 0)
     if (token.kind !== "punct") continue;
     // A spread argument can supply the type from any position, so its type is unknown.
     if (token.text === "..." && depth === 0) return "any";
-    if (token.text === "(" || token.text === "[" || token.text === "{" || token.text === "${") depth += 1;
+    if (token.text === "(" || token.text === "[" || token.text === "{" || token.text === "${")
+      depth += 1;
     else if (token.text === ")" || token.text === "]" || token.text === "}") {
       if (depth === 0) return "none";
       depth -= 1;
@@ -1074,19 +1276,34 @@ function parseFromStringType(tokens: readonly JsToken[], open: number, skip = 0)
       const type = tokens[index + 1];
       if (isPunct(type, ")")) return "none";
       const after = tokens[index + 2];
-      if (!isLiteral(type) || type.substituted === true || !(isPunct(after, ")") || isPunct(after, ","))) return "any";
+      if (
+        !isLiteral(type) ||
+        type.substituted === true ||
+        !(isPunct(after, ")") || isPunct(after, ","))
+      )
+        return "any";
       const value = type.value ?? "";
-      return DOM_PARSER_HTML_TYPES.has(value) ? "html" : DOM_PARSER_XML_TYPES.has(value) ? "xml" : "none";
+      return DOM_PARSER_HTML_TYPES.has(value)
+        ? "html"
+        : DOM_PARSER_XML_TYPES.has(value)
+          ? "xml"
+          : "none";
     }
   }
   return "any";
 }
 
 /** A call frame's current argument, counted among the callee's own (-1 for `.call`'s `this`). */
-const argumentOf = (frame: Pick<CallFrame, "argument" | "shift">) => frame.argument - (frame.shift ?? 0);
+const argumentOf = (frame: Pick<CallFrame, "argument" | "shift">) =>
+  frame.argument - (frame.shift ?? 0);
 
 /** The sinks a call's current argument reaches. */
-function argumentSinks(frame: Pick<CallFrame, "callee" | "receiver" | "start" | "argument" | "shift" | "literals" | "parseAs">): SinkSet | undefined {
+function argumentSinks(
+  frame: Pick<
+    CallFrame,
+    "callee" | "receiver" | "start" | "argument" | "shift" | "literals" | "parseAs"
+  >,
+): SinkSet | undefined {
   const { callee, start } = frame;
   const argument = argumentOf(frame);
   if (callee === undefined || argument < 0) return undefined;
@@ -1095,14 +1312,22 @@ function argumentSinks(frame: Pick<CallFrame, "callee" | "receiver" | "start" | 
   // computed property.
   if (callee === "setAttribute" || callee === "setAttributeNS") {
     const nameArgument = callee === "setAttributeNS" ? 1 : 0;
-    const kind = argument === nameArgument + 1 ? attributeSink(frame.literals[nameArgument]) : undefined;
+    const kind =
+      argument === nameArgument + 1 ? attributeSink(frame.literals[nameArgument]) : undefined;
     return kind === undefined ? undefined : { [kind]: start };
   }
   if ((callee === "open" || callee === "assign") && argument === 0) return { url: start };
-  if (callee === "replace" && argument === 0 && frame.receiver === "location") return { url: start };
-  if (callee === "navigate" && argument === 0 && frame.receiver === "navigation") return { url: start };
+  if (callee === "replace" && argument === 0 && frame.receiver === "location")
+    return { url: start };
+  if (callee === "navigate" && argument === 0 && frame.receiver === "navigation")
+    return { url: start };
   // `execCommand('insertHTML', ui, markup)` inserts markup where the selection is.
-  if (callee === "execCommand" && argument === 2 && frame.literals[0]?.toLowerCase() === "inserthtml") return { html: start };
+  if (
+    callee === "execCommand" &&
+    argument === 2 &&
+    frame.literals[0]?.toLowerCase() === "inserthtml"
+  )
+    return { html: start };
   // DOMParser's document is not in the page, but its nodes are moved into it.
   if (callee === "parseFromString" && argument === 0) {
     const as = frame.parseAs ?? "any";
@@ -1118,7 +1343,11 @@ function argumentSinks(frame: Pick<CallFrame, "callee" | "receiver" | "start" | 
 
 /** Whether the tokens ending at `at` read an element's `attributes` (`.attributes` or `['attributes']`). */
 const readsAttributes = (tokens: readonly JsToken[], at: number) =>
-  isName(tokens[at], "attributes") || (isPunct(tokens[at], "]") && tokens[at - 1]?.value === "attributes" && isLiteral(tokens[at - 1]) && isPunct(tokens[at - 2], "["));
+  isName(tokens[at], "attributes") ||
+  (isPunct(tokens[at], "]") &&
+    tokens[at - 1]?.value === "attributes" &&
+    isLiteral(tokens[at - 1]) &&
+    isPunct(tokens[at - 2], "["));
 
 /**
  * The name of the attribute node that the tokens ending at `at` read:
@@ -1128,18 +1357,26 @@ const readsAttributes = (tokens: readonly JsToken[], at: number) =>
  */
 function attributeNodeName(tokens: readonly JsToken[], at: number): string | undefined {
   const last = tokens[at];
-  if (last?.kind === "name") return isDot(tokens[at - 1]) && readsAttributes(tokens, at - 2) ? last.text : undefined;
+  if (last?.kind === "name")
+    return isDot(tokens[at - 1]) && readsAttributes(tokens, at - 2) ? last.text : undefined;
   const literal = tokens[at - 1];
   if (!isLiteral(literal)) return undefined;
-  if (isPunct(last, "]") && isPunct(tokens[at - 2], "[")) return readsAttributes(tokens, at - (isPunct(tokens[at - 3], "?.") ? 4 : 3)) ? literal.value : undefined;
+  if (isPunct(last, "]") && isPunct(tokens[at - 2], "["))
+    return readsAttributes(tokens, at - (isPunct(tokens[at - 3], "?.") ? 4 : 3))
+      ? literal.value
+      : undefined;
   if (!isPunct(last, ")")) return undefined;
   if (isPunct(tokens[at - 2], "(")) {
     const getter = tokens[at - 3];
-    return isName(getter, "getAttributeNode") || isName(getter, "getNamedItem") ? literal.value : undefined;
+    return isName(getter, "getAttributeNode") || isName(getter, "getNamedItem")
+      ? literal.value
+      : undefined;
   }
   if (isPunct(tokens[at - 2], ",") && isPunct(tokens[at - 4], "(")) {
     const getter = tokens[at - 5];
-    return isName(getter, "getAttributeNodeNS") || isName(getter, "getNamedItemNS") ? literal.value : undefined;
+    return isName(getter, "getAttributeNodeNS") || isName(getter, "getNamedItemNS")
+      ? literal.value
+      : undefined;
   }
   return undefined;
 }
@@ -1170,7 +1407,12 @@ function assignmentSinks(tokens: readonly JsToken[], at: number): SinkSet | unde
   if (HTML_PROPERTIES.has(property)) return { html: start };
   if (!viaDot) return undefined;
   // An SVG link's `href.baseVal`.
-  if (property === "baseVal" && memberAt(tokens, object)?.name === "href" && memberAt(tokens, object)?.object !== undefined) return { url: start };
+  if (
+    property === "baseVal" &&
+    memberAt(tokens, object)?.name === "href" &&
+    memberAt(tokens, object)?.object !== undefined
+  )
+    return { url: start };
   if (ATTRIBUTE_NODE_VALUES.has(property)) {
     const kind = attributeSink(attributeNodeName(tokens, object));
     if (kind !== undefined) return { [kind]: start };
@@ -1179,7 +1421,8 @@ function assignmentSinks(tokens: readonly JsToken[], at: number): SinkSet | unde
 }
 
 /** The sinks a literal in `frame` reaches: its own target's, its call argument's and the enclosing value's. */
-const frameSinks = (frame: CallFrame) => joinSinks(frame.sinks, frame.call ? argumentSinks(frame) : undefined, frame.outer);
+const frameSinks = (frame: CallFrame) =>
+  joinSinks(frame.sinks, frame.call ? argumentSinks(frame) : undefined, frame.outer);
 
 /** How many frames from the bottom two stacks share, or -1 when they are the same. */
 function sharedFrames(a: readonly CallFrame[], b: readonly CallFrame[]): number {
@@ -1210,14 +1453,25 @@ const FORK_BUDGET_FLOOR = 65_536;
  * a whole script or an event handler's body; either may start with a hashbang.
  */
 export function findJsSink(code: string, depth = 0): HtmlFindings {
-  const lexer = new JsLexer(code, { at: hashbangEnd(code), braces: undefined, parens: undefined, tail: [], lineBreak: false });
+  const lexer = new JsLexer(code, {
+    at: hashbangEnd(code),
+    braces: undefined,
+    parens: undefined,
+    tail: [],
+    lineBreak: false,
+  });
   lexer.run();
   const tokens = lexer.tokens;
   let found: HtmlFindings = {};
   const note = (findings: HtmlFindings) => {
-    found = { embed: found.embed ?? findings.embed, url: found.url ?? findings.url, limit: found.limit ?? findings.limit };
+    found = {
+      embed: found.embed ?? findings.embed,
+      url: found.url ?? findings.url,
+      limit: found.limit ?? findings.limit,
+    };
   };
-  const done = () => found.limit !== undefined || (found.embed !== undefined && found.url !== undefined);
+  const done = () =>
+    found.limit !== undefined || (found.embed !== undefined && found.url !== undefined);
   let budget = FORK_BUDGET_PER_CHARACTER * code.length + FORK_BUDGET_FLOOR;
   const spend = (units: number) => {
     budget -= units;
@@ -1233,14 +1487,22 @@ export function findJsSink(code: string, depth = 0): HtmlFindings {
     if (found.limit !== undefined) return found;
     // Past the meeting point, keep a chain of literals joined with `+` whole.
     let meet = Math.min(other.resume + FORK_TRAIL_TOKENS, tokens.length);
-    while (meet < tokens.length && (isPunct(tokens[meet], "+") ? isLiteral(tokens[meet - 1]) : isLiteral(tokens[meet]) && isPunct(tokens[meet - 1], "+"))) {
+    while (
+      meet < tokens.length &&
+      (isPunct(tokens[meet], "+")
+        ? isLiteral(tokens[meet - 1])
+        : isLiteral(tokens[meet]) && isPunct(tokens[meet - 1], "+"))
+    ) {
       meet += 1;
     }
     others.push({ ...other, meet });
   }
   const snapshots: { index: number; fork: number; meet: boolean }[] = [];
   lexer.forks.forEach((fork, index) => {
-    snapshots.push({ index: fork.tokenIndex, fork: index, meet: false }, { index: others[index]!.meet, fork: index, meet: true });
+    snapshots.push(
+      { index: fork.tokenIndex, fork: index, meet: false },
+      { index: others[index]!.meet, fork: index, meet: true },
+    );
   });
   snapshots.sort((a, b) => a.index - b.index);
   const atFork: CallFrame[][] = [];
@@ -1248,7 +1510,11 @@ export function findJsSink(code: string, depth = 0): HtmlFindings {
   const stack: CallFrame[] = [rootFrame()];
   let next = 0;
   const copyUpTo = (index: number) => {
-    while (next < snapshots.length && snapshots[next]!.index <= index && found.limit === undefined) {
+    while (
+      next < snapshots.length &&
+      snapshots[next]!.index <= index &&
+      found.limit === undefined
+    ) {
       const snapshot = snapshots[next]!;
       spend(stack.length + 1);
       (snapshot.meet ? atMeet : atFork)[snapshot.fork] = copyFrames(stack);
@@ -1263,7 +1529,11 @@ export function findJsSink(code: string, depth = 0): HtmlFindings {
     if (done() || other.dead === true) return;
     const frames = atFork[index]!;
     const lead = Math.max(0, fork.tokenIndex - FORK_LEAD_TOKENS);
-    const joined = [...tokens.slice(lead, fork.tokenIndex), ...other.tokens, ...tokens.slice(other.resume, other.meet)];
+    const joined = [
+      ...tokens.slice(lead, fork.tokenIndex),
+      ...other.tokens,
+      ...tokens.slice(other.resume, other.meet),
+    ];
     spend(joined.length);
     scanJsTokens(code, joined, fork.tokenIndex - lead, frames, depth, note, done);
     // Past this point both readings see the same tokens, but the call frames
@@ -1274,8 +1544,19 @@ export function findJsSink(code: string, depth = 0): HtmlFindings {
     const level = frames.length === atMeet[index]!.length ? shared : -1;
     // The root frame is never popped: when only it differs, this reading
     // has nothing left to add once its value has ended.
-    const caughtUp = () => frames.length <= level || (level === 0 && frames.length === 1 && frames[0]!.sinks === undefined);
-    scanJsTokens(code, tokens, other.meet, frames, depth, note, () => done() || caughtUp(), () => spend(1));
+    const caughtUp = () =>
+      frames.length <= level ||
+      (level === 0 && frames.length === 1 && frames[0]!.sinks === undefined);
+    scanJsTokens(
+      code,
+      tokens,
+      other.meet,
+      frames,
+      depth,
+      note,
+      () => done() || caughtUp(),
+      () => spend(1),
+    );
   });
   return found;
 }
@@ -1311,7 +1592,12 @@ function scanJsTokens(
   // Where the three checks below report: `note`, or while markup joined
   // from more than one literal is checked, `noteJoined`, which marks each
   // excerpt as joined from strings, since the source never spells it whole.
-  const noteJoined = (findings: HtmlFindings) => note({ limit: findings.limit, embed: joinedExcerpt(findings.embed), url: joinedExcerpt(findings.url) });
+  const noteJoined = (findings: HtmlFindings) =>
+    note({
+      limit: findings.limit,
+      embed: joinedExcerpt(findings.embed),
+      url: joinedExcerpt(findings.url),
+    });
   let report = note;
   const checkMarkup = (markup: string) => {
     if (!markup.includes("<")) return;
@@ -1359,7 +1645,8 @@ function scanJsTokens(
     // Read apart from their elements, so a prefixed attribute and an
     // unprefixed one with the same local name do not hide each other.
     let links = "";
-    for (const match of markup.matchAll(XML_PREFIXED_URL_ATTRIBUTE)) links += `<a href=${match[1]}></a>`;
+    for (const match of markup.matchAll(XML_PREFIXED_URL_ATTRIBUTE))
+      links += `<a href=${match[1]}></a>`;
     checkMarkup(links);
   };
 
@@ -1373,7 +1660,10 @@ function scanJsTokens(
   const urlPieces = new Map<number, { url: string; open: boolean; last: number }>();
 
   /** The literals each markup, handler or XML sink is given, by kind and where its target starts. */
-  const values = new Map<string, { kind: "html" | "handler" | "xml"; start: number; end: number; parts: string[] }>();
+  const values = new Map<
+    string,
+    { kind: "html" | "handler" | "xml"; start: number; end: number; parts: string[] }
+  >();
   const collect = (kind: "html" | "handler" | "xml", start: number, part: string, end: number) => {
     const key = `${kind}:${start}`;
     const value = values.get(key);
@@ -1391,14 +1681,22 @@ function scanJsTokens(
     let frame = stack[stack.length - 1]!;
     // A line break between a finished operand and a name or string ends the
     // statement (no `+`, `.` or `(` carries it on), and with it the value.
-    if (token.lineBefore === true && endsOperand(previous) && ((token.kind === "name" && !OPERATOR_WORDS.has(token.text)) || token.kind === "string")) {
+    if (
+      token.lineBefore === true &&
+      endsOperand(previous) &&
+      ((token.kind === "name" && !OPERATOR_WORDS.has(token.text)) || token.kind === "string")
+    ) {
       frame.sinks = undefined;
     }
     if (token.kind === "punct") {
       const text = token.text;
       if (text === "(") {
         const named = calleeBefore(tokens, index - 1);
-        const call = named !== undefined || isPunct(previous, ")") || isPunct(previous, "]") || isPunct(previous, "?.");
+        const call =
+          named !== undefined ||
+          isPunct(previous, ")") ||
+          isPunct(previous, "]") ||
+          isPunct(previous, "?.");
         stack.push({
           call,
           callee: named?.callee,
@@ -1407,13 +1705,27 @@ function scanJsTokens(
           argument: 0,
           shift: named?.shift,
           literals: [],
-          parseAs: named?.callee === "parseFromString" ? parseFromStringType(tokens, index, named.shift) : undefined,
+          parseAs:
+            named?.callee === "parseFromString"
+              ? parseFromStringType(tokens, index, named.shift)
+              : undefined,
           outer: call ? undefined : wrappedSinks(frame, previous),
           urlTarget: call ? undefined : wrappedUrlTarget(frame),
         });
-      } else if (text === "[" && isPunct(previous, "...") && frame.call && frame.callee !== undefined) {
+      } else if (
+        text === "[" &&
+        isPunct(previous, "...") &&
+        frame.call &&
+        frame.callee !== undefined
+      ) {
         // An array spread into a call: its elements are the call's arguments.
-        stack.push({ ...frame, literals: [...frame.literals], spread: true, sinks: undefined, deferred: undefined });
+        stack.push({
+          ...frame,
+          literals: [...frame.literals],
+          spread: true,
+          sinks: undefined,
+          deferred: undefined,
+        });
       } else if (text === "[" || text === "${") {
         // `[` after an operand reads a property; only an array literal is the value.
         const value = text === "${" || !endsOperand(previous);
@@ -1430,7 +1742,8 @@ function scanJsTokens(
         stack.push({ call: false, start: token.start, argument: 0, literals: [] });
       } else if (text === ",") {
         // `Object.assign(node, {value: ...})` sets an attribute node's value.
-        if (frame.callee === "assign" && frame.receiver === "Object" && frame.argument === 0) frame.assignTo = attributeSink(attributeNodeName(tokens, index - 1));
+        if (frame.callee === "assign" && frame.receiver === "Object" && frame.argument === 0)
+          frame.assignTo = attributeSink(attributeNodeName(tokens, index - 1));
         if (frame.root !== true) frame.argument += 1;
         frame.sinks = undefined;
       } else if (text === ";") {
@@ -1441,15 +1754,24 @@ function scanJsTokens(
         // An object key whose value the object then writes, as in
         // `Object.assign(element, {innerHTML: ...})`, named or computed from a
         // literal (`{['innerHTML']: ...}`).
-        const computed = isPunct(tokens[index - 1], "]") && isLiteral(tokens[index - 2]) && isPunct(tokens[index - 3], "[");
+        const computed =
+          isPunct(tokens[index - 1], "]") &&
+          isLiteral(tokens[index - 2]) &&
+          isPunct(tokens[index - 3], "[");
         const key = computed ? tokens[index - 2] : tokens[index - 1];
         const keyName = key?.kind === "name" ? key.text : isLiteral(key) ? key.value : undefined;
         const before = tokens[index - (computed ? 4 : 2)];
         if (keyName !== undefined && (isPunct(before, "{") || isPunct(before, ","))) {
           const assigned = stack[stack.length - 2];
-          if (URL_PROPERTIES.has(keyName) || keyName === "location") frame.sinks = { url: key!.start };
+          if (URL_PROPERTIES.has(keyName) || keyName === "location")
+            frame.sinks = { url: key!.start };
           else if (HTML_PROPERTIES.has(keyName)) frame.sinks = { html: key!.start };
-          else if (ATTRIBUTE_NODE_VALUES.has(keyName) && assigned?.assignTo !== undefined && assigned.argument > 0) frame.sinks = { [assigned.assignTo]: key!.start };
+          else if (
+            ATTRIBUTE_NODE_VALUES.has(keyName) &&
+            assigned?.assignTo !== undefined &&
+            assigned.argument > 0
+          )
+            frame.sinks = { [assigned.assignTo]: key!.start };
         }
       } else if (text === ")" || text === "]" || text === "}") {
         if (frame.root === true) frame.sinks = undefined;
@@ -1458,15 +1780,22 @@ function scanJsTokens(
           const call = stack[stack.length - 1]!;
           // The array's last element is the call's current argument; an
           // empty array adds none, and a trailing comma ends no element.
-          call.argument = isPunct(previous, "[") || isPunct(previous, ",") ? frame.argument - 1 : frame.argument;
+          call.argument =
+            isPunct(previous, "[") || isPunct(previous, ",") ? frame.argument - 1 : frame.argument;
           call.literals = frame.literals;
           call.deferred ??= frame.deferred;
         } else {
           stack.pop();
-          if (frame.deferred !== undefined && argumentOf(frame) === 0) note({ url: code.slice(frame.start, token.end) });
+          if (frame.deferred !== undefined && argumentOf(frame) === 0)
+            note({ url: code.slice(frame.start, token.end) });
           // An on* attribute node made to be set on an element later: its
           // value is not followed, so the attribute is refused.
-          const name = frame.callee === "createAttribute" ? frame.literals[0] : frame.callee === "createAttributeNS" ? frame.literals[1] : undefined;
+          const name =
+            frame.callee === "createAttribute"
+              ? frame.literals[0]
+              : frame.callee === "createAttributeNS"
+                ? frame.literals[1]
+                : undefined;
           if (attributeSink(name) === "handler") note({ url: code.slice(frame.start, token.end) });
         }
       }
@@ -1494,29 +1823,61 @@ function scanJsTokens(
     const end = tokens[chainEnd]!.end;
     frame = stack[stack.length - 1]!;
 
-    if (frame.call && (isPunct(previous, "(") || isPunct(previous, ",") || (frame.spread === true && isPunct(previous, "[")))) {
+    if (
+      frame.call &&
+      (isPunct(previous, "(") ||
+        isPunct(previous, ",") ||
+        (frame.spread === true && isPunct(previous, "[")))
+    ) {
       const argument = argumentOf(frame);
-      if (argument >= 0 && argument < LITERAL_ARGUMENTS && chainEnd === index && (token.kind === "string" || !token.substituted)) frame.literals[argument] = token.value;
-      if (frame.callee === "replace" && argument === 0 && frame.receiver !== "location" && isUnsafeUrl(url)) frame.deferred = url;
+      if (
+        argument >= 0 &&
+        argument < LITERAL_ARGUMENTS &&
+        chainEnd === index &&
+        (token.kind === "string" || !token.substituted)
+      )
+        frame.literals[argument] = token.value;
+      if (
+        frame.callee === "replace" &&
+        argument === 0 &&
+        frame.receiver !== "location" &&
+        isUnsafeUrl(url)
+      )
+        frame.deferred = url;
     }
     // A tagged template is a call of its tag with the template's text, which
     // String.raw (and any other tag) may pass on raw.
     let tag: SinkSet | undefined;
     let raw: string | undefined;
-    if (token.kind === "template" && (previous?.kind === "name" || isPunct(previous, "]") || isPunct(previous, ")"))) {
+    if (
+      token.kind === "template" &&
+      (previous?.kind === "name" || isPunct(previous, "]") || isPunct(previous, ")"))
+    ) {
       const named = calleeBefore(tokens, index - 1);
       if (named !== undefined || previous.kind !== "name") {
         // A tag gets the template's strings first and its substitutions after,
         // so a tagged `parseFromString` is given a type only by a substitution.
-        if (named !== undefined) tag = argumentSinks({ ...named, argument: 0, literals: [], parseAs: token.substituted === true ? "any" : "none" });
-        if (!token.substituted && chainEnd === index) raw = code.slice(token.start + 1, token.end - 1);
+        if (named !== undefined)
+          tag = argumentSinks({
+            ...named,
+            argument: 0,
+            literals: [],
+            parseAs: token.substituted === true ? "any" : "none",
+          });
+        if (!token.substituted && chainEnd === index)
+          raw = code.slice(token.start + 1, token.end - 1);
       }
     }
     let sinks = joinSinks(frameSinks(frame), tag);
     const urlTarget = sinks?.url ?? frame.urlTarget;
     if (urlTarget !== undefined) {
       const piece = urlPieces.get(urlTarget);
-      if (piece === undefined) urlPieces.set(urlTarget, { url, open: sinks?.url !== undefined && !afterPlus && urlOpen, last: chainEnd });
+      if (piece === undefined)
+        urlPieces.set(urlTarget, {
+          url,
+          open: sinks?.url !== undefined && !afterPlus && urlOpen,
+          last: chainEnd,
+        });
       else {
         if (piece.open && piece.url.length < URL_PREFIX_LENGTH) {
           const joins = joinsUrlPieces(tokens, piece.last, index);
@@ -1529,13 +1890,15 @@ function scanJsTokens(
         piece.last = chainEnd;
       }
     }
-    if (afterPlus && sinks?.url !== undefined) sinks = joinSinks({ html: sinks.html, handler: sinks.handler, xml: sinks.xml });
+    if (afterPlus && sinks?.url !== undefined)
+      sinks = joinSinks({ html: sinks.html, handler: sinks.handler, xml: sinks.xml });
     if (sinks === undefined) {
       index = chainEnd;
       continue;
     }
     if (sinks.url !== undefined) {
-      if (isUnsafeUrl(url) || (raw !== undefined && isUnsafeUrl(raw))) note({ url: code.slice(sinks.url, end) });
+      if (isUnsafeUrl(url) || (raw !== undefined && isUnsafeUrl(raw)))
+        note({ url: code.slice(sinks.url, end) });
     }
     report = chainEnd > index ? noteJoined : note;
     if (sinks.html !== undefined) {
@@ -1580,12 +1943,16 @@ function scanJsTokens(
 const JOINED_EXCERPT_MARK = "\0";
 
 function joinedExcerpt(excerpt: string | undefined): string | undefined {
-  return excerpt === undefined || excerpt.startsWith(JOINED_EXCERPT_MARK) ? excerpt : JOINED_EXCERPT_MARK + excerpt;
+  return excerpt === undefined || excerpt.startsWith(JOINED_EXCERPT_MARK)
+    ? excerpt
+    : JOINED_EXCERPT_MARK + excerpt;
 }
 
 /** A finding's excerpt as written, and whether a script joined it from strings. */
 export function readExcerpt(excerpt: string): { text: string; joined: boolean } {
-  return excerpt.startsWith(JOINED_EXCERPT_MARK) ? { text: excerpt.slice(JOINED_EXCERPT_MARK.length), joined: true } : { text: excerpt, joined: false };
+  return excerpt.startsWith(JOINED_EXCERPT_MARK)
+    ? { text: excerpt.slice(JOINED_EXCERPT_MARK.length), joined: true }
+    : { text: excerpt, joined: false };
 }
 
 /** How much of a URL is read to tell whether it is unsafe. */
@@ -1597,9 +1964,14 @@ const URL_PREFIX_LENGTH = 64;
  * with each substitution that is a single literal filled in, up to the first
  * one that is not.
  */
-function literalUrl(code: string, tokens: readonly JsToken[], at: number): { url: string; open: boolean } {
+function literalUrl(
+  code: string,
+  tokens: readonly JsToken[],
+  at: number,
+): { url: string; open: boolean } {
   const token = tokens[at]!;
-  if (token.kind === "string" || token.substituted !== true) return { url: token.value ?? "", open: true };
+  if (token.kind === "string" || token.substituted !== true)
+    return { url: token.value ?? "", open: true };
   let url = "";
   let from = token.start + 1;
   for (let index = at + 1; url.length < URL_PREFIX_LENGTH; index += 3) {
@@ -1608,10 +1980,12 @@ function literalUrl(code: string, tokens: readonly JsToken[], at: number): { url
     url += cookTemplateText(code, from, dollar.start);
     const literal = tokens[index + 1];
     const close = tokens[index + 2];
-    if (!isLiteral(literal) || literal.substituted === true || !isPunct(close, "}")) return { url, open: false };
+    if (!isLiteral(literal) || literal.substituted === true || !isPunct(close, "}"))
+      return { url, open: false };
     url += literal.value ?? "";
     from = close.end;
-    if (close.closesTemplate === true) return { url: url + cookTemplateText(code, from, Math.max(from, token.end - 1)), open: true };
+    if (close.closesTemplate === true)
+      return { url: url + cookTemplateText(code, from, Math.max(from, token.end - 1)), open: true };
   }
   return { url, open: true };
 }
@@ -1694,7 +2068,13 @@ const modes = (() => {
   const body = after("<p>");
   const text = after("<style>");
   const select: ReadonlySet<number> = new Set([after("<select>"), after("<table><td><select>")]);
-  if (typeof body !== "number" || select.size !== 2 || select.has(body) || select.has(text) || text === body) {
+  if (
+    typeof body !== "number" ||
+    select.size !== 2 ||
+    select.has(body) ||
+    select.has(text) ||
+    text === body
+  ) {
     throw new Error("parse5 no longer keeps the insertion modes the HTML check needs.");
   }
   return { body, text, select };
@@ -1744,28 +2124,34 @@ export class HtmlScanner {
       createElement: (tagName, namespaceURI, attrs) => {
         this.elements += 1;
         if (this.elements > MAX_HTML_ELEMENTS) {
-          throw new StructureLimit(`it builds more than ${MAX_HTML_ELEMENTS.toLocaleString("en-US")} elements`);
+          throw new StructureLimit(
+            `it builds more than ${MAX_HTML_ELEMENTS.toLocaleString("en-US")} elements`,
+          );
         }
         if (this.parser.openElements.stackTop + 1 >= MAX_HTML_NESTING_DEPTH) {
           throw new StructureLimit(`elements nest more than ${MAX_HTML_NESTING_DEPTH} deep`);
         }
         const element = defaultTreeAdapter.createElement(tagName, namespaceURI, attrs);
         // An element built from a start tag was checked when the tag was read.
-        if (!this.checkedAttributes.has(attrs)) this.checkTag(element.tagName, element.attrs, this.committed, true);
+        if (!this.checkedAttributes.has(attrs))
+          this.checkTag(element.tagName, element.attrs, this.committed, true);
         const name = element.tagName.toLowerCase();
         if (name === "script" || name === "style") this.rawText.add(element);
         return element;
       },
       adoptAttributes: (recipient, attrs) => {
-        if (recipient.attrs.length + attrs.length > MAX_HTML_ELEMENT_ATTRIBUTES) throw this.attributeLimit();
+        if (recipient.attrs.length + attrs.length > MAX_HTML_ELEMENT_ATTRIBUTES)
+          throw this.attributeLimit();
         defaultTreeAdapter.adoptAttributes(recipient, attrs);
         this.checkTag(recipient.tagName, recipient.attrs, this.committed, true);
       },
       onItemPush: (item) => {
-        if (item.namespaceURI !== htmlSpec.NS.HTML) this.openForeign.set(item.tagName, (this.openForeign.get(item.tagName) ?? 0) + 1);
+        if (item.namespaceURI !== htmlSpec.NS.HTML)
+          this.openForeign.set(item.tagName, (this.openForeign.get(item.tagName) ?? 0) + 1);
       },
       onItemPop: (item) => {
-        const count = item.namespaceURI === htmlSpec.NS.HTML ? undefined : this.openForeign.get(item.tagName);
+        const count =
+          item.namespaceURI === htmlSpec.NS.HTML ? undefined : this.openForeign.get(item.tagName);
         if (count === 1) this.openForeign.delete(item.tagName);
         else if (count !== undefined) this.openForeign.set(item.tagName, count - 1);
         if (this.rawText.delete(item)) this.checkRawText(item);
@@ -1797,7 +2183,8 @@ export class HtmlScanner {
     // keeps: Chromium's customizable <select> builds the elements inside it,
     // where parse5 ignores every start tag but <option>, <optgroup> and <hr>.
     const onStartTag = this.parser.onStartTag;
-    if (typeof onStartTag !== "function") throw new Error("parse5 no longer exposes the start-tag hook the HTML check needs.");
+    if (typeof onStartTag !== "function")
+      throw new Error("parse5 no longer exposes the start-tag hook the HTML check needs.");
     const parser = this.parser as unknown as ParserModes;
     this.parser.onStartTag = (token) => {
       this.checkTag(token.tagName, token.attrs, this.committed, true);
@@ -1806,13 +2193,26 @@ export class HtmlScanner {
       // in the body, so what follows is read as SVG, MathML or CSS. parse5
       // drops them there, so they are built by its in-body rules instead.
       const select = parser.insertionMode;
-      if (SELECT_RAW_TEXT.has(token.tagName) && modes.select.has(select) && !parser.shouldProcessStartTagTokenInForeignContent(token)) {
+      if (
+        SELECT_RAW_TEXT.has(token.tagName) &&
+        modes.select.has(select) &&
+        !parser.shouldProcessStartTagTokenInForeignContent(token)
+      ) {
         throw new StructureLimit(`<${token.tagName}> ${SELECT_RAW_TEXT_LIMIT}`);
       }
-      if (modes.select.has(select) && this.foreignAboveSelect() && (!parser.shouldProcessStartTagTokenInForeignContent(token) || foreignContent.causesExit(token))) {
+      if (
+        modes.select.has(select) &&
+        this.foreignAboveSelect() &&
+        (!parser.shouldProcessStartTagTokenInForeignContent(token) ||
+          foreignContent.causesExit(token))
+      ) {
         throw new StructureLimit(`<${token.tagName}> ${SELECT_FOREIGN_LIMIT}`);
       }
-      if (SELECT_BODY_CONTENT.has(token.tagName) && modes.select.has(select) && !parser.shouldProcessStartTagTokenInForeignContent(token)) {
+      if (
+        SELECT_BODY_CONTENT.has(token.tagName) &&
+        modes.select.has(select) &&
+        !parser.shouldProcessStartTagTokenInForeignContent(token)
+      ) {
         parser.insertionMode = modes.body;
         onStartTag.call(this.parser, token);
         // A <style> switches to text parsing, which returns to the mode it left.
@@ -1841,18 +2241,26 @@ export class HtmlScanner {
     // browser matches only HTML elements and ignores it (the <title> is
     // special), reading what follows as HTML in the <span>, so it is refused.
     const onEndTag = this.parser.onEndTag;
-    if (typeof onEndTag !== "function") throw new Error("parse5 no longer exposes the end-tag hook the HTML check needs.");
+    if (typeof onEndTag !== "function")
+      throw new Error("parse5 no longer exposes the end-tag hook the HTML check needs.");
     this.parser.onEndTag = (token) => {
       if (!this.closing && modes.select.has(parser.insertionMode)) {
         const { openElements } = this.parser;
         const tag = token.tagName;
         const kept = this.foreignAboveSelect()
           ? (tag !== "p" && tag !== "br" && this.endsForeignElement(tag)) ||
-            (tag === "select" && openElements.hasInScope(htmlSpec.TAG_ID.SELECT) && openElements.hasInSelectScope(htmlSpec.TAG_ID.SELECT))
+            (tag === "select" &&
+              openElements.hasInScope(htmlSpec.TAG_ID.SELECT) &&
+              openElements.hasInSelectScope(htmlSpec.TAG_ID.SELECT))
           : tag !== "select" || openElements.hasInScope(htmlSpec.TAG_ID.SELECT);
         if (!kept) throw new StructureLimit(`</${tag}> ${SELECT_FOREIGN_LIMIT}`);
       }
-      if (!this.closing && token.tagName !== "p" && token.tagName !== "br" && this.endsForeignAroundHtml(token)) {
+      if (
+        !this.closing &&
+        token.tagName !== "p" &&
+        token.tagName !== "br" &&
+        this.endsForeignAroundHtml(token)
+      ) {
         throw new StructureLimit(`</${token.tagName}> ${FOREIGN_END_LIMIT}`);
       }
       onEndTag.call(this.parser, token);
@@ -1861,10 +2269,15 @@ export class HtmlScanner {
     // so a tag's attribute count is capped as it is read.
     const tokenizer = this.parser.tokenizer as unknown as TokenizerInternals;
     const leaveAttributeName = tokenizer._leaveAttrName;
-    if (typeof leaveAttributeName !== "function") throw new Error("parse5 no longer exposes the attribute hook the HTML check needs.");
+    if (typeof leaveAttributeName !== "function")
+      throw new Error("parse5 no longer exposes the attribute hook the HTML check needs.");
     tokenizer._leaveAttrName = () => {
       const token = tokenizer.currentToken;
-      if (token?.type === Token.TokenType.START_TAG && token.attrs.length >= MAX_HTML_ELEMENT_ATTRIBUTES) throw this.attributeLimit();
+      if (
+        token?.type === Token.TokenType.START_TAG &&
+        token.attrs.length >= MAX_HTML_ELEMENT_ATTRIBUTES
+      )
+        throw this.attributeLimit();
       leaveAttributeName.call(tokenizer);
     };
   }
@@ -1902,8 +2315,15 @@ export class HtmlScanner {
     const findings = { ...this.committed };
     const pending = (this.parser.tokenizer as unknown as TokenizerInternals).currentToken;
     if (pending?.type === Token.TokenType.START_TAG) {
-      const size = pending.attrs.reduce((total, attribute) => total + attribute.name.length + attribute.value.length, pending.tagName.length);
-      if (pending !== this.pending?.tag || size <= PENDING_TAG_REREAD_SIZE || size >= 2 * this.pending.size) {
+      const size = pending.attrs.reduce(
+        (total, attribute) => total + attribute.name.length + attribute.value.length,
+        pending.tagName.length,
+      );
+      if (
+        pending !== this.pending?.tag ||
+        size <= PENDING_TAG_REREAD_SIZE ||
+        size >= 2 * this.pending.size
+      ) {
         const found: HtmlFindings = {};
         this.checkTag(pending.tagName, pending.attrs, found, false);
         this.pending = { tag: pending, size, found };
@@ -1927,12 +2347,21 @@ export class HtmlScanner {
     let size = tokenizer.currentCharacterToken?.chars.length ?? 0;
     if (token?.type === Token.TokenType.START_TAG || token?.type === Token.TokenType.END_TAG) {
       // The attribute being read is in `attrs` once its name ends; before that only `currentAttr` has it.
-      const attributes = token.attrs.reduce((total, attribute) => total + attribute.name.length + attribute.value.length, 0);
-      size = Math.max(size, token.tagName.length + attributes + (tokenizer.currentAttr?.name.length ?? 0));
+      const attributes = token.attrs.reduce(
+        (total, attribute) => total + attribute.name.length + attribute.value.length,
+        0,
+      );
+      size = Math.max(
+        size,
+        token.tagName.length + attributes + (tokenizer.currentAttr?.name.length ?? 0),
+      );
     } else if (token?.type === Token.TokenType.COMMENT) {
       size = Math.max(size, token.data.length);
     } else if (token?.type === Token.TokenType.DOCTYPE) {
-      size = Math.max(size, (token.name?.length ?? 0) + (token.publicId?.length ?? 0) + (token.systemId?.length ?? 0));
+      size = Math.max(
+        size,
+        (token.name?.length ?? 0) + (token.publicId?.length ?? 0) + (token.systemId?.length ?? 0),
+      );
     }
     return size;
   }
@@ -1946,7 +2375,11 @@ export class HtmlScanner {
     if (!this.finished) {
       const pending = { ...this.committed };
       const tag = (this.parser.tokenizer as unknown as TokenizerInternals).currentToken;
-      if (!this.complete() && this.committed.limit === undefined && tag?.type === Token.TokenType.START_TAG) {
+      if (
+        !this.complete() &&
+        this.committed.limit === undefined &&
+        tag?.type === Token.TokenType.START_TAG
+      ) {
         this.checkTag(tag.tagName, tag.attrs, pending, false);
       }
       this.run(() => this.parser.tokenizer.write("", true));
@@ -1975,7 +2408,9 @@ export class HtmlScanner {
   private fosterParent(): void {
     this.fosterParented += 1;
     if (this.fosterParented > MAX_HTML_FOSTER_PARENTED) {
-      throw new StructureLimit(`it moves more than ${MAX_HTML_FOSTER_PARENTED.toLocaleString("en-US")} pieces of content out of tables`);
+      throw new StructureLimit(
+        `it moves more than ${MAX_HTML_FOSTER_PARENTED.toLocaleString("en-US")} pieces of content out of tables`,
+      );
     }
   }
 
@@ -2023,7 +2458,11 @@ export class HtmlScanner {
         if (namespace === htmlSpec.NS.HTML) foreignRun = false;
         else if (treeAdapter.getTagName(element).toLowerCase() === token.tagName) return false;
       }
-      if (token.tagID === id && (id !== htmlSpec.TAG_ID.UNKNOWN || treeAdapter.getTagName(element) === token.tagName)) return namespace !== htmlSpec.NS.HTML;
+      if (
+        token.tagID === id &&
+        (id !== htmlSpec.TAG_ID.UNKNOWN || treeAdapter.getTagName(element) === token.tagName)
+      )
+        return namespace !== htmlSpec.NS.HTML;
       if (htmlSpec.SPECIAL_ELEMENTS[namespace].has(id)) return false;
     }
     return false;
@@ -2037,7 +2476,8 @@ export class HtmlScanner {
     if (this.openForeign.size === 0) return false;
     const { openElements, treeAdapter } = this.parser;
     for (let index = openElements.stackTop; index > 0; index -= 1) {
-      if (treeAdapter.getNamespaceURI(openElements.items[index] as Element) !== htmlSpec.NS.HTML) return true;
+      if (treeAdapter.getNamespaceURI(openElements.items[index] as Element) !== htmlSpec.NS.HTML)
+        return true;
       if (openElements.tagIDs[index] === htmlSpec.TAG_ID.SELECT) return false;
     }
     return false;
@@ -2051,7 +2491,12 @@ export class HtmlScanner {
     return this.committed.embed !== undefined && this.committed.url !== undefined;
   }
 
-  private checkTag(tagName: string, attributes: readonly Token.Attribute[], into: HtmlFindings, settled: boolean): void {
+  private checkTag(
+    tagName: string,
+    attributes: readonly Token.Attribute[],
+    into: HtmlFindings,
+    settled: boolean,
+  ): void {
     const tag = tagName.toLowerCase();
     const names = attributes.map(attributeName);
     if (
@@ -2065,7 +2510,10 @@ export class HtmlScanner {
     if (into.url !== undefined) return;
     const smilTarget =
       SMIL_ELEMENTS.has(tag) &&
-      attributes.some((attribute, index) => names[index] === "attributename" && SMIL_HREF_TARGET.test(attribute.value.trim()));
+      attributes.some(
+        (attribute, index) =>
+          names[index] === "attributename" && SMIL_HREF_TARGET.test(attribute.value.trim()),
+      );
     for (const [index, attribute] of attributes.entries()) {
       const name = names[index]!;
       if (URL_ATTRIBUTES.has(name)) {

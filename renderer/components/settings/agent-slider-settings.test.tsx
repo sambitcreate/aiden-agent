@@ -58,7 +58,13 @@ function threeStops(): Slider {
     stops: [
       { id: "fast", label: "Fast", providerId: "acme", model: "fast-model" },
       { id: "mid", label: "Balanced", providerId: "acme", model: "mid-model" },
-      { id: "smart", label: "Smart", providerId: "acme", model: "smart-model", thinkingLevel: "medium" },
+      {
+        id: "smart",
+        label: "Smart",
+        providerId: "acme",
+        model: "smart-model",
+        thinkingLevel: "medium",
+      },
     ],
   };
 }
@@ -118,7 +124,8 @@ function deferred<T>() {
 }
 
 const isHome = (label: string) =>
-  screen.getByRole("radio", { name: `Home stop: ${label}` }).getAttribute("aria-checked") === "true";
+  screen.getByRole("radio", { name: `Home stop: ${label}` }).getAttribute("aria-checked") ===
+  "true";
 
 async function stopNames(): Promise<string[]> {
   const inputs = await screen.findAllByRole("textbox", { name: /^Name of stop/u });
@@ -131,7 +138,10 @@ test("each stop is a row with its name, model and effort, and the preview rests 
   await screen.findByRole("button", { name: "Model for Smart: Smart Model. Choose a model." });
   const preview = screen.getByRole("slider", { name: "Agent Slider" });
   assert.match(preview.getAttribute("aria-valuetext") ?? "", /^Balanced, Mid Model/u);
-  assert.equal(screen.getByRole("radio", { name: "Home stop: Balanced" }).getAttribute("aria-checked"), "true");
+  assert.equal(
+    screen.getByRole("radio", { name: "Home stop: Balanced" }).getAttribute("aria-checked"),
+    "true",
+  );
 });
 
 test("at 3 stops Remove does nothing and says why", async () => {
@@ -176,17 +186,30 @@ test("removing a stop above 3 saves without it, and a removed home moves to the 
   slider.stops.push({ id: "spare", label: "Spare" });
   const { lastSaved } = mount({ agentSlider: slider });
   fireEvent.click(await screen.findByRole("button", { name: "Remove Balanced" }));
-  await waitFor(() => assert.deepEqual(lastSaved()?.stops.map((stop) => stop.label), ["Fast", "Smart", "Spare"]));
+  await waitFor(() =>
+    assert.deepEqual(
+      lastSaved()?.stops.map((stop) => stop.label),
+      ["Fast", "Smart", "Spare"],
+    ),
+  );
   assert.equal(lastSaved()?.homeStopId, "smart");
 });
 
 test("the move buttons reorder by keyboard, keep focus and announce the new place", async () => {
   const { lastSaved } = mount({ agentSlider: threeStops() });
   const down = await screen.findByRole("button", { name: "Move Fast down" });
-  assert.equal(screen.getByRole("button", { name: "Move Fast up" }).getAttribute("aria-disabled"), "true");
+  assert.equal(
+    screen.getByRole("button", { name: "Move Fast up" }).getAttribute("aria-disabled"),
+    "true",
+  );
   down.focus();
   fireEvent.click(down);
-  await waitFor(() => assert.deepEqual(lastSaved()?.stops.map((stop) => stop.id), ["mid", "fast", "smart"]));
+  await waitFor(() =>
+    assert.deepEqual(
+      lastSaved()?.stops.map((stop) => stop.id),
+      ["mid", "fast", "smart"],
+    ),
+  );
   assert.deepEqual(await stopNames(), ["Balanced", "Fast", "Smart"]);
   await waitFor(() =>
     assert.equal(document.activeElement, screen.getByRole("button", { name: "Move Fast down" })),
@@ -226,7 +249,10 @@ test("choosing a home stop saves it, and Undo in the toast puts the old home bac
   fireEvent.click(within(toastElement).getByRole("button", { name: "Undo" }));
   await waitFor(() => assert.equal(saves.length, 2));
   assert.deepEqual(lastSaved(), threeStops());
-  assert.equal(screen.getByRole("radio", { name: "Home stop: Balanced" }).getAttribute("aria-checked"), "true");
+  assert.equal(
+    screen.getByRole("radio", { name: "Home stop: Balanced" }).getAttribute("aria-checked"),
+    "true",
+  );
 });
 
 test("Undo after the slider changed elsewhere saves nothing and says so", async () => {
@@ -246,7 +272,10 @@ test("Undo after the slider changed elsewhere saves nothing and says so", async 
   fireEvent.click(undo);
   assert.ok(await screen.findByText("Can’t undo — the slider changed since"));
   assert.equal(saves.length, 1);
-  assert.equal(screen.getByRole("radio", { name: "Home stop: Fast" }).getAttribute("aria-checked"), "true");
+  assert.equal(
+    screen.getByRole("radio", { name: "Home stop: Fast" }).getAttribute("aria-checked"),
+    "true",
+  );
 });
 
 test("the effort select lists only the model's levels and is absent for a model without them", async () => {
@@ -331,7 +360,9 @@ test("Local to cloud puts the first local model, an empty Balanced and the new-c
   // A template is one action: Undo brings the whole old slider back.
   const toastText = await screen.findByText("Applied Local to cloud");
   fireEvent.click(
-    within(toastText.closest("[data-sonner-toast]") as HTMLElement).getByRole("button", { name: "Undo" }),
+    within(toastText.closest("[data-sonner-toast]") as HTMLElement).getByRole("button", {
+      name: "Undo",
+    }),
   );
   await waitFor(() => assert.deepEqual(lastSaved(), threeStops()));
 });
@@ -364,7 +395,9 @@ test("an unreadable slider is explained and replaced only after confirming", asy
 
 test("an older save that fails while a newer one is queued neither reports nor undoes the newer edit", async () => {
   const first = deferred<boolean>();
-  const { saves, persisted } = mount({ agentSlider: threeStops() }, (index) => (index === 0 ? first.promise : true));
+  const { saves, persisted } = mount({ agentSlider: threeStops() }, (index) =>
+    index === 0 ? first.promise : true,
+  );
   fireEvent.click(await screen.findByRole("radio", { name: "Home stop: Smart" }));
   await waitFor(() => assert.equal(saves.length, 1));
   fireEvent.click(screen.getByRole("radio", { name: "Home stop: Fast" }));

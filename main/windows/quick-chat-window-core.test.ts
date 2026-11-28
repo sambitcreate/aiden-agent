@@ -55,7 +55,11 @@ test("computeQuickChatTransitionBounds anchors bottom edge and horizontal center
   // 13" MacBook Air work area: expanding to starter-popover and closing back must not drift downward.
   const laptopWorkArea = { x: 0, y: 25, width: 1440, height: 800 };
   const laptopStarter = computeQuickChatInitialBounds(laptopWorkArea, "starter");
-  const laptopPopover = computeQuickChatTransitionBounds(laptopStarter, laptopWorkArea, "starter-popover");
+  const laptopPopover = computeQuickChatTransitionBounds(
+    laptopStarter,
+    laptopWorkArea,
+    "starter-popover",
+  );
   assert.equal(laptopPopover.y + laptopPopover.height, laptopStarter.y + laptopStarter.height);
   const laptopClosed = computeQuickChatTransitionBounds(laptopPopover, laptopWorkArea, "starter");
   assert.deepEqual(laptopClosed, laptopStarter);
@@ -63,32 +67,60 @@ test("computeQuickChatTransitionBounds anchors bottom edge and horizontal center
 
 test("clampBoundsToWorkArea shrinks and clamps gracefully on small displays", () => {
   const smallWorkArea = { x: 0, y: 0, width: 480, height: 500 };
-  const clamped = clampBoundsToWorkArea({ x: -100, y: -50, width: 560, height: 640 }, smallWorkArea);
+  const clamped = clampBoundsToWorkArea(
+    { x: -100, y: -50, width: 560, height: 640 },
+    smallWorkArea,
+  );
   assert.deepEqual(clamped, { x: 0, y: 0, width: 480, height: 500 });
 });
 
 test("shouldHideQuickChatOnBlur hides State 1, respects suppression, and honors State 2 keepOpenOnBlur", () => {
   // Suppressed blur never hides.
   assert.equal(
-    shouldHideQuickChatOnBlur({ mode: "starter", keepOpenOnBlur: true, now: 1000, suppressBlurUntil: 1500 }),
+    shouldHideQuickChatOnBlur({
+      mode: "starter",
+      keepOpenOnBlur: true,
+      now: 1000,
+      suppressBlurUntil: 1500,
+    }),
     false,
   );
   // State 1 hides on blur once suppression expires.
   assert.equal(
-    shouldHideQuickChatOnBlur({ mode: "starter", keepOpenOnBlur: true, now: 1500, suppressBlurUntil: 1500 }),
+    shouldHideQuickChatOnBlur({
+      mode: "starter",
+      keepOpenOnBlur: true,
+      now: 1500,
+      suppressBlurUntil: 1500,
+    }),
     true,
   );
   assert.equal(
-    shouldHideQuickChatOnBlur({ mode: "starter-popover", keepOpenOnBlur: true, now: 2000, suppressBlurUntil: 1500 }),
+    shouldHideQuickChatOnBlur({
+      mode: "starter-popover",
+      keepOpenOnBlur: true,
+      now: 2000,
+      suppressBlurUntil: 1500,
+    }),
     true,
   );
   // State 2 stays pinned when keepOpenOnBlur is true, hides when false.
   assert.equal(
-    shouldHideQuickChatOnBlur({ mode: "modal", keepOpenOnBlur: true, now: 2000, suppressBlurUntil: 1500 }),
+    shouldHideQuickChatOnBlur({
+      mode: "modal",
+      keepOpenOnBlur: true,
+      now: 2000,
+      suppressBlurUntil: 1500,
+    }),
     false,
   );
   assert.equal(
-    shouldHideQuickChatOnBlur({ mode: "modal", keepOpenOnBlur: false, now: 2000, suppressBlurUntil: 1500 }),
+    shouldHideQuickChatOnBlur({
+      mode: "modal",
+      keepOpenOnBlur: false,
+      now: 2000,
+      suppressBlurUntil: 1500,
+    }),
     true,
   );
 });

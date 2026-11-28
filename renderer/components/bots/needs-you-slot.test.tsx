@@ -3,7 +3,13 @@ import assert from "node:assert/strict";
 import { afterEach, test } from "node:test";
 import { act } from "react";
 import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
-import { NeedsYouAnnouncer, NeedsYouFocusScope, NeedsYouHeader, useNeedsYouSlot, type NeedsYouItem } from "./needs-you-slot";
+import {
+  NeedsYouAnnouncer,
+  NeedsYouFocusScope,
+  NeedsYouHeader,
+  useNeedsYouSlot,
+  type NeedsYouItem,
+} from "./needs-you-slot";
 
 afterEach(cleanup);
 
@@ -43,9 +49,18 @@ const position = () => {
   const header = screen.queryByRole("navigation", { name: "Needs you" });
   return header ? within(header).getByText(/^\d+ of \d+$/u).textContent : null;
 };
-const next = () => fireEvent.click(within(screen.getByRole("navigation", { name: "Needs you" })).getByRole("button", { name: "Next" }));
+const next = () =>
+  fireEvent.click(
+    within(screen.getByRole("navigation", { name: "Needs you" })).getByRole("button", {
+      name: "Next",
+    }),
+  );
 const previous = () =>
-  fireEvent.click(within(screen.getByRole("navigation", { name: "Needs you" })).getByRole("button", { name: "Previous" }));
+  fireEvent.click(
+    within(screen.getByRole("navigation", { name: "Needs you" })).getByRole("button", {
+      name: "Previous",
+    }),
+  );
 
 test("whatever order they arrive in, take control shows first, then approvals, the folder request, the plan, and the question last", () => {
   render(
@@ -65,21 +80,27 @@ test("whatever order they arrive in, take control shows first, then approvals, t
     seen.push([position(), shown()]);
     next();
   }
-  assert.deepEqual(seen, [
-    ["1 of 6", "Sign in to github.com"],
-    ["2 of 6", "Send email"],
-    ["3 of 6", "Run on your Mac?"],
-    ["4 of 6", "Use ~/Documents"],
-    ["5 of 6", "Approve this plan?"],
-    ["6 of 6", "Which colour?"],
-  ], "two approvals keep the order they came in");
+  assert.deepEqual(
+    seen,
+    [
+      ["1 of 6", "Sign in to github.com"],
+      ["2 of 6", "Send email"],
+      ["3 of 6", "Run on your Mac?"],
+      ["4 of 6", "Use ~/Documents"],
+      ["5 of 6", "Approve this plan?"],
+      ["6 of 6", "Which colour?"],
+    ],
+    "two approvals keep the order they came in",
+  );
   assert.equal(shown(), "Sign in to github.com", "Next from the last wraps to the first");
   previous();
   assert.equal(shown(), "Which colour?", "Previous from the first wraps to the last");
 });
 
 test("one item shows alone with no counter and nothing to announce; none shows nothing", () => {
-  const { rerender } = render(<Slot items={[{ key: "a", kind: "approval", text: "Send email" }]} />);
+  const { rerender } = render(
+    <Slot items={[{ key: "a", kind: "approval", text: "Send email" }]} />,
+  );
   assert.equal(shown(), "Send email");
   assert.equal(position(), null);
   assert.equal(screen.queryByRole("button", { name: "Next" }), null);
@@ -95,7 +116,11 @@ test("the slot stays on the item the person moved to as others arrive, and retur
   const { rerender } = render(<Slot items={[take, approval]} />);
   next();
   assert.equal(shown(), "Send email");
-  assert.equal(screen.getByRole("status").textContent, "Needs you, 2 of 2", "where it sits is announced");
+  assert.equal(
+    screen.getByRole("status").textContent,
+    "Needs you, 2 of 2",
+    "where it sits is announced",
+  );
   rerender(<Slot items={[take, approval, plan]} />);
   assert.equal(shown(), "Send email", "a new card does not pull the slot away");
   assert.equal(position(), "2 of 3");
@@ -115,7 +140,10 @@ test("Previous and Next are named buttons a keyboard reaches", () => {
   );
   const header = screen.getByRole("navigation", { name: "Needs you" });
   const buttons = within(header).getAllByRole("button");
-  assert.deepEqual(buttons.map((button) => button.getAttribute("aria-label")), ["Previous", "Next"]);
+  assert.deepEqual(
+    buttons.map((button) => button.getAttribute("aria-label")),
+    ["Previous", "Next"],
+  );
   for (const button of buttons) assert.notEqual(button.getAttribute("tabindex"), "-1");
 });
 
@@ -129,10 +157,18 @@ test("the card on show stays while others arrive, even before the person moves: 
   rerender(<Slot items={[question, approval, take]} />);
   assert.equal(shown(), "Which colour?", "the half-answered question is never swapped away");
   assert.equal(position(), "3 of 3", "it keeps its place in the order; the count says more wait");
-  assert.equal(screen.getByRole("status").textContent, "", "nothing is announced while the card on show stays");
+  assert.equal(
+    screen.getByRole("status").textContent,
+    "",
+    "nothing is announced while the card on show stays",
+  );
   rerender(<Slot items={[approval, take]} />);
   assert.equal(shown(), "Enter the code", "once it is answered, the first still waiting comes up");
-  assert.equal(screen.getByRole("status").textContent, "Needs you, 1 of 2", "and that change is announced");
+  assert.equal(
+    screen.getByRole("status").textContent,
+    "Needs you, 1 of 2",
+    "and that change is announced",
+  );
 });
 
 test("answering the card that held focus moves focus to the card that takes its place; focus the person put elsewhere stays", () => {
@@ -143,10 +179,17 @@ test("answering the card that held focus moves focus to the card that takes its 
   screen.getByRole("button", { name: "Answer: Enter the code" }).focus();
   // The answer lands: that card, and the button focus was on, go away.
   rerender(<Slot items={[approval, plan]} />);
-  assert.equal(document.activeElement, screen.getByRole("group", { name: "Send email" }), "focus lands on the next card, not the page");
+  assert.equal(
+    document.activeElement,
+    screen.getByRole("group", { name: "Send email" }),
+    "focus lands on the next card, not the page",
+  );
   screen.getByRole("button", { name: "Elsewhere in the chat" }).focus();
   rerender(<Slot items={[plan]} />);
-  assert.equal(document.activeElement, screen.getByRole("button", { name: "Elsewhere in the chat" }));
+  assert.equal(
+    document.activeElement,
+    screen.getByRole("button", { name: "Elsewhere in the chat" }),
+  );
 });
 
 test("answering the last card from inside the slot hands focus to the composer", () => {
@@ -154,7 +197,11 @@ test("answering the last card from inside the slot hands focus to the composer",
   const { rerender } = render(<Slot items={[take]} />);
   screen.getByRole("button", { name: "Answer: Enter the code" }).focus();
   rerender(<Slot items={[]} />);
-  assert.equal(document.activeElement, screen.getByRole("textbox", { name: "Message" }), "focus goes to the composer, not the page");
+  assert.equal(
+    document.activeElement,
+    screen.getByRole("textbox", { name: "Message" }),
+    "focus goes to the composer, not the page",
+  );
 });
 
 test("a card answered elsewhere while focus is outside the slot, or on nothing, moves no focus", async () => {
@@ -174,5 +221,9 @@ test("a card answered elsewhere while focus is outside the slot, or on nothing, 
   });
   assert.equal(document.activeElement, document.body);
   rerender(<Slot items={[plan]} />);
-  assert.equal(document.activeElement, document.body, "an answer from another device does not pull focus into the slot");
+  assert.equal(
+    document.activeElement,
+    document.body,
+    "an answer from another device does not pull focus into the slot",
+  );
 });

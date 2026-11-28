@@ -24,7 +24,14 @@ export interface FakeImageCall {
 
 export type FakeImageReply =
   /** `mimeTypes` labels each returned image in order; `text` adds a caption after them. */
-  | { kind: "images"; count?: number; cost?: number; data?: string; mimeTypes?: string[]; text?: string }
+  | {
+      kind: "images";
+      count?: number;
+      cost?: number;
+      data?: string;
+      mimeTypes?: string[];
+      text?: string;
+    }
   | { kind: "error"; message: string }
   /** Waits for release() or the abort. On abort it takes `cancelMs` (a provider-side cancel) before settling. */
   | { kind: "hold"; cancelMs?: number; onCancelled?: () => void };
@@ -41,7 +48,12 @@ const usage = (total: number): Usage => ({
 export function fakeImageModels(
   options: {
     provider?: string;
-    models?: readonly { id: string; name?: string; input?: ("text" | "image")[]; maxReferences?: number }[];
+    models?: readonly {
+      id: string;
+      name?: string;
+      input?: ("text" | "image")[];
+      maxReferences?: number;
+    }[];
     reply?: (call: FakeImageCall, index: number) => FakeImageReply;
   } = {},
 ): { models: MutableModels; calls: FakeImageCall[]; release(): void } {
@@ -49,7 +61,12 @@ export function fakeImageModels(
   const calls: FakeImageCall[] = [];
   const held = new Set<() => void>();
   const catalog: ImageModel<ImageApi>[] = (
-    options.models ?? [{ id: "google/gemini-3.1-flash-image", name: "Google: Nano Banana 2 (Gemini 3.1 Flash Image)" }]
+    options.models ?? [
+      {
+        id: "google/gemini-3.1-flash-image",
+        name: "Google: Nano Banana 2 (Gemini 3.1 Flash Image)",
+      },
+    ]
   ).map((entry) => ({
     type: "image",
     id: entry.id,
@@ -60,7 +77,9 @@ export function fakeImageModels(
     input: entry.input ?? ["text", "image"],
     output: ["image", "text"],
     cost: { input: 0.5, output: 3, cacheRead: 0, cacheWrite: 0 },
-    ...(entry.maxReferences ? { inputLimits: { images: { maxPerRequest: entry.maxReferences } } } : {}),
+    ...(entry.maxReferences
+      ? { inputLimits: { images: { maxPerRequest: entry.maxReferences } } }
+      : {}),
   }));
   const images = (
     model: ImageModel<ImageApi>,
@@ -90,14 +109,25 @@ export function fakeImageModels(
     createProvider({
       id: provider,
       name: provider === "openrouter" ? "OpenRouter" : provider,
-      auth: { apiKey: { name: "Fake key", resolve: async () => ({ auth: { apiKey: "fake-key" }, source: "test" }) } },
+      auth: {
+        apiKey: {
+          name: "Fake key",
+          resolve: async () => ({ auth: { apiKey: "fake-key" }, source: "test" }),
+        },
+      },
       models: catalog,
       images: {
         "fake-images": {
-          async generateImages(model: ImageModel<ImageApi>, context: ImagesContext, requestOptions?: ImagesOptions) {
+          async generateImages(
+            model: ImageModel<ImageApi>,
+            context: ImagesContext,
+            requestOptions?: ImagesOptions,
+          ) {
             const call: FakeImageCall = {
               model: model.id,
-              prompt: context.input.flatMap((item) => (item.type === "text" ? [item.text] : [])).join(""),
+              prompt: context.input
+                .flatMap((item) => (item.type === "text" ? [item.text] : []))
+                .join(""),
               references: context.input.filter((item) => item.type === "image").length,
               options: requestOptions,
             };
@@ -110,7 +140,12 @@ export function fakeImageModels(
               });
             }
             if (reply.kind === "error") {
-              return { ...images(model, 0, 0), output: [], stopReason: "error", errorMessage: reply.message };
+              return {
+                ...images(model, 0, 0),
+                output: [],
+                stopReason: "error",
+                errorMessage: reply.message,
+              };
             }
             const aborted = (): AssistantImages => ({
               ...images(model, 0, 0),
@@ -188,12 +223,29 @@ export function generateChains(count: number, prompt = "A red bicycle at dawn") 
     doc.edges = [];
     for (let index = 1; index <= count; index += 1) {
       doc.nodes.push(
-        { id: `g${index}`, type: "generate-image", position: at, data: { model: { ...NANO_BANANA }, count: 1 } },
+        {
+          id: `g${index}`,
+          type: "generate-image",
+          position: at,
+          data: { model: { ...NANO_BANANA }, count: 1 },
+        },
         { id: `o${index}`, type: "output", position: at, data: {} },
       );
       doc.edges.push(
-        { id: `p-g${index}`, source: "p", sourcePort: "text", target: `g${index}`, targetPort: "prompt" },
-        { id: `g${index}-o${index}`, source: `g${index}`, sourcePort: "images", target: `o${index}`, targetPort: "images" },
+        {
+          id: `p-g${index}`,
+          source: "p",
+          sourcePort: "text",
+          target: `g${index}`,
+          targetPort: "prompt",
+        },
+        {
+          id: `g${index}-o${index}`,
+          source: `g${index}`,
+          sourcePort: "images",
+          target: `o${index}`,
+          targetPort: "images",
+        },
       );
     }
     return doc;

@@ -514,20 +514,34 @@ test("servers whose ids share a readable prefix keep distinct child tool names t
   dashed.setServer(configuredServer({ id: "my-server", name: "My Server" }));
   const underscored = harness();
   underscored.setServer(configuredServer({ id: "my_server", name: "My Server" }));
-  const byId = new Map([["my-server", dashed], ["my_server", underscored]]);
+  const byId = new Map([
+    ["my-server", dashed],
+    ["my_server", underscored],
+  ]);
   const host: SubagentMcpReadHost = {
     resolveServer: (serverId, signal) => byId.get(serverId)!.host.resolveServer(serverId, signal),
-    withClient: (server, signal, operation) => byId.get(server.id)!.host.withClient(server, signal, operation),
+    withClient: (server, signal, operation) =>
+      byId.get(server.id)!.host.withClient(server, signal, operation),
   };
   const scopes = [await approvedScope(dashed), await approvedScope(underscored)];
 
   const bindings = subagentMcpApprovalBindings(scopes);
   const names = bindings.map(({ childAgentToolName }) => childAgentToolName);
   assert.equal(new Set(names).size, 2);
-  assert.deepEqual(bindings.map(({ serverId }) => serverId), ["my-server", "my_server"]);
+  assert.deepEqual(
+    bindings.map(({ serverId }) => serverId),
+    ["my-server", "my_server"],
+  );
 
-  const tools = await createReadOnlySubagentMcpTools({ scopes, host, consumeNetworkOperation: () => undefined });
-  assert.deepEqual(tools.map(({ name }) => name), names);
+  const tools = await createReadOnlySubagentMcpTools({
+    scopes,
+    host,
+    consumeNetworkOperation: () => undefined,
+  });
+  assert.deepEqual(
+    tools.map(({ name }) => name),
+    names,
+  );
   await tools[1]!.execute("call-underscored", { query: "which" });
   assert.equal(underscored.calls.length, 1);
   assert.equal(dashed.calls.length, 0);
@@ -586,7 +600,10 @@ test("a hidden tool is refused before dispatch even when the connection fingerpr
     host: h.host,
     consumeNetworkOperation: () => undefined,
   });
-  assert.equal(await rejectionCode(tool!.execute("call-hidden", { query: "hello" })), "authority_drift");
+  assert.equal(
+    await rejectionCode(tool!.execute("call-hidden", { query: "hello" })),
+    "authority_drift",
+  );
   assert.equal(h.calls.length, 0);
 });
 
@@ -761,14 +778,20 @@ test("structured-only read tools return their structured content to children, re
   const h = harness();
   const scope = await approvedScope(h);
   const tools = await createReadOnlySubagentMcpTools({
-    scopes: [scope], host: h.host, consumeNetworkOperation: () => undefined, policy: { maxResultBytes: 4096 },
+    scopes: [scope],
+    host: h.host,
+    consumeNetworkOperation: () => undefined,
+    policy: { maxResultBytes: 4096 },
   });
   const run = async (result: Record<string, unknown>) => {
     h.setCall(async () => result);
     const output = await tools[0]!.execute(`call-${Math.random()}`, { query: "hello" });
     return output.content[0]?.type === "text" ? output.content[0].text : "";
   };
-  const structured = await run({ content: [], structuredContent: { status: "open", owner: SECRET, items: [1, 2] } });
+  const structured = await run({
+    content: [],
+    structuredContent: { status: "open", owner: SECRET, items: [1, 2] },
+  });
   assert.match(structured, /untrusted external data/u);
   assert.match(structured, /"status":"open"/u);
   assert.match(structured, /"items":\[1,2\]/u);
@@ -776,9 +799,15 @@ test("structured-only read tools return their structured content to children, re
   assert.doesNotMatch(structured, new RegExp(SECRET, "u"));
   // A text block that already serializes the same JSON is not repeated.
   const payload = { status: "open" };
-  const echoed = await run({ content: [{ type: "text", text: JSON.stringify(payload) }], structuredContent: payload });
+  const echoed = await run({
+    content: [{ type: "text", text: JSON.stringify(payload) }],
+    structuredContent: payload,
+  });
   assert.equal(echoed.match(/"status"/gu)?.length, 1);
-  const large = await run({ content: [], structuredContent: { rows: Array.from({ length: 2_000 }, (_, index) => ({ index })) } });
+  const large = await run({
+    content: [],
+    structuredContent: { rows: Array.from({ length: 2_000 }, (_, index) => ({ index })) },
+  });
   assert.ok(Buffer.byteLength(large, "utf8") <= 4096);
   assert.match(large, /truncated/u);
 });

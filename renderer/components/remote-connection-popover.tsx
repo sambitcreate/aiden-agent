@@ -2,13 +2,7 @@ import { remoteDeviceTypeLabel } from "../lib/remote-connection-status";
 import * as React from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { ChevronDown, Smartphone, Laptop, Tablet } from "lucide-react";
-import {
-  Button,
-  Popover,
-  PopoverContent,
-  PopoverTrigger,
-  Text,
-} from "./ui";
+import { Button, Popover, PopoverContent, PopoverTrigger, Text } from "./ui";
 import { useAppCapabilities } from "../lib/app-capabilities";
 import { aidenRemoteApi } from "../lib/ipc";
 import { queryKeys, useAidenRemoteSettings } from "../lib/queries";
@@ -38,32 +32,47 @@ export function DeviceRow({
   device: AidenRemoteDeviceView;
   state: keyof RemoteDeviceGroups;
 }) {
-  const Icon = device.type === "mac" || device.type === "linux" ? Laptop : device.type === "ipad" ? Tablet : Smartphone;
-  const timestamp = state === "previous" ? (device.revokedAt ?? device.lastSeenAt) : device.lastSeenAt;
-  const detail = state === "previous"
-    ? `Removed ${relativeSeen(timestamp)}`
-    : state === "pending"
-      ? "Finishing connection"
-    : `Last seen ${relativeSeen(timestamp)}`;
+  const Icon =
+    device.type === "mac" || device.type === "linux"
+      ? Laptop
+      : device.type === "ipad"
+        ? Tablet
+        : Smartphone;
+  const timestamp =
+    state === "previous" ? (device.revokedAt ?? device.lastSeenAt) : device.lastSeenAt;
+  const detail =
+    state === "previous"
+      ? `Removed ${relativeSeen(timestamp)}`
+      : state === "pending"
+        ? "Finishing connection"
+        : `Last seen ${relativeSeen(timestamp)}`;
 
   return (
     <div className="flex min-w-0 items-center gap-2.5 rounded-lg px-3 py-1.5">
       <Icon className="size-4 shrink-0 text-secondary" aria-hidden="true" />
       <div className="min-w-0 flex-1">
-        <Text variant="small-strong" truncate className="block">{device.name}</Text>
+        <Text variant="small-strong" truncate className="block">
+          {device.name}
+        </Text>
         <Text
           variant="small"
           color="secondary"
           truncate
           className="block"
-          title={state === "pending" ? "Waiting for the first authenticated connection" : new Date(timestamp).toLocaleString()}
+          title={
+            state === "pending"
+              ? "Waiting for the first authenticated connection"
+              : new Date(timestamp).toLocaleString()
+          }
         >
           {remoteDeviceTypeLabel(device.type)} · {detail}
         </Text>
       </div>
       <span
         aria-hidden="true"
-        className={state === "active" ? "size-2 rounded-full bg-green" : "size-2 rounded-full bg-tertiary"}
+        className={
+          state === "active" ? "size-2 rounded-full bg-green" : "size-2 rounded-full bg-tertiary"
+        }
       />
     </div>
   );
@@ -85,7 +94,9 @@ function DeviceGroup({
         <span>{label}</span>
         <span>{devices.length}</span>
       </div>
-      {devices.map((device) => <DeviceRow key={device.id} device={device} state={state} />)}
+      {devices.map((device) => (
+        <DeviceRow key={device.id} device={device} state={state} />
+      ))}
     </section>
   );
 }
@@ -102,9 +113,13 @@ export function RemoteConnectionPopover({
   const settings = useAidenRemoteSettings(open);
   const { platform } = useAppCapabilities();
 
-  React.useEffect(() => aidenRemoteApi.onChanged(() => {
-    void queryClient.invalidateQueries({ queryKey: queryKeys.aidenRemote });
-  }), [queryClient]);
+  React.useEffect(
+    () =>
+      aidenRemoteApi.onChanged(() => {
+        void queryClient.invalidateQueries({ queryKey: queryKeys.aidenRemote });
+      }),
+    [queryClient],
+  );
 
   const snapshot = settings.data;
   const groups = snapshot
@@ -117,14 +132,17 @@ export function RemoteConnectionPopover({
         error: snapshot.status.error,
         activeDeviceCount: groups.active.length,
       })
-    : settings.isLoading ? "Checking" : "Unavailable";
-  const statusTone = snapshot?.status.error || (snapshot?.status.enabled && !snapshot.status.running)
-    ? "bg-red"
-    : groups.active.length > 0
-      ? "bg-green"
-      : snapshot?.status.running
-        ? "bg-accent"
-        : "bg-tertiary";
+    : settings.isLoading
+      ? "Checking"
+      : "Unavailable";
+  const statusTone =
+    snapshot?.status.error || (snapshot?.status.enabled && !snapshot.status.running)
+      ? "bg-red"
+      : groups.active.length > 0
+        ? "bg-green"
+        : snapshot?.status.running
+          ? "bg-accent"
+          : "bg-tertiary";
 
   const manage = () => {
     setOpen(false);
@@ -160,9 +178,14 @@ export function RemoteConnectionPopover({
           <div className="flex items-start justify-between gap-3">
             <div>
               <Text variant="strong">Device connections</Text>
-              <Text as="p" variant="small" color="secondary" className="mt-0.5">{summary}</Text>
+              <Text as="p" variant="small" color="secondary" className="mt-0.5">
+                {summary}
+              </Text>
             </div>
-            <span className={`mt-1.5 size-2.5 shrink-0 rounded-full ${statusTone}`} aria-hidden="true" />
+            <span
+              className={`mt-1.5 size-2.5 shrink-0 rounded-full ${statusTone}`}
+              aria-hidden="true"
+            />
           </div>
           {snapshot?.status.error ? (
             <Text as="p" variant="small" color="secondary" className="mt-2 text-red">
@@ -177,7 +200,9 @@ export function RemoteConnectionPopover({
           ) : !snapshot ? (
             <p className="px-3 py-3 text-small text-secondary">Connection status is unavailable.</p>
           ) : snapshot.devices.length === 0 ? (
-            <p className="px-3 py-3 text-small text-secondary">No devices have been paired with this {localComputerNoun(platform)}.</p>
+            <p className="px-3 py-3 text-small text-secondary">
+              No devices have been paired with this {localComputerNoun(platform)}.
+            </p>
           ) : (
             <>
               <DeviceGroup label="Recently active" devices={groups.active} state="active" />

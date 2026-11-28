@@ -19,14 +19,15 @@ const provider: Provider = {
 
 test("projects pinned Claude effort capabilities onto configured models", () => {
   const [enriched] = enrichAnthropicProviders([provider]);
-  assert.deepEqual(
-    enriched.modelMetadata?.["claude-opus-4-8"]?.thinkingLevels,
-    ["off", "low", "medium", "high", "xhigh", "max"],
-  );
-  assert.equal(
-    enriched.modelMetadata?.["unknown-model"],
-    undefined,
-  );
+  assert.deepEqual(enriched.modelMetadata?.["claude-opus-4-8"]?.thinkingLevels, [
+    "off",
+    "low",
+    "medium",
+    "high",
+    "xhigh",
+    "max",
+  ]);
+  assert.equal(enriched.modelMetadata?.["unknown-model"], undefined);
 });
 
 test("refreshes only the untouched legacy Anthropic preset", () => {
@@ -34,11 +35,7 @@ test("refreshes only the untouched legacy Anthropic preset", () => {
     providers: [
       {
         ...provider,
-        models: [
-          "claude-sonnet-4-20250514",
-          "claude-3-7-sonnet-latest",
-          "claude-3-5-haiku-latest",
-        ],
+        models: ["claude-sonnet-4-20250514", "claude-3-7-sonnet-latest", "claude-3-5-haiku-latest"],
         defaultModel: "claude-sonnet-4-20250514",
         isPreset: true,
       },
@@ -62,10 +59,10 @@ test("refreshes only the untouched legacy Anthropic preset", () => {
 });
 
 test("accepts only exact model-supported Claude effort selections", () => {
-  assert.deepEqual(
-    parseAnthropicThinkingSelection("claude-opus-4-8", "max"),
-    { modelId: "claude-opus-4-8", level: "max" },
-  );
+  assert.deepEqual(parseAnthropicThinkingSelection("claude-opus-4-8", "max"), {
+    modelId: "claude-opus-4-8",
+    level: "max",
+  });
   assert.throws(
     () => parseAnthropicThinkingSelection("claude-opus-4-6", "xhigh"),
     /not supported/u,
@@ -75,13 +72,10 @@ test("accepts only exact model-supported Claude effort selections", () => {
     /does not support/u,
   );
   assert.deepEqual(
-    parseAnthropicThinkingSelection(
-      "claude-future-remote",
-      "xhigh",
-      (modelId) =>
-        modelId === "claude-future-remote"
-          ? { reasoning: true, thinkingLevelMap: { xhigh: "xhigh", max: "max" } }
-          : undefined,
+    parseAnthropicThinkingSelection("claude-future-remote", "xhigh", (modelId) =>
+      modelId === "claude-future-remote"
+        ? { reasoning: true, thinkingLevelMap: { xhigh: "xhigh", max: "max" } }
+        : undefined,
     ),
     { modelId: "claude-future-remote", level: "xhigh" },
   );

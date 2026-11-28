@@ -27,12 +27,19 @@ export type WorkDetailsCollapseTiming = "completion" | "next-input";
 export type BusySendPreference = "queue" | "steer";
 
 export const WORK_DETAILS_LABELS: Record<WorkDetailsMode, string> = {
-  compact: "Compact", standard: "Standard", detailed: "Detailed", verbose: "Verbose",
+  compact: "Compact",
+  standard: "Standard",
+  detailed: "Detailed",
+  verbose: "Verbose",
 };
 export const COLLAPSE_TIMING_LABELS: Record<WorkDetailsCollapseTiming, string> = {
-  completion: "On completion", "next-input": "On next message",
+  completion: "On completion",
+  "next-input": "On next message",
 };
-export const BUSY_SEND_LABELS: Record<BusySendPreference, string> = { queue: "Queue", steer: "Steer" };
+export const BUSY_SEND_LABELS: Record<BusySendPreference, string> = {
+  queue: "Queue",
+  steer: "Steer",
+};
 
 export function isWorkDetailsMode(value: unknown): value is WorkDetailsMode {
   return value === "compact" || value === "standard" || value === "detailed" || value === "verbose";
@@ -483,28 +490,32 @@ function isCodeFontId(value: unknown): value is CodeFontId {
 
 function normalizeVariant(value: unknown, fallback: ThemeVariantConfig): ThemeVariantConfig {
   if (!isRecord(value)) return cloneVariant(fallback);
-  const preset = value.preset === "custom" || isThemePresetId(value.preset)
-    ? value.preset
-    : fallback.preset;
+  const preset =
+    value.preset === "custom" || isThemePresetId(value.preset) ? value.preset : fallback.preset;
   return {
     preset,
-    accent: typeof value.accent === "string" && HEX_COLOR.test(value.accent)
-      ? value.accent.toUpperCase()
-      : fallback.accent,
-    background: typeof value.background === "string" && HEX_COLOR.test(value.background)
-      ? value.background.toUpperCase()
-      : fallback.background,
-    foreground: typeof value.foreground === "string" && HEX_COLOR.test(value.foreground)
-      ? value.foreground.toUpperCase()
-      : fallback.foreground,
+    accent:
+      typeof value.accent === "string" && HEX_COLOR.test(value.accent)
+        ? value.accent.toUpperCase()
+        : fallback.accent,
+    background:
+      typeof value.background === "string" && HEX_COLOR.test(value.background)
+        ? value.background.toUpperCase()
+        : fallback.background,
+    foreground:
+      typeof value.foreground === "string" && HEX_COLOR.test(value.foreground)
+        ? value.foreground.toUpperCase()
+        : fallback.foreground,
     uiFont: isUiFontId(value.uiFont) ? value.uiFont : fallback.uiFont,
     codeFont: isCodeFontId(value.codeFont) ? value.codeFont : fallback.codeFont,
-    translucentSidebar: typeof value.translucentSidebar === "boolean"
-      ? value.translucentSidebar
-      : fallback.translucentSidebar,
-    contrast: typeof value.contrast === "number" && Number.isFinite(value.contrast)
-      ? clamp(Math.round(value.contrast), 0, 100)
-      : fallback.contrast,
+    translucentSidebar:
+      typeof value.translucentSidebar === "boolean"
+        ? value.translucentSidebar
+        : fallback.translucentSidebar,
+    contrast:
+      typeof value.contrast === "number" && Number.isFinite(value.contrast)
+        ? clamp(Math.round(value.contrast), 0, 100)
+        : fallback.contrast,
   };
 }
 
@@ -524,53 +535,71 @@ export function normalizeAppearanceConfig(value: unknown): AppearanceConfig {
   if (!isRecord(value)) return fallback;
   return {
     version: APPEARANCE_VERSION,
-    mode: value.mode === "light" || value.mode === "dark" || value.mode === "system"
-      ? value.mode
-      : fallback.mode,
+    mode:
+      value.mode === "light" || value.mode === "dark" || value.mode === "system"
+        ? value.mode
+        : fallback.mode,
     light: normalizeStoredVariant(value.light, fallback.light, "light"),
     dark: normalizeStoredVariant(value.dark, fallback.dark, "dark"),
-    pointerCursors: typeof value.pointerCursors === "boolean"
-      ? value.pointerCursors
-      : fallback.pointerCursors,
-    autoHideComposerContext: typeof value.autoHideComposerContext === "boolean"
-      ? value.autoHideComposerContext
-      : fallback.autoHideComposerContext,
-    showComposerContextUsage: typeof value.showComposerContextUsage === "boolean" ? value.showComposerContextUsage : true,
-    showWorkspacePaths: typeof value.showWorkspacePaths === "boolean"
-      ? value.showWorkspacePaths
-      : fallback.showWorkspacePaths,
-    workspacePathFormat: value.workspacePathFormat === "middle" || value.workspacePathFormat === "end" || value.workspacePathFormat === "start"
-      ? value.workspacePathFormat
-      : fallback.workspacePathFormat,
-    dockIcon: value.dockIcon === "monochrome" || value.dockIcon === "aiden"
-      ? value.dockIcon
-      : fallback.dockIcon,
-    reduceMotion: value.reduceMotion === "on" || value.reduceMotion === "off" || value.reduceMotion === "system"
-      ? value.reduceMotion
-      : fallback.reduceMotion,
-    uiFontSize: typeof value.uiFontSize === "number" && Number.isFinite(value.uiFontSize)
-      ? clamp(Math.round(value.uiFontSize), 12, 18)
-      : fallback.uiFontSize,
-    codeFontSize: typeof value.codeFontSize === "number" && Number.isFinite(value.codeFontSize)
-      ? clamp(Math.round(value.codeFontSize), 10, 18)
-      : fallback.codeFontSize,
-    diffMarkers: value.diffMarkers === "symbols" || value.diffMarkers === "color"
-      ? value.diffMarkers
-      : fallback.diffMarkers,
-    fontSmoothing: typeof value.fontSmoothing === "boolean"
-      ? value.fontSmoothing
-      : fallback.fontSmoothing,
+    pointerCursors:
+      typeof value.pointerCursors === "boolean" ? value.pointerCursors : fallback.pointerCursors,
+    autoHideComposerContext:
+      typeof value.autoHideComposerContext === "boolean"
+        ? value.autoHideComposerContext
+        : fallback.autoHideComposerContext,
+    showComposerContextUsage:
+      typeof value.showComposerContextUsage === "boolean" ? value.showComposerContextUsage : true,
+    showWorkspacePaths:
+      typeof value.showWorkspacePaths === "boolean"
+        ? value.showWorkspacePaths
+        : fallback.showWorkspacePaths,
+    workspacePathFormat:
+      value.workspacePathFormat === "middle" ||
+      value.workspacePathFormat === "end" ||
+      value.workspacePathFormat === "start"
+        ? value.workspacePathFormat
+        : fallback.workspacePathFormat,
+    dockIcon:
+      value.dockIcon === "monochrome" || value.dockIcon === "aiden"
+        ? value.dockIcon
+        : fallback.dockIcon,
+    reduceMotion:
+      value.reduceMotion === "on" || value.reduceMotion === "off" || value.reduceMotion === "system"
+        ? value.reduceMotion
+        : fallback.reduceMotion,
+    uiFontSize:
+      typeof value.uiFontSize === "number" && Number.isFinite(value.uiFontSize)
+        ? clamp(Math.round(value.uiFontSize), 12, 18)
+        : fallback.uiFontSize,
+    codeFontSize:
+      typeof value.codeFontSize === "number" && Number.isFinite(value.codeFontSize)
+        ? clamp(Math.round(value.codeFontSize), 10, 18)
+        : fallback.codeFontSize,
+    diffMarkers:
+      value.diffMarkers === "symbols" || value.diffMarkers === "color"
+        ? value.diffMarkers
+        : fallback.diffMarkers,
+    fontSmoothing:
+      typeof value.fontSmoothing === "boolean" ? value.fontSmoothing : fallback.fontSmoothing,
     chatWidth: isChatWidthPreference(value.chatWidth) ? value.chatWidth : fallback.chatWidth,
-    inlineVisuals: isInlineVisualsMode(value.inlineVisuals) ? value.inlineVisuals : fallback.inlineVisuals,
+    inlineVisuals: isInlineVisualsMode(value.inlineVisuals)
+      ? value.inlineVisuals
+      : fallback.inlineVisuals,
     workDetails: isWorkDetailsMode(value.workDetails) ? value.workDetails : fallback.workDetails,
-    workDetailsCollapseTiming: isWorkDetailsCollapseTiming(value.workDetailsCollapseTiming) ? value.workDetailsCollapseTiming : fallback.workDetailsCollapseTiming,
+    workDetailsCollapseTiming: isWorkDetailsCollapseTiming(value.workDetailsCollapseTiming)
+      ? value.workDetailsCollapseTiming
+      : fallback.workDetailsCollapseTiming,
     ...(typeof value.showToolActivity === "boolean"
       ? { showToolActivity: value.showToolActivity }
       : typeof fallback.showToolActivity === "boolean"
         ? { showToolActivity: fallback.showToolActivity }
         : {}),
-    busySendBehavior: isBusySendPreference(value.busySendBehavior) ? value.busySendBehavior : fallback.busySendBehavior,
-    linuxTitleBar: isLinuxTitleBarPreference(value.linuxTitleBar) ? value.linuxTitleBar : fallback.linuxTitleBar,
+    busySendBehavior: isBusySendPreference(value.busySendBehavior)
+      ? value.busySendBehavior
+      : fallback.busySendBehavior,
+    linuxTitleBar: isLinuxTitleBarPreference(value.linuxTitleBar)
+      ? value.linuxTitleBar
+      : fallback.linuxTitleBar,
   };
 }
 
@@ -598,7 +627,10 @@ export function parseAppearanceConfig(value: unknown): AppearanceConfig {
   if (value.workDetails !== undefined && !isWorkDetailsMode(value.workDetails)) {
     throw new Error("Work details mode is unsupported.");
   }
-  if (value.workDetailsCollapseTiming !== undefined && !isWorkDetailsCollapseTiming(value.workDetailsCollapseTiming)) {
+  if (
+    value.workDetailsCollapseTiming !== undefined &&
+    !isWorkDetailsCollapseTiming(value.workDetailsCollapseTiming)
+  ) {
     throw new Error("Work details collapse timing is unsupported.");
   }
   if (value.busySendBehavior !== undefined && !isBusySendPreference(value.busySendBehavior)) {
@@ -611,14 +643,23 @@ export function parseAppearanceConfig(value: unknown): AppearanceConfig {
   if (value.showWorkspacePaths !== undefined && typeof value.showWorkspacePaths !== "boolean") {
     throw new Error("Workspace path visibility must be a boolean value.");
   }
-  if (value.workspacePathFormat !== undefined && value.workspacePathFormat !== normalized.workspacePathFormat) {
+  if (
+    value.workspacePathFormat !== undefined &&
+    value.workspacePathFormat !== normalized.workspacePathFormat
+  ) {
     throw new Error("Workspace path format is unsupported.");
   }
   // Older V1 settings did not contain this preference. Keep them loadable.
-  if (value.autoHideComposerContext !== undefined && typeof value.autoHideComposerContext !== "boolean") {
+  if (
+    value.autoHideComposerContext !== undefined &&
+    typeof value.autoHideComposerContext !== "boolean"
+  ) {
     throw new Error("Composer context preference must be a boolean value.");
   }
-  if (value.showComposerContextUsage !== undefined && typeof value.showComposerContextUsage !== "boolean") {
+  if (
+    value.showComposerContextUsage !== undefined &&
+    typeof value.showComposerContextUsage !== "boolean"
+  ) {
     throw new Error("Composer context usage visibility must be a boolean value.");
   }
   // Older V1 settings and exports predate the chat width preference.
@@ -649,7 +690,12 @@ export function parseAppearanceConfig(value: unknown): AppearanceConfig {
     if (typeof variant.translucentSidebar !== "boolean") {
       throw new Error(`${label} theme has an invalid sidebar preference.`);
     }
-    if (typeof variant.contrast !== "number" || !Number.isFinite(variant.contrast) || variant.contrast < 0 || variant.contrast > 100) {
+    if (
+      typeof variant.contrast !== "number" ||
+      !Number.isFinite(variant.contrast) ||
+      variant.contrast < 0 ||
+      variant.contrast > 100
+    ) {
       throw new Error(`${label} theme contrast must be between 0 and 100.`);
     }
   };
@@ -663,10 +709,18 @@ export function parseAppearanceConfig(value: unknown): AppearanceConfig {
   if (typeof value.pointerCursors !== "boolean" || typeof value.fontSmoothing !== "boolean") {
     throw new Error("Appearance toggle preferences must be boolean values.");
   }
-  if (normalized.mode !== value.mode || normalized.dockIcon !== value.dockIcon || normalized.reduceMotion !== value.reduceMotion || normalized.diffMarkers !== value.diffMarkers) {
+  if (
+    normalized.mode !== value.mode ||
+    normalized.dockIcon !== value.dockIcon ||
+    normalized.reduceMotion !== value.reduceMotion ||
+    normalized.diffMarkers !== value.diffMarkers
+  ) {
     throw new Error("Appearance settings contain an unsupported option.");
   }
-  if (normalized.uiFontSize !== value.uiFontSize || normalized.codeFontSize !== value.codeFontSize) {
+  if (
+    normalized.uiFontSize !== value.uiFontSize ||
+    normalized.codeFontSize !== value.codeFontSize
+  ) {
     throw new Error("Appearance font sizes are outside the supported range.");
   }
   return normalized;
@@ -699,29 +753,36 @@ export function parseThemeVariantJson(text: string, scheme: AppearanceScheme): T
     throw new Error("The theme has an invalid sidebar preference.");
   }
   if (
-    typeof candidate.contrast !== "number"
-    || !Number.isFinite(candidate.contrast)
-    || candidate.contrast < 0
-    || candidate.contrast > 100
+    typeof candidate.contrast !== "number" ||
+    !Number.isFinite(candidate.contrast) ||
+    candidate.contrast < 0 ||
+    candidate.contrast > 100
   ) {
     throw new Error("Theme contrast must be between 0 and 100.");
   }
-  if (candidate.preset !== undefined && candidate.preset !== "custom" && !isThemePresetId(candidate.preset)) {
+  if (
+    candidate.preset !== undefined &&
+    candidate.preset !== "custom" &&
+    !isThemePresetId(candidate.preset)
+  ) {
     throw new Error("The theme has an unsupported preset.");
   }
   const normalized = normalizeVariant(candidate, getPresetVariant("aiden", scheme));
   const claimedPreset = isThemePresetId(candidate.preset) ? candidate.preset : null;
   const claimedPresetValues = claimedPreset ? getPresetVariant(claimedPreset, scheme) : null;
-  const matchesClaimedPreset = claimedPresetValues !== null
-    && ([
-      "accent",
-      "background",
-      "foreground",
-      "uiFont",
-      "codeFont",
-      "translucentSidebar",
-      "contrast",
-    ] as const).every((key) => normalized[key] === claimedPresetValues[key]);
+  const matchesClaimedPreset =
+    claimedPresetValues !== null &&
+    (
+      [
+        "accent",
+        "background",
+        "foreground",
+        "uiFont",
+        "codeFont",
+        "translucentSidebar",
+        "contrast",
+      ] as const
+    ).every((key) => normalized[key] === claimedPresetValues[key]);
   const result: ThemeVariantConfig = {
     ...normalized,
     preset: matchesClaimedPreset && claimedPreset ? claimedPreset : "custom",
@@ -731,7 +792,10 @@ export function parseThemeVariantJson(text: string, scheme: AppearanceScheme): T
   return result;
 }
 
-export function serializeThemeVariant(variant: ThemeVariantConfig, scheme: AppearanceScheme): string {
+export function serializeThemeVariant(
+  variant: ThemeVariantConfig,
+  scheme: AppearanceScheme,
+): string {
   return JSON.stringify(
     {
       version: APPEARANCE_VERSION,
@@ -826,15 +890,11 @@ function contrastCorrectColor(
   );
   if (readableFallback) return readableFallback;
   return fallbackCandidates.sort(
-    (left, right) =>
-      minimumContrastRatio(right, surfaces) - minimumContrastRatio(left, surfaces),
+    (left, right) => minimumContrastRatio(right, surfaces) - minimumContrastRatio(left, surfaces),
   )[0];
 }
 
-function foregroundForFill(
-  fill: string,
-  scheme: AppearanceScheme,
-): string {
+function foregroundForFill(fill: string, scheme: AppearanceScheme): string {
   const preferred = scheme === "light" ? "#FFFFFF" : "#000000";
   const alternate = preferred === "#FFFFFF" ? "#000000" : "#FFFFFF";
   return colorContrastRatio(fill, preferred) >= 4.5 ? preferred : alternate;
@@ -862,9 +922,10 @@ const MAX_FILL_DEEPENING = 0.45;
 function solidFill(base: string, scheme: AppearanceScheme): SolidFill {
   const color = mixHex(base, base, 0);
   let fill = color;
-  let foreground = colorContrastRatio(color, "#FFFFFF") >= colorContrastRatio(color, "#000000")
-    ? "#FFFFFF"
-    : "#000000";
+  let foreground =
+    colorContrastRatio(color, "#FFFFFF") >= colorContrastRatio(color, "#000000")
+      ? "#FFFFFF"
+      : "#000000";
   for (let step = 0; step <= MAX_FILL_DEEPENING * 100; step += 1) {
     const candidate = mixHex(color, "#000000", step / 100);
     if (colorContrastRatio(candidate, "#FFFFFF") >= 4.5) {
@@ -878,7 +939,8 @@ function solidFill(base: string, scheme: AppearanceScheme): SolidFill {
   // already at that extreme (pure black or white), where they reverse.
   const away = foreground === "#FFFFFF" ? "#000000" : "#FFFFFF";
   const toward = mixHex(fill, away, 0.01) === fill ? foreground : away;
-  const amounts = foreground === "#FFFFFF" && !light ? [0.1, 0.18] : light ? [0.07, 0.14] : [0.14, 0.22];
+  const amounts =
+    foreground === "#FFFFFF" && !light ? [0.1, 0.18] : light ? [0.07, 0.14] : [0.14, 0.22];
   return {
     fill,
     foreground,
@@ -894,8 +956,10 @@ function selectedPalette(variant: ThemeVariantConfig, scheme: AppearanceScheme):
 }
 
 export function uiFontStack(id: UiFontId): string {
-  if (id === "rounded") return '"SF Pro Rounded", -apple-system, BlinkMacSystemFont, "Helvetica Neue", system-ui, sans-serif';
-  if (id === "humanist") return '"Avenir Next", Avenir, -apple-system, BlinkMacSystemFont, system-ui, sans-serif';
+  if (id === "rounded")
+    return '"SF Pro Rounded", -apple-system, BlinkMacSystemFont, "Helvetica Neue", system-ui, sans-serif';
+  if (id === "humanist")
+    return '"Avenir Next", Avenir, -apple-system, BlinkMacSystemFont, system-ui, sans-serif';
   return '-apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", system-ui, sans-serif';
 }
 
@@ -915,12 +979,14 @@ export function resolveThemeTokens(
   const foreground = variant.foreground;
   const background = variant.background;
   const light = scheme === "light";
-  const raised = variant.preset === "custom"
-    ? mixHex(background, light ? "#FFFFFF" : foreground, light ? 0.72 : 0.08 + contrast * 0.04)
-    : palette.raised;
-  const sidebar = variant.preset === "custom"
-    ? mixHex(background, foreground, 0.025 + contrast * (light ? 0.025 : 0.045))
-    : palette.sidebar;
+  const raised =
+    variant.preset === "custom"
+      ? mixHex(background, light ? "#FFFFFF" : foreground, light ? 0.72 : 0.08 + contrast * 0.04)
+      : palette.raised;
+  const sidebar =
+    variant.preset === "custom"
+      ? mixHex(background, foreground, 0.025 + contrast * (light ? 0.025 : 0.045))
+      : palette.sidebar;
   // Use the same rounded alphas for contrast correction and emitted CSS,
   // including the system Increase Contrast increment.
   const controlAlpha = Number((0.055 + contrast * 0.065).toFixed(3));
@@ -931,14 +997,7 @@ export function resolveThemeTokens(
   const controlTint = mixHex(background, foreground, controlAlpha);
   const selectionTint = mixHex(background, variant.accent, selectionAlpha);
   const wellTint = mixHex(raised, foreground, wellAlpha);
-  const textSurfaces = [
-    background,
-    sidebar,
-    raised,
-    controlTint,
-    selectionTint,
-    wellTint,
-  ] as const;
+  const textSurfaces = [background, sidebar, raised, controlTint, selectionTint, wellTint] as const;
   // Hovered and selected rows also sit on the sidebar and on menus. Those
   // tints need WCAG AA (4.5:1 for text, 3:1 for icons) rather than the wider
   // margin the base surfaces keep, so the text hierarchy moves no further
@@ -956,11 +1015,10 @@ export function resolveThemeTokens(
       Math.min(minimum, 4.5),
       fallbacks,
     );
-  const toolbarIcon = readable(
-    mixHex(foreground, "#FFFFFF", light ? 0.3 : 0.08),
-    3,
-    [foreground, variant.accent],
-  );
+  const toolbarIcon = readable(mixHex(foreground, "#FFFFFF", light ? 0.3 : 0.08), 3, [
+    foreground,
+    variant.accent,
+  ]);
   const secondaryBase = readable(
     variant.preset === "custom"
       ? mixHex(background, foreground, light ? 0.64 : 0.7)
@@ -968,42 +1026,24 @@ export function resolveThemeTokens(
     4.75,
     [foreground, variant.accent],
   );
-  const textSecondary = readable(
-    mixHex(secondaryBase, foreground, 0.28),
-    4.75,
-    [foreground, variant.accent],
-  );
-  const textTertiary = readable(
-    mixHex(secondaryBase, foreground, 0.14),
-    4.75,
-    [foreground, variant.accent],
-  );
-  const textQuaternary = readable(
-    secondaryBase,
-    4.75,
-    [foreground, variant.accent],
-  );
+  const textSecondary = readable(mixHex(secondaryBase, foreground, 0.28), 4.75, [
+    foreground,
+    variant.accent,
+  ]);
+  const textTertiary = readable(mixHex(secondaryBase, foreground, 0.14), 4.75, [
+    foreground,
+    variant.accent,
+  ]);
+  const textQuaternary = readable(secondaryBase, 4.75, [foreground, variant.accent]);
   const borderAlpha = 0.09 + contrast * 0.12;
-  const accentForeground = colorContrastRatio(variant.accent, "#FFFFFF")
-    >= colorContrastRatio(variant.accent, "#000000")
-    ? "#FFFFFF"
-    : "#000000";
+  const accentForeground =
+    colorContrastRatio(variant.accent, "#FFFFFF") >= colorContrastRatio(variant.accent, "#000000")
+      ? "#FFFFFF"
+      : "#000000";
   const accentContrastTarget = accentForeground === "#FFFFFF" ? "#000000" : "#FFFFFF";
-  const accentHover = mixHex(
-    variant.accent,
-    accentContrastTarget,
-    light ? 0.07 : 0.14,
-  );
-  const accentActive = mixHex(
-    variant.accent,
-    accentContrastTarget,
-    light ? 0.14 : 0.22,
-  );
-  const supportRed = readable(
-    palette.danger,
-    4.75,
-    [foreground, variant.accent],
-  );
+  const accentHover = mixHex(variant.accent, accentContrastTarget, light ? 0.07 : 0.14);
+  const accentActive = mixHex(variant.accent, accentContrastTarget, light ? 0.14 : 0.22);
+  const supportRed = readable(palette.danger, 4.75, [foreground, variant.accent]);
   // Accent used as text (links, inline actions, chips) keeps the chosen hue
   // but moves just far enough to stay readable on every surface and row tint.
   const accentText = readable(variant.accent, 4.5, [foreground]);
@@ -1011,58 +1051,43 @@ export function resolveThemeTokens(
   // accent and support red; dark schemes deepen the raw hue for white content.
   const accentFill = solidFill(variant.accent, scheme);
   const dangerFill = solidFill(light ? supportRed : palette.danger, scheme);
-  const supportGreen = readable(
-    palette.success,
-    4.75,
-    [foreground, variant.accent],
-  );
-  const supportWarning = readable(
-    palette.warning,
-    4.75,
-    [foreground, variant.accent],
-  );
-  const syntaxKeyword = contrastCorrectColor(
-    light ? "#C83349" : "#FF7F8D",
-    textSurfaces,
-    4.75,
-    [foreground, variant.accent],
-  );
+  const supportGreen = readable(palette.success, 4.75, [foreground, variant.accent]);
+  const supportWarning = readable(palette.warning, 4.75, [foreground, variant.accent]);
+  const syntaxKeyword = contrastCorrectColor(light ? "#C83349" : "#FF7F8D", textSurfaces, 4.75, [
+    foreground,
+    variant.accent,
+  ]);
   const syntaxString = contrastCorrectColor(
-    light
-      ? mixHex("#176B58", variant.accent, 0.12)
-      : mixHex("#8CE0C6", variant.accent, 0.12),
+    light ? mixHex("#176B58", variant.accent, 0.12) : mixHex("#8CE0C6", variant.accent, 0.12),
     textSurfaces,
     4.75,
     [foreground, variant.accent],
   );
   const syntaxNumber = contrastCorrectColor(
-    light
-      ? mixHex("#2D5BA7", variant.accent, 0.22)
-      : mixHex("#92BFFF", variant.accent, 0.24),
+    light ? mixHex("#2D5BA7", variant.accent, 0.22) : mixHex("#92BFFF", variant.accent, 0.24),
     textSurfaces,
     4.75,
     [foreground, variant.accent],
   );
   const syntaxTitle = contrastCorrectColor(
-    light
-      ? mixHex("#7546A8", variant.accent, 0.12)
-      : mixHex("#D4A8FF", variant.accent, 0.12),
+    light ? mixHex("#7546A8", variant.accent, 0.12) : mixHex("#D4A8FF", variant.accent, 0.12),
     textSurfaces,
     4.75,
     [foreground, variant.accent],
   );
-  const syntaxVariable = contrastCorrectColor(
-    light ? "#C45C19" : "#FFB06B",
-    textSurfaces,
-    4.75,
-    [foreground, variant.accent],
-  );
+  const syntaxVariable = contrastCorrectColor(light ? "#C45C19" : "#FFB06B", textSurfaces, 4.75, [
+    foreground,
+    variant.accent,
+  ]);
 
   // Colored status text is corrected against its own translucent fill, not
   // just the canvas. Keep hue where possible without relying on an outline.
   const statusTokens: Record<string, string> = {};
   for (const [tone, color] of Object.entries({
-    accent: variant.accent, red: supportRed, green: supportGreen, warning: supportWarning,
+    accent: variant.accent,
+    red: supportRed,
+    green: supportGreen,
+    warning: supportWarning,
   })) {
     statusTokens[`--status-${tone}-surface`] = alphaHex(color, 0.08);
     statusTokens[`--status-${tone}`] = contrastCorrectColor(
@@ -1098,12 +1123,7 @@ export function resolveThemeTokens(
     "--accent-foreground": accentForeground,
     "--accent-hover": accentHover,
     "--accent-active": accentActive,
-    "--focus-ring": contrastCorrectColor(
-      foreground,
-      textSurfaces,
-      3,
-      [foreground],
-    ),
+    "--focus-ring": contrastCorrectColor(foreground, textSurfaces, 3, [foreground]),
     "--fill-accent": accentFill.fill,
     "--fill-accent-foreground": accentFill.foreground,
     "--fill-accent-hover": accentFill.hover,
@@ -1146,24 +1166,18 @@ export function resolveThemeTokens(
       4.75,
       [foreground, variant.accent],
     ),
-    "--terminal-magenta": contrastCorrectColor(
-      light ? "#895A9D" : "#DCBAFF",
-      textSurfaces,
-      4.75,
-      [foreground, variant.accent],
-    ),
-    "--terminal-cyan": contrastCorrectColor(
-      light ? "#367D8C" : "#91E9EE",
-      textSurfaces,
-      4.75,
-      [foreground, variant.accent],
-    ),
-    "--terminal-white": contrastCorrectColor(
-      light ? "#DDE2E8" : foreground,
-      textSurfaces,
-      4.75,
-      [foreground, variant.accent],
-    ),
+    "--terminal-magenta": contrastCorrectColor(light ? "#895A9D" : "#DCBAFF", textSurfaces, 4.75, [
+      foreground,
+      variant.accent,
+    ]),
+    "--terminal-cyan": contrastCorrectColor(light ? "#367D8C" : "#91E9EE", textSurfaces, 4.75, [
+      foreground,
+      variant.accent,
+    ]),
+    "--terminal-white": contrastCorrectColor(light ? "#DDE2E8" : foreground, textSurfaces, 4.75, [
+      foreground,
+      variant.accent,
+    ]),
     "--theme-canvas": background,
     "--theme-sidebar": sidebar,
     "--theme-raised": raised,
@@ -1179,9 +1193,11 @@ export function colorContrastRatio(first: string, second: string): number {
   if (!HEX_COLOR.test(first) || !HEX_COLOR.test(second)) return 0;
   const luminance = (hex: string) => {
     const rgb = hexToRgb(hex);
-    return 0.2126 * relativeLuminanceChannel(rgb.red)
-      + 0.7152 * relativeLuminanceChannel(rgb.green)
-      + 0.0722 * relativeLuminanceChannel(rgb.blue);
+    return (
+      0.2126 * relativeLuminanceChannel(rgb.red) +
+      0.7152 * relativeLuminanceChannel(rgb.green) +
+      0.0722 * relativeLuminanceChannel(rgb.blue)
+    );
   };
   const a = luminance(first);
   const b = luminance(second);
@@ -1197,27 +1213,27 @@ export function themeVariantSafetyIssues(
   const label = scheme === "light" ? "Light theme" : "Dark theme";
   const issues: string[] = [];
   const palette = selectedPalette(variant, scheme);
-  const raised = variant.preset === "custom"
-    ? mixHex(
-        variant.background,
-        scheme === "light" ? "#FFFFFF" : variant.foreground,
-        scheme === "light" ? 0.72 : 0.12,
-      )
-    : palette.raised;
-  const sidebar = variant.preset === "custom"
-    ? mixHex(
-        variant.background,
-        variant.foreground,
-        scheme === "light" ? 0.05 : 0.07,
-      )
-    : palette.sidebar;
+  const raised =
+    variant.preset === "custom"
+      ? mixHex(
+          variant.background,
+          scheme === "light" ? "#FFFFFF" : variant.foreground,
+          scheme === "light" ? 0.72 : 0.12,
+        )
+      : palette.raised;
+  const sidebar =
+    variant.preset === "custom"
+      ? mixHex(variant.background, variant.foreground, scheme === "light" ? 0.05 : 0.07)
+      : palette.sidebar;
   const textRatio = Math.min(
     colorContrastRatio(variant.foreground, variant.background),
     colorContrastRatio(variant.foreground, sidebar),
     colorContrastRatio(variant.foreground, raised),
   );
   if (textRatio < 4.5) {
-    issues.push(`${label} foreground needs at least 4.5:1 contrast against its surfaces (currently ${textRatio.toFixed(2)}:1).`);
+    issues.push(
+      `${label} foreground needs at least 4.5:1 contrast against its surfaces (currently ${textRatio.toFixed(2)}:1).`,
+    );
   }
 
   const weakestSurfaceRatio = Math.min(
@@ -1226,7 +1242,9 @@ export function themeVariantSafetyIssues(
     colorContrastRatio(variant.accent, raised),
   );
   if (weakestSurfaceRatio < 4.5) {
-    issues.push(`${label} accent needs at least 4.5:1 contrast against its surfaces (currently ${weakestSurfaceRatio.toFixed(2)}:1).`);
+    issues.push(
+      `${label} accent needs at least 4.5:1 contrast against its surfaces (currently ${weakestSurfaceRatio.toFixed(2)}:1).`,
+    );
   }
 
   const onAccentRatio = Math.max(

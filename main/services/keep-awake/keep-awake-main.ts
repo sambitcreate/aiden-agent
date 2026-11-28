@@ -111,11 +111,15 @@ export async function startKeepAwake(): Promise<void> {
     onStatus: (status) => {
       if (status.holding !== wasHolding) {
         wasHolding = status.holding;
-        logger.info("keep-awake", status.holding ? "Keeping the computer awake." : "Not keeping the computer awake.");
+        logger.info(
+          "keep-awake",
+          status.holding ? "Keeping the computer awake." : "Not keeping the computer awake.",
+        );
       }
       ipcMain.broadcast(KEEP_AWAKE_CHANGED_CHANNEL, status);
     },
-    onError: (error) => logger.warn("keep-awake", "Keep-awake could not read an input or change the hold.", error),
+    onError: (error) =>
+      logger.warn("keep-awake", "Keep-awake could not read an input or change the hold.", error),
   });
   if (controller) {
     created.dispose();

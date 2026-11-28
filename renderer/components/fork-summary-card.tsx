@@ -139,7 +139,11 @@ function FileList({ label, paths }: { label: string; paths: readonly string[] })
       </Text>
       <ul aria-label={`${label} files`} className="mt-0.5 flex min-w-0 flex-col gap-0.5">
         {paths.map((item) => (
-          <li key={item} className="select-text truncate font-mono text-mini text-secondary" title={item}>
+          <li
+            key={item}
+            className="select-text truncate font-mono text-mini text-secondary"
+            title={item}
+          >
             {item}
           </li>
         ))}

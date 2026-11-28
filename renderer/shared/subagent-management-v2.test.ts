@@ -35,11 +35,14 @@ function snapshot(overrides: Partial<SubagentRunSnapshotV2> = {}): SubagentRunSn
 
 test("management results are exact and renderer-safe", () => {
   const run = snapshot();
-  assert.deepEqual(parseSubagentManagementResultV2({ version: 2, action: "status", snapshot: run }), {
-    version: 2,
-    action: "status",
-    snapshot: run,
-  });
+  assert.deepEqual(
+    parseSubagentManagementResultV2({ version: 2, action: "status", snapshot: run }),
+    {
+      version: 2,
+      action: "status",
+      snapshot: run,
+    },
+  );
   assert.deepEqual(
     parseSubagentManagementResultV2({
       version: 2,

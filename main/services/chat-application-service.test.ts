@@ -75,11 +75,10 @@ function fixture(overrides: Partial<ChatApplicationDependencies> = {}) {
       rename: async () => chat(),
       setChatModelSelection: async () => chat(),
       setDesignMode: async () => chat(),
-      moveEmptyChatToWorkspace: async (id: string, workspaceId: string) =>
-        chat(id, workspaceId),
+      moveEmptyChatToWorkspace: async (id: string, workspaceId: string) => chat(id, workspaceId),
       remove: async () => undefined,
     },
-    configStore: { getWorkspace: async (id: string) => id === workspace.id ? workspace : null },
+    configStore: { getWorkspace: async (id: string) => (id === workspace.id ? workspace : null) },
     llmClient: {
       isChatOwnedByInactiveRenderer: () => false,
       isChatBusy: () => false,
@@ -88,7 +87,9 @@ function fixture(overrides: Partial<ChatApplicationDependencies> = {}) {
       markAppendReconciliationRequired: () => undefined,
       clearAppendReconciliationRequired: () => undefined,
       beginChatWorkspaceChange: () => () => undefined,
-      beginChatDeletion: () => () => { finishDeletionCalls += 1; },
+      beginChatDeletion: () => () => {
+        finishDeletionCalls += 1;
+      },
       cancelChat: async () => undefined,
     },
     displayImageArtifactStore: {
@@ -134,10 +135,7 @@ test("shared chat creation preserves workspace and renderer-owner commit gates",
   assert.throws(application.assertCreateCurrent, /renderer document is no longer active/u);
 
   await assert.rejects(
-    application.service.create(
-      { workspaceId: "missing", title: "Chat" },
-      owner(),
-    ),
+    application.service.create({ workspaceId: "missing", title: "Chat" }, owner()),
     /selected workspace is no longer available/u,
   );
 });
@@ -163,15 +161,23 @@ test("public chat creation in flight across a workspace mutation is refused and 
   const mutationGate = new WorkspaceMutationGate();
   const operations = new WorkspaceOperationRegistry();
   let storeEntered = () => {};
-  const entered = new Promise<void>((resolve) => { storeEntered = resolve; });
+  const entered = new Promise<void>((resolve) => {
+    storeEntered = resolve;
+  });
   let resumeStore = () => {};
-  const resumed = new Promise<void>((resolve) => { resumeStore = resolve; });
+  const resumed = new Promise<void>((resolve) => {
+    resumeStore = resolve;
+  });
   const committed: string[] = [];
   const application = fixture({
     workspaceMutationGate: mutationGate,
     workspaceOperationRegistry: operations,
     chatStore: {
-      create: async (input: { assertCurrent?: () => void; workspaceId: string; title?: string }) => {
+      create: async (input: {
+        assertCurrent?: () => void;
+        workspaceId: string;
+        title?: string;
+      }) => {
         storeEntered();
         await resumed;
         input.assertCurrent?.();
@@ -181,11 +187,16 @@ test("public chat creation in flight across a workspace mutation is refused and 
     },
   } as unknown as Partial<ChatApplicationDependencies>);
 
-  const inFlight = application.service.create({ workspaceId: "workspace-1", title: "Before" }, owner());
+  const inFlight = application.service.create(
+    { workspaceId: "workspace-1", title: "Before" },
+    owner(),
+  );
   await entered;
   const finishMutation = mutationGate.begin("workspace-1");
   let drained = false;
-  const draining = operations.cancelAndSettle("workspace-1").then(() => { drained = true; });
+  const draining = operations.cancelAndSettle("workspace-1").then(() => {
+    drained = true;
+  });
   await new Promise<void>((resolve) => setImmediate(resolve));
   assert.equal(drained, false, "the mutation waits for the in-flight create to settle");
 
@@ -199,7 +210,10 @@ test("public chat creation in flight across a workspace mutation is refused and 
   );
 
   finishMutation();
-  const after = await application.service.create({ workspaceId: "workspace-1", title: "After" }, owner());
+  const after = await application.service.create(
+    { workspaceId: "workspace-1", title: "After" },
+    owner(),
+  );
   assert.equal(after?.id, "created");
   assert.deepEqual(committed, ["After"]);
 });
@@ -259,7 +273,11 @@ test("shared chat reads expose stable staged-image recovery gates", async () => 
 test("shared chat deletion removes staged artifacts after the durable tombstone", async () => {
   const events: string[] = [];
   const application = fixture({
-    toolOutputStore: { deleteByChat: async () => { events.push("spills"); } },
+    toolOutputStore: {
+      deleteByChat: async () => {
+        events.push("spills");
+      },
+    },
     // Agent scratch state is removed only after the chat is durably gone, and a
     // cleanup that never finishes does not hold up the delete.
     forgetDeletedChat: (chatId) => {
@@ -267,24 +285,44 @@ test("shared chat deletion removes staged artifacts after the durable tombstone"
       return new Promise<void>(() => undefined);
     },
     // Queued snapshots of the chat's visuals stop before anything is removed.
-    visualSnapshots: { cancelChat: (chatId) => { events.push(`snapshots:${chatId}`); } },
+    visualSnapshots: {
+      cancelChat: (chatId) => {
+        events.push(`snapshots:${chatId}`);
+      },
+    },
     subagentRunStore: {
-      deleteChat: async () => { events.push("tombstone"); },
-      completeChatDeletion: async () => { events.push("complete"); },
+      deleteChat: async () => {
+        events.push("tombstone");
+      },
+      completeChatDeletion: async () => {
+        events.push("complete");
+      },
       pendingChatDeletions: async () => [],
     },
     displayImageArtifactStore: {
       availability: () => ({ available: true }),
       hasPending: async () => false,
-      deleteChat: async () => { events.push("artifacts"); },
+      deleteChat: async () => {
+        events.push("artifacts");
+      },
     },
     generativeUiArtifactStore: {
       availability: () => ({ available: true }),
       hasPending: async () => false,
-      deleteChat: async () => { events.push("html-artifacts"); },
+      deleteChat: async () => {
+        events.push("html-artifacts");
+      },
     },
-    piRuntimeEffectStore: { deleteChat: async () => { events.push("effects"); } },
-    piCompactionSessionStore: { deleteChat: async () => { events.push("compaction"); } },
+    piRuntimeEffectStore: {
+      deleteChat: async () => {
+        events.push("effects");
+      },
+    },
+    piCompactionSessionStore: {
+      deleteChat: async () => {
+        events.push("compaction");
+      },
+    },
     chatStore: {
       listRegular: async () => [],
       list: async () => [],
@@ -294,16 +332,32 @@ test("shared chat deletion removes staged artifacts after the durable tombstone"
       setChatModelSelection: async () => chat(),
       setDesignMode: async () => chat(),
       moveEmptyChatToWorkspace: async () => chat(),
-      remove: async () => { events.push("chat"); },
+      remove: async () => {
+        events.push("chat");
+      },
     },
   });
   await application.service.remove("chat-1");
-  assert.deepEqual(events, ["snapshots:chat-1", "tombstone", "spills", "artifacts", "html-artifacts", "effects", "compaction", "chat", "complete", "scratch:chat-1"]);
+  assert.deepEqual(events, [
+    "snapshots:chat-1",
+    "tombstone",
+    "spills",
+    "artifacts",
+    "html-artifacts",
+    "effects",
+    "compaction",
+    "chat",
+    "complete",
+    "scratch:chat-1",
+  ]);
 });
 
 test("deleting a chat from any surface stops its idle cache warmer, and a failed delete leaves it running", async () => {
   // A warmer with no reply to replay; it only needs to be adoptable and disposable.
-  const idleWarmer = () => new PiCacheWarmer({ signal: new AbortController().signal } as ConstructorParameters<typeof PiCacheWarmer>[0]);
+  const idleWarmer = () =>
+    new PiCacheWarmer({ signal: new AbortController().signal } as ConstructorParameters<
+      typeof PiCacheWarmer
+    >[0]);
   const kept = idleWarmer();
   adoptChatCacheWarmer("chat-1", kept);
   const failing = fixture({
@@ -316,7 +370,9 @@ test("deleting a chat from any surface stops its idle cache warmer, and a failed
       setChatModelSelection: async () => chat(),
       setDesignMode: async () => chat(),
       moveEmptyChatToWorkspace: async () => chat(),
-      remove: async () => { throw new Error("disk failed"); },
+      remove: async () => {
+        throw new Error("disk failed");
+      },
     } as ChatApplicationDependencies["chatStore"],
   });
   await assert.rejects(failing.service.remove("chat-1"), /disk failed/u);
@@ -344,16 +400,32 @@ test("shared chat deletion keeps admission closed while a durable delete is pend
       setChatModelSelection: async () => chat(),
       setDesignMode: async () => chat(),
       moveEmptyChatToWorkspace: async () => chat(),
-      remove: async () => { throw new Error("disk failed"); },
+      remove: async () => {
+        throw new Error("disk failed");
+      },
     } as ChatApplicationDependencies["chatStore"],
     subagentRunStore: {
-      deleteChat: async () => { events.push("private-delete"); },
-      completeChatDeletion: async () => { events.push("complete"); },
+      deleteChat: async () => {
+        events.push("private-delete");
+      },
+      completeChatDeletion: async () => {
+        events.push("complete");
+      },
       pendingChatDeletions: async () => ["chat-1"],
     } as ChatApplicationDependencies["subagentRunStore"],
-    piRuntimeEffectStore: { deleteChat: async () => { events.push("effects-delete"); } },
-    piCompactionSessionStore: { deleteChat: async () => { events.push("compaction-delete"); } },
-    forgetDeletedChat: async () => { events.push("scratch"); },
+    piRuntimeEffectStore: {
+      deleteChat: async () => {
+        events.push("effects-delete");
+      },
+    },
+    piCompactionSessionStore: {
+      deleteChat: async () => {
+        events.push("compaction-delete");
+      },
+    },
+    forgetDeletedChat: async () => {
+      events.push("scratch");
+    },
   });
 
   await assert.rejects(application.service.remove("chat-1"), /disk failed/u);
@@ -366,7 +438,9 @@ test("a chat deletion keeps its fences closed until the deletion is durably comp
   const closedDuringCompletion: [number, number][] = [];
   const application = fixture({
     attachments: {
-      beginChatDeletion: () => () => { attachmentFenceOpened += 1; },
+      beginChatDeletion: () => () => {
+        attachmentFenceOpened += 1;
+      },
       revokeChat: () => undefined,
     } as unknown as ChatApplicationDependencies["attachments"],
     subagentRunStore: {
@@ -390,19 +464,27 @@ test("a chat deletion whose tombstone status cannot be read stays fenced for sta
   const events: string[] = [];
   const application = fixture({
     subagentRunStore: {
-      deleteChat: async () => { throw new Error("V2 tombstone failed"); },
+      deleteChat: async () => {
+        throw new Error("V2 tombstone failed");
+      },
       completeChatDeletion: async () => undefined,
-      pendingChatDeletions: async () => { throw new Error("status unreadable"); },
+      pendingChatDeletions: async () => {
+        throw new Error("status unreadable");
+      },
     } as ChatApplicationDependencies["subagentRunStore"],
     followThrough: {
       deleteChat: async () => undefined,
-      restoreChat: (chatId: string) => { restored.push(chatId); },
+      restoreChat: (chatId: string) => {
+        restored.push(chatId);
+      },
     } as ChatApplicationDependencies["followThrough"],
   });
 
   await assert.rejects(
     application.service.remove("chat-1", {
-      onDeletionRollForward: () => { events.push("roll-forward"); },
+      onDeletionRollForward: () => {
+        events.push("roll-forward");
+      },
     }),
     /subagent history/u,
   );
@@ -415,8 +497,12 @@ test("shared chat deletion publishes its roll-forward boundary before later clea
   const events: string[] = [];
   const application = fixture({
     subagentRunStore: {
-      deleteChat: async () => { events.push("tombstone"); },
-      completeChatDeletion: async () => { events.push("complete"); },
+      deleteChat: async () => {
+        events.push("tombstone");
+      },
+      completeChatDeletion: async () => {
+        events.push("complete");
+      },
       pendingChatDeletions: async () => ["chat-1"],
     } as ChatApplicationDependencies["subagentRunStore"],
     piRuntimeEffectStore: {
@@ -429,7 +515,9 @@ test("shared chat deletion publishes its roll-forward boundary before later clea
 
   await assert.rejects(
     application.service.remove("chat-1", {
-      onDeletionRollForward: () => { events.push("roll-forward"); },
+      onDeletionRollForward: () => {
+        events.push("roll-forward");
+      },
     }),
     /tool-effect history/u,
   );
@@ -452,7 +540,9 @@ test("a partial subagent tombstone failure still publishes the roll-forward boun
 
   await assert.rejects(
     application.service.remove("chat-1", {
-      onDeletionRollForward: () => { events.push("roll-forward"); },
+      onDeletionRollForward: () => {
+        events.push("roll-forward");
+      },
     }),
     /subagent history/u,
   );
@@ -463,28 +553,44 @@ test("a partial subagent tombstone failure still publishes the roll-forward boun
 test("a chat deletion that fails before its durable tombstone hands the chat back to follow-through", async () => {
   const events: string[] = [];
   const followThrough = {
-    deleteChat: async (chatId: string) => { events.push(`suppress:${chatId}`); },
-    restoreChat: (chatId: string) => { events.push(`restore:${chatId}`); },
+    deleteChat: async (chatId: string) => {
+      events.push(`suppress:${chatId}`);
+    },
+    restoreChat: (chatId: string) => {
+      events.push(`restore:${chatId}`);
+    },
   };
   const failed = fixture({
     followThrough,
-    releaseChatContext: (chatId: string) => { events.push(`release:${chatId}`); },
+    releaseChatContext: (chatId: string) => {
+      events.push(`release:${chatId}`);
+    },
     subagentRunStore: {
-      deleteChat: async () => { throw new Error("disk failed"); },
+      deleteChat: async () => {
+        throw new Error("disk failed");
+      },
       completeChatDeletion: async () => undefined,
       pendingChatDeletions: async () => [],
     } as ChatApplicationDependencies["subagentRunStore"],
   });
   await assert.rejects(failed.service.remove("chat-1"), /subagent history/u);
-  assert.deepEqual(events, ["suppress:chat-1", "restore:chat-1"], "the retained chat keeps its context");
+  assert.deepEqual(
+    events,
+    ["suppress:chat-1", "restore:chat-1"],
+    "the retained chat keeps its context",
+  );
   assert.equal(failed.finishDeletionCalls(), 1, "admission reopens for the retained chat");
 
   events.length = 0;
   const pending = fixture({
     followThrough,
-    releaseChatContext: (chatId: string) => { events.push(`release:${chatId}`); },
+    releaseChatContext: (chatId: string) => {
+      events.push(`release:${chatId}`);
+    },
     subagentRunStore: {
-      deleteChat: async () => { throw new Error("V2 tombstone failed"); },
+      deleteChat: async () => {
+        throw new Error("V2 tombstone failed");
+      },
       completeChatDeletion: async () => undefined,
       pendingChatDeletions: async () => ["chat-1"],
     } as ChatApplicationDependencies["subagentRunStore"],
@@ -499,9 +605,15 @@ test("a chat deletion that fails before its durable tombstone hands the chat bac
   events.length = 0;
   await fixture({
     followThrough,
-    releaseChatContext: (chatId: string) => { events.push(`release:${chatId}`); },
+    releaseChatContext: (chatId: string) => {
+      events.push(`release:${chatId}`);
+    },
   }).service.remove("chat-1");
-  assert.deepEqual(events, ["suppress:chat-1", "release:chat-1"], "a completed delete keeps the chat's runs ignored");
+  assert.deepEqual(
+    events,
+    ["suppress:chat-1", "release:chat-1"],
+    "a completed delete keeps the chat's runs ignored",
+  );
 });
 
 test("chat deletion checks a remote revision before cancellation or private-history changes", async () => {
@@ -516,17 +628,23 @@ test("chat deletion checks a remote revision before cancellation or private-hist
       clearAppendReconciliationRequired: () => undefined,
       beginChatWorkspaceChange: () => () => undefined,
       beginChatDeletion: () => () => undefined,
-      cancelChat: async () => { effects.push("cancel"); },
+      cancelChat: async () => {
+        effects.push("cancel");
+      },
     } as ChatApplicationDependencies["llmClient"],
     subagentRunStore: {
-      deleteChat: async () => { effects.push("subagents"); },
+      deleteChat: async () => {
+        effects.push("subagents");
+      },
       completeChatDeletion: async () => undefined,
       pendingChatDeletions: async () => [],
     },
   });
   await assert.rejects(
     application.service.remove("chat-1", {
-      assertCurrent: () => { throw new Error("stale revision"); },
+      assertCurrent: () => {
+        throw new Error("stale revision");
+      },
     }),
     /stale revision/u,
   );
@@ -544,16 +662,25 @@ test("all chat deletion paths fence uploads and clear them only at durable roll-
     const app = fixture({
       attachments,
       subagentRunStore: {
-        deleteChat: async () => { tombstoned = true; },
-        completeChatDeletion: async () => { tombstoned = false; },
-        pendingChatDeletions: async () => tombstoned ? ["chat-1"] : [],
-      },
-      ...(failure === "after-tombstone" ? {
-        displayImageArtifactStore: {
-          availability: () => ({ available: true }), hasPending: async () => false,
-          deleteChat: async () => { throw new Error("disk failed"); },
+        deleteChat: async () => {
+          tombstoned = true;
         },
-      } : {}),
+        completeChatDeletion: async () => {
+          tombstoned = false;
+        },
+        pendingChatDeletions: async () => (tombstoned ? ["chat-1"] : []),
+      },
+      ...(failure === "after-tombstone"
+        ? {
+            displayImageArtifactStore: {
+              availability: () => ({ available: true }),
+              hasPending: async () => false,
+              deleteChat: async () => {
+                throw new Error("disk failed");
+              },
+            },
+          }
+        : {}),
     });
     const removal = app.service.remove("chat-1", {
       assertCurrent: () => {
@@ -644,7 +771,9 @@ test("a committed deletion offers the chat's workspace for release, and a failed
   assert.equal(application.finishDeletionCalls(), 1);
 
   const uncommitted = fixture({
-    afterChatRemoved: async (workspaceId: string) => { released.push(`late:${workspaceId}`); },
+    afterChatRemoved: async (workspaceId: string) => {
+      released.push(`late:${workspaceId}`);
+    },
     chatStore: {
       listRegular: async () => [],
       list: async () => [],
@@ -654,11 +783,17 @@ test("a committed deletion offers the chat's workspace for release, and a failed
       setChatModelSelection: async () => chat(),
       setDesignMode: async () => chat(),
       moveEmptyChatToWorkspace: async () => chat(),
-      remove: async () => { throw new Error("disk failed"); },
+      remove: async () => {
+        throw new Error("disk failed");
+      },
     } as ChatApplicationDependencies["chatStore"],
   });
   await assert.rejects(uncommitted.service.remove("chat-1"), /disk failed/u);
-  assert.deepEqual(released, ["workspace-1"], "nothing is released for a deletion that did not commit");
+  assert.deepEqual(
+    released,
+    ["workspace-1"],
+    "nothing is released for a deletion that did not commit",
+  );
 });
 
 test("deleting a chat deletes its design canvas, and a canvas that cannot be deleted keeps the chat", async () => {
@@ -672,7 +807,11 @@ test("deleting a chat deletes its design canvas, and a canvas that cannot be del
 
     let removed = false;
     const failing = fixture({
-      designCanvasStore: { delete: async () => { throw new Error("disk failed"); } },
+      designCanvasStore: {
+        delete: async () => {
+          throw new Error("disk failed");
+        },
+      },
       chatStore: {
         listRegular: async () => [],
         list: async () => [],
@@ -682,7 +821,9 @@ test("deleting a chat deletes its design canvas, and a canvas that cannot be del
         setChatModelSelection: async () => chat(),
         setDesignMode: async () => chat(),
         moveEmptyChatToWorkspace: async () => chat(),
-        remove: async () => { removed = true; },
+        remove: async () => {
+          removed = true;
+        },
       } as ChatApplicationDependencies["chatStore"],
     });
     await assert.rejects(failing.service.remove("chat-2"), /design canvas/u);
@@ -722,7 +863,8 @@ test("after a Not now, Aiden may ask about design mode again only once the perso
     documentId: "doc-a",
     isDestroyed: () => false,
     send: (channel, payload) => {
-      if (channel === "designCanvas:consent") cards.push((payload as { requestId: string }).requestId);
+      if (channel === "designCanvas:consent")
+        cards.push((payload as { requestId: string }).requestId);
     },
     onInvalidated: () => () => undefined,
   };
@@ -730,11 +872,20 @@ test("after a Not now, Aiden may ask about design mode again only once the perso
   await designModeConsent.answer(cards[0], "decline", owner, async () => undefined);
   assert.equal(await asked, "declined");
   await service.setDesignMode("chat-1", false);
-  assert.equal(await designModeConsent.request({ chatId: "chat-1", reason: "Again.", owner }), "declined", "turning it off is not opening it");
+  assert.equal(
+    await designModeConsent.request({ chatId: "chat-1", reason: "Again.", owner }),
+    "declined",
+    "turning it off is not opening it",
+  );
 
   await service.setDesignMode("chat-1", true);
   const stop = new AbortController();
-  const again = designModeConsent.request({ chatId: "chat-1", reason: "Again.", owner, signal: stop.signal });
+  const again = designModeConsent.request({
+    chatId: "chat-1",
+    reason: "Again.",
+    owner,
+    signal: stop.signal,
+  });
   assert.equal(cards.length, 2, "a new card once the person opened design mode");
   stop.abort();
   assert.equal(await again, "unavailable");
@@ -758,8 +909,15 @@ test("turning design mode on hands the chat and its folder to the canvas once, a
       create: async () => chat(),
       rename: async () => chat(),
       setChatModelSelection: async () => chat(),
-      setDesignMode: async (id: string, enabled: boolean, assertCurrent?: (current: Chat) => void | Promise<void>) => {
-        const current: Chat = { ...chat(id, "workspace-1"), ...(designMode ? { designMode: true as const } : {}) };
+      setDesignMode: async (
+        id: string,
+        enabled: boolean,
+        assertCurrent?: (current: Chat) => void | Promise<void>,
+      ) => {
+        const current: Chat = {
+          ...chat(id, "workspace-1"),
+          ...(designMode ? { designMode: true as const } : {}),
+        };
         await assertCurrent?.(current);
         designMode = enabled;
         return { ...current, ...(enabled ? { designMode: true as const } : {}) };
@@ -768,7 +926,9 @@ test("turning design mode on hands the chat and its folder to the canvas once, a
       remove: async () => undefined,
     } as unknown as ChatApplicationDependencies["chatStore"];
   };
-  const configStore = { getWorkspace: async (id: string) => (id === folderWorkspace.id ? folderWorkspace : undefined) };
+  const configStore = {
+    getWorkspace: async (id: string) => (id === folderWorkspace.id ? folderWorkspace : undefined),
+  };
   const entries: { chatId: string; workspaceRoot: string }[] = [];
   const { service } = fixture({
     configStore,
@@ -784,7 +944,9 @@ test("turning design mode on hands the chat and its folder to the canvas once, a
 
   const logged: string[] = [];
   let finishPlacing!: () => void;
-  const placed = new Promise<void>((resolve) => { finishPlacing = resolve; });
+  const placed = new Promise<void>((resolve) => {
+    finishPlacing = resolve;
+  });
   const failing = fixture({
     configStore,
     chatStore: togglingStore(),
@@ -882,15 +1044,21 @@ test("a created chat counts once with its workspace kind, and a refused create c
   assert.deepEqual(sent, [{ event: "chat_created", props: { workspace_kind: "folder" } }]);
 
   // A chat an outside MCP app made is created, but not counted.
-  const uncounted = await application.service.create({ workspaceId: "workspace-1", title: "Chat" }, owner(), {
-    reportAnalytics: false,
-  });
+  const uncounted = await application.service.create(
+    { workspaceId: "workspace-1", title: "Chat" },
+    owner(),
+    {
+      reportAnalytics: false,
+    },
+  );
   assert.ok(uncounted?.id);
   assert.equal(sent.length, 1);
 
   const stale = owner();
   stale.invalidate();
-  await assert.rejects(application.service.create({ workspaceId: "workspace-1", title: "Chat" }, stale));
+  await assert.rejects(
+    application.service.create({ workspaceId: "workspace-1", title: "Chat" }, stale),
+  );
   assert.equal(sent.length, 1);
 });
 
@@ -899,7 +1067,10 @@ test("promoteEphemeral reports floating_chat_promoted only when the chat was act
   let ephemeralFlag = true;
   const application = fixture({
     chatStore: {
-      promoteEphemeralChat: async (chatId: string, assertAllowed?: (chat: Chat) => Promise<void>) => {
+      promoteEphemeralChat: async (
+        chatId: string,
+        assertAllowed?: (chat: Chat) => Promise<void>,
+      ) => {
         const current: Chat = {
           id: chatId,
           workspaceId: "nows-1",

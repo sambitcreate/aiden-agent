@@ -31,7 +31,9 @@ function fail(message, status = 1) {
     console.error(message);
     process.exit(status || 1);
   }
-  console.warn(`${message} The form-fill specialist will be unavailable in this development build.`);
+  console.warn(
+    `${message} The form-fill specialist will be unavailable in this development build.`,
+  );
   process.exit(0);
 }
 

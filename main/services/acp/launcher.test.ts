@@ -16,7 +16,9 @@ function launcher(stateDir: string, ledger: AcpPidLedger, released: { count: num
         return {
           command: process.execPath,
           args: [FAKE_AGENT],
-          env: buildChildEnvironment({ set: { RUN_TMP: context.tmpDir, HOOK: context.browserHook ?? "" } }),
+          env: buildChildEnvironment({
+            set: { RUN_TMP: context.tmpDir, HOOK: context.browserHook ?? "" },
+          }),
         };
       },
     },
@@ -45,7 +47,10 @@ test("each process gets its own temp directory, a ledger entry and a lease, all 
   const runDirs = readdirSync(path.join(stateDir, "tmp"));
   assert.equal(runDirs.length, 1);
   assert.match(runDirs[0]!, /^run-/u);
-  assert.deepEqual(ledger.snapshot().map((entry) => entry.pid), [launched.process.pid]);
+  assert.deepEqual(
+    ledger.snapshot().map((entry) => entry.pid),
+    [launched.process.pid],
+  );
   await launched.dispose();
   await launched.dispose();
   assert.equal(released.count, 1, "the lease is released exactly once");
@@ -74,7 +79,10 @@ test("sweep removes temp directories a crashed run left behind", async () => {
 
 test("the hook lives on a path BROWSER parsing cannot split", () => {
   assert.equal(hookDirectory("/state/aiden", "/tmp"), "/state/aiden/hooks");
-  assert.match(hookDirectory("/Users/me/Library/Application Support/Aiden Agent/acp", "/tmp"), /^\/tmp\/aiden-acp-hooks-/u);
+  assert.match(
+    hookDirectory("/Users/me/Library/Application Support/Aiden Agent/acp", "/tmp"),
+    /^\/tmp\/aiden-acp-hooks-/u,
+  );
   assert.match(hookDirectory("/odd:path", "/tmp"), /^\/tmp\//u);
 });
 
@@ -84,11 +92,16 @@ test("quit stops every agent the launcher started, including sign-in agents no s
   const released = { count: 0 };
   const runtimeLauncher = launcher(stateDir, ledger, released);
   const signIn = await runtimeLauncher.launch("auth", stateDir);
-  const validation = await runtimeLauncher.launchWith("validate", stateDir, {}, {
-    runtimeDir: stateDir,
-    asset: { url: "", sha256: "", archiveBytes: 0, members: [], executable: "", args: [] },
-    release() {},
-  });
+  const validation = await runtimeLauncher.launchWith(
+    "validate",
+    stateDir,
+    {},
+    {
+      runtimeDir: stateDir,
+      asset: { url: "", sha256: "", archiveBytes: 0, members: [], executable: "", args: [] },
+      release() {},
+    },
+  );
   // A chat launch that is still starting when quit begins.
   const starting = runtimeLauncher.launch("chat", stateDir);
   const startingOutcome = starting.then(
@@ -103,5 +116,9 @@ test("quit stops every agent the launcher started, including sign-in agents no s
   await assert.rejects(runtimeLauncher.launch("chat", stateDir), /shutting down/u);
   assert.deepEqual(ledger.snapshot(), []);
   assert.deepEqual(readdirSync(path.join(stateDir, "tmp")), []);
-  assert.equal(released.count, 2, "the chat leases are returned; the validation lease was an override");
+  assert.equal(
+    released.count,
+    2,
+    "the chat leases are returned; the validation lease was an override",
+  );
 });

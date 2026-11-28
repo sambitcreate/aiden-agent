@@ -19,7 +19,9 @@ export interface BotHealthReports {
   get(botId: string): BotHealthReport | undefined;
 }
 
-export function createBotHealthReports(): BotHealthReports & { onChange(listener: (botId: string) => void): () => void } {
+export function createBotHealthReports(): BotHealthReports & {
+  onChange(listener: (botId: string) => void): () => void;
+} {
   const reports = new Map<string, BotHealthReport>();
   const listeners = new Set<(botId: string) => void>();
   return {
@@ -103,7 +105,10 @@ export const BOT_ROUTINE_PREFLIGHT_HORIZON_MS = 60 * 60_000;
 export const BOT_ROUTINE_PREFLIGHT_TIMEOUT_MS = 60_000;
 const CHECKED_KEPT = 500;
 
-export function createBotRoutinePreflight(dependencies: BotRoutinePreflightDependencies): { rearm(): Promise<void>; dispose(): void } {
+export function createBotRoutinePreflight(dependencies: BotRoutinePreflightDependencies): {
+  rearm(): Promise<void>;
+  dispose(): void;
+} {
   const timers = new Map<string, { timer: { cancel(): void } }>();
   const checked = new Set<string>();
   const running = new Map<string, Promise<void>>();
@@ -124,13 +129,18 @@ export function createBotRoutinePreflight(dependencies: BotRoutinePreflightDepen
     remember(fireKey);
     // One check per Bot at a time; a second routine of the same Bot waits.
     const previous = running.get(task.botId) ?? Promise.resolve();
-    const current = previous.then(async () => {
-      if (disposed) return;
-      const signal = AbortSignal.any([controller.signal, AbortSignal.timeout(BOT_ROUTINE_PREFLIGHT_TIMEOUT_MS)]);
-      const report = await dependencies.run(task.botId, task.id, signal);
-      dependencies.reports.set(report);
-      await reconcileHealthIssues(dependencies.issues, report, task.name?.trim() || undefined);
-    }).catch((error: unknown) => dependencies.onError?.(error));
+    const current = previous
+      .then(async () => {
+        if (disposed) return;
+        const signal = AbortSignal.any([
+          controller.signal,
+          AbortSignal.timeout(BOT_ROUTINE_PREFLIGHT_TIMEOUT_MS),
+        ]);
+        const report = await dependencies.run(task.botId, task.id, signal);
+        dependencies.reports.set(report);
+        await reconcileHealthIssues(dependencies.issues, report, task.name?.trim() || undefined);
+      })
+      .catch((error: unknown) => dependencies.onError?.(error));
     running.set(task.botId, current);
     await current;
     if (running.get(task.botId) === current) running.delete(task.botId);

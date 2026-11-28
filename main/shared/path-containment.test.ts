@@ -45,7 +45,10 @@ test("isPathInside handles Windows separators, drives, and UNC roots", () => {
 test("assertPathInside throws the caller's message only for escapes", () => {
   const root = path.resolve("/srv/aiden/root");
   assert.doesNotThrow(() => assertPathInside(root, path.join(root, "ok"), "escaped"));
-  assert.throws(() => assertPathInside(root, path.join(root, "..", "x"), "escaped"), /^Error: escaped$/);
+  assert.throws(
+    () => assertPathInside(root, path.join(root, "..", "x"), "escaped"),
+    /^Error: escaped$/,
+  );
 });
 
 test("resolveRealPathInside follows symlinks before deciding containment", async (t) => {

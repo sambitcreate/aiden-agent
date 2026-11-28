@@ -29,7 +29,9 @@ export class AidenRemoteSpeechLane {
 
     let release!: () => void;
     const previous = this.tail;
-    this.tail = new Promise<void>((resolve) => { release = resolve; });
+    this.tail = new Promise<void>((resolve) => {
+      release = resolve;
+    });
     await previous;
     try {
       return await operation();

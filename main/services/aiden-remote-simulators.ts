@@ -49,7 +49,8 @@ export type AidenRemoteSimulatorAudience = "desktop" | "mobile";
  * health reads, and the input socket. Screenshots, the accessibility tree,
  * the event log, H.264 and the device list socket stay desktop-only.
  */
-const MOBILE_HUB_HTTP_PATH = /^\/vendor\/serve-sim\/helper\/[A-Za-z0-9-]+\/(stream\.mjpeg|config|health)$/u;
+const MOBILE_HUB_HTTP_PATH =
+  /^\/vendor\/serve-sim\/helper\/[A-Za-z0-9-]+\/(stream\.mjpeg|config|health)$/u;
 const MOBILE_HUB_WS_PATH = /^\/vendor\/serve-sim\/helper\/ws$/u;
 
 export const MOBILE_SIMULATOR_REFUSAL =
@@ -209,7 +210,11 @@ export interface AidenRemoteSimulatorHost {
 }
 
 export function simulatorsUnavailable(): AidenRemoteServiceError {
-  return new AidenRemoteServiceError("not_found", "Simulators are unavailable on this Aiden installation.", 404);
+  return new AidenRemoteServiceError(
+    "not_found",
+    "Simulators are unavailable on this Aiden installation.",
+    404,
+  );
 }
 
 function sharingOff(): AidenRemoteServiceError {
@@ -227,7 +232,12 @@ function unknownSimulator(): AidenRemoteServiceError {
 /** Host errors carry local detail (paths, tool output). Paired devices get a fixed message. */
 function simulatorFailure(error: unknown): AidenRemoteServiceError {
   if (error instanceof AidenRemoteServiceError) return error;
-  return new AidenRemoteServiceError("internal_error", "The simulator request could not be completed.", 500, true);
+  return new AidenRemoteServiceError(
+    "internal_error",
+    "The simulator request could not be completed.",
+    500,
+    true,
+  );
 }
 
 function requireDeviceId(body: unknown): string {
@@ -274,7 +284,9 @@ export class AidenRemoteSimulatorRelay {
   >();
 
   constructor(
-    private readonly resolve: (audience: AidenRemoteSimulatorAudience) => AidenRemoteSimulatorHost | null,
+    private readonly resolve: (
+      audience: AidenRemoteSimulatorAudience,
+    ) => AidenRemoteSimulatorHost | null,
   ) {}
 
   host(audience: AidenRemoteSimulatorAudience = "desktop"): AidenRemoteSimulatorHost | null {
@@ -313,7 +325,12 @@ export class AidenRemoteSimulatorRelay {
 
   private requireRelayCapacity(deviceId: string): void {
     if ((this.live.get(deviceId)?.size ?? 0) >= MAX_RELAYS_PER_DEVICE) {
-      throw new AidenRemoteServiceError("handle_capacity", "Too many simulator streams are open.", 429, true);
+      throw new AidenRemoteServiceError(
+        "handle_capacity",
+        "Too many simulator streams are open.",
+        429,
+        true,
+      );
     }
   }
 
@@ -351,28 +368,48 @@ export class AidenRemoteSimulatorRelay {
       return;
     }
     if (query) {
-      throw new AidenRemoteServiceError("invalid_request", "This endpoint does not accept query parameters.", 400);
+      throw new AidenRemoteServiceError(
+        "invalid_request",
+        "This endpoint does not accept query parameters.",
+        400,
+      );
     }
     const host = this.host(audience);
     if (!host) throw simulatorsUnavailable();
     if (request.method === "GET" && path === "/simulators") {
       let listing: AidenRemoteSimulatorListing;
       try {
-        listing = await host.list(context.chatId === undefined ? undefined : { chatId: context.chatId });
+        listing = await host.list(
+          context.chatId === undefined ? undefined : { chatId: context.chatId },
+        );
       } catch (error) {
         throw simulatorFailure(error);
       }
-      context.writeJson(200, listing.sharing ? listing : { sharing: false, status: listing.status, devices: [] });
+      context.writeJson(
+        200,
+        listing.sharing ? listing : { sharing: false, status: listing.status, devices: [] },
+      );
       return;
     }
     if (context.chatId !== undefined) {
-      throw new AidenRemoteServiceError("invalid_request", "This endpoint does not accept query parameters.", 400);
+      throw new AidenRemoteServiceError(
+        "invalid_request",
+        "This endpoint does not accept query parameters.",
+        400,
+      );
     }
     if (request.method !== "POST") {
-      throw new AidenRemoteServiceError("not_found", "This Aiden Remote endpoint does not exist.", 404);
+      throw new AidenRemoteServiceError(
+        "not_found",
+        "This Aiden Remote endpoint does not exist.",
+        404,
+      );
     }
     // Settings and device actions stay desktop-only; refuse before reading the body.
-    if (audience === "mobile" && (path === "/simulators/settings" || path === "/simulators/action")) {
+    if (
+      audience === "mobile" &&
+      (path === "/simulators/settings" || path === "/simulators/action")
+    ) {
       throw mobileRefused();
     }
     const body = await context.readJson(4_096);
@@ -402,15 +439,27 @@ export class AidenRemoteSimulatorRelay {
           // The serving Mac only ever acts on its own simulators.
           const input =
             typeof body === "object" && body !== null && !Array.isArray(body)
-              ? parseDeviceActionInput({ ...(body as Record<string, unknown>), hostId: LOCAL_DEVICE_HOST_ID })
+              ? parseDeviceActionInput({
+                  ...(body as Record<string, unknown>),
+                  hostId: LOCAL_DEVICE_HOST_ID,
+                })
               : null;
-          if (!input) throw new AidenRemoteServiceError("invalid_request", "The simulator action is invalid.", 400);
+          if (!input)
+            throw new AidenRemoteServiceError(
+              "invalid_request",
+              "The simulator action is invalid.",
+              400,
+            );
           if (!shared.isKnownDevice(input.deviceId)) throw unknownSimulator();
           context.writeJson(200, await shared.action(input));
           return;
         }
         default:
-          throw new AidenRemoteServiceError("not_found", "This Aiden Remote endpoint does not exist.", 404);
+          throw new AidenRemoteServiceError(
+            "not_found",
+            "This Aiden Remote endpoint does not exist.",
+            404,
+          );
       }
     } catch (error) {
       throw simulatorFailure(error);
@@ -435,7 +484,9 @@ export class AidenRemoteSimulatorRelay {
     if (!route.ok) {
       throw new AidenRemoteServiceError(
         route.status === 405 ? "invalid_request" : "not_found",
-        route.status === 405 ? "This method is not allowed on this route." : "This Aiden Remote endpoint does not exist.",
+        route.status === 405
+          ? "This method is not allowed on this route."
+          : "This Aiden Remote endpoint does not exist.",
         route.status,
       );
     }
@@ -449,7 +500,12 @@ export class AidenRemoteSimulatorRelay {
     if (route.deviceIds.some((deviceId) => !host.isKnownDevice(deviceId))) throw unknownSimulator();
     const hubOrigin = host.hubOrigin();
     if (!hubOrigin) {
-      throw new AidenRemoteServiceError("not_found", "The simulator hub is not running on this Mac.", 404, true);
+      throw new AidenRemoteServiceError(
+        "not_found",
+        "The simulator hub is not running on this Mac.",
+        404,
+        true,
+      );
     }
     return { hubOrigin, upstreamPath: route.upstreamPath, mutable: route.mutable, hubPath };
   }
@@ -466,9 +522,14 @@ export class AidenRemoteSimulatorRelay {
     hubPath: string,
     audience: AidenRemoteSimulatorAudience,
   ) {
-    const invalid = () => new AidenRemoteServiceError("invalid_request", "The simulator request is invalid.", 400);
+    const invalid = () =>
+      new AidenRemoteServiceError("invalid_request", "The simulator request is invalid.", 400);
     if (method !== "POST") {
-      throw new AidenRemoteServiceError("invalid_request", "This method is not allowed on this route.", 405);
+      throw new AidenRemoteServiceError(
+        "invalid_request",
+        "This method is not allowed on this route.",
+        405,
+      );
     }
     if (hubPath === "/vendor/serve-emu/api/screenshot") return undefined;
     const parsed = await context.readJson(MAX_SCREENSHOT_BODY_BYTES);
@@ -484,7 +545,11 @@ export class AidenRemoteSimulatorRelay {
     // The iOS screenshot capture must name a listed simulator.
     const udid = record?.udid;
     if (typeof udid !== "string" || !DEVICE_ID_PATTERN.test(udid)) {
-      throw new AidenRemoteServiceError("invalid_request", "The screenshot request is invalid.", 400);
+      throw new AidenRemoteServiceError(
+        "invalid_request",
+        "The screenshot request is invalid.",
+        400,
+      );
     }
     if (!this.requireSharing(audience).isKnownDevice(udid)) throw unknownSimulator();
     return Buffer.from(JSON.stringify({ udid }));
@@ -497,15 +562,25 @@ export class AidenRemoteSimulatorRelay {
     const { request, response } = context;
     const method = request.method ?? "GET";
     if (method === "OPTIONS") {
-      throw new AidenRemoteServiceError("invalid_request", "This method is not allowed on this route.", 405);
+      throw new AidenRemoteServiceError(
+        "invalid_request",
+        "This method is not allowed on this route.",
+        405,
+      );
     }
     if (context.chatId !== undefined) {
-      throw new AidenRemoteServiceError("invalid_request", "This endpoint does not accept a chat.", 400);
+      throw new AidenRemoteServiceError(
+        "invalid_request",
+        "This endpoint does not accept a chat.",
+        400,
+      );
     }
     const target = this.hubTarget(method, context.path, context.query, false, audience);
     this.requireRelayCapacity(context.deviceId);
     const body =
-      method === "GET" || method === "HEAD" ? undefined : await this.relayBody(context, method, target.hubPath, audience);
+      method === "GET" || method === "HEAD"
+        ? undefined
+        : await this.relayBody(context, method, target.hubPath, audience);
     const headers = hubRequestHeaders(request.headers, target.hubOrigin, { forceOrigin: true });
     delete headers["content-type"];
     if (body) {
@@ -513,16 +588,30 @@ export class AidenRemoteSimulatorRelay {
       headers["content-length"] = String(body.length);
     }
     await new Promise<void>((resolve, reject) => {
-      const upstream = httpRequest(`${target.hubOrigin}${target.upstreamPath}`, { method, headers }, (hubResponse) => {
-        response.writeHead(hubResponse.statusCode ?? 502, hubResponseHeaders(hubResponse.headers));
-        // pipe() never forwards errors: a hub that resets mid-stream must end this response, not crash main.
-        hubResponse.once("error", () => response.destroy());
-        hubResponse.pipe(response);
-        response.once("close", () => hubResponse.destroy());
-      });
+      const upstream = httpRequest(
+        `${target.hubOrigin}${target.upstreamPath}`,
+        { method, headers },
+        (hubResponse) => {
+          response.writeHead(
+            hubResponse.statusCode ?? 502,
+            hubResponseHeaders(hubResponse.headers),
+          );
+          // pipe() never forwards errors: a hub that resets mid-stream must end this response, not crash main.
+          hubResponse.once("error", () => response.destroy());
+          hubResponse.pipe(response);
+          response.once("close", () => hubResponse.destroy());
+        },
+      );
       upstream.once("error", () => {
         if (!response.headersSent) {
-          reject(new AidenRemoteServiceError("internal_error", "The simulator hub did not respond.", 502, true));
+          reject(
+            new AidenRemoteServiceError(
+              "internal_error",
+              "The simulator hub did not respond.",
+              502,
+              true,
+            ),
+          );
         } else {
           response.destroy();
           resolve();
@@ -555,7 +644,11 @@ export class AidenRemoteSimulatorRelay {
     const { request, socket } = input;
     const audience = input.audience ?? "desktop";
     if (!input.path.startsWith(`${AIDEN_REMOTE_SIMULATOR_HUB_PREFIX}/`)) {
-      throw new AidenRemoteServiceError("not_found", "This Aiden Remote endpoint does not exist.", 404);
+      throw new AidenRemoteServiceError(
+        "not_found",
+        "This Aiden Remote endpoint does not exist.",
+        404,
+      );
     }
     const target = this.hubTarget(request.method ?? "GET", input.path, input.query, true, audience);
     this.requireRelayCapacity(input.deviceId);

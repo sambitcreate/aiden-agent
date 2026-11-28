@@ -36,7 +36,9 @@ export function createModelsCatalogReader(deps: ModelsCatalogReaderDependencies)
     try {
       return await deps.displayCache.catalog(bundled);
     } catch (error) {
-      deps.warn("Could not read the device-local models.dev cache.", { error: errorMessage(error) });
+      deps.warn("Could not read the device-local models.dev cache.", {
+        error: errorMessage(error),
+      });
       return bundled;
     }
   }
@@ -67,7 +69,9 @@ export function createModelsCatalogReader(deps: ModelsCatalogReaderDependencies)
       modelIds: string[],
     ): Promise<Record<string, ModelInfo>> {
       const modelsDev = await getDisplayModelsDev();
-      return Object.fromEntries(modelIds.map((id) => [id, resolveModelInfo(modelsDev, provider, id)]));
+      return Object.fromEntries(
+        modelIds.map((id) => [id, resolveModelInfo(modelsDev, provider, id)]),
+      );
     },
   };
 }

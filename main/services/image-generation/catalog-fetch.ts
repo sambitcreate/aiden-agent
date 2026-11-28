@@ -26,9 +26,11 @@ import { REPLICATE_VERSION_ID } from "./settings-store.js";
 
 type Fetch = typeof fetch;
 
-export const OPENROUTER_IMAGE_MODELS_URL = "https://openrouter.ai/api/v1/models?output_modalities=image";
+export const OPENROUTER_IMAGE_MODELS_URL =
+  "https://openrouter.ai/api/v1/models?output_modalities=image";
 export const FAL_MODELS_URL = "https://api.fal.ai/v1/models";
-export const REPLICATE_TEXT_TO_IMAGE_COLLECTION_URL = "https://api.replicate.com/v1/collections/text-to-image";
+export const REPLICATE_TEXT_TO_IMAGE_COLLECTION_URL =
+  "https://api.replicate.com/v1/collections/text-to-image";
 
 const MAX_CATALOG_BYTES = 4 * 1024 * 1024;
 const MAX_PAGES_PER_CATEGORY = 5;
@@ -41,7 +43,10 @@ const FAL_CURSOR = /^[A-Za-z0-9+/=_-]{1,128}$/u;
 
 export class CatalogFetchError extends Error {
   constructor(
-    readonly code: Extract<ImageGenerationErrorCode, "network_error" | "rejected_key" | "invalid_catalog" | "key_required">,
+    readonly code: Extract<
+      ImageGenerationErrorCode,
+      "network_error" | "rejected_key" | "invalid_catalog" | "key_required"
+    >,
     message: string,
   ) {
     super(message);
@@ -56,13 +61,18 @@ function record(value: unknown): Record<string, unknown> | undefined {
 }
 
 function stringArray(value: unknown): string[] {
-  return Array.isArray(value) ? value.filter((entry): entry is string => typeof entry === "string") : [];
+  return Array.isArray(value)
+    ? value.filter((entry): entry is string => typeof entry === "string")
+    : [];
 }
 
 function cleanName(value: unknown, fallback: string): string {
   if (typeof value !== "string") return fallback;
   /* eslint-disable no-control-regex */
-  const name = value.replace(/[\u0000-\u001f\u007f]+/gu, " ").replace(/\s+/gu, " ").trim();
+  const name = value
+    .replace(/[\u0000-\u001f\u007f]+/gu, " ")
+    .replace(/\s+/gu, " ")
+    .trim();
   /* eslint-enable no-control-regex */
   return name && name.length <= MAX_NAME ? name : fallback;
 }
@@ -84,12 +94,17 @@ function stopped(provider: string, signal: AbortSignal | undefined): CatalogFetc
   const timedOut = reason instanceof Error && reason.name === "TimeoutError";
   return new CatalogFetchError(
     "network_error",
-    timedOut ? `${provider} took too long to list its models. Try again.` : "Fetching models was cancelled.",
+    timedOut
+      ? `${provider} took too long to list its models. Try again.`
+      : "Fetching models was cancelled.",
   );
 }
 
 function invalid(provider: string): CatalogFetchError {
-  return new CatalogFetchError("invalid_catalog", `${provider} returned a model list Aiden can't read.`);
+  return new CatalogFetchError(
+    "invalid_catalog",
+    `${provider} returned a model list Aiden can't read.`,
+  );
 }
 
 async function getJson(
@@ -117,13 +132,17 @@ async function getJson(
   }
   if (!response.ok) {
     await response.body?.cancel().catch(() => undefined);
-    throw new CatalogFetchError("network_error", `${provider} couldn't list models (${response.status}).`);
+    throw new CatalogFetchError(
+      "network_error",
+      `${provider} couldn't list models (${response.status}).`,
+    );
   }
   const bytes = await readBoundedBody(response, {
     maxBytes: MAX_CATALOG_BYTES,
     signal,
     errors: {
-      tooLarge: () => new CatalogFetchError("invalid_catalog", `${provider} returned an oversized model list.`),
+      tooLarge: () =>
+        new CatalogFetchError("invalid_catalog", `${provider} returned an oversized model list.`),
       missingBody: () => invalid(provider),
       invalidChunk: () => invalid(provider),
       aborted: () => stopped(provider, signal),
@@ -171,8 +190,13 @@ export function parseOpenRouterImageModels(value: unknown): ImageCatalogEntry[] 
   return models;
 }
 
-export async function fetchOpenRouterImageModels(fetchImpl: Fetch, signal?: AbortSignal): Promise<ImageCatalogEntry[]> {
-  return parseOpenRouterImageModels(await getJson(fetchImpl, OPENROUTER_IMAGE_MODELS_URL, "OpenRouter", {}, signal));
+export async function fetchOpenRouterImageModels(
+  fetchImpl: Fetch,
+  signal?: AbortSignal,
+): Promise<ImageCatalogEntry[]> {
+  return parseOpenRouterImageModels(
+    await getJson(fetchImpl, OPENROUTER_IMAGE_MODELS_URL, "OpenRouter", {}, signal),
+  );
 }
 
 // ---- fal ----
@@ -185,7 +209,10 @@ export interface FalModelSummary {
 }
 
 /** Parse one page of `GET /v1/models`. */
-export function parseFalModelsPage(value: unknown): { models: FalModelSummary[]; nextCursor?: string } {
+export function parseFalModelsPage(value: unknown): {
+  models: FalModelSummary[];
+  nextCursor?: string;
+} {
   const body = record(value);
   const list = body?.models;
   if (!Array.isArray(list)) throw invalid("fal");
@@ -207,7 +234,9 @@ export function parseFalModelsPage(value: unknown): { models: FalModelSummary[];
   }
   const cursor = body?.next_cursor;
   const nextCursor =
-    body?.has_more === true && typeof cursor === "string" && FAL_CURSOR.test(cursor) ? cursor : undefined;
+    body?.has_more === true && typeof cursor === "string" && FAL_CURSOR.test(cursor)
+      ? cursor
+      : undefined;
   return { models, ...(nextCursor ? { nextCursor } : {}) };
 }
 
@@ -258,7 +287,9 @@ export function pairFalModels(
       adapter: {
         kind: "fal",
         textEndpoint: model.endpoint,
-        ...(edit ? { editEndpoint: edit, referenceField: "image_urls" as const, maxReferences: 4 } : {}),
+        ...(edit
+          ? { editEndpoint: edit, referenceField: "image_urls" as const, maxReferences: 4 }
+          : {}),
       },
     });
   }
@@ -357,7 +388,10 @@ export function replicateReferenceField(
       return {
         field,
         mode: "array",
-        max: typeof max === "number" && Number.isSafeInteger(max) && max >= 1 ? Math.min(max, MAX_IMAGE_REFERENCES) : 4,
+        max:
+          typeof max === "number" && Number.isSafeInteger(max) && max >= 1
+            ? Math.min(max, MAX_IMAGE_REFERENCES)
+            : 4,
       };
     }
     if (property.type === "string") return { field, mode: "single", max: 1 };
@@ -381,7 +415,9 @@ export function replicateAspectRatios(schema: unknown): ImageAspectRatio[] | und
     const ref = node.$ref;
     if (typeof ref === "string" && ref.startsWith("#/components/schemas/")) {
       const name = ref.slice("#/components/schemas/".length);
-      return Object.prototype.hasOwnProperty.call(schemas ?? {}, name) ? enumOf(schemas![name], depth + 1) : undefined;
+      return Object.prototype.hasOwnProperty.call(schemas ?? {}, name)
+        ? enumOf(schemas![name], depth + 1)
+        : undefined;
     }
     for (const key of ["allOf", "anyOf", "oneOf"] as const) {
       const list = node[key];
@@ -413,7 +449,10 @@ export function parseReplicateCollection(value: unknown): ImageCatalogEntry[] {
     const id = `${owner}/${name}`;
     if (id.length > MAX_ID || seen.has(id)) continue;
     const latest = record(model?.latest_version);
-    const version = typeof latest?.id === "string" && REPLICATE_VERSION_ID.test(latest.id) ? latest.id : undefined;
+    const version =
+      typeof latest?.id === "string" && REPLICATE_VERSION_ID.test(latest.id)
+        ? latest.id
+        : undefined;
     const reference = replicateReferenceField(latest?.openapi_schema);
     const aspectRatios = replicateAspectRatios(latest?.openapi_schema);
     seen.add(id);
@@ -430,7 +469,9 @@ export function parseReplicateCollection(value: unknown): ImageCatalogEntry[] {
           ? {
               referenceField: reference.field,
               // Stored only when the schema disagrees with the field name's usual shape.
-              ...(reference.mode !== REPLICATE_REFERENCE_FIELDS[reference.field] ? { referenceMode: reference.mode } : {}),
+              ...(reference.mode !== REPLICATE_REFERENCE_FIELDS[reference.field]
+                ? { referenceMode: reference.mode }
+                : {}),
               maxReferences: reference.max,
             }
           : {}),
@@ -448,9 +489,16 @@ export async function fetchReplicateImageModels(
   key: string | undefined,
   signal?: AbortSignal,
 ): Promise<ImageCatalogEntry[]> {
-  if (!key) throw new CatalogFetchError("key_required", "Add a Replicate key to fetch its model list.");
+  if (!key)
+    throw new CatalogFetchError("key_required", "Add a Replicate key to fetch its model list.");
   return parseReplicateCollection(
-    await getJson(fetchImpl, REPLICATE_TEXT_TO_IMAGE_COLLECTION_URL, "Replicate", { authorization: `Bearer ${key}` }, signal),
+    await getJson(
+      fetchImpl,
+      REPLICATE_TEXT_TO_IMAGE_COLLECTION_URL,
+      "Replicate",
+      { authorization: `Bearer ${key}` },
+      signal,
+    ),
   );
 }
 

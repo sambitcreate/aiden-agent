@@ -1,11 +1,22 @@
-import { AIDEN_UI_CATALOG, AIDEN_UI_ICONS, type ListShape, type PropKind } from "../../renderer/shared/aiden-ui/catalog.js";
+import {
+  AIDEN_UI_CATALOG,
+  AIDEN_UI_ICONS,
+  type ListShape,
+  type PropKind,
+} from "../../renderer/shared/aiden-ui/catalog.js";
 import { AIDEN_UI_LIMITS } from "../../renderer/shared/aiden-ui/types.js";
 
 /**
  * On-demand design guidance for inline visuals, returned by the
  * `visualize_guide` tool so the system prompt stays short.
  */
-export const GENERATIVE_UI_GUIDE_MODULES = ["catalog", "design", "html", "charts", "interactive"] as const;
+export const GENERATIVE_UI_GUIDE_MODULES = [
+  "catalog",
+  "design",
+  "html",
+  "charts",
+  "interactive",
+] as const;
 export type GenerativeUiGuideModule = (typeof GENERATIVE_UI_GUIDE_MODULES)[number];
 
 /** The catalog guide's worked example; a test keeps it compiling cleanly. */
@@ -34,8 +45,15 @@ function describeKind(kind: PropKind, list: ListShape | undefined): string {
 function catalogReference(): string {
   return Object.entries(AIDEN_UI_CATALOG)
     .map(([name, entry]) => {
-      const props = Object.entries(entry.props).map(([prop, kind]) => `${prop}: ${describeKind(kind, entry.lists?.[prop])}`);
-      const children = entry.children === "nodes" ? "components" : entry.children === "text" ? "text" : "no children";
+      const props = Object.entries(entry.props).map(
+        ([prop, kind]) => `${prop}: ${describeKind(kind, entry.lists?.[prop])}`,
+      );
+      const children =
+        entry.children === "nodes"
+          ? "components"
+          : entry.children === "text"
+            ? "text"
+            : "no children";
       return `- \`${name}\` — ${props.length ? props.join(", ") : "no props"}; ${children}`;
     })
     .join("\n");
@@ -54,20 +72,20 @@ function catalogGuide(inlineVisuals: boolean): string {
           "- Prefer `render_ui`: it draws with Aiden's own components, looks native, follows the theme, and works without scripts. Use `render_artifact` only for custom drawing or scripting (canvas, simulations, 3D, Plotly).",
         ]
       : []),
-    "- Start with `<Visual title=\"…\">`. Elements are JSX-like and must come from the catalog below. HTML elements, `className`, `style`, and `on…` handlers are dropped and reported back to you.",
-    "- Prop values: `\"text\"`, `{3}`, `{true}`, a bare flag (`stacked`), `{expression}`, or a constant literal like `{[{value:\"a\",label:\"A\"}]}`.",
+    '- Start with `<Visual title="…">`. Elements are JSX-like and must come from the catalog below. HTML elements, `className`, `style`, and `on…` handlers are dropped and reported back to you.',
+    '- Prop values: `"text"`, `{3}`, `{true}`, a bare flag (`stacked`), `{expression}`, or a constant literal like `{[{value:"a",label:"A"}]}`.',
     `- Data: put JSON in \`<Data name="data">{…}</Data>\` and read it as \`$data\`. It holds up to ${AIDEN_UI_LIMITS.dataBytes / 1024} KiB. Keep numbers in data and let the components format them.`,
-    "- Expressions: `$name`, `$a.b`, `$a[$key]`, literals, `+` (adds numbers, joins text), `== != < <= > >=`, `&& || !`, `test ? a : b`, and `fmt(value, \"currency\"|\"percent\"|\"number\"|\"date\")`, `len(x)`, `sum(list, \"field\")`, `max(list, \"field\")`, `min(…)`, `round(x, digits)`, `filter(list, \"field\", value)`, `sort(list, \"field\", \"asc\"|\"desc\")`. There is no `-`, `*`, `/`, method call, or arrow function: precompute values into data.",
-    "- Local state: declare keys in `<Visual state={{tab: \"a\"}}>`, bind inputs with `bind=\"tab\"`, and change state with `action={setState(\"tab\", \"b\")}`. Show parts conditionally with `<If test={$tab == \"a\"}>` and repeat with `<Each in={$data.rows} as=\"row\">…{$row.name}…</Each>`.",
+    '- Expressions: `$name`, `$a.b`, `$a[$key]`, literals, `+` (adds numbers, joins text), `== != < <= > >=`, `&& || !`, `test ? a : b`, and `fmt(value, "currency"|"percent"|"number"|"date")`, `len(x)`, `sum(list, "field")`, `max(list, "field")`, `min(…)`, `round(x, digits)`, `filter(list, "field", value)`, `sort(list, "field", "asc"|"desc")`. There is no `-`, `*`, `/`, method call, or arrow function: precompute values into data.',
+    '- Local state: declare keys in `<Visual state={{tab: "a"}}>`, bind inputs with `bind="tab"`, and change state with `action={setState("tab", "b")}`. Show parts conditionally with `<If test={$tab == "a"}>` and repeat with `<Each in={$data.rows} as="row">…{$row.name}…</Each>`.',
     inlineVisuals
-      ? "- Actions: `sendPrompt(\"…\")` sends a visible follow-up message as the user (phrase it as their message), `setState`, `openUrl(\"https://…\")` (Aiden asks before opening), `copy(\"…\")`."
-      : "- Actions: `sendPrompt(\"…\")` asks Aiden in the chat beside the page (phrase it as the person's message), `compose(\"…\")` puts text in the composer for the person to edit and send, `run(\"actionName\", value…)` runs one of the page's declared actions, `setState`, `openUrl(\"https://…\")` (Aiden asks before opening), `copy(\"…\")`.",
+      ? '- Actions: `sendPrompt("…")` sends a visible follow-up message as the user (phrase it as their message), `setState`, `openUrl("https://…")` (Aiden asks before opening), `copy("…")`.'
+      : '- Actions: `sendPrompt("…")` asks Aiden in the chat beside the page (phrase it as the person\'s message), `compose("…")` puts text in the composer for the person to edit and send, `run("actionName", value…)` runs one of the page\'s declared actions, `setState`, `openUrl("https://…")` (Aiden asks before opening), `copy("…")`.',
     ...(inlineVisuals
       ? [
-          "- Width: `layout` defaults to the reading column (about 690px); pass `layout: \"wide\"` (before `markup`) to span the chat pane for dashboards and wide tables. Everything reflows with the window.",
+          '- Width: `layout` defaults to the reading column (about 690px); pass `layout: "wide"` (before `markup`) to span the chat pane for dashboards and wide tables. Everything reflows with the window.',
         ]
       : [
-          "- Width: a page is a reading column by default; pass `layout: \"wide\"` to workspace_artifact for dashboards and wide tables. Everything reflows with the window.",
+          '- Width: a page is a reading column by default; pass `layout: "wide"` to workspace_artifact for dashboards and wide tables. Everything reflows with the window.',
         ]),
     inlineVisuals
       ? "- Keep it compact, sentence case, and keep the takeaway in your prose too. Repairs Aiden made come back in the tool result: if one changed what you meant, redraw with the same title, which replaces the visual in place. For a small fix, redraw with edits (exact { old, new } replacements of the markup you last drew) instead of the whole markup."
@@ -110,7 +128,9 @@ const MODULES: Record<Exclude<GenerativeUiGuideModule, "catalog">, string> = {
 };
 
 export function isGenerativeUiGuideModule(value: unknown): value is GenerativeUiGuideModule {
-  return typeof value === "string" && (GENERATIVE_UI_GUIDE_MODULES as readonly string[]).includes(value);
+  return (
+    typeof value === "string" && (GENERATIVE_UI_GUIDE_MODULES as readonly string[]).includes(value)
+  );
 }
 
 export interface GenerativeUiGuideOptions {
@@ -124,7 +144,9 @@ export function generativeUiGuide(
 ): string {
   const inlineVisuals = options.inlineVisuals !== false;
   const unique = GENERATIVE_UI_GUIDE_MODULES.filter((module) => modules.includes(module));
-  return unique.map((module) => (module === "catalog" ? catalogGuide(inlineVisuals) : MODULES[module])).join("\n\n");
+  return unique
+    .map((module) => (module === "catalog" ? catalogGuide(inlineVisuals) : MODULES[module]))
+    .join("\n\n");
 }
 
 /**
@@ -142,7 +164,8 @@ export function visualizeGuideLoadNotes(
   const unique = GENERATIVE_UI_GUIDE_MODULES.filter((module) => modules.includes(module));
   return unique.map((module) => ({
     key: `visualize_guide:${module}:${module === "catalog" && !inlineVisuals ? "pages" : "visuals"}`,
-    heading: "Their guide follows. You have read it now, so do not call visualize_guide for these parts.",
+    heading:
+      "Their guide follows. You have read it now, so do not call visualize_guide for these parts.",
     text: () => generativeUiGuide([module], { inlineVisuals }),
   }));
 }

@@ -35,7 +35,11 @@ class StripFocusKeeper extends React.Component<StripFocusKeeperProps> {
     return active && this.props.stripRef.current?.contains(active) ? active : null;
   }
 
-  componentDidUpdate(_previous: StripFocusKeeperProps, _state: unknown, focusedBefore: Element | null) {
+  componentDidUpdate(
+    _previous: StripFocusKeeperProps,
+    _state: unknown,
+    focusedBefore: Element | null,
+  ) {
     if (!focusedBefore) return;
     const active = document.activeElement;
     const removed = !focusedBefore.isConnected && (!active || active === document.body);

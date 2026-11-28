@@ -11,6 +11,7 @@ records what is implemented on this branch and what remains gated; this is not a
 ## Implemented
 
 ### Phase 0 — SDK and baseline
+
 - `@google/genai` upgraded from 2.19.0 to the reviewed **2.24.0** (lockfile updated).
 - `main/services/gemini-live/sdk-contract.test.ts` pins the new reviewed version;
   Live (7 + 181 + 58) and voice (90) regression suites pass unchanged.
@@ -20,6 +21,7 @@ records what is implemented on this branch and what remains gated; this is not a
   `(string & {})` arm; live credential acceptance remains an explicit gate.
 
 ### Phase 1 — Shared contracts and source resolution
+
 - `renderer/shared/tts.ts`: `TtsSettingsV1`, `TtsSourceRef`, `TtsStartRequest`,
   `TtsJobPhase`/`TtsJobSnapshot`/`TtsServiceEvent`, closed `TtsSafeError` union,
   `TTS_LIMITS`, strict patch/source/start parsing (unknown fields rejected).
@@ -41,6 +43,7 @@ records what is implemented on this branch and what remains gated; this is not a
   `runtimeSettingsFrom` normalization.
 
 ### Phase 2 — Vertical slice
+
 - `main/services/tts/gemini-wire.ts`: request builder (`store:false`, transcript
   as transcript, style only in the annotation), strict unary response parsing,
   RIFF chunk-based WAV validation, closed error classification, voices list
@@ -138,7 +141,6 @@ records what is implemented on this branch and what remains gated; this is not a
 `main/services/google-provider.test.ts` fails 3 cases on pristine `origin/main`
 (models.dev catalog drift in migration defaults).
 
-
 ## Desktop-owned mobile playback — September 24, 2026
 
 Implemented the authenticated `tts-v1` Remote API and iOS/Android Read Aloud
@@ -164,7 +166,6 @@ independent review was not admitted (subagent tree deadline); no sign-off is
 claimed. Real-device audible playback and live Google acceptance remain open.
 Evidence: `/tmp/aiden-native-tts.0Ef4XD/` on the development Mac.
 
-
 ### Unlocked iPhone verification and simulator permission
 
 After the owner unlocked Smbt16ProMax, reran AidenChatTests,
@@ -180,7 +181,6 @@ and no longer requires the unavailable iPhone 13 Pro as the default destination.
 Physical-device evidence remains necessary for hardware, actual audio routing,
 and signing/Keychain/entitlements acceptance. No simulator run is claimed here.
 
-
 ### PR publication follow-up
 
 The original PR CI lint failure was traced to test setters returning assignment
@@ -189,7 +189,6 @@ segmentation behavior. Fresh full ESLint, application and E2E TypeScript checks,
 CI registry (8 tests), TTS (122 tests), and diff hygiene pass locally. PR #245
 remains draft pending the acceptance/review gates above; rerun CI is authoritative
 for the new published revision.
-
 
 ### PR #245 review corrections — September 25, 2026
 
@@ -215,7 +214,6 @@ Fresh CI/Hermes results for this correction commit must be checked after push.
 An additional local subagent review was not admitted (tree deadline); no new
 local reviewer sign-off is claimed. PR is ready for review, not draft; full
 Voice Studio/streaming scope remains partial.
-
 
 ### Follow-up: preflight rejection retryability
 

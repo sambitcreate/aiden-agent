@@ -20,7 +20,12 @@ test("a tool request runs the registered handler and reports its result for that
   const log: unknown[] = [];
   bus.setSession("s1", transport(log));
   bus.registerTool("read_open_chat", (args) => ({ ok: true, echo: args.limit }));
-  await bus.runToolRequest({ sessionId: "s1", requestId: "r1", name: "read_open_chat", args: { limit: 3 } });
+  await bus.runToolRequest({
+    sessionId: "s1",
+    requestId: "r1",
+    name: "read_open_chat",
+    args: { limit: 3 },
+  });
   assert.deepEqual(log, [{ sessionId: "s1", requestId: "r1", response: { ok: true, echo: 3 } }]);
 });
 
@@ -29,30 +34,43 @@ test("a missing or throwing handler answers with a fixed error", async () => {
   const log: Array<{ response: { error: { code: string } } }> = [];
   bus.setSession("s1", transport(log));
   await bus.runToolRequest({ sessionId: "s1", requestId: "r1", name: "nope", args: {} });
-  bus.registerTool("boom", () => { throw new Error("private detail"); });
+  bus.registerTool("boom", () => {
+    throw new Error("private detail");
+  });
   await bus.runToolRequest({ sessionId: "s1", requestId: "r2", name: "boom", args: {} });
-  assert.deepEqual(log.map((entry) => entry.response.error.code), ["tool_unavailable", "tool_failed"]);
+  assert.deepEqual(
+    log.map((entry) => entry.response.error.code),
+    ["tool_unavailable", "tool_failed"],
+  );
   assert.doesNotMatch(JSON.stringify(log), /private detail/u);
 });
 
 test("a request for another session sends nothing; one cancelled before it commits answers cancelled at once", async () => {
   const bus = new LiveSessionBus();
-  const log: Array<{ requestId?: string; response?: { ok?: unknown; error?: { code: string } } }> = [];
+  const log: Array<{ requestId?: string; response?: { ok?: unknown; error?: { code: string } } }> =
+    [];
   bus.setSession("s1", transport(log));
   await bus.runToolRequest({ sessionId: "old", requestId: "r1", name: "x", args: {} });
   assert.equal(log.length, 0);
   let release!: () => void;
   let sawAbort = false;
-  bus.registerTool("slow", (_args, context) => new Promise((resolve) => {
-    release = () => {
-      sawAbort = context.signal.aborted;
-      resolve({ ok: true });
-    };
-  }));
+  bus.registerTool(
+    "slow",
+    (_args, context) =>
+      new Promise((resolve) => {
+        release = () => {
+          sawAbort = context.signal.aborted;
+          resolve({ ok: true });
+        };
+      }),
+  );
   const running = bus.runToolRequest({ sessionId: "s1", requestId: "r2", name: "slow", args: {} });
   bus.cancelToolRequest("s1", "r2");
   await Promise.resolve();
-  assert.deepEqual(log.map((entry) => entry.response?.error?.code), ["cancelled"]);
+  assert.deepEqual(
+    log.map((entry) => entry.response?.error?.code),
+    ["cancelled"],
+  );
   release();
   await running;
   assert.equal(sawAbort, true);
@@ -77,7 +95,9 @@ test("a cancel after the handler committed still reports what really happened", 
   assert.deepEqual(log, [], "nothing until the send settles");
   finish();
   await running;
-  assert.deepEqual(log, [{ sessionId: "s1", requestId: "r1", response: { ok: true, status: "sent", aborted: true } }]);
+  assert.deepEqual(log, [
+    { sessionId: "s1", requestId: "r1", response: { ok: true, status: "sent", aborted: true } },
+  ]);
 });
 
 test("unregistering keeps a newer registration of the same tool", () => {
@@ -94,7 +114,10 @@ test("voice inputs get rising ids and reach every listener; notes need a session
   bus.onVoiceInput((input) => heard.push(input));
   bus.publishVoiceInput("allow");
   bus.publishVoiceInput("bye");
-  assert.deepEqual(heard.map((input) => input.text), ["allow", "bye"]);
+  assert.deepEqual(
+    heard.map((input) => input.text),
+    ["allow", "bye"],
+  );
   assert.ok(heard[1]!.id > heard[0]!.id);
   assert.equal(bus.latestVoiceInputId(), heard[1]!.id);
   assert.equal(await bus.note("It finished."), false);

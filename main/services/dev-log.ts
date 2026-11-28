@@ -22,7 +22,11 @@ export function redactDevLogSecrets(value: string): string {
   return sanitizeDiagnosticText(value, Math.max(4_096, value.length));
 }
 
-export function writeDevLog(level: "debug" | "info" | "warn" | "error", scope: string, values: unknown[]): void {
+export function writeDevLog(
+  level: "debug" | "info" | "warn" | "error",
+  scope: string,
+  values: unknown[],
+): void {
   writeLegacyDiagnostic(level, scope, values);
 }
 

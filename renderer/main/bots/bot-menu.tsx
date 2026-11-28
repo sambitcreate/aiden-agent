@@ -5,7 +5,17 @@
 // side panel, opened from its name.
 
 import * as React from "react";
-import { AppWindow, Ellipsis, MessageCircle, MessageCircleMore, Pause, Pin, PinOff, Play, Trash2 } from "lucide-react";
+import {
+  AppWindow,
+  Ellipsis,
+  MessageCircle,
+  MessageCircleMore,
+  Pause,
+  Pin,
+  PinOff,
+  Play,
+  Trash2,
+} from "lucide-react";
 import { useRouter } from "@tanstack/react-router";
 import {
   Button,
@@ -25,7 +35,12 @@ import { botsApi } from "../../lib/ipc";
 import { applyBotBubbleChange, botBubblesApi, useBotBubbles } from "../../lib/bot-bubbles-api";
 import { botChatRouteBotId } from "../../lib/bot-routes";
 import { useOptionalShortcutLabel } from "../../lib/command-system";
-import { isBotBubbled, parseBotBubbleRect, type BotBubbleRect, type BotBubbleState } from "../../shared/bot-bubbles";
+import {
+  isBotBubbled,
+  parseBotBubbleRect,
+  type BotBubbleRect,
+  type BotBubbleState,
+} from "../../shared/bot-bubbles";
 import { userFacingErrorMessage } from "../../lib/ipc-error";
 import { cn } from "../../lib/ui-utils";
 import type { BotDefinition } from "../../shared/bots";
@@ -48,13 +63,19 @@ const MENU_ICON = "size-4 shrink-0";
  * Pause the Bot (its running turn stops where it is and nothing new runs) or
  * lift the pause. The Bot's state reaches every window through `bots:changed`.
  */
-export async function setBotPaused(bot: Pick<BotDefinition, "id" | "name">, paused: boolean): Promise<void> {
+export async function setBotPaused(
+  bot: Pick<BotDefinition, "id" | "name">,
+  paused: boolean,
+): Promise<void> {
   try {
     if (paused) await botsApi.pause(bot.id);
     else await botsApi.unpause(bot.id);
   } catch (error) {
     toast.error(
-      userFacingErrorMessage(error, paused ? `Aiden couldn’t pause ${bot.name}.` : `Aiden couldn’t resume ${bot.name}.`),
+      userFacingErrorMessage(
+        error,
+        paused ? `Aiden couldn’t pause ${bot.name}.` : `Aiden couldn’t resume ${bot.name}.`,
+      ),
     );
   }
 }
@@ -82,7 +103,9 @@ export async function bubbleBot(
   sourceRect?: BotBubbleRect,
 ): Promise<void> {
   try {
-    await applyBotBubbleChange(botBubblesApi.bubble(sourceRect ? { botId: bot.id, sourceRect } : { botId: bot.id }));
+    await applyBotBubbleChange(
+      botBubblesApi.bubble(sourceRect ? { botId: bot.id, sourceRect } : { botId: bot.id }),
+    );
   } catch (error) {
     toast.error(userFacingErrorMessage(error, `Aiden couldn’t bubble ${bot.name}.`));
   }

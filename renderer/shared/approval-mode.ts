@@ -52,7 +52,8 @@ export function parseWorkspaceMacGrants(value: unknown): WorkspaceMacGrants | un
   const record = value as Record<string, unknown>;
   const grants: WorkspaceMacGrants = {};
   for (const kind of MAC_GRANT_CLASSES) {
-    if (Object.prototype.hasOwnProperty.call(record, kind) && record[kind] === true) grants[kind] = true;
+    if (Object.prototype.hasOwnProperty.call(record, kind) && record[kind] === true)
+      grants[kind] = true;
   }
   return Object.keys(grants).length > 0 ? grants : undefined;
 }
@@ -69,15 +70,21 @@ export interface ApprovalModeSettings {
  * was given Ask at startup (`approvalModeAfterUpgrade`). Auto without a usable
  * model is Ask.
  */
-export function effectiveApprovalMode(settings: ApprovalModeSettings | undefined, usableModel: boolean): ApprovalMode {
+export function effectiveApprovalMode(
+  settings: ApprovalModeSettings | undefined,
+  usableModel: boolean,
+): ApprovalMode {
   const raw = settings?.approvalMode;
   // Unset follows a usable model to Auto only when the fresh-install seed said
   // so: settings that were never seeded (an unreadable file, say) may belong
   // to an install already in use, so they read as Ask. A value that isn't a
   // mode is Ask too.
-  const mode = raw === undefined
-    ? (settings?.approvalModeOrigin === "fresh" ? "auto" : "ask")
-    : (parseApprovalMode(raw) ?? "ask");
+  const mode =
+    raw === undefined
+      ? settings?.approvalModeOrigin === "fresh"
+        ? "auto"
+        : "ask"
+      : (parseApprovalMode(raw) ?? "ask");
   return mode === "auto" && !usableModel ? "ask" : mode;
 }
 
@@ -98,7 +105,9 @@ export interface ApprovalModeMigrationEvidence {
  * The mode to write at startup, or `undefined` to leave a fresh install unset
  * (it follows a usable model to Auto). Never returns Auto.
  */
-export function approvalModeAfterUpgrade(evidence: ApprovalModeMigrationEvidence): "ask" | undefined {
+export function approvalModeAfterUpgrade(
+  evidence: ApprovalModeMigrationEvidence,
+): "ask" | undefined {
   if (evidence.stored) return undefined;
   return evidence.upgradedProfile || evidence.inUse ? "ask" : undefined;
 }
@@ -134,14 +143,22 @@ export function workspaceApprovalPolicy(
   globalMode: ApprovalMode,
 ): WorkspaceApprovalPolicy {
   const own = parseApprovalMode(workspace?.approvalMode);
-  const grants = new Set<MacGrantClass>(Object.keys(parseWorkspaceMacGrants(workspace?.macGrants) ?? {}) as MacGrantClass[]);
+  const grants = new Set<MacGrantClass>(
+    Object.keys(parseWorkspaceMacGrants(workspace?.macGrants) ?? {}) as MacGrantClass[],
+  );
   const chatOnly = workspace?.permission === "none";
   if (own === undefined && workspace?.permission === "full") {
     grants.add("shell");
     grants.add("files");
     return { mode: "never", customized: true, chatOnly, macGrants: grants, legacyFull: true };
   }
-  return { mode: own ?? globalMode, customized: own !== undefined, chatOnly, macGrants: grants, legacyFull: false };
+  return {
+    mode: own ?? globalMode,
+    customized: own !== undefined,
+    chatOnly,
+    macGrants: grants,
+    legacyFull: false,
+  };
 }
 
 /**
@@ -152,8 +169,17 @@ export function workspaceApprovalPolicy(
  */
 export function workspaceApprovalPatch(
   workspace: ApprovalWorkspaceFields,
-  change: { mode?: ApprovalMode | null; revokeMac?: MacGrantClass; grantMac?: MacGrantClass; clearMac?: true },
-): { permission?: "ask"; approvalMode?: ApprovalMode | null; macGrants: WorkspaceMacGrants | null } {
+  change: {
+    mode?: ApprovalMode | null;
+    revokeMac?: MacGrantClass;
+    grantMac?: MacGrantClass;
+    clearMac?: true;
+  },
+): {
+  permission?: "ask";
+  approvalMode?: ApprovalMode | null;
+  macGrants: WorkspaceMacGrants | null;
+} {
   const current = workspaceApprovalPolicy(workspace, "ask");
   const grants = new Set(current.macGrants);
   if (change.clearMac) grants.clear();
@@ -161,7 +187,12 @@ export function workspaceApprovalPatch(
   if (change.grantMac) grants.add(change.grantMac);
   const macGrants: WorkspaceMacGrants = {};
   for (const kind of MAC_GRANT_CLASSES) if (grants.has(kind)) macGrants[kind] = true;
-  const mode = change.mode === undefined ? (current.legacyFull ? "never" : parseApprovalMode(workspace.approvalMode) ?? null) : change.mode;
+  const mode =
+    change.mode === undefined
+      ? current.legacyFull
+        ? "never"
+        : (parseApprovalMode(workspace.approvalMode) ?? null)
+      : change.mode;
   return {
     ...(current.legacyFull ? { permission: "ask" as const } : {}),
     approvalMode: mode,
@@ -184,7 +215,9 @@ export interface WorkspaceApprovalChange {
  * when neither is present; anything malformed throws. Grants are added only
  * by answering a Mac card, never from this patch.
  */
-export function parseWorkspaceApprovalChange(fields: Readonly<Record<string, unknown>>): WorkspaceApprovalChange | undefined {
+export function parseWorkspaceApprovalChange(
+  fields: Readonly<Record<string, unknown>>,
+): WorkspaceApprovalChange | undefined {
   const change: WorkspaceApprovalChange = {};
   if (fields.approvalMode !== undefined) {
     if (fields.approvalMode === null) change.mode = null;
@@ -199,19 +232,28 @@ export function parseWorkspaceApprovalChange(fields: Readonly<Record<string, unk
     change.clearMac = true;
   }
   if (fields.revokeMacGrant !== undefined) {
-    if (!MAC_GRANT_CLASSES.includes(fields.revokeMacGrant as MacGrantClass)) throw new Error("Invalid Mac permission.");
+    if (!MAC_GRANT_CLASSES.includes(fields.revokeMacGrant as MacGrantClass))
+      throw new Error("Invalid Mac permission.");
     change.revokeMac = fields.revokeMacGrant as MacGrantClass;
   }
-  return change.mode !== undefined || change.revokeMac !== undefined || change.clearMac ? change : undefined;
+  return change.mode !== undefined || change.revokeMac !== undefined || change.clearMac
+    ? change
+    : undefined;
 }
 
 /**
  * The workspace record after a mode or grant change: what the main process
  * saves, and what the renderer shows at once before the save returns.
  */
-export function applyWorkspaceApprovalChange<T extends ApprovalWorkspaceFields>(workspace: T, change: WorkspaceApprovalChange): T {
+export function applyWorkspaceApprovalChange<T extends ApprovalWorkspaceFields>(
+  workspace: T,
+  change: WorkspaceApprovalChange,
+): T {
   const approval = workspaceApprovalPatch(workspace, change);
-  const next = { ...workspace, ...(approval.permission ? { permission: approval.permission } : {}) } as T & {
+  const next = {
+    ...workspace,
+    ...(approval.permission ? { permission: approval.permission } : {}),
+  } as T & {
     approvalMode?: ApprovalMode;
     macGrants?: WorkspaceMacGrants;
   };
@@ -236,7 +278,9 @@ const MAX_APPROVAL_MODEL_ID = 512;
  * Validate the approval fields of a Settings patch. Only present keys are
  * returned; anything malformed throws. `approvalModeOrigin` is never writable.
  */
-export function parseApprovalSettingsPatch(patch: Readonly<Record<string, unknown>>): ApprovalSettingsPatch {
+export function parseApprovalSettingsPatch(
+  patch: Readonly<Record<string, unknown>>,
+): ApprovalSettingsPatch {
   const next: ApprovalSettingsPatch = {};
   if (patch.approvalMode !== undefined) {
     const mode = parseApprovalMode(patch.approvalMode);
@@ -259,14 +303,19 @@ export function parseApprovalSettingsPatch(patch: Readonly<Record<string, unknow
       (value as { model: string }).model.length > 0 &&
       (value as { model: string }).model.length <= MAX_APPROVAL_MODEL_ID
     ) {
-      next.approvalModel = { providerId: (value as { providerId: string }).providerId, model: (value as { model: string }).model };
+      next.approvalModel = {
+        providerId: (value as { providerId: string }).providerId,
+        model: (value as { model: string }).model,
+      };
     } else throw new Error("Invalid approval model.");
   }
   return next;
 }
 
 /** The stored approval model, when it is well formed. */
-export function parseApprovalModel(value: unknown): { providerId: string; model: string } | undefined {
+export function parseApprovalModel(
+  value: unknown,
+): { providerId: string; model: string } | undefined {
   try {
     return parseApprovalSettingsPatch({ approvalModel: value }).approvalModel;
   } catch {

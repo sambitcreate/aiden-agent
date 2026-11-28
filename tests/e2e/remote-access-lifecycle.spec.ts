@@ -13,10 +13,12 @@ type RemoteRuntimeStatus = {
 
 async function remoteStatus(page: Page): Promise<RemoteRuntimeStatus> {
   return page.evaluate(async () => {
-    const bridge = (window as unknown as {
-      aidenAPI: { ipc: { invoke(channel: string): Promise<unknown> } };
-    }).aidenAPI;
-    const snapshot = await bridge.ipc.invoke("remote:get") as {
+    const bridge = (
+      window as unknown as {
+        aidenAPI: { ipc: { invoke(channel: string): Promise<unknown> } };
+      }
+    ).aidenAPI;
+    const snapshot = (await bridge.ipc.invoke("remote:get")) as {
       status: RemoteRuntimeStatus;
     };
     return snapshot.status;
@@ -47,11 +49,14 @@ async function remoteHealth(port: number): Promise<{ status: number; body: unkno
   });
 }
 
-test("guided phone setup asks once, enables access, and survives closing the main window", async ({ aiden }, testInfo) => {
+test("guided phone setup asks once, enables access, and survives closing the main window", async ({
+  aiden,
+}, testInfo) => {
   const { page } = aiden;
   await finishLmStudioOnboarding(page);
   await page.getByRole("button", { name: "Settings", exact: true }).click();
-  await page.getByRole("navigation", { name: "Settings" })
+  await page
+    .getByRole("navigation", { name: "Settings" })
     .getByRole("button", { name: "Connections", exact: true })
     .click();
 
@@ -67,19 +72,24 @@ test("guided phone setup asks once, enables access, and survives closing the mai
   expect(connectBox!.y - (choicesBox!.y + choicesBox!.height)).toBeGreaterThanOrEqual(12);
   expect(connectBox!.x).toBe(choicesBox!.x);
   expect(connectBox!.width).toBeLessThan(choicesBox!.width);
-  await page.getByRole("group", { name: "1. Connect your phone", exact: true })
+  await page
+    .getByRole("group", { name: "1. Connect your phone", exact: true })
     .screenshot({ path: testInfo.outputPath("phone-setup-spacing.png") });
 
   expect(await remoteStatus(page)).toMatchObject({ enabled: false, running: false });
   await page.getByRole("button", { name: "Connect a device", exact: true }).click();
-  const review = page.getByRole("dialog", { name: `Connect your phone to this ${process.platform === "darwin" ? "Mac" : "computer"}?` });
+  const review = page.getByRole("dialog", {
+    name: `Connect your phone to this ${process.platform === "darwin" ? "Mac" : "computer"}?`,
+  });
   await expect(review).toBeVisible();
   expect(await remoteStatus(page)).toMatchObject({ enabled: false, running: false });
   await review.getByRole("button", { name: "Cancel", exact: true }).click();
   expect(await remoteStatus(page)).toMatchObject({ enabled: false, running: false });
   await page.getByRole("button", { name: "Connect a device", exact: true }).click();
   await review.getByRole("button", { name: "Enable and show code", exact: true }).click();
-  await expect(page.getByRole("img", { name: "One-time Aiden pairing QR code", exact: true })).toBeVisible();
+  await expect(
+    page.getByRole("img", { name: "One-time Aiden pairing QR code", exact: true }),
+  ).toBeVisible();
   const running = await remoteStatus(page);
   expect(running).toMatchObject({ enabled: true, running: true });
   assertHealth(await remoteHealth(running.lanPort));
@@ -147,13 +157,17 @@ async function openConnectionRequest(
   return { requestId, pollSecret };
 }
 
-test("a connection request that replaces the one on screen starts back on Deny", async ({ aiden }) => {
+test("a connection request that replaces the one on screen starts back on Deny", async ({
+  aiden,
+}) => {
   const { page } = aiden;
   await finishLmStudioOnboarding(page);
   await page.evaluate(async () => {
-    const bridge = (window as unknown as {
-      aidenAPI: { ipc: { invoke(channel: string, ...args: unknown[]): Promise<unknown> } };
-    }).aidenAPI;
+    const bridge = (
+      window as unknown as {
+        aidenAPI: { ipc: { invoke(channel: string, ...args: unknown[]): Promise<unknown> } };
+      }
+    ).aidenAPI;
     await bridge.ipc.invoke("remote:setEnabled", true);
   });
   await expect.poll(async () => (await remoteStatus(page)).running).toBe(true);
@@ -162,14 +176,20 @@ test("a connection request that replaces the one on screen starts back on Deny",
   // Enabling Remote alone never invites unknown computers. The host must
   // explicitly accept requests and open its own Add device window first.
   const refused = await hostRequest(lanPort, "POST", "/pairing/requests", {
-    body: { deviceName: "Uninvited Mac", deviceType: "mac", publicKey: generateKeyPairSync("x25519").publicKey.export({ format: "jwk" }).x },
+    body: {
+      deviceName: "Uninvited Mac",
+      deviceType: "mac",
+      publicKey: generateKeyPairSync("x25519").publicKey.export({ format: "jwk" }).x,
+    },
   });
   expect(refused.status).toBe(403);
   expect(refused.body).toMatchObject({ error: { code: "pairing_closed" } });
   await page.evaluate(async () => {
-    const bridge = (window as unknown as {
-      aidenAPI: { ipc: { invoke(channel: string, ...args: unknown[]): Promise<unknown> } };
-    }).aidenAPI;
+    const bridge = (
+      window as unknown as {
+        aidenAPI: { ipc: { invoke(channel: string, ...args: unknown[]): Promise<unknown> } };
+      }
+    ).aidenAPI;
     await bridge.ipc.invoke("remote:setAcceptPairingRequests", true);
     await bridge.ipc.invoke("remote:beginPairing", "lan");
   });
@@ -203,11 +223,14 @@ test("a connection request that replaces the one on screen starts back on Deny",
   expect(outcome.body).not.toHaveProperty("envelope");
 });
 
-test("adding another computer by setup code reports an unreachable address and returns to the form", async ({ aiden }) => {
+test("adding another computer by setup code reports an unreachable address and returns to the form", async ({
+  aiden,
+}) => {
   const { page } = aiden;
   await finishLmStudioOnboarding(page);
   await page.getByRole("button", { name: "Settings", exact: true }).click();
-  await page.getByRole("navigation", { name: "Settings" })
+  await page
+    .getByRole("navigation", { name: "Settings" })
     .getByRole("button", { name: "Connections", exact: true })
     .click();
 
@@ -263,18 +286,28 @@ function assertHealth(result: { status: number; body: unknown }): void {
   expect(result.body).toEqual({ ok: true, protocolVersion: 1 });
 }
 
-test("paired-computer load and removal failures preserve context and offer recovery", async ({ aiden }, testInfo) => {
+test("paired-computer load and removal failures preserve context and offer recovery", async ({
+  aiden,
+}, testInfo) => {
   const { page, app } = aiden;
   await finishLmStudioOnboarding(page);
   await app.evaluate(({ ipcMain, BrowserWindow }) => {
     ipcMain.removeHandler("remote:peersList");
-    ipcMain.handle("remote:peersList", () => { throw new Error("Saved connections are temporarily unavailable."); });
-    for (const window of BrowserWindow.getAllWindows()) window.webContents.send("remote:peers-changed", {});
+    ipcMain.handle("remote:peersList", () => {
+      throw new Error("Saved connections are temporarily unavailable.");
+    });
+    for (const window of BrowserWindow.getAllWindows())
+      window.webContents.send("remote:peers-changed", {});
   });
   await page.getByRole("button", { name: "Settings", exact: true }).click();
-  await page.getByRole("navigation", { name: "Settings" }).getByRole("button", { name: "Connections", exact: true }).click();
+  await page
+    .getByRole("navigation", { name: "Settings" })
+    .getByRole("button", { name: "Connections", exact: true })
+    .click();
   await page.getByRole("tab", { name: "Control other devices", exact: true }).click();
-  await expect(page.getByText("Couldn't load paired computers. Your saved connections have not been removed.")).toBeVisible();
+  await expect(
+    page.getByText("Couldn't load paired computers. Your saved connections have not been removed."),
+  ).toBeVisible();
   await expect(page.getByText("No computers yet", { exact: true })).toBeHidden();
   const retry = page.getByRole("button", { name: "Try again", exact: true });
   // Settings can show the sidebar's cached error while its mount refetch is
@@ -282,12 +315,21 @@ test("paired-computer load and removal failures preserve context and offer recov
   // settles; otherwise it can recover and remove this button before the click.
   await expect(retry).toBeEnabled();
   await app.evaluate(({ ipcMain }) => {
-    let hosts = [{ id: "recovery_host", name: "Recovery computer", enabled: false, state: "disabled", features: [], capabilities: [] }];
+    let hosts = [
+      {
+        id: "recovery_host",
+        name: "Recovery computer",
+        enabled: false,
+        state: "disabled",
+        features: [],
+        capabilities: [],
+      },
+    ];
     let removals = 0;
     ipcMain.removeHandler("remote:peersList");
     ipcMain.handle("remote:peersList", () => hosts);
     ipcMain.removeHandler("remote:peersRemove");
-    ipcMain.handle("remote:peersRemove", event => {
+    ipcMain.handle("remote:peersRemove", (event) => {
       if (++removals === 1) throw new Error("The saved connection could not be removed.");
       hosts = [];
       event.sender.send("remote:peers-changed", {});

@@ -41,8 +41,18 @@ const MAX_SOURCES = 6;
 /** A bare value (no token name) counts only when it is used this often. */
 const MIN_BARE_COLOR_USES = 2;
 
-const SKIPPED_SEGMENTS = new Set(["node_modules", "vendor", "vendors", "third_party", "dist", "build", "out", "coverage"]);
-const TELLING_CSS = /^(?:globals?|theme|themes|tokens?|design-tokens|variables|vars|colou?rs|base|app|index|main|styles?|root)\.(?:css|scss|less)$/iu;
+const SKIPPED_SEGMENTS = new Set([
+  "node_modules",
+  "vendor",
+  "vendors",
+  "third_party",
+  "dist",
+  "build",
+  "out",
+  "coverage",
+]);
+const TELLING_CSS =
+  /^(?:globals?|theme|themes|tokens?|design-tokens|variables|vars|colou?rs|base|app|index|main|styles?|root)\.(?:css|scss|less)$/iu;
 
 /**
  * How telling a workspace file is for its design system: 0 when it is not a
@@ -54,17 +64,28 @@ export function designSystemFileRank(relativePath: string): number {
   const name = segments[segments.length - 1]?.toLowerCase();
   if (!name || segments.length === 0) return 0;
   if (segments[0] === "design") return 0;
-  if (segments.some((segment) => segment.startsWith(".") || SKIPPED_SEGMENTS.has(segment.toLowerCase()))) return 0;
+  if (
+    segments.some(
+      (segment) => segment.startsWith(".") || SKIPPED_SEGMENTS.has(segment.toLowerCase()),
+    )
+  )
+    return 0;
   if (name.endsWith(".min.css")) return 0;
   const shallow = segments.length <= 3 ? 1 : 0;
   if (/^tailwind\.config\.(?:js|cjs|mjs|ts|cts|mts)$/u.test(name)) return 6 + shallow;
-  if (/(?:^|[.-])tokens?\.json$/u.test(name) || name === "theme.json" || /\.theme\.json$/u.test(name)) return 6 + shallow;
+  if (
+    /(?:^|[.-])tokens?\.json$/u.test(name) ||
+    name === "theme.json" ||
+    /\.theme\.json$/u.test(name)
+  )
+    return 6 + shallow;
   if (/\.(?:css|scss|less)$/u.test(name)) return (TELLING_CSS.test(name) ? 4 : 2) + shallow;
   return 0;
 }
 
 const HEX = /^#(?:[0-9a-f]{3,4}|[0-9a-f]{6}|[0-9a-f]{8})$/iu;
-const COLOR_FUNCTION = /^(rgba?|hsla?|oklch|oklab|lab|lch|hwb)\((?:[0-9.%+\-\s,/]|deg|turn|none)*\)$/iu;
+const COLOR_FUNCTION =
+  /^(rgba?|hsla?|oklch|oklab|lab|lch|hwb)\((?:[0-9.%+\-\s,/]|deg|turn|none)*\)$/iu;
 /** Space-separated HSL channels, as shadcn-style themes keep them in variables (`222.2 47.4% 11.2%`). */
 const HSL_CHANNELS = /^\d{1,3}(?:\.\d+)?\s+\d{1,3}(?:\.\d+)?%\s+\d{1,3}(?:\.\d+)?%$/u;
 
@@ -102,7 +123,10 @@ const MAX_JOINED_TOKEN_NAME = 64;
 
 /** `raw` trimmed, with each run of dots, slashes and whitespace made one dash and each run of three or more dashes two. */
 export function collapsedName(raw: string): string {
-  return raw.trim().replace(/[.\s/]+/gu, "-").replace(/-{3,}/gu, "--");
+  return raw
+    .trim()
+    .replace(/[.\s/]+/gu, "-")
+    .replace(/-{3,}/gu, "--");
 }
 
 /**
@@ -138,12 +162,14 @@ export function shortenedName(raw: string): string {
   return raw.replace(/[-.\s/]+/gu, shortenedRun);
 }
 
-
 function tokenName(raw: string | null): string | null {
   if (raw === null) return null;
   const name = collapsedName(raw);
   if (!TOKEN_NAME.test(name)) return null;
-  const words = name.replace(/^(?:--|\$|@)/u, "").split(/[-_]+/u).filter(Boolean);
+  const words = name
+    .replace(/^(?:--|\$|@)/u, "")
+    .split(/[-_]+/u)
+    .filter(Boolean);
   return words.length <= MAX_TOKEN_NAME_WORDS ? name : null;
 }
 
@@ -181,12 +207,18 @@ const MAX_FAMILY_WORDS = 4;
 function plainFamily(family: string): boolean {
   if (!FAMILY.test(family)) return false;
   const words = family.split(/\s+/u);
-  return words.length === 1 || (words.length <= MAX_FAMILY_WORDS && words.every((word) => FAMILY_WORD.test(word)));
+  return (
+    words.length === 1 ||
+    (words.length <= MAX_FAMILY_WORDS && words.every((word) => FAMILY_WORD.test(word)))
+  );
 }
 
 /** The first family a font stack names, when it is a real font rather than a generic or system one. */
 function leadingFamily(entries: readonly string[]): string | null {
-  const first = entries[0]?.trim().replace(/^["']|["']$/gu, "").trim();
+  const first = entries[0]
+    ?.trim()
+    .replace(/^["']|["']$/gu, "")
+    .trim();
   if (!first || first.includes("var(") || GENERIC_FAMILIES.has(first.toLowerCase())) return null;
   const family = first.replace(/\s+/gu, " ");
   return plainFamily(family) ? family : null;
@@ -197,11 +229,23 @@ function fontStack(value: string): string[] {
 }
 
 type Found = {
-  colors: Array<{ name: string | null; value: string; dark: boolean; source: string; order: number }>;
+  colors: Array<{
+    name: string | null;
+    value: string;
+    dark: boolean;
+    source: string;
+    order: number;
+  }>;
   fonts: Array<{ name: string | null; family: string; source: string; order: number }>;
 };
 
-function addColor(found: Found, name: string | null, raw: unknown, dark: boolean, source: string): void {
+function addColor(
+  found: Found,
+  name: string | null,
+  raw: unknown,
+  dark: boolean,
+  source: string,
+): void {
   if (typeof raw !== "string") return;
   const value = parseDesignColor(raw);
   if (!value) return;
@@ -209,7 +253,12 @@ function addColor(found: Found, name: string | null, raw: unknown, dark: boolean
 }
 
 function addFont(found: Found, name: string | null, raw: unknown, source: string): void {
-  const entries = typeof raw === "string" ? fontStack(raw) : Array.isArray(raw) ? raw.filter((entry): entry is string => typeof entry === "string") : [];
+  const entries =
+    typeof raw === "string"
+      ? fontStack(raw)
+      : Array.isArray(raw)
+        ? raw.filter((entry): entry is string => typeof entry === "string")
+        : [];
   const family = leadingFamily(entries);
   if (family) found.fonts.push({ name, family, source, order: found.fonts.length });
 }
@@ -234,7 +283,10 @@ function cssDeclarations(text: string): Array<{ property: string; value: string;
       const property = buffer.slice(0, colon).trim();
       const value = buffer.slice(colon + 1).trim();
       // Top-level declarations are SCSS and Less variables only.
-      const allowed = blocks.length > 0 ? /^(?:--[\w-]+|[a-z-]+)$/iu.test(property) : /^[$@][\w-]+$/u.test(property);
+      const allowed =
+        blocks.length > 0
+          ? /^(?:--[\w-]+|[a-z-]+)$/iu.test(property)
+          : /^[$@][\w-]+$/u.test(property);
       if (allowed && value) declarations.push({ property, value, dark: darkBlocks > 0 });
     }
     buffer = "";
@@ -285,7 +337,11 @@ function readStyleSheet(found: Found, file: DesignSystemFile): void {
     }
     if (variable) {
       addColor(found, tokenName(property), value, dark, file.path);
-    } else if (/^(?:color|background|background-color|border-color|fill|stroke|outline-color|accent-color)$/u.test(lower)) {
+    } else if (
+      /^(?:color|background|background-color|border-color|fill|stroke|outline-color|accent-color)$/u.test(
+        lower,
+      )
+    ) {
       addColor(found, null, value, dark, file.path);
     }
   }
@@ -311,9 +367,15 @@ type LiteralBudget = { values: number };
  * Each call reads on from where the last one ended, so a file is read once;
  * once `budget` is spent it ends at the end of the text.
  */
-function readLiteral(text: string, start: number, budget: LiteralBudget, depth = 0): { value: Literal; end: number } {
+function readLiteral(
+  text: string,
+  start: number,
+  budget: LiteralBudget,
+  depth = 0,
+): { value: Literal; end: number } {
   budget.values += 1;
-  if (budget.values > DESIGN_SYSTEM_MAX_CONFIG_VALUES) return { value: undefined, end: text.length };
+  if (budget.values > DESIGN_SYSTEM_MAX_CONFIG_VALUES)
+    return { value: undefined, end: text.length };
   let index = skipSpace(text, start);
   const char = text[index];
   if (depth > 12) return { value: undefined, end: skipExpression(text, index) };
@@ -343,7 +405,8 @@ function readLiteral(text: string, start: number, budget: LiteralBudget, depth =
           index = skipExpression(text, index);
         } else {
           const entry = readLiteral(text, index + 1, budget, depth + 1);
-          if (entry.value !== undefined && !Object.prototype.hasOwnProperty.call(object, key.name)) object[key.name] = entry.value;
+          if (entry.value !== undefined && !Object.prototype.hasOwnProperty.call(object, key.name))
+            object[key.name] = entry.value;
           index = entry.end;
         }
       }
@@ -375,8 +438,10 @@ function readLiteral(text: string, start: number, budget: LiteralBudget, depth =
 function skipSpace(text: string, index: number): number {
   while (index < text.length) {
     if (/\s/u.test(text[index] as string)) index += 1;
-    else if (text.startsWith("//", index)) index = text.indexOf("\n", index) === -1 ? text.length : text.indexOf("\n", index);
-    else if (text.startsWith("/*", index)) index = text.indexOf("*/", index) === -1 ? text.length : text.indexOf("*/", index) + 2;
+    else if (text.startsWith("//", index))
+      index = text.indexOf("\n", index) === -1 ? text.length : text.indexOf("\n", index);
+    else if (text.startsWith("/*", index))
+      index = text.indexOf("*/", index) === -1 ? text.length : text.indexOf("*/", index) + 2;
     else break;
   }
   return index;
@@ -396,7 +461,8 @@ function scanString(text: string, start: number): { end: number; closed: boolean
     // An escape skips the next character; a backslash before a CRLF line ending continues the line.
     if (char === "\\") index += text.startsWith("\r\n", index + 1) ? 2 : 1;
     else if (char === quote) return { end: index + 1, closed: true };
-    else if (quote !== "`" && (char === "\n" || char === "\r")) return { end: index, closed: false };
+    else if (quote !== "`" && (char === "\n" || char === "\r"))
+      return { end: index, closed: false };
   }
   return { end: text.length, closed: false };
 }
@@ -452,7 +518,8 @@ function skipExpression(text: string, start: number): number {
       }
       // So is a regex literal, so a slash, quote or bracket in it (`/a\//`, `/it's/`) is not either.
       // After `i++` or `i--` it divides; after `a + +` (signs apart) it still starts a regex.
-      const afterIncrement = (previous === "+" || previous === "-") && text[previousIndex - 1] === previous;
+      const afterIncrement =
+        (previous === "+" || previous === "-") && text[previousIndex - 1] === previous;
       if (previous === "" || (BEFORE_REGEX.includes(previous) && !afterIncrement)) {
         index = regexEnd(text, index);
         previous = "/";
@@ -496,7 +563,13 @@ function joinedName(prefix: string | null, key: string): string | null {
 }
 
 /** `prefix` is "" at the top of the block and null once the name is too long to keep. */
-function flattenColors(found: Found, value: Literal, prefix: string | null, source: string, depth = 0): void {
+function flattenColors(
+  found: Found,
+  value: Literal,
+  prefix: string | null,
+  source: string,
+  depth = 0,
+): void {
   if (depth > 4 || value === undefined) return;
   if (typeof value === "string") {
     addColor(found, tokenName(prefix), value, false, source);
@@ -521,7 +594,9 @@ function readTailwindConfig(found: Found, file: DesignSystemFile): void {
     const block = read.value;
     if (!block || typeof block !== "object" || Array.isArray(block)) continue;
     if (match[1] === "colors") flattenColors(found, block, "", file.path);
-    else for (const [role, stack] of Object.entries(block)) addFont(found, tokenName(role), stack, file.path);
+    else
+      for (const [role, stack] of Object.entries(block))
+        addFont(found, tokenName(role), stack, file.path);
   }
 }
 
@@ -541,22 +616,43 @@ function readTokenJson(found: Found, file: DesignSystemFile): void {
   // whole trail at every value, so a long key costs once, not once per child.
   const walk = (node: unknown, depth: number, name: string | null, font: boolean): void => {
     visited += 1;
-    if (visited > DESIGN_SYSTEM_MAX_CONFIG_VALUES || depth > 8 || node === null || typeof node !== "object") return;
+    if (
+      visited > DESIGN_SYSTEM_MAX_CONFIG_VALUES ||
+      depth > 8 ||
+      node === null ||
+      typeof node !== "object"
+    )
+      return;
     if (Array.isArray(node)) {
       for (const entry of node) walk(entry, depth + 1, name, font);
       return;
     }
     const record = node as Record<string, unknown>;
-    const label = typeof record.slug === "string" ? record.slug : typeof record.name === "string" ? record.name : null;
+    const label =
+      typeof record.slug === "string"
+        ? record.slug
+        : typeof record.name === "string"
+          ? record.name
+          : null;
     // WordPress theme.json palettes and font families: [{slug, color}], [{slug, fontFamily}].
-    if (label !== null && (typeof record.color === "string" || typeof record.fontFamily === "string")) {
-      if (typeof record.color === "string") addColor(found, tokenName(label), record.color, false, file.path);
+    if (
+      label !== null &&
+      (typeof record.color === "string" || typeof record.fontFamily === "string")
+    ) {
+      if (typeof record.color === "string")
+        addColor(found, tokenName(label), record.color, false, file.path);
       else addFont(found, tokenName(label), record.fontFamily, file.path);
       return;
     }
-    const tokenValue = "$value" in record ? record.$value : "value" in record ? record.value : undefined;
+    const tokenValue =
+      "$value" in record ? record.$value : "value" in record ? record.value : undefined;
     if (tokenValue !== undefined) {
-      const type = typeof record.$type === "string" ? record.$type : typeof record.type === "string" ? record.type : "";
+      const type =
+        typeof record.$type === "string"
+          ? record.$type
+          : typeof record.type === "string"
+            ? record.type
+            : "";
       if (/font/iu.test(type) || font) addFont(found, tokenName(name), tokenValue, file.path);
       else addColor(found, tokenName(name), tokenValue, false, file.path);
       return;
@@ -604,12 +700,21 @@ export function detectDesignSystem(files: readonly DesignSystemFile[]): Detected
       if (color.dark) continue;
       const seen = bare.get(color.value);
       if (seen) seen.uses += 1;
-      else bare.set(color.value, { color: { name: null, value: color.value, source: color.source }, uses: 1 });
+      else
+        bare.set(color.value, {
+          color: { name: null, value: color.value, source: color.source },
+          uses: 1,
+        });
       continue;
     }
     const seen = named.get(color.name);
     if (!seen) {
-      named.set(color.name, color.dark ? { name: color.name, value: color.value, dark: color.value, source: color.source } : { name: color.name, value: color.value, source: color.source });
+      named.set(
+        color.name,
+        color.dark
+          ? { name: color.name, value: color.value, dark: color.value, source: color.source }
+          : { name: color.name, value: color.value, source: color.source },
+      );
     } else if (color.dark && seen.dark === undefined) {
       seen.dark = color.value;
     } else if (!color.dark && seen.dark === seen.value && seen.source === color.source) {
@@ -623,7 +728,11 @@ export function detectDesignSystem(files: readonly DesignSystemFile[]): Detected
     .sort((left, right) => right.uses - left.uses)
     .map(({ color }) => color);
   const colors = [...named.values()]
-    .map((color) => (color.dark === color.value ? { name: color.name, value: color.value, source: color.source } : color))
+    .map((color) =>
+      color.dark === color.value
+        ? { name: color.name, value: color.value, source: color.source }
+        : color,
+    )
     .concat(bareColors)
     .slice(0, DESIGN_SYSTEM_MAX_COLORS);
 
@@ -665,12 +774,18 @@ export function designSystemOfferLine(detected: DetectedDesignSystem): string {
     const value = color.dark ? `${color.value} (dark ${color.dark})` : color.value;
     return color.name ? `${color.name} ${value}` : value;
   });
-  const fonts = detected.fonts.map((font) => (font.name ? `${JSON.stringify(font.family)} (${font.name})` : JSON.stringify(font.family)));
+  const fonts = detected.fonts.map((font) =>
+    font.name ? `${JSON.stringify(font.family)} (${font.name})` : JSON.stringify(font.family),
+  );
   const found = [
     colors.length > 0 ? `colours ${colors.join(", ")}` : null,
     fonts.length > 0 ? `fonts ${fonts.join(", ")}` : null,
   ].filter((part): part is string => part !== null);
-  const sources = [...new Set(detected.sources.map(shownSource).filter((source): source is string => source !== null))]
+  const sources = [
+    ...new Set(
+      detected.sources.map(shownSource).filter((source): source is string => source !== null),
+    ),
+  ]
     .slice(0, MAX_SHOWN_SOURCES)
     .map((source) => JSON.stringify(source));
   const where = sources.length > 0 ? ` (${sources.join(", ")})` : "";

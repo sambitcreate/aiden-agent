@@ -3157,9 +3157,7 @@
   ],
   "stopReason": "duration",
   "finishedAt": "2026-10-11T22:05:00.209Z",
-  "finalResources": [
-    "TCPServerWrap"
-  ],
+  "finalResources": ["TCPServerWrap"],
   "finalMemory": {
     "rss": 182779904,
     "heapTotal": 68206592,

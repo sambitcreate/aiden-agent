@@ -23,9 +23,7 @@ export interface SpeechPreparation {
 }
 
 /** Closed set of projection failure kinds the service maps onto safe errors. */
-export type SpeechPreparationError =
-  | "source_too_large"
-  | "transcript_too_large";
+export type SpeechPreparationError = "source_too_large" | "transcript_too_large";
 
 export class SpeechTextError extends Error {
   constructor(
@@ -180,9 +178,7 @@ class Projection {
         return;
       case "list": {
         let index =
-          node.ordered && typeof node.start === "number" && node.start > 0
-            ? node.start
-            : 1;
+          node.ordered && typeof node.start === "number" && node.start > 0 ? node.start : 1;
         for (const item of node.children ?? []) {
           if (item.type !== "listItem") continue;
           const label = node.ordered ? `${index}. ` : "";
@@ -190,7 +186,12 @@ class Projection {
           const pieces: string[] = [];
           for (const child of item.children ?? []) {
             if (child.type === "list") {
-              this.pushInline(pieces.join("").replace(/[ \t]+/gu, " ").trim());
+              this.pushInline(
+                pieces
+                  .join("")
+                  .replace(/[ \t]+/gu, " ")
+                  .trim(),
+              );
               this.endBlock();
               pieces.length = 0;
               this.visit(child, reading);
@@ -198,7 +199,12 @@ class Projection {
               pieces.push(this.inline(child));
             }
           }
-          this.pushInline(pieces.join("").replace(/[ \t]+/gu, " ").trim());
+          this.pushInline(
+            pieces
+              .join("")
+              .replace(/[ \t]+/gu, " ")
+              .trim(),
+          );
           this.endBlock();
           if (node.ordered) index += 1;
         }
@@ -229,23 +235,19 @@ class Projection {
         return;
       }
       case "table": {
-        const rows = (node.children ?? []).filter(
-          (row) => row.type === "tableRow",
-        );
+        const rows = (node.children ?? []).filter((row) => row.type === "tableRow");
         if (rows.length > MAX_TABLE_ROWS) {
           this.notice("Large tables skipped");
           return;
         }
-        const headerCells =
-          rows[0]?.children?.filter((c) => c.type === "tableCell") ?? [];
+        const headerCells = rows[0]?.children?.filter((c) => c.type === "tableCell") ?? [];
         if (headerCells.length > MAX_TABLE_COLUMNS) {
           this.notice("Large tables skipped");
           return;
         }
         const headers = headerCells.map((cell) => this.inline(cell).trim());
         for (const row of rows.slice(1)) {
-          const cells =
-            row.children?.filter((c) => c.type === "tableCell") ?? [];
+          const cells = row.children?.filter((c) => c.type === "tableCell") ?? [];
           const pairs: string[] = [];
           cells.forEach((cell, index) => {
             const value = this.inline(cell).trim();
@@ -296,10 +298,7 @@ export function prepareSpeechText(input: {
 }): SpeechPreparation | null {
   const source = input.markdown;
   if (Buffer.byteLength(source, "utf8") > TTS_LIMITS.sourceMaxBytes) {
-    throw new SpeechTextError(
-      "source_too_large",
-      "This response is too large to read aloud.",
-    );
+    throw new SpeechTextError("source_too_large", "This response is too large to read aloud.");
   }
   if (!parser) {
     throw new Error("Speech text parser is not loaded; await ensureSpeechTextParser() first.");
@@ -311,10 +310,7 @@ export function prepareSpeechText(input: {
   const text = projection.blocks.join("\n\n").trim();
   if (!text) return null;
   if (Buffer.byteLength(text, "utf8") > TTS_LIMITS.transcriptMaxBytes) {
-    throw new SpeechTextError(
-      "transcript_too_large",
-      "This response is too large to read aloud.",
-    );
+    throw new SpeechTextError("transcript_too_large", "This response is too large to read aloud.");
   }
   return {
     text,
@@ -335,11 +331,7 @@ function splitOversizedBlock(block: string): string[] {
   const out: string[] = [];
   let current = "";
   for (const sentence of block.split(SENTENCE_BOUNDARY)) {
-    if (
-      current &&
-      utf8Bytes(current) + 1 + utf8Bytes(sentence) >
-        TTS_LIMITS.segmentMaxBytes
-    ) {
+    if (current && utf8Bytes(current) + 1 + utf8Bytes(sentence) > TTS_LIMITS.segmentMaxBytes) {
       out.push(current);
       current = "";
     }
@@ -354,10 +346,7 @@ function splitOversizedBlock(block: string): string[] {
     // Sentence itself exceeds the hard bound: split at safe boundaries.
     let piece = "";
     for (const char of sentence) {
-      if (
-        piece &&
-        utf8Bytes(piece) + utf8Bytes(char) > TTS_LIMITS.segmentMaxBytes
-      ) {
+      if (piece && utf8Bytes(piece) + utf8Bytes(char) > TTS_LIMITS.segmentMaxBytes) {
         out.push(piece);
         piece = char;
         continue;
@@ -375,7 +364,10 @@ function splitOversizedBlock(block: string): string[] {
  * preferred, sentences next, and never a surrogate pair or important unit.
  */
 export function segmentSpeechText(text: string): string[] {
-  const blocks = text.split(/\n{2,}/u).map((b) => b.trim()).filter(Boolean);
+  const blocks = text
+    .split(/\n{2,}/u)
+    .map((b) => b.trim())
+    .filter(Boolean);
   const segments: string[] = [];
   let current = "";
   for (const block of blocks) {
@@ -388,10 +380,7 @@ export function segmentSpeechText(text: string): string[] {
       segments.push(...splitOversizedBlock(block));
       continue;
     }
-    if (
-      current &&
-      utf8Bytes(current) + 2 + blockBytes > TTS_LIMITS.segmentTargetMaxChars
-    ) {
+    if (current && utf8Bytes(current) + 2 + blockBytes > TTS_LIMITS.segmentTargetMaxChars) {
       segments.push(current);
       current = block;
       continue;

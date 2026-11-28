@@ -1,7 +1,12 @@
 // Loaded on demand so React Flow and its CSS stay out of the entry chunk.
 import "../canvas/styles";
 import "./design-canvas.css";
-import { getViewportForBounds, type NodeChange, type ReactFlowInstance, type Viewport } from "@xyflow/react";
+import {
+  getViewportForBounds,
+  type NodeChange,
+  type ReactFlowInstance,
+  type Viewport,
+} from "@xyflow/react";
 import * as React from "react";
 import { StudioCanvas, type CanvasTool } from "../canvas";
 import type { CanvasKeyEvent } from "../canvas/canvas-keymap-core";
@@ -19,7 +24,11 @@ import {
   renamePage,
   showPage,
 } from "../shared/design-canvas/pages";
-import { attachTargetAt, syncConnectors, type DesignPoint } from "../shared/design-canvas/connectors";
+import {
+  attachTargetAt,
+  syncConnectors,
+  type DesignPoint,
+} from "../shared/design-canvas/connectors";
 import type { DesignExportFormat } from "../shared/design-canvas/frame-export";
 import { presentationOrder } from "../shared/design-canvas/presentation";
 import { containerAt, regroupFrames } from "../shared/design-canvas/drawing";
@@ -29,7 +38,11 @@ import {
   isDesignContainer,
   withActiveViewport,
 } from "../shared/design-canvas/schema";
-import type { DesignCanvas as CanvasDocument, DesignConnectorEnd, DesignFrame } from "../shared/design-canvas/schema";
+import type {
+  DesignCanvas as CanvasDocument,
+  DesignConnectorEnd,
+  DesignFrame,
+} from "../shared/design-canvas/schema";
 import {
   applyNodeChanges,
   duplicateFrames,
@@ -42,13 +55,22 @@ import {
 } from "./canvas-adapter-core";
 import { readDesignArtifactTheme } from "./artifact-theme";
 import { resolveDesignCanvasKey } from "./canvas-keymap-core";
-import { canvasFocusFrom, forgetCanvasFocus, takeCanvasFocus, type CanvasFocusRequest } from "./canvas-focus-requests";
+import {
+  canvasFocusFrom,
+  forgetCanvasFocus,
+  takeCanvasFocus,
+  type CanvasFocusRequest,
+} from "./canvas-focus-requests";
 import { DesignCanvasEmpty } from "./design-canvas-empty";
 import { frameIframe, useDesignComments } from "./design-comments";
 import { usePageTextEdits } from "./page-text-edits";
 import { designFrameSnapshots } from "./frame-snapshots";
 import { DesignTweaksFloat, type DesignTweakOps } from "./design-tweaks-panel";
-import { showDesignTweakVersions, shrinkDesignPicture, takeDesignTweakVersionPicture } from "./tweak-versions";
+import {
+  showDesignTweakVersions,
+  shrinkDesignPicture,
+  takeDesignTweakVersionPicture,
+} from "./tweak-versions";
 import {
   tweaksAfterBake,
   tweaksAfterBakeUndo,
@@ -58,7 +80,12 @@ import {
 import { postToDesignPage } from "../shared/design-canvas/bridge-messages";
 import { useDesignDrawing, type DesignDrawTool } from "./design-drawing";
 import { DesignExpandButton } from "./design-expand";
-import { DesignPresentBar, DesignPresentButton, presentationKey, type DesignPresentation } from "./design-present";
+import {
+  DesignPresentBar,
+  DesignPresentButton,
+  presentationKey,
+  type DesignPresentation,
+} from "./design-present";
 import {
   DESIGN_PANEL_TABS,
   DesignPanelButton,
@@ -87,7 +114,11 @@ export default function DesignCanvas({ chatId }: { chatId: string }) {
     // The landmark stays the same while the canvas loads or fails, so focus and
     // assistive tech find it in one place.
     return (
-      <div role="region" aria-label="Design canvas" className="flex h-full items-center justify-center">
+      <div
+        role="region"
+        aria-label="Design canvas"
+        className="flex h-full items-center justify-center"
+      >
         {canvas.status === "error" ? (
           <EmptyState
             role="alert"
@@ -96,7 +127,10 @@ export default function DesignCanvas({ chatId }: { chatId: string }) {
           />
         ) : (
           <div role="status" aria-label="Loading canvas">
-            <div aria-hidden className="h-24 w-40 animate-pulse rounded-button bg-control motion-reduce:animate-none" />
+            <div
+              aria-hidden
+              className="h-24 w-40 animate-pulse rounded-button bg-control motion-reduce:animate-none"
+            />
           </div>
         )}
       </div>
@@ -180,7 +214,10 @@ function LoadedDesignCanvas({
   const [minimap, setMinimap] = React.useState(false);
   const [selection, setSelection] = React.useState<ReadonlySet<string>>(() => new Set());
   const [entered, setEntered] = React.useState<string | null>(null);
-  const [versions, setVersions] = React.useState<FileVersions>(() => ({ paths: new Map(), kept: new Map() }));
+  const [versions, setVersions] = React.useState<FileVersions>(() => ({
+    paths: new Map(),
+    kept: new Map(),
+  }));
   const [missing, setMissing] = React.useState<ReadonlyMap<string, number>>(() => new Map());
   const [grant, setGrant] = React.useState<string | null>(null);
   const [autoFocusId, setAutoFocusId] = React.useState<string | null>(null);
@@ -227,14 +264,20 @@ function LoadedDesignCanvas({
   const watchedKey = React.useMemo(() => {
     const paths: string[] = [];
     for (const frame of doc.frames) {
-      if ((frame.kind === "file" || frame.kind === "image") && frame.path && !paths.includes(frame.path)) {
+      if (
+        (frame.kind === "file" || frame.kind === "image") &&
+        frame.path &&
+        !paths.includes(frame.path)
+      ) {
         paths.push(frame.path);
       }
     }
     return paths.join("\n");
   }, [doc.frames]);
   React.useEffect(() => {
-    void designCanvasApi.watchDesignFiles(chatId, watchedKey ? watchedKey.split("\n") : []).catch(() => undefined);
+    void designCanvasApi
+      .watchDesignFiles(chatId, watchedKey ? watchedKey.split("\n") : [])
+      .catch(() => undefined);
   }, [chatId, watchedKey]);
   React.useEffect(
     () => () => {
@@ -254,7 +297,8 @@ function LoadedDesignCanvas({
         const shown = kept.get(keep ?? "");
         // Any later change of the file reloads every frame of it, a kept one too.
         for (const [frameId, held] of kept) if (held.path === path) kept.delete(frameId);
-        if (keep !== undefined) kept.set(keep, { path, shows: shown?.path === path ? shown.shows : before });
+        if (keep !== undefined)
+          kept.set(keep, { path, shows: shown?.path === path ? shown.shows : before });
       }
       return { paths: next, kept };
     });
@@ -275,7 +319,9 @@ function LoadedDesignCanvas({
       designCanvasApi.onDesignCanvasSnapshot((request) => {
         if (request?.chatId !== chatId || typeof request.requestId !== "string") return;
         const answer = (dataUrl: string | null) =>
-          void designCanvasApi.answerDesignCanvasSnapshot(request.requestId, dataUrl).catch(() => undefined);
+          void designCanvasApi
+            .answerDesignCanvasSnapshot(request.requestId, dataUrl)
+            .catch(() => undefined);
         const rect = wrapper.current?.getBoundingClientRect();
         if (!rect || rect.width < 1 || rect.height < 1 || document.visibilityState === "hidden") {
           answer(null);
@@ -283,7 +329,10 @@ function LoadedDesignCanvas({
         }
         void designCanvasApi
           .captureDesignFrame({ x: rect.x, y: rect.y, width: rect.width, height: rect.height })
-          .then((shot) => answer("dataUrl" in shot ? shot.dataUrl : null), () => answer(null));
+          .then(
+            (shot) => answer("dataUrl" in shot ? shot.dataUrl : null),
+            () => answer(null),
+          );
       }),
     [chatId],
   );
@@ -295,7 +344,9 @@ function LoadedDesignCanvas({
     const measure = () => {
       const rect = element.getBoundingClientRect();
       setViewSize((current) =>
-        current.w === rect.width && current.h === rect.height ? current : { w: rect.width, h: rect.height },
+        current.w === rect.width && current.h === rect.height
+          ? current
+          : { w: rect.width, h: rect.height },
       );
     };
     measure();
@@ -355,16 +406,37 @@ function LoadedDesignCanvas({
   // At most six frames run a real page; the rest show their snapshots.
   React.useEffect(() => {
     // A hidden frame is not drawn, so it never runs its page.
-    const frames = framesOnPage(doc).filter((frame) => !frame.hidden && missing.get(frame.id) !== frameVersionOf(frame));
+    const frames = framesOnPage(doc).filter(
+      (frame) => !frame.hidden && missing.get(frame.id) !== frameVersionOf(frame),
+    );
     setLive((previous) => {
-      const next = selectLiveFrames({ frames, viewport, view: viewSize, selected: selection, entered, previous });
+      const next = selectLiveFrames({
+        frames,
+        viewport,
+        view: viewSize,
+        selected: selection,
+        entered,
+        previous,
+      });
       return sameSet(previous, next) ? previous : next;
     });
   }, [doc, missing, frameVersionOf, viewport, viewSize, selection, entered]);
 
   const nodes = React.useMemo(() => nodesFromCanvas(doc, selection), [doc, selection]);
-  const comments = useDesignComments({ chatId, doc, change, flush, flow, wrapper, live, versionOf });
-  const pageWindow = React.useCallback((frameId: string) => frameIframe(wrapper.current, frameId)?.contentWindow ?? null, []);
+  const comments = useDesignComments({
+    chatId,
+    doc,
+    change,
+    flush,
+    flow,
+    wrapper,
+    live,
+    versionOf,
+  });
+  const pageWindow = React.useCallback(
+    (frameId: string) => frameIframe(wrapper.current, frameId)?.contentWindow ?? null,
+    [],
+  );
   const reloadPath = React.useCallback(
     (path: string, keep?: string) => {
       // A kept frame's page now shows words its earlier picture lacks, at the
@@ -375,7 +447,14 @@ function LoadedDesignCanvas({
     },
     [reloadPaths],
   );
-  const textEdits = usePageTextEdits({ chatId, doc, pageWindow, queueComment: comments.queueOnElement, flush, reload: reloadPath });
+  const textEdits = usePageTextEdits({
+    chatId,
+    doc,
+    pageWindow,
+    queueComment: comments.queueOnElement,
+    flush,
+    reload: reloadPath,
+  });
   forgetTextEdits.current = textEdits.forget;
   const toggleComments = () => {
     const next = !comments.active;
@@ -438,7 +517,10 @@ function LoadedDesignCanvas({
       maxWaitMs: FOCUS_WAIT_MS,
     });
     if (decision.action === "wait") {
-      const timer = setTimeout(() => setPendingFocus((current) => (current ? { ...current } : current)), 200);
+      const timer = setTimeout(
+        () => setPendingFocus((current) => (current ? { ...current } : current)),
+        200,
+      );
       return () => clearTimeout(timer);
     }
     setPendingFocus(null);
@@ -472,7 +554,11 @@ function LoadedDesignCanvas({
     );
     // One undo step per drag or resize, taken when it starts.
     const flags = edits.map((entry) =>
-      entry.type === "position" ? entry.dragging : entry.type === "dimensions" ? entry.resizing : undefined,
+      entry.type === "position"
+        ? entry.dragging
+        : entry.type === "dimensions"
+          ? entry.resizing
+          : undefined,
     );
     let record = true;
     if (flags.includes(true)) {
@@ -494,7 +580,12 @@ function LoadedDesignCanvas({
   const removeFrames = React.useCallback(
     (ids: string[]) => {
       if (ids.length === 0) return;
-      change((current) => applyNodeChanges(current, ids.map((id) => ({ type: "remove" as const, id }))));
+      change((current) =>
+        applyNodeChanges(
+          current,
+          ids.map((id) => ({ type: "remove" as const, id })),
+        ),
+      );
       setSelection((current) => {
         const next = new Set([...current].filter((id) => !ids.includes(id)));
         return sameSet(current, next) ? current : next;
@@ -507,7 +598,12 @@ function LoadedDesignCanvas({
   const add = (frame: PlaceFrameInput): string | null => {
     const current = latestViewport.current;
     const zoom = current.zoom || 1;
-    const view = { x: -current.x / zoom, y: -current.y / zoom, w: viewSize.w / zoom, h: viewSize.h / zoom };
+    const view = {
+      x: -current.x / zoom,
+      y: -current.y / zoom,
+      w: viewSize.w / zoom,
+      h: viewSize.h / zoom,
+    };
     // The id is fixed up front: an edit replayed after a save conflict places the same frame.
     const id = crypto.randomUUID();
     let placed = false;
@@ -538,7 +634,12 @@ function LoadedDesignCanvas({
             w: input.w,
             h: input.h,
           });
-      const result = placeFrame(latest, { ...input, ...(holder ? { groupId: holder.id } : {}) }, { x: 0, y: 0, w: 0, h: 0 }, () => id);
+      const result = placeFrame(
+        latest,
+        { ...input, ...(holder ? { groupId: holder.id } : {}) },
+        { x: 0, y: 0, w: 0, h: 0 },
+        () => id,
+      );
       if ("error" in result) return latest;
       placed = true;
       return result.doc;
@@ -554,7 +655,8 @@ function LoadedDesignCanvas({
 
   const attachAt = React.useCallback((point: DesignPoint, except?: string) => {
     const current = latestDoc.current;
-    return attachTargetAt(current, current.activePageId, point, new Set(except ? [except] : []))?.id;
+    return attachTargetAt(current, current.activePageId, point, new Set(except ? [except] : []))
+      ?.id;
   }, []);
 
   const moveEnd = React.useCallback(
@@ -570,8 +672,11 @@ function LoadedDesignCanvas({
           y: Math.round(point.y),
           ...(target && target !== other.frameId ? { frameId: target } : {}),
         };
-        const ends: [DesignConnectorEnd, DesignConnectorEnd] = index === 0 ? [end, other] : [other, end];
-        const frames = current.frames.map((entry) => (entry.id === id ? { ...entry, ends } : entry));
+        const ends: [DesignConnectorEnd, DesignConnectorEnd] =
+          index === 0 ? [end, other] : [other, end];
+        const frames = current.frames.map((entry) =>
+          entry.id === id ? { ...entry, ends } : entry,
+        );
         return syncConnectors({ ...current, frames });
       }),
     [change],
@@ -635,7 +740,12 @@ function LoadedDesignCanvas({
         let made = true;
         change((current) => {
           let index = 0;
-          const next = duplicatePage(current, action.id, pageId, () => (ids[index++] ??= crypto.randomUUID()));
+          const next = duplicatePage(
+            current,
+            action.id,
+            pageId,
+            () => (ids[index++] ??= crypto.randomUUID()),
+          );
           made = next !== current;
           return next;
         });
@@ -656,7 +766,14 @@ function LoadedDesignCanvas({
 
   const onAdd = (kind: DesignAddKind) => {
     if (kind === "note") {
-      const id = add({ kind: "note", title: "Note", text: "", w: 240, h: 160, createdBy: "person" });
+      const id = add({
+        kind: "note",
+        title: "Note",
+        text: "",
+        w: 240,
+        h: 160,
+        createdBy: "person",
+      });
       if (id !== null) setAutoFocusId(id);
     } else if (kind === "group") {
       add({ kind: "group", title: "Group", w: 640, h: 400, createdBy: "person" });
@@ -702,7 +819,8 @@ function LoadedDesignCanvas({
         // The focused frame is going; keys stay with the canvas, so ⌘Z can bring it back.
         const region = wrapper.current?.querySelector<HTMLElement>(".studio-canvas");
         requestAnimationFrame(() => {
-          if (region && !region.contains(document.activeElement)) region.focus({ preventScroll: true });
+          if (region && !region.contains(document.activeElement))
+            region.focus({ preventScroll: true });
         });
         return true;
       }
@@ -769,13 +887,17 @@ function LoadedDesignCanvas({
   // so a moved artboard carries its items and arrows follow what they join.
   const moveTo = React.useCallback(
     (id: string, x: number, y: number) =>
-      change((current) => applyNodeChanges(current, [{ type: "position", id, position: { x, y } }])),
+      change((current) =>
+        applyNodeChanges(current, [{ type: "position", id, position: { x, y } }]),
+      ),
     [change],
   );
   const resizeTo = React.useCallback(
     (id: string, w: number, h: number) =>
       change((current) =>
-        applyNodeChanges(current, [{ type: "dimensions", id, dimensions: { width: w, height: h }, setAttributes: true }]),
+        applyNodeChanges(current, [
+          { type: "dimensions", id, dimensions: { width: w, height: h }, setAttributes: true },
+        ]),
       ),
     [change],
   );
@@ -785,7 +907,8 @@ function LoadedDesignCanvas({
     [change],
   );
   const stepOrder = React.useCallback(
-    (id: string, direction: "forward" | "backward") => change((current) => stepLayer(current, id, direction)),
+    (id: string, direction: "forward" | "backward") =>
+      change((current) => stepLayer(current, id, direction)),
     [change],
   );
 
@@ -812,7 +935,10 @@ function LoadedDesignCanvas({
         const result = await designCanvasApi
           .exportDesignFrame(chatId, id, format, readDesignArtifactTheme(true))
           .catch(() => ({ error: "failed" as const }));
-        if ("saved" in result) toast.success(format === "source" ? "Saved the original file." : `Saved the ${format.toUpperCase()}.`);
+        if ("saved" in result)
+          toast.success(
+            format === "source" ? "Saved the original file." : `Saved the ${format.toUpperCase()}.`,
+          );
         else if ("error" in result) toast.error(EXPORT_ERRORS[result.error]);
       })();
     },
@@ -838,8 +964,15 @@ function LoadedDesignCanvas({
     setRenaming(null);
     setSelection((selected) => (selected.size === 0 ? selected : new Set()));
     const frame = current.frames.find((entry) => entry.id === ids[index]);
-    setEntered(options.single && (frame?.kind === "file" || frame?.kind === "artifact") ? frame.id : null);
-    setPresentation({ ids, index, single: options.single === true, restore: latestViewport.current });
+    setEntered(
+      options.single && (frame?.kind === "file" || frame?.kind === "artifact") ? frame.id : null,
+    );
+    setPresentation({
+      ids,
+      index,
+      single: options.single === true,
+      restore: latestViewport.current,
+    });
   }
 
   const presentRef = React.useRef(present);
@@ -850,7 +983,11 @@ function LoadedDesignCanvas({
       if (!current) return current;
       const last = current.ids.length - 1;
       const index =
-        to === "first" ? 0 : to === "last" ? last : Math.min(last, Math.max(0, current.index + (to === "next" ? 1 : -1)));
+        to === "first"
+          ? 0
+          : to === "last"
+            ? last
+            : Math.min(last, Math.max(0, current.index + (to === "next" ? 1 : -1)));
       return index === current.index ? current : { ...current, index };
     });
   }
@@ -886,12 +1023,22 @@ function LoadedDesignCanvas({
       const bounds = { ...instance.getNodesBounds([presentedId]) };
       // A page, artifact or image is shown without its title row (design-canvas.css).
       const kind = latestDoc.current.frames.find((frame) => frame.id === presentedId)?.kind;
-      if ((kind === "file" || kind === "artifact" || kind === "image") && bounds.height > DESIGN_FRAME_HEADER_PX) {
+      if (
+        (kind === "file" || kind === "artifact" || kind === "image") &&
+        bounds.height > DESIGN_FRAME_HEADER_PX
+      ) {
         bounds.y += DESIGN_FRAME_HEADER_PX;
         bounds.height -= DESIGN_FRAME_HEADER_PX;
       }
       if (bounds.width > 0 && bounds.height > 0) {
-        const fitted = getViewportForBounds(bounds, viewSize.w, viewSize.h, CANVAS_MIN_ZOOM, 4, 0.06);
+        const fitted = getViewportForBounds(
+          bounds,
+          viewSize.w,
+          viewSize.h,
+          CANVAS_MIN_ZOOM,
+          4,
+          0.06,
+        );
         void instance.setViewport(fitted, { duration: prefersReducedMotion() ? 0 : 350 });
       }
       wrapper.current?.querySelector<HTMLElement>(".studio-canvas")?.focus({ preventScroll: true });
@@ -900,7 +1047,11 @@ function LoadedDesignCanvas({
   }, [presentedId, viewSize]);
   // A frame that goes away (Aiden removed it, say) ends a presentation that is only it.
   React.useEffect(() => {
-    if (presentation && presentation.ids.every((id) => !doc.frames.some((frame) => frame.id === id))) stopPresenting();
+    if (
+      presentation &&
+      presentation.ids.every((id) => !doc.frames.some((frame) => frame.id === id))
+    )
+      stopPresenting();
   });
 
   const update = React.useCallback<DesignNodeContextValue["update"]>(
@@ -959,14 +1110,20 @@ function LoadedDesignCanvas({
 
   const undoTweakDefaults = React.useCallback(
     async (frameId: string, path: string, values: Record<string, string>, undoId: string) => {
-      const answer = await designCanvasApi.undoBakeDesignTweaks(chatId, frameId, undoId).catch(() => null);
+      const answer = await designCanvasApi
+        .undoBakeDesignTweaks(chatId, frameId, undoId)
+        .catch(() => null);
       if (answer?.ok) {
         const latest = latestDoc.current.frames.find((entry) => entry.id === frameId);
         update(frameId, { tweaks: tweaksAfterBakeUndo(latest?.tweaks, values) }, { record: true });
         reloadPaths([path]);
         toast("Put the page's file back as it was.");
       } else {
-        toast.error(answer?.reason === "changed" ? "The file changed since, so it was left as it is." : "The file couldn't be put back.");
+        toast.error(
+          answer?.reason === "changed"
+            ? "The file changed since, so it was left as it is."
+            : "The file couldn't be put back.",
+        );
       }
     },
     [chatId, update, reloadPaths],
@@ -978,7 +1135,8 @@ function LoadedDesignCanvas({
   const makeTweaksDefault = React.useCallback(
     (frameId: string) => {
       const frame = latestDoc.current.frames.find((entry) => entry.id === frameId);
-      if (frame?.kind !== "file" || !frame.path || !frame.tweaks || baking.current.has(frameId)) return;
+      if (frame?.kind !== "file" || !frame.path || !frame.tweaks || baking.current.has(frameId))
+        return;
       const { path, tweaks: values } = frame;
       baking.current.add(frameId);
       void (async () => {
@@ -988,7 +1146,9 @@ function LoadedDesignCanvas({
           toast.error("The canvas couldn't be saved, so the page's file wasn't changed.");
           return;
         }
-        const result = await designCanvasApi.bakeDesignTweaks(chatId, frameId, values).catch(() => null);
+        const result = await designCanvasApi
+          .bakeDesignTweaks(chatId, frameId, values)
+          .catch(() => null);
         if (!result?.ok) {
           toast.error(BAKE_ERRORS[result?.reason ?? "failed"] ?? BAKE_ERRORS.failed);
           return;
@@ -999,29 +1159,55 @@ function LoadedDesignCanvas({
         // being written: the file would bring that value straight back, so
         // the write is undone and the frame keeps what it shows now.
         if (latest && tweaksTakenBackDuringBake(latest.tweaks, values, result.written)) {
-          const undone = await designCanvasApi.undoBakeDesignTweaks(chatId, frameId, undoId).catch(() => null);
+          const undone = await designCanvasApi
+            .undoBakeDesignTweaks(chatId, frameId, undoId)
+            .catch(() => null);
           if (undone?.ok) {
             reloadPaths([path]);
-            toast("The values changed while they were being written, so the page's file was left as it was.");
+            toast(
+              "The values changed while they were being written, so the page's file was left as it was.",
+            );
             return;
           }
           // Another write landed first, so the file keeps the new defaults;
           // the frame keeps what the person set by pinning the old ones.
           const now = latestDoc.current.frames.find((entry) => entry.id === frameId);
-          update(frameId, { tweaks: tweaksAfterTakenBackBake(now?.tweaks, values, result.written, result.previous) }, { record: true });
+          update(
+            frameId,
+            {
+              tweaks: tweaksAfterTakenBackBake(
+                now?.tweaks,
+                values,
+                result.written,
+                result.previous,
+              ),
+            },
+            { record: true },
+          );
           reloadPaths([path]);
-          toast("The values changed while they were being written. The page's file has the new defaults, and this frame keeps what you set.");
+          toast(
+            "The values changed while they were being written. The page's file has the new defaults, and this frame keeps what you set.",
+          );
           return;
         }
         // The frame lets go of what the file now says, keeping words the file
         // couldn't take and anything changed while the file was written.
-        update(frameId, { tweaks: tweaksAfterBake(latest?.tweaks, result.written) }, { record: true });
+        update(
+          frameId,
+          { tweaks: tweaksAfterBake(latest?.tweaks, result.written) },
+          { record: true },
+        );
         reloadPaths([path]);
         toast.success(
           result.kept.length > 0
             ? "Made these the page's defaults. Some words couldn't be placed in the file, so this frame keeps them."
             : "Made these the page's defaults.",
-          { action: { label: "Undo", onClick: () => void undoTweakDefaults(frameId, path, values, undoId) } },
+          {
+            action: {
+              label: "Undo",
+              onClick: () => void undoTweakDefaults(frameId, path, values, undoId),
+            },
+          },
         );
       })().finally(() => baking.current.delete(frameId));
     },
@@ -1035,7 +1221,11 @@ function LoadedDesignCanvas({
       change((current) => {
         let index = 0;
         // The ids are fixed on the first run, so a replay after a save conflict adds the same frames.
-        const shown = showDesignTweakVersions(current, frameId, () => (ids[index++] ??= crypto.randomUUID()));
+        const shown = showDesignTweakVersions(
+          current,
+          frameId,
+          () => (ids[index++] ??= crypto.randomUUID()),
+        );
         groupId = shown?.groupId ?? null;
         return shown?.doc ?? current;
       });
@@ -1048,7 +1238,11 @@ function LoadedDesignCanvas({
       setSelection(new Set([id]));
       requestAnimationFrame(() =>
         requestAnimationFrame(() => {
-          void flow.current?.fitView({ nodes: [{ id }], padding: 0.15, duration: prefersReducedMotion() ? 0 : 350 });
+          void flow.current?.fitView({
+            nodes: [{ id }],
+            padding: 0.15,
+            duration: prefersReducedMotion() ? 0 : 350,
+          });
         }),
       );
     },
@@ -1078,11 +1272,27 @@ function LoadedDesignCanvas({
       showAll: showTweakVersions,
       fileVersion: frameVersionOf,
     }),
-    [update, pageWindow, comments.queueOnFrame, makeTweaksDefault, captureFrame, showTweakVersions, frameVersionOf],
+    [
+      update,
+      pageWindow,
+      comments.queueOnFrame,
+      makeTweaksDefault,
+      captureFrame,
+      showTweakVersions,
+      frameVersionOf,
+    ],
   );
-  const enteredPage = entered === null ? undefined : doc.frames.find((frame) => frame.id === entered && frame.kind === "file");
+  const enteredPage =
+    entered === null
+      ? undefined
+      : doc.frames.find((frame) => frame.id === entered && frame.kind === "file");
   // The side panel's Tweaks tab already shows this page's controls.
-  const panelShowsTweaks = panel.open && panel.tab === "tweaks" && selection.size === 1 && entered !== null && selection.has(entered);
+  const panelShowsTweaks =
+    panel.open &&
+    panel.tab === "tweaks" &&
+    selection.size === 1 &&
+    entered !== null &&
+    selection.has(entered);
 
   const context = React.useMemo<DesignNodeContextValue>(
     () => ({
@@ -1095,7 +1305,9 @@ function LoadedDesignCanvas({
       autoFocusId,
       enter: setEntered,
       markMissing: (id, version) =>
-        setMissing((current) => (current.get(id) === version ? current : new Map(current).set(id, version))),
+        setMissing((current) =>
+          current.get(id) === version ? current : new Map(current).set(id, version),
+        ),
       remove: (id) => removeFrames([id]),
       update,
       autoFocusDone: (id) => setAutoFocusId((current) => (current === id ? null : current)),
@@ -1189,9 +1401,12 @@ function LoadedDesignCanvas({
               latestViewport.current = next;
               // Present moves the view for itself; the page keeps where the person left it.
               if (presentingRef.current) return;
-              change((current) => withActiveViewport(current, { x: next.x, y: next.y, zoom: next.zoom }), {
-                record: false,
-              });
+              change(
+                (current) => withActiveViewport(current, { x: next.x, y: next.y, zoom: next.zoom }),
+                {
+                  record: false,
+                },
+              );
             }}
             onPaneClick={(event) => {
               if (presentation) return;
@@ -1229,12 +1444,21 @@ function LoadedDesignCanvas({
               presentation ? (
                 <DesignPresentBar
                   presentation={presentation}
-                  title={doc.frames.find((frame) => frame.id === presentation.ids[presentation.index])?.title ?? ""}
+                  title={
+                    doc.frames.find((frame) => frame.id === presentation.ids[presentation.index])
+                      ?.title ?? ""
+                  }
                   onStep={step}
                   onExit={stopPresenting}
                 />
               ) : enteredPage && !panelShowsTweaks ? (
-                <DesignTweaksFloat key={enteredPage.id} frame={enteredPage} readSource={readSource} versionOf={versionOf} ops={tweakOps} />
+                <DesignTweaksFloat
+                  key={enteredPage.id}
+                  frame={enteredPage}
+                  readSource={readSource}
+                  versionOf={versionOf}
+                  ops={tweakOps}
+                />
               ) : null
             }
             emptyState={<DesignCanvasEmpty />}
@@ -1268,7 +1492,9 @@ function LoadedDesignCanvas({
           onTab={(tab) => setPanel((current) => ({ ...current, tab }))}
           onClose={() => {
             setPanel((current) => ({ ...current, open: false }));
-            wrapper.current?.querySelector<HTMLElement>(".studio-canvas")?.focus({ preventScroll: true });
+            wrapper.current
+              ?.querySelector<HTMLElement>(".studio-canvas")
+              ?.focus({ preventScroll: true });
           }}
           versionOf={versionOf}
           onSelect={(ids) => setSelection(new Set(ids))}
@@ -1291,7 +1517,8 @@ const BAKE_ERRORS: Record<string, string> = {
   "not-found": "The page no longer declares these tweaks.",
   unchanged: "These are already the page's defaults.",
   changed: "The file changed while it was being written. Try again.",
-  words: "The page's words couldn't be found in its file, so it wasn't changed. Send the values to Aiden instead.",
+  words:
+    "The page's words couldn't be found in its file, so it wasn't changed. Send the values to Aiden instead.",
   failed: "The page's file couldn't be changed.",
 };
 
@@ -1303,7 +1530,12 @@ function readPanelState(): { open: boolean; tab: DesignPanelTab } {
     const saved = JSON.parse(window.localStorage.getItem(PANEL_STORAGE_KEY) ?? "null") as unknown;
     if (saved && typeof saved === "object") {
       const { open, tab } = saved as { open?: unknown; tab?: unknown };
-      return { open: open === true, tab: DESIGN_PANEL_TABS.includes(tab as DesignPanelTab) ? (tab as DesignPanelTab) : "properties" };
+      return {
+        open: open === true,
+        tab: DESIGN_PANEL_TABS.includes(tab as DesignPanelTab)
+          ? (tab as DesignPanelTab)
+          : "properties",
+      };
     }
   } catch {
     // Storage that cannot be read starts the panel closed.

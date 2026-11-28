@@ -2,10 +2,16 @@ import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
 import type { ServerResponse } from "node:http";
 import test from "node:test";
-import { AidenRemoteHostFeedService, type AidenRemoteHostFeedState } from "./aiden-remote-host-feed.js";
+import {
+  AidenRemoteHostFeedService,
+  type AidenRemoteHostFeedState,
+} from "./aiden-remote-host-feed.js";
 import { AidenRemoteHostRunService } from "./aiden-remote-host-runs.js";
 import { AidenRemoteServiceError } from "./aiden-remote-errors.js";
-import { AIDEN_REMOTE_HOST_FEED_SNAPSHOT_CHUNK_BYTES, type AidenRemoteCapability } from "./aiden-remote-protocol.js";
+import {
+  AIDEN_REMOTE_HOST_FEED_SNAPSHOT_CHUNK_BYTES,
+  type AidenRemoteCapability,
+} from "./aiden-remote-protocol.js";
 import type { AidenRemoteChatSummaryProjection } from "./aiden-remote-chats.js";
 import { HostRunRegistry } from "./host-run-registry.js";
 import { PEER_FEED_MAX_CHATS } from "./peer-host-feed-cache.js";
@@ -23,7 +29,13 @@ import {
   type PeerManagerRegistry,
 } from "./peer-host-manager.js";
 import { PEER_RUN_EVICT_MS } from "./peer-run-subscriptions.js";
-import { PeerEventFrames, PeerTransportError, type PeerRequest, type PeerStreamEnd, type PeerTrust } from "./peer-transport.js";
+import {
+  PeerEventFrames,
+  PeerTransportError,
+  type PeerRequest,
+  type PeerStreamEnd,
+  type PeerTrust,
+} from "./peer-transport.js";
 import type {
   PeerHostFeedMessage,
   PeerHostStatus,
@@ -75,7 +87,9 @@ async function settle(): Promise<void> {
 class Wire extends EventEmitter {
   destroyed = false;
   writableEnded = false;
-  constructor(private readonly hooks: { write(chunk: string): void; end(): void; destroy(): void }) {
+  constructor(
+    private readonly hooks: { write(chunk: string): void; end(): void; destroy(): void },
+  ) {
     super();
   }
   writeHead(): this {
@@ -165,7 +179,10 @@ class FakeHost {
     capabilities: new Set<AidenRemoteCapability>(CAPABILITIES as AidenRemoteCapability[]),
   };
 
-  constructor(readonly id: string, title: string) {
+  constructor(
+    readonly id: string,
+    title: string,
+  ) {
     const now = () => 5_000;
     this.runs = new HostRunRegistry({ now, epoch: `runs_${id}` });
     this.service = new AidenRemoteHostRunService({
@@ -303,13 +320,22 @@ class FakeHost {
     }
     const run = /^\/runs\/([^/]+)\/events$/u.exec(path);
     if (run) {
-      this.service.openRunEvents(this.device, decodeURIComponent(run[1]!), Number(input.lastEventId ?? 0), wire);
+      this.service.openRunEvents(
+        this.device,
+        decodeURIComponent(run[1]!),
+        Number(input.lastEventId ?? 0),
+        wire,
+      );
       return;
     }
     const chat = /^\/chats\/([^/]+)\/runs\/current\/events$/u.exec(path);
     if (chat) {
       if (input.lastEventId !== undefined && input.lastEventId !== "0")
-        throw new AidenRemoteServiceError("invalid_request", "Resume a run through its run ID.", 400);
+        throw new AidenRemoteServiceError(
+          "invalid_request",
+          "Resume a run through its run ID.",
+          400,
+        );
       const runId = this.service.currentRunId(decodeURIComponent(chat[1]!));
       this.service.openRunEvents(this.device, runId, 0, wire);
       return;
@@ -332,7 +358,11 @@ function stored(id: string, enabled = true): StoredPeerHost {
   };
 }
 
-function setup(hosts: FakeHost[], records = hosts.map((host) => stored(host.id)), client?: (host: FakeHost, trust: PeerTrust) => PeerClient) {
+function setup(
+  hosts: FakeHost[],
+  records = hosts.map((host) => stored(host.id)),
+  client?: (host: FakeHost, trust: PeerTrust) => PeerClient,
+) {
   const timers = new FakeTimers();
   const byId = new Map(hosts.map((host) => [host.id, host]));
   let saved = records;
@@ -393,13 +423,26 @@ function setup(hosts: FakeHost[], records = hosts.map((host) => stored(host.id))
     manager.close();
     for (const host of hosts) host.close();
   };
-  return { timers, registry, manager, sent, advance, statuses, status, feed, frames, events, close };
+  return {
+    timers,
+    registry,
+    manager,
+    sent,
+    advance,
+    statuses,
+    status,
+    feed,
+    frames,
+    events,
+    close,
+  };
 }
 
 test("two hosts with colliding chat and run IDs keep separate feeds and live runs", async () => {
   const a = new FakeHost("host_a", "Plans on A");
   const b = new FakeHost("host_b", "Plans on B");
-  for (const host of [a, b]) host.runs.begin({ runId: "run-1", chatId: "chat-1", origin: "renderer" });
+  for (const host of [a, b])
+    host.runs.begin({ runId: "run-1", chatId: "chat-1", origin: "renderer" });
   const harness = setup([a, b]);
   try {
     await harness.manager.whenReady();
@@ -442,13 +485,19 @@ test("a pin or identity mismatch blocks without retrying and only re-enabling cl
   };
   // A revoked credential is a terminal 403 the transport maps to authentication_required.
   revoked.server = () => {
-    throw new PeerTransportError("authentication_required", 403, { code: "credential_revoked", retryable: false });
+    throw new PeerTransportError("authentication_required", 403, {
+      code: "credential_revoked",
+      retryable: false,
+    });
   };
   const harness = setup([host, revoked]);
   try {
     await harness.manager.whenReady();
     await settle();
-    assert.deepEqual(harness.status("host_a").state, { kind: "blocked", reason: "identity_changed" });
+    assert.deepEqual(harness.status("host_a").state, {
+      kind: "blocked",
+      reason: "identity_changed",
+    });
     assert.deepEqual(harness.status("host_b").state, { kind: "blocked", reason: "auth" });
 
     harness.manager.wake();
@@ -458,11 +507,19 @@ test("a pin or identity mismatch blocks without retrying and only re-enabling cl
     const outcome = await harness.manager.call("host_a", { operation: "summaries" });
     assert.deepEqual(outcome, {
       ok: false,
-      error: { code: "identity_changed", message: new PeerTransportError("identity_changed").message },
+      error: {
+        code: "identity_changed",
+        message: new PeerTransportError("identity_changed").message,
+      },
     });
     assert.deepEqual(host.calls, ["GET /server"], "operations on a blocked host make no traffic");
 
-    host.server = () => ({ protocolVersion: 1, instanceId: "host_a", capabilities: CAPABILITIES, features: FEATURES });
+    host.server = () => ({
+      protocolVersion: 1,
+      instanceId: "host_a",
+      capabilities: CAPABILITIES,
+      features: FEATURES,
+    });
     await harness.manager.setEnabled("host_a", false);
     await harness.manager.setEnabled("host_a", true);
     await settle();
@@ -470,7 +527,12 @@ test("a pin or identity mismatch blocks without retrying and only re-enabling cl
     assert.equal(harness.status("host_b").state.kind, "blocked");
 
     // A plain Reconnect leaves an auth block alone...
-    revoked.server = () => ({ protocolVersion: 1, instanceId: "host_b", capabilities: CAPABILITIES, features: FEATURES });
+    revoked.server = () => ({
+      protocolVersion: 1,
+      instanceId: "host_b",
+      capabilities: CAPABILITIES,
+      features: FEATURES,
+    });
     await harness.manager.reconnect("host_b");
     await settle();
     assert.deepEqual(harness.status("host_b").state, { kind: "blocked", reason: "auth" });
@@ -488,18 +550,27 @@ test("a pin or identity mismatch blocks without retrying and only re-enabling cl
 
 test("transport failure categories survive supervision and clear after successful synchronization", async () => {
   const host = new FakeHost("host_a", "Plans");
-  host.server = () => { throw new PeerTransportError("unavailable", undefined, undefined, "dns"); };
+  host.server = () => {
+    throw new PeerTransportError("unavailable", undefined, undefined, "dns");
+  };
   const harness = setup([host]);
   try {
     await harness.manager.whenReady();
     await settle();
     assert.equal(harness.status("host_a").state.kind, "backoff");
     assert.equal(harness.status("host_a").failure, "dns");
-    host.server = () => ({ protocolVersion: 1, instanceId: "host_a", capabilities: CAPABILITIES, features: FEATURES });
+    host.server = () => ({
+      protocolVersion: 1,
+      instanceId: "host_a",
+      capabilities: CAPABILITIES,
+      features: FEATURES,
+    });
     await harness.advance(3_000);
     assert.equal(harness.status("host_a").state.kind, "connected");
     assert.equal(harness.status("host_a").failure, undefined);
-  } finally { harness.close(); }
+  } finally {
+    harness.close();
+  }
 });
 
 test("reconnects back off 3, 4, 8, 16 and 30 seconds and reset after 30 seconds connected", async () => {
@@ -524,7 +595,12 @@ test("reconnects back off 3, 4, 8, 16 and 30 seconds and reset after 30 seconds 
     assert.deepEqual(delays, [...PEER_BACKOFF_STEPS_MS, 30_000]);
     assert.equal(host.calls.length, 7);
 
-    host.server = () => ({ protocolVersion: 1, instanceId: "host_a", capabilities: CAPABILITIES, features: FEATURES });
+    host.server = () => ({
+      protocolVersion: 1,
+      instanceId: "host_a",
+      capabilities: CAPABILITIES,
+      features: FEATURES,
+    });
     await harness.advance(30_000);
     assert.equal(harness.status("host_a").state.kind, "connected");
 
@@ -547,9 +623,18 @@ test("reconnects back off 3, 4, 8, 16 and 30 seconds and reset after 30 seconds 
     harness.close();
   }
   // Jitter stays within a fifth of the step either way.
-  assert.equal(peerBackoffDelay(1, () => 0), 2_400);
-  assert.equal(peerBackoffDelay(1, () => 1), 3_600);
-  assert.equal(peerBackoffDelay(9, () => 0.5), 30_000);
+  assert.equal(
+    peerBackoffDelay(1, () => 0),
+    2_400,
+  );
+  assert.equal(
+    peerBackoffDelay(1, () => 1),
+    3_600,
+  );
+  assert.equal(
+    peerBackoffDelay(9, () => 0.5),
+    30_000,
+  );
 });
 
 test("Reconnect restarts a backing-off or outdated host at once and leaves a host blocked on trust alone", async () => {
@@ -576,22 +661,39 @@ test("Reconnect restarts a backing-off or outdated host at once and leaves a hos
     assert.equal(state.kind, "backoff");
     assert.equal(offline.calls.length, 2);
 
-    offline.server = () => ({ protocolVersion: 1, instanceId: "host_a", capabilities: CAPABILITIES, features: FEATURES });
+    offline.server = () => ({
+      protocolVersion: 1,
+      instanceId: "host_a",
+      capabilities: CAPABILITIES,
+      features: FEATURES,
+    });
     harness.manager.reconnect("host_a");
     await settle();
-    assert.equal(offline.calls.filter((call) => call === "GET /server").length, 3, "no wait for the backoff");
+    assert.equal(
+      offline.calls.filter((call) => call === "GET /server").length,
+      3,
+      "no wait for the backoff",
+    );
     assert.equal(harness.status("host_a").state.kind, "connected");
 
     harness.manager.reconnect("host_b");
     harness.manager.reconnect("host_unknown");
     await harness.advance(10 * 60_000);
     assert.deepEqual(blocked.calls, ["GET /server"], "a blocked host is never retried");
-    assert.deepEqual(harness.status("host_b").state, { kind: "blocked", reason: "identity_changed" });
+    assert.deepEqual(harness.status("host_b").state, {
+      kind: "blocked",
+      reason: "identity_changed",
+    });
 
     // A version mismatch waits too, until the person updates and asks again.
     assert.deepEqual(harness.status("host_c").state, { kind: "blocked", reason: "protocol" });
     assert.deepEqual(outdated.calls, ["GET /server"]);
-    outdated.server = () => ({ protocolVersion: 1, instanceId: "host_c", capabilities: CAPABILITIES, features: FEATURES });
+    outdated.server = () => ({
+      protocolVersion: 1,
+      instanceId: "host_c",
+      capabilities: CAPABILITIES,
+      features: FEATURES,
+    });
     await harness.manager.reconnect("host_c");
     await settle();
     assert.equal(harness.status("host_c").state.kind, "connected");
@@ -628,7 +730,12 @@ test("a superseded connection attempt cannot move the host, and generations only
   });
   let first = true;
   host.server = () => {
-    const answer = { protocolVersion: 1, instanceId: "host_a", capabilities: CAPABILITIES, features: FEATURES };
+    const answer = {
+      protocolVersion: 1,
+      instanceId: "host_a",
+      capabilities: CAPABILITIES,
+      features: FEATURES,
+    };
     if (!first) return answer;
     first = false;
     return late.then(() => answer);
@@ -645,10 +752,20 @@ test("a superseded connection attempt cannot move the host, and generations only
     await settle();
     assert.equal(harness.status("host_a").state.kind, "connected");
     const seen = harness.statuses("host_a");
-    assert.equal(seen.some((status) => status.state.kind === "backoff"), false);
+    assert.equal(
+      seen.some((status) => status.state.kind === "backoff"),
+      false,
+    );
     for (let index = 1; index < seen.length; index += 1)
-      assert.ok(seen[index]!.generation >= seen[index - 1]!.generation, "generations never go back");
-    assert.equal(host.streams("/host/events").length, 1, "only the current connection opened a feed");
+      assert.ok(
+        seen[index]!.generation >= seen[index - 1]!.generation,
+        "generations never go back",
+      );
+    assert.equal(
+      host.streams("/host/events").length,
+      1,
+      "only the current connection opened a feed",
+    );
   } finally {
     harness.close();
   }
@@ -677,7 +794,10 @@ test("feed and run streams cross the five-minute cap without gaps or duplicates"
     await host.change({ summaries: [summary("chat-1", "Renamed", 9_000)] });
     await settle();
 
-    assert.ok(host.calls.includes(`EVENTS /runs/run-1/events @${before}`), "the run resumed from its cursor");
+    assert.ok(
+      host.calls.includes(`EVENTS /runs/run-1/events @${before}`),
+      "the run resumed from its cursor",
+    );
     const sequences = harness.events("host_a").map((event) => [event.sequence, event.type]);
     const expected = sequences.map((_, index) => index + 1);
     // run.ended repeats the terminal sequence; everything else is consecutive.
@@ -723,7 +843,10 @@ test("a chat's stream parks after its run, ignores the replay on reconnect and f
     await settle();
     harness.manager.wake();
     await harness.advance(PEER_WAKE_COALESCE_MS);
-    assert.equal(host.calls.filter((call) => call === "EVENTS /chats/chat-1/runs/current/events").length, 2);
+    assert.equal(
+      host.calls.filter((call) => call === "EVENTS /chats/chat-1/runs/current/events").length,
+      2,
+    );
     assert.equal(harness.events("host_a").length, ended, "nothing already shown is repeated");
 
     // The feed announces the chat's next run and the stream follows it.
@@ -742,7 +865,8 @@ test("a chat's stream parks after its run, ignores the replay on reconnect and f
     await host.noteRun("run-2");
     await settle();
     assert.equal(streamState(harness.frames("host_a")), "idle");
-    const probes = () => host.calls.filter((call) => call === "EVENTS /chats/chat-1/runs/current/events").length;
+    const probes = () =>
+      host.calls.filter((call) => call === "EVENTS /chats/chat-1/runs/current/events").length;
     const probed = probes();
     const shown = harness.events("host_a").length;
 
@@ -758,7 +882,11 @@ test("a chat's stream parks after its run, ignores the replay on reconnect and f
     assert.match(JSON.stringify(third), /third answer/);
     assert.equal(last(third)?.type, "run.ended");
     assert.equal(streamState(harness.frames("host_a")), "idle");
-    assert.equal(host.calls.filter((call) => call === "GET /server").length, 2, "no reconnect was needed");
+    assert.equal(
+      host.calls.filter((call) => call === "GET /server").length,
+      2,
+      "no reconnect was needed",
+    );
   } finally {
     harness.close();
   }
@@ -776,7 +904,11 @@ test("windows share one live stream that closes five minutes after its last view
     await settle();
     assert.equal(first.key, second.key);
     assert.equal(host.streams("/runs/").length, 1);
-    assert.equal(harness.manager.runUnsubscribe(first.subscriptionId, "window-2"), false, "only its owner releases it");
+    assert.equal(
+      harness.manager.runUnsubscribe(first.subscriptionId, "window-2"),
+      false,
+      "only its owner releases it",
+    );
     assert.equal(harness.manager.runUnsubscribe(first.subscriptionId, "window-1"), true);
     harness.manager.releaseOwner("window-2");
 
@@ -789,7 +921,10 @@ test("windows share one live stream that closes five minutes after its last view
     const again = await harness.manager.runSubscribe("host_a", { runId: "run-1" }, 0, "window-1");
     await settle();
     assert.equal(host.streams("/runs/").length, 1);
-    assert.equal(host.calls.filter((call) => call.startsWith("EVENTS /runs/run-1/events")).length, 2);
+    assert.equal(
+      host.calls.filter((call) => call.startsWith("EVENTS /runs/run-1/events")).length,
+      2,
+    );
     assert.equal(again.events.length, 0, "a fresh stream starts empty and fills by broadcast");
   } finally {
     harness.close();
@@ -804,7 +939,10 @@ test("a disabled host makes no requests at all", async () => {
   try {
     await harness.manager.whenReady();
     await settle();
-    await assert.rejects(harness.manager.runSubscribe("host_b", { runId: "run-1" }, 0, "window-1"), /disabled/);
+    await assert.rejects(
+      harness.manager.runSubscribe("host_b", { runId: "run-1" }, 0, "window-1"),
+      /disabled/,
+    );
     const outcome = await harness.manager.call("host_b", { operation: "summaries" });
     assert.equal(outcome.ok, false);
     harness.manager.wake();
@@ -837,7 +975,8 @@ test("sleep, unlock and network changes probe the healthy connection without sta
   try {
     await harness.manager.whenReady();
     await settle();
-    const resets = () => harness.feed("host_a").filter((message) => message.change.type === "reset").length;
+    const resets = () =>
+      harness.feed("host_a").filter((message) => message.change.type === "reset").length;
     assert.equal(resets(), 1);
     harness.manager.wake();
     await harness.advance(100);
@@ -848,7 +987,9 @@ test("sleep, unlock and network changes probe the healthy connection without sta
     assert.equal(host.calls.filter((call) => call.startsWith("EVENTS /host/events @")).length, 0);
     assert.equal(resets(), 1);
     assert.deepEqual(
-      harness.feed("host_a").flatMap((message) => (message.change.type === "stale" ? [message.change.stale] : [])),
+      harness
+        .feed("host_a")
+        .flatMap((message) => (message.change.type === "stale" ? [message.change.stale] : [])),
       [],
       "healthy rows never become stale during a wake probe",
     );
@@ -856,7 +997,10 @@ test("sleep, unlock and network changes probe the healthy connection without sta
     harness.close();
   }
   assert.equal(
-    peerNetworkFingerprint({ en0: [{ address: "10.0.0.2", internal: false }], lo0: [{ address: "127.0.0.1", internal: true }] }),
+    peerNetworkFingerprint({
+      en0: [{ address: "10.0.0.2", internal: false }],
+      lo0: [{ address: "127.0.0.1", internal: true }],
+    }),
     peerNetworkFingerprint({ lo0: [], en0: [{ address: "10.0.0.2", internal: false }] }),
   );
   assert.notEqual(
@@ -875,7 +1019,11 @@ test("an ambiguous mutation is reconciled with one read and never replayed", asy
     await host.noteRun("run-1");
     await settle();
     host.json = async (input) => {
-      if (input.method === "GET") throw new PeerTransportError("request_failed", 404, { code: "chat_not_found", retryable: false });
+      if (input.method === "GET")
+        throw new PeerTransportError("request_failed", 404, {
+          code: "chat_not_found",
+          retryable: false,
+        });
       throw new PeerTransportError("unavailable");
     };
     const cancel = await harness.manager.call("host_a", {
@@ -889,7 +1037,10 @@ test("an ambiguous mutation is reconciled with one read and never replayed", asy
     assert.deepEqual(!cancel.ok && cancel.error.reconciled, {
       run: harness.manager.feedSnapshot("host_a")!.runs.find((run) => run.runId === "run-1"),
     });
-    assert.deepEqual(host.traffic().filter((call) => !call.startsWith("EVENTS")), ["POST /runs/run-1/cancel"]);
+    assert.deepEqual(
+      host.traffic().filter((call) => !call.startsWith("EVENTS")),
+      ["POST /runs/run-1/cancel"],
+    );
 
     const rename = await harness.manager.call("host_a", {
       operation: "renameChat",
@@ -897,12 +1048,15 @@ test("an ambiguous mutation is reconciled with one read and never replayed", asy
       revision: "rev_1",
       body: { title: "New" },
     });
-    assert.deepEqual(!rename.ok && rename.error.reconciled, { chat: null }, "the chat no longer exists");
-    assert.deepEqual(host.traffic().filter((call) => !call.startsWith("EVENTS")), [
-      "POST /runs/run-1/cancel",
-      "PATCH /chats/chat-1",
-      "GET /chats/chat-1",
-    ]);
+    assert.deepEqual(
+      !rename.ok && rename.error.reconciled,
+      { chat: null },
+      "the chat no longer exists",
+    );
+    assert.deepEqual(
+      host.traffic().filter((call) => !call.startsWith("EVENTS")),
+      ["POST /runs/run-1/cancel", "PATCH /chats/chat-1", "GET /chats/chat-1"],
+    );
 
     // A failed read is just an error: reads are not reconciled.
     const read = await harness.manager.call("host_a", { operation: "chat", resourceId: "chat-1" });
@@ -910,7 +1064,11 @@ test("an ambiguous mutation is reconciled with one read and never replayed", asy
     assert.equal(!read.ok && read.error.status, 404);
     const invalid = await harness.manager.call("host_a", { operation: "send", resourceId: "../x" });
     assert.equal(!invalid.ok && invalid.error.code, "invalid_request");
-    assert.equal(harness.status("host_a").state.kind, "connected", "a failed operation does not drop the host");
+    assert.equal(
+      harness.status("host_a").state.kind,
+      "connected",
+      "a failed operation does not drop the host",
+    );
   } finally {
     harness.close();
   }
@@ -976,7 +1134,11 @@ test("a request admitted by a superseded connection cannot block the reconnected
 
     reject(new PeerTransportError("authentication_required", 401));
     const outcome = await held;
-    assert.equal(!outcome.ok && outcome.error.code, "authentication_required", "the caller still learns why");
+    assert.equal(
+      !outcome.ok && outcome.error.code,
+      "authentication_required",
+      "the caller still learns why",
+    );
     await harness.advance(60_000);
     assert.equal(harness.status("host_a").state.kind, "connected");
     assert.equal(harness.status("host_a").generation, reconnected.generation);
@@ -1018,12 +1180,16 @@ function crowdedHost(id: string, chats: number): FakeHost {
 for (const hostCount of [1, 5, 10]) {
   test(`${hostCount} crowded host(s) each cost one bounded snapshot and keep only their newest chats`, async () => {
     const chats = PEER_FEED_MAX_CHATS + 500;
-    const hosts = Array.from({ length: hostCount }, (_, index) => crowdedHost(`host_${index}`, chats));
+    const hosts = Array.from({ length: hostCount }, (_, index) =>
+      crowdedHost(`host_${index}`, chats),
+    );
     const harness = setup(hosts);
     try {
       await harness.manager.whenReady();
       await settle();
-      const newest = new Set(Array.from({ length: PEER_FEED_MAX_CHATS }, (_, index) => `chat-${chats - 1 - index}`));
+      const newest = new Set(
+        Array.from({ length: PEER_FEED_MAX_CHATS }, (_, index) => `chat-${chats - 1 - index}`),
+      );
       const perHostBytes = new Set<number>();
       for (const host of hosts) {
         // The sidebar is built from the feed alone: no transcript or list reads.
@@ -1031,17 +1197,23 @@ for (const hostCount of [1, 5, 10]) {
         const snapshot = harness.manager.feedSnapshot(host.id);
         assert.ok(snapshot);
         assert.equal(snapshot.summaries.length, PEER_FEED_MAX_CHATS);
-        assert.ok(snapshot.summaries.every((row) => newest.has(row.id)), "the oldest chats are the ones left out");
+        assert.ok(
+          snapshot.summaries.every((row) => newest.has(row.id)),
+          "the oldest chats are the ones left out",
+        );
         // One reset reaches the windows per host, however many hosts there are.
         const resets = harness.feed(host.id).filter((message) => message.change.type === "reset");
         assert.equal(resets.length, 1);
 
-        const frames = sseFrames(host, "/host/events").filter((frame) => frame.includes("event: snapshot"));
+        const frames = sseFrames(host, "/host/events").filter((frame) =>
+          frame.includes("event: snapshot"),
+        );
         const bytes = frames.map((frame) => Buffer.byteLength(frame));
         // Every snapshot frame fits the chunk budget plus its envelope, far
         // inside the transport's 1 MiB frame limit, and only the last has an id.
         assert.ok(frames.length > 1, "a crowded host's snapshot is split");
-        for (const size of bytes) assert.ok(size <= AIDEN_REMOTE_HOST_FEED_SNAPSHOT_CHUNK_BYTES + 4_096, `${size}`);
+        for (const size of bytes)
+          assert.ok(size <= AIDEN_REMOTE_HOST_FEED_SNAPSHOT_CHUNK_BYTES + 4_096, `${size}`);
         assert.deepEqual(
           frames.map((frame) => frame.startsWith("id: ")),
           frames.map((_, index) => index === frames.length - 1),
@@ -1056,7 +1228,10 @@ for (const hostCount of [1, 5, 10]) {
   });
 
   test(`one wake checks ${hostCount} healthy host(s) without reopening feeds`, async () => {
-    const hosts = Array.from({ length: hostCount }, (_, index) => new FakeHost(`host_${index}`, `Chat ${index}`));
+    const hosts = Array.from(
+      { length: hostCount },
+      (_, index) => new FakeHost(`host_${index}`, `Chat ${index}`),
+    );
     const off = new FakeHost("host_off", "Off");
     const harness = setup(
       [...hosts, off],
@@ -1078,7 +1253,10 @@ for (const hostCount of [1, 5, 10]) {
         assert.equal(host.calls.length, 1, host.calls.join("\n"));
         assert.equal(host.calls[0], "GET /server");
         // The existing feed remained live without reading a new snapshot.
-        assert.equal(harness.feed(host.id).filter((message) => message.change.type === "reset").length, 1);
+        assert.equal(
+          harness.feed(host.id).filter((message) => message.change.type === "reset").length,
+          1,
+        );
         assert.equal(harness.status(host.id).state.kind, "connected");
       }
       assert.deepEqual(off.calls, []);
@@ -1092,19 +1270,31 @@ for (const timing of ["early", "delayed", "slow"] as const) {
   test(`cold LAN automatically learns its alternate without replacing the feed (${timing} discovery)`, async () => {
     const host = new FakeHost("host_discovery", "Cold discovery");
     const record = { ...stored(host.id), endpoint: "https://studio.local/api/aiden/v1" };
-    const alternate = { endpoint: "https://studio.tail123.ts.net/api/aiden/v1", serverSpkiSha256: record.serverSpkiSha256 };
+    const alternate = {
+      endpoint: "https://studio.tail123.ts.net/api/aiden/v1",
+      serverSpkiSha256: record.serverSpkiSha256,
+    };
     let discovered = false;
     let lanDown = false;
     const attempted: string[] = [];
-    host.server = () => ({ protocolVersion: 1, instanceId: host.id, capabilities: CAPABILITIES,
-      features: [...FEATURES, "peer-routes-v1"], peerRoutes: discovered ? [alternate] : [] });
+    host.server = () => ({
+      protocolVersion: 1,
+      instanceId: host.id,
+      capabilities: CAPABILITIES,
+      features: [...FEATURES, "peer-routes-v1"],
+      peerRoutes: discovered ? [alternate] : [],
+    });
     const harness = setup([host], [record], (server, trust) => {
       const client = server.client();
-      return { ...client, json: async (input) => {
-        attempted.push(trust.endpoint);
-        if (lanDown && trust.endpoint === record.endpoint) throw new PeerTransportError("unavailable");
-        return client.json(input);
-      } };
+      return {
+        ...client,
+        json: async (input) => {
+          attempted.push(trust.endpoint);
+          if (lanDown && trust.endpoint === record.endpoint)
+            throw new PeerTransportError("unavailable");
+          return client.json(input);
+        },
+      };
     });
     try {
       await harness.manager.whenReady();
@@ -1116,7 +1306,10 @@ for (const timing of ["early", "delayed", "slow"] as const) {
       assert.equal(host.calls.filter((call) => call === "GET /server").length, 1);
       if (timing === "slow") {
         await harness.advance(1);
-        assert.equal((await harness.registry.list())[0]!.routes?.some((route) => route.kind === "tailscale"), false);
+        assert.equal(
+          (await harness.registry.list())[0]!.routes?.some((route) => route.kind === "tailscale"),
+          false,
+        );
         assert.equal(host.calls.filter((call) => call === "GET /server").length, 2);
         await harness.advance(5_000);
         discovered = true;
@@ -1128,12 +1321,19 @@ for (const timing of ["early", "delayed", "slow"] as const) {
         await harness.advance(timing === "delayed" ? 40_000 : 1);
       }
       const expectedReads = timing === "slow" ? 3 : 2;
-      assert.equal((await harness.registry.list())[0]!.routes?.some((route) => route.kind === "tailscale"), true);
+      assert.equal(
+        (await harness.registry.list())[0]!.routes?.some((route) => route.kind === "tailscale"),
+        true,
+      );
       assert.equal(harness.status(host.id).generation, generation);
       assert.equal(host.streams("/host/events")[0], stream);
       assert.equal(host.calls.filter((call) => call === "GET /server").length, expectedReads);
       await harness.advance(300_000);
-      assert.equal(host.calls.filter((call) => call === "GET /server").length, expectedReads, "discovery never becomes idle polling");
+      assert.equal(
+        host.calls.filter((call) => call === "GET /server").length,
+        expectedReads,
+        "discovery never becomes idle polling",
+      );
       lanDown = true;
       stream.drop();
       await settle();
@@ -1142,32 +1342,53 @@ for (const timing of ["early", "delayed", "slow"] as const) {
       assert.equal(harness.status(host.id).feed, "live");
       assert.equal((await harness.registry.list())[0]!.activeRouteKind, "tailscale");
       assert.equal(last(attempted), alternate.endpoint);
-    } finally { harness.close(); }
+    } finally {
+      harness.close();
+    }
   });
 }
 
-for (const disableAt of [0, 25_000]) test(`disabling a cold LAN connection at ${disableAt} cancels remaining discovery reads`, async () => {
-  const host = new FakeHost("host_disabled_discovery", "Disabled discovery");
-  host.server = () => ({ protocolVersion: 1, instanceId: host.id, capabilities: CAPABILITIES,
-    features: [...FEATURES, "peer-routes-v1"], peerRoutes: [] });
-  const harness = setup([host], [{ ...stored(host.id), endpoint: "https://studio.local/api/aiden/v1" }]);
-  try {
-    await harness.manager.whenReady();
-    await settle();
-    assert.equal(harness.status(host.id).state.kind, "connected");
-    await harness.advance(disableAt);
-    await harness.manager.setEnabled(host.id, false);
-    await harness.advance(120_000);
-    assert.equal(host.calls.filter((call) => call === "GET /server").length, disableAt ? 2 : 1);
-    assert.equal(harness.status(host.id).state.kind, "disabled");
-  } finally { harness.close(); }
-});
+for (const disableAt of [0, 25_000])
+  test(`disabling a cold LAN connection at ${disableAt} cancels remaining discovery reads`, async () => {
+    const host = new FakeHost("host_disabled_discovery", "Disabled discovery");
+    host.server = () => ({
+      protocolVersion: 1,
+      instanceId: host.id,
+      capabilities: CAPABILITIES,
+      features: [...FEATURES, "peer-routes-v1"],
+      peerRoutes: [],
+    });
+    const harness = setup(
+      [host],
+      [{ ...stored(host.id), endpoint: "https://studio.local/api/aiden/v1" }],
+    );
+    try {
+      await harness.manager.whenReady();
+      await settle();
+      assert.equal(harness.status(host.id).state.kind, "connected");
+      await harness.advance(disableAt);
+      await harness.manager.setEnabled(host.id, false);
+      await harness.advance(120_000);
+      assert.equal(host.calls.filter((call) => call === "GET /server").length, disableAt ? 2 : 1);
+      assert.equal(harness.status(host.id).state.kind, "disabled");
+    } finally {
+      harness.close();
+    }
+  });
 
 test("unavailable alternate discovery stops after its two bounded collection reads", async () => {
   const host = new FakeHost("host_no_alternate", "No alternate");
-  host.server = () => ({ protocolVersion: 1, instanceId: host.id, capabilities: CAPABILITIES,
-    features: [...FEATURES, "peer-routes-v1"], peerRoutes: [] });
-  const harness = setup([host], [{ ...stored(host.id), endpoint: "https://studio.local/api/aiden/v1" }]);
+  host.server = () => ({
+    protocolVersion: 1,
+    instanceId: host.id,
+    capabilities: CAPABILITIES,
+    features: [...FEATURES, "peer-routes-v1"],
+    peerRoutes: [],
+  });
+  const harness = setup(
+    [host],
+    [{ ...stored(host.id), endpoint: "https://studio.local/api/aiden/v1" }],
+  );
   try {
     await harness.manager.whenReady();
     await settle();
@@ -1177,8 +1398,13 @@ test("unavailable alternate discovery stops after its two bounded collection rea
     await harness.advance(600_000);
     assert.equal(host.calls.filter((call) => call === "GET /server").length, 3);
     assert.equal(harness.status(host.id).feed, "live");
-    assert.equal((await harness.registry.list())[0]!.routes?.some((route) => route.kind === "tailscale"), false);
-  } finally { harness.close(); }
+    assert.equal(
+      (await harness.registry.list())[0]!.routes?.some((route) => route.kind === "tailscale"),
+      false,
+    );
+  } finally {
+    harness.close();
+  }
 });
 
 test("a registry change during a preferred-route check keeps one 30-second check per tick", async () => {
@@ -1200,11 +1426,15 @@ test("a registry change during a preferred-route check keeps one 30-second check
   let notifyChanged = () => {};
   let checks = 0;
   const inFlight: Array<() => void> = [];
-  const finishChecks = () => { for (const finish of inFlight.splice(0)) finish(); };
+  const finishChecks = () => {
+    for (const finish of inFlight.splice(0)) finish();
+  };
   const registry: PeerManagerRegistry = {
     list: async () => [view],
     connect: async () => view,
-    request: async () => { throw new Error("unused"); },
+    request: async () => {
+      throw new Error("unused");
+    },
     setEnabled: async () => undefined,
     remove: async () => undefined,
     onChanged: (listener) => {
@@ -1214,7 +1444,9 @@ test("a registry change during a preferred-route check keeps one 30-second check
     attachConnectionState: () => undefined,
     preferReachableRoute: () => {
       checks += 1;
-      return new Promise<boolean>((resolve) => { inFlight.push(() => resolve(false)); });
+      return new Promise<boolean>((resolve) => {
+        inFlight.push(() => resolve(false));
+      });
     },
   };
   const manager = new PeerHostManager({
@@ -1259,7 +1491,10 @@ test("a paired private-CA .local host retries TLS collisions via backoff, Reconn
 
   const tlsDir = await mkdtemp(path.join(os.tmpdir(), "aiden-mgr-lan-ca-"));
   t.after(() => rm(tlsDir, { recursive: true, force: true }));
-  const identity = await loadOrCreateAidenRemoteTlsIdentity({ directory: tlsDir, hostnames: ["studio.local"] });
+  const identity = await loadOrCreateAidenRemoteTlsIdentity({
+    directory: tlsDir,
+    hostnames: ["studio.local"],
+  });
   const caCertificateDerBase64 = new X509Certificate(identity.caCertificate).raw.toString("base64");
   const lanRecord = (id: string): StoredPeerHost => ({
     ...stored(id),
@@ -1268,7 +1503,9 @@ test("a paired private-CA .local host retries TLS collisions via backoff, Reconn
     caCertificateDerBase64,
   });
   const tlsIdentityCollision = () =>
-    new PeerTransportError("identity_changed", undefined, undefined, "tls", { identitySource: "tls" });
+    new PeerTransportError("identity_changed", undefined, undefined, "tls", {
+      identitySource: "tls",
+    });
 
   // 1. Fails TLS once, then recovers via scheduled backoff, explicit Reconnect, and wake() separately.
   for (const recovery of ["backoff", "reconnect", "wake"] as const) {
@@ -1394,8 +1631,16 @@ test("a paired private-CA .local host retries TLS collisions via backoff, Reconn
           message: new PeerTransportError("identity_changed").message,
         },
       });
-      assert.equal(host.calls.length, callsBeforeSend, "no HTTP mutation, reconcile read or replay reached the host");
-      assert.equal(harness.status("host_ops").state.kind, "connected", "a single failed unary socket does not block the host");
+      assert.equal(
+        host.calls.length,
+        callsBeforeSend,
+        "no HTTP mutation, reconcile read or replay reached the host",
+      );
+      assert.equal(
+        harness.status("host_ops").state.kind,
+        "connected",
+        "a single failed unary socket does not block the host",
+      );
 
       // A wake probe hitting a .local TLS collision moves the host to backoff (not blocked), then recovers.
       harness.manager.wake();
@@ -1443,7 +1688,10 @@ test("a paired private-CA .local host retries TLS collisions via backoff, Reconn
     try {
       await harness.manager.whenReady();
       await settle();
-      assert.deepEqual(harness.status(initialMismatch.id).state, { kind: "blocked", reason: "identity_changed" });
+      assert.deepEqual(harness.status(initialMismatch.id).state, {
+        kind: "blocked",
+        reason: "identity_changed",
+      });
       assert.equal(harness.status(probeMismatch.id).state.kind, "connected");
 
       // Swap the second host's instanceId before a wake probe.
@@ -1455,7 +1703,10 @@ test("a paired private-CA .local host retries TLS collisions via backoff, Reconn
       });
       harness.manager.wake();
       await harness.advance(PEER_WAKE_COALESCE_MS);
-      assert.deepEqual(harness.status(probeMismatch.id).state, { kind: "blocked", reason: "identity_changed" });
+      assert.deepEqual(harness.status(probeMismatch.id).state, {
+        kind: "blocked",
+        reason: "identity_changed",
+      });
 
       const connectCalls = initialMismatch.calls.length;
       const probeCalls = probeMismatch.calls.length;
@@ -1463,8 +1714,16 @@ test("a paired private-CA .local host retries TLS collisions via backoff, Reconn
       await harness.manager.reconnect(probeMismatch.id);
       harness.manager.wake();
       await harness.advance(10 * 60_000);
-      assert.equal(initialMismatch.calls.length, connectCalls, "connect instance mismatch makes no retry traffic");
-      assert.equal(probeMismatch.calls.length, probeCalls, "probe instance mismatch makes no retry traffic");
+      assert.equal(
+        initialMismatch.calls.length,
+        connectCalls,
+        "connect instance mismatch makes no retry traffic",
+      );
+      assert.equal(
+        probeMismatch.calls.length,
+        probeCalls,
+        "probe instance mismatch makes no retry traffic",
+      );
     } finally {
       harness.close();
     }
@@ -1488,7 +1747,9 @@ test("a paired private-CA .local host retries TLS collisions via backoff, Reconn
       connect: async () => {
         if (connectMode === "tls") throw tlsIdentityCollision();
         if (connectMode === "instance") {
-          throw new PeerTransportError("identity_changed", undefined, undefined, undefined, { identitySource: "instance" });
+          throw new PeerTransportError("identity_changed", undefined, undefined, undefined, {
+            identitySource: "instance",
+          });
         }
         return { ...lanView, state: "connected", activeRouteKind: "lan" };
       },
@@ -1520,7 +1781,10 @@ test("a paired private-CA .local host retries TLS collisions via backoff, Reconn
       await stubManager.setEnabled("host_stub_lan", false);
       await stubManager.setEnabled("host_stub_lan", true);
       await settle();
-      assert.deepEqual(stubManager.statuses()[0]?.state, { kind: "blocked", reason: "identity_changed" });
+      assert.deepEqual(stubManager.statuses()[0]?.state, {
+        kind: "blocked",
+        reason: "identity_changed",
+      });
     } finally {
       stubManager.close();
     }
@@ -1594,12 +1858,24 @@ test("real-TLS key rotation on a paired .local LAN host keeps rejecting while re
 
   await manager.reconnect(host.instanceId);
   await waitState(() => manager.statuses()[0]?.state.kind === "backoff");
-  assert.equal(saved[0]!.serverSpkiSha256, originalPin, "retrying never re-pins a private-CA LAN key");
-  assert.equal(host.received.length, receivedAfterRotate, "rejected TLS retries send no HTTP requests or credentials");
+  assert.equal(
+    saved[0]!.serverSpkiSha256,
+    originalPin,
+    "retrying never re-pins a private-CA LAN key",
+  );
+  assert.equal(
+    host.received.length,
+    receivedAfterRotate,
+    "rejected TLS retries send no HTTP requests or credentials",
+  );
 
   // Re-pairing replaces the pin and restores supervision.
   await registry.pairWithSetupCode(
-    { endpoint: host.lanAddressEndpoint, code: host.openSetupCode("lan"), instanceId: host.instanceId },
+    {
+      endpoint: host.lanAddressEndpoint,
+      code: host.openSetupCode("lan"),
+      instanceId: host.instanceId,
+    },
     undefined,
     { replaceHostId: host.instanceId },
   );

@@ -9,7 +9,12 @@
 import * as React from "react";
 import { devicesApi } from "./ipc";
 import { subscribeDeviceForeground, type DeviceForegroundApp } from "./device-foreground";
-import type { DeviceActionInput, DevicePlatform, DeviceSettings, DeviceStreamGrant } from "../shared/devices";
+import type {
+  DeviceActionInput,
+  DevicePlatform,
+  DeviceSettings,
+  DeviceStreamGrant,
+} from "../shared/devices";
 
 type Distribute<T> = T extends unknown ? Omit<T, "hostId" | "deviceId"> : never;
 export type DeviceActionBody = Distribute<DeviceActionInput>;
@@ -55,7 +60,8 @@ export function createDeviceControls(options: {
         if (generation === revision) set({ settings, error: null });
       },
       (error: unknown) => {
-        if (generation === revision) set({ settings: null, error: message(error, "Could not read the simulator settings.") });
+        if (generation === revision)
+          set({ settings: null, error: message(error, "Could not read the simulator settings.") });
       },
     );
   return {

@@ -7,8 +7,7 @@ import { build } from "esbuild";
 import playwrightTest from "@playwright/test";
 import type * as PlaywrightTestModule from "@playwright/test";
 
-const { expect, test } =
-  playwrightTest as unknown as typeof PlaywrightTestModule;
+const { expect, test } = playwrightTest as unknown as typeof PlaywrightTestModule;
 
 // A standalone native guest, as in bot-browser.spec.ts: the real browser
 // service, sign_in tool, hand-off cards and card opener, without starting
@@ -57,10 +56,12 @@ async function runNative(scenario: "sign-in" | "rule") {
   } finally {
     await rm(temporaryBuild, { recursive: true, force: true });
   }
-  const raw = await readFile(path.join(root, "result.json"), "utf8").catch((error: NodeJS.ErrnoException) => {
-    if (error.code !== "ENOENT") throw error;
-    throw new Error(`The Bot sign-in fixture exited without a result:\n${output}`);
-  });
+  const raw = await readFile(path.join(root, "result.json"), "utf8").catch(
+    (error: NodeJS.ErrnoException) => {
+      if (error.code !== "ENOENT") throw error;
+      throw new Error(`The Bot sign-in fixture exited without a result:\n${output}`);
+    },
+  );
   return JSON.parse(raw);
 }
 

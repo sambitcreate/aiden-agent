@@ -112,15 +112,37 @@ export type ChatArtifactEventV1 =
     };
 
 const IMAGE_ARTIFACT_KEYS = new Set(["version", "kind", "attachment"]);
-const HTML_ARTIFACT_KEYS = new Set(["version", "kind", "id", "title", "mimeType", "size", "mediaId"]);
+const HTML_ARTIFACT_KEYS = new Set([
+  "version",
+  "kind",
+  "id",
+  "title",
+  "mimeType",
+  "size",
+  "mediaId",
+]);
 const IMAGE_KEYS = new Set(["id", "name", "mimeType", "kind", "size", "data"]);
 const PRESENT_EVENT_KEYS = new Set(["version", "operation", "artifact"]);
 const RESET_EVENT_KEYS = new Set(["version", "operation"]);
-const PRESENT_EVENT_ALLOWED_KEYS = new Set(["version", "operation", "artifact", "toolCallId", "src", "layout"]);
+const PRESENT_EVENT_ALLOWED_KEYS = new Set([
+  "version",
+  "operation",
+  "artifact",
+  "toolCallId",
+  "src",
+  "layout",
+]);
 const DRAFT_EVENT_REQUIRED_KEYS = ["version", "operation", "toolCallId", "src"] as const;
 const UI_EVENT_KEYS = new Set(["version", "operation", "visual"]);
 const UI_DRAFT_EVENT_KEYS = new Set(["version", "operation", "toolCallId", "visual"]);
-const DRAFT_EVENT_ALLOWED_KEYS = new Set(["version", "operation", "toolCallId", "title", "src", "layout"]);
+const DRAFT_EVENT_ALLOWED_KEYS = new Set([
+  "version",
+  "operation",
+  "toolCallId",
+  "title",
+  "src",
+  "layout",
+]);
 const DRAFT_END_EVENT_KEYS = new Set(["version", "operation", "toolCallId"]);
 const MAX_PLACEMENTS = 40;
 const MAX_ID_CHARS = 256;
@@ -161,7 +183,9 @@ function base64Value(code: number): number | undefined {
   return undefined;
 }
 
-function parseChatImageArtifactV1(artifact: Record<string, unknown>): ChatImageArtifactV1 | undefined {
+function parseChatImageArtifactV1(
+  artifact: Record<string, unknown>,
+): ChatImageArtifactV1 | undefined {
   if (
     !hasExactKeys(artifact, IMAGE_ARTIFACT_KEYS) ||
     artifact.version !== CHAT_ARTIFACT_VERSION ||
@@ -283,15 +307,25 @@ export function parseChatArtifactEventV1(value: unknown): ChatArtifactEventV1 | 
     return visual ? { version: CHAT_ARTIFACT_EVENT_VERSION, operation: "ui", visual } : undefined;
   }
   if (event.operation === "ui_draft") {
-    if (!hasExactKeys(event, UI_DRAFT_EVENT_KEYS) || !isToolCallId(event.toolCallId)) return undefined;
+    if (!hasExactKeys(event, UI_DRAFT_EVENT_KEYS) || !isToolCallId(event.toolCallId))
+      return undefined;
     const visual = parseChatUiVisualV1(event.visual);
     return visual
-      ? { version: CHAT_ARTIFACT_EVENT_VERSION, operation: "ui_draft", toolCallId: event.toolCallId, visual }
+      ? {
+          version: CHAT_ARTIFACT_EVENT_VERSION,
+          operation: "ui_draft",
+          toolCallId: event.toolCallId,
+          visual,
+        }
       : undefined;
   }
   if (event.operation === "draft_end") {
     return hasExactKeys(event, DRAFT_END_EVENT_KEYS) && isToolCallId(event.toolCallId)
-      ? { version: CHAT_ARTIFACT_EVENT_VERSION, operation: "draft_end", toolCallId: event.toolCallId }
+      ? {
+          version: CHAT_ARTIFACT_EVENT_VERSION,
+          operation: "draft_end",
+          toolCallId: event.toolCallId,
+        }
       : undefined;
   }
   if (event.operation === "draft") {

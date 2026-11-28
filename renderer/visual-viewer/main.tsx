@@ -81,7 +81,10 @@ function UiViewer({ payload }: { payload: Extract<VisualViewerPayload, { kind: "
     const check = () => {
       if (!live) return;
       const canvases = [...document.querySelectorAll<HTMLCanvasElement>("canvas[role='img']")];
-      if (canvases.every((canvas) => canvas.dataset.chartReady === "true") || Date.now() > deadline) {
+      if (
+        canvases.every((canvas) => canvas.dataset.chartReady === "true") ||
+        Date.now() > deadline
+      ) {
         postVisualViewerMessage({ type: "ready" });
         return;
       }
@@ -124,18 +127,27 @@ function HtmlViewer({ payload }: { payload: Extract<VisualViewerPayload, { kind:
       switch (message.type) {
         case "ready": {
           const theme = readGenerativeUiTheme();
-          guest.postMessage({ type: GENERATIVE_UI_THEME_MESSAGE, colorScheme: theme.colorScheme, vars: theme.vars }, "*");
+          guest.postMessage(
+            { type: GENERATIVE_UI_THEME_MESSAGE, colorScheme: theme.colorScheme, vars: theme.vars },
+            "*",
+          );
           requestAnimationFrame(() => setThemed(true));
           return;
         }
         case "resize": {
           if (!Number.isFinite(message.height)) return;
-          setHeight(Math.min(MAX_GUEST_HEIGHT, Math.max(MIN_GUEST_HEIGHT, Math.ceil(message.height))));
+          setHeight(
+            Math.min(MAX_GUEST_HEIGHT, Math.max(MIN_GUEST_HEIGHT, Math.ceil(message.height))),
+          );
           return;
         }
         case "prompt": {
           const now = performance.now();
-          const decision = admitGuestPrompt({ text: message.text, now, lastAcceptedAt: lastPrompt.current });
+          const decision = admitGuestPrompt({
+            text: message.text,
+            now,
+            lastAcceptedAt: lastPrompt.current,
+          });
           if (decision.action !== "confirm") return;
           lastPrompt.current = now;
           postVisualViewerMessage({ type: "prompt", text: decision.text });
@@ -179,7 +191,12 @@ function Viewer({ payload }: { payload: VisualViewerPayload }) {
   return (
     <main
       aria-label={payload.title}
-      style={{ boxSizing: "border-box", minHeight: "100vh", padding: "16px", background: "var(--theme-canvas)" }}
+      style={{
+        boxSizing: "border-box",
+        minHeight: "100vh",
+        padding: "16px",
+        background: "var(--theme-canvas)",
+      }}
       className="text-primary"
     >
       {payload.kind === "ui" ? <UiViewer payload={payload} /> : <HtmlViewer payload={payload} />}
@@ -193,9 +210,16 @@ if (payload && (payload.kind === "ui" || payload.kind === "html")) {
   applyViewerTheme(payload.scheme, payload.preset);
   document.body.style.margin = "0";
   document.body.style.background = "var(--theme-canvas)";
-  const container = document.getElementById("root") ?? document.body.appendChild(document.createElement("div"));
+  const container =
+    document.getElementById("root") ?? document.body.appendChild(document.createElement("div"));
   // The desktop stylesheet pins html, body and #root to the viewport with
   // overflow hidden. The viewer scrolls inside its own full-viewport surface.
-  Object.assign(container.style, { position: "fixed", inset: "0", overflowX: "hidden", overflowY: "auto", overscrollBehavior: "contain" });
+  Object.assign(container.style, {
+    position: "fixed",
+    inset: "0",
+    overflowX: "hidden",
+    overflowY: "auto",
+    overscrollBehavior: "contain",
+  });
   createRoot(container).render(<Viewer payload={payload} />);
 }

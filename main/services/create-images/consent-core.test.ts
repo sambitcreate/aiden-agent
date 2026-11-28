@@ -6,8 +6,19 @@ const draft: ConsentDraft = {
   workflowId: "wf",
   workflowRevision: 2,
   scope: { kind: "all" },
-  requests: [{ nodeId: "g", variant: 0, provider: "openrouter", providerLabel: "OpenRouter", model: "m", modelLabel: "Model",
-    referenceCount: 0, referenceBytes: 0, pendingReferenceCount: 0 }],
+  requests: [
+    {
+      nodeId: "g",
+      variant: 0,
+      provider: "openrouter",
+      providerLabel: "OpenRouter",
+      model: "m",
+      modelLabel: "Model",
+      referenceCount: 0,
+      referenceBytes: 0,
+      pendingReferenceCount: 0,
+    },
+  ],
   totalRequests: 1,
   estimate: { kind: "unknown" },
 };
@@ -15,15 +26,25 @@ const draft: ConsentDraft = {
 function store() {
   let clock = 10_000;
   let id = 0;
-  const consents = new RunConsentStore<string>({ now: () => clock, newId: () => `consent-${(id += 1)}` });
+  const consents = new RunConsentStore<string>({
+    now: () => clock,
+    newId: () => `consent-${(id += 1)}`,
+  });
   return { consents, advance: (ms: number) => (clock += ms) };
 }
 
 test("a consent names the plan, expires five minutes later and is single-use", () => {
   const { consents } = store();
   const plan = consents.issue("window-a", draft, "digest");
-  assert.deepEqual({ ...plan, consentId: "x" }, { ...draft, consentId: "x", createdAt: 10_000, expiresAt: 10_000 + CONSENT_TTL_MS });
-  assert.deepEqual(consents.consume(plan.consentId, "window-a"), { ok: true, plan, internal: "digest" });
+  assert.deepEqual(
+    { ...plan, consentId: "x" },
+    { ...draft, consentId: "x", createdAt: 10_000, expiresAt: 10_000 + CONSENT_TTL_MS },
+  );
+  assert.deepEqual(consents.consume(plan.consentId, "window-a"), {
+    ok: true,
+    plan,
+    internal: "digest",
+  });
   assert.deepEqual(consents.consume(plan.consentId, "window-a"), { ok: false });
 });
 

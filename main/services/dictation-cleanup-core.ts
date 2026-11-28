@@ -16,10 +16,7 @@ export function buildDictationCleanupUserPrompt(transcript: string): string {
 }
 
 /** Keep the original transcript when the model returns empty or runaway text. */
-export function sanitizeDictationCleanupOutput(
-  raw: unknown,
-  original: string,
-): string {
+export function sanitizeDictationCleanupOutput(raw: unknown, original: string): string {
   if (typeof raw !== "string") return original;
   let text = raw.trim();
   if (!text) return original;
@@ -31,7 +28,9 @@ export function sanitizeDictationCleanupOutput(
 }
 
 export function dictationCleanupUsageIsLocal(
-  provider: Pick<StoredProvider, "id" | "label" | "baseUrl" | "needsKey" | "deployment"> | undefined,
+  provider:
+    | Pick<StoredProvider, "id" | "label" | "baseUrl" | "needsKey" | "deployment">
+    | undefined,
   providerId: string,
 ): boolean {
   if (provider) return isLocalModelProvider(provider);

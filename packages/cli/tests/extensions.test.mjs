@@ -14,24 +14,30 @@ const pkgDir = path.dirname(fileURLToPath(import.meta.url)) + "/..";
  * end-to-end coverage lives in the parity suite's daemon tests.
  */
 function evalModule(expression) {
-	const result = spawnSync(
-		process.execPath,
-		["--experimental-strip-types", "--input-type=module", "--no-warnings", "-e", expression],
-		{
-			cwd: pkgDir, encoding: "utf-8", timeout: 60_000,
-			// Source imports resolve native helpers through the installed CLI entry, as the bundle does.
-			env: { ...process.env, AIDEN_CLI_ENTRY: path.join(pkgDir, "dist", "app", "cli.js") },
-		},
-	);
-	assert.equal(result.status, 0, result.stderr);
-	return result.stdout;
+  const result = spawnSync(
+    process.execPath,
+    ["--experimental-strip-types", "--input-type=module", "--no-warnings", "-e", expression],
+    {
+      cwd: pkgDir,
+      encoding: "utf-8",
+      timeout: 60_000,
+      // Source imports resolve native helpers through the installed CLI entry, as the bundle does.
+      env: { ...process.env, AIDEN_CLI_ENTRY: path.join(pkgDir, "dist", "app", "cli.js") },
+    },
+  );
+  assert.equal(result.status, 0, result.stderr);
+  return result.stdout;
 }
 
-const bridgeUrl = JSON.stringify(pathToFileURL(path.join(pkgDir, "src", "pi-bridge", "adapt-aiden-extension.ts")).href);
-const settingsUrl = JSON.stringify(pathToFileURL(path.join(pkgDir, "src", "extensions", "aiden-settings.ts")).href);
+const bridgeUrl = JSON.stringify(
+  pathToFileURL(path.join(pkgDir, "src", "pi-bridge", "adapt-aiden-extension.ts")).href,
+);
+const settingsUrl = JSON.stringify(
+  pathToFileURL(path.join(pkgDir, "src", "extensions", "aiden-settings.ts")).href,
+);
 
 test("bridge registers tools and chains system prompts onto before_agent_start", () => {
-	const out = evalModule(`
+  const out = evalModule(`
 import * as bridge from ${bridgeUrl};
 const registered = [];
 const handlers = {};
@@ -52,11 +58,11 @@ if (result.systemPrompt !== "BASE\\n\\nUse the demo tool politely.") {
 }
 console.log("bridge-ok");
 `);
-	assert.match(out, /bridge-ok/);
+  assert.match(out, /bridge-ok/);
 });
 
 test("aiden.json settings reject wrong-typed values (desktop normalization parity)", () => {
-	const out = evalModule(`
+  const out = evalModule(`
 import { readAidenSettings, writeAidenSettings } from ${settingsUrl};
 import { mkdtempSync, readFileSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -75,14 +81,14 @@ try {
 	rmSync(dir, { recursive: true, force: true });
 }
 `);
-	assert.match(out, /normalize-ok/);
+  assert.match(out, /normalize-ok/);
 });
 
 test("memory scope id matches the desktop SAFE_ID charset and is stable per folder", () => {
-	const out = evalModule(`
+  const out = evalModule(`
 import { workspaceScopeId, memoryEnabledFor } from ${JSON.stringify(
-		pathToFileURL(path.join(pkgDir, "src", "extensions", "memory-scope.ts")).href,
-	)};
+    pathToFileURL(path.join(pkgDir, "src", "extensions", "memory-scope.ts")).href,
+  )};
 import { mkdtempSync, readFileSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -103,11 +109,11 @@ try {
 }
 console.log("scope-ok");
 `);
-	assert.match(out, /scope-ok/);
+  assert.match(out, /scope-ok/);
 });
 
 test("aiden.json settings preserve other features and reject corrupt authority state", () => {
-	const out = evalModule(`
+  const out = evalModule(`
 import { readAidenSettings, writeAidenSettings } from ${settingsUrl};
 import { mkdtempSync, readFileSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -130,5 +136,5 @@ try {
 	rmSync(dir, { recursive: true, force: true });
 }
 `);
-	assert.match(out, /settings-ok/);
+  assert.match(out, /settings-ok/);
 });

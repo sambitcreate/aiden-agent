@@ -29,7 +29,10 @@ test("every Bot starts with the plan's rule table", () => {
     expected,
   );
   // Bots also run on Linux, where the person's computer isn't a Mac.
-  assert.equal(botRuleLabel({ actionClass: "install" }, "linux"), "Install software on your computer");
+  assert.equal(
+    botRuleLabel({ actionClass: "install" }, "linux"),
+    "Install software on your computer",
+  );
   // One built-in rule per class, and every class has one.
   assert.deepEqual(rules.map((rule) => rule.actionClass).sort(), [...BOT_ACTION_CLASSES].sort());
   assert.equal(new Set(rules.map((rule) => rule.id)).size, rules.length);
@@ -56,7 +59,12 @@ test("behaviors read as the editor's choices", () => {
 
 test("custom rule ids are custom. and a UUID", () => {
   assert.ok(BOT_CUSTOM_RULE_ID_PATTERN.test("custom.0b8a3f5e-2c11-4d5f-9b7a-0123456789ab"));
-  for (const id of ["custom.1", "default.purchase", "locked.money", "custom.0B8A3F5E-2C11-4D5F-9B7A-0123456789AB"]) {
+  for (const id of [
+    "custom.1",
+    "default.purchase",
+    "locked.money",
+    "custom.0B8A3F5E-2C11-4D5F-9B7A-0123456789AB",
+  ]) {
     assert.equal(BOT_CUSTOM_RULE_ID_PATTERN.test(id), false, id);
   }
 });

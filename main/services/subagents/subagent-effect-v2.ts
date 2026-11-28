@@ -94,7 +94,8 @@ function snapshotPlainRecord(value: unknown): Record<string, unknown> | undefine
     value === null ||
     Array.isArray(value) ||
     utilTypes.isProxy(value)
-  ) return undefined;
+  )
+    return undefined;
   const prototype = Object.getPrototypeOf(value);
   if (prototype !== Object.prototype && prototype !== null) return undefined;
   const descriptors = Object.getOwnPropertyDescriptors(value);
@@ -198,7 +199,9 @@ export function parseFinishDurableSubagentEffectV2Input(
     !record ||
     !exactKeys(record, ["effectId", "approvalId", "runId", "chatId", "state", "terminalDigest"]) ||
     !identities(record, ["effectId", "approvalId", "runId", "chatId"]) ||
-    (record.state !== "completed" && record.state !== "remote_error" && record.state !== "unknown") ||
+    (record.state !== "completed" &&
+      record.state !== "remote_error" &&
+      record.state !== "unknown") ||
     !digest(record.terminalDigest)
   ) {
     return undefined;
@@ -239,7 +242,10 @@ export function parseDurableSubagentApprovalV2(
       "toolCallId",
       "toolName",
     ]) ||
-    (record.state !== "prepared" && record.state !== "authorized" && record.state !== "consumed" && record.state !== "cancelled") ||
+    (record.state !== "prepared" &&
+      record.state !== "authorized" &&
+      record.state !== "consumed" &&
+      record.state !== "cancelled") ||
     !digest(record.argumentDigest) ||
     !digest(record.effectDigest) ||
     !digest(record.authorityDigest) ||

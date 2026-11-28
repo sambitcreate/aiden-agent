@@ -82,9 +82,7 @@ function projectV2(
  * mutation is privacy deletion, where the rollback-readable V1 marker is
  * installed first and cleared last.
  */
-export function createSubagentRunStoreDispatcher(
-  options: SubagentRunStoreDispatcherOptions,
-) {
+export function createSubagentRunStoreDispatcher(options: SubagentRunStoreDispatcherOptions) {
   const projection = options.projection ?? "native";
   let initialized = false;
 
@@ -116,7 +114,9 @@ export function createSubagentRunStoreDispatcher(
         await options.v1.initialize();
       } else {
         if (!options.prepareV2 || !options.checkpointV1Mutation) {
-          throw new Error("V2 persistence requires migration preparation and V1 checkpoint coordination.");
+          throw new Error(
+            "V2 persistence requires migration preparation and V1 checkpoint coordination.",
+          );
         }
         // Do not initialize V1 here: ordinary V1 startup reconciliation is a
         // write and would invalidate the migration source checkpoint.
@@ -135,11 +135,13 @@ export function createSubagentRunStoreDispatcher(
         const parsed = parseSubagentRunSnapshot(value);
         if (!parsed) throw new Error("Invalid subagent snapshot.");
         const v1 = parsed.version === 1 ? parsed : adaptSubagentRunSnapshotV2ToV1(parsed);
-        if (!v1) throw new Error("Subagent V2 snapshot cannot be represented by V1 rollback storage.");
+        if (!v1)
+          throw new Error("Subagent V2 snapshot cannot be represented by V1 rollback storage.");
         return options.v1.upsert(v1);
       }
       const snapshot = parseSubagentRunSnapshotV2(value);
-      if (!snapshot || !manifest) throw new Error("V2 persistence requires an exact snapshot and private manifest.");
+      if (!snapshot || !manifest)
+        throw new Error("V2 persistence requires an exact snapshot and private manifest.");
       return projectV2(await options.v2.upsert(snapshot, manifest), projection);
     },
 
@@ -153,36 +155,43 @@ export function createSubagentRunStoreDispatcher(
     async listByChat(chatId: string): Promise<SubagentRunSnapshot[]> {
       requireInitialized();
       if (options.selection === "v1") return options.v1.listByChat(chatId);
-      return (await options.v2.listByChat(chatId)).map((snapshot) => projectV2(snapshot, projection));
+      return (await options.v2.listByChat(chatId)).map((snapshot) =>
+        projectV2(snapshot, projection),
+      );
     },
 
     async prepareEffect(value: unknown) {
       requireInitialized();
-      if (options.selection !== "v2") throw new Error("Durable subagent effects require V2 persistence.");
+      if (options.selection !== "v2")
+        throw new Error("Durable subagent effects require V2 persistence.");
       return options.v2.prepareEffect(value);
     },
 
     async authorizeEffect(value: unknown) {
       requireInitialized();
-      if (options.selection !== "v2") throw new Error("Durable subagent effects require V2 persistence.");
+      if (options.selection !== "v2")
+        throw new Error("Durable subagent effects require V2 persistence.");
       return options.v2.authorizeEffect(value);
     },
 
     async markEffectDispatchStarted(value: unknown) {
       requireInitialized();
-      if (options.selection !== "v2") throw new Error("Durable subagent effects require V2 persistence.");
+      if (options.selection !== "v2")
+        throw new Error("Durable subagent effects require V2 persistence.");
       return options.v2.markEffectDispatchStarted(value);
     },
 
     async cancelEffectBeforeDispatch(value: unknown, unsent?: McpToolCallNotSentError) {
       requireInitialized();
-      if (options.selection !== "v2") throw new Error("Durable subagent effects require V2 persistence.");
+      if (options.selection !== "v2")
+        throw new Error("Durable subagent effects require V2 persistence.");
       return options.v2.cancelEffectBeforeDispatch(value, unsent);
     },
 
     async finishEffect(value: unknown) {
       requireInitialized();
-      if (options.selection !== "v2") throw new Error("Durable subagent effects require V2 persistence.");
+      if (options.selection !== "v2")
+        throw new Error("Durable subagent effects require V2 persistence.");
       return options.v2.finishEffect(value);
     },
 
@@ -267,6 +276,4 @@ export function createSubagentRunStoreDispatcher(
 
 export type SubagentRunStoreDispatcher = ReturnType<typeof createSubagentRunStoreDispatcher>;
 
-export type SubagentRunStoreDispatcherSnapshot =
-  | SubagentRunSnapshotV1
-  | SubagentRunSnapshotV2;
+export type SubagentRunStoreDispatcherSnapshot = SubagentRunSnapshotV1 | SubagentRunSnapshotV2;

@@ -26,10 +26,7 @@ import { pauseWhenUnseen } from "../lib/offscreen-pause";
 import { userFacingErrorMessage } from "../lib/ipc-error";
 import { DEFAULT_BOT_AVATAR } from "../shared/bots";
 import type { BotBubble, BotBubbleState } from "../shared/bot-bubbles";
-import {
-  BOT_BUBBLE_HIT_SELECTOR,
-  BotBubbleMiniChat,
-} from "./bot-bubble-mini-chat";
+import { BOT_BUBBLE_HIT_SELECTOR, BotBubbleMiniChat } from "./bot-bubble-mini-chat";
 import { botHeadLabel, botUnreadBadge, useBotHeadStatus } from "./bot-head-status";
 import {
   closeTargetCentre,
@@ -85,23 +82,16 @@ interface Gesture {
 }
 
 function report(change: Promise<unknown>, fallback: string) {
-  void change.catch((error: unknown) =>
-    toast.error(userFacingErrorMessage(error, fallback)),
-  );
+  void change.catch((error: unknown) => toast.error(userFacingErrorMessage(error, fallback)));
 }
 
 const toggleOpen = (botId: string, openBotId: string | null) =>
   report(
-    applyBotBubbleChange(
-      botBubblesApi.open(openBotId === botId ? null : botId),
-    ),
+    applyBotBubbleChange(botBubblesApi.open(openBotId === botId ? null : botId)),
     "Aiden couldn’t open that chat.",
   );
 const closeBubble = (botId: string) =>
-  report(
-    applyBotBubbleChange(botBubblesApi.close(botId)),
-    "Aiden couldn’t close that bubble.",
-  );
+  report(applyBotBubbleChange(botBubblesApi.close(botId)), "Aiden couldn’t close that bubble.");
 
 function velocityOf(samples: Gesture["samples"]): { x: number; y: number } {
   const last = samples[samples.length - 1];
@@ -125,14 +115,10 @@ export function BotBubbleHeads({
   const [drag, setDrag] = React.useState<DragState | null>(null);
   const [peekBotId, setPeekBotId] = React.useState<string | null>(null);
   // Where a head was just put, until main's state says so.
-  const [pending, setPending] = React.useState<
-    Readonly<Record<string, HeadSpot>>
-  >({});
+  const [pending, setPending] = React.useState<Readonly<Record<string, HeadSpot>>>({});
   const gesture = React.useRef<Gesture | null>(null);
   const suppressClick = React.useRef(false);
-  const peekTimer = React.useRef<ReturnType<typeof setTimeout> | undefined>(
-    undefined,
-  );
+  const peekTimer = React.useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const interactive = React.useRef(false);
   /** Where the pointer last was, to ask again what is under it when a surface goes away. */
   const pointer = React.useRef<{ x: number; y: number } | null>(null);
@@ -258,9 +244,7 @@ export function BotBubbleHeads({
         const { [bubble.botId]: _dropped, ...rest } = current;
         return rest;
       });
-      toast.error(
-        userFacingErrorMessage(error, "Aiden couldn’t move that bubble."),
-      );
+      toast.error(userFacingErrorMessage(error, "Aiden couldn’t move that bubble."));
     });
   };
 
@@ -269,10 +253,7 @@ export function BotBubbleHeads({
     callbacks.current.onDraggingChange?.(false);
   };
 
-  const onPointerDown = (
-    event: React.PointerEvent<HTMLButtonElement>,
-    bubble: BotBubble,
-  ) => {
+  const onPointerDown = (event: React.PointerEvent<HTMLButtonElement>, bubble: BotBubble) => {
     if (event.button !== 0) return;
     const origin = positionOf(bubble.botId);
     if (!origin) return;
@@ -318,10 +299,7 @@ export function BotBubbleHeads({
     });
   };
 
-  const onPointerUp = (
-    event: React.PointerEvent<HTMLButtonElement>,
-    bubble: BotBubble,
-  ) => {
+  const onPointerUp = (event: React.PointerEvent<HTMLButtonElement>, bubble: BotBubble) => {
     const current = gesture.current;
     if (!current || current.pointerId !== event.pointerId) return;
     gesture.current = null;
@@ -339,14 +317,10 @@ export function BotBubbleHeads({
     if (isOverCloseTarget(position, area)) {
       // The head stays on the × until main drops it, rather than springing back to its side first.
       callbacks.current.onDraggingChange?.(false);
-      void applyBotBubbleChange(botBubblesApi.close(bubble.botId)).catch(
-        (error: unknown) => {
-          setDrag((now) => (now?.botId === bubble.botId ? null : now));
-          toast.error(
-            userFacingErrorMessage(error, "Aiden couldn’t close that bubble."),
-          );
-        },
-      );
+      void applyBotBubbleChange(botBubblesApi.close(bubble.botId)).catch((error: unknown) => {
+        setDrag((now) => (now?.botId === bubble.botId ? null : now));
+        toast.error(userFacingErrorMessage(error, "Aiden couldn’t close that bubble."));
+      });
       return;
     }
     endDrag();
@@ -373,8 +347,7 @@ export function BotBubbleHeads({
   const draggedBotId = drag?.botId;
   React.useEffect(() => {
     const botId = gesture.current?.botId ?? draggedBotId;
-    if (botId === undefined || bubbles.some((bubble) => bubble.botId === botId))
-      return;
+    if (botId === undefined || bubbles.some((bubble) => bubble.botId === botId)) return;
     const moved = gesture.current?.moved ?? true;
     gesture.current = null;
     if (!moved) return;
@@ -384,17 +357,13 @@ export function BotBubbleHeads({
 
   const focusNeighbour = (botId: string) => {
     const heads = Array.from(
-      layerRef.current?.querySelectorAll<HTMLElement>("[data-bubble-head]") ??
-        [],
+      layerRef.current?.querySelectorAll<HTMLElement>("[data-bubble-head]") ?? [],
     );
     const at = heads.findIndex((head) => head.dataset.bubbleHead === botId);
     (heads[at + 1] ?? heads[at - 1])?.focus();
   };
 
-  const onKeyDown = (
-    event: React.KeyboardEvent<HTMLButtonElement>,
-    bubble: BotBubble,
-  ) => {
+  const onKeyDown = (event: React.KeyboardEvent<HTMLButtonElement>, bubble: BotBubble) => {
     if (event.key === "Delete" || event.key === "Backspace") {
       event.preventDefault();
       focusNeighbour(bubble.botId);
@@ -403,19 +372,11 @@ export function BotBubbleHeads({
     }
     if (event.key === "Escape" && openBotId !== null) {
       event.preventDefault();
-      report(
-        applyBotBubbleChange(botBubblesApi.open(null)),
-        "Aiden couldn’t tuck that chat away.",
-      );
+      report(applyBotBubbleChange(botBubblesApi.open(null)), "Aiden couldn’t tuck that chat away.");
       return;
     }
     if (isHeadMoveKey(event.key)) {
-      const spot = moveStackedHeadWithKey(
-        wantedSpots,
-        bubble.botId,
-        event.key,
-        area,
-      );
+      const spot = moveStackedHeadWithKey(wantedSpots, bubble.botId, event.key, area);
       if (!spot) return;
       event.preventDefault();
       persist(bubble, spot);
@@ -432,9 +393,7 @@ export function BotBubbleHeads({
   };
 
   const openPosition =
-    openBotId !== null && drag?.botId !== openBotId
-      ? positions.get(openBotId)
-      : undefined;
+    openBotId !== null && drag?.botId !== openBotId ? positions.get(openBotId) : undefined;
   // While its head is dragged the chat stays mounted but hidden, so a half-written message survives.
   const lastChatPlacement = React.useRef<{
     botId: string;
@@ -450,37 +409,25 @@ export function BotBubbleHeads({
   if (chats.open !== openBotId) {
     const last = lastChatPlacement.current;
     const wasShown =
-      chats.open !== null &&
-      last?.botId === chats.open &&
-      drag?.botId !== chats.open;
-    leavingChat = wasShown
-      ? last
-      : leavingChat?.botId === openBotId
-        ? null
-        : leavingChat;
+      chats.open !== null && last?.botId === chats.open && drag?.botId !== chats.open;
+    leavingChat = wasShown ? last : leavingChat?.botId === openBotId ? null : leavingChat;
   }
   // A chat whose head is gone goes with it.
   const leavingId = leavingChat?.botId;
-  if (
-    leavingId !== undefined &&
-    !bubbles.some((bubble) => bubble.botId === leavingId)
-  )
+  if (leavingId !== undefined && !bubbles.some((bubble) => bubble.botId === leavingId))
     leavingChat = null;
   if (chats.open !== openBotId || chats.leaving !== leavingChat)
     setChats({ open: openBotId, leaving: leavingChat });
   const chatLeft = React.useCallback(
     (botId: string) =>
-      setChats((now) =>
-        now.leaving?.botId === botId ? { ...now, leaving: null } : now,
-      ),
+      setChats((now) => (now.leaving?.botId === botId ? { ...now, leaving: null } : now)),
     [],
   );
   // The pointer may now rest on nothing of ours (Escape closed the chat under it).
   const leavingBotId = leavingChat?.botId ?? null;
   React.useEffect(() => {
     const at = pointer.current;
-    if (!at || gesture.current || typeof document.elementFromPoint !== "function")
-      return;
+    if (!at || gesture.current || typeof document.elementFromPoint !== "function") return;
     if (document.querySelector('[role="menu"]')) return;
     const under = document.elementFromPoint(at.x, at.y);
     setInteractive(Boolean(under?.closest(BOT_BUBBLE_HIT_SELECTOR)));
@@ -499,9 +446,7 @@ export function BotBubbleHeads({
       : null;
   const target = closeTargetCentre(area);
   const peekPosition =
-    peekBotId !== null && !drag && peekBotId !== openBotId
-      ? positions.get(peekBotId)
-      : undefined;
+    peekBotId !== null && !drag && peekBotId !== openBotId ? positions.get(peekBotId) : undefined;
 
   return (
     <div ref={layerRef} className="bot-bubble-layer" data-host={host}>
@@ -530,9 +475,7 @@ export function BotBubbleHeads({
               dragging={drag?.botId === bubble.botId}
               magnet={drag?.botId === bubble.botId && drag.hot}
               live={host === "overlay"}
-              peekShown={
-                peekPosition !== undefined && peekBotId === bubble.botId
-              }
+              peekShown={peekPosition !== undefined && peekBotId === bubble.botId}
               peek={
                 peekPosition !== undefined && peekBotId === bubble.botId
                   ? peekPlacement(peekPosition, sideOf(bubble.botId), area)
@@ -553,8 +496,7 @@ export function BotBubbleHeads({
                 )
               }
               onOpenFromMenu={() => {
-                if (openBotId !== bubble.botId)
-                  toggleOpen(bubble.botId, openBotId);
+                if (openBotId !== bubble.botId) toggleOpen(bubble.botId, openBotId);
               }}
               onClose={() => closeBubble(bubble.botId)}
               onPointerDown={(event) => onPointerDown(event, bubble)}
@@ -563,9 +505,7 @@ export function BotBubbleHeads({
               onPointerCancel={onPointerCancel}
               onLostPointerCapture={onPointerCancel}
               onKeyDown={(event) => onKeyDown(event, bubble)}
-              onHover={(hovering) =>
-                hovering ? showPeekSoon(bubble.botId) : hidePeek()
-              }
+              onHover={(hovering) => (hovering ? showPeekSoon(bubble.botId) : hidePeek())}
             />
             {openBotId === bubble.botId && chatPlacement ? (
               <BotBubbleMiniChat
@@ -726,9 +666,7 @@ function BotBubbleHead(props: BotBubbleHeadProps) {
               photo={photo}
               working={status.working}
             />
-            {status.working ? (
-              <span aria-hidden="true" className="bot-bubble-ring" />
-            ) : null}
+            {status.working ? <span aria-hidden="true" className="bot-bubble-ring" /> : null}
             {status.unread ? (
               <span
                 aria-hidden="true"
@@ -747,16 +685,10 @@ function BotBubbleHead(props: BotBubbleHeadProps) {
           </button>
         </ContextMenuTrigger>
         <ContextMenuContent data-bubble-hit="">
-          <ContextMenuItem onSelect={props.onOpenFromMenu}>
-            Open
-          </ContextMenuItem>
-          <ContextMenuItem onSelect={props.onOpenInAiden}>
-            Open in Aiden
-          </ContextMenuItem>
+          <ContextMenuItem onSelect={props.onOpenFromMenu}>Open</ContextMenuItem>
+          <ContextMenuItem onSelect={props.onOpenInAiden}>Open in Aiden</ContextMenuItem>
           <ContextMenuSeparator />
-          <ContextMenuItem onSelect={props.onClose}>
-            Close bubble
-          </ContextMenuItem>
+          <ContextMenuItem onSelect={props.onClose}>Close bubble</ContextMenuItem>
         </ContextMenuContent>
       </ContextMenu>
       {peek ? (
@@ -772,12 +704,7 @@ function BotBubbleHead(props: BotBubbleHeadProps) {
             {status.name}
           </Text>
           {status.line ? (
-            <Text
-              as="p"
-              variant="small"
-              color="secondary"
-              className="line-clamp-2"
-            >
+            <Text as="p" variant="small" color="secondary" className="line-clamp-2">
               {status.line}
             </Text>
           ) : null}

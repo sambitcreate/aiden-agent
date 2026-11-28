@@ -46,7 +46,8 @@ const MAX_CACHED_PREVIEWS = 64;
 function storePreview(key: string, preview: CachedPreview): void {
   previewCache.delete(key);
   previewCache.set(key, preview);
-  if (previewCache.size > MAX_CACHED_PREVIEWS) previewCache.delete(previewCache.keys().next().value!);
+  if (previewCache.size > MAX_CACHED_PREVIEWS)
+    previewCache.delete(previewCache.keys().next().value!);
 }
 
 function cacheKey(chatId: string, mediaId: string): string {
@@ -97,7 +98,10 @@ function cachedPreview(chatId: string, artifact: ChatHtmlArtifactV1): CachedPrev
   return cached;
 }
 
-function postThemeTo(guest: Window, readTheme: () => GenerativeUiThemeSnapshot = readGenerativeUiTheme): void {
+function postThemeTo(
+  guest: Window,
+  readTheme: () => GenerativeUiThemeSnapshot = readGenerativeUiTheme,
+): void {
   const theme = readTheme();
   guest.postMessage(
     { type: GENERATIVE_UI_THEME_MESSAGE, colorScheme: theme.colorScheme, vars: theme.vars },
@@ -222,7 +226,8 @@ export function HtmlArtifactIframe({
       // A streaming draft never fires load until it completes; the bridge
       // announces itself so the guest is themed from its first paint.
       else if (message.type === "ready") postThemeTo(guest, themeRef.current);
-      else if (message.type === "resize") handlers.current.onHeight?.(clampInlineVisualHeight(message.height));
+      else if (message.type === "resize")
+        handlers.current.onHeight?.(clampInlineVisualHeight(message.height));
       else handlers.current.onPrompt?.(message.text);
     };
     document.addEventListener("keydown", noteTab, true);
@@ -459,7 +464,8 @@ function HtmlArtifactFrameImpl({
       aria-labelledby={expanded ? expandedTitleId : captionTitleId}
       className={cn(
         "aiden-html-artifact-popover aiden-inline-visual group/visual relative min-w-0 p-0 text-primary",
-        expanded && "flex max-w-none flex-col overflow-hidden rounded-dialog bg-popover shadow-modal",
+        expanded &&
+          "flex max-w-none flex-col overflow-hidden rounded-dialog bg-popover shadow-modal",
       )}
       data-html-artifact={artifact.mediaId}
       data-inline-visual={artifact.mediaId}
@@ -468,10 +474,7 @@ function HtmlArtifactFrameImpl({
     >
       {expanded ? (
         <div className="flex min-h-14 shrink-0 items-center gap-2 border-b border-separator px-5 py-3">
-          <h2
-            id={expandedTitleId}
-            className="min-w-0 flex-1 truncate text-heading2 font-semibold"
-          >
+          <h2 id={expandedTitleId} className="min-w-0 flex-1 truncate text-heading2 font-semibold">
             {artifact.title}
           </h2>
           {exportActions()}

@@ -32,7 +32,8 @@ const search = () => screen.getByRole("searchbox", { name: "Find in chat" });
 
 test("matches ignore case and skip text a reader can't see", () => {
   const root = document.createElement("div");
-  root.innerHTML = "<p>Release notes</p><p hidden>release</p><p aria-hidden='true'>release</p><p>pre-RELEASE build, release day</p>";
+  root.innerHTML =
+    "<p>Release notes</p><p hidden>release</p><p aria-hidden='true'>release</p><p>pre-RELEASE build, release day</p>";
   const matches = findChatMatches(root, "release");
   assert.deepEqual(
     matches.map((range) => range.toString()),

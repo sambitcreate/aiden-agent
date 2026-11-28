@@ -35,7 +35,8 @@ function row(id: string, overrides: Partial<InboxSignals> = {}, hostId = "local"
   return { key: projectOrderKey(hostId, id), signals: signals(overrides) };
 }
 
-const ids = (rows: readonly InboxRow[]) => rows.map((entry) => decodeURIComponent(entry.key.split(":")[1] ?? ""));
+const ids = (rows: readonly InboxRow[]) =>
+  rows.map((entry) => decodeURIComponent(entry.key.split(":")[1] ?? ""));
 
 test("each placement rule lands on its shelf", () => {
   const cases: [string, Partial<InboxSignals>, string, number][] = [
@@ -58,13 +59,22 @@ test("each placement rule lands on its shelf", () => {
 
 test("a read failure is not urgent, and a failed run that is working again is working", () => {
   assert.equal(inboxState(signals({ failed: true }), NOW).shelf, "earlier");
-  assert.equal(inboxState(signals({ failed: true, unread: true, rowState: "working" }), NOW).shelf, "working");
+  assert.equal(
+    inboxState(signals({ failed: true, unread: true, rowState: "working" }), NOW).shelf,
+    "working",
+  );
 });
 
 test("the open chat is never unread and stays listed however old", () => {
   assert.equal(inboxState(signals({ unread: true, isOpen: true }), NOW).shelf, "earlier");
-  assert.equal(inboxState(signals({ failed: true, unread: true, isOpen: true }), NOW).shelf, "earlier");
-  assert.equal(inboxState(signals({ isOpen: true, updatedAt: NOW - 30 * DAY }), NOW).shelf, "earlier");
+  assert.equal(
+    inboxState(signals({ failed: true, unread: true, isOpen: true }), NOW).shelf,
+    "earlier",
+  );
+  assert.equal(
+    inboxState(signals({ isOpen: true, updatedAt: NOW - 30 * DAY }), NOW).shelf,
+    "earlier",
+  );
 });
 
 test("the recent window is a parameter", () => {
@@ -76,7 +86,10 @@ test("the recent window is a parameter", () => {
 
 test("Done hides a chat until newer output arrives", () => {
   const doneAt = NOW - 2 * HOUR;
-  assert.equal(inboxState(signals({ doneAt, lastAssistantAt: doneAt - MINUTE }), NOW).shelf, "hidden");
+  assert.equal(
+    inboxState(signals({ doneAt, lastAssistantAt: doneAt - MINUTE }), NOW).shelf,
+    "hidden",
+  );
   assert.equal(inboxState(signals({ doneAt, lastAssistantAt: doneAt }), NOW).shelf, "hidden");
   assert.equal(inboxState(signals({ doneAt }), NOW).shelf, "hidden");
   assert.equal(
@@ -89,8 +102,14 @@ test("a snooze hides until it expires, and prompts or failures wake it early", (
   const snoozedUntil = NOW + HOUR;
   assert.equal(inboxState(signals({ snoozedUntil, unread: true }), NOW).shelf, "hidden");
   assert.equal(inboxState(signals({ snoozedUntil, unread: true }), snoozedUntil).shelf, "updates");
-  assert.equal(inboxState(signals({ snoozedUntil, rowState: "needs_approval" }), NOW).shelf, "needs_you");
-  assert.equal(inboxState(signals({ snoozedUntil, failed: true, unread: true }), NOW).shelf, "needs_you");
+  assert.equal(
+    inboxState(signals({ snoozedUntil, rowState: "needs_approval" }), NOW).shelf,
+    "needs_you",
+  );
+  assert.equal(
+    inboxState(signals({ snoozedUntil, failed: true, unread: true }), NOW).shelf,
+    "needs_you",
+  );
   assert.equal(
     inboxState(signals({ doneAt: NOW, rowState: "needs_input" }), NOW).shelf,
     "needs_you",
@@ -98,15 +117,18 @@ test("a snooze hides until it expires, and prompts or failures wake it early", (
 });
 
 test("Needs you orders by tier, then the longest wait, falling back to updatedAt", () => {
-  const organized = organizeInbox([
-    row("failed-new", { failed: true, unread: true, updatedAt: NOW - MINUTE }),
-    row("question", { rowState: "needs_input", attentionSince: NOW - 5 * MINUTE }),
-    row("approval-recent", { rowState: "needs_approval", attentionSince: NOW - MINUTE }),
-    row("interrupted", { attention: "interrupted", attentionSince: NOW - 3 * DAY }),
-    row("approval-remote", { rowState: "needs_approval", updatedAt: NOW - 20 * MINUTE }, "mac-2"),
-    row("approval-old", { rowState: "needs_approval", attentionSince: NOW - 30 * MINUTE }),
-    row("failed-old", { failed: true, unread: true, updatedAt: NOW - 2 * HOUR }),
-  ], NOW);
+  const organized = organizeInbox(
+    [
+      row("failed-new", { failed: true, unread: true, updatedAt: NOW - MINUTE }),
+      row("question", { rowState: "needs_input", attentionSince: NOW - 5 * MINUTE }),
+      row("approval-recent", { rowState: "needs_approval", attentionSince: NOW - MINUTE }),
+      row("interrupted", { attention: "interrupted", attentionSince: NOW - 3 * DAY }),
+      row("approval-remote", { rowState: "needs_approval", updatedAt: NOW - 20 * MINUTE }, "mac-2"),
+      row("approval-old", { rowState: "needs_approval", attentionSince: NOW - 30 * MINUTE }),
+      row("failed-old", { failed: true, unread: true, updatedAt: NOW - 2 * HOUR }),
+    ],
+    NOW,
+  );
   assert.deepEqual(ids(organized.needsYou), [
     "approval-old",
     "approval-remote",
@@ -119,16 +141,19 @@ test("Needs you orders by tier, then the longest wait, falling back to updatedAt
 });
 
 test("every other shelf follows its own order", () => {
-  const organized = organizeInbox([
-    row("pin-old", { pinnedAt: NOW - 3 * DAY }),
-    row("pin-new", { pinnedAt: NOW - DAY }),
-    row("update-old", { unread: true, lastAssistantAt: NOW - 3 * HOUR }),
-    row("update-new", { unread: true, lastAssistantAt: NOW - MINUTE }),
-    row("earlier-old", { updatedAt: NOW - 2 * DAY }),
-    row("earlier-new", { updatedAt: NOW - MINUTE }),
-    row("work-late", { rowState: "working", runStartedAt: NOW - MINUTE }),
-    row("work-early", { rowState: "working", runStartedAt: NOW - HOUR }),
-  ], NOW);
+  const organized = organizeInbox(
+    [
+      row("pin-old", { pinnedAt: NOW - 3 * DAY }),
+      row("pin-new", { pinnedAt: NOW - DAY }),
+      row("update-old", { unread: true, lastAssistantAt: NOW - 3 * HOUR }),
+      row("update-new", { unread: true, lastAssistantAt: NOW - MINUTE }),
+      row("earlier-old", { updatedAt: NOW - 2 * DAY }),
+      row("earlier-new", { updatedAt: NOW - MINUTE }),
+      row("work-late", { rowState: "working", runStartedAt: NOW - MINUTE }),
+      row("work-early", { rowState: "working", runStartedAt: NOW - HOUR }),
+    ],
+    NOW,
+  );
   assert.deepEqual(ids(organized.pinned), ["pin-new", "pin-old"]);
   assert.deepEqual(ids(organized.updates), ["update-new", "update-old"]);
   assert.deepEqual(ids(organized.earlier), ["earlier-new", "earlier-old"]);
@@ -142,14 +167,22 @@ test("ties break on the host-qualified key, whatever the input order", () => {
     row("a", { updatedAt: NOW - HOUR }),
   ];
   const expected = ["local:a", "local:b", "mac-2:a"];
-  assert.deepEqual(organizeInbox(tied, NOW).earlier.map((entry) => entry.key), expected);
-  assert.deepEqual(organizeInbox([...tied].reverse(), NOW).earlier.map((entry) => entry.key), expected);
+  assert.deepEqual(
+    organizeInbox(tied, NOW).earlier.map((entry) => entry.key),
+    expected,
+  );
+  assert.deepEqual(
+    organizeInbox([...tied].reverse(), NOW).earlier.map((entry) => entry.key),
+    expected,
+  );
 });
 
 test("Earlier is capped with a Show more count, and hidden rows are counted", () => {
-  const rows = Array.from({ length: 23 }, (_, index) => row(`chat-${String(index).padStart(2, "0")}`, {
-    updatedAt: NOW - (index + 1) * MINUTE,
-  }));
+  const rows = Array.from({ length: 23 }, (_, index) =>
+    row(`chat-${String(index).padStart(2, "0")}`, {
+      updatedAt: NOW - (index + 1) * MINUTE,
+    }),
+  );
   rows.push(row("stale", { updatedAt: NOW - 9 * DAY }), row("done", { doneAt: NOW }));
   const capped = organizeInbox(rows, NOW);
   assert.equal(capped.earlier.length, 20);
@@ -164,30 +197,45 @@ test("Earlier is capped with a Show more count, and hidden rows are counted", ()
 });
 
 test("the open chat keeps a slot in a full Earlier without growing it", () => {
-  const rows = Array.from({ length: 25 }, (_, index) => row(`chat-${String(index).padStart(2, "0")}`, {
-    updatedAt: NOW - (index + 1) * MINUTE,
-  }));
+  const rows = Array.from({ length: 25 }, (_, index) =>
+    row(`chat-${String(index).padStart(2, "0")}`, {
+      updatedAt: NOW - (index + 1) * MINUTE,
+    }),
+  );
   rows.push(row("open", { isOpen: true, updatedAt: NOW - 30 * DAY }));
   const organized = organizeInbox(rows, NOW);
   assert.equal(organized.earlier.length, 20);
   assert.deepEqual(ids(organized.earlier).slice(-2), ["chat-18", "open"]);
   assert.equal(organized.earlierMoreCount, 6);
-  assert.deepEqual(ids(organized.earlierOverflow), ["chat-19", "chat-20", "chat-21", "chat-22", "chat-23", "chat-24"]);
+  assert.deepEqual(ids(organized.earlierOverflow), [
+    "chat-19",
+    "chat-20",
+    "chat-21",
+    "chat-22",
+    "chat-23",
+    "chat-24",
+  ]);
   // Shown plus Show more is every Earlier row, each once.
   assert.equal(new Set([...organized.earlier, ...organized.earlierOverflow]).size, 26);
 
-  const recentOpen = organizeInbox(rows.map((entry) => entry.key === "local:open"
-    ? row("open", { isOpen: true, updatedAt: NOW })
-    : entry), NOW);
+  const recentOpen = organizeInbox(
+    rows.map((entry) =>
+      entry.key === "local:open" ? row("open", { isOpen: true, updatedAt: NOW }) : entry,
+    ),
+    NOW,
+  );
   assert.equal(ids(recentOpen.earlier)[0], "open");
   assert.equal(recentOpen.earlierMoreCount, 6);
 });
 
 test("rows from an offline host keep their place but leave the Needs you count", () => {
-  const organized = organizeInbox([
-    row("local-approval", { rowState: "needs_approval" }),
-    row("offline-approval", { rowState: "needs_approval", hostOnline: false }, "mac-2"),
-  ], NOW);
+  const organized = organizeInbox(
+    [
+      row("local-approval", { rowState: "needs_approval" }),
+      row("offline-approval", { rowState: "needs_approval", hostOnline: false }, "mac-2"),
+    ],
+    NOW,
+  );
   assert.equal(organized.needsYou.length, 2);
   assert.equal(organized.needsYouCount, 1);
 });
@@ -198,7 +246,12 @@ function order(partial: Partial<Record<keyof InboxDisplayOrder, string[]>>): Inb
 
 function shown(held: HeldInboxOrder, section: keyof InboxDisplayOrder): string[] {
   return held[section].map((entry) =>
-    entry.leaving ? `${entry.key}(leaving)` : entry.liveSection ? `${entry.key}(→${entry.liveSection})` : entry.key);
+    entry.leaving
+      ? `${entry.key}(leaving)`
+      : entry.liveSection
+        ? `${entry.key}(→${entry.liveSection})`
+        : entry.key,
+  );
 }
 
 const NOTHING = new Set<string>();
@@ -229,9 +282,19 @@ test("a freeze keeps a row whose state changed in its slot", () => {
 test("a freeze holds a row that left the list, dimmed, until it comes back", () => {
   const previous = releasedInboxOrder(order({ updates: ["a", "b", "c"] }));
   const present = new Set(["a", "b", "c"]);
-  const left = freezeInboxOrder({ previous, next: order({ updates: ["a", "c"] }), touched: NOTHING, present });
+  const left = freezeInboxOrder({
+    previous,
+    next: order({ updates: ["a", "c"] }),
+    touched: NOTHING,
+    present,
+  });
   assert.deepEqual(shown(left, "updates"), ["a", "b(leaving)", "c"]);
-  const back = freezeInboxOrder({ previous: left, next: order({ updates: ["b", "a", "c"] }), touched: NOTHING, present });
+  const back = freezeInboxOrder({
+    previous: left,
+    next: order({ updates: ["b", "a", "c"] }),
+    touched: NOTHING,
+    present,
+  });
   assert.deepEqual(shown(back, "updates"), ["a", "b", "c"]);
 });
 
@@ -271,9 +334,16 @@ test("a freeze places a touched row at its live position", () => {
 
 test("a freeze keeps a full Earlier within its cap and counts the rest into Show more", () => {
   const LIMIT = 3;
-  const before = organizeInbox(["a", "b", "c", "d"].map((id, index) => row(id, { updatedAt: NOW - (index + 2) * MINUTE })), NOW, { earlierLimit: LIMIT });
+  const before = organizeInbox(
+    ["a", "b", "c", "d"].map((id, index) => row(id, { updatedAt: NOW - (index + 2) * MINUTE })),
+    NOW,
+    { earlierLimit: LIMIT },
+  );
   const previous = releasedInboxOrder(inboxDisplayOrder(before));
-  const liveRows = [row("new", { updatedAt: NOW - MINUTE }), ...["a", "b", "c", "d"].map((id, index) => row(id, { updatedAt: NOW - (index + 2) * MINUTE }))];
+  const liveRows = [
+    row("new", { updatedAt: NOW - MINUTE }),
+    ...["a", "b", "c", "d"].map((id, index) => row(id, { updatedAt: NOW - (index + 2) * MINUTE })),
+  ];
   const live = organizeInbox(liveRows, NOW, { earlierLimit: LIMIT });
   const keys = (rows: readonly InboxRow[]) => rows.map((entry) => entry.key);
   const held = freezeInboxOrder({
@@ -286,11 +356,23 @@ test("a freeze keeps a full Earlier within its cap and counts the rest into Show
   });
   // `c` only fell past the cap: it keeps its slot, not dimmed; `new` waits behind Show more.
   assert.deepEqual(shown(held, "earlier"), ["local:a", "local:b", "local:c"]);
-  assert.equal(heldEarlierMoreCount(held, { earlier: keys(live.earlier), earlierOverflow: keys(live.earlierOverflow) }), 2);
+  assert.equal(
+    heldEarlierMoreCount(held, {
+      earlier: keys(live.earlier),
+      earlierOverflow: keys(live.earlierOverflow),
+    }),
+    2,
+  );
 
   // Released, the live order and its own count take over again.
   const released = releasedInboxOrder(inboxDisplayOrder(live));
-  assert.equal(heldEarlierMoreCount(released, { earlier: keys(live.earlier), earlierOverflow: keys(live.earlierOverflow) }), live.earlierMoreCount);
+  assert.equal(
+    heldEarlierMoreCount(released, {
+      earlier: keys(live.earlier),
+      earlierOverflow: keys(live.earlierOverflow),
+    }),
+    live.earlierMoreCount,
+  );
 });
 
 test("a frozen row moving into Earlier past the cap is not shown as leaving", () => {
@@ -308,9 +390,12 @@ test("a frozen row moving into Earlier past the cap is not shown as leaving", ()
 });
 
 test("the display order follows the organized sections", () => {
-  const organized = organizeInbox([
-    row("w", { rowState: "working", runStartedAt: NOW - MINUTE }),
-    row("u", { unread: true }),
-  ], NOW);
-  assert.deepEqual(inboxDisplayOrder(organized), order({ working: ["local:w"], updates: ["local:u"] }));
+  const organized = organizeInbox(
+    [row("w", { rowState: "working", runStartedAt: NOW - MINUTE }), row("u", { unread: true })],
+    NOW,
+  );
+  assert.deepEqual(
+    inboxDisplayOrder(organized),
+    order({ working: ["local:w"], updates: ["local:u"] }),
+  );
 });

@@ -5,8 +5,16 @@
 import { createRequire } from "node:module";
 import { createSileroRegionDetector, loadSherpa, speechEngine } from "./local-speech-engine.js";
 import { decodeOggOpusToPcm16k } from "./local-speech-opus.js";
-import { createTranscribeCppEngine, unpackedTranscribeLibrary, type TranscribeCppModule } from "./local-speech-transcribe-cpp.js";
-import { createLocalSpeechMessageHandler, createRoutedSpeechEngine, replyToWorkerFrame } from "./local-speech-worker-core.js";
+import {
+  createTranscribeCppEngine,
+  unpackedTranscribeLibrary,
+  type TranscribeCppModule,
+} from "./local-speech-transcribe-cpp.js";
+import {
+  createLocalSpeechMessageHandler,
+  createRoutedSpeechEngine,
+  replyToWorkerFrame,
+} from "./local-speech-worker-core.js";
 
 async function loadTranscribeCpp(): Promise<TranscribeCppModule> {
   // In a packaged app the binding would resolve its library inside app.asar,
@@ -24,7 +32,10 @@ async function loadTranscribeCpp(): Promise<TranscribeCppModule> {
 const handle = createLocalSpeechMessageHandler(
   createRoutedSpeechEngine(
     speechEngine,
-    createTranscribeCppEngine({ load: loadTranscribeCpp, detectRegions: createSileroRegionDetector(loadSherpa) }),
+    createTranscribeCppEngine({
+      load: loadTranscribeCpp,
+      detectRegions: createSileroRegionDetector(loadSherpa),
+    }),
   ),
   { decodeOggOpus: decodeOggOpusToPcm16k },
 );
@@ -37,7 +48,8 @@ const parentPort = (
     };
   }
 ).parentPort;
-if (!parentPort) throw new Error("On-device transcription worker requires an Electron parent port.");
+if (!parentPort)
+  throw new Error("On-device transcription worker requires an Electron parent port.");
 
 parentPort.on("message", (event) => {
   void replyToWorkerFrame(event.data, handle).then((reply) => {

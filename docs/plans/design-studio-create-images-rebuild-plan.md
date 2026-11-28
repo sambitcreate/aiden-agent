@@ -8,16 +8,17 @@ Status: Active — owner approved direction 2026-10-07
 Date: 2026-10-07
 
 **Owner decisions (2026-10-07):**
+
 1. Create Images generates through **Pi image models** (`generateImages`), with optional direct Google registration.
 2. **Designer Mode folds into Design Studio** as DS-4 "Connected app"; `designer-mode-plan.md` is superseded.
 3. **Studio Foundation PR lands first**, then the DS and CI tracks run in parallel.
 4. The orchestrator **keeps going** through phases and asks the owner questions along the way. The owner is still needed for the live image acceptance (CI-1.10) and for merges.
-Baseline: `main` @ `bd232b85` (0.54.0 + #368)
-Old work (read-only references):
+   Baseline: `main` @ `bd232b85` (0.54.0 + #368)
+   Old work (read-only references):
 
-| Mode | Old branch | Old tip | PR | Reference worktree |
-|---|---|---|---|---|
-| Design Studio | `feature/stitch-design-studio` | `577d17af` | #85 (closed, unmerged) | `.claude/worktrees/ref-design-studio` |
+| Mode          | Old branch                                 | Old tip    | PR                     | Reference worktree                    |
+| ------------- | ------------------------------------------ | ---------- | ---------------------- | ------------------------------------- |
+| Design Studio | `feature/stitch-design-studio`             | `577d17af` | #85 (closed, unmerged) | `.claude/worktrees/ref-design-studio` |
 | Create Images | `feature/create-images-node-banana-parity` | `1e3b3909` | #37 (closed, unmerged) | `.claude/worktrees/ref-create-images` |
 
 Both branches forked at `c8c09e0d` (2026-09-21) and are **722 commits behind** `main`. Since then main has changed 1,868 files (+450k/−198k).
@@ -37,6 +38,7 @@ The full audits were run read-only against both branch tips and current `main`.
 ### 1.1 Design Studio (`feature/stitch-design-studio`)
 
 **The idea is good.** It offers:
+
 - Durable local Screen projects.
 - Explore (2–4 directions) and Refine (one immutable revision).
 - Element selection into the composer.
@@ -48,38 +50,39 @@ The full audits were run read-only against both branch tips and current `main`.
 
 **The implementation does not fit current main:**
 
-| # | Problem | Evidence |
-|---|---|---|
-| 1 | The Studio is grafted onto ChatPane (`presentation="design"`). | `chat-pane.tsx` +1,542/−504 and ~229 Design references. Main has changed that file by +1,231/−542 since the fork, the worst merge surface in the app. |
-| 2 | God component. | `design-workspace.tsx` is 4,761 lines. One component holds 75 `useState`, 27 effects and 48 direct IPC calls. |
-| 3 | The run hook is broken on current Pi. | `generative-ui-extension.ts` and `pi-agent-runtime-harness.ts` use `shouldStopAfterTurn`, which Pi 1.x removed. Migrate to `finishTurn → { action: "end" }`. |
-| 4 | Tests violate AGENTS.md. | ~660 `readFileSync` + `assert.match` source-grep assertions across 8 new files plus existing contract tests. (The rule landed in #241, after the branch tip.) |
-| 5 | Pseudo-workspace leak. | Project chats hide behind the sentinel `"design-projects"` workspace, so exclusion filters spread into 8+ core and Remote modules. |
-| 6 | Over-engineering for an unshipped feature. | V1+V2 schemas and a migration for data that never shipped. ~9k LOC of journals and recovery. 20+ distinct hash concepts. 23 private copies of validators. |
-| 7 | IPC sprawl. | ~72 `designer:*` channels in one 2,123-line handler, which would add ~30% to the app's IPC surface. Code in Phases 4–6 is golfed into lines of up to 398 characters. |
-| 8 | Product ceiling. | A project is one chat, so it inherits the per-chat generative-UI quota of 40 artifacts / 8 MiB. Explore exhausts a project in roughly 10–20 turns. |
-| 9 | Performance. | Reference images are stored as base64 inside a JSON DataStore of up to 96 MB that is rewritten on every mutation. React Flow and every panel load eagerly in the chat route. |
-| 10 | No kill switch, design-guide gaps. | No feature flag. Accent focus outlines, custom radii, raw `<button>`s, and prototype authoring by typed CSS selector. |
+| #   | Problem                                                        | Evidence                                                                                                                                                                     |
+| --- | -------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 1   | The Studio is grafted onto ChatPane (`presentation="design"`). | `chat-pane.tsx` +1,542/−504 and ~229 Design references. Main has changed that file by +1,231/−542 since the fork, the worst merge surface in the app.                        |
+| 2   | God component.                                                 | `design-workspace.tsx` is 4,761 lines. One component holds 75 `useState`, 27 effects and 48 direct IPC calls.                                                                |
+| 3   | The run hook is broken on current Pi.                          | `generative-ui-extension.ts` and `pi-agent-runtime-harness.ts` use `shouldStopAfterTurn`, which Pi 1.x removed. Migrate to `finishTurn → { action: "end" }`.                 |
+| 4   | Tests violate AGENTS.md.                                       | ~660 `readFileSync` + `assert.match` source-grep assertions across 8 new files plus existing contract tests. (The rule landed in #241, after the branch tip.)                |
+| 5   | Pseudo-workspace leak.                                         | Project chats hide behind the sentinel `"design-projects"` workspace, so exclusion filters spread into 8+ core and Remote modules.                                           |
+| 6   | Over-engineering for an unshipped feature.                     | V1+V2 schemas and a migration for data that never shipped. ~9k LOC of journals and recovery. 20+ distinct hash concepts. 23 private copies of validators.                    |
+| 7   | IPC sprawl.                                                    | ~72 `designer:*` channels in one 2,123-line handler, which would add ~30% to the app's IPC surface. Code in Phases 4–6 is golfed into lines of up to 398 characters.         |
+| 8   | Product ceiling.                                               | A project is one chat, so it inherits the per-chat generative-UI quota of 40 artifacts / 8 MiB. Explore exhausts a project in roughly 10–20 turns.                           |
+| 9   | Performance.                                                   | Reference images are stored as base64 inside a JSON DataStore of up to 96 MB that is rewritten on every mutation. React Flow and every panel load eagerly in the chat route. |
+| 10  | No kill switch, design-guide gaps.                             | No feature flag. Accent focus outlines, custom radii, raw `<button>`s, and prototype authoring by typed CSS selector.                                                        |
 
 ### 1.2 Create Images (`feature/create-images-node-banana-parity`)
 
 **The idea is good.** It brings a Node Banana–style node canvas for image generation:
+
 - Prompt, image input, generate, output, gallery, compare, annotation, and groups.
 - Templates, prompt variables, and batching.
 - Explicit paid consent, with no automatic paid retries.
 
 **The implementation does not fit current main:**
 
-| # | Problem | Evidence |
-|---|---|---|
-| 1 | It never produced a real image. | Both authorized live Gemini attempts failed (`request_rejected`, `output-invalid`). About 20k LOC of parity features were stacked on an unvalidated provider path. |
-| 2 | Ungated, app-wide security changes. | `main-window.html` CSP removes `https:` from `connect-src` and `file:` from img/media for the whole app. A global `session.defaultSession.webRequest.onBeforeRequest` egress guard needed a favicon exception bolted on. The privileged-scheme call `registerSchemesAsPrivileged` runs twice. |
-| 3 | Quadratic journal. | Each append copies the event array and re-parses the whole journal, SHA-256s the full JSON, writes to two event logs plus a pending file with ~20 fsyncs, and ~15–20 `lstat` checks. Appends take 21/57/114 s at 100/250/500 nodes, and the perf test thresholds (45/105/240 s) legitimize that. |
-| 4 | God files. | 21 production files exceed 800 lines. `run-journal-store.ts` is 4,311 lines; `workflow-canvas.tsx` 4,152; `create-images-view.tsx` 3,632 (77 `useState` across the two views). |
-| 5 | Tests violate AGENTS.md. | ~580 source-grep assertions (335 in `feature-surface.test.ts`). No Playwright e2e and no render test of either main view. |
-| 6 | Redundant provider stack. | A hand-rolled `fetch` Gemini Interactions client with 24 hard-coded `"gemini"` branches in the coordinator. Main now has Pi `models.generateImages`, `registerImagesApiProvider`, 59 image models, reference-image resolution, usage accounting and artifact staging. |
-| 7 | Test and debug machinery in production. | The packaged acceptance runner calls `executeJavaScript`. Stress fixture routes, a production mock provider, a source-fingerprint packaging step, rate limits on Aiden's own renderer, a forced external workspace folder with Finder sync, and a sandboxed decoder window plus a `sips` fallback. |
-| 8 | Coupling and UX defects. | The quit dialog says "mock runs cost $0" even during live runs. Main calls a renderer global through `executeJavaScript`. `Command+D` is globally reserved. Selection cards have bordered and accent borders. The onboarding tile advertises a feature that is off by default. |
+| #   | Problem                                 | Evidence                                                                                                                                                                                                                                                                                           |
+| --- | --------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 1   | It never produced a real image.         | Both authorized live Gemini attempts failed (`request_rejected`, `output-invalid`). About 20k LOC of parity features were stacked on an unvalidated provider path.                                                                                                                                 |
+| 2   | Ungated, app-wide security changes.     | `main-window.html` CSP removes `https:` from `connect-src` and `file:` from img/media for the whole app. A global `session.defaultSession.webRequest.onBeforeRequest` egress guard needed a favicon exception bolted on. The privileged-scheme call `registerSchemesAsPrivileged` runs twice.      |
+| 3   | Quadratic journal.                      | Each append copies the event array and re-parses the whole journal, SHA-256s the full JSON, writes to two event logs plus a pending file with ~20 fsyncs, and ~15–20 `lstat` checks. Appends take 21/57/114 s at 100/250/500 nodes, and the perf test thresholds (45/105/240 s) legitimize that.   |
+| 4   | God files.                              | 21 production files exceed 800 lines. `run-journal-store.ts` is 4,311 lines; `workflow-canvas.tsx` 4,152; `create-images-view.tsx` 3,632 (77 `useState` across the two views).                                                                                                                     |
+| 5   | Tests violate AGENTS.md.                | ~580 source-grep assertions (335 in `feature-surface.test.ts`). No Playwright e2e and no render test of either main view.                                                                                                                                                                          |
+| 6   | Redundant provider stack.               | A hand-rolled `fetch` Gemini Interactions client with 24 hard-coded `"gemini"` branches in the coordinator. Main now has Pi `models.generateImages`, `registerImagesApiProvider`, 59 image models, reference-image resolution, usage accounting and artifact staging.                              |
+| 7   | Test and debug machinery in production. | The packaged acceptance runner calls `executeJavaScript`. Stress fixture routes, a production mock provider, a source-fingerprint packaging step, rate limits on Aiden's own renderer, a forced external workspace folder with Finder sync, and a sandboxed decoder window plus a `sips` fallback. |
+| 8   | Coupling and UX defects.                | The quit dialog says "mock runs cost $0" even during live runs. Main calls a renderer global through `executeJavaScript`. `Command+D` is globally reserved. Selection cards have bordered and accent borders. The onboarding tile advertises a feature that is off by default.                     |
 
 ### 1.3 Main drift that blocks a merge
 
@@ -167,20 +170,20 @@ These apply to every task in every track.
 These failure modes are not exercised by any single task's happy-path tests. Each one becomes a named test in the task that owns the code.
 
 1. **Restart mid-run.**
-   - *Expected:* quitting during an Explore or an image run leaves a consistent project or workflow on relaunch. In-flight work shows as *interrupted*, with no automatic resubmit and **no second paid request**.
-   - *Owner:* DS-1 store and CI-1 run ledger tests, plus a Playwright relaunch spec per track.
+   - _Expected:_ quitting during an Explore or an image run leaves a consistent project or workflow on relaunch. In-flight work shows as _interrupted_, with no automatic resubmit and **no second paid request**.
+   - _Owner:_ DS-1 store and CI-1 run ledger tests, plus a Playwright relaunch spec per track.
 2. **Hidden chats leaking.**
-   - *Expected:* a Design project's backing chat never appears in the sidebar, search, Remote summaries, the multi-host feed, peer desktops, chat fork, Bots or native clients.
-   - *Owner:* F-3 central visibility predicate, with tests through each projection. Run the iOS/Android contract suites.
+   - _Expected:_ a Design project's backing chat never appears in the sidebar, search, Remote summaries, the multi-host feed, peer desktops, chat fork, Bots or native clients.
+   - _Owner:_ F-3 central visibility predicate, with tests through each projection. Run the iOS/Android contract suites.
 3. **Flag off means no trace.**
-   - *Expected:* with both flags off, the app behaves exactly like `main`: no routes, sidebar rows, commands, settings sections, IPC side effects, CSP changes or bundle growth in the entry chunk.
-   - *Owner:* F-1 / F-2 rendered-sidebar and router tests, plus a bundle-budget check.
+   - _Expected:_ with both flags off, the app behaves exactly like `main`: no routes, sidebar rows, commands, settings sections, IPC side effects, CSP changes or bundle growth in the entry chunk.
+   - _Owner:_ F-1 / F-2 rendered-sidebar and router tests, plus a bundle-budget check.
 4. **Consent and cost.**
-   - *Expected:* no provider request ever leaves without an explicit consent naming provider, model and request count. Batch and retry never silently multiply requests. A cancelled consent sends nothing.
-   - *Owner:* CI-1 consent core tests with a fake image API that counts requests.
+   - _Expected:_ no provider request ever leaves without an explicit consent naming provider, model and request count. Batch and retry never silently multiply requests. A cancelled consent sends nothing.
+   - _Owner:_ CI-1 consent core tests with a fake image API that counts requests.
 5. **Scale.**
-   - *Expected:* a 500-node workflow and a 200-revision Design project open, save and run without multi-second stalls. Journal or ledger overhead for a 500-node run stays under 1 s, and memory stays bounded.
-   - *Owner:* CI-1 ledger perf test with a tight threshold, and a DS-1 store perf test. Timing tests go in a separate perf lane and are not in the default pretest.
+   - _Expected:_ a 500-node workflow and a 200-revision Design project open, save and run without multi-second stalls. Journal or ledger overhead for a 500-node run stays under 1 s, and memory stays bounded.
+   - _Owner:_ CI-1 ledger perf test with a tight threshold, and a DS-1 store perf test. Timing tests go in a separate perf lane and are not in the default pretest.
 
 ---
 
@@ -188,17 +191,18 @@ These failure modes are not exercised by any single task's happy-path tests. Eac
 
 All work happens in worktrees under `/Users/sambitbiswas/projects/aiden-macos/.claude/worktrees/`.
 
-| Worktree | Branch | Base | Purpose | Lifetime |
-|---|---|---|---|---|
-| `design-studio-image-gen-upgrade-74e137` (this one) | `feature/design-studio-image-gen-upgrade-74e137` | `main` | Orchestration: this plan, ADRs, per-phase task plans, index/memory updates | Until both tracks ship |
-| `ref-design-studio` | detached @ `577d17af` | – | **Read-only** port source for Design Studio | Delete after DS-4 |
-| `ref-create-images` | detached @ `1e3b3909` | – | **Read-only** port source for Create Images | Delete after CI-3 |
-| `studio-foundation` | `feature/studio-foundation` | `main` | Track F: shared flags, routes, sidebar, canvas kit, asset store, scheme, test lanes | Until F merges |
-| `design-studio-v2` | `feature/design-studio-v2` (then `-p2`, `-p3`…) | `main` after F merges | Track DS phases | Per phase PR |
-| `create-images-v2` | `feature/create-images-v2` (then `-p2`…) | `main` after F merges | Track CI phases | Per phase PR |
-| `designer-connected-app` | `feature/design-studio-connected` | `main` after DS-2 | Track DS-4 (Designer Mode) | Later |
+| Worktree                                            | Branch                                           | Base                  | Purpose                                                                             | Lifetime               |
+| --------------------------------------------------- | ------------------------------------------------ | --------------------- | ----------------------------------------------------------------------------------- | ---------------------- |
+| `design-studio-image-gen-upgrade-74e137` (this one) | `feature/design-studio-image-gen-upgrade-74e137` | `main`                | Orchestration: this plan, ADRs, per-phase task plans, index/memory updates          | Until both tracks ship |
+| `ref-design-studio`                                 | detached @ `577d17af`                            | –                     | **Read-only** port source for Design Studio                                         | Delete after DS-4      |
+| `ref-create-images`                                 | detached @ `1e3b3909`                            | –                     | **Read-only** port source for Create Images                                         | Delete after CI-3      |
+| `studio-foundation`                                 | `feature/studio-foundation`                      | `main`                | Track F: shared flags, routes, sidebar, canvas kit, asset store, scheme, test lanes | Until F merges         |
+| `design-studio-v2`                                  | `feature/design-studio-v2` (then `-p2`, `-p3`…)  | `main` after F merges | Track DS phases                                                                     | Per phase PR           |
+| `create-images-v2`                                  | `feature/create-images-v2` (then `-p2`…)         | `main` after F merges | Track CI phases                                                                     | Per phase PR           |
+| `designer-connected-app`                            | `feature/design-studio-connected`                | `main` after DS-2     | Track DS-4 (Designer Mode)                                                          | Later                  |
 
 Rules:
+
 - Each phase is one PR from its own branch. The next phase branches from `main` after the previous phase merges. If a phase must stack before its predecessor merges, it uses that predecessor's branch as its PR base. Never delete a base branch while a stacked PR uses it.
 - Feature branches are updated by **merging `origin/main` in**; they are never rebased.
 - The old remote branches `feature/stitch-design-studio` and `feature/create-images-node-banana-parity` stay untouched as an archive.
@@ -247,6 +251,7 @@ Rules:
   - `docs/plans/README.md`
 
   Feature tracks never both edit one of these in the same window.
+
 - **Local gates before any PR:** the phase's narrow suites, `npm run typecheck` (or the repo's tsc script), lint, `npm run build` + `check:bundle-budget`, the affected Playwright specs, and the Remote/native contract suites when chat listing or Remote is touched.
 
 ---
@@ -267,7 +272,7 @@ Rules:
   - **Chat visibility:** a `isUserVisibleChat()` / chat `owner` predicate that replaces the ten scattered `ASSISTANT_WORKSPACE_ID` exclusions.
   - **Tests:** npm suites (`test:chat-visibility`, `test:studio-foundation`, later `test:design-studio`, `test:create-images`) filed into the existing CI lanes; no new lanes (ADR-F).
 - [ ] **ADR-DS (Design Studio)**
-  - **Ownership:** a project is a first-class record that *owns* a hidden chat via the `owner` field, not a sentinel workspace.
+  - **Ownership:** a project is a first-class record that _owns_ a hidden chat via the `owner` field, not a sentinel workspace.
   - **Storage:**
     - Project manifest JSON via `writeJsonAtomic`, one file per project.
     - Revision HTML as files, plus reference images in the shared asset store.
@@ -275,7 +280,7 @@ Rules:
   - **Quota:** a project-scoped artifact quota replaces the per-chat 40/8 MiB ceiling.
   - **Tool profile:** a `design` capability profile in the agent runtime with the tool allowlist (`render_artifact`), a `finishTurn`-based stop and a bounded context builder.
   - **IPC budget:** ≤ 25 channels, using an op-based `designProjects:mutate` with a discriminated union in place of many CRUD channels.
-  - **Designer Mode:** folded in as DS-4. Mark `designer-mode-plan.md` *superseded by this plan*, and keep its Phase 0 GO gate, Vite-first scope and license-provenance ledger as DS-4 entry criteria.
+  - **Designer Mode:** folded in as DS-4. Mark `designer-mode-plan.md` _superseded by this plan_, and keep its Phase 0 GO gate, Vite-first scope and license-provenance ledger as DS-4 entry criteria.
   - **Dropped:**
     - V1→V2 and legacy-chat migrations
     - CDP prototype verification
@@ -307,14 +312,14 @@ Rules:
 
 ## 7. Track F: Studio Foundation (worktree `studio-foundation`, one PR)
 
-| Task | Deliverable | Key files | Behavioral tests |
-|---|---|---|---|
-| F-1 Capabilities and flags | `designStudio` / `createImages` capabilities, default off | `main/handlers/app.ts`, `renderer/lib/app-capabilities.tsx` | Capability read with env on/off; render tests show nothing when off |
-| F-2 Routes, sidebar, commands | Lazy `/design`, `/images` routes under the chat layout with placeholder views; sidebar Design and Images rows; `design.open` / `images.open` commands (no default binding); capability-route redirect to `/` | `router.tsx`, `chat-sidebar.tsx`, `keybindings.ts`, `command-system-core.ts`, new `renderer/main/design-route.tsx`, `images-route.tsx` | Rendered sidebar with each flag combination; router redirect when off; palette visibility; bundle budget unchanged |
-| F-3 Chat visibility predicate | `isUserVisibleChat(chat)` (or the `owner` field) replacing the scattered `ASSISTANT_WORKSPACE_ID` exclusions, applied in every listing/Remote/peer/fork projection | `chat-workspace-authority.ts`, `aiden-remote-chats.ts`, `aiden-remote-host-feed.ts`, `chat-fork-service`, `main/handlers/chats.ts`, … | Per-projection tests: a hidden chat is absent from the sidebar list, Remote summary, host feed, peer list, fork, search; existing Assistant behavior unchanged. iOS/Android contract suites run. |
-| F-4 Shared asset store and protocol | `main/services/studio-assets/` (content-addressed put/get/thumb/GC) and the `aiden-asset:` protocol with document-bound grants, in one privileged-scheme registration | new `studio-assets/*-core.ts`, `generative-ui-protocol.ts` (shared registration), `main/index.ts` reconcile chain | Put/dedupe/GC/ref-count; invalid magic bytes and oversize pixels rejected; grant bound to document and revoked on navigation; both schemes privileged (register-and-invoke) |
-| F-5 Canvas kit | `renderer/canvas/` on pinned `@xyflow/react`: `<StudioCanvas>`, tool rail, node chrome, keyboard map, fit/zoom | new files; CSS imported only by lazy routes | Testing Library render plus keyboard tool switching; Playwright smoke for pan/zoom/select on the placeholder route |
-| F-6 Test suites and docs | npm suites filed into existing lanes in `ci-test-registry.json`, `package.json` scripts, `.memory/studio-foundation.md`, plan index | registry, `package.json` | `test:ci-policy` / `validateRegistry` green |
+| Task                                | Deliverable                                                                                                                                                                                                  | Key files                                                                                                                              | Behavioral tests                                                                                                                                                                                 |
+| ----------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| F-1 Capabilities and flags          | `designStudio` / `createImages` capabilities, default off                                                                                                                                                    | `main/handlers/app.ts`, `renderer/lib/app-capabilities.tsx`                                                                            | Capability read with env on/off; render tests show nothing when off                                                                                                                              |
+| F-2 Routes, sidebar, commands       | Lazy `/design`, `/images` routes under the chat layout with placeholder views; sidebar Design and Images rows; `design.open` / `images.open` commands (no default binding); capability-route redirect to `/` | `router.tsx`, `chat-sidebar.tsx`, `keybindings.ts`, `command-system-core.ts`, new `renderer/main/design-route.tsx`, `images-route.tsx` | Rendered sidebar with each flag combination; router redirect when off; palette visibility; bundle budget unchanged                                                                               |
+| F-3 Chat visibility predicate       | `isUserVisibleChat(chat)` (or the `owner` field) replacing the scattered `ASSISTANT_WORKSPACE_ID` exclusions, applied in every listing/Remote/peer/fork projection                                           | `chat-workspace-authority.ts`, `aiden-remote-chats.ts`, `aiden-remote-host-feed.ts`, `chat-fork-service`, `main/handlers/chats.ts`, …  | Per-projection tests: a hidden chat is absent from the sidebar list, Remote summary, host feed, peer list, fork, search; existing Assistant behavior unchanged. iOS/Android contract suites run. |
+| F-4 Shared asset store and protocol | `main/services/studio-assets/` (content-addressed put/get/thumb/GC) and the `aiden-asset:` protocol with document-bound grants, in one privileged-scheme registration                                        | new `studio-assets/*-core.ts`, `generative-ui-protocol.ts` (shared registration), `main/index.ts` reconcile chain                      | Put/dedupe/GC/ref-count; invalid magic bytes and oversize pixels rejected; grant bound to document and revoked on navigation; both schemes privileged (register-and-invoke)                      |
+| F-5 Canvas kit                      | `renderer/canvas/` on pinned `@xyflow/react`: `<StudioCanvas>`, tool rail, node chrome, keyboard map, fit/zoom                                                                                               | new files; CSS imported only by lazy routes                                                                                            | Testing Library render plus keyboard tool switching; Playwright smoke for pan/zoom/select on the placeholder route                                                                               |
+| F-6 Test suites and docs            | npm suites filed into existing lanes in `ci-test-registry.json`, `package.json` scripts, `.memory/studio-foundation.md`, plan index                                                                          | registry, `package.json`                                                                                                               | `test:ci-policy` / `validateRegistry` green                                                                                                                                                      |
 
 **Exit:** with both flags off, behavior matches `main` (sidebar, router and bundle-budget evidence). With them on, two empty canvases render. F-3 passes on desktop and native suites. CI is green at the exact head, and the PR merges.
 
@@ -327,6 +332,7 @@ Rules:
 ### DS-1 Generated-prototype core (MVP)
 
 **Scope:**
+
 - **Project library:** create, rename, duplicate, delete, with the delete cascade preview.
 - **Project route:** canvas of Screens and reference images.
 - **Composer:** reuses the existing composer through a chat-turn hook, not a `presentation` flag on ChatPane.
@@ -334,18 +340,19 @@ Rules:
 - **Inspector:** Preview / Code / History with compare.
 - **Visual edit:** element selection via React Grab (pinned and vendored), inserting chips as untrusted context.
 
-| Task | Deliverable | Port from `ref-design-studio` |
-|---|---|---|
-| DS-1.1 Project store *(delivered by DS-1a)* | One-schema manifest, revision files, project quota; initialized in the reconcile chain | Ideas from `design-project-store.ts` / `design-project-contract.ts` (rewrite, no V2) |
-| DS-1.2 Design tool profile *(delivered by DS-1a)* | `design` capability profile, `render_artifact` only, `finishTurn` stop, 128 KiB bounded context, earlier HTML marked untrusted | `generative-ui-extension.ts` changes, migrated to Pi 1.x |
-| DS-1.3 Generative-UI design CSP and vendoring *(DS-1b)* | Design guest CSP + React Grab primitives, pinned | `generative-ui-html/protocol/host-libraries` diffs, `scripts/vendor-generative-ui-libs.mjs` (main's copies are nearly unchanged; ports cleanly) |
-| DS-1.4 IPC *(delivered by DS-1a)* | `main/handlers/design/*.ts` (≤ 25 channels) and `renderer/lib/design-ipc.ts` | Rewrite of `designer.ts` |
-| DS-1.5 Canvas and nodes *(DS-1b)* | `renderer/design/` components (Screen node, reference node, tool rail) and hooks `useDesignProject`, `useDesignSelection`, `useDesignPreview` | Split of `design-workspace.tsx`; `renderer/shared/design-selection.ts` ported as-is |
-| DS-1.6 Explore / Refine flows *(DS-1b)* | Direction sets, choose/archive, refine lineage, Incomplete-run banner (Resume · Discard) | `design-workspace.ts` logic (pure parts) |
-| DS-1.7 Inspector *(DS-1b)* | Preview / Code / History tabs with shared `Button` and tokens | `design-project-inspector.tsx` (restyle) |
-| DS-1.8 E2E *(DS-1b)* | Playwright: create → explore (fake model) → choose → refine → relaunch → state intact; flag off → no route | – |
+| Task                                                    | Deliverable                                                                                                                                   | Port from `ref-design-studio`                                                                                                                   |
+| ------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
+| DS-1.1 Project store _(delivered by DS-1a)_             | One-schema manifest, revision files, project quota; initialized in the reconcile chain                                                        | Ideas from `design-project-store.ts` / `design-project-contract.ts` (rewrite, no V2)                                                            |
+| DS-1.2 Design tool profile _(delivered by DS-1a)_       | `design` capability profile, `render_artifact` only, `finishTurn` stop, 128 KiB bounded context, earlier HTML marked untrusted                | `generative-ui-extension.ts` changes, migrated to Pi 1.x                                                                                        |
+| DS-1.3 Generative-UI design CSP and vendoring _(DS-1b)_ | Design guest CSP + React Grab primitives, pinned                                                                                              | `generative-ui-html/protocol/host-libraries` diffs, `scripts/vendor-generative-ui-libs.mjs` (main's copies are nearly unchanged; ports cleanly) |
+| DS-1.4 IPC _(delivered by DS-1a)_                       | `main/handlers/design/*.ts` (≤ 25 channels) and `renderer/lib/design-ipc.ts`                                                                  | Rewrite of `designer.ts`                                                                                                                        |
+| DS-1.5 Canvas and nodes _(DS-1b)_                       | `renderer/design/` components (Screen node, reference node, tool rail) and hooks `useDesignProject`, `useDesignSelection`, `useDesignPreview` | Split of `design-workspace.tsx`; `renderer/shared/design-selection.ts` ported as-is                                                             |
+| DS-1.6 Explore / Refine flows _(DS-1b)_                 | Direction sets, choose/archive, refine lineage, Incomplete-run banner (Resume · Discard)                                                      | `design-workspace.ts` logic (pure parts)                                                                                                        |
+| DS-1.7 Inspector _(DS-1b)_                              | Preview / Code / History tabs with shared `Button` and tokens                                                                                 | `design-project-inspector.tsx` (restyle)                                                                                                        |
+| DS-1.8 E2E _(DS-1b)_                                    | Playwright: create → explore (fake model) → choose → refine → relaunch → state intact; flag off → no route                                    | –                                                                                                                                               |
 
 **Exit:**
+
 - All new tests are behavioral, and new files are ≤ 800 lines.
 - No `design` checks scattered through `llm-client.ts`.
 - `check:bundle-budget` is green with React Flow lazy.
@@ -372,6 +379,7 @@ Rules:
 **Entry gate:** a written GO on the Designer Mode Phase 0 criteria (containment and DOM↔source identity on the `tests/fixtures/source-design-vite` fixture).
 
 **Scope:**
+
 - Vite + React only.
 - The user explicitly starts the dev server, with a **scrubbed env** (no provider keys) and `shell:false`.
 - Loopback proxy + websocket proxy (port `source-preview-transport-core.ts` and `source-preview-websocket-proxy.ts` with their tests).
@@ -398,6 +406,7 @@ Rules:
 ### CI-1 MVP that actually generates images
 
 **Scope:**
+
 - **Nodes:** Prompt, Image Input, Generate Image, Output (with an inline mini-gallery).
 - **Templates:** Blank and Starter.
 - **Graph rules:** typed ports and cycle validation.
@@ -408,20 +417,21 @@ Rules:
 
 **Status (2026-10-08):** CI-1.1 to CI-1.9 are implemented. PR A is `feature/create-images-v2` (CI-1.1 to CI-1.7, including CI-1.6a), and PR B is `feature/create-images-v2-ui` (CI-1.8 and CI-1.9). The `createImages` flag defaults off. Both PRs merged as [#382](https://github.com/sambitcreate/aiden-agent/pull/382) and [#383](https://github.com/sambitcreate/aiden-agent/pull/383), and CI-1.10 (owner-attended live OpenRouter acceptance) passed on 2026-10-08.
 
-| Task | Deliverable | Port from `ref-create-images` |
-|---|---|---|
-| CI-1.1 Graph schema and ports | Trimmed `schema.ts`, `ports.ts` (typed ports, cycles), `editor-core.ts`, `node-dimensions-core.ts` with their behavioral tests | Port nearly as-is |
-| CI-1.2 Workflow store | JSON per workflow via `writeJsonAtomic`, index, debounced autosave | Rewrite of `workflow-manifest-store.ts` (drop `autosave.journal`) |
-| CI-1.3 Run ledger | `node:sqlite` attempts table, O(1) append, interrupt-on-restart, retention of 100 runs | Rewrite of `run-journal-store.ts` (4,311 lines → target < 400) |
-| CI-1.4 Scheduler and coordinator | Topological scheduler with cancellation; coordinator < 600 lines, provider-agnostic | `scheduler-core.ts` (port), `run-service.ts` (rewrite) |
-| CI-1.5 Image provider adapter | Wraps Pi `generateImages` and reference images (`pi-model-image-references.ts` bounds); usage via `modelOperationUsageRecord`; fake image API for tests only | Replaces `gemini-image-provider-core.ts` / `gemini-interactions-core.ts` / production mock |
-| CI-1.6 Consent core | Consent plan (provider, model, count, estimate/unknown, expiry), enforced in main; no automatic paid retry or fallback | Ideas from `image-provider-execution-core.ts` (shrink) |
-| CI-1.7 IPC | `main/handlers/create-images/*.ts` (≤ 15 channels), `renderer/lib/create-images-ipc.ts`, one throttled `imageWorkflows:run-changed` notification | Rewrite of the 2,195-line handler and 1,502-line `ipc.ts` |
-| CI-1.8 Canvas UI | `renderer/images/` on the canvas kit: node registry, one file per node, `useWorkflowController` hook, run panel, consent sheet; no bordered selection cards | Split of `workflow-canvas.tsx` / `create-images-view.tsx` |
-| CI-1.9 Perf and e2e | Ledger perf test (500-node run < 1 s overhead) in a perf lane; Playwright build → run (fake API) → output visible → relaunch → interrupted state → rerun after fresh consent | – |
-| CI-1.10 Live acceptance (owner-attended) | One real image end to end on the owner's machine with their key, recorded in the evidence doc | – |
+| Task                                     | Deliverable                                                                                                                                                                  | Port from `ref-create-images`                                                              |
+| ---------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------ |
+| CI-1.1 Graph schema and ports            | Trimmed `schema.ts`, `ports.ts` (typed ports, cycles), `editor-core.ts`, `node-dimensions-core.ts` with their behavioral tests                                               | Port nearly as-is                                                                          |
+| CI-1.2 Workflow store                    | JSON per workflow via `writeJsonAtomic`, index, debounced autosave                                                                                                           | Rewrite of `workflow-manifest-store.ts` (drop `autosave.journal`)                          |
+| CI-1.3 Run ledger                        | `node:sqlite` attempts table, O(1) append, interrupt-on-restart, retention of 100 runs                                                                                       | Rewrite of `run-journal-store.ts` (4,311 lines → target < 400)                             |
+| CI-1.4 Scheduler and coordinator         | Topological scheduler with cancellation; coordinator < 600 lines, provider-agnostic                                                                                          | `scheduler-core.ts` (port), `run-service.ts` (rewrite)                                     |
+| CI-1.5 Image provider adapter            | Wraps Pi `generateImages` and reference images (`pi-model-image-references.ts` bounds); usage via `modelOperationUsageRecord`; fake image API for tests only                 | Replaces `gemini-image-provider-core.ts` / `gemini-interactions-core.ts` / production mock |
+| CI-1.6 Consent core                      | Consent plan (provider, model, count, estimate/unknown, expiry), enforced in main; no automatic paid retry or fallback                                                       | Ideas from `image-provider-execution-core.ts` (shrink)                                     |
+| CI-1.7 IPC                               | `main/handlers/create-images/*.ts` (≤ 15 channels), `renderer/lib/create-images-ipc.ts`, one throttled `imageWorkflows:run-changed` notification                             | Rewrite of the 2,195-line handler and 1,502-line `ipc.ts`                                  |
+| CI-1.8 Canvas UI                         | `renderer/images/` on the canvas kit: node registry, one file per node, `useWorkflowController` hook, run panel, consent sheet; no bordered selection cards                  | Split of `workflow-canvas.tsx` / `create-images-view.tsx`                                  |
+| CI-1.9 Perf and e2e                      | Ledger perf test (500-node run < 1 s overhead) in a perf lane; Playwright build → run (fake API) → output visible → relaunch → interrupted state → rerun after fresh consent | –                                                                                          |
+| CI-1.10 Live acceptance (owner-attended) | One real image end to end on the owner's machine with their key, recorded in the evidence doc                                                                                | –                                                                                          |
 
 **Exit:**
+
 - CI-1.10 has produced a real image.
 - All tests are behavioral, and new files are ≤ 800 lines.
 - Bundle budget is green.
@@ -465,31 +475,32 @@ Rules:
 
 ## 10. Sequencing and rough sizing
 
-| Step | Depends on | Runs in parallel with | Relative size |
-|---|---|---|---|
-| Phase 0 ADRs | – | – | S |
-| Track F | Phase 0 | – | M |
-| DS-1 | F | CI-1 | L |
-| CI-1 | F | DS-1 | L |
-| DS-2 | DS-1 | CI-2 | M |
-| CI-2 | CI-1 (incl. live acceptance) | DS-2 | M |
-| DS-3 | DS-1, CI-1 | CI-3 | S |
-| DS-4 | DS-2 + Designer Mode GO gate | CI-3 / CI-4 | L |
-| CI-3 / CI-4, DS-5+ | prior phase | each other | M each |
+| Step               | Depends on                   | Runs in parallel with | Relative size |
+| ------------------ | ---------------------------- | --------------------- | ------------- |
+| Phase 0 ADRs       | –                            | –                     | S             |
+| Track F            | Phase 0                      | –                     | M             |
+| DS-1               | F                            | CI-1                  | L             |
+| CI-1               | F                            | DS-1                  | L             |
+| DS-2               | DS-1                         | CI-2                  | M             |
+| CI-2               | CI-1 (incl. live acceptance) | DS-2                  | M             |
+| DS-3               | DS-1, CI-1                   | CI-3                  | S             |
+| DS-4               | DS-2 + Designer Mode GO gate | CI-3 / CI-4           | L             |
+| CI-3 / CI-4, DS-5+ | prior phase                  | each other            | M each        |
 
 ## 11. Risks
 
-| Risk | Mitigation |
-|---|---|
-| Hotspot conflicts between tracks | Track F registers both features' slots up front; the orchestrator owns any later hotspot edits; merge `main` after each landing |
-| Pi image-model coverage or quality is not good enough | ADR-CI allows registering a direct Google images API via `registerImagesApiProvider`; the provider adapter interface keeps the coordinator provider-agnostic |
-| Design generation quality depends on model and prompt | DS-1 keeps model choice with the existing picker; the fake-model e2e covers flow while live quality is assessed by the owner at each phase |
-| F-3 visibility refactor regresses the Assistant or Remote | Per-projection behavioral tests; native contract suites; F-3 can split into its own PR if the diff is large |
-| Scope creep back to the old size | IPC and file-size budgets, scope-cut rules, and one PR per phase with an explicit exit checklist |
+| Risk                                                      | Mitigation                                                                                                                                                   |
+| --------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Hotspot conflicts between tracks                          | Track F registers both features' slots up front; the orchestrator owns any later hotspot edits; merge `main` after each landing                              |
+| Pi image-model coverage or quality is not good enough     | ADR-CI allows registering a direct Google images API via `registerImagesApiProvider`; the provider adapter interface keeps the coordinator provider-agnostic |
+| Design generation quality depends on model and prompt     | DS-1 keeps model choice with the existing picker; the fake-model e2e covers flow while live quality is assessed by the owner at each phase                   |
+| F-3 visibility refactor regresses the Assistant or Remote | Per-projection behavioral tests; native contract suites; F-3 can split into its own PR if the diff is large                                                  |
+| Scope creep back to the old size                          | IPC and file-size budgets, scope-cut rules, and one PR per phase with an explicit exit checklist                                                             |
 
 ## 12. Port index (quick reference)
 
 **Port nearly as-is**, after reformatting and checking that the tests are behavioral:
+
 - **Create Images:**
   - `renderer/shared/create-images/` `ports.ts`, `templates.ts`, `prompt-variables.ts`, `prompt-list.ts`, `editor-core.ts`, `graph-fragment-core.ts`, `node-dimensions-core.ts`, `image-lightbox-core.ts`, `recent-output-core.ts`
   - `main/services/create-images/asset-image-validation-core.ts` and `asset-delivery-core.ts`
@@ -501,6 +512,7 @@ Rules:
   - `tests/fixtures/source-design-vite`
 
 **Rewrite:**
+
 - Both handler files and IPC clients
 - Both god components
 - The project store and run journal
@@ -510,6 +522,7 @@ Rules:
 - All CSS (to tokens and squircle)
 
 **Drop:**
+
 - Everything listed under "Dropped" in ADR-DS and ADR-CI
 - All source-grep tests
 - Reformat churn in unrelated files

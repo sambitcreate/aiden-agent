@@ -14,7 +14,15 @@ export const BOT_PANEL_ID = "bot-panel";
  * only while the Bot has a computer on a Mac with Bot computers (`bot-workbench.tsx`).
  * `advanced` holds the Bot's settings (plan §4.4).
  */
-export const BOT_PANEL_TABS = ["activity", "files", "memory", "routines", "browser", "computer", "advanced"] as const;
+export const BOT_PANEL_TABS = [
+  "activity",
+  "files",
+  "memory",
+  "routines",
+  "browser",
+  "computer",
+  "advanced",
+] as const;
 export type BotPanelTab = (typeof BOT_PANEL_TABS)[number];
 export const BOT_PANEL_OPEN_KEY = "aiden-agent.bot-panel.open";
 export const BOT_PANEL_TAB_KEY = "aiden-agent.bot-panel.tab";
@@ -75,7 +83,9 @@ interface BotPanelState {
 type BotPanelValue = BotPanelState & BotPanelActions;
 
 function parseBotPanelTab(value: string | null): BotPanelTab {
-  return (BOT_PANEL_TABS as readonly string[]).includes(value ?? "") ? (value as BotPanelTab) : "activity";
+  return (BOT_PANEL_TABS as readonly string[]).includes(value ?? "")
+    ? (value as BotPanelTab)
+    : "activity";
 }
 
 function readStored(key: string): string | null {
@@ -139,7 +149,8 @@ export function BotPanelProvider({
     if (routedBotId === null) return;
     setState((current) => {
       const dropFile = current.fileRequest !== null && current.fileRequest.botId !== routedBotId;
-      const dropSection = current.sectionRequest !== null && current.sectionRequest.botId !== routedBotId;
+      const dropSection =
+        current.sectionRequest !== null && current.sectionRequest.botId !== routedBotId;
       if (!dropFile && !dropSection) return current;
       return {
         ...current,
@@ -153,7 +164,8 @@ export function BotPanelProvider({
     if (!openRef.current) {
       const active = document.activeElement;
       returnFocus.current =
-        returnTo ?? (active instanceof HTMLElement && !active.closest(`#${BOT_PANEL_ID}`) ? active : null);
+        returnTo ??
+        (active instanceof HTMLElement && !active.closest(`#${BOT_PANEL_ID}`) ? active : null);
     }
     pendingFocus.current = true;
     setFocusRequest((value) => value + 1);
@@ -206,13 +218,16 @@ export function BotPanelProvider({
   }, [close, requestFocus]);
 
   const setTab = React.useCallback(
-    (tab: BotPanelTab) => setState((current) => (current.tab === tab ? current : { ...current, tab })),
+    (tab: BotPanelTab) =>
+      setState((current) => (current.tab === tab ? current : { ...current, tab })),
     [],
   );
 
   const reveal = React.useCallback(
     (tab: BotPanelTab) =>
-      setState((current) => (current.open && current.tab === tab ? current : { ...current, open: true, tab })),
+      setState((current) =>
+        current.open && current.tab === tab ? current : { ...current, open: true, tab },
+      ),
     [],
   );
 
@@ -226,7 +241,10 @@ export function BotPanelProvider({
     () => ({ show, reveal, setTab, toggle, close, consumeFocusRequest }),
     [show, reveal, setTab, toggle, close, consumeFocusRequest],
   );
-  const panelState = React.useMemo<BotPanelState>(() => ({ ...state, focusRequest }), [state, focusRequest]);
+  const panelState = React.useMemo<BotPanelState>(
+    () => ({ ...state, focusRequest }),
+    [state, focusRequest],
+  );
   return (
     <BotPanelActionsContext.Provider value={actions}>
       <BotPanelStateContext.Provider value={panelState}>{children}</BotPanelStateContext.Provider>
@@ -237,7 +255,9 @@ export function BotPanelProvider({
 /** The provider for the app and for tests under a router: it follows the Bot whose chat is routed. */
 export function RoutedBotPanelProvider({ children }: React.PropsWithChildren) {
   const router = useRouter();
-  const [routedBotId, setRoutedBotId] = React.useState(() => botChatRouteBotId(router.state.location.pathname));
+  const [routedBotId, setRoutedBotId] = React.useState(() =>
+    botChatRouteBotId(router.state.location.pathname),
+  );
   React.useEffect(() => {
     const follow = (pathname: string) => setRoutedBotId(botChatRouteBotId(pathname));
     follow(router.state.location.pathname);

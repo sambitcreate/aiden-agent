@@ -57,7 +57,11 @@ export async function ensureAgentDeviceShim(input: {
   await mkdir(shimDir, { recursive: true });
   const launcherPath = path.join(shimDir, "agent-device-launcher.mjs");
   const command = path.join(shimDir, "agent-device");
-  await writeIfChanged(launcherPath, agentDeviceLauncherSource(input.nodePath, input.entryPath), 0o644);
+  await writeIfChanged(
+    launcherPath,
+    agentDeviceLauncherSource(input.nodePath, input.entryPath),
+    0o644,
+  );
   await writeIfChanged(command, agentDeviceShimSource(input.nodePath, launcherPath), 0o755);
   return { shimDir, command };
 }
@@ -73,8 +77,14 @@ export const agentDeviceSession = (chatId: string, hostId: string, deviceId: str
   `aiden-${key(JSON.stringify([chatId, hostId, deviceId]))}`;
 
 /** Holds the daemon token, so it is owner-only and replaced atomically. */
-export async function writeAgentDeviceConfig(file: string, endpoint: AgentDeviceEndpoint): Promise<void> {
-  const content = JSON.stringify({ daemonBaseUrl: endpoint.baseUrl, daemonAuthToken: endpoint.token });
+export async function writeAgentDeviceConfig(
+  file: string,
+  endpoint: AgentDeviceEndpoint,
+): Promise<void> {
+  const content = JSON.stringify({
+    daemonBaseUrl: endpoint.baseUrl,
+    daemonAuthToken: endpoint.token,
+  });
   await writeIfChanged(file, content, 0o600);
 }
 

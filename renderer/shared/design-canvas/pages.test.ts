@@ -14,10 +14,27 @@ import {
   renamePage,
   showPage,
 } from "./pages.js";
-import { DESIGN_CANVAS_LIMITS, emptyDesignCanvas, type DesignCanvas, type DesignFrame } from "./schema.js";
+import {
+  DESIGN_CANVAS_LIMITS,
+  emptyDesignCanvas,
+  type DesignCanvas,
+  type DesignFrame,
+} from "./schema.js";
 
 function frame(id: string, pageId: string, extra: Partial<DesignFrame> = {}): DesignFrame {
-  return { id, kind: "note", title: id, x: 10, y: 20, w: 200, h: 120, text: id, pageId, createdBy: "person", ...extra };
+  return {
+    id,
+    kind: "note",
+    title: id,
+    x: 10,
+    y: 20,
+    w: 200,
+    h: 120,
+    text: id,
+    pageId,
+    createdBy: "person",
+    ...extra,
+  };
 }
 
 function twoPages(): DesignCanvas {
@@ -41,11 +58,15 @@ test("a new page goes after the one on screen, takes the next free name and is s
 
 test("pages stop at the limit", () => {
   let doc = emptyDesignCanvas();
-  for (let index = 2; index <= DESIGN_CANVAS_LIMITS.pages; index += 1) doc = addPage(doc, `p${index}`);
+  for (let index = 2; index <= DESIGN_CANVAS_LIMITS.pages; index += 1)
+    doc = addPage(doc, `p${index}`);
   assert.equal(doc.pages.length, DESIGN_CANVAS_LIMITS.pages);
   assert.equal(canAddPage(doc), false);
   assert.equal(addPage(doc, "one-more"), doc);
-  assert.equal(duplicatePage(doc, "page-1", "copy", () => "x"), doc);
+  assert.equal(
+    duplicatePage(doc, "page-1", "copy", () => "x"),
+    doc,
+  );
 });
 
 test("renaming refuses an empty name and cuts a long one", () => {
@@ -60,7 +81,11 @@ test("duplicating copies the page's frames with new ids and keeps groups togethe
   const base = twoPages();
   const doc: DesignCanvas = {
     ...base,
-    frames: [frame("g", "page-1", { kind: "group" }), frame("n", "page-1", { groupId: "g" }), frame("other", "p2")],
+    frames: [
+      frame("g", "page-1", { kind: "group" }),
+      frame("n", "page-1", { groupId: "g" }),
+      frame("other", "p2"),
+    ],
   };
   let next = 0;
   const copy = duplicatePage(doc, "page-1", "copy", () => `new-${next++}`);
@@ -73,13 +98,22 @@ test("duplicating copies the page's frames with new ids and keeps groups togethe
   assert.notEqual(group.id, "g");
   assert.equal(member.groupId, group.id, "the copy's member points at the copy's group");
   assert.deepEqual([member.x, member.y, member.text], [10, 20, "n"]);
-  assert.equal(copy.frames.filter((entry) => entry.pageId === "page-1").length, 2, "the original stays");
+  assert.equal(
+    copy.frames.filter((entry) => entry.pageId === "page-1").length,
+    2,
+    "the original stays",
+  );
 });
 
 test("a duplicate that would pass the frame limit changes nothing", () => {
-  const frames = Array.from({ length: DESIGN_CANVAS_LIMITS.frames / 2 + 1 }, (_, index) => frame(`f${index}`, "page-1"));
+  const frames = Array.from({ length: DESIGN_CANVAS_LIMITS.frames / 2 + 1 }, (_, index) =>
+    frame(`f${index}`, "page-1"),
+  );
   const doc = { ...emptyDesignCanvas(), frames };
-  assert.equal(duplicatePage(doc, "page-1", "copy", () => crypto.randomUUID()), doc);
+  assert.equal(
+    duplicatePage(doc, "page-1", "copy", () => crypto.randomUUID()),
+    doc,
+  );
 });
 
 test("deleting a page removes its frames and comments and shows the page before it", () => {
@@ -87,13 +121,31 @@ test("deleting a page removes its frames and comments and shows the page before 
   const doc: DesignCanvas = {
     ...base,
     frames: [frame("a", "page-1"), frame("b", "p3")],
-    comments: [{ id: "c", pageId: "p3", frameId: "b", x: 0, y: 0, note: "", state: "open", anchorState: "anchored", createdAt: "t" }],
+    comments: [
+      {
+        id: "c",
+        pageId: "p3",
+        frameId: "b",
+        x: 0,
+        y: 0,
+        note: "",
+        state: "open",
+        anchorState: "anchored",
+        createdAt: "t",
+      },
+    ],
   };
   assert.equal(doc.activePageId, "p3");
   const after = deletePage(doc, "p3");
-  assert.deepEqual(after.pages.map((page) => page.id), ["page-1", "p2"]);
+  assert.deepEqual(
+    after.pages.map((page) => page.id),
+    ["page-1", "p2"],
+  );
   assert.equal(after.activePageId, "page-1", "the page before the deleted one is shown");
-  assert.deepEqual(after.frames.map((entry) => entry.id), ["a"]);
+  assert.deepEqual(
+    after.frames.map((entry) => entry.id),
+    ["a"],
+  );
   assert.deepEqual(after.comments, []);
   const first = deletePage(showPage(doc, "page-1"), "page-1");
   assert.equal(first.activePageId, "p3", "deleting the first page shows the new first page");
@@ -104,10 +156,23 @@ test("deleting a page removes its frames and comments and shows the page before 
 test("pages move one place at a time and stop at the ends", () => {
   const doc = addPage(twoPages(), "p3");
   // Order is Page 1, then p3 (added after the page on screen), then p2.
-  assert.deepEqual(doc.pages.map((page) => page.id), ["page-1", "p3", "p2"]);
-  assert.deepEqual(movePage(doc, "p2", -1).pages.map((page) => page.id), ["page-1", "p2", "p3"]);
-  assert.deepEqual(movePage(doc, "page-1", 1).pages.map((page) => page.id), ["p3", "page-1", "p2"]);
-  assert.equal(movePage(doc, "p3", -1).activePageId, doc.activePageId, "moving does not change the page on screen");
+  assert.deepEqual(
+    doc.pages.map((page) => page.id),
+    ["page-1", "p3", "p2"],
+  );
+  assert.deepEqual(
+    movePage(doc, "p2", -1).pages.map((page) => page.id),
+    ["page-1", "p2", "p3"],
+  );
+  assert.deepEqual(
+    movePage(doc, "page-1", 1).pages.map((page) => page.id),
+    ["p3", "page-1", "p2"],
+  );
+  assert.equal(
+    movePage(doc, "p3", -1).activePageId,
+    doc.activePageId,
+    "moving does not change the page on screen",
+  );
   assert.equal(movePage(doc, "page-1", -1), doc);
   assert.equal(movePage(doc, "p2", 1), doc);
 });
@@ -116,15 +181,34 @@ test("moving frames to another page brings a group's members and comments, and a
   const base = twoPages();
   const doc: DesignCanvas = {
     ...base,
-    frames: [frame("g", "page-1", { kind: "group" }), frame("m", "page-1", { groupId: "g" }), frame("solo", "page-1", { groupId: "g" })],
-    comments: [{ id: "c", pageId: "page-1", frameId: "m", x: 0, y: 0, note: "", state: "open", anchorState: "anchored", createdAt: "t" }],
+    frames: [
+      frame("g", "page-1", { kind: "group" }),
+      frame("m", "page-1", { groupId: "g" }),
+      frame("solo", "page-1", { groupId: "g" }),
+    ],
+    comments: [
+      {
+        id: "c",
+        pageId: "page-1",
+        frameId: "m",
+        x: 0,
+        y: 0,
+        note: "",
+        state: "open",
+        anchorState: "anchored",
+        createdAt: "t",
+      },
+    ],
   };
   const moved = moveFramesToPage(doc, ["g"], "p2");
-  assert.deepEqual(moved.frames.map((entry) => [entry.id, entry.pageId, entry.groupId]), [
-    ["g", "p2", undefined],
-    ["m", "p2", "g"],
-    ["solo", "p2", "g"],
-  ]);
+  assert.deepEqual(
+    moved.frames.map((entry) => [entry.id, entry.pageId, entry.groupId]),
+    [
+      ["g", "p2", undefined],
+      ["m", "p2", "g"],
+      ["solo", "p2", "g"],
+    ],
+  );
   assert.equal(moved.comments[0]!.pageId, "p2");
   const lone = moveFramesToPage(doc, ["m"], "p2");
   assert.equal(lone.frames[1]!.pageId, "p2");
@@ -138,7 +222,18 @@ test("a copied page's arrows join the copies of their boxes", () => {
   const doc: DesignCanvas = {
     ...emptyDesignCanvas(),
     frames: [
-      { id: "a", kind: "shape", shape: "rect", title: "A", x: 0, y: 0, w: 100, h: 60, pageId: "page-1", createdBy: "person" },
+      {
+        id: "a",
+        kind: "shape",
+        shape: "rect",
+        title: "A",
+        x: 0,
+        y: 0,
+        w: 100,
+        h: 60,
+        pageId: "page-1",
+        createdBy: "person",
+      },
       {
         id: "ab",
         kind: "connector",
@@ -158,7 +253,9 @@ test("a copied page's arrows join the copies of their boxes", () => {
   };
   let next = 0;
   const copy = duplicatePage(doc, "page-1", "page-2", () => `copy-${++next}`);
-  const arrow = copy.frames.find((frame) => frame.pageId === "page-2" && frame.kind === "connector")!;
+  const arrow = copy.frames.find(
+    (frame) => frame.pageId === "page-2" && frame.kind === "connector",
+  )!;
   assert.deepEqual(arrow.ends, [
     { x: 100, y: 30, frameId: "copy-1" },
     { x: 400, y: 30 },

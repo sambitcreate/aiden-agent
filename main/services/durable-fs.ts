@@ -116,11 +116,7 @@ export async function writeFileAtomic(
   const staged = stagedPathFor(target);
   let published = false;
   try {
-    const handle = await fs.open(
-      staged,
-      "wx",
-      options.mode === undefined ? 0o666 : options.mode,
-    );
+    const handle = await fs.open(staged, "wx", options.mode === undefined ? 0o666 : options.mode);
     try {
       await handle.writeFile(data);
       // open()'s mode is filtered by the umask; chmod pins the requested bits.
@@ -163,9 +159,5 @@ export async function writeJsonAtomic(
   const { space, trailingNewline, ...writeOptions } = options;
   const serialized = JSON.stringify(value, null, space);
   if (serialized === undefined) throw new TypeError("Value is not JSON-serializable.");
-  await writeFileAtomic(
-    target,
-    trailingNewline ? `${serialized}\n` : serialized,
-    writeOptions,
-  );
+  await writeFileAtomic(target, trailingNewline ? `${serialized}\n` : serialized, writeOptions);
 }

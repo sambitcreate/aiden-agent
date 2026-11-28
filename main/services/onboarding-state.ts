@@ -30,13 +30,10 @@ async function readiness(allowLegacyEvidence = false): Promise<{
   // Outside one-time migration, static Pi catalogs and ambient credentials are
   // not validation evidence. Migration may retain the exact provider/model the
   // legacy app last used when it is still structurally ready today.
-  const selected = onboardingEvidenceProvider(providers, progress) ??
+  const selected =
+    onboardingEvidenceProvider(providers, progress) ??
     (allowLegacyEvidence && progress === null
-      ? legacyOnboardingEvidenceProvider(
-          providers,
-          settings.lastProviderId,
-          settings.lastModel,
-        )
+      ? legacyOnboardingEvidenceProvider(providers, settings.lastProviderId, settings.lastModel)
       : undefined);
   return {
     profileReady:
@@ -130,23 +127,26 @@ export async function setOnboardingProgress(
     }
   }
   const priorStep = current?.lastSatisfiedStep;
-  const state = await persist({
-    version: ONBOARDING_STATE_VERSION,
-    outcome: "incomplete",
-    lastSatisfiedStep:
-      step === "bots"
-        ? "bots"
-        : step === "provider"
-          ? "provider"
-          : priorStep === "bots"
-            ? "bots"
-            : priorStep === "provider" || priorStep === "tour"
-              ? "provider"
-              : "profile",
-    ...((selectedProviderId ?? current?.selectedProviderId)
-      ? { selectedProviderId: selectedProviderId ?? current?.selectedProviderId }
-      : {}),
-  }, isCurrent);
+  const state = await persist(
+    {
+      version: ONBOARDING_STATE_VERSION,
+      outcome: "incomplete",
+      lastSatisfiedStep:
+        step === "bots"
+          ? "bots"
+          : step === "provider"
+            ? "provider"
+            : priorStep === "bots"
+              ? "bots"
+              : priorStep === "provider" || priorStep === "tour"
+                ? "provider"
+                : "profile",
+      ...((selectedProviderId ?? current?.selectedProviderId)
+        ? { selectedProviderId: selectedProviderId ?? current?.selectedProviderId }
+        : {}),
+    },
+    isCurrent,
+  );
   return {
     ...state,
     profileReady: true,

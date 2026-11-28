@@ -58,13 +58,15 @@ async function flush(): Promise<void> {
   for (let index = 0; index < 10; index += 1) await new Promise((resolve) => setImmediate(resolve));
 }
 
-function harness(options: {
-  accepting?: () => boolean;
-  admission?: () => { id: string; expiresAt: number } | undefined;
-  resolveTransport?: () => Promise<AidenPairingRequestTransportIdentity>;
-  displayName?: () => string;
-  hostCapabilities?: boolean;
-} = {}) {
+function harness(
+  options: {
+    accepting?: () => boolean;
+    admission?: () => { id: string; expiresAt: number } | undefined;
+    resolveTransport?: () => Promise<AidenPairingRequestTransportIdentity>;
+    displayName?: () => string;
+    hostCapabilities?: boolean;
+  } = {},
+) {
   let stored: AidenRemoteStateDocument = createDefaultAidenRemoteState(() => Buffer.alloc(24, 9));
   let failNextSave = false;
   let saveGate: Promise<void> | null = null;
@@ -93,7 +95,8 @@ function harness(options: {
     instanceId: stored.instanceId,
     devices: registry,
     accepting: options.accepting ?? (() => true),
-    admission: options.admission ?? (() => ({ id: "test-host-window", expiresAt: clock.now() + 300_000 })),
+    admission:
+      options.admission ?? (() => ({ id: "test-host-window", expiresAt: clock.now() + 300_000 })),
     resolveTransport: options.resolveTransport ?? (async () => IDENTITY),
     displayName: options.displayName ?? (() => "Studio Mac"),
     botCapabilitiesSupported: () => true,
@@ -165,14 +168,26 @@ function assertRemoteError(code: string, status?: number) {
 test("a host window is required and renewal cannot admit an in-flight create", async () => {
   let window: string | undefined;
   let resume!: () => void;
-  const transport = new Promise<void>((resolve) => { resume = resolve; });
+  const transport = new Promise<void>((resolve) => {
+    resume = resolve;
+  });
   const { service, liveDevices } = harness({
-    admission: () => window ? { id: window, expiresAt: Number.MAX_SAFE_INTEGER } : undefined,
-    resolveTransport: async () => { await transport; return IDENTITY; },
+    admission: () => (window ? { id: window, expiresAt: Number.MAX_SAFE_INTEGER } : undefined),
+    resolveTransport: async () => {
+      await transport;
+      return IDENTITY;
+    },
   });
   assert.equal(service.accepting(), false);
-  const body = { deviceName: "Desk", deviceType: "mac", publicKey: generatePairingRequestKeyPair().publicKey };
-  await assert.rejects(service.create(body, DEFAULT_CONTEXT), assertRemoteError("pairing_closed", 403));
+  const body = {
+    deviceName: "Desk",
+    deviceType: "mac",
+    publicKey: generatePairingRequestKeyPair().publicKey,
+  };
+  await assert.rejects(
+    service.create(body, DEFAULT_CONTEXT),
+    assertRemoteError("pairing_closed", 403),
+  );
   window = "first";
   const creating = service.create(body, DEFAULT_CONTEXT);
   window = "second";
@@ -185,7 +200,9 @@ test("a host window is required and renewal cannot admit an in-flight create", a
 for (const boundary of ["close", "renew", "expire"] as const) {
   test(`host window ${boundary} fences reveal, Allow and pending credential publication`, async () => {
     let window: string | undefined = "first";
-    const { service, holdSaves, clock, liveDevices } = harness({ admission: () => window ? { id: window, expiresAt: Number.MAX_SAFE_INTEGER } : undefined });
+    const { service, holdSaves, clock, liveDevices } = harness({
+      admission: () => (window ? { id: window, expiresAt: Number.MAX_SAFE_INTEGER } : undefined),
+    });
     const { created } = await open(service);
     const release = holdSaves();
     const deciding = service.respond(created.requestId, "allow");
@@ -200,15 +217,21 @@ for (const boundary of ["close", "renew", "expire"] as const) {
     assert.equal((await deciding)?.state, "cancelled");
     assert.equal(liveDevices().length, 0);
     assert.equal((await service.poll(created.requestId, created.pollSecret)).envelope, undefined);
-    await assert.rejects(Promise.resolve().then(() => service.reveal(created.requestId, created.pollSecret, {
-      requesterNonce: randomBytes(32).toString("base64url"),
-    })));
+    await assert.rejects(
+      Promise.resolve().then(() =>
+        service.reveal(created.requestId, created.pollSecret, {
+          requesterNonce: randomBytes(32).toString("base64url"),
+        }),
+      ),
+    );
   });
 }
 
 test("the request expires with its host window even during long polling", async () => {
   let expiresAt = Number.MAX_SAFE_INTEGER;
-  const { service, clock, liveDevices } = harness({ admission: () => ({ id: "first", expiresAt }) });
+  const { service, clock, liveDevices } = harness({
+    admission: () => ({ id: "first", expiresAt }),
+  });
   expiresAt = clock.now() + 100;
   const { created } = await open(service);
   assert.equal(Date.parse(created.expiresAt), expiresAt);
@@ -339,12 +362,13 @@ test("the requester accepts every host name the host allows and nothing longer",
     const { keys, created } = await open(service);
     await service.respond(created.requestId, "allow");
     const { envelope } = await service.poll(created.requestId, created.pollSecret);
-    return () => openPeerPairingRequestGrant(envelope, {
-      requestId: created.requestId,
-      publicKey: keys.publicKey,
-      privateKey: keys.privateKey,
-      serverSpkiSha256: SPKI,
-    });
+    return () =>
+      openPeerPairingRequestGrant(envelope, {
+        requestId: created.requestId,
+        publicKey: keys.publicKey,
+        privateKey: keys.privateKey,
+        serverSpkiSha256: SPKI,
+      });
   }
 
   // 80 characters by the host's count, but 81 UTF-16 units.
@@ -375,16 +399,22 @@ test("deny, expiry and requester cancel issue no credential", async () => {
   });
 
   const cancelled = await open(service, { source: "192.168.1.21", transport: "lan" });
-  assert.deepEqual(await service.cancel(cancelled.created.requestId, cancelled.created.pollSecret), {
-    requestId: cancelled.created.requestId,
-    state: "cancelled",
-  });
+  assert.deepEqual(
+    await service.cancel(cancelled.created.requestId, cancelled.created.pollSecret),
+    {
+      requestId: cancelled.created.requestId,
+      state: "cancelled",
+    },
+  );
   assert.equal((await service.respond(cancelled.created.requestId, "allow"))?.state, "cancelled");
 
   const expired = await open(service, { source: "192.168.1.22", transport: "lan" });
   await clock.advance(2 * 60_000);
   assert.equal(service.list().length, 0);
-  assert.equal((await service.poll(expired.created.requestId, expired.created.pollSecret)).state, "expired");
+  assert.equal(
+    (await service.poll(expired.created.requestId, expired.created.pollSecret)).state,
+    "expired",
+  );
   assert.equal((await service.respond(expired.created.requestId, "allow"))?.state, "expired");
 
   assert.equal(stored().devices.length, 0);
@@ -426,7 +456,10 @@ test("phones, malformed requests and a closed setting are refused before anythin
   const publicKey = generatePairingRequestKeyPair().publicKey;
   for (const deviceType of ["iphone", "ipad"]) {
     await assert.rejects(
-      service.create({ deviceName: "Phone", deviceType, publicKey }, { source: "a", transport: "lan" }),
+      service.create(
+        { deviceName: "Phone", deviceType, publicKey },
+        { source: "a", transport: "lan" },
+      ),
       assertRemoteError("capability_denied", 403),
     );
   }
@@ -451,7 +484,10 @@ test("phones, malformed requests and a closed setting are refused before anythin
   accepting = false;
   assert.equal(service.accepting(), false);
   await assert.rejects(
-    service.create({ deviceName: "Mac", deviceType: "linux", publicKey }, { source: "b", transport: "lan" }),
+    service.create(
+      { deviceName: "Mac", deviceType: "linux", publicKey },
+      { source: "b", transport: "lan" },
+    ),
     assertRemoteError("pairing_closed", 403),
   );
   assert.equal(service.list().length, 0);
@@ -478,7 +514,11 @@ test("creation is rate limited per source and globally, and open requests are bo
   const { service, clock } = harness();
   const create = (source: string) =>
     service.create(
-      { deviceName: "Mac", deviceType: "mac", publicKey: generatePairingRequestKeyPair().publicKey },
+      {
+        deviceName: "Mac",
+        deviceType: "mac",
+        publicKey: generatePairingRequestKeyPair().publicKey,
+      },
       { source, transport: "lan" },
     );
 
@@ -597,7 +637,11 @@ test("an approved grant nobody collected is revoked when it retires or the servi
   assert.equal(liveDevices().length, 1);
   await assert.rejects(
     service.create(
-      { deviceName: "Mac", deviceType: "mac", publicKey: generatePairingRequestKeyPair().publicKey },
+      {
+        deviceName: "Mac",
+        deviceType: "mac",
+        publicKey: generatePairingRequestKeyPair().publicKey,
+      },
       { source: "10.0.0.4", transport: "lan" },
     ),
     assertRemoteError("pairing_closed", 403),
@@ -616,7 +660,9 @@ test("a requester that cancels before or after collecting its grant leaves no wo
   // pairing withdraws it the same way, and the envelope is gone.
   const collected = await open(service, { source: "10.0.0.2", transport: "lan" });
   await service.respond(collected.created.requestId, "allow");
-  assert.ok((await service.poll(collected.created.requestId, collected.created.pollSecret)).envelope);
+  assert.ok(
+    (await service.poll(collected.created.requestId, collected.created.pollSecret)).envelope,
+  );
   assert.equal(liveDevices().length, 1);
   assert.equal(
     (await service.cancel(collected.created.requestId, collected.created.pollSecret)).state,

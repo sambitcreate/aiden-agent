@@ -55,11 +55,13 @@ In the end all eight tasks shipped together in one PR.
 Today [AidenVisualViewer.swift:350](../../ios/AidenOnTheGo/Features/Remote/AidenVisualViewer.swift) reloads every time the web content process dies, which loops forever on a page that keeps killing it. Android already stops and shows a message ([AidenVisualViewerScreen.kt:231](../../android/app/src/main/java/sbtbiswas/AidenOnTheGo/features/chat/AidenVisualViewerScreen.kt)). Match Android: reload once, then show the viewer's existing failure state with Retry.
 
 **Files:**
+
 - Modify: `ios/AidenOnTheGo/Features/Remote/AidenVisualDocument.swift` (add the value type next to `AidenVisualNavigationPolicy`)
 - Modify: `ios/AidenOnTheGo/Features/Remote/AidenVisualViewer.swift:240-355`
 - Test: `ios/AidenOnTheGoTests/AidenVisualViewerTests.swift`
 
 **Interfaces:**
+
 - Produces: `struct AidenWebContentRecovery: Equatable, Sendable { enum Action: Equatable { case reload, fail }; mutating func processDidTerminate() -> Action; mutating func documentDidLoad() }`. `documentDidLoad()` resets the budget after a successful new `load`, not after a crash reload.
 
 - [ ] **Step 1: Write the failing test** `testWebContentReloadsOnceThenFailsUntilANewDocumentLoads`. Create a fresh recovery. The first `processDidTerminate()` returns `.reload` and the second `.fail`. After `documentDidLoad()`, the next call returns `.reload` again.
@@ -73,6 +75,7 @@ Today [AidenVisualViewer.swift:350](../../ios/AidenOnTheGo/Features/Remote/Aiden
 When the Mac's snapshot is missing (snapshot render failed or is still pending), both phones show "Can't view on this device. View in Aiden Agent." That happens even when the Mac announces `chat-visual-viewer-v1`, and the document route serves any visual the projection lists (`docs/aiden-remote-api-v1.md` § Phone visual viewer, revision 35). With the viewer available, the visual should get its row (title card plus **Open interactive**) and the card should go away.
 
 **Files:**
+
 - Modify: `ios/AidenOnTheGo/Models/AidenChat.swift:300-316` (`rowVisuals`, `unviewableHtmlArtifacts`)
 - Modify: `ios/AidenOnTheGo/Features/Chat/AidenChatRows.swift:365,428,485`, in `AidenMessageView` (`:172`), which has no `visualViewerAvailable`. Pass `loadVisualDocument != nil` (`:197`); its `==` already compares whether it is nil (`:218`). `messageChronologicalRows` needs the same flag.
 - Modify: `android/app/src/main/java/sbtbiswas/AidenOnTheGo/features/chat/AidenChatDetailScreen.kt:1715-1736` (`aidenUnsupportedHtmlArtifacts`, `aidenVisualHasRow`, `aidenVisualsWithRows`) and their callers (`:1471`, the notice list).
@@ -80,6 +83,7 @@ When the Mac's snapshot is missing (snapshot render failed or is still pending),
 - Test: `ios/AidenOnTheGoTests/AidenChatTests.swift` (next to `testHtmlArtifactCardIsReplacedOnlyByAVisualWithASnapshot`, `:6993`), `android/app/src/test/java/sbtbiswas/AidenOnTheGo/AidenChatTest.kt` (next to `:2254`).
 
 **Interfaces:**
+
 - Produces (iOS): `static func rowVisuals(in message: AidenChatMessage, viewerAvailable: Bool) -> [AidenChatVisual]` and `static func unviewableHtmlArtifacts(in message: AidenChatMessage, viewerAvailable: Bool) -> [AidenHtmlArtifact]`. Remove the one-argument forms, since pre-1.0 means no compatibility shims.
 - Produces (Android): `aidenVisualHasRow(visual, attachments, viewerAvailable: Boolean)`, `aidenVisualsWithRows(message, viewerAvailable: Boolean)`, `aidenUnsupportedHtmlArtifacts(message, viewerAvailable: Boolean)`.
 
@@ -97,10 +101,12 @@ When the Mac's snapshot is missing (snapshot render failed or is still pending),
 This is the foundation for Tasks 4 and 7. It is one `WKWebView` wrapper that loads a string and can't reach the network, storage, the app or another page.
 
 **Files:**
+
 - Create: `ios/AidenOnTheGo/Features/Remote/AidenSandboxedHTMLView.swift`
 - Test: `ios/AidenOnTheGoTests/AidenSandboxedHTMLTests.swift` (new; register in pbxproj)
 
 **Interfaces:**
+
 - Consumes: `AidenWebContentRecovery` (Task 1), `AidenVisualViewerMessage.externalURL(_:)`.
 - Produces:
   - `enum AidenPreviewNavigation { enum Decision: Equatable { case allow, cancel, offerLink(URL), anchor(String) }; static func decision(url: URL?, isMainFrame: Bool?, isLinkTap: Bool, hasLoaded: Bool) -> Decision }`. `isMainFrame == nil` means a new window.
@@ -141,17 +147,20 @@ This is the foundation for Tasks 4 and 7. It is one `WKWebView` wrapper that loa
 ### Task 4: View button on SVG code blocks (iOS)
 
 **Files:**
+
 - Create: `ios/AidenOnTheGo/Features/Chat/AidenSVGPreview.swift`
 - Modify: `ios/AidenOnTheGo/Features/Chat/AidenChatMarkdown.swift:180-184` (open fence passes `isOpen: true`), `:220-224` (closed fence), `:335-418` (`AidenCodeBlockView` header and sheet)
 - Test: `ios/AidenOnTheGoTests/AidenChatMarkdownTests.swift`
 
 **Interfaces:**
+
 - Consumes: `AidenSandboxedHTMLView` (Task 3).
 - Produces:
   - `enum AidenSVGPreview { static let maximumSourceBytes = 1_048_576; static func offersView(language: String?, source: String, isOpen: Bool) -> Bool; static func document(for source: String) -> String? }`.
   - `AidenCodeBlockView.init(source:language:isOpen: Bool = false, copyController:)`.
 
 **Decisions:**
+
 - `offersView` is true only for a closed fence, a language that normalizes to `svg` (case-insensitive), source that isn't empty, and source of at most 1 MiB. A closed fence inside a reply that is still streaming counts, because its source is final.
 - `document(for:)` trims the source and parses it with `XMLParser` (`shouldProcessNamespaces = true`); the root element's local name must be `svg`, otherwise `nil`. A standalone `image/svg+xml` image draws blank without the SVG namespace, and agent SVG often leaves it out. When the root has no namespace, insert ` xmlns="http://www.w3.org/2000/svg"` right after the opening `<svg`; when it has another namespace, return `nil`. Then base64-encode the result, and wraps it as `<img src="data:image/svg+xml;base64,…" alt="">` on a white card (`#fff`, `border-radius:12px`, `padding:12px`, `img{display:block;max-width:100%;height:auto;margin:0 auto}`). An SVG used as an `<img>` runs no script and fetches nothing. The preview uses `allowsScripts: false` and the network block as belts and braces. Pinch-zoom stays on.
 - Header: a `View` button with the `eye` symbol, placed before Copy, at least 44×44. Its accessibility label is "View drawing", and it matches Copy's style.
@@ -171,15 +180,18 @@ This is the foundation for Tasks 4 and 7. It is one `WKWebView` wrapper that loa
 ### Task 5: Preview toggle on SVG code blocks (desktop)
 
 **Files:**
+
 - Create: `renderer/lib/svg-fence-preview.ts`, `renderer/lib/svg-fence-preview.test.ts`
 - Modify: `renderer/components/code-block.tsx` (header toggle and a new `previewable` prop), `renderer/components/markdown.tsx:172-178` (passes `previewable` for chat fences; it already passes `plain` for open ones). `CodeBlock` is also used by `render_ui` (`renderer/components/aiden-ui/components.tsx:227`), which reaches native visuals and the phone viewer bundle. Leave that call site alone so the toggle never appears there.
 - Test: `renderer/components/code-block.test.tsx` (new)
 - Modify: `package.json`, appending both test files to `test:transcript-images`
 
 **Interfaces:**
+
 - Produces: `export const SVG_PREVIEW_MAX_BYTES = 1_048_576; export function svgPreviewSource(code: string, lang: string | undefined): string | null`. It returns a `data:image/svg+xml;charset=utf-8,…` URL (`encodeURIComponent`) or `null`.
 
 **Decisions:**
+
 - `svgPreviewSource` returns a URL only when `lang` lowercases to `svg`, the trimmed source (after an optional `<?xml …?>` prolog and comments) starts with `<svg` and ends with `</svg>`, and its UTF-8 length is at most `SVG_PREVIEW_MAX_BYTES`. The real check is decoding. `<img onError>` switches to the note "Couldn't draw this SVG.".
 - `CodeBlock` gains `previewable?: boolean` (default `false`). It shows the toggle button only when `previewable && !plain` and `svgPreviewSource` isn't null. The button's accessible name is always "Preview", and `aria-pressed` carries the state (it shows the code icon while pressed). It's styled like `CopyButton`, with the same visibility on hover and focus-visible. It starts unpressed, showing the code. Preview replaces the `<pre>` with `<img alt="SVG preview">` on a white card (`#fff`, `rounded-card`, `p-3`, `max-h-[32rem]`, `object-contain`). The main window's CSP already allows `img-src data:`.
 
@@ -201,29 +213,32 @@ This is the foundation for Tasks 4 and 7. It is one `WKWebView` wrapper that loa
 Unstyled agent HTML should look like Aiden, and any style of the page's own should win. The variables are named after desktop's `GENERATIVE_UI_THEME_VARIABLES` (`renderer/shared/generative-ui-theme.ts`), so one agent instruction works on both.
 
 **Files:**
+
 - Create: `ios/AidenOnTheGo/Features/Remote/AidenHTMLPreviewTheme.swift`
 - Test: `ios/AidenOnTheGoTests/AidenSandboxedHTMLTests.swift`
 
 **Interfaces:**
+
 - Produces: `enum AidenHTMLPreviewTheme { static func css(palette: AidenPalette, colorScheme: ColorScheme, uiFont: AidenUIFontID, codeFont: AidenCodeFontID, bodySize: CGFloat) -> String }`. Callers pass `AidenMarkdownMetrics.bodySize(for: dynamicTypeSize)` as `bodySize`.
 
 **Decisions:**
+
 - All rules sit under `:where()`, which has zero specificity: `:where(:root){<vars>;color-scheme:<light|dark>;background:var(--surface-background);color:var(--text-primary);font-family:var(--font-ui-family);font-size:<bodySize>px;-webkit-text-size-adjust:100%}`, `:where(body){margin:0;padding:16px}`, `:where(a){color:var(--accent)}`, `:where(code,kbd,pre,samp){font-family:var(--font-code-family)}`.
 - Variables:
 
-  | Variable | Source |
-  | --- | --- |
-  | `--surface-background` | `canvasHex` |
-  | `--surface-popover` | `raisedHex` |
-  | `--text-primary` | `foregroundHex` |
-  | `--text-secondary` | `secondaryHex` |
-  | `--border-separator` | `foregroundHex` at alpha 0.087, as `rgb(r g b / 0.087)` |
-  | `--accent` | `accentHex` |
-  | `--fill-accent` | `accentSolidFill.fillHex` |
-  | `--fill-accent-foreground` | `accentSolidFill.contentHex` |
-  | `--font-ui-family` | `system` → `-apple-system,system-ui,sans-serif`; `rounded` → `ui-rounded,-apple-system,system-ui,sans-serif`; `humanist` → `"Avenir Next",-apple-system,sans-serif` |
-  | `--font-code-family` | `sfMono` → `ui-monospace,"SF Mono",Menlo,monospace`; `menlo` → `Menlo,ui-monospace,monospace`; `monaco` → `Monaco,ui-monospace,monospace` |
-  | `--ui-font-size` | `<bodySize>px` |
+  | Variable                   | Source                                                                                                                                                              |
+  | -------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+  | `--surface-background`     | `canvasHex`                                                                                                                                                         |
+  | `--surface-popover`        | `raisedHex`                                                                                                                                                         |
+  | `--text-primary`           | `foregroundHex`                                                                                                                                                     |
+  | `--text-secondary`         | `secondaryHex`                                                                                                                                                      |
+  | `--border-separator`       | `foregroundHex` at alpha 0.087, as `rgb(r g b / 0.087)`                                                                                                             |
+  | `--accent`                 | `accentHex`                                                                                                                                                         |
+  | `--fill-accent`            | `accentSolidFill.fillHex`                                                                                                                                           |
+  | `--fill-accent-foreground` | `accentSolidFill.contentHex`                                                                                                                                        |
+  | `--font-ui-family`         | `system` → `-apple-system,system-ui,sans-serif`; `rounded` → `ui-rounded,-apple-system,system-ui,sans-serif`; `humanist` → `"Avenir Next",-apple-system,sans-serif` |
+  | `--font-code-family`       | `sfMono` → `ui-monospace,"SF Mono",Menlo,monospace`; `menlo` → `Menlo,ui-monospace,monospace`; `monaco` → `Monaco,ui-monospace,monospace`                           |
+  | `--ui-font-size`           | `<bodySize>px`                                                                                                                                                      |
 
 - A theme change reloads the preview, with the view keyed on the CSS string. Restyling a live page in place isn't worth it for a sheet.
 
@@ -239,15 +254,18 @@ Unstyled agent HTML should look like Aiden, and any style of the page's own shou
 ### Task 7: Preview / Source for `.html` workspace files (iOS)
 
 **Files:**
+
 - Modify: `ios/AidenOnTheGo/Features/Remote/AidenWorkspaceEnvironmentView.swift:488-565` (`AidenWorkspaceFileEditorView`)
 - Modify: `ios/AidenOnTheGo/Models/AidenWorkspaceEnvironment.swift` (pure helper beside `AidenWorkspaceSourcePreview`)
 - Test: `ios/AidenOnTheGoTests/AidenSandboxedHTMLTests.swift`
 
 **Interfaces:**
+
 - Consumes: `AidenSandboxedHTMLView` (Task 3), `AidenHTMLPreviewTheme.css` (Task 6).
 - Produces: `enum AidenWorkspaceHTMLPreview { enum Mode: Equatable { case preview, source }; static func isHTML(_ displayPath: String) -> Bool; static func initialMode(for document: AidenWorkspaceFileDocument) -> Mode; static func canPreview(_ document: AidenWorkspaceFileDocument) -> Bool }`.
 
 **Decisions:**
+
 - `isHTML` is true when the path extension, lowercased, is `html` or `htm`.
 - `canPreview` is `isHTML && !document.truncated`. `initialMode` is `.preview` when `canPreview`, otherwise `.source`.
 - For an HTML file, a segmented `Picker` ("Preview" / "Source") goes in the principal toolbar slot. It is disabled when `!canPreview`, and then a footnote reads "This file is too large to preview."
@@ -273,6 +291,7 @@ Unstyled agent HTML should look like Aiden, and any style of the page's own shou
 Today the activity line's "File written · name" ([AidenActivityFeed.swift:146](../../ios/AidenOnTheGo/Features/Chat/AidenActivityFeed.swift)) is plain text. It should open the file through the chat's existing `./relative` link routing, which leads to `AidenWorkspaceFilesView`, and with Task 7 an HTML file opens rendered.
 
 **Files:**
+
 - Modify: `ios/AidenOnTheGo/Models/AidenChat.swift:384-397` (`AidenProducedFile`)
 - Modify: `ios/AidenOnTheGo/Features/Chat/AidenActivityFeed.swift:141-158`
 - Modify: `ios/AidenOnTheGo/Features/Chat/AidenChatDetailView.swift:240-249` (sets the environment flag from the same condition the link handler uses)
@@ -280,9 +299,11 @@ Today the activity line's "File written · name" ([AidenActivityFeed.swift:146](
 - Test: `ios/AidenOnTheGoTests/AidenChatTests.swift`
 
 **Interfaces:**
+
 - Produces: `extension AidenProducedFile { var workspaceLink: URL? }` and `EnvironmentValues.aidenOpensWorkspaceFileLinks: Bool` (default `false`). `workspaceLink` returns `./` plus the percent-encoded `relativePath`, or `nil` whenever `AidenWorkspaceFileLink.path` would refuse that link. The router refuses `:`, `?`, `#`, `\`, control characters, more than 21 segments and over 4,096 bytes (`AidenWorkspaceEnvironment.swift:341-349`), and the Mac accepts POSIX colon filenames, so this happens. A nil link leaves the label as plain text.
 
 **Decisions:**
+
 - `AidenChatDetailView` sets `aidenOpensWorkspaceFileLinks = model.chat.botId == nil && workspace?.hasFolder == true`.
 - Where that flag is true and `workspaceLink` isn't nil, the whole activity line becomes a plain `Button` that calls `openURL(link)`. A caption2 label alone is far below 44 pt; the line is wide and gets `.frame(minHeight: 44, alignment: .leading)` with `.contentShape(Rectangle())`. The text keeps its style and the file name gains an underline on press. Its accessibility hint is "Opens the file", and an accessibility action named "Open file" is added, because the row combines its children.
 - Edited files get the same treatment.

@@ -1,6 +1,9 @@
 import { join } from "node:path";
 import { AidenMcpHost } from "../../../main/services/aiden-mcp-server.js";
-import { AidenMcpToolRunner, type AidenMcpServices } from "../../../main/services/aiden-mcp-tools.js";
+import {
+  AidenMcpToolRunner,
+  type AidenMcpServices,
+} from "../../../main/services/aiden-mcp-tools.js";
 import {
   AidenMcpProvenanceLog,
   emptyAidenMcpProvenanceDocument,
@@ -32,12 +35,16 @@ export interface CliMcpHostOptions {
 export function createCliMcpHost(options: CliMcpHostOptions): AidenMcpHost {
   const provenanceFile = join(options.agentDir, CLI_MCP_PROVENANCE_FILE);
   const provenance = new AidenMcpProvenanceLog({
-    load: async () => parseAidenMcpProvenanceDocument(readJson<unknown>(provenanceFile, emptyAidenMcpProvenanceDocument())),
+    load: async () =>
+      parseAidenMcpProvenanceDocument(
+        readJson<unknown>(provenanceFile, emptyAidenMcpProvenanceDocument()),
+      ),
     save: async (document) => atomicJson(provenanceFile, document),
   });
   const tools = new AidenMcpToolRunner({
     services: options.services,
-    acquireAuthorization: (appId, tracksMutationDrain) => options.state.acquireDeviceAuthorization(appId, tracksMutationDrain),
+    acquireAuthorization: (appId, tracksMutationDrain) =>
+      options.state.acquireDeviceAuthorization(appId, tracksMutationDrain),
     recordProvenance: (chatId, entry) => provenance.record(chatId, entry),
     appVersion: options.appVersion,
     hostName: async () => (await options.state.snapshot()).displayName,
@@ -52,12 +59,14 @@ export function createCliMcpHost(options: CliMcpHostOptions): AidenMcpHost {
     // Category-only, as on the desktop: never a credential, app name, chat or path.
     log: (event, details) => {
       const problem = typeof details?.problem === "string" ? ` (${details.problem})` : "";
-      if (event === "start-failed") process.stderr.write(`aiden: The MCP server could not start${problem}.\n`);
+      if (event === "start-failed")
+        process.stderr.write(`aiden: The MCP server could not start${problem}.\n`);
     },
   });
 }
 
-export const CLI_APPS_USAGE = "Usage: apps list | connect <name> [--access read|supervised] | revoke <app-id> | on | off";
+export const CLI_APPS_USAGE =
+  "Usage: apps list | connect <name> [--access read|supervised] | revoke <app-id> | on | off";
 
 /**
  * Daemon side of `aiden apps`. The command itself sends nothing; a connect
@@ -75,11 +84,16 @@ export async function cliAppsCommand(host: AidenMcpHost, args: string[]): Promis
       // the token is issued means no failure here can lose a token.
       await host.setEnabled(true);
       const issued = await host.issueApp({ name, access });
-      const connection: CliAppConnection = { app: issued.app, token: issued.credential, server: await host.status() };
+      const connection: CliAppConnection = {
+        app: issued.app,
+        token: issued.credential,
+        server: await host.status(),
+      };
       return connection;
     }
     case "revoke": {
-      if (rest.length !== 1 || !rest[0]) throw new Error("Usage: apps revoke <app-id> (see `aiden apps list`)");
+      if (rest.length !== 1 || !rest[0])
+        throw new Error("Usage: apps revoke <app-id> (see `aiden apps list`)");
       const revoked = await host.revokeApp(rest[0]);
       if (!revoked) throw new Error("No connected app has that id. See `aiden apps list`.");
       return { revoked };
@@ -100,7 +114,8 @@ function parseConnectArgs(args: string[]): { name: string; access: AidenRemoteAg
     const arg = args[index]!;
     if (arg === "--access" || arg.startsWith("--access=")) {
       const value = arg === "--access" ? args[++index] : arg.slice("--access=".length);
-      if (value !== "read" && value !== "supervised") throw new Error("Access is read or supervised.");
+      if (value !== "read" && value !== "supervised")
+        throw new Error("Access is read or supervised.");
       access = value;
     } else if (arg.startsWith("--")) {
       throw new Error(CLI_APPS_USAGE);
@@ -109,7 +124,7 @@ function parseConnectArgs(args: string[]): { name: string; access: AidenRemoteAg
     }
   }
   const name = words.join(" ").trim();
-  if (!name) throw new Error("Name the app, for example `aiden apps connect \"Claude Code\"`.");
+  if (!name) throw new Error('Name the app, for example `aiden apps connect "Claude Code"`.');
   if ([...name].length > 80) throw new Error("An app name is at most 80 characters.");
   return { name, access };
 }

@@ -12,7 +12,9 @@ function isRecord(value) {
 }
 
 function median(values) {
-  const sorted = [...values].filter((value) => Number.isFinite(value) && value > 0).sort((a, b) => a - b);
+  const sorted = [...values]
+    .filter((value) => Number.isFinite(value) && value > 0)
+    .sort((a, b) => a - b);
   if (sorted.length === 0) return null;
   const middle = Math.floor(sorted.length / 2);
   if (sorted.length % 2 === 1) return sorted[middle];
@@ -27,7 +29,11 @@ export function normalizeSpecFile(file) {
   if (index >= 0) return posix.slice(index + marker.length);
   if (posix.startsWith("tests/e2e/")) return posix.slice("tests/e2e/".length);
   const relative = posix.replace(/^\.\//u, "");
-  if (relative.endsWith(".spec.ts") && !relative.startsWith("/") && !/^[A-Za-z]:\//u.test(relative)) {
+  if (
+    relative.endsWith(".spec.ts") &&
+    !relative.startsWith("/") &&
+    !/^[A-Za-z]:\//u.test(relative)
+  ) {
     return relative;
   }
   return posix.split("/").filter(Boolean).at(-1) ?? "";
@@ -163,7 +169,9 @@ export function mergeTimingArtifacts(storePath, directory, outPath) {
 }
 
 function usage() {
-  throw new Error("Usage: node scripts/ci-e2e-timings.mjs extract <report> <out> | merge <store> <extracted...> --platform <darwin|linux> --out <store> | merge-dir <store> <dir> --out <store>");
+  throw new Error(
+    "Usage: node scripts/ci-e2e-timings.mjs extract <report> <out> | merge <store> <extracted...> --platform <darwin|linux> --out <store> | merge-dir <store> <dir> --out <store>",
+  );
 }
 
 function main(argv = process.argv.slice(2)) {

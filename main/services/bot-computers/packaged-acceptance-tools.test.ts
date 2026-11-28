@@ -19,18 +19,31 @@ import path from "node:path";
 import { after, test } from "node:test";
 import { promisify } from "node:util";
 import type { AgentTool } from "@earendil-works/pi-agent-core";
-import { validateToolArguments, type Context, type Message, type Model, type ToolResultMessage } from "@earendil-works/pi-ai";
+import {
+  validateToolArguments,
+  type Context,
+  type Message,
+  type Model,
+  type ToolResultMessage,
+} from "@earendil-works/pi-ai";
 import { complete } from "@earendil-works/pi-ai/compat";
 import { createBotComputerShellTool } from "./computer-shell-tool.js";
 import { createBotComputerTool, createBotComputerToolState } from "./computer-tool.js";
 import { BOT_COMPUTER_GIVE_BACK_NOTE, createBotComputerControl } from "./control.js";
-import type { BotComputerConnection, BotComputerGuestCommandResult, BotComputerScreen } from "./types.js";
+import type {
+  BotComputerConnection,
+  BotComputerGuestCommandResult,
+  BotComputerScreen,
+} from "./types.js";
 
 interface AcceptanceCore {
   ACCEPTANCE_PROMPT: string;
   ACCEPTANCE_FINAL_TEXT: string;
   acceptanceChatCompletionPath(capability: string): string;
-  acceptanceResponse(request: unknown, context: { giveBackNote: string; nonce: string }): { chunks: unknown[] };
+  acceptanceResponse(
+    request: unknown,
+    context: { giveBackNote: string; nonce: string },
+  ): { chunks: unknown[] };
   acceptanceSharedFileName(nonce: string): string;
   evaluateAcceptanceRequests(
     requests: unknown[],
@@ -38,7 +51,9 @@ interface AcceptanceCore {
   ): { ok: boolean; failures: string[]; evidence: Record<string, unknown> };
 }
 
-const core = (await import(path.resolve("scripts/bot-computers-packaged-acceptance-core.mjs"))) as AcceptanceCore;
+const core = (await import(
+  path.resolve("scripts/bot-computers-packaged-acceptance-core.mjs")
+)) as AcceptanceCore;
 const run = promisify(execFile);
 const BOT = "bot-ada";
 const NONCE = "0123456789abcdef0123456789abcdef";
@@ -54,7 +69,10 @@ after(async () => {
 async function loopbackModel() {
   const requests: unknown[] = [];
   const server = createServer((request, response) => {
-    if (request.method !== "POST" || request.url !== core.acceptanceChatCompletionPath(CAPABILITY)) {
+    if (
+      request.method !== "POST" ||
+      request.url !== core.acceptanceChatCompletionPath(CAPABILITY)
+    ) {
       response.writeHead(404).end();
       return;
     }
@@ -65,13 +83,18 @@ async function loopbackModel() {
       const body: unknown = JSON.parse(text);
       requests.push(body);
       response.writeHead(200, { "content-type": "text/event-stream" });
-      for (const chunk of core.acceptanceResponse(body, context).chunks) response.write(`data: ${JSON.stringify(chunk)}\n\n`);
+      for (const chunk of core.acceptanceResponse(body, context).chunks)
+        response.write(`data: ${JSON.stringify(chunk)}\n\n`);
       response.end("data: [DONE]\n\n");
     });
   });
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
   const { port } = server.address() as AddressInfo;
-  return { port, requests, close: () => new Promise<void>((resolve) => server.close(() => resolve())) };
+  return {
+    port,
+    requests,
+    close: () => new Promise<void>((resolve) => server.close(() => resolve())),
+  };
 }
 
 /** A 2560×1600 screen that scales captures to the width asked for, as the RFB screen does. */
@@ -101,7 +124,10 @@ async function botComputer({ takeOverOnWait }: { takeOverOnWait: number }) {
   const home = path.join(root, "home");
   const bin = path.join(root, "bin");
   await Promise.all([mkdir(path.join(home, "Shared"), { recursive: true }), mkdir(bin)]);
-  await writeFile(path.join(bin, "sw_vers"), '#!/bin/sh\n[ "$1" = -productVersion ] && echo 26.6.2\n');
+  await writeFile(
+    path.join(bin, "sw_vers"),
+    '#!/bin/sh\n[ "$1" = -productVersion ] && echo 26.6.2\n',
+  );
   await chmod(path.join(bin, "sw_vers"), 0o755);
 
   const control = createBotComputerControl();
@@ -115,7 +141,10 @@ async function botComputer({ takeOverOnWait }: { takeOverOnWait: number }) {
     ensureRunning: async () => connection,
     touch: () => {},
     async runGuestCommand(_botId: string, command: string): Promise<BotComputerGuestCommandResult> {
-      const { stdout, stderr } = await run("/bin/sh", ["-c", command], { cwd: home, env: { HOME: home, PATH: `${bin}:/usr/bin:/bin` } });
+      const { stdout, stderr } = await run("/bin/sh", ["-c", command], {
+        cwd: home,
+        env: { HOME: home, PATH: `${bin}:/usr/bin:/bin` },
+      });
       return { exitCode: 0, stdout, stderr, truncated: false, timedOut: false };
     },
   };
@@ -170,7 +199,11 @@ async function playBot(port: number, tools: AgentTool[]) {
     assert.equal(reply.errorMessage, undefined);
     messages.push(reply);
     const toolCalls = reply.content.filter((part) => part.type === "toolCall");
-    if (toolCalls.length === 0) return { calls, reply: reply.content.map((part) => (part.type === "text" ? part.text : "")).join("") };
+    if (toolCalls.length === 0)
+      return {
+        calls,
+        reply: reply.content.map((part) => (part.type === "text" ? part.text : "")).join(""),
+      };
     for (const call of toolCalls) {
       const tool = tools.find((candidate) => candidate.name === call.name);
       assert.ok(tool, `the acceptance called a tool the Bot has: ${call.name}`);
@@ -203,12 +236,23 @@ test("the packaged acceptance's calls are valid for the real computer tools, and
       [],
       "no call came back as an error",
     );
-    const sharedFileText = await readFile(path.join(computer.sharedFolder, core.acceptanceSharedFileName(NONCE)), "utf8");
-    assert.deepEqual(core.evaluateAcceptanceRequests(model.requests, { ...context, sharedFileText }), {
-      ok: true,
-      failures: [],
-      evidence: { captureSize: { width: 1280, height: 800 }, waits: 2, interrupted: "wait", macosVersion: "26.6.2" },
-    });
+    const sharedFileText = await readFile(
+      path.join(computer.sharedFolder, core.acceptanceSharedFileName(NONCE)),
+      "utf8",
+    );
+    assert.deepEqual(
+      core.evaluateAcceptanceRequests(model.requests, { ...context, sharedFileText }),
+      {
+        ok: true,
+        failures: [],
+        evidence: {
+          captureSize: { width: 1280, height: 800 },
+          waits: 2,
+          interrupted: "wait",
+          macosVersion: "26.6.2",
+        },
+      },
+    );
   } finally {
     await model.close();
   }

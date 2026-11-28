@@ -35,7 +35,10 @@ test("the view has no slot for ids outside the three image providers", async () 
   assert.equal(await view.read("anthropic"), undefined);
   assert.equal(await view.read("../openrouter"), undefined);
   assert.deepEqual(await view.list(), []);
-  await assert.rejects(view.modify("anthropic", async () => ({ type: "api_key", key: "x" })), /no credential slot/u);
+  await assert.rejects(
+    view.modify("anthropic", async () => ({ type: "api_key", key: "x" })),
+    /no credential slot/u,
+  );
   await assert.rejects(view.delete("tts"), /no credential slot/u);
   assert.equal(base.entries.size, 1);
 });

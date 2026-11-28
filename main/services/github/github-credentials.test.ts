@@ -56,7 +56,10 @@ test("environment tokens follow gh's host precedence", () => {
 
 test("an unknown remote host is not authorized by a global enterprise token", async () => {
   const { credentials, asked } = source({ env: { GH_ENTERPRISE_TOKEN: "enterprise-secret" } });
-  assert.equal(isAuthorizedGitHubHost("attacker.example", { GH_ENTERPRISE_TOKEN: "enterprise-secret" }), false);
+  assert.equal(
+    isAuthorizedGitHubHost("attacker.example", { GH_ENTERPRISE_TOKEN: "enterprise-secret" }),
+    false,
+  );
   assert.equal(await credentials.authorizesHost("attacker.example"), false);
   const result = await credentials.resolve("attacker.example");
   assert.equal(result.ok, false);

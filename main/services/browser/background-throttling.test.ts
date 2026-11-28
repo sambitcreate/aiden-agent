@@ -14,7 +14,14 @@ function fixture() {
       writes.push(value);
     },
   });
-  return { policy, writes, enabled: () => enabled, destroy: () => { destroyed = true; } };
+  return {
+    policy,
+    writes,
+    enabled: () => enabled,
+    destroy: () => {
+      destroyed = true;
+    },
+  };
 }
 
 test("overlapping capture and automation preserve scheduling until the last owner finishes", () => {

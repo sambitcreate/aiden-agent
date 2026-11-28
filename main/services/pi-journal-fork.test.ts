@@ -21,7 +21,10 @@ const model = fauxProvider({
   models: [{ id: "faux-fork", contextWindow: 100_000, maxTokens: 1_000 }],
 }).getModel() as Model<Api>;
 
-function reply(content: AssistantMessage["content"], stopReason: AssistantMessage["stopReason"] = "stop"): AssistantMessage {
+function reply(
+  content: AssistantMessage["content"],
+  stopReason: AssistantMessage["stopReason"] = "stop",
+): AssistantMessage {
   return {
     role: "assistant",
     content,
@@ -29,7 +32,11 @@ function reply(content: AssistantMessage["content"], stopReason: AssistantMessag
     provider: model.provider,
     model: model.id,
     usage: {
-      input: 10, output: 10, cacheRead: 0, cacheWrite: 0, totalTokens: 20,
+      input: 10,
+      output: 10,
+      cacheRead: 0,
+      cacheWrite: 0,
+      totalTokens: 20,
       cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
     },
     stopReason,
@@ -75,19 +82,43 @@ async function storeFixture(t: test.TestContext) {
 /** u0 → a0, a checkpoint, u1 → tool call → a1, then u2 → a2 after the cut. */
 async function sourceWithTurns(store: PiCompactionSessionStore): Promise<void> {
   const source = await store.openChat("source");
-  await settledTurn(source, [visible("u0", "user", "hello")], [reply([{ type: "text", text: "hi" }])], "a0");
+  await settledTurn(
+    source,
+    [visible("u0", "user", "hello")],
+    [reply([{ type: "text", text: "hi" }])],
+    "a0",
+  );
   await source.appendCompaction({
-    id: "checkpoint", summary: "PRE_CUT_SUMMARY", retainedTail: [], tokensBefore: 100,
+    id: "checkpoint",
+    summary: "PRE_CUT_SUMMARY",
+    retainedTail: [],
+    tokensBefore: 100,
   });
-  const turnOne = [visible("u0", "user", "hello"), visible("a0", "assistant", "hi"), visible("u1", "user", "find the file")];
-  await settledTurn(source, turnOne, [
-    reply([{ type: "toolCall", id: "call-1", name: "read", arguments: { path: "a.txt" } }], "toolUse"),
-    {
-      role: "toolResult", toolCallId: "call-1", toolName: "read",
-      content: [{ type: "text", text: "PRE_CUT_TOOL_OUTPUT" }], isError: false, timestamp: 2,
-    },
-    reply([{ type: "text", text: "found it" }]),
-  ], "a1");
+  const turnOne = [
+    visible("u0", "user", "hello"),
+    visible("a0", "assistant", "hi"),
+    visible("u1", "user", "find the file"),
+  ];
+  await settledTurn(
+    source,
+    turnOne,
+    [
+      reply(
+        [{ type: "toolCall", id: "call-1", name: "read", arguments: { path: "a.txt" } }],
+        "toolUse",
+      ),
+      {
+        role: "toolResult",
+        toolCallId: "call-1",
+        toolName: "read",
+        content: [{ type: "text", text: "PRE_CUT_TOOL_OUTPUT" }],
+        isError: false,
+        timestamp: 2,
+      },
+      reply([{ type: "text", text: "found it" }]),
+    ],
+    "a1",
+  );
   await settledTurn(
     source,
     [...turnOne, visible("a1", "assistant", "found it"), visible("u2", "user", "POST_CUT_PROMPT")],
@@ -120,21 +151,30 @@ test("a fork carries model context through the cut and nothing after it", async 
   ]);
 
   // The fork's next turn appends only its new prompt, not the copied ones.
-  await syncChatMessagesToPiSession(reopened, [
-    visible("f-u0", "user", "hello"),
-    visible("f-a0", "assistant", "hi"),
-    visible("f-u1", "user", "find the file"),
-    visible("f-a1", "assistant", "found it"),
-    visible("f-u2", "user", "a different follow-up"),
-  ], model, true);
-  const after = (await reopened.getBranch()).flatMap((entry) => (entry.type === "message" ? [entry.message] : []));
+  await syncChatMessagesToPiSession(
+    reopened,
+    [
+      visible("f-u0", "user", "hello"),
+      visible("f-a0", "assistant", "hi"),
+      visible("f-u1", "user", "find the file"),
+      visible("f-a1", "assistant", "found it"),
+      visible("f-u2", "user", "a different follow-up"),
+    ],
+    model,
+    true,
+  );
+  const after = (await reopened.getBranch()).flatMap((entry) =>
+    entry.type === "message" ? [entry.message] : [],
+  );
   assert.deepEqual(
     after.filter((message) => message.role === "user").map((message) => texts([message])[0]),
     ["hello", "find the file", "a different follow-up"],
   );
 
   // The source journal is untouched by the fork.
-  const source = texts((await store.openChat("source").then((session) => session.buildContext())).messages);
+  const source = texts(
+    (await store.openChat("source").then((session) => session.buildContext())).messages,
+  );
   assert.ok(source.includes("POST_CUT_ANSWER"));
 });
 
@@ -143,17 +183,27 @@ test("a fork of a fork can cut at an earlier inherited reply", async (t) => {
   await sourceWithTurns(store);
   const fork = (sourceChatId: string, targetChatId: string, sourceIds: string[], prefix: string) =>
     store.forkChat({
-      sourceChatId, targetChatId, targetCreatedAt: Date.now(),
+      sourceChatId,
+      targetChatId,
+      targetCreatedAt: Date.now(),
       messages: sourceIds.map((sourceId) => ({ sourceId, id: `${prefix}${sourceId}` })),
     });
   assert.equal(await fork("source", "fork", ["u0", "a0", "u1", "a1"], "f-"), true);
 
   // Reopen so the nested fork reads the copied journal from disk.
   const reopened = new PiCompactionSessionStore({ root: async () => root });
-  assert.equal(await reopened.forkChat({
-    sourceChatId: "fork", targetChatId: "nested", targetCreatedAt: Date.now(),
-    messages: [{ sourceId: "f-u0", id: "g-u0" }, { sourceId: "f-a0", id: "g-a0" }],
-  }), true);
+  assert.equal(
+    await reopened.forkChat({
+      sourceChatId: "fork",
+      targetChatId: "nested",
+      targetCreatedAt: Date.now(),
+      messages: [
+        { sourceId: "f-u0", id: "g-u0" },
+        { sourceId: "f-a0", id: "g-a0" },
+      ],
+    }),
+    true,
+  );
   // The same cut taken in the original chat is the oracle.
   assert.equal(await fork("source", "direct", ["u0", "a0"], "d-"), true);
 
@@ -166,19 +216,30 @@ test("a fork of a fork can cut at an earlier inherited reply", async (t) => {
   assert.deepEqual(texts((await nested.buildContext()).messages), ["hello", "hi"]);
 
   // The nested fork's next turn appends only its new prompt.
-  await syncChatMessagesToPiSession(nested, [
-    visible("g-u0", "user", "hello"),
-    visible("g-a0", "assistant", "hi"),
-    visible("g-u1", "user", "another question"),
-  ], model, true);
-  assert.deepEqual(texts((await nested.buildContext()).messages), ["hello", "hi", "another question"]);
+  await syncChatMessagesToPiSession(
+    nested,
+    [
+      visible("g-u0", "user", "hello"),
+      visible("g-a0", "assistant", "hi"),
+      visible("g-u1", "user", "another question"),
+    ],
+    model,
+    true,
+  );
+  assert.deepEqual(texts((await nested.buildContext()).messages), [
+    "hello",
+    "hi",
+    "another question",
+  ]);
 });
 
 test("a fork without a provable journal boundary creates no journal", async (t) => {
   const { store } = await storeFixture(t);
   const fork = (sourceChatId: string, targetChatId: string, sourceId: string) =>
     store.forkChat({
-      sourceChatId, targetChatId, targetCreatedAt: Date.now(),
+      sourceChatId,
+      targetChatId,
+      targetCreatedAt: Date.now(),
       messages: [{ sourceId, id: `${targetChatId}-message` }],
     });
 

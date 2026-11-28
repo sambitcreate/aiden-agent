@@ -43,13 +43,17 @@ test("parseAttachToWorkspaceRequest accepts valid inputs and rejects malformed f
     }),
     { chatId: "chat-1", targetWorkspaceId: "ws-1", fileAction: "copy" },
   );
-  assert.deepEqual(
-    parseAttachToWorkspaceRequest({ chatId: "chat-1", targetWorkspaceId: "ws-1" }),
-    { chatId: "chat-1", targetWorkspaceId: "ws-1" },
-  );
+  assert.deepEqual(parseAttachToWorkspaceRequest({ chatId: "chat-1", targetWorkspaceId: "ws-1" }), {
+    chatId: "chat-1",
+    targetWorkspaceId: "ws-1",
+  });
   assert.throws(() => parseAttachToWorkspaceRequest({ chatId: "", targetWorkspaceId: "ws-1" }));
   assert.throws(() =>
-    parseAttachToWorkspaceRequest({ chatId: "chat-1", targetWorkspaceId: "ws-1", fileAction: "delete" }),
+    parseAttachToWorkspaceRequest({
+      chatId: "chat-1",
+      targetWorkspaceId: "ws-1",
+      fileAction: "delete",
+    }),
   );
   assert.throws(() =>
     parseAttachToWorkspaceRequest({ chatId: "chat-1", targetWorkspaceId: "ws-1", extra: true }),
@@ -73,7 +77,12 @@ test("parseChatFirstMessage parses ephemeral flag and rejects ephemeral + worktr
       workspaceId: "default",
       turnId: "turn-1",
       ephemeral: true,
-      worktree: { sourceWorkspaceId: "default", baseRef: "main", fromOrigin: false, idempotencyKey: draftId },
+      worktree: {
+        sourceWorkspaceId: "default",
+        baseRef: "main",
+        fromOrigin: false,
+        idempotencyKey: draftId,
+      },
       message: { role: "user", content: "Quick question" },
     }),
   );
@@ -86,7 +95,7 @@ test("inspectScratchFolderFiles lists regular files and skips symlinks, .git, an
     await fs.mkdir(path.join(scratch, ".git"), { recursive: true });
     await fs.mkdir(path.join(scratch, ".aiden"), { recursive: true });
     await fs.writeFile(path.join(scratch, "notes.md"), "hello");
-    await fs.writeFile(path.join(scratch, "sub", "data.json"), "{\"ok\":true}");
+    await fs.writeFile(path.join(scratch, "sub", "data.json"), '{"ok":true}');
     await fs.writeFile(path.join(scratch, ".DS_Store"), "junk");
     await fs.writeFile(path.join(scratch, ".git", "config"), "ignored");
     await fs.writeFile(path.join(scratch, ".aiden", "hooks.json"), "ignored");
@@ -99,7 +108,7 @@ test("inspectScratchFolderFiles lists regular files and skips symlinks, .git, an
       result.entries.map((entry) => entry.relativePath),
       ["notes.md", "sub/data.json"],
     );
-    assert.equal(result.totalBytes, Buffer.byteLength("hello") + Buffer.byteLength("{\"ok\":true}"));
+    assert.equal(result.totalBytes, Buffer.byteLength("hello") + Buffer.byteLength('{"ok":true}'));
 
     const missing = await inspectScratchFolderFiles(path.join(dir, "does-not-exist"));
     assert.equal(missing.hasFiles, false);
@@ -176,7 +185,11 @@ test("ephemeral chat stays hidden from listRegular, promotes cleanly, and attach
     ]);
 
     let busy = false;
-    const recordedBoundaries: Array<{ chatId: string; targetWorkspaceId: string; copiedPaths?: readonly string[] }> = [];
+    const recordedBoundaries: Array<{
+      chatId: string;
+      targetWorkspaceId: string;
+      copiedPaths?: readonly string[];
+    }> = [];
     const revokedDesign: string[] = [];
     const releasedContext: string[] = [];
     const invalidatedWorkspaceContext: string[] = [];
@@ -271,8 +284,14 @@ test("ephemeral chat stays hidden from listRegular, promotes cleanly, and attach
     assert.equal(created.ephemeral, true);
 
     // Ephemeral chat is in raw list() (so GC keeps its journal) but hidden from listRegular().
-    assert.equal((await chatStore.list()).some((m) => m.id === chatId), true);
-    assert.equal((await chatStore.listRegular()).some((m) => m.id === chatId), false);
+    assert.equal(
+      (await chatStore.list()).some((m) => m.id === chatId),
+      true,
+    );
+    assert.equal(
+      (await chatStore.listRegular()).some((m) => m.id === chatId),
+      false,
+    );
 
     // Busy chat refuses attach.
     busy = true;
@@ -285,7 +304,10 @@ test("ephemeral chat stays hidden from listRegular, promotes cleanly, and attach
     // Inspect finds scratch file.
     const inspected = await service.inspectAttachFiles(chatId);
     assert.equal(inspected.hasFiles, true);
-    assert.deepEqual(inspected.entries.map((e) => e.relativePath), ["plan.md"]);
+    assert.deepEqual(
+      inspected.entries.map((e) => e.relativePath),
+      ["plan.md"],
+    );
 
     // Omitting fileAction when scratch files exist must reject without mutating chat or trashing scratch files.
     await assert.rejects(
@@ -298,7 +320,10 @@ test("ephemeral chat stays hidden from listRegular, promotes cleanly, and attach
     assert.deepEqual(releasedWorkspaces, []);
 
     // Attach in-place with owner + fileAction: "copy" (verifies zero self-deadlock on cancelAndSettle).
-    const attached = await service.attachToWorkspace(chatId, "ws-project", { fileAction: "copy", owner });
+    const attached = await service.attachToWorkspace(chatId, "ws-project", {
+      fileAction: "copy",
+      owner,
+    });
     assert.equal(attached.chat.workspaceId, "ws-project");
     assert.equal(attached.chat.ephemeral, undefined);
     assert.equal(attached.oldWorkspaceId, "nows-1");
@@ -308,7 +333,10 @@ test("ephemeral chat stays hidden from listRegular, promotes cleanly, and attach
 
     // Now visible in listRegular under ws-project, with all caches/boundaries updated
     // and destructive releaseChatContext (spending wipe) NOT called on attach.
-    assert.equal((await chatStore.listRegular("ws-project")).some((m) => m.id === chatId), true);
+    assert.equal(
+      (await chatStore.listRegular("ws-project")).some((m) => m.id === chatId),
+      true,
+    );
     assert.deepEqual(recordedBoundaries, [
       { chatId, targetWorkspaceId: "ws-project", copiedPaths: ["plan.md"] },
     ]);
@@ -326,7 +354,10 @@ test("ephemeral chat stays hidden from listRegular, promotes cleanly, and attach
     await chatStore.create({ id: orphanId, workspaceId: "nows-1", ephemeral: true });
     const promoted = await service.promoteEphemeral(savedId);
     assert.equal(promoted.ephemeral, undefined);
-    assert.equal((await chatStore.listRegular()).some((m) => m.id === savedId), true);
+    assert.equal(
+      (await chatStore.listRegular()).some((m) => m.id === savedId),
+      true,
+    );
 
     const swept = await service.sweepOrphanedEphemeralChats();
     assert.equal(swept, 1);
@@ -371,20 +402,38 @@ test("recordPiWorkspaceAttachedBoundary survives both normal context and skill-f
       entries.push({ type: "custom", id, parentId, seq, timestamp: Date.now(), customType, data });
       return id;
     },
-    async appendCompaction() { throw new Error("unused"); },
-    async appendBranchSummary() { throw new Error("unused"); },
-    async importBranch() { throw new Error("unused"); },
-    async getBranch() { return [...entries]; },
-    async getEntries() { return [...entries]; },
+    async appendCompaction() {
+      throw new Error("unused");
+    },
+    async appendBranchSummary() {
+      throw new Error("unused");
+    },
+    async importBranch() {
+      throw new Error("unused");
+    },
+    async getBranch() {
+      return [...entries];
+    },
+    async getEntries() {
+      return [...entries];
+    },
     async buildContext(given) {
       const branch = given ?? entries;
       const messages = branch.filter((e) => e.type === "message").map((e) => e.message);
       return { messages, thinkingLevel: "off", model: null, activeToolNames: null };
     },
-    async getLeafId() { return entries.length > 0 ? entries[entries.length - 1]!.id : null; },
-    async getMetadata() { return { id: "chat-1", createdAt: 1 }; },
-    async moveTo() { return undefined; },
-    withEntryProjectors() { return session; },
+    async getLeafId() {
+      return entries.length > 0 ? entries[entries.length - 1]!.id : null;
+    },
+    async getMetadata() {
+      return { id: "chat-1", createdAt: 1 };
+    },
+    async moveTo() {
+      return undefined;
+    },
+    withEntryProjectors() {
+      return session;
+    },
   };
 
   // Chronological placement: attach after u1, then add u2 and u3 -> skill-free keeps note after u1 (NOT after u3).
@@ -404,7 +453,11 @@ test("recordPiWorkspaceAttachedBoundary survives both normal context and skill-f
   assert.match(normalText, /My Repo/);
   assert.match(normalText, /notes\.md/);
 
-  const dummyModel = { id: "m", api: "openai-completions", provider: "openai" } as unknown as Model<Api>;
+  const dummyModel = {
+    id: "m",
+    api: "openai-completions",
+    provider: "openai",
+  } as unknown as Model<Api>;
   const projected = await projectVisibleHistoryWithoutSkills(
     session,
     [
@@ -538,18 +591,49 @@ test("legacy shared No-workspace folder refuses copying sibling chats' files and
 
 test("filterRemoteVisibleWorkspaces performs at most one chat-store scan across many No-workspace entries", async () => {
   const workspaces: Workspace[] = [
-    { id: "default", name: "No workspace", folderPath: "/tmp/d", permission: "ask", noWorkspace: true, createdAt: 1, updatedAt: 1 },
-    { id: "ws-real", name: "Real", folderPath: "/tmp/r", permission: "ask", createdAt: 1, updatedAt: 1 },
+    {
+      id: "default",
+      name: "No workspace",
+      folderPath: "/tmp/d",
+      permission: "ask",
+      noWorkspace: true,
+      createdAt: 1,
+      updatedAt: 1,
+    },
+    {
+      id: "ws-real",
+      name: "Real",
+      folderPath: "/tmp/r",
+      permission: "ask",
+      createdAt: 1,
+      updatedAt: 1,
+    },
   ];
   const chats: Array<{ workspaceId: string; ephemeral?: true }> = [];
   for (let i = 0; i < 40; i += 1) {
     const id = `nows-ephem-${i}`;
-    workspaces.push({ id, name: "No workspace", folderPath: `/tmp/${id}`, permission: "ask", noWorkspace: true, createdAt: 1, updatedAt: 1 });
+    workspaces.push({
+      id,
+      name: "No workspace",
+      folderPath: `/tmp/${id}`,
+      permission: "ask",
+      noWorkspace: true,
+      createdAt: 1,
+      updatedAt: 1,
+    });
     chats.push({ workspaceId: id, ephemeral: true });
   }
   for (let i = 0; i < 10; i += 1) {
     const id = `nows-saved-${i}`;
-    workspaces.push({ id, name: "No workspace", folderPath: `/tmp/${id}`, permission: "ask", noWorkspace: true, createdAt: 1, updatedAt: 1 });
+    workspaces.push({
+      id,
+      name: "No workspace",
+      folderPath: `/tmp/${id}`,
+      permission: "ask",
+      noWorkspace: true,
+      createdAt: 1,
+      updatedAt: 1,
+    });
     chats.push({ workspaceId: id });
   }
 
@@ -560,47 +644,80 @@ test("filterRemoteVisibleWorkspaces performs at most one chat-store scan across 
   });
   assert.equal(listCalls, 1, "must scan chatStore at most once regardless of No-workspace count");
   assert.equal(visible.length, 12); // default + ws-real + 10 saved
-  assert.equal(visible.some((w) => w.id.startsWith("nows-ephem-")), false);
+  assert.equal(
+    visible.some((w) => w.id.startsWith("nows-ephem-")),
+    false,
+  );
 
   // Zero scans when only regular/default workspaces exist.
   let zeroCalls = 0;
-  const realOnly = await filterRemoteVisibleWorkspaces(
-    workspaces.slice(0, 2),
-    async () => {
-      zeroCalls += 1;
-      return [];
-    },
-  );
+  const realOnly = await filterRemoteVisibleWorkspaces(workspaces.slice(0, 2), async () => {
+    zeroCalls += 1;
+    return [];
+  });
   assert.equal(zeroCalls, 0);
   assert.equal(realOnly.length, 2);
 });
 
 test("AidenRemoteWorkspaceService hides ephemeral-only hidden workspaces from list, get, update, and remove", async () => {
   const list: Workspace[] = [
-    { id: "ws-1", name: "App", folderPath: "/tmp/app", permission: "ask", createdAt: 1, updatedAt: 1 },
-    { id: "nows-ephemeral", name: "No workspace", folderPath: "/tmp/nows-e", permission: "ask", noWorkspace: true, createdAt: 1, updatedAt: 1 },
+    {
+      id: "ws-1",
+      name: "App",
+      folderPath: "/tmp/app",
+      permission: "ask",
+      createdAt: 1,
+      updatedAt: 1,
+    },
+    {
+      id: "nows-ephemeral",
+      name: "No workspace",
+      folderPath: "/tmp/nows-e",
+      permission: "ask",
+      noWorkspace: true,
+      createdAt: 1,
+      updatedAt: 1,
+    },
   ];
   const remote = new AidenRemoteWorkspaceService({
     application: {
       list: async () => list,
       get: async (id) => list.find((w) => w.id === id) ?? null,
-      create: async () => { throw new Error("unused"); },
-      createScratch: async () => { throw new Error("unused"); },
-      createFromFolder: async () => { throw new Error("unused"); },
-      update: async () => { throw new Error("unused"); },
+      create: async () => {
+        throw new Error("unused");
+      },
+      createScratch: async () => {
+        throw new Error("unused");
+      },
+      createFromFolder: async () => {
+        throw new Error("unused");
+      },
+      update: async () => {
+        throw new Error("unused");
+      },
       remove: async () => undefined,
     },
     browser: {
-      consumeSelection: () => { throw new Error("unused"); },
-      revalidateConsumedSelection: async () => { throw new Error("unused"); },
+      consumeSelection: () => {
+        throw new Error("unused");
+      },
+      revalidateConsumedSelection: async () => {
+        throw new Error("unused");
+      },
     },
     isWorkspaceHidden: (workspace) => workspace.id === "nows-ephemeral",
   });
 
   const listed = await remote.list();
-  assert.deepEqual(listed.workspaces.map((w) => w.id), ["ws-1"]);
+  assert.deepEqual(
+    listed.workspaces.map((w) => w.id),
+    ["ws-1"],
+  );
   await assert.rejects(() => remote.get("nows-ephemeral"), /no longer exists/u);
-  await assert.rejects(() => remote.update("nows-ephemeral", "rev_1", { name: "X" }), /no longer exists/u);
+  await assert.rejects(
+    () => remote.update("nows-ephemeral", "rev_1", { name: "X" }),
+    /no longer exists/u,
+  );
   await assert.rejects(() => remote.remove("nows-ephemeral", "rev_1"), /no longer exists/u);
   assert.equal((await remote.get("ws-1")).id, "ws-1");
 });

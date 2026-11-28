@@ -25,7 +25,11 @@ test("lists the last check's results with plain labels", () => {
   assert.ok(screen.getByText("Gmail needs reconnecting"));
   assert.ok(screen.getByText("Needs you"));
   assert.ok(screen.getByText("Sign-in"));
-  assert.equal(screen.queryByText("Bot computer"), null, "a Bot without a computer does not list one");
+  assert.equal(
+    screen.queryByText("Bot computer"),
+    null,
+    "a Bot without a computer does not list one",
+  );
 });
 
 test("a repaired check reads as fixed, not as a problem", () => {
@@ -36,7 +40,9 @@ test("a repaired check reads as fixed, not as a problem", () => {
 
 test("Check now calls back once and shows the checking state", () => {
   let calls = 0;
-  const { rerender } = render(<BotHealthGroup report={null} checking={false} onCheck={() => (calls += 1)} />);
+  const { rerender } = render(
+    <BotHealthGroup report={null} checking={false} onCheck={() => (calls += 1)} />,
+  );
   assert.ok(screen.getByText("Not checked yet"));
   fireEvent.click(screen.getByRole("button", { name: /Check now/u }));
   assert.equal(calls, 1);
@@ -46,7 +52,14 @@ test("Check now calls back once and shows the checking state", () => {
 });
 
 test("the one status reads Needs you when something waits on the person", () => {
-  render(<BotHealthGroup report={REPORT} status="needs_you" checking={false} onCheck={() => undefined} />);
+  render(
+    <BotHealthGroup
+      report={REPORT}
+      status="needs_you"
+      checking={false}
+      onCheck={() => undefined}
+    />,
+  );
   assert.ok(screen.getByText("Status"));
   assert.equal(screen.getAllByText("Needs you").length, 2, "the status and the connection");
 });

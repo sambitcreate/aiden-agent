@@ -48,8 +48,12 @@ export function remoteImageReadable(image: ExpectedImage): boolean {
  * listed. The host already checks them; this keeps a changed or swapped entry
  * from drawing as something else.
  */
-export function acceptRemoteImage(expected: ExpectedImage, content: PeerAttachmentContent): string | null {
-  if (content.mimeType !== expected.mimeType || content.bytes.byteLength !== expected.size) return null;
+export function acceptRemoteImage(
+  expected: ExpectedImage,
+  content: PeerAttachmentContent,
+): string | null {
+  if (content.mimeType !== expected.mimeType || content.bytes.byteLength !== expected.size)
+    return null;
   return bytesToBase64(content.bytes);
 }
 
@@ -98,9 +102,19 @@ class RemoteImageGone extends Error {}
 
 function imageGone(error: HostChatError): boolean {
   if (error.retryable === true) return false;
-  if ([error.code, error.remoteCode].some((code) => code === "not_found" || code === "unsupported" || code === "capability_denied"))
+  if (
+    [error.code, error.remoteCode].some(
+      (code) => code === "not_found" || code === "unsupported" || code === "capability_denied",
+    )
+  )
     return true;
-  return error.status !== undefined && error.status >= 400 && error.status < 500 && error.status !== 408 && error.status !== 429;
+  return (
+    error.status !== undefined &&
+    error.status >= 400 &&
+    error.status < 500 &&
+    error.status !== 408 &&
+    error.status !== 429
+  );
 }
 
 /**
@@ -114,7 +128,8 @@ const hostReads = new Map<string, { active: number; waiting: (() => void)[] }>()
 async function limited<T>(hostId: string, read: () => Promise<T>): Promise<T> {
   const slot = hostReads.get(hostId) ?? { active: 0, waiting: [] };
   hostReads.set(hostId, slot);
-  if (slot.active >= REMOTE_IMAGE_READS_PER_HOST) await new Promise<void>((resolve) => slot.waiting.push(resolve));
+  if (slot.active >= REMOTE_IMAGE_READS_PER_HOST)
+    await new Promise<void>((resolve) => slot.waiting.push(resolve));
   slot.active += 1;
   try {
     return await read();
@@ -143,16 +158,25 @@ function useRemoteImageReads(
             result = await read(image.id);
           } catch (error) {
             // Bytes main could not hand over as an image are not worth reading again.
-            throw new RemoteImageGone(error instanceof Error ? error.message : "The other computer sent an unreadable image.");
+            throw new RemoteImageGone(
+              error instanceof Error
+                ? error.message
+                : "The other computer sent an unreadable image.",
+            );
           }
-          if (!result.ok) throw imageGone(result.error) ? new RemoteImageGone(result.error.message) : new Error(result.error.message);
+          if (!result.ok)
+            throw imageGone(result.error)
+              ? new RemoteImageGone(result.error.message)
+              : new Error(result.error.message);
           const data = acceptRemoteImage(image, result.value);
-          if (data === null) throw new RemoteImageGone("The other computer sent a different image.");
+          if (data === null)
+            throw new RemoteImageGone("The other computer sent a different image.");
           return data;
         }),
       enabled,
       // A busy or unreachable host is asked again; one that no longer has the image is not.
-      retry: (failures: number, error: Error) => !(error instanceof RemoteImageGone) && failures < 2,
+      retry: (failures: number, error: Error) =>
+        !(error instanceof RemoteImageGone) && failures < 2,
       // The bytes behind an id never change; the client's cache time decides how long they stay.
       staleTime: Infinity,
     })),
@@ -174,8 +198,12 @@ function useRemoteImageReads(
 }
 
 /** `wanted`, kept the same array while the same images are wanted. */
-function useStableWanted(images: (ExpectedImage & { id: string })[]): (ExpectedImage & { id: string })[] {
-  const key = images.map((image) => `${image.id}\u0000${image.mimeType}\u0000${image.size}`).join("\u0001");
+function useStableWanted(
+  images: (ExpectedImage & { id: string })[],
+): (ExpectedImage & { id: string })[] {
+  const key = images
+    .map((image) => `${image.id}\u0000${image.mimeType}\u0000${image.size}`)
+    .join("\u0001");
   // The key names every field a read depends on.
   return React.useMemo(() => images, [key]);
 }
@@ -200,7 +228,10 @@ export function useRemoteChatImages(
     (id) =>
       adapter?.attachmentContent
         ? adapter.attachmentContent(chatId, id)
-        : Promise.resolve({ ok: false, error: { code: "unsupported", message: "Aiden cannot read that image here." } }),
+        : Promise.resolve({
+            ok: false,
+            error: { code: "unsupported", message: "Aiden cannot read that image here." },
+          }),
     [adapter, chatId],
   );
   const hostId = adapter?.hostId ?? "";
@@ -211,8 +242,13 @@ export function useRemoteChatImages(
     read,
     enabled && Boolean(adapter?.attachmentContent),
   );
-  const filled = React.useRef(new WeakMap<ChatMessage, { key: string; message: ChatMessage }>()).current;
-  return React.useMemo(() => withRemoteImageData(messages, loaded, filled), [messages, loaded, filled]);
+  const filled = React.useRef(
+    new WeakMap<ChatMessage, { key: string; message: ChatMessage }>(),
+  ).current;
+  return React.useMemo(
+    () => withRemoteImageData(messages, loaded, filled),
+    [messages, loaded, filled],
+  );
 }
 
 /**
@@ -259,12 +295,22 @@ export function useRemoteBotImages(
   );
   const read = React.useCallback<RemoteImageRead>(
     async (entryId) => {
-      const result = await peerHostsApi.call(hostId, { operation: "botSessionImage", resourceId: botId, itemId: entryId });
+      const result = await peerHostsApi.call(hostId, {
+        operation: "botSessionImage",
+        resourceId: botId,
+        itemId: entryId,
+      });
       return result.ok ? { ok: true, value: peerAttachmentContent(result.value) } : result;
     },
     [hostId, botId],
   );
-  const { loaded, gone } = useRemoteImageReads(hostId, ["host", hostId, "bot", botId], wanted, read, enabled);
+  const { loaded, gone } = useRemoteImageReads(
+    hostId,
+    ["host", hostId, "bot", botId],
+    wanted,
+    read,
+    enabled,
+  );
   return React.useMemo(
     () => (entries ? withRemoteBotImages(entries, loaded, gone) : entries),
     [entries, loaded, gone],
@@ -283,14 +329,33 @@ export function useRemoteBotPhoto(
   enabled = true,
 ): string | undefined {
   const query = useQuery({
-    queryKey: ["host", hostId, "bot", botId, "photo", asset?.assetRevision ?? "", asset?.byteSize ?? 0],
+    queryKey: [
+      "host",
+      hostId,
+      "bot",
+      botId,
+      "photo",
+      asset?.assetRevision ?? "",
+      asset?.byteSize ?? 0,
+    ],
     queryFn: asset
       ? () =>
           limited(hostId, async () => {
-            const result = await peerHostsApi.call(hostId, { operation: "botAvatar", resourceId: botId, itemId: asset.assetRevision });
-            if (!result.ok) throw imageGone(result.error) ? new RemoteImageGone(result.error.message) : new Error(result.error.message);
-            const data = acceptRemoteImage({ mimeType: "image/png", size: asset.byteSize }, peerAttachmentContent(result.value));
-            if (data === null) throw new RemoteImageGone("The other computer sent a different photo.");
+            const result = await peerHostsApi.call(hostId, {
+              operation: "botAvatar",
+              resourceId: botId,
+              itemId: asset.assetRevision,
+            });
+            if (!result.ok)
+              throw imageGone(result.error)
+                ? new RemoteImageGone(result.error.message)
+                : new Error(result.error.message);
+            const data = acceptRemoteImage(
+              { mimeType: "image/png", size: asset.byteSize },
+              peerAttachmentContent(result.value),
+            );
+            if (data === null)
+              throw new RemoteImageGone("The other computer sent a different photo.");
             return `data:image/png;base64,${data}`;
           })
       : skipToken,

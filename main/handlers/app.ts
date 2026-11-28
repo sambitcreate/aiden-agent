@@ -19,7 +19,11 @@
 import { appUpdateInstallNeedsPassword, supportsAppUpdates } from "../services/app-updater.js";
 import { app, logger } from "../platform.js";
 import { currentRuntimeProfile } from "../runtime-profile.js";
-import { activeLinuxDictationHoldShortcut, linuxDictationHoldSetupAvailable, linuxDictationHoldTriggerDescription } from "../services/shortcut.js";
+import {
+  activeLinuxDictationHoldShortcut,
+  linuxDictationHoldSetupAvailable,
+  linuxDictationHoldTriggerDescription,
+} from "../services/shortcut.js";
 import { hostPlatformCapabilities } from "../services/host-platform-capabilities.js";
 import { subagentsEnabled } from "../services/subagents/feature-flag.js";
 import { geminiLiveEnabled } from "../services/gemini-live/feature-flag.js";

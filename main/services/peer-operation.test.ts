@@ -15,14 +15,9 @@ type Endpoint = {
 function contractRoute(method: string, url: string) {
   const [pathname, search = ""] = url.split("?");
   for (const [template, methods] of Object.entries(protocol.paths)) {
-    const shape = new RegExp(
-      `^${template.replace(/\{[^}]+\}/gu, "[^/]+")}$`,
-      "u",
-    );
+    const shape = new RegExp(`^${template.replace(/\{[^}]+\}/gu, "[^/]+")}$`, "u");
     if (!shape.test(pathname)) continue;
-    const endpoint = (methods as Record<string, Endpoint>)[
-      method.toLowerCase()
-    ];
+    const endpoint = (methods as Record<string, Endpoint>)[method.toLowerCase()];
     if (!endpoint) continue;
     const refs = (endpoint.parameters ?? []).map((entry) => entry.$ref ?? "");
     return {
@@ -39,51 +34,182 @@ const KEY = "aiden-0123456789abcdef";
 
 test("expanded peer operations resolve to the contract's routes, not arbitrary URLs", () => {
   const cases: [Record<string, unknown>, string][] = [
-    [{ operation: "messagesWindow", resourceId: "chat_1", before: "msg:9", limit: 50 }, "chatMessagesWindow"],
-    [{ operation: "attachmentContent", resourceId: "chat_1", itemId: `a${"x".repeat(200)}` }, "getChatAttachmentContent"],
+    [
+      { operation: "messagesWindow", resourceId: "chat_1", before: "msg:9", limit: 50 },
+      "chatMessagesWindow",
+    ],
+    [
+      { operation: "attachmentContent", resourceId: "chat_1", itemId: `a${"x".repeat(200)}` },
+      "getChatAttachmentContent",
+    ],
     [{ operation: "skills", resourceId: "chat_1" }, "getChatSkills"],
     [{ operation: "tasks", resourceId: "chat_1" }, "getChatTasks"],
     [{ operation: "agents", resourceId: "chat_1", turnId: "turn_2" }, "getChatAgents"],
     [{ operation: "streamQuestion", resourceId: "stream_1" }, "getStreamQuestion"],
     [{ operation: "bots" }, "listBots"],
     [{ operation: "bot", resourceId: "bot_1" }, "getBot"],
-    [{ operation: "botConversations", query: "release notes & more", botId: "bot_1", limit: 20 }, "listBotConversations"],
+    [
+      { operation: "botConversations", query: "release notes & more", botId: "bot_1", limit: 20 },
+      "listBotConversations",
+    ],
     [{ operation: "botCapabilities", botId: "bot_1" }, "getBotCapabilityCatalog"],
-    [{ operation: "markRead", resourceId: "chat_1", idempotencyKey: KEY, body: { throughMessageId: "m1" } }, "markChatRead"],
-    [{ operation: "setTriage", resourceId: "chat_1", idempotencyKey: KEY, body: { done: true, ifRevision: 2 } }, "setChatTriage"],
-    [{ operation: "interruptAgent", resourceId: "chat_1", itemId: "agent_1", idempotencyKey: KEY }, "interruptChatAgent"],
-    [{ operation: "respondQuestion", resourceId: "prompt_1", idempotencyKey: KEY }, "respondQuestion"],
+    [
+      {
+        operation: "markRead",
+        resourceId: "chat_1",
+        idempotencyKey: KEY,
+        body: { throughMessageId: "m1" },
+      },
+      "markChatRead",
+    ],
+    [
+      {
+        operation: "setTriage",
+        resourceId: "chat_1",
+        idempotencyKey: KEY,
+        body: { done: true, ifRevision: 2 },
+      },
+      "setChatTriage",
+    ],
+    [
+      { operation: "interruptAgent", resourceId: "chat_1", itemId: "agent_1", idempotencyKey: KEY },
+      "interruptChatAgent",
+    ],
+    [
+      { operation: "respondQuestion", resourceId: "prompt_1", idempotencyKey: KEY },
+      "respondQuestion",
+    ],
     [{ operation: "inputs", resourceId: "stream_1", idempotencyKey: KEY }, "submitStreamInput"],
     [{ operation: "runCancel", resourceId: "run_1", idempotencyKey: KEY }, "cancelRun"],
-    [{ operation: "runRespondApproval", resourceId: "run_1", itemId: "approval_1", idempotencyKey: KEY }, "respondRunApproval"],
-    [{ operation: "runRespondQuestion", resourceId: "run_1", itemId: "prompt_1", idempotencyKey: KEY }, "respondRunQuestion"],
+    [
+      {
+        operation: "runRespondApproval",
+        resourceId: "run_1",
+        itemId: "approval_1",
+        idempotencyKey: KEY,
+      },
+      "respondRunApproval",
+    ],
+    [
+      {
+        operation: "runRespondQuestion",
+        resourceId: "run_1",
+        itemId: "prompt_1",
+        idempotencyKey: KEY,
+      },
+      "respondRunQuestion",
+    ],
     [{ operation: "runInputs", resourceId: "run_1", idempotencyKey: KEY }, "submitRunInput"],
     [{ operation: "createBotChat", resourceId: "bot_1", idempotencyKey: KEY }, "createBotChat"],
-    [{ operation: "botSessionImage", resourceId: "bot_1", itemId: "entry_7" }, "getBotSessionImage"],
-    [{ operation: "botAvatar", resourceId: "bot_1", itemId: `avatar_revision_${"a".repeat(32)}` }, "getBotAvatarContent"],
-    [{ operation: "uploadAttachment", resourceId: "chat_1", body: { name: "a.txt" } }, "uploadChatAttachment"],
-    [{ operation: "removeAttachment", resourceId: "chat_1", itemId: `att_${"A".repeat(43)}` }, "removeChatAttachment"],
+    [
+      { operation: "botSessionImage", resourceId: "bot_1", itemId: "entry_7" },
+      "getBotSessionImage",
+    ],
+    [
+      { operation: "botAvatar", resourceId: "bot_1", itemId: `avatar_revision_${"a".repeat(32)}` },
+      "getBotAvatarContent",
+    ],
+    [
+      { operation: "uploadAttachment", resourceId: "chat_1", body: { name: "a.txt" } },
+      "uploadChatAttachment",
+    ],
+    [
+      { operation: "removeAttachment", resourceId: "chat_1", itemId: `att_${"A".repeat(43)}` },
+      "removeChatAttachment",
+    ],
     [{ operation: "botSession", resourceId: "bot_1" }, "getBotSession"],
-    [{ operation: "botSessionEntries", resourceId: "bot_1", before: "entry_7", limit: 50 }, "getBotSessionEntries"],
-    [{ operation: "botWithdrawQueued", resourceId: "bot_1", itemId: "42", idempotencyKey: KEY }, "withdrawBotQueuedMessage"],
-    [{ operation: "botSend", resourceId: "bot_1", idempotencyKey: KEY, body: { text: "hi" } }, "sendBotMessage"],
+    [
+      { operation: "botSessionEntries", resourceId: "bot_1", before: "entry_7", limit: 50 },
+      "getBotSessionEntries",
+    ],
+    [
+      { operation: "botWithdrawQueued", resourceId: "bot_1", itemId: "42", idempotencyKey: KEY },
+      "withdrawBotQueuedMessage",
+    ],
+    [
+      { operation: "botSend", resourceId: "bot_1", idempotencyKey: KEY, body: { text: "hi" } },
+      "sendBotMessage",
+    ],
     [{ operation: "botResume", resourceId: "bot_1", idempotencyKey: KEY }, "resumeBotSession"],
     [{ operation: "botDismiss", resourceId: "bot_1", idempotencyKey: KEY }, "dismissBotSession"],
     [{ operation: "botStop", resourceId: "bot_1", idempotencyKey: KEY }, "stopBotSession"],
-    [{ operation: "botAnswerQuestion", resourceId: "bot_1", itemId: "wait-1", idempotencyKey: KEY }, "answerBotQuestion"],
-    [{ operation: "botAnswerHandoff", resourceId: "bot_1", itemId: "wait-1", idempotencyKey: KEY, body: { outcome: "done" } }, "answerBotHandoff"],
-    [{ operation: "botHandoffOpenOnMac", resourceId: "bot_1", itemId: "wait-1", idempotencyKey: KEY }, "openBotHandoffOnMac"],
+    [
+      {
+        operation: "botAnswerQuestion",
+        resourceId: "bot_1",
+        itemId: "wait-1",
+        idempotencyKey: KEY,
+      },
+      "answerBotQuestion",
+    ],
+    [
+      {
+        operation: "botAnswerHandoff",
+        resourceId: "bot_1",
+        itemId: "wait-1",
+        idempotencyKey: KEY,
+        body: { outcome: "done" },
+      },
+      "answerBotHandoff",
+    ],
+    [
+      {
+        operation: "botHandoffOpenOnMac",
+        resourceId: "bot_1",
+        itemId: "wait-1",
+        idempotencyKey: KEY,
+      },
+      "openBotHandoffOnMac",
+    ],
     [{ operation: "botPause", resourceId: "bot_1", idempotencyKey: KEY }, "pauseBot"],
     [{ operation: "botUnpause", resourceId: "bot_1", idempotencyKey: KEY }, "unpauseBot"],
-    [{ operation: "botConnectionRequest", resourceId: "bot_1", idempotencyKey: KEY, body: { pluginId: "notion" } }, "requestBotConnection"],
-    [{ operation: "botRespondPlan", resourceId: "bot_1", itemId: "plan-1", idempotencyKey: KEY, body: { decision: "approve" } }, "respondBotPlan"],
-    [{ operation: "botAnswerAccessRequest", resourceId: "bot_1", itemId: "wait-1", idempotencyKey: KEY, body: { choice: "once" } }, "answerBotAccessRequest"],
     [
-      { operation: "botRespondRoutineProposal", resourceId: "bot_1", itemId: "4b1f8a52-7f0e-4b8e-9d55-3f2c1a6b7e10", idempotencyKey: KEY, body: { decision: "accept" } },
+      {
+        operation: "botConnectionRequest",
+        resourceId: "bot_1",
+        idempotencyKey: KEY,
+        body: { pluginId: "notion" },
+      },
+      "requestBotConnection",
+    ],
+    [
+      {
+        operation: "botRespondPlan",
+        resourceId: "bot_1",
+        itemId: "plan-1",
+        idempotencyKey: KEY,
+        body: { decision: "approve" },
+      },
+      "respondBotPlan",
+    ],
+    [
+      {
+        operation: "botAnswerAccessRequest",
+        resourceId: "bot_1",
+        itemId: "wait-1",
+        idempotencyKey: KEY,
+        body: { choice: "once" },
+      },
+      "answerBotAccessRequest",
+    ],
+    [
+      {
+        operation: "botRespondRoutineProposal",
+        resourceId: "bot_1",
+        itemId: "4b1f8a52-7f0e-4b8e-9d55-3f2c1a6b7e10",
+        idempotencyKey: KEY,
+        body: { decision: "accept" },
+      },
       "respondBotRoutineProposal",
     ],
-    [{ operation: "uploadBotAttachment", resourceId: "bot_1", body: { name: "a.png" } }, "uploadBotAttachment"],
-    [{ operation: "removeBotAttachment", resourceId: "bot_1", itemId: `att_${"A".repeat(43)}` }, "removeBotAttachment"],
+    [
+      { operation: "uploadBotAttachment", resourceId: "bot_1", body: { name: "a.png" } },
+      "uploadBotAttachment",
+    ],
+    [
+      { operation: "removeBotAttachment", resourceId: "bot_1", itemId: `att_${"A".repeat(43)}` },
+      "removeBotAttachment",
+    ],
   ];
   for (const [operation, expected] of cases) {
     const request = peerOperationRequest(operation);
@@ -150,19 +276,85 @@ test("expanded peer mutations demand a client-minted key and reject malformed pa
     { operation: "attachmentContent", resourceId: "chat_1", itemId: "a/b" },
     { operation: "botAnswerQuestion", resourceId: "bot_1", itemId: "wait/1", idempotencyKey: KEY },
     { operation: "botStop", resourceId: "bot_1", idempotencyKey: KEY, body: { force: true } },
-    { operation: "botAnswerHandoff", resourceId: "bot_1", itemId: "wait/1", idempotencyKey: KEY, body: { outcome: "done" } },
-    { operation: "botAnswerHandoff", resourceId: "bot_1", itemId: "wait-1", idempotencyKey: KEY, body: { outcome: "maybe" } },
-    { operation: "botAnswerHandoff", resourceId: "bot_1", itemId: "wait-1", idempotencyKey: KEY, body: { outcome: "done", note: "   " } },
-    { operation: "botAnswerHandoff", resourceId: "bot_1", itemId: "wait-1", idempotencyKey: KEY, body: { outcome: "done", password: "x" } },
+    {
+      operation: "botAnswerHandoff",
+      resourceId: "bot_1",
+      itemId: "wait/1",
+      idempotencyKey: KEY,
+      body: { outcome: "done" },
+    },
+    {
+      operation: "botAnswerHandoff",
+      resourceId: "bot_1",
+      itemId: "wait-1",
+      idempotencyKey: KEY,
+      body: { outcome: "maybe" },
+    },
+    {
+      operation: "botAnswerHandoff",
+      resourceId: "bot_1",
+      itemId: "wait-1",
+      idempotencyKey: KEY,
+      body: { outcome: "done", note: "   " },
+    },
+    {
+      operation: "botAnswerHandoff",
+      resourceId: "bot_1",
+      itemId: "wait-1",
+      idempotencyKey: KEY,
+      body: { outcome: "done", password: "x" },
+    },
     { operation: "botAnswerHandoff", resourceId: "bot_1", itemId: "wait-1", idempotencyKey: KEY },
-    { operation: "botHandoffOpenOnMac", resourceId: "bot_1", itemId: "wait-1", idempotencyKey: KEY, body: { url: "https://x" } },
+    {
+      operation: "botHandoffOpenOnMac",
+      resourceId: "bot_1",
+      itemId: "wait-1",
+      idempotencyKey: KEY,
+      body: { url: "https://x" },
+    },
     { operation: "botPause", resourceId: "bot_1", idempotencyKey: KEY, body: { by: "mac" } },
-    { operation: "botRespondPlan", resourceId: "bot_1", itemId: "plan/1", idempotencyKey: KEY, body: { decision: "approve" } },
-    { operation: "botRespondPlan", resourceId: "bot_1", itemId: "plan-1", idempotencyKey: KEY, body: { decision: "always" } },
-    { operation: "botAnswerAccessRequest", resourceId: "bot_1", itemId: "wait-1", idempotencyKey: KEY, body: { choice: "forever" } },
-    { operation: "botAnswerAccessRequest", resourceId: "bot_1", itemId: "wait-1", idempotencyKey: KEY, body: { choice: "once", path: "/" } },
-    { operation: "botRespondRoutineProposal", resourceId: "bot_1", itemId: "not-a-proposal", idempotencyKey: KEY, body: { decision: "accept" } },
-    { operation: "botRespondRoutineProposal", resourceId: "bot_1", itemId: "4b1f8a52-7f0e-4b8e-9d55-3f2c1a6b7e10", idempotencyKey: KEY, body: { decision: "accept", reason: "other" } },
+    {
+      operation: "botRespondPlan",
+      resourceId: "bot_1",
+      itemId: "plan/1",
+      idempotencyKey: KEY,
+      body: { decision: "approve" },
+    },
+    {
+      operation: "botRespondPlan",
+      resourceId: "bot_1",
+      itemId: "plan-1",
+      idempotencyKey: KEY,
+      body: { decision: "always" },
+    },
+    {
+      operation: "botAnswerAccessRequest",
+      resourceId: "bot_1",
+      itemId: "wait-1",
+      idempotencyKey: KEY,
+      body: { choice: "forever" },
+    },
+    {
+      operation: "botAnswerAccessRequest",
+      resourceId: "bot_1",
+      itemId: "wait-1",
+      idempotencyKey: KEY,
+      body: { choice: "once", path: "/" },
+    },
+    {
+      operation: "botRespondRoutineProposal",
+      resourceId: "bot_1",
+      itemId: "not-a-proposal",
+      idempotencyKey: KEY,
+      body: { decision: "accept" },
+    },
+    {
+      operation: "botRespondRoutineProposal",
+      resourceId: "bot_1",
+      itemId: "4b1f8a52-7f0e-4b8e-9d55-3f2c1a6b7e10",
+      idempotencyKey: KEY,
+      body: { decision: "accept", reason: "other" },
+    },
     { operation: "runCancel", resourceId: "../../server", idempotencyKey: KEY },
     { operation: "bots", url: "https://elsewhere" },
     { operation: "removeAttachment", resourceId: "chat_1", itemId: "att_short" },
@@ -183,24 +375,62 @@ test("hand-off and pause operations send what the host's revision-37 routes take
   assert.equal(answer.path, `/bots/bot_1/handoffs/${fixture.answer.response.waitId}/answer`);
   assert.deepEqual(answer.body, fixture.answer.request);
   assert.throws(
-    () => peerOperationRequest({ operation: "botAnswerHandoff", resourceId: "bot_1", itemId: "wait-1", body: fixture.answer.request }),
+    () =>
+      peerOperationRequest({
+        operation: "botAnswerHandoff",
+        resourceId: "bot_1",
+        itemId: "wait-1",
+        body: fixture.answer.request,
+      }),
     /Invalid peer text/u,
     "an answer without its key never leaves this Mac",
   );
   assert.deepEqual(
-    peerOperationRequest({ operation: "botHandoffOpenOnMac", resourceId: "bot_1", itemId: "wait-1", idempotencyKey: KEY }).body,
+    peerOperationRequest({
+      operation: "botHandoffOpenOnMac",
+      resourceId: "bot_1",
+      itemId: "wait-1",
+      idempotencyKey: KEY,
+    }).body,
     fixture.openOnMac.request,
   );
-  const pause = peerOperationRequest({ operation: "botPause", resourceId: "bot_1", idempotencyKey: KEY });
-  assert.deepEqual([pause.method, pause.path, pause.body], ["POST", "/bots/bot_1/pause", fixture.pause.request]);
-  const unpause = peerOperationRequest({ operation: "botUnpause", resourceId: "bot_1", idempotencyKey: KEY, body: {} });
+  const pause = peerOperationRequest({
+    operation: "botPause",
+    resourceId: "bot_1",
+    idempotencyKey: KEY,
+  });
+  assert.deepEqual(
+    [pause.method, pause.path, pause.body],
+    ["POST", "/bots/bot_1/pause", fixture.pause.request],
+  );
+  const unpause = peerOperationRequest({
+    operation: "botUnpause",
+    resourceId: "bot_1",
+    idempotencyKey: KEY,
+    body: {},
+  });
   // Lifting a pause is a DELETE without a body, keyed like every other Bot session write.
-  assert.deepEqual([unpause.method, unpause.path, "body" in unpause, unpause.idempotencyKey], ["DELETE", "/bots/bot_1/pause", false, KEY]);
+  assert.deepEqual(
+    [unpause.method, unpause.path, "body" in unpause, unpause.idempotencyKey],
+    ["DELETE", "/bots/bot_1/pause", false, KEY],
+  );
 
-  assert.deepEqual(await peerOperationResult({ operation: "botAnswerHandoff" }, fixture.answer.response), fixture.answer.response);
-  assert.deepEqual(await peerOperationResult({ operation: "botHandoffOpenOnMac" }, fixture.openOnMac.response), fixture.openOnMac.response);
-  assert.deepEqual(await peerOperationResult({ operation: "botPause" }, fixture.pause.response), fixture.pause.response);
-  assert.deepEqual(await peerOperationResult({ operation: "botUnpause" }, fixture.unpause.response), fixture.unpause.response);
+  assert.deepEqual(
+    await peerOperationResult({ operation: "botAnswerHandoff" }, fixture.answer.response),
+    fixture.answer.response,
+  );
+  assert.deepEqual(
+    await peerOperationResult({ operation: "botHandoffOpenOnMac" }, fixture.openOnMac.response),
+    fixture.openOnMac.response,
+  );
+  assert.deepEqual(
+    await peerOperationResult({ operation: "botPause" }, fixture.pause.response),
+    fixture.pause.response,
+  );
+  assert.deepEqual(
+    await peerOperationResult({ operation: "botUnpause" }, fixture.unpause.response),
+    fixture.unpause.response,
+  );
   for (const [operation, invalid] of [
     ["botAnswerHandoff", { waitId: "wait/1" }],
     ["botAnswerHandoff", { waitId: "wait-1", extra: true }],
@@ -208,11 +438,18 @@ test("hand-off and pause operations send what the host's revision-37 routes take
     ["botPause", { state: "asleep", interrupted: false }],
     ["botUnpause", {}],
   ] as const)
-    await assert.rejects(peerOperationResult({ operation }, invalid), `${operation} ${JSON.stringify(invalid)}`);
+    await assert.rejects(
+      peerOperationResult({ operation }, invalid),
+      `${operation} ${JSON.stringify(invalid)}`,
+    );
 });
 
 test("only an attachment upload may send a body past the 1 MiB JSON cap", () => {
-  const upload = peerOperationRequest({ operation: "uploadAttachment", resourceId: "chat_1", body: {} });
+  const upload = peerOperationRequest({
+    operation: "uploadAttachment",
+    resourceId: "chat_1",
+    body: {},
+  });
   assert.ok((upload.maxBodyBytes ?? 0) >= 12 * 1024 * 1024);
   // Staged uploads expire unused, so the upload carries no idempotency key.
   assert.equal(upload.idempotencyKey, undefined);
@@ -262,7 +499,12 @@ test("expanded peer reads reject malformed DTOs and attachment bytes stay bounde
   assert.equal(await peerOperationResult({ operation: "removeAttachment" }, undefined), undefined);
   // `markRead` is a 204: only an empty body satisfies it.
   assert.equal(await peerOperationResult({ operation: "markRead" }, undefined), undefined);
-  const triage = { chatId: "chat_1", revision: 3, updatedAt: "2026-11-02T10:00:00.000Z", doneAt: "2026-11-02T10:00:00.000Z" };
+  const triage = {
+    chatId: "chat_1",
+    revision: 3,
+    updatedAt: "2026-11-02T10:00:00.000Z",
+    doneAt: "2026-11-02T10:00:00.000Z",
+  };
   assert.deepEqual(await peerOperationResult({ operation: "setTriage" }, triage), triage);
   await assert.rejects(peerOperationResult({ operation: "setTriage" }, { ...triage, revision: 0 }));
 
@@ -292,9 +534,7 @@ test("expanded peer reads reject malformed DTOs and attachment bytes stay bounde
       { mimeType: "image/png", data: Buffer.alloc(0) },
       { mimeType: "image/png", data: "iVBOR" },
     ])
-      await assert.rejects(
-        peerOperationResult({ operation }, invalid),
-      );
+      await assert.rejects(peerOperationResult({ operation }, invalid));
 });
 
 test("fork operations reach the contract's fork routes with the headers each one declares", () => {
@@ -354,7 +594,10 @@ test("a fork without its key, revision or a well-formed cut point never leaves t
     // The desktop's internal name for the focus is not part of the wire.
     { ...valid, body: { messageId: "m1", position: "after", summary: { instructions: "x" } } },
     { ...valid, body: { messageId: "m1", position: "after", summary: { focus: "   " } } },
-    { ...valid, body: { messageId: "m1", position: "after", summary: { focus: "x".repeat(1001) } } },
+    {
+      ...valid,
+      body: { messageId: "m1", position: "after", summary: { focus: "x".repeat(1001) } },
+    },
     { ...valid, resourceId: "../server" },
     { operation: "forkSummaryRetry", resourceId: "chat_1", body: { force: true } },
   ])
@@ -362,7 +605,8 @@ test("a fork without its key, revision or a well-formed cut point never leaves t
   // At the bound, and with no focus at all, a summary request is accepted.
   for (const summary of [{}, { focus: "x".repeat(1000) }])
     assert.deepEqual(
-      peerOperationRequest({ ...valid, body: { messageId: "m1", position: "after", summary } }).body,
+      peerOperationRequest({ ...valid, body: { messageId: "m1", position: "after", summary } })
+        .body,
       { messageId: "m1", position: "after", summary },
     );
 });
@@ -375,13 +619,22 @@ test("fork answers are parsed into the contract's chat and prefill shapes", asyn
     { operation: "forkChat" },
     {
       ...editFork,
-      prefill: { ...editFork.prefill, attachments: editFork.prefill.attachments.map((entry) => ({ ...entry, id: restaged })) },
+      prefill: {
+        ...editFork.prefill,
+        attachments: editFork.prefill.attachments.map((entry) => ({ ...entry, id: restaged })),
+      },
     },
-  )) as { chat: { id: string; forkedFrom?: { position: string } }; prefill?: { text: string; attachments?: { id: string }[] } };
+  )) as {
+    chat: { id: string; forkedFrom?: { position: string } };
+    prefill?: { text: string; attachments?: { id: string }[] };
+  };
   assert.equal(edited.chat.id, "chat_fixture_fork_02");
   assert.equal(edited.chat.forkedFrom?.position, "before");
   assert.equal(edited.prefill?.text, "Now check the error codes.");
-  assert.deepEqual(edited.prefill?.attachments?.map((attachment) => attachment.id), [restaged]);
+  assert.deepEqual(
+    edited.prefill?.attachments?.map((attachment) => attachment.id),
+    [restaged],
+  );
 
   const summarized = (await peerOperationResult(
     { operation: "forkSummaryRetry" },
@@ -398,15 +651,30 @@ test("fork answers are parsed into the contract's chat and prefill shapes", asyn
   await assert.rejects(peerOperationResult({ operation: "forkChat" }, { chat: plain }));
   for (const operation of ["forkChat", "forkSummaryRetry", "forkSummarySkip", "forkSummaryCancel"])
     await assert.rejects(peerOperationResult({ operation }, {}), operation);
-  await assert.rejects(peerOperationResult({ operation: "forkSummaryCancel" }, { cancelled: "yes" }));
+  await assert.rejects(
+    peerOperationResult({ operation: "forkSummaryCancel" }, { cancelled: "yes" }),
+  );
 });
 
-
 test("server reads strip route trust before crossing into the renderer", async () => {
-  const server = { ...contract.server, peerRoutes: [{ endpoint: "https://private.local/api/aiden/v1", caCertificateDerBase64: "private-route-trust", serverSpkiSha256: "secret-pin" }] };
+  const server = {
+    ...contract.server,
+    peerRoutes: [
+      {
+        endpoint: "https://private.local/api/aiden/v1",
+        caCertificateDerBase64: "private-route-trust",
+        serverSpkiSha256: "secret-pin",
+      },
+    ],
+  };
   const result = await peerOperationResult({ operation: "server" }, server);
   assert.deepEqual(result, contract.server);
-  await assert.rejects(peerOperationResult({ operation: "server" }, { ...server, nested: { credential: "still-forbidden" } }));
+  await assert.rejects(
+    peerOperationResult(
+      { operation: "server" },
+      { ...server, nested: { credential: "still-forbidden" } },
+    ),
+  );
 });
 
 test("a newer host's Bot session reads here as far as this Mac understands it", async () => {
@@ -429,14 +697,25 @@ test("a newer host's Bot session reads here as far as this Mac understands it", 
     },
   )) as { state: string; entries: { id: string }[] };
   assert.equal(session.state, "unavailable");
-  assert.deepEqual(session.entries.map((entry) => entry.id), ["m1"]);
-  await assert.rejects(peerOperationResult({ operation: "botSession", resourceId: "bot_1" }, { botId: "bot_1" }));
+  assert.deepEqual(
+    session.entries.map((entry) => entry.id),
+    ["m1"],
+  );
+  await assert.rejects(
+    peerOperationResult({ operation: "botSession", resourceId: "bot_1" }, { botId: "bot_1" }),
+  );
 });
 
 test("the host's real Bot session, send receipt and controls pass this Mac's contract check", async () => {
-  const fixtures = contract as unknown as Record<string, { response?: unknown } & Record<string, unknown>>;
+  const fixtures = contract as unknown as Record<
+    string,
+    { response?: unknown } & Record<string, unknown>
+  >;
   for (const key of ["botSession", "botSessionNeedsModel", "botSessionCards"]) {
-    const session = (await peerOperationResult({ operation: "botSession", resourceId: "bot_1" }, fixtures[key])) as {
+    const session = (await peerOperationResult(
+      { operation: "botSession", resourceId: "bot_1" },
+      fixtures[key],
+    )) as {
       botId: string;
     };
     assert.equal(session.botId, (fixtures[key] as { botId: string }).botId, key);
@@ -444,41 +723,68 @@ test("the host's real Bot session, send receipt and controls pass this Mac's con
   // A holder of bot:handoffs reads the waiting card and the paused state. The
   // host test checks these fixtures are what its sessions really send.
   const handoffs = contract.botHandoffs;
-  const waiting = (await peerOperationResult({ operation: "botSession", resourceId: "bot_1" }, handoffs.session)) as {
+  const waiting = (await peerOperationResult(
+    { operation: "botSession", resourceId: "bot_1" },
+    handoffs.session,
+  )) as {
     handoff?: unknown;
   };
   assert.deepEqual(waiting.handoff, handoffs.session.handoff, "the card reaches the paired Mac");
-  const paused = (await peerOperationResult({ operation: "botSession", resourceId: "bot_1" }, handoffs.pausedSession)) as {
+  const paused = (await peerOperationResult(
+    { operation: "botSession", resourceId: "bot_1" },
+    handoffs.pausedSession,
+  )) as {
     state?: string;
     handoff?: unknown;
   };
-  assert.deepEqual([paused.state, paused.handoff], [handoffs.pausedSession.state, handoffs.pausedSession.handoff]);
+  assert.deepEqual(
+    [paused.state, paused.handoff],
+    [handoffs.pausedSession.state, handoffs.pausedSession.handoff],
+  );
   assert.equal(paused.state, "paused");
   // A folder request and a plan reach the paired Mac on a plain read too, not only on the stream.
-  const asking = (await peerOperationResult({ operation: "botSession", resourceId: "bot_1" }, contract.botAccessRequests.session)) as {
+  const asking = (await peerOperationResult(
+    { operation: "botSession", resourceId: "bot_1" },
+    contract.botAccessRequests.session,
+  )) as {
     accessRequest?: unknown;
   };
   assert.deepEqual(asking.accessRequest, contract.botAccessRequests.session.accessRequest);
-  const planning = (await peerOperationResult({ operation: "botSession", resourceId: "bot_1" }, contract.botPlans.session)) as {
+  const planning = (await peerOperationResult(
+    { operation: "botSession", resourceId: "bot_1" },
+    contract.botPlans.session,
+  )) as {
     plan?: unknown;
   };
   assert.deepEqual(planning.plan, contract.botPlans.session.plan);
-  const unreadable = (await peerOperationResult({ operation: "botSession", resourceId: "bot_1" }, {
-    ...contract.botPlans.session,
-    plan: { ...contract.botPlans.session.plan, status: "reconsidering" },
-  })) as { plan?: unknown };
+  const unreadable = (await peerOperationResult(
+    { operation: "botSession", resourceId: "bot_1" },
+    {
+      ...contract.botPlans.session,
+      plan: { ...contract.botPlans.session.plan, status: "reconsidering" },
+    },
+  )) as { plan?: unknown };
   assert.equal(unreadable.plan, null, "a plan this Mac can't read is left for the host");
   assert.deepEqual(
-    await peerOperationResult({ operation: "botSend", resourceId: "bot_1" }, fixtures.botSessionSend!.response),
+    await peerOperationResult(
+      { operation: "botSend", resourceId: "bot_1" },
+      fixtures.botSessionSend!.response,
+    ),
     fixtures.botSessionSend!.response,
   );
   assert.deepEqual(
-    await peerOperationResult({ operation: "botResume", resourceId: "bot_1" }, fixtures.botSessionResume!.response),
+    await peerOperationResult(
+      { operation: "botResume", resourceId: "bot_1" },
+      fixtures.botSessionResume!.response,
+    ),
     fixtures.botSessionResume!.response,
   );
   // A state alone stays closed: a receipt's fields are not a control's answer.
   await assert.rejects(
-    peerOperationResult({ operation: "botResume", resourceId: "bot_1" }, fixtures.botSessionSend!.response),
+    peerOperationResult(
+      { operation: "botResume", resourceId: "bot_1" },
+      fixtures.botSessionSend!.response,
+    ),
   );
 });
 
@@ -520,7 +826,8 @@ test("a context pressure read names the host's route, and its model pair travels
     { providerId: "p", modelId: "m".repeat(257) },
   ])
     assert.throws(
-      () => peerOperationRequest({ operation: "contextPressure", resourceId: "chat_1", ...malformed }),
+      () =>
+        peerOperationRequest({ operation: "contextPressure", resourceId: "chat_1", ...malformed }),
       JSON.stringify(malformed),
     );
 });
@@ -537,16 +844,28 @@ test("a context pressure answer is checked against the contract before it reache
     { ...answer, pressure: { ...answer.pressure, promptCache: { ttlMs: 1, lastRequestAt: 1 } } },
     { ...answer, pressure: { ...answer.pressure, contextTokens: -5 } },
   ])
-    await assert.rejects(peerOperationResult({ operation: "contextPressure" }, refused), JSON.stringify(refused));
+    await assert.rejects(
+      peerOperationResult({ operation: "contextPressure" }, refused),
+      JSON.stringify(refused),
+    );
 });
 
 test("a Bot search reaches the host exactly as typed, and plain words still work on older hosts", () => {
   const endpoint = "https://studio.example.ts.net/api/aiden/v1";
   const sent = (search: string) => {
-    const url = peerRequestUrl(endpoint, peerOperationRequest({ operation: "botConversations", query: search }).path);
+    const url = peerRequestUrl(
+      endpoint,
+      peerOperationRequest({ operation: "botConversations", query: search }).path,
+    );
     return url.search.slice(1);
   };
-  for (const search of ["plan week", "release notes & more", "café ☕ 100% done+", "it's #1 = best", "a/b:c@d"]) {
+  for (const search of [
+    "plan week",
+    "release notes & more",
+    "café ☕ 100% done+",
+    "it's #1 = best",
+    "a/b:c@d",
+  ]) {
     const query = sent(search);
     // The host's own URL rule, then the way it reads the value.
     assert.equal(isSafeEncodedQuery(query), true, search);
@@ -560,12 +879,21 @@ test("a Bot search reaches the host exactly as typed, and plain words still work
 });
 
 test("an unknown Inbox placement falls back without rejecting the paired host's page", async () => {
-  const row = { ...contract.chatSummaries.summaries[0], inboxBucket: "future_bucket", inboxSortAt: "unknown" };
-  const result = await peerOperationResult({ operation: "summaries" }, { summaries: [row] }) as typeof contract.chatSummaries;
+  const row = {
+    ...contract.chatSummaries.summaries[0],
+    inboxBucket: "future_bucket",
+    inboxSortAt: "unknown",
+  };
+  const result = (await peerOperationResult(
+    { operation: "summaries" },
+    { summaries: [row] },
+  )) as typeof contract.chatSummaries;
   assert.equal(result.summaries[0]?.id, row.id);
   assert.equal(result.summaries[0]?.inboxBucket, undefined);
   assert.equal(result.summaries[0]?.inboxSortAt, undefined);
-  await assert.rejects(async () => peerOperationResult({ operation: "summaries" }, { summaries: [{ ...row, unread: "yes" }] }));
+  await assert.rejects(async () =>
+    peerOperationResult({ operation: "summaries" }, { summaries: [{ ...row, unread: "yes" }] }),
+  );
 });
 
 test("plan, access-card and routine-suggestion answers send what the host's routes take, and read their receipts", async () => {
@@ -573,57 +901,153 @@ test("plan, access-card and routine-suggestion answers send what the host's rout
   const access = contract.botAccessRequests.answer;
   const routine = contract.botRoutineProposalRespond;
   assert.deepEqual(
-    peerOperationRequest({ operation: "botRespondPlan", resourceId: "bot_1", itemId: plan.response.planId, idempotencyKey: KEY, body: plan.request }).body,
+    peerOperationRequest({
+      operation: "botRespondPlan",
+      resourceId: "bot_1",
+      itemId: plan.response.planId,
+      idempotencyKey: KEY,
+      body: plan.request,
+    }).body,
     plan.request,
   );
-  assert.deepEqual(await peerOperationResult({ operation: "botRespondPlan" }, plan.response), plan.response);
   assert.deepEqual(
-    peerOperationRequest({ operation: "botAnswerAccessRequest", resourceId: "bot_1", itemId: "wait-1", idempotencyKey: KEY, body: access.request }).body,
+    await peerOperationResult({ operation: "botRespondPlan" }, plan.response),
+    plan.response,
+  );
+  assert.deepEqual(
+    peerOperationRequest({
+      operation: "botAnswerAccessRequest",
+      resourceId: "bot_1",
+      itemId: "wait-1",
+      idempotencyKey: KEY,
+      body: access.request,
+    }).body,
     access.request,
   );
-  assert.deepEqual(await peerOperationResult({ operation: "botAnswerAccessRequest" }, access.response), access.response);
-  assert.deepEqual(await peerOperationResult({ operation: "botRespondRoutineProposal" }, routine.response), routine.response);
+  assert.deepEqual(
+    await peerOperationResult({ operation: "botAnswerAccessRequest" }, access.response),
+    access.response,
+  );
+  assert.deepEqual(
+    await peerOperationResult({ operation: "botRespondRoutineProposal" }, routine.response),
+    routine.response,
+  );
   // A receipt the contract doesn't allow never reaches the chat.
-  await assert.rejects(peerOperationResult({ operation: "botRespondPlan" }, { ...plan.response, status: "pending" }));
-  await assert.rejects(peerOperationResult({ operation: "botAnswerAccessRequest" }, { answered: false }));
+  await assert.rejects(
+    peerOperationResult({ operation: "botRespondPlan" }, { ...plan.response, status: "pending" }),
+  );
+  await assert.rejects(
+    peerOperationResult({ operation: "botAnswerAccessRequest" }, { answered: false }),
+  );
 });
 
 test("a remote Bot chat pages back from its oldest entry and takes back a queued message on the host's own routes", async () => {
-  const page = peerOperationRequest({ operation: "botSessionEntries", resourceId: "bot_1", before: "entry_7", limit: 50 });
+  const page = peerOperationRequest({
+    operation: "botSessionEntries",
+    resourceId: "bot_1",
+    before: "entry_7",
+    limit: 50,
+  });
   assert.equal(page.method, "GET");
   assert.equal(page.path, "/bots/bot_1/session/entries?before=entry_7&limit=50");
-  assert.equal(peerOperationRequest({ operation: "botSessionEntries", resourceId: "bot_1", before: "entry_7" }).path, "/bots/bot_1/session/entries?before=entry_7");
-  for (const bad of [{ before: "a/b" }, {}, { before: "entry_7", limit: 201 }, { before: "entry_7", limit: 0 }]) {
-    assert.throws(() => peerOperationRequest({ operation: "botSessionEntries", resourceId: "bot_1", ...bad }), JSON.stringify(bad));
+  assert.equal(
+    peerOperationRequest({ operation: "botSessionEntries", resourceId: "bot_1", before: "entry_7" })
+      .path,
+    "/bots/bot_1/session/entries?before=entry_7",
+  );
+  for (const bad of [
+    { before: "a/b" },
+    {},
+    { before: "entry_7", limit: 201 },
+    { before: "entry_7", limit: 0 },
+  ]) {
+    assert.throws(
+      () => peerOperationRequest({ operation: "botSessionEntries", resourceId: "bot_1", ...bad }),
+      JSON.stringify(bad),
+    );
   }
-  const withdraw = peerOperationRequest({ operation: "botWithdrawQueued", resourceId: "bot_1", itemId: "42", idempotencyKey: KEY });
-  assert.deepEqual([withdraw.method, withdraw.path, withdraw.body], ["POST", "/bots/bot_1/queued/42/withdraw", {}]);
-  assert.throws(() => peerOperationRequest({ operation: "botWithdrawQueued", resourceId: "bot_1", itemId: "../x", idempotencyKey: KEY }));
-  assert.throws(() => peerOperationRequest({ operation: "botWithdrawQueued", resourceId: "bot_1", itemId: "42", idempotencyKey: KEY, body: { now: true } }));
+  const withdraw = peerOperationRequest({
+    operation: "botWithdrawQueued",
+    resourceId: "bot_1",
+    itemId: "42",
+    idempotencyKey: KEY,
+  });
+  assert.deepEqual(
+    [withdraw.method, withdraw.path, withdraw.body],
+    ["POST", "/bots/bot_1/queued/42/withdraw", {}],
+  );
+  assert.throws(() =>
+    peerOperationRequest({
+      operation: "botWithdrawQueued",
+      resourceId: "bot_1",
+      itemId: "../x",
+      idempotencyKey: KEY,
+    }),
+  );
+  assert.throws(() =>
+    peerOperationRequest({
+      operation: "botWithdrawQueued",
+      resourceId: "bot_1",
+      itemId: "42",
+      idempotencyKey: KEY,
+      body: { now: true },
+    }),
+  );
 
   // A newer host's page is read as far as this Mac understands it; anything else about it must be exact.
   const entries = (contract.botSession.entries as unknown[]).slice(0, 2);
   const read = (await peerOperationResult(
     { operation: "botSessionEntries", resourceId: "bot_1" },
-    { botId: "bot_1", epoch: "e1", entries: [...entries, { type: "hand_off", id: "h1", text: "Sign in" }], hasOlder: true },
+    {
+      botId: "bot_1",
+      epoch: "e1",
+      entries: [...entries, { type: "hand_off", id: "h1", text: "Sign in" }],
+      hasOlder: true,
+    },
   )) as { entries: unknown[]; hasOlder: boolean };
   const oldest = (entries[0] as { id: string }).id;
-  assert.deepEqual(read, { botId: "bot_1", epoch: "e1", entries, hasOlder: true, olderCursor: oldest, hostCount: 3 });
+  assert.deepEqual(read, {
+    botId: "bot_1",
+    epoch: "e1",
+    entries,
+    hasOlder: true,
+    olderCursor: oldest,
+    hostCount: 3,
+  });
   // When the oldest entries are of a kind this Mac can't show, the next page still starts at the host's oldest,
   // so paging moves past them instead of asking for the same page again.
   const unreadable = { type: "hand_off", id: "h0", text: "Sign in" };
   assert.deepEqual(
-    await peerOperationResult({ operation: "botSessionEntries", resourceId: "bot_1" }, { botId: "bot_1", epoch: "e1", entries: [unreadable, ...entries], hasOlder: true }),
+    await peerOperationResult(
+      { operation: "botSessionEntries", resourceId: "bot_1" },
+      { botId: "bot_1", epoch: "e1", entries: [unreadable, ...entries], hasOlder: true },
+    ),
     { botId: "bot_1", epoch: "e1", entries, hasOlder: true, olderCursor: "h0", hostCount: 3 },
   );
   assert.deepEqual(
-    await peerOperationResult({ operation: "botSessionEntries", resourceId: "bot_1" }, { botId: "bot_1", epoch: "e1", entries: [unreadable], hasOlder: true }),
+    await peerOperationResult(
+      { operation: "botSessionEntries", resourceId: "bot_1" },
+      { botId: "bot_1", epoch: "e1", entries: [unreadable], hasOlder: true },
+    ),
     { botId: "bot_1", epoch: "e1", entries: [], hasOlder: true, olderCursor: "h0", hostCount: 1 },
   );
-  await assert.rejects(peerOperationResult({ operation: "botSessionEntries", resourceId: "bot_1" }, { botId: "bot_1", epoch: "e1", entries }));
+  await assert.rejects(
+    peerOperationResult(
+      { operation: "botSessionEntries", resourceId: "bot_1" },
+      { botId: "bot_1", epoch: "e1", entries },
+    ),
+  );
   assert.deepEqual(
-    await peerOperationResult({ operation: "botWithdrawQueued", resourceId: "bot_1" }, { submissionId: "42", outcome: "started" }),
+    await peerOperationResult(
+      { operation: "botWithdrawQueued", resourceId: "bot_1" },
+      { submissionId: "42", outcome: "started" },
+    ),
     { submissionId: "42", outcome: "started" },
   );
-  await assert.rejects(peerOperationResult({ operation: "botWithdrawQueued", resourceId: "bot_1" }, { submissionId: "42", outcome: "maybe" }));
+  await assert.rejects(
+    peerOperationResult(
+      { operation: "botWithdrawQueued", resourceId: "bot_1" },
+      { submissionId: "42", outcome: "maybe" },
+    ),
+  );
 });

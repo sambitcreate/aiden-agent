@@ -23,15 +23,7 @@ import {
 import { AidenIcon } from "../aiden-icon";
 import { ProviderIcon } from "../provider-icon";
 import { McpPresetIcon } from "../settings/mcp-preset-icons";
-import {
-  ArtButton,
-  ArtChip,
-  ArtComposer,
-  ArtIcon,
-  ArtWindow,
-  Bar,
-  Toggle,
-} from "./art-kit";
+import { ArtButton, ArtChip, ArtComposer, ArtIcon, ArtWindow, Bar, Toggle } from "./art-kit";
 
 /* Art for the "Choose and extend" tiles. */
 
@@ -132,11 +124,7 @@ const PICKER_MODELS = [
 export function ModelFreedomArt() {
   return (
     <>
-      <ArtWindow
-        raised
-        className="oa-models-details"
-        style={{ left: 14, top: 22, width: 126 }}
-      >
+      <ArtWindow raised className="oa-models-details" style={{ left: 14, top: 22, width: 126 }}>
         <div className="oa-row" style={{ alignItems: "flex-start", gap: 5 }}>
           <ProviderIcon
             providerId="anthropic"
@@ -156,35 +144,21 @@ export function ModelFreedomArt() {
             ["32%", "36%"],
             ["46%", "22%"],
           ].map(([label, value]) => (
-            <div
-              key={label}
-              className="oa-row"
-              style={{ justifyContent: "space-between" }}
-            >
+            <div key={label} className="oa-row" style={{ justifyContent: "space-between" }}>
               <Bar width={label} tone="soft" />
               <Bar width={value} />
             </div>
           ))}
         </div>
       </ArtWindow>
-      <ArtChip
-        className="oa-models-local oa-anim-float"
-        style={{ left: 16, top: 120 }}
-      >
-        <ProviderIcon
-          providerId="ollama"
-          providerLabel="Ollama"
-          className="oa-models-chip-mark"
-        />
+      <ArtChip className="oa-models-local oa-anim-float" style={{ left: 16, top: 120 }}>
+        <ProviderIcon providerId="ollama" providerLabel="Ollama" className="oa-models-chip-mark" />
         Ollama
         <span className="oa-models-via">on Tailscale</span>
         <ArtIcon icon={Lock} />
       </ArtChip>
 
-      <div
-        className="oa-composer oa-models-composer"
-        style={{ left: 152, top: 206, width: 230 }}
-      >
+      <div className="oa-composer oa-models-composer" style={{ left: 152, top: 206, width: 230 }}>
         <div className="oa-composer-bar" style={{ top: 8, bottom: "auto" }}>
           <ArtIcon icon={Plus} />
           <span className="oa-models-trigger">
@@ -204,11 +178,7 @@ export function ModelFreedomArt() {
           </span>
         </div>
       </div>
-      <ArtWindow
-        raised
-        className="oa-models-picker"
-        style={{ left: 160, top: 8, width: 212 }}
-      >
+      <ArtWindow raised className="oa-models-picker" style={{ left: 160, top: 8, width: 212 }}>
         <div className="oa-models-filter oa-separator-bottom">
           <ArtIcon icon={Search} />
           Filter models…
@@ -216,9 +186,7 @@ export function ModelFreedomArt() {
         {PICKER_MODELS.map((model) => (
           <div
             key={model.provider}
-            className={
-              "oa-models-row" + ("selected" in model ? " oa-selected" : "")
-            }
+            className={"oa-models-row" + ("selected" in model ? " oa-selected" : "")}
           >
             <ProviderIcon
               providerId={model.provider}
@@ -227,21 +195,12 @@ export function ModelFreedomArt() {
               className="oa-models-mark"
             />
             <span className="oa-stack oa-grow" style={{ gap: 3 }}>
-              <Bar
-                width={model.name}
-                tone={"selected" in model ? "ink" : undefined}
-              />
+              <Bar width={model.name} tone={"selected" in model ? "ink" : undefined} />
               <Bar width={model.sub} tone="soft" />
             </span>
-            {"format" in model ? (
-              <span className="oa-models-format">{model.format}</span>
-            ) : null}
-            {"selected" in model ? (
-              <ArtIcon icon={Check} className="oa-models-check" />
-            ) : null}
-            {"pinned" in model ? (
-              <ArtIcon icon={Pin} className="oa-models-pin" />
-            ) : null}
+            {"format" in model ? <span className="oa-models-format">{model.format}</span> : null}
+            {"selected" in model ? <ArtIcon icon={Check} className="oa-models-check" /> : null}
+            {"pinned" in model ? <ArtIcon icon={Pin} className="oa-models-pin" /> : null}
           </div>
         ))}
       </ArtWindow>
@@ -250,10 +209,7 @@ export function ModelFreedomArt() {
 }
 
 /** One line of a codemode script, as [text, syntax token] runs. */
-type CodeRun = readonly [
-  string,
-  "keyword" | "variable" | "title" | "string" | "plain",
-];
+type CodeRun = readonly [string, "keyword" | "variable" | "title" | "string" | "plain"];
 const TOOL_SCRIPT: readonly (readonly CodeRun[])[] = [
   [
     ["const ", "keyword"],
@@ -292,10 +248,7 @@ const TOOL_SCRIPT: readonly (readonly CodeRun[])[] = [
 export function ToolScriptsArt() {
   return (
     <>
-      <ArtWindow
-        className="oa-script-window"
-        style={{ left: 12, top: 10, width: 178 }}
-      >
+      <ArtWindow className="oa-script-window" style={{ left: 12, top: 10, width: 178 }}>
         <div className="oa-script-head oa-separator-bottom">
           <ArtIcon icon={SquareTerminal} />
           <span className="oa-strong">Codemode</span>
@@ -320,10 +273,7 @@ export function ToolScriptsArt() {
           ))}
         </div>
       </ArtWindow>
-      <div
-        className="oa-row"
-        style={{ position: "absolute", left: 14, top: 100, gap: 4 }}
-      >
+      <div className="oa-row" style={{ position: "absolute", left: 14, top: 100, gap: 4 }}>
         <ArtChip className="oa-anim-pop" style={{ animationDelay: "1.6s" }}>
           <span className="oa-add" style={{ display: "contents" }}>
             <ArtIcon icon={Check} />
@@ -352,26 +302,14 @@ export function ToolScriptsArt() {
 /** A tiny landscape thumbnail drawn with shapes: sun and two mountains. */
 function Landscape({ variant = 0 }: { variant?: 0 | 1 }) {
   return (
-    <svg
-      aria-hidden="true"
-      className="oa-vision-thumb"
-      viewBox="0 0 28 28"
-      data-variant={variant}
-    >
+    <svg aria-hidden="true" className="oa-vision-thumb" viewBox="0 0 28 28" data-variant={variant}>
       <rect width="28" height="28" className="oa-vision-sky" />
       <circle cx={variant ? 8 : 20} cy="9" r="3.4" className="oa-vision-sun" />
       <path
-        d={
-          variant
-            ? "M-2 28L9 13L17 22L22 16L30 28Z"
-            : "M-2 28L8 15L15 23L20 17L30 28Z"
-        }
+        d={variant ? "M-2 28L9 13L17 22L22 16L30 28Z" : "M-2 28L8 15L15 23L20 17L30 28Z"}
         className="oa-vision-far"
       />
-      <path
-        d={variant ? "M-2 28L14 19L30 28Z" : "M4 28L17 18L30 28Z"}
-        className="oa-vision-near"
-      />
+      <path d={variant ? "M-2 28L14 19L30 28Z" : "M4 28L17 18L30 28Z"} className="oa-vision-near" />
     </svg>
   );
 }
@@ -379,27 +317,19 @@ function Landscape({ variant = 0 }: { variant?: 0 | 1 }) {
 export function AttachmentsVisionArt() {
   return (
     <>
-      <ArtComposer
-        style={{ left: 10, top: 10, width: 178, height: 84 }}
-        placeholder=""
-      >
+      <ArtComposer style={{ left: 10, top: 10, width: 178, height: 84 }} placeholder="">
         <span className="oa-vision-attachments">
           <span className="oa-vision-chip">
             <Landscape />
             <span className="oa-mono">trail.png</span>
             <ArtIcon icon={X} />
           </span>
-          <span
-            className="oa-vision-chip oa-anim-pop"
-            style={{ animationDelay: "0.3s" }}
-          >
+          <span className="oa-vision-chip oa-anim-pop" style={{ animationDelay: "0.3s" }}>
             <Landscape variant={1} />
             <ArtIcon icon={X} />
           </span>
         </span>
-        <span style={{ color: "var(--text-primary)" }}>
-          Where was this taken?
-        </span>
+        <span style={{ color: "var(--text-primary)" }}>Where was this taken?</span>
       </ArtComposer>
       <div
         className="oa-stack"
@@ -408,22 +338,10 @@ export function AttachmentsVisionArt() {
         <ArtChip icon={Eye} style={{ justifySelf: "start" }}>
           Vision
         </ArtChip>
-        <Bar
-          width="94%"
-          className="oa-anim-type"
-          style={{ animationDelay: "0.6s" }}
-        />
-        <Bar
-          width="72%"
-          className="oa-anim-type"
-          style={{ animationDelay: "0.8s" }}
-        />
+        <Bar width="94%" className="oa-anim-type" style={{ animationDelay: "0.6s" }} />
+        <Bar width="72%" className="oa-anim-type" style={{ animationDelay: "0.8s" }} />
       </div>
-      <ArtWindow
-        raised
-        className="oa-vision-approve"
-        style={{ left: 12, top: 148, width: 172 }}
-      >
+      <ArtWindow raised className="oa-vision-approve" style={{ left: 12, top: 148, width: 172 }}>
         <ArtIcon icon={ImagePlus} />
         <span className="oa-strong">Edit image</span>
         <span className="oa-grow" />
@@ -458,10 +376,7 @@ export function WebSearchArt() {
         <span className="oa-grow" />
         <span className="oa-web-count">3 sources</span>
       </div>
-      <ArtWindow
-        className="oa-web-sources"
-        style={{ left: 10, top: 30, width: 176 }}
-      >
+      <ArtWindow className="oa-web-sources" style={{ left: 10, top: 30, width: 176 }}>
         {WEB_SOURCES.map(({ domain, title }, index) => (
           <div
             key={domain}
@@ -483,11 +398,7 @@ export function WebSearchArt() {
         <Bar width="82%" />
         <Bar width="64%" />
       </div>
-      <ArtWindow
-        raised
-        className="oa-web-setting"
-        style={{ left: 14, top: 128, width: 166 }}
-      >
+      <ArtWindow raised className="oa-web-setting" style={{ left: 14, top: 128, width: 166 }}>
         <ArtIcon icon={Globe} />
         <span className="oa-strong">Exa</span>
         <Bar width={40} tone="soft" />
@@ -531,23 +442,13 @@ export function ReusableSkillsArt() {
         </ArtChip>
         <ArtChip icon={Zap}>Auto or $</ArtChip>
       </div>
-      <ArtWindow
-        raised
-        className="oa-skill-palette"
-        style={{ left: 122, top: 6, width: 178 }}
-      >
+      <ArtWindow raised className="oa-skill-palette" style={{ left: 122, top: 6, width: 178 }}>
         {SKILL_ROWS.map(({ name, source, detail }, index) => (
-          <div
-            key={name}
-            className={"oa-skill-row" + (index === 0 ? " oa-selected" : "")}
-          >
+          <div key={name} className={"oa-skill-row" + (index === 0 ? " oa-selected" : "")}>
             <AidenIcon aria-hidden="true" className="oa-skill-icon" />
             <span className="oa-skill-name">{name}</span>
             <span className="oa-skill-source">{source}</span>
-            <span
-              className="oa-grow"
-              style={{ display: "flex", justifyContent: "flex-end" }}
-            >
+            <span className="oa-grow" style={{ display: "flex", justifyContent: "flex-end" }}>
               <Bar width={detail} tone="soft" />
             </span>
           </div>
@@ -582,29 +483,17 @@ export function McpConnectorsArt() {
         <ArtChip icon={Plug}>Local or hosted</ArtChip>
         <ArtChip icon={Lock}>OAuth sign-in</ArtChip>
       </div>
-      <ArtWindow
-        className="oa-mcp-card"
-        style={{ left: 120, top: 8, width: 166 }}
-      >
+      <ArtWindow className="oa-mcp-card" style={{ left: 120, top: 8, width: 166 }}>
         {MCP_SERVICES.map(({ id, name, tools, resources, enabled }, index) => (
-          <div
-            key={id}
-            className={"oa-mcp-row" + (index > 0 ? " oa-mcp-divided" : "")}
-          >
+          <div key={id} className={"oa-mcp-row" + (index > 0 ? " oa-mcp-divided" : "")}>
             <span className="oa-mcp-avatar">
-              <McpPresetIcon
-                presetId={id}
-                name={name}
-                className="oa-mcp-logo"
-              />
+              <McpPresetIcon presetId={id} name={name} className="oa-mcp-logo" />
             </span>
             <span className="oa-stack oa-grow" style={{ gap: 3 }}>
               <span className="oa-row" style={{ gap: 4 }}>
                 <span className="oa-strong">{name}</span>
                 <span
-                  className={
-                    "oa-mcp-status" + (index === 1 ? " oa-anim-pop" : "")
-                  }
+                  className={"oa-mcp-status" + (index === 1 ? " oa-anim-pop" : "")}
                   data-on={enabled || undefined}
                   style={index === 1 ? { animationDelay: "0.4s" } : undefined}
                 >

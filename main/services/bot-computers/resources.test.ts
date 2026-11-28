@@ -4,7 +4,12 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
 
-import { allocatedBytes, availableMemoryBytes, parseVmStat, requireResources } from "./resources.js";
+import {
+  allocatedBytes,
+  availableMemoryBytes,
+  parseVmStat,
+  requireResources,
+} from "./resources.js";
 import { BotComputerError } from "./types.js";
 
 const VM_STAT = `Mach Virtual Memory Statistics: (page size of 16384 bytes)
@@ -36,7 +41,10 @@ test("available memory is free plus inactive plus purgeable pages", () => {
   const pages = parseVmStat(VM_STAT);
   assert.deepEqual(pages, { pageSize: 16_384, free: 80_000, inactive: 400_000, purgeable: 44_288 });
   assert.equal(availableMemoryBytes(pages), (80_000 + 400_000 + 44_288) * 16_384);
-  assert.throws(() => parseVmStat("Mach Virtual Memory Statistics:\nPages free: 1.\n"), /page size/u);
+  assert.throws(
+    () => parseVmStat("Mach Virtual Memory Statistics:\nPages free: 1.\n"),
+    /page size/u,
+  );
 });
 
 const probe = (freeDisk: number, memory: number | Error) => ({
@@ -50,17 +58,27 @@ const probe = (freeDisk: number, memory: number | Error) => ({
 test("too little disk or memory is refused with a message the person can act on", async () => {
   await assert.rejects(
     requireResources(probe(10e9, 64e9), { dir: "/", diskBytes: 80e9 }),
-    (error: unknown) => error instanceof BotComputerError && error.code === "low_disk" && /80\.0 GB/u.test(error.message),
+    (error: unknown) =>
+      error instanceof BotComputerError &&
+      error.code === "low_disk" &&
+      /80\.0 GB/u.test(error.message),
   );
   await assert.rejects(
     requireResources(probe(500e9, 4e9), { dir: "/", memoryBytes: 8 * 1024 ** 3 }),
-    (error: unknown) => error instanceof BotComputerError && error.code === "low_memory" && /stop another Bot's computer/u.test(error.message),
+    (error: unknown) =>
+      error instanceof BotComputerError &&
+      error.code === "low_memory" &&
+      /stop another Bot's computer/u.test(error.message),
   );
   await assert.rejects(
     requireResources(probe(500e9, new Error("vm_stat missing")), { dir: "/", memoryBytes: 1 }),
     (error: unknown) => error instanceof BotComputerError && error.code === "low_memory",
   );
-  await requireResources(probe(500e9, 64e9), { dir: "/", diskBytes: 80e9, memoryBytes: 8 * 1024 ** 3 });
+  await requireResources(probe(500e9, 64e9), {
+    dir: "/",
+    diskBytes: 80e9,
+    memoryBytes: 8 * 1024 ** 3,
+  });
 });
 
 test("disk use counts allocated blocks and never follows symlinks out of the tree", async () => {

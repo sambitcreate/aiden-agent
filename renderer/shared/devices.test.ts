@@ -50,12 +50,18 @@ test("device service state parses a complete snapshot", () => {
 
 test("device service state fails closed on unknown platforms, statuses, and shapes", () => {
   const device = state().devices[0];
-  assert.equal(parseDeviceServiceState(state({ devices: [{ ...device, platform: "watchos" }] })), null);
+  assert.equal(
+    parseDeviceServiceState(state({ devices: [{ ...device, platform: "watchos" }] })),
+    null,
+  );
   assert.equal(parseDeviceServiceState(state({ devices: [{ ...device, kind: "watch" }] })), null);
   assert.equal(parseDeviceServiceState(state({ hostStatus: "booting" })), null);
   assert.equal(parseDeviceServiceState(state({ hostStatuses: { local: { status: "?" } } })), null);
   assert.equal(parseDeviceServiceState(state({ consent: { streaming: "yes" } })), null);
-  assert.equal(parseDeviceServiceState(state({ sessions: [{ chatId: "c", openedBy: "x" }] })), null);
+  assert.equal(
+    parseDeviceServiceState(state({ sessions: [{ chatId: "c", openedBy: "x" }] })),
+    null,
+  );
   assert.equal(parseDeviceServiceState(state({ toolVersions: { hub: "" } })), null);
   assert.equal(parseDeviceServiceState(state({ unavailableReason: 4 })), null);
   assert.equal(parseDeviceServiceState(null), null);
@@ -107,7 +113,10 @@ test("device actions parse each supported iOS action", () => {
     { type: "clearLocation" },
   ];
   for (const action of valid) {
-    assert.deepEqual(parseDeviceActionInput({ ...actionTarget, ...action }), { ...actionTarget, ...action });
+    assert.deepEqual(parseDeviceActionInput({ ...actionTarget, ...action }), {
+      ...actionTarget,
+      ...action,
+    });
   }
 });
 
@@ -137,26 +146,53 @@ test("device actions fail closed on bad targets, values, URLs, and app ids", () 
     { ...actionTarget, type: "openUrl", url: "javascript:alert(1)" },
     { ...actionTarget, type: "openUrl", url: "https://exa mple.com" },
     { ...actionTarget, type: "openUrl", url: "not a url" },
-    { ...actionTarget, type: "setPermission", permission: "siri", decision: "grant", appId: "com.a.b" },
-    { ...actionTarget, type: "setPermission", permission: "camera", decision: "allow", appId: "com.a.b" },
-    { ...actionTarget, type: "setPermission", permission: "camera", decision: "grant", appId: "--all" },
+    {
+      ...actionTarget,
+      type: "setPermission",
+      permission: "siri",
+      decision: "grant",
+      appId: "com.a.b",
+    },
+    {
+      ...actionTarget,
+      type: "setPermission",
+      permission: "camera",
+      decision: "allow",
+      appId: "com.a.b",
+    },
+    {
+      ...actionTarget,
+      type: "setPermission",
+      permission: "camera",
+      decision: "grant",
+      appId: "--all",
+    },
     { ...actionTarget, type: "setLocation", latitude: 91, longitude: 0 },
     { ...actionTarget, type: "setLocation", latitude: 0, longitude: Number.NaN },
   ];
-  for (const action of invalid) assert.equal(parseDeviceActionInput(action), null, JSON.stringify(action));
+  for (const action of invalid)
+    assert.equal(parseDeviceActionInput(action), null, JSON.stringify(action));
 });
 
 test("device settings keep known values and reject malformed ones", () => {
   assert.deepEqual(parseDeviceSettings({}), {});
-  assert.deepEqual(parseDeviceSettings({ appearance: "light", textSize: "default", increaseContrast: false }), {
-    appearance: "light",
-    textSize: "default",
-    increaseContrast: false,
-  });
+  assert.deepEqual(
+    parseDeviceSettings({ appearance: "light", textSize: "default", increaseContrast: false }),
+    {
+      appearance: "light",
+      textSize: "default",
+      increaseContrast: false,
+    },
+  );
   assert.equal(parseDeviceSettings({ appearance: "auto" }), null);
   assert.equal(parseDeviceSettings({ textSize: 3 }), null);
   assert.deepEqual(
-    parseDeviceSettings({ reduceMotion: true, voiceOver: false, liquidGlass: "clear", colorFilter: "none" }),
+    parseDeviceSettings({
+      reduceMotion: true,
+      voiceOver: false,
+      liquidGlass: "clear",
+      colorFilter: "none",
+    }),
     { reduceMotion: true, voiceOver: false, liquidGlass: "clear", colorFilter: "none" },
   );
   assert.equal(parseDeviceSettings({ showBorders: "on" }), null);
@@ -168,12 +204,18 @@ test("device settings keep known values and reject malformed ones", () => {
 test("the Aiden On The Go sharing consent reads as off when absent and fails closed when malformed", () => {
   assert.equal(parseDeviceServiceState(state())?.consent.mobileSharing, false);
   const shared = parseDeviceServiceState(
-    state({ consent: { streaming: true, agentAccess: false, peerSharing: false, mobileSharing: true } }),
+    state({
+      consent: { streaming: true, agentAccess: false, peerSharing: false, mobileSharing: true },
+    }),
   );
   assert.equal(shared?.consent.mobileSharing, true);
   assert.equal(shared?.consent.peerSharing, false);
   assert.equal(
-    parseDeviceServiceState(state({ consent: { streaming: true, agentAccess: false, peerSharing: false, mobileSharing: "yes" } })),
+    parseDeviceServiceState(
+      state({
+        consent: { streaming: true, agentAccess: false, peerSharing: false, mobileSharing: "yes" },
+      }),
+    ),
     null,
   );
 });
@@ -199,14 +241,27 @@ test("Android emulators and per-platform availability cross the boundary", () =>
       hosts: [{ id: "local", kind: "local", name: "This Mac", status: "ready", platforms }],
     }),
   );
-  assert.deepEqual(parsed?.devices.map((device) => [device.id, device.platform]), [
-    ["emulator-5554", "android"],
-    ["Pixel_Fold_API_35", "android"],
-  ]);
+  assert.deepEqual(
+    parsed?.devices.map((device) => [device.id, device.platform]),
+    [
+      ["emulator-5554", "android"],
+      ["Pixel_Fold_API_35", "android"],
+    ],
+  );
   assert.deepEqual(parsed?.hosts[0]?.platforms, platforms);
   const host = { id: "local", kind: "local", name: "This Mac", status: "ready" };
-  assert.equal(parseDeviceServiceState(state({ hosts: [{ ...host, platforms: [{ platform: "web", available: true }] }] })), null);
-  assert.equal(parseDeviceServiceState(state({ hosts: [{ ...host, platforms: [{ platform: "ios", available: "yes" }] }] })), null);
+  assert.equal(
+    parseDeviceServiceState(
+      state({ hosts: [{ ...host, platforms: [{ platform: "web", available: true }] }] }),
+    ),
+    null,
+  );
+  assert.equal(
+    parseDeviceServiceState(
+      state({ hosts: [{ ...host, platforms: [{ platform: "ios", available: "yes" }] }] }),
+    ),
+    null,
+  );
   assert.equal(parseDeviceServiceState(state({ hosts: [{ ...host, platforms: {} }] })), null);
 });
 
@@ -219,11 +274,18 @@ test("Android actions parse with AVD names, serials, and package names", () => {
   ]) {
     assert.deepEqual(parseDeviceActionInput({ ...serial, ...action }), { ...serial, ...action });
   }
-  assert.deepEqual(parseDeviceActionInput({ hostId: "local", deviceId: "Pixel_9_API_35.1", type: "clearLocation" }), {
-    hostId: "local",
-    deviceId: "Pixel_9_API_35.1",
-    type: "clearLocation",
-  });
+  assert.deepEqual(
+    parseDeviceActionInput({
+      hostId: "local",
+      deviceId: "Pixel_9_API_35.1",
+      type: "clearLocation",
+    }),
+    {
+      hostId: "local",
+      deviceId: "Pixel_9_API_35.1",
+      type: "clearLocation",
+    },
+  );
 });
 
 test("each platform offers only the actions it can run", () => {
@@ -231,19 +293,37 @@ test("each platform offers only the actions it can run", () => {
   assert.equal(deviceActionSupported("ios", { type: "setOrientation" }), false);
   assert.equal(deviceActionSupported("android", { type: "sendPush" }), false);
   assert.equal(deviceActionSupported("android", { type: "setLiquidGlass" }), false);
-  assert.equal(deviceActionSupported("android", { type: "setToggle", setting: "networkEnabled" }), true);
-  assert.equal(deviceActionSupported("android", { type: "setToggle", setting: "voiceOver" }), false);
-  assert.equal(deviceActionSupported("ios", { type: "setToggle", setting: "networkEnabled" }), false);
-  assert.equal(deviceActionSupported("android", { type: "setPermission", permission: "camera" }), true);
-  assert.equal(deviceActionSupported("android", { type: "setPermission", permission: "faceid" }), false);
+  assert.equal(
+    deviceActionSupported("android", { type: "setToggle", setting: "networkEnabled" }),
+    true,
+  );
+  assert.equal(
+    deviceActionSupported("android", { type: "setToggle", setting: "voiceOver" }),
+    false,
+  );
+  assert.equal(
+    deviceActionSupported("ios", { type: "setToggle", setting: "networkEnabled" }),
+    false,
+  );
+  assert.equal(
+    deviceActionSupported("android", { type: "setPermission", permission: "camera" }),
+    true,
+  );
+  assert.equal(
+    deviceActionSupported("android", { type: "setPermission", permission: "faceid" }),
+    false,
+  );
   assert.equal(deviceActionSupported("ios", { type: "setPermission", permission: "faceid" }), true);
 });
 
 test("Android settings carry the network switch and the focused package", () => {
-  assert.deepEqual(parseDeviceSettings({ networkEnabled: false, foregroundApp: "com.android.settings" }), {
-    networkEnabled: false,
-    foregroundApp: "com.android.settings",
-  });
+  assert.deepEqual(
+    parseDeviceSettings({ networkEnabled: false, foregroundApp: "com.android.settings" }),
+    {
+      networkEnabled: false,
+      foregroundApp: "com.android.settings",
+    },
+  );
   assert.equal(parseDeviceSettings({ networkEnabled: "off" }), null);
   assert.equal(parseDeviceSettings({ foregroundApp: "rm -rf /" }), null);
 });

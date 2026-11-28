@@ -26,9 +26,7 @@ export function isPathInside(
   const relative = pathApi.relative(root, candidate);
   if (relative === "") return options.allowRoot ?? true;
   return (
-    relative !== ".." &&
-    !relative.startsWith(`..${pathApi.sep}`) &&
-    !pathApi.isAbsolute(relative)
+    relative !== ".." && !relative.startsWith(`..${pathApi.sep}`) && !pathApi.isAbsolute(relative)
   );
 }
 

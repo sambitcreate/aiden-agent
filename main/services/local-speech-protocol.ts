@@ -10,7 +10,9 @@ export const MAX_PCM_SAMPLES = 16_000 * 60 * 30;
 /** Generous bound for 30 minutes of Opus even at high bitrates. */
 export const MAX_OGG_OPUS_BYTES = 64 * 1024 * 1024;
 
-export type LocalSpeechAudio = { kind: "pcm16"; pcm: Int16Array } | { kind: "ogg-opus"; bytes: Uint8Array };
+export type LocalSpeechAudio =
+  | { kind: "pcm16"; pcm: Int16Array }
+  | { kind: "ogg-opus"; bytes: Uint8Array };
 
 type V = typeof LOCAL_SPEECH_PROTOCOL_VERSION;
 
@@ -62,9 +64,22 @@ export type LocalSpeechWorkerMessage =
       decodeMs?: number;
       loadMs?: number;
     }
-  | { version: V; kind: "failure"; requestId: string; message: string; code?: LocalSpeechFailureCode };
+  | {
+      version: V;
+      kind: "failure";
+      requestId: string;
+      message: string;
+      code?: LocalSpeechFailureCode;
+    };
 
-const FAMILIES: readonly SpeechModelFamily[] = ["nemo-transducer", "nemo-canary", "whisper", "sense-voice", "moonshine-v2", "parakeet-gguf"];
+const FAMILIES: readonly SpeechModelFamily[] = [
+  "nemo-transducer",
+  "nemo-canary",
+  "whisper",
+  "sense-voice",
+  "moonshine-v2",
+  "parakeet-gguf",
+];
 const FAILURE_CODES: readonly LocalSpeechFailureCode[] = [
   "model-missing",
   "engine-unavailable",
@@ -100,7 +115,8 @@ export function normalizePcm16(value: unknown): Int16Array | null {
     return value.byteLength % 2 === 0 ? new Int16Array(value) : null;
   }
   if (!ArrayBuffer.isView(value) || value.byteLength % 2 !== 0) return null;
-  if (value.byteOffset % 2 === 0) return new Int16Array(value.buffer, value.byteOffset, value.byteLength / 2);
+  if (value.byteOffset % 2 === 0)
+    return new Int16Array(value.buffer, value.byteOffset, value.byteLength / 2);
   // Unaligned views (possible for pooled Buffers) need a copy.
   const copy = new Uint8Array(value.byteLength);
   copy.set(new Uint8Array(value.buffer, value.byteOffset, value.byteLength));
@@ -110,7 +126,8 @@ export function normalizePcm16(value: unknown): Int16Array | null {
 function normalizeBytes(value: unknown): Uint8Array | null {
   if (value instanceof Uint8Array) return value;
   if (value instanceof ArrayBuffer) return new Uint8Array(value);
-  if (ArrayBuffer.isView(value)) return new Uint8Array(value.buffer, value.byteOffset, value.byteLength);
+  if (ArrayBuffer.isView(value))
+    return new Uint8Array(value.buffer, value.byteOffset, value.byteLength);
   return null;
 }
 
@@ -149,13 +166,16 @@ export function isLocalSpeechParentMessage(value: unknown): value is LocalSpeech
       return (
         isNonEmptyString(value.modelDirectory) &&
         isSpecFor(value.spec, value.modelId) &&
-        (value.language === undefined || value.language === null || (typeof value.language === "string" && LANGUAGE.test(value.language)))
+        (value.language === undefined ||
+          value.language === null ||
+          (typeof value.language === "string" && LANGUAGE.test(value.language)))
       );
     case "transcribe":
       return (
         isNonEmptyString(value.modelDirectory) &&
         isSpecFor(value.spec, value.modelId) &&
-        (value.language === null || (typeof value.language === "string" && LANGUAGE.test(value.language))) &&
+        (value.language === null ||
+          (typeof value.language === "string" && LANGUAGE.test(value.language))) &&
         typeof value.translate === "boolean" &&
         typeof value.trimSilence === "boolean" &&
         typeof value.vadModelPath === "string" &&
@@ -177,9 +197,11 @@ export function isLocalSpeechWorkerMessage(value: unknown): value is LocalSpeech
   }
   if (value.kind !== "result") return false;
   if (value.ready !== undefined && typeof value.ready !== "boolean") return false;
-  if (value.error !== undefined && value.error !== null && typeof value.error !== "string") return false;
+  if (value.error !== undefined && value.error !== null && typeof value.error !== "string")
+    return false;
   if (value.text !== undefined && typeof value.text !== "string") return false;
-  if (value.language !== undefined && value.language !== null && typeof value.language !== "string") return false;
+  if (value.language !== undefined && value.language !== null && typeof value.language !== "string")
+    return false;
   if (value.decodeMs !== undefined && typeof value.decodeMs !== "number") return false;
   if (value.loadMs !== undefined && typeof value.loadMs !== "number") return false;
   return true;

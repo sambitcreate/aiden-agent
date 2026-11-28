@@ -12,7 +12,10 @@ export function availableChatModel(
     !canUseGeminiChatModel(settings.geminiUsageScope, provider.id)
   )
     return undefined;
-  return firstVisibleModelForProvider(settings.hiddenModelsByProvider, provider.id, provider.models, [
-    provider.defaultModel,
-  ]);
+  return firstVisibleModelForProvider(
+    settings.hiddenModelsByProvider,
+    provider.id,
+    provider.models,
+    [provider.defaultModel],
+  );
 }

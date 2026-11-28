@@ -26,7 +26,13 @@ interface OwnershipRecord {
 function readRecord(file: string): OwnershipRecord | undefined {
   try {
     const value = JSON.parse(readFileSync(file, "utf8")) as Partial<OwnershipRecord>;
-    if (typeof value.pid !== "number" || typeof value.generation !== "string" || typeof value.heartbeatAt !== "number" || typeof value.acquiredAt !== "number") return undefined;
+    if (
+      typeof value.pid !== "number" ||
+      typeof value.generation !== "string" ||
+      typeof value.heartbeatAt !== "number" ||
+      typeof value.acquiredAt !== "number"
+    )
+      return undefined;
     return value as OwnershipRecord;
   } catch {
     return undefined;
@@ -105,9 +111,13 @@ export function createTelegramOwnershipLease(options: {
       let recovered = false;
       if (existsSync(file)) {
         const current = readRecord(file);
-        const stale = !current || (now() - current.heartbeatAt > staleMs && !processAlive(current.pid));
+        const stale =
+          !current || (now() - current.heartbeatAt > staleMs && !processAlive(current.pid));
         if (!stale) return { acquired: false, recovered: false, ownerPid: current?.pid };
-        renameSync(file, path.join(directory, `${options.profile}.recovered-${now()}-${randomUUID()}.json`));
+        renameSync(
+          file,
+          path.join(directory, `${options.profile}.recovered-${now()}-${randomUUID()}.json`),
+        );
         recovered = true;
       }
       const timestamp = now();

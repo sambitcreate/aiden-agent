@@ -70,7 +70,10 @@ test("generation initialization persists terminal outcomes before releasing owne
     "const initializationTerminalState = { attempted: false }",
   );
   assert.ok(helperStart >= 0, "terminal persistence helper must be part of generation start");
-  assert.match(llmClientSource, /import \{[^}]*\bpersistGenerationInitializationTerminal\b[^}]*\}/u);
+  assert.match(
+    llmClientSource,
+    /import \{[^}]*\bpersistGenerationInitializationTerminal\b[^}]*\}/u,
+  );
   assert.match(startSource, /await persistGenerationInitializationTerminal\(\{/u);
   // Where the outcome is written (the chat store, with the run's model unless
   // it keeps the chat's) is checked by behaviour in

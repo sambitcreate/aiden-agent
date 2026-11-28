@@ -46,16 +46,12 @@ test("terminal-style commits cannot cross a mutation that begins during async va
     releaseValidation = resolve;
   });
   let wroteToPty = false;
-  const write = commitWithWorkspaceMutationAdmission(
-    gate,
-    "workspace-1",
-    async () => {
-      await validation;
-      return () => {
-        wroteToPty = true;
-      };
-    },
-  );
+  const write = commitWithWorkspaceMutationAdmission(gate, "workspace-1", async () => {
+    await validation;
+    return () => {
+      wroteToPty = true;
+    };
+  });
   await new Promise<void>((resolve) => setImmediate(resolve));
   const finishMutation = gate.begin("workspace-1");
   releaseValidation();
@@ -112,10 +108,7 @@ test("workspace mutation cancels and drains initialization before its delayed ch
     string,
     { workspaceId?: string; completion?: Promise<void> | null }
   >();
-  const active = new Map<
-    string,
-    { workspaceId?: string; completion?: Promise<void> | null }
-  >();
+  const active = new Map<string, { workspaceId?: string; completion?: Promise<void> | null }>();
   const initialization = { workspaceId: undefined as string | undefined };
   initializations.set("stream-with-stale-renderer-hint", initialization);
   let runtimePreparationStarted = false;

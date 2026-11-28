@@ -17,8 +17,14 @@ import { AidenWindowInspectedError, type AidenWindowPort } from "./provider.js";
 export interface DebuggableContents {
   isDestroyed(): boolean;
   isDevToolsOpened(): boolean;
-  on(event: "devtools-opened" | "did-navigate" | "did-navigate-in-page", listener: () => void): unknown;
-  removeListener(event: "devtools-opened" | "did-navigate" | "did-navigate-in-page", listener: () => void): unknown;
+  on(
+    event: "devtools-opened" | "did-navigate" | "did-navigate-in-page",
+    listener: () => void,
+  ): unknown;
+  removeListener(
+    event: "devtools-opened" | "did-navigate" | "did-navigate-in-page",
+    listener: () => void,
+  ): unknown;
   readonly debugger: {
     attach(protocolVersion?: string): void;
     detach(): void;

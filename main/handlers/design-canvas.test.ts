@@ -95,8 +95,7 @@ async function fixture(
     broadcast: (update) => broadcasts.push(update),
     getChat: async (chatId) => chats[chatId] ?? null,
     grants,
-    workspaceRoot:
-      options.workspaceRoot ?? (async (chat) => roots[chat.workspaceId ?? ""] ?? null),
+    workspaceRoot: options.workspaceRoot ?? (async (chat) => roots[chat.workspaceId ?? ""] ?? null),
     windowFor: options.windowFor ?? (() => null),
     watcher: {
       set: async (chatId, workspaceRoot, paths) => {
@@ -117,7 +116,9 @@ async function fixture(
     },
     renderFrame: async (request) => {
       renders.push(request);
-      return options.renderFrame ? options.renderFrame(request) : new TextEncoder().encode(`${request.format}:${request.url}`);
+      return options.renderFrame
+        ? options.renderFrame(request)
+        : new TextEncoder().encode(`${request.format}:${request.url}`);
     },
     artifactPreview: async (_chatId, mediaId, theme) => {
       artifactThemes.push(theme);
@@ -197,11 +198,28 @@ test("a page a save takes off is remembered as removed, unless the save says the
     pageId: "page-1",
     createdBy: "aiden" as const,
   });
-  await invoke("designCanvas:save", "chat-1", { ...note, frames: [...note.frames, page("design/a.html"), page("design/b.html")] }, 0);
-  await invoke("designCanvas:save", "chat-1", { ...note, frames: [...note.frames, page("design/b.html")] }, 1, { undone: ["design/a.html"] });
-  assert.equal(((await invoke("designCanvas:get", "chat-1")) as DesignCanvas).removedPagePaths, undefined);
+  await invoke(
+    "designCanvas:save",
+    "chat-1",
+    { ...note, frames: [...note.frames, page("design/a.html"), page("design/b.html")] },
+    0,
+  );
+  await invoke(
+    "designCanvas:save",
+    "chat-1",
+    { ...note, frames: [...note.frames, page("design/b.html")] },
+    1,
+    { undone: ["design/a.html"] },
+  );
+  assert.equal(
+    ((await invoke("designCanvas:get", "chat-1")) as DesignCanvas).removedPagePaths,
+    undefined,
+  );
   await invoke("designCanvas:save", "chat-1", note, 2);
-  assert.deepEqual(((await invoke("designCanvas:get", "chat-1")) as DesignCanvas).removedPagePaths, ["design/b.html"]);
+  assert.deepEqual(
+    ((await invoke("designCanvas:get", "chat-1")) as DesignCanvas).removedPagePaths,
+    ["design/b.html"],
+  );
 });
 
 test("a conflicting or invalid save broadcasts nothing", async (t) => {
@@ -227,9 +245,18 @@ test("malformed parameters are rejected before the store is used", async (t) => 
   await assert.rejects(invoke("designCanvas:save", "chat-1", note, 1.5));
   await assert.rejects(invoke("designCanvas:save", "chat-1", note, "0"));
   await assert.rejects(invoke("designCanvas:save", undefined, note, 0));
-  await assert.rejects(invoke("designCanvas:save", "chat-1", note, 0, { undone: "design/a.html" }), /save options/u);
-  await assert.rejects(invoke("designCanvas:save", "chat-1", note, 0, { undone: ["../outside.html"] }), /save options/u);
-  await assert.rejects(invoke("designCanvas:save", "chat-1", note, 0, { undone: [42] }), /save options/u);
+  await assert.rejects(
+    invoke("designCanvas:save", "chat-1", note, 0, { undone: "design/a.html" }),
+    /save options/u,
+  );
+  await assert.rejects(
+    invoke("designCanvas:save", "chat-1", note, 0, { undone: ["../outside.html"] }),
+    /save options/u,
+  );
+  await assert.rejects(
+    invoke("designCanvas:save", "chat-1", note, 0, { undone: [42] }),
+    /save options/u,
+  );
   assert.deepEqual(await fs.readdir(root), []);
   assert.deepEqual(broadcasts, []);
 });
@@ -377,7 +404,12 @@ test("a capture comes from the asking window, clamped to its content", async (t)
   const { invokeFrom } = await fixture(t, {
     windowFor: (event) => (event === sender ? mine.window : other.window),
   });
-  const result = await invokeFrom(sender, "designCanvas:capture", { x: -40, y: 700, width: 400.6, height: 300 });
+  const result = await invokeFrom(sender, "designCanvas:capture", {
+    x: -40,
+    y: 700,
+    width: 400.6,
+    height: 300,
+  });
   assert.deepEqual(mine.captured, [{ x: 0, y: 700, width: 361, height: 100 }]);
   assert.deepEqual(other.captured, []);
   assert.deepEqual(result, { dataUrl: "data:image/png;base64,361x100" });
@@ -398,7 +430,12 @@ test("a zoomed-in page captures the frame it shows, not the area its page coordi
 test("a capture is a PNG no larger than 1024 px on its longest side", async (t) => {
   const retina = fakeWindow({ width: 2000, height: 1200 }, 2);
   const { invoke } = await fixture(t, { windowFor: () => retina.window });
-  const result = (await invoke("designCanvas:capture", { x: 0, y: 0, width: 1600, height: 400 })) as {
+  const result = (await invoke("designCanvas:capture", {
+    x: 0,
+    y: 0,
+    width: 1600,
+    height: 400,
+  })) as {
     dataUrl: string;
   };
   assert.equal(DESIGN_CAPTURE_MAX_SIDE, 1024);
@@ -406,7 +443,11 @@ test("a capture is a PNG no larger than 1024 px on its longest side", async (t) 
   const small = (await invoke("designCanvas:capture", { x: 0, y: 0, width: 300, height: 200 })) as {
     dataUrl: string;
   };
-  assert.equal(small.dataUrl, "data:image/png;base64,600x400", "a small capture is not scaled up or down");
+  assert.equal(
+    small.dataUrl,
+    "data:image/png;base64,600x400",
+    "a small capture is not scaled up or down",
+  );
 });
 
 test("an empty, off-window or malformed rectangle captures nothing", async (t) => {
@@ -421,7 +462,11 @@ test("an empty, off-window or malformed rectangle captures nothing", async (t) =
     "0,0,100,100",
     null,
   ]) {
-    assert.deepEqual(await invoke("designCanvas:capture", rect), { error: "unavailable" }, JSON.stringify(rect));
+    assert.deepEqual(
+      await invoke("designCanvas:capture", rect),
+      { error: "unavailable" },
+      JSON.stringify(rect),
+    );
   }
   assert.deepEqual(page.captured, []);
 });
@@ -500,11 +545,15 @@ test("picking a file opens the dialog in the workspace and returns its relative 
     roots: { "workspace-1": site },
     pickFile: async () => choice,
   });
-  assert.deepEqual(await invoke("designCanvas:pickFile", "chat-1", "file"), { path: "design/hero page.html" });
+  assert.deepEqual(await invoke("designCanvas:pickFile", "chat-1", "file"), {
+    path: "design/hero page.html",
+  });
   assert.equal(dialogs[0]?.defaultPath, site);
   assert.equal(dialogs[0]?.kind, "file");
   choice = path.join(site, "design", "img", "logo.png");
-  assert.deepEqual(await invoke("designCanvas:pickFile", "chat-1", "image"), { path: "design/img/logo.png" });
+  assert.deepEqual(await invoke("designCanvas:pickFile", "chat-1", "image"), {
+    path: "design/img/logo.png",
+  });
   choice = null;
   assert.deepEqual(await invoke("designCanvas:pickFile", "chat-1", "file"), { cancelled: true });
 });
@@ -512,21 +561,37 @@ test("picking a file opens the dialog in the workspace and returns its relative 
 test("a picked file of the wrong type is unsupported", async (t) => {
   const { site } = await pickWorkspace(t);
   let choice = path.join(site, "design", "img", "logo.png");
-  const { invoke } = await fixture(t, { roots: { "workspace-1": site }, pickFile: async () => choice });
-  assert.deepEqual(await invoke("designCanvas:pickFile", "chat-1", "file"), { error: "unsupported" });
+  const { invoke } = await fixture(t, {
+    roots: { "workspace-1": site },
+    pickFile: async () => choice,
+  });
+  assert.deepEqual(await invoke("designCanvas:pickFile", "chat-1", "file"), {
+    error: "unsupported",
+  });
   choice = path.join(site, "notes.md");
-  assert.deepEqual(await invoke("designCanvas:pickFile", "chat-1", "image"), { error: "unsupported" });
+  assert.deepEqual(await invoke("designCanvas:pickFile", "chat-1", "image"), {
+    error: "unsupported",
+  });
   choice = path.join(site, "design", "hero page.html");
-  assert.deepEqual(await invoke("designCanvas:pickFile", "chat-1", "image"), { error: "unsupported" });
+  assert.deepEqual(await invoke("designCanvas:pickFile", "chat-1", "image"), {
+    error: "unsupported",
+  });
 });
 
 test("a picked file outside the workspace, or linked from outside it, is refused", async (t) => {
   const { site, outside } = await pickWorkspace(t);
   let choice = path.join(outside, "secret.html");
-  const { invoke } = await fixture(t, { roots: { "workspace-1": site }, pickFile: async () => choice });
-  assert.deepEqual(await invoke("designCanvas:pickFile", "chat-1", "file"), { error: "outside-workspace" });
+  const { invoke } = await fixture(t, {
+    roots: { "workspace-1": site },
+    pickFile: async () => choice,
+  });
+  assert.deepEqual(await invoke("designCanvas:pickFile", "chat-1", "file"), {
+    error: "outside-workspace",
+  });
   choice = path.join(site, "design", "link.html");
-  assert.deepEqual(await invoke("designCanvas:pickFile", "chat-1", "file"), { error: "outside-workspace" });
+  assert.deepEqual(await invoke("designCanvas:pickFile", "chat-1", "file"), {
+    error: "outside-workspace",
+  });
 });
 
 test("a chat that cannot frame workspace files never opens the dialog", async (t) => {
@@ -552,14 +617,26 @@ async function exportCanvas(
   const doc: DesignCanvas = {
     ...emptyDesignCanvas(),
     frames: [
-      { ...frame, id: "page", kind: "file", title: "Hero: Pricing", path: "design/hero page.html", designWidth: 768, paper: "a4", printMode: "fixed" },
+      {
+        ...frame,
+        id: "page",
+        kind: "file",
+        title: "Hero: Pricing",
+        path: "design/hero page.html",
+        designWidth: 768,
+        paper: "a4",
+        printMode: "fixed",
+      },
       { ...frame, id: "logo", kind: "image", title: "logo.png", path: "design/img/logo.png" },
       { ...frame, id: "chart", kind: "artifact", title: "Sales chart", mediaId: "media-1" },
       { ...frame, id: "gone", kind: "file", title: "Gone", path: "design/missing.html" },
       { ...frame, id: "n", kind: "note", title: "Note", text: "hi" },
     ],
   };
-  assert.deepEqual(await harness.invoke("designCanvas:save", "chat-1", doc, 0), { ok: true, revision: 1 });
+  assert.deepEqual(await harness.invoke("designCanvas:save", "chat-1", doc, 0), {
+    ok: true,
+    revision: 1,
+  });
   return { ...harness, site, out };
 }
 
@@ -579,7 +656,10 @@ test("a page downloads as a PNG or a PDF drawn from its own address, with its pa
     paper: "a4",
     printMode: "fixed",
   });
-  assert.equal(await fs.readFile(destination, "utf8"), `png:aiden-design://${grant}/design/hero%20page.html`);
+  assert.equal(
+    await fs.readFile(destination, "utf8"),
+    `png:aiden-design://${grant}/design/hero%20page.html`,
+  );
 
   destination = path.join(out, "hero.pdf");
   assert.deepEqual(await invoke("designCanvas:export", "chat-1", "page", "pdf"), { saved: true });
@@ -589,17 +669,26 @@ test("a page downloads as a PNG or a PDF drawn from its own address, with its pa
 
 test("the original file of a page or an image is copied as it is on disk", async (t) => {
   let destination = "";
-  const { invoke, out, site, renders, saveDialogs } = await exportCanvas(t, { saveFile: () => destination });
+  const { invoke, out, site, renders, saveDialogs } = await exportCanvas(t, {
+    saveFile: () => destination,
+  });
   destination = path.join(out, "copy.html");
-  assert.deepEqual(await invoke("designCanvas:export", "chat-1", "page", "source"), { saved: true });
+  assert.deepEqual(await invoke("designCanvas:export", "chat-1", "page", "source"), {
+    saved: true,
+  });
   assert.equal(saveDialogs[0]?.defaultPath, "hero page.html");
   assert.deepEqual(
     await fs.readFile(destination),
     await fs.readFile(path.join(site, "design", "hero page.html")),
   );
   destination = path.join(out, "logo.png");
-  assert.deepEqual(await invoke("designCanvas:export", "chat-1", "logo", "source"), { saved: true });
-  assert.deepEqual(await fs.readFile(destination), await fs.readFile(path.join(site, "design", "img", "logo.png")));
+  assert.deepEqual(await invoke("designCanvas:export", "chat-1", "logo", "source"), {
+    saved: true,
+  });
+  assert.deepEqual(
+    await fs.readFile(destination),
+    await fs.readFile(path.join(site, "design", "img", "logo.png")),
+  );
   assert.deepEqual(renders, [], "copying never draws the page");
 });
 
@@ -612,7 +701,9 @@ test("an artifact downloads from its preview, and its original goes through the 
   destination = path.join(out, "chart.png");
   assert.deepEqual(await invoke("designCanvas:export", "chat-1", "chart", "png"), { saved: true });
   assert.deepEqual(renders[0], { url: "aiden-genui://preview/abc", width: 640, format: "png" });
-  assert.deepEqual(await invoke("designCanvas:export", "chat-1", "chart", "source"), { saved: true });
+  assert.deepEqual(await invoke("designCanvas:export", "chat-1", "chart", "source"), {
+    saved: true,
+  });
   assert.deepEqual(artifactExports, ["chat-1/media-1"]);
   assert.equal(saveDialogs.length, 1, "the artifact export shows its own dialog");
 });
@@ -626,7 +717,9 @@ test("a dark, tweaked page exports with its tweaks on its address, and only a da
   const { invoke, out, renders, artifactThemes, issuedGrants } = harness;
   destination = path.join(out, "x.png");
   const theme = { colorScheme: "dark", vars: {} };
-  assert.deepEqual(await invoke("designCanvas:export", "chat-1", "chart", "png", theme), { saved: true });
+  assert.deepEqual(await invoke("designCanvas:export", "chat-1", "chart", "png", theme), {
+    saved: true,
+  });
   assert.deepEqual(artifactThemes, [undefined], "a light artifact keeps the default theme");
 
   const stored = (await invoke("designCanvas:get", "chat-1")) as DesignCanvas;
@@ -640,12 +733,22 @@ test("a dark, tweaked page exports with its tweaks on its address, and only a da
           : frame,
     ),
   };
-  assert.deepEqual(await invoke("designCanvas:save", "chat-1", doc, stored.revision), { ok: true, revision: stored.revision + 1 });
-  assert.deepEqual(await invoke("designCanvas:export", "chat-1", "chart", "png", theme), { saved: true });
+  assert.deepEqual(await invoke("designCanvas:save", "chat-1", doc, stored.revision), {
+    ok: true,
+    revision: stored.revision + 1,
+  });
+  assert.deepEqual(await invoke("designCanvas:export", "chat-1", "chart", "png", theme), {
+    saved: true,
+  });
   assert.deepEqual(artifactThemes[1], theme);
   assert.deepEqual(await invoke("designCanvas:export", "chat-1", "page", "png"), { saved: true });
   const url = new URL(renders[renders.length - 1]!.url.replace(/^aiden-design:/u, "https:"));
-  assert.equal(renders[renders.length - 1]!.url.startsWith(`aiden-design://${issuedGrants[issuedGrants.length - 1]}/design/hero%20page.html?`), true);
+  assert.equal(
+    renders[renders.length - 1]!.url.startsWith(
+      `aiden-design://${issuedGrants[issuedGrants.length - 1]}/design/hero%20page.html?`,
+    ),
+    true,
+  );
   assert.equal(url.searchParams.get("aiden-dark"), "1");
   assert.deepEqual(JSON.parse(url.searchParams.get("aiden-tweaks")!), {
     vars: { "--accent": "#ff0055" },
@@ -658,26 +761,48 @@ test("a plain text change is written into the page's file only where it is found
   const file = path.join(site, "design", "hero page.html");
   await fs.writeFile(file, "<h1>Hi</h1>\n<p>Hi</p>\n<p>Plan &amp; ship</p>\n");
   assert.deepEqual(
-    await invoke("designCanvas:editText", "chat-1", "page", [{ before: "Plan & ship", after: "Plan, build & ship" }]),
+    await invoke("designCanvas:editText", "chat-1", "page", [
+      { before: "Plan & ship", after: "Plan, build & ship" },
+    ]),
     { ok: true },
   );
-  assert.equal(await fs.readFile(file, "utf8"), "<h1>Hi</h1>\n<p>Hi</p>\n<p>Plan, build &amp; ship</p>\n");
-  assert.deepEqual(await invoke("designCanvas:editText", "chat-1", "page", [{ before: "Hi", after: "Hey" }]), {
-    ok: false,
-    reason: "ambiguous",
-  });
+  assert.equal(
+    await fs.readFile(file, "utf8"),
+    "<h1>Hi</h1>\n<p>Hi</p>\n<p>Plan, build &amp; ship</p>\n",
+  );
   assert.deepEqual(
-    await invoke("designCanvas:editText", "chat-1", "page", [{ before: "Hi", after: "Hey" }], "design/hero page.html:2"),
+    await invoke("designCanvas:editText", "chat-1", "page", [{ before: "Hi", after: "Hey" }]),
+    {
+      ok: false,
+      reason: "ambiguous",
+    },
+  );
+  assert.deepEqual(
+    await invoke(
+      "designCanvas:editText",
+      "chat-1",
+      "page",
+      [{ before: "Hi", after: "Hey" }],
+      "design/hero page.html:2",
+    ),
     { ok: true },
     "the element's stamp picks the line",
   );
-  assert.equal(await fs.readFile(file, "utf8"), "<h1>Hi</h1>\n<p>Hey</p>\n<p>Plan, build &amp; ship</p>\n");
+  assert.equal(
+    await fs.readFile(file, "utf8"),
+    "<h1>Hi</h1>\n<p>Hey</p>\n<p>Plan, build &amp; ship</p>\n",
+  );
 
-  assert.deepEqual(await invoke("designCanvas:editText", "chat-1", "n", [{ before: "hi", after: "yo" }]), {
-    ok: false,
-    reason: "unavailable",
-  });
-  await assert.rejects(invoke("designCanvas:editText", "chat-1", "page", [{ before: 1, after: "x" }]));
+  assert.deepEqual(
+    await invoke("designCanvas:editText", "chat-1", "n", [{ before: "hi", after: "yo" }]),
+    {
+      ok: false,
+      reason: "unavailable",
+    },
+  );
+  await assert.rejects(
+    invoke("designCanvas:editText", "chat-1", "page", [{ before: 1, after: "x" }]),
+  );
   await assert.rejects(invoke("designCanvas:editText", "chat-1", "page", []));
 
   // A frame whose file is a link out of the workspace is never written.
@@ -686,11 +811,17 @@ test("a plain text change is written into the page's file only where it is found
     ...stored,
     frames: [...stored.frames, { ...stored.frames[0]!, id: "link", path: "design/link.html" }],
   };
-  assert.deepEqual(await invoke("designCanvas:save", "chat-1", linked, stored.revision), { ok: true, revision: stored.revision + 1 });
-  assert.deepEqual(await invoke("designCanvas:editText", "chat-1", "link", [{ before: "secret", after: "mine" }]), {
-    ok: false,
-    reason: "missing",
+  assert.deepEqual(await invoke("designCanvas:save", "chat-1", linked, stored.revision), {
+    ok: true,
+    revision: stored.revision + 1,
   });
+  assert.deepEqual(
+    await invoke("designCanvas:editText", "chat-1", "link", [{ before: "secret", after: "mine" }]),
+    {
+      ok: false,
+      reason: "missing",
+    },
+  );
 });
 
 test("make default writes a frame's values into its page, keeps words it can't place, and undoes only an untouched file", async (t) => {
@@ -719,31 +850,56 @@ test("make default writes a frame's values into its page, keeps words it can't p
   const baked = await fs.readFile(file, "utf8");
   assert.match(baked, /<style data-aiden-tweaks>\n:root:root:root \{ --radius: 16px; \}/u);
   assert.match(baked, /<h1 data-aiden-text="title">Hello<\/h1>/u);
-  assert.match(baked, /<a data-aiden-text="cta"><i>Go<\/i><\/a><b>Go<\/b>/u, "words that can't be placed stay for the frame to keep");
+  assert.match(
+    baked,
+    /<a data-aiden-text="cta"><i>Go<\/i><\/a><b>Go<\/b>/u,
+    "words that can't be placed stay for the frame to keep",
+  );
   assert.match(baked, /"default": "Go"/u, "and the file still says its old words");
   assert.doesNotMatch(baked, /data-cta=/u);
   assert.match(baked, /"default": 16/u);
 
-  assert.deepEqual(await invoke("designCanvas:undoBakeTweaks", "chat-1", "page", first.undoId), { ok: true });
+  assert.deepEqual(await invoke("designCanvas:undoBakeTweaks", "chat-1", "page", first.undoId), {
+    ok: true,
+  });
   assert.equal(await fs.readFile(file, "utf8"), page);
-  assert.deepEqual(await invoke("designCanvas:undoBakeTweaks", "chat-1", "page", first.undoId), { ok: false, reason: "unchanged" }, "one undo per make default");
+  assert.deepEqual(
+    await invoke("designCanvas:undoBakeTweaks", "chat-1", "page", first.undoId),
+    { ok: false, reason: "unchanged" },
+    "one undo per make default",
+  );
 
   // An older Make default's Undo leaves a later one alone; the later one's Undo still works.
   const older = await bake(values);
   const newer = await bake({ "--radius": "20px" });
   assert.match(await fs.readFile(file, "utf8"), /--radius: 20px;/u);
-  assert.deepEqual(await invoke("designCanvas:undoBakeTweaks", "chat-1", "page", older.undoId), { ok: false, reason: "changed" });
+  assert.deepEqual(await invoke("designCanvas:undoBakeTweaks", "chat-1", "page", older.undoId), {
+    ok: false,
+    reason: "changed",
+  });
   assert.match(await fs.readFile(file, "utf8"), /--radius: 20px;/u);
-  assert.deepEqual(await invoke("designCanvas:undoBakeTweaks", "chat-1", "page", newer.undoId), { ok: true });
+  assert.deepEqual(await invoke("designCanvas:undoBakeTweaks", "chat-1", "page", newer.undoId), {
+    ok: true,
+  });
   assert.match(await fs.readFile(file, "utf8"), /--radius: 16px;/u);
 
   const again = await bake({ "--radius": "12px" });
   await fs.writeFile(file, `${await fs.readFile(file, "utf8")}<!-- edited -->`);
-  assert.deepEqual(await invoke("designCanvas:undoBakeTweaks", "chat-1", "page", again.undoId), { ok: false, reason: "changed" }, "a file changed since is left alone");
+  assert.deepEqual(
+    await invoke("designCanvas:undoBakeTweaks", "chat-1", "page", again.undoId),
+    { ok: false, reason: "changed" },
+    "a file changed since is left alone",
+  );
 
-  assert.deepEqual(await invoke("designCanvas:bakeTweaks", "chat-1", "page", undefined), { ok: false, reason: "unchanged" });
+  assert.deepEqual(await invoke("designCanvas:bakeTweaks", "chat-1", "page", undefined), {
+    ok: false,
+    reason: "unchanged",
+  });
   await fs.writeFile(file, "<p>No tweaks here</p>");
-  assert.deepEqual(await invoke("designCanvas:bakeTweaks", "chat-1", "page", values), { ok: false, reason: "not-found" });
+  assert.deepEqual(await invoke("designCanvas:bakeTweaks", "chat-1", "page", values), {
+    ok: false,
+    reason: "not-found",
+  });
   await assert.rejects(invoke("designCanvas:bakeTweaks", "chat-1", "page", { color: "red" }));
 });
 
@@ -754,10 +910,15 @@ test("text edits of one page made at once all land in its file", async (t) => {
   await fs.writeFile(file, `${lines.join("\n")}\n`);
   const results = await Promise.all(
     lines.map((_, index) =>
-      invoke("designCanvas:editText", "chat-1", "page", [{ before: `Line ${index} old`, after: `Line ${index} new` }]),
+      invoke("designCanvas:editText", "chat-1", "page", [
+        { before: `Line ${index} old`, after: `Line ${index} new` },
+      ]),
     ),
   );
-  assert.deepEqual(results, lines.map(() => ({ ok: true })));
+  assert.deepEqual(
+    results,
+    lines.map(() => ({ ok: true })),
+  );
   assert.equal(
     await fs.readFile(file, "utf8"),
     `${lines.map((_, index) => `<p>Line ${index} new</p>`).join("\n")}\n`,
@@ -773,25 +934,41 @@ test("nothing is saved when the dialog is cancelled, the file is gone, or drawin
       throw new Error("crashed");
     },
   });
-  assert.deepEqual(await invoke("designCanvas:export", "chat-1", "page", "png"), { canceled: true });
+  assert.deepEqual(await invoke("designCanvas:export", "chat-1", "page", "png"), {
+    canceled: true,
+  });
   assert.deepEqual(renders, [], "a cancelled dialog draws nothing");
   destination = path.join(out, "x.png");
-  assert.deepEqual(await invoke("designCanvas:export", "chat-1", "gone", "png"), { error: "missing" });
-  assert.deepEqual(await invoke("designCanvas:export", "chat-1", "chart", "pdf"), { error: "missing" });
-  assert.deepEqual(await invoke("designCanvas:export", "chat-1", "page", "png"), { error: "failed" });
+  assert.deepEqual(await invoke("designCanvas:export", "chat-1", "gone", "png"), {
+    error: "missing",
+  });
+  assert.deepEqual(await invoke("designCanvas:export", "chat-1", "chart", "pdf"), {
+    error: "missing",
+  });
+  assert.deepEqual(await invoke("designCanvas:export", "chat-1", "page", "png"), {
+    error: "failed",
+  });
   await assert.rejects(fs.access(destination));
 });
 
 test("only a frame the stored canvas holds exports, and only in the formats its kind has", async (t) => {
   const { invoke, saveDialogs, chats } = await exportCanvas(t, { saveFile: () => "/nowhere" });
-  assert.deepEqual(await invoke("designCanvas:export", "chat-1", "n", "png"), { error: "unavailable" });
-  assert.deepEqual(await invoke("designCanvas:export", "chat-1", "logo", "pdf"), { error: "unavailable" });
-  assert.deepEqual(await invoke("designCanvas:export", "chat-1", "nope", "png"), { error: "unavailable" });
+  assert.deepEqual(await invoke("designCanvas:export", "chat-1", "n", "png"), {
+    error: "unavailable",
+  });
+  assert.deepEqual(await invoke("designCanvas:export", "chat-1", "logo", "pdf"), {
+    error: "unavailable",
+  });
+  assert.deepEqual(await invoke("designCanvas:export", "chat-1", "nope", "png"), {
+    error: "unavailable",
+  });
   await assert.rejects(invoke("designCanvas:export", "chat-1", "page", "svg"));
   await assert.rejects(invoke("designCanvas:export", "chat-1", 7, "png"));
   // Out of design mode the workspace may no longer be framed, so its files stay put.
   chats["chat-1"] = { id: "chat-1", workspaceId: "workspace-1" };
-  assert.deepEqual(await invoke("designCanvas:export", "chat-1", "page", "source"), { error: "unavailable" });
+  assert.deepEqual(await invoke("designCanvas:export", "chat-1", "page", "source"), {
+    error: "unavailable",
+  });
   assert.deepEqual(saveDialogs, []);
 });
 
@@ -803,14 +980,22 @@ test("the Code tab reads a page's file or an artifact's HTML, cut at 512 KiB, an
     text: await fs.readFile(page, "utf8"),
     truncated: false,
   });
-  assert.deepEqual(await invoke("designCanvas:source", "chat-1", "chart"), { text: "<svg>chart</svg>", truncated: false });
+  assert.deepEqual(await invoke("designCanvas:source", "chat-1", "chart"), {
+    text: "<svg>chart</svg>",
+    truncated: false,
+  });
   assert.deepEqual(await invoke("designCanvas:source", "chat-1", "gone"), { error: "missing" });
   assert.deepEqual(await invoke("designCanvas:source", "chat-1", "n"), { error: "unavailable" });
-  assert.deepEqual(await invoke("designCanvas:source", "chat-1", "nowhere"), { error: "unavailable" });
+  assert.deepEqual(await invoke("designCanvas:source", "chat-1", "nowhere"), {
+    error: "unavailable",
+  });
   await assert.rejects(invoke("designCanvas:source", "chat-1", ""), /Invalid design frame/);
 
   await fs.writeFile(page, "a".repeat(DESIGN_SOURCE_MAX_BYTES + 10));
-  const big = (await invoke("designCanvas:source", "chat-1", "page")) as { text: string; truncated: boolean };
+  const big = (await invoke("designCanvas:source", "chat-1", "page")) as {
+    text: string;
+    truncated: boolean;
+  };
   assert.equal(big.truncated, true);
   assert.equal(big.text.length, DESIGN_SOURCE_MAX_BYTES);
 });
@@ -822,7 +1007,11 @@ test("Send to canvas puts a chat visual on the page on screen as the person's fr
     artifactTitles: { "media-1": "  Revenue mockup  " },
     artifactHtml: { "media-1": "<main><h1>Revenue</h1></main>" },
   });
-  const placed = (await invoke("designCanvas:placeArtifact", "chat-1", "media-1")) as DesignCanvasPlaceArtifactResult;
+  const placed = (await invoke(
+    "designCanvas:placeArtifact",
+    "chat-1",
+    "media-1",
+  )) as DesignCanvasPlaceArtifactResult;
   assert.deepEqual(placed, { status: "placed", frameId: "placed-1" });
   // Announced as the person's own step, so an open canvas can undo it.
   assert.deepEqual(broadcasts, [{ chatId: "chat-1", revision: 1, step: "send-to-canvas:1" }]);
@@ -851,9 +1040,13 @@ test("Send to canvas centres a visual in the canvas the person sees, and shows t
     artifactHtml: { "media-1": "<p>wide</p>", "media-2": "<p>default</p>" },
   });
   // A 3000 x 2000 canvas on screen at zoom 1: the frame lands in its middle.
-  await invoke("designCanvas:placeArtifact", "chat-1", "media-1", { viewSize: { w: 3000, h: 2000 } });
+  await invoke("designCanvas:placeArtifact", "chat-1", "media-1", {
+    viewSize: { w: 3000, h: 2000 },
+  });
   // A size that does not parse is ignored, not refused.
-  await invoke("designCanvas:placeArtifact", "chat-1", "media-2", { viewSize: { w: -5, h: "tall" } });
+  await invoke("designCanvas:placeArtifact", "chat-1", "media-2", {
+    viewSize: { w: -5, h: "tall" },
+  });
   let doc = (await invoke("designCanvas:get", "chat-1")) as DesignCanvas;
   const wide = doc.frames.find((frame) => frame.kind === "artifact" && frame.mediaId === "media-1");
   assert.ok(wide);
@@ -876,7 +1069,11 @@ test("Send to canvas centres a visual in the canvas the person sees, and shows t
   assert.equal(doc.activePageId, wide.pageId);
   assert.equal(doc.frames.length, 2, "nothing new is placed");
   assert.equal(broadcasts.length, before + 1);
-  assert.equal(broadcasts[broadcasts.length - 1]?.step, undefined, "showing another page is no undo step of its own");
+  assert.equal(
+    broadcasts[broadcasts.length - 1]?.step,
+    undefined,
+    "showing another page is no undo step of its own",
+  );
 });
 
 test("Send to canvas refuses a visual the chat no longer has, or HTML that fails the visual checks", async (t) => {
@@ -884,10 +1081,19 @@ test("Send to canvas refuses a visual the chat no longer has, or HTML that fails
     artifactTitles: { "media-1": "Gone", "media-2": "Remote image" },
     artifactHtml: { "media-2": '<img src="https://evil.test/x.png">' },
   });
-  assert.deepEqual(await invoke("designCanvas:placeArtifact", "chat-1", "media-1"), { error: "missing" });
-  assert.deepEqual(await invoke("designCanvas:placeArtifact", "chat-1", "media-9"), { error: "missing" });
-  assert.deepEqual(await invoke("designCanvas:placeArtifact", "chat-1", "media-2"), { error: "unsafe" });
-  await assert.rejects(invoke("designCanvas:placeArtifact", "chat-1", "../media"), /Invalid visual/u);
+  assert.deepEqual(await invoke("designCanvas:placeArtifact", "chat-1", "media-1"), {
+    error: "missing",
+  });
+  assert.deepEqual(await invoke("designCanvas:placeArtifact", "chat-1", "media-9"), {
+    error: "missing",
+  });
+  assert.deepEqual(await invoke("designCanvas:placeArtifact", "chat-1", "media-2"), {
+    error: "unsafe",
+  });
+  await assert.rejects(
+    invoke("designCanvas:placeArtifact", "chat-1", "../media"),
+    /Invalid visual/u,
+  );
   await assert.rejects(invoke("designCanvas:placeArtifact", "chat-1", 7), /Invalid visual/u);
   assert.deepEqual(broadcasts, []);
   assert.deepEqual(((await invoke("designCanvas:get", "chat-1")) as DesignCanvas).frames, []);
@@ -898,14 +1104,25 @@ test("Send to canvas is refused in a Bot or routine chat and reports a full canv
     chats: {
       "chat-1": { id: "chat-1", workspaceId: "workspace-1", designMode: true },
       bot: { id: "bot", workspaceId: "workspace-1", designMode: true, botId: "bot-1" },
-      routine: { id: "routine", workspaceId: "workspace-1", designMode: true, owner: { kind: "routine" } as unknown as DesignCanvasChat["owner"] },
+      routine: {
+        id: "routine",
+        workspaceId: "workspace-1",
+        designMode: true,
+        owner: { kind: "routine" } as unknown as DesignCanvasChat["owner"],
+      },
     },
     artifactTitles: { "media-1": "Chart" },
     artifactHtml: { "media-1": "<p>chart</p>" },
   });
   await assert.rejects(invoke("designCanvas:placeArtifact", "bot", "media-1"), /not available/u);
-  await assert.rejects(invoke("designCanvas:placeArtifact", "routine", "media-1"), /not available/u);
-  await assert.rejects(invoke("designCanvas:placeArtifact", "missing-chat", "media-1"), /no longer available/u);
+  await assert.rejects(
+    invoke("designCanvas:placeArtifact", "routine", "media-1"),
+    /not available/u,
+  );
+  await assert.rejects(
+    invoke("designCanvas:placeArtifact", "missing-chat", "media-1"),
+    /no longer available/u,
+  );
 
   await store.update("chat-1", (doc) => ({
     ...doc,
@@ -922,5 +1139,7 @@ test("Send to canvas is refused in a Bot or routine chat and reports a full canv
       createdBy: "person" as const,
     })),
   }));
-  assert.deepEqual(await invoke("designCanvas:placeArtifact", "chat-1", "media-1"), { error: "full" });
+  assert.deepEqual(await invoke("designCanvas:placeArtifact", "chat-1", "media-1"), {
+    error: "full",
+  });
 });

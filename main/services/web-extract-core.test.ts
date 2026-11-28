@@ -13,7 +13,9 @@ import {
   type WebPageExtraction,
 } from "./web-extract-core.js";
 
-function sourceLineOf(result: { status: string; sourceLine?: string } | undefined): string | undefined {
+function sourceLineOf(
+  result: { status: string; sourceLine?: string } | undefined,
+): string | undefined {
   return result?.sourceLine;
 }
 
@@ -51,7 +53,11 @@ function scriptedModel(
   };
 }
 
-async function extract(fields: Record<string, string>, answers: Record<string, unknown>, page = PRICING_PAGE) {
+async function extract(
+  fields: Record<string, string>,
+  answers: Record<string, unknown>,
+  page = PRICING_PAGE,
+) {
   const extraction = await extractWebPageFields({
     page,
     fields: parseWebExtractFields(fields),
@@ -65,7 +71,10 @@ async function extract(fields: Record<string, string>, answers: Record<string, u
 test("a confident, well-typed value found on the page is extracted with its source line", async () => {
   const fields = await extract(
     { pro_monthly: "number: Pro plan monthly price", trial: "text: free trial length" },
-    { pro_monthly: { value: 20, confidence: 0.97 }, trial: { value: "14-day free trial", confidence: 0.91 } },
+    {
+      pro_monthly: { value: 20, confidence: 0.97 },
+      trial: { value: "14-day free trial", confidence: 0.91 },
+    },
   );
   assert.deepEqual(fields.pro_monthly, {
     status: "extracted",
@@ -82,7 +91,10 @@ test("a confident, well-typed value found on the page is extracted with its sour
 });
 
 test("a value below the 0.80 threshold is uncertain, still citing the line where it appears", async () => {
-  const fields = await extract({ pro_monthly: "number" }, { pro_monthly: { value: 20, confidence: 0.55 } });
+  const fields = await extract(
+    { pro_monthly: "number" },
+    { pro_monthly: { value: 20, confidence: 0.55 } },
+  );
   assert.deepEqual(fields.pro_monthly, {
     status: "uncertain",
     guess: 20,
@@ -101,11 +113,31 @@ test("a confident value that is not on the page is never extracted", async () =>
       seats: { value: [1200, 5000], confidence: 0.9 },
     },
   );
-  assert.deepEqual(fields.pro_monthly, { status: "uncertain", guess: 24, confidence: 0.99, notFound: true });
-  assert.deepEqual(fields.plan, { status: "uncertain", guess: "Enterprise", confidence: 0.95, notFound: true });
-  assert.deepEqual(fields.ships, { status: "uncertain", guess: "2026-11-04", confidence: 0.93, notFound: true });
+  assert.deepEqual(fields.pro_monthly, {
+    status: "uncertain",
+    guess: 24,
+    confidence: 0.99,
+    notFound: true,
+  });
+  assert.deepEqual(fields.plan, {
+    status: "uncertain",
+    guess: "Enterprise",
+    confidence: 0.95,
+    notFound: true,
+  });
+  assert.deepEqual(fields.ships, {
+    status: "uncertain",
+    guess: "2026-11-04",
+    confidence: 0.93,
+    notFound: true,
+  });
   // 1,200 is on the page as "1.2k"; 5,000 is not, so the list is not.
-  assert.deepEqual(fields.seats, { status: "uncertain", guess: [1200, 5000], confidence: 0.9, notFound: true });
+  assert.deepEqual(fields.seats, {
+    status: "uncertain",
+    guess: [1200, 5000],
+    confidence: 0.9,
+    notFound: true,
+  });
 });
 
 test("a field the model found no value for is null, whatever guess it sends", async () => {
@@ -121,12 +153,18 @@ test("a field the model found no value for is null, whatever guess it sends", as
 test("a value of the wrong type is uncertain even when confident and present", async () => {
   const fields = await extract(
     { seats: "integer", ships: "date" },
-    { seats: { value: "1.2k", confidence: 0.95 }, ships: { value: "November 3, 2026", confidence: 0.95 } },
+    {
+      seats: { value: "1.2k", confidence: 0.95 },
+      ships: { value: "November 3, 2026", confidence: 0.95 },
+    },
   );
   assert.equal(fields.seats!.status, "uncertain");
   assert.equal(fields.ships!.status, "uncertain");
   // Written as on the page, so the guess still points at its line.
-  assert.equal(fields.ships!.status === "uncertain" && fields.ships!.sourceLine, "Version 5.3.1 shipped on November 3, 2026.");
+  assert.equal(
+    fields.ships!.status === "uncertain" && fields.ships!.sourceLine,
+    "Version 5.3.1 shipped on November 3, 2026.",
+  );
 });
 
 test("numbers match the page as written: separators, multipliers and signs", async () => {
@@ -144,7 +182,10 @@ test("numbers match the page as written: separators, multipliers and signs", asy
     },
   );
   assert.equal(fields.team!.status, "extracted");
-  assert.equal(fields.team!.status === "extracted" && fields.team!.sourceLine, "Team | $1,299 / year | up to 1.2k seats");
+  assert.equal(
+    fields.team!.status === "extracted" && fields.team!.sourceLine,
+    "Team | $1,299 / year | up to 1.2k seats",
+  );
   assert.equal(fields.seats!.status, "extracted");
   assert.equal(fields.patch!.status, "extracted");
   assert.equal(fields.not_negative!.status, "uncertain");
@@ -153,9 +194,14 @@ test("numbers match the page as written: separators, multipliers and signs", asy
 
 test("scaled numbers support only their scaled value, including signs and list items", async () => {
   for (const [written, value] of [
-    ["1.2k", 1200], ["1.2K", 1200], ["1.2m", 1_200_000],
-    ["1.2bn", 1_200_000_000], ["1.2BN", 1_200_000_000],
-    ["1.2 thousand", 1200], ["1.2 MILLION", 1_200_000], ["-1.2k", -1200],
+    ["1.2k", 1200],
+    ["1.2K", 1200],
+    ["1.2m", 1_200_000],
+    ["1.2bn", 1_200_000_000],
+    ["1.2BN", 1_200_000_000],
+    ["1.2 thousand", 1200],
+    ["1.2 MILLION", 1_200_000],
+    ["-1.2k", -1200],
   ] as const) {
     const coefficient = value < 0 ? -1.2 : 1.2;
     const fields = await extract(
@@ -168,7 +214,11 @@ test("scaled numbers support only their scaled value, including signs and list i
       `Seats: ${written}`,
     );
     assert.equal(fields.correct!.status, "extracted", written);
-    assert.deepEqual(fields.wrong, { status: "uncertain", guess: coefficient, confidence: 0.99, notFound: true }, written);
+    assert.deepEqual(
+      fields.wrong,
+      { status: "uncertain", guess: coefficient, confidence: 0.99, notFound: true },
+      written,
+    );
     assert.equal(fields.list!.status, "uncertain", written);
   }
   const fields = await extract(
@@ -191,7 +241,10 @@ test("text citations include the complete match across line endings and normaliz
   for (const separator of ["\n", "\r\n", "\n\n", "\n \t\n"]) {
     const fields = await extract(
       { destination: "text", destinations: "list" },
-      { destination: { value: "New York", confidence: 0.99 }, destinations: { value: ["New York", "Paris"], confidence: 0.99 } },
+      {
+        destination: { value: "New York", confidence: 0.99 },
+        destinations: { value: ["New York", "Paris"], confidence: 0.99 },
+      },
       `Shipping destination: New${separator}York\nParis`,
     );
     assert.equal(fields.destination!.status, "extracted");
@@ -251,14 +304,29 @@ test("complete astral-character support uses the recap's Unicode code-point budg
   for (const [page, value, source] of [
     ["😀".repeat(101), "😀".repeat(101), "😀".repeat(101)],
     ["😀".repeat(200), "😀".repeat(200), "😀".repeat(200)],
-    ["😀".repeat(50) + "\r\n\r\n" + "😀".repeat(51), "😀".repeat(50) + " " + "😀".repeat(51), "😀".repeat(50) + " " + "😀".repeat(51)],
+    [
+      "😀".repeat(50) + "\r\n\r\n" + "😀".repeat(51),
+      "😀".repeat(50) + " " + "😀".repeat(51),
+      "😀".repeat(50) + " " + "😀".repeat(51),
+    ],
   ]) {
-    const fields = await extract({ symbols: "text" }, { symbols: { value, confidence: 0.99 } }, page);
+    const fields = await extract(
+      { symbols: "text" },
+      { symbols: { value, confidence: 0.99 } },
+      page,
+    );
     assert.equal(fields.symbols!.status, "extracted");
     assert.equal(sourceLineOf(fields.symbols), source);
     const recap = buildWebExtractRecap({ url: "https://example.com", fields });
-    assert.ok(recap && parseWebExtractRecap(recap), "the complete source fits the real wire validator");
-    assert.equal(recap.fields[0]!.sourceLine, source, "the recap must not clip supporting characters");
+    assert.ok(
+      recap && parseWebExtractRecap(recap),
+      "the complete source fits the real wire validator",
+    );
+    assert.equal(
+      recap.fields[0]!.sourceLine,
+      source,
+      "the recap must not clip supporting characters",
+    );
   }
 });
 
@@ -268,14 +336,19 @@ test("astral citation windows count omission markers and translate raw UTF-16 of
     ["xxx" + "😀".repeat(199), "😀".repeat(199), "…" + "😀".repeat(199)],
     ["😀".repeat(199) + "yyy", "😀".repeat(199), "😀".repeat(199) + "…"],
   ]) {
-    const fields = await extract({ symbols: "text" }, { symbols: { value, confidence: 0.99 } }, page);
+    const fields = await extract(
+      { symbols: "text" },
+      { symbols: { value, confidence: 0.99 } },
+      page,
+    );
     assert.equal(fields.symbols!.status, "extracted");
     assert.equal(sourceLineOf(fields.symbols), expectedSource);
     assert.equal(Array.from(sourceLineOf(fields.symbols)!).length, 200);
   }
   const value = "A😀".repeat(50);
   const fields = await extract(
-    { symbols: "text" }, { symbols: { value, confidence: 0.99 } },
+    { symbols: "text" },
+    { symbols: { value, confidence: 0.99 } },
     "🪶".repeat(120) + "START " + value + " END" + "🪶".repeat(120),
   );
   assert.equal(fields.symbols!.status, "extracted");
@@ -294,7 +367,11 @@ test("actual code-point overflow stays uncertain even when glyphs look shorter",
     ["😀".repeat(100) + "\n" + "😀".repeat(100), "😀".repeat(100) + " " + "😀".repeat(100)],
     ["e\u0301".repeat(101), "é".repeat(101)],
   ]) {
-    const fields = await extract({ symbols: "text" }, { symbols: { value, confidence: 0.99 } }, page);
+    const fields = await extract(
+      { symbols: "text" },
+      { symbols: { value, confidence: 0.99 } },
+      page,
+    );
     assert.deepEqual(fields.symbols, { status: "uncertain", guess: value, confidence: 0.99 });
   }
 });
@@ -310,10 +387,19 @@ test("dates, times and datetimes match the forms pages write them in", async () 
       wrong_day: { value: "2026-11-13", confidence: 0.9 },
     },
   );
-  assert.equal(fields.ships!.status === "extracted" && fields.ships!.sourceLine, "Version 5.3.1 shipped on November 3, 2026.");
-  assert.equal(fields.opens!.status === "extracted" && fields.opens!.sourceLine, "Support hours: 9:30 am to 5 pm, Monday to Friday.");
+  assert.equal(
+    fields.ships!.status === "extracted" && fields.ships!.sourceLine,
+    "Version 5.3.1 shipped on November 3, 2026.",
+  );
+  assert.equal(
+    fields.opens!.status === "extracted" && fields.opens!.sourceLine,
+    "Support hours: 9:30 am to 5 pm, Monday to Friday.",
+  );
   assert.equal(fields.closes!.status, "extracted");
-  assert.equal(fields.launch!.status === "extracted" && fields.launch!.sourceLine, "Launch event: 2026-11-12 at 18:00.");
+  assert.equal(
+    fields.launch!.status === "extracted" && fields.launch!.sourceLine,
+    "Launch event: 2026-11-12 at 18:00.",
+  );
   assert.equal(fields.wrong_day!.status, "uncertain");
 });
 
@@ -352,11 +438,29 @@ test("a datetime is extracted only when its date, time and offset share one line
     },
     page,
   );
-  assert.equal(fields.launch!.status === "extracted" && fields.launch!.sourceLine, "Launch: November 3, 2026 at 09:00.");
-  assert.equal(fields.keynote!.status === "extracted" && fields.keynote!.sourceLine, "Keynote: 2026-11-04 09:00 UTC");
-  assert.equal(fields.tokyo!.status === "extracted" && fields.tokyo!.sourceLine, "Tokyo meetup: 5 Nov 2026, 18:30 (UTC+9)");
-  assert.equal(fields.adelaide!.status === "extracted" && fields.adelaide!.sourceLine, "Adelaide meetup: 6 Nov 2026, 18:30 (UTC+9:30)");
-  for (const name of ["mixed_lines", "unstated_offset", "wrong_offset", "fraction", "whole_hour_prefix"]) {
+  assert.equal(
+    fields.launch!.status === "extracted" && fields.launch!.sourceLine,
+    "Launch: November 3, 2026 at 09:00.",
+  );
+  assert.equal(
+    fields.keynote!.status === "extracted" && fields.keynote!.sourceLine,
+    "Keynote: 2026-11-04 09:00 UTC",
+  );
+  assert.equal(
+    fields.tokyo!.status === "extracted" && fields.tokyo!.sourceLine,
+    "Tokyo meetup: 5 Nov 2026, 18:30 (UTC+9)",
+  );
+  assert.equal(
+    fields.adelaide!.status === "extracted" && fields.adelaide!.sourceLine,
+    "Adelaide meetup: 6 Nov 2026, 18:30 (UTC+9:30)",
+  );
+  for (const name of [
+    "mixed_lines",
+    "unstated_offset",
+    "wrong_offset",
+    "fraction",
+    "whole_hour_prefix",
+  ]) {
     assert.equal(fields[name]!.status, "uncertain", name);
   }
 });
@@ -395,9 +499,15 @@ test("a duration is extracted only when the page's amount and unit give the valu
     page,
   );
   // Converted from "2 weeks", not the unrelated 14 above it.
-  assert.equal(fields.trial_days!.status === "extracted" && fields.trial_days!.sourceLine, "The trial lasts 2 weeks.");
+  assert.equal(
+    fields.trial_days!.status === "extracted" && fields.trial_days!.sourceLine,
+    "The trial lasts 2 weeks.",
+  );
   assert.equal(fields.trial_weeks!.status, "extracted");
-  assert.equal(fields.session!.status === "extracted" && fields.session!.sourceLine, "Sessions time out after 1 hour 30 minutes.");
+  assert.equal(
+    fields.session!.status === "extracted" && fields.session!.sourceLine,
+    "Sessions time out after 1 hour 30 minutes.",
+  );
   assert.equal(fields.renewal_months!.status, "extracted");
   for (const name of ["wrong_unit", "renewal_days", "session_hour_only", "session_minutes_only"]) {
     assert.equal(fields[name]!.status, "uncertain", name);
@@ -413,7 +523,11 @@ test("a duration is extracted only when the page's amount and unit give the valu
   assert.equal(plans.summed!.status, "uncertain");
 
   // A bare number is never a duration.
-  const bare = await extract({ team_days: "duration.days" }, { team_days: { value: 14, confidence: 0.95 } }, "We have 14 offices.");
+  const bare = await extract(
+    { team_days: "duration.days" },
+    { team_days: { value: 14, confidence: 0.95 } },
+    "We have 14 offices.",
+  );
   assert.equal(bare.team_days!.status, "uncertain");
 });
 
@@ -425,8 +539,14 @@ test("a list is extracted only when every item is on the page", async () => {
       more_countries: { value: ["Germany", "France"], confidence: 0.9 },
     },
   );
-  assert.equal(fields.countries!.status === "extracted" && fields.countries!.sourceLine, "Available in Germany, Japan and Brazil.");
-  assert.equal(fields.more_countries!.status === "uncertain" && fields.more_countries!.notFound, true);
+  assert.equal(
+    fields.countries!.status === "extracted" && fields.countries!.sourceLine,
+    "Available in Germany, Japan and Brazil.",
+  );
+  assert.equal(
+    fields.more_countries!.status === "uncertain" && fields.more_countries!.notFound,
+    true,
+  );
 });
 
 test("text matches whole words, ignoring case, curly quotes and emphasis", async () => {
@@ -451,7 +571,10 @@ test("the model gets the parsed fields, a local reference date, and at most its 
   const [request] = model.requests;
   assert.equal(request!.page, PRICING_PAGE.slice(0, 40));
   assert.equal(request!.referenceDate, "2026-01-05");
-  assert.deepEqual({ ...request!.fields }, { price: { type: "number", instructions: "Pro monthly price" } });
+  assert.deepEqual(
+    { ...request!.fields },
+    { price: { type: "number", instructions: "Pro monthly price" } },
+  );
   // The value is past the budget, so it was not in what the model read.
   assert.ok(!("error" in extraction));
   assert.equal(extraction.cut, true);
@@ -467,8 +590,14 @@ test("model failures become an error kind; a caller's abort is rethrown", async 
     },
   });
   const fields = parseWebExtractFields({ price: "number" });
-  assert.deepEqual(await extractWebPageFields({ page: "x", fields, model: failing(new WebExtractError("quota")) }), { error: "quota" });
-  assert.deepEqual(await extractWebPageFields({ page: "x", fields, model: failing(new Error("boom")) }), { error: "unavailable" });
+  assert.deepEqual(
+    await extractWebPageFields({ page: "x", fields, model: failing(new WebExtractError("quota")) }),
+    { error: "quota" },
+  );
+  assert.deepEqual(
+    await extractWebPageFields({ page: "x", fields, model: failing(new Error("boom")) }),
+    { error: "unavailable" },
+  );
   assert.deepEqual(
     await extractWebPageFields({ page: "x", fields, model: scriptedModel({ price: "20" }) }),
     { error: "invalid-response" },
@@ -476,24 +605,42 @@ test("model failures become an error kind; a caller's abort is rethrown", async 
   const slow: WebExtractModel = {
     id: "slow",
     maxPageChars: 1_000,
-    run: (request) => new Promise((_resolve, reject) => request.signal.addEventListener("abort", () => reject(request.signal.reason))),
+    run: (request) =>
+      new Promise((_resolve, reject) =>
+        request.signal.addEventListener("abort", () => reject(request.signal.reason)),
+      ),
   };
   // The timeout timer does not hold the event loop open on its own.
   const keepAlive = setInterval(() => undefined, 5);
   try {
-    assert.deepEqual(await extractWebPageFields({ page: "x", fields, model: slow, timeoutMs: 10 }), { error: "timeout" });
+    assert.deepEqual(
+      await extractWebPageFields({ page: "x", fields, model: slow, timeoutMs: 10 }),
+      { error: "timeout" },
+    );
   } finally {
     clearInterval(keepAlive);
   }
   const controller = new AbortController();
-  const pending = extractWebPageFields({ page: "x", fields, model: slow, signal: controller.signal });
+  const pending = extractWebPageFields({
+    page: "x",
+    fields,
+    model: slow,
+    signal: controller.signal,
+  });
   controller.abort(new Error("stopped"));
   await assert.rejects(pending, /stopped/u);
 });
 
 test("field maps are checked before anything is sent", () => {
   assert.deepEqual(
-    { ...parseWebExtractFields({ a: "integer", b: "duration.days: trial", c: "list.date", d: "datetime" }) },
+    {
+      ...parseWebExtractFields({
+        a: "integer",
+        b: "duration.days: trial",
+        c: "list.date",
+        d: "datetime",
+      }),
+    },
     {
       a: { type: "number", integer: true },
       b: { type: "duration", unit: "days", instructions: "trial" },
@@ -529,11 +676,27 @@ test("every field name accepted is one Clairic accepts", () => {
       return false;
     }
   };
-  for (const name of ["price", "_private", "Pro_Monthly2", "a".repeat(64)]) assert.equal(accepted(name), true, name);
-  for (const name of ["price", "_private", "1price", "9", "a".repeat(64), "a".repeat(65), "has-dash", "has.dot", "has space", "émoji", ""]) {
+  for (const name of ["price", "_private", "Pro_Monthly2", "a".repeat(64)])
+    assert.equal(accepted(name), true, name);
+  for (const name of [
+    "price",
+    "_private",
+    "1price",
+    "9",
+    "a".repeat(64),
+    "a".repeat(65),
+    "has-dash",
+    "has.dot",
+    "has space",
+    "émoji",
+    "",
+  ]) {
     if (accepted(name)) assert.match(name, CLAIRIC_FIELD_NAME, name);
   }
-  assert.throws(() => parseWebExtractFields({ "1price": "number" }), /start with a letter or underscore/u);
+  assert.throws(
+    () => parseWebExtractFields({ "1price": "number" }),
+    /start with a letter or underscore/u,
+  );
 });
 
 test("a long source line is cited as a window around the value", () => {
@@ -551,7 +714,12 @@ test("the model-facing text says which values are guesses", () => {
   const extraction: WebPageExtraction = {
     cut: true,
     fields: {
-      price: { status: "extracted", value: 20, confidence: 0.97, sourceLine: "Pro is $20 per month." },
+      price: {
+        status: "extracted",
+        value: 20,
+        confidence: 0.97,
+        sourceLine: "Pro is $20 per month.",
+      },
       seats: { status: "uncertain", guess: 50, confidence: 0.4, notFound: true },
       sla: { status: "null", value: null },
     },
@@ -562,5 +730,8 @@ test("the model-facing text says which values are guesses", () => {
   assert.match(text, /^sla: not on the page$/mu);
   assert.match(text, /first part of the page/u);
   assert.match(text, /guesses/u);
-  assert.equal(formatWebPageExtraction({ error: "auth" }), "Extraction failed: the extraction model rejected every saved key.");
+  assert.equal(
+    formatWebPageExtraction({ error: "auth" }),
+    "Extraction failed: the extraction model rejected every saved key.",
+  );
 });

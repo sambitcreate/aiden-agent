@@ -1,8 +1,13 @@
 import type { NormalizedBlock } from "../types.js";
 
 const NOISE_TOOLS = new Set([
-  "TodoWrite", "TodoRead", "ToolSearch", "WebSearch",
-  "AskUser", "ExitSpecMode", "GenerateDroid",
+  "TodoWrite",
+  "TodoRead",
+  "ToolSearch",
+  "WebSearch",
+  "AskUser",
+  "ExitSpecMode",
+  "GenerateDroid",
 ]);
 
 const NOISE_STRINGS = [
@@ -11,7 +16,8 @@ const NOISE_STRINGS = [
   "IMPORTANT: TodoWrite was not called yet.",
 ];
 
-const XML_WRAPPER_RE = /<(system-reminder|ide_opened_file|command-message|context-window-usage)[^>]*>[\s\S]*?<\/\1>/g;
+const XML_WRAPPER_RE =
+  /<(system-reminder|ide_opened_file|command-message|context-window-usage)[^>]*>[\s\S]*?<\/\1>/g;
 
 const isNoiseUserBlock = (text: string): boolean => {
   const trimmed = text.trim();
@@ -20,8 +26,7 @@ const isNoiseUserBlock = (text: string): boolean => {
   return stripped.length === 0;
 };
 
-const cleanUserText = (text: string): string =>
-  text.replace(XML_WRAPPER_RE, "").trim();
+const cleanUserText = (text: string): string => text.replace(XML_WRAPPER_RE, "").trim();
 
 export const filterNoise = (blocks: NormalizedBlock[]): NormalizedBlock[] => {
   const out: NormalizedBlock[] = [];

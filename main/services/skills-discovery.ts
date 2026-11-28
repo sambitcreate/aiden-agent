@@ -231,10 +231,7 @@ async function readBoundedSkillFile(
       offset += bytesRead;
     }
     if (offset > readLimit) {
-      throw new SkillReadLimitError(
-        "Skill instructions exceed Aiden's safety limit.",
-        offset,
-      );
+      throw new SkillReadLimitError("Skill instructions exceed Aiden's safety limit.", offset);
     }
     return { text: buffer.toString("utf8", 0, offset), bytesRead: offset };
   } finally {
@@ -272,7 +269,11 @@ async function* boundedSkillPaths(
       entries.sort((left, right) => (left.name < right.name ? -1 : left.name > right.name ? 1 : 0));
       for (const entry of entries) {
         const relative = path.join(current.relative, entry.name);
-        if (entry.file && entry.name === "SKILL.md" && (current.depth >= 1 || search.baseSkill === true)) {
+        if (
+          entry.file &&
+          entry.name === "SKILL.md" &&
+          (current.depth >= 1 || search.baseSkill === true)
+        ) {
           yield relative;
         } else if (entry.directory && current.depth < search.maxDepth) {
           queue.push({
@@ -293,10 +294,7 @@ async function scanPatterns(
 ): Promise<DiscoveredSkill[]> {
   if (!(await dirExists(config.root))) return [];
   const rootHandle = await fs
-    .open(
-      config.root,
-      fsConstants.O_RDONLY | fsConstants.O_DIRECTORY | fsConstants.O_NOFOLLOW,
-    )
+    .open(config.root, fsConstants.O_RDONLY | fsConstants.O_DIRECTORY | fsConstants.O_NOFOLLOW)
     .catch(() => null);
   if (!rootHandle) return [];
   try {
@@ -351,7 +349,11 @@ async function scanPatterns(
       if (!plainName || !instructions) continue;
       // The namespace prefix can push an authored name past the catalog's
       // identity limit; leave such a plugin skill out rather than list it as invalid.
-      if (config.namespace && Array.from(name.normalize("NFKC")).length > SLASH_LIMITS.safeNameCharacters) continue;
+      if (
+        config.namespace &&
+        Array.from(name.normalize("NFKC")).length > SLASH_LIMITS.safeNameCharacters
+      )
+        continue;
 
       skills.push({
         // Priority preserves .aiden > .claude > .agents within each source;
@@ -535,16 +537,26 @@ async function scanAllSkillCandidates(
 
 async function pluginScanConfigs(home: string, workspaceRoot?: string): Promise<ScanConfig[]> {
   const seen = new Set<string>();
-  return (await claudePluginSkillRoots(home, workspaceRoot)).filter((plugin) => {
-    const key = JSON.stringify([plugin.scope, plugin.namespace, plugin.root]);
-    if (seen.has(key)) return false;
-    seen.add(key);
-    return true;
-  }).map((plugin) => ({
-    root: plugin.root, searches: plugin.searches, source: plugin.scope, priority: 30, namespace: plugin.namespace,
-  })).sort((left, right) =>
-    (left.source === "workspace" ? 0 : 1) - (right.source === "workspace" ? 0 : 1) ||
-    left.root.localeCompare(right.root) || left.namespace.localeCompare(right.namespace));
+  return (await claudePluginSkillRoots(home, workspaceRoot))
+    .filter((plugin) => {
+      const key = JSON.stringify([plugin.scope, plugin.namespace, plugin.root]);
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    })
+    .map((plugin) => ({
+      root: plugin.root,
+      searches: plugin.searches,
+      source: plugin.scope,
+      priority: 30,
+      namespace: plugin.namespace,
+    }))
+    .sort(
+      (left, right) =>
+        (left.source === "workspace" ? 0 : 1) - (right.source === "workspace" ? 0 : 1) ||
+        left.root.localeCompare(right.root) ||
+        left.namespace.localeCompare(right.namespace),
+    );
 }
 
 const DISCOVERY_CACHE_TTL_MS = 5_000;

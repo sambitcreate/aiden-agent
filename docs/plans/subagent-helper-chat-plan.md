@@ -6,8 +6,6 @@ Written 2026-11-22 from main at `1afb737c`. Built as one PR in three reviewed ph
 
 Three PRs turn today's Subagents inspector into a read-only chat for each helper, fix the bugs from your screenshot, and remove the 10-minute clock. Each PR lists what you'll notice, the build steps with the files they touch, the tests, and when it counts as done.
 
-
-
 ## What you decided
 
 OptionC: full helper chatBug fixes, a calmer view, and each helper's whole conversation.
@@ -51,6 +49,7 @@ Mostly behind the scenes
    - `redactEnvironmentAssignments`: a colon-and-block counts as a label when its name is all capital letters, like `JSON:`, `HTML:`, `NOTE:`, `TASK:` or `DATA:`, and has no secret hint. A secret hint is a setting-shaped name (all caps, snake or kebab case, or camelCase) ending in `key`, `token`, `secret`, `password`, `passphrase`, `pwd`, `jwt`, `cred`, `credential` or `cookie`; a plain word that is exactly one of those words, such as `Password:`, so prose headings like `Keys:`, `Hotkeys:` and `Design tokens:` survive; one of a few whole names (`AUTHORIZATION`, `SESSION_ID`, `SESSION_TOKEN`, `PRIVATE_KEY`), or a whole-segment `PIN`. A label's block still hides when its value looks like a credential to the existing detectors or is one opaque token on its own. Names with underscores or digits, and names with a secret hint, still hide in the panel, so `PASSPHRASE:`, `KEY:`, `APITOKEN:`, `API_KEY:` and `apiToken:` stay hidden.
    - The helper text the main chat reads hides every indented line under a colon-and-block whose name carries a secret hint, not only the first one, so a multi-line `PASSWORD:` block and its partial findings stay hidden there too. A prose heading such as `Authentication:` or `Keyboard:` is not a secret name, so its block survives. Main-chat compaction keeps its existing filter unchanged.
    - `sanitizeWithPolicyFacts`: before giving up and swapping the whole text for a marker, run the filter again until the text stops changing (at most 3 passes). Use the "\[REDACTED ENCODED TEXT\]" marker only when encoded data really triggered it.
+
 2. ### Change the time limits
 
    `main/services/subagents/subagent-child-policy.ts`, `subagent-supervisor-core.ts`, `subagent-child-runner.ts`, `main/services/llm-client.ts`, `main/services/bot-runtime/bot-tool-sources-main.ts`, `packages/cli/src/bot-subagents.ts`
@@ -59,16 +58,19 @@ Mostly behind the scenes
    - The reply's clock starts at the first helper launch, not when the main chat starts answering. For Bots that gives the helpers the full 60 minutes. Every helper call in one Bot reply shares that clock. The desktop rebuilds a Bot's tools for every task phase, so it keeps the clock per execution claim (one admitted message and its reply) and drops it when that reply ends (even with the next message starting at once), is dismissed or is resumed by a person (a quiet automatic retry keeps the clock). `aiden serve` keeps it per turn. A new message starts a new reply with a fresh 60 minutes; in `aiden serve` that includes a follow-up sent while a reply is running. An interrupted Bot task that a person resumes counts as a new reply: carrying the old start across a restart would need it saved with the task.
    - A helper waiting for a free slot (only 2 run at once) no longer loses time while it waits in chats.
    - The "save one last turn for a report" step before the deadline only happens when a real limit applies, which means Bots.
+
 3. ### Stop the refused-retry loop (Bots)
 
    `subagent-supervisor-core.ts` around the "elapsed before run admission" check
    - When a Bot's 60 minutes run out, the next helper call gets one plain tool result instead of an error: "Helpers can't start again in this reply because the 60-minute limit for Bot replies was reached. Finish the work yourself or tell the person." Later calls in the same reply get the same answer without running anything.
+
 4. ### Hand over partial work when a helper is stopped or fails
 
    `subagent-child-runner.ts` (result paths for interrupted, failed and timed-out helpers), `subagent-workspace-write.ts`, `subagent-supervisor-core.ts` (`formatResults`), `subagent-event-projector.ts`
    - The turn-limit path already passes the helper's partial findings to the main chat (`sanitizePartialFindingsForParent`). Use the same path when you stop a helper, when it fails, and at a Bot's 60-minute limit. The result is marked "incomplete, unverified".
    - Record the relative path of each file the helper changes through Aiden's edit tools. The result lists up to 20 of them under "Files it changed:", one path per line, since a name can itself contain a comma or "and". If a write may still have been finishing when the helper stopped, the list says it may be incomplete. If the helper also ran commands, add: "It also ran commands, which may have changed other files."
    - The summary card the panel shows gets the same partial text, using the panel's stricter filter.
+
 5. ### Remove duplicate and confusing text
 
    `subagent-event-projector.ts` (Result text), `renderer/components/subagent-detail.tsx`, `renderer/lib/subagent-view-state.ts`
@@ -76,6 +78,7 @@ Mostly behind the scenes
    - "Latest activity" is hidden once a helper has stopped.
    - The "No recent update" notice gets its own Stop button.
    - The new wording is "Stopped at the 60-minute limit for Bot replies". It replaces "The child tree reached its deadline" and "The child reached its deadline".
+
 6. ### Write the plan into the repo
 
    `docs/plans/subagent-helper-chat-plan.md`, `docs/plans/README.md`
@@ -122,6 +125,7 @@ Nothing yet. This PR records each helper's task, messages and steps while it run
    - Steps use the same `GenerationTimeline` format the main chat already uses. Read, Edited +18 −0, Ran a command and similar rows then look exactly like the main chat's.
    - A "trimmed" flag says older steps were dropped to stay under the size cap.
    - A strict parser rejects anything malformed, like the other shared formats.
+
 2. ### Record it while the helper runs
 
    new `main/services/subagents/subagent-transcript-recorder.ts`; hooked into `subagent-child-runner.ts` where it already subscribes to the helper's events
@@ -131,6 +135,7 @@ Nothing yet. This PR records each helper's task, messages and steps while it run
    - Each revision is saved before it is streamed. A failed save streams nothing and is retried with backoff; the final save is retried a bounded number of times. One save runs at a time. A store that keeps failing is reported once, and after 5 failures in a row it is left alone until something changes.
    - Edits show their line counts (+N −M), as in the main chat.
    - Helpers running in the separate model process (`subagent-inference-process`) report through the same event stream, so this covers them too.
+
 3. ### Keep it with the chat
 
    `main/services/subagents/subagent-run-store-v2-core.ts`, `subagent-run-store-io.ts`, `subagent-run-store-production.ts`
@@ -138,6 +143,7 @@ Nothing yet. This PR records each helper's task, messages and steps while it run
    - The cap is 2 MB per helper. Older steps are dropped first, and the trimmed flag is set so the view can say so.
    - The existing chat-delete path (`subagentRunStore.deleteChat`, with its restart-safe tombstones) removes these files too.
    - Settings → Storage already counts `subagent-runs-v2` under chat threads, so the files are counted automatically.
+
 4. ### Let the panel read it, live and saved
 
    `main/handlers/subagents.ts`, `main/services/subagents/subagent-history-read-core.ts`, `main/services/llm-client.ts`, `renderer/lib/generation-stream.ts`, `renderer/lib/chat-terminal-sync.ts`, preload
@@ -145,6 +151,7 @@ Nothing yet. This PR records each helper's task, messages and steps while it run
    - Live: a new `chat:subagent-transcript` stream message (run, revision, changed entries), sent the same way as `chat:subagents` today.
    - A late joiner, such as someone who opens the panel mid-run, reads the saved copy, then applies newer live revisions.
    - Live updates go only to the window running the chat. Another window that opens the helper chat re-reads the saved copy whenever the run's status or saved revision changes, including when it becomes terminal, so it follows the helper in steps rather than token by token. The helper's final copy is saved just after it finishes, so for a finished helper an empty or unfinished copy does not count: the window reads again a few times, each a little later, before settling on what it has.
+
 5. ### Bots and the Aiden server
    - Bot helpers record the same way. The Bot runtime builds its own helper manager, and the recorder hooks in at the same point.
    - The CLI server (`aiden serve`) runs the same code, so it saves transcripts too. Phones don't receive them yet.
@@ -198,6 +205,7 @@ What you seeAfter PR 2
    - **Trimmed note** at the top when PR 2 dropped old steps.
    - **⋯ menu, Technical details:** fresh start or copied chat, turns, tokens, where the model choice came from, and a copy button for the run ID.
    - Keeps scroll position, has a Jump to latest button, and announces status changes through the existing `SubagentLiveAnnouncer`. It respects Reduce Motion.
+
 2. ### Bottom bar
    - Shows the model and effort, for example "GLM 5.3 Flash · Max", then Stop (only while running; Stop all when the helper has active helpers under it), Expand, and Close (Back to main chat when expanded; the effort is left out when it is off).
    - Stop uses the existing helper control (`subagents:manage`), the same as the Stop button today.
@@ -208,16 +216,19 @@ What you seeAfter PR 2
    - Back to main chat or Esc (the Back tooltip reads "Back to main chat (Esc)") returns, and focus goes back to the button that opened it, or, if that button is gone, to the same helper's Expand button or the message box. While the helper chat covers the conversation, the conversation's hover cards and tooltips stay closed; a popover or dialog opened from it is a surface of its own. When the narrow side panel floats over the conversation, its open hover cards and tooltips close once, and the visible strip shows them again. Switching chats closes it.
    - The side panel shows only “<label>” is open in the main chat, with no button; the expanded chat's own Back to main chat is the only Back.
    - If the main chat waits on something else meanwhile, a note-style bar (warning fill, no border, announced once politely) says "The main chat needs your approval." or "The main chat has a question for you." Its button, Go to approval or Answer question, returns to the main chat and focuses the approval card or the questionnaire.
+
 4. ### Calmer fallback for older helpers
 
    `renderer/components/subagent-detail.tsx`
    - Helpers saved before PR 2 have no transcript, so they keep a cleaned-up summary. "Task preview" becomes "What it was asked". The step list becomes "What it did", with plain step names such as "Read a file", "Changed a file" and "Wrote its report". Result stays.
    - Removed: Saved view notice, "Context: …", "Latest activity" on stopped helpers, and "activity milestones".
+
 5. ### Wire up the existing clicks
 
    `renderer/components/subagents-panel.tsx`, `subagent-composer-pill.tsx`, `subagent-chips.tsx`
    - The Subagents panel shows the helper chat when a run has a transcript, and the fallback when it doesn't. The chat card rows and the tray already call `openSubagent`, so they need no new wiring.
    - The tray button "Open in side panel" is replaced by a state-worded open action: "Open helper chat" while the helper runs, "Review" when it waits on you, and "View result" once it has ended. The list rows use the same status words as the card.
+
 6. ### Design rules
    - Follow `GUI.md`, `docs/design-guide.md` and the ChatGPT reference files the repo requires before new UI.
    - Use Aiden's tokens only. Status shows in soft fills, never in coloured borders. Keyboard focus rings stay visible.
@@ -248,15 +259,15 @@ What you seeAfter PR 2
 
 Removing the clock doesn't remove every limit, so a confused helper still can't run up an unbounded bill.
 
-| Limit | Today | After |
-| --- | --- | --- |
-| Time, helpers in your chats | 10 minutes, shared by the whole reply | None (24-hour safety net) |
-| Time, Bot helpers | 10 minutes, shared by the whole reply | 60 minutes, from the first launch |
-| Steps per helper | 24 (up to 128 for read-only scouts) | Same |
-| Tool calls per helper | 64 | Same |
-| Helpers at once | 2 (1 on a local model), the rest wait | Same, and waiting costs no time in chats |
-| Helpers per request | Up to 4 | Same |
-| Spending and usage limits | Apply | Same |
+| Limit                       | Today                                 | After                                    |
+| --------------------------- | ------------------------------------- | ---------------------------------------- |
+| Time, helpers in your chats | 10 minutes, shared by the whole reply | None (24-hour safety net)                |
+| Time, Bot helpers           | 10 minutes, shared by the whole reply | 60 minutes, from the first launch        |
+| Steps per helper            | 24 (up to 128 for read-only scouts)   | Same                                     |
+| Tool calls per helper       | 64                                    | Same                                     |
+| Helpers at once             | 2 (1 on a local model), the rest wait | Same, and waiting costs no time in chats |
+| Helpers per request         | Up to 4                               | Same                                     |
+| Spending and usage limits   | Apply                                 | Same                                     |
 
 A saved helper conversation differs from the main chat in a few small ways:
 
@@ -278,13 +289,13 @@ A saved helper conversation differs from the main chat in a few small ways:
 
 ## Risks and how each is handled
 
-| Risk | What could happen | Handling |
-| --- | --- | --- |
-| Longer waits | With no clock, the main chat waits as long as its slowest helper. | The pill and "No recent update" show it, Stop is one click away, and the 24-hour net stays. |
-| Showing more text | Today's panel shows little on purpose. The helper chat shows what the helper did. | The parent/helper credential filter (the one Phase 1 uses for a stopped helper's partial work) hides API keys, tokens, private key blocks and secret-named values in the text and in every step field. A dedicated security review comes before PR 2 merges. |
-| Disk use | Many long helpers add up. | 2 MB cap per helper, deleted with the chat, and shown in Settings → Storage. |
-| Overlap with "Make Aiden more proactive" | Its background helpers touch the same code. | That thread knows this plan. Its helper PRs build on these three, which give them a place to show their work. |
-| Privacy filter change | Loosening the label rule could let a real secret through. | A name counts as a label only when it is a bare all-capital word of letters (no digits, `_` or `-`) with no secret hint, and a label's block still hides when its value looks like a credential. The secret-ending match (`key`, `token`, `secret`, `password` and the rest) applies only to setting-shaped names: all caps, containing `_` or `-`, or camelCase. Every all-caps name is setting-shaped, so `KEY:`, `APITOKEN:` and `PASSPHRASE:` never count as labels. Other names, such as prose headings, are hints only when they are exactly a secret word (`Password:`, `Credentials:`), so `Keys:` and `Design tokens:` survive; the secret words include `passcode`, `otp`, `totp`, `cvv`, `seed`, `mnemonic`, `private` and `signature` as well; a few whole names (`AUTHORIZATION`, `SESSION_ID`, `SESSION_TOKEN`, `PRIVATE_KEY`) and a whole-segment `PIN` are always hints (`colonBlockNameIsLabel` and `blockNameHasSecretHint` in `renderer/shared/subagent-safe-text.ts`). Every other name still hides in the panel, secret-named blocks hide on every line for the main chat, and tests cover both, including `PASSPHRASE:`, `KEY:`, `APITOKEN:` and multi-line `PASSWORD:`. The saved helper conversation also hides a secret-named value on the same line (`OTP: 731905`, `PIN=4821`, `"cvv": "381"`); references, paths, placeholders and prose such as `Signature: see the docs` stay, and `NOTE:`, `README:`, `Design tokens:` and `Keys:` survive. |
+| Risk                                     | What could happen                                                                 | Handling                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
+| ---------------------------------------- | --------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Longer waits                             | With no clock, the main chat waits as long as its slowest helper.                 | The pill and "No recent update" show it, Stop is one click away, and the 24-hour net stays.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
+| Showing more text                        | Today's panel shows little on purpose. The helper chat shows what the helper did. | The parent/helper credential filter (the one Phase 1 uses for a stopped helper's partial work) hides API keys, tokens, private key blocks and secret-named values in the text and in every step field. A dedicated security review comes before PR 2 merges.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
+| Disk use                                 | Many long helpers add up.                                                         | 2 MB cap per helper, deleted with the chat, and shown in Settings → Storage.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
+| Overlap with "Make Aiden more proactive" | Its background helpers touch the same code.                                       | That thread knows this plan. Its helper PRs build on these three, which give them a place to show their work.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
+| Privacy filter change                    | Loosening the label rule could let a real secret through.                         | A name counts as a label only when it is a bare all-capital word of letters (no digits, `_` or `-`) with no secret hint, and a label's block still hides when its value looks like a credential. The secret-ending match (`key`, `token`, `secret`, `password` and the rest) applies only to setting-shaped names: all caps, containing `_` or `-`, or camelCase. Every all-caps name is setting-shaped, so `KEY:`, `APITOKEN:` and `PASSPHRASE:` never count as labels. Other names, such as prose headings, are hints only when they are exactly a secret word (`Password:`, `Credentials:`), so `Keys:` and `Design tokens:` survive; the secret words include `passcode`, `otp`, `totp`, `cvv`, `seed`, `mnemonic`, `private` and `signature` as well; a few whole names (`AUTHORIZATION`, `SESSION_ID`, `SESSION_TOKEN`, `PRIVATE_KEY`) and a whole-segment `PIN` are always hints (`colonBlockNameIsLabel` and `blockNameHasSecretHint` in `renderer/shared/subagent-safe-text.ts`). Every other name still hides in the panel, secret-named blocks hide on every line for the main chat, and tests cover both, including `PASSPHRASE:`, `KEY:`, `APITOKEN:` and multi-line `PASSWORD:`. The saved helper conversation also hides a secret-named value on the same line (`OTP: 731905`, `PIN=4821`, `"cvv": "381"`); references, paths, placeholders and prose such as `Signature: see the docs` stay, and `NOTE:`, `README:`, `Design tokens:` and `Keys:` survive. |
 
 ## Order
 

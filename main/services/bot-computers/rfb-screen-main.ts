@@ -17,7 +17,11 @@ import type { NativeImage } from "electron";
 
 import { connectRfb, type RfbClient } from "./rfb-client.js";
 import { createRfbScreen, type BotComputerImageEncoder } from "./rfb-screen.js";
-import { BotComputerError, type BotComputerConnection, type BotComputerScreenFactory } from "./types.js";
+import {
+  BotComputerError,
+  type BotComputerConnection,
+  type BotComputerScreenFactory,
+} from "./types.js";
 
 /**
  * BGRA pixels to PNG or JPEG with Electron's `nativeImage`, scaled down to at
@@ -31,21 +35,33 @@ export function nativeImageEncoder(native: {
     let image = native.createFromBitmap(bgra, { width, height });
     if (width > maxWidth) image = image.resize({ width: maxWidth, quality: "good" });
     const size = image.getSize();
-    return { image: format === "png" ? image.toPNG() : image.toJPEG(quality), width: size.width, height: size.height };
+    return {
+      image: format === "png" ? image.toPNG() : image.toJPEG(quality),
+      width: size.width,
+      height: size.height,
+    };
   };
 }
 
 const RECORDING_LIMIT_BYTES = 32 * 1_048_576;
 
 /** The file calls a recording makes; tests stand in a disk that fills up. */
-export type RfbRecordingFs = Pick<typeof nodeFs, "mkdirSync" | "openSync" | "writeSync" | "closeSync">;
+export type RfbRecordingFs = Pick<
+  typeof nodeFs,
+  "mkdirSync" | "openSync" | "writeSync" | "closeSync"
+>;
 
 /**
  * Tees what the server sends into a 0600 file, up to the limit. A write the
  * disk refuses (full, or an I/O error) ends the recording, never the screen:
  * it runs inside the socket's data handler, where a throw would be uncaught.
  */
-function recordServerBytes(socket: Socket, file: string, fs: RfbRecordingFs, log: (message: string, error?: unknown) => void): void {
+function recordServerBytes(
+  socket: Socket,
+  file: string,
+  fs: RfbRecordingFs,
+  log: (message: string, error?: unknown) => void,
+): void {
   let fd: number | undefined;
   let written = 0;
   try {
@@ -94,10 +110,19 @@ export interface RfbScreenFactoryOptions {
 }
 
 /** Opens one VNC connection to this run's loopback server. */
-function openVnc(connection: BotComputerConnection, options: RfbScreenFactoryOptions, signal?: AbortSignal): Promise<RfbClient> {
+function openVnc(
+  connection: BotComputerConnection,
+  options: RfbScreenFactoryOptions,
+  signal?: AbortSignal,
+): Promise<RfbClient> {
   // Lume reports loopback; the host already refused a VM whose port answers anywhere else.
   if (connection.vnc.host !== "127.0.0.1") {
-    return Promise.reject(new BotComputerError("vnc_not_loopback", "The computer's screen isn't on this Mac's loopback address."));
+    return Promise.reject(
+      new BotComputerError(
+        "vnc_not_loopback",
+        "The computer's screen isn't on this Mac's loopback address.",
+      ),
+    );
   }
   const socket = connect({ host: "127.0.0.1", port: connection.vnc.port });
   socket.setNoDelay(true);
@@ -116,5 +141,11 @@ function openVnc(connection: BotComputerConnection, options: RfbScreenFactoryOpt
 /** The screen factory P8's sessions call once per computer run. */
 export function createRfbScreenFactory(options: RfbScreenFactoryOptions): BotComputerScreenFactory {
   return (connection, signal) =>
-    createRfbScreen({ connect: (connectSignal) => openVnc(connection, options, connectSignal), encode: options.encode }, signal);
+    createRfbScreen(
+      {
+        connect: (connectSignal) => openVnc(connection, options, connectSignal),
+        encode: options.encode,
+      },
+      signal,
+    );
 }

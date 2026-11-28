@@ -36,13 +36,25 @@ function stores(accessMode: "full" | "custom" = "full") {
   let afterIdentityWrite: (() => void) | undefined;
   let botRevision = 1;
   const view = (): BotAccessView => {
-    const base = { botId: BOT, revision: `access-${accessRevision}`, policyEpoch: "1", summary: "" };
+    const base = {
+      botId: BOT,
+      revision: `access-${accessRevision}`,
+      policyEpoch: "1",
+      summary: "",
+    };
     return accessMode === "full"
       ? { ...base, accessMode: "full" }
       : {
           ...base,
           accessMode: "custom",
-          custom: { ...model, fileScopeIds: ["scope:docs"], shellEnabled: false, connectionIds: [], skillIds: [], otherCapabilityIds: [] },
+          custom: {
+            ...model,
+            fileScopeIds: ["scope:docs"],
+            shellEnabled: false,
+            connectionIds: [],
+            skillIds: [],
+            otherCapabilityIds: [],
+          },
         };
   };
   const ports = createBotSettingsPorts({
@@ -55,15 +67,26 @@ function stores(accessMode: "full" | "custom" = "full") {
     },
     capabilityCatalog: async () => ({
       revision: "catalog-1",
-      providers: [{ id: "provider:a", label: "A", available: true, models: [{ id: "model:fast", label: "Fast", available: true }] }],
+      providers: [
+        {
+          id: "provider:a",
+          label: "A",
+          available: true,
+          models: [{ id: "model:fast", label: "Fast", available: true }],
+        },
+      ],
     }),
     botWebSearchEnabled: async () => false,
     updateBotAccess: async ({ expectedRevision, access }) => {
       const hook = duringAccessWrite;
       duringAccessWrite = undefined;
       hook?.();
-      if (expectedRevision !== `access-${accessRevision}`) throw new BotCapabilityRevisionConflictError(`access-${accessRevision}`);
-      const next = access.accessMode === "full" ? { providerId: access.providerId!, modelId: access.modelId! } : access.custom;
+      if (expectedRevision !== `access-${accessRevision}`)
+        throw new BotCapabilityRevisionConflictError(`access-${accessRevision}`);
+      const next =
+        access.accessMode === "full"
+          ? { providerId: access.providerId!, modelId: access.modelId! }
+          : access.custom;
       model = { providerId: next.providerId, modelId: next.modelId };
       accessRevision += 1;
     },
@@ -71,9 +94,17 @@ function stores(accessMode: "full" | "custom" = "full") {
       const hook = duringIdentityWrite;
       duringIdentityWrite = undefined;
       hook?.();
-      if (input.expectedRevision !== bot.revision) throw new BotIdentityRevisionConflictError(bot.revision);
+      if (input.expectedRevision !== bot.revision)
+        throw new BotIdentityRevisionConflictError(bot.revision);
       botRevision += 1;
-      bot = { ...bot, name: input.name, description: input.description, instructions: input.instructions, avatar: input.avatar, revision: `bot-${botRevision}` };
+      bot = {
+        ...bot,
+        name: input.name,
+        description: input.description,
+        instructions: input.instructions,
+        avatar: input.avatar,
+        revision: `bot-${botRevision}`,
+      };
       const written = structuredClone(bot);
       const after = afterIdentityWrite;
       afterIdentityWrite = undefined;
@@ -87,11 +118,21 @@ function stores(accessMode: "full" | "custom" = "full") {
   return {
     ports,
     /** A desktop model or tools edit: moves only the access revision. */
-    bumpAccess() { accessRevision += 1; },
-    setAccessReadable(readable: boolean) { accessReadable = readable; },
-    raceAccessWrite(edit: () => void) { duringAccessWrite = edit; },
-    raceIdentityWrite(edit: () => void) { duringIdentityWrite = edit; },
-    followIdentityWrite(edit: () => void) { afterIdentityWrite = edit; },
+    bumpAccess() {
+      accessRevision += 1;
+    },
+    setAccessReadable(readable: boolean) {
+      accessReadable = readable;
+    },
+    raceAccessWrite(edit: () => void) {
+      duringAccessWrite = edit;
+    },
+    raceIdentityWrite(edit: () => void) {
+      duringIdentityWrite = edit;
+    },
+    followIdentityWrite(edit: () => void) {
+      afterIdentityWrite = edit;
+    },
     /** A desktop identity edit: moves only the Bot's revision. */
     renameOnDesktop(name: string) {
       botRevision += 1;
@@ -106,7 +147,10 @@ test("a model change decided before a desktop access edit is refused and writes 
   const { revision } = await fake.ports.read(BOT);
   fake.bumpAccess();
 
-  await assert.rejects(fake.ports.write(BOT, { name: "Planner", model: FAST }, revision), BotSettingsConflictError);
+  await assert.rejects(
+    fake.ports.write(BOT, { name: "Planner", model: FAST }, revision),
+    BotSettingsConflictError,
+  );
 
   const after = await fake.current();
   assert.equal(after.name, "Chief");
@@ -134,7 +178,10 @@ test("when the Bot's access can't be read, a model change is refused and nothing
   await assert.rejects(fake.ports.write(BOT, { name: "Planner", model: FAST }, revision));
   // Readable again: the change was decided on no access revision at all.
   fake.setAccessReadable(true);
-  await assert.rejects(fake.ports.write(BOT, { name: "Planner", model: FAST }, revision), BotSettingsConflictError);
+  await assert.rejects(
+    fake.ports.write(BOT, { name: "Planner", model: FAST }, revision),
+    BotSettingsConflictError,
+  );
 
   const after = await fake.current();
   assert.equal(after.name, "Chief");
@@ -148,7 +195,10 @@ test("a name and model change whose model write loses a race leaves the name as 
     // The desktop saves access after the up-front check, just before the store's own check.
     fake.raceAccessWrite(() => fake.bumpAccess());
 
-    await assert.rejects(fake.ports.write(BOT, { name: "Planner", model: FAST }, revision), BotSettingsConflictError);
+    await assert.rejects(
+      fake.ports.write(BOT, { name: "Planner", model: FAST }, revision),
+      BotSettingsConflictError,
+    );
 
     const after = await fake.current();
     assert.equal(after.name, "Chief", mode);
@@ -176,7 +226,10 @@ test("a name and model change whose name write loses a race to a desktop edit ch
     // The desktop renames the Bot after the up-front check, just before the store's own check.
     fake.raceIdentityWrite(() => fake.renameOnDesktop("Desk name"));
 
-    await assert.rejects(fake.ports.write(BOT, { name: "Planner", model: FAST }, revision), BotSettingsConflictError);
+    await assert.rejects(
+      fake.ports.write(BOT, { name: "Planner", model: FAST }, revision),
+      BotSettingsConflictError,
+    );
 
     const after = await fake.current();
     assert.equal(after.name, "Desk name", mode);
@@ -193,10 +246,17 @@ test("a desktop rename landing between the name write and a refused model write 
     fake.followIdentityWrite(() => fake.renameOnDesktop("Desk name"));
     fake.raceAccessWrite(() => fake.bumpAccess());
 
-    await assert.rejects(fake.ports.write(BOT, { name: "Planner", model: FAST }, revision), BotSettingsConflictError);
+    await assert.rejects(
+      fake.ports.write(BOT, { name: "Planner", model: FAST }, revision),
+      BotSettingsConflictError,
+    );
 
     const after = await fake.current();
-    assert.equal(after.name, "Desk name", `${mode}: the undo must not overwrite the later desktop edit`);
+    assert.equal(
+      after.name,
+      "Desk name",
+      `${mode}: the undo must not overwrite the later desktop edit`,
+    );
     assert.deepEqual(after.model, { providerId: "provider:a", modelId: "model:slow" }, mode);
   }
 });

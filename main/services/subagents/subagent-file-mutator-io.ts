@@ -19,8 +19,7 @@ const MAX_COMMAND_BYTES = 275_000;
 /** The native read-html cap; larger files are refused before reading. */
 export const MAX_HTML_CONTENT_BYTES = 512 * 1024;
 const DEFAULT_REQUEST_TIMEOUT_MS = 30_000;
-const RECOVERY_NAME =
-  /^\.aiden-subagent-file-[A-Za-z0-9][A-Za-z0-9_-]{0,63}-[a-f0-9-]{36}\.tmp$/u;
+const RECOVERY_NAME = /^\.aiden-subagent-file-[A-Za-z0-9][A-Za-z0-9_-]{0,63}-[a-f0-9-]{36}\.tmp$/u;
 const SHA256 = /^[a-f0-9]{64}$/u;
 
 export type SubagentFileMutatorFailure =
@@ -57,8 +56,7 @@ export interface SubagentFileMutatorRuntimePaths {
 export function resolveSubagentFileMutatorBinary(
   runtime: SubagentFileMutatorRuntimePaths = {
     defaultApp: process.defaultApp === true,
-    resourcesPath:
-      typeof process.resourcesPath === "string" ? process.resourcesPath : undefined,
+    resourcesPath: typeof process.resourcesPath === "string" ? process.resourcesPath : undefined,
     cwd: process.cwd(),
   },
 ): string {
@@ -67,12 +65,7 @@ export function resolveSubagentFileMutatorBinary(
     typeof runtime.resourcesPath === "string" &&
     runtime.resourcesPath.length > 0
   ) {
-    return path.resolve(
-      runtime.resourcesPath,
-      "..",
-      "Helpers",
-      "aiden-subagent-file-mutator",
-    );
+    return path.resolve(runtime.resourcesPath, "..", "Helpers", "aiden-subagent-file-mutator");
   }
   return path.resolve(runtime.cwd, "build", "native", "aiden-subagent-file-mutator");
 }
@@ -183,9 +176,7 @@ export class SubagentFileMutatorClient {
       !Number.isFinite(options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS) ||
       (options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS) <= 0 ||
       !Number.isFinite(
-        options.effectfulRequestTimeoutMs ??
-          options.requestTimeoutMs ??
-          DEFAULT_REQUEST_TIMEOUT_MS,
+        options.effectfulRequestTimeoutMs ?? options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
       ) ||
       (options.effectfulRequestTimeoutMs ??
         options.requestTimeoutMs ??
@@ -196,8 +187,7 @@ export class SubagentFileMutatorClient {
     this.workspaceRoot = Object.freeze({ ...options.workspaceRoot });
     this.binary = options.binary ?? resolveSubagentFileMutatorBinary();
     this.requestTimeoutMs = options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS;
-    this.effectfulRequestTimeoutMs =
-      options.effectfulRequestTimeoutMs ?? this.requestTimeoutMs;
+    this.effectfulRequestTimeoutMs = options.effectfulRequestTimeoutMs ?? this.requestTimeoutMs;
     this.spawnProcess = options.spawnProcess ?? (spawn as SpawnMutator);
   }
 
@@ -283,8 +273,7 @@ export class SubagentFileMutatorClient {
     operation: Promise<T>,
     signal: AbortSignal | undefined,
     timeoutFailure: () => SubagentFileMutatorError,
-    abortFailure: () => SubagentFileMutatorError = () =>
-      new SubagentFileMutatorError("cancelled"),
+    abortFailure: () => SubagentFileMutatorError = () => new SubagentFileMutatorError("cancelled"),
     timeoutMs = this.requestTimeoutMs,
   ): Promise<T> {
     if (signal?.aborted) throw new SubagentFileMutatorError("cancelled");
@@ -367,11 +356,7 @@ export class SubagentFileMutatorClient {
     return this.startPromise;
   }
 
-  private async request(
-    command: string,
-    signal?: AbortSignal,
-    effectful = false,
-  ): Promise<string> {
+  private async request(command: string, signal?: AbortSignal, effectful = false): Promise<string> {
     if (Buffer.byteLength(command, "utf8") > MAX_COMMAND_BYTES) {
       throw new SubagentFileMutatorError("invalid_input");
     }
@@ -395,27 +380,15 @@ export class SubagentFileMutatorClient {
             });
           }),
           signal,
-          () =>
-            new SubagentFileMutatorError(
-              effectful && sent ? "indeterminate" : "io_failed",
-            ),
-          () =>
-            new SubagentFileMutatorError(
-              effectful && sent ? "indeterminate" : "cancelled",
-            ),
+          () => new SubagentFileMutatorError(effectful && sent ? "indeterminate" : "io_failed"),
+          () => new SubagentFileMutatorError(effectful && sent ? "indeterminate" : "cancelled"),
           effectful ? this.effectfulRequestTimeoutMs : this.requestTimeoutMs,
         );
         response = await this.bounded(
           this.nextLine(),
           signal,
-          () =>
-            new SubagentFileMutatorError(
-              effectful && sent ? "indeterminate" : "io_failed",
-            ),
-          () =>
-            new SubagentFileMutatorError(
-              effectful && sent ? "indeterminate" : "cancelled",
-            ),
+          () => new SubagentFileMutatorError(effectful && sent ? "indeterminate" : "io_failed"),
+          () => new SubagentFileMutatorError(effectful && sent ? "indeterminate" : "cancelled"),
           effectful ? this.effectfulRequestTimeoutMs : this.requestTimeoutMs,
         );
       } catch (error) {
@@ -471,20 +444,15 @@ export class SubagentFileMutatorClient {
         `read-html ${requestId} ${encodeProtocolValue(relativePath)}`,
         signal,
       );
-      const match =
-        /^html-read ([A-Za-z0-9_-]{1,64}) ([0-9]+) ([A-Za-z0-9+/=]+|-)$/u.exec(
-          response,
-        );
+      const match = /^html-read ([A-Za-z0-9_-]{1,64}) ([0-9]+) ([A-Za-z0-9+/=]+|-)$/u.exec(
+        response,
+      );
       if (!match || match[1] !== requestId) {
         this.terminate(new SubagentFileMutatorError("io_failed"));
         throw new SubagentFileMutatorError("io_failed");
       }
       const bytes = Number(match[2]);
-      if (
-        !Number.isSafeInteger(bytes) ||
-        bytes < 1 ||
-        bytes > MAX_HTML_CONTENT_BYTES
-      ) {
+      if (!Number.isSafeInteger(bytes) || bytes < 1 || bytes > MAX_HTML_CONTENT_BYTES) {
         this.terminate(new SubagentFileMutatorError("io_failed"));
         throw new SubagentFileMutatorError("io_failed");
       }
@@ -553,10 +521,7 @@ export class SubagentFileMutatorClient {
     return inspection;
   }
 
-  async prepare(
-    effectValue: PreparedSubagentFileMutation,
-    signal?: AbortSignal,
-  ): Promise<void> {
+  async prepare(effectValue: PreparedSubagentFileMutation, signal?: AbortSignal): Promise<void> {
     let effect: PreparedSubagentFileMutation;
     try {
       assertPreparedSubagentFileMutation(effectValue);

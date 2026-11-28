@@ -30,7 +30,11 @@ export function HistoryPanel({
   onRetry(): void;
 }) {
   if (status === "loading" && items.length === 0) {
-    return <Text variant="small" color="secondary" className="p-3">Loading images…</Text>;
+    return (
+      <Text variant="small" color="secondary" className="p-3">
+        Loading images…
+      </Text>
+    );
   }
   if (status === "error" && items.length === 0) {
     return (
@@ -38,14 +42,20 @@ export function HistoryPanel({
         placement="inline"
         title="Images couldn't be loaded"
         description="Your images are still saved. Try again in a moment."
-        action={<Button size="small" variant="muted" onClick={onRetry}>Try Again</Button>}
+        action={
+          <Button size="small" variant="muted" onClick={onRetry}>
+            Try Again
+          </Button>
+        }
       />
     );
   }
   const footer = saveFolderLabel ? (
     // Leading-aligned: the app's floating Live control sits in the bottom-right corner.
     <footer className="image-history-footer flex flex-wrap items-center gap-x-2">
-      <Text variant="small" color="secondary" className="min-w-0">Saved to {saveFolderLabel}</Text>
+      <Text variant="small" color="secondary" className="min-w-0">
+        Saved to {saveFolderLabel}
+      </Text>
       <Button size="small" variant="transparent" onClick={onRevealFolder}>
         <FolderOpen aria-hidden="true" />
         Show Folder
@@ -70,13 +80,21 @@ export function HistoryPanel({
     <div className="flex min-h-0 flex-1 flex-col">
       <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto p-3">
         {groups.map((group) => {
-          const when = relativeTime(group.createdAt, now, (timestamp) => dateFormat.format(timestamp));
+          const when = relativeTime(group.createdAt, now, (timestamp) =>
+            dateFormat.format(timestamp),
+          );
           const count = imageCountLabel(group.entries.length);
           const heading = [when, runStateLabel(group.runState), count].filter(Boolean).join(" · ");
           return (
-            <section key={group.runId} aria-label={`Run ${heading}`} className="flex flex-col gap-2">
+            <section
+              key={group.runId}
+              aria-label={`Run ${heading}`}
+              className="flex flex-col gap-2"
+            >
               <header className="flex items-center gap-2">
-                <Text as="h3" variant="small" color="secondary" className="min-w-0 flex-1" truncate>{heading}</Text>
+                <Text as="h3" variant="small" color="secondary" className="min-w-0 flex-1" truncate>
+                  {heading}
+                </Text>
                 <Button
                   size="small"
                   variant="transparent"
@@ -89,8 +107,21 @@ export function HistoryPanel({
               <ul className="image-history-grid" aria-label="Images from this run">
                 {group.entries.map(({ item, index }) => (
                   <li key={item.assetId}>
-                    <button type="button" className="image-thumb" aria-label={`Open image ${index + 1} of ${items.length}`} onClick={() => onOpen(index)}>
-                      {item.thumbUrl ? <img src={item.thumbUrl} alt="" loading="lazy" decoding="async" draggable={false} /> : null}
+                    <button
+                      type="button"
+                      className="image-thumb"
+                      aria-label={`Open image ${index + 1} of ${items.length}`}
+                      onClick={() => onOpen(index)}
+                    >
+                      {item.thumbUrl ? (
+                        <img
+                          src={item.thumbUrl}
+                          alt=""
+                          loading="lazy"
+                          decoding="async"
+                          draggable={false}
+                        />
+                      ) : null}
                     </button>
                   </li>
                 ))}

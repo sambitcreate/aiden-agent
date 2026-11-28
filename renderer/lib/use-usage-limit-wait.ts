@@ -71,7 +71,10 @@ export function useUsageLimitWait(
 }
 
 /** Retry now for one chat or Bot. Resolves to false when it was tried in the last 30 seconds. */
-export function retryUsageLimitNow(ownerKind: UsageLimitWaitView["ownerKind"], ownerId: string): Promise<boolean> {
+export function retryUsageLimitNow(
+  ownerKind: UsageLimitWaitView["ownerKind"],
+  ownerId: string,
+): Promise<boolean> {
   return usageLimitsApi.retryNow(ownerKind, ownerId).catch(() => false);
 }
 

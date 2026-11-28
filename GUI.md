@@ -30,18 +30,18 @@ These references capture the project at download time. After deliberate local cu
 
 For interface creation or revision, read Interface judgment and Foundations, then the relevant component guide. A small edit does not trigger an application-wide audit.
 
-| Need | Reference |
-| --- | --- |
-| Ownership, token definitions, shared assignments, and deliberate theme changes | [Theme contract](gui/theme-contract.md) |
-| Hierarchy, composition, navigation, charts, and clear controls | [Interface judgment](gui/interface-judgment.md) |
-| Color, typography, spacing, surfaces, icons, and motion | [Foundations](gui/foundations.md) |
-| Working with Base UI primitives | [Base UI](gui/base-ui.md) |
-| Custom markup and existing component libraries | [Custom components](gui/custom-components.md) |
-| The downloaded project’s concrete values and assignments | [Theme reference](gui/themes.md) |
-| Proportional checks and integration failures | [Verification](gui/verification.md) |
+| Need                                                                           | Reference                                       |
+| ------------------------------------------------------------------------------ | ----------------------------------------------- |
+| Ownership, token definitions, shared assignments, and deliberate theme changes | [Theme contract](gui/theme-contract.md)         |
+| Hierarchy, composition, navigation, charts, and clear controls                 | [Interface judgment](gui/interface-judgment.md) |
+| Color, typography, spacing, surfaces, icons, and motion                        | [Foundations](gui/foundations.md)               |
+| Working with Base UI primitives                                                | [Base UI](gui/base-ui.md)                       |
+| Custom markup and existing component libraries                                 | [Custom components](gui/custom-components.md)   |
+| The downloaded project’s concrete values and assignments                       | [Theme reference](gui/themes.md)                |
+| Proportional checks and integration failures                                   | [Verification](gui/verification.md)             |
 
-| Request | Skill |
-| --- | --- |
-| Build or edit UI using the current theme | `graphical-ui` |
+| Request                                           | Skill               |
+| ------------------------------------------------- | ------------------- |
+| Build or edit UI using the current theme          | `graphical-ui`      |
 | Apply the supplied theme to an existing interface | `graphical-convert` |
-| Find theme drift and repair it when requested | `graphical-audit` |
+| Find theme drift and repair it when requested     | `graphical-audit`   |

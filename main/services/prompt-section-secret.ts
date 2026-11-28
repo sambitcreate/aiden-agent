@@ -60,7 +60,10 @@ function pause(ms: number): void {
 const KEY_SLOTS = 8;
 
 function keySlot(dir: string, index: number): string {
-  return path.join(dir, index === 0 ? PROMPT_SECTION_KEY_FILE : `${PROMPT_SECTION_KEY_FILE}.${index}`);
+  return path.join(
+    dir,
+    index === 0 ? PROMPT_SECTION_KEY_FILE : `${PROMPT_SECTION_KEY_FILE}.${index}`,
+  );
 }
 
 /** How long a slot still being written by its creator is waited for. */
@@ -89,7 +92,10 @@ function slotState(slot: string): SlotState {
     let unfinished: boolean;
     try {
       const info = lstatSync(slot);
-      unfinished = info.isFile() && Date.now() - info.mtimeMs < SLOT_ABANDONED_MS && KEY_PREFIX.test(readFileSync(slot, "utf8"));
+      unfinished =
+        info.isFile() &&
+        Date.now() - info.mtimeMs < SLOT_ABANDONED_MS &&
+        KEY_PREFIX.test(readFileSync(slot, "utf8"));
     } catch {
       return "damaged";
     }
@@ -183,7 +189,10 @@ export function promptSectionDeviceKey(dir: string): Buffer {
       fallbackLogged = true;
       // This module stays Electron-free (the CLI and the harness use it), so it
       // reports through Node's warning channel rather than the app logger.
-      process.emitWarning("The app data folder did not provide a stored prompt section key; using a key for this run only.", "PromptSectionKeyWarning");
+      process.emitWarning(
+        "The app data folder did not provide a stored prompt section key; using a key for this run only.",
+        "PromptSectionKeyWarning",
+      );
     }
     key = fresh;
   }

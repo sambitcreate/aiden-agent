@@ -2,7 +2,11 @@ import assert from "node:assert/strict";
 import { describe, test } from "node:test";
 import type { AgentMessage, AgentTool } from "@earendil-works/pi-agent-core";
 import { Type } from "typebox";
-import { assembleChatPrompt, buildWorkspaceChatBasePrompt, type ChatPromptAssemblyInput } from "./chat-prompt-assembly.js";
+import {
+  assembleChatPrompt,
+  buildWorkspaceChatBasePrompt,
+  type ChatPromptAssemblyInput,
+} from "./chat-prompt-assembly.js";
 import { createMemoryExtension } from "./memory-context.js";
 import type { MemoryFact, MemoryScope, MemoryStore } from "./memory-store.js";
 import { LOAD_TOOLS_TOOL_NAME } from "./on-demand-tools.js";
@@ -52,7 +56,11 @@ const botWorkspace = {
   incarnation: { device: "1", inode: "2" },
 };
 
-const botChat = { definition: bot, workspace: botWorkspace, fileAuthority: { mode: "full_mac" as const, botHome: true } };
+const botChat = {
+  definition: bot,
+  workspace: botWorkspace,
+  fileAuthority: { mode: "full_mac" as const, botHome: true },
+};
 
 describe("chat prompt assembly", () => {
   test("an ordinary chat sends its base prompt unchanged and reports no Bot instructions", () => {
@@ -64,19 +72,39 @@ describe("chat prompt assembly", () => {
   test("a Bot chat adds the runtime contract after the base prompt and reports it as Bot instructions", () => {
     const assembly = assemble({ bot: botChat });
     assert.ok(assembly.systemPrompt.startsWith(basePrompt), "the host policy stays first");
-    assert.ok(assembly.systemPrompt.includes("Answer in one line."), "the persona reaches the prompt");
-    assert.ok(assembly.systemPrompt.includes(botWorkspace.homePath), "the managed home reaches the prompt");
+    assert.ok(
+      assembly.systemPrompt.includes("Answer in one line."),
+      "the persona reaches the prompt",
+    );
+    assert.ok(
+      assembly.systemPrompt.includes(botWorkspace.homePath),
+      "the managed home reaches the prompt",
+    );
     assert.ok(assembly.promptSections["bot-instructions"].includes("Answer in one line."));
-    assert.ok(!assembly.promptSections["bot-instructions"].includes(basePrompt), "the host policy is not counted as Bot instructions");
+    assert.ok(
+      !assembly.promptSections["bot-instructions"].includes(basePrompt),
+      "the host policy is not counted as Bot instructions",
+    );
   });
 
   test("the memory extension's facts reach the prompt and are reported as the memory section", async () => {
     const scope: MemoryScope = { kind: "workspace", id: "workspace-1" };
     const fact: MemoryFact = {
-      id: "m1", scope, text: "Uses pnpm.", provenance: { kind: "user_edit", sourceId: "m1" }, createdAt: 1, updatedAt: 1,
-      confidence: 1, reviewState: "approved", state: "active", alwaysOn: true,
+      id: "m1",
+      scope,
+      text: "Uses pnpm.",
+      provenance: { kind: "user_edit", sourceId: "m1" },
+      createdAt: 1,
+      updatedAt: 1,
+      confidence: 1,
+      reviewState: "approved",
+      state: "active",
+      alwaysOn: true,
     };
-    const store = { alwaysOn: async () => [fact], recall: async () => [] } as unknown as MemoryStore;
+    const store = {
+      alwaysOn: async () => [fact],
+      recall: async () => [],
+    } as unknown as MemoryStore;
     const assembly = assemble({ extensions: [await createMemoryExtension({ store, scope })] });
     assert.ok(assembly.promptSections.memory.includes("Uses pnpm."));
     assert.ok(assembly.systemPrompt.includes("Uses pnpm."));
@@ -90,19 +118,42 @@ describe("chat prompt assembly", () => {
     assert.ok(!fresh.includes("classify"));
     assert.ok(fresh.includes("read_file"));
 
-    const loaded: AgentMessage[] = [{
-      role: "assistant",
-      content: [{ type: "toolCall", id: "call-1", name: LOAD_TOOLS_TOOL_NAME, arguments: { names: ["classify"] } }],
-      api: "anthropic-messages",
-      provider: "anthropic",
-      model: "test",
-      usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } },
-      stopReason: "toolUse",
-      timestamp: 1,
-    }];
+    const loaded: AgentMessage[] = [
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "toolCall",
+            id: "call-1",
+            name: LOAD_TOOLS_TOOL_NAME,
+            arguments: { names: ["classify"] },
+          },
+        ],
+        api: "anthropic-messages",
+        provider: "anthropic",
+        model: "test",
+        usage: {
+          input: 0,
+          output: 0,
+          cacheRead: 0,
+          cacheWrite: 0,
+          totalTokens: 0,
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+        },
+        stopReason: "toolUse",
+        timestamp: 1,
+      },
+    ];
     const later = names(assembly.toolsFor(loaded));
-    assert.ok(later.includes("classify"), "a loaded tool is declared from the start of the next run");
-    assert.deepEqual(later.slice(0, fresh.length), fresh, "loaded tools are appended, so the earlier list is a prefix");
+    assert.ok(
+      later.includes("classify"),
+      "a loaded tool is declared from the start of the next run",
+    );
+    assert.deepEqual(
+      later.slice(0, fresh.length),
+      fresh,
+      "loaded tools are appended, so the earlier list is a prefix",
+    );
   });
 
   test("a chat that may not use on-demand tools declares every admitted tool and no loader", () => {
@@ -114,14 +165,19 @@ describe("chat prompt assembly", () => {
   });
 
   test("a Bot chat declares every tool up front even when on-demand tools are allowed", () => {
-    const declared = names(assemble({ tools: withCodemode, bot: botChat, allowOnDemandTools: true }).toolsFor([]));
+    const declared = names(
+      assemble({ tools: withCodemode, bot: botChat, allowOnDemandTools: true }).toolsFor([]),
+    );
     assert.ok(declared.includes("classify"));
     assert.ok(!declared.includes(LOAD_TOOLS_TOOL_NAME));
   });
 
   test("a Bot's scoped file authority names its approved folders in the prompt", () => {
     const scoped = assemble({
-      bot: { ...botChat, fileAuthority: { mode: "scoped", botHome: false, approvedRoots: ["/Users/me/Receipts"] } },
+      bot: {
+        ...botChat,
+        fileAuthority: { mode: "scoped", botHome: false, approvedRoots: ["/Users/me/Receipts"] },
+      },
     });
     assert.ok(scoped.systemPrompt.includes("/Users/me/Receipts"));
     assert.ok(!assemble({ bot: botChat }).systemPrompt.includes("/Users/me/Receipts"));
@@ -145,9 +201,20 @@ describe("workspace base prompt", () => {
 
   test("a chat that can follow pull requests is told to follow one when it sees work through", async () => {
     for (const permission of ["full", "ask"] as const) {
-      assert.match(await base(permission, ["read_file", "follow_pull_request"]), /see through or merge work .* call follow_pull_request/u);
+      assert.match(
+        await base(permission, ["read_file", "follow_pull_request"]),
+        /see through or merge work .* call follow_pull_request/u,
+      );
     }
-    assert.doesNotMatch(await base("full", ["read_file"]), /follow_pull_request/u, "not without the tool");
-    assert.doesNotMatch(await base("read-only", ["read_file", "follow_pull_request"]), /follow_pull_request/u, "not in a read-only run");
+    assert.doesNotMatch(
+      await base("full", ["read_file"]),
+      /follow_pull_request/u,
+      "not without the tool",
+    );
+    assert.doesNotMatch(
+      await base("read-only", ["read_file", "follow_pull_request"]),
+      /follow_pull_request/u,
+      "not in a read-only run",
+    );
   });
 });

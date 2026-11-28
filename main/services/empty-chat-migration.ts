@@ -12,7 +12,10 @@ export class EmptyChatMigrationSnapshotError extends Error {
   }
 }
 
-export interface EmptyChatCandidate { id: string; fingerprint: string }
+export interface EmptyChatCandidate {
+  id: string;
+  fingerprint: string;
+}
 const fingerprint = (chat: Chat) => createHash("sha256").update(JSON.stringify(chat)).digest("hex");
 
 export interface EmptyChatMigrationState {
@@ -25,13 +28,23 @@ export interface EmptyChatMigrationState {
 export function isEmptyChatMigrationState(value: unknown): value is EmptyChatMigrationState {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
   const state = value as Partial<EmptyChatMigrationState>;
-  return state.version === 1 && typeof state.complete === "boolean" &&
-    (state.pending === null || (Array.isArray(state.pending) &&
-      state.pending.every((candidate) => candidate && typeof candidate === "object" &&
-        typeof candidate.id === "string" && /^[A-Za-z0-9._:-]{1,160}$/u.test(candidate.id) &&
-        typeof candidate.fingerprint === "string" && /^[a-f0-9]{64}$/u.test(candidate.fingerprint)) &&
-      new Set(state.pending.map((candidate) => candidate.id)).size === state.pending.length)) &&
-    (!state.complete || (Array.isArray(state.pending) && state.pending.length === 0));
+  return (
+    state.version === 1 &&
+    typeof state.complete === "boolean" &&
+    (state.pending === null ||
+      (Array.isArray(state.pending) &&
+        state.pending.every(
+          (candidate) =>
+            candidate &&
+            typeof candidate === "object" &&
+            typeof candidate.id === "string" &&
+            /^[A-Za-z0-9._:-]{1,160}$/u.test(candidate.id) &&
+            typeof candidate.fingerprint === "string" &&
+            /^[a-f0-9]{64}$/u.test(candidate.fingerprint),
+        ) &&
+        new Set(state.pending.map((candidate) => candidate.id)).size === state.pending.length)) &&
+    (!state.complete || (Array.isArray(state.pending) && state.pending.length === 0))
+  );
 }
 
 export function isLegacyEmptyWorkspaceChat(
@@ -40,10 +53,14 @@ export function isLegacyEmptyWorkspaceChat(
   reservedChatIds: ReadonlySet<string>,
 ): boolean {
   const workspaceId = persistedChatWorkspaceId(chat.workspaceId);
-  return chat.messages.length === 0 && chatSurface(chat) === "regular" &&
+  return (
+    chat.messages.length === 0 &&
+    chatSurface(chat) === "regular" &&
     workspaceIds.has(workspaceId) &&
-    !chat.id.startsWith("telegram-") && !chat.id.startsWith("assistant-") &&
-    !reservedChatIds.has(chat.id);
+    !chat.id.startsWith("telegram-") &&
+    !chat.id.startsWith("assistant-") &&
+    !reservedChatIds.has(chat.id)
+  );
 }
 
 /**
@@ -64,8 +81,12 @@ export async function migrateEmptyWorkspaceChats(deps: {
   if (!isEmptyChatMigrationState(state)) throw new Error("Invalid empty-chat migration state.");
   if (state.complete) return 0;
   const readCandidate = async (id: string) => {
-    try { return await deps.get(id); }
-    catch (error) { deps.onPreserved?.(error); return null; }
+    try {
+      return await deps.get(id);
+    } catch (error) {
+      deps.onPreserved?.(error);
+      return null;
+    }
   };
   if (state.pending === null) {
     try {
@@ -77,7 +98,8 @@ export async function migrateEmptyWorkspaceChats(deps: {
         const chat = await readCandidate(meta.id);
         // Snapshot before consulting any external eligibility store. Unknown
         // payloads survive; any stored message is already outside cleanup scope.
-        if (chat?.messages.length === 0) candidates.push({ id: chat.id, fingerprint: fingerprint(chat) });
+        if (chat?.messages.length === 0)
+          candidates.push({ id: chat.id, fingerprint: fingerprint(chat) });
       }
       state = { version: 1, pending: candidates, complete: false };
       await deps.save(state);
@@ -91,20 +113,28 @@ export async function migrateEmptyWorkspaceChats(deps: {
     const chat = await readCandidate(id);
     let eligible = false;
     if (chat && fingerprint(chat) === candidate.fingerprint) {
-      try { eligible = await deps.eligible(chat); }
-      catch (error) { deps.onPreserved?.(error); }
+      try {
+        eligible = await deps.eligible(chat);
+      } catch (error) {
+        deps.onPreserved?.(error);
+      }
     }
     if (eligible) {
       await deps.remove(id, async (current) => {
         // Cross-store removal calls this again after deleting private stores;
         // do not reopen those stores or re-evaluate eligibility at that point.
-        if (current.messages.length !== 0 || fingerprint(current) !== candidate.fingerprint) throw new Error("The empty chat changed during migration.");
+        if (current.messages.length !== 0 || fingerprint(current) !== candidate.fingerprint)
+          throw new Error("The empty chat changed during migration.");
       });
       removed++;
     }
     // Eligibility uncertainty preserves this candidate permanently. It cannot
     // keep a pre-snapshot retry window open or sweep newer chats on restart.
-    state = { version: 1, pending: state.pending!.filter((entry) => entry.id !== id), complete: false };
+    state = {
+      version: 1,
+      pending: state.pending!.filter((entry) => entry.id !== id),
+      complete: false,
+    };
     await deps.save(state);
   }
   await deps.save({ version: 1, pending: [], complete: true });

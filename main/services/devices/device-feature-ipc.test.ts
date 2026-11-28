@@ -2,7 +2,10 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import type { DeviceRecordingInfo } from "../../../renderer/shared/device-features.js";
 import type { RendererDocumentOwner } from "../renderer-document-owner.js";
-import { MAX_FRAMED_SCREENSHOT_BYTES, registerDeviceFeatureHandlersWith } from "./device-feature-ipc.js";
+import {
+  MAX_FRAMED_SCREENSHOT_BYTES,
+  registerDeviceFeatureHandlersWith,
+} from "./device-feature-ipc.js";
 import type { DeviceFeatures } from "./device-features.js";
 import type { DeviceIpcEvent } from "./device-ipc.js";
 
@@ -32,7 +35,9 @@ const RECORDING: DeviceRecordingInfo = {
   endsBy: 600_001,
 };
 
-function harness(options: { enabled?: boolean; ownerError?: boolean; dialog?: string | null } = {}) {
+function harness(
+  options: { enabled?: boolean; ownerError?: boolean; dialog?: string | null } = {},
+) {
   const handlers = new Map<string, (event: DeviceIpcEvent, ...args: unknown[]) => unknown>();
   const calls: unknown[][] = [];
   const sent: unknown[][] = [];
@@ -75,7 +80,11 @@ function harness(options: { enabled?: boolean; ownerError?: boolean; dialog?: st
       calls.push(["saveScreenshot", target, path]);
       return path ? { status: "saved", path } : { status: "cancelled" };
     },
-    async saveFramedScreenshot(target: unknown, png: Uint8Array, choose: (name: string) => Promise<string | null>) {
+    async saveFramedScreenshot(
+      target: unknown,
+      png: Uint8Array,
+      choose: (name: string) => Promise<string | null>,
+    ) {
       const path = await choose("iPhone-framed-2026.png");
       calls.push(["saveFramedScreenshot", target, png, path]);
       return path ? { status: "saved", path } : { status: "cancelled" };
@@ -90,7 +99,8 @@ function harness(options: { enabled?: boolean; ownerError?: boolean; dialog?: st
     handle: (channel, listener) => handlers.set(channel, listener),
     enabled: () => options.enabled ?? true,
     owner: () => {
-      if (options.ownerError) throw new Error("Simulator access requires the active application document.");
+      if (options.ownerError)
+        throw new Error("Simulator access requires the active application document.");
       return owner;
     },
     features: () => features,
@@ -120,24 +130,39 @@ function harness(options: { enabled?: boolean; ownerError?: boolean; dialog?: st
 test("every feature channel is registered and refused while the flag is off or the document is stale", async () => {
   const off = harness({ enabled: false });
   assert.deepEqual([...off.handlers.keys()].sort(), [...CHANNELS].sort());
-  for (const channel of CHANNELS) await assert.rejects(off.invoke(channel, TARGET), /not enabled/u, channel);
+  for (const channel of CHANNELS)
+    await assert.rejects(off.invoke(channel, TARGET), /not enabled/u, channel);
   const stale = harness({ ownerError: true });
-  for (const channel of CHANNELS) await assert.rejects(stale.invoke(channel, TARGET), /active application document/u);
+  for (const channel of CHANNELS)
+    await assert.rejects(stale.invoke(channel, TARGET), /active application document/u);
   assert.deepEqual([...off.calls, ...stale.calls], []);
 });
 
 test("targets are parsed fail-closed before any feature runs", async () => {
   const ipc = harness();
   for (const channel of ["devices:erase", "devices:clipboard-paste", "devices:clipboard-copy"]) {
-    await assert.rejects(ipc.invoke(channel, { hostId: "local", deviceId: UDID }), /valid simulator/u, channel);
-    await assert.rejects(ipc.invoke(channel, { ...TARGET, deviceId: "$(id)" }), /valid simulator/u, channel);
+    await assert.rejects(
+      ipc.invoke(channel, { hostId: "local", deviceId: UDID }),
+      /valid simulator/u,
+      channel,
+    );
+    await assert.rejects(
+      ipc.invoke(channel, { ...TARGET, deviceId: "$(id)" }),
+      /valid simulator/u,
+      channel,
+    );
   }
   await assert.rejects(ipc.invoke("devices:recording-start", TARGET), /valid chat/u);
   await assert.rejects(ipc.invoke("devices:recording-stop", { id: "../x" }), /valid recording/u);
-  await assert.rejects(ipc.invoke("devices:screenshot-save", { hostId: "local", deviceId: "a/b" }), /valid simulator/u);
+  await assert.rejects(
+    ipc.invoke("devices:screenshot-save", { hostId: "local", deviceId: "a/b" }),
+    /valid simulator/u,
+  );
   assert.deepEqual(ipc.calls, []);
 
-  assert.deepEqual(await ipc.invoke("devices:erase", { ...TARGET, command: "rm -rf /" }), { wasBooted: true });
+  assert.deepEqual(await ipc.invoke("devices:erase", { ...TARGET, command: "rm -rf /" }), {
+    wasBooted: true,
+  });
   await ipc.invoke("devices:clipboard-paste", TARGET);
   await ipc.invoke("devices:clipboard-copy", TARGET);
   await ipc.invoke("devices:recording-start", { chatId: "chat-1", ...TARGET });
@@ -160,13 +185,24 @@ test("Android emulators reach the features by serial or AVD name, and a flag-lik
   await ipc.invoke("devices:clipboard-paste", running);
   await ipc.invoke("devices:erase", stopped);
   await ipc.invoke("devices:recording-start", { chatId: "chat-1", ...running });
-  assert.deepEqual(await ipc.invoke("devices:screenshot-save", { hostId: "local", deviceId: "Pixel_9.API-36" }), {
-    status: "saved",
-    path: "/Users/me/Downloads/chosen",
-  });
+  assert.deepEqual(
+    await ipc.invoke("devices:screenshot-save", { hostId: "local", deviceId: "Pixel_9.API-36" }),
+    {
+      status: "saved",
+      path: "/Users/me/Downloads/chosen",
+    },
+  );
   for (const deviceId of ["-wipe-data", ".hidden", "emulator 5554", "a/b"]) {
-    await assert.rejects(ipc.invoke("devices:erase", { ...stopped, deviceId }), /valid simulator/u, deviceId);
-    await assert.rejects(ipc.invoke("devices:screenshot-save", { hostId: "local", deviceId }), /valid simulator/u, deviceId);
+    await assert.rejects(
+      ipc.invoke("devices:erase", { ...stopped, deviceId }),
+      /valid simulator/u,
+      deviceId,
+    );
+    await assert.rejects(
+      ipc.invoke("devices:screenshot-save", { hostId: "local", deviceId }),
+      /valid simulator/u,
+      deviceId,
+    );
   }
   assert.deepEqual(ipc.calls.slice(0, 3), [
     ["pasteFromHost", running],
@@ -178,47 +214,74 @@ test("Android emulators reach the features by serial or AVD name, and a flag-lik
 
 test("saves go through the user's dialog, and a document that went away gets no file", async () => {
   const ipc = harness();
-  assert.deepEqual(await ipc.invoke("devices:screenshot-save", { hostId: "local", deviceId: UDID }), {
-    status: "saved",
-    path: "/Users/me/Downloads/chosen",
-  });
+  assert.deepEqual(
+    await ipc.invoke("devices:screenshot-save", { hostId: "local", deviceId: UDID }),
+    {
+      status: "saved",
+      path: "/Users/me/Downloads/chosen",
+    },
+  );
   assert.deepEqual(ipc.dialogs, [{ defaultName: "iPhone-2026.png", kind: "png" }]);
   await ipc.invoke("devices:recording-save", { id: "recording-0001" });
   assert.deepEqual(ipc.dialogs[1], { defaultName: "iPhone-2026.mp4", kind: "mp4" });
 
   ipc.destroy();
-  assert.deepEqual(await ipc.invoke("devices:recording-save", { id: "recording-0001" }), { status: "cancelled" });
-
-  const cancelled = harness({ dialog: null });
-  assert.deepEqual(await cancelled.invoke("devices:screenshot-save", { hostId: "local", deviceId: UDID }), {
+  assert.deepEqual(await ipc.invoke("devices:recording-save", { id: "recording-0001" }), {
     status: "cancelled",
   });
+
+  const cancelled = harness({ dialog: null });
+  assert.deepEqual(
+    await cancelled.invoke("devices:screenshot-save", { hostId: "local", deviceId: UDID }),
+    {
+      status: "cancelled",
+    },
+  );
 });
 
 test("a framed screenshot accepts only a bounded PNG for a valid device, then uses the save dialog", async () => {
   const ipc = harness();
   const png = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 7]);
   const target = { hostId: "local", deviceId: UDID };
-  for (const bad of [undefined, "data:image/png;base64,AAAA", new Uint8Array([1, 2, 3, 4, 5, 6, 7, 8, 9]), png.slice(0, 8)]) {
-    await assert.rejects(ipc.invoke("devices:framed-screenshot-save", { ...target, png: bad }), /not a valid image/u);
+  for (const bad of [
+    undefined,
+    "data:image/png;base64,AAAA",
+    new Uint8Array([1, 2, 3, 4, 5, 6, 7, 8, 9]),
+    png.slice(0, 8),
+  ]) {
+    await assert.rejects(
+      ipc.invoke("devices:framed-screenshot-save", { ...target, png: bad }),
+      /not a valid image/u,
+    );
   }
   const huge = new Uint8Array(MAX_FRAMED_SCREENSHOT_BYTES + 1);
   huge.set(png.subarray(0, 8));
-  await assert.rejects(ipc.invoke("devices:framed-screenshot-save", { ...target, png: huge }), /not a valid image/u);
-  await assert.rejects(ipc.invoke("devices:framed-screenshot-save", { hostId: "local", deviceId: "a/b", png }), /valid simulator/u);
+  await assert.rejects(
+    ipc.invoke("devices:framed-screenshot-save", { ...target, png: huge }),
+    /not a valid image/u,
+  );
+  await assert.rejects(
+    ipc.invoke("devices:framed-screenshot-save", { hostId: "local", deviceId: "a/b", png }),
+    /valid simulator/u,
+  );
   assert.deepEqual(ipc.calls, []);
   assert.deepEqual(await ipc.invoke("devices:framed-screenshot-save", { ...target, png }), {
     status: "saved",
     path: "/Users/me/Downloads/chosen",
   });
-  assert.deepEqual(ipc.calls, [["saveFramedScreenshot", target, png, "/Users/me/Downloads/chosen"]]);
+  assert.deepEqual(ipc.calls, [
+    ["saveFramedScreenshot", target, png, "/Users/me/Downloads/chosen"],
+  ]);
   assert.deepEqual(ipc.dialogs, [{ defaultName: "iPhone-framed-2026.png", kind: "png" }]);
 });
 
 test("only files saved from the Simulator tab can be revealed", async () => {
   const ipc = harness();
   await ipc.invoke("devices:reveal-saved", { path: "/Users/me/Downloads/shot.png" });
-  await assert.rejects(ipc.invoke("devices:reveal-saved", { path: "/etc/passwd" }), /Only files saved/u);
+  await assert.rejects(
+    ipc.invoke("devices:reveal-saved", { path: "/etc/passwd" }),
+    /Only files saved/u,
+  );
   await assert.rejects(ipc.invoke("devices:reveal-saved", null), /Invalid simulator request/u);
   assert.deepEqual(ipc.revealed, ["/Users/me/Downloads/shot.png"]);
 });

@@ -11,7 +11,14 @@ import { TooltipProvider } from "./ui";
 
 afterEach(cleanup);
 
-const WORKSPACE: Workspace = { id: "ws-1", name: "prompt-lab", folderPath: "/Users/me/prompt-lab", permission: "full", createdAt: 0, updatedAt: 0 };
+const WORKSPACE: Workspace = {
+  id: "ws-1",
+  name: "prompt-lab",
+  folderPath: "/Users/me/prompt-lab",
+  permission: "full",
+  createdAt: 0,
+  updatedAt: 0,
+};
 
 const entry = (path: string, kind: WorkspaceFileEntry["kind"]): WorkspaceFileEntry => ({
   path,
@@ -20,11 +27,14 @@ const entry = (path: string, kind: WorkspaceFileEntry["kind"]): WorkspaceFileEnt
   depth: path.split("/").length - 1,
   kind,
 });
-const index = (...entries: WorkspaceFileEntry[]): WorkspaceFileIndex => ({ entries, truncated: false, skippedDirectories: 0 }) as WorkspaceFileIndex;
+const index = (...entries: WorkspaceFileEntry[]): WorkspaceFileIndex =>
+  ({ entries, truncated: false, skippedDirectories: 0 }) as WorkspaceFileIndex;
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
-  const promise = new Promise<T>((done) => { resolve = done; });
+  const promise = new Promise<T>((done) => {
+    resolve = done;
+  });
   return { promise, resolve };
 }
 
@@ -55,15 +65,28 @@ test("a link to a folder newer than the loaded index expands it once the refresh
   // The agent created new-folder after the index loaded, then linked it.
   view.rerender(panel({ requestedPath: "new-folder", requestedPathKey: 1 }));
   await waitFor(() => assert.equal(loads, 2));
-  assert.equal(calls.some((call) => call.channel === "workspaces:readFile"), false, "not read as a file from a stale index");
+  assert.equal(
+    calls.some((call) => call.channel === "workspaces:readFile"),
+    false,
+    "not read as a file from a stale index",
+  );
 
   await act(async () => {
-    refresh.resolve(index(entry("README.md", "file"), entry("new-folder", "directory"), entry("new-folder/a.css", "file")));
+    refresh.resolve(
+      index(
+        entry("README.md", "file"),
+        entry("new-folder", "directory"),
+        entry("new-folder/a.css", "file"),
+      ),
+    );
   });
   const folder = await screen.findByRole("button", { name: "new-folder" });
   await waitFor(() => assert.equal(folder.getAttribute("aria-expanded"), "true"));
   assert.ok(await screen.findByRole("button", { name: "a.css" }));
-  assert.equal(calls.some((call) => call.channel === "workspaces:readFile"), false);
+  assert.equal(
+    calls.some((call) => call.channel === "workspaces:readFile"),
+    false,
+  );
 });
 
 test("a link to a file the index lists opens it in the editor without another refresh", async () => {
@@ -73,7 +96,13 @@ test("a link to a file the index lists opens it in the editor without another re
       loads += 1;
       return index(entry("thermostat", "directory"), entry("thermostat/style.css", "file"));
     },
-    "workspaces:readFile": (_workspaceId, path) => ({ path, content: "h1 { color: tomato; }", size: 21, modifiedAt: 0, version: "v1" }),
+    "workspaces:readFile": (_workspaceId, path) => ({
+      path,
+      content: "h1 { color: tomato; }",
+      size: 21,
+      modifiedAt: 0,
+      version: "v1",
+    }),
   });
   const view = render(panel({ requestedPath: null, requestedPathKey: 0 }));
   await screen.findByRole("button", { name: "thermostat" });

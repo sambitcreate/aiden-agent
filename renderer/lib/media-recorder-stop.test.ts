@@ -26,10 +26,14 @@ test("stop waits for the hangover, flushes, then stops once", () => {
     },
   };
   const timers: Array<() => void> = [];
-  scheduleRecorderStopWithTail(recorder, (callback) => {
-    timers.push(callback);
-    return 1 as unknown as ReturnType<typeof setTimeout>;
-  }, RECORDING_TAIL_FLUSH_MS);
+  scheduleRecorderStopWithTail(
+    recorder,
+    (callback) => {
+      timers.push(callback);
+      return 1 as unknown as ReturnType<typeof setTimeout>;
+    },
+    RECORDING_TAIL_FLUSH_MS,
+  );
   assert.deepEqual(calls, []);
   assert.equal(timers.length, 1);
   timers[0]?.();

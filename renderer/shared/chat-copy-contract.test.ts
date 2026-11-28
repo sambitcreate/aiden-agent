@@ -40,7 +40,12 @@ test("long titles keep numbering forks after the base is truncated", () => {
 });
 
 test("fork lineage parsing accepts only the exact recorded shape", () => {
-  const lineage = { chatId: "chat_1", messageId: "msg-2", position: "before", at: 1_700_000_000_000 };
+  const lineage = {
+    chatId: "chat_1",
+    messageId: "msg-2",
+    position: "before",
+    at: 1_700_000_000_000,
+  };
   assert.deepEqual(parseChatForkLineageV1(lineage), lineage);
   for (const invalid of [
     null,
@@ -67,7 +72,10 @@ test("a fork summary survives parsing only in its exact shape, and never takes t
     text: "## Goal\nShip it",
     files: { read: ["a.ts"], modified: [] },
   } as const;
-  assert.deepEqual(parseChatForkLineageV1({ ...lineage, summary: ready }), { ...lineage, summary: ready });
+  assert.deepEqual(parseChatForkLineageV1({ ...lineage, summary: ready }), {
+    ...lineage,
+    summary: ready,
+  });
   for (const damaged of [
     { ...ready, state: "done" },
     { ...ready, afterMessageId: "../x" },
@@ -86,7 +94,14 @@ test("only an unsettled summary holds a fork's sends", () => {
   const lineage = { chatId: "c", messageId: "m", position: "after", at: 1 } as const;
   assert.equal(forkSummaryHoldsSend(undefined), false);
   assert.equal(forkSummaryHoldsSend(lineage), false);
-  for (const [state, held] of [["pending", true], ["failed", true], ["ready", false]] as const) {
-    assert.equal(forkSummaryHoldsSend({ ...lineage, summary: { state, afterMessageId: "x" } }), held);
+  for (const [state, held] of [
+    ["pending", true],
+    ["failed", true],
+    ["ready", false],
+  ] as const) {
+    assert.equal(
+      forkSummaryHoldsSend({ ...lineage, summary: { state, afterMessageId: "x" } }),
+      held,
+    );
   }
 });

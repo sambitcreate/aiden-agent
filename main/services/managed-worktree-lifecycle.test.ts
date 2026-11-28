@@ -6,11 +6,7 @@ import * as path from "node:path";
 import test from "node:test";
 import { promisify } from "node:util";
 import { randomUUID } from "node:crypto";
-import {
-  GitManagedWorktreeDeleteError,
-  GitService,
-  GitServiceError,
-} from "./git.js";
+import { GitManagedWorktreeDeleteError, GitService, GitServiceError } from "./git.js";
 import {
   checkCreateCapacity,
   checkWorktreeAllocation,
@@ -90,11 +86,7 @@ test("managed worktree creation never executes repository Git hooks", async (t) 
   const marker = path.join(await temporaryDirectory(t), "hook-ran");
   const hooksDir = path.join(repository, ".git", "hooks");
   const hook = path.join(hooksDir, "post-checkout");
-  await fs.writeFile(
-    hook,
-    `#!/bin/sh\necho ran > ${JSON.stringify(marker)}\n`,
-    { mode: 0o755 },
-  );
+  await fs.writeFile(hook, `#!/bin/sh\necho ran > ${JSON.stringify(marker)}\n`, { mode: 0o755 });
 
   const service = new GitService({ cacheTtlMs: 0 });
   const created = await service.createWorktree(repository, root, "codex/no-hooks");
@@ -114,10 +106,7 @@ test("captureManagedWorktreeSnapshot records tracked, staged, deleted, and untra
   const service = new GitService({ cacheTtlMs: 0 });
   const created = await service.createWorktree(repository, root, "codex/snapshot-capture");
 
-  await fs.appendFile(
-    path.join(repository, ".git", "info", "exclude"),
-    "\n.ignored-cache\n",
-  );
+  await fs.appendFile(path.join(repository, ".git", "info", "exclude"), "\n.ignored-cache\n");
   await fs.writeFile(path.join(created.path, "README.md"), "modified\n");
   await fs.writeFile(path.join(created.path, "staged.txt"), "staged\n");
   await git(created.path, ["add", "staged.txt"]);
@@ -246,8 +235,7 @@ test("safe deletion fails closed when the snapshot anchor disappeared after capt
         provisionedIgnored: [],
       },
     ),
-    (error: unknown) =>
-      error instanceof GitServiceError && error.code === "dirty_worktree",
+    (error: unknown) => error instanceof GitServiceError && error.code === "dirty_worktree",
   );
   // The recoverable checkout is preserved rather than silently discarded.
   assert.equal((await fs.lstat(created.path)).isDirectory(), true);
@@ -263,18 +251,38 @@ test("safe deletion rejects a snapshot ref moved to another commit with the same
   const created = await service.createWorktree(repository, root, "codex/same-tree-ref");
   await fs.writeFile(path.join(created.path, "README.md"), "dirty\n");
   const snapshotId = randomUUID();
-  const capture = await service.captureManagedWorktreeSnapshot(repository, created.path, snapshotId);
-  const replacement = await git(repository, ["commit-tree", capture.tree, "-p", capture.head, "-m", "same tree, different commit"]);
+  const capture = await service.captureManagedWorktreeSnapshot(
+    repository,
+    created.path,
+    snapshotId,
+  );
+  const replacement = await git(repository, [
+    "commit-tree",
+    capture.tree,
+    "-p",
+    capture.head,
+    "-m",
+    "same tree, different commit",
+  ]);
   assert.notEqual(replacement, capture.commit);
   await git(repository, ["update-ref", capture.ref, replacement, capture.commit]);
 
   await assert.rejects(
     service.deleteManagedWorktree(
-      repository, created.path, created.branch, created.createdFromHead,
-      undefined, created.worktreeGitDir, created.ownershipToken,
-      created.worktreeDevice, created.worktreeInode, true,
-      { snapshot: { id: snapshotId, ref: capture.ref, commit: capture.commit, tree: capture.tree },
-        provisionedIgnored: [] },
+      repository,
+      created.path,
+      created.branch,
+      created.createdFromHead,
+      undefined,
+      created.worktreeGitDir,
+      created.ownershipToken,
+      created.worktreeDevice,
+      created.worktreeInode,
+      true,
+      {
+        snapshot: { id: snapshotId, ref: capture.ref, commit: capture.commit, tree: capture.tree },
+        provisionedIgnored: [],
+      },
     ),
     (error: unknown) => error instanceof GitServiceError && error.code === "dirty_worktree",
   );
@@ -290,10 +298,7 @@ test("an unknown ignored file blocks safe deletion even with a snapshot", async 
     worktreeDirectoryRemover: removeAfterAuthorize,
   });
   const created = await service.createWorktree(repository, root, "codex/unknown-ignored");
-  await fs.appendFile(
-    path.join(repository, ".git", "info", "exclude"),
-    "\nuser-secret.env\n",
-  );
+  await fs.appendFile(path.join(repository, ".git", "info", "exclude"), "\nuser-secret.env\n");
   await fs.writeFile(path.join(created.path, "user-secret.env"), "SECRET=1\n");
 
   const snapshotId = randomUUID();
@@ -331,10 +336,7 @@ test("an unknown ignored file blocks safe deletion even with a snapshot", async 
       error.destructiveMutationAttempted === false,
   );
   assert.ok((await fs.lstat(created.path)).isDirectory());
-  assert.equal(
-    await fs.readFile(path.join(created.path, "user-secret.env"), "utf8"),
-    "SECRET=1\n",
-  );
+  assert.equal(await fs.readFile(path.join(created.path, "user-secret.env"), "utf8"), "SECRET=1\n");
 });
 
 test("a provisioned file inside an ignored directory does not block safe deletion", async (t) => {
@@ -531,13 +533,8 @@ test("content changed after the snapshot cannot be silently discarded", async (t
     path.dirname(created.path),
     `.aiden-removing-${created.ownershipToken}`,
   );
-  assert.equal(
-    await fs.readFile(path.join(quarantine, "README.md"), "utf8"),
-    "newer content\n",
-  );
-  const journal = JSON.parse(
-    await fs.readFile(`${quarantine}.json`, "utf8"),
-  );
+  assert.equal(await fs.readFile(path.join(quarantine, "README.md"), "utf8"), "newer content\n");
+  const journal = JSON.parse(await fs.readFile(`${quarantine}.json`, "utf8"));
   assert.equal(journal.phase, "needs_review");
 });
 
@@ -561,9 +558,7 @@ test("restore recreates dirty state without putting the synthetic commit on the 
   const snapshotId = randomUUID();
   const snapshotDir = path.join(snapshotRoot, snapshotId);
   await fs.mkdir(path.join(snapshotDir, "files"), { recursive: true });
-  const provisioned = [
-    await captureProvisionedFile(snapshotDir, created.path, ".env"),
-  ];
+  const provisioned = [await captureProvisionedFile(snapshotDir, created.path, ".env")];
   const capture = await service.captureManagedWorktreeSnapshot(
     repository,
     created.path,
@@ -622,8 +617,11 @@ test("restore recreates dirty state without putting the synthetic commit on the 
   assert.equal(restored.head, capture.head);
   assert.ok(restored.ownershipToken !== created.ownershipToken);
   const hookMarker = path.join(restoreRoot, "restore-index-hook-ran");
-  await fs.writeFile(path.join(repository, ".git", "hooks", "post-index-change"),
-    `#!/bin/sh\ntouch '${hookMarker}'\n`, { mode: 0o755 });
+  await fs.writeFile(
+    path.join(repository, ".git", "hooks", "post-index-change"),
+    `#!/bin/sh\ntouch '${hookMarker}'\n`,
+    { mode: 0o755 },
+  );
   await service.applyManagedWorktreeSnapshot(repository, restored.path, capture.commit);
   await assert.rejects(fs.stat(hookMarker), { code: "ENOENT" });
   await restoreProvisionedFiles(snapshotDir, manifest.provisionedFiles, restored.path);
@@ -632,10 +630,7 @@ test("restore recreates dirty state without putting the synthetic commit on the 
   // `.M` = worktree-modified but unstaged: dirty state returns unstaged.
   assert.match(status, /1 \.M [^\0\n]* README\.md/u);
   assert.match(status, /\? notes\.txt/u);
-  assert.equal(
-    await fs.readFile(path.join(restored.path, ".env"), "utf8"),
-    "TOKEN=captured\n",
-  );
+  assert.equal(await fs.readFile(path.join(restored.path, ".env"), "utf8"), "TOKEN=captured\n");
   const log = await git(restored.path, ["log", "--format=%s"]);
   assert.ok(!log.includes(`aiden snapshot ${snapshotId}`));
   assert.equal(await git(restored.path, ["rev-parse", "HEAD"]), capture.head);
@@ -721,15 +716,24 @@ test("restore converges after a crash between checkout creation and journal upda
     createWorkspaceId: () => "workspace-restored",
   };
 
-  await assert.rejects(restoreManagedWorktreeSnapshot({
-    ...deps,
-    checkCapacity: async (_root, phase) => {
-      assert.equal(phase, "checkout_planned");
-      throw new WorktreeCapacityUnavailableError();
-    },
-  }, snapshotId), WorktreeCapacityUnavailableError);
+  await assert.rejects(
+    restoreManagedWorktreeSnapshot(
+      {
+        ...deps,
+        checkCapacity: async (_root, phase) => {
+          assert.equal(phase, "checkout_planned");
+          throw new WorktreeCapacityUnavailableError();
+        },
+      },
+      snapshotId,
+    ),
+    WorktreeCapacityUnavailableError,
+  );
   assert.equal(await readManagedWorktreeRestoreJournal(snapshotRoot, snapshotId), undefined);
-  assert.equal((await requireReadyManagedWorktreeSnapshot(snapshotRoot, snapshotId)).state, "ready");
+  assert.equal(
+    (await requireReadyManagedWorktreeSnapshot(snapshotRoot, snapshotId)).state,
+    "ready",
+  );
 
   // Simulate the crash window: the journal recorded the planned path and the
   // checkout was created, but the checkout identity was never journaled.
@@ -753,33 +757,73 @@ test("restore converges after a crash between checkout creation and journal upda
     "",
   );
 
-  await assert.rejects(restoreManagedWorktreeSnapshot({
-    ...deps,
-    resumeCheckout: async () => { throw new Error("ownership changed"); },
-    checkCapacity: async () => { throw new Error("must verify before reducing the budget"); },
-  }, snapshotId), /ownership changed/);
-  assert.equal((await readManagedWorktreeRestoreJournal(snapshotRoot, snapshotId))?.phase, "checkout_planned");
-  await assert.rejects(restoreManagedWorktreeSnapshot({
-    ...deps,
-    checkCapacity: async (_root, phase) => { assert.equal(phase, "checkout_created"); },
-    managedWorktreeUsable: async () => false,
-  }, snapshotId), /partially restored managed worktree could not be verified/);
-  assert.equal((await readManagedWorktreeRestoreJournal(snapshotRoot, snapshotId))?.phase, "checkout_planned");
-  await assert.rejects(restoreManagedWorktreeSnapshot({
-    ...deps,
-    checkCapacity: async (_root, phase) => {
-      assert.equal(phase, "checkout_created");
-      await git(plannedPath, ["commit", "--allow-empty", "-m", "External branch advance"]);
-    },
-  }, snapshotId), /partially restored managed worktree could not be verified/);
-  assert.equal((await readManagedWorktreeRestoreJournal(snapshotRoot, snapshotId))?.phase, "checkout_planned");
+  await assert.rejects(
+    restoreManagedWorktreeSnapshot(
+      {
+        ...deps,
+        resumeCheckout: async () => {
+          throw new Error("ownership changed");
+        },
+        checkCapacity: async () => {
+          throw new Error("must verify before reducing the budget");
+        },
+      },
+      snapshotId,
+    ),
+    /ownership changed/,
+  );
+  assert.equal(
+    (await readManagedWorktreeRestoreJournal(snapshotRoot, snapshotId))?.phase,
+    "checkout_planned",
+  );
+  await assert.rejects(
+    restoreManagedWorktreeSnapshot(
+      {
+        ...deps,
+        checkCapacity: async (_root, phase) => {
+          assert.equal(phase, "checkout_created");
+        },
+        managedWorktreeUsable: async () => false,
+      },
+      snapshotId,
+    ),
+    /partially restored managed worktree could not be verified/,
+  );
+  assert.equal(
+    (await readManagedWorktreeRestoreJournal(snapshotRoot, snapshotId))?.phase,
+    "checkout_planned",
+  );
+  await assert.rejects(
+    restoreManagedWorktreeSnapshot(
+      {
+        ...deps,
+        checkCapacity: async (_root, phase) => {
+          assert.equal(phase, "checkout_created");
+          await git(plannedPath, ["commit", "--allow-empty", "-m", "External branch advance"]);
+        },
+      },
+      snapshotId,
+    ),
+    /partially restored managed worktree could not be verified/,
+  );
+  assert.equal(
+    (await readManagedWorktreeRestoreJournal(snapshotRoot, snapshotId))?.phase,
+    "checkout_planned",
+  );
   await git(plannedPath, ["reset", "--hard", capture.head]);
-  const first = await restoreManagedWorktreeSnapshot({
-    ...deps,
-    checkCapacity: async (_root, phase) => {
-      assert.equal(phase, "checkout_created", "an existing verified checkout must not be budgeted again");
+  const first = await restoreManagedWorktreeSnapshot(
+    {
+      ...deps,
+      checkCapacity: async (_root, phase) => {
+        assert.equal(
+          phase,
+          "checkout_created",
+          "an existing verified checkout must not be budgeted again",
+        );
+      },
     },
-  }, snapshotId);
+    snapshotId,
+  );
   const canonicalPlanned = await fs.realpath(plannedPath);
   assert.equal(first.workspaceId, "workspace-restored");
   assert.equal(first.worktree.path, canonicalPlanned);
@@ -788,10 +832,15 @@ test("restore converges after a crash between checkout creation and journal upda
 
   // A retry after completion converges to the saved result instead of
   // attaching the recorded branch to a fresh random path.
-  const again = await restoreManagedWorktreeSnapshot({
-    ...deps,
-    checkCapacity: async () => { throw new Error("completed restores allocate nothing"); },
-  }, snapshotId);
+  const again = await restoreManagedWorktreeSnapshot(
+    {
+      ...deps,
+      checkCapacity: async () => {
+        throw new Error("completed restores allocate nothing");
+      },
+    },
+    snapshotId,
+  );
   assert.equal(again.workspaceId, "workspace-restored");
   assert.equal(again.worktree.path, canonicalPlanned);
   const worktrees = await git(repository, ["worktree", "list", "--porcelain"]);
@@ -934,7 +983,8 @@ test("restore fails closed on branch conflicts and existing destinations", async
       base,
       "",
     ),
-    (error: unknown) => error instanceof GitServiceError && !/exists at a different commit/u.test(error.message),
+    (error: unknown) =>
+      error instanceof GitServiceError && !/exists at a different commit/u.test(error.message),
   );
   assert.ok(created.path);
 });
@@ -951,8 +1001,13 @@ test("a managed worktree deleted outside Aiden comes back on its branch, with co
   await fs.rm(created.path, { recursive: true, force: true });
   assert.equal(
     await service.managedWorktreeUsable(
-      repository, created.path, "aiden/fix", created.worktreeGitDir, created.ownershipToken,
-      created.worktreeDevice, created.worktreeInode,
+      repository,
+      created.path,
+      "aiden/fix",
+      created.worktreeGitDir,
+      created.ownershipToken,
+      created.worktreeDevice,
+      created.worktreeInode,
     ),
     false,
   );
@@ -961,39 +1016,70 @@ test("a managed worktree deleted outside Aiden comes back on its branch, with co
   // and the branch is untouched, so Restore can simply be tried again.
   await assert.rejects(
     service.restoreDeletedManagedWorktreeCheckout(
-      repository, root, created.path, "aiden/fix", created.worktreeGitDir, created.ownershipToken, "",
-      async () => { throw new Error("disk full"); },
+      repository,
+      root,
+      created.path,
+      "aiden/fix",
+      created.worktreeGitDir,
+      created.ownershipToken,
+      "",
+      async () => {
+        throw new Error("disk full");
+      },
     ),
     /disk full/u,
   );
   await assert.rejects(fs.lstat(created.path), { code: "ENOENT" });
   assert.equal(await git(repository, ["rev-parse", "aiden/fix"]), branchHead, "the branch is kept");
   assert.ok(
-    !(await git(repository, ["worktree", "list", "--porcelain"])).includes(`worktree ${created.path}`),
+    !(await git(repository, ["worktree", "list", "--porcelain"])).includes(
+      `worktree ${created.path}`,
+    ),
     "the rolled-back checkout is not registered",
   );
 
   let recorded: string | undefined;
   const restored = await service.restoreDeletedManagedWorktreeCheckout(
-    repository, root, created.path, "aiden/fix", created.worktreeGitDir, created.ownershipToken, "",
-    async (worktree) => { recorded = worktree.ownershipToken; },
+    repository,
+    root,
+    created.path,
+    "aiden/fix",
+    created.worktreeGitDir,
+    created.ownershipToken,
+    "",
+    async (worktree) => {
+      recorded = worktree.ownershipToken;
+    },
   );
   assert.equal(recorded, restored.ownershipToken, "the new identity is recorded before it returns");
   assert.equal(restored.path, created.path, "it is back in the same place");
-  assert.equal(await fs.readFile(path.join(restored.path, "fix.txt"), "utf8"), "fixed\n", "with the branch's commits");
+  assert.equal(
+    await fs.readFile(path.join(restored.path, "fix.txt"), "utf8"),
+    "fixed\n",
+    "with the branch's commits",
+  );
   assert.equal(await git(restored.path, ["rev-parse", "HEAD"]), branchHead);
   assert.equal(await git(restored.path, ["branch", "--show-current"]), "aiden/fix");
   assert.notEqual(restored.ownershipToken, created.ownershipToken);
   assert.equal(
     await service.managedWorktreeUsable(
-      repository, restored.path, "aiden/fix", restored.worktreeGitDir, restored.ownershipToken,
-      restored.worktreeDevice, restored.worktreeInode,
+      repository,
+      restored.path,
+      "aiden/fix",
+      restored.worktreeGitDir,
+      restored.ownershipToken,
+      restored.worktreeDevice,
+      restored.worktreeInode,
     ),
     true,
     "Aiden admits the restored checkout under its new identity",
   );
   const listed = (await git(repository, ["worktree", "list", "--porcelain"])).split("\n");
-  assert.equal(listed.filter((line) => line === "branch refs/heads/aiden/fix").length, 1, "Git records it once");
+  assert.equal(
+    listed.filter((line) => line === "branch refs/heads/aiden/fix").length,
+    1,
+    "Git records it once",
+  );
   assert.ok(!listed.some((line) => line.startsWith("prunable")), "the stale record is gone");
 });
 
@@ -1008,7 +1094,13 @@ test("a failed restore keeps the folder when something was written into it meanw
   // and then saving the restored record fails.
   await assert.rejects(
     service.restoreDeletedManagedWorktreeCheckout(
-      repository, root, created.path, "aiden/edited", created.worktreeGitDir, created.ownershipToken, "",
+      repository,
+      root,
+      created.path,
+      "aiden/edited",
+      created.worktreeGitDir,
+      created.ownershipToken,
+      "",
       async (restored) => {
         await fs.writeFile(path.join(restored.path, "editor-unsaved-work.txt"), "unsaved\n");
         throw new Error("disk full");
@@ -1021,18 +1113,34 @@ test("a failed restore keeps the folder when something was written into it meanw
     "unsaved\n",
     "what was written is still there",
   );
-  assert.equal(await git(repository, ["rev-parse", "aiden/edited"]), branchHead, "the branch is kept");
-  assert.equal(await git(created.path, ["branch", "--show-current"]), "aiden/edited", "the kept folder is still a checkout");
+  assert.equal(
+    await git(repository, ["rev-parse", "aiden/edited"]),
+    branchHead,
+    "the branch is kept",
+  );
+  assert.equal(
+    await git(created.path, ["branch", "--show-current"]),
+    "aiden/edited",
+    "the kept folder is still a checkout",
+  );
 
   // As the message says: delete the folder, then Restore again.
   await fs.rm(created.path, { recursive: true, force: true });
   const restored = await service.restoreDeletedManagedWorktreeCheckout(
-    repository, root, created.path, "aiden/edited", created.worktreeGitDir, created.ownershipToken, "",
+    repository,
+    root,
+    created.path,
+    "aiden/edited",
+    created.worktreeGitDir,
+    created.ownershipToken,
+    "",
     async () => undefined,
   );
   assert.equal(restored.path, created.path);
   assert.equal(await git(restored.path, ["branch", "--show-current"]), "aiden/edited");
-  await assert.rejects(fs.lstat(path.join(restored.path, "editor-unsaved-work.txt")), { code: "ENOENT" });
+  await assert.rejects(fs.lstat(path.join(restored.path, "editor-unsaved-work.txt")), {
+    code: "ENOENT",
+  });
 });
 
 test("a failed restore never deletes an ignored file written while it was undoing itself", async (t) => {
@@ -1055,7 +1163,10 @@ test("a failed restore never deletes an ignored file written while it was undoin
       armed = false;
       // The checkout has been set aside by now: the editor writes into the
       // folder the check just looked at, wherever it is.
-      const workTree = args[1].find((arg: string) => arg.startsWith("--work-tree="))?.slice("--work-tree=".length) ?? args[0];
+      const workTree =
+        args[1]
+          .find((arg: string) => arg.startsWith("--work-tree="))
+          ?.slice("--work-tree=".length) ?? args[0];
       await fs.writeFile(path.join(workTree, "editor-backup.txt"), "backup\n");
       backupWritten = true;
     }
@@ -1063,7 +1174,13 @@ test("a failed restore never deletes an ignored file written while it was undoin
   };
   await assert.rejects(
     service.restoreDeletedManagedWorktreeCheckout(
-      repository, root, created.path, "aiden/backup", created.worktreeGitDir, created.ownershipToken, "",
+      repository,
+      root,
+      created.path,
+      "aiden/backup",
+      created.worktreeGitDir,
+      created.ownershipToken,
+      "",
       async () => {
         armed = true;
         throw new Error("disk full");
@@ -1072,7 +1189,11 @@ test("a failed restore never deletes an ignored file written while it was undoin
   );
   assert.equal(armed, false, "the rollback looked at the folder");
   assert.equal(backupWritten, true);
-  assert.equal(await fs.readFile(path.join(created.path, "editor-backup.txt"), "utf8"), "backup\n", "the backup survives in the worktree's place");
+  assert.equal(
+    await fs.readFile(path.join(created.path, "editor-backup.txt"), "utf8"),
+    "backup\n",
+    "the backup survives in the worktree's place",
+  );
 });
 
 test("a restore leaves alone a folder put back from the Trash while it was checking for room", async (t) => {
@@ -1095,12 +1216,22 @@ test("a restore leaves alone a folder put back from the Trash while it was check
   };
   await assert.rejects(
     service.restoreDeletedManagedWorktreeCheckout(
-      repository, root, created.path, "aiden/trash", created.worktreeGitDir, created.ownershipToken, "",
+      repository,
+      root,
+      created.path,
+      "aiden/trash",
+      created.worktreeGitDir,
+      created.ownershipToken,
+      "",
       async () => undefined,
     ),
     /already there/u,
   );
-  assert.equal(await fs.readFile(path.join(created.path, ".env"), "utf8"), "SECRET=1\n", "the ignored file it held is kept");
+  assert.equal(
+    await fs.readFile(path.join(created.path, ".env"), "utf8"),
+    "SECRET=1\n",
+    "the ignored file it held is kept",
+  );
 });
 
 test("a restore leaves alone a folder put back from the Trash just as Git's old record is cleared", async (t) => {
@@ -1124,12 +1255,22 @@ test("a restore leaves alone a folder put back from the Trash just as Git's old 
   };
   await assert.rejects(
     service.restoreDeletedManagedWorktreeCheckout(
-      repository, root, created.path, "aiden/late-trash", created.worktreeGitDir, created.ownershipToken, "",
+      repository,
+      root,
+      created.path,
+      "aiden/late-trash",
+      created.worktreeGitDir,
+      created.ownershipToken,
+      "",
       async () => undefined,
     ),
     /already there/u,
   );
-  assert.equal(await fs.readFile(path.join(created.path, ".env"), "utf8"), "SECRET=1\n", "the ignored file it held is kept");
+  assert.equal(
+    await fs.readFile(path.join(created.path, ".env"), "utf8"),
+    "SECRET=1\n",
+    "the ignored file it held is kept",
+  );
   assert.equal(
     await git(created.path, ["branch", "--show-current"]),
     "aiden/late-trash",
@@ -1151,16 +1292,27 @@ test("a folder put back from the Trash just before the new checkout keeps its Gi
   // The folder comes back after the last look for it, as Git starts the checkout.
   const run = service["run"].bind(service);
   service["run"] = async (...args) => {
-    if (args[1][0] === "worktree" && args[1][1] === "add") await fs.rename(trash, created.path).catch(() => undefined);
+    if (args[1][0] === "worktree" && args[1][1] === "add")
+      await fs.rename(trash, created.path).catch(() => undefined);
     return run(...args);
   };
   await assert.rejects(
     service.restoreDeletedManagedWorktreeCheckout(
-      repository, root, created.path, "aiden/at-add", created.worktreeGitDir, created.ownershipToken, "",
+      repository,
+      root,
+      created.path,
+      "aiden/at-add",
+      created.worktreeGitDir,
+      created.ownershipToken,
+      "",
       async () => undefined,
     ),
   );
-  assert.equal(await fs.readFile(path.join(created.path, ".env"), "utf8"), "SECRET=1\n", "the ignored file it held is kept");
+  assert.equal(
+    await fs.readFile(path.join(created.path, ".env"), "utf8"),
+    "SECRET=1\n",
+    "the ignored file it held is kept",
+  );
   assert.equal(
     await git(created.path, ["branch", "--show-current"]),
     "aiden/at-add",
@@ -1179,14 +1331,27 @@ test("a restore finishes when Git's old record cannot be deleted afterwards", as
   };
   let recorded: string | undefined;
   const restored = await service.restoreDeletedManagedWorktreeCheckout(
-    repository, root, created.path, "aiden/stuck-record", created.worktreeGitDir, created.ownershipToken, "",
-    async (worktree) => { recorded = worktree.ownershipToken; },
+    repository,
+    root,
+    created.path,
+    "aiden/stuck-record",
+    created.worktreeGitDir,
+    created.ownershipToken,
+    "",
+    async (worktree) => {
+      recorded = worktree.ownershipToken;
+    },
   );
   assert.equal(recorded, restored.ownershipToken, "the new identity is still recorded");
   assert.equal(
     await service.managedWorktreeUsable(
-      repository, restored.path, "aiden/stuck-record", restored.worktreeGitDir, restored.ownershipToken,
-      restored.worktreeDevice, restored.worktreeInode,
+      repository,
+      restored.path,
+      "aiden/stuck-record",
+      restored.worktreeGitDir,
+      restored.ownershipToken,
+      restored.worktreeDevice,
+      restored.worktreeInode,
     ),
     true,
   );
@@ -1201,7 +1366,13 @@ test("a restore never lets a folder that was moved to the Trash share the new ch
   const trashed = path.join(trash, path.basename(created.path));
   await fs.rename(created.path, trashed);
   const restored = await service.restoreDeletedManagedWorktreeCheckout(
-    repository, root, created.path, "aiden/trashed", created.worktreeGitDir, created.ownershipToken, "",
+    repository,
+    root,
+    created.path,
+    "aiden/trashed",
+    created.worktreeGitDir,
+    created.ownershipToken,
+    "",
     async () => undefined,
   );
   assert.equal(await git(restored.path, ["branch", "--show-current"]), "aiden/trashed");
@@ -1209,7 +1380,11 @@ test("a restore never lets a folder that was moved to the Trash share the new ch
   // new one, or Git commands there would change the restored checkout.
   await fs.writeFile(path.join(trashed, "stray.txt"), "stray\n");
   await assert.rejects(git(trashed, ["add", "stray.txt"]));
-  assert.equal(await git(restored.path, ["status", "--porcelain"]), "", "the restored checkout's index is untouched");
+  assert.equal(
+    await git(restored.path, ["status", "--porcelain"]),
+    "",
+    "the restored checkout's index is untouched",
+  );
 });
 
 test("a workspace in a subfolder the branch no longer has is not restored", async (t) => {
@@ -1227,13 +1402,25 @@ test("a workspace in a subfolder the branch no longer has is not restored", asyn
   let saved = false;
   await assert.rejects(
     service.restoreDeletedManagedWorktreeCheckout(
-      repository, root, created.path, "aiden/nested", created.worktreeGitDir, created.ownershipToken, "app",
-      async () => { saved = true; },
+      repository,
+      root,
+      created.path,
+      "aiden/nested",
+      created.worktreeGitDir,
+      created.ownershipToken,
+      "app",
+      async () => {
+        saved = true;
+      },
     ),
     /no longer has this workspace's folder/u,
   );
   assert.equal(saved, false, "nothing is recorded for a folder that is not there");
-  await assert.rejects(fs.lstat(created.path), { code: "ENOENT" }, "the checkout it made is taken away again");
+  await assert.rejects(
+    fs.lstat(created.path),
+    { code: "ENOENT" },
+    "the checkout it made is taken away again",
+  );
 });
 
 test("a failed restore puts the folder back when a late write stops its removal", async (t) => {
@@ -1256,15 +1443,35 @@ test("a failed restore puts the folder back when a late write stops its removal"
   await fs.rm(created.path, { recursive: true, force: true });
   await assert.rejects(
     service.restoreDeletedManagedWorktreeCheckout(
-      repository, root, created.path, "aiden/late", created.worktreeGitDir, created.ownershipToken, "",
-      async () => { throw new Error("disk full"); },
+      repository,
+      root,
+      created.path,
+      "aiden/late",
+      created.worktreeGitDir,
+      created.ownershipToken,
+      "",
+      async () => {
+        throw new Error("disk full");
+      },
     ),
     (error: unknown) => error instanceof GitServiceError && /kept the folder/u.test(error.message),
   );
   assert.equal(removals, 1);
-  assert.equal(await fs.readFile(path.join(created.path, "editor-unsaved-work.txt"), "utf8"), "unsaved\n", "back where it was");
-  assert.equal(await git(created.path, ["branch", "--show-current"]), "aiden/late", "and still a checkout of its branch");
-  assert.equal(await git(repository, ["rev-parse", "aiden/late"]), branchHead, "the branch is kept");
+  assert.equal(
+    await fs.readFile(path.join(created.path, "editor-unsaved-work.txt"), "utf8"),
+    "unsaved\n",
+    "back where it was",
+  );
+  assert.equal(
+    await git(created.path, ["branch", "--show-current"]),
+    "aiden/late",
+    "and still a checkout of its branch",
+  );
+  assert.equal(
+    await git(repository, ["rev-parse", "aiden/late"]),
+    branchHead,
+    "the branch is kept",
+  );
   assert.deepEqual(
     (await fs.readdir(path.dirname(created.path))).filter((name) => name.startsWith(".aiden-")),
     [],
@@ -1292,17 +1499,37 @@ test("a failed restore keeps its removal record when something new took the fold
   await fs.rm(created.path, { recursive: true, force: true });
   await assert.rejects(
     service.restoreDeletedManagedWorktreeCheckout(
-      repository, root, created.path, "aiden/collide", created.worktreeGitDir, created.ownershipToken, "",
-      async () => { throw new Error("disk full"); },
+      repository,
+      root,
+      created.path,
+      "aiden/collide",
+      created.worktreeGitDir,
+      created.ownershipToken,
+      "",
+      async () => {
+        throw new Error("disk full");
+      },
     ),
     (error: unknown) => error instanceof GitServiceError && !/kept the folder/u.test(error.message),
   );
-  assert.equal(await fs.readFile(path.join(created.path, "watcher.txt"), "utf8"), "watcher\n", "the new folder is left alone");
-  const setAside = (await fs.readdir(path.dirname(created.path))).filter((name) => name.startsWith(".aiden-"));
-  assert.ok(setAside.some((name) => name.endsWith(".json")), "the removal record is kept for recovery");
+  assert.equal(
+    await fs.readFile(path.join(created.path, "watcher.txt"), "utf8"),
+    "watcher\n",
+    "the new folder is left alone",
+  );
+  const setAside = (await fs.readdir(path.dirname(created.path))).filter((name) =>
+    name.startsWith(".aiden-"),
+  );
+  assert.ok(
+    setAside.some((name) => name.endsWith(".json")),
+    "the removal record is kept for recovery",
+  );
   const folder = setAside.find((name) => !name.endsWith(".json"))!;
   assert.equal(
-    await fs.readFile(path.join(path.dirname(created.path), folder, "editor-unsaved-work.txt"), "utf8"),
+    await fs.readFile(
+      path.join(path.dirname(created.path), folder, "editor-unsaved-work.txt"),
+      "utf8",
+    ),
     "unsaved\n",
     "and the saved work is still in the set-aside folder",
   );
@@ -1316,7 +1543,11 @@ test("a deleted worktree whose branch now needs a checkout filter is not restore
   // After its first checkout, the branch gained a file that a configured
   // filter would rewrite (and run a command for) on checkout.
   const sentinel = path.join(await temporaryDirectory(t), "smudged");
-  await git(repository, ["config", "filter.probe.smudge", `touch ${JSON.stringify(sentinel)}; cat`]);
+  await git(repository, [
+    "config",
+    "filter.probe.smudge",
+    `touch ${JSON.stringify(sentinel)}; cat`,
+  ]);
   await fs.writeFile(path.join(created.path, ".gitattributes"), "data.txt filter=probe\n");
   await fs.writeFile(path.join(created.path, "data.txt"), "data\n");
   await git(created.path, ["add", ".gitattributes", "data.txt"]);
@@ -1324,7 +1555,13 @@ test("a deleted worktree whose branch now needs a checkout filter is not restore
   await fs.rm(created.path, { recursive: true, force: true });
   await assert.rejects(
     service.restoreDeletedManagedWorktreeCheckout(
-      repository, root, created.path, "aiden/filtered", created.worktreeGitDir, created.ownershipToken, "",
+      repository,
+      root,
+      created.path,
+      "aiden/filtered",
+      created.worktreeGitDir,
+      created.ownershipToken,
+      "",
       async () => undefined,
     ),
     (error: unknown) => error instanceof GitServiceError,
@@ -1332,7 +1569,9 @@ test("a deleted worktree whose branch now needs a checkout filter is not restore
   await assert.rejects(fs.lstat(created.path), { code: "ENOENT" }, "no checkout was made");
   await assert.rejects(fs.lstat(sentinel), { code: "ENOENT" }, "the filter never ran");
   assert.ok(
-    (await git(repository, ["worktree", "list", "--porcelain"])).includes(`worktree ${created.path}`),
+    (await git(repository, ["worktree", "list", "--porcelain"])).includes(
+      `worktree ${created.path}`,
+    ),
     "Git's record of the deleted folder is left as it was",
   );
 });
@@ -1341,9 +1580,20 @@ test("a deleted worktree is not restored when its branch is gone, taken, or the 
   const repository = await createRepository(t);
   const root = await temporaryDirectory(t);
   const service = new GitService({ cacheTtlMs: 0 });
-  const restore = (created: Awaited<ReturnType<GitService["createWorktree"]>>, branch: string, token = created.ownershipToken) =>
+  const restore = (
+    created: Awaited<ReturnType<GitService["createWorktree"]>>,
+    branch: string,
+    token = created.ownershipToken,
+  ) =>
     service.restoreDeletedManagedWorktreeCheckout(
-      repository, root, created.path, branch, created.worktreeGitDir, token, "", async () => undefined,
+      repository,
+      root,
+      created.path,
+      branch,
+      created.worktreeGitDir,
+      token,
+      "",
+      async () => undefined,
     );
 
   // The folder is still there.
@@ -1356,7 +1606,11 @@ test("a deleted worktree is not restored when its branch is gone, taken, or the 
   await git(repository, ["worktree", "prune"]);
   await git(repository, ["branch", "-D", "aiden/deleted"]);
   await assert.rejects(restore(deleted, "aiden/deleted"), /no longer exists/u);
-  assert.equal(await service.managedWorktreeBranchHead(repository, "aiden/deleted"), undefined, "nothing recreated the branch");
+  assert.equal(
+    await service.managedWorktreeBranchHead(repository, "aiden/deleted"),
+    undefined,
+    "nothing recreated the branch",
+  );
 
   // Another worktree now has the branch checked out.
   const taken = await service.createWorktree(repository, root, "aiden/taken");
@@ -1369,24 +1623,32 @@ test("a deleted worktree is not restored when its branch is gone, taken, or the 
   // Git's record of the folder carries another owner's marker: it is left alone.
   const foreign = await service.createWorktree(repository, root, "aiden/foreign");
   await fs.rm(foreign.path, { recursive: true, force: true });
-  await assert.rejects(restore(foreign, "aiden/foreign", randomUUID()), /ownership could not be verified/u);
+  await assert.rejects(
+    restore(foreign, "aiden/foreign", randomUUID()),
+    /ownership could not be verified/u,
+  );
   assert.ok(
-    (await git(repository, ["worktree", "list", "--porcelain"])).includes(`worktree ${foreign.path}`),
+    (await git(repository, ["worktree", "list", "--porcelain"])).includes(
+      `worktree ${foreign.path}`,
+    ),
     "the registration it could not verify is kept",
   );
 });
 
 function isExpectedCapacityDenial(error: unknown): boolean {
-  return error instanceof InsufficientDiskSpaceError &&
+  return (
+    error instanceof InsufficientDiskSpaceError &&
     error.code === "insufficient_disk_space" &&
     // statfs reports Number values; large valid filesystems can exceed the
     // safe-integer range. Compare only values from this admission observation.
-    Number.isFinite(error.availableBytes) && error.availableBytes >= 0 &&
+    Number.isFinite(error.availableBytes) &&
+    error.availableBytes >= 0 &&
     Number.isFinite(error.requiredBytes) &&
     error.requiredBytes > error.availableBytes &&
     error.requiredBytes > error.reserveBytes &&
     error.reserveBytes > 0 &&
-    error.estimatedBytes === Number.MAX_SAFE_INTEGER;
+    error.estimatedBytes === Number.MAX_SAFE_INTEGER
+  );
 }
 
 test("capacity admission reports a typed insufficient_disk_space error", async (t) => {
@@ -1412,10 +1674,16 @@ test("capacity denial predicate supports large finite filesystem observations", 
   assert.equal(Number.isSafeInteger(report.availableBytes), false);
   assert.equal(isExpectedCapacityDenial(new InsufficientDiskSpaceError(report)), true);
   for (const availableBytes of [NaN, Infinity, -Infinity, -1, report.requiredBytes]) {
-    assert.equal(isExpectedCapacityDenial(new InsufficientDiskSpaceError({ ...report, availableBytes })), false);
+    assert.equal(
+      isExpectedCapacityDenial(new InsufficientDiskSpaceError({ ...report, availableBytes })),
+      false,
+    );
   }
   for (const requiredBytes of [NaN, Infinity, -Infinity]) {
-    assert.equal(isExpectedCapacityDenial(new InsufficientDiskSpaceError({ ...report, requiredBytes })), false);
+    assert.equal(
+      isExpectedCapacityDenial(new InsufficientDiskSpaceError({ ...report, requiredBytes })),
+      false,
+    );
   }
   assert.equal(isExpectedCapacityDenial(new Error("untyped denial")), false);
 });
@@ -1449,11 +1717,11 @@ test(".worktreeinclude provisions only ignored+untracked files with mode preserv
 
   const env = await fs.lstat(path.join(worktreePath, ".env"));
   assert.equal(env.mode & 0o777, 0o600);
+  assert.equal(await fs.readFile(path.join(worktreePath, ".env"), "utf8"), "SECRET=42\n");
   assert.equal(
-    await fs.readFile(path.join(worktreePath, ".env"), "utf8"),
-    "SECRET=42\n",
+    await fs.readFile(path.join(worktreePath, "generated", "fixture.bin"), "utf8"),
+    "fixture\n",
   );
-  assert.equal(await fs.readFile(path.join(worktreePath, "generated", "fixture.bin"), "utf8"), "fixture\n");
   // Tracked and non-ignored untracked files are never provisioned this way.
   await assert.rejects(fs.lstat(path.join(worktreePath, "tracked.txt")), { code: "ENOENT" });
   await assert.rejects(fs.lstat(path.join(worktreePath, "untracked.txt")), {
@@ -1474,7 +1742,12 @@ test(".worktreeinclude with checkIgnored skips unrelated huge ignored trees and 
   await Promise.all(
     Array.from({ length: 120 }, (_, index) =>
       fs.writeFile(
-        path.join(repository, "node_modules", "pkg", `module-with-long-name-${String(index).padStart(4, "0")}.js`),
+        path.join(
+          repository,
+          "node_modules",
+          "pkg",
+          `module-with-long-name-${String(index).padStart(4, "0")}.js`,
+        ),
         "export {};\n",
       ),
     ),
@@ -1485,7 +1758,14 @@ test(".worktreeinclude with checkIgnored skips unrelated huge ignored trees and 
 
   const bounded = new GitService({ cacheTtlMs: 0, maxBufferBytes: 2_048 });
   await assert.rejects(
-    bounded.listFiles(repository, ["ls-files", "-z", "-o", "-i", "--exclude-standard", "--full-name"]),
+    bounded.listFiles(repository, [
+      "ls-files",
+      "-z",
+      "-o",
+      "-i",
+      "--exclude-standard",
+      "--full-name",
+    ]),
     (error: unknown) => error instanceof GitServiceError && error.code === "output_limit",
     "naive --exclude-standard overflows the stdout cap when node_modules is large",
   );
@@ -1539,7 +1819,11 @@ test("resolveWorktreeBase streams prefix matches without output_limit and preser
   const repository = await createRepository(t);
   const head = await git(repository, ["rev-parse", "HEAD"]);
   for (let index = 0; index < 80; index++) {
-    await git(repository, ["update-ref", `refs/heads/feat/branch-with-long-name-${String(index).padStart(3, "0")}`, head]);
+    await git(repository, [
+      "update-ref",
+      `refs/heads/feat/branch-with-long-name-${String(index).padStart(3, "0")}`,
+      head,
+    ]);
   }
   const bounded = new GitService({ cacheTtlMs: 0, maxBufferBytes: 1_024 });
   await assert.rejects(
@@ -1560,7 +1844,11 @@ test("streaming check-attr admission handles attribute output larger than maxBuf
   await Promise.all(
     Array.from({ length: 120 }, (_, index) =>
       fs.writeFile(
-        path.join(repository, "src", `file-with-a-reasonably-long-name-${String(index).padStart(4, "0")}.ts`),
+        path.join(
+          repository,
+          "src",
+          `file-with-a-reasonably-long-name-${String(index).padStart(4, "0")}.ts`,
+        ),
         "export const x = 1;\n",
       ),
     ),
@@ -1608,7 +1896,9 @@ test("createWorktree validates additionalAllocationBytes atomically before creat
     }),
     (error: unknown) => error instanceof GitServiceError && error.code === "unsupported_scope",
   );
-  await assert.rejects(git(repository, ["show-ref", "--verify", "refs/heads/feature/overflow-reserve"]));
+  await assert.rejects(
+    git(repository, ["show-ref", "--verify", "refs/heads/feature/overflow-reserve"]),
+  );
 });
 
 test(".worktreeinclude provisioning is a no-op without the macOS transfer helper", async (t) => {
@@ -1661,8 +1951,7 @@ test("provisioning refuses symlinked sources, escapes, and existing destinations
       { sourceRoot: repository, worktreePath },
     ),
     (error: unknown) =>
-      error instanceof ManagedWorktreeProvisionerError &&
-      error.code === "unsafe_source",
+      error instanceof ManagedWorktreeProvisionerError && error.code === "unsafe_source",
   );
 
   // An existing destination is never overwritten.
@@ -1716,7 +2005,11 @@ test("provisionManagedWorktreeFilesBatch settles only after exit on abort and ke
     "Every file installed on disk must match onProvisioned 1:1 at rejection (no untracked or .tmp leftovers)",
   );
   await new Promise((resolve) => setTimeout(resolve, 100));
-  assert.equal(reported.length, countAtReject, "No onProvisioned callbacks may fire after rejection");
+  assert.equal(
+    reported.length,
+    countAtReject,
+    "No onProvisioned callbacks may fire after rejection",
+  );
   assert.deepEqual((await fs.readdir(destinationRoot)).sort(), filesOnDiskAtReject);
 
   // 2. Throwing inside onProvisioned rejects cleanly instead of crashing the process.
@@ -1759,10 +2052,9 @@ test("provisioned blob storage captures bytes, verifies digests, and restores id
   // A leftover inflight temp from a crashed write is discarded, not wedged.
   await fs.writeFile(path.join(restored, ".env.aiden-restore-inflight"), "partial\n");
   await restoreProvisionedFiles(snapshotDir, [entry], restored);
-  await assert.rejects(
-    fs.lstat(path.join(restored, ".env.aiden-restore-inflight")),
-    { code: "ENOENT" },
-  );
+  await assert.rejects(fs.lstat(path.join(restored, ".env.aiden-restore-inflight")), {
+    code: "ENOENT",
+  });
   assert.equal(await fs.readFile(path.join(restored, ".env"), "utf8"), "CAPTURED=1\n");
   // Conflicting content fails closed.
   await fs.writeFile(path.join(restored, ".env"), "OTHER=0\n");
@@ -1844,10 +2136,7 @@ test("snapshot manifests round-trip and reject incomplete or corrupt records", a
     state: "ready",
   };
   await persistManagedWorktreeSnapshot(snapshotRoot, manifest);
-  assert.deepEqual(
-    await readManagedWorktreeSnapshot(snapshotRoot, snapshotId),
-    manifest,
-  );
+  assert.deepEqual(await readManagedWorktreeSnapshot(snapshotRoot, snapshotId), manifest);
   await assert.rejects(
     requireReadyManagedWorktreeSnapshot(snapshotRoot, randomUUID()),
     (error: unknown) =>
@@ -1885,7 +2174,6 @@ test("readWorktreeInclude rejects symlinks and oversized includes", async (t) =>
   );
 });
 
-
 test("checkout estimates include the entire pinned tree from a nested workspace despite deleted source files", async (t) => {
   const repository = await createRepository(t);
   await fs.mkdir(path.join(repository, "nested"));
@@ -1895,18 +2183,24 @@ test("checkout estimates include the entire pinned tree from a nested workspace 
   await git(repository, ["commit", "-m", "whole tree"]);
   const commit = await git(repository, ["rev-parse", "HEAD"]);
   const marker = path.join(repository, "estimate-hook-ran");
-  await fs.writeFile(path.join(repository, ".git", "hooks", "post-index-change"),
-    `#!/bin/sh\ntouch '${marker}'\n`, { mode: 0o755 });
+  await fs.writeFile(
+    path.join(repository, ".git", "hooks", "post-index-change"),
+    `#!/bin/sh\ntouch '${marker}'\n`,
+    { mode: 0o755 },
+  );
   await fs.unlink(path.join(repository, "large"));
   const service = new GitService({ cacheTtlMs: 0 });
   const rootEstimate = await service.managedWorktreeCheckoutBytes(repository, commit);
   assert.ok(rootEstimate >= 100000);
   await assert.rejects(fs.stat(marker), { code: "ENOENT" });
-  assert.equal(await service.managedWorktreeCheckoutBytes(path.join(repository, "nested"), commit), rootEstimate);
+  assert.equal(
+    await service.managedWorktreeCheckoutBytes(path.join(repository, "nested"), commit),
+    rootEstimate,
+  );
   await git(repository, ["add", "."]);
   await git(repository, ["commit", "-m", "delete large"]);
   assert.equal(await service.managedWorktreeCheckoutBytes(repository, commit), rootEstimate);
-  assert.ok(await service.managedWorktreeCheckoutBytes(repository) < rootEstimate);
+  assert.ok((await service.managedWorktreeCheckoutBytes(repository)) < rootEstimate);
 });
 
 test("checkout admission rejects filters and encodings without executing transformations or creating a branch", async (t) => {
@@ -1917,12 +2211,20 @@ test("checkout admission rejects filters and encodings without executing transfo
     await git(repository, ["config", `filter.${driver}.smudge`, `touch '${marker}'; cat`]);
   }
   const service = new GitService({ cacheTtlMs: 0 });
-  for (const attribute of ["filter=expanding", "filter=unset", "filter=unspecified", "ident", "working-tree-encoding=UTF-16"]) {
+  for (const attribute of [
+    "filter=expanding",
+    "filter=unset",
+    "filter=unspecified",
+    "ident",
+    "working-tree-encoding=UTF-16",
+  ]) {
     await fs.writeFile(path.join(repository, ".gitattributes"), `README.md ${attribute}\n`);
     await git(repository, ["add", ".gitattributes"]);
     await git(repository, ["commit", "-m", "checkout transformation"]);
-    await assert.rejects(service.createWorktree(repository, root, "feature/rejected"),
-      (error: unknown) => error instanceof GitServiceError && error.code === "unsupported_scope");
+    await assert.rejects(
+      service.createWorktree(repository, root, "feature/rejected"),
+      (error: unknown) => error instanceof GitServiceError && error.code === "unsupported_scope",
+    );
     await assert.rejects(git(repository, ["show-ref", "--verify", "refs/heads/feature/rejected"]));
     await assert.rejects(fs.stat(marker), { code: "ENOENT" });
   }
@@ -1938,7 +2240,11 @@ test("checkout admission allows disabled ident without expanding content", async
     await fs.writeFile(path.join(repository, ".gitattributes"), `README.md ${attribute}\n`);
     await git(repository, ["add", "."]);
     await git(repository, ["commit", "-m", "disabled ident"]);
-    const created = await service.createWorktree(repository, root, `feature/disabled-ident-${index}`);
+    const created = await service.createWorktree(
+      repository,
+      root,
+      `feature/disabled-ident-${index}`,
+    );
     assert.equal(await fs.readFile(path.join(created.path, "README.md"), "utf8"), content);
   }
 });
@@ -1958,10 +2264,18 @@ test("checkout admission rejects ambiguous filter sentinels activated only insid
   await fs.writeFile(path.join(repository, ".gitattributes"), "README.md filter=unset\n");
   await git(repository, ["add", ".gitattributes"]);
   await git(repository, ["commit", "-m", "conditional checkout filter"]);
-  await assert.rejects(new GitService({ cacheTtlMs: 0 }).createWorktree(repository, root, "feature/conditional-filter"),
-    (error: unknown) => error instanceof GitServiceError && error.code === "unsupported_scope");
+  await assert.rejects(
+    new GitService({ cacheTtlMs: 0 }).createWorktree(
+      repository,
+      root,
+      "feature/conditional-filter",
+    ),
+    (error: unknown) => error instanceof GitServiceError && error.code === "unsupported_scope",
+  );
   await assert.rejects(fs.stat(marker), { code: "ENOENT" });
-  await assert.rejects(git(repository, ["show-ref", "--verify", "refs/heads/feature/conditional-filter"]));
+  await assert.rejects(
+    git(repository, ["show-ref", "--verify", "refs/heads/feature/conditional-filter"]),
+  );
 });
 
 test("capacity admission rejects unknown numeric estimates and uses the destination's existing ancestor", async (t) => {
@@ -1975,37 +2289,66 @@ test("capacity admission rejects unknown numeric estimates and uses the destinat
   await assert.rejects(fs.stat(path.dirname(missing)), { code: "ENOENT" });
 });
 
-
 test("worktree admission reserves shared or unknown pools against both volume limits", async () => {
   const checkoutBytes = 1024;
-  await assert.rejects(checkWorktreeAllocation("/destination", "/repository/.git", -1, async () => {
-    throw new Error("invalid estimates must fail before filesystem inspection");
-  }), WorktreeCapacityUnavailableError);
-  const required = (bytes: number) => CREATE_CAPACITY_POLICY.reserveBytes + Math.ceil(bytes * CREATE_CAPACITY_POLICY.overheadFactor);
+  await assert.rejects(
+    checkWorktreeAllocation("/destination", "/repository/.git", -1, async () => {
+      throw new Error("invalid estimates must fail before filesystem inspection");
+    }),
+    WorktreeCapacityUnavailableError,
+  );
+  const required = (bytes: number) =>
+    CREATE_CAPACITY_POLICY.reserveBytes + Math.ceil(bytes * CREATE_CAPACITY_POLICY.overheadFactor);
   const combinedBytes = checkoutBytes + WORKTREE_GIT_METADATA_BYTES;
   for (const sameDevice of [true, false]) {
-    const inspect = (destinationFree: number, metadataFree: number) => async (directory: string) => ({
-      device: sameDevice ? "shared" : directory,
-      availableBytes: directory === "/destination" ? destinationFree : metadataFree,
-    });
+    const inspect =
+      (destinationFree: number, metadataFree: number) => async (directory: string) => ({
+        device: sameDevice ? "shared" : directory,
+        availableBytes: directory === "/destination" ? destinationFree : metadataFree,
+      });
     // Different APFS volume devices can still share a pool. Separate component
     // budgets must not pass when their aggregate would consume the reserve.
-    await assert.rejects(checkWorktreeAllocation("/destination", "/repository/.git", checkoutBytes,
-      inspect(required(checkoutBytes), required(WORKTREE_GIT_METADATA_BYTES))),
-    (error: unknown) => error instanceof InsufficientDiskSpaceError && error.estimatedBytes === combinedBytes);
-    await checkWorktreeAllocation("/destination", "/repository/.git", checkoutBytes,
-      inspect(required(combinedBytes), required(combinedBytes)));
+    await assert.rejects(
+      checkWorktreeAllocation(
+        "/destination",
+        "/repository/.git",
+        checkoutBytes,
+        inspect(required(checkoutBytes), required(WORKTREE_GIT_METADATA_BYTES)),
+      ),
+      (error: unknown) =>
+        error instanceof InsufficientDiskSpaceError && error.estimatedBytes === combinedBytes,
+    );
+    await checkWorktreeAllocation(
+      "/destination",
+      "/repository/.git",
+      checkoutBytes,
+      inspect(required(combinedBytes), required(combinedBytes)),
+    );
     // Either volume can have a stricter quota than the underlying shared pool.
     for (const [destinationFree, metadataFree] of [
       [required(combinedBytes) - 1, required(combinedBytes)],
       [required(combinedBytes), required(combinedBytes) - 1],
     ]) {
-      await assert.rejects(checkWorktreeAllocation("/destination", "/repository/.git", checkoutBytes,
-        inspect(destinationFree, metadataFree)), InsufficientDiskSpaceError);
+      await assert.rejects(
+        checkWorktreeAllocation(
+          "/destination",
+          "/repository/.git",
+          checkoutBytes,
+          inspect(destinationFree, metadataFree),
+        ),
+        InsufficientDiskSpaceError,
+      );
     }
     for (const invalid of [NaN, Infinity, -1, Number.MAX_SAFE_INTEGER + 1]) {
-      await assert.rejects(checkWorktreeAllocation("/destination", "/repository/.git", checkoutBytes,
-        inspect(required(combinedBytes), invalid)), WorktreeCapacityUnavailableError);
+      await assert.rejects(
+        checkWorktreeAllocation(
+          "/destination",
+          "/repository/.git",
+          checkoutBytes,
+          inspect(required(combinedBytes), invalid),
+        ),
+        WorktreeCapacityUnavailableError,
+      );
     }
   }
 });
@@ -2040,8 +2383,10 @@ test("capacity admission derives exact reports from controlled filesystem observ
       });
       blocks = 2 ** 30; // Large, safely representable filesystems remain supported.
       assert.deepEqual(await check(root, estimate), {
-        availableBytes: blocks * 4096, requiredBytes: Math.ceil(estimate * factor) + reserve,
-        reserveBytes: reserve, estimatedBytes: estimate,
+        availableBytes: blocks * 4096,
+        requiredBytes: Math.ceil(estimate * factor) + reserve,
+        reserveBytes: reserve,
+        estimatedBytes: estimate,
       });
     }
     assert.deepEqual(paths, Array(4).fill(root));

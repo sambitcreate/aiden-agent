@@ -31,7 +31,9 @@ export function botStarter(): BotStarter {
         audienceId: BOT_DESKTOP_AUDIENCE_ID,
         botId,
         bot: input,
-        ...(presetId === undefined ? { source: "onboarding" as const } : { presetId, source: "template" as const }),
+        ...(presetId === undefined
+          ? { source: "onboarding" as const }
+          : { presetId, source: "template" as const }),
         ...(access === undefined ? {} : { access }),
         // Templates and the first Bot say every Bot can search the web.
         grantFullWebSearch: true,
@@ -51,8 +53,10 @@ export function botStarter(): BotStarter {
       state: async (botId) => (await botSessionRuntime()).state(botId),
       conversation: async (botId) => (await botSessionRuntime()).conversation(botId),
     },
-    onIntroError: (botId, error) => logger.warn("bots", `Bot ${botId} could not introduce itself.`, error),
-    onRoutineError: (botId, error) => logger.warn("bots", `Bot ${botId}'s template routine could not be added.`, error),
+    onIntroError: (botId, error) =>
+      logger.warn("bots", `Bot ${botId} could not introduce itself.`, error),
+    onRoutineError: (botId, error) =>
+      logger.warn("bots", `Bot ${botId}'s template routine could not be added.`, error),
   });
   return starter;
 }

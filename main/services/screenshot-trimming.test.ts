@@ -17,7 +17,14 @@ function call(id: string, toolName: string): Message {
     api: "anthropic-messages",
     provider: "anthropic",
     model: "faux",
-    usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } },
+    usage: {
+      input: 0,
+      output: 0,
+      cacheRead: 0,
+      cacheWrite: 0,
+      totalTokens: 0,
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+    },
     stopReason: "toolUse",
     timestamp: 0,
   };
@@ -28,7 +35,10 @@ function screenshot(id: string, toolName: string, data: string): ToolResultMessa
     role: "toolResult",
     toolCallId: id,
     toolName,
-    content: [{ type: "text", text: `${id} done` }, { type: "image", data, mimeType: "image/png" }],
+    content: [
+      { type: "text", text: `${id} done` },
+      { type: "image", data, mimeType: "image/png" },
+    ],
     isError: false,
     timestamp: 0,
   };
@@ -37,7 +47,9 @@ function screenshot(id: string, toolName: string, data: string): ToolResultMessa
 /** Each screenshot's data, in the order the request carries them. */
 function carried(messages: readonly Message[]): string[] {
   return messages.flatMap((message) =>
-    message.role === "toolResult" ? message.content.flatMap((part) => (part.type === "image" ? [part.data] : [])) : [],
+    message.role === "toolResult"
+      ? message.content.flatMap((part) => (part.type === "image" ? [part.data] : []))
+      : [],
   );
 }
 
@@ -54,7 +66,10 @@ function run(datas: readonly string[], toolName = "computer_use") {
     // Each request is its own array, as the agent loop builds one per step.
     const request = trimScreenshots([...transcript]);
     const previous = requests[requests.length - 1];
-    if (previous && previous.some((message, at) => JSON.stringify(message) !== JSON.stringify(request[at]))) {
+    if (
+      previous &&
+      previous.some((message, at) => JSON.stringify(message) !== JSON.stringify(request[at]))
+    ) {
       edited.push(index + 1);
     }
     requests.push(request);
@@ -69,19 +84,38 @@ test("screenshots are cut only at the count limit, and each cut keeps the newest
   // cut lands six screenshots later.
   assert.deepEqual(edited, [9, 15, 21], "earlier messages change only at a cut");
   for (const step of edited) {
-    assert.deepEqual(carried(requests[step - 1]!), datas.slice(step - 3, step), `step ${step} keeps the newest three`);
+    assert.deepEqual(
+      carried(requests[step - 1]!),
+      datas.slice(step - 3, step),
+      `step ${step} keeps the newest three`,
+    );
   }
   for (let step = 1; step <= 8; step += 1) {
-    assert.deepEqual(carried(requests[step - 1]!), datas.slice(0, step), `step ${step} carries every screenshot`);
+    assert.deepEqual(
+      carried(requests[step - 1]!),
+      datas.slice(0, step),
+      `step ${step} carries every screenshot`,
+    );
   }
-  assert.deepEqual(carried(requests[13]!), datas.slice(6, 14), "between cuts the kept ones only grow");
+  assert.deepEqual(
+    carried(requests[13]!),
+    datas.slice(6, 14),
+    "between cuts the kept ones only grow",
+  );
 
   // A cut screenshot always becomes the same bytes: the note in its place,
   // with the result's own text kept.
   const last = requests[requests.length - 1]!;
   const first = last[2] as ToolResultMessage;
-  assert.deepEqual(first.content, [{ type: "text", text: "shot-0 done" }, { type: "text", text: OLDER_COMPUTER_SCREENSHOT_NOTE }]);
-  assert.equal(JSON.stringify(trimScreenshots(transcript)), JSON.stringify(last), "the same history renders the same request");
+  assert.deepEqual(first.content, [
+    { type: "text", text: "shot-0 done" },
+    { type: "text", text: OLDER_COMPUTER_SCREENSHOT_NOTE },
+  ]);
+  assert.equal(
+    JSON.stringify(trimScreenshots(transcript)),
+    JSON.stringify(last),
+    "the same history renders the same request",
+  );
   assert.equal(carried(transcript).length, 24, "the transcript keeps every screenshot");
 });
 
@@ -98,7 +132,11 @@ test("screenshots are cut at the byte limit too, down to what fits in the smalle
     assert.ok(kept.length <= SCREENSHOT_TRIM_LIMITS.keepImages);
   }
   const notes = requests[9]!.flatMap((message) =>
-    message.role === "toolResult" ? message.content.filter((part) => part.type === "text" && part.text === OLDER_BROWSER_SCREENSHOT_NOTE) : [],
+    message.role === "toolResult"
+      ? message.content.filter(
+          (part) => part.type === "text" && part.text === OLDER_BROWSER_SCREENSHOT_NOTE,
+        )
+      : [],
   );
   assert.equal(notes.length, 8, "each cut browser screenshot leaves the browser note");
 });
@@ -112,13 +150,26 @@ test("the newest screenshot stays even when it alone passes both limits", () => 
 
 test("the screenshot tools share one count, and other images are neither counted nor cut", () => {
   const transcript: Message[] = [
-    { role: "user", content: [{ type: "text", text: "Look." }, { type: "image", data: "person", mimeType: "image/png" }], timestamp: 0 },
+    {
+      role: "user",
+      content: [
+        { type: "text", text: "Look." },
+        { type: "image", data: "person", mimeType: "image/png" },
+      ],
+      timestamp: 0,
+    },
   ];
   const tools = ["computer_use", "browser_snapshot", "computer"];
   for (let index = 0; index < 9; index += 1) {
     const toolName = tools[index % tools.length]!;
-    transcript.push(call(`shot-${index}`, toolName), screenshot(`shot-${index}`, toolName, `png-${index}`));
-    transcript.push(call(`read-${index}`, "read_file"), screenshot(`read-${index}`, "read_file", `file-${index}`));
+    transcript.push(
+      call(`shot-${index}`, toolName),
+      screenshot(`shot-${index}`, toolName, `png-${index}`),
+    );
+    transcript.push(
+      call(`read-${index}`, "read_file"),
+      screenshot(`read-${index}`, "read_file", `file-${index}`),
+    );
   }
   const request = trimScreenshots(transcript);
   assert.deepEqual(
@@ -129,7 +180,13 @@ test("the screenshot tools share one count, and other images are neither counted
   assert.equal(carried(request).filter((data) => data.startsWith("file-")).length, 9);
   assert.equal(request[0], transcript[0], "the person's image is untouched");
   const notes = request.flatMap((message) =>
-    message.role === "toolResult" ? message.content.flatMap((part) => (part.type === "text" && part.text.startsWith("An older") ? [`${message.toolName}: ${part.text}`] : [])) : [],
+    message.role === "toolResult"
+      ? message.content.flatMap((part) =>
+          part.type === "text" && part.text.startsWith("An older")
+            ? [`${message.toolName}: ${part.text}`]
+            : [],
+        )
+      : [],
   );
   assert.deepEqual(notes, [
     `computer_use: ${OLDER_COMPUTER_SCREENSHOT_NOTE}`,

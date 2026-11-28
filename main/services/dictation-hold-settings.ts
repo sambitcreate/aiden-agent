@@ -2,11 +2,13 @@
 export class DictationHoldSettingsTransaction {
   private revision = 0;
   private latestHold = false;
-  constructor(private readonly portal: {
-    active(): boolean;
-    bind(): Promise<unknown>;
-    disable(): Promise<void>;
-  }) {}
+  constructor(
+    private readonly portal: {
+      active(): boolean;
+      bind(): Promise<unknown>;
+      disable(): Promise<void>;
+    },
+  ) {}
 
   async apply<T>(hold: boolean, persist: (isCurrent: () => boolean) => Promise<T>): Promise<T> {
     const revision = ++this.revision;
@@ -18,7 +20,9 @@ export class DictationHoldSettingsTransaction {
       throw new Error("Dictation shortcut settings changed during setup.");
     }
     let result: T;
-    try { result = await persist(() => revision === this.revision); } catch (error) {
+    try {
+      result = await persist(() => revision === this.revision);
+    } catch (error) {
       if (newlyBound && revision === this.revision) await this.portal.disable();
       throw error;
     }

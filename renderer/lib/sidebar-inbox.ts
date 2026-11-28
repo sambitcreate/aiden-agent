@@ -1,4 +1,3 @@
-
 import {
   INBOX_RECENT_WINDOW_MS,
   INBOX_SECTIONS,
@@ -103,13 +102,18 @@ export function organizeInbox<Row extends InboxRow>(
   const sorted = (section: InboxSection): Row[] => {
     const sign = SECTION_DIRECTION[section] === "oldest" ? 1 : -1;
     return buckets[section]
-      .sort((a, b) =>
-        a.placement.tier - b.placement.tier ||
-        sign * (a.placement.sortAt - b.placement.sortAt) ||
-        compareKeys(a.row.key, b.row.key))
+      .sort(
+        (a, b) =>
+          a.placement.tier - b.placement.tier ||
+          sign * (a.placement.sortAt - b.placement.sortAt) ||
+          compareKeys(a.row.key, b.row.key),
+      )
       .map((entry) => entry.row);
   };
-  const { shown: earlier, overflow: earlierOverflow } = capEarlier(sorted("earlier"), options.showAllEarlier ? Infinity : earlierLimit);
+  const { shown: earlier, overflow: earlierOverflow } = capEarlier(
+    sorted("earlier"),
+    options.showAllEarlier ? Infinity : earlierLimit,
+  );
   return {
     needsYou: sorted("needs_you"),
     pinned: sorted("pinned"),
@@ -129,7 +133,10 @@ export function organizeInbox<Row extends InboxRow>(
  * main pane and never grows past the cap. It is the oldest row shown, so the
  * newest-first order holds.
  */
-function capEarlier<Row extends InboxRow>(all: Row[], limit: number): { shown: Row[]; overflow: Row[] } {
+function capEarlier<Row extends InboxRow>(
+  all: Row[],
+  limit: number,
+): { shown: Row[]; overflow: Row[] } {
   if (all.length <= limit) return { shown: all, overflow: [] };
   const openPastCap = limit > 0 ? all.slice(limit).filter((row) => row.signals.isOpen) : [];
   const kept = Math.max(0, limit - openPastCap.length);
@@ -219,11 +226,13 @@ export function freezeInboxOrder(input: FreezeInboxInput): HeldInboxOrder {
       if (!input.present.has(row.key) || input.touched.has(row.key) || held.has(row.key)) continue;
       const live = liveSection.get(row.key);
       held.add(row.key);
-      lists[section].push(live === undefined
-        ? { key: row.key, leaving: true }
-        : live === section
-          ? { key: row.key, leaving: false }
-          : { key: row.key, leaving: false, liveSection: live });
+      lists[section].push(
+        live === undefined
+          ? { key: row.key, leaving: true }
+          : live === section
+            ? { key: row.key, leaving: false }
+            : { key: row.key, leaving: false, liveSection: live },
+      );
     }
   }
   for (const section of INBOX_SECTIONS) {
@@ -259,7 +268,11 @@ export function freezeInboxOrder(input: FreezeInboxInput): HeldInboxOrder {
   return lists;
 }
 
-function dropFromEnd(list: HeldInboxRow[], limit: number, droppable: (row: HeldInboxRow) => boolean): void {
+function dropFromEnd(
+  list: HeldInboxRow[],
+  limit: number,
+  droppable: (row: HeldInboxRow) => boolean,
+): void {
   for (let index = list.length - 1; index >= 0 && list.length > limit; index -= 1) {
     if (droppable(list[index]!)) list.splice(index, 1);
   }

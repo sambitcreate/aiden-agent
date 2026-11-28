@@ -19,7 +19,11 @@ import {
   type ModelsSimpleStreamOptions,
 } from "@earendil-works/pi-ai";
 import { promptCacheTtlMs } from "./prompt-cache-lifetimes.js";
-import { memoryFactLinesIn, memoryFactsStillApproved, type ApprovedMemoryFacts } from "./side-call-prefix.js";
+import {
+  memoryFactLinesIn,
+  memoryFactsStillApproved,
+  type ApprovedMemoryFacts,
+} from "./side-call-prefix.js";
 import type { UsageRequestSource } from "./usage-store-core.js";
 import type { ChatGenerationOwner } from "./chat-generation-owner.js";
 import type { ChatStartParams } from "./types.js";
@@ -46,11 +50,18 @@ export function canWarmForegroundChat(options: {
   interactionSurface?: "telegram";
   mode?: ChatStartParams["mode"];
 }): boolean {
-  return options.enabled && !options.local && !options.bot && options.owner.id > 0 && options.owner.kind !== "remote" && !options.owner.isDestroyed() &&
+  return (
+    options.enabled &&
+    !options.local &&
+    !options.bot &&
+    options.owner.id > 0 &&
+    options.owner.kind !== "remote" &&
+    !options.owner.isDestroyed() &&
     (options.usageSource === undefined || options.usageSource === "chat") &&
-    options.interactionSurface === undefined && options.mode !== "assistant-automation";
+    options.interactionSurface === undefined &&
+    options.mode !== "assistant-automation"
+  );
 }
-
 
 export function stopAllPiCacheWarmers(): void {
   for (const warmer of activeWarmers) warmer.dispose();
@@ -66,7 +77,9 @@ export function adoptChatCacheWarmer(chatId: string, warmer: PiCacheWarmer | und
   chatWarmers.delete(chatId);
   if (warmer && !warmer.isDisposed) {
     chatWarmers.set(chatId, warmer);
-    warmer.onDispose(() => { if (chatWarmers.get(chatId) === warmer) chatWarmers.delete(chatId); });
+    warmer.onDispose(() => {
+      if (chatWarmers.get(chatId) === warmer) chatWarmers.delete(chatId);
+    });
   }
 }
 
@@ -77,7 +90,13 @@ export function adoptChatCacheWarmer(chatId: string, warmer: PiCacheWarmer | und
  */
 export function releaseChatCacheWarmer(chatId: string, documentId?: string): boolean {
   const warmer = chatWarmers.get(chatId);
-  if (!warmer || (documentId !== undefined && warmer.documentId !== undefined && warmer.documentId !== documentId)) return false;
+  if (
+    !warmer ||
+    (documentId !== undefined &&
+      warmer.documentId !== undefined &&
+      warmer.documentId !== documentId)
+  )
+    return false;
   warmer.dispose();
   return true;
 }
@@ -106,16 +125,26 @@ export async function settleReplyCacheWarmer(
   },
 ): Promise<void> {
   if (!warmer) return;
-  if (!reply.delivered || reply.owner.isDestroyed()) { warmer.dispose(); return; }
+  if (!reply.delivered || reply.owner.isDestroyed()) {
+    warmer.dispose();
+    return;
+  }
   try {
     const settled = await reply.chat();
-    if (!settled || warmer.isDisposed) { warmer.dispose(); return; }
+    if (!settled || warmer.isDisposed) {
+      warmer.dispose();
+      return;
+    }
     warmer.settle({
       isCurrent: () => !reply.owner.isDestroyed(),
       stillCurrent: async () => {
         const now = await reply.chat();
-        return !!now && now.summaryRevision === settled.summaryRevision &&
-          now.providerId === settled.providerId && now.model === settled.model;
+        return (
+          !!now &&
+          now.summaryRevision === settled.summaryRevision &&
+          now.providerId === settled.providerId &&
+          now.model === settled.model
+        );
       },
     });
   } catch {
@@ -130,7 +159,11 @@ export interface CacheWarmingClock {
 }
 const realClock: CacheWarmingClock = {
   now: () => Date.now(),
-  setTimeout: (callback, delayMs) => { const timer = setTimeout(callback, delayMs); timer.unref(); return timer; },
+  setTimeout: (callback, delayMs) => {
+    const timer = setTimeout(callback, delayMs);
+    timer.unref();
+    return timer;
+  },
   clearTimeout: (timer) => clearTimeout(timer as ReturnType<typeof setTimeout>),
 };
 
@@ -144,10 +177,15 @@ function idleRefreshPays(model: Pick<Model<Api>, "cost">, promptTokens: number):
   const economics = cacheWarmingEconomics(model, promptTokens);
   if (!economics) return false;
   const missCost = economics.expectedSavings + economics.warmCost;
-  return CACHE_WARMING_IDLE_CONTINUATION_PROBABILITY * missCost - economics.warmCost >= MIN_SAVINGS_USD;
+  return (
+    CACHE_WARMING_IDLE_CONTINUATION_PROBABILITY * missCost - economics.warmCost >= MIN_SAVINGS_USD
+  );
 }
 
-export function cacheWarmingEconomics(model: Pick<Model<Api>, "cost">, promptTokens: number): { warmCost: number; expectedSavings: number } | undefined {
+export function cacheWarmingEconomics(
+  model: Pick<Model<Api>, "cost">,
+  promptTokens: number,
+): { warmCost: number; expectedSavings: number } | undefined {
   if (!Number.isFinite(promptTokens) || promptTokens <= 0) return undefined;
   let rates = model.cost;
   let threshold = -1;
@@ -157,9 +195,14 @@ export function cacheWarmingEconomics(model: Pick<Model<Api>, "cost">, promptTok
       threshold = tier.inputTokensAbove;
     }
   }
-  if (![rates.input, rates.output, rates.cacheRead, rates.cacheWrite].every((rate) => Number.isFinite(rate) && rate >= 0)) return undefined;
-  const hit = promptTokens * rates.cacheRead / 1_000_000;
-  const miss = promptTokens * (rates.cacheWrite > 0 ? rates.cacheWrite : rates.input) / 1_000_000;
+  if (
+    ![rates.input, rates.output, rates.cacheRead, rates.cacheWrite].every(
+      (rate) => Number.isFinite(rate) && rate >= 0,
+    )
+  )
+    return undefined;
+  const hit = (promptTokens * rates.cacheRead) / 1_000_000;
+  const miss = (promptTokens * (rates.cacheWrite > 0 ? rates.cacheWrite : rates.input)) / 1_000_000;
   if (miss === 0 && hit === 0) return undefined;
   const warmCost = hit + rates.output / 1_000_000;
   return { warmCost, expectedSavings: Math.max(0, miss - hit) - warmCost };
@@ -172,7 +215,16 @@ interface WarmRun {
   context?: TranscriptContext;
   /** The memory fact lines the frozen request states, confirmed before every refresh. */
   memoryFacts?: readonly string[];
-  options: Pick<SimpleStreamOptions, "sessionId" | "reasoning" | "thinkingBudgets" | "cacheRetention" | "temperature" | "transport" | "toolChoice">;
+  options: Pick<
+    SimpleStreamOptions,
+    | "sessionId"
+    | "reasoning"
+    | "thinkingBudgets"
+    | "cacheRetention"
+    | "temperature"
+    | "transport"
+    | "toolChoice"
+  >;
   cost: Model<Api>["cost"];
   startedAt: number;
   ttlMs: number;
@@ -246,7 +298,11 @@ export class PiCacheWarmer {
   }
 
   /** Called only at a real foreground request, before its transport starts. */
-  requestStarted(model: Model<Api>, context: TranscriptContext, options: SimpleStreamOptions = {}): (message: AssistantMessage) => void {
+  requestStarted(
+    model: Model<Api>,
+    context: TranscriptContext,
+    options: SimpleStreamOptions = {},
+  ): (message: AssistantMessage) => void {
     this.stop();
     // An explicit retention, so the PI_CACHE_RETENTION environment never
     // decides a lifetime the request did not ask for.
@@ -257,40 +313,73 @@ export class PiCacheWarmer {
     const delayMs = Number.isFinite(ttlMs) && ttlMs > 0 ? getCacheWarmingDelayMs(ttlMs) : undefined;
     // Payload rewrites, arbitrary sampling/metadata and deferred requests cannot be
     // replayed faithfully without retaining callbacks or opaque authority.
-    if (this.disposed || delayMs === undefined || !this.deps.isCurrent() || options.signal?.aborted || options.headers || options.onPayload || (options as ModelsSimpleStreamOptions).transformHeaders || options.samplingParams || options.metadata || options.env || options.deferred || model.samplingParams ||
-      !isCacheWarmingReplayable(model, { ...options, cacheRetention: retention })) return () => {};
+    if (
+      this.disposed ||
+      delayMs === undefined ||
+      !this.deps.isCurrent() ||
+      options.signal?.aborted ||
+      options.headers ||
+      options.onPayload ||
+      (options as ModelsSimpleStreamOptions).transformHeaders ||
+      options.samplingParams ||
+      options.metadata ||
+      options.env ||
+      options.deferred ||
+      model.samplingParams ||
+      !isCacheWarmingReplayable(model, { ...options, cacheRetention: retention })
+    )
+      return () => {};
     const controller = new AbortController();
     const requestSignal = options.signal;
-    const cancel = () => { if (this.run === run) this.stop(); };
+    const cancel = () => {
+      if (this.run === run) this.stop();
+    };
     // Only the message list is copied here: each foreground request (every
     // tool-loop turn) passes through, and most never become worth warming.
     const run: WarmRun = {
       context: { ...context, messages: [...context.messages] },
       options: {
-        sessionId: options.sessionId, reasoning: options.reasoning,
-        thinkingBudgets: options.thinkingBudgets ? structuredClone(options.thinkingBudgets) : undefined,
-        cacheRetention: retention, temperature: options.temperature, transport: options.transport,
+        sessionId: options.sessionId,
+        reasoning: options.reasoning,
+        thinkingBudgets: options.thinkingBudgets
+          ? structuredClone(options.thinkingBudgets)
+          : undefined,
+        cacheRetention: retention,
+        temperature: options.temperature,
+        transport: options.transport,
         toolChoice: options.toolChoice ? structuredClone(options.toolChoice) : undefined,
       },
-      cost: model.cost, startedAt: this.clock.now(), ttlMs,
-      delayMs, deadlineAt: 0,
-      promptTokens: 0, spentUsd: 0, controller,
+      cost: model.cost,
+      startedAt: this.clock.now(),
+      ttlMs,
+      delayMs,
+      deadlineAt: 0,
+      promptTokens: 0,
+      spentUsd: 0,
+      controller,
       removeAbort: () => requestSignal?.removeEventListener("abort", cancel),
     };
     this.run = run;
     requestSignal?.addEventListener("abort", cancel, { once: true });
     // No timer is armed until provider-reported usage establishes real economics.
     return (message) => {
-      if (this.run !== run || message.stopReason === "error" || message.stopReason === "aborted") return;
+      if (this.run !== run || message.stopReason === "error" || message.stopReason === "aborted")
+        return;
       run.promptTokens = message.usage.input + message.usage.cacheRead + message.usage.cacheWrite;
       const economics = cacheWarmingEconomics({ cost: run.cost }, run.promptTokens);
-      if (!economics || economics.expectedSavings < MIN_SAVINGS_USD || !run.context) { this.stop(); return; }
+      if (!economics || economics.expectedSavings < MIN_SAVINGS_USD || !run.context) {
+        this.stop();
+        return;
+      }
       // Freeze the replayed prefix and endpoint identity only for a request worth warming.
       run.context = structuredClone(run.context);
       run.memoryFacts = memoryFactLinesIn(run.context);
       run.cost = structuredClone(run.cost);
       run.identity = modelIdentity(model);
-      if (this.deps.idleOnly) { this.setDeadline(run, run.startedAt); return; }
+      if (this.deps.idleOnly) {
+        this.setDeadline(run, run.startedAt);
+        return;
+      }
       this.schedule(run, run.startedAt);
     };
   }
@@ -308,9 +397,14 @@ export class PiCacheWarmer {
 
   /** Runs once when the warmer ends (at once if it already has); returns a remover. */
   onDispose(listener: () => void): () => void {
-    if (this.disposed) { listener(); return () => {}; }
+    if (this.disposed) {
+      listener();
+      return () => {};
+    }
     this.disposeListeners.add(listener);
-    return () => { this.disposeListeners.delete(listener); };
+    return () => {
+      this.disposeListeners.delete(listener);
+    };
   }
 
   get isDisposed(): boolean {
@@ -326,12 +420,21 @@ export class PiCacheWarmer {
    */
   settle(idle: PiCacheWarmerIdleOptions): boolean {
     const run = this.run;
-    if (this.disposed || !run || run.identity === undefined || !idle.isCurrent() ||
-      !idleRefreshPays({ cost: run.cost }, run.promptTokens)) {
+    if (
+      this.disposed ||
+      !run ||
+      run.identity === undefined ||
+      !idle.isCurrent() ||
+      !idleRefreshPays({ cost: run.cost }, run.promptTokens)
+    ) {
       this.dispose();
       return false;
     }
-    run.idle = { isCurrent: () => idle.isCurrent(), ...(idle.stillCurrent ? { stillCurrent: () => idle.stillCurrent!() } : {}), warms: 0 };
+    run.idle = {
+      isCurrent: () => idle.isCurrent(),
+      ...(idle.stillCurrent ? { stillCurrent: () => idle.stillCurrent!() } : {}),
+      warms: 0,
+    };
     if (!this.withinHorizon(run, this.nextRefreshAt(run))) {
       this.dispose();
       return false;
@@ -350,7 +453,11 @@ export class PiCacheWarmer {
     const listeners = [...this.disposeListeners];
     this.disposeListeners.clear();
     for (const listener of listeners) {
-      try { listener(); } catch { /* A cleanup cannot stop the others. */ }
+      try {
+        listener();
+      } catch {
+        /* A cleanup cannot stop the others. */
+      }
     }
   }
 
@@ -364,7 +471,11 @@ export class PiCacheWarmer {
 
   /** Pi's horizons: an hour from the real request while streaming, 30 minutes once idle. */
   private withinHorizon(run: WarmRun, refreshAt: number): boolean {
-    if (run.idle) return run.idle.warms < IDLE_WARM_LIMIT && refreshAt <= run.startedAt + CACHE_WARMING_MAX_IDLE_AGE_MS;
+    if (run.idle)
+      return (
+        run.idle.warms < IDLE_WARM_LIMIT &&
+        refreshAt <= run.startedAt + CACHE_WARMING_MAX_IDLE_AGE_MS
+      );
     return refreshAt <= run.startedAt + MAX_AGE_MS;
   }
 
@@ -378,9 +489,18 @@ export class PiCacheWarmer {
   private schedule(run: WarmRun, cacheWrittenAt: number): void {
     const nextAt = this.setDeadline(run, cacheWrittenAt);
     if (this.run !== run) return;
-    if (!this.attended(run)) { this.stopIdle(run); return; }
-    if (!this.pays(run) || !this.withinHorizon(run, nextAt) || this.clock.now() > run.deadlineAt) { this.stopIdle(run); return; }
-    run.timer = this.clock.setTimeout(() => void this.refresh(run), Math.max(0, nextAt - this.clock.now()));
+    if (!this.attended(run)) {
+      this.stopIdle(run);
+      return;
+    }
+    if (!this.pays(run) || !this.withinHorizon(run, nextAt) || this.clock.now() > run.deadlineAt) {
+      this.stopIdle(run);
+      return;
+    }
+    run.timer = this.clock.setTimeout(
+      () => void this.refresh(run),
+      Math.max(0, nextAt - this.clock.now()),
+    );
   }
 
   /** While streaming, one replayed prefix avoids one miss, so refreshes share its savings; idle refreshes pay one at a time. */
@@ -399,8 +519,14 @@ export class PiCacheWarmer {
 
   private current(run: WarmRun): boolean {
     const now = this.clock.now();
-    return this.run === run && this.attended(run) && !run.controller.signal.aborted && !this.deps.signal.aborted && now <= run.deadlineAt &&
-      now <= run.startedAt + (run.idle ? CACHE_WARMING_MAX_IDLE_AGE_MS : MAX_AGE_MS);
+    return (
+      this.run === run &&
+      this.attended(run) &&
+      !run.controller.signal.aborted &&
+      !this.deps.signal.aborted &&
+      now <= run.deadlineAt &&
+      now <= run.startedAt + (run.idle ? CACHE_WARMING_MAX_IDLE_AGE_MS : MAX_AGE_MS)
+    );
   }
 
   private async refresh(run: WarmRun): Promise<void> {
@@ -408,46 +534,92 @@ export class PiCacheWarmer {
     try {
       // Settings are read before resolving credentials (no keychain read when off)
       // and again after, since either await can race a toggle or a cancellation.
-      if (!this.current(run) || !(await this.deps.enabled())) { this.stopIdle(run); return; }
+      if (!this.current(run) || !(await this.deps.enabled())) {
+        this.stopIdle(run);
+        return;
+      }
       // A settled chat that changed since (a new message, a model switch, a
       // compaction) no longer sends this prefix.
-      if (run.idle?.stillCurrent && !(await run.idle.stillCurrent())) { this.stopIdle(run); return; }
-      if (!this.current(run)) { this.stopIdle(run); return; }
+      if (run.idle?.stillCurrent && !(await run.idle.stillCurrent())) {
+        this.stopIdle(run);
+        return;
+      }
+      if (!this.current(run)) {
+        this.stopIdle(run);
+        return;
+      }
       // A memory fact the request states that is no longer approved (forgotten,
       // deleted, expired or memory turned off) must not be sent again; nor, when
       // the facts cannot be read, may any. A removed fact never comes back, so
       // the warmer ends for good.
-      if (!(await memoryFactsStillApproved(run.memoryFacts ?? [], this.deps.approvedMemoryFacts))) { this.dispose(); return; }
-      if (!this.current(run)) { this.stopIdle(run); return; }
+      if (!(await memoryFactsStillApproved(run.memoryFacts ?? [], this.deps.approvedMemoryFacts))) {
+        this.dispose();
+        return;
+      }
+      if (!this.current(run)) {
+        this.stopIdle(run);
+        return;
+      }
       // A refresh is spending like any other request: past the chat's or
       // Bot's limit none is sent, and none follows once the limit refuses.
-      if (this.deps.withinSpendingLimit && !(await this.deps.withinSpendingLimit())) { this.dispose(); return; }
-      if (!this.current(run)) { this.stopIdle(run); return; }
+      if (this.deps.withinSpendingLimit && !(await this.deps.withinSpendingLimit())) {
+        this.dispose();
+        return;
+      }
+      if (!this.current(run)) {
+        this.stopIdle(run);
+        return;
+      }
       const runtime = await this.deps.resolveRuntime(run.controller.signal);
-      if (!this.current(run) || !(await this.deps.enabled()) || !this.current(run) || modelIdentity(runtime.model) !== run.identity) { this.stopIdle(run); return; }
+      if (
+        !this.current(run) ||
+        !(await this.deps.enabled()) ||
+        !this.current(run) ||
+        modelIdentity(runtime.model) !== run.identity
+      ) {
+        this.stopIdle(run);
+        return;
+      }
       const context = run.context;
-      if (!context) { this.stopIdle(run); return; }
+      if (!context) {
+        this.stopIdle(run);
+        return;
+      }
       const economics = cacheWarmingEconomics({ cost: run.cost }, run.promptTokens);
-      if (!economics || !this.pays(run)) { this.stopIdle(run); return; }
+      if (!economics || !this.pays(run)) {
+        this.stopIdle(run);
+        return;
+      }
       // One replayed prefix can avoid only one future miss. Reserve this request's
       // estimated cost before dispatch; every later streaming refresh shares that budget.
       run.spentUsd += economics.warmCost;
       if (run.idle) run.idle.warms += 1;
       const dispatchedAt = this.clock.now();
-      const message = await runtime.streams.streamSimple(runtime.model, context, {
-        ...run.options, apiKey: runtime.apiKey, headers: runtime.headers,
-        maxTokens: 1, maxRetries: 0, timeoutMs: 30_000, signal: run.controller.signal,
-        // A replay must not use or replace the real conversation's server-side continuation state.
-        disableContinuation: true,
-      }).result();
+      const message = await runtime.streams
+        .streamSimple(runtime.model, context, {
+          ...run.options,
+          apiKey: runtime.apiKey,
+          headers: runtime.headers,
+          maxTokens: 1,
+          maxRetries: 0,
+          timeoutMs: 30_000,
+          signal: run.controller.signal,
+          // A replay must not use or replace the real conversation's server-side continuation state.
+          disableContinuation: true,
+        })
+        .result();
       // Account provider usage even when cancellation races a completed response.
       await this.deps.recordUsage(message, runtime);
       const reportedCost = message.usage.cost.total;
       if (Number.isFinite(reportedCost) && reportedCost > economics.warmCost) {
         run.spentUsd += reportedCost - economics.warmCost;
       }
-      if (message.stopReason === "error" || message.stopReason === "aborted") { this.stopIdle(run); return; }
-      if (message.usage.cacheRead + message.usage.cacheWrite > 0) this.deps.onCacheRefreshed?.(dispatchedAt);
+      if (message.stopReason === "error" || message.stopReason === "aborted") {
+        this.stopIdle(run);
+        return;
+      }
+      if (message.usage.cacheRead + message.usage.cacheWrite > 0)
+        this.deps.onCacheRefreshed?.(dispatchedAt);
       if (this.run === run) this.schedule(run, dispatchedAt);
     } catch {
       // Warming cannot fail the foreground turn and does not retry a failed refresh.
@@ -456,15 +628,21 @@ export class PiCacheWarmer {
   }
 }
 
-
 /** Observe the exact normalized request after host provider hooks have run. */
 export function withPiCacheWarming(streamFn: StreamFn, warmer: PiCacheWarmer): StreamFn {
   return async (model, context, options) => {
     let finished: (message: AssistantMessage) => void = () => {};
-    try { finished = warmer.requestStarted(model, context, options); } catch { warmer.stop(); }
+    try {
+      finished = warmer.requestStarted(model, context, options);
+    } catch {
+      warmer.stop();
+    }
     try {
       const stream = await streamFn(model, context, options);
-      void stream.result().then(finished).catch(() => warmer.stop());
+      void stream
+        .result()
+        .then(finished)
+        .catch(() => warmer.stop());
       return stream;
     } catch (error) {
       warmer.stop();

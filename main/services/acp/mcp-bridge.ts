@@ -17,7 +17,12 @@ import {
   type CallToolResult,
 } from "@modelcontextprotocol/sdk/types.js";
 import { randomUUID, timingSafeEqual } from "node:crypto";
-import { createServer, type IncomingMessage, type Server as HttpServer, type ServerResponse } from "node:http";
+import {
+  createServer,
+  type IncomingMessage,
+  type Server as HttpServer,
+  type ServerResponse,
+} from "node:http";
 import { Value } from "typebox/value";
 
 import { AcpHarnessError } from "./errors.js";
@@ -89,7 +94,11 @@ export class AcpMcpBridge {
       void this.handle(request, response).catch(() => {
         if (!response.headersSent) response.writeHead(500, { "content-type": "application/json" });
         response.end(
-          JSON.stringify({ jsonrpc: "2.0", id: null, error: { code: -32603, message: "Bridge error" } }),
+          JSON.stringify({
+            jsonrpc: "2.0",
+            id: null,
+            error: { code: -32603, message: "Bridge error" },
+          }),
         );
       });
     });
@@ -140,7 +149,10 @@ export class AcpMcpBridge {
       return;
     }
     const body = await readJson(request);
-    const protocol = new Server({ name: "aiden-tools", version: "1.0.0" }, { capabilities: { tools: {} } });
+    const protocol = new Server(
+      { name: "aiden-tools", version: "1.0.0" },
+      { capabilities: { tools: {} } },
+    );
     protocol.setRequestHandler(ListToolsRequestSchema, () => ({
       tools: this.tools.map((tool) => ({
         name: tool.mcpName,
@@ -159,7 +171,11 @@ export class AcpMcpBridge {
       } catch {
         return toolError("The tool's schema could not validate these arguments.");
       }
-      return this.options.onCall({ id: `acp-${randomUUID()}`, name: tool.hostName, arguments: args });
+      return this.options.onCall({
+        id: `acp-${randomUUID()}`,
+        name: tool.hostName,
+        arguments: args,
+      });
     });
     const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
     try {
@@ -180,13 +196,19 @@ function projectTools(tools: readonly Tool[], omissions: string[]): BridgeTool[]
       omissions.push(`Tool limit ${MAX_TOOLS} reached`);
       break;
     }
-    const mcpName = `${BRIDGE_TOOL_PREFIX}${tool.name}`.replace(/[^a-zA-Z0-9_-]/gu, "_").slice(0, 64);
+    const mcpName = `${BRIDGE_TOOL_PREFIX}${tool.name}`
+      .replace(/[^a-zA-Z0-9_-]/gu, "_")
+      .slice(0, 64);
     if (names.has(mcpName)) {
       omissions.push(`${tool.name}: duplicate projected name`);
       continue;
     }
     const inputSchema = sanitizeSchema(tool.parameters);
-    if (!inputSchema || inputSchema.type !== "object" || JSON.stringify(inputSchema).length > SCHEMA_LIMIT) {
+    if (
+      !inputSchema ||
+      inputSchema.type !== "object" ||
+      JSON.stringify(inputSchema).length > SCHEMA_LIMIT
+    ) {
       omissions.push(`${tool.name}: schema must be a bounded object`);
       continue;
     }
@@ -238,13 +260,18 @@ export function sanitizeSchema(value: unknown, depth = 0): Record<string, unknow
     const additional = sanitizeSchema(source.additionalProperties, depth + 1);
     if (additional) output.additionalProperties = additional;
   }
-  if (source.properties && typeof source.properties === "object" && !Array.isArray(source.properties)) {
+  if (
+    source.properties &&
+    typeof source.properties === "object" &&
+    !Array.isArray(source.properties)
+  ) {
     const properties: Record<string, unknown> = {};
     for (const [name, schema] of Object.entries(source.properties as Record<string, unknown>)) {
       const sanitized = sanitizeSchema(schema, depth + 1);
       // An unconstrained property (Type.Unknown, Type.Any) stays described as "any value".
       if (sanitized) properties[name] = sanitized;
-      else if (schema && typeof schema === "object" && !Array.isArray(schema)) properties[name] = {};
+      else if (schema && typeof schema === "object" && !Array.isArray(schema))
+        properties[name] = {};
     }
     output.properties = properties;
     // A required name must describe a property the agent can see.
@@ -261,7 +288,9 @@ export function sanitizeSchema(value: unknown, depth = 0): Record<string, unknow
   for (const key of ["anyOf", "oneOf", "allOf"] as const) {
     const variants = source[key];
     if (!Array.isArray(variants)) continue;
-    const sanitized = variants.map((item) => sanitizeSchema(item, depth + 1)).filter((item) => item !== undefined);
+    const sanitized = variants
+      .map((item) => sanitizeSchema(item, depth + 1))
+      .filter((item) => item !== undefined);
     if (sanitized.length) output[key] = sanitized;
   }
   if (output.type === undefined && output.properties !== undefined) output.type = "object";
@@ -275,7 +304,8 @@ async function readJson(request: IncomingMessage): Promise<unknown> {
   for await (const chunk of request) {
     const bytes = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk as Uint8Array);
     size += bytes.length;
-    if (size > BODY_LIMIT) throw new AcpHarnessError("invalid_input", "The tool request is too large.");
+    if (size > BODY_LIMIT)
+      throw new AcpHarnessError("invalid_input", "The tool request is too large.");
     chunks.push(bytes);
   }
   return JSON.parse(Buffer.concat(chunks).toString("utf8"));
@@ -299,6 +329,8 @@ function jsonValue(value: unknown): boolean {
   if (jsonScalar(value)) return true;
   if (Array.isArray(value)) return value.every(jsonValue);
   return Boolean(
-    value && typeof value === "object" && Object.values(value as Record<string, unknown>).every(jsonValue),
+    value &&
+    typeof value === "object" &&
+    Object.values(value as Record<string, unknown>).every(jsonValue),
   );
 }

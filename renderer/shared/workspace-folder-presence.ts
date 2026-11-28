@@ -34,7 +34,9 @@ export function managedWorktreeMissingMessage(
   options?: Pick<MissingWorktreeOptions, "branch" | "restorable" | "mainWorkspaceId">,
 ): string {
   const where = folder ? `: ${folder}` : "";
-  const elsewhere = options?.mainWorkspaceId ? "start a new chat in the main checkout" : "start the chat in another workspace";
+  const elsewhere = options?.mainWorkspaceId
+    ? "start a new chat in the main checkout"
+    : "start the chat in another workspace";
   if (!options) {
     return `The worktree folder for “${name}” is missing${where}. Restore it, or ${elsewhere}.`;
   }

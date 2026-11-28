@@ -7,7 +7,12 @@ import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import { fauxAssistantMessage } from "@earendil-works/pi-ai/providers/faux";
 import { createBotSessionService } from "../bot-runtime/bot-session-service.js";
 import { recordingDeps } from "../bot-runtime/test-support/fixtures.js";
-import { createFauxModels, FAUX_MODEL_REF, slowAnswer, waitFor } from "../bot-runtime/test-support/faux.js";
+import {
+  createFauxModels,
+  FAUX_MODEL_REF,
+  slowAnswer,
+  waitFor,
+} from "../bot-runtime/test-support/faux.js";
 import type { BotReplyOutcome } from "../bot-runtime/bot-session-service.js";
 import {
   createTelegramBotIngress,
@@ -64,12 +69,18 @@ test("the request id names the Bot, chat, thread and message", () => {
     telegramBotRequestId({ botId: "bot:a", chatId: 42, threadId: 9, messageId: 1001 }),
     "tg:bot:a:42:9:1001",
   );
-  assert.equal(telegramBotRequestId({ botId: "bot:a", chatId: 42, messageId: 1001 }), "tg:bot:a:42:0:1001");
+  assert.equal(
+    telegramBotRequestId({ botId: "bot:a", chatId: 42, messageId: 1001 }),
+    "tg:bot:a:42:0:1001",
+  );
   assert.equal(
     telegramBotRequestId({ botId: "bot:a", chatId: 42, threadId: 9, callbackQueryId: "cbq-77" }),
     "tg:bot:a:42:9:cbq:cbq-77",
   );
-  assert.throws(() => telegramBotRequestId({ botId: "bot:a", chatId: 42, messageId: 0 }), /positive messageId or callbackQueryId/u);
+  assert.throws(
+    () => telegramBotRequestId({ botId: "bot:a", chatId: 42, messageId: 0 }),
+    /positive messageId or callbackQueryId/u,
+  );
 });
 
 test("busy follow-up mode and callback-query identities are forwarded and recovered across unrecorded outbox failures", async () => {
@@ -105,7 +116,9 @@ test("busy follow-up mode and callback-query identities are forwarded and recove
   try {
     assert.deepEqual(await ingress.rows(), []);
     mkdirSync(file);
-    await assert.rejects(ingress.admit(callbackMessage), { name: "BotReplyAdmittedUnrecordedError" });
+    await assert.rejects(ingress.admit(callbackMessage), {
+      name: "BotReplyAdmittedUnrecordedError",
+    });
     rmSync(file, { recursive: true, force: true });
 
     const replayed = await ingress.admit(callbackMessage);
@@ -115,7 +128,9 @@ test("busy follow-up mode and callback-query identities are forwarded and recove
       { text: "Ship it", requestId: "tg:bot:a:7:3:cbq:query-abc", whenBusy: "followUp" },
       { text: "Ship it", requestId: "tg:bot:a:7:3:cbq:query-abc", whenBusy: "followUp" },
     ]);
-    assert.deepEqual(delivered, [{ chatId: 7, threadId: 3, ownerUserId: 7, text: "Callback reply." }]);
+    assert.deepEqual(delivered, [
+      { chatId: 7, threadId: 3, ownerUserId: 7, text: "Callback reply." },
+    ]);
   } finally {
     ingress.stop();
   }
@@ -123,7 +138,10 @@ test("busy follow-up mode and callback-query identities are forwarded and recove
 
 test("a redelivered Telegram update makes one submission and one reply", async () => {
   const dir = tempDir();
-  const fauxModels = createFauxModels([fauxAssistantMessage("Here you go."), fauxAssistantMessage("extra")]);
+  const fauxModels = createFauxModels([
+    fauxAssistantMessage("Here you go."),
+    fauxAssistantMessage("extra"),
+  ]);
   const session = await createBotSessionService({
     profileDir: dir,
     models: fauxModels.models,
@@ -138,7 +156,13 @@ test("a redelivered Telegram update makes one submission and one reply", async (
     deliver: async (reply) => void delivered.push(reply),
   });
   try {
-    const message = { botId: "bot:a", chatId: 7, messageId: 55, ownerUserId: 7, text: "plan dinner" };
+    const message = {
+      botId: "bot:a",
+      chatId: 7,
+      messageId: 55,
+      ownerUserId: 7,
+      text: "plan dinner",
+    };
     const first = await ingress.admit(message);
     const second = await ingress.admit(message);
     assert.equal(first.deduped, false);
@@ -146,7 +170,10 @@ test("a redelivered Telegram update makes one submission and one reply", async (
     await ingress.idle();
     assert.equal(fauxModels.calls(), 1);
     assert.deepEqual(delivered, [{ chatId: 7, ownerUserId: 7, text: "Here you go." }]);
-    assert.deepEqual((await ingress.rows()).map((row) => row.state), ["sent"]);
+    assert.deepEqual(
+      (await ingress.rows()).map((row) => row.state),
+      ["sent"],
+    );
   } finally {
     ingress.stop();
     await session.shutdown();
@@ -194,14 +221,21 @@ test("an admission whose outbox write fails is retried from what is on disk, so 
     // The failure says the session already accepted the turn, so the update must not be skipped.
     await assert.rejects(ingress.admit(message), { name: "BotReplyAdmittedUnrecordedError" });
     rmSync(file, { recursive: true, force: true });
-    assert.deepEqual(await ingress.rows(), [], "the cache does not report a row that never reached disk");
+    assert.deepEqual(
+      await ingress.rows(),
+      [],
+      "the cache does not report a row that never reached disk",
+    );
 
     // Telegram redelivers the update because the offset was kept.
     await ingress.admit(message);
     await ingress.idle();
     assert.deepEqual(delivered, [{ chatId: 7, ownerUserId: 7, text: "Here you go." }]);
     const durable = JSON.parse(readFileSync(file, "utf8")) as { rows: BotReplyRow[] };
-    assert.deepEqual(durable.rows.map((row) => [row.requestId, row.state]), [[telegramBotRequestId(message), "sent"]]);
+    assert.deepEqual(
+      durable.rows.map((row) => [row.requestId, row.state]),
+      [[telegramBotRequestId(message), "sent"]],
+    );
     assert.deepEqual(await ingress.rows(), durable.rows);
   } finally {
     ingress.stop();
@@ -228,11 +262,20 @@ test("a deduped admission of a durable row nobody is waiting on starts waiting f
     deliver: async (reply) => void delivered.push(reply),
   });
   try {
-    assert.deepEqual(await ingress.admit(message), { requestId: telegramBotRequestId(message), deduped: true });
+    assert.deepEqual(await ingress.admit(message), {
+      requestId: telegramBotRequestId(message),
+      deduped: true,
+    });
     await ingress.idle();
     assert.equal(waits, 1);
-    assert.deepEqual(delivered.map((reply) => reply.text), ["Hello."]);
-    assert.deepEqual((await ingress.rows()).map((row) => row.state), ["sent"]);
+    assert.deepEqual(
+      delivered.map((reply) => reply.text),
+      ["Hello."],
+    );
+    assert.deepEqual(
+      (await ingress.rows()).map((row) => row.state),
+      ["sent"],
+    );
   } finally {
     ingress.stop();
   }
@@ -243,12 +286,19 @@ test("a reply saved before a crash is delivered on restart without regenerating 
   seed(file, [{ state: "pending", text: "Saved answer." }]);
   const { calls, session } = untouchedSession();
   const delivered: TelegramBotReply[] = [];
-  const ingress = createTelegramBotIngress({ file, session, deliver: async (reply) => void delivered.push(reply) });
+  const ingress = createTelegramBotIngress({
+    file,
+    session,
+    deliver: async (reply) => void delivered.push(reply),
+  });
   await ingress.recover();
   await ingress.idle();
   assert.deepEqual(delivered, [{ chatId: 7, ownerUserId: 7, text: "Saved answer." }]);
   assert.deepEqual(calls, { send: 0, awaitReply: 0 });
-  assert.deepEqual((await ingress.rows()).map((row) => row.state), ["sent"]);
+  assert.deepEqual(
+    (await ingress.rows()).map((row) => row.state),
+    ["sent"],
+  );
 });
 
 test("a send cut off by a crash is redelivered once, labelled as a possible duplicate", async () => {
@@ -282,7 +332,10 @@ test("a redelivery that was itself cut off is not sent a third time", async () =
   });
   await ingress.recover();
   await ingress.idle();
-  assert.deepEqual((await ingress.rows()).map((row) => row.state), ["failed"]);
+  assert.deepEqual(
+    (await ingress.rows()).map((row) => row.state),
+    ["failed"],
+  );
 });
 
 test("a send that fails mid-way is retried once with the duplicate label", async () => {
@@ -302,7 +355,10 @@ test("a send that fails mid-way is retried once with the duplicate label", async
   await ingress.admit({ botId: "bot:a", chatId: 7, messageId: 3, ownerUserId: 7, text: "go" });
   await ingress.idle();
   assert.deepEqual(attempts, ["Long answer.", `${MAY_BE_DUPLICATE_PREFIX} Long answer.`]);
-  assert.deepEqual((await ingress.rows()).map((row) => row.state), ["sent"]);
+  assert.deepEqual(
+    (await ingress.rows()).map((row) => row.state),
+    ["sent"],
+  );
 });
 
 test("recovery working from an old row list cannot deliver a reply that was already sent", async () => {
@@ -310,7 +366,11 @@ test("recovery working from an old row list cannot deliver a reply that was alre
   const message = { botId: "bot:a", chatId: 7, ownerUserId: 7, messageId: 900, text: "Hi" };
   const requestId = telegramBotRequestId(message);
   // Each spent redelivery costs recovery one write, which is time for the wait below to finish.
-  const spent = Array.from({ length: 12 }, () => ({ state: "sending" as const, text: "Spent", redelivered: true }));
+  const spent = Array.from({ length: 12 }, () => ({
+    state: "sending" as const,
+    text: "Spent",
+    redelivered: true,
+  }));
   seed(file, [...spent, { requestId, state: "awaiting", submissionId: "77" }]);
   let release!: () => void;
   const answered = new Promise<void>((resolve) => {
@@ -342,10 +402,19 @@ test("a turn interrupted by a quit is delivered once after an explicit Resume, a
   const dir = tempDir();
   const file = path.join(dir, "outbox.json");
   const delivered: string[] = [];
-  const message = { botId: "bot:a", chatId: 7, messageId: 91, ownerUserId: 7, text: "plan the week" };
+  const message = {
+    botId: "bot:a",
+    chatId: 7,
+    messageId: 91,
+    ownerUserId: 7,
+    text: "plan the week",
+  };
 
   /** One process: the real Bot runtime and Telegram ingress, wired the way production wires them. */
-  async function open(responses: Parameters<typeof createFauxModels>[0], options?: { tokensPerSecond?: number }) {
+  async function open(
+    responses: Parameters<typeof createFauxModels>[0],
+    options?: { tokensPerSecond?: number },
+  ) {
     const fauxModels = createFauxModels(responses, options);
     let ingress: ReturnType<typeof createTelegramBotIngress> | undefined;
     const session = await createBotSessionService({
@@ -356,7 +425,11 @@ test("a turn interrupted by a quit is delivered once after an explicit Resume, a
       knownBotIds: async () => new Set(["bot:a"]),
       onStateChange: (botId, state) => ingress?.botStateChanged(botId, state),
     });
-    ingress = createTelegramBotIngress({ file, session, deliver: async (reply) => void delivered.push(reply.text) });
+    ingress = createTelegramBotIngress({
+      file,
+      session,
+      deliver: async (reply) => void delivered.push(reply.text),
+    });
     const quit = async () => {
       await session.shutdown();
       await ingress!.idle();
@@ -367,11 +440,18 @@ test("a turn interrupted by a quit is delivered once after an explicit Resume, a
 
   const first = await open([slowAnswer()], { tokensPerSecond: 40 });
   await first.ingress.admit(message);
-  await waitFor(async () => (await first.session.state("bot:a")).kind === "running" && first.fauxModels.calls() === 1, {
-    what: "the Telegram turn to stream",
-  });
+  await waitFor(
+    async () =>
+      (await first.session.state("bot:a")).kind === "running" && first.fauxModels.calls() === 1,
+    {
+      what: "the Telegram turn to stream",
+    },
+  );
   await first.quit();
-  assert.deepEqual((await first.ingress.rows()).map((row) => row.state), ["interrupted"]);
+  assert.deepEqual(
+    (await first.ingress.rows()).map((row) => row.state),
+    ["interrupted"],
+  );
 
   // A restart without Resume leaves the paused turn alone and delivers nothing.
   const second = await open([fauxAssistantMessage("never")]);
@@ -387,7 +467,9 @@ test("a turn interrupted by a quit is delivered once after an explicit Resume, a
   await third.ingress.idle();
   assert.deepEqual(delivered, []);
   await third.session.resume("bot:a", "desk-resume");
-  await waitFor(async () => (await third.ingress.rows())[0]?.state === "sent", { what: "the resumed reply to be sent" });
+  await waitFor(async () => (await third.ingress.rows())[0]?.state === "sent", {
+    what: "the resumed reply to be sent",
+  });
   await third.ingress.idle();
   assert.deepEqual(delivered, ["resumed Telegram answer"]);
   await third.quit();
@@ -405,7 +487,13 @@ test("a Resume that lands while startup recovery is still settling its paused ob
   const dir = tempDir();
   const file = path.join(dir, "outbox.json");
   const delivered: string[] = [];
-  const message = { botId: "bot:a", chatId: 7, messageId: 93, ownerUserId: 7, text: "plan the month" };
+  const message = {
+    botId: "bot:a",
+    chatId: 7,
+    messageId: 93,
+    ownerUserId: 7,
+    text: "plan the month",
+  };
 
   const fauxBefore = createFauxModels([slowAnswer()], { tokensPerSecond: 40 });
   const before = await createBotSessionService({
@@ -415,11 +503,18 @@ test("a Resume that lands while startup recovery is still settling its paused ob
     resolveModel: async () => FAUX_MODEL_REF,
     knownBotIds: async () => new Set(["bot:a"]),
   });
-  const beforeIngress = createTelegramBotIngress({ file, session: before, deliver: async (reply) => void delivered.push(reply.text) });
-  await beforeIngress.admit(message);
-  await waitFor(async () => (await before.state("bot:a")).kind === "running" && fauxBefore.calls() === 1, {
-    what: "the Telegram turn to stream",
+  const beforeIngress = createTelegramBotIngress({
+    file,
+    session: before,
+    deliver: async (reply) => void delivered.push(reply.text),
   });
+  await beforeIngress.admit(message);
+  await waitFor(
+    async () => (await before.state("bot:a")).kind === "running" && fauxBefore.calls() === 1,
+    {
+      what: "the Telegram turn to stream",
+    },
+  );
   await before.shutdown();
   await beforeIngress.idle();
   beforeIngress.stop();
@@ -441,7 +536,11 @@ test("a Resume that lands while startup recovery is still settling its paused ob
   let waits = 0;
   const gatedSession = {
     send: session.send.bind(session),
-    async awaitReply(botId: string, submissionId: string, signal: AbortSignal): Promise<BotReplyOutcome> {
+    async awaitReply(
+      botId: string,
+      submissionId: string,
+      signal: AbortSignal,
+    ): Promise<BotReplyOutcome> {
       waits += 1;
       const outcome = await session.awaitReply(botId, submissionId, signal);
       if (waits === 1) {
@@ -451,7 +550,11 @@ test("a Resume that lands while startup recovery is still settling its paused ob
       return outcome;
     },
   };
-  ingress = createTelegramBotIngress({ file, session: gatedSession, deliver: async (reply) => void delivered.push(reply.text) });
+  ingress = createTelegramBotIngress({
+    file,
+    session: gatedSession,
+    deliver: async (reply) => void delivered.push(reply.text),
+  });
   try {
     await session.initialize();
     await ingress.recover();
@@ -459,12 +562,17 @@ test("a Resume that lands while startup recovery is still settling its paused ob
     assert.equal(held?.kind, "interrupted");
 
     await session.resume("bot:a", "desk-resume");
-    await waitFor(async () => fauxModels.calls() === 1 && (await session.state("bot:a")).kind === "idle", {
-      what: "the resumed turn to finish",
-    });
+    await waitFor(
+      async () => fauxModels.calls() === 1 && (await session.state("bot:a")).kind === "idle",
+      {
+        what: "the resumed turn to finish",
+      },
+    );
     release();
 
-    await waitFor(async () => (await ingress!.rows())[0]?.state === "sent", { what: "the resumed reply to be sent" });
+    await waitFor(async () => (await ingress!.rows())[0]?.state === "sent", {
+      what: "the resumed reply to be sent",
+    });
     await ingress.idle();
     assert.deepEqual(delivered, ["resumed answer"]);
   } finally {
@@ -494,21 +602,40 @@ test("a message to a paused Bot gets one fixed line, no row, and never reaches t
   });
   try {
     await session.pause("bot:a", "mac");
-    const admitted = await ingress.admit({ botId: "bot:a", chatId: 7, threadId: 3, messageId: 60, ownerUserId: 7, text: "hi" });
+    const admitted = await ingress.admit({
+      botId: "bot:a",
+      chatId: 7,
+      threadId: 3,
+      messageId: 60,
+      ownerUserId: 7,
+      text: "hi",
+    });
     await ingress.idle();
     assert.deepEqual(admitted, { requestId: "tg:bot:a:7:3:60", deduped: false, paused: true });
     assert.deepEqual(delivered, [
-      { chatId: 7, threadId: 3, ownerUserId: 7, text: "Ada is paused. Resume it in Aiden to continue." },
+      {
+        chatId: 7,
+        threadId: 3,
+        ownerUserId: 7,
+        text: "Ada is paused. Resume it in Aiden to continue.",
+      },
     ]);
     assert.deepEqual(await ingress.rows(), [], "nothing waits for an answer");
     assert.equal(fauxModels.calls(), 0);
     const view = await (await session.conversation("bot:a")).context(BACKGROUND_CONTEXT);
-    assert.equal(view.entries.some((entry) => entry.kind === "pi.user"), false, "the Bot got no input");
+    assert.equal(
+      view.entries.some((entry) => entry.kind === "pi.user"),
+      false,
+      "the Bot got no input",
+    );
   } finally {
     ingress.stop();
     await session.shutdown();
   }
-  assert.equal(telegramBotPausedLine(undefined), "This Bot is paused. Resume it in Aiden to continue.");
+  assert.equal(
+    telegramBotPausedLine(undefined),
+    "This Bot is paused. Resume it in Aiden to continue.",
+  );
 });
 
 test("a message to a Bot over its monthly spending limit gets the limit line and never reaches the Bot", async () => {
@@ -520,7 +647,8 @@ test("a message to a Bot over its monthly spending limit gets the limit line and
     extension: recordingDeps(),
     resolveModel: async () => FAUX_MODEL_REF,
     knownBotIds: async () => new Set(["bot:a"]),
-    spendingRefusal: async () => "Ada reached its $20.00 spending limit for this month. Allow more to keep going.",
+    spendingRefusal: async () =>
+      "Ada reached its $20.00 spending limit for this month. Allow more to keep going.",
   });
   const delivered: TelegramBotReply[] = [];
   const ingress = createTelegramBotIngress({
@@ -533,7 +661,11 @@ test("a message to a Bot over its monthly spending limit gets the limit line and
     await ingress.admit({ botId: "bot:a", chatId: 7, messageId: 61, ownerUserId: 7, text: "hi" });
     await ingress.idle();
     assert.deepEqual(delivered, [
-      { chatId: 7, ownerUserId: 7, text: "Ada reached its $20.00 spending limit for this month. Allow more to keep going." },
+      {
+        chatId: 7,
+        ownerUserId: 7,
+        text: "Ada reached its $20.00 spending limit for this month. Allow more to keep going.",
+      },
     ]);
     assert.deepEqual(await ingress.rows(), [], "nothing waits for an answer");
     assert.equal(fauxModels.calls(), 0);
@@ -545,7 +677,10 @@ test("a message to a Bot over its monthly spending limit gets the limit line and
 
 test("a Telegram turn paused mid-reply is delivered once after unpause and Resume, not before", async () => {
   const dir = tempDir();
-  const fauxModels = createFauxModels([slowAnswer(), fauxAssistantMessage("finished after the pause")], { tokensPerSecond: 40 });
+  const fauxModels = createFauxModels(
+    [slowAnswer(), fauxAssistantMessage("finished after the pause")],
+    { tokensPerSecond: 40 },
+  );
   let ingress: ReturnType<typeof createTelegramBotIngress> | undefined;
   const session = await createBotSessionService({
     profileDir: dir,
@@ -556,21 +691,38 @@ test("a Telegram turn paused mid-reply is delivered once after unpause and Resum
     onStateChange: (botId, state) => ingress?.botStateChanged(botId, state),
   });
   const delivered: string[] = [];
-  ingress = createTelegramBotIngress({ file: path.join(dir, "outbox.json"), session, deliver: async (reply) => void delivered.push(reply.text) });
+  ingress = createTelegramBotIngress({
+    file: path.join(dir, "outbox.json"),
+    session,
+    deliver: async (reply) => void delivered.push(reply.text),
+  });
   try {
-    await ingress.admit({ botId: "bot:a", chatId: 7, messageId: 61, ownerUserId: 7, text: "write it all" });
-    await waitFor(async () => (await session.state("bot:a")).kind === "running" && fauxModels.calls() === 1, {
-      what: "the Telegram turn to stream",
+    await ingress.admit({
+      botId: "bot:a",
+      chatId: 7,
+      messageId: 61,
+      ownerUserId: 7,
+      text: "write it all",
     });
+    await waitFor(
+      async () => (await session.state("bot:a")).kind === "running" && fauxModels.calls() === 1,
+      {
+        what: "the Telegram turn to stream",
+      },
+    );
     await session.pause("bot:a", "phone");
-    await waitFor(async () => (await ingress!.rows())[0]?.state === "interrupted", { what: "the paused row" });
+    await waitFor(async () => (await ingress!.rows())[0]?.state === "interrupted", {
+      what: "the paused row",
+    });
     await session.unpause("bot:a");
     await ingress.idle();
     assert.deepEqual(delivered, [], "unpausing alone delivers nothing");
     assert.equal(fauxModels.calls(), 1);
 
     await session.resume("bot:a", "desk-resume");
-    await waitFor(async () => (await ingress!.rows())[0]?.state === "sent", { what: "the resumed reply to be sent" });
+    await waitFor(async () => (await ingress!.rows())[0]?.state === "sent", {
+      what: "the resumed reply to be sent",
+    });
     await ingress.idle();
     assert.deepEqual(delivered, ["finished after the pause"]);
   } finally {
@@ -592,11 +744,18 @@ test("a turn the person dismissed is settled and never delivered", async () => {
     resolveModel: async () => FAUX_MODEL_REF,
     knownBotIds: async () => new Set(["bot:a"]),
   });
-  const beforeIngress = createTelegramBotIngress({ file, session: before, deliver: async (reply) => void delivered.push(reply.text) });
-  await beforeIngress.admit(message);
-  await waitFor(async () => (await before.state("bot:a")).kind === "running" && fauxModels.calls() === 1, {
-    what: "the Telegram turn to stream",
+  const beforeIngress = createTelegramBotIngress({
+    file,
+    session: before,
+    deliver: async (reply) => void delivered.push(reply.text),
   });
+  await beforeIngress.admit(message);
+  await waitFor(
+    async () => (await before.state("bot:a")).kind === "running" && fauxModels.calls() === 1,
+    {
+      what: "the Telegram turn to stream",
+    },
+  );
   await before.shutdown();
   await beforeIngress.idle();
   beforeIngress.stop();
@@ -610,12 +769,18 @@ test("a turn the person dismissed is settled and never delivered", async () => {
     knownBotIds: async () => new Set(["bot:a"]),
     onStateChange: (botId, state) => ingress?.botStateChanged(botId, state),
   });
-  ingress = createTelegramBotIngress({ file, session, deliver: async (reply) => void delivered.push(reply.text) });
+  ingress = createTelegramBotIngress({
+    file,
+    session,
+    deliver: async (reply) => void delivered.push(reply.text),
+  });
   try {
     await session.initialize();
     await ingress.recover();
     await session.dismiss("bot:a", "desk-dismiss");
-    await waitFor(async () => (await ingress!.rows())[0]?.state === "dismissed", { what: "the row to settle" });
+    await waitFor(async () => (await ingress!.rows())[0]?.state === "dismissed", {
+      what: "the row to settle",
+    });
     await ingress.idle();
     assert.deepEqual(delivered, []);
   } finally {
@@ -643,20 +808,35 @@ test("a routine result goes to the bound chat once, with the routine name in bol
     routineTargetEnabled: async () => true,
   });
   assert.deepEqual(await ingress.enqueueRoutineDelivery(routineDelivery), { queued: true });
-  assert.deepEqual(await ingress.enqueueRoutineDelivery(routineDelivery), { queued: false }, "one row per firing");
+  assert.deepEqual(
+    await ingress.enqueueRoutineDelivery(routineDelivery),
+    { queued: false },
+    "one row per firing",
+  );
   await ingress.idle();
   assert.deepEqual(delivered, [
-    { chatId: 7, ownerUserId: 7, text: "**Morning \\*brief\\***\n\nYour first meeting is at 9:30." },
+    {
+      chatId: 7,
+      ownerUserId: 7,
+      text: "**Morning \\*brief\\***\n\nYour first meeting is at 9:30.",
+    },
   ]);
-  assert.deepEqual((await ingress.rows()).map((row) => [row.kind, row.state]), [["routine", "sent"]]);
+  assert.deepEqual(
+    (await ingress.rows()).map((row) => [row.kind, row.state]),
+    [["routine", "sent"]],
+  );
 });
 
 test("startup recovery cannot send a newly queued routine result twice", async () => {
   const file = path.join(tempDir(), "outbox.json");
   let releaseBinding!: () => void;
-  const bindingChecked = new Promise<void>((resolve) => { releaseBinding = resolve; });
+  const bindingChecked = new Promise<void>((resolve) => {
+    releaseBinding = resolve;
+  });
   let bindingStarted!: () => void;
-  const started = new Promise<void>((resolve) => { bindingStarted = resolve; });
+  const started = new Promise<void>((resolve) => {
+    bindingStarted = resolve;
+  });
   const delivered: TelegramBotReply[] = [];
   const ingress = createTelegramBotIngress({
     file,
@@ -674,13 +854,18 @@ test("startup recovery cannot send a newly queued routine result twice", async (
   releaseBinding();
   await ingress.idle();
   assert.equal(delivered.length, 1);
-  assert.deepEqual((await ingress.rows()).map((row) => row.state), ["sent"]);
+  assert.deepEqual(
+    (await ingress.rows()).map((row) => row.state),
+    ["sent"],
+  );
 });
 
 test("a routine result cut off by a crash mid-send is redelivered once with the duplicate label", async () => {
   const file = path.join(tempDir(), "outbox.json");
   let started!: () => void;
-  const sending = new Promise<void>((resolve) => { started = resolve; });
+  const sending = new Promise<void>((resolve) => {
+    started = resolve;
+  });
   const crashed = createTelegramBotIngress({
     file,
     session: untouchedSession().session,
@@ -704,8 +889,13 @@ test("a routine result cut off by a crash mid-send is redelivered once with the 
   });
   await restarted.recover();
   await restarted.idle();
-  assert.deepEqual(delivered, [`${MAY_BE_DUPLICATE_PREFIX} **Morning \\*brief\\***\n\nYour first meeting is at 9:30.`]);
-  assert.deepEqual((await restarted.rows()).map((row) => row.state), ["sent"]);
+  assert.deepEqual(delivered, [
+    `${MAY_BE_DUPLICATE_PREFIX} **Morning \\*brief\\***\n\nYour first meeting is at 9:30.`,
+  ]);
+  assert.deepEqual(
+    (await restarted.rows()).map((row) => row.state),
+    ["sent"],
+  );
 });
 
 test("a routine result for a binding switched off before the send is dropped unsent", async () => {
@@ -723,7 +913,10 @@ test("a routine result for a binding switched off before the send is dropped uns
   await ingress.enqueueRoutineDelivery(routineDelivery);
   await ingress.idle();
   assert.deepEqual(checked, [{ botId: "bot:a", chatId: 7 }]);
-  assert.deepEqual((await ingress.rows()).map((row) => row.state), ["failed"]);
+  assert.deepEqual(
+    (await ingress.rows()).map((row) => row.state),
+    ["failed"],
+  );
 });
 
 test("an interrupted turn delivers nothing", async () => {
@@ -739,7 +932,10 @@ test("an interrupted turn delivers nothing", async () => {
   });
   await ingress.recover();
   await ingress.idle();
-  assert.deepEqual((await ingress.rows()).map((row) => row.state), ["interrupted"]);
+  assert.deepEqual(
+    (await ingress.rows()).map((row) => row.state),
+    ["interrupted"],
+  );
 });
 
 test("a reply that failed reaches the chat once as an error and is settled", async () => {
@@ -750,23 +946,116 @@ test("a reply that failed reaches the chat once as an error and is settled", asy
     file,
     session: {
       send: async () => assert.fail("no resubmission"),
-      awaitReply: async () => ({ kind: "failed", error: "The Bot stopped before it could answer this." }),
+      awaitReply: async () => ({
+        kind: "failed",
+        error: "The Bot stopped before it could answer this.",
+      }),
     },
     deliver: async (reply) => void delivered.push(reply),
   });
   await ingress.recover();
   await ingress.idle();
-  assert.deepEqual(delivered, [{ chatId: 7, ownerUserId: 7, text: "⚠️ Error: The Bot stopped before it could answer this." }]);
-  assert.deepEqual((await ingress.rows()).map((row) => row.state), ["sent"]);
+  assert.deepEqual(delivered, [
+    { chatId: 7, ownerUserId: 7, text: "⚠️ Error: The Bot stopped before it could answer this." },
+  ]);
+  assert.deepEqual(
+    (await ingress.rows()).map((row) => row.state),
+    ["sent"],
+  );
 });
 
-test("a peer final queued under an original Bot identity cannot reach a replacement after recovery",async()=>{
- const file=path.join(tempDir(),"outbox.json"),delivered:TelegramBotReply[]=[];let current="old",release!:()=>void,reached!:()=>void;const barrier=new Promise<void>(resolve=>{release=resolve;}),entered=new Promise<void>(resolve=>{reached=resolve;});const first=createTelegramBotIngress({file,session:untouchedSession().session,deliver:async reply=>{delivered.push(reply);},routineTargetEnabled:async row=>{reached();await barrier;return row.botIncarnation===current;}});
- await first.enqueueRoutineDelivery({...routineDelivery,requestId:"peer-final-old",botIncarnation:"old",publication:{assertCurrent:async()=>{if(current!=="old")throw new Error("Previous Bot identity");}}});await entered;first.stop();current="replacement";release();await first.idle();assert.equal(delivered.length,0);
- const reopened=createTelegramBotIngress({file,session:untouchedSession().session,deliver:async reply=>{delivered.push(reply);},routineTargetEnabled:async row=>row.botIncarnation===current});await reopened.recover();await reopened.idle();assert.equal(delivered.length,0);assert.equal((await reopened.rows())[0]?.botIncarnation,"old");assert.equal((await reopened.rows())[0]?.state,"failed");
- current="replacement";await reopened.enqueueRoutineDelivery({...routineDelivery,requestId:"peer-final-new",botIncarnation:"replacement",publication:{assertCurrent:async()=>{if(current!=="replacement")throw new Error("Previous Bot identity");}}});await reopened.idle();assert.equal(delivered.length,1);assert.equal(delivered[0]?.botIncarnation,"replacement");
+test("a peer final queued under an original Bot identity cannot reach a replacement after recovery", async () => {
+  const file = path.join(tempDir(), "outbox.json"),
+    delivered: TelegramBotReply[] = [];
+  let current = "old",
+    release!: () => void,
+    reached!: () => void;
+  const barrier = new Promise<void>((resolve) => {
+      release = resolve;
+    }),
+    entered = new Promise<void>((resolve) => {
+      reached = resolve;
+    });
+  const first = createTelegramBotIngress({
+    file,
+    session: untouchedSession().session,
+    deliver: async (reply) => {
+      delivered.push(reply);
+    },
+    routineTargetEnabled: async (row) => {
+      reached();
+      await barrier;
+      return row.botIncarnation === current;
+    },
+  });
+  await first.enqueueRoutineDelivery({
+    ...routineDelivery,
+    requestId: "peer-final-old",
+    botIncarnation: "old",
+    publication: {
+      assertCurrent: async () => {
+        if (current !== "old") throw new Error("Previous Bot identity");
+      },
+    },
+  });
+  await entered;
+  first.stop();
+  current = "replacement";
+  release();
+  await first.idle();
+  assert.equal(delivered.length, 0);
+  const reopened = createTelegramBotIngress({
+    file,
+    session: untouchedSession().session,
+    deliver: async (reply) => {
+      delivered.push(reply);
+    },
+    routineTargetEnabled: async (row) => row.botIncarnation === current,
+  });
+  await reopened.recover();
+  await reopened.idle();
+  assert.equal(delivered.length, 0);
+  assert.equal((await reopened.rows())[0]?.botIncarnation, "old");
+  assert.equal((await reopened.rows())[0]?.state, "failed");
+  current = "replacement";
+  await reopened.enqueueRoutineDelivery({
+    ...routineDelivery,
+    requestId: "peer-final-new",
+    botIncarnation: "replacement",
+    publication: {
+      assertCurrent: async () => {
+        if (current !== "replacement") throw new Error("Previous Bot identity");
+      },
+    },
+  });
+  await reopened.idle();
+  assert.equal(delivered.length, 1);
+  assert.equal(delivered[0]?.botIncarnation, "replacement");
 });
 
-test("a peer final cannot publish its Telegram outbox row after its owner lifetime expires",async()=>{
- const file=path.join(tempDir(),"outbox.json"),delivered:TelegramBotReply[]=[],ingress=createTelegramBotIngress({file,session:untouchedSession().session,deliver:async reply=>{delivered.push(reply);},routineTargetEnabled:async()=>true});await assert.rejects(ingress.enqueueRoutineDelivery({...routineDelivery,botIncarnation:"old",publication:{assertCurrent:async()=>{throw new Error("Previous Bot identity");}}}),/Previous Bot identity/u);assert.deepEqual(await ingress.rows(),[]);assert.deepEqual(delivered,[]);
+test("a peer final cannot publish its Telegram outbox row after its owner lifetime expires", async () => {
+  const file = path.join(tempDir(), "outbox.json"),
+    delivered: TelegramBotReply[] = [],
+    ingress = createTelegramBotIngress({
+      file,
+      session: untouchedSession().session,
+      deliver: async (reply) => {
+        delivered.push(reply);
+      },
+      routineTargetEnabled: async () => true,
+    });
+  await assert.rejects(
+    ingress.enqueueRoutineDelivery({
+      ...routineDelivery,
+      botIncarnation: "old",
+      publication: {
+        assertCurrent: async () => {
+          throw new Error("Previous Bot identity");
+        },
+      },
+    }),
+    /Previous Bot identity/u,
+  );
+  assert.deepEqual(await ingress.rows(), []);
+  assert.deepEqual(delivered, []);
 });

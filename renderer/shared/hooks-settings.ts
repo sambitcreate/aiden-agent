@@ -2,11 +2,33 @@
 // group and label hooks. The hook contract itself lives in
 // main/services/hooks/hook-types.ts; this file only shapes it for display.
 
-import { HOOK_EVENT_MATCH_TARGETS, HOOK_EVENT_SCOPE_KINDS, HOOK_EVENTS, type HookEvent, type HookListing, type HookRunRecord, type HookScope, type HookStatus } from "../../main/services/hooks/hook-types.js";
-import type { HookProposal, HookTestResult, HookWorkspaceFileStatus } from "../../main/services/hooks/hook-service.js";
+import {
+  HOOK_EVENT_MATCH_TARGETS,
+  HOOK_EVENT_SCOPE_KINDS,
+  HOOK_EVENTS,
+  type HookEvent,
+  type HookListing,
+  type HookRunRecord,
+  type HookScope,
+  type HookStatus,
+} from "../../main/services/hooks/hook-types.js";
+import type {
+  HookProposal,
+  HookTestResult,
+  HookWorkspaceFileStatus,
+} from "../../main/services/hooks/hook-service.js";
 
 export { HOOK_EVENT_SCOPE_KINDS, HOOK_EVENTS };
-export type { HookEvent, HookListing, HookProposal, HookRunRecord, HookScope, HookStatus, HookTestResult, HookWorkspaceFileStatus };
+export type {
+  HookEvent,
+  HookListing,
+  HookProposal,
+  HookRunRecord,
+  HookScope,
+  HookStatus,
+  HookTestResult,
+  HookWorkspaceFileStatus,
+};
 
 /** Main → renderer: hooks, proposals, a run or an auto-disable changed. */
 export const HOOKS_CHANGED_CHANNEL = "hooks:changed";
@@ -55,7 +77,10 @@ export const HOOK_MAX_MATCHER_LENGTH = 500;
 export const HOOK_MAX_NAME_LENGTH = 120;
 
 /** Events whose matcher filters by tool name. Other events ignore the matcher. */
-export const HOOK_TOOL_EVENTS: ReadonlySet<HookEvent> = new Set<HookEvent>(["PreToolUse", "PostToolUse"]);
+export const HOOK_TOOL_EVENTS: ReadonlySet<HookEvent> = new Set<HookEvent>([
+  "PreToolUse",
+  "PostToolUse",
+]);
 
 export const HOOK_EVENT_DESCRIPTIONS: Record<HookEvent, string> = {
   PreToolUse: "Before a tool runs. Can block it or ask you first.",
@@ -108,7 +133,9 @@ export interface HookStatusPresentation {
   color: "green" | "warning" | "red" | "gray" | "blue";
 }
 
-export function hookStatusPresentation(listing: Pick<HookListing, "status">): HookStatusPresentation {
+export function hookStatusPresentation(
+  listing: Pick<HookListing, "status">,
+): HookStatusPresentation {
   switch (listing.status) {
     case "active":
       return { label: "Active", color: "green" };
@@ -143,7 +170,9 @@ export function hookSwitchOn(listing: Pick<HookListing, "status">): boolean {
 
 /** The owner can flip the switch: not for unsupported hooks, and not before approval (Approve is the action). */
 export function hookSwitchAvailable(listing: Pick<HookListing, "status">): boolean {
-  return listing.status !== "unsupported" && listing.status !== "missing" && !hookNeedsApproval(listing);
+  return (
+    listing.status !== "unsupported" && listing.status !== "missing" && !hookNeedsApproval(listing)
+  );
 }
 
 export function hookScopeKey(scope: HookScope): string {
@@ -164,12 +193,18 @@ function folderName(root: string): string {
   return parts[parts.length - 1] ?? root;
 }
 
-export function hookScopeLabel(scope: HookScope, workspaces: readonly HooksWorkspaceLabel[]): string {
+export function hookScopeLabel(
+  scope: HookScope,
+  workspaces: readonly HooksWorkspaceLabel[],
+): string {
   switch (scope.kind) {
     case "global":
       return "Global";
     case "workspace":
-      return workspaces.find((workspace) => workspace.workspaceRoot === scope.workspaceRoot)?.name ?? folderName(scope.workspaceRoot);
+      return (
+        workspaces.find((workspace) => workspace.workspaceRoot === scope.workspaceRoot)?.name ??
+        folderName(scope.workspaceRoot)
+      );
     case "chat":
       return "Chat hooks";
     case "bot":
@@ -195,7 +230,9 @@ const SCOPE_ORDER: Record<HookScope["kind"], number> = { global: 0, workspace: 1
  * One group per scope that has hooks (or a workspace file with problems),
  * in the order global → workspaces → Bots → chats. Hooks keep their order.
  */
-export function groupHooksByScope(overview: Pick<HooksOverview, "hooks" | "workspaceFiles" | "workspaces">): HookScopeGroup[] {
+export function groupHooksByScope(
+  overview: Pick<HooksOverview, "hooks" | "workspaceFiles" | "workspaces">,
+): HookScopeGroup[] {
   const groups = new Map<string, HookScopeGroup>();
   const groupFor = (scope: HookScope): HookScopeGroup => {
     const key = hookScopeKey(scope);
@@ -205,7 +242,13 @@ export function groupHooksByScope(overview: Pick<HooksOverview, "hooks" | "works
         key,
         title: hookScopeLabel(scope, overview.workspaces),
         detail:
-          scope.kind === "workspace" ? scope.workspaceRoot : scope.kind === "chat" ? scope.chatId : scope.kind === "bot" ? scope.botId : undefined,
+          scope.kind === "workspace"
+            ? scope.workspaceRoot
+            : scope.kind === "chat"
+              ? scope.chatId
+              : scope.kind === "bot"
+                ? scope.botId
+                : undefined,
         scope,
         hooks: [],
         fileProblems: [],
@@ -233,7 +276,9 @@ export function hookShortDigest(digest: string): string {
 }
 
 function matchTargetOf(event: string): "tool" | "value" | undefined {
-  return (HOOK_EVENTS as readonly string[]).includes(event) ? HOOK_EVENT_MATCH_TARGETS[event as HookEvent] : undefined;
+  return (HOOK_EVENTS as readonly string[]).includes(event)
+    ? HOOK_EVENT_MATCH_TARGETS[event as HookEvent]
+    : undefined;
 }
 
 /** True when the event's matcher filters anything; the others run whatever it says. */
@@ -242,7 +287,9 @@ export function hookEventUsesMatcher(event: string): boolean {
 }
 
 /** The matcher as a hook row shows it, or nothing where it filters nothing. */
-export function hookMatcherLabel(listing: Pick<HookListing, "matcher" | "event">): string | undefined {
+export function hookMatcherLabel(
+  listing: Pick<HookListing, "matcher" | "event">,
+): string | undefined {
   const target = matchTargetOf(listing.event);
   if (!target) return undefined;
   const matcher = listing.matcher.trim();

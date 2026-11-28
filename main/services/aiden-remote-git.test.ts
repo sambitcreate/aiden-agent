@@ -1,4 +1,7 @@
-import { InsufficientDiskSpaceError, WorktreeCapacityUnavailableError } from "./managed-worktree-capacity.js";
+import {
+  InsufficientDiskSpaceError,
+  WorktreeCapacityUnavailableError,
+} from "./managed-worktree-capacity.js";
 import { ManagedWorktreeProcessActiveError } from "./managed-worktree-cleanup-errors.js";
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
@@ -60,7 +63,7 @@ test("remote Git keeps paths and snapshot internals on the Mac and safely comple
     updatedAt: 2,
   };
   const application = createWorkspaceEnvironmentApplicationService({
-    configStore: { getWorkspace: async (id) => id === workspace.id ? workspace : undefined },
+    configStore: { getWorkspace: async (id) => (id === workspace.id ? workspace : undefined) },
     workspaceMutationGate: new WorkspaceMutationGate(),
     workspaceOperationRegistry: new WorkspaceOperationRegistry(),
     assertManagedWorktreeAdmission: async () => undefined,
@@ -147,20 +150,25 @@ test("remote Git keeps paths and snapshot internals on the Mac and safely comple
     assert.equal(diff.result.diff.includes(repository), false);
 
     await assert.rejects(
-      () => service.diff("device-2", workspace.id, {
-        snapshotId: review.snapshotId,
-        fileId: changed.id,
-      }),
-      (error: unknown) => error instanceof AidenRemoteServiceError && error.code === "handle_wrong_device",
+      () =>
+        service.diff("device-2", workspace.id, {
+          snapshotId: review.snapshotId,
+          fileId: changed.id,
+        }),
+      (error: unknown) =>
+        error instanceof AidenRemoteServiceError && error.code === "handle_wrong_device",
     );
     await assert.rejects(
-      () => service.commit("device-1", workspace.id, "commit-key-remote-0001", {
-        snapshotId: review.snapshotId,
-        message: "Update value",
-        scope: "all-reviewed",
-        confirmedForeground: false,
-      }),
-      (error: unknown) => error instanceof AidenRemoteServiceError && error.code === "permission_confirmation_required",
+      () =>
+        service.commit("device-1", workspace.id, "commit-key-remote-0001", {
+          snapshotId: review.snapshotId,
+          message: "Update value",
+          scope: "all-reviewed",
+          confirmedForeground: false,
+        }),
+      (error: unknown) =>
+        error instanceof AidenRemoteServiceError &&
+        error.code === "permission_confirmation_required",
     );
 
     const commitInput = {
@@ -186,31 +194,33 @@ test("remote Git keeps paths and snapshot internals on the Mac and safely comple
 
     const branchSnapshot = await service.branches("device-1", workspace.id);
     assert.ok(branchSnapshot.snapshotId);
-    assert.equal(branchSnapshot.result?.kind === "branches" ? branchSnapshot.result.unborn : "missing", undefined);
-    const created = await service.createBranch(
-      "device-1",
-      workspace.id,
-      "branch-key-remote-0001",
-      { name: "feature/mobile", startPoint: "main", confirmedForeground: true },
+    assert.equal(
+      branchSnapshot.result?.kind === "branches" ? branchSnapshot.result.unborn : "missing",
+      undefined,
     );
+    const created = await service.createBranch("device-1", workspace.id, "branch-key-remote-0001", {
+      name: "feature/mobile",
+      startPoint: "main",
+      confirmedForeground: true,
+    });
     assert.equal(created.status, "succeeded");
     assert.equal(await git(repository, "branch", "--show-current"), "feature/mobile");
     await assert.rejects(
-      () => service.checkout(
-        "device-1",
-        workspace.id,
-        "checkout-key-remote-1",
-        { branch: "main", snapshotId: branchSnapshot.snapshotId, confirmedForeground: true },
-      ),
-      (error: unknown) => error instanceof AidenRemoteServiceError && error.code === "operation_stale",
+      () =>
+        service.checkout("device-1", workspace.id, "checkout-key-remote-1", {
+          branch: "main",
+          snapshotId: branchSnapshot.snapshotId,
+          confirmedForeground: true,
+        }),
+      (error: unknown) =>
+        error instanceof AidenRemoteServiceError && error.code === "operation_stale",
     );
     const freshBranches = await service.branches("device-1", workspace.id);
-    await service.checkout(
-      "device-1",
-      workspace.id,
-      "checkout-key-remote-2",
-      { branch: "main", snapshotId: freshBranches.snapshotId, confirmedForeground: true },
-    );
+    await service.checkout("device-1", workspace.id, "checkout-key-remote-2", {
+      branch: "main",
+      snapshotId: freshBranches.snapshotId,
+      confirmedForeground: true,
+    });
     assert.equal(await git(repository, "branch", "--show-current"), "main");
 
     const pushCapability = await service.pushCapability("device-1", workspace.id);
@@ -219,27 +229,28 @@ test("remote Git keeps paths and snapshot internals on the Mac and safely comple
       throw new Error("missing push capability");
     }
     assert.equal(pushCapability.result.allowed, true);
-    const pushed = await service.push(
-      "device-1",
-      workspace.id,
-      "push-key-remote-000001",
-      {
-        snapshotId: pushCapability.snapshotId,
-        remote: pushCapability.result.remote,
-        branch: pushCapability.result.branch,
-        confirmedForeground: true,
-      },
-    );
+    const pushed = await service.push("device-1", workspace.id, "push-key-remote-000001", {
+      snapshotId: pushCapability.snapshotId,
+      remote: pushCapability.result.remote,
+      branch: pushCapability.result.branch,
+      confirmedForeground: true,
+    });
     assert.equal(pushed.status, "succeeded");
-    assert.equal(await git(repository, "rev-parse", "HEAD"), await git(repository, "rev-parse", "origin/main"));
+    assert.equal(
+      await git(repository, "rev-parse", "HEAD"),
+      await git(repository, "rev-parse", "origin/main"),
+    );
 
     await assert.rejects(
-      () => service.createWorktree("device-1", workspace.id, "worktree-key-remote-0001", {
-        branch: "feature/worktree",
-        name: "Mobile Worktree",
-        confirmedForeground: false,
-      }),
-      (error: unknown) => error instanceof AidenRemoteServiceError && error.code === "permission_confirmation_required",
+      () =>
+        service.createWorktree("device-1", workspace.id, "worktree-key-remote-0001", {
+          branch: "feature/worktree",
+          name: "Mobile Worktree",
+          confirmedForeground: false,
+        }),
+      (error: unknown) =>
+        error instanceof AidenRemoteServiceError &&
+        error.code === "permission_confirmation_required",
     );
     const createInput = {
       branch: "feature/worktree",
@@ -248,11 +259,26 @@ test("remote Git keeps paths and snapshot internals on the Mac and safely comple
     };
     for (const [index, failure] of [
       new WorktreeCapacityUnavailableError(),
-      new InsufficientDiskSpaceError({ availableBytes: 1, requiredBytes: 100, reserveBytes: 10, estimatedBytes: 90 }),
+      new InsufficientDiskSpaceError({
+        availableBytes: 1,
+        requiredBytes: 100,
+        reserveBytes: 10,
+        estimatedBytes: 90,
+      }),
     ].entries()) {
       createFailure = failure;
-      await assert.rejects(service.createWorktree("device-1", workspace.id, `capacity-denied-000${index}`, createInput),
-        (error: unknown) => error instanceof AidenRemoteServiceError && error.code === "git_capability_denied" && /disk/i.test(error.message));
+      await assert.rejects(
+        service.createWorktree(
+          "device-1",
+          workspace.id,
+          `capacity-denied-000${index}`,
+          createInput,
+        ),
+        (error: unknown) =>
+          error instanceof AidenRemoteServiceError &&
+          error.code === "git_capability_denied" &&
+          /disk/i.test(error.message),
+      );
     }
     createFailure = undefined;
     const worktreeCreated = await service.createWorktree(
@@ -271,25 +297,29 @@ test("remote Git keeps paths and snapshot internals on the Mac and safely comple
     assert.equal(createWorktreeCount, 1);
 
     await assert.rejects(
-      () => service.deleteManagedWorktree(
-        "device-1",
-        managedWorkspace.id,
-        "rev_wrong",
-        "worktree-delete-key-0001",
-        { confirmedForeground: true },
-      ),
-      (error: unknown) => error instanceof AidenRemoteServiceError && error.code === "revision_conflict",
+      () =>
+        service.deleteManagedWorktree(
+          "device-1",
+          managedWorkspace.id,
+          "rev_wrong",
+          "worktree-delete-key-0001",
+          { confirmedForeground: true },
+        ),
+      (error: unknown) =>
+        error instanceof AidenRemoteServiceError && error.code === "revision_conflict",
     );
     deleteFailure = new ManagedWorktreeProcessActiveError();
     await assert.rejects(
-      () => service.deleteManagedWorktree(
-        "device-1",
-        managedWorkspace.id,
-        workspaceRevision(managedWorkspace),
-        "worktree-delete-key-busy-0001",
-        { confirmedForeground: true },
-      ),
-      (error: unknown) => error instanceof AidenRemoteServiceError &&
+      () =>
+        service.deleteManagedWorktree(
+          "device-1",
+          managedWorkspace.id,
+          workspaceRevision(managedWorkspace),
+          "worktree-delete-key-busy-0001",
+          { confirmedForeground: true },
+        ),
+      (error: unknown) =>
+        error instanceof AidenRemoteServiceError &&
         error.code === "git_capability_denied" &&
         error.status === 409 &&
         /terminal process is still exiting/u.test(error.message),
@@ -304,19 +334,25 @@ test("remote Git keeps paths and snapshot internals on the Mac and safely comple
       { confirmedForeground: true },
     );
     assert.equal(deleted.result?.kind, "mutation");
-    assert.deepEqual(await service.deleteManagedWorktree(
-      "device-1",
-      managedWorkspace.id,
-      workspaceRevision(managedWorkspace),
-      "worktree-delete-key-busy-0001",
-      { confirmedForeground: true },
-    ), deleted);
+    assert.deepEqual(
+      await service.deleteManagedWorktree(
+        "device-1",
+        managedWorkspace.id,
+        workspaceRevision(managedWorkspace),
+        "worktree-delete-key-busy-0001",
+        { confirmedForeground: true },
+      ),
+      deleted,
+    );
     assert.equal(deleteWorktreeCount, 1);
 
     const worktrees = await service.worktrees("device-1", workspace.id);
     assert.equal(worktrees.result?.kind, "worktrees");
     if (worktrees.result?.kind !== "worktrees") throw new Error("missing worktrees");
-    assert.deepEqual(worktrees.result.worktrees.map((entry) => entry.id), [workspace.id]);
+    assert.deepEqual(
+      worktrees.result.worktrees.map((entry) => entry.id),
+      [workspace.id],
+    );
     assert.equal(JSON.stringify(worktrees).includes(repository), false);
   } finally {
     await fs.rm(temporary, { recursive: true, force: true });
@@ -324,7 +360,9 @@ test("remote Git keeps paths and snapshot internals on the Mac and safely comple
 });
 
 test("a changed filename that cannot be projected is omitted instead of failing Git review and comparison", async (t) => {
-  const repository = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "aiden-remote-git-names-")));
+  const repository = await fs.realpath(
+    await fs.mkdtemp(path.join(os.tmpdir(), "aiden-remote-git-names-")),
+  );
   t.after(() => fs.rm(repository, { recursive: true, force: true }));
   await git(repository, "init", "-b", "main");
   await git(repository, "config", "user.email", "aiden@example.test");
@@ -342,11 +380,16 @@ test("a changed filename that cannot be projected is omitted instead of failing 
   await fs.writeFile(path.join(repository, "ok.txt"), "three\n", "utf8");
 
   const workspace: Workspace = {
-    id: "workspace-names", name: "Names", folderPath: repository, permission: "ask", createdAt: 1, updatedAt: 2,
+    id: "workspace-names",
+    name: "Names",
+    folderPath: repository,
+    permission: "ask",
+    createdAt: 1,
+    updatedAt: 2,
   };
   const service = new AidenRemoteGitService({
     application: createWorkspaceEnvironmentApplicationService({
-      configStore: { getWorkspace: async (id) => id === workspace.id ? workspace : undefined },
+      configStore: { getWorkspace: async (id) => (id === workspace.id ? workspace : undefined) },
       workspaceMutationGate: new WorkspaceMutationGate(),
       workspaceOperationRegistry: new WorkspaceOperationRegistry(),
       assertManagedWorktreeAdmission: async () => undefined,
@@ -355,19 +398,31 @@ test("a changed filename that cannot be projected is omitted instead of failing 
     }),
     owners: new AidenRemoteWorkspaceOwnerRegistry(),
     git: {
-      review: gitReview, diff: gitDiff, branches: gitBranches, checkout: gitCheckout, createBranch: gitCreateBranch,
-      commit: gitCommit, pushCapability: gitPushCapability, push: gitPush, compare: gitCompare,
-      comparisonDiff: gitComparisonDiff, worktrees: gitWorktrees,
+      review: gitReview,
+      diff: gitDiff,
+      branches: gitBranches,
+      checkout: gitCheckout,
+      createBranch: gitCreateBranch,
+      commit: gitCommit,
+      pushCapability: gitPushCapability,
+      push: gitPush,
+      compare: gitCompare,
+      comparisonDiff: gitComparisonDiff,
+      worktrees: gitWorktrees,
     },
     listWorkspaces: async () => [workspace],
   });
 
   const review = await service.review("device-1", workspace.id);
   if (review.result?.kind !== "review" || !review.snapshotId) throw new Error("missing review");
-  assert.deepEqual(review.result.files.map((file) => file.displayPath), ["ok.txt"]);
+  assert.deepEqual(
+    review.result.files.map((file) => file.displayPath),
+    ["ok.txt"],
+  );
   assert.equal(review.result.uncommitted, 2, "the omitted change still counts as uncommitted");
   const diff = await service.diff("device-1", workspace.id, {
-    snapshotId: review.snapshotId, fileId: review.result.files[0]!.id,
+    snapshotId: review.snapshotId,
+    fileId: review.result.files[0]!.id,
   });
   assert.match(diff.result?.kind === "diff" ? diff.result.diff : "", /\+three/u);
   // Committing "all reviewed" would include the change the device never showed.
@@ -376,18 +431,28 @@ test("a changed filename that cannot be projected is omitted instead of failing 
   for (const scope of ["all-reviewed", "staged-reviewed"]) {
     await assert.rejects(
       service.commit("device-1", workspace.id, `commit-key-names-${scope}`, {
-        snapshotId: review.snapshotId, message: "Hidden", scope, confirmedForeground: true,
+        snapshotId: review.snapshotId,
+        message: "Hidden",
+        scope,
+        confirmedForeground: true,
       }),
-      (error: unknown) => error instanceof AidenRemoteServiceError && error.code === "git_capability_denied",
+      (error: unknown) =>
+        error instanceof AidenRemoteServiceError && error.code === "git_capability_denied",
     );
   }
   assert.equal(await git(repository, "rev-parse", "HEAD"), head);
 
-  const comparison = await service.compare("device-1", workspace.id, { baseRef: "refs/heads/main" });
+  const comparison = await service.compare("device-1", workspace.id, {
+    baseRef: "refs/heads/main",
+  });
   if (comparison.result?.kind !== "comparison") throw new Error("missing comparison");
-  assert.deepEqual(comparison.result.files.map((file) => file.displayPath), ["ok.txt"]);
+  assert.deepEqual(
+    comparison.result.files.map((file) => file.displayPath),
+    ["ok.txt"],
+  );
   const comparisonDiff = await service.comparisonDiff("device-1", workspace.id, {
-    comparisonId: comparison.result.comparisonId, fileId: comparison.result.files[0]!.id,
+    comparisonId: comparison.result.comparisonId,
+    fileId: comparison.result.files[0]!.id,
   });
   assert.match(comparisonDiff.result?.kind === "diff" ? comparisonDiff.result.diff : "", /\+two/u);
 });
@@ -400,11 +465,16 @@ test("a repository with no commits says so in its branch list", async (t) => {
   await git(repository, "config", "user.name", "Aiden Test");
 
   const workspace: Workspace = {
-    id: "workspace-unborn", name: "Fresh", folderPath: repository, permission: "ask", createdAt: 1, updatedAt: 2,
+    id: "workspace-unborn",
+    name: "Fresh",
+    folderPath: repository,
+    permission: "ask",
+    createdAt: 1,
+    updatedAt: 2,
   };
   const service = new AidenRemoteGitService({
     application: createWorkspaceEnvironmentApplicationService({
-      configStore: { getWorkspace: async (id) => id === workspace.id ? workspace : undefined },
+      configStore: { getWorkspace: async (id) => (id === workspace.id ? workspace : undefined) },
       workspaceMutationGate: new WorkspaceMutationGate(),
       workspaceOperationRegistry: new WorkspaceOperationRegistry(),
       assertManagedWorktreeAdmission: async () => undefined,
@@ -413,15 +483,31 @@ test("a repository with no commits says so in its branch list", async (t) => {
     }),
     owners: new AidenRemoteWorkspaceOwnerRegistry(),
     git: {
-      review: gitReview, diff: gitDiff, branches: gitBranches, checkout: gitCheckout, createBranch: gitCreateBranch,
-      commit: gitCommit, pushCapability: gitPushCapability, push: gitPush, compare: gitCompare,
-      comparisonDiff: gitComparisonDiff, worktrees: gitWorktrees,
+      review: gitReview,
+      diff: gitDiff,
+      branches: gitBranches,
+      checkout: gitCheckout,
+      createBranch: gitCreateBranch,
+      commit: gitCommit,
+      pushCapability: gitPushCapability,
+      push: gitPush,
+      compare: gitCompare,
+      comparisonDiff: gitComparisonDiff,
+      worktrees: gitWorktrees,
     },
     listWorkspaces: async () => [workspace],
   });
 
   const fresh = await service.branches("device-1", workspace.id);
   if (fresh.result?.kind !== "branches") throw new Error("missing branches");
-  assert.equal(fresh.result.unborn, true, "a phone must not offer a worktree from a repository with nothing to branch from");
-  assert.deepEqual(fresh.result.branches, ["main"], "Git still names the branch the first commit will create");
+  assert.equal(
+    fresh.result.unborn,
+    true,
+    "a phone must not offer a worktree from a repository with nothing to branch from",
+  );
+  assert.deepEqual(
+    fresh.result.branches,
+    ["main"],
+    "Git still names the branch the first commit will create",
+  );
 });

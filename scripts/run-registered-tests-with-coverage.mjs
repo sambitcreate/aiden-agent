@@ -11,9 +11,7 @@ if (!scriptName || process.argv.length !== 3) {
 }
 
 const projectRoot = fileURLToPath(new URL("../", import.meta.url));
-const packageJson = JSON.parse(
-  await readFile(new URL("../package.json", import.meta.url), "utf8"),
-);
+const packageJson = JSON.parse(await readFile(new URL("../package.json", import.meta.url), "utf8"));
 const registeredCommand = packageJson.scripts?.[scriptName];
 if (typeof registeredCommand !== "string") {
   throw new Error(`Unknown package script: ${scriptName}`);

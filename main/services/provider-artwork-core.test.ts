@@ -21,7 +21,9 @@ test("provider artwork accepts PNG and inert SVG sources", () => {
   assert.equal(
     decodeProviderArtworkSource({
       name: "icon.svg",
-      dataBase64: Buffer.from('<svg viewBox="0 0 10 10"><path d="M0 0h10v10z"/></svg>').toString("base64"),
+      dataBase64: Buffer.from('<svg viewBox="0 0 10 10"><path d="M0 0h10v10z"/></svg>').toString(
+        "base64",
+      ),
     }).kind,
     "svg",
   );
@@ -29,15 +31,16 @@ test("provider artwork accepts PNG and inert SVG sources", () => {
 
 test("provider artwork rejects active or externally-referenced SVG content", () => {
   for (const source of [
-    '<svg><script>alert(1)</script></svg>',
+    "<svg><script>alert(1)</script></svg>",
     '<svg><image href="https://example.test/icon.png"/></svg>',
     '<svg><path onload="alert(1)"/></svg>',
   ]) {
     assert.throws(
-      () => decodeProviderArtworkSource({
-        name: "icon.svg",
-        dataBase64: Buffer.from(source).toString("base64"),
-      }),
+      () =>
+        decodeProviderArtworkSource({
+          name: "icon.svg",
+          dataBase64: Buffer.from(source).toString("base64"),
+        }),
       /cannot contain scripts or external resources/u,
     );
   }
@@ -54,7 +57,8 @@ test("provider artwork rejects malformed base64 and oversized PNG dimensions bef
   pngHeader.writeUInt32BE(8_193, 16);
   pngHeader.writeUInt32BE(64, 20);
   assert.throws(
-    () => decodeProviderArtworkSource({ name: "icon.png", dataBase64: pngHeader.toString("base64") }),
+    () =>
+      decodeProviderArtworkSource({ name: "icon.png", dataBase64: pngHeader.toString("base64") }),
     /dimensions/u,
   );
 });
@@ -76,9 +80,12 @@ test("already-normalized artwork persists without another decode", () => {
 });
 
 test("invalid artwork is dropped, and oversized PNG bytes are re-encoded", () => {
-  assert.equal(persistStoredProviderArtwork(undefined, () => {
-    throw new Error("unused");
-  }), undefined);
+  assert.equal(
+    persistStoredProviderArtwork(undefined, () => {
+      throw new Error("unused");
+    }),
+    undefined,
+  );
   assert.equal(
     persistStoredProviderArtwork({ mimeType: "image/svg+xml" }, () => {
       throw new Error("unused");

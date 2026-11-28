@@ -29,7 +29,9 @@ test("local Aiden Live, Scheduled, Profile, and About surfaces stay safe to expl
   } else {
     // Linux has no Computer Use and no app microphone permission, so neither blocks Live.
     await expect(liveSetup.getByText("Screen and Accessibility", { exact: true })).toHaveCount(0);
-    await expect(liveSetup.getByText(/Linux doesn’t ask apps for microphone permission/u)).toBeVisible();
+    await expect(
+      liveSetup.getByText(/Linux doesn’t ask apps for microphone permission/u),
+    ).toBeVisible();
   }
   await expect(liveSetup.getByText("Scheduled tasks", { exact: true })).toBeVisible();
   await liveSetup.getByRole("button", { name: "Not now", exact: true }).click();
@@ -75,7 +77,9 @@ test("local Aiden Live, Scheduled, Profile, and About surfaces stay safe to expl
   const dailyBrief = page.getByRole("button", { name: /Daily brief/u });
   await expect(dailyBrief).toBeVisible();
   await dailyBrief.click();
-  await expect(page.locator("textarea")).toHaveValue(/Create an automation named "Daily brief".*Summarize.*Schedule:/u);
+  await expect(page.locator("textarea")).toHaveValue(
+    /Create an automation named "Daily brief".*Summarize.*Schedule:/u,
+  );
   await expect(page.getByRole("dialog")).toHaveCount(0);
 
   await page.getByRole("button", { name: "Profile", exact: true }).click();
@@ -130,47 +134,87 @@ test("local Aiden Live, Scheduled, Profile, and About surfaces stay safe to expl
 test.describe("conversational scheduling", () => {
   test.use({ workspaceSeed: true });
 
-  test("answers a visible question and saves the approved task with its chosen model", async ({ aiden }) => {
+  test("answers a visible question and saves the approved task with its chosen model", async ({
+    aiden,
+  }) => {
     const { page, lmStudio } = aiden;
     await finishLmStudioOnboarding(page);
     const prompt = "Schedule audit: ask about timing, then prepare my workspace brief.";
     const scenario = lmStudio.enqueueToolScenario!({
       prompt,
       calls: [
-        { name: "ask_user_question", arguments: { questions: [{
-          question: "When should the workspace brief run?", header: "Timing",
-          options: [{ label: "Weekdays", description: "Every weekday morning at nine." }, { label: "Weekly", description: "Every Friday morning at nine." }],
-        }] } },
-        { name: "schedule_task", arguments: {
-          action: "create", name: "Audit workspace brief", cron: "0 9 * * 1-5", timezone: "America/New_York", prompt: "Summarize important workspace changes without modifying files.",
-        } },
+        {
+          name: "ask_user_question",
+          arguments: {
+            questions: [
+              {
+                question: "When should the workspace brief run?",
+                header: "Timing",
+                options: [
+                  { label: "Weekdays", description: "Every weekday morning at nine." },
+                  { label: "Weekly", description: "Every Friday morning at nine." },
+                ],
+              },
+            ],
+          },
+        },
+        {
+          name: "schedule_task",
+          arguments: {
+            action: "create",
+            name: "Audit workspace brief",
+            cron: "0 9 * * 1-5",
+            timezone: "America/New_York",
+            prompt: "Summarize important workspace changes without modifying files.",
+          },
+        },
       ],
       finalText: "Your workspace brief has been saved.",
     });
     await page.locator("textarea").fill(prompt);
     await page.getByRole("button", { name: "Send message" }).click();
-    await expect(page.getByRole("heading", { name: "When should the workspace brief run?" })).toBeVisible();
+    await expect(
+      page.getByRole("heading", { name: "When should the workspace brief run?" }),
+    ).toBeVisible();
     await page.getByRole("button", { name: /Weekdays Every weekday/u }).click();
     await page.getByRole("button", { name: "Submit", exact: true }).click();
     const approval = page.getByRole("region", { name: "Save this scheduled task?" });
-    await expect(approval).toContainText("Summarize important workspace changes without modifying files.");
+    await expect(approval).toContainText(
+      "Summarize important workspace changes without modifying files.",
+    );
     await approval.getByRole("button", { name: "Allow once" }).click();
-    await expect(page.getByText("Your workspace brief has been saved.", { exact: true }).first()).toBeVisible();
+    await expect(
+      page.getByText("Your workspace brief has been saved.", { exact: true }).first(),
+    ).toBeVisible();
     const recap = page.getByRole("list", { name: "Your answers" });
     await expect(recap.getByRole("listitem")).toHaveCount(1);
     await expect(recap.getByRole("listitem")).toContainText("When should the workspace brief run?");
     await expect(recap.getByRole("listitem")).toContainText("Weekdays");
     expect(scenario.error).toBeUndefined();
-    const tasks = JSON.parse(await readFile(join(aiden.userDataDir, "schedules.json"), "utf8")) as Array<{ name: string; providerId?: string; model?: string; cron: string; permission: string }>;
+    const tasks = JSON.parse(
+      await readFile(join(aiden.userDataDir, "schedules.json"), "utf8"),
+    ) as Array<{
+      name: string;
+      providerId?: string;
+      model?: string;
+      cron: string;
+      permission: string;
+    }>;
     expect(tasks).toHaveLength(1);
-    expect(tasks[0]).toMatchObject({ name: "Audit workspace brief", cron: "0 9 * * 1-5", permission: "read-only" });
+    expect(tasks[0]).toMatchObject({
+      name: "Audit workspace brief",
+      cron: "0 9 * * 1-5",
+      permission: "read-only",
+    });
     expect(tasks[0]?.providerId).toBeTruthy();
     expect(tasks[0]?.model).toBeTruthy();
     expect(JSON.stringify(scenario.results[0]?.content)).toContain("Weekdays");
     expect(JSON.stringify(scenario.results[1]?.content)).toContain("Audit workspace brief");
   });
 
-  test("question tabs preserve answers and replace the composer in a short desktop window", async ({ aiden }, testInfo) => {
+  test("question tabs preserve answers and replace the composer in a short desktop window", async ({
+    aiden,
+  }, testInfo) => {
     const { page, lmStudio, app } = aiden;
     await finishLmStudioOnboarding(page);
     await app.evaluate(({ BrowserWindow }) => {
@@ -179,13 +223,36 @@ test.describe("conversational scheduling", () => {
       window.setSize(740, 520);
     });
     const prompt = "Question audit: ask me to choose a detailed schedule.";
-    const scenario = lmStudio.enqueueToolScenario!({ prompt, calls: [{ name: "ask_user_question", arguments: { questions: [{
-      question: "Which schedule best fits your working day and the time you want to review the results?",
-      header: "Schedule", options: ["Morning", "Afternoon", "Evening", "Weekly"].map((label) => ({ label, description: `${label}: ${"Review changes and choose when you have time to act on the report. ".repeat(4)}` })),
-    }, {
-      question: "How detailed should the report be?", header: "Detail",
-      options: [{ label: "Brief", description: "Just the highlights." }, { label: "Full", description: "Include all changes." }],
-    }] } }], finalText: "I received your custom schedule." });
+    const scenario = lmStudio.enqueueToolScenario!({
+      prompt,
+      calls: [
+        {
+          name: "ask_user_question",
+          arguments: {
+            questions: [
+              {
+                question:
+                  "Which schedule best fits your working day and the time you want to review the results?",
+                header: "Schedule",
+                options: ["Morning", "Afternoon", "Evening", "Weekly"].map((label) => ({
+                  label,
+                  description: `${label}: ${"Review changes and choose when you have time to act on the report. ".repeat(4)}`,
+                })),
+              },
+              {
+                question: "How detailed should the report be?",
+                header: "Detail",
+                options: [
+                  { label: "Brief", description: "Just the highlights." },
+                  { label: "Full", description: "Include all changes." },
+                ],
+              },
+            ],
+          },
+        },
+      ],
+      finalText: "I received your custom schedule.",
+    });
     await page.locator("textarea").fill(prompt);
     await page.getByRole("button", { name: "Send message" }).click();
     await page.getByRole("button", { name: "Type your own answer" }).click();
@@ -195,35 +262,48 @@ test.describe("conversational scheduling", () => {
     await expect(page.getByRole("heading", { name: /Which schedule best/u })).toHaveCount(0);
     await page.getByRole("button", { name: "Brief Just the highlights." }).click();
     await page.getByRole("tab", { name: /1. Schedule/u }).click();
-    await expect(page.getByRole("textbox", { name: /Custom answer for/u })).toHaveValue("Every Tuesday at noon");
+    await expect(page.getByRole("textbox", { name: /Custom answer for/u })).toHaveValue(
+      "Every Tuesday at noon",
+    );
     await page.getByRole("tab", { name: /1. Schedule/u }).press("ArrowRight");
     await expect(page.getByRole("tab", { name: /2. Detail/u })).toBeFocused();
-    await expect(page.getByRole("button", { name: /Brief.*Just the highlights/u })).toHaveAttribute("aria-pressed", "true");
+    await expect(page.getByRole("button", { name: /Brief.*Just the highlights/u })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
     const submit = page.getByRole("button", { name: "Submit", exact: true });
     await expect(submit).toBeInViewport();
     const shell = page.getByRole("region", { name: "How detailed should the report be?" });
     // Keyboard focus must not scroll an outer container under the sidebar.
     // Observe settled layout, including the normal composer entry transition.
-    await expect.poll(async () => {
-      const bounds = await shell.boundingBox();
-      const sidebar = await page.locator("[data-sidebar]").boundingBox();
-      return bounds && sidebar ? bounds.x - sidebar.x - sidebar.width : -Infinity;
-    }).toBeGreaterThanOrEqual(0);
+    await expect
+      .poll(async () => {
+        const bounds = await shell.boundingBox();
+        const sidebar = await page.locator("[data-sidebar]").boundingBox();
+        return bounds && sidebar ? bounds.x - sidebar.x - sidebar.width : -Infinity;
+      })
+      .toBeGreaterThanOrEqual(0);
     // The card keeps the composer's bottom inset instead of touching the window edge.
-    await expect.poll(async () => {
-      const bounds = await shell.boundingBox();
-      const viewportHeight = await page.evaluate(() => window.innerHeight);
-      return bounds ? viewportHeight - (bounds.y + bounds.height) : -Infinity;
-    }).toBeGreaterThanOrEqual(16);
+    await expect
+      .poll(async () => {
+        const bounds = await shell.boundingBox();
+        const viewportHeight = await page.evaluate(() => window.innerHeight);
+        return bounds ? viewportHeight - (bounds.y + bounds.height) : -Infinity;
+      })
+      .toBeGreaterThanOrEqual(16);
     await page.screenshot({ path: testInfo.outputPath("question-composer.png") });
     await page.getByRole("button", { name: "Submit", exact: true }).click();
-    await expect(page.getByText("I received your custom schedule.", { exact: true }).first()).toBeVisible();
+    await expect(
+      page.getByText("I received your custom schedule.", { exact: true }).first(),
+    ).toBeVisible();
     expect(JSON.stringify(scenario.results)).toContain("Every Tuesday at noon");
     expect(JSON.stringify(scenario.results)).toContain("Brief");
     await expect(composerPrimaryButton(page)).toBeVisible();
   });
 
-  test("a long scheduled-task review keeps its question, every fact and the buttons on screen in a short window", async ({ aiden }, testInfo) => {
+  test("a long scheduled-task review keeps its question, every fact and the buttons on screen in a short window", async ({
+    aiden,
+  }, testInfo) => {
     const { page, lmStudio, app } = aiden;
     await finishLmStudioOnboarding(page);
     await app.evaluate(({ BrowserWindow }) => {
@@ -232,12 +312,25 @@ test.describe("conversational scheduling", () => {
       window.setSize(740, 520);
     });
     const prompt = "Schedule audit: propose a long nightly review.";
-    const steps = Array.from({ length: 24 }, (_, index) => `${index + 1}. Review the changes in area ${index + 1} and note anything that needs a person.`);
+    const steps = Array.from(
+      { length: 24 },
+      (_, index) =>
+        `${index + 1}. Review the changes in area ${index + 1} and note anything that needs a person.`,
+    );
     lmStudio.enqueueToolScenario!({
       prompt,
-      calls: [{ name: "schedule_task", arguments: {
-        action: "create", name: "Long nightly review", cron: "0 22 * * *", timezone: "America/New_York", prompt: steps.join("\n"),
-      } }],
+      calls: [
+        {
+          name: "schedule_task",
+          arguments: {
+            action: "create",
+            name: "Long nightly review",
+            cron: "0 22 * * *",
+            timezone: "America/New_York",
+            prompt: steps.join("\n"),
+          },
+        },
+      ],
       finalText: "The nightly review has been saved.",
     });
     await page.locator("textarea").fill(prompt);
@@ -249,29 +342,43 @@ test.describe("conversational scheduling", () => {
     const viewportHeight = await page.evaluate(() => window.innerHeight);
     const toolbarBottom = await approval.evaluate((element) => {
       const pane = element.closest(":has(> div > header[data-toolbar])");
-      return pane?.querySelector("header[data-toolbar]")?.getBoundingClientRect().bottom ?? Number.NaN;
+      return (
+        pane?.querySelector("header[data-toolbar]")?.getBoundingClientRect().bottom ?? Number.NaN
+      );
     });
     expect(toolbarBottom).toBeGreaterThan(0);
-    await expect.poll(async () => (await approval.boundingBox())?.y ?? -Infinity).toBeGreaterThanOrEqual(toolbarBottom - 0.5);
+    await expect
+      .poll(async () => (await approval.boundingBox())?.y ?? -Infinity)
+      .toBeGreaterThanOrEqual(toolbarBottom - 0.5);
     const card = (await approval.boundingBox())!;
     expect(card.y + card.height).toBeLessThanOrEqual(viewportHeight);
-    await expect(approval.getByText("Save this scheduled task?", { exact: true })).toBeInViewport({ ratio: 1 });
-    await expect(approval.getByText("Long nightly review", { exact: true })).toBeInViewport({ ratio: 1 });
+    await expect(approval.getByText("Save this scheduled task?", { exact: true })).toBeInViewport({
+      ratio: 1,
+    });
+    await expect(approval.getByText("Long nightly review", { exact: true })).toBeInViewport({
+      ratio: 1,
+    });
     await expect(approval.getByRole("button", { name: "Allow once" })).toBeInViewport({ ratio: 1 });
     // The rest of a tall review scrolls inside the card, down to the instructions' last line.
     const review = approval.getByRole("group", { name: "Task details" });
     await review.evaluate((element) => element.scrollTo(0, element.scrollHeight));
     const instructions = (await approval.getByLabel("Instructions").boundingBox())!;
     expect(instructions.y + instructions.height).toBeLessThanOrEqual(viewportHeight);
-    await expect(approval.getByText("Save this scheduled task?", { exact: true })).toBeInViewport({ ratio: 1 });
+    await expect(approval.getByText("Save this scheduled task?", { exact: true })).toBeInViewport({
+      ratio: 1,
+    });
     await page.screenshot({ path: testInfo.outputPath("long-schedule-review.png") });
 
     // A long follow-up typed while the review waits grows the composer. The card gives up room but never slides
     // under the toolbar, and what no longer fits stays reachable by scrolling.
     const composer = page.locator("textarea");
-    await composer.fill(Array.from({ length: 10 }, (_, index) => `Follow-up line ${index + 1}`).join("\n"));
+    await composer.fill(
+      Array.from({ length: 10 }, (_, index) => `Follow-up line ${index + 1}`).join("\n"),
+    );
     await expect.poll(async () => (await composer.boundingBox())?.height ?? 0).toBeGreaterThan(150);
-    await expect.poll(async () => (await approval.boundingBox())?.y ?? -Infinity).toBeGreaterThanOrEqual(toolbarBottom - 0.5);
+    await expect
+      .poll(async () => (await approval.boundingBox())?.y ?? -Infinity)
+      .toBeGreaterThanOrEqual(toolbarBottom - 0.5);
     const composerTop = (await composer.boundingBox())!.y;
     const cramped = (await approval.boundingBox())!;
     expect(cramped.y + cramped.height).toBeLessThanOrEqual(composerTop);
@@ -294,15 +401,21 @@ test.describe("conversational scheduling", () => {
 
     await composer.fill("");
     await allow.click();
-    await expect(page.getByText("The nightly review has been saved.", { exact: true }).first()).toBeVisible();
+    await expect(
+      page.getByText("The nightly review has been saved.", { exact: true }).first(),
+    ).toBeVisible();
   });
 
-  test("desktop displays a phone-owned question and sends the answer through host authority", async ({ aiden }) => {
+  test("desktop displays a phone-owned question and sends the answer through host authority", async ({
+    aiden,
+  }) => {
     const { page, app } = aiden;
     await finishLmStudioOnboarding(page);
     await page.locator("textarea").fill("Create a conversation for the phone question audit.");
     await page.getByRole("button", { name: "Send message" }).click();
-    await expect(page.getByText("Deterministic E2E response received.", { exact: true }).first()).toBeVisible();
+    await expect(
+      page.getByText("Deterministic E2E response received.", { exact: true }).first(),
+    ).toBeVisible();
     await app.evaluate(({ ipcMain, BrowserWindow }) => {
       let pending = true;
       let questionChatId: string | undefined;
@@ -311,32 +424,64 @@ test.describe("conversational scheduling", () => {
         if (typeof chatId !== "string" || !chatId) throw new Error("Wrong question chat");
         questionChatId ??= chatId;
         if (chatId !== questionChatId) throw new Error("Question changed chats");
-        return pending ? ({
-        version: 1, source: "remote", promptId: "phone-question", chatId,
-        streamId: "phone-stream", toolCallId: "phone-call", expiresAt: new Date(Date.now() + 300_000).toISOString(),
-        questions: [{ question: "Which cadence should I use from your phone?", header: "Cadence", multiSelect: false,
-          options: [{ label: "Daily", description: "Every day." }, { label: "Weekly", description: "Every Friday." }] }],
-      }) : null;
+        return pending
+          ? {
+              version: 1,
+              source: "remote",
+              promptId: "phone-question",
+              chatId,
+              streamId: "phone-stream",
+              toolCallId: "phone-call",
+              expiresAt: new Date(Date.now() + 300_000).toISOString(),
+              questions: [
+                {
+                  question: "Which cadence should I use from your phone?",
+                  header: "Cadence",
+                  multiSelect: false,
+                  options: [
+                    { label: "Daily", description: "Every day." },
+                    { label: "Weekly", description: "Every Friday." },
+                  ],
+                },
+              ],
+            }
+          : null;
       });
       ipcMain.removeHandler("remote:respondQuestionFromHost");
       ipcMain.handle("remote:respondQuestionFromHost", (_event, chatId, promptId, response) => {
-        if (!pending || chatId !== questionChatId || promptId !== "phone-question" || response.answers[0]?.answer !== "Weekly") throw new Error("Wrong question answer or chat");
+        if (
+          !pending ||
+          chatId !== questionChatId ||
+          promptId !== "phone-question" ||
+          response.answers[0]?.answer !== "Weekly"
+        )
+          throw new Error("Wrong question answer or chat");
         pending = false;
         BrowserWindow.getAllWindows()[0]?.webContents.send("remote:approval-changed", { chatId });
         return { status: "answered" };
       });
       ipcMain.removeHandler("chat:answerQuestionnaire");
-      ipcMain.handle("chat:answerQuestionnaire", () => { throw new Error("Phone questions do not belong to this renderer"); });
+      ipcMain.handle("chat:answerQuestionnaire", () => {
+        throw new Error("Phone questions do not belong to this renderer");
+      });
     });
     await page.getByRole("button", { name: "Scheduled", exact: true }).click();
     // The router retains ChatPane while Scheduled's lazy chunk loads. A second
     // click before that route commits can keep the same pane and skip its read.
     await expect(page.getByRole("searchbox", { name: "Search scheduled tasks" })).toBeVisible();
-    await page.locator("[data-sidebar]").getByRole("button", { name: /Deterministic E2E response received/u }).first().click();
-    await expect(page.getByRole("heading", { name: "Which cadence should I use from your phone?" })).toBeVisible();
+    await page
+      .locator("[data-sidebar]")
+      .getByRole("button", { name: /Deterministic E2E response received/u })
+      .first()
+      .click();
+    await expect(
+      page.getByRole("heading", { name: "Which cadence should I use from your phone?" }),
+    ).toBeVisible();
     await page.getByRole("button", { name: "Weekly Every Friday." }).click();
     await page.getByRole("button", { name: "Submit", exact: true }).click();
-    await expect(page.getByRole("heading", { name: "Which cadence should I use from your phone?" })).toHaveCount(0);
+    await expect(
+      page.getByRole("heading", { name: "Which cadence should I use from your phone?" }),
+    ).toHaveCount(0);
     await expect(page.locator("textarea")).toBeVisible();
   });
 });

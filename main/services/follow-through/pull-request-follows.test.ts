@@ -3,7 +3,11 @@ import test from "node:test";
 import { MAX_PULL_REQUEST_FOLLOWS_PER_CHAT } from "../../../renderer/shared/follow-through.js";
 import type { FollowProbe, FollowReadResult } from "./pull-request-follow-github.js";
 import type { FollowedCheck, FollowNotice, PullRequestObservation } from "./pull-request-follow.js";
-import { PullRequestFollows, type FollowTimers, type StartFollowInput } from "./pull-request-follows.js";
+import {
+  PullRequestFollows,
+  type FollowTimers,
+  type StartFollowInput,
+} from "./pull-request-follows.js";
 
 const T0 = Date.parse("2026-10-26T12:00:00Z");
 
@@ -26,7 +30,9 @@ function open(overrides: Partial<PullRequestObservation> = {}): PullRequestObser
     headSha: "a".repeat(40),
     mergeable: true,
     checksState: "failing",
-    checks: [{ name: "unit", status: "failure", url: "https://github.com/acme/app/actions/runs/1/job/2" }],
+    checks: [
+      { name: "unit", status: "failure", url: "https://github.com/acme/app/actions/runs/1/job/2" },
+    ],
     comments: [],
     ...overrides,
   };
@@ -36,7 +42,9 @@ function harness(options: { answering?: (chatId: string, at: number) => boolean 
   let now = T0;
   const posted: Array<{ chatId: string; notice: FollowNotice }> = [];
   const persisted: number[] = [];
-  let answer: (follow: { number: number }) => FollowReadResult | Promise<FollowReadResult> = () => ({ kind: "ok", observation: open() });
+  let answer: (follow: {
+    number: number;
+  }) => FollowReadResult | Promise<FollowReadResult> = () => ({ kind: "ok", observation: open() });
   const logReads: string[] = [];
   const reads: Array<{ number: number; at: number; probe?: FollowProbe }> = [];
   // Fake one-shot timers: they fire only when the test moves the clock past them.
@@ -123,13 +131,15 @@ test("following the same pull request twice keeps one follow; each chat may foll
   follows.follow(input(1));
   follows.follow(input(1));
   assert.equal(follows.list("chat-1").length, 1);
-  for (let number = 2; number <= MAX_PULL_REQUEST_FOLLOWS_PER_CHAT; number += 1) follows.follow(input(number));
+  for (let number = 2; number <= MAX_PULL_REQUEST_FOLLOWS_PER_CHAT; number += 1)
+    follows.follow(input(number));
   assert.throws(() => follows.follow(input(99)), /already follows 3 pull requests/u);
   assert.doesNotThrow(() => follows.follow(input(99, "chat-2")), "the limit is per chat");
 });
 
 test("a comment the agent wrote with the person's account during its own answer is not news", async () => {
-  const answering = (chatId: string, at: number) => chatId === "chat-1" && at >= T0 + 60_000 && at <= T0 + 120_000;
+  const answering = (chatId: string, at: number) =>
+    chatId === "chat-1" && at >= T0 + 60_000 && at <= T0 + 120_000;
   const { follows, posted, setAnswer } = harness({ answering });
   setAnswer(() => ({
     kind: "ok",
@@ -137,8 +147,24 @@ test("a comment the agent wrote with the person's account during its own answer 
       checksState: "pending",
       checks: [{ name: "unit", status: "pending" }],
       comments: [
-        { id: "mine", kind: "comment", author: "sambit", trusted: true, byViewer: true, body: "Fixed the test.", createdAt: T0 + 90_000 },
-        { id: "person", kind: "comment", author: "sambit", trusted: true, byViewer: true, body: "Also bump the version.", createdAt: T0 + 300_000 },
+        {
+          id: "mine",
+          kind: "comment",
+          author: "sambit",
+          trusted: true,
+          byViewer: true,
+          body: "Fixed the test.",
+          createdAt: T0 + 90_000,
+        },
+        {
+          id: "person",
+          kind: "comment",
+          author: "sambit",
+          trusted: true,
+          byViewer: true,
+          body: "Also bump the version.",
+          createdAt: T0 + 300_000,
+        },
       ],
     }),
   }));
@@ -146,7 +172,11 @@ test("a comment the agent wrote with the person's account during its own answer 
   await follows.kick();
   assert.equal(posted.length, 1);
   assert.doesNotMatch(posted[0]!.notice.text, /Fixed the test/u);
-  assert.match(posted[0]!.notice.text, /Also bump the version/u, "the person writing on GitHub later still counts");
+  assert.match(
+    posted[0]!.notice.text,
+    /Also bump the version/u,
+    "the person writing on GitHub later still counts",
+  );
 });
 
 test("a follow stopped while its read was in flight posts nothing", async () => {
@@ -173,7 +203,10 @@ test("a pull request GitHub cannot find ends its follow; a failed read keeps it 
   assert.equal(ended!.endedReason, "unavailable");
 
   const flaky = harness();
-  flaky.setAnswer(() => ({ kind: "retry", message: "GitHub's rate limit was reached; Aiden will try again later." }));
+  flaky.setAnswer(() => ({
+    kind: "retry",
+    message: "GitHub's rate limit was reached; Aiden will try again later.",
+  }));
   flaky.follows.follow(input());
   await flaky.follows.kick();
   const [kept] = flaky.follows.list("chat-1");
@@ -182,7 +215,10 @@ test("a pull request GitHub cannot find ends its follow; a failed read keeps it 
   assert.deepEqual(flaky.posted, []);
 
   // The next good read clears the problem.
-  flaky.setAnswer(() => ({ kind: "ok", observation: open({ checksState: "pending", checks: [] }) }));
+  flaky.setAnswer(() => ({
+    kind: "ok",
+    observation: open({ checksState: "pending", checks: [] }),
+  }));
   flaky.advance(60 * 60_000);
   await flaky.follows.kick();
   assert.equal(flaky.follows.list("chat-1")[0]!.problem, undefined);
@@ -228,13 +264,22 @@ for (const ending of ["stop", "access-changed", "shutdown"] as const) {
       persist: () => {},
       post: (_chat, notice) => posted.push(notice),
       reader: {
-        read: async () => ({ kind: "ok", observation: open({
-          checks: ["unit", "integration"].map((name) => ({ name, status: "failure", url: open().checks[0]!.url })),
-        }) }),
+        read: async () => ({
+          kind: "ok",
+          observation: open({
+            checks: ["unit", "integration"].map((name) => ({
+              name,
+              status: "failure",
+              url: open().checks[0]!.url,
+            })),
+          }),
+        }),
         jobLogTail: async (_record, check, signal) => {
           logs.push(check.name);
           logSignal = signal;
-          return new Promise<string>((resolve) => { finishLog = resolve; });
+          return new Promise<string>((resolve) => {
+            finishLog = resolve;
+          });
         },
       },
     });
@@ -256,7 +301,12 @@ for (const ending of ["stop", "access-changed", "shutdown"] as const) {
 test("a workspace change suspends a due poll until commit or rollback", async () => {
   const { follows, setAnswer, posted } = harness();
   let finish!: (value: FollowReadResult) => void;
-  setAnswer(() => new Promise((resolve) => { finish = resolve; }));
+  setAnswer(
+    () =>
+      new Promise((resolve) => {
+        finish = resolve;
+      }),
+  );
   follows.follow(input());
   const resume = follows.pauseChats(["chat-1"]);
   finish({ kind: "ok", observation: open() });
@@ -275,7 +325,11 @@ const PR_PATH = "/repos/acme/app/pulls/42";
 
 /** A settled pull request: checks passed, nothing to say. */
 function quiet(overrides: Partial<PullRequestObservation> = {}): PullRequestObservation {
-  return open({ checksState: "passing", checks: [{ name: "unit", status: "success" }], ...overrides });
+  return open({
+    checksState: "passing",
+    checks: [{ name: "unit", status: "success" }],
+    ...overrides,
+  });
 }
 
 function nextCheckIn(h: ReturnType<typeof harness>): number {
@@ -363,7 +417,11 @@ test("a nudge never reads sooner than the follow's minimum interval or before a 
   await h.elapse(10_000);
   assert.equal(h.reads.length, 1);
 
-  h.setAnswer(() => ({ kind: "retry", message: "GitHub's rate limit was reached.", retryAt: h.now() + 20 * MINUTE }));
+  h.setAnswer(() => ({
+    kind: "retry",
+    message: "GitHub's rate limit was reached.",
+    retryAt: h.now() + 20 * MINUTE,
+  }));
   await h.elapse(5 * MINUTE);
   assert.equal(h.reads.length, 2, "the ambient nudge read at the settled cadence");
 
@@ -404,7 +462,10 @@ test("a stopped follow sends no request, however it is nudged", async () => {
   assert.equal(deleted.follows.nudgeAll("action"), 0);
   assert.equal(deleted.timers.size, 0);
   await deleted.elapse(60 * MINUTE);
-  assert.deepEqual(deleted.reads.map((read) => read.number), [42, 7]);
+  assert.deepEqual(
+    deleted.reads.map((read) => read.number),
+    [42, 7],
+  );
 });
 
 test("a nudge waits while its chat's workspace is changing", async () => {
@@ -436,13 +497,21 @@ test("an unchanged probe posts nothing, reads no logs and keeps the status", asy
   h.advance(nextCheckIn(h));
   await h.follows.kick();
   assert.equal(h.reads.length, 2);
-  assert.deepEqual(h.reads[1]!.probe, { etags, skipIfUnchanged: true }, "the stored tags go out as If-None-Match");
+  assert.deepEqual(
+    h.reads[1]!.probe,
+    { etags, skipIfUnchanged: true },
+    "the stored tags go out as If-None-Match",
+  );
   assert.equal(h.posted.length, postedBefore);
   assert.deepEqual(h.logReads, []);
   const after = h.follows.list("chat-1")[0]!;
   assert.equal(after.status, before.status);
   assert.equal(after.noticesSent, before.noticesSent);
-  assert.equal(h.follows.all()[0]!.lastCheckedAt, h.now(), "an unchanged answer still counts as a look");
+  assert.equal(
+    h.follows.all()[0]!.lastCheckedAt,
+    h.now(),
+    "an unchanged answer still counts as a look",
+  );
 });
 
 test("a quiet pull request is read less and less often, and back at the normal cadence once it changes", async () => {
@@ -462,14 +531,26 @@ test("a quiet pull request is read less and less often, and back at the normal c
   }
   // The third look would wait 20 minutes, but the full read is due 30 minutes
   // after the last one (T+20 then T+30); after that the backoff is at its cap.
-  assert.deepEqual(delays, [5, 10, 10, 30].map((minutes) => minutes * MINUTE));
+  assert.deepEqual(
+    delays,
+    [5, 10, 10, 30].map((minutes) => minutes * MINUTE),
+  );
 
   // A new comment changes the pull request: the backoff starts over.
   h.setAnswer(() => ({
     kind: "ok",
     etags: { [PR_PATH]: 'W/"pr-2"' },
     observation: quiet({
-      comments: [{ id: "c1", kind: "comment", author: "reviewer", trusted: true, body: "Please rename this.", createdAt: h.now() }],
+      comments: [
+        {
+          id: "c1",
+          kind: "comment",
+          author: "reviewer",
+          trusted: true,
+          body: "Please rename this.",
+          createdAt: h.now(),
+        },
+      ],
     }),
   }));
   h.advance(nextCheckIn(h));
@@ -480,7 +561,11 @@ test("a quiet pull request is read less and less often, and back at the normal c
   h.setAnswer(() => ({ kind: "unchanged" }));
   h.advance(nextCheckIn(h));
   await h.follows.kick();
-  assert.deepEqual(h.reads[h.reads.length - 1]!.probe?.etags, { [PR_PATH]: 'W/"pr-2"' }, "the new tags are the ones probed");
+  assert.deepEqual(
+    h.reads[h.reads.length - 1]!.probe?.etags,
+    { [PR_PATH]: 'W/"pr-2"' },
+    "the new tags are the ones probed",
+  );
 });
 
 test("checks still running keep the two-minute cadence even when nothing changes", async () => {
@@ -507,7 +592,11 @@ test("a failing check is never probed, and a full read half an hour old is never
   await failing.follows.kick();
   failing.advance(nextCheckIn(failing));
   await failing.follows.kick();
-  assert.equal(failing.reads[1]!.probe, undefined, "the failing-for-an-hour clock needs a full read, so no probe goes out");
+  assert.equal(
+    failing.reads[1]!.probe,
+    undefined,
+    "the failing-for-an-hour clock needs a full read, so no probe goes out",
+  );
 
   const stale = harness();
   stale.setAnswer(() => ({ kind: "ok", observation: quiet(), etags: { [PR_PATH]: 'W/"pr-1"' } }));
@@ -543,18 +632,22 @@ test("a probe that comes back after the full read fell due is followed by the fu
   const fullReadAt = h.now() - 20 * MINUTE;
   const before = h.reads.length;
   h.setAnswer(() => {
-    if (!h.reads[h.reads.length - 1]!.probe?.skipIfUnchanged) return { kind: "ok", observation: quiet(), etags };
+    if (!h.reads[h.reads.length - 1]!.probe?.skipIfUnchanged)
+      return { kind: "ok", observation: quiet(), etags };
     h.advance(11 * MINUTE);
     return { kind: "unchanged" };
   });
   await h.follows.kick();
   const looks = h.reads.slice(before);
-  assert.deepEqual(looks.map(({ at, probe }) => ({ after: at - fullReadAt, skip: probe?.skipIfUnchanged })), [
-    { after: 20 * MINUTE, skip: true },
-    // Not another 20-minute backoff: the full read the probe stood in for went
-    // due while it was out, so it runs as soon as the probe returns.
-    { after: 31 * MINUTE, skip: false },
-  ]);
+  assert.deepEqual(
+    looks.map(({ at, probe }) => ({ after: at - fullReadAt, skip: probe?.skipIfUnchanged })),
+    [
+      { after: 20 * MINUTE, skip: true },
+      // Not another 20-minute backoff: the full read the probe stood in for went
+      // due while it was out, so it runs as soon as the probe returns.
+      { after: 31 * MINUTE, skip: false },
+    ],
+  );
 });
 
 test("a forced full read that found what the probe said, nothing new, keeps backing off", async () => {
@@ -562,7 +655,12 @@ test("a forced full read that found what the probe said, nothing new, keeps back
   h.setAnswer(() => ({ kind: "ok", observation: quiet(), etags: { [PR_PATH]: 'W/"pr-1"' } }));
   h.follows.follow(input());
   await h.follows.kick();
-  h.setAnswer(() => ({ kind: "ok", observation: quiet(), etags: { [PR_PATH]: 'W/"pr-1"' }, probedUnchanged: true }));
+  h.setAnswer(() => ({
+    kind: "ok",
+    observation: quiet(),
+    etags: { [PR_PATH]: 'W/"pr-1"' },
+    probedUnchanged: true,
+  }));
   h.advance(nextCheckIn(h));
   await h.follows.kick();
   h.advance(nextCheckIn(h));
@@ -580,7 +678,11 @@ test("a pull request still failing after its hour card goes back to cheap probes
   while (!h.posted.some((post) => post.notice.notice.title === "Still failing after an hour")) {
     h.advance(nextCheckIn(h));
     await h.follows.kick();
-    assert.equal(h.reads[h.reads.length - 1]!.probe, undefined, "the failure clock still needs full reads");
+    assert.equal(
+      h.reads[h.reads.length - 1]!.probe,
+      undefined,
+      "the failure clock still needs full reads",
+    );
     assert.ok(h.now() - T0 <= 2 * 60 * MINUTE, "the hour card came");
   }
   // The next look sends probes again and keeps the tags GitHub hands back.

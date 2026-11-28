@@ -46,7 +46,11 @@ function largeRef(): ImageContent {
 }
 
 function isCreate(request: RecordedRequest) {
-  return request.method === "POST" && request.url.endsWith("/predictions") && request.url.includes("/models/");
+  return (
+    request.method === "POST" &&
+    request.url.endsWith("/predictions") &&
+    request.url.includes("/models/")
+  );
 }
 
 test("a prediction finished within Prefer: wait is downloaded once, without the key", async () => {
@@ -65,7 +69,10 @@ test("a prediction finished within Prefer: wait is downloaded once, without the 
   assert.equal(result.stopReason, "stop", result.errorMessage);
   assert.deepEqual(result.output, [{ type: "image", mimeType: "image/png", data: pngBase64(3) }]);
   const [create, download] = requests;
-  assert.equal(create!.url, "https://api.replicate.com/v1/models/google/nano-banana-2.1/predictions");
+  assert.equal(
+    create!.url,
+    "https://api.replicate.com/v1/models/google/nano-banana-2.1/predictions",
+  );
   assert.equal(create!.headers.authorization, `Bearer ${KEY}`);
   assert.equal(create!.headers.prefer, "wait=60");
   assert.deepEqual(create!.body, {
@@ -83,22 +90,32 @@ test("an unfinished prediction is polled until it succeeds", async () => {
     if (isCreate(request)) return json({ id: "p2", status: "starting", output: null });
     if (request.url === "https://api.replicate.com/v1/predictions/p2") {
       polls += 1;
-      return json(polls < 2 ? { id: "p2", status: "processing" } : { id: "p2", status: "succeeded", output: outputs });
+      return json(
+        polls < 2
+          ? { id: "p2", status: "processing" }
+          : { id: "p2", status: "succeeded", output: outputs },
+      );
     }
     if (outputs.includes(request.url)) return bytes(png(outputs.indexOf(request.url) + 1));
     return json({}, 500);
   });
 
-  const result = await api(fetch).generateImages(model("black-forest-labs/flux-schnell"), context("a fox"), {
-    apiKey: KEY,
-  });
+  const result = await api(fetch).generateImages(
+    model("black-forest-labs/flux-schnell"),
+    context("a fox"),
+    {
+      apiKey: KEY,
+    },
+  );
 
   assert.equal(result.stopReason, "stop", result.errorMessage);
   assert.equal(polls, 2);
   assert.equal(result.output.length, 2);
-  assert.ok(requests.filter((request) => request.method === "GET" && request.url.includes("/predictions/")).every(
-    (request) => request.headers.authorization === `Bearer ${KEY}`,
-  ));
+  assert.ok(
+    requests
+      .filter((request) => request.method === "GET" && request.url.includes("/predictions/"))
+      .every((request) => request.headers.authorization === `Bearer ${KEY}`),
+  );
 });
 
 test("a failed prediction reports Replicate's reason", async () => {
@@ -107,9 +124,13 @@ test("a failed prediction reports Replicate's reason", async () => {
       ? json({ id: "p3", status: "failed", error: "NSFW content detected" })
       : json({}, 500),
   );
-  const result = await api(fetch).generateImages(model("black-forest-labs/flux-schnell"), context("x"), {
-    apiKey: KEY,
-  });
+  const result = await api(fetch).generateImages(
+    model("black-forest-labs/flux-schnell"),
+    context("x"),
+    {
+      apiKey: KEY,
+    },
+  );
   assert.equal(result.stopReason, "error");
   assert.match(result.errorMessage ?? "", /NSFW content detected/u);
   assert.deepEqual(result.output, []);
@@ -124,10 +145,14 @@ test("cancelling mid-poll cancels the prediction and reports aborted", async () 
     throw new DOMException("The operation was aborted.", "AbortError");
   });
 
-  const result = await api(fetch).generateImages(model("black-forest-labs/flux-schnell"), context("x"), {
-    apiKey: KEY,
-    signal: controller.signal,
-  });
+  const result = await api(fetch).generateImages(
+    model("black-forest-labs/flux-schnell"),
+    context("x"),
+    {
+      apiKey: KEY,
+      signal: controller.signal,
+    },
+  );
 
   assert.equal(result.stopReason, "aborted");
   const cancel = requests.find((request) => request.url.endsWith("/cancel"));
@@ -145,9 +170,13 @@ test("output outside replicate.delivery is refused without fetching it", async (
     const { fetch, requests } = fakeFetch((request) =>
       isCreate(request) ? json({ id: "p5", status: "succeeded", output: [output] }) : bytes(png(1)),
     );
-    const result = await api(fetch).generateImages(model("black-forest-labs/flux-schnell"), context("x"), {
-      apiKey: KEY,
-    });
+    const result = await api(fetch).generateImages(
+      model("black-forest-labs/flux-schnell"),
+      context("x"),
+      {
+        apiKey: KEY,
+      },
+    );
     assert.equal(result.stopReason, "error", output);
     assert.match(result.errorMessage ?? "", /unexpected address/u);
     assert.equal(requests.length, 1, output);
@@ -157,7 +186,8 @@ test("output outside replicate.delivery is refused without fetching it", async (
 test("references over 256 KB are uploaded, smaller ones are inlined", async () => {
   const uploaded = "https://api.replicate.com/v1/files/f1";
   const { fetch, requests } = fakeFetch((request) => {
-    if (request.url === "https://api.replicate.com/v1/files") return json({ id: "f1", urls: { get: uploaded } }, 201);
+    if (request.url === "https://api.replicate.com/v1/files")
+      return json({ id: "f1", urls: { get: uploaded } }, 201);
     if (isCreate(request)) return json({ id: "p6", status: "succeeded", output: DELIVERY });
     return bytes(png(2));
   });
@@ -180,11 +210,17 @@ test("references over 256 KB are uploaded, smaller ones are inlined", async () =
 
 test("an upload answered with a foreign file address is refused", async () => {
   const { fetch, requests } = fakeFetch((request) =>
-    request.url.endsWith("/v1/files") ? json({ urls: { get: "https://evil.example/f1" } }) : json({}, 500),
+    request.url.endsWith("/v1/files")
+      ? json({ urls: { get: "https://evil.example/f1" } })
+      : json({}, 500),
   );
-  const result = await api(fetch).generateImages(model("google/nano-banana-2.1"), context("x", [largeRef()]), {
-    apiKey: KEY,
-  });
+  const result = await api(fetch).generateImages(
+    model("google/nano-banana-2.1"),
+    context("x", [largeRef()]),
+    {
+      apiKey: KEY,
+    },
+  );
   assert.equal(result.stopReason, "error");
   assert.equal(requests.some(isCreate), false);
 });
@@ -205,12 +241,18 @@ test("a single-image field gets one string; extra or unsupported references fail
 
   const cases: [string, ImageContent[], RegExp][] = [
     ["black-forest-labs/flux-kontext-max", [smallRef, smallRef], /accepts one reference image/u],
-    ["google/nano-banana-2.1", [smallRef, smallRef, smallRef, smallRef], /at most 3 reference images/u],
+    [
+      "google/nano-banana-2.1",
+      [smallRef, smallRef, smallRef, smallRef],
+      /at most 3 reference images/u,
+    ],
     ["black-forest-labs/flux-schnell", [smallRef], /doesn't accept reference images/u],
   ];
   for (const [id, references, message] of cases) {
     const { fetch, requests } = fakeFetch(() => json({}, 500));
-    const result = await api(fetch).generateImages(model(id), context("x", references), { apiKey: KEY });
+    const result = await api(fetch).generateImages(model(id), context("x", references), {
+      apiKey: KEY,
+    });
     assert.equal(result.stopReason, "error");
     assert.match(result.errorMessage ?? "", message);
     assert.equal(requests.length, 0);
@@ -225,17 +267,25 @@ test("errors never carry the key, even when Replicate echoes it", async () => {
   ];
   for (const [status, body] of statuses) {
     const { fetch } = fakeFetch(() => json(body, status));
-    const result = await api(fetch).generateImages(model("black-forest-labs/flux-schnell"), context("x"), {
-      apiKey: KEY,
-    });
+    const result = await api(fetch).generateImages(
+      model("black-forest-labs/flux-schnell"),
+      context("x"),
+      {
+        apiKey: KEY,
+      },
+    );
     assert.equal(result.stopReason, "error");
     assert.ok(result.errorMessage, `status ${status}`);
     assert.equal(result.errorMessage!.includes(KEY), false, `status ${status}`);
   }
   const rejected = fakeFetch(() => json({ detail: "Unauthenticated" }, 401));
-  const result = await api(rejected.fetch).generateImages(model("black-forest-labs/flux-schnell"), context("x"), {
-    apiKey: KEY,
-  });
+  const result = await api(rejected.fetch).generateImages(
+    model("black-forest-labs/flux-schnell"),
+    context("x"),
+    {
+      apiKey: KEY,
+    },
+  );
   assert.equal(result.errorMessage, "The Replicate image key was rejected.");
 });
 
@@ -259,9 +309,13 @@ test("a key straddling the error-length cutoff leaks no fragment of itself", asy
     for (const pad of straddlingPads(key.length)) {
       const { fetch } = fakeFetch(respond(`${"x".repeat(pad)}${key} tail`));
       const references = label === "failed upload" ? [largeRef()] : [];
-      const result = await api(fetch).generateImages(model("google/nano-banana-2.1"), context("x", references), {
-        apiKey: key,
-      });
+      const result = await api(fetch).generateImages(
+        model("google/nano-banana-2.1"),
+        context("x", references),
+        {
+          apiKey: key,
+        },
+      );
       assert.equal(result.stopReason, "error", `${label} pad ${pad}`);
       assert.equal(
         secretFragmentIn(result.errorMessage ?? "", key),
@@ -274,7 +328,11 @@ test("a key straddling the error-length cutoff leaks no fragment of itself", asy
 
 test("a missing key fails without a request", async () => {
   const { fetch, requests } = fakeFetch(() => json({}, 500));
-  const result = await api(fetch).generateImages(model("black-forest-labs/flux-schnell"), context("x"), {});
+  const result = await api(fetch).generateImages(
+    model("black-forest-labs/flux-schnell"),
+    context("x"),
+    {},
+  );
   assert.equal(result.stopReason, "error");
   assert.match(result.errorMessage ?? "", /Settings → Image Generation/u);
   assert.equal(requests.length, 0);
@@ -297,18 +355,28 @@ test("a fetched community model runs by its pinned version", async () => {
     metadata: () => ({ kind: "replicate", version: VERSION }),
   });
 
-  const result = await pinned.generateImages(model("someone/community-art"), context("a lighthouse"), { apiKey: KEY });
+  const result = await pinned.generateImages(
+    model("someone/community-art"),
+    context("a lighthouse"),
+    { apiKey: KEY },
+  );
 
   assert.equal(result.stopReason, "stop", result.errorMessage);
   assert.equal(requests[0]!.url, PREDICTIONS);
   assert.deepEqual(requests[0]!.body, { version: VERSION, input: { prompt: "a lighthouse" } });
-  assert.equal(requests.some((request) => request.url.includes("/models/")), false);
+  assert.equal(
+    requests.some((request) => request.url.includes("/models/")),
+    false,
+  );
 });
 
 test("a model without a version that 404s by name is retried once through its latest version", async () => {
   const { fetch, requests } = fakeFetch((request) => {
     if (isCreate(request)) return json({ detail: "not found" }, 404);
-    if (request.method === "GET" && request.url === "https://api.replicate.com/v1/models/someone/custom-art") {
+    if (
+      request.method === "GET" &&
+      request.url === "https://api.replicate.com/v1/models/someone/custom-art"
+    ) {
       return json({ owner: "someone", name: "custom-art", latest_version: { id: VERSION } });
     }
     if (request.method === "POST" && request.url === PREDICTIONS) {
@@ -318,7 +386,9 @@ test("a model without a version that 404s by name is retried once through its la
     return json({}, 500);
   });
 
-  const result = await api(fetch).generateImages(model("someone/custom-art"), context("a barn"), { apiKey: KEY });
+  const result = await api(fetch).generateImages(model("someone/custom-art"), context("a barn"), {
+    apiKey: KEY,
+  });
 
   assert.equal(result.stopReason, "stop", result.errorMessage);
   assert.deepEqual(
@@ -347,11 +417,18 @@ test("a transient poll failure is retried and the prediction still completes", a
     return json({}, 500);
   });
 
-  const result = await api(fetch).generateImages(model("black-forest-labs/flux-schnell"), context("x"), { apiKey: KEY });
+  const result = await api(fetch).generateImages(
+    model("black-forest-labs/flux-schnell"),
+    context("x"),
+    { apiKey: KEY },
+  );
 
   assert.equal(result.stopReason, "stop", result.errorMessage);
   assert.equal(polls, 3);
-  assert.equal(requests.some((request) => request.url.endsWith("/cancel")), false);
+  assert.equal(
+    requests.some((request) => request.url.endsWith("/cancel")),
+    false,
+  );
 });
 
 test("a poll that keeps failing gives up, cancels the paid prediction and reports an error", async () => {
@@ -361,7 +438,11 @@ test("a poll that keeps failing gives up, cancels the paid prediction and report
     return json({ detail: "down" }, 502);
   });
 
-  const result = await api(fetch).generateImages(model("black-forest-labs/flux-schnell"), context("x"), { apiKey: KEY });
+  const result = await api(fetch).generateImages(
+    model("black-forest-labs/flux-schnell"),
+    context("x"),
+    { apiKey: KEY },
+  );
 
   assert.equal(result.stopReason, "error");
   assert.match(result.errorMessage ?? "", /Replicate had a problem \(502\)/u);
@@ -374,7 +455,11 @@ test("a prediction Replicate aborted is reported as cancelled", async () => {
   const { fetch } = fakeFetch((request) =>
     isCreate(request) ? json({ id: "t3", status: "aborted" }) : json({}, 500),
   );
-  const result = await api(fetch).generateImages(model("black-forest-labs/flux-schnell"), context("x"), { apiKey: KEY });
+  const result = await api(fetch).generateImages(
+    model("black-forest-labs/flux-schnell"),
+    context("x"),
+    { apiKey: KEY },
+  );
   assert.equal(result.stopReason, "error");
   assert.equal(result.errorMessage, "Replicate cancelled this prediction.");
 });
@@ -388,10 +473,14 @@ test("the time-limit message names the limit that applied", async () => {
   });
   // AbortSignal.timeout does not hold the event loop open by itself.
   const keepAlive = setTimeout(() => undefined, 5_000);
-  const result = await api(fetch).generateImages(model("black-forest-labs/flux-schnell"), context("x"), {
-    apiKey: KEY,
-    timeoutMs: 30,
-  });
+  const result = await api(fetch).generateImages(
+    model("black-forest-labs/flux-schnell"),
+    context("x"),
+    {
+      apiKey: KEY,
+      timeoutMs: 30,
+    },
+  );
   clearTimeout(keepAlive);
   assert.equal(result.stopReason, "error");
   assert.equal(result.errorMessage, "Replicate took longer than 1 second.");

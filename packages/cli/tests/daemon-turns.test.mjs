@@ -2,7 +2,15 @@
 // accepted and refused turns, what a provider and the chat store actually saw,
 // what a client was told, and which resources stay held.
 import assert from "node:assert/strict";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import fsPromises from "node:fs/promises";
 import { syncBuiltinESMExports } from "node:module";
 import { createServer } from "node:http";
@@ -23,63 +31,125 @@ async function until(condition, label, timeoutMs = 10_000) {
   }
 }
 
-const chunk = (delta, finish = null) => `data: ${JSON.stringify({ id: "test", object: "chat.completion.chunk", choices: [{ index: 0, delta, finish_reason: finish }] })}\n\n`;
+const chunk = (delta, finish = null) =>
+  `data: ${JSON.stringify({ id: "test", object: "chat.completion.chunk", choices: [{ index: 0, delta, finish_reason: finish }] })}\n\n`;
 const usage = `data: ${JSON.stringify({ id: "test", object: "chat.completion.chunk", choices: [], usage: { prompt_tokens: 10, completion_tokens: 4, total_tokens: 14 } })}\n\n`;
 
 /** One scripted step per provider request; an unscripted request answers "Done". */
 const reply = (text) => (response) => {
   response.write(chunk({ role: "assistant", content: text }));
-  response.write(chunk({}, "stop")); response.write(usage);
+  response.write(chunk({}, "stop"));
+  response.write(usage);
   response.end("data: [DONE]\n\n");
 };
 const callTool = (name, args) => (response) => {
-  response.write(chunk({ role: "assistant", tool_calls: [{ index: 0, id: "call_1", type: "function", function: { name, arguments: JSON.stringify(args) } }] }));
-  response.write(chunk({}, "tool_calls")); response.write(usage);
+  response.write(
+    chunk({
+      role: "assistant",
+      tool_calls: [
+        {
+          index: 0,
+          id: "call_1",
+          type: "function",
+          function: { name, arguments: JSON.stringify(args) },
+        },
+      ],
+    }),
+  );
+  response.write(chunk({}, "tool_calls"));
+  response.write(usage);
   response.end("data: [DONE]\n\n");
 };
 /** One assistant message that calls each `[name, args]` in order, as a tool batch. */
 const callTools = (calls) => (response) => {
-  response.write(chunk({ role: "assistant", tool_calls: calls.map(([name, args], index) => ({ index, id: `call_${index + 1}`, type: "function", function: { name, arguments: JSON.stringify(args) } })) }));
-  response.write(chunk({}, "tool_calls")); response.write(usage);
+  response.write(
+    chunk({
+      role: "assistant",
+      tool_calls: calls.map(([name, args], index) => ({
+        index,
+        id: `call_${index + 1}`,
+        type: "function",
+        function: { name, arguments: JSON.stringify(args) },
+      })),
+    }),
+  );
+  response.write(chunk({}, "tool_calls"));
+  response.write(usage);
   response.end("data: [DONE]\n\n");
 };
 /** Streams a first delta and then stays open, as a slow provider does. */
-const hangAfter = (text) => (response) => { response.write(chunk({ role: "assistant", content: text })); };
+const hangAfter = (text) => (response) => {
+  response.write(chunk({ role: "assistant", content: text }));
+};
 
 /** An Anthropic Messages reply, for a fixture whose provider is `anthropic`. */
-const anthropicEvent = (type, data) => `event: ${type}\ndata: ${JSON.stringify({ type, ...data })}\n\n`;
+const anthropicEvent = (type, data) =>
+  `event: ${type}\ndata: ${JSON.stringify({ type, ...data })}\n\n`;
 const anthropicReply = (text) => (response) => {
-  response.write(anthropicEvent("message_start", { message: { id: `msg_${text}`, type: "message", role: "assistant", model: "test", content: [], stop_reason: null, usage: { input_tokens: 10, output_tokens: 0 } } }));
-  response.write(anthropicEvent("content_block_start", { index: 0, content_block: { type: "text", text: "" } }));
-  response.write(anthropicEvent("content_block_delta", { index: 0, delta: { type: "text_delta", text } }));
+  response.write(
+    anthropicEvent("message_start", {
+      message: {
+        id: `msg_${text}`,
+        type: "message",
+        role: "assistant",
+        model: "test",
+        content: [],
+        stop_reason: null,
+        usage: { input_tokens: 10, output_tokens: 0 },
+      },
+    }),
+  );
+  response.write(
+    anthropicEvent("content_block_start", { index: 0, content_block: { type: "text", text: "" } }),
+  );
+  response.write(
+    anthropicEvent("content_block_delta", { index: 0, delta: { type: "text_delta", text } }),
+  );
   response.write(anthropicEvent("content_block_stop", { index: 0 }));
-  response.write(anthropicEvent("message_delta", { delta: { stop_reason: "end_turn" }, usage: { output_tokens: 4 } }));
+  response.write(
+    anthropicEvent("message_delta", {
+      delta: { stop_reason: "end_turn" },
+      usage: { output_tokens: 4 },
+    }),
+  );
   response.end(anthropicEvent("message_stop", {}));
 };
 
 /** A refusal the session does not retry. */
-const reject = (response) => { response.writeHead(400, { "content-type": "application/json" }); response.end(JSON.stringify({ error: { message: "Rejected" } })); };
+const reject = (response) => {
+  response.writeHead(400, { "content-type": "application/json" });
+  response.end(JSON.stringify({ error: { message: "Rejected" } }));
+};
 
 /** Writes a workspace hook file and approves each hook, as the person would at a terminal. */
 async function startHooks(dir, hooks) {
   mkdirSync(join(dir, ".aiden"), { recursive: true });
   writeFileSync(join(dir, ".aiden", "hooks.json"), JSON.stringify({ hooks }));
-  for (const { id, digest } of (await api.hooksAdminCommand(dir, ["list"])).hooks) await api.hooksAdminCommand(dir, ["approve", id, digest], { isInteractive: () => true });
+  for (const { id, digest } of (await api.hooksAdminCommand(dir, ["list"])).hooks)
+    await api.hooksAdminCommand(dir, ["approve", id, digest], { isInteractive: () => true });
   return api.startCliHooks(dir);
 }
 
 async function fixture(t, { access = "full", hooks, anthropic = false, model = {} } = {}) {
   const dir = mkdtempSync(join(tmpdir(), "aiden-daemon-turns-"));
-  const steps = [], requests = [], headers = [], requestWaiters = [];
+  const steps = [],
+    requests = [],
+    headers = [],
+    requestWaiters = [];
   /** Resolves once the server has received `count` requests. */
-  const requestCount = (count) => new Promise((resolve) => {
-    if (requests.length >= count) resolve(); else requestWaiters.push({ count, resolve });
-  });
+  const requestCount = (count) =>
+    new Promise((resolve) => {
+      if (requests.length >= count) resolve();
+      else requestWaiters.push({ count, resolve });
+    });
   const server = createServer(async (request, response) => {
-    let body = ""; for await (const part of request) body += part;
-    requests.push(JSON.parse(body)); headers.push(request.headers);
+    let body = "";
+    for await (const part of request) body += part;
+    requests.push(JSON.parse(body));
+    headers.push(request.headers);
     for (const waiter of requestWaiters.filter((entry) => requests.length >= entry.count)) {
-      requestWaiters.splice(requestWaiters.indexOf(waiter), 1); waiter.resolve();
+      requestWaiters.splice(requestWaiters.indexOf(waiter), 1);
+      waiter.resolve();
     }
     const step = steps.shift() ?? (anthropic ? anthropicReply("Done") : reply("Done"));
     if (step !== reject) response.writeHead(200, { "content-type": "text/event-stream" });
@@ -87,13 +157,36 @@ async function fixture(t, { access = "full", hooks, anthropic = false, model = {
   });
   await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
   const base = `http://127.0.0.1:${server.address().port}`;
-  const testModel = { id: "test", name: "Test", reasoning: false, input: ["text"], contextWindow: 32000, maxTokens: 4096, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, ...model };
+  const testModel = {
+    id: "test",
+    name: "Test",
+    reasoning: false,
+    input: ["text"],
+    contextWindow: 32000,
+    maxTokens: 4096,
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    ...model,
+  };
   // The `anthropic` provider at a path naming api.anthropic.com gets every
   // default Pi gives Anthropic's own endpoint, message threads included.
   const providerId = anthropic ? "anthropic" : "cli-test";
-  api.atomicJson(join(dir, "models.json"), { providers: { [providerId]: anthropic
-    ? { api: "anthropic-messages", baseUrl: `${base}/api.anthropic.com`, apiKey: "test-only", models: [testModel] }
-    : { api: "openai-completions", baseUrl: `${base}/v1`, apiKey: "test-only", models: [testModel] } } });
+  api.atomicJson(join(dir, "models.json"), {
+    providers: {
+      [providerId]: anthropic
+        ? {
+            api: "anthropic-messages",
+            baseUrl: `${base}/api.anthropic.com`,
+            apiKey: "test-only",
+            models: [testModel],
+          }
+        : {
+            api: "openai-completions",
+            baseUrl: `${base}/v1`,
+            apiKey: "test-only",
+            models: [testModel],
+          },
+    },
+  });
   const workspace = await api.workspaceCommand(dir, ["add", dir]);
   await api.workspaceCommand(dir, ["access", workspace.id, access]);
   const hookService = hooks ? await startHooks(dir, hooks) : undefined;
@@ -101,44 +194,92 @@ async function fixture(t, { access = "full", hooks, anthropic = false, model = {
   t.after(async () => {
     await daemon.stop();
     if (hooks) await api.stopCliHooks(hookService);
-    server.closeAllConnections(); server.close();
+    server.closeAllConnections();
+    server.close();
     rmSync(dir, { recursive: true, force: true });
   });
   return { dir, daemon, workspace, steps, requests, headers, requestCount, providerId };
 }
 
 function ownerFor(documentId = "owner") {
-  const events = [], listeners = new Set(), waiters = [];
+  const events = [],
+    listeners = new Set(),
+    waiters = [];
   let destroyed = false;
-  return { events, id: 0, kind: "remote", documentId, isDestroyed: () => destroyed,
-    onInvalidated(listener) { listeners.add(listener); return () => listeners.delete(listener); },
+  return {
+    events,
+    id: 0,
+    kind: "remote",
+    documentId,
+    isDestroyed: () => destroyed,
+    onInvalidated(listener) {
+      listeners.add(listener);
+      return () => listeners.delete(listener);
+    },
     send(channel, value) {
       events.push({ channel, value });
-      for (const waiter of waiters.filter((entry) => entry.channel === channel)) { waiters.splice(waiters.indexOf(waiter), 1); waiter.resolve(value); }
+      for (const waiter of waiters.filter((entry) => entry.channel === channel)) {
+        waiters.splice(waiters.indexOf(waiter), 1);
+        waiter.resolve(value);
+      }
     },
     /** The first event on `channel`: one already sent, or the next one. */
     next(channel) {
       const sent = events.find((event) => event.channel === channel);
-      return sent ? Promise.resolve(sent.value) : new Promise((resolve) => waiters.push({ channel, resolve }));
+      return sent
+        ? Promise.resolve(sent.value)
+        : new Promise((resolve) => waiters.push({ channel, resolve }));
     },
-    invalidate() { destroyed = true; for (const listener of listeners) listener(); },
-    of(channel) { return events.filter((event) => event.channel === channel).map((event) => event.value); } };
+    invalidate() {
+      destroyed = true;
+      for (const listener of listeners) listener();
+    },
+    of(channel) {
+      return events.filter((event) => event.channel === channel).map((event) => event.value);
+    },
+  };
 }
 
 /** The ordinary ingress order: reserve, durably append the user message, settle, hand off. */
-async function beginTurn({ daemon, workspace, providerId = "cli-test" }, chatId, { streamId = `stream-${chatId}`, owner = ownerFor(), usageSource = "chat", text = "Hello", create = true } = {}) {
-  if (create) await daemon.chatStore.create({ id: chatId, title: chatId, workspaceId: workspace.id });
-  const lease = daemon.llmClient.beginChatTurn(chatId, streamId, owner.documentId); assert.ok(lease, "the turn was admitted");
+async function beginTurn(
+  { daemon, workspace, providerId = "cli-test" },
+  chatId,
+  {
+    streamId = `stream-${chatId}`,
+    owner = ownerFor(),
+    usageSource = "chat",
+    text = "Hello",
+    create = true,
+  } = {},
+) {
+  if (create)
+    await daemon.chatStore.create({ id: chatId, title: chatId, workspaceId: workspace.id });
+  const lease = daemon.llmClient.beginChatTurn(chatId, streamId, owner.documentId);
+  assert.ok(lease, "the turn was admitted");
   await daemon.chatStore.appendMessage(chatId, { role: "user", content: text });
   lease.settleAsyncWork();
-  const started = await daemon.llmClient.start(streamId, { chatId, workspaceId: workspace.id, providerId, model: "test", messages: [{ role: "user", content: text }] }, owner, { usageSource });
+  const started = await daemon.llmClient.start(
+    streamId,
+    {
+      chatId,
+      workspaceId: workspace.id,
+      providerId,
+      model: "test",
+      messages: [{ role: "user", content: text }],
+    },
+    owner,
+    { usageSource },
+  );
   return { lease, owner, streamId, started };
 }
 
-const assistantMessages = async (daemon, chatId) => (await daemon.chatStore.get(chatId)).messages.filter((message) => message.role === "assistant");
+const assistantMessages = async (daemon, chatId) =>
+  (await daemon.chatStore.get(chatId)).messages.filter((message) => message.role === "assistant");
 
 /** Only a settled generation lets another owner take the chat's session lease. */
-function assertSessionReleased(daemon, chatId) { api.acquireLease(daemon.sessionPath(chatId))(); }
+function assertSessionReleased(daemon, chatId) {
+  api.acquireLease(daemon.sessionPath(chatId))();
+}
 
 test("a completed turn saves one answer, tells the client, and frees the chat", async (t) => {
   const f = await fixture(t);
@@ -149,7 +290,10 @@ test("a completed turn saves one answer, tells the client, and frees the chat", 
   const [done] = owner.of("chat:done");
   assert.equal(done.content, "Answer");
   assert.equal(done.timeline.status, "completed");
-  assert.deepEqual((await assistantMessages(f.daemon, "complete")).map((message) => message.content), ["Answer"]);
+  assert.deepEqual(
+    (await assistantMessages(f.daemon, "complete")).map((message) => message.content),
+    ["Answer"],
+  );
   assert.equal(owner.of("chat:error").length, 0);
   assert.equal(f.daemon.llmClient.isChatBusy("complete"), false);
   assert.deepEqual(f.daemon.activity.snapshot().activeChatIds, []);
@@ -160,7 +304,9 @@ test("a failing activity listener cannot leave the session lease held after idle
   const f = await fixture(t);
   f.steps.push(reply("Answer"));
   let armed = false;
-  const remove = f.daemon.onActivityChange(() => { if (armed) throw new Error("listener failed"); });
+  const remove = f.daemon.onActivityChange(() => {
+    if (armed) throw new Error("listener failed");
+  });
   t.after(remove);
   const { started } = await beginTurn(f, "listener");
   assert.equal(started, true);
@@ -174,7 +320,9 @@ test("a failing activity listener cannot leave the session lease held after idle
 test("a run that cannot register gives the chat back and does not hold shutdown", async (t) => {
   const f = await fixture(t);
   let armed = true;
-  const remove = f.daemon.onActivityChange(() => { if (armed) throw new Error("listener failed"); });
+  const remove = f.daemon.onActivityChange(() => {
+    if (armed) throw new Error("listener failed");
+  });
   t.after(remove);
   await assert.rejects(beginTurn(f, "unregistered"), /listener failed/u);
   armed = false;
@@ -189,15 +337,29 @@ test("a run that cannot register gives the chat back and does not hold shutdown"
 
 test("a chat holds one turn at a time and the daemon holds three chats", async (t) => {
   const { daemon } = await fixture(t);
-  const leases = ["one", "two", "three"].map((id) => daemon.llmClient.beginChatTurn(id, `s-${id}`, "owner"));
+  const leases = ["one", "two", "three"].map((id) =>
+    daemon.llmClient.beginChatTurn(id, `s-${id}`, "owner"),
+  );
   assert.ok(leases.every(Boolean));
-  assert.equal(daemon.llmClient.beginChatTurn("one", "s-again", "other"), null, "a second turn cannot share a chat");
-  assert.equal(daemon.llmClient.beginChatTurn("four", "s-four", "owner"), null, "a fourth chat waits for a slot");
-  leases[0].settleAsyncWork(); leases[0].release();
+  assert.equal(
+    daemon.llmClient.beginChatTurn("one", "s-again", "other"),
+    null,
+    "a second turn cannot share a chat",
+  );
+  assert.equal(
+    daemon.llmClient.beginChatTurn("four", "s-four", "owner"),
+    null,
+    "a fourth chat waits for a slot",
+  );
+  leases[0].settleAsyncWork();
+  leases[0].release();
   await tick();
   const later = daemon.llmClient.beginChatTurn("four", "s-four", "owner");
   assert.ok(later, "a released reservation frees its slot");
-  for (const lease of [later, leases[1], leases[2]]) { lease.settleAsyncWork(); lease.release(); }
+  for (const lease of [later, leases[1], leases[2]]) {
+    lease.settleAsyncWork();
+    lease.release();
+  }
 });
 
 test("a turn cannot begin on a chat that is being deleted", async (t) => {
@@ -205,23 +367,49 @@ test("a turn cannot begin on a chat that is being deleted", async (t) => {
   const release = daemon.deletion.begin("deleting");
   assert.equal(daemon.llmClient.beginChatTurn("deleting", "stream", "owner"), null);
   release();
-  const lease = daemon.llmClient.beginChatTurn("deleting", "stream", "owner"); assert.ok(lease);
-  lease.settleAsyncWork(); lease.release();
+  const lease = daemon.llmClient.beginChatTurn("deleting", "stream", "owner");
+  assert.ok(lease);
+  lease.settleAsyncWork();
+  lease.release();
 });
 
 test("only the reservation's own settled turn may start a generation", async (t) => {
-  const f = await fixture(t), { daemon, workspace } = f;
+  const f = await fixture(t),
+    { daemon, workspace } = f;
   await daemon.chatStore.create({ id: "owned", title: "Owned", workspaceId: workspace.id });
-  const owner = ownerFor(), params = { chatId: "owned", workspaceId: workspace.id, providerId: "cli-test", model: "test", messages: [{ role: "user", content: "Hello" }] };
+  const owner = ownerFor(),
+    params = {
+      chatId: "owned",
+      workspaceId: workspace.id,
+      providerId: "cli-test",
+      model: "test",
+      messages: [{ role: "user", content: "Hello" }],
+    };
   const lease = daemon.llmClient.beginChatTurn("owned", "stream", owner.documentId);
-  assert.equal(await daemon.llmClient.start("stream", params, owner, { usageSource: "chat" }), false, "preparation is still pending");
+  assert.equal(
+    await daemon.llmClient.start("stream", params, owner, { usageSource: "chat" }),
+    false,
+    "preparation is still pending",
+  );
   lease.settleAsyncWork();
-  assert.equal(await daemon.llmClient.start("other-stream", params, owner, { usageSource: "chat" }), false, "another turn id");
-  assert.equal(await daemon.llmClient.start("stream", params, ownerFor("stranger"), { usageSource: "chat" }), false, "another owner");
+  assert.equal(
+    await daemon.llmClient.start("other-stream", params, owner, { usageSource: "chat" }),
+    false,
+    "another turn id",
+  );
+  assert.equal(
+    await daemon.llmClient.start("stream", params, ownerFor("stranger"), { usageSource: "chat" }),
+    false,
+    "another owner",
+  );
   assert.equal(f.requests.length, 0);
   assertSessionReleased(daemon, "owned");
   lease.release();
-  assert.equal(await daemon.llmClient.start("stream", params, owner, { usageSource: "chat" }), false, "the reservation is gone");
+  assert.equal(
+    await daemon.llmClient.start("stream", params, owner, { usageSource: "chat" }),
+    false,
+    "the reservation is gone",
+  );
   assert.equal(owner.events.length, 0);
 });
 
@@ -252,7 +440,10 @@ test("a stop after the first delta keeps the partial answer exactly once", async
   const [error] = owner.of("chat:error");
   assert.equal(error.cancelled, true);
   assert.equal(error.timeline.cancellationOrigin, "user_stop");
-  assert.deepEqual((await assistantMessages(f.daemon, "mid-stop")).map((message) => message.content), ["Partial"]);
+  assert.deepEqual(
+    (await assistantMessages(f.daemon, "mid-stop")).map((message) => message.content),
+    ["Partial"],
+  );
   assert.equal(owner.of("chat:error").length, 1, "one terminal event");
 });
 
@@ -269,7 +460,11 @@ test("stops are bound to the owner and stream they name", async (t) => {
   assert.equal(f.daemon.llmClient.cancelRun(streamId), true);
   await f.daemon.llmClient.waitForChatIdle("scoped-stop");
   assert.equal(owner.of("chat:error")[0].timeline.cancellationOrigin, "user_stop");
-  assert.equal(f.daemon.llmClient.cancelRun(streamId), false, "a settled run cannot be stopped again");
+  assert.equal(
+    f.daemon.llmClient.cancelRun(streamId),
+    false,
+    "a settled run cannot be stopped again",
+  );
 });
 
 test("an owner that goes away ends its run and the journal keeps the terminal", async (t) => {
@@ -281,7 +476,10 @@ test("an owner that goes away ends its run and the journal keeps the terminal", 
   owner.invalidate();
   await f.daemon.llmClient.waitForChatIdle("owner-gone");
   assert.equal(owner.events.length, before, "a destroyed owner is not written to");
-  assert.deepEqual((await assistantMessages(f.daemon, "owner-gone")).map((message) => message.content), ["Partial"]);
+  assert.deepEqual(
+    (await assistantMessages(f.daemon, "owner-gone")).map((message) => message.content),
+    ["Partial"],
+  );
   const journal = f.daemon.runs.read(streamId, 0).events;
   assert.deepEqual([journal.at(-1).type, journal.at(-1).terminal], ["cancelled", true]);
   assertSessionReleased(f.daemon, "owner-gone");
@@ -298,7 +496,11 @@ test("a provider failure is an uncancelled error and a replacement turn is unaff
   f.steps.push(reply("Recovered"));
   const second = await beginTurn(f, "replaced", { streamId: "second", create: false });
   await f.daemon.llmClient.waitForChatIdle("replaced");
-  assert.equal(f.daemon.llmClient.cancel("first", first.owner.documentId), false, "the old stream no longer names a run");
+  assert.equal(
+    f.daemon.llmClient.cancel("first", first.owner.documentId),
+    false,
+    "the old stream no longer names a run",
+  );
   assert.equal(second.owner.of("chat:done")[0].content, "Recovered");
   assert.equal(first.owner.of("chat:done").length, 0);
 });
@@ -306,7 +508,8 @@ test("a provider failure is an uncancelled error and a replacement turn is unaff
 test("a failed final save reports the error and is retried once as the partial answer", async (t) => {
   const f = await fixture(t);
   f.steps.push(reply("Answer"));
-  const append = f.daemon.chatStore.appendMessage, assistantWrites = [];
+  const append = f.daemon.chatStore.appendMessage,
+    assistantWrites = [];
   f.daemon.chatStore.appendMessage = async (...args) => {
     if (args[1].role !== "assistant") return append(...args);
     assistantWrites.push(args[1]);
@@ -322,8 +525,15 @@ test("a failed final save reports the error and is retried once as the partial a
   assert.equal(assistantWrites.length, 2);
   assert.equal(error.timeline.status, "failed");
   const stored = await assistantMessages(f.daemon, "save-fault");
-  assert.deepEqual(stored.map((message) => message.content), ["Answer"]);
-  assert.equal(stored[0].timeline.status, "failed", "the record agrees with what the client was told");
+  assert.deepEqual(
+    stored.map((message) => message.content),
+    ["Answer"],
+  );
+  assert.equal(
+    stored[0].timeline.status,
+    "failed",
+    "the record agrees with what the client was told",
+  );
   assertSessionReleased(f.daemon, "save-fault");
 });
 
@@ -350,21 +560,44 @@ test("shutdown stops running work, keeps its partial answer, and admits nothing 
   const { owner } = await beginTurn(f, "draining-run");
   await until(() => owner.of("chat:delta").length > 0, "the first delta");
   const stopping = f.daemon.stop();
-  assert.equal(f.daemon.llmClient.beginChatTurn("late", "stream", "owner"), null, "admission closes before the first await");
+  assert.equal(
+    f.daemon.llmClient.beginChatTurn("late", "stream", "owner"),
+    null,
+    "admission closes before the first await",
+  );
   await stopping;
   assert.equal(owner.of("chat:error")[0].timeline.cancellationOrigin, "application_shutdown");
-  assert.deepEqual((await assistantMessages(f.daemon, "draining-run")).map((message) => message.content), ["Partial"]);
+  assert.deepEqual(
+    (await assistantMessages(f.daemon, "draining-run")).map((message) => message.content),
+    ["Partial"],
+  );
   assert.deepEqual(f.daemon.activity.snapshot().activeChatIds, []);
   assertSessionReleased(f.daemon, "draining-run");
 });
 
 test("a reservation that shutdown revoked cannot start afterwards", async (t) => {
-  const f = await fixture(t), { daemon, workspace } = f;
+  const f = await fixture(t),
+    { daemon, workspace } = f;
   await daemon.chatStore.create({ id: "revoked", title: "Revoked", workspaceId: workspace.id });
-  const owner = ownerFor(), lease = daemon.llmClient.beginChatTurn("revoked", "stream", owner.documentId);
+  const owner = ownerFor(),
+    lease = daemon.llmClient.beginChatTurn("revoked", "stream", owner.documentId);
   lease.settleAsyncWork();
   await daemon.stop();
-  assert.equal(await daemon.llmClient.start("stream", { chatId: "revoked", workspaceId: workspace.id, providerId: "cli-test", model: "test", messages: [{ role: "user", content: "Hello" }] }, owner, { usageSource: "chat" }), false);
+  assert.equal(
+    await daemon.llmClient.start(
+      "stream",
+      {
+        chatId: "revoked",
+        workspaceId: workspace.id,
+        providerId: "cli-test",
+        model: "test",
+        messages: [{ role: "user", content: "Hello" }],
+      },
+      owner,
+      { usageSource: "chat" },
+    ),
+    false,
+  );
   assert.equal(f.requests.length, 0);
   assert.equal(owner.events.length, 0);
 });
@@ -373,12 +606,29 @@ test("idle waiters see work through a reservation handing off to its generation"
   const f = await fixture(t);
   await f.daemon.chatStore.create({ id: "handoff", title: "Handoff", workspaceId: f.workspace.id });
   f.steps.push(hangAfter("Working"));
-  const owner = ownerFor(), lease = f.daemon.llmClient.beginChatTurn("handoff", "stream", owner.documentId);
+  const owner = ownerFor(),
+    lease = f.daemon.llmClient.beginChatTurn("handoff", "stream", owner.documentId);
   let idle = false;
-  const waiting = f.daemon.llmClient.waitForChatIdle("handoff").then(() => { idle = true; });
+  const waiting = f.daemon.llmClient.waitForChatIdle("handoff").then(() => {
+    idle = true;
+  });
   await f.daemon.chatStore.appendMessage("handoff", { role: "user", content: "Hello" });
   lease.settleAsyncWork();
-  assert.equal(await f.daemon.llmClient.start("stream", { chatId: "handoff", workspaceId: f.workspace.id, providerId: "cli-test", model: "test", messages: [{ role: "user", content: "Hello" }] }, owner, { usageSource: "chat" }), true);
+  assert.equal(
+    await f.daemon.llmClient.start(
+      "stream",
+      {
+        chatId: "handoff",
+        workspaceId: f.workspace.id,
+        providerId: "cli-test",
+        model: "test",
+        messages: [{ role: "user", content: "Hello" }],
+      },
+      owner,
+      { usageSource: "chat" },
+    ),
+    true,
+  );
   await until(() => owner.of("chat:delta").length > 0, "the first delta");
   await tick();
   assert.equal(idle, false, "the handoff is not idle");
@@ -391,7 +641,11 @@ test("idle waiters see work through a reservation handing off to its generation"
 // C11: a tool call in an `ask` workspace waits on the person's answer.
 
 /** Runs one turn up to its approval prompt. */
-async function awaitingApproval(f, chatId, { tool = "list_dir", args = { path: "." }, owner = ownerFor() } = {}) {
+async function awaitingApproval(
+  f,
+  chatId,
+  { tool = "list_dir", args = { path: "." }, owner = ownerFor() } = {},
+) {
   f.steps.push(callTool(tool, args), reply("Finished"));
   const turn = await beginTurn(f, chatId, { owner });
   await until(() => owner.of("chat:approval").length > 0, "the approval prompt");
@@ -400,23 +654,67 @@ async function awaitingApproval(f, chatId, { tool = "list_dir", args = { path: "
 test("every raised approval reports one decision, and it matches the outcome", async () => {
   const run = async ({ raised = () => {}, publish }) => {
     const decisions = [];
-    const approvals = api.createDaemonApprovals({ raised, resolved: (id, decision) => decisions.push(decision) });
-    const outcome = await approvals.request({ streamId: "stream", toolCallId: "call", toolName: "list_dir", summary: "List" }, new AbortController().signal, "owner", (prompt) => publish(approvals, prompt));
+    const approvals = api.createDaemonApprovals({
+      raised,
+      resolved: (id, decision) => decisions.push(decision),
+    });
+    const outcome = await approvals.request(
+      { streamId: "stream", toolCallId: "call", toolName: "list_dir", summary: "List" },
+      new AbortController().signal,
+      "owner",
+      (prompt) => publish(approvals, prompt),
+    );
     return { outcome, decisions };
   };
-  const allow = (approvals, prompt) => assert.equal(approvals.approve(prompt.approvalId, "allow", "owner"), true);
-  assert.deepEqual(await run({ publish: allow }), { outcome: "allowed", decisions: ["allow"] }, "answered during delivery");
-  assert.deepEqual(await run({ publish: (approvals, prompt) => { allow(approvals, prompt); throw new Error("send failed"); } }),
-    { outcome: "allowed", decisions: ["allow"] }, "answered, then delivery failed");
-  assert.deepEqual(await run({ publish: () => { throw new Error("send failed"); } }), { outcome: "unavailable", decisions: ["cancelled"] });
-  assert.deepEqual(await run({ raised: () => { throw new Error("attention failed"); }, publish: () => assert.fail("never delivered") }),
-    { outcome: "unavailable", decisions: ["cancelled"] }, "attention may have changed before it threw");
-  assert.deepEqual(await run({ publish: (approvals, prompt) => { setImmediate(() => approvals.approve(prompt.approvalId, "deny", "owner")); } }),
-    { outcome: "denied", decisions: ["deny"] }, "the ordinary path reports once too");
+  const allow = (approvals, prompt) =>
+    assert.equal(approvals.approve(prompt.approvalId, "allow", "owner"), true);
+  assert.deepEqual(
+    await run({ publish: allow }),
+    { outcome: "allowed", decisions: ["allow"] },
+    "answered during delivery",
+  );
+  assert.deepEqual(
+    await run({
+      publish: (approvals, prompt) => {
+        allow(approvals, prompt);
+        throw new Error("send failed");
+      },
+    }),
+    { outcome: "allowed", decisions: ["allow"] },
+    "answered, then delivery failed",
+  );
+  assert.deepEqual(
+    await run({
+      publish: () => {
+        throw new Error("send failed");
+      },
+    }),
+    { outcome: "unavailable", decisions: ["cancelled"] },
+  );
+  assert.deepEqual(
+    await run({
+      raised: () => {
+        throw new Error("attention failed");
+      },
+      publish: () => assert.fail("never delivered"),
+    }),
+    { outcome: "unavailable", decisions: ["cancelled"] },
+    "attention may have changed before it threw",
+  );
+  assert.deepEqual(
+    await run({
+      publish: (approvals, prompt) => {
+        setImmediate(() => approvals.approve(prompt.approvalId, "deny", "owner"));
+      },
+    }),
+    { outcome: "denied", decisions: ["deny"] },
+    "the ordinary path reports once too",
+  );
 });
 
 const toolResult = (owner) => owner.of("chat:tool").find((event) => event.phase !== "call")?.phase;
-const toolResultSeen = (request) => JSON.stringify(request.messages.filter((message) => message.role === "tool"));
+const toolResultSeen = (request) =>
+  JSON.stringify(request.messages.filter((message) => message.role === "tool"));
 
 test("an allowed tool call runs once, and only the owner or a host may answer", async (t) => {
   const f = await fixture(t, { access: "ask" });
@@ -425,11 +723,23 @@ test("an allowed tool call runs once, and only the owner or a host may answer", 
   assert.equal(approval.toolName, "list_dir");
   assert.equal(approval.summary, "List folder: .");
   assert.deepEqual(f.daemon.activity.snapshot().approvalChatIds, ["allow"]);
-  assert.equal(f.daemon.llmClient.approve(approval.approvalId, "allow", "stranger"), false, "another owner cannot answer");
+  assert.equal(
+    f.daemon.llmClient.approve(approval.approvalId, "allow", "stranger"),
+    false,
+    "another owner cannot answer",
+  );
   assert.equal(f.daemon.llmClient.approve("approval_unknown", "allow", owner.documentId), false);
   assert.equal(f.daemon.llmClient.approve(approval.approvalId, "allow", owner.documentId), true);
-  assert.equal(f.daemon.llmClient.approve(approval.approvalId, "deny", owner.documentId), false, "the first answer stands");
-  assert.equal(f.daemon.llmClient.approveAsHost(approval.approvalId, "deny"), false, "the first answer stands for a host too");
+  assert.equal(
+    f.daemon.llmClient.approve(approval.approvalId, "deny", owner.documentId),
+    false,
+    "the first answer stands",
+  );
+  assert.equal(
+    f.daemon.llmClient.approveAsHost(approval.approvalId, "deny"),
+    false,
+    "the first answer stands for a host too",
+  );
   await f.daemon.llmClient.waitForChatIdle("allow");
   assert.equal(toolResult(owner), "result");
   assert.match(toolResultSeen(f.requests[1]), /visible\.txt/u);
@@ -440,7 +750,11 @@ test("a denied tool call never runs and the model hears the refusal", async (t) 
   const f = await fixture(t, { access: "ask" });
   writeFileSync(join(f.dir, "visible.txt"), "x");
   const { approval, streamId } = await awaitingApproval(f, "deny");
-  assert.equal(f.daemon.llmClient.approveAsHost(approval.approvalId, "deny"), true, "a paired desktop can answer any run");
+  assert.equal(
+    f.daemon.llmClient.approveAsHost(approval.approvalId, "deny"),
+    true,
+    "a paired desktop can answer any run",
+  );
   await f.daemon.llmClient.waitForChatIdle("deny");
   const seen = toolResultSeen(f.requests[1]);
   assert.doesNotMatch(seen, /visible\.txt/u);
@@ -455,7 +769,11 @@ test("a stop during an approval wait cancels the prompt and the tool never runs"
   const { owner, approval } = await awaitingApproval(f, "stop-approval");
   await f.daemon.llmClient.cancelChat("stop-approval", "user_stop");
   await f.daemon.llmClient.waitForChatIdle("stop-approval");
-  assert.equal(f.daemon.llmClient.approve(approval.approvalId, "allow", owner.documentId), false, "a lapsed prompt cannot be answered");
+  assert.equal(
+    f.daemon.llmClient.approve(approval.approvalId, "allow", owner.documentId),
+    false,
+    "a lapsed prompt cannot be answered",
+  );
   assert.equal(f.daemon.runs.resolution(approval.approvalId)?.decision, "cancelled");
   assert.equal(f.requests.length, 1, "no tool result went back to the provider");
   assert.equal(owner.of("chat:tool").filter((event) => event.phase === "result").length, 0);
@@ -504,15 +822,23 @@ test("a native visual on a served chat is saved on the reply and reaches the pho
   f.steps.push(callTool("render_ui", { title: "Revenue", markup }), reply("Here is revenue."));
   await beginTurn(f, "visual");
   await f.daemon.llmClient.waitForChatIdle("visual");
-  assert.match(toolResultSeen(f.requests[1]), /Shown as text: phones and Macs paired to this server show \\"Revenue\\" as the text below/u);
+  assert.match(
+    toolResultSeen(f.requests[1]),
+    /Shown as text: phones and Macs paired to this server show \\"Revenue\\" as the text below/u,
+  );
   const [message] = await assistantMessages(f.daemon, "visual");
   assert.equal(message.content, "Here is revenue.");
   const [visual] = message.uiVisuals;
   const toolStep = message.timeline.steps.find((step) => step.toolCallId === visual.toolCallId);
   assert.ok(toolStep, "the visual is placed at its tool call in the reply's timeline");
-  const [projected] = api.projectAidenRemoteChat(await f.daemon.chatStore.get("visual")).messages.filter((entry) => entry.role === "assistant");
+  const [projected] = api
+    .projectAidenRemoteChat(await f.daemon.chatStore.get("visual"))
+    .messages.filter((entry) => entry.role === "assistant");
   assert.equal(projected.visuals.length, 1);
-  assert.match(projected.visuals[0].fallbackText, /^By month \(bar chart, 1 points\)\nmonth: Jan · revenue: 1,200$/u);
+  assert.match(
+    projected.visuals[0].fallbackText,
+    /^By month \(bar chart, 1 points\)\nmonth: Jan · revenue: 1,200$/u,
+  );
 });
 
 // Shutdown waits for whoever really holds the chat, not only for a live lease.
@@ -522,10 +848,17 @@ test("shutdown waits for a cancelled reservation whose append is still in flight
   const lease = daemon.llmClient.beginChatTurn("cancelled-append", "stream", "owner");
   lease.reserveAppendPayload(100);
   await daemon.llmClient.cancelChat("cancelled-append");
-  assert.equal(daemon.llmClient.isChatBusy("cancelled-append"), true, "the write still holds the chat");
+  assert.equal(
+    daemon.llmClient.isChatBusy("cancelled-append"),
+    true,
+    "the write still holds the chat",
+  );
   let stopped = false;
-  const stopping = daemon.stop().then(() => { stopped = true; });
-  await tick(); await tick();
+  const stopping = daemon.stop().then(() => {
+    stopped = true;
+  });
+  await tick();
+  await tick();
   assert.equal(stopped, false, "the process may not exit under an in-flight write");
   lease.settleAsyncWork();
   await stopping;
@@ -534,24 +867,66 @@ test("shutdown waits for a cancelled reservation whose append is still in flight
 
 /** A Bot chat whose authority check calls back into the test. */
 function fakeBots(onCheck, tools = []) {
-  const authority = { botId: "bot", provider: { sourceProviderId: "cli-test", sourceModelId: "test" }, managedHome: { workspaceId: "bot-workspace" } };
-  return { assertLegacyChatAllowed() {}, async assertNotPaused() {}, tools: async () => tools, instructions: async () => "Be brief.",
-    authority: { admit: async () => ({ authority, signal: new AbortController().signal, release() {}, revalidateBeforeEffect: onCheck }) } };
+  const authority = {
+    botId: "bot",
+    provider: { sourceProviderId: "cli-test", sourceModelId: "test" },
+    managedHome: { workspaceId: "bot-workspace" },
+  };
+  return {
+    assertLegacyChatAllowed() {},
+    async assertNotPaused() {},
+    tools: async () => tools,
+    instructions: async () => "Be brief.",
+    authority: {
+      admit: async () => ({
+        authority,
+        signal: new AbortController().signal,
+        release() {},
+        revalidateBeforeEffect: onCheck,
+      }),
+    },
+  };
 }
 
 async function beginBotTurn(f, chatId, owner) {
-  await f.daemon.chatStore.create({ id: chatId, title: "Bot", workspaceId: f.workspace.id, botId: "bot" });
+  await f.daemon.chatStore.create({
+    id: chatId,
+    title: "Bot",
+    workspaceId: f.workspace.id,
+    botId: "bot",
+  });
   const lease = f.daemon.llmClient.beginChatTurn(chatId, `stream-${chatId}`, owner.documentId);
   await f.daemon.chatStore.appendMessage(chatId, { role: "user", content: "Hello" });
   lease.settleAsyncWork();
-  assert.equal(await f.daemon.llmClient.start(`stream-${chatId}`, { chatId, workspaceId: f.workspace.id, providerId: "cli-test", model: "test", messages: [{ role: "user", content: "Hello" }] }, owner, { usageSource: "chat", botAudienceId: "audience" }), true);
+  assert.equal(
+    await f.daemon.llmClient.start(
+      `stream-${chatId}`,
+      {
+        chatId,
+        workspaceId: f.workspace.id,
+        providerId: "cli-test",
+        model: "test",
+        messages: [{ role: "user", content: "Hello" }],
+      },
+      owner,
+      { usageSource: "chat", botAudienceId: "audience" },
+    ),
+    true,
+  );
 }
 
 test("a stop during any Bot authority check before the prompt keeps the provider request from going out", async (t) => {
   for (const stopAt of [1, 2, 3]) {
-    const f = await fixture(t), owner = ownerFor(), chatId = `bot-${stopAt}`;
+    const f = await fixture(t),
+      owner = ownerFor(),
+      chatId = `bot-${stopAt}`;
     let checks = 0;
-    f.daemon.setBots(fakeBots(async () => { checks += 1; if (checks === stopAt) await f.daemon.llmClient.cancelChat(chatId, "user_stop"); }));
+    f.daemon.setBots(
+      fakeBots(async () => {
+        checks += 1;
+        if (checks === stopAt) await f.daemon.llmClient.cancelChat(chatId, "user_stop");
+      }),
+    );
     await beginBotTurn(f, chatId, owner);
     await f.daemon.llmClient.waitForChatIdle(chatId);
     assert.equal(f.requests.length, 0, `no provider request after a stop during check ${stopAt}`);
@@ -561,12 +936,29 @@ test("a stop during any Bot authority check before the prompt keeps the provider
 });
 
 test("a stop during a Bot tool's authority check keeps the tool from running", async (t) => {
-  const f = await fixture(t), owner = ownerFor();
-  let stopping = false, ran = 0;
-  const probe = { name: "probe", description: "Probe", parameters: { type: "object", properties: {} }, execute: async () => { ran += 1; return { content: [{ type: "text", text: "ran" }], details: {} }; } };
+  const f = await fixture(t),
+    owner = ownerFor();
+  let stopping = false,
+    ran = 0;
+  const probe = {
+    name: "probe",
+    description: "Probe",
+    parameters: { type: "object", properties: {} },
+    execute: async () => {
+      ran += 1;
+      return { content: [{ type: "text", text: "ran" }], details: {} };
+    },
+  };
   // The session's abort waits for this very check, so the stop lands without being awaited here.
-  f.daemon.setBots(fakeBots(async () => { if (stopping) void f.daemon.llmClient.cancelChat("bot-tool", "user_stop"); }, [probe]));
-  f.steps.push((response) => { stopping = true; callTool("probe", {})(response); }, reply("Finished"));
+  f.daemon.setBots(
+    fakeBots(async () => {
+      if (stopping) void f.daemon.llmClient.cancelChat("bot-tool", "user_stop");
+    }, [probe]),
+  );
+  f.steps.push((response) => {
+    stopping = true;
+    callTool("probe", {})(response);
+  }, reply("Finished"));
   await beginBotTurn(f, "bot-tool", owner);
   await f.daemon.llmClient.waitForChatIdle("bot-tool");
   assert.equal(ran, 0);
@@ -574,16 +966,40 @@ test("a stop during a Bot tool's authority check keeps the tool from running", a
 });
 
 test("a stop during a tool batch shows each unfinished call as stopped and the later call never runs", async (t) => {
-  const f = await fixture(t), owner = ownerFor();
+  const f = await fixture(t),
+    owner = ownerFor();
   let afterRan = 0;
   const started = Promise.withResolvers();
   const empty = { type: "object", properties: {} };
   // A sequential tool makes Pi run the batch one call at a time, so the stop lands before `after` starts.
-  const slow = { name: "slow", description: "Slow", parameters: empty, executionMode: "sequential",
-    execute: (_id, _params, signal) => new Promise((_, reject) => { started.resolve(); signal?.addEventListener("abort", () => reject(new Error("aborted")), { once: true }); }) };
-  const after = { name: "after", description: "After", parameters: empty, execute: async () => { afterRan += 1; return { content: [{ type: "text", text: "ran" }], details: {} }; } };
+  const slow = {
+    name: "slow",
+    description: "Slow",
+    parameters: empty,
+    executionMode: "sequential",
+    execute: (_id, _params, signal) =>
+      new Promise((_, reject) => {
+        started.resolve();
+        signal?.addEventListener("abort", () => reject(new Error("aborted")), { once: true });
+      }),
+  };
+  const after = {
+    name: "after",
+    description: "After",
+    parameters: empty,
+    execute: async () => {
+      afterRan += 1;
+      return { content: [{ type: "text", text: "ran" }], details: {} };
+    },
+  };
   f.daemon.setBots(fakeBots(async () => {}, [slow, after]));
-  f.steps.push(callTools([["slow", {}], ["after", {}]]), reply("Finished"));
+  f.steps.push(
+    callTools([
+      ["slow", {}],
+      ["after", {}],
+    ]),
+    reply("Finished"),
+  );
   await beginBotTurn(f, "batch-stop", owner);
   await started.promise;
   await f.daemon.llmClient.cancelChat("batch-stop", "user_stop");
@@ -593,87 +1009,145 @@ test("a stop during a tool batch shows each unfinished call as stopped and the l
   const [ended] = owner.of("chat:error");
   assert.equal(ended.cancelled, true);
   const tools = ended.timeline.steps.filter((step) => step.kind === "tool");
-  assert.deepEqual(tools.map((step) => [step.toolName, step.status, step.stoppedByUser]), [["slow", "cancelled", true], ["after", "cancelled", true]]);
+  assert.deepEqual(
+    tools.map((step) => [step.toolName, step.status, step.stoppedByUser]),
+    [
+      ["slow", "cancelled", true],
+      ["after", "cancelled", true],
+    ],
+  );
 });
 
-test("a run whose session lease cannot be removed still reports idle", { skip: process.platform === "win32" || process.getuid?.() === 0 }, async (t) => {
-  const f = await fixture(t);
-  f.steps.push(hangAfter("Partial"));
-  const { owner } = await beginTurn(f, "stuck-release");
-  await until(() => owner.of("chat:delta").length > 0, "the first delta");
-  const journals = join(f.dir, "daemon-chats", "journals");
-  chmodSync(journals, 0o500);
-  try {
-    const waiting = f.daemon.llmClient.waitForChatIdle("stuck-release");
-    await f.daemon.llmClient.cancelChat("stuck-release", "user_stop");
-    await Promise.race([waiting, new Promise((_, reject) => setTimeout(() => reject(new Error("the idle waiter never woke")), 5_000))]);
-    assert.equal(f.daemon.llmClient.isChatBusy("stuck-release"), false);
-  } finally { chmodSync(journals, 0o700); }
-});
+test(
+  "a run whose session lease cannot be removed still reports idle",
+  { skip: process.platform === "win32" || process.getuid?.() === 0 },
+  async (t) => {
+    const f = await fixture(t);
+    f.steps.push(hangAfter("Partial"));
+    const { owner } = await beginTurn(f, "stuck-release");
+    await until(() => owner.of("chat:delta").length > 0, "the first delta");
+    const journals = join(f.dir, "daemon-chats", "journals");
+    chmodSync(journals, 0o500);
+    try {
+      const waiting = f.daemon.llmClient.waitForChatIdle("stuck-release");
+      await f.daemon.llmClient.cancelChat("stuck-release", "user_stop");
+      await Promise.race([
+        waiting,
+        new Promise((_, reject) =>
+          setTimeout(() => reject(new Error("the idle waiter never woke")), 5_000),
+        ),
+      ]);
+      assert.equal(f.daemon.llmClient.isChatBusy("stuck-release"), false);
+    } finally {
+      chmodSync(journals, 0o700);
+    }
+  },
+);
 
 // C14: a chat deletion that a crash interrupted.
 
 test("an interrupted chat deletion blocks new turns and finishes when the server starts without Remote", async (t) => {
-  const f = await fixture(t), { dir, daemon, workspace } = f;
-  await daemon.chatStore.create({ id: "half-deleted", title: "Half deleted", workspaceId: workspace.id });
+  const f = await fixture(t),
+    { dir, daemon, workspace } = f;
+  await daemon.chatStore.create({
+    id: "half-deleted",
+    title: "Half deleted",
+    workspaceId: workspace.id,
+  });
   await daemon.chatStore.create({ id: "kept", title: "Kept", workspaceId: workspace.id });
   mkdirSync(dirname(daemon.sessionPath("half-deleted")), { recursive: true });
   writeFileSync(daemon.sessionPath("half-deleted"), "{}\n");
   api.atomicJson(join(dir, "daemon-chat-deletions.json"), ["half-deleted"]);
   const restarted = api.createDaemonChats(dir);
   t.after(() => restarted.stop());
-  assert.equal(restarted.llmClient.beginChatTurn("half-deleted", "stream", "owner"), null, "the deletion already committed");
-  const controller = new AbortController(), ready = Promise.withResolvers();
+  assert.equal(
+    restarted.llmClient.beginChatTurn("half-deleted", "stream", "owner"),
+    null,
+    "the deletion already committed",
+  );
+  const controller = new AbortController(),
+    ready = Promise.withResolvers();
   const serving = api.serve(dir, controller.signal, { onReady: ready.resolve });
   void serving.catch(ready.reject);
   await ready.promise;
-  controller.abort(); await serving;
+  controller.abort();
+  await serving;
   const after = api.createDaemonChats(dir);
   t.after(() => after.stop());
   assert.equal(await after.chatStore.get("half-deleted"), null);
   assert.equal(existsSync(after.sessionPath("half-deleted")), false);
   assert.deepEqual(JSON.parse(readFileSync(join(dir, "daemon-chat-deletions.json"), "utf8")), []);
   assert.ok(await after.chatStore.get("kept"));
-  const lease = after.llmClient.beginChatTurn("kept", "stream", "owner"); assert.ok(lease);
-  lease.settleAsyncWork(); lease.release();
+  const lease = after.llmClient.beginChatTurn("kept", "stream", "owner");
+  assert.ok(lease);
+  lease.settleAsyncWork();
+  lease.release();
 });
 
-for (const [name, record] of [["malformed", "{ not json"], ["a non-list", "{}"], ["a list of non-ids", "[123]"]]) test(`a deletion record that is ${name} closes every chat and refuses to start`, async (t) => {
-  const dir = mkdtempSync(join(tmpdir(), "aiden-tombstones-"));
-  t.after(() => rmSync(dir, { recursive: true, force: true }));
-  writeFileSync(join(dir, "daemon-chat-deletions.json"), record);
-  const daemon = api.createDaemonChats(dir);
-  t.after(() => daemon.stop());
-  assert.equal(daemon.llmClient.beginChatTurn("maybe-deleted", "stream", "owner"), null, "any chat may be one whose deletion committed");
-  await assert.rejects(daemon.recoverChatDeletions(), /deletion/u);
-  const controller = new AbortController();
-  await assert.rejects(api.serve(dir, controller.signal, { remote: false }), /deletion/u);
-  assert.equal(existsSync(join(dir, "serve.lock")), false);
-});
+for (const [name, record] of [
+  ["malformed", "{ not json"],
+  ["a non-list", "{}"],
+  ["a list of non-ids", "[123]"],
+])
+  test(`a deletion record that is ${name} closes every chat and refuses to start`, async (t) => {
+    const dir = mkdtempSync(join(tmpdir(), "aiden-tombstones-"));
+    t.after(() => rmSync(dir, { recursive: true, force: true }));
+    writeFileSync(join(dir, "daemon-chat-deletions.json"), record);
+    const daemon = api.createDaemonChats(dir);
+    t.after(() => daemon.stop());
+    assert.equal(
+      daemon.llmClient.beginChatTurn("maybe-deleted", "stream", "owner"),
+      null,
+      "any chat may be one whose deletion committed",
+    );
+    await assert.rejects(daemon.recoverChatDeletions(), /deletion/u);
+    const controller = new AbortController();
+    await assert.rejects(api.serve(dir, controller.signal, { remote: false }), /deletion/u);
+    assert.equal(existsSync(join(dir, "serve.lock")), false);
+  });
 
 test("a deletion that cannot finish keeps its chat closed without stopping the rest of the daemon", async (t) => {
-  const f = await fixture(t), { dir, daemon, workspace } = f;
+  const f = await fixture(t),
+    { dir, daemon, workspace } = f;
   await daemon.chatStore.create({ id: "stuck", title: "Stuck", workspaceId: workspace.id });
   const { rm } = fsPromises;
-  fsPromises.rm = async (path, ...rest) => { if (String(path) === daemon.sessionPath("stuck")) throw new Error("disk fault"); return rm(path, ...rest); };
+  fsPromises.rm = async (path, ...rest) => {
+    if (String(path) === daemon.sessionPath("stuck")) throw new Error("disk fault");
+    return rm(path, ...rest);
+  };
   syncBuiltinESMExports();
-  t.after(() => { fsPromises.rm = rm; syncBuiltinESMExports(); });
+  t.after(() => {
+    fsPromises.rm = rm;
+    syncBuiltinESMExports();
+  });
   api.atomicJson(join(dir, "daemon-chat-deletions.json"), ["stuck"]);
   const restarted = api.createDaemonChats(dir);
   t.after(() => restarted.stop());
   await assert.rejects(restarted.recoverChatDeletions(), /disk fault/u);
   assert.equal(restarted.llmClient.beginChatTurn("stuck", "stream", "owner"), null);
-  assert.deepEqual(JSON.parse(readFileSync(join(dir, "daemon-chat-deletions.json"), "utf8")), ["stuck"], "the tombstone stays for the next start");
-  fsPromises.rm = rm; syncBuiltinESMExports();
+  assert.deepEqual(
+    JSON.parse(readFileSync(join(dir, "daemon-chat-deletions.json"), "utf8")),
+    ["stuck"],
+    "the tombstone stays for the next start",
+  );
+  fsPromises.rm = rm;
+  syncBuiltinESMExports();
   await restarted.recoverChatDeletions();
   assert.equal(await restarted.chatStore.get("stuck"), null);
-  const lease = restarted.llmClient.beginChatTurn("stuck", "stream", "owner"); assert.ok(lease, "a finished deletion frees the id");
-  lease.settleAsyncWork(); lease.release();
+  const lease = restarted.llmClient.beginChatTurn("stuck", "stream", "owner");
+  assert.ok(lease, "a finished deletion frees the id");
+  lease.settleAsyncWork();
+  lease.release();
 });
 
 function approvalsFixture(options = {}) {
-  const raised = [], resolved = [];
-  const approvals = api.createDaemonApprovals({ raised: (prompt) => raised.push(prompt.approvalId), resolved: (id, decision) => resolved.push([id, decision]), ...options });
+  const raised = [],
+    resolved = [];
+  const approvals = api.createDaemonApprovals({
+    raised: (prompt) => raised.push(prompt.approvalId),
+    resolved: (id, decision) => resolved.push([id, decision]),
+    ...options,
+  });
   const prompt = { streamId: "stream", toolCallId: "call", toolName: "list_dir", summary: "List" };
   return { approvals, prompt, raised, resolved };
 }
@@ -681,34 +1155,71 @@ function approvalsFixture(options = {}) {
 test("an unanswered approval expires, is journaled as expired, and cannot be answered late", async () => {
   const { approvals, prompt, resolved } = approvalsFixture({ expiryMs: 10 });
   let published;
-  const outcome = await approvals.request(prompt, new AbortController().signal, "owner", (value) => { published = value; });
+  const outcome = await approvals.request(
+    prompt,
+    new AbortController().signal,
+    "owner",
+    (value) => {
+      published = value;
+    },
+  );
   assert.notEqual(outcome, "allowed");
   assert.deepEqual(resolved, [[published.approvalId, "expired"]]);
   assert.equal(approvals.approve(published.approvalId, "allow", "owner"), false);
 });
 
 test("an approval is never published to a run that is already stopping, and a failed publish fails closed", async () => {
-  const stopped = approvalsFixture(), controller = new AbortController();
+  const stopped = approvalsFixture(),
+    controller = new AbortController();
   controller.abort();
-  assert.notEqual(await stopped.approvals.request(stopped.prompt, controller.signal, "owner", () => assert.fail("published")), "allowed");
-  assert.deepEqual([stopped.raised, stopped.resolved], [[], []], "nobody saw it, so nothing is withdrawn");
+  assert.notEqual(
+    await stopped.approvals.request(stopped.prompt, controller.signal, "owner", () =>
+      assert.fail("published"),
+    ),
+    "allowed",
+  );
+  assert.deepEqual(
+    [stopped.raised, stopped.resolved],
+    [[], []],
+    "nobody saw it, so nothing is withdrawn",
+  );
   const broken = approvalsFixture();
-  assert.notEqual(await broken.approvals.request(broken.prompt, new AbortController().signal, "owner", () => { throw new Error("owner gone"); }), "allowed");
-  assert.deepEqual(broken.resolved.map(([id]) => id), broken.raised, "an undelivered prompt leaves no attention behind");
+  assert.notEqual(
+    await broken.approvals.request(broken.prompt, new AbortController().signal, "owner", () => {
+      throw new Error("owner gone");
+    }),
+    "allowed",
+  );
+  assert.deepEqual(
+    broken.resolved.map(([id]) => id),
+    broken.raised,
+    "an undelivered prompt leaves no attention behind",
+  );
 });
 
 test("the journal records how a published approval really ended", async () => {
-  const { approvals, prompt, resolved } = approvalsFixture(), controller = new AbortController();
+  const { approvals, prompt, resolved } = approvalsFixture(),
+    controller = new AbortController();
   const answered = [];
-  const allowed = approvals.request(prompt, controller.signal, "owner", (value) => answered.push(value.approvalId));
-  const denied = approvals.request(prompt, controller.signal, "owner", (value) => answered.push(value.approvalId));
-  const stopped = approvals.request(prompt, controller.signal, "owner", (value) => answered.push(value.approvalId));
+  const allowed = approvals.request(prompt, controller.signal, "owner", (value) =>
+    answered.push(value.approvalId),
+  );
+  const denied = approvals.request(prompt, controller.signal, "owner", (value) =>
+    answered.push(value.approvalId),
+  );
+  const stopped = approvals.request(prompt, controller.signal, "owner", (value) =>
+    answered.push(value.approvalId),
+  );
   assert.equal(approvals.approve(answered[0], "allow", "owner"), true);
   assert.equal(approvals.approveAsHost(answered[1], "deny"), true);
   controller.abort();
   assert.deepEqual(await Promise.all([allowed, denied]), ["allowed", "denied"]);
   assert.notEqual(await stopped, "allowed");
-  assert.deepEqual(resolved, [[answered[0], "allow"], [answered[1], "deny"], [answered[2], "cancelled"]]);
+  assert.deepEqual(resolved, [
+    [answered[0], "allow"],
+    [answered[1], "deny"],
+    [answered[2], "cancelled"],
+  ]);
 });
 
 // The custody owner on its own: legal and refused events, stale leases, and
@@ -716,17 +1227,29 @@ test("the journal records how a published approval really ended", async () => {
 
 test("custody follows the reservation to its one holder and ignores events that do not apply", () => {
   const step = (state, type) => api.transitionDaemonChat(state, { type });
-  const reserved = step(undefined, "reserved"), settled = step(reserved, "preparation_settled");
+  const reserved = step(undefined, "reserved"),
+    settled = step(reserved, "preparation_settled");
   assert.deepEqual(reserved, { holder: "lease", preparation: "pending" });
   assert.equal(step(settled, "lease_revoked"), undefined, "nothing left to wait for");
-  assert.deepEqual(step(reserved, "lease_revoked"), { holder: "settling" }, "revoked work keeps the chat");
+  assert.deepEqual(
+    step(reserved, "lease_revoked"),
+    { holder: "settling" },
+    "revoked work keeps the chat",
+  );
   assert.equal(step(step(reserved, "lease_revoked"), "preparation_settled"), undefined);
   assert.equal(step(reserved, "generation_registered"), reserved, "unsettled work cannot hand off");
   const running = step(settled, "generation_registered");
   assert.deepEqual(running, { holder: "generation" });
-  for (const type of ["reserved", "preparation_settled", "lease_revoked", "generation_registered"]) assert.equal(step(running, type), running);
+  for (const type of ["reserved", "preparation_settled", "lease_revoked", "generation_registered"])
+    assert.equal(step(running, type), running);
   assert.equal(step(running, "generation_released"), undefined);
-  for (const type of ["preparation_settled", "lease_revoked", "generation_registered", "generation_released"]) assert.equal(step(undefined, type), undefined);
+  for (const type of [
+    "preparation_settled",
+    "lease_revoked",
+    "generation_registered",
+    "generation_released",
+  ])
+    assert.equal(step(undefined, type), undefined);
 });
 
 function ownerFixture(t) {
@@ -736,18 +1259,30 @@ function ownerFixture(t) {
   return { admission, owner: new api.DaemonTurnOwner({ admission, isDeleting: () => false }) };
 }
 
-const fakeRun = (streamId) => { let settle; const settled = new Promise((resolve) => { settle = resolve; }); return { streamId, ownerId: "owner", settled, settle }; };
+const fakeRun = (streamId) => {
+  let settle;
+  const settled = new Promise((resolve) => {
+    settle = resolve;
+  });
+  return { streamId, ownerId: "owner", settled, settle };
+};
 
 test("a lease that lost its chat cannot move the turn that replaced it", (t) => {
   const { owner } = ownerFixture(t);
   const first = owner.begin("chat", "first", "owner");
-  first.settleAsyncWork(); first.release();
-  const second = owner.begin("chat", "second", "owner"); assert.ok(second);
-  first.release(); first.settleAsyncWork();
+  first.settleAsyncWork();
+  first.release();
+  const second = owner.begin("chat", "second", "owner");
+  assert.ok(second);
+  first.release();
+  first.settleAsyncWork();
   assert.equal(owner.isBusy("chat"), true);
   second.settleAsyncWork();
   const run = fakeRun("second");
-  assert.equal(owner.handoff("chat", "second", "owner", run, () => {}), true);
+  assert.equal(
+    owner.handoff("chat", "second", "owner", run, () => {}),
+    true,
+  );
   first.release();
   assert.equal(owner.run("chat"), run);
   assert.equal(owner.release("chat", fakeRun("stale")), false, "a stale run releases nothing");
@@ -759,9 +1294,15 @@ test("a lease that lost its chat cannot move the turn that replaced it", (t) => 
 test("a handoff that fails leaves the turn to its reservation", (t) => {
   const { owner } = ownerFixture(t);
   const lease = owner.begin("chat", "turn", "owner");
-  assert.equal(owner.handoff("chat", "turn", "owner", fakeRun("turn"), () => assert.fail("not settled")), false);
+  assert.equal(
+    owner.handoff("chat", "turn", "owner", fakeRun("turn"), () => assert.fail("not settled")),
+    false,
+  );
   lease.settleAsyncWork();
-  assert.equal(owner.handoff("chat", "other", "owner", fakeRun("other"), () => assert.fail("another turn")), false);
+  assert.equal(
+    owner.handoff("chat", "other", "owner", fakeRun("other"), () => assert.fail("another turn")),
+    false,
+  );
   assert.equal(owner.run("chat"), undefined);
   assert.equal(owner.isBusy("chat"), true);
   lease.release();
@@ -781,82 +1322,174 @@ function random(seed) {
 
 test("generated event orders keep one holder per chat, capacity, and honest idle answers", async (t) => {
   for (let seed = 1; seed <= 40; seed += 1) {
-    const { owner } = ownerFixture(t), next = random(seed), chats = ["a", "b", "c", "d", "e"];
-    const leases = new Map(), runs = new Map(), idle = new Map();
+    const { owner } = ownerFixture(t),
+      next = random(seed),
+      chats = ["a", "b", "c", "d", "e"];
+    const leases = new Map(),
+      runs = new Map(),
+      idle = new Map();
     const trace = [];
     for (let step = 0; step < 300; step += 1) {
-      const chat = chats[next(chats.length)], action = next(6), lease = leases.get(chat), run = runs.get(chat);
+      const chat = chats[next(chats.length)],
+        action = next(6),
+        lease = leases.get(chat),
+        run = runs.get(chat);
       trace.push(`${action}:${chat}`);
       if (action === 0) {
-        const liveChats = new Set([...runs.keys(), ...[...leases].filter(([, held]) => held.live).map(([id]) => id)]).size;
+        const liveChats = new Set([
+          ...runs.keys(),
+          ...[...leases].filter(([, held]) => held.live).map(([id]) => id),
+        ]).size;
         const blocked = leases.has(chat) || runs.has(chat) || liveChats >= 3;
         const begun = owner.begin(chat, `turn-${step}`, "owner");
         assert.equal(begun === null, blocked, `seed ${seed}: ${trace.join(" ")}`);
-        if (begun) leases.set(chat, { value: begun, turn: `turn-${step}`, live: true, settled: false });
+        if (begun)
+          leases.set(chat, { value: begun, turn: `turn-${step}`, live: true, settled: false });
       } else if (action === 1 && lease) {
-        lease.value.settleAsyncWork(); lease.settled = true;
+        lease.value.settleAsyncWork();
+        lease.settled = true;
         if (!lease.live) leases.delete(chat);
       } else if (action === 2 && lease?.live) {
-        lease.value.release(); lease.live = false;
+        lease.value.release();
+        lease.live = false;
         if (lease.settled) leases.delete(chat);
       } else if (action === 3 && lease?.live && lease.settled) {
         const started = fakeRun(lease.turn);
-        assert.equal(owner.handoff(chat, lease.turn, "owner", started, () => {}), true);
-        leases.delete(chat); runs.set(chat, started);
+        assert.equal(
+          owner.handoff(chat, lease.turn, "owner", started, () => {}),
+          true,
+        );
+        leases.delete(chat);
+        runs.set(chat, started);
       } else if (action === 4 && run) {
         assert.equal(owner.release(chat, run), true);
-        run.settle(); runs.delete(chat);
+        run.settle();
+        runs.delete(chat);
       } else if (action === 5 && !idle.has(chat) && (lease || run)) {
         const entry = { resolved: false };
         idle.set(chat, entry);
-        void owner.waitForIdle(chat).then(() => { entry.resolved = true; });
+        void owner.waitForIdle(chat).then(() => {
+          entry.resolved = true;
+        });
       }
-      for (const id of chats) assert.equal(owner.isBusy(id), leases.has(id) || runs.has(id), `seed ${seed}, ${id}: ${trace.join(" ")}`);
+      for (const id of chats)
+        assert.equal(
+          owner.isBusy(id),
+          leases.has(id) || runs.has(id),
+          `seed ${seed}, ${id}: ${trace.join(" ")}`,
+        );
       await tick();
       for (const [id, entry] of idle) {
-        if (entry.resolved) { assert.equal(owner.isBusy(id), false, `seed ${seed}: an idle waiter woke while ${id} was held`); idle.delete(id); }
+        if (entry.resolved) {
+          assert.equal(
+            owner.isBusy(id),
+            false,
+            `seed ${seed}: an idle waiter woke while ${id} was held`,
+          );
+          idle.delete(id);
+        }
       }
     }
     const remaining = owner.closeIntake();
-    assert.deepEqual(new Set(remaining), new Set([...leases.keys(), ...runs.keys()]), "shutdown knows every holder");
+    assert.deepEqual(
+      new Set(remaining),
+      new Set([...leases.keys(), ...runs.keys()]),
+      "shutdown knows every holder",
+    );
     assert.equal(owner.begin("z", "late", "owner"), null);
-    for (const [chat, lease] of leases) { lease.value.settleAsyncWork(); lease.value.release(); assert.equal(owner.isBusy(chat), false); }
-    for (const [chat, run] of runs) { owner.release(chat, run); run.settle(); }
+    for (const [chat, lease] of leases) {
+      lease.value.settleAsyncWork();
+      lease.value.release();
+      assert.equal(owner.isBusy(chat), false);
+    }
+    for (const [chat, run] of runs) {
+      owner.release(chat, run);
+      run.settle();
+    }
   }
 });
 
 const posix = { skip: process.platform === "win32" };
-const commandHook = (command, matcher) => [{ ...(matcher ? { matcher } : {}), hooks: [{ type: "command", command }] }];
+const commandHook = (command, matcher) => [
+  { ...(matcher ? { matcher } : {}), hooks: [{ type: "command", command }] },
+];
 const answer = (value) => `printf '%s' '${JSON.stringify(value)}'`;
-const askBeforeListing = { PreToolUse: commandHook(answer({ hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "ask", permissionDecisionReason: "Listing needs a look." } }), "LS") };
+const askBeforeListing = {
+  PreToolUse: commandHook(
+    answer({
+      hookSpecificOutput: {
+        hookEventName: "PreToolUse",
+        permissionDecision: "ask",
+        permissionDecisionReason: "Listing needs a look.",
+      },
+    }),
+    "LS",
+  ),
+};
 /** Holds back the first finish of a turn and lets the continued one end. */
-const keepGoingOnce = { Stop: commandHook(`grep -q '"stop_hook_active":false' && ${answer({ decision: "block", reason: "Run the tests first." })} || true`) };
+const keepGoingOnce = {
+  Stop: commandHook(
+    `grep -q '"stop_hook_active":false' && ${answer({ decision: "block", reason: "Run the tests first." })} || true`,
+  ),
+};
 
-test("a hook's ask reaches the phone on a full-access chat, and the person's answer decides", posix, async (t) => {
-  const f = await fixture(t, { hooks: askBeforeListing });
-  writeFileSync(join(f.dir, "visible.txt"), "x");
-  const denied = await awaitingApproval(f, "hook-deny");
-  assert.match(denied.approval.summary, /Listing needs a look\./u);
-  assert.match(denied.approval.summary, /List folder: \./u, "the person still sees what would run");
-  assert.equal(f.daemon.llmClient.approve(denied.approval.approvalId, "deny", denied.owner.documentId), true);
-  await f.daemon.llmClient.waitForChatIdle("hook-deny");
-  assert.doesNotMatch(toolResultSeen(f.requests[1]), /visible\.txt/u);
-  const allowed = await awaitingApproval(f, "hook-allow");
-  assert.equal(f.daemon.llmClient.approve(allowed.approval.approvalId, "allow", allowed.owner.documentId), true);
-  await f.daemon.llmClient.waitForChatIdle("hook-allow");
-  assert.match(toolResultSeen(f.requests.at(-1)), /visible\.txt/u);
-});
+test(
+  "a hook's ask reaches the phone on a full-access chat, and the person's answer decides",
+  posix,
+  async (t) => {
+    const f = await fixture(t, { hooks: askBeforeListing });
+    writeFileSync(join(f.dir, "visible.txt"), "x");
+    const denied = await awaitingApproval(f, "hook-deny");
+    assert.match(denied.approval.summary, /Listing needs a look\./u);
+    assert.match(
+      denied.approval.summary,
+      /List folder: \./u,
+      "the person still sees what would run",
+    );
+    assert.equal(
+      f.daemon.llmClient.approve(denied.approval.approvalId, "deny", denied.owner.documentId),
+      true,
+    );
+    await f.daemon.llmClient.waitForChatIdle("hook-deny");
+    assert.doesNotMatch(toolResultSeen(f.requests[1]), /visible\.txt/u);
+    const allowed = await awaitingApproval(f, "hook-allow");
+    assert.equal(
+      f.daemon.llmClient.approve(allowed.approval.approvalId, "allow", allowed.owner.documentId),
+      true,
+    );
+    await f.daemon.llmClient.waitForChatIdle("hook-allow");
+    assert.match(toolResultSeen(f.requests.at(-1)), /visible\.txt/u);
+  },
+);
 
-test("a long hook reason can't push the end of the tool request out of the phone's summary", posix, async (t) => {
-  const reason = "r".repeat(600), path = `${"a".repeat(1_650)}-tail`;
-  const f = await fixture(t, { hooks: { PreToolUse: commandHook(answer({ hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "ask", permissionDecisionReason: reason } }), "LS") } });
-  const { approval } = await awaitingApproval(f, "hook-long", { args: { path } });
-  const shownOnPhone = approval.summary.slice(0, 2_000); // Remote's limit on an approval summary.
-  assert.ok(shownOnPhone.includes(path), "the whole request is shown");
-  assert.match(shownOnPhone, /rrr/u, "and so is the start of the reason");
-  assert.equal(f.daemon.llmClient.approveAsHost(approval.approvalId, "deny"), true);
-  await f.daemon.llmClient.waitForChatIdle("hook-long");
-});
+test(
+  "a long hook reason can't push the end of the tool request out of the phone's summary",
+  posix,
+  async (t) => {
+    const reason = "r".repeat(600),
+      path = `${"a".repeat(1_650)}-tail`;
+    const f = await fixture(t, {
+      hooks: {
+        PreToolUse: commandHook(
+          answer({
+            hookSpecificOutput: {
+              hookEventName: "PreToolUse",
+              permissionDecision: "ask",
+              permissionDecisionReason: reason,
+            },
+          }),
+          "LS",
+        ),
+      },
+    });
+    const { approval } = await awaitingApproval(f, "hook-long", { args: { path } });
+    const shownOnPhone = approval.summary.slice(0, 2_000); // Remote's limit on an approval summary.
+    assert.ok(shownOnPhone.includes(path), "the whole request is shown");
+    assert.match(shownOnPhone, /rrr/u, "and so is the start of the reason");
+    assert.equal(f.daemon.llmClient.approveAsHost(approval.approvalId, "deny"), true);
+    await f.daemon.llmClient.waitForChatIdle("hook-long");
+  },
+);
 
 test("a hook's ask on a turn nobody attends is refused without a prompt", posix, async (t) => {
   const f = await fixture(t, { hooks: askBeforeListing });
@@ -885,36 +1518,77 @@ test("a Stop hook keeps the turn going once, and the chat saves one answer", pos
 test("a stop while a Stop hook runs ends the turn instead of continuing it", posix, async (t) => {
   const marker = join(mkdtempSync(join(tmpdir(), "aiden-hook-marker-")), "started");
   t.after(() => rmSync(dirname(marker), { recursive: true, force: true }));
-  const f = await fixture(t, { hooks: { Stop: commandHook(`touch '${marker}'; sleep 30; ${answer({ decision: "block", reason: "Keep going." })}`) } });
+  const f = await fixture(t, {
+    hooks: {
+      Stop: commandHook(
+        `touch '${marker}'; sleep 30; ${answer({ decision: "block", reason: "Keep going." })}`,
+      ),
+    },
+  });
   f.steps.push(reply("First"));
   const { owner } = await beginTurn(f, "hook-stop");
   await until(() => existsSync(marker), "the Stop hook");
   await f.daemon.llmClient.cancelChat("hook-stop", "user_stop");
-  await until(() => !f.daemon.llmClient.isChatBusy("hook-stop"), "the stop, well before the hook's own 30 seconds");
+  await until(
+    () => !f.daemon.llmClient.isChatBusy("hook-stop"),
+    "the stop, well before the hook's own 30 seconds",
+  );
   assert.equal(f.requests.length, 1, "the stopped turn never asks the provider again");
   assert.equal(owner.of("chat:error")[0]?.cancelled, true);
   assertSessionReleased(f.daemon, "hook-stop");
 });
 
-test("a prompt hook's context follows its prompt as a separate message, on that turn and every later one", posix, async (t) => {
-  // The same shape the desktop journals (prompt-prefix-stability: "a turn's hook context is journaled after its prompt").
-  const additionalContext = answer({ hookSpecificOutput: { hookEventName: "UserPromptSubmit", additionalContext: "ticket: OPS-12" } });
-  const f = await fixture(t, { hooks: { UserPromptSubmit: commandHook(`grep -q OPS-TRIGGER && ${additionalContext} || true`) } });
-  f.steps.push(reply("First"), reply("Second"));
-  await beginTurn(f, "hook-context", { streamId: "hook-context-1", text: "Check OPS-TRIGGER" });
-  await f.daemon.llmClient.waitForChatIdle("hook-context");
-  await beginTurn(f, "hook-context", { streamId: "hook-context-2", text: "Two", create: false });
-  await f.daemon.llmClient.waitForChatIdle("hook-context");
-  const text = (message) => (typeof message.content === "string" ? message.content : message.content.map((part) => part.text ?? "").join(""));
-  const conversation = (request) => request.messages.filter((message) => message.role !== "system").map((message) => [message.role, text(message)]);
-  const [[, prompt], [role, context]] = conversation(f.requests[0]);
-  assert.equal(prompt, "Check OPS-TRIGGER");
-  assert.equal(role, "user");
-  // The desktop's own helpers build the expected message (each hook's context
-  // fenced under its name, "grep" from the command), so both hosts send the same text.
-  assert.equal(context, text(api.hookContextMessage(api.hookTurnContextText([api.fenceAsData('Context from hook "grep"', "ticket: OPS-12")]), 0)));
-  assert.deepEqual(conversation(f.requests[1]), [["user", "Check OPS-TRIGGER"], ["user", context], ["assistant", "First"], ["user", "Two"]]);
-});
+test(
+  "a prompt hook's context follows its prompt as a separate message, on that turn and every later one",
+  posix,
+  async (t) => {
+    // The same shape the desktop journals (prompt-prefix-stability: "a turn's hook context is journaled after its prompt").
+    const additionalContext = answer({
+      hookSpecificOutput: {
+        hookEventName: "UserPromptSubmit",
+        additionalContext: "ticket: OPS-12",
+      },
+    });
+    const f = await fixture(t, {
+      hooks: {
+        UserPromptSubmit: commandHook(`grep -q OPS-TRIGGER && ${additionalContext} || true`),
+      },
+    });
+    f.steps.push(reply("First"), reply("Second"));
+    await beginTurn(f, "hook-context", { streamId: "hook-context-1", text: "Check OPS-TRIGGER" });
+    await f.daemon.llmClient.waitForChatIdle("hook-context");
+    await beginTurn(f, "hook-context", { streamId: "hook-context-2", text: "Two", create: false });
+    await f.daemon.llmClient.waitForChatIdle("hook-context");
+    const text = (message) =>
+      typeof message.content === "string"
+        ? message.content
+        : message.content.map((part) => part.text ?? "").join("");
+    const conversation = (request) =>
+      request.messages
+        .filter((message) => message.role !== "system")
+        .map((message) => [message.role, text(message)]);
+    const [[, prompt], [role, context]] = conversation(f.requests[0]);
+    assert.equal(prompt, "Check OPS-TRIGGER");
+    assert.equal(role, "user");
+    // The desktop's own helpers build the expected message (each hook's context
+    // fenced under its name, "grep" from the command), so both hosts send the same text.
+    assert.equal(
+      context,
+      text(
+        api.hookContextMessage(
+          api.hookTurnContextText([api.fenceAsData('Context from hook "grep"', "ticket: OPS-12")]),
+          0,
+        ),
+      ),
+    );
+    assert.deepEqual(conversation(f.requests[1]), [
+      ["user", "Check OPS-TRIGGER"],
+      ["user", context],
+      ["assistant", "First"],
+      ["user", "Two"],
+    ]);
+  },
+);
 
 test("an Anthropic chat sends its whole conversation on every turn, never a message thread", async (t) => {
   const f = await fixture(t, { anthropic: true });
@@ -923,34 +1597,78 @@ test("an Anthropic chat sends its whole conversation on every turn, never a mess
   await f.daemon.llmClient.waitForChatIdle("threads");
   await beginTurn(f, "threads", { streamId: "threads-2", text: "Two", create: false });
   await f.daemon.llmClient.waitForChatIdle("threads");
-  assert.deepEqual((await assistantMessages(f.daemon, "threads")).map((message) => message.content), ["First", "Second"]);
+  assert.deepEqual(
+    (await assistantMessages(f.daemon, "threads")).map((message) => message.content),
+    ["First", "Second"],
+  );
   assert.equal(f.requests.length, 2);
   for (const [index, request] of f.requests.entries()) {
     assert.equal("thread" in request, false, `request ${index + 1} has no thread`);
     assert.doesNotMatch(String(f.headers[index]["anthropic-beta"] ?? ""), /message-threads/u);
   }
   // The second turn carries the first exchange itself, not a pointer to it.
-  assert.deepEqual(f.requests[1].messages.map((message) => message.role), ["user", "assistant", "user"]);
+  assert.deepEqual(
+    f.requests[1].messages.map((message) => message.role),
+    ["user", "assistant", "user"],
+  );
 });
 
 /** An Anthropic Messages reply that calls one tool. */
 const anthropicCallTool = (name, args) => (response) => {
-  response.write(anthropicEvent("message_start", { message: { id: `msg_${name}`, type: "message", role: "assistant", model: "test", content: [], stop_reason: null, usage: { input_tokens: 10, output_tokens: 0 } } }));
-  response.write(anthropicEvent("content_block_start", { index: 0, content_block: { type: "tool_use", id: "toolu_1", name, input: {} } }));
-  response.write(anthropicEvent("content_block_delta", { index: 0, delta: { type: "input_json_delta", partial_json: JSON.stringify(args) } }));
+  response.write(
+    anthropicEvent("message_start", {
+      message: {
+        id: `msg_${name}`,
+        type: "message",
+        role: "assistant",
+        model: "test",
+        content: [],
+        stop_reason: null,
+        usage: { input_tokens: 10, output_tokens: 0 },
+      },
+    }),
+  );
+  response.write(
+    anthropicEvent("content_block_start", {
+      index: 0,
+      content_block: { type: "tool_use", id: "toolu_1", name, input: {} },
+    }),
+  );
+  response.write(
+    anthropicEvent("content_block_delta", {
+      index: 0,
+      delta: { type: "input_json_delta", partial_json: JSON.stringify(args) },
+    }),
+  );
   response.write(anthropicEvent("content_block_stop", { index: 0 }));
-  response.write(anthropicEvent("message_delta", { delta: { stop_reason: "tool_use" }, usage: { output_tokens: 4 } }));
+  response.write(
+    anthropicEvent("message_delta", {
+      delta: { stop_reason: "tool_use" },
+      usage: { output_tokens: 4 },
+    }),
+  );
   response.end(anthropicEvent("message_stop", {}));
 };
 
 /** Every `cache_control` marker in a request body. */
-const cacheMarkers = (value) => Array.isArray(value) ? value.reduce((total, item) => total + cacheMarkers(item), 0)
-  : value && typeof value === "object" ? Object.entries(value).reduce((total, [key, child]) => total + (key === "cache_control" ? 1 : cacheMarkers(child)), 0) : 0;
+const cacheMarkers = (value) =>
+  Array.isArray(value)
+    ? value.reduce((total, item) => total + cacheMarkers(item), 0)
+    : value && typeof value === "object"
+      ? Object.entries(value).reduce(
+          (total, [key, child]) => total + (key === "cache_control" ? 1 : cacheMarkers(child)),
+          0,
+        )
+      : 0;
 
 test("an Anthropic chat with always-on memory caches the system prompt before the memory on its own", async (t) => {
   const f = await fixture(t, { anthropic: true });
   const fact = "Prefers metric units";
-  f.steps.push(anthropicCallTool("remember_fact", { fact, alwaysOn: true }), anthropicReply("Saved."), anthropicReply("Noted."));
+  f.steps.push(
+    anthropicCallTool("remember_fact", { fact, alwaysOn: true }),
+    anthropicReply("Saved."),
+    anthropicReply("Noted."),
+  );
   await beginTurn(f, "head", { streamId: "head-1", text: "Remember that I prefer metric units." });
   await f.daemon.llmClient.waitForChatIdle("head");
   // The first turn told no memory, so its system prompt stays one block.
@@ -971,7 +1689,9 @@ test("an Anthropic chat with always-on memory caches the system prompt before th
 const largePromptReply = (text) => (response) => {
   response.write(chunk({ role: "assistant", content: text }));
   response.write(chunk({}, "stop"));
-  response.write(`data: ${JSON.stringify({ id: "test", object: "chat.completion.chunk", choices: [], usage: { prompt_tokens: 200_000, completion_tokens: 4, total_tokens: 200_004 } })}\n\n`);
+  response.write(
+    `data: ${JSON.stringify({ id: "test", object: "chat.completion.chunk", choices: [], usage: { prompt_tokens: 200_000, completion_tokens: 4, total_tokens: 200_004 } })}\n\n`,
+  );
   response.end("data: [DONE]\n\n");
 };
 
@@ -984,7 +1704,12 @@ const largePromptReply = (text) => (response) => {
  * cache's lifetime and nothing can be sent on the tick.
  */
 async function requestsAcrossLongReply(t, { profile, usageSource = "chat" }) {
-  const f = await fixture(t, { model: { promptCache: { short: 300 }, cost: { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 3.75 } } });
+  const f = await fixture(t, {
+    model: {
+      promptCache: { short: 300 },
+      cost: { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 3.75 },
+    },
+  });
   if (profile !== undefined) api.atomicJson(join(f.dir, "aiden.json"), profile);
   f.steps.push(largePromptReply("First"));
   await beginTurn(f, "warming", { usageSource });
@@ -993,14 +1718,20 @@ async function requestsAcrossLongReply(t, { profile, usageSource = "chat" }) {
   // Pi's refresh timers for a 5-minute cache, armed while the second turn runs.
   // Date is real, so a timer armed a few milliseconds after Pi's clock read is a little shorter.
   const refreshDelay = getCacheWarmingDelayMs(300_000);
-  const refreshTimers = [], mockedSetTimeout = globalThis.setTimeout;
+  const refreshTimers = [],
+    mockedSetTimeout = globalThis.setTimeout;
   globalThis.setTimeout = function (callback, delay, ...rest) {
     if (delay > refreshDelay - 1_000 && delay <= refreshDelay) refreshTimers.push(delay);
     return mockedSetTimeout.call(this, callback, delay, ...rest);
   };
   f.steps.push(hangAfter("Still"));
   const owner = ownerFor();
-  const second = beginTurn(f, "warming", { streamId: "warming-2", create: false, usageSource, owner });
+  const second = beginTurn(f, "warming", {
+    streamId: "warming-2",
+    create: false,
+    usageSource,
+    owner,
+  });
   await owner.next("chat:delta");
   await second;
   t.mock.timers.tick(refreshDelay);
@@ -1014,41 +1745,95 @@ async function requestsAcrossLongReply(t, { profile, usageSource = "chat" }) {
 
 test("aiden serve keeps a chat's cache warm mid-reply only when the profile turns warming on", async (t) => {
   await t.test("on", async (t) => {
-    const { seen, refresh, refreshTimers } = await requestsAcrossLongReply(t, { profile: { cacheWarmingEnabled: true } });
+    const { seen, refresh, refreshTimers } = await requestsAcrossLongReply(t, {
+      profile: { cacheWarmingEnabled: true },
+    });
     assert.equal(refreshTimers, 1, "Pi armed one refresh");
     assert.equal(seen, 3, "one refresh request");
-    assert.equal(refresh.max_completion_tokens ?? refresh.max_tokens, 1, "the refresh asks for a single token");
+    assert.equal(
+      refresh.max_completion_tokens ?? refresh.max_tokens,
+      1,
+      "the refresh asks for a single token",
+    );
   });
   // Pi's own default warms after every turn; the server sends nothing extra unless asked.
-  for (const [name, profile] of [["no setting", undefined], ["off", { cacheWarmingEnabled: false }], ["not a boolean", { cacheWarmingEnabled: "true" }]]) {
-    await t.test(name, async (t) => assert.deepEqual(await requestsAcrossLongReply(t, { profile }), { seen: 2, refresh: undefined, refreshTimers: 0 }));
+  for (const [name, profile] of [
+    ["no setting", undefined],
+    ["off", { cacheWarmingEnabled: false }],
+    ["not a boolean", { cacheWarmingEnabled: "true" }],
+  ]) {
+    await t.test(name, async (t) =>
+      assert.deepEqual(await requestsAcrossLongReply(t, { profile }), {
+        seen: 2,
+        refresh: undefined,
+        refreshTimers: 0,
+      }),
+    );
   }
   await t.test("a scheduled run, with warming on", async (t) => {
-    assert.deepEqual(await requestsAcrossLongReply(t, { profile: { cacheWarmingEnabled: true }, usageSource: "scheduled" }), { seen: 2, refresh: undefined, refreshTimers: 0 });
+    assert.deepEqual(
+      await requestsAcrossLongReply(t, {
+        profile: { cacheWarmingEnabled: true },
+        usageSource: "scheduled",
+      }),
+      { seen: 2, refresh: undefined, refreshTimers: 0 },
+    );
   });
 });
 
 test("a server session warms only for an attended turn on a profile that opts in", () => {
   const dir = mkdtempSync(join(tmpdir(), "aiden-daemon-warming-"));
   try {
-    assert.equal(api.SettingsManager.create(dir, dir).getCacheWarmingMode(), "idle", "Pi's own default keeps warming between turns");
-    assert.equal(api.daemonSettingsManager(dir, dir, { attended: true }).getCacheWarmingMode(), "off");
+    assert.equal(
+      api.SettingsManager.create(dir, dir).getCacheWarmingMode(),
+      "idle",
+      "Pi's own default keeps warming between turns",
+    );
+    assert.equal(
+      api.daemonSettingsManager(dir, dir, { attended: true }).getCacheWarmingMode(),
+      "off",
+    );
     // Pi's own warming setting does not override the profile's switch.
     api.atomicJson(join(dir, "settings.json"), { cacheWarming: "idle" });
-    assert.equal(api.daemonSettingsManager(dir, dir, { attended: true }).getCacheWarmingMode(), "off");
+    assert.equal(
+      api.daemonSettingsManager(dir, dir, { attended: true }).getCacheWarmingMode(),
+      "off",
+    );
     api.atomicJson(join(dir, "aiden.json"), { cacheWarmingEnabled: true });
-    assert.equal(api.daemonSettingsManager(dir, dir, { attended: true }).getCacheWarmingMode(), "streaming");
-    assert.equal(api.daemonSettingsManager(dir, dir, { attended: false }).getCacheWarmingMode(), "off");
+    assert.equal(
+      api.daemonSettingsManager(dir, dir, { attended: true }).getCacheWarmingMode(),
+      "streaming",
+    );
+    assert.equal(
+      api.daemonSettingsManager(dir, dir, { attended: false }).getCacheWarmingMode(),
+      "off",
+    );
     // Pi would replay an hour-long request at the default lifetime, so a turn that asked for the hour is not warmed by Pi.
-    assert.equal(api.daemonSettingsManager(dir, dir, { attended: true, longRetention: true }).getCacheWarmingMode(), "off");
+    assert.equal(
+      api
+        .daemonSettingsManager(dir, dir, { attended: true, longRetention: true })
+        .getCacheWarmingMode(),
+      "off",
+    );
     writeFileSync(join(dir, "aiden.json"), "{ not json");
-    assert.equal(api.daemonSettingsManager(dir, dir, { attended: true }).getCacheWarmingMode(), "off");
-  } finally { rmSync(dir, { recursive: true, force: true }); }
+    assert.equal(
+      api.daemonSettingsManager(dir, dir, { attended: true }).getCacheWarmingMode(),
+      "off",
+    );
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });
 
 /** Every `cache_control.ttl` an Anthropic request body asks for. */
-const cacheTtls = (value) => Array.isArray(value) ? value.flatMap(cacheTtls)
-  : value && typeof value === "object" ? Object.entries(value).flatMap(([key, child]) => key === "cache_control" ? [child.ttl ?? "default"] : cacheTtls(child)) : [];
+const cacheTtls = (value) =>
+  Array.isArray(value)
+    ? value.flatMap(cacheTtls)
+    : value && typeof value === "object"
+      ? Object.entries(value).flatMap(([key, child]) =>
+          key === "cache_control" ? [child.ttl ?? "default"] : cacheTtls(child),
+        )
+      : [];
 
 test("aiden serve asks for the hour-long cache only on an attended chat whose profile opts in", async (t) => {
   // The `anthropic` provider keeps an hour only for a model named as its own family.
@@ -1061,9 +1846,16 @@ test("aiden serve asks for the hour-long cache only on an attended chat whose pr
     return [...new Set(cacheTtls(f.requests[before]))];
   };
   assert.deepEqual(await ttlsOf("no-setting", "chat"), ["default"]);
-  api.atomicJson(join(f.dir, "aiden.json"), { cacheWarmingEnabled: true, longPromptCacheRetention: true });
+  api.atomicJson(join(f.dir, "aiden.json"), {
+    cacheWarmingEnabled: true,
+    longPromptCacheRetention: true,
+  });
   assert.deepEqual(await ttlsOf("attended", "chat"), ["1h"]);
-  assert.equal(f.daemon.isKeepingChatWarm("attended"), false, "an hour-long cache is not kept warm as well");
+  assert.equal(
+    f.daemon.isKeepingChatWarm("attended"),
+    false,
+    "an hour-long cache is not kept warm as well",
+  );
   assert.deepEqual(await ttlsOf("scheduled", "scheduled"), ["default"]);
   assert.deepEqual(await ttlsOf("telegram", "telegram"), ["default"]);
 });
@@ -1078,14 +1870,27 @@ test("aiden serve asks for the hour-long cache only on an attended chat whose pr
 function idleRefreshDriver(t, f, chatId) {
   const refreshDelay = getCacheWarmingDelayMs(300_000);
   t.mock.timers.enable({ apis: ["setTimeout", "Date"], now: Date.now() });
-  const pending = new Set(), mockedSetTimeout = globalThis.setTimeout, mockedClearTimeout = globalThis.clearTimeout;
+  const pending = new Set(),
+    mockedSetTimeout = globalThis.setTimeout,
+    mockedClearTimeout = globalThis.clearTimeout;
   globalThis.setTimeout = function (callback, delay, ...rest) {
     const watched = delay > refreshDelay - 1_000 && delay <= refreshDelay;
-    const timer = mockedSetTimeout.call(this, (...args) => { pending.delete(timer); callback(...args); }, delay, ...rest);
+    const timer = mockedSetTimeout.call(
+      this,
+      (...args) => {
+        pending.delete(timer);
+        callback(...args);
+      },
+      delay,
+      ...rest,
+    );
     if (watched) pending.add(timer);
     return timer;
   };
-  globalThis.clearTimeout = function (timer) { pending.delete(timer); return mockedClearTimeout.call(this, timer); };
+  globalThis.clearTimeout = function (timer) {
+    pending.delete(timer);
+    return mockedClearTimeout.call(this, timer);
+  };
   // The mocked `Date` stands still between ticks, so the wait is bounded on the real clock.
   const settled = async (condition) => {
     const deadline = performance.now() + 10_000;
@@ -1108,24 +1913,35 @@ function idleRefreshDriver(t, f, chatId) {
       return f.requests.slice(start);
     },
     /** Waits until the chat's refresh is armed, and returns how many refresh timers are pending. */
-    async armed() { await settled(() => pending.size > 0 || !f.daemon.isKeepingChatWarm(chatId)); return pending.size; },
+    async armed() {
+      await settled(() => pending.size > 0 || !f.daemon.isKeepingChatWarm(chatId));
+      return pending.size;
+    },
     /** How many refresh timers are pending now. */
     pendingRefreshes: () => pending.size,
     /** Passes one warming delay on the mocked clock, and returns the requests sent meanwhile. */
     async passRefreshDelay() {
       const start = f.requests.length;
       t.mock.timers.tick(refreshDelay);
-      for (let turns = 0; turns < 20; turns += 1) await new Promise((resolve) => setImmediate(resolve));
+      for (let turns = 0; turns < 20; turns += 1)
+        await new Promise((resolve) => setImmediate(resolve));
       return f.requests.slice(start);
     },
-    reset() { t.mock.timers.reset(); },
+    reset() {
+      t.mock.timers.reset();
+    },
   };
 }
 
 test("aiden serve keeps a settled attended chat warm within the desktop's idle limits", async (t) => {
   // Pricier than the mid-reply case: a settled chat must still save $0.05 on a 15% chance of a reply.
   const warmingFixture = async (t, profile = { cacheWarmingEnabled: true }) => {
-    const f = await fixture(t, { model: { promptCache: { short: 300 }, cost: { input: 15, output: 75, cacheRead: 1.5, cacheWrite: 18.75 } } });
+    const f = await fixture(t, {
+      model: {
+        promptCache: { short: 300 },
+        cost: { input: 15, output: 75, cacheRead: 1.5, cacheWrite: 18.75 },
+      },
+    });
     api.atomicJson(join(f.dir, "aiden.json"), profile);
     return f;
   };
@@ -1140,8 +1956,16 @@ test("aiden serve keeps a settled attended chat warm within the desktop's idle l
     driver.reset();
     assert.equal(refreshes.length, 3);
     for (const refresh of refreshes) {
-      assert.equal(refresh.max_completion_tokens ?? refresh.max_tokens, 1, "a refresh asks for a single token");
-      assert.deepEqual(refresh.messages, f.requests[0].messages, "a refresh replays the reply's own request");
+      assert.equal(
+        refresh.max_completion_tokens ?? refresh.max_tokens,
+        1,
+        "a refresh asks for a single token",
+      );
+      assert.deepEqual(
+        refresh.messages,
+        f.requests[0].messages,
+        "a refresh replays the reply's own request",
+      );
     }
     assert.equal(f.daemon.isKeepingChatWarm("idle"), false);
   });
@@ -1201,7 +2025,10 @@ test("aiden serve keeps a settled attended chat warm within the desktop's idle l
     driver.reset();
   });
   // The memory prompt is not part of the chat, so turning memory off writes nothing the summary revision sees.
-  for (const [name, memoryEnabled, expected] of [["a told fact still approved keeps warming", true, 3], ["turning memory off ends warming with no refresh", false, 0]]) {
+  for (const [name, memoryEnabled, expected] of [
+    ["a told fact still approved keeps warming", true, 3],
+    ["turning memory off ends warming with no refresh", false, 0],
+  ]) {
     await t.test(name, async (t) => {
       const f = await warmingFixture(t);
       const driver = idleRefreshDriver(t, f, "told");
@@ -1213,27 +2040,41 @@ test("aiden serve keeps a settled attended chat warm within the desktop's idle l
       await beginTurn(f, "told", { text: "What do I keep?", streamId: "told-2", create: false });
       await f.daemon.llmClient.waitForChatIdle("told");
       const told = f.requests.at(-1);
-      assert.match(JSON.stringify(told.messages[0]), /bees on the roof/u, "the system prompt told the chat the fact");
+      assert.match(
+        JSON.stringify(told.messages[0]),
+        /bees on the roof/u,
+        "the system prompt told the chat the fact",
+      );
       assert.equal(await driver.armed(), 1);
       api.atomicJson(join(f.dir, "aiden.json"), { cacheWarmingEnabled: true, memoryEnabled });
       const refreshes = await driver.drain();
       driver.reset();
       assert.equal(refreshes.length, expected);
-      for (const refresh of refreshes) assert.deepEqual(refresh.messages, told.messages, "a refresh replays the told request");
+      for (const refresh of refreshes)
+        assert.deepEqual(refresh.messages, told.messages, "a refresh replays the told request");
       assert.equal(f.daemon.isKeepingChatWarm("told"), false);
     });
   }
   await t.test("revoking the device whose turn it was ends warming", async (t) => {
     const f = await warmingFixture(t);
     f.steps.push(largePromptReply("First"));
-    await beginTurn(f, "revoked", { owner: ownerFor(`${api.remoteDeviceDocumentPrefix("phone")}stream`) });
+    await beginTurn(f, "revoked", {
+      owner: ownerFor(`${api.remoteDeviceDocumentPrefix("phone")}stream`),
+    });
     await f.daemon.llmClient.waitForChatIdle("revoked");
     f.daemon.releaseDeviceAttendance("another-phone");
-    assert.equal(f.daemon.isKeepingChatWarm("revoked"), true, "another device's revocation leaves it");
+    assert.equal(
+      f.daemon.isKeepingChatWarm("revoked"),
+      true,
+      "another device's revocation leaves it",
+    );
     f.daemon.releaseDeviceAttendance("phone");
     assert.equal(f.daemon.isKeepingChatWarm("revoked"), false);
   });
-  for (const [name, profile, usageSource] of [["warming off", { cacheWarmingEnabled: false }, "chat"], ["a scheduled run", { cacheWarmingEnabled: true }, "scheduled"]]) {
+  for (const [name, profile, usageSource] of [
+    ["warming off", { cacheWarmingEnabled: false }, "chat"],
+    ["a scheduled run", { cacheWarmingEnabled: true }, "scheduled"],
+  ]) {
     await t.test(name, async (t) => {
       const f = await warmingFixture(t, profile);
       f.steps.push(largePromptReply("First"));
@@ -1246,18 +2087,31 @@ test("aiden serve keeps a settled attended chat warm within the desktop's idle l
 
 test("a server session sends Codex requests over a WebSocket unless SSE is asked for or a proxy is set", (t) => {
   const dir = mkdtempSync(join(tmpdir(), "aiden-daemon-transport-"));
-  const proxyNames = ["HTTPS_PROXY", "https_proxy", "ALL_PROXY", "all_proxy", "NO_PROXY", "no_proxy"];
+  const proxyNames = [
+    "HTTPS_PROXY",
+    "https_proxy",
+    "ALL_PROXY",
+    "all_proxy",
+    "NO_PROXY",
+    "no_proxy",
+  ];
   const saved = proxyNames.map((name) => [name, process.env[name]]);
   for (const name of proxyNames) delete process.env[name];
   t.after(() => {
-    for (const [name, value] of saved) { if (value === undefined) delete process.env[name]; else process.env[name] = value; }
+    for (const [name, value] of saved) {
+      if (value === undefined) delete process.env[name];
+      else process.env[name] = value;
+    }
     rmSync(dir, { recursive: true, force: true });
   });
   // Pi's default sends previous-response deltas over the socket.
   assert.equal(api.SettingsManager.create(dir, dir).getTransport(), "auto");
   assert.equal(api.daemonSettingsManager(dir, dir, { attended: true }).getTransport(), "websocket");
   api.atomicJson(join(dir, "settings.json"), { transport: "websocket-cached" });
-  assert.equal(api.daemonSettingsManager(dir, dir, { attended: false }).getTransport(), "websocket");
+  assert.equal(
+    api.daemonSettingsManager(dir, dir, { attended: false }).getTransport(),
+    "websocket",
+  );
   api.atomicJson(join(dir, "settings.json"), { transport: "sse" });
   assert.equal(api.daemonSettingsManager(dir, dir, { attended: true }).getTransport(), "sse");
   api.atomicJson(join(dir, "settings.json"), {});
@@ -1267,7 +2121,10 @@ test("a server session sends Codex requests over a WebSocket unless SSE is asked
   process.env.NO_PROXY = "chatgpt.com";
   assert.equal(api.daemonSettingsManager(dir, dir, { attended: true }).getTransport(), "websocket");
   // A helper agent's worker is a short-lived child process: SSE, whatever settings.json asks.
-  api.atomicJson(join(dir, "settings.json"), { transport: "websocket-cached", cacheWarming: "streaming" });
+  api.atomicJson(join(dir, "settings.json"), {
+    transport: "websocket-cached",
+    cacheWarming: "streaming",
+  });
   const worker = api.subagentWorkerSettingsManager(dir, dir);
   assert.equal(worker.getTransport(), "sse");
   assert.equal(worker.getCacheWarmingMode(), "off");
@@ -1277,12 +2134,19 @@ test("a server session sends Codex requests over a WebSocket unless SSE is asked
 const replyAtContext = (text, promptTokens) => (response) => {
   response.write(chunk({ role: "assistant", content: text }));
   response.write(chunk({}, "stop"));
-  response.write(`data: ${JSON.stringify({ id: "test", object: "chat.completion.chunk", choices: [], usage: { prompt_tokens: promptTokens, completion_tokens: 4, total_tokens: promptTokens + 4 } })}\n\n`);
+  response.write(
+    `data: ${JSON.stringify({ id: "test", object: "chat.completion.chunk", choices: [], usage: { prompt_tokens: promptTokens, completion_tokens: 4, total_tokens: promptTokens + 4 } })}\n\n`,
+  );
   response.end("data: [DONE]\n\n");
 };
 
-const compactionSummaries = (daemon, chatId) => readFileSync(daemon.sessionPath(chatId), "utf8").split("\n").filter(Boolean)
-  .map((line) => JSON.parse(line)).filter((entry) => entry.type === "compaction").map((entry) => entry.summary);
+const compactionSummaries = (daemon, chatId) =>
+  readFileSync(daemon.sessionPath(chatId), "utf8")
+    .split("\n")
+    .filter(Boolean)
+    .map((line) => JSON.parse(line))
+    .filter((entry) => entry.type === "compaction")
+    .map((entry) => entry.summary);
 
 test("a fact the chat was told and then forgot does not survive a serve compaction", async (t) => {
   const f = await fixture(t);
@@ -1294,12 +2158,20 @@ test("a fact the chat was told and then forgot does not survive a serve compacti
     await beginTurn(f, "forgets", { text, create, streamId: `stream-${f.requests.length}` });
     await f.daemon.llmClient.waitForChatIdle("forgets");
   };
-  await run("Remember my hobby.", [callTool("remember_fact", { fact, alwaysOn: true }), reply("Saved.")], true);
+  await run(
+    "Remember my hobby.",
+    [callTool("remember_fact", { fact, alwaysOn: true }), reply("Saved.")],
+    true,
+  );
   const factId = /\[memory:([^\]]+)\]/u.exec(toolResultSeen(f.requests[1]))?.[1];
   assert.ok(factId, "the fact was saved");
   // The always-on prompt tells the next turn, and the reply restates it.
   await run("What do I do on Tuesdays?", [reply("You play the theremin on Tuesdays.")]);
-  assert.match(JSON.stringify(f.requests[2].messages[0]), /theremin/u, "the system prompt told the chat");
+  assert.match(
+    JSON.stringify(f.requests[2].messages[0]),
+    /theremin/u,
+    "the system prompt told the chat",
+  );
   // The fact is forgotten, the turn ends past the threshold, and the summarizer restates it anyway.
   await run("Forget my hobby.", [
     callTool("forget_fact", { factId }),
@@ -1322,21 +2194,44 @@ test("a fact the chat learned only from the always-on prompt, then removed elsew
     await f.daemon.llmClient.waitForChatIdle(chatId);
   };
   // Another chat saves the fact, so no copy of it is in this chat's history.
-  await run("saver", "Remember my bees.", [callTool("remember_fact", { fact, alwaysOn: true }), reply("Saved.")], true);
+  await run(
+    "saver",
+    "Remember my bees.",
+    [callTool("remember_fact", { fact, alwaysOn: true }), reply("Saved.")],
+    true,
+  );
   const factId = /\[memory:([^\]]+)\]/u.exec(toolResultSeen(f.requests[1]))?.[1];
   assert.ok(factId, "the fact was saved");
   await run("told", "Hello.", [reply("Hello.")], true);
-  assert.match(JSON.stringify(f.requests[2].messages[0]), /bees on the roof/u, "the always-on prompt told the chat");
+  assert.match(
+    JSON.stringify(f.requests[2].messages[0]),
+    /bees on the roof/u,
+    "the always-on prompt told the chat",
+  );
   // The other chat removes it, and this chat's next turn ends past the threshold; the summarizer states it anyway.
-  await run("saver", "Forget my bees.", [callTool("forget_fact", { factId }), reply("Forgotten.")], false);
+  await run(
+    "saver",
+    "Forget my bees.",
+    [callTool("forget_fact", { factId }), reply("Forgotten.")],
+    false,
+  );
   const before = f.requests.length;
-  await run("told", "What is new?", [
-    replyAtContext("Nothing much.", 30_000),
-    reply("## Goal\nThe user keeps bees on the roof.\nThe user said hello."),
-  ], false);
+  await run(
+    "told",
+    "What is new?",
+    [
+      replyAtContext("Nothing much.", 30_000),
+      reply("## Goal\nThe user keeps bees on the roof.\nThe user said hello."),
+    ],
+    false,
+  );
   const sent = f.requests.slice(before);
   assert.ok(sent.length >= 2, "the turn and its summarizer requests");
-  assert.doesNotMatch(JSON.stringify(sent), /bees/iu, "the removed fact reaches neither the turn nor the summarizer");
+  assert.doesNotMatch(
+    JSON.stringify(sent),
+    /bees/iu,
+    "the removed fact reaches neither the turn nor the summarizer",
+  );
   const [summary] = compactionSummaries(f.daemon, "told");
   assert.ok(summary, "the compaction was stored");
   assert.doesNotMatch(summary, /bees/iu, "the stored summary does not state the removed fact");
@@ -1346,30 +2241,72 @@ test("a fact the chat learned only from the always-on prompt, then removed elsew
 test("a serve compaction whose summary still states a fact across lines is not stored", async (t) => {
   const f = await fixture(t);
   api.atomicJson(join(f.dir, "settings.json"), { compaction: { keepRecentTokens: 1 } });
-  f.steps.push(callTool("remember_fact", { fact: "Owns a red canoe", alwaysOn: true }), reply("Saved."));
+  f.steps.push(
+    callTool("remember_fact", { fact: "Owns a red canoe", alwaysOn: true }),
+    reply("Saved."),
+  );
   await beginTurn(f, "split", { text: "Remember my boat." });
   await f.daemon.llmClient.waitForChatIdle("split");
-  f.steps.push(replyAtContext("You own a red canoe.", 30_000), reply("## Goal\nThe user owns a red\ncanoe and paddles."));
+  f.steps.push(
+    replyAtContext("You own a red canoe.", 30_000),
+    reply("## Goal\nThe user owns a red\ncanoe and paddles."),
+  );
   const before = f.requests.length;
-  await beginTurn(f, "split", { text: "What boat do I own?", create: false, streamId: "stream-split-2" });
+  await beginTurn(f, "split", {
+    text: "What boat do I own?",
+    create: false,
+    streamId: "stream-split-2",
+  });
   await f.daemon.llmClient.waitForChatIdle("split");
   assert.ok(f.requests.length >= before + 2, "the summarizer was asked");
-  assert.deepEqual(compactionSummaries(f.daemon, "split"), [], "no summary stating the fact was written");
-  assert.deepEqual((await assistantMessages(f.daemon, "split")).map((message) => message.content).at(-1), "You own a red canoe.", "the turn's answer stands");
+  assert.deepEqual(
+    compactionSummaries(f.daemon, "split"),
+    [],
+    "no summary stating the fact was written",
+  );
+  assert.deepEqual(
+    (await assistantMessages(f.daemon, "split")).map((message) => message.content).at(-1),
+    "You own a red canoe.",
+    "the turn's answer stands",
+  );
 });
 
 /** An Anthropic Messages reply whose usage reports `inputTokens`, so the turn ends past the compaction threshold. */
 const anthropicReplyAtContext = (text, inputTokens) => (response) => {
-  response.write(anthropicEvent("message_start", { message: { id: `msg_${text}`, type: "message", role: "assistant", model: "test", content: [], stop_reason: null, usage: { input_tokens: inputTokens, output_tokens: 0 } } }));
-  response.write(anthropicEvent("content_block_start", { index: 0, content_block: { type: "text", text: "" } }));
-  response.write(anthropicEvent("content_block_delta", { index: 0, delta: { type: "text_delta", text } }));
+  response.write(
+    anthropicEvent("message_start", {
+      message: {
+        id: `msg_${text}`,
+        type: "message",
+        role: "assistant",
+        model: "test",
+        content: [],
+        stop_reason: null,
+        usage: { input_tokens: inputTokens, output_tokens: 0 },
+      },
+    }),
+  );
+  response.write(
+    anthropicEvent("content_block_start", { index: 0, content_block: { type: "text", text: "" } }),
+  );
+  response.write(
+    anthropicEvent("content_block_delta", { index: 0, delta: { type: "text_delta", text } }),
+  );
   response.write(anthropicEvent("content_block_stop", { index: 0 }));
-  response.write(anthropicEvent("message_delta", { delta: { stop_reason: "end_turn" }, usage: { output_tokens: 4 } }));
+  response.write(
+    anthropicEvent("message_delta", {
+      delta: { stop_reason: "end_turn" },
+      usage: { output_tokens: 4 },
+    }),
+  );
   response.end(anthropicEvent("message_stop", {}));
 };
 
 /** A request body without its cache markers, which move to the newest user message. */
-const withoutCacheMarkers = (value) => JSON.parse(JSON.stringify(value ?? null, (key, child) => key === "cache_control" ? undefined : child));
+const withoutCacheMarkers = (value) =>
+  JSON.parse(
+    JSON.stringify(value ?? null, (key, child) => (key === "cache_control" ? undefined : child)),
+  );
 
 test("a serve compaction after a turn continues the turn's request, at the default cache lifetime", async (t) => {
   const f = await fixture(t, { anthropic: true, model: { name: "claude-test" } });
@@ -1379,17 +2316,36 @@ test("a serve compaction after a turn continues the turn's request, at the defau
   f.steps.push(anthropicReply("Hello."));
   await beginTurn(f, "cached", { text: "Hello." });
   await f.daemon.llmClient.waitForChatIdle("cached");
-  f.steps.push(anthropicReplyAtContext("Plenty.", 20_000), anthropicReply("## Goal\nThe user said hello twice."));
+  f.steps.push(
+    anthropicReplyAtContext("Plenty.", 20_000),
+    anthropicReply("## Goal\nThe user said hello twice."),
+  );
   const before = f.requests.length;
   await beginTurn(f, "cached", { text: "And again.", create: false, streamId: "stream-cached-2" });
   await f.daemon.llmClient.waitForChatIdle("cached");
   assert.equal(f.requests.length, before + 2, "the turn and one summary request");
   const [turn, summary] = f.requests.slice(before);
-  assert.deepEqual(withoutCacheMarkers(summary.system), withoutCacheMarkers(turn.system), "the turn's system prompt");
-  assert.deepEqual(withoutCacheMarkers(summary.tools), withoutCacheMarkers(turn.tools), "the turn's tools");
-  assert.deepEqual(withoutCacheMarkers(summary.messages.slice(0, turn.messages.length)), withoutCacheMarkers(turn.messages), "the turn's messages, unchanged");
+  assert.deepEqual(
+    withoutCacheMarkers(summary.system),
+    withoutCacheMarkers(turn.system),
+    "the turn's system prompt",
+  );
+  assert.deepEqual(
+    withoutCacheMarkers(summary.tools),
+    withoutCacheMarkers(turn.tools),
+    "the turn's tools",
+  );
+  assert.deepEqual(
+    withoutCacheMarkers(summary.messages.slice(0, turn.messages.length)),
+    withoutCacheMarkers(turn.messages),
+    "the turn's messages, unchanged",
+  );
   const added = summary.messages.slice(turn.messages.length);
-  assert.deepEqual(added.map((message) => message.role), ["assistant", "user"], "the turn's reply, then the instruction");
+  assert.deepEqual(
+    added.map((message) => message.role),
+    ["assistant", "user"],
+    "the turn's reply, then the instruction",
+  );
   assert.match(JSON.stringify(added[0]), /Plenty\./u);
   assert.deepEqual([...new Set(cacheTtls(turn))], ["1h"]);
   assert.deepEqual([...new Set(cacheTtls(summary))], ["default"]);
@@ -1406,24 +2362,58 @@ test("a serve compaction after a removed fact sends the isolated request", async
     await f.daemon.llmClient.waitForChatIdle(chatId);
   };
   // Another chat saves the fact, so this chat learns it only from the always-on prompt.
-  await run("saver", "Remember my bees.", [anthropicCallTool("remember_fact", { fact: "Keeps bees on the roof", alwaysOn: true }), anthropicReply("Saved.")], true);
+  await run(
+    "saver",
+    "Remember my bees.",
+    [
+      anthropicCallTool("remember_fact", { fact: "Keeps bees on the roof", alwaysOn: true }),
+      anthropicReply("Saved."),
+    ],
+    true,
+  );
   const factId = /\[memory:([^\]]+)\]/u.exec(JSON.stringify(f.requests[1].messages))?.[1];
   assert.ok(factId, "the fact was saved");
   await run("removed", "Hello.", [anthropicReply("Hello.")], true);
-  assert.match(JSON.stringify(f.requests[2].system), /bees on the roof/u, "the always-on prompt told the chat");
-  await run("saver", "Forget my bees.", [anthropicCallTool("forget_fact", { factId }), anthropicReply("Forgotten.")], false);
+  assert.match(
+    JSON.stringify(f.requests[2].system),
+    /bees on the roof/u,
+    "the always-on prompt told the chat",
+  );
+  await run(
+    "saver",
+    "Forget my bees.",
+    [anthropicCallTool("forget_fact", { factId }), anthropicReply("Forgotten.")],
+    false,
+  );
   const before = f.requests.length;
-  await run("removed", "What is new?", [
-    anthropicReplyAtContext("Nothing much.", 20_000),
-    anthropicReply("## Goal\nThe user said hello."),
-    anthropicReply("The turn asked what is new."),
-  ], false);
+  await run(
+    "removed",
+    "What is new?",
+    [
+      anthropicReplyAtContext("Nothing much.", 20_000),
+      anthropicReply("## Goal\nThe user said hello."),
+      anthropicReply("The turn asked what is new."),
+    ],
+    false,
+  );
   const [turn, ...summaries] = f.requests.slice(before);
   assert.ok(summaries.length >= 1, "the summarizer was asked");
   for (const summary of summaries) {
-    assert.notDeepEqual(withoutCacheMarkers(summary.system), withoutCacheMarkers(turn.system), "Pi's own summarizer prompt, not the turn's");
-    assert.equal(summary.messages.length, 1, "the history goes as one summarizer input, not as the turn's messages");
-    assert.doesNotMatch(JSON.stringify(summary), /bees/iu, "the removed fact does not reach the summarizer");
+    assert.notDeepEqual(
+      withoutCacheMarkers(summary.system),
+      withoutCacheMarkers(turn.system),
+      "Pi's own summarizer prompt, not the turn's",
+    );
+    assert.equal(
+      summary.messages.length,
+      1,
+      "the history goes as one summarizer input, not as the turn's messages",
+    );
+    assert.doesNotMatch(
+      JSON.stringify(summary),
+      /bees/iu,
+      "the removed fact does not reach the summarizer",
+    );
   }
   const [stored] = compactionSummaries(f.daemon, "removed");
   assert.match(stored ?? "", /said hello/u, "the isolated summary was stored");
@@ -1437,14 +2427,19 @@ test("CLI bridge runtimes send XHIGH thinkingLevel for Gemini 4 models through r
   const server = createServer((request, response) => {
     requestPath = request.url ?? "";
     request.setEncoding("utf-8");
-    request.on("data", (chunkText) => { requestBody += String(chunkText); });
+    request.on("data", (chunkText) => {
+      requestBody += String(chunkText);
+    });
     request.on("end", () => {
       response.writeHead(200, { "content-type": "text/event-stream" });
       response.end(
         `data: ${JSON.stringify({
           candidates: [
             {
-              content: { role: "model", parts: [{ text: "Deep thought", thought: true }, { text: "Done" }] },
+              content: {
+                role: "model",
+                parts: [{ text: "Deep thought", thought: true }, { text: "Done" }],
+              },
               finishReason: "STOP",
             },
           ],
@@ -1453,24 +2448,37 @@ test("CLI bridge runtimes send XHIGH thinkingLevel for Gemini 4 models through r
     });
   });
   await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
-  t.after(() => { server.closeAllConnections(); server.close(); });
+  t.after(() => {
+    server.closeAllConnections();
+    server.close();
+  });
   const baseUrl = `http://127.0.0.1:${server.address().port}/v1beta`;
   api.atomicJson(join(dir, "models.json"), {
     providers: {
       google: {
         baseUrl,
         apiKey: "cli-test-key",
-        models: [{
-          id: "gemini-4-hydrogen",
-          name: "Gemini 4 Hydrogen",
-          api: "google-generative-ai",
-          reasoning: true,
-          thinkingLevelMap: { off: null, minimal: null, low: "low", medium: "medium", high: "high", xhigh: "xhigh", max: null },
-          input: ["text"],
-          contextWindow: 1_048_576,
-          maxTokens: 65_536,
-          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-        }],
+        models: [
+          {
+            id: "gemini-4-hydrogen",
+            name: "Gemini 4 Hydrogen",
+            api: "google-generative-ai",
+            reasoning: true,
+            thinkingLevelMap: {
+              off: null,
+              minimal: null,
+              low: "low",
+              medium: "medium",
+              high: "high",
+              xhigh: "xhigh",
+              max: null,
+            },
+            input: ["text"],
+            contextWindow: 1_048_576,
+            maxTokens: 65_536,
+            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+          },
+        ],
       },
     },
   });

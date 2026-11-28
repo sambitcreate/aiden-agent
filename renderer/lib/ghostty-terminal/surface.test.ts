@@ -21,7 +21,8 @@ test("macOS Command chords stay with the host instead of reaching the PTY", () =
 });
 
 test("terminal link affordances honor the host navigation predicate", () => {
-  const canActivate = (text: string) => /^https?:\/\//u.test(text) || /\.(?:html?|pdf)$/u.test(text);
+  const canActivate = (text: string) =>
+    /^https?:\/\//u.test(text) || /\.(?:html?|pdf)$/u.test(text);
   assert.equal(isTerminalLinkActivatable("https://example.com", canActivate), true);
   assert.equal(isTerminalLinkActivatable("docs/guide.pdf", canActivate), true);
   assert.equal(isTerminalLinkActivatable("renderer/main.ts:12", canActivate), false);

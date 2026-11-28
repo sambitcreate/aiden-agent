@@ -27,7 +27,13 @@ export interface ShortcutSheetSection {
   rows: ShortcutSheetRow[];
 }
 
-const SECTION_ORDER = ["General", "Moving around", "In a chat", "Workspace", "Design canvas"] as const;
+const SECTION_ORDER = [
+  "General",
+  "Moving around",
+  "In a chat",
+  "Workspace",
+  "Design canvas",
+] as const;
 type SheetSectionTitle = (typeof SECTION_ORDER)[number];
 
 const CATEGORY_SECTION: Record<CommandCategory, SheetSectionTitle> = {

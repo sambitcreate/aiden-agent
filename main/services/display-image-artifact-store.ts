@@ -2,7 +2,10 @@ import * as fs from "node:fs/promises";
 import { randomUUID } from "node:crypto";
 import { DataStore } from "./data-store.js";
 import type { Attachment } from "./types.js";
-import { parseChatArtifactV1, type ChatImageArtifactV1 } from "../../renderer/shared/chat-artifacts.js";
+import {
+  parseChatArtifactV1,
+  type ChatImageArtifactV1,
+} from "../../renderer/shared/chat-artifacts.js";
 import {
   MAX_DISPLAY_IMAGE_BYTES_PER_CHAT,
   MAX_DISPLAY_IMAGE_PIXELS,
@@ -363,7 +366,9 @@ export class DisplayImageArtifactStore {
   async usageByChat(chatId: string): Promise<DisplayImageArtifactUsage> {
     this.requireAvailable();
     if (!boundedIdentity(chatId)) throw new Error("Invalid display-image artifact chat identity.");
-    return stagedUsage((await this.data.load()).records.filter((record) => record.chatId === chatId));
+    return stagedUsage(
+      (await this.data.load()).records.filter((record) => record.chatId === chatId),
+    );
   }
 
   async hasPending(chatId: string): Promise<boolean> {

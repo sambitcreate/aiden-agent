@@ -20,7 +20,12 @@ import {
   remoteInboxEntries,
   type InboxEntry,
 } from "./sidebar-inbox-view";
-import { inboxState, releasedInboxOrder, type InboxDisplayOrder, type InboxSignals } from "./sidebar-inbox";
+import {
+  inboxState,
+  releasedInboxOrder,
+  type InboxDisplayOrder,
+  type InboxSignals,
+} from "./sidebar-inbox";
 import type { BotDefinition } from "../shared/bots";
 import { botFixture } from "../main/bots/test-fixtures";
 import { projectOrderKey } from "./sidebar-organization";
@@ -33,7 +38,14 @@ const HOUR = 60 * MINUTE;
 const NOW = Date.UTC(2026, 9, 31, 12);
 
 function chat(id: string, overrides: Partial<ChatMeta> = {}): ChatMeta {
-  return { id, title: `Chat ${id}`, workspaceId: "ws-1", createdAt: NOW - 2 * HOUR, updatedAt: NOW - HOUR, ...overrides };
+  return {
+    id,
+    title: `Chat ${id}`,
+    workspaceId: "ws-1",
+    createdAt: NOW - 2 * HOUR,
+    updatedAt: NOW - HOUR,
+    ...overrides,
+  };
 }
 
 const workspaces: Workspace[] = [{ id: "ws-1", name: "aiden", permission: "full" } as Workspace];
@@ -41,7 +53,12 @@ const workspaces: Workspace[] = [{ id: "ws-1", name: "aiden", permission: "full"
 function entry(
   id: string,
   signals: Partial<InboxSignals> = {},
-  options: { remote?: boolean; pending?: ChatPendingAttention; hostLabel?: string; project?: string } = {},
+  options: {
+    remote?: boolean;
+    pending?: ChatPendingAttention;
+    hostLabel?: string;
+    project?: string;
+  } = {},
 ): InboxEntry {
   const hostId = options.remote ? "studio" : "local";
   const base: InboxEntry = {
@@ -102,22 +119,64 @@ test("a local chat's pending wait carries its time and a detached prompt into th
     workspaces,
     rowState: () => "idle",
     unread: () => false,
-    pending: new Map([["a", { chatId: "a", kind: "detached", summary: "rm -rf build", since: NOW - 5 * MINUTE, count: 1 }]]),
+    pending: new Map([
+      [
+        "a",
+        {
+          chatId: "a",
+          kind: "detached",
+          summary: "rm -rf build",
+          since: NOW - 5 * MINUTE,
+          count: 1,
+        },
+      ],
+    ]),
   });
   const status = inboxRowStatus(row!, "needs_you", NOW);
   assert.deepEqual([status.label, status.wait, status.tone], ["Unavailable", "5m", "warning"]);
-  assert.equal(inboxRowDescription(row!, status), "Approval unavailable — return to retry: rm -rf build");
+  assert.equal(
+    inboxRowDescription(row!, status),
+    "Approval unavailable — return to retry: rm -rf build",
+  );
 });
 
 test("remote entries leave out blocked hosts and name an unnamed host", () => {
   const rows: RemoteSidebarRows[] = [
     {
       projects: [{ key: "p-studio", name: "site" } as never],
-      chats: [{ key: projectOrderKey("studio", "c1"), chatId: "c1", hostId: "studio", hostLabel: " ", projectKey: "p-studio", title: "Deploy", rowState: "needs_approval", unread: false, lastRunFailed: false, stale: true, createdAt: NOW - HOUR } as never],
+      chats: [
+        {
+          key: projectOrderKey("studio", "c1"),
+          chatId: "c1",
+          hostId: "studio",
+          hostLabel: " ",
+          projectKey: "p-studio",
+          title: "Deploy",
+          rowState: "needs_approval",
+          unread: false,
+          lastRunFailed: false,
+          stale: true,
+          createdAt: NOW - HOUR,
+        } as never,
+      ],
     },
     {
       projects: [],
-      chats: [{ key: projectOrderKey("blocked", "c2"), chatId: "c2", hostId: "blocked", hostLabel: "Old", projectKey: "x", title: "Hidden", rowState: "idle", unread: true, lastRunFailed: false, stale: false, createdAt: NOW } as never],
+      chats: [
+        {
+          key: projectOrderKey("blocked", "c2"),
+          chatId: "c2",
+          hostId: "blocked",
+          hostLabel: "Old",
+          projectKey: "x",
+          title: "Hidden",
+          rowState: "idle",
+          unread: true,
+          lastRunFailed: false,
+          stale: false,
+          createdAt: NOW,
+        } as never,
+      ],
     },
   ];
   const hosts = [
@@ -143,13 +202,37 @@ test("a chat's triage places its local and remote rows", () => {
     triage: (chatId) => (chatId === "a" ? triage : undefined),
   });
   assert.equal(inboxState(local!.signals, NOW, 24 * HOUR).shelf, "pinned");
-  const rows: RemoteSidebarRows[] = [{
-    projects: [],
-    chats: [{ key: projectOrderKey("studio", "c1"), chatId: "c1", hostId: "studio", hostLabel: "Studio", projectKey: "x", title: "Deploy", rowState: "idle", unread: true, lastRunFailed: false, stale: false, createdAt: NOW - HOUR, lastActivityAt: NOW - 10 * MINUTE } as never],
-  }];
-  const hosts = [{ id: "studio", label: "Studio", availability: "online" }] as unknown as SidebarHost[];
-  const [remote] = remoteInboxEntries(rows, hosts, () => false, (row) =>
-    row.chatId === "c1" ? { revision: 1, updatedAt: NOW, snoozedUntil: NOW + HOUR } : undefined);
+  const rows: RemoteSidebarRows[] = [
+    {
+      projects: [],
+      chats: [
+        {
+          key: projectOrderKey("studio", "c1"),
+          chatId: "c1",
+          hostId: "studio",
+          hostLabel: "Studio",
+          projectKey: "x",
+          title: "Deploy",
+          rowState: "idle",
+          unread: true,
+          lastRunFailed: false,
+          stale: false,
+          createdAt: NOW - HOUR,
+          lastActivityAt: NOW - 10 * MINUTE,
+        } as never,
+      ],
+    },
+  ];
+  const hosts = [
+    { id: "studio", label: "Studio", availability: "online" },
+  ] as unknown as SidebarHost[];
+  const [remote] = remoteInboxEntries(
+    rows,
+    hosts,
+    () => false,
+    (row) =>
+      row.chatId === "c1" ? { revision: 1, updatedAt: NOW, snoozedUntil: NOW + HOUR } : undefined,
+  );
   assert.equal(inboxState(remote!.signals, NOW, 24 * HOUR).shelf, "hidden");
   assert.equal(inboxState(remote!.signals, NOW + 2 * HOUR, 24 * HOUR).shelf, "updates");
 });
@@ -160,10 +243,21 @@ test("search matches title, project and host, and the machine filter narrows to 
     entry("b", {}, { remote: true, project: "site" }),
   ];
   const titles = (items: InboxEntry[]) => items.map((item) => item.title);
-  assert.deepEqual(titles(filterInboxEntries(entries, { search: "studio", machineFilter: "all" })), ["Chat b"]);
-  assert.deepEqual(titles(filterInboxEntries(entries, { search: "chat AIDEN", machineFilter: "all" })), ["Chat a"]);
-  assert.deepEqual(titles(filterInboxEntries(entries, { search: "", machineFilter: "local" })), ["Chat a"]);
-  assert.deepEqual(titles(filterInboxEntries(entries, { search: "chat", machineFilter: "host:studio" })), ["Chat b"]);
+  assert.deepEqual(
+    titles(filterInboxEntries(entries, { search: "studio", machineFilter: "all" })),
+    ["Chat b"],
+  );
+  assert.deepEqual(
+    titles(filterInboxEntries(entries, { search: "chat AIDEN", machineFilter: "all" })),
+    ["Chat a"],
+  );
+  assert.deepEqual(titles(filterInboxEntries(entries, { search: "", machineFilter: "local" })), [
+    "Chat a",
+  ]);
+  assert.deepEqual(
+    titles(filterInboxEntries(entries, { search: "chat", machineFilter: "host:studio" })),
+    ["Chat b"],
+  );
 });
 
 test("a local chat whose keep-going goal needs the person is a Needs you row with the goal's reason", () => {
@@ -173,13 +267,31 @@ test("a local chat whose keep-going goal needs the person is a Needs you row wit
     workspaces,
     rowState: () => "idle",
     unread: () => false,
-    pending: new Map([["a", { chatId: "a", kind: "goal", summary: "Needs an API key to deploy", since: NOW - 7 * MINUTE, count: 1 }]]),
+    pending: new Map([
+      [
+        "a",
+        {
+          chatId: "a",
+          kind: "goal",
+          summary: "Needs an API key to deploy",
+          since: NOW - 7 * MINUTE,
+          count: 1,
+        },
+      ],
+    ]),
   });
   assert.equal(inboxState(row!.signals, NOW).shelf, "needs_you");
   const status = inboxRowStatus(row!, "needs_you", NOW);
-  assert.deepEqual([status.label, status.wait, status.tone, status.needsYou], ["Needs you", "7m", "warning", "needs_you"]);
+  assert.deepEqual(
+    [status.label, status.wait, status.tone, status.needsYou],
+    ["Needs you", "7m", "warning", "needs_you"],
+  );
   assert.equal(inboxRowDescription(row!, status), "Keep-going goal: Needs an API key to deploy");
-  assert.equal(inboxRowAction(row!, "needs_you", status, true), null, "the person answers it in the chat");
+  assert.equal(
+    inboxRowAction(row!, "needs_you", status, true),
+    null,
+    "the person answers it in the chat",
+  );
 });
 
 test("Needs you statuses name the wait, and only Failed uses the danger tone", () => {
@@ -198,17 +310,38 @@ test("Needs you statuses name the wait, and only Failed uses the danger tone", (
 test("a working row reads its run length, and an offline host's clock stops where it dropped", () => {
   const running = entry("a", { rowState: "working", runStartedAt: NOW - 90 * MINUTE });
   assert.equal(inboxRowStatus(running, "working", NOW).label, "Working 1h");
-  const waiting = entry("b", { rowState: "needs_approval", attentionSince: NOW - 10 * MINUTE }, { remote: true });
+  const waiting = entry(
+    "b",
+    { rowState: "needs_approval", attentionSince: NOW - 10 * MINUTE },
+    { remote: true },
+  );
   // The view passes the moment the host went offline as the row's clock.
   assert.equal(inboxRowStatus(waiting, "needs_you", NOW - 8 * MINUTE).wait, "2m");
 });
 
 test("descriptions carry the request text for local rows and status, host and wait for remote rows", () => {
-  const approval = entry("a", { rowState: "needs_approval", attentionSince: NOW - MINUTE }, {
-    pending: { chatId: "a", kind: "approval", summary: "npm publish", since: NOW - MINUTE, count: 3 },
-  });
-  assert.equal(inboxRowDescription(approval, inboxRowStatus(approval, "needs_you", NOW)), "Approve: npm publish (+2 more)");
-  const remote = entry("b", { rowState: "needs_input", updatedAt: NOW - 4 * MINUTE, hostOnline: false }, { remote: true });
+  const approval = entry(
+    "a",
+    { rowState: "needs_approval", attentionSince: NOW - MINUTE },
+    {
+      pending: {
+        chatId: "a",
+        kind: "approval",
+        summary: "npm publish",
+        since: NOW - MINUTE,
+        count: 3,
+      },
+    },
+  );
+  assert.equal(
+    inboxRowDescription(approval, inboxRowStatus(approval, "needs_you", NOW)),
+    "Approve: npm publish (+2 more)",
+  );
+  const remote = entry(
+    "b",
+    { rowState: "needs_input", updatedAt: NOW - 4 * MINUTE, hostOnline: false },
+    { remote: true },
+  );
   assert.equal(
     inboxRowDescription(remote, inboxRowStatus(remote, "needs_you", NOW)),
     "Question on Studio, waiting 4m. Studio is offline",
@@ -218,8 +351,11 @@ test("descriptions carry the request text for local rows and status, host and wa
 });
 
 test("only unread Updates and Earlier rows offer Mark read, and only a Failed Needs you row offers Acknowledge", () => {
-  const action = (item: InboxEntry, section: "needs_you" | "updates" | "earlier" | "working", canMarkRead = true) =>
-    inboxRowAction(item, section, inboxRowStatus(item, section, NOW), canMarkRead);
+  const action = (
+    item: InboxEntry,
+    section: "needs_you" | "updates" | "earlier" | "working",
+    canMarkRead = true,
+  ) => inboxRowAction(item, section, inboxRowStatus(item, section, NOW), canMarkRead);
   assert.equal(action(entry("a", { unread: true }), "updates"), "mark_read");
   assert.equal(action(entry("a", { unread: false }), "earlier"), null);
   assert.equal(action(entry("a", { rowState: "needs_approval" }), "needs_you"), null);
@@ -228,7 +364,10 @@ test("only unread Updates and Earlier rows offer Mark read, and only a Failed Ne
   assert.equal(action(entry("a", { rowState: "working", unread: true }), "working"), null);
   // Remote rows need the host's read grant and a live connection.
   assert.equal(action(entry("b", { unread: true }, { remote: true }), "updates", false), null);
-  assert.equal(action(entry("b", { unread: true, hostOnline: false }, { remote: true }), "updates"), null);
+  assert.equal(
+    action(entry("b", { unread: true, hostOnline: false }, { remote: true }), "updates"),
+    null,
+  );
   assert.equal(action(entry("b", { unread: true }, { remote: true }), "updates"), "mark_read");
 });
 
@@ -241,7 +380,14 @@ test("Mark read names the newest rendered message, so a reply landing mid-click 
   ];
   assert.equal(markReadThroughMessageId(messages, NOW - 2 * MINUTE), "a1");
   assert.equal(markReadThroughMessageId(messages, undefined), null);
-  assert.equal(markReadThroughMessageId([...messages, { id: "a3", role: "assistant", createdAt: NOW }], NOW, 3), "a2");
+  assert.equal(
+    markReadThroughMessageId(
+      [...messages, { id: "a3", role: "assistant", createdAt: NOW }],
+      NOW,
+      3,
+    ),
+    "a2",
+  );
   assert.equal(markReadThroughMessageId([], NOW), null);
 });
 
@@ -250,7 +396,14 @@ test("a row leaving Needs you holds its slot for 400 ms, then goes; a deleted or
   const b = projectOrderKey("local", "b");
   const present = new Set([a, b]);
   const next = order({ needs_you: [b], working: [a] });
-  const first = debounceNeedsYouLeave({ previous: [a, b], next, leftAt: new Map(), present, touched: new Set(), now: NOW });
+  const first = debounceNeedsYouLeave({
+    previous: [a, b],
+    next,
+    leftAt: new Map(),
+    present,
+    touched: new Set(),
+    now: NOW,
+  });
   assert.deepEqual(first.order.needs_you, [a, b]);
   assert.deepEqual(first.order.working, []);
   assert.equal(first.nextCheckAt, NOW + 400);
@@ -263,26 +416,63 @@ test("a row leaving Needs you holds its slot for 400 ms, then goes; a deleted or
     now: NOW + 399,
   });
   assert.deepEqual(later.order.needs_you, [a, b]);
-  const due = debounceNeedsYouLeave({ previous: later.order.needs_you, next, leftAt: later.leftAt, present, touched: new Set(), now: NOW + 400 });
+  const due = debounceNeedsYouLeave({
+    previous: later.order.needs_you,
+    next,
+    leftAt: later.leftAt,
+    present,
+    touched: new Set(),
+    now: NOW + 400,
+  });
   assert.deepEqual([due.order.needs_you, due.order.working, due.nextCheckAt], [[b], [a], null]);
-  const deleted = debounceNeedsYouLeave({ previous: [a, b], next: order({ needs_you: [b] }), leftAt: new Map(), present: new Set([b]), touched: new Set(), now: NOW });
+  const deleted = debounceNeedsYouLeave({
+    previous: [a, b],
+    next: order({ needs_you: [b] }),
+    leftAt: new Map(),
+    present: new Set([b]),
+    touched: new Set(),
+    now: NOW,
+  });
   assert.deepEqual(deleted.order.needs_you, [b]);
-  const touched = debounceNeedsYouLeave({ previous: [a, b], next, leftAt: new Map(), present, touched: new Set([a]), now: NOW });
+  const touched = debounceNeedsYouLeave({
+    previous: [a, b],
+    next,
+    leftAt: new Map(),
+    present,
+    touched: new Set([a]),
+    now: NOW,
+  });
   assert.deepEqual(touched.order.needs_you, [b]);
 });
 
 test("shortcut order follows the visible sections, skips held-over rows, and leaves out a collapsed Working shelf", () => {
   const key = (id: string) => projectOrderKey("local", id);
-  const held = releasedInboxOrder(order({
-    needs_you: [key("n")],
-    pinned: [key("p")],
-    updates: [key("u")],
-    earlier: [key("e1"), key("e2")],
-    working: [key("w")],
-  }));
-  const withLeaving = { ...held, earlier: [held.earlier[0]!, { ...held.earlier[1]!, leaving: true }] };
-  assert.deepEqual(inboxShortcutOrder(withLeaving, { workingExpanded: true }), [key("n"), key("p"), key("u"), key("e1"), key("w")]);
-  assert.deepEqual(inboxShortcutOrder(withLeaving, { workingExpanded: false }), [key("n"), key("p"), key("u"), key("e1")]);
+  const held = releasedInboxOrder(
+    order({
+      needs_you: [key("n")],
+      pinned: [key("p")],
+      updates: [key("u")],
+      earlier: [key("e1"), key("e2")],
+      working: [key("w")],
+    }),
+  );
+  const withLeaving = {
+    ...held,
+    earlier: [held.earlier[0]!, { ...held.earlier[1]!, leaving: true }],
+  };
+  assert.deepEqual(inboxShortcutOrder(withLeaving, { workingExpanded: true }), [
+    key("n"),
+    key("p"),
+    key("u"),
+    key("e1"),
+    key("w"),
+  ]);
+  assert.deepEqual(inboxShortcutOrder(withLeaving, { workingExpanded: false }), [
+    key("n"),
+    key("p"),
+    key("u"),
+    key("e1"),
+  ]);
 });
 
 test("the pending attention request asks about live chats first, then the newest, and never Bot chats", () => {
@@ -299,7 +489,9 @@ test("the pending attention request asks about live chats first, then the newest
 });
 
 test("the pending attention key is short, follows the ids, and ignores the order they arrive in", () => {
-  const many = Array.from({ length: 500 }, (_, index) => chat(`chat-${index}`, { updatedAt: NOW - index * MINUTE }));
+  const many = Array.from({ length: 500 }, (_, index) =>
+    chat(`chat-${index}`, { updatedAt: NOW - index * MINUTE }),
+  );
   const request = pendingAttentionRequest(many, []);
   assert.equal(request.ids.length, 500);
   assert.ok(request.key.length < 20, request.key);
@@ -309,11 +501,22 @@ test("the pending attention key is short, follows the ids, and ignores the order
 });
 
 function bot(id: string): BotDefinition {
-  return botFixture({ id, name: `Bot ${id}`, createdAt: NOW - 9 * HOUR, updatedAt: NOW - 9 * HOUR });
+  return botFixture({
+    id,
+    name: `Bot ${id}`,
+    createdAt: NOW - 9 * HOUR,
+    updatedAt: NOW - 9 * HOUR,
+  });
 }
 
 function botEntries(
-  rows: { id: string; needsYou?: boolean; lastReplyAt?: number | null; running?: boolean; activityAt?: number }[],
+  rows: {
+    id: string;
+    needsYou?: boolean;
+    lastReplyAt?: number | null;
+    running?: boolean;
+    activityAt?: number;
+  }[],
   options: { openBotId?: string | null; seen?: Record<string, number> } = {},
 ): InboxEntry[] {
   return botInboxEntries({
@@ -327,7 +530,8 @@ function botEntries(
     })),
     openBotId: options.openBotId ?? null,
     // The Bot sidebar's rule: a reply newer than the last one seen.
-    unread: (botId, lastReplyAt) => lastReplyAt !== null && lastReplyAt > (options.seen?.[botId] ?? 0),
+    unread: (botId, lastReplyAt) =>
+      lastReplyAt !== null && lastReplyAt > (options.seen?.[botId] ?? 0),
   });
 }
 
@@ -336,7 +540,10 @@ test("a Bot that needs the person is in Needs you, and its status says Needs you
   assert.ok(waiting);
   assert.equal(inboxState(waiting.signals, NOW).shelf, "needs_you");
   const status = inboxRowStatus(waiting, "needs_you", NOW);
-  assert.deepEqual([status.label, status.tone, status.wait, status.needsYou], ["Needs you", "warning", "6m", "needs_you"]);
+  assert.deepEqual(
+    [status.label, status.tone, status.wait, status.needsYou],
+    ["Needs you", "warning", "6m", "needs_you"],
+  );
   assert.equal(inboxRowDescription(waiting, status), "Waiting for you");
   // A Bot that needs the person offers no hover action: opening it is the answer.
   assert.equal(inboxRowAction(waiting, "needs_you", status, false), null);
@@ -353,11 +560,17 @@ test("a Bot with an unread reply is in Updates and offers Mark read; a read or m
     ],
     { seen: { seen: NOW - 2 * HOUR } },
   );
-  assert.deepEqual(entries.map((item) => item.key), [botInboxKey("fresh")]);
+  assert.deepEqual(
+    entries.map((item) => item.key),
+    [botInboxKey("fresh")],
+  );
   const [fresh] = entries;
   assert.ok(fresh);
   assert.equal(inboxState(fresh.signals, NOW).shelf, "updates");
-  assert.equal(inboxRowAction(fresh, "updates", inboxRowStatus(fresh, "updates", NOW), false), "mark_read");
+  assert.equal(
+    inboxRowAction(fresh, "updates", inboxRowStatus(fresh, "updates", NOW), false),
+    "mark_read",
+  );
 });
 
 test("Bots the Inbox doesn't list still have rows, with their live state, for the list to hold in place", () => {
@@ -370,8 +583,14 @@ test("Bots the Inbox doesn't list still have rows, with their live state, for th
     openBotId: null,
     unread: (botId) => botId === "fresh",
   });
-  assert.deepEqual(listed.map((item) => item.key), [botInboxKey("fresh")]);
-  assert.deepEqual(unlisted.map((item) => item.key), [botInboxKey("seen")]);
+  assert.deepEqual(
+    listed.map((item) => item.key),
+    [botInboxKey("fresh")],
+  );
+  assert.deepEqual(
+    unlisted.map((item) => item.key),
+    [botInboxKey("seen")],
+  );
   const [seen] = unlisted;
   assert.ok(seen);
   assert.equal(seen.signals.unread, false);
@@ -381,8 +600,16 @@ test("Bots the Inbox doesn't list still have rows, with their live state, for th
 test("a local Bot whose last turn failed is Failed in Needs you with no prompt, issue or unread reply, until it runs again", () => {
   const rowsFor = (state: { kind: string } | undefined, openBotId: string | null = null) =>
     botInboxRows({
-    platform: "darwin",
-      bots: [{ bot: bot("b1"), ...(state ? { state } : {}), activityAt: NOW - 4 * MINUTE, needsYou: false, lastReplyAt: NOW - HOUR }],
+      platform: "darwin",
+      bots: [
+        {
+          bot: bot("b1"),
+          ...(state ? { state } : {}),
+          activityAt: NOW - 4 * MINUTE,
+          needsYou: false,
+          lastReplyAt: NOW - HOUR,
+        },
+      ],
       openBotId,
       // Its last reply was already seen.
       unread: () => false,
@@ -416,20 +643,69 @@ test("the open Bot stays listed while it is open, never as unread, and its key c
 });
 
 test("a revision-50 host's own triage and run times place its rows when nothing here overrides them", () => {
-  const rows: RemoteSidebarRows[] = [{
-    projects: [],
-    chats: [
-      { key: projectOrderKey("studio", "pinned"), chatId: "pinned", hostId: "studio", hostLabel: "Studio", projectKey: "x", title: "Pinned", rowState: "idle", unread: false, lastRunFailed: false, stale: false, createdAt: NOW - HOUR, triage: { revision: 3, updatedAt: NOW, pinnedAt: NOW - MINUTE } },
-      { key: projectOrderKey("studio", "asks"), chatId: "asks", hostId: "studio", hostLabel: "Studio", projectKey: "x", title: "Asks", rowState: "needs_approval", unread: false, lastRunFailed: false, stale: false, createdAt: NOW - HOUR, lastActivityAt: NOW - MINUTE, attentionSince: NOW - 7 * MINUTE, attentionSummary: "npm publish" },
-      { key: projectOrderKey("studio", "busy"), chatId: "busy", hostId: "studio", hostLabel: "Studio", projectKey: "x", title: "Busy", rowState: "working", unread: false, lastRunFailed: false, stale: false, createdAt: NOW - HOUR, runStartedAt: NOW - 2 * HOUR },
-    ] as never,
-  }];
-  const hosts = [{ id: "studio", label: "Studio", availability: "online" }] as unknown as SidebarHost[];
+  const rows: RemoteSidebarRows[] = [
+    {
+      projects: [],
+      chats: [
+        {
+          key: projectOrderKey("studio", "pinned"),
+          chatId: "pinned",
+          hostId: "studio",
+          hostLabel: "Studio",
+          projectKey: "x",
+          title: "Pinned",
+          rowState: "idle",
+          unread: false,
+          lastRunFailed: false,
+          stale: false,
+          createdAt: NOW - HOUR,
+          triage: { revision: 3, updatedAt: NOW, pinnedAt: NOW - MINUTE },
+        },
+        {
+          key: projectOrderKey("studio", "asks"),
+          chatId: "asks",
+          hostId: "studio",
+          hostLabel: "Studio",
+          projectKey: "x",
+          title: "Asks",
+          rowState: "needs_approval",
+          unread: false,
+          lastRunFailed: false,
+          stale: false,
+          createdAt: NOW - HOUR,
+          lastActivityAt: NOW - MINUTE,
+          attentionSince: NOW - 7 * MINUTE,
+          attentionSummary: "npm publish",
+        },
+        {
+          key: projectOrderKey("studio", "busy"),
+          chatId: "busy",
+          hostId: "studio",
+          hostLabel: "Studio",
+          projectKey: "x",
+          title: "Busy",
+          rowState: "working",
+          unread: false,
+          lastRunFailed: false,
+          stale: false,
+          createdAt: NOW - HOUR,
+          runStartedAt: NOW - 2 * HOUR,
+        },
+      ] as never,
+    },
+  ];
+  const hosts = [
+    { id: "studio", label: "Studio", availability: "online" },
+  ] as unknown as SidebarHost[];
   const byTitle = new Map(remoteInboxEntries(rows, hosts).map((item) => [item.title, item]));
   assert.equal(inboxState(byTitle.get("Pinned")!.signals, NOW).shelf, "pinned");
   const asks = byTitle.get("Asks")!;
   const status = inboxRowStatus(asks, "needs_you", NOW);
-  assert.equal(status.wait, "7m", "the wait counts from when the ask was raised, not the last activity");
+  assert.equal(
+    status.wait,
+    "7m",
+    "the wait counts from when the ask was raised, not the last activity",
+  );
   assert.equal(inboxRowDescription(asks, status), "Approve: npm publish. On Studio, waiting 7m");
   assert.equal(inboxRowStatus(byTitle.get("Busy")!, "working", NOW).label, "Working 2h");
 });
@@ -444,24 +720,48 @@ test("a paired host's Bot is listed while it needs you, has failed or is open, a
     { id: "old", label: "Old", availability: "blocked" },
   ] as unknown as SidebarHost[];
   const feeds = new Map([
-    ["studio", remoteBotFeed("studio", [
-      { id: "asks", name: "Planner", needsYou: true, sessionState: "running", lastReplyAt: new Date(NOW - 5 * MINUTE).toISOString(), avatar: { semantic: "not an avatar" } },
-      { id: "broke", name: " ", failed: true, updatedAt: new Date(NOW - 3 * HOUR).toISOString() },
-      { id: "quiet", name: "Quiet", lastReplyAt: new Date(NOW - MINUTE).toISOString() },
-      { id: "open", name: "Open" },
-    ])],
+    [
+      "studio",
+      remoteBotFeed("studio", [
+        {
+          id: "asks",
+          name: "Planner",
+          needsYou: true,
+          sessionState: "running",
+          lastReplyAt: new Date(NOW - 5 * MINUTE).toISOString(),
+          avatar: { semantic: "not an avatar" },
+        },
+        { id: "broke", name: " ", failed: true, updatedAt: new Date(NOW - 3 * HOUR).toISOString() },
+        { id: "quiet", name: "Quiet", lastReplyAt: new Date(NOW - MINUTE).toISOString() },
+        { id: "open", name: "Open" },
+      ]),
+    ],
     ["old", remoteBotFeed("old", [{ id: "hidden", name: "Hidden", needsYou: true }])],
   ]);
   const { listed, unlisted } = remoteBotInboxRows({ hosts, feeds, openKey: "studio/open" });
-  assert.deepEqual(listed.map((item) => item.key), ["asks", "broke", "open"].map((id) => remoteBotInboxKey("studio", id)));
-  assert.deepEqual(unlisted.map((item) => item.title), ["Quiet"], "a reply alone never lists a remote Bot");
+  assert.deepEqual(
+    listed.map((item) => item.key),
+    ["asks", "broke", "open"].map((id) => remoteBotInboxKey("studio", id)),
+  );
+  assert.deepEqual(
+    unlisted.map((item) => item.title),
+    ["Quiet"],
+    "a reply alone never lists a remote Bot",
+  );
   const [asks, broke, open] = listed;
 
   const asksStatus = inboxRowStatus(asks!, "needs_you", NOW);
-  assert.deepEqual([asksStatus.label, asksStatus.needsYou, asksStatus.wait], ["Needs you", "needs_you", "5m"]);
+  assert.deepEqual(
+    [asksStatus.label, asksStatus.needsYou, asksStatus.wait],
+    ["Needs you", "needs_you", "5m"],
+  );
   assert.equal(inboxRowDescription(asks!, asksStatus), "Waiting for you on Studio");
   assert.equal(asks!.source.kind === "remoteBot" && asks!.source.working, true);
-  assert.equal(asks!.source.kind === "remoteBot" && "avatar" in asks!.source, false, "a malformed avatar is left out");
+  assert.equal(
+    asks!.source.kind === "remoteBot" && "avatar" in asks!.source,
+    false,
+    "a malformed avatar is left out",
+  );
 
   assert.equal(broke!.title, "Untitled Bot");
   assert.equal(inboxState(broke!.signals, NOW).shelf, "needs_you");
@@ -472,7 +772,11 @@ test("a paired host's Bot is listed while it needs you, has failed or is open, a
   assert.equal(open!.signals.isOpen, true);
   for (const item of listed) {
     for (const section of ["needs_you", "updates", "earlier"] as const) {
-      assert.equal(inboxRowAction(item!, section, inboxRowStatus(item!, section, NOW), true), null, `${item!.title} ${section}`);
+      assert.equal(
+        inboxRowAction(item!, section, inboxRowStatus(item!, section, NOW), true),
+        null,
+        `${item!.title} ${section}`,
+      );
     }
   }
   // A Bot's key never collides with a chat of the same id on that host.
@@ -480,7 +784,12 @@ test("a paired host's Bot is listed while it needs you, has failed or is open, a
 });
 
 test("an offline or stale host's Bot stays listed but never reads as working, and an older host's Bots stay out", () => {
-  const waiting: PeerFeedRow = { id: "asks", name: "Planner", needsYou: true, sessionState: "running" };
+  const waiting: PeerFeedRow = {
+    id: "asks",
+    name: "Planner",
+    needsYou: true,
+    sessionState: "running",
+  };
   const offline = remoteBotInboxRows({
     hosts: [{ id: "studio", label: "Studio", availability: "offline" }] as unknown as SidebarHost[],
     feeds: new Map([["studio", remoteBotFeed("studio", [waiting])]]),
@@ -501,7 +810,9 @@ test("an offline or stale host's Bot stays listed but never reads as working, an
 
   const older = remoteBotInboxRows({
     hosts: [{ id: "studio", label: "Studio", availability: "online" }] as unknown as SidebarHost[],
-    feeds: new Map([["studio", remoteBotFeed("studio", [{ id: "b", name: "B", sessionState: "running" }])]]),
+    feeds: new Map([
+      ["studio", remoteBotFeed("studio", [{ id: "b", name: "B", sessionState: "running" }])],
+    ]),
     openKey: null,
   });
   assert.deepEqual([older.listed.length, older.unlisted.length], [0, 1]);

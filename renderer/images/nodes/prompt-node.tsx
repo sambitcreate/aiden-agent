@@ -27,7 +27,10 @@ export function PromptNode({ id, data, selected }: NodeProps<WorkflowFlowNode>) 
   return (
     <ImageNodeFrame>
       <CanvasNodeChrome title={node.title ?? "Prompt"} selected={selected}>
-        <PromptNodeBody text={node.data.text} onChange={(text) => editor.apply({ type: "set-prompt", nodeId: id, text })} />
+        <PromptNodeBody
+          text={node.data.text}
+          onChange={(text) => editor.apply({ type: "set-prompt", nodeId: id, text })}
+        />
       </CanvasNodeChrome>
       <NodePorts type="prompt" />
     </ImageNodeFrame>

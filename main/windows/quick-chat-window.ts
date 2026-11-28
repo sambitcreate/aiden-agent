@@ -56,10 +56,7 @@ export function isQuickChatAuthorizedConversation(chatId: string): boolean {
   return authorizedQuickChatIds.has(chatId);
 }
 
-export function assertQuickChatConversationAccess(
-  event: IpcMainInvokeEvent,
-  chatId: string,
-): void {
+export function assertQuickChatConversationAccess(event: IpcMainInvokeEvent, chatId: string): void {
   if (isCurrentQuickChatEvent(event) && !authorizedQuickChatIds.has(chatId)) {
     throw new Error("Unauthorized Quick Chat conversation access.");
   }
@@ -168,11 +165,14 @@ async function createQuickChatWindow(): Promise<BrowserWindow> {
   const loaded = new Promise<BrowserWindow>((resolve, reject) => {
     window.webContents.once("did-finish-load", () => resolve(window));
     window.once("closed", () => reject(new Error("Quick Chat window closed before it loaded")));
-    window.webContents.once("did-fail-load", (_event, code, description, _validatedUrl, isMainFrame) => {
-      if (!isMainFrame) return;
-      if (!window.isDestroyed()) window.destroy();
-      reject(new Error(`Quick Chat window failed to load (${code}): ${description}`));
-    });
+    window.webContents.once(
+      "did-fail-load",
+      (_event, code, description, _validatedUrl, isMainFrame) => {
+        if (!isMainFrame) return;
+        if (!window.isDestroyed()) window.destroy();
+        reject(new Error(`Quick Chat window failed to load (${code}): ${description}`));
+      },
+    );
   });
 
   const url = getWindowUrl("quick-chat.html");

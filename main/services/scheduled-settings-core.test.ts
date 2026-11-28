@@ -37,6 +37,12 @@ test("default MCP access is accepted only as an explicit boolean", () => {
 });
 
 test("the check-back switch is accepted only as an explicit boolean", () => {
-  assert.deepEqual(scheduledSettingsPatch({ chatCheckBacks: false }, (timezone) => timezone), { chatCheckBacks: false });
-  assert.deepEqual(scheduledSettingsPatch({ chatCheckBacks: "off" }, (timezone) => timezone), {});
+  assert.deepEqual(
+    scheduledSettingsPatch({ chatCheckBacks: false }, (timezone) => timezone),
+    { chatCheckBacks: false },
+  );
+  assert.deepEqual(
+    scheduledSettingsPatch({ chatCheckBacks: "off" }, (timezone) => timezone),
+    {},
+  );
 });

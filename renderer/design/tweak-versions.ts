@@ -3,7 +3,11 @@
 // for this app run only (after a restart a version shows its name alone).
 
 import * as React from "react";
-import { DESIGN_CANVAS_LIMITS, type DesignCanvas, type DesignFrame } from "../shared/design-canvas/schema";
+import {
+  DESIGN_CANVAS_LIMITS,
+  type DesignCanvas,
+  type DesignFrame,
+} from "../shared/design-canvas/schema";
 import { showsDesignTweakVersion } from "../shared/design-canvas/tweaks";
 
 const GAP = 48;
@@ -42,11 +46,16 @@ export function showDesignTweakVersions(
   // To the page's right, past anything already there, so nothing on the page is covered.
   const top = frame.y - PAD;
   let left = frame.x + frame.w + 2 * GAP;
-  const others = doc.frames.filter((entry) => entry.pageId === frame.pageId && entry.id !== frame.id);
+  const others = doc.frames.filter(
+    (entry) => entry.pageId === frame.pageId && entry.id !== frame.id,
+  );
   const blocking = (x: number) =>
     others.find(
       (entry) =>
-        entry.x < x + w + GAP && x - GAP < entry.x + entry.w && entry.y < top + h + GAP && top - GAP < entry.y + entry.h,
+        entry.x < x + w + GAP &&
+        x - GAP < entry.x + entry.w &&
+        entry.y < top + h + GAP &&
+        top - GAP < entry.y + entry.h,
     );
   for (let blocker = blocking(left); blocker; blocker = blocking(left)) {
     left = Math.max(left, blocker.x + blocker.w) + 2 * GAP;
@@ -115,7 +124,12 @@ function changed(): void {
 }
 
 /** Keeps a version's picture for this app run, taken from the file's version `stamp`. */
-export function keepDesignTweakVersionPicture(frameId: string, versionId: string, dataUrl: string, stamp = 0): void {
+export function keepDesignTweakVersionPicture(
+  frameId: string,
+  versionId: string,
+  dataUrl: string,
+  stamp = 0,
+): void {
   const key = pictureKey(frameId, versionId);
   pictures.delete(key);
   pictures.set(key, { picture: dataUrl, stamp });
@@ -127,7 +141,10 @@ export function keepDesignTweakVersionPicture(frameId: string, versionId: string
 export const DESIGN_TWEAK_V1 = "v1";
 
 /** The look a frame shows for one of its versions, or null when it has no such version. */
-function versionLook(frame: DesignFrame | undefined, versionId: string): { tweaks?: DesignFrame["tweaks"]; dark?: true } | null {
+function versionLook(
+  frame: DesignFrame | undefined,
+  versionId: string,
+): { tweaks?: DesignFrame["tweaks"]; dark?: true } | null {
   if (frame?.kind !== "file") return null;
   if (versionId === DESIGN_TWEAK_V1) return {};
   return frame.tweakVersions?.find((version) => version.id === versionId) ?? null;
@@ -166,7 +183,8 @@ export function takeDesignTweakVersionPicture(
     if (stamp === null || pictures.get(pictureKey(frameId, versionId))?.stamp === stamp) return;
     void canvas.capture(frameId).then(
       (picture) => {
-        if (picture && stampNow() === stamp) keepDesignTweakVersionPicture(frameId, versionId, picture, stamp);
+        if (picture && stampNow() === stamp)
+          keepDesignTweakVersionPicture(frameId, versionId, picture, stamp);
       },
       () => undefined,
     );
@@ -186,19 +204,30 @@ function subscribe(listener: () => void): () => void {
  * A version's picture, if one was taken since the app started; with `stamp`,
  * only one taken from that version of the page's file.
  */
-export function designTweakVersionPicture(frameId: string, versionId: string, stamp?: number): string | undefined {
+export function designTweakVersionPicture(
+  frameId: string,
+  versionId: string,
+  stamp?: number,
+): string | undefined {
   const entry = pictures.get(pictureKey(frameId, versionId));
   return entry && (stamp === undefined || entry.stamp === stamp) ? entry.picture : undefined;
 }
 
 /** A version's picture from this version of the file; only the chips whose picture changed render again. */
-export function useDesignTweakVersionPicture(frameId: string, versionId: string, stamp: number): string | undefined {
+export function useDesignTweakVersionPicture(
+  frameId: string,
+  versionId: string,
+  stamp: number,
+): string | undefined {
   const read = () => designTweakVersionPicture(frameId, versionId, stamp);
   return React.useSyncExternalStore(subscribe, read, read);
 }
 
 /** A picture scaled down so its longest side is at most `side`; the original when it can't be. */
-export async function shrinkDesignPicture(dataUrl: string, side = DESIGN_TWEAK_PICTURE_SIDE): Promise<string> {
+export async function shrinkDesignPicture(
+  dataUrl: string,
+  side = DESIGN_TWEAK_PICTURE_SIDE,
+): Promise<string> {
   try {
     const image = new Image();
     image.src = dataUrl;

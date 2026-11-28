@@ -49,8 +49,12 @@ function counter() {
 }
 
 const inside = (outer: DesignFrame, inner: DesignFrame) =>
-  inner.x >= outer.x && inner.y >= outer.y && inner.x + inner.w <= outer.x + outer.w && inner.y + inner.h <= outer.y + outer.h;
-const overlap = (a: DesignFrame, b: DesignFrame) => a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h;
+  inner.x >= outer.x &&
+  inner.y >= outer.y &&
+  inner.x + inner.w <= outer.x + outer.w &&
+  inner.y + inner.h <= outer.y + outer.h;
+const overlap = (a: DesignFrame, b: DesignFrame) =>
+  a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h;
 
 test("Show all lays out V1 and each saved version as its own page, in a group beside the original", () => {
   const original = page();
@@ -70,14 +74,21 @@ test("Show all lays out V1 and each saved version as its own page, in a group be
   for (const copy of copies) {
     assert.equal(copy.path, original.path);
     assert.equal(copy.groupId, group.id);
-    assert.equal(copy.tweakVersions, undefined, "a copy shows one version; it doesn't carry the list");
+    assert.equal(
+      copy.tweakVersions,
+      undefined,
+      "a copy shows one version; it doesn't carry the list",
+    );
     assert.ok(inside(group, copy), `${copy.title} sits inside the group`);
     assert.ok(!overlap(copy, original), `${copy.title} doesn't cover the original`);
   }
   assert.ok(!overlap(group, original));
   assert.ok(!overlap(copies[0]!, copies[1]!) && !overlap(copies[1]!, copies[2]!));
   // The original keeps what it showed, and the result is a canvas the store accepts as is.
-  assert.deepEqual(shown.doc.frames.find((frame) => frame.id === "page"), original);
+  assert.deepEqual(
+    shown.doc.frames.find((frame) => frame.id === "page"),
+    original,
+  );
   const parsed = parseDesignCanvas(shown.doc);
   assert.ok(parsed.ok);
   assert.equal(parsed.dropped, 0);
@@ -88,8 +99,15 @@ test("Show all lays out V1 and each saved version as its own page, in a group be
 });
 
 test("many versions of a wide page wrap into rows that stay within a group's largest size", () => {
-  const versions = Array.from({ length: 12 }, (_, index) => ({ id: `v-${index + 2}`, name: `V${index + 2}` }));
-  const shown = showDesignTweakVersions(canvas(page({ w: 1440, h: 900, tweakVersions: versions })), "page", counter());
+  const versions = Array.from({ length: 12 }, (_, index) => ({
+    id: `v-${index + 2}`,
+    name: `V${index + 2}`,
+  }));
+  const shown = showDesignTweakVersions(
+    canvas(page({ w: 1440, h: 900, tweakVersions: versions })),
+    "page",
+    counter(),
+  );
   assert.ok(shown);
   const group = shown.doc.frames.find((frame) => frame.id === shown.groupId)!;
   assert.ok(group.w <= DESIGN_CANVAS_LIMITS.maxSize && group.h <= DESIGN_CANVAS_LIMITS.maxSize);
@@ -97,31 +115,46 @@ test("many versions of a wide page wrap into rows that stay within a group's lar
   assert.equal(copies.length, 13);
   for (const [index, copy] of copies.entries()) {
     assert.ok(inside(group, copy));
-    for (const other of copies.slice(index + 1)) assert.ok(!overlap(copy, other), `${copy.title} and ${other.title} overlap`);
+    for (const other of copies.slice(index + 1))
+      assert.ok(!overlap(copy, other), `${copy.title} and ${other.title} overlap`);
   }
 });
 
 test("Show all needs saved versions and room on the canvas", () => {
-  assert.equal(showDesignTweakVersions(canvas(page({ tweakVersions: undefined })), "page", counter()), null);
-  assert.equal(showDesignTweakVersions(canvas(page({ kind: "artifact" })), "page", counter()), null);
+  assert.equal(
+    showDesignTweakVersions(canvas(page({ tweakVersions: undefined })), "page", counter()),
+    null,
+  );
+  assert.equal(
+    showDesignTweakVersions(canvas(page({ kind: "artifact" })), "page", counter()),
+    null,
+  );
   assert.equal(showDesignTweakVersions(canvas(page()), "missing", counter()), null);
-  const crowd = Array.from({ length: DESIGN_CANVAS_LIMITS.framesPerPage - 2 }, (_, index): DesignFrame => ({
-    id: `note-${index}`,
-    kind: "note",
-    title: "Note",
-    x: 0,
-    y: 5000 + index * 10,
-    w: 100,
-    h: 100,
-    pageId: DESIGN_FIRST_PAGE_ID,
-    createdBy: "person",
-  }));
+  const crowd = Array.from(
+    { length: DESIGN_CANVAS_LIMITS.framesPerPage - 2 },
+    (_, index): DesignFrame => ({
+      id: `note-${index}`,
+      kind: "note",
+      title: "Note",
+      x: 0,
+      y: 5000 + index * 10,
+      w: 100,
+      h: 100,
+      pageId: DESIGN_FIRST_PAGE_ID,
+      createdBy: "person",
+    }),
+  );
   assert.equal(showDesignTweakVersions(canvas(page(), ...crowd), "page", counter()), null);
 });
 
 test("Show all steps past whatever already sits to the page's right, so nothing on the page is covered", () => {
   const original = page();
-  const neighbour: DesignFrame = { ...page({ tweakVersions: undefined }), id: "neighbour", title: "Pricing", x: original.x + original.w + 64 };
+  const neighbour: DesignFrame = {
+    ...page({ tweakVersions: undefined }),
+    id: "neighbour",
+    title: "Pricing",
+    x: original.x + original.w + 64,
+  };
   const note: DesignFrame = {
     id: "note",
     kind: "note",
@@ -136,7 +169,8 @@ test("Show all steps past whatever already sits to the page's right, so nothing 
   const shown = showDesignTweakVersions(canvas(original, neighbour, note), "page", counter());
   assert.ok(shown);
   const group = shown.doc.frames.find((frame) => frame.id === shown.groupId)!;
-  for (const other of [original, neighbour, note]) assert.ok(!overlap(group, other), `the group covers ${other.title}`);
+  for (const other of [original, neighbour, note])
+    assert.ok(!overlap(group, other), `the group covers ${other.title}`);
   for (const id of shown.ids) {
     const copy = shown.doc.frames.find((frame) => frame.id === id)!;
     assert.ok(inside(group, copy));
@@ -147,7 +181,10 @@ const settle = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
 
 test("a version's picture checks the canvas's frame as it is when taken, whoever asked for it", async () => {
   // The canvas's frame, read fresh each time; no editor is involved after the ask.
-  let current: DesignFrame | undefined = page({ id: "shot-a", tweaks: { "data-density": "compact" } });
+  let current: DesignFrame | undefined = page({
+    id: "shot-a",
+    tweaks: { "data-density": "compact" },
+  });
   const frameNow = () => current;
   let resolveShot: (picture: string) => void = () => undefined;
   let shots = 0;
@@ -172,13 +209,20 @@ test("a version's picture checks the canvas's frame as it is when taken, whoever
   current = { ...current, tweaks: undefined, dark: true };
   resolveShot("data:image/png;base64,TkIHVA==");
   await settle(10);
-  assert.equal(designTweakVersionPicture("shot-a", "v-2"), undefined, "Night's look isn't filed under V2");
+  assert.equal(
+    designTweakVersionPicture("shot-a", "v-2"),
+    undefined,
+    "Night's look isn't filed under V2",
+  );
 
   // V2 deleted while its picture is taken: nothing is kept for it.
   current = { ...current, dark: undefined, tweaks: { "data-density": "compact" } };
   takeDesignTweakVersionPicture("shot-a", "v-2", 0, canvasNow);
   await settle(10);
-  current = { ...current, tweakVersions: current.tweakVersions?.filter((version) => version.id !== "v-2") };
+  current = {
+    ...current,
+    tweakVersions: current.tweakVersions?.filter((version) => version.id !== "v-2"),
+  };
   resolveShot("data:image/png;base64,VjI=");
   await settle(10);
   assert.equal(designTweakVersionPicture("shot-a", "v-2"), undefined);
@@ -195,7 +239,10 @@ test("a version's picture checks the canvas's frame as it is when taken, whoever
   await settle(10);
   resolveShot("data:image/png;base64,VjE=");
   await settle(10);
-  assert.equal(designTweakVersionPicture("shot-a", DESIGN_TWEAK_V1, 1), "data:image/png;base64,VjE=");
+  assert.equal(
+    designTweakVersionPicture("shot-a", DESIGN_TWEAK_V1, 1),
+    "data:image/png;base64,VjE=",
+  );
 
   // Shown again from the same file: the picture it has is kept, with no new one taken.
   takeDesignTweakVersionPicture("shot-a", DESIGN_TWEAK_V1, 0, canvasNow);

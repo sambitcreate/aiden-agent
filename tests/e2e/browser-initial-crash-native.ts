@@ -14,8 +14,7 @@ app.setPath("userData", path.join(root, "user-data"));
 void app
   .whenReady()
   .then(async () => {
-    const { BrowserService } =
-      await import("../../main/services/browser/service");
+    const { BrowserService } = await import("../../main/services/browser/service");
     const browser = new BrowserService();
     const owner = new BrowserWindow({ show: false });
     browser.attachOwner("initial-crash", {
@@ -47,9 +46,7 @@ void app
     let deadline: ReturnType<typeof setTimeout> | undefined;
     let exitCode = 0;
     try {
-      await new Promise<void>((resolve) =>
-        server.listen(0, "127.0.0.1", resolve),
-      );
+      await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
       const url = `http://127.0.0.1:${(server.address() as AddressInfo).port}/first`;
       // The public command path is covered by the regular app E2E. This focused
       // native entry isolates creation/lifecycle without starting unrelated services.
@@ -90,12 +87,7 @@ void app
       await Promise.race([
         new Promise<void>((resolve) => {
           const stopped = () => {
-            if (
-              guest.getURL() !== url ||
-              guest.isCrashed() ||
-              guest.isLoadingMainFrame()
-            )
-              return;
+            if (guest.getURL() !== url || guest.isCrashed() || guest.isLoadingMainFrame()) return;
             guest.removeListener("did-stop-loading", stopped);
             resolve();
           };

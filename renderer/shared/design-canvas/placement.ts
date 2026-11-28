@@ -25,7 +25,10 @@ export const clampSize = (value: number, kind?: DesignFrameKind) =>
     Math.max(kind ? designMinSize(kind) : DESIGN_CANVAS_LIMITS.minSize, Math.round(value)),
   );
 export const clampCoord = (value: number) =>
-  Math.min(DESIGN_CANVAS_LIMITS.maxCoord, Math.max(-DESIGN_CANVAS_LIMITS.maxCoord, Math.round(value)));
+  Math.min(
+    DESIGN_CANVAS_LIMITS.maxCoord,
+    Math.max(-DESIGN_CANVAS_LIMITS.maxCoord, Math.round(value)),
+  );
 
 /** A frame to place; it goes on `pageId`, or on the page on screen. */
 export type PlaceFrameInput = Omit<DesignFrame, "id" | "x" | "y" | "pageId"> &
@@ -47,9 +50,14 @@ export function placeFrame(
   const w = clampSize(frame.w, frame.kind);
   const h = clampSize(frame.h, frame.kind);
   const pageId =
-    frame.pageId !== undefined && doc.pages.some((page) => page.id === frame.pageId) ? frame.pageId : doc.activePageId;
+    frame.pageId !== undefined && doc.pages.some((page) => page.id === frame.pageId)
+      ? frame.pageId
+      : doc.activePageId;
   const onPage = doc.frames.filter((entry) => entry.pageId === pageId);
-  if (doc.frames.length >= DESIGN_CANVAS_LIMITS.frames || onPage.length >= DESIGN_CANVAS_LIMITS.framesPerPage) {
+  if (
+    doc.frames.length >= DESIGN_CANVAS_LIMITS.frames ||
+    onPage.length >= DESIGN_CANVAS_LIMITS.framesPerPage
+  ) {
     return { error: "limit" };
   }
   const group =
@@ -67,7 +75,11 @@ export function placeFrame(
       : { x: group.x + GROUP_INSET.x, y: group.y + GROUP_INSET.y };
     // An artboard keeps the width the person drew, so what would run past its
     // right edge starts a new row inside it, below everything already there.
-    if (last && group.kind === "frame" && position.x + w > group.x + group.w - GROUP_PADDING.right) {
+    if (
+      last &&
+      group.kind === "frame" &&
+      position.x + w > group.x + group.w - GROUP_PADDING.right
+    ) {
       position = {
         x: group.x + GROUP_INSET.x,
         y: Math.max(...members.map((entry) => entry.y + entry.h)) + DESIGN_FRAME_GAP,
@@ -76,7 +88,10 @@ export function placeFrame(
   } else {
     const ungrouped = onPage.filter((entry) => entry.groupId === undefined);
     const overlaps = (entry: DesignFrame, box: { x: number; y: number; w: number; h: number }) =>
-      entry.x < box.x + box.w && box.x < entry.x + entry.w && entry.y < box.y + box.h && box.y < entry.y + entry.h;
+      entry.x < box.x + box.w &&
+      box.x < entry.x + entry.w &&
+      entry.y < box.y + box.h &&
+      box.y < entry.y + entry.h;
     const inView = ungrouped.filter((entry) => overlaps(entry, view));
     const last = inView[inView.length - 1];
     position = last
@@ -84,7 +99,10 @@ export function placeFrame(
       : { x: view.x + (view.w - w) / 2, y: view.y + (view.h - h) / 2 };
     // A frame already there (an earlier one that ran past the view) pushes the
     // new one further right, so frames added in a row never stack.
-    for (let blocker = ungrouped.find((entry) => overlaps(entry, { ...position, w, h })); blocker; ) {
+    for (
+      let blocker = ungrouped.find((entry) => overlaps(entry, { ...position, w, h }));
+      blocker;
+    ) {
       position = { x: blocker.x + blocker.w + DESIGN_FRAME_GAP, y: position.y };
       blocker = ungrouped.find((entry) => overlaps(entry, { ...position, w, h }));
     }
@@ -153,8 +171,12 @@ export function refitGroups(doc: DesignCanvas, ids: Iterable<string | undefined>
       w: clampSize(Math.max(group.x + group.w, fit.x + fit.w) - x, group.kind),
       h: clampSize(Math.max(group.y + group.h, fit.y + fit.h) - y, group.kind),
     };
-    if (held.x === group.x && held.y === group.y && held.w === group.w && held.h === group.h) continue;
-    next = syncConnectors({ ...next, frames: next.frames.map((entry) => (entry.id === id ? { ...entry, ...held } : entry)) });
+    if (held.x === group.x && held.y === group.y && held.w === group.w && held.h === group.h)
+      continue;
+    next = syncConnectors({
+      ...next,
+      frames: next.frames.map((entry) => (entry.id === id ? { ...entry, ...held } : entry)),
+    });
   }
   return next;
 }
@@ -167,7 +189,9 @@ export function refitGroups(doc: DesignCanvas, ids: Iterable<string | undefined>
 export function fitGroupToMembers(doc: DesignCanvas, groupId: string): DesignCanvas {
   const group = doc.frames.find((entry) => entry.id === groupId && isDesignContainer(entry.kind));
   if (!group) return doc;
-  const members = doc.frames.filter((entry) => entry.groupId === groupId && entry.pageId === group.pageId);
+  const members = doc.frames.filter(
+    (entry) => entry.groupId === groupId && entry.pageId === group.pageId,
+  );
   if (members.length === 0) return doc;
   const left = Math.min(...members.map((entry) => entry.x)) - GROUP_PADDING.left;
   const top = Math.min(...members.map((entry) => entry.y)) - GROUP_PADDING.top;
@@ -179,7 +203,8 @@ export function fitGroupToMembers(doc: DesignCanvas, groupId: string): DesignCan
     w: clampSize(right - left, group.kind),
     h: clampSize(bottom - top, group.kind),
   };
-  if (next.x === group.x && next.y === group.y && next.w === group.w && next.h === group.h) return doc;
+  if (next.x === group.x && next.y === group.y && next.w === group.w && next.h === group.h)
+    return doc;
   return syncConnectors({
     ...doc,
     frames: doc.frames.map((entry) => (entry.id === groupId ? { ...entry, ...next } : entry)),
@@ -190,7 +215,8 @@ export function fitGroupToMembers(doc: DesignCanvas, groupId: string): DesignCan
 export type DesignBeside = "right" | "left" | "below" | "above";
 
 type Box = { x: number; y: number; w: number; h: number };
-const overlapsBox = (a: Box, b: Box) => a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h;
+const overlapsBox = (a: Box, b: Box) =>
+  a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h;
 
 /**
  * Where a box of `size` goes beside `anchor`: 64 px off the chosen side,
@@ -238,7 +264,9 @@ export function copyFrames(
 ): { doc: DesignCanvas; copies: Map<string, string> } | null {
   const chosen = new Set(ids);
   const groupIds = new Set(
-    doc.frames.filter((frame) => chosen.has(frame.id) && isDesignContainer(frame.kind)).map((frame) => frame.id),
+    doc.frames
+      .filter((frame) => chosen.has(frame.id) && isDesignContainer(frame.kind))
+      .map((frame) => frame.id),
   );
   const sources = doc.frames.filter(
     (frame) => chosen.has(frame.id) || (frame.groupId !== undefined && groupIds.has(frame.groupId)),
@@ -256,11 +284,17 @@ export function copyFrames(
   ];
   const copies = new Map<string, string>();
   for (const frame of ordered) copies.set(frame.id, newId());
-  const lockedGroups = new Set(doc.frames.filter((frame) => frame.locked && isDesignContainer(frame.kind)).map((frame) => frame.id));
+  const lockedGroups = new Set(
+    doc.frames
+      .filter((frame) => frame.locked && isDesignContainer(frame.kind))
+      .map((frame) => frame.id),
+  );
   const added: DesignFrame[] = [];
   for (const frame of ordered) {
     // A copy joins its group's copy, or the group itself, but never a locked group it was not copied with.
-    const groupId = frame.groupId && (copies.get(frame.groupId) ?? (lockedGroups.has(frame.groupId) ? undefined : frame.groupId));
+    const groupId =
+      frame.groupId &&
+      (copies.get(frame.groupId) ?? (lockedGroups.has(frame.groupId) ? undefined : frame.groupId));
     const ends = frame.ends?.map((end): DesignConnectorEnd => {
       const target = end.frameId !== undefined ? copies.get(end.frameId) : undefined;
       if (target) return { ...end, frameId: target };

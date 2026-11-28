@@ -1,6 +1,9 @@
 import { randomBytes } from "node:crypto";
 import { promises as fs } from "node:fs";
-import { AIDEN_UI_CATALOG_VERSION, type AidenUiNodeV1 } from "../../../renderer/shared/aiden-ui/types.js";
+import {
+  AIDEN_UI_CATALOG_VERSION,
+  type AidenUiNodeV1,
+} from "../../../renderer/shared/aiden-ui/types.js";
 import { validateCompiledAum } from "../../../renderer/shared/aiden-ui/validate.js";
 import { parseChatUiVisualV1 } from "../../../renderer/shared/aiden-ui/visual.js";
 import {
@@ -48,7 +51,10 @@ export interface WorkspaceArtifactFiles {
  * FIFO, a device, a directory) is refused without blocking, and the read
  * fails with EFBIG past `maxBytes`.
  */
-export async function readWorkspaceArtifactPageFile(filePath: string, maxBytes: number): Promise<Uint8Array> {
+export async function readWorkspaceArtifactPageFile(
+  filePath: string,
+  maxBytes: number,
+): Promise<Uint8Array> {
   return readRegularFile(await fs.realpath(filePath), maxBytes);
 }
 
@@ -84,7 +90,9 @@ export interface WorkspaceArtifactPageFileV1 {
 }
 
 /** The file an export writes for a page. */
-export function workspaceArtifactPageFile(artifact: WorkspaceArtifactV1): WorkspaceArtifactPageFileV1 {
+export function workspaceArtifactPageFile(
+  artifact: WorkspaceArtifactV1,
+): WorkspaceArtifactPageFileV1 {
   const { catalogVersion, tree, dataJson, layout, fallbackText } = artifact.visual;
   return {
     format: WORKSPACE_ARTIFACT_FILE_FORMAT,
@@ -139,14 +147,18 @@ export function parseWorkspaceArtifactPageFile(value: unknown): WorkspaceArtifac
   }
   if (value.version !== WORKSPACE_ARTIFACT_FILE_VERSION) {
     throw new Error(
-      typeof value.version === "number" && Number.isSafeInteger(value.version) && value.version > WORKSPACE_ARTIFACT_FILE_VERSION
+      typeof value.version === "number" &&
+        Number.isSafeInteger(value.version) &&
+        value.version > WORKSPACE_ARTIFACT_FILE_VERSION
         ? "This page was exported by a newer Aiden. Update Aiden to import it."
         : "This page file’s version isn’t one Aiden can read.",
     );
   }
   const title = typeof value.title === "string" ? value.title.trim() : value.title;
   if (!isWorkspaceArtifactTitle(title)) {
-    cannotImport(`its title must be 1–${WORKSPACE_ARTIFACT_LIMITS.titleChars} visible characters on one line.`);
+    cannotImport(
+      `its title must be 1–${WORKSPACE_ARTIFACT_LIMITS.titleChars} visible characters on one line.`,
+    );
   }
   const description = strictly(() => parseWorkspaceArtifactDescription(value.description));
   const sources = strictly(() => parseWorkspaceArtifactSources(value.sources));
@@ -160,8 +172,10 @@ export function parseWorkspaceArtifactPageFile(value: unknown): WorkspaceArtifac
   const refresh = strictly(() => parseWorkspaceArtifactRefresh(value.refresh));
   const raw = value.visual;
   if (!isRecord(raw)) cannotImport("it has no page.");
-  if (raw.catalogVersion !== AIDEN_UI_CATALOG_VERSION) cannotImport("it was made for components this Aiden doesn’t have.");
-  if (raw.layout !== undefined && raw.layout !== "column" && raw.layout !== "wide") cannotImport('its layout must be "column" or "wide".');
+  if (raw.catalogVersion !== AIDEN_UI_CATALOG_VERSION)
+    cannotImport("it was made for components this Aiden doesn’t have.");
+  if (raw.layout !== undefined && raw.layout !== "column" && raw.layout !== "wide")
+    cannotImport('its layout must be "column" or "wide".');
   // Held to what compileAum enforces, and rebuilt from known keys only.
   const page = validateCompiledAum(
     {
@@ -254,13 +268,15 @@ export class WorkspaceArtifactImports {
 
   private prune(): void {
     const now = this.now();
-    for (const [token, entry] of this.pending) if (entry.expiresAt <= now) this.pending.delete(token);
+    for (const [token, entry] of this.pending)
+      if (entry.expiresAt <= now) this.pending.delete(token);
   }
 
   hold(workspaceId: string, owner: string, content: WorkspaceArtifactContent): string {
     this.prune();
     // The oldest waiting import goes first, so previews cannot pile up.
-    while (this.pending.size >= MAX_PENDING_IMPORTS) this.pending.delete(this.pending.keys().next().value!);
+    while (this.pending.size >= MAX_PENDING_IMPORTS)
+      this.pending.delete(this.pending.keys().next().value!);
     const token = this.newToken();
     this.pending.set(token, { workspaceId, owner, content, expiresAt: this.now() + this.ttlMs });
     return token;
@@ -271,7 +287,8 @@ export class WorkspaceArtifactImports {
     this.prune();
     const entry = this.pending.get(token);
     // A token offered from elsewhere stays for the window it belongs to.
-    if (!entry || entry.workspaceId !== workspaceId || entry.owner !== owner) throw new Error(EXPIRED);
+    if (!entry || entry.workspaceId !== workspaceId || entry.owner !== owner)
+      throw new Error(EXPIRED);
     this.pending.delete(token);
     return entry.content;
   }

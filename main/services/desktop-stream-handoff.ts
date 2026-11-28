@@ -4,11 +4,21 @@
 
 import { randomUUID } from "node:crypto";
 import type { AskUserQuestionPromptV1 } from "../../renderer/shared/ask-user-question.js";
-import { chatArtifactIdentity, parseChatArtifactEventV1, type ChatArtifactV1 } from "../../renderer/shared/chat-artifacts.js";
+import {
+  chatArtifactIdentity,
+  parseChatArtifactEventV1,
+  type ChatArtifactV1,
+} from "../../renderer/shared/chat-artifacts.js";
 import type { ChatUiVisualV1 } from "../../renderer/shared/aiden-ui/types.js";
-import { parseChatContextPressureNotification, type ChatContextPressureV1 } from "../../renderer/shared/context-pressure.js";
+import {
+  parseChatContextPressureNotification,
+  type ChatContextPressureV1,
+} from "../../renderer/shared/context-pressure.js";
 import type { GenerationTimeline } from "../../renderer/shared/generation-timeline.js";
-import { parseSubagentRunSnapshot, type SubagentRunSnapshot } from "../../renderer/shared/subagent-runs.js";
+import {
+  parseSubagentRunSnapshot,
+  type SubagentRunSnapshot,
+} from "../../renderer/shared/subagent-runs.js";
 import { parseTodoSnapshotView, type TodoSnapshotViewV1 } from "../../renderer/shared/todo.js";
 import type {
   DesktopHandoffLiveStreamSnapshot,
@@ -53,7 +63,10 @@ function upsertArtifact(list: ChatArtifactV1[], next: ChatArtifactV1): ChatArtif
   return copy;
 }
 
-function upsertSubagent(list: SubagentRunSnapshot[], next: SubagentRunSnapshot): SubagentRunSnapshot[] {
+function upsertSubagent(
+  list: SubagentRunSnapshot[],
+  next: SubagentRunSnapshot,
+): SubagentRunSnapshot[] {
   const idx = list.findIndex((item) => item.runId === next.runId);
   if (idx < 0) return [...list, next];
   const copy = [...list];
@@ -162,9 +175,10 @@ export class DesktopLiveStreamAccumulator {
           } else if (parsed.operation === "ui") {
             const visual = parsed.visual;
             const idx = state.uiVisuals.findIndex((item) => item.id === visual.id);
-            state.uiVisuals = idx < 0
-              ? [...state.uiVisuals, visual]
-              : state.uiVisuals.map((item, i) => (i === idx ? visual : item));
+            state.uiVisuals =
+              idx < 0
+                ? [...state.uiVisuals, visual]
+                : state.uiVisuals.map((item, i) => (i === idx ? visual : item));
           }
         } else {
           state.uiVisuals = applyUiVisualEvent(state.uiVisuals, data.event);

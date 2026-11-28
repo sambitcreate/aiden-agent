@@ -36,7 +36,11 @@ function toolStep(order: number, overrides: Partial<AgentToolStep> = {}): AgentT
   };
 }
 
-function message(text: string, steps: AgentToolStep[] = [], finished = true): SubagentTranscriptEntry {
+function message(
+  text: string,
+  steps: AgentToolStep[] = [],
+  finished = true,
+): SubagentTranscriptEntry {
   return {
     kind: "message",
     text,
@@ -46,7 +50,11 @@ function message(text: string, steps: AgentToolStep[] = [], finished = true): Su
   };
 }
 
-function transcript(entries: SubagentTranscriptEntry[], revision = 1, runId = "run-1"): SubagentTranscriptV1 {
+function transcript(
+  entries: SubagentTranscriptEntry[],
+  revision = 1,
+  runId = "run-1",
+): SubagentTranscriptV1 {
   return {
     version: 1,
     runId,
@@ -88,27 +96,42 @@ test("the parser rejects malformed helper conversations", () => {
     ["no entries", { ...valid, entries: [] }],
     ["a message where the task belongs", { ...valid, entries: [message("hi")] }],
     ["a second task", { ...valid, entries: [valid.entries[0], { kind: "task", text: "again" }] }],
-    ["a message with an extra key", { ...valid, entries: [valid.entries[0], { ...message("x"), html: "<b>" }] }],
+    [
+      "a message with an extra key",
+      { ...valid, entries: [valid.entries[0], { ...message("x"), html: "<b>" }] },
+    ],
     [
       "a message that finished before it started",
-      { ...valid, entries: [valid.entries[0], { ...message("x"), startedAt: 5_000, finishedAt: 4_000 }] },
+      {
+        ...valid,
+        entries: [valid.entries[0], { ...message("x"), startedAt: 5_000, finishedAt: 4_000 }],
+      },
     ],
     [
       "oversized text",
-      { ...valid, entries: [valid.entries[0], message("x".repeat(MAX_SUBAGENT_TRANSCRIPT_TEXT_CHARS + 1))] },
+      {
+        ...valid,
+        entries: [valid.entries[0], message("x".repeat(MAX_SUBAGENT_TRANSCRIPT_TEXT_CHARS + 1))],
+      },
     ],
     [
       "a step with an absolute target",
-      { ...valid, entries: [valid.entries[0], message("x", [toolStep(0, { target: "/etc/passwd" })])] },
+      {
+        ...valid,
+        entries: [valid.entries[0], message("x", [toolStep(0, { target: "/etc/passwd" })])],
+      },
     ],
     [
       "a step with an unknown field",
-      { ...valid, entries: [valid.entries[0], message("x", [{ ...toolStep(0), command: "rm -rf /" } as AgentToolStep])] },
+      {
+        ...valid,
+        entries: [
+          valid.entries[0],
+          message("x", [{ ...toolStep(0), command: "rm -rf /" } as AgentToolStep]),
+        ],
+      },
     ],
-    [
-      "steps out of order",
-      { ...valid, entries: [valid.entries[0], message("x", [toolStep(1)])] },
-    ],
+    ["steps out of order", { ...valid, entries: [valid.entries[0], message("x", [toolStep(1)])] }],
   ];
   for (const [name, value] of variants) {
     assert.equal(parseSubagentTranscript(value), undefined, name);
@@ -122,7 +145,11 @@ test("live updates and stream notifications are parsed strictly", () => {
     streamId: "gen-1",
     update: good,
   });
-  assert.equal(parseSubagentTranscriptUpdate({ ...good, revision: 1 }), undefined, "revision must advance");
+  assert.equal(
+    parseSubagentTranscriptUpdate({ ...good, revision: 1 }),
+    undefined,
+    "revision must advance",
+  );
   assert.equal(
     parseSubagentTranscriptUpdate({ ...good, changes: [{ index: 2, entry: message("x") }] }),
     undefined,
@@ -146,16 +173,31 @@ test("live updates and stream notifications are parsed strictly", () => {
     "index 0 must be the task",
   );
   assert.equal(parseSubagentTranscriptNotification({ streamId: "", update: good }), undefined);
-  assert.equal(parseSubagentTranscriptNotification({ streamId: "gen-1", update: good, extra: 1 }), undefined);
+  assert.equal(
+    parseSubagentTranscriptNotification({ streamId: "gen-1", update: good, extra: 1 }),
+    undefined,
+  );
 });
 
 test("a reader that joins mid-run converges on the saved copy plus later live updates", () => {
   // The recorder's revisions, in full, as it saved them.
   const r1 = transcript([], 1);
   const r2 = transcript([message("Looking", [], false)], 2);
-  const r3 = transcript([message("Looking at the loader.", [toolStep(0, { status: "running", finishedAt: undefined })], false)], 3);
+  const r3 = transcript(
+    [
+      message(
+        "Looking at the loader.",
+        [toolStep(0, { status: "running", finishedAt: undefined })],
+        false,
+      ),
+    ],
+    3,
+  );
   delete (r3.entries[1] as { steps: AgentToolStep[] }).steps[0]!.finishedAt;
-  const r4 = transcript([message("Looking at the loader.", [toolStep(0)]), message("It is read in src/config.ts.")], 4);
+  const r4 = transcript(
+    [message("Looking at the loader.", [toolStep(0)]), message("It is read in src/config.ts.")],
+    4,
+  );
 
   const live: SubagentTranscriptUpdateV1[] = [
     update(0, 1, 1, [{ index: 0, entry: r1.entries[0]! }]),
@@ -198,7 +240,10 @@ test("a gap between the saved copy and the live stream is reported, not papered 
 });
 
 test("a window keeps live state for its newest helpers only", () => {
-  let live = foldLiveSubagentTranscript(undefined, update(0, 1, 1, [{ index: 0, entry: transcript([]).entries[0]! }], "run-0"));
+  let live = foldLiveSubagentTranscript(
+    undefined,
+    update(0, 1, 1, [{ index: 0, entry: transcript([]).entries[0]! }], "run-0"),
+  );
   for (let index = 1; index <= MAX_LIVE_SUBAGENT_TRANSCRIPTS; index += 1) {
     live = foldLiveSubagentTranscript(
       live,
@@ -211,14 +256,20 @@ test("a window keeps live state for its newest helpers only", () => {
   // A stale update hands back the same state.
   const before = live;
   assert.equal(
-    foldLiveSubagentTranscript(live, update(0, 1, 1, [{ index: 0, entry: transcript([]).entries[0]! }], "run-5")),
+    foldLiveSubagentTranscript(
+      live,
+      update(0, 1, 1, [{ index: 0, entry: transcript([]).entries[0]! }], "run-5"),
+    ),
     before,
   );
 });
 
 test("a conversation over 2 MB loses its oldest steps first and says so", () => {
   const steps = Array.from({ length: 200 }, (_value, order) =>
-    toolStep(order, { label: `Read file number ${order} of the project tree`, target: `src/module-${order}/index.ts` }),
+    toolStep(order, {
+      label: `Read file number ${order} of the project tree`,
+      target: `src/module-${order}/index.ts`,
+    }),
   );
   const text = "x".repeat(190_000);
   const entries = Array.from({ length: 10 }, () => message(text, steps));
@@ -228,13 +279,18 @@ test("a conversation over 2 MB loses its oldest steps first and says so", () => 
   const trimmed = trimSubagentTranscriptToBytes(big);
   assert.equal(trimmed.trimmed, true);
   assert.ok(subagentTranscriptBytes(trimmed) <= MAX_SUBAGENT_TRANSCRIPT_BYTES);
-  const messages = trimmed.entries.slice(1) as Array<Extract<SubagentTranscriptEntry, { kind: "message" }>>;
+  const messages = trimmed.entries.slice(1) as Array<
+    Extract<SubagentTranscriptEntry, { kind: "message" }>
+  >;
   // Every message's words survive; only steps were dropped, oldest first.
   assert.ok(messages.every((entry) => entry.text === text));
   assert.equal(messages[0]!.steps.length, 0);
   assert.equal(messages[messages.length - 1]!.steps.length, 200);
   const counts = messages.map((entry) => entry.steps.length);
-  assert.deepEqual(counts, [...counts].sort((left, right) => left - right));
+  assert.deepEqual(
+    counts,
+    [...counts].sort((left, right) => left - right),
+  );
   // What is left of a partly trimmed message is its newest steps, renumbered.
   const partial = messages.find((entry) => entry.steps.length > 0 && entry.steps.length < 200);
   if (partial) {
@@ -296,7 +352,10 @@ test("a history reply carries a transcript only for the same run", () => {
   assert.equal(parsedDetail.transcript, undefined);
 
   const saved = transcript([message("Done.")]);
-  assert.deepEqual(parseSubagentHistoryDetailWithTranscript({ ...detail, transcript: saved })?.transcript, saved);
+  assert.deepEqual(
+    parseSubagentHistoryDetailWithTranscript({ ...detail, transcript: saved })?.transcript,
+    saved,
+  );
   assert.equal(
     parseSubagentHistoryDetailWithTranscript({ ...detail, transcript: transcript([], 1, "run-2") }),
     undefined,

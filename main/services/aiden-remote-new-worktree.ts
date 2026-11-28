@@ -19,7 +19,10 @@ import {
   FirstMessageWorktreeSettingsChangedError,
   type FirstMessageWorktreeRecord,
 } from "./first-message-worktree.js";
-import { InsufficientDiskSpaceError, WorktreeCapacityUnavailableError } from "./managed-worktree-capacity.js";
+import {
+  InsufficientDiskSpaceError,
+  WorktreeCapacityUnavailableError,
+} from "./managed-worktree-capacity.js";
 import type { GitBranches, Workspace } from "./types.js";
 import type { WorkspaceOperationDocumentOwner } from "./workspace-operation-registry.js";
 
@@ -61,22 +64,33 @@ export function phoneChatWorktreeKey(chatId: string): string {
   return `phone-chat:${chatId}`;
 }
 
-function refusal(message: string, code: "git_capability_denied" | "workspace_unavailable" = "git_capability_denied") {
+function refusal(
+  message: string,
+  code: "git_capability_denied" | "workspace_unavailable" = "git_capability_denied",
+) {
   return new AidenRemoteServiceError(code, message, 409);
 }
 
 function remoteFailure(error: unknown, baseRef: string): AidenRemoteServiceError {
   const cause = error instanceof FirstMessageWorktreeError ? error.cause : error;
   if (cause instanceof InsufficientDiskSpaceError) {
-    return refusal("There isn't enough free disk space on your computer for a new worktree. Free some space, then try again.");
+    return refusal(
+      "There isn't enough free disk space on your computer for a new worktree. Free some space, then try again.",
+    );
   }
   if (cause instanceof WorktreeCapacityUnavailableError) {
-    return refusal("Your computer couldn't check its free disk space for a new worktree. Check its storage, then try again.");
+    return refusal(
+      "Your computer couldn't check its free disk space for a new worktree. Check its storage, then try again.",
+    );
   }
   if (error instanceof FirstMessageWorktreeError && error.phase === "fetching") {
-    return refusal(`Aiden couldn't fetch ${baseRef} from its remote on your computer. Check the computer's network, then try again.`);
+    return refusal(
+      `Aiden couldn't fetch ${baseRef} from its remote on your computer. Check the computer's network, then try again.`,
+    );
   }
-  return refusal("Aiden couldn't make the worktree on your computer. Try again, or send without New worktree.");
+  return refusal(
+    "Aiden couldn't make the worktree on your computer. Try again, or send without New worktree.",
+  );
 }
 
 export function createAidenRemoteNewWorktrees(dependencies: AidenRemoteNewWorktreeDependencies) {
@@ -89,11 +103,18 @@ export function createAidenRemoteNewWorktrees(dependencies: AidenRemoteNewWorktr
      * last ledger write can fail after the save). Any other worktree, even a
      * managed one, is not this chat's setup.
      */
-    async worktreeBranch(chatId: string, workspaceId: string, key = phoneChatWorktreeKey(chatId)): Promise<string | undefined> {
+    async worktreeBranch(
+      chatId: string,
+      workspaceId: string,
+      key = phoneChatWorktreeKey(chatId),
+    ): Promise<string | undefined> {
       const record = await dependencies.record(key);
-      if (!record || record.state === "failed" || record.workspaceId !== workspaceId) return undefined;
+      if (!record || record.state === "failed" || record.workspaceId !== workspaceId)
+        return undefined;
       const managed = (await dependencies.getWorkspace(workspaceId))?.managedWorktree;
-      return managed && managed.branch === record.branch && managed.ownershipToken === record.ownershipToken
+      return managed &&
+        managed.branch === record.branch &&
+        managed.ownershipToken === record.ownershipToken
         ? managed.branch
         : undefined;
     },
@@ -111,23 +132,36 @@ export function createAidenRemoteNewWorktrees(dependencies: AidenRemoteNewWorktr
         // A worktree stacks from the workspace it came from, starting at its own branch.
         const managed = workspace.managedWorktree;
         const source = (await dependencies.listWorkspaces?.())?.find(
-          (candidate) => !candidate.managedWorktree && candidate.folderPath === managed.repositoryPath,
+          (candidate) =>
+            !candidate.managedWorktree && candidate.folderPath === managed.repositoryPath,
         );
         if (!source) {
-          throw refusal("Aiden couldn't find the workspace this worktree came from, so it can't make another worktree from it.", "workspace_unavailable");
+          throw refusal(
+            "Aiden couldn't find the workspace this worktree came from, so it can't make another worktree from it.",
+            "workspace_unavailable",
+          );
         }
         if (workspace.permission === "none") {
-          throw refusal("This workspace has no folder access, so Aiden can't make a worktree in it.", "workspace_unavailable");
+          throw refusal(
+            "This workspace has no folder access, so Aiden can't make a worktree in it.",
+            "workspace_unavailable",
+          );
         }
         workspace = source;
         sourceWorkspaceId = source.id;
         stackedBase = managed.branch;
       }
       if (!workspace?.folderPath || workspace.scratch) {
-        throw refusal("This chat's workspace has no folder, so it can't have a worktree.", "workspace_unavailable");
+        throw refusal(
+          "This chat's workspace has no folder, so it can't have a worktree.",
+          "workspace_unavailable",
+        );
       }
       if (workspace.permission === "none") {
-        throw refusal("This workspace has no folder access, so Aiden can't make a worktree in it.", "workspace_unavailable");
+        throw refusal(
+          "This workspace has no folder access, so Aiden can't make a worktree in it.",
+          "workspace_unavailable",
+        );
       }
       if (workspace.managedWorktree) {
         throw refusal("This chat is already in a worktree.");
@@ -136,9 +170,12 @@ export function createAidenRemoteNewWorktrees(dependencies: AidenRemoteNewWorktr
       try {
         branches = await dependencies.branches(workspace.folderPath);
       } catch {
-        throw refusal("Aiden couldn't read this workspace's Git branches on your computer. Try again.");
+        throw refusal(
+          "Aiden couldn't read this workspace's Git branches on your computer. Try again.",
+        );
       }
-      if (!branches.isRepo) throw refusal("This workspace isn't a Git repository, so it can't have a worktree.");
+      if (!branches.isRepo)
+        throw refusal("This workspace isn't a Git repository, so it can't have a worktree.");
       const asked = options.baseRef ?? stackedBase;
       if (options.branchName !== undefined && !isValidBranchName(options.branchName)) {
         throw refusal("That branch name isn't valid in Git. Choose another, or leave it out.");
@@ -153,7 +190,9 @@ export function createAidenRemoteNewWorktrees(dependencies: AidenRemoteNewWorktr
       );
       if (!base) throw refusal("This repository has no commits yet, so it can't have a worktree.");
       if (asked !== undefined && base.baseRef !== asked) {
-        throw refusal(`Aiden couldn't find the branch ${asked} in this repository. Choose an existing branch, or leave it out.`);
+        throw refusal(
+          `Aiden couldn't find the branch ${asked} in this repository. Choose an existing branch, or leave it out.`,
+        );
       }
       const owner = dependencies.owner(deviceId);
       const request: FirstMessageWorktreeRequest = {
@@ -167,7 +206,8 @@ export function createAidenRemoteNewWorktrees(dependencies: AidenRemoteNewWorktr
       try {
         info = await dependencies.ensure(request, text, owner);
       } catch (error) {
-        if (!(error instanceof FirstMessageWorktreeSettingsChangedError)) throw remoteFailure(error, base.baseRef);
+        if (!(error instanceof FirstMessageWorktreeSettingsChangedError))
+          throw remoteFailure(error, base.baseRef);
         // The repository's default moved since an earlier attempt made this
         // chat's worktree: use that worktree rather than make a second one.
         const earlier = error.worktree;
@@ -177,7 +217,9 @@ export function createAidenRemoteNewWorktrees(dependencies: AidenRemoteNewWorktr
               ...request,
               baseRef: earlier.baseRef,
               fromOrigin: earlier.fromOrigin,
-              ...(earlier.requestedBranchName === undefined ? {} : { branchName: earlier.requestedBranchName }),
+              ...(earlier.requestedBranchName === undefined
+                ? {}
+                : { branchName: earlier.requestedBranchName }),
             },
             text,
             owner,

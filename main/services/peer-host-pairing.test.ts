@@ -157,7 +157,9 @@ test("a denied, closed or self-addressed request saves nothing and says why", as
 
   const self = registryFor(host, { localInstanceId: host.instanceId });
   const before = host.seen.length;
-  const refused = await outcome(self.registry.pairWithRequest(target, () => assert.fail("no code")));
+  const refused = await outcome(
+    self.registry.pairWithRequest(target, () => assert.fail("no code")),
+  );
   assert.equal(refused.status, "failed");
   assert.equal(host.seen.length, before, "pairing with this installation sends nothing");
 });
@@ -190,7 +192,8 @@ async function hostAccepts(host: PeerTestHost, credential: string | undefined) {
     await transport.json({ path: "/server", credential });
     return true;
   } catch (error) {
-    if (error instanceof PeerTransportError && error.code === "authentication_required") return false;
+    if (error instanceof PeerTransportError && error.code === "authentication_required")
+      return false;
     throw error;
   }
 }
@@ -253,7 +256,10 @@ test("a pairing this device cannot save revokes its credential on the other devi
     (await host.devices.listDevices()).filter((device) => device.revokedAt === undefined).length,
     1,
   );
-  assert.deepEqual(await working.request(host.instanceId, { path: "/server" }).then(() => "served"), "served");
+  assert.deepEqual(
+    await working.request(host.instanceId, { path: "/server" }).then(() => "served"),
+    "served",
+  );
 });
 
 test("a setup code opens the sealed payload for the typed address and pairs over the pinned exchange", async (t) => {
@@ -263,7 +269,12 @@ test("a setup code opens the sealed payload for the typed address and pairs over
   const code = host.openSetupCode("lan");
 
   assert.deepEqual(
-    await outcome(registry.pairWithSetupCode({ endpoint: host.lanEndpoint, code: "ABCD-EFGH-JKMN-PQRS-TVWX-YZ" })),
+    await outcome(
+      registry.pairWithSetupCode({
+        endpoint: host.lanEndpoint,
+        code: "ABCD-EFGH-JKMN-PQRS-TVWX-YZ",
+      }),
+    ),
     { status: "invalid_code" },
   );
   assert.deepEqual(saved(), []);
@@ -309,7 +320,11 @@ test("a setup code for a discovered device is bound to its installation, not the
     instanceId: host.instanceId,
   });
   assert.equal(view.id, host.instanceId);
-  assert.equal(discovered.saved()[0]?.endpoint, host.lanEndpoint, "the host's own endpoint is saved");
+  assert.equal(
+    discovered.saved()[0]?.endpoint,
+    host.lanEndpoint,
+    "the host's own endpoint is saved",
+  );
 });
 
 test("a renewed Tailscale key is re-pinned only after the same installation confirms it", async (t) => {
@@ -324,7 +339,9 @@ test("a renewed Tailscale key is re-pinned only after the same installation conf
 
   await host.rotateLeaf();
   assert.notEqual(host.serverSpkiSha256(), original);
-  const server = (await registry.request(host.instanceId, { path: "/server" })) as { instanceId: string };
+  const server = (await registry.request(host.instanceId, { path: "/server" })) as {
+    instanceId: string;
+  };
   assert.equal(server.instanceId, host.instanceId);
   assert.equal(saved()[0]!.serverSpkiSha256, host.serverSpkiSha256());
   assert.equal(repinned(), 1);
@@ -368,7 +385,9 @@ test("a LAN host stays strictly pinned and re-pairing replaces its key but keeps
   assert.equal(saved().length, 1);
   assert.equal(saved()[0]!.serverSpkiSha256, host.serverSpkiSha256());
   assert.notEqual(saved()[0]!.credential, original.credential);
-  const server = (await registry.request(host.instanceId, { path: "/server" })) as { instanceId: string };
+  const server = (await registry.request(host.instanceId, { path: "/server" })) as {
+    instanceId: string;
+  };
   assert.equal(server.instanceId, host.instanceId);
 });
 
@@ -388,7 +407,10 @@ test("names are bounded by Unicode characters, as the host counts them", async (
   // A local name may keep the joiners inside an emoji; 81 characters is too long.
   const coder = "\u{1F469}‍\u{1F4BB}";
   assert.equal((await registry.rename(host.instanceId, `${coder} desk`)).name, `${coder} desk`);
-  await assert.rejects(registry.rename(host.instanceId, "\u{1F5A5}".repeat(81)), /up to 80 characters/u);
+  await assert.rejects(
+    registry.rename(host.instanceId, "\u{1F5A5}".repeat(81)),
+    /up to 80 characters/u,
+  );
   assert.deepEqual(
     (await registry.list()).map((entry) => entry.name),
     [`${coder} desk`],
@@ -398,7 +420,11 @@ test("names are bounded by Unicode characters, as the host counts them", async (
 /** A system resolver without mDNS: every `.local` name is unknown. */
 const withoutMdns: LookupFunction = (hostname, options, callback) => {
   if (/\.local\.?$/iu.test(hostname)) {
-    callback(Object.assign(new Error(`getaddrinfo ENOTFOUND ${hostname}`), { code: "ENOTFOUND" }), "", 0);
+    callback(
+      Object.assign(new Error(`getaddrinfo ENOTFOUND ${hostname}`), { code: "ENOTFOUND" }),
+      "",
+      0,
+    );
     return;
   }
   dns.lookup(hostname, options, callback);
@@ -434,8 +460,14 @@ test("a LAN host found at its Bonjour address stays reachable under its unresolv
     answer(host, "allow"),
   );
   assert.equal(view.state, "connected");
-  assert.equal(saved.hosts[0]?.endpoint, host.lanEndpoint, "the host's canonical endpoint is saved");
-  const server = (await registry.request(host.instanceId, { path: "/server" })) as { instanceId: string };
+  assert.equal(
+    saved.hosts[0]?.endpoint,
+    host.lanEndpoint,
+    "the host's canonical endpoint is saved",
+  );
+  const server = (await registry.request(host.instanceId, { path: "/server" })) as {
+    instanceId: string;
+  };
   assert.equal(server.instanceId, host.instanceId);
 });
 
@@ -451,7 +483,9 @@ test("a setup code for a discovered device pairs through the address it was foun
   });
   assert.equal(view.id, host.instanceId);
   assert.equal(saved.hosts[0]?.endpoint, host.lanEndpoint);
-  const server = (await registry.request(host.instanceId, { path: "/server" })) as { instanceId: string };
+  const server = (await registry.request(host.instanceId, { path: "/server" })) as {
+    instanceId: string;
+  };
   assert.equal(server.instanceId, host.instanceId);
 });
 
@@ -481,7 +515,9 @@ test("after a restart, a paired LAN host is reachable again once discovery repor
 
   const pinned = host.serverSpkiSha256();
   await restarted.rememberLanAddress(host.instanceId, address, pinned);
-  const server = (await restarted.request(host.instanceId, { path: "/server" })) as { instanceId: string };
+  const server = (await restarted.request(host.instanceId, { path: "/server" })) as {
+    instanceId: string;
+  };
   assert.equal(server.instanceId, host.instanceId);
 
   // The address only changes where a connection goes: TLS still checks the
@@ -530,7 +566,9 @@ test("after a restart, discovery recovers a LAN host's address even when Tailsca
         return {
           observedSpki: undefined,
           json: async () => {
-            throw Object.assign(new Error(`getaddrinfo ENOTFOUND ${hostname}`), { code: "ENOTFOUND" });
+            throw Object.assign(new Error(`getaddrinfo ENOTFOUND ${hostname}`), {
+              code: "ENOTFOUND",
+            });
           },
         };
       return new PeerBootstrapTransport({
@@ -562,11 +600,17 @@ test("after a restart, discovery recovers a LAN host's address even when Tailsca
   });
   await eventually(() => reports.length > 0);
   await Promise.all(reports);
-  const server = (await restarted.request(host.instanceId, { path: "/server" })) as { instanceId: string };
+  const server = (await restarted.request(host.instanceId, { path: "/server" })) as {
+    instanceId: string;
+  };
   assert.equal(server.instanceId, host.instanceId);
   await eventually(() => !state.scanning);
   assert.equal(state.devices.length, 1);
-  assert.equal(discovery.target(host.instanceId)?.route, "tailscale", "Tailscale stays the pairing route");
+  assert.equal(
+    discovery.target(host.instanceId)?.route,
+    "tailscale",
+    "Tailscale stays the pairing route",
+  );
 });
 
 test("pairing a Mac counts once by how it was paired, and a denied request counts nothing", async (t) => {
@@ -579,7 +623,10 @@ test("pairing a Mac counts once by how it was paired, and a denied request count
   assert.deepEqual(sent, []);
 
   await registryFor(host).registry.pairWithRequest(target, answer(host, "allow"));
-  await registryFor(host).registry.pairWithSetupCode({ endpoint: host.lanEndpoint, code: host.openSetupCode("lan") });
+  await registryFor(host).registry.pairWithSetupCode({
+    endpoint: host.lanEndpoint,
+    code: host.openSetupCode("lan"),
+  });
   assert.deepEqual(sent, [
     { event: "peer_mac_paired", props: { method: "discovery" } },
     { event: "peer_mac_paired", props: { method: "code" } },

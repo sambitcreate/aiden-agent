@@ -41,11 +41,22 @@ export function RunPanel({
             <li key={`${attempt.nodeId}:${attempt.variant}`} className="flex flex-col gap-1">
               <Text truncate>{nodeTitles.get(attempt.nodeId) ?? "Generate Image"}</Text>
               <AttemptBadge attempt={attempt} />
-              {cost ? <Text variant="small" color="secondary">{cost}</Text> : null}
+              {cost ? (
+                <Text variant="small" color="secondary">
+                  {cost}
+                </Text>
+              ) : null}
               {!running && RETRYABLE.has(attempt.state) ? (
                 <div className="flex flex-wrap gap-1">
                   {RETRY_OPTIONS.map((option) => (
-                    <Button key={option.kind} size="small" variant="transparent" title={option.hint} disabled={busy} onClick={() => onRetry(attempt.nodeId, option.kind)}>
+                    <Button
+                      key={option.kind}
+                      size="small"
+                      variant="transparent"
+                      title={option.hint}
+                      disabled={busy}
+                      onClick={() => onRetry(attempt.nodeId, option.kind)}
+                    >
                       {option.label}
                     </Button>
                   ))}

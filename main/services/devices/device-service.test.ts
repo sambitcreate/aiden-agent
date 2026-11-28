@@ -72,9 +72,30 @@ const SIMCTL_FIXTURE = JSON.stringify({
 const HUB_ANDROID_LIST = {
   simulators: [],
   emulators: [
-    { id: "emulator-5554", name: "Pixel_9_API_35", version: "Android 15.0", platform: "android", booted: true, physical: false },
-    { id: "Pixel_Fold_API_35", name: "Pixel_Fold_API_35", version: "Android 15.0", platform: "android", booted: false, physical: false },
-    { id: "R5CT1234", name: "Galaxy S24", version: "Android 14.0", platform: "android", booted: true, physical: true },
+    {
+      id: "emulator-5554",
+      name: "Pixel_9_API_35",
+      version: "Android 15.0",
+      platform: "android",
+      booted: true,
+      physical: false,
+    },
+    {
+      id: "Pixel_Fold_API_35",
+      name: "Pixel_Fold_API_35",
+      version: "Android 15.0",
+      platform: "android",
+      booted: false,
+      physical: false,
+    },
+    {
+      id: "R5CT1234",
+      name: "Galaxy S24",
+      version: "Android 14.0",
+      platform: "android",
+      booted: true,
+      physical: true,
+    },
   ],
   errors: [],
 };
@@ -111,8 +132,10 @@ function fakeHost(options: FakeHostOptions = {}) {
     run: async (command, args) => {
       commands.push([command, ...args]);
       if (command === "emulator") return { stdout: LIST_AVDS, stderr: "", code: 0 };
-      if (args[1] === "list") return { stdout: SIMCTL_FIXTURE, stderr: "", code: options.listCode ?? 0 };
-      if (args[1] === "shutdown") return { stdout: "", stderr: "", code: options.shutdownCode ?? 0 };
+      if (args[1] === "list")
+        return { stdout: SIMCTL_FIXTURE, stderr: "", code: options.listCode ?? 0 };
+      if (args[1] === "shutdown")
+        return { stdout: "", stderr: "", code: options.shutdownCode ?? 0 };
       return { stdout: "", stderr: "", code: 0 };
     },
   });
@@ -121,7 +144,11 @@ function fakeHost(options: FakeHostOptions = {}) {
     kind: "local",
     platformAvailability: async (platform) => {
       const reason =
-        platform === "ios" ? options.ios : options.android === true ? undefined : (options.android ?? "Android SDK not found.");
+        platform === "ios"
+          ? options.ios
+          : options.android === true
+            ? undefined
+            : (options.android ?? "Android SDK not found.");
       return reason ? { platform, available: false, reason } : { platform, available: true };
     },
     hubInstalled: async () => options.installed ?? true,
@@ -143,13 +170,18 @@ function fakeHost(options: FakeHostOptions = {}) {
       calls.push("ensureAgentReady");
       installs.push(start?.allowInstall === true);
       if (options.agentFails) throw new Error(options.agentFails);
-      if (!(options.agentInstalled ?? true) && !start?.allowInstall) throw new DeviceToolsMissingError("agent-device");
+      if (!(options.agentInstalled ?? true) && !start?.allowInstall)
+        throw new DeviceToolsMissingError("agent-device");
       if (options.agentGate) await options.agentGate;
       onPhase?.("starting");
       ready ??= makeReady();
       return {
         ...ready,
-        agentDevice: { baseUrl: "http://127.0.0.1:54000", token: "daemon-token", entryPath: "/pinned/agent-device/bin.js" },
+        agentDevice: {
+          baseUrl: "http://127.0.0.1:54000",
+          token: "daemon-token",
+          entryPath: "/pinned/agent-device/bin.js",
+        },
       };
     },
     current: () => ready,
@@ -188,12 +220,16 @@ function fakeFetch(
     if (options.unreachable && url.endsWith(options.unreachable)) throw new Error("fetch failed");
     if (options.bootGate && url.endsWith("/boot")) await options.bootGate;
     const screenshot = /\/screenshot(\?|$)/u.test(url);
-    const bootBody = url.endsWith("/boot") ? (JSON.parse(init.body ?? "{}") as { platform?: string; name?: string }) : null;
+    const bootBody = url.endsWith("/boot")
+      ? (JSON.parse(init.body ?? "{}") as { platform?: string; name?: string })
+      : null;
     if (bootBody?.platform === "android") androidBooted = bootBody.name ?? null;
     const androidList = {
       ...HUB_ANDROID_LIST,
       emulators: HUB_ANDROID_LIST.emulators.map((device) =>
-        device.name === androidBooted ? { ...device, id: options.bootSerial ?? "emulator-5556", booted: true } : device,
+        device.name === androidBooted
+          ? { ...device, id: options.bootSerial ?? "emulator-5556", booted: true }
+          : device,
       ),
     };
     const payload = screenshot
@@ -215,9 +251,14 @@ function fakeFetch(
       status: 200,
       headers: {
         get: (name: string) =>
-          name === "content-type" ? (screenshot ? (options.screenshotType ?? "image/png") : "application/json") : null,
+          name === "content-type"
+            ? screenshot
+              ? (options.screenshotType ?? "image/png")
+              : "application/json"
+            : null,
       },
-      arrayBuffer: async () => payload.buffer.slice(payload.byteOffset, payload.byteOffset + payload.byteLength),
+      arrayBuffer: async () =>
+        payload.buffer.slice(payload.byteOffset, payload.byteOffset + payload.byteLength),
     };
   };
   return { fetch, calls };
@@ -243,7 +284,8 @@ async function withService(
   } = {},
 ) {
   const baseDir = await mkdtemp(path.join(tmpdir(), "aiden-devices-service-"));
-  if (options.consent) await writeFile(path.join(baseDir, "consent.json"), JSON.stringify(options.consent));
+  if (options.consent)
+    await writeFile(path.join(baseDir, "consent.json"), JSON.stringify(options.consent));
   const host = fakeHost(options);
   const hub = fakeFetch(options);
   const proxyStarts: number[] = [];
@@ -257,7 +299,11 @@ async function withService(
       assert.equal(resolveHub("remote"), null);
       return {
         origin: "http://127.0.0.1:53000",
-        mintGrant: () => ({ origin: "http://127.0.0.1:53000", token: "T".repeat(43), expiresAt: 1 }),
+        mintGrant: () => ({
+          origin: "http://127.0.0.1:53000",
+          token: "T".repeat(43),
+          expiresAt: 1,
+        }),
         closeHost: () => undefined,
         close: async () => undefined,
       } satisfies DeviceHubProxy;
@@ -301,7 +347,12 @@ test("loading never starts or installs anything", async () => {
   await withService(async ({ service, host }) => {
     const state = await service.load();
     assert.equal(state.hostStatus, "needs-consent");
-    assert.deepEqual(state.consent, { streaming: false, agentAccess: false, peerSharing: false, mobileSharing: false });
+    assert.deepEqual(state.consent, {
+      streaming: false,
+      agentAccess: false,
+      peerSharing: false,
+      mobileSharing: false,
+    });
     assert.deepEqual(state.toolVersions, { hub: "0.12.0", agent: "0.21.12" });
     assert.equal((await service.refresh()).hostStatus, "needs-consent");
     assert.deepEqual(host.calls, []);
@@ -329,8 +380,14 @@ test("streaming consent persists, installs, starts, and lists simulators", async
         mobileSharing: false,
       });
       const statuses = states.map((entry) => entry.hostStatus);
-      assert.deepEqual([...new Set(statuses)], ["needs-consent", "installing", "starting", "ready"]);
-      assert.equal(states.find((entry) => entry.hostStatus === "installing")?.hostStatuses.local.detail, "expo-device-hub@0.12.0");
+      assert.deepEqual(
+        [...new Set(statuses)],
+        ["needs-consent", "installing", "starting", "ready"],
+      );
+      assert.equal(
+        states.find((entry) => entry.hostStatus === "installing")?.hostStatuses.local.detail,
+        "expo-device-hub@0.12.0",
+      );
     },
     { installed: false },
   );
@@ -362,7 +419,10 @@ test("an unavailable host reports the user-readable reason", async () => {
     async ({ service }) => {
       const state = await service.grantConsent("streaming");
       assert.equal(state.hostStatus, "unavailable");
-      assert.equal(state.unavailableReason, "Open Xcode once and accept its license, then try again.");
+      assert.equal(
+        state.unavailableReason,
+        "Open Xcode once and accept its license, then try again.",
+      );
     },
     { unavailable: "Open Xcode once and accept its license, then try again." },
   );
@@ -444,7 +504,11 @@ test("a hub that cannot recycle stream helpers still boots and attaches the simu
   await withService(
     async ({ service, hub }) => {
       await service.refresh();
-      const session = await service.open({ chatId: "chat-1", deviceId: IPHONE_OLD, openedBy: "user" });
+      const session = await service.open({
+        chatId: "chat-1",
+        deviceId: IPHONE_OLD,
+        openedBy: "user",
+      });
       assert.equal(session.deviceId, IPHONE_OLD);
       assert.deepEqual(
         hub.calls.map((call) => new URL(call.url).pathname),
@@ -482,25 +546,50 @@ test("open boots when needed, attaches the stream helper, and is idempotent per 
         /Set up simulator streaming first/u,
       );
       await service.refresh();
-      const session = await service.open({ chatId: "chat-1", deviceId: IPHONE_OLD, openedBy: "user" });
-      assert.deepEqual(session, { chatId: "chat-1", hostId: "local", deviceId: IPHONE_OLD, openedBy: "user" });
+      const session = await service.open({
+        chatId: "chat-1",
+        deviceId: IPHONE_OLD,
+        openedBy: "user",
+      });
+      assert.deepEqual(session, {
+        chatId: "chat-1",
+        hostId: "local",
+        deviceId: IPHONE_OLD,
+        openedBy: "user",
+      });
       assert.deepEqual(hub.calls, [
         // A status read while the simulator is still off makes serve-sim drop a helper left from its last boot.
         { url: "http://127.0.0.1:52000/vendor/serve-sim/readyz", body: undefined },
-        { url: "http://127.0.0.1:52000/api/devices/boot", body: { platform: "ios", id: IPHONE_OLD, name: "iPhone 17" } },
-        { url: "http://127.0.0.1:52000/vendor/serve-sim/grid/api/start", body: { udid: IPHONE_OLD } },
+        {
+          url: "http://127.0.0.1:52000/api/devices/boot",
+          body: { platform: "ios", id: IPHONE_OLD, name: "iPhone 17" },
+        },
+        {
+          url: "http://127.0.0.1:52000/vendor/serve-sim/grid/api/start",
+          body: { udid: IPHONE_OLD },
+        },
       ]);
       await service.open({ chatId: "chat-1", deviceId: IPHONE_OLD, openedBy: "agent" });
       assert.equal(hub.calls.filter((call) => call.url.endsWith("/boot")).length, 1);
       await service.open({ chatId: "chat-2", deviceId: IPHONE, openedBy: "agent" });
-      assert.equal(hub.calls.filter((call) => call.url.endsWith("/boot")).length, 1, "a booted device is not booted again");
+      assert.equal(
+        hub.calls.filter((call) => call.url.endsWith("/boot")).length,
+        1,
+        "a booted device is not booted again",
+      );
       assert.equal(
         hub.calls.filter((call) => call.url.endsWith("/readyz")).length,
         1,
         "a running simulator's helper is never recycled",
       );
-      assert.deepEqual(service.sessionsForChat("chat-1").map((entry) => entry.deviceId), [IPHONE_OLD]);
-      assert.deepEqual(service.sessionsForChat("chat-2").map((entry) => [entry.deviceId, entry.openedBy]), [[IPHONE, "agent"]]);
+      assert.deepEqual(
+        service.sessionsForChat("chat-1").map((entry) => entry.deviceId),
+        [IPHONE_OLD],
+      );
+      assert.deepEqual(
+        service.sessionsForChat("chat-2").map((entry) => [entry.deviceId, entry.openedBy]),
+        [[IPHONE, "agent"]],
+      );
       assert.equal(service.state().sessions.length, 2);
       await assert.rejects(
         service.open({ chatId: "chat-1", deviceId: "MISSING", openedBy: "user" }),
@@ -538,7 +627,12 @@ test("closing a session never shuts the simulator down unless asked", async () =
       assert.deepEqual(service.sessionsForChat("chat-1"), []);
       assert.ok(!host.commands.some((command) => command.includes("shutdown")));
       await service.close({ chatId: "chat-1", hostId: "local", deviceId: IPHONE, shutdown: true });
-      assert.deepEqual(host.commands[host.commands.length - 1], ["xcrun", "simctl", "shutdown", IPHONE]);
+      assert.deepEqual(host.commands[host.commands.length - 1], [
+        "xcrun",
+        "simctl",
+        "shutdown",
+        IPHONE,
+      ]);
       assert.equal(service.state().devices.find((device) => device.id === IPHONE)?.booted, false);
     },
     { consent: { streaming: true } },
@@ -554,7 +648,12 @@ test("a simulator that refuses to shut down is reported, not shown as off", asyn
         service.close({ chatId: "chat-1", hostId: "local", deviceId: IPHONE, shutdown: true }),
         /did not shut down/u,
       );
-      assert.deepEqual(host.commands[host.commands.length - 1], ["xcrun", "simctl", "shutdown", IPHONE]);
+      assert.deepEqual(host.commands[host.commands.length - 1], [
+        "xcrun",
+        "simctl",
+        "shutdown",
+        IPHONE,
+      ]);
       assert.equal(service.state().devices.find((device) => device.id === IPHONE)?.booted, true);
     },
     { consent: { streaming: true }, shutdownCode: 124 },
@@ -610,36 +709,39 @@ test("actions run one simctl argv on a known booted simulator and return fresh s
 });
 
 test("revoking agent access stops only the agent; revoking streaming stops the host", async () => {
+  await withService(async ({ baseDir, service, host }) => {
+    await assert.rejects(service.grantConsent("agentAccess"), /before allowing agent access/u);
+    await service.grantConsent("streaming");
+    assert.equal((await service.grantConsent("agentAccess")).consent.agentAccess, true);
+    await service.open({ chatId: "chat-1", deviceId: IPHONE, openedBy: "user" });
+
+    const afterAgent = await service.revokeConsent("agentAccess");
+    assert.deepEqual(host.calls, ["ensureReady", "ensureAgentReady", "stopAgent"]);
+    assert.equal(service.agentShimDir(), null);
+    assert.equal(afterAgent.hostStatus, "ready");
+    assert.equal(afterAgent.sessions.length, 1);
+
+    const afterStreaming = await service.revokeConsent("streaming");
+    assert.deepEqual(host.calls, ["ensureReady", "ensureAgentReady", "stopAgent", "stop"]);
+    assert.equal(afterStreaming.hostStatus, "needs-consent");
+    assert.deepEqual(afterStreaming.sessions, []);
+    assert.deepEqual(afterStreaming.devices, []);
+    assert.deepEqual(JSON.parse(await readFile(path.join(baseDir, "consent.json"), "utf8")), {
+      version: 1,
+      streaming: false,
+      agentAccess: false,
+      peerSharing: false,
+      mobileSharing: false,
+    });
+  });
   await withService(
-    async ({ baseDir, service, host }) => {
-      await assert.rejects(service.grantConsent("agentAccess"), /before allowing agent access/u);
-      await service.grantConsent("streaming");
-      assert.equal((await service.grantConsent("agentAccess")).consent.agentAccess, true);
-      await service.open({ chatId: "chat-1", deviceId: IPHONE, openedBy: "user" });
-
-      const afterAgent = await service.revokeConsent("agentAccess");
-      assert.deepEqual(host.calls, ["ensureReady", "ensureAgentReady", "stopAgent"]);
-      assert.equal(service.agentShimDir(), null);
-      assert.equal(afterAgent.hostStatus, "ready");
-      assert.equal(afterAgent.sessions.length, 1);
-
-      const afterStreaming = await service.revokeConsent("streaming");
-      assert.deepEqual(host.calls, ["ensureReady", "ensureAgentReady", "stopAgent", "stop"]);
-      assert.equal(afterStreaming.hostStatus, "needs-consent");
-      assert.deepEqual(afterStreaming.sessions, []);
-      assert.deepEqual(afterStreaming.devices, []);
-      assert.deepEqual(JSON.parse(await readFile(path.join(baseDir, "consent.json"), "utf8")), {
-        version: 1,
+    async ({ service }) => {
+      assert.deepEqual((await service.load()).consent, {
         streaming: false,
         agentAccess: false,
         peerSharing: false,
         mobileSharing: false,
       });
-    },
-  );
-  await withService(
-    async ({ service }) => {
-      assert.deepEqual((await service.load()).consent, { streaming: false, agentAccess: false, peerSharing: false, mobileSharing: false });
     },
     { consent: { streaming: false, agentAccess: true } },
   );
@@ -648,34 +750,59 @@ test("revoking agent access stops only the agent; revoking streaming stops the h
 test("granting agent access installs agent-device and writes the pinned shim", async () => {
   await withService(async ({ baseDir, service, host }) => {
     const entryPath = path.join(baseDir, "pinned-agent.mjs");
-    await writeFile(entryPath, 'console.log(JSON.stringify({runtime:process.execPath,args:process.argv.slice(2),mode:process.env.ELECTRON_RUN_AS_NODE ?? null}));');
+    await writeFile(
+      entryPath,
+      "console.log(JSON.stringify({runtime:process.execPath,args:process.argv.slice(2),mode:process.env.ELECTRON_RUN_AS_NODE ?? null}));",
+    );
     const ensureAgent = host.host.ensureAgentReady;
     host.host.ensureAgentReady = async (...args) => {
       const ready = await ensureAgent(...args);
-      return { ...ready, nodePath: process.execPath, agentDevice: { ...ready.agentDevice, entryPath } };
+      return {
+        ...ready,
+        nodePath: process.execPath,
+        agentDevice: { ...ready.agentDevice, entryPath },
+      };
     };
     await service.grantConsent("streaming");
     await service.grantConsent("agentAccess");
     const shimDir = service.agentShimDir();
     assert.equal(shimDir, path.join(baseDir, "bin"));
     const result = spawnSync(path.join(shimDir!, "agent-device"), ["--version"], {
-      encoding: "utf8", env: { ...process.env, ELECTRON_RUN_AS_NODE: "1" },
+      encoding: "utf8",
+      env: { ...process.env, ELECTRON_RUN_AS_NODE: "1" },
     });
     assert.equal(result.status, 0, result.stderr);
-    assert.deepEqual(JSON.parse(result.stdout), { runtime: process.execPath, args: ["--version"], mode: null });
+    assert.deepEqual(JSON.parse(result.stdout), {
+      runtime: process.execPath,
+      args: ["--version"],
+      mode: null,
+    });
 
-    const target = await service.agentTarget({ chatId: "chat-1", hostId: "local", deviceId: IPHONE });
+    const target = await service.agentTarget({
+      chatId: "chat-1",
+      hostId: "local",
+      deviceId: IPHONE,
+    });
     assert.equal(target.command, path.join(shimDir!, "agent-device"));
     assert.equal(target.args[0], "--config");
     assert.match(target.args[3] ?? "", /^aiden-[0-9a-f]{24}$/u);
-    const other = await service.agentTarget({ chatId: "chat-2", hostId: "local", deviceId: IPHONE });
+    const other = await service.agentTarget({
+      chatId: "chat-2",
+      hostId: "local",
+      deviceId: IPHONE,
+    });
     assert.notEqual(other.args[3], target.args[3]);
     assert.equal(other.args[1], target.args[1]);
     assert.deepEqual(JSON.parse(await readFile(target.args[1]!, "utf8")), {
       daemonBaseUrl: "http://127.0.0.1:54000",
       daemonAuthToken: "daemon-token",
     });
-    assert.deepEqual(host.calls, ["ensureReady", "ensureAgentReady", "ensureAgentReady", "ensureAgentReady"]);
+    assert.deepEqual(host.calls, [
+      "ensureReady",
+      "ensureAgentReady",
+      "ensureAgentReady",
+      "ensureAgentReady",
+    ]);
   });
 });
 
@@ -722,7 +849,10 @@ test("a revoke that lands mid-grant wins, and the agent it started is stopped", 
       assert.equal(service.state().consent.agentAccess, false);
       assert.equal(service.agentShimDir(), null);
       assert.deepEqual(host.calls.filter((call) => call === "stopAgent").length, 2);
-      assert.equal(JSON.parse(await readFile(path.join(baseDir, "consent.json"), "utf8")).agentAccess, false);
+      assert.equal(
+        JSON.parse(await readFile(path.join(baseDir, "consent.json"), "utf8")).agentAccess,
+        false,
+      );
     },
     { agentGate },
   );
@@ -796,13 +926,23 @@ test("tool versions are read from disk, and pruning keeps only the pinned instal
     await seedInstall(baseDir, "expo-device-hub", "0.11.0");
     await seedInstall(baseDir, "expo-device-hub", "0.12.0");
     await seedInstall(baseDir, "agent-device", "0.20.0");
-    await mkdir(path.join(baseDir, "tools", "expo-device-hub", ".staging-abc"), { recursive: true });
+    await mkdir(path.join(baseDir, "tools", "expo-device-hub", ".staging-abc"), {
+      recursive: true,
+    });
     const before = await service.toolchain();
-    assert.deepEqual(before.tools.map((tool) => tool.installed), [["0.11.0", "0.12.0"], ["0.20.0"]]);
+    assert.deepEqual(
+      before.tools.map((tool) => tool.installed),
+      [["0.11.0", "0.12.0"], ["0.20.0"]],
+    );
     const after = await service.pruneTools();
-    assert.deepEqual(after.tools.map((tool) => tool.installed), [["0.12.0"], []]);
+    assert.deepEqual(
+      after.tools.map((tool) => tool.installed),
+      [["0.12.0"], []],
+    );
     // An install staging beside the pinned version is left alone.
-    assert.ok((await readdir(path.join(baseDir, "tools", "expo-device-hub"))).includes(".staging-abc"));
+    assert.ok(
+      (await readdir(path.join(baseDir, "tools", "expo-device-hub"))).includes(".staging-abc"),
+    );
     assert.deepEqual(host.calls, [], "reading and pruning never start anything");
   });
 });
@@ -819,7 +959,12 @@ test("removing installed tools turns everything off, stops both helpers, and del
       await writeFile(path.join(baseDir, "hub.json"), "{}");
       assert.ok(service.agentShimDir());
       const state = await service.removeTools();
-      assert.deepEqual(state.consent, { streaming: false, agentAccess: false, peerSharing: false, mobileSharing: false });
+      assert.deepEqual(state.consent, {
+        streaming: false,
+        agentAccess: false,
+        peerSharing: false,
+        mobileSharing: false,
+      });
       assert.equal(state.hostStatus, "needs-consent");
       assert.equal(service.agentShimDir(), null);
       assert.equal(host.host.current(), null);
@@ -861,7 +1006,10 @@ test("removal waits out an agent install in flight, and a grant waits for the re
       const regranted = await regrant;
       assert.equal(regranted.consent.streaming, true);
       assert.equal(regranted.consent.agentAccess, false);
-      assert.deepEqual((await service.toolchain()).tools.map((tool) => tool.installed), [[], []]);
+      assert.deepEqual(
+        (await service.toolchain()).tools.map((tool) => tool.installed),
+        [[], []],
+      );
     },
     { agentGate },
   );
@@ -871,12 +1019,17 @@ test("a streaming revoke while the grant is saving wins before npm is contacted"
   await withService(
     async ({ service, host }) => {
       const grant = service.grantConsent("streaming");
-      while (!service.state().consent.streaming) await new Promise((resolve) => setImmediate(resolve));
+      while (!service.state().consent.streaming)
+        await new Promise((resolve) => setImmediate(resolve));
       const revoked = service.revokeConsent("streaming");
       const state = await grant;
       await revoked;
       assert.equal(state.consent.streaming, false);
-      assert.equal(host.calls.includes("ensureReady"), false, "no install or start after the revoke");
+      assert.equal(
+        host.calls.includes("ensureReady"),
+        false,
+        "no install or start after the revoke",
+      );
       assert.equal(host.host.current(), null);
     },
     { installed: false },
@@ -970,7 +1123,13 @@ test("screenshot directories are private per chat and removed with the chat", as
     assert.match(path.basename(first), /^[0-9a-f]{24}$/u);
     await writeFile(path.join(first, "shot.png"), "png");
     service.closeChat("chat/../1");
-    await waitFor(async () => !(await access(first).then(() => true, () => false)));
+    await waitFor(
+      async () =>
+        !(await access(first).then(
+          () => true,
+          () => false,
+        )),
+    );
     await access(second);
   });
 });
@@ -990,7 +1149,10 @@ test("concurrent consent saves never collide on a temp file", async () => {
         peerSharing: false,
         mobileSharing: false,
       });
-      assert.deepEqual((await readdir(baseDir)).filter((name) => name.endsWith(".tmp")), []);
+      assert.deepEqual(
+        (await readdir(baseDir)).filter((name) => name.endsWith(".tmp")),
+        [],
+      );
     },
     { consent: { streaming: true, agentAccess: true } },
   );
@@ -1024,7 +1186,10 @@ test("screenshots require PNG, and stream grants start one proxy lazily", async 
   await withService(
     async ({ service }) => {
       await service.refresh();
-      await assert.rejects(service.screenshot({ hostId: "local", deviceId: IPHONE }), /screenshot failed/u);
+      await assert.rejects(
+        service.screenshot({ hostId: "local", deviceId: IPHONE }),
+        /screenshot failed/u,
+      );
     },
     { consent: { streaming: true }, screenshotType: "text/html" },
   );
@@ -1054,7 +1219,10 @@ test("the hub's emulators and every AVD become Android devices, without physical
   assert.ok(devices.every((device) => device.platform === "android" && device.kind === "other"));
   // Ids that could read as flags, and malformed entries, never become devices.
   assert.deepEqual(
-    parseAndroidDevices({ emulators: [{ id: "-s", name: "x", platform: "android" }, null, "x"] }, "-avd\n\n"),
+    parseAndroidDevices(
+      { emulators: [{ id: "-s", name: "x", platform: "android" }, null, "x"] },
+      "-avd\n\n",
+    ),
     [],
   );
   assert.deepEqual(parseAndroidDevices(null, ""), []);
@@ -1111,7 +1279,10 @@ test("a Mac without Xcode still lists Android emulators, and a broken Android li
     async ({ service, host }) => {
       const state = await service.refresh();
       assert.equal(state.hostStatus, "ready");
-      assert.deepEqual(new Set(state.devices.map((device) => device.platform)), new Set(["android"]));
+      assert.deepEqual(
+        new Set(state.devices.map((device) => device.platform)),
+        new Set(["android"]),
+      );
       assert.ok(!host.commands.some((command) => command[0] === "xcrun"));
       assert.equal(state.hosts[0]?.platforms?.[0]?.reason, "Xcode was not found.");
     },
@@ -1134,7 +1305,11 @@ test("booting an AVD goes through the hub, and the session follows the emulator 
   await withService(
     async ({ service, hub }) => {
       await service.refresh();
-      const session = await service.open({ chatId: "chat-1", deviceId: "Pixel_Fold_API_35", openedBy: "user" });
+      const session = await service.open({
+        chatId: "chat-1",
+        deviceId: "Pixel_Fold_API_35",
+        openedBy: "user",
+      });
       assert.equal(session.deviceId, "emulator-5556");
       const posts = hub.calls.filter((call) => call.body !== undefined);
       assert.deepEqual(posts, [
@@ -1164,7 +1339,12 @@ test("an emulator that fails to boot says why and opens no session", async () =>
       );
       assert.deepEqual(service.state().sessions, []);
     },
-    { consent: { streaming: true }, android: true, refuse: "/boot", refusal: "Not enough disk space to boot" },
+    {
+      consent: { streaming: true },
+      android: true,
+      refuse: "/boot",
+      refusal: "Not enough disk space to boot",
+    },
   );
 });
 
@@ -1174,24 +1354,50 @@ test("a running emulator opens without any hub call, and Android actions run adb
       await service.refresh();
       await service.open({ chatId: "chat-1", deviceId: "emulator-5554", openedBy: "user" });
       assert.ok(!hub.calls.some((call) => call.body !== undefined));
-      await service.action({ hostId: "local", deviceId: "emulator-5554", type: "setToggle", setting: "networkEnabled", value: false });
+      await service.action({
+        hostId: "local",
+        deviceId: "emulator-5554",
+        type: "setToggle",
+        setting: "networkEnabled",
+        value: false,
+      });
       assert.ok(
-        host.commands.some((command) => command.join(" ") === "adb -s emulator-5554 shell svc wifi disable"),
+        host.commands.some(
+          (command) => command.join(" ") === "adb -s emulator-5554 shell svc wifi disable",
+        ),
       );
-      assert.ok(!host.commands.some((command) => command[0] === "xcrun" && command.includes("emulator-5554")));
+      assert.ok(
+        !host.commands.some(
+          (command) => command[0] === "xcrun" && command.includes("emulator-5554"),
+        ),
+      );
       await assert.rejects(
-        service.action({ hostId: "local", deviceId: "emulator-5554", type: "sendPush", appId: "com.a.b", payload: "Hi" }),
+        service.action({
+          hostId: "local",
+          deviceId: "emulator-5554",
+          type: "sendPush",
+          appId: "com.a.b",
+          payload: "Hi",
+        }),
         /Android Emulators do not support this setting/u,
       );
       await assert.rejects(
-        service.action({ hostId: "local", deviceId: IPHONE, type: "setOrientation", value: "portrait" }),
+        service.action({
+          hostId: "local",
+          deviceId: IPHONE,
+          type: "setOrientation",
+          value: "portrait",
+        }),
         /iOS Simulators do not support this setting/u,
       );
       const png = await service.screenshot({ hostId: "local", deviceId: "emulator-5554" });
       assert.deepEqual([...png], [0x89, 0x50, 0x4e, 0x47]);
       assert.ok(
         hub.calls.some(
-          (call) => call.url === "http://127.0.0.1:52000/vendor/serve-emu/api/screenshot?device=emulator-5554" && call.body === undefined,
+          (call) =>
+            call.url ===
+              "http://127.0.0.1:52000/vendor/serve-emu/api/screenshot?device=emulator-5554" &&
+            call.body === undefined,
         ),
       );
     },
@@ -1204,9 +1410,16 @@ test("shutting an emulator down goes through the hub, never simctl", async () =>
     async ({ service, hub, host }) => {
       await service.refresh();
       await service.open({ chatId: "chat-1", deviceId: "emulator-5554", openedBy: "user" });
-      await service.close({ chatId: "chat-1", hostId: "local", deviceId: "emulator-5554", shutdown: true });
+      await service.close({
+        chatId: "chat-1",
+        hostId: "local",
+        deviceId: "emulator-5554",
+        shutdown: true,
+      });
       assert.deepEqual(
-        hub.calls.filter((call) => call.url.endsWith("/api/devices/shutdown")).map((call) => call.body),
+        hub.calls
+          .filter((call) => call.url.endsWith("/api/devices/shutdown"))
+          .map((call) => call.body),
         [{ platform: "android", id: "emulator-5554", name: "Pixel_9_API_35" }],
       );
       assert.ok(!host.commands.some((command) => command.includes("shutdown")));
@@ -1220,15 +1433,28 @@ test("erase's shutdown of an emulator uses the hub too, and only for devices thi
   await withService(
     async ({ service, hub, host }) => {
       await service.refresh();
-      await assert.rejects(service.shutdownLocal({ hostId: "local", deviceId: "emulator-5560" }), /no longer available/u);
-      await assert.rejects(service.shutdownLocal({ hostId: "peer-mac", deviceId: "emulator-5554" }), /on this Mac/u);
-      assert.equal(hub.calls.filter((call) => call.url.endsWith("/api/devices/shutdown")).length, 0);
+      await assert.rejects(
+        service.shutdownLocal({ hostId: "local", deviceId: "emulator-5560" }),
+        /no longer available/u,
+      );
+      await assert.rejects(
+        service.shutdownLocal({ hostId: "peer-mac", deviceId: "emulator-5554" }),
+        /on this Mac/u,
+      );
+      assert.equal(
+        hub.calls.filter((call) => call.url.endsWith("/api/devices/shutdown")).length,
+        0,
+      );
       await service.shutdownLocal({ hostId: "local", deviceId: "emulator-5554" });
       assert.deepEqual(
-        hub.calls.filter((call) => call.url.endsWith("/api/devices/shutdown")).map((call) => call.body),
+        hub.calls
+          .filter((call) => call.url.endsWith("/api/devices/shutdown"))
+          .map((call) => call.body),
         [{ platform: "android", id: "emulator-5554", name: "Pixel_9_API_35" }],
       );
-      assert.ok(!host.commands.some((command) => command[0] === "xcrun" && command.includes("shutdown")));
+      assert.ok(
+        !host.commands.some((command) => command[0] === "xcrun" && command.includes("shutdown")),
+      );
     },
     { consent: { streaming: true }, android: true },
   );
@@ -1251,7 +1477,14 @@ function fakePeers(listings: Record<string, PeerSimulatorListing | null | Error>
     },
     open: async (hostId, deviceId) => {
       calls.push(`open:${hostId}:${deviceId}`);
-      return { id: deviceId, name: "iPhone 17", platform: "ios", version: "iOS 27.0", booted: true, kind: "iphone" };
+      return {
+        id: deviceId,
+        name: "iPhone 17",
+        platform: "ios",
+        version: "iOS 27.0",
+        booted: true,
+        kind: "iphone",
+      };
     },
     shutdown: async (hostId, deviceId) => {
       calls.push(`shutdown:${hostId}:${deviceId}`);
@@ -1283,7 +1516,9 @@ async function withPeers(
   const baseDir = await mkdtemp(path.join(tmpdir(), "aiden-devices-peers-"));
   await writeFile(path.join(baseDir, "consent.json"), JSON.stringify(consent));
   const peers = fakePeers(listings);
-  let resolver: ((hostId: string) => DeviceHubTarget | null | Promise<DeviceHubTarget | null>) | null = null;
+  let resolver:
+    | ((hostId: string) => DeviceHubTarget | null | Promise<DeviceHubTarget | null>)
+    | null = null;
   const service = createDeviceService({
     baseDir,
     host: fakeHost().host,
@@ -1293,7 +1528,11 @@ async function withPeers(
       resolver = resolveHub;
       return {
         origin: "http://127.0.0.1:53000",
-        mintGrant: () => ({ origin: "http://127.0.0.1:53000", token: "T".repeat(43), expiresAt: 1 }),
+        mintGrant: () => ({
+          origin: "http://127.0.0.1:53000",
+          token: "T".repeat(43),
+          expiresAt: 1,
+        }),
         closeHost: (hostId) => closed.push(hostId),
         close: async () => undefined,
       } satisfies DeviceHubProxy;
@@ -1318,7 +1557,16 @@ async function withPeers(
 const READY_LISTING: PeerSimulatorListing = {
   sharing: true,
   status: "ready",
-  devices: [{ id: PEER_PHONE, name: "iPhone 17", platform: "ios", version: "iOS 27.0", booted: false, kind: "iphone" }],
+  devices: [
+    {
+      id: PEER_PHONE,
+      name: "iPhone 17",
+      platform: "ios",
+      version: "iOS 27.0",
+      booted: false,
+      kind: "iphone",
+    },
+  ],
 };
 
 test("a refresh lists paired Macs after this Mac, and reports why a Mac has no devices", async () => {
@@ -1341,8 +1589,14 @@ test("a refresh lists paired Macs after this Mac, and reports why a Mac has no d
           ["office", "peer", "unavailable"],
         ],
       );
-      assert.equal(state.hosts.find((host) => host.id === "office")?.detail, "Could not reach Mac office.");
-      assert.match(state.hosts.find((host) => host.id === "laptop")?.detail ?? "", /sharing is off on Mac laptop/u);
+      assert.equal(
+        state.hosts.find((host) => host.id === "office")?.detail,
+        "Could not reach Mac office.",
+      );
+      assert.match(
+        state.hosts.find((host) => host.id === "laptop")?.detail ?? "",
+        /sharing is off on Mac laptop/u,
+      );
       assert.deepEqual(
         state.devices.filter((device) => device.hostId === "studio").map((device) => device.id),
         [PEER_PHONE],
@@ -1357,41 +1611,66 @@ test("paired Macs are never contacted without streaming consent or from a local 
     await service.refresh();
     await service.refreshPeers();
     assert.deepEqual(peers.calls, []);
-    await assert.rejects(service.open({ chatId: "c", hostId: "studio", deviceId: PEER_PHONE, openedBy: "user" }));
+    await assert.rejects(
+      service.open({ chatId: "c", hostId: "studio", deviceId: PEER_PHONE, openedBy: "user" }),
+    );
   });
   await withPeers({ studio: READY_LISTING }, { streaming: true }, async ({ service, peers }) => {
     const state = await service.refreshLocal();
     assert.deepEqual(peers.calls, []);
-    assert.deepEqual(state.hosts.map((host) => host.id), ["local"]);
+    assert.deepEqual(
+      state.hosts.map((host) => host.id),
+      ["local"],
+    );
   });
 });
 
 test("opening a paired Mac's simulator goes through the peer, and revoking streaming forgets it", async () => {
-  await withPeers({ studio: READY_LISTING }, { streaming: true }, async ({ service, peers, resolve }) => {
-    await service.refreshPeers();
-    await assert.rejects(
-      service.open({ chatId: "c", hostId: "studio", deviceId: IPHONE, openedBy: "user" }),
-      /no longer available/u,
-    );
-    const session = await service.open({ chatId: "c", hostId: "studio", deviceId: PEER_PHONE, openedBy: "user" });
-    assert.deepEqual(session, { chatId: "c", hostId: "studio", deviceId: PEER_PHONE, openedBy: "user" });
-    assert.ok(peers.calls.includes(`open:studio:${PEER_PHONE}`));
-    assert.equal(service.state().devices.find((device) => device.id === PEER_PHONE)?.booted, true);
+  await withPeers(
+    { studio: READY_LISTING },
+    { streaming: true },
+    async ({ service, peers, resolve }) => {
+      await service.refreshPeers();
+      await assert.rejects(
+        service.open({ chatId: "c", hostId: "studio", deviceId: IPHONE, openedBy: "user" }),
+        /no longer available/u,
+      );
+      const session = await service.open({
+        chatId: "c",
+        hostId: "studio",
+        deviceId: PEER_PHONE,
+        openedBy: "user",
+      });
+      assert.deepEqual(session, {
+        chatId: "c",
+        hostId: "studio",
+        deviceId: PEER_PHONE,
+        openedBy: "user",
+      });
+      assert.ok(peers.calls.includes(`open:studio:${PEER_PHONE}`));
+      assert.equal(
+        service.state().devices.find((device) => device.id === PEER_PHONE)?.booted,
+        true,
+      );
 
-    await service.streamGrant();
-    const upstream = (await resolve()("studio")) as { origin: string } | null;
-    assert.equal(upstream?.origin, "https://studio.local:47831");
-    assert.equal(await resolve()("unknown"), null);
+      await service.streamGrant();
+      const upstream = (await resolve()("studio")) as { origin: string } | null;
+      assert.equal(upstream?.origin, "https://studio.local:47831");
+      assert.equal(await resolve()("unknown"), null);
 
-    await service.close({ chatId: "c", hostId: "studio", deviceId: PEER_PHONE, shutdown: true });
-    assert.ok(peers.calls.includes(`shutdown:studio:${PEER_PHONE}`));
-    await service.open({ chatId: "c", hostId: "studio", deviceId: PEER_PHONE, openedBy: "user" });
+      await service.close({ chatId: "c", hostId: "studio", deviceId: PEER_PHONE, shutdown: true });
+      assert.ok(peers.calls.includes(`shutdown:studio:${PEER_PHONE}`));
+      await service.open({ chatId: "c", hostId: "studio", deviceId: PEER_PHONE, openedBy: "user" });
 
-    const state = await service.revokeConsent("streaming");
-    assert.deepEqual(state.hosts.map((host) => host.id), ["local"]);
-    assert.deepEqual(state.sessions, []);
-    assert.equal(await resolve()("studio"), null);
-  });
+      const state = await service.revokeConsent("streaming");
+      assert.deepEqual(
+        state.hosts.map((host) => host.id),
+        ["local"],
+      );
+      assert.deepEqual(state.sessions, []);
+      assert.equal(await resolve()("studio"), null);
+    },
+  );
 });
 
 test("a streaming revoke during a peer refresh or open is never undone", async () => {
@@ -1403,7 +1682,10 @@ test("a streaming revoke during a peer refresh or open is never undone", async (
     await service.revokeConsent("streaming");
     answer(READY_LISTING);
     await refreshing;
-    assert.deepEqual(service.state().hosts.map((host) => host.id), ["local"]);
+    assert.deepEqual(
+      service.state().hosts.map((host) => host.id),
+      ["local"],
+    );
   });
   await withPeers({ studio: READY_LISTING }, { streaming: true }, async ({ service, peers }) => {
     await service.refreshPeers();
@@ -1413,13 +1695,21 @@ test("a streaming revoke during a peer refresh or open is never undone", async (
       await new Promise<void>((resolve) => (proceed = resolve));
       return open(hostId, deviceId);
     };
-    const opening = service.open({ chatId: "c", hostId: "studio", deviceId: PEER_PHONE, openedBy: "user" });
+    const opening = service.open({
+      chatId: "c",
+      hostId: "studio",
+      deviceId: PEER_PHONE,
+      openedBy: "user",
+    });
     await new Promise((resolve) => setImmediate(resolve));
     await service.revokeConsent("streaming");
     proceed();
     await assert.rejects(opening, /turned off while opening/u);
     assert.deepEqual(service.state().sessions, []);
-    assert.deepEqual(service.state().hosts.map((host) => host.id), ["local"]);
+    assert.deepEqual(
+      service.state().hosts.map((host) => host.id),
+      ["local"],
+    );
   });
 });
 
@@ -1435,12 +1725,42 @@ test("a paired Mac may rename only a stopped AVD, and only to an emulator serial
       android("emulator-5554", true, "Pixel Fold"),
     ],
   };
-  const cases: Array<{ deviceId: string; answer: ReturnType<typeof android> | null; accepted: boolean; why: string }> = [
-    { deviceId: "Pixel_9_API_35", answer: android("emulator-5556", true, "Pixel 9"), accepted: true, why: "a stopped AVD boots under its serial" },
-    { deviceId: "Pixel_9_API_35", answer: android("emulator-5554", true, "Pixel 9"), accepted: false, why: "the serial belongs to another listed device" },
-    { deviceId: "Pixel_9_API_35", answer: android("Pixel_Tablet_API_36", true), accepted: false, why: "not an emulator serial" },
-    { deviceId: "emulator-5554", answer: android("emulator-5560", true, "Pixel Fold"), accepted: false, why: "a running emulator keeps its id" },
-    { deviceId: PEER_PHONE, answer: android("emulator-5556", true), accepted: false, why: "an iOS simulator is not an AVD" },
+  const cases: Array<{
+    deviceId: string;
+    answer: ReturnType<typeof android> | null;
+    accepted: boolean;
+    why: string;
+  }> = [
+    {
+      deviceId: "Pixel_9_API_35",
+      answer: android("emulator-5556", true, "Pixel 9"),
+      accepted: true,
+      why: "a stopped AVD boots under its serial",
+    },
+    {
+      deviceId: "Pixel_9_API_35",
+      answer: android("emulator-5554", true, "Pixel 9"),
+      accepted: false,
+      why: "the serial belongs to another listed device",
+    },
+    {
+      deviceId: "Pixel_9_API_35",
+      answer: android("Pixel_Tablet_API_36", true),
+      accepted: false,
+      why: "not an emulator serial",
+    },
+    {
+      deviceId: "emulator-5554",
+      answer: android("emulator-5560", true, "Pixel Fold"),
+      accepted: false,
+      why: "a running emulator keeps its id",
+    },
+    {
+      deviceId: PEER_PHONE,
+      answer: android("emulator-5556", true),
+      accepted: false,
+      why: "an iOS simulator is not an AVD",
+    },
   ];
   for (const { deviceId, answer, accepted, why } of cases) {
     await withPeers({ studio: listing }, { streaming: true }, async ({ service, peers }) => {
@@ -1451,11 +1771,18 @@ test("a paired Mac may rename only a stopped AVD, and only to an emulator serial
       if (!accepted) {
         await assert.rejects(opening, /answered with a different device/u, why);
         assert.deepEqual(service.state().sessions, [], why);
-        assert.deepEqual(service.state().devices.filter((device) => device.hostId === "studio"), before, why);
+        assert.deepEqual(
+          service.state().devices.filter((device) => device.hostId === "studio"),
+          before,
+          why,
+        );
         return;
       }
       assert.equal((await opening).deviceId, answer!.id, why);
-      const ids = service.state().devices.filter((device) => device.hostId === "studio").map((device) => device.id);
+      const ids = service
+        .state()
+        .devices.filter((device) => device.hostId === "studio")
+        .map((device) => device.id);
       assert.deepEqual(ids, [PEER_PHONE, "emulator-5556", "emulator-5554"], why);
     });
   }
@@ -1473,32 +1800,46 @@ test("closing a paired Mac's simulator while it is still opening wins over the o
         await new Promise<void>((resolve) => (proceed = resolve));
         return open(hostId, deviceId);
       };
-      const opening = service.open({ chatId: "c", hostId: "studio", deviceId: PEER_PHONE, openedBy: "user" });
+      const opening = service.open({
+        chatId: "c",
+        hostId: "studio",
+        deviceId: PEER_PHONE,
+        openedBy: "user",
+      });
       await waitFor(() => waiting);
-      if (closeWith === "session") await service.close({ chatId: "c", hostId: "studio", deviceId: PEER_PHONE });
+      if (closeWith === "session")
+        await service.close({ chatId: "c", hostId: "studio", deviceId: PEER_PHONE });
       else service.closeChat("c");
       proceed();
       await assert.rejects(opening, /closed while it was opening/u);
       assert.deepEqual(service.sessionsForChat("c"), [], closeWith);
       peers.port.open = open;
       await service.open({ chatId: "c", hostId: "studio", deviceId: PEER_PHONE, openedBy: "user" });
-      assert.equal(service.sessionsForChat("c").length, 1, "a fresh open after the close still works");
+      assert.equal(
+        service.sessionsForChat("c").length,
+        1,
+        "a fresh open after the close still works",
+      );
     });
   }
 });
 
 test("proxied streams to a paired Mac close when it stops being ready or streaming is revoked", async () => {
-  await withPeers({ studio: READY_LISTING }, { streaming: true }, async ({ service, peers, closed }) => {
-    await service.refreshPeers();
-    await service.streamGrant();
-    peers.port.list = async () => ({ sharing: false, status: "ready", devices: [] });
-    await service.refreshPeers();
-    await new Promise((resolve) => setImmediate(resolve));
-    assert.deepEqual(closed, ["studio"]);
-    await service.revokeConsent("streaming");
-    await new Promise((resolve) => setImmediate(resolve));
-    assert.deepEqual(closed, ["studio", "studio"]);
-  });
+  await withPeers(
+    { studio: READY_LISTING },
+    { streaming: true },
+    async ({ service, peers, closed }) => {
+      await service.refreshPeers();
+      await service.streamGrant();
+      peers.port.list = async () => ({ sharing: false, status: "ready", devices: [] });
+      await service.refreshPeers();
+      await new Promise((resolve) => setImmediate(resolve));
+      assert.deepEqual(closed, ["studio"]);
+      await service.revokeConsent("streaming");
+      await new Promise((resolve) => setImmediate(resolve));
+      assert.deepEqual(closed, ["studio", "studio"]);
+    },
+  );
 });
 
 test("paired Macs reach this Mac's simulators only while streaming and sharing are both on", async () => {
@@ -1599,7 +1940,11 @@ test("phones see shared Android emulators but open only iOS Simulators", async (
       const mobile = service.shareHost("mobile");
       const listing = await mobile.list();
       const emulator = listing.devices.find((device) => device.id === "emulator-5554");
-      assert.equal(emulator?.platform, "android", "Android emulators are listed for phones to show as Open on your Mac");
+      assert.equal(
+        emulator?.platform,
+        "android",
+        "Android emulators are listed for phones to show as Open on your Mac",
+      );
       const before = hub.calls.length;
       await assert.rejects(mobile.open("emulator-5554"), (error: unknown) => {
         assert.equal((error as { code?: string }).code, "capability_denied");
@@ -1615,9 +1960,21 @@ test("phones see shared Android emulators but open only iOS Simulators", async (
       const commandsBefore = host.commands.length;
       const denied = (error: unknown) => (error as { code?: string }).code === "capability_denied";
       await assert.rejects(mobile.shutdown("emulator-5554"), denied);
-      await assert.rejects(mobile.action({ hostId: "local", deviceId: iphone.id, type: "setAppearance", value: "dark" }), denied);
+      await assert.rejects(
+        mobile.action({
+          hostId: "local",
+          deviceId: iphone.id,
+          type: "setAppearance",
+          value: "dark",
+        }),
+        denied,
+      );
       assert.equal(hub.calls.length, deniedBefore, "refused phone mutations never reach the hub");
-      assert.equal(host.commands.length, commandsBefore, "refused phone mutations never run a device command");
+      assert.equal(
+        host.commands.length,
+        commandsBefore,
+        "refused phone mutations never run a device command",
+      );
       assert.equal(
         (await mobile.list()).devices.find((device) => device.id === "emulator-5554")?.booted,
         true,

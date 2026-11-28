@@ -29,7 +29,9 @@ test("Bot share_image is pinned to the exact managed home", async () => {
         inode: identity.ino.toString(),
       },
       scopeToWorkspace: true,
-      share: () => { shares += 1; },
+      share: () => {
+        shares += 1;
+      },
     });
     await tool.execute("inside", { path: "inside.png" });
     assert.equal(shares, 1);

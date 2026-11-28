@@ -22,7 +22,12 @@ export interface FauxModels {
 
 export function createFauxModels(
   responses: FauxResponseStep[] = [],
-  options: { tokensPerSecond?: number; provider?: string; modelId?: string; input?: ("text" | "image")[] } = {},
+  options: {
+    tokensPerSecond?: number;
+    provider?: string;
+    modelId?: string;
+    input?: ("text" | "image")[];
+  } = {},
 ): FauxModels {
   const faux = fauxProvider({
     provider: options.provider ?? FAUX_PROVIDER,

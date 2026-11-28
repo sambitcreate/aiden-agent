@@ -25,8 +25,15 @@ import {
   type SettingsManager,
 } from "@earendil-works/pi-coding-agent";
 import type { Api, Model, TranscriptContext } from "@earendil-works/pi-ai";
-import { memoryFactLinesInBranch, withoutMemoryFacts, withoutStatedMemoryFacts } from "../../../main/services/chat-frozen-state.js";
-import { prefixContinuesContext, summaryOnCachedPrefix } from "../../../main/services/pi-compaction-core.js";
+import {
+  memoryFactLinesInBranch,
+  withoutMemoryFacts,
+  withoutStatedMemoryFacts,
+} from "../../../main/services/chat-frozen-state.js";
+import {
+  prefixContinuesContext,
+  summaryOnCachedPrefix,
+} from "../../../main/services/pi-compaction-core.js";
 import type { SideCallPrefix } from "../../../main/services/side-call-prefix.js";
 
 export interface DaemonCompactionMemory {
@@ -44,25 +51,50 @@ export interface DaemonCompactionMemory {
 /** Pi's virtual models route each request; a summary goes to the physical model the route picks. */
 const VIRTUAL_MODEL_API = "pi-virtual";
 
-export async function compactWithoutMemoryFacts(event: SessionBeforeCompactEvent, memory: DaemonCompactionMemory): Promise<SessionBeforeCompactResult> {
+export async function compactWithoutMemoryFacts(
+  event: SessionBeforeCompactEvent,
+  memory: DaemonCompactionMemory,
+): Promise<SessionBeforeCompactResult> {
   try {
     const selected = memory.model;
     if (!selected) return { cancel: true };
-    const approved = await memory.approvedFactLines?.().catch(() => []) ?? [];
-    const facts = [...memoryFactLinesInBranch(event.branchEntries), ...memory.toldFacts, ...approved];
+    const approved = (await memory.approvedFactLines?.().catch(() => [])) ?? [];
+    const facts = [
+      ...memoryFactLinesInBranch(event.branchEntries),
+      ...memory.toldFacts,
+      ...approved,
+    ];
     const { preparation, signal } = event;
     const summaryPreparation = {
       ...preparation,
       messagesToSummarize: withoutMemoryFacts(preparation.messagesToSummarize),
       turnPrefixMessages: withoutMemoryFacts(preparation.turnPrefixMessages),
     };
-    const { model, thinkingLevel } = selected.api === VIRTUAL_MODEL_API
-      ? await memory.session.modelRuntime.resolveModel(selected, convertToLlm(memory.session.messages), { reason: "direct", thinkingLevel: memory.session.thinkingLevel, signal })
-      : { model: selected, thinkingLevel: memory.session.thinkingLevel };
+    const { model, thinkingLevel } =
+      selected.api === VIRTUAL_MODEL_API
+        ? await memory.session.modelRuntime.resolveModel(
+            selected,
+            convertToLlm(memory.session.messages),
+            { reason: "direct", thinkingLevel: memory.session.thinkingLevel, signal },
+          )
+        : { model: selected, thinkingLevel: memory.session.thinkingLevel };
     const { agent } = memory.session;
-    const result = (facts.length === 0 && event.reason !== "overflow" ? await cachedCompaction(event, memory, model) : undefined)
-      ?? await compact(summaryPreparation, model, undefined, undefined, event.customInstructions, signal, thinkingLevel,
-        agent.streamFunction, undefined, memory.settings.getRetrySettings());
+    const result =
+      (facts.length === 0 && event.reason !== "overflow"
+        ? await cachedCompaction(event, memory, model)
+        : undefined) ??
+      (await compact(
+        summaryPreparation,
+        model,
+        undefined,
+        undefined,
+        event.customInstructions,
+        signal,
+        thinkingLevel,
+        agent.streamFunction,
+        undefined,
+        memory.settings.getRetrySettings(),
+      ));
     // Whichever lines the summarizer wrote, none that states a fact is kept;
     // a fact split across kept lines fails the compaction.
     const kept = withoutStatedMemoryFacts(result.summary, facts);
@@ -79,20 +111,44 @@ export async function compactWithoutMemoryFacts(event: SessionBeforeCompactEvent
  * stream function and payload hook, with the instruction after the reply.
  * Only called once no fact was ever told the chat.
  */
-async function cachedCompaction(event: SessionBeforeCompactEvent, memory: DaemonCompactionMemory, model: Model<Api>) {
+async function cachedCompaction(
+  event: SessionBeforeCompactEvent,
+  memory: DaemonCompactionMemory,
+  model: Model<Api>,
+) {
   let prefix: SideCallPrefix | undefined;
-  try { prefix = await memory.cachedPrefix?.(); } catch { return undefined; }
+  try {
+    prefix = await memory.cachedPrefix?.();
+  } catch {
+    return undefined;
+  }
   if (!prefix || !prefixContinuesContext(prefix, model, memory.session.messages)) return undefined;
   const { agent } = memory.session;
   const { preparation } = event;
   const summary = await summaryOnCachedPrefix({
-    prefix, model, fileOps: preparation.fileOps, reserveTokens: preparation.settings.reserveTokens,
-    signal: event.signal, customInstructions: event.customInstructions,
+    prefix,
+    model,
+    fileOps: preparation.fileOps,
+    reserveTokens: preparation.settings.reserveTokens,
+    signal: event.signal,
+    customInstructions: event.customInstructions,
     approvedMemoryFacts: async () => (await memory.approvedFactLines?.()) ?? [],
     complete: async (requestModel, context, options) =>
       // The continuation is the turn's own transcript context, replayed with the instruction appended.
-      (await agent.streamFunction(requestModel, context as TranscriptContext, { ...options, onPayload: agent.onPayload })).result(),
+      (
+        await agent.streamFunction(requestModel, context as TranscriptContext, {
+          ...options,
+          onPayload: agent.onPayload,
+        })
+      ).result(),
   });
-  return summary && { summary: summary.summary, firstKeptEntryId: preparation.firstKeptEntryId, tokensBefore: preparation.tokensBefore,
-    ...(summary.usage ? { usage: summary.usage } : {}), details: { readFiles: summary.readFiles, modifiedFiles: summary.modifiedFiles } };
+  return (
+    summary && {
+      summary: summary.summary,
+      firstKeptEntryId: preparation.firstKeptEntryId,
+      tokensBefore: preparation.tokensBefore,
+      ...(summary.usage ? { usage: summary.usage } : {}),
+      details: { readFiles: summary.readFiles, modifiedFiles: summary.modifiedFiles },
+    }
+  );
 }

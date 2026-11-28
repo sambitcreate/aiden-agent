@@ -34,7 +34,11 @@ export interface AcpProviderSignIn {
 export interface AcpHarnessProviderOptions {
   definition: AcpHarnessDefinition;
   /** Usually `runtime.stream`; resolved lazily so the runtime can start on first use. */
-  stream(model: Model<Api>, context: TranscriptContext, options?: SimpleStreamOptions): AssistantMessageEventStream;
+  stream(
+    model: Model<Api>,
+    context: TranscriptContext,
+    options?: SimpleStreamOptions,
+  ): AssistantMessageEventStream;
   signIn: AcpProviderSignIn;
   /** Authenticated catalog discovery (starts the agent). */
   discoverModels(signal: AbortSignal): Promise<Model<Api>[]>;

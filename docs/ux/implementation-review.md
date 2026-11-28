@@ -4,20 +4,20 @@ Approved from [Now vs proposed](now-vs-proposed.html). The [journey chart](../pl
 
 ## Quick review
 
-| Try this | Look for |
-| --- | --- |
-| First-run AI setup | Choose an account, an API key, a local model or Set up later. Advanced connection opens custom setup. Custom setup cannot complete without an available default model. |
-| Settings → Aiden On The Go | Connect your phone / Scan to finish. Choose a method, acknowledge once, scan the code. |
-| Cancel the phone acknowledgement | Access stays off. No route changes. |
-| Interrupt or fail phone preparation | New access is rolled back when the result is known. Existing access and unrelated routes are preserved. Uncertain changes require explicit verification. |
-| Create a bot | Name and instructions → model and access. Optional appearance and detailed capabilities. Fresh desktop drafts start with no custom tool grants. |
-| Telegram | Token → model/access → connect and pair. Enable and connect happen together after an unattended-access acknowledgement. |
-| Voice | Choose where audio goes. Errors stay beside the draft with Open voice settings. |
-| Computer Use | Read the screenshot/provider explanation before enable; then handle Mac permissions. |
-| Scheduled task | Review the task and its access before creation. Failed saves keep the draft. |
-| Connect a plugin | Connect checks the endpoint’s tool availability. Errors stay in the dialog. |
-| Search Settings | Try “connect my phone”, “use my voice”, “connect my ai”, or “see my screen”. |
-| Native pairing | Updated Mac instructions, scanning first, manual entry available, raw payload import under Advanced. |
+| Try this                            | Look for                                                                                                                                                               |
+| ----------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| First-run AI setup                  | Choose an account, an API key, a local model or Set up later. Advanced connection opens custom setup. Custom setup cannot complete without an available default model. |
+| Settings → Aiden On The Go          | Connect your phone / Scan to finish. Choose a method, acknowledge once, scan the code.                                                                                 |
+| Cancel the phone acknowledgement    | Access stays off. No route changes.                                                                                                                                    |
+| Interrupt or fail phone preparation | New access is rolled back when the result is known. Existing access and unrelated routes are preserved. Uncertain changes require explicit verification.               |
+| Create a bot                        | Name and instructions → model and access. Optional appearance and detailed capabilities. Fresh desktop drafts start with no custom tool grants.                        |
+| Telegram                            | Token → model/access → connect and pair. Enable and connect happen together after an unattended-access acknowledgement.                                                |
+| Voice                               | Choose where audio goes. Errors stay beside the draft with Open voice settings.                                                                                        |
+| Computer Use                        | Read the screenshot/provider explanation before enable; then handle Mac permissions.                                                                                   |
+| Scheduled task                      | Review the task and its access before creation. Failed saves keep the draft.                                                                                           |
+| Connect a plugin                    | Connect checks the endpoint’s tool availability. Errors stay in the dialog.                                                                                            |
+| Search Settings                     | Try “connect my phone”, “use my voice”, “connect my ai”, or “see my screen”.                                                                                           |
+| Native pairing                      | Updated Mac instructions, scanning first, manual entry available, raw payload import under Advanced.                                                                   |
 
 Two desktop actions means **Connect a device → Enable and show code after choosing the method**. External Tailscale installation/sign-in/HTTPS authorization, scanning, and OS permission prompts are additional steps.
 

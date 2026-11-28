@@ -77,7 +77,9 @@ test("keeps datasets as both bounded text attachments and inspectable local file
   );
   assert.equal(result.attachments[0]?.kind, "text");
   assert.deepEqual(stored, [{ name: "data.csv", mimeType: "text/csv" }]);
-  assert.deepEqual(result.localFiles, [{ name: "data.csv", mimeType: "text/csv", path: "/private/inbox/data.csv", size: 7 }]);
+  assert.deepEqual(result.localFiles, [
+    { name: "data.csv", mimeType: "text/csv", path: "/private/inbox/data.csv", size: 7 },
+  ]);
   assert.match(result.text, /Local path: \/private\/inbox\/data\.csv/);
 });
 
@@ -86,25 +88,51 @@ test("stores PDFs and videos as inspectable local files", async () => {
     {
       api: {
         async downloadFile(fileId) {
-          return { file: { file_id: fileId, file_unique_id: fileId }, bytes: Uint8Array.from([1, 2]) };
+          return {
+            file: { file_id: fileId, file_unique_id: fileId },
+            bytes: Uint8Array.from([1, 2]),
+          };
         },
       },
-      async storeFile({ name }) { return `/private/inbox/${name}`; },
+      async storeFile({ name }) {
+        return `/private/inbox/${name}`;
+      },
     },
     {
       message_id: 7,
       chat: privateChat,
       date: 0,
-      document: { file_id: "pdf", file_unique_id: "p", file_name: "paper.pdf", mime_type: "application/pdf" },
-      video: { file_id: "video", file_unique_id: "v", file_name: "clip.mp4", mime_type: "video/mp4", width: 10, height: 10, duration: 1 },
+      document: {
+        file_id: "pdf",
+        file_unique_id: "p",
+        file_name: "paper.pdf",
+        mime_type: "application/pdf",
+      },
+      video: {
+        file_id: "video",
+        file_unique_id: "v",
+        file_name: "clip.mp4",
+        mime_type: "video/mp4",
+        width: 10,
+        height: 10,
+        duration: 1,
+      },
     },
   );
-  assert.deepEqual(result.localFiles.map(({ name }) => name), ["paper.pdf", "clip.mp4"]);
+  assert.deepEqual(
+    result.localFiles.map(({ name }) => name),
+    ["paper.pdf", "clip.mp4"],
+  );
 });
 
 function onDeviceRouter(onDevice: string[]) {
   return createTranscribeRouter({
-    resolve: async () => ({ kind: "ready", provider: "local", modelId: "parakeet-v3", automatic: true }),
+    resolve: async () => ({
+      kind: "ready",
+      provider: "local",
+      modelId: "parakeet-v3",
+      automatic: true,
+    }),
     local: {
       async oggOpus(bytes, modelId) {
         onDevice.push(`${modelId}:${bytes.byteLength}`);
@@ -122,7 +150,10 @@ test("an on-device resolution transcribes a Telegram voice note locally", async 
     {
       api: {
         async downloadFile() {
-          return { file: { file_id: "v", file_unique_id: "u" }, bytes: Uint8Array.from([79, 103, 103, 83]) };
+          return {
+            file: { file_id: "v", file_unique_id: "u" },
+            bytes: Uint8Array.from([79, 103, 103, 83]),
+          };
         },
       },
       transcribeAudio: onDeviceRouter(onDevice),
@@ -154,10 +185,18 @@ test("audio the on-device path cannot decode gets a cloud-provider notice", asyn
       message_id: 8,
       chat: privateChat,
       date: 0,
-      audio: { file_id: "a", file_unique_id: "u", duration: 1, mime_type: "audio/mpeg", file_name: "song.mp3" },
+      audio: {
+        file_id: "a",
+        file_unique_id: "u",
+        duration: 1,
+        mime_type: "audio/mpeg",
+        file_name: "song.mp3",
+      },
     },
   );
   assert.deepEqual(onDevice, []);
   assert.equal(result.text, "");
-  assert.deepEqual(result.notices, ["song.mp3 was not transcribed: This audio format needs a cloud voice provider."]);
+  assert.deepEqual(result.notices, [
+    "song.mp3 was not transcribed: This audio format needs a cloud voice provider.",
+  ]);
 });

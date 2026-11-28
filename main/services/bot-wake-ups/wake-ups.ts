@@ -9,11 +9,23 @@ import {
   BOT_WAKE_UP_LIMITS,
   BOT_WAKE_UP_ROUTINE_NAME,
 } from "../../../renderer/shared/bot-wake-ups.js";
-import { botRoutineCron, type BotRoutineSchedule } from "../../../renderer/shared/bot-routine-schedule.js";
+import {
+  botRoutineCron,
+  type BotRoutineSchedule,
+} from "../../../renderer/shared/bot-routine-schedule.js";
 import { nextScheduledRun } from "../schedule-store-core.js";
-import { BOT_ROUTINE_CATCH_UP_WINDOW_MS, isSpentBotWakeUp, type BotRoutineService } from "../scheduled-bot-routines.js";
+import {
+  BOT_ROUTINE_CATCH_UP_WINDOW_MS,
+  isSpentBotWakeUp,
+  type BotRoutineService,
+} from "../scheduled-bot-routines.js";
 import type { ScheduledTask } from "../types.js";
-import { localClockParts, resolveWakeUpTime, WAKE_UP_INVALID_TIME_MESSAGE, type WakeUpWhen } from "../wake-up-time.js";
+import {
+  localClockParts,
+  resolveWakeUpTime,
+  WAKE_UP_INVALID_TIME_MESSAGE,
+  type WakeUpWhen,
+} from "../wake-up-time.js";
 
 export interface BotWakeUp {
   id: string;
@@ -65,7 +77,8 @@ export function resolveBotWakeUpTime(
   const { fireAt, local } = resolved;
   const schedule = { kind: "once" as const, date: local.date, time: local.time };
   try {
-    if (nextScheduledRun(botRoutineCron(schedule), zone, new Date(now)) !== fireAt) return undefined;
+    if (nextScheduledRun(botRoutineCron(schedule), zone, new Date(now)) !== fireAt)
+      return undefined;
   } catch {
     return undefined;
   }
@@ -86,7 +99,12 @@ function projectWakeUp(task: ScheduledTask, zone: string): BotWakeUp {
 
 /** Whether `task` is a wake-up of `botId` still waiting for its time. */
 function isPendingWakeUp(task: ScheduledTask, botId: string): boolean {
-  return task.botId === botId && task.wakeUp !== undefined && task.enabled && task.nextRunAt !== undefined;
+  return (
+    task.botId === botId &&
+    task.wakeUp !== undefined &&
+    task.enabled &&
+    task.nextRunAt !== undefined
+  );
 }
 
 const INVALID_TIME_MESSAGE = `${WAKE_UP_INVALID_TIME_MESSAGE} A time in the hour a daylight-saving change repeats can't be set; pick one after it.`;
@@ -120,15 +138,21 @@ export function createBotWakeUps(dependencies: BotWakeUpDependencies) {
   const prune = async (botId: string): Promise<void> => {
     const cutoff = now() - BOT_ROUTINE_CATCH_UP_WINDOW_MS;
     for (const task of await dependencies.store.list()) {
-      if (task.botId !== botId || !isSpentBotWakeUp(task) || (task.lastRunAt ?? 0) >= cutoff) continue;
-      await dependencies.routines.delete({ botId, id: task.id }, { cleanup: "background" }).catch(() => undefined);
+      if (task.botId !== botId || !isSpentBotWakeUp(task) || (task.lastRunAt ?? 0) >= cutoff)
+        continue;
+      await dependencies.routines
+        .delete({ botId, id: task.id }, { cleanup: "background" })
+        .catch(() => undefined);
     }
   };
 
   return {
     pending,
 
-    async set(botId: string, input: { when: BotWakeUpWhen; note: string }): Promise<BotWakeUpOutcome<{ wakeUp: BotWakeUp }>> {
+    async set(
+      botId: string,
+      input: { when: BotWakeUpWhen; note: string },
+    ): Promise<BotWakeUpOutcome<{ wakeUp: BotWakeUp }>> {
       const note = input.note.trim();
       if (!note || [...note].length > BOT_WAKE_UP_LIMITS.noteChars) {
         return {
@@ -142,7 +166,11 @@ export function createBotWakeUps(dependencies: BotWakeUpDependencies) {
         // one turned off after it is followed by `cancelAll` in the same queue.
         const generation = await dependencies.generation(botId);
         if (generation === null) {
-          return { ok: false, code: "off", message: "The person turned off wake-ups for this Bot." };
+          return {
+            ok: false,
+            code: "off",
+            message: "The person turned off wake-ups for this Bot.",
+          };
         }
         const zone = dependencies.timezone();
         const at = now();
@@ -192,7 +220,13 @@ export function createBotWakeUps(dependencies: BotWakeUpDependencies) {
     async cancel(botId: string, id: string): Promise<BotWakeUpOutcome<{ cancelled: BotWakeUp }>> {
       return serial(botId, async () => {
         const task = (await pendingTasks(botId)).find((candidate) => candidate.id === id);
-        if (!task) return { ok: false, code: "not_found", message: "No pending wake-up has that id.", pending: await pending(botId) };
+        if (!task)
+          return {
+            ok: false,
+            code: "not_found",
+            message: "No pending wake-up has that id.",
+            pending: await pending(botId),
+          };
         // In the background: settling the wake-up's issues appends to this
         // Bot's chat, which waits for the calling tool's turn to end.
         await dependencies.routines.delete(

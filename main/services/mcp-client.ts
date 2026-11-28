@@ -36,10 +36,14 @@ export function createMcpClient(name: string, version = "1.0.0"): McpClient {
  * callers classify cancellation by the abort reason the caller supplied, so
  * surface that reason instead.
  */
-export function withMcpAbortReason<T>(pending: Promise<T>, signal: AbortSignal | undefined): Promise<T> {
+export function withMcpAbortReason<T>(
+  pending: Promise<T>,
+  signal: AbortSignal | undefined,
+): Promise<T> {
   if (!signal) return pending;
   return pending.catch((error: unknown) => {
-    if (error instanceof McpAbortError && signal.aborted && signal.reason !== undefined) throw signal.reason;
+    if (error instanceof McpAbortError && signal.aborted && signal.reason !== undefined)
+      throw signal.reason;
     throw error;
   });
 }
@@ -55,14 +59,14 @@ export function mcpRequest<T>(
   params: Record<string, unknown> | undefined,
   options: McpCallOptions = {},
 ): Promise<T> {
-  const request = () => client.request<T>(method, params, {
-    ...(options.signal ? { signal: options.signal } : {}),
-    ...(options.timeoutMs === undefined ? {} : { timeoutMs: options.timeoutMs }),
-    ...(options.onProgress ? { onProgress: options.onProgress } : {}),
-  });
-  const pending = method === "tools/call"
-    ? mcpToolSendGuard.run(options.beforeSend, request)
-    : request();
+  const request = () =>
+    client.request<T>(method, params, {
+      ...(options.signal ? { signal: options.signal } : {}),
+      ...(options.timeoutMs === undefined ? {} : { timeoutMs: options.timeoutMs }),
+      ...(options.onProgress ? { onProgress: options.onProgress } : {}),
+    });
+  const pending =
+    method === "tools/call" ? mcpToolSendGuard.run(options.beforeSend, request) : request();
   return withMcpAbortReason(pending, options.signal);
 }
 

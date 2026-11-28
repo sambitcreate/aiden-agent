@@ -86,11 +86,18 @@ test("a question asked after a detach reports itself unpublished; aborted or rel
   // The person stopped this ask themselves.
   const controller = new AbortController();
   controller.abort();
-  await coordinator.request({ streamId: "s-left", toolCallId: "call-aborted", questions }, "document-one", controller.signal);
+  await coordinator.request(
+    { streamId: "s-left", toolCallId: "call-aborted", questions },
+    "document-one",
+    controller.signal,
+  );
   assert.equal(shortCircuited.length, 1);
 
   coordinator.releaseStream("s-left");
-  const live = coordinator.request({ streamId: "s-left", toolCallId: "call-live", questions }, "document-one");
+  const live = coordinator.request(
+    { streamId: "s-left", toolCallId: "call-live", questions },
+    "document-one",
+  );
   assert.equal(published.length, 1);
   coordinator.cancelStream("s-left");
   await live;
@@ -146,7 +153,10 @@ test("a prompt whose publication failed is never withdrawn", async () => {
 });
 
 test("an unanswered timed prompt tells the agent no answer arrived and reports late replies as expired", async (t) => {
-  t.mock.timers.enable({ apis: ["setTimeout", "Date"], now: Date.parse("2026-09-27T10:00:00.000Z") });
+  t.mock.timers.enable({
+    apis: ["setTimeout", "Date"],
+    now: Date.parse("2026-09-27T10:00:00.000Z"),
+  });
   let published!: AskUserQuestionPromptV1;
   const coordinator = new AskUserQuestionCoordinator((prompt) => {
     published = prompt;
@@ -173,7 +183,10 @@ test("an unanswered timed prompt tells the agent no answer arrived and reports l
   };
   assert.equal(coordinator.respondWithOutcome(published.promptId, late, "document-one"), "expired");
   // Another document cannot learn about or claim someone else's prompt.
-  assert.equal(coordinator.respondWithOutcome(published.promptId, late, "document-two"), "rejected");
+  assert.equal(
+    coordinator.respondWithOutcome(published.promptId, late, "document-two"),
+    "rejected",
+  );
 });
 
 test("an answer that races past the deadline is settled as a timeout, never delivered", async (t) => {
@@ -236,9 +249,18 @@ test("a withdrawn prompt says whether its owner settled it or the host ended it"
     (prompt) => published.push(prompt),
     (promptId, _response, settledBy) => withdrawn.push([promptId, settledBy]),
   );
-  const answered = coordinator.request({ streamId: "s-owner", toolCallId: "call-owner", questions }, "document-one");
-  const closed = coordinator.request({ streamId: "s-closed", toolCallId: "call-closed", questions }, "document-one");
-  const quit = coordinator.request({ streamId: "s-quit", toolCallId: "call-quit", questions }, "document-one");
+  const answered = coordinator.request(
+    { streamId: "s-owner", toolCallId: "call-owner", questions },
+    "document-one",
+  );
+  const closed = coordinator.request(
+    { streamId: "s-closed", toolCallId: "call-closed", questions },
+    "document-one",
+  );
+  const quit = coordinator.request(
+    { streamId: "s-quit", toolCallId: "call-quit", questions },
+    "document-one",
+  );
   const [answerPrompt, closePrompt, quitPrompt] = published;
   coordinator.respond(
     answerPrompt!.promptId,
@@ -253,7 +275,12 @@ test("a withdrawn prompt says whether its owner settled it or the host ended it"
   // Closing the card is the owner's choice too.
   coordinator.respond(
     closePrompt!.promptId,
-    { version: ASK_USER_QUESTION_VERSION, promptId: closePrompt!.promptId, cancelled: true, answers: [] },
+    {
+      version: ASK_USER_QUESTION_VERSION,
+      promptId: closePrompt!.promptId,
+      cancelled: true,
+      answers: [],
+    },
     "document-one",
   );
   coordinator.shutdown();
@@ -345,7 +372,9 @@ test("the first answer wins across the owner and a paired host", async () => {
   assert.equal(coordinator.respondAsHost(published.promptId, pick("Guided")), "answered");
   assert.equal(coordinator.respond(published.promptId, pick("Direct"), "document-one"), false);
   assert.equal(coordinator.respondAsHost(published.promptId, pick("Direct")), "rejected");
-  assert.deepEqual((await pending).answers, [{ questionIndex: 0, kind: "option", answer: "Guided" }]);
+  assert.deepEqual((await pending).answers, [
+    { questionIndex: 0, kind: "option", answer: "Guided" },
+  ]);
 });
 
 test("an invalid answer leaves the question waiting for a valid one", async () => {
@@ -372,5 +401,7 @@ test("an invalid answer leaves the question waiting for a valid one", async () =
     coordinator.respondWithOutcome(published.promptId, pick("Direct"), "document-one"),
     "answered",
   );
-  assert.deepEqual((await pending).answers, [{ questionIndex: 0, kind: "option", answer: "Direct" }]);
+  assert.deepEqual((await pending).answers, [
+    { questionIndex: 0, kind: "option", answer: "Direct" },
+  ]);
 });

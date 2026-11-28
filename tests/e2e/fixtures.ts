@@ -21,21 +21,31 @@ export const REPOSITORY_ROOT = path.resolve(path.dirname(fileURLToPath(import.me
 
 export async function expectSquircleButtons(page: Page): Promise<void> {
   const actions = page.locator('button, [role="button"], [data-slot="button"]');
-  const failures = await actions.evaluateAll((elements) => elements.filter((element) => {
-    if (["switch", "radio", "checkbox"].includes(element.getAttribute("role") ?? "")) return false;
-    if (!element.getClientRects().length) return false;
-    const style = getComputedStyle(element);
-    if (element.parentElement?.classList.contains("squircle-action-group")) {
-      const first = element === element.parentElement.firstElementChild;
-      const last = element === element.parentElement.lastElementChild;
-      return style.getPropertyValue("corner-shape") !== "squircle"
-        || style.borderStartStartRadius !== (first ? "16px" : "0px")
-        || style.borderEndStartRadius !== (first ? "16px" : "0px")
-        || style.borderStartEndRadius !== (last ? "16px" : "0px")
-        || style.borderEndEndRadius !== (last ? "16px" : "0px");
-    }
-    return style.getPropertyValue("corner-shape") !== "squircle" || style.borderTopLeftRadius !== "16px";
-  }).map((element) => element.getAttribute("aria-label") ?? element.textContent?.trim()));
+  const failures = await actions.evaluateAll((elements) =>
+    elements
+      .filter((element) => {
+        if (["switch", "radio", "checkbox"].includes(element.getAttribute("role") ?? ""))
+          return false;
+        if (!element.getClientRects().length) return false;
+        const style = getComputedStyle(element);
+        if (element.parentElement?.classList.contains("squircle-action-group")) {
+          const first = element === element.parentElement.firstElementChild;
+          const last = element === element.parentElement.lastElementChild;
+          return (
+            style.getPropertyValue("corner-shape") !== "squircle" ||
+            style.borderStartStartRadius !== (first ? "16px" : "0px") ||
+            style.borderEndStartRadius !== (first ? "16px" : "0px") ||
+            style.borderStartEndRadius !== (last ? "16px" : "0px") ||
+            style.borderEndEndRadius !== (last ? "16px" : "0px")
+          );
+        }
+        return (
+          style.getPropertyValue("corner-shape") !== "squircle" ||
+          style.borderTopLeftRadius !== "16px"
+        );
+      })
+      .map((element) => element.getAttribute("aria-label") ?? element.textContent?.trim()),
+  );
   playwrightTest.expect(failures).toEqual([]);
 }
 
@@ -112,13 +122,7 @@ const OS_INJECTED_ENV_NAMES = new Set([
   // Chromium/GTK add these inside the launched Linux process even when they
   // are absent from electron.launch's explicit environment.
   ...(process.platform === "linux"
-    ? [
-        "CHROME_DESKTOP",
-        "DBUS_SESSION_BUS_ADDRESS",
-        "FC_FONTATIONS",
-        "GDK_BACKEND",
-        "NO_AT_BRIDGE",
-      ]
+    ? ["CHROME_DESKTOP", "DBUS_SESSION_BUS_ADDRESS", "FC_FONTATIONS", "GDK_BACKEND", "NO_AT_BRIDGE"]
     : []),
 ]);
 const CREDENTIAL_ENV_NAME =
@@ -281,7 +285,9 @@ function writeJson(response: import("node:http").ServerResponse, value: unknown)
 
 function writeCompletion(
   response: import("node:http").ServerResponse,
-  reply: { text: string } | { id: string; name: string; arguments: Record<string, unknown> } = { text: E2E_ASSISTANT_RESPONSE },
+  reply: { text: string } | { id: string; name: string; arguments: Record<string, unknown> } = {
+    text: E2E_ASSISTANT_RESPONSE,
+  },
   hold?: (finish: () => void) => void,
 ): void {
   const common = {
@@ -300,9 +306,20 @@ function writeCompletion(
       choices: [
         {
           index: 0,
-          delta: "text" in reply
-            ? { role: "assistant", content: reply.text }
-            : { role: "assistant", tool_calls: [{ index: 0, id: reply.id, type: "function", function: { name: reply.name, arguments: JSON.stringify(reply.arguments) } }] },
+          delta:
+            "text" in reply
+              ? { role: "assistant", content: reply.text }
+              : {
+                  role: "assistant",
+                  tool_calls: [
+                    {
+                      index: 0,
+                      id: reply.id,
+                      type: "function",
+                      function: { name: reply.name, arguments: JSON.stringify(reply.arguments) },
+                    },
+                  ],
+                },
           finish_reason: null,
         },
       ],
@@ -341,7 +358,8 @@ function streamedChunk(delta: Record<string, unknown>, finishReason: string | nu
 function flushStreamedReply(reply: StreamedReply): void {
   const response = reply.response;
   if (!response || response.writableEnded) return;
-  for (const text of reply.pending.splice(0)) response.write(streamedChunk({ content: text }, null));
+  for (const text of reply.pending.splice(0))
+    response.write(streamedChunk({ content: text }, null));
   if (reply.finished) {
     response.write(streamedChunk({}, "stop"));
     response.end("data: [DONE]\n\n");
@@ -371,17 +389,35 @@ async function startMockLmStudio(): Promise<MockLmStudio> {
   };
   let holding = false;
   const held = new Set<() => void>();
-  const rateLimits: Array<{ prompt: string; remaining: number; headers: Record<string, string> }> = [];
+  const rateLimits: Array<{ prompt: string; remaining: number; headers: Record<string, string> }> =
+    [];
   const serverFailures: Array<{ prompt: string; remaining: number; status: number }> = [];
   const cutOffScripts: Array<{ prompt: string; parts: CutOffCompletionPart[] }> = [];
-  const scenarios: Array<{ script: DeterministicToolScenario; state: DeterministicToolScenarioState; id: string }> = [];
-  const enqueueToolScenario = (scenario: DeterministicToolScenario): DeterministicToolScenarioState => {
+  const scenarios: Array<{
+    script: DeterministicToolScenario;
+    state: DeterministicToolScenarioState;
+    id: string;
+  }> = [];
+  const enqueueToolScenario = (
+    scenario: DeterministicToolScenario,
+  ): DeterministicToolScenarioState => {
     if (!scenario.prompt.trim() || scenario.calls.length > 16 || scenarios.length >= 8) {
-      throw new Error("A deterministic tool scenario needs a unique prompt and 0–16 calls; at most 8 scenarios may be queued.");
+      throw new Error(
+        "A deterministic tool scenario needs a unique prompt and 0–16 calls; at most 8 scenarios may be queued.",
+      );
     }
-    if (scenarios.some(({ script }) => script.prompt === scenario.prompt)) throw new Error("A deterministic tool scenario prompt must be unique.");
-    const state: DeterministicToolScenarioState = { issuedToolNames: [], results: [], completed: false };
-    scenarios.push({ script: structuredClone(scenario), state, id: `aiden-e2e-script-${scenarios.length}` });
+    if (scenarios.some(({ script }) => script.prompt === scenario.prompt))
+      throw new Error("A deterministic tool scenario prompt must be unique.");
+    const state: DeterministicToolScenarioState = {
+      issuedToolNames: [],
+      results: [],
+      completed: false,
+    };
+    scenarios.push({
+      script: structuredClone(scenario),
+      state,
+      id: `aiden-e2e-script-${scenarios.length}`,
+    });
     return state;
   };
   const nativeModel = {
@@ -422,35 +458,49 @@ async function startMockLmStudio(): Promise<MockLmStudio> {
         const body = await readJsonBody(request);
         requests.push({ method, url, headers: { ...request.headers }, body });
         const sendCompletion = (
-          reply: { text: string } | { id: string; name: string; arguments: Record<string, unknown> } = { text: E2E_ASSISTANT_RESPONSE },
-        ) => writeCompletion(
-          response,
-          reply,
-          holding
-            ? (finish) => {
-                held.add(finish);
-                response.once("close", () => held.delete(finish));
-              }
-            : undefined,
-        );
-        const completion = body as { messages?: Array<{ role?: string; content?: unknown; tool_call_id?: string }>; tools?: Array<{ function?: { name?: string; description?: string } }> } | null;
+          reply:
+            | { text: string }
+            | { id: string; name: string; arguments: Record<string, unknown> } = {
+            text: E2E_ASSISTANT_RESPONSE,
+          },
+        ) =>
+          writeCompletion(
+            response,
+            reply,
+            holding
+              ? (finish) => {
+                  held.add(finish);
+                  response.once("close", () => held.delete(finish));
+                }
+              : undefined,
+          );
+        const completion = body as {
+          messages?: Array<{ role?: string; content?: unknown; tool_call_id?: string }>;
+          tools?: Array<{ function?: { name?: string; description?: string } }>;
+        } | null;
         // pi-ai forwards tool-result images as a follow-up user message, and
         // Aiden follows a prompt with hidden host messages (a chat state
         // update, a turn note); none of those is the user's prompt.
         const hostCarrier = (content: unknown) => {
           const text = typeof content === "string" ? content : JSON.stringify(content ?? "");
-          return text.includes("Attached image(s) from tool result:") ||
-            /^(?:\[\{"type":"text","text":")?<(?:state_update|turn_note)>/u.test(text);
+          return (
+            text.includes("Attached image(s) from tool result:") ||
+            /^(?:\[\{"type":"text","text":")?<(?:state_update|turn_note)>/u.test(text)
+          );
         };
         const latestUser = [...(completion?.messages ?? [])]
           .reverse()
           .find(({ role, content }) => role === "user" && !hostCarrier(content));
-        const userText = typeof latestUser?.content === "string"
-          ? latestUser.content
-          : JSON.stringify(latestUser?.content ?? "");
-        const toolFree = completion?.tools?.length ? undefined : toolFreeAnswers.find((answer) => userText.includes(answer.prompt));
+        const userText =
+          typeof latestUser?.content === "string"
+            ? latestUser.content
+            : JSON.stringify(latestUser?.content ?? "");
+        const toolFree = completion?.tools?.length
+          ? undefined
+          : toolFreeAnswers.find((answer) => userText.includes(answer.prompt));
         if (toolFree) {
-          if (toolFree.remaining !== undefined && --toolFree.remaining <= 0) toolFreeAnswers.splice(toolFreeAnswers.indexOf(toolFree), 1);
+          if (toolFree.remaining !== undefined && --toolFree.remaining <= 0)
+            toolFreeAnswers.splice(toolFreeAnswers.indexOf(toolFree), 1);
           sendCompletion({ text: toolFree.text });
           return;
         }
@@ -459,26 +509,45 @@ async function startMockLmStudio(): Promise<MockLmStudio> {
           : undefined;
         if (rateLimit) {
           rateLimit.remaining -= 1;
-          response.writeHead(429, { ...rateLimit.headers, "content-type": "application/json; charset=utf-8" });
-          response.end(JSON.stringify({ error: { message: "Rate limit reached for requests", type: "rate_limit_exceeded" } }));
+          response.writeHead(429, {
+            ...rateLimit.headers,
+            "content-type": "application/json; charset=utf-8",
+          });
+          response.end(
+            JSON.stringify({
+              error: { message: "Rate limit reached for requests", type: "rate_limit_exceeded" },
+            }),
+          );
           return;
         }
         const serverFailure = completion?.tools?.length
-          ? serverFailures.find((failure) => failure.remaining > 0 && userText.includes(failure.prompt))
+          ? serverFailures.find(
+              (failure) => failure.remaining > 0 && userText.includes(failure.prompt),
+            )
           : undefined;
         if (serverFailure) {
           serverFailure.remaining -= 1;
-          response.writeHead(serverFailure.status, { "content-type": "application/json; charset=utf-8" });
-          response.end(JSON.stringify({ error: { message: "The fixture turned this request away", type: "fixture_error" } }));
+          response.writeHead(serverFailure.status, {
+            "content-type": "application/json; charset=utf-8",
+          });
+          response.end(
+            JSON.stringify({
+              error: { message: "The fixture turned this request away", type: "fixture_error" },
+            }),
+          );
           return;
         }
         // A continuation's latest user message is Aiden's request to continue,
         // so a cut-off script follows the whole conversation, not that message.
         const conversation = JSON.stringify(
-          (completion?.messages ?? []).filter(({ role }) => role === "user").map(({ content }) => content),
+          (completion?.messages ?? [])
+            .filter(({ role }) => role === "user")
+            .map(({ content }) => content),
         );
         const cutOff = completion?.tools?.length
-          ? cutOffScripts.find((script) => script.parts.length > 0 && conversation.includes(script.prompt))
+          ? cutOffScripts.find(
+              (script) => script.parts.length > 0 && conversation.includes(script.prompt),
+            )
           : undefined;
         if (cutOff) {
           const part = cutOff.parts.shift()!;
@@ -496,7 +565,9 @@ async function startMockLmStudio(): Promise<MockLmStudio> {
           response.end("data: [DONE]\n\n");
           return;
         }
-        const streamed = streamedReplies.find((reply) => !reply.response && userText.includes(reply.prompt));
+        const streamed = streamedReplies.find(
+          (reply) => !reply.response && userText.includes(reply.prompt),
+        );
         if (streamed && completion?.tools?.length) {
           streamed.response = response;
           response.writeHead(200, {
@@ -512,10 +583,18 @@ async function startMockLmStudio(): Promise<MockLmStudio> {
         // the agent completion with its actual available schema consumes a script.
         if (scenario && completion?.tools?.length) {
           const { script, state, id } = scenario;
-          const results = new Map((completion.messages ?? []).filter(({ role, tool_call_id }) => role === "tool" && tool_call_id?.startsWith(`${id}-`)).map((message) => [message.tool_call_id!, message.content]));
+          const results = new Map(
+            (completion.messages ?? [])
+              .filter(
+                ({ role, tool_call_id }) => role === "tool" && tool_call_id?.startsWith(`${id}-`),
+              )
+              .map((message) => [message.tool_call_id!, message.content]),
+          );
           let next = 0;
           while (next < script.calls.length && results.has(`${id}-${next}`)) next += 1;
-          state.results = script.calls.slice(0, next).map((call, index) => ({ name: call.name, content: results.get(`${id}-${index}`) }));
+          state.results = script.calls
+            .slice(0, next)
+            .map((call, index) => ({ name: call.name, content: results.get(`${id}-${index}`) }));
           if (next === script.calls.length) {
             state.completed = true;
             sendCompletion({ text: script.finalText });
@@ -526,8 +605,12 @@ async function startMockLmStudio(): Promise<MockLmStudio> {
             // A tool held back until loaded: load it first, as a real model
             // does from the `load_tools` catalog, then make the scripted call.
             const loadId = `${id}-load-${next}`;
-            const catalog = completion.tools.find((tool) => tool.function?.name === "load_tools")?.function?.description ?? "";
-            const loaded = (completion.messages ?? []).some(({ role, tool_call_id }) => role === "tool" && tool_call_id === loadId);
+            const catalog =
+              completion.tools.find((tool) => tool.function?.name === "load_tools")?.function
+                ?.description ?? "";
+            const loaded = (completion.messages ?? []).some(
+              ({ role, tool_call_id }) => role === "tool" && tool_call_id === loadId,
+            );
             if (!loaded && catalog.includes(`- ${call.name}:`)) {
               sendCompletion({ id: loadId, name: "load_tools", arguments: { names: [call.name] } });
               return;
@@ -583,21 +666,39 @@ async function startMockLmStudio(): Promise<MockLmStudio> {
     enqueueStreamedReply,
     answerToolFreeCompletions: (prompt: string, text: string, options?: { times?: number }) => {
       if (!prompt.trim()) throw new Error("A tool-free answer needs a prompt to match.");
-      if (options?.times !== undefined && (!Number.isInteger(options.times) || options.times < 1)) throw new Error("times must be a positive count.");
-      toolFreeAnswers.push({ prompt, text, ...(options?.times !== undefined ? { remaining: options.times } : {}) });
+      if (options?.times !== undefined && (!Number.isInteger(options.times) || options.times < 1))
+        throw new Error("times must be a positive count.");
+      toolFreeAnswers.push({
+        prompt,
+        text,
+        ...(options?.times !== undefined ? { remaining: options.times } : {}),
+      });
     },
     rateLimitCompletions: (prompt, count, headers) => {
-      if (!prompt.trim() || !Number.isInteger(count) || count < 1) throw new Error("A rate limit needs a prompt and a positive count.");
+      if (!prompt.trim() || !Number.isInteger(count) || count < 1)
+        throw new Error("A rate limit needs a prompt and a positive count.");
       rateLimits.push({ prompt, remaining: count, headers: { ...headers } });
     },
     failCompletions: (prompt, count, status) => {
-      if (!prompt.trim() || !Number.isInteger(count) || count < 1 || status < 400 || status === 429) {
-        throw new Error("A failure needs a prompt, a positive count and a 4xx (not 429) or 5xx status.");
+      if (
+        !prompt.trim() ||
+        !Number.isInteger(count) ||
+        count < 1 ||
+        status < 400 ||
+        status === 429
+      ) {
+        throw new Error(
+          "A failure needs a prompt, a positive count and a 4xx (not 429) or 5xx status.",
+        );
       }
       serverFailures.push({ prompt, remaining: count, status });
     },
     cutOffCompletions: (prompt, parts) => {
-      if (!prompt.trim() || parts.length === 0 || cutOffScripts.some((script) => script.prompt === prompt)) {
+      if (
+        !prompt.trim() ||
+        parts.length === 0 ||
+        cutOffScripts.some((script) => script.prompt === prompt)
+      ) {
         throw new Error("A cut-off script needs a unique prompt and at least one part.");
       }
       cutOffScripts.push({ prompt, parts: parts.map((part) => ({ ...part })) });
@@ -692,7 +793,10 @@ export async function firstAidenWindow(app: ElectronApplication): Promise<Page> 
   return page;
 }
 
-type StartupMilestones = Record<"willFinishLaunching" | "nativeReady" | "playwrightRun", number | null>;
+type StartupMilestones = Record<
+  "willFinishLaunching" | "nativeReady" | "playwrightRun",
+  number | null
+>;
 
 /**
  * Name the startup step a launch that opened no window stopped at, from the
@@ -706,15 +810,17 @@ async function withStartupMilestones(app: ElectronApplication, error: unknown): 
   try {
     const milestones = await withTimeout(
       app.evaluate(() => ({
-        ...(globalThis as unknown as { __aidenE2eStartupMilestones: StartupMilestones }).__aidenE2eStartupMilestones,
+        ...(globalThis as unknown as { __aidenE2eStartupMilestones: StartupMilestones })
+          .__aidenE2eStartupMilestones,
         now: Math.round(process.uptime() * 1000),
       })),
       "Reading Electron startup milestones",
       2_000,
     );
     const at = (value: number | null) => (value === null ? "never" : `${value} ms`);
-    detail = `Electron startup milestones after ${milestones.now} ms: will-finish-launching ${at(milestones.willFinishLaunching)}, `
-      + `native ready ${at(milestones.nativeReady)}, Playwright run ${at(milestones.playwrightRun)}.`;
+    detail =
+      `Electron startup milestones after ${milestones.now} ms: will-finish-launching ${at(milestones.willFinishLaunching)}, ` +
+      `native ready ${at(milestones.nativeReady)}, Playwright run ${at(milestones.playwrightRun)}.`;
   } catch (readError) {
     detail = `Electron startup milestones could not be read: ${formatFailure(readError)}`;
   }
@@ -795,7 +901,9 @@ async function assertRuntimeIsolation(
     throw new Error("The E2E app ignored one or more isolated XDG roots.");
   }
   if (userDataDir === configDir || runtime.runtimeProfile !== expected.runtimeProfile) {
-    throw new Error(`The E2E launch did not establish distinct ${expected.runtimeProfile} profile roots.`);
+    throw new Error(
+      `The E2E launch did not establish distinct ${expected.runtimeProfile} profile roots.`,
+    );
   }
   const expectedEnvironmentKeys = Object.keys(expected.environment).sort();
   const runtimeEnvironmentKeys = runtime.environmentKeys
@@ -808,7 +916,9 @@ async function assertRuntimeIsolation(
   }
   const allowedKeys = new Set(expected.allowedCredentialKeys);
   const forbiddenAuthKeys = runtime.environmentKeys.filter(
-    (key) => !allowedKeys.has(key) && (PI_AMBIENT_AUTH_ENV_NAMES.has(key) || CREDENTIAL_ENV_NAME.test(key)),
+    (key) =>
+      !allowedKeys.has(key) &&
+      (PI_AMBIENT_AUTH_ENV_NAMES.has(key) || CREDENTIAL_ENV_NAME.test(key)),
   );
   if (forbiddenAuthKeys.length > 0) {
     throw new Error(
@@ -821,7 +931,11 @@ async function assertRuntimeIsolation(
 export async function connectOnboardingLmStudio(onboarding: Locator): Promise<void> {
   await onboarding.getByRole("button", { name: /I run a local model/u }).click();
   await onboarding.getByRole("button", { name: "LM Studio", exact: true }).click();
-  await onboarding.page().getByRole("dialog", { name: "Connect LM Studio" }).getByRole("button", { name: "Check for models" }).click();
+  await onboarding
+    .page()
+    .getByRole("dialog", { name: "Connect LM Studio" })
+    .getByRole("button", { name: "Check for models" })
+    .click();
   await onboarding.getByRole("button", { name: "Continue setup" }).click();
   await expect(onboarding.getByRole("heading", { name: "Finish setup" })).toBeVisible();
 }
@@ -851,7 +965,8 @@ export async function finishLmStudioOnboarding(page: Page): Promise<void> {
  * when Aiden Live is offered and the draft is empty, the Live button that
  * takes Send's place.
  */
-export const COMPOSER_PRIMARY_NAME = /^(Send message|Queue message|Set up Aiden Live|Start Aiden Live)$/u;
+export const COMPOSER_PRIMARY_NAME =
+  /^(Send message|Queue message|Set up Aiden Live|Start Aiden Live)$/u;
 
 export function composerPrimaryButton(page: Page): Locator {
   return page.getByRole("button", { name: COMPOSER_PRIMARY_NAME });
@@ -949,7 +1064,10 @@ async function terminateOwnedProcess(child: ChildProcess): Promise<void> {
  * `devLogPath` is the app's development dev log: a quit that never finishes
  * prints its quit records from it, with the stuck process's threads.
  */
-export async function closeAiden(app: ElectronApplication | undefined, devLogPath?: string): Promise<void> {
+export async function closeAiden(
+  app: ElectronApplication | undefined,
+  devLogPath?: string,
+): Promise<void> {
   if (!app) return;
   let child: ReturnType<ElectronApplication["process"]>;
   try {
@@ -968,7 +1086,9 @@ export async function closeAiden(app: ElectronApplication | undefined, devLogPat
       ]);
       if (!closed) {
         // Hosted runs keep only the job log, so say there where the quit stopped.
-        process.stderr.write(`Electron PID ${pid} did not quit:\n${await describeStuckShutdown({ pid, devLogPath })}\n`);
+        process.stderr.write(
+          `Electron PID ${pid} did not quit:\n${await describeStuckShutdown({ pid, devLogPath })}\n`,
+        );
         throw new Error(`Electron shutdown timed out after ${ELECTRON_EXIT_TIMEOUT_MS} ms.`);
       }
     } else {
@@ -1054,13 +1174,21 @@ const ISOLATED_KEYCHAIN_NAME = "aiden-e2e.keychain-db";
 async function provisionIsolatedKeychain(homeDir: string): Promise<string> {
   if (process.platform !== "darwin") throw new Error("The isolated E2E keychain is macOS-only.");
   const env = { HOME: homeDir, PATH: "/usr/bin:/bin" };
-  const security = async (...args: string[]) => (await runSecurity(SECURITY, args, { env, timeout: 10_000 })).stdout.trim();
+  const security = async (...args: string[]) =>
+    (await runSecurity(SECURITY, args, { env, timeout: 10_000 })).stdout.trim();
   await mkdir(path.join(homeDir, "Library", "Preferences"), { recursive: true, mode: 0o700 });
   await mkdir(path.join(homeDir, "Library", "Keychains"), { recursive: true, mode: 0o700 });
   if (await security("list-keychains", "-d", "user")) {
-    throw new Error("The fixture HOME already resolves a keychain search list; refusing to change it.");
+    throw new Error(
+      "The fixture HOME already resolves a keychain search list; refusing to change it.",
+    );
   }
-  const keychain = path.join(await realpath(homeDir), "Library", "Keychains", ISOLATED_KEYCHAIN_NAME);
+  const keychain = path.join(
+    await realpath(homeDir),
+    "Library",
+    "Keychains",
+    ISOLATED_KEYCHAIN_NAME,
+  );
   await security("create-keychain", "-p", "", keychain);
   // No auto-lock timeout: a slow hosted run must not see the keychain lock mid-test.
   await security("set-keychain-settings", keychain);
@@ -1088,7 +1216,12 @@ function formatFailure(error: unknown): string {
 const MAX_PRINTED_DEV_LOG_PROBLEMS = 40;
 
 function devLogFile(rootDir: string): string {
-  return path.join(rootDir, "user-data", "logs", process.env.AIDEN_E2E_RUNTIME_PROFILE === "production" ? "aiden.log" : "aiden-dev.log");
+  return path.join(
+    rootDir,
+    "user-data",
+    "logs",
+    process.env.AIDEN_E2E_RUNTIME_PROFILE === "production" ? "aiden.log" : "aiden-dev.log",
+  );
 }
 
 /** Only the development journal keeps the quit records; production drops them by design. */
@@ -1100,16 +1233,26 @@ function quitRecordsLog(rootDir: string): string | undefined {
 function devLogProblems(devLog: string): string[] {
   const problems: string[] = [];
   for (const line of devLog.split("\n")) {
-    let record: { at?: unknown; level?: unknown; area?: unknown; event?: unknown; fields?: Record<string, unknown> };
+    let record: {
+      at?: unknown;
+      level?: unknown;
+      area?: unknown;
+      event?: unknown;
+      fields?: Record<string, unknown>;
+    };
     try {
       record = JSON.parse(line) as typeof record;
     } catch {
       continue;
     }
     if (record.level !== "warn" && record.level !== "error") continue;
-    const message = typeof record.fields?.message === "string" ? record.fields.message.slice(0, 240) : "";
-    const errorType = typeof record.fields?.errorType === "string" ? ` [${record.fields.errorType}]` : "";
-    problems.push(`  ${String(record.at)} ${String(record.level)} ${String(record.area)}/${String(record.event)}${errorType} ${message}`.trimEnd());
+    const message =
+      typeof record.fields?.message === "string" ? record.fields.message.slice(0, 240) : "";
+    const errorType =
+      typeof record.fields?.errorType === "string" ? ` [${record.fields.errorType}]` : "";
+    problems.push(
+      `  ${String(record.at)} ${String(record.level)} ${String(record.area)}/${String(record.event)}${errorType} ${message}`.trimEnd(),
+    );
   }
   return problems.slice(-MAX_PRINTED_DEV_LOG_PROBLEMS);
 }
@@ -1121,7 +1264,14 @@ export const test = base.extend<AidenE2eOptions & { aiden: AidenE2e }>({
   fakeOpenRouter: [false, { option: true }],
   isolatedKeychain: [false, { option: true }],
   aiden: async (
-    { browserName: _browserName, portableConfigSeed, workspaceSeed, appEnvironment, fakeOpenRouter, isolatedKeychain },
+    {
+      browserName: _browserName,
+      portableConfigSeed,
+      workspaceSeed,
+      appEnvironment,
+      fakeOpenRouter,
+      isolatedKeychain,
+    },
     use,
     testInfo,
   ) => {
@@ -1179,7 +1329,8 @@ export const test = base.extend<AidenE2eOptions & { aiden: AidenE2e }>({
           }
         : {};
       const launch = async (): Promise<Page> => {
-        const runtimeProfile = process.env.AIDEN_E2E_RUNTIME_PROFILE === "production" ? "production" : "development";
+        const runtimeProfile =
+          process.env.AIDEN_E2E_RUNTIME_PROFILE === "production" ? "production" : "development";
         const launchEnvironment: Record<string, string> = {
           ...isolatedAppEnvironment(),
           AIDEN_CONFIG_DIR: testConfigDir,
@@ -1290,7 +1441,10 @@ export const test = base.extend<AidenE2eOptions & { aiden: AidenE2e }>({
           ? await withTimeout(
               window.evaluate(() =>
                 [...document.querySelectorAll("[role=alert], [role=status], [data-sonner-toast]")]
-                  .map((element) => element.textContent?.replace(/\s+/gu, " ").trim().slice(0, 200) ?? "")
+                  .map(
+                    (element) =>
+                      element.textContent?.replace(/\s+/gu, " ").trim().slice(0, 200) ?? "",
+                  )
                   .filter(Boolean)
                   .slice(0, 20),
               ),
@@ -1299,7 +1453,9 @@ export const test = base.extend<AidenE2eOptions & { aiden: AidenE2e }>({
             )
           : [];
         if (notices.length > 0) {
-          process.stderr.write(`On-screen notices (${testInfo.title}):\n${notices.map((notice) => `  ${notice}`).join("\n")}\n`);
+          process.stderr.write(
+            `On-screen notices (${testInfo.title}):\n${notices.map((notice) => `  ${notice}`).join("\n")}\n`,
+          );
         }
       } catch {
         // A closed or crashed window has nothing more to report.
@@ -1315,7 +1471,9 @@ export const test = base.extend<AidenE2eOptions & { aiden: AidenE2e }>({
         // and errors so an intermittent failure still names what went wrong.
         const problems = devLogProblems(devLog.toString("utf8"));
         if (problems.length > 0) {
-          process.stderr.write(`Aiden dev-log warnings and errors (${testInfo.title}):\n${problems.join("\n")}\n`);
+          process.stderr.write(
+            `Aiden dev-log warnings and errors (${testInfo.title}):\n${problems.join("\n")}\n`,
+          );
         }
       } catch (error) {
         if ((error as NodeJS.ErrnoException).code !== "ENOENT") {

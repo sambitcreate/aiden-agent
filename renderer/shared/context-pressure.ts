@@ -245,13 +245,18 @@ export function parseChatContextPressure(value: unknown): ChatContextPressureV1 
   };
 }
 
-const PROMPT_CACHE_MISS_SOURCE = /^(?:tools|messages|model|retention|ttl|unknown|system:[a-z0-9._-]{1,64})$/iu;
+const PROMPT_CACHE_MISS_SOURCE =
+  /^(?:tools|messages|model|retention|ttl|unknown|system:[a-z0-9._-]{1,64})$/iu;
 
 /** A malformed miss is dropped rather than failing the whole projection. */
 function parsePromptCacheMiss(value: unknown): PromptCacheMissV1 | undefined {
   if (!value || typeof value !== "object") return undefined;
   const candidate = value as Record<string, unknown>;
-  if (typeof candidate.source !== "string" || !PROMPT_CACHE_MISS_SOURCE.test(candidate.source) || !safeNonNegative(candidate.at)) {
+  if (
+    typeof candidate.source !== "string" ||
+    !PROMPT_CACHE_MISS_SOURCE.test(candidate.source) ||
+    !safeNonNegative(candidate.at)
+  ) {
     return undefined;
   }
   return { source: candidate.source, at: candidate.at };
@@ -272,7 +277,11 @@ export function describePromptCacheMissSource(source: string): string {
 function parsePromptCacheWindow(value: unknown): PromptCacheWindowV1 | undefined {
   if (!value || typeof value !== "object") return undefined;
   const candidate = value as Record<string, unknown>;
-  if (!safeNonNegative(candidate.ttlMs) || candidate.ttlMs === 0 || !safeNonNegative(candidate.lastRequestAt)) {
+  if (
+    !safeNonNegative(candidate.ttlMs) ||
+    candidate.ttlMs === 0 ||
+    !safeNonNegative(candidate.lastRequestAt)
+  ) {
     return undefined;
   }
   return { ttlMs: candidate.ttlMs, lastRequestAt: candidate.lastRequestAt };
@@ -314,7 +323,8 @@ export function formatContextTokenCount(value: number): string {
   if (!Number.isFinite(value) || value < 0) return "0";
   const rounded = Math.round(value);
   // One decimal, dropping a trailing ".0"; 999,950 rounds up to "1M", never "1000.0K".
-  const scaled = (amount: number, unit: string) => `${amount.toFixed(1).replace(/\.0$/u, "")}${unit}`;
+  const scaled = (amount: number, unit: string) =>
+    `${amount.toFixed(1).replace(/\.0$/u, "")}${unit}`;
   if (rounded >= 999_950) return scaled(rounded / 1_000_000, "M");
   if (rounded >= 1_000) return scaled(rounded / 1_000, "K");
   return String(rounded);
@@ -342,6 +352,8 @@ export type ContextMeterPressure = Pick<
 > &
   Partial<Pick<ChatContextPressureV1, "addedAfterUsageAnchorTokens" | "breakdown">>;
 
-export function contextPressurePercent(pressure: Pick<ChatContextPressureV1, "percentOfUsableInput">): number {
+export function contextPressurePercent(
+  pressure: Pick<ChatContextPressureV1, "percentOfUsableInput">,
+): number {
   return Math.max(0, Math.round(pressure.percentOfUsableInput));
 }

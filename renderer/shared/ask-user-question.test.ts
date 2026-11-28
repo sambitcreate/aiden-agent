@@ -103,7 +103,10 @@ test("prompt deadlines are strict instants and owners cannot forge a timeout", (
   };
   const timed = parseAskUserQuestionPrompt({ ...envelope, expiresAt: "2026-09-27T10:05:00.000Z" });
   assert.equal(timed?.expiresAt, "2026-09-27T10:05:00.000Z");
-  assert.equal(parseAskUserQuestionPrompt({ ...envelope, expiresAt: "in five minutes" }), undefined);
+  assert.equal(
+    parseAskUserQuestionPrompt({ ...envelope, expiresAt: "in five minutes" }),
+    undefined,
+  );
   assert.equal(
     parseAskUserQuestionPrompt({ ...envelope, expiresAt: "September 27, 2026 10:05" }),
     undefined,
@@ -115,7 +118,10 @@ test("prompt deadlines are strict instants and owners cannot forge a timeout", (
   assert.equal(askUserQuestionMsUntilExpiry({}, now), undefined);
   assert.equal(retainExpiredAskUserQuestionForLateAnswer(timed, now), null);
   assert.equal(retainExpiredAskUserQuestionForLateAnswer(timed, now + 120_000), timed);
-  assert.equal(retainExpiredAskUserQuestionForLateAnswer({ ...timed, expiresAt: undefined }, now), null);
+  assert.equal(
+    retainExpiredAskUserQuestionForLateAnswer({ ...timed, expiresAt: undefined }, now),
+    null,
+  );
 
   const response = parseAskUserQuestionResponse(
     {
@@ -165,25 +171,79 @@ test("a late answer becomes a readable follow-up and an empty one offers nothing
 
 test("an answer summary reads as the person's reply", () => {
   const two = [
-    { question: "Which colour?", header: "Colour", multiSelect: false, options: [{ label: "Blue", description: "b" }, { label: "Red", description: "r" }] },
-    { question: "Which sizes?", header: "Sizes", multiSelect: true, options: [{ label: "S", description: "s" }, { label: "M", description: "m" }] },
+    {
+      question: "Which colour?",
+      header: "Colour",
+      multiSelect: false,
+      options: [
+        { label: "Blue", description: "b" },
+        { label: "Red", description: "r" },
+      ],
+    },
+    {
+      question: "Which sizes?",
+      header: "Sizes",
+      multiSelect: true,
+      options: [
+        { label: "S", description: "s" },
+        { label: "M", description: "m" },
+      ],
+    },
   ];
   assert.equal(
-    summarizeAskUserQuestionResponse(two.slice(0, 1), { cancelled: false, answers: [{ questionIndex: 0, kind: "option", answer: "Blue" }] }),
+    summarizeAskUserQuestionResponse(two.slice(0, 1), {
+      cancelled: false,
+      answers: [{ questionIndex: 0, kind: "option", answer: "Blue" }],
+    }),
     "Blue",
   );
   assert.equal(
-    summarizeAskUserQuestionResponse(two, { cancelled: false, answers: [{ questionIndex: 1, kind: "multi", selected: ["S", "M"] }] }),
+    summarizeAskUserQuestionResponse(two, {
+      cancelled: false,
+      answers: [{ questionIndex: 1, kind: "multi", selected: ["S", "M"] }],
+    }),
     "Colour: Skipped\nSizes: S, M",
   );
   assert.equal(summarizeAskUserQuestionResponse(two, { cancelled: true, answers: [] }), "Skipped");
 });
 
 const recapQuestions = [
-  { question: "Which colour?", header: "Colour", multiSelect: false, options: [{ label: "Blue", description: "b" }, { label: "Red", description: "r" }] },
-  { question: "Which sizes?", header: "Sizes", multiSelect: true, options: [{ label: "S", description: "s" }, { label: "M", description: "m" }] },
-  { question: "Anything else?", header: "Notes", multiSelect: false, options: [{ label: "No", description: "n" }, { label: "Yes", description: "y" }] },
-  { question: "Ship it?", header: "Ship", multiSelect: false, options: [{ label: "Now", description: "n" }, { label: "Later", description: "l" }] },
+  {
+    question: "Which colour?",
+    header: "Colour",
+    multiSelect: false,
+    options: [
+      { label: "Blue", description: "b" },
+      { label: "Red", description: "r" },
+    ],
+  },
+  {
+    question: "Which sizes?",
+    header: "Sizes",
+    multiSelect: true,
+    options: [
+      { label: "S", description: "s" },
+      { label: "M", description: "m" },
+    ],
+  },
+  {
+    question: "Anything else?",
+    header: "Notes",
+    multiSelect: false,
+    options: [
+      { label: "No", description: "n" },
+      { label: "Yes", description: "y" },
+    ],
+  },
+  {
+    question: "Ship it?",
+    header: "Ship",
+    multiSelect: false,
+    options: [
+      { label: "Now", description: "n" },
+      { label: "Later", description: "l" },
+    ],
+  },
 ];
 
 test("a recap keeps each question beside what the owner chose", () => {
@@ -202,7 +262,12 @@ test("a recap keeps each question beside what the owner chose", () => {
       { question: "Which colour?", header: "Colour", kind: "option", answers: ["Blue"] },
       { question: "Which sizes?", header: "Sizes", kind: "multi", answers: ["M", "S"] },
       // Terminal controls never reach the transcript.
-      { question: "Anything else?", header: "Notes", kind: "custom", answers: ["Use the  staging bucket"] },
+      {
+        question: "Anything else?",
+        header: "Notes",
+        kind: "custom",
+        answers: ["Use the  staging bucket"],
+      },
       { question: "Ship it?", header: "Ship", kind: "skipped", answers: [] },
     ],
   });
@@ -210,7 +275,13 @@ test("a recap keeps each question beside what the owner chose", () => {
 
   const long = buildAskUserQuestionRecap(recapQuestions.slice(2, 3), {
     cancelled: false,
-    answers: [{ questionIndex: 0, kind: "custom", answer: "x".repeat(ASK_USER_RECAP_MAX_CUSTOM_LENGTH + 50) }],
+    answers: [
+      {
+        questionIndex: 0,
+        kind: "custom",
+        answer: "x".repeat(ASK_USER_RECAP_MAX_CUSTOM_LENGTH + 50),
+      },
+    ],
   });
   const clipped = long?.items[0]?.answers[0] ?? "";
   assert.equal(Array.from(clipped).length, ASK_USER_RECAP_MAX_CUSTOM_LENGTH);
@@ -219,9 +290,15 @@ test("a recap keeps each question beside what the owner chose", () => {
 
 test("a closed or expired questionnaire records no answers, even ones the owner had picked", () => {
   const picked = [{ questionIndex: 0, kind: "option" as const, answer: "Blue" }];
-  const dismissed = buildAskUserQuestionRecap(recapQuestions.slice(0, 1), { cancelled: true, answers: picked });
+  const dismissed = buildAskUserQuestionRecap(recapQuestions.slice(0, 1), {
+    cancelled: true,
+    answers: picked,
+  });
   assert.equal(dismissed?.outcome, "dismissed");
-  assert.deepEqual(dismissed?.items.map((item) => item.kind), ["skipped"]);
+  assert.deepEqual(
+    dismissed?.items.map((item) => item.kind),
+    ["skipped"],
+  );
 
   const expired = buildAskUserQuestionRecap(recapQuestions.slice(0, 1), {
     cancelled: true,
@@ -229,7 +306,10 @@ test("a closed or expired questionnaire records no answers, even ones the owner 
     answers: picked,
   });
   assert.equal(expired?.outcome, "expired");
-  assert.deepEqual(expired?.items.map((item) => item.kind), ["skipped"]);
+  assert.deepEqual(
+    expired?.items.map((item) => item.kind),
+    ["skipped"],
+  );
 
   // A custom answer with nothing printable cannot produce a recap replay would reject.
   assert.equal(
@@ -265,40 +345,116 @@ test("stored recaps are rejected unless every item is well formed", () => {
 });
 
 test("an option the agent marks as recommended starts as the answer", () => {
-  assert.deepEqual(parseRecommendedOptionLabel("Postgres (Recommended)"), { text: "Postgres", recommended: true });
-  assert.deepEqual(parseRecommendedOptionLabel("Postgres(recommended)"), { text: "Postgres", recommended: true });
+  assert.deepEqual(parseRecommendedOptionLabel("Postgres (Recommended)"), {
+    text: "Postgres",
+    recommended: true,
+  });
+  assert.deepEqual(parseRecommendedOptionLabel("Postgres(recommended)"), {
+    text: "Postgres",
+    recommended: true,
+  });
   // Only a trailing marker counts, and a bare marker is just a label.
-  assert.deepEqual(parseRecommendedOptionLabel("(Recommended) Postgres"), { text: "(Recommended) Postgres", recommended: false });
-  assert.deepEqual(parseRecommendedOptionLabel("(Recommended)"), { text: "(Recommended)", recommended: false });
+  assert.deepEqual(parseRecommendedOptionLabel("(Recommended) Postgres"), {
+    text: "(Recommended) Postgres",
+    recommended: false,
+  });
+  assert.deepEqual(parseRecommendedOptionLabel("(Recommended)"), {
+    text: "(Recommended)",
+    recommended: false,
+  });
 
   const marked = [
-    { question: "Which database?", header: "Database", multiSelect: false, options: [{ label: "SQLite", description: "s" }, { label: "Postgres (Recommended)", description: "p" }, { label: "MySQL (recommended)", description: "m" }] },
-    { question: "Which sizes?", header: "Sizes", multiSelect: true, options: [{ label: "S (Recommended)", description: "s" }, { label: "M", description: "m" }, { label: "L (Recommended)", description: "l" }] },
-    { question: "Ship it?", header: "Ship", multiSelect: false, options: [{ label: "Now", description: "n" }, { label: "Later", description: "l" }] },
+    {
+      question: "Which database?",
+      header: "Database",
+      multiSelect: false,
+      options: [
+        { label: "SQLite", description: "s" },
+        { label: "Postgres (Recommended)", description: "p" },
+        { label: "MySQL (recommended)", description: "m" },
+      ],
+    },
+    {
+      question: "Which sizes?",
+      header: "Sizes",
+      multiSelect: true,
+      options: [
+        { label: "S (Recommended)", description: "s" },
+        { label: "M", description: "m" },
+        { label: "L (Recommended)", description: "l" },
+      ],
+    },
+    {
+      question: "Ship it?",
+      header: "Ship",
+      multiSelect: false,
+      options: [
+        { label: "Now", description: "n" },
+        { label: "Later", description: "l" },
+      ],
+    },
   ];
   const answers = recommendedAskUserAnswers(marked);
   // A single choice takes the first marked option, a multi-select every one, and an unmarked question none.
-  assert.deepEqual([...answers.values()], [
-    { questionIndex: 0, kind: "option", answer: "Postgres (Recommended)" },
-    { questionIndex: 1, kind: "multi", selected: ["S (Recommended)", "L (Recommended)"] },
-  ]);
+  assert.deepEqual(
+    [...answers.values()],
+    [
+      { questionIndex: 0, kind: "option", answer: "Postgres (Recommended)" },
+      { questionIndex: 1, kind: "multi", selected: ["S (Recommended)", "L (Recommended)"] },
+    ],
+  );
   // The preselected answers are valid wire answers for the prompt they came from.
-  const prompt = parseAskUserQuestionPrompt({ version: ASK_USER_QUESTION_VERSION, promptId: "q-1", streamId: "s-1", toolCallId: "tool-1", questions: marked });
+  const prompt = parseAskUserQuestionPrompt({
+    version: ASK_USER_QUESTION_VERSION,
+    promptId: "q-1",
+    streamId: "s-1",
+    toolCallId: "tool-1",
+    questions: marked,
+  });
   assert.ok(prompt);
-  const response = parseAskUserQuestionResponse({ version: ASK_USER_QUESTION_VERSION, promptId: "q-1", cancelled: false, answers: [...answers.values()] }, prompt);
+  const response = parseAskUserQuestionResponse(
+    {
+      version: ASK_USER_QUESTION_VERSION,
+      promptId: "q-1",
+      cancelled: false,
+      answers: [...answers.values()],
+    },
+    prompt,
+  );
   assert.deepEqual(response?.answers, [...answers.values()]);
 
   // Two options that read the same once the marker is dropped, or a marked
   // reserved word, are not a valid questionnaire.
-  const twin = { ...marked[2]!, options: [{ label: "Now", description: "n" }, { label: "Now (Recommended)", description: "r" }] };
+  const twin = {
+    ...marked[2]!,
+    options: [
+      { label: "Now", description: "n" },
+      { label: "Now (Recommended)", description: "r" },
+    ],
+  };
   assert.equal(parseAskUserQuestions([twin]), undefined);
-  const reserved = { ...marked[2]!, options: [{ label: "Now", description: "n" }, { label: "Other (Recommended)", description: "o" }] };
+  const reserved = {
+    ...marked[2]!,
+    options: [
+      { label: "Now", description: "n" },
+      { label: "Other (Recommended)", description: "o" },
+    ],
+  };
   assert.equal(parseAskUserQuestions([reserved]), undefined);
 
   // What the person sees afterwards drops the marker; the model keeps the label it wrote.
-  assert.match(formatLateAskUserQuestionFollowUp(marked, response!.answers) ?? "", /Answer: Postgres\n/u);
-  assert.match(formatAskUserQuestionAnswers(marked, response!.answers), /Answer: Postgres \(Recommended\)\n/u);
-  assert.equal(summarizeAskUserQuestionResponse(marked, response!), "Database: Postgres\nSizes: S, L\nShip: Skipped");
+  assert.match(
+    formatLateAskUserQuestionFollowUp(marked, response!.answers) ?? "",
+    /Answer: Postgres\n/u,
+  );
+  assert.match(
+    formatAskUserQuestionAnswers(marked, response!.answers),
+    /Answer: Postgres \(Recommended\)\n/u,
+  );
+  assert.equal(
+    summarizeAskUserQuestionResponse(marked, response!),
+    "Database: Postgres\nSizes: S, L\nShip: Skipped",
+  );
   assert.deepEqual(
     buildAskUserQuestionRecap(marked, response!)?.items.map((item) => item.answers),
     [["Postgres"], ["S", "L"], []],

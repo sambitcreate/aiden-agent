@@ -103,25 +103,33 @@ export type BotSettingsRespondResult =
 
 function pick(values: BotSettingsValues, fields: readonly BotSettingsField[]): BotSettingsPatch {
   const patch: BotSettingsPatch = {};
-  for (const field of fields) (patch as Record<string, unknown>)[field] = structuredClone(values[field]);
+  for (const field of fields)
+    (patch as Record<string, unknown>)[field] = structuredClone(values[field]);
   return patch;
 }
 
 function modelText(models: readonly BotSettingsModelOption[]) {
   return (model: BotSettingsModel | null) =>
-    model === null ? "None" : models.find((option) => option.providerId === model.providerId && option.modelId === model.modelId)?.label ?? model.modelId;
+    model === null
+      ? "None"
+      : (models.find(
+          (option) => option.providerId === model.providerId && option.modelId === model.modelId,
+        )?.label ?? model.modelId);
 }
 
 export function createBotSettingsChangeService(ports: BotSettingsPorts) {
   const now = ports.now ?? Date.now;
   const newId = ports.newId ?? randomUUID;
   const serial = createKeyedSerial();
-  const fileOf = (botId: string) => path.join(botSessionDirectory(ports.profileDir(), botId), BOT_SETTINGS_CHANGES_FILE);
+  const fileOf = (botId: string) =>
+    path.join(botSessionDirectory(ports.profileDir(), botId), BOT_SETTINGS_CHANGES_FILE);
 
   async function load(botId: string): Promise<StoredChange[]> {
     try {
       const parsed = JSON.parse(await fs.readFile(fileOf(botId), "utf8")) as unknown;
-      return Array.isArray(parsed) ? (parsed as StoredChange[]).filter((record) => typeof record?.changeId === "string") : [];
+      return Array.isArray(parsed)
+        ? (parsed as StoredChange[]).filter((record) => typeof record?.changeId === "string")
+        : [];
     } catch {
       return [];
     }
@@ -129,24 +137,48 @@ export function createBotSettingsChangeService(ports: BotSettingsPorts) {
 
   async function save(botId: string, records: StoredChange[]): Promise<void> {
     // Keep every held change still waiting, and the latest settled ones (Undo reads them).
-    const settled = new Set(records.filter((record) => !(record.mode === "held" && record.status === "pending")).slice(-SETTLED_KEPT));
-    await writeJsonAtomic(fileOf(botId), records.filter((record) => settled.has(record) || (record.mode === "held" && record.status === "pending")), {
-      mode: 0o600,
-      mkdirMode: 0o700,
-    });
+    const settled = new Set(
+      records
+        .filter((record) => !(record.mode === "held" && record.status === "pending"))
+        .slice(-SETTLED_KEPT),
+    );
+    await writeJsonAtomic(
+      fileOf(botId),
+      records.filter(
+        (record) => settled.has(record) || (record.mode === "held" && record.status === "pending"),
+      ),
+      {
+        mode: 0o600,
+        mkdirMode: 0o700,
+      },
+    );
   }
 
-  async function modelAllowed(botId: string, model: BotSettingsModel | null | undefined): Promise<string | undefined> {
+  async function modelAllowed(
+    botId: string,
+    model: BotSettingsModel | null | undefined,
+  ): Promise<string | undefined> {
     if (model === undefined) return undefined;
     if (model === null) return "update_bot can't take a Bot's model away.";
     const models = await ports.models(botId);
-    if (models.some((option) => option.providerId === model.providerId && option.modelId === model.modelId)) return undefined;
+    if (
+      models.some(
+        (option) => option.providerId === model.providerId && option.modelId === model.modelId,
+      )
+    )
+      return undefined;
     return models.length === 0
       ? "No other models are connected on this device. The person adds providers in Settings → Providers."
       : `That model isn't one of the connected ones. Choose from: ${models.map((option) => `${option.label} (${option.providerId} / ${option.modelId})`).join("; ")}.`;
   }
 
-  async function settle(botId: string, record: StoredChange, status: BotSettingsChangeStatus, records: StoredChange[], append: Append): Promise<void> {
+  async function settle(
+    botId: string,
+    record: StoredChange,
+    status: BotSettingsChangeStatus,
+    records: StoredChange[],
+    append: Append,
+  ): Promise<void> {
     record.status = status;
     record.decidedAt = now();
     await save(botId, records);
@@ -160,11 +192,19 @@ export function createBotSettingsChangeService(ports: BotSettingsPorts) {
      * outside the chat (the tool counts a history it can't read as having). Returns the tool's text; throws with a message the Bot can read
      * when the change is refused.
      */
-    call(botId: string, raw: unknown, context: { owner: boolean; readOutside?: boolean; append?: Append }): Promise<string> {
-      const append: Append = context.append ?? ((kind, data) => ports.appendEntry(botId, kind, data));
+    call(
+      botId: string,
+      raw: unknown,
+      context: { owner: boolean; readOutside?: boolean; append?: Append },
+    ): Promise<string> {
+      const append: Append =
+        context.append ?? ((kind, data) => ports.appendEntry(botId, kind, data));
       return serial(botId, async () => {
         const { values: current, revision } = await ports.read(botId);
-        const isEmpty = raw === undefined || raw === null || (typeof raw === "object" && !Array.isArray(raw) && Object.keys(raw).length === 0);
+        const isEmpty =
+          raw === undefined ||
+          raw === null ||
+          (typeof raw === "object" && !Array.isArray(raw) && Object.keys(raw).length === 0);
         if (isEmpty) {
           const models = await ports.models(botId);
           return JSON.stringify({
@@ -182,13 +222,19 @@ export function createBotSettingsChangeService(ports: BotSettingsPorts) {
         if (fields.length === 0) return "Nothing changed: those are already this Bot's settings.";
         const next: BotSettingsValues = { ...current, ...parsed.patch };
         const models = parsed.patch.model ? await ports.models(botId) : [];
-        const lines = fields.map((field) => botSettingsLine(field, current, next, modelText(models)));
+        const lines = fields.map((field) =>
+          botSettingsLine(field, current, next, modelText(models)),
+        );
         const records = await load(botId);
         // Words from outside the chat may be steering the Bot, and reaching out
         // more on its own is the person's call: both wait, like any run not theirs.
-        const reason: BotSettingsHeldReason | undefined = !context.owner ? "not_owner"
-          : context.readOutside === true ? "outside_content"
-            : botSettingsPatchWidens(current, parsed.patch) ? "widens" : undefined;
+        const reason: BotSettingsHeldReason | undefined = !context.owner
+          ? "not_owner"
+          : context.readOutside === true
+            ? "outside_content"
+            : botSettingsPatchWidens(current, parsed.patch)
+              ? "widens"
+              : undefined;
         const before = pick(current, fields);
         const record: StoredChange = {
           changeId: newId(),
@@ -196,15 +242,24 @@ export function createBotSettingsChangeService(ports: BotSettingsPorts) {
           fields,
           before,
           after: pick(next, fields),
-          ...(reason !== undefined ? { requested: structuredClone(raw) as Record<string, unknown> } : {}),
+          ...(reason !== undefined
+            ? { requested: structuredClone(raw) as Record<string, unknown> }
+            : {}),
           // A Bot with no model of its own can't be put back to none.
-          ...(reason === undefined && fields.includes("model") && before.model === null ? { undoable: false as const } : {}),
+          ...(reason === undefined && fields.includes("model") && before.model === null
+            ? { undoable: false as const }
+            : {}),
           status: "pending",
           createdAt: now(),
         };
         if (reason !== undefined) {
-          if (records.filter((stored) => stored.mode === "held" && stored.status === "pending").length >= PENDING_LIMIT) {
-            throw new Error("The person already has settings changes to look at. Wait for their answer.");
+          if (
+            records.filter((stored) => stored.mode === "held" && stored.status === "pending")
+              .length >= PENDING_LIMIT
+          ) {
+            throw new Error(
+              "The person already has settings changes to look at. Wait for their answer.",
+            );
           }
         } else {
           await ports.write(botId, record.after, revision);
@@ -217,7 +272,10 @@ export function createBotSettingsChangeService(ports: BotSettingsPorts) {
           fields,
           lines,
           ...(reason !== undefined && record.after.instructions !== undefined
-            ? { instructions: record.after.instructions, previousInstructions: current.instructions }
+            ? {
+                instructions: record.after.instructions,
+                previousInstructions: current.instructions,
+              }
             : {}),
           ...(reason !== undefined ? { heldReason: reason } : {}),
           ...(record.undoable === false ? { undoable: false as const } : {}),
@@ -228,29 +286,47 @@ export function createBotSettingsChangeService(ports: BotSettingsPorts) {
             ? `${botSettingsReceiptLabel(fields)}: ${lines.join("; ")}. This change can't be undone from the chat; the person changes the model in this Bot's settings.`
             : `${botSettingsReceiptLabel(fields)}: ${lines.join("; ")}. The person can undo it from the chat.`;
         }
-        const why = reason === "not_owner" ? "This run wasn't started by the person"
-          : reason === "outside_content" ? "This conversation has read content from outside the chat"
-            : "Reaching out more on your own is the person's call";
+        const why =
+          reason === "not_owner"
+            ? "This run wasn't started by the person"
+            : reason === "outside_content"
+              ? "This conversation has read content from outside the chat"
+              : "Reaching out more on your own is the person's call";
         return `${botSettingsHeldTitle(fields)} ${why}, so the change waits for them to apply it: ${lines.join("; ")}.`;
       });
     },
 
     /** The person's answer: Undo an applied change, or Apply, Edit or Dismiss a held one. */
-    respond(botId: string, changeId: string, decision: BotSettingsChangeDecision, append?: Append): Promise<BotSettingsRespondResult> {
+    respond(
+      botId: string,
+      changeId: string,
+      decision: BotSettingsChangeDecision,
+      append?: Append,
+    ): Promise<BotSettingsRespondResult> {
       const write: Append = append ?? ((kind, data) => ports.appendEntry(botId, kind, data));
       return serial(botId, async () => {
         const records = await load(botId);
         const record = records.find((stored) => stored.changeId === changeId);
-        if (!record || record.status !== "pending") return { ok: false, message: "This change was already answered." };
+        if (!record || record.status !== "pending")
+          return { ok: false, message: "This change was already answered." };
         if (decision === "undo") {
-          if (record.mode !== "applied") return { ok: false, message: "This change hasn't been applied." };
+          if (record.mode !== "applied")
+            return { ok: false, message: "This change hasn't been applied." };
           // No model to go back to: Undo would leave the new one and still say Restored.
-          if (record.undoable === false || (record.fields.includes("model") && !record.before.model)) {
-            return { ok: false, message: "This change can't be undone here. Change the model in this Bot's settings." };
+          if (
+            record.undoable === false ||
+            (record.fields.includes("model") && !record.before.model)
+          ) {
+            return {
+              ok: false,
+              message: "This change can't be undone here. Change the model in this Bot's settings.",
+            };
           }
           const { values: current, revision } = await ports.read(botId);
           const after = { ...current, ...record.after } as BotSettingsValues;
-          const unchanged = record.fields.every((field) => sameBotSettingsValue(field, current, after));
+          const unchanged = record.fields.every((field) =>
+            sameBotSettingsValue(field, current, after),
+          );
           const refused = async (): Promise<BotSettingsRespondResult> => {
             await settle(botId, record, "undo_refused", records, write);
             return { ok: true, status: "undo_refused", message: BOT_SETTINGS_UNDO_REFUSED_MESSAGE };
@@ -266,7 +342,8 @@ export function createBotSettingsChangeService(ports: BotSettingsPorts) {
           await settle(botId, record, "restored", records, write);
           return { ok: true, status: "restored" };
         }
-        if (record.mode !== "held") return { ok: false, message: "This change was already applied." };
+        if (record.mode !== "held")
+          return { ok: false, message: "This change was already applied." };
         if (decision === "dismiss") {
           await settle(botId, record, "dismissed", records, write);
           return { ok: true, status: "dismissed" };
@@ -286,7 +363,8 @@ export function createBotSettingsChangeService(ports: BotSettingsPorts) {
           // when proposed never overwrites what the person set since.
           patch = {};
           for (const field of record.fields) {
-            if (parsed.patch[field] !== undefined) (patch as Record<string, unknown>)[field] = parsed.patch[field];
+            if (parsed.patch[field] !== undefined)
+              (patch as Record<string, unknown>)[field] = parsed.patch[field];
           }
         }
         const refusal = await modelAllowed(botId, patch.model);
@@ -294,7 +372,8 @@ export function createBotSettingsChangeService(ports: BotSettingsPorts) {
         try {
           await ports.write(botId, patch, revision);
         } catch (error) {
-          if (error instanceof BotSettingsConflictError) return { ok: false, message: "This Bot's settings changed just now. Try Apply again." };
+          if (error instanceof BotSettingsConflictError)
+            return { ok: false, message: "This Bot's settings changed just now. Try Apply again." };
           throw error;
         }
         await settle(botId, record, "applied", records, write);

@@ -35,7 +35,11 @@ test("the Settings switch shows the saved choice and turns usage data off", asyn
   const control = screen.getByRole("switch", SWITCH);
   assert.equal(control.getAttribute("aria-checked"), "true");
   fireEvent.click(control);
-  assert.equal(control.getAttribute("aria-checked"), "false", "the switch moves before main answers");
+  assert.equal(
+    control.getAttribute("aria-checked"),
+    "false",
+    "the switch moves before main answers",
+  );
   await flush();
 
   assert.deepEqual(channelCalls(calls, "analytics:setEnabled"), [[false]]);
@@ -61,7 +65,10 @@ test("a failed save puts the switch back and says so once", async () => {
   await flush();
 
   assert.equal(screen.getByRole("switch", SWITCH).getAttribute("aria-checked"), "true");
-  assert.equal((await screen.findAllByText("Aiden could not save the usage data setting.")).length, 1);
+  assert.equal(
+    (await screen.findAllByText("Aiden could not save the usage data setting.")).length,
+    1,
+  );
 });
 
 test("an environment opt-out shows the switch off and locked, naming both variables", async () => {
@@ -98,7 +105,10 @@ test("What's sent lists the real events and their allowed values", async () => {
   assert.ok(within(events).getByText("web_search_used"));
   const crashes = within(sheet).getByRole("region", { name: "Crash and error reports" });
   assert.ok(within(crashes).getByText("app_crashed"));
-  assert.match(within(sheet).getByRole("region", { name: "With every event" }).textContent ?? "", /app_version/u);
+  assert.match(
+    within(sheet).getByRole("region", { name: "With every event" }).textContent ?? "",
+    /app_version/u,
+  );
   assert.match(sheet.textContent ?? "", /Never sent: chats, prompts, replies/u);
 });
 
@@ -139,7 +149,10 @@ for (const [button, choice] of [
     await flush();
 
     assert.deepEqual(channelCalls(calls, "analytics:markNoticeShown"), [[choice]]);
-    assert.equal(screen.queryByRole("region", { name: "Aiden now shares anonymous usage data" }), null);
+    assert.equal(
+      screen.queryByRole("region", { name: "Aiden now shares anonymous usage data" }),
+      null,
+    );
   });
 }
 
@@ -149,7 +162,8 @@ test("changing the Settings switch while the notice is open closes it without an
   let saved = status({ noticePending: true });
   const calls = installBotTestIpc({
     "analytics:status": () => saved,
-    "analytics:setEnabled": (enabled) => (saved = status({ enabled: enabled as boolean, noticePending: false })),
+    "analytics:setEnabled": (enabled) =>
+      (saved = status({ enabled: enabled as boolean, noticePending: false })),
   });
   render(
     <>
@@ -158,7 +172,8 @@ test("changing the Settings switch while the notice is open closes it without an
     </>,
   );
   await flush();
-  const notice = () => screen.queryByRole("region", { name: "Aiden now shares anonymous usage data" });
+  const notice = () =>
+    screen.queryByRole("region", { name: "Aiden now shares anonymous usage data" });
   assert.ok(notice());
 
   fireEvent.click(screen.getByRole("switch", SWITCH));
@@ -177,10 +192,20 @@ test("the notice stays hidden when main has nothing pending", async () => {
 });
 
 function onboardingSnapshot(outcome: OnboardingSnapshot["outcome"]): OnboardingSnapshot {
-  return { version: 2, outcome, lastSatisfiedStep: outcome === "incomplete" ? "none" : "tour", profileReady: true, providerReady: true };
+  return {
+    version: 2,
+    outcome,
+    lastSatisfiedStep: outcome === "incomplete" ? "none" : "tour",
+    profileReady: true,
+    providerReady: true,
+  };
 }
 
-function renderOnboarding(outcome: OnboardingSnapshot["outcome"], readStatus = () => status({ noticePending: true }) as AnalyticsStatusView | Promise<AnalyticsStatusView>) {
+function renderOnboarding(
+  outcome: OnboardingSnapshot["outcome"],
+  readStatus = () =>
+    status({ noticePending: true }) as AnalyticsStatusView | Promise<AnalyticsStatusView>,
+) {
   const calls = installBotTestIpc({
     "app:getOnboardingState": () => onboardingSnapshot(outcome),
     "app:setOnboardingOutcome": () => onboardingSnapshot("incomplete"),
@@ -188,7 +213,9 @@ function renderOnboarding(outcome: OnboardingSnapshot["outcome"], readStatus = (
     "analytics:status": readStatus,
     "analytics:markNoticeShown": () => status(),
   });
-  const client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: Infinity } } });
+  const client = new QueryClient({
+    defaultOptions: { queries: { retry: false, gcTime: Infinity } },
+  });
   render(
     <QueryClientProvider client={client}>
       <OnboardingFlow />
@@ -243,7 +270,10 @@ for (const [label, read, displayed] of [
     const calls = renderOnboarding("incomplete", read);
     const finish = await screen.findByRole("button", { name: "Start using Aiden" });
     await flush();
-    assert.equal(screen.getByRole("switch", SWITCH).getAttribute("aria-checked"), String(displayed));
+    assert.equal(
+      screen.getByRole("switch", SWITCH).getAttribute("aria-checked"),
+      String(displayed),
+    );
     fireEvent.click(finish);
     await flush();
     assert.equal(channelCalls(calls, "app:setOnboardingOutcome").length, 1);
@@ -254,11 +284,16 @@ for (const [label, read, displayed] of [
 test("waitForOnboardingActiveCheck waits for the initial main-process check before unblocking navigation", async () => {
   let resolveState!: (snapshot: OnboardingSnapshot) => void;
   installBotTestIpc({
-    "app:getOnboardingState": () => new Promise<OnboardingSnapshot>((resolve) => { resolveState = resolve; }),
+    "app:getOnboardingState": () =>
+      new Promise<OnboardingSnapshot>((resolve) => {
+        resolveState = resolve;
+      }),
     "profile:get": () => ({ name: "Ada" }),
     "analytics:status": () => status(),
   });
-  const client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: Infinity } } });
+  const client = new QueryClient({
+    defaultOptions: { queries: { retry: false, gcTime: Infinity } },
+  });
   render(
     <QueryClientProvider client={client}>
       <OnboardingFlow />
@@ -266,7 +301,9 @@ test("waitForOnboardingActiveCheck waits for the initial main-process check befo
   );
 
   // While the check is in flight, the DOM marks onboarding as checking.
-  assert.ok(document.querySelector("[data-onboarding-active='true'][data-onboarding-checking='true']"));
+  assert.ok(
+    document.querySelector("[data-onboarding-active='true'][data-onboarding-checking='true']"),
+  );
   let settled: boolean | null = null;
   const checkPromise = waitForOnboardingActiveCheck(2000).then((value) => {
     settled = value;

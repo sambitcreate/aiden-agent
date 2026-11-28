@@ -137,7 +137,11 @@ function boundedSingleLineProjection(
   marker?: string,
 ): ProjectedText {
   const normalized = normalizeProjectedTextWithFacts(value);
-  const projected = boundedProjection(collapseSubagentTextToSingleLine(normalized.text), maximum, marker);
+  const projected = boundedProjection(
+    collapseSubagentTextToSingleLine(normalized.text),
+    maximum,
+    marker,
+  );
   return {
     ...projected,
     displayFiltered: normalized.displayFiltered || projected.displayFiltered,
@@ -278,7 +282,9 @@ export class SubagentEventProjector {
     const projectionNotices = mergeProjectionNotices(
       undefined,
       taskPreview.truncated && "task_truncated",
-      (taskPreview.displayFiltered || label.displayFiltered || modelId.displayFiltered ||
+      (taskPreview.displayFiltered ||
+        label.displayFiltered ||
+        modelId.displayFiltered ||
         providerId?.displayFiltered === true) &&
         "display_filtered",
     );
@@ -514,7 +520,9 @@ export class SubagentEventProjector {
     if (current.finishedAt !== undefined || !this.input.onContextUsage) return;
     const usage = subagentContextUsageFromReport(
       reported,
-      this.contextWindows.has(current.runId) ? this.contextWindows.get(current.runId) : this.input.contextWindow,
+      this.contextWindows.has(current.runId)
+        ? this.contextWindows.get(current.runId)
+        : this.input.contextWindow,
     );
     if (!usage) return;
     try {

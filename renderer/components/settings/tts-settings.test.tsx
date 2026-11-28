@@ -5,11 +5,7 @@ import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import * as React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { defaultTtsSettings, TTS_LIMITS, type TtsSettingsV1 } from "../../shared/tts.js";
-import {
-  clearGeneratedAudio,
-  TtsSettingsView,
-  type TtsSettingsViewProps,
-} from "./tts-settings.js";
+import { clearGeneratedAudio, TtsSettingsView, type TtsSettingsViewProps } from "./tts-settings.js";
 
 const noop = () => undefined;
 
@@ -77,8 +73,11 @@ function textOf(node: React.ReactNode): string {
 }
 
 function button(tree: React.ReactNode, label: string): Element {
-  const [match] = findAll(tree, (element) => typeof element.props.onClick === "function" &&
-    textOf(element.props.children) === label);
+  const [match] = findAll(
+    tree,
+    (element) =>
+      typeof element.props.onClick === "function" && textOf(element.props.children) === label,
+  );
   assert.ok(match, `button ${label}`);
   return match;
 }
@@ -91,7 +90,10 @@ function byAriaLabel(tree: React.ReactNode, label: string): Element {
 
 test("the preview button drives the player controller and flips to Stop while active", () => {
   const calls: string[] = [];
-  const handlers = { onPreview: () => calls.push("preview"), onStopPreview: () => calls.push("stop") };
+  const handlers = {
+    onPreview: () => calls.push("preview"),
+    onStopPreview: () => calls.push("stop"),
+  };
   const idle = TtsSettingsView(props(handlers));
   const previewButton = button(idle, "Preview sample");
   assert.equal(previewButton.props.disabled, false);
@@ -106,16 +108,20 @@ test("the preview button drives the player controller and flips to Stop while ac
 test("preview is unavailable until Read aloud is enabled and connected, but Stop always works", () => {
   const disabled = TtsSettingsView(props(withSettings({ enabled: false })));
   assert.equal(button(disabled, "Preview sample").props.disabled, true);
-  const disconnected = TtsSettingsView(props({
-    snapshot: { ...props().snapshot!, credentialReady: false },
-  }));
+  const disconnected = TtsSettingsView(
+    props({
+      snapshot: { ...props().snapshot!, credentialReady: false },
+    }),
+  );
   assert.equal(button(disconnected, "Preview sample").props.disabled, true);
   assert.match(renderToStaticMarkup(disconnected), /Needs setup/u);
-  const activeWhileSaving = TtsSettingsView(props({
-    ...withSettings({ enabled: false }),
-    saving: true,
-    previewActive: true,
-  }));
+  const activeWhileSaving = TtsSettingsView(
+    props({
+      ...withSettings({ enabled: false }),
+      saving: true,
+      previewActive: true,
+    }),
+  );
   assert.equal(button(activeWhileSaving, "Stop preview").props.disabled, false);
 });
 
@@ -127,25 +133,40 @@ test("the delivery note is bounded and saves on blur only when it changed", () =
     onPatch: (update: unknown) => patches.push(update),
     onDeliveryNoteChange: (value: string) => typed.push(value),
   };
-  const unchanged = byAriaLabel(TtsSettingsView(props({ ...base, deliveryNote: "slow" })), "Optional delivery note");
+  const unchanged = byAriaLabel(
+    TtsSettingsView(props({ ...base, deliveryNote: "slow" })),
+    "Optional delivery note",
+  );
   assert.equal(unchanged.props.maxLength, TTS_LIMITS.deliveryNoteMaxChars);
   (unchanged.props.onBlur as () => void)();
   assert.deepEqual(patches, []);
 
-  (unchanged.props.onChange as (event: { target: { value: string } }) => void)({ target: { value: "slower" } });
+  (unchanged.props.onChange as (event: { target: { value: string } }) => void)({
+    target: { value: "slower" },
+  });
   assert.deepEqual(typed, ["slower"]);
 
-  const edited = byAriaLabel(TtsSettingsView(props({ ...base, deliveryNote: "slower" })), "Optional delivery note");
+  const edited = byAriaLabel(
+    TtsSettingsView(props({ ...base, deliveryNote: "slower" })),
+    "Optional delivery note",
+  );
   (edited.props.onBlur as () => void)();
   assert.deepEqual(patches, [{ delivery: { preset: "calm", note: "slower" } }]);
 });
 
 test("settings render shared accessible controls, not native selects or page headings", () => {
-  const html = renderToStaticMarkup(TtsSettingsView(props(withSettings({ credentialSource: "dedicated" }))));
+  const html = renderToStaticMarkup(
+    TtsSettingsView(props(withSettings({ credentialSource: "dedicated" }))),
+  );
   assert.doesNotMatch(html, /<h1/u);
   // Only the shared Select's hidden form mirror may be a native <select>.
   assert.doesNotMatch(html, /<select(?![^>]*aria-hidden="true")/u);
-  for (const label of ["Speech model", "Google API key source", "Read aloud voice", "Delivery style"]) {
+  for (const label of [
+    "Speech model",
+    "Google API key source",
+    "Read aloud voice",
+    "Delivery style",
+  ]) {
     assert.match(html, new RegExp(`role="combobox"[^>]*aria-label="${label}"`, "u"));
   }
   assert.match(html, /type="password"[^>]*aria-label="Dedicated Google API key"/u);
@@ -155,28 +176,51 @@ test("settings render shared accessible controls, not native selects or page hea
 
 test("the page reads as three groups, in order", () => {
   const html = renderToStaticMarkup(TtsSettingsView(props()));
-  const positions = ["Setup", "Voice and delivery", "Privacy and storage"].map((title) => html.indexOf(`>${title}<`));
-  assert.ok(positions.every((position) => position >= 0), `missing a group: ${positions.join(", ")}`);
-  assert.deepEqual([...positions].sort((a, b) => a - b), positions);
+  const positions = ["Setup", "Voice and delivery", "Privacy and storage"].map((title) =>
+    html.indexOf(`>${title}<`),
+  );
+  assert.ok(
+    positions.every((position) => position >= 0),
+    `missing a group: ${positions.join(", ")}`,
+  );
+  assert.deepEqual(
+    [...positions].sort((a, b) => a - b),
+    positions,
+  );
 });
 
 test("preview failures surface as an alert, and a load failure offers retry", () => {
-  const html = renderToStaticMarkup(TtsSettingsView(props({ previewError: { message: "Voice unavailable." } })));
+  const html = renderToStaticMarkup(
+    TtsSettingsView(props({ previewError: { message: "Voice unavailable." } })),
+  );
   assert.match(html, /role="alert"[^>]*>Voice unavailable\./u);
 
   let retried = 0;
-  const failed = TtsSettingsView(props({ snapshot: null, loadError: true, onRetry: () => { retried += 1; } }));
+  const failed = TtsSettingsView(
+    props({
+      snapshot: null,
+      loadError: true,
+      onRetry: () => {
+        retried += 1;
+      },
+    }),
+  );
   assert.match(renderToStaticMarkup(failed), /could not be loaded/u);
   (button(failed, "Try again").props.onClick as () => void)();
   assert.equal(retried, 1);
-  assert.doesNotMatch(renderToStaticMarkup(TtsSettingsView(props({ snapshot: null }))), /Try again/u);
+  assert.doesNotMatch(
+    renderToStaticMarkup(TtsSettingsView(props({ snapshot: null }))),
+    /Try again/u,
+  );
 });
 
 test("clearing generated audio stops preview first and reports failure", async () => {
   const events: string[] = [];
   await clearGeneratedAudio({
     stopPreview: () => events.push("stop"),
-    clearCache: async () => { events.push("clear"); },
+    clearCache: async () => {
+      events.push("clear");
+    },
     notify: (message) => events.push(message),
   });
   assert.deepEqual(events, ["stop", "clear", "Generated audio cleared."]);

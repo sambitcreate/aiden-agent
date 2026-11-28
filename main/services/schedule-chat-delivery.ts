@@ -89,7 +89,12 @@ export interface TaskRunChatDeliveryDeps {
   ensureOwnChat(task: ScheduledTask): Promise<string>;
   /** Today's run in the task's own chat. Throws when the run could not happen. */
   /** `eventText`: what a trigger saw, already fenced as data, added after the task's prompt. */
-  runInOwnChat(task: ScheduledTask, chatId: string, signal: AbortSignal, eventText?: string): Promise<TaskRunExecution>;
+  runInOwnChat(
+    task: ScheduledTask,
+    chatId: string,
+    signal: AbortSignal,
+    eventText?: string,
+  ): Promise<TaskRunExecution>;
   /** Say in the task's own chat that the run failed. */
   reportOwnChatFailure(task: ScheduledTask, chatId: string, message: string): Promise<void>;
   /** Run the task's script without holding any chat; `output` is what it printed. Throws when it could not start. */
@@ -98,7 +103,12 @@ export interface TaskRunChatDeliveryDeps {
    * Prepare and admit the task's model turn in the chat: the notice is saved
    * as the turn's prompt. `busy` when another turn holds the chat right now.
    */
-  admitTurn(task: ScheduledTask, chatId: string, post: AgentNoticePost, signal: AbortSignal): Promise<AdmittedTaskTurn>;
+  admitTurn(
+    task: ScheduledTask,
+    chatId: string,
+    post: AgentNoticePost,
+    signal: AbortSignal,
+  ): Promise<AdmittedTaskTurn>;
   /** True once nothing runs in the chat; false when `timeoutMs` passed first. */
   waitForIdle(chatId: string, timeoutMs: number): Promise<boolean>;
   /** Post a notice through the chat's ordered notice delivery. */
@@ -170,7 +180,11 @@ function taskNotice(task: ScheduledTask, tone: AgentNoticeTone, summary: string)
 }
 
 /** The model-facing prompt: the person's instructions, plus any outside text fenced as data. */
-export function scheduledTaskNoticeText(task: ScheduledTask, cadence: string, eventText?: string): string {
+export function scheduledTaskNoticeText(
+  task: ScheduledTask,
+  cadence: string,
+  eventText?: string,
+): string {
   const lines = [
     `Your scheduled task "${task.name}" is running now (${cadence}). Its instructions, written by the person:`,
     "",
@@ -209,22 +223,42 @@ export function createTaskRunChatDelivery(deps: TaskRunChatDeliveryDeps) {
     return undefined;
   }
 
-  async function inOwnChat(task: ScheduledTask, signal: AbortSignal, eventText?: string): Promise<TaskRunOutcome> {
+  async function inOwnChat(
+    task: ScheduledTask,
+    signal: AbortSignal,
+    eventText?: string,
+  ): Promise<TaskRunOutcome> {
     const chatId = await deps.ensureOwnChat(task);
-    const fenced = eventText?.trim() ? fenceAsData(TRIGGER_EVENT_LABEL, headText(eventText, EVENT_TEXT_CHARS)) : undefined;
+    const fenced = eventText?.trim()
+      ? fenceAsData(TRIGGER_EVENT_LABEL, headText(eventText, EVENT_TEXT_CHARS))
+      : undefined;
     try {
-      return { kind: "fell_back", chatId, ...(await deps.runInOwnChat(task, chatId, signal, fenced)) };
+      return {
+        kind: "fell_back",
+        chatId,
+        ...(await deps.runInOwnChat(task, chatId, signal, fenced)),
+      };
     } catch (cause) {
       const error = errorText(cause);
       await deps
         .reportOwnChatFailure(task, chatId, `Scheduled task failed: ${error}`)
         .catch((reportError: unknown) => deps.onError?.(reportError));
-      return { kind: "fell_back", chatId, result: signal.aborted ? "blocked" : "error", output: "", error };
+      return {
+        kind: "fell_back",
+        chatId,
+        result: signal.aborted ? "blocked" : "error",
+        output: "",
+        error,
+      };
     }
   }
 
   /** A record-only card in the chat; never wakes it. Returns whether it was posted. */
-  async function record(chatId: string, notice: AgentNoticeV1, text: string): Promise<AgentNoticeOutcome> {
+  async function record(
+    chatId: string,
+    notice: AgentNoticeV1,
+    text: string,
+  ): Promise<AgentNoticeOutcome> {
     const outcome = await deps.postNotice({ chatId, notice, text, wake: false });
     if (outcome.kind === "dropped") deps.onError?.(new Error(outcome.reason));
     return outcome;
@@ -235,7 +269,11 @@ export function createTaskRunChatDelivery(deps: TaskRunChatDeliveryDeps) {
     if (budget.takeSkipNotice(chatId)) {
       await record(
         chatId,
-        taskNotice(task, "info", `Skipped: ${MAX_TASK_RUNS_PER_CHAT_PER_HOUR} task runs this hour already`),
+        taskNotice(
+          task,
+          "info",
+          `Skipped: ${MAX_TASK_RUNS_PER_CHAT_PER_HOUR} task runs this hour already`,
+        ),
         `${output} Scheduled tasks that post into this chat wait for the next hour; the person can still run one by hand.`,
       );
     }
@@ -253,9 +291,15 @@ export function createTaskRunChatDelivery(deps: TaskRunChatDeliveryDeps) {
     return { kind: "skipped", reason: "chat_busy", chatId, output: CHAT_BUSY_OUTPUT };
   }
 
-  async function runScriptInChat(task: ScheduledTask, chatId: string, signal: AbortSignal): Promise<TaskRunOutcome> {
+  async function runScriptInChat(
+    task: ScheduledTask,
+    chatId: string,
+    signal: AbortSignal,
+  ): Promise<TaskRunOutcome> {
     const execution = await deps.runScript(task, signal);
-    const printed = execution.output.trim() ? tailText(execution.output, SCRIPT_OUTPUT_NOTICE_CHARS) : undefined;
+    const printed = execution.output.trim()
+      ? tailText(execution.output, SCRIPT_OUTPUT_NOTICE_CHARS)
+      : undefined;
     const fenced = printed
       ? fenceAsData(printed.truncated ? "Script output (end)" : "Script output", printed.text)
       : undefined;
@@ -264,10 +308,16 @@ export function createTaskRunChatDelivery(deps: TaskRunChatDeliveryDeps) {
       await record(
         chatId,
         taskNotice(task, "failure", reason),
-        [`Scheduled task "${task.name}" failed: ${reason}`, ...(fenced ? ["", fenced] : [])].join("\n"),
+        [`Scheduled task "${task.name}" failed: ${reason}`, ...(fenced ? ["", fenced] : [])].join(
+          "\n",
+        ),
       );
     } else if (fenced) {
-      await record(chatId, taskNotice(task, "info", deps.cadence(task)), `Scheduled task "${task.name}" ran its script.\n\n${fenced}`);
+      await record(
+        chatId,
+        taskNotice(task, "info", deps.cadence(task)),
+        `Scheduled task "${task.name}" ran its script.\n\n${fenced}`,
+      );
     }
     return { kind: "ran", chatId, ...execution };
   }
@@ -304,12 +354,16 @@ export function createTaskRunChatDelivery(deps: TaskRunChatDeliveryDeps) {
       });
       if (admission.kind === "moved") return { kind: "moved" };
       if (admission.kind === "budget") return overBudget(task, chatId);
-      if (admission.kind === "admitted") return { kind: "ran", chatId, ...(await admission.finish()) };
+      if (admission.kind === "admitted")
+        return { kind: "ran", chatId, ...(await admission.finish()) };
       // Another turn took the chat between the wait and the admission. Back
       // off before trying again, so a chat that is held without counting as
       // busy isn't asked hundreds of times a minute.
       if (deps.now() >= deadline) return chatBusy(task, chatId);
-      await delay(Math.min(TASK_RUN_ADMISSION_RETRY_MS, Math.max(0, deadline - deps.now())), signal);
+      await delay(
+        Math.min(TASK_RUN_ADMISSION_RETRY_MS, Math.max(0, deadline - deps.now())),
+        signal,
+      );
     }
   }
 
@@ -319,7 +373,10 @@ export function createTaskRunChatDelivery(deps: TaskRunChatDeliveryDeps) {
    * `chat_budget`. A run the person started by hand doesn't count against
    * the chat's hourly share. Only a failure to reach any chat throws.
    */
-  async function deliverTaskRunToChat(task: ScheduledTask, options: TaskRunDeliveryOptions): Promise<TaskRunOutcome> {
+  async function deliverTaskRunToChat(
+    task: ScheduledTask,
+    options: TaskRunDeliveryOptions,
+  ): Promise<TaskRunOutcome> {
     const chatId = await originChat(task);
     if (!chatId) return inOwnChat(task, options.signal, options.eventText);
     const countsAgainstBudget = options.trigger?.kind !== "manual";
@@ -335,10 +392,20 @@ export function createTaskRunChatDelivery(deps: TaskRunChatDeliveryDeps) {
       const error = errorText(cause);
       await record(
         chatId,
-        taskNotice(task, "failure", options.signal.aborted ? "Cancelled" : "The run couldn't start"),
+        taskNotice(
+          task,
+          "failure",
+          options.signal.aborted ? "Cancelled" : "The run couldn't start",
+        ),
         `Scheduled task "${task.name}" failed: ${error}`,
       ).catch((recordError: unknown) => deps.onError?.(recordError));
-      return { kind: "ran", chatId, result: options.signal.aborted ? "blocked" : "error", output: "", error };
+      return {
+        kind: "ran",
+        chatId,
+        result: options.signal.aborted ? "blocked" : "error",
+        output: "",
+        error,
+      };
     }
     return outcome.kind === "moved" ? inOwnChat(task, options.signal, options.eventText) : outcome;
   }
@@ -350,11 +417,15 @@ export function createTaskRunChatDelivery(deps: TaskRunChatDeliveryDeps) {
    * again; a chat that no longer exists has nowhere to post, so that counts
    * as done.
    */
-  async function recordInLandingChat(task: ScheduledTask, card: { tone: AgentNoticeTone; summary: string; text: string },
-    options: { mustSave?: boolean } = {}): Promise<string> {
+  async function recordInLandingChat(
+    task: ScheduledTask,
+    card: { tone: AgentNoticeTone; summary: string; text: string },
+    options: { mustSave?: boolean } = {},
+  ): Promise<string> {
     const chatId = (await originChat(task)) ?? (await deps.ensureOwnChat(task));
     const outcome = await record(chatId, taskNotice(task, card.tone, card.summary), card.text);
-    if (options.mustSave && outcome.kind === "dropped" && !outcome.gone) throw new Error(`The card wasn't saved: ${outcome.reason}`);
+    if (options.mustSave && outcome.kind === "dropped" && !outcome.gone)
+      throw new Error(`The card wasn't saved: ${outcome.reason}`);
     return chatId;
   }
 

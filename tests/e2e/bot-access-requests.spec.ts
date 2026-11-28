@@ -12,10 +12,12 @@ interface AccessE2eState {
 
 // Substitute the projected Bot feed because the mock profile has no Keychain
 // authority. The card, keyboard interaction, IPC client and error handling are real.
-test("access cards keep their scope visible and wait for the host's answer", async ({ aiden }, testInfo) => {
+test("access cards keep their scope visible and wait for the host's answer", async ({
+  aiden,
+}, testInfo) => {
   const { page } = aiden;
   await finishLmStudioOnboarding(page);
-  const bot = botFixture({id: "bot-access", name: "Planner"});
+  const bot = botFixture({ id: "bot-access", name: "Planner" });
   const request: BotPendingAccessRequest = {
     botId: bot.id,
     waitId: "11112233-4455-4677-8899-aabbccddeeff",
@@ -26,113 +28,211 @@ test("access cards keep their scope visible and wait for the host's answer", asy
     why: "To sort this year's receipts without changing the rest of your Documents folder.",
     choices: ["not_now", "always", "once"],
   };
-  await aiden.app.evaluate(({ipcMain, BrowserWindow}, input) => {
-    let pending: typeof input.request | null = input.request;
-    let seq = 0;
-    let release: (() => void) | undefined;
-    const snapshot = () => ({
-      botId: input.bot.id, epoch: "access-e2e", seq, partial: null,
-      state: {kind: "idle"}, question: null, handoff: null,
-      accessRequest: pending, activity: null, queued: [], entries: [],
-    });
-    const publish = () => {
-      seq += 1;
-      for (const window of BrowserWindow.getAllWindows()) {
-        window.webContents.send("bots:live:event", {botId: input.bot.id, epoch: "access-e2e", seq, type: "snapshot", snapshot: snapshot()});
-      }
-    };
-    const state: AccessE2eState = {
-      answers: [], failNext: true, saveForFuture: false,
-      release: () => { release?.(); release = undefined; },
-      replace: (next) => { pending = next; publish(); },
-    };
-    (globalThis as unknown as {accessRequestE2e: AccessE2eState}).accessRequestE2e = state;
-    for (const channel of ["bots:list", "bots:get", "bots:live:subscribe", "bots:live:summary", "bots:getCanonicalPhoto", "bots:pendingApprovals", "bots:answerAccessRequest"]) ipcMain.removeHandler(channel);
-    ipcMain.handle("bots:list", () => [input.bot]);
-    ipcMain.handle("bots:get", () => input.bot);
-    ipcMain.handle("bots:getCanonicalPhoto", () => null);
-    ipcMain.handle("bots:pendingApprovals", () => []);
-    ipcMain.handle("bots:live:summary", () => ({botId: input.bot.id, preview: null, updatedAt: 1000, state: {kind: "idle"}, needsYou: pending !== null, lastReplyAt: null}));
-    ipcMain.handle("bots:live:subscribe", snapshot);
-    ipcMain.handle("bots:answerAccessRequest", async (_event, answer: unknown) => {
-      state.answers.push(answer);
-      await new Promise<void>(resolve => { release = resolve; });
-      if (state.failNext) {
-        state.failNext = false;
-        throw new Error("The folder could not be saved. Please try again.");
-      }
-      pending = null;
-      publish();
-      return {answered: true, ...(state.saveForFuture ? {savedForFuture: true} : {})};
-    });
-  }, {bot, request});
-  await page.getByRole("button", {name: "Bots", exact: true}).click();
-  const card = page.getByRole("group", {name: "Planner wants to use Taxes", exact: true});
+  await aiden.app.evaluate(
+    ({ ipcMain, BrowserWindow }, input) => {
+      let pending: typeof input.request | null = input.request;
+      let seq = 0;
+      let release: (() => void) | undefined;
+      const snapshot = () => ({
+        botId: input.bot.id,
+        epoch: "access-e2e",
+        seq,
+        partial: null,
+        state: { kind: "idle" },
+        question: null,
+        handoff: null,
+        accessRequest: pending,
+        activity: null,
+        queued: [],
+        entries: [],
+      });
+      const publish = () => {
+        seq += 1;
+        for (const window of BrowserWindow.getAllWindows()) {
+          window.webContents.send("bots:live:event", {
+            botId: input.bot.id,
+            epoch: "access-e2e",
+            seq,
+            type: "snapshot",
+            snapshot: snapshot(),
+          });
+        }
+      };
+      const state: AccessE2eState = {
+        answers: [],
+        failNext: true,
+        saveForFuture: false,
+        release: () => {
+          release?.();
+          release = undefined;
+        },
+        replace: (next) => {
+          pending = next;
+          publish();
+        },
+      };
+      (globalThis as unknown as { accessRequestE2e: AccessE2eState }).accessRequestE2e = state;
+      for (const channel of [
+        "bots:list",
+        "bots:get",
+        "bots:live:subscribe",
+        "bots:live:summary",
+        "bots:getCanonicalPhoto",
+        "bots:pendingApprovals",
+        "bots:answerAccessRequest",
+      ])
+        ipcMain.removeHandler(channel);
+      ipcMain.handle("bots:list", () => [input.bot]);
+      ipcMain.handle("bots:get", () => input.bot);
+      ipcMain.handle("bots:getCanonicalPhoto", () => null);
+      ipcMain.handle("bots:pendingApprovals", () => []);
+      ipcMain.handle("bots:live:summary", () => ({
+        botId: input.bot.id,
+        preview: null,
+        updatedAt: 1000,
+        state: { kind: "idle" },
+        needsYou: pending !== null,
+        lastReplyAt: null,
+      }));
+      ipcMain.handle("bots:live:subscribe", snapshot);
+      ipcMain.handle("bots:answerAccessRequest", async (_event, answer: unknown) => {
+        state.answers.push(answer);
+        await new Promise<void>((resolve) => {
+          release = resolve;
+        });
+        if (state.failNext) {
+          state.failNext = false;
+          throw new Error("The folder could not be saved. Please try again.");
+        }
+        pending = null;
+        publish();
+        return { answered: true, ...(state.saveForFuture ? { savedForFuture: true } : {}) };
+      });
+    },
+    { bot, request },
+  );
+  await page.getByRole("button", { name: "Bots", exact: true }).click();
+  const card = page.getByRole("group", { name: "Planner wants to use Taxes", exact: true });
   await expect(card).toBeVisible();
   await expect(card).toContainText(request.place!);
   await expect(card).toContainText(request.why);
   // The ask card: Deny, Allow once, then the menu that holds Always for this folder.
-  await card.getByRole("button", {name: "Deny", exact: true}).focus();
+  await card.getByRole("button", { name: "Deny", exact: true }).focus();
   await page.keyboard.press("Tab");
-  await expect(card.getByRole("button", {name: "Allow once", exact: true})).toBeFocused();
+  await expect(card.getByRole("button", { name: "Allow once", exact: true })).toBeFocused();
   await page.keyboard.press("Tab");
-  await expect(card.getByRole("button", {name: "More ways to allow", exact: true})).toBeFocused();
-  await expect(page.getByText("LM Studio (local) added.", {exact: true})).toBeHidden();
-  for (const [mode, width] of [["light", 1280], ["dark", 600]] as const) {
-    await page.evaluate(async scheme => {
-      const appearance = await window.aidenAPI.ipc.invoke("settings:getAppearance") as Record<string, unknown>;
-      await window.aidenAPI.ipc.invoke("settings:previewAppearance", {...appearance, mode: scheme, reduceMotion: "on"});
+  await expect(card.getByRole("button", { name: "More ways to allow", exact: true })).toBeFocused();
+  await expect(page.getByText("LM Studio (local) added.", { exact: true })).toBeHidden();
+  for (const [mode, width] of [
+    ["light", 1280],
+    ["dark", 600],
+  ] as const) {
+    await page.evaluate(async (scheme) => {
+      const appearance = (await window.aidenAPI.ipc.invoke("settings:getAppearance")) as Record<
+        string,
+        unknown
+      >;
+      await window.aidenAPI.ipc.invoke("settings:previewAppearance", {
+        ...appearance,
+        mode: scheme,
+        reduceMotion: "on",
+      });
     }, mode);
-    await aiden.app.evaluate(({BrowserWindow}, size) => BrowserWindow.getAllWindows()[0]!.setSize(size, 900), width);
+    await aiden.app.evaluate(
+      ({ BrowserWindow }, size) => BrowserWindow.getAllWindows()[0]!.setSize(size, 900),
+      width,
+    );
     await expect(page.locator("html")).toHaveAttribute("data-appearance-scheme", mode);
-    await expect(card.getByRole("button", {name: "Allow once", exact: true})).toBeVisible();
-    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
-    await page.screenshot({path: testInfo.outputPath(`access-card-${mode}.png`)});
+    await expect(card.getByRole("button", { name: "Allow once", exact: true })).toBeVisible();
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(
+      true,
+    );
+    await page.screenshot({ path: testInfo.outputPath(`access-card-${mode}.png`) });
   }
-  await card.getByRole("button", {name: "More ways to allow", exact: true}).click();
-  await page.getByRole("menuitem", {name: /Always for this folder/u}).click();
+  await card.getByRole("button", { name: "More ways to allow", exact: true }).click();
+  await page.getByRole("menuitem", { name: /Always for this folder/u }).click();
   for (const button of await card.getByRole("button").all()) await expect(button).toBeDisabled();
-  expect(await aiden.app.evaluate(() => (globalThis as unknown as {accessRequestE2e: AccessE2eState}).accessRequestE2e.answers)).toEqual([{botId: bot.id, waitId: request.waitId, choice: "always"}]);
-  await aiden.app.evaluate(() => (globalThis as unknown as {accessRequestE2e: AccessE2eState}).accessRequestE2e.release());
-  await expect(page.getByText("The folder could not be saved. Please try again.", {exact: false}).first()).toBeVisible();
-  await expect(card.getByRole("button", {name: "Allow once", exact: true})).toBeEnabled();
-  await card.getByRole("button", {name: "Allow once", exact: true}).click();
-  await expect(card.getByRole("button", {name: "Deny", exact: true})).toBeDisabled();
-  await aiden.app.evaluate(() => (globalThis as unknown as {accessRequestE2e: AccessE2eState}).accessRequestE2e.release());
+  expect(
+    await aiden.app.evaluate(
+      () =>
+        (globalThis as unknown as { accessRequestE2e: AccessE2eState }).accessRequestE2e.answers,
+    ),
+  ).toEqual([{ botId: bot.id, waitId: request.waitId, choice: "always" }]);
+  await aiden.app.evaluate(() =>
+    (globalThis as unknown as { accessRequestE2e: AccessE2eState }).accessRequestE2e.release(),
+  );
+  await expect(
+    page.getByText("The folder could not be saved. Please try again.", { exact: false }).first(),
+  ).toBeVisible();
+  await expect(card.getByRole("button", { name: "Allow once", exact: true })).toBeEnabled();
+  await card.getByRole("button", { name: "Allow once", exact: true }).click();
+  await expect(card.getByRole("button", { name: "Deny", exact: true })).toBeDisabled();
+  await aiden.app.evaluate(() =>
+    (globalThis as unknown as { accessRequestE2e: AccessE2eState }).accessRequestE2e.release(),
+  );
   await expect(card).toBeHidden();
   await expect(page.getByPlaceholder("Ask Planner")).toBeVisible();
 
-  const {place: _place, ...wholeMac} = request;
-  const wholeMacRequest: BotPendingAccessRequest = {...wholeMac, waitId: "22222233-4455-4677-8899-aabbccddeeff", target: "whole_mac", label: "your whole Mac", choices: ["not_now", "once"]};
-  await aiden.app.evaluate((_electron, next) => (globalThis as unknown as {accessRequestE2e: AccessE2eState}).accessRequestE2e.replace(next), wholeMacRequest);
-  const wholeCard = page.getByRole("group", {name: "Planner wants to use your whole Mac", exact: true});
+  const { place: _place, ...wholeMac } = request;
+  const wholeMacRequest: BotPendingAccessRequest = {
+    ...wholeMac,
+    waitId: "22222233-4455-4677-8899-aabbccddeeff",
+    target: "whole_mac",
+    label: "your whole Mac",
+    choices: ["not_now", "once"],
+  };
+  await aiden.app.evaluate(
+    (_electron, next) =>
+      (globalThis as unknown as { accessRequestE2e: AccessE2eState }).accessRequestE2e.replace(
+        next,
+      ),
+    wholeMacRequest,
+  );
+  const wholeCard = page.getByRole("group", {
+    name: "Planner wants to use your whole Mac",
+    exact: true,
+  });
   await expect(wholeCard).toBeVisible();
-  await expect(wholeCard.getByRole("button", {name: "More ways to allow", exact: true})).toHaveCount(0);
-  await wholeCard.getByRole("button", {name: "Deny", exact: true}).click();
-  await expect(wholeCard.getByRole("button", {name: "Allow once", exact: true})).toBeDisabled();
-  await aiden.app.evaluate(() => (globalThis as unknown as {accessRequestE2e: AccessE2eState}).accessRequestE2e.release());
+  await expect(
+    wholeCard.getByRole("button", { name: "More ways to allow", exact: true }),
+  ).toHaveCount(0);
+  await wholeCard.getByRole("button", { name: "Deny", exact: true }).click();
+  await expect(wholeCard.getByRole("button", { name: "Allow once", exact: true })).toBeDisabled();
+  await aiden.app.evaluate(() =>
+    (globalThis as unknown as { accessRequestE2e: AccessE2eState }).accessRequestE2e.release(),
+  );
   await expect(wholeCard).toBeHidden();
-  const futureRequest: BotPendingAccessRequest = {...request, waitId: "33332233-4455-4677-8899-aabbccddeeff"};
+  const futureRequest: BotPendingAccessRequest = {
+    ...request,
+    waitId: "33332233-4455-4677-8899-aabbccddeeff",
+  };
   await aiden.app.evaluate((_electron, next) => {
-    const state = (globalThis as unknown as {accessRequestE2e: AccessE2eState}).accessRequestE2e;
+    const state = (globalThis as unknown as { accessRequestE2e: AccessE2eState }).accessRequestE2e;
     state.saveForFuture = true;
     state.replace(next);
   }, futureRequest);
-  const futureCard = page.getByRole("group", {name: "Planner wants to use Taxes", exact: true});
+  const futureCard = page.getByRole("group", { name: "Planner wants to use Taxes", exact: true });
   await expect(futureCard).toBeVisible();
-  await futureCard.getByRole("button", {name: "More ways to allow", exact: true}).click();
-  await page.getByRole("menuitem", {name: /Always for this folder/u}).click();
-  await expect(futureCard.getByRole("button", {name: "Deny", exact: true})).toBeDisabled();
-  await aiden.app.evaluate(() => (globalThis as unknown as {accessRequestE2e: AccessE2eState}).accessRequestE2e.release());
+  await futureCard.getByRole("button", { name: "More ways to allow", exact: true }).click();
+  await page.getByRole("menuitem", { name: /Always for this folder/u }).click();
+  await expect(futureCard.getByRole("button", { name: "Deny", exact: true })).toBeDisabled();
+  await aiden.app.evaluate(() =>
+    (globalThis as unknown as { accessRequestE2e: AccessE2eState }).accessRequestE2e.release(),
+  );
   await expect(futureCard).toBeHidden();
-  await expect(page.getByText("Folder approval recorded.", {exact: true})).toBeVisible();
-  expect(await aiden.app.evaluate(() => (globalThis as unknown as {accessRequestE2e: AccessE2eState}).accessRequestE2e.answers)).toEqual([
-    {botId: bot.id, waitId: request.waitId, choice: "always"},
-    {botId: bot.id, waitId: request.waitId, choice: "once"},
-    {botId: bot.id, waitId: "22222233-4455-4677-8899-aabbccddeeff", choice: "not_now"},
-    {botId: bot.id, waitId: futureRequest.waitId, choice: "always"},
+  await expect(page.getByText("Folder approval recorded.", { exact: true })).toBeVisible();
+  expect(
+    await aiden.app.evaluate(
+      () =>
+        (globalThis as unknown as { accessRequestE2e: AccessE2eState }).accessRequestE2e.answers,
+    ),
+  ).toEqual([
+    { botId: bot.id, waitId: request.waitId, choice: "always" },
+    { botId: bot.id, waitId: request.waitId, choice: "once" },
+    { botId: bot.id, waitId: "22222233-4455-4677-8899-aabbccddeeff", choice: "not_now" },
+    { botId: bot.id, waitId: futureRequest.waitId, choice: "always" },
   ]);
-  expect(aiden.lmStudio.requests.filter(r => r.url === "/v1/chat/completions")).toHaveLength(0);
+  expect(aiden.lmStudio.requests.filter((r) => r.url === "/v1/chat/completions")).toHaveLength(0);
 });
 
 interface AllowedE2eState {
@@ -143,57 +243,159 @@ interface AllowedE2eState {
 // Public IPC fixtures isolate the UI from the mock profile's unavailable
 // Keychain. Real rule book, store and handler behavior is covered headlessly
 // (main/handlers/approval-rules.test.ts).
-test("a card's Always becomes a row in Settings → Approvals, and Remove takes it away", async ({ aiden }, testInfo) => {
+test("a card's Always becomes a row in Settings → Approvals, and Remove takes it away", async ({
+  aiden,
+}, testInfo) => {
   const { page } = aiden;
   await finishLmStudioOnboarding(page);
   const bot = botFixture({ id: "bot-allowed", name: "Ada" });
   await aiden.app.evaluate(({ ipcMain, BrowserWindow }, bot) => {
-    let pending = true, release: (() => void) | undefined;
-    const prompt = { botId: bot.id, waitId: "ordinary-approval", toolCallId: "calendar-call", toolName: "calendar_create", summary: "Create the project review event", always: { key: "calendar-create", count: 3 } };
+    let pending = true,
+      release: (() => void) | undefined;
+    const prompt = {
+      botId: bot.id,
+      waitId: "ordinary-approval",
+      toolCallId: "calendar-call",
+      toolName: "calendar_create",
+      summary: "Create the project review event",
+      always: { key: "calendar-create", count: 3 },
+    };
     type Row = import("../../renderer/shared/approval-rules").ApprovalRuleRow;
-    let rows: Row[] = [{ ref: { source: "bot-folder", botId: bot.id, entryId: "folder_root_a" }, group: "mac", title: "Folder · ~/Documents/Taxes", kind: "Folder", scope: { kind: "bot", label: bot.name }, legacy: true, decisions: [], createdAt: "2026-11-03T12:00:00Z" }];
+    let rows: Row[] = [
+      {
+        ref: { source: "bot-folder", botId: bot.id, entryId: "folder_root_a" },
+        group: "mac",
+        title: "Folder · ~/Documents/Taxes",
+        kind: "Folder",
+        scope: { kind: "bot", label: bot.name },
+        legacy: true,
+        decisions: [],
+        createdAt: "2026-11-03T12:00:00Z",
+      },
+    ];
     const broadcast = (channel: string, payload: unknown) => {
       for (const window of BrowserWindow.getAllWindows()) window.webContents.send(channel, payload);
     };
     const changed = () => broadcast("chat:approvalRules:changed", {});
-    const state: AllowedE2eState = { answers: [], release: () => { release?.(); release = undefined; } };
+    const state: AllowedE2eState = {
+      answers: [],
+      release: () => {
+        release?.();
+        release = undefined;
+      },
+    };
     (globalThis as unknown as { allowedE2e: AllowedE2eState }).allowedE2e = state;
-    for (const channel of ["bots:list", "bots:get", "bots:getCanonicalPhoto", "bots:pendingApprovals", "bots:live:summary", "bots:live:subscribe", "bots:approve", "chat:approvalRules:list", "chat:approvalRules:remove"]) ipcMain.removeHandler(channel);
+    for (const channel of [
+      "bots:list",
+      "bots:get",
+      "bots:getCanonicalPhoto",
+      "bots:pendingApprovals",
+      "bots:live:summary",
+      "bots:live:subscribe",
+      "bots:approve",
+      "chat:approvalRules:list",
+      "chat:approvalRules:remove",
+    ])
+      ipcMain.removeHandler(channel);
     ipcMain.handle("bots:list", () => [bot]);
     ipcMain.handle("bots:get", () => bot);
     ipcMain.handle("bots:getCanonicalPhoto", () => null);
-    ipcMain.handle("bots:pendingApprovals", () => pending ? [prompt] : []);
-    ipcMain.handle("bots:live:summary", () => ({ botId: bot.id, preview: null, updatedAt: 1000, state: { kind: "idle" }, needsYou: pending, lastReplyAt: null }));
-    ipcMain.handle("bots:live:subscribe", () => ({ botId: bot.id, epoch: "allowed-e2e", seq: 0, entries: [], partial: null, state: { kind: "idle" }, question: null, handoff: null, accessRequest: null, plan: null, activity: null, queued: [] }));
+    ipcMain.handle("bots:pendingApprovals", () => (pending ? [prompt] : []));
+    ipcMain.handle("bots:live:summary", () => ({
+      botId: bot.id,
+      preview: null,
+      updatedAt: 1000,
+      state: { kind: "idle" },
+      needsYou: pending,
+      lastReplyAt: null,
+    }));
+    ipcMain.handle("bots:live:subscribe", () => ({
+      botId: bot.id,
+      epoch: "allowed-e2e",
+      seq: 0,
+      entries: [],
+      partial: null,
+      state: { kind: "idle" },
+      question: null,
+      handoff: null,
+      accessRequest: null,
+      plan: null,
+      activity: null,
+      queued: [],
+    }));
     ipcMain.handle("bots:approve", async (_event, answer: unknown) => {
       state.answers.push(answer);
-      await new Promise<void>(resolve => { release = resolve; });
+      await new Promise<void>((resolve) => {
+        release = resolve;
+      });
       pending = false;
-      broadcast("bots:approval-settled", { botId: bot.id, waitId: prompt.waitId, outcome: "allowed" });
-      rows = [{ ref: { source: "bot-allow", botId: bot.id, entryId: "rule_calendar" }, group: "allow", title: "Calendar · Create event", kind: "Connected app", scope: { kind: "bot", label: bot.name }, legacy: true, decisions: ["allow", "ask", "block"], createdAt: "2026-11-04T12:00:00Z" }, ...rows];
+      broadcast("bots:approval-settled", {
+        botId: bot.id,
+        waitId: prompt.waitId,
+        outcome: "allowed",
+      });
+      rows = [
+        {
+          ref: { source: "bot-allow", botId: bot.id, entryId: "rule_calendar" },
+          group: "allow",
+          title: "Calendar · Create event",
+          kind: "Connected app",
+          scope: { kind: "bot", label: bot.name },
+          legacy: true,
+          decisions: ["allow", "ask", "block"],
+          createdAt: "2026-11-04T12:00:00Z",
+        },
+        ...rows,
+      ];
       changed();
       return { decided: true };
     });
     ipcMain.handle("chat:approvalRules:list", () => ({ rows }));
-    ipcMain.handle("chat:approvalRules:remove", (_event, input: { ref: { source: string; entryId?: string } }) => {
-      const before = rows.length;
-      rows = rows.filter(row => !("entryId" in row.ref) || row.ref.entryId !== input.ref.entryId);
-      changed(); return { removed: before !== rows.length };
-    });
+    ipcMain.handle(
+      "chat:approvalRules:remove",
+      (_event, input: { ref: { source: string; entryId?: string } }) => {
+        const before = rows.length;
+        rows = rows.filter(
+          (row) => !("entryId" in row.ref) || row.ref.entryId !== input.ref.entryId,
+        );
+        changed();
+        return { removed: before !== rows.length };
+      },
+    );
   }, bot);
   await page.getByRole("button", { name: "Bots", exact: true }).click();
-  const card = page.getByRole("region", { name: "Request from Ada: Review before Calendar create", exact: true });
+  const card = page.getByRole("region", {
+    name: "Request from Ada: Review before Calendar create",
+    exact: true,
+  });
   await expect(card).toContainText("You’ve allowed this 3 times in the last 2 weeks.");
   const draft = page.locator("textarea");
   await draft.fill("Keep this unsent draft");
-  for (const [mode, width] of [["light", 1280], ["dark", 600]] as const) {
-    await page.evaluate(async mode => {
-      const appearance = await window.aidenAPI.ipc.invoke("settings:getAppearance") as Record<string, unknown>;
-      await window.aidenAPI.ipc.invoke("settings:previewAppearance", { ...appearance, mode, reduceMotion: "on" });
+  for (const [mode, width] of [
+    ["light", 1280],
+    ["dark", 600],
+  ] as const) {
+    await page.evaluate(async (mode) => {
+      const appearance = (await window.aidenAPI.ipc.invoke("settings:getAppearance")) as Record<
+        string,
+        unknown
+      >;
+      await window.aidenAPI.ipc.invoke("settings:previewAppearance", {
+        ...appearance,
+        mode,
+        reduceMotion: "on",
+      });
     }, mode);
-    await aiden.app.evaluate(({ BrowserWindow }, width) => BrowserWindow.getAllWindows()[0]!.setSize(width, 900), width);
-    await expect(card.getByRole("button", { name: "More ways to allow", exact: true })).toBeVisible();
-    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+    await aiden.app.evaluate(
+      ({ BrowserWindow }, width) => BrowserWindow.getAllWindows()[0]!.setSize(width, 900),
+      width,
+    );
+    await expect(
+      card.getByRole("button", { name: "More ways to allow", exact: true }),
+    ).toBeVisible();
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(
+      true,
+    );
     await page.screenshot({ path: testInfo.outputPath(`repeated-approval-${mode}.png`) });
   }
   // Keyboard only: Deny, Allow once, then the menu with Ada's own Always.
@@ -205,9 +407,15 @@ test("a card's Always becomes a row in Settings → Approvals, and Remove takes 
   const always = page.getByRole("menuitem", { name: /^Always allow for Ada/u });
   await expect(always).toBeVisible();
   await page.keyboard.press("Enter");
-  expect(await aiden.app.evaluate(() => (globalThis as unknown as { allowedE2e: AllowedE2eState }).allowedE2e.answers)).toEqual([{ waitId: "ordinary-approval", decision: "allow", scope: "always" }]);
+  expect(
+    await aiden.app.evaluate(
+      () => (globalThis as unknown as { allowedE2e: AllowedE2eState }).allowedE2e.answers,
+    ),
+  ).toEqual([{ waitId: "ordinary-approval", decision: "allow", scope: "always" }]);
   await expect(draft).toHaveValue("Keep this unsent draft");
-  await aiden.app.evaluate(() => (globalThis as unknown as { allowedE2e: AllowedE2eState }).allowedE2e.release());
+  await aiden.app.evaluate(() =>
+    (globalThis as unknown as { allowedE2e: AllowedE2eState }).allowedE2e.release(),
+  );
   await expect(page.getByText("Always allow requested.", { exact: true })).toBeVisible();
   await expect(page.getByText("Ada won’t ask about this again.", { exact: true })).toHaveCount(0);
   await page.getByRole("button", { name: "Manage", exact: true }).click();
@@ -215,13 +423,21 @@ test("a card's Always becomes a row in Settings → Approvals, and Remove takes 
   await expect(ruleRow).toBeVisible();
   await expect(ruleRow).toContainText("Only for Ada");
   await expect(ruleRow.getByRole("radio", { name: "Allow", exact: true })).toBeChecked();
-  await expect(page.getByRole("group", { name: "Folder · ~/Documents/Taxes", exact: true })).toBeVisible();
+  await expect(
+    page.getByRole("group", { name: "Folder · ~/Documents/Taxes", exact: true }),
+  ).toBeVisible();
   await page.screenshot({ path: testInfo.outputPath("approval-rules-dark.png") });
-  await ruleRow.getByRole("button", { name: "Remove: Calendar · Create event", exact: true }).click();
+  await ruleRow
+    .getByRole("button", { name: "Remove: Calendar · Create event", exact: true })
+    .click();
   await expect(page.getByText("Calendar · Create event", { exact: true })).toBeHidden();
-  await page.getByRole("button", { name: "Remove: Folder · ~/Documents/Taxes", exact: true }).click();
+  await page
+    .getByRole("button", { name: "Remove: Folder · ~/Documents/Taxes", exact: true })
+    .click();
   await expect(page.getByText("Folder · ~/Documents/Taxes", { exact: true })).toBeHidden();
   await expect(page.getByText(/^Nothing yet\. Choose Always on a card/u)).toBeVisible();
   await page.screenshot({ path: testInfo.outputPath("approval-rules-empty-dark.png") });
-  expect(aiden.lmStudio.requests.filter(request => request.url === "/v1/chat/completions")).toHaveLength(0);
+  expect(
+    aiden.lmStudio.requests.filter((request) => request.url === "/v1/chat/completions"),
+  ).toHaveLength(0);
 });

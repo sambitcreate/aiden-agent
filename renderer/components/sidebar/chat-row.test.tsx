@@ -22,8 +22,10 @@ function labels(markup: string): string[] {
 
 /** The `aria-busy` value on the row's own button. */
 function rowBusy(markup: string): string | undefined {
-  return /<button[^>]*data-roving-item[^>]*aria-busy="([^"]+)"/u.exec(markup)?.[1]
-    ?? /<button[^>]*aria-busy="([^"]+)"[^>]*data-roving-item/u.exec(markup)?.[1];
+  return (
+    /<button[^>]*data-roving-item[^>]*aria-busy="([^"]+)"/u.exec(markup)?.[1] ??
+    /<button[^>]*aria-busy="([^"]+)"[^>]*data-roving-item/u.exec(markup)?.[1]
+  );
 }
 
 function row(props: Partial<ChatRowProps> = {}): string {
@@ -51,7 +53,9 @@ test("each row state shows its one status pill next to the title", () => {
     assert.deepEqual(labels(markup), pills, state);
     assert.match(markup, />Fix the build</u, state);
   }
-  assert.deepEqual(labels(row({ status: { state: "idle", unread: true, failed: true } })), ["Failed"]);
+  assert.deepEqual(labels(row({ status: { state: "idle", unread: true, failed: true } })), [
+    "Failed",
+  ]);
 });
 
 test("the open chat never shows unread, other rows do", () => {
@@ -75,7 +79,10 @@ test("a remote row carries its host marker and a ••• menu named for the ch
   assert.deepEqual(labels(live), ["On Studio Mac", "More for Fix the build"]);
   assert.match(live, /data-remote-chat="live"/u);
   assert.match(live, /data-remote-host-marker="true"/u);
-  assert.match(live, /<button[^>]*aria-label="More for Fix the build"[^>]*aria-haspopup="menu"|<button[^>]*aria-haspopup="menu"[^>]*aria-label="More for Fix the build"/u);
+  assert.match(
+    live,
+    /<button[^>]*aria-label="More for Fix the build"[^>]*aria-haspopup="menu"|<button[^>]*aria-haspopup="menu"[^>]*aria-label="More for Fix the build"/u,
+  );
 
   const stale = row({ remote: { hostLabel: "Studio Mac", stale: true } });
   assert.deepEqual(labels(stale), ["On Studio Mac, offline"]);
@@ -129,11 +136,17 @@ test("remote rows offer only the actions the host grants", () => {
 
 test("remote mark read needs an unread row and rename needs the host's revision", () => {
   assert.deepEqual(ids(remoteChat({ unread: false }), ["markRead", "rename"]), ["open", "rename"]);
-  assert.deepEqual(ids(remoteChat({ revision: undefined }), ["markRead", "rename"]), ["open", "markRead"]);
+  assert.deepEqual(ids(remoteChat({ revision: undefined }), ["markRead", "rename"]), [
+    "open",
+    "markRead",
+  ]);
 });
 
 test("an offline host's rows keep Open but disable the actions that need the host", () => {
-  const actions = remoteChatRowActions(remoteChat({ stale: true }), new Set(["markRead", "rename"]));
+  const actions = remoteChatRowActions(
+    remoteChat({ stale: true }),
+    new Set(["markRead", "rename"]),
+  );
   assert.deepEqual(actions, [
     { id: "open", disabled: false },
     { id: "markRead", disabled: true },
@@ -143,7 +156,10 @@ test("an offline host's rows keep Open but disable the actions that need the hos
 
 test("a remote row's menu lists the granted actions, keeps disabled ones unselectable, and runs the chosen one", async () => {
   const chosen: string[] = [];
-  const actions = remoteChatRowActions(remoteChat({ stale: true }), new Set(["markRead", "rename"]));
+  const actions = remoteChatRowActions(
+    remoteChat({ stale: true }),
+    new Set(["markRead", "rename"]),
+  );
   render(
     <ChatRow
       title="Fix the build"
@@ -201,7 +217,13 @@ test("a remote row's live menu runs Mark read and Rename", async () => {
 test("clicking a row group's header asks to toggle it", () => {
   let toggles = 0;
   render(
-    <RowGroup expanded={false} icon={null} title="aiden-agent" accessibleName="aiden-agent workspace" onToggle={() => void toggles++}>
+    <RowGroup
+      expanded={false}
+      icon={null}
+      title="aiden-agent"
+      accessibleName="aiden-agent workspace"
+      onToggle={() => void toggles++}
+    >
       <span>child</span>
     </RowGroup>,
   );
@@ -212,7 +234,13 @@ test("clicking a row group's header asks to toggle it", () => {
 test("a row group shows its rows only while expanded and names the toggle for the next step", () => {
   const render = (expanded: boolean) =>
     renderToStaticMarkup(
-      <RowGroup expanded={expanded} icon={null} title="aiden-agent" accessibleName="aiden-agent workspace" onToggle={() => {}}>
+      <RowGroup
+        expanded={expanded}
+        icon={null}
+        title="aiden-agent"
+        accessibleName="aiden-agent workspace"
+        onToggle={() => {}}
+      >
         <span data-child="row">child</span>
       </RowGroup>,
     );
@@ -267,7 +295,10 @@ function inboxRowButton(): HTMLElement {
 
 test("an Inbox row's name leads with its title and says Unread once, at the end", () => {
   inboxRow({ unread: true });
-  assert.equal(screen.getByRole("button", { name: "Fix the build, aiden, 2h, Unread" }), inboxRowButton());
+  assert.equal(
+    screen.getByRole("button", { name: "Fix the build, aiden, 2h, Unread" }),
+    inboxRowButton(),
+  );
   cleanup();
 
   inboxRow({ unread: false });
@@ -276,8 +307,14 @@ test("an Inbox row's name leads with its title and says Unread once, at the end"
   cleanup();
 
   // A Needs you row names its reason and how long it has waited, after the title.
-  inboxRow({ meta: "aiden · Studio", status: { label: "Approval", tone: "warning", wait: "4m", needsYou: "approval" } });
-  assert.equal(screen.getByRole("button", { name: "Fix the build, aiden · Studio, Approval, 4m" }), inboxRowButton());
+  inboxRow({
+    meta: "aiden · Studio",
+    status: { label: "Approval", tone: "warning", wait: "4m", needsYou: "approval" },
+  });
+  assert.equal(
+    screen.getByRole("button", { name: "Fix the build, aiden · Studio, Approval, 4m" }),
+    inboxRowButton(),
+  );
 });
 
 test("an Inbox row's action runs without opening the chat, and a dimmed row offers none", () => {
@@ -292,13 +329,20 @@ test("an Inbox row's action runs without opening the chat, and a dimmed row offe
   assert.equal(opened, 0);
   cleanup();
 
-  inboxRow({ unread: true, dimmed: true, action: { kind: "mark_read", onSelect: () => (marked += 1) } });
+  inboxRow({
+    unread: true,
+    dimmed: true,
+    action: { kind: "mark_read", onSelect: () => (marked += 1) },
+  });
   assert.equal(screen.queryByRole("button", { name: /^Mark read/u }), null);
 });
 
 test("an Inbox row describes its request and keeps its leading icon", () => {
   inboxRow(
-    { description: "Approve: rm -rf build", status: { label: "Approval", tone: "warning", needsYou: "approval" } },
+    {
+      description: "Approve: rm -rf build",
+      status: { label: "Approval", tone: "warning", needsYou: "approval" },
+    },
     { icon: <span data-testid="lead-icon" /> },
   );
   assert.equal(inboxRowButton().getAttribute("aria-description"), "Approve: rm -rf build");
@@ -310,7 +354,12 @@ test("an Inbox remote row's menu offers the same one action as its hover icon", 
   for (const kind of ["acknowledge", "mark_read"] as const) {
     let fromMenu = 0;
     const action = { kind, onSelect: () => (fromMenu += 1) };
-    const handlers = { onOpen: () => {}, onMarkRead: () => {}, onRename: () => {}, inboxAction: action };
+    const handlers = {
+      onOpen: () => {},
+      onMarkRead: () => {},
+      onRename: () => {},
+      inboxAction: action,
+    };
     inboxRow({ unread: true, action }, { menu: remoteChatRowMenu(actions, handlers) });
     const hover = screen.getByRole("button", { name: /^(Acknowledge|Mark read): Fix the build$/u });
     const hoverLabel = hover.getAttribute("title");
@@ -319,38 +368,67 @@ test("an Inbox remote row's menu offers the same one action as its hover icon", 
     fireEvent.contextMenu(inboxRowButton());
     const items = within(await screen.findByRole("menu")).getAllByRole("menuitem");
     // Open first, then the row's one action, named as the hover icon names it; no separate Mark read.
-    assert.deepEqual(items.map((item) => item.textContent), ["Open", hoverLabel, "Rename"]);
+    assert.deepEqual(
+      items.map((item) => item.textContent),
+      ["Open", hoverLabel, "Rename"],
+    );
     fireEvent.click(items[1]!);
     assert.equal(fromMenu, 1);
     cleanup();
   }
 
   // Without an Inbox action, the menu has none either.
-  inboxRow({}, {
-    menu: remoteChatRowMenu(actions, { onOpen: () => {}, onMarkRead: () => {}, onRename: () => {}, inboxAction: null }),
-  });
+  inboxRow(
+    {},
+    {
+      menu: remoteChatRowMenu(actions, {
+        onOpen: () => {},
+        onMarkRead: () => {},
+        onRename: () => {},
+        inboxAction: null,
+      }),
+    },
+  );
   assert.equal(document.querySelector("[data-inbox-action]"), null);
   fireEvent.contextMenu(inboxRowButton());
   const items = within(await screen.findByRole("menu")).getAllByRole("menuitem");
-  assert.deepEqual(items.map((item) => item.textContent), ["Open", "Rename"]);
+  assert.deepEqual(
+    items.map((item) => item.textContent),
+    ["Open", "Rename"],
+  );
 });
 
 test("an Inbox row's triage lives in its menus only, and Snooze sends an absolute time", async () => {
   // Saturday 31 October 2026, 15:00 on this device's clock.
   const now = new Date(2026, 9, 31, 15, 0);
   const acts: [string, number | undefined][] = [];
-  const triageMenu = (pinned: boolean, disabled = false): ChatRowMenu => (...parts) =>
-    inboxTriageMenuItems(parts, { pinned, disabled, now: () => now, onAct: (kind, until) => void acts.push([kind, until]) });
+  const triageMenu =
+    (pinned: boolean, disabled = false): ChatRowMenu =>
+    (...parts) =>
+      inboxTriageMenuItems(parts, {
+        pinned,
+        disabled,
+        now: () => now,
+        onAct: (kind, until) => void acts.push([kind, until]),
+      });
   inboxRow({ unread: true }, { menu: triageMenu(false) });
   // No inline triage button on the row itself.
   assert.equal(screen.queryByRole("button", { name: /\b(Pin|Mark done|Snooze)\b/u }), null);
 
   fireEvent.contextMenu(inboxRowButton());
   const menu = await screen.findByRole("menu");
-  assert.deepEqual(within(menu).getAllByRole("menuitem").map((item) => item.textContent), ["Pin", "Mark done", "Snooze"]);
+  assert.deepEqual(
+    within(menu)
+      .getAllByRole("menuitem")
+      .map((item) => item.textContent),
+    ["Pin", "Mark done", "Snooze"],
+  );
   fireEvent.click(within(menu).getByRole("menuitem", { name: "Snooze" }));
   const presets = [...document.querySelectorAll<HTMLElement>("[data-snooze-preset]")];
-  assert.deepEqual(presets.map((item) => item.dataset.snoozePreset), ["hour", "evening", "tomorrow", "next_week"]);
+  assert.deepEqual(
+    presets.map((item) => item.dataset.snoozePreset),
+    ["hour", "evening", "tomorrow", "next_week"],
+  );
   fireEvent.click(presets[2]!);
   assert.deepEqual(acts, [["snooze", new Date(2026, 10, 1, 9, 0).getTime()]]);
   cleanup();
@@ -361,7 +439,11 @@ test("an Inbox row's triage lives in its menus only, and Snooze sends an absolut
   const items = within(await screen.findByRole("menu")).getAllByRole("menuitem");
   assert.deepEqual(
     items.map((item) => [item.textContent, item.getAttribute("aria-disabled") === "true"]),
-    [["Unpin", true], ["Mark done", true], ["Snooze", true]],
+    [
+      ["Unpin", true],
+      ["Mark done", true],
+      ["Snooze", true],
+    ],
   );
   fireEvent.click(items[0]!);
   assert.equal(acts.length, 1, "a disabled item never acts");
@@ -369,8 +451,15 @@ test("an Inbox row's triage lives in its menus only, and Snooze sends an absolut
 
 test("a Done or snoozed row's menu takes it back, and a row that waits on the person offers Pin alone", async () => {
   const acts: [string, number | undefined][] = [];
-  const menuFor = (offer: { doneAndSnooze: boolean; done: boolean; snoozed: boolean }): ChatRowMenu => (...parts) =>
-    inboxTriageMenuItems(parts, { pinned: false, offer, disabled: false, onAct: (kind, until) => void acts.push([kind, until]) });
+  const menuFor =
+    (offer: { doneAndSnooze: boolean; done: boolean; snoozed: boolean }): ChatRowMenu =>
+    (...parts) =>
+      inboxTriageMenuItems(parts, {
+        pinned: false,
+        offer,
+        disabled: false,
+        onAct: (kind, until) => void acts.push([kind, until]),
+      });
   const items = async (offer: { doneAndSnooze: boolean; done: boolean; snoozed: boolean }) => {
     inboxRow({}, { menu: menuFor(offer) });
     fireEvent.contextMenu(inboxRowButton());
@@ -378,43 +467,71 @@ test("a Done or snoozed row's menu takes it back, and a row that waits on the pe
   };
 
   const done = await items({ doneAndSnooze: true, done: true, snoozed: false });
-  assert.deepEqual(done.map((item) => item.textContent), ["Pin", "Mark not done", "Snooze"]);
+  assert.deepEqual(
+    done.map((item) => item.textContent),
+    ["Pin", "Mark not done", "Snooze"],
+  );
   fireEvent.click(done[1]!);
   cleanup();
 
   const snoozed = await items({ doneAndSnooze: true, done: false, snoozed: true });
-  assert.deepEqual(snoozed.map((item) => item.textContent), ["Pin", "Mark done", "Unsnooze"]);
+  assert.deepEqual(
+    snoozed.map((item) => item.textContent),
+    ["Pin", "Mark done", "Unsnooze"],
+  );
   fireEvent.click(snoozed[2]!);
   cleanup();
-  assert.deepEqual(acts, [["undone", undefined], ["unsnooze", undefined]]);
+  assert.deepEqual(acts, [
+    ["undone", undefined],
+    ["unsnooze", undefined],
+  ]);
 
   const waiting = await items({ doneAndSnooze: false, done: false, snoozed: false });
-  assert.deepEqual(waiting.map((item) => item.textContent), ["Pin"]);
+  assert.deepEqual(
+    waiting.map((item) => item.textContent),
+    ["Pin"],
+  );
   cleanup();
 
   // A waiting row with a snooze still to run can end it.
   const waitingSnoozed = await items({ doneAndSnooze: false, done: false, snoozed: true });
-  assert.deepEqual(waitingSnoozed.map((item) => item.textContent), ["Pin", "Unsnooze"]);
+  assert.deepEqual(
+    waitingSnoozed.map((item) => item.textContent),
+    ["Pin", "Unsnooze"],
+  );
   fireEvent.click(waitingSnoozed[1]!);
-  assert.deepEqual(acts, [["undone", undefined], ["unsnooze", undefined], ["unsnooze", undefined]]);
+  assert.deepEqual(acts, [
+    ["undone", undefined],
+    ["unsnooze", undefined],
+    ["unsnooze", undefined],
+  ]);
 });
 
 test("an Inbox remote row's triage follows its one action, as on a local row", async () => {
   const actions = remoteChatRowActions(remoteChat(), new Set(["markRead", "rename"]));
   const action = { kind: "mark_read" as const, onSelect: () => {} };
-  inboxRow({ unread: true, action }, {
-    menu: remoteChatRowMenu(actions, {
-      onOpen: () => {},
-      onMarkRead: () => {},
-      onRename: () => {},
-      inboxAction: action,
-      triage: (...parts) => inboxTriageMenuItems(parts, { pinned: false, disabled: false, onAct: () => {} }),
-    }),
-  });
-  const hoverLabel = screen.getByRole("button", { name: /^Mark read: Fix the build$/u }).getAttribute("title");
+  inboxRow(
+    { unread: true, action },
+    {
+      menu: remoteChatRowMenu(actions, {
+        onOpen: () => {},
+        onMarkRead: () => {},
+        onRename: () => {},
+        inboxAction: action,
+        triage: (...parts) =>
+          inboxTriageMenuItems(parts, { pinned: false, disabled: false, onAct: () => {} }),
+      }),
+    },
+  );
+  const hoverLabel = screen
+    .getByRole("button", { name: /^Mark read: Fix the build$/u })
+    .getAttribute("title");
   fireEvent.contextMenu(inboxRowButton());
   const items = within(await screen.findByRole("menu")).getAllByRole("menuitem");
-  assert.deepEqual(items.map((item) => item.textContent), ["Open", hoverLabel, "Pin", "Mark done", "Snooze", "Rename"]);
+  assert.deepEqual(
+    items.map((item) => item.textContent),
+    ["Open", hoverLabel, "Pin", "Mark done", "Snooze", "Rename"],
+  );
 });
 
 test("a chat another chat started names that chat on its row and in its description", () => {

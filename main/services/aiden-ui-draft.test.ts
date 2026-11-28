@@ -9,7 +9,8 @@ function fakeSession(enabled = true) {
   const timers: Array<() => void> = [];
   const session = createUiDraftSession({
     enabled,
-    publicToolCallId: (raw) => ({ raw1: "call-1", raw2: "call-2" } as Record<string, string>)[raw],
+    publicToolCallId: (raw) =>
+      (({ raw1: "call-1", raw2: "call-2" }) as Record<string, string>)[raw],
     send: (event) => events.push(event),
     schedule: (run) => {
       timers.push(run);
@@ -61,11 +62,19 @@ test("end flushes the final draft; cancel and dispose retract it", () => {
   session.end("raw1");
   assert.equal(events.length, 1);
   session.cancel("raw1");
-  assert.deepEqual(events[events.length - 1], { version: 1, operation: "draft_end", toolCallId: "call-1" });
+  assert.deepEqual(events[events.length - 1], {
+    version: 1,
+    operation: "draft_end",
+    toolCallId: "call-1",
+  });
   session.delta("raw2", "render_ui", { title: "Other", markup: MARKUP });
   flush();
   session.dispose();
-  assert.deepEqual(events[events.length - 1], { version: 1, operation: "draft_end", toolCallId: "call-2" });
+  assert.deepEqual(events[events.length - 1], {
+    version: 1,
+    operation: "draft_end",
+    toolCallId: "call-2",
+  });
   flush();
 });
 

@@ -15,7 +15,10 @@
 // conversation entry (`aiden.routine-proposal`, `aiden.routine-proposal-status`)
 // that the live projection folds into one card.
 
-import { BOT_SUGGESTION_LIMIT_MESSAGE as SUGGESTION_LIMIT, type BotSuggestionBudget } from "./bot-runtime/bot-suggestion-budget.js";
+import {
+  BOT_SUGGESTION_LIMIT_MESSAGE as SUGGESTION_LIMIT,
+  type BotSuggestionBudget,
+} from "./bot-runtime/bot-suggestion-budget.js";
 import { randomUUID } from "node:crypto";
 import { promises as fs } from "node:fs";
 import path from "node:path";
@@ -81,7 +84,12 @@ export type BotRoutineProposalRecord = BotRoutineProposalEntryData & {
 
 export type BotRoutineProposeResult =
   | { ok: true; proposal: BotRoutineProposalEntryData }
-  | { ok: false; code: "too_many_pending" | "invalid" | "cooling_off" | "declined_before" | "suggestion_limit"; error: string; until?: number };
+  | {
+      ok: false;
+      code: "too_many_pending" | "invalid" | "cooling_off" | "declined_before" | "suggestion_limit";
+      error: string;
+      until?: number;
+    };
 
 export type BotRoutineReviseResult =
   | { ok: true; proposal: BotRoutineProposalEntryData; replaced: string }
@@ -99,7 +107,10 @@ export interface BotRoutineProposalInput {
 }
 
 /** The answer inside the main process: a just-made link routine's token rides along once, for the desktop to turn into its link. */
-export type BotRoutineProposalServiceRespondResult = Omit<BotRoutineProposalRespondResult, "link"> & { token?: string };
+export type BotRoutineProposalServiceRespondResult = Omit<
+  BotRoutineProposalRespondResult,
+  "link"
+> & { token?: string };
 
 type ProposalContent = { name: string; prompt: string } & (
   | { schedule: BotRoutineSchedule; timezone: string }
@@ -122,7 +133,12 @@ export function proposalBackoff(
   now: number,
 ): { code: "cooling_off"; until: number } | { code: "declined_before" } | undefined {
   const settledNewestFirst = records
-    .filter((record) => record.status !== "pending" && record.decidedAt !== undefined && record.settledBy !== "host")
+    .filter(
+      (record) =>
+        record.status !== "pending" &&
+        record.decidedAt !== undefined &&
+        record.settledBy !== "host",
+    )
     .sort((a, b) => b.decidedAt! - a.decidedAt!);
   const window = settledNewestFirst.slice(0, BOT_ROUTINE_PROPOSAL_COOLING.window);
   const dismissed = window.filter((record) => record.status === "dismissed");
@@ -131,10 +147,12 @@ export function proposalBackoff(
     if (until > now) return { code: "cooling_off", until };
   }
   const wanted = normalizedProposalName(name);
-  const declinedSame = settledNewestFirst.some((record) =>
-    record.status === "dismissed" &&
-    normalizedProposalName(record.name) === wanted &&
-    now - record.decidedAt! < BOT_ROUTINE_PROPOSAL_COOLING.sameNameMs);
+  const declinedSame = settledNewestFirst.some(
+    (record) =>
+      record.status === "dismissed" &&
+      normalizedProposalName(record.name) === wanted &&
+      now - record.decidedAt! < BOT_ROUTINE_PROPOSAL_COOLING.sameNameMs,
+  );
   return declinedSame ? { code: "declined_before" } : undefined;
 }
 
@@ -160,7 +178,11 @@ export interface BotRoutineProposalServiceDependencies {
    */
   conversationEntries(botId: string): Promise<readonly { kind: string; data?: unknown }[]>;
   /** A suggestion was answered (follow-ups queue behind the pending limit). */
-  onSettled?(botId: string, proposalId: string, status: Exclude<BotRoutineProposalStatus, "pending">): void;
+  onSettled?(
+    botId: string,
+    proposalId: string,
+    status: Exclude<BotRoutineProposalStatus, "pending">,
+  ): void;
   /** A waiting card was revised into a new one (`replacement`); it was not answered. */
   onRevised?(botId: string, replacedId: string, replacement: BotRoutineProposalEntryData): void;
   /**
@@ -194,18 +216,30 @@ export function parseBotRoutineProposalRespond(value: unknown): BotRoutinePropos
   const fields = value as Record<string, unknown>;
   const keys = Object.keys(fields);
   if (!["botId", "proposalId", "decision"].every((key) => keys.includes(key))) invalid();
-  if (!keys.every((key) => key === "botId" || key === "proposalId" || key === "decision" || key === "reason")) invalid();
+  if (
+    !keys.every(
+      (key) => key === "botId" || key === "proposalId" || key === "decision" || key === "reason",
+    )
+  )
+    invalid();
   if (!isPathSafeBotCapabilityId(fields.botId, BOT_LIMITS.idChars)) invalid();
   if (fields.decision !== "accept" && fields.decision !== "dismiss") invalid();
   if (fields.reason !== undefined) {
     if (fields.decision !== "dismiss") invalid();
-    if (!BOT_ROUTINE_PROPOSAL_DECLINE_REASONS.includes(fields.reason as BotRoutineProposalDeclineReason)) invalid();
+    if (
+      !BOT_ROUTINE_PROPOSAL_DECLINE_REASONS.includes(
+        fields.reason as BotRoutineProposalDeclineReason,
+      )
+    )
+      invalid();
   }
   return {
     botId: fields.botId,
     proposalId: parseBotRoutineProposalId(fields.proposalId),
     decision: fields.decision,
-    ...(fields.reason !== undefined ? { reason: fields.reason as BotRoutineProposalDeclineReason } : {}),
+    ...(fields.reason !== undefined
+      ? { reason: fields.reason as BotRoutineProposalDeclineReason }
+      : {}),
   };
 }
 
@@ -218,7 +252,9 @@ function isRecord(value: unknown): value is BotRoutineProposalRecord {
     typeof record.prompt === "string" &&
     typeof record.label === "string" &&
     typeof record.createdAt === "number" &&
-    (record.status === "pending" || record.status === "accepted" || record.status === "dismissed") &&
+    (record.status === "pending" ||
+      record.status === "accepted" ||
+      record.status === "dismissed") &&
     (record.revises === undefined || typeof record.revises === "string") &&
     (record.revisionShown === undefined || record.revisionShown === true) &&
     (isObject(record.trigger)
@@ -232,12 +268,17 @@ function isRecord(value: unknown): value is BotRoutineProposalRecord {
  * saved is not one of them, even before its revision finishes settling it.
  */
 function waiting(records: readonly BotRoutineProposalRecord[]): BotRoutineProposalRecord[] {
-  const replaced = new Set(records.flatMap((record) =>
-    (record.status === "pending" && record.revises && record.revisionShown ? [record.revises] : [])));
-  return records.filter((record) =>
-    record.status === "pending" &&
-    !replaced.has(record.proposalId) &&
-    !(record.revises !== undefined && !record.revisionShown));
+  const replaced = new Set(
+    records.flatMap((record) =>
+      record.status === "pending" && record.revises && record.revisionShown ? [record.revises] : [],
+    ),
+  );
+  return records.filter(
+    (record) =>
+      record.status === "pending" &&
+      !replaced.has(record.proposalId) &&
+      !(record.revises !== undefined && !record.revisionShown),
+  );
 }
 
 function isObject(value: unknown): value is object {
@@ -261,17 +302,21 @@ function routineText(value: unknown, what: string): string {
   const text = typeof value === "string" ? value.trim() : "";
   const limit = what === "name" ? BOT_ROUTINE_NAME_LIMIT : BOT_ROUTINE_PROMPT_LIMIT;
   if (!text || [...text].length > limit || (what === "prompt" && text.length > limit)) {
-    throw new Error(what === "name"
-      ? `Give the routine a name of at most ${limit} characters.`
-      : "Say what the routine should do, in at most 32 KB.");
+    throw new Error(
+      what === "name"
+        ? `Give the routine a name of at most ${limit} characters.`
+        : "Say what the routine should do, in at most 32 KB.",
+    );
   }
   return text;
 }
 
 function contentKey(content: ProposalContent): string {
-  return JSON.stringify("trigger" in content
-    ? [content.name, content.prompt, content.trigger]
-    : [content.name, content.prompt, content.schedule, content.timezone]);
+  return JSON.stringify(
+    "trigger" in content
+      ? [content.name, content.prompt, content.trigger]
+      : [content.name, content.prompt, content.schedule, content.timezone],
+  );
 }
 
 function settled(record: BotRoutineProposalRecord): BotRoutineProposalRespondResult {
@@ -281,7 +326,9 @@ function settled(record: BotRoutineProposalRecord): BotRoutineProposalRespondRes
   };
 }
 
-export function createBotRoutineProposalService(dependencies: BotRoutineProposalServiceDependencies) {
+export function createBotRoutineProposalService(
+  dependencies: BotRoutineProposalServiceDependencies,
+) {
   /** The Bot says the person asked for it, and the person's own message started this turn. */
   const askedByOwner = (botId: string, input: { requested?: boolean }): boolean =>
     input.requested === true && dependencies.ownerAsked?.(botId) === true;
@@ -309,27 +356,52 @@ export function createBotRoutineProposalService(dependencies: BotRoutineProposal
 
   async function save(botId: string, records: BotRoutineProposalRecord[]): Promise<void> {
     const pending = records.filter((record) => record.status === "pending");
-    const decided = records.filter((record) => record.status !== "pending").slice(-SETTLED_PROPOSALS_KEPT);
+    const decided = records
+      .filter((record) => record.status !== "pending")
+      .slice(-SETTLED_PROPOSALS_KEPT);
     const kept = records.filter((record) => pending.includes(record) || decided.includes(record));
-    await writeJsonAtomic(fileOf(botId), { version: 1, proposals: kept }, { mode: 0o600, mkdirMode: 0o700 });
+    await writeJsonAtomic(
+      fileOf(botId),
+      { version: 1, proposals: kept },
+      { mode: 0o600, mkdirMode: 0o700 },
+    );
   }
 
   type Append = (kind: string, data: Record<string, unknown>) => Promise<void>;
-  const sessionAppend = (botId: string): Append => (kind, data) => dependencies.appendEntry(botId, kind, data);
+  const sessionAppend =
+    (botId: string): Append =>
+    (kind, data) =>
+      dependencies.appendEntry(botId, kind, data);
   type Entries = () => Promise<readonly { kind: string; data?: unknown }[]>;
-  const sessionEntries = (botId: string): Entries => () => dependencies.conversationEntries(botId);
+  const sessionEntries =
+    (botId: string): Entries =>
+    () =>
+      dependencies.conversationEntries(botId);
 
   /**
    * What a proposal asks for, validated like the routine it would add: a
    * schedule (run in this Mac's timezone) or a trigger, exactly one.
    */
-  async function parseContent(botId: string, input: BotRoutineProposalInput): Promise<ProposalContent> {
+  async function parseContent(
+    botId: string,
+    input: BotRoutineProposalInput,
+  ): Promise<ProposalContent> {
     const hasSchedule = input.schedule !== undefined;
     const hasTrigger = input.trigger !== undefined;
     if (hasSchedule === hasTrigger) throw new Error("Give a schedule or a trigger, not both.");
     if (hasSchedule) {
-      const parsed = parseBotRoutineCreate({ botId, name: input.name, schedule: input.schedule, prompt: input.prompt });
-      return { name: parsed.name, prompt: parsed.prompt, schedule: parsed.schedule, timezone: dependencies.defaultTimezone() };
+      const parsed = parseBotRoutineCreate({
+        botId,
+        name: input.name,
+        schedule: input.schedule,
+        prompt: input.prompt,
+      });
+      return {
+        name: parsed.name,
+        prompt: parsed.prompt,
+        schedule: parsed.schedule,
+        timezone: dependencies.defaultTimezone(),
+      };
     }
     if (!dependencies.eventRoutines) throw new Error("Event routines aren't available here.");
     const name = routineText(input.name, "name");
@@ -337,16 +409,28 @@ export function createBotRoutineProposalService(dependencies: BotRoutineProposal
     const trigger = parseBotRoutineTrigger(input.trigger);
     // Like a task Aiden proposes: never this computer or a private network.
     // The Bot's owner can still set one up in the Bot's profile.
-    if (trigger.kind === "watch" && trigger.source.type === "url" && isPrivateWatchAddress(trigger.source.url)) {
-      throw new Error("A routine a Bot proposes can't watch this computer or a private network address. The person can set that up in the Bot's profile.");
+    if (
+      trigger.kind === "watch" &&
+      trigger.source.type === "url" &&
+      isPrivateWatchAddress(trigger.source.url)
+    ) {
+      throw new Error(
+        "A routine a Bot proposes can't watch this computer or a private network address. The person can set that up in the Bot's profile.",
+      );
     }
     if ((await dependencies.eventRoutines.list(botId)).length >= BOT_EVENT_ROUTINES_MAX) {
-      throw new Error("This Bot has as many event routines as it can keep. The person can remove one in the Bot's profile.");
+      throw new Error(
+        "This Bot has as many event routines as it can keep. The person can remove one in the Bot's profile.",
+      );
     }
     return { name, prompt, trigger };
   }
 
-  function recordOf(content: ProposalContent, reason: string | undefined, at: number): BotRoutineProposalRecord {
+  function recordOf(
+    content: ProposalContent,
+    reason: string | undefined,
+    at: number,
+  ): BotRoutineProposalRecord {
     const base = {
       proposalId: newId(),
       name: content.name,
@@ -357,7 +441,12 @@ export function createBotRoutineProposalService(dependencies: BotRoutineProposal
     };
     return "trigger" in content
       ? { ...base, trigger: content.trigger, label: formatBotRoutineTriggerLabel(content.trigger) }
-      : { ...base, schedule: content.schedule, timezone: content.timezone, label: botRoutineLabel(content.schedule, content.timezone, at) };
+      : {
+          ...base,
+          schedule: content.schedule,
+          timezone: content.timezone,
+          label: botRoutineLabel(content.schedule, content.timezone, at),
+        };
   }
 
   function cleanReason(value: string | undefined): string | undefined {
@@ -369,9 +458,14 @@ export function createBotRoutineProposalService(dependencies: BotRoutineProposal
   }
 
   /** The routine this proposal added, scheduled or event. */
-  async function createdFrom(botId: string, proposalId: string): Promise<{ id: string } | undefined> {
-    return (await dependencies.routines.findBySourceProposal(botId, proposalId)) ??
-      (await dependencies.eventRoutines?.findBySourceProposal(botId, proposalId));
+  async function createdFrom(
+    botId: string,
+    proposalId: string,
+  ): Promise<{ id: string } | undefined> {
+    return (
+      (await dependencies.routines.findBySourceProposal(botId, proposalId)) ??
+      (await dependencies.eventRoutines?.findBySourceProposal(botId, proposalId))
+    );
   }
 
   /**
@@ -393,7 +487,13 @@ export function createBotRoutineProposalService(dependencies: BotRoutineProposal
       supersededBy?: string;
     } = {},
   ): Promise<BotRoutineProposalRecord> {
-    const { routineId, append = sessionAppend(botId), declineReason, settledBy, supersededBy } = options;
+    const {
+      routineId,
+      append = sessionAppend(botId),
+      declineReason,
+      settledBy,
+      supersededBy,
+    } = options;
     const record = records[index]!;
     const data: BotRoutineProposalStatusEntryData = {
       proposalId: record.proposalId,
@@ -402,13 +502,21 @@ export function createBotRoutineProposalService(dependencies: BotRoutineProposal
       ...(status === "dismissed" && supersededBy !== undefined ? { supersededBy } : {}),
     };
     await append(BOT_ROUTINE_PROPOSAL_STATUS_ENTRY_KIND, { ...data });
-    const { routineId: _previous, declineReason: _reason, settledBy: _by, supersededBy: _next, ...rest } = record;
+    const {
+      routineId: _previous,
+      declineReason: _reason,
+      settledBy: _by,
+      supersededBy: _next,
+      ...rest
+    } = record;
     const next = {
       ...rest,
       status,
       ...(routineId !== undefined ? { routineId } : {}),
       ...(status === "dismissed" && declineReason !== undefined ? { declineReason } : {}),
-      ...(status === "dismissed" && (settledBy || supersededBy) ? { settledBy: "host" as const } : {}),
+      ...(status === "dismissed" && (settledBy || supersededBy)
+        ? { settledBy: "host" as const }
+        : {}),
       ...(status === "dismissed" && supersededBy !== undefined ? { supersededBy } : {}),
       decidedAt: now(),
     } as BotRoutineProposalRecord;
@@ -442,7 +550,8 @@ export function createBotRoutineProposalService(dependencies: BotRoutineProposal
       const record = records[index]!;
       if (record.status === "accepted") continue;
       const created = await createdFrom(botId, record.proposalId);
-      if (created) await settle(botId, records, index, "accepted", { routineId: created.id, append });
+      if (created)
+        await settle(botId, records, index, "accepted", { routineId: created.id, append });
     }
     await finishRevisions(botId, records, append, entries);
     return records;
@@ -470,18 +579,29 @@ export function createBotRoutineProposalService(dependencies: BotRoutineProposal
     append: Append = sessionAppend(botId),
     entries: Entries = sessionEntries(botId),
   ): Promise<void> {
-    const unmarked = records.filter((record) => record.revises !== undefined && !record.revisionShown && record.status === "pending");
+    const unmarked = records.filter(
+      (record) =>
+        record.revises !== undefined && !record.revisionShown && record.status === "pending",
+    );
     if (unmarked.length > 0) {
       const shownIds = await shownCardIds(entries);
-      for (const record of unmarked) if (shownIds.has(record.proposalId)) record.revisionShown = true;
-      records.splice(0, records.length, ...records.filter((record) => !unmarked.includes(record) || record.revisionShown));
+      for (const record of unmarked)
+        if (shownIds.has(record.proposalId)) record.revisionShown = true;
+      records.splice(
+        0,
+        records.length,
+        ...records.filter((record) => !unmarked.includes(record) || record.revisionShown),
+      );
       await save(botId, records);
     }
     for (const replacement of [...records]) {
       if (replacement.revises === undefined || !replacement.revisionShown) continue;
       const index = records.findIndex((record) => record.proposalId === replacement.revises);
       if (index < 0 || records[index]!.status !== "pending") continue;
-      await settle(botId, records, index, "dismissed", { append, supersededBy: replacement.proposalId });
+      await settle(botId, records, index, "dismissed", {
+        append,
+        supersededBy: replacement.proposalId,
+      });
       revised(botId, replacement.revises, replacement);
     }
   }
@@ -492,7 +612,8 @@ export function createBotRoutineProposalService(dependencies: BotRoutineProposal
     for (const entry of await entries()) {
       if (entry.kind !== BOT_ROUTINE_PROPOSAL_ENTRY_KIND) continue;
       const data = entry.data as { proposalId?: unknown } | null;
-      if (data && typeof data === "object" && typeof data.proposalId === "string") ids.add(data.proposalId);
+      if (data && typeof data === "object" && typeof data.proposalId === "string")
+        ids.add(data.proposalId);
     }
     return ids;
   }
@@ -520,8 +641,19 @@ export function createBotRoutineProposalService(dependencies: BotRoutineProposal
           };
         } else {
           if (typeof data.timezone !== "string") throw new Error("missing timezone");
-          const parsed = parseBotRoutineCreate({ botId, name: data.name, schedule: data.schedule, prompt: data.prompt, timezone: data.timezone });
-          proposal = { name: parsed.name, prompt: parsed.prompt, schedule: parsed.schedule, timezone: parsed.timezone ?? data.timezone };
+          const parsed = parseBotRoutineCreate({
+            botId,
+            name: data.name,
+            schedule: data.schedule,
+            prompt: data.prompt,
+            timezone: data.timezone,
+          });
+          proposal = {
+            name: parsed.name,
+            prompt: parsed.prompt,
+            schedule: parsed.schedule,
+            timezone: parsed.timezone ?? data.timezone,
+          };
         }
       } catch {
         throw new BotRoutineProposalNotFoundError();
@@ -536,7 +668,12 @@ export function createBotRoutineProposalService(dependencies: BotRoutineProposal
     /** The newest answered suggestions, for the Bot's `routines list`. */
     async recentDecisions(botId: string): Promise<BotRoutineProposalDecisionSummary[]> {
       return (await load(botId))
-        .filter((record) => record.status !== "pending" && record.decidedAt !== undefined && record.settledBy !== "host")
+        .filter(
+          (record) =>
+            record.status !== "pending" &&
+            record.decidedAt !== undefined &&
+            record.settledBy !== "host",
+        )
         .sort((a, b) => b.decidedAt! - a.decidedAt!)
         .slice(0, BOT_ROUTINE_PROPOSAL_COOLING.recent)
         .map((record) => ({
@@ -549,9 +686,14 @@ export function createBotRoutineProposalService(dependencies: BotRoutineProposal
     },
 
     /** The suggestions still waiting for an answer, for the Bot's `routines list` and `revise`. */
-    async pending(botId: string): Promise<Array<{ proposalId: string; name: string; label: string }>> {
-      return waiting(await load(botId))
-        .map((record) => ({ proposalId: record.proposalId, name: record.name, label: botRoutineProposalWhen(record) }));
+    async pending(
+      botId: string,
+    ): Promise<Array<{ proposalId: string; name: string; label: string }>> {
+      return waiting(await load(botId)).map((record) => ({
+        proposalId: record.proposalId,
+        name: record.name,
+        label: botRoutineProposalWhen(record),
+      }));
     },
 
     /** How many suggestions wait for an answer. */
@@ -582,7 +724,11 @@ export function createBotRoutineProposalService(dependencies: BotRoutineProposal
           content = await parseContent(botId, input);
           reason = cleanReason(input.reason);
         } catch (error) {
-          return { ok: false, code: "invalid", error: error instanceof Error ? error.message : "Invalid routine." };
+          return {
+            ok: false,
+            code: "invalid",
+            error: error instanceof Error ? error.message : "Invalid routine.",
+          };
         }
         const records = await reconcile(botId, await load(botId), append, entries);
         const requested = askedByOwner(botId, input);
@@ -590,14 +736,17 @@ export function createBotRoutineProposalService(dependencies: BotRoutineProposal
         // promise always gets its card. "The person asked" counts only in a
         // turn the owner's own message started, and only gets past a
         // same-name decline, never cooling off.
-        const found = input.hostFollowUp ? undefined : proposalBackoff(records, content.name, now());
+        const found = input.hostFollowUp
+          ? undefined
+          : proposalBackoff(records, content.name, now());
         const backoff = found?.code === "declined_before" && requested ? undefined : found;
         if (backoff?.code === "cooling_off") {
           return {
             ok: false,
             code: "cooling_off",
             until: backoff.until,
-            error: "The person declined most recent suggestions. Don't suggest routines for a while; the person can add one themselves in the Bot's profile.",
+            error:
+              "The person declined most recent suggestions. Don't suggest routines for a while; the person can add one themselves in the Bot's profile.",
           };
         }
         if (backoff?.code === "declined_before") {
@@ -607,7 +756,8 @@ export function createBotRoutineProposalService(dependencies: BotRoutineProposal
           return {
             ok: false,
             code: "too_many_pending",
-            error: "The person already has routine suggestions to answer. Wait for them, or revise one of them, before suggesting another.",
+            error:
+              "The person already has routine suggestions to answer. Wait for them, or revise one of them, before suggesting another.",
           };
         }
         const record = recordOf(content, reason, now());
@@ -618,7 +768,13 @@ export function createBotRoutineProposalService(dependencies: BotRoutineProposal
           return true;
         };
         const counted = dependencies.suggestionBudget && !input.hostFollowUp;
-        if (counted ? !(await dependencies.suggestionBudget!.offer(botId, "routine", show, { always: requested })) : !(await show())) {
+        if (
+          counted
+            ? !(await dependencies.suggestionBudget!.offer(botId, "routine", show, {
+                always: requested,
+              }))
+            : !(await show())
+        ) {
           return { ok: false, code: "suggestion_limit", error: SUGGESTION_LIMIT };
         }
         return { ok: true, proposal };
@@ -644,30 +800,48 @@ export function createBotRoutineProposalService(dependencies: BotRoutineProposal
           content = await parseContent(botId, input);
           reason = cleanReason(input.reason);
         } catch (error) {
-          return { ok: false, code: "invalid", error: error instanceof Error ? error.message : "Invalid routine." };
+          return {
+            ok: false,
+            code: "invalid",
+            error: error instanceof Error ? error.message : "Invalid routine.",
+          };
         }
         const records = await reconcile(botId, await load(botId), append, entries);
         const wanted = proposalId.toLowerCase();
         const index = records.findIndex((record) => record.proposalId === wanted);
         const current = records[index];
         if (!current) {
-          return { ok: false, code: "not_found", error: "There is no suggestion with that id. Use list to see the ones still waiting." };
+          return {
+            ok: false,
+            code: "not_found",
+            error: "There is no suggestion with that id. Use list to see the ones still waiting.",
+          };
         }
         if (current.status !== "pending") {
           return {
             ok: false,
             code: "not_pending",
-            error: "The person already answered that suggestion, so it can't be revised. Propose a new one only if it still clearly helps.",
+            error:
+              "The person already answered that suggestion, so it can't be revised. Propose a new one only if it still clearly helps.",
           };
         }
         // Renaming a card into something the person turned down is a new idea.
-        const renamed = normalizedProposalName(content.name) !== normalizedProposalName(current.name);
-        if (renamed && !askedByOwner(botId, input) && !input.hostFollowUp && proposalBackoff(records, content.name, now())?.code === "declined_before") {
+        const renamed =
+          normalizedProposalName(content.name) !== normalizedProposalName(current.name);
+        if (
+          renamed &&
+          !askedByOwner(botId, input) &&
+          !input.hostFollowUp &&
+          proposalBackoff(records, content.name, now())?.code === "declined_before"
+        ) {
           return { ok: false, code: "declined_before", error: DECLINED_BEFORE };
         }
         // The new card names the card it replaces before either is shown,
         // so a revision cut short after this save still finishes.
-        const record: BotRoutineProposalRecord = { ...recordOf(content, reason ?? current.reason, now()), revises: current.proposalId };
+        const record: BotRoutineProposalRecord = {
+          ...recordOf(content, reason ?? current.reason, now()),
+          revises: current.proposalId,
+        };
         records.push(record);
         await save(botId, records);
         const proposal = entryData(record);
@@ -675,13 +849,19 @@ export function createBotRoutineProposalService(dependencies: BotRoutineProposal
           await append(BOT_ROUTINE_PROPOSAL_ENTRY_KIND, { ...proposal });
         } catch (error) {
           // The new card was never shown: the old one stays the one to answer.
-          await save(botId, records.filter((entry) => entry !== record));
+          await save(
+            botId,
+            records.filter((entry) => entry !== record),
+          );
           throw error;
         }
         // Only now does the saved link replace the old card on recovery.
         record.revisionShown = true;
         await save(botId, records);
-        await settle(botId, records, index, "dismissed", { append, supersededBy: record.proposalId });
+        await settle(botId, records, index, "dismissed", {
+          append,
+          supersededBy: record.proposalId,
+        });
         revised(botId, current.proposalId, record);
         return { ok: true, proposal, replaced: current.proposalId };
       });
@@ -696,7 +876,9 @@ export function createBotRoutineProposalService(dependencies: BotRoutineProposal
      * returns its token once, for the desktop to show as a link; the Bot
      * never sees it.
      */
-    respond(input: BotRoutineProposalRespondInput & { settledBy?: "host" }): Promise<BotRoutineProposalServiceRespondResult> {
+    respond(
+      input: BotRoutineProposalRespondInput & { settledBy?: "host" },
+    ): Promise<BotRoutineProposalServiceRespondResult> {
       return serial(input.botId, async () => {
         const records = await load(input.botId);
         await finishRevisions(input.botId, records);
@@ -705,7 +887,10 @@ export function createBotRoutineProposalService(dependencies: BotRoutineProposal
         if (!record) throw new BotRoutineProposalNotFoundError();
         if (record.status === "accepted") return settled(record);
         const created = await createdFrom(input.botId, record.proposalId);
-        if (created) return settled(await settle(input.botId, records, index, "accepted", { routineId: created.id }));
+        if (created)
+          return settled(
+            await settle(input.botId, records, index, "accepted", { routineId: created.id }),
+          );
         if (record.supersededBy !== undefined) throw new BotRoutineProposalNotFoundError();
         if (
           record.status === "dismissed" &&
@@ -724,10 +909,12 @@ export function createBotRoutineProposalService(dependencies: BotRoutineProposal
         }
         if (record.status !== "pending") return settled(record);
         if (input.decision === "dismiss") {
-          return settled(await settle(input.botId, records, index, "dismissed", {
-            ...(input.reason !== undefined ? { declineReason: input.reason } : {}),
-            ...(input.settledBy ? { settledBy: input.settledBy } : {}),
-          }));
+          return settled(
+            await settle(input.botId, records, index, "dismissed", {
+              ...(input.reason !== undefined ? { declineReason: input.reason } : {}),
+              ...(input.settledBy ? { settledBy: input.settledBy } : {}),
+            }),
+          );
         }
         const shown = await shownProposal(input.botId, record.proposalId);
         if ("trigger" in shown) {
@@ -737,11 +924,19 @@ export function createBotRoutineProposalService(dependencies: BotRoutineProposal
             trigger: shown.trigger,
             sourceProposalId: record.proposalId,
           });
-          const answer = settled(await settle(input.botId, records, index, "accepted", { routineId: routine.id }));
+          const answer = settled(
+            await settle(input.botId, records, index, "accepted", { routineId: routine.id }),
+          );
           return token !== undefined ? { ...answer, token } : answer;
         }
-        const routine = await dependencies.routines.create({ botId: input.botId, ...shown, sourceProposalId: record.proposalId });
-        return settled(await settle(input.botId, records, index, "accepted", { routineId: routine.id }));
+        const routine = await dependencies.routines.create({
+          botId: input.botId,
+          ...shown,
+          sourceProposalId: record.proposalId,
+        });
+        return settled(
+          await settle(input.botId, records, index, "accepted", { routineId: routine.id }),
+        );
       });
     },
   };

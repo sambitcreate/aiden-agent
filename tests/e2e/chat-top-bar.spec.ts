@@ -2,7 +2,13 @@ import { execFileSync } from "node:child_process";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { Page } from "@playwright/test";
-import { chooseFolderlessWorkspace, expect, finishLmStudioOnboarding, test, waitForToastsToClear } from "./fixtures";
+import {
+  chooseFolderlessWorkspace,
+  expect,
+  finishLmStudioOnboarding,
+  test,
+  waitForToastsToClear,
+} from "./fixtures";
 
 function contextBar(page: Page) {
   return page.locator('[role="group"][aria-label="Composer workspace bar"]');
@@ -23,14 +29,18 @@ async function startPersistedChat(page: Page, beforeSend?: () => Promise<void>):
 
 /** Whether the first reply of the one chat saved in `workspaceId` has arrived. */
 async function firstReplyState(userDataDir: string, workspaceId: string): Promise<string> {
-  const index = JSON.parse(await readFile(path.join(userDataDir, "chats", "index.json"), "utf8")) as {
+  const index = JSON.parse(
+    await readFile(path.join(userDataDir, "chats", "index.json"), "utf8"),
+  ) as {
     id: string;
     workspaceId?: string;
     botId?: string;
   }[];
   const meta = index.find((entry) => !entry.botId && entry.workspaceId === workspaceId);
   if (!meta) return "no chat";
-  const saved = JSON.parse(await readFile(path.join(userDataDir, "chats", `${meta.id}.json`), "utf8")) as {
+  const saved = JSON.parse(
+    await readFile(path.join(userDataDir, "chats", `${meta.id}.json`), "utf8"),
+  ) as {
     messages: { role: string; providerFailure?: unknown }[];
   };
   const reply = saved.messages.find((message) => message.role === "assistant");
@@ -66,11 +76,15 @@ test.describe("folder workspaces", () => {
 
   test("a plain folder gets folder actions but no Git-only ones", async ({ aiden }) => {
     const { page } = aiden;
-    await aiden.app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setSize(1280, 800));
+    await aiden.app.evaluate(({ BrowserWindow }) =>
+      BrowserWindow.getAllWindows()[0].setSize(1280, 800),
+    );
     await startPersistedChat(page, async () => {
       // A plain-folder draft offers the workspace, with no "Local" label or PR chip.
       await expect(contextBar(page)).toHaveAttribute("data-mode", "full");
-      await expect(contextBar(page).getByRole("button", { name: "Choose a workspace" })).toBeVisible();
+      await expect(
+        contextBar(page).getByRole("button", { name: "Choose a workspace" }),
+      ).toBeVisible();
       await expect(contextBar(page).getByText("Local", { exact: true })).toHaveCount(0);
       await expect(pullRequestChip(page)).toHaveCount(0);
     });
@@ -117,23 +131,37 @@ test.describe("folder workspaces", () => {
     const { page } = aiden;
     execFileSync("git", ["init", "-b", "main", aiden.workspaceDir]);
     execFileSync("git", [
-      "-C", aiden.workspaceDir,
-      "-c", "user.email=e2e@example.com",
-      "-c", "user.name=Aiden E2E",
-      "commit", "--allow-empty", "-m", "init",
+      "-C",
+      aiden.workspaceDir,
+      "-c",
+      "user.email=e2e@example.com",
+      "-c",
+      "user.name=Aiden E2E",
+      "commit",
+      "--allow-empty",
+      "-m",
+      "init",
     ]);
     execFileSync("git", [
-      "-C", aiden.workspaceDir,
-      "remote", "add", "origin", "https://github.com/example-owner/example-repo.git",
+      "-C",
+      aiden.workspaceDir,
+      "remote",
+      "add",
+      "origin",
+      "https://github.com/example-owner/example-repo.git",
     ]);
-    await aiden.app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setSize(1280, 800));
+    await aiden.app.evaluate(({ BrowserWindow }) =>
+      BrowserWindow.getAllWindows()[0].setSize(1280, 800),
+    );
     await startPersistedChat(page, async () => {
       await expect(pullRequestChip(page)).toHaveCount(0);
     });
     // The bar collapses to the branch; nothing is ready to open as a PR yet.
     await expect(contextBar(page)).toHaveAttribute("data-mode", "summary");
     await expect(contextBar(page).getByRole("button", { name: "main", exact: true })).toBeVisible();
-    await expect(contextBar(page).getByRole("button", { name: "Choose a workspace" })).toHaveCount(0);
+    await expect(contextBar(page).getByRole("button", { name: "Choose a workspace" })).toHaveCount(
+      0,
+    );
     await expect(pullRequestChip(page)).toHaveCount(0);
 
     const menu = await openChipMenu(page);
@@ -145,32 +173,43 @@ test.describe("folder workspaces", () => {
     const changes = page.locator('[data-workspace-tool="review"]');
     await changes.click();
     const panel = page.getByRole("complementary", { name: "Environment work surface" });
-    await expect(panel.locator("#environment-review-tab")).toHaveAttribute(
-      "aria-selected",
-      "true",
-    );
+    await expect(panel.locator("#environment-review-tab")).toHaveAttribute("aria-selected", "true");
     await expect(changes).toHaveAttribute("aria-pressed", "true");
   });
 
-  test("a draft in New worktree mode creates its worktree on send and runs there", async ({ aiden }) => {
+  test("a draft in New worktree mode creates its worktree on send and runs there", async ({
+    aiden,
+  }) => {
     const { page } = aiden;
     execFileSync("git", ["init", "-b", "main", aiden.workspaceDir]);
     execFileSync("git", [
-      "-C", aiden.workspaceDir,
-      "-c", "user.email=e2e@example.com",
-      "-c", "user.name=Aiden E2E",
-      "commit", "--allow-empty", "-m", "init",
+      "-C",
+      aiden.workspaceDir,
+      "-c",
+      "user.email=e2e@example.com",
+      "-c",
+      "user.name=Aiden E2E",
+      "commit",
+      "--allow-empty",
+      "-m",
+      "init",
     ]);
-    await aiden.app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setSize(1280, 800));
+    await aiden.app.evaluate(({ BrowserWindow }) =>
+      BrowserWindow.getAllWindows()[0].setSize(1280, 800),
+    );
     await finishLmStudioOnboarding(page);
 
     // Nothing is created yet: the chip and the headline describe the plan.
     await contextBar(page).getByRole("button", { name: "main", exact: true }).click();
     const workIn = page.getByRole("radiogroup", { name: "Work in" });
-    await expect(workIn.getByRole("radio", { name: /^This checkout/u })).toHaveAttribute("aria-checked", "true");
+    await expect(workIn.getByRole("radio", { name: /^This checkout/u })).toHaveAttribute(
+      "aria-checked",
+      "true",
+    );
     await workIn.getByRole("radio", { name: /^New worktree/u }).click();
-    await expect(page.getByRole("radiogroup", { name: "Start from" }).getByRole("radio", { name: /^main/u }))
-      .toHaveAttribute("aria-checked", "true");
+    await expect(
+      page.getByRole("radiogroup", { name: "Start from" }).getByRole("radio", { name: /^main/u }),
+    ).toHaveAttribute("aria-checked", "true");
     // No remote, so there is no origin to start from.
     await expect(page.getByRole("menu").getByRole("switch")).toHaveCount(0);
     await closeMenu(page);
@@ -180,8 +219,11 @@ test.describe("folder workspaces", () => {
     await expect(page.locator("[data-draft-worktree-hint]")).toHaveText(
       "A new worktree from main will be created when you send",
     );
-    expect(execFileSync("git", ["-C", aiden.workspaceDir, "worktree", "list"], { encoding: "utf8" }).trim().split("\n"))
-      .toHaveLength(1);
+    expect(
+      execFileSync("git", ["-C", aiden.workspaceDir, "worktree", "list"], { encoding: "utf8" })
+        .trim()
+        .split("\n"),
+    ).toHaveLength(1);
 
     // Record the progress row, which may only be on screen briefly.
     await page.evaluate(() => {
@@ -210,18 +252,25 @@ test.describe("folder workspaces", () => {
     await expect(
       contextBar(page).getByRole("button", { name: /^aiden\/fix-the-login-bug, worktree/u }),
     ).toBeVisible();
-    const worktrees = execFileSync("git", ["-C", aiden.workspaceDir, "worktree", "list"], { encoding: "utf8" });
+    const worktrees = execFileSync("git", ["-C", aiden.workspaceDir, "worktree", "list"], {
+      encoding: "utf8",
+    });
     expect(worktrees).toContain("[aiden/fix-the-login-bug]");
 
     // The worktree is registered as a workspace, listed in the sidebar.
     const worktreeWorkspace = await page.evaluate(async () => {
-      const bridge = (window as unknown as {
-        aidenAPI: { ipc: { invoke<T>(channel: string, ...args: unknown[]): Promise<T> } };
-      }).aidenAPI.ipc;
-      const workspaces = await bridge.invoke<{ id: string; name: string; managedWorktree?: { branch: string } }[]>(
-        "workspaces:list",
+      const bridge = (
+        window as unknown as {
+          aidenAPI: { ipc: { invoke<T>(channel: string, ...args: unknown[]): Promise<T> } };
+        }
+      ).aidenAPI.ipc;
+      const workspaces =
+        await bridge.invoke<{ id: string; name: string; managedWorktree?: { branch: string } }[]>(
+          "workspaces:list",
+        );
+      return workspaces.find(
+        (workspace) => workspace.managedWorktree?.branch === "aiden/fix-the-login-bug",
       );
-      return workspaces.find((workspace) => workspace.managedWorktree?.branch === "aiden/fix-the-login-bug");
     });
     expect(worktreeWorkspace).toBeDefined();
     await expect(
@@ -230,38 +279,56 @@ test.describe("folder workspaces", () => {
 
     // The chat was saved in the worktree and its first response ran there.
     await expect
-      .poll(async () => {
-        const index = JSON.parse(
-          await readFile(path.join(aiden.userDataDir, "chats", "index.json"), "utf8"),
-        ) as { id: string; workspaceId?: string; botId?: string }[];
-        const meta = index.find((entry) => !entry.botId && entry.workspaceId === worktreeWorkspace!.id);
-        if (!meta) return "no chat in the worktree";
-        const saved = JSON.parse(
-          await readFile(path.join(aiden.userDataDir, "chats", `${meta.id}.json`), "utf8"),
-        ) as { messages: { role: string; providerFailure?: unknown }[] };
-        const reply = saved.messages.find((message) => message.role === "assistant");
-        return reply ? (reply.providerFailure ? "failed" : "answered") : "waiting";
-      }, { timeout: 20_000 })
+      .poll(
+        async () => {
+          const index = JSON.parse(
+            await readFile(path.join(aiden.userDataDir, "chats", "index.json"), "utf8"),
+          ) as { id: string; workspaceId?: string; botId?: string }[];
+          const meta = index.find(
+            (entry) => !entry.botId && entry.workspaceId === worktreeWorkspace!.id,
+          );
+          if (!meta) return "no chat in the worktree";
+          const saved = JSON.parse(
+            await readFile(path.join(aiden.userDataDir, "chats", `${meta.id}.json`), "utf8"),
+          ) as { messages: { role: string; providerFailure?: unknown }[] };
+          const reply = saved.messages.find((message) => message.role === "assistant");
+          return reply ? (reply.providerFailure ? "failed" : "answered") : "waiting";
+        },
+        { timeout: 20_000 },
+      )
       .toBe("answered");
     await expect(page.getByText("Generation failed")).toHaveCount(0);
   });
 
-  test("a failed worktree send waits for Retry, Cancel or Run in this checkout, even after leaving", async ({ aiden }) => {
+  test("a failed worktree send waits for Retry, Cancel or Run in this checkout, even after leaving", async ({
+    aiden,
+  }) => {
     const { page } = aiden;
     execFileSync("git", ["init", "-b", "main", aiden.workspaceDir]);
     execFileSync("git", [
-      "-C", aiden.workspaceDir,
-      "-c", "user.email=e2e@example.com",
-      "-c", "user.name=Aiden E2E",
-      "commit", "--allow-empty", "-m", "init",
+      "-C",
+      aiden.workspaceDir,
+      "-c",
+      "user.email=e2e@example.com",
+      "-c",
+      "user.name=Aiden E2E",
+      "commit",
+      "--allow-empty",
+      "-m",
+      "init",
     ]);
-    await aiden.app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setSize(1280, 800));
+    await aiden.app.evaluate(({ BrowserWindow }) =>
+      BrowserWindow.getAllWindows()[0].setSize(1280, 800),
+    );
     await finishLmStudioOnboarding(page);
     const composer = page.locator("textarea");
 
     // `main` is a valid name, but that branch is checked out here, so Git refuses it.
     await contextBar(page).getByRole("button", { name: "main", exact: true }).click();
-    await page.getByRole("radiogroup", { name: "Work in" }).getByRole("radio", { name: /^New worktree/u }).click();
+    await page
+      .getByRole("radiogroup", { name: "Work in" })
+      .getByRole("radio", { name: /^New worktree/u })
+      .click();
     await page.locator("[data-branch-name-row]").click();
     await page.getByRole("textbox", { name: /Branch name/u }).fill("main");
     await page.keyboard.press("Enter");
@@ -273,11 +340,15 @@ test.describe("folder workspaces", () => {
       const seen: string[] = [];
       (window as unknown as { __worktreeStates: string[] }).__worktreeStates = seen;
       new MutationObserver(() => {
-        const state = document.querySelector("[data-draft-worktree-send]")?.getAttribute("data-draft-worktree-send") ?? "none";
+        const state =
+          document
+            .querySelector("[data-draft-worktree-send]")
+            ?.getAttribute("data-draft-worktree-send") ?? "none";
         if (seen[seen.length - 1] !== state) seen.push(state);
       }).observe(document.body, { subtree: true, childList: true, attributes: true });
     });
-    const states = () => page.evaluate(() => (window as unknown as { __worktreeStates: string[] }).__worktreeStates);
+    const states = () =>
+      page.evaluate(() => (window as unknown as { __worktreeStates: string[] }).__worktreeStates);
 
     await composer.fill("Fix the login bug");
     await expect(page.getByRole("button", { name: "Send message" })).toBeEnabled();
@@ -318,42 +389,67 @@ test.describe("folder workspaces", () => {
     await expect(page.locator("[data-chat-title-menu]")).toBeVisible({ timeout: 20_000 });
     await expect(contextBar(page)).toHaveAttribute("data-mode", "summary");
     await expect(contextBar(page).getByRole("button", { name: "main", exact: true })).toBeVisible();
-    const chats = JSON.parse(await readFile(path.join(aiden.userDataDir, "chats", "index.json"), "utf8")) as {
+    const chats = JSON.parse(
+      await readFile(path.join(aiden.userDataDir, "chats", "index.json"), "utf8"),
+    ) as {
       workspaceId?: string;
       botId?: string;
     }[];
-    const saved = chats.filter((entry) => !entry.botId && entry.workspaceId && entry.workspaceId !== "assistant");
+    const saved = chats.filter(
+      (entry) => !entry.botId && entry.workspaceId && entry.workspaceId !== "assistant",
+    );
     expect(saved).toHaveLength(1);
     const workspace = await page.evaluate(async (workspaceId) => {
-      const bridge = (window as unknown as {
-        aidenAPI: { ipc: { invoke<T>(channel: string, ...args: unknown[]): Promise<T> } };
-      }).aidenAPI.ipc;
-      return bridge.invoke<{ folderPath?: string; managedWorktree?: unknown } | null>("workspaces:get", workspaceId);
+      const bridge = (
+        window as unknown as {
+          aidenAPI: { ipc: { invoke<T>(channel: string, ...args: unknown[]): Promise<T> } };
+        }
+      ).aidenAPI.ipc;
+      return bridge.invoke<{ folderPath?: string; managedWorktree?: unknown } | null>(
+        "workspaces:get",
+        workspaceId,
+      );
     }, saved[0].workspaceId);
     expect(workspace?.managedWorktree).toBeUndefined();
-    expect(execFileSync("git", ["-C", aiden.workspaceDir, "worktree", "list"], { encoding: "utf8" }).trim().split("\n"))
-      .toHaveLength(1);
+    expect(
+      execFileSync("git", ["-C", aiden.workspaceDir, "worktree", "list"], { encoding: "utf8" })
+        .trim()
+        .split("\n"),
+    ).toHaveLength(1);
     await expect
       .poll(() => firstReplyState(aiden.userDataDir, saved[0].workspaceId!), { timeout: 20_000 })
       .toBe("answered");
     await expect(page.getByText("Deterministic E2E response received.").first()).toBeVisible();
   });
 
-  test("Retry chosen after leaving a failed worktree send creates the worktree and starts the reply", async ({ aiden }) => {
+  test("Retry chosen after leaving a failed worktree send creates the worktree and starts the reply", async ({
+    aiden,
+  }) => {
     const { page } = aiden;
     execFileSync("git", ["init", "-b", "main", aiden.workspaceDir]);
     execFileSync("git", [
-      "-C", aiden.workspaceDir,
-      "-c", "user.email=e2e@example.com",
-      "-c", "user.name=Aiden E2E",
-      "commit", "--allow-empty", "-m", "init",
+      "-C",
+      aiden.workspaceDir,
+      "-c",
+      "user.email=e2e@example.com",
+      "-c",
+      "user.name=Aiden E2E",
+      "commit",
+      "--allow-empty",
+      "-m",
+      "init",
     ]);
     // An explicit name that already exists fails until that branch is gone.
     execFileSync("git", ["-C", aiden.workspaceDir, "branch", "aiden/taken"]);
-    await aiden.app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setSize(1280, 800));
+    await aiden.app.evaluate(({ BrowserWindow }) =>
+      BrowserWindow.getAllWindows()[0].setSize(1280, 800),
+    );
     await finishLmStudioOnboarding(page);
     await contextBar(page).getByRole("button", { name: "main", exact: true }).click();
-    await page.getByRole("radiogroup", { name: "Work in" }).getByRole("radio", { name: /^New worktree/u }).click();
+    await page
+      .getByRole("radiogroup", { name: "Work in" })
+      .getByRole("radio", { name: /^New worktree/u })
+      .click();
     await page.locator("[data-branch-name-row]").click();
     await page.getByRole("textbox", { name: /Branch name/u }).fill("aiden/taken");
     await page.keyboard.press("Enter");
@@ -372,13 +468,21 @@ test.describe("folder workspaces", () => {
     await failure.getByRole("button", { name: "Retry" }).click();
 
     await expect(page.locator("[data-chat-title-menu]")).toBeVisible({ timeout: 20_000 });
-    await expect(contextBar(page).getByRole("button", { name: /^aiden\/taken, worktree/u })).toBeVisible();
+    await expect(
+      contextBar(page).getByRole("button", { name: /^aiden\/taken, worktree/u }),
+    ).toBeVisible();
     const worktreeId = await page.evaluate(async () => {
-      const bridge = (window as unknown as {
-        aidenAPI: { ipc: { invoke<T>(channel: string, ...args: unknown[]): Promise<T> } };
-      }).aidenAPI.ipc;
-      const workspaces = await bridge.invoke<{ id: string; managedWorktree?: { branch: string } }[]>("workspaces:list");
-      return workspaces.find((workspace) => workspace.managedWorktree?.branch === "aiden/taken")?.id;
+      const bridge = (
+        window as unknown as {
+          aidenAPI: { ipc: { invoke<T>(channel: string, ...args: unknown[]): Promise<T> } };
+        }
+      ).aidenAPI.ipc;
+      const workspaces =
+        await bridge.invoke<{ id: string; managedWorktree?: { branch: string } }[]>(
+          "workspaces:list",
+        );
+      return workspaces.find((workspace) => workspace.managedWorktree?.branch === "aiden/taken")
+        ?.id;
     });
     expect(worktreeId).toBeDefined();
     await expect
@@ -390,10 +494,16 @@ test.describe("folder workspaces", () => {
     const { page } = aiden;
     execFileSync("git", ["init", "-b", "main", aiden.workspaceDir]);
     execFileSync("git", [
-      "-C", aiden.workspaceDir,
-      "-c", "user.email=e2e@example.com",
-      "-c", "user.name=Aiden E2E",
-      "commit", "--allow-empty", "-m", "init",
+      "-C",
+      aiden.workspaceDir,
+      "-c",
+      "user.email=e2e@example.com",
+      "-c",
+      "user.name=Aiden E2E",
+      "commit",
+      "--allow-empty",
+      "-m",
+      "init",
     ]);
     await finishLmStudioOnboarding(page);
     await expect(contextBar(page).getByRole("button", { name: "main", exact: true })).toBeVisible();
@@ -409,7 +519,9 @@ test.describe("folder workspaces", () => {
     await expect(page.locator("textarea")).toBeFocused();
   });
 
-  test("the headline name opens the workspace menu, and a typed path moves the draft there", async ({ aiden }) => {
+  test("the headline name opens the workspace menu, and a typed path moves the draft there", async ({
+    aiden,
+  }) => {
     const { page } = aiden;
     // HOME is the test root, so ~/typed-project resolves inside it.
     const typedFolder = path.join(aiden.rootDir, "typed-project");
@@ -436,15 +548,21 @@ test.describe("folder workspaces", () => {
     await expect(composer).toBeFocused();
     await composer.press("Enter");
     await expect(page.locator("[data-chat-title-menu]")).toBeVisible({ timeout: 20_000 });
-    const chats = JSON.parse(await readFile(path.join(aiden.userDataDir, "chats", "index.json"), "utf8")) as {
+    const chats = JSON.parse(
+      await readFile(path.join(aiden.userDataDir, "chats", "index.json"), "utf8"),
+    ) as {
       workspaceId?: string;
       botId?: string;
     }[];
-    const [chat] = chats.filter((entry) => !entry.botId && entry.workspaceId && entry.workspaceId !== "assistant");
+    const [chat] = chats.filter(
+      (entry) => !entry.botId && entry.workspaceId && entry.workspaceId !== "assistant",
+    );
     const workspace = await page.evaluate(async (workspaceId) => {
-      const bridge = (window as unknown as {
-        aidenAPI: { ipc: { invoke<T>(channel: string, ...args: unknown[]): Promise<T> } };
-      }).aidenAPI.ipc;
+      const bridge = (
+        window as unknown as {
+          aidenAPI: { ipc: { invoke<T>(channel: string, ...args: unknown[]): Promise<T> } };
+        }
+      ).aidenAPI.ipc;
       return bridge.invoke<{ folderPath?: string } | null>("workspaces:get", workspaceId);
     }, chat.workspaceId);
     expect(workspace?.folderPath?.endsWith(`${path.sep}typed-project`)).toBe(true);
@@ -461,13 +579,17 @@ test.describe("folder workspaces", () => {
     await expect(dialog).toBeHidden();
     await expect(page.locator("[data-chat-title-menu]")).toContainText("Renamed from the top bar");
     await expect(
-      page.locator("[data-sidebar]").getByRole("button", { name: "Renamed from the top bar", exact: true }),
+      page
+        .locator("[data-sidebar]")
+        .getByRole("button", { name: "Renamed from the top bar", exact: true }),
     ).toBeVisible();
   });
   test("turning workspace access off hides repository and folder actions", async ({ aiden }) => {
     const { page } = aiden;
     execFileSync("git", ["init", "-b", "main", aiden.workspaceDir]);
-    await aiden.app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setSize(1280, 800));
+    await aiden.app.evaluate(({ BrowserWindow }) =>
+      BrowserWindow.getAllWindows()[0].setSize(1280, 800),
+    );
     await startPersistedChat(page);
     await expect(page.locator('[data-workspace-tool="review"]')).toBeVisible();
 
@@ -481,8 +603,12 @@ test.describe("folder workspaces", () => {
     await expect(page.locator("[data-terminal-toggle]")).toHaveCount(0);
     await expect(page.locator('[data-workspace-tool="browser"]')).toBeVisible();
     const menu = await openChipMenu(page);
-    await expect(menu.locator("[data-workspace-chip-status]")).toHaveText("Workspace access is off");
-    await expect(menu.getByRole("menuitem", { name: /Show in Finder|Open folder/u })).toHaveCount(0);
+    await expect(menu.locator("[data-workspace-chip-status]")).toHaveText(
+      "Workspace access is off",
+    );
+    await expect(menu.getByRole("menuitem", { name: /Show in Finder|Open folder/u })).toHaveCount(
+      0,
+    );
     await expect(menu.getByRole("menuitem", { name: "Copy branch name" })).toHaveCount(0);
     await expect(menu.getByRole("menuitem", { name: "Copy folder path" })).toBeVisible();
     await closeMenu(page);
@@ -500,26 +626,30 @@ test.describe("folder workspaces", () => {
         ({ BrowserWindow }, size) => BrowserWindow.getAllWindows()[0].setSize(size, 800),
         width,
       );
-      await expect.poll(async () => {
-        const [titleBox, chipBox, toolsBox] = await Promise.all([
-          title.boundingBox(),
-          chip.isVisible().then((visible) => (visible ? chip.boundingBox() : null)),
-          tools.boundingBox(),
-        ]);
-        if (!titleBox || !toolsBox) return `missing at ${width}`;
-        if (titleBox.width < 80) return `title ${titleBox.width}px at ${width}`;
-        const titleEnd = titleBox.x + titleBox.width;
-        if (chipBox && (chipBox.x < titleEnd || chipBox.x + chipBox.width > toolsBox.x)) {
-          return `chip overlaps at ${width}`;
-        }
-        if (!chipBox && titleEnd > toolsBox.x) return `title overlaps at ${width}`;
-        return "ok";
-      }).toBe("ok");
+      await expect
+        .poll(async () => {
+          const [titleBox, chipBox, toolsBox] = await Promise.all([
+            title.boundingBox(),
+            chip.isVisible().then((visible) => (visible ? chip.boundingBox() : null)),
+            tools.boundingBox(),
+          ]);
+          if (!titleBox || !toolsBox) return `missing at ${width}`;
+          if (titleBox.width < 80) return `title ${titleBox.width}px at ${width}`;
+          const titleEnd = titleBox.x + titleBox.width;
+          if (chipBox && (chipBox.x < titleEnd || chipBox.x + chipBox.width > toolsBox.x)) {
+            return `chip overlaps at ${width}`;
+          }
+          if (!chipBox && titleEnd > toolsBox.x) return `title overlaps at ${width}`;
+          return "ok";
+        })
+        .toBe("ok");
     }
   });
   test("Quick View leads the workspace tools and Environment ends them", async ({ aiden }) => {
     const { page } = aiden;
-    await aiden.app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setSize(1280, 800));
+    await aiden.app.evaluate(({ BrowserWindow }) =>
+      BrowserWindow.getAllWindows()[0].setSize(1280, 800),
+    );
     await startPersistedChat(page);
     const group = page.locator("[data-workspace-tool-buttons]");
     const toggles = {
@@ -532,7 +662,9 @@ test.describe("folder workspaces", () => {
     // Left-to-right order of the four controls, read again until the resized bar settles.
     const leftToRight = async () => {
       const entries = await Promise.all(
-        Object.entries(toggles).map(async ([name, toggle]) => [name, (await toggle.boundingBox())?.x] as const),
+        Object.entries(toggles).map(
+          async ([name, toggle]) => [name, (await toggle.boundingBox())?.x] as const,
+        ),
       );
       if (entries.some(([, left]) => left === undefined)) return [];
       return entries.sort(([, a], [, b]) => a! - b!).map(([name]) => name);
@@ -555,13 +687,17 @@ test.describe("folder workspaces", () => {
     // uses the system title bar (a tiling desktop picks it automatically).
     test.use({ appEnvironment: { XDG_CURRENT_DESKTOP: "sway" } });
 
-    test("a tool covered by Quick View reads as not showing until it comes forward", async ({ aiden }) => {
+    test("a tool covered by Quick View reads as not showing until it comes forward", async ({
+      aiden,
+    }) => {
       const { page } = aiden;
       await startPersistedChat(page);
       await page.getByRole("button", { name: "Hide sidebar", exact: true }).click();
       // 890px: Quick View no longer fits beside the floating tools (they stack), while
       // the collapsed-sidebar header is still wide enough for individual tool buttons.
-      await aiden.app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setSize(890, 720));
+      await aiden.app.evaluate(({ BrowserWindow }) =>
+        BrowserWindow.getAllWindows()[0].setSize(890, 720),
+      );
       const files = page.locator('[data-workspace-tool="files"]');
       const tools = page.locator('[data-environment-surface="tools"]');
       await files.click();
@@ -581,7 +717,9 @@ test.describe("folder workspaces", () => {
     const { page } = aiden;
     const notes = path.join(aiden.workspaceDir, "notes.txt");
     await writeFile(notes, "original\n");
-    await aiden.app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setSize(1280, 800));
+    await aiden.app.evaluate(({ BrowserWindow }) =>
+      BrowserWindow.getAllWindows()[0].setSize(1280, 800),
+    );
     await startPersistedChat(page);
     const back = page.getByRole("button", { name: "Go back", exact: true });
     const forward = page.getByRole("button", { name: "Go forward", exact: true });
@@ -655,9 +793,10 @@ test("a collapsed sidebar keeps the title clear of the leading controls", async 
   const title = page.locator("[data-chat-title-menu]");
   await expect(page.getByRole("button", { name: "Show sidebar", exact: true })).toBeVisible();
   // Wait for the header padding transition to settle before measuring.
-  await expect.poll(async () => {
-    const [controls, heading] = await Promise.all([forward.boundingBox(), title.boundingBox()]);
-    return Boolean(controls && heading && heading.x >= controls.x + controls.width);
-  }).toBe(true);
+  await expect
+    .poll(async () => {
+      const [controls, heading] = await Promise.all([forward.boundingBox(), title.boundingBox()]);
+      return Boolean(controls && heading && heading.x >= controls.x + controls.width);
+    })
+    .toBe(true);
 });
-

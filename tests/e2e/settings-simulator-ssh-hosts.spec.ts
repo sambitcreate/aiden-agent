@@ -1,18 +1,26 @@
 import path from "node:path";
 import { expect, finishLmStudioOnboarding, readJsonFile, test } from "./fixtures";
 
-type StoredHosts = { version: number; hosts: Array<{ id: string; label: string; target: string; port?: number }> };
+type StoredHosts = {
+  version: number;
+  hosts: Array<{ id: string; label: string; target: string; port?: number }>;
+};
 
 test.describe("Settings → Simulator → SSH hosts", () => {
   test.use({ appEnvironment: { AIDEN_EXPERIMENTAL_DEVICES: "1" } });
 
-  test("adds, validates, persists, and removes an SSH host without contacting it", async ({ aiden }) => {
+  test("adds, validates, persists, and removes an SSH host without contacting it", async ({
+    aiden,
+  }) => {
     test.skip(process.platform !== "darwin", "iOS Simulator devices are macOS-only");
     let page = aiden.page;
     const hostsFile = path.join(aiden.userDataDir, "devices", "ssh-hosts.json");
     const openSimulatorSettings = async () => {
       await page.getByRole("button", { name: "Settings", exact: true }).click();
-      await page.getByRole("navigation", { name: "Settings" }).getByRole("button", { name: "Simulator", exact: true }).click();
+      await page
+        .getByRole("navigation", { name: "Settings" })
+        .getByRole("button", { name: "Simulator", exact: true })
+        .click();
       await expect(page.getByRole("heading", { name: "SSH hosts" })).toBeVisible();
     };
     await finishLmStudioOnboarding(page);
@@ -42,7 +50,11 @@ test.describe("Settings → Simulator → SSH hosts", () => {
     // Streaming is off, so the host can be edited and tested but not connected.
     await expect(row.getByRole("button", { name: "Connect Build Mac" })).toBeDisabled();
     await expect
-      .poll(async () => (await readJsonFile<StoredHosts>(hostsFile).catch(() => null))?.hosts.map((host) => host.target))
+      .poll(async () =>
+        (await readJsonFile<StoredHosts>(hostsFile).catch(() => null))?.hosts.map(
+          (host) => host.target,
+        ),
+      )
       .toEqual(["me@build-mac.invalid"]);
 
     page = await aiden.relaunch();

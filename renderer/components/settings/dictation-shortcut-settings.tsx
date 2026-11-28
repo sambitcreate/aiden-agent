@@ -207,9 +207,11 @@ function DictationHotkey() {
   return (
     <Field
       label="Dictation hotkey"
-      description={capabilities.accessibilityPaste
-        ? "Press it from anywhere to dictate into the focused text field. When nothing editable is focused, the transcript is copied to the clipboard."
-        : "Press it from anywhere to dictate. The completed transcript is copied to the clipboard."}
+      description={
+        capabilities.accessibilityPaste
+          ? "Press it from anywhere to dictate into the focused text field. When nothing editable is focused, the transcript is copied to the clipboard."
+          : "Press it from anywhere to dictate. The completed transcript is copied to the clipboard."
+      }
     >
       <div className="flex flex-wrap items-center justify-end gap-2">
         <Badge
@@ -227,7 +229,9 @@ function DictationHotkey() {
               ? "Unavailable"
               : "Off"}
         </Badge>
-        <Text variant="small-strong">{capabilities.dictationHoldTrigger ?? prettyAccelerator(binding)}</Text>
+        <Text variant="small-strong">
+          {capabilities.dictationHoldTrigger ?? prettyAccelerator(binding)}
+        </Text>
         <Button
           size="small"
           variant="filled"
@@ -271,7 +275,9 @@ export function DictationShortcutSettings() {
           ? "Aiden couldn’t change dictation settings. Your desktop may not support hold shortcuts or the request was cancelled."
           : "Couldn’t change dictation settings.",
       );
-    } finally { setHoldBusy(false); }
+    } finally {
+      setHoldBusy(false);
+    }
   };
 
   return (
@@ -291,15 +297,20 @@ export function DictationShortcutSettings() {
           label="Shortcut behavior"
           description={[
             ACTIVATION_DESCRIPTION[activationMode],
-            setupOnly ? "Choose Hold to dictate to let your desktop assign a hold shortcut for this session." : null,
-          ].filter(Boolean).join(" ")}
+            setupOnly
+              ? "Choose Hold to dictate to let your desktop assign a hold shortcut for this session."
+              : null,
+          ]
+            .filter(Boolean)
+            .join(" ")}
         >
           <Select
             value={activationMode}
             onValueChange={(value) => {
               // Not `disabled`: the trigger gets focus back as the list closes, and a
               // disabled trigger would drop it to the page while this saves.
-              if (!holdBusy && isDictationActivationMode(value)) void patch({ dictationActivationMode: value });
+              if (!holdBusy && isDictationActivationMode(value))
+                void patch({ dictationActivationMode: value });
             }}
           >
             <SelectTrigger
@@ -324,16 +335,23 @@ export function DictationShortcutSettings() {
           label="Shortcut behavior"
           description="Press the global dictation shortcut once to start and again to stop."
         >
-          <Text as="p" variant="small" color="secondary" className="text-right max-[540px]:text-left">
+          <Text
+            as="p"
+            variant="small"
+            color="secondary"
+            className="text-right max-[540px]:text-left"
+          >
             {ACTIVATION_LABEL.toggle}
           </Text>
         </Field>
       )}
       <Field
         label="Stop after silence"
-        description={capabilities.dictationHoldToTalk
-          ? "Applies to every shortcut behavior. Release or press the shortcut again to stop manually."
-          : "Press the shortcut again to stop manually."}
+        description={
+          capabilities.dictationHoldToTalk
+            ? "Applies to every shortcut behavior. Release or press the shortcut again to stop manually."
+            : "Press the shortcut again to stop manually."
+        }
       >
         <Switch
           aria-label="Stop after silence"

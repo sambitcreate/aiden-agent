@@ -36,7 +36,8 @@ export function botModelUsable(found: ReturnType<typeof findBotModel>): boolean 
 export function recommendedBotModelChoice(catalog: BotCapabilityCatalog): BotModelChoice {
   const model = firstAvailableModel(catalog);
   if (!model) return {};
-  const readsImages = findBotModel(catalog, model.providerId, model.modelId)?.model.supportsImages === true;
+  const readsImages =
+    findBotModel(catalog, model.providerId, model.modelId)?.model.supportsImages === true;
   const vision = readsImages ? undefined : firstAvailableVisionModel(catalog, model.providerId);
   return {
     providerId: model.providerId,
@@ -63,10 +64,16 @@ export function chooseBotModel(
     return { providerId, modelId, visionProviderId: undefined, visionModelId: undefined };
   }
   const kept = findBotModel(catalog, current.visionProviderId, current.visionModelId);
-  const vision = kept && botModelUsable(kept) && kept.model.supportsImages
-    ? { providerId: kept.provider.id, modelId: kept.model.id }
-    : firstAvailableVisionModel(catalog, providerId);
-  return { providerId, modelId, visionProviderId: vision?.providerId, visionModelId: vision?.modelId };
+  const vision =
+    kept && botModelUsable(kept) && kept.model.supportsImages
+      ? { providerId: kept.provider.id, modelId: kept.model.id }
+      : firstAvailableVisionModel(catalog, providerId);
+  return {
+    providerId,
+    modelId,
+    visionProviderId: vision?.providerId,
+    visionModelId: vision?.modelId,
+  };
 }
 
 /** Picks the photo model; only a usable model that reads images is accepted. */
@@ -82,10 +89,12 @@ export function chooseBotVisionModel(
 }
 
 export function sameBotModelChoice(a: BotModelChoice, b: BotModelChoice): boolean {
-  return a.providerId === b.providerId
-    && a.modelId === b.modelId
-    && a.visionProviderId === b.visionProviderId
-    && a.visionModelId === b.visionModelId;
+  return (
+    a.providerId === b.providerId &&
+    a.modelId === b.modelId &&
+    a.visionProviderId === b.visionProviderId &&
+    a.visionModelId === b.visionModelId
+  );
 }
 
 /** The Full-access update a new Bot is created with. No model means no model keys. */
@@ -104,7 +113,9 @@ export function botFullAccess(
       ...(hasModel ? { providerId: choice.providerId!, modelId: choice.modelId! } : {}),
       // The create dialog names Web Search; creating the Bot grants it.
       webSearchEnabled: true,
-      ...(hasVision ? { visionModel: { providerId: choice.visionProviderId!, modelId: choice.visionModelId! } } : {}),
+      ...(hasVision
+        ? { visionModel: { providerId: choice.visionProviderId!, modelId: choice.visionModelId! } }
+        : {}),
     },
   };
 }

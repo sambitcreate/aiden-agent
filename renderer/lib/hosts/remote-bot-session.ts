@@ -5,7 +5,12 @@
 
 import { BOT_ACTIVITY_PHASES, type BotActivityPhase } from "../../shared/bot-activity";
 import type { BotPendingAccessRequest } from "../../shared/bot-access-requests";
-import type { BotLiveSnapshot, BotQueuedMessage, BotSessionState, BotTranscriptEntry } from "../../shared/bot-live";
+import type {
+  BotLiveSnapshot,
+  BotQueuedMessage,
+  BotSessionState,
+  BotTranscriptEntry,
+} from "../../shared/bot-live";
 import type { BotPlanView } from "../../shared/bot-plans";
 import type { BotRoutineProposalEntryData } from "../../shared/bot-routine-proposals";
 import type { PeerHostView } from "../../shared/peer-host";
@@ -72,14 +77,24 @@ function withTime<T extends object>(entry: T, createdAt: string | undefined): T 
 }
 
 /** One host entry as a transcript entry, or null for one this Mac does not draw. */
-export function remoteBotTranscriptEntry(entry: AidenRemoteBotSessionEntry): BotTranscriptEntry | null {
+export function remoteBotTranscriptEntry(
+  entry: AidenRemoteBotSessionEntry,
+): BotTranscriptEntry | null {
   switch (entry.type) {
     case "peer":
-      return withTime({
-        id: entry.id, type: "peer" as const, exchangeId: entry.exchangeId,
-        direction: entry.direction, peerBotId: entry.peerBotId, peerName: entry.peerName,
-        messageKind: entry.messageKind, ...(entry.final ? { final: true as const } : {}),
-      }, entry.createdAt);
+      return withTime(
+        {
+          id: entry.id,
+          type: "peer" as const,
+          exchangeId: entry.exchangeId,
+          direction: entry.direction,
+          peerBotId: entry.peerBotId,
+          peerName: entry.peerName,
+          messageKind: entry.messageKind,
+          ...(entry.final ? { final: true as const } : {}),
+        },
+        entry.createdAt,
+      );
     case "message":
       if (entry.role === "assistant")
         return withTime(
@@ -93,32 +108,61 @@ export function remoteBotTranscriptEntry(entry: AidenRemoteBotSessionEntry): Bot
           entry.createdAt,
         );
       if (entry.label !== undefined)
-        return withTime({ id: entry.id, type: "routine" as const, label: entry.label, text: entry.text }, entry.createdAt);
-      return withTime({ id: entry.id, type: "user" as const, text: entry.text, imageCount: 0 }, entry.createdAt);
+        return withTime(
+          { id: entry.id, type: "routine" as const, label: entry.label, text: entry.text },
+          entry.createdAt,
+        );
+      return withTime(
+        { id: entry.id, type: "user" as const, text: entry.text, imageCount: 0 },
+        entry.createdAt,
+      );
     case "connect_card":
       return {
         id: entry.id,
         type: "connect_card",
-        card: { type: "connect_card", pluginId: entry.pluginId, reason: entry.reason, status: entry.status },
+        card: {
+          type: "connect_card",
+          pluginId: entry.pluginId,
+          reason: entry.reason,
+          status: entry.status,
+        },
       };
     case "notice":
       return { id: entry.id, type: "notice", notice: entry.notice };
     case "failed_turn":
-      return withTime({ id: entry.id, type: "failed_turn" as const, retryText: entry.retryText ?? null }, entry.createdAt);
+      return withTime(
+        { id: entry.id, type: "failed_turn" as const, retryText: entry.retryText ?? null },
+        entry.createdAt,
+      );
     // Revision 45 (`bot:images`): the bytes stay on the host until the transcript reads them
     // (`useRemoteBotImages`); empty `data` marks an image not read yet.
     case "shared_image":
-      return { id: entry.id, type: "shared_image", name: entry.name, mimeType: entry.mimeType, size: entry.size, data: "" };
+      return {
+        id: entry.id,
+        type: "shared_image",
+        name: entry.name,
+        mimeType: entry.mimeType,
+        size: entry.size,
+        data: "",
+      };
     // Revision 27 (`bot:cards`): the host names neither what changed nor why, so the line only says so.
     case "memory_update":
-      return withTime({ id: entry.id, type: "memory_update" as const, targets: [], source: "turn" as const }, entry.createdAt);
+      return withTime(
+        { id: entry.id, type: "memory_update" as const, targets: [], source: "turn" as const },
+        entry.createdAt,
+      );
     case "routine_proposal":
       return withTime(
         {
           id: entry.id,
           type: "routine_proposal" as const,
           // The host's own label already says when it runs; its schedule and timezone stay on the host.
-          proposal: { proposalId: entry.proposalId, name: entry.name, prompt: entry.prompt, label: entry.label } as BotRoutineProposalEntryData,
+          proposal: {
+            proposalId: entry.proposalId,
+            name: entry.name,
+            prompt: entry.prompt,
+            label: entry.label,
+          } as BotRoutineProposalEntryData,
           status: entry.status,
           ...(entry.routineId ? { routineId: entry.routineId } : {}),
         },
@@ -165,7 +209,9 @@ export function remoteBotSessionPaused(view: AidenRemoteBotSessionStateView): bo
 
 const PHASES: ReadonlySet<string> = new Set(BOT_ACTIVITY_PHASES);
 
-function activity(value: AidenRemoteBotSessionActivity | null | undefined): BotLiveSnapshot["activity"] {
+function activity(
+  value: AidenRemoteBotSessionActivity | null | undefined,
+): BotLiveSnapshot["activity"] {
   if (!value) return null;
   // A phase this version does not know reads as `working`, as the contract asks.
   const phase = (PHASES.has(value.phase) ? value.phase : "working") as BotActivityPhase;
@@ -188,10 +234,14 @@ function queued(value: readonly AidenRemoteBotQueuedMessage[] | undefined): BotQ
  */
 function remoteBotPlanRevision(plan: AidenRemoteBotPlan): number {
   const shown = JSON.stringify([
-    plan.planId, plan.status, plan.title, plan.why,
+    plan.planId,
+    plan.status,
+    plan.title,
+    plan.why,
     plan.steps.map((step) => [step.text, step.status]),
     plan.items.map((item) => [item.line, item.details, item.used ?? null, item.max ?? null]),
-    plan.expiresAt ?? null, plan.from ?? null,
+    plan.expiresAt ?? null,
+    plan.from ?? null,
   ]);
   // FNV-1a, 32-bit.
   let hash = 0x811c9dc5;
@@ -234,7 +284,10 @@ export function remoteBotPlanView(botId: string, plan: AidenRemoteBotPlan): BotP
  * Revision 55 (`bot:access-requests`): the folder or whole-computer access
  * the Bot is waiting on. The host keeps the tool call; `waitId` answers it.
  */
-export function remoteBotAccessRequest(botId: string, request: AidenRemoteBotAccessRequest): BotPendingAccessRequest {
+export function remoteBotAccessRequest(
+  botId: string,
+  request: AidenRemoteBotAccessRequest,
+): BotPendingAccessRequest {
   return {
     botId,
     waitId: request.waitId,
@@ -249,7 +302,9 @@ export function remoteBotAccessRequest(botId: string, request: AidenRemoteBotAcc
 }
 
 function entries(value: readonly AidenRemoteBotSessionEntry[]): BotTranscriptEntry[] {
-  return value.map(remoteBotTranscriptEntry).filter((entry): entry is BotTranscriptEntry => entry !== null);
+  return value
+    .map(remoteBotTranscriptEntry)
+    .filter((entry): entry is BotTranscriptEntry => entry !== null);
 }
 
 export function remoteBotSessionView(session: AidenRemoteBotSession): RemoteBotSessionView {
@@ -271,7 +326,9 @@ export function remoteBotSessionView(session: AidenRemoteBotSession): RemoteBotS
         : null,
       activity: activity(session.activity),
       queued: queued(session.queued),
-      accessRequest: session.accessRequest ? remoteBotAccessRequest(session.botId, session.accessRequest) : null,
+      accessRequest: session.accessRequest
+        ? remoteBotAccessRequest(session.botId, session.accessRequest)
+        : null,
       plan: session.plan ? remoteBotPlanView(session.botId, session.plan) : null,
     },
     approval: session.approval,
@@ -290,7 +347,10 @@ export function remoteBotSessionView(session: AidenRemoteBotSession): RemoteBotS
  * this Mac can't read are already left out, so the page's own oldest entry may
  * be newer than that, or missing, and it may hold fewer than `hostCount`.
  */
-export type RemoteBotSessionEntriesPage = AidenRemoteBotSessionEntriesPage & { olderCursor?: string; hostCount?: number };
+export type RemoteBotSessionEntriesPage = AidenRemoteBotSessionEntriesPage & {
+  olderCursor?: string;
+  hostCount?: number;
+};
 
 /**
  * A fresh read or a reconnect's snapshot of the same session keeps the older
@@ -314,7 +374,10 @@ export function carryOlderRemoteBotEntries(
   const loaded = previous.olderLoaded ?? 0;
   return {
     ...next,
-    snapshot: { ...next.snapshot, entries: [...previous.snapshot.entries.slice(0, index), ...next.snapshot.entries] },
+    snapshot: {
+      ...next.snapshot,
+      entries: [...previous.snapshot.entries.slice(0, index), ...next.snapshot.entries],
+    },
     hasOlder: previous.hasOlder,
     olderCursor: previous.olderCursor,
     olderLoaded: index,
@@ -340,7 +403,9 @@ export function withOlderRemoteBotEntries(
     olderLoaded: (view.olderLoaded ?? 0) + older.length,
     olderHostSpan: (view.olderHostSpan ?? 0) + (page.hostCount ?? page.entries.length),
     hasOlder: page.hasOlder,
-    olderCursor: page.hasOlder ? (page.olderCursor ?? page.entries[0]?.id ?? view.olderCursor) : null,
+    olderCursor: page.hasOlder
+      ? (page.olderCursor ?? page.entries[0]?.id ?? view.olderCursor)
+      : null,
   };
 }
 
@@ -382,7 +447,9 @@ export function withRereadOlderRemoteBotEntries(
   // (the host removed or moved the older ones), it resumes from that entry.
   // The boundary is whichever kept entry comes first in the host's order now,
   // so a reorder doesn't cut off a kept entry that moved earlier.
-  const kept = new Set(view.snapshot.entries.slice(0, Math.max(0, carried)).map((entry) => entry.id));
+  const kept = new Set(
+    view.snapshot.entries.slice(0, Math.max(0, carried)).map((entry) => entry.id),
+  );
   const at = reread.snapshot.entries.findIndex((entry) => kept.has(entry.id));
   if (at <= 0) return reread;
   const boundary = reread.snapshot.entries[at]!.id;
@@ -429,12 +496,20 @@ export function applyRemoteBotSessionEvent(
       return next({ entries });
     }
     case "state":
-      return { ...next({ state: remoteBotSessionState(event.payload) }), paused: remoteBotSessionPaused(event.payload) };
+      return {
+        ...next({ state: remoteBotSessionState(event.payload) }),
+        paused: remoteBotSessionPaused(event.payload),
+      };
     case "question": {
       const question = event.payload.question;
       return next({
         question: question
-          ? { botId: snapshot.botId, waitId: question.waitId, toolCallId: question.toolCallId, questions: question.questions }
+          ? {
+              botId: snapshot.botId,
+              waitId: question.waitId,
+              toolCallId: question.toolCallId,
+              questions: question.questions,
+            }
           : null,
       });
     }
@@ -451,10 +526,14 @@ export function applyRemoteBotSessionEvent(
       return { ...next({}), handoff: event.payload.handoff };
     // Only sent to a Mac holding `bot:plans` or `bot:access-requests`; others read the host's notice line.
     case "plan":
-      return next({ plan: event.payload.plan ? remoteBotPlanView(snapshot.botId, event.payload.plan) : null });
+      return next({
+        plan: event.payload.plan ? remoteBotPlanView(snapshot.botId, event.payload.plan) : null,
+      });
     case "access_request":
       return next({
-        accessRequest: event.payload.accessRequest ? remoteBotAccessRequest(snapshot.botId, event.payload.accessRequest) : null,
+        accessRequest: event.payload.accessRequest
+          ? remoteBotAccessRequest(snapshot.botId, event.payload.accessRequest)
+          : null,
       });
     case "issues":
       // Contract revision 42: Bot issue cards are a phone surface in this
@@ -468,7 +547,9 @@ export function applyRemoteBotSessionEvent(
  * transcript its own app, phones and Telegram show. Older hosts only offer
  * Bot chats through the workspace chat routes.
  */
-export function hostSharesBotSessions(view: Pick<PeerHostView, "features" | "capabilities">): boolean {
+export function hostSharesBotSessions(
+  view: Pick<PeerHostView, "features" | "capabilities">,
+): boolean {
   const grants = new Set(view.capabilities);
   return (
     view.features.includes("bot-durable-session-v1") &&

@@ -54,8 +54,5 @@ test("a persistence error retains the only rendered partial response", () => {
     errorCleanup,
     /if \(!partial \|\| updatedChat\) \{\s*setGenerationTimeline\(null\)/u,
   );
-  assert.match(
-    errorCleanup,
-    /Boolean\(\(partial \|\| hasUnpersistedArtifact\) && !updatedChat\)/u,
-  );
+  assert.match(errorCleanup, /Boolean\(\(partial \|\| hasUnpersistedArtifact\) && !updatedChat\)/u);
 });

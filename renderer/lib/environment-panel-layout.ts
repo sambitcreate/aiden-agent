@@ -38,7 +38,11 @@ export const ENVIRONMENT_PANEL_WIDTH_BOUNDS: PanelWidthBounds = {
  * narrower. That lets it sit beside the chat, reflowing it, on windows where the
  * workspace panel would already float over the chat.
  */
-export const BOT_PANEL_WIDTH_BOUNDS: PanelWidthBounds = { min: 400, max: MAX_PANEL_WIDTH, default: 440 };
+export const BOT_PANEL_WIDTH_BOUNDS: PanelWidthBounds = {
+  min: 400,
+  max: MAX_PANEL_WIDTH,
+  default: 440,
+};
 
 export function clampEnvironmentPanelWidth(
   value: number,
@@ -174,7 +178,9 @@ export function storedWorkbenchWidth(
 ): number {
   if (stored === null) return bounds.default;
   const parsed = Number(stored);
-  return Number.isFinite(parsed) && parsed >= bounds.min && parsed <= bounds.max ? parsed : bounds.default;
+  return Number.isFinite(parsed) && parsed >= bounds.min && parsed <= bounds.max
+    ? parsed
+    : bounds.default;
 }
 
 /** Design mode's chat column: renderer-local and shared by every design-mode chat. */
@@ -244,7 +250,10 @@ export function resolveDesignEntryAction(input: {
   canWiden: boolean;
 }): DesignEntryAction {
   if (input.containerWidth >= DESIGN_SPLIT_MIN_WIDTH) return "none";
-  if (input.sidebarWidth > 0 && input.containerWidth + input.sidebarWidth >= DESIGN_SPLIT_MIN_WIDTH) {
+  if (
+    input.sidebarWidth > 0 &&
+    input.containerWidth + input.sidebarWidth >= DESIGN_SPLIT_MIN_WIDTH
+  ) {
     return "collapseSidebar";
   }
   return input.canWiden ? "widenWindow" : "none";

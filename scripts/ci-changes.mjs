@@ -15,7 +15,15 @@ import { isDeepStrictEqual } from "node:util";
 // - catalog: model catalog contracts plus the desktop unit lanes (the runtime
 //   reads model limits from the catalog). Implied by desktop, and the only area
 //   a bundled models.dev catalog refresh selects.
-export const AREA_NAMES = Object.freeze(["desktop", "apple", "ios", "android", "cli", "linux", "catalog"]);
+export const AREA_NAMES = Object.freeze([
+  "desktop",
+  "apple",
+  "ios",
+  "android",
+  "cli",
+  "linux",
+  "catalog",
+]);
 
 export const MODEL_CATALOG_PATHS = Object.freeze(["resources/model-capabilities.json"]);
 
@@ -32,8 +40,10 @@ const LINUX_SPECIFIC = /(?:^|[/._-])linux(?:$|[/._-])/iu;
 // The Remote server is the only main/ code whose behavior native clients
 // consume. Its wire contract is also pinned by protocol/ fixtures.
 const REMOTE_SERVER_PATH = /^main\/(?:services|handlers)\/(?:[^/]+\/)*aiden-remote[^/]*(?:\/.*)?$/u;
-const LOCK_FILE = /(?:^|\/)(?:[^/]+\.(?:lock|lockfile)|package-lock\.json|npm-shrinkwrap\.json|pnpm-lock\.yaml|yarn\.lock|bun\.lock(?:b)?)$/u;
-const CONFIG_FILE = /(?:^|\/)(?:[^/]*\.config\.[^/]+|(?:config|tsconfig)(?:\.[^/]+)?|\.eslintrc(?:\.[^/]+)?|\.prettierrc(?:\.[^/]+)?)$/u;
+const LOCK_FILE =
+  /(?:^|\/)(?:[^/]+\.(?:lock|lockfile)|package-lock\.json|npm-shrinkwrap\.json|pnpm-lock\.yaml|yarn\.lock|bun\.lock(?:b)?)$/u;
+const CONFIG_FILE =
+  /(?:^|\/)(?:[^/]*\.config\.[^/]+|(?:config|tsconfig)(?:\.[^/]+)?|\.eslintrc(?:\.[^/]+)?|\.prettierrc(?:\.[^/]+)?)$/u;
 // Shared renderer files whose contract a native client mirrors by hand. Add a
 // file here when a native client starts mirroring it. No mobile build or test
 // reads renderer/shared/, and the wire contract is pinned by protocol/ fixtures,
@@ -288,7 +298,11 @@ function forceFullRequested(options) {
 }
 
 function validPathList(paths) {
-  return Array.isArray(paths) && paths.length > 0 && paths.every((path) => typeof path === "string" && path.length > 0);
+  return (
+    Array.isArray(paths) &&
+    paths.length > 0 &&
+    paths.every((path) => typeof path === "string" && path.length > 0)
+  );
 }
 
 // The models.dev refresh bot pushes commits that change only the bundled
@@ -417,12 +431,20 @@ function fullDetection(reason, changedCount = 0, changedPaths = []) {
 
 function readManifest(spawn, ref, cwd) {
   const result = invokeGit(spawn, ["show", `${ref}:${ROOT_MANIFEST_PATH}`], cwd);
-  if (!result || result.error || result.status !== 0 || result.signal || typeof result.stdout !== "string") {
+  if (
+    !result ||
+    result.error ||
+    result.status !== 0 ||
+    result.signal ||
+    typeof result.stdout !== "string"
+  ) {
     return null;
   }
   try {
     const manifest = JSON.parse(result.stdout);
-    return manifest !== null && typeof manifest === "object" && !Array.isArray(manifest) ? manifest : null;
+    return manifest !== null && typeof manifest === "object" && !Array.isArray(manifest)
+      ? manifest
+      : null;
   } catch {
     return null;
   }
@@ -438,7 +460,9 @@ function nativeJobScriptNames(scripts) {
       return;
     }
     names.add(name);
-    for (const [, nested] of String(scripts?.[name] ?? "").matchAll(/\bnpm (?:run-script|run)\s+(?:-\S+\s+)*([\w:.-]+)/gu)) {
+    for (const [, nested] of String(scripts?.[name] ?? "").matchAll(
+      /\bnpm (?:run-script|run)\s+(?:-\S+\s+)*([\w:.-]+)/gu,
+    )) {
       visitWithHooks(nested);
     }
   };
@@ -467,7 +491,10 @@ function manifestChangeIsHostOnly(spawn, baseSha, headSha, cwd) {
   }
   const { scripts: baseScripts, ...baseRest } = base;
   const { scripts: headScripts, ...headRest } = head;
-  const nativeScripts = [...nativeJobScriptNames(baseScripts), ...nativeJobScriptNames(headScripts)];
+  const nativeScripts = [
+    ...nativeJobScriptNames(baseScripts),
+    ...nativeJobScriptNames(headScripts),
+  ];
   return (
     isDeepStrictEqual(baseRest, headRest) &&
     nativeScripts.every((name) => baseScripts?.[name] === headScripts?.[name])
@@ -477,20 +504,26 @@ function manifestChangeIsHostOnly(spawn, baseSha, headSha, cwd) {
 export function detectChangedAreas(options = {}) {
   const environment = options.env ?? process.env;
   const eventName = envValue(environment, options.eventName, "GITHUB_EVENT_NAME") ?? "push";
-  let baseSha = envValue(
-    environment,
-    options.baseSha,
-    "BASE_SHA",
-  );
+  let baseSha = envValue(environment, options.baseSha, "BASE_SHA");
   const headSha = envValue(environment, options.headSha, "HEAD_SHA");
   const cwd = options.cwd ?? process.cwd();
   const spawn = options.spawn ?? defaultSpawnSync;
   // A push that creates a branch has no
   // previous tip. Classify it by everything it adds over main instead.
-  if (eventName === "push" && typeof baseSha === "string" && /^0+$/u.test(baseSha) && validGitRef(headSha)) {
+  if (
+    eventName === "push" &&
+    typeof baseSha === "string" &&
+    /^0+$/u.test(baseSha) &&
+    validGitRef(headSha)
+  ) {
     const mergeBase = invokeGit(spawn, ["merge-base", "origin/main", headSha], cwd);
     const resolved = typeof mergeBase?.stdout === "string" ? mergeBase.stdout.trim() : "";
-    if (mergeBase && !mergeBase.error && mergeBase.status === 0 && /^[0-9a-f]{40}$/u.test(resolved)) {
+    if (
+      mergeBase &&
+      !mergeBase.error &&
+      mergeBase.status === 0 &&
+      /^[0-9a-f]{40}$/u.test(resolved)
+    ) {
       baseSha = resolved;
     }
   }
@@ -512,7 +545,14 @@ export function detectChangedAreas(options = {}) {
   }
 
   const result = invokeGit(spawn, buildDiffArgs({ eventName, baseSha, headSha }), cwd);
-  if (!result || result.error || result.status !== 0 || result.signal || result.stdout === undefined || result.stdout === null) {
+  if (
+    !result ||
+    result.error ||
+    result.status !== 0 ||
+    result.signal ||
+    result.stdout === undefined ||
+    result.stdout === null
+  ) {
     return fullDetection("git-diff-failed");
   }
   const paths = parseChangedPaths(result.stdout);
@@ -520,7 +560,10 @@ export function detectChangedAreas(options = {}) {
     eventName === "pull_request" &&
     paths.includes(ROOT_MANIFEST_PATH) &&
     manifestChangeIsHostOnly(spawn, baseSha, headSha, cwd);
-  return { ...analyzeChangedPaths(paths, { eventName, forceFull, hostOnlyManifest }), changedPaths: paths };
+  return {
+    ...analyzeChangedPaths(paths, { eventName, forceFull, hostOnlyManifest }),
+    changedPaths: paths,
+  };
 }
 
 export const runChangedAreaDetection = detectChangedAreas;
@@ -558,7 +601,9 @@ function main() {
   const result = detectChangedAreas();
   writeChangedAreaOutputs(result, process.env.GITHUB_OUTPUT);
   writeChangedAreaSummary(result, process.env.GITHUB_STEP_SUMMARY);
-  process.stdout.write(`CI changed-area decision recorded for ${result.changedCount} changed paths.\n`);
+  process.stdout.write(
+    `CI changed-area decision recorded for ${result.changedCount} changed paths.\n`,
+  );
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {

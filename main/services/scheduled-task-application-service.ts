@@ -26,9 +26,18 @@ export interface ScheduledTaskApplicationDependencies {
       input: ScheduledTaskInput,
       options?: { expectedUpdatedAt?: number; signal?: AbortSignal },
     ): Promise<ScheduledTask>;
-    remove(id: string, options?: { signal?: AbortSignal; expectedUpdatedAt?: number }): Promise<void>;
-    pause(id: string, options?: { signal?: AbortSignal; expectedUpdatedAt?: number }): Promise<ScheduledTask>;
-    resume(id: string, options?: { signal?: AbortSignal; expectedUpdatedAt?: number }): Promise<ScheduledTask>;
+    remove(
+      id: string,
+      options?: { signal?: AbortSignal; expectedUpdatedAt?: number },
+    ): Promise<void>;
+    pause(
+      id: string,
+      options?: { signal?: AbortSignal; expectedUpdatedAt?: number },
+    ): Promise<ScheduledTask>;
+    resume(
+      id: string,
+      options?: { signal?: AbortSignal; expectedUpdatedAt?: number },
+    ): Promise<ScheduledTask>;
     runNow(
       id: string,
       options?: { signal?: AbortSignal; runId?: string; expectedUpdatedAt?: number },
@@ -81,9 +90,7 @@ export function scheduledTaskRevision(task: ScheduledTask): string {
 }
 
 export function scheduledSettingsRevision(settings: object): string {
-  return `rev_${createHash("sha256")
-    .update(JSON.stringify(settings))
-    .digest("base64url")}`;
+  return `rev_${createHash("sha256").update(JSON.stringify(settings)).digest("base64url")}`;
 }
 
 function expectedTaskRevision(task: ScheduledTask, expected?: string): number | undefined {
@@ -109,10 +116,7 @@ export function createScheduledTaskApplicationService(
       }
     }
     if ((input.mcpServerIds?.length ?? 0) > 0) {
-      dependencies.validateMcpSelection(
-        await dependencies.listMcpServers(),
-        input.mcpServerIds!,
-      );
+      dependencies.validateMcpSelection(await dependencies.listMcpServers(), input.mcpServerIds!);
     }
     if (input.mode === "script") {
       const workspace = input.workspaceId
@@ -215,13 +219,16 @@ export function createScheduledTaskApplicationService(
     save,
     remove: (id: string, revision?: string, signal?: AbortSignal) =>
       mutateExisting(id, revision, (expectedUpdatedAt) =>
-        dependencies.service.remove(id, { signal, expectedUpdatedAt })),
+        dependencies.service.remove(id, { signal, expectedUpdatedAt }),
+      ),
     pause: (id: string, revision?: string, signal?: AbortSignal) =>
       mutateExisting(id, revision, (expectedUpdatedAt) =>
-        dependencies.service.pause(id, { signal, expectedUpdatedAt })),
+        dependencies.service.pause(id, { signal, expectedUpdatedAt }),
+      ),
     resume: (id: string, revision?: string, signal?: AbortSignal) =>
       mutateExisting(id, revision, (expectedUpdatedAt) =>
-        dependencies.service.resume(id, { signal, expectedUpdatedAt })),
+        dependencies.service.resume(id, { signal, expectedUpdatedAt }),
+      ),
     /** "Use its own chat": later runs post into the task's own chat instead of the chat that made it. */
     useOwnChat: (id: string, revision?: string) =>
       mutateExisting(
@@ -254,9 +261,10 @@ export function createScheduledTaskApplicationService(
       return dependencies.listScripts({ workspaceRoot: workspace?.folderPath });
     },
     // Servers switched off for the model cannot be chosen for a schedule.
-    mcpServers: async () => (await dependencies.listMcpServers())
-      .filter((server) => server.enabled && mcpServerOffersTools(server))
-      .map((server) => ({ id: server.id, name: server.name })),
+    mcpServers: async () =>
+      (await dependencies.listMcpServers())
+        .filter((server) => server.enabled && mcpServerOffersTools(server))
+        .map((server) => ({ id: server.id, name: server.name })),
     settings,
     updateSettings,
     isRunning: (id: string) => dependencies.service.isRunning(id),

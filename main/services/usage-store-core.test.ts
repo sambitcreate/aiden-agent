@@ -676,28 +676,56 @@ test("usage recorded after the shutdown flush is still persisted", async () => {
   assert.equal((await reloaded.summary("7d")).totals.requests, 3);
 });
 
-
 test("TTS accounting survives reload and keeps unknown cost and usage separate from zero", async () => {
   const { ttsUsageRecord } = await import("./tts/service.js");
-  const persistence = memoryPersistence(); const store = createUsageStore(persistence);
+  const persistence = memoryPersistence();
+  const store = createUsageStore(persistence);
   for (const status of ["completed", "failed", "cancelled"] as const) {
-    await store.record(ttsUsageRecord({ kind: "read-aloud", model: "gemini-3.8-flash-tts", status,
-      inputTokens: status === "completed" ? 2 : null, outputTokens: status === "completed" ? 3 : null,
-      usageKnown: status === "completed" }));
+    await store.record(
+      ttsUsageRecord({
+        kind: "read-aloud",
+        model: "gemini-3.8-flash-tts",
+        status,
+        inputTokens: status === "completed" ? 2 : null,
+        outputTokens: status === "completed" ? 3 : null,
+        usageKnown: status === "completed",
+      }),
+    );
   }
   const totals = (await createUsageStore(persistence).summary("all")).totals;
-  assert.equal(totals.requests, 3); assert.equal(totals.tokens.total, 5);
-  assert.equal(totals.unmeteredRequests, 2); assert.equal(totals.unpricedHostedRequests, 3);
-  assert.equal(totals.costedRequests, 0); assert.equal(totals.failedRequests, 1); assert.equal(totals.cancelledRequests, 1);
-  assert.equal(ttsUsageRecord({ kind: "preview", model: "tts", status: "completed", inputTokens: 1, outputTokens: null, usageKnown: false }).tokens, null);
-  assert.ok(persistence.read().buckets.every(bucket => bucket.source === "text-to-speech"));
+  assert.equal(totals.requests, 3);
+  assert.equal(totals.tokens.total, 5);
+  assert.equal(totals.unmeteredRequests, 2);
+  assert.equal(totals.unpricedHostedRequests, 3);
+  assert.equal(totals.costedRequests, 0);
+  assert.equal(totals.failedRequests, 1);
+  assert.equal(totals.cancelledRequests, 1);
+  assert.equal(
+    ttsUsageRecord({
+      kind: "preview",
+      model: "tts",
+      status: "completed",
+      inputTokens: 1,
+      outputTokens: null,
+      usageKnown: false,
+    }).tokens,
+    null,
+  );
+  assert.ok(persistence.read().buckets.every((bucket) => bucket.source === "text-to-speech"));
 });
-
 
 test("cache warming charges survive reload and are included in user-visible usage totals", async () => {
   const persistence = memoryPersistence();
   const store = createUsageStore(persistence, () => NOW);
-  await store.record(record({ source: "cache-warm", providerId: "fixture", modelId: "priced", costStatus: "reported", costUsd: 0.10003 }));
+  await store.record(
+    record({
+      source: "cache-warm",
+      providerId: "fixture",
+      modelId: "priced",
+      costStatus: "reported",
+      costUsd: 0.10003,
+    }),
+  );
   const reloaded = createUsageStore(persistence, () => NOW);
   const summary = await reloaded.summary("7d");
   assert.equal(summary.totals.requests, 1);
@@ -705,36 +733,94 @@ test("cache warming charges survive reload and are included in user-visible usag
   assert.equal(persistence.read().buckets[0]?.source, "cache-warm");
 });
 
-
 test("operation usage follows the selected provider deployment rather than the chat provider", async () => {
-  const hostedChat = { id: "hosted-chat", label: "Hosted chat", baseUrl: "https://chat.example/v1", deployment: "hosted" as const, needsKey: true };
-  const localOperation = { id: "local-images", label: "Local images", baseUrl: "http://127.0.0.1:9090/v1", needsKey: false };
-  const hostedOperation = { id: "hosted-classifier", label: "Hosted classifier", deployment: "hosted" as const, baseUrl: "http://localhost:9000/proxy", needsKey: true };
+  const hostedChat = {
+    id: "hosted-chat",
+    label: "Hosted chat",
+    baseUrl: "https://chat.example/v1",
+    deployment: "hosted" as const,
+    needsKey: true,
+  };
+  const localOperation = {
+    id: "local-images",
+    label: "Local images",
+    baseUrl: "http://127.0.0.1:9090/v1",
+    needsKey: false,
+  };
+  const hostedOperation = {
+    id: "hosted-classifier",
+    label: "Hosted classifier",
+    deployment: "hosted" as const,
+    baseUrl: "http://localhost:9000/proxy",
+    needsKey: true,
+  };
   const store = createUsageStore(memoryPersistence(), () => NOW);
-  const operation = (provider: string) => ({ provider, providerLabel: provider, model: "operation-model", modelLabel: "Operation model", status: "completed" as const });
+  const operation = (provider: string) => ({
+    provider,
+    providerLabel: provider,
+    model: "operation-model",
+    modelLabel: "Operation model",
+    status: "completed" as const,
+  });
   for (const model of ["image-model", "classifier-model"]) {
-    const local = modelOperationUsageRecord({ ...operation(localOperation.id), model }, [hostedChat, localOperation], "chat");
+    const local = modelOperationUsageRecord(
+      { ...operation(localOperation.id), model },
+      [hostedChat, localOperation],
+      "chat",
+    );
     assert.equal(local.local, true);
     assert.equal(local.costStatus, "not-applicable");
     await store.record(local);
   }
-  const hosted = modelOperationUsageRecord({ ...operation(hostedOperation.id), usage: {
-    input: 10, output: 5, cacheRead: 0, cacheWrite: 0, totalTokens: 15,
-    cost: { input: 0.1, output: 0.2, cacheRead: 0, cacheWrite: 0, total: 0.3 },
-  } }, [localOperation, hostedOperation], "chat");
-  assert.equal(hosted.local, false, "explicit hosted deployment wins even for a loopback proxy and local chat");
+  const hosted = modelOperationUsageRecord(
+    {
+      ...operation(hostedOperation.id),
+      usage: {
+        input: 10,
+        output: 5,
+        cacheRead: 0,
+        cacheWrite: 0,
+        totalTokens: 15,
+        cost: { input: 0.1, output: 0.2, cacheRead: 0, cacheWrite: 0, total: 0.3 },
+      },
+    },
+    [localOperation, hostedOperation],
+    "chat",
+  );
+  assert.equal(
+    hosted.local,
+    false,
+    "explicit hosted deployment wins even for a loopback proxy and local chat",
+  );
   assert.equal(hosted.costStatus, "reported");
   await store.record(hosted);
-  const unknown = modelOperationUsageRecord(operation("unknown-provider"), [localOperation], "chat");
-  assert.equal(unknown.local, false, "a local chat does not grant unknown operations local accounting");
+  const unknown = modelOperationUsageRecord(
+    operation("unknown-provider"),
+    [localOperation],
+    "chat",
+  );
+  assert.equal(
+    unknown.local,
+    false,
+    "a local chat does not grant unknown operations local accounting",
+  );
   await store.record(unknown);
   const summary = await store.summary("1y");
   assert.equal(summary.totals.requests, 4);
   assert.equal(summary.totals.localRequests, 2);
   assert.equal(summary.totals.unpricedHostedRequests, 1);
   assert.equal(summary.totals.hostedCostUsd, 0.3);
-  const freshFacade = modelOperationUsageRecord(operation(hostedOperation.id), [hostedOperation], "chat", true);
-  assert.equal(freshFacade.local, true, "a host facade can supply its newer authoritative deployment snapshot");
+  const freshFacade = modelOperationUsageRecord(
+    operation(hostedOperation.id),
+    [hostedOperation],
+    "chat",
+    true,
+  );
+  assert.equal(
+    freshFacade.local,
+    true,
+    "a host facade can supply its newer authoritative deployment snapshot",
+  );
   assert.equal(freshFacade.costStatus, "not-applicable");
 });
 
@@ -742,7 +828,13 @@ test("design run charges survive reload under their own source", async () => {
   const persistence = memoryPersistence();
   const store = createUsageStore(persistence, () => NOW);
   await store.record(
-    record({ source: "design", providerId: "fixture", modelId: "priced", costStatus: "reported", costUsd: 0.25 }),
+    record({
+      source: "design",
+      providerId: "fixture",
+      modelId: "priced",
+      costStatus: "reported",
+      costUsd: 0.25,
+    }),
   );
   const summary = await createUsageStore(persistence, () => NOW).summary("7d");
   assert.equal(summary.totals.requests, 1);
@@ -753,7 +845,13 @@ test("design run charges survive reload under their own source", async () => {
 test("Create Images requests persist as their own privacy-safe usage source", async () => {
   const persistence = memoryPersistence();
   await createUsageStore(persistence, () => NOW).record(
-    record({ source: "create-images", providerId: "openrouter", modelId: "google/gemini-3.1-flash-image", costStatus: "reported", costUsd: 0.039 }),
+    record({
+      source: "create-images",
+      providerId: "openrouter",
+      modelId: "google/gemini-3.1-flash-image",
+      costStatus: "reported",
+      costUsd: 0.039,
+    }),
   );
   const reloaded = await createUsageStore(persistence, () => NOW).summary("7d");
   assert.equal(reloaded.totals.requests, 1);

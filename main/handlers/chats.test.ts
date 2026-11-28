@@ -12,5 +12,8 @@ test("the todo snapshot handler shares durable admission and preserves the owner
   assert.match(snapshot, /openChatIfEligible/u);
   assert.doesNotMatch(snapshot, /openChat\(/u);
   assert.match(snapshot, /loadDurableTodoSnapshot\(chatId, opened\.session\)/u);
-  assert.match(snapshot, /await loadDurableTodoSnapshot[\s\S]*owner\.isDestroyed\(\)[\s\S]*return snapshot/u);
+  assert.match(
+    snapshot,
+    /await loadDurableTodoSnapshot[\s\S]*owner\.isDestroyed\(\)[\s\S]*return snapshot/u,
+  );
 });

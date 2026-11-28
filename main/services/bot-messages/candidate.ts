@@ -2,7 +2,10 @@ import type { BotToolCandidate } from "../bot-runtime/bot-tool-assembly.js";
 import type { BotDefinition } from "../../../renderer/shared/bots.js";
 import { createMessageBotTool, type MessageBotToolDeps } from "./tool.js";
 /** One fixed declaration; execution binds to the real durable call. */
-export async function messageBotCandidate(botId: string, deps: MessageBotToolDeps): Promise<BotToolCandidate> {
+export async function messageBotCandidate(
+  botId: string,
+  deps: MessageBotToolDeps,
+): Promise<BotToolCandidate> {
   return {
     tool: createMessageBotTool(botId, deps),
     replay: "safe",
@@ -22,7 +25,10 @@ export interface MessageBotOfferDeps extends MessageBotToolDeps {
  * unchanged. Which peers accept messages is read by `list` and when sending;
  * the Bot-message chain limit and peer turns are refused per call.
  */
-export async function messageBotOffer(botId: string, deps: MessageBotOfferDeps): Promise<BotToolCandidate | undefined> {
+export async function messageBotOffer(
+  botId: string,
+  deps: MessageBotOfferDeps,
+): Promise<BotToolCandidate | undefined> {
   if (!(await deps.messagingEnabled())) return undefined;
   const bot = await deps.bot(botId);
   if (!bot || bot.messagesOtherBots === false) return undefined;

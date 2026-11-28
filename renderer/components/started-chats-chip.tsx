@@ -19,14 +19,17 @@ import {
 } from "../shared/child-chats";
 
 function needsPerson(view: StartedChatView): boolean {
-  return !view.tookOver && (view.state === "waiting_for_approval" || view.state === "waiting_for_input");
+  return (
+    !view.tookOver && (view.state === "waiting_for_approval" || view.state === "waiting_for_input")
+  );
 }
 
 function dotClass(view: StartedChatView): string {
   if (needsPerson(view)) return "bg-status-warning";
   if (view.tookOver) return "bg-quaternary";
   if (view.state === "running") return "bg-accent";
-  if (view.state === "done") return view.outcome === "stopped" ? "bg-quaternary" : "bg-status-green";
+  if (view.state === "done")
+    return view.outcome === "stopped" ? "bg-quaternary" : "bg-status-green";
   if (view.state === "failed") return "bg-status-red";
   return "bg-quaternary";
 }
@@ -48,8 +51,11 @@ export function StartedChatsChipView({
   if (!views.length) return null;
   const label = startedChatsChipLabel(views);
   const waiting = views.filter(needsPerson).length;
-  const working = views.filter((view) => startedChatWorking(view) && !view.tookOver && !stopping.has(view.chatId));
-  const fail = (error: unknown, fallback: string) => toast.error(error instanceof Error ? error.message : fallback);
+  const working = views.filter(
+    (view) => startedChatWorking(view) && !view.tookOver && !stopping.has(view.chatId),
+  );
+  const fail = (error: unknown, fallback: string) =>
+    toast.error(error instanceof Error ? error.message : fallback);
   const settle = (ids: readonly string[]) =>
     setStopping((current) => {
       const next = new Set(current);
@@ -81,10 +87,15 @@ export function StartedChatsChipView({
           variant="transparent"
           size="small"
           className="h-7 shrink-0 gap-1.5 px-2 text-secondary"
-          aria-label={waiting > 0 ? `${label}, ${waiting} ${waiting === 1 ? "needs" : "need"} you` : label}
+          aria-label={
+            waiting > 0 ? `${label}, ${waiting} ${waiting === 1 ? "needs" : "need"} you` : label
+          }
           data-started-chats-chip=""
         >
-          <MessagesSquare aria-hidden="true" className={cn("size-4 shrink-0", waiting > 0 && "text-status-warning")} />
+          <MessagesSquare
+            aria-hidden="true"
+            className={cn("size-4 shrink-0", waiting > 0 && "text-status-warning")}
+          />
           <span className="max-w-[12rem] truncate">{label}</span>
         </Button>
       </PopoverTrigger>
@@ -99,8 +110,15 @@ export function StartedChatsChipView({
             const isStopping = stopping.has(view.chatId);
             const canStop = startedChatWorking(view) && !view.tookOver && !isStopping;
             return (
-              <li key={view.chatId} className="flex min-w-0 items-center gap-2 rounded-lg px-2 py-1.5" data-started-chat-row={view.chatId}>
-                <span aria-hidden="true" className={cn("size-1.5 shrink-0 rounded-full", dotClass(view))} />
+              <li
+                key={view.chatId}
+                className="flex min-w-0 items-center gap-2 rounded-lg px-2 py-1.5"
+                data-started-chat-row={view.chatId}
+              >
+                <span
+                  aria-hidden="true"
+                  className={cn("size-1.5 shrink-0 rounded-full", dotClass(view))}
+                />
                 <div className="min-w-0 flex-1">
                   <Text as="p" variant="small-strong" className="truncate">
                     {view.title}
@@ -122,7 +140,13 @@ export function StartedChatsChipView({
                   Open
                 </Button>
                 {canStop ? (
-                  <Button variant="transparent" size="small" className="shrink-0 px-2" aria-label={`Stop “${view.title}”`} onClick={() => stop(view)}>
+                  <Button
+                    variant="transparent"
+                    size="small"
+                    className="shrink-0 px-2"
+                    aria-label={`Stop “${view.title}”`}
+                    onClick={() => stop(view)}
+                  >
                     Stop
                   </Button>
                 ) : null}
@@ -131,7 +155,9 @@ export function StartedChatsChipView({
           })}
         </ul>
         <div className="flex items-center justify-between gap-2 border-t border-separator px-3 py-1.5">
-          <p className="min-w-0 text-small text-tertiary">This chat hears back when each one finishes.</p>
+          <p className="min-w-0 text-small text-tertiary">
+            This chat hears back when each one finishes.
+          </p>
           {working.length > 0 ? (
             <Button variant="transparent" size="small" className="shrink-0 px-2" onClick={stopAll}>
               Stop all
@@ -143,7 +169,13 @@ export function StartedChatsChipView({
   );
 }
 
-export function StartedChatsChip({ leadChatId, views }: { leadChatId: string; views: readonly StartedChatView[] }) {
+export function StartedChatsChip({
+  leadChatId,
+  views,
+}: {
+  leadChatId: string;
+  views: readonly StartedChatView[];
+}) {
   const queryClient = useQueryClient();
   const navigate = useNavigate();
   const onChanged = React.useCallback(() => {
@@ -153,5 +185,12 @@ export function StartedChatsChip({ leadChatId, views }: { leadChatId: string; vi
     (chatId: string) => void navigate({ to: "/chat/$chatId", params: { chatId } }),
     [navigate],
   );
-  return <StartedChatsChipView leadChatId={leadChatId} views={views} onOpen={onOpen} onChanged={onChanged} />;
+  return (
+    <StartedChatsChipView
+      leadChatId={leadChatId}
+      views={views}
+      onOpen={onOpen}
+      onChanged={onChanged}
+    />
+  );
 }

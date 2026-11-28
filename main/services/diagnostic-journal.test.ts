@@ -48,16 +48,16 @@ test("production legacy adapter omits arbitrary messages and secrets", async () 
     ]);
     await flushDiagnosticJournal();
     const contents = await fs.readFile(target, "utf8");
-    assert.doesNotMatch(contents, /provider failed|live-secret|workspace|private|raw provider response/u);
+    assert.doesNotMatch(
+      contents,
+      /provider failed|live-secret|workspace|private|raw provider response/u,
+    );
     const record = contents
       .trim()
       .split("\n")
       .map((line) => JSON.parse(line) as { event: string; fields?: Record<string, unknown> })
       .find((candidate) => candidate.event === "providers-failed");
-    assert.deepEqual(Object.keys(record?.fields ?? {}).sort(), [
-      "errorType",
-      "fingerprint",
-    ]);
+    assert.deepEqual(Object.keys(record?.fields ?? {}).sort(), ["errorType", "fingerprint"]);
   });
 });
 
@@ -73,19 +73,25 @@ test("production Bot failures keep their class and a distinct fingerprint withou
     ]);
     await flushDiagnosticJournal();
     const contents = await fs.readFile(target, "utf8");
-    assert.doesNotMatch(contents, /creation failed|admission failed|acme-private|capabilities changed/u);
+    assert.doesNotMatch(
+      contents,
+      /creation failed|admission failed|acme-private|capabilities changed/u,
+    );
     const records = contents
       .trim()
       .split("\n")
-      .map((line) => JSON.parse(line) as {
-        area: string;
-        fields?: { errorType?: string; fingerprint?: string };
-      })
+      .map(
+        (line) =>
+          JSON.parse(line) as {
+            area: string;
+            fields?: { errorType?: string; fingerprint?: string };
+          },
+      )
       .filter((candidate) => candidate.area === "bots");
-    assert.deepEqual(records.map(({ fields }) => fields?.errorType), [
-      "BotRuntimeInventoryLeaseInvalidError",
-      "BotCapabilityUnavailableError",
-    ]);
+    assert.deepEqual(
+      records.map(({ fields }) => fields?.errorType),
+      ["BotRuntimeInventoryLeaseInvalidError", "BotCapabilityUnavailableError"],
+    );
     assert.notEqual(records[0]?.fields?.fingerprint, records[1]?.fields?.fingerprint);
   });
 });
@@ -111,29 +117,46 @@ test("production journal strips development-only fields from typed callers", asy
 });
 
 test("legacy logging safely classifies cancellation and ignores hostile proxy errors", async () => {
-  for (const profile of ["production", "development"] as const) await withJournal(profile, async () => {
-    const revoked = Proxy.revocable({}, {});
-    revoked.revoke();
-    assert.doesNotThrow(() => writeLegacyDiagnostic("error", "pi", [revoked.proxy]));
-    const inheritsProxy = Object.create(revoked.proxy);
-    assert.doesNotThrow(() => writeLegacyDiagnostic("error", "pi", [inheritsProxy]));
-    assert.doesNotThrow(() => writeLegacyDiagnostic("error", "pi", [{
-      toJSON() { throw new Error("private"); },
-      toString() { throw new Error("private"); },
-    }]));
-    const event = writeLegacyDiagnostic("error", "pi", [new DOMException("private", "AbortError")]);
-    assert.equal(event.code, "cancelled");
-    assert.equal(event.outcome, "cancelled");
-    assert.equal(writeLegacyDiagnostic("warn", "pi", [{ status: 503 }]).code, undefined);
-    assert.equal(writeLegacyDiagnostic("warn", "pi", [{ name: "AbortError" }]).code, undefined);
-  });
+  for (const profile of ["production", "development"] as const)
+    await withJournal(profile, async () => {
+      const revoked = Proxy.revocable({}, {});
+      revoked.revoke();
+      assert.doesNotThrow(() => writeLegacyDiagnostic("error", "pi", [revoked.proxy]));
+      const inheritsProxy = Object.create(revoked.proxy);
+      assert.doesNotThrow(() => writeLegacyDiagnostic("error", "pi", [inheritsProxy]));
+      assert.doesNotThrow(() =>
+        writeLegacyDiagnostic("error", "pi", [
+          {
+            toJSON() {
+              throw new Error("private");
+            },
+            toString() {
+              throw new Error("private");
+            },
+          },
+        ]),
+      );
+      const event = writeLegacyDiagnostic("error", "pi", [
+        new DOMException("private", "AbortError"),
+      ]);
+      assert.equal(event.code, "cancelled");
+      assert.equal(event.outcome, "cancelled");
+      assert.equal(writeLegacyDiagnostic("warn", "pi", [{ status: 503 }]).code, undefined);
+      assert.equal(writeLegacyDiagnostic("warn", "pi", [{ name: "AbortError" }]).code, undefined);
+    });
 });
 
 test("production legacy adapter retains structural SDK causes without serializing envelopes", async () => {
   await withJournal("production", async (target) => {
     const event = writeLegacyDiagnostic("warn", "mcp", [
-      "Skipping private server", { cause: { code: "ECONNREFUSED", status: 503 },
-        message: "private-prompt", headers: { authorization: "private-auth" }, url: "https://private-endpoint", task: "private-task" },
+      "Skipping private server",
+      {
+        cause: { code: "ECONNREFUSED", status: 503 },
+        message: "private-prompt",
+        headers: { authorization: "private-auth" },
+        url: "https://private-endpoint",
+        task: "private-task",
+      },
     ]);
     assert.equal(event.event, "mcp-degraded");
     assert.equal(event.code, "network-failed");
@@ -188,7 +211,11 @@ test("active writes rotate before the cap and remove stale artifacts", async () 
   await withJournal("production", async (target) => {
     await fs.writeFile(`${target}.4`, "stale", { mode: 0o600 });
     await fs.writeFile(`${target}.tmp`, "stale", { mode: 0o600 });
-    initDiagnosticJournal({ targetPath: target, profile: "production", sessionId: "session-rotate" });
+    initDiagnosticJournal({
+      targetPath: target,
+      profile: "production",
+      sessionId: "session-rotate",
+    });
     await flushDiagnosticJournal();
     const currentBytes = (await fs.stat(target)).size;
     await fs.appendFile(target, "x".repeat(MAX_DIAGNOSTIC_LOG_BYTES - currentBytes - 64));
@@ -236,19 +263,36 @@ test("a retained rotation is pruned on the first append after it expires mid-ses
   let current = new Date("2026-08-01T00:00:00.000Z");
   try {
     const rotation = `${target}.1`;
-    await fs.writeFile(rotation, `${JSON.stringify({ version: 1, at: current.toISOString() })}\n`, { mode: 0o600 });
+    await fs.writeFile(rotation, `${JSON.stringify({ version: 1, at: current.toISOString() })}\n`, {
+      mode: 0o600,
+    });
     await fs.utimes(rotation, current, current);
     initDiagnosticJournal({ targetPath: target, profile: "production", now: () => current });
-    writeDiagnosticEvent({ level: "warn", area: "diagnostics", event: "retention-check", fields: { sequence: 1 } });
+    writeDiagnosticEvent({
+      level: "warn",
+      area: "diagnostics",
+      event: "retention-check",
+      fields: { sequence: 1 },
+    });
     await flushDiagnosticJournal();
 
     current = new Date(current.getTime() + MAX_DIAGNOSTIC_LOG_AGE_MS - 60_000);
-    writeDiagnosticEvent({ level: "warn", area: "diagnostics", event: "retention-check", fields: { sequence: 2 } });
+    writeDiagnosticEvent({
+      level: "warn",
+      area: "diagnostics",
+      event: "retention-check",
+      fields: { sequence: 2 },
+    });
     await flushDiagnosticJournal();
     await fs.stat(rotation);
 
     current = new Date(current.getTime() + 120_000);
-    writeDiagnosticEvent({ level: "warn", area: "diagnostics", event: "retention-check", fields: { sequence: 3 } });
+    writeDiagnosticEvent({
+      level: "warn",
+      area: "diagnostics",
+      event: "retention-check",
+      fields: { sequence: 3 },
+    });
     await flushDiagnosticJournal();
     await assert.rejects(fs.stat(rotation), { code: "ENOENT" });
   } finally {
@@ -261,7 +305,12 @@ test("a burst of lines lands complete and in order", async () => {
   await withJournal("production", async (target) => {
     await flushDiagnosticJournal();
     for (let index = 0; index < 200; index += 1) {
-      writeDiagnosticEvent({ level: "warn", area: "diagnostics", event: "backpressure-fixture", fields: { sequence: index } });
+      writeDiagnosticEvent({
+        level: "warn",
+        area: "diagnostics",
+        event: "backpressure-fixture",
+        fields: { sequence: index },
+      });
       if (index % 50 === 0) await Promise.resolve();
     }
     await flushDiagnosticJournal();
@@ -271,7 +320,10 @@ test("a burst of lines lands complete and in order", async () => {
       .map((line) => JSON.parse(line) as { event: string; fields?: { sequence?: number } })
       .filter((record) => record.event === "backpressure-fixture")
       .map((record) => record.fields?.sequence);
-    assert.deepEqual(sequences, Array.from({ length: 200 }, (_, index) => index));
+    assert.deepEqual(
+      sequences,
+      Array.from({ length: 200 }, (_, index) => index),
+    );
     assert.equal(diagnosticJournalStatus().pendingWrites, 0);
   });
 });
@@ -282,7 +334,12 @@ test("a batch that crosses the size cap rotates without splitting or losing line
     const currentBytes = (await fs.stat(target)).size;
     await fs.appendFile(target, `${"x".repeat(MAX_DIAGNOSTIC_LOG_BYTES - currentBytes - 2_000)}\n`);
     for (let index = 0; index < 100; index += 1) {
-      writeDiagnosticEvent({ level: "warn", area: "diagnostics", event: "rotation-fixture", fields: { sequence: index } });
+      writeDiagnosticEvent({
+        level: "warn",
+        area: "diagnostics",
+        event: "rotation-fixture",
+        fields: { sequence: index },
+      });
     }
     await flushDiagnosticJournal();
     const sequences: unknown[] = [];
@@ -294,7 +351,10 @@ test("a batch that crosses the size cap rotates without splitting or losing line
         if (record.event === "rotation-fixture") sequences.push(record.fields?.sequence);
       }
     }
-    assert.deepEqual(sequences, Array.from({ length: 100 }, (_, index) => index));
+    assert.deepEqual(
+      sequences,
+      Array.from({ length: 100 }, (_, index) => index),
+    );
   });
 });
 
@@ -302,7 +362,12 @@ test("a log directory removed mid-session is recreated owner-only on the next ap
   await withJournal("production", async (target, dir) => {
     await flushDiagnosticJournal();
     await fs.rm(dir, { recursive: true, force: true });
-    writeDiagnosticEvent({ level: "warn", area: "diagnostics", event: "retention-check", fields: { sequence: 9 } });
+    writeDiagnosticEvent({
+      level: "warn",
+      area: "diagnostics",
+      event: "retention-check",
+      fields: { sequence: 9 },
+    });
     await flushDiagnosticJournal();
     assert.match(await fs.readFile(target, "utf8"), /"sequence":9/u);
     assert.equal((await fs.stat(dir)).mode & 0o777, 0o700);
@@ -318,13 +383,23 @@ test("a log directory swapped for a symlink mid-session is not written through",
   try {
     await fs.mkdir(outside);
     initDiagnosticJournal({ targetPath: path.join(root, "aiden.log"), profile: "production" });
-    writeDiagnosticEvent({ level: "warn", area: "diagnostics", event: "retention-check", fields: { sequence: 1 } });
+    writeDiagnosticEvent({
+      level: "warn",
+      area: "diagnostics",
+      event: "retention-check",
+      fields: { sequence: 1 },
+    });
     await flushDiagnosticJournal();
     assert.equal(diagnosticJournalStatus().writeFailed, false);
 
     await fs.rename(root, path.join(dir, "logs-moved"));
     await fs.symlink(outside, root);
-    writeDiagnosticEvent({ level: "warn", area: "diagnostics", event: "retention-check", fields: { sequence: 2 } });
+    writeDiagnosticEvent({
+      level: "warn",
+      area: "diagnostics",
+      event: "retention-check",
+      fields: { sequence: 2 },
+    });
     await flushDiagnosticJournal();
 
     assert.deepEqual(await fs.readdir(outside), []);
@@ -341,7 +416,12 @@ test("lines lost to a failed append are reported as dropped", async () => {
     // A second link makes the journal no longer an owned regular file.
     await fs.link(target, path.join(dir, "second-link"));
     for (let index = 0; index < 3; index += 1) {
-      writeDiagnosticEvent({ level: "warn", area: "diagnostics", event: "backpressure-fixture", fields: { sequence: index } });
+      writeDiagnosticEvent({
+        level: "warn",
+        area: "diagnostics",
+        event: "backpressure-fixture",
+        fields: { sequence: index },
+      });
     }
     await flushDiagnosticJournal();
 
@@ -371,7 +451,11 @@ test("an expired active journal is segmented at startup and removed", async () =
   const target = path.join(dir, "aiden.log");
   const current = new Date("2026-08-27T12:00:00.000Z");
   try {
-    await fs.writeFile(target, `${JSON.stringify({ version: 1, at: "2025-01-01T00:00:00.000Z" })}\n`, { mode: 0o600 });
+    await fs.writeFile(
+      target,
+      `${JSON.stringify({ version: 1, at: "2025-01-01T00:00:00.000Z" })}\n`,
+      { mode: 0o600 },
+    );
     const old = new Date(current.getTime() - MAX_DIAGNOSTIC_LOG_AGE_MS - 1_000);
     await fs.utimes(target, old, old);
     initDiagnosticJournal({ targetPath: target, profile: "production", now: () => current });
@@ -388,13 +472,18 @@ test("legacy development logs are preserved owner-only but excluded from the str
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-diagnostic-legacy-"));
   const target = path.join(dir, "aiden-dev.log");
   try {
-    await fs.writeFile(target, "=== Aiden dev session ===\npassword=legacy-secret\n", { mode: 0o600 });
+    await fs.writeFile(target, "=== Aiden dev session ===\npassword=legacy-secret\n", {
+      mode: 0o600,
+    });
     await fs.writeFile(path.join(dir, "aiden-dev.prev.log"), "legacy", { mode: 0o600 });
     initDiagnosticJournal({ targetPath: target, profile: "development" });
     await flushDiagnosticJournal();
     assert.doesNotMatch(await fs.readFile(target, "utf8"), /legacy-secret|Aiden dev session/u);
     await assert.rejects(fs.stat(path.join(dir, "aiden-dev.prev.log")), { code: "ENOENT" });
-    assert.match(await fs.readFile(path.join(dir, "aiden-dev.legacy.log"), "utf8"), /legacy-secret/u);
+    assert.match(
+      await fs.readFile(path.join(dir, "aiden-dev.legacy.log"), "utf8"),
+      /legacy-secret/u,
+    );
     assert.equal((await fs.stat(path.join(dir, "aiden-dev.legacy.log"))).mode & 0o777, 0o600);
     assert.equal(await fs.readFile(path.join(dir, "aiden-dev.legacy.prev.log"), "utf8"), "legacy");
   } finally {
@@ -409,16 +498,39 @@ test("active and fatal segments rotate by age without a restart", async () => {
   let current = new Date("2026-08-01T00:00:00.000Z");
   try {
     initDiagnosticJournal({ targetPath: target, profile: "production", now: () => current });
-    writeDiagnosticEvent({ level: "warn", area: "diagnostics", event: "retention-check", fields: { sequence: 1 } });
-    writeDiagnosticEventSync({ level: "fatal", area: "app", event: "app-failed", fields: { sequence: 1 } });
+    writeDiagnosticEvent({
+      level: "warn",
+      area: "diagnostics",
+      event: "retention-check",
+      fields: { sequence: 1 },
+    });
+    writeDiagnosticEventSync({
+      level: "fatal",
+      area: "app",
+      event: "app-failed",
+      fields: { sequence: 1 },
+    });
     await flushDiagnosticJournal();
     current = new Date(current.getTime() + MAX_DIAGNOSTIC_LOG_AGE_MS + 1_000);
-    writeDiagnosticEvent({ level: "warn", area: "diagnostics", event: "retention-check", fields: { sequence: 2 } });
-    writeDiagnosticEventSync({ level: "fatal", area: "app", event: "app-failed", fields: { sequence: 2 } });
+    writeDiagnosticEvent({
+      level: "warn",
+      area: "diagnostics",
+      event: "retention-check",
+      fields: { sequence: 2 },
+    });
+    writeDiagnosticEventSync({
+      level: "fatal",
+      area: "app",
+      event: "app-failed",
+      fields: { sequence: 2 },
+    });
     await flushDiagnosticJournal();
     assert.doesNotMatch(await fs.readFile(target, "utf8"), /"sequence":1/u);
     await assert.rejects(fs.stat(`${target}.1`), { code: "ENOENT" });
-    assert.doesNotMatch(await fs.readFile(path.join(dir, "aiden-fatal.log"), "utf8"), /"sequence":1/u);
+    assert.doesNotMatch(
+      await fs.readFile(path.join(dir, "aiden-fatal.log"), "utf8"),
+      /"sequence":1/u,
+    );
   } finally {
     await flushDiagnosticJournal();
     await fs.rm(dir, { recursive: true, force: true });
@@ -431,12 +543,22 @@ test("fatal retention age survives restarts and expired legacy archives are prun
   let current = new Date("2026-08-01T00:00:00.000Z");
   try {
     initDiagnosticJournal({ targetPath: target, profile: "development", now: () => current });
-    writeDiagnosticEventSync({ level: "fatal", area: "app", event: "app-failed", fields: { sequence: 1 } });
+    writeDiagnosticEventSync({
+      level: "fatal",
+      area: "app",
+      event: "app-failed",
+      fields: { sequence: 1 },
+    });
     await flushDiagnosticJournal();
 
     current = new Date(current.getTime() + 6 * 24 * 60 * 60 * 1_000);
     initDiagnosticJournal({ targetPath: target, profile: "development", now: () => current });
-    writeDiagnosticEventSync({ level: "fatal", area: "app", event: "app-failed", fields: { sequence: 2 } });
+    writeDiagnosticEventSync({
+      level: "fatal",
+      area: "app",
+      event: "app-failed",
+      fields: { sequence: 2 },
+    });
     await flushDiagnosticJournal();
 
     const legacy = path.join(dir, "aiden-dev.legacy.log");
@@ -450,7 +572,10 @@ test("fatal retention age survives restarts and expired legacy archives are prun
     current = new Date(current.getTime() + 2 * 24 * 60 * 60 * 1_000);
     initDiagnosticJournal({ targetPath: target, profile: "development", now: () => current });
     await flushDiagnosticJournal();
-    assert.doesNotMatch(await fs.readFile(path.join(dir, "aiden-fatal.log"), "utf8"), /"sequence":1/u);
+    assert.doesNotMatch(
+      await fs.readFile(path.join(dir, "aiden-fatal.log"), "utf8"),
+      /"sequence":1/u,
+    );
     await assert.rejects(fs.stat(legacy), { code: "ENOENT" });
     await assert.rejects(fs.stat(legacyPrevious), { code: "ENOENT" });
   } finally {
@@ -465,11 +590,21 @@ test("a retention sweep cannot erase a synchronous fatal written at its boundary
   let current = new Date("2026-08-01T00:00:00.000Z");
   try {
     initDiagnosticJournal({ targetPath: target, profile: "production", now: () => current });
-    writeDiagnosticEventSync({ level: "fatal", area: "app", event: "app-failed", fields: { sequence: 1 } });
+    writeDiagnosticEventSync({
+      level: "fatal",
+      area: "app",
+      event: "app-failed",
+      fields: { sequence: 1 },
+    });
     await flushDiagnosticJournal();
     current = new Date(current.getTime() + MAX_DIAGNOSTIC_LOG_AGE_MS + 1_000);
     const sweep = pruneDiagnosticJournalRetention(current);
-    writeDiagnosticEventSync({ level: "fatal", area: "app", event: "app-failed", fields: { sequence: 2 } });
+    writeDiagnosticEventSync({
+      level: "fatal",
+      area: "app",
+      event: "app-failed",
+      fields: { sequence: 2 },
+    });
     await sweep;
     const fatal = await fs.readFile(path.join(dir, "aiden-fatal.log"), "utf8");
     assert.match(fatal, /"sequence":2/u);
@@ -546,7 +681,10 @@ test("list and delete are exhaustive without touching neighboring state", async 
     await fs.writeFile(`${target}.1`, "{}\n", { mode: 0o600 });
     assert.equal((await listDiagnosticJournalFiles()).length, 3);
     await deleteDiagnosticJournalFiles();
-    assert.deepEqual((await listDiagnosticJournalFiles()).sort(), [target, path.join(dir, "aiden-fatal.log")].sort());
+    assert.deepEqual(
+      (await listDiagnosticJournalFiles()).sort(),
+      [target, path.join(dir, "aiden-fatal.log")].sort(),
+    );
     assert.equal(await fs.readFile(target, "utf8"), "");
     assert.equal(await fs.readFile(authoritative, "utf8"), "keep");
   });
@@ -569,7 +707,9 @@ test("unusable paths never throw and expose an in-memory failure status", async 
 
 function deferred() {
   let resolve!: () => void;
-  const promise = new Promise<void>((done) => { resolve = done; });
+  const promise = new Promise<void>((done) => {
+    resolve = done;
+  });
   return { promise, resolve };
 }
 
@@ -581,13 +721,17 @@ async function withHeldDeletion(
   const remove = fsPromises.rm;
   const started = deferred();
   const held = deferred();
-  const removeMock = context.mock.method(fsPromises, "rm", async (...args: Parameters<typeof remove>) => {
-    if (args[0] === target) {
-      started.resolve();
-      await held.promise;
-    }
-    return remove(...args);
-  });
+  const removeMock = context.mock.method(
+    fsPromises,
+    "rm",
+    async (...args: Parameters<typeof remove>) => {
+      if (args[0] === target) {
+        started.resolve();
+        await held.promise;
+      }
+      return remove(...args);
+    },
+  );
   syncBuiltinESMExports();
   const deletion = deleteDiagnosticJournalFiles();
   // Production flush deadlines are unref'd; keep blocked synthetic I/O alive.
@@ -621,7 +765,12 @@ test("journal deletion preserves later accepted writes even when they would rota
     const currentBytes = (await fs.stat(target)).size;
     await fs.appendFile(target, "x".repeat(MAX_DIAGNOSTIC_LOG_BYTES - currentBytes - 64));
     await withHeldDeletion(context, target, async () => {
-      writeDiagnosticEvent({ level: "warn", area: "diagnostics", event: "rotation-fixture", fields: { sequence: 27 } });
+      writeDiagnosticEvent({
+        level: "warn",
+        area: "diagnostics",
+        event: "rotation-fixture",
+        fields: { sequence: 27 },
+      });
       // A broken queue can drain the new append while removal is held, erasing it
       // when deletion resumes. A correct queue remains blocked behind deletion.
       await flushDiagnosticJournal(100);
@@ -653,9 +802,19 @@ test("snapshots admitted during journal deletion exclude deleted records", async
 test("deletion preserves synchronous fatal records accepted after its request", async () => {
   await withJournal("production", async (_target, dir) => {
     await flushDiagnosticJournal();
-    writeDiagnosticEventSync({ level: "fatal", area: "app", event: "app-failed", fields: { sequence: 1 } });
+    writeDiagnosticEventSync({
+      level: "fatal",
+      area: "app",
+      event: "app-failed",
+      fields: { sequence: 1 },
+    });
     const deletion = deleteDiagnosticJournalFiles();
-    writeDiagnosticEventSync({ level: "fatal", area: "app", event: "app-failed", fields: { sequence: 2 } });
+    writeDiagnosticEventSync({
+      level: "fatal",
+      area: "app",
+      event: "app-failed",
+      fields: { sequence: 2 },
+    });
     await deletion;
     const contents = await fs.readFile(path.join(dir, "aiden-fatal.log"), "utf8");
     assert.doesNotMatch(contents, /"sequence":1/u);
@@ -667,10 +826,15 @@ test("failed journal deletion rejects, reports failure, and leaves the queue usa
   await withJournal("production", async (target) => {
     await flushDiagnosticJournal();
     const remove = fsPromises.rm;
-    const removeMock = context.mock.method(fsPromises, "rm", async (...args: Parameters<typeof remove>) => {
-      if (args[0] === target) throw Object.assign(new Error("Synthetic removal failure"), { code: "EACCES" });
-      return remove(...args);
-    });
+    const removeMock = context.mock.method(
+      fsPromises,
+      "rm",
+      async (...args: Parameters<typeof remove>) => {
+        if (args[0] === target)
+          throw Object.assign(new Error("Synthetic removal failure"), { code: "EACCES" });
+        return remove(...args);
+      },
+    );
     syncBuiltinESMExports();
     try {
       await assert.rejects(deleteDiagnosticJournalFiles(), { code: "EACCES" });
@@ -679,7 +843,12 @@ test("failed journal deletion rejects, reports failure, and leaves the queue usa
       removeMock.mock.restore();
       syncBuiltinESMExports();
     }
-    writeDiagnosticEvent({ level: "warn", area: "diagnostics", event: "retention-check", fields: { sequence: 27 } });
+    writeDiagnosticEvent({
+      level: "warn",
+      area: "diagnostics",
+      event: "retention-check",
+      fields: { sequence: 27 },
+    });
     await flushDiagnosticJournal();
     assert.match(await fs.readFile(target, "utf8"), /"sequence":27/u);
     await deleteDiagnosticJournalFiles();
@@ -687,16 +856,40 @@ test("failed journal deletion rejects, reports failure, and leaves the queue usa
   });
 });
 
-
 test("successive journal deletions retain only writes admitted after the last request", async () => {
   await withJournal("production", async (target, dir) => {
-    writeDiagnosticEvent({ level: "warn", area: "diagnostics", event: "retention-check", fields: { sequence: 1 } });
+    writeDiagnosticEvent({
+      level: "warn",
+      area: "diagnostics",
+      event: "retention-check",
+      fields: { sequence: 1 },
+    });
     const first = deleteDiagnosticJournalFiles();
-    writeDiagnosticEvent({ level: "warn", area: "diagnostics", event: "retention-check", fields: { sequence: 2 } });
-    writeDiagnosticEventSync({ level: "fatal", area: "app", event: "app-failed", fields: { sequence: 2 } });
+    writeDiagnosticEvent({
+      level: "warn",
+      area: "diagnostics",
+      event: "retention-check",
+      fields: { sequence: 2 },
+    });
+    writeDiagnosticEventSync({
+      level: "fatal",
+      area: "app",
+      event: "app-failed",
+      fields: { sequence: 2 },
+    });
     const second = deleteDiagnosticJournalFiles();
-    writeDiagnosticEvent({ level: "warn", area: "diagnostics", event: "retention-check", fields: { sequence: 3 } });
-    writeDiagnosticEventSync({ level: "fatal", area: "app", event: "app-failed", fields: { sequence: 3 } });
+    writeDiagnosticEvent({
+      level: "warn",
+      area: "diagnostics",
+      event: "retention-check",
+      fields: { sequence: 3 },
+    });
+    writeDiagnosticEventSync({
+      level: "fatal",
+      area: "app",
+      event: "app-failed",
+      fields: { sequence: 3 },
+    });
     await Promise.all([first, second, flushDiagnosticJournal()]);
     for (const file of [target, path.join(dir, "aiden-fatal.log")]) {
       const contents = await fs.readFile(file, "utf8");
@@ -717,32 +910,60 @@ test("fatal deletion failure is reported without poisoning later journal operati
     assert.equal(diagnosticJournalStatus().writeFailed, true);
     await fs.rmdir(fatal);
     await deleteDiagnosticJournalFiles();
-    writeDiagnosticEvent({ level: "warn", area: "diagnostics", event: "retention-check", fields: { sequence: 27 } });
-    writeDiagnosticEventSync({ level: "fatal", area: "app", event: "app-failed", fields: { sequence: 27 } });
+    writeDiagnosticEvent({
+      level: "warn",
+      area: "diagnostics",
+      event: "retention-check",
+      fields: { sequence: 27 },
+    });
+    writeDiagnosticEventSync({
+      level: "fatal",
+      area: "app",
+      event: "app-failed",
+      fields: { sequence: 27 },
+    });
     await flushDiagnosticJournal();
-    for (const file of [target, fatal]) assert.match(await fs.readFile(file, "utf8"), /"sequence":27/u);
+    for (const file of [target, fatal])
+      assert.match(await fs.readFile(file, "utf8"), /"sequence":27/u);
   });
 });
 
 test("a pre-deletion snapshot retains its fatal evidence across a later fatal reset", async (context) => {
   await withJournal("production", async (_target, dir) => {
     await flushDiagnosticJournal();
-    writeDiagnosticEventSync({ level: "fatal", area: "app", event: "app-failed", fields: { sequence: 1 } });
+    writeDiagnosticEventSync({
+      level: "fatal",
+      area: "app",
+      event: "app-failed",
+      fields: { sequence: 1 },
+    });
     const destination = path.join(dir, "before-delete");
     const mkdir = fsPromises.mkdir;
     const started = deferred();
     const held = deferred();
-    const mkdirMock = context.mock.method(fsPromises, "mkdir", async (...args: Parameters<typeof mkdir>) => {
-      if (args[0] === destination) { started.resolve(); await held.promise; }
-      return mkdir(...args);
-    });
+    const mkdirMock = context.mock.method(
+      fsPromises,
+      "mkdir",
+      async (...args: Parameters<typeof mkdir>) => {
+        if (args[0] === destination) {
+          started.resolve();
+          await held.promise;
+        }
+        return mkdir(...args);
+      },
+    );
     syncBuiltinESMExports();
     const snapshot = snapshotDiagnosticJournalFiles(destination);
     let deletion: Promise<void> | undefined;
     try {
       await started.promise;
       deletion = deleteDiagnosticJournalFiles();
-      writeDiagnosticEventSync({ level: "fatal", area: "app", event: "app-failed", fields: { sequence: 2 } });
+      writeDiagnosticEventSync({
+        level: "fatal",
+        area: "app",
+        event: "app-failed",
+        fields: { sequence: 2 },
+      });
     } finally {
       held.resolve();
       await snapshot;
@@ -767,16 +988,28 @@ test("fatal retention finishes before queued general maintenance can cross a del
     await flushDiagnosticJournal();
     let current = new Date("2026-08-01T00:00:00.000Z");
     initDiagnosticJournal({ targetPath: target, profile: "production", now: () => current });
-    writeDiagnosticEventSync({ level: "fatal", area: "app", event: "app-failed", fields: { sequence: 1 } });
+    writeDiagnosticEventSync({
+      level: "fatal",
+      area: "app",
+      event: "app-failed",
+      fields: { sequence: 1 },
+    });
     await flushDiagnosticJournal();
     current = new Date(current.getTime() + MAX_DIAGNOSTIC_LOG_AGE_MS + 1_000);
     const stat = fsPromises.lstat;
     const started = deferred();
     const held = deferred();
-    const statMock = context.mock.method(fsPromises, "lstat", async (...args: Parameters<typeof stat>) => {
-      if (args[0] === target) { started.resolve(); await held.promise; }
-      return stat(...args);
-    });
+    const statMock = context.mock.method(
+      fsPromises,
+      "lstat",
+      async (...args: Parameters<typeof stat>) => {
+        if (args[0] === target) {
+          started.resolve();
+          await held.promise;
+        }
+        return stat(...args);
+      },
+    );
     syncBuiltinESMExports();
     const sweep = pruneDiagnosticJournalRetention(current);
     let deletion: Promise<void> | undefined;
@@ -784,7 +1017,12 @@ test("fatal retention finishes before queued general maintenance can cross a del
       await started.promise;
       assert.equal(await fs.readFile(path.join(dir, "aiden-fatal.log"), "utf8"), "");
       deletion = deleteDiagnosticJournalFiles();
-      writeDiagnosticEventSync({ level: "fatal", area: "app", event: "app-failed", fields: { sequence: 2 } });
+      writeDiagnosticEventSync({
+        level: "fatal",
+        area: "app",
+        event: "app-failed",
+        fields: { sequence: 2 },
+      });
     } finally {
       held.resolve();
       await sweep;
@@ -798,13 +1036,33 @@ test("fatal retention finishes before queued general maintenance can cross a del
 
 test("snapshot admission precedes an immediately requested journal deletion", async () => {
   await withJournal("production", async (target, dir) => {
-    writeDiagnosticEvent({ level: "warn", area: "diagnostics", event: "retention-check", fields: { sequence: 1 } });
-    writeDiagnosticEventSync({ level: "fatal", area: "app", event: "app-failed", fields: { sequence: 1 } });
+    writeDiagnosticEvent({
+      level: "warn",
+      area: "diagnostics",
+      event: "retention-check",
+      fields: { sequence: 1 },
+    });
+    writeDiagnosticEventSync({
+      level: "fatal",
+      area: "app",
+      event: "app-failed",
+      fields: { sequence: 1 },
+    });
     const destination = path.join(dir, "snapshot");
     const snapshot = snapshotDiagnosticJournalFiles(destination);
     const deletion = deleteDiagnosticJournalFiles();
-    writeDiagnosticEvent({ level: "warn", area: "diagnostics", event: "retention-check", fields: { sequence: 2 } });
-    writeDiagnosticEventSync({ level: "fatal", area: "app", event: "app-failed", fields: { sequence: 2 } });
+    writeDiagnosticEvent({
+      level: "warn",
+      area: "diagnostics",
+      event: "retention-check",
+      fields: { sequence: 2 },
+    });
+    writeDiagnosticEventSync({
+      level: "fatal",
+      area: "app",
+      event: "app-failed",
+      fields: { sequence: 2 },
+    });
     await Promise.all([snapshot, deletion, flushDiagnosticJournal()]);
     for (const file of [path.basename(target), "aiden-fatal.log"]) {
       const before = await fs.readFile(path.join(destination, file), "utf8");
@@ -827,7 +1085,12 @@ test("a fatal snapshot publication failure preserves its destination and release
     assert.equal(await fs.readFile(occupied, "utf8"), "keep");
     assert.equal(diagnosticJournalStatus().writeFailed, true);
     await deleteDiagnosticJournalFiles();
-    writeDiagnosticEventSync({ level: "fatal", area: "app", event: "app-failed", fields: { sequence: 2 } });
+    writeDiagnosticEventSync({
+      level: "fatal",
+      area: "app",
+      event: "app-failed",
+      fields: { sequence: 2 },
+    });
     const next = path.join(dir, "next-snapshot");
     await snapshotDiagnosticJournalFiles(next);
     assert.match(await fs.readFile(path.join(next, "aiden-fatal.log"), "utf8"), /"sequence":2/u);
@@ -836,18 +1099,30 @@ test("a fatal snapshot publication failure preserves its destination and release
 
 test("what is passed beside an event reaches the observer and never the journal", async () => {
   await withJournal("production", async (target, dir) => {
-    const rawError = { message: "reply: my landlord refuses", stack: "at /Users/jane/secret-plan/x.js:1:1" };
+    const rawError = {
+      message: "reply: my landlord refuses",
+      stack: "at /Users/jane/secret-plan/x.js:1:1",
+    };
     const seen: unknown[] = [];
     observeDiagnosticEvents((event, detail) => seen.push([event.event, detail?.rawError]));
     try {
-      writeDiagnosticEvent({ level: "error", area: "renderer", event: "renderer-global-error", outcome: "failed" }, { rawError });
-      writeDiagnosticEventSync({ level: "fatal", area: "app", event: "uncaught-exception", outcome: "failed" }, { rawError });
+      writeDiagnosticEvent(
+        { level: "error", area: "renderer", event: "renderer-global-error", outcome: "failed" },
+        { rawError },
+      );
+      writeDiagnosticEventSync(
+        { level: "fatal", area: "app", event: "uncaught-exception", outcome: "failed" },
+        { rawError },
+      );
       await flushDiagnosticJournal();
     } finally {
       observeDiagnosticEvents(undefined);
     }
 
-    assert.deepEqual(seen, [["renderer-global-error", rawError], ["uncaught-exception", rawError]]);
+    assert.deepEqual(seen, [
+      ["renderer-global-error", rawError],
+      ["uncaught-exception", rawError],
+    ]);
     for (const file of [target, path.join(dir, "aiden-fatal.log")]) {
       const written = await fs.readFile(file, "utf8");
       assert.doesNotMatch(written, /landlord|secret-plan|jane/u);
@@ -858,7 +1133,11 @@ test("what is passed beside an event reaches the observer and never the journal"
 test("the observer sees events the journal drops, and its failures stay out of the writer", async () => {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-diagnostic-journal-"));
   try {
-    initDiagnosticJournal({ targetPath: path.join(dir, "aiden.log"), profile: "production", writeMode: "fatal-only" });
+    initDiagnosticJournal({
+      targetPath: path.join(dir, "aiden.log"),
+      profile: "production",
+      writeMode: "fatal-only",
+    });
     const seen: string[] = [];
     observeDiagnosticEvents((event) => {
       seen.push(event.event);
@@ -866,8 +1145,12 @@ test("the observer sees events the journal drops, and its failures stay out of t
       writeDiagnosticEvent({ level: "warn", area: "diagnostics", event: "retention-check" });
       throw new Error("observer failed");
     });
-    assert.doesNotThrow(() => writeDiagnosticEvent({ level: "error", area: "electron", event: "child-process-gone" }));
-    assert.doesNotThrow(() => writeDiagnosticEventSync({ level: "fatal", area: "app", event: "uncaught-exception" }));
+    assert.doesNotThrow(() =>
+      writeDiagnosticEvent({ level: "error", area: "electron", event: "child-process-gone" }),
+    );
+    assert.doesNotThrow(() =>
+      writeDiagnosticEventSync({ level: "fatal", area: "app", event: "uncaught-exception" }),
+    );
     assert.deepEqual(seen, ["child-process-gone", "uncaught-exception"]);
   } finally {
     observeDiagnosticEvents(undefined);

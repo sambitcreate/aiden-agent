@@ -16,19 +16,38 @@ import { PairingRequestSheet } from "../components/remote-pairing-request-sheet"
 import { useQueryClient } from "@tanstack/react-query";
 import { appControlsApi } from "../lib/ipc";
 import * as React from "react";
-import { appApi, chatsApi, claimChatHandoff, localRunsApi, onNotification, quickChatApi, settingsApi, workspacesApi } from "../lib/ipc";
+import {
+  appApi,
+  chatsApi,
+  claimChatHandoff,
+  localRunsApi,
+  onNotification,
+  quickChatApi,
+  settingsApi,
+  workspacesApi,
+} from "../lib/ipc";
 import { parseSettingsSection, settingsLocation } from "../lib/settings-section";
 import { consumePendingChatHandoff, notifyPendingChatHandoff } from "../lib/chat-handoff-bridge";
 import { seedComposerAttachments } from "../lib/composer-draft-store";
 import type { Attachment } from "../lib/types";
-import { mirrorNewChatModelToHost, persistModelSelection, subscribeHostNewChatModel } from "../lib/use-model-selection";
+import {
+  mirrorNewChatModelToHost,
+  persistModelSelection,
+  subscribeHostNewChatModel,
+} from "../lib/use-model-selection";
 import { useTheme } from "../lib/use-theme";
 import { useActiveWorkspace, WorkspaceProvider } from "../lib/workspace-context";
 import { WorkspaceTerminalProvider, useWorkspaceTerminal } from "../components/terminal-drawer";
 import { EnvironmentPanelProvider, useEnvironmentPanelCore } from "../components/environment-panel";
 import { toast } from "../components/ui";
 import { RoutedBotPanelProvider, useBotPanelActions } from "./bots/bot-panel-context";
-import { botChatPath, botChatRouteBotId, botListLocation, environmentToggleTarget, isBotsPath } from "../lib/bot-routes";
+import {
+  botChatPath,
+  botChatRouteBotId,
+  botListLocation,
+  environmentToggleTarget,
+  isBotsPath,
+} from "../lib/bot-routes";
 import { AssistantDock } from "../components/assistant/assistant-dock";
 import { LiveAppControlLayer } from "../components/assistant/live-app-control-layer";
 import { queryKeys, upsertCreatedWorkspaceInCache } from "../lib/queries";
@@ -42,7 +61,11 @@ import {
 } from "../lib/lifecycle-guard";
 import { CommandSystemProvider, useCommandHandler, useCommandSystem } from "../lib/command-system";
 import { NewChatActionsProvider, type NewChatActions } from "../lib/new-chat-actions";
-import { chatIdFromPath, draftWorkspaceMenu, requestDraftWorkspaceMenu } from "../lib/draft-workspace-menu";
+import {
+  chatIdFromPath,
+  draftWorkspaceMenu,
+  requestDraftWorkspaceMenu,
+} from "../lib/draft-workspace-menu";
 import { AppCommandPalette } from "../components/command-palette";
 import { LiveChatToolsHost } from "./live-chat-tools-host";
 import { KeyboardRegions } from "../components/keyboard-regions";
@@ -162,16 +185,15 @@ function RootContent() {
     [queryClient],
   );
   const reconcileDetachedLifecycleChat = React.useCallback(
-    (
-      owner:
-        | { chatId: string; workspaceId: string }
-        | DetachedLifecycleChatReconciliation,
-    ) => {
+    (owner: { chatId: string; workspaceId: string } | DetachedLifecycleChatReconciliation) => {
       const captured = "streamIds" in owner ? owner : captureDetachedLifecycleChat(owner);
       return (async () => {
         try {
           await reconcileChatCacheAfterIdle(owner.chatId);
-          const snapshot = parseChatActivitySnapshot(await chatsApi.activitySnapshot(), new Set([owner.chatId]));
+          const snapshot = parseChatActivitySnapshot(
+            await chatsApi.activitySnapshot(),
+            new Set([owner.chatId]),
+          );
           if (!snapshot || !captured) return;
           clearInactiveDetachedLifecycleChat(captured, new Set(snapshot.activeChatIds));
         } catch {
@@ -491,7 +513,11 @@ function RootContent() {
         payload && typeof payload === "object"
           ? (payload as { kind?: unknown; workspace?: Workspace })
           : undefined;
-      if (update?.kind === "created" && update.workspace && typeof update.workspace.id === "string") {
+      if (
+        update?.kind === "created" &&
+        update.workspace &&
+        typeof update.workspace.id === "string"
+      ) {
         upsertCreatedWorkspaceInCache(queryClient, update.workspace);
         return;
       }
@@ -520,11 +546,17 @@ function RootContent() {
 
   React.useEffect(() => {
     return onNotification("chats:follow-through-changed", (payload: unknown) => {
-      const update = payload && typeof payload === "object" ? (payload as { chatId?: unknown; transcript?: unknown }) : {};
+      const update =
+        payload && typeof payload === "object"
+          ? (payload as { chatId?: unknown; transcript?: unknown })
+          : {};
       const chatId = typeof update.chatId === "string" && update.chatId ? update.chatId : undefined;
-      void queryClient.invalidateQueries({ queryKey: ["chat-follow-through", ...(chatId ? [chatId] : [])] });
+      void queryClient.invalidateQueries({
+        queryKey: ["chat-follow-through", ...(chatId ? [chatId] : [])],
+      });
       // A follow-up notice was saved without a turn to stream it: re-read the transcript.
-      if (chatId && update.transcript === true) void queryClient.invalidateQueries({ queryKey: queryKeys.chat(chatId) });
+      if (chatId && update.transcript === true)
+        void queryClient.invalidateQueries({ queryKey: queryKeys.chat(chatId) });
     });
   }, [queryClient]);
 
@@ -536,7 +568,11 @@ function RootContent() {
       const key = queryKeys.chatGoal(chatId);
       const notice = goalSettleNotification(queryClient.getQueryData<GoalView | null>(key), goal);
       queryClient.setQueryData(key, goal);
-      if (!notice || windowShowsChat({ focused: document.hasFocus(), pathname: goalPathnameRef.current }, chatId)) return;
+      if (
+        !notice ||
+        windowShowsChat({ focused: document.hasFocus(), pathname: goalPathnameRef.current }, chatId)
+      )
+        return;
       try {
         if (typeof Notification === "undefined") return;
         const notification = new Notification(notice.title, { body: notice.body });
@@ -551,17 +587,24 @@ function RootContent() {
   }, [navigate, queryClient]);
   // A goal the agent suggested, or the suggestion answered: the card updates without a re-read.
   React.useEffect(
-    () => chatsApi.onGoalProposalChanged((chatId, proposal) => queryClient.setQueryData(queryKeys.chatGoalProposal(chatId), proposal)),
+    () =>
+      chatsApi.onGoalProposalChanged((chatId, proposal) =>
+        queryClient.setQueryData(queryKeys.chatGoalProposal(chatId), proposal),
+      ),
     [queryClient],
   );
 
   React.useEffect(() => {
     return onNotification("chats:child-chats-changed", (payload: unknown) => {
       const leadChatId =
-        payload && typeof payload === "object" && typeof (payload as { leadChatId?: unknown }).leadChatId === "string"
+        payload &&
+        typeof payload === "object" &&
+        typeof (payload as { leadChatId?: unknown }).leadChatId === "string"
           ? (payload as { leadChatId: string }).leadChatId
           : undefined;
-      void queryClient.invalidateQueries({ queryKey: leadChatId ? queryKeys.startedChats(leadChatId) : ["started-chats"] });
+      void queryClient.invalidateQueries({
+        queryKey: leadChatId ? queryKeys.startedChats(leadChatId) : ["started-chats"],
+      });
     });
   }, [queryClient]);
 
@@ -636,7 +679,11 @@ function RootContent() {
             if (isChatCacheDeleted(chatId)) return;
             await queryClient.cancelQueries({ queryKey: chatKey, exact: true });
             if (isChatCacheDeleted(chatId)) return;
-            await queryClient.fetchQuery({ queryKey: chatKey, queryFn: () => chatsApi.get(chatId), staleTime: 0 });
+            await queryClient.fetchQuery({
+              queryKey: chatKey,
+              queryFn: () => chatsApi.get(chatId),
+              staleTime: 0,
+            });
             await queryClient.refetchQueries({ queryKey: queryKeys.chats, type: "all" });
           },
         }).catch(() => {
@@ -650,7 +697,10 @@ function RootContent() {
     let disposed = false;
     const reconcileInactiveOwners = (payload: unknown) => {
       const owners = pendingDetachedLifecycleChats();
-      const snapshot = parseChatActivitySnapshot(payload, new Set(owners.map(owner => owner.chatId)));
+      const snapshot = parseChatActivitySnapshot(
+        payload,
+        new Set(owners.map((owner) => owner.chatId)),
+      );
       if (!snapshot) return;
       const activeChatIds = new Set(snapshot.activeChatIds);
       for (const owner of owners) {
@@ -673,17 +723,21 @@ function RootContent() {
     };
   }, [reconcileDetachedLifecycleChat]);
 
-  React.useEffect(() => appControlsApi.onChanged(() => {
-    void Promise.all([
-      queryClient.invalidateQueries({ queryKey: queryKeys.settings }),
-      queryClient.invalidateQueries({ queryKey: queryKeys.webSearch }),
-      // The Web pages row reads whether Web Search is on from its own snapshot.
-      queryClient.invalidateQueries({ queryKey: queryKeys.webFetch }),
-      queryClient.invalidateQueries({ queryKey: queryKeys.workspaces }),
-      queryClient.invalidateQueries({ queryKey: queryKeys.skills }),
-      queryClient.invalidateQueries({ queryKey: ["skillCatalog"] }),
-    ]);
-  }), [queryClient]);
+  React.useEffect(
+    () =>
+      appControlsApi.onChanged(() => {
+        void Promise.all([
+          queryClient.invalidateQueries({ queryKey: queryKeys.settings }),
+          queryClient.invalidateQueries({ queryKey: queryKeys.webSearch }),
+          // The Web pages row reads whether Web Search is on from its own snapshot.
+          queryClient.invalidateQueries({ queryKey: queryKeys.webFetch }),
+          queryClient.invalidateQueries({ queryKey: queryKeys.workspaces }),
+          queryClient.invalidateQueries({ queryKey: queryKeys.skills }),
+          queryClient.invalidateQueries({ queryKey: ["skillCatalog"] }),
+        ]);
+      }),
+    [queryClient],
+  );
 
   React.useEffect(() => {
     // ~/.aiden/config.json was edited outside the app. Only what is sourced
@@ -729,7 +783,10 @@ function RootContent() {
   React.useEffect(() => {
     return onNotification<{ path: string; requestId?: string }>("app:navigate", (payload) => {
       void (async () => {
-        const acknowledge = (status: "opened" | "blocked") => { if (payload.requestId) void appControlsApi.acknowledgeNavigation(payload.requestId, status); };
+        const acknowledge = (status: "opened" | "blocked") => {
+          if (payload.requestId)
+            void appControlsApi.acknowledgeNavigation(payload.requestId, status);
+        };
         if (!payload?.path) return;
         if (document.querySelector("[data-onboarding-active='true']")) {
           const blockedByOnboarding = document.querySelector("[data-onboarding-checking='true']")
@@ -753,15 +810,19 @@ function RootContent() {
         }
         const settingsHandoffPrefix = "/quick-chat-handoff/settings/";
         if (payload.path.startsWith(settingsHandoffPrefix)) {
-          const section = parseSettingsSection(payload.path.slice(settingsHandoffPrefix.length).trim());
+          const section = parseSettingsSection(
+            payload.path.slice(settingsHandoffPrefix.length).trim(),
+          );
           if (!section) {
             acknowledge("blocked");
             return;
           }
-          void current.navigate(settingsLocation(section, { pathname: router.state.location.pathname })).then(
-            () => acknowledge("opened"),
-            () => acknowledge("blocked"),
-          );
+          void current
+            .navigate(settingsLocation(section, { pathname: router.state.location.pathname }))
+            .then(
+              () => acknowledge("opened"),
+              () => acknowledge("blocked"),
+            );
           return;
         }
         const draftHandoffPrefix = "/quick-chat-handoff/draft/";
@@ -818,7 +879,10 @@ function RootContent() {
           );
           return;
         }
-        void current.navigate({ to: payload.path }).then(() => acknowledge("opened"), () => acknowledge("blocked"));
+        void current.navigate({ to: payload.path }).then(
+          () => acknowledge("opened"),
+          () => acknowledge("blocked"),
+        );
       })();
     });
   }, []);

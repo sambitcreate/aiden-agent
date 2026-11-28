@@ -2,7 +2,11 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import type { AgentSliderSettings } from "../shared/agent-slider";
 import type { Provider } from "./types";
-import { agentSliderComposerState, agentSliderStepTarget, agentSliderStopSetsEffort } from "./agent-slider-view";
+import {
+  agentSliderComposerState,
+  agentSliderStepTarget,
+  agentSliderStopSetsEffort,
+} from "./agent-slider-view";
 import { composerThinkingLevels } from "./composer-thinking-levels";
 
 const acme = {
@@ -74,7 +78,10 @@ test("with the home stop the only one that can run, a step from Custom lands on 
       { id: "b", label: "B", providerId: "nowhere", model: "x" },
     ],
   };
-  const custom = agentSliderComposerState(lonely, inventory, { providerId: "acme", model: "smart" });
+  const custom = agentSliderComposerState(lonely, inventory, {
+    providerId: "acme",
+    model: "smart",
+  });
   assert.equal(agentSliderStepTarget(custom, 1)?.id, "mid");
   assert.equal(agentSliderStepTarget(custom, -1)?.id, "mid");
 });
@@ -90,7 +97,11 @@ test("only a stop with its own effort takes over the effort control", () => {
   const onFast = agentSliderComposerState(slider, inventory, { providerId: "acme", model: "fast" });
   assert.equal(onFast?.position.custom, false);
   assert.equal(agentSliderStopSetsEffort(onFast), false);
-  const custom = agentSliderComposerState(slider, inventory, { providerId: "acme", model: "mid", thinkingLevel: "low" });
+  const custom = agentSliderComposerState(slider, inventory, {
+    providerId: "acme",
+    model: "mid",
+    thinkingLevel: "low",
+  });
   assert.equal(custom?.position.custom, true);
   assert.equal(agentSliderStopSetsEffort(custom), false);
   assert.equal(agentSliderStopSetsEffort(undefined), false, "no slider, no stop");

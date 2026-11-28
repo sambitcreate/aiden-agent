@@ -6,13 +6,23 @@
 
 import * as React from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { AlarmClock, ChevronDown, ExternalLink, GitPullRequest, TerminalSquare } from "lucide-react";
+import {
+  AlarmClock,
+  ChevronDown,
+  ExternalLink,
+  GitPullRequest,
+  TerminalSquare,
+} from "lucide-react";
 import { Button, Popover, PopoverContent, PopoverTrigger, Text, toast } from "./ui";
 import { chatsApi } from "../lib/ipc";
 import { queryKeys, useChatFollowThrough } from "../lib/queries";
 import { useLinkOpener } from "../lib/link-opener";
 import { cn } from "../lib/ui-utils";
-import { backgroundJobLabel, backgroundJobPortUrl, type BackgroundJobView } from "../shared/background-jobs";
+import {
+  backgroundJobLabel,
+  backgroundJobPortUrl,
+  type BackgroundJobView,
+} from "../shared/background-jobs";
 import { checkBackWhen, type CheckBackView } from "../shared/check-backs";
 import {
   MAX_COMMENT_ONLY_FOLLOW_UPDATES,
@@ -54,7 +64,8 @@ const FOLLOW_END_LABELS: Record<NonNullable<PullRequestFollowView["endedReason"]
 };
 
 export function pullRequestFollowStatus(follow: PullRequestFollowView): string {
-  if (follow.state === "ended") return follow.endedReason ? FOLLOW_END_LABELS[follow.endedReason] : "Stopped";
+  if (follow.state === "ended")
+    return follow.endedReason ? FOLLOW_END_LABELS[follow.endedReason] : "Stopped";
   const parts = [
     follow.status ?? "Waiting for the first read",
     `${follow.noticesSent} ${follow.noticesSent === 1 ? "update" : "updates"} sent`,
@@ -86,12 +97,21 @@ function ChipTrigger({
 }) {
   return (
     <PopoverTrigger asChild>
-      <Button variant="transparent" size="small" className="h-7 shrink-0 gap-1.5 px-2 text-secondary" aria-label={ariaLabel}>
+      <Button
+        variant="transparent"
+        size="small"
+        className="h-7 shrink-0 gap-1.5 px-2 text-secondary"
+        aria-label={ariaLabel}
+      >
         <Icon
           aria-hidden="true"
           className={cn(
             "size-4 shrink-0",
-            tone === "success" ? "text-status-green" : tone === "failure" ? "text-status-red" : undefined,
+            tone === "success"
+              ? "text-status-green"
+              : tone === "failure"
+                ? "text-status-red"
+                : undefined,
           )}
         />
         <span className="max-w-[12rem] truncate">{label}</span>
@@ -107,7 +127,11 @@ function JobOutput({ chatId, jobId }: { chatId: string; jobId: string }) {
     refetchInterval: 4_000,
   });
   if (output.isError) {
-    return <p className="px-2 py-1 text-small text-tertiary">This job's output is no longer available.</p>;
+    return (
+      <p className="px-2 py-1 text-small text-tertiary">
+        This job's output is no longer available.
+      </p>
+    );
   }
   if (!output.data) return null;
   const text = output.data.output.trimEnd();
@@ -119,20 +143,41 @@ function JobOutput({ chatId, jobId }: { chatId: string; jobId: string }) {
   );
 }
 
-function JobRow({ chatId, job, now, onStop }: { chatId: string; job: BackgroundJobView; now: number; onStop: (job: BackgroundJobView) => void }) {
+function JobRow({
+  chatId,
+  job,
+  now,
+  onStop,
+}: {
+  chatId: string;
+  job: BackgroundJobView;
+  now: number;
+  onStop: (job: BackgroundJobView) => void;
+}) {
   const [showOutput, setShowOutput] = React.useState(false);
   const outputId = React.useId();
   const { openLink } = useLinkOpener();
   const ports = job.state === "running" ? (job.ports ?? []) : [];
   return (
     <li className="flex flex-col">
-      <div className={cn("flex min-w-0 gap-2 rounded-lg px-2 py-1.5", ports.length ? "items-start" : "items-center")}>
+      <div
+        className={cn(
+          "flex min-w-0 gap-2 rounded-lg px-2 py-1.5",
+          ports.length ? "items-start" : "items-center",
+        )}
+      >
         <span
           aria-hidden="true"
           className={cn(
             "size-1.5 shrink-0 rounded-full",
             ports.length && "mt-[7px]",
-            job.state === "running" ? "bg-accent" : job.state === "exited" ? "bg-status-green" : job.state === "failed" ? "bg-status-red" : "bg-quaternary",
+            job.state === "running"
+              ? "bg-accent"
+              : job.state === "exited"
+                ? "bg-status-green"
+                : job.state === "failed"
+                  ? "bg-status-red"
+                  : "bg-quaternary",
           )}
         />
         <div className="min-w-0 flex-1">
@@ -151,7 +196,9 @@ function JobRow({ chatId, job, now, onStop }: { chatId: string; job: BackgroundJ
                   size="small"
                   className="h-6 gap-1 px-1.5 font-mono text-mini text-accent-text"
                   aria-label={`Open localhost:${port}`}
-                  onClick={() => openLink(backgroundJobPortUrl(port), { workspaceId: job.workspaceId })}
+                  onClick={() =>
+                    openLink(backgroundJobPortUrl(port), { workspaceId: job.workspaceId })
+                  }
                 >
                   localhost:{port}
                   <ExternalLink aria-hidden="true" className="size-3 shrink-0" />
@@ -169,10 +216,21 @@ function JobRow({ chatId, job, now, onStop }: { chatId: string; job: BackgroundJ
           onClick={() => setShowOutput((value) => !value)}
         >
           Output
-          <ChevronDown aria-hidden="true" className={cn("size-3.5 transition-transform duration-200 ease-standard motion-reduce:transition-none", showOutput && "rotate-180")} />
+          <ChevronDown
+            aria-hidden="true"
+            className={cn(
+              "size-3.5 transition-transform duration-200 ease-standard motion-reduce:transition-none",
+              showOutput && "rotate-180",
+            )}
+          />
         </Button>
         {job.state === "running" ? (
-          <Button variant="transparent" size="small" className="shrink-0 px-2" onClick={() => onStop(job)}>
+          <Button
+            variant="transparent"
+            size="small"
+            className="shrink-0 px-2"
+            onClick={() => onStop(job)}
+          >
             Stop
           </Button>
         ) : null}
@@ -182,7 +240,15 @@ function JobRow({ chatId, job, now, onStop }: { chatId: string; job: BackgroundJ
   );
 }
 
-function JobsChip({ chatId, jobs, onChanged }: { chatId: string; jobs: BackgroundJobView[]; onChanged: () => void }) {
+function JobsChip({
+  chatId,
+  jobs,
+  onChanged,
+}: {
+  chatId: string;
+  jobs: BackgroundJobView[];
+  onChanged: () => void;
+}) {
   const [open, setOpen] = React.useState(false);
   const running = jobs.filter((job) => job.state === "running").length;
   const now = useNow(open);
@@ -190,7 +256,9 @@ function JobsChip({ chatId, jobs, onChanged }: { chatId: string; jobs: Backgroun
     void chatsApi
       .stopBackgroundJob(chatId, job.id)
       .then(onChanged)
-      .catch((error: unknown) => toast.error(error instanceof Error ? error.message : "The job could not be stopped."));
+      .catch((error: unknown) =>
+        toast.error(error instanceof Error ? error.message : "The job could not be stopped."),
+      );
   };
   return (
     <Popover open={open} onOpenChange={setOpen}>
@@ -218,7 +286,15 @@ function JobsChip({ chatId, jobs, onChanged }: { chatId: string; jobs: Backgroun
   );
 }
 
-function FollowChip({ chatId, follows, onChanged }: { chatId: string; follows: PullRequestFollowView[]; onChanged: () => void }) {
+function FollowChip({
+  chatId,
+  follows,
+  onChanged,
+}: {
+  chatId: string;
+  follows: PullRequestFollowView[];
+  onChanged: () => void;
+}) {
   const [open, setOpen] = React.useState(false);
   const { openLink } = useLinkOpener();
   const active = follows.filter((follow) => follow.state === "following");
@@ -226,9 +302,15 @@ function FollowChip({ chatId, follows, onChanged }: { chatId: string; follows: P
   const failing = active.some((follow) => /failing|conflict/u.test(follow.status ?? ""));
   const stop = (follow: PullRequestFollowView) => {
     void chatsApi
-      .stopFollowingPullRequest(chatId, { host: follow.host, repository: follow.repository, number: follow.number })
+      .stopFollowingPullRequest(chatId, {
+        host: follow.host,
+        repository: follow.repository,
+        number: follow.number,
+      })
       .then(onChanged)
-      .catch((error: unknown) => toast.error(error instanceof Error ? error.message : "Could not stop following."));
+      .catch((error: unknown) =>
+        toast.error(error instanceof Error ? error.message : "Could not stop following."),
+      );
   };
   // Opening the list is a good moment to look again: the person wants news.
   const toggle = (next: boolean) => {
@@ -246,8 +328,14 @@ function FollowChip({ chatId, follows, onChanged }: { chatId: string; follows: P
     <Popover open={open} onOpenChange={toggle}>
       <ChipTrigger
         icon={GitPullRequest}
-        label={active.length === 1 ? `Following #${first.number}` : `Following ${active.length} PRs`}
-        ariaLabel={active.length === 1 ? `Following pull request ${first.number}` : `Following ${active.length} pull requests`}
+        label={
+          active.length === 1 ? `Following #${first.number}` : `Following ${active.length} PRs`
+        }
+        ariaLabel={
+          active.length === 1
+            ? `Following pull request ${first.number}`
+            : `Following ${active.length} pull requests`
+        }
         tone={failing ? "failure" : undefined}
       />
       <PopoverContent align="start" className="w-[22rem] p-0" aria-label="Followed pull requests">
@@ -258,7 +346,10 @@ function FollowChip({ chatId, follows, onChanged }: { chatId: string; follows: P
         </div>
         <ul className="flex max-h-80 flex-col px-1.5 pb-2">
           {follows.map((follow) => (
-            <li key={`${follow.host}/${follow.repository}#${follow.number}`} className="flex min-w-0 items-center gap-2 rounded-lg px-2 py-1.5">
+            <li
+              key={`${follow.host}/${follow.repository}#${follow.number}`}
+              className="flex min-w-0 items-center gap-2 rounded-lg px-2 py-1.5"
+            >
               <div className="min-w-0 flex-1">
                 <Text as="p" variant="small-strong" className="truncate">
                   #{follow.number} {follow.title ?? follow.repository}
@@ -272,11 +363,22 @@ function FollowChip({ chatId, follows, onChanged }: { chatId: string; follows: P
                   </Text>
                 ) : null}
               </div>
-              <Button variant="transparent" size="small" iconOnly aria-label={`Open pull request ${follow.number}`} onClick={() => openLink(follow.url)}>
+              <Button
+                variant="transparent"
+                size="small"
+                iconOnly
+                aria-label={`Open pull request ${follow.number}`}
+                onClick={() => openLink(follow.url)}
+              >
                 <ExternalLink aria-hidden="true" />
               </Button>
               {follow.state === "following" ? (
-                <Button variant="transparent" size="small" className="shrink-0 px-2" onClick={() => stop(follow)}>
+                <Button
+                  variant="transparent"
+                  size="small"
+                  className="shrink-0 px-2"
+                  onClick={() => stop(follow)}
+                >
                   Stop
                 </Button>
               ) : null}
@@ -284,7 +386,8 @@ function FollowChip({ chatId, follows, onChanged }: { chatId: string; follows: P
           ))}
         </ul>
         <p className="border-t border-separator px-3 py-2 text-small text-tertiary">
-          Only comments from people who can write to the repository and from review bots reach the agent.
+          Only comments from people who can write to the repository and from review bots reach the
+          agent.
         </p>
       </PopoverContent>
     </Popover>
@@ -299,7 +402,15 @@ export function checkBackChipLabel(checkBacks: readonly CheckBackView[], now: nu
   return `Checking back ${checkBackWhen(first.fireAt, now)}${more > 0 ? ` +${more}` : ""}`;
 }
 
-function CheckBackChip({ chatId, checkBacks, onChanged }: { chatId: string; checkBacks: CheckBackView[]; onChanged: () => void }) {
+function CheckBackChip({
+  chatId,
+  checkBacks,
+  onChanged,
+}: {
+  chatId: string;
+  checkBacks: CheckBackView[];
+  onChanged: () => void;
+}) {
   const [open, setOpen] = React.useState(false);
   const [cancelling, setCancelling] = React.useState<ReadonlySet<string>>(() => new Set());
   const now = useNow(open);
@@ -316,7 +427,9 @@ function CheckBackChip({ chatId, checkBacks, onChanged }: { chatId: string; chec
           next.delete(checkBack.id);
           return next;
         });
-        toast.error(error instanceof Error ? error.message : "The check-back could not be cancelled.");
+        toast.error(
+          error instanceof Error ? error.message : "The check-back could not be cancelled.",
+        );
       });
   };
   if (!visible.length) return null;
@@ -326,7 +439,11 @@ function CheckBackChip({ chatId, checkBacks, onChanged }: { chatId: string; chec
       <ChipTrigger
         icon={AlarmClock}
         label={label}
-        ariaLabel={visible.length === 1 ? label : `${visible.length} check-backs pending, next ${checkBackWhen(visible[0]!.fireAt, now)}`}
+        ariaLabel={
+          visible.length === 1
+            ? label
+            : `${visible.length} check-backs pending, next ${checkBackWhen(visible[0]!.fireAt, now)}`
+        }
       />
       <PopoverContent align="start" className="w-[22rem] p-0" aria-label="Check-backs">
         <div className="px-3 pb-1 pt-2.5">
@@ -336,10 +453,15 @@ function CheckBackChip({ chatId, checkBacks, onChanged }: { chatId: string; chec
         </div>
         <ul className="flex max-h-80 flex-col overflow-y-auto px-1.5 pb-2">
           {visible.map((checkBack) => (
-            <li key={checkBack.id} className="flex min-w-0 items-start gap-2 rounded-lg px-2 py-1.5">
+            <li
+              key={checkBack.id}
+              className="flex min-w-0 items-start gap-2 rounded-lg px-2 py-1.5"
+            >
               <div className="min-w-0 flex-1">
                 <Text as="p" variant="small-strong" className="truncate">
-                  {checkBackWhen(checkBack.fireAt, now).replace(/^./u, (first) => first.toUpperCase())}
+                  {checkBackWhen(checkBack.fireAt, now).replace(/^./u, (first) =>
+                    first.toUpperCase(),
+                  )}
                 </Text>
                 <Text as="p" variant="small" color="tertiary" className="line-clamp-2 break-words">
                   {checkBack.note}

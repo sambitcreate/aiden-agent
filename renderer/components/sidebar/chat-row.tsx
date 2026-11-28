@@ -1,5 +1,17 @@
 import * as React from "react";
-import { BellDot, Check, CheckCheck, CircleAlert, GitFork, Loader2, MessageCircleQuestion, MessagesSquare, ShieldAlert, Unplug, type LucideIcon } from "lucide-react";
+import {
+  BellDot,
+  Check,
+  CheckCheck,
+  CircleAlert,
+  GitFork,
+  Loader2,
+  MessageCircleQuestion,
+  MessagesSquare,
+  ShieldAlert,
+  Unplug,
+  type LucideIcon,
+} from "lucide-react";
 import {
   Button,
   ContextMenu,
@@ -217,7 +229,11 @@ export function ChatRow({
       )}
       icon={icon}
       aria-busy={busy || status.state === "working"}
-      aria-description={[startedByChat, forkedFrom, inSelection ? "Selected" : undefined].filter(Boolean).join(". ") || undefined}
+      aria-description={
+        [startedByChat, forkedFrom, inSelection ? "Selected" : undefined]
+          .filter(Boolean)
+          .join(". ") || undefined
+      }
       data-forked={forkedFrom ? "true" : undefined}
       data-started-by-chat={startedByChat ? "true" : undefined}
       title={
@@ -277,7 +293,9 @@ export function ChatRow({
           <ContextMenuTrigger asChild onKeyDown={openContextMenuFromKeyboard}>
             {item}
           </ContextMenuTrigger>
-          <ContextMenuContent>{menu(ContextMenuItem, ContextMenuSeparator, CONTEXT_SUB)}</ContextMenuContent>
+          <ContextMenuContent>
+            {menu(ContextMenuItem, ContextMenuSeparator, CONTEXT_SUB)}
+          </ContextMenuContent>
         </ContextMenu>
       ) : (
         item
@@ -311,7 +329,12 @@ function InboxStatusIcon({ status }: { status: ChatRowInbox["status"] }) {
   const className = "size-3 shrink-0";
   if (status.tone === "working") {
     // Only the icon dims; the text keeps its contrast.
-    return <Loader2 aria-hidden="true" className={cn(className, "animate-[spin_1.5s_linear_infinite] opacity-60")} />;
+    return (
+      <Loader2
+        aria-hidden="true"
+        className={cn(className, "animate-[spin_1.5s_linear_infinite] opacity-60")}
+      />
+    );
   }
   switch (status.needsYou) {
     case "approval":
@@ -363,7 +386,13 @@ function InboxRowStatus({ status }: { status: ChatRowInbox["status"] }) {
  * row is before where it lives: "Fix the build, aiden, 2h, Unread".
  */
 function inboxAccessibleName(title: string, inbox: ChatRowInbox): string {
-  return [title, inbox.meta, inbox.status.spoken ?? inbox.status.label, inbox.status.wait, inbox.unread ? "Unread" : undefined]
+  return [
+    title,
+    inbox.meta,
+    inbox.status.spoken ?? inbox.status.label,
+    inbox.status.wait,
+    inbox.unread ? "Unread" : undefined,
+  ]
     .filter((part): part is string => Boolean(part?.trim()))
     .join(", ");
 }
@@ -429,7 +458,11 @@ function InboxChatRow({
           <span className="flex min-h-(--text-small--line-height) min-w-0 items-center gap-1.5 text-small text-quaternary">
             {inbox.metaIcon ? (
               <span className="flex min-w-0 flex-1 items-center gap-1">
-                <span aria-hidden="true" className="grid size-3.5 shrink-0 place-items-center [&>svg]:size-full" data-inbox-meta-icon="">
+                <span
+                  aria-hidden="true"
+                  className="grid size-3.5 shrink-0 place-items-center [&>svg]:size-full"
+                  data-inbox-meta-icon=""
+                >
                   {inbox.metaIcon}
                 </span>
                 <span className="min-w-0 truncate">{inbox.meta}</span>
@@ -475,7 +508,9 @@ function InboxChatRow({
           {item}
         </ContextMenuTrigger>,
       )}
-      <ContextMenuContent>{menu(ContextMenuItem, ContextMenuSeparator, CONTEXT_SUB)}</ContextMenuContent>
+      <ContextMenuContent>
+        {menu(ContextMenuItem, ContextMenuSeparator, CONTEXT_SUB)}
+      </ContextMenuContent>
     </ContextMenu>
   ) : (
     withTooltip(item)

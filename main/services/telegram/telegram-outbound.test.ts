@@ -3,7 +3,11 @@ import { mkdtempSync, rmSync } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { after, test } from "node:test";
-import { createTelegramButtonStore, markTelegramButtonSelected, planTelegramReply } from "./telegram-outbound.js";
+import {
+  createTelegramButtonStore,
+  markTelegramButtonSelected,
+  planTelegramReply,
+} from "./telegram-outbound.js";
 
 const tempDirs: string[] = [];
 after(() => {
@@ -47,10 +51,7 @@ test("plans workspace attachment actions without exposing local paths in text", 
 });
 
 test("button-only responses receive a visible fallback heading", () => {
-  const plan = planTelegramReply(
-    '<!-- telegram_button value="Done" -->',
-    () => "tgbtn:1",
-  );
+  const plan = planTelegramReply('<!-- telegram_button value="Done" -->', () => "tgbtn:1");
   assert.equal(plan.markdown, "☑️ **Choose an option:**");
 });
 
@@ -60,8 +61,17 @@ test("button tokens are non-reused across restarts and scoped to their originati
   const file = path.join(dir, "buttons.json");
   let now = 1_000;
   const first = createTelegramButtonStore(() => now, { file });
-  const scopeA = { profile: "work", chatId: 100, threadId: 5, ownerUserId: 42, bindingKey: "work:100:5:42:bot-a:w:bw:bc" };
-  const token1 = first.register({ label: "Approve", prompt: "Approve deployment", selectedStyle: "success" }, scopeA);
+  const scopeA = {
+    profile: "work",
+    chatId: 100,
+    threadId: 5,
+    ownerUserId: 42,
+    bindingKey: "work:100:5:42:bot-a:w:bw:bc",
+  };
+  const token1 = first.register(
+    { label: "Approve", prompt: "Approve deployment", selectedStyle: "success" },
+    scopeA,
+  );
   first.bindMessage([token1], 88);
   await first.flush();
 
@@ -70,12 +80,20 @@ test("button tokens are non-reused across restarts and scoped to their originati
   assert.notEqual(token1, token2, "a fresh store does not mint predictable colliding tokens");
 
   assert.equal(
-    await first.prepareCallback("cb-wrong-thread", token1, { ...scopeA, threadId: 6, messageId: 88 }),
+    await first.prepareCallback("cb-wrong-thread", token1, {
+      ...scopeA,
+      threadId: 6,
+      messageId: 88,
+    }),
     undefined,
     "wrong thread fails closed without consuming the button",
   );
   assert.equal(
-    await first.prepareCallback("cb-rebound", token1, { ...scopeA, bindingKey: "work:100:5:42:bot-b:w:bw:bc2", messageId: 88 }),
+    await first.prepareCallback("cb-rebound", token1, {
+      ...scopeA,
+      bindingKey: "work:100:5:42:bot-b:w:bw:bc2",
+      messageId: 88,
+    }),
     undefined,
     "rebound Bot route fails closed without consuming the button",
   );
@@ -93,7 +111,10 @@ test("button tokens are non-reused across restarts and scoped to their originati
   });
 
   const restarted = createTelegramButtonStore(() => now, { file });
-  const replayed = await restarted.prepareCallback("cb-valid", token1, { ...scopeA, messageId: 88 });
+  const replayed = await restarted.prepareCallback("cb-valid", token1, {
+    ...scopeA,
+    messageId: 88,
+  });
   assert.deepEqual(replayed, {
     action: { label: "Approve", prompt: "Approve deployment", selectedStyle: "success" },
     alreadyCompleted: false,
@@ -101,7 +122,10 @@ test("button tokens are non-reused across restarts and scoped to their originati
 
   await restarted.completeCallback("cb-valid", token1);
   // Same callbackQueryId replaying after offset persistence failure still sees its completed receipt.
-  const duplicateDelivery = await restarted.prepareCallback("cb-valid", token1, { ...scopeA, messageId: 88 });
+  const duplicateDelivery = await restarted.prepareCallback("cb-valid", token1, {
+    ...scopeA,
+    messageId: 88,
+  });
   assert.deepEqual(duplicateDelivery, {
     action: { label: "Approve", prompt: "Approve deployment", selectedStyle: "success" },
     alreadyCompleted: true,

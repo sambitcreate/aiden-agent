@@ -67,7 +67,10 @@ test("a Bot chat has no slash palette for rename, fork, side questions, or expor
   renderComposer(LOCAL_COMPOSER_SURFACES);
   const local = await typeSlash();
   for (const command of ["Rename chat", "Fork from a turn", "Ask a side question", "Export chat"]) {
-    assert.ok(local.some((option) => option.startsWith(command)), command);
+    assert.ok(
+      local.some((option) => option.startsWith(command)),
+      command,
+    );
   }
   cleanup();
 

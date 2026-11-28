@@ -38,7 +38,11 @@ test("reduced motion shows new tokens at the reveal cadence rather than on every
   assert.doesNotMatch(surface(), /and more/u, "a token right after a release waits");
 
   await act(() => new Promise((resolve) => setTimeout(resolve, STREAMING_REVEAL_RELEASE_MS + 50)));
-  assert.match(surface(), /still streaming and more/u, "the waiting text shows once the cadence allows");
+  assert.match(
+    surface(),
+    /still streaming and more/u,
+    "the waiting text shows once the cadence allows",
+  );
 
   rerender(<StreamingMarkdownReveal content={`${STREAMING} and more. Done`} complete />);
   assert.match(surface(), /and more\. Done/u, "the end of the turn shows at once");

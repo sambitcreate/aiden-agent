@@ -24,7 +24,10 @@ export function AssistantComputerUseApproval({
       <div className="flex items-start gap-2.5">
         <span className="grid size-7 shrink-0 place-items-center rounded-full bg-status-accent-surface text-status-accent">
           {deciding ? (
-            <Loader2 className="size-3.5 animate-spin motion-reduce:animate-none" aria-hidden="true" />
+            <Loader2
+              className="size-3.5 animate-spin motion-reduce:animate-none"
+              aria-hidden="true"
+            />
           ) : (
             <Mic2 className="size-3.5" aria-hidden="true" />
           )}
@@ -47,8 +50,8 @@ export function AssistantComputerUseApproval({
         {prompt.summary}
       </Text>
       <Text as="p" variant="small" color="tertiary" className="mt-1.5">
-        Say “Allow once” or “Deny.” Approval applies only to this exact action and current
-        captured target.
+        Say “Allow once” or “Deny.” Approval applies only to this exact action and current captured
+        target.
       </Text>
     </section>
   );

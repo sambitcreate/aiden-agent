@@ -9,7 +9,10 @@ import {
   type AidenIdempotencySnapshot,
 } from "./aiden-remote-operation-contract.js";
 import type { ScheduledTaskApplicationService } from "./scheduled-task-application-service.js";
-import { scheduledSettingsRevision, scheduledTaskRevision } from "./scheduled-task-application-service.js";
+import {
+  scheduledSettingsRevision,
+  scheduledTaskRevision,
+} from "./scheduled-task-application-service.js";
 import type {
   ScheduledRun,
   ScheduledTask,
@@ -58,7 +61,7 @@ export interface AidenRemoteScheduledTaskProjection {
 
 function ownRecord(value: unknown): Record<string, unknown> | null {
   return value && typeof value === "object" && !Array.isArray(value)
-    ? value as Record<string, unknown>
+    ? (value as Record<string, unknown>)
     : null;
 }
 
@@ -68,8 +71,10 @@ function exactKeys(
   optional: readonly string[] = [],
 ): boolean {
   const allowed = new Set([...required, ...optional]);
-  return required.every((key) => Object.prototype.hasOwnProperty.call(record, key))
-    && Object.keys(record).every((key) => allowed.has(key));
+  return (
+    required.every((key) => Object.prototype.hasOwnProperty.call(record, key)) &&
+    Object.keys(record).every((key) => allowed.has(key))
+  );
 }
 
 function boundedString(value: unknown, maximum: number): value is string {
@@ -79,14 +84,18 @@ function boundedString(value: unknown, maximum: number): value is string {
 function boundedIds(value: unknown): string[] | undefined {
   if (value === undefined) return undefined;
   if (!Array.isArray(value) || value.length > 64) return undefined;
-  const ids = value.map((item) => boundedString(item, 256) ? item : "");
+  const ids = value.map((item) => (boundedString(item, 256) ? item : ""));
   if (ids.some((id) => !id) || new Set(ids).size !== ids.length) return undefined;
   return ids;
 }
 
 function safeTaskId(value: string): string {
   if (!TASK_ID_PATTERN.test(value)) {
-    throw new AidenRemoteServiceError("invalid_request", "The scheduled-task identifier is invalid.", 400);
+    throw new AidenRemoteServiceError(
+      "invalid_request",
+      "The scheduled-task identifier is invalid.",
+      400,
+    );
   }
   return value;
 }
@@ -100,9 +109,14 @@ function redactSummary(value: string, limit = 20_000): string {
     .replace(/\/(?:Users|home|private|var|opt|srv|mnt)\/[^\s"'`]+/gu, "[local path]")
     .replace(/\b[A-Za-z]:\\Users\\[^\s"'`]+/gu, "[local path]")
     .replace(/file:\/\/[^\s"'`]+/gu, "[local path]");
-  return [...redactCredentialTokens(withoutPaths, "[redacted]")
-    // Remote summaries also mask long values that follow a credential-like word.
-    .replace(/\b(?:sk|key|token|secret|bearer|api[_-]?key|password)[-_:=\s]*[A-Za-z0-9._~+/-]{12,}\b/giu, "[redacted]")]
+  return [
+    ...redactCredentialTokens(withoutPaths, "[redacted]")
+      // Remote summaries also mask long values that follow a credential-like word.
+      .replace(
+        /\b(?:sk|key|token|secret|bearer|api[_-]?key|password)[-_:=\s]*[A-Za-z0-9._~+/-]{12,}\b/giu,
+        "[redacted]",
+      ),
+  ]
     .slice(0, limit)
     .join("");
 }
@@ -111,9 +125,13 @@ function redactSummary(value: string, limit = 20_000): string {
 const ISO_EPOCH_MAX = 8.64e15;
 
 function isWellFormedRun(run: ScheduledRun): boolean {
-  return Number.isFinite(run.startedAt) && Number.isFinite(run.finishedAt)
-    && Math.abs(run.startedAt) <= ISO_EPOCH_MAX && Math.abs(run.finishedAt) <= ISO_EPOCH_MAX
-    && run.finishedAt >= run.startedAt;
+  return (
+    Number.isFinite(run.startedAt) &&
+    Number.isFinite(run.finishedAt) &&
+    Math.abs(run.startedAt) <= ISO_EPOCH_MAX &&
+    Math.abs(run.finishedAt) <= ISO_EPOCH_MAX &&
+    run.finishedAt >= run.startedAt
+  );
 }
 
 function mapRun(run: ScheduledRun, summaryLimit = 20_000) {
@@ -122,7 +140,7 @@ function mapRun(run: ScheduledRun, summaryLimit = 20_000) {
   return {
     id: run.id,
     taskId: run.taskId,
-    status: failed ? "failed" as const : "succeeded" as const,
+    status: failed ? ("failed" as const) : ("succeeded" as const),
     startedAt: new Date(run.startedAt).toISOString(),
     finishedAt: new Date(run.finishedAt).toISOString(),
     ...(summary ? { summary } : {}),
@@ -200,15 +218,30 @@ function mapError(error: unknown): never {
     throw new AidenRemoteServiceError("not_found", "This scheduled task no longer exists.", 404);
   }
   if (/changed|revision/iu.test(message)) {
-    throw new AidenRemoteServiceError("revision_conflict", "This scheduled task changed. Refresh it before trying again.", 409);
+    throw new AidenRemoteServiceError(
+      "revision_conflict",
+      "This scheduled task changed. Refresh it before trying again.",
+      409,
+    );
   }
   if (/already running/iu.test(message)) {
-    throw new AidenRemoteServiceError("operation_in_progress", "This scheduled task is already running.", 409, true);
+    throw new AidenRemoteServiceError(
+      "operation_in_progress",
+      "This scheduled task is already running.",
+      409,
+      true,
+    );
   }
-  if (/workspace|script|provider|model|MCP|cron|schedule|timezone|permission|prompt/iu.test(message)) {
+  if (
+    /workspace|script|provider|model|MCP|cron|schedule|timezone|permission|prompt/iu.test(message)
+  ) {
     throw new AidenRemoteServiceError("invalid_request", message.slice(0, 500), 400);
   }
-  throw new AidenRemoteServiceError("internal_error", "Aiden could not complete this scheduled-task request.", 500);
+  throw new AidenRemoteServiceError(
+    "internal_error",
+    "Aiden could not complete this scheduled-task request.",
+    500,
+  );
 }
 
 export class AidenRemoteScheduleService {
@@ -217,8 +250,23 @@ export class AidenRemoteScheduleService {
 
   constructor(
     private readonly options: {
-      application: Pick<ScheduledTaskApplicationService,
-        "list" | "get" | "save" | "remove" | "pause" | "resume" | "runNow" | "runs" | "preview" | "scripts" | "mcpServers" | "settings" | "updateSettings" | "isRunning">;
+      application: Pick<
+        ScheduledTaskApplicationService,
+        | "list"
+        | "get"
+        | "save"
+        | "remove"
+        | "pause"
+        | "resume"
+        | "runNow"
+        | "runs"
+        | "preview"
+        | "scripts"
+        | "mcpServers"
+        | "settings"
+        | "updateSettings"
+        | "isRunning"
+      >;
       models: Pick<AidenRemoteModelService, "resolve">;
       idempotency?: AidenIdempotencyLedger;
       persistIdempotency?: (snapshot: AidenIdempotencySnapshot) => Promise<void>;
@@ -261,9 +309,24 @@ export class AidenRemoteScheduleService {
       throw new AidenRemoteServiceError("handle_invalid", "This script selection is invalid.", 400);
     }
     const claim = this.scriptClaims.get(createHash("sha256").update(token).digest("base64url"));
-    if (!claim) throw new AidenRemoteServiceError("handle_expired", "This script selection expired. Refresh the inventory.", 410);
-    if (claim.deviceId !== deviceId) throw new AidenRemoteServiceError("handle_wrong_device", "This script selection belongs to another device.", 403);
-    if (claim.workspaceId !== workspaceId) throw new AidenRemoteServiceError("operation_stale", "This script selection belongs to another workspace.", 409);
+    if (!claim)
+      throw new AidenRemoteServiceError(
+        "handle_expired",
+        "This script selection expired. Refresh the inventory.",
+        410,
+      );
+    if (claim.deviceId !== deviceId)
+      throw new AidenRemoteServiceError(
+        "handle_wrong_device",
+        "This script selection belongs to another device.",
+        403,
+      );
+    if (claim.workspaceId !== workspaceId)
+      throw new AidenRemoteServiceError(
+        "operation_stale",
+        "This script selection belongs to another workspace.",
+        409,
+      );
     return claim.name;
   }
 
@@ -281,7 +344,9 @@ export class AidenRemoteScheduleService {
       ...(task.providerId ? { providerId: task.providerId } : {}),
       ...(task.model ? { modelId: task.model } : {}),
       ...(task.mcpServerIds ? { mcpServerIds: [...task.mcpServerIds] } : {}),
-      ...(task.script ? { scriptId: this.issueScript(deviceId, task.workspaceId, task.script) } : {}),
+      ...(task.script
+        ? { scriptId: this.issueScript(deviceId, task.workspaceId, task.script) }
+        : {}),
       ...(task.prompt ? { prompt: task.prompt } : {}),
       notify: task.notify,
       running: this.options.application.isRunning(task.id),
@@ -305,44 +370,79 @@ export class AidenRemoteScheduleService {
 
   private async mutation(deviceId: string, value: unknown): Promise<ScheduledTaskInput> {
     const record = ownRecord(value);
-    if (!record || !exactKeys(record,
-      ["name", "schedule", "timezone", "mode", "permission", "confirmedForeground"],
-      ["workspaceId", "providerId", "modelId", "mcpServerIds", "scriptId", "prompt", "notify"],
-    ) || record.confirmedForeground !== true || !boundedString(record.name, 120)
-      || !boundedString(record.schedule, 500) || !boundedString(record.timezone, 120)
-      || (record.mode !== "llm" && record.mode !== "script")
-      || (record.permission !== "full" && record.permission !== "read-only")
-      || (record.workspaceId !== undefined && !boundedString(record.workspaceId, 128))
-      || (record.notify !== undefined && typeof record.notify !== "boolean")) {
-      throw new AidenRemoteServiceError("permission_confirmation_required", "Creating or editing unattended work requires final foreground review.", 409);
+    if (
+      !record ||
+      !exactKeys(
+        record,
+        ["name", "schedule", "timezone", "mode", "permission", "confirmedForeground"],
+        ["workspaceId", "providerId", "modelId", "mcpServerIds", "scriptId", "prompt", "notify"],
+      ) ||
+      record.confirmedForeground !== true ||
+      !boundedString(record.name, 120) ||
+      !boundedString(record.schedule, 500) ||
+      !boundedString(record.timezone, 120) ||
+      (record.mode !== "llm" && record.mode !== "script") ||
+      (record.permission !== "full" && record.permission !== "read-only") ||
+      (record.workspaceId !== undefined && !boundedString(record.workspaceId, 128)) ||
+      (record.notify !== undefined && typeof record.notify !== "boolean")
+    ) {
+      throw new AidenRemoteServiceError(
+        "permission_confirmation_required",
+        "Creating or editing unattended work requires final foreground review.",
+        409,
+      );
     }
     const workspaceId = typeof record.workspaceId === "string" ? record.workspaceId : undefined;
     const ids = boundedIds(record.mcpServerIds);
     if (record.mcpServerIds !== undefined && ids === undefined) {
-      throw new AidenRemoteServiceError("invalid_request", "The selected MCP scope is invalid.", 400);
+      throw new AidenRemoteServiceError(
+        "invalid_request",
+        "The selected MCP scope is invalid.",
+        400,
+      );
     }
     if (record.mode === "llm") {
       if (!boundedString(record.prompt, 32 * 1_024)) {
-        throw new AidenRemoteServiceError("invalid_request", "Ask Aiden tasks require a bounded prompt.", 400);
+        throw new AidenRemoteServiceError(
+          "invalid_request",
+          "Ask Aiden tasks require a bounded prompt.",
+          400,
+        );
       }
       const resolved = await this.options.models.resolve(
         typeof record.providerId === "string" ? record.providerId : undefined,
         typeof record.modelId === "string" ? record.modelId : undefined,
       );
       return {
-        name: record.name.trim(), mode: "llm", cron: record.schedule.trim(), timezone: record.timezone.trim(),
-        permission: record.permission, prompt: record.prompt, providerId: resolved.providerId,
-        model: resolved.modelId, ...(workspaceId ? { workspaceId } : {}),
-        ...(ids ? { mcpServerIds: ids } : {}), ...(typeof record.notify === "boolean" ? { notify: record.notify } : {}),
+        name: record.name.trim(),
+        mode: "llm",
+        cron: record.schedule.trim(),
+        timezone: record.timezone.trim(),
+        permission: record.permission,
+        prompt: record.prompt,
+        providerId: resolved.providerId,
+        model: resolved.modelId,
+        ...(workspaceId ? { workspaceId } : {}),
+        ...(ids ? { mcpServerIds: ids } : {}),
+        ...(typeof record.notify === "boolean" ? { notify: record.notify } : {}),
       };
     }
     if (record.permission !== "full" || typeof record.scriptId !== "string") {
-      throw new AidenRemoteServiceError("invalid_request", "Script tasks require Full permission and a current script selection.", 400);
+      throw new AidenRemoteServiceError(
+        "invalid_request",
+        "Script tasks require Full permission and a current script selection.",
+        400,
+      );
     }
     return {
-      name: record.name.trim(), mode: "script", cron: record.schedule.trim(), timezone: record.timezone.trim(),
-      permission: "full", script: this.consumeScript(deviceId, workspaceId, record.scriptId),
-      ...(workspaceId ? { workspaceId } : {}), ...(typeof record.notify === "boolean" ? { notify: record.notify } : {}),
+      name: record.name.trim(),
+      mode: "script",
+      cron: record.schedule.trim(),
+      timezone: record.timezone.trim(),
+      permission: "full",
+      script: this.consumeScript(deviceId, workspaceId, record.scriptId),
+      ...(workspaceId ? { workspaceId } : {}),
+      ...(typeof record.notify === "boolean" ? { notify: record.notify } : {}),
     };
   }
 
@@ -359,7 +459,8 @@ export class AidenRemoteScheduleService {
         ledger: this.idempotency,
         persist: this.options.persistIdempotency,
         notPreparedMessage: "Aiden could not durably prepare this scheduled-task request.",
-        outcomeUnrecordedMessage: "The scheduled-task change may have completed, but Aiden could not record its outcome.",
+        outcomeUnrecordedMessage:
+          "The scheduled-task change may have completed, but Aiden could not record its outcome.",
       },
       scope,
       input,
@@ -368,12 +469,19 @@ export class AidenRemoteScheduleService {
   }
 
   async list(deviceId: string) {
-    return { tasks: (await this.options.application.list()).filter((task) => !task.trigger).map((task) => this.project(deviceId, task)) };
+    return {
+      tasks: (await this.options.application.list())
+        .filter((task) => !task.trigger)
+        .map((task) => this.project(deviceId, task)),
+    };
   }
 
   async get(deviceId: string, taskId: string) {
-    try { return this.project(deviceId, await this.phoneTask(safeTaskId(taskId))); }
-    catch (error) { mapError(error); }
+    try {
+      return this.project(deviceId, await this.phoneTask(safeTaskId(taskId)));
+    } catch (error) {
+      mapError(error);
+    }
   }
 
   async create(deviceId: string, key: string, value: unknown) {
@@ -384,7 +492,9 @@ export class AidenRemoteScheduleService {
         value,
         async () => this.project(deviceId, await this.options.application.save(input)),
       );
-    } catch (error) { mapError(error); }
+    } catch (error) {
+      mapError(error);
+    }
   }
 
   async update(deviceId: string, taskId: string, revision: string, value: unknown) {
@@ -392,16 +502,22 @@ export class AidenRemoteScheduleService {
     const input = { ...(await this.mutation(deviceId, value)), id };
     try {
       await this.phoneTask(id);
-      return this.project(deviceId, await this.options.application.save(input, { expectedRevision: revision }));
-    } catch (error) { mapError(error); }
+      return this.project(
+        deviceId,
+        await this.options.application.save(input, { expectedRevision: revision }),
+      );
+    } catch (error) {
+      mapError(error);
+    }
   }
 
   async remove(taskId: string, revision: string): Promise<void> {
     try {
       await this.phoneTask(safeTaskId(taskId));
       await this.options.application.remove(safeTaskId(taskId), revision);
+    } catch (error) {
+      mapError(error);
     }
-    catch (error) { mapError(error); }
   }
 
   async pause(deviceId: string, taskId: string, revision: string, key: string) {
@@ -413,7 +529,9 @@ export class AidenRemoteScheduleService {
         { revision },
         async () => this.project(deviceId, await this.options.application.pause(id, revision)),
       );
-    } catch (error) { mapError(error); }
+    } catch (error) {
+      mapError(error);
+    }
   }
 
   async resume(deviceId: string, taskId: string, revision: string, key: string) {
@@ -425,7 +543,9 @@ export class AidenRemoteScheduleService {
         { revision },
         async () => this.project(deviceId, await this.options.application.resume(id, revision)),
       );
-    } catch (error) { mapError(error); }
+    } catch (error) {
+      mapError(error);
+    }
   }
 
   async run(deviceId: string, taskId: string, revision: string, key: string) {
@@ -438,10 +558,17 @@ export class AidenRemoteScheduleService {
         { revision },
         async () => {
           await this.options.application.runNow(id, runId, revision);
-          return { taskId: id, runId, status: "accepted" as const, acceptedAt: new Date(this.now()).toISOString() };
+          return {
+            taskId: id,
+            runId,
+            status: "accepted" as const,
+            acceptedAt: new Date(this.now()).toISOString(),
+          };
         },
       );
-    } catch (error) { mapError(error); }
+    } catch (error) {
+      mapError(error);
+    }
   }
 
   async runs(taskId: string) {
@@ -453,9 +580,14 @@ export class AidenRemoteScheduleService {
       const valid = stored.filter(isWellFormedRun);
       // Bound the aggregate so 50 worst-case UTF-8 summaries cannot cross the
       // router's 1 MB response cap (up to 4 bytes per code point).
-      const perRun = Math.min(20_000, Math.max(500, Math.floor(200_000 / Math.max(1, valid.length))));
+      const perRun = Math.min(
+        20_000,
+        Math.max(500, Math.floor(200_000 / Math.max(1, valid.length))),
+      );
       return { runs: valid.map((run) => mapRun(run, perRun)) };
-    } catch (error) { mapError(error); }
+    } catch (error) {
+      mapError(error);
+    }
   }
 
   /**
@@ -472,7 +604,8 @@ export class AidenRemoteScheduleService {
    */
   async notifications(since?: number) {
     const tasks = await this.options.application.list();
-    const notifications: Array<ReturnType<typeof mapRun> & { taskName: string; notify: boolean }> = [];
+    const notifications: Array<ReturnType<typeof mapRun> & { taskName: string; notify: boolean }> =
+      [];
     for (const task of tasks) {
       if (task.trigger) continue;
       let taskName: string;
@@ -500,20 +633,48 @@ export class AidenRemoteScheduleService {
 
   preview(value: unknown) {
     const record = ownRecord(value);
-    if (!record || !exactKeys(record, ["cron", "timezone"], ["count"])
-      || !boundedString(record.cron, 500) || !boundedString(record.timezone, 120)
-      || (record.count !== undefined && (!Number.isInteger(record.count) || (record.count as number) < 1 || (record.count as number) > 20))) {
-      throw new AidenRemoteServiceError("invalid_request", "The schedule preview request is invalid.", 400);
+    if (
+      !record ||
+      !exactKeys(record, ["cron", "timezone"], ["count"]) ||
+      !boundedString(record.cron, 500) ||
+      !boundedString(record.timezone, 120) ||
+      (record.count !== undefined &&
+        (!Number.isInteger(record.count) ||
+          (record.count as number) < 1 ||
+          (record.count as number) > 20))
+    ) {
+      throw new AidenRemoteServiceError(
+        "invalid_request",
+        "The schedule preview request is invalid.",
+        400,
+      );
     }
     try {
-      return { dates: this.options.application.preview(record.cron, record.timezone, typeof record.count === "number" ? record.count : 3).map((date) => new Date(date).toISOString()) };
-    } catch (error) { mapError(error); }
+      return {
+        dates: this.options.application
+          .preview(
+            record.cron,
+            record.timezone,
+            typeof record.count === "number" ? record.count : 3,
+          )
+          .map((date) => new Date(date).toISOString()),
+      };
+    } catch (error) {
+      mapError(error);
+    }
   }
 
   async scripts(deviceId: string, workspaceId?: string) {
     try {
-      return { scripts: (await this.options.application.scripts(workspaceId)).map((name) => ({ id: this.issueScript(deviceId, workspaceId, name), name })) };
-    } catch (error) { mapError(error); }
+      return {
+        scripts: (await this.options.application.scripts(workspaceId)).map((name) => ({
+          id: this.issueScript(deviceId, workspaceId, name),
+          name,
+        })),
+      };
+    } catch (error) {
+      mapError(error);
+    }
   }
 
   async mcpServers() {
@@ -527,33 +688,73 @@ export class AidenRemoteScheduleService {
           return { id: server.id, name: server.name };
         }),
       };
-    } catch (error) { mapError(error); }
+    } catch (error) {
+      mapError(error);
+    }
   }
 
   async settings() {
     const current = await this.options.application.settings();
-    return { revision: remoteScheduledSettingsRevision(current.value), ...remoteScheduledSettings(current.value) };
+    return {
+      revision: remoteScheduledSettingsRevision(current.value),
+      ...remoteScheduledSettings(current.value),
+    };
   }
 
   async updateSettings(revision: string, value: unknown) {
     const record = ownRecord(value);
-    if (!record || record.confirmedForeground !== true || !exactKeys(record, ["confirmedForeground"], ["enabled", "defaultMode", "defaultPermission", "defaultMcpEnabled", "defaultNotify", "defaultTimezone"]) || Object.keys(record).length < 2) {
-      throw new AidenRemoteServiceError("permission_confirmation_required", "Scheduled-task settings require explicit foreground confirmation.", 409);
+    if (
+      !record ||
+      record.confirmedForeground !== true ||
+      !exactKeys(
+        record,
+        ["confirmedForeground"],
+        [
+          "enabled",
+          "defaultMode",
+          "defaultPermission",
+          "defaultMcpEnabled",
+          "defaultNotify",
+          "defaultTimezone",
+        ],
+      ) ||
+      Object.keys(record).length < 2
+    ) {
+      throw new AidenRemoteServiceError(
+        "permission_confirmation_required",
+        "Scheduled-task settings require explicit foreground confirmation.",
+        409,
+      );
     }
-    if ((record.enabled !== undefined && typeof record.enabled !== "boolean")
-      || (record.defaultMode !== undefined && record.defaultMode !== "llm" && record.defaultMode !== "script")
-      || (record.defaultPermission !== undefined && record.defaultPermission !== "read-only" && record.defaultPermission !== "full")
-      || (record.defaultMcpEnabled !== undefined && typeof record.defaultMcpEnabled !== "boolean")
-      || (record.defaultNotify !== undefined && typeof record.defaultNotify !== "boolean")
-      || (record.defaultTimezone !== undefined && !boundedString(record.defaultTimezone, 120))) {
-      throw new AidenRemoteServiceError("invalid_request", "One or more scheduled-task settings are invalid.", 400);
+    if (
+      (record.enabled !== undefined && typeof record.enabled !== "boolean") ||
+      (record.defaultMode !== undefined &&
+        record.defaultMode !== "llm" &&
+        record.defaultMode !== "script") ||
+      (record.defaultPermission !== undefined &&
+        record.defaultPermission !== "read-only" &&
+        record.defaultPermission !== "full") ||
+      (record.defaultMcpEnabled !== undefined && typeof record.defaultMcpEnabled !== "boolean") ||
+      (record.defaultNotify !== undefined && typeof record.defaultNotify !== "boolean") ||
+      (record.defaultTimezone !== undefined && !boundedString(record.defaultTimezone, 120))
+    ) {
+      throw new AidenRemoteServiceError(
+        "invalid_request",
+        "One or more scheduled-task settings are invalid.",
+        400,
+      );
     }
     const { confirmedForeground: _confirmed, ...patch } = record;
     try {
       const saved = await this.options.application.updateSettings(revision, patch, {
         revisionOf: remoteScheduledSettingsRevision,
       });
-      return { revision: remoteScheduledSettingsRevision(saved.value), ...remoteScheduledSettings(saved.value) };
-    } catch (error) { mapError(error); }
+      return {
+        revision: remoteScheduledSettingsRevision(saved.value),
+        ...remoteScheduledSettings(saved.value),
+      };
+    } catch (error) {
+      mapError(error);
+    }
   }
 }

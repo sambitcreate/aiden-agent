@@ -8,13 +8,25 @@ import type { PostHogTransport } from "./analytics-client.js";
 import type { AnalyticsState } from "./analytics-consent.js";
 import { validateOutgoingEvent, type AnalyticsMessage } from "./analytics-core.js";
 import { PENDING_CRASH_FILE, RUN_MARKER_FILE } from "./analytics-crash.js";
-import { createAnalyticsService, createLoggingTransport, type AnalyticsService, type AnalyticsServiceOptions } from "./analytics-service.js";
+import {
+  createAnalyticsService,
+  createLoggingTransport,
+  type AnalyticsService,
+  type AnalyticsServiceOptions,
+} from "./analytics-service.js";
 
 // Real sanitizing, consent and pending-crash files, through a fake transport,
 // across simulated exits and relaunches: each `launch()` is a new process
 // sharing only the settings and the run directory.
 
-const SUPER = { app_version: "1.40.0", platform: "darwin", arch: "arm64", os_major: 26, surface: "desktop", channel: "release" } as const;
+const SUPER = {
+  app_version: "1.40.0",
+  platform: "darwin",
+  arch: "arm64",
+  os_major: 26,
+  surface: "desktop",
+  channel: "release",
+} as const;
 const APP_ROOT = "/Applications/Aiden.app/Contents/Resources/app.asar";
 const NOTICE = "2026-10-01T00:00:00.000Z";
 const ALLOWED: AnalyticsState = { enabled: true, noticeShownAt: NOTICE, lastVersion: "1.40.0" };
@@ -39,8 +51,13 @@ function device(t: { after(fn: () => void): void }, initial: AnalyticsState = AL
   function transport(): PostHogTransport {
     let open = true;
     return {
-      capture: (message) => { if (open) queued.push(message); },
-      revokeQueue: () => { open = false; queued.length = 0; },
+      capture: (message) => {
+        if (open) queued.push(message);
+      },
+      revokeQueue: () => {
+        open = false;
+        queued.length = 0;
+      },
       captureOptOut: async (message) => void network.push(message),
       captureNow: (message) => {
         if (!open) return Promise.resolve(false);
@@ -55,7 +72,10 @@ function device(t: { after(fn: () => void): void }, initial: AnalyticsState = AL
         network.push(...queued.splice(0));
         open = false;
       },
-      discard: async () => { open = false; queued.length = 0; },
+      discard: async () => {
+        open = false;
+        queued.length = 0;
+      },
     };
   }
 
@@ -81,7 +101,10 @@ function device(t: { after(fn: () => void): void }, initial: AnalyticsState = AL
     });
   }
 
-  const crashes = () => [...network, ...queued].filter((message) => message.event === "$exception" || message.event === "app_crashed");
+  const crashes = () =>
+    [...network, ...queued].filter(
+      (message) => message.event === "$exception" || message.event === "app_crashed",
+    );
   return {
     directory,
     launch,
@@ -93,9 +116,16 @@ function device(t: { after(fn: () => void): void }, initial: AnalyticsState = AL
     hasPending: () => existsSync(join(directory, PENDING_CRASH_FILE)),
     hasMarker: () => existsSync(join(directory, RUN_MARKER_FILE)),
     stored: () => stored,
-    setStored: (next: AnalyticsState) => { stored = next; },
-    setSendResult: (next: SendResult) => { sendResult = next; },
-    forgetNetwork: () => { network.length = 0; queued.length = 0; },
+    setStored: (next: AnalyticsState) => {
+      stored = next;
+    },
+    setSendResult: (next: SendResult) => {
+      sendResult = next;
+    },
+    forgetNetwork: () => {
+      network.length = 0;
+      queued.length = 0;
+    },
   };
 }
 
@@ -146,7 +176,10 @@ test("a rejection that does end the process, under Node's throw mode, keeps its 
   await service.start();
   d.forgetNetwork();
 
-  service.handleDiagnosticEvent({ event: "uncaught-exception", fields: { origin: "unhandledRejection" } }, { rawError: fatalError() });
+  service.handleDiagnosticEvent(
+    { event: "uncaught-exception", fields: { origin: "unhandledRejection" } },
+    { rawError: fatalError() },
+  );
   await settle();
 
   assert.equal(d.network[0]!.properties.origin, "unhandled_rejection");
@@ -172,28 +205,38 @@ test("a main-process rejection the app survives is an error, sanitized, with not
   assert.equal(report!.properties.origin, "unhandled_rejection");
   assert.equal(d.hasPending(), false);
   const sent = JSON.stringify(report);
-  for (const leak of ["divorce", "jane", "legal.pdf"]) assert.equal(sent.includes(leak), false, leak);
+  for (const leak of ["divorce", "jane", "legal.pdf"])
+    assert.equal(sent.includes(leak), false, leak);
   assert.notEqual(validateOutgoingEvent(report!), null);
 
   // Repeats of one rejection stop at the flood limit, like any non-fatal error.
-  for (let index = 0; index < 5; index += 1) service.handleDiagnosticEvent({ event: "unhandled-rejection" }, { rawError: reason });
+  for (let index = 0; index < 5; index += 1)
+    service.handleDiagnosticEvent({ event: "unhandled-rejection" }, { rawError: reason });
   assert.equal(d.crashes().length, 3);
 });
 
 test("the development debug log keeps a report's fields inside its 1,024-character line", async (t) => {
   const d = device(t);
   const lines: string[] = [];
-  const service = d.launch({ createTransport: async () => createLoggingTransport((line) => lines.push(line)) });
+  const service = d.launch({
+    createTransport: async () => createLoggingTransport((line) => lines.push(line)),
+  });
   await service.start();
 
   const error = new RangeError("Maximum call stack size exceeded");
-  const frames = Array.from({ length: 30 }, (_, index) => `    at step${index} (${APP_ROOT}/build/main/index.js:${index + 1}:1)`);
+  const frames = Array.from(
+    { length: 30 },
+    (_, index) => `    at step${index} (${APP_ROOT}/build/main/index.js:${index + 1}:1)`,
+  );
   error.stack = `RangeError: ${error.message}\n${frames.join("\n")}`;
   service.handleDiagnosticEvent({ event: "unhandled-rejection" }, { rawError: error });
 
   const line = lines.find((entry) => entry.includes("$exception"));
   assert.ok(line && line.length > 1_024);
-  assert.match(line.slice(0, 1_024), /"source":"main".*"origin":"unhandled_rejection"|"origin":"unhandled_rejection".*"source":"main"/u);
+  assert.match(
+    line.slice(0, 1_024),
+    /"source":"main".*"origin":"unhandled_rejection"|"origin":"unhandled_rejection".*"source":"main"/u,
+  );
 });
 
 test("startup failing after capture began is kept as a fatal crash, and sent on the next launch", async (t) => {
@@ -209,7 +252,12 @@ test("startup failing after capture began is kept as a fatal crash, and sent on 
   await next.start();
   await settle();
 
-  assert.deepEqual(d.crashes().map((message) => [message.event, message.properties.level, message.properties.origin]), [["$exception", "fatal", "pending_crash"]]);
+  assert.deepEqual(
+    d
+      .crashes()
+      .map((message) => [message.event, message.properties.level, message.properties.origin]),
+    [["$exception", "fatal", "pending_crash"]],
+  );
   assert.equal(d.hasPending(), false);
 });
 
@@ -239,8 +287,17 @@ test("an older crash still waiting to be sent does not explain away the last run
   await settle();
   await next.shutdown();
 
-  assert.deepEqual(d.crashes().map((message) => message.event).sort(), ["$exception", "app_crashed"]);
-  assert.equal(d.crashes().find((message) => message.event === "app_crashed")?.properties.kind, "unclean_exit");
+  assert.deepEqual(
+    d
+      .crashes()
+      .map((message) => message.event)
+      .sort(),
+    ["$exception", "app_crashed"],
+  );
+  assert.equal(
+    d.crashes().find((message) => message.event === "app_crashed")?.properties.kind,
+    "unclean_exit",
+  );
 });
 
 test("a crash the process did not outlive is sent once on the next launch, as the version and time it happened", async (t) => {
@@ -293,7 +350,10 @@ test("a crash that could not be sent waits for a launch that can, under the same
   d.setSendResult("ok");
   await d.launch().start();
   await settle();
-  assert.deepEqual(d.crashes().map((message) => message.uuid), [id]);
+  assert.deepEqual(
+    d.crashes().map((message) => message.uuid),
+    [id],
+  );
   assert.equal(d.hasPending(), false);
 });
 
@@ -345,7 +405,10 @@ test("a crash from before an opt-out is discarded unsent, by consent or by insta
 
   await stale.launch().start();
   await settle();
-  assert.deepEqual(stale.crashes().filter((message) => message.event === "$exception"), []);
+  assert.deepEqual(
+    stale.crashes().filter((message) => message.event === "$exception"),
+    [],
+  );
   assert.equal(stale.hasPending(), false);
 });
 
@@ -377,7 +440,10 @@ test("before the notice has been shown nothing is captured, kept or sent later",
   await first.start();
 
   first.handleDiagnosticEvent(fatalEvent, { rawError: fatalError() });
-  first.handleDiagnosticEvent({ event: "renderer-process-gone", fields: { reason: "crashed", exitCode: 1 } });
+  first.handleDiagnosticEvent({
+    event: "renderer-process-gone",
+    fields: { reason: "crashed", exitCode: 1 },
+  });
   first.handleDiagnosticEvent({ event: "renderer-global-error" }, { rawError: { message: "x" } });
   assert.equal(d.hasPending(), false);
 
@@ -388,7 +454,12 @@ test("before the notice has been shown nothing is captured, kept or sent later",
   await settle();
 
   assert.deepEqual(d.crashes(), [], "a crash from before the notice is never reported");
-  assert.equal(d.network.concat(d.queued).find((message) => message.event === "app_opened")?.properties.launch_kind, "cold", "nor is it hinted at");
+  assert.equal(
+    d.network.concat(d.queued).find((message) => message.event === "app_opened")?.properties
+      .launch_kind,
+    "cold",
+    "nor is it hinted at",
+  );
 });
 
 test("a fatal crash during startup is kept only under consent already saved, and activation sends it", async (t) => {
@@ -415,7 +486,9 @@ test("a fatal crash during startup is kept only under consent already saved, and
   }
 
   const environment = device(t, { ...ALLOWED, installId: "0b6f4a6e-3c1d-4f8e-9a2b-7c5d1e0f9a8b" });
-  environment.launch({ env: { DO_NOT_TRACK: "1" } }).handleDiagnosticEvent(fatalEvent, { rawError: fatalError() });
+  environment
+    .launch({ env: { DO_NOT_TRACK: "1" } })
+    .handleDiagnosticEvent(fatalEvent, { rawError: fatalError() });
   assert.equal(environment.hasPending(), false);
 });
 
@@ -431,8 +504,15 @@ test("a run that ended without a quit is reported once; an orderly stop is not a
   second.beginRun();
   await second.start();
   const unclean = d.crashes();
-  assert.deepEqual(unclean.map((message) => [message.event, message.properties.kind]), [["app_crashed", "unclean_exit"]]);
-  assert.equal(d.network.some((message) => message.event === "app_crashed"), true, "flushed at once, not left in the queue");
+  assert.deepEqual(
+    unclean.map((message) => [message.event, message.properties.kind]),
+    [["app_crashed", "unclean_exit"]],
+  );
+  assert.equal(
+    d.network.some((message) => message.event === "app_crashed"),
+    true,
+    "flushed at once, not left in the queue",
+  );
   d.forgetNetwork();
 
   // A signal or an explicit exit ends the run through JavaScript.
@@ -454,19 +534,41 @@ test("process deaths are sent as app_crashed with only categorical fields", asyn
   await service.start();
   d.forgetNetwork();
 
-  service.handleDiagnosticEvent({ event: "renderer-process-gone", fields: { reason: "oom", exitCode: 137 } });
-  service.handleDiagnosticEvent({ event: "child-process-gone", fields: { processType: "GPU", reason: "crashed", exitCode: 11 } });
-  service.handleDiagnosticEvent({ event: "browser-tab-process-gone", fields: { reason: "crashed", exitCode: 11 } });
+  service.handleDiagnosticEvent({
+    event: "renderer-process-gone",
+    fields: { reason: "oom", exitCode: 137 },
+  });
+  service.handleDiagnosticEvent({
+    event: "child-process-gone",
+    fields: { processType: "GPU", reason: "crashed", exitCode: 11 },
+  });
+  service.handleDiagnosticEvent({
+    event: "browser-tab-process-gone",
+    fields: { reason: "crashed", exitCode: 11 },
+  });
   service.handleDiagnosticEvent({ event: "renderer-crash-loop", fields: { crashCount: 4 } });
-  service.handleDiagnosticEvent({ event: "renderer-process-gone", fields: { reason: "clean-exit", exitCode: 0 } });
-  service.handleDiagnosticEvent({ event: "renderer-process-gone", fields: { reason: "killed", exitCode: 15 } }, { duringShutdown: true });
+  service.handleDiagnosticEvent({
+    event: "renderer-process-gone",
+    fields: { reason: "clean-exit", exitCode: 0 },
+  });
+  service.handleDiagnosticEvent(
+    { event: "renderer-process-gone", fields: { reason: "killed", exitCode: 15 } },
+    { duringShutdown: true },
+  );
 
-  assert.deepEqual(d.queued.map((message) => [message.properties.kind, message.properties.reason, message.properties.exit_code]), [
-    ["renderer", "oom", 137],
-    ["gpu", "crashed", 11],
-    ["browser_tab", "crashed", 11],
-    ["renderer_loop", undefined, undefined],
-  ]);
+  assert.deepEqual(
+    d.queued.map((message) => [
+      message.properties.kind,
+      message.properties.reason,
+      message.properties.exit_code,
+    ]),
+    [
+      ["renderer", "oom", 137],
+      ["gpu", "crashed", 11],
+      ["browser_tab", "crashed", 11],
+      ["renderer_loop", undefined, undefined],
+    ],
+  );
   for (const message of d.queued) assert.ok(validateOutgoingEvent(message));
 });
 
@@ -485,22 +587,25 @@ test("hostile renderer input is sanitized in main and passes the outgoing guard 
     "chat:start",
   ];
 
-  service.handleDiagnosticEvent({ event: "renderer-global-error" }, {
-    rawError: {
-      name: "jane.doe@example.com",
-      message: `IPC chat:start failed for "${secrets[3]}" with ${secrets[1]} from ${secrets[0]} (${secrets[2]}) at ${secrets[4]}`,
-      stack: [
-        `Error: ${secrets[3]}`,
-        `    at ${secrets[3]} (${APP_ROOT}/build/renderer/app.js:1:1)`,
-        `    at sendTurn (file://${APP_ROOT}/build/renderer/assets/index-Ab12.js:40:7)`,
-        `    at hook (${secrets[0]}:3:1)`,
-        `    at notes (${APP_ROOT}/taxes.pdf:1:1)`,
-      ].join("\n"),
-      route: secrets[4],
-      windowTitle: secrets[3],
-      args: [secrets[1]],
+  service.handleDiagnosticEvent(
+    { event: "renderer-global-error" },
+    {
+      rawError: {
+        name: "jane.doe@example.com",
+        message: `IPC chat:start failed for "${secrets[3]}" with ${secrets[1]} from ${secrets[0]} (${secrets[2]}) at ${secrets[4]}`,
+        stack: [
+          `Error: ${secrets[3]}`,
+          `    at ${secrets[3]} (${APP_ROOT}/build/renderer/app.js:1:1)`,
+          `    at sendTurn (file://${APP_ROOT}/build/renderer/assets/index-Ab12.js:40:7)`,
+          `    at hook (${secrets[0]}:3:1)`,
+          `    at notes (${APP_ROOT}/taxes.pdf:1:1)`,
+        ].join("\n"),
+        route: secrets[4],
+        windowTitle: secrets[3],
+        args: [secrets[1]],
+      },
     },
-  });
+  );
 
   const [message] = d.queued;
   assert.ok(message);
@@ -527,28 +632,38 @@ test("flood control: three of one renderer error, fatal repeats past that, twent
   d.forgetNetwork();
 
   for (let i = 0; i < 40; i += 1) {
-    service.handleDiagnosticEvent({ event: "renderer-global-error" }, { rawError: { name: "TypeError", message: "Failed to fetch" } });
+    service.handleDiagnosticEvent(
+      { event: "renderer-global-error" },
+      { rawError: { name: "TypeError", message: "Failed to fetch" } },
+    );
   }
   assert.equal(d.queued.length, 3);
 
-  for (let i = 0; i < 40; i += 1) service.handleDiagnosticEvent(fatalEvent, { rawError: fatalError() });
+  for (let i = 0; i < 40; i += 1)
+    service.handleDiagnosticEvent(fatalEvent, { rawError: fatalError() });
   await settle();
   assert.equal(d.crashes().length, 25);
 
   // The cap also stops the disk writes.
   rmSync(d.pendingFile(), { force: true });
   service.handleDiagnosticEvent(fatalEvent, { rawError: fatalError() });
-  service.handleDiagnosticEvent({ event: "renderer-process-gone", fields: { reason: "crashed", exitCode: 1 } });
+  service.handleDiagnosticEvent({
+    event: "renderer-process-gone",
+    fields: { reason: "crashed", exitCode: 1 },
+  });
   assert.equal(d.hasPending(), false);
   assert.equal(d.crashes().length, 25);
 });
 
 test("reporting never throws, whatever fails underneath it", async (t) => {
-  const hostile = new Proxy({}, {
-    get() {
-      throw new Error("a getter threw");
+  const hostile = new Proxy(
+    {},
+    {
+      get() {
+        throw new Error("a getter threw");
+      },
     },
-  });
+  );
 
   const d = device(t);
   const logged: string[] = [];
@@ -563,7 +678,9 @@ test("reporting never throws, whatever fails underneath it", async (t) => {
 
   assert.doesNotThrow(() => service.handleDiagnosticEvent(fatalEvent, { rawError: hostile }));
   assert.doesNotThrow(() => service.handleDiagnosticEvent(fatalEvent, { rawError: undefined }));
-  assert.doesNotThrow(() => service.handleDiagnosticEvent({ event: "renderer-global-error" }, { rawError: hostile }));
+  assert.doesNotThrow(() =>
+    service.handleDiagnosticEvent({ event: "renderer-global-error" }, { rawError: hostile }),
+  );
   await settle();
 
   const unwritable = device(t);
@@ -572,7 +689,11 @@ test("reporting never throws, whatever fails underneath it", async (t) => {
   assert.doesNotThrow(() => failing.handleDiagnosticEvent(fatalEvent, { rawError: fatalError() }));
 
   const broken = device(t);
-  const noState = broken.launch({ readStateSync: () => { throw new Error("settings unreadable"); } });
+  const noState = broken.launch({
+    readStateSync: () => {
+      throw new Error("settings unreadable");
+    },
+  });
   assert.doesNotThrow(() => noState.handleDiagnosticEvent(fatalEvent, { rawError: fatalError() }));
 });
 
@@ -623,7 +744,10 @@ test("a report after opt-out sends nothing, even if the renderer has not heard y
 
   service.handleDiagnosticEvent({ event: "renderer-global-error" }, { rawError: { message: "x" } });
   service.handleDiagnosticEvent(fatalEvent, { rawError: fatalError() });
-  service.handleDiagnosticEvent({ event: "renderer-process-gone", fields: { reason: "crashed", exitCode: 1 } });
+  service.handleDiagnosticEvent({
+    event: "renderer-process-gone",
+    fields: { reason: "crashed", exitCode: 1 },
+  });
   await settle();
 
   assert.deepEqual(d.crashes(), []);
@@ -632,7 +756,10 @@ test("a report after opt-out sends nothing, even if the renderer has not heard y
 
 test("a stale pending file the parser rejects is removed and sends nothing", async (t) => {
   const d = device(t);
-  writeFileSync(d.pendingFile(), JSON.stringify({ version: 1, id: "x", exception: { errors: [{ value: "/Users/jane" }] } }));
+  writeFileSync(
+    d.pendingFile(),
+    JSON.stringify({ version: 1, id: "x", exception: { errors: [{ value: "/Users/jane" }] } }),
+  );
 
   await d.launch().start();
 

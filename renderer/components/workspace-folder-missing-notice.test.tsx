@@ -3,7 +3,10 @@ import { installBotTestIpc } from "../main/bots/test-dom";
 import assert from "node:assert/strict";
 import { afterEach, beforeEach, test } from "node:test";
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
-import { WorkspaceFolderMissingNotice, type ContinueInNewChatChoice } from "./workspace-folder-missing-notice";
+import {
+  WorkspaceFolderMissingNotice,
+  type ContinueInNewChatChoice,
+} from "./workspace-folder-missing-notice";
 
 // Boolean and string oracles throughout: a failing assert on a happy-dom node would print the DOM.
 
@@ -36,7 +39,10 @@ test("Continue in a new chat lists No workspace first, then the workspaces, and 
     />,
   );
   const items = await openContinueMenu();
-  assert.deepEqual(items.map((item) => item.textContent), ["No workspace", "api", "site"]);
+  assert.deepEqual(
+    items.map((item) => item.textContent),
+    ["No workspace", "api", "site"],
+  );
   await act(async () => {
     fireEvent.click(items[1]!);
   });
@@ -45,10 +51,21 @@ test("Continue in a new chat lists No workspace first, then the workspaces, and 
 
 test("with nowhere else to go, or no handler, the notice offers only Check again", () => {
   const { rerender } = render(
-    <WorkspaceFolderMissingNotice workspaceName="parser" continueChoices={[]} onCheckAgain={() => undefined} onContinueIn={() => undefined} />,
+    <WorkspaceFolderMissingNotice
+      workspaceName="parser"
+      continueChoices={[]}
+      onCheckAgain={() => undefined}
+      onContinueIn={() => undefined}
+    />,
   );
   assert.equal(screen.queryByRole("button", { name: "Continue in a new chat" }) === null, true);
-  rerender(<WorkspaceFolderMissingNotice workspaceName="parser" continueChoices={CHOICES} onCheckAgain={() => undefined} />);
+  rerender(
+    <WorkspaceFolderMissingNotice
+      workspaceName="parser"
+      continueChoices={CHOICES}
+      onCheckAgain={() => undefined}
+    />,
+  );
   assert.equal(screen.queryByRole("button", { name: "Continue in a new chat" }) === null, true);
   assert.equal(Boolean(screen.getByRole("button", { name: "Check again" })), true);
 });
@@ -73,7 +90,12 @@ test("a deleted worktree keeps Restore worktree as the main action next to Conti
   render(
     <WorkspaceFolderMissingNotice
       workspaceName="api"
-      worktree={{ branch: "aiden/fix", restorable: true, mainWorkspaceId: "api", mainWorkspaceName: "api" }}
+      worktree={{
+        branch: "aiden/fix",
+        restorable: true,
+        mainWorkspaceId: "api",
+        mainWorkspaceName: "api",
+      }}
       continueChoices={CHOICES}
       onCheckAgain={() => undefined}
       onRestore={() => undefined}
@@ -82,5 +104,10 @@ test("a deleted worktree keeps Restore worktree as the main action next to Conti
     />,
   );
   const labels = screen.getAllByRole("button").map((button) => button.textContent);
-  assert.deepEqual(labels, ["Check again", "Continue in a new chat", "New chat in main checkout", "Restore worktree"]);
+  assert.deepEqual(labels, [
+    "Check again",
+    "Continue in a new chat",
+    "New chat in main checkout",
+    "Restore worktree",
+  ]);
 });

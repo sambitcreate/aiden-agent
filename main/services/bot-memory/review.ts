@@ -1,4 +1,8 @@
-import { BOT_PEER_INPUT_KIND, BOT_MESSAGE_INPUT_KIND, isBotInputEntryKind } from "../bot-runtime/bot-input-entry.js";
+import {
+  BOT_PEER_INPUT_KIND,
+  BOT_MESSAGE_INPUT_KIND,
+  isBotInputEntryKind,
+} from "../bot-runtime/bot-input-entry.js";
 // Background memory review (spec 2026-10-09 §10).
 //
 // After a reply, the Bot's conversation is looked at again outside the turn:
@@ -35,8 +39,21 @@ import { BOT_PEER_INPUT_KIND, BOT_MESSAGE_INPUT_KIND, isBotInputEntryKind } from
 // The same runner (`runMemoryReview`) does the compaction flush (§9).
 
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
-import type { Api, AssistantMessage, Message, Model, Models, Tool, ToolCall } from "@earendil-works/pi-ai";
-import type { Conversation, EntryId, EntryRecord, SubmissionRecord } from "@earendil-works/pi-durable";
+import type {
+  Api,
+  AssistantMessage,
+  Message,
+  Model,
+  Models,
+  Tool,
+  ToolCall,
+} from "@earendil-works/pi-ai";
+import type {
+  Conversation,
+  EntryId,
+  EntryRecord,
+  SubmissionRecord,
+} from "@earendil-works/pi-durable";
 import type { AgentTool } from "@earendil-works/pi-agent-core";
 import {
   BOT_MEMORY_REVIEW_ENTRY_KIND,
@@ -109,9 +126,7 @@ const REVIEW_SYSTEM_PROMPT = [
 export function textOf(content: Message["content"] | undefined): string {
   if (content === undefined) return "";
   if (typeof content === "string") return content;
-  return content
-    .flatMap((part) => (part.type === "text" ? [part.text] : []))
-    .join("\n");
+  return content.flatMap((part) => (part.type === "text" ? [part.text] : [])).join("\n");
 }
 
 /** Keep the newest `limit` characters, starting at a line boundary when possible. */
@@ -177,7 +192,8 @@ export async function runMemoryReview(run: MemoryReviewRun): Promise<MemoryRevie
   const signal = AbortSignal.any([run.authority.signal, ...(run.signal ? [run.signal] : [])]);
   let added = 0;
   const targets = new Set<BotMemoryTarget>();
-  const lost = () => new BotMemoryAuthorityLostError(added, [...targets], run.authority.signal.reason);
+  const lost = () =>
+    new BotMemoryAuthorityLostError(added, [...targets], run.authority.signal.reason);
   /** Right before an effect: still running, and the authority still admits the Bot. */
   const fence = async () => {
     if (run.authority.signal.aborted) throw lost();
@@ -196,11 +212,21 @@ export async function runMemoryReview(run: MemoryReviewRun): Promise<MemoryRevie
     assertCurrent: fence,
     ...(run.canSchedule ? { canSchedule: run.canSchedule } : {}),
   });
-  const declaration: Tool = { name: tool.name, description: tool.description, parameters: tool.parameters };
-  const extraTools = new Map((run.extras?.tools ?? []).map((extra) => [extra.name, extra] as const));
+  const declaration: Tool = {
+    name: tool.name,
+    description: tool.description,
+    parameters: tool.parameters,
+  };
+  const extraTools = new Map(
+    (run.extras?.tools ?? []).map((extra) => [extra.name, extra] as const),
+  );
   const declarations: Tool[] = [
     declaration,
-    ...[...extraTools.values()].map((extra) => ({ name: extra.name, description: extra.description, parameters: extra.parameters })),
+    ...[...extraTools.values()].map((extra) => ({
+      name: extra.name,
+      description: extra.description,
+      parameters: extra.parameters,
+    })),
   ];
   const systemPrompt = run.extras?.instructions.length
     ? `${REVIEW_SYSTEM_PROMPT}\n${run.extras.instructions.join("\n")}`
@@ -239,7 +265,10 @@ export async function runMemoryReview(run: MemoryReviewRun): Promise<MemoryRevie
     if (run.authority.signal.aborted) throw lost();
     signal.throwIfAborted();
     if (answer.stopReason === "error" || answer.stopReason === "aborted") {
-      throw new Error(answer.errorMessage ?? `The memory review ${answer.stopReason === "error" ? "failed" : "stopped"}.`);
+      throw new Error(
+        answer.errorMessage ??
+          `The memory review ${answer.stopReason === "error" ? "failed" : "stopped"}.`,
+      );
     }
     messages.push(answer);
     const calls = answer.content.filter((part): part is ToolCall => part.type === "toolCall");
@@ -323,7 +352,12 @@ interface NoticeData {
 function unattendedNoticeRequestId(entry: EntryRecord): string | undefined {
   if (entry.kind !== BOT_NOTICE_ENTRY_KIND) return undefined;
   const data = entry.data as NoticeData | undefined;
-  if (data?.notice !== "routine" && data?.notice !== "hidden_input" && data?.notice !== "bot_message") return undefined;
+  if (
+    data?.notice !== "routine" &&
+    data?.notice !== "hidden_input" &&
+    data?.notice !== "bot_message"
+  )
+    return undefined;
   return typeof data.requestId === "string" ? data.requestId : undefined;
 }
 
@@ -331,14 +365,41 @@ function unattendedNoticeRequestId(entry: EntryRecord): string | undefined {
 type Step =
   | { id: EntryId; kind: "input"; botMessage: boolean; peerRequestId?: string; unattended?: true }
   | { id: EntryId; kind: "output" }
-  | { id: EntryId; kind: "notice"; requestId: string; botMessage: boolean; peerRequestId?: string; unattended?: true };
+  | {
+      id: EntryId;
+      kind: "notice";
+      requestId: string;
+      botMessage: boolean;
+      peerRequestId?: string;
+      unattended?: true;
+    };
 
 function stepOf(entry: EntryRecord): Step | undefined {
   const requestId = unattendedNoticeRequestId(entry);
-  if (requestId !== undefined) return { id: entry.id, kind: "notice", requestId, botMessage: (entry.data as NoticeData).notice === "bot_message" };
+  if (requestId !== undefined)
+    return {
+      id: entry.id,
+      kind: "notice",
+      requestId,
+      botMessage: (entry.data as NoticeData).notice === "bot_message",
+    };
   const role = entry.model?.[0]?.role;
-  if (isBotInputEntryKind(entry.kind) && role === "user") { const requestId = (entry.data as { peerRequestId?: unknown } | undefined)?.peerRequestId; return { id: entry.id, kind: "input", botMessage: entry.kind === BOT_MESSAGE_INPUT_KIND, ...(entry.kind === BOT_PEER_INPUT_KIND ? { unattended: true as const, ...(typeof requestId === "string" ? { peerRequestId: requestId } : {}) } : {}) }; }
-  if (entry.kind === "pi.assistant" && role === "assistant") return { id: entry.id, kind: "output" };
+  if (isBotInputEntryKind(entry.kind) && role === "user") {
+    const requestId = (entry.data as { peerRequestId?: unknown } | undefined)?.peerRequestId;
+    return {
+      id: entry.id,
+      kind: "input",
+      botMessage: entry.kind === BOT_MESSAGE_INPUT_KIND,
+      ...(entry.kind === BOT_PEER_INPUT_KIND
+        ? {
+            unattended: true as const,
+            ...(typeof requestId === "string" ? { peerRequestId: requestId } : {}),
+          }
+        : {}),
+    };
+  }
+  if (entry.kind === "pi.assistant" && role === "assistant")
+    return { id: entry.id, kind: "output" };
   return undefined;
 }
 
@@ -352,7 +413,11 @@ function stepOf(entry: EntryRecord): Step | undefined {
  * exclude a person's later turn. When `fromStart` is false the walk starts mid-history: outputs before
  * its first input have an unknown owner and are left unowned (fail closed).
  */
-function ownership(steps: readonly Step[], unattended: ReadonlyMap<string, UnattendedInput>, fromStart: boolean): Map<EntryId, EntryOwner> {
+function ownership(
+  steps: readonly Step[],
+  unattended: ReadonlyMap<string, UnattendedInput>,
+  fromStart: boolean,
+): Map<EntryId, EntryOwner> {
   const answers = new Map<EntryId, EntryId | undefined>();
   for (const input of unattended.values()) answers.set(input.entry, input.answer);
   const present = new Set(steps.map((step) => step.id));
@@ -393,17 +458,35 @@ function ownership(steps: readonly Step[], unattended: ReadonlyMap<string, Unatt
 }
 
 /** Looks up committed submissions by request id, in order (undefined when none). */
-export type SubmissionLookup = (requestIds: readonly string[]) => Promise<ReadonlyArray<SubmissionRecord | undefined>>;
+export type SubmissionLookup = (
+  requestIds: readonly string[],
+) => Promise<ReadonlyArray<SubmissionRecord | undefined>>;
 
 /** Each routine or self-intro notice's request id, resolved to the input it became and the entry that answered it. */
-async function resolveUnattended(steps: readonly Step[], lookup: SubmissionLookup): Promise<Map<string, UnattendedInput>> {
-  const ids = [...new Set(steps.flatMap((step) => (step.kind === "notice" ? [step.requestId] : step.kind === "input" && step.peerRequestId ? [step.peerRequestId] : [])))];
+async function resolveUnattended(
+  steps: readonly Step[],
+  lookup: SubmissionLookup,
+): Promise<Map<string, UnattendedInput>> {
+  const ids = [
+    ...new Set(
+      steps.flatMap((step) =>
+        step.kind === "notice"
+          ? [step.requestId]
+          : step.kind === "input" && step.peerRequestId
+            ? [step.peerRequestId]
+            : [],
+      ),
+    ),
+  ];
   const unattended = new Map<string, UnattendedInput>();
   if (ids.length === 0) return unattended;
   const records = await lookup(ids);
   records.forEach((record, index) => {
     if (record?.type !== "input" || record.entry === undefined) return;
-    unattended.set(ids[index]!, { entry: record.entry, ...(record.status === "done" ? { answer: record.answer } : {}) });
+    unattended.set(ids[index]!, {
+      entry: record.entry,
+      ...(record.status === "done" ? { answer: record.answer } : {}),
+    });
   });
   return unattended;
 }
@@ -414,7 +497,10 @@ async function resolveUnattended(steps: readonly Step[], lookup: SubmissionLooku
  * `memoryProvenance` does. For read-only callers (`bot_recall`) that hold the
  * committed history and a transaction rather than a `Conversation`.
  */
-export async function provenanceOfHistory(entries: readonly EntryRecord[], lookup: SubmissionLookup): Promise<MemoryProvenance> {
+export async function provenanceOfHistory(
+  entries: readonly EntryRecord[],
+  lookup: SubmissionLookup,
+): Promise<MemoryProvenance> {
   const steps = entries.flatMap((entry) => {
     const step = stepOf(entry);
     return step === undefined ? [] : [step];
@@ -442,7 +528,8 @@ export async function memoryProvenance(
   let scanned = 0;
   let floorAt: number | undefined;
   let ownerAt: number | undefined;
-  const done = () => scanned >= NOTICE_SCAN_LIMIT || (ownerAt !== undefined && scanned - ownerAt >= ENTRY_PAGE);
+  const done = () =>
+    scanned >= NOTICE_SCAN_LIMIT || (ownerAt !== undefined && scanned - ownerAt >= ENTRY_PAGE);
   do {
     options.signal?.throwIfAborted();
     const page = await conversation.entries({}, ENTRY_PAGE, cursor, BACKGROUND_CONTEXT);
@@ -451,13 +538,18 @@ export async function memoryProvenance(
       const step = stepOf(entry);
       if (step !== undefined) newestFirst.push(step);
       if (floorAt === undefined && entry.id === options.floor) floorAt = scanned;
-      if (floorAt !== undefined && ownerAt === undefined && step?.kind === "input") ownerAt = scanned;
+      if (floorAt !== undefined && ownerAt === undefined && step?.kind === "input")
+        ownerAt = scanned;
     }
     cursor = page.next;
   } while (cursor !== undefined && !done());
   const steps = newestFirst.reverse();
   const unattended = await resolveUnattended(steps, (ids) =>
-    conversation.commit((tx) => Promise.all(ids.map((requestId) => tx.submissionByRequest(conversation.id, requestId))), BACKGROUND_CONTEXT),
+    conversation.commit(
+      (tx) =>
+        Promise.all(ids.map((requestId) => tx.submissionByRequest(conversation.id, requestId))),
+      BACKGROUND_CONTEXT,
+    ),
   );
   return ownership(steps, unattended, cursor === undefined);
 }
@@ -475,12 +567,16 @@ export interface ReviewWindow {
  * kept; a routine or self-intro turn, and anything whose owner is unknown,
  * is left out.
  */
-export function personTurns(entries: readonly EntryRecord[], provenance: MemoryProvenance): ReviewWindow {
+export function personTurns(
+  entries: readonly EntryRecord[],
+  provenance: MemoryProvenance,
+): ReviewWindow {
   let personInputs = 0;
   const lines: string[] = [];
   for (const entry of entries) {
     const step = stepOf(entry);
-    if (step === undefined || step.kind === "notice" || provenance.get(entry.id) !== "person") continue;
+    if (step === undefined || step.kind === "notice" || provenance.get(entry.id) !== "person")
+      continue;
     const text = textOf(entry.model?.[0]?.content).trim();
     if (step.kind === "input") {
       personInputs += 1;
@@ -499,7 +595,9 @@ export function personTurns(entries: readonly EntryRecord[], provenance: MemoryP
 function isMemoryResult(entry: EntryRecord): boolean {
   if (entry.kind !== "pi.tool-result") return false;
   const message = entry.model?.[0];
-  return message?.role === "toolResult" && message.toolName === BOT_MEMORY_TOOL_NAME && !message.isError;
+  return (
+    message?.role === "toolResult" && message.toolName === BOT_MEMORY_TOOL_NAME && !message.isError
+  );
 }
 
 /**
@@ -507,7 +605,10 @@ function isMemoryResult(entry: EntryRecord): boolean {
  * marker and the last successful `bot_memory` result. `entries` are oldest
  * first and must reach back to the watermark (or the start).
  */
-export function reviewWindow(entries: readonly EntryRecord[], provenance: MemoryProvenance): ReviewWindow {
+export function reviewWindow(
+  entries: readonly EntryRecord[],
+  provenance: MemoryProvenance,
+): ReviewWindow {
   let start = 0;
   for (let index = entries.length - 1; index >= 0; index -= 1) {
     const entry = entries[index]!;
@@ -520,7 +621,10 @@ export function reviewWindow(entries: readonly EntryRecord[], provenance: Memory
 }
 
 /** Oldest-first entries back to the newest watermark (or the start of history). */
-async function entriesSinceWatermark(conversation: Conversation, signal: AbortSignal): Promise<EntryRecord[]> {
+async function entriesSinceWatermark(
+  conversation: Conversation,
+  signal: AbortSignal,
+): Promise<EntryRecord[]> {
   const newestFirst: EntryRecord[] = [];
   let cursor: Parameters<Conversation["entries"]>[2];
   do {
@@ -528,7 +632,8 @@ async function entriesSinceWatermark(conversation: Conversation, signal: AbortSi
     const page = await conversation.entries({}, ENTRY_PAGE, cursor, BACKGROUND_CONTEXT);
     for (const entry of page.items) {
       newestFirst.push(entry);
-      if (entry.kind === BOT_MEMORY_REVIEW_ENTRY_KIND || isMemoryResult(entry)) return newestFirst.reverse();
+      if (entry.kind === BOT_MEMORY_REVIEW_ENTRY_KIND || isMemoryResult(entry))
+        return newestFirst.reverse();
     }
     cursor = page.next;
   } while (cursor !== undefined && newestFirst.length < ENTRY_SCAN_LIMIT);
@@ -560,7 +665,9 @@ export interface BotMemoryReviewDeps {
   /** Whether the Bot has routines now (see `MemoryReviewRun.canSchedule`). */
   canSchedule?(botId: string): Promise<boolean>;
   /** The daily learning budget; a refused reservation skips the run without a marker. */
-  reserve?(botId: string): Promise<{ ok: true; settle(outputTokens: number | undefined): Promise<void> } | { ok: false }>;
+  reserve?(
+    botId: string,
+  ): Promise<{ ok: true; settle(outputTokens: number | undefined): Promise<void> } | { ok: false }>;
   /** Memory as text before the run, and a record of what the run added (for Undo). */
   snapshot?(botId: string): Promise<string>;
   recordChange?(botId: string, before: string, result: MemoryReviewResult): Promise<void>;
@@ -600,27 +707,40 @@ export function createBotMemoryReview(deps: BotMemoryReviewDeps): BotMemoryRevie
    * nothing: the check runs again once the conversation is in hand, right
    * before the append. False when cancelled.
    */
-  async function writeMarker(botId: string, controller: AbortController, data: BotMemoryReviewEntryData): Promise<boolean> {
+  async function writeMarker(
+    botId: string,
+    controller: AbortController,
+    data: BotMemoryReviewEntryData,
+  ): Promise<boolean> {
     if (controller.signal.aborted) return false;
     const conversation = await deps.conversation(botId);
     if (controller.signal.aborted) return false;
     await conversation.commit(
-      (tx) => tx.appendEntry(conversation.id, { kind: BOT_MEMORY_REVIEW_ENTRY_KIND, data: { ...data } }),
+      (tx) =>
+        tx.appendEntry(conversation.id, { kind: BOT_MEMORY_REVIEW_ENTRY_KIND, data: { ...data } }),
       BACKGROUND_CONTEXT,
     );
     return true;
   }
 
-  async function review(botId: string, controller: AbortController): Promise<BotMemoryReviewOutcome> {
+  async function review(
+    botId: string,
+    controller: AbortController,
+  ): Promise<BotMemoryReviewOutcome> {
     if (!(await deps.isIdle(botId))) return { kind: "skipped", reason: "not_idle" };
-    const admission = await deps.admit(botId).catch((): BotMemoryAdmission => ({ ok: false, reason: "not_admitted" }));
+    const admission = await deps
+      .admit(botId)
+      .catch((): BotMemoryAdmission => ({ ok: false, reason: "not_admitted" }));
     if (!admission.ok) return { kind: "skipped", reason: admission.reason };
     const { lease, model } = admission;
     try {
       const signal = AbortSignal.any([controller.signal, lease.signal]);
       const conversation = await deps.conversation(botId);
       const entries = await entriesSinceWatermark(conversation, signal);
-      const window = reviewWindow(entries, await memoryProvenance(conversation, { floor: entries[0]?.id, signal }));
+      const window = reviewWindow(
+        entries,
+        await memoryProvenance(conversation, { floor: entries[0]?.id, signal }),
+      );
       if (window.personInputs < interval) return { kind: "skipped", reason: "too_soon" };
       let result: MemoryReviewResult;
       const extras = deps.extras?.(botId);
@@ -647,31 +767,54 @@ export function createBotMemoryReview(deps: BotMemoryReviewDeps): BotMemoryRevie
         // Access changed: stop here. A marker records only what was already saved;
         // with nothing saved, the next reply tries again once access is back.
         if (error instanceof BotMemoryAuthorityLostError) {
-          if (error.added > 0 && !(await writeMarker(botId, controller, { source: "review", added: error.added, targets: error.targets }))) {
+          if (
+            error.added > 0 &&
+            !(await writeMarker(botId, controller, {
+              source: "review",
+              added: error.added,
+              targets: error.targets,
+            }))
+          ) {
             return { kind: "aborted" };
           }
           return { kind: "revoked", added: error.added, targets: error.targets };
         }
         // A model error still writes the marker, so the next try waits another interval.
         deps.onError?.(botId, error);
-        if (!(await writeMarker(botId, controller, { source: "review", added: 0, targets: [], failed: true }))) {
+        if (
+          !(await writeMarker(botId, controller, {
+            source: "review",
+            added: 0,
+            targets: [],
+            failed: true,
+          }))
+        ) {
           return { kind: "aborted" };
         }
         return { kind: "failed" };
       }
       await reserved?.settle(undefined).catch(() => undefined);
       // Cancelled once the answer was in (a pause): no marker, so the window is reviewed again later.
-      if (!(await writeMarker(botId, controller, { source: "review", added: result.added, targets: result.targets }))) {
+      if (
+        !(await writeMarker(botId, controller, {
+          source: "review",
+          added: result.added,
+          targets: result.targets,
+        }))
+      ) {
         return { kind: "aborted" };
       }
       if (result.added > 0 && before !== undefined) {
-        await deps.recordChange?.(botId, before, result).catch((error: unknown) => deps.onError?.(botId, error));
+        await deps
+          .recordChange?.(botId, before, result)
+          .catch((error: unknown) => deps.onError?.(botId, error));
       }
       deps.afterReview?.(botId);
       return { kind: "reviewed", added: result.added, targets: result.targets };
     } catch (error) {
       // Revoked before the run started (while reading the transcript).
-      if (!controller.signal.aborted && lease.signal.aborted) return { kind: "revoked", added: 0, targets: [] };
+      if (!controller.signal.aborted && lease.signal.aborted)
+        return { kind: "revoked", added: 0, targets: [] };
       throw error;
     } finally {
       lease.release();

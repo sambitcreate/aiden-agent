@@ -44,7 +44,10 @@ export interface GoalTurnHooks {
    * (with `notice` saved first, or answering the saved one); undefined when
    * the chat has no active goal.
    */
-  noticeRound(chatId: string, notice?: { text: string; notice: AgentNoticeV1 }): Promise<StartTurnResult | undefined>;
+  noticeRound(
+    chatId: string,
+    notice?: { text: string; notice: AgentNoticeV1 },
+  ): Promise<StartTurnResult | undefined>;
   /** A goal round without a window refused a call that needs the chat on screen. */
   windowToolRefused(chatId: string): void;
   /** `propose_goal`: shows the person a Start / Not now card. Throws why it can't. */

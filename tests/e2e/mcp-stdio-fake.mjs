@@ -3,7 +3,8 @@
 import process from "node:process";
 
 let buffer = "";
-const reply = (id, result) => process.stdout.write(`${JSON.stringify({ jsonrpc: "2.0", id, result })}\n`);
+const reply = (id, result) =>
+  process.stdout.write(`${JSON.stringify({ jsonrpc: "2.0", id, result })}\n`);
 process.stdin.setEncoding("utf8");
 process.stdin.on("data", (chunk) => {
   buffer += chunk;
@@ -20,10 +21,15 @@ process.stdin.on("data", (chunk) => {
       });
     } else if (message.method === "tools/list") {
       reply(message.id, {
-        tools: ["echo", "count"].map((name) => ({ name, inputSchema: { type: "object", properties: {} } })),
+        tools: ["echo", "count"].map((name) => ({
+          name,
+          inputSchema: { type: "object", properties: {} },
+        })),
       });
     } else {
-      process.stdout.write(`${JSON.stringify({ jsonrpc: "2.0", id: message.id, error: { code: -32601, message: "Not supported" } })}\n`);
+      process.stdout.write(
+        `${JSON.stringify({ jsonrpc: "2.0", id: message.id, error: { code: -32601, message: "Not supported" } })}\n`,
+      );
     }
   }
 });

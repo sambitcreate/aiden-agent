@@ -407,7 +407,10 @@ test("YAML skill metadata reaches the catalog and tools without losing multiline
       fixture.description,
     );
     // The one skill tool loads it by the name the prompt lists with its description.
-    assert.match(JSON.stringify(await tools[0]!.execute("load", { name: fixture.directory })), /Keep this body/u);
+    assert.match(
+      JSON.stringify(await tools[0]!.execute("load", { name: fixture.directory })),
+      /Keep this body/u,
+    );
     assert.ok(formatAvailableSkills(snapshot)?.includes(fixture.description));
   }
 });
@@ -599,21 +602,39 @@ test("strict invocation booleans default to both and isolate malformed policies"
   }
 });
 
-async function installPlugin(home: string, key: string, skills: Record<string, string>, options: {
-  manifest?: Record<string, unknown>;
-  scope?: string;
-  projectPath?: string;
-} = {}) {
+async function installPlugin(
+  home: string,
+  key: string,
+  skills: Record<string, string>,
+  options: {
+    manifest?: Record<string, unknown>;
+    scope?: string;
+    projectPath?: string;
+  } = {},
+) {
   const root = path.join(home, "installed", key.replace(/@/g, "-"));
-  for (const [name, content] of Object.entries(skills)) await writeSkill(path.join(root, "skills"), name, content);
+  for (const [name, content] of Object.entries(skills))
+    await writeSkill(path.join(root, "skills"), name, content);
   if (options.manifest) {
     await fs.mkdir(path.join(root, ".claude-plugin"), { recursive: true });
-    await fs.writeFile(path.join(root, ".claude-plugin", "plugin.json"), JSON.stringify(options.manifest));
+    await fs.writeFile(
+      path.join(root, ".claude-plugin", "plugin.json"),
+      JSON.stringify(options.manifest),
+    );
   }
   const inventory = path.join(home, ".claude", "plugins", "installed_plugins.json");
   await fs.mkdir(path.dirname(inventory), { recursive: true });
-  const existing = await fs.readFile(inventory, "utf8").then(JSON.parse).catch(() => ({ plugins: {} }));
-  existing.plugins[key] = [{ scope: options.scope ?? "user", installPath: root, ...(options.projectPath ? { projectPath: options.projectPath } : {}) }];
+  const existing = await fs
+    .readFile(inventory, "utf8")
+    .then(JSON.parse)
+    .catch(() => ({ plugins: {} }));
+  existing.plugins[key] = [
+    {
+      scope: options.scope ?? "user",
+      installPath: root,
+      ...(options.projectPath ? { projectPath: options.projectPath } : {}),
+    },
+  ];
   await fs.writeFile(inventory, JSON.stringify(existing));
   return root;
 }
@@ -627,23 +648,60 @@ async function enablePlugins(base: string, enabledPlugins: Record<string, unknow
 test("enabled installed plugin skills reach the authoritative catalog with namespace and invocation policies", async (t) => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-plugins-"));
   t.after(() => fs.rm(home, { recursive: true, force: true }));
-  const root = await installPlugin(home, "review@shop", {
-    review: "---\nname: audit\ndescription: Review code.\ndisable-model-invocation: true\n---\nReview carefully.",
-    hidden: "---\nuser-invocable: false\n---\nAutomatic only.",
-    blank: '---\nname: " "\n---\nBlank identity.',
-  }, { manifest: { name: "engineering" } });
+  const root = await installPlugin(
+    home,
+    "review@shop",
+    {
+      review:
+        "---\nname: audit\ndescription: Review code.\ndisable-model-invocation: true\n---\nReview carefully.",
+      hidden: "---\nuser-invocable: false\n---\nAutomatic only.",
+      blank: '---\nname: " "\n---\nBlank identity.',
+    },
+    { manifest: { name: "engineering" } },
+  );
   await installPlugin(home, "disabled@shop", { review: "Disabled instructions." });
   await installPlugin(home, "unconfigured@shop", { review: "Unconfigured instructions." });
   await enablePlugins(home, { "review@shop": true, "disabled@shop": false });
   const candidates = await discoverSkillCandidates(undefined, home);
-  assert.deepEqual(candidates.map(({ name, source }) => [name, source]), [["engineering:hidden", "global"], ["engineering:audit", "global"]]);
-  assert.equal(candidates.find((skill) => skill.name === "engineering:audit")?.instructions, "Review carefully.");
-  assert.equal(candidates.find((skill) => skill.name === "engineering:audit")?.modelInvocable, false);
-  assert.equal(candidates.find((skill) => skill.name === "engineering:hidden")?.userInvocable, false);
-  assert.equal(candidates.find((skill) => skill.name === "engineering:audit")?.path, await fs.realpath(path.join(root, "skills", "review", "SKILL.md")));
+  assert.deepEqual(
+    candidates.map(({ name, source }) => [name, source]),
+    [
+      ["engineering:hidden", "global"],
+      ["engineering:audit", "global"],
+    ],
+  );
+  assert.equal(
+    candidates.find((skill) => skill.name === "engineering:audit")?.instructions,
+    "Review carefully.",
+  );
+  assert.equal(
+    candidates.find((skill) => skill.name === "engineering:audit")?.modelInvocable,
+    false,
+  );
+  assert.equal(
+    candidates.find((skill) => skill.name === "engineering:hidden")?.userInvocable,
+    false,
+  );
+  assert.equal(
+    candidates.find((skill) => skill.name === "engineering:audit")?.path,
+    await fs.realpath(path.join(root, "skills", "review", "SKILL.md")),
+  );
   const { SkillRegistry } = await import("./skill-registry.js");
-  const registry = new SkillRegistry({ getWorkspace: async () => ({ id: "w", name: "No folder", permission: "none", createdAt: 1, updatedAt: 1 }), listConfigured: async () => [], discover: async () => candidates });
-  assert.deepEqual((await registry.snapshot("w")).catalog.map((skill) => skill.name), ["engineering:audit"]);
+  const registry = new SkillRegistry({
+    getWorkspace: async () => ({
+      id: "w",
+      name: "No folder",
+      permission: "none",
+      createdAt: 1,
+      updatedAt: 1,
+    }),
+    listConfigured: async () => [],
+    discover: async () => candidates,
+  });
+  assert.deepEqual(
+    (await registry.snapshot("w")).catalog.map((skill) => skill.name),
+    ["engineering:audit"],
+  );
 });
 
 test("project plugin enablement and installed scope stay workspace-bound and require workspace access", async (t) => {
@@ -651,17 +709,42 @@ test("project plugin enablement and installed scope stay workspace-bound and req
   const workspace = path.join(home, "project");
   const other = path.join(home, "other");
   t.after(() => fs.rm(home, { recursive: true, force: true }));
-  await installPlugin(home, "project@shop", { review: "Project instructions." }, { scope: "project", projectPath: workspace });
+  await installPlugin(
+    home,
+    "project@shop",
+    { review: "Project instructions." },
+    { scope: "project", projectPath: workspace },
+  );
   await installPlugin(home, "user@shop", { review: "User instructions." });
   await enablePlugins(home, { "project@shop": true, "user@shop": true });
   await enablePlugins(workspace, { "user@shop": false });
-  assert.deepEqual((await discoverSkillCandidates(workspace, home)).map((skill) => [skill.name, skill.source]), [["project:review", "workspace"]]);
-  assert.deepEqual((await discoverSkillCandidates(other, home)).map((skill) => skill.name), ["user:review"]);
+  assert.deepEqual(
+    (await discoverSkillCandidates(workspace, home)).map((skill) => [skill.name, skill.source]),
+    [["project:review", "workspace"]],
+  );
+  assert.deepEqual(
+    (await discoverSkillCandidates(other, home)).map((skill) => skill.name),
+    ["user:review"],
+  );
   await enablePlugins(workspace, { "user@shop": true }, true);
   const candidates = await discoverSkillCandidates(workspace, home);
-  assert.deepEqual(candidates.map((skill) => skill.source), ["workspace", "workspace"]);
+  assert.deepEqual(
+    candidates.map((skill) => skill.source),
+    ["workspace", "workspace"],
+  );
   const { SkillRegistry } = await import("./skill-registry.js");
-  const registry = new SkillRegistry({ getWorkspace: async () => ({ id: "w", name: "Project", folderPath: workspace, permission: "none", createdAt: 1, updatedAt: 1 }), listConfigured: async () => [], discover: async () => candidates });
+  const registry = new SkillRegistry({
+    getWorkspace: async () => ({
+      id: "w",
+      name: "Project",
+      folderPath: workspace,
+      permission: "none",
+      createdAt: 1,
+      updatedAt: 1,
+    }),
+    listConfigured: async () => [],
+    discover: async () => candidates,
+  });
   const snapshot = await registry.snapshot("w");
   assert.equal(snapshot.available.length, 0);
   assert.equal(snapshot.catalog.length, 2);
@@ -671,37 +754,71 @@ test("project plugin enablement and installed scope stay workspace-bound and req
 test("manifest collections and root skills use bounded plugin containment and preserve authored overrides", async (t) => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-plugins-paths-"));
   t.after(() => fs.rm(home, { recursive: true, force: true }));
-  const root = await installPlugin(home, "tools@shop", { normal: "Normal body." }, { manifest: { skills: ["./extra", "./linked", "../../outside", "/tmp", "./extra/SKILL.md"] } });
+  const root = await installPlugin(
+    home,
+    "tools@shop",
+    { normal: "Normal body." },
+    { manifest: { skills: ["./extra", "./linked", "../../outside", "/tmp", "./extra/SKILL.md"] } },
+  );
   await fs.mkdir(path.join(root, "extra"));
   await fs.writeFile(path.join(root, "extra", "SKILL.md"), "---\nname: custom\n---\nCustom body.");
   await fs.writeFile(path.join(root, "SKILL.md"), "---\nname: root\n---\nRoot body.");
   // The standard collection holds `<name>/SKILL.md` skills; a SKILL.md at its top is not one.
-  await fs.writeFile(path.join(root, "skills", "SKILL.md"), "---\nname: collection\n---\nCollection readme.");
+  await fs.writeFile(
+    path.join(root, "skills", "SKILL.md"),
+    "---\nname: collection\n---\nCollection readme.",
+  );
   const outside = path.join(home, "outside");
   await writeSkill(outside, "escaped", "Escaped body.");
   await fs.symlink(outside, path.join(root, "linked"));
   await enablePlugins(home, { "tools@shop": true });
-  await writeSkill(path.join(home, ".aiden", "skills"), "override", "---\nname: tools:normal\n---\nUser override.");
+  await writeSkill(
+    path.join(home, ".aiden", "skills"),
+    "override",
+    "---\nname: tools:normal\n---\nUser override.",
+  );
   const skills = await discoverSkills(undefined, home);
-  assert.deepEqual(skills.map((skill) => skill.name).sort(), ["tools:custom", "tools:normal", "tools:root"]);
-  assert.equal(skills.find((skill) => skill.name === "tools:normal")?.instructions, "User override.");
+  assert.deepEqual(skills.map((skill) => skill.name).sort(), [
+    "tools:custom",
+    "tools:normal",
+    "tools:root",
+  ]);
+  assert.equal(
+    skills.find((skill) => skill.name === "tools:normal")?.instructions,
+    "User override.",
+  );
   const candidates = await discoverSkillCandidates(undefined, home);
   assert.equal(candidates.filter((skill) => skill.name === "tools:custom").length, 1);
   await writeSkill(root, "audit", "Root collection audit instructions.");
-  assert.ok(!(await discoverSkillCandidates(undefined, home)).some((skill) => skill.name === "tools:audit"), "the implicit root fallback must remain direct-only");
+  assert.ok(
+    !(await discoverSkillCandidates(undefined, home)).some((skill) => skill.name === "tools:audit"),
+    "the implicit root fallback must remain direct-only",
+  );
   for (const collection of [".", "./"]) {
-    await fs.writeFile(path.join(root, ".claude-plugin", "plugin.json"), JSON.stringify({ skills: collection }));
+    await fs.writeFile(
+      path.join(root, ".claude-plugin", "plugin.json"),
+      JSON.stringify({ skills: collection }),
+    );
     const declared = await discoverSkillCandidates(undefined, home);
-    assert.equal(declared.find((skill) => skill.name === "tools:audit")?.instructions, "Root collection audit instructions.");
+    assert.equal(
+      declared.find((skill) => skill.name === "tools:audit")?.instructions,
+      "Root collection audit instructions.",
+    );
     assert.equal(declared.filter((skill) => skill.name === "tools:custom").length, 1);
     assert.ok(!declared.some((skill) => skill.name === "tools:escaped"));
   }
   // A manifest that names one SKILL.md gets that skill, not every skill nested beside it.
   await writeSkill(path.join(root, "extra"), "stray", "Undeclared nested body.");
-  await fs.writeFile(path.join(root, ".claude-plugin", "plugin.json"), JSON.stringify({ skills: "./extra/SKILL.md" }));
+  await fs.writeFile(
+    path.join(root, ".claude-plugin", "plugin.json"),
+    JSON.stringify({ skills: "./extra/SKILL.md" }),
+  );
   const single = await discoverSkillCandidates(undefined, home);
   assert.equal(single.filter((skill) => skill.name === "tools:custom").length, 1);
-  assert.ok(!single.some((skill) => skill.name === "tools:stray"), "a declared SKILL.md does not import its folder's nested skills");
+  assert.ok(
+    !single.some((skill) => skill.name === "tools:stray"),
+    "a declared SKILL.md does not import its folder's nested skills",
+  );
 });
 
 test("malformed plugin metadata and nonboolean enablement fail closed without hiding ordinary skills", async (t) => {
@@ -710,15 +827,29 @@ test("malformed plugin metadata and nonboolean enablement fail closed without hi
   await writeSkill(path.join(home, ".claude", "skills"), "ordinary", "Ordinary body.");
   await installPlugin(home, "plugin@shop", { review: "Plugin body." });
   await enablePlugins(home, { "plugin@shop": ["^1.0.0"] });
-  assert.deepEqual((await discoverSkillCandidates(undefined, home)).map((skill) => skill.name), ["ordinary"]);
+  assert.deepEqual(
+    (await discoverSkillCandidates(undefined, home)).map((skill) => skill.name),
+    ["ordinary"],
+  );
   await enablePlugins(home, { "plugin@shop": true });
-  assert.deepEqual((await discoverSkillCandidates(undefined, home)).map((skill) => skill.name).sort(), ["ordinary", "plugin:review"]);
+  assert.deepEqual(
+    (await discoverSkillCandidates(undefined, home)).map((skill) => skill.name).sort(),
+    ["ordinary", "plugin:review"],
+  );
   // "unsafe:" plus 75 characters is past the 80-character name limit, so the skill is left out.
-  await installPlugin(home, "unsafe@shop", { review: `---\nname: ${"x".repeat(75)}\n---\nOverlong name.` });
+  await installPlugin(home, "unsafe@shop", {
+    review: `---\nname: ${"x".repeat(75)}\n---\nOverlong name.`,
+  });
   await enablePlugins(home, { "plugin@shop": true, "unsafe@shop": true });
-  assert.deepEqual((await discoverSkillCandidates(undefined, home)).map((skill) => skill.name).sort(), ["ordinary", "plugin:review"]);
+  assert.deepEqual(
+    (await discoverSkillCandidates(undefined, home)).map((skill) => skill.name).sort(),
+    ["ordinary", "plugin:review"],
+  );
   await fs.writeFile(path.join(home, ".claude", "plugins", "installed_plugins.json"), "{");
-  assert.deepEqual((await discoverSkillCandidates(undefined, home)).map((skill) => skill.name), ["ordinary"]);
+  assert.deepEqual(
+    (await discoverSkillCandidates(undefined, home)).map((skill) => skill.name),
+    ["ordinary"],
+  );
 });
 
 test("discoverSkillCandidatesWithCachedGlobals reuses global skills across worktrees while scanning each workspace fresh", async (t) => {
@@ -736,20 +867,34 @@ test("discoverSkillCandidatesWithCachedGlobals reuses global skills across workt
 
   invalidateSkillDiscoveryCache();
   const first = await discoverSkillCandidatesWithCachedGlobals(ws1, home);
-  assert.deepEqual(first.map((skill) => skill.name), ["ws-one", "global-one"]);
+  assert.deepEqual(
+    first.map((skill) => skill.name),
+    ["ws-one", "global-one"],
+  );
 
   // Add a second global skill without invalidating: ws2 still sees its own fresh
   // workspace skill while reusing the cached global scan.
   await writeSkill(path.join(home, ".claude", "skills"), "global-two", "Global 2.");
   const second = await discoverSkillCandidatesWithCachedGlobals(ws2, home);
-  assert.deepEqual(second.map((skill) => skill.name), ["ws-two", "global-one"]);
+  assert.deepEqual(
+    second.map((skill) => skill.name),
+    ["ws-two", "global-one"],
+  );
 
   // Uncached discoverSkillCandidates still sees the new global skill immediately.
   const uncached = await discoverSkillCandidates(ws2, home);
-  assert.deepEqual(uncached.map((skill) => skill.name).sort(), ["global-one", "global-two", "ws-two"]);
+  assert.deepEqual(uncached.map((skill) => skill.name).sort(), [
+    "global-one",
+    "global-two",
+    "ws-two",
+  ]);
 
   // After invalidation, cached-global discovery observes the new global skill.
   invalidateSkillDiscoveryCache();
   const refreshed = await discoverSkillCandidatesWithCachedGlobals(ws2, home);
-  assert.deepEqual(refreshed.map((skill) => skill.name).sort(), ["global-one", "global-two", "ws-two"]);
+  assert.deepEqual(refreshed.map((skill) => skill.name).sort(), [
+    "global-one",
+    "global-two",
+    "ws-two",
+  ]);
 });

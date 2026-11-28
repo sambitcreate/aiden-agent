@@ -13,7 +13,11 @@ import {
 } from "../shared/live-app-control";
 import { matchLiveVoicePhrase } from "../shared/live-voice-phrases";
 import type { LiveActivity } from "./live-activity";
-import type { LiveRendererToolContext, LiveRendererToolResult, LiveVoiceInput } from "./live-session-bus";
+import type {
+  LiveRendererToolContext,
+  LiveRendererToolResult,
+  LiveVoiceInput,
+} from "./live-session-bus";
 
 export interface LiveAppControlState {
   /** Live is acting: the outline is drawn and the ribbon offers Take over. */
@@ -48,7 +52,10 @@ export interface LiveAppControlInputEvent {
 /** Whether an input event's target is the ribbon's Confirm or Cancel, or inside one. */
 export function isLiveConfirmAnswerTarget(target: unknown): boolean {
   const element = target as { closest?: (selector: string) => unknown } | null;
-  return typeof element?.closest === "function" && Boolean(element.closest(`[${LIVE_CONFIRM_ANSWER_ATTRIBUTE}]`));
+  return (
+    typeof element?.closest === "function" &&
+    Boolean(element.closest(`[${LIVE_CONFIRM_ANSWER_ATTRIBUTE}]`))
+  );
 }
 
 const IDLE: LiveAppControlState = { acting: false, label: "" };
@@ -75,7 +82,8 @@ export class LiveAppControlController {
   private requestActive = false;
   private watch: ((result: LiveRendererToolResult) => void) | null = null;
   private lingerTimer: ReturnType<typeof setTimeout> | null = null;
-  private confirmation: { id: string; finish(confirmed: boolean, reason: string): void } | null = null;
+  private confirmation: { id: string; finish(confirmed: boolean, reason: string): void } | null =
+    null;
   private confirmSequence = 0;
   private readonly stopVoice: () => void;
 
@@ -96,16 +104,25 @@ export class LiveAppControlController {
   };
 
   /** The renderer tool main calls for every app-control step. */
-  handle = async (args: Record<string, unknown>, context: LiveRendererToolContext): Promise<LiveRendererToolResult> => {
+  handle = async (
+    args: Record<string, unknown>,
+    context: LiveRendererToolContext,
+  ): Promise<LiveRendererToolResult> => {
     switch (args.op) {
       case "admit":
         return this.admit(typeof args.label === "string" ? args.label.slice(0, 120) : "");
       case "watch":
         return this.watchUntilTakeOver(context.signal);
       case "confirm":
-        return this.confirm(typeof args.label === "string" ? args.label.slice(0, 200) : "", context.signal);
+        return this.confirm(
+          typeof args.label === "string" ? args.label.slice(0, 200) : "",
+          context.signal,
+        );
       case "note":
-        return { ok: typeof args.text === "string" && (await this.deps.bus.note(args.text.slice(0, 2_000))) };
+        return {
+          ok:
+            typeof args.text === "string" && (await this.deps.bus.note(args.text.slice(0, 2_000))),
+        };
       default:
         return failure("invalid", "Unknown app control step.");
     }
@@ -120,7 +137,8 @@ export class LiveAppControlController {
     if (this.confirmation) {
       // Pressing or keying Confirm or Cancel answers through their own handlers.
       if (event.answersConfirmation) return;
-      if (event.type === "keydown" && event.key !== undefined && FOCUS_ONLY_KEYS.has(event.key)) return;
+      if (event.type === "keydown" && event.key !== undefined && FOCUS_ONLY_KEYS.has(event.key))
+        return;
       // Anything else is the user carrying on themselves: the guarded control
       // is not used, and Live waits until they speak again.
       const escape = event.type === "keydown" && event.key === "Escape";
@@ -165,7 +183,10 @@ export class LiveAppControlController {
     this.actions += 1;
     this.requestActive = true;
     this.setActing(label || "Moving through Aiden");
-    return { ok: true, remaining: (this.deps.maxActions ?? LIVE_APP_CONTROL_MAX_ACTIONS) - this.actions };
+    return {
+      ok: true,
+      remaining: (this.deps.maxActions ?? LIVE_APP_CONTROL_MAX_ACTIONS) - this.actions,
+    };
   }
 
   private watchUntilTakeOver(signal: AbortSignal): Promise<LiveRendererToolResult> {
@@ -209,7 +230,10 @@ export class LiveAppControlController {
         resolve({ ok: true, confirmed, reason });
       };
       const aborted = () => finish(false, "cancelled");
-      const timer = setTimeout(() => finish(false, "timeout"), this.deps.confirmTimeoutMs ?? LIVE_APP_CONTROL_CONFIRM_TIMEOUT_MS);
+      const timer = setTimeout(
+        () => finish(false, "timeout"),
+        this.deps.confirmTimeoutMs ?? LIVE_APP_CONTROL_CONFIRM_TIMEOUT_MS,
+      );
       this.confirmation = { id, finish };
       // Tapping Confirm works at once. Its callbacks only ever answer this one
       // guarded action, which main has bound to one element and one action.
@@ -233,9 +257,12 @@ export class LiveAppControlController {
       // under way at the fence, or with no provable onset, never says yes; a
       // deny phrase there still refuses.
       void this.deps.bus
-        .note(`Ask the user to say confirm or tap Confirm to allow: ${shownLabel}. Nothing happens until they do.`, {
-          awaitDelivery: true,
-        })
+        .note(
+          `Ask the user to say confirm or tap Confirm to allow: ${shownLabel}. Nothing happens until they do.`,
+          {
+            awaitDelivery: true,
+          },
+        )
         .catch(() => false)
         .then((delivered) => {
           if (settled || !delivered) return;

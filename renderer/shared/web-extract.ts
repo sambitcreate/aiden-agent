@@ -118,7 +118,10 @@ function record(value: unknown): Record<string, unknown> | undefined {
 /** C0 controls (newline and tab included) and DEL never reach a one-line display. */
 function oneLine(value: string): string {
   /* eslint-disable no-control-regex */
-  return value.replace(/[\u0000-\u001f\u007f]+/gu, " ").replace(/\s+/gu, " ").trim();
+  return value
+    .replace(/[\u0000-\u001f\u007f]+/gu, " ")
+    .replace(/\s+/gu, " ")
+    .trim();
   /* eslint-enable no-control-regex */
 }
 

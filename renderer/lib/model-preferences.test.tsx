@@ -51,7 +51,6 @@ function PreferencesProbe() {
   );
 }
 
-
 function mount() {
   const client = createBotTestQueryClient();
   render(
@@ -116,7 +115,10 @@ test("overlapping pin saves never lose an update when replies arrive late", asyn
     },
   });
   const client = createBotTestQueryClient();
-  await client.fetchQuery({ queryKey: queryKeys.settings, queryFn: async () => structuredClone(server) });
+  await client.fetchQuery({
+    queryKey: queryKeys.settings,
+    queryFn: async () => structuredClone(server),
+  });
   const toggle = (value: string) =>
     saveModelPreferences(client, ({ pinnedModels }) => ({
       pinnedModels: pinnedModels.includes(value)
@@ -149,7 +151,10 @@ test("an update that changes nothing sends no write and leaves the cache alone",
   const initial: AppSettings = { pinnedModels: ["p::x"] };
   const server = settingsServer(initial);
   const client = createBotTestQueryClient();
-  await client.fetchQuery({ queryKey: queryKeys.settings, queryFn: async () => structuredClone(initial) });
+  await client.fetchQuery({
+    queryKey: queryKeys.settings,
+    queryFn: async () => structuredClone(initial),
+  });
   const before = client.getQueryData<AppSettings>(queryKeys.settings);
 
   const result = await saveModelPreferences(client, () => ({}));

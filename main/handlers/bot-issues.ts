@@ -23,7 +23,8 @@ import { parseBotId } from "./bot-params.js";
 const ISSUE_ID = /^[A-Za-z0-9._:-]{1,160}$/u;
 
 function exact(value: unknown, keys: readonly string[]): Record<string, unknown> {
-  if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("Invalid bot issue fields.");
+  if (!value || typeof value !== "object" || Array.isArray(value))
+    throw new Error("Invalid bot issue fields.");
   const fields = value as Record<string, unknown>;
   const allowed = new Set(keys);
   for (const key of Object.keys(fields)) {
@@ -50,8 +51,12 @@ export function parseBotIssueAct(input: unknown): {
 
 export function parseBotIssueList(input: unknown): { botId: string; open?: boolean } {
   const fields = exact(input, ["botId", "open"]);
-  if (fields.open !== undefined && typeof fields.open !== "boolean") throw new Error("Invalid bot issue filter.");
-  return { botId: parseBotId(fields.botId), ...(fields.open === undefined ? {} : { open: fields.open }) };
+  if (fields.open !== undefined && typeof fields.open !== "boolean")
+    throw new Error("Invalid bot issue filter.");
+  return {
+    botId: parseBotId(fields.botId),
+    ...(fields.open === undefined ? {} : { open: fields.open }),
+  };
 }
 
 export interface BotIssueHandlerDependencies<Event = unknown> {
@@ -62,14 +67,17 @@ export interface BotIssueHandlerDependencies<Event = unknown> {
 export function registerBotIssueHandlers<Event = unknown>(
   dependencies: BotIssueHandlerDependencies<Event>,
 ): void {
-  dependencies.handle(BOT_ISSUE_CHANNELS.act, async (_event, input): Promise<{ result: "done" | "not_open" }> => {
-    const { botId, issueId, action } = parseBotIssueAct(input);
-    const result: BotIssueActResult = await dependencies.issues.act(botId, issueId, action);
-    // A stale card (another window answered first) is not an error; an action
-    // this issue never offered is.
-    if (result === "invalid") throw new Error("That action doesn’t fit this issue.");
-    return { result };
-  });
+  dependencies.handle(
+    BOT_ISSUE_CHANNELS.act,
+    async (_event, input): Promise<{ result: "done" | "not_open" }> => {
+      const { botId, issueId, action } = parseBotIssueAct(input);
+      const result: BotIssueActResult = await dependencies.issues.act(botId, issueId, action);
+      // A stale card (another window answered first) is not an error; an action
+      // this issue never offered is.
+      if (result === "invalid") throw new Error("That action doesn’t fit this issue.");
+      return { result };
+    },
+  );
 
   dependencies.handle(BOT_ISSUE_CHANNELS.list, async (_event, input): Promise<BotIssue[]> => {
     const { botId, open } = parseBotIssueList(input);

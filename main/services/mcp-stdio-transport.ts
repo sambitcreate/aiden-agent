@@ -18,7 +18,11 @@ import {
   type ObservedProcessEntry,
   type ProcessIncarnationSurvivor,
 } from "../shared/process-group.js";
-import { StdioTransport, type McpTransport, type StdioTransportOptions } from "@earendil-works/pi-mcp";
+import {
+  StdioTransport,
+  type McpTransport,
+  type StdioTransportOptions,
+} from "@earendil-works/pi-mcp";
 
 export interface McpProcessGroupRecord {
   pgid: number;
@@ -65,7 +69,10 @@ function snapshotGroupRecords(): McpProcessGroupRecord[] {
   return [...liveGroups.values()].map((record) => ({
     pgid: record.pgid,
     ...(record.leaderStartId ? { leaderStartId: record.leaderStartId } : {}),
-    survivors: record.survivors.map((survivor) => ({ pid: survivor.pid, startId: survivor.startId })),
+    survivors: record.survivors.map((survivor) => ({
+      pid: survivor.pid,
+      startId: survivor.startId,
+    })),
   }));
 }
 
@@ -86,7 +93,9 @@ function groupsChanged(): void {
 export function watchMcpProcessGroups(listener: (groups: readonly number[]) => void): () => void {
   groupListeners.add(listener);
   listener([...liveGroups.keys()]);
-  return () => { groupListeners.delete(listener); };
+  return () => {
+    groupListeners.delete(listener);
+  };
 }
 
 /**
@@ -99,7 +108,9 @@ export function watchMcpProcessGroupRecords(
 ): () => void {
   groupRecordListeners.add(listener);
   listener(snapshotGroupRecords());
-  return () => { groupRecordListeners.delete(listener); };
+  return () => {
+    groupRecordListeners.delete(listener);
+  };
 }
 
 function isDescendantOfAny(
@@ -122,9 +133,23 @@ function isDescendantOfAny(
 }
 
 /** The environment every stdio server may see, matching the MCP SDK's default set. */
-const DEFAULT_INHERITED_ENV_VARS = process.platform === "win32"
-  ? ["APPDATA", "HOMEDRIVE", "HOMEPATH", "LOCALAPPDATA", "PATH", "PROCESSOR_ARCHITECTURE", "SYSTEMDRIVE", "SYSTEMROOT", "TEMP", "USERNAME", "USERPROFILE", "PROGRAMFILES"]
-  : ["HOME", "LOGNAME", "PATH", "SHELL", "TERM", "USER"];
+const DEFAULT_INHERITED_ENV_VARS =
+  process.platform === "win32"
+    ? [
+        "APPDATA",
+        "HOMEDRIVE",
+        "HOMEPATH",
+        "LOCALAPPDATA",
+        "PATH",
+        "PROCESSOR_ARCHITECTURE",
+        "SYSTEMDRIVE",
+        "SYSTEMROOT",
+        "TEMP",
+        "USERNAME",
+        "USERPROFILE",
+        "PROGRAMFILES",
+      ]
+    : ["HOME", "LOGNAME", "PATH", "SHELL", "TERM", "USER"];
 
 /**
  * Safe default environment for a spawned MCP server: login identity, PATH
@@ -166,8 +191,14 @@ function settlesWithin(operation: Promise<unknown>, ms: number): Promise<boolean
     const timer = setTimeout(() => resolve(false), ms);
     timer.unref?.();
     void operation.then(
-      () => { clearTimeout(timer); resolve(true); },
-      () => { clearTimeout(timer); resolve(true); },
+      () => {
+        clearTimeout(timer);
+        resolve(true);
+      },
+      () => {
+        clearTimeout(timer);
+        resolve(true);
+      },
     );
   });
 }
@@ -256,7 +287,8 @@ class AidenStdioTransport extends StdioTransport {
     const pid = this.groupPid;
     const record = this.groupRecord;
     const child = this.trackedChild;
-    if (pid === undefined || record === undefined || record.leaderExited || !record.leaderStartId) return;
+    if (pid === undefined || record === undefined || record.leaderExited || !record.leaderStartId)
+      return;
     if (liveGroups.get(pid) !== record) return;
     if (child && (child.exitCode !== null || child.signalCode !== null)) return;
     const observed = observePreExitProcessGroupMembers(pid, record.leaderStartId);
@@ -326,7 +358,10 @@ class AidenStdioTransport extends StdioTransport {
       child?.stdout?.destroy();
       child?.stderr?.destroy();
       const record = this.groupRecord;
-      if (this.groupPid !== undefined && !(record?.leaderExited && record.survivors.length === 0 && !this.customGroupProbe)) {
+      if (
+        this.groupPid !== undefined &&
+        !(record?.leaderExited && record.survivors.length === 0 && !this.customGroupProbe)
+      ) {
         signalGroup(this.groupPid, "SIGKILL");
       } else if (!record?.leaderExited) {
         child?.kill("SIGKILL");
@@ -367,13 +402,20 @@ class AidenStdioTransport extends StdioTransport {
     for (const member of members) {
       if (currentUid !== undefined && member.uid !== currentUid) continue;
       if (!member.startId) continue;
-      if (record.survivors.some((survivor) => survivor.pid === member.pid && survivor.startId === member.startId)) {
+      if (
+        record.survivors.some(
+          (survivor) => survivor.pid === member.pid && survivor.startId === member.startId,
+        )
+      ) {
         verifiedPids.add(member.pid);
       }
     }
     if (verifiedPids.size === 0) return false;
     return members.some(
-      (member) => !member.zombie && (currentUid === undefined || member.uid === currentUid) && isDescendantOfAny(member, verifiedPids, byPid),
+      (member) =>
+        !member.zombie &&
+        (currentUid === undefined || member.uid === currentUid) &&
+        isDescendantOfAny(member, verifiedPids, byPid),
     );
   }
 
@@ -444,5 +486,10 @@ export function createMcpStdioTransport(options: McpStdioTransportOptions): McpT
     ...(options.maxBufferSize === undefined ? {} : { maxMessageBytes: options.maxBufferSize }),
     closeTimeoutMs: graceMs,
   };
-  return new AidenStdioTransport(transportOptions, graceMs, process.platform !== "win32", options.groupStillRuns);
+  return new AidenStdioTransport(
+    transportOptions,
+    graceMs,
+    process.platform !== "win32",
+    options.groupStillRuns,
+  );
 }

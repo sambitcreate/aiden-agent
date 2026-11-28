@@ -25,7 +25,10 @@ test("shows the saved preference and saves a new one", async () => {
   fireEvent.click(await screen.findByRole("option", { name: "Ask each time" }));
   await flush();
   assert.deepEqual(last(calls), { channel: "browser:set-link-preference", args: ["ask"] });
-  assert.match(screen.getByRole("combobox", { name: "Open links in" }).textContent ?? "", /Ask each time/);
+  assert.match(
+    screen.getByRole("combobox", { name: "Open links in" }).textContent ?? "",
+    /Ask each time/,
+  );
 });
 
 test("a link-preference broadcast updates the shown choice without a reload", async () => {
@@ -37,7 +40,10 @@ test("a link-preference broadcast updates the shown choice without a reload", as
   await flush();
   emitBotTestNotification("browser:event", { type: "link-preference", linkOpening: "external" });
   await flush();
-  assert.match(screen.getByRole("combobox", { name: "Open links in" }).textContent ?? "", /System browser/);
+  assert.match(
+    screen.getByRole("combobox", { name: "Open links in" }).textContent ?? "",
+    /System browser/,
+  );
 });
 
 test("a failed save restores the previous choice", async () => {
@@ -52,18 +58,29 @@ test("a failed save restores the previous choice", async () => {
   fireEvent.click(screen.getByRole("combobox", { name: "Open links in" }));
   fireEvent.click(await screen.findByRole("option", { name: "System browser" }));
   await flush();
-  assert.match(screen.getByRole("combobox", { name: "Open links in" }).textContent ?? "", /Aiden browser/);
+  assert.match(
+    screen.getByRole("combobox", { name: "Open links in" }).textContent ?? "",
+    /Aiden browser/,
+  );
 });
 
 test("embedded chat link control follows a newer broadcast while its first read is pending", async () => {
   let finish!: (value: string) => void;
-  installBotTestIpc({ "browser:link-preference": () => new Promise<string>((resolve) => { finish = resolve; }) });
+  installBotTestIpc({
+    "browser:link-preference": () =>
+      new Promise<string>((resolve) => {
+        finish = resolve;
+      }),
+  });
   render(<LinksSettings embedded />);
   emitBotTestNotification("browser:event", { type: "link-preference", linkOpening: "external" });
   await flush();
   finish("ask");
   await flush();
-  assert.match(screen.getByRole("combobox", { name: "Open chat links in" }).textContent ?? "", /System browser/u);
+  assert.match(
+    screen.getByRole("combobox", { name: "Open chat links in" }).textContent ?? "",
+    /System browser/u,
+  );
 });
 
 function recordScrolls(): { scrolls: ScrollIntoViewOptions[]; restore: () => void } {
@@ -72,7 +89,12 @@ function recordScrolls(): { scrolls: ScrollIntoViewOptions[]; restore: () => voi
   HTMLElement.prototype.scrollIntoView = function (options) {
     scrolls.push(options as ScrollIntoViewOptions);
   };
-  return { scrolls, restore: () => { HTMLElement.prototype.scrollIntoView = original; } };
+  return {
+    scrolls,
+    restore: () => {
+      HTMLElement.prototype.scrollIntoView = original;
+    },
+  };
 }
 
 /** Frames that run only when the test advances time. */
@@ -113,7 +135,12 @@ function scrollport(middle: number): { port: HTMLDivElement; restore: () => void
   HTMLElement.prototype.scrollIntoView = function () {
     port.scrollTop = middle;
   };
-  return { port, restore: () => { HTMLElement.prototype.scrollIntoView = original; } };
+  return {
+    port,
+    restore: () => {
+      HTMLElement.prototype.scrollIntoView = original;
+    },
+  };
 }
 
 test("opening the links section glides the row to the middle, or jumps there under Reduce Motion", async () => {

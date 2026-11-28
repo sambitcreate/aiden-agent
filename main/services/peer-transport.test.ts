@@ -18,7 +18,11 @@ import {
 } from "./peer-transport.js";
 import { AIDEN_REMOTE_LEGACY_BOT_TURN_MESSAGE } from "./aiden-remote-chats.js";
 import { decryptPeerPairing, assertPeerPairingExpiry } from "./peer-pairing.js";
-import { peerOperationRequest, peerOperationResult, peerRawUploadRequest } from "./peer-operation.js";
+import {
+  peerOperationRequest,
+  peerOperationResult,
+  peerRawUploadRequest,
+} from "./peer-operation.js";
 import { createAidenRemoteRequestHandler } from "./aiden-remote-router.js";
 import type { AidenRemoteCapability } from "./aiden-remote-protocol.js";
 import { AidenRemotePairingService } from "./aiden-remote-pairing.js";
@@ -43,16 +47,12 @@ test("desktop manual pairing consumes the native clients' canonical cryptographi
     Date.parse(envelope.expiresAt) - 1000,
   );
   assert.equal(decoded.endpoint, endpoint);
-  assert.throws(() =>
-    decryptPeerPairing(envelope, "0000-0000-0000-0000-0000", endpoint),
-  );
+  assert.throws(() => decryptPeerPairing(envelope, "0000-0000-0000-0000-0000", endpoint));
 });
 
 test("closed peer operations reject injected routes and require mutation identity", async () => {
   for (const operation of ["cancel", "respondApproval"]) {
-    assert.throws(() =>
-      peerOperationRequest({ operation, resourceId: "resource" }),
-    );
+    assert.throws(() => peerOperationRequest({ operation, resourceId: "resource" }));
     assert.equal(
       peerOperationRequest({
         operation,
@@ -62,12 +62,8 @@ test("closed peer operations reject injected routes and require mutation identit
       "k".repeat(32),
     );
   }
-  assert.throws(() =>
-    peerOperationRequest({ operation: "send", resourceId: "chat" }),
-  );
-  assert.throws(() =>
-    peerOperationRequest({ operation: "server", path: "/secrets" }),
-  );
+  assert.throws(() => peerOperationRequest({ operation: "send", resourceId: "chat" }));
+  assert.throws(() => peerOperationRequest({ operation: "server", path: "/secrets" }));
   assert.throws(() => peerOperationRequest({ operation: "unknown" }));
   assert.deepEqual(
     peerOperationRequest({
@@ -78,15 +74,10 @@ test("closed peer operations reject injected routes and require mutation identit
     { method: "GET", path: "/workspaces/work/files/file_handle" },
   );
   await assert.rejects(
-    peerOperationResult(
-      { operation: "server" },
-      { nested: { credential: "secret" } },
-    ),
+    peerOperationResult({ operation: "server" }, { nested: { credential: "secret" } }),
     /response contract/,
   );
-  await assert.rejects(
-    peerOperationResult({ operation: "chat" }, { id: "missing-fields" }),
-  );
+  await assert.rejects(peerOperationResult({ operation: "chat" }, { id: "missing-fields" }));
 });
 
 test("real HTTPS verifies CA and SPKI, rejects redirects/oversized JSON, and parses chunked SSE", async (t) => {
@@ -153,10 +144,7 @@ test("real HTTPS verifies CA and SPKI, rejects redirects/oversized JSON, and par
     { key: identity.privateKey, cert: identity.certificateChain },
     (request, response) => {
       receivedRequests++;
-      if (
-        request.url?.endsWith("/pairing/exchange") ||
-        request.url?.endsWith("/server")
-      ) {
+      if (request.url?.endsWith("/pairing/exchange") || request.url?.endsWith("/server")) {
         void actualRouter(request, response);
         return;
       }
@@ -241,20 +229,25 @@ test("real HTTPS verifies CA and SPKI, rejects redirects/oversized JSON, and par
   const trust = {
     endpoint: `https://127.0.0.1:${address.port}/api/aiden/v1`,
     serverSpkiSha256: identity.serverSpkiSha256,
-    caCertificateDerBase64: new X509Certificate(
-      identity.caCertificate,
-    ).raw.toString("base64"),
+    caCertificateDerBase64: new X509Certificate(identity.caCertificate).raw.toString("base64"),
   };
   try {
     const client = new PeerTransport(trust);
-    await assert.rejects(client.json({ path: "/never-answers", timeoutMs: 50 }), (error: unknown) => {
-      assert.ok(error instanceof PeerTransportError);
-      assert.equal(error.failure, "timeout");
-      return true;
-    });
-    const badDns = new PeerTransport({ ...trust, endpoint: "https://missing.example/api/aiden/v1" }, {
-      lookup: (_hostname, _options, callback) => callback(Object.assign(new Error("private endpoint text"), { code: "ENOTFOUND" }), "", 4),
-    });
+    await assert.rejects(
+      client.json({ path: "/never-answers", timeoutMs: 50 }),
+      (error: unknown) => {
+        assert.ok(error instanceof PeerTransportError);
+        assert.equal(error.failure, "timeout");
+        return true;
+      },
+    );
+    const badDns = new PeerTransport(
+      { ...trust, endpoint: "https://missing.example/api/aiden/v1" },
+      {
+        lookup: (_hostname, _options, callback) =>
+          callback(Object.assign(new Error("private endpoint text"), { code: "ENOTFOUND" }), "", 4),
+      },
+    );
     await assert.rejects(badDns.json({ path: "/server" }), (error: unknown) => {
       assert.ok(error instanceof PeerTransportError);
       assert.equal(error.failure, "dns");
@@ -309,7 +302,11 @@ test("real HTTPS verifies CA and SPKI, rejects redirects/oversized JSON, and par
         return true;
       },
     );
-    assert.equal(receivedRequests, beforeRejectedPin, "a wrong pin must fail before sending any HTTP request or credential");
+    assert.equal(
+      receivedRequests,
+      beforeRejectedPin,
+      "a wrong pin must fail before sending any HTTP request or credential",
+    );
     // A `.local` hostname mismatch in TLS also carries `"tls"` provenance without sending HTTP bytes.
     await assert.rejects(
       new PeerTransport(
@@ -323,7 +320,12 @@ test("real HTTPS verifies CA and SPKI, rejects redirects/oversized JSON, and par
             else callback(null, "127.0.0.1", 4);
           },
         },
-      ).json({ method: "POST", path: "/upload", credential: "a".repeat(43), body: { secret: "never-sent" } }),
+      ).json({
+        method: "POST",
+        path: "/upload",
+        credential: "a".repeat(43),
+        body: { secret: "never-sent" },
+      }),
       (error: unknown) => {
         assert.ok(error instanceof PeerTransportError);
         assert.equal(error.code, "identity_changed");
@@ -332,7 +334,11 @@ test("real HTTPS verifies CA and SPKI, rejects redirects/oversized JSON, and par
         return true;
       },
     );
-    assert.equal(receivedRequests, beforeRejectedPin, "a wrong hostname must fail before sending any HTTP request or credential");
+    assert.equal(
+      receivedRequests,
+      beforeRejectedPin,
+      "a wrong hostname must fail before sending any HTTP request or credential",
+    );
     // Envelope codes separate an answered per-operation refusal from a revoked credential.
     await assert.rejects(
       client.json({ path: "/denied", credential: "a".repeat(43) }),
@@ -369,12 +375,8 @@ test("real HTTPS verifies CA and SPKI, rejects redirects/oversized JSON, and par
       client.events({ path: "/denied", onOpen: () => openedAt.push(-1) }, () => {}),
     );
     assert.deepEqual(openedAt, [0]);
-    await assert.rejects(
-      client.events({ path: "/resume", lastEventId: "bad\nid" }, () => {}),
-    );
-    await assert.rejects(
-      client.json({ path: "/redirect", credential: "a".repeat(43) }),
-    );
+    await assert.rejects(client.events({ path: "/resume", lastEventId: "bad\nid" }, () => {}));
+    await assert.rejects(client.json({ path: "/redirect", credential: "a".repeat(43) }));
     assert.equal(redirected, 0);
     await assert.rejects(client.json({ path: "/large" }));
     // A request body over 1 MiB leaves only where the operation allows an
@@ -444,7 +446,9 @@ test("real HTTPS verifies CA and SPKI, rejects redirects/oversized JSON, and par
     nextFrame = new Promise<void>((resolve) => {
       received = resolve;
     });
-    const slow = client.events({ path: "/slow-open", onOpen: () => slowOpened() }, () => received());
+    const slow = client.events({ path: "/slow-open", onOpen: () => slowOpened() }, () =>
+      received(),
+    );
     // An early abort surfaces as the stream's rejection rather than a hang.
     const unlessEnded = (step: Promise<void>) => Promise.race([step, slow.then(() => {})]);
     await slowRequested;
@@ -504,9 +508,7 @@ test(
     assert.equal(boundaries, 16_384);
     // A long-lived feed keeps going: committed frames release the rolling budget.
     const feed = new PeerEventFrames();
-    const committed = Buffer.from(
-      `id: e:1\ndata: ${"x".repeat(1000)}\n\n`.repeat(1024),
-    );
+    const committed = Buffer.from(`id: e:1\ndata: ${"x".repeat(1000)}\n\n`.repeat(1024));
     let delivered = 0;
     for (let round = 0; round < 24; round++)
       feed.push(
@@ -549,35 +551,57 @@ test("a Mac holding attachments:raw sends a picture to a real host as its own by
   );
   const store = new AidenRemoteAttachmentStore();
   const received: Array<{ contentType: string | undefined; bytes: number }> = [];
-  let grants = new Set<AidenRemoteCapability>(["server:read", "bot:read", "bot:write", "chat:write"]);
+  let grants = new Set<AidenRemoteCapability>([
+    "server:read",
+    "bot:read",
+    "bot:write",
+    "chat:write",
+  ]);
   const router = createAidenRemoteRequestHandler({
     instanceId: "host_raw",
     displayName: () => "Raw fixture",
     appVersion: "1",
     pairing: new AidenRemotePairingService("host_raw", {
-      issueDevice: async () => { throw new Error("unused"); },
-      revokeDevice: async () => { throw new Error("unused"); },
+      issueDevice: async () => {
+        throw new Error("unused");
+      },
+      revokeDevice: async () => {
+        throw new Error("unused");
+      },
     }),
     devices: {
       acquireDeviceAuthorization: () => () => undefined,
       authenticate: async (credential) =>
         credential === "a".repeat(43)
-          ? { id: "device_raw", name: "Desktop", revoked: false, acceptsBotCapabilities: true, capabilities: grants }
+          ? {
+              id: "device_raw",
+              name: "Desktop",
+              revoked: false,
+              acceptsBotCapabilities: true,
+              capabilities: grants,
+            }
           : null,
     },
     botSessions: {
       supportsAttachments: true,
-      uploadAttachment: async (deviceId: string, botId: string, body: unknown) => store.upload(deviceId, `bot:${botId}`, body),
+      uploadAttachment: async (deviceId: string, botId: string, body: unknown) =>
+        store.upload(deviceId, `bot:${botId}`, body),
       removeAttachment: async () => {},
     } as never,
     connectionMode: () => "lan",
     now: Date.now,
     log: () => undefined,
   });
-  const server = https.createServer({ key: identity.privateKey, cert: identity.certificateChain }, (request, response) => {
-    received.push({ contentType: request.headers["content-type"], bytes: Number(request.headers["content-length"]) });
-    void router(request, response);
-  });
+  const server = https.createServer(
+    { key: identity.privateKey, cert: identity.certificateChain },
+    (request, response) => {
+      received.push({
+        contentType: request.headers["content-type"],
+        bytes: Number(request.headers["content-length"]),
+      });
+      void router(request, response);
+    },
+  );
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
   const address = server.address();
   assert.ok(address && typeof address !== "string");
@@ -588,12 +612,20 @@ test("a Mac holding attachments:raw sends a picture to a real host as its own by
   });
   const send = (operation: Record<string, unknown>, raw: boolean) => {
     const request = peerOperationRequest(operation);
-    return client.json({ ...(raw ? peerRawUploadRequest(operation, request) : request), credential: "a".repeat(43) });
+    return client.json({
+      ...(raw ? peerRawUploadRequest(operation, request) : request),
+      credential: "a".repeat(43),
+    });
   };
   const picture = {
     operation: "uploadBotAttachment",
     resourceId: "bot-1",
-    body: { name: "it's Café (1).png", mimeType: "image/png", kind: "image", data: png.toString("base64") },
+    body: {
+      name: "it's Café (1).png",
+      mimeType: "image/png",
+      kind: "image",
+      data: png.toString("base64"),
+    },
   };
   try {
     // The JSON envelope works for every host.
@@ -612,19 +644,35 @@ test("a Mac holding attachments:raw sends a picture to a real host as its own by
     const viaRaw = (await send(picture, true)) as { name: string; size: number; mimeType: string };
     assert.equal(viaRaw.name, "it's Café (1).png", "the name survives percent-encoding");
     assert.equal(viaRaw.size, png.length);
-    assert.deepEqual(received[received.length - 1], { contentType: "image/png", bytes: png.length }, "the picture's own bytes, no base64");
+    assert.deepEqual(
+      received[received.length - 1],
+      { contentType: "image/png", bytes: png.length },
+      "the picture's own bytes, no base64",
+    );
     assert.ok(png.length < Buffer.byteLength(JSON.stringify(picture.body)));
 
     // Text, and a picture type the raw route does not take, keep the envelope.
-    const text = { operation: "uploadBotAttachment", resourceId: "bot-1", body: { name: "a.txt", mimeType: "text/plain", kind: "text", text: "hi" } };
+    const text = {
+      operation: "uploadBotAttachment",
+      resourceId: "bot-1",
+      body: { name: "a.txt", mimeType: "text/plain", kind: "text", text: "hi" },
+    };
     assert.equal(peerRawUploadRequest(text, peerOperationRequest(text)).rawBody, undefined);
     const gif = { ...picture, body: { ...picture.body, mimeType: "image/gif" } };
     assert.equal(peerRawUploadRequest(gif, peerOperationRequest(gif)).rawBody, undefined);
     // A name that cannot be percent-encoded (a lone surrogate) keeps the envelope instead of failing the call.
     const unpaired = { ...picture, body: { ...picture.body, name: "\uD800.png" } };
     assert.equal(peerRawUploadRequest(unpaired, peerOperationRequest(unpaired)).rawBody, undefined);
-    const send2 = { operation: "send", resourceId: "chat_1", idempotencyKey: "k".repeat(16), body: { text: "hi" } };
-    assert.deepEqual(peerRawUploadRequest(send2, peerOperationRequest(send2)), peerOperationRequest(send2));
+    const send2 = {
+      operation: "send",
+      resourceId: "chat_1",
+      idempotencyKey: "k".repeat(16),
+      body: { text: "hi" },
+    };
+    assert.deepEqual(
+      peerRawUploadRequest(send2, peerOperationRequest(send2)),
+      peerOperationRequest(send2),
+    );
   } finally {
     await new Promise<void>((resolve) => server.close(() => resolve()));
     await rm(directory, { recursive: true, force: true });
@@ -636,9 +684,7 @@ test("pairing tolerates bounded skew but rejects nonsense expiry", () => {
   for (const delta of [-120_000, 0, 300_000, 420_000])
     assertPeerPairingExpiry(new Date(now + delta).toISOString(), now);
   for (const delta of [-120_001, 420_001])
-    assert.throws(() =>
-      assertPeerPairingExpiry(new Date(now + delta).toISOString(), now),
-    );
+    assert.throws(() => assertPeerPairingExpiry(new Date(now + delta).toISOString(), now));
   assert.throws(() => assertPeerPairingExpiry("nonsense", now));
 });
 
@@ -671,47 +717,42 @@ test("every exposed operation rejects malformed DTOs and preserves legitimate co
     providers: [],
     defaults: { secret: "model-id", headers: "another-model" },
   };
-  assert.deepEqual(
-    await peerOperationResult({ operation: "models" }, models),
-    models,
-  );
-  assert.deepEqual(
-    await peerOperationResult({ operation: "approval" }, { approval: null }),
-    { approval: null },
-  );
+  assert.deepEqual(await peerOperationResult({ operation: "models" }, models), models);
+  assert.deepEqual(await peerOperationResult({ operation: "approval" }, { approval: null }), {
+    approval: null,
+  });
   await assert.rejects(
-    peerOperationResult(
-      { operation: "approval" },
-      { approval: null, credential: "private" },
-    ),
+    peerOperationResult({ operation: "approval" }, { approval: null, credential: "private" }),
   );
-  assert.equal(
-    await peerOperationResult({ operation: "deleteChat" }, undefined),
-    undefined,
-  );
+  assert.equal(await peerOperationResult({ operation: "deleteChat" }, undefined), undefined);
 });
 
 test("a host's own explanation reaches this Mac, so a refused request says what to do", () => {
   const envelope = (code: string, message: unknown) => JSON.stringify({ error: { code, message } });
-  const refused = peerStatusError(400, parsePeerErrorEnvelope(envelope("invalid_request", AIDEN_REMOTE_LEGACY_BOT_TURN_MESSAGE)));
+  const refused = peerStatusError(
+    400,
+    parsePeerErrorEnvelope(envelope("invalid_request", AIDEN_REMOTE_LEGACY_BOT_TURN_MESSAGE)),
+  );
   assert.equal(refused.code, "request_failed");
   assert.equal(refused.message, AIDEN_REMOTE_LEGACY_BOT_TURN_MESSAGE);
   assert.equal(
-    peerStatusError(404, parsePeerErrorEnvelope(envelope("not_found", "Gone.\u0007\n\u202eevil"))).message,
+    peerStatusError(404, parsePeerErrorEnvelope(envelope("not_found", "Gone.\u0007\n\u202eevil")))
+      .message,
     "Gone. evil",
     "control and direction characters never reach the toast",
   );
   assert.equal(
-    peerStatusError(400, parsePeerErrorEnvelope(envelope("invalid_request", "x".repeat(301)))).message,
+    peerStatusError(400, parsePeerErrorEnvelope(envelope("invalid_request", "x".repeat(301))))
+      .message,
     "The other device could not complete this request.",
   );
   assert.equal(
-    peerStatusError(401, parsePeerErrorEnvelope(envelope("unauthorized", "Bearer token expired"))).message,
+    peerStatusError(401, parsePeerErrorEnvelope(envelope("unauthorized", "Bearer token expired")))
+      .message,
     "Pair this device again to reconnect.",
     "a lost pairing keeps this Mac's own advice",
   );
 });
-
 
 test("transport diagnoses fixed OS codes without forwarding error text", () => {
   for (const [code, expected] of [

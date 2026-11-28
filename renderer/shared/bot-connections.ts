@@ -45,10 +45,12 @@ type SuggestionTarget = { name: string; setupEntry: BotConnectionSetupEntry };
  * on Linux too, and phones have no card for it.
  */
 const SUGGESTIONS_BY_ID: ReadonlyMap<string, SuggestionTarget> = new Map<string, SuggestionTarget>([
-  ...CONNECTOR_CATALOG.filter((entry) => isConnectorAvailable(entry) && !entry.macApp).map((entry): [string, SuggestionTarget] => [
-    entry.id,
-    { name: entry.name, setupEntry: { kind: "mcp-preset", presetId: entry.id } },
-  ]),
+  ...CONNECTOR_CATALOG.filter((entry) => isConnectorAvailable(entry) && !entry.macApp).map(
+    (entry): [string, SuggestionTarget] => [
+      entry.id,
+      { name: entry.name, setupEntry: { kind: "mcp-preset", presetId: entry.id } },
+    ],
+  ),
   ...COMPOSIO_APPS.map((app): [string, SuggestionTarget] => [
     app.id,
     { name: app.name, setupEntry: { kind: "composio", presetId: "composio", appName: app.name } },

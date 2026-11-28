@@ -6,7 +6,10 @@ import { createProposeSkillTool } from "../bot-skills/propose-tool.js";
 import type { AgentTool } from "@earendil-works/pi-agent-core";
 import type { JsonValue } from "@earendil-works/chord/json";
 import type { EntryRecord } from "@earendil-works/pi-durable";
-import { createSuggestConnectionTool, type SuggestConnectionDeps } from "../bot-runtime-tools/suggest-connection.js";
+import {
+  createSuggestConnectionTool,
+  type SuggestConnectionDeps,
+} from "../bot-runtime-tools/suggest-connection.js";
 import { createRoutineNotesTool, type BotRoutineNotesStore } from "../bot-routine-notes.js";
 import type { BotRuntimeEffectiveAuthority } from "../bot-runtime-authority.js";
 import { createBotRoutinesTool, type BotRoutinesToolDependencies } from "../schedule-tool.js";
@@ -19,7 +22,11 @@ import {
   createVisionAnalysisTool,
   type VisionAnalysisToolDependencies,
 } from "../vision-analysis-tool-core.js";
-import { BOT_SHARED_IMAGE_ENTRY_KIND, imageAttachmentsFromEntries, sharedImageEntry } from "./bot-images.js";
+import {
+  BOT_SHARED_IMAGE_ENTRY_KIND,
+  imageAttachmentsFromEntries,
+  sharedImageEntry,
+} from "./bot-images.js";
 import type { BotToolCandidate } from "./bot-tool-assembly.js";
 import { BOT_CONNECT_CARD_ENTRY_KIND } from "./live-projection.js";
 import type { BotToolCall } from "./tool-adapter.js";
@@ -35,7 +42,8 @@ export function connectCardPending(entries: readonly EntryRecord[], pluginId: st
     if (head !== undefined && entry.id < head) break;
     if (entry.kind === BOT_CONNECT_CARD_ENTRY_KIND) {
       const card = entry.data as { pluginId?: unknown; status?: unknown } | null;
-      if (card?.pluginId === pluginId) return card.status === undefined || card.status === "pending";
+      if (card?.pluginId === pluginId)
+        return card.status === undefined || card.status === "pending";
     }
     if (head === undefined && entry.head !== undefined) head = entry.head;
   }
@@ -50,19 +58,28 @@ export function connectCardPending(entries: readonly EntryRecord[], pluginId: st
  */
 export function suggestConnectionCandidate(
   botId: string,
-  deps: Pick<SuggestConnectionDeps, "isConnected" | "isDismissed" | "botLacksConnection" | "chatLacksConnection">,
+  deps: Pick<
+    SuggestConnectionDeps,
+    "isConnected" | "isDismissed" | "botLacksConnection" | "chatLacksConnection"
+  >,
 ): BotToolCandidate {
   const unbound = async (): Promise<never> => {
     throw new Error("Suggesting a connection needs a Bot conversation.");
   };
   return {
-    tool: createSuggestConnectionTool(botId, { ...deps, appendConnectCard: unbound, hasPendingCard: unbound }),
+    tool: createSuggestConnectionTool(botId, {
+      ...deps,
+      appendConnectCard: unbound,
+      hasPendingCard: unbound,
+    }),
     replay: "unsafe",
     bind: (call) =>
       createSuggestConnectionTool(botId, {
         ...deps,
-        appendConnectCard: (_botId, card) => call.appendEntry(BOT_CONNECT_CARD_ENTRY_KIND, { ...card }),
-        hasPendingCard: async (_botId, pluginId) => connectCardPending(await call.entries(), pluginId),
+        appendConnectCard: (_botId, card) =>
+          call.appendEntry(BOT_CONNECT_CARD_ENTRY_KIND, { ...card }),
+        hasPendingCard: async (_botId, pluginId) =>
+          connectCardPending(await call.entries(), pluginId),
       }),
   };
 }
@@ -71,7 +88,9 @@ export function suggestConnectionCandidate(
  * `share_image` from the Bot folder. A shared image becomes an
  * `aiden.bot-shared-image` entry once the tool returns.
  */
-export function shareImageCandidate(authority: Readonly<BotRuntimeEffectiveAuthority>): BotToolCandidate {
+export function shareImageCandidate(
+  authority: Readonly<BotRuntimeEffectiveAuthority>,
+): BotToolCandidate {
   const build = (share: (attachment: Attachment) => void) =>
     createShareImageTool({
       workspaceRoot: authority.workingDirectory,
@@ -154,7 +173,8 @@ export function routineRequestIdsOf(entries: readonly EntryRecord[]): string[] {
     if (requestIds.length >= ROUTINE_NOTICES_CHECKED) break;
     if (entry.kind !== ROUTINE_NOTICE_KIND) continue;
     const data = entry.data as { notice?: unknown; requestId?: unknown } | undefined;
-    if (data?.notice === "routine" && typeof data.requestId === "string") requestIds.push(data.requestId);
+    if (data?.notice === "routine" && typeof data.requestId === "string")
+      requestIds.push(data.requestId);
   }
   return requestIds;
 }
@@ -167,7 +187,9 @@ export function routineRequestIdsOf(entries: readonly EntryRecord[]): string[] {
  * harness host, whose per-Bot lock a pause, quit or delete holds while it
  * waits for this call.
  */
-export async function routineTaskIdOfCall(call: Pick<BotToolCall, "entries" | "submissions">): Promise<string | undefined> {
+export async function routineTaskIdOfCall(
+  call: Pick<BotToolCall, "entries" | "submissions">,
+): Promise<string | undefined> {
   const requestIds = routineRequestIdsOf(await call.entries());
   if (requestIds.length === 0) return undefined;
   const records = await call.submissions(requestIds);
@@ -205,8 +227,18 @@ export function routineNotesCandidate(
  * conversation, so it shows exactly where the Bot suggested it.
  */
 /** What the Bot sees of an event routine: never its link or token hash. */
-function eventRoutineSummary(routine: BotEventRoutine): { id: string; name: string; label: string; enabled: boolean } {
-  return { id: routine.id, name: routine.name, label: formatBotRoutineTriggerLabel(routine.trigger), enabled: routine.enabled };
+function eventRoutineSummary(routine: BotEventRoutine): {
+  id: string;
+  name: string;
+  label: string;
+  enabled: boolean;
+} {
+  return {
+    id: routine.id,
+    name: routine.name,
+    label: formatBotRoutineTriggerLabel(routine.trigger),
+    enabled: routine.enabled,
+  };
 }
 
 /**
@@ -214,13 +246,24 @@ function eventRoutineSummary(routine: BotEventRoutine): { id: string; name: stri
  * off. `changed` re-arms its watches after a pause.
  */
 export function eventRoutinesToolSource(
-  services: () => Promise<{ store: Pick<BotEventRoutineStore, "list" | "pause">; changed(botId: string): void }>,
+  services: () => Promise<{
+    store: Pick<BotEventRoutineStore, "list" | "pause">;
+    changed(botId: string): void;
+  }>,
 ): NonNullable<BotRoutinesToolDependencies["eventRoutines"]> {
   return {
-    list: async (botId) => (await (await services()).store.list(botId)).filter((routine) => routine.connector?.deletedAt === undefined).map(eventRoutineSummary),
+    list: async (botId) =>
+      (await (await services()).store.list(botId))
+        .filter((routine) => routine.connector?.deletedAt === undefined)
+        .map(eventRoutineSummary),
     pause: async (botId, routineId) => {
       const { store, changed } = await services();
-      if (!(await store.list(botId)).some((routine) => routine.id === routineId && routine.connector?.deletedAt === undefined)) return undefined;
+      if (
+        !(await store.list(botId)).some(
+          (routine) => routine.id === routineId && routine.connector?.deletedAt === undefined,
+        )
+      )
+        return undefined;
       const paused = await store.pause(botId, routineId);
       changed(botId);
       return eventRoutineSummary(paused);
@@ -251,7 +294,15 @@ export function routinesCandidate(
     createBotRoutinesTool(botId, {
       ...rest,
       propose: (id, input) => propose(id, input, append, entries),
-      ...(revise ? { revise: (id: string, proposalId: string, input: Parameters<BotRoutinesToolDependencies["propose"]>[1]) => revise(id, proposalId, input, append, entries) } : {}),
+      ...(revise
+        ? {
+            revise: (
+              id: string,
+              proposalId: string,
+              input: Parameters<BotRoutinesToolDependencies["propose"]>[1],
+            ) => revise(id, proposalId, input, append, entries),
+          }
+        : {}),
     });
   return {
     tool: build(async () => {
@@ -260,7 +311,11 @@ export function routinesCandidate(
     replay: "unsafe",
     // Cards are written and read through the call, never by reopening the
     // Bot's session, which a pause closes while it waits for this call.
-    bind: (call) => build((kind, data) => call.appendEntry(kind, data as JsonValue), () => call.entries()),
+    bind: (call) =>
+      build(
+        (kind, data) => call.appendEntry(kind, data as JsonValue),
+        () => call.entries(),
+      ),
   };
 }
 

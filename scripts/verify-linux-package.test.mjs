@@ -15,9 +15,7 @@ import {
   isElfMagic,
 } from "./verify-linux-package.mjs";
 
-const packageJson = JSON.parse(
-  readFileSync(new URL("../package.json", import.meta.url), "utf8"),
-);
+const packageJson = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8"));
 const releaseWorkflow = readFileSync(
   new URL("../.github/workflows/release.yml", import.meta.url),
   "utf8",
@@ -32,37 +30,25 @@ test("Linux package requires its lease and Bot inbox helpers and shared Generati
   missingHelper.build.linux.extraFiles = missingHelper.build.linux.extraFiles.filter(
     (entry) => !String(entry.to).includes("aiden-bot-inbox-writer"),
   );
-  assert.throws(
-    () => assertLinuxBuildConfiguration(missingHelper),
-    /aiden-bot-inbox-writer/u,
-  );
+  assert.throws(() => assertLinuxBuildConfiguration(missingHelper), /aiden-bot-inbox-writer/u);
 
   const missingLeaseHelper = JSON.parse(JSON.stringify(packageJson));
   missingLeaseHelper.build.linux.extraFiles = missingLeaseHelper.build.linux.extraFiles.filter(
     (entry) => !String(entry.to).includes("aiden-lease-flock"),
   );
-  assert.throws(
-    () => assertLinuxBuildConfiguration(missingLeaseHelper),
-    /aiden-lease-flock/u,
-  );
+  assert.throws(() => assertLinuxBuildConfiguration(missingLeaseHelper), /aiden-lease-flock/u);
 
   const missingUpdateHelper = JSON.parse(JSON.stringify(packageJson));
   missingUpdateHelper.build.linux.extraFiles = missingUpdateHelper.build.linux.extraFiles.filter(
     (entry) => !String(entry.to).includes("aiden-package-install"),
   );
-  assert.throws(
-    () => assertLinuxBuildConfiguration(missingUpdateHelper),
-    /aiden-package-install/u,
-  );
+  assert.throws(() => assertLinuxBuildConfiguration(missingUpdateHelper), /aiden-package-install/u);
 
   const missingLibraries = JSON.parse(JSON.stringify(packageJson));
   missingLibraries.build.extraResources = missingLibraries.build.extraResources.filter(
     (entry) => entry.from !== "resources/generative-ui",
   );
-  assert.throws(
-    () => assertLinuxBuildConfiguration(missingLibraries),
-    /Generative UI libraries/u,
-  );
+  assert.throws(() => assertLinuxBuildConfiguration(missingLibraries), /Generative UI libraries/u);
 });
 
 test("Linux package configuration rejects globally bundled Computer Use resources", () => {
@@ -71,10 +57,7 @@ test("Linux package configuration rejects globally bundled Computer Use resource
     from: "resources/computer-use/cua-driver-artifact.json",
     to: "computer-use/cua-driver-artifact.json",
   });
-  assert.throws(
-    () => assertLinuxBuildConfiguration(invalid),
-    /must not be global/u,
-  );
+  assert.throws(() => assertLinuxBuildConfiguration(invalid), /must not be global/u);
 
   for (const entry of [
     {
@@ -102,9 +85,7 @@ test("Linux package configuration requires desktop association and runtime libra
     },
     (invalid) => {
       invalid.build.deb.depends = invalid.build.deb.depends.filter(
-        (dependency) =>
-          dependency !==
-          "libasound2t64 (>= 1.0.17) | libasound2 (>= 1.0.17)",
+        (dependency) => dependency !== "libasound2t64 (>= 1.0.17) | libasound2 (>= 1.0.17)",
       );
     },
     (invalid) => {
@@ -124,10 +105,7 @@ test("Linux package configuration requires desktop association and runtime libra
 
 test("Linux distribution refreshes models.dev only through the explicit release step", () => {
   assert.doesNotMatch(packageJson.scripts["dist:linux"], /models:refresh/u);
-  assert.match(
-    releaseWorkflow,
-    /npm run models:refresh\s+npm run dist:linux/u,
-  );
+  assert.match(releaseWorkflow, /npm run models:refresh\s+npm run dist:linux/u);
 });
 
 test("Linux releases preserve the exact declared desktop version", () => {
@@ -137,9 +115,7 @@ test("Linux releases preserve the exact declared desktop version", () => {
 });
 
 test("Linux native binaries cannot silently raise the RHEL 9 glibc baseline", () => {
-  assert.doesNotThrow(() =>
-    assertGlibcSymbolBaseline("helper", "UND (GLIBC_2.34) close_range"),
-  );
+  assert.doesNotThrow(() => assertGlibcSymbolBaseline("helper", "UND (GLIBC_2.34) close_range"));
   assert.throws(
     () => assertGlibcSymbolBaseline("helper", "UND (GLIBC_2.38) __isoc23_strtoull"),
     /requires GLIBC_2\.38/u,
@@ -168,7 +144,11 @@ test("Linux packages leave out the native libraries of the Metal speech engine a
     "/node_modules/@transcribe-cpp/linux-arm64-cpu-vulkan/libtranscribe.so",
     "/node_modules/@koromix/koffi-linux-x64/linux_x64/koffi.node",
   ]) {
-    assert.throws(() => assertNoMetalSpeechEngine([shipped]), /Metal speech engine's native libraries/u, shipped);
+    assert.throws(
+      () => assertNoMetalSpeechEngine([shipped]),
+      /Metal speech engine's native libraries/u,
+      shipped,
+    );
   }
 });
 
@@ -182,7 +162,10 @@ test("Linux package verification names every file other users could write", asyn
     assert.deepEqual(await findSharedWritableEntries(root), []);
     await chmod(path.join(root, "aiden-agent"), 0o777);
     await chmod(path.join(root, "locales", "en-US.pak"), 0o664);
-    assert.deepEqual(await findSharedWritableEntries(root), ["aiden-agent", path.join("locales", "en-US.pak")]);
+    assert.deepEqual(await findSharedWritableEntries(root), [
+      "aiden-agent",
+      path.join("locales", "en-US.pak"),
+    ]);
   } finally {
     await rm(root, { recursive: true, force: true });
   }

@@ -12,14 +12,28 @@ import type { ToolApprovalOutcome } from "../tool-approval.js";
 import { parseAskUserQuestionPrompt } from "../../../renderer/shared/ask-user-question.js";
 import { ActivityFeed } from "../../../renderer/components/activity-feed.js";
 import { activityIssueCount } from "../../../renderer/lib/agent-steps.js";
-import { canHostAcpHarness, createAcpGenerationHost, questionFor, type AcpGenerationHostOptions } from "./generation-host.js";
+import {
+  canHostAcpHarness,
+  createAcpGenerationHost,
+  questionFor,
+  type AcpGenerationHostOptions,
+} from "./generation-host.js";
 
-function setup(overrides: Partial<AcpGenerationHostOptions> = {}, outcome: ToolApprovalOutcome = "allowed", scope?: "once" | "chat") {
+function setup(
+  overrides: Partial<AcpGenerationHostOptions> = {},
+  outcome: ToolApprovalOutcome = "allowed",
+  scope?: "once" | "chat",
+) {
   let latest: GenerationTimeline | undefined;
   const timeline = new GenerationTimelineProjector("stream-1", (snapshot) => {
     latest = snapshot;
   });
-  const prompts: Array<{ toolCallId: string; toolName: string; summary: string; scopes?: readonly string[] }> = [];
+  const prompts: Array<{
+    toolCallId: string;
+    toolName: string;
+    summary: string;
+    scopes?: readonly string[];
+  }> = [];
   const host = createAcpGenerationHost({
     chatId: "chat-1",
     streamId: "stream-1",
@@ -73,13 +87,25 @@ test("an agent permission cancelled by Stop reads as stopped, while one cancelle
   // The approval card for the first call is cancelled because the agent
   // detached; the runtime then finalizes the step as cancelled.
   host.activity.started("acp:s:1", "edit_file", { path: "src/app.ts" });
-  assert.equal(await host.requestApproval({ toolCallId: "acp:s:1", kind: "file_change", title: "Edit", paths: [], offersAlways: false }, signal), "cancelled");
+  assert.equal(
+    await host.requestApproval(
+      { toolCallId: "acp:s:1", kind: "file_change", title: "Edit", paths: [], offersAlways: false },
+      signal,
+    ),
+    "cancelled",
+  );
   host.activity.finished("acp:s:1", "cancelled");
   // The person presses Stop while the second call waits on its card; the
   // runtime finalizes it before the generation's closing sweep runs.
   host.activity.started("acp:s:2", "run_command", { command: "npm test" });
   stopping = true;
-  assert.equal(await host.requestApproval({ toolCallId: "acp:s:2", kind: "command", title: "npm test", paths: [], offersAlways: false }, signal), "cancelled");
+  assert.equal(
+    await host.requestApproval(
+      { toolCallId: "acp:s:2", kind: "command", title: "npm test", paths: [], offersAlways: false },
+      signal,
+    ),
+    "cancelled",
+  );
   host.activity.finished("acp:s:2", "cancelled");
   // A non-cancelled terminal state is never marked, even during Stop.
   host.activity.started("acp:s:3", "delete_file", { path: "old.ts" });
@@ -104,12 +130,19 @@ test("native activity becomes labelled, persisted timeline steps", () => {
   const { host, timeline } = setup();
   host.activity.started("acp:s:1", "edit_file", { path: "src/app.ts" });
   host.activity.running("acp:s:1");
-  host.activity.finished("acp:s:1", "completed", { kind: "file_line_changes", version: 1, additions: 3, deletions: 1 });
+  host.activity.finished("acp:s:1", "completed", {
+    kind: "file_line_changes",
+    version: 1,
+    additions: 3,
+    deletions: 1,
+  });
   host.activity.started("acp:s:2", "delete_file", { path: "old.ts" });
   host.activity.finished("acp:s:2", "failed");
   const steps = timeline()!.steps.filter((step) => step.kind === "tool");
   assert.deepEqual(
-    steps.map((step) => step.kind === "tool" && [step.label, step.target, step.status, step.lineChanges]),
+    steps.map(
+      (step) => step.kind === "tool" && [step.label, step.target, step.status, step.lineChanges],
+    ),
     [
       ["Edit file", "src/app.ts", "completed", { additions: 3, deletions: 1 }],
       ["Delete file", "old.ts", "failed", undefined],
@@ -121,42 +154,112 @@ test("an approval waits on Aiden's card and maps the chosen scope to the agent's
   const once = setup(undefined, "allowed", "once");
   once.host.activity.started("acp:s:1", "run_command", {});
   const answer = await once.host.requestApproval(
-    { toolCallId: "1", activityId: "acp:s:1", kind: "command", title: "npm test", paths: [], offersAlways: true },
+    {
+      toolCallId: "1",
+      activityId: "acp:s:1",
+      kind: "command",
+      title: "npm test",
+      paths: [],
+      offersAlways: true,
+    },
     signal,
   );
   assert.equal(answer, "allow_once");
   assert.equal(once.prompts[0]?.toolName, "run_command");
-  assert.equal(once.prompts[0]?.toolCallId, "call-1", "the card is keyed to the visible activity row");
+  assert.equal(
+    once.prompts[0]?.toolCallId,
+    "call-1",
+    "the card is keyed to the visible activity row",
+  );
   assert.deepEqual(once.prompts[0]?.scopes, ["once", "chat"]);
-  assert.match(once.prompts[0]?.summary ?? "", /^Google Antigravity wants to run a command: npm test$/u);
+  assert.match(
+    once.prompts[0]?.summary ?? "",
+    /^Google Antigravity wants to run a command: npm test$/u,
+  );
   const first = once.timeline()?.steps[0];
   assert.equal(first?.kind === "tool" ? first.status : undefined, "running");
 
   const chat = setup(undefined, "allowed", "chat");
   assert.equal(
-    await chat.host.requestApproval({ toolCallId: "2", kind: "file_change", title: "Edit", paths: ["a.ts"], warning: "Injected?", offersAlways: true }, signal),
+    await chat.host.requestApproval(
+      {
+        toolCallId: "2",
+        kind: "file_change",
+        title: "Edit",
+        paths: ["a.ts"],
+        warning: "Injected?",
+        offersAlways: true,
+      },
+      signal,
+    ),
     "allow_always",
   );
-  assert.match(chat.prompts[0]?.summary ?? "", /Files: a\.ts\nWarning from Google Antigravity: Injected\?/u);
+  assert.match(
+    chat.prompts[0]?.summary ?? "",
+    /Files: a\.ts\nWarning from Google Antigravity: Injected\?/u,
+  );
 
-  assert.equal(await setup(undefined, "denied").host.requestApproval({ toolCallId: "3", kind: "command", title: "x", paths: [], offersAlways: false }, signal), "reject");
-  assert.equal(await setup(undefined, "detached").host.requestApproval({ toolCallId: "4", kind: "command", title: "x", paths: [], offersAlways: false }, signal), "cancelled");
+  assert.equal(
+    await setup(undefined, "denied").host.requestApproval(
+      { toolCallId: "3", kind: "command", title: "x", paths: [], offersAlways: false },
+      signal,
+    ),
+    "reject",
+  );
+  assert.equal(
+    await setup(undefined, "detached").host.requestApproval(
+      { toolCallId: "4", kind: "command", title: "x", paths: [], offersAlways: false },
+      signal,
+    ),
+    "cancelled",
+  );
   assert.equal(setup(undefined, "denied").prompts[0]?.scopes, undefined);
 });
 
 test("agent questions use the question prompt; custom or skipped answers are no answer", async () => {
-  const question = { title: "Which color?", options: [{ id: "r", label: "Red" }, { id: "b", label: "Blue" }] };
+  const question = {
+    title: "Which color?",
+    options: [
+      { id: "r", label: "Red" },
+      { id: "b", label: "Blue" },
+    ],
+  };
   const answers = [
-    { response: { version: 1 as const, promptId: "p", cancelled: false, answers: [{ questionIndex: 0, kind: "option" as const, answer: "Blue" }] }, expected: "b" },
-    { response: { version: 1 as const, promptId: "p", cancelled: false, answers: [{ questionIndex: 0, kind: "custom" as const, answer: "Green" }] }, expected: undefined },
-    { response: { version: 1 as const, promptId: "p", cancelled: true, answers: [] }, expected: undefined },
+    {
+      response: {
+        version: 1 as const,
+        promptId: "p",
+        cancelled: false,
+        answers: [{ questionIndex: 0, kind: "option" as const, answer: "Blue" }],
+      },
+      expected: "b",
+    },
+    {
+      response: {
+        version: 1 as const,
+        promptId: "p",
+        cancelled: false,
+        answers: [{ questionIndex: 0, kind: "custom" as const, answer: "Green" }],
+      },
+      expected: undefined,
+    },
+    {
+      response: { version: 1 as const, promptId: "p", cancelled: true, answers: [] },
+      expected: undefined,
+    },
   ];
   for (const { response, expected } of answers) {
     const { host } = setup({ requestQuestion: async () => response });
     assert.equal(await host.askQuestion!(question, signal), expected);
   }
   assert.equal(questionFor({ title: "Only one", options: [{ id: "a", label: "A" }] }), undefined);
-  assert.equal(questionFor({ title: "Many", options: ["a", "b", "c", "d", "e"].map((id) => ({ id, label: id })) })?.question.options.length, 4);
+  assert.equal(
+    questionFor({
+      title: "Many",
+      options: ["a", "b", "c", "d", "e"].map((id) => ({ id, label: id })),
+    })?.question.options.length,
+    4,
+  );
 });
 
 test("mapped agent questions pass the renderer's question contract and answers map back", async () => {
@@ -196,7 +299,15 @@ test("tools the agent already has are not bridged; Aiden-only tools are", () => 
   const { host } = setup();
   const tool = (name: string) => ({ name, description: name, parameters: Type.Object({}) });
   assert.deepEqual(
-    host.bridgeableTools([tool("run_command"), tool("edit_file"), tool("browser_open"), tool("todo"), tool("grep")]).map((entry) => entry.name),
+    host
+      .bridgeableTools([
+        tool("run_command"),
+        tool("edit_file"),
+        tool("browser_open"),
+        tool("todo"),
+        tool("grep"),
+      ])
+      .map((entry) => entry.name),
     ["browser_open", "todo"],
   );
 });
@@ -223,7 +334,10 @@ test("a context rebuild notice is a visible, completed activity row", () => {
 test("only attended desktop chats may host an agent harness", () => {
   const attended = { rendererOwner: true, remoteOwner: false, bot: false, assistant: false };
   assert.equal(canHostAcpHarness(attended), true);
-  assert.equal(canHostAcpHarness({ ...attended, usageSource: "chat", interactionSurface: "desktop" }), true);
+  assert.equal(
+    canHostAcpHarness({ ...attended, usageSource: "chat", interactionSurface: "desktop" }),
+    true,
+  );
   for (const blocked of [
     { rendererOwner: false },
     { remoteOwner: true },

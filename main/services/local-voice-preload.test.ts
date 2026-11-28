@@ -38,7 +38,12 @@ function subject(options: {
   return { preload, warmed, logged, resolves: () => resolves };
 }
 
-const local = (modelId: string): VoiceProviderResolution => ({ kind: "ready", provider: "local", modelId, automatic: true });
+const local = (modelId: string): VoiceProviderResolution => ({
+  kind: "ready",
+  provider: "local",
+  modelId,
+  automatic: true,
+});
 
 test("the model voice would use is loaded ahead of the first dictation", async () => {
   const { preload, warmed } = subject({ resolutions: [local("parakeet-v3")] });
@@ -47,14 +52,20 @@ test("the model voice would use is loaded ahead of the first dictation", async (
 });
 
 test("nothing loads when Load in advance is off, without even resolving the provider", async () => {
-  const { preload, warmed, resolves } = subject({ enabled: false, resolutions: [local("parakeet-v3")] });
+  const { preload, warmed, resolves } = subject({
+    enabled: false,
+    resolutions: [local("parakeet-v3")],
+  });
   await preload();
   assert.deepEqual(warmed, []);
   assert.equal(resolves(), 0);
 });
 
 test("a Mac with no on-device model never resolves a provider", async () => {
-  const { preload, warmed, resolves } = subject({ hasLocalModel: false, resolutions: [local("parakeet-v3")] });
+  const { preload, warmed, resolves } = subject({
+    hasLocalModel: false,
+    resolutions: [local("parakeet-v3")],
+  });
   await preload();
   assert.deepEqual(warmed, []);
   assert.equal(resolves(), 0);

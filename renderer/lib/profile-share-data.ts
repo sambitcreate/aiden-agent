@@ -121,7 +121,10 @@ export async function profileShareSvgToPng(svg: SVGSVGElement): Promise<string> 
     });
     image.src = objectUrl;
     await loaded;
-    if (image.naturalWidth !== PROFILE_SHARE_WIDTH || image.naturalHeight !== PROFILE_SHARE_HEIGHT) {
+    if (
+      image.naturalWidth !== PROFILE_SHARE_WIDTH ||
+      image.naturalHeight !== PROFILE_SHARE_HEIGHT
+    ) {
       throw new Error("Aiden rendered the profile snapshot at an unexpected size.");
     }
 

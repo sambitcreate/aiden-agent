@@ -97,10 +97,15 @@ function isRecord(value: unknown): value is Record<string, unknown> {
  * Validates one stored earlier version with the same limits as a live page, by
  * reading it back as a full artifact. Anything that does not fit is dropped.
  */
-function parseRevision(workspaceId: string, artifactId: string, value: unknown): WorkspaceArtifactRevisionV1 | undefined {
+function parseRevision(
+  workspaceId: string,
+  artifactId: string,
+  value: unknown,
+): WorkspaceArtifactRevisionV1 | undefined {
   if (!isRecord(value)) return undefined;
   const savedAt = value.savedAt;
-  if (typeof savedAt !== "number" || !Number.isSafeInteger(savedAt) || savedAt < 0) return undefined;
+  if (typeof savedAt !== "number" || !Number.isSafeInteger(savedAt) || savedAt < 0)
+    return undefined;
   const artifact = parseWorkspaceArtifactV1({
     version: 1,
     id: artifactId,
@@ -121,7 +126,10 @@ function parseRevision(workspaceId: string, artifactId: string, value: unknown):
   return historyEntryOf(artifact, savedAt);
 }
 
-function historyEntryOf(artifact: WorkspaceArtifactV1, savedAt: number): WorkspaceArtifactRevisionV1 {
+function historyEntryOf(
+  artifact: WorkspaceArtifactV1,
+  savedAt: number,
+): WorkspaceArtifactRevisionV1 {
   return {
     revision: artifact.revision,
     savedAt,
@@ -143,7 +151,11 @@ const jsonBytes = (value: unknown) => Buffer.byteLength(JSON.stringify(value), "
  * file's compact JSON plus its trailing newline) fits `maxBytes`. Each one
  * keeps its page and is marked `markupDropped`. Returns the size left.
  */
-function dropMarkupToFit(entries: Iterable<{ markup?: string; markupDropped?: true }>, size: number, maxBytes: number): number {
+function dropMarkupToFit(
+  entries: Iterable<{ markup?: string; markupDropped?: true }>,
+  size: number,
+  maxBytes: number,
+): number {
   for (const entry of entries) {
     if (size <= maxBytes) break;
     if (entry.markup === undefined) continue;
@@ -162,16 +174,26 @@ function dropMarkupToFit(entries: Iterable<{ markup?: string; markupDropped?: tr
  * fit even then goes first, so other pages keep theirs. A file that is still
  * too large fails its write, as before.
  */
-function fitPagesToBudget(draft: WorkspaceArtifactsDocument, keepId: string, maxBytes: number): void {
+function fitPagesToBudget(
+  draft: WorkspaceArtifactsDocument,
+  keepId: string,
+  maxBytes: number,
+): void {
   const size = jsonBytes(draft) + 1;
   if (size <= maxBytes) return;
   const others = draft.artifacts
     .filter((artifact) => artifact.markup !== undefined && artifact.id !== keepId)
     .sort((a, b) => a.updatedAt - b.updatedAt);
-  const saved = draft.artifacts.find((artifact) => artifact.id === keepId && artifact.markup !== undefined);
+  const saved = draft.artifacts.find(
+    (artifact) => artifact.id === keepId && artifact.markup !== undefined,
+  );
   // What dropping every other page's markup would save, near enough to decide the order.
   const othersMarkup = others.reduce((total, artifact) => total + jsonBytes(artifact.markup), 0);
-  const order = saved ? (size - othersMarkup > maxBytes ? [saved, ...others] : [...others, saved]) : others;
+  const order = saved
+    ? size - othersMarkup > maxBytes
+      ? [saved, ...others]
+      : [...others, saved]
+    : others;
   dropMarkupToFit(order, size, maxBytes);
 }
 
@@ -184,19 +206,27 @@ function fitPagesToBudget(draft: WorkspaceArtifactsDocument, keepId: string, max
 function fitPageToBudget(draft: WorkspaceArtifactsDocument, id: string, maxBytes: number): void {
   const size = jsonBytes(draft) + 1;
   if (size <= maxBytes) return;
-  dropMarkupToFit(draft.artifacts.filter((artifact) => artifact.id === id), size, maxBytes);
+  dropMarkupToFit(
+    draft.artifacts.filter((artifact) => artifact.id === id),
+    size,
+    maxBytes,
+  );
 }
 
 export function normalizeWorkspaceArtifactHistoryDocument(workspaceId: string) {
   return (value: unknown): WorkspaceArtifactHistoryDocument => {
     if (!isRecord(value) || !isRecord(value.revisions)) return emptyHistory();
     const revisions: Record<string, WorkspaceArtifactRevisionV1[]> = {};
-    for (const [id, entries] of Object.entries(value.revisions).slice(0, WORKSPACE_ARTIFACT_LIMITS.perWorkspace * 2)) {
+    for (const [id, entries] of Object.entries(value.revisions).slice(
+      0,
+      WORKSPACE_ARTIFACT_LIMITS.perWorkspace * 2,
+    )) {
       if (!isWorkspaceArtifactId(id) || !Array.isArray(entries)) continue;
       const kept: WorkspaceArtifactRevisionV1[] = [];
       for (const entry of entries.slice(-WORKSPACE_ARTIFACT_LIMITS.history)) {
         const revision = parseRevision(workspaceId, id, entry);
-        if (revision && !kept.some((other) => other.revision === revision.revision)) kept.push(revision);
+        if (revision && !kept.some((other) => other.revision === revision.revision))
+          kept.push(revision);
       }
       if (kept.length) revisions[id] = kept;
     }
@@ -225,7 +255,8 @@ function trimHistoryToFit(draft: WorkspaceArtifactHistoryDocument, maxBytes: num
     let oldest: { id: string; savedAt: number } | undefined;
     for (const [id, entries] of Object.entries(draft.revisions)) {
       const first = entries[0];
-      if (first && (!oldest || first.savedAt < oldest.savedAt)) oldest = { id, savedAt: first.savedAt };
+      if (first && (!oldest || first.savedAt < oldest.savedAt))
+        oldest = { id, savedAt: first.savedAt };
     }
     if (!oldest) return;
     const entries = draft.revisions[oldest.id]!;
@@ -248,14 +279,21 @@ export function normalizeWorkspaceArtifactsDocument(workspaceId: string) {
     const unreadable: unknown[] = [];
     // Entries set aside earlier are read again, so a page a looser reader
     // (a newer release, or a rule that keeps rather than drops) can read comes back.
-    const earlier = Array.isArray(value.unreadable) ? value.unreadable.slice(0, UNREADABLE_LIMIT) : [];
+    const earlier = Array.isArray(value.unreadable)
+      ? value.unreadable.slice(0, UNREADABLE_LIMIT)
+      : [];
     const entries = [...value.artifacts, ...earlier];
     for (const [index, entry] of entries.entries()) {
       const setAside = index >= value.artifacts.length;
       const artifact = parseWorkspaceArtifactV1(entry);
       // A second copy of a live page is dropped, unless it was already set aside: that stays as it was.
       if (artifact && seen.has(artifact.id) && !setAside) continue;
-      if (!artifact || seen.has(artifact.id) || artifact.workspaceId !== workspaceId || artifacts.length >= WORKSPACE_ARTIFACT_LIMITS.perWorkspace) {
+      if (
+        !artifact ||
+        seen.has(artifact.id) ||
+        artifact.workspaceId !== workspaceId ||
+        artifacts.length >= WORKSPACE_ARTIFACT_LIMITS.perWorkspace
+      ) {
         if (unreadable.length < UNREADABLE_LIMIT) unreadable.push(entry);
         continue;
       }
@@ -266,10 +304,15 @@ export function normalizeWorkspaceArtifactsDocument(workspaceId: string) {
   };
 }
 
-export function normalizeWorkspaceArtifactSnapshotsDocument(value: unknown): WorkspaceArtifactSnapshotsDocument {
+export function normalizeWorkspaceArtifactSnapshotsDocument(
+  value: unknown,
+): WorkspaceArtifactSnapshotsDocument {
   if (!isRecord(value) || !isRecord(value.snapshots)) return emptySnapshots();
   const snapshots: Record<string, WorkspaceArtifactSnapshotV1> = {};
-  for (const [id, entry] of Object.entries(value.snapshots).slice(0, WORKSPACE_ARTIFACT_LIMITS.perWorkspace * 2)) {
+  for (const [id, entry] of Object.entries(value.snapshots).slice(
+    0,
+    WORKSPACE_ARTIFACT_LIMITS.perWorkspace * 2,
+  )) {
     if (!isWorkspaceArtifactId(id)) continue;
     const snapshot = parseWorkspaceArtifactSnapshotV1(entry);
     if (snapshot) snapshots[id] = snapshot;
@@ -290,10 +333,15 @@ export function normalizeWorkspaceArtifactSnapshotsDocument(value: unknown): Wor
 export function workspaceArtifactDigest(
   sources: readonly WorkspaceArtifactSourceV1[],
   actions: readonly WorkspaceArtifactActionV1[],
-  isTurnedOff: (action: WorkspaceArtifactActionV1) => boolean = (action) => workspaceArtifactActionProblem(action) !== undefined,
+  isTurnedOff: (action: WorkspaceArtifactActionV1) => boolean = (action) =>
+    workspaceArtifactActionProblem(action) !== undefined,
 ): string {
-  const covered = actions.map((action) => (isTurnedOff(action) ? { ...action, turnedOff: true } : action));
-  return createHash("sha256").update(JSON.stringify({ sources, actions: covered })).digest("hex");
+  const covered = actions.map((action) =>
+    isTurnedOff(action) ? { ...action, turnedOff: true } : action,
+  );
+  return createHash("sha256")
+    .update(JSON.stringify({ sources, actions: covered }))
+    .digest("hex");
 }
 
 export interface WorkspaceArtifactContent {
@@ -356,7 +404,8 @@ export function freeWorkspaceArtifactTitle(title: string, taken: ReadonlySet<str
   for (let index = 2; index <= taken.size + 1; index += 1) {
     const suffix = ` (${index})`;
     let base = Array.from(title);
-    while (base.join("").length + suffix.length > WORKSPACE_ARTIFACT_LIMITS.titleChars) base = base.slice(0, -1);
+    while (base.join("").length + suffix.length > WORKSPACE_ARTIFACT_LIMITS.titleChars)
+      base = base.slice(0, -1);
     const candidate = `${base.join("").trimEnd()}${suffix}`;
     if (!taken.has(candidate)) return candidate;
   }
@@ -368,7 +417,11 @@ export function freeWorkspaceArtifactTitle(title: string, taken: ReadonlySet<str
 function canonicalJson(value: unknown): string {
   return JSON.stringify(value, (_key, entry: unknown) =>
     entry && typeof entry === "object" && !Array.isArray(entry)
-      ? Object.fromEntries(Object.entries(entry as Record<string, unknown>).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)))
+      ? Object.fromEntries(
+          Object.entries(entry as Record<string, unknown>).sort(([a], [b]) =>
+            a < b ? -1 : a > b ? 1 : 0,
+          ),
+        )
       : entry,
   );
 }
@@ -378,7 +431,10 @@ function canonicalJson(value: unknown): string {
  * or runs. The live state the person changed since is not part of the page:
  * an identical re-save keeps it rather than resetting it.
  */
-function sameArtifactContent(previous: WorkspaceArtifactV1, content: WorkspaceArtifactContent): boolean {
+function sameArtifactContent(
+  previous: WorkspaceArtifactV1,
+  content: WorkspaceArtifactContent,
+): boolean {
   const page = (visual: ChatUiVisualV1) => {
     const { id: _id, title: _title, state: _state, ...rest } = visual;
     return rest;
@@ -430,11 +486,13 @@ export interface WorkspaceArtifactStoreOptions {
  * that name credential paths, so none can be stored to be read later.
  */
 function assertNoCredentialFiles(content: Pick<WorkspaceArtifactContent, "sources">): void {
-  for (const source of content.sources) if (source.kind === "file") assertArtifactFilePath(source.file);
+  for (const source of content.sources)
+    if (source.kind === "file") assertArtifactFilePath(source.file);
 }
 
 function requireWorkspaceId(value: string): string {
-  if (!isWorkspaceArtifactWorkspaceId(value)) throw new Error("The workspace identifier is invalid.");
+  if (!isWorkspaceArtifactWorkspaceId(value))
+    throw new Error("The workspace identifier is invalid.");
   return value;
 }
 
@@ -449,7 +507,10 @@ function notFound(): never {
 
 export class WorkspaceArtifactStore {
   private readonly artifactStores = new Map<string, DataStore<WorkspaceArtifactsDocument>>();
-  private readonly snapshotStores = new Map<string, DataStore<WorkspaceArtifactSnapshotsDocument>>();
+  private readonly snapshotStores = new Map<
+    string,
+    DataStore<WorkspaceArtifactSnapshotsDocument>
+  >();
   private readonly historyStores = new Map<string, DataStore<WorkspaceArtifactHistoryDocument>>();
   private readonly root: () => string;
   private readonly now: () => number;
@@ -492,13 +553,18 @@ export class WorkspaceArtifactStore {
     let store = this.snapshotStores.get(id);
     if (!store) {
       // Snapshots are a regenerable cache: a bad file is replaced, not rescued.
-      store = new DataStore<WorkspaceArtifactSnapshotsDocument>(`${id}.snapshots.json`, emptySnapshots(), this.root, {
-        maxBytes: SNAPSHOTS_MAX_BYTES,
-        fileMode: 0o600,
-        compact: true,
-        preserveCorruptFile: false,
-        normalize: normalizeWorkspaceArtifactSnapshotsDocument,
-      });
+      store = new DataStore<WorkspaceArtifactSnapshotsDocument>(
+        `${id}.snapshots.json`,
+        emptySnapshots(),
+        this.root,
+        {
+          maxBytes: SNAPSHOTS_MAX_BYTES,
+          fileMode: 0o600,
+          compact: true,
+          preserveCorruptFile: false,
+          normalize: normalizeWorkspaceArtifactSnapshotsDocument,
+        },
+      );
       this.snapshotStores.set(id, store);
     }
     return store;
@@ -509,13 +575,18 @@ export class WorkspaceArtifactStore {
     let store = this.historyStores.get(id);
     if (!store) {
       // History is a convenience: a bad file is replaced, not rescued.
-      store = new DataStore<WorkspaceArtifactHistoryDocument>(`${id}.history.json`, emptyHistory(), this.root, {
-        maxBytes: this.historyMaxBytes,
-        fileMode: 0o600,
-        compact: true,
-        preserveCorruptFile: false,
-        normalize: normalizeWorkspaceArtifactHistoryDocument(id),
-      });
+      store = new DataStore<WorkspaceArtifactHistoryDocument>(
+        `${id}.history.json`,
+        emptyHistory(),
+        this.root,
+        {
+          maxBytes: this.historyMaxBytes,
+          fileMode: 0o600,
+          compact: true,
+          preserveCorruptFile: false,
+          normalize: normalizeWorkspaceArtifactHistoryDocument(id),
+        },
+      );
       this.historyStores.set(id, store);
     }
     return store;
@@ -530,7 +601,10 @@ export class WorkspaceArtifactStore {
     const history = this.historyStore(workspaceId);
     await history.update(async (draft) => {
       // A workspace removed meanwhile must not get its history file back.
-      if (this.artifactStores.get(workspaceId) !== pages || this.historyStores.get(workspaceId) !== history) {
+      if (
+        this.artifactStores.get(workspaceId) !== pages ||
+        this.historyStores.get(workspaceId) !== history
+      ) {
         throw new HistoryDetachedError();
       }
       // Pages deleted meanwhile (their delete may have run first) keep no history.
@@ -539,7 +613,9 @@ export class WorkspaceArtifactStore {
         if (!live.has(id)) delete draft.revisions[id];
       }
       if (!live.has(previous.id)) return;
-      const entries = (draft.revisions[previous.id] ?? []).filter((entry) => entry.revision !== previous.revision);
+      const entries = (draft.revisions[previous.id] ?? []).filter(
+        (entry) => entry.revision !== previous.revision,
+      );
       entries.push(historyEntryOf(previous, this.now()));
       entries.sort((a, b) => a.revision - b.revision);
       draft.revisions[previous.id] = entries.slice(-WORKSPACE_ARTIFACT_LIMITS.history);
@@ -561,9 +637,15 @@ export class WorkspaceArtifactStore {
   }
 
   /** The earlier versions kept for a page, newest first. */
-  async history(workspaceId: string, artifactId: string): Promise<WorkspaceArtifactRevisionSummary[]> {
+  async history(
+    workspaceId: string,
+    artifactId: string,
+  ): Promise<WorkspaceArtifactRevisionSummary[]> {
     const id = requireArtifactId(artifactId);
-    const [view, { revisions }] = await Promise.all([this.get(workspaceId, id), this.historyStore(workspaceId).load()]);
+    const [view, { revisions }] = await Promise.all([
+      this.get(workspaceId, id),
+      this.historyStore(workspaceId).load(),
+    ]);
     if (!view) notFound();
     return (revisions[id] ?? [])
       .map((entry) => ({
@@ -591,7 +673,11 @@ export class WorkspaceArtifactStore {
   }
 
   /** One kept earlier version, or undefined once it has been dropped. */
-  async revision(workspaceId: string, artifactId: string, revision: number): Promise<WorkspaceArtifactRevisionV1 | undefined> {
+  async revision(
+    workspaceId: string,
+    artifactId: string,
+    revision: number,
+  ): Promise<WorkspaceArtifactRevisionV1 | undefined> {
     const id = requireArtifactId(artifactId);
     const { revisions } = await this.historyStore(workspaceId).load();
     return revisions[id]?.find((entry) => entry.revision === revision);
@@ -616,7 +702,8 @@ export class WorkspaceArtifactStore {
     if (!entry) throw new Error(`Revision ${revision} of this artifact is no longer kept.`);
     assertNoCredentialFiles(entry);
     const pages = this.artifacts(workspaceId);
-    const current = (await pages.load()).artifacts.find((artifact) => artifact.id === id) ?? notFound();
+    const current =
+      (await pages.load()).artifacts.find((artifact) => artifact.id === id) ?? notFound();
     try {
       await this.writeRevision(workspaceId, pages, current);
     } catch (error) {
@@ -645,7 +732,8 @@ export class WorkspaceArtifactStore {
 
   async list(workspaceId: string): Promise<WorkspaceArtifactView[]> {
     const [{ artifacts }, loaded] = await Promise.all([
-      this.artifacts(workspaceId).load(), this.snapshots(workspaceId).load(),
+      this.artifacts(workspaceId).load(),
+      this.snapshots(workspaceId).load(),
     ]);
     const denied = new Map<string, Set<string>>();
     // Pages often read the same file, so each file's policy is asked once per listing; a throw keeps the cache.
@@ -655,7 +743,9 @@ export class WorkspaceArtifactStore {
       let answer = policy.get(file);
       if (!answer) {
         answer = fileSourceAllowed
-          ? Promise.resolve().then(() => fileSourceAllowed(workspaceId, file)).catch(() => undefined)
+          ? Promise.resolve()
+              .then(() => fileSourceAllowed(workspaceId, file))
+              .catch(() => undefined)
           : Promise.resolve(true);
         policy.set(file, answer);
       }
@@ -670,26 +760,47 @@ export class WorkspaceArtifactStore {
         if (allowed) allowed = (await allowedByPolicy(source.file)) ?? true;
         const snapshot = loaded.snapshots[artifact.id];
         const before = snapshot?.sources[source.name];
-        if (before && ((!allowed && (!before.policyDenied || before.dataJson !== undefined)) || snapshot?.filePolicyVersion !== 1)) names.add(source.name);
+        if (
+          before &&
+          ((!allowed && (!before.policyDenied || before.dataJson !== undefined)) ||
+            snapshot?.filePolicyVersion !== 1)
+        )
+          names.add(source.name);
       }
       const declared = new Set(artifact.sources.map((source) => source.name));
-      for (const name of Object.keys(loaded.snapshots[artifact.id]?.sources ?? {})) if (!declared.has(name)) names.add(name);
+      for (const name of Object.keys(loaded.snapshots[artifact.id]?.sources ?? {}))
+        if (!declared.has(name)) names.add(name);
       if (names.size) denied.set(artifact.id, names);
     }
-    const snapshots = denied.size ? await this.snapshots(workspaceId).update((draft) => {
-      for (const [id, names] of denied) {
-        const snapshot = draft.snapshots[id];
-        if (!snapshot) continue;
-        const declared = new Set(artifacts.find((artifact) => artifact.id === id)?.sources.map((source) => source.name));
-        for (const name of names) {
-          if (!declared.has(name)) { delete snapshot.sources[name]; continue; }
-          const before = snapshot.sources[name];
-          if (before) snapshot.sources[name] = { status: "blocked", at: before.at, policyDenied: true, error: "Cached file data must be refreshed under the credential policy." };
-        }
-        snapshot.filePolicyVersion = 1;
-      }
-      return structuredClone(draft.snapshots);
-    }) : loaded.snapshots;
+    const snapshots = denied.size
+      ? await this.snapshots(workspaceId).update((draft) => {
+          for (const [id, names] of denied) {
+            const snapshot = draft.snapshots[id];
+            if (!snapshot) continue;
+            const declared = new Set(
+              artifacts
+                .find((artifact) => artifact.id === id)
+                ?.sources.map((source) => source.name),
+            );
+            for (const name of names) {
+              if (!declared.has(name)) {
+                delete snapshot.sources[name];
+                continue;
+              }
+              const before = snapshot.sources[name];
+              if (before)
+                snapshot.sources[name] = {
+                  status: "blocked",
+                  at: before.at,
+                  policyDenied: true,
+                  error: "Cached file data must be refreshed under the credential policy.",
+                };
+            }
+            snapshot.filePolicyVersion = 1;
+          }
+          return structuredClone(draft.snapshots);
+        })
+      : loaded.snapshots;
     return artifacts.map((artifact) => {
       const snapshot = snapshots[artifact.id];
       const digest = workspaceArtifactDigest(artifact.sources, artifact.actions);
@@ -716,11 +827,16 @@ export class WorkspaceArtifactStore {
         );
       }
       const title = options.uniqueTitle
-        ? freeWorkspaceArtifactTitle(content.title, new Set(draft.artifacts.map((artifact) => artifact.visual.title)))
+        ? freeWorkspaceArtifactTitle(
+            content.title,
+            new Set(draft.artifacts.map((artifact) => artifact.visual.title)),
+          )
         : content.title;
       const named = draft.artifacts.find((artifact) => artifact.visual.title === title);
       if (named) {
-        throw new Error(`An artifact named "${title}" already exists here (id ${named.id}). Update it by that id instead.`);
+        throw new Error(
+          `An artifact named "${title}" already exists here (id ${named.id}). Update it by that id instead.`,
+        );
       }
       const id = requireArtifactId(this.newId());
       const now = this.now();
@@ -731,7 +847,9 @@ export class WorkspaceArtifactStore {
         ...(content.description ? { description: content.description } : {}),
         visual: { ...content.visual, id, title },
         ...(content.markup !== undefined ? { markup: content.markup } : {}),
-        ...(content.markup === undefined && content.markupDropped ? { markupDropped: true as const } : {}),
+        ...(content.markup === undefined && content.markupDropped
+          ? { markupDropped: true as const }
+          : {}),
         ...(content.initialState ? { initialState: content.initialState } : {}),
         sources: content.sources,
         actions: content.actions,
@@ -746,7 +864,10 @@ export class WorkspaceArtifactStore {
         updatedAt: now,
       };
       const checked = parseWorkspaceArtifactV1(artifact);
-      if (!checked) throw new Error("The artifact could not be saved because its page is too large or invalid.");
+      if (!checked)
+        throw new Error(
+          "The artifact could not be saved because its page is too large or invalid.",
+        );
       draft.artifacts.push(checked);
       fitPagesToBudget(draft, id, this.artifactsMaxBytes);
       return structuredClone(checked);
@@ -762,10 +883,17 @@ export class WorkspaceArtifactStore {
   async replace(
     workspaceId: string,
     artifactId: string,
-    content: WorkspaceArtifactContent | ((current: WorkspaceArtifactV1) => WorkspaceArtifactContent),
+    content:
+      | WorkspaceArtifactContent
+      | ((current: WorkspaceArtifactV1) => WorkspaceArtifactContent),
     options: WorkspaceArtifactWriteOptions = {},
   ): Promise<WorkspaceArtifactV1> {
-    return this.replaceWith(workspaceId, artifactId, typeof content === "function" ? content : () => content, options);
+    return this.replaceWith(
+      workspaceId,
+      artifactId,
+      typeof content === "function" ? content : () => content,
+      options,
+    );
   }
 
   /**
@@ -794,28 +922,41 @@ export class WorkspaceArtifactStore {
       if (base && previous.visual.title !== base.title && built.title === base.title) {
         content.title = previous.visual.title;
       }
-      if (base && previous.description !== base.description && built.description === base.description) {
+      if (
+        base &&
+        previous.description !== base.description &&
+        built.description === base.description
+      ) {
         if (previous.description) content.description = previous.description;
         else delete content.description;
       }
       if (!isWorkspaceArtifactTitle(content.title)) throw new Error(TITLE_RULE);
       assertNoCredentialFiles(content);
-      const named = draft.artifacts.find((artifact) => artifact.id !== id && artifact.visual.title === content.title);
+      const named = draft.artifacts.find(
+        (artifact) => artifact.id !== id && artifact.visual.title === content.title,
+      );
       if (named) {
-        throw new Error(`Another artifact here (id ${named.id}) is already named "${content.title}"; pick another title.`);
+        throw new Error(
+          `Another artifact here (id ${named.id}) is already named "${content.title}"; pick another title.`,
+        );
       }
       const digest = workspaceArtifactDigest(content.sources, content.actions);
       // Only a card that showed exactly these commands approves them;
       // otherwise an unchanged set keeps the approval it had.
       const approvedDigest =
-        options.approvedDigest === digest || previous.approvedDigest === digest ? digest : undefined;
+        options.approvedDigest === digest || previous.approvedDigest === digest
+          ? digest
+          : undefined;
       // A save that changes nothing makes no version; it can only add the
       // approval the person just gave for these exact commands.
       if (sameArtifactContent(previous, content)) {
         if (approvedDigest) previous.approvedDigest = approvedDigest;
         // Markup that compiles to the same page (spacing, say) is kept as the
         // source to edit, without a version of its own.
-        if (content.markup !== undefined && content.markup.length <= WORKSPACE_ARTIFACT_LIMITS.markupChars) {
+        if (
+          content.markup !== undefined &&
+          content.markup.length <= WORKSPACE_ARTIFACT_LIMITS.markupChars
+        ) {
           previous.markup = content.markup;
           delete previous.markupDropped;
         }
@@ -829,7 +970,9 @@ export class WorkspaceArtifactStore {
         ...(content.description ? { description: content.description } : {}),
         visual: { ...content.visual, id, title: content.title },
         ...(content.markup !== undefined ? { markup: content.markup } : {}),
-        ...(content.markup === undefined && content.markupDropped ? { markupDropped: true as const } : {}),
+        ...(content.markup === undefined && content.markupDropped
+          ? { markupDropped: true as const }
+          : {}),
         ...(content.initialState ? { initialState: content.initialState } : {}),
         sources: content.sources,
         actions: content.actions,
@@ -841,7 +984,10 @@ export class WorkspaceArtifactStore {
         updatedAt: this.now(),
       };
       const checked = parseWorkspaceArtifactV1(next);
-      if (!checked) throw new Error("The artifact could not be saved because its page is too large or invalid.");
+      if (!checked)
+        throw new Error(
+          "The artifact could not be saved because its page is too large or invalid.",
+        );
       draft.artifacts[index] = checked;
       fitPagesToBudget(draft, id, this.artifactsMaxBytes);
       // A version this turn already saved is not an undo step of its own.
@@ -849,21 +995,32 @@ export class WorkspaceArtifactStore {
         options.fold !== undefined &&
         options.fold.revision === previous.revision &&
         options.fold.title === previous.visual.title;
-      return { saved: structuredClone(checked), replaced: folded ? undefined : structuredClone(previous) };
+      return {
+        saved: structuredClone(checked),
+        replaced: folded ? undefined : structuredClone(previous),
+      };
     });
     if (replaced) await this.recordRevision(workspaceId, pages, replaced);
     return saved;
   }
 
-  async rename(workspaceId: string, artifactId: string, title: string): Promise<WorkspaceArtifactV1> {
+  async rename(
+    workspaceId: string,
+    artifactId: string,
+    title: string,
+  ): Promise<WorkspaceArtifactV1> {
     const id = requireArtifactId(artifactId);
     const trimmed = title.trim();
     if (!isWorkspaceArtifactTitle(trimmed)) throw new Error(TITLE_RULE);
     return this.artifacts(workspaceId).update((draft) => {
       const artifact = draft.artifacts.find((entry) => entry.id === id) ?? notFound();
-      const named = draft.artifacts.find((entry) => entry.id !== id && entry.visual.title === trimmed);
+      const named = draft.artifacts.find(
+        (entry) => entry.id !== id && entry.visual.title === trimmed,
+      );
       if (named) {
-        throw new Error(`Another artifact here (id ${named.id}) is already named "${trimmed}"; pick another title.`);
+        throw new Error(
+          `Another artifact here (id ${named.id}) is already named "${trimmed}"; pick another title.`,
+        );
       }
       artifact.visual = { ...artifact.visual, title: trimmed };
       artifact.updatedAt = this.now();
@@ -873,7 +1030,11 @@ export class WorkspaceArtifactStore {
   }
 
   /** Records the person's approval, but only for the exact commands they saw. */
-  async approve(workspaceId: string, artifactId: string, digest: string): Promise<WorkspaceArtifactV1> {
+  async approve(
+    workspaceId: string,
+    artifactId: string,
+    digest: string,
+  ): Promise<WorkspaceArtifactV1> {
     const id = requireArtifactId(artifactId);
     return this.artifacts(workspaceId).update((draft) => {
       const artifact = draft.artifacts.find((entry) => entry.id === id) ?? notFound();
@@ -890,7 +1051,12 @@ export class WorkspaceArtifactStore {
    * revision the page has since left is dropped: it belongs to a page that is
    * gone, and would otherwise overwrite the state a restore just brought back.
    */
-  async saveState(workspaceId: string, artifactId: string, revision: number, state: Record<string, unknown>): Promise<void> {
+  async saveState(
+    workspaceId: string,
+    artifactId: string,
+    revision: number,
+    state: Record<string, unknown>,
+  ): Promise<void> {
     const id = requireArtifactId(artifactId);
     await this.artifacts(workspaceId).update((draft) => {
       const artifact = draft.artifacts.find((entry) => entry.id === id) ?? notFound();
@@ -950,11 +1116,19 @@ export class WorkspaceArtifactStore {
         }
         sources[source.name] = {
           ...result,
-          ...(before?.dataJson !== undefined && result.dataJson === undefined && !result.policyDenied ? { dataJson: before.dataJson } : {}),
+          ...(before?.dataJson !== undefined &&
+          result.dataJson === undefined &&
+          !result.policyDenied
+            ? { dataJson: before.dataJson }
+            : {}),
         };
       }
       const snapshot: WorkspaceArtifactSnapshotV1 = {
-        filePolicyVersion: 1, revision: artifact.revision, refreshedAt: this.now(), sources };
+        filePolicyVersion: 1,
+        revision: artifact.revision,
+        refreshedAt: this.now(),
+        sources,
+      };
       draft.snapshots[id] = snapshot;
       return snapshot;
     });

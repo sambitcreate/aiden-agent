@@ -15,10 +15,12 @@ export function ImageNode({ id, data, selected }: NodeProps<DesignNode>) {
   const { frame } = data;
   const version = canvas.versionOf(frame.path);
   const [brokenVersion, setBrokenVersion] = React.useState<number | null>(null);
-  const src = canvas.grant && frame.path ? withVersion(designUrl(canvas.grant, frame.path), version) : null;
+  const src =
+    canvas.grant && frame.path ? withVersion(designUrl(canvas.grant, frame.path), version) : null;
 
   let body: React.ReactNode;
-  if (brokenVersion === version) body = <MissingFrame path={frame.path} onRemove={() => canvas.remove(id)} />;
+  if (brokenVersion === version)
+    body = <MissingFrame path={frame.path} onRemove={() => canvas.remove(id)} />;
   else if (src) {
     body = (
       <img

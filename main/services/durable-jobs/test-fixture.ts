@@ -36,8 +36,7 @@ export const evidence = (
   overrides: Partial<RecoveryEvidence> = {},
 ): RecoveryEvidence => ({
   kind,
-  checkpoint:
-    kind === "checkpoint" || kind === "failed_safe" ? checkpoint : null,
+  checkpoint: kind === "checkpoint" || kind === "failed_safe" ? checkpoint : null,
   resultRef: kind === "completed" ? "assistant-result" : null,
   waitId: kind.startsWith("waiting_") ? "approval-1" : null,
   ...overrides,

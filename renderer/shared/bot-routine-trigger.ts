@@ -5,7 +5,10 @@
 // watches are not built yet (D2 approved, spike pending).
 
 /** What a watch checks: a bounded GET of one address, or a script in the Bot's folder. */
-export type BotWatchSource = { type: "url"; url: string } | { type: "script"; script: string } | { type: "connector"; watchId: string };
+export type BotWatchSource =
+  | { type: "url"; url: string }
+  | { type: "script"; script: string }
+  | { type: "connector"; watchId: string };
 
 export type BotRoutineTrigger =
   | { kind: "file_change"; folder: string; pattern?: string }
@@ -43,10 +46,17 @@ const LOOPBACK_HOSTS: ReadonlySet<string> = new Set(["localhost", "127.0.0.1", "
 
 /** A relative path inside the Bot's folder: never absolute, never `..`, never the Bot's own `.aiden/` state. */
 function insideRelative(value: unknown, limit: number): string | undefined {
-  const relative = typeof value === "string" ? value.trim().replace(/\\/gu, "/").replace(/^\.\/+/u, "") : "";
+  const relative =
+    typeof value === "string"
+      ? value
+          .trim()
+          .replace(/\\/gu, "/")
+          .replace(/^\.\/+/u, "")
+      : "";
   if (!relative || relative.length > limit) return undefined;
   if (relative.startsWith("/") || /^[A-Za-z]:/u.test(relative)) return undefined;
-  if (relative.split("/").some((part) => part === ".." || part === "" || part === ".")) return undefined;
+  if (relative.split("/").some((part) => part === ".." || part === "" || part === "."))
+    return undefined;
   if (relative.split("/")[0] === ".aiden") return undefined;
   if (relative.includes("\0")) return undefined;
   return relative;
@@ -58,7 +68,8 @@ function insideRelative(value: unknown, limit: number): string | undefined {
  * is never sent.
  */
 export function parseBotWatchUrl(value: unknown): string | undefined {
-  if (typeof value !== "string" || !value.trim() || value.trim().length > BOT_WATCH_LIMITS.urlChars) return undefined;
+  if (typeof value !== "string" || !value.trim() || value.trim().length > BOT_WATCH_LIMITS.urlChars)
+    return undefined;
   let url: URL;
   try {
     url = new URL(value.trim());
@@ -66,13 +77,19 @@ export function parseBotWatchUrl(value: unknown): string | undefined {
     return undefined;
   }
   if (url.username || url.password) return undefined;
-  if (url.protocol !== "https:" && !(url.protocol === "http:" && LOOPBACK_HOSTS.has(url.hostname))) return undefined;
+  if (url.protocol !== "https:" && !(url.protocol === "http:" && LOOPBACK_HOSTS.has(url.hostname)))
+    return undefined;
   url.hash = "";
   return url.href;
 }
 
 function parseWatch(record: Record<string, unknown>): BotRoutineTrigger | undefined {
-  if (!Object.keys(record).every((key) => key === "kind" || key === "source" || key === "everyMinutes")) return undefined;
+  if (
+    !Object.keys(record).every(
+      (key) => key === "kind" || key === "source" || key === "everyMinutes",
+    )
+  )
+    return undefined;
   const every = record.everyMinutes;
   if (typeof every !== "number" || !Number.isInteger(every)) return undefined;
   if (every < BOT_WATCH_LIMITS.minMinutes || every > BOT_WATCH_LIMITS.maxMinutes) return undefined;
@@ -85,13 +102,25 @@ function parseWatch(record: Record<string, unknown>): BotRoutineTrigger | undefi
     return url ? { kind: "watch", source: { type: "url", url }, everyMinutes: every } : undefined;
   }
   if (fields.type === "connector") {
-    if (Object.keys(fields).length !== 2 || typeof fields.watchId !== "string" || !/^[a-f0-9-]{36}$/iu.test(fields.watchId) || ![15, 30, 60].includes(every)) return undefined;
-    return { kind: "watch", source: { type: "connector", watchId: fields.watchId }, everyMinutes: every };
+    if (
+      Object.keys(fields).length !== 2 ||
+      typeof fields.watchId !== "string" ||
+      !/^[a-f0-9-]{36}$/iu.test(fields.watchId) ||
+      ![15, 30, 60].includes(every)
+    )
+      return undefined;
+    return {
+      kind: "watch",
+      source: { type: "connector", watchId: fields.watchId },
+      everyMinutes: every,
+    };
   }
   if (fields.type === "script") {
     if (Object.keys(fields).length !== 2 || !("script" in fields)) return undefined;
     const script = insideRelative(fields.script, BOT_WATCH_LIMITS.scriptChars);
-    return script ? { kind: "watch", source: { type: "script", script }, everyMinutes: every } : undefined;
+    return script
+      ? { kind: "watch", source: { type: "script", script }, everyMinutes: every }
+      : undefined;
   }
   return undefined;
 }
@@ -109,14 +138,26 @@ export function parseBotRoutineTrigger(value: unknown): BotRoutineTrigger {
     return { kind: "webhook" };
   }
   if (record.kind !== "file_change") return fail();
-  if (!Object.keys(record).every((key) => key === "kind" || key === "folder" || key === "pattern")) return fail();
-  const folder = typeof record.folder === "string" ? record.folder.trim().replace(/\\/gu, "/").replace(/^\.\/+/u, "") : "";
+  if (!Object.keys(record).every((key) => key === "kind" || key === "folder" || key === "pattern"))
+    return fail();
+  const folder =
+    typeof record.folder === "string"
+      ? record.folder
+          .trim()
+          .replace(/\\/gu, "/")
+          .replace(/^\.\/+/u, "")
+      : "";
   if (!folder || folder.length > BOT_ROUTINE_EVENT_LIMITS.folderChars) return fail();
   if (folder.startsWith("/") || /^[A-Za-z]:/u.test(folder)) return fail();
   if (folder.split("/").some((part) => part === ".." || part === "")) return fail();
   if (folder.split("/")[0] === ".aiden") return fail();
   if (record.pattern !== undefined) {
-    if (typeof record.pattern !== "string" || !record.pattern.trim() || record.pattern.length > BOT_ROUTINE_EVENT_LIMITS.patternChars) return fail();
+    if (
+      typeof record.pattern !== "string" ||
+      !record.pattern.trim() ||
+      record.pattern.length > BOT_ROUTINE_EVENT_LIMITS.patternChars
+    )
+      return fail();
     return { kind: "file_change", folder, pattern: record.pattern.trim() };
   }
   return { kind: "file_change", folder };
@@ -137,7 +178,10 @@ function shortened(text: string, limit: number): string {
  * A watch address for a label: the whole host, always, and only the path
  * shortened, so an approval card can't hide where an address points.
  */
-export function watchAddressLabel(value: string, options: { scheme: boolean; query: boolean; pathChars: number }): string {
+export function watchAddressLabel(
+  value: string,
+  options: { scheme: boolean; query: boolean; pathChars: number },
+): string {
   try {
     const url = new URL(value);
     const path = `${url.pathname === "/" ? "" : url.pathname}${options.query ? url.search : ""}`;
@@ -150,10 +194,12 @@ export function watchAddressLabel(value: string, options: { scheme: boolean; que
 export function formatBotRoutineTriggerLabel(trigger: BotRoutineTrigger): string {
   if (trigger.kind === "webhook") return "When this routine's link is called";
   if (trigger.kind === "watch") {
-    if (trigger.source.type === "connector") return `Every ${formatBotWatchInterval(trigger.everyMinutes)}, when its connector watch changes`;
-    const what = trigger.source.type === "url"
-      ? watchAddressLabel(trigger.source.url, { scheme: true, query: true, pathChars: 60 })
-      : `the output of ${shortened(trigger.source.script, 60)}`;
+    if (trigger.source.type === "connector")
+      return `Every ${formatBotWatchInterval(trigger.everyMinutes)}, when its connector watch changes`;
+    const what =
+      trigger.source.type === "url"
+        ? watchAddressLabel(trigger.source.url, { scheme: true, query: true, pathChars: 60 })
+        : `the output of ${shortened(trigger.source.script, 60)}`;
     return `Every ${formatBotWatchInterval(trigger.everyMinutes)}, when ${what} changes`;
   }
   return trigger.pattern
@@ -165,7 +211,10 @@ export function formatBotRoutineTriggerLabel(trigger: BotRoutineTrigger): string
 export function matchesTriggerPattern(fileName: string, pattern: string | undefined): boolean {
   if (!pattern) return true;
   const expression = new RegExp(
-    `^${pattern.replace(/[.+^${}()|[\]\\]/gu, "\\$&").replace(/\*/gu, ".*").replace(/\?/gu, ".")}$`,
+    `^${pattern
+      .replace(/[.+^${}()|[\]\\]/gu, "\\$&")
+      .replace(/\*/gu, ".*")
+      .replace(/\?/gu, ".")}$`,
     "iu",
   );
   return expression.test(fileName);

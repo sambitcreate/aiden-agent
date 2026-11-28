@@ -1,7 +1,21 @@
-import { AIDEN_UI_CATALOG, PRESERVE_WHITESPACE, type ListShape } from "../../../renderer/shared/aiden-ui/catalog.js";
-import { evaluate, truthy, type AidenUiRead, type AidenUiScope } from "../../../renderer/shared/aiden-ui/evaluate.js";
+import {
+  AIDEN_UI_CATALOG,
+  PRESERVE_WHITESPACE,
+  type ListShape,
+} from "../../../renderer/shared/aiden-ui/catalog.js";
+import {
+  evaluate,
+  truthy,
+  type AidenUiRead,
+  type AidenUiScope,
+} from "../../../renderer/shared/aiden-ui/evaluate.js";
 import { hasOwn, ownEntry } from "../../../renderer/shared/aiden-ui/own.js";
-import { asString, isAction, isExpr, parseAidenUiData } from "../../../renderer/shared/aiden-ui/props.js";
+import {
+  asString,
+  isAction,
+  isExpr,
+  parseAidenUiData,
+} from "../../../renderer/shared/aiden-ui/props.js";
 import {
   AIDEN_UI_LIMITS,
   AIDEN_UI_RENDER_BUDGET,
@@ -64,7 +78,8 @@ function describe(expr: AidenUiExprV1): string {
   if (expr.op === "var") return `$${expr.name}`;
   if (expr.op === "get") {
     const key = expr.key;
-    if (key.op === "lit" && typeof key.v === "string" && /^[A-Za-z_]\w{0,39}$/u.test(key.v)) return `${describe(expr.of)}.${key.v}`;
+    if (key.op === "lit" && typeof key.v === "string" && /^[A-Za-z_]\w{0,39}$/u.test(key.v))
+      return `${describe(expr.of)}.${key.v}`;
     if (key.op === "lit" && typeof key.v === "number") return `${describe(expr.of)}[${key.v}]`;
     return `${describe(expr.of)}[…]`;
   }
@@ -117,26 +132,34 @@ function listShapeFinding(
   scope: AidenUiScope,
 ): string | undefined {
   if (value === undefined || value === null) return undefined;
-  const where = expr.op === "lit" ? `<${node.t} ${prop}>` : `<${node.t} ${prop}={${describe(expr)}}>`;
+  const where =
+    expr.op === "lit" ? `<${node.t} ${prop}>` : `<${node.t} ${prop}={${describe(expr)}}>`;
   const want = shape.kind === "number" ? "a list of numbers" : `a list of ${shape.item}`;
   if (!Array.isArray(value)) {
-    const lists = isRecord(value) ? Object.keys(value).filter((key) => Array.isArray(value[key])) : [];
+    const lists = isRecord(value)
+      ? Object.keys(value).filter((key) => Array.isArray(value[key]))
+      : [];
     return `${where} got ${kindOf(value)}, not ${want}${lists.length ? `; its list fields are ${listNames(lists)}` : ""}.`;
   }
   const sample = value.slice(0, LIST_SAMPLE);
   if (shape.kind === "number") {
     const wrong = sample.find((item) => !isNumberLike(item));
-    return wrong === undefined ? undefined : `${where} holds ${itemKindOf(wrong)} items; give it ${want}.`;
+    return wrong === undefined
+      ? undefined
+      : `${where} holds ${itemKindOf(wrong)} items; give it ${want}.`;
   }
   if (shape.kind !== "object") return undefined;
   const wrong = sample.find((item) => !isRecord(item));
-  if (wrong !== undefined) return `${where} holds ${itemKindOf(wrong)} items, so those rows draw empty; give each item as ${shape.item}.`;
+  if (wrong !== undefined)
+    return `${where} holds ${itemKindOf(wrong)} items, so those rows draw empty; give each item as ${shape.item}.`;
   const fields = (shape.needs ?? []).map((field) => {
     if (typeof field === "string") return field;
     const named = node.p?.[field.prop];
     return (isExpr(named) ? asString(evaluate(named, scope)) : "") || field.fallback;
   });
-  const missing = fields.filter((field) => !sample.some((item) => isRecord(item) && hasOwn(item, field)));
+  const missing = fields.filter(
+    (field) => !sample.some((item) => isRecord(item) && hasOwn(item, field)),
+  );
   if (!missing.length || !sample.length) return undefined;
   const has = new Set<string>();
   for (const item of sample) {
@@ -145,7 +168,9 @@ function listShapeFinding(
       has.add(field);
     }
   }
-  const names = missing.map((field) => (SHOWABLE_NAME.test(field) ? JSON.stringify(field) : "that"));
+  const names = missing.map((field) =>
+    SHOWABLE_NAME.test(field) ? JSON.stringify(field) : "that",
+  );
   return `${where} items have no ${names.join(" or ")} field, so they draw empty${has.size ? ` (they have ${listNames(has)})` : ""}; give each item as ${shape.item}.`;
 }
 
@@ -178,7 +203,12 @@ function isNull(expr: AidenUiExprV1): boolean {
  * `a == null`). Those guard fields that may be absent, so one refresh without
  * the field says nothing about whether the page is wrong.
  */
-function scanExpr(expr: AidenUiExprV1, test: boolean, names: Set<string>, guards: Set<GetExpr>): void {
+function scanExpr(
+  expr: AidenUiExprV1,
+  test: boolean,
+  names: Set<string>,
+  guards: Set<GetExpr>,
+): void {
   switch (expr.op) {
     case "var":
       names.add(expr.name);
@@ -211,7 +241,10 @@ function scanExpr(expr: AidenUiExprV1, test: boolean, names: Set<string>, guards
   }
 }
 
-function forEachNode(nodes: readonly AidenUiNodeV1[] | undefined, visit: (node: AidenUiNodeV1) => void): void {
+function forEachNode(
+  nodes: readonly AidenUiNodeV1[] | undefined,
+  visit: (node: AidenUiNodeV1) => void,
+): void {
   for (const node of nodes ?? []) {
     visit(node);
     forEachNode(node.c, visit);
@@ -221,7 +254,8 @@ function forEachNode(nodes: readonly AidenUiNodeV1[] | undefined, visit: (node: 
 function readsAnything(nodes: readonly AidenUiNodeV1[] | undefined): boolean {
   let found = false;
   forEachNode(nodes, (node) => {
-    if (node.e || Object.values(node.p ?? {}).some((value) => isExpr(value) && value.op !== "lit")) found = true;
+    if (node.e || Object.values(node.p ?? {}).some((value) => isExpr(value) && value.op !== "lit"))
+      found = true;
   });
   return found;
 }
@@ -267,22 +301,38 @@ export function checkWorkspaceArtifactPage(
     const action = artifact.actions.find((entry) => entry.name === call.name);
     if (!action) {
       const declared = artifact.actions.map((entry) => entry.name).join(", ");
-      add(findings, `run("${call.name}") names no action on this page${declared ? ` (actions: ${declared})` : ""}.`);
+      add(
+        findings,
+        `run("${call.name}") names no action on this page${declared ? ` (actions: ${declared})` : ""}.`,
+      );
     } else if (call.args !== action.params.length) {
-      add(findings, `run("${call.name}") passes ${call.args} value${call.args === 1 ? "" : "s"}, but the action takes ${action.params.length}.`);
+      add(
+        findings,
+        `run("${call.name}") passes ${call.args} value${call.args === 1 ? "" : "s"}, but the action takes ${action.params.length}.`,
+      );
     }
   }
   for (const source of artifact.sources) {
-    if (!named.has(source.name)) add(findings, `Source "${source.name}" is never read; bind it in markup as $${source.name}.`);
+    if (!named.has(source.name))
+      add(findings, `Source "${source.name}" is never read; bind it in markup as $${source.name}.`);
   }
 
-  const notLoaded = new Set(artifact.sources.filter((source) => results?.[source.name]?.status !== "ok").map((source) => source.name));
+  const notLoaded = new Set(
+    artifact.sources
+      .filter((source) => results?.[source.name]?.status !== "ok")
+      .map((source) => source.name),
+  );
   for (const name of notLoaded) if (named.has(name)) add(unchecked, `$${name} did not load`);
 
   const snapshot = results ? { revision: 0, refreshedAt: 0, sources: results } : undefined;
-  const vars = { ...parseAidenUiData(workspaceArtifactDataJson(artifact, snapshot)), ...(artifact.visual.state ?? {}) };
+  const vars = {
+    ...parseAidenUiData(workspaceArtifactDataJson(artifact, snapshot)),
+    ...(artifact.visual.state ?? {}),
+  };
   // When the sources' data together is over the cap, the tab binds none of them.
-  const dropped = artifact.sources.filter((source) => !notLoaded.has(source.name) && !hasOwn(vars, source.name));
+  const dropped = artifact.sources.filter(
+    (source) => !notLoaded.has(source.name) && !hasOwn(vars, source.name),
+  );
   if (dropped.length) {
     add(
       findings,
@@ -305,7 +355,15 @@ export function checkWorkspaceArtifactPage(
     if (root !== undefined && notLoaded.has(root)) return;
     let tally = members.get(read.expr);
     if (!tally) {
-      tally = { expr: read.expr, key: read.key, found: 0, missing: 0, onList: 0, onText: 0, fields: new Set() };
+      tally = {
+        expr: read.expr,
+        key: read.key,
+        found: 0,
+        missing: 0,
+        onList: 0,
+        onText: 0,
+        fields: new Set(),
+      };
       members.set(read.expr, tally);
     }
     if (read.value !== undefined) {
@@ -314,7 +372,10 @@ export function checkWorkspaceArtifactPage(
       if (typeof read.key === "string") tally.onList += 1;
     } else if (typeof read.object === "string") {
       if (read.key === "length") tally.onText += 1;
-    } else if (isRecord(read.object) && (typeof read.key === "string" || typeof read.key === "number")) {
+    } else if (
+      isRecord(read.object) &&
+      (typeof read.key === "string" || typeof read.key === "number")
+    ) {
       tally.missing += 1;
       for (const field of Object.keys(read.object)) {
         if (tally.fields.size >= MAX_NAMES_SHOWN * 4) break;
@@ -325,7 +386,10 @@ export function checkWorkspaceArtifactPage(
 
   let hiddenBranches = 0;
   let cutShort = false;
-  const budget = { nodes: AIDEN_UI_RENDER_BUDGET.nodes, iterations: AIDEN_UI_RENDER_BUDGET.iterations };
+  const budget = {
+    nodes: AIDEN_UI_RENDER_BUDGET.nodes,
+    iterations: AIDEN_UI_RENDER_BUDGET.iterations,
+  };
   const read = (expr: AidenUiExprV1, scope: AidenUiScope) => evaluate(expr, { ...scope, onRead });
   const walk = (nodes: readonly AidenUiNodeV1[] | undefined, scope: AidenUiScope): void => {
     for (const node of nodes ?? []) {
@@ -352,12 +416,19 @@ export function checkWorkspaceArtifactPage(
         if (!Array.isArray(list)) {
           if (isExpr(source) && isRecord(list)) {
             const lists = Object.keys(list).filter((key) => Array.isArray(list[key]));
-            add(findings, `<Each in={${describe(source)}}> got an object, not a list${lists.length ? `; its list fields are ${listNames(lists)}` : ""}.`);
+            add(
+              findings,
+              `<Each in={${describe(source)}}> got an object, not a list${lists.length ? `; its list fields are ${listNames(lists)}` : ""}.`,
+            );
           }
           continue;
         }
         if (list.length === 0) {
-          if (readsAnything(node.c)) add(unchecked, `the rows of <Each in={${isExpr(source) ? describe(source) : "…"}}> (the list was empty)`);
+          if (readsAnything(node.c))
+            add(
+              unchecked,
+              `the rows of <Each in={${isExpr(source) ? describe(source) : "…"}}> (the list was empty)`,
+            );
           continue;
         }
         const as = node.p?.as;
@@ -368,7 +439,10 @@ export function checkWorkspaceArtifactPage(
             break;
           }
           budget.iterations -= 1;
-          walk(node.c, { ...scope, vars: { ...scope.vars, [name]: item, [`${name}Index`]: index } });
+          walk(node.c, {
+            ...scope,
+            vars: { ...scope.vars, [name]: item, [`${name}Index`]: index },
+          });
         }
         continue;
       }
@@ -381,7 +455,9 @@ export function checkWorkspaceArtifactPage(
         } else if (isExpr(value)) {
           const result = read(value, scope);
           const shape = entry.lists ? ownEntry(entry.lists, prop) : undefined;
-          const finding = shape ? listShapeFinding(node, prop, value, result, shape, scope) : undefined;
+          const finding = shape
+            ? listShapeFinding(node, prop, value, result, shape, scope)
+            : undefined;
           if (finding) add(findings, finding);
         }
       }
@@ -397,11 +473,17 @@ export function checkWorkspaceArtifactPage(
   }
   if (cutShort) add(unchecked, "the rest of the page (too large to draw in full)");
   if (hiddenBranches) {
-    add(unchecked, `${hiddenBranches} <If> branch${hiddenBranches === 1 ? "" : "es"} hidden with this data`);
+    add(
+      unchecked,
+      `${hiddenBranches} <If> branch${hiddenBranches === 1 ? "" : "es"} hidden with this data`,
+    );
   }
 
   for (const name of missingVars) {
-    add(findings, `$${name} is not ${artifact.sources.length ? "a source, " : ""}a <Data> value or a state key, so it is always empty.`);
+    add(
+      findings,
+      `$${name} is not ${artifact.sources.length ? "a source, " : ""}a <Data> value or a state key, so it is always empty.`,
+    );
   }
   for (const tally of members.values()) {
     if (tally.found > 0 || guards.has(tally.expr)) continue;
@@ -417,8 +499,12 @@ export function checkWorkspaceArtifactPage(
     } else if (tally.onText > 0) {
       add(findings, `${where} is always empty: text has no .length; use len(${of}).`);
     } else if (tally.missing > 0) {
-      const key = typeof tally.key === "string" && SHOWABLE_NAME.test(tally.key) ? `"${tally.key}"` : "that";
-      add(findings, `${where} is always empty: the data has no ${key} field${tally.fields.size ? ` (it has ${listNames(tally.fields)})` : ""}.`);
+      const key =
+        typeof tally.key === "string" && SHOWABLE_NAME.test(tally.key) ? `"${tally.key}"` : "that";
+      add(
+        findings,
+        `${where} is always empty: the data has no ${key} field${tally.fields.size ? ` (it has ${listNames(tally.fields)})` : ""}.`,
+      );
     }
   }
 

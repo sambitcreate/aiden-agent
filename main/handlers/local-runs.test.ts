@@ -69,7 +69,9 @@ class FakeDocument implements LocalRunOwner {
   frames(): string[] {
     return this.messages.flatMap((message) =>
       message.frames.map((frame) =>
-        frame.kind === "event" ? `${frame.event.type}@${frame.event.sequence}` : `state:${frame.state}`,
+        frame.kind === "event"
+          ? `${frame.event.type}@${frame.event.sequence}`
+          : `state:${frame.state}`,
       ),
     );
   }
@@ -79,7 +81,11 @@ type FakeEvent = { document: FakeDocument | null };
 
 function setup() {
   const clock = { now: 1_000 };
-  const registry = new HostRunRegistry({ now: () => clock.now, epoch: "epoch-local", deltaCoalesceMs: 0 });
+  const registry = new HostRunRegistry({
+    now: () => clock.now,
+    epoch: "epoch-local",
+    deltaCoalesceMs: 0,
+  });
   const timers = new FakeTimers();
   let ids = 0;
   const observers = new LocalRunObservers({
@@ -100,7 +106,12 @@ function setup() {
     observers: () => observers,
     stopRun: (runId) => {
       const summary = registry.summary(runId);
-      if (!summary || summary.state === "done" || summary.state === "failed" || summary.state === "cancelled") {
+      if (
+        !summary ||
+        summary.state === "done" ||
+        summary.state === "failed" ||
+        summary.state === "cancelled"
+      ) {
         return false;
       }
       stops.push(runId);
@@ -136,7 +147,11 @@ test("a phone-started run reaches the watching window live, one batch per frame,
   assert.equal(subscription.runId, "run-1");
   assert.equal(subscription.state, "streaming");
   assert.deepEqual(eventKeys(subscription), ["run.started@1", "text_delta@2"]);
-  assert.deepEqual(subscription.events[0]!.payload, { runId: "run-1", chatId: "chat-1", origin: "remote" });
+  assert.deepEqual(subscription.events[0]!.payload, {
+    runId: "run-1",
+    chatId: "chat-1",
+    origin: "remote",
+  });
 
   registry.publish("run-1", "chat:delta", { delta: "lo" });
   registry.publish("run-1", "chat:delta", { delta: " there" });
@@ -150,7 +165,9 @@ test("a phone-started run reaches the watching window live, one batch per frame,
     [{ text: "lo" }, { text: " there" }],
   );
 
-  registry.publish("run-1", "chat:done", { chat: { messages: [{ id: "assistant-1", role: "assistant" }] } });
+  registry.publish("run-1", "chat:done", {
+    chat: { messages: [{ id: "assistant-1", role: "assistant" }] },
+  });
   frame();
   assert.deepEqual(page.frames().slice(2), ["done@5", "run.ended@5", "state:ended"]);
   const ended = page.messages[1]!.frames[1]!;
@@ -172,9 +189,15 @@ test("a window watching one chat never receives another chat's frames", async ()
   registry.publish("run-1", "chat:delta", { delta: "for chat one" });
   frame();
 
-  assert.deepEqual(page.messages.map((message) => message.chatId), ["chat-1"]);
+  assert.deepEqual(
+    page.messages.map((message) => message.chatId),
+    ["chat-1"],
+  );
   assert.deepEqual(page.frames(), ["text_delta@2"]);
-  assert.deepEqual(other.messages.map((message) => message.chatId), ["chat-2"]);
+  assert.deepEqual(
+    other.messages.map((message) => message.chatId),
+    ["chat-2"],
+  );
   assert.deepEqual(other.frames(), ["text_delta@2"]);
 });
 
@@ -202,7 +225,11 @@ test("a cursor resumes after the last delivered event and is ignored once the ch
   registry.begin({ runId: "run-2", chatId: "chat-1", origin: "remote" });
   const moved = await observe(page, "chat-1", { runId: "run-1", sequence: 5 });
   assert.equal(moved.runId, "run-2");
-  assert.deepEqual(eventKeys(moved), ["run.started@1"], "another run's cursor replays the new run whole");
+  assert.deepEqual(
+    eventKeys(moved),
+    ["run.started@1"],
+    "another run's cursor replays the new run whole",
+  );
 
   const idle = await observe(page, "chat-idle");
   assert.equal(idle.runId, null);
@@ -261,7 +288,10 @@ test("a document that goes away releases its observations and receives nothing m
   assert.equal(second.messages.length, 1);
 
   // The reloaded document (same frame) cannot release the old observation again.
-  assert.equal(await invoke("runs:unobserveLocal", new FakeDocument("1:doc-a"), mine.subscriptionId), false);
+  assert.equal(
+    await invoke("runs:unobserveLocal", new FakeDocument("1:doc-a"), mine.subscriptionId),
+    false,
+  );
 
   assert.equal(await invoke("runs:unobserveLocal", second, theirs.subscriptionId), true);
   assert.equal(observers.size, 0);
@@ -289,19 +319,29 @@ test("only an active document with well-formed input can observe or stop a run",
 
   await assert.rejects(invoke("runs:observeLocal", null, "chat-1"), /active application document/u);
   await assert.rejects(invoke("runs:observeLocal", page, "../chat"), /Invalid chat identifier/u);
-  await assert.rejects(invoke("runs:observeLocal", page, "chat-1", { runId: "run-1", sequence: -1 }), /Invalid run cursor/u);
+  await assert.rejects(
+    invoke("runs:observeLocal", page, "chat-1", { runId: "run-1", sequence: -1 }),
+    /Invalid run cursor/u,
+  );
   await assert.rejects(invoke("runs:observeLocal", page, "chat-1", "run-1"), /Invalid run cursor/u);
   await assert.rejects(invoke("runs:stopLocal", page, 42), /Invalid run identifier/u);
 
   assert.equal(await invoke("runs:stopLocal", page, "run-1"), true);
   assert.deepEqual(stops, ["run-1"]);
   assert.equal(registry.summary("run-1")?.state, "cancelled");
-  assert.equal(await invoke("runs:stopLocal", page, "run-1"), false, "a finished run cannot be stopped again");
+  assert.equal(
+    await invoke("runs:stopLocal", page, "run-1"),
+    false,
+    "a finished run cannot be stopped again",
+  );
   assert.equal(await invoke("runs:stopLocal", page, "run-unknown"), false);
 
   page.navigate();
   await assert.rejects(invoke("runs:stopLocal", page, "run-1"), /application document changed/u);
-  await assert.rejects(invoke("runs:observeLocal", page, "chat-1"), /application document changed/u);
+  await assert.rejects(
+    invoke("runs:observeLocal", page, "chat-1"),
+    /application document changed/u,
+  );
 });
 
 test("a settled query names only runs that finished and that nothing still runs", async () => {
@@ -316,15 +356,31 @@ test("a settled query names only runs that finished and that nothing still runs"
   live.add("run-saving");
 
   assert.deepEqual(
-    await invoke("runs:settledLocal", page, ["run-old", "run-phone", "run-saving", "run-unknown", "run-old"]),
+    await invoke("runs:settledLocal", page, [
+      "run-old",
+      "run-phone",
+      "run-saving",
+      "run-unknown",
+      "run-old",
+    ]),
     ["run-old"],
     "the busy chat's newer run does not hold back the finished one; a run still persisting or unknown is not settled",
   );
   await assert.rejects(invoke("runs:settledLocal", page, "run-old"), /Invalid run identifiers/u);
   await assert.rejects(invoke("runs:settledLocal", page, ["../x"]), /Invalid run identifier/u);
-  await assert.rejects(invoke("runs:settledLocal", page, Array.from({ length: 65 }, (_, i) => `run-${i}`)), /Invalid run identifiers/u);
+  await assert.rejects(
+    invoke(
+      "runs:settledLocal",
+      page,
+      Array.from({ length: 65 }, (_, i) => `run-${i}`),
+    ),
+    /Invalid run identifiers/u,
+  );
   page.navigate();
-  await assert.rejects(invoke("runs:settledLocal", page, ["run-old"]), /application document changed/u);
+  await assert.rejects(
+    invoke("runs:settledLocal", page, ["run-old"]),
+    /application document changed/u,
+  );
 });
 
 test("the watching window shows a phone's reply as it streams, stops it, and lets the saved reply replace it", async () => {
@@ -346,7 +402,8 @@ test("the watching window shows a phone's reply as it streams, stops it, and let
     admitRunInput: async () => ({ admitted: false, committed: false, reason: "run_not_active" }),
     // This window did not start the phone's run, so its own Stop declines it.
     stop: async () => false,
-    observeRun: (chatId) => invoke("runs:observeLocal", page, chatId, null) as Promise<PeerRunSubscription>,
+    observeRun: (chatId) =>
+      invoke("runs:observeLocal", page, chatId, null) as Promise<PeerRunSubscription>,
     unobserveRun: (id) => invoke("runs:unobserveLocal", page, id) as Promise<boolean>,
     onRunFrame: (handler) => {
       listeners.add(handler);
@@ -364,10 +421,17 @@ test("the watching window shows a phone's reply as it streams, stops it, and let
     refetch: async () => {
       reads++;
       const state = registry.summary("run-phone")?.state;
-      if (state !== "cancelled" && state !== "done") return { kind: "read", messages: [{ role: "user" }] };
+      if (state !== "cancelled" && state !== "done")
+        return { kind: "read", messages: [{ role: "user" }] };
       settledReads++;
       // The stopped reply was saved before the run settled.
-      return { kind: "read", messages: [{ role: "user" }, { role: "assistant", timeline: { generationId: "run-phone" } }] };
+      return {
+        kind: "read",
+        messages: [
+          { role: "user" },
+          { role: "assistant", timeline: { generationId: "run-phone" } },
+        ],
+      };
     },
     schedule: (publish) => publish(),
   });
@@ -382,7 +446,11 @@ test("the watching window shows a phone's reply as it streams, stops it, and let
   frame();
   await new Promise((settle) => setImmediate(settle));
   const live = detachedLifecycleChatProjection(chatId, "workspace-1");
-  assert.equal(live?.content, "Drafting the summary", "the reply is on screen before the run settles");
+  assert.equal(
+    live?.content,
+    "Drafting the summary",
+    "the reply is on screen before the run settles",
+  );
   assert.equal(live?.reasoning, "Weighing options");
   assert.equal(registry.summary("run-phone")?.state, "working", "the run is still going");
   assert.equal(reads, 1, "the phone's saved message is read once when its run starts");

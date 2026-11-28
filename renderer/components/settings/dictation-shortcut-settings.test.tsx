@@ -11,7 +11,11 @@ import {
 } from "@tanstack/react-router";
 import { installBotTestIpc } from "../../main/bots/test-dom";
 import { createBotTestQueryClient } from "../../main/bots/test-providers";
-import { AppCapabilitiesProvider, DISABLED_APP_CAPABILITIES, type AppCapabilities } from "../../lib/app-capabilities";
+import {
+  AppCapabilitiesProvider,
+  DISABLED_APP_CAPABILITIES,
+  type AppCapabilities,
+} from "../../lib/app-capabilities";
 import { Toaster, toast } from "../ui";
 import { DictationShortcutSettings } from "./dictation-shortcut-settings";
 
@@ -35,7 +39,8 @@ async function mount(
       const next = patch as Record<string, unknown>;
       stored = { ...stored, ...next };
       // Main keeps the release-events flag in step with the chosen behavior.
-      if (next.dictationActivationMode) stored.dictationHoldToTalk = next.dictationActivationMode !== "toggle";
+      if (next.dictationActivationMode)
+        stored.dictationHoldToTalk = next.dictationActivationMode !== "toggle";
       return stored;
     },
     "shortcut:get": () => ({ effective: {}, global: [] }),
@@ -50,7 +55,10 @@ async function mount(
       </QueryClientProvider>
     ),
   });
-  const router = createRouter({ routeTree: root, history: createMemoryHistory({ initialEntries: ["/"] }) });
+  const router = createRouter({
+    routeTree: root,
+    history: createMemoryHistory({ initialEntries: ["/"] }),
+  });
   await router.load();
   render(<RouterProvider router={router} />);
   await screen.findByText("Stop after silence");
@@ -61,19 +69,30 @@ const behavior = () => screen.queryByRole("combobox", { name: "Dictation shortcu
 
 test("a desktop with one behavior states it as a plain row with nothing to choose", async () => {
   await mount({});
-  assert.notEqual(screen.queryByText("Press the global dictation shortcut once to start and again to stop."), null);
+  assert.notEqual(
+    screen.queryByText("Press the global dictation shortcut once to start and again to stop."),
+    null,
+  );
   assert.equal(behavior() === null, true);
   assert.equal(screen.queryAllByRole("radio").length, 0);
 });
 
 test("the row describes the saved behavior next to its selector", async () => {
-  await mount({ dictationHoldToTalk: true }, { dictationHoldToTalk: true, dictationActivationMode: "hybrid" });
+  await mount(
+    { dictationHoldToTalk: true },
+    { dictationHoldToTalk: true, dictationActivationMode: "hybrid" },
+  );
   await waitFor(() => assert.equal(behavior()?.textContent?.includes("Tap or hold"), true));
   assert.notEqual(
-    screen.queryByText("Tap to start and tap again to stop, or hold while speaking and release to transcribe."),
+    screen.queryByText(
+      "Tap to start and tap again to stop, or hold while speaking and release to transcribe.",
+    ),
     null,
   );
-  assert.equal(screen.queryByText("Press once to start; press again to stop and transcribe.") === null, true);
+  assert.equal(
+    screen.queryByText("Press once to start; press again to stop and transcribe.") === null,
+    true,
+  );
 });
 
 test("choosing a behavior saves it and the description follows", async () => {
@@ -82,17 +101,20 @@ test("choosing a behavior saves it and the description follows", async () => {
   fireEvent.keyDown(trigger, { key: "ArrowDown" });
   fireEvent.click(await screen.findByRole("option", { name: "Tap or hold" }));
   await waitFor(() =>
-    assert.deepEqual(
-      calls.find((call) => call.channel === "settings:set")?.args[0],
-      { dictationActivationMode: "hybrid" },
-    ),
+    assert.deepEqual(calls.find((call) => call.channel === "settings:set")?.args[0], {
+      dictationActivationMode: "hybrid",
+    }),
   );
-  await screen.findByText("Tap to start and tap again to stop, or hold while speaking and release to transcribe.");
+  await screen.findByText(
+    "Tap to start and tap again to stop, or hold while speaking and release to transcribe.",
+  );
 });
 
 test("while a behavior saves, focus stays on the selector and a second choice waits", async () => {
   let finishSave = () => {};
-  const saveGate = new Promise<void>((resolve) => { finishSave = resolve; });
+  const saveGate = new Promise<void>((resolve) => {
+    finishSave = resolve;
+  });
   const calls = await mount({ dictationHoldToTalk: true }, {}, saveGate);
   const trigger = await screen.findByRole("combobox", { name: "Dictation shortcut behavior" });
   const saves = () => calls.filter((call) => call.channel === "settings:set");
@@ -126,7 +148,8 @@ test("a desktop that assigns the hold shortcut keeps saying so while Press to to
 
 test("each dictation switch is named by its row and saves its own setting", async () => {
   const calls = await mount({});
-  const saves = () => calls.filter((call) => call.channel === "settings:set").map((call) => call.args[0]);
+  const saves = () =>
+    calls.filter((call) => call.channel === "settings:set").map((call) => call.args[0]);
   fireEvent.click(screen.getByRole("switch", { name: "Stop after silence" }));
   fireEvent.click(screen.getByRole("switch", { name: "Clean up transcript" }));
   fireEvent.click(screen.getByRole("switch", { name: "Play sounds" }));

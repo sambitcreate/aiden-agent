@@ -26,20 +26,28 @@ import { invoke, onNotification } from "./ipc-bridge";
 
 export const createImagesIpc = {
   list: () => invoke<ListWorkflowsResponse>("imageWorkflows:list", {}),
-  create: (request: CreateWorkflowRequest) => invoke<WorkflowResponse>("imageWorkflows:create", request),
+  create: (request: CreateWorkflowRequest) =>
+    invoke<WorkflowResponse>("imageWorkflows:create", request),
   get: (workflowId: string) => invoke<GetWorkflowResponse>("imageWorkflows:get", { workflowId }),
-  save: (request: SaveWorkflowRequest) => invoke<SaveWorkflowResponse>("imageWorkflows:save", request),
-  mutate: (request: MutateWorkflowRequest) => invoke<MutateWorkflowResponse>("imageWorkflows:mutate", request),
+  save: (request: SaveWorkflowRequest) =>
+    invoke<SaveWorkflowResponse>("imageWorkflows:save", request),
+  mutate: (request: MutateWorkflowRequest) =>
+    invoke<MutateWorkflowResponse>("imageWorkflows:mutate", request),
   listModels: () => invoke<ListModelsResponse>("imageWorkflows:list-models", {}),
-  importImage: (request: ImportImageRequest) => invoke<ImportImageResponse>("imageWorkflows:import-image", request),
-  prepareRun: (request: PrepareRunRequest) => invoke<PrepareRunResponse>("imageWorkflows:prepare-run", request),
-  startRun: (consentId: string) => invoke<StartRunResponse>("imageWorkflows:start-run", { consentId }),
+  importImage: (request: ImportImageRequest) =>
+    invoke<ImportImageResponse>("imageWorkflows:import-image", request),
+  prepareRun: (request: PrepareRunRequest) =>
+    invoke<PrepareRunResponse>("imageWorkflows:prepare-run", request),
+  startRun: (consentId: string) =>
+    invoke<StartRunResponse>("imageWorkflows:start-run", { consentId }),
   cancelRun: (runId: string) => invoke<{ ok: boolean }>("imageWorkflows:cancel-run", { runId }),
   getRun: (request: GetRunRequest) => invoke<GetRunResponse>("imageWorkflows:get-run", request),
   listRuns: (workflowId: string, limit = 20) =>
     invoke<ListRunsResponse>("imageWorkflows:list-runs", { workflowId, limit }),
-  gallery: (request: GalleryRequest = {}) => invoke<GalleryResponse>("imageWorkflows:gallery", request),
-  imageAction: (request: ImageActionRequest) => invoke<ImageActionResponse>("imageWorkflows:image-action", request),
+  gallery: (request: GalleryRequest = {}) =>
+    invoke<GalleryResponse>("imageWorkflows:gallery", request),
+  imageAction: (request: ImageActionRequest) =>
+    invoke<ImageActionResponse>("imageWorkflows:image-action", request),
   onRunChanged: (handler: (snapshot: RunSnapshot) => void) =>
     onNotification<RunSnapshot>("imageWorkflows:run-changed", handler),
 };

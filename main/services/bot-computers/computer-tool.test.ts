@@ -38,7 +38,11 @@ interface CaptureCall {
 }
 
 /** A screen of `width`×`height` framebuffer pixels that scales captures to `maxWidth`. */
-function fakeScreen(width: number, height: number, options: { blockKeysAfter?: number; oversize?: boolean } = {}) {
+function fakeScreen(
+  width: number,
+  height: number,
+  options: { blockKeysAfter?: number; oversize?: boolean } = {},
+) {
   const events: ScreenEvent[] = [];
   const captures: CaptureCall[] = [];
   let keys = 0;
@@ -61,7 +65,9 @@ function fakeScreen(width: number, height: number, options: { blockKeysAfter?: n
     async key(event, signal) {
       keys += 1;
       if (options.blockKeysAfter !== undefined && keys > options.blockKeysAfter && signal) {
-        await new Promise<never>((_, reject) => signal.addEventListener("abort", () => reject(signal.reason), { once: true }));
+        await new Promise<never>((_, reject) =>
+          signal.addEventListener("abort", () => reject(signal.reason), { once: true }),
+        );
       }
       events.push({ kind: "key", ...event });
     },
@@ -104,7 +110,10 @@ function harness(
   let screenFailure: Error | undefined;
   const deps = {
     host: {
-      async ensureRunning(_botId: string, opts: { reason: BotComputerStartReason; onProgress?(text: string): void }) {
+      async ensureRunning(
+        _botId: string,
+        opts: { reason: BotComputerStartReason; onProgress?(text: string): void },
+      ) {
         reasons.push(opts.reason);
         opts.onProgress?.("Starting Ada's computer…");
         return current;
@@ -126,14 +135,18 @@ function harness(
     state,
     botName: async () => "Ada",
     sleep: async () => undefined,
-    ...(options.unattendedWaitMs === undefined ? {} : { unattendedWaitMs: options.unattendedWaitMs }),
+    ...(options.unattendedWaitMs === undefined
+      ? {}
+      : { unattendedWaitMs: options.unattendedWaitMs }),
   };
   const tool = createBotComputerTool("ada", deps, {
     routine: options.routine === true,
     ...(options.unattended === undefined ? {} : { unattended: options.unattended }),
   });
   const call = (args: Record<string, unknown> & { action: string }, signal?: AbortSignal) =>
-    tool.execute("call", args as unknown as BotComputerArgs, signal) as Promise<AgentToolResult<BotComputerResultDetails>>;
+    tool.execute("call", args as unknown as BotComputerArgs, signal) as Promise<
+      AgentToolResult<BotComputerResultDetails>
+    >;
   return {
     control,
     state,
@@ -170,7 +183,16 @@ test("every action that changes the computer needs an intent; looking doesn't", 
   assert.equal(missing.isError, true);
   assert.match(textOf(missing), /needs an intent/u);
   for (const action of ["double_click", "right_click", "scroll", "type", "key", "drag"]) {
-    const result = await h.call({ action, coordinate: [1, 1], from_coordinate: [1, 1], to_coordinate: [2, 2], direction: "down", text: "x", keys: "return", intent: "   " });
+    const result = await h.call({
+      action,
+      coordinate: [1, 1],
+      from_coordinate: [1, 1],
+      to_coordinate: [2, 2],
+      direction: "down",
+      text: "x",
+      keys: "return",
+      intent: "   ",
+    });
     assert.equal(result.isError, true, `${action} without a real intent`);
   }
   assert.equal(h.fake.events.length, 0, "nothing reached the screen");
@@ -181,7 +203,11 @@ test("every action that changes the computer needs an intent; looking doesn't", 
 
 test("coordinates are pixels of the newest capture, scaled to the framebuffer", async () => {
   const h = harness({ width: 2560, height: 1600 });
-  const early = await h.call({ action: "click", coordinate: [100, 100], intent: "Open the Downloads folder" });
+  const early = await h.call({
+    action: "click",
+    coordinate: [100, 100],
+    intent: "Open the Downloads folder",
+  });
   assert.equal(early.isError, true);
   assert.match(textOf(early), /Take a capture first/u);
   assert.equal(h.fake.events.length, 0);
@@ -190,14 +216,22 @@ test("coordinates are pixels of the newest capture, scaled to the framebuffer", 
   assert.deepEqual([shot.details.width, shot.details.height], [1280, 800]);
   assert.match(textOf(shot), /1280×800 pixels/u);
 
-  const clicked = await h.call({ action: "click", coordinate: [640, 400], intent: "Click Place order" });
+  const clicked = await h.call({
+    action: "click",
+    coordinate: [640, 400],
+    intent: "Click Place order",
+  });
   assert.equal(clicked.isError, undefined);
   assert.deepEqual(h.fake.events, [
     { kind: "pointer", x: 1280, y: 800, buttons: 0 },
     { kind: "pointer", x: 1280, y: 800, buttons: 1 },
     { kind: "pointer", x: 1280, y: 800, buttons: 0 },
   ]);
-  assert.deepEqual(last(h.pointers), { x: 1280, y: 800, width: 2560, height: 1600 }, "the viewer draws the avatar there");
+  assert.deepEqual(
+    last(h.pointers),
+    { x: 1280, y: 800, width: 2560, height: 1600 },
+    "the viewer draws the avatar there",
+  );
   assert.equal(last(h.activity), "Ada is using the computer: Click Place order");
 
   h.fake.events.length = 0;
@@ -208,22 +242,37 @@ test("coordinates are pixels of the newest capture, scaled to the framebuffer", 
     "the far edge stays on screen, and a right click presses the right button",
   );
 
-  const outside = await h.call({ action: "click", coordinate: [1400, 10], intent: "Click the menu" });
+  const outside = await h.call({
+    action: "click",
+    coordinate: [1400, 10],
+    intent: "Click the menu",
+  });
   assert.equal(outside.isError, true);
   assert.match(textOf(outside), /outside the newest capture/u);
 
   h.fake.events.length = 0;
-  await h.call({ action: "drag", from_coordinate: [0, 0], to_coordinate: [100, 50], intent: "Drag the file to the folder" });
+  await h.call({
+    action: "drag",
+    from_coordinate: [0, 0],
+    to_coordinate: [100, 50],
+    intent: "Drag the file to the folder",
+  });
   const pressed = h.fake.events.filter((event) => event.kind === "pointer" && event.buttons === 1);
   assert.deepEqual(pressed[0], { kind: "pointer", x: 0, y: 0, buttons: 1 });
   assert.deepEqual(last(pressed), { kind: "pointer", x: 200, y: 100, buttons: 1 });
-  assert.deepEqual(last(h.fake.events), { kind: "pointer", x: 200, y: 100, buttons: 0 }, "the drag ends released at its target");
+  assert.deepEqual(
+    last(h.fake.events),
+    { kind: "pointer", x: 200, y: 100, buttons: 0 },
+    "the drag ends released at its target",
+  );
 });
 
 test("a capture is a JPEG at most 1280 px on its long side, at quality 70", async () => {
   const wide = harness({ width: 3840, height: 2160 });
   const shot = await wide.call({ action: "capture" });
-  assert.deepEqual(wide.fake.captures, [{ format: "jpeg", maxWidth: BOT_COMPUTER_CAPTURE_MAX_EDGE, quality: 70 }]);
+  assert.deepEqual(wide.fake.captures, [
+    { format: "jpeg", maxWidth: BOT_COMPUTER_CAPTURE_MAX_EDGE, quality: 70 },
+  ]);
   const [image] = images(shot);
   assert.equal(image?.type === "image" ? image.mimeType : undefined, "image/jpeg");
   assert.ok(Math.max(shot.details.width!, shot.details.height!) <= BOT_COMPUTER_CAPTURE_MAX_EDGE);
@@ -231,7 +280,11 @@ test("a capture is a JPEG at most 1280 px on its long side, at quality 70", asyn
   const portrait = harness({ width: 1600, height: 2560 });
   const tall = await portrait.call({ action: "capture" });
   assert.ok(tall.details.height! <= BOT_COMPUTER_CAPTURE_MAX_EDGE, `height ${tall.details.height}`);
-  assert.equal(portrait.fake.captures.length, 2, "a portrait screen is captured again, bounded by its height");
+  assert.equal(
+    portrait.fake.captures.length,
+    2,
+    "a portrait screen is captured again, bounded by its height",
+  );
   assert.ok(portrait.fake.captures[1]!.maxWidth < BOT_COMPUTER_CAPTURE_MAX_EDGE);
 
   const oversize = harness({ screen: fakeScreen(2560, 1600, { oversize: true }) });
@@ -249,7 +302,11 @@ test("while the person has the computer nothing is captured; the call waits for 
   });
   await new Promise((resolve) => setImmediate(resolve));
   assert.equal(settled, false, "the call waits");
-  assert.equal(h.fake.captures.length, 0, "the model never sees the screen while the person has it");
+  assert.equal(
+    h.fake.captures.length,
+    0,
+    "the model never sees the screen while the person has it",
+  );
   h.control.giveBack("ada");
   const result = await pending;
   assert.equal(textOf(result), BOT_COMPUTER_GIVE_BACK_NOTE);
@@ -275,7 +332,10 @@ test("Take over interrupts the action, nothing stays held, and Give back returns
   h.control.giveBack("ada");
   const result = await typing;
   assert.equal(textOf(result), BOT_COMPUTER_GIVE_BACK_NOTE);
-  assert.ok(h.touches() > touchesWhileHeld, "the idle timer restarts when the call ends, after Give back");
+  assert.ok(
+    h.touches() > touchesWhileHeld,
+    "the idle timer restarts when the call ends, after Give back",
+  );
 
   // The capture from before the person held the computer no longer places a click.
   const before = h.fake.events.length;
@@ -284,7 +344,10 @@ test("Take over interrupts the action, nothing stays held, and Give back returns
   assert.equal(textOf(click), BOT_COMPUTER_GIVE_BACK_NOTE);
   assert.equal(h.fake.events.length, before);
   await h.call({ action: "capture" });
-  assert.equal((await h.call({ action: "click", coordinate: [10, 10], intent: "Click Search" })).isError, undefined);
+  assert.equal(
+    (await h.call({ action: "click", coordinate: [10, 10], intent: "Click Search" })).isError,
+    undefined,
+  );
 });
 
 /** The call's result, or "still waiting" if it hasn't settled within `ms`. */
@@ -305,7 +368,11 @@ test("on a routine or Telegram turn, a computer the person keeps using is given 
     const h = harness({ ...turn, unattendedWaitMs: 40 });
     h.control.takeOver("ada", "viewer");
     const result = await within(h.call({ action: "capture" }), 2_000);
-    assert.notEqual(result, "still waiting", `${JSON.stringify(turn)}: the run doesn't wait for a person who isn't there to answer`);
+    assert.notEqual(
+      result,
+      "still waiting",
+      `${JSON.stringify(turn)}: the run doesn't wait for a person who isn't there to answer`,
+    );
     if (result === "still waiting") continue;
     assert.equal(result.isError, true);
     assert.match(textOf(result), /still using Ada's computer.*say in your reply/u);
@@ -314,14 +381,19 @@ test("on a routine or Telegram turn, a computer the person keeps using is given 
 
     // Taken over in the middle of an action, too.
     h.control.giveBack("ada");
-    const typing = harness({ ...turn, unattendedWaitMs: 40, screen: fakeScreen(2560, 1600, { blockKeysAfter: 1 }) });
+    const typing = harness({
+      ...turn,
+      unattendedWaitMs: 40,
+      screen: fakeScreen(2560, 1600, { blockKeysAfter: 1 }),
+    });
     await typing.call({ action: "capture" });
     const pending = typing.call({ action: "type", text: "Ab", intent: "Type the search terms" });
     await new Promise((resolve) => setImmediate(resolve));
     typing.control.takeOver("ada", "input");
     const interrupted = await within(pending, 2_000);
     assert.notEqual(interrupted, "still waiting");
-    if (interrupted !== "still waiting") assert.match(textOf(interrupted), /still using Ada's computer/u);
+    if (interrupted !== "still waiting")
+      assert.match(textOf(interrupted), /still using Ada's computer/u);
   }
   // A person's own turn keeps waiting for Give back.
   const attended = harness({ unattendedWaitMs: 40 });
@@ -371,7 +443,11 @@ test("typing sends US-keyboard keys and never echoes the text; line breaks are r
     { kind: "key", keysym: XK_SHIFT, down: false },
   ]);
   h.fake.events.length = 0;
-  const multiline = await h.call({ action: "type", text: "line one\nline two", intent: "Type the note" });
+  const multiline = await h.call({
+    action: "type",
+    text: "line one\nline two",
+    intent: "Type the note",
+  });
   assert.equal(multiline.isError, true);
   assert.equal(h.fake.events.length, 0, "a line break could submit a form: nothing is typed");
 });
@@ -397,9 +473,17 @@ test("the model never sees the VNC password in an error", async () => {
   const failed = await h.call({ action: "capture" });
   assert.equal(failed.isError, true);
   assert.doesNotMatch(textOf(failed), /vnc-secret-1234|5901/u);
-  h.failScreen(new BotComputerError("stale", "Ada's computer is missing or incomplete. Reset it in the Bot's profile."));
+  h.failScreen(
+    new BotComputerError(
+      "stale",
+      "Ada's computer is missing or incomplete. Reset it in the Bot's profile.",
+    ),
+  );
   const stale = await h.call({ action: "capture" });
-  assert.equal(textOf(stale), "Ada's computer is missing or incomplete. Reset it in the Bot's profile.");
+  assert.equal(
+    textOf(stale),
+    "Ada's computer is missing or incomplete. Reset it in the Bot's profile.",
+  );
 });
 
 test("stopping the reply stops the call instead of reporting a failure", async () => {
@@ -459,7 +543,11 @@ test("with element control, capture with app adds the app's numbered elements to
   assert.equal(shot.details.lane, "driver");
   assert.equal(shot.details.elementCount, 2);
   const read = h.calls().find((call) => call.name === "get_window_state");
-  assert.equal(read?.args.include_screenshot, false, "the guest driver is asked for elements only, never pixels");
+  assert.equal(
+    read?.args.include_screenshot,
+    false,
+    "the guest driver is asked for elements only, never pixels",
+  );
 });
 
 test("an element click goes through the guest driver, and the numbers end once anything acts", async (t) => {
@@ -470,13 +558,21 @@ test("an element click goes through the guest driver, and the numbers end once a
   assert.equal(textOf(clicked), 'Clicked [1] AXButton "Second".');
   const clicks = h.calls().filter((call) => call.name === "click");
   assert.equal(clicks.length, 1);
-  assert.match(String(clicks[0]?.args.element_token), /^s[0-9a-f]{8}:1$/u, "the click names element 1 of the captured snapshot");
+  assert.match(
+    String(clicks[0]?.args.element_token),
+    /^s[0-9a-f]{8}:1$/u,
+    "the click names element 1 of the captured snapshot",
+  );
   assert.equal(h.fake.events.length, 0, "no VNC pointer events for an element click");
 
   const again = await h.call({ action: "click", element: 1, intent: "Click Second" });
   assert.equal(again.isError, true);
   assert.match(textOf(again), /capture with app again/u);
-  assert.equal(h.calls().filter((call) => call.name === "click").length, 1, "a spent number never reaches the guest");
+  assert.equal(
+    h.calls().filter((call) => call.name === "click").length,
+    1,
+    "a spent number never reaches the guest",
+  );
 
   // A screen action ends the numbers too: the screen may no longer match them.
   await h.call({ action: "capture", app: "Safari" });
@@ -490,7 +586,11 @@ test("an element click whose guest bridge dropped after the guest got it may hav
   const h = guestLane(t, { exitOn: "click" });
   await h.call({ action: "capture", app: "Safari" });
   const clicked = await h.call({ action: "click", element: 1, intent: "Click Second" });
-  assert.equal(h.calls().filter((call) => call.name === "click").length, 1, "the guest received the click");
+  assert.equal(
+    h.calls().filter((call) => call.name === "click").length,
+    1,
+    "the guest received the click",
+  );
   assert.equal(clicked.isError, true);
   assert.match(textOf(clicked), /may already have happened/u);
   assert.match(textOf(clicked), /capture/iu);
@@ -509,13 +609,19 @@ test("element numbers from before the person held the computer, or from another 
   const stale = await h.call({ action: "click", element: 0, intent: "Click First" });
   assert.equal(stale.isError, true);
   assert.match(textOf(stale), /Capture with app first/u);
-  assert.equal(h.calls().some((call) => call.name === "click"), false);
+  assert.equal(
+    h.calls().some((call) => call.name === "click"),
+    false,
+  );
 
   const missing = await h.call({ action: "capture", app: "TextEdit" });
   assert.equal(missing.isError, undefined, "the screenshot still arrives");
   assert.equal(images(missing).length, 1);
   assert.match(textOf(missing), /coordinates of the screenshot/u);
-  assert.equal((await h.call({ action: "click", element: 0, intent: "Click First" })).isError, true);
+  assert.equal(
+    (await h.call({ action: "click", element: 0, intent: "Click First" })).isError,
+    true,
+  );
 });
 
 test("while the person has the computer, a capture with app reaches neither the screen nor the guest driver", async (t) => {
@@ -541,7 +647,11 @@ test("a hand-over gets a fresh guest bridge for the next element step", async (t
   h.control.takeOver("ada", "sign_in");
   h.control.giveBack("ada");
   await h.call({ action: "capture", app: "Safari" });
-  assert.equal(h.bridges(), 2, "after Give back the guest driver is reached afresh (sign-in stops it)");
+  assert.equal(
+    h.bridges(),
+    2,
+    "after Give back the guest driver is reached afresh (sign-in stops it)",
+  );
 });
 
 test("without element control, app and element are explained instead of acting", async () => {

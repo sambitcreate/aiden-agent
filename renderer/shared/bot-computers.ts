@@ -40,7 +40,13 @@ export type BotComputerSetupState =
     }
   | { kind: "failed"; message: string; resumable: boolean };
 
-export type BotComputerRunState = "stopped" | "starting" | "running" | "stopping" | "waiting_for_slot" | "stale";
+export type BotComputerRunState =
+  | "stopped"
+  | "starting"
+  | "running"
+  | "stopping"
+  | "waiting_for_slot"
+  | "stale";
 
 export interface BotComputerStatus {
   botId: string;
@@ -156,7 +162,8 @@ export function parseBotComputersSettingsPatch(value: unknown): Partial<BotCompu
   const patch: Partial<BotComputersSettings> = {};
   for (const [key, entry] of Object.entries(input)) {
     if (key === "maxRunning") {
-      if (entry !== 1 && entry !== 2) throw new Error("At most one or two Bot computers can run at once.");
+      if (entry !== 1 && entry !== 2)
+        throw new Error("At most one or two Bot computers can run at once.");
       patch.maxRunning = entry;
     } else if (key === "idleStopMinutes") {
       if (!(BOT_COMPUTER_IDLE_STOP_CHOICES as readonly unknown[]).includes(entry)) {
@@ -178,10 +185,17 @@ const RUN_STATES: ReadonlySet<string> = new Set([
   "waiting_for_slot",
   "stale",
 ]);
-const BUILD_STEPS: ReadonlySet<string> = new Set(["create", "provision", "guest_driver", "permissions"]);
+const BUILD_STEPS: ReadonlySet<string> = new Set([
+  "create",
+  "provision",
+  "guest_driver",
+  "permissions",
+]);
 
 function record(value: unknown): Record<string, unknown> | undefined {
-  return value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : undefined;
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : undefined;
 }
 
 function count(value: unknown): number | undefined {
@@ -220,21 +234,27 @@ function parseSetup(value: unknown): BotComputerSetupState | undefined {
         ? {
             kind: "building_base",
             step,
-            permissions: { accessibility: permissions.accessibility, screenRecording: permissions.screenRecording },
+            permissions: {
+              accessibility: permissions.accessibility,
+              screenRecording: permissions.screenRecording,
+            },
           }
         : { kind: "building_base", step };
     }
     case "ready": {
       const baseVersion = text(input.baseVersion, 32);
       const baseBuild = text(input.baseBuild, 32);
-      if (!baseVersion || !baseBuild || typeof input.updateAvailable !== "boolean") return undefined;
+      if (!baseVersion || !baseBuild || typeof input.updateAvailable !== "boolean")
+        return undefined;
       const note = text(input.elementControlNote, 300);
       return {
         kind: "ready",
         baseVersion,
         baseBuild,
         updateAvailable: input.updateAvailable,
-        ...(typeof input.elementControl === "boolean" ? { elementControl: input.elementControl } : {}),
+        ...(typeof input.elementControl === "boolean"
+          ? { elementControl: input.elementControl }
+          : {}),
         ...(note ? { elementControlNote: note } : {}),
       };
     }
@@ -253,7 +273,10 @@ export function parseBotComputerStatus(value: unknown): BotComputerStatus | unde
   const input = record(value);
   const botId = text(input?.botId, 200);
   const vmName = text(input?.vmName, 64);
-  const baseBuild = typeof input?.baseBuild === "string" && input.baseBuild.length <= 32 ? input.baseBuild : undefined;
+  const baseBuild =
+    typeof input?.baseBuild === "string" && input.baseBuild.length <= 32
+      ? input.baseBuild
+      : undefined;
   if (!input || !botId || !vmName || baseBuild === undefined) return undefined;
   if (typeof input.state !== "string" || !RUN_STATES.has(input.state)) return undefined;
   if (typeof input.outdated !== "boolean") return undefined;
@@ -278,7 +301,8 @@ export function parseBotComputersStatus(value: unknown): BotComputersStatus | un
   const setup = parseSetup(input?.setup);
   const settings = record(input?.settings);
   const requirements = record(input?.requirements);
-  if (!input || !setup || !settings || !requirements || !Array.isArray(input.computers)) return undefined;
+  if (!input || !setup || !settings || !requirements || !Array.isArray(input.computers))
+    return undefined;
   if (settings.maxRunning !== 1 && settings.maxRunning !== 2) return undefined;
   const idleStopMinutes = count(settings.idleStopMinutes);
   const diskUsedBytes = count(input.diskUsedBytes);
@@ -310,13 +334,20 @@ export function parseBotComputersStatus(value: unknown): BotComputersStatus | un
     diskUsedBytes,
     ...(freeDiskBytes !== undefined ? { freeDiskBytes } : {}),
     computers,
-    requirements: { downloadBytes, baseDiskBytes, setupFreeBytes, memoryPerComputerBytes, baseVersion },
+    requirements: {
+      downloadBytes,
+      baseDiskBytes,
+      setupFreeBytes,
+      memoryPerComputerBytes,
+      baseVersion,
+    },
   };
 }
 
 /** "20 GB", "8.6 GB". Decimal units, as download pages and Finder show them. */
 export function formatBotComputerBytes(bytes: number): string {
-  if (bytes >= 1_000_000_000 && bytes % 1_000_000_000 < 50_000_000) return `${Math.round(bytes / 1_000_000_000)} GB`;
+  if (bytes >= 1_000_000_000 && bytes % 1_000_000_000 < 50_000_000)
+    return `${Math.round(bytes / 1_000_000_000)} GB`;
   return formatHarnessBytes(bytes);
 }
 
@@ -366,7 +397,9 @@ export function botComputerSetupPercent(setup: BotComputerSetupState): number | 
 }
 
 export function botComputerSetupBusy(setup: BotComputerSetupState): boolean {
-  return setup.kind === "downloading" || setup.kind === "verifying" || setup.kind === "building_base";
+  return (
+    setup.kind === "downloading" || setup.kind === "verifying" || setup.kind === "building_base"
+  );
 }
 
 /** The computer's state in plain words, naming the Bot ("Ada's computer is running."). */
@@ -388,19 +421,29 @@ export function botComputerStateLabel(state: BotComputerRunState, botName: strin
   }
 }
 
-export function parseBotComputerViewerGrant(value: unknown, now = Date.now()): BotComputerViewerGrant | undefined {
+export function parseBotComputerViewerGrant(
+  value: unknown,
+  now = Date.now(),
+): BotComputerViewerGrant | undefined {
   const input = record(value);
   if (!input || input.hostId !== BOT_COMPUTER_VIEWER_HOST_ID) return undefined;
-  if (typeof input.deviceId !== "string" || !DEVICE_ID_PATTERN.test(input.deviceId)) return undefined;
+  if (typeof input.deviceId !== "string" || !DEVICE_ID_PATTERN.test(input.deviceId))
+    return undefined;
   const grant = parseDeviceStreamGrant(input.grant, now);
-  return grant ? { hostId: BOT_COMPUTER_VIEWER_HOST_ID, deviceId: input.deviceId, grant } : undefined;
+  return grant
+    ? { hostId: BOT_COMPUTER_VIEWER_HOST_ID, deviceId: input.deviceId, grant }
+    : undefined;
 }
 
 /** The viewer grant's options from the renderer. Anything but `{ start: boolean }` throws. */
 export function parseBotComputerViewerRequest(value: unknown): { start: boolean } {
   if (value === undefined) return { start: false };
   const input = record(value);
-  if (!input || Object.keys(input).some((key) => key !== "start") || (input.start !== undefined && typeof input.start !== "boolean")) {
+  if (
+    !input ||
+    Object.keys(input).some((key) => key !== "start") ||
+    (input.start !== undefined && typeof input.start !== "boolean")
+  ) {
     throw new Error("The viewer request must be { start: boolean }.");
   }
   return { start: input.start === true };
@@ -411,9 +454,17 @@ export function parseBotComputerPointer(value: unknown): BotComputerPointer | nu
   const input = record(value);
   if (!input) return null;
   const { x, y, width, height } = input;
-  if (![x, y, width, height].every((entry) => typeof entry === "number" && Number.isFinite(entry))) return null;
-  const pointer = { x: x as number, y: y as number, width: width as number, height: height as number };
-  if (pointer.width <= 0 || pointer.height <= 0 || pointer.width > 8192 || pointer.height > 8192) return null;
-  if (pointer.x < 0 || pointer.y < 0 || pointer.x > pointer.width || pointer.y > pointer.height) return null;
+  if (![x, y, width, height].every((entry) => typeof entry === "number" && Number.isFinite(entry)))
+    return null;
+  const pointer = {
+    x: x as number,
+    y: y as number,
+    width: width as number,
+    height: height as number,
+  };
+  if (pointer.width <= 0 || pointer.height <= 0 || pointer.width > 8192 || pointer.height > 8192)
+    return null;
+  if (pointer.x < 0 || pointer.y < 0 || pointer.x > pointer.width || pointer.y > pointer.height)
+    return null;
   return pointer;
 }

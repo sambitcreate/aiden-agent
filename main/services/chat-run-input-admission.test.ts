@@ -124,9 +124,7 @@ test("run input admission persists the user message before admitting a steer", a
     role: "user",
     content: "Steer now",
   });
-  assert.deepEqual(app.steered, [
-    { role: "user", content: "Steer now", timestamp: 7_777 },
-  ]);
+  assert.deepEqual(app.steered, [{ role: "user", content: "Steer now", timestamp: 7_777 }]);
   assert.equal(app.followedUp.length, 0);
 });
 
@@ -146,7 +144,9 @@ test("a steer Aiden Live sent is saved as By voice and reaches Pi as plain text"
     content: "Use the staging database",
     inputSource: "voice",
   });
-  assert.deepEqual(app.steered, [{ role: "user", content: "Use the staging database", timestamp: 7_777 }]);
+  assert.deepEqual(app.steered, [
+    { role: "user", content: "Use the staging database", timestamp: 7_777 },
+  ]);
 });
 
 test("run input admission routes queue mode to the follow-up queue", async () => {
@@ -389,7 +389,13 @@ test("a steer or follow-up the person writes ends the chat's snooze; a notice or
     streamId: "stream-1",
     mode: "queue",
     text: "Background task finished",
-    notice: { version: 1, source: "background_job", tone: "success", title: "Background job ended", summary: "npm test · exit code 0" },
+    notice: {
+      version: 1,
+      source: "background_job",
+      tone: "success",
+      title: "Background job ended",
+      summary: "npm test · exit code 0",
+    },
   });
   // Nor is input the run refuses before it reaches the transcript.
   app.setProbe("capacity");
@@ -413,8 +419,17 @@ test("a failing snooze wake never changes what the admission reports", async () 
       throw new Error("triage store unavailable");
     },
   });
-  const result = await app.admission.admit({ streamId: "stream-1", mode: "steer", text: "Steer now" });
-  assert.deepEqual(result, { admitted: true, queue: "steer", committed: true, messageId: "message_admitted_1" });
+  const result = await app.admission.admit({
+    streamId: "stream-1",
+    mode: "steer",
+    text: "Steer now",
+  });
+  assert.deepEqual(result, {
+    admitted: true,
+    queue: "steer",
+    committed: true,
+    messageId: "message_admitted_1",
+  });
 });
 
 test("run input admission rejects uncommitted store failures without consuming the draft", async () => {
@@ -499,7 +514,12 @@ test("input whose run is stopped, ended or filled while its hooks run is not sav
       attachContext: () => assert.fail("nothing is queued"),
     };
     assert.deepEqual(
-      await f.admission.admit({ streamId: "stream-1", mode: "steer", text: "use the staging db", ownerDocumentId: "doc-1" }),
+      await f.admission.admit({
+        streamId: "stream-1",
+        mode: "steer",
+        text: "use the staging db",
+        ownerDocumentId: "doc-1",
+      }),
       { admitted: false, reason, committed: false },
       label,
     );
@@ -549,8 +569,17 @@ test("input saved after the run's queue closed becomes the chat's next turn, so 
   const owed = owedTurnStub("accept");
   app.generation.owedTurn = owed.owedTurn;
   app.setDuringAppend(() => app.setFollowUpReceipt({ accepted: false, reason: "not-active" }));
-  const result = await app.admission.admit({ streamId: "stream-1", mode: "queue", text: "then this" });
-  assert.deepEqual(result, { admitted: true, queue: "follow-up", committed: true, messageId: "message_admitted_1" });
+  const result = await app.admission.admit({
+    streamId: "stream-1",
+    mode: "queue",
+    text: "then this",
+  });
+  assert.deepEqual(result, {
+    admitted: true,
+    queue: "follow-up",
+    committed: true,
+    messageId: "message_admitted_1",
+  });
   assert.deepEqual(owed.registered, [{ messageId: "message_admitted_1" }]);
   assert.equal(owed.holdsReleased(), owed.holdsTaken());
 });
@@ -560,8 +589,17 @@ test("a steer saved after the queue closed runs next as a follow-up, not mid-run
   const owed = owedTurnStub("accept");
   app.generation.owedTurn = owed.owedTurn;
   app.setDuringAppend(() => app.setSteerReceipt({ accepted: false, reason: "not-active" }));
-  const result = await app.admission.admit({ streamId: "stream-1", mode: "steer", text: "actually do this" });
-  assert.deepEqual(result, { admitted: true, queue: "follow-up", committed: true, messageId: "message_admitted_1" });
+  const result = await app.admission.admit({
+    streamId: "stream-1",
+    mode: "steer",
+    text: "actually do this",
+  });
+  assert.deepEqual(result, {
+    admitted: true,
+    queue: "follow-up",
+    committed: true,
+    messageId: "message_admitted_1",
+  });
   assert.deepEqual(owed.registered, [{ messageId: "message_admitted_1" }]);
 });
 
@@ -571,7 +609,12 @@ test("input saved after the run left the active map is still owed while its life
   app.generation.owedTurn = owed.owedTurn;
   app.setAfterAppend(() => app.active.delete("stream-1"));
   const result = await app.admission.admit({ streamId: "stream-1", mode: "queue", text: "late" });
-  assert.deepEqual(result, { admitted: true, queue: "follow-up", committed: true, messageId: "message_admitted_1" });
+  assert.deepEqual(result, {
+    admitted: true,
+    queue: "follow-up",
+    committed: true,
+    messageId: "message_admitted_1",
+  });
   assert.equal(app.followedUp.length, 0, "the closed run's queue is never touched");
   assert.equal(owed.holdsReleased(), 1);
 });
@@ -582,8 +625,17 @@ test("input main cannot register as the next turn is reported saved, never queue
   const owed = owedTurnStub("refuse");
   app.generation.owedTurn = owed.owedTurn;
   app.setDuringAppend(() => app.setFollowUpReceipt({ accepted: false, reason: "not-active" }));
-  const result = await app.admission.admit({ streamId: "stream-1", mode: "queue", text: "nobody runs this" });
-  assert.deepEqual(result, { admitted: false, reason: "run_not_active", committed: true, messageId: "message_admitted_1" });
+  const result = await app.admission.admit({
+    streamId: "stream-1",
+    mode: "queue",
+    text: "nobody runs this",
+  });
+  assert.deepEqual(result, {
+    admitted: false,
+    reason: "run_not_active",
+    committed: true,
+    messageId: "message_admitted_1",
+  });
   assert.equal(owed.holdsReleased(), 1);
 });
 
@@ -596,9 +648,15 @@ test("the screened input's hook context travels with the owed turn instead of th
     attachContext: () => assert.fail("the closed run never takes this input"),
   };
   app.setDuringAppend(() => app.setFollowUpReceipt({ accepted: false, reason: "not-active" }));
-  const result = await app.admission.admit({ streamId: "stream-1", mode: "queue", text: "with context" });
+  const result = await app.admission.admit({
+    streamId: "stream-1",
+    mode: "queue",
+    text: "with context",
+  });
   assert.equal(result.admitted, true);
-  assert.deepEqual(owed.registered, [{ messageId: "message_admitted_1", hookContext: "hook says hi" }]);
+  assert.deepEqual(owed.registered, [
+    { messageId: "message_admitted_1", hookContext: "hook says hi" },
+  ]);
 });
 
 test("a failed save releases the run's owed-turn hold and registers nothing", async () => {
@@ -617,7 +675,11 @@ test("input a run still takes is queued normally and never registered as an owed
   const app = fixture();
   const owed = owedTurnStub("accept");
   app.generation.owedTurn = owed.owedTurn;
-  const result = await app.admission.admit({ streamId: "stream-1", mode: "queue", text: "in time" });
+  const result = await app.admission.admit({
+    streamId: "stream-1",
+    mode: "queue",
+    text: "in time",
+  });
   assert.equal(result.admitted, true);
   assert.equal(app.followedUp.length, 1);
   assert.deepEqual(owed.registered, []);
@@ -631,7 +693,12 @@ test("a lead chat's message to a chat it started reaches its run before the queu
   app.generation.leadChatInput = async () => {
     order.push(`lead input, ${app.steered.length} queued`);
   };
-  const result = await app.admission.admit({ streamId: "stream-1", mode: "steer", text: "From the lead", fromLeadChat: true });
+  const result = await app.admission.admit({
+    streamId: "stream-1",
+    mode: "steer",
+    text: "From the lead",
+    fromLeadChat: true,
+  });
   assert.equal(result.admitted, true);
   assert.deepEqual(order, ["lead input, 0 queued"]);
   assert.equal(app.steered.length, 1);
@@ -654,7 +721,10 @@ test("stop, chat deletion, or run end while awaiting leadChatInput prevents queu
     const owed = owedTurnStub("accept");
     app.generation.owedTurn = owed.owedTurn;
     let release!: () => void;
-    app.generation.leadChatInput = () => new Promise<void>((resolve) => { release = resolve; });
+    app.generation.leadChatInput = () =>
+      new Promise<void>((resolve) => {
+        release = resolve;
+      });
     const pending = app.admission.admit({
       streamId: "stream-1",
       mode: "steer",
@@ -719,7 +789,12 @@ test("stop, chat deletion, or run end while awaiting leadChatInput prevents queu
     });
     assert.deepEqual(
       result,
-      { admitted: false, reason: "run_not_active", committed: true, messageId: "message_admitted_1" },
+      {
+        admitted: false,
+        reason: "run_not_active",
+        committed: true,
+        messageId: "message_admitted_1",
+      },
       kind,
     );
     assert.equal(app.followedUp.length, 0, kind);
@@ -772,7 +847,13 @@ test("a started chat's ending that quotes outside text reaches the run's taint b
     streamId: "stream-1",
     mode: "queue",
     text: `“Docs” finished.\n\n${reply}`,
-    notice: agentNotice({ source: "chat", tone: "success", title: "“Docs” finished", summary: "", outside: true }),
+    notice: agentNotice({
+      source: "chat",
+      tone: "success",
+      title: "“Docs” finished",
+      summary: "",
+      outside: true,
+    }),
   });
   assert.deepEqual(order, ["outside, 0 queued"]);
   assert.equal(app.followedUp.length, 1);
@@ -782,15 +863,33 @@ test("a started chat's ending that quotes outside text reaches the run's taint b
     streamId: "stream-1",
     mode: "queue",
     text: `“Tests” finished.\n\n${fenceAsData("Its last reply", "All 12 tests pass.")}`,
-    notice: agentNotice({ source: "chat", tone: "success", title: "“Tests” finished", summary: "" }),
+    notice: agentNotice({
+      source: "chat",
+      tone: "success",
+      title: "“Tests” finished",
+      summary: "",
+    }),
   });
-  await app.admission.admit({ streamId: "stream-1", mode: "queue", text: "Look at collector.example" });
+  await app.admission.admit({
+    streamId: "stream-1",
+    mode: "queue",
+    text: "Look at collector.example",
+  });
   await app.admission.admit({
     streamId: "stream-1",
     mode: "queue",
     text: `npm test ended.\n\n${fenceAsData("End of its output", "ok 12 tests")}`,
-    notice: agentNotice({ source: "background_job", tone: "success", title: "Background job ended", summary: "" }),
+    notice: agentNotice({
+      source: "background_job",
+      tone: "success",
+      title: "Background job ended",
+      summary: "",
+    }),
   });
-  assert.deepEqual(order, ["outside, 0 queued"], "only the tainted chat's ending was outside content");
+  assert.deepEqual(
+    order,
+    ["outside, 0 queued"],
+    "only the tainted chat's ending was outside content",
+  );
   assert.equal(app.followedUp.length, 4);
 });

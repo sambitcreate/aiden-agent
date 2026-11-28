@@ -40,7 +40,17 @@ export const COMMAND_READING_LIMITS = {
 // Bidi overrides and zero-width characters can make shown text read
 // differently from what it is; the description never needs them.
 const HIDDEN_CHARACTERS = new RegExp(
-  `[${([[0x00, 0x08], [0x0b, 0x1f], [0x7f, 0x9f], [0x200b, 0x200f], [0x2028, 0x202e], [0x2060, 0x2069], [0xfeff, 0xfeff]] as const)
+  `[${(
+    [
+      [0x00, 0x08],
+      [0x0b, 0x1f],
+      [0x7f, 0x9f],
+      [0x200b, 0x200f],
+      [0x2028, 0x202e],
+      [0x2060, 0x2069],
+      [0xfeff, 0xfeff],
+    ] as const
+  )
     .map(([from, to]) => `${String.fromCodePoint(from)}-${String.fromCodePoint(to)}`)
     .join("")}]`,
   "gu",
@@ -48,7 +58,12 @@ const HIDDEN_CHARACTERS = new RegExp(
 
 function clip(text: string, max: number): string {
   const points = [...text];
-  return points.length <= max ? text : `${points.slice(0, max - 1).join("").trimEnd()}…`;
+  return points.length <= max
+    ? text
+    : `${points
+        .slice(0, max - 1)
+        .join("")
+        .trimEnd()}…`;
 }
 
 /** The model's description as the card shows it: one trimmed line, bounded, or undefined. */
@@ -131,7 +146,11 @@ function parseShell(text: string): ParsedShell {
   let words: string[] = [];
   let word: string | null = null;
   let pipedFrom = false;
-  let pendingRedirect: { kind: "write"; append: boolean } | { kind: "read" } | { kind: "heredoc" } | undefined;
+  let pendingRedirect:
+    | { kind: "write"; append: boolean }
+    | { kind: "read" }
+    | { kind: "heredoc" }
+    | undefined;
   // A quoted delimiter (`<<'EOF'`) keeps the body literal; an unquoted one expands `$(…)` and backticks in it.
   const heredocs: Array<{ delimiter: string; expands: boolean }> = [];
   let commandWrites: string[] = [];
@@ -150,14 +169,16 @@ function parseShell(text: string): ParsedShell {
         parsed.writes.push({ path: value, append: redirect.append });
         commandWrites.push(value);
       }
-      if (redirect.kind === "heredoc") heredocs.push({ delimiter: value.replace(/^-/u, ""), expands: !quoted });
+      if (redirect.kind === "heredoc")
+        heredocs.push({ delimiter: value.replace(/^-/u, ""), expands: !quoted });
       return;
     }
     words.push(value);
   };
   const endCommand = (pipeNext: boolean) => {
     endWord();
-    if (words.length > 0 || commandWrites.length > 0) parsed.commands.push({ words, pipedFrom, writes: commandWrites });
+    if (words.length > 0 || commandWrites.length > 0)
+      parsed.commands.push({ words, pipedFrom, writes: commandWrites });
     words = [];
     commandWrites = [];
     pipedFrom = pipeNext;
@@ -233,7 +254,11 @@ function parseShell(text: string): ParsedShell {
       index = end + 1;
       continue;
     }
-    if ((char === "$" || char === "<" || char === ">") && next === "(" && (char === "$" || word === null)) {
+    if (
+      (char === "$" || char === "<" || char === ">") &&
+      next === "(" &&
+      (char === "$" || word === null)
+    ) {
       const close = closingParen(text, index + 2);
       if (close < 0) {
         parsed.complete = false;
@@ -336,7 +361,8 @@ function parseShell(text: string): ParsedShell {
             body.push(line);
           }
           if (!found) parsed.complete = false;
-          if (expands && !expandedSubstitutions(body.join("\n"), parsed.substitutions)) parsed.complete = false;
+          if (expands && !expandedSubstitutions(body.join("\n"), parsed.substitutions))
+            parsed.complete = false;
         }
         index = cursor;
         continue;
@@ -358,20 +384,80 @@ function parseShell(text: string): ParsedShell {
 
 const SHELLS = new Set(["sh", "bash", "zsh", "dash", "ksh", "fish"]);
 const INTERPRETERS = new Set([
-  ...SHELLS, "python", "python2", "python3", "node", "nodejs", "ruby", "perl", "php", "deno", "bun", "tsx", "ts-node", "osascript",
+  ...SHELLS,
+  "python",
+  "python2",
+  "python3",
+  "node",
+  "nodejs",
+  "ruby",
+  "perl",
+  "php",
+  "deno",
+  "bun",
+  "tsx",
+  "ts-node",
+  "osascript",
 ]);
 const SCRIPT_RUNNERS: Record<string, string> = {
-  python: "Python", python2: "Python", python3: "Python", node: "Node", nodejs: "Node", ruby: "Ruby", perl: "Perl", php: "PHP",
-  deno: "Deno", bun: "Bun", tsx: "Node", "ts-node": "Node", sh: "the shell", bash: "the shell", zsh: "the shell", dash: "the shell",
+  python: "Python",
+  python2: "Python",
+  python3: "Python",
+  node: "Node",
+  nodejs: "Node",
+  ruby: "Ruby",
+  perl: "Perl",
+  php: "PHP",
+  deno: "Deno",
+  bun: "Bun",
+  tsx: "Node",
+  "ts-node": "Node",
+  sh: "the shell",
+  bash: "the shell",
+  zsh: "the shell",
+  dash: "the shell",
 };
 const FETCHERS = new Set(["curl", "wget"]);
 const NETWORK_COMMANDS = new Set([
-  "curl", "wget", "ssh", "scp", "sftp", "ftp", "nc", "ncat", "netcat", "telnet", "http", "https", "xh", "ping", "dig", "nslookup",
-  "host", "npx", "bunx", "pnpx", "gh",
+  "curl",
+  "wget",
+  "ssh",
+  "scp",
+  "sftp",
+  "ftp",
+  "nc",
+  "ncat",
+  "netcat",
+  "telnet",
+  "http",
+  "https",
+  "xh",
+  "ping",
+  "dig",
+  "nslookup",
+  "host",
+  "npx",
+  "bunx",
+  "pnpx",
+  "gh",
 ]);
 const NETWORK_SUBCOMMANDS: Record<string, ReadonlySet<string>> = {
   git: new Set(["push", "pull", "fetch", "clone", "ls-remote", "submodule", "remote"]),
-  npm: new Set(["install", "i", "add", "ci", "publish", "update", "upgrade", "exec", "create", "init", "login", "unpublish", "dist-tag"]),
+  npm: new Set([
+    "install",
+    "i",
+    "add",
+    "ci",
+    "publish",
+    "update",
+    "upgrade",
+    "exec",
+    "create",
+    "init",
+    "login",
+    "unpublish",
+    "dist-tag",
+  ]),
   pnpm: new Set(["install", "i", "add", "update", "up", "upgrade", "publish", "dlx", "create"]),
   yarn: new Set(["install", "add", "upgrade", "up", "publish", "dlx", "create"]),
   bun: new Set(["install", "i", "add", "update", "upgrade", "publish", "create", "x"]),
@@ -408,33 +494,50 @@ function stripWrappers(words: readonly string[], seen: Set<string>): string[] {
       seen.add("admin");
       rest = rest.slice(1);
       // sudo's own options, and the user an `-u` names.
-      while (rest[0]?.startsWith("-")) rest = /^-[ugCDhpRrTt]$/u.test(rest[0]) ? rest.slice(2) : rest.slice(1);
+      while (rest[0]?.startsWith("-"))
+        rest = /^-[ugCDhpRrTt]$/u.test(rest[0]) ? rest.slice(2) : rest.slice(1);
       continue;
     }
     if (name === "env") {
       rest = rest.slice(1);
-      while (rest[0]?.startsWith("-")) rest = /^-[uSC]$/u.test(rest[0]) ? rest.slice(2) : rest.slice(1);
+      while (rest[0]?.startsWith("-"))
+        rest = /^-[uSC]$/u.test(rest[0]) ? rest.slice(2) : rest.slice(1);
       continue;
     }
-    if (["nohup", "time", "command", "exec", "builtin", "caffeinate", "stdbuf", "unbuffer", "noglob"].includes(name)) {
+    if (
+      [
+        "nohup",
+        "time",
+        "command",
+        "exec",
+        "builtin",
+        "caffeinate",
+        "stdbuf",
+        "unbuffer",
+        "noglob",
+      ].includes(name)
+    ) {
       rest = rest.slice(1);
       while (rest[0]?.startsWith("-")) rest = rest.slice(1);
       continue;
     }
     if (name === "nice" || name === "ionice") {
       rest = rest.slice(1);
-      while (rest[0]?.startsWith("-")) rest = /^-[nc]$/u.test(rest[0]) ? rest.slice(2) : rest.slice(1);
+      while (rest[0]?.startsWith("-"))
+        rest = /^-[nc]$/u.test(rest[0]) ? rest.slice(2) : rest.slice(1);
       continue;
     }
     if (name === "timeout" || name === "gtimeout") {
       rest = rest.slice(1);
-      while (rest[0]?.startsWith("-")) rest = /^-[sk]$/u.test(rest[0]) ? rest.slice(2) : rest.slice(1);
+      while (rest[0]?.startsWith("-"))
+        rest = /^-[sk]$/u.test(rest[0]) ? rest.slice(2) : rest.slice(1);
       rest = rest.slice(1);
       continue;
     }
     if (name === "xargs") {
       rest = rest.slice(1);
-      while (rest[0]?.startsWith("-")) rest = /^-[nIiLPdsEa]$/u.test(rest[0]) ? rest.slice(2) : rest.slice(1);
+      while (rest[0]?.startsWith("-"))
+        rest = /^-[nIiLPdsEa]$/u.test(rest[0]) ? rest.slice(2) : rest.slice(1);
       continue;
     }
     return rest;
@@ -464,7 +567,8 @@ function shellScript(args: readonly string[]): string | undefined {
 /** The script file an interpreter runs, when it runs one (not `-c`, `-e`, `-m` or stdin). */
 function scriptFile(args: readonly string[]): string | undefined {
   for (const arg of args) {
-    if (arg === "-" || /^-[a-zA-Z]*[cemr]$/u.test(arg) || arg === "--eval" || arg === "--print") return undefined;
+    if (arg === "-" || /^-[a-zA-Z]*[cemr]$/u.test(arg) || arg === "--eval" || arg === "--print")
+      return undefined;
     if (arg.startsWith("-")) continue;
     return /[./]/u.test(arg) ? arg : undefined;
   }
@@ -489,7 +593,8 @@ function outsideProject(word: string, reader: Reader): boolean {
   let fromHome = false;
   if (path === "~" || path.startsWith("~/") || path.startsWith("~")) {
     if (!reader.home) return true;
-    path = path === "~" ? reader.home : path.startsWith("~/") ? `${reader.home}${path.slice(1)}` : path;
+    path =
+      path === "~" ? reader.home : path.startsWith("~/") ? `${reader.home}${path.slice(1)}` : path;
     if (path.startsWith("~")) return true;
     fromHome = true;
   } else if (/^\$\{?HOME\}?(\/|$)/u.test(path)) {
@@ -500,7 +605,8 @@ function outsideProject(word: string, reader: Reader): boolean {
   // Relative paths start at the project folder; `src/../../x` still climbs out of it.
   if (!path.startsWith("/")) return climbsOut(path);
   if (DEVICE_FILES.test(path)) return false;
-  if (!fromHome && TEMP_ROOTS.some((root) => path === root || path.startsWith(`${root}/`))) return false;
+  if (!fromHome && TEMP_ROOTS.some((root) => path === root || path.startsWith(`${root}/`)))
+    return false;
   const root = reader.root?.replace(/\/+$/u, "");
   if (root && (path === root || path.startsWith(`${root}/`))) {
     // `/project/../elsewhere` climbs back out.
@@ -528,7 +634,26 @@ function urlFileName(url: string): string | undefined {
 }
 
 /** wget's short options that take a value, so a cluster such as `-qO file` ends at one. */
-const WGET_VALUE_OPTIONS = new Set(["O", "o", "a", "P", "t", "T", "w", "e", "i", "U", "Q", "D", "B", "l", "A", "R", "I", "X"]);
+const WGET_VALUE_OPTIONS = new Set([
+  "O",
+  "o",
+  "a",
+  "P",
+  "t",
+  "T",
+  "w",
+  "e",
+  "i",
+  "U",
+  "Q",
+  "D",
+  "B",
+  "l",
+  "A",
+  "R",
+  "I",
+  "X",
+]);
 
 /** The files a `curl` or `wget` call saves what it downloads to. */
 function fetchedFiles(name: string, args: readonly string[]): string[] {
@@ -607,7 +732,9 @@ function readCommands(text: string, reader: Reader): void {
   // A fetch earlier in a pipeline, and whether it reaches a shell.
   let fetchInPipeline = false;
   const fetchSubstitution = parsed.substitutions.some((body) =>
-    parseShell(body).commands.some(({ words }) => FETCHERS.has(baseName(stripWrappers(words, new Set())[0] ?? ""))),
+    parseShell(body).commands.some(({ words }) =>
+      FETCHERS.has(baseName(stripWrappers(words, new Set())[0] ?? "")),
+    ),
   );
   for (const { words: raw, pipedFrom, writes } of parsed.commands) {
     if (!pipedFrom) fetchInPipeline = false;
@@ -616,17 +743,27 @@ function readCommands(text: string, reader: Reader): void {
     const name = baseName(words[0]!);
     const args = words.slice(1);
     // A downloaded file run later in the same command: `curl -o x.sh URL && sh x.sh`, `wget URL/x.sh && ./x.sh`.
-    const ran = INTERPRETERS.has(name) ? (scriptFile(args) ?? args.find((arg) => !arg.startsWith("-"))) : name === "source" || name === "." ? args[0] : words[0]!.includes("/") ? words[0] : undefined;
+    const ran = INTERPRETERS.has(name)
+      ? (scriptFile(args) ?? args.find((arg) => !arg.startsWith("-")))
+      : name === "source" || name === "."
+        ? args[0]
+        : words[0]!.includes("/")
+          ? words[0]
+          : undefined;
     if (ran && reader.downloads.has(baseName(ran))) reader.found.add("downloaded");
     if (FETCHERS.has(name)) {
-      for (const file of [...fetchedFiles(name, args), ...writes]) reader.downloads.add(baseName(file));
+      for (const file of [...fetchedFiles(name, args), ...writes])
+        reader.downloads.add(baseName(file));
     }
     for (const arg of args) if (outsideProject(arg, reader)) reader.found.add("outside");
     if (words[0]!.startsWith("~") || words[0]!.startsWith("..")) reader.found.add("outside");
     // What runs is only known when it runs: `$CMD`, `$(…)`, or `eval "$(…)"`.
     if (/[$`]/u.test(words[0]!)) reader.found.add(fetchSubstitution ? "downloaded" : "unread");
 
-    if (INTERPRETERS.has(name) && ((pipedFrom && fetchInPipeline && !scriptFile(args)) || fetchSubstitution)) {
+    if (
+      INTERPRETERS.has(name) &&
+      ((pipedFrom && fetchInPipeline && !scriptFile(args)) || fetchSubstitution)
+    ) {
       reader.found.add("downloaded");
     }
     if (FETCHERS.has(name)) fetchInPipeline = true;
@@ -634,16 +771,31 @@ function readCommands(text: string, reader: Reader): void {
     if (NETWORK_COMMANDS.has(name)) reader.found.add("internet");
     const subcommand = args.find((arg) => !arg.startsWith("-"));
     if (subcommand && NETWORK_SUBCOMMANDS[name]?.has(subcommand)) reader.found.add("internet");
-    if ((name === "softwareupdate") && args.some((arg) => NETWORK_SUBCOMMANDS.softwareupdate!.has(arg))) reader.found.add("internet");
+    if (
+      name === "softwareupdate" &&
+      args.some((arg) => NETWORK_SUBCOMMANDS.softwareupdate!.has(arg))
+    )
+      reader.found.add("internet");
     if (name === "yarn" && !subcommand) reader.found.add("internet");
-    if ((name === "python" || name === "python3") && args[0] === "-m" && (args[1] === "pip" || args[1] === "ensurepip") && args.includes("install")) {
+    if (
+      (name === "python" || name === "python3") &&
+      args[0] === "-m" &&
+      (args[1] === "pip" || args[1] === "ensurepip") &&
+      args.includes("install")
+    ) {
       reader.found.add("internet");
     }
-    if (name === "rsync" && args.some((arg) => arg.startsWith("rsync://") || /^[\w.-]+@?[\w.-]*:/u.test(arg))) reader.found.add("internet");
-    if (name === "rsync" && args.some((arg) => arg.startsWith("--delete"))) reader.found.add("deletes");
+    if (
+      name === "rsync" &&
+      args.some((arg) => arg.startsWith("rsync://") || /^[\w.-]+@?[\w.-]*:/u.test(arg))
+    )
+      reader.found.add("internet");
+    if (name === "rsync" && args.some((arg) => arg.startsWith("--delete")))
+      reader.found.add("deletes");
 
     if (DELETERS.has(name)) reader.found.add("deletes");
-    if (name === "git" && (subcommand === "clean" || subcommand === "rm")) reader.found.add("deletes");
+    if (name === "git" && (subcommand === "clean" || subcommand === "rm"))
+      reader.found.add("deletes");
     if (name === "find") {
       if (args.includes("-delete")) reader.found.add("deletes");
       const exec = args.findIndex((arg) => arg === "-exec" || arg === "-execdir" || arg === "-ok");
@@ -654,7 +806,8 @@ function readCommands(text: string, reader: Reader): void {
       }
     }
     if (STOPPERS.has(name)) reader.found.add("stops");
-    if (name === "launchctl" && subcommand && LAUNCHCTL_STOPS.has(subcommand)) reader.found.add("stops");
+    if (name === "launchctl" && subcommand && LAUNCHCTL_STOPS.has(subcommand))
+      reader.found.add("stops");
     if (POWER.has(name)) reader.found.add("power");
     if (name === "osascript") {
       const script = args.join(" ");
@@ -670,11 +823,19 @@ function readCommands(text: string, reader: Reader): void {
 
     // Calm steps, named the way the person sees the files.
     const operands = args.filter((arg) => !arg.startsWith("-"));
-    if (name === "mkdir") for (const folder of operands) reader.calm.set(`Makes folder ${shownName(folder)}`, true);
-    if (name === "touch") for (const file of operands) reader.calm.set(`Creates ${shownName(file)}`, true);
+    if (name === "mkdir")
+      for (const folder of operands) reader.calm.set(`Makes folder ${shownName(folder)}`, true);
+    if (name === "touch")
+      for (const file of operands) reader.calm.set(`Creates ${shownName(file)}`, true);
     if (name === "mv") reader.calm.set("Moves or renames files", true);
     if (name === "cp" || name === "ditto") reader.calm.set("Copies files", true);
-    if ((name === "sed" || name === "gsed") && args.some((arg) => arg === "-i" || arg.startsWith("-i") || arg === "--in-place" || /^-[a-zA-Z]*i/u.test(arg))) {
+    if (
+      (name === "sed" || name === "gsed") &&
+      args.some(
+        (arg) =>
+          arg === "-i" || arg.startsWith("-i") || arg === "--in-place" || /^-[a-zA-Z]*i/u.test(arg),
+      )
+    ) {
       const file = operands[operands.length - 1];
       if (file && operands.length >= 2) reader.calm.set(`Edits ${shownName(file)}`, true);
     }
@@ -717,7 +878,10 @@ const RISK_LABELS: Array<[string, string]> = [
  * should know, read from the command text alone. Risky tags come first and are
  * never dropped; calm ones fill what room is left.
  */
-export function commandTags(command: string, options: { workspaceRoot?: string; home?: string } = {}): CommandTag[] {
+export function commandTags(
+  command: string,
+  options: { workspaceRoot?: string; home?: string } = {},
+): CommandTag[] {
   const reader: Reader = {
     ...(options.workspaceRoot ? { root: options.workspaceRoot } : {}),
     ...(options.home ? { home: options.home.replace(/\/+$/u, "") } : {}),
@@ -728,9 +892,17 @@ export function commandTags(command: string, options: { workspaceRoot?: string; 
   };
   if (command.length > COMMAND_READING_LIMITS.command) reader.found.add("unread");
   else readCommands(command, reader);
-  const risky = RISK_LABELS.filter(([key]) => reader.found.has(key)).map(([, label]) => ({ label, tone: "risk" as const }));
+  const risky = RISK_LABELS.filter(([key]) => reader.found.has(key)).map(([, label]) => ({
+    label,
+    tone: "risk" as const,
+  }));
   const room = Math.max(0, COMMAND_READING_LIMITS.tags - risky.length);
-  const calm = [...reader.calm.keys()].slice(0, room).map((label) => ({ label: clip(label, COMMAND_READING_LIMITS.tagLabel), tone: "calm" as const }));
+  const calm = [...reader.calm.keys()]
+    .slice(0, room)
+    .map((label) => ({
+      label: clip(label, COMMAND_READING_LIMITS.tagLabel),
+      tone: "calm" as const,
+    }));
   return [...risky, ...calm];
 }
 
@@ -753,7 +925,13 @@ export function commandReadingForCall(
   args: unknown,
   options: { workspaceRoot?: string; home?: string } = {},
 ): CommandReading | undefined {
-  if (toolName !== "run_command" || typeof args !== "object" || args === null || Array.isArray(args)) return undefined;
+  if (
+    toolName !== "run_command" ||
+    typeof args !== "object" ||
+    args === null ||
+    Array.isArray(args)
+  )
+    return undefined;
   const { command, description } = args as Record<string, unknown>;
   if (typeof command !== "string" || !command.trim()) return undefined;
   return commandReading(command, description, options);
@@ -764,13 +942,19 @@ export function parseCommandReading(value: unknown): CommandReading | undefined 
   if (typeof value !== "object" || value === null || Array.isArray(value)) return undefined;
   const record = value as Record<string, unknown>;
   if (Object.keys(record).some((key) => key !== "explanation" && key !== "tags")) return undefined;
-  if (!Array.isArray(record.tags) || record.tags.length > COMMAND_READING_LIMITS.tags) return undefined;
+  if (!Array.isArray(record.tags) || record.tags.length > COMMAND_READING_LIMITS.tags)
+    return undefined;
   const tags: CommandTag[] = [];
   for (const entry of record.tags as unknown[]) {
     if (typeof entry !== "object" || entry === null || Array.isArray(entry)) return undefined;
     const { label, tone, ...rest } = entry as Record<string, unknown>;
     if (Object.keys(rest).length > 0) return undefined;
-    if (typeof label !== "string" || !label.trim() || [...label].length > COMMAND_READING_LIMITS.tagLabel) return undefined;
+    if (
+      typeof label !== "string" ||
+      !label.trim() ||
+      [...label].length > COMMAND_READING_LIMITS.tagLabel
+    )
+      return undefined;
     if (tone !== "calm" && tone !== "risk") return undefined;
     tags.push({ label, tone });
   }

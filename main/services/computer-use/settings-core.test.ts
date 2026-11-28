@@ -251,7 +251,10 @@ test("turning Computer Use on counts once, not when it was already on and not wh
     cancelComputerUseGenerations: () => {},
   });
 
-  await assert.rejects(coordinator.setEnabled(true, () => true), /disk full/u);
+  await assert.rejects(
+    coordinator.setEnabled(true, () => true),
+    /disk full/u,
+  );
   assert.deepEqual(sent, []);
 
   failWrite = false;

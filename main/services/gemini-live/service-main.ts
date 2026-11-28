@@ -50,10 +50,7 @@ function ensureAidenLiveThreadRecovery(): Promise<void> {
 export function initializeAidenLiveService(): Promise<void> {
   return ensureAidenLiveThreadRecovery();
 }
-const computerUseAuthorizations = new Map<
-  string,
-  { token: string; dispose: () => void }
->();
+const computerUseAuthorizations = new Map<string, { token: string; dispose: () => void }>();
 
 function ownerKey(owner: RendererDocumentOwner): string {
   return `${owner.id}:${owner.documentId}`;
@@ -147,7 +144,11 @@ export const geminiLiveService = new GeminiLiveService({
         // macOS uses its system picker; Linux resolves the person's choice here.
         process.platform === "linux"
           ? (binding) =>
-              resolveLiveDisplaySource(desktopCapturer, linuxLiveDisplayPickerMode(), binding.sourceId)
+              resolveLiveDisplaySource(
+                desktopCapturer,
+                linuxLiveDisplayPickerMode(),
+                binding.sourceId,
+              )
           : undefined,
       );
     } else if (bindings.length === 0 && disposeDisplayMediaGuards) {
@@ -166,21 +167,13 @@ export const geminiLiveService = new GeminiLiveService({
     computerUseAuthorizations.delete(key);
     authorized.dispose();
     const settings = await configStore.getSettings();
-    if (
-      signal.aborted ||
-      owner.isDestroyed() ||
-      settings.computerUseEnabled !== true
-    ) {
+    if (signal.aborted || owner.isDestroyed() || settings.computerUseEnabled !== true) {
       return null;
     }
     const status = await computerUseStatus.status({ signal });
     if (!status.ready || signal.aborted || owner.isDestroyed()) return null;
     const confirmedSettings = await configStore.getSettings();
-    if (
-      signal.aborted ||
-      owner.isDestroyed() ||
-      confirmedSettings.computerUseEnabled !== true
-    ) {
+    if (signal.aborted || owner.isDestroyed() || confirmedSettings.computerUseEnabled !== true) {
       return null;
     }
 
@@ -192,11 +185,7 @@ export const geminiLiveService = new GeminiLiveService({
       | null = null;
     const isAuthorized = async () => {
       const currentSettings = await configStore.getSettings();
-      return (
-        !signal.aborted &&
-        !owner.isDestroyed() &&
-        currentSettings.computerUseEnabled === true
-      );
+      return !signal.aborted && !owner.isDestroyed() && currentSettings.computerUseEnabled === true;
     };
     const bridge = new GeminiLiveComputerUseBridge({
       sessionId,

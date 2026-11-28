@@ -11,12 +11,7 @@ import type { BotInboundAttachmentHomeLease } from "./bot-inbound-attachment-hom
 import { MAX_TELEGRAM_DOWNLOAD_BYTES } from "./telegram/telegram-inbound.js";
 
 const repositoryRoot = path.resolve(import.meta.dirname, "..", "..");
-const testingBinary = path.join(
-  repositoryRoot,
-  "build",
-  "native",
-  "aiden-bot-inbox-writer-test",
-);
+const testingBinary = path.join(repositoryRoot, "build", "native", "aiden-bot-inbox-writer-test");
 
 async function homeLease(homePath: string): Promise<BotInboundAttachmentHomeLease> {
   const expected = await fs.stat(homePath, { bigint: true });
@@ -31,11 +26,7 @@ async function homeLease(homePath: string): Promise<BotInboundAttachmentHomeLeas
         fs.realpath(homePath),
         fs.stat(homePath, { bigint: true }),
       ]);
-      if (
-        canonical !== homePath ||
-        current.dev !== expected.dev ||
-        current.ino !== expected.ino
-      ) {
+      if (canonical !== homePath || current.dev !== expected.dev || current.ino !== expected.ino) {
         throw new Error("managed home changed");
       }
     },
@@ -150,38 +141,42 @@ test("rejects unsafe components and bytes above Telegram's existing ceiling", as
   );
 });
 
-test("a Bot inbox write stalled on its volume is killed at the deadline", { timeout: 10_000 }, async (t) => {
-  if (process.platform === "win32") return;
-  const parent = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-bot-inbox-stall-"));
-  t.after(() => fs.rm(parent, { recursive: true, force: true }));
-  const home = path.join(parent, "home");
-  await fs.mkdir(home);
-  const canonicalHome = await fs.realpath(home);
-  // Stands in for a helper blocked in openat on a hung mount: it never
-  // answers the handshake and never exits on its own.
-  const pidFile = path.join(parent, "helper.pid");
-  const stalledHelper = path.join(parent, "stalled-writer");
-  await fs.writeFile(stalledHelper, `#!/bin/sh\necho $$ > '${pidFile}'\nexec /bin/sleep 60\n`, {
-    mode: 0o700,
-  });
+test(
+  "a Bot inbox write stalled on its volume is killed at the deadline",
+  { timeout: 10_000 },
+  async (t) => {
+    if (process.platform === "win32") return;
+    const parent = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-bot-inbox-stall-"));
+    t.after(() => fs.rm(parent, { recursive: true, force: true }));
+    const home = path.join(parent, "home");
+    await fs.mkdir(home);
+    const canonicalHome = await fs.realpath(home);
+    // Stands in for a helper blocked in openat on a hung mount: it never
+    // answers the handshake and never exits on its own.
+    const pidFile = path.join(parent, "helper.pid");
+    const stalledHelper = path.join(parent, "stalled-writer");
+    await fs.writeFile(stalledHelper, `#!/bin/sh\necho $$ > '${pidFile}'\nexec /bin/sleep 60\n`, {
+      mode: 0o700,
+    });
 
-  const started = Date.now();
-  await assert.rejects(
-    writeBotInboundAttachment({
-      home: await homeLease(canonicalHome),
-      profile: "default",
-      leaf: "stalled.bin",
-      bytes: Buffer.from([1, 2, 3]),
-      timeoutMs: 300,
-      testControl: {
-        binary: stalledHelper,
-        afterInboxPinned() {},
-        beforeExit() {},
-      },
-    }),
-    /could not be stored safely/u,
-  );
-  assert.ok(Date.now() - started < 5_000, "the ingest is not held by the stalled helper");
-  const pid = Number.parseInt(await fs.readFile(pidFile, "utf8"), 10);
-  assert.throws(() => process.kill(pid, 0), { code: "ESRCH" }, "the stalled helper was killed");
-});
+    const started = Date.now();
+    await assert.rejects(
+      writeBotInboundAttachment({
+        home: await homeLease(canonicalHome),
+        profile: "default",
+        leaf: "stalled.bin",
+        bytes: Buffer.from([1, 2, 3]),
+        timeoutMs: 300,
+        testControl: {
+          binary: stalledHelper,
+          afterInboxPinned() {},
+          beforeExit() {},
+        },
+      }),
+      /could not be stored safely/u,
+    );
+    assert.ok(Date.now() - started < 5_000, "the ingest is not held by the stalled helper");
+    const pid = Number.parseInt(await fs.readFile(pidFile, "utf8"), 10);
+    assert.throws(() => process.kill(pid, 0), { code: "ESRCH" }, "the stalled helper was killed");
+  },
+);

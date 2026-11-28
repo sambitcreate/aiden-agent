@@ -23,5 +23,6 @@ test("the most important status wins, case by case", () => {
     [{ spending_nearing: true, plan: true }, "spending_nearing"],
     [{ plan: true }, "plan"],
   ];
-  for (const [applies, expected] of cases) assert.equal(pickBotStatus(applies), expected, JSON.stringify(applies));
+  for (const [applies, expected] of cases)
+    assert.equal(pickBotStatus(applies), expected, JSON.stringify(applies));
 });

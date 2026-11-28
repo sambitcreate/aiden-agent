@@ -139,8 +139,14 @@ test("merged discovery keeps server order and drops unavailable or colliding ser
         unavailable.push([server.name, projectDiagnosticError(error).code]),
     },
   );
-  assert.deepEqual(tools.map(({ name }) => name), ["alpha_read", "beta_read", "beta_write"]);
-  assert.deepEqual(unavailable.map(([name]) => name), ["hung", "duplicate"]);
+  assert.deepEqual(
+    tools.map(({ name }) => name),
+    ["alpha_read", "beta_read", "beta_write"],
+  );
+  assert.deepEqual(
+    unavailable.map(([name]) => name),
+    ["hung", "duplicate"],
+  );
   assert.equal(unavailable[0][1], "timed-out");
 });
 
@@ -154,21 +160,31 @@ test("strict discovery fails closed naming the unavailable server", () => {
     /MCP server "hung" is unavailable: .*did not respond/u,
   );
   assert.throws(
-    () => mergeMcpServerDiscovery([{ name: "empty" }], [fulfilled({ tools: [] })], { strict: true }),
+    () =>
+      mergeMcpServerDiscovery([{ name: "empty" }], [fulfilled({ tools: [] })], { strict: true }),
     /did not provide any tools/u,
   );
 });
 
 function gate() {
   let open!: () => void;
-  const opened = new Promise<void>((resolve) => { open = resolve; });
+  const opened = new Promise<void>((resolve) => {
+    open = resolve;
+  });
   return { open, opened };
 }
 
 /** Discovery through a real in-memory MCP server: connect, list, name tools `<server>_<tool>`. */
-async function discoverFrom(t: { after(fn: () => Promise<void>): void }, prefix: string, server: Server) {
+async function discoverFrom(
+  t: { after(fn: () => Promise<void>): void },
+  prefix: string,
+  server: Server,
+) {
   const client = await connectClient(server);
-  t.after(async () => { await client.close(); await server.close(); });
+  t.after(async () => {
+    await client.close();
+    await server.close();
+  });
   const tools = await client.listTools(mcpRequestDeadline(5_000));
   return { tools: tools.map(({ name }) => agentTool(`${prefix}_${name}`)) };
 }
@@ -183,8 +199,14 @@ test("deferred admission starts the turn with ready servers and lets a slow serv
     ({ name }) => discoverFrom(t, name, name === "fast" ? fast.server : slow.server),
     { budgetMs: 10_000, windowMs: 100 },
   );
-  assert.ok(Date.now() - started < 2_000, "the turn must not wait for the slow server's tools/list");
-  assert.deepEqual(tools.map(({ name }) => name), ["fast_read"]);
+  assert.ok(
+    Date.now() - started < 2_000,
+    "the turn must not wait for the slow server's tools/list",
+  );
+  assert.deepEqual(
+    tools.map(({ name }) => name),
+    ["fast_read"],
+  );
   assert.equal(late.pending(), 1);
   assert.deepEqual(late.tools(), []);
 
@@ -198,7 +220,10 @@ test("deferred admission starts the turn with ready servers and lets a slow serv
   slowList.open();
   await waiting;
   assert.equal(late.pending(), 0);
-  assert.deepEqual(late.tools().map(({ name }) => name), ["slow_search"]);
+  assert.deepEqual(
+    late.tools().map(({ name }) => name),
+    ["slow_search"],
+  );
 });
 
 test("deferred admission does not wait out its window once every server is ready", async (t) => {
@@ -209,7 +234,10 @@ test("deferred admission does not wait out its window once every server is ready
     { budgetMs: 10_000, windowMs: 30_000 },
   );
   assert.ok(Date.now() - started < 2_000);
-  assert.deepEqual(tools.map(({ name }) => name), ["only_read"]);
+  assert.deepEqual(
+    tools.map(({ name }) => name),
+    ["only_read"],
+  );
   assert.equal(late, NO_LATE_MCP_DISCOVERY);
   await late.settled();
 });
@@ -229,10 +257,14 @@ test("late servers that collide, fail or miss their budget are reported, never a
     {
       budgetMs: 300,
       windowMs: 20,
-      onUnavailable: (server, error) => unavailable.push([server.name, projectDiagnosticError(error).code]),
+      onUnavailable: (server, error) =>
+        unavailable.push([server.name, projectDiagnosticError(error).code]),
     },
   );
-  assert.deepEqual(tools.map(({ name }) => name), ["alpha_read"]);
+  assert.deepEqual(
+    tools.map(({ name }) => name),
+    ["alpha_read"],
+  );
   assert.equal(late.pending(), 3);
   release.open();
   await late.settled();
@@ -264,7 +296,9 @@ test("a connect stalled before initialize is bounded and its client closed", asy
   const stalled: McpTransport = {
     start: () => new Promise<void>(() => undefined),
     send: async () => undefined,
-    close: async () => { closes += 1; },
+    close: async () => {
+      closes += 1;
+    },
     onMessage: () => () => undefined,
     onError: () => () => undefined,
     onClose: () => () => undefined,
@@ -272,7 +306,13 @@ test("a connect stalled before initialize is bounded and its client closed", asy
   const client = new McpClient({ name: "discovery-test", version: "1" });
   const started = Date.now();
   await assert.rejects(
-    connectMcpWithinDeadline(client.connect(stalled), async () => { await stalled.close(); }, { ms: 100 }),
+    connectMcpWithinDeadline(
+      client.connect(stalled),
+      async () => {
+        await stalled.close();
+      },
+      { ms: 100 },
+    ),
     (error: unknown) => projectDiagnosticError(error).code === "timed-out",
   );
   assert.ok(Date.now() - started < 2_000);
@@ -300,12 +340,24 @@ test("built tools are reused while client, inventory, identity and lease are unc
   // An equal-looking but different inventory (re-listed after its TTL) rebuilds.
   assert.equal(memo.get("docs", [client, {}, '["docs","Docs",null]', false]), undefined);
   memo.set("docs", [client, inventory, '["docs","Docs",null]', false], () => leaseCurrent, built);
-  assert.equal(memo.get("docs", [{}, inventory, '["docs","Docs",null]', false]), undefined, "a reconnected client rebuilds");
+  assert.equal(
+    memo.get("docs", [{}, inventory, '["docs","Docs",null]', false]),
+    undefined,
+    "a reconnected client rebuilds",
+  );
   memo.set("docs", [client, inventory, '["docs","Docs",null]', false], () => leaseCurrent, built);
-  assert.equal(memo.get("docs", [client, inventory, '["docs","Renamed",null]', false]), undefined, "a rename rebuilds");
+  assert.equal(
+    memo.get("docs", [client, inventory, '["docs","Renamed",null]', false]),
+    undefined,
+    "a rename rebuilds",
+  );
   memo.set("docs", [client, inventory, '["docs","Docs",null]', false], () => leaseCurrent, built);
   leaseCurrent = false;
-  assert.equal(memo.get("docs", [client, inventory, '["docs","Docs",null]', false]), undefined, "a revoked lease rebuilds");
+  assert.equal(
+    memo.get("docs", [client, inventory, '["docs","Docs",null]', false]),
+    undefined,
+    "a revoked lease rebuilds",
+  );
 });
 
 test("prewarm runs one discovery per server at a time, never after shutdown, and reports failures", async () => {
@@ -314,7 +366,11 @@ test("prewarm runs one discovery per server at a time, never after shutdown, and
   const release = gate();
   let discoveries = 0;
   const failures: string[] = [];
-  const discover = async () => { discoveries += 1; await release.opened; throw new Error("server unavailable"); };
+  const discover = async () => {
+    discoveries += 1;
+    await release.opened;
+    throw new Error("server unavailable");
+  };
   const first = prewarmer.start("docs", discover, (error) => failures.push(String(error)));
   const second = prewarmer.start("docs", discover, (error) => failures.push(String(error)));
   assert.equal(first, second);
@@ -323,16 +379,30 @@ test("prewarm runs one discovery per server at a time, never after shutdown, and
   assert.equal(discoveries, 1);
   assert.deepEqual(failures, ["Error: server unavailable"]);
 
-  await prewarmer.start("docs", async () => { discoveries += 1; }, () => undefined);
+  await prewarmer.start(
+    "docs",
+    async () => {
+      discoveries += 1;
+    },
+    () => undefined,
+  );
   assert.equal(discoveries, 2, "a finished prewarm does not block the next one");
   shutDown = true;
-  await prewarmer.start("docs", async () => { discoveries += 1; }, () => undefined);
+  await prewarmer.start(
+    "docs",
+    async () => {
+      discoveries += 1;
+    },
+    () => undefined,
+  );
   assert.equal(discoveries, 2, "no connection starts after shutdown");
 });
 
 test("deferred admission waits past its window for servers that must be declared, and only for them", async () => {
   let releaseDirect!: () => void;
-  const direct = new Promise<void>((resolve) => { releaseDirect = resolve; });
+  const direct = new Promise<void>((resolve) => {
+    releaseDirect = resolve;
+  });
   const discover = async ({ name }: { name: string }) => {
     if (name === "direct") await direct;
     if (name === "slow") await new Promise<void>(() => undefined);
@@ -343,7 +413,10 @@ test("deferred admission waits past its window for servers that must be declared
     [{ name: "direct" }, { name: "auto" }, { name: "slow" }],
     discover,
     { budgetMs: 10_000, windowMs: 20, awaitServer: ({ name }) => name === "direct" },
-  ).then((result) => { admittedAt = Date.now(); return result; });
+  ).then((result) => {
+    admittedAt = Date.now();
+    return result;
+  });
   await new Promise((resolve) => setTimeout(resolve, 80));
   assert.equal(admittedAt, 0, "a direct server still discovering holds the turn past the window");
   releaseDirect();

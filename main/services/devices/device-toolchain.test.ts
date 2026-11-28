@@ -1,5 +1,15 @@
 import assert from "node:assert/strict";
-import { chmod, link, symlink, mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
+import {
+  chmod,
+  link,
+  symlink,
+  mkdir,
+  mkdtemp,
+  readdir,
+  readFile,
+  rm,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -76,7 +86,10 @@ test("installs pass exact pinned npm arguments and publish a sentinel", async ()
     assert.equal(entryPath, paths.entryPath);
     assert.equal(
       entryPath,
-      path.join(baseDir, "tools/expo-device-hub/0.12.0/node_modules/expo-device-hub/dist/server/cli.mjs"),
+      path.join(
+        baseDir,
+        "tools/expo-device-hub/0.12.0/node_modules/expo-device-hub/dist/server/cli.mjs",
+      ),
     );
     assert.equal(await readFile(paths.sentinel, "utf8"), "0.12.0\n");
     assert.equal(await isToolInstalled(baseDir, DEVICE_HUB), true);
@@ -232,26 +245,37 @@ test("npm resolves from PATH, then the login shell, then Homebrew locations", as
     }),
     "/usr/local/bin/npm",
   );
-  assert.equal(
-    await resolveNpm({ env: {}, isExecutable: executable([]), loginShellLookup }),
-    null,
-  );
+  assert.equal(await resolveNpm({ env: {}, isExecutable: executable([]), loginShellLookup }), null);
 });
-
 
 test("Node discovery handles Finder PATH, version managers, fallback, and a missing runtime", async () => {
   const env = { PATH: "relative:/usr/bin", SHELL: "/bin/zsh" };
-  assert.equal(await resolveDeviceNode({
-    env, isExecutable: async (p) => p === "/Users/me/.nvm/versions/node/v22/bin/node",
-    loginShellLookup: async () => "Welcome\n/Users/me/.nvm/versions/node/v22/bin/node\n",
-  }), "/Users/me/.nvm/versions/node/v22/bin/node");
-  assert.equal(await resolveDeviceNode({
-    env, isExecutable: async (p) => p === "/opt/homebrew/bin/node",
-    loginShellLookup: async () => { throw new Error("unavailable shell"); },
-  }), "/opt/homebrew/bin/node");
-  assert.equal(await resolveDeviceNode({
-    env, isExecutable: async () => false, loginShellLookup: async () => "node is a shell function",
-  }), null);
+  assert.equal(
+    await resolveDeviceNode({
+      env,
+      isExecutable: async (p) => p === "/Users/me/.nvm/versions/node/v22/bin/node",
+      loginShellLookup: async () => "Welcome\n/Users/me/.nvm/versions/node/v22/bin/node\n",
+    }),
+    "/Users/me/.nvm/versions/node/v22/bin/node",
+  );
+  assert.equal(
+    await resolveDeviceNode({
+      env,
+      isExecutable: async (p) => p === "/opt/homebrew/bin/node",
+      loginShellLookup: async () => {
+        throw new Error("unavailable shell");
+      },
+    }),
+    "/opt/homebrew/bin/node",
+  );
+  assert.equal(
+    await resolveDeviceNode({
+      env,
+      isExecutable: async () => false,
+      loginShellLookup: async () => "node is a shell function",
+    }),
+    null,
+  );
 });
 
 test("Node validation rejects the application and its aliases without launching it", async () => {

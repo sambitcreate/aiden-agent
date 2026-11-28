@@ -197,19 +197,27 @@ function harness(options?: { enabled?: boolean }): Harness {
   harnessState.revision = state.revision;
   Object.defineProperty(harnessState, "chat", {
     get: () => state.chat,
-    set: (value) => { state.chat = value; },
+    set: (value) => {
+      state.chat = value;
+    },
   });
   Object.defineProperty(harnessState, "busy", {
     get: () => state.busy,
-    set: (value) => { state.busy = value; },
+    set: (value) => {
+      state.busy = value;
+    },
   });
   Object.defineProperty(harnessState, "settings", {
     get: () => state.settings,
-    set: (value) => { state.settings = value; },
+    set: (value) => {
+      state.settings = value;
+    },
   });
   Object.defineProperty(harnessState, "revision", {
     get: () => state.revision,
-    set: (value) => { state.revision = value; },
+    set: (value) => {
+      state.revision = value;
+    },
   });
   harnessState.clock = clock;
   harnessState.usage = usage;
@@ -479,7 +487,10 @@ test("resuming after the final segment finished while paused keeps the soundbite
   // Stop keeps a retained completed soundbite; Play again replays it for free.
   h.service.stop(h.owner());
   assert.ok(h.service.readAudio(h.owner(), first.jobId, 0, 0, 1024));
-  const replayed = await h.service.start(h.owner(), { ...startRequest(h), requestId: "replay-after-resume" });
+  const replayed = await h.service.start(h.owner(), {
+    ...startRequest(h),
+    requestId: "replay-after-resume",
+  });
   assert.equal(replayed.jobId, first.jobId);
   assert.equal(replayed.phase, "completed");
   assert.equal(h.usage.length, 1);
@@ -755,7 +766,6 @@ test("duplicate start IDs do not regenerate, even after Stop", async () => {
   );
 });
 
-
 test("replay is byte-identical and independent of settings revision counters", async () => {
   const h = harness();
   const first = await h.service.start(h.owner(), startRequest(h));
@@ -774,8 +784,11 @@ test("cache clear does not turn Play into another billable generation", async ()
   await h.service.start(h.owner(), startRequest(h));
   await flush();
   h.service.clearCache(h.owner());
-  await assert.rejects(h.service.start(h.owner(), { ...startRequest(h), requestId: "again" }),
-    (error: unknown) => error instanceof TtsStartError && error.safe.code === "playback_unavailable");
+  await assert.rejects(
+    h.service.start(h.owner(), { ...startRequest(h), requestId: "again" }),
+    (error: unknown) =>
+      error instanceof TtsStartError && error.safe.code === "playback_unavailable",
+  );
   assert.equal(h.provider.calls.length, 1);
 });
 
@@ -783,15 +796,21 @@ test("cancelled or possibly billed failed soundbites never regenerate with a fre
   for (const failure of [false, true]) {
     const h = harness();
     h.provider.synthesize = async (input) => {
-      h.provider.calls.push({ body: input.body as unknown as Record<string, unknown>, apiKey: input.apiKey });
+      h.provider.calls.push({
+        body: input.body as unknown as Record<string, unknown>,
+        apiKey: input.apiKey,
+      });
       if (failure) throw new Error("HTTP 503");
       return new Promise(() => undefined);
     };
     await h.service.start(h.owner(), startRequest(h));
     await flush();
     h.service.stop(h.owner());
-    await assert.rejects(h.service.start(h.owner(), { ...startRequest(h), requestId: "another" }),
-      (error: unknown) => error instanceof TtsStartError && error.safe.code === "playback_unavailable");
+    await assert.rejects(
+      h.service.start(h.owner(), { ...startRequest(h), requestId: "another" }),
+      (error: unknown) =>
+        error instanceof TtsStartError && error.safe.code === "playback_unavailable",
+    );
     assert.equal(h.provider.calls.length, 1);
   }
 });
@@ -813,7 +832,10 @@ test("eviction drops an entire inactive soundbite and keeps a non-billable tombs
   const original = h.provider.synthesize.bind(h.provider);
   h.provider.synthesize = async (input) => {
     const generated = await original(input);
-    return { ...generated, audio: { ...generated.audio, bytes: new Uint8Array(TTS_LIMITS.segmentAudioMaxBytes) } };
+    return {
+      ...generated,
+      audio: { ...generated.audio, bytes: new Uint8Array(TTS_LIMITS.segmentAudioMaxBytes) },
+    };
   };
   const first = await h.service.start(h.owner(), startRequest(h));
   await flush();
@@ -826,11 +848,13 @@ test("eviction drops an entire inactive soundbite and keeps a non-billable tombs
   assert.equal(h.service.audioStore.retainedBytes, TTS_LIMITS.sessionAudioMaxBytes);
   assert.equal(h.service.readAudio(h.owner(), first.jobId, 0, 0, 64), null);
   h.chat!.messages[1]!.content = originalText;
-  await assert.rejects(h.service.start(h.owner(), { ...startRequest(h), requestId: "evicted" }),
-    (error: unknown) => error instanceof TtsStartError && error.safe.code === "playback_unavailable");
+  await assert.rejects(
+    h.service.start(h.owner(), { ...startRequest(h), requestId: "evicted" }),
+    (error: unknown) =>
+      error instanceof TtsStartError && error.safe.code === "playback_unavailable",
+  );
   assert.equal(h.provider.calls.length, 5);
 });
-
 
 test("replacement stops audible completed playback without destroying its replay", async () => {
   const h = harness();
@@ -838,21 +862,32 @@ test("replacement stops audible completed playback without destroying its replay
   await flush();
   await h.service.startPreview(h.owner());
   await flush();
-  const stopped = h.events.filter((event) => event.kind === "job" &&
-    event.snapshot.jobId === first.jobId && event.snapshot.phase === "cancelled");
+  const stopped = h.events.filter(
+    (event) =>
+      event.kind === "job" &&
+      event.snapshot.jobId === first.jobId &&
+      event.snapshot.phase === "cancelled",
+  );
   assert.equal(stopped.length, 1);
   assert.ok(h.service.readAudio(h.owner(), first.jobId, 0, 0, 1024));
-  const replayed = await h.service.start(h.owner(), { ...startRequest(h), requestId: "after-preview" });
+  const replayed = await h.service.start(h.owner(), {
+    ...startRequest(h),
+    requestId: "after-preview",
+  });
   assert.equal(replayed.jobId, first.jobId);
   assert.equal(replayed.phase, "completed");
   assert.equal(h.provider.calls.length, 2); // One response, one preview; replay is free.
 });
 
-
 test("remote Read Aloud inherits desktop setup and replays only its device/chat audio", async () => {
   const h = harness();
   const remote = new AidenRemoteTtsService(h.service);
-  const authority = { deviceId: "phone", chatId: "chat-1", current: () => true, authorize: async () => undefined };
+  const authority = {
+    deviceId: "phone",
+    chatId: "chat-1",
+    current: () => true,
+    authorize: async () => undefined,
+  };
   const status = await remote.status(authority);
   assert.equal(status.ready, true);
   const first = await remote.start(authority, startRequest(h));
@@ -874,7 +909,12 @@ test("remote Read Aloud inherits desktop setup and replays only its device/chat 
 test("remote stop arriving before start prevents billing and cannot stop a newer intent", async () => {
   const h = harness();
   const remote = new AidenRemoteTtsService(h.service);
-  const authority = { deviceId: "phone", chatId: "chat-1", current: () => true, authorize: async () => undefined };
+  const authority = {
+    deviceId: "phone",
+    chatId: "chat-1",
+    current: () => true,
+    authorize: async () => undefined,
+  };
   remote.stop(authority, { requestId: "req-1" });
   await assert.rejects(remote.start(authority, startRequest(h)), /stopped/u);
   assert.equal(h.provider.calls.length, 0);
@@ -882,7 +922,13 @@ test("remote stop arriving before start prevents billing and cannot stop a newer
   await flush();
   remote.stop(authority, { requestId: "req-1" });
   assert.equal((await remote.status(authority)).job?.jobId, job.jobId);
-  await assert.rejects(remote.start(authority, { ...startRequest(h), source: { ...sourceRef(h), chatId: "other-chat" } }), /match/u);
+  await assert.rejects(
+    remote.start(authority, {
+      ...startRequest(h),
+      source: { ...sourceRef(h), chatId: "other-chat" },
+    }),
+    /match/u,
+  );
   remote.close();
 });
 
@@ -891,25 +937,44 @@ test("remote cannot replace desktop playback; disabling on desktop stops remote 
   await h.service.start(h.owner(), startRequest(h));
   await flush();
   const remote = new AidenRemoteTtsService(h.service);
-  const authority = { deviceId: "phone", chatId: "chat-1", current: () => true, authorize: async () => undefined };
+  const authority = {
+    deviceId: "phone",
+    chatId: "chat-1",
+    current: () => true,
+    authorize: async () => undefined,
+  };
   await assert.rejects(remote.start(authority, startRequest(h)), /another device/u);
   h.service.stop(h.owner());
   const job = await remote.start(authority, { ...startRequest(h), requestId: "later" });
   await flush();
   await h.service.updateSettings(h.owner(), h.revision, { enabled: false });
   assert.equal((await remote.status()).enabled, false);
-  await assert.rejects(remote.read(authority, job.jobId, 0, 0), /Turn on Read Aloud in Aiden Agent/u);
+  await assert.rejects(
+    remote.read(authority, job.jobId, 0, 0),
+    /Turn on Read Aloud in Aiden Agent/u,
+  );
   remote.close();
 });
 
 test("remote authorization is rechecked between synthesis segments", async () => {
-  const h = harness(); twoSegments(h);
+  const h = harness();
+  twoSegments(h);
   let permitted = true;
   const remote = new AidenRemoteTtsService(h.service);
-  const authority = { deviceId: "phone", chatId: "chat-1", current: () => true,
-    authorize: async () => { if (!permitted) throw new Error("Access revoked"); } };
+  const authority = {
+    deviceId: "phone",
+    chatId: "chat-1",
+    current: () => true,
+    authorize: async () => {
+      if (!permitted) throw new Error("Access revoked");
+    },
+  };
   const original = h.provider.synthesize.bind(h.provider);
-  h.provider.synthesize = async (input) => { const audio = await original(input); permitted = false; return audio; };
+  h.provider.synthesize = async (input) => {
+    const audio = await original(input);
+    permitted = false;
+    return audio;
+  };
   await remote.start(authority, startRequest(h));
   await flush();
   assert.equal(h.provider.calls.length, 1);
@@ -917,17 +982,24 @@ test("remote authorization is rechecked between synthesis segments", async () =>
   remote.close();
 });
 
-
 test("remote transport suspension preserves replay and source changes fence audio reads", async () => {
   const h = harness();
   const remote = new AidenRemoteTtsService(h.service);
-  const authority = { deviceId: "phone", chatId: "chat-1", current: () => true, authorize: async () => undefined };
+  const authority = {
+    deviceId: "phone",
+    chatId: "chat-1",
+    current: () => true,
+    authorize: async () => undefined,
+  };
   const job = await remote.start(authority, startRequest(h));
   await flush();
   remote.suspend();
   await assert.rejects(remote.status(authority), /no longer available/u);
   remote.resume();
-  const replay = await remote.start(authority, { ...startRequest(h), requestId: "after-reconnect" });
+  const replay = await remote.start(authority, {
+    ...startRequest(h),
+    requestId: "after-reconnect",
+  });
   assert.equal(replay.jobId, job.jobId);
   assert.equal(h.provider.calls.length, 1);
   assert.ok((await remote.read(authority, job.jobId, 0, 0)).bytesBase64.length > 0);
@@ -937,133 +1009,220 @@ test("remote transport suspension preserves replay and source changes fence audi
   remote.close();
 });
 
-
 test("dispatched usage is settled once on failure, timeout and cancellation, including late completion", async () => {
   for (const action of ["failure", "timeout", "cancel", "owner"] as const) {
-    const h = harness(); const reports: import("./service.js").TtsUsageReport[] = [];
-    h.deps.recordUsage = report => reports.push(report);
+    const h = harness();
+    const reports: import("./service.js").TtsUsageReport[] = [];
+    h.deps.recordUsage = (report) => reports.push(report);
     let resolve!: (value: TtsUnarySynthesisResult) => void;
     let reject!: (error: Error) => void;
-    const promise = new Promise<TtsUnarySynthesisResult>((yes, no) => { resolve = yes; reject = no; });
+    const promise = new Promise<TtsUnarySynthesisResult>((yes, no) => {
+      resolve = yes;
+      reject = no;
+    });
     const pending = { promise, resolve, reject };
     h.provider.synthesize = () => pending.promise;
     const owner = h.owner();
-    await h.service.start(owner, startRequest(h)); await flush();
+    await h.service.start(owner, startRequest(h));
+    await flush();
     if (action === "failure") pending.reject(new Error("network failure"));
     else if (action === "timeout") h.clock.advance(TTS_LIMITS.requestTimeoutMs + 1);
     else if (action === "owner") owner.invalidate();
     else h.service.stop(owner);
     await flush();
     assert.equal(reports.length, 1);
-    assert.equal(reports[0]!.status, action === "cancel" || action === "owner" ? "cancelled" : "failed");
+    assert.equal(
+      reports[0]!.status,
+      action === "cancel" || action === "owner" ? "cancelled" : "failed",
+    );
     assert.equal(reports[0]!.usageKnown, false);
-    pending.resolve({ audio: { bytes: wavBytes(), mimeType: "audio/wav", sampleRate: 24000, channels: 1 }, usage: { inputTokens: 1, outputTokens: 2 } });
-    await flush(); assert.equal(reports.length, 1);
+    pending.resolve({
+      audio: { bytes: wavBytes(), mimeType: "audio/wav", sampleRate: 24000, channels: 1 },
+      usage: { inputTokens: 1, outputTokens: 2 },
+    });
+    await flush();
+    assert.equal(reports.length, 1);
   }
 });
 
 test("remote status does not reserve sessions; idle eviction and revocation never reopen billed intents", async () => {
-  const h = harness(); let now = 0;
+  const h = harness();
+  let now = 0;
   const remote = new AidenRemoteTtsService(h.service, () => now);
-  const authority = (index: number) => ({ deviceId: `phone-${index}`, chatId: "chat-1", current: () => true, authorize: async () => undefined });
+  const authority = (index: number) => ({
+    deviceId: `phone-${index}`,
+    chatId: "chat-1",
+    current: () => true,
+    authorize: async () => undefined,
+  });
   try {
     for (let i = 0; i < 300; i++) await remote.status(authority(i));
     for (let i = 0; i < 256; i++) {
-      await remote.start(authority(i), startRequest(h)); await flush();
+      await remote.start(authority(i), startRequest(h));
+      await flush();
       remote.stop(authority(i), { requestId: "req-1" });
     }
     now = 120_001;
-    await remote.start(authority(256), startRequest(h)); await flush();
+    await remote.start(authority(256), startRequest(h));
+    await flush();
     remote.stop(authority(256), { requestId: "req-1" });
     assert.equal(h.provider.calls.length, 257);
-    await assert.rejects(remote.start(authority(0), { ...startRequest(h), requestId: "fresh-request" }), /expired/u);
+    await assert.rejects(
+      remote.start(authority(0), { ...startRequest(h), requestId: "fresh-request" }),
+      /expired/u,
+    );
     await assert.rejects(remote.start(authority(0), startRequest(h)), /stopped/u);
     assert.equal(h.provider.calls.length, 257);
     remote.revokeDevice("phone-256");
-    await assert.rejects(remote.start(authority(256), { ...startRequest(h), requestId: "revived" }), /access/u);
-    await remote.start(authority(257), startRequest(h)); await flush();
+    await assert.rejects(
+      remote.start(authority(256), { ...startRequest(h), requestId: "revived" }),
+      /access/u,
+    );
+    await remote.start(authority(257), startRequest(h));
+    await flush();
     assert.equal(h.provider.calls.length, 258);
-  } finally { remote.close(); }
+  } finally {
+    remote.close();
+  }
 });
 
-
 test("provider success is accounted even if local retention fails, while preflight never counts", async () => {
-  const h = harness(); const reports: import("./service.js").TtsUsageReport[] = [];
-  h.deps.recordUsage = report => reports.push(report);
-  h.service.audioStore.put = () => { throw new Error("buffer limit"); };
-  await h.service.start(h.owner(), startRequest(h)); await flush();
+  const h = harness();
+  const reports: import("./service.js").TtsUsageReport[] = [];
+  h.deps.recordUsage = (report) => reports.push(report);
+  h.service.audioStore.put = () => {
+    throw new Error("buffer limit");
+  };
+  await h.service.start(h.owner(), startRequest(h));
+  await flush();
   assert.equal(lastJob(h).phase, "failed");
-  assert.equal(reports.length, 1); assert.equal(reports[0]!.status, "completed");
+  assert.equal(reports.length, 1);
+  assert.equal(reports[0]!.status, "completed");
   assert.equal(reports[0]!.inputTokens, 4);
   const disabled = harness({ enabled: false });
-  disabled.deps.recordUsage = report => reports.push(report);
+  disabled.deps.recordUsage = (report) => reports.push(report);
   await assert.rejects(disabled.service.start(disabled.owner(), startRequest(disabled)));
   assert.equal(reports.length, 1);
 });
 
-
 test("remote preflight rejection stays retryable after session reclamation", async () => {
-  const h = harness({ enabled: false }); let now = 0;
+  const h = harness({ enabled: false });
+  let now = 0;
   const remote = new AidenRemoteTtsService(h.service, () => now);
-  const authority = (i: number) => ({ deviceId: `preflight-${i}`, chatId: "chat-1", current: () => true, authorize: async () => undefined });
+  const authority = (i: number) => ({
+    deviceId: `preflight-${i}`,
+    chatId: "chat-1",
+    current: () => true,
+    authorize: async () => undefined,
+  });
   try {
-    for (let i = 0; i < 256; i++) await assert.rejects(remote.start(authority(i), startRequest(h)), /not set up/u);
-    assert.equal(h.provider.calls.length, 0); assert.equal(h.usage.length, 0);
+    for (let i = 0; i < 256; i++)
+      await assert.rejects(remote.start(authority(i), startRequest(h)), /not set up/u);
+    assert.equal(h.provider.calls.length, 0);
+    assert.equal(h.usage.length, 0);
     now = 120_001;
     await assert.rejects(remote.start(authority(256), startRequest(h)), /not set up/u);
     h.settings.enabled = true;
-    await remote.start(authority(0), { ...startRequest(h), requestId: "corrected-setup" }); await flush();
-    assert.equal(h.provider.calls.length, 1); assert.equal(h.usage.length, 1);
-  } finally { remote.close(); }
+    await remote.start(authority(0), { ...startRequest(h), requestId: "corrected-setup" });
+    await flush();
+    assert.equal(h.provider.calls.length, 1);
+    assert.equal(h.usage.length, 1);
+  } finally {
+    remote.close();
+  }
 });
 
 test("a preflight rejection cannot erase a concurrent accepted source tombstone", async () => {
   for (const rejectFirst of [true, false]) {
-    const h = harness(); let now = 0;
+    const h = harness();
+    let now = 0;
     const original = h.service.start.bind(h.service);
     let reject!: (error: Error) => void;
     let releaseAccepted!: () => void;
-    const acceptance = new Promise<void>(resolve => { releaseAccepted = resolve; });
-    h.service.start = (owner, request) => request.requestId === "preflight" ?
-      new Promise((_, fail) => { reject = fail; }) : original(owner, request).then(async job => {
-        await acceptance; return job;
-      });
+    const acceptance = new Promise<void>((resolve) => {
+      releaseAccepted = resolve;
+    });
+    h.service.start = (owner, request) =>
+      request.requestId === "preflight"
+        ? new Promise((_, fail) => {
+            reject = fail;
+          })
+        : original(owner, request).then(async (job) => {
+            await acceptance;
+            return job;
+          });
     const remote = new AidenRemoteTtsService(h.service, () => now);
-    const authority = (i: number) => ({ deviceId: `concurrent-${i}`, chatId: "chat-1", current: () => true, authorize: async () => undefined });
-    const preflightError = new TtsStartError({ code: "setup_required", message: "preflight rejected", retryable: false, generationMayHaveBeenBilled: false });
+    const authority = (i: number) => ({
+      deviceId: `concurrent-${i}`,
+      chatId: "chat-1",
+      current: () => true,
+      authorize: async () => undefined,
+    });
+    const preflightError = new TtsStartError({
+      code: "setup_required",
+      message: "preflight rejected",
+      retryable: false,
+      generationMayHaveBeenBilled: false,
+    });
     try {
-      const rejected = assert.rejects(remote.start(authority(0), { ...startRequest(h), requestId: "preflight" }), /preflight rejected/u);
+      const rejected = assert.rejects(
+        remote.start(authority(0), { ...startRequest(h), requestId: "preflight" }),
+        /preflight rejected/u,
+      );
       await flush();
       const accepted = remote.start(authority(0), startRequest(h));
       await flush();
-      if (rejectFirst) { reject(preflightError); await rejected; }
+      if (rejectFirst) {
+        reject(preflightError);
+        await rejected;
+      }
       releaseAccepted();
-      await accepted; await flush();
+      await accepted;
+      await flush();
       if (!rejectFirst) reject(preflightError);
       await rejected;
       remote.stop(authority(0), { requestId: "req-1" });
       h.settings.enabled = false;
-      for (let i = 1; i < 256; i++) await assert.rejects(remote.start(authority(i), startRequest(h)));
+      for (let i = 1; i < 256; i++)
+        await assert.rejects(remote.start(authority(i), startRequest(h)));
       now = 120_001;
       await assert.rejects(remote.start(authority(256), startRequest(h)));
       h.settings.enabled = true;
-      await assert.rejects(remote.start(authority(0), { ...startRequest(h), requestId: "after-eviction" }), /expired/u);
+      await assert.rejects(
+        remote.start(authority(0), { ...startRequest(h), requestId: "after-eviction" }),
+        /expired/u,
+      );
       assert.equal(h.provider.calls.length, 1);
-    } finally { remote.close(); }
+    } finally {
+      remote.close();
+    }
   }
 });
 
-
 test("uncertain start failures keep their anti-rebilling fence after reclamation", async () => {
-  const h = harness(); let now = 0;
+  const h = harness();
+  let now = 0;
   const original = h.service.start.bind(h.service);
-  const errors = [new Error("uncertain dispatch"), new TtsStartError({ code: "network", message: "possibly billed", retryable: false, generationMayHaveBeenBilled: true })];
+  const errors = [
+    new Error("uncertain dispatch"),
+    new TtsStartError({
+      code: "network",
+      message: "possibly billed",
+      retryable: false,
+      generationMayHaveBeenBilled: true,
+    }),
+  ];
   h.service.start = (owner, request) => {
     const index = ["unknown", "billed"].indexOf(request.requestId);
     return index < 0 ? original(owner, request) : Promise.reject(errors[index]);
   };
   const remote = new AidenRemoteTtsService(h.service, () => now);
-  const authority = (i: number) => ({ deviceId: `uncertain-${i}`, chatId: "chat-1", current: () => true, authorize: async () => undefined });
+  const authority = (i: number) => ({
+    deviceId: `uncertain-${i}`,
+    chatId: "chat-1",
+    current: () => true,
+    authorize: async () => undefined,
+  });
   try {
     await assert.rejects(remote.start(authority(0), { ...startRequest(h), requestId: "unknown" }));
     await assert.rejects(remote.start(authority(1), { ...startRequest(h), requestId: "billed" }));
@@ -1072,9 +1231,15 @@ test("uncertain start failures keep their anti-rebilling fence after reclamation
     now = 120_001;
     await assert.rejects(remote.start(authority(256), startRequest(h)));
     h.settings.enabled = true;
-    for (const i of [0, 1]) await assert.rejects(remote.start(authority(i), { ...startRequest(h), requestId: "new-request" }), /expired/u);
+    for (const i of [0, 1])
+      await assert.rejects(
+        remote.start(authority(i), { ...startRequest(h), requestId: "new-request" }),
+        /expired/u,
+      );
     assert.equal(h.provider.calls.length, 0);
-  } finally { remote.close(); }
+  } finally {
+    remote.close();
+  }
 });
 
 test("starting read aloud counts once, and a refused start counts nothing", async (t) => {

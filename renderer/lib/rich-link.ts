@@ -111,9 +111,7 @@ function descriptor(
     resourceLabel,
     primaryLabel: boundText(primaryLabel, PRIMARY_LABEL_LIMIT),
     safeDisplayUrl: boundText(safeDisplayUrl, DISPLAY_URL_LIMIT),
-    ...(secondaryLabel
-      ? { secondaryLabel: boundText(secondaryLabel, SECONDARY_LABEL_LIMIT) }
-      : {}),
+    ...(secondaryLabel ? { secondaryLabel: boundText(secondaryLabel, SECONDARY_LABEL_LIMIT) } : {}),
   };
 }
 
@@ -130,29 +128,85 @@ function describeGitHub(url: URL): RichLinkDescriptor | null {
   const section = parts[2]?.toLowerCase();
   const identifier = parts[3];
   if (section === "pull" && identifier) {
-    return descriptor("github", "GitHub", "pull-request", "Pull request", repoLabel, safePath(url), `#${identifier}`);
+    return descriptor(
+      "github",
+      "GitHub",
+      "pull-request",
+      "Pull request",
+      repoLabel,
+      safePath(url),
+      `#${identifier}`,
+    );
   }
   if (section === "issues" && identifier) {
-    return descriptor("github", "GitHub", "issue", "Issue", repoLabel, safePath(url), `#${identifier}`);
+    return descriptor(
+      "github",
+      "GitHub",
+      "issue",
+      "Issue",
+      repoLabel,
+      safePath(url),
+      `#${identifier}`,
+    );
   }
   if (section === "commit" && identifier) {
-    return descriptor("github", "GitHub", "commit", "Commit", repoLabel, safePath(url), identifier.slice(0, 12));
+    return descriptor(
+      "github",
+      "GitHub",
+      "commit",
+      "Commit",
+      repoLabel,
+      safePath(url),
+      identifier.slice(0, 12),
+    );
   }
   if (section === "releases") {
     const release = parts[4] || identifier;
-    return descriptor("github", "GitHub", "release", "Release", repoLabel, safePath(url), release ? cleanLabel(release, "Release") : undefined);
+    return descriptor(
+      "github",
+      "GitHub",
+      "release",
+      "Release",
+      repoLabel,
+      safePath(url),
+      release ? cleanLabel(release, "Release") : undefined,
+    );
   }
   if (section === "actions") {
     return descriptor("github", "GitHub", "workflow", "Workflow run", repoLabel, safePath(url));
   }
   if (section === "discussions" && identifier) {
-    return descriptor("github", "GitHub", "discussion", "Discussion", repoLabel, safePath(url), `#${identifier}`);
+    return descriptor(
+      "github",
+      "GitHub",
+      "discussion",
+      "Discussion",
+      repoLabel,
+      safePath(url),
+      `#${identifier}`,
+    );
   }
   if (section === "blob") {
-    return descriptor("github", "GitHub", "file", "File", cleanLabel(parts[parts.length - 1] || repository, repository), safePath(url), repoLabel);
+    return descriptor(
+      "github",
+      "GitHub",
+      "file",
+      "File",
+      cleanLabel(parts[parts.length - 1] || repository, repository),
+      safePath(url),
+      repoLabel,
+    );
   }
   if (section === "tree") {
-    return descriptor("github", "GitHub", "folder", "Folder", cleanLabel(parts[parts.length - 1] || repository, repository), safePath(url), repoLabel);
+    return descriptor(
+      "github",
+      "GitHub",
+      "folder",
+      "Folder",
+      cleanLabel(parts[parts.length - 1] || repository, repository),
+      safePath(url),
+      repoLabel,
+    );
   }
   return descriptor("github", "GitHub", "repository", "Repository", repoLabel, safePath(url));
 }
@@ -173,25 +227,87 @@ function describeGitLab(url: URL): RichLinkDescriptor | null {
   const section = parts[separator + 1]?.toLowerCase();
   const identifier = parts[separator + 2];
   if (section === "merge_requests" && identifier) {
-    return descriptor("gitlab", "GitLab", "pull-request", "Merge request", projectLabel, safePath(url), `!${identifier}`);
+    return descriptor(
+      "gitlab",
+      "GitLab",
+      "pull-request",
+      "Merge request",
+      projectLabel,
+      safePath(url),
+      `!${identifier}`,
+    );
   }
   if (section === "issues" && identifier) {
-    return descriptor("gitlab", "GitLab", "issue", "Issue", projectLabel, safePath(url), `#${identifier}`);
+    return descriptor(
+      "gitlab",
+      "GitLab",
+      "issue",
+      "Issue",
+      projectLabel,
+      safePath(url),
+      `#${identifier}`,
+    );
   }
   if (section === "commit" && identifier) {
-    return descriptor("gitlab", "GitLab", "commit", "Commit", projectLabel, safePath(url), identifier.slice(0, 12));
+    return descriptor(
+      "gitlab",
+      "GitLab",
+      "commit",
+      "Commit",
+      projectLabel,
+      safePath(url),
+      identifier.slice(0, 12),
+    );
   }
   if (section === "pipelines") {
-    return descriptor("gitlab", "GitLab", "workflow", "Pipeline", projectLabel, safePath(url), identifier ? `#${identifier}` : undefined);
+    return descriptor(
+      "gitlab",
+      "GitLab",
+      "workflow",
+      "Pipeline",
+      projectLabel,
+      safePath(url),
+      identifier ? `#${identifier}` : undefined,
+    );
   }
   if (section === "releases") {
-    return descriptor("gitlab", "GitLab", "release", "Release", projectLabel, safePath(url), identifier ? cleanLabel(identifier, "Release") : undefined);
+    return descriptor(
+      "gitlab",
+      "GitLab",
+      "release",
+      "Release",
+      projectLabel,
+      safePath(url),
+      identifier ? cleanLabel(identifier, "Release") : undefined,
+    );
   }
   if (section === "blob") {
-    return descriptor("gitlab", "GitLab", "file", "File", cleanLabel(parts[parts.length - 1] || projectParts[projectParts.length - 1] || "File", "File"), safePath(url), projectLabel);
+    return descriptor(
+      "gitlab",
+      "GitLab",
+      "file",
+      "File",
+      cleanLabel(
+        parts[parts.length - 1] || projectParts[projectParts.length - 1] || "File",
+        "File",
+      ),
+      safePath(url),
+      projectLabel,
+    );
   }
   if (section === "tree") {
-    return descriptor("gitlab", "GitLab", "folder", "Folder", cleanLabel(parts[parts.length - 1] || projectParts[projectParts.length - 1] || "Folder", "Folder"), safePath(url), projectLabel);
+    return descriptor(
+      "gitlab",
+      "GitLab",
+      "folder",
+      "Folder",
+      cleanLabel(
+        parts[parts.length - 1] || projectParts[projectParts.length - 1] || "Folder",
+        "Folder",
+      ),
+      safePath(url),
+      projectLabel,
+    );
   }
   return descriptor("gitlab", "GitLab", "repository", "Project", projectLabel, safePath(url));
 }
@@ -201,13 +317,34 @@ function describeGoogle(url: URL): RichLinkDescriptor | null {
   if (exactHost(url, "docs.google.com")) {
     const kind = parts[0]?.toLowerCase();
     if (kind === "document") {
-      return descriptor("google-drive", "Google Drive", "document", "Google Doc", "Document", `${url.hostname}/document`);
+      return descriptor(
+        "google-drive",
+        "Google Drive",
+        "document",
+        "Google Doc",
+        "Document",
+        `${url.hostname}/document`,
+      );
     }
     if (kind === "spreadsheets") {
-      return descriptor("google-drive", "Google Drive", "spreadsheet", "Google Sheet", "Spreadsheet", `${url.hostname}/spreadsheets`);
+      return descriptor(
+        "google-drive",
+        "Google Drive",
+        "spreadsheet",
+        "Google Sheet",
+        "Spreadsheet",
+        `${url.hostname}/spreadsheets`,
+      );
     }
     if (kind === "presentation") {
-      return descriptor("google-drive", "Google Drive", "presentation", "Google Slides", "Presentation", `${url.hostname}/presentation`);
+      return descriptor(
+        "google-drive",
+        "Google Drive",
+        "presentation",
+        "Google Slides",
+        "Presentation",
+        `${url.hostname}/presentation`,
+      );
     }
   }
   if (exactHost(url, "drive.google.com")) {
@@ -225,7 +362,8 @@ function describeGoogle(url: URL): RichLinkDescriptor | null {
 }
 
 function describeSharePoint(url: URL): RichLinkDescriptor | null {
-  if (!hasHost(url, "sharepoint.com") && !exactHost(url, "onedrive.live.com", "1drv.ms")) return null;
+  if (!hasHost(url, "sharepoint.com") && !exactHost(url, "onedrive.live.com", "1drv.ms"))
+    return null;
   const parts = pathParts(url);
   const looksLikeFolder = parts.some((part) => {
     const lower = part.toLowerCase();
@@ -250,7 +388,8 @@ function describeBox(url: URL): RichLinkDescriptor | null {
   const folderIndex = parts.findIndex((part) => part.toLowerCase() === "folder");
   const fileIndex = parts.findIndex((part) => part.toLowerCase() === "file");
   const kind = folderIndex >= 0 ? "folder" : "file";
-  const label = kind === "folder" ? "Shared folder" : fileIndex >= 0 ? "Shared file" : "Shared item";
+  const label =
+    kind === "folder" ? "Shared folder" : fileIndex >= 0 ? "Shared file" : "Shared item";
   return descriptor("box", "Box", kind, kind === "folder" ? "Folder" : "File", label, url.hostname);
 }
 
@@ -275,7 +414,10 @@ function describeSlack(url: URL): RichLinkDescriptor | null {
   const parts = pathParts(url);
   const archiveIndex = parts.indexOf("archives");
   const channel = archiveIndex >= 0 ? parts[archiveIndex + 1] : undefined;
-  const workspace = url.hostname === "app.slack.com" ? "Slack" : cleanLabel(url.hostname.split(".")[0] || "Slack", "Slack");
+  const workspace =
+    url.hostname === "app.slack.com"
+      ? "Slack"
+      : cleanLabel(url.hostname.split(".")[0] || "Slack", "Slack");
   return descriptor(
     "slack",
     "Slack",
@@ -303,7 +445,16 @@ function describeTeams(url: URL): RichLinkDescriptor | null {
 }
 
 function describeOutlook(url: URL): RichLinkDescriptor | null {
-  if (!exactHost(url, "outlook.office.com", "outlook.office365.com", "outlook.live.com", "outlook.cloud.microsoft")) return null;
+  if (
+    !exactHost(
+      url,
+      "outlook.office.com",
+      "outlook.office365.com",
+      "outlook.live.com",
+      "outlook.cloud.microsoft",
+    )
+  )
+    return null;
   const path = url.pathname.toLowerCase();
   const isCalendar = path.includes("calendar");
   return descriptor(
@@ -478,7 +629,9 @@ function backtickCodeRanges(content: string, fencedRanges: TextRange[]): TextRan
 }
 
 function mergeTextRanges(ranges: TextRange[]): TextRange[] {
-  const sorted = [...ranges].sort((left, right) => left.start - right.start || left.end - right.end);
+  const sorted = [...ranges].sort(
+    (left, right) => left.start - right.start || left.end - right.end,
+  );
   const merged: TextRange[] = [];
   for (const range of sorted) {
     const previous = merged[merged.length - 1];
@@ -513,14 +666,26 @@ export function tokenizeWebLinks(content: string): WebLinkSegment[] {
     const urlText = trimWebUrlCandidate(candidate);
     if (!urlText || !isValidWebUrl(urlText)) continue;
     if (matchStart > cursor) {
-      segments.push({ kind: "text", text: content.slice(cursor, matchStart), start: cursor, end: matchStart });
+      segments.push({
+        kind: "text",
+        text: content.slice(cursor, matchStart),
+        start: cursor,
+        end: matchStart,
+      });
     }
     const linkEnd = matchStart + urlText.length;
     segments.push({ kind: "link", text: urlText, href: urlText, start: matchStart, end: linkEnd });
     cursor = linkEnd;
   }
   if (cursor < content.length) {
-    segments.push({ kind: "text", text: content.slice(cursor), start: cursor, end: content.length });
+    segments.push({
+      kind: "text",
+      text: content.slice(cursor),
+      start: cursor,
+      end: content.length,
+    });
   }
-  return segments.length ? segments : [{ kind: "text", text: content, start: 0, end: content.length }];
+  return segments.length
+    ? segments
+    : [{ kind: "text", text: content, start: 0, end: content.length }];
 }

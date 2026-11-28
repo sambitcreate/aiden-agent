@@ -62,7 +62,9 @@ test("minimize and maximize leave an open dialog and its unsaved input alone", a
   );
   // Radix starts listening for outside presses a tick after the dialog opens.
   await act(() => new Promise((resolve) => setTimeout(resolve, 10)));
-  fireEvent.change(screen.getByRole("textbox", { name: "Task name" }), { target: { value: "Weekly digest" } });
+  fireEvent.change(screen.getByRole("textbox", { name: "Task name" }), {
+    target: { value: "Weekly digest" },
+  });
 
   // The modal hides the rest of the app from assistive tech; the controls stay clickable.
   await click(screen.getByRole("button", { name: "Minimize", hidden: true }));
@@ -75,7 +77,10 @@ test("minimize and maximize leave an open dialog and its unsaved input alone", a
   );
   assert.deepEqual(closes, [], "no window action asked the dialog to close");
   assert.equal(screen.getByRole("dialog", { name: "Edit task" }).isConnected, true);
-  assert.equal((screen.getByRole("textbox", { name: "Task name" }) as HTMLInputElement).value, "Weekly digest");
+  assert.equal(
+    (screen.getByRole("textbox", { name: "Task name" }) as HTMLInputElement).value,
+    "Weekly digest",
+  );
 });
 
 test("a press on the app behind the dialog still dismisses it", async () => {

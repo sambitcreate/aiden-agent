@@ -1,4 +1,7 @@
-import { parseGenerationTimeline, type GenerationTimeline } from "../../renderer/shared/generation-timeline.js";
+import {
+  parseGenerationTimeline,
+  type GenerationTimeline,
+} from "../../renderer/shared/generation-timeline.js";
 
 const MAX_PREFIX_LENGTH = 32_768;
 const MAX_TIMELINE_BYTES = 128 * 1024;
@@ -18,7 +21,10 @@ export class RunTranscriptCheckpoint {
       const key = type === "text_delta" ? "text" : "reasoning";
       const prefix = this[key];
       if (prefix !== undefined && typeof payload.text === "string") {
-        this[key] = prefix.length + payload.text.length <= MAX_PREFIX_LENGTH ? prefix + payload.text : undefined;
+        this[key] =
+          prefix.length + payload.text.length <= MAX_PREFIX_LENGTH
+            ? prefix + payload.text
+            : undefined;
       }
     } else if (type === "timeline") {
       this.setTimeline(payload.timeline);
@@ -36,7 +42,10 @@ export class RunTranscriptCheckpoint {
 
   private setTimeline(value: unknown): void {
     const timeline = parseGenerationTimeline(value);
-    this.timeline = timeline && Buffer.byteLength(JSON.stringify(timeline)) <= MAX_TIMELINE_BYTES ? timeline : undefined;
+    this.timeline =
+      timeline && Buffer.byteLength(JSON.stringify(timeline)) <= MAX_TIMELINE_BYTES
+        ? timeline
+        : undefined;
   }
 
   payload(): Record<string, unknown> {

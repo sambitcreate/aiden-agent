@@ -1,5 +1,9 @@
 // Installs happy-dom and the fake IPC bridge; must stay the first import.
-import { emitBotTestNotification, installBotTestIpc, type BotTestIpcCall } from "../main/bots/test-dom";
+import {
+  emitBotTestNotification,
+  installBotTestIpc,
+  type BotTestIpcCall,
+} from "../main/bots/test-dom";
 import assert from "node:assert/strict";
 import { beforeEach, test } from "node:test";
 import { createElement } from "react";
@@ -44,7 +48,14 @@ const INPUT = {
 };
 
 function savedChat(workspaceId: string): Chat {
-  return { id: DRAFT_ID, workspaceId, title: "Fix the login bug", messages: [], createdAt: 1, updatedAt: 1 } as Chat;
+  return {
+    id: DRAFT_ID,
+    workspaceId,
+    title: "Fix the login bug",
+    messages: [],
+    createdAt: 1,
+    updatedAt: 1,
+  } as Chat;
 }
 
 const WORKTREE_INFO = {
@@ -67,7 +78,9 @@ beforeEach(() => {
       const reply = replies.shift();
       if (reply === undefined) throw new Error("No reply queued");
       const worktree = (input as { worktree?: unknown }).worktree;
-      return typeof reply === "function" ? (reply as (worktree: unknown) => unknown)(worktree) : reply;
+      return typeof reply === "function"
+        ? (reply as (worktree: unknown) => unknown)(worktree)
+        : reply;
     },
   });
 });
@@ -98,12 +111,25 @@ async function nextTick() {
 
 test("a successful send reports this draft's progress and returns the chat saved in the new worktree", async () => {
   let finish!: (value: unknown) => void;
-  replies.push(() => new Promise((resolve) => { finish = resolve; }));
+  replies.push(
+    () =>
+      new Promise((resolve) => {
+        finish = resolve;
+      }),
+  );
   const views: WorktreeSendView[] = [];
   const send = start(views);
   await nextTick();
-  emitBotTestNotification(PROGRESS, { draftId: DRAFT_ID, phase: "fetching", startPoint: "origin/main" });
-  emitBotTestNotification(PROGRESS, { draftId: "11111111-2222-4333-8444-555555555555", phase: "creating", branch: "other" });
+  emitBotTestNotification(PROGRESS, {
+    draftId: DRAFT_ID,
+    phase: "fetching",
+    startPoint: "origin/main",
+  });
+  emitBotTestNotification(PROGRESS, {
+    draftId: "11111111-2222-4333-8444-555555555555",
+    phase: "creating",
+    branch: "other",
+  });
   emitBotTestNotification(PROGRESS, {
     draftId: DRAFT_ID,
     phase: "creating",
@@ -115,7 +141,10 @@ test("a successful send reports this draft's progress and returns the chat saved
 
   assert.equal(outcome.chat.workspaceId, "ws-worktree");
   assert.equal(outcome.worktree?.branch, "aiden/fix-the-login-bug");
-  assert.deepEqual(sent().map((input) => input.worktree), [REQUEST]);
+  assert.deepEqual(
+    sent().map((input) => input.worktree),
+    [REQUEST],
+  );
   assert.deepEqual(
     views.map((view) => [view.status, view.progress.phase, view.progress.branch]),
     [
@@ -164,7 +193,12 @@ test("a first message Aiden Live sent keeps its By voice label while the worktre
 
 test("a failure waits for the user; Retry resends with the same idempotency key", async () => {
   replies.push(
-    { ok: false, code: "worktree-failed", reason: "Couldn't fetch origin.", detail: "fatal: unable to access" },
+    {
+      ok: false,
+      code: "worktree-failed",
+      reason: "Couldn't fetch origin.",
+      detail: "fatal: unable to access",
+    },
     { ok: true, chat: savedChat("ws-worktree"), worktree: { ...WORKTREE_INFO, reused: false } },
   );
   const views: WorktreeSendView[] = [];
@@ -221,7 +255,12 @@ test("settings that changed since an earlier attempt offer the worktree that att
       code: "worktree-settings-changed",
       reason: "This chat already has a worktree on aiden/first-try.",
       // That attempt asked for Auto, from develop, without fetching.
-      worktree: { workspaceId: "ws-worktree", branch: "aiden/first-try", baseRef: "develop", fromOrigin: false },
+      worktree: {
+        workspaceId: "ws-worktree",
+        branch: "aiden/first-try",
+        baseRef: "develop",
+        fromOrigin: false,
+      },
     },
     { ok: true, chat: savedChat("ws-worktree"), worktree: { ...WORKTREE_INFO, reused: true } },
   );
@@ -229,7 +268,10 @@ test("settings that changed since an earlier attempt offer the worktree that att
   const send = start(views);
   await nextTick();
   const failed = views[views.length - 1];
-  assert.equal(failed?.status === "failed" ? failed.existing?.branch : undefined, "aiden/first-try");
+  assert.equal(
+    failed?.status === "failed" ? failed.existing?.branch : undefined,
+    "aiden/first-try",
+  );
   send.decide("use-existing");
   await send.result;
   const [, second] = sent();
@@ -252,7 +294,9 @@ test("a failure stays with its draft until answered, even with no view open", as
     { ok: true, chat: savedChat("ws-worktree"), worktree: WORKTREE_INFO },
   );
   let changes = 0;
-  const unsubscribe = subscribeActiveWorktreeSends(() => { changes += 1; });
+  const unsubscribe = subscribeActiveWorktreeSends(() => {
+    changes += 1;
+  });
   // Nothing renders the send: the user left the draft while it ran.
   const send = startWorktreeFirstSend({
     api: {
@@ -274,7 +318,11 @@ test("a failure stays with its draft until answered, even with no view open", as
   returned!.decide("retry");
   const outcome = await send.result;
   assert.equal(outcome.chat.workspaceId, "ws-worktree");
-  assert.equal(activeWorktreeSend(DRAFT_ID)?.view.status, "running", "kept until the caller releases it");
+  assert.equal(
+    activeWorktreeSend(DRAFT_ID)?.view.status,
+    "running",
+    "kept until the caller releases it",
+  );
   send.release();
   assert.equal(activeWorktreeSend(DRAFT_ID), undefined);
   unsubscribe();
@@ -284,13 +332,20 @@ test("two drafts' worktree sends never answer or show each other's state", async
   let finishOther!: (value: unknown) => void;
   replies.push(
     { ok: false, code: "worktree-failed", reason: "First draft failed." },
-    () => new Promise((resolve) => { finishOther = resolve; }),
+    () =>
+      new Promise((resolve) => {
+        finishOther = resolve;
+      }),
   );
   const first = start([], DRAFT_ID);
   await nextTick();
   const second = start([], OTHER_DRAFT);
   await nextTick();
-  emitBotTestNotification(PROGRESS, { draftId: OTHER_DRAFT, phase: "creating", branch: "aiden/other" });
+  emitBotTestNotification(PROGRESS, {
+    draftId: OTHER_DRAFT,
+    phase: "creating",
+    branch: "aiden/other",
+  });
 
   assert.equal(activeWorktreeSend(DRAFT_ID)?.view.status, "failed");
   assert.equal(activeWorktreeSend(OTHER_DRAFT)?.view.status, "running");
@@ -317,7 +372,12 @@ test("running in this checkout after a worktree was made reports the worktree as
       ok: false,
       code: "worktree-settings-changed",
       reason: "This draft already created worktree aiden/first-try from main.",
-      worktree: { workspaceId: "ws-worktree", branch: "aiden/first-try", baseRef: "main", fromOrigin: false },
+      worktree: {
+        workspaceId: "ws-worktree",
+        branch: "aiden/first-try",
+        baseRef: "main",
+        fromOrigin: false,
+      },
     },
     savedChat("ws-repo"),
     () => new Promise(() => undefined),
@@ -330,13 +390,14 @@ test("running in this checkout after a worktree was made reports the worktree as
 
   // A worktree that reported ready before the chat failed to save is kept too.
   replies.length = 0;
-  replies.push(
-    () => {
-      emitBotTestNotification(PROGRESS, { draftId: OTHER_DRAFT, phase: "ready", branch: "aiden/made-it" });
-      return { ok: false, code: "worktree-failed", reason: "Aiden couldn't save the chat." };
-    },
-    savedChat("ws-repo"),
-  );
+  replies.push(() => {
+    emitBotTestNotification(PROGRESS, {
+      draftId: OTHER_DRAFT,
+      phase: "ready",
+      branch: "aiden/made-it",
+    });
+    return { ok: false, code: "worktree-failed", reason: "Aiden couldn't save the chat." };
+  }, savedChat("ws-repo"));
   const saved = start([], OTHER_DRAFT);
   await nextTick();
   saved.decide("checkout");
@@ -391,12 +452,23 @@ test("a continued send's reply starts in the view now showing the chat, once, an
 test("a /visualize turn continued from another view still asks for a visual", () => {
   const received: ContinuedWorktreeTurn[] = [];
   const unregister = registerWorktreeSendContinuation(DRAFT_ID, (turn) => received.push(turn));
-  continueWorktreeSendInView(DRAFT_ID, { turnId: "turn-v", workspaceId: "ws-repo", visualize: true });
-  continueWorktreeSendInView(DRAFT_ID, { turnId: "turn-plain", workspaceId: "ws-repo", visualize: false });
+  continueWorktreeSendInView(DRAFT_ID, {
+    turnId: "turn-v",
+    workspaceId: "ws-repo",
+    visualize: true,
+  });
+  continueWorktreeSendInView(DRAFT_ID, {
+    turnId: "turn-plain",
+    workspaceId: "ws-repo",
+    visualize: false,
+  });
   unregister();
   assert.deepEqual(
     received.map((turn) => [turn.turnId, turn.visualize]),
-    [["turn-v", true], ["turn-plain", false]],
+    [
+      ["turn-v", true],
+      ["turn-plain", false],
+    ],
   );
 });
 
@@ -439,11 +511,17 @@ test("seedDraftWorktreeFromGitInfo seeds baseRef on frame 0 and respects unborn/
     { baseRef: "main", fromOrigin: false },
   );
   assert.equal(
-    seedDraftWorktreeFromGitInfo({ gitMode: "checkout" }, { isRepo: true, unborn: true, branch: "main" }),
+    seedDraftWorktreeFromGitInfo(
+      { gitMode: "checkout" },
+      { isRepo: true, unborn: true, branch: "main" },
+    ),
     undefined,
   );
   assert.equal(
-    seedDraftWorktreeFromGitInfo({ gitMode: "checkout" }, { isRepo: true, detached: true, branch: "HEAD" }),
+    seedDraftWorktreeFromGitInfo(
+      { gitMode: "checkout" },
+      { isRepo: true, detached: true, branch: "HEAD" },
+    ),
     undefined,
   );
 

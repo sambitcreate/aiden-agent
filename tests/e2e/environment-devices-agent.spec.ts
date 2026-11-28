@@ -55,7 +55,13 @@ writeFileSync(
 );
 chmodSync(path.join(fakeBin, "xcrun"), 0o755);
 
-async function seedTool(baseDir: string, name: string, version: string, entry: string[], fake: string) {
+async function seedTool(
+  baseDir: string,
+  name: string,
+  version: string,
+  entry: string[],
+  fake: string,
+) {
   const installDir = path.join(baseDir, "tools", name, version);
   const entryPath = path.join(installDir, "node_modules", name, ...entry);
   await mkdir(path.dirname(entryPath), { recursive: true });
@@ -66,8 +72,20 @@ async function seedTool(baseDir: string, name: string, version: string, entry: s
 
 async function seedInstalledFakes(userDataDir: string): Promise<void> {
   const baseDir = path.join(userDataDir, "devices");
-  await seedTool(baseDir, "expo-device-hub", HUB_VERSION, ["dist", "server", "cli.mjs"], "device-hub-fake.mjs");
-  await seedTool(baseDir, "agent-device", AGENT_VERSION, ["bin", "agent-device.mjs"], "agent-device-fake.mjs");
+  await seedTool(
+    baseDir,
+    "expo-device-hub",
+    HUB_VERSION,
+    ["dist", "server", "cli.mjs"],
+    "device-hub-fake.mjs",
+  );
+  await seedTool(
+    baseDir,
+    "agent-device",
+    AGENT_VERSION,
+    ["bin", "agent-device.mjs"],
+    "agent-device-fake.mjs",
+  );
   await writeFile(
     path.join(baseDir, "consent.json"),
     `${JSON.stringify({ version: 1, streaming: true, agentAccess: false })}\n`,
@@ -119,7 +137,8 @@ test.describe("Simulator agent tools", () => {
       // The reply can fork once it has settled into its saved message.
       await expect(page.getByRole("button", { name: "Fork from here" })).toHaveCount(1);
       await expect(page.getByText(E2E_ASSISTANT_RESPONSE, { exact: true })).toHaveCount(1);
-      const agentRequests = () => lmStudio.requests.filter(({ body }) => toolNamesIn(body).length > 0);
+      const agentRequests = () =>
+        lmStudio.requests.filter(({ body }) => toolNamesIn(body).length > 0);
       expect(agentRequests().length).toBeGreaterThan(0);
       for (const { body } of agentRequests()) {
         expect(toolNamesIn(body).filter((name) => name.startsWith("device_"))).toEqual([]);
@@ -145,8 +164,20 @@ test.describe("Simulator agent tools", () => {
         { name: "device_list", arguments: {} },
         { name: "device_open", arguments: {} },
         { name: "device_screenshot", arguments: {} },
-        { name: "run_command", arguments: { command: "command -v agent-device && agent-device --version", description: "Checks that agent-device is installed" } },
-        { name: "run_command", arguments: { command: "agent-device snapshot -i", description: "Takes a snapshot of the device screen" } },
+        {
+          name: "run_command",
+          arguments: {
+            command: "command -v agent-device && agent-device --version",
+            description: "Checks that agent-device is installed",
+          },
+        },
+        {
+          name: "run_command",
+          arguments: {
+            command: "agent-device snapshot -i",
+            description: "Takes a snapshot of the device screen",
+          },
+        },
       ];
       const scenario = lmStudio.enqueueToolScenario!({
         prompt,
@@ -162,7 +193,9 @@ test.describe("Simulator agent tools", () => {
       expect(scenario.completed).toBe(true);
       expect(scenario.issuedToolNames).toEqual(calls.map(({ name }) => name));
 
-      const [listed, opened, , located, refused] = scenario.results.map(({ content }) => JSON.stringify(content));
+      const [listed, opened, , located, refused] = scenario.results.map(({ content }) =>
+        JSON.stringify(content),
+      );
       expect(listed).toContain(DEVICE_UDID);
       expect(opened).toContain(DEVICE_UDID);
       expect(opened).toContain("--config");
@@ -174,7 +207,9 @@ test.describe("Simulator agent tools", () => {
       expect(located).toContain("aiden e2e fake");
       expect(refused).toContain("Call device_open first");
       // The screenshot reached the model as an image.
-      expect(JSON.stringify(lmStudio.requests.map(({ body }) => body))).toContain("data:image/png;base64,iVBORw0KGgo");
+      expect(JSON.stringify(lmStudio.requests.map(({ body }) => body))).toContain(
+        "data:image/png;base64,iVBORw0KGgo",
+      );
 
       // device_open floated this chat's live device over the transcript.
       const player = page.locator("[data-device-mini-player]");
@@ -185,7 +220,10 @@ test.describe("Simulator agent tools", () => {
       await player.getByRole("button", { name: "Dock device in its tab" }).click();
       await expect(player).toHaveCount(0);
       await expect(tools).toBeVisible();
-      await expect(tools.getByRole("tab", { name: DEVICE_NAME, exact: true })).toHaveAttribute("aria-selected", "true");
+      await expect(tools.getByRole("tab", { name: DEVICE_NAME, exact: true })).toHaveAttribute(
+        "aria-selected",
+        "true",
+      );
       await expect(panel.locator(".device-viewer-status")).toHaveText("Live");
       // The agent daemon was started, and the launcher kept its token out of the CLI's env.
       const agentCalls = (await readFile(agentLog, "utf8"))
@@ -212,12 +250,16 @@ test.describe("Simulator agent tools", () => {
       await page.getByRole("button", { name: "Send message" }).click();
       const allowOnce = page.getByRole("button", { name: "Allow once", exact: true });
       await expect(allowOnce).toBeVisible({ timeout: 45_000 });
-      await expect(page.getByText(/Close simulator in the Simulator tab\. It keeps running\./u)).toBeVisible();
+      await expect(
+        page.getByText(/Close simulator in the Simulator tab\. It keeps running\./u),
+      ).toBeVisible();
       expect(closing.completed).toBe(false);
       await allowOnce.click();
-      await expect(page.getByText("The simulator is closed.", { exact: true }).first()).toBeVisible({
-        timeout: 45_000,
-      });
+      await expect(page.getByText("The simulator is closed.", { exact: true }).first()).toBeVisible(
+        {
+          timeout: 45_000,
+        },
+      );
       expect(closing.error).toBeUndefined();
 
       // Revoking agent access removes the tools from the next generation.
@@ -230,12 +272,20 @@ test.describe("Simulator agent tools", () => {
       await expect(agentAccess).toHaveAttribute("aria-checked", "false");
       await page.getByRole("button", { name: "Close environment panel", exact: true }).click();
       const afterPrompt = "Simulator agent scenario: anything after revoke.";
-      const after = lmStudio.enqueueToolScenario!({ prompt: afterPrompt, calls: [], finalText: "No simulator tools now." });
+      const after = lmStudio.enqueueToolScenario!({
+        prompt: afterPrompt,
+        calls: [],
+        finalText: "No simulator tools now.",
+      });
       await page.locator("textarea").first().fill(afterPrompt);
       await page.getByRole("button", { name: "Send message" }).click();
-      await expect(page.getByText("No simulator tools now.", { exact: true }).first()).toBeVisible({ timeout: 45_000 });
+      await expect(page.getByText("No simulator tools now.", { exact: true }).first()).toBeVisible({
+        timeout: 45_000,
+      });
       expect(after.completed).toBe(true);
-      const revoked = agentRequests().filter(({ body }) => JSON.stringify(body).includes(afterPrompt));
+      const revoked = agentRequests().filter(({ body }) =>
+        JSON.stringify(body).includes(afterPrompt),
+      );
       expect(revoked.length).toBeGreaterThan(0);
       for (const { body } of revoked) {
         expect(toolNamesIn(body).filter((name) => name.startsWith("device_"))).toEqual([]);

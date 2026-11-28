@@ -21,11 +21,13 @@ test("monitor requires exact identifiers and an explicit profile", () => {
     /explicit control-free --profile/u,
   );
   assert.throws(
-    () => parseMonitorOptions(["--mode", "review"], { ...baseEnvironment, AIDEN_ASC_APP_ID: "Aiden" }),
+    () =>
+      parseMonitorOptions(["--mode", "review"], { ...baseEnvironment, AIDEN_ASC_APP_ID: "Aiden" }),
     /exact numeric --app-id/u,
   );
   assert.throws(
-    () => parseMonitorOptions(["--mode", "testflight"], { ...baseEnvironment, AIDEN_ASC_BUILD_ID: "" }),
+    () =>
+      parseMonitorOptions(["--mode", "testflight"], { ...baseEnvironment, AIDEN_ASC_BUILD_ID: "" }),
     /exact --build-id/u,
   );
   assert.throws(
@@ -38,24 +40,23 @@ test("processing is scoped to the exact build and every command uses strict name
   const options = parseMonitorOptions(["--mode", "processing"], baseEnvironment);
   const commands = buildAscCommands(options);
 
-  assert.deepEqual(commands, [[
-    "--strict-auth",
-    "--profile",
-    "Aiden Release ASC",
-    "builds",
-    "info",
-    "--build-id",
-    "9876543210",
-    "--output",
-    "json",
-  ]]);
+  assert.deepEqual(commands, [
+    [
+      "--strict-auth",
+      "--profile",
+      "Aiden Release ASC",
+      "builds",
+      "info",
+      "--build-id",
+      "9876543210",
+      "--output",
+      "json",
+    ],
+  ]);
 });
 
 test("review status is read-only and version-scoped when supplied", () => {
-  const options = parseMonitorOptions(
-    ["--mode", "review", "--version", "1.5"],
-    baseEnvironment,
-  );
+  const options = parseMonitorOptions(["--mode", "review", "--version", "1.5"], baseEnvironment);
   const command = buildAscCommands(options)[0];
 
   assert.deepEqual(command.slice(0, 6), [
@@ -69,7 +70,9 @@ test("review status is read-only and version-scoped when supplied", () => {
   assert.ok(command.includes("1234567890"));
   assert.ok(command.includes("IOS"));
   assert.ok(command.includes("1.5"));
-  assert.ok(!command.some((argument) => /submit|create|update|delete|publish|upload/iu.test(argument)));
+  assert.ok(
+    !command.some((argument) => /submit|create|update|delete|publish|upload/iu.test(argument)),
+  );
 });
 
 test("TestFlight summaries omit tester identity, feedback text, screenshots, and crash content", () => {

@@ -9,11 +9,7 @@ import { parseChatInputSource, type ChatInputSourceV1 } from "./chat-input-sourc
 
 export type ChatRunInputMode = "steer" | "queue";
 
-export type ChatRunInputRejectionReason =
-  | "run_not_active"
-  | "cancelled"
-  | "capacity"
-  | "invalid";
+export type ChatRunInputRejectionReason = "run_not_active" | "cancelled" | "capacity" | "invalid";
 
 export interface ChatRunInputAdmissionResult {
   admitted: boolean;

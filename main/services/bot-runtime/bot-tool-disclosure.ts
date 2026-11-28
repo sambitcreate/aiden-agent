@@ -15,7 +15,9 @@ export const BOT_BROWSER_GATEWAY_TOOL = "browser";
 
 /** Whether `messages` hold a successful result of the gateway tool `gateway`. */
 function disclosed(messages: readonly Message[], gateway: string): boolean {
-  return messages.some((message) => message.role === "toolResult" && message.toolName === gateway && !message.isError);
+  return messages.some(
+    (message) => message.role === "toolResult" && message.toolName === gateway && !message.isError,
+  );
 }
 
 /** The tools this request must not declare yet: `browser_*` until `browser` has answered. */

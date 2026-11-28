@@ -41,14 +41,21 @@ test("hosted presets keep credentials on their exact catalog origin", () => {
   for (const preset of availableHttp.filter((entry) => !entry.local)) {
     const origin = new URL(preset.url).origin;
     // Provider-owned paths on the same origin are allowed.
-    assert.equal(serverFromPreset(preset, `${origin}/mcp/session/abc`).url, `${origin}/mcp/session/abc`);
+    assert.equal(
+      serverFromPreset(preset, `${origin}/mcp/session/abc`).url,
+      `${origin}/mcp/session/abc`,
+    );
     for (const elsewhere of [
       `https://attacker.invalid/mcp`,
       `${origin.replace("https:", "http:")}/mcp`,
       `${origin}.evil.test/mcp`,
       origin.replace("https://", "https://user:pass@") + "/mcp",
     ]) {
-      assert.throws(() => serverFromPreset(preset, elsewhere), /official secure server/u, `${preset.id} rejects ${elsewhere}`);
+      assert.throws(
+        () => serverFromPreset(preset, elsewhere),
+        /official secure server/u,
+        `${preset.id} rejects ${elsewhere}`,
+      );
     }
   }
   // A blank address falls back to the catalog default.
@@ -77,10 +84,20 @@ test("Figma Desktop connects without a credential and only to its loopback origi
     "http://192.168.1.4:3845/mcp",
     "https://mcp.figma.com/mcp",
   ]) {
-    assert.throws(() => serverFromPreset(desktop, elsewhere), /only connects to http:\/\/127\.0\.0\.1:3845/u, elsewhere);
+    assert.throws(
+      () => serverFromPreset(desktop, elsewhere),
+      /only connects to http:\/\/127\.0\.0\.1:3845/u,
+      elsewhere,
+    );
   }
-  assert.throws(() => assertMcpPresetServer({ ...server, oauth: true }), /invalid authentication mode/u);
-  assert.throws(() => assertMcpPresetServer({ ...server, headers: { Authorization: "Bearer x" } }), /does not take headers/u);
+  assert.throws(
+    () => assertMcpPresetServer({ ...server, oauth: true }),
+    /invalid authentication mode/u,
+  );
+  assert.throws(
+    () => assertMcpPresetServer({ ...server, headers: { Authorization: "Bearer x" } }),
+    /does not take headers/u,
+  );
 });
 
 test("iMCP runs only the server inside its app in an Applications folder, with nothing added, and only on a Mac", () => {
@@ -111,16 +128,42 @@ test("iMCP runs only the server inside its app in an Applications folder, with n
     "/Applications/iMCP.app/Contents/MacOS/../../../../bin/sh",
     "/tmp/imcp-server",
   ]) {
-    assert.throws(() => assertMcpPresetServer({ ...valid, command }, mac), /only runs the server inside iMCP\.app/u, command);
+    assert.throws(
+      () => assertMcpPresetServer({ ...valid, command }, mac),
+      /only runs the server inside iMCP\.app/u,
+      command,
+    );
   }
-  assert.throws(() => assertMcpPresetServer({ ...valid, args: ["--evil"] }, mac), /no arguments or environment/u);
-  assert.throws(() => assertMcpPresetServer({ ...valid, env: { NODE_OPTIONS: "--require x" } }, mac), /no arguments or environment/u);
-  assert.throws(() => assertMcpPresetServer({ ...valid, transport: "http", url: "https://example.com/mcp" }, mac), /own app on this Mac/u);
-  assert.throws(() => assertMcpPresetServer({ ...valid, oauth: true }, mac), /own app on this Mac/u);
-  assert.throws(() => assertMcpPresetServer({ ...valid, headers: { Authorization: "x" } }, mac), /own app on this Mac/u);
-  assert.throws(() => assertMcpPresetServer({ ...valid, id: "preset-notion" }, mac), /invalid identity/u);
+  assert.throws(
+    () => assertMcpPresetServer({ ...valid, args: ["--evil"] }, mac),
+    /no arguments or environment/u,
+  );
+  assert.throws(
+    () => assertMcpPresetServer({ ...valid, env: { NODE_OPTIONS: "--require x" } }, mac),
+    /no arguments or environment/u,
+  );
+  assert.throws(
+    () =>
+      assertMcpPresetServer({ ...valid, transport: "http", url: "https://example.com/mcp" }, mac),
+    /own app on this Mac/u,
+  );
+  assert.throws(
+    () => assertMcpPresetServer({ ...valid, oauth: true }, mac),
+    /own app on this Mac/u,
+  );
+  assert.throws(
+    () => assertMcpPresetServer({ ...valid, headers: { Authorization: "x" } }, mac),
+    /own app on this Mac/u,
+  );
+  assert.throws(
+    () => assertMcpPresetServer({ ...valid, id: "preset-notion" }, mac),
+    /invalid identity/u,
+  );
   // A record carried to Linux never runs.
-  assert.throws(() => assertMcpPresetServer(valid, { platform: "linux", homedir: "/Users/me" }), /works only on a Mac/u);
+  assert.throws(
+    () => assertMcpPresetServer(valid, { platform: "linux", homedir: "/Users/me" }),
+    /works only on a Mac/u,
+  );
 });
 
 test("hosted Figma is refused with its reason wherever main validates a preset", () => {
@@ -144,21 +187,48 @@ test("preset identity, transport and authentication mode are bound together", ()
   const composio = getMcpPreset("composio")!;
   const valid = serverFromPreset(composio, "https://connect.composio.dev/mcp/session/abc");
   assert.equal(
-    assertMcpPresetServer({ id: "custom", name: "Custom", transport: "http", url: "https://example.com/mcp", enabled: true }),
+    assertMcpPresetServer({
+      id: "custom",
+      name: "Custom",
+      transport: "http",
+      url: "https://example.com/mcp",
+      enabled: true,
+    }),
     undefined,
   );
-  assert.throws(() => assertMcpPresetServer({ ...valid, id: "preset-notion" }), /invalid identity/u);
-  assert.throws(() => assertMcpPresetServer({ ...valid, presetId: undefined }), /invalid identity/u);
-  assert.throws(() => assertMcpPresetServer({ ...valid, presetId: "unknown" }), /invalid identity/u);
-  assert.throws(() => assertMcpPresetServer({ ...valid, transport: "stdio" }), /own HTTP connection/u);
-  assert.throws(() => assertMcpPresetServer({ ...valid, oauth: true }), /invalid authentication mode/u);
+  assert.throws(
+    () => assertMcpPresetServer({ ...valid, id: "preset-notion" }),
+    /invalid identity/u,
+  );
+  assert.throws(
+    () => assertMcpPresetServer({ ...valid, presetId: undefined }),
+    /invalid identity/u,
+  );
+  assert.throws(
+    () => assertMcpPresetServer({ ...valid, presetId: "unknown" }),
+    /invalid identity/u,
+  );
+  assert.throws(
+    () => assertMcpPresetServer({ ...valid, transport: "stdio" }),
+    /own HTTP connection/u,
+  );
+  assert.throws(
+    () => assertMcpPresetServer({ ...valid, oauth: true }),
+    /invalid authentication mode/u,
+  );
   const notion = serverFromPreset(getMcpPreset("notion")!);
-  assert.throws(() => assertMcpPresetServer({ ...notion, oauth: undefined }), /invalid authentication mode/u);
+  assert.throws(
+    () => assertMcpPresetServer({ ...notion, oauth: undefined }),
+    /invalid authentication mode/u,
+  );
 });
 
 test("every server registers as Aiden Agent and presets cannot carry a pre-registered client", () => {
   for (const preset of MCP_PRESETS) {
-    assert.equal(mcpOAuthClientNameForServer({ id: presetServerId(preset.id), presetId: preset.id }), "Aiden Agent");
+    assert.equal(
+      mcpOAuthClientNameForServer({ id: presetServerId(preset.id), presetId: preset.id }),
+      "Aiden Agent",
+    );
   }
   assert.equal(mcpOAuthClientNameForServer({ id: "custom" }), "Aiden Agent");
   const notion = serverFromPreset(getMcpPreset("notion")!);

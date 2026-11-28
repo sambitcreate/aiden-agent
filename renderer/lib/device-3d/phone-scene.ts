@@ -41,10 +41,15 @@ function roundedPath(width: number, height: number, radius: number, path = new S
 }
 
 /** Display orientation is independent of orbit. Texture coordinates stay in raw framebuffer space. */
-export function phoneDisplayLayout(screen: DeviceScreenSize | null, rawWidth: number, rawHeight: number) {
+export function phoneDisplayLayout(
+  screen: DeviceScreenSize | null,
+  rawWidth: number,
+  rawHeight: number,
+) {
   const width = rawWidth || screen?.width || 900;
   const height = rawHeight || screen?.height || 1950;
-  const landscape = screen?.orientation === "landscape_left" || screen?.orientation === "landscape_right";
+  const landscape =
+    screen?.orientation === "landscape_left" || screen?.orientation === "landscape_right";
   const rotation =
     screen?.orientation === "landscape_left"
       ? -Math.PI / 2
@@ -78,9 +83,23 @@ export function createPhoneScene(
   const height = SCREEN_HEIGHT + profile.bezel * 2;
   const backZ = 0.01 - profile.depth;
   const metal = new MeshStandardMaterial({ color: 0xb5bcc7, metalness: 0.88, roughness: 0.27 });
-  const glass = new MeshPhysicalMaterial({ color: 0x141820, metalness: 0.15, roughness: 0.2, clearcoat: 1 });
-  const backMaterial = new MeshStandardMaterial({ color: profile.backColor, metalness: 0.45, roughness: 0.32 });
-  const lensMaterial = new MeshPhysicalMaterial({ color: 0x071326, metalness: 0.6, roughness: 0.12, clearcoat: 1 });
+  const glass = new MeshPhysicalMaterial({
+    color: 0x141820,
+    metalness: 0.15,
+    roughness: 0.2,
+    clearcoat: 1,
+  });
+  const backMaterial = new MeshStandardMaterial({
+    color: profile.backColor,
+    metalness: 0.45,
+    roughness: 0.32,
+  });
+  const lensMaterial = new MeshPhysicalMaterial({
+    color: 0x071326,
+    metalness: 0.6,
+    roughness: 0.12,
+    clearcoat: 1,
+  });
   const flashMaterial = new MeshBasicMaterial({ color: 0xf2ead6 });
   const materials = [metal, glass, backMaterial, lensMaterial, flashMaterial];
 
@@ -113,7 +132,10 @@ export function createPhoneScene(
   back.position.z = backZ;
   orientation.add(back);
 
-  const screenGeometry = new ShapeGeometry(roundedPath(screenWidth, SCREEN_HEIGHT, profile.screenRadius), 20);
+  const screenGeometry = new ShapeGeometry(
+    roundedPath(screenWidth, SCREEN_HEIGHT, profile.screenRadius),
+    20,
+  );
   updateDisplayUv(screenGeometry, screenWidth, SCREEN_HEIGHT, layout);
   const screenMaterial = new MeshBasicMaterial({ map: texture, toneMapped: false });
   const display = new Mesh(screenGeometry, screenMaterial);
@@ -123,7 +145,11 @@ export function createPhoneScene(
 
   for (const { edge, offset, length } of profile.buttons) {
     const button = new Mesh(
-      new BoxGeometry(edge === "top" ? length : 0.026, edge === "top" ? 0.026 : length, profile.depth * 0.65),
+      new BoxGeometry(
+        edge === "top" ? length : 0.026,
+        edge === "top" ? 0.026 : length,
+        profile.depth * 0.65,
+      ),
       metal,
     );
     button.position.set(
@@ -136,7 +162,11 @@ export function createPhoneScene(
   // Rear components share a surface-relative coordinate system, with outward positive Z.
   const rearCamera = new Group();
   rearCamera.name = "rear-camera";
-  rearCamera.position.set(width / 2 - profile.camera.insetX, height / 2 - profile.camera.insetY, back.position.z + 0.001);
+  rearCamera.position.set(
+    width / 2 - profile.camera.insetX,
+    height / 2 - profile.camera.insetY,
+    back.position.z + 0.001,
+  );
   rearCamera.rotation.y = Math.PI;
   orientation.add(rearCamera);
   const plateFront = 0.025 + 0.007;
@@ -148,7 +178,13 @@ export function createPhoneScene(
         profile.camera.height,
         Math.min(profile.camera.width, profile.camera.height) / 4,
       ),
-      { depth: 0.025, bevelEnabled: true, bevelSize: 0.009, bevelThickness: 0.007, bevelSegments: 2 },
+      {
+        depth: 0.025,
+        bevelEnabled: true,
+        bevelSize: 0.009,
+        bevelThickness: 0.007,
+        bevelSegments: 2,
+      },
     ),
     backMaterial,
   );
@@ -171,7 +207,13 @@ export function createPhoneScene(
   }
 
   let activeLayout = layout;
-  const screenPoint = createDisplayProjection(display, orientation, screenWidth, SCREEN_HEIGHT, () => activeLayout);
+  const screenPoint = createDisplayProjection(
+    display,
+    orientation,
+    screenWidth,
+    SCREEN_HEIGHT,
+    () => activeLayout,
+  );
   return {
     root,
     orientation,
@@ -194,10 +236,18 @@ export function createPhoneScene(
 }
 
 /** Canonical portrait geometry maps to raw framebuffer coordinates in every OS orientation. */
-export function updateDisplayUv(geometry: BufferGeometry, width: number, height: number, layout: PhoneDisplayLayout) {
+export function updateDisplayUv(
+  geometry: BufferGeometry,
+  width: number,
+  height: number,
+  layout: PhoneDisplayLayout,
+) {
   const position = geometry.getAttribute("position");
   if (!geometry.hasAttribute("uv")) {
-    geometry.setAttribute("uv", new Float32BufferAttribute(new Float32Array(position.count * 2), 2));
+    geometry.setAttribute(
+      "uv",
+      new Float32BufferAttribute(new Float32Array(position.count * 2), 2),
+    );
   }
   const uv = geometry.getAttribute("uv");
   for (let i = 0; i < position.count; i++) {
@@ -226,7 +276,12 @@ export function createDisplayProjection(
   display.geometry.computeBoundingBox();
   const z = display.position.z + (display.geometry.boundingBox?.max.z ?? 0);
   const plane = new Plane(new Vector3(0, 0, 1), -z);
-  return (x: number, y: number, camera: Camera, captured = false): { x: number; y: number } | null => {
+  return (
+    x: number,
+    y: number,
+    camera: Camera,
+    captured = false,
+  ): { x: number; y: number } | null => {
     orientation.updateWorldMatrix(true, true);
     camera.updateMatrixWorld(true);
     pointer.set(x * 2 - 1, 1 - y * 2);

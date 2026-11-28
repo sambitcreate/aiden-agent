@@ -6,15 +6,27 @@
 import { createHash } from "node:crypto";
 import type { McpLiveStatus, McpToolSummary } from "../../renderer/shared/mcp-status.js";
 
-export type { McpLiveState, McpLiveStatus, McpToolSummary } from "../../renderer/shared/mcp-status.js";
+export type {
+  McpLiveState,
+  McpLiveStatus,
+  McpToolSummary,
+} from "../../renderer/shared/mcp-status.js";
 
 /** Bounds of the per-server tool list kept for Settings (never pushed). */
-export const MCP_TOOL_SUMMARY_LIMITS = Object.freeze({ count: 512, nameChars: 256, titleChars: 128 });
+export const MCP_TOOL_SUMMARY_LIMITS = Object.freeze({
+  count: 512,
+  nameChars: 256,
+  titleChars: 128,
+});
 
 function toolSummaries(tools: readonly { name: string; title?: string }[]): McpToolSummary[] {
   return tools.slice(0, MCP_TOOL_SUMMARY_LIMITS.count).flatMap(({ name, title }) => {
-    if (typeof name !== "string" || !name || name.length > MCP_TOOL_SUMMARY_LIMITS.nameChars) return [];
-    const shown = typeof title === "string" ? title.replace(/\s+/gu, " ").trim().slice(0, MCP_TOOL_SUMMARY_LIMITS.titleChars) : "";
+    if (typeof name !== "string" || !name || name.length > MCP_TOOL_SUMMARY_LIMITS.nameChars)
+      return [];
+    const shown =
+      typeof title === "string"
+        ? title.replace(/\s+/gu, " ").trim().slice(0, MCP_TOOL_SUMMARY_LIMITS.titleChars)
+        : "";
     return [{ name, ...(shown ? { title: shown } : {}) }];
   });
 }
@@ -35,7 +47,9 @@ function toolsRevision(tools: readonly McpToolSummary[]): string {
 }
 
 /** The last known inventory fields, carried across connection-state changes. */
-function inventoryFields(previous: McpLiveStatus | undefined): Pick<McpLiveStatus, "toolCount" | "toolsRevision" | "resources"> {
+function inventoryFields(
+  previous: McpLiveStatus | undefined,
+): Pick<McpLiveStatus, "toolCount" | "toolsRevision" | "resources"> {
   return {
     ...(previous?.toolCount === undefined ? {} : { toolCount: previous.toolCount }),
     ...(previous?.toolsRevision === undefined ? {} : { toolsRevision: previous.toolsRevision }),
@@ -96,7 +110,14 @@ export class McpLiveStatusRegistry {
     });
   }
 
-  inventory(serverId: string, inventory: { toolCount: number; resources: boolean; tools?: readonly { name: string; title?: string }[] }): void {
+  inventory(
+    serverId: string,
+    inventory: {
+      toolCount: number;
+      resources: boolean;
+      tools?: readonly { name: string; title?: string }[];
+    },
+  ): void {
     if (inventory.tools) this.toolLists.set(serverId, toolSummaries(inventory.tools));
     const tools = this.toolLists.get(serverId);
     this.publish({
@@ -191,7 +212,11 @@ export const mcpLiveStatus = new McpLiveStatusRegistry();
 /** Connection-cache observer for the desktop manager's long-lived clients. */
 export function recordMcpConnectionLifecycle(
   serverId: string,
-  event: { type: "connecting" } | { type: "connected" } | { type: "failed"; error: unknown } | { type: "closed" },
+  event:
+    | { type: "connecting" }
+    | { type: "connected" }
+    | { type: "failed"; error: unknown }
+    | { type: "closed" },
   registry: McpLiveStatusRegistry = mcpLiveStatus,
 ): void {
   if (event.type === "connecting") registry.connecting(serverId);

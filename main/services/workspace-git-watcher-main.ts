@@ -9,5 +9,6 @@ import { GitRepoWatcher } from "./git-repo-watcher.js";
  * the workspace's watcher.
  */
 export const workspaceGitWatcher = new GitRepoWatcher({
-  notify: (workspaceId, generation) => ipcMain.broadcast("git:changed", { workspaceId, generation }),
+  notify: (workspaceId, generation) =>
+    ipcMain.broadcast("git:changed", { workspaceId, generation }),
 });

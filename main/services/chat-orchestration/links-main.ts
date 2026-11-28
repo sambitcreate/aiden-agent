@@ -4,7 +4,13 @@ import { app, logger } from "../../platform.js";
 import { DataStore } from "../data-store.js";
 import type { ApprovalCeiling } from "../approval-gate/run-approval.js";
 import type { ChatStartedByV1 } from "../../../renderer/shared/chat-started-by.js";
-import { ChatLinkStore, emptyChatLinkDocument, parseChatLinkDocument, startedChatTurnCeiling, type ChatLinkDocument } from "./links.js";
+import {
+  ChatLinkStore,
+  emptyChatLinkDocument,
+  parseChatLinkDocument,
+  startedChatTurnCeiling,
+  type ChatLinkDocument,
+} from "./links.js";
 
 const CHAT_LINKS_FILE = "chat-orchestration.json";
 const CHAT_LINKS_MAX_BYTES = 8 * 1024 * 1024;
@@ -43,13 +49,16 @@ export async function startedChatApprovalCeiling(
     startedBy,
     // What the lead's workspace allows now, read on every turn of the chat.
     leadCeiling: async (leadChatId) => {
-      const [{ chatStore }, { configStore }, { approvalCeilingOf, currentWorkspaceApproval }] = await Promise.all([
-        import("../chat-store.js"),
-        import("../config-store.js"),
-        import("../approval-gate/run-approval.js"),
-      ]);
+      const [{ chatStore }, { configStore }, { approvalCeilingOf, currentWorkspaceApproval }] =
+        await Promise.all([
+          import("../chat-store.js"),
+          import("../config-store.js"),
+          import("../approval-gate/run-approval.js"),
+        ]);
       const workspaceId = (await chatStore.getMeta(leadChatId))?.workspaceId;
-      const policy = workspaceId ? await currentWorkspaceApproval(configStore, workspaceId) : undefined;
+      const policy = workspaceId
+        ? await currentWorkspaceApproval(configStore, workspaceId)
+        : undefined;
       return policy ? approvalCeilingOf(policy) : undefined;
     },
   });

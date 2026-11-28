@@ -49,9 +49,10 @@ export function normalizeDisabledMcpServerIds(value: unknown): string[] | undefi
 }
 
 /** Copies only the off-lists that hold entries, for spreading into a record. */
-export function workspaceCapabilityFields(
-  value: { disabledSkills?: unknown; disabledMcpServerIds?: unknown },
-): WorkspaceCapabilityFields {
+export function workspaceCapabilityFields(value: {
+  disabledSkills?: unknown;
+  disabledMcpServerIds?: unknown;
+}): WorkspaceCapabilityFields {
   const disabledSkills = normalizeDisabledSkills(value.disabledSkills);
   const disabledMcpServerIds = normalizeDisabledMcpServerIds(value.disabledMcpServerIds);
   return {

@@ -42,7 +42,8 @@ const NORMAL_TEXT_TOKENS = [
 ] as const;
 
 function mixHexForContrastTest(from: string, to: string, amount: number): string {
-  const channel = (value: string, offset: number) => Number.parseInt(value.slice(offset, offset + 2), 16);
+  const channel = (value: string, offset: number) =>
+    Number.parseInt(value.slice(offset, offset + 2), 16);
   const mixed = [1, 3, 5].map((offset) =>
     Math.round(channel(from, offset) + (channel(to, offset) - channel(from, offset)) * amount)
       .toString(16)
@@ -54,51 +55,89 @@ function mixHexForContrastTest(from: string, to: string, amount: number): string
 function compositeToken(base: string, overlay: string): string {
   const match = /^rgb\((\d+) (\d+) (\d+) \/ ([\d.]+)\)$/.exec(overlay);
   assert.ok(match, `Expected an emitted alpha color, got ${overlay}`);
-  const color = `#${match.slice(1, 4).map((channel) => Number(channel).toString(16).padStart(2, "0")).join("")}`;
+  const color = `#${match
+    .slice(1, 4)
+    .map((channel) => Number(channel).toString(16).padStart(2, "0"))
+    .join("")}`;
   return mixHexForContrastTest(base, color, Number(match[4]));
 }
 
 function actualSurfaces(tokens: Record<string, string>): string[] {
-  return [tokens["--theme-canvas"], tokens["--theme-sidebar"], tokens["--surface-popover"],
+  return [
+    tokens["--theme-canvas"],
+    tokens["--theme-sidebar"],
+    tokens["--surface-popover"],
     compositeToken(tokens["--theme-canvas"], tokens["--surface-control"]),
     compositeToken(tokens["--theme-canvas"], tokens["--surface-list-selection"]),
-    compositeToken(tokens["--surface-popover"], tokens["--surface-well"])];
+    compositeToken(tokens["--surface-popover"], tokens["--surface-well"]),
+  ];
 }
 
 test("colored status labels remain readable on their actual fills across presets and contrast settings", () => {
-  for (const preset of THEME_PRESETS) for (const scheme of ["light", "dark"] as const) {
-    for (const contrast of [0, getPresetVariant(preset.id, scheme).contrast, 100]) for (const highContrast of [false, true]) {
-      const tokens = resolveThemeTokens({ ...getPresetVariant(preset.id, scheme), contrast }, scheme, highContrast);
-      for (const surface of actualSurfaces(tokens)) {
-        for (const tone of ["accent", "red", "green", "warning"]) {
-          const fill = compositeToken(surface, tokens[`--status-${tone}-surface`]);
-          assert.ok(colorContrastRatio(tokens[`--status-${tone}`], fill) >= 4.75,
-            `${preset.id}/${scheme}/${contrast}/${highContrast}: ${tone} on ${fill}`);
+  for (const preset of THEME_PRESETS)
+    for (const scheme of ["light", "dark"] as const) {
+      for (const contrast of [0, getPresetVariant(preset.id, scheme).contrast, 100])
+        for (const highContrast of [false, true]) {
+          const tokens = resolveThemeTokens(
+            { ...getPresetVariant(preset.id, scheme), contrast },
+            scheme,
+            highContrast,
+          );
+          for (const surface of actualSurfaces(tokens)) {
+            for (const tone of ["accent", "red", "green", "warning"]) {
+              const fill = compositeToken(surface, tokens[`--status-${tone}-surface`]);
+              assert.ok(
+                colorContrastRatio(tokens[`--status-${tone}`], fill) >= 4.75,
+                `${preset.id}/${scheme}/${contrast}/${highContrast}: ${tone} on ${fill}`,
+              );
+            }
+            assert.ok(colorContrastRatio(tokens["--text-quaternary"], surface) >= 4.75);
+          }
+          assert.equal(
+            tokens["--focus-ring"],
+            tokens["--text-primary"],
+            "keyboard focus is neutral",
+          );
+          assert.notEqual(
+            tokens["--status-green"],
+            tokens["--status-red"],
+            "statuses keep distinct colors",
+          );
         }
-        assert.ok(colorContrastRatio(tokens["--text-quaternary"], surface) >= 4.75);
-      }
-      assert.equal(tokens["--focus-ring"], tokens["--text-primary"], "keyboard focus is neutral");
-      assert.notEqual(tokens["--status-green"], tokens["--status-red"], "statuses keep distinct colors");
     }
-  }
 });
 
 function hexHue(hex: string): number {
-  const [red, green, blue] = [1, 3, 5].map((offset) => Number.parseInt(hex.slice(offset, offset + 2), 16) / 255);
+  const [red, green, blue] = [1, 3, 5].map(
+    (offset) => Number.parseInt(hex.slice(offset, offset + 2), 16) / 255,
+  );
   const max = Math.max(red, green, blue);
   const delta = max - Math.min(red, green, blue);
   if (delta === 0) return 0;
-  const sector = max === red ? ((green - blue) / delta) % 6 : max === green ? (blue - red) / delta + 2 : (red - green) / delta + 4;
+  const sector =
+    max === red
+      ? ((green - blue) / delta) % 6
+      : max === green
+        ? (blue - red) / delta + 2
+        : (red - green) / delta + 4;
   return (sector * 60 + 360) % 360;
 }
 
-function eachThemeSetting(run: (tokens: Record<string, string>, label: string, scheme: AppearanceScheme) => void): void {
-  for (const preset of THEME_PRESETS) for (const scheme of ["light", "dark"] as const) {
-    for (const contrast of [0, getPresetVariant(preset.id, scheme).contrast, 100]) for (const highContrast of [false, true]) {
-      const tokens = resolveThemeTokens({ ...getPresetVariant(preset.id, scheme), contrast }, scheme, highContrast);
-      run(tokens, `${preset.id}/${scheme}/${contrast}/${highContrast}`, scheme);
+function eachThemeSetting(
+  run: (tokens: Record<string, string>, label: string, scheme: AppearanceScheme) => void,
+): void {
+  for (const preset of THEME_PRESETS)
+    for (const scheme of ["light", "dark"] as const) {
+      for (const contrast of [0, getPresetVariant(preset.id, scheme).contrast, 100])
+        for (const highContrast of [false, true]) {
+          const tokens = resolveThemeTokens(
+            { ...getPresetVariant(preset.id, scheme), contrast },
+            scheme,
+            highContrast,
+          );
+          run(tokens, `${preset.id}/${scheme}/${contrast}/${highContrast}`, scheme);
+        }
     }
-  }
 }
 
 test("solid accent and danger fills carry WCAG AA content in every state", () => {
@@ -106,13 +145,24 @@ test("solid accent and danger fills carry WCAG AA content in every state", () =>
     for (const role of ["accent", "danger"] as const) {
       for (const state of ["", "-hover", "-active"]) {
         assert.ok(
-          colorContrastRatio(tokens[`--fill-${role}${state}`], tokens[`--fill-${role}-foreground`]) >= 4.5,
+          colorContrastRatio(
+            tokens[`--fill-${role}${state}`],
+            tokens[`--fill-${role}-foreground`],
+          ) >= 4.5,
           `${label}: --fill-${role}${state}`,
         );
       }
       // Hover and press must stay visible, even on a pure black or white fill.
-      assert.notEqual(tokens[`--fill-${role}-hover`], tokens[`--fill-${role}`], `${label}: ${role} hover`);
-      assert.notEqual(tokens[`--fill-${role}-active`], tokens[`--fill-${role}-hover`], `${label}: ${role} active`);
+      assert.notEqual(
+        tokens[`--fill-${role}-hover`],
+        tokens[`--fill-${role}`],
+        `${label}: ${role} hover`,
+      );
+      assert.notEqual(
+        tokens[`--fill-${role}-active`],
+        tokens[`--fill-${role}-hover`],
+        `${label}: ${role} active`,
+      );
     }
   });
 });
@@ -121,16 +171,25 @@ test("dark themes put white content on a deepened fill that keeps the theme hue"
   for (const preset of THEME_PRESETS) {
     const tokens = resolveThemeTokens(getPresetVariant(preset.id, "dark"), "dark");
     assert.equal(tokens["--fill-danger-foreground"], "#FFFFFF", `${preset.id} danger`);
-    assert.ok(Math.abs(hexHue(tokens["--fill-danger"]) - hexHue(preset.dark.danger)) < 3, `${preset.id} danger hue`);
+    assert.ok(
+      Math.abs(hexHue(tokens["--fill-danger"]) - hexHue(preset.dark.danger)) < 3,
+      `${preset.id} danger hue`,
+    );
     if (preset.id === "monochrome") continue;
     assert.equal(tokens["--fill-accent-foreground"], "#FFFFFF", `${preset.id} accent`);
-    assert.ok(Math.abs(hexHue(tokens["--fill-accent"]) - hexHue(preset.dark.accent)) < 3, `${preset.id} accent hue`);
+    assert.ok(
+      Math.abs(hexHue(tokens["--fill-accent"]) - hexHue(preset.dark.accent)) < 3,
+      `${preset.id} accent hue`,
+    );
   }
   // A white accent cannot deepen without turning grey, so it keeps black content.
   const monochrome = resolveThemeTokens(getPresetVariant("monochrome", "dark"), "dark");
   assert.equal(monochrome["--fill-accent"], "#FFFFFF");
   assert.equal(monochrome["--fill-accent-foreground"], "#000000");
-  const yellow = resolveThemeTokens({ ...getPresetVariant("aiden", "dark"), preset: "custom", accent: "#FFE14D" }, "dark");
+  const yellow = resolveThemeTokens(
+    { ...getPresetVariant("aiden", "dark"), preset: "custom", accent: "#FFE14D" },
+    "dark",
+  );
   assert.ok(colorContrastRatio(yellow["--fill-accent"], yellow["--fill-accent-foreground"]) >= 4.5);
 });
 
@@ -151,11 +210,21 @@ test("text stays readable on hovered and selected rows in the sidebar and menus"
       compositeToken(surface, tokens["--surface-list-selection"]),
     ]);
     for (const row of rows) {
-      for (const role of ["--text-secondary", "--text-tertiary", "--text-quaternary", "--accent-text",
-        "--support-red", "--support-green", "--support-warning"]) {
+      for (const role of [
+        "--text-secondary",
+        "--text-tertiary",
+        "--text-quaternary",
+        "--accent-text",
+        "--support-red",
+        "--support-green",
+        "--support-warning",
+      ]) {
         assert.ok(colorContrastRatio(tokens[role], row) >= 4.5, `${label}: ${role} on ${row}`);
       }
-      assert.ok(colorContrastRatio(tokens["--toolbar-icon"], row) >= 3, `${label}: toolbar icon on ${row}`);
+      assert.ok(
+        colorContrastRatio(tokens["--toolbar-icon"], row) >= 3,
+        `${label}: toolbar icon on ${row}`,
+      );
     }
   });
 });
@@ -184,9 +253,10 @@ function assertSemanticContrast(
   const compositeSurfaces = actualSurfaces(tokens).slice(3);
   for (const role of NORMAL_TEXT_TOKENS) {
     const requiredRatio = role === "--terminal-foreground" ? 4.5 : minimumTextRatio;
-    const evaluatedSurfaces = role === "--terminal-foreground" || !includeCompositeSurfaces
-      ? surfaces
-      : [...surfaces, ...compositeSurfaces];
+    const evaluatedSurfaces =
+      role === "--terminal-foreground" || !includeCompositeSurfaces
+        ? surfaces
+        : [...surfaces, ...compositeSurfaces];
     for (const surface of evaluatedSurfaces) {
       assert.ok(
         colorContrastRatio(tokens[role], surface) >= requiredRatio,
@@ -223,8 +293,14 @@ function assertSemanticContrast(
 
 test("the built-in theme pairs remain readable and avoid black dark canvases", () => {
   for (const preset of THEME_PRESETS) {
-    assert.ok(colorContrastRatio(preset.light.canvas, preset.light.foreground) >= 7, `${preset.label} light contrast`);
-    assert.ok(colorContrastRatio(preset.dark.canvas, preset.dark.foreground) >= 7, `${preset.label} dark contrast`);
+    assert.ok(
+      colorContrastRatio(preset.light.canvas, preset.light.foreground) >= 7,
+      `${preset.label} light contrast`,
+    );
+    assert.ok(
+      colorContrastRatio(preset.dark.canvas, preset.dark.foreground) >= 7,
+      `${preset.label} dark contrast`,
+    );
     assert.notEqual(preset.dark.canvas, "#000000");
     assert.notEqual(preset.dark.raised, "#000000");
     for (const surface of ["canvas", "sidebar", "raised"] as const) {
@@ -315,7 +391,8 @@ test("paper and calm share warm neutrals but remain visually distinct", () => {
   }
   // Paper is the crisper, lighter light theme.
   assert.ok(
-    colorContrastRatio(paper.light.canvas, "#000000") > colorContrastRatio(calm.light.canvas, "#000000"),
+    colorContrastRatio(paper.light.canvas, "#000000") >
+      colorContrastRatio(calm.light.canvas, "#000000"),
     "paper light canvas is lighter than calm",
   );
 });
@@ -433,15 +510,24 @@ test("appearance normalization safely clamps user-controlled values", () => {
 test("composer context auto-hide defaults on and preserves explicit saved preferences", () => {
   assert.equal(createDefaultAppearanceConfig().autoHideComposerContext, true);
   assert.equal(normalizeAppearanceConfig({}).autoHideComposerContext, true);
-  assert.equal(normalizeAppearanceConfig({ autoHideComposerContext: "false" }).autoHideComposerContext, true);
+  assert.equal(
+    normalizeAppearanceConfig({ autoHideComposerContext: "false" }).autoHideComposerContext,
+    true,
+  );
   for (const enabled of [false, true]) {
     const stored = { ...createDefaultAppearanceConfig(), autoHideComposerContext: enabled };
-    assert.equal(parseAppearanceConfig(JSON.parse(JSON.stringify(stored))).autoHideComposerContext, enabled);
+    assert.equal(
+      parseAppearanceConfig(JSON.parse(JSON.stringify(stored))).autoHideComposerContext,
+      enabled,
+    );
   }
   const legacy: Record<string, unknown> = { ...createDefaultAppearanceConfig() };
   delete legacy.autoHideComposerContext;
   assert.equal(parseAppearanceConfig(legacy).autoHideComposerContext, true);
-  assert.throws(() => parseAppearanceConfig({ ...legacy, autoHideComposerContext: "yes" }), /boolean/u);
+  assert.throws(
+    () => parseAppearanceConfig({ ...legacy, autoHideComposerContext: "yes" }),
+    /boolean/u,
+  );
 });
 
 test("inline visuals default to automatic, migrate legacy settings, and reject unknown modes", () => {
@@ -451,11 +537,20 @@ test("inline visuals default to automatic, migrate legacy settings, and reject u
   assert.equal(parseAppearanceConfig(legacy).inlineVisuals, "automatic");
   for (const inlineVisuals of ["automatic", "on_request", "off"] as const) {
     const stored = { ...createDefaultAppearanceConfig(), inlineVisuals };
-    assert.equal(parseAppearanceConfig(JSON.parse(JSON.stringify(stored))).inlineVisuals, inlineVisuals);
+    assert.equal(
+      parseAppearanceConfig(JSON.parse(JSON.stringify(stored))).inlineVisuals,
+      inlineVisuals,
+    );
   }
-  assert.equal(normalizeAppearanceConfig({ inlineVisuals: "sometimes" }).inlineVisuals, "automatic");
+  assert.equal(
+    normalizeAppearanceConfig({ inlineVisuals: "sometimes" }).inlineVisuals,
+    "automatic",
+  );
   assert.equal(normalizeAppearanceConfig({ inlineVisuals: "off" }).inlineVisuals, "off");
-  assert.throws(() => parseAppearanceConfig({ ...legacy, inlineVisuals: "sometimes" }), /inline visuals/i);
+  assert.throws(
+    () => parseAppearanceConfig({ ...legacy, inlineVisuals: "sometimes" }),
+    /inline visuals/i,
+  );
 });
 
 test("the Linux title bar preference defaults to automatic, migrates legacy settings, and rejects unknown values", () => {
@@ -465,7 +560,10 @@ test("the Linux title bar preference defaults to automatic, migrates legacy sett
   assert.equal(parseAppearanceConfig(legacy).linuxTitleBar, "auto");
   for (const linuxTitleBar of ["auto", "aiden", "system"] as const) {
     const stored = { ...createDefaultAppearanceConfig(), linuxTitleBar };
-    assert.equal(parseAppearanceConfig(JSON.parse(JSON.stringify(stored))).linuxTitleBar, linuxTitleBar);
+    assert.equal(
+      parseAppearanceConfig(JSON.parse(JSON.stringify(stored))).linuxTitleBar,
+      linuxTitleBar,
+    );
   }
   assert.equal(normalizeAppearanceConfig({ linuxTitleBar: "native" }).linuxTitleBar, "auto");
   assert.throws(() => parseAppearanceConfig({ ...legacy, linuxTitleBar: "native" }), /title bar/i);
@@ -507,18 +605,9 @@ test("the shared focus treatment separates text entry from non-text keyboard foc
     /:root\s+:where\(\s*button,[^}]+\):focus-visible\s*\{\s*outline: 2px solid var\(--focus-ring\) !important;\s*outline-offset: var\(--keyboard-focus-offset, 2px\) !important;/u,
   );
   assert.doesNotMatch(styles, /:root :where\(\*\):focus/u);
-  assert.match(
-    styles,
-    /--color-support-red-foreground: var\(--support-red-foreground\);/u,
-  );
-  assert.match(
-    styles,
-    /--color-support-green-foreground: var\(--support-green-foreground\);/u,
-  );
-  assert.match(
-    styles,
-    /--color-support-warning-foreground: var\(--support-warning-foreground\);/u,
-  );
+  assert.match(styles, /--color-support-red-foreground: var\(--support-red-foreground\);/u);
+  assert.match(styles, /--color-support-green-foreground: var\(--support-green-foreground\);/u);
+  assert.match(styles, /--color-support-warning-foreground: var\(--support-warning-foreground\);/u);
   assert.match(
     ui,
     /bg-fill-danger text-fill-danger-foreground[\s\S]*?hover:bg-fill-danger-hover[\s\S]*?active:bg-fill-danger-active[\s\S]*?focus-visible:bg-fill-danger-hover/u,
@@ -621,19 +710,24 @@ test("per-scheme theme JSON round-trips without losing editable fields", () => {
     /not a light theme/i,
   );
   assert.throws(
-    () => parseThemeVariantJson(JSON.stringify({ version: 2, scheme: "dark", theme: original }), "dark"),
+    () =>
+      parseThemeVariantJson(
+        JSON.stringify({ version: 2, scheme: "dark", theme: original }),
+        "dark",
+      ),
     /unsupported version/i,
   );
   assert.throws(
-    () => parseThemeVariantJson(JSON.stringify({ accent: "#7C5CFC", background: "#20242C", foreground: "#FFFFFF" }), "dark"),
+    () =>
+      parseThemeVariantJson(
+        JSON.stringify({ accent: "#7C5CFC", background: "#20242C", foreground: "#FFFFFF" }),
+        "dark",
+      ),
     /font selection/i,
   );
 
   const mismatchedPreset = { ...getPresetVariant("aiden", "dark"), accent: "#A18FFF" };
-  assert.equal(
-    parseThemeVariantJson(JSON.stringify(mismatchedPreset), "dark").preset,
-    "custom",
-  );
+  assert.equal(parseThemeVariantJson(JSON.stringify(mismatchedPreset), "dark").preset, "custom");
 });
 
 test("resolved dark tokens use the selected graphite canvas and accent", () => {
@@ -673,18 +767,29 @@ test("unsafe custom theme drafts report recovery guidance", () => {
   assert.match(issues.join(" "), /accent/i);
 });
 
-
 test("status primitives keep semantic fills and icons without decorative edges", () => {
   const ui = readFileSync(new URL("../components/ui.tsx", import.meta.url), "utf8");
-  const badge = ui.slice(ui.indexOf("export function Badge"), ui.indexOf("export function Callout"));
+  const badge = ui.slice(
+    ui.indexOf("export function Badge"),
+    ui.indexOf("export function Callout"),
+  );
   for (const tone of ["accent", "green", "red"]) {
     assert.match(badge, new RegExp(`bg-status-${tone}-surface text-status-${tone}`, "u"));
   }
   assert.match(badge, /aria-hidden="true"/u);
-  const callout = ui.slice(ui.indexOf("export function Callout"), ui.indexOf("export function EmptyState"));
-  assert.ok(callout.includes("[&_.text-red]:text-status-red"), "nested red labels use the tinted-surface foreground");
+  const callout = ui.slice(
+    ui.indexOf("export function Callout"),
+    ui.indexOf("export function EmptyState"),
+  );
+  assert.ok(
+    callout.includes("[&_.text-red]:text-status-red"),
+    "nested red labels use the tinted-surface foreground",
+  );
   assert.ok(callout.includes("[&_.text-support-red]:text-status-red"));
-  const radio = ui.slice(ui.indexOf("export const RadioGroupItem"), ui.indexOf("export const Command ="));
+  const radio = ui.slice(
+    ui.indexOf("export const RadioGroupItem"),
+    ui.indexOf("export const Command ="),
+  );
   assert.match(radio, /bg-tertiary[\s\S]*hover:bg-secondary/u);
   assert.match(radio, /data-\[state=checked\]:bg-fill-accent/u);
   assert.match(radio, /Indicator className="size-1.5 rounded-full bg-fill-accent-foreground"/u);
@@ -696,20 +801,32 @@ test("status primitives keep semantic fills and icons without decorative edges",
     const tokens = resolveThemeTokens(getPresetVariant("aiden", scheme), scheme);
     const start = styles.indexOf(scheme === "light" ? ":root {" : ":root.dark {");
     const fallback = canonicalCss(styles.slice(start, styles.indexOf("\n}", start)));
-    for (const [token, value] of Object.entries(tokens).filter(([name]) => ["--status-", "--text-", "--syntax-", "--support-", "--fill-", "--accent-text"].some(prefix => name.startsWith(prefix)))) {
-      assert.ok(fallback.includes(canonicalCss(`${token}: ${value};`)), `${scheme} fallback ${token} matches the resolver`);
+    for (const [token, value] of Object.entries(tokens).filter(([name]) =>
+      ["--status-", "--text-", "--syntax-", "--support-", "--fill-", "--accent-text"].some(
+        (prefix) => name.startsWith(prefix),
+      ),
+    )) {
+      assert.ok(
+        fallback.includes(canonicalCss(`${token}: ${value};`)),
+        `${scheme} fallback ${token} matches the resolver`,
+      );
     }
   }
 });
-
 
 test("composer usage visibility defaults on for legacy settings and strictly validates explicit values", () => {
   const legacy = { ...createDefaultAppearanceConfig() } as Record<string, unknown>;
   delete legacy.showComposerContextUsage;
   assert.equal(normalizeAppearanceConfig(legacy).showComposerContextUsage, true);
   assert.equal(parseAppearanceConfig(legacy).showComposerContextUsage, true);
-  assert.equal(parseAppearanceConfig({ ...legacy, showComposerContextUsage: false }).showComposerContextUsage, false);
-  assert.throws(() => parseAppearanceConfig({ ...legacy, showComposerContextUsage: "false" }), /visibility/);
+  assert.equal(
+    parseAppearanceConfig({ ...legacy, showComposerContextUsage: false }).showComposerContextUsage,
+    false,
+  );
+  assert.throws(
+    () => parseAppearanceConfig({ ...legacy, showComposerContextUsage: "false" }),
+    /visibility/,
+  );
 });
 
 test("chat presentation preferences migrate, round-trip, and reject unsupported explicit values", () => {
@@ -721,15 +838,32 @@ test("chat presentation preferences migrate, round-trip, and reject unsupported 
   assert.equal(migrated.workDetails, "standard");
   assert.equal(migrated.workDetailsCollapseTiming, "completion");
   assert.equal(migrated.busySendBehavior, "queue");
-  const chosen = { ...migrated, workDetails: "verbose", workDetailsCollapseTiming: "next-input", busySendBehavior: "steer" };
+  const chosen = {
+    ...migrated,
+    workDetails: "verbose",
+    workDetailsCollapseTiming: "next-input",
+    busySendBehavior: "steer",
+  };
   const restored = parseAppearanceConfig(JSON.parse(JSON.stringify(chosen)));
   assert.equal(restored.workDetails, "verbose");
   assert.equal(restored.workDetailsCollapseTiming, "next-input");
   assert.equal(restored.busySendBehavior, "steer");
-  assert.throws(() => parseAppearanceConfig({ ...migrated, workDetails: "hidden" }), /work details mode/i);
-  assert.throws(() => parseAppearanceConfig({ ...migrated, workDetailsCollapseTiming: null }), /collapse timing/i);
-  assert.throws(() => parseAppearanceConfig({ ...migrated, busySendBehavior: "interrupt" }), /busy send behavior/i);
-  assert.equal(normalizeAppearanceConfig({ workDetails: "bad", busySendBehavior: false }).workDetails, "standard");
+  assert.throws(
+    () => parseAppearanceConfig({ ...migrated, workDetails: "hidden" }),
+    /work details mode/i,
+  );
+  assert.throws(
+    () => parseAppearanceConfig({ ...migrated, workDetailsCollapseTiming: null }),
+    /collapse timing/i,
+  );
+  assert.throws(
+    () => parseAppearanceConfig({ ...migrated, busySendBehavior: "interrupt" }),
+    /busy send behavior/i,
+  );
+  assert.equal(
+    normalizeAppearanceConfig({ workDetails: "bad", busySendBehavior: false }).workDetails,
+    "standard",
+  );
 });
 
 test("Show tool activity stays unset until chosen, round-trips per device, and rejects non-boolean values", () => {
@@ -737,8 +871,16 @@ test("Show tool activity stays unset until chosen, round-trips per device, and r
   // Unset means "decide from the Bots", so normalizing must not invent a value.
   assert.equal(normalizeAppearanceConfig(legacy).showToolActivity, undefined);
   assert.equal(parseAppearanceConfig(legacy).showToolActivity, undefined);
-  const chosen = parseAppearanceConfig(JSON.parse(JSON.stringify({ ...legacy, showToolActivity: false })));
+  const chosen = parseAppearanceConfig(
+    JSON.parse(JSON.stringify({ ...legacy, showToolActivity: false })),
+  );
   assert.equal(chosen.showToolActivity, false);
-  assert.equal(normalizeAppearanceConfig({ ...chosen, showToolActivity: "yes" }).showToolActivity, undefined);
-  assert.throws(() => parseAppearanceConfig({ ...legacy, showToolActivity: "true" }), /tool activity/i);
+  assert.equal(
+    normalizeAppearanceConfig({ ...chosen, showToolActivity: "yes" }).showToolActivity,
+    undefined,
+  );
+  assert.throws(
+    () => parseAppearanceConfig({ ...legacy, showToolActivity: "true" }),
+    /tool activity/i,
+  );
 });

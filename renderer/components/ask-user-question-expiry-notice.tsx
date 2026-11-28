@@ -78,7 +78,11 @@ export function AskUserQuestionExpiryNotice(props: AskUserQuestionExpiryNoticePr
       <Callout
         role="status"
         aria-label={
-          props.state === "expired" ? "Question expired" : props.state === "restarted" ? "Question from before a restart" : "Late answer"
+          props.state === "expired"
+            ? "Question expired"
+            : props.state === "restarted"
+              ? "Question from before a restart"
+              : "Late answer"
         }
       >
         <p className="flex items-start gap-2 text-small text-secondary">

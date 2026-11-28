@@ -158,11 +158,18 @@ test("a script that leaves a background job on its output still finishes", async
     await fs.writeFile(script, "#!/bin/bash\nsleep 30 &\necho started", { mode: 0o755 });
     const startedAt = Date.now();
     const result = await runScheduledScript(script, { cwd: files.root, timeoutMs: 35_000 });
-    assert.ok(Date.now() - startedAt < 10_000, "the run must not wait for the 30 s job or the timeout");
+    assert.ok(
+      Date.now() - startedAt < 10_000,
+      "the run must not wait for the 30 s job or the timeout",
+    );
     assert.equal(result.exitCode, 0);
     assert.equal(result.timedOut, false);
     assert.equal(result.stdout.trim(), "started");
-    assert.equal(result.backgroundStopped, true, "the caller learns the background job was stopped");
+    assert.equal(
+      result.backgroundStopped,
+      true,
+      "the caller learns the background job was stopped",
+    );
   } finally {
     await files.cleanup();
   }
@@ -171,7 +178,11 @@ test("a script that leaves a background job on its output still finishes", async
 test("scripts run without Aiden's own credentials and with the agent PATH", async () => {
   if (process.platform === "win32") return;
   const files = await fixture();
-  const saved = { secret: process.env.AIDEN_TELEGRAM_BOT_TOKEN, tooling: process.env.NPM_TOKEN, path: process.env.PATH };
+  const saved = {
+    secret: process.env.AIDEN_TELEGRAM_BOT_TOKEN,
+    tooling: process.env.NPM_TOKEN,
+    path: process.env.PATH,
+  };
   try {
     process.env.AIDEN_TELEGRAM_BOT_TOKEN = "aiden-secret";
     process.env.NPM_TOKEN = "tooling-token";
@@ -191,7 +202,11 @@ test("scripts run without Aiden's own credentials and with the agent PATH", asyn
       assert.ok(scriptPath!.split(":").includes("/opt/homebrew/bin"));
     }
   } finally {
-    for (const [name, value] of [["AIDEN_TELEGRAM_BOT_TOKEN", saved.secret], ["NPM_TOKEN", saved.tooling], ["PATH", saved.path]] as const) {
+    for (const [name, value] of [
+      ["AIDEN_TELEGRAM_BOT_TOKEN", saved.secret],
+      ["NPM_TOKEN", saved.tooling],
+      ["PATH", saved.path],
+    ] as const) {
       if (value === undefined) delete process.env[name];
       else process.env[name] = value;
     }

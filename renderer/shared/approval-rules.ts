@@ -106,12 +106,22 @@ function hasHiddenText(value: string): boolean {
 }
 
 function validId(value: unknown): value is string {
-  return typeof value === "string" && value.length > 0 && value.length <= MAX_ID_CHARS && !hasControl(value);
+  return (
+    typeof value === "string" &&
+    value.length > 0 &&
+    value.length <= MAX_ID_CHARS &&
+    !hasControl(value)
+  );
 }
 
 /** A tool name as Aiden or a connected app spells it. */
 function validToolName(value: unknown): value is string {
-  return typeof value === "string" && value.length > 0 && value.length <= MAX_TOOL_CHARS && /^[A-Za-z0-9_.:/-]+$/u.test(value);
+  return (
+    typeof value === "string" &&
+    value.length > 0 &&
+    value.length <= MAX_TOOL_CHARS &&
+    /^[A-Za-z0-9_.:/-]+$/u.test(value)
+  );
 }
 
 /**
@@ -127,7 +137,11 @@ export function normalizeApprovalRuleHost(value: unknown): string | undefined {
   } catch {
     return undefined;
   }
-  text = text.split("/")[0]!.split(":")[0]!.replace(/\.$/u, "").replace(/^www\./u, "");
+  text = text
+    .split("/")[0]!
+    .split(":")[0]!
+    .replace(/\.$/u, "")
+    .replace(/^www\./u, "");
   if (!text || text.length > 253 || !/^[a-z0-9.-]+$/u.test(text)) return undefined;
   if (!text.includes(".") || text.startsWith(".") || text.includes("..")) return undefined;
   return text;
@@ -149,7 +163,9 @@ export function parseApprovalRuleTarget(value: unknown): ApprovalRuleTarget | un
     case "tool":
       return validToolName(record.tool) ? { kind: "tool", tool: record.tool } : undefined;
     case "connector":
-      return validId(record.serverId) ? { kind: "connector", serverId: record.serverId } : undefined;
+      return validId(record.serverId)
+        ? { kind: "connector", serverId: record.serverId }
+        : undefined;
     case "connector-tool":
       return validId(record.serverId) && validToolName(record.tool)
         ? { kind: "connector-tool", serverId: record.serverId, tool: record.tool }
@@ -171,7 +187,8 @@ export function parseApprovalRuleOwner(value: unknown): ApprovalRuleOwner | unde
   if (value === null || typeof value !== "object" || Array.isArray(value)) return undefined;
   const record = value as Record<string, unknown>;
   if (record.kind === "mac") return { kind: "mac" };
-  if (record.kind === "workspace" && validId(record.workspaceId)) return { kind: "workspace", workspaceId: record.workspaceId };
+  if (record.kind === "workspace" && validId(record.workspaceId))
+    return { kind: "workspace", workspaceId: record.workspaceId };
   if (record.kind === "bot" && validId(record.botId)) return { kind: "bot", botId: record.botId };
   return undefined;
 }
@@ -181,15 +198,22 @@ export function parseApprovalRuleOwner(value: unknown): ApprovalRuleOwner | unde
  * another service, or into a chat, asks once in every mode, Never ask
  * included, so no Always-allow rule can skip their card.
  */
-export const DISCLOSURE_TOOL_NAMES: ReadonlySet<string> = new Set(["share_image", "generate_image", "classify"]);
+export const DISCLOSURE_TOOL_NAMES: ReadonlySet<string> = new Set([
+  "share_image",
+  "generate_image",
+  "classify",
+]);
 
 /**
  * The decisions a new or changed rule may take. A natural-language rule never
  * allows (words can only tighten), and nor does a rule on a disclosure tool.
  */
-export function approvalRuleDecisionsFor(target: ApprovalRuleTarget | Pick<ApprovalRuleTarget, "kind">): readonly ApprovalRuleDecision[] {
+export function approvalRuleDecisionsFor(
+  target: ApprovalRuleTarget | Pick<ApprovalRuleTarget, "kind">,
+): readonly ApprovalRuleDecision[] {
   if (target.kind === "text") return ["ask", "block"];
-  if (target.kind === "tool" && "tool" in target && DISCLOSURE_TOOL_NAMES.has(target.tool)) return ["ask", "block"];
+  if (target.kind === "tool" && "tool" in target && DISCLOSURE_TOOL_NAMES.has(target.tool))
+    return ["ask", "block"];
   return APPROVAL_RULE_DECISIONS;
 }
 
@@ -205,12 +229,14 @@ export function parseApprovalRule(value: unknown): ApprovalRule | undefined {
   // Words never allow. (An Allow on a disclosure tool is read but never
   // applies: the gate asks for those first.)
   if (target.kind === "text" && decision === "allow") return undefined;
-  if (typeof record.createdAt !== "string" || Number.isNaN(Date.parse(record.createdAt))) return undefined;
+  if (typeof record.createdAt !== "string" || Number.isNaN(Date.parse(record.createdAt)))
+    return undefined;
   // "Do it myself" only on an Always-ask natural-language rule.
   const handOff = record.handOff === true && decision === "ask" && target.kind === "text";
-  const label = typeof record.label === "string" && !hasControl(record.label) && record.label.trim()
-    ? record.label.trim().slice(0, MAX_LABEL_CHARS)
-    : undefined;
+  const label =
+    typeof record.label === "string" && !hasControl(record.label) && record.label.trim()
+      ? record.label.trim().slice(0, MAX_LABEL_CHARS)
+      : undefined;
   return {
     id: record.id,
     target,
@@ -238,13 +264,21 @@ export function approvalRuleTargetKey(target: ApprovalRuleTarget): string {
 }
 
 export function approvalRuleOwnerKey(owner: ApprovalRuleOwner): string {
-  return owner.kind === "mac" ? "mac" : owner.kind === "workspace" ? `workspace:${owner.workspaceId}` : `bot:${owner.botId}`;
+  return owner.kind === "mac"
+    ? "mac"
+    : owner.kind === "workspace"
+      ? `workspace:${owner.workspaceId}`
+      : `bot:${owner.botId}`;
 }
 
 /** Strict read of the stored document; a bad or duplicate rule is dropped, never the file. */
 export function normalizeApprovalRulesDocument(value: unknown): ApprovalRulesDocument {
-  const record = value !== null && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : undefined;
-  if (!record || record.version !== 1 || !Array.isArray(record.rules)) return emptyApprovalRulesDocument();
+  const record =
+    value !== null && typeof value === "object" && !Array.isArray(value)
+      ? (value as Record<string, unknown>)
+      : undefined;
+  if (!record || record.version !== 1 || !Array.isArray(record.rules))
+    return emptyApprovalRulesDocument();
   const byKey = new Map<string, ApprovalRule>();
   const ids = new Set<string>();
   const rules: ApprovalRule[] = [];
@@ -276,8 +310,17 @@ export function normalizeApprovalRulesDocument(value: unknown): ApprovalRulesDoc
  * be the ones it can't read.
  */
 export function isApprovalRulesDocumentSafe(value: unknown): boolean {
-  const record = value !== null && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : undefined;
-  if (!record || record.version !== 1 || !Array.isArray(record.rules) || record.rules.length > APPROVAL_RULES_MAX) return false;
+  const record =
+    value !== null && typeof value === "object" && !Array.isArray(value)
+      ? (value as Record<string, unknown>)
+      : undefined;
+  if (
+    !record ||
+    record.version !== 1 ||
+    !Array.isArray(record.rules) ||
+    record.rules.length > APPROVAL_RULES_MAX
+  )
+    return false;
   if (Object.keys(record).some((key) => key !== "version" && key !== "rules")) return false;
   const normalized = normalizeApprovalRulesDocument(record);
   return normalized.rules.length === record.rules.length;
@@ -307,16 +350,22 @@ const SPECIFICITY: Readonly<Record<Exclude<ApprovalRuleTargetKind, "text">, numb
 };
 
 /** Whether a rule's owner answers for this subject: the whole Mac, or its own workspace or Bot. */
-export function approvalRuleOwnerAnswers(owner: ApprovalRuleOwner, subject: Pick<ApprovalRuleSubject, "workspaceId" | "botId">): boolean {
+export function approvalRuleOwnerAnswers(
+  owner: ApprovalRuleOwner,
+  subject: Pick<ApprovalRuleSubject, "workspaceId" | "botId">,
+): boolean {
   if (owner.kind === "mac") return true;
-  if (owner.kind === "workspace") return subject.workspaceId !== undefined && owner.workspaceId === subject.workspaceId;
+  if (owner.kind === "workspace")
+    return subject.workspaceId !== undefined && owner.workspaceId === subject.workspaceId;
   return subject.botId !== undefined && owner.botId === subject.botId;
 }
 
 function hostMatches(ruleHost: string, host: string | undefined): boolean {
   if (!host) return false;
   const normalized = normalizeApprovalRuleHost(host);
-  return normalized !== undefined && (normalized === ruleHost || normalized.endsWith(`.${ruleHost}`));
+  return (
+    normalized !== undefined && (normalized === ruleHost || normalized.endsWith(`.${ruleHost}`))
+  );
 }
 
 function targetMatches(target: ApprovalRuleTarget, subject: ApprovalRuleSubject): boolean {
@@ -326,7 +375,11 @@ function targetMatches(target: ApprovalRuleTarget, subject: ApprovalRuleSubject)
     case "connector":
       return subject.connector !== undefined && subject.connector.serverId === target.serverId;
     case "connector-tool":
-      return subject.connector !== undefined && subject.connector.serverId === target.serverId && subject.connector.tool === target.tool;
+      return (
+        subject.connector !== undefined &&
+        subject.connector.serverId === target.serverId &&
+        subject.connector.tool === target.tool
+      );
     case "site":
       return hostMatches(target.host, subject.host);
     case "text":
@@ -345,7 +398,10 @@ export interface ApprovalRuleResolution {
  * by the workspace or Bot beats one for the whole Mac, then the stricter one.
  * Natural-language rules are not considered here.
  */
-export function resolveApprovalRule(rules: readonly ApprovalRule[], subject: ApprovalRuleSubject): ApprovalRuleResolution | undefined {
+export function resolveApprovalRule(
+  rules: readonly ApprovalRule[],
+  subject: ApprovalRuleSubject,
+): ApprovalRuleResolution | undefined {
   let best: ApprovalRule | undefined;
   let block: ApprovalRule | undefined;
   const rank = (rule: ApprovalRule) => [
@@ -362,7 +418,12 @@ export function resolveApprovalRule(rules: readonly ApprovalRule[], subject: App
     return false;
   };
   for (const rule of rules) {
-    if (rule.target.kind === "text" || !approvalRuleOwnerAnswers(rule.owner, subject) || !targetMatches(rule.target, subject)) continue;
+    if (
+      rule.target.kind === "text" ||
+      !approvalRuleOwnerAnswers(rule.owner, subject) ||
+      !targetMatches(rule.target, subject)
+    )
+      continue;
     if (rule.decision === "block" && (block === undefined || better(rule, block))) block = rule;
     if (best === undefined || better(rule, best)) best = rule;
   }
@@ -388,8 +449,13 @@ export function approvalRuleHostOf(args: unknown): string | undefined {
 }
 
 /** The natural-language rules that answer for this Bot. */
-export function approvalTextRulesFor(rules: readonly ApprovalRule[], botId: string): ApprovalRule[] {
-  return rules.filter((rule) => rule.target.kind === "text" && approvalRuleOwnerAnswers(rule.owner, { botId }));
+export function approvalTextRulesFor(
+  rules: readonly ApprovalRule[],
+  botId: string,
+): ApprovalRule[] {
+  return rules.filter(
+    (rule) => rule.target.kind === "text" && approvalRuleOwnerAnswers(rule.owner, { botId }),
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -492,33 +558,59 @@ function exactKeys(record: Record<string, unknown>, keys: readonly string[]): bo
 
 /** Strict parse of a row reference from the renderer. */
 export function parseApprovalRuleRowRef(value: unknown): ApprovalRuleRowRef {
-  if (value === null || typeof value !== "object" || Array.isArray(value)) throw new Error("Invalid rule.");
+  if (value === null || typeof value !== "object" || Array.isArray(value))
+    throw new Error("Invalid rule.");
   const record = value as Record<string, unknown>;
   switch (record.source) {
     case "rule":
     case "workspace-exact":
-      if (exactKeys(record, ["source", "id"]) && typeof record.id === "string" && RULE_ID.test(record.id)) {
+      if (
+        exactKeys(record, ["source", "id"]) &&
+        typeof record.id === "string" &&
+        RULE_ID.test(record.id)
+      ) {
         return { source: record.source, id: record.id };
       }
       break;
     case "bot-allow":
     case "bot-folder":
-      if (exactKeys(record, ["source", "botId", "entryId"]) && validId(record.botId) && validId(record.entryId)) {
+      if (
+        exactKeys(record, ["source", "botId", "entryId"]) &&
+        validId(record.botId) &&
+        validId(record.entryId)
+      ) {
         return { source: record.source, botId: record.botId, entryId: record.entryId };
       }
       break;
     case "bot-rule":
-      if (exactKeys(record, ["source", "botId", "ruleId"]) && validId(record.botId) && validId(record.ruleId)) {
+      if (
+        exactKeys(record, ["source", "botId", "ruleId"]) &&
+        validId(record.botId) &&
+        validId(record.ruleId)
+      ) {
         return { source: "bot-rule", botId: record.botId, ruleId: record.ruleId };
       }
       break;
     case "workspace-mac":
-      if (exactKeys(record, ["source", "workspaceId", "grant"]) && validId(record.workspaceId) && MAC_GRANTS.has(record.grant as string)) {
-        return { source: "workspace-mac", workspaceId: record.workspaceId, grant: record.grant as "shell" | "files" | "computer-use" };
+      if (
+        exactKeys(record, ["source", "workspaceId", "grant"]) &&
+        validId(record.workspaceId) &&
+        MAC_GRANTS.has(record.grant as string)
+      ) {
+        return {
+          source: "workspace-mac",
+          workspaceId: record.workspaceId,
+          grant: record.grant as "shell" | "files" | "computer-use",
+        };
       }
       break;
     case "bot-chat-mac":
-      if (exactKeys(record, ["source", "botId", "grantId"]) && validId(record.botId) && typeof record.grantId === "string" && RULE_ID.test(record.grantId)) {
+      if (
+        exactKeys(record, ["source", "botId", "grantId"]) &&
+        validId(record.botId) &&
+        typeof record.grantId === "string" &&
+        RULE_ID.test(record.grantId)
+      ) {
         return { source: "bot-chat-mac", botId: record.botId, grantId: record.grantId };
       }
       break;
@@ -530,19 +622,32 @@ export function parseApprovalRuleRowRef(value: unknown): ApprovalRuleRowRef {
 }
 
 export function parseApprovalRuleAddInput(value: unknown): ApprovalRuleAddInput {
-  if (value === null || typeof value !== "object" || Array.isArray(value)) throw new Error("Invalid rule.");
+  if (value === null || typeof value !== "object" || Array.isArray(value))
+    throw new Error("Invalid rule.");
   const record = value as Record<string, unknown>;
-  if (!exactKeys(record, ["target", "decision", "owner", "handOff", "label"])) throw new Error("Invalid rule.");
+  if (!exactKeys(record, ["target", "decision", "owner", "handOff", "label"]))
+    throw new Error("Invalid rule.");
   const target = parseApprovalRuleTarget(record.target);
   const decision = parseApprovalRuleDecision(record.decision);
-  if (!target) throw new Error(target === undefined && (record.target as { kind?: unknown } | undefined)?.kind === "text"
-    ? `Describe the action in a few words, in up to ${BOT_RULE_TEXT_MAX_CHARS} characters.`
-    : "Invalid rule.");
-  if (!decision || !approvalRuleDecisionsFor(target).includes(decision)) throw new Error("Invalid rule.");
+  if (!target)
+    throw new Error(
+      target === undefined && (record.target as { kind?: unknown } | undefined)?.kind === "text"
+        ? `Describe the action in a few words, in up to ${BOT_RULE_TEXT_MAX_CHARS} characters.`
+        : "Invalid rule.",
+    );
+  if (!decision || !approvalRuleDecisionsFor(target).includes(decision))
+    throw new Error("Invalid rule.");
   const owner = record.owner === undefined ? undefined : parseApprovalRuleOwner(record.owner);
-  if (record.owner !== undefined && (!owner || owner.kind === "bot")) throw new Error("Invalid rule.");
-  if (record.handOff !== undefined && typeof record.handOff !== "boolean") throw new Error("Invalid rule.");
-  if (record.label !== undefined && (typeof record.label !== "string" || record.label.length > MAX_LABEL_CHARS || hasControl(record.label))) {
+  if (record.owner !== undefined && (!owner || owner.kind === "bot"))
+    throw new Error("Invalid rule.");
+  if (record.handOff !== undefined && typeof record.handOff !== "boolean")
+    throw new Error("Invalid rule.");
+  if (
+    record.label !== undefined &&
+    (typeof record.label !== "string" ||
+      record.label.length > MAX_LABEL_CHARS ||
+      hasControl(record.label))
+  ) {
     throw new Error("Invalid rule.");
   }
   return {
@@ -550,20 +655,29 @@ export function parseApprovalRuleAddInput(value: unknown): ApprovalRuleAddInput 
     decision,
     ...(owner ? { owner } : {}),
     ...(record.handOff === true ? { handOff: true } : {}),
-    ...(typeof record.label === "string" && record.label.trim() ? { label: record.label.trim() } : {}),
+    ...(typeof record.label === "string" && record.label.trim()
+      ? { label: record.label.trim() }
+      : {}),
   };
 }
 
 export function parseApprovalRuleChangeInput(value: unknown): ApprovalRuleChangeInput {
-  if (value === null || typeof value !== "object" || Array.isArray(value)) throw new Error("Invalid rule.");
+  if (value === null || typeof value !== "object" || Array.isArray(value))
+    throw new Error("Invalid rule.");
   const record = value as Record<string, unknown>;
   if (!exactKeys(record, ["ref", "decision", "handOff"])) throw new Error("Invalid rule.");
   const ref = parseApprovalRuleRowRef(record.ref);
-  const decision = record.decision === undefined ? undefined : parseApprovalRuleDecision(record.decision);
+  const decision =
+    record.decision === undefined ? undefined : parseApprovalRuleDecision(record.decision);
   if (record.decision !== undefined && !decision) throw new Error("Invalid rule.");
-  if (record.handOff !== undefined && typeof record.handOff !== "boolean") throw new Error("Invalid rule.");
+  if (record.handOff !== undefined && typeof record.handOff !== "boolean")
+    throw new Error("Invalid rule.");
   if (decision === undefined && record.handOff === undefined) throw new Error("Invalid rule.");
-  return { ref, ...(decision ? { decision } : {}), ...(typeof record.handOff === "boolean" ? { handOff: record.handOff } : {}) };
+  return {
+    ref,
+    ...(decision ? { decision } : {}),
+    ...(typeof record.handOff === "boolean" ? { handOff: record.handOff } : {}),
+  };
 }
 
 /** The row's title for a target rule. */
@@ -602,18 +716,30 @@ export function approvalRuleKindLabel(kind: ApprovalRuleTargetKind): string {
  * Aiden's own tools that Add rule offers: the ones that change or send
  * something, or reach the web. Labels say what the tool does.
  */
-export const APPROVAL_RULE_AIDEN_TOOLS: readonly { tool: string; label: string; description?: string }[] = [
+export const APPROVAL_RULE_AIDEN_TOOLS: readonly {
+  tool: string;
+  label: string;
+  description?: string;
+}[] = [
   { tool: "browser_click", label: "Click on a web page" },
   { tool: "browser_type", label: "Type on a web page" },
   { tool: "browser_press", label: "Press keys on a web page" },
-  { tool: "browser_evaluate", label: "Run a script on a web page", description: "Workspace chats only" },
+  {
+    tool: "browser_evaluate",
+    label: "Run a script on a web page",
+    description: "Workspace chats only",
+  },
   { tool: "browser_navigate", label: "Go to a web page" },
   { tool: "web_fetch", label: "Fetch a web page" },
   { tool: "web_search", label: "Search the web" },
   { tool: "share_image", label: "Share an image" },
   { tool: "generate_image", label: "Create an image" },
   { tool: "run_command", label: "Run a command", description: "Your Mac still asks on first use" },
-  { tool: "write_file", label: "Create or replace a file", description: "Your Mac still asks on first use" },
+  {
+    tool: "write_file",
+    label: "Create or replace a file",
+    description: "Your Mac still asks on first use",
+  },
   { tool: "edit_file", label: "Edit a file", description: "Your Mac still asks on first use" },
   { tool: "background_job", label: "Start a background job" },
   { tool: "forget_fact", label: "Forget a memory" },

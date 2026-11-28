@@ -32,7 +32,12 @@ export const BOT_DESKTOP_AUDIENCE_ID = "desktop:local";
 
 /** The sole production admission path for Bot turns and effects. */
 export const botRuntimeAuthority = {
-  async admit(input: { audienceId: string; botId: string; chatId: string; routineModelGrant?: BotRoutineModelGrant }) {
+  async admit(input: {
+    audienceId: string;
+    botId: string;
+    chatId: string;
+    routineModelGrant?: BotRoutineModelGrant;
+  }) {
     await initializeBotApplicationService();
     return resolver.admit(input);
   },
@@ -90,16 +95,20 @@ export async function resolveBotRuntimeCatalogSnapshot(
         sourceModelId: authority.provider.sourceModelId,
       },
       ...(authority.visionProvider
-        ? [{
-            sourceProviderId: authority.visionProvider.sourceProviderId,
-            sourceModelId: authority.visionProvider.sourceModelId,
-          }]
+        ? [
+            {
+              sourceProviderId: authority.visionProvider.sourceProviderId,
+              sourceModelId: authority.visionProvider.sourceModelId,
+            },
+          ]
         : []),
     ],
     signal,
   });
   if (snapshot.catalog.revision !== authority.catalogRevision) {
-    throw new Error("This Bot's available capabilities changed. Start again after reviewing access.");
+    throw new Error(
+      "This Bot's available capabilities changed. Start again after reviewing access.",
+    );
   }
   return snapshot;
 }

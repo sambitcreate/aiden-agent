@@ -15,10 +15,7 @@ import {
 class ManualClock implements GeminiLiveClock {
   private time = 0;
   private nextId = 1;
-  private readonly timers = new Map<
-    number,
-    { at: number; callback: () => void }
-  >();
+  private readonly timers = new Map<number, { at: number; callback: () => void }>();
 
   now(): number {
     return this.time;
@@ -39,9 +36,7 @@ class ManualClock implements GeminiLiveClock {
     for (;;) {
       const next = [...this.timers.entries()]
         .filter(([, timer]) => timer.at <= target)
-        .sort(
-          (left, right) => left[1].at - right[1].at || left[0] - right[0],
-        )[0];
+        .sort((left, right) => left[1].at - right[1].at || left[0] - right[0])[0];
       if (!next) break;
       this.time = next[1].at;
       this.timers.delete(next[0]);
@@ -79,31 +74,22 @@ function harness(
     onEvent: (event) => events.push(event),
     ...(options.tools ? { tools: options.tools } : {}),
     ...(options.voice ? { voice: options.voice } : {}),
-    ...(options.connectTimeoutMs
-      ? { connectTimeoutMs: options.connectTimeoutMs }
-      : {}),
+    ...(options.connectTimeoutMs ? { connectTimeoutMs: options.connectTimeoutMs } : {}),
     ...(options.idleTimeoutMs ? { idleTimeoutMs: options.idleTimeoutMs } : {}),
     ...(options.signal ? { signal: options.signal } : {}),
   });
   return { clock, events, protocol, server };
 }
 
-function emitToolCalls(
-  server: FakeGeminiLiveServer,
-  start: number,
-  count: number,
-): void {
+function emitToolCalls(server: FakeGeminiLiveServer, start: number, count: number): void {
   for (let offset = 0; offset < count; offset += 8) {
     server.latest.emit({
       toolCall: {
-        functionCalls: Array.from(
-          { length: Math.min(8, count - offset) },
-          (_, index) => ({
-            id: `call-${start + offset + index}`,
-            name: "computer_use",
-            args: { action: "capture" },
-          }),
-        ),
+        functionCalls: Array.from({ length: Math.min(8, count - offset) }, (_, index) => ({
+          id: `call-${start + offset + index}`,
+          name: "computer_use",
+          args: { action: "capture" },
+        })),
       },
     });
   }
@@ -162,7 +148,9 @@ test("a chosen voice asks Gemini for that prebuilt voice; without one the provid
 test("extended-thinking sessions enable low thinking and a voice-first action contract", async () => {
   const subject = harness({
     model: "gemini-3.8-live-extended-thinking",
-    tools: [{ functionDeclarations: [{ name: "computer_use", description: "Act on the screen." }] }],
+    tools: [
+      { functionDeclarations: [{ name: "computer_use", description: "Act on the screen." }] },
+    ],
   });
   await subject.protocol.start();
   const config = subject.server.latest.params.config!;
@@ -195,9 +183,7 @@ test("with Aiden's own window tools, Live may act only inside Aiden", async () =
 test("accepts only bounded 16 kHz 20-40 ms PCM and emits an exact SDK audio blob", async () => {
   const subject = harness();
   await subject.protocol.start();
-  const pcm20ms = new Uint8Array(
-    (GEMINI_LIVE_INPUT_SAMPLE_RATE * 2 * 20) / 1_000,
-  );
+  const pcm20ms = new Uint8Array((GEMINI_LIVE_INPUT_SAMPLE_RATE * 2 * 20) / 1_000);
   pcm20ms[0] = 17;
   subject.protocol.sendAudio(pcm20ms);
   pcm20ms[0] = 99;
@@ -212,18 +198,9 @@ test("accepts only bounded 16 kHz 20-40 ms PCM and emits an exact SDK audio blob
       mimeType: "audio/pcm;rate=16000",
     },
   });
-  assert.throws(
-    () => subject.protocol.sendAudio(new Uint8Array(638)),
-    /20 and 40/u,
-  );
-  assert.throws(
-    () => subject.protocol.sendAudio(new Uint8Array(641)),
-    /signed 16-bit/u,
-  );
-  assert.throws(
-    () => subject.protocol.sendAudio(new Uint8Array(1_282)),
-    /20 and 40/u,
-  );
+  assert.throws(() => subject.protocol.sendAudio(new Uint8Array(638)), /20 and 40/u);
+  assert.throws(() => subject.protocol.sendAudio(new Uint8Array(641)), /signed 16-bit/u);
+  assert.throws(() => subject.protocol.sendAudio(new Uint8Array(1_282)), /20 and 40/u);
 
   const jitterSubject = harness();
   await jitterSubject.protocol.start();
@@ -241,10 +218,7 @@ test("accepts only bounded 16 kHz 20-40 ms PCM and emits an exact SDK audio blob
   await rateSubject.protocol.start();
   for (let packet = 0; packet < 60; packet += 1)
     rateSubject.protocol.sendAudio(new Uint8Array(640));
-  assert.throws(
-    () => rateSubject.protocol.sendAudio(new Uint8Array(640)),
-    /packet-rate limit/u,
-  );
+  assert.throws(() => rateSubject.protocol.sendAudio(new Uint8Array(640)), /packet-rate limit/u);
 
   const byteRateSubject = harness();
   await byteRateSubject.protocol.start();
@@ -276,10 +250,7 @@ test("limits JPEG video to one per second with a one-slot latest-frame-wins queu
       mimeType: "image/jpeg",
     },
   });
-  assert.throws(
-    () => subject.protocol.sendJpeg(new Uint8Array([1, 2, 3, 4])),
-    /JPEG/u,
-  );
+  assert.throws(() => subject.protocol.sendJpeg(new Uint8Array([1, 2, 3, 4])), /JPEG/u);
 });
 
 test("processes every bounded part and every top-level member of a compound server event", async () => {
@@ -363,12 +334,9 @@ test("processes every bounded part and every top-level member of a compound serv
   });
   assert.equal(subject.server.connections.length, 2);
   assert.equal(subject.server.connections[0]?.closed, true);
-  assert.deepEqual(
-    subject.server.connections[1]?.params.config?.sessionResumption,
-    {
-      handle: "resume-handle",
-    },
-  );
+  assert.deepEqual(subject.server.connections[1]?.params.config?.sessionResumption, {
+    handle: "resume-handle",
+  });
 
   subject.protocol.sendText("continues on resumed connection");
   assert.deepEqual(subject.server.latest.received[0], {
@@ -518,8 +486,7 @@ test("bounded thought parts remain private while the session stays open", async 
   assert.equal(subject.protocol.state, "open");
   assert.equal(
     subject.events.some(
-      (event) =>
-        event.type === "model_text" && event.text === "private reasoning",
+      (event) => event.type === "model_text" && event.text === "private reasoning",
     ),
     false,
   );
@@ -585,8 +552,7 @@ test("malformed documented metadata fails closed instead of extending provider a
     assert.equal(subject.protocol.state, "failed", JSON.stringify(message));
     assert.ok(
       subject.events.some(
-        (event) =>
-          event.type === "error" && event.code === "malformed_server_event",
+        (event) => event.type === "error" && event.code === "malformed_server_event",
       ),
     );
   }
@@ -623,8 +589,7 @@ test("malformed inbound traffic fails the transport closed without extending pro
   assert.equal(subject.server.latest.closed, true);
   assert.equal(
     subject.events.filter(
-      (event) =>
-        event.type === "error" && event.code === "malformed_server_event",
+      (event) => event.type === "error" && event.code === "malformed_server_event",
     ).length,
     1,
   );
@@ -634,9 +599,7 @@ test("malformed inbound traffic fails the transport closed without extending pro
   );
   subject.clock.advance(100);
   assert.equal(
-    subject.events.some(
-      (event) => event.type === "error" && event.code === "idle_timeout",
-    ),
+    subject.events.some((event) => event.type === "error" && event.code === "idle_timeout"),
     false,
   );
 });
@@ -653,8 +616,7 @@ test("malformed diagnostics expose only a fixed schema branch", async () => {
     },
   } as never);
   const error = subject.events.find(
-    (event) =>
-      event.type === "error" && event.code === "malformed_server_event",
+    (event) => event.type === "error" && event.code === "malformed_server_event",
   );
   assert.deepEqual(error, {
     type: "error",
@@ -670,7 +632,10 @@ test("an exact empty serverContent envelope is a bounded provider no-op", async 
   await subject.protocol.start();
   subject.server.latest.emit({ serverContent: {} } as never);
   assert.equal(subject.protocol.state, "open");
-  assert.equal(subject.events.some((event) => event.type === "error"), false);
+  assert.equal(
+    subject.events.some((event) => event.type === "error"),
+    false,
+  );
 });
 
 test("unsupported Part payload arms fail closed instead of being discarded", async () => {
@@ -731,8 +696,7 @@ test("interaction-status diagnostics expose only fixed metadata categories", asy
     await subject.protocol.start();
     subject.server.latest.emit(message as never);
     const error = subject.events.find(
-      (event) =>
-        event.type === "error" && event.code === "malformed_server_event",
+      (event) => event.type === "error" && event.code === "malformed_server_event",
     );
     assert.equal(error?.type, "error");
     if (error?.type !== "error") throw new Error("Expected protocol error.");
@@ -752,9 +716,8 @@ test("validated completion metadata remains meaningful without inventing turn ev
   } as never);
   assert.equal(subject.protocol.state, "open");
   assert.equal(
-    subject.events.filter(
-      (event) => event.type === "turn" && event.state === "turn_complete",
-    ).length,
+    subject.events.filter((event) => event.type === "turn" && event.state === "turn_complete")
+      .length,
     1,
   );
 
@@ -792,8 +755,7 @@ test("compound server-content diagnostics restore the parent schema branch", asy
     },
   } as never);
   const error = subject.events.find(
-    (event) =>
-      event.type === "error" && event.code === "malformed_server_event",
+    (event) => event.type === "error" && event.code === "malformed_server_event",
   );
   assert.equal(error?.type, "error");
   if (error?.type !== "error") throw new Error("Expected protocol error.");
@@ -834,9 +796,7 @@ test("compound events validate atomically before emitting or mutating tool state
   assert.equal(
     subject.events.some(
       (event) =>
-        event.type === "model_text" ||
-        event.type === "audio" ||
-        event.type === "function_call",
+        event.type === "model_text" || event.type === "audio" || event.type === "function_call",
     ),
     false,
   );
@@ -854,9 +814,7 @@ test("nested inbound schemas reject unknown keys and wrong types", async () => {
     { serverContent: { outputTranscription: { text: "ok", confidence: 1 } } },
     {
       toolCall: {
-        functionCalls: [
-          { id: "call-1", name: "computer_use", args: {}, extra: true },
-        ],
+        functionCalls: [{ id: "call-1", name: "computer_use", args: {}, extra: true }],
       },
     },
     { toolCallCancellation: { ids: [], extra: false } },
@@ -871,8 +829,7 @@ test("nested inbound schemas reject unknown keys and wrong types", async () => {
     assert.equal(subject.protocol.state, "failed", JSON.stringify(message));
     assert.ok(
       subject.events.some(
-        (event) =>
-          event.type === "error" && event.code === "malformed_server_event",
+        (event) => event.type === "error" && event.code === "malformed_server_event",
       ),
       JSON.stringify(message),
     );
@@ -900,14 +857,10 @@ test("one compound event has a total decoded-content budget", async () => {
   });
   assert.equal(subject.protocol.state, "failed");
   assert.ok(
-    subject.events.some(
-      (event) => event.type === "error" && event.code === "provider_rate_limit",
-    ),
+    subject.events.some((event) => event.type === "error" && event.code === "provider_rate_limit"),
   );
   assert.equal(
-    subject.events.some(
-      (event) => event.type === "model_text" || event.type === "function_call",
-    ),
+    subject.events.some((event) => event.type === "model_text" || event.type === "function_call"),
     false,
   );
 });
@@ -933,8 +886,7 @@ test("unknown and invalid aggregate events are transport-terminal", async () => 
     assert.equal(subject.server.latest.closed, true);
     assert.ok(
       subject.events.some(
-        (event) =>
-          event.type === "error" && event.code === "malformed_server_event",
+        (event) => event.type === "error" && event.code === "malformed_server_event",
       ),
     );
   }
@@ -951,24 +903,17 @@ test("oversized ignored Gemini metadata fails closed within the event budget", a
     {
       usageMetadata: {
         totalTokenCount: 1,
-        promptTokensDetails: [
-          { modality: "AUDIO", detail: "x".repeat(33_000) },
-        ],
+        promptTokensDetails: [{ modality: "AUDIO", detail: "x".repeat(33_000) }],
       },
     },
   ]) {
     const subject = harness();
     await subject.protocol.start();
     subject.server.latest.emit(message);
-    assert.equal(
-      subject.protocol.state,
-      "failed",
-      JSON.stringify(Object.keys(message)),
-    );
+    assert.equal(subject.protocol.state, "failed", JSON.stringify(Object.keys(message)));
     assert.ok(
       subject.events.some(
-        (event) =>
-          event.type === "error" && event.code === "malformed_server_event",
+        (event) => event.type === "error" && event.code === "malformed_server_event",
       ),
     );
   }
@@ -979,9 +924,7 @@ test("tool responses preserve correlation but bound the structured result", asyn
   await subject.protocol.start();
   subject.server.latest.emit({
     toolCall: {
-      functionCalls: [
-        { id: "call-1", name: "computer_use", args: { action: "capture" } },
-      ],
+      functionCalls: [{ id: "call-1", name: "computer_use", args: { action: "capture" } }],
     },
   });
   subject.protocol.sendToolResult({
@@ -1038,18 +981,12 @@ test("tool call IDs are session-scoped, idempotent, and cancellation blocks comp
   };
   subject.server.latest.emit({ toolCall: { functionCalls: [call, call] } });
   subject.server.latest.emit({ toolCall: { functionCalls: [call] } });
-  assert.equal(
-    subject.events.filter((event) => event.type === "function_call").length,
-    1,
-  );
+  assert.equal(subject.events.filter((event) => event.type === "function_call").length, 1);
 
   subject.server.latest.emit({
     toolCallCancellation: { ids: ["call-1", "call-1"] },
   });
-  assert.equal(
-    subject.events.filter((event) => event.type === "function_cancel").length,
-    1,
-  );
+  assert.equal(subject.events.filter((event) => event.type === "function_cancel").length, 1);
   assert.throws(
     () =>
       subject.protocol.sendToolResult({
@@ -1088,9 +1025,7 @@ test("tool ID ledger has one hard session ceiling across completion, cancellatio
   emitToolCalls(subject.server, GEMINI_LIVE_MAX_SESSION_TOOL_CALL_IDS, 1);
   assert.equal(subject.protocol.state, "failed");
   assert.ok(
-    subject.events.some(
-      (event) => event.type === "error" && event.code === "provider_rate_limit",
-    ),
+    subject.events.some((event) => event.type === "error" && event.code === "provider_rate_limit"),
   );
 });
 
@@ -1112,18 +1047,14 @@ test("controlled resumption cannot reset or bypass the session tool ID ledger ce
   assert.equal(subject.server.connections.length, 2);
   assert.equal(subject.protocol.state, "failed");
   assert.ok(
-    subject.events.some(
-      (event) => event.type === "error" && event.code === "provider_rate_limit",
-    ),
+    subject.events.some((event) => event.type === "error" && event.code === "provider_rate_limit"),
   );
 });
 
 test("large provider PCM is rechunked to the renderer queue contract and rate-bounded", async () => {
   const subject = harness();
   await subject.protocol.start();
-  const pcm = new Uint8Array(
-    GEMINI_LIVE_MAX_RENDERER_AUDIO_CHUNK_BYTES * 2 + 48_000,
-  );
+  const pcm = new Uint8Array(GEMINI_LIVE_MAX_RENDERER_AUDIO_CHUNK_BYTES * 2 + 48_000);
   subject.server.latest.emit({
     serverContent: {
       modelTurn: {
@@ -1144,10 +1075,7 @@ test("large provider PCM is rechunked to the renderer queue contract and rate-bo
     [96_000, 96_000, 48_000],
   );
   assert.ok(
-    audio.every(
-      (event) =>
-        event.pcm.byteLength <= GEMINI_LIVE_MAX_RENDERER_AUDIO_CHUNK_BYTES,
-    ),
+    audio.every((event) => event.pcm.byteLength <= GEMINI_LIVE_MAX_RENDERER_AUDIO_CHUNK_BYTES),
   );
 
   const burst = new Uint8Array(300_000);
@@ -1173,9 +1101,7 @@ test("large provider PCM is rechunked to the renderer queue contract and rate-bo
   });
   assert.equal(subject.protocol.state, "failed");
   assert.ok(
-    subject.events.some(
-      (event) => event.type === "error" && event.code === "provider_rate_limit",
-    ),
+    subject.events.some((event) => event.type === "error" && event.code === "provider_rate_limit"),
   );
 });
 
@@ -1188,9 +1114,7 @@ test("provider event count has an aggregate rolling rate budget", async () => {
   }
   assert.equal(subject.protocol.state, "failed");
   assert.ok(
-    subject.events.some(
-      (event) => event.type === "error" && event.code === "provider_rate_limit",
-    ),
+    subject.events.some((event) => event.type === "error" && event.code === "provider_rate_limit"),
   );
 });
 
@@ -1202,24 +1126,16 @@ test("unexpected disconnect and provider error never auto-restart or expose prov
   assert.equal(disconnected.server.connections.length, 1);
   assert.ok(
     disconnected.events.some(
-      (event) =>
-        event.type === "reconnect_required" &&
-        event.reason === "unexpected_disconnect",
+      (event) => event.type === "reconnect_required" && event.reason === "unexpected_disconnect",
     ),
   );
-  assert.equal(
-    JSON.stringify(disconnected.events).includes("fake provider detail"),
-    false,
-  );
+  assert.equal(JSON.stringify(disconnected.events).includes("fake provider detail"), false);
 
   const errored = harness();
   await errored.protocol.start();
   errored.server.latest.fail();
   assert.equal(errored.protocol.state, "failed");
-  assert.equal(
-    JSON.stringify(errored.events).includes("fake provider detail"),
-    false,
-  );
+  assert.equal(JSON.stringify(errored.events).includes("fake provider detail"), false);
 });
 
 test("GoAway without a resumable handle fails closed instead of reconnecting", async () => {
@@ -1231,9 +1147,7 @@ test("GoAway without a resumable handle fails closed instead of reconnecting", a
   assert.equal(subject.server.connections.length, 1);
   assert.ok(
     subject.events.some(
-      (event) =>
-        event.type === "reconnect_required" &&
-        event.reason === "resumption_unavailable",
+      (event) => event.type === "reconnect_required" && event.reason === "resumption_unavailable",
     ),
   );
 });
@@ -1251,9 +1165,7 @@ test("connection timeout, idle timeout, and AbortSignal cancellation close every
   await assert.rejects(start);
   assert.equal(connecting.protocol.state, "failed");
   assert.ok(
-    connecting.events.some(
-      (event) => event.type === "error" && event.code === "connect_timeout",
-    ),
+    connecting.events.some((event) => event.type === "error" && event.code === "connect_timeout"),
   );
 
   const idle = harness({ idleTimeoutMs: 100 });
@@ -1261,11 +1173,7 @@ test("connection timeout, idle timeout, and AbortSignal cancellation close every
   idle.clock.advance(100);
   assert.equal(idle.protocol.state, "failed");
   assert.equal(idle.server.latest.closed, true);
-  assert.ok(
-    idle.events.some(
-      (event) => event.type === "error" && event.code === "idle_timeout",
-    ),
-  );
+  assert.ok(idle.events.some((event) => event.type === "error" && event.code === "idle_timeout"));
 
   const controller = new AbortController();
   const cancelled = harness({ signal: controller.signal });
@@ -1273,11 +1181,7 @@ test("connection timeout, idle timeout, and AbortSignal cancellation close every
   controller.abort();
   assert.equal(cancelled.protocol.state, "closed");
   assert.equal(cancelled.server.latest.closed, true);
-  assert.ok(
-    cancelled.events.some(
-      (event) => event.type === "error" && event.code === "cancelled",
-    ),
-  );
+  assert.ok(cancelled.events.some((event) => event.type === "error" && event.code === "cancelled"));
 });
 
 test("provider idle deadline is independent of continuous outbound media activity", async () => {
@@ -1289,9 +1193,7 @@ test("provider idle deadline is independent of continuous outbound media activit
   }
   assert.equal(outboundOnly.protocol.state, "failed");
   assert.ok(
-    outboundOnly.events.some(
-      (event) => event.type === "error" && event.code === "idle_timeout",
-    ),
+    outboundOnly.events.some((event) => event.type === "error" && event.code === "idle_timeout"),
   );
 
   const inbound = harness({ idleTimeoutMs: 100 });

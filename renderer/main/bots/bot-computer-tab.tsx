@@ -19,7 +19,10 @@ import { BotAvatar } from "../../components/bot-avatar";
 import { DeviceFloatingPlaceholder } from "../../components/device-floating-placeholder";
 import { useDocumentVisible } from "../../components/device-mini-player";
 import { Button, Text, toast } from "../../components/ui";
-import { DEVICE_SCREEN_CONTAINER_STYLE, fittedScreenStyle } from "../../lib/device-display-rotation";
+import {
+  DEVICE_SCREEN_CONTAINER_STYLE,
+  fittedScreenStyle,
+} from "../../lib/device-display-rotation";
 import { botComputersApi } from "../../lib/ipc";
 import { userFacingErrorMessage } from "../../lib/ipc-error";
 import { useBotComputersCache, useBotComputersStatus } from "../../lib/use-bot-computers";
@@ -44,7 +47,12 @@ export const BOT_COMPUTER_POINTER_POLL_MS = 500;
 export function useBotComputer(botId: string) {
   const query = useBotComputersStatus();
   const computer = query.data?.computers.find((entry) => entry.botId === botId);
-  return { supported: query.supported, loaded: query.data !== undefined, failed: query.isError, computer };
+  return {
+    supported: query.supported,
+    loaded: query.data !== undefined,
+    failed: query.isError,
+    computer,
+  };
 }
 
 /** The Bot's last action point, read only while it drives a running computer the person can see. */
@@ -58,7 +66,12 @@ function useBotPointer(botId: string, enabled: boolean): BotComputerPointer | nu
         (next) => {
           if (!current) return;
           setPointer((previous) =>
-            previous && next && previous.x === next.x && previous.y === next.y && previous.width === next.width && previous.height === next.height
+            previous &&
+            next &&
+            previous.x === next.x &&
+            previous.y === next.y &&
+            previous.width === next.width &&
+            previous.height === next.height
               ? previous
               : next,
           );
@@ -101,7 +114,10 @@ export function useBotComputerStart(bot: Pick<ComputerBot, "id" | "name">): BotC
       .then(
         () => undefined,
         (failure: unknown) => {
-          if (mounted.current) setError(userFacingErrorMessage(failure, `Aiden couldn't start ${bot.name}'s computer.`));
+          if (mounted.current)
+            setError(
+              userFacingErrorMessage(failure, `Aiden couldn't start ${bot.name}'s computer.`),
+            );
         },
       )
       .finally(() => {
@@ -164,8 +180,16 @@ export function useBotComputerControl(bot: Pick<ComputerBot, "id" | "name">) {
   );
   return {
     busy,
-    takeOver: () => act(() => botComputersApi.takeOver(bot.id), `Aiden couldn't take over ${bot.name}'s computer.`),
-    giveBack: () => act(() => botComputersApi.giveBack(bot.id), `Aiden couldn't give ${bot.name}'s computer back.`),
+    takeOver: () =>
+      act(
+        () => botComputersApi.takeOver(bot.id),
+        `Aiden couldn't take over ${bot.name}'s computer.`,
+      ),
+    giveBack: () =>
+      act(
+        () => botComputersApi.giveBack(bot.id),
+        `Aiden couldn't give ${bot.name}'s computer back.`,
+      ),
   };
 }
 
@@ -183,7 +207,10 @@ interface ComputerScreenProps {
 
 /** The live screen of a running computer: stream, avatar, read-only hint, and the person's input. */
 function ComputerScreen({ bot, computer, active, variant, onScreen }: ComputerScreenProps) {
-  const requestGrant = React.useCallback(async () => (await botComputersApi.viewerGrant(bot.id, { start: false })).grant, [bot.id]);
+  const requestGrant = React.useCallback(
+    async () => (await botComputersApi.viewerGrant(bot.id, { start: false })).grant,
+    [bot.id],
+  );
   const stream = useDeviceStream({
     hostId: BOT_COMPUTER_VIEWER_HOST_ID,
     deviceId: computer.vmName,
@@ -196,8 +223,11 @@ function ComputerScreen({ bot, computer, active, variant, onScreen }: ComputerSc
   const pointer = useBotPointer(bot.id, active && botDrives);
   const screenRef = React.useRef<HTMLDivElement | null>(null);
   const owner = `${bot.name}'s computer`;
-  const screenSize = stream.screen && stream.screen.width > 0 && stream.screen.height > 0 ? stream.screen : null;
-  const aspect = (screenSize ?? BOT_COMPUTER_DEFAULT_SCREEN).width / (screenSize ?? BOT_COMPUTER_DEFAULT_SCREEN).height;
+  const screenSize =
+    stream.screen && stream.screen.width > 0 && stream.screen.height > 0 ? stream.screen : null;
+  const aspect =
+    (screenSize ?? BOT_COMPUTER_DEFAULT_SCREEN).width /
+    (screenSize ?? BOT_COMPUTER_DEFAULT_SCREEN).height;
   const onScreenRef = React.useRef(onScreen);
   onScreenRef.current = onScreen;
   const screenWidth = screenSize?.width ?? 0;
@@ -214,12 +244,18 @@ function ComputerScreen({ bot, computer, active, variant, onScreen }: ComputerSc
   const overlays = stream.status !== "error";
   return (
     <div
-      className={cn("relative flex min-h-0 flex-1 items-center justify-center overflow-hidden bg-well", variant === "float" ? "rounded-b-sheet" : "p-3")}
+      className={cn(
+        "relative flex min-h-0 flex-1 items-center justify-center overflow-hidden bg-well",
+        variant === "float" ? "rounded-b-sheet" : "p-3",
+      )}
       style={DEVICE_SCREEN_CONTAINER_STYLE}
     >
       <div
         ref={screenRef}
-        className={cn("device-viewer-screen bot-computer-screen", variant === "float" && "device-mini-player-screen")}
+        className={cn(
+          "device-viewer-screen bot-computer-screen",
+          variant === "float" && "device-mini-player-screen",
+        )}
         data-typing-surface="device"
         data-bot-computer-screen={computer.vmName}
         data-controller={computer.controller}
@@ -248,9 +284,19 @@ function ComputerScreen({ bot, computer, active, variant, onScreen }: ComputerSc
             aria-hidden="true"
             data-bot-computer-pointer
             className="bot-computer-pointer"
-            style={{ left: `${(pointer.x / pointer.width) * 100}%`, top: `${(pointer.y / pointer.height) * 100}%` }}
+            style={{
+              left: `${(pointer.x / pointer.width) * 100}%`,
+              top: `${(pointer.y / pointer.height) * 100}%`,
+            }}
           >
-            <BotAvatar botId={bot.id} avatar={bot.avatar} name={bot.name} photoLoading="immediate" size="small" state={computer.activity ? "tool" : undefined} />
+            <BotAvatar
+              botId={bot.id}
+              avatar={bot.avatar}
+              name={bot.name}
+              photoLoading="immediate"
+              size="small"
+              state={computer.activity ? "tool" : undefined}
+            />
           </span>
         ) : null}
         {botDrives && overlays ? (
@@ -270,18 +316,35 @@ function ComputerScreen({ bot, computer, active, variant, onScreen }: ComputerSc
         ) : null}
       </div>
       <span className="sr-only" role="status" aria-live="polite">
-        {streaming ? (botDrives ? `${bot.name} is using ${owner}` : `You're using ${owner}`) : stream.status === "error" ? "Disconnected" : "Connecting…"}
+        {streaming
+          ? botDrives
+            ? `${bot.name} is using ${owner}`
+            : `You're using ${owner}`
+          : stream.status === "error"
+            ? "Disconnected"
+            : "Connecting…"}
       </span>
     </div>
   );
 }
 
 /** Everything but the live screen: off, starting, waiting, stopping, unfinished. */
-function ComputerState({ bot, computer, start }: { bot: ComputerBot; computer: BotComputerStatus; start: BotComputerStart }) {
-  const starting = start.pending || computer.state === "starting" || computer.state === "waiting_for_slot";
+function ComputerState({
+  bot,
+  computer,
+  start,
+}: {
+  bot: ComputerBot;
+  computer: BotComputerStatus;
+  start: BotComputerStart;
+}) {
+  const starting =
+    start.pending || computer.state === "starting" || computer.state === "waiting_for_slot";
   if (starting || computer.state === "stopping") {
     const label =
-      computer.state === "stopping" || computer.state === "waiting_for_slot" ? botComputerStateLabel(computer.state, bot.name) : `Starting ${bot.name}'s computer…`;
+      computer.state === "stopping" || computer.state === "waiting_for_slot"
+        ? botComputerStateLabel(computer.state, bot.name)
+        : `Starting ${bot.name}'s computer…`;
     return (
       <div role="status" className="browser-empty h-full min-h-0" data-bot-computer-banner>
         <AidenActivityMark mark="bounce" size={24} className="text-primary" />
@@ -290,20 +353,21 @@ function ComputerState({ bot, computer, start }: { bot: ComputerBot; computer: B
     );
   }
   return (
-    <section aria-labelledby={`bot-computer-${bot.id}-state`} className="browser-empty h-full min-h-0">
+    <section
+      aria-labelledby={`bot-computer-${bot.id}-state`}
+      className="browser-empty h-full min-h-0"
+    >
       <Text id={`bot-computer-${bot.id}-state`} variant="strong">
-        {computer.state === "stale" ? `${bot.name}'s computer didn't finish being made` : `${bot.name}'s computer is off`}
+        {computer.state === "stale"
+          ? `${bot.name}'s computer didn't finish being made`
+          : `${bot.name}'s computer is off`}
       </Text>
       <p>
         {computer.state === "stale"
           ? "Reset it in the Bot's profile to start again."
           : `It starts when ${bot.name} needs it, or when you start it here.`}
       </p>
-      {start.error ? (
-        <p role="alert">
-          {start.error}
-        </p>
-      ) : null}
+      {start.error ? <p role="alert">{start.error}</p> : null}
       {computer.state === "stale" ? null : (
         <Button size="small" variant="filled" onClick={start.start}>
           <Play aria-hidden /> {start.error ? "Try again" : "Start"}
@@ -330,7 +394,15 @@ export function BotComputerView({
   onScreen?(screen: { width: number; height: number } | null): void;
 }) {
   if (computer.state === "running" && !start.pending) {
-    return <ComputerScreen bot={bot} computer={computer} active={active} variant={variant} onScreen={onScreen} />;
+    return (
+      <ComputerScreen
+        bot={bot}
+        computer={computer}
+        active={active}
+        variant={variant}
+        onScreen={onScreen}
+      />
+    );
   }
   return variant === "float" ? (
     <div className="min-h-0 flex-1 overflow-auto rounded-b-sheet bg-well">
@@ -356,11 +428,24 @@ export function BotComputerControlButton({
   const botDrives = computer.controller === "bot";
   const label = botDrives ? "Take over" : `Give back to ${bot.name}`;
   return variant === "float" ? (
-    <Button variant="transparent" size="small" iconOnly aria-label={label} title={label} disabled={control.busy} onClick={botDrives ? control.takeOver : control.giveBack}>
+    <Button
+      variant="transparent"
+      size="small"
+      iconOnly
+      aria-label={label}
+      title={label}
+      disabled={control.busy}
+      onClick={botDrives ? control.takeOver : control.giveBack}
+    >
       {botDrives ? <MousePointerClick aria-hidden /> : <Undo2 aria-hidden />}
     </Button>
   ) : (
-    <Button variant={botDrives ? "filled" : "accent"} size="small" disabled={control.busy} onClick={botDrives ? control.takeOver : control.giveBack}>
+    <Button
+      variant={botDrives ? "filled" : "accent"}
+      size="small"
+      disabled={control.busy}
+      onClick={botDrives ? control.takeOver : control.giveBack}
+    >
       {botDrives ? <MousePointerClick aria-hidden /> : <Undo2 aria-hidden />}
       {botDrives ? "Take over" : "Give back"}
     </Button>
@@ -380,7 +465,12 @@ function ComputerStatusLine({ bot, computer }: { bot: ComputerBot; computer: Bot
   const text = computer.activity ?? `${bot.name}'s computer is running`;
   return (
     <span className="flex min-w-0 flex-1 items-center gap-2" data-bot-computer-activity>
-      <AidenActivityMark mark="quad-shuffle" size={16} active={Boolean(computer.activity)} className="shrink-0 text-primary" />
+      <AidenActivityMark
+        mark="quad-shuffle"
+        size={16}
+        active={Boolean(computer.activity)}
+        className="shrink-0 text-primary"
+      />
       <Text variant="small" color="secondary" className="min-w-0 truncate">
         {text}
       </Text>
@@ -412,19 +502,33 @@ export function BotComputerTab({
   start: BotComputerStart;
 }) {
   const visible = useDocumentVisible();
-  if (floating) return <DeviceFloatingPlaceholder name={`${bot.name}'s computer`} onDock={onDock} />;
+  if (floating)
+    return <DeviceFloatingPlaceholder name={`${bot.name}'s computer`} onDock={onDock} />;
   return (
     <div className="flex h-full min-h-0 flex-col" data-bot-computer-tab={bot.id}>
       {computer.state === "running" ? (
         <div className="flex min-h-10 shrink-0 items-center gap-2 px-3 py-1.5">
           <ComputerStatusLine bot={bot} computer={computer} />
           <BotComputerControlButton bot={bot} computer={computer} />
-          <Button variant="transparent" size="small" iconOnly aria-label="Float over chat" title="Float over chat" onClick={onFloat}>
+          <Button
+            variant="transparent"
+            size="small"
+            iconOnly
+            aria-label="Float over chat"
+            title="Float over chat"
+            onClick={onFloat}
+          >
             <PictureInPicture2 aria-hidden />
           </Button>
         </div>
       ) : null}
-      <BotComputerView bot={bot} computer={computer} active={active && visible} variant="tab" start={start} />
+      <BotComputerView
+        bot={bot}
+        computer={computer}
+        active={active && visible}
+        variant="tab"
+        start={start}
+      />
     </div>
   );
 }

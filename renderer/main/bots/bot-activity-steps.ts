@@ -52,10 +52,20 @@ export function mergeBotSteps(steps: readonly BotRecapStep[]): BotRecapStep[] {
   const merged: BotRecapStep[] = [];
   for (const step of steps) {
     const last = merged[merged.length - 1];
-    if (last && last.status === "ok" && step.status === "ok" && last.kind === step.kind && last.app === step.app) {
+    if (
+      last &&
+      last.status === "ok" &&
+      step.status === "ok" &&
+      last.kind === step.kind &&
+      last.app === step.app
+    ) {
       const { detail: _detail, ...rest } = last;
       const count = (last.count ?? 1) + 1;
-      merged[merged.length - 1] = { ...rest, count, label: botStepPhrase(step.kind, count, step.app) };
+      merged[merged.length - 1] = {
+        ...rest,
+        count,
+        label: botStepPhrase(step.kind, count, step.app),
+      };
       continue;
     }
     merged.push(step);
@@ -77,17 +87,26 @@ function botRecapSentence(steps: readonly BotRecapStep[]): string {
     if (group) group.count += 1;
     else groups.set(key, { kind: step.kind, ...(step.app ? { app: step.app } : {}), count: 1 });
   }
-  return [...groups.values()].map(({ kind, app, count }) => lowerFirst(botStepPhrase(kind, count, app))).join(", ");
+  return [...groups.values()]
+    .map(({ kind, app, count }) => lowerFirst(botStepPhrase(kind, count, app)))
+    .join(", ");
 }
 
-export function botRecapHeader(steps: readonly BotRecapStep[], durationMs: number, live: boolean): string {
+export function botRecapHeader(
+  steps: readonly BotRecapStep[],
+  durationMs: number,
+  live: boolean,
+): string {
   const sentence = botRecapSentence(steps);
   const lead = live ? "Working" : `Worked for ${botDurationLabel(durationMs)}`;
   return sentence ? `${lead} · ${sentence}` : lead;
 }
 
 /** Failures and refusals are counted apart; a step the person stopped is neither. */
-export function botRecapIssues(steps: readonly BotRecapStep[]): { failed: number; blocked: number } {
+export function botRecapIssues(steps: readonly BotRecapStep[]): {
+  failed: number;
+  blocked: number;
+} {
   return {
     failed: steps.filter((step) => step.status === "failed").length,
     blocked: steps.filter((step) => step.status === "blocked").length,
@@ -105,11 +124,26 @@ export function botStepLine(step: BotRecapStep): {
     case "running":
       return { text: botPhaseWord(step.kind, step.app), ...detail, tone: "normal", active: true };
     case "failed":
-      return { text: `Couldn’t ${botStepInfinitive(step.kind, step.app)}`, ...detail, tone: "error", active: false };
+      return {
+        text: `Couldn’t ${botStepInfinitive(step.kind, step.app)}`,
+        ...detail,
+        tone: "error",
+        active: false,
+      };
     case "blocked":
-      return { text: `Blocked: ${botStepInfinitive(step.kind, step.app)}`, ...detail, tone: "warning", active: false };
+      return {
+        text: `Blocked: ${botStepInfinitive(step.kind, step.app)}`,
+        ...detail,
+        tone: "warning",
+        active: false,
+      };
     case "stopped":
-      return { text: `Stopped: ${botStepInfinitive(step.kind, step.app)}`, ...detail, tone: "normal", active: false };
+      return {
+        text: `Stopped: ${botStepInfinitive(step.kind, step.app)}`,
+        ...detail,
+        tone: "normal",
+        active: false,
+      };
     case "ok":
       return { text: step.label, ...detail, tone: "normal", active: false };
   }

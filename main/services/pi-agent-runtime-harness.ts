@@ -12,8 +12,27 @@ import { hostCommandObservation } from "./pi-host-command-observation.js";
 import { toolOutputScope } from "./tool-output-store.js";
 import { recordAttendedToolArguments } from "./assistant/tool-loop-guard.js";
 import { AIDEN_PI_CLIENT_IDENTITY } from "./pi-client-identity.js";
-import { Agent, runToolCall, type AgentToolCallOutcome, type AgentTurnDecision, type AfterToolCallContext, type AfterToolCallResult, type AgentEvent, type AgentMessage, type AgentOptions, type AgentState, type AgentTool, type BeforeToolCallContext, type BeforeToolCallResult } from "@earendil-works/pi-agent-core";
-import { type AgentHarnessResources, type AgentHarnessStreamOptions, type AgentHarnessStreamOptionsPatch, formatSkillsForSystemPrompt } from "./pi-legacy-harness.js";
+import {
+  Agent,
+  runToolCall,
+  type AgentToolCallOutcome,
+  type AgentTurnDecision,
+  type AfterToolCallContext,
+  type AfterToolCallResult,
+  type AgentEvent,
+  type AgentMessage,
+  type AgentOptions,
+  type AgentState,
+  type AgentTool,
+  type BeforeToolCallContext,
+  type BeforeToolCallResult,
+} from "@earendil-works/pi-agent-core";
+import {
+  type AgentHarnessResources,
+  type AgentHarnessStreamOptions,
+  type AgentHarnessStreamOptionsPatch,
+  formatSkillsForSystemPrompt,
+} from "./pi-legacy-harness.js";
 import {
   getCurrentSystemPrompt,
   getCurrentSystemMessage,
@@ -51,7 +70,10 @@ import {
 import type { PiRuntimeEffectStore } from "./pi-runtime-effect-store.js";
 import { piRuntimePrivateFailure } from "./pi-runtime-failure.js";
 import { isPiCodemodeCallable, piRuntimeReplayPolicy } from "./pi-runtime-tool.js";
-import { providerFailureDiagnosticFields, providerFailureFromTerminalOutcome } from "./provider-failure.js";
+import {
+  providerFailureDiagnosticFields,
+  providerFailureFromTerminalOutcome,
+} from "./provider-failure.js";
 import { writeDiagnosticEvent } from "./diagnostic-journal.js";
 import type { ProviderFailureV1 } from "../../renderer/shared/provider-failure.js";
 import {
@@ -152,7 +174,10 @@ export interface PiAgentRuntimeExtension {
  * Pi's own `identity` option (the request `ClientIdentity`) is fixed by the
  * host to `AIDEN_PI_CLIENT_IDENTITY`; `identity` here is the runtime identity.
  */
-export interface PiAgentRuntimeHarnessOptions extends Omit<AgentOptions, "toolExecution" | "identity"> {
+export interface PiAgentRuntimeHarnessOptions extends Omit<
+  AgentOptions,
+  "toolExecution" | "identity"
+> {
   /** A settled spending stop ends both Pi tool turns and managed provider recovery. */
   spendingLimitReached?: () => Promise<boolean>;
   extensions?: readonly PiAgentRuntimeExtension[];
@@ -267,7 +292,8 @@ export type PiRuntimeTerminalOutcome = (
       finalMessage?: AssistantMessage;
       finalMessageWasAbandoned?: boolean;
       attempts: number;
-    }) & { emergencyProjection?: Exclude<GenerationEmergencyProjection, { kind: "none" }> };
+    }
+) & { emergencyProjection?: Exclude<GenerationEmergencyProjection, { kind: "none" }> };
 
 export interface PiRuntimeSessionBinding {
   session: PiSessionPort | Promise<PiSessionPort>;
@@ -275,7 +301,11 @@ export interface PiRuntimeSessionBinding {
   compaction: Omit<PiCompactionCoordinatorOptions, "session">;
   /** Explicit model override; omitted to preserve the default request safety budget. */
   compactionReserveTokens?: number;
-  appendMessages?: (session: PiSessionPort, messages: readonly AgentMessage[], visibleChatMessageId?: string) => Promise<void>;
+  appendMessages?: (
+    session: PiSessionPort,
+    messages: readonly AgentMessage[],
+    visibleChatMessageId?: string,
+  ) => Promise<void>;
   /**
    * Host adapter for atomically journaling a visible user plus its sync
    * marker, followed by the run input's `following` host messages.
@@ -365,7 +395,9 @@ export interface PiRuntimeRunOptions {
    * Never asked after an abort, an error, an output-limit stop or a Stop by
    * the person; a throw or a cancellation completes the run as it was.
    */
-  onStop?: (event: PiRuntimeStopEvent) => Promise<PiRuntimeStopDecision | undefined> | PiRuntimeStopDecision | undefined;
+  onStop?: (
+    event: PiRuntimeStopEvent,
+  ) => Promise<PiRuntimeStopDecision | undefined> | PiRuntimeStopDecision | undefined;
   /** Unset or 0 never asks `onStop`. */
   maxStopContinuations?: number;
 }
@@ -441,13 +473,16 @@ function newDurableSectionMessages(
   const sectionsOf = (message: AgentMessage): Record<string, unknown> | undefined => {
     if (message.role !== "system") return undefined;
     const sections = (message as { sections?: unknown }).sections;
-    return sections && typeof sections === "object" ? (sections as Record<string, unknown>) : undefined;
+    return sections && typeof sections === "object"
+      ? (sections as Record<string, unknown>)
+      : undefined;
   };
   const durable = (message: AgentMessage) => {
     const sections = sectionsOf(message);
     return Boolean(sections && keys.some((key) => key in sections));
   };
-  const fingerprint = (message: AgentMessage) => JSON.stringify([message.timestamp, sectionsOf(message)]);
+  const fingerprint = (message: AgentMessage) =>
+    JSON.stringify([message.timestamp, sectionsOf(message)]);
   const seen = new Set(previous.filter(durable).map(fingerprint));
   const added: AgentMessage[] = [];
   for (const message of next) {
@@ -574,7 +609,9 @@ function composeTools(
   const seen = new Map<object, object>();
   const tools = [
     ...baseTools.map((tool) => snapshotAgentTool(tool, seen)),
-    ...extensions.flatMap((extension) => extension.tools?.map((tool) => snapshotAgentTool(tool, seen)) ?? []),
+    ...extensions.flatMap(
+      (extension) => extension.tools?.map((tool) => snapshotAgentTool(tool, seen)) ?? [],
+    ),
   ];
   const names = new Set<string>();
   for (const tool of tools) {
@@ -588,14 +625,18 @@ function composeTools(
 
 /** The skills listing extensions contribute to the composed system prompt. */
 export function extensionSkillsPrompt(extensions: readonly PiAgentRuntimeExtension[]): string {
-  return formatSkillsForSystemPrompt(extensions.flatMap((extension) => extension.resources?.skills ?? []));
+  return formatSkillsForSystemPrompt(
+    extensions.flatMap((extension) => extension.resources?.skills ?? []),
+  );
 }
 
 /**
  * The frozen-state tail extensions append to the composed system prompt, after
  * every cache-stable part. Empty when no extension has one.
  */
-export function extensionVolatileSystemPrompt(extensions: readonly PiAgentRuntimeExtension[]): string {
+export function extensionVolatileSystemPrompt(
+  extensions: readonly PiAgentRuntimeExtension[],
+): string {
   return extensions
     .map((extension) => extension.volatileSystemPrompt?.trim())
     .filter((value): value is string => Boolean(value))
@@ -657,9 +698,7 @@ function composeEntryProjectors(
       projectors[customType] = (entry, index, entries) => {
         try {
           const visibleEntries = entries.filter(
-            (candidate) =>
-              candidate.type !== "custom" ||
-              candidate.customType === customType,
+            (candidate) => candidate.type !== "custom" || candidate.customType === customType,
           );
           const visibleIndex = visibleEntries.findIndex((candidate) => candidate.id === entry.id);
           const projected = projector(
@@ -862,7 +901,8 @@ function applyAfterToolPatch(
   context: AfterToolCallContext,
   patch: AfterToolCallResult,
 ): AfterToolCallContext {
-  const structuredContent = patch.structuredContent ?? (patch.content ? undefined : context.result.structuredContent);
+  const structuredContent =
+    patch.structuredContent ?? (patch.content ? undefined : context.result.structuredContent);
   const result = {
     ...context.result,
     ...(patch.content === undefined ? {} : { content: patch.content }),
@@ -955,7 +995,9 @@ export class PiAgentRuntimeHarness {
   private readonly lateDeferredTools: (() => readonly AgentTool[]) | undefined;
   /** One frozen snapshot per late tool object, so its identity is stable across lookups. */
   private readonly lateSnapshots = new WeakMap<AgentTool, AgentTool>();
-  private readonly agentListeners = new Set<(event: AgentEvent, signal: AbortSignal) => Promise<void> | void>();
+  private readonly agentListeners = new Set<
+    (event: AgentEvent, signal: AbortSignal) => Promise<void> | void
+  >();
   private readonly activeTools = new Map<string, string>();
   private readonly nestedCalls = new Map<string, NestedToolCalls>();
   /** Running UTF-8 total of retained nested arguments per parent, so admission stays O(1) per call. */
@@ -985,7 +1027,8 @@ export class PiAgentRuntimeHarness {
     steer?: true;
   }> = [];
   /** Visible-chat projections that app cancellation stopped waiting for. */
-  private uncertainQueuedProjections: Array<{ fingerprint: string; operation: Promise<unknown> }> = [];
+  private uncertainQueuedProjections: Array<{ fingerprint: string; operation: Promise<unknown> }> =
+    [];
   /**
    * Settlements of those projections, kept for the rest of the run even once
    * they settle. A save that lands after cancellation never reached Pi's
@@ -1083,17 +1126,21 @@ export class PiAgentRuntimeHarness {
     };
     const names = new Set(initialState.tools.map((tool) => tool.name));
     const snapshots = new Map<object, object>();
-    this.deferredTools = Object.freeze(deferredTools.map((tool) => {
-      if (!tool.name || names.has(tool.name) || !isPiCodemodeCallable(tool)) throw new Error("Deferred tools must have unique admitted callable identities.");
-      names.add(tool.name);
-      return snapshotAgentTool(tool, snapshots);
-    }));
+    this.deferredTools = Object.freeze(
+      deferredTools.map((tool) => {
+        if (!tool.name || names.has(tool.name) || !isPiCodemodeCallable(tool))
+          throw new Error("Deferred tools must have unique admitted callable identities.");
+        names.add(tool.name);
+        return snapshotAgentTool(tool, snapshots);
+      }),
+    );
     this.lateDeferredTools = lateDeferredTools;
     if (initialState.model) {
       this.contextProjectionOptions = {
         compactionReserveTokens: this.durability?.compactionReserveTokens,
         contextWindow: initialState.model.contextWindow,
-        systemPrompt: getCurrentSystemPrompt(initialState.messages ?? []) || initialState.systemPrompt || "",
+        systemPrompt:
+          getCurrentSystemPrompt(initialState.messages ?? []) || initialState.systemPrompt || "",
         tools: initialState.tools ?? [],
         supportsImages: initialState.model.input.includes("image"),
         providerId: initialState.model.provider,
@@ -1264,7 +1311,9 @@ export class PiAgentRuntimeHarness {
       : agentOptions.streamFn;
 
     const sideBySideTools = createSideBySideToolPolicy();
-    const finishTurnExtensions = extensions.filter((extension) => extension.finishTurn !== undefined);
+    const finishTurnExtensions = extensions.filter(
+      (extension) => extension.finishTurn !== undefined,
+    );
     const hostFinishTurn = agentOptions.finishTurn;
     const finishTurn: AgentOptions["finishTurn"] =
       finishTurnExtensions.length === 0
@@ -1315,7 +1364,7 @@ export class PiAgentRuntimeHarness {
         ? async (turn, signal) => {
             const decision = await finishTurn?.(turn, signal);
             this.stoppedAtSpendingLimit = await spendingLimitReached();
-            return this.stoppedAtSpendingLimit ? { action: "end" } : decision ?? undefined;
+            return this.stoppedAtSpendingLimit ? { action: "end" } : (decision ?? undefined);
           }
         : finishTurn,
       transformContext:
@@ -1516,7 +1565,8 @@ export class PiAgentRuntimeHarness {
     });
 
     this.subscribeAgent((event) => {
-      if (event.type === "tool_execution_start") this.activeTools.set(event.toolCallId, event.toolName);
+      if (event.type === "tool_execution_start")
+        this.activeTools.set(event.toolCallId, event.toolName);
       else if (event.type === "tool_execution_end") this.activeTools.delete(event.toolCallId);
       else if (event.type === "message_end" && event.message.role === "toolResult") {
         const calls = this.nestedCalls.get(event.message.toolCallId);
@@ -1601,7 +1651,9 @@ export class PiAgentRuntimeHarness {
         // The managed initial input is already durable and Agent.continue()
         // does not re-emit it. Any emitted user is queued steer/follow-up input.
         const emittedFingerprint =
-          event.message.role === "user" ? snapshotQueuedMessage(event.message)?.fingerprint : undefined;
+          event.message.role === "user"
+            ? snapshotQueuedMessage(event.message)?.fingerprint
+            : undefined;
         const acceptedIndex =
           event.message.role === "user"
             ? this.acceptedQueuedMessages.findIndex(
@@ -1611,7 +1663,9 @@ export class PiAgentRuntimeHarness {
             : -1;
         // Host-committed input already has its visible chat message.
         const committedVisibleId =
-          acceptedIndex >= 0 ? this.acceptedQueuedMessages[acceptedIndex].visibleChatMessageId : undefined;
+          acceptedIndex >= 0
+            ? this.acceptedQueuedMessages[acceptedIndex].visibleChatMessageId
+            : undefined;
         const visibleChatMessageId =
           committedVisibleId ??
           (event.message.role === "user" && durability.beforeQueuedUser
@@ -1698,7 +1752,11 @@ export class PiAgentRuntimeHarness {
           // durable; a declared one joins the journal where it now sits, so the
           // next turn rebuilds the same transcript instead of patching it again.
           this.pendingDurableMessages.push(
-            ...newDurableSectionMessages(input.context.messages, context.messages, durability.durableSections),
+            ...newDurableSectionMessages(
+              input.context.messages,
+              context.messages,
+              durability.durableSections,
+            ),
           );
         }
         try {
@@ -1747,7 +1805,10 @@ export class PiAgentRuntimeHarness {
             return hostPrepared;
           }
           if (!result.messages) return hostPrepared;
-          const compactedMessages = this.installCompactedMessages(result.messages, context.messages);
+          const compactedMessages = this.installCompactedMessages(
+            result.messages,
+            context.messages,
+          );
           if (result.compacted) {
             this.pendingEmergencyCheckpoint = false;
             if (this.contextProjectionOptions) {
@@ -1815,10 +1876,15 @@ export class PiAgentRuntimeHarness {
     return tools;
   }
 
-  private subscribeAgent(listener: (event: AgentEvent, signal: AbortSignal) => Promise<void> | void): () => void {
+  private subscribeAgent(
+    listener: (event: AgentEvent, signal: AbortSignal) => Promise<void> | void,
+  ): () => void {
     this.agentListeners.add(listener);
     const unsubscribe = this.agent.subscribe(listener);
-    return () => { unsubscribe(); this.agentListeners.delete(listener); };
+    return () => {
+      unsubscribe();
+      this.agentListeners.delete(listener);
+    };
   }
 
   private async emitNestedEvent(event: AgentEvent, signal: AbortSignal): Promise<void> {
@@ -1826,11 +1892,23 @@ export class PiAgentRuntimeHarness {
   }
 
   /** Programmatic calls use the same approvals, effects and observers as model-issued calls. */
-  executeNestedToolCall(parentToolCallId: string, name: string, args: unknown, signal?: AbortSignal): Promise<AgentToolCallOutcome> {
+  executeNestedToolCall(
+    parentToolCallId: string,
+    name: string,
+    args: unknown,
+    signal?: AbortSignal,
+  ): Promise<AgentToolCallOutcome> {
     const operation = this.nestedToolQueue.then(async () => {
       this.assertUsable();
-      if (!this.running || this.activeTools.get(parentToolCallId) !== "codemode") throw new Error("No active codemode tool owns this call.");
-      if (this.criticalFault || this.policyFault || this.managedHostFault || this.terminatedNestedParents.has(parentToolCallId)) throw new Error("The nested tool runtime has stopped.");
+      if (!this.running || this.activeTools.get(parentToolCallId) !== "codemode")
+        throw new Error("No active codemode tool owns this call.");
+      if (
+        this.criticalFault ||
+        this.policyFault ||
+        this.managedHostFault ||
+        this.terminatedNestedParents.has(parentToolCallId)
+      )
+        throw new Error("The nested tool runtime has stopped.");
       const activeSignal = this.agent.signal;
       if (!activeSignal) throw new Error("The tool runtime is not active.");
       const callSignal = signal ? AbortSignal.any([signal, activeSignal]) : activeSignal;
@@ -1839,18 +1917,26 @@ export class PiAgentRuntimeHarness {
       const tools = this.getCallableTools() as AgentTool[];
       const tool = tools.find((item) => item.name === name && isPiCodemodeCallable(item));
       if (!tool) throw new Error("This tool is not available to codemode.");
-      if (!args || typeof args !== "object" || Array.isArray(args)) throw new Error("Tool arguments must be an object.");
+      if (!args || typeof args !== "object" || Array.isArray(args))
+        throw new Error("Tool arguments must be an object.");
       const serialized = JSON.stringify(args);
-      if (Buffer.byteLength(serialized) > 32_768) throw new Error("Nested tool arguments exceed 32 KiB.");
+      if (Buffer.byteLength(serialized) > 32_768)
+        throw new Error("Nested tool arguments exceed 32 KiB.");
       const messages = this.agent.state.messages;
       let assistantMessage: AssistantMessage | undefined;
       for (let index = messages.length - 1; index >= 0 && !assistantMessage; index -= 1) {
         const message = messages[index]!;
-        if (message.role === "assistant" && message.content.some((part) => part.type === "toolCall" && part.id === parentToolCallId)) assistantMessage = message;
+        if (
+          message.role === "assistant" &&
+          message.content.some((part) => part.type === "toolCall" && part.id === parentToolCallId)
+        )
+          assistantMessage = message;
       }
-      if (!assistantMessage) throw new Error("The parent tool's durable assistant plan is unavailable.");
+      if (!assistantMessage)
+        throw new Error("The parent tool's durable assistant plan is unavailable.");
       const records = this.nestedCalls.get(parentToolCallId) ?? { calls: [], complete: true };
-      if (records.calls.length >= 128) throw new Error("Codemode is limited to 128 nested calls per script.");
+      if (records.calls.length >= 128)
+        throw new Error("Codemode is limited to 128 nested calls per script.");
       this.nestedCalls.set(parentToolCallId, records);
       const id = `${parentToolCallId}/${records.calls.length + 1}`;
       const argumentsSnapshot = JSON.parse(serialized) as JsonObject;
@@ -1859,17 +1945,31 @@ export class PiAgentRuntimeHarness {
       const retain = argumentsBytes <= 8192 && retainedBytes + argumentsBytes <= 32_768;
       if (retain) this.nestedRetainedBytes.set(parentToolCallId, retainedBytes + argumentsBytes);
       const record: NestedToolCalls["calls"][number] = {
-        id, name, status: "unfinished",
-        ...(retain ? { arguments: argumentsSnapshot as NonNullable<NestedToolCalls["calls"][number]["arguments"]> } : { argumentsBytes }),
+        id,
+        name,
+        status: "unfinished",
+        ...(retain
+          ? {
+              arguments: argumentsSnapshot as NonNullable<
+                NestedToolCalls["calls"][number]["arguments"]
+              >,
+            }
+          : { argumentsBytes }),
       };
       if (!retain) records.complete = false;
       records.calls.push(record);
       const started = Date.now();
       const toolCall = { type: "toolCall" as const, id, name, arguments: argumentsSnapshot };
       try {
-        await this.emitNestedEvent({ type: "tool_execution_start", toolCallId: id, toolName: name, args: argumentsSnapshot }, callSignal);
+        await this.emitNestedEvent(
+          { type: "tool_execution_start", toolCallId: id, toolName: name, args: argumentsSnapshot },
+          callSignal,
+        );
         const outcome = await runToolCall(toolCall, {
-          tools, assistantMessage, context: { messages: this.agent.state.messages, tools }, signal: callSignal,
+          tools,
+          assistantMessage,
+          context: { messages: this.agent.state.messages, tools },
+          signal: callSignal,
           beforeToolCall: async (context, hookSignal) => {
             callSignal.throwIfAborted();
             const result = await this.agent.beforeToolCall?.(context, hookSignal);
@@ -1877,12 +1977,31 @@ export class PiAgentRuntimeHarness {
             return result;
           },
           afterToolCall: this.agent.afterToolCall,
-          onUpdate: (partialResult) => this.emitNestedEvent({ type: "tool_execution_update", toolCallId: id, toolName: name, args: argumentsSnapshot, partialResult }, callSignal),
+          onUpdate: (partialResult) =>
+            this.emitNestedEvent(
+              {
+                type: "tool_execution_update",
+                toolCallId: id,
+                toolName: name,
+                args: argumentsSnapshot,
+                partialResult,
+              },
+              callSignal,
+            ),
         });
         record.status = outcome.isError ? "error" : "ok";
         if (outcome.result.terminate) this.terminatedNestedParents.add(parentToolCallId);
         record.durationMs = Date.now() - started;
-        await this.emitNestedEvent({ type: "tool_execution_end", toolCallId: id, toolName: name, result: outcome.result, isError: outcome.isError }, callSignal);
+        await this.emitNestedEvent(
+          {
+            type: "tool_execution_end",
+            toolCallId: id,
+            toolName: name,
+            result: outcome.result,
+            isError: outcome.isError,
+          },
+          callSignal,
+        );
         return outcome;
       } catch (error) {
         records.complete = false;
@@ -2032,7 +2151,9 @@ export class PiAgentRuntimeHarness {
           outcome.kind === "completed"
             ? "completed"
             : outcome.kind === "app_cancelled"
-              ? interruptedByShutdown ? "interrupted" : "app_cancelled"
+              ? interruptedByShutdown
+                ? "interrupted"
+                : "app_cancelled"
               : outcome.kind === "provider_failed"
                 ? "provider_failed"
                 : "host_failed",
@@ -2056,8 +2177,11 @@ export class PiAgentRuntimeHarness {
         // Classify before closing the raw provider message; only closed fields
         // reach the journal and all consumers retain the redacted outcome.
         writeDiagnosticEvent({
-          level: "warn", area: "generation", event: "provider-failed",
-          outcome: "failed", code: "provider-failed",
+          level: "warn",
+          area: "generation",
+          event: "provider-failed",
+          outcome: "failed",
+          code: "provider-failed",
           fields: providerFailureDiagnosticFields(finalized),
         });
       }
@@ -2110,7 +2234,12 @@ export class PiAgentRuntimeHarness {
         return await finish(
           cancelled()
             ? { kind: "app_cancelled", finalMessage, attempts }
-            : { kind: "host_failed", faultKind: this.managedHostFault ?? "session", finalMessage, attempts },
+            : {
+                kind: "host_failed",
+                faultKind: this.managedHostFault ?? "session",
+                finalMessage,
+                attempts,
+              },
         );
       }
       return undefined;
@@ -2120,14 +2249,23 @@ export class PiAgentRuntimeHarness {
       finalMessage: AssistantMessage,
     ): Promise<PiRuntimeTerminalOutcome | undefined> => {
       continuations += 1;
-      const event: PiRuntimeContinueEvent = { continuation: continuations, maxContinuations, reason };
+      const event: PiRuntimeContinueEvent = {
+        continuation: continuations,
+        maxContinuations,
+        reason,
+      };
       const hook = await waitForManagedHook(
         Promise.resolve().then(() => options.onContinue?.(event)),
         abortController.signal,
       );
       if (hook.error) {
         this.reportFault({ source: "lifecycle_subscriber", error: toError(hook.error) });
-        return await finish({ kind: "host_failed", faultKind: "lifecycle", finalMessage, attempts });
+        return await finish({
+          kind: "host_failed",
+          faultKind: "lifecycle",
+          finalMessage,
+          attempts,
+        });
       }
       if (hook.cancelled || cancelled()) {
         return await finish({ kind: "app_cancelled", finalMessage, attempts });
@@ -2331,7 +2469,10 @@ export class PiAgentRuntimeHarness {
           const following = input.following ?? [];
           const appendOperation = durability.appendInput
             ? durability.appendInput(session, input.message, following)
-            : (durability.appendMessages ?? appendPiMessages)(session, [input.message, ...following]);
+            : (durability.appendMessages ?? appendPiMessages)(session, [
+                input.message,
+                ...following,
+              ]);
           const appended = await waitForManagedPromise(appendOperation, abortController.signal);
           if (appended.kind === "cancelled") {
             this.trackDetachedDurability(appendOperation);
@@ -2366,10 +2507,7 @@ export class PiAgentRuntimeHarness {
           );
           this.emitContextProjection(projection);
           const preflightOperation = coordinator.checkContextPressure(projection);
-          const preflight = await waitForManagedPromise(
-            preflightOperation,
-            abortController.signal,
-          );
+          const preflight = await waitForManagedPromise(preflightOperation, abortController.signal);
           if (preflight.kind === "cancelled") {
             this.trackDetachedDurability(preflightOperation);
             return await finish({ kind: "app_cancelled", attempts });
@@ -2491,7 +2629,8 @@ export class PiAgentRuntimeHarness {
         // Pi has ended this step because the owner reached its spending cap.
         // Its outer recovery loop must not start another request or paid summary.
         if (this.stoppedAtSpendingLimit) {
-          if (cancelled()) return await finish({ kind: "app_cancelled", finalMessage: assistant, attempts });
+          if (cancelled())
+            return await finish({ kind: "app_cancelled", finalMessage: assistant, attempts });
           if (assistant.stopReason === "error" || assistant.stopReason === "aborted") {
             return await finish({
               kind: "provider_failed",
@@ -2501,7 +2640,12 @@ export class PiAgentRuntimeHarness {
             });
           }
           if (assistant.stopReason === "length" && !keptCutOffReply(assistant, "output-limit")) {
-            return await finish({ kind: "provider_failed", reason: "output-limit", finalMessage: assistant, attempts });
+            return await finish({
+              kind: "provider_failed",
+              reason: "output-limit",
+              finalMessage: assistant,
+              attempts,
+            });
           }
           return await complete(assistant, false);
         }
@@ -2600,9 +2744,7 @@ export class PiAgentRuntimeHarness {
             delayMs,
           });
           const retryHook = await waitForManagedHook(
-            Promise.resolve().then(() =>
-              options.onRetry?.(retry),
-            ),
+            Promise.resolve().then(() => options.onRetry?.(retry)),
             abortController.signal,
           );
           if (retryHook.error) {
@@ -2785,7 +2927,10 @@ export class PiAgentRuntimeHarness {
     if (rejected) return rejected;
     const queued = snapshotQueuedMessage(message);
     if (!queued) return { accepted: false, reason: "invalid-message" };
-    this.acceptedQueuedMessages.push({ ...queued, visibleChatMessageId: options?.visibleChatMessageId });
+    this.acceptedQueuedMessages.push({
+      ...queued,
+      visibleChatMessageId: options?.visibleChatMessageId,
+    });
     this.agent.followUp(queued.message);
     return { accepted: true, queue: "follow-up" };
   }
@@ -3041,12 +3186,22 @@ export class PiAgentRuntimeHarness {
     const observation = hostCommandObservation(context.result);
     if (observation) {
       // Receipts are private evidence: a failed write must not fail the tool effect or the run.
-      await binding.store.verification.check(binding.chatId, toolOutputScope({ runId: this.identity.runId, sessionId: this.identity.sessionId }), {
-        checkId: verificationIdentity("check", tracked.owner.effectId), runId: verificationIdentity("run", this.identity.runId), turnId: verificationIdentity("turn", operation.operationId),
-        artifactId: verificationIdentity("artifact", tracked.owner.effectId), kind: "tool_execution",
-        snapshot: async () => observation.snapshot,
-        observe: async () => observation,
-      }, this.managedAbortController?.signal).catch(() => undefined);
+      await binding.store.verification
+        .check(
+          binding.chatId,
+          toolOutputScope({ runId: this.identity.runId, sessionId: this.identity.sessionId }),
+          {
+            checkId: verificationIdentity("check", tracked.owner.effectId),
+            runId: verificationIdentity("run", this.identity.runId),
+            turnId: verificationIdentity("turn", operation.operationId),
+            artifactId: verificationIdentity("artifact", tracked.owner.effectId),
+            kind: "tool_execution",
+            snapshot: async () => observation.snapshot,
+            observe: async () => observation,
+          },
+          this.managedAbortController?.signal,
+        )
+        .catch(() => undefined);
     }
     operation.effects.delete(context.toolCall.id);
   }

@@ -598,8 +598,20 @@ export function parseBotCapabilityState(value: unknown): BotCapabilityState {
   const notices = value.notices.map((entry) => parseNotice(entry, value.sequence as number));
   const incarnations = parseIncarnations(value.incarnations);
   const legacyMigration = parseLegacyMigration(value.legacyMigration, value.sequence as number);
-  if (value.routineModels !== undefined && (typeof value.routineModels !== "string" || Buffer.byteLength(value.routineModels) > 4 * 1024 * 1024 || value.sequence === 0)) throw new BotCapabilityUnavailableError("Routine model authority storage is invalid.");
-  if (value.peerMessaging !== undefined && (typeof value.peerMessaging !== "string" || Buffer.byteLength(value.peerMessaging) > 2 * 1024 * 1024 || value.sequence === 0)) throw new BotCapabilityUnavailableError("Peer messaging authority storage is invalid.");
+  if (
+    value.routineModels !== undefined &&
+    (typeof value.routineModels !== "string" ||
+      Buffer.byteLength(value.routineModels) > 4 * 1024 * 1024 ||
+      value.sequence === 0)
+  )
+    throw new BotCapabilityUnavailableError("Routine model authority storage is invalid.");
+  if (
+    value.peerMessaging !== undefined &&
+    (typeof value.peerMessaging !== "string" ||
+      Buffer.byteLength(value.peerMessaging) > 2 * 1024 * 1024 ||
+      value.sequence === 0)
+  )
+    throw new BotCapabilityUnavailableError("Peer messaging authority storage is invalid.");
   if (new Set(policies.map(({ botId }) => botId)).size !== policies.length) {
     throw new BotCapabilityUnavailableError(
       "Bot access storage contains duplicate Bot identities.",
@@ -714,7 +726,10 @@ export function projectBotAccessView(
     botId,
     revision: policy.revision,
     policyEpoch: `epoch:${policy.policyEpoch}`,
-    summary: policy.accessMode === "full" ? botAccessSummaries(process.platform).full : botAccessSummaries(process.platform).custom,
+    summary:
+      policy.accessMode === "full"
+        ? botAccessSummaries(process.platform).full
+        : botAccessSummaries(process.platform).custom,
   };
   return policy.accessMode === "custom"
     ? { ...base, accessMode: "custom", custom: cloneBotCustomSelection(policy.custom) }
@@ -1415,8 +1430,12 @@ export class BotCapabilityStateEditor {
     this.assertPolicyRevision(policy, access.expectedBotPolicyRevision);
     if (access.mode === "custom") {
       validateSelectionAgainstCatalog(access.custom, input.catalog, {
-        retainedSkillIds: chat.mode === "custom" ? chat.custom.skillIds
-          : policy.accessMode === "custom" ? policy.custom.skillIds : [],
+        retainedSkillIds:
+          chat.mode === "custom"
+            ? chat.custom.skillIds
+            : policy.accessMode === "custom"
+              ? policy.custom.skillIds
+              : [],
       });
       const model = storedBotModelAuthority(policy);
       if (
@@ -1637,7 +1656,11 @@ export class BotCapabilityStateEditor {
    * the status comes back unchanged. The check and the write are one step, so
    * a review-first choice made just before can't be overwritten.
    */
-  acknowledgeNotice(audienceId: string, value: unknown, options: { keepReviewFirst?: boolean } = {}): BotNoticeStatus {
+  acknowledgeNotice(
+    audienceId: string,
+    value: unknown,
+    options: { keepReviewFirst?: boolean } = {},
+  ): BotNoticeStatus {
     const safeAudienceId = assertNoticeAudience(audienceId);
     const acknowledgement: BotNoticeAcknowledgement = parseBotNoticeAcknowledgement(value);
     const existing = this.state.notices.find((entry) => entry.audienceId === safeAudienceId);
@@ -1808,7 +1831,9 @@ export class BotCapabilityStateEditor {
     routineModelGrant?: BotRoutineModelGrant;
   }): BoundBotCustomSelection | undefined {
     const policy = this.policy(input.botId);
-    const routine = input.routineModelGrant ? inspectBotRoutineModelGrant(input.routineModelGrant) : undefined;
+    const routine = input.routineModelGrant
+      ? inspectBotRoutineModelGrant(input.routineModelGrant)
+      : undefined;
     if (routine && routine.claim.botId !== input.botId) throw new BotCapabilityUnavailableError();
     const model = storedBotModelAuthority(policy);
     if (routine) assertBoundBotProviderModelCurrent(routine.binding, input.snapshot);
@@ -1819,9 +1844,13 @@ export class BotCapabilityStateEditor {
       assertBoundBotProviderModelCurrent(policy.visionModel.binding, input.snapshot);
     }
     if (policy.accessMode === "custom") {
-      const choices = { skillsEnabled: input.skillsEnabled ?? input.snapshot.catalog.skillsEnabled };
+      const choices = {
+        skillsEnabled: input.skillsEnabled ?? input.snapshot.catalog.skillsEnabled,
+      };
       if (routine) {
-        const drift = botCustomSelectionDrift(policy.binding, input.snapshot, choices).filter((issue) => issue.group !== "provider" && issue.group !== "model");
+        const drift = botCustomSelectionDrift(policy.binding, input.snapshot, choices).filter(
+          (issue) => issue.group !== "provider" && issue.group !== "model",
+        );
         if (drift.length) throw new BotCapabilityBindingDriftError(drift);
       } else assertBoundBotCustomSelectionCurrent(policy.binding, input.snapshot, choices);
     }
@@ -1830,7 +1859,18 @@ export class BotCapabilityStateEditor {
       if (chat.botId !== policy.botId) throw new BotCapabilityUnavailableError();
       if (chat.mode === "custom") {
         validateSelectionAgainstCatalog(
-          { ...chat.custom, ...(routine ? { providerId: routine.binding.providerOption.id, modelId: routine.binding.modelOption.id } : {}), ...((input.skillsEnabled ?? input.snapshot.catalog.skillsEnabled) === false ? { skillIds: [] } : {}) },
+          {
+            ...chat.custom,
+            ...(routine
+              ? {
+                  providerId: routine.binding.providerOption.id,
+                  modelId: routine.binding.modelOption.id,
+                }
+              : {}),
+            ...((input.skillsEnabled ?? input.snapshot.catalog.skillsEnabled) === false
+              ? { skillIds: [] }
+              : {}),
+          },
           input.snapshot.catalog,
         );
       }
@@ -1875,4 +1915,3 @@ export function isSafeBotCapabilityState(value: unknown): boolean {
     return false;
   }
 }
-

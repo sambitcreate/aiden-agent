@@ -78,7 +78,12 @@ function sourceLines(text: string, isComplete: boolean, baseOffset = 0): SourceL
     const newline = text.indexOf("\n", start);
     if (newline >= 0) {
       const value = text.slice(start, newline + 1);
-      lines.push({ start: baseOffset + start, text: value, body: value.slice(0, -1), closed: true });
+      lines.push({
+        start: baseOffset + start,
+        text: value,
+        body: value.slice(0, -1),
+        closed: true,
+      });
       start = newline + 1;
       continue;
     }
@@ -501,7 +506,11 @@ export function scanStreamingRevealBoundary(
   const start = text.startsWith(scan.text) ? scan : INITIAL_STREAMING_REVEAL_BOUNDARY_SCAN;
   let { boundary, fence, previous, previousTableRow, tableHeader } = start;
   let offset = start.text.length;
-  for (let newline = text.indexOf("\n", offset); newline >= 0; newline = text.indexOf("\n", offset)) {
+  for (
+    let newline = text.indexOf("\n", offset);
+    newline >= 0;
+    newline = text.indexOf("\n", offset)
+  ) {
     const line = text.slice(offset, newline);
     const end = newline + 1;
     const trimmed = line.trim();

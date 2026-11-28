@@ -11,7 +11,12 @@
 
 import { isStorableResult, isStorableResultSchema } from "./result-schema.js";
 import { isValidBranchName } from "../../../renderer/shared/worktree-on-send.js";
-import { APPROVAL_MODES, MAC_GRANT_CLASSES, type ApprovalMode, type MacGrantClass } from "../../../renderer/shared/approval-mode.js";
+import {
+  APPROVAL_MODES,
+  MAC_GRANT_CLASSES,
+  type ApprovalMode,
+  type MacGrantClass,
+} from "../../../renderer/shared/approval-mode.js";
 import { narrowApprovalCeiling, type ApprovalCeiling } from "../approval-gate/run-approval.js";
 
 export type ChatLinkRunEnd = "done" | "stopped" | "failed" | "interrupted";
@@ -90,11 +95,19 @@ function time(value: unknown): number | undefined {
 function parseCeiling(value: unknown): ApprovalCeiling | undefined {
   if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
   const record = value as Record<string, unknown>;
-  if (!APPROVAL_MODES.includes(record.mode as ApprovalMode) || typeof record.chatOnly !== "boolean") return undefined;
-  if (!Array.isArray(record.macGrants) || !record.macGrants.every((grant) => MAC_GRANT_CLASSES.includes(grant as MacGrantClass))) {
+  if (!APPROVAL_MODES.includes(record.mode as ApprovalMode) || typeof record.chatOnly !== "boolean")
+    return undefined;
+  if (
+    !Array.isArray(record.macGrants) ||
+    !record.macGrants.every((grant) => MAC_GRANT_CLASSES.includes(grant as MacGrantClass))
+  ) {
     return undefined;
   }
-  return { mode: record.mode as ApprovalMode, macGrants: [...new Set(record.macGrants as MacGrantClass[])], chatOnly: record.chatOnly };
+  return {
+    mode: record.mode as ApprovalMode,
+    macGrants: [...new Set(record.macGrants as MacGrantClass[])],
+    chatOnly: record.chatOnly,
+  };
 }
 
 /** One link, or `undefined` when any required part is missing or damaged. Optional parts that are damaged are dropped. */
@@ -104,12 +117,17 @@ export function parseChatLink(value: unknown): ChatLink | undefined {
   const ceiling = parseCeiling(record.ceiling);
   const createdAt = time(record.createdAt);
   if (
-    typeof record.childChatId !== "string" || !ID.test(record.childChatId) ||
-    typeof record.leadChatId !== "string" || !ID.test(record.leadChatId) ||
+    typeof record.childChatId !== "string" ||
+    !ID.test(record.childChatId) ||
+    typeof record.leadChatId !== "string" ||
+    !ID.test(record.leadChatId) ||
     record.childChatId === record.leadChatId ||
-    typeof record.key !== "string" || !KEY.test(record.key) ||
-    typeof record.title !== "string" || [...record.title].length > TITLE_CHARS ||
-    createdAt === undefined || !ceiling
+    typeof record.key !== "string" ||
+    !KEY.test(record.key) ||
+    typeof record.title !== "string" ||
+    [...record.title].length > TITLE_CHARS ||
+    createdAt === undefined ||
+    !ceiling
   ) {
     return undefined;
   }
@@ -129,20 +147,39 @@ export function parseChatLink(value: unknown): ChatLink | undefined {
   if (tookOverAt !== undefined) link.tookOverAt = tookOverAt;
   if (typeof record.runId === "string" && KEY.test(record.runId)) link.runId = record.runId;
   const owed = record.owed as Record<string, unknown> | undefined;
-  if (owed && typeof owed === "object" && typeof owed.runId === "string" && KEY.test(owed.runId) &&
-      RUN_ENDS.includes(owed.end as ChatLinkRunEnd) && time(owed.at) !== undefined) {
+  if (
+    owed &&
+    typeof owed === "object" &&
+    typeof owed.runId === "string" &&
+    KEY.test(owed.runId) &&
+    RUN_ENDS.includes(owed.end as ChatLinkRunEnd) &&
+    time(owed.at) !== undefined
+  ) {
     link.owed = { runId: owed.runId, end: owed.end as ChatLinkRunEnd, at: owed.at as number };
   }
-  if (typeof record.branch === "string" && record.branch.length <= 255 && isValidBranchName(record.branch)) link.branch = record.branch;
+  if (
+    typeof record.branch === "string" &&
+    record.branch.length <= 255 &&
+    isValidBranchName(record.branch)
+  )
+    link.branch = record.branch;
   if (isStorableResultSchema(record.resultSchema)) {
     link.resultSchema = record.resultSchema;
     const result = record.result as Record<string, unknown> | undefined;
-    if (result && typeof result === "object" && !Array.isArray(result) && isStorableResult(result.value) && time(result.at) !== undefined) {
+    if (
+      result &&
+      typeof result === "object" &&
+      !Array.isArray(result) &&
+      isStorableResult(result.value) &&
+      time(result.at) !== undefined
+    ) {
       link.result = { value: result.value, at: result.at as number };
     }
   }
   if (Array.isArray(record.delivered)) {
-    const delivered = record.delivered.filter((runId): runId is string => typeof runId === "string" && KEY.test(runId));
+    const delivered = record.delivered.filter(
+      (runId): runId is string => typeof runId === "string" && KEY.test(runId),
+    );
     if (delivered.length > 0) link.delivered = delivered.slice(-DELIVERED_LIMIT);
   }
   return link;
@@ -166,7 +203,11 @@ export function parseChatLinkDocument(value: unknown): ChatLinkDocument {
 }
 
 /** What a started chat whose link is lost runs under: Ask, no Mac grants. */
-export const LOST_LINK_CEILING: ApprovalCeiling = Object.freeze({ mode: "ask", macGrants: [], chatOnly: false }) as ApprovalCeiling;
+export const LOST_LINK_CEILING: ApprovalCeiling = Object.freeze({
+  mode: "ask",
+  macGrants: [],
+  chatOnly: false,
+}) as ApprovalCeiling;
 
 /** The ceiling for a chat: its link's, or the lost-link one when only its `startedBy` survives. */
 export function startedChatCeiling(
@@ -174,7 +215,9 @@ export function startedChatCeiling(
   chatId: string,
   startedBy: { chatId: string } | undefined,
 ): ApprovalCeiling | undefined {
-  return links.ceilingFor(chatId) ?? (startedBy ? { ...LOST_LINK_CEILING, macGrants: [] } : undefined);
+  return (
+    links.ceilingFor(chatId) ?? (startedBy ? { ...LOST_LINK_CEILING, macGrants: [] } : undefined)
+  );
 }
 
 /**
@@ -245,7 +288,9 @@ export class ChatLinkStore {
 
   /** The chats this lead started, oldest first. */
   childrenOf(leadChatId: string): ChatLink[] {
-    return [...this.links.values()].filter((link) => link.leadChatId === leadChatId).map((link) => structuredClone(link));
+    return [...this.links.values()]
+      .filter((link) => link.leadChatId === leadChatId)
+      .map((link) => structuredClone(link));
   }
 
   /** The ceiling a started chat runs under, or `undefined` for any other chat. */
@@ -337,7 +382,10 @@ export class ChatLinkStore {
     const write = this.writes.then(async () => {
       this.queued = undefined;
       try {
-        await this.storage.save({ version: 1, links: [...this.links.values()].map((link) => structuredClone(link)) });
+        await this.storage.save({
+          version: 1,
+          links: [...this.links.values()].map((link) => structuredClone(link)),
+        });
       } catch (error) {
         this.log("Could not save the started-chat links.", error);
       }

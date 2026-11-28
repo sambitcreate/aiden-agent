@@ -22,8 +22,13 @@ type Load<T> =
  */
 const handledRequestKeys = new Map<string, number>();
 
-function unhandledRequest(botId: string, request: BotPanelFileRequest | null): BotPanelFileRequest | null {
-  return request && request.botId === botId && handledRequestKeys.get(botId) !== request.key ? request : null;
+function unhandledRequest(
+  botId: string,
+  request: BotPanelFileRequest | null,
+): BotPanelFileRequest | null {
+  return request && request.botId === botId && handledRequestKeys.get(botId) !== request.key
+    ? request
+    : null;
 }
 
 export function BotPanelFiles({
@@ -71,9 +76,9 @@ export function BotPanelFiles({
       headingRef.current?.focus();
       return;
     }
-    const row = Array.from(listRef.current?.querySelectorAll<HTMLElement>("[data-file-path]") ?? []).find(
-      (element) => element.dataset.filePath === target.path,
-    );
+    const row = Array.from(
+      listRef.current?.querySelectorAll<HTMLElement>("[data-file-path]") ?? [],
+    ).find((element) => element.dataset.filePath === target.path);
     (row ?? listRef.current)?.focus();
   }, [path]);
 
@@ -107,7 +112,9 @@ export function BotPanelFiles({
         if (!current) return;
         const message = userFacingErrorMessage(error, `Aiden couldn’t load ${botName}’s files.`);
         setIndex((value) =>
-          value.status === "ready" ? { status: "ready", value: value.value, refreshError: message } : { status: "failed", message },
+          value.status === "ready"
+            ? { status: "ready", value: value.value, refreshError: message }
+            : { status: "failed", message },
         );
       },
     );
@@ -123,7 +130,9 @@ export function BotPanelFiles({
     }
     if (!active) return;
     let current = true;
-    const showing = (value: Load<WorkspaceFileDocument> | null): value is Extract<Load<WorkspaceFileDocument>, { status: "ready" }> =>
+    const showing = (
+      value: Load<WorkspaceFileDocument> | null,
+    ): value is Extract<Load<WorkspaceFileDocument>, { status: "ready" }> =>
       value?.status === "ready" && value.value.path === path;
     // The open file stays on screen while it is re-read; only another file shows the skeleton.
     setDocument((value) => (showing(value) ? value : { status: "loading" }));
@@ -135,7 +144,9 @@ export function BotPanelFiles({
         if (!current) return;
         const message = userFacingErrorMessage(error, "Aiden couldn’t open that file.");
         setDocument((value) =>
-          showing(value) ? { status: "ready", value: value.value, refreshError: message } : { status: "failed", message },
+          showing(value)
+            ? { status: "ready", value: value.value, refreshError: message }
+            : { status: "failed", message },
         );
       },
     );
@@ -218,7 +229,12 @@ export function BotPanelFiles({
           description={`When ${botName} writes a list, a note, or a plan, it shows up here.`}
         />
       ) : (
-        <ul ref={listRef} aria-label="Files" tabIndex={-1} className="flex flex-col gap-0.5 outline-none">
+        <ul
+          ref={listRef}
+          aria-label="Files"
+          tabIndex={-1}
+          className="flex flex-col gap-0.5 outline-none"
+        >
           {files.map((entry) => (
             <li key={entry.path} style={{ paddingLeft: `${entry.depth * 16}px` }}>
               {entry.kind === "file" ? (

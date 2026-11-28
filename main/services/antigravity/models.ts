@@ -82,7 +82,8 @@ function titleFromId(id: string): string {
 
 function effortOf(choice: NativeModelChoice): { base: string; effort: Effort } | undefined {
   const byName = choice.name.trim().match(/^(.+?)\s*\((low|medium|high)\)$/iu);
-  if (byName?.[1] && byName[2]) return { base: byName[1].trim(), effort: byName[2].toLowerCase() as Effort };
+  if (byName?.[1] && byName[2])
+    return { base: byName[1].trim(), effort: byName[2].toLowerCase() as Effort };
   const byId = choice.value.match(/^(.+)-(low|medium|high)$/u);
   if (byId?.[1] && byId[2]) return { base: titleFromId(byId[1]), effort: byId[2] as Effort };
   return undefined;
@@ -124,7 +125,9 @@ export function projectNativeModels(choices: readonly NativeModelChoice[]): Mode
       if (emittedGroups.has(key)) continue;
       emittedGroups.add(key);
       for (const member of group.members) emitted.add(member);
-      output.push(reasoningModel(canonicalId(group.name, group.variants), group.name, group.variants));
+      output.push(
+        reasoningModel(canonicalId(group.name, group.variants), group.name, group.variants),
+      );
       continue;
     }
     emitted.add(id);
@@ -138,19 +141,24 @@ export function modelChoicesFromConfig(options: readonly SessionConfigOption[]):
   choices: NativeModelChoice[];
 } {
   const option = options.find(
-    (candidate) => (candidate.category === "model" || candidate.id === "model") && candidate.type === "select",
+    (candidate) =>
+      (candidate.category === "model" || candidate.id === "model") && candidate.type === "select",
   );
   if (!option || option.type !== "select") return { choices: [] };
   const choices: NativeModelChoice[] = [];
   for (const entry of option.options) {
     if ("value" in entry) choices.push({ value: entry.value, name: entry.name });
-    else for (const nested of entry.options) choices.push({ value: nested.value, name: nested.name });
+    else
+      for (const nested of entry.options) choices.push({ value: nested.value, name: nested.name });
   }
   return { configId: option.id, choices };
 }
 
 /** The exact native id for Aiden's model and thinking level; unsupported tiers clamp to the nearest. */
-export function nativeAntigravityModelId(model: Model<Api>, reasoning: ThinkingLevel | undefined): string {
+export function nativeAntigravityModelId(
+  model: Model<Api>,
+  reasoning: ThinkingLevel | undefined,
+): string {
   const map = model.thinkingLevelMap;
   if (!model.reasoning || !map) return model.id;
   const preferred: Effort =

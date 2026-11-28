@@ -109,9 +109,7 @@ export function useAssistantLiveApprovals(
           current.filter((candidate) => candidate.approvalId !== prompt.approvalId),
         );
       } finally {
-        setDecidingApprovalId((current) =>
-          current === prompt.approvalId ? null : current,
-        );
+        setDecidingApprovalId((current) => (current === prompt.approvalId ? null : current));
       }
     },
     [decidingApprovalId, syncRetentionFloor],

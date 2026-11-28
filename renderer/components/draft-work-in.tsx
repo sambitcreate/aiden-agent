@@ -21,7 +21,11 @@ export interface GitBranchPickerDraft {
   onSelectCheckout: () => void | Promise<void>;
   onSelectNewWorktree: () => void | Promise<void>;
   onSelectWorktree: (workspaceId: string) => void | Promise<void>;
-  onUpdateWorktree: (update: { baseRef?: string; fromOrigin?: boolean; branchName?: string }) => void;
+  onUpdateWorktree: (update: {
+    baseRef?: string;
+    fromOrigin?: boolean;
+    branchName?: string;
+  }) => void;
 }
 
 function report(action: () => void | Promise<void>, fallback: string): Promise<void> {
@@ -138,7 +142,9 @@ function RadioRow({
       </span>
       {icon}
       <span className="min-w-0 flex-1 truncate">{label}</span>
-      {meta ? <span className="max-w-36 shrink-0 truncate text-small text-tertiary">{meta}</span> : null}
+      {meta ? (
+        <span className="max-w-36 shrink-0 truncate text-small text-tertiary">{meta}</span>
+      ) : null}
     </button>
   );
 }
@@ -260,7 +266,10 @@ export function DraftWorkIn({
   )?.branch;
   const checkoutMeta = inExistingWorktree
     ? workIn.source.name
-    : [current, uncommitted > 0 ? `${uncommitted} change${uncommitted === 1 ? "" : "s"}` : undefined]
+    : [
+        current,
+        uncommitted > 0 ? `${uncommitted} change${uncommitted === 1 ? "" : "s"}` : undefined,
+      ]
         .filter(Boolean)
         .join(" · ");
   const hasRemote = branches ? (branches.hasRemote ?? branches.remoteBranches.length > 0) : false;

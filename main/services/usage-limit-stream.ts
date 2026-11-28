@@ -46,12 +46,14 @@ const FETCH_OBSERVABLE_APIS: ReadonlySet<string> = new Set([
 ]);
 
 /** Only rate-limit headers are kept from a response; nothing else is read. */
-const RATE_LIMIT_HEADER = /^(?:retry-after(?:-ms)?|x-ratelimit-|ratelimit-|anthropic-ratelimit-|x-codex-(?:primary|secondary)-)/iu;
+const RATE_LIMIT_HEADER =
+  /^(?:retry-after(?:-ms)?|x-ratelimit-|ratelimit-|anthropic-ratelimit-|x-codex-(?:primary|secondary)-)/iu;
 
 function rateLimitHeaders(entries: Iterable<[string, string]>): Record<string, string> {
   const kept: Record<string, string> = {};
   for (const [name, value] of entries) {
-    if (RATE_LIMIT_HEADER.test(name) && typeof value === "string" && value.length <= 512) kept[name.toLowerCase()] = value;
+    if (RATE_LIMIT_HEADER.test(name) && typeof value === "string" && value.length <= 512)
+      kept[name.toLowerCase()] = value;
   }
   return kept;
 }
@@ -90,7 +92,11 @@ export interface UsageLimitStreamOptions {
 }
 
 type Peeked =
-  | { kind: "content" | "done" | "ended"; events: AssistantMessageEvent[]; iterator: AsyncIterator<AssistantMessageEvent> }
+  | {
+      kind: "content" | "done" | "ended";
+      events: AssistantMessageEvent[];
+      iterator: AsyncIterator<AssistantMessageEvent>;
+    }
   | { kind: "error"; events: AssistantMessageEvent[]; error: AssistantMessage };
 
 /** Read until the response shows content or ends, keeping what was read. */
@@ -110,7 +116,11 @@ async function peek(stream: AssistantMessageEventStream): Promise<Peeked> {
 }
 
 /** A stream that replays what was read and then forwards the rest. */
-function replay(source: AssistantMessageEventStream, peeked: Peeked, replaceError?: AssistantMessage): AssistantMessageEventStream {
+function replay(
+  source: AssistantMessageEventStream,
+  peeked: Peeked,
+  replaceError?: AssistantMessage,
+): AssistantMessageEventStream {
   const output = createAssistantMessageEventStream();
   for (const event of peeked.events) {
     output.push(event.type === "error" && replaceError ? { ...event, error: replaceError } : event);
@@ -121,7 +131,10 @@ function replay(source: AssistantMessageEventStream, peeked: Peeked, replaceErro
   }
   if (peeked.kind === "ended") {
     output.end();
-    void source.result().then((message) => output.end(message), () => {});
+    void source.result().then(
+      (message) => output.end(message),
+      () => {},
+    );
     return output;
   }
   const { iterator } = peeked;
@@ -134,13 +147,20 @@ function replay(source: AssistantMessageEventStream, peeked: Peeked, replaceErro
       }
     } finally {
       output.end();
-      void source.result().then((message) => output.end(message), () => {});
+      void source.result().then(
+        (message) => output.end(message),
+        () => {},
+      );
     }
   })();
   return output;
 }
 
-export function terminalMessage(model: Model<Api>, stopReason: "error" | "aborted", errorMessage: string): AssistantMessage {
+export function terminalMessage(
+  model: Model<Api>,
+  stopReason: "error" | "aborted",
+  errorMessage: string,
+): AssistantMessage {
   return {
     role: "assistant",
     content: [],
@@ -163,7 +183,11 @@ export function terminalMessage(model: Model<Api>, stopReason: "error" | "aborte
 
 export function terminalStream(message: AssistantMessage): AssistantMessageEventStream {
   const output = createAssistantMessageEventStream();
-  output.push({ type: "error", reason: message.stopReason === "aborted" ? "aborted" : "error", error: message });
+  output.push({
+    type: "error",
+    reason: message.stopReason === "aborted" ? "aborted" : "error",
+    error: message,
+  });
   output.end();
   return output;
 }
@@ -182,7 +206,10 @@ export function usageLimitObservedOptions(
   const next: SimpleStreamOptions = {
     ...options,
     onResponse: async (response, responseModel) => {
-      record({ status: response.status, headers: rateLimitHeaders(Object.entries(response.headers ?? {})) });
+      record({
+        status: response.status,
+        headers: rateLimitHeaders(Object.entries(response.headers ?? {})),
+      });
       await hostOnResponse?.(response, responseModel);
     },
   };
@@ -205,7 +232,9 @@ export function usageLimitObservedOptions(
 export async function streamWaitingOutUsageLimits(
   model: Model<Api>,
   options: SimpleStreamOptions | undefined,
-  call: (options: SimpleStreamOptions | undefined) => AssistantMessageEventStream | Promise<AssistantMessageEventStream>,
+  call: (
+    options: SimpleStreamOptions | undefined,
+  ) => AssistantMessageEventStream | Promise<AssistantMessageEventStream>,
   limits: UsageLimitStreamOptions,
 ): Promise<AssistantMessageEventStream> {
   const { gate, owner, providerLabel } = limits;
@@ -222,27 +251,63 @@ export async function streamWaitingOutUsageLimits(
     return refusal ? terminalStream(terminalMessage(model, "error", refusal)) : call(options);
   }
   for (;;) {
-    const ticket = await gate.acquire(order, { owner, providerLabel, modelId: model.id, signal, maxWaitMs, ...(previous ? { previous } : {}) });
-    if (ticket.kind === "aborted") return terminalStream(terminalMessage(model, "aborted", "Request was aborted"));
+    const ticket = await gate.acquire(order, {
+      owner,
+      providerLabel,
+      modelId: model.id,
+      signal,
+      maxWaitMs,
+      ...(previous ? { previous } : {}),
+    });
+    if (ticket.kind === "aborted")
+      return terminalStream(terminalMessage(model, "aborted", "Request was aborted"));
     if (ticket.kind === "too-long") {
       // A limit another request (or an earlier run) holds clears after this request's longest wait.
-      const decision = { kind: "give-up", reason: "beyond-max-wait", ...(ticket.resetAt ? { resetAt: ticket.resetAt } : {}) } as const;
+      const decision = {
+        kind: "give-up",
+        reason: "beyond-max-wait",
+        ...(ticket.resetAt ? { resetAt: ticket.resetAt } : {}),
+      } as const;
       const waited = previous !== undefined || ticket.waited;
-      limits.onGiveUp?.({ owner, model, decision, providerLabel, waited, maxWaitMs: ticket.maxWaitMs });
+      limits.onGiveUp?.({
+        owner,
+        model,
+        decision,
+        providerLabel,
+        waited,
+        maxWaitMs: ticket.maxWaitMs,
+      });
       const note = usageLimitGiveUpNote(decision, { maxWaitMs: ticket.maxWaitMs, now: now() });
-      return terminalStream(markUsageLimitFailure(terminalMessage(model, "error", `${providerLabel} is at its usage limit.\n\n${note}`)));
+      return terminalStream(
+        markUsageLimitFailure(
+          terminalMessage(model, "error", `${providerLabel} is at its usage limit.\n\n${note}`),
+        ),
+      );
     }
     if (ticket.kind === "refused") {
       return terminalStream(
         markUsageLimitFailure(
-          terminalMessage(model, "error", usageLimitRefusedMessage({ providerLabel, ...(ticket.resetAt ? { resetAt: ticket.resetAt } : {}), now: now() })),
+          terminalMessage(
+            model,
+            "error",
+            usageLimitRefusedMessage({
+              providerLabel,
+              ...(ticket.resetAt ? { resetAt: ticket.resetAt } : {}),
+              now: now(),
+            }),
+          ),
         ),
       );
     }
     let observation: ProviderResponseObservation | undefined;
-    const sent = usageLimitObservedOptions(model, options, limits.observeFetch !== false, (seen) => {
-      observation = seen;
-    });
+    const sent = usageLimitObservedOptions(
+      model,
+      options,
+      limits.observeFetch !== false,
+      (seen) => {
+        observation = seen;
+      },
+    );
     let stream: AssistantMessageEventStream;
     let peeked: Peeked;
     try {
@@ -300,17 +365,36 @@ export async function streamWaitingOutUsageLimits(
     if (decision.kind === "give-up") {
       // Only a wait that ran out turns the line away; the rest fail one by one, as today.
       if (decision.reason === "beyond-max-wait" || decision.reason === "backoff-exhausted") {
-        gate.refuse({ key, providerId: model.provider, ...(accountWide ? {} : { modelId: model.id }) }, decision.resetAt, ticket);
+        gate.refuse(
+          { key, providerId: model.provider, ...(accountWide ? {} : { modelId: model.id }) },
+          decision.resetAt,
+          ticket,
+        );
       } else if (decision.reason === "off" && ownTest) {
         // Waiting was turned off during the wait: the limit stops holding anyone.
         gate.answered(ticket);
       } else {
         gate.release(ticket);
       }
-      limits.onGiveUp?.({ owner, model, decision, providerLabel, waited: previous !== undefined, maxWaitMs });
+      limits.onGiveUp?.({
+        owner,
+        model,
+        decision,
+        providerLabel,
+        waited: previous !== undefined,
+        maxWaitMs,
+      });
       const note = usageLimitGiveUpNote(decision, { maxWaitMs, now: at });
-      const base = error.errorMessage?.trim() || `${providerLabel} rejected the request because of a usage limit.`;
-      return replay(stream, peeked, markUsageLimitFailure(note ? { ...error, errorMessage: `${base}\n\n${note}` } : { ...error }));
+      const base =
+        error.errorMessage?.trim() ||
+        `${providerLabel} rejected the request because of a usage limit.`;
+      return replay(
+        stream,
+        peeked,
+        markUsageLimitFailure(
+          note ? { ...error, errorMessage: `${base}\n\n${note}` } : { ...error },
+        ),
+      );
     }
     gate.hold(decision.entry);
     limits.onWait?.({ owner, model, entry: decision.entry });
@@ -339,7 +423,10 @@ export function streamSimpleWaitingOutUsageLimits(
     async (stream) => {
       for await (const event of stream) output.push(event);
       output.end();
-      void stream.result().then((message) => output.end(message), () => {});
+      void stream.result().then(
+        (message) => output.end(message),
+        () => {},
+      );
     },
     (error: unknown) => {
       const message = terminalMessage(
@@ -347,7 +434,11 @@ export function streamSimpleWaitingOutUsageLimits(
         options?.signal?.aborted ? "aborted" : "error",
         error instanceof Error ? error.message : String(error),
       );
-      output.push({ type: "error", reason: message.stopReason === "aborted" ? "aborted" : "error", error: message });
+      output.push({
+        type: "error",
+        reason: message.stopReason === "aborted" ? "aborted" : "error",
+        error: message,
+      });
       output.end();
     },
   );

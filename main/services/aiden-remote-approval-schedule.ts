@@ -11,7 +11,10 @@ import {
   safeApprovalText,
   type ScheduledTaskApprovalDetails,
 } from "../../renderer/shared/assistant.js";
-import { formatScheduledTaskCadence, scheduledTaskEnabledAfterApproval } from "../../renderer/shared/scheduled-task-presentation.js";
+import {
+  formatScheduledTaskCadence,
+  scheduledTaskEnabledAfterApproval,
+} from "../../renderer/shared/scheduled-task-presentation.js";
 import { boundedText } from "./run-event-projection.js";
 
 /** The longest instructions or script a phone card shows; the summary bound. */
@@ -52,7 +55,8 @@ const ACTIONS = ["create", "update", "pause", "resume", "remove", "run_now"] as 
 
 /** Cut to the wire bound, dropping a character the bound would split in half. */
 function shortened(value: string): { text: string; truncated: boolean } {
-  if (value.length <= AIDEN_REMOTE_APPROVAL_SCHEDULE_TEXT_LIMIT) return { text: value, truncated: false };
+  if (value.length <= AIDEN_REMOTE_APPROVAL_SCHEDULE_TEXT_LIMIT)
+    return { text: value, truncated: false };
   let end = AIDEN_REMOTE_APPROVAL_SCHEDULE_TEXT_LIMIT;
   const last = value.charCodeAt(end - 1);
   if (last >= 0xd800 && last <= 0xdbff) end -= 1;
@@ -61,8 +65,22 @@ function shortened(value: string): { text: string; truncated: boolean } {
 
 type ScheduleCardSource = Pick<
   ScheduledTaskApprovalDetails,
-  | "action" | "name" | "cron" | "timezone" | "nextRunAt" | "notify" | "mode" | "permission" | "workspaceName"
-  | "mcpServerNames" | "providerName" | "modelName" | "enabled" | "schedulerEnabled" | "prompt" | "script"
+  | "action"
+  | "name"
+  | "cron"
+  | "timezone"
+  | "nextRunAt"
+  | "notify"
+  | "mode"
+  | "permission"
+  | "workspaceName"
+  | "mcpServerNames"
+  | "providerName"
+  | "modelName"
+  | "enabled"
+  | "schedulerEnabled"
+  | "prompt"
+  | "script"
 >;
 
 /**
@@ -97,7 +115,8 @@ export function approvalScheduleCard(
   const content = body ? shortened(body) : undefined;
   // The card says what the task will be once approved: a resumed task runs again, a paused one does not.
   const enabled = scheduledTaskEnabledAfterApproval(details);
-  const runsOnItsOwn = enabled && details.schedulerEnabled && details.action !== "remove" && details.nextRunAt > 0;
+  const runsOnItsOwn =
+    enabled && details.schedulerEnabled && details.action !== "remove" && details.nextRunAt > 0;
   const nextRun = runsOnItsOwn ? new Date(details.nextRunAt) : undefined;
   const card: AidenRemoteApprovalSchedule = {
     action: details.action,
@@ -109,7 +128,9 @@ export function approvalScheduleCard(
     permission: details.permission,
     ...(details.workspaceName ? { workspaceName: details.workspaceName } : {}),
     connectors: [...details.mcpServerNames],
-    ...(details.mode === "llm" ? { providerName: details.providerName, modelName: details.modelName } : {}),
+    ...(details.mode === "llm"
+      ? { providerName: details.providerName, modelName: details.modelName }
+      : {}),
     notify: details.notify,
     enabled,
     schedulerEnabled: details.schedulerEnabled,
@@ -124,25 +145,51 @@ export function approvalScheduleCard(
 }
 
 const SCHEDULE_KEYS = new Set([
-  "action", "name", "cadence", "timezone", "nextRunAt", "mode", "permission", "workspaceName",
-  "connectors", "providerName", "modelName", "notify", "enabled", "schedulerEnabled", "prompt",
-  "script", "truncated",
+  "action",
+  "name",
+  "cadence",
+  "timezone",
+  "nextRunAt",
+  "mode",
+  "permission",
+  "workspaceName",
+  "connectors",
+  "providerName",
+  "modelName",
+  "notify",
+  "enabled",
+  "schedulerEnabled",
+  "prompt",
+  "script",
+  "truncated",
 ]);
 
 const RFC3339_UTC = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,9})?Z$/u;
 
-function text(record: Record<string, unknown>, key: string, limit: number, multiline = false): string {
+function text(
+  record: Record<string, unknown>,
+  key: string,
+  limit: number,
+  multiline = false,
+): string {
   const value = record[key];
-  if (!safeApprovalText(value, limit, multiline)) throw new Error(`Approval schedule ${key} is invalid.`);
+  if (!safeApprovalText(value, limit, multiline))
+    throw new Error(`Approval schedule ${key} is invalid.`);
   return value;
 }
 
-function optionalText(record: Record<string, unknown>, key: string, limit: number, multiline = false): string | undefined {
+function optionalText(
+  record: Record<string, unknown>,
+  key: string,
+  limit: number,
+  multiline = false,
+): string | undefined {
   return record[key] === undefined ? undefined : text(record, key, limit, multiline);
 }
 
 function flag(record: Record<string, unknown>, key: string): boolean {
-  if (typeof record[key] !== "boolean") throw new Error(`Approval schedule ${key} must be boolean.`);
+  if (typeof record[key] !== "boolean")
+    throw new Error(`Approval schedule ${key} must be boolean.`);
   return record[key] as boolean;
 }
 
@@ -155,8 +202,10 @@ export function parseAidenRemoteApprovalSchedule(value: unknown): AidenRemoteApp
   for (const key of Object.keys(record)) {
     if (!SCHEDULE_KEYS.has(key)) throw new Error(`Approval schedule has unknown key ${key}.`);
   }
-  if (!(ACTIONS as readonly unknown[]).includes(record.action)) throw new Error("Approval schedule action is invalid.");
-  if (record.mode !== "llm" && record.mode !== "script") throw new Error("Approval schedule mode is invalid.");
+  if (!(ACTIONS as readonly unknown[]).includes(record.action))
+    throw new Error("Approval schedule action is invalid.");
+  if (record.mode !== "llm" && record.mode !== "script")
+    throw new Error("Approval schedule mode is invalid.");
   if (record.permission !== "read-only" && record.permission !== "full") {
     throw new Error("Approval schedule permission is invalid.");
   }
@@ -169,21 +218,39 @@ export function parseAidenRemoteApprovalSchedule(value: unknown): AidenRemoteApp
     throw new Error("Approval schedule connectors are invalid.");
   }
   const nextRunAt = optionalText(record, "nextRunAt", 40);
-  if (nextRunAt !== undefined && (!RFC3339_UTC.test(nextRunAt) || !Number.isFinite(Date.parse(nextRunAt)))) {
+  if (
+    nextRunAt !== undefined &&
+    (!RFC3339_UTC.test(nextRunAt) || !Number.isFinite(Date.parse(nextRunAt)))
+  ) {
     throw new Error("Approval schedule nextRunAt must be an RFC 3339 UTC date-time.");
   }
   const llm = record.mode === "llm";
-  const providerName = optionalText(record, "providerName", ASSISTANT_AUTOMATION_PROVIDER_NAME_LIMIT);
+  const providerName = optionalText(
+    record,
+    "providerName",
+    ASSISTANT_AUTOMATION_PROVIDER_NAME_LIMIT,
+  );
   const modelName = optionalText(record, "modelName", ASSISTANT_AUTOMATION_MODEL_NAME_LIMIT);
   const prompt = optionalText(record, "prompt", AIDEN_REMOTE_APPROVAL_SCHEDULE_TEXT_LIMIT, true);
   const script = optionalText(record, "script", AIDEN_REMOTE_APPROVAL_SCHEDULE_TEXT_LIMIT, true);
-  if (llm ? script !== undefined : prompt !== undefined || providerName !== undefined || modelName !== undefined) {
+  if (
+    llm
+      ? script !== undefined
+      : prompt !== undefined || providerName !== undefined || modelName !== undefined
+  ) {
     throw new Error("Approval schedule content does not match its mode.");
   }
-  if (record.truncated !== undefined && (record.truncated !== true || (prompt ?? script) === undefined)) {
+  if (
+    record.truncated !== undefined &&
+    (record.truncated !== true || (prompt ?? script) === undefined)
+  ) {
     throw new Error("Approval schedule truncated must be true and mark shortened content.");
   }
-  const workspaceName = optionalText(record, "workspaceName", ASSISTANT_AUTOMATION_WORKSPACE_NAME_LIMIT);
+  const workspaceName = optionalText(
+    record,
+    "workspaceName",
+    ASSISTANT_AUTOMATION_WORKSPACE_NAME_LIMIT,
+  );
   return {
     action: record.action as AidenRemoteApprovalSchedule["action"],
     name: text(record, "name", ASSISTANT_AUTOMATION_NAME_LIMIT),

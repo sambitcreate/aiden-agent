@@ -3,7 +3,10 @@ import type { NormalizedBlock } from "../types.js";
 import { textOf } from "./content.js";
 import { sanitize } from "./sanitize.js";
 
-const normalizeOne = (msg: Message | { role: "bashExecution"; command?: string; output?: string; exitCode?: number }, msgIndex: number | string): NormalizedBlock[] => {
+const normalizeOne = (
+  msg: Message | { role: "bashExecution"; command?: string; output?: string; exitCode?: number },
+  msgIndex: number | string,
+): NormalizedBlock[] => {
   if (msg.role === "user") {
     const blocks: NormalizedBlock[] = [];
     const text = sanitize(textOf(msg.content));
@@ -26,12 +29,14 @@ const normalizeOne = (msg: Message | { role: "bashExecution"; command?: string; 
   }
 
   if (msg.role === "toolResult") {
-    return [{
-      kind: "tool_result",
-      name: msg.toolName,
-      text: sanitize(textOf(msg.content)),
-      sourceIndex: msgIndex,
-    }];
+    return [
+      {
+        kind: "tool_result",
+        name: msg.toolName,
+        text: sanitize(textOf(msg.content)),
+        sourceIndex: msgIndex,
+      },
+    ];
   }
 
   if (msg.role === "assistant") {

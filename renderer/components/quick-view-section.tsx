@@ -23,7 +23,12 @@ export interface QuickViewSectionProps {
   /** Visible sibling cards' rects at drag start, in visible order; supplied by the parent. */
   measureSiblings: () => DOMRect[];
   /** Tier 3 header button, left of the grip: Open in sidebar (`PanelRightOpen`) or open-external (`ArrowUpRight`). */
-  headerAction?: { kind: "sidebar" | "external"; label: string; onSelect: () => void; disabled?: boolean };
+  headerAction?: {
+    kind: "sidebar" | "external";
+    label: string;
+    onSelect: () => void;
+    disabled?: boolean;
+  };
   /** Live drop target while dragging (null when the drag ends) so the parent can shift siblings. */
   onDragPreview?: (id: QuickViewSectionId, to: number | null) => void;
   /** Mount `children` only while the body is laid out: open, or still collapsing. */

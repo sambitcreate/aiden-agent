@@ -138,25 +138,30 @@ test("an allow scope is honored only when the prompt offered it", async () => {
       summary: "npm test",
       ...(scopes ? { scopes } : {}),
     });
-  const decideLatest = async (
-    pending: Promise<unknown>,
-    allowed: boolean,
-    scope: unknown,
-  ) => {
+  const decideLatest = async (pending: Promise<unknown>, allowed: boolean, scope: unknown) => {
     const prompt = prompts[prompts.length - 1]!;
     approvals.decide(prompt.approvalId, allowed, undefined, { scope } as never);
     await pending;
     return approvals.takeDecisionPayload("stream", prompt.toolCallId)?.scope;
   };
 
-  assert.equal(await decideLatest(ask("offered", ["once", "chat", "always"]), true, "always"), "always");
+  assert.equal(
+    await decideLatest(ask("offered", ["once", "chat", "always"]), true, "always"),
+    "always",
+  );
   assert.equal(await decideLatest(ask("chat", ["once", "chat", "always"]), true, "chat"), "chat");
   // Not offered: a specialized card or a bot turn only allows once.
   assert.equal(await decideLatest(ask("not-offered"), true, "always"), undefined);
   assert.equal(await decideLatest(ask("partial", ["once", "chat"]), true, "always"), undefined);
   // A deny never records a scope, and unknown names are ignored.
-  assert.equal(await decideLatest(ask("denied", ["once", "chat", "always"]), false, "always"), undefined);
-  assert.equal(await decideLatest(ask("unknown", ["once", "chat", "always"]), true, "forever"), undefined);
+  assert.equal(
+    await decideLatest(ask("denied", ["once", "chat", "always"]), false, "always"),
+    undefined,
+  );
+  assert.equal(
+    await decideLatest(ask("unknown", ["once", "chat", "always"]), true, "forever"),
+    undefined,
+  );
 });
 
 test("detaching a renderer denies pending and future approvals without aborting the stream", async () => {
@@ -201,10 +206,20 @@ test("an approval asked after a detach reports itself unpublished; cancelled or 
   const approvals = new ToolApprovalCoordinator(
     (prompt) => published.push(prompt.approvalId),
     undefined,
-    (prompt) => shortCircuited.push({ streamId: prompt.streamId, approvalId: prompt.approvalId, summary: prompt.summary }),
+    (prompt) =>
+      shortCircuited.push({
+        streamId: prompt.streamId,
+        approvalId: prompt.approvalId,
+        summary: prompt.summary,
+      }),
   );
   const ask = (streamId: string, summary: string) =>
-    approvals.request({ streamId, toolCallId: `call-${summary}`, toolName: "run_command", summary });
+    approvals.request({
+      streamId,
+      toolCallId: `call-${summary}`,
+      toolName: "run_command",
+      summary,
+    });
 
   approvals.detachStream("left");
   assert.equal(await ask("left", "npm test"), "detached");
@@ -238,7 +253,12 @@ test("a throwing short-circuit observer still settles the approval", async () =>
   );
   approvals.detachStream("left");
   assert.equal(
-    await approvals.request({ streamId: "left", toolCallId: "call", toolName: "write_file", summary: "write" }),
+    await approvals.request({
+      streamId: "left",
+      toolCallId: "call",
+      toolName: "write_file",
+      summary: "write",
+    }),
     "detached",
   );
 });
@@ -323,7 +343,11 @@ test("stream cancellation rejects delayed child approvals with a fresh signal", 
 
   const child = trackedSignal();
   const delayed = coordinator.request(delayedApproval, child.signal, "owner");
-  assert.equal(prompts.length, 1, "cancellation must close admission, not only drain pending prompts");
+  assert.equal(
+    prompts.length,
+    1,
+    "cancellation must close admission, not only drain pending prompts",
+  );
   assert.equal(await delayed, "cancelled");
   assert.equal(child.listenerCount(), 0);
   assert.equal(coordinator.pendingCount, 0);
@@ -346,7 +370,9 @@ test("cancelling before the first approval still closes that stream only", async
 
 test("renderer detachment cannot downgrade a cancelled stream", async () => {
   let publications = 0;
-  const coordinator = new ToolApprovalCoordinator(() => { publications += 1; });
+  const coordinator = new ToolApprovalCoordinator(() => {
+    publications += 1;
+  });
   coordinator.cancelStream(delayedApproval.streamId);
   coordinator.detachStream(delayedApproval.streamId);
   assert.equal(await coordinator.request(delayedApproval), "cancelled");
@@ -366,7 +392,9 @@ test("release removes a cancelled stream fence after generation settlement", asy
 
 test("shutdown rejects future requests even after stream release", async () => {
   let publications = 0;
-  const coordinator = new ToolApprovalCoordinator(() => { publications += 1; });
+  const coordinator = new ToolApprovalCoordinator(() => {
+    publications += 1;
+  });
   coordinator.detachStream(delayedApproval.streamId);
   coordinator.shutdown();
   coordinator.releaseStream(delayedApproval.streamId);
@@ -385,7 +413,9 @@ for (const boundary of ["cancelStream", "shutdown"] as const) {
     let reentrant: Promise<string> | undefined;
     const coordinator = new ToolApprovalCoordinator(
       (prompt) => prompts.push(prompt.approvalId),
-      () => { reentrant = coordinator.request(delayedApproval); },
+      () => {
+        reentrant = coordinator.request(delayedApproval);
+      },
     );
     const tracked = trackedSignal();
     const pending = coordinator.request(delayedApproval, tracked.signal);
@@ -425,8 +455,15 @@ test("a caller-supplied approval id is published and answered under that id; re-
   assert.equal(await first, "cancelled");
   assert.equal(coordinator.decideAsHost("wait-1", true), true);
   assert.equal(await second, "allowed");
-  assert.deepEqual(withdrawn, [["wait-1", "cancelled"], ["wait-1", "allowed"]]);
-  assert.equal(coordinator.decideAsHost("wait-1", true), false, "an answered id cannot be answered again");
+  assert.deepEqual(withdrawn, [
+    ["wait-1", "cancelled"],
+    ["wait-1", "allowed"],
+  ]);
+  assert.equal(
+    coordinator.decideAsHost("wait-1", true),
+    false,
+    "an answered id cannot be answered again",
+  );
 });
 
 test("a prompt answered from inside its own publication is still withdrawn exactly once", async () => {
@@ -469,7 +506,10 @@ test("re-asking an id from inside its publication leaves the replacement pending
   });
 
   await assert.rejects(ask("first"), /replaced/u);
-  assert.deepEqual(approvals.pending("b").map((prompt) => prompt.toolCallId), ["second"]);
+  assert.deepEqual(
+    approvals.pending("b").map((prompt) => prompt.toolCallId),
+    ["second"],
+  );
   assert.deepEqual(withdrawn, []);
 
   assert.equal(approvals.decide("same", "allow"), true);
@@ -536,7 +576,13 @@ test("a publication that throws after settling its own prompt keeps the outcome 
     (approvalId) => withdrawn.push(approvalId),
   );
   const outcome = await coordinator.request(
-    { streamId: "s-throw", approvalId: "a-throw", toolCallId: "c", toolName: "write", summary: "x" },
+    {
+      streamId: "s-throw",
+      approvalId: "a-throw",
+      toolCallId: "c",
+      toolName: "write",
+      summary: "x",
+    },
     undefined,
     "document-one",
   );
@@ -617,17 +663,33 @@ test("identical parallel calls in one run share one card, and its answer reaches
   const first = approvals.request({ ...card, toolCallId: "call-1" }, undefined, "doc");
   const second = approvals.request({ ...card, toolCallId: "call-2" }, undefined, "doc");
   const other = approvals.request(
-    { ...card, summary: "Run command: npm run lint", effect: toolCallApprovalEffect("run_command", { command: "npm run lint" }), toolCallId: "call-3" },
+    {
+      ...card,
+      summary: "Run command: npm run lint",
+      effect: toolCallApprovalEffect("run_command", { command: "npm run lint" }),
+      toolCallId: "call-3",
+    },
     undefined,
     "doc",
   );
-  assert.deepEqual(prompts.map((prompt) => prompt.toolCallId), ["call-1", "call-3"], "the identical call joins the first card");
-  assert.ok(prompts.every((prompt) => !("effect" in prompt)), "the effect key never reaches the card");
+  assert.deepEqual(
+    prompts.map((prompt) => prompt.toolCallId),
+    ["call-1", "call-3"],
+    "the identical call joins the first card",
+  );
+  assert.ok(
+    prompts.every((prompt) => !("effect" in prompt)),
+    "the effect key never reaches the card",
+  );
 
   assert.equal(approvals.decide(prompts[0]!.approvalId, true, "doc", { scope: "chat" }), true);
   assert.deepEqual(await Promise.all([first, second]), ["allowed", "allowed"]);
   assert.deepEqual(approvals.takeDecisionPayload("run", "call-1"), { scope: "chat" });
-  assert.deepEqual(approvals.takeDecisionPayload("run", "call-2"), { scope: "chat" }, "the shared answer's scope applies to both calls");
+  assert.deepEqual(
+    approvals.takeDecisionPayload("run", "call-2"),
+    { scope: "chat" },
+    "the shared answer's scope applies to both calls",
+  );
   approvals.decide(prompts[1]!.approvalId, true, "doc");
   assert.equal(await other, "allowed");
 });
@@ -673,7 +735,12 @@ test("a denied action is not asked again in the same run", async () => {
 test("a shared card withdrawn for its own call alone asks again for the calls still waiting", async () => {
   const prompts: Array<{ approvalId: string; toolCallId: string }> = [];
   const approvals = new ToolApprovalCoordinator((prompt) => prompts.push(prompt));
-  const card = { streamId: "run", toolName: "run_command", summary: "Run command: make", effect: toolCallApprovalEffect("run_command", { command: "make" }) };
+  const card = {
+    streamId: "run",
+    toolName: "run_command",
+    summary: "Run command: make",
+    effect: toolCallApprovalEffect("run_command", { command: "make" }),
+  };
   const leaderStop = new AbortController();
   const leader = approvals.request({ ...card, toolCallId: "call-1" }, leaderStop.signal);
   const follower = approvals.request({ ...card, toolCallId: "call-2" });
@@ -681,12 +748,20 @@ test("a shared card withdrawn for its own call alone asks again for the calls st
   leaderStop.abort();
   assert.equal(await leader, "cancelled");
   await new Promise((resolve) => setImmediate(resolve));
-  assert.deepEqual(prompts.map((prompt) => prompt.toolCallId), ["call-1", "call-2"], "the waiting call gets its own card");
+  assert.deepEqual(
+    prompts.map((prompt) => prompt.toolCallId),
+    ["call-1", "call-2"],
+    "the waiting call gets its own card",
+  );
   approvals.decide(prompts[1]!.approvalId, true);
   assert.equal(await follower, "allowed");
 
   const followerStop = new AbortController();
-  const makeTest = { ...card, summary: "Run command: make test", effect: toolCallApprovalEffect("run_command", { command: "make test" }) };
+  const makeTest = {
+    ...card,
+    summary: "Run command: make test",
+    effect: toolCallApprovalEffect("run_command", { command: "make test" }),
+  };
   const shared = approvals.request({ ...makeTest, toolCallId: "call-3" });
   const leaving = approvals.request({ ...makeTest, toolCallId: "call-4" }, followerStop.signal);
   followerStop.abort();
@@ -699,10 +774,22 @@ test("calls whose card reads the same but whose arguments differ each get their 
   const prompts: Array<{ approvalId: string; toolCallId: string }> = [];
   const approvals = new ToolApprovalCoordinator((prompt) => prompts.push(prompt));
   // A browser card names the page, not the script it would run.
-  const card = { streamId: "run", toolName: "browser_evaluate", summary: "Run JavaScript on this page\nhttps://example.com/" };
+  const card = {
+    streamId: "run",
+    toolName: "browser_evaluate",
+    summary: "Run JavaScript on this page\nhttps://example.com/",
+  };
   const target = { tabId: "tab-1" };
-  const read = approvals.request({ ...card, toolCallId: "call-1", effect: toolCallApprovalEffect(card.toolName, { script: "document.title" }, target) });
-  const wipe = approvals.request({ ...card, toolCallId: "call-2", effect: toolCallApprovalEffect(card.toolName, { script: "localStorage.clear()" }, target) });
+  const read = approvals.request({
+    ...card,
+    toolCallId: "call-1",
+    effect: toolCallApprovalEffect(card.toolName, { script: "document.title" }, target),
+  });
+  const wipe = approvals.request({
+    ...card,
+    toolCallId: "call-2",
+    effect: toolCallApprovalEffect(card.toolName, { script: "localStorage.clear()" }, target),
+  });
   assert.equal(prompts.length, 2, "one Allow cannot approve a different script");
 
   approvals.decide(prompts[1]!.approvalId, false);
@@ -710,11 +797,23 @@ test("calls whose card reads the same but whose arguments differ each get their 
   approvals.decide(prompts[0]!.approvalId, true);
   assert.equal(await read, "allowed", "denying one script does not deny the other");
 
-  const again = approvals.request({ ...card, toolCallId: "call-3", effect: toolCallApprovalEffect(card.toolName, { script: "document.title" }, target) });
+  const again = approvals.request({
+    ...card,
+    toolCallId: "call-3",
+    effect: toolCallApprovalEffect(card.toolName, { script: "document.title" }, target),
+  });
   assert.equal(prompts.length, 3, "an allowed action is asked again: only a deny is remembered");
   approvals.decide(prompts[2]!.approvalId, true);
   assert.equal(await again, "allowed");
-  const otherTab = approvals.request({ ...card, toolCallId: "call-4", effect: toolCallApprovalEffect(card.toolName, { script: "localStorage.clear()" }, { tabId: "tab-2" }) });
+  const otherTab = approvals.request({
+    ...card,
+    toolCallId: "call-4",
+    effect: toolCallApprovalEffect(
+      card.toolName,
+      { script: "localStorage.clear()" },
+      { tabId: "tab-2" },
+    ),
+  });
   assert.equal(prompts.length, 4, "the denied script on another tab is a different action");
   approvals.decide(prompts[3]!.approvalId, true);
   assert.equal(await otherTab, "allowed");
@@ -741,7 +840,10 @@ test("an action's effect ignores key order and is absent for values that are not
     toolCallApprovalEffect("edit_file", { path: "a.ts", edits: [{ old: "x", new: "y" }] }),
     toolCallApprovalEffect("edit_file", { edits: [{ new: "y", old: "x" }], path: "a.ts" }),
   );
-  assert.notEqual(toolCallApprovalEffect("edit_file", { path: "a.ts" }), toolCallApprovalEffect("write_file", { path: "a.ts" }));
+  assert.notEqual(
+    toolCallApprovalEffect("edit_file", { path: "a.ts" }),
+    toolCallApprovalEffect("write_file", { path: "a.ts" }),
+  );
   assert.equal(toolCallApprovalEffect("x", { n: 10n }), undefined);
 });
 

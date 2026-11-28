@@ -88,14 +88,20 @@ export interface RendererChatMutationDeps {
   /** Tells every window a chat's design mode changed (`chats:design-mode-changed`). */
   broadcastDesignModeChanged(change: ChatDesignModeChange): void;
   chatTitleService: {
-    renameWithFoundationModels(chatId: string, options: { rejectFeatureOwned?: boolean }): Promise<unknown>;
+    renameWithFoundationModels(
+      chatId: string,
+      options: { rejectFeatureOwned?: boolean },
+    ): Promise<unknown>;
   };
   botApplicationService: { deleteChat(input: { botId: string; chatId: string }): Promise<unknown> };
   hostPlatformCapabilities(): { bots: boolean };
   closeDeviceSessionsForChat(chatId: string): void;
   /** Sending in a snoozed chat brings it back: `wake` clears only a snooze. */
   chatTriage?: { wake(chatId: string): Promise<unknown> };
-  rendererDocumentOwner(event: IpcMainInvokeEvent, invalidRequest: () => Error): RendererDocumentOwner;
+  rendererDocumentOwner(
+    event: IpcMainInvokeEvent,
+    invalidRequest: () => Error,
+  ): RendererDocumentOwner;
   llmClient: {
     requiresAppendReconciliation(ownerId: string): boolean;
     beginChatTurn(chatId: string, turnId: string, ownerId: string): ChatTurnLease | null;
@@ -105,7 +111,9 @@ export interface RendererChatMutationDeps {
   unresolvedGuiArtifactMessage(chatId: string): Promise<string | undefined>;
   artifactRecoveryMessage(unresolved: string, recoveredMessage: string): string;
   workspaceMutationGate: Pick<WorkspaceMutationGate, "admit">;
-  skillRegistry: { resolveFresh: Parameters<typeof commitSkillInvocationForAppend>[1]["resolveFresh"] };
+  skillRegistry: {
+    resolveFresh: Parameters<typeof commitSkillInvocationForAppend>[1]["resolveFresh"];
+  };
   assertChatAccess?: (event: IpcMainInvokeEvent, chatId: string) => void;
   onChatRemoved?: (event: IpcMainInvokeEvent, chatId: string) => void;
 }
@@ -159,7 +167,12 @@ export function createRendererChatMutationHandlers(deps: RendererChatMutationDep
       ),
 
     /** Turn design mode on or off for one chat, then tell every window. */
-    setDesignMode: async (_event: IpcMainInvokeEvent, id: unknown, enabled: unknown, source: unknown) => {
+    setDesignMode: async (
+      _event: IpcMainInvokeEvent,
+      id: unknown,
+      enabled: unknown,
+      source: unknown,
+    ) => {
       const chatId = asString(id, "id");
       if (typeof enabled !== "boolean") throw new Error('Expected a boolean for "enabled".');
       if (!designModeEnabled()) throw new Error("Design mode is not available.");
@@ -172,7 +185,8 @@ export function createRendererChatMutationHandlers(deps: RendererChatMutationDep
       });
       // The store only resolves once the chat holds exactly this value.
       broadcastDesignModeChanged({ chatId, designMode: enabled });
-      if (wasOn === false && enabled) reportAnalyticsEvent("design_mode_entered", { source: designModeEntrySource(source) });
+      if (wasOn === false && enabled)
+        reportAnalyticsEvent("design_mode_entered", { source: designModeEntrySource(source) });
       else if (wasOn === true && !enabled) reportAnalyticsEvent("design_mode_exited", {});
       return chat;
     },
@@ -185,9 +199,10 @@ export function createRendererChatMutationHandlers(deps: RendererChatMutationDep
       const chatId = asString(id, "id");
       deps.assertChatAccess?.(event, chatId);
       const chat = await chatStore.get(chatId);
-      const result = chat?.botId && hostPlatformCapabilities().bots
-        ? await botApplicationService.deleteChat({ botId: chat.botId, chatId })
-        : await chatApplicationService.remove(chatId, { rejectFeatureOwned: true });
+      const result =
+        chat?.botId && hostPlatformCapabilities().bots
+          ? await botApplicationService.deleteChat({ botId: chat.botId, chatId })
+          : await chatApplicationService.remove(chatId, { rejectFeatureOwned: true });
       // The chat's read marker and triage entry go in the deletion itself
       // (chatApplicationService.remove), shared with Remote and Bot deletes.
       closeDeviceSessionsForChat(chatId);
@@ -217,17 +232,14 @@ export function createRendererChatMutationHandlers(deps: RendererChatMutationDep
       deps.assertChatAccess?.(event, chatId);
       const owner = rendererDocumentOwner(
         event,
-        () =>
-          new Error("Chat messages require the active application document."),
+        () => new Error("Chat messages require the active application document."),
       );
       if (llmClient.requiresAppendReconciliation(owner.documentId)) {
         throw new Error(appendReconciliationFailureMessage("blocked"));
       }
       const turn = llmClient.beginChatTurn(chatId, turnId, owner.documentId);
       if (!turn) {
-        throw new Error(
-          "Wait for the previous response to finish saving before sending again.",
-        );
+        throw new Error("Wait for the previous response to finish saving before sending again.");
       }
       turn.onReleased(owner.onInvalidated(turn.release));
       try {
@@ -251,16 +263,12 @@ export function createRendererChatMutationHandlers(deps: RendererChatMutationDep
               ),
             );
           }
-          const authoritativeChat = skillReference
-            ? await chatStore.get(chatId)
-            : undefined;
+          const authoritativeChat = skillReference ? await chatStore.get(chatId) : undefined;
           if (skillReference && !authoritativeChat) {
             throw new Error("This chat is no longer available.");
           }
           if (!turn.isActive()) {
-            throw new Error(
-              "This message turn expired before it could be saved.",
-            );
+            throw new Error("This message turn expired before it could be saved.");
           }
           const workspaceId = authoritativeChat
             ? persistedChatWorkspaceId(authoritativeChat.workspaceId)
@@ -282,8 +290,7 @@ export function createRendererChatMutationHandlers(deps: RendererChatMutationDep
             });
           }
           const userMessageId = randomUUID();
-          const isCurrent = () =>
-            turn.isActive() && workspaceAdmission?.signal.aborted !== true;
+          const isCurrent = () => turn.isActive() && workspaceAdmission?.signal.aborted !== true;
           const append = (skill?: {
             provenance: {
               version: 1;
@@ -335,13 +342,9 @@ export function createRendererChatMutationHandlers(deps: RendererChatMutationDep
                 },
                 {
                   resolveFresh: (resolvedWorkspaceId, invocationId) =>
-                    skillRegistry.resolveFresh(
-                      resolvedWorkspaceId,
-                      invocationId,
-                    ),
+                    skillRegistry.resolveFresh(resolvedWorkspaceId, invocationId),
                   isCurrent,
-                  prepareLease: (prepared) =>
-                    turn.prepareSkillInvocation(prepared),
+                  prepareLease: (prepared) => turn.prepareSkillInvocation(prepared),
                   append,
                 },
               )
@@ -350,7 +353,9 @@ export function createRendererChatMutationHandlers(deps: RendererChatMutationDep
           if (grabbedElements?.length) {
             reportAnalyticsEvent("browser_grab_sent", {
               count_bucket: countBucket(grabbedElements.length),
-              with_screenshot: grabbedElements.some((element) => Boolean(element.thumbnailAttachmentId)),
+              with_screenshot: grabbedElements.some((element) =>
+                Boolean(element.thumbnailAttachmentId),
+              ),
             });
           }
           // The person wrote in it, so a snoozed chat is back. Never blocks

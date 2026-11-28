@@ -38,9 +38,7 @@ test("with both flags off the nav is exactly New Agent, Scheduled, Bots", () => 
     ["New Agent", "Scheduled", "Bots"],
   );
   assert.deepEqual(
-    render({ capabilities: { bots: false, createImages: false } }).rows.map(
-      ({ title }) => title,
-    ),
+    render({ capabilities: { bots: false, createImages: false } }).rows.map(({ title }) => title),
     ["New Agent", "Scheduled"],
   );
 });
@@ -48,7 +46,11 @@ test("with both flags off the nav is exactly New Agent, Scheduled, Bots", () => 
 test("the Images row appears only with its capability, after the existing rows, and no Design row exists", () => {
   const titles = (capabilities: SidebarPrimaryNavProps["capabilities"]) =>
     render({ capabilities }).rows.map(({ title }) => title);
-  assert.deepEqual(titles({ bots: false, createImages: true }), ["New Agent", "Scheduled", "Images"]);
+  assert.deepEqual(titles({ bots: false, createImages: true }), [
+    "New Agent",
+    "Scheduled",
+    "Images",
+  ]);
   assert.deepEqual(titles(ALL), ["New Agent", "Scheduled", "Bots", "Images"]);
   assert.equal(titles(ALL).includes("Design"), false);
 });
@@ -67,8 +69,11 @@ test("the current row follows the path, including nested studio routes", () => {
 });
 
 test("with the open Bot's Inbox row selected below, Bots doesn't read as selected too", () => {
-  const current = render({ pathname: "/bots/bot-1/chat", capabilities: ALL, openBotShownBelow: true })
-    .rows.filter(({ current }) => current === "page");
+  const current = render({
+    pathname: "/bots/bot-1/chat",
+    capabilities: ALL,
+    openBotShownBelow: true,
+  }).rows.filter(({ current }) => current === "page");
   assert.deepEqual(current, []);
 });
 

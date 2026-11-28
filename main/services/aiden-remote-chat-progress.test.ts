@@ -45,9 +45,7 @@ const run: SubagentRunSnapshotV1 = {
 };
 
 function fixture(
-  overrides: Partial<
-    ConstructorParameters<typeof AidenRemoteChatProgressService>[0]
-  > = {},
+  overrides: Partial<ConstructorParameters<typeof AidenRemoteChatProgressService>[0]> = {},
 ) {
   const events = new ChatProgressEvents();
   const service = new AidenRemoteChatProgressService({
@@ -103,42 +101,32 @@ test("idle task reads replay durable state and unchanged reads retain revisions"
 test("remote-issued public turn identities round-trip through roster selection", async () => {
   const { service } = fixture({
     publicTurnId: (chatId, generationId) =>
-      chatId === "chat-1" && generationId === "generation-1"
-        ? "turn_public_01"
-        : undefined,
+      chatId === "chat-1" && generationId === "generation-1" ? "turn_public_01" : undefined,
   });
   const roster = await service.agentRoster("device-1", "chat-1");
   // The roster echoes the protocol's public turn identity (turnStart/streamStatus),
   // not a projection-minted surrogate, so clients can correlate by turnId.
   assert.equal(roster.turnId, "turn_public_01");
-  const selected = await service.agentRoster(
-    "device-1",
-    "chat-1",
-    "turn_public_01",
-  );
+  const selected = await service.agentRoster("device-1", "chat-1", "turn_public_01");
   assert.equal(selected.turnId, "turn_public_01");
-  await assert.rejects(
-    service.agentRoster("device-1", "chat-1", "turn_missing_01"),
-    /unavailable/,
-  );
+  await assert.rejects(service.agentRoster("device-1", "chat-1", "turn_missing_01"), /unavailable/);
 });
 
 test("roster dedupes milestone kinds and projects closed producer notices", async () => {
   const { service } = fixture({
-    readAgents: async () => [{
-      ...run,
-      // The upstream journal only skips consecutive duplicates; the public
-      // contract requires unique kinds, so the projection must dedupe.
-      milestones: ["reading", "searching", "reading"],
-      projectionNotices: ["task_truncated", "report_truncated"],
-    }],
+    readAgents: async () => [
+      {
+        ...run,
+        // The upstream journal only skips consecutive duplicates; the public
+        // contract requires unique kinds, so the projection must dedupe.
+        milestones: ["reading", "searching", "reading"],
+        projectionNotices: ["task_truncated", "report_truncated"],
+      },
+    ],
   });
   const roster = await service.agentRoster("device-1", "chat-1");
   assert.deepEqual(roster.agents[0]?.milestones, ["reading", "searching"]);
-  assert.deepEqual(roster.agents[0]?.notices, [
-    "task_truncated",
-    "report_truncated",
-  ]);
+  assert.deepEqual(roster.agents[0]?.notices, ["task_truncated", "report_truncated"]);
 });
 
 test("generations without an issued public turn get a stable minted identity", async () => {
@@ -147,21 +135,23 @@ test("generations without an issued public turn get a stable minted identity", a
   assert.match(roster.turnId ?? "", /^turn_[A-Za-z0-9._:-]+$/u);
   // The minted identity still round-trips through the selector so earlier
   // turns remain inspectable without leaking the private generation id.
-  const selected = await service.agentRoster(
-    "device-1",
-    "chat-1",
-    roster.turnId!,
-  );
+  const selected = await service.agentRoster("device-1", "chat-1", roster.turnId!);
   assert.equal(selected.turnId, roster.turnId);
   assert.equal(selected.agents.length, roster.agents.length);
 });
 
 test("inactive background coordinator runs do not appear in foreground mobile rosters", async () => {
   const { service } = fixture({
-    readAgents: async () => [{
-      ...run, version: 2, execution: "background", context: "fresh",
-      depth: 1, authorityRevision: 1,
-    }],
+    readAgents: async () => [
+      {
+        ...run,
+        version: 2,
+        execution: "background",
+        context: "fresh",
+        depth: 1,
+        authorityRevision: 1,
+      },
+    ],
   });
   const roster = await service.agentRoster("device-1", "chat-1");
   assert.deepEqual(roster.agents, []);
@@ -174,8 +164,11 @@ test("escaped task text and dense dependencies cannot exceed native frame budget
     readTodo: async () => ({
       ...todo,
       tasks: ids.map((id, index) => ({
-        id, subject: '"'.repeat(512), activeForm: '"'.repeat(512),
-        status: "pending", blockedBy: ids.slice(0, index),
+        id,
+        subject: '"'.repeat(512),
+        activeForm: '"'.repeat(512),
+        status: "pending",
+        blockedBy: ids.slice(0, index),
       })),
     }),
   });
@@ -194,15 +187,9 @@ test("running task state is exposed only by a durable publication, not in-memory
     },
   });
   events.begin("chat-1", "generation-1");
-  assert.equal(
-    (await service.taskSnapshot("device-1", "chat-1")).availability,
-    "unavailable",
-  );
+  assert.equal((await service.taskSnapshot("device-1", "chat-1")).availability, "unavailable");
   events.durableTodo("chat-1", "generation-1", todo);
-  assert.deepEqual(
-    (await service.taskSnapshot("device-1", "chat-1")).tasks,
-    todo.tasks,
-  );
+  assert.deepEqual((await service.taskSnapshot("device-1", "chat-1")).tasks, todo.tasks);
   assert.equal(reads, 0);
   events.settle("chat-1", "generation-1");
   await service.taskSnapshot("device-1", "chat-1");
@@ -243,14 +230,11 @@ test("public agents retain display facts but omit private identities, instructio
     run.terminalMarkdown!,
   ])
     assert.ok(!json.includes(value), value);
-  assert.deepEqual(
-    await service.agentRoster("device-1", "chat-1", roster.turnId),
-    { ...roster, revision: roster.revision + 1 },
-  );
-  await assert.rejects(
-    service.agentRoster("device-1", "chat-1", "turn_other"),
-    /unavailable/,
-  );
+  assert.deepEqual(await service.agentRoster("device-1", "chat-1", roster.turnId), {
+    ...roster,
+    revision: roster.revision + 1,
+  });
+  await assert.rejects(service.agentRoster("device-1", "chat-1", "turn_other"), /unavailable/);
 });
 
 test("public agent text keeps surrogate pairs at the protocol bounds", async () => {
@@ -273,40 +257,42 @@ test("public agent text keeps surrogate pairs at the protocol bounds", async () 
     epoch: "epoch_boundary",
     revision: 1,
     updatedAt: "2026-09-14T00:00:00.000Z",
-    agents: [{
-      agentId: "agent_boundary",
-      depth: 1,
-      revision: 1,
-      role: "reviewer" as const,
-      label: boundedLabel,
-      taskPreview: "Reviewer task",
-      state: "completed" as const,
-      startedAt: "2026-09-14T00:00:00.000Z",
-      updatedAt: "2026-09-14T00:00:01.000Z",
-      finishedAt: "2026-09-14T00:00:01.000Z",
-      modelId: boundedModelId,
-      turns: 1,
-      tools: 1,
-      tokens: 1,
-    }],
+    agents: [
+      {
+        agentId: "agent_boundary",
+        depth: 1,
+        revision: 1,
+        role: "reviewer" as const,
+        label: boundedLabel,
+        taskPreview: "Reviewer task",
+        state: "completed" as const,
+        startedAt: "2026-09-14T00:00:00.000Z",
+        updatedAt: "2026-09-14T00:00:01.000Z",
+        finishedAt: "2026-09-14T00:00:01.000Z",
+        modelId: boundedModelId,
+        turns: 1,
+        tools: 1,
+        tokens: 1,
+      },
+    ],
   };
   assert.throws(
-    () => parseAidenRemoteChatAgentRoster({
-      ...wireRoster,
-      agents: [{ ...wireRoster.agents[0]!, label: labelAtBoundary.slice(0, 120) }],
-    }),
+    () =>
+      parseAidenRemoteChatAgentRoster({
+        ...wireRoster,
+        agents: [{ ...wireRoster.agents[0]!, label: labelAtBoundary.slice(0, 120) }],
+      }),
     /characters/u,
   );
   assert.throws(
-    () => parseAidenRemoteChatAgentRoster({
-      ...wireRoster,
-      agents: [{ ...wireRoster.agents[0]!, modelId: modelIdAtBoundary.slice(0, 160) }],
-    }),
+    () =>
+      parseAidenRemoteChatAgentRoster({
+        ...wireRoster,
+        agents: [{ ...wireRoster.agents[0]!, modelId: modelIdAtBoundary.slice(0, 160) }],
+      }),
     /characters/u,
   );
-  assert.doesNotThrow(() =>
-    parseAidenRemoteChatAgentRoster(wireRoster),
-  );
+  assert.doesNotThrow(() => parseAidenRemoteChatAgentRoster(wireRoster));
 
   const sourceLabel = `${"l".repeat(118)}😀`;
   const sourceModelId = `${"m".repeat(158)}🚀`;
@@ -326,18 +312,13 @@ test("new parent turns reset the roster instead of showing the prior agents", as
   const current = await service.agentRoster("device-1", "chat-1");
   assert.notEqual(prior.turnId, current.turnId);
   assert.deepEqual(current.agents, []);
-  assert.equal(
-    (await service.agentRoster("device-1", "chat-1", prior.turnId)).agents
-      .length,
-    1,
-  );
+  assert.equal((await service.agentRoster("device-1", "chat-1", prior.turnId)).agents.length, 1);
 });
 
 test("a valid roster recovers with a newer revision after a corrupt read", async () => {
   let corrupt = false;
   const { service } = fixture({
-    readAgents: async () =>
-      corrupt ? [{ ...run, chatId: "other-chat" }] : [run],
+    readAgents: async () => (corrupt ? [{ ...run, chatId: "other-chat" }] : [run]),
   });
   const before = await service.agentRoster("device-1", "chat-1");
   corrupt = true;
@@ -346,15 +327,16 @@ test("a valid roster recovers with a newer revision after a corrupt read", async
   corrupt = false;
   const recovered = await service.agentRoster("device-1", "chat-1");
   assert.equal(recovered.availability, "ready");
-  assert.ok(
-    before.revision < invalid.revision && invalid.revision < recovered.revision,
-  );
+  assert.ok(before.revision < invalid.revision && invalid.revision < recovered.revision);
 });
 
 test("public identities are scoped to the Mac and prior turns are discoverable after reopening", async () => {
   const prior = { ...run, generationId: "older-generation", runId: "older-run", startedAt: 1 };
   const first = fixture({ readAgents: async () => [run, prior] }).service;
-  const otherMac = fixture({ instanceId: "other-mac", readAgents: async () => [run, prior] }).service;
+  const otherMac = fixture({
+    instanceId: "other-mac",
+    readAgents: async () => [run, prior],
+  }).service;
   const current = await first.agentRoster("device-1", "chat-1");
   const other = await otherMac.agentRoster("device-1", "chat-1");
   assert.notEqual(current.turnId, other.turnId);
@@ -389,10 +371,7 @@ test("restart preserves terminal failures and marks abandoned active runs interr
     ["failed", "interrupted"],
   );
   assert.ok(!JSON.stringify(roster).includes("private provider error"));
-  assert.notEqual(
-    roster.epoch,
-    (await fixture().service.agentRoster("device-1", "chat-1")).epoch,
-  );
+  assert.notEqual(roster.epoch, (await fixture().service.agentRoster("device-1", "chat-1")).epoch);
 });
 
 test("authorization is rechecked after asynchronous storage before returning data", async () => {
@@ -413,23 +392,13 @@ test("authorization is rechecked after asynchronous storage before returning dat
 test("SSE is scoped by read grants, publishes fresh state on reconnect, and closes on revocation", async () => {
   const { service, events } = fixture();
   const response = new Response();
-  await service.openEvents(
-    "device-1",
-    "chat-1",
-    new Set(["tasks:read"]),
-    99999,
-    response.wire,
-  );
+  await service.openEvents("device-1", "chat-1", new Set(["tasks:read"]), 99999, response.wire);
   assert.match(response.chunks.join(""), /event: task_update/);
   assert.doesNotMatch(response.chunks.join(""), /agents_update/);
   const count = response.chunks.length;
   events.changed("chat-1");
   await new Promise((done) => setImmediate(done));
-  assert.equal(
-    response.chunks.length,
-    count,
-    "unchanged state does not emit duplicate snapshots",
-  );
+  assert.equal(response.chunks.length, count, "unchanged state does not emit duplicate snapshots");
   service.revokeDevice("device-1");
   assert.ok(response.destroyed, "revocation drops the socket instead of flushing to it");
   assert.equal(events.current("chat-1"), undefined);
@@ -455,7 +424,14 @@ test("a cursor from another host epoch hydrates despite colliding sequence numbe
   const currentEpoch = (await nextHost.taskSnapshot("device-1", "chat-1")).epoch;
   const currentCursor = Number([...restored.chunks.join("").matchAll(/^id: (\d+)$/gmu)].pop()![1]);
   const resumed = new Response();
-  await nextHost.openEvents("device-1", "chat-1", grants, currentCursor, resumed.wire, currentEpoch);
+  await nextHost.openEvents(
+    "device-1",
+    "chat-1",
+    grants,
+    currentCursor,
+    resumed.wire,
+    currentEpoch,
+  );
   assert.equal(resumed.chunks.length, 0, "a current epoch resumes unchanged snapshots");
   firstHost.close();
   nextHost.close();
@@ -529,7 +505,8 @@ test("clients that disconnect before the stream opens do not hold progress conne
     // stream; a phone that backgrounds meanwhile has already dropped the socket.
     opened.push(
       once(response, "close").then(() =>
-        service.openEvents("device-1", "chat-1", grants, 0, response)),
+        service.openEvents("device-1", "chat-1", grants, 0, response),
+      ),
     );
   });
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
@@ -641,10 +618,12 @@ test("a host at its total progress stream cap asks the client to retry shortly",
         retryable?: boolean;
         details?: { retryAfterSeconds?: number };
       };
-      return value.code === "rate_limited"
-        && value.status === 429
-        && value.retryable === true
-        && (value.details?.retryAfterSeconds ?? 0) > 0;
+      return (
+        value.code === "rate_limited" &&
+        value.status === 429 &&
+        value.retryable === true &&
+        (value.details?.retryAfterSeconds ?? 0) > 0
+      );
     },
   );
   streams[0]!.emit("close");
@@ -787,33 +766,40 @@ test("interrupt is unavailable when the host does not wire subagent control", as
   );
 });
 
-
-test("foreground control invalidations reach every subscribed client without exposing preferences", { timeout: 4000 }, async (t) => {
-  // The mock response has no socket to keep Node alive for the service's unref'd coalescer.
-  const keepAlive = setInterval(() => {}, 1000);
-  t.after(() => clearInterval(keepAlive));
-  let allowed = true;
-  const { service, events } = fixture({ appControlsEnabled: async () => allowed });
-  t.after(() => service.close());
-  const first = new Response(), second = new Response(), legacy = new Response();
-  await service.openEvents("device-1", "chat-1", new Set(["app-controls:read"]), 0, first.wire);
-  await service.openEvents("device-1", "chat-1", new Set(["app-controls:read"]), 0, second.wire);
-  await service.openEvents("device-1", "chat-1", new Set(["tasks:read"]), 0, legacy.wire);
-  assert.match(first.chunks.join(""), /app_controls_changed/u);
-  const changed = (response: Response) => new Promise<string>((resolve) => response.once("chunk", resolve));
-  const nextFirst = changed(first), nextSecond = changed(second);
-  events.appControlsChanged(); // same path used by normal Settings and another client
-  const updates = await Promise.all([nextFirst, nextSecond]);
-  assert.ok(updates.every((text) => text.includes('"revision":1')));
-  assert.ok(updates.every((text) => !text.includes("memory") && !text.includes("value")));
-  assert.doesNotMatch(legacy.chunks.join(""), /app_controls_changed/u);
-  allowed = false;
-  const closed = once(first, "close");
-  events.appControlsChanged();
-  await closed;
-  assert.ok(first.destroyed);
-  service.close();
-});
+test(
+  "foreground control invalidations reach every subscribed client without exposing preferences",
+  { timeout: 4000 },
+  async (t) => {
+    // The mock response has no socket to keep Node alive for the service's unref'd coalescer.
+    const keepAlive = setInterval(() => {}, 1000);
+    t.after(() => clearInterval(keepAlive));
+    let allowed = true;
+    const { service, events } = fixture({ appControlsEnabled: async () => allowed });
+    t.after(() => service.close());
+    const first = new Response(),
+      second = new Response(),
+      legacy = new Response();
+    await service.openEvents("device-1", "chat-1", new Set(["app-controls:read"]), 0, first.wire);
+    await service.openEvents("device-1", "chat-1", new Set(["app-controls:read"]), 0, second.wire);
+    await service.openEvents("device-1", "chat-1", new Set(["tasks:read"]), 0, legacy.wire);
+    assert.match(first.chunks.join(""), /app_controls_changed/u);
+    const changed = (response: Response) =>
+      new Promise<string>((resolve) => response.once("chunk", resolve));
+    const nextFirst = changed(first),
+      nextSecond = changed(second);
+    events.appControlsChanged(); // same path used by normal Settings and another client
+    const updates = await Promise.all([nextFirst, nextSecond]);
+    assert.ok(updates.every((text) => text.includes('"revision":1')));
+    assert.ok(updates.every((text) => !text.includes("memory") && !text.includes("value")));
+    assert.doesNotMatch(legacy.chunks.join(""), /app_controls_changed/u);
+    allowed = false;
+    const closed = once(first, "close");
+    events.appControlsChanged();
+    await closed;
+    assert.ok(first.destroyed);
+    service.close();
+  },
+);
 
 test("a warm reconnect re-announces controls so native cards cleared on disconnect reload", async (t) => {
   const keepAlive = setInterval(() => {}, 1000);
@@ -831,7 +817,11 @@ test("a warm reconnect re-announces controls so native cards cleared on disconne
   await service.openEvents("device-1", "chat-1", grants, cursor, resumed.wire);
   const replay = resumed.chunks.join("");
   assert.doesNotMatch(replay, /event: task_update/u, "unchanged task snapshots stay deduplicated");
-  assert.match(replay, /event: app_controls_changed/u, "an unchanged controls revision is re-announced");
+  assert.match(
+    replay,
+    /event: app_controls_changed/u,
+    "an unchanged controls revision is re-announced",
+  );
   service.close();
 });
 
@@ -839,29 +829,56 @@ test("Bot progress remains live with an unrelated controls grant", { timeout: 40
   const keepAlive = setInterval(() => {}, 1000);
   t.after(() => clearInterval(keepAlive));
   const events = new ChatProgressEvents();
-  const meta = { id: "chat-1", workspaceId: "workspace-1", title: "Bot", botId: "bot-1", createdAt: 1, updatedAt: 2 };
+  const meta = {
+    id: "chat-1",
+    workspaceId: "workspace-1",
+    title: "Bot",
+    botId: "bot-1",
+    createdAt: 1,
+    updatedAt: 2,
+  };
   const authorize = createChatProgressAuthorizer({
-    events, acquireDeviceAuthorization: () => () => {},
-    device: async () => ({ id: "device-1", acceptsProgressCapabilities: true,
-      capabilities: ["chat:read", "bot:read", "tasks:read", "agents:read", "app-controls:read"] }),
-    chatMetadata: async () => [meta], readChat: async () => ({ ...meta, messages: [] }),
+    events,
+    acquireDeviceAuthorization: () => () => {},
+    device: async () => ({
+      id: "device-1",
+      acceptsProgressCapabilities: true,
+      capabilities: ["chat:read", "bot:read", "tasks:read", "agents:read", "app-controls:read"],
+    }),
+    chatMetadata: async () => [meta],
+    readChat: async () => ({ ...meta, messages: [] }),
     authorizeRetainedBotChat: async () => true,
   });
-  let subject = "Initial task", label = "Initial reviewer";
-  const { service } = fixture({ events, authorize, appControlsEnabled: async () => true,
+  let subject = "Initial task",
+    label = "Initial reviewer";
+  const { service } = fixture({
+    events,
+    authorize,
+    appControlsEnabled: async () => true,
     readTodo: async () => ({ ...todo, tasks: [{ id: 1, subject, status: "pending" }] }),
     readAgents: async () => [{ ...run, label }],
   });
   t.after(() => service.close());
   const response = new Response();
-  await service.openEvents("device-1", "chat-1", new Set(["tasks:read", "agents:read", "app-controls:read"]), 0, response.wire);
+  await service.openEvents(
+    "device-1",
+    "chat-1",
+    new Set(["tasks:read", "agents:read", "app-controls:read"]),
+    0,
+    response.wire,
+  );
   assert.equal(response.ended, false);
   assert.doesNotMatch(response.chunks.join(""), /app_controls_changed/u);
-  const updated = (type: string) => new Promise<string>((resolve) => response.on("chunk", (chunk: string) => {
-    if (chunk.includes(`"type":"${type}"`)) resolve(chunk);
-  }));
-  const nextTask = updated("task_update"), nextAgent = updated("agents_update");
-  subject = "Updated task"; label = "Updated reviewer";
+  const updated = (type: string) =>
+    new Promise<string>((resolve) =>
+      response.on("chunk", (chunk: string) => {
+        if (chunk.includes(`"type":"${type}"`)) resolve(chunk);
+      }),
+    );
+  const nextTask = updated("task_update"),
+    nextAgent = updated("agents_update");
+  subject = "Updated task";
+  label = "Updated reviewer";
   events.changed("chat-1");
   const [tasks, agents] = await Promise.all([nextTask, nextAgent]);
   assert.match(tasks, /Updated task/u);

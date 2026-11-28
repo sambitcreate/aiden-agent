@@ -90,7 +90,12 @@ test(
   async () => {
     const directory = await mkdtemp(path.join(tmpdir(), "aiden-dictation-script-"));
     try {
-      await executeFile("/usr/bin/osacompile", ["-o", path.join(directory, "paste.scpt"), "-e", ATOMIC_PASTE_SCRIPT]);
+      await executeFile("/usr/bin/osacompile", [
+        "-o",
+        path.join(directory, "paste.scpt"),
+        "-e",
+        ATOMIC_PASTE_SCRIPT,
+      ]);
     } finally {
       await rm(directory, { recursive: true, force: true });
     }
@@ -204,19 +209,34 @@ test("a transaction killed after ⌘V never puts the previous clipboard back, wh
     reason: "paste-unavailable",
     message: "Check the field — transcript copied.",
   });
-  assert.equal(killed.lateCommandV(), "hello world", "a late ⌘V pastes the transcript, never the previous clipboard");
-  assert.deepEqual(killed.clipboardWrites, [], "no write after the timeout, so a copy the person makes meanwhile survives");
+  assert.equal(
+    killed.lateCommandV(),
+    "hello world",
+    "a late ⌘V pastes the transcript, never the previous clipboard",
+  );
+  assert.deepEqual(
+    killed.clipboardWrites,
+    [],
+    "no write after the timeout, so a copy the person makes meanwhile survives",
+  );
 });
 
 test("a transaction killed before sending ⌘V still leaves the transcript on the clipboard", async () => {
-  const timedOut = Object.assign(new Error("Command failed: osascript"), { killed: true, stderr: "" });
+  const timedOut = Object.assign(new Error("Command failed: osascript"), {
+    killed: true,
+    stderr: "",
+  });
   const subject = harness({
-    pasteWithPreservedClipboard: (text) => runAtomicMacPaste(text, async () => Promise.reject(timedOut)),
+    pasteWithPreservedClipboard: (text) =>
+      runAtomicMacPaste(text, async () => Promise.reject(timedOut)),
   });
   const result = await pasteTranscript("hello world", subject.deps);
   assert.equal(result.outcome, "copied");
   assert.equal(subject.clipboard(), "hello world");
-  await assert.rejects(runAtomicMacPaste("x", async () => Promise.reject(timedOut)), (error) => !(error instanceof PasteAfterKeystrokeError));
+  await assert.rejects(
+    runAtomicMacPaste("x", async () => Promise.reject(timedOut)),
+    (error) => !(error instanceof PasteAfterKeystrokeError),
+  );
 });
 
 test("active Secure Input keeps the transcript on the clipboard without sending a keystroke", async () => {
@@ -355,7 +375,9 @@ test("a failed prefetched probe still keeps the transcript on the clipboard", as
     now: () => 0,
   });
   prefetch.prefetch();
-  const { deps, clipboard } = harness({ isSecureInputActive: () => prefetch.isSecureInputActive() });
+  const { deps, clipboard } = harness({
+    isSecureInputActive: () => prefetch.isSecureInputActive(),
+  });
   const result = await pasteTranscript("hello", deps);
   assert.equal(result.outcome, "copied");
   assert.equal(clipboard(), "hello");

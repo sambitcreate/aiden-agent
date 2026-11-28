@@ -27,44 +27,40 @@ test("workspace launcher opens tools on demand and returns after closing the las
   await page.locator("[data-environment-toggle]").click();
   await expect(panel.getByRole("tabpanel", { name: "New tab" })).toBeVisible();
   await panel.getByRole("button", { name: "Files", exact: true }).click();
-  await expect(
-    panel.getByRole("tab", { name: "Files", exact: true }),
-  ).toHaveAttribute("aria-selected", "true");
-  await panel.getByRole("button", { name: "New workspace tab" }).click();
-  await panel.getByRole("button", { name: "Context", exact: true }).click();
-  await expect(panel.getByRole("tabpanel", { name: "Context" })).toContainText(
-    "Send a message",
+  await expect(panel.getByRole("tab", { name: "Files", exact: true })).toHaveAttribute(
+    "aria-selected",
+    "true",
   );
   await panel.getByRole("button", { name: "New workspace tab" }).click();
+  await panel.getByRole("button", { name: "Context", exact: true }).click();
+  await expect(panel.getByRole("tabpanel", { name: "Context" })).toContainText("Send a message");
+  await panel.getByRole("button", { name: "New workspace tab" }).click();
   await panel.getByRole("button", { name: "Files", exact: true }).click();
-  await expect(
-    panel.getByRole("tab", { name: "Files", exact: true }),
-  ).toHaveCount(1);
+  await expect(panel.getByRole("tab", { name: "Files", exact: true })).toHaveCount(1);
   await panel.getByRole("button", { name: "Close environment panel" }).click();
   await page.locator("[data-environment-toggle]").click();
   await expect(panel.getByRole("tabpanel", { name: "New tab" })).toBeVisible();
   for (const width of [900, 1600]) {
     await aiden.app.evaluate(
-      ({ BrowserWindow }, width) =>
-        BrowserWindow.getAllWindows()[0].setSize(width, 900),
+      ({ BrowserWindow }, width) => BrowserWindow.getAllWindows()[0].setSize(width, 900),
       width,
     );
     await expect(panel).toBeVisible();
-    expect(
-      await panel.evaluate(
-        (element) => element.scrollWidth <= element.clientWidth,
-      ),
-    ).toBe(true);
+    expect(await panel.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(
+      true,
+    );
   }
   await expect(page.locator("[data-environment-surface-mode]")).toHaveAttribute(
     "data-environment-surface-mode",
     "tools-pinned",
   );
-  await expect.poll(async () => {
-    const composer = await page.locator("textarea").boundingBox();
-    const tools = await panel.boundingBox();
-    return Boolean(composer && tools && composer.x + composer.width <= tools.x);
-  }).toBe(true);
+  await expect
+    .poll(async () => {
+      const composer = await page.locator("textarea").boundingBox();
+      const tools = await panel.boundingBox();
+      return Boolean(composer && tools && composer.x + composer.width <= tools.x);
+    })
+    .toBe(true);
   await page.screenshot({ path: "/tmp/aiden-workspace-launcher.png", animations: "disabled" });
   await panel.getByRole("button", { name: "Close Files tab" }).click();
   await panel.getByRole("button", { name: "Close Context tab" }).click();
@@ -72,23 +68,33 @@ test("workspace launcher opens tools on demand and returns after closing the las
   await expect(panel.getByRole("tabpanel", { name: "New tab" })).toBeVisible();
 });
 
-test("the Files panel shows the agent's edits and new files while it is open", async ({ aiden }) => {
+test("the Files panel shows the agent's edits and new files while it is open", async ({
+  aiden,
+}) => {
   const { page, lmStudio, workspaceDir } = aiden;
   await writeFile(path.join(workspaceDir, "notes.md"), "first draft\n");
   await finishLmStudioOnboarding(page);
-  await aiden.app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setSize(1600, 900));
+  await aiden.app.evaluate(({ BrowserWindow }) =>
+    BrowserWindow.getAllWindows()[0].setSize(1600, 900),
+  );
   const panel = page.getByRole("complementary", { name: "Environment work surface" });
   await page.locator("[data-environment-toggle]").click();
   await panel.getByRole("button", { name: "Files", exact: true }).click();
   const tree = panel.getByRole("region", { name: "Workspace files" });
-  await tree.getByRole("button", { name: /notes\.md/u }).first().click();
+  await tree
+    .getByRole("button", { name: /notes\.md/u })
+    .first()
+    .click();
   const editor = panel.getByRole("textbox", { name: "Edit notes.md" });
   await expect(editor).toHaveValue("first draft\n");
   const prompt = "Files panel test: update my notes and add a list.";
   const scenario = lmStudio.enqueueToolScenario!({
     prompt,
     calls: [
-      { name: "edit_file", arguments: { path: "notes.md", old_string: "first draft", new_string: "second draft" } },
+      {
+        name: "edit_file",
+        arguments: { path: "notes.md", old_string: "first draft", new_string: "second draft" },
+      },
       { name: "write_file", arguments: { path: "added.md", content: "- one\n" } },
     ],
     finalText: "Updated notes.md and added added.md.",
@@ -107,16 +113,24 @@ test("a file the Files panel couldn't open opens once the agent writes it", asyn
   await writeFile(path.join(workspaceDir, "notes.md"), "first draft\n");
   await writeFile(path.join(workspaceDir, "plan.md"), "the plan\n");
   await finishLmStudioOnboarding(page);
-  await aiden.app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setSize(1600, 900));
+  await aiden.app.evaluate(({ BrowserWindow }) =>
+    BrowserWindow.getAllWindows()[0].setSize(1600, 900),
+  );
   const panel = page.getByRole("complementary", { name: "Environment work surface" });
   await page.locator("[data-environment-toggle]").click();
   await panel.getByRole("button", { name: "Files", exact: true }).click();
   const tree = panel.getByRole("region", { name: "Workspace files" });
-  await tree.getByRole("button", { name: /plan\.md/u }).first().click();
+  await tree
+    .getByRole("button", { name: /plan\.md/u })
+    .first()
+    .click();
   await expect(panel.getByRole("textbox", { name: "Edit plan.md" })).toHaveValue("the plan\n");
   // The tree still lists notes.md, but it is gone from disk when it is opened.
   await rm(path.join(workspaceDir, "notes.md"));
-  await tree.getByRole("button", { name: /notes\.md/u }).first().click();
+  await tree
+    .getByRole("button", { name: /notes\.md/u })
+    .first()
+    .click();
   await expect(panel.getByRole("button", { name: "Try again" })).toBeVisible();
   const prompt = "Files panel test: write my notes again.";
   const scenario = lmStudio.enqueueToolScenario!({
@@ -152,9 +166,7 @@ test("Environment keeps its tabs, width and open state across a relaunch and ans
   const tabNames = () => panel.getByRole("tab").allTextContents();
   await page.locator("[data-environment-toggle]").click();
   await expect(panel).toBeVisible();
-  await expect
-    .poll(async () => (await panel.boundingBox())?.width ?? 0)
-    .toBeGreaterThan(0);
+  await expect.poll(async () => (await panel.boundingBox())?.width ?? 0).toBeGreaterThan(0);
   await panel.getByRole("button", { name: "Files", exact: true }).click();
   await panel.getByRole("button", { name: "New workspace tab" }).click();
   await panel.getByRole("button", { name: "Context", exact: true }).click();
@@ -194,7 +206,9 @@ test("Environment keeps its tabs, width and open state across a relaunch and ans
 test.describe("Subagents capability", () => {
   test.use({ appEnvironment: { AIDEN_SUBAGENTS_ENABLED: "0" } });
 
-  test("the Environment panel mounts no Subagents panel when the capability is off", async ({ aiden }) => {
+  test("the Environment panel mounts no Subagents panel when the capability is off", async ({
+    aiden,
+  }) => {
     await finishLmStudioOnboarding(aiden.page);
     await aiden.page.locator("[data-environment-toggle]").click();
     const panel = aiden.page.getByRole("complementary", { name: "Environment work surface" });
@@ -203,7 +217,9 @@ test.describe("Subagents capability", () => {
   });
 });
 
-test("the Environment panel mounts the Subagents panel when the capability is on", async ({ aiden }) => {
+test("the Environment panel mounts the Subagents panel when the capability is on", async ({
+  aiden,
+}) => {
   await finishLmStudioOnboarding(aiden.page);
   await aiden.page.locator("[data-environment-toggle]").click();
   const panel = aiden.page.getByRole("complementary", { name: "Environment work surface" });
@@ -219,7 +235,10 @@ test("Quick View docks beside the chat on a narrower window and floats over it w
   const card = page.locator("#quick-view-card");
   const composer = page.locator("textarea").first();
   const resize = (width: number) =>
-    app.evaluate(({ BrowserWindow }, width) => BrowserWindow.getAllWindows()[0].setSize(width, 900), width);
+    app.evaluate(
+      ({ BrowserWindow }, width) => BrowserWindow.getAllWindows()[0].setSize(width, 900),
+      width,
+    );
   // Room between the composer's content and the card's left edge; negative means covered.
   const clearance = async () => {
     const field = await composer.boundingBox();
@@ -243,7 +262,9 @@ test("Quick View docks beside the chat on a narrower window and floats over it w
   // Closing Quick View centers the chat again.
   await resize(1400);
   await page.locator("[data-quick-view-toggle]").click();
-  await expect.poll(async () => Math.round((await composer.boundingBox())!.x)).toBe(Math.round(centered!.x));
+  await expect
+    .poll(async () => Math.round((await composer.boundingBox())!.x))
+    .toBe(Math.round(centered!.x));
 });
 
 test("terminal docking retains the same live surface, screen state and shell", async ({
@@ -251,31 +272,23 @@ test("terminal docking retains the same live surface, screen state and shell", a
 }) => {
   const { page } = aiden;
   await finishLmStudioOnboarding(page);
-  await page
-    .getByRole("button", { name: "Show terminal", exact: true })
-    .click();
+  await page.getByRole("button", { name: "Show terminal", exact: true }).click();
   const drawer = page.locator(".terminal-drawer");
   const output = drawer.getByRole("log", { name: "Terminal output" });
   await expect(output).toHaveText(/\S/u);
   await expect(drawer.locator(".ghostty-input")).toBeFocused();
-  await page.keyboard.type(
-    "export AIDEN_DOCK_CHECK=314159; echo ready-$AIDEN_DOCK_CHECK",
-  );
+  await page.keyboard.type("export AIDEN_DOCK_CHECK=314159; echo ready-$AIDEN_DOCK_CHECK");
   await page.keyboard.press("Enter");
   await expect(output).toContainText("ready-314159");
   const canvas = await drawer.locator("canvas").elementHandle();
-  await drawer
-    .getByRole("button", { name: "Move terminal to side panel" })
-    .click();
+  await drawer.getByRole("button", { name: "Move terminal to side panel" }).click();
   await expect(drawer).toHaveAttribute("data-placement", "side");
   const panel = page.getByRole("complementary", {
     name: "Environment work surface",
   });
   await expect(panel.locator(".terminal-drawer")).toBeVisible();
   expect(
-    await drawer
-      .locator("canvas")
-      .evaluate((node, original) => node === original, canvas),
+    await drawer.locator("canvas").evaluate((node, original) => node === original, canvas),
   ).toBe(true);
   await panel.getByRole("button", { name: "New workspace tab" }).click();
   await expect(drawer).toBeHidden();
@@ -284,21 +297,15 @@ test("terminal docking retains the same live surface, screen state and shell", a
   await drawer.getByRole("button", { name: "Move terminal to bottom" }).click();
   await expect(drawer).toHaveAttribute("data-placement", "bottom");
   expect(
-    await drawer
-      .locator("canvas")
-      .evaluate((node, original) => node === original, canvas),
+    await drawer.locator("canvas").evaluate((node, original) => node === original, canvas),
   ).toBe(true);
   await drawer.locator(".ghostty-input").focus();
   await page.keyboard.type("echo still-$AIDEN_DOCK_CHECK");
   await page.keyboard.press("Enter");
   await expect(output).toContainText("still-314159");
-  await drawer
-    .getByRole("button", { name: "Split terminal horizontally" })
-    .click();
+  await drawer.getByRole("button", { name: "Split terminal horizontally" }).click();
   await expect(drawer.locator("canvas")).toHaveCount(2);
-  await drawer
-    .getByRole("button", { name: "Move terminal to side panel" })
-    .click();
+  await drawer.getByRole("button", { name: "Move terminal to side panel" }).click();
   await expect(panel.locator(".terminal-drawer canvas")).toHaveCount(2);
   await panel.getByRole("button", { name: "Close Terminal tab" }).click();
   await expect(drawer).toBeHidden();
@@ -307,14 +314,10 @@ test("terminal docking retains the same live surface, screen state and shell", a
   await expect(drawer.locator("canvas")).toHaveCount(2);
 });
 
-test("terminal screen reaches every edge of its area in both placements", async ({
-  aiden,
-}) => {
+test("terminal screen reaches every edge of its area in both placements", async ({ aiden }) => {
   const { page } = aiden;
   await finishLmStudioOnboarding(page);
-  await page
-    .getByRole("button", { name: "Show terminal", exact: true })
-    .click();
+  await page.getByRole("button", { name: "Show terminal", exact: true }).click();
   const drawer = page.locator(".terminal-drawer");
   await expect(drawer.getByRole("log", { name: "Terminal output" })).toHaveText(/\S/u);
   // A short canvas leaves an empty band below it, and a tall one hides its last
@@ -337,9 +340,7 @@ test("terminal screen reaches every edge of its area in both placements", async 
   await expect
     .poll(() => drawer.evaluate((surface) => surface.getBoundingClientRect().height))
     .toBe(232);
-  await drawer
-    .getByRole("button", { name: "Move terminal to side panel" })
-    .click();
+  await drawer.getByRole("button", { name: "Move terminal to side panel" }).click();
   await expect(drawer).toHaveAttribute("data-placement", "side");
   await expect.poll(edgeGaps).toEqual(flush);
 });
@@ -374,12 +375,16 @@ test("a program's synchronized redraw appears whole, and an unfinished one still
     });
   });
   // Built at runtime so the typed command line cannot satisfy the checks below.
-  await run(`M=frame; printf "\\033[?2026h$M-begun"; sleep 0.25; printf " $M-finished\\033[?2026l\\n"`);
+  await run(
+    `M=frame; printf "\\033[?2026h$M-begun"; sleep 0.25; printf " $M-finished\\033[?2026l\\n"`,
+  );
   await expect(output).toContainText("frame-begun frame-finished");
   const frames = await page.evaluate(
     () => (window as unknown as { terminalFrames: string[] }).terminalFrames,
   );
-  expect(frames.filter((frame) => frame.includes("frame-begun") && !frame.includes("frame-finished"))).toEqual([]);
+  expect(
+    frames.filter((frame) => frame.includes("frame-begun") && !frame.includes("frame-finished")),
+  ).toEqual([]);
 
   await run(`M=stuck; printf "\\033[?2026h$M-output\\n"`);
   await expect(output).toContainText("stuck-output");
@@ -528,9 +533,7 @@ test("context is available with the composer meter hidden and preference survive
   await finishLmStudioOnboarding(page);
   await page.locator("textarea").fill("Context inspector test");
   await page.locator("textarea").press("Enter");
-  await expect(
-    page.getByRole("button", { name: /^Context usage,/ }),
-  ).toBeVisible();
+  await expect(page.getByRole("button", { name: /^Context usage,/ })).toBeVisible();
   await page.getByRole("button", { name: "Settings", exact: true }).click();
   await page
     .getByRole("navigation", { name: "Settings" })
@@ -543,18 +546,12 @@ test("context is available with the composer meter hidden and preference survive
   await preference.click();
   await expect(preference).not.toBeChecked();
   await page.getByRole("button", { name: "Back to app" }).click();
-  await expect(
-    page.getByRole("button", { name: /^Context usage,/ }),
-  ).toHaveCount(0);
+  await expect(page.getByRole("button", { name: /^Context usage,/ })).toHaveCount(0);
   await page.locator("[data-environment-toggle]").click();
   await page.getByRole("button", { name: "Context", exact: true }).click();
-  await expect(page.getByRole("tabpanel", { name: "Context" })).toContainText(
-    "Recorded usage",
-  );
+  await expect(page.getByRole("tabpanel", { name: "Context" })).toContainText("Recorded usage");
   page = await aiden.relaunch();
-  await expect(
-    page.getByRole("button", { name: /^Context usage,/ }),
-  ).toHaveCount(0);
+  await expect(page.getByRole("button", { name: /^Context usage,/ })).toHaveCount(0);
   await page.getByRole("button", { name: "Settings", exact: true }).click();
   await page
     .getByRole("navigation", { name: "Settings" })
@@ -581,7 +578,14 @@ test("browser pages share the tool tab strip and the launcher hides the native p
       name: "Environment work surface",
     });
     await aiden.app.evaluate(({ ipcMain }) => {
-      const handlers = (ipcMain as unknown as { _invokeHandlers: Map<string, (event: Electron.IpcMainInvokeEvent, ...args: unknown[]) => unknown> })._invokeHandlers;
+      const handlers = (
+        ipcMain as unknown as {
+          _invokeHandlers: Map<
+            string,
+            (event: Electron.IpcMainInvokeEvent, ...args: unknown[]) => unknown
+          >;
+        }
+      )._invokeHandlers;
       const original = handlers.get("browser:command")!;
       let failNextCreate = true;
       ipcMain.removeHandler("browser:command");
@@ -598,18 +602,14 @@ test("browser pages share the tool tab strip and the launcher hides the native p
       .fill(`http://127.0.0.1:${(server.address() as AddressInfo).port}`);
     await panel.getByRole("textbox", { name: "Open a URL" }).press("Enter");
     await expect(panel.getByRole("alert")).toHaveText("Could not open this address. Try again.");
-    await expect(panel.getByRole("textbox", { name: "Open a URL" })).toHaveValue(`http://127.0.0.1:${(server.address() as AddressInfo).port}`);
+    await expect(panel.getByRole("textbox", { name: "Open a URL" })).toHaveValue(
+      `http://127.0.0.1:${(server.address() as AddressInfo).port}`,
+    );
     await panel.getByRole("textbox", { name: "Open a URL" }).press("Enter");
-    await expect(
-      panel.getByRole("tab", { name: "Panel fixture", exact: true }),
-    ).toBeVisible();
-    await expect(
-      panel.getByRole("tablist", { name: "Browser tabs" }),
-    ).toBeHidden();
+    await expect(panel.getByRole("tab", { name: "Panel fixture", exact: true })).toBeVisible();
+    await expect(panel.getByRole("tablist", { name: "Browser tabs" })).toBeHidden();
     await panel.getByRole("button", { name: "New workspace tab" }).click();
-    await expect(
-      panel.getByRole("textbox", { name: "Open a URL" }),
-    ).toBeVisible();
+    await expect(panel.getByRole("textbox", { name: "Open a URL" })).toBeVisible();
     await expect(panel.getByRole("textbox", { name: "Open a URL" })).toHaveValue("");
     await expect(panel.getByRole("alert")).toHaveCount(0);
     await expect(panel.locator("#environment-browser-panel")).toBeHidden();
@@ -628,30 +628,26 @@ test("browser pages share the tool tab strip and the launcher hides the native p
               };
             }
           ).aidenAPI;
-          return (
-            await api.ipc.invoke("browser:get-state", workspaceId)
-          ).tabs.some((tab) => tab.visible);
+          return (await api.ipc.invoke("browser:get-state", workspaceId)).tabs.some(
+            (tab) => tab.visible,
+          );
         }, E2E_WORKSPACE_ID),
       )
       .toBe(false);
     await panel.getByRole("button", { name: "Context", exact: true }).click();
-    await panel
-      .getByRole("tab", { name: "Panel fixture", exact: true })
-      .click();
+    await panel.getByRole("tab", { name: "Panel fixture", exact: true }).click();
     await expect(panel.locator("#environment-browser-panel")).toBeVisible();
-    await panel
-      .getByRole("button", { name: "Close Panel fixture tab" })
-      .click();
-    await expect(
-      panel.getByRole("tab", { name: "Panel fixture", exact: true }),
-    ).toHaveCount(0);
+    await panel.getByRole("button", { name: "Close Panel fixture tab" }).click();
+    await expect(panel.getByRole("tab", { name: "Panel fixture", exact: true })).toHaveCount(0);
   } finally {
     server.closeAllConnections();
     await new Promise<void>((resolve) => server.close(() => resolve()));
   }
 });
 
-test("browser creation and background selection preserve address focus while strip navigation moves it", async ({ aiden }) => {
+test("browser creation and background selection preserve address focus while strip navigation moves it", async ({
+  aiden,
+}) => {
   const { page } = aiden;
   await finishLmStudioOnboarding(page);
   // The onboarding toast sits over the floating panel's New browser tab button.
@@ -682,7 +678,11 @@ test("browser creation and background selection preserve address focus while str
   await expect(tabs.first()).toBeFocused();
   await address.focus();
   await page.evaluate(async (workspaceId) => {
-    const ipc = (window as unknown as { aidenAPI: { ipc: { invoke<T>(channel: string, ...args: unknown[]): Promise<T> } } }).aidenAPI.ipc;
+    const ipc = (
+      window as unknown as {
+        aidenAPI: { ipc: { invoke<T>(channel: string, ...args: unknown[]): Promise<T> } };
+      }
+    ).aidenAPI.ipc;
     const state = await ipc.invoke<{ tabs: { id: string }[] }>("browser:get-state", workspaceId);
     await ipc.invoke("browser:command", workspaceId, { action: "select", tabId: state.tabs[1].id });
   }, E2E_WORKSPACE_ID);
@@ -690,7 +690,9 @@ test("browser creation and background selection preserve address focus while str
   await expect(address).toBeFocused();
 });
 
-test("the shared browser strip ignores a delayed command snapshot after a newer close event", async ({ aiden }) => {
+test("the shared browser strip ignores a delayed command snapshot after a newer close event", async ({
+  aiden,
+}) => {
   const { page, app } = aiden;
   await finishLmStudioOnboarding(page);
   // The onboarding toast sits over the floating panel's New browser tab button.
@@ -703,13 +705,27 @@ test("the shared browser strip ignores a delayed command snapshot after a newer 
   const tabs = panel.getByRole("tablist", { name: "Environment views" }).getByRole("tab");
   await expect(tabs).toHaveCount(2);
   const closingId = await page.evaluate(async (workspaceId) => {
-    const ipc = (window as unknown as { aidenAPI: { ipc: { invoke<T>(channel: string, ...args: unknown[]): Promise<T> } } }).aidenAPI.ipc;
+    const ipc = (
+      window as unknown as {
+        aidenAPI: { ipc: { invoke<T>(channel: string, ...args: unknown[]): Promise<T> } };
+      }
+    ).aidenAPI.ipc;
     const state = await ipc.invoke<{ tabs: { id: string }[] }>("browser:get-state", workspaceId);
     return state.tabs[0].id;
   }, E2E_WORKSPACE_ID);
   await app.evaluate(({ ipcMain }) => {
-    const control = globalThis as unknown as { heldBrowserSelect?: boolean; releaseBrowserSelect?: () => void };
-    const handlers = (ipcMain as unknown as { _invokeHandlers: Map<string, (event: Electron.IpcMainInvokeEvent, ...args: unknown[]) => unknown> })._invokeHandlers;
+    const control = globalThis as unknown as {
+      heldBrowserSelect?: boolean;
+      releaseBrowserSelect?: () => void;
+    };
+    const handlers = (
+      ipcMain as unknown as {
+        _invokeHandlers: Map<
+          string,
+          (event: Electron.IpcMainInvokeEvent, ...args: unknown[]) => unknown
+        >;
+      }
+    )._invokeHandlers;
     const original = handlers.get("browser:command")!;
     let holdNextSelect = true;
     ipcMain.removeHandler("browser:command");
@@ -717,33 +733,63 @@ test("the shared browser strip ignores a delayed command snapshot after a newer 
       const hold = holdNextSelect && (args[1] as { action: string }).action === "select";
       if (hold) holdNextSelect = false;
       const result = await original(event, ...args);
-      if (hold) await new Promise<void>((resolve) => { control.releaseBrowserSelect = resolve; control.heldBrowserSelect = true; });
+      if (hold)
+        await new Promise<void>((resolve) => {
+          control.releaseBrowserSelect = resolve;
+          control.heldBrowserSelect = true;
+        });
       return result;
     });
   });
   await tabs.first().click();
-  await expect.poll(() => app.evaluate(() => (globalThis as unknown as { heldBrowserSelect?: boolean }).heldBrowserSelect)).toBe(true);
-  await page.evaluate(async ({ workspaceId, tabId }) => {
-    const ipc = (window as unknown as { aidenAPI: { ipc: { invoke(channel: string, ...args: unknown[]): Promise<unknown> } } }).aidenAPI.ipc;
-    await ipc.invoke("browser:command", workspaceId, { action: "close", tabId });
-  }, { workspaceId: E2E_WORKSPACE_ID, tabId: closingId });
+  await expect
+    .poll(() =>
+      app.evaluate(
+        () => (globalThis as unknown as { heldBrowserSelect?: boolean }).heldBrowserSelect,
+      ),
+    )
+    .toBe(true);
+  await page.evaluate(
+    async ({ workspaceId, tabId }) => {
+      const ipc = (
+        window as unknown as {
+          aidenAPI: { ipc: { invoke(channel: string, ...args: unknown[]): Promise<unknown> } };
+        }
+      ).aidenAPI.ipc;
+      await ipc.invoke("browser:command", workspaceId, { action: "close", tabId });
+    },
+    { workspaceId: E2E_WORKSPACE_ID, tabId: closingId },
+  );
   await expect(tabs).toHaveCount(1);
   // Choose another tool before the stale select returns: it must not reveal Browser.
   await panel.getByRole("button", { name: "New workspace tab" }).click();
   await panel.getByRole("button", { name: "Context", exact: true }).click();
-  await app.evaluate(() => (globalThis as unknown as { releaseBrowserSelect?: () => void }).releaseBrowserSelect?.());
+  await app.evaluate(() =>
+    (globalThis as unknown as { releaseBrowserSelect?: () => void }).releaseBrowserSelect?.(),
+  );
   await page.evaluate(async (workspaceId) => {
-    const ipc = (window as unknown as { aidenAPI: { ipc: { invoke(channel: string, ...args: unknown[]): Promise<unknown> } } }).aidenAPI.ipc;
+    const ipc = (
+      window as unknown as {
+        aidenAPI: { ipc: { invoke(channel: string, ...args: unknown[]): Promise<unknown> } };
+      }
+    ).aidenAPI.ipc;
     await ipc.invoke("browser:get-state", workspaceId);
-    await new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve())));
+    await new Promise<void>((resolve) =>
+      requestAnimationFrame(() => requestAnimationFrame(() => resolve())),
+    );
   }, E2E_WORKSPACE_ID);
   await expect(tabs).toHaveCount(2); // One surviving browser page plus Context.
-  await expect(panel.getByRole("tab", { name: "Context", exact: true })).toHaveAttribute("aria-selected", "true");
+  await expect(panel.getByRole("tab", { name: "Context", exact: true })).toHaveAttribute(
+    "aria-selected",
+    "true",
+  );
   await expect(panel.locator("#environment-browser-panel")).toBeHidden();
 });
 
 for (const scenario of ["create", "select", "superseded select", "superseded create"] as const) {
-  test(`browser ${scenario} distinguishes newer metadata from superseding navigation`, async ({ aiden }) => {
+  test(`browser ${scenario} distinguishes newer metadata from superseding navigation`, async ({
+    aiden,
+  }) => {
     const { page, app } = aiden;
     const creating = scenario.endsWith("create");
     const superseded = scenario.startsWith("superseded");
@@ -757,52 +803,101 @@ for (const scenario of ["create", "select", "superseded select", "superseded cre
       await panel.getByRole("button", { name: "New workspace tab" }).click();
       await panel.getByRole("button", { name: "Context", exact: true }).click();
     }
-    await app.evaluate(({ ipcMain }, action) => {
-      const control = globalThis as unknown as { heldMetadataTab?: string; releaseMetadataResponse?: () => void };
-      const handlers = (ipcMain as unknown as { _invokeHandlers: Map<string, (event: Electron.IpcMainInvokeEvent, ...args: unknown[]) => unknown> })._invokeHandlers;
-      const original = handlers.get("browser:command")!;
-      let holdNext = true;
-      ipcMain.removeHandler("browser:command");
-      ipcMain.handle("browser:command", async (event, ...args) => {
-        const command = args[1] as { action: string; tabId?: string };
-        const hold = holdNext && command.action === action;
-        if (hold) holdNext = false;
-        const result = await original(event, ...args) as { tabId?: string };
-        if (hold) await new Promise<void>((resolve) => {
-          control.heldMetadataTab = result.tabId ?? command.tabId;
-          control.releaseMetadataResponse = resolve;
+    await app.evaluate(
+      ({ ipcMain }, action) => {
+        const control = globalThis as unknown as {
+          heldMetadataTab?: string;
+          releaseMetadataResponse?: () => void;
+        };
+        const handlers = (
+          ipcMain as unknown as {
+            _invokeHandlers: Map<
+              string,
+              (event: Electron.IpcMainInvokeEvent, ...args: unknown[]) => unknown
+            >;
+          }
+        )._invokeHandlers;
+        const original = handlers.get("browser:command")!;
+        let holdNext = true;
+        ipcMain.removeHandler("browser:command");
+        ipcMain.handle("browser:command", async (event, ...args) => {
+          const command = args[1] as { action: string; tabId?: string };
+          const hold = holdNext && command.action === action;
+          if (hold) holdNext = false;
+          const result = (await original(event, ...args)) as { tabId?: string };
+          if (hold)
+            await new Promise<void>((resolve) => {
+              control.heldMetadataTab = result.tabId ?? command.tabId;
+              control.releaseMetadataResponse = resolve;
+            });
+          return result;
         });
-        return result;
-      });
-    }, creating ? "create" : "select");
+      },
+      creating ? "create" : "select",
+    );
     if (creating) {
       await panel.getByRole("textbox", { name: "Open a URL" }).fill("about:blank");
       await panel.getByRole("textbox", { name: "Open a URL" }).press("Enter");
     } else {
-      await panel.getByRole("tablist", { name: "Environment views" }).getByRole("tab").first().click();
+      await panel
+        .getByRole("tablist", { name: "Environment views" })
+        .getByRole("tab")
+        .first()
+        .click();
     }
-    await expect.poll(() => app.evaluate(() => Boolean((globalThis as unknown as { heldMetadataTab?: string }).heldMetadataTab))).toBe(true);
-    const tabId = await app.evaluate(() => (globalThis as unknown as { heldMetadataTab: string }).heldMetadataTab);
-    await page.evaluate(async ({ workspaceId, tabId }) => {
-      const ipc = (window as unknown as { aidenAPI: { ipc: { invoke(channel: string, ...args: unknown[]): Promise<unknown> } } }).aidenAPI.ipc;
-      await ipc.invoke("browser:command", workspaceId, { action: "mute", tabId, muted: true });
-    }, { workspaceId: E2E_WORKSPACE_ID, tabId });
+    await expect
+      .poll(() =>
+        app.evaluate(() =>
+          Boolean((globalThis as unknown as { heldMetadataTab?: string }).heldMetadataTab),
+        ),
+      )
+      .toBe(true);
+    const tabId = await app.evaluate(
+      () => (globalThis as unknown as { heldMetadataTab: string }).heldMetadataTab,
+    );
+    await page.evaluate(
+      async ({ workspaceId, tabId }) => {
+        const ipc = (
+          window as unknown as {
+            aidenAPI: { ipc: { invoke(channel: string, ...args: unknown[]): Promise<unknown> } };
+          }
+        ).aidenAPI.ipc;
+        await ipc.invoke("browser:command", workspaceId, { action: "mute", tabId, muted: true });
+      },
+      { workspaceId: E2E_WORKSPACE_ID, tabId },
+    );
     // Metadata does not reveal the presenter. Hidden creates intentionally leave
     // the active page unchanged until their navigation intent is revalidated.
-    if (!creating) await expect(panel.locator('#environment-browser-panel .browser-chrome button[aria-label="Unmute tab"]')).toHaveCount(1);
+    if (!creating)
+      await expect(
+        panel.locator('#environment-browser-panel .browser-chrome button[aria-label="Unmute tab"]'),
+      ).toHaveCount(1);
     await expect(panel.locator("#environment-browser-panel")).toBeHidden();
     if (superseded) {
       await panel.getByRole("button", { name: "New workspace tab" }).click();
       await panel.getByRole("button", { name: "Files", exact: true }).click();
     }
-    await app.evaluate(() => (globalThis as unknown as { releaseMetadataResponse?: () => void }).releaseMetadataResponse?.());
+    await app.evaluate(() =>
+      (
+        globalThis as unknown as { releaseMetadataResponse?: () => void }
+      ).releaseMetadataResponse?.(),
+    );
     await page.evaluate(async (workspaceId) => {
-      const ipc = (window as unknown as { aidenAPI: { ipc: { invoke(channel: string, ...args: unknown[]): Promise<unknown> } } }).aidenAPI.ipc;
+      const ipc = (
+        window as unknown as {
+          aidenAPI: { ipc: { invoke(channel: string, ...args: unknown[]): Promise<unknown> } };
+        }
+      ).aidenAPI.ipc;
       await ipc.invoke("browser:get-state", workspaceId);
-      await new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve())));
+      await new Promise<void>((resolve) =>
+        requestAnimationFrame(() => requestAnimationFrame(() => resolve())),
+      );
     }, E2E_WORKSPACE_ID);
     if (superseded) {
-      await expect(panel.getByRole("tab", { name: "Files", exact: true })).toHaveAttribute("aria-selected", "true");
+      await expect(panel.getByRole("tab", { name: "Files", exact: true })).toHaveAttribute(
+        "aria-selected",
+        "true",
+      );
       await expect(panel.locator("#environment-browser-panel")).toBeHidden();
     } else {
       await expect(panel.locator("#environment-browser-panel")).toBeVisible();

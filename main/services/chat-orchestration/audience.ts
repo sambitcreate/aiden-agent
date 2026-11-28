@@ -43,7 +43,10 @@ export interface AudienceDeviceRecord {
  * An outside MCP app's (type "agent") and a lead chat's started chats never
  * do; a phone or paired computer does.
  */
-export function audienceReportsAnalytics(audienceId: string, devices: readonly AudienceDeviceRecord[]): boolean {
+export function audienceReportsAnalytics(
+  audienceId: string,
+  devices: readonly AudienceDeviceRecord[],
+): boolean {
   if (isChatAudience(audienceId)) return false;
   return devices.find((device) => device.id === audienceId)?.type !== "agent";
 }

@@ -219,7 +219,8 @@ export function shouldEnableAppUpdates(environment: AppUpdaterEnvironment): bool
   return (
     (environment.platform === "darwin" ||
       (environment.platform === "linux" &&
-        (environment.linuxAppImageEligible === true || environment.linuxPackageEligible === true))) &&
+        (environment.linuxAppImageEligible === true ||
+          environment.linuxPackageEligible === true))) &&
     environment.isPackaged &&
     environment.runtimeProfile === "production" &&
     environment.updateConfigExists

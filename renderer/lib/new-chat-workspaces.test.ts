@@ -3,8 +3,21 @@ import test from "node:test";
 import { continueInWorkspaceChoices, newChatWorkspaceChoices } from "./new-chat-workspaces";
 import type { Workspace } from "./types";
 
-function workspace(id: string, name: string, createdAt: number, extra: Partial<Workspace> = {}): Workspace {
-  return { id, name, folderPath: `/Users/me/${name}`, permission: "ask", createdAt, updatedAt: createdAt, ...extra };
+function workspace(
+  id: string,
+  name: string,
+  createdAt: number,
+  extra: Partial<Workspace> = {},
+): Workspace {
+  return {
+    id,
+    name,
+    folderPath: `/Users/me/${name}`,
+    permission: "ask",
+    createdAt,
+    updatedAt: createdAt,
+    ...extra,
+  };
 }
 
 const site = workspace("site", "site", 100);
@@ -32,7 +45,11 @@ test("workspaces are ordered by their latest chat, with chatless ones by when th
   );
   assert.deepEqual(
     choices.map(({ workspace, lastActivityAt }) => [workspace.id, lastActivityAt]),
-    [["api", 9_000], ["fresh", 5_000], ["site", 3_000]],
+    [
+      ["api", 9_000],
+      ["fresh", 5_000],
+      ["site", 3_000],
+    ],
   );
 });
 
@@ -44,7 +61,10 @@ test("managed worktrees are left out and only the current workspace is marked", 
   );
   assert.deepEqual(
     choices.map(({ workspace, current }) => [workspace.id, current]),
-    [["api", false], ["site", true]],
+    [
+      ["api", false],
+      ["site", true],
+    ],
   );
 });
 
@@ -61,7 +81,10 @@ test("a chat whose folder is gone can continue in No workspace or any other work
   const hiddenHome = workspace("hidden-1", "hidden", 10, { noWorkspace: true });
   const hiddenLater = workspace("hidden-2", "hidden", 20, { noWorkspace: true });
   const assistant = workspace("assistant", "Assistant", 1);
-  const choices = continueInWorkspaceChoices([site, api, fresh, worktree, hiddenLater, hiddenHome, assistant], "site");
+  const choices = continueInWorkspaceChoices(
+    [site, api, fresh, worktree, hiddenLater, hiddenHome, assistant],
+    "site",
+  );
   assert.deepEqual(choices, [
     { workspaceId: "hidden-1", name: "No workspace", noWorkspace: true },
     { workspaceId: "api", name: "api" },
@@ -72,7 +95,9 @@ test("a chat whose folder is gone can continue in No workspace or any other work
 test("a deleted worktree's main checkout is offered first, and a No workspace chat is not offered No workspace again", () => {
   const home = workspace("default", "default", 10, { noWorkspace: true });
   assert.deepEqual(
-    continueInWorkspaceChoices([site, api, fresh, worktree, home], "api-wt", "site").map(({ workspaceId }) => workspaceId),
+    continueInWorkspaceChoices([site, api, fresh, worktree, home], "api-wt", "site").map(
+      ({ workspaceId }) => workspaceId,
+    ),
     ["default", "site", "api", "fresh"],
   );
   assert.deepEqual(

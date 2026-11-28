@@ -38,7 +38,10 @@ test("a missing file reads as defaults and a saved document round-trips with mod
   await store.update((draft) => {
     draft.defaultModel = { provider: "fal", id: "fal-ai/flux/schnell" };
     draft.enabled.fal = { "fal-ai/flux/schnell": false };
-    draft.fetched.fal = { fetchedAt: 1_760_000_000_000, models: [structuredClone(fetchedEntry)] as never };
+    draft.fetched.fal = {
+      fetchedAt: 1_760_000_000_000,
+      models: [structuredClone(fetchedEntry)] as never,
+    };
   });
 
   const reopened = createImageGenerationSettingsStore(() => root);
@@ -67,7 +70,12 @@ test("a corrupt or tampered file resets to defaults and is reported", async (t) 
     "{not json",
     JSON.stringify({ version: 2 }),
     JSON.stringify({ version: 1, custom: { anthropic: [] } }),
-    JSON.stringify({ version: 1, fetched: { fal: { fetchedAt: 1, models: [{ ...fetchedEntry, adapter: { kind: "replicate" } }] } } }),
+    JSON.stringify({
+      version: 1,
+      fetched: {
+        fal: { fetchedAt: 1, models: [{ ...fetchedEntry, adapter: { kind: "replicate" } }] },
+      },
+    }),
   ]) {
     const root = await tempRoot(t);
     await fs.writeFile(path.join(root, IMAGE_GENERATION_SETTINGS_FILE), contents);
@@ -86,22 +94,45 @@ test("validation enforces per-provider id shapes, adapter fields and size bounds
       version: 1,
       custom: {
         replicate: [
-          { provider: "replicate", id: "a/b", name: "A", acceptsReferenceImages: true, adapter: { kind: "replicate", referenceField: "mask" } },
+          {
+            provider: "replicate",
+            id: "a/b",
+            name: "A",
+            acceptsReferenceImages: true,
+            adapter: { kind: "replicate", referenceField: "mask" },
+          },
         ],
       },
     }),
   );
   assert.throws(() =>
-    valid({ version: 1, custom: { fal: Array.from({ length: 51 }, (_, index) => ({ ...fetchedEntry, id: `a/m${index}`, adapter: { kind: "fal", textEndpoint: `a/m${index}` } })) } }),
+    valid({
+      version: 1,
+      custom: {
+        fal: Array.from({ length: 51 }, (_, index) => ({
+          ...fetchedEntry,
+          id: `a/m${index}`,
+          adapter: { kind: "fal", textEndpoint: `a/m${index}` },
+        })),
+      },
+    }),
   );
   // A reference mode is only "array" or "single", and only alongside a reference field.
   const replicateEntry = (adapter: Record<string, unknown>) => ({
     version: 1,
-    custom: { replicate: [{ provider: "replicate", id: "a/b", name: "A", acceptsReferenceImages: true, adapter }] },
+    custom: {
+      replicate: [
+        { provider: "replicate", id: "a/b", name: "A", acceptsReferenceImages: true, adapter },
+      ],
+    },
   });
-  assert.throws(() => valid(replicateEntry({ kind: "replicate", referenceField: "image", referenceMode: "many" })));
+  assert.throws(() =>
+    valid(replicateEntry({ kind: "replicate", referenceField: "image", referenceMode: "many" })),
+  );
   assert.throws(() => valid(replicateEntry({ kind: "replicate", referenceMode: "array" })));
-  const arrayMode = valid(replicateEntry({ kind: "replicate", referenceField: "image", referenceMode: "array" }));
+  const arrayMode = valid(
+    replicateEntry({ kind: "replicate", referenceField: "image", referenceMode: "array" }),
+  );
   assert.deepEqual(arrayMode.custom.replicate?.[0]?.adapter, {
     kind: "replicate",
     referenceField: "image",
@@ -112,7 +143,13 @@ test("validation enforces per-provider id shapes, adapter fields and size bounds
     version: 1,
     custom: {
       replicate: [
-        { provider: "replicate", id: "a/b", name: "A", acceptsReferenceImages: true, adapter: { kind: "replicate" } },
+        {
+          provider: "replicate",
+          id: "a/b",
+          name: "A",
+          acceptsReferenceImages: true,
+          adapter: { kind: "replicate" },
+        },
       ],
     },
   });
@@ -121,6 +158,10 @@ test("validation enforces per-provider id shapes, adapter fields and size bounds
 
 test("every bundled curated entry passes the stored-entry validator unchanged", () => {
   for (const entry of [...CURATED_REPLICATE_IMAGE_MODELS, ...CURATED_FAL_IMAGE_MODELS]) {
-    assert.deepEqual(parseImageCatalogEntry(entry.provider, structuredClone(entry)), entry, entry.id);
+    assert.deepEqual(
+      parseImageCatalogEntry(entry.provider, structuredClone(entry)),
+      entry,
+      entry.id,
+    );
   }
 });

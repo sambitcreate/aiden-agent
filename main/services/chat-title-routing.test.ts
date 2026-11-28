@@ -24,7 +24,10 @@ test("automatic prefers Apple only while the native connection is ready", () => 
 });
 
 test("Apple-only mode never falls through to a network chat model", () => {
-  assert.equal(resolveChatTitleRoute("apple-foundation-models", status("ready")), "apple-foundation-models");
+  assert.equal(
+    resolveChatTitleRoute("apple-foundation-models", status("ready")),
+    "apple-foundation-models",
+  );
   assert.equal(resolveChatTitleRoute("apple-foundation-models", status("error")), "seed-only");
   assert.equal(resolveChatTitleRoute("apple-foundation-models", null), "seed-only");
 });

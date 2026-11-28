@@ -18,11 +18,13 @@ test("the pinned Pi release exposes native OpenAI Codex OAuth", async () => {
   assert.ok(providerIds.includes("typesafe"));
   assert.ok(providerIds.includes("radius"));
   assert.deepEqual(
-    providers.filter(
-      (entry) =>
-        typeof entry.auth.apiKey?.login !== "function" &&
-        typeof entry.auth.oauth?.login !== "function",
-    ).map((entry) => entry.id),
+    providers
+      .filter(
+        (entry) =>
+          typeof entry.auth.apiKey?.login !== "function" &&
+          typeof entry.auth.oauth?.login !== "function",
+      )
+      .map((entry) => entry.id),
     [],
     "Every pinned built-in must retain an explicit stored-auth setup path for Bots.",
   );
@@ -59,7 +61,10 @@ test("every provider without a saved model starts on a model the pinned Pi catal
   const models = builtinModels();
   for (const [providerId, modelId] of Object.entries(PI_DEFAULT_MODEL_PER_PROVIDER)) {
     assert.ok(models.getProvider(providerId), `${providerId} is a pinned Pi provider`);
-    assert.ok(models.getModel(providerId, modelId), `${providerId}/${modelId} is in the pinned catalog`);
+    assert.ok(
+      models.getModel(providerId, modelId),
+      `${providerId}/${modelId} is in the pinned catalog`,
+    );
   }
   for (const providerId of ["openai", "azure", "openai-codex"]) {
     const ids = models.getModels(providerId).map((model) => model.id);
@@ -90,11 +95,17 @@ test("GPT-6.2 Astra and Sol never offer thinking off on OpenAI, Azure or Codex",
 test("pinned provider streams serialize transcript prompts for thinking and GPT Responses", async () => {
   const models = builtinModels();
   const providers = builtinProviders();
-  const system = createInitialSystemMessage("Follow the host policy", [{
-    name: "fixture_read", description: "Read fixture", parameters: Type.Object({}),
-  }]);
+  const system = createInitialSystemMessage("Follow the host policy", [
+    {
+      name: "fixture_read",
+      description: "Read fixture",
+      parameters: Type.Object({}),
+    },
+  ]);
   assert.ok(system);
-  const context = normalizeContext({ messages: [system, { role: "user", content: "Hello", timestamp: 1 }] });
+  const context = normalizeContext({
+    messages: [system, { role: "user", content: "Hello", timestamp: 1 }],
+  });
   for (const [providerId, modelId, api] of [
     ["anthropic", "claude-opus-5-5", "anthropic-messages"],
     ["openai", "gpt-6-sol", "openai-responses"],
@@ -106,12 +117,19 @@ test("pinned provider streams serialize transcript prompts for thinking and GPT 
     assert.equal(model.api, api);
     let payload: unknown;
     const captured = new Error("captured before network");
-    await provider.streamSimple(model, context, {
-      apiKey: "offline-fixture",
-      reasoning: "high",
-      onPayload: (request) => { payload = request; throw captured; },
-      fetch: async () => { throw new Error("Provider smoke attempted network I/O."); },
-    }).result();
+    await provider
+      .streamSimple(model, context, {
+        apiKey: "offline-fixture",
+        reasoning: "high",
+        onPayload: (request) => {
+          payload = request;
+          throw captured;
+        },
+        fetch: async () => {
+          throw new Error("Provider smoke attempted network I/O.");
+        },
+      })
+      .result();
     assert.ok(payload && typeof payload === "object", `${providerId} built a request`);
     assert.match(JSON.stringify(payload), /Follow the host policy/u);
     assert.match(JSON.stringify(payload), /fixture_read/u);
@@ -121,21 +139,42 @@ test("pinned provider streams serialize transcript prompts for thinking and GPT 
 test("unknown local OpenAI-compatible endpoints omit strict tool mode by default", async () => {
   const template = builtinModels().getModel("openai", "gpt-6-sol");
   assert.ok(template);
-  const model = { ...template, provider: "custom:local", api: "openai-completions" as const,
-    baseUrl: "http://127.0.0.1:1234/v1", compat: undefined };
-  const system = createInitialSystemMessage("Local host policy", [{
-    name: "fixture_read", description: "Read fixture", parameters: Type.Object({}),
-  }]);
+  const model = {
+    ...template,
+    provider: "custom:local",
+    api: "openai-completions" as const,
+    baseUrl: "http://127.0.0.1:1234/v1",
+    compat: undefined,
+  };
+  const system = createInitialSystemMessage("Local host policy", [
+    {
+      name: "fixture_read",
+      description: "Read fixture",
+      parameters: Type.Object({}),
+    },
+  ]);
   assert.ok(system);
   let payload: unknown;
-  await openAICompletionsApi().streamSimple(model, normalizeContext({
-    messages: [system, { role: "user", content: "Hello", timestamp: 1 }],
-  }), {
-    apiKey: "offline-fixture",
-    onPayload: (request) => { payload = request; throw new Error("captured before network"); },
-    fetch: async () => { throw new Error("Local provider smoke attempted network I/O."); },
-  }).result();
-  const tools = (payload as { tools?: Array<{ function?: { strict?: unknown } }> } | undefined)?.tools;
+  await openAICompletionsApi()
+    .streamSimple(
+      model,
+      normalizeContext({
+        messages: [system, { role: "user", content: "Hello", timestamp: 1 }],
+      }),
+      {
+        apiKey: "offline-fixture",
+        onPayload: (request) => {
+          payload = request;
+          throw new Error("captured before network");
+        },
+        fetch: async () => {
+          throw new Error("Local provider smoke attempted network I/O.");
+        },
+      },
+    )
+    .result();
+  const tools = (payload as { tools?: Array<{ function?: { strict?: unknown } }> } | undefined)
+    ?.tools;
   assert.equal(tools?.length, 1);
   assert.equal(tools?.[0]?.function?.strict, undefined);
 });

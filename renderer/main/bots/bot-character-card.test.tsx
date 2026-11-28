@@ -8,7 +8,13 @@ import { BotLookPicker } from "./bot-character-card";
 
 afterEach(cleanup);
 
-function Harness({ initial, onSave }: { initial: BotAvatar; onSave(avatar: BotAvatarAppearance): void }) {
+function Harness({
+  initial,
+  onSave,
+}: {
+  initial: BotAvatar;
+  onSave(avatar: BotAvatarAppearance): void;
+}) {
   const [avatar, setAvatar] = React.useState<BotAvatar>(initial);
   return (
     <BotLookPicker
@@ -31,8 +37,14 @@ test("picking a colour and a shape changes only the Bot's character", () => {
   fireEvent.click(within(shapes).getByRole("radio", { name: "Hex" }));
 
   assert.deepEqual(saved[saved.length - 1], { ...DEFAULT_BOT_AVATAR, color: "mint", shape: "hex" });
-  assert.equal(within(colours).getByRole("radio", { name: "Mint" }).getAttribute("aria-checked"), "true");
-  assert.equal(within(shapes).getByRole("radio", { name: "Hex" }).getAttribute("aria-checked"), "true");
+  assert.equal(
+    within(colours).getByRole("radio", { name: "Mint" }).getAttribute("aria-checked"),
+    "true",
+  );
+  assert.equal(
+    within(shapes).getByRole("radio", { name: "Hex" }).getAttribute("aria-checked"),
+    "true",
+  );
 });
 
 test("arrow keys move the colour selection like a radio group", () => {

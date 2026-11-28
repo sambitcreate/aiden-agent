@@ -18,7 +18,9 @@ const FINGERPRINT = /^[a-f0-9]{64}$/u;
 export class McpStdioApprovalRequiredError extends Error {
   readonly code = "mcp-stdio-approval-required";
   constructor(serverName: string) {
-    super(`“${serverName}” was added outside Aiden. Approve it in Settings → Connectors before it can run.`);
+    super(
+      `“${serverName}” was added outside Aiden. Approve it in Settings → Connectors before it can run.`,
+    );
   }
 }
 
@@ -28,13 +30,22 @@ type Approvals = Map<string, string[]>;
 function parse(text: string): Approvals {
   const value: unknown = JSON.parse(text);
   const approved = (value as { approved?: unknown } | null)?.approved;
-  if (!value || typeof value !== "object" || (value as { version?: unknown }).version !== 1 || !approved || typeof approved !== "object" || Array.isArray(approved)) {
+  if (
+    !value ||
+    typeof value !== "object" ||
+    (value as { version?: unknown }).version !== 1 ||
+    !approved ||
+    typeof approved !== "object" ||
+    Array.isArray(approved)
+  ) {
     throw new Error("Invalid MCP stdio approvals.");
   }
   const result: Approvals = new Map();
   for (const [id, entry] of Object.entries(approved)) {
-    const fingerprints = (Array.isArray(entry) ? entry : [entry])
-      .filter((fingerprint): fingerprint is string => typeof fingerprint === "string" && FINGERPRINT.test(fingerprint));
+    const fingerprints = (Array.isArray(entry) ? entry : [entry]).filter(
+      (fingerprint): fingerprint is string =>
+        typeof fingerprint === "string" && FINGERPRINT.test(fingerprint),
+    );
     if (fingerprints.length > 0) result.set(id, fingerprints.slice(-MAX_PER_SERVER));
   }
   return result;
@@ -79,10 +90,16 @@ export function createMcpStdioApprovalStore(file: () => Promise<string>): McpStd
   };
   const write = async (approved: Approvals) => {
     const entries = [...approved].slice(-MAX_APPROVALS);
-    await writeJsonAtomic(await file(), { version: 1, approved: Object.fromEntries(entries) }, { mode: 0o600, space: 2 });
+    await writeJsonAtomic(
+      await file(),
+      { version: 1, approved: Object.fromEntries(entries) },
+      { mode: 0o600, space: 2 },
+    );
   };
   const sameList = (left: readonly string[] | undefined, right: readonly string[]) =>
-    left !== undefined && left.length === right.length && left.every((value, index) => value === right[index]);
+    left !== undefined &&
+    left.length === right.length &&
+    left.every((value, index) => value === right[index]);
   return {
     async isApproved(server) {
       if (server.transport !== "stdio") return true;
@@ -117,9 +134,10 @@ export function createMcpStdioApprovalStore(file: () => Promise<string>): McpStd
         const approved = await read();
         const existing = approved.get(serverId);
         if (!existing) return;
-        const keep = configured?.id === serverId && configured.transport === "stdio"
-          ? mcpStdioLaunchFingerprint(configured)
-          : undefined;
+        const keep =
+          configured?.id === serverId && configured.transport === "stdio"
+            ? mcpStdioLaunchFingerprint(configured)
+            : undefined;
         if (keep !== undefined && existing.includes(keep)) {
           if (sameList(existing, [keep])) return;
           approved.set(serverId, [keep]);
@@ -130,7 +148,8 @@ export function createMcpStdioApprovalStore(file: () => Promise<string>): McpStd
       });
     },
     async approveShown(server, shownFingerprint) {
-      if (server.transport !== "stdio" || mcpStdioLaunchFingerprint(server) !== shownFingerprint) return false;
+      if (server.transport !== "stdio" || mcpStdioLaunchFingerprint(server) !== shownFingerprint)
+        return false;
       await this.approve(server);
       return true;
     },

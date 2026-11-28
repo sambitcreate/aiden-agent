@@ -2,7 +2,17 @@ import { initializeSqliteReclamation, reclaimSqlitePages } from "../sqlite-recla
 // Append-friendly run history for Create Images. One row per node attempt; every
 // write is a single keyed statement. The ledger is history, not a work queue: a
 // restart marks unfinished work interrupted and nothing is ever resubmitted.
-import { chmodSync, closeSync, constants, existsSync, fstatSync, lstatSync, mkdirSync, openSync, renameSync } from "node:fs";
+import {
+  chmodSync,
+  closeSync,
+  constants,
+  existsSync,
+  fstatSync,
+  lstatSync,
+  mkdirSync,
+  openSync,
+  renameSync,
+} from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import type {
@@ -97,9 +107,13 @@ const LATEST_PER_NODE = `
  * `exports` maps an image asset to Aiden's auto-saved copy of it in the Pictures folder.
  */
 function ensureAdditions(db: DatabaseSync): void {
-  const columns = (db.prepare("PRAGMA table_info(attempts)").all() as unknown as { name: string }[]).map((row) => row.name);
+  const columns = (
+    db.prepare("PRAGMA table_info(attempts)").all() as unknown as { name: string }[]
+  ).map((row) => row.name);
   if (!columns.includes("prompt")) db.exec("ALTER TABLE attempts ADD COLUMN prompt TEXT");
-  db.exec("CREATE TABLE IF NOT EXISTS exports (asset_id TEXT PRIMARY KEY, path TEXT NOT NULL, exported_at INTEGER NOT NULL)");
+  db.exec(
+    "CREATE TABLE IF NOT EXISTS exports (asset_id TEXT PRIMARY KEY, path TEXT NOT NULL, exported_at INTEGER NOT NULL)",
+  );
 }
 
 const OLDER_THAN_RECENT = `
@@ -203,7 +217,9 @@ function isOutputRef(value: unknown): value is OutputRef {
     /^[0-9a-f]{64}$/u.test(ref.assetId) &&
     Number.isSafeInteger(ref.width) &&
     Number.isSafeInteger(ref.height) &&
-    (ref.mediaType === "image/png" || ref.mediaType === "image/jpeg" || ref.mediaType === "image/webp")
+    (ref.mediaType === "image/png" ||
+      ref.mediaType === "image/jpeg" ||
+      ref.mediaType === "image/webp")
   );
 }
 
@@ -286,8 +302,12 @@ function statements(db: DatabaseSync) {
     attempts: db.prepare(
       "SELECT node_id, variant, state, provider, model, submitted_at, finished_at, error_code, error_message, cancel_requested, truncated, cost_usd, cost_status, output, prompt FROM attempts WHERE run_id = ? ORDER BY id",
     ),
-    latestRun: db.prepare("SELECT id FROM runs WHERE workflow_id = ? ORDER BY created_at DESC, rowid DESC LIMIT 1"),
-    listRuns: db.prepare("SELECT * FROM runs WHERE workflow_id = ? ORDER BY created_at DESC, rowid DESC LIMIT ?"),
+    latestRun: db.prepare(
+      "SELECT id FROM runs WHERE workflow_id = ? ORDER BY created_at DESC, rowid DESC LIMIT 1",
+    ),
+    listRuns: db.prepare(
+      "SELECT * FROM runs WHERE workflow_id = ? ORDER BY created_at DESC, rowid DESC LIMIT ?",
+    ),
     latestOutputs: db.prepare(
       "SELECT a.node_id AS node_id, a.output AS output FROM attempts a JOIN runs r ON r.id = a.run_id WHERE r.workflow_id = ? AND a.state = 'succeeded' AND a.output IS NOT NULL ORDER BY a.id DESC",
     ),
@@ -361,15 +381,24 @@ export interface ImageRunLedgerOptions {
 const DAMAGED_SQLITE_CODES = new Set([11, 26]);
 
 function isDamaged(error: unknown): boolean {
-  if (error instanceof ImageRunLedgerError) return error.code === "corrupt" || error.code === "unsupported";
+  if (error instanceof ImageRunLedgerError)
+    return error.code === "corrupt" || error.code === "unsupported";
   const sqlite = error as { code?: unknown; errcode?: unknown };
-  return sqlite?.code === "ERR_SQLITE_ERROR" && typeof sqlite.errcode === "number" && DAMAGED_SQLITE_CODES.has(sqlite.errcode & 0xff);
+  return (
+    sqlite?.code === "ERR_SQLITE_ERROR" &&
+    typeof sqlite.errcode === "number" &&
+    DAMAGED_SQLITE_CODES.has(sqlite.errcode & 0xff)
+  );
 }
 
 /** Renames the ledger and its sidecars to `runs-v1.sqlite.corrupt-<time>[-n]`, keeping SQLite's suffixes. */
 function quarantine(file: string, at: number): string {
   let target = `${file}.corrupt-${at}`;
-  for (let n = 1; [target, `${target}-wal`, `${target}-shm`].some((candidate) => existsSync(candidate)); n += 1) {
+  for (
+    let n = 1;
+    [target, `${target}-wal`, `${target}-shm`].some((candidate) => existsSync(candidate));
+    n += 1
+  ) {
     target = `${file}.corrupt-${at}-${n}`;
   }
   renameSync(file, target);
@@ -429,17 +458,27 @@ export class ImageRunLedger {
       db.exec("PRAGMA busy_timeout=100;");
       initializeSqliteReclamation(db);
       db.exec("PRAGMA foreign_keys=ON; PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL;");
-      const version = Number((db.prepare("PRAGMA user_version").get() as { user_version: number }).user_version);
+      const version = Number(
+        (db.prepare("PRAGMA user_version").get() as { user_version: number }).user_version,
+      );
       if (version === 0) {
         if (db.prepare("SELECT name FROM sqlite_master WHERE type = 'table'").get()) {
           throw new ImageRunLedgerError("corrupt", "The image run ledger has no schema version.");
         }
         db.exec(`BEGIN IMMEDIATE; ${SCHEMA} COMMIT;`);
       } else if (version !== 1) {
-        throw new ImageRunLedgerError("unsupported", "The image run ledger uses an unsupported schema.");
+        throw new ImageRunLedgerError(
+          "unsupported",
+          "The image run ledger uses an unsupported schema.",
+        );
       }
-      const tables = db.prepare("SELECT COUNT(*) AS count FROM sqlite_master WHERE type = 'table' AND name IN ('runs', 'attempts')").get() as { count: number };
-      if (Number(tables.count) !== 2) throw new ImageRunLedgerError("corrupt", "The image run ledger is missing its tables.");
+      const tables = db
+        .prepare(
+          "SELECT COUNT(*) AS count FROM sqlite_master WHERE type = 'table' AND name IN ('runs', 'attempts')",
+        )
+        .get() as { count: number };
+      if (Number(tables.count) !== 2)
+        throw new ImageRunLedgerError("corrupt", "The image run ledger is missing its tables.");
       db.exec("BEGIN IMMEDIATE");
       try {
         ensureAdditions(db);
@@ -475,7 +514,13 @@ export class ImageRunLedger {
         this.now(),
       );
       for (const attempt of input.attempts) {
-        this.sql.insertAttempt.run(input.runId, attempt.nodeId, attempt.variant, attempt.provider ?? null, attempt.model ?? null);
+        this.sql.insertAttempt.run(
+          input.runId,
+          attempt.nodeId,
+          attempt.variant,
+          attempt.provider ?? null,
+          attempt.model ?? null,
+        );
       }
     });
   }
@@ -489,7 +534,12 @@ export class ImageRunLedger {
     try {
       return this.transaction(() => {
         if (Number(this.sql.claim.run(runId).changes) !== 1) return false;
-        if (Number(this.sql.submit.run(this.now(), prompt ?? null, runId, nodeId, variant).changes) !== 1) throw NOT_QUEUED;
+        if (
+          Number(
+            this.sql.submit.run(this.now(), prompt ?? null, runId, nodeId, variant).changes,
+          ) !== 1
+        )
+          throw NOT_QUEUED;
         return true;
       });
     } catch (error) {
@@ -511,7 +561,9 @@ export class ImageRunLedger {
           update.truncated ? 1 : 0,
           update.costUsd ?? null,
           update.costStatus ?? null,
-          update.output && update.output.length > 0 ? JSON.stringify(update.output.slice(0, MAX_OUTPUTS)) : null,
+          update.output && update.output.length > 0
+            ? JSON.stringify(update.output.slice(0, MAX_OUTPUTS))
+            : null,
           update.runId,
           update.nodeId,
           update.variant,
@@ -525,7 +577,11 @@ export class ImageRunLedger {
     this.sql.requestCancel.run(runId);
   }
 
-  finishRun(runId: string, state: Exclude<RunState, "running" | "interrupted">, endReason?: string): void {
+  finishRun(
+    runId: string,
+    state: Exclude<RunState, "running" | "interrupted">,
+    endReason?: string,
+  ): void {
     this.requireOpen();
     this.sql.finishRun.run(state, this.now(), endReason ?? null, runId);
   }
@@ -562,8 +618,12 @@ export class ImageRunLedger {
   latestOutputs(workflowId: string): Record<string, OutputRef[]> {
     this.requireOpen();
     const latest: Record<string, OutputRef[]> = {};
-    for (const row of this.sql.latestOutputs.all(workflowId) as unknown as { node_id: string; output: string }[]) {
-      if (!Object.prototype.hasOwnProperty.call(latest, row.node_id)) latest[row.node_id] = parseOutput(row.output);
+    for (const row of this.sql.latestOutputs.all(workflowId) as unknown as {
+      node_id: string;
+      output: string;
+    }[]) {
+      if (!Object.prototype.hasOwnProperty.call(latest, row.node_id))
+        latest[row.node_id] = parseOutput(row.output);
     }
     return latest;
   }
@@ -572,8 +632,12 @@ export class ImageRunLedger {
   latestOutputSequence(workflowId: string): Record<string, number> {
     this.requireOpen();
     const latest: Record<string, number> = {};
-    for (const row of this.sql.outputSequence.all(workflowId) as unknown as { node_id: string; sequence: number }[]) {
-      if (!Object.prototype.hasOwnProperty.call(latest, row.node_id)) latest[row.node_id] = Number(row.sequence);
+    for (const row of this.sql.outputSequence.all(workflowId) as unknown as {
+      node_id: string;
+      sequence: number;
+    }[]) {
+      if (!Object.prototype.hasOwnProperty.call(latest, row.node_id))
+        latest[row.node_id] = Number(row.sequence);
     }
     return latest;
   }
@@ -590,7 +654,11 @@ export class ImageRunLedger {
       for (const ref of parseOutput(row.output)) ids.add(ref.assetId);
       seen.set(row.workflow_id, ids);
     }
-    return Object.fromEntries([...seen].filter(([, ids]) => ids.size > 0).map(([workflowId, ids]) => [workflowId, [...ids].sort()]));
+    return Object.fromEntries(
+      [...seen]
+        .filter(([, ids]) => ids.size > 0)
+        .map(([workflowId, ids]) => [workflowId, [...ids].sort()]),
+    );
   }
 
   /** Every run in the ledger with the generated assets its `images-run` holder should keep (possibly none). */
@@ -610,14 +678,18 @@ export class ImageRunLedger {
    */
   generatedAttempts(workflowId: string | undefined, limit: number): GeneratedAttempt[] {
     this.requireOpen();
-    return (this.sql.generatedAttempts.all(workflowId ?? null, limit) as unknown as GeneratedAttemptRow[]).map(generatedAttemptFrom);
+    return (
+      this.sql.generatedAttempts.all(workflowId ?? null, limit) as unknown as GeneratedAttemptRow[]
+    ).map(generatedAttemptFrom);
   }
 
   /** The newest succeeded Generate attempt that produced this asset, or undefined when the ledger never generated it. */
   generatedAsset(assetId: string): { attempt: GeneratedAttempt; ref: OutputRef } | undefined {
     this.requireOpen();
     if (assetId.length === 0) return undefined;
-    for (const row of this.sql.generatedAttemptsNaming.all(assetId) as unknown as GeneratedAttemptRow[]) {
+    for (const row of this.sql.generatedAttemptsNaming.all(
+      assetId,
+    ) as unknown as GeneratedAttemptRow[]) {
       const attempt = generatedAttemptFrom(row);
       const ref = attempt.output.find((candidate) => candidate.assetId === assetId);
       if (ref) return { attempt, ref };
@@ -626,16 +698,22 @@ export class ImageRunLedger {
   }
 
   /** `generatedAsset` for many assets in one pass over the ledger; assets it never generated are absent. */
-  generatedAssets(assetIds: Iterable<string>): Map<string, { attempt: GeneratedAttempt; ref: OutputRef }> {
+  generatedAssets(
+    assetIds: Iterable<string>,
+  ): Map<string, { attempt: GeneratedAttempt; ref: OutputRef }> {
     this.requireOpen();
     const wanted = new Set(assetIds);
     const found = new Map<string, { attempt: GeneratedAttempt; ref: OutputRef }>();
     if (wanted.size === 0) return found;
-    for (const row of this.sql.generatedAttempts.all(null, -1) as unknown as GeneratedAttemptRow[]) {
+    for (const row of this.sql.generatedAttempts.all(
+      null,
+      -1,
+    ) as unknown as GeneratedAttemptRow[]) {
       const attempt = generatedAttemptFrom(row);
       for (const ref of attempt.output) {
         // Rows come newest first, so the first attempt naming an asset is its newest.
-        if (wanted.has(ref.assetId) && !found.has(ref.assetId)) found.set(ref.assetId, { attempt, ref });
+        if (wanted.has(ref.assetId) && !found.has(ref.assetId))
+          found.set(ref.assetId, { attempt, ref });
       }
       if (found.size === wanted.size) break;
     }
@@ -651,7 +729,12 @@ export class ImageRunLedger {
   /** Every recorded auto-saved copy, by asset id. */
   exportPaths(): Map<string, string> {
     this.requireOpen();
-    return new Map((this.sql.allExports.all() as unknown as { asset_id: string; path: string }[]).map((row) => [row.asset_id, row.path]));
+    return new Map(
+      (this.sql.allExports.all() as unknown as { asset_id: string; path: string }[]).map((row) => [
+        row.asset_id,
+        row.path,
+      ]),
+    );
   }
 
   recordExport(assetId: string, filePath: string): void {
@@ -672,7 +755,11 @@ export class ImageRunLedger {
 
   private generatedRows(): { run_id: string; workflow_id: string; output: string | null }[] {
     this.requireOpen();
-    return this.sql.generatedOutputs.all() as unknown as { run_id: string; workflow_id: string; output: string | null }[];
+    return this.sql.generatedOutputs.all() as unknown as {
+      run_id: string;
+      workflow_id: string;
+      output: string | null;
+    }[];
   }
 
   /** The single restart sweep: unfinished work becomes history, never a queue. */
@@ -695,10 +782,16 @@ export class ImageRunLedger {
   pruneRuns(keep = RUN_RETENTION): string[] {
     return this.transaction(() => {
       const holding = new Set<string>();
-      for (const row of this.sql.latestPerNode.all() as unknown as { workflow_id: string; node_id: string; run_id: string }[]) {
+      for (const row of this.sql.latestPerNode.all() as unknown as {
+        workflow_id: string;
+        node_id: string;
+        run_id: string;
+      }[]) {
         if (this.isLiveNode(row.workflow_id, row.node_id)) holding.add(row.run_id);
       }
-      const ids = (this.sql.olderThanRecent.all(keep) as unknown as { id: string }[]).map((row) => row.id).filter((id) => !holding.has(id));
+      const ids = (this.sql.olderThanRecent.all(keep) as unknown as { id: string }[])
+        .map((row) => row.id)
+        .filter((id) => !holding.has(id));
       for (const id of ids) this.sql.deleteRun.run(id);
       if (ids.length > 0) this.forgetOrphanExports();
       return ids;
@@ -713,7 +806,9 @@ export class ImageRunLedger {
 
   deleteWorkflowRuns(workflowId: string): string[] {
     return this.transaction(() => {
-      const ids = (this.sql.workflowRuns.all(workflowId) as unknown as { id: string }[]).map((row) => row.id);
+      const ids = (this.sql.workflowRuns.all(workflowId) as unknown as { id: string }[]).map(
+        (row) => row.id,
+      );
       for (const id of ids) this.sql.deleteRun.run(id);
       if (ids.length > 0) this.forgetOrphanExports();
       return ids;

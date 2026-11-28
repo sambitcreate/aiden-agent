@@ -34,10 +34,16 @@ export const LIVE_CHAT_MAX_CANDIDATES = 3;
 export const LIVE_CHAT_ERRORS = {
   noChat: { code: "no_open_chat", message: "No chat is open in Aiden's main window." },
   off: { code: "chat_access_off", message: "Chat access for Live is off in Settings." },
-  notReady: { code: "chat_not_ready", message: "This chat isn't ready to send. Check its model in Aiden." },
+  notReady: {
+    code: "chat_not_ready",
+    message: "This chat isn't ready to send. Check its model in Aiden.",
+  },
   firstSending: { code: "chat_busy", message: "The chat's first message is still sending." },
   nothingRunning: { code: "nothing_running", message: "Nothing is running in this chat." },
-  cannotStop: { code: "cannot_stop", message: "This reply can't be stopped yet. Try again in a moment." },
+  cannotStop: {
+    code: "cannot_stop",
+    message: "This reply can't be stopped yet. Try again in a moment.",
+  },
   cannotSteer: {
     code: "cannot_steer",
     message: "This reply can't take guidance right now. Queue the message instead.",
@@ -49,7 +55,10 @@ export const LIVE_CHAT_ERRORS = {
   cannotQueue: { code: "cannot_queue", message: "This chat can't queue a message right now." },
   sendFailed: { code: "send_failed", message: "Aiden couldn't send the message." },
   notFound: { code: "chat_not_found", message: "No chat has a title like that." },
-  navigationBlocked: { code: "navigation_blocked", message: "Aiden can't leave the open chat right now." },
+  navigationBlocked: {
+    code: "navigation_blocked",
+    message: "Aiden can't leave the open chat right now.",
+  },
   workspaceNotFound: { code: "workspace_not_found", message: "No workspace has a name like that." },
   newChatFailed: { code: "new_chat_failed", message: "Aiden couldn't start a new chat." },
   invalid: { code: "invalid_arguments", message: "The request was not valid." },
@@ -63,22 +72,28 @@ export const LIVE_CHAT_ERRORS = {
   },
   sendOutcomeUnknown: {
     code: "outcome_unknown",
-    message: "Aiden couldn't confirm the message was saved. Check the chat before sending it again; do not resend it.",
+    message:
+      "Aiden couldn't confirm the message was saved. Check the chat before sending it again; do not resend it.",
   },
   steerOutcomeUnknown: {
     code: "outcome_unknown",
-    message: "Aiden couldn't confirm the guidance. Check the conversation before sending it again; do not resend it.",
+    message:
+      "Aiden couldn't confirm the guidance. Check the conversation before sending it again; do not resend it.",
   },
   cancelled: { code: "cancelled", message: "The request was cancelled." },
   hookBlocked: {
     code: "hook_blocked",
-    message: "One of the person's hooks refused this message. It shows in the chat, marked, and no model will read it.",
+    message:
+      "One of the person's hooks refused this message. It shows in the chat, marked, and no model will read it.",
   },
 } as const;
 
 export type LiveChatError = (typeof LIVE_CHAT_ERRORS)[keyof typeof LIVE_CHAT_ERRORS];
 
-export function liveChatFailure(error: LiveChatError): { ok: false; error: { code: string; message: string } } {
+export function liveChatFailure(error: LiveChatError): {
+  ok: false;
+  error: { code: string; message: string };
+} {
   return { ok: false, error: { code: error.code, message: error.message } };
 }
 
@@ -106,16 +121,19 @@ export interface LiveChatReadMessage {
 const REDACTED = "[hidden]";
 
 /** Key names whose value is a secret: a segment (split on `_`, `-` or `.`) names one. */
-const SECRET_KEY_PART = /(?:^|[_.-])(?:PASSWORD|PASSWD|PASS|SECRET|TOKEN|API_?KEY|PRIVATE_?KEY|ACCESS_?KEY|CLIENT_?SECRET|CREDENTIALS?)(?:$|[_.-])/iu;
+const SECRET_KEY_PART =
+  /(?:^|[_.-])(?:PASSWORD|PASSWD|PASS|SECRET|TOKEN|API_?KEY|PRIVATE_?KEY|ACCESS_?KEY|CLIENT_?SECRET|CREDENTIALS?)(?:$|[_.-])/iu;
 /** `KEY=value` or `KEY: value` at the start of a line, optionally after `export`. */
 const ASSIGNMENT = /^(\s*(?:export\s+)?)([A-Za-z_][A-Za-z0-9_.-]{0,80})(\s*[=:]\s*)(.+)$/gmu;
 /** `KEY=value` inside a line, as in a command (`AWS_SECRET_ACCESS_KEY=… aws s3 ls`): one value token. */
-const INLINE_ASSIGNMENT = /(?<![A-Za-z0-9_.-])([A-Za-z_][A-Za-z0-9_.-]{0,80})(\s*=\s*)("[^"\n]*"|'[^'\n]*'|[^\s"']+)/gu;
+const INLINE_ASSIGNMENT =
+  /(?<![A-Za-z0-9_.-])([A-Za-z_][A-Za-z0-9_.-]{0,80})(\s*=\s*)("[^"\n]*"|'[^'\n]*'|[^\s"']+)/gu;
 /**
  * `KEY: value` inside a line, as in a title (`Fix login DB_PASSWORD: correct horse`).
  * Prose has no command boundary, so the rest of the line is hidden.
  */
-const INLINE_COLON_ASSIGNMENT = /(?<![A-Za-z0-9_.-])([A-Za-z_][A-Za-z0-9_.-]{0,80})(\s*:\s*)([^\n]+)/gu;
+const INLINE_COLON_ASSIGNMENT =
+  /(?<![A-Za-z0-9_.-])([A-Za-z_][A-Za-z0-9_.-]{0,80})(\s*:\s*)([^\n]+)/gu;
 const PEM_BLOCK = /-----BEGIN [A-Z0-9 ]*KEY-----[\s\S]*?(?:-----END [A-Z0-9 ]*KEY-----|$)/gu;
 
 /**
@@ -132,7 +150,9 @@ export function redactLiveChatSecrets(text: string): string {
   );
   const hide = (match: string, key: string, separator: string, value: string) =>
     SECRET_KEY_PART.test(key) && value !== REDACTED ? `${key}${separator}${REDACTED}` : match;
-  const withoutInline = withoutAssignments.replace(INLINE_ASSIGNMENT, hide).replace(INLINE_COLON_ASSIGNMENT, hide);
+  const withoutInline = withoutAssignments
+    .replace(INLINE_ASSIGNMENT, hide)
+    .replace(INLINE_COLON_ASSIGNMENT, hide);
   return redactBareCredentialTokens(withoutInline, REDACTED);
 }
 
@@ -140,7 +160,9 @@ function oneLine(text: string): string {
   return text.replace(/\s+/gu, " ").trim();
 }
 
-function toolSummary(steps: ReadonlyArray<{ kind: string; toolName?: string }> | undefined): string | null {
+function toolSummary(
+  steps: ReadonlyArray<{ kind: string; toolName?: string }> | undefined,
+): string | null {
   if (!steps?.length) return null;
   const counts = new Map<string, number>();
   for (const step of steps) {
@@ -150,7 +172,9 @@ function toolSummary(steps: ReadonlyArray<{ kind: string; toolName?: string }> |
     counts.set(name, (counts.get(name) ?? 0) + 1);
   }
   if (counts.size === 0) return null;
-  const parts = [...counts].slice(0, 8).map(([name, count]) => (count > 1 ? `${name} ×${count}` : name));
+  const parts = [...counts]
+    .slice(0, 8)
+    .map(([name, count]) => (count > 1 ? `${name} ×${count}` : name));
   const more = counts.size > 8 ? `, and ${counts.size - 8} more` : "";
   return `[Used tools: ${parts.join(", ")}${more}]`;
 }
@@ -166,7 +190,8 @@ function messageText(message: LiveChatTranscriptMessage): string {
   }
   const content = message.content.trim();
   if (content) parts.push(content);
-  else if (message.role === "assistant" && message.providerFailure) parts.push("[The reply failed.]");
+  else if (message.role === "assistant" && message.providerFailure)
+    parts.push("[The reply failed.]");
   const attachmentCount = message.attachments?.length ?? 0;
   if (attachmentCount > 0) {
     parts.push(attachmentCount === 1 ? "[1 attachment]" : `[${attachmentCount} attachments]`);
@@ -204,7 +229,9 @@ export function liveChatTranscript(
     kept.unshift({
       role: message.role,
       text,
-      ...(message.role === "user" && message.inputSource === "voice" ? { byVoice: true as const } : {}),
+      ...(message.role === "user" && message.inputSource === "voice"
+        ? { byVoice: true as const }
+        : {}),
     });
     if (budget <= 0 && index > 0) truncated = true;
   }
@@ -230,7 +257,10 @@ export interface LiveChatSendState {
 export type LiveChatSendAction = "send" | "steer" | "queue" | { refuse: LiveChatError };
 
 /** The composer's own rules, picked by mode: auto sends when idle and steers when busy. */
-export function decideLiveChatSend(mode: LiveChatSendMode, state: LiveChatSendState): LiveChatSendAction {
+export function decideLiveChatSend(
+  mode: LiveChatSendMode,
+  state: LiveChatSendState,
+): LiveChatSendAction {
   // A paused queue would hold the message without telling anyone, so Live refuses.
   const queue: LiveChatSendAction = !state.queueAvailable
     ? { refuse: LIVE_CHAT_ERRORS.cannotQueue }
@@ -275,7 +305,8 @@ export function liveChatTitleScore(title: string, query: string): number {
   let matched = 0;
   for (const word of queryWords) {
     if (titleWords.some((candidate) => candidate === word)) matched += 1;
-    else if (word.length >= 3 && titleWords.some((candidate) => candidate.startsWith(word))) matched += 0.75;
+    else if (word.length >= 3 && titleWords.some((candidate) => candidate.startsWith(word)))
+      matched += 0.75;
   }
   return 0.7 * (matched / queryWords.length);
 }
@@ -301,7 +332,10 @@ const CLOSE_MARGIN = 0.1;
  * several are about as good (including two chats with the same title),
  * nothing opens and the top three titles come back, most recent first.
  */
-export function findLiveChat(chats: readonly LiveChatCandidate[], query: string): LiveChatFindResult {
+export function findLiveChat(
+  chats: readonly LiveChatCandidate[],
+  query: string,
+): LiveChatFindResult {
   const scored = chats
     .map((chat) => ({ chat, score: liveChatTitleScore(chat.title, query) }))
     .filter((entry) => entry.score >= MIN_SCORE)
@@ -310,7 +344,9 @@ export function findLiveChat(chats: readonly LiveChatCandidate[], query: string)
   if (!best) return { kind: "none" };
   // One chat with exactly that title wins over titles that merely contain it.
   if (best.score === 1 && (scored[1]?.score ?? 0) < 1) return { kind: "open", chat: best.chat };
-  const close = scored.filter((entry) => entry.score >= best.score - (best.score === 1 ? 0 : CLOSE_MARGIN));
+  const close = scored.filter(
+    (entry) => entry.score >= best.score - (best.score === 1 ? 0 : CLOSE_MARGIN),
+  );
   if (close.length === 1) return { kind: "open", chat: best.chat };
   return {
     kind: "ambiguous",

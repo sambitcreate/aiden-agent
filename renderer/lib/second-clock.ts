@@ -8,12 +8,15 @@ const listeners = new Set<() => void>();
 
 function schedule(): void {
   if (listeners.size === 0 || timer !== undefined) return;
-  timer = window.setTimeout(() => {
-    timer = undefined;
-    snapshot = Date.now();
-    for (const listener of [...listeners]) listener();
-    schedule();
-  }, 1_000 - (Date.now() % 1_000));
+  timer = window.setTimeout(
+    () => {
+      timer = undefined;
+      snapshot = Date.now();
+      for (const listener of [...listeners]) listener();
+      schedule();
+    },
+    1_000 - (Date.now() % 1_000),
+  );
 }
 
 export const secondClock = {

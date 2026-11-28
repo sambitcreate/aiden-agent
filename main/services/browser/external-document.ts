@@ -14,14 +14,20 @@ function inside(root: string, candidate: string): boolean {
  * the workspace folder, for opening in the system's default browser or app.
  * Symlinks are followed and the target must still be inside the workspace.
  */
-export async function resolveExternalWorkspaceDocument(folderPath: string, suppliedPath: string): Promise<string> {
+export async function resolveExternalWorkspaceDocument(
+  folderPath: string,
+  suppliedPath: string,
+): Promise<string> {
   if (!suppliedPath || suppliedPath.includes("\0")) throw new Error("A document path is required.");
   const configured = path.resolve(folderPath);
   const root = await fs.realpath(configured);
   const absolute = path.isAbsolute(suppliedPath);
   const lexical = absolute ? path.resolve(suppliedPath) : path.resolve(root, suppliedPath);
   // An absolute link names the configured folder, which may itself be a symlink.
-  const candidate = absolute && inside(configured, lexical) ? path.join(root, path.relative(configured, lexical)) : lexical;
+  const candidate =
+    absolute && inside(configured, lexical)
+      ? path.join(root, path.relative(configured, lexical))
+      : lexical;
   if (!inside(root, candidate)) throw new Error("Aiden can only open files inside this workspace.");
   const real = await fs.realpath(candidate).catch(() => {
     throw new Error("This file no longer exists.");
@@ -29,6 +35,7 @@ export async function resolveExternalWorkspaceDocument(folderPath: string, suppl
   if (!inside(root, real)) throw new Error("Aiden can only open files inside this workspace.");
   if (!EXTERNAL_DOCUMENT_EXTENSIONS.has(path.extname(real).toLowerCase()))
     throw new Error("Only HTML and PDF files can open in the system browser.");
-  if (!(await fs.stat(real)).isFile()) throw new Error("Only files can open in the system browser.");
+  if (!(await fs.stat(real)).isFile())
+    throw new Error("Only files can open in the system browser.");
   return real;
 }

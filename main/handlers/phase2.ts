@@ -7,13 +7,23 @@ import { hasMcpProviderAuthGrant, setMcpProviderAuthGrant } from "../services/mc
 
 import { app, ipcMain } from "../platform.js";
 import { registerComposioWatchInspection } from "./composio-watch-inspection.js";
-import { createComposioSettingsInspection, saveComposioSettingsInspection } from "../services/bot-routine-events/composio-settings-inspection.js";
-import { createComposioSettingsCalendarReadCheck, saveComposioCalendarReadCheck } from "../services/bot-routine-events/composio-settings-calendar-check.js";
+import {
+  createComposioSettingsInspection,
+  saveComposioSettingsInspection,
+} from "../services/bot-routine-events/composio-settings-inspection.js";
+import {
+  createComposioSettingsCalendarReadCheck,
+  saveComposioCalendarReadCheck,
+} from "../services/bot-routine-events/composio-settings-calendar-check.js";
 import { COMPOSIO_SERVICE_SERVER_ID } from "../../renderer/shared/composio-service.js";
 import { configStore } from "../services/config-store.js";
 import { publishAppControlsChanged } from "../services/app-controls-events-main.js";
 import { secrets } from "../services/secrets.js";
-import { mcpManager, prewarmMcpServers, withForegroundComposioSettingsMcpClient } from "../services/mcp.js";
+import {
+  mcpManager,
+  prewarmMcpServers,
+  withForegroundComposioSettingsMcpClient,
+} from "../services/mcp.js";
 import {
   authorizeMcpServer,
   cancelMcpAuthorization,
@@ -31,8 +41,15 @@ import type { McpServer } from "../services/types.js";
 import { mcpStdioLaunchFingerprint } from "../services/mcp-field-secrets-core.js";
 import { resolveMcpConnectionCredentials } from "../services/mcp-connection-credentials.js";
 import { isMcpMacAppOpen, mcpMacAppStatus, openMcpMacApp } from "../services/mcp-mac-apps.js";
-import { mcpStdioApprovals, resolveStoredMcpFieldSecrets, storedMcpEnvForApproval } from "../services/mcp-field-secrets.js";
-import { saveConfiguredMcpServer, sealPlaintextMcpServerFields } from "../services/mcp-server-save.js";
+import {
+  mcpStdioApprovals,
+  resolveStoredMcpFieldSecrets,
+  storedMcpEnvForApproval,
+} from "../services/mcp-field-secrets.js";
+import {
+  saveConfiguredMcpServer,
+  sealPlaintextMcpServerFields,
+} from "../services/mcp-server-save.js";
 import type { McpOAuthOperation } from "../services/mcp-oauth-operation.js";
 import {
   mutateCredentialForConfiguredMcp,
@@ -63,7 +80,10 @@ import { parseSkill, parseMcpServer } from "./phase2-parse.js";
 import { rendererDocumentOwner } from "../services/renderer-document-owner.js";
 import type { RendererDocumentOwner } from "../services/renderer-document-owner.js";
 import { mutatePortableConfigAndSync } from "../services/portable-credential-snapshot.js";
-import { mcpConfigurationLeases, withMcpConfigurationPublication } from "../services/mcp-config-lease.js";
+import {
+  mcpConfigurationLeases,
+  withMcpConfigurationPublication,
+} from "../services/mcp-config-lease.js";
 import {
   webSearchCredentials,
   webSearchKeyPoolTracker,
@@ -108,7 +128,9 @@ function draftCredentialResolver(credentials: McpDraftCredentials) {
       // Stored env/header values only go where the saved server already connects.
       resolveFieldSecrets: async (server) => {
         if (!credentials.savedDestination) {
-          throw new Error("Enter the header and environment values again to test a changed connection.");
+          throw new Error(
+            "Enter the header and environment values again to test a changed connection.",
+          );
         }
         await reconcilePendingMcpCredentialCleanup();
         return resolveStoredMcpFieldSecrets(server);
@@ -126,13 +148,17 @@ function draftCredentialResolver(credentials: McpDraftCredentials) {
 }
 
 async function mcpServerDependents(serverId: string) {
-  const [{ scheduleStore }, { botStore }, { botCapabilityStore }, { BotCapabilityUnavailableError }] =
-    await Promise.all([
-      import("../services/schedule-store.js"),
-      import("../services/bot-store.js"),
-      import("../services/bot-capability-services-main.js"),
-      import("../services/bot-capability-store-core.js"),
-    ]);
+  const [
+    { scheduleStore },
+    { botStore },
+    { botCapabilityStore },
+    { BotCapabilityUnavailableError },
+  ] = await Promise.all([
+    import("../services/schedule-store.js"),
+    import("../services/bot-store.js"),
+    import("../services/bot-capability-services-main.js"),
+    import("../services/bot-capability-store-core.js"),
+  ]);
   const [tasks, bots] = await Promise.all([scheduleStore.list(), botStore.list()]);
   return {
     schedules: scheduledTasksUsingMcpServer(serverId, tasks),
@@ -397,7 +423,9 @@ export function registerPhase2Handlers(): void {
             )
           : preset.auth.kind === "none"
             ? Boolean(existing)
-            : Boolean(existing) && (await mcpOAuthSignInState(serverId, existing)).authorized && !mcpLiveStatus.needsSignIn(serverId),
+            : Boolean(existing) &&
+              (await mcpOAuthSignInState(serverId, existing)).authorized &&
+              !mcpLiveStatus.needsSignIn(serverId),
       signIn: async (preset, serverId, existing) => {
         if (preset.auth.kind !== "oauth") return undefined;
         const state = await mcpOAuthSignInState(serverId, existing);
@@ -450,7 +478,10 @@ export function registerPhase2Handlers(): void {
     const parsed = parseMcpServer(server);
     assertMcpPresetServer(parsed);
     // Only the editor, which shows the command, approves a local server to run.
-    const flags = typeof options === "object" && options !== null ? options as { approveLaunch?: unknown; fromEditor?: unknown } : {};
+    const flags =
+      typeof options === "object" && options !== null
+        ? (options as { approveLaunch?: unknown; fromEditor?: unknown })
+        : {};
     const approveLaunch = flags.approveLaunch === true;
     // Editor saves (sign-in and provider consent included) may carry kept
     // values to an address the person changed there; other saves cannot.
@@ -516,17 +547,36 @@ export function registerPhase2Handlers(): void {
   });
   registerMcpProviderAuthHandler<Electron.IpcMainInvokeEvent>({
     handle: (channel, handler) => ipcMain.handle(channel, handler),
-    owner: (event) => rendererDocumentOwner(event, () => new Error("MCP credential approval requires the active application document.")),
-    publish: (parsed, allowed, isCurrent) => mutateCredentialForConfiguredMcp(parsed.id, async (configured) => {
-      if (!sameMcpRuntimeConnection(mcpRuntimeConnectionSnapshot(parsed), mcpRuntimeConnectionSnapshot(configured))) throw new Error("This MCP server configuration changed. Try again.");
-      const admission = mcpConfigurationLeases.acquire(parsed.id);
-      await mcpManager.disconnect(parsed.id);
-      admission.assertCurrent();
-      await withMcpConfigurationPublication(parsed.id, () => {
-        const publication = mcpConfigurationLeases.acquire(parsed.id);
-        return setMcpProviderAuthGrant(parsed, allowed, () => isCurrent() && !publication.signal.aborted);
-      });
-    }, isCurrent),
+    owner: (event) =>
+      rendererDocumentOwner(
+        event,
+        () => new Error("MCP credential approval requires the active application document."),
+      ),
+    publish: (parsed, allowed, isCurrent) =>
+      mutateCredentialForConfiguredMcp(
+        parsed.id,
+        async (configured) => {
+          if (
+            !sameMcpRuntimeConnection(
+              mcpRuntimeConnectionSnapshot(parsed),
+              mcpRuntimeConnectionSnapshot(configured),
+            )
+          )
+            throw new Error("This MCP server configuration changed. Try again.");
+          const admission = mcpConfigurationLeases.acquire(parsed.id);
+          await mcpManager.disconnect(parsed.id);
+          admission.assertCurrent();
+          await withMcpConfigurationPublication(parsed.id, () => {
+            const publication = mcpConfigurationLeases.acquire(parsed.id);
+            return setMcpProviderAuthGrant(
+              parsed,
+              allowed,
+              () => isCurrent() && !publication.signal.aborted,
+            );
+          });
+        },
+        isCurrent,
+      ),
   });
   ipcMain.handle("mcp:oauthStatus", async (_event, id: unknown) => {
     const serverId = asString(id, "id");
@@ -538,24 +588,41 @@ export function registerPhase2Handlers(): void {
     };
   });
   const inspectComposio = createComposioSettingsInspection({
-    configured: async () => (await configStore.listMcpServers()).find((server) => server.id === COMPOSIO_SERVICE_SERVER_ID),
+    configured: async () =>
+      (await configStore.listMcpServers()).find(
+        (server) => server.id === COMPOSIO_SERVICE_SERVER_ID,
+      ),
     withClient: withForegroundComposioSettingsMcpClient,
-    publish: (result, current) => saveComposioSettingsInspection(app.getPath("userData"), result, current),
+    publish: (result, current) =>
+      saveComposioSettingsInspection(app.getPath("userData"), result, current),
   });
   registerComposioWatchInspection<Electron.IpcMainInvokeEvent>({
     handle: (channel, handler) => ipcMain.handle(channel, handler),
-    owner: (event) => rendererDocumentOwner(event, () => new Error("Composio inspection needs the active application document.")),
+    owner: (event) =>
+      rendererDocumentOwner(
+        event,
+        () => new Error("Composio inspection needs the active application document."),
+      ),
     inspect: inspectComposio,
     checkCalendarReads: createComposioSettingsCalendarReadCheck({
-      configured: async () => (await configStore.listMcpServers()).find((server) => server.id === COMPOSIO_SERVICE_SERVER_ID),
+      configured: async () =>
+        (await configStore.listMcpServers()).find(
+          (server) => server.id === COMPOSIO_SERVICE_SERVER_ID,
+        ),
       withClient: withForegroundComposioSettingsMcpClient,
-      publish: (result, current) => saveComposioCalendarReadCheck(app.getPath("userData"), result, current),
+      publish: (result, current) =>
+        saveComposioCalendarReadCheck(app.getPath("userData"), result, current),
     }),
   });
   registerMcpControlHandlers<Electron.IpcMainInvokeEvent>({
     handle: (channel, handler) => ipcMain.handle(channel, handler),
-    owner: (event) => rendererDocumentOwner(event, () => new Error("MCP changes must come from the active application document.")),
-    configured: async (serverId) => (await configStore.listMcpServers()).find((server) => server.id === serverId),
+    owner: (event) =>
+      rendererDocumentOwner(
+        event,
+        () => new Error("MCP changes must come from the active application document."),
+      ),
+    configured: async (serverId) =>
+      (await configStore.listMcpServers()).find((server) => server.id === serverId),
     authorize: async (parsed, isCurrent, ownerSignal) => {
       let reserved: McpOAuthOperation | undefined;
       try {
@@ -565,7 +632,12 @@ export function registerPhase2Handlers(): void {
           async () => {
             await mcpManager.disconnect(parsed.id);
             // Sign-in reaches the server with its stored header values and client secret.
-            const result = await authorizeMcpServer(await resolveStoredMcpFieldSecrets(parsed), isCurrent, ownerSignal, reserved);
+            const result = await authorizeMcpServer(
+              await resolveStoredMcpFieldSecrets(parsed),
+              isCurrent,
+              ownerSignal,
+              reserved,
+            );
             reserved = undefined;
             prewarmMcpServers([parsed]);
             return result;
@@ -600,7 +672,12 @@ export function registerPhase2Handlers(): void {
         isCurrent,
       ),
     testDraft: (server, credentials, isCurrent) =>
-      mcpManager.status(server, isCurrent, mcpManager.statusGeneration(server.id), draftCredentialResolver(credentials)),
+      mcpManager.status(
+        server,
+        isCurrent,
+        mcpManager.statusGeneration(server.id),
+        draftCredentialResolver(credentials),
+      ),
     admitSaved: (saved, operation, isCurrent) =>
       withConfiguredMcp(saved.id, mcpRuntimeConnectionSnapshot(saved), operation, isCurrent),
     signInState: (server) => mcpOAuthSignInState(server.id, server),
@@ -627,7 +704,8 @@ export function registerPhase2Handlers(): void {
     approveLaunch: async (server, fingerprint, isCurrent) => {
       const approved = await approveReviewedMcpLaunch(server.id, fingerprint, {
         seal: (id) => sealPlaintextMcpServerFields([id], { throwOnError: true }),
-        configured: async (id) => (await configStore.listMcpServers()).find((candidate) => candidate.id === id),
+        configured: async (id) =>
+          (await configStore.listMcpServers()).find((candidate) => candidate.id === id),
         resolve: resolveStoredMcpFieldSecrets,
         confirm: confirmMcpLaunch,
         approve: (current, shown) => mcpStdioApprovals.approveShown(current, shown),

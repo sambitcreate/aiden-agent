@@ -27,7 +27,12 @@ import {
 afterEach(cleanup);
 
 const escape = (init: KeyboardEventInit = {}) => {
-  const event = new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true, ...init });
+  const event = new KeyboardEvent("keydown", {
+    key: "Escape",
+    bubbles: true,
+    cancelable: true,
+    ...init,
+  });
   (document.activeElement ?? document.body).dispatchEvent(event);
   return event;
 };
@@ -57,7 +62,10 @@ test("anything but a panel covers a panel, whenever it opened, and panels never 
   assert.equal(botPanel.isTop(), true);
   const dialog = openLayer("modal", { name: "dialog" });
   assert.equal(tools.isTop(), false);
-  assert.equal(hasOpenLayer((layer) => layer.name === "dialog"), true);
+  assert.equal(
+    hasOpenLayer((layer) => layer.name === "dialog"),
+    true,
+  );
   dialog.close();
   tools.close();
   botPanel.close();
@@ -91,7 +99,15 @@ test("Escape goes to the uncovered layers, newest first, until one handles it", 
   assert.deepEqual(heard, [], "a closed layer stops listening");
 });
 
-function Layer({ open = true, kind, onEscape }: { open?: boolean; kind: LayerKind; onEscape(): void }) {
+function Layer({
+  open = true,
+  kind,
+  onEscape,
+}: {
+  open?: boolean;
+  kind: LayerKind;
+  onEscape(): void;
+}) {
   useLayer(open, kind, { onEscape });
   return null;
 }
@@ -136,7 +152,12 @@ function Harness({ dismissDisabled = false }: { dismissDisabled?: boolean }) {
   return (
     <>
       <p>{sheetOpen ? "Sheet open" : "Sheet closed"}</p>
-      <Dialog open={dialogOpen} onOpenChange={setDialogOpen} title="Rename" dismissDisabled={dismissDisabled}>
+      <Dialog
+        open={dialogOpen}
+        onOpenChange={setDialogOpen}
+        title="Rename"
+        dismissDisabled={dismissDisabled}
+      >
         <input aria-label="Name" />
       </Dialog>
     </>
@@ -184,7 +205,10 @@ test("an uncontrolled menu is on the stack only while open", async () => {
   trigger.focus();
   fireEvent.keyDown(trigger, { key: "Enter" });
   await screen.findByRole("menuitem", { name: "Rename" });
-  assert.equal(hasOpenLayer((layer) => layer.kind === "menu"), true);
+  assert.equal(
+    hasOpenLayer((layer) => layer.kind === "menu"),
+    true,
+  );
   act(() => void escape());
   await waitFor(() => assert.equal(screen.queryByRole("menu"), null));
   assert.equal(hasOpenLayer(), false);
@@ -219,11 +243,20 @@ test("the compact sidebar leaves Tab to a dialog that opened before it", () => {
   const offsetParent = Object.getOwnPropertyDescriptor(HTMLElement.prototype, "offsetParent");
   Object.defineProperty(window, "innerWidth", { configurable: true, value: 600 });
   // happy-dom does no layout; the sidebar only counts controls that are shown.
-  Object.defineProperty(HTMLElement.prototype, "offsetParent", { configurable: true, get: () => document.body });
+  Object.defineProperty(HTMLElement.prototype, "offsetParent", {
+    configurable: true,
+    get: () => document.body,
+  });
   try {
     const shortcuts = { overrides: undefined, effective: effectiveBindings(undefined), global: [] };
-    installBotTestIpc({ "shortcut:get": () => shortcuts, "app:renderer-ready": () => null, "app:setMenuCommands": () => true });
-    const client = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity } } });
+    installBotTestIpc({
+      "shortcut:get": () => shortcuts,
+      "app:renderer-ready": () => null,
+      "app:setMenuCommands": () => true,
+    });
+    const client = new QueryClient({
+      defaultOptions: { queries: { retry: false, staleTime: Infinity } },
+    });
     client.setQueryData(["shortcuts"], shortcuts);
     render(
       <QueryClientProvider client={client}>
@@ -243,7 +276,11 @@ test("the compact sidebar leaves Tab to a dialog that opened before it", () => {
     fireEvent.click(screen.getByRole("button", { name: "Open sidebar", hidden: true }));
     assert.notEqual(document.querySelector('[data-compact-sidebar-open="true"]'), null);
     // Radix pulls focus back into the dialog, so a trapped Tab shows as a swallowed key.
-    assert.equal(fireEvent.keyDown(first, { key: "Tab" }), true, "the sidebar left Tab to the dialog");
+    assert.equal(
+      fireEvent.keyDown(first, { key: "Tab" }),
+      true,
+      "the sidebar left Tab to the dialog",
+    );
   } finally {
     if (offsetParent) Object.defineProperty(HTMLElement.prototype, "offsetParent", offsetParent);
     else delete (HTMLElement.prototype as { offsetParent?: unknown }).offsetParent;

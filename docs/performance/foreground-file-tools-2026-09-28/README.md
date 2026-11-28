@@ -7,13 +7,13 @@ These are deterministic filesystem counters and synthetic timings, not energy or
 packaged UI latency measurements. Raw receipts: [before](before.json),
 [after](after.json), [Electron runtime](electron.json).
 
-| Fixture | Before | After |
-| --- | ---: | ---: |
-| 16 MiB read_file: actual bytes read | 16,777,216 | 200,001 |
-| Same read: output characters | 200,014 | 200,014 |
-| Already-aborted grep | Returns match; reads 7 bytes | Rejects; reads 0 bytes |
-| 10,100-entry no-match scan: entries enumerated | 10,100 | 10,000, explicit incomplete notice |
-| Wide list output | 200,989 characters | Bounded incomplete notice; over-cap directory omitted |
+| Fixture                                        |                       Before |                                                 After |
+| ---------------------------------------------- | ---------------------------: | ----------------------------------------------------: |
+| 16 MiB read_file: actual bytes read            |                   16,777,216 |                                               200,001 |
+| Same read: output characters                   |                      200,014 |                                               200,014 |
+| Already-aborted grep                           | Returns match; reads 7 bytes |                                Rejects; reads 0 bytes |
+| 10,100-entry no-match scan: entries enumerated |                       10,100 |                    10,000, explicit incomplete notice |
+| Wide list output                               |           200,989 characters | Bounded incomplete notice; over-cap directory omitted |
 
 Grep has a 10 MiB aggregate input ceiling, including each overflow probe; tests
 exercise growth after stat and exact byte counts. List/glob/grep have 10,000-entry,
@@ -43,7 +43,6 @@ Worker termination begins on cancellation/deadline even while traversal is pendi
 Deferred-I/O tests cover acquisition/read cancellation across all four tools,
 concurrent and repeated cancellation, blocked cleanup, and capacity recovery.
 A deadline while I/O is pending returns only the notice, without partial results.
-
 
 Parent hidden-file/credential policy remains distinct from the stricter child
 policy. Read_file still supports safe symlinks and metadata, excludes .env secrets,

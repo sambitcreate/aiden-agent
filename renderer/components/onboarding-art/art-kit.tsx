@@ -26,7 +26,12 @@ interface BoxProps {
  * popover or card floating above another window: plain popover surface and
  * popover elevation instead of the tile's tinted surface.
  */
-export function ArtWindow({ raised = false, className, style, children }: BoxProps & { raised?: boolean }) {
+export function ArtWindow({
+  raised = false,
+  className,
+  style,
+  children,
+}: BoxProps & { raised?: boolean }) {
   return (
     <div className={cn("oa-window", className)} data-raised={raised || undefined} style={style}>
       {children}
@@ -53,12 +58,7 @@ export function ArtIcon({ icon: Icon, className }: { icon: LucideIcon; className
   return <Icon aria-hidden="true" className={cn("oa-icon", className)} strokeWidth={2} />;
 }
 
-export function ArtChip({
-  icon,
-  className,
-  style,
-  children,
-}: BoxProps & { icon?: LucideIcon }) {
+export function ArtChip({ icon, className, style, children }: BoxProps & { icon?: LucideIcon }) {
   return (
     <span className={cn("oa-chip", className)} style={style}>
       {icon ? <ArtIcon icon={icon} /> : null}

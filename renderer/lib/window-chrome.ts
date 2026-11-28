@@ -3,13 +3,18 @@
 // controls take at the top-right corner.
 
 import * as React from "react";
-import { isWindowChrome, type WindowChrome, type WindowControlsState } from "../shared/window-chrome";
+import {
+  isWindowChrome,
+  type WindowChrome,
+  type WindowControlsState,
+} from "../shared/window-chrome";
 
 /** Fixed for the window's lifetime; read once from the preload. Unknown hosts lay out like macOS. */
 export function currentWindowChrome(): WindowChrome {
-  const chrome = typeof window === "undefined"
-    ? undefined
-    : (window as { aidenAPI?: { window?: { chrome?: unknown } } }).aidenAPI?.window?.chrome;
+  const chrome =
+    typeof window === "undefined"
+      ? undefined
+      : (window as { aidenAPI?: { window?: { chrome?: unknown } } }).aidenAPI?.window?.chrome;
   return isWindowChrome(chrome) ? chrome : "mac";
 }
 
@@ -32,7 +37,12 @@ const MENU_BUTTON_WIDTH = 30;
  * the leading sidebar-toggle/history cluster while the sidebar is collapsed.
  */
 export function collapsedHeaderInset(chrome: WindowChrome): number {
-  return leadingClusterOffset(chrome) + (chrome === "aiden" ? MENU_BUTTON_WIDTH : 0) + LEADING_CLUSTER_WIDTH + 12;
+  return (
+    leadingClusterOffset(chrome) +
+    (chrome === "aiden" ? MENU_BUTTON_WIDTH : 0) +
+    LEADING_CLUSTER_WIDTH +
+    12
+  );
 }
 
 interface ControlsSnapshot extends WindowControlsState {
@@ -45,7 +55,12 @@ const listeners = new Set<() => void>();
 
 function publish(next: Partial<ControlsSnapshot>): void {
   const merged = { ...snapshot, ...next };
-  if (merged.maximized === snapshot.maximized && merged.fullScreen === snapshot.fullScreen && merged.width === snapshot.width) return;
+  if (
+    merged.maximized === snapshot.maximized &&
+    merged.fullScreen === snapshot.fullScreen &&
+    merged.width === snapshot.width
+  )
+    return;
   snapshot = merged;
   for (const listener of listeners) listener();
 }
@@ -64,7 +79,11 @@ export function setWindowControlsWidth(width: number): void {
 }
 
 export function useWindowControlsSnapshot(): ControlsSnapshot {
-  return React.useSyncExternalStore(subscribe, () => snapshot, () => snapshot);
+  return React.useSyncExternalStore(
+    subscribe,
+    () => snapshot,
+    () => snapshot,
+  );
 }
 
 /** Width Aiden's drawn window controls take at the top-right corner, or 0 when there are none. */
@@ -79,7 +98,9 @@ export function useWindowControlsInset(): number {
  * right end meets the window's top-right corner, otherwise 0. A bar beside a
  * docked panel needs none; the panel's own header takes it.
  */
-export function useTrailingWindowControlsClearance(ref: React.RefObject<HTMLElement | null>): number {
+export function useTrailingWindowControlsClearance(
+  ref: React.RefObject<HTMLElement | null>,
+): number {
   const inset = useWindowControlsInset();
   const [touches, setTouches] = React.useState(false);
   React.useLayoutEffect(() => {

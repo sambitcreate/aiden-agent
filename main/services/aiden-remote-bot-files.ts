@@ -75,28 +75,47 @@ function languageFor(entry: WorkspaceFileEntry): string | undefined {
   if (entry.kind !== "file") return undefined;
   const extension = path.extname(entry.name).slice(1).toLowerCase();
   const names: Record<string, string> = {
-    c: "C", cc: "C++", cpp: "C++", css: "CSS", go: "Go", h: "C Header",
-    html: "HTML", java: "Java", js: "JavaScript", json: "JSON", jsx: "JSX",
-    kt: "Kotlin", md: "Markdown", mjs: "JavaScript", py: "Python", rb: "Ruby",
-    rs: "Rust", sh: "Shell", swift: "Swift", ts: "TypeScript", tsx: "TSX",
-    yaml: "YAML", yml: "YAML",
+    c: "C",
+    cc: "C++",
+    cpp: "C++",
+    css: "CSS",
+    go: "Go",
+    h: "C Header",
+    html: "HTML",
+    java: "Java",
+    js: "JavaScript",
+    json: "JSON",
+    jsx: "JSX",
+    kt: "Kotlin",
+    md: "Markdown",
+    mjs: "JavaScript",
+    py: "Python",
+    rb: "Ruby",
+    rs: "Rust",
+    sh: "Shell",
+    swift: "Swift",
+    ts: "TypeScript",
+    tsx: "TSX",
+    yaml: "YAML",
+    yml: "YAML",
   };
   return names[extension];
 }
 
 function mapHandleError(error: unknown): never {
   if (!(error instanceof AidenOpaqueHandleError)) throw error;
-  const status = error.code === "handle_wrong_device"
-    ? 403
-    : error.code === "handle_expired"
-      ? 410
-      : error.code === "handle_capacity"
-        ? 429
-        : error.code === "root_policy_changed" ||
-            error.code === "filesystem_identity_changed" ||
-            error.code === "path_outside_root"
-          ? 409
-          : 400;
+  const status =
+    error.code === "handle_wrong_device"
+      ? 403
+      : error.code === "handle_expired"
+        ? 410
+        : error.code === "handle_capacity"
+          ? 429
+          : error.code === "root_policy_changed" ||
+              error.code === "filesystem_identity_changed" ||
+              error.code === "path_outside_root"
+            ? 409
+            : 400;
   throw new AidenRemoteServiceError(
     error.code,
     error.code === "handle_expired"
@@ -127,9 +146,10 @@ function mapAuthorityError(error: unknown): never {
 }
 
 function parseWrite(value: unknown): { content: string; expectedVersion: string } {
-  const record = value && typeof value === "object" && !Array.isArray(value)
-    ? value as Record<string, unknown>
-    : null;
+  const record =
+    value && typeof value === "object" && !Array.isArray(value)
+      ? (value as Record<string, unknown>)
+      : null;
   if (
     !record ||
     Object.keys(record).length !== 2 ||
@@ -170,13 +190,16 @@ function requireManagedHome(admission: BotRuntimeAuthorityAdmission): void {
 
 function authorityPolicyRevision(authority: BotFileAuthorityContext): string {
   return `botfiles_${createHash("sha256")
-    .update(JSON.stringify({
-      botId: authority.botId,
-      chatId: authority.chatId,
-      workspaceId: authority.workspaceId,
-      botPolicy: authority.botPolicy,
-      chatPolicy: authority.chatPolicy,
-    }), "utf8")
+    .update(
+      JSON.stringify({
+        botId: authority.botId,
+        chatId: authority.chatId,
+        workspaceId: authority.workspaceId,
+        botPolicy: authority.botPolicy,
+        chatPolicy: authority.chatPolicy,
+      }),
+      "utf8",
+    )
     .digest("base64url")}`;
 }
 
@@ -303,17 +326,21 @@ export class AidenRemoteBotFileService {
         for (const entry of index.entries) {
           // Bot policy revalidation stays serial and runs only after admission.
           // Share the same budget as workspace/Gemini/legacy file listings.
-          const [inspected] = await mapWorkspaceMetadata([entry], async () => {
-            try {
-              const displayPath = safeDisplayPath(entry.path);
-              await authority.revalidateBeforeEffect();
-              const claims = await this.claims(deviceId, authority, displayPath, snapshotId);
-              return { displayPath, claims };
-            } catch (error) {
-              if (error instanceof BotRuntimeAuthorityError) mapAuthorityError(error);
-              return undefined;
-            }
-          }, authority.signal);
+          const [inspected] = await mapWorkspaceMetadata(
+            [entry],
+            async () => {
+              try {
+                const displayPath = safeDisplayPath(entry.path);
+                await authority.revalidateBeforeEffect();
+                const claims = await this.claims(deviceId, authority, displayPath, snapshotId);
+                return { displayPath, claims };
+              } catch (error) {
+                if (error instanceof BotRuntimeAuthorityError) mapAuthorityError(error);
+                return undefined;
+              }
+            },
+            authority.signal,
+          );
           if (!inspected) {
             omitted = true;
             continue;
@@ -346,8 +373,10 @@ export class AidenRemoteBotFileService {
           maxDepth: 20,
         };
       } catch (caught) {
-        const error = authority.signal.aborted && authority.signal.reason instanceof Error
-          ? authority.signal.reason : caught;
+        const error =
+          authority.signal.aborted && authority.signal.reason instanceof Error
+            ? authority.signal.reason
+            : caught;
         if (error instanceof AidenRemoteServiceError) throw error;
         if (error instanceof BotRuntimeAuthorityError) mapAuthorityError(error);
         throw new AidenRemoteServiceError(
@@ -410,18 +439,15 @@ export class AidenRemoteBotFileService {
     }
   }
 
-  read(
-    deviceId: string,
-    chatId: string,
-    fileId: string,
-  ): Promise<AidenRemoteFileDocument> {
+  read(deviceId: string, chatId: string, fileId: string): Promise<AidenRemoteFileDocument> {
     return this.withResolvedFile(deviceId, chatId, fileId, async (input) => {
       try {
         return projectedDocument(
           fileId,
           input.displayPath,
-          await readWorkspaceFile(input.folderPath, input.displayPath, input.signal,
-            { exclusiveIdentity: input.identity }),
+          await readWorkspaceFile(input.folderPath, input.displayPath, input.signal, {
+            exclusiveIdentity: input.identity,
+          }),
         );
       } catch {
         throw new AidenRemoteServiceError(
@@ -449,7 +475,13 @@ export class AidenRemoteBotFileService {
           input.expectedVersion,
           resolved.signal,
         );
-        await rebindAidenFileHandleToSavedFile(this.handles, fileId, resolved.folderPath, resolved.displayPath, installed);
+        await rebindAidenFileHandleToSavedFile(
+          this.handles,
+          fileId,
+          resolved.folderPath,
+          resolved.displayPath,
+          installed,
+        );
         return projectedDocument(fileId, resolved.displayPath, document);
       } catch (error) {
         if (error instanceof WorkspaceFileError && error.code === "changed_on_disk") {

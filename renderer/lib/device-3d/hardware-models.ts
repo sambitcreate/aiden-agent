@@ -53,17 +53,37 @@ interface RearPart {
 
 export interface HandsetSpec {
   readonly id: DeviceModelId;
-  readonly body: { readonly width: number; readonly height: number; readonly depth: number; readonly radius: number };
+  readonly body: {
+    readonly width: number;
+    readonly height: number;
+    readonly depth: number;
+    readonly radius: number;
+  };
   readonly pixels: { readonly width: number; readonly height: number; readonly ppi: number };
   readonly displayRadius: number;
   /** Rounded rail radius where the frame meets each face. */
   readonly rail: number;
-  readonly island: { readonly width: number; readonly height: number; readonly fromTop: number } | null;
+  readonly island: {
+    readonly width: number;
+    readonly height: number;
+    readonly fromTop: number;
+  } | null;
   /** Front camera when there is no island, as an offset from the display centre. */
   readonly frontCamera: { readonly x: number; readonly y: number; readonly radius: number } | null;
   readonly back:
-    | { readonly kind: "plateau"; readonly height: number; readonly rise: number; readonly windowInset: number }
-    | { readonly kind: "bump"; readonly width: number; readonly height: number; readonly inset: number; readonly rise: number };
+    | {
+        readonly kind: "plateau";
+        readonly height: number;
+        readonly rise: number;
+        readonly windowInset: number;
+      }
+    | {
+        readonly kind: "bump";
+        readonly width: number;
+        readonly height: number;
+        readonly inset: number;
+        readonly rise: number;
+      };
   readonly lenses: readonly RearPart[];
   readonly lensRise: number;
   readonly flash: RearPart;
@@ -73,7 +93,12 @@ export interface HandsetSpec {
   readonly edgeKeys: readonly EdgeKey[];
   /** Bottom-edge port width and speaker hole spread, mm. */
   readonly port: { readonly width: number; readonly height: number };
-  readonly speakers: { readonly from: number; readonly to: number; readonly holes: number; readonly edges: readonly ("top" | "bottom")[] };
+  readonly speakers: {
+    readonly from: number;
+    readonly to: number;
+    readonly holes: number;
+    readonly edges: readonly ("top" | "bottom")[];
+  };
   readonly finish: { readonly frame: number; readonly back: number; readonly plateau?: number };
 }
 
@@ -182,8 +207,16 @@ function sideKey(parts: PartList, kit: MaterialKit, spec: HandsetSpec, button: S
     // A flush sapphire key inside a polished surround.
     const surround = face(capsule(thickness + 0.7, button.length + 0.7), 0);
     const crystal = face(capsule(thickness, button.length), 0);
-    parts.add(kit.polished, surround, place(sign * (width / 2 + 0.02), y, 0, 0, sign * (Math.PI / 2)));
-    parts.add(kit.lensGlass, crystal, place(sign * (width / 2 + 0.05), y, 0, 0, sign * (Math.PI / 2)));
+    parts.add(
+      kit.polished,
+      surround,
+      place(sign * (width / 2 + 0.02), y, 0, 0, sign * (Math.PI / 2)),
+    );
+    parts.add(
+      kit.lensGlass,
+      crystal,
+      place(sign * (width / 2 + 0.05), y, 0, 0, sign * (Math.PI / 2)),
+    );
     surround.dispose();
     crystal.dispose();
     return;
@@ -212,7 +245,11 @@ function edgeKey(parts: PartList, kit: MaterialKit, spec: HandsetSpec, key: Edge
     bevelSegments: 2,
     curveSegments: 10,
   });
-  parts.add(kit.key, geometry, place(width / 2 - key.fromRight, height / 2 - 0.25, 0, -Math.PI / 2));
+  parts.add(
+    kit.key,
+    geometry,
+    place(width / 2 - key.fromRight, height / 2 - 0.25, 0, -Math.PI / 2),
+  );
   geometry.dispose();
 }
 
@@ -291,30 +328,60 @@ export function buildHandset(spec: HandsetSpec): Group {
   root.name = spec.id;
 
   // Frame: one slab with a rounded rail on both faces.
-  const body = slab(continuousRect(width - rail * 2, height - rail * 2, radius - rail), back, front, rail, 5, 18);
+  const body = slab(
+    continuousRect(width - rail * 2, height - rail * 2, radius - rail),
+    back,
+    front,
+    rail,
+    5,
+    18,
+  );
   parts.add(kit.frame, body);
   body.dispose();
 
   // Cover glass over the flat front, then the display and its cut-outs.
-  const glass = face(continuousRect(width - rail * 2 + 0.2, height - rail * 2 + 0.2, radius - rail), front + 0.02);
+  const glass = face(
+    continuousRect(width - rail * 2 + 0.2, height - rail * 2 + 0.2, radius - rail),
+    front + 0.02,
+  );
   parts.add(kit.frontGlass, glass);
   glass.dispose();
   const screen = new Mesh(
-    face(continuousRect(display.width, display.height, spec.displayRadius), front + 0.06, false, 24),
+    face(
+      continuousRect(display.width, display.height, spec.displayRadius),
+      front + 0.06,
+      false,
+      24,
+    ),
     new MeshBasicMaterial({ color: 0x000000, name: "screen-placeholder" }),
   );
   screen.name = "device-screen";
   if (spec.island) {
     const islandY = display.height / 2 - spec.island.fromTop - spec.island.height / 2;
-    const island = face(capsule(spec.island.width, spec.island.height, 0, islandY), front + 0.14, false, 16);
+    const island = face(
+      capsule(spec.island.width, spec.island.height, 0, islandY),
+      front + 0.14,
+      false,
+      16,
+    );
     parts.add(kit.cutout, island);
     island.dispose();
-    const lens = face(circle(spec.island.height * 0.21, spec.island.width / 2 - spec.island.height * 0.55, islandY), front + 0.18, false, 16);
+    const lens = face(
+      circle(spec.island.height * 0.21, spec.island.width / 2 - spec.island.height * 0.55, islandY),
+      front + 0.18,
+      false,
+      16,
+    );
     parts.add(kit.lensIris, lens);
     lens.dispose();
   }
   if (spec.frontCamera) {
-    const camera = face(circle(spec.frontCamera.radius, spec.frontCamera.x, spec.frontCamera.y), front + 0.05, false, 16);
+    const camera = face(
+      circle(spec.frontCamera.radius, spec.frontCamera.x, spec.frontCamera.y),
+      front + 0.05,
+      false,
+      16,
+    );
     parts.add(kit.lensIris, camera);
     camera.dispose();
   }
@@ -328,7 +395,13 @@ export function buildHandset(spec: HandsetSpec): Group {
     const windowBottom = -height / 2 + plateau.windowInset;
     const windowHeight = windowTop - windowBottom;
     const windowGlass = face(
-      continuousRect(width - plateau.windowInset * 2, windowHeight, [3.5, 3.5, radius - plateau.windowInset, radius - plateau.windowInset], 0, windowBottom + windowHeight / 2),
+      continuousRect(
+        width - plateau.windowInset * 2,
+        windowHeight,
+        [3.5, 3.5, radius - plateau.windowInset, radius - plateau.windowInset],
+        0,
+        windowBottom + windowHeight / 2,
+      ),
       back - 0.03,
       true,
     );
@@ -341,7 +414,13 @@ export function buildHandset(spec: HandsetSpec): Group {
     const shelfBottom = plateauBottom + shelfRail;
     const shelfCorner = radius - rail - shelfRail - 0.1;
     const shelf = slab(
-      continuousRect(shelfWidth, shelfTop - shelfBottom, [shelfCorner, shelfCorner, 6, 6], 0, (shelfTop + shelfBottom) / 2),
+      continuousRect(
+        shelfWidth,
+        shelfTop - shelfBottom,
+        [shelfCorner, shelfCorner, 6, 6],
+        0,
+        (shelfTop + shelfBottom) / 2,
+      ),
       back - plateau.rise,
       back + 0.4,
       shelfRail,
@@ -355,7 +434,14 @@ export function buildHandset(spec: HandsetSpec): Group {
     const bump = spec.back;
     const cx = width / 2 - bump.inset - bump.width / 2;
     const cy = height / 2 - bump.inset - bump.height / 2;
-    const raised = slab(continuousRect(bump.width, bump.height, Math.min(bump.width, bump.height) / 2, cx, cy), back - bump.rise, back + 0.3, 0.45, 3, 18);
+    const raised = slab(
+      continuousRect(bump.width, bump.height, Math.min(bump.width, bump.height) / 2, cx, cy),
+      back - bump.rise,
+      back + 0.3,
+      0.45,
+      3,
+      18,
+    );
     parts.add(kit.plateau, raised);
     raised.dispose();
     cameraSurface = back - bump.rise;

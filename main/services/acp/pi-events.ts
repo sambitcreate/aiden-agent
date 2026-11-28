@@ -139,7 +139,12 @@ export class PiEventWriter {
     this.open = undefined;
     const block = this.message.content[index];
     if (kind === "text" && block?.type === "text") {
-      this.stream.push({ type: "text_end", contentIndex: index, content: block.text, partial: this.message });
+      this.stream.push({
+        type: "text_end",
+        contentIndex: index,
+        content: block.text,
+        partial: this.message,
+      });
     } else if (kind === "thinking" && block?.type === "thinking") {
       this.stream.push({
         type: "thinking_end",

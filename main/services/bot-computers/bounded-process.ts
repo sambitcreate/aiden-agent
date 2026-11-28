@@ -60,7 +60,11 @@ export function runBoundedProcess(
       detached: false,
       env: options.env,
       shell: false,
-      stdio: [options.stdin === undefined && options.stdinFile === undefined ? "ignore" : "pipe", "pipe", "pipe"],
+      stdio: [
+        options.stdin === undefined && options.stdinFile === undefined ? "ignore" : "pipe",
+        "pipe",
+        "pipe",
+      ],
       windowsHide: true,
     });
     if (options.onSpawn) child.once("spawn", options.onSpawn);
@@ -127,7 +131,10 @@ export function runBoundedProcess(
     child.stderr?.on("data", (chunk: Buffer) => {
       stderrBytes = collect(stderr, chunk, stderrBytes, maxStderr);
       if (truncated && overflow === "fail") {
-        failure ??= new BotComputerError("lume_failed", "The helper returned too much diagnostic output.");
+        failure ??= new BotComputerError(
+          "lume_failed",
+          "The helper returned too much diagnostic output.",
+        );
         void terminate();
       }
     });

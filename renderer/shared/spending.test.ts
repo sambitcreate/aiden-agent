@@ -22,13 +22,24 @@ const chat: SpendingStatusView = {
 };
 
 test("a setting outside its bounds turns every limit off rather than guessing", () => {
-  assert.deepEqual(parseSpendingLimitsSettings({ chatUsd: 5, botMonthUsd: 20.004, monthStartDay: 15 }), {
-    chatUsd: 5,
-    botMonthUsd: 20,
-    monthStartDay: 15,
-  });
+  assert.deepEqual(
+    parseSpendingLimitsSettings({ chatUsd: 5, botMonthUsd: 20.004, monthStartDay: 15 }),
+    {
+      chatUsd: 5,
+      botMonthUsd: 20,
+      monthStartDay: 15,
+    },
+  );
   assert.deepEqual(parseSpendingLimitsSettings({}), {});
-  for (const bad of [{ chatUsd: 0 }, { chatUsd: -1 }, { routineRunUsd: 1e9 }, { monthStartDay: 29 }, { chatUsd: 5, extra: 1 }, null, []]) {
+  for (const bad of [
+    { chatUsd: 0 },
+    { chatUsd: -1 },
+    { routineRunUsd: 1e9 },
+    { monthStartDay: 29 },
+    { chatUsd: 5, extra: 1 },
+    null,
+    [],
+  ]) {
     assert.equal(parseSpendingLimitsSettings(bad), undefined, JSON.stringify(bad));
   }
 });
@@ -37,27 +48,57 @@ test("a chat is nearing from 80% of what it may spend and reached at it", () => 
   assert.equal(spendingState(3.99, 5), "under");
   assert.equal(spendingState(4, 5), "nearing");
   assert.equal(spendingState(5, 5), "reached");
-  assert.equal(spendingState(5.4, 10), "under", "after Allow more the allowance is the limit twice");
+  assert.equal(
+    spendingState(5.4, 10),
+    "under",
+    "after Allow more the allowance is the limit twice",
+  );
 });
 
 test("the notice names the chat or Bot, the amounts and the month", () => {
   assert.equal(spendingNotice({ ...chat, state: "under" }), undefined);
   assert.equal(spendingNotice(chat)?.title, "This chat has used $4.10 of its $5.00 limit.");
   const bot = spendingNotice(
-    { ...chat, ownerKind: "bot", ownerId: "ada", period: "month", limitUsd: 20, extraUsd: 20, spentUsd: 41.5, state: "reached" },
+    {
+      ...chat,
+      ownerKind: "bot",
+      ownerId: "ada",
+      period: "month",
+      limitUsd: 20,
+      extraUsd: 20,
+      spentUsd: 41.5,
+      state: "reached",
+    },
     "Ada",
   );
   assert.equal(bot?.title, "Ada reached its $40.00 spending limit this month.");
-  assert.equal(bot?.body, "It has spent $41.50. Allow $20.00 more to keep going, or change the limit in Settings.");
+  assert.equal(
+    bot?.body,
+    "It has spent $41.50. Allow $20.00 more to keep going, or change the limit in Settings.",
+  );
   assert.equal(bot?.allowMoreLabel, "Allow $20.00 more");
-  assert.match(spendingNotice({ ...chat, ownerKind: "bot", period: "month" }, " ")?.title ?? "", /^This Bot /u);
+  assert.match(
+    spendingNotice({ ...chat, ownerKind: "bot", period: "month" }, " ")?.title ?? "",
+    /^This Bot /u,
+  );
 });
 
 test("amounts read as dollars and days as ordinals", () => {
   assert.equal(formatUsd(1250), "$1,250.00");
   assert.equal(formatUsd(0.004), "less than $0.01");
   assert.equal(formatUsd(0), "$0.00");
-  assert.deepEqual([1, 2, 3, 4, 11, 12, 13, 21, 22, 28].map(ordinalDay), ["1st", "2nd", "3rd", "4th", "11th", "12th", "13th", "21st", "22nd", "28th"]);
+  assert.deepEqual([1, 2, 3, 4, 11, 12, 13, 21, 22, 28].map(ordinalDay), [
+    "1st",
+    "2nd",
+    "3rd",
+    "4th",
+    "11th",
+    "12th",
+    "13th",
+    "21st",
+    "22nd",
+    "28th",
+  ]);
 });
 
 test("a status from main is read strictly", () => {
@@ -71,10 +112,29 @@ test("a status from main is read strictly", () => {
 test("only a hosted provider with a stored API key bills by the request", () => {
   const hosted = { id: "openai", baseUrl: "https://api.openai.com/v1", hasKey: true };
   assert.equal(meteredProviderConnected([hosted]), true);
-  assert.equal(meteredProviderConnected([{ ...hosted, credentialType: "oauth" }]), false, "a sign-in is $0");
-  assert.equal(meteredProviderConnected([{ ...hosted, hasKey: false }]), false, "no key, nothing to bill");
-  assert.equal(meteredProviderConnected([{ ...hosted, deployment: "local" }]), false, "marked as running on this Mac");
-  assert.equal(meteredProviderConnected([{ ...hosted, baseUrl: "http://localhost:1234/v1" }]), false);
-  assert.equal(meteredProviderConnected([{ ...hosted, id: "antigravity" }]), false, "an agent harness bills its own way");
+  assert.equal(
+    meteredProviderConnected([{ ...hosted, credentialType: "oauth" }]),
+    false,
+    "a sign-in is $0",
+  );
+  assert.equal(
+    meteredProviderConnected([{ ...hosted, hasKey: false }]),
+    false,
+    "no key, nothing to bill",
+  );
+  assert.equal(
+    meteredProviderConnected([{ ...hosted, deployment: "local" }]),
+    false,
+    "marked as running on this Mac",
+  );
+  assert.equal(
+    meteredProviderConnected([{ ...hosted, baseUrl: "http://localhost:1234/v1" }]),
+    false,
+  );
+  assert.equal(
+    meteredProviderConnected([{ ...hosted, id: "antigravity" }]),
+    false,
+    "an agent harness bills its own way",
+  );
   assert.equal(meteredProviderConnected([]), false);
 });

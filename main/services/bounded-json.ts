@@ -36,20 +36,33 @@ export function copyBoundedJson(value: unknown, bounds: JsonCopyBounds): JsonVal
   let remaining = bounds.maxSize;
   const ancestors = new Set<object>();
   function copy(entry: unknown, depth: number): JsonValue {
-    if (++nodes > bounds.maxNodes || depth > bounds.maxDepth || remaining <= 0) throw new Error("limit");
-    if (entry === null || typeof entry === "boolean") { remaining -= 5; return entry; }
-    if (typeof entry === "number" && Number.isFinite(entry)) { remaining -= 32; return entry; }
+    if (++nodes > bounds.maxNodes || depth > bounds.maxDepth || remaining <= 0)
+      throw new Error("limit");
+    if (entry === null || typeof entry === "boolean") {
+      remaining -= 5;
+      return entry;
+    }
+    if (typeof entry === "number" && Number.isFinite(entry)) {
+      remaining -= 32;
+      return entry;
+    }
     if (typeof entry === "string") {
       remaining -= bounds.measure(entry) + 2;
       if (remaining < 0) throw new Error("limit");
       return entry;
     }
-    if (!entry || typeof entry !== "object" || ancestors.has(entry)) throw new Error("invalid JSON");
+    if (!entry || typeof entry !== "object" || ancestors.has(entry))
+      throw new Error("invalid JSON");
     const prototype = Object.getPrototypeOf(entry);
-    if (!Array.isArray(entry) && prototype !== Object.prototype && prototype !== null) throw new Error("invalid object");
+    if (!Array.isArray(entry) && prototype !== Object.prototype && prototype !== null)
+      throw new Error("invalid object");
     ancestors.add(entry);
     remaining -= 2;
-    const output: Record<string, JsonValue> | JsonValue[] = Array.isArray(entry) ? [] : bounds.ordinaryObjects ? {} : Object.create(null);
+    const output: Record<string, JsonValue> | JsonValue[] = Array.isArray(entry)
+      ? []
+      : bounds.ordinaryObjects
+        ? {}
+        : Object.create(null);
     for (const key in entry) {
       if (!Object.prototype.hasOwnProperty.call(entry, key)) continue;
       remaining -= bounds.measure(key) + 4;
@@ -59,11 +72,22 @@ export function copyBoundedJson(value: unknown, bounds: JsonCopyBounds): JsonVal
       if (Array.isArray(output)) {
         if (key !== String(output.length)) throw new Error("non-JSON array");
         output.push(next);
-      } else Object.defineProperty(output, key, { value: next, enumerable: true, writable: true, configurable: true });
+      } else
+        Object.defineProperty(output, key, {
+          value: next,
+          enumerable: true,
+          writable: true,
+          configurable: true,
+        });
     }
-    if (Array.isArray(entry) && (output as JsonValue[]).length !== entry.length) throw new Error("sparse array");
+    if (Array.isArray(entry) && (output as JsonValue[]).length !== entry.length)
+      throw new Error("sparse array");
     ancestors.delete(entry);
     return output;
   }
-  try { return copy(value, 0); } catch { return undefined; }
+  try {
+    return copy(value, 0);
+  } catch {
+    return undefined;
+  }
 }

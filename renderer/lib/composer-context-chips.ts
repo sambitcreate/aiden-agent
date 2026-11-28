@@ -67,12 +67,21 @@ export function composerContextChips(input: ComposerContextChipsInput): Composer
     branch &&
     input.pullRequestRemote &&
     (linked > 0 || pending > 0 || current || branchCanOpen);
-  const followThrough = input.stage === "started" && input.hasFolder && !input.accessOff && input.followThrough === true;
-  const tasks = input.stage === "started" && input.hasFolder && !input.accessOff && input.postingTasks === true;
+  const followThrough =
+    input.stage === "started" &&
+    input.hasFolder &&
+    !input.accessOff &&
+    input.followThrough === true;
+  const tasks =
+    input.stage === "started" && input.hasFolder && !input.accessOff && input.postingTasks === true;
   const startedChats = input.stage === "started" && input.startedChats === true;
   // Running work keeps a summary strip even in a folder without Git.
   const barMode: ComposerContextBarMode =
-    input.stage === "draft" || !input.autoHide ? "full" : branch || followThrough || tasks || startedChats ? "summary" : "hidden";
+    input.stage === "draft" || !input.autoHide
+      ? "full"
+      : branch || followThrough || tasks || startedChats
+        ? "summary"
+        : "hidden";
   const full = barMode === "full";
   return {
     workspace: full,

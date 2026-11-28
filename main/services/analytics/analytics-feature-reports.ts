@@ -29,14 +29,18 @@ export interface ChatMessageSent {
    * cannot change what is counted. Leave it out, or resolve without a slider,
    * and the event carries no slider properties.
    */
-  readonly agentSlider?: () => Promise<{ slider: unknown; chatThinkingLevel?: GenerationThinkingLevel } | undefined>;
+  readonly agentSlider?: () => Promise<
+    { slider: unknown; chatThinkingLevel?: GenerationThinkingLevel } | undefined
+  >;
 }
 
 /** One person's message reached a running turn. Subagent turns never come through here. */
 export function reportChatMessageSent(sent: ChatMessageSent): void {
   const report = captureAnalyticsReporter();
   void Promise.all([
-    Promise.resolve().then(sent.inWorkspace).catch(() => false),
+    Promise.resolve()
+      .then(sent.inWorkspace)
+      .catch(() => false),
     Promise.resolve().then(() => (typeof sent.origin === "function" ? sent.origin() : sent.origin)),
     Promise.resolve()
       .then(() => sent.agentSlider?.())
@@ -67,7 +71,10 @@ export function reportChatMessageSent(sent: ChatMessageSent): void {
 /** A person's own connection is only ever counted as "custom"; its name and URL stay here. */
 export function reportCustomProviderConnected(provider: StoredProvider): void {
   const local = !provider.needsKey || resolveProviderDeployment(provider) === "local";
-  reportAnalyticsEvent("provider_connected", { provider_id: "custom", auth: local ? "local" : "key" });
+  reportAnalyticsEvent("provider_connected", {
+    provider_id: "custom",
+    auth: local ? "local" : "key",
+  });
 }
 
 /** A connector the person added: a preset's id, otherwise `custom`. */
@@ -79,7 +86,9 @@ export function reportConnectorAdded(server: Pick<McpServer, "id" | "transport">
 }
 
 /** A desktop message that carried design-canvas comments: only how many, bucketed. */
-export function reportDesignCommentsSent(messages: readonly { role: string; content: string }[]): void {
+export function reportDesignCommentsSent(
+  messages: readonly { role: string; content: string }[],
+): void {
   const last = [...messages].reverse().find((message) => message.role === "user");
   const count = last ? attachedDesignCommentCount(last.content) : 0;
   if (count > 0) reportAnalyticsEvent("design_comments_sent", { count_bucket: countBucket(count) });

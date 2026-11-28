@@ -1,11 +1,30 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { boundedMcpToolPageReader, callMcpTool, callMcpToolOnLiveClient, createMcpToolCallGuard, createMcpToolInventoryCache, guardedMcpToolCall, listMcpToolInventory, listMcpToolPage, readGuardedMcpInventory } from "./mcp-tool-inventory.js";
+import {
+  boundedMcpToolPageReader,
+  callMcpTool,
+  callMcpToolOnLiveClient,
+  createMcpToolCallGuard,
+  createMcpToolInventoryCache,
+  guardedMcpToolCall,
+  listMcpToolInventory,
+  listMcpToolPage,
+  readGuardedMcpInventory,
+} from "./mcp-tool-inventory.js";
 import { executeMcpAgentTool } from "./mcp-tool-result.js";
-import { LATEST_PROTOCOL_VERSION, McpClient, McpTimeoutError, type JsonRpcMessage } from "@earendil-works/pi-mcp";
+import {
+  LATEST_PROTOCOL_VERSION,
+  McpClient,
+  McpTimeoutError,
+  type JsonRpcMessage,
+} from "@earendil-works/pi-mcp";
 import { createInMemoryTransportPair } from "@earendil-works/pi-mcp/testing";
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
-import { CallToolRequestSchema, ListToolsRequestSchema, type CallToolResult } from "@modelcontextprotocol/sdk/types.js";
+import {
+  CallToolRequestSchema,
+  ListToolsRequestSchema,
+  type CallToolResult,
+} from "@modelcontextprotocol/sdk/types.js";
 import { connectSdkServer } from "./mcp-test-support.js";
 import { COMPOSIO_WATCH_INVENTORY_LIMITS } from "./mcp-tool-inventory.js";
 import { withBotConnectorForegroundLifetime } from "./bot-connector-inventory-scope.js";
@@ -20,94 +39,191 @@ async function connectedClient(server: Server): Promise<McpClient> {
  * A wire-level server: replies exactly as `respond` says, without a server
  * library's own result validation, so tests observe what the client accepts.
  */
-async function rawServerClient(t: { after(fn: () => Promise<void>): void }, respond: (method: string, params: unknown) => unknown) {
+async function rawServerClient(
+  t: { after(fn: () => Promise<void>): void },
+  respond: (method: string, params: unknown) => unknown,
+) {
   const { client: clientSide, server: serverSide } = createInMemoryTransportPair();
   const requests: Array<{ method: string; params: unknown }> = [];
   serverSide.onMessage((message: JsonRpcMessage) => {
     if (!("method" in message) || !("id" in message)) return;
     requests.push({ method: message.method, params: message.params });
-    const result = message.method === "initialize"
-      ? { protocolVersion: LATEST_PROTOCOL_VERSION, capabilities: { tools: {}, resources: {} }, serverInfo: { name: "raw", version: "1" } }
-      : respond(message.method, message.params);
-    void Promise.resolve(result).then((value) => serverSide.send({ jsonrpc: "2.0", id: message.id, result: value }));
+    const result =
+      message.method === "initialize"
+        ? {
+            protocolVersion: LATEST_PROTOCOL_VERSION,
+            capabilities: { tools: {}, resources: {} },
+            serverInfo: { name: "raw", version: "1" },
+          }
+        : respond(message.method, message.params);
+    void Promise.resolve(result).then((value) =>
+      serverSide.send({ jsonrpc: "2.0", id: message.id, result: value }),
+    );
   });
   await serverSide.start();
   const client = new McpClient({ name: "raw-client", version: "1" });
   await client.connect(clientSide);
-  t.after(async () => { await client.close(); });
+  t.after(async () => {
+    await client.close();
+  });
   return { client, requests: () => requests.filter(({ method }) => method !== "initialize") };
 }
 
 test("foreground connector inventory enforces its transport budget before requesting a fifth raw RPC page", async (t) => {
   let pages = 0;
-  const { client } = await rawServerClient(t, () => ({ tools: [], nextCursor: `opaque-${++pages}` }));
-  await assert.rejects(listMcpToolInventory({ assertCurrent() {}, limits: COMPOSIO_WATCH_INVENTORY_LIMITS,
-    listPage: (cursor, signal) => listMcpToolPage(client, cursor, { signal }, undefined, 256 * 1024) }), /page limit/u);
+  const { client } = await rawServerClient(t, () => ({
+    tools: [],
+    nextCursor: `opaque-${++pages}`,
+  }));
+  await assert.rejects(
+    listMcpToolInventory({
+      assertCurrent() {},
+      limits: COMPOSIO_WATCH_INVENTORY_LIMITS,
+      listPage: (cursor, signal) =>
+        listMcpToolPage(client, cursor, { signal }, undefined, 256 * 1024),
+    }),
+    /page limit/u,
+  );
   assert.equal(pages, 4);
 });
 
 test("foreground raw tool/byte limits reject the whole inventory without requesting the following RPC page", async (t) => {
   for (const mode of ["tools", "bytes", "aggregate"] as const) {
     let pages = 0;
-    const limits = mode === "aggregate" ? { maxPages: 4, maxTools: 128, maxPageBytes: 200, maxTotalBytes: 250 } : COMPOSIO_WATCH_INVENTORY_LIMITS;
-    const { client } = await rawServerClient(t, () => { pages++; return { tools: mode === "tools" ? Array.from({ length: 129 }, (_, i) => ({ name: `read_${i}`, inputSchema: { type: "object" } })) : [], nextCursor: "later", ignoredRawMetadata: "x".repeat(mode === "bytes" ? 256 * 1024 : mode === "aggregate" ? 100 : 0) }; });
-    await assert.rejects(listMcpToolInventory({ assertCurrent() {}, limits,
-      listPage: (cursor, signal) => listMcpToolPage(client, cursor, { signal }, undefined, limits.maxPageBytes) }), /limit/u);
+    const limits =
+      mode === "aggregate"
+        ? { maxPages: 4, maxTools: 128, maxPageBytes: 200, maxTotalBytes: 250 }
+        : COMPOSIO_WATCH_INVENTORY_LIMITS;
+    const { client } = await rawServerClient(t, () => {
+      pages++;
+      return {
+        tools:
+          mode === "tools"
+            ? Array.from({ length: 129 }, (_, i) => ({
+                name: `read_${i}`,
+                inputSchema: { type: "object" },
+              }))
+            : [],
+        nextCursor: "later",
+        ignoredRawMetadata: "x".repeat(
+          mode === "bytes" ? 256 * 1024 : mode === "aggregate" ? 100 : 0,
+        ),
+      };
+    });
+    await assert.rejects(
+      listMcpToolInventory({
+        assertCurrent() {},
+        limits,
+        listPage: (cursor, signal) =>
+          listMcpToolPage(client, cursor, { signal }, undefined, limits.maxPageBytes),
+      }),
+      /limit/u,
+    );
     assert.equal(pages, mode === "aggregate" ? 2 : 1);
   }
 });
 
 test("the initiating foreground lifetime fences every raw inventory RPC page, including admission reads", async (t) => {
   for (const invalidate of ["abort", "authorization"] as const) {
-    const controller = new AbortController(); let current = true; let pages = 0;
+    const controller = new AbortController();
+    let current = true;
+    let pages = 0;
     const { client } = await rawServerClient(t, () => {
-      pages++; if (invalidate === "abort") controller.abort(); else current = false;
+      pages++;
+      if (invalidate === "abort") controller.abort();
+      else current = false;
       return { tools: [], nextCursor: "second" };
     });
-    await assert.rejects(withBotConnectorForegroundLifetime({ signal: controller.signal, assertCurrent: () => { if (!current) throw new Error("Foreground authorization changed."); } }, () => listMcpToolInventory({ assertCurrent() {}, limits: COMPOSIO_WATCH_INVENTORY_LIMITS,
-      listPage: (cursor, signal) => listMcpToolPage(client, cursor, { signal }, undefined, 256 * 1024) })));
+    await assert.rejects(
+      withBotConnectorForegroundLifetime(
+        {
+          signal: controller.signal,
+          assertCurrent: () => {
+            if (!current) throw new Error("Foreground authorization changed.");
+          },
+        },
+        () =>
+          listMcpToolInventory({
+            assertCurrent() {},
+            limits: COMPOSIO_WATCH_INVENTORY_LIMITS,
+            listPage: (cursor, signal) =>
+              listMcpToolPage(client, cursor, { signal }, undefined, 256 * 1024),
+          }),
+      ),
+    );
     assert.equal(pages, 1, "no next metadata page after the document or device lifetime ends");
   }
 });
 
 test("inventory follows opaque cursors and retains later-page schemas and annotations", async () => {
   const cursors: Array<string | undefined> = [];
-  const result = await listMcpToolInventory<{ name: string; annotations?: { readOnlyHint: boolean }; inputSchema?: unknown }>({
+  const result = await listMcpToolInventory<{
+    name: string;
+    annotations?: { readOnlyHint: boolean };
+    inputSchema?: unknown;
+  }>({
     assertCurrent() {},
     async listPage(cursor) {
       cursors.push(cursor);
       return cursor === undefined
-        ? { tools: [{ name: "first", annotations: { readOnlyHint: true } }], nextCursor: "opaque/+==" }
+        ? {
+            tools: [{ name: "first", annotations: { readOnlyHint: true } }],
+            nextCursor: "opaque/+==",
+          }
         : { tools: [{ name: "last", inputSchema: { type: "object", required: ["query"] } }] };
     },
   });
   assert.deepEqual(cursors, [undefined, "opaque/+=="]);
-  assert.deepEqual(result, [{ name: "first", annotations: { readOnlyHint: true } }, { name: "last", inputSchema: { type: "object", required: ["query"] } }]);
+  assert.deepEqual(result, [
+    { name: "first", annotations: { readOnlyHint: true } },
+    { name: "last", inputSchema: { type: "object", required: ["query"] } },
+  ]);
 });
 
 test("cycles and ambiguous duplicate names fail without publishing partial inventory", async () => {
   for (const mode of ["cycle", "duplicate"]) {
     let requests = 0;
-    await assert.rejects(listMcpToolInventory({
-      assertCurrent() {},
-      async listPage() {
-        requests++;
-        return { tools: [{ name: mode === "cycle" ? `tool${requests}` : "same" }], nextCursor: "again" };
-      },
-    }), /repeated|duplicate/u);
+    await assert.rejects(
+      listMcpToolInventory({
+        assertCurrent() {},
+        async listPage() {
+          requests++;
+          return {
+            tools: [{ name: mode === "cycle" ? `tool${requests}` : "same" }],
+            nextCursor: "again",
+          };
+        },
+      }),
+      /repeated|duplicate/u,
+    );
     assert.equal(requests, 2);
   }
 });
 
 test("unbounded empty pages and excessive tool totals are rejected", async () => {
   let requests = 0;
-  await assert.rejects(listMcpToolInventory({ assertCurrent() {}, listPage: async () => ({ tools: [], nextCursor: String(++requests) }) }), /page limit/u);
+  await assert.rejects(
+    listMcpToolInventory({
+      assertCurrent() {},
+      listPage: async () => ({ tools: [], nextCursor: String(++requests) }),
+    }),
+    /page limit/u,
+  );
   assert.equal(requests, 64);
   requests = 0;
-  await assert.rejects(listMcpToolInventory({
-    assertCurrent() {},
-    async listPage() { requests++; return { tools: Array.from({ length: 257 }, (_, i) => ({ name: `${requests}-${i}` })), nextCursor: String(requests) }; },
-  }), /tool limit/u);
+  await assert.rejects(
+    listMcpToolInventory({
+      assertCurrent() {},
+      async listPage() {
+        requests++;
+        return {
+          tools: Array.from({ length: 257 }, (_, i) => ({ name: `${requests}-${i}` })),
+          nextCursor: String(requests),
+        };
+      },
+    }),
+    /tool limit/u,
+  );
   assert.equal(requests, 2);
 });
 
@@ -116,32 +232,68 @@ test("abort and configuration changes after a page prevent subsequent requests a
     const controller = new AbortController();
     let current = true;
     let requests = 0;
-    await assert.rejects(listMcpToolInventory({
-      signal: controller.signal,
-      assertCurrent() { if (!current) throw new Error("changed"); },
-      async listPage(_cursor, signal) {
-        requests++;
-        if (reason === "abort") { controller.abort(new Error("cancelled")); assert.equal(signal.aborted, true); }
-        else current = false;
-        return { tools: [{ name: "stale" }], nextCursor: "later" };
-      },
-    }), /cancelled|changed/u);
+    await assert.rejects(
+      listMcpToolInventory({
+        signal: controller.signal,
+        assertCurrent() {
+          if (!current) throw new Error("changed");
+        },
+        async listPage(_cursor, signal) {
+          requests++;
+          if (reason === "abort") {
+            controller.abort(new Error("cancelled"));
+            assert.equal(signal.aborted, true);
+          } else current = false;
+          return { tools: [{ name: "stale" }], nextCursor: "later" };
+        },
+      }),
+      /cancelled|changed/u,
+    );
     assert.equal(requests, 1);
   }
 });
 
 test("already cancelled discovery sends no requests and later-page failures propagate", async () => {
-  const controller = new AbortController(); controller.abort(new Error("cancelled"));
+  const controller = new AbortController();
+  controller.abort(new Error("cancelled"));
   let requests = 0;
-  await assert.rejects(listMcpToolInventory({ signal: controller.signal, assertCurrent() {}, async listPage() { requests++; return { tools: [] }; } }), /cancelled/u);
+  await assert.rejects(
+    listMcpToolInventory({
+      signal: controller.signal,
+      assertCurrent() {},
+      async listPage() {
+        requests++;
+        return { tools: [] };
+      },
+    }),
+    /cancelled/u,
+  );
   assert.equal(requests, 0);
-  await assert.rejects(listMcpToolInventory({ assertCurrent() {}, async listPage(cursor) { if (cursor) throw new Error("unavailable"); return { tools: [{ name: "partial" }], nextCursor: "page2" }; } }), /unavailable/u);
+  await assert.rejects(
+    listMcpToolInventory({
+      assertCurrent() {},
+      async listPage(cursor) {
+        if (cursor) throw new Error("unavailable");
+        return { tools: [{ name: "partial" }], nextCursor: "page2" };
+      },
+    }),
+    /unavailable/u,
+  );
 });
 
 test("malformed or oversized cursors never become subsequent requests", async () => {
   for (const cursor of ["x".repeat(4097), 42, {}]) {
     let requests = 0;
-    await assert.rejects(listMcpToolInventory({ assertCurrent() {}, async listPage() { requests++; return { tools: [], nextCursor: cursor as string }; } }), /invalid/u);
+    await assert.rejects(
+      listMcpToolInventory({
+        assertCurrent() {},
+        async listPage() {
+          requests++;
+          return { tools: [], nextCursor: cursor as string };
+        },
+      }),
+      /invalid/u,
+    );
     assert.equal(requests, 1);
   }
 });
@@ -152,10 +304,19 @@ for (const end of [undefined, null, ""]) {
       const cursor = (params as { cursor?: string } | undefined)?.cursor;
       return cursor === undefined
         ? { tools: [{ name: "first", inputSchema: { type: "object" } }], nextCursor: "page-2" }
-        : { tools: [{ name: "last", inputSchema: { type: "object" } }], ...(end === undefined ? {} : { nextCursor: end }) };
+        : {
+            tools: [{ name: "last", inputSchema: { type: "object" } }],
+            ...(end === undefined ? {} : { nextCursor: end }),
+          };
     });
-    const tools = await listMcpToolInventory({ assertCurrent() {}, listPage: (cursor, signal) => listMcpToolPage(client, cursor, { signal }) });
-    assert.deepEqual(tools.map(({ name }) => name), ["first", "last"]);
+    const tools = await listMcpToolInventory({
+      assertCurrent() {},
+      listPage: (cursor, signal) => listMcpToolPage(client, cursor, { signal }),
+    });
+    assert.deepEqual(
+      tools.map(({ name }) => name),
+      ["first", "last"],
+    );
     assert.equal(requests().length, 2, "the end-of-list page is not followed by another request");
   });
 }
@@ -177,9 +338,14 @@ test("each discovery page has its own deadline", async (t) => {
 test("non-object structured content from a real tools/call reaches the agent result and its output schema", async (t) => {
   const values: unknown[] = [[1, "two"], null, 0, false, "", "text"];
   let next = 0;
-  const { client } = await rawServerClient(t, () => ({ content: [], structuredContent: values[next++] }));
+  const { client } = await rawServerClient(t, () => ({
+    content: [],
+    structuredContent: values[next++],
+  }));
   for (const value of values) {
-    const schema = { type: value === null ? "null" : Array.isArray(value) ? "array" : typeof value };
+    const schema = {
+      type: value === null ? "null" : Array.isArray(value) ? "array" : typeof value,
+    };
     const guard = createMcpToolCallGuard([{ name: "any", outputSchema: schema }]);
     const result = await executeMcpAgentTool(async () => {
       const raw = await callMcpTool(client, { name: "any", arguments: {} });
@@ -191,11 +357,18 @@ test("non-object structured content from a real tools/call reaches the agent res
   }
 });
 
-const TICKET_SCHEMA = { type: "object", properties: { status: { enum: ["open", "closed"] } }, required: ["status"] };
+const TICKET_SCHEMA = {
+  type: "object",
+  properties: { status: { enum: ["open", "closed"] } },
+  required: ["status"],
+};
 // A text-only reply, then one whose structured status is outside the schema's enum.
 const TICKET_REPLIES = [
   { content: [{ type: "text", text: "Ticket 7 was filed." }] },
-  { content: [{ type: "text", text: "Ticket 8 was filed." }], structuredContent: { status: "pending-PRIVATE-VALUE" } },
+  {
+    content: [{ type: "text", text: "Ticket 8 was filed." }],
+    structuredContent: { status: "pending-PRIVATE-VALUE" },
+  },
 ];
 
 test("advisory output checks return a tool's real reply unchanged with a data-free diagnostic; strict still rejects it", async (t) => {
@@ -205,8 +378,15 @@ test("advisory output checks return a tool's real reply unchanged with a data-fr
   const guard = createMcpToolCallGuard([{ name: toolName, outputSchema: TICKET_SCHEMA }]);
   const diagnostics: string[] = [];
   for (const reply of TICKET_REPLIES) {
-    const result = await guardedMcpToolCall(guard, client, { name: toolName, arguments: {} },
-      { outputSchema: "advisory", onOutputSchemaDiagnostic: (diagnostic) => diagnostics.push(diagnostic) });
+    const result = await guardedMcpToolCall(
+      guard,
+      client,
+      { name: toolName, arguments: {} },
+      {
+        outputSchema: "advisory",
+        onOutputSchemaDiagnostic: (diagnostic) => diagnostics.push(diagnostic),
+      },
+    );
     assert.deepEqual(result, reply);
   }
   assert.equal(diagnostics.length, 2);
@@ -214,40 +394,106 @@ test("advisory output checks return a tool's real reply unchanged with a data-fr
   assert.match(diagnostics[1], /does not match the tool's output schema.*enum/u);
   for (const diagnostic of diagnostics) {
     assert.ok(diagnostic.length < 512, "the diagnostic is bounded even for a long tool name");
-    assert.doesNotMatch(diagnostic, /PRIVATE-VALUE|Ticket \d/u, "the diagnostic never carries the returned data");
+    assert.doesNotMatch(
+      diagnostic,
+      /PRIVATE-VALUE|Ticket \d/u,
+      "the diagnostic never carries the returned data",
+    );
   }
 
   // Strict is the default, and stays the rule for parsers: both replies reject.
-  await assert.rejects(guardedMcpToolCall(guard, client, { name: toolName, arguments: {} }), /did not return structured content/u);
-  await assert.rejects(guardedMcpToolCall(guard, client, { name: toolName, arguments: {} }, { outputSchema: "strict" }), /output schema/u);
+  await assert.rejects(
+    guardedMcpToolCall(guard, client, { name: toolName, arguments: {} }),
+    /did not return structured content/u,
+  );
+  await assert.rejects(
+    guardedMcpToolCall(
+      guard,
+      client,
+      { name: toolName, arguments: {} },
+      { outputSchema: "strict" },
+    ),
+    /output schema/u,
+  );
   assert.throws(() => guard.validateResult(toolName, TICKET_REPLIES[1]), /output schema/u);
 
   // A conforming reply or a tool error reports nothing in either mode.
-  assert.equal(guard.validateResult(toolName, { content: [], structuredContent: { status: "open" } }, "advisory"), undefined);
+  assert.equal(
+    guard.validateResult(
+      toolName,
+      { content: [], structuredContent: { status: "open" } },
+      "advisory",
+    ),
+    undefined,
+  );
   assert.equal(guard.validateResult(toolName, { isError: true, content: [] }, "strict"), undefined);
 });
 
 test("an advisory diagnostic stays one inert line when the server names its tool and schema with control characters", () => {
   const hostileName = "file_ticket\r\naiden: forged line\u001b[2J\u2028\u202e";
   const hostileProperty = "status\n\u001b]0;title\u0007";
-  const guard = createMcpToolCallGuard([{ name: hostileName,
-    outputSchema: { type: "object", properties: { [hostileProperty]: { type: "string" } }, required: [hostileProperty] } }]);
-  const diagnostic = guard.validateResult(hostileName, { content: [], structuredContent: { [hostileProperty]: 7 } }, "advisory");
+  const guard = createMcpToolCallGuard([
+    {
+      name: hostileName,
+      outputSchema: {
+        type: "object",
+        properties: { [hostileProperty]: { type: "string" } },
+        required: [hostileProperty],
+      },
+    },
+  ]);
+  const diagnostic = guard.validateResult(
+    hostileName,
+    { content: [], structuredContent: { [hostileProperty]: 7 } },
+    "advisory",
+  );
   assert.ok(diagnostic);
-  assert.ok([...diagnostic].every((ch) => ch.codePointAt(0)! >= 0x20 && ch.codePointAt(0) !== 0x7f), "no line breaks or terminal controls reach the sink");
-  assert.match(diagnostic, /^MCP tool "file_ticket\?\?aiden: forged line\?\[2J\?\?": .*First failing rule: #\/properties\/status/u);
+  assert.ok(
+    [...diagnostic].every((ch) => ch.codePointAt(0)! >= 0x20 && ch.codePointAt(0) !== 0x7f),
+    "no line breaks or terminal controls reach the sink",
+  );
+  assert.match(
+    diagnostic,
+    /^MCP tool "file_ticket\?\?aiden: forged line\?\[2J\?\?": .*First failing rule: #\/properties\/status/u,
+  );
 });
 
 test("an advisory agent tool call through the live-client path carries the raw reply to the model", async (t) => {
   let next = 0;
-  const { client } = await rawServerClient(t, (method) => method === "tools/list"
-    ? { tools: [{ name: "file_ticket", inputSchema: { type: "object" }, outputSchema: TICKET_SCHEMA }] }
-    : TICKET_REPLIES[next++]);
-  const read = (live: McpClient) => readGuardedMcpInventory(live, () => listMcpToolInventory({ assertCurrent() {}, listPage: (cursor, signal) => listMcpToolPage(live, cursor, { signal }) }), () => {});
+  const { client } = await rawServerClient(t, (method) =>
+    method === "tools/list"
+      ? {
+          tools: [
+            { name: "file_ticket", inputSchema: { type: "object" }, outputSchema: TICKET_SCHEMA },
+          ],
+        }
+      : TICKET_REPLIES[next++],
+  );
+  const read = (live: McpClient) =>
+    readGuardedMcpInventory(
+      live,
+      () =>
+        listMcpToolInventory({
+          assertCurrent() {},
+          listPage: (cursor, signal) => listMcpToolPage(live, cursor, { signal }),
+        }),
+      () => {},
+    );
   const { guard: discovered } = await read(client);
   const diagnostics: string[] = [];
-  const callAsAgent = () => executeMcpAgentTool(() => callMcpToolOnLiveClient(discovered, client, read, { name: "file_ticket", arguments: {} },
-    { outputSchema: "advisory", onOutputSchemaDiagnostic: (diagnostic) => diagnostics.push(diagnostic) }));
+  const callAsAgent = () =>
+    executeMcpAgentTool(() =>
+      callMcpToolOnLiveClient(
+        discovered,
+        client,
+        read,
+        { name: "file_ticket", arguments: {} },
+        {
+          outputSchema: "advisory",
+          onOutputSchemaDiagnostic: (diagnostic) => diagnostics.push(diagnostic),
+        },
+      ),
+    );
 
   const textOnly = await callAsAgent();
   assert.match((textOnly.content[0] as { text: string }).text, /Ticket 7 was filed\./u);
@@ -255,22 +501,41 @@ test("an advisory agent tool call through the live-client path carries the raw r
 
   const mismatched = await callAsAgent();
   assert.match((mismatched.content[0] as { text: string }).text, /Ticket 8 was filed\./u);
-  assert.deepEqual({ ...mismatched.structuredContent as object }, { status: "pending-PRIVATE-VALUE" });
+  assert.deepEqual(
+    { ...(mismatched.structuredContent as object) },
+    { status: "pending-PRIVATE-VALUE" },
+  );
   assert.equal(diagnostics.length, 2);
 });
 
 test("complete inventory guards preserve early-page output schemas and task requirements", async () => {
-  const tools = await listMcpToolInventory({ assertCurrent() {}, async listPage(cursor) {
-    return cursor === undefined
-      ? { tools: [
-        { name: "validated", outputSchema: { type: "object", properties: { value: { type: "number" } }, required: ["value"] } },
-        { name: "task", execution: { taskSupport: "required" } },
-      ], nextCursor: "second" }
-      : { tools: [{ name: "ordinary" }] };
-  } });
+  const tools = await listMcpToolInventory({
+    assertCurrent() {},
+    async listPage(cursor) {
+      return cursor === undefined
+        ? {
+            tools: [
+              {
+                name: "validated",
+                outputSchema: {
+                  type: "object",
+                  properties: { value: { type: "number" } },
+                  required: ["value"],
+                },
+              },
+              { name: "task", execution: { taskSupport: "required" } },
+            ],
+            nextCursor: "second",
+          }
+        : { tools: [{ name: "ordinary" }] };
+    },
+  });
   const guard = createMcpToolCallGuard(tools);
   assert.throws(() => guard.validateResult("validated", { content: [] }), /structured content/u);
-  assert.throws(() => guard.validateResult("validated", { structuredContent: { value: "wrong" } }), /output schema/u);
+  assert.throws(
+    () => guard.validateResult("validated", { structuredContent: { value: "wrong" } }),
+    /output schema/u,
+  );
   guard.validateResult("validated", { structuredContent: { value: 42 } });
   guard.validateResult("validated", { isError: true, content: [] });
   assert.throws(() => guard.assertCallable("task"), /task-based/u);
@@ -278,9 +543,16 @@ test("complete inventory guards preserve early-page output schemas and task requ
 });
 
 test("tools that reuse a schema $id each validate against their own output schema", () => {
-  const schema = (field: string, nested: boolean) => nested
-    ? { type: "object", properties: { item: { $id: "https://fixture.test/item", type: "object", required: [field] } }, required: ["item"] }
-    : { $id: "https://fixture.test/out", type: "object", required: [field] };
+  const schema = (field: string, nested: boolean) =>
+    nested
+      ? {
+          type: "object",
+          properties: {
+            item: { $id: "https://fixture.test/item", type: "object", required: [field] },
+          },
+          required: ["item"],
+        }
+      : { $id: "https://fixture.test/out", type: "object", required: [field] };
   for (const nested of [false, true]) {
     const guard = createMcpToolCallGuard([
       { name: "alpha", outputSchema: schema("a", nested) },
@@ -294,16 +566,32 @@ test("tools that reuse a schema $id each validate against their own output schem
     guard.validateResult("beta", wrap({ b: 1 }));
     assert.throws(() => guard.validateResult("beta", wrap({ a: 1 })), /output schema/u);
     guard.validateResult("anonymous", { structuredContent: { c: 1 } });
-    assert.throws(() => guard.validateResult("anonymous", { structuredContent: { a: 1 } }), /output schema/u);
+    assert.throws(
+      () => guard.validateResult("anonymous", { structuredContent: { a: 1 } }),
+      /output schema/u,
+    );
   }
 });
 
 test("an uncompilable output schema blocks only its own tool, before dispatch", async () => {
-  const server = new Server({ name: "schema-fixture", version: "1" }, { capabilities: { tools: {} } });
-  server.setRequestHandler(ListToolsRequestSchema, async () => ({ tools: [
-    { name: "broken", inputSchema: { type: "object" as const }, outputSchema: { type: "object" as const, properties: { value: { $ref: "#/missing" } } } },
-    { name: "healthy", inputSchema: { type: "object" as const }, outputSchema: { type: "object" as const, required: ["value"] } },
-  ] }));
+  const server = new Server(
+    { name: "schema-fixture", version: "1" },
+    { capabilities: { tools: {} } },
+  );
+  server.setRequestHandler(ListToolsRequestSchema, async () => ({
+    tools: [
+      {
+        name: "broken",
+        inputSchema: { type: "object" as const },
+        outputSchema: { type: "object" as const, properties: { value: { $ref: "#/missing" } } },
+      },
+      {
+        name: "healthy",
+        inputSchema: { type: "object" as const },
+        outputSchema: { type: "object" as const, required: ["value"] },
+      },
+    ],
+  }));
   const dispatched: string[] = [];
   server.setRequestHandler(CallToolRequestSchema, async ({ params }) => {
     dispatched.push(params.name);
@@ -311,7 +599,12 @@ test("an uncompilable output schema blocks only its own tool, before dispatch", 
   });
   const client = await connectedClient(server);
   try {
-    const guard = createMcpToolCallGuard(await listMcpToolInventory({ assertCurrent() {}, listPage: (cursor, signal) => listMcpToolPage(client, cursor, { signal }) }));
+    const guard = createMcpToolCallGuard(
+      await listMcpToolInventory({
+        assertCurrent() {},
+        listPage: (cursor, signal) => listMcpToolPage(client, cursor, { signal }),
+      }),
+    );
     const invoke = async (name: string) => {
       guard.assertCallable(name);
       const result = await callMcpTool(client, { name });
@@ -321,7 +614,10 @@ test("an uncompilable output schema blocks only its own tool, before dispatch", 
     await assert.rejects(invoke("broken"), /could not be compiled/u);
     assert.deepEqual((await invoke("healthy")).structuredContent, { value: 1 });
     assert.deepEqual(dispatched, ["healthy"]);
-    assert.throws(() => createMcpToolCallGuard([{ name: "array", outputSchema: [] }]), /Invalid MCP tool output schema/u);
+    assert.throws(
+      () => createMcpToolCallGuard([{ name: "array", outputSchema: [] }]),
+      /Invalid MCP tool output schema/u,
+    );
   } finally {
     await client.close();
     await server.close();
@@ -329,20 +625,34 @@ test("an uncompilable output schema blocks only its own tool, before dispatch", 
 });
 
 test("schema guards preserve server error diagnostics while validating successful output", async () => {
-  const guard = createMcpToolCallGuard([{ name: "lookup", outputSchema: {
-    type: "object", properties: { value: { type: "number" } }, required: ["value"],
-  } }]);
-  const execute = (result: unknown) => executeMcpAgentTool(async () => {
-    guard.validateResult("lookup", result);
-    return result;
-  });
-  await assert.rejects(execute({
-    isError: true,
-    content: [{ type: "text", text: "Lookup permission denied; reconnect the account." }],
-    structuredContent: { code: "PERMISSION_DENIED", retryable: false },
-  }), /Lookup permission denied; reconnect the account/u);
+  const guard = createMcpToolCallGuard([
+    {
+      name: "lookup",
+      outputSchema: {
+        type: "object",
+        properties: { value: { type: "number" } },
+        required: ["value"],
+      },
+    },
+  ]);
+  const execute = (result: unknown) =>
+    executeMcpAgentTool(async () => {
+      guard.validateResult("lookup", result);
+      return result;
+    });
+  await assert.rejects(
+    execute({
+      isError: true,
+      content: [{ type: "text", text: "Lookup permission denied; reconnect the account." }],
+      structuredContent: { code: "PERMISSION_DENIED", retryable: false },
+    }),
+    /Lookup permission denied; reconnect the account/u,
+  );
   for (const isError of [undefined, false, "true"]) {
-    await assert.rejects(execute({ isError, content: [], structuredContent: { code: "PERMISSION_DENIED" } }), /output schema/u);
+    await assert.rejects(
+      execute({ isError, content: [], structuredContent: { code: "PERMISSION_DENIED" } }),
+      /output schema/u,
+    );
     await assert.rejects(execute({ isError, content: [] }), /did not return structured content/u);
   }
   const success = await execute({ isError: false, content: [], structuredContent: { value: 42 } });
@@ -350,14 +660,29 @@ test("schema guards preserve server error diagnostics while validating successfu
 });
 
 test("raw requests preserve errors on every inventory page, envelopes, progress and cancellation", async () => {
-  const server = new Server({ name: "inventory-fixture", version: "1" }, { capabilities: { tools: {} } });
-  const tool = (name: string) => ({ name, inputSchema: { type: "object" as const }, outputSchema: {
-    type: "object" as const, required: ["value"], properties: { value: { type: "number" } },
-  } });
-  server.setRequestHandler(ListToolsRequestSchema, async ({ params }) => params?.cursor
-    ? { tools: [tool("last"), { ...tool("task"), execution: { taskSupport: "required" } }] }
-    : { tools: [tool("first")], nextCursor: "last-page" });
-  let response: unknown = { isError: true, content: [{ type: "text", text: "Account permission denied" }], structuredContent: { code: "DENIED" } };
+  const server = new Server(
+    { name: "inventory-fixture", version: "1" },
+    { capabilities: { tools: {} } },
+  );
+  const tool = (name: string) => ({
+    name,
+    inputSchema: { type: "object" as const },
+    outputSchema: {
+      type: "object" as const,
+      required: ["value"],
+      properties: { value: { type: "number" } },
+    },
+  });
+  server.setRequestHandler(ListToolsRequestSchema, async ({ params }) =>
+    params?.cursor
+      ? { tools: [tool("last"), { ...tool("task"), execution: { taskSupport: "required" } }] }
+      : { tools: [tool("first")], nextCursor: "last-page" },
+  );
+  let response: unknown = {
+    isError: true,
+    content: [{ type: "text", text: "Account permission denied" }],
+    structuredContent: { code: "DENIED" },
+  };
   let calls = 0;
   let entered = () => {};
   let cancelled = () => {};
@@ -365,15 +690,30 @@ test("raw requests preserve errors on every inventory page, envelopes, progress 
     calls++;
     if (params.arguments?.hang) {
       entered();
-      await new Promise<void>(resolve => extra.signal.addEventListener("abort", () => { cancelled(); resolve(); }, { once: true }));
+      await new Promise<void>((resolve) =>
+        extra.signal.addEventListener(
+          "abort",
+          () => {
+            cancelled();
+            resolve();
+          },
+          { once: true },
+        ),
+      );
     } else if (params._meta?.progressToken !== undefined) {
-      await extra.sendNotification({ method: "notifications/progress", params: { progressToken: params._meta.progressToken, progress: 1, total: 1 } });
+      await extra.sendNotification({
+        method: "notifications/progress",
+        params: { progressToken: params._meta.progressToken, progress: 1, total: 1 },
+      });
     }
     return response as CallToolResult;
   });
   const client = await connectedClient(server);
   try {
-    const inventory = await listMcpToolInventory({ assertCurrent() {}, listPage: (cursor, signal) => listMcpToolPage(client, cursor, { signal }) });
+    const inventory = await listMcpToolInventory({
+      assertCurrent() {},
+      listPage: (cursor, signal) => listMcpToolPage(client, cursor, { signal }),
+    });
     const guard = createMcpToolCallGuard(inventory);
     const invoke = async (name: string) => {
       guard.assertCallable(name);
@@ -385,7 +725,10 @@ test("raw requests preserve errors on every inventory page, envelopes, progress 
       const result = await invoke(name);
       assert.equal(result.isError, true);
       assert.deepEqual(result.structuredContent, { code: "DENIED" });
-      await assert.rejects(executeMcpAgentTool(async () => result), /Account permission denied/u);
+      await assert.rejects(
+        executeMcpAgentTool(async () => result),
+        /Account permission denied/u,
+      );
     }
     const dispatched = calls;
     await assert.rejects(invoke("task"), /task-based/u);
@@ -396,23 +739,44 @@ test("raw requests preserve errors on every inventory page, envelopes, progress 
     await assert.rejects(invoke("last"), /boolean|invalid_type/u);
     response = { content: [], structuredContent: { value: 42 } };
     const progress: number[] = [];
-    const success = await callMcpTool(client, { name: "last" }, { onProgress: update => progress.push(update.progress), timeoutMs: 500 });
+    const success = await callMcpTool(
+      client,
+      { name: "last" },
+      { onProgress: (update) => progress.push(update.progress), timeoutMs: 500 },
+    );
     guard.validateResult("last", success);
     assert.deepEqual(success.structuredContent, { value: 42 });
     assert.deepEqual(progress, [1]);
     const controller = new AbortController();
-    const started = new Promise<void>(resolve => { entered = resolve; });
-    const aborted = new Promise<void>(resolve => { cancelled = resolve; });
-    const pending = callMcpTool(client, { name: "last", arguments: { hang: true } }, { signal: controller.signal, timeoutMs: 1_000 });
+    const started = new Promise<void>((resolve) => {
+      entered = resolve;
+    });
+    const aborted = new Promise<void>((resolve) => {
+      cancelled = resolve;
+    });
+    const pending = callMcpTool(
+      client,
+      { name: "last", arguments: { hang: true } },
+      { signal: controller.signal, timeoutMs: 1_000 },
+    );
     const rejection = assert.rejects(pending, /cancelled by test/u);
     await started;
     controller.abort(new Error("cancelled by test"));
     await rejection;
     await aborted;
-    const timedOut = new Promise<void>(resolve => { cancelled = resolve; });
-    await assert.rejects(callMcpTool(client, { name: "last", arguments: { hang: true } }, {
-      timeoutMs: 10,
-    }), /timed out/u);
+    const timedOut = new Promise<void>((resolve) => {
+      cancelled = resolve;
+    });
+    await assert.rejects(
+      callMcpTool(
+        client,
+        { name: "last", arguments: { hang: true } },
+        {
+          timeoutMs: 10,
+        },
+      ),
+      /timed out/u,
+    );
     await timedOut;
   } finally {
     await client.close();
@@ -422,27 +786,48 @@ test("raw requests preserve errors on every inventory page, envelopes, progress 
 
 test("inventory cache reuses a watched listChanged client's tools until the server announces a change", async () => {
   const connect = async (listChanged: boolean, watch: boolean) => {
-    const server = new Server({ name: "cache-fixture", version: "1" }, { capabilities: { tools: listChanged ? { listChanged: true } : {} } });
+    const server = new Server(
+      { name: "cache-fixture", version: "1" },
+      { capabilities: { tools: listChanged ? { listChanged: true } : {} } },
+    );
     const client = new McpClient({ name: "test-client", version: "1" });
     let names = ["first"];
     let lists = 0;
     let failNext = false;
     server.setRequestHandler(ListToolsRequestSchema, async () => {
       lists += 1;
-      if (failNext) { failNext = false; throw new Error("transient list failure"); }
+      if (failNext) {
+        failNext = false;
+        throw new Error("transient list failure");
+      }
       return { tools: names.map((name) => ({ name, inputSchema: { type: "object" as const } })) };
     });
     const cache = createMcpToolInventoryCache<string[]>();
     if (watch) cache.watch(client);
     await client.connect(await connectSdkServer(server));
-    const read = () => cache.load(client, async () => (await listMcpToolInventory({
-      assertCurrent() {}, listPage: (cursor, signal) => listMcpToolPage(client, cursor, { signal }),
-    })).map(({ name }) => name));
+    const read = () =>
+      cache.load(client, async () =>
+        (
+          await listMcpToolInventory({
+            assertCurrent() {},
+            listPage: (cursor, signal) => listMcpToolPage(client, cursor, { signal }),
+          })
+        ).map(({ name }) => name),
+      );
     return {
-      read, lists: () => lists,
-      change: async (next: string[]) => { names = next; await server.sendToolListChanged(); },
-      failNext: () => { failNext = true; },
-      close: async () => { await client.close(); await server.close(); },
+      read,
+      lists: () => lists,
+      change: async (next: string[]) => {
+        names = next;
+        await server.sendToolListChanged();
+      },
+      failNext: () => {
+        failNext = true;
+      },
+      close: async () => {
+        await client.close();
+        await server.close();
+      },
     };
   };
 
@@ -465,7 +850,10 @@ test("inventory cache reuses a watched listChanged client's tools until the serv
     await cached.close();
   }
 
-  for (const [listChanged, watch] of [[false, true], [true, false]] as const) {
+  for (const [listChanged, watch] of [
+    [false, true],
+    [true, false],
+  ] as const) {
     const uncached = await connect(listChanged, watch);
     try {
       await uncached.read();
@@ -483,7 +871,12 @@ test("a cached inventory waiter stops on its own abort without failing the share
   cache.watch(client);
   let release!: (value: string) => void;
   let reads = 0;
-  const read = () => { reads += 1; return new Promise<string>((resolve) => { release = resolve; }); };
+  const read = () => {
+    reads += 1;
+    return new Promise<string>((resolve) => {
+      release = resolve;
+    });
+  };
   const revoked = new AbortController();
   const abandoned = cache.load(client, read, revoked.signal);
   const survivor = cache.load(client, read);
@@ -503,17 +896,27 @@ test("a server without listChanged reuses its inventory for the TTL, then re-lis
   const server = new Server({ name: "ttl-fixture", version: "1" }, { capabilities: { tools: {} } });
   server.setRequestHandler(ListToolsRequestSchema, async () => {
     lists += 1;
-    if (failNext) { failNext = false; throw new Error("transient list failure"); }
+    if (failNext) {
+      failNext = false;
+      throw new Error("transient list failure");
+    }
     return { tools: names.map((name) => ({ name, inputSchema: { type: "object" as const } })) };
   });
   const client = new McpClient({ name: "test-client", version: "1" });
-  const cache = createMcpToolInventoryCache<{ names: string[]; guard: ReturnType<typeof createMcpToolCallGuard> }>({ ttlMs: 30_000, now: () => now });
+  const cache = createMcpToolInventoryCache<{
+    names: string[];
+    guard: ReturnType<typeof createMcpToolCallGuard>;
+  }>({ ttlMs: 30_000, now: () => now });
   cache.watch(client);
   await client.connect(await connectSdkServer(server));
-  const read = () => cache.load(client, async () => {
-    const tools = await listMcpToolInventory({ assertCurrent() {}, listPage: (cursor, signal) => listMcpToolPage(client, cursor, { signal }) });
-    return { names: tools.map(({ name }) => name), guard: createMcpToolCallGuard(tools) };
-  });
+  const read = () =>
+    cache.load(client, async () => {
+      const tools = await listMcpToolInventory({
+        assertCurrent() {},
+        listPage: (cursor, signal) => listMcpToolPage(client, cursor, { signal }),
+      });
+      return { names: tools.map(({ name }) => name), guard: createMcpToolCallGuard(tools) };
+    });
   try {
     const first = await read();
     now = 29_000;
@@ -548,42 +951,78 @@ test("a list change revokes a published tool and a list response still in flight
   let readOnlyHint = true;
   let change = () => {};
   let calls = 0;
-  const server = new Server({ name: "withdrawal", version: "1" }, { capabilities: { tools: { listChanged: true } } });
+  const server = new Server(
+    { name: "withdrawal", version: "1" },
+    { capabilities: { tools: { listChanged: true } } },
+  );
   server.setRequestHandler(ListToolsRequestSchema, async () => ({
-    tools: offered.map(name => ({
+    tools: offered.map((name) => ({
       name,
       title: name === "renamed" && !readOnlyHint ? "Confirm deletion" : "Preview",
       inputSchema: { type: "object" as const },
       annotations: { readOnlyHint: name === "changed" ? readOnlyHint : true },
     })),
   }));
-  server.setRequestHandler(CallToolRequestSchema, async () => { calls++; return { content: [] }; });
+  server.setRequestHandler(CallToolRequestSchema, async () => {
+    calls++;
+    return { content: [] };
+  });
   const client = new McpClient({ name: "test", version: "1" });
   const cache = createMcpToolInventoryCache<{ guard: ReturnType<typeof createMcpToolCallGuard> }>();
   cache.watch(client);
   client.onNotification("notifications/tools/list_changed", () => change());
   await client.connect(await connectSdkServer(server));
-  t.after(async () => { await client.close(); await server.close(); });
-  const read = () => cache.load(client, async (assertCurrent) => ({
-    guard: createMcpToolCallGuard((await listMcpToolPage(client, undefined)).tools, assertCurrent),
-  }));
+  t.after(async () => {
+    await client.close();
+    await server.close();
+  });
+  const read = () =>
+    cache.load(client, async (assertCurrent) => ({
+      guard: createMcpToolCallGuard(
+        (await listMcpToolPage(client, undefined)).tools,
+        assertCurrent,
+      ),
+    }));
   const discovered = (await read()).guard;
   await callMcpToolOnLiveClient(discovered, client, read, { name: "retired" });
-  const changed = new Promise<void>(resolve => { change = resolve; });
+  const changed = new Promise<void>((resolve) => {
+    change = resolve;
+  });
   offered = ["stable", "changed", "renamed"];
   readOnlyHint = false;
   await server.sendToolListChanged();
   await changed;
-  await assert.rejects(callMcpToolOnLiveClient(discovered, client, read, { name: "retired" }), /no longer offered/u);
-  await assert.rejects(callMcpToolOnLiveClient(discovered, client, read, { name: "changed" }), /effects changed/u);
-  await assert.rejects(callMcpToolOnLiveClient(discovered, client, read, { name: "renamed" }), /changed/u);
+  await assert.rejects(
+    callMcpToolOnLiveClient(discovered, client, read, { name: "retired" }),
+    /no longer offered/u,
+  );
+  await assert.rejects(
+    callMcpToolOnLiveClient(discovered, client, read, { name: "changed" }),
+    /effects changed/u,
+  );
+  await assert.rejects(
+    callMcpToolOnLiveClient(discovered, client, read, { name: "renamed" }),
+    /changed/u,
+  );
   await callMcpToolOnLiveClient(discovered, client, read, { name: "stable" });
   assert.equal(calls, 2);
 
   let release!: () => void;
-  const gate = new Promise<void>(resolve => { release = resolve; });
-  const pending = cache.load(client, async () => { await gate; return { guard: discovered }; }, undefined, true);
-  const changedAgain = new Promise<void>(resolve => { change = resolve; });
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const pending = cache.load(
+    client,
+    async () => {
+      await gate;
+      return { guard: discovered };
+    },
+    undefined,
+    true,
+  );
+  const changedAgain = new Promise<void>((resolve) => {
+    change = resolve;
+  });
   await server.sendToolListChanged();
   await changedAgain;
   release();
@@ -592,72 +1031,136 @@ test("a list change revokes a published tool and a list response still in flight
 
 test("after a reconnect, calls are checked against the live client's inventory, not the one the tools were built from", async (t) => {
   const serve = async (tools: { name: string; outputSchema?: Record<string, unknown> }[]) => {
-    const server = new Server({ name: "reconnect-fixture", version: "1" }, { capabilities: { tools: {} } });
+    const server = new Server(
+      { name: "reconnect-fixture", version: "1" },
+      { capabilities: { tools: {} } },
+    );
     let calls = 0;
     server.setRequestHandler(ListToolsRequestSchema, async () => ({
-      tools: tools.map(({ name, outputSchema }) => ({ name, inputSchema: { type: "object" as const }, ...(outputSchema ? { outputSchema } : {}) })),
+      tools: tools.map(({ name, outputSchema }) => ({
+        name,
+        inputSchema: { type: "object" as const },
+        ...(outputSchema ? { outputSchema } : {}),
+      })),
     }));
     server.setRequestHandler(CallToolRequestSchema, async () => {
       calls += 1;
       return { content: [{ type: "text", text: "ok" }], structuredContent: { count: "many" } };
     });
     const client = await connectedClient(server);
-    t.after(async () => { await client.close(); await server.close(); });
-    const inventory = async () => ({ guard: createMcpToolCallGuard(await listMcpToolInventory({ assertCurrent() {}, listPage: (cursor, signal) => listMcpToolPage(client, cursor, { signal }) })) });
+    t.after(async () => {
+      await client.close();
+      await server.close();
+    });
+    const inventory = async () => ({
+      guard: createMcpToolCallGuard(
+        await listMcpToolInventory({
+          assertCurrent() {},
+          listPage: (cursor, signal) => listMcpToolPage(client, cursor, { signal }),
+        }),
+      ),
+    });
     return { client, inventory, calls: () => calls };
   };
   const before = await serve([{ name: "lookup" }, { name: "retired" }]);
   // The restarted server dropped one tool and now declares an output schema for the other.
-  const after = await serve([{ name: "lookup", outputSchema: { type: "object", properties: { count: { type: "number" } } } }]);
+  const after = await serve([
+    { name: "lookup", outputSchema: { type: "object", properties: { count: { type: "number" } } } },
+  ]);
   const discovered = (await before.inventory()).guard;
 
-  const ok = await callMcpToolOnLiveClient(discovered, before.client, before.inventory, { name: "retired", arguments: {} });
+  const ok = await callMcpToolOnLiveClient(discovered, before.client, before.inventory, {
+    name: "retired",
+    arguments: {},
+  });
   assert.equal(ok.isError, undefined);
   await assert.rejects(
-    callMcpToolOnLiveClient(discovered, after.client, after.inventory, { name: "retired", arguments: {} }),
+    callMcpToolOnLiveClient(discovered, after.client, after.inventory, {
+      name: "retired",
+      arguments: {},
+    }),
     /no longer offered/u,
   );
   assert.equal(after.calls(), 0, "a tool the live server no longer offers is never dispatched");
   await assert.rejects(
-    callMcpToolOnLiveClient(discovered, after.client, after.inventory, { name: "lookup", arguments: {} }),
+    callMcpToolOnLiveClient(discovered, after.client, after.inventory, {
+      name: "lookup",
+      arguments: {},
+    }),
     /schema or effects changed/u,
   );
   assert.equal(after.calls(), 0, "an old handle cannot dispatch a newly declared output contract");
   const refreshed = (await after.inventory()).guard;
   await assert.rejects(
-    callMcpToolOnLiveClient(refreshed, after.client, after.inventory, { name: "lookup", arguments: {} }),
+    callMcpToolOnLiveClient(refreshed, after.client, after.inventory, {
+      name: "lookup",
+      arguments: {},
+    }),
     /does not match the tool's output schema/u,
   );
 });
 
 test("tools whose input schema root is unusable are left out and reported, the rest stay offered", async (t) => {
-  const { client } = await rawServerClient(t, () => ({ tools: [
-    { name: "good", inputSchema: { type: "object", properties: { q: { type: "string" } }, required: ["q"] } },
-    { name: "array-root", inputSchema: { type: "array" } },
-    { name: "untyped-root", inputSchema: {} },
-    { name: "bad-properties", inputSchema: { type: "object", properties: ["q"] } },
-    { name: "bad-required", inputSchema: { type: "object", required: [1] } },
-  ] }));
+  const { client } = await rawServerClient(t, () => ({
+    tools: [
+      {
+        name: "good",
+        inputSchema: { type: "object", properties: { q: { type: "string" } }, required: ["q"] },
+      },
+      { name: "array-root", inputSchema: { type: "array" } },
+      { name: "untyped-root", inputSchema: {} },
+      { name: "bad-properties", inputSchema: { type: "object", properties: ["q"] } },
+      { name: "bad-required", inputSchema: { type: "object", required: [1] } },
+    ],
+  }));
   const skipped: string[] = [];
   const tools = await listMcpToolInventory({
     assertCurrent() {},
-    listPage: boundedMcpToolPageReader(client, 1_000, (name, reason) => skipped.push(`${name}: ${reason}`)),
+    listPage: boundedMcpToolPageReader(client, 1_000, (name, reason) =>
+      skipped.push(`${name}: ${reason}`),
+    ),
   });
-  assert.deepEqual(tools.map(({ name }) => name), ["good"]);
-  assert.deepEqual(skipped.map((entry) => entry.split(":")[0]), ["array-root", "untyped-root", "bad-properties", "bad-required"]);
-  await assert.rejects(listMcpToolPage({ request: async () => ({ tools: [{ inputSchema: { type: "object" } }] }) } as never, undefined),
-    /Invalid entry/u, "a tool without a name still invalidates the page");
+  assert.deepEqual(
+    tools.map(({ name }) => name),
+    ["good"],
+  );
+  assert.deepEqual(
+    skipped.map((entry) => entry.split(":")[0]),
+    ["array-root", "untyped-root", "bad-properties", "bad-required"],
+  );
+  await assert.rejects(
+    listMcpToolPage(
+      { request: async () => ({ tools: [{ inputSchema: { type: "object" } }] }) } as never,
+      undefined,
+    ),
+    /Invalid entry/u,
+    "a tool without a name still invalidates the page",
+  );
 });
 
 test("identical re-listings preserve active guards and conflicting concurrent listings require a fresh read", async () => {
   const client = {};
-  const list = (names: string[]) => readGuardedMcpInventory(client, async () => names.map(name => ({ name })), () => {});
+  const list = (names: string[]) =>
+    readGuardedMcpInventory(
+      client,
+      async () => names.map((name) => ({ name })),
+      () => {},
+    );
   const initial = await list(["one", "two"]);
   await list(["two", "one"]);
   initial.guard.assertCallable("one");
   let release!: () => void;
-  const gate = new Promise<void>(resolve => { release = resolve; });
-  const slow = readGuardedMcpInventory(client, async () => { await gate; return [{ name: "old" }]; }, () => {});
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const slow = readGuardedMcpInventory(
+    client,
+    async () => {
+      await gate;
+      return [{ name: "old" }];
+    },
+    () => {},
+  );
   const removed = await list(["two"]);
   release();
   await assert.rejects(slow, /inventory changed/u);
@@ -666,33 +1169,133 @@ test("identical re-listings preserve active guards and conflicting concurrent li
   (await list(["two"])).guard.assertCallable("two");
 });
 
-test("cache-only observation never joins pending reads and selected renewal survives TTL without reviving changed schemas", async t => {
-  let now = 0, pages = 0, notify: (() => void) | undefined;
-  const cache = createMcpToolInventoryCache<Awaited<ReturnType<typeof readGuardedMcpInventory>>>({ ttlMs: 30, now: () => now });
-  const { client } = await rawServerClient(t, () => { pages++; return { tools: [{ name: pages < 3 ? "read" : "changed", inputSchema: { type: "object" } }] }; });
+test("cache-only observation never joins pending reads and selected renewal survives TTL without reviving changed schemas", async (t) => {
+  let now = 0,
+    pages = 0,
+    notify: (() => void) | undefined;
+  const cache = createMcpToolInventoryCache<Awaited<ReturnType<typeof readGuardedMcpInventory>>>({
+    ttlMs: 30,
+    now: () => now,
+  });
+  const { client } = await rawServerClient(t, () => {
+    pages++;
+    return { tools: [{ name: pages < 3 ? "read" : "changed", inputSchema: { type: "object" } }] };
+  });
   // The real cache's notification protocol is independent of the wire server's capabilities.
-  cache.watch({ onNotification: (_name, listener) => { notify = () => listener({}); } });
-  const source = { serverCapabilities: { tools: {} }, onNotification: (_name: string, listener: (value: unknown) => void) => { notify = () => listener({}); } }; cache.watch(source);
-  let release!: () => void; const wait = new Promise<void>(resolve => { release = resolve; });
-  const first = cache.load(source, async check => { await wait; return readGuardedMcpInventory(client, () => listMcpToolInventory({ assertCurrent: check, listPage: (cursor, signal) => listMcpToolPage(client, cursor, { signal }) }), check); });
-  assert.equal(cache.peek(source), undefined); assert.equal(pages, 0); release(); await first;
-  assert.equal(cache.peek(source)?.tools[0]?.name, "read"); now = 31; assert.equal(cache.peek(source), undefined); assert.equal(pages, 1, "expiry itself performs no metadata request");
+  cache.watch({
+    onNotification: (_name, listener) => {
+      notify = () => listener({});
+    },
+  });
+  const source = {
+    serverCapabilities: { tools: {} },
+    onNotification: (_name: string, listener: (value: unknown) => void) => {
+      notify = () => listener({});
+    },
+  };
+  cache.watch(source);
+  let release!: () => void;
+  const wait = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const first = cache.load(source, async (check) => {
+    await wait;
+    return readGuardedMcpInventory(
+      client,
+      () =>
+        listMcpToolInventory({
+          assertCurrent: check,
+          listPage: (cursor, signal) => listMcpToolPage(client, cursor, { signal }),
+        }),
+      check,
+    );
+  });
+  assert.equal(cache.peek(source), undefined);
+  assert.equal(pages, 0);
+  release();
+  await first;
+  assert.equal(cache.peek(source)?.tools[0]?.name, "read");
+  now = 31;
+  assert.equal(cache.peek(source), undefined);
+  assert.equal(pages, 1, "expiry itself performs no metadata request");
   const publish = cache.publisher(source);
-  const renewal = await cache.load(source, check => readGuardedMcpInventory(client, () => listMcpToolInventory({ assertCurrent: check, listPage: (cursor, signal) => listMcpToolPage(client, cursor, { signal }) }), check), undefined, true); publish(renewal);
-  assert.equal(cache.peek(source)?.tools[0]?.name, "read"); assert.equal(pages, 2);
-  const stalePublisher = cache.publisher(source); notify!(); assert.equal(cache.peek(source), undefined); assert.throws(() => stalePublisher(renewal), /changed/u);
-  const changed = await cache.load(source, check => readGuardedMcpInventory(client, () => listMcpToolInventory({ assertCurrent: check, listPage: (cursor, signal) => listMcpToolPage(client, cursor, { signal }) }), check));
-  assert.equal(changed.tools[0]?.name, "changed"); assert.throws(() => renewal.guard.assertCallable("read"), /changed/u);
+  const renewal = await cache.load(
+    source,
+    (check) =>
+      readGuardedMcpInventory(
+        client,
+        () =>
+          listMcpToolInventory({
+            assertCurrent: check,
+            listPage: (cursor, signal) => listMcpToolPage(client, cursor, { signal }),
+          }),
+        check,
+      ),
+    undefined,
+    true,
+  );
+  publish(renewal);
+  assert.equal(cache.peek(source)?.tools[0]?.name, "read");
+  assert.equal(pages, 2);
+  const stalePublisher = cache.publisher(source);
+  notify!();
+  assert.equal(cache.peek(source), undefined);
+  assert.throws(() => stalePublisher(renewal), /changed/u);
+  const changed = await cache.load(source, (check) =>
+    readGuardedMcpInventory(
+      client,
+      () =>
+        listMcpToolInventory({
+          assertCurrent: check,
+          listPage: (cursor, signal) => listMcpToolPage(client, cursor, { signal }),
+        }),
+      check,
+    ),
+  );
+  assert.equal(changed.tools[0]?.name, "changed");
+  assert.throws(() => renewal.guard.assertCallable("read"), /changed/u);
 });
 
-test("background selected-metadata renewal fences every raw page after authorization changes", async t => {
-  const { withBotConnectorMetadataRenewal, withBotConnectorCachedInventoryScope, botConnectorInventoryCacheOnly } = await import("./bot-connector-inventory-scope.js");
-  let current = true, pages = 0;
-  const { client } = await rawServerClient(t, () => { pages++; current = false; return { tools: [], nextCursor: "never-request" }; });
+test("background selected-metadata renewal fences every raw page after authorization changes", async (t) => {
+  const {
+    withBotConnectorMetadataRenewal,
+    withBotConnectorCachedInventoryScope,
+    botConnectorInventoryCacheOnly,
+  } = await import("./bot-connector-inventory-scope.js");
+  let current = true,
+    pages = 0;
+  const { client } = await rawServerClient(t, () => {
+    pages++;
+    current = false;
+    return { tools: [], nextCursor: "never-request" };
+  });
   await withBotConnectorCachedInventoryScope("selected", async () => {
-    await assert.rejects(withBotConnectorMetadataRenewal({ serverId: "selected", signal: new AbortController().signal, assertCurrent: async () => { if (!current) throw new Error("source allowance revoked"); } }, () => listMcpToolInventory({ assertCurrent() {}, limits: COMPOSIO_WATCH_INVENTORY_LIMITS, listPage: (cursor, signal) => listMcpToolPage(client, cursor, { signal }) })), /revoked/u);
+    await assert.rejects(
+      withBotConnectorMetadataRenewal(
+        {
+          serverId: "selected",
+          signal: new AbortController().signal,
+          assertCurrent: async () => {
+            if (!current) throw new Error("source allowance revoked");
+          },
+        },
+        () =>
+          listMcpToolInventory({
+            assertCurrent() {},
+            limits: COMPOSIO_WATCH_INVENTORY_LIMITS,
+            listPage: (cursor, signal) => listMcpToolPage(client, cursor, { signal }),
+          }),
+      ),
+      /revoked/u,
+    );
     assert.equal(botConnectorInventoryCacheOnly(), true);
-    await assert.rejects(withBotConnectorMetadataRenewal({ serverId: "other", signal: new AbortController().signal, assertCurrent: async () => {} }, async () => undefined), /cannot switch/u);
+    await assert.rejects(
+      withBotConnectorMetadataRenewal(
+        { serverId: "other", signal: new AbortController().signal, assertCurrent: async () => {} },
+        async () => undefined,
+      ),
+      /cannot switch/u,
+    );
   });
   assert.equal(pages, 1, "no second page or replacement connector after the source lost authority");
 });

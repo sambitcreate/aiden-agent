@@ -33,7 +33,10 @@ test("new stores reclaim a bounded number of deleted pages and retain live rows 
   try {
     initializeSqliteReclamation(reopened);
     assert.equal(pragma(reopened, "auto_vacuum"), 2);
-    assert.equal(reopened.prepare("SELECT length(bytes) AS size FROM payload WHERE id=0").get()?.size, 8192);
+    assert.equal(
+      reopened.prepare("SELECT length(bytes) AS size FROM payload WHERE id=0").get()?.size,
+      8192,
+    );
     assert.equal(reopened.prepare("PRAGMA integrity_check").get()?.integrity_check, "ok");
   } finally {
     reopened.close();
@@ -44,7 +47,9 @@ test("existing databases retain their format and contents without a full rewrite
   for (const mode of [0, 1]) {
     const database = new DatabaseSync(":memory:");
     try {
-      database.exec(`PRAGMA auto_vacuum=${mode}; CREATE TABLE payload (text TEXT); INSERT INTO payload VALUES ('keep')`);
+      database.exec(
+        `PRAGMA auto_vacuum=${mode}; CREATE TABLE payload (text TEXT); INSERT INTO payload VALUES ('keep')`,
+      );
       initializeSqliteReclamation(database);
       reclaimSqlitePages(database);
       assert.equal(pragma(database, "auto_vacuum"), mode);

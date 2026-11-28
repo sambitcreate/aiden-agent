@@ -309,7 +309,8 @@ export function parseSubagentRunSnapshotV1(value: unknown): SubagentRunSnapshotV
     (value.providerId !== undefined && !safeText(value.providerId, 160)) ||
     (value.thinkingLevel !== undefined && !isGenerationThinkingLevel(value.thinkingLevel)) ||
     (value.modelSelection !== undefined &&
-      (typeof value.modelSelection !== "string" || !MODEL_SELECTION_SOURCES.has(value.modelSelection))) ||
+      (typeof value.modelSelection !== "string" ||
+        !MODEL_SELECTION_SOURCES.has(value.modelSelection))) ||
     !nonNegativeInteger(value.turns) ||
     !nonNegativeInteger(value.tools) ||
     !nonNegativeInteger(value.tokens) ||
@@ -768,9 +769,7 @@ export function parseSubagentRunSnapshot(value: unknown): SubagentRunSnapshot | 
       : undefined;
 }
 
-export function isSubagentRunStateTerminal(
-  state: SubagentRunState | SubagentRunStateV2,
-): boolean {
+export function isSubagentRunStateTerminal(state: SubagentRunState | SubagentRunStateV2): boolean {
   return SUBAGENT_V2_TERMINAL_STATES.has(state);
 }
 

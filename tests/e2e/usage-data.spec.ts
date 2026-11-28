@@ -13,7 +13,8 @@ const USAGE_SWITCH = { name: "Share anonymous usage and crash data" } as const;
 
 async function storedUsageDataEnabled(settingsFile: string): Promise<boolean | undefined> {
   try {
-    return (await readJsonFile<{ analytics?: { enabled?: boolean } }>(settingsFile)).analytics?.enabled;
+    return (await readJsonFile<{ analytics?: { enabled?: boolean } }>(settingsFile)).analytics
+      ?.enabled;
   } catch (error) {
     // The optimistic switch can update before the first settings file is persisted.
     if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
@@ -23,8 +24,13 @@ async function storedUsageDataEnabled(settingsFile: string): Promise<boolean | u
 
 async function openDiagnosticsSettings(page: Page) {
   await page.getByRole("button", { name: "Settings", exact: true }).click();
-  await page.getByRole("navigation", { name: "Settings" }).getByRole("button", { name: "About", exact: true }).click();
-  const group = page.locator("section.settings-group").filter({ has: page.getByRole("heading", { name: "Usage data" }) });
+  await page
+    .getByRole("navigation", { name: "Settings" })
+    .getByRole("button", { name: "About", exact: true })
+    .click();
+  const group = page
+    .locator("section.settings-group")
+    .filter({ has: page.getByRole("heading", { name: "Usage data" }) });
   await expect(group).toBeVisible();
   return group;
 }
@@ -47,7 +53,9 @@ test.describe("usage data", () => {
     await expect(storedUsageDataEnabled(unreadableFile)).rejects.toMatchObject({ code: "EISDIR" });
   });
 
-  test("is on in onboarding, and turning it off in Settings survives relaunch", async ({ aiden }) => {
+  test("is on in onboarding, and turning it off in Settings survives relaunch", async ({
+    aiden,
+  }) => {
     const onboarding = aiden.page.locator('section[aria-label="Set up Aiden"]');
     await onboarding.getByPlaceholder("Your name").fill(E2E_PROFILE_NAME);
     await onboarding.getByRole("button", { name: /^Next/u }).click();
@@ -63,7 +71,9 @@ test.describe("usage data", () => {
     await onboarding.getByRole("button", { name: "Start using Aiden" }).click();
     await expect(onboarding).toBeHidden();
     // A new install answered the question in onboarding, so the upgrade notice never appears.
-    await expect(aiden.page.getByRole("region", { name: "Aiden now shares anonymous usage data" })).toHaveCount(0);
+    await expect(
+      aiden.page.getByRole("region", { name: "Aiden now shares anonymous usage data" }),
+    ).toHaveCount(0);
 
     const group = await openDiagnosticsSettings(aiden.page);
     const control = group.getByRole("switch", USAGE_SWITCH);

@@ -32,10 +32,7 @@ const SINGLE_LINE_INPUT_TYPES = new Set([
   "number",
 ]);
 
-export function shouldSubmitDialogOnEnter(
-  key: DialogEnterKey,
-  target: DialogEnterTarget,
-): boolean {
+export function shouldSubmitDialogOnEnter(key: DialogEnterKey, target: DialogEnterTarget): boolean {
   if (key.key !== "Enter" || key.isComposing || key.defaultPrevented) return false;
   if (key.shiftKey || key.altKey) return false;
   if (target.inForm) return false;

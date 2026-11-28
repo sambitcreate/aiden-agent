@@ -20,7 +20,8 @@ function truncate(value: string, maximum: number): string {
   return characters.length > maximum ? characters.slice(0, maximum).join("") : characters.join("");
 }
 
-export const BOT_NO_MODEL_MESSAGE = "No AI model set up yet. Set one up first so your Bot can answer.";
+export const BOT_NO_MODEL_MESSAGE =
+  "No AI model set up yet. Set one up first so your Bot can answer.";
 
 /**
  * New bot (plan §4.2): one field. A large preview of the Bot's look, "Name your
@@ -57,7 +58,8 @@ export function BotCreateFlow({
       setError(null);
     }
   }
-  const noModel = catalogQuery.data !== undefined && firstAvailableModel(catalogQuery.data) === undefined;
+  const noModel =
+    catalogQuery.data !== undefined && firstAvailableModel(catalogQuery.data) === undefined;
   const setUpModel = () => {
     onOpenChange(false);
     void navigate({ to: "/settings", search: { section: "providers" } });
@@ -76,7 +78,10 @@ export function BotCreateFlow({
         return;
       }
       // Full access is the default for a new Bot; creating it accepts the notice.
-      if (catalog.notice.requiresAcknowledgement || catalog.notice.acceptedDecision !== "continue_full") {
+      if (
+        catalog.notice.requiresAcknowledgement ||
+        catalog.notice.acceptedDecision !== "continue_full"
+      ) {
         await botsApi.acknowledgeAccessNotice({
           version: BOT_FULL_ACCESS_NOTICE_VERSION,
           decision: "continue_full",

@@ -13,7 +13,14 @@ export function DesignModeBanner({ onWiden, onDismiss }: { onWiden(): void; onDi
       <Button variant="filled" size="small" onClick={onWiden}>
         Widen window
       </Button>
-      <Button iconOnly variant="transparent" size="small" aria-label="Dismiss" title="Dismiss" onClick={onDismiss}>
+      <Button
+        iconOnly
+        variant="transparent"
+        size="small"
+        aria-label="Dismiss"
+        title="Dismiss"
+        onClick={onDismiss}
+      >
         <X />
       </Button>
     </Callout>

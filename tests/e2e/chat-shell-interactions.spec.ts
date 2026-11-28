@@ -1,8 +1,20 @@
 import { execFileSync } from "node:child_process";
 import { writeFile } from "node:fs/promises";
 import path from "node:path";
-import { colorContrastRatio, getPresetVariant, resolveThemeTokens } from "../../renderer/shared/appearance";
-import { chooseFolderlessWorkspace, composerPrimaryButton, expect, expectSquircleButtons, finishLmStudioOnboarding, test, type AidenE2e } from "./fixtures";
+import {
+  colorContrastRatio,
+  getPresetVariant,
+  resolveThemeTokens,
+} from "../../renderer/shared/appearance";
+import {
+  chooseFolderlessWorkspace,
+  composerPrimaryButton,
+  expect,
+  expectSquircleButtons,
+  finishLmStudioOnboarding,
+  test,
+  type AidenE2e,
+} from "./fixtures";
 
 const PASTED_IMAGE_NAME = "Pasted image.png";
 const PRIMARY_MODIFIER = process.platform === "darwin" ? "Meta" : "Control";
@@ -72,8 +84,12 @@ test("chat shell keeps local interactions isolated and keyboard-accessible", asy
   const originalAnnouncer = await announcer.elementHandle();
   const assertAccessibleAnnouncer = async () => {
     await expect(announcer).toHaveCount(1);
-    expect(await announcer.evaluate(el => el.closest('[inert], [aria-hidden="true"]') === null)).toBe(true);
-    expect(await announcer.evaluate((el, original) => el === original, originalAnnouncer)).toBe(true);
+    expect(
+      await announcer.evaluate((el) => el.closest('[inert], [aria-hidden="true"]') === null),
+    ).toBe(true);
+    expect(await announcer.evaluate((el, original) => el === original, originalAnnouncer)).toBe(
+      true,
+    );
   };
   await assertAccessibleAnnouncer();
   const environment = page.getByRole("button", { name: "Show Environment" });
@@ -86,8 +102,12 @@ test("chat shell keeps local interactions isolated and keyboard-accessible", asy
   await expect(quickViewToggle).toHaveAttribute("aria-pressed", "false");
   await environment.click();
   await expect(environmentSurface).toBeVisible();
-  await expect(environmentSurface.getByRole("tab", { name: "New tab", exact: true })).toHaveAttribute("aria-selected", "true");
-  await expect(environmentSurface.getByRole("button", { name: "Files", exact: false })).toBeDisabled();
+  await expect(
+    environmentSurface.getByRole("tab", { name: "New tab", exact: true }),
+  ).toHaveAttribute("aria-selected", "true");
+  await expect(
+    environmentSurface.getByRole("button", { name: "Files", exact: false }),
+  ).toBeDisabled();
   await expect(page.getByRole("button", { name: "Hide Environment" })).toHaveAttribute(
     "aria-pressed",
     "true",
@@ -97,16 +117,15 @@ test("chat shell keeps local interactions isolated and keyboard-accessible", asy
   await expect(quickView).toBeVisible();
   await expect(quickView.getByText("No workspace folder", { exact: true })).toBeVisible();
   await expect(
-    quickView.getByText(
-      "Choose a local workspace to see its environment, changes, and branch.",
-      { exact: true },
-    ),
+    quickView.getByText("Choose a local workspace to see its environment, changes, and branch.", {
+      exact: true,
+    }),
   ).toBeVisible();
   await aiden.app.evaluate(({ BrowserWindow }) => {
     BrowserWindow.getAllWindows()[0].setSize(900, 720);
   });
   await expect(page.locator('[data-environment-stacked="true"]')).toHaveCount(1);
-  await expect(page.locator('[data-environment-surface="tools"]')).toHaveAttribute('inert', '');
+  await expect(page.locator('[data-environment-surface="tools"]')).toHaveAttribute("inert", "");
   await assertAccessibleAnnouncer();
   await expect(quickViewToggle).toHaveAttribute("aria-label", "Hide Quick View");
   await expect(quickViewToggle).toHaveAttribute("aria-pressed", "true");
@@ -155,10 +174,7 @@ test("chat shell keeps local interactions isolated and keyboard-accessible", asy
 
   await sidebarSearch.evaluate((element) => element.blur());
   const visibleSidebarToggle = page.getByRole("button", { name: "Hide sidebar" });
-  await expect(visibleSidebarToggle).toHaveAttribute(
-    "aria-keyshortcuts",
-    `${PRIMARY_MODIFIER}+B`,
-  );
+  await expect(visibleSidebarToggle).toHaveAttribute("aria-keyshortcuts", `${PRIMARY_MODIFIER}+B`);
   await page.keyboard.press(`${PRIMARY_MODIFIER}+B`);
   const sidebarToggle = page.getByRole("button", { name: "Show sidebar" });
   await expect(sidebarToggle).toHaveAttribute("aria-pressed", "false");
@@ -184,12 +200,16 @@ test("chat shell keeps local interactions isolated and keyboard-accessible", asy
 test.describe("with a workspace", () => {
   test.use({ workspaceSeed: true });
 
-  test("joined editor actions keep square hover seams and visible keyboard focus", async ({ aiden }) => {
+  test("joined editor actions keep square hover seams and visible keyboard focus", async ({
+    aiden,
+  }) => {
     const { app, page } = aiden;
     await finishLmStudioOnboarding(page);
     await app.evaluate(({ ipcMain }) => {
       ipcMain.removeHandler("workspaces:externalEditors");
-      ipcMain.handle("workspaces:externalEditors", () => [{ id: "finder", label: "Finder", iconDataUrl: null }]);
+      ipcMain.handle("workspaces:externalEditors", () => [
+        { id: "finder", label: "Finder", iconDataUrl: null },
+      ]);
     });
     // The picker reads the installed editors when it mounts, which can be
     // under onboarding and before the override; read them again.
@@ -203,7 +223,10 @@ test.describe("with a workspace", () => {
     await expect(group).toHaveCSS("border-radius", "16px");
     await expect(group).toHaveCSS("overflow", "visible");
     await expectSquircleButtons(page);
-    for (const [button, seam] of [[open, "right"], [choose, "left"]] as const) {
+    for (const [button, seam] of [
+      [open, "right"],
+      [choose, "left"],
+    ] as const) {
       await button.hover();
       await expect(button).not.toHaveCSS("background-color", "rgba(0, 0, 0, 0)");
       await expect(button).toHaveCSS(`border-top-${seam}-radius`, "0px");
@@ -292,7 +315,8 @@ test.describe("with a workspace", () => {
     await expect(sidebarResizer).toHaveAttribute("aria-valuenow", "340");
 
     const workspaceActions = page.getByRole("button", {
-      name: "Actions for Aiden E2E workspace", exact: true,
+      name: "Actions for Aiden E2E workspace",
+      exact: true,
     });
     await workspaceActions.evaluate((node) => node.scrollIntoView({ block: "end" }));
     const triggerBounds = await workspaceActions.boundingBox();
@@ -354,7 +378,9 @@ test.describe("with a workspace", () => {
     }, originalWindowBounds!);
   });
 
-  test("highlighted menu rows keep readable content and destructive rows stay red", async ({ aiden }) => {
+  test("highlighted menu rows keep readable content and destructive rows stay red", async ({
+    aiden,
+  }) => {
     const { page } = aiden;
     await finishLmStudioOnboarding(page);
     await page.evaluate(async () => {
@@ -371,9 +397,15 @@ test.describe("with a workspace", () => {
     const toHex = (rgb: string) => {
       const channels = /^rgba?\((\d+), (\d+), (\d+)/u.exec(rgb);
       expect(channels, rgb).not.toBeNull();
-      return `#${channels!.slice(1, 4).map((value) => Number(value).toString(16).padStart(2, "0")).join("")}`;
+      return `#${channels!
+        .slice(1, 4)
+        .map((value) => Number(value).toString(16).padStart(2, "0"))
+        .join("")}`;
     };
-    const expectReadableRow = async (row: ReturnType<typeof page.getByRole>, scheme: "light" | "dark") => {
+    const expectReadableRow = async (
+      row: ReturnType<typeof page.getByRole>,
+      scheme: "light" | "dark",
+    ) => {
       const [background, color] = await row.evaluate((node) => {
         const style = getComputedStyle(node);
         return [style.backgroundColor, style.color];
@@ -387,7 +419,8 @@ test.describe("with a workspace", () => {
     for (const scheme of ["light", "dark"] as const) {
       const tokens = resolveThemeTokens(getPresetVariant("aiden", scheme), scheme);
       const fills = await page.evaluate((themeTokens) => {
-        for (const [name, value] of Object.entries(themeTokens)) document.documentElement.style.setProperty(name, value);
+        for (const [name, value] of Object.entries(themeTokens))
+          document.documentElement.style.setProperty(name, value);
         const read = (name: string) => {
           const probe = document.createElement("div");
           probe.style.backgroundColor = `var(${name})`;
@@ -407,7 +440,10 @@ test.describe("with a workspace", () => {
       await page.keyboard.press("Escape");
       await expect(page.getByRole("menu")).toBeHidden();
 
-      const workspaceActions = page.getByRole("button", { name: "Actions for Aiden E2E workspace", exact: true });
+      const workspaceActions = page.getByRole("button", {
+        name: "Actions for Aiden E2E workspace",
+        exact: true,
+      });
       await workspaceActions.focus();
       await workspaceActions.press("Enter");
       const remove = page.getByRole("menuitem", { name: /^Remove “/u });
@@ -482,7 +518,9 @@ test.describe("with a workspace", () => {
     await page.mouse.move(pane!.x + pane!.width / 2, pane!.y + pane!.height / 2);
     await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
     const needsYou = sidebar.getByRole("group", { name: "Needs you" });
-    await expect(needsYou.locator("[data-inbox-status]")).toHaveText(["Approval", "Question"].map((label) => new RegExp(`^${label}`, "u")));
+    await expect(needsYou.locator("[data-inbox-status]")).toHaveText(
+      ["Approval", "Question"].map((label) => new RegExp(`^${label}`, "u")),
+    );
     const expected = [
       "Needs you",
       "Approval chat",
@@ -496,7 +534,9 @@ test.describe("with a workspace", () => {
       .poll(async () => {
         const text = await sidebar.innerText();
         const positions = expected.map((label) => text.indexOf(label));
-        return positions.every((position, index) => position >= 0 && (index === 0 || position > positions[index - 1]!));
+        return positions.every(
+          (position, index) => position >= 0 && (index === 0 || position > positions[index - 1]!),
+        );
       })
       .toBe(true);
 
@@ -508,11 +548,20 @@ test.describe("with a workspace", () => {
       const ringRoom = (element: Element) => {
         const box = element.getBoundingClientRect();
         let clip = element.parentElement;
-        while (clip && getComputedStyle(clip).overflowY === "visible" && getComputedStyle(clip).overflowX === "visible") {
+        while (
+          clip &&
+          getComputedStyle(clip).overflowY === "visible" &&
+          getComputedStyle(clip).overflowX === "visible"
+        ) {
           clip = clip.parentElement;
         }
         const bounds = clip!.getBoundingClientRect();
-        return Math.min(box.top - bounds.top, bounds.bottom - box.bottom, box.left - bounds.left, bounds.right - box.right);
+        return Math.min(
+          box.top - bounds.top,
+          bounds.bottom - box.bottom,
+          box.left - bounds.left,
+          bounds.right - box.right,
+        );
       };
       const opacity = (element: Element) => {
         let product = 1;
@@ -523,7 +572,9 @@ test.describe("with a workspace", () => {
       };
       const toggle = section.querySelector("button[aria-expanded]")!;
       const firstRow = section.querySelector("[data-inbox-row] [data-roving-item]")!;
-      const listRow = document.querySelector("[data-inbox-view] [data-inbox-row] [data-roving-item]")!;
+      const listRow = document.querySelector(
+        "[data-inbox-view] [data-inbox-row] [data-roving-item]",
+      )!;
       document.documentElement.classList.add("window-blurred");
       const blurred = { shelf: opacity(firstRow), list: opacity(listRow) };
       document.documentElement.classList.remove("window-blurred");
@@ -624,7 +675,10 @@ test.describe("with a workspace", () => {
     const neverAsk = options.getByRole("radio", { name: "Approvals: Never ask", exact: true });
     await expect(permission).toHaveAttribute("aria-expanded", "true");
     await expect(permission).not.toHaveAttribute("aria-haspopup");
-    await expect(options).toHaveAttribute("id", await permission.getAttribute("aria-controls") as string);
+    await expect(options).toHaveAttribute(
+      "id",
+      (await permission.getAttribute("aria-controls")) as string,
+    );
     // Clicking the already-selected mode dismisses without a change.
     await neverAsk.click();
     await expect(permission).toHaveAttribute("aria-expanded", "false");
@@ -661,7 +715,9 @@ test.describe("with a workspace", () => {
     await expect(page.locator(".composer-shell textarea")).toBeFocused();
   });
 
-  test("composer footer controls share one row and collapse instead of wrapping", async ({ aiden }) => {
+  test("composer footer controls share one row and collapse instead of wrapping", async ({
+    aiden,
+  }) => {
     const { page } = aiden;
     await finishLmStudioOnboarding(page);
     const composer = page.locator(".composer-responsive");
@@ -678,7 +734,9 @@ test.describe("with a workspace", () => {
       await composer.evaluate((element, px) => {
         (element as HTMLElement).style.width = `${px}px`;
       }, width);
-      await expect.poll(() => composer.evaluate((element) => element.getBoundingClientRect().width)).toBe(width);
+      await expect
+        .poll(() => composer.evaluate((element) => element.getBoundingClientRect().width))
+        .toBe(width);
       const boxes = [];
       for (const control of controls) {
         await expect(control).toBeVisible();
@@ -687,11 +745,15 @@ test.describe("with a workspace", () => {
         boxes.push(box!);
       }
       const centers = boxes.map((box) => box.y + box.height / 2);
-      expect(Math.max(...centers) - Math.min(...centers), `one footer row at ${width}px`).toBeLessThanOrEqual(4);
+      expect(
+        Math.max(...centers) - Math.min(...centers),
+        `one footer row at ${width}px`,
+      ).toBeLessThanOrEqual(4);
       for (let index = 1; index < boxes.length; index += 1) {
-        expect(boxes[index]!.x, `footer controls do not overlap at ${width}px`).toBeGreaterThanOrEqual(
-          boxes[index - 1]!.x + boxes[index - 1]!.width - 0.5,
-        );
+        expect(
+          boxes[index]!.x,
+          `footer controls do not overlap at ${width}px`,
+        ).toBeGreaterThanOrEqual(boxes[index - 1]!.x + boxes[index - 1]!.width - 0.5);
       }
       // The approvals chip drops its label before anything wraps.
       const labelVisible = await permission.evaluate((element) => {
@@ -782,21 +844,32 @@ test("compaction commands keep cancellation available for every engine", async (
   await expect(composer).toBeEditable();
 });
 
-
-test("composer selector menus use opaque theme surfaces on hover and keyboard focus", async ({ aiden }) => {
+test("composer selector menus use opaque theme surfaces on hover and keyboard focus", async ({
+  aiden,
+}) => {
   const { page } = aiden;
   await finishLmStudioOnboarding(page);
   // The deterministic local model has no effort selector. Mount the real component's
   // markup to exercise its hover/focus CSS against the shipped renderer stylesheet.
   // Render outside Playwright, whose JSX transform serializes component objects.
-  const thinkingMarkup = execFileSync(process.execPath, ["--import", "tsx", "--input-type=module", "-e", `
+  const thinkingMarkup = execFileSync(
+    process.execPath,
+    [
+      "--import",
+      "tsx",
+      "--input-type=module",
+      "-e",
+      `
     import { createElement } from "react";
     import { renderToStaticMarkup } from "react-dom/server";
     import { ThinkingControl } from "./renderer/components/thinking-control.tsx";
     process.stdout.write(renderToStaticMarkup(createElement(ThinkingControl, {
       level: "medium", levels: ["off", "low", "medium", "high"], onChange: () => undefined,
     })));
-  `], { encoding: "utf8" });
+  `,
+    ],
+    { encoding: "utf8" },
+  );
   await page.evaluate((markup) => {
     const host = document.createElement("div");
     host.id = "thinking-surface-fixture";
@@ -812,7 +885,8 @@ test("composer selector menus use opaque theme surfaces on hover and keyboard fo
   for (const scheme of ["light", "dark"] as const) {
     const tokens = resolveThemeTokens(getPresetVariant("aiden", scheme), scheme);
     const expected = await page.evaluate((themeTokens) => {
-      for (const [name, value] of Object.entries(themeTokens)) document.documentElement.style.setProperty(name, value);
+      for (const [name, value] of Object.entries(themeTokens))
+        document.documentElement.style.setProperty(name, value);
       const probe = document.createElement("div");
       probe.style.backgroundColor = "var(--surface-popover)";
       document.body.append(probe);
@@ -851,7 +925,14 @@ async function seedPaletteChats({ app, page }: AidenE2e): Promise<void> {
       title: "Repeated palette title",
       createdAt: 1_800_000_000_000,
       updatedAt: 1_800_000_000_000,
-      messages: [{ id: `message-${id}`, role: "user", content: `Opened ${id}`, createdAt: 1_800_000_000_000 }],
+      messages: [
+        {
+          id: `message-${id}`,
+          role: "user",
+          content: `Opened ${id}`,
+          createdAt: 1_800_000_000_000,
+        },
+      ],
     }));
     ipcMain.removeHandler("chats:list");
     ipcMain.handle("chats:list", () => chats);
@@ -867,7 +948,9 @@ async function seedPaletteChats({ app, page }: AidenE2e): Promise<void> {
   await expect(page.locator("textarea")).toBeVisible();
 }
 
-test("holding Command reveals chat shortcuts and typing outside a field lands in the composer", async ({ aiden }) => {
+test("holding Command reveals chat shortcuts and typing outside a field lands in the composer", async ({
+  aiden,
+}) => {
   const { page } = aiden;
   await finishLmStudioOnboarding(page);
   await seedPaletteChats(aiden);
@@ -964,7 +1047,10 @@ test("an Agent Slider stop sets the model the next message runs on", async ({ ai
 
   // Onboarding seeded Fast / Balanced / Smart around the connected model.
   const modelPicker = page.getByRole("button", { name: /^Selected model:/u });
-  await expect(modelPicker).toHaveAttribute("aria-label", /, Balanced on the Agent Slider\. Choose a model\.$/u);
+  await expect(modelPicker).toHaveAttribute(
+    "aria-label",
+    /, Balanced on the Agent Slider\. Choose a model\.$/u,
+  );
   await modelPicker.click();
   const agentSlider = page.getByRole("slider", { name: "Agent Slider" });
   await expect(agentSlider).toHaveAttribute("aria-valuenow", "2");
@@ -981,7 +1067,11 @@ test("an Agent Slider stop sets the model the next message runs on", async ({ ai
   await expect(modelPicker).toHaveAttribute("aria-label", /Smart on the Agent Slider/u);
 
   const prompt = "Agent Slider test: which model answers this?";
-  const reply = lmStudio.enqueueToolScenario!({ prompt, calls: [], finalText: "The Smart stop's model." });
+  const reply = lmStudio.enqueueToolScenario!({
+    prompt,
+    calls: [],
+    finalText: "The Smart stop's model.",
+  });
   await page.locator("textarea").first().fill(prompt);
   await page.getByRole("button", { name: "Send message" }).click();
   await expect.poll(() => reply.completed).toBe(true);
@@ -1015,7 +1105,9 @@ test("sent user prompts can be selected with the pointer", async ({ aiden }) => 
   expect(expected).toContain(selected.trim());
 });
 
-test("chats can be moved between, opened from their menu and deleted from the keyboard alone", async ({ aiden }) => {
+test("chats can be moved between, opened from their menu and deleted from the keyboard alone", async ({
+  aiden,
+}) => {
   const { page } = aiden;
   await finishLmStudioOnboarding(page);
   await seedPaletteChats(aiden);
@@ -1034,7 +1126,9 @@ test("chats can be moved between, opened from their menu and deleted from the ke
   await expect(second).toBeVisible();
 
   // Shift+F10 opens the open chat's row menu where the row is.
-  const row = page.locator('aside button[aria-current="page"]', { hasText: "Repeated palette title" });
+  const row = page.locator('aside button[aria-current="page"]', {
+    hasText: "Repeated palette title",
+  });
   await row.focus();
   await page.keyboard.press("Shift+F10");
   const menu = page.getByRole("menu");
@@ -1070,7 +1164,9 @@ test("chats can be moved between, opened from their menu and deleted from the ke
   await palette.getByRole("combobox").press("Enter");
   const settingsSearch = palette.getByRole("combobox", { name: "Search settings" });
   await settingsSearch.fill("Control this device");
-  await expect(palette.getByRole("option").filter({ hasText: "Control this device" })).toContainText("Connections");
+  await expect(
+    palette.getByRole("option").filter({ hasText: "Control this device" }),
+  ).toContainText("Connections");
   await settingsSearch.fill("");
   await settingsSearch.press("Backspace");
   await palette.getByRole("combobox", { name: "Search commands" }).fill("Go to Scheduled");
@@ -1082,7 +1178,9 @@ test("chats can be moved between, opened from their menu and deleted from the ke
   await expect(second).toBeVisible();
 });
 
-test("F6 moves between areas, arrows move through the chat list, and Command+F finds text in the chat", async ({ aiden }) => {
+test("F6 moves between areas, arrows move through the chat list, and Command+F finds text in the chat", async ({
+  aiden,
+}) => {
   const { page } = aiden;
   await finishLmStudioOnboarding(page);
   await seedPaletteChats(aiden);
@@ -1099,12 +1197,16 @@ test("F6 moves between areas, arrows move through the chat list, and Command+F f
   await page.keyboard.press("Shift+F6");
   await expect(page.getByRole("region", { name: "Conversation" })).toBeFocused();
   await page.keyboard.press("Shift+F6");
-  const openRow = page.locator('aside button[aria-current="page"]', { hasText: "Repeated palette title" });
+  const openRow = page.locator('aside button[aria-current="page"]', {
+    hasText: "Repeated palette title",
+  });
   await expect(openRow).toBeFocused();
 
   // The chat list is one Tab stop; ↓ moves to the next chat and ↩ opens it.
   await page.keyboard.press("ArrowDown");
-  const nextRow = page.locator("aside button[data-roving-item]:focus", { hasText: "Repeated palette title" });
+  const nextRow = page.locator("aside button[data-roving-item]:focus", {
+    hasText: "Repeated palette title",
+  });
   await expect(nextRow).toHaveCount(1);
   await expect(nextRow).not.toHaveAttribute("aria-current", "page");
   await page.keyboard.press("Enter");
@@ -1122,15 +1224,21 @@ test("F6 moves between areas, arrows move through the chat list, and Command+F f
   const find = page.getByRole("searchbox", { name: "Find in chat" });
   await expect(find).toBeFocused();
   await find.fill("palette-chat");
-  await expect(page.getByRole("search", { name: "Find in chat" }).getByRole("status")).toHaveText("1 of 1");
+  await expect(page.getByRole("search", { name: "Find in chat" }).getByRole("status")).toHaveText(
+    "1 of 1",
+  );
   await find.fill("nothing like this");
-  await expect(page.getByRole("search", { name: "Find in chat" }).getByRole("status")).toHaveText("No matches");
+  await expect(page.getByRole("search", { name: "Find in chat" }).getByRole("status")).toHaveText(
+    "No matches",
+  );
   await page.keyboard.press("Escape");
   await expect(find).toBeHidden();
   await expect(message).toBeFocused();
 });
 
-test("the chat list searches by typing, selects a run with Shift+arrows and deletes it from the bulk bar", async ({ aiden }) => {
+test("the chat list searches by typing, selects a run with Shift+arrows and deletes it from the bulk bar", async ({
+  aiden,
+}) => {
   const { app, page } = aiden;
   await finishLmStudioOnboarding(page);
   const workspaceId = await page.evaluate(() => localStorage.getItem("aiden-agent.workspaceId"));
@@ -1142,7 +1250,14 @@ test("the chat list searches by typing, selects a run with Shift+arrows and dele
       title,
       createdAt: 1_800_000_000_000 - index * 60_000,
       updatedAt: 1_800_000_000_000 - index * 60_000,
-      messages: [{ id: `collection-message-${index}`, role: "user", content: `Opened ${title}`, createdAt: 1_800_000_000_000 }],
+      messages: [
+        {
+          id: `collection-message-${index}`,
+          role: "user",
+          content: `Opened ${title}`,
+          createdAt: 1_800_000_000_000,
+        },
+      ],
     }));
     ipcMain.removeHandler("chats:list");
     ipcMain.handle("chats:list", () => chats);
@@ -1187,7 +1302,10 @@ test("the chat list searches by typing, selects a run with Shift+arrows and dele
   await expect(bar).toBeHidden();
   await page.keyboard.press("Shift+ArrowUp");
   await expect(bar.getByRole("status")).toHaveText("2 selected");
-  await expect(page.locator("aside [data-in-selection='true']")).toHaveText([/Mike draft/u, /Nova review/u]);
+  await expect(page.locator("aside [data-in-selection='true']")).toHaveText([
+    /Mike draft/u,
+    /Nova review/u,
+  ]);
 
   await bar.getByRole("button", { name: "Delete" }).click();
   const confirm = page.getByRole("alertdialog", { name: "Delete 2 chats?" });
@@ -1195,14 +1313,20 @@ test("the chat list searches by typing, selects a run with Shift+arrows and dele
   await expect(confirm).toContainText("Nova review");
   await confirm.getByRole("button", { name: "Delete" }).click();
   await expect(confirm).toBeHidden();
-  await expect(page.locator("aside button[data-roving-item]", { hasText: "Mike draft" })).toHaveCount(0);
-  await expect(page.locator("aside button[data-roving-item]", { hasText: "Nova review" })).toHaveCount(0);
+  await expect(
+    page.locator("aside button[data-roving-item]", { hasText: "Mike draft" }),
+  ).toHaveCount(0);
+  await expect(
+    page.locator("aside button[data-roving-item]", { hasText: "Nova review" }),
+  ).toHaveCount(0);
   await expect(bar).toBeHidden();
   // The deleted run was last, so focus lands on the chat before it.
   await expect(focusedRow).toHaveText(/Lima notes/u);
 });
 
-test("saved focus-navigation shortcuts take priority and disabling restores the built-in key", async ({ aiden }) => {
+test("saved focus-navigation shortcuts take priority and disabling restores the built-in key", async ({
+  aiden,
+}) => {
   const { page } = aiden;
   await finishLmStudioOnboarding(page);
   await seedPaletteChats(aiden);
@@ -1210,7 +1334,10 @@ test("saved focus-navigation shortcuts take priority and disabling restores the 
   await expect(page.getByText("Opened palette-chat-first", { exact: true })).toBeVisible();
   const message = page.locator('[data-focus-region="composer"] textarea');
   const palette = page.locator("[data-command-palette-content]");
-  for (const [binding, key] of [["Alt+Up", "Alt+ArrowUp"], ["Shift+F6", "Shift+F6"]]) {
+  for (const [binding, key] of [
+    ["Alt+Up", "Alt+ArrowUp"],
+    ["Shift+F6", "Shift+F6"],
+  ]) {
     await page.evaluate(async (binding) => {
       await window.aidenAPI.ipc.invoke("shortcut:set", { commandId: "model.change", binding });
     }, binding);
@@ -1230,7 +1357,9 @@ test("saved focus-navigation shortcuts take priority and disabling restores the 
   await expect(palette).toBeHidden();
 });
 
-test("Command+/ lists every key, and the menu bar's Help, Go and Chat items show keys and grey out what can't run", async ({ aiden }) => {
+test("Command+/ lists every key, and the menu bar's Help, Go and Chat items show keys and grey out what can't run", async ({
+  aiden,
+}) => {
   const { app, page } = aiden;
   await finishLmStudioOnboarding(page);
   // Setup finishes with the message box ready to type in.
@@ -1276,7 +1405,9 @@ test("Command+/ lists every key, and the menu bar's Help, Go and Chat items show
   await expect(sheet).toBeHidden();
 });
 
-test("Find in chat brings each match into view, even far apart in one tall code block", async ({ aiden }) => {
+test("Find in chat brings each match into view, even far apart in one tall code block", async ({
+  aiden,
+}) => {
   const { app, page } = aiden;
   await finishLmStudioOnboarding(page);
   const workspaceId = await page.evaluate(() => localStorage.getItem("aiden-agent.workspaceId"));
@@ -1292,7 +1423,12 @@ test("Find in chat brings each match into view, even far apart in one tall code 
       updatedAt: 1_800_000_000_000,
       messages: [
         { id: "find-u1", role: "user", content: "Show the log", createdAt: 1_800_000_000_000 },
-        { id: "find-a1", role: "assistant", content: `Here it is:\n\n\`\`\`\n${lines.join("\n")}\n\`\`\``, createdAt: 1_800_000_000_001 },
+        {
+          id: "find-a1",
+          role: "assistant",
+          content: `Here it is:\n\n\`\`\`\n${lines.join("\n")}\n\`\`\``,
+          createdAt: 1_800_000_000_001,
+        },
       ],
     };
     ipcMain.removeHandler("chats:list");
@@ -1312,7 +1448,9 @@ test("Find in chat brings each match into view, even far apart in one tall code 
   // True when the painted current match sits inside the visible conversation.
   const currentMatchVisible = () =>
     page.evaluate(() => {
-      const highlight = (CSS as unknown as { highlights: Map<string, Set<Range>> }).highlights.get("aiden-find-current");
+      const highlight = (CSS as unknown as { highlights: Map<string, Set<Range>> }).highlights.get(
+        "aiden-find-current",
+      );
       const range = highlight ? [...highlight][0] : undefined;
       const scrollport = document.querySelector<HTMLElement>('[data-focus-region="chat"]');
       if (!range || !scrollport) return false;
@@ -1357,7 +1495,10 @@ test("command palette selects each chat with identical labels independently", as
   await search.press("ArrowDown");
   await expect(rows.nth(1)).toHaveAttribute("aria-selected", "true");
   await expect(rows.nth(0)).toHaveAttribute("aria-selected", "false");
-  await expect(search).toHaveAttribute("aria-activedescendant", await rows.nth(1).getAttribute("id") as string);
+  await expect(search).toHaveAttribute(
+    "aria-activedescendant",
+    (await rows.nth(1).getAttribute("id")) as string,
+  );
 
   // Background title/activity updates must refresh cmdk's search index while
   // the palette stays open, including when the current query stops matching.
@@ -1388,7 +1529,10 @@ test("command palette selects each chat with identical labels independently", as
   await search.press("ArrowDown");
   const renamed = palette.getByRole("option", { name: /Zebra orchard renamed/u });
   await expect(renamed).toHaveAttribute("aria-selected", "true");
-  await expect(search).toHaveAttribute("aria-activedescendant", await renamed.getAttribute("id") as string);
+  await expect(search).toHaveAttribute(
+    "aria-activedescendant",
+    (await renamed.getAttribute("id")) as string,
+  );
   await expect(search).toBeFocused();
   await search.press("Enter");
   await expect(palette).toBeHidden();
@@ -1396,7 +1540,9 @@ test("command palette selects each chat with identical labels independently", as
   await expect(page.getByText("Opened palette-chat-first", { exact: true })).toHaveCount(0);
 });
 
-test("command palette selects same-named models from distinct provider identities", async ({ aiden }) => {
+test("command palette selects same-named models from distinct provider identities", async ({
+  aiden,
+}) => {
   const { app, page } = aiden;
   await finishLmStudioOnboarding(page);
   await app.evaluate(({ ipcMain }) => {
@@ -1464,8 +1610,12 @@ test("command palette selects same-named models from distinct provider identitie
   await expect(search).toHaveAttribute("aria-activedescendant", selectedId as string);
   await search.press("Enter");
   await expect(palette).toBeHidden();
-  await expect.poll(() => page.evaluate(() => localStorage.getItem("aiden-agent.providerId"))).toBe("zzq-provider-second");
-  await expect.poll(() => page.evaluate(() => localStorage.getItem("aiden-agent.model"))).toBe("repeated-model");
+  await expect
+    .poll(() => page.evaluate(() => localStorage.getItem("aiden-agent.providerId")))
+    .toBe("zzq-provider-second");
+  await expect
+    .poll(() => page.evaluate(() => localStorage.getItem("aiden-agent.model")))
+    .toBe("repeated-model");
 });
 
 test("command palette shows each model's and provider's own logo", async ({ aiden }) => {
@@ -1475,12 +1625,37 @@ test("command palette shows each model's and provider's own logo", async ({ aide
     // A 1x1 PNG stands in for a custom connection's own picture.
     const artwork = {
       mimeType: "image/png",
-      dataBase64: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==",
+      dataBase64:
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==",
     };
     const providers = [
-      { id: "zai", kind: "openai", label: "Z.AI", models: ["glm-5.3"], needsKey: true, hasKey: true, isBuiltin: true },
-      { id: "anthropic", kind: "openai", label: "Anthropic", models: ["claude-opus-4-1"], needsKey: true, hasKey: true, isBuiltin: true },
-      { id: "deepseek", kind: "openai", label: "DeepSeek", models: ["deepseek-chat"], needsKey: true, hasKey: false, isBuiltin: true },
+      {
+        id: "zai",
+        kind: "openai",
+        label: "Z.AI",
+        models: ["glm-5.3"],
+        needsKey: true,
+        hasKey: true,
+        isBuiltin: true,
+      },
+      {
+        id: "anthropic",
+        kind: "openai",
+        label: "Anthropic",
+        models: ["claude-opus-4-1"],
+        needsKey: true,
+        hasKey: true,
+        isBuiltin: true,
+      },
+      {
+        id: "deepseek",
+        kind: "openai",
+        label: "DeepSeek",
+        models: ["deepseek-chat"],
+        needsKey: true,
+        hasKey: false,
+        isBuiltin: true,
+      },
       {
         id: "custom:studio-box",
         kind: "openai",
@@ -1563,13 +1738,18 @@ for (const mode of [
   { command: "provider.manage", label: "providers" },
   { command: "settings.search", label: "settings" },
 ]) {
-  test(`command palette direct ${mode.label} entry discards stale root selection`, async ({ aiden }) => {
+  test(`command palette direct ${mode.label} entry discards stale root selection`, async ({
+    aiden,
+  }) => {
     const { app, page } = aiden;
     await finishLmStudioOnboarding(page);
     await page.keyboard.press(`${PRIMARY_MODIFIER}+k`);
     const palette = page.locator("[data-command-palette-content]");
     await palette.getByRole("combobox").fill("Toggle sidebar");
-    await expect(palette.getByRole("option", { name: /Toggle sidebar/u })).toHaveAttribute("aria-selected", "true");
+    await expect(palette.getByRole("option", { name: /Toggle sidebar/u })).toHaveAttribute(
+      "aria-selected",
+      "true",
+    );
     await page.keyboard.press("Escape");
     await expect(palette).toBeHidden();
     await app.evaluate(({ BrowserWindow, ipcMain }, command) => {
@@ -1588,14 +1768,18 @@ for (const mode of [
     await expect(selected).toHaveAttribute("aria-disabled", "false");
     await search.press("Enter");
     if (mode.label === "providers") {
-      await expect(page.getByText("Provider model catalogs refreshed", { exact: true })).toBeVisible();
+      await expect(
+        page.getByText("Provider model catalogs refreshed", { exact: true }),
+      ).toBeVisible();
     } else {
       await expect(palette).toBeHidden();
     }
   });
 }
 
-test("command palette clears hidden and disabled selection and reselects across back navigation", async ({ aiden }) => {
+test("command palette clears hidden and disabled selection and reselects across back navigation", async ({
+  aiden,
+}) => {
   const { page } = aiden;
   await finishLmStudioOnboarding(page);
   await chooseFolderlessWorkspace(page);
@@ -1617,36 +1801,51 @@ test("command palette clears hidden and disabled selection and reselects across 
   await search.fill("Search chats");
   await search.press("Enter");
   await expect(search).toHaveAttribute("aria-label", "Search chats");
-  await expect(palette.getByRole("option", { name: /^New chat/u })).toHaveAttribute("aria-selected", "true");
+  await expect(palette.getByRole("option", { name: /^New chat/u })).toHaveAttribute(
+    "aria-selected",
+    "true",
+  );
   await search.press("Escape");
   await expect(search).toHaveAttribute("aria-label", "Search commands");
   await expect(palette.locator('[role="option"][aria-selected="true"]')).toHaveCount(1);
   // Search chats is now the recent root command. Enter re-enters that mode,
   // and the next Enter activates its New chat default without arrow recovery.
-  await expect(palette.getByRole("option", { name: "Search chats" })).toHaveAttribute("aria-selected", "true");
+  await expect(palette.getByRole("option", { name: "Search chats" })).toHaveAttribute(
+    "aria-selected",
+    "true",
+  );
   await search.press("Enter");
   await expect(search).toHaveAttribute("aria-label", "Search chats");
   await search.press("Enter");
   await expect(palette).toBeHidden();
 });
 
-test("command palette loads model results when settings resolve after providers", async ({ aiden }) => {
+test("command palette loads model results when settings resolve after providers", async ({
+  aiden,
+}) => {
   const { app, page } = aiden;
   await finishLmStudioOnboarding(page);
   const settings = await page.evaluate(async () => {
-    const { ipc } = (window as unknown as {
-      aidenAPI: { ipc: { invoke(channel: string): Promise<Record<string, unknown>> } };
-    }).aidenAPI;
+    const { ipc } = (
+      window as unknown as {
+        aidenAPI: { ipc: { invoke(channel: string): Promise<Record<string, unknown>> } };
+      }
+    ).aidenAPI;
     const settings = await ipc.invoke("settings:get");
     delete settings.hiddenModelsByProvider;
     return settings;
   });
   await app.evaluate(({ ipcMain }, settings) => {
     let release!: () => void;
-    const gate = new Promise<void>((resolve) => { release = resolve; });
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
     Object.assign(globalThis, { paletteReleaseSettings: release });
     ipcMain.removeHandler("settings:get");
-    ipcMain.handle("settings:get", async () => { await gate; return settings; });
+    ipcMain.handle("settings:get", async () => {
+      await gate;
+      return settings;
+    });
     const providers = ["first", "second"].map((id) => ({
       id: `late-settings-${id}`,
       kind: "openai",
@@ -1689,7 +1888,9 @@ test("command palette prefers matching provider actions over forced retries", as
   await finishLmStudioOnboarding(page);
   await app.evaluate(({ ipcMain }) => {
     const state = { listCalls: 0, refreshCalls: 0, releaseRefresh: () => {} };
-    const refreshGate = new Promise<void>((resolve) => { state.releaseRefresh = resolve; });
+    const refreshGate = new Promise<void>((resolve) => {
+      state.releaseRefresh = resolve;
+    });
     Object.assign(globalThis, { paletteProviderError: state });
     ipcMain.removeHandler("providers:list");
     ipcMain.handle("providers:list", () => {
@@ -1713,34 +1914,52 @@ test("command palette prefers matching provider actions over forced retries", as
   const palette = page.locator("[data-command-palette-content]");
   const search = palette.getByRole("combobox", { name: "Search providers" });
   const retry = palette.getByRole("option", { name: /Providers could not be loaded/u });
-  const refresh = palette.getByRole("option", { name: /Refresh.*providers|Refresh provider catalogs/u });
+  const refresh = palette.getByRole("option", {
+    name: /Refresh.*providers|Refresh provider catalogs/u,
+  });
   await expect(retry).toBeVisible();
   await search.fill("Retry");
   await expect(retry).toHaveAttribute("aria-selected", "true");
   await search.fill("Refresh");
   // Activate immediately after editing, without waiting for selection or arrows.
   await search.press("Enter");
-  await expect.poll(() => app.evaluate(() =>
-    (globalThis as unknown as { paletteProviderError: { refreshCalls: number } }).paletteProviderError.refreshCalls,
-  )).toBe(1);
+  await expect
+    .poll(() =>
+      app.evaluate(
+        () =>
+          (globalThis as unknown as { paletteProviderError: { refreshCalls: number } })
+            .paletteProviderError.refreshCalls,
+      ),
+    )
+    .toBe(1);
   // Refresh is disabled while busy, so the visible retry becomes the fallback.
   await expect(refresh).toHaveAttribute("aria-disabled", "true");
   await expect(retry).toHaveAttribute("aria-selected", "true");
   await search.fill("🧪 no matching palette result");
   await expect(retry).toHaveAttribute("aria-selected", "true");
-  const callsBeforeRetry = await app.evaluate(() =>
-    (globalThis as unknown as { paletteProviderError: { listCalls: number } }).paletteProviderError.listCalls,
+  const callsBeforeRetry = await app.evaluate(
+    () =>
+      (globalThis as unknown as { paletteProviderError: { listCalls: number } })
+        .paletteProviderError.listCalls,
   );
   await search.press("Enter");
-  await expect.poll(() => app.evaluate(() =>
-    (globalThis as unknown as { paletteProviderError: { listCalls: number } }).paletteProviderError.listCalls,
-  )).toBeGreaterThan(callsBeforeRetry);
+  await expect
+    .poll(() =>
+      app.evaluate(
+        () =>
+          (globalThis as unknown as { paletteProviderError: { listCalls: number } })
+            .paletteProviderError.listCalls,
+      ),
+    )
+    .toBeGreaterThan(callsBeforeRetry);
   await search.fill("");
   await expect(retry).toHaveAttribute("aria-selected", "true");
   await search.fill("Refresh");
   await expect(retry).toHaveAttribute("aria-selected", "true");
   await app.evaluate(() => {
-    (globalThis as unknown as { paletteProviderError: { releaseRefresh: () => void } }).paletteProviderError.releaseRefresh();
+    (
+      globalThis as unknown as { paletteProviderError: { releaseRefresh: () => void } }
+    ).paletteProviderError.releaseRefresh();
   });
   await expect(refresh).toHaveAttribute("aria-disabled", "false");
   // The query is unchanged when Refresh becomes enabled. cmdk does not perform
@@ -1748,41 +1967,62 @@ test("command palette prefers matching provider actions over forced retries", as
   await expect(refresh).toHaveAttribute("aria-selected", "true");
   await expect(retry).toHaveAttribute("aria-selected", "false");
   await search.press("Enter");
-  await expect.poll(() => app.evaluate(() =>
-    (globalThis as unknown as { paletteProviderError: { refreshCalls: number } }).paletteProviderError.refreshCalls,
-  )).toBe(2);
+  await expect
+    .poll(() =>
+      app.evaluate(
+        () =>
+          (globalThis as unknown as { paletteProviderError: { refreshCalls: number } })
+            .paletteProviderError.refreshCalls,
+      ),
+    )
+    .toBe(2);
 });
 
 for (const mode of [
   { command: "chat.search", label: "chats", channel: "chats:list", ordinary: "New chat" },
-  { command: "model.change", label: "models", channel: "providers:list", ordinary: "Aiden E2E Vision" },
+  {
+    command: "model.change",
+    label: "models",
+    channel: "providers:list",
+    ordinary: "Aiden E2E Vision",
+  },
 ]) {
-  test(`command palette ${mode.label} retry fallback follows errors and recovery`, async ({ aiden }) => {
+  test(`command palette ${mode.label} retry fallback follows errors and recovery`, async ({
+    aiden,
+  }) => {
     const { app, page } = aiden;
     await finishLmStudioOnboarding(page);
     const providers = await page.evaluate(() =>
-      (window as unknown as { aidenAPI: { ipc: { invoke(channel: string): Promise<unknown> } } })
-        .aidenAPI.ipc.invoke("providers:list"),
+      (
+        window as unknown as { aidenAPI: { ipc: { invoke(channel: string): Promise<unknown> } } }
+      ).aidenAPI.ipc.invoke("providers:list"),
     );
-    await app.evaluate(({ ipcMain }, { channel, providers }) => {
-      const state = { recovered: false, calls: 0, release: () => {} };
-      const gate = new Promise<void>((resolve) => { state.release = resolve; });
-      // Initial provider loading gates the entire shell; let it reach error so
-      // model mode can open. Chats loading leaves the palette shell available.
-      if (channel === "providers:list") state.release();
-      Object.assign(globalThis, { paletteRecovery: state });
-      ipcMain.removeHandler(channel);
-      ipcMain.handle(channel, async () => {
-        state.calls++;
-        await gate;
-        if (!state.recovered) throw new Error("Intentional palette loading failure");
-        return channel === "chats:list" ? [] : providers;
-      });
-    }, { channel: mode.channel, providers });
+    await app.evaluate(
+      ({ ipcMain }, { channel, providers }) => {
+        const state = { recovered: false, calls: 0, release: () => {} };
+        const gate = new Promise<void>((resolve) => {
+          state.release = resolve;
+        });
+        // Initial provider loading gates the entire shell; let it reach error so
+        // model mode can open. Chats loading leaves the palette shell available.
+        if (channel === "providers:list") state.release();
+        Object.assign(globalThis, { paletteRecovery: state });
+        ipcMain.removeHandler(channel);
+        ipcMain.handle(channel, async () => {
+          state.calls++;
+          await gate;
+          if (!state.recovered) throw new Error("Intentional palette loading failure");
+          return channel === "chats:list" ? [] : providers;
+        });
+      },
+      { channel: mode.channel, providers },
+    );
     await page.reload();
     // The composer waits on these reads; the shell and palette are available
     // while they are pending, which is the loading state under test.
-    await expect(page.getByRole("button", { name: "Settings", exact: true })).toBeVisible({ timeout: 15_000 });
+    await expect(page.getByRole("button", { name: "Settings", exact: true })).toBeVisible({
+      timeout: 15_000,
+    });
     await app.evaluate(({ BrowserWindow }, command) => {
       for (const window of BrowserWindow.getAllWindows()) {
         window.webContents.send("app:command", { commandId: command });
@@ -1793,19 +2033,27 @@ for (const mode of [
     await search.fill("🧪 no matching palette result");
     const selected = palette.locator('[role="option"][aria-selected="true"]');
     if (mode.label === "chats") {
-      await expect(palette.getByRole("option", { name: "Loading chats…" })).toHaveAttribute("aria-disabled", "true");
+      await expect(palette.getByRole("option", { name: "Loading chats…" })).toHaveAttribute(
+        "aria-disabled",
+        "true",
+      );
       await expect(selected).toHaveCount(0);
       await search.press("Enter");
       await expect(palette).toBeVisible();
       await app.evaluate(() => {
-        (globalThis as unknown as { paletteRecovery: { release: () => void } }).paletteRecovery.release();
+        (
+          globalThis as unknown as { paletteRecovery: { release: () => void } }
+        ).paletteRecovery.release();
       });
     }
     const retry = palette.getByRole("option", { name: /could not be loaded/u });
     await expect(retry).toHaveAttribute("aria-selected", "true", { timeout: 15_000 });
     await search.fill(mode.ordinary);
     if (mode.label === "chats") {
-      await expect(palette.getByRole("option", { name: /^New chat/u })).toHaveAttribute("aria-selected", "true");
+      await expect(palette.getByRole("option", { name: /^New chat/u })).toHaveAttribute(
+        "aria-selected",
+        "true",
+      );
       await expect(retry).toHaveAttribute("aria-selected", "false");
     } else {
       // Model errors replace ordinary results; retry is the only enabled row.
@@ -1814,7 +2062,9 @@ for (const mode of [
     await search.fill("🧪 no matching palette result");
     await expect(retry).toHaveAttribute("aria-selected", "true");
     await app.evaluate(() => {
-      (globalThis as unknown as { paletteRecovery: { recovered: boolean } }).paletteRecovery.recovered = true;
+      (
+        globalThis as unknown as { paletteRecovery: { recovered: boolean } }
+      ).paletteRecovery.recovered = true;
     });
     await search.press("Enter");
     await expect(retry).toHaveCount(0);
@@ -1827,7 +2077,9 @@ for (const mode of [
   });
 }
 
-test("a long prompt wraps inside its column, folds behind a chevron, and copies in full from the bubble's corner", async ({ aiden }) => {
+test("a long prompt wraps inside its column, folds behind a chevron, and copies in full from the bubble's corner", async ({
+  aiden,
+}) => {
   const { app, page } = aiden;
   await finishLmStudioOnboarding(page);
   await page.emulateMedia({ reducedMotion: "reduce" });
@@ -1837,7 +2089,10 @@ test("a long prompt wraps inside its column, folds behind a chevron, and copies 
   const prompt = [
     `Add my Umbrel to the global MCP config. The auth header is Authorization: Bearer ${token}.`,
     // Taller than the window once expanded, so Find has to scroll to its match.
-    ...Array.from({ length: 60 }, (_, index) => `Step ${index + 1}: check the server and report what you find.`),
+    ...Array.from(
+      { length: 60 },
+      (_, index) => `Step ${index + 1}: check the server and report what you find.`,
+    ),
     "END-OF-PROMPT",
   ].join("\n");
   await page.locator("textarea").fill(prompt);
@@ -1852,14 +2107,23 @@ test("a long prompt wraps inside its column, folds behind a chevron, and copies 
     bubble.evaluate((element) => {
       const column = element.closest(".chat-content-column")!.getBoundingClientRect();
       const rect = element.getBoundingClientRect();
-      return { left: rect.left, right: rect.right, columnLeft: column.left, columnRight: column.right };
+      return {
+        left: rect.left,
+        right: rect.right,
+        columnLeft: column.left,
+        columnRight: column.right,
+      };
     });
   const box = await geometry();
-  expect(box.left, "the bubble never spills left of the transcript column").toBeGreaterThanOrEqual(box.columnLeft - 0.5);
+  expect(box.left, "the bubble never spills left of the transcript column").toBeGreaterThanOrEqual(
+    box.columnLeft - 0.5,
+  );
   expect(box.right).toBeLessThanOrEqual(box.columnRight + 0.5);
 
   const bodyHeight = () => body.evaluate((element) => element.getBoundingClientRect().height);
-  const lineHeight = await body.evaluate((element) => Number.parseFloat(getComputedStyle(element).lineHeight));
+  const lineHeight = await body.evaluate((element) =>
+    Number.parseFloat(getComputedStyle(element).lineHeight),
+  );
   const folded = await bodyHeight();
   expect(folded, "folded to six lines").toBeLessThanOrEqual(lineHeight * 6 + 1);
 
@@ -1874,8 +2138,16 @@ test("a long prompt wraps inside its column, folds behind a chevron, and copies 
   // Find selects a match in the hidden tail without focusing it; the fold opens so it shows.
   expect(
     await page.evaluate(() =>
-      (window as unknown as { find(text: string, caseSensitive: boolean, backwards: boolean, wrapAround: boolean): boolean })
-        .find("END-OF-PROMPT", false, false, true),
+      (
+        window as unknown as {
+          find(
+            text: string,
+            caseSensitive: boolean,
+            backwards: boolean,
+            wrapAround: boolean,
+          ): boolean;
+        }
+      ).find("END-OF-PROMPT", false, false, true),
     ),
   ).toBe(true);
   await expect(showLess).toHaveAttribute("aria-expanded", "true");
@@ -1888,7 +2160,11 @@ test("a long prompt wraps inside its column, folds behind a chevron, and copies 
         if (!selection || selection.rangeCount === 0 || !scroller) return false;
         const match = selection.getRangeAt(0).getBoundingClientRect();
         const view = scroller.getBoundingClientRect();
-        return selection.toString() === "END-OF-PROMPT" && match.top >= view.top && match.bottom <= view.bottom;
+        return (
+          selection.toString() === "END-OF-PROMPT" &&
+          match.top >= view.top &&
+          match.bottom <= view.bottom
+        );
       }),
     )
     .toBe(true);
@@ -1916,7 +2192,9 @@ test("a long prompt wraps inside its column, folds behind a chevron, and copies 
 test.describe("mentions in a workspace", () => {
   test.use({ workspaceSeed: true });
 
-  test("@ in the composer picks a workspace file into one chip that Backspace removes whole", async ({ aiden }) => {
+  test("@ in the composer picks a workspace file into one chip that Backspace removes whole", async ({
+    aiden,
+  }) => {
     const { page } = aiden;
     await writeFile(path.join(aiden.workspaceDir, "mention-target.md"), "# Notes\n");
     await finishLmStudioOnboarding(page);
@@ -1931,7 +2209,10 @@ test.describe("mentions in a workspace", () => {
 
     await composer.fill("");
     await composer.fill("see @mention-ta");
-    await expect(files.getByRole("option", { name: /^mention-target\.md/u })).toHaveAttribute("aria-selected", "true");
+    await expect(files.getByRole("option", { name: /^mention-target\.md/u })).toHaveAttribute(
+      "aria-selected",
+      "true",
+    );
     await composer.press("Enter");
     await expect(files).toBeHidden();
     await expect(composer).toHaveValue("see ");
@@ -1946,7 +2227,9 @@ test.describe("mentions in a workspace", () => {
   });
 });
 
-test("↑ in an empty composer shows message history with each previous reply and recalls prompts", async ({ aiden }) => {
+test("↑ in an empty composer shows message history with each previous reply and recalls prompts", async ({
+  aiden,
+}) => {
   const { app, page } = aiden;
   await finishLmStudioOnboarding(page);
   const workspaceId = await page.evaluate(() => localStorage.getItem("aiden-agent.workspaceId"));
@@ -1960,9 +2243,19 @@ test("↑ in an empty composer shows message history with each previous reply an
       updatedAt: 1_800_000_120_000,
       messages: [
         { id: "h-u1", role: "user", content: "Plan the release", createdAt: 1_800_000_000_000 },
-        { id: "h-a1", role: "assistant", content: "First reply with milestones.", createdAt: 1_800_000_010_000 },
+        {
+          id: "h-a1",
+          role: "assistant",
+          content: "First reply with milestones.",
+          createdAt: 1_800_000_010_000,
+        },
         { id: "h-u2", role: "user", content: "Make it shorter", createdAt: 1_800_000_060_000 },
-        { id: "h-a2", role: "assistant", content: "Compact two-step release summary.", createdAt: 1_800_000_070_000 },
+        {
+          id: "h-a2",
+          role: "assistant",
+          content: "Compact two-step release summary.",
+          createdAt: 1_800_000_070_000,
+        },
       ],
     };
     ipcMain.removeHandler("chats:list");
@@ -1978,7 +2271,9 @@ test("↑ in an empty composer shows message history with each previous reply an
   await page.reload();
   const composer = page.locator("textarea");
   await expect(composer).toBeVisible();
-  await expect(page.getByRole("complementary").getByRole("button", { name: "History demo", exact: true })).toBeVisible();
+  await expect(
+    page.getByRole("complementary").getByRole("button", { name: "History demo", exact: true }),
+  ).toBeVisible();
   await composer.focus();
   await page.keyboard.press(`${PRIMARY_MODIFIER}+1`);
   await expect(page.getByText("Compact two-step release summary.")).toBeVisible();

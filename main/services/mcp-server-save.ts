@@ -75,9 +75,14 @@ async function stageForSave(
 ): Promise<{ staged: McpServer; launchUnchanged: boolean }> {
   // Additive only: nothing the configured record resolves changes until
   // the new record is published.
-  const staged = await stageStoredMcpFieldSecrets(serverId, plan, isCurrent, { fromEditor: options.approveLaunch === true || options.fromEditor === true, current });
+  const staged = await stageStoredMcpFieldSecrets(serverId, plan, isCurrent, {
+    fromEditor: options.approveLaunch === true || options.fromEditor === true,
+    current,
+  });
   const baseline = mcpFieldSecretCleanupBaseline(current, plan);
-  const launchUnchanged = current?.transport === "stdio" && baseline !== undefined &&
+  const launchUnchanged =
+    current?.transport === "stdio" &&
+    baseline !== undefined &&
     mcpStdioLaunchFingerprint(baseline) === mcpStdioLaunchFingerprint(staged) &&
     (await mcpStdioApprovals.isApproved(current));
   return { staged, launchUnchanged };
@@ -110,16 +115,28 @@ async function reviewEditorLaunch(
       const next = target(current);
       if (!next) return undefined;
       const plan = planMcpServerFieldSecrets(next, { reuse: { current, values: storedValues } });
-      const { staged, launchUnchanged } = await stageForSave(serverId, current, plan, isCurrent, options);
-      return staged.transport === "stdio" && !launchUnchanged ? resolveStoredMcpFieldSecrets(staged) : undefined;
+      const { staged, launchUnchanged } = await stageForSave(
+        serverId,
+        current,
+        plan,
+        isCurrent,
+        options,
+      );
+      return staged.transport === "stdio" && !launchUnchanged
+        ? resolveStoredMcpFieldSecrets(staged)
+        : undefined;
     },
     isCurrent,
   );
   if (!effective) return undefined;
   if (!(await confirmMcpLaunch(effective))) {
     // Drop the values staged for the launch that was not approved.
-    await mutateMcpWithCredentialCleanup(serverId, () => null, (current) => pruneStoredMcpFieldSecrets(serverId, current), isCurrent)
-      .catch(() => undefined);
+    await mutateMcpWithCredentialCleanup(
+      serverId,
+      () => null,
+      (current) => pruneStoredMcpFieldSecrets(serverId, current),
+      isCurrent,
+    ).catch(() => undefined);
     throw new Error("Launch review cancelled.");
   }
   if (!isCurrent()) throw new Error("The renderer document is no longer active.");
@@ -137,7 +154,9 @@ async function saveWithFieldSecrets(
   isCurrent: () => boolean,
   options: SaveConfiguredMcpServerOptions,
 ): Promise<McpServer | undefined> {
-  const reviewed = options.approveLaunch ? await reviewEditorLaunch(serverId, target, isCurrent, options) : undefined;
+  const reviewed = options.approveLaunch
+    ? await reviewEditorLaunch(serverId, target, isCurrent, options)
+    : undefined;
   // Planning runs synchronously inside the mutation, so the stored values it
   // compares against are read first. They only choose which markers to reuse;
   // staging validates every kept marker again.
@@ -159,7 +178,13 @@ async function saveWithFieldSecrets(
       // already allowed. Like the field secrets, the approval is additive until
       // the record is published, so a failed save keeps the configured launch
       // runnable; afterwards only the published launch stays approved.
-      const { staged, launchUnchanged } = await stageForSave(serverId, current, plan, isCurrent, options);
+      const { staged, launchUnchanged } = await stageForSave(
+        serverId,
+        current,
+        plan,
+        isCurrent,
+        options,
+      );
       if (options.approveLaunch && staged.transport === "stdio" && !launchUnchanged) {
         const effective = await resolveStoredMcpFieldSecrets(staged);
         if (reviewed === undefined || mcpStdioLaunchFingerprint(effective) !== reviewed) {
@@ -172,7 +197,9 @@ async function saveWithFieldSecrets(
         options.approveLaunch === true || launchUnchanged,
         async () => {
           await mcpManager.disconnect(serverId);
-          return withMcpConfigurationPublication(serverId, () => configStore.saveMcpServer(staged, isCurrent));
+          return withMcpConfigurationPublication(serverId, () =>
+            configStore.saveMcpServer(staged, isCurrent),
+          );
         },
       );
       // Committed: values the published record no longer resolves can go.
@@ -191,15 +218,28 @@ async function saveWithFieldSecrets(
  * next time. Local launch consent is independent: sealing never approves a
  * pending command. Its exact values are reviewed only in a foreground action.
  */
-export async function sealPlaintextMcpServerFields(serverIds?: readonly string[], options: { throwOnError?: boolean } = {}): Promise<void> {
-  const servers = (await configStore.listMcpServers())
-    .filter((server) => !serverIds || serverIds.includes(server.id));
+export async function sealPlaintextMcpServerFields(
+  serverIds?: readonly string[],
+  options: { throwOnError?: boolean } = {},
+): Promise<void> {
+  const servers = (await configStore.listMcpServers()).filter(
+    (server) => !serverIds || serverIds.includes(server.id),
+  );
   for (const server of servers.filter(hasPlaintextMcpFields)) {
     try {
-      await saveWithFieldSecrets(server.id, (current) => (current && hasPlaintextMcpFields(current) ? current : undefined), () => true, {});
+      await saveWithFieldSecrets(
+        server.id,
+        (current) => (current && hasPlaintextMcpFields(current) ? current : undefined),
+        () => true,
+        {},
+      );
     } catch (error) {
       if (options.throwOnError) throw error;
-      logger.warn("mcp", `Could not move the env and header values of MCP server ${server.id} into the keychain.`, error);
+      logger.warn(
+        "mcp",
+        `Could not move the env and header values of MCP server ${server.id} into the keychain.`,
+        error,
+      );
     }
   }
 }

@@ -1,11 +1,6 @@
 /* global URL */
 
-import {
-  existsSync,
-  globSync,
-  readdirSync,
-  readFileSync,
-} from "node:fs";
+import { existsSync, globSync, readdirSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -64,7 +59,9 @@ export function discoverTestFiles(root = PROJECT_ROOT) {
     if (!existsSync(absolute)) continue;
     for (const entry of readdirSync(absolute, { recursive: true, withFileTypes: true })) {
       if (!entry.isFile() || !TEST_FILE_PATTERN.test(entry.name)) continue;
-      const file = path.relative(root, path.join(entry.parentPath, entry.name)).replaceAll(path.sep, "/");
+      const file = path
+        .relative(root, path.join(entry.parentPath, entry.name))
+        .replaceAll(path.sep, "/");
       if (file.split("/").includes("node_modules")) continue;
       files.push(file);
     }
@@ -149,7 +146,9 @@ function consumeEnvironmentAssignments(segment, scriptName) {
       assignments.length === 1 &&
       assignments[0] === "CARGO_TARGET_DIR=../../build/computer-use-broker-test";
     if (!allowed) {
-      throw new Error(`${scriptName} uses unregistered environment assignments: ${assignments.join(" ")}`);
+      throw new Error(
+        `${scriptName} uses unregistered environment assignments: ${assignments.join(" ")}`,
+      );
     }
   }
   return index;
@@ -157,9 +156,7 @@ function consumeEnvironmentAssignments(segment, scriptName) {
 
 function expandTestPath(argument, scriptName) {
   const hasGlob = /[*?{}[\]]/u.test(argument);
-  const matches = hasGlob
-    ? globSync(argument, { cwd: PROJECT_ROOT, nodir: true })
-    : [argument];
+  const matches = hasGlob ? globSync(argument, { cwd: PROJECT_ROOT, nodir: true }) : [argument];
   if (matches.length === 0) {
     throw new Error(`${scriptName} test path did not match any file: ${argument}`);
   }
@@ -204,25 +201,38 @@ function collectDirectTestFiles(segment, scriptName) {
     throw new Error(`${scriptName} uses an unregistered npm command: ${npmCommand}`);
   }
   if (command === "cd") {
-    if (scriptName === "test:computer-use:native" && segment.slice(index).join(" ") === "cd native/computer-use-broker") {
+    if (
+      scriptName === "test:computer-use:native" &&
+      segment.slice(index).join(" ") === "cd native/computer-use-broker"
+    ) {
       return [];
     }
-    throw new Error(`${scriptName} uses an unregistered directory change: ${segment.slice(index).join(" ")}`);
+    throw new Error(
+      `${scriptName} uses an unregistered directory change: ${segment.slice(index).join(" ")}`,
+    );
   }
   if (command === "ruby") {
-    if (scriptName === "test:ios-release" && segment.slice(index).join(" ") === "ruby ios/ci/select_testflight_build_number_test.rb") {
+    if (
+      scriptName === "test:ios-release" &&
+      segment.slice(index).join(" ") === "ruby ios/ci/select_testflight_build_number_test.rb"
+    ) {
       return [];
     }
-    throw new Error(`${scriptName} uses an unregistered Ruby test command: ${segment.slice(index).join(" ")}`);
+    throw new Error(
+      `${scriptName} uses an unregistered Ruby test command: ${segment.slice(index).join(" ")}`,
+    );
   }
   if (command === "playwright") {
     if (
       scriptName === "test:generative-ui" &&
-      segment.slice(index).join(" ") === "playwright test --config=playwright.generative-ui.config.ts --fail-on-flaky-tests"
+      segment.slice(index).join(" ") ===
+        "playwright test --config=playwright.generative-ui.config.ts --fail-on-flaky-tests"
     ) {
       return [];
     }
-    throw new Error(`${scriptName} uses an unregistered Playwright command: ${segment.slice(index).join(" ")}`);
+    throw new Error(
+      `${scriptName} uses an unregistered Playwright command: ${segment.slice(index).join(" ")}`,
+    );
   }
   if (command === "cargo") {
     const cargoCommand = segment.slice(index).join(" ");
@@ -231,7 +241,10 @@ function collectDirectTestFiles(segment, scriptName) {
       "test --locked",
       "clippy --locked --all-targets -- -D warnings",
     ]);
-    if (scriptName === "test:computer-use:native" && allowed.has(cargoCommand.replace(/^cargo /u, ""))) {
+    if (
+      scriptName === "test:computer-use:native" &&
+      allowed.has(cargoCommand.replace(/^cargo /u, ""))
+    ) {
       return [];
     }
     throw new Error(`${scriptName} uses an unregistered Cargo command: ${cargoCommand}`);
@@ -240,7 +253,8 @@ function collectDirectTestFiles(segment, scriptName) {
     const buildCommand = segment.slice(index).join(" ");
     if (
       scriptName === "build:vcc" &&
-      buildCommand === "esbuild main/services/pi-vcc/worker.ts --bundle --platform=node --target=node22 --format=esm --packages=external --outfile=build/main/pi-vcc-worker.js"
+      buildCommand ===
+        "esbuild main/services/pi-vcc/worker.ts --bundle --platform=node --target=node22 --format=esm --packages=external --outfile=build/main/pi-vcc-worker.js"
     ) {
       return [];
     }
@@ -248,13 +262,18 @@ function collectDirectTestFiles(segment, scriptName) {
   }
   if (command === "vite") {
     const buildCommand = segment.slice(index).join(" ");
-    if (scriptName === "build:visual-viewer" && buildCommand === "vite build --config vite.visual-viewer.config.ts") {
+    if (
+      scriptName === "build:visual-viewer" &&
+      buildCommand === "vite build --config vite.visual-viewer.config.ts"
+    ) {
       return [];
     }
     throw new Error(`${scriptName} uses an unregistered Vite command: ${buildCommand}`);
   }
   if (command !== "tsx" && command !== "node") {
-    throw new Error(`${scriptName} uses an unregistered test command: ${segment.slice(index).join(" ")}`);
+    throw new Error(
+      `${scriptName} uses an unregistered test command: ${segment.slice(index).join(" ")}`,
+    );
   }
   if (segment[index + 1] !== "--test") {
     const buildCommand = segment.slice(index).join(" ");
@@ -350,7 +369,12 @@ export function collectSourceTests({
       } else {
         for (const file of collectDirectTestFiles(segment, scriptName)) files.add(file);
         const direct = segment.slice(index);
-        if ((direct[0] === "node" && direct[1] !== "--test") || direct[0] === "esbuild" || direct[0] === "vite") builds.push(direct);
+        if (
+          (direct[0] === "node" && direct[1] !== "--test") ||
+          direct[0] === "esbuild" ||
+          direct[0] === "vite"
+        )
+          builds.push(direct);
       }
     }
     filesByScript.set(scriptName, files);
@@ -358,7 +382,8 @@ export function collectSourceTests({
 
   for (const sourceScript of sourceNames) {
     visit(sourceScript, true);
-    if (!sourceScript.startsWith("pre") && !sourceScript.startsWith("post")) visit(`post${sourceScript}`, false);
+    if (!sourceScript.startsWith("pre") && !sourceScript.startsWith("post"))
+      visit(`post${sourceScript}`, false);
   }
   const files = new Map();
   for (const [scriptName, scriptFiles] of filesByScript) {
@@ -436,7 +461,10 @@ function collectWorkflowScriptTests(registry, packageManifest, workflows) {
     }
   }
   if (entries.length === 0) return new Set();
-  const source = collectSourceTests({ packageManifest, sourceScripts: entries.map((entry) => entry.script) });
+  const source = collectSourceTests({
+    packageManifest,
+    sourceScripts: entries.map((entry) => entry.script),
+  });
   return new Set(source.files.keys());
 }
 
@@ -448,7 +476,9 @@ function manualTestFiles(registry) {
     }
     if (files.has(entry.file)) throw new Error(`Duplicate manual test file: ${entry.file}`);
     if (!TEST_FILE_PATTERN.test(entry.file) || !existsSync(path.join(PROJECT_ROOT, entry.file))) {
-      throw new Error(`Manual test allowlist references a missing or unsupported test file: ${entry.file}`);
+      throw new Error(
+        `Manual test allowlist references a missing or unsupported test file: ${entry.file}`,
+      );
     }
     files.add(entry.file);
   }
@@ -461,14 +491,17 @@ export function validateRegistry({
   workflows = readWorkflows(),
   discoveredFiles = discoverTestFiles(),
 } = {}) {
-  if (registry.version !== 1) throw new Error(`Unsupported CI registry version: ${registry.version}`);
+  if (registry.version !== 1)
+    throw new Error(`Unsupported CI registry version: ${registry.version}`);
   // Sets and Maps below would silently collapse a repeated id, while the
   // runner would still schedule every copy.
   assertUniqueIds(registry.prerequisites, "prerequisite");
   assertUniqueIds(registry.preserved, "preserved");
   for (const hook of RUNNER_LIFECYCLE_HOOKS) {
     if (typeof packageManifest.scripts?.[hook] === "string") {
-      throw new Error(`${hook} would bypass the CI registry; register its tests in pretest:serial or test:serial`);
+      throw new Error(
+        `${hook} would bypass the CI registry; register its tests in pretest:serial or test:serial`,
+      );
     }
   }
   const source = collectSourceTests({
@@ -477,10 +510,22 @@ export function validateRegistry({
   });
   // File coverage alone cannot prove that native builds, browser execution,
   // coverage thresholds, Ruby checks or Rust checks are still executed.
-  for (const script of ["test:browser", "test:generative-ui", "test:terminal:coverage", "test:ios-release", "test:computer-use:native", "test:cli"]) {
+  for (const script of [
+    "test:browser",
+    "test:generative-ui",
+    "test:terminal:coverage",
+    "test:ios-release",
+    "test:computer-use:native",
+    "test:cli",
+  ]) {
     if (!source.visited.includes(script)) continue;
-    if (!(registry.preserved ?? []).some((entry) => entry.sourceScripts?.includes(script) &&
-      JSON.stringify(entry.command) === JSON.stringify(["npm", "run", script]))) {
+    if (
+      !(registry.preserved ?? []).some(
+        (entry) =>
+          entry.sourceScripts?.includes(script) &&
+          JSON.stringify(entry.command) === JSON.stringify(["npm", "run", script]),
+      )
+    ) {
       throw new Error(`Missing preserved execution mode: ${script}`);
     }
   }
@@ -489,16 +534,23 @@ export function validateRegistry({
     ...(registry.lanes ?? []).flatMap((lane) => lane.prerequisites ?? []),
     ...(registry.preserved ?? []).flatMap((entry) => entry.requires ?? []),
   ]);
-  for (const id of prerequisites) if (!usedPrerequisites.has(id)) throw new Error(`Unassigned build prerequisite: ${id}`);
-  for (const id of usedPrerequisites) if (!prerequisites.has(id)) throw new Error(`Unknown build prerequisite: ${id}`);
-  const registeredBuilds = new Set((registry.prerequisites ?? []).flatMap((entry) => {
-    const command = entry.command;
-    return command?.[0] === "npm" && command[1] === "run" && command.length === 3
-      ? tokenizeScript(packageManifest.scripts[command[2]] ?? "", command[2]).map((tokens) => JSON.stringify(tokens))
-      : [JSON.stringify(command)];
-  }));
+  for (const id of prerequisites)
+    if (!usedPrerequisites.has(id)) throw new Error(`Unassigned build prerequisite: ${id}`);
+  for (const id of usedPrerequisites)
+    if (!prerequisites.has(id)) throw new Error(`Unknown build prerequisite: ${id}`);
+  const registeredBuilds = new Set(
+    (registry.prerequisites ?? []).flatMap((entry) => {
+      const command = entry.command;
+      return command?.[0] === "npm" && command[1] === "run" && command.length === 3
+        ? tokenizeScript(packageManifest.scripts[command[2]] ?? "", command[2]).map((tokens) =>
+            JSON.stringify(tokens),
+          )
+        : [JSON.stringify(command)];
+    }),
+  );
   for (const command of source.builds) {
-    if (!registeredBuilds.has(JSON.stringify(command))) throw new Error(`Missing build prerequisite: ${command.join(" ")}`);
+    if (!registeredBuilds.has(JSON.stringify(command)))
+      throw new Error(`Missing build prerequisite: ${command.join(" ")}`);
   }
   const unitFiles = flattenLaneFiles(registry);
   const preservedFiles = registryPreservedFiles(registry, packageManifest);
@@ -506,7 +558,8 @@ export function validateRegistry({
   const lanePreserved = new Map();
   for (const lane of registry.lanes ?? []) {
     for (const id of lane.preserved ?? []) {
-      if (!preservedIds.has(id)) throw new Error(`Lane ${lane.name} references missing preserved command: ${id}`);
+      if (!preservedIds.has(id))
+        throw new Error(`Lane ${lane.name} references missing preserved command: ${id}`);
       const owners = lanePreserved.get(id) ?? [];
       owners.push(lane.name);
       lanePreserved.set(id, owners);
@@ -533,10 +586,14 @@ export function validateRegistry({
   const duplicateUnit = [...unitFiles].filter(([, owners]) => owners.length > 1);
   const overlap = [...unitFiles].filter(([file]) => preservedFiles.has(file));
   if (duplicateUnit.length > 0) {
-    throw new Error(`A unit test file is assigned to multiple lanes: ${duplicateUnit.map(([file]) => file).join(", ")}`);
+    throw new Error(
+      `A unit test file is assigned to multiple lanes: ${duplicateUnit.map(([file]) => file).join(", ")}`,
+    );
   }
   if (overlap.length > 0) {
-    throw new Error(`A test file is both unit and preserved: ${overlap.map(([file]) => file).join(", ")}`);
+    throw new Error(
+      `A test file is both unit and preserved: ${overlap.map(([file]) => file).join(", ")}`,
+    );
   }
 
   for (const file of allAssigned) {
@@ -554,9 +611,13 @@ export function validateRegistry({
   // script names would otherwise never run. Compare the files on disk instead.
   const workflowFiles = collectWorkflowScriptTests(registry, packageManifest, workflows);
   const manualFiles = manualTestFiles(registry);
-  const staleManual = [...manualFiles].filter((file) => sourceFiles.has(file) || workflowFiles.has(file)).sort();
+  const staleManual = [...manualFiles]
+    .filter((file) => sourceFiles.has(file) || workflowFiles.has(file))
+    .sort();
   if (staleManual.length > 0) {
-    throw new Error(`Manual test allowlist names files CI already runs: ${JSON.stringify(staleManual)}`);
+    throw new Error(
+      `Manual test allowlist names files CI already runs: ${JSON.stringify(staleManual)}`,
+    );
   }
   const unrun = discoveredFiles
     .filter((file) => !sourceFiles.has(file) && !workflowFiles.has(file) && !manualFiles.has(file))

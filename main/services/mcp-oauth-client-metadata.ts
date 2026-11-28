@@ -1,9 +1,16 @@
 // Electron-free MCP OAuth client metadata. Every registration uses the
 // client name "Aiden Agent" (`mcpOAuthClientNameForServer` is the single source).
 
-import { OAuthError, OAuthIssuerMismatchError, OAuthRegistrationError } from "@earendil-works/pi-mcp/oauth";
+import {
+  OAuthError,
+  OAuthIssuerMismatchError,
+  OAuthRegistrationError,
+} from "@earendil-works/pi-mcp/oauth";
 import { mcpOAuthDisplayText } from "./mcp-oauth-session.js";
-import { MCP_OAUTH_LOOPBACK_PORT, MCP_OAUTH_REDIRECT_URI } from "../../renderer/shared/mcp-oauth-config.js";
+import {
+  MCP_OAUTH_LOOPBACK_PORT,
+  MCP_OAUTH_REDIRECT_URI,
+} from "../../renderer/shared/mcp-oauth-config.js";
 
 export { MCP_OAUTH_LOOPBACK_PORT, MCP_OAUTH_REDIRECT_URI };
 
@@ -28,7 +35,10 @@ export interface McpOAuthClientMetadata {
   application_type: "native";
 }
 
-export function mcpOAuthClientMetadata(clientName?: string, redirectUri: string = MCP_OAUTH_REDIRECT_URI): McpOAuthClientMetadata {
+export function mcpOAuthClientMetadata(
+  clientName?: string,
+  redirectUri: string = MCP_OAUTH_REDIRECT_URI,
+): McpOAuthClientMetadata {
   const name = clientName?.trim() || DEFAULT_MCP_OAUTH_CLIENT_NAME;
   return {
     client_name: name,
@@ -60,7 +70,13 @@ function explained(message: string, error: unknown): Error & { cause?: unknown }
 function oauthDescription(body: string): string {
   try {
     const value = JSON.parse(body) as { error_description?: unknown; error?: unknown };
-    const text = mcpOAuthDisplayText(typeof value.error_description === "string" ? value.error_description : typeof value.error === "string" ? value.error : undefined);
+    const text = mcpOAuthDisplayText(
+      typeof value.error_description === "string"
+        ? value.error_description
+        : typeof value.error === "string"
+          ? value.error
+          : undefined,
+    );
     return text ? `: ${text}` : ".";
   } catch {
     return ".";
@@ -87,14 +103,23 @@ export function explainMcpOAuthFailure(error: unknown): Error & { cause?: unknow
   }
   if (error instanceof OAuthRegistrationError) {
     // The response body is the server's to choose (an HTML error page, a stack trace): show only a bounded description.
-    return explained(`This MCP server rejected OAuth client registration (HTTP ${error.status})${oauthDescription(error.body)}`, error);
+    return explained(
+      `This MCP server rejected OAuth client registration (HTTP ${error.status})${oauthDescription(error.body)}`,
+      error,
+    );
   }
   if (error instanceof OAuthError) {
     // Pi reports a token response without an OAuth error document as "HTTP <status>: <body>".
-    const status = error.code === "server_error" ? /\bHTTP (\d{3})\b/u.exec(error.message)?.[1] : undefined;
+    const status =
+      error.code === "server_error" ? /\bHTTP (\d{3})\b/u.exec(error.message)?.[1] : undefined;
     if (status) return explained(`The authorization server answered HTTP ${status}.`, error);
     const description = mcpOAuthDisplayText(error.message);
-    return explained(description && description !== error.code ? `The authorization server returned “${error.code}”: ${description}` : `The authorization server returned “${error.code}”.`, error);
+    return explained(
+      description && description !== error.code
+        ? `The authorization server returned “${error.code}”: ${description}`
+        : `The authorization server returned “${error.code}”.`,
+      error,
+    );
   }
   if (error instanceof OAuthIssuerMismatchError) {
     return explained(

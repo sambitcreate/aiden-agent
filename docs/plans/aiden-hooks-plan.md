@@ -8,13 +8,13 @@ Research baseline: `main` at `8c5903a09` (Pi 1.4.0, Remote revision 47). Ten par
 
 No, not for users or the agent. Aiden has internal extension points, but a person can't attach a script to "before a tool runs" or "when the turn ends", and the agent can't propose one.
 
-| Surface | What exists | Who can use it |
-| --- | --- | --- |
+| Surface                 | What exists                                                                                                                                                                                                                                                                                                                  | Who can use it    |
+| ----------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------- |
 | Desktop workspace chats | `PiAgentRuntimeExtension` (`main/services/pi-agent-runtime-harness.ts:97-143`), composed for `finishTurn`, `transformContext`, `beforeToolCall` and `afterToolCall`. The global registry (`:3153-3205`, "trusted-extension reload") is snapshotted into non-Bot chats at `llm-client.ts:3103` but has no production entries. | Aiden source only |
-| Host approval point | `beforeToolCall` in `llm-client.ts:3780-4250`: Computer Use, Form Fill, workspace approval (`APPROVAL_TOOL_NAMES`), disclosure and memory gates, remembered scopes, then `approvals.request`. | Aiden source only |
-| Bots | pi-durable `hook()` in `bot-runtime/bot-extension.ts:472-600`: `beforeRequest`, `afterResponse`, `onYield`, `beforeCompact`, `beforeTool`. Bots are excluded from the extension registry. | Aiden source only |
-| CLI (`packages/cli`) | pi-coding-agent `pi.on()` (41 events) but `noExtensions: true` in `daemon-chats.ts:195`, `scheduled-inference.ts` and `subagent-worker.ts`; the daemon uses `before_agent_start`, `tool_call` and `session_shutdown` internally. | Aiden source only |
-| Claude Code plugins | `claude-plugin-skill-roots.ts` (PR #571) imports **skills only**. `docs/skills.md` states it does not load plugin hooks, commands, MCP servers or code. | n/a |
+| Host approval point     | `beforeToolCall` in `llm-client.ts:3780-4250`: Computer Use, Form Fill, workspace approval (`APPROVAL_TOOL_NAMES`), disclosure and memory gates, remembered scopes, then `approvals.request`.                                                                                                                                | Aiden source only |
+| Bots                    | pi-durable `hook()` in `bot-runtime/bot-extension.ts:472-600`: `beforeRequest`, `afterResponse`, `onYield`, `beforeCompact`, `beforeTool`. Bots are excluded from the extension registry.                                                                                                                                    | Aiden source only |
+| CLI (`packages/cli`)    | pi-coding-agent `pi.on()` (41 events) but `noExtensions: true` in `daemon-chats.ts:195`, `scheduled-inference.ts` and `subagent-worker.ts`; the daemon uses `before_agent_start`, `tool_call` and `session_shutdown` internally.                                                                                             | Aiden source only |
+| Claude Code plugins     | `claude-plugin-skill-roots.ts` (PR #571) imports **skills only**. `docs/skills.md` states it does not load plugin hooks, commands, MCP servers or code.                                                                                                                                                                      | n/a               |
 
 So the plumbing to intercept tools and turns already exists in three places (desktop harness, Bot durable hooks, CLI `pi.on`). What's missing is a user-owned configuration, a safe process runner, a trust model and an agent-facing way to manage it.
 
@@ -77,6 +77,7 @@ So the plumbing to intercept tools and turns already exists in three places (des
 ### Hooks already on this Mac
 
 Three kinds of hooks are installed here, and Aiden runs none of them:
+
 - the superpowers plugin's SessionStart (injects context);
 - the Codex plugin's SessionStart/SessionEnd and Stop (blocks to keep a turn going);
 - the user's own SessionStart trackers (herdr, rex).
@@ -99,6 +100,7 @@ Three kinds of hooks are installed here, and Aiden runs none of them:
    - This matches how Aiden already treats agent-proposed skills, routines and wake-ups.
 
 Use-case catalogue for the first release, in priority order:
+
 1. format or lint after edit;
 2. block dangerous commands;
 3. tests before Stop;
@@ -154,14 +156,22 @@ Aiden reads a Claude-compatible schema natively:
       {
         "matcher": "run_command|Bash",
         "hooks": [
-          { "type": "command", "command": "~/.aiden/hooks/guard-shell.sh", "timeout": 10, "failClosed": true }
-        ]
-      }
+          {
+            "type": "command",
+            "command": "~/.aiden/hooks/guard-shell.sh",
+            "timeout": 10,
+            "failClosed": true,
+          },
+        ],
+      },
     ],
     "PostToolUse": [
-      { "matcher": "edit_file|write_file", "hooks": [{ "type": "command", "command": "npx prettier --write \"$AIDEN_HOOK_FILE\"" }] }
-    ]
-  }
+      {
+        "matcher": "edit_file|write_file",
+        "hooks": [{ "type": "command", "command": "npx prettier --write \"$AIDEN_HOOK_FILE\"" }],
+      },
+    ],
+  },
 }
 ```
 
@@ -182,6 +192,7 @@ Aiden reads a Claude-compatible schema natively:
   - `computer` → `computer_use`
 
   Payloads sent on stdin include both `tool_name` (Claude spelling) and `aiden_tool_name`. Input keys get Claude aliases (`path` also appears as `file_path`).
+
 - **Environment.**
   - Each run gets a minimal allowlist: `PATH`, `HOME`, `LANG`, `LC_ALL`, `TMPDIR`, plus `AIDEN_PROJECT_DIR`, `AIDEN_HOOK_EVENT`, `AIDEN_SESSION_ID` and the aliases `CLAUDE_PROJECT_DIR` and `CLAUDE_PLUGIN_ROOT`.
   - The model of `subagent-shell-runner-io.ts:208-224` is the one to follow. Do **not** copy `schedule-script.ts`, which passes the full `process.env`; `GH_TOKEN` and other secrets stay out.
@@ -190,19 +201,19 @@ Aiden reads a Claude-compatible schema natively:
 
 ## 6. Events
 
-| Event | Phase | Can | Emit point |
-| --- | --- | --- | --- |
-| `PreToolUse` | 1 | deny, ask, allow (within scope), `updatedInput` (non-shell tools only), context | host `beforeToolCall`, `llm-client.ts` before `workspaceApproval` |
-| `PostToolUse` | 1 | add context, or flag the result to the model | harness `afterToolCall` |
-| `UserPromptSubmit` | 1 | block with reason, add context | prompt intake, `llm-client.ts` ~:2304 |
-| `SessionStart` | 1 | add context | `prepareNextTurnWithContext` on a chat's first turn and after resume or compaction |
-| `Stop` | 1 observe, 3 continue | observe in Phase 1; `decision: block` continues the turn in Phase 3 (needs a continuation path; `finishTurn` can only end a turn today) | `finishTurn` |
-| `Notification` | 1 | observe | approval requested, question asked, turn waiting |
-| `PreCompact` | 3 | add context and memory proposals | harness compaction, Bot `beforeCompact` |
-| `SubagentStop` | 3 | observe | `background-lifecycle-v2.ts` `transition()` |
-| `RoutineRun` / `RoutineFailed` | 3 | observe | `scheduled-bot-routines.ts` `recordRun` |
-| `WorktreeSetup` (Claude's `WorktreeCreate` is listed as unsupported) | 3 | run setup (fills the planned, never-executed worktree setup-script slot) | `first-message-worktree.ts`, `managed-worktree-provisioner.ts` |
-| `SessionEnd` | 3 | observe | chat close and Bot pause |
+| Event                                                                | Phase                 | Can                                                                                                                                     | Emit point                                                                         |
+| -------------------------------------------------------------------- | --------------------- | --------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------- |
+| `PreToolUse`                                                         | 1                     | deny, ask, allow (within scope), `updatedInput` (non-shell tools only), context                                                         | host `beforeToolCall`, `llm-client.ts` before `workspaceApproval`                  |
+| `PostToolUse`                                                        | 1                     | add context, or flag the result to the model                                                                                            | harness `afterToolCall`                                                            |
+| `UserPromptSubmit`                                                   | 1                     | block with reason, add context                                                                                                          | prompt intake, `llm-client.ts` ~:2304                                              |
+| `SessionStart`                                                       | 1                     | add context                                                                                                                             | `prepareNextTurnWithContext` on a chat's first turn and after resume or compaction |
+| `Stop`                                                               | 1 observe, 3 continue | observe in Phase 1; `decision: block` continues the turn in Phase 3 (needs a continuation path; `finishTurn` can only end a turn today) | `finishTurn`                                                                       |
+| `Notification`                                                       | 1                     | observe                                                                                                                                 | approval requested, question asked, turn waiting                                   |
+| `PreCompact`                                                         | 3                     | add context and memory proposals                                                                                                        | harness compaction, Bot `beforeCompact`                                            |
+| `SubagentStop`                                                       | 3                     | observe                                                                                                                                 | `background-lifecycle-v2.ts` `transition()`                                        |
+| `RoutineRun` / `RoutineFailed`                                       | 3                     | observe                                                                                                                                 | `scheduled-bot-routines.ts` `recordRun`                                            |
+| `WorktreeSetup` (Claude's `WorktreeCreate` is listed as unsupported) | 3                     | run setup (fills the planned, never-executed worktree setup-script slot)                                                                | `first-message-worktree.ts`, `managed-worktree-provisioner.ts`                     |
+| `SessionEnd`                                                         | 3                     | observe                                                                                                                                 | chat close and Bot pause                                                           |
 
 Bash `updatedInput` is never honoured, matching Claude Code: a hook may not rewrite a shell command into something the approval card didn't show.
 
@@ -287,13 +298,13 @@ A deferred tool (listed in `load_tools`, so it costs no tokens until it's used) 
 
 > As built (2026-10-31): the `hooks` tool ships for attended desktop chats only. Bot chats have no `propose_hook` yet, and Settings saves only global and workspace hooks, so nothing creates a `bot:<id>` hook; the runtime still runs one if it exists.
 
-| Action | Card | Notes |
-| --- | --- | --- |
-| `list` | none | Shows the scope, event, matcher, command, status and last result. No secrets: `envAllow` lists names only. |
+| Action    | Card                      | Notes                                                                                                                                                                                                              |
+| --------- | ------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `list`    | none                      | Shows the scope, event, matcher, command, status and last result. No secrets: `envAllow` lists names only.                                                                                                         |
 | `propose` | host-only digest approval | Create, edit or delete. Takes event, matcher, command, timeout (≤ 30 s from the agent), `failClosed`, `envAllow` and scope (`chat`, `workspace` or `bot:<id>`; never `global`). The card shows a diff for an edit. |
-| `disable` | none | Can only make things safer. Re-enabling goes through `propose`. |
-| `test` | Allow once | Runs the hook against a synthetic fixture payload for its event and returns the exit code, the decision and a short excerpt of its output. |
-| `logs` | none | Shows the last runs of one hook, fenced as data. |
+| `disable` | none                      | Can only make things safer. Re-enabling goes through `propose`.                                                                                                                                                    |
+| `test`    | Allow once                | Runs the hook against a synthetic fixture payload for its event and returns the exit code, the decision and a short excerpt of its output.                                                                         |
+| `logs`    | none                      | Shows the last runs of one hook, fenced as data.                                                                                                                                                                   |
 
 - **Built-in skill.** A bundled skill (alongside the Aiden knowledge skill) teaches the agent the event list, the payload shape, when a hook beats a reminder, and to suggest hooks after it sees the owner repeat a correction such as "run prettier", "don't touch dist" or "tell me when you're done".
 - **Learning loop (Bots).** This plugs into Plan C (self-improving): a correction can become a hook proposal that carries a behavior fingerprint and a learning-history entry, with Undo.
@@ -303,24 +314,24 @@ A deferred tool (listed in `load_tools`, so it costs no tokens until it's used) 
 - **Settings → Hooks.** Follows `docs/settings-design-system.md`:
   - a grouped card per scope;
   - rows show event, matcher and command, with a trailing switch;
-  - status labels: *Waiting for approval*, *Changed — re-approve*, *Disabled after failures*, *Not supported in Aiden*;
+  - status labels: _Waiting for approval_, _Changed — re-approve_, _Disabled after failures_, _Not supported in Aiden_;
   - a "What hooks can see" sheet;
   - Import from Claude Code, in Phase 4.
   - Status (2026-10-31): built on `feature/aiden-hooks` with an Add hook sheet, a detail sheet with run log, Test and Delete, digest-bound Approve for repo hooks, agent proposals with a before-and-after diff, and Pause all hooks; see the Hooks section of `docs/settings-design-system.md`. Import from Claude Code was dropped by owner decision 5.
-- **In chat.** A hook block or ask shows inside the existing tool row ("Blocked by hook *guard-shell*: pushes to main are not allowed"). Context from hooks appears in the Quick View Context breakdown as a new "Hooks" category.
+- **In chat.** A hook block or ask shows inside the existing tool row ("Blocked by hook _guard-shell_: pushes to main are not allowed"). Context from hooks appears in the Quick View Context breakdown as a new "Hooks" category.
 - **Phones.** Hook runs appear as `tool` steps in Phase 1, with no protocol change. iOS `AidenAgentStep.Kind` is a closed enum, so adding a `hook` kind needs a capability-gated Remote revision across iOS, Android and the fixtures (Phase 5).
 - **Onboarding.** Hooks are a power-user feature, so they get no onboarding step and no gallery tile in v1. Revisit once Bots can propose hooks.
 
 ## 11. Phased rollout
 
-| Phase | Scope | Exit criteria |
-| --- | --- | --- |
-| 0 | Close the `.claude` hidden-directory write gap and protect the hooks paths. Do this first even if hooks slip. | Behavioral tests: `write_file` and `edit_file` refuse `.claude/settings.json` and `.aiden/hooks.json` in Full access |
-| 1 | `main/services/hooks/` core plus desktop workspace chats: PreToolUse (block, ask, scoped allow), PostToolUse context, UserPromptSubmit, SessionStart context, Stop/Notification observe-only. Global and workspace scopes, edited in Settings. | Fixture suite for parser, matcher, merge and runner (adapting deepseek-harness's 15 scenarios); register-and-invoke tests; one Playwright flow (a hook blocks `run_command`, the reason shows in the tool row) |
-| 2 | Agent `hooks` tool and skill, the digest approval card, Settings → Hooks page, run log, auto-disable and issues. | Approval-card Playwright flow with screenshots for owner review; tests that phone approval of a hook is refused |
-| 3 | Bots (`propose_hook`, `beforeTool` and `afterResponse`), routines, subagents, worktree setup, PreCompact, Stop-continue (8-turn cap, `stop_hook_active`), CLI parity with a capability flag. | Durable-replay idempotency test; CLI test that the daemon honours a block |
-| 4 | Opt-in import from `.claude/settings.json`, Claude plugin `hooks/hooks.json` and Codex config, converted with per-hook approval. | Import fixtures for the superpowers and Codex plugin hooks on this Mac |
-| 5 | Remote revision for a native `hook` step kind and hook status on iOS and Android (read-only). | iOS, Android and fixture contract tests together |
+| Phase | Scope                                                                                                                                                                                                                                          | Exit criteria                                                                                                                                                                                                  |
+| ----- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 0     | Close the `.claude` hidden-directory write gap and protect the hooks paths. Do this first even if hooks slip.                                                                                                                                  | Behavioral tests: `write_file` and `edit_file` refuse `.claude/settings.json` and `.aiden/hooks.json` in Full access                                                                                           |
+| 1     | `main/services/hooks/` core plus desktop workspace chats: PreToolUse (block, ask, scoped allow), PostToolUse context, UserPromptSubmit, SessionStart context, Stop/Notification observe-only. Global and workspace scopes, edited in Settings. | Fixture suite for parser, matcher, merge and runner (adapting deepseek-harness's 15 scenarios); register-and-invoke tests; one Playwright flow (a hook blocks `run_command`, the reason shows in the tool row) |
+| 2     | Agent `hooks` tool and skill, the digest approval card, Settings → Hooks page, run log, auto-disable and issues.                                                                                                                               | Approval-card Playwright flow with screenshots for owner review; tests that phone approval of a hook is refused                                                                                                |
+| 3     | Bots (`propose_hook`, `beforeTool` and `afterResponse`), routines, subagents, worktree setup, PreCompact, Stop-continue (8-turn cap, `stop_hook_active`), CLI parity with a capability flag.                                                   | Durable-replay idempotency test; CLI test that the daemon honours a block                                                                                                                                      |
+| 4     | Opt-in import from `.claude/settings.json`, Claude plugin `hooks/hooks.json` and Codex config, converted with per-hook approval.                                                                                                               | Import fixtures for the superpowers and Codex plugin hooks on this Mac                                                                                                                                         |
+| 5     | Remote revision for a native `hook` step kind and hook status on iOS and Android (read-only).                                                                                                                                                  | iOS, Android and fixture contract tests together                                                                                                                                                               |
 
 Status of the exit criteria (2026-11-01): the two Playwright flows for phases 1 and 2 were not added. Behavioral suites cover the same claims instead:
 

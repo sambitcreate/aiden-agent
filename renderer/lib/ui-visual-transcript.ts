@@ -29,7 +29,9 @@ export function uiVisualSlots(
     if (row.kind !== "activity") continue;
     for (const step of row.steps) if (isToolStep(step)) rowKeyByCall.set(step.toolCallId, row.key);
   }
-  const presentedCalls = new Set(visuals.flatMap((visual) => (visual.toolCallId ? [visual.toolCallId] : [])));
+  const presentedCalls = new Set(
+    visuals.flatMap((visual) => (visual.toolCallId ? [visual.toolCallId] : [])),
+  );
   const byRowKey = new Map<string, ChatUiVisualV1[]>();
   const trailing: ChatUiVisualV1[] = [];
   for (const visual of visuals) {

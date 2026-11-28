@@ -403,8 +403,18 @@ async function compactableChat(root: string, providerId: string, modelId: string
     providerId,
     model: modelId,
     messages: Array.from({ length: 12 }, (_, index) => [
-      { id: `user-${index}`, role: "user" as const, content: `Request ${index} ${"x".repeat(1_200)}`, createdAt: index * 2 + 10 },
-      { id: `assistant-${index}`, role: "assistant" as const, content: `Answer ${index}`, createdAt: index * 2 + 11 },
+      {
+        id: `user-${index}`,
+        role: "user" as const,
+        content: `Request ${index} ${"x".repeat(1_200)}`,
+        createdAt: index * 2 + 10,
+      },
+      {
+        id: `assistant-${index}`,
+        role: "assistant" as const,
+        content: `Answer ${index}`,
+        createdAt: index * 2 + 11,
+      },
     ]).flat(),
   };
   const session = await new PiCompactionSessionStore({ root: async () => root }).openChat(chat.id);
@@ -415,7 +425,11 @@ async function compactableChat(root: string, providerId: string, modelId: string
 test("PreCompact hook context steers an operator compaction and a finished one is reported", async (t) => {
   const root = await mkdtemp(path.join(os.tmpdir(), "aiden-context-precompact-"));
   t.after(() => rm(root, { recursive: true, force: true }));
-  const { faux, runtime, chat, session } = await compactableChat(root, "context-precompact", "context-precompact-model");
+  const { faux, runtime, chat, session } = await compactableChat(
+    root,
+    "context-precompact",
+    "context-precompact-model",
+  );
   const providerPayloads: string[] = [];
   faux.setResponses(
     Array.from({ length: 4 }, () => (context) => {
@@ -443,7 +457,9 @@ test("PreCompact hook context steers an operator compaction and a finished one i
   );
 
   assert.equal(result.compacted, true, JSON.stringify(result));
-  assert.deepEqual(asked, [{ chatId: chat.id, audience: "desktop", trigger: "manual", aborted: false }]);
+  assert.deepEqual(asked, [
+    { chatId: chat.id, audience: "desktop", trigger: "manual", aborted: false },
+  ]);
   assert.match(providerPayloads.join("\n"), /Additional focus: KEEP_THE_RELEASE_CHECKLIST/u);
   assert.deepEqual(compacted, [chat.id]);
 });
@@ -451,7 +467,11 @@ test("PreCompact hook context steers an operator compaction and a finished one i
 test("an operator compaction continues the chat's cached request, and the finished one retires that request", async (t) => {
   const root = await mkdtemp(path.join(os.tmpdir(), "aiden-context-cached-"));
   t.after(() => rm(root, { recursive: true, force: true }));
-  const { faux, runtime, chat, session } = await compactableChat(root, "context-cached", "context-cached-model");
+  const { faux, runtime, chat, session } = await compactableChat(
+    root,
+    "context-cached",
+    "context-cached-model",
+  );
   // A model whose prompt cache lives five minutes, so the chat's last request is kept.
   const model = { ...runtime.model, promptCache: { short: 300 } } as Model<Api>;
   const cachedRuntime: ResolvedModelRuntime = { ...runtime, model };
@@ -466,9 +486,20 @@ test("an operator compaction continues the chat's cached request, and the finish
   // The chat's last turn: its request and reply, as the turn's stream records them.
   const messages = (await session.buildContext()).messages as Message[];
   const last = messages[messages.length - 1] as AssistantMessage;
-  chatSideCallPrefixes.begin(chat.id, model, normalizeContext({ systemPrompt: "You are Aiden.", messages: messages.slice(0, -1) }))({
+  chatSideCallPrefixes.begin(
+    chat.id,
+    model,
+    normalizeContext({ systemPrompt: "You are Aiden.", messages: messages.slice(0, -1) }),
+  )({
     ...last,
-    usage: { input: 3_000, output: 20, cacheRead: 0, cacheWrite: 0, totalTokens: 3_020, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } },
+    usage: {
+      input: 3_000,
+      output: 20,
+      cacheRead: 0,
+      cacheWrite: 0,
+      totalTokens: 3_020,
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+    },
   });
   assert.ok(await chatSideCallPrefixes.latest(chat.id), "the chat's cached request is on record");
   const { value } = deps({
@@ -487,17 +518,31 @@ test("an operator compaction continues the chat's cached request, and the finish
 
   assert.equal(result.compacted, true, JSON.stringify(result));
   assert.equal(requests.length, 1);
-  assert.match(requests[0]!.payload, /write a checkpoint summary/u, "the summary continued the cached request");
+  assert.match(
+    requests[0]!.payload,
+    /write a checkpoint summary/u,
+    "the summary continued the cached request",
+  );
   assert.match(requests[0]!.payload, /You are Aiden\./u);
   assert.equal(requests[0]!.retention, "short");
-  assert.equal(await chatSideCallPrefixes.latest(chat.id), undefined, "no later call continues the pre-compaction request");
+  assert.equal(
+    await chatSideCallPrefixes.latest(chat.id),
+    undefined,
+    "no later call continues the pre-compaction request",
+  );
 });
 
 test("a failing PreCompact source never fails a recovery compaction, which hooks see as auto", async (t) => {
   const root = await mkdtemp(path.join(os.tmpdir(), "aiden-context-precompact-fail-"));
   t.after(() => rm(root, { recursive: true, force: true }));
-  const { faux, runtime, chat, session } = await compactableChat(root, "context-precompact-fail", "context-precompact-fail-model");
-  faux.setResponses(Array.from({ length: 4 }, () => fauxAssistantMessage(validSummary("recovered checkpoint"))));
+  const { faux, runtime, chat, session } = await compactableChat(
+    root,
+    "context-precompact-fail",
+    "context-precompact-fail-model",
+  );
+  faux.setResponses(
+    Array.from({ length: 4 }, () => fauxAssistantMessage(validSummary("recovered checkpoint"))),
+  );
   const triggers: string[] = [];
   const { value } = deps({
     getChat: async () => chat,
@@ -597,27 +642,48 @@ test("disabling Skills cancels an operator compaction already at the provider", 
   );
 });
 
-
 test("manual compaction snapshots the saved model's recent budget across provider resolution", async (t) => {
   const root = await mkdtemp(path.join(os.tmpdir(), "aiden-context-model-budget-"));
   t.after(() => rm(root, { recursive: true, force: true }));
   const providerId = "budget-provider";
   const modelId = "budget-model";
   const { faux, model, runtime } = compactionRuntime(providerId, modelId);
-  faux.setResponses(Array.from({ length: 8 }, () => () => fauxAssistantMessage(validSummary("configured checkpoint"))));
+  faux.setResponses(
+    Array.from(
+      { length: 8 },
+      () => () => fauxAssistantMessage(validSummary("configured checkpoint")),
+    ),
+  );
   const chat: Chat = {
-    ...baseChat, providerId, model: modelId,
+    ...baseChat,
+    providerId,
+    model: modelId,
     messages: Array.from({ length: 12 }, (_, index) => [
-      { id: `budget-user-${index}`, role: "user" as const, content: `BUDGET_TURN_${index} ${"x".repeat(1_200)}`, createdAt: index * 2 + 10 },
-      { id: `budget-answer-${index}`, role: "assistant" as const, content: `Answer ${index}`, createdAt: index * 2 + 11 },
+      {
+        id: `budget-user-${index}`,
+        role: "user" as const,
+        content: `BUDGET_TURN_${index} ${"x".repeat(1_200)}`,
+        createdAt: index * 2 + 10,
+      },
+      {
+        id: `budget-answer-${index}`,
+        role: "assistant" as const,
+        content: `Answer ${index}`,
+        createdAt: index * 2 + 11,
+      },
     ]).flat(),
   };
   const store = new PiCompactionSessionStore({ root: async () => root });
   const session = await store.openChat(chat.id);
   await syncChatMessagesToPiSession(session, chat.messages, model, false);
-  const overrides = { "budget-provider/budget-model": { reserveTokens: 2_000, keepRecentTokens: 0 } };
+  const overrides = {
+    "budget-provider/budget-model": { reserveTokens: 2_000, keepRecentTokens: 0 },
+  };
   const { value } = deps({
-    getCompactionPreferences: async () => ({ compactionEngine: "llm", compactionModelOverrides: overrides }),
+    getCompactionPreferences: async () => ({
+      compactionEngine: "llm",
+      compactionModelOverrides: overrides,
+    }),
     getChat: async () => chat,
     openSession: async () => session,
     resolveRuntime: async () => {
@@ -625,7 +691,11 @@ test("manual compaction snapshots the saved model's recent budget across provide
       return runtime;
     },
   });
-  const result = await new ContextLifecycleService(value).compactChat(chat.id, { kind: "desktop", ownerId: "renderer:1" }, "operator");
+  const result = await new ContextLifecycleService(value).compactChat(
+    chat.id,
+    { kind: "desktop", ownerId: "renderer:1" },
+    "operator",
+  );
   assert.equal(result.compacted, true, JSON.stringify(result));
   const context = JSON.stringify(await session.buildContext());
   assert.match(context, /configured checkpoint/u);

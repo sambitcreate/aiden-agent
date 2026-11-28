@@ -5,8 +5,17 @@ import { chatDeleteTaskNote, chatTaskChipLabel, tasksPostingInChat } from "./cha
 
 function task(id: string, patch: Partial<ScheduledTask> = {}): ScheduledTask {
   return {
-    id, name: `Task ${id}`, enabled: true, mode: "llm", cron: "0 9 * * *", timezone: "UTC",
-    permission: "read-only", prompt: "hello", notify: false, createdAt: 1, updatedAt: 1,
+    id,
+    name: `Task ${id}`,
+    enabled: true,
+    mode: "llm",
+    cron: "0 9 * * *",
+    timezone: "UTC",
+    permission: "read-only",
+    prompt: "hello",
+    notify: false,
+    createdAt: 1,
+    updatedAt: 1,
     ...patch,
   } as ScheduledTask;
 }
@@ -23,7 +32,10 @@ test("the composer chip lists only enabled tasks posting into this chat, soonest
     task("e", { nextRunAt: soon }),
   ];
   const posting = tasksPostingInChat(tasks, "chat-1");
-  assert.deepEqual(posting.map((item) => item.id), ["b", "a"]);
+  assert.deepEqual(
+    posting.map((item) => item.id),
+    ["b", "a"],
+  );
   assert.match(chatTaskChipLabel(posting, now), /^2 scheduled tasks · next \S+/u);
   assert.match(chatTaskChipLabel(posting.slice(1), now), /^Weekly notes · next tomorrow /u);
   assert.equal(chatTaskChipLabel([task("x", { name: "No next run" })], now), "No next run");
@@ -38,7 +50,10 @@ test("deleting a chat says which tasks will keep running in their own chats", ()
     task("d", { name: "Unbound" }),
   ];
   assert.equal(chatDeleteTaskNote(tasks, ["chat-9"]), "");
-  assert.equal(chatDeleteTaskNote(tasks, ["chat-1"]), "Daily build check will keep running in its own chat.");
+  assert.equal(
+    chatDeleteTaskNote(tasks, ["chat-1"]),
+    "Daily build check will keep running in its own chat.",
+  );
   assert.equal(
     chatDeleteTaskNote(tasks, ["chat-1", "chat-2"]),
     "Daily build check and Inbox brief will keep running in their own chats.",

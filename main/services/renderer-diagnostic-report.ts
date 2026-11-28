@@ -46,7 +46,10 @@ export function parseRendererReport(value: unknown): ParsedRendererReport {
   if (!RENDERER_DIAGNOSTIC_KINDS.includes(input.kind as RendererDiagnosticKind)) {
     throw new Error("Invalid renderer diagnostic kind.");
   }
-  if (typeof input.errorType !== "string" || normalizeDiagnosticErrorType(input.errorType) !== input.errorType) {
+  if (
+    typeof input.errorType !== "string" ||
+    normalizeDiagnosticErrorType(input.errorType) !== input.errorType
+  ) {
     throw new Error("Invalid renderer diagnostic error type.");
   }
   if (typeof input.context !== "string" || !RENDERER_CONTEXTS.has(input.context)) {
@@ -57,7 +60,9 @@ export function parseRendererReport(value: unknown): ParsedRendererReport {
   }
   if (
     input.suppressed !== undefined &&
-    (!Number.isSafeInteger(input.suppressed) || Number(input.suppressed) < 1 || Number(input.suppressed) > 10_000)
+    (!Number.isSafeInteger(input.suppressed) ||
+      Number(input.suppressed) < 1 ||
+      Number(input.suppressed) > 10_000)
   ) {
     throw new Error("Invalid renderer diagnostic suppression count.");
   }

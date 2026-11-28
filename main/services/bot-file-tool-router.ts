@@ -2,10 +2,7 @@ import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { Type, type TSchema } from "typebox";
 import type { AgentTool } from "@earendil-works/pi-agent-core";
-import {
-  buildPinnedCodingTools,
-  type PinnedWorkspaceRootIdentity,
-} from "./coding-tools.js";
+import { buildPinnedCodingTools, type PinnedWorkspaceRootIdentity } from "./coding-tools.js";
 
 export const BOT_FILE_TOOL_NAMES = Object.freeze([
   "read_file",
@@ -34,7 +31,11 @@ export interface BotFileToolRouterOptions {
   /** Omission of `location` always resolves to this exact enabled location. */
   readonly defaultLocation: BotFileToolLocation;
   readonly additionalLocations?: readonly BotFileToolLocation[];
-  readonly lateLocation?: { readonly id: string; readonly label: string; resolve(): Promise<BotFileToolLocation | undefined> };
+  readonly lateLocation?: {
+    readonly id: string;
+    readonly label: string;
+    resolve(): Promise<BotFileToolLocation | undefined>;
+  };
   /** Additional stable main-owned aliases, with the same temporary privacy fence. */
   readonly lateLocations?: readonly NonNullable<BotFileToolRouterOptions["lateLocation"]>[];
   /**
@@ -57,7 +58,9 @@ const WRITING_TOOLS = new Set<string>(["write_file", "edit_file"]);
  * A directory or file no write may land in; a directory may leave out
  * subdirectories that stay writable (a Bot's own home inside Aiden's Bot storage).
  */
-export type BotFileToolProtectedRoot = string | { readonly root: string; readonly except: readonly string[] };
+export type BotFileToolProtectedRoot =
+  | string
+  | { readonly root: string; readonly except: readonly string[] };
 
 let processProtectedRoots: () => readonly BotFileToolProtectedRoot[] = () => [];
 let processTemporaryPrivateRoots: () => readonly string[] = () => [];
@@ -74,7 +77,9 @@ export function setBotFileToolTemporaryPrivateRoots(roots: () => readonly string
  * files, so a Bot cannot change app settings or its own access by editing
  * them (owner decision 2026-10-27).
  */
-export function setBotFileToolProtectedRoots(roots: () => readonly BotFileToolProtectedRoot[]): void {
+export function setBotFileToolProtectedRoots(
+  roots: () => readonly BotFileToolProtectedRoot[],
+): void {
   processProtectedRoots = roots;
 }
 
@@ -98,7 +103,10 @@ async function realTarget(target: string): Promise<string> {
 
 function isWithin(child: string, root: string): boolean {
   const relative = path.relative(root, child);
-  return relative === "" || (relative !== ".." && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative));
+  return (
+    relative === "" ||
+    (relative !== ".." && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative))
+  );
 }
 
 async function writesIntoProtectedRoot(
@@ -128,36 +136,44 @@ async function taskProtectedRoots(
 ): Promise<BotFileToolProtectedRoot[]> {
   const ownHomeExceptions: string[] = [];
   const fixed = await realTarget(defaultLocation.root);
-  const narrowed = await Promise.all(roots.map(async (entry) => {
-    if (typeof entry === "string") return entry;
-    const except: string[] = [];
-    if (fixed === path.resolve(defaultLocation.root)) {
-      for (const open of entry.except) {
-        const canonicalOpen = await realTarget(open);
-        if (fixed !== canonicalOpen && isWithin(fixed, canonicalOpen)) {
-          except.push(fixed);
-          ownHomeExceptions.push(fixed);
+  const narrowed = await Promise.all(
+    roots.map(async (entry) => {
+      if (typeof entry === "string") return entry;
+      const except: string[] = [];
+      if (fixed === path.resolve(defaultLocation.root)) {
+        for (const open of entry.except) {
+          const canonicalOpen = await realTarget(open);
+          if (fixed !== canonicalOpen && isWithin(fixed, canonicalOpen)) {
+            except.push(fixed);
+            ownHomeExceptions.push(fixed);
+          }
         }
       }
-    }
-    return { root: entry.root, except };
-  }));
+      return { root: entry.root, except };
+    }),
+  );
   return [...narrowed, ...privateRoots.map((root) => ({ root, except: ownHomeExceptions }))];
 }
 
 /** Skill folders the skill loaders read: `.aiden/skill(s)`, `.claude/skills`, `.agents`. */
 // Case-insensitive: macOS volumes are, so `.claude/Skills` is `.claude/skills`.
-const SKILL_DIRECTORY = /(?:^|[\\/])(?:\.aiden[\\/]skills?|\.claude[\\/]skills|\.agents)(?:[\\/]|$)/iu;
+const SKILL_DIRECTORY =
+  /(?:^|[\\/])(?:\.aiden[\\/]skills?|\.claude[\\/]skills|\.agents)(?:[\\/]|$)/iu;
 
 /**
  * Whether a write lands in a folder the skill loaders read. A Bot never
  * writes skills itself: it proposes one (`propose_skill`) and the person
  * approves it, or a hand-written file waits for approval.
  */
-export async function writesIntoSkillDirectory(locationRoot: string, params: Record<string, unknown>): Promise<boolean> {
+export async function writesIntoSkillDirectory(
+  locationRoot: string,
+  params: Record<string, unknown>,
+): Promise<boolean> {
   if (typeof params.path !== "string") return false;
   const target = await realTarget(path.resolve(locationRoot, params.path));
-  return SKILL_DIRECTORY.test(target) || SKILL_DIRECTORY.test(path.resolve(locationRoot, params.path));
+  return (
+    SKILL_DIRECTORY.test(target) || SKILL_DIRECTORY.test(path.resolve(locationRoot, params.path))
+  );
 }
 
 type ToolParameterObject = TSchema & {
@@ -190,7 +206,8 @@ function safeLabel(label: string): boolean {
 }
 
 function checkedLocation(location: BotFileToolLocation, role: string): BotFileToolLocation {
-  if (location.access !== undefined && location.access !== "read" && location.access !== "write") throw new Error(`${role} must specify read or write access.`);
+  if (location.access !== undefined && location.access !== "read" && location.access !== "write")
+    throw new Error(`${role} must specify read or write access.`);
   if (!SAFE_OPAQUE_LOCATION_ID.test(location.id)) {
     throw new Error(`${role} must have a safe opaque location id.`);
   }
@@ -218,13 +235,15 @@ function checkedLocation(location: BotFileToolLocation, role: string): BotFileTo
   });
 }
 
-function underlyingTools(location: BotFileToolLocation, fileMutatorBinary?: string, assertReadPath?: (canonicalPath: string) => Promise<void>): ReadonlyMap<BotFileToolName, AgentTool> {
-  const selected = buildPinnedCodingTools(
-    location.root,
-    undefined,
-    location.expectedIdentity,
-    { fileMutatorBinary, assertReadPath },
-  ).filter((tool) => TOOL_NAMES.has(tool.name));
+function underlyingTools(
+  location: BotFileToolLocation,
+  fileMutatorBinary?: string,
+  assertReadPath?: (canonicalPath: string) => Promise<void>,
+): ReadonlyMap<BotFileToolName, AgentTool> {
+  const selected = buildPinnedCodingTools(location.root, undefined, location.expectedIdentity, {
+    fileMutatorBinary,
+    assertReadPath,
+  }).filter((tool) => TOOL_NAMES.has(tool.name));
   const map = new Map<BotFileToolName, AgentTool>();
   for (const tool of selected) {
     const name = tool.name as BotFileToolName;
@@ -250,8 +269,7 @@ function locationParameter(
         : `${location.id} (${location.label})`,
     )
     .join(", ");
-  const description =
-    `Opaque location id. Omit to use the default enabled location. Available locations: ${summary}.`;
+  const description = `Opaque location id. Omit to use the default enabled location. Available locations: ${summary}.`;
   return Type.Optional(
     choices.length === 1
       ? Type.Literal(locations[0]!.id, { description })
@@ -330,8 +348,17 @@ export function buildBotFileTools(options: BotFileToolRouterOptions): AgentTool[
   const byId = new Map(prepared.map((location) => [location.id, location] as const));
   const schemaLocations = prepared.map(({ id, label }) => ({ id, label }));
   const lateLocations = new Map<string, NonNullable<BotFileToolRouterOptions["lateLocation"]>>();
-  for (const location of [...(options.lateLocation ? [options.lateLocation] : []), ...(options.lateLocations ?? [])]) {
-    if (ids.has(location.id) || lateLocations.has(location.id) || !SAFE_OPAQUE_LOCATION_ID.test(location.id) || !safeLabel(location.label)) throw new Error("Invalid late Bot file location.");
+  for (const location of [
+    ...(options.lateLocation ? [options.lateLocation] : []),
+    ...(options.lateLocations ?? []),
+  ]) {
+    if (
+      ids.has(location.id) ||
+      lateLocations.has(location.id) ||
+      !SAFE_OPAQUE_LOCATION_ID.test(location.id) ||
+      !safeLabel(location.label)
+    )
+      throw new Error("Invalid late Bot file location.");
     lateLocations.set(location.id, location);
     schemaLocations.push({ id: location.id, label: location.label });
   }
@@ -355,10 +382,14 @@ export function buildBotFileTools(options: BotFileToolRouterOptions): AgentTool[
         }
         let selected = byId.get(suppliedLocation ?? defaultLocation.id);
         let temporaryRoots: readonly BotFileToolProtectedRoot[] | undefined;
-        const late = typeof suppliedLocation === "string" ? lateLocations.get(suppliedLocation) : undefined;
+        const late =
+          typeof suppliedLocation === "string" ? lateLocations.get(suppliedLocation) : undefined;
         if (!selected && late) {
           const resolved = await late.resolve();
-          if (!resolved) throw new Error("Nothing extra is allowed for this task yet. Ask with request_access first.");
+          if (!resolved)
+            throw new Error(
+              "Nothing extra is allowed for this task yet. Ask with request_access first.",
+            );
           if (resolved.id !== suppliedLocation) throw unknownLocationError();
           const checked = checkedLocation(resolved, "Task location");
           temporaryRoots = await taskProtectedRoots(
@@ -368,31 +399,51 @@ export function buildBotFileTools(options: BotFileToolRouterOptions): AgentTool[
           );
           const protectedRoots = temporaryRoots;
           const assertReadPath = async (canonicalPath: string) => {
-            if (await writesIntoProtectedRoot(checked.root, { path: canonicalPath }, protectedRoots)) {
-              throw new Error("Aiden's private Bot session, memory and settings files cannot be read through temporary access.");
+            if (
+              await writesIntoProtectedRoot(checked.root, { path: canonicalPath }, protectedRoots)
+            ) {
+              throw new Error(
+                "Aiden's private Bot session, memory and settings files cannot be read through temporary access.",
+              );
             }
           };
-          selected = { ...checked, tools: underlyingTools(checked, options.fileMutatorBinary, assertReadPath) };
+          selected = {
+            ...checked,
+            tools: underlyingTools(checked, options.fileMutatorBinary, assertReadPath),
+          };
         }
         if (!selected) throw unknownLocationError();
         const underlying = selected.tools.get(name);
         if (!underlying) throw unknownLocationError();
         if (
-          temporaryRoots && !WRITING_TOOLS.has(name) &&
+          temporaryRoots &&
+          !WRITING_TOOLS.has(name) &&
           (await writesIntoProtectedRoot(selected.root, underlyingParams, temporaryRoots))
         ) {
-          throw new Error("Aiden's private Bot session, memory and settings files cannot be read through temporary access.");
+          throw new Error(
+            "Aiden's private Bot session, memory and settings files cannot be read through temporary access.",
+          );
         }
-        if (WRITING_TOOLS.has(name) && selected.access === "read") throw new Error("This task allows reading this folder only. Ask with request_access before changing it.");
+        if (WRITING_TOOLS.has(name) && selected.access === "read")
+          throw new Error(
+            "This task allows reading this folder only. Ask with request_access before changing it.",
+          );
         if (
           WRITING_TOOLS.has(name) &&
-          (await writesIntoProtectedRoot(selected.root, underlyingParams, temporaryRoots ?? (options.protectedRoots ?? processProtectedRoots)()))
+          (await writesIntoProtectedRoot(
+            selected.root,
+            underlyingParams,
+            temporaryRoots ?? (options.protectedRoots ?? processProtectedRoots)(),
+          ))
         ) {
           throw new Error(
             "Aiden manages Bot session and memory files and its own settings files; file tools cannot change them. Settings change only in Aiden's Settings.",
           );
         }
-        if (WRITING_TOOLS.has(name) && (await writesIntoSkillDirectory(selected.root, underlyingParams))) {
+        if (
+          WRITING_TOOLS.has(name) &&
+          (await writesIntoSkillDirectory(selected.root, underlyingParams))
+        ) {
           throw new Error("Skills need the person's OK. Use propose_skill instead.");
         }
         let result: Awaited<ReturnType<AgentTool["execute"]>>;
@@ -401,8 +452,14 @@ export function buildBotFileTools(options: BotFileToolRouterOptions): AgentTool[
         } catch (error) {
           throw redactLocationRoots(error, [...prepared, selected]);
         }
-        if (options.onWrite && WRITING_TOOLS.has(name) && typeof underlyingParams.path === "string") {
-          const written = await realTarget(path.resolve(selected.root, underlyingParams.path)).catch(() => undefined);
+        if (
+          options.onWrite &&
+          WRITING_TOOLS.has(name) &&
+          typeof underlyingParams.path === "string"
+        ) {
+          const written = await realTarget(
+            path.resolve(selected.root, underlyingParams.path),
+          ).catch(() => undefined);
           // Awaited, so the journal holds the version this call left before the call returns.
           if (written) await Promise.resolve(options.onWrite(written)).catch(() => undefined);
         }

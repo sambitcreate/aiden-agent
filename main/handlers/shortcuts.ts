@@ -44,19 +44,14 @@ async function releaseAbandonedRecorder(owner: ShortcutRecorderOwner): Promise<v
       error,
     );
     try {
-      ipcMain.broadcast(
-        "shortcut:changed",
-        shortcutSnapshot(await configStore.getSettings()),
-      );
+      ipcMain.broadcast("shortcut:changed", shortcutSnapshot(await configStore.getSettings()));
     } catch {
       // The runtime failure above is already logged.
     }
   }
 }
 
-function claimRecorder(
-  event: Electron.IpcMainInvokeEvent,
-): ShortcutRecorderOwner {
+function claimRecorder(event: Electron.IpcMainInvokeEvent): ShortcutRecorderOwner {
   const document = rendererDocumentOwner(
     event,
     () => new Error("Shortcut recording requires the active renderer document."),
@@ -97,10 +92,7 @@ function startRecorder(owner: ShortcutRecorderOwner): Promise<KeybindingSnapshot
     .catch(async () => {
       clearRecorderOwner(owner);
       try {
-        ipcMain.broadcast(
-          "shortcut:changed",
-          shortcutSnapshot(await configStore.getSettings()),
-        );
+        ipcMain.broadcast("shortcut:changed", shortcutSnapshot(await configStore.getSettings()));
       } catch {
         // Preserve the suspension failure returned to every joined caller.
       }
@@ -131,8 +123,7 @@ function parseMutation(value: unknown): KeybindingMutation {
 export function registerShortcutHandlers(): void {
   ipcMain.handle("shortcut:get", async () => shortcutSnapshot(await configStore.getSettings()));
   ipcMain.handle("shortcut:set-recording", async (event, suspended: unknown) => {
-    if (typeof suspended !== "boolean")
-      throw new Error("Invalid shortcut recorder state.");
+    if (typeof suspended !== "boolean") throw new Error("Invalid shortcut recorder state.");
     const document = rendererDocumentOwner(
       event,
       () => new Error("Shortcut recording requires the active renderer document."),
@@ -149,10 +140,7 @@ export function registerShortcutHandlers(): void {
     } catch (error) {
       if (owner) clearRecorderOwner(owner);
       try {
-        ipcMain.broadcast(
-          "shortcut:changed",
-          shortcutSnapshot(await configStore.getSettings()),
-        );
+        ipcMain.broadcast("shortcut:changed", shortcutSnapshot(await configStore.getSettings()));
       } catch {
         // Preserve the recorder restoration failure.
       }
@@ -164,11 +152,7 @@ export function registerShortcutHandlers(): void {
     const mutation = parseMutation(value);
     try {
       const { snapshot } = await transactShortcutSettings((previous) => {
-        const keybindings = applyKeybindingMutation(
-          previous.keybindings,
-          mutation,
-          previous,
-        );
+        const keybindings = applyKeybindingMutation(previous.keybindings, mutation, previous);
         return {
           next: { ...previous, keybindings },
           persist: () => configStore.setSettings({ keybindings }).then(() => undefined),
@@ -179,10 +163,7 @@ export function registerShortcutHandlers(): void {
       return snapshot;
     } catch (error) {
       try {
-        ipcMain.broadcast(
-          "shortcut:changed",
-          shortcutSnapshot(await configStore.getSettings()),
-        );
+        ipcMain.broadcast("shortcut:changed", shortcutSnapshot(await configStore.getSettings()));
       } catch {
         // Preserve the transaction failure. A subsequent settings retry can
         // refresh status if the settings store itself is unavailable.

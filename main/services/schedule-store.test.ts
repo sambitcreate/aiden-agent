@@ -7,7 +7,10 @@ import {
   validateScriptName,
   validateTimezone,
 } from "./schedule-store.js";
-import { TASK_CONNECTOR_NEEDS_SOURCE, type ScheduledTaskTrigger } from "../../renderer/shared/scheduled-task-trigger.js";
+import {
+  TASK_CONNECTOR_NEEDS_SOURCE,
+  type ScheduledTaskTrigger,
+} from "../../renderer/shared/scheduled-task-trigger.js";
 
 class MemoryPersistence<T> {
   constructor(private data: T) {}
@@ -102,29 +105,72 @@ test("task store validates, updates, pauses, and retains runtime fields", async 
 test("a Bot fire claim advances the schedule and keeps its original message through an edit", async () => {
   const store = testStore();
   const task = await store.save({
-    botId: "bot-chef", name: "Daily check", mode: "llm", cron: "0 9 * * *", timezone: "UTC",
-    routineSchedule: { kind: "daily", time: "09:00" }, prompt: "Check the inbox.",
+    botId: "bot-chef",
+    name: "Daily check",
+    mode: "llm",
+    cron: "0 9 * * *",
+    timezone: "UTC",
+    routineSchedule: { kind: "daily", time: "09:00" },
+    prompt: "Check the inbox.",
   });
   const due = task.nextRunAt!;
-  await assert.rejects(store.claimRoutineFire(task.id, due, due + 24 * 60 * 60_000, () => true, due, async () => { throw new Error("Protected choice could not be saved"); }), /Protected choice could not be saved/u);
-  assert.equal((await store.get(task.id))?.nextRunAt, due, "failed write-ahead model admission cannot advance or own the fire");
+  await assert.rejects(
+    store.claimRoutineFire(
+      task.id,
+      due,
+      due + 24 * 60 * 60_000,
+      () => true,
+      due,
+      async () => {
+        throw new Error("Protected choice could not be saved");
+      },
+    ),
+    /Protected choice could not be saved/u,
+  );
+  assert.equal(
+    (await store.get(task.id))?.nextRunAt,
+    due,
+    "failed write-ahead model admission cannot advance or own the fire",
+  );
   assert.equal((await store.get(task.id))?.pendingRoutineFires?.length ?? 0, 0);
   const claimed = await store.claimRoutineFire(task.id, due, due + 24 * 60 * 60_000);
   assert.equal(claimed.nextRunAt, due + 24 * 60 * 60_000);
-  assert.deepEqual(claimed.pendingRoutineFires, [{
-    fireTime: due, requestId: `routine:${task.id}:${due}`, prompt: "Check the inbox.", name: "Daily check",
-    routineTiming: { scheduledFor: due, timezone: "UTC" },
-  }]);
-  await assert.rejects(store.claimRoutineFire(task.id, due, due + 24 * 60 * 60_000), /no longer due/u);
+  assert.deepEqual(claimed.pendingRoutineFires, [
+    {
+      fireTime: due,
+      requestId: `routine:${task.id}:${due}`,
+      prompt: "Check the inbox.",
+      name: "Daily check",
+      routineTiming: { scheduledFor: due, timezone: "UTC" },
+    },
+  ]);
+  await assert.rejects(
+    store.claimRoutineFire(task.id, due, due + 24 * 60 * 60_000),
+    /no longer due/u,
+  );
 
   const edited = await store.save({
-    id: task.id, botId: "bot-chef", name: "Renamed check", mode: "llm", cron: "0 9 * * *", timezone: "UTC",
-    routineSchedule: { kind: "daily", time: "09:00" }, prompt: "Check calendar instead.",
+    id: task.id,
+    botId: "bot-chef",
+    name: "Renamed check",
+    mode: "llm",
+    cron: "0 9 * * *",
+    timezone: "UTC",
+    routineSchedule: { kind: "daily", time: "09:00" },
+    prompt: "Check calendar instead.",
   });
   assert.equal(edited.pendingRoutineFires?.[0]?.prompt, "Check the inbox.");
   assert.equal((await store.get(task.id))?.pendingRoutineFires?.[0]?.name, "Daily check");
-  await store.addRoutineRetry(task.id, { failedRunId: `routine:${task.id}:${due}`, attempt: 1, at: due + 300_000 });
-  assert.deepEqual((await store.get(task.id))?.pendingRoutineFires?.find(fire => fire.retry)?.routineTiming, { scheduledFor: due, timezone: "UTC" }, "retry due time never replaces the occurrence it retries");
+  await store.addRoutineRetry(task.id, {
+    failedRunId: `routine:${task.id}:${due}`,
+    attempt: 1,
+    at: due + 300_000,
+  });
+  assert.deepEqual(
+    (await store.get(task.id))?.pendingRoutineFires?.find((fire) => fire.retry)?.routineTiming,
+    { scheduledFor: due, timezone: "UTC" },
+    "retry due time never replaces the occurrence it retries",
+  );
   await store.settleRoutineFire(task.id, `routine:${task.id}:${due}`);
   await store.clearRoutineRetries(task.id);
   assert.equal((await store.get(task.id))?.pendingRoutineFires?.length ?? 0, 0);
@@ -430,13 +476,7 @@ test("store methods remain safe when called without an object receiver", async (
 
 test("script names reject traversal and path separators", () => {
   assert.equal(validateScriptName("daily-report.sh"), "daily-report.sh");
-  for (const invalid of [
-    "",
-    "..",
-    "../secret.sh",
-    "nested/task.sh",
-    "nested\\task.sh",
-  ]) {
+  for (const invalid of ["", "..", "../secret.sh", "nested/task.sh", "nested\\task.sh"]) {
     assert.throws(() => validateScriptName(invalid), /single file name/iu);
   }
 });
@@ -470,10 +510,7 @@ test("stored invalid schedules are quarantined instead of aborting startup", asy
       updatedAt: 1,
     },
   ]);
-  const store = createScheduleStore(
-    tasks,
-    new MemoryPersistence<unknown[]>([]),
-  );
+  const store = createScheduleStore(tasks, new MemoryPersistence<unknown[]>([]));
   const [task] = await store.list();
   assert.equal(task?.id, "broken");
   assert.equal(task?.enabled, false);
@@ -499,10 +536,7 @@ test("stored project-plus-MCP schedules are quarantined until their scope is spl
       updatedAt: 1,
     },
   ]);
-  const store = createScheduleStore(
-    tasks,
-    new MemoryPersistence<unknown[]>([]),
-  );
+  const store = createScheduleStore(tasks, new MemoryPersistence<unknown[]>([]));
   const task = await store.get("mixed-task");
   assert.equal(task?.enabled, false);
   assert.match(task?.lastError ?? "", /either one project or MCP servers/iu);
@@ -524,15 +558,9 @@ test("a quarantined Assistant-profile task cannot be re-enabled with elevated ca
       updatedAt: 1,
     },
   ]);
-  const store = createScheduleStore(
-    tasks,
-    new MemoryPersistence<unknown[]>([]),
-  );
+  const store = createScheduleStore(tasks, new MemoryPersistence<unknown[]>([]));
   assert.equal((await store.get("corrupt-assistant"))?.enabled, false);
-  await assert.rejects(
-    store.setEnabled("corrupt-assistant", true),
-    /provider\/model-pinned/iu,
-  );
+  await assert.rejects(store.setEnabled("corrupt-assistant", true), /provider\/model-pinned/iu);
 });
 
 test("stored Assistant tasks without an approved provider binding are quarantined", async () => {
@@ -551,10 +579,7 @@ test("stored Assistant tasks without an approved provider binding are quarantine
       updatedAt: 1,
     },
   ]);
-  const store = createScheduleStore(
-    tasks,
-    new MemoryPersistence<unknown[]>([]),
-  );
+  const store = createScheduleStore(tasks, new MemoryPersistence<unknown[]>([]));
   const task = await store.get("unpinned-assistant");
   assert.equal(task?.enabled, false);
   assert.match(task?.lastError ?? "", /provider\/model-pinned/iu);
@@ -577,10 +602,7 @@ test("loads legacy Gemini scheduled tasks through the native Google provider", a
       updatedAt: 1,
     },
   ]);
-  const store = createScheduleStore(
-    tasks,
-    new MemoryPersistence<unknown[]>([]),
-  );
+  const store = createScheduleStore(tasks, new MemoryPersistence<unknown[]>([]));
   assert.equal((await store.list())[0]?.providerId, "google");
 });
 
@@ -603,20 +625,12 @@ test("persists protected custom aliases for historical and newly saved schedules
   ]);
   const alias = async (providerId: string | undefined) =>
     providerId === "openai" ? "custom:openai-legacy" : providerId;
-  const store = createScheduleStore(
-    tasks,
-    new MemoryPersistence<unknown[]>([]),
-    () => 1,
-    alias,
-  );
+  const store = createScheduleStore(tasks, new MemoryPersistence<unknown[]>([]), () => 1, alias);
 
   const migrated = (await store.list())[0];
   assert.equal(migrated?.providerId, "custom:openai-legacy");
   assert.equal(migrated?.updatedAt, 2);
-  assert.equal(
-    (tasks.snapshot()[0] as { providerId?: string }).providerId,
-    "custom:openai-legacy",
-  );
+  assert.equal((tasks.snapshot()[0] as { providerId?: string }).providerId, "custom:openai-legacy");
   assert.equal((tasks.snapshot()[0] as { updatedAt?: number }).updatedAt, 2);
 
   const created = await store.save({
@@ -628,10 +642,7 @@ test("persists protected custom aliases for historical and newly saved schedules
     prompt: "Summarize only changes.",
   });
   assert.equal(created.providerId, "custom:openai-legacy");
-  assert.equal(
-    (tasks.snapshot()[1] as { providerId?: string }).providerId,
-    "custom:openai-legacy",
-  );
+  assert.equal((tasks.snapshot()[1] as { providerId?: string }).providerId, "custom:openai-legacy");
 });
 
 test("script tasks require explicit Full permission", async () => {
@@ -750,7 +761,6 @@ test("runtime ownership is rechecked at disk publication and preserves later wri
   assert.equal(diskTask.updatedAt, newer.updatedAt);
 });
 
-
 test("loads legacy Azure scheduled tasks through the renamed native provider", async () => {
   const tasks = new MemoryPersistence<unknown[]>([
     {
@@ -768,10 +778,7 @@ test("loads legacy Azure scheduled tasks through the renamed native provider", a
       updatedAt: 1,
     },
   ]);
-  const store = createScheduleStore(
-    tasks,
-    new MemoryPersistence<unknown[]>([]),
-  );
+  const store = createScheduleStore(tasks, new MemoryPersistence<unknown[]>([]));
   assert.equal((await store.list())[0]?.providerId, "azure");
 });
 
@@ -789,7 +796,11 @@ function chatTaskInput(patch: Record<string, unknown> = {}) {
 
 test("the chat a task posts into is set once at creation and every later save keeps it", async () => {
   const persistence = new MemoryPersistence<unknown[]>([]);
-  const store = createScheduleStore(persistence, new MemoryPersistence<unknown[]>([]), () => 1_800_000_000_000);
+  const store = createScheduleStore(
+    persistence,
+    new MemoryPersistence<unknown[]>([]),
+    () => 1_800_000_000_000,
+  );
   const created = await store.save(chatTaskInput({ originChatId: "chat-1" }));
   assert.equal(created.originChatId, "chat-1");
   // An editor or phone save carries no binding: it is kept, not cleared.
@@ -799,7 +810,10 @@ test("the chat a task posts into is set once at creation and every later save ke
   const moved = await store.save({ ...chatTaskInput({ originChatId: "chat-2" }), id: created.id });
   assert.equal(moved.originChatId, "chat-1");
   // Moving the task to another project drops the binding: that chat is in the old project.
-  const otherProject = await store.save({ ...chatTaskInput({ workspaceId: "workspace-b" }), id: created.id });
+  const otherProject = await store.save({
+    ...chatTaskInput({ workspaceId: "workspace-b" }),
+    id: created.id,
+  });
   assert.equal(otherProject.originChatId, undefined);
   const rebound = await store.save(chatTaskInput({ originChatId: "chat-1" }));
   // It survives a reload from disk.
@@ -816,7 +830,10 @@ test("a task bound to a chat can't be edited to run more often than every 15 min
     /at most every 15 minutes/u,
   );
   assert.equal((await store.get(bound.id))?.cron, "0 9 * * *");
-  await assert.rejects(store.save(chatTaskInput({ originChatId: "chat-1", cron: "*/14 * * * *" })), /15 minutes/u);
+  await assert.rejects(
+    store.save(chatTaskInput({ originChatId: "chat-1", cron: "*/14 * * * *" })),
+    /15 minutes/u,
+  );
   // Its own chat has no floor.
   const own = await store.save(chatTaskInput({ cron: "*/5 * * * *" }));
   assert.equal(own.cron, "*/5 * * * *");
@@ -829,7 +846,10 @@ test("Use its own chat and deleting the chat drop the binding, and nothing else"
   const other = await store.save(chatTaskInput({ name: "Other", originChatId: "chat-2" }));
   assert.equal(await store.clearOriginChat(first.id, { expectedChatId: "chat-9" }), undefined);
   // Use its own chat is checked against the revision the person saw.
-  await assert.rejects(store.clearOriginChat(first.id, { expectedUpdatedAt: first.updatedAt - 1 }), /changed/u);
+  await assert.rejects(
+    store.clearOriginChat(first.id, { expectedUpdatedAt: first.updatedAt - 1 }),
+    /changed/u,
+  );
   assert.equal((await store.get(first.id))?.originChatId, "chat-1");
   const moved = await store.clearOriginChat(first.id, { expectedUpdatedAt: first.updatedAt });
   assert.equal(moved?.originChatId, undefined);
@@ -851,66 +871,175 @@ test("a task that runs when something changes has no cron, survives a reload and
     cron: "",
     timezone: "UTC",
     prompt: "Tell me what changed.",
-    trigger: { kind: "watch", source: { type: "url", url: "https://example.com/status" }, everyMinutes: 15 },
+    trigger: {
+      kind: "watch",
+      source: { type: "url", url: "https://example.com/status" },
+      everyMinutes: 15,
+    },
   });
   assert.equal(created.cron, "");
   assert.equal(created.nextRunAt, undefined);
-  assert.deepEqual(created.trigger, { kind: "watch", source: { type: "url", url: "https://example.com/status" }, everyMinutes: 15 });
+  assert.deepEqual(created.trigger, {
+    kind: "watch",
+    source: { type: "url", url: "https://example.com/status" },
+    everyMinutes: 15,
+  });
 
   await store.setEnabled(created.id, false);
   const enabled = await store.setEnabled(created.id, true);
   assert.equal(enabled.enabled, true);
   assert.equal(enabled.nextRunAt, undefined);
 
-  const reloaded = createScheduleStore(new MemoryPersistence(tasks.snapshot()), runs, () => 1_800_000_000_000);
+  const reloaded = createScheduleStore(
+    new MemoryPersistence(tasks.snapshot()),
+    runs,
+    () => 1_800_000_000_000,
+  );
   const loaded = await reloaded.get(created.id);
   assert.equal(loaded?.enabled, true);
   assert.doesNotMatch(loaded?.lastError ?? "", /Needs attention/u);
   assert.deepEqual(loaded?.trigger, created.trigger);
 
   // A save that doesn't mention the trigger keeps it; null puts the task back on a cron.
-  const renamed = await reloaded.save({ id: created.id, name: "Status", mode: "llm", cron: "", timezone: "UTC", prompt: "Tell me what changed." });
+  const renamed = await reloaded.save({
+    id: created.id,
+    name: "Status",
+    mode: "llm",
+    cron: "",
+    timezone: "UTC",
+    prompt: "Tell me what changed.",
+  });
   assert.deepEqual(renamed.trigger, created.trigger);
-  const scheduled = await reloaded.save({ id: created.id, name: "Status", mode: "llm", cron: "0 9 * * *", timezone: "UTC", prompt: "Tell me.", trigger: null });
+  const scheduled = await reloaded.save({
+    id: created.id,
+    name: "Status",
+    mode: "llm",
+    cron: "0 9 * * *",
+    timezone: "UTC",
+    prompt: "Tell me.",
+    trigger: null,
+  });
   assert.equal(scheduled.trigger, undefined);
   assert.ok(scheduled.nextRunAt);
 });
 
-test("a connected-app task's \"Needs its source\" clears when it is saved as another kind of task, and stays while it still watches a connected app", async () => {
+test('a connected-app task\'s "Needs its source" clears when it is saved as another kind of task, and stays while it still watches a connected app', async () => {
   const store = testStore();
   const connector: ScheduledTaskTrigger = {
-    kind: "connector", everyMinutes: 15, condition: { kind: "email", unreadOnly: false },
-    source: { providerLabel: "iMCP Mail", accountLabel: "person@example.test", resourceLabel: "Inbox" },
+    kind: "connector",
+    everyMinutes: 15,
+    condition: { kind: "email", unreadOnly: false },
+    source: {
+      providerLabel: "iMCP Mail",
+      accountLabel: "person@example.test",
+      resourceLabel: "Inbox",
+    },
   };
-  const base = { name: "New mail", mode: "llm" as const, cron: "", timezone: "UTC", prompt: "Tell me about new mail." };
+  const base = {
+    name: "New mail",
+    mode: "llm" as const,
+    cron: "",
+    timezone: "UTC",
+    prompt: "Tell me about new mail.",
+  };
   const created = await store.save({ ...base, trigger: connector });
   await store.updateRuntime(created.id, { lastError: TASK_CONNECTOR_NEEDS_SOURCE });
   const renamed = await store.save({ ...base, id: created.id, name: "Inbox news" });
-  assert.equal(renamed.lastError, TASK_CONNECTOR_NEEDS_SOURCE, "still a connected-app task without a source");
-  const watch = await store.save({ ...base, id: created.id, trigger: { kind: "watch", source: { type: "url", url: "https://example.com/status" }, everyMinutes: 15 } });
+  assert.equal(
+    renamed.lastError,
+    TASK_CONNECTOR_NEEDS_SOURCE,
+    "still a connected-app task without a source",
+  );
+  const watch = await store.save({
+    ...base,
+    id: created.id,
+    trigger: {
+      kind: "watch",
+      source: { type: "url", url: "https://example.com/status" },
+      everyMinutes: 15,
+    },
+  });
   assert.equal(watch.lastError, undefined);
 
   // Any other error stays until the task runs again.
   await store.updateRuntime(created.id, { lastError: "The page answered 500." });
-  assert.equal((await store.save({ ...base, id: created.id, cron: "0 9 * * *", trigger: null })).lastError, "The page answered 500.");
+  assert.equal(
+    (await store.save({ ...base, id: created.id, cron: "0 9 * * *", trigger: null })).lastError,
+    "The page answered 500.",
+  );
 });
 
 test("a task trigger is checked strictly and only asks Aiden", async () => {
   const store = testStore();
   const base = { name: "Watch", mode: "llm" as const, cron: "", timezone: "UTC", prompt: "Look." };
-  await assert.rejects(store.save({ ...base, trigger: { kind: "watch", source: { type: "url", url: "ftp://example.com" }, everyMinutes: 15 } }), /https/u);
-  await assert.rejects(store.save({ ...base, trigger: { kind: "watch", source: { type: "url", url: "https://example.com" }, everyMinutes: 2 } }), /5 to 1440/u);
-  await assert.rejects(store.save({ ...base, trigger: { kind: "watch", source: { type: "script", script: "../x.sh" }, everyMinutes: 15 } }), /one script file/u);
-  await assert.rejects(store.save({ ...base, trigger: { kind: "watch", source: { type: "script", script: "check.sh" }, everyMinutes: 15 } }), /Full permission/u);
   await assert.rejects(
-    store.save({ ...base, trigger: { kind: "watch", source: { type: "url", url: "https://example.com" }, everyMinutes: 15, extra: 1 } as never }),
+    store.save({
+      ...base,
+      trigger: {
+        kind: "watch",
+        source: { type: "url", url: "ftp://example.com" },
+        everyMinutes: 15,
+      },
+    }),
+    /https/u,
+  );
+  await assert.rejects(
+    store.save({
+      ...base,
+      trigger: {
+        kind: "watch",
+        source: { type: "url", url: "https://example.com" },
+        everyMinutes: 2,
+      },
+    }),
+    /5 to 1440/u,
+  );
+  await assert.rejects(
+    store.save({
+      ...base,
+      trigger: { kind: "watch", source: { type: "script", script: "../x.sh" }, everyMinutes: 15 },
+    }),
+    /one script file/u,
+  );
+  await assert.rejects(
+    store.save({
+      ...base,
+      trigger: { kind: "watch", source: { type: "script", script: "check.sh" }, everyMinutes: 15 },
+    }),
+    /Full permission/u,
+  );
+  await assert.rejects(
+    store.save({
+      ...base,
+      trigger: {
+        kind: "watch",
+        source: { type: "url", url: "https://example.com" },
+        everyMinutes: 15,
+        extra: 1,
+      } as never,
+    }),
     /Invalid task trigger/u,
   );
   await assert.rejects(
-    store.save({ name: "Script", mode: "script", cron: "", timezone: "UTC", script: "a.sh", permission: "full",
-      trigger: { kind: "watch", source: { type: "url", url: "https://example.com" }, everyMinutes: 15 } }),
+    store.save({
+      name: "Script",
+      mode: "script",
+      cron: "",
+      timezone: "UTC",
+      script: "a.sh",
+      permission: "full",
+      trigger: {
+        kind: "watch",
+        source: { type: "url", url: "https://example.com" },
+        everyMinutes: 15,
+      },
+    }),
     /asks Aiden/u,
   );
-  const script = await store.save({ ...base, permission: "full", trigger: { kind: "watch", source: { type: "script", script: "check.sh" }, everyMinutes: 60 } });
+  const script = await store.save({
+    ...base,
+    permission: "full",
+    trigger: { kind: "watch", source: { type: "script", script: "check.sh" }, everyMinutes: 60 },
+  });
   assert.equal(script.trigger?.kind === "watch" && script.trigger.source.type, "script");
 });

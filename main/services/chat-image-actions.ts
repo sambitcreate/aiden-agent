@@ -46,12 +46,19 @@ interface ImageRef {
 }
 
 function parseImageRef(input: unknown): ImageRef {
-  const value = input !== null && typeof input === "object" && !Array.isArray(input)
-    ? (input as Record<string, unknown>)
-    : undefined;
+  const value =
+    input !== null && typeof input === "object" && !Array.isArray(input)
+      ? (input as Record<string, unknown>)
+      : undefined;
   const keys = value ? Object.keys(value) : [];
-  const valid = (field: unknown) => typeof field === "string" && field.length > 0 && field.length <= MAX_ID_LENGTH;
-  if (!value || keys.some((key) => key !== "chatId" && key !== "attachmentId") || !valid(value.chatId) || !valid(value.attachmentId))
+  const valid = (field: unknown) =>
+    typeof field === "string" && field.length > 0 && field.length <= MAX_ID_LENGTH;
+  if (
+    !value ||
+    keys.some((key) => key !== "chatId" && key !== "attachmentId") ||
+    !valid(value.chatId) ||
+    !valid(value.attachmentId)
+  )
     throw new Error("Invalid image request.");
   return { chatId: value.chatId as string, attachmentId: value.attachmentId as string };
 }
@@ -69,7 +76,10 @@ export function safeImageFileStem(name: string): string {
 export function safeFileNameStem(name: string, fallback = "Image"): string {
   /* eslint-disable no-control-regex */
   const cleaned = name
-    .replace(/[\u0000-\u001f\u007f-\u009f\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069/\\:*?"<>|]+/gu, " ")
+    .replace(
+      /[\u0000-\u001f\u007f-\u009f\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069/\\:*?"<>|]+/gu,
+      " ",
+    )
     .replace(/\s+/gu, " ")
     .trim()
     .replace(/^[.\s]+/u, "");
@@ -105,9 +115,12 @@ export function createChatImageActions(deps: ChatImageActionDeps) {
     const chat = await deps.getChat(ref.chatId);
     if (!chat) throw new Error("The chat is no longer available.");
     for (const message of chat.messages) {
-      const attachment = message.attachments?.find((candidate) => candidate.id === ref.attachmentId);
+      const attachment = message.attachments?.find(
+        (candidate) => candidate.id === ref.attachmentId,
+      );
       if (!attachment) continue;
-      if (attachment.kind !== "image" || !isCanonicalRasterImageMimeType(attachment.mimeType)) break;
+      if (attachment.kind !== "image" || !isCanonicalRasterImageMimeType(attachment.mimeType))
+        break;
       const bytes = attachment.data
         ? Buffer.from(attachment.data, "base64")
         : attachment.sha256 && deps.readImage
@@ -116,7 +129,9 @@ export function createChatImageActions(deps: ChatImageActionDeps) {
       if (!bytes) break;
       return { attachment, mimeType: attachment.mimeType, bytes: Buffer.from(bytes) };
     }
-    throw new Error("This image isn't saved in the chat yet. Try again when the response finishes.");
+    throw new Error(
+      "This image isn't saved in the chat yet. Try again when the response finishes.",
+    );
   }
 
   return {
@@ -127,7 +142,10 @@ export function createChatImageActions(deps: ChatImageActionDeps) {
       const stem = safeImageFileStem(attachment.name);
       const extension = EXTENSIONS[mimeType];
       for (let attempt = 0; attempt < MAX_UNIQUE_ATTEMPTS; attempt += 1) {
-        const filePath = path.join(dir, `${attempt === 0 ? stem : `${stem} (${attempt})`}.${extension}`);
+        const filePath = path.join(
+          dir,
+          `${attempt === 0 ? stem : `${stem} (${attempt})`}.${extension}`,
+        );
         let handle: fs.FileHandle;
         try {
           handle = await fs.open(filePath, "wx", 0o644);
@@ -167,7 +185,8 @@ export function createChatImageActions(deps: ChatImageActionDeps) {
     },
     /** Reveals only a file this app session saved. */
     showSaved(input: unknown): true {
-      if (typeof input !== "string" || !saved.has(input)) throw new Error("That saved image isn't available.");
+      if (typeof input !== "string" || !saved.has(input))
+        throw new Error("That saved image isn't available.");
       deps.showItemInFolder(input);
       return true;
     },
@@ -176,7 +195,10 @@ export function createChatImageActions(deps: ChatImageActionDeps) {
 
 type Handle = (channel: string, listener: (event: unknown, ...args: unknown[]) => unknown) => void;
 
-export function registerChatImageActionHandlers(ipc: { handle: Handle }, deps: ChatImageActionDeps): void {
+export function registerChatImageActionHandlers(
+  ipc: { handle: Handle },
+  deps: ChatImageActionDeps,
+): void {
   const actions = createChatImageActions(deps);
   ipc.handle("chats:saveImageToDownloads", (_event, input) => actions.saveToDownloads(input));
   ipc.handle("chats:copyImage", (_event, input) => actions.copy(input));

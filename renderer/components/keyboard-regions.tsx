@@ -12,7 +12,11 @@ export function KeyboardRegions() {
   const sidebarShortcut = sidebarBinding ? prettyAccelerator(sidebarBinding) : null;
   useCommandHandler("focus.sidebar", () => {
     if (!focusRegion("sidebar"))
-      toast.info(sidebarShortcut ? `Show the sidebar first (${sidebarShortcut}).` : "Show the sidebar first.");
+      toast.info(
+        sidebarShortcut
+          ? `Show the sidebar first (${sidebarShortcut}).`
+          : "Show the sidebar first.",
+      );
   });
   useCommandHandler("focus.chat", () => {
     if (!focusRegion("chat")) toast.info("There’s no conversation on this page.");

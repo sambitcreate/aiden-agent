@@ -27,7 +27,11 @@ test("anything else is a regular expression anchored to the whole name", () => {
   assert.equal(hookMatcherMatches("Web.*", "web_fetch"), true);
   assert.equal(hookMatcherMatches("Web.*", "run_command"), false);
   assert.equal(hookMatcherMatches("Ba.h", "run_command"), true);
-  assert.equal(hookMatcherMatches("a.h", "run_command"), false, "anchored, so it can not match inside Bash");
+  assert.equal(
+    hookMatcherMatches("a.h", "run_command"),
+    false,
+    "anchored, so it can not match inside Bash",
+  );
 });
 
 test("an invalid regular expression is rejected and matches nothing", () => {
@@ -58,7 +62,11 @@ test("a Write matcher also covers generate_image, which can save its image as a 
     assert.equal(hookMatcherMatches(matcher, "generate_image"), true, matcher);
   }
   assert.equal(hookMatcherMatches("generate_image", "generate_image"), true);
-  assert.equal(hookMatcherMatches("generate_image", "write_file"), false, "a generate_image matcher stays its own");
+  assert.equal(
+    hookMatcherMatches("generate_image", "write_file"),
+    false,
+    "a generate_image matcher stays its own",
+  );
   assert.equal(hookMatcherMatches("Bash", "generate_image"), false);
   assert.equal(hookMatcherMatches("Write", "display_image"), false);
 });

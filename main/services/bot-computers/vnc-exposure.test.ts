@@ -33,7 +33,14 @@ function externalAddress(): string | undefined {
 }
 
 const loopback: NetworkInterfaceInfo[] = [
-  { address: "127.0.0.1", netmask: "255.0.0.0", family: "IPv4", mac: "00:00:00:00:00:00", internal: true, cidr: "127.0.0.1/8" },
+  {
+    address: "127.0.0.1",
+    netmask: "255.0.0.0",
+    family: "IPv4",
+    mac: "00:00:00:00:00:00",
+    internal: true,
+    cidr: "127.0.0.1/8",
+  },
 ];
 const address = externalAddress();
 const external: NodeJS.Dict<NetworkInterfaceInfo[]> | undefined =
@@ -41,26 +48,47 @@ const external: NodeJS.Dict<NetworkInterfaceInfo[]> | undefined =
     ? undefined
     : {
         lo0: loopback,
-        en0: [{ address, netmask: "255.255.255.0", family: "IPv4", mac: "a6:4f:2c:9e:13:01", internal: false, cidr: `${address}/24` }],
+        en0: [
+          {
+            address,
+            netmask: "255.255.255.0",
+            family: "IPv4",
+            mac: "a6:4f:2c:9e:13:01",
+            internal: false,
+            cidr: `${address}/24`,
+          },
+        ],
       };
-const noAddress = external === undefined ? "this machine has no address beyond loopback to try" : false;
+const noAddress =
+  external === undefined ? "this machine has no address beyond loopback to try" : false;
 
-test("a listener bound to every interface is reachable beyond loopback", { skip: noAddress }, async () => {
-  const { server, port } = await listen("0.0.0.0");
-  try {
-    assert.equal(await vncReachableBeyondLoopback(port, { interfaces: external }), true);
-  } finally {
-    server.close();
-  }
-});
+test(
+  "a listener bound to every interface is reachable beyond loopback",
+  { skip: noAddress },
+  async () => {
+    const { server, port } = await listen("0.0.0.0");
+    try {
+      assert.equal(await vncReachableBeyondLoopback(port, { interfaces: external }), true);
+    } finally {
+      server.close();
+    }
+  },
+);
 
-test("a loopback-only listener is not, and internal interfaces are never tried", { skip: noAddress }, async () => {
-  const { server, port } = await listen("127.0.0.1");
-  try {
-    assert.equal(await vncReachableBeyondLoopback(port, { interfaces: external }), false);
-    assert.equal(await vncReachableBeyondLoopback(port, { interfaces: { lo0: loopback } }), false);
-    assert.equal(await vncReachableBeyondLoopback(0, { interfaces: external }), false);
-  } finally {
-    server.close();
-  }
-});
+test(
+  "a loopback-only listener is not, and internal interfaces are never tried",
+  { skip: noAddress },
+  async () => {
+    const { server, port } = await listen("127.0.0.1");
+    try {
+      assert.equal(await vncReachableBeyondLoopback(port, { interfaces: external }), false);
+      assert.equal(
+        await vncReachableBeyondLoopback(port, { interfaces: { lo0: loopback } }),
+        false,
+      );
+      assert.equal(await vncReachableBeyondLoopback(0, { interfaces: external }), false);
+    } finally {
+      server.close();
+    }
+  },
+);

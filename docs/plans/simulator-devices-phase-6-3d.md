@@ -24,24 +24,24 @@ T3's GLB path is ported 1:1: exact device-name matching, an abortable, replaceab
 
 ## Design
 
-| File | Role |
-| --- | --- |
-| `renderer/lib/device-3d/model-registry.ts` | Exact simulator name → model id; `isDuoDevice`. No `three` import. |
-| `renderer/lib/device-3d/model-kit.ts` | Continuous-corner outlines, slabs, lathe-turned lenses, PBR material kit, per-material merging. |
-| `renderer/lib/device-3d/hardware-models.ts` | Original iPhone Pro, Pro Max and iPad Pro 13 models from spec dimensions. |
-| `renderer/lib/device-3d/duo-model.ts` | Original iPhone Duo: two thin leaves, hinge barrel, three displays on T3's rig contract. |
-| `renderer/lib/device-3d/model-scene.ts` | T3's normalized-model contract and validation; model disposal. |
-| `renderer/lib/device-3d/shape-profile.ts`, `phone-scene.ts` | Family bodies, raw-framebuffer UVs and touch projection. |
-| `renderer/lib/device-3d/android-fold-scene.ts` | T3's procedural Android fold body. |
-| `renderer/lib/device-3d/device-motion.ts`, `view-snap.ts`, `framing.ts` | T3's spring, snapping and framing. |
-| `renderer/lib/device-3d/interaction.ts`, `trackpad.ts` | Scheduler, pointer ownership, wheel navigation and log zoom, trackpad and Safari gestures. |
-| `renderer/lib/device-3d/phone-viewer.ts`, `duo-viewer.ts` | The two viewers, with an injectable `viewer-runtime.ts` (renderer, PMREM `RoomEnvironment`, clock, frames, timers). |
-| `renderer/lib/device-3d/duo-scene.ts`, `duo-snap.ts` | T3's Duo articulation, UVs, touch mapping and rest views. |
-| `renderer/lib/device-duo-control.ts` | T3's Duo control queue, fold state, hold orientation and pinch accumulator. |
-| `renderer/lib/device-duo-stream.ts` | Per-display Duo feeds, hooked into `device-stream.ts`. |
-| `renderer/components/device-phone-viewport.tsx`, `device-duo-viewport.tsx` | React shells: lazy load, resize, pointer, trackpad and blur. |
-| `renderer/components/device-duo-controls.tsx` | Fold and stance buttons with Aiden's own glyphs. |
-| `main/services/devices/trackpad-scroll-end.ts` | Forwards `gestureScrollEnd` on `devices:trackpad-scroll-end`. |
+| File                                                                       | Role                                                                                                                |
+| -------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------- |
+| `renderer/lib/device-3d/model-registry.ts`                                 | Exact simulator name → model id; `isDuoDevice`. No `three` import.                                                  |
+| `renderer/lib/device-3d/model-kit.ts`                                      | Continuous-corner outlines, slabs, lathe-turned lenses, PBR material kit, per-material merging.                     |
+| `renderer/lib/device-3d/hardware-models.ts`                                | Original iPhone Pro, Pro Max and iPad Pro 13 models from spec dimensions.                                           |
+| `renderer/lib/device-3d/duo-model.ts`                                      | Original iPhone Duo: two thin leaves, hinge barrel, three displays on T3's rig contract.                            |
+| `renderer/lib/device-3d/model-scene.ts`                                    | T3's normalized-model contract and validation; model disposal.                                                      |
+| `renderer/lib/device-3d/shape-profile.ts`, `phone-scene.ts`                | Family bodies, raw-framebuffer UVs and touch projection.                                                            |
+| `renderer/lib/device-3d/android-fold-scene.ts`                             | T3's procedural Android fold body.                                                                                  |
+| `renderer/lib/device-3d/device-motion.ts`, `view-snap.ts`, `framing.ts`    | T3's spring, snapping and framing.                                                                                  |
+| `renderer/lib/device-3d/interaction.ts`, `trackpad.ts`                     | Scheduler, pointer ownership, wheel navigation and log zoom, trackpad and Safari gestures.                          |
+| `renderer/lib/device-3d/phone-viewer.ts`, `duo-viewer.ts`                  | The two viewers, with an injectable `viewer-runtime.ts` (renderer, PMREM `RoomEnvironment`, clock, frames, timers). |
+| `renderer/lib/device-3d/duo-scene.ts`, `duo-snap.ts`                       | T3's Duo articulation, UVs, touch mapping and rest views.                                                           |
+| `renderer/lib/device-duo-control.ts`                                       | T3's Duo control queue, fold state, hold orientation and pinch accumulator.                                         |
+| `renderer/lib/device-duo-stream.ts`                                        | Per-display Duo feeds, hooked into `device-stream.ts`.                                                              |
+| `renderer/components/device-phone-viewport.tsx`, `device-duo-viewport.tsx` | React shells: lazy load, resize, pointer, trackpad and blur.                                                        |
+| `renderer/components/device-duo-controls.tsx`                              | Fold and stance buttons with Aiden's own glyphs.                                                                    |
+| `main/services/devices/trackpad-scroll-end.ts`                             | Forwards `gestureScrollEnd` on `devices:trackpad-scroll-end`.                                                       |
 
 Accessibility: the 3D wrapper is a focusable `role="application"` region that forwards keys like the flat screen. **3D view** and **Flat view** use `aria-pressed`; when 3D is blocked its button stays focusable with `aria-disabled` and the reason as its description. All animation respects `prefers-reduced-motion`, and the final pose always stays visible.
 

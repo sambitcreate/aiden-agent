@@ -72,11 +72,15 @@ test("bound inputs drive the values, chart, and table without a model call", asy
 
   fireEvent.click(screen.getByRole("radio", { name: "Margin" }));
   assert.ok(within(figure).getByText("31%"));
-  await waitFor(() => assert.deepEqual(liveCharts()[0]!.config.data.datasets[0]!.data, [0.28, 0.35, 0.27]));
+  await waitFor(() =>
+    assert.deepEqual(liveCharts()[0]!.config.data.datasets[0]!.data, [0.28, 0.35, 0.27]),
+  );
   // Sorted table rows read from data, formatted per column.
   // The last table is the visible one; the chart's screen-reader table comes first.
   const tables = within(figure).getAllByRole("table");
-  const rows = within(tables[tables.length - 1]!).getAllByRole("row").map((row) => row.textContent);
+  const rows = within(tables[tables.length - 1]!)
+    .getAllByRole("row")
+    .map((row) => row.textContent);
   assert.deepEqual(rows.slice(1), ["AMER$3,100.0035%", "EMEA$2,400.0028%", "APAC$1,430.0027%"]);
 });
 
@@ -108,11 +112,13 @@ test("actions send, copy, and open only through their own handlers", async () =>
   // The open request fires onAction as soon as it's made, not after the user
   // confirms — the provider doesn't report the choice back.
   fireEvent.click(screen.getByRole("button", { name: "Pricing page" }));
-  await waitFor(() => assert.deepEqual(actions, [
-    { kind: "send", text: "Start the team plan" },
-    { kind: "copy", text: "Plan: team" },
-    { kind: "open", url: "https://example.com/pricing" },
-  ]));
+  await waitFor(() =>
+    assert.deepEqual(actions, [
+      { kind: "send", text: "Start the team plan" },
+      { kind: "copy", text: "Plan: team" },
+      { kind: "open", url: "https://example.com/pricing" },
+    ]),
+  );
   const dialog = await screen.findByRole("dialog", { name: "Open this link?" });
   assert.ok(within(dialog).getByText("https://example.com/pricing"));
   // forcePrompt never offers "remember my choice".
@@ -143,7 +149,14 @@ test("a non-https openUrl does nothing", () => {
     tree: {
       t: "Visual",
       k: "0",
-      c: [{ t: "Button", k: "0.0", p: { action: { act: "open", url: { op: "lit", v: "http://example.com" } } }, c: [{ t: "#text", k: "0.0.0", s: "Go" }] }],
+      c: [
+        {
+          t: "Button",
+          k: "0.0",
+          p: { action: { act: "open", url: { op: "lit", v: "http://example.com" } } },
+          c: [{ t: "#text", k: "0.0.0", s: "Go" }],
+        },
+      ],
     },
   });
   render(<AidenUiBlock visual={visual} />);
@@ -153,7 +166,10 @@ test("a non-https openUrl does nothing", () => {
 
 test("Each and If follow state: rows appear when a filter is turned off", () => {
   render(<AidenUiBlock visual={visualFrom("filter")} />);
-  const titles = () => screen.queryAllByText(/^(Crash on launch|Slow search|Typo in settings)$/u).map((node) => node.textContent);
+  const titles = () =>
+    screen
+      .queryAllByText(/^(Crash on launch|Slow search|Typo in settings)$/u)
+      .map((node) => node.textContent);
   assert.deepEqual(titles(), ["Crash on launch", "Slow search"]);
   fireEvent.click(screen.getByRole("switch", { name: "Show closed" }));
   assert.deepEqual(titles(), ["Crash on launch", "Slow search", "Typo in settings"]);
@@ -161,7 +177,9 @@ test("Each and If follow state: rows appear when a filter is turned off", () => 
 
 test("a draft visual is inert: actions never fire and inputs are disabled", () => {
   const actions: AidenUiAction[] = [];
-  render(<AidenUiBlock visual={visualFrom("tabs")} draft onAction={(action) => actions.push(action)} />);
+  render(
+    <AidenUiBlock visual={visualFrom("tabs")} draft onAction={(action) => actions.push(action)} />,
+  );
   fireEvent.click(screen.getByRole("button", { name: "Choose plan" }));
   assert.equal(actions.length, 0);
   assert.ok(screen.getByRole("figure").querySelector("[inert]"));
@@ -206,7 +224,16 @@ test("nested loops stay inside one render budget instead of hanging the chat", (
   const started = Date.now();
   const view = render(
     <AidenUiBlock
-      visual={{ version: 1, kind: "ui", id: "ui-loops", title: "Loops", catalogVersion: 1, tree: compiled.tree, dataJson: compiled.dataJson, fallbackText: "" }}
+      visual={{
+        version: 1,
+        kind: "ui",
+        id: "ui-loops",
+        title: "Loops",
+        catalogVersion: 1,
+        tree: compiled.tree,
+        dataJson: compiled.dataJson,
+        fallbackText: "",
+      }}
     />,
   );
   assert.ok(view.container.querySelectorAll("p").length <= 2000);
@@ -215,7 +242,9 @@ test("nested loops stay inside one render budget instead of hanging the chat", (
 
 test("a visual's follow-up waits for the user to confirm the exact text", () => {
   const actions: AidenUiAction[] = [];
-  const view = render(<AidenUiBlock visual={visualFrom("tabs")} onAction={(action) => actions.push(action)} />);
+  const view = render(
+    <AidenUiBlock visual={visualFrom("tabs")} onAction={(action) => actions.push(action)} />,
+  );
   fireEvent.click(screen.getByRole("button", { name: "Choose plan" }));
   assert.equal(actions.length, 0);
   const chip = screen.getByRole("group", { name: "Follow-up suggested by Plan options" });
@@ -226,24 +255,44 @@ test("a visual's follow-up waits for the user to confirm the exact text", () => 
   fireEvent.click(screen.getByRole("button", { name: "Choose plan" }));
   fireEvent.click(screen.getByRole("button", { name: "Dismiss follow-up" }));
   assert.equal(actions.length, 1);
-  view.rerender(<AidenUiBlock visual={visualFrom("tabs")} onAction={(action) => actions.push(action)} followUpBusy />);
+  view.rerender(
+    <AidenUiBlock
+      visual={visualFrom("tabs")}
+      onAction={(action) => actions.push(action)}
+      followUpBusy
+    />,
+  );
   fireEvent.click(screen.getByRole("button", { name: "Choose plan" }));
   assert.ok(screen.getByRole("button", { name: "Add to draft" }));
 });
 
 test("newer saved state re-seeds an untouched visual and merges into a touched one", () => {
   const base = visualFrom("tabs");
-  const view = render(<AidenUiBlock visual={{ ...base, state: { plan: "team", seats: 5, annual: false, note: "" } }} />);
-  view.rerender(<AidenUiBlock visual={{ ...base, state: { plan: "solo", seats: 5, annual: false, note: "" } }} />);
+  const view = render(
+    <AidenUiBlock
+      visual={{ ...base, state: { plan: "team", seats: 5, annual: false, note: "" } }}
+    />,
+  );
+  view.rerender(
+    <AidenUiBlock
+      visual={{ ...base, state: { plan: "solo", seats: 5, annual: false, note: "" } }}
+    />,
+  );
   assert.equal(screen.getByRole("tab", { name: "Solo" }).getAttribute("aria-selected"), "true");
   fireEvent.mouseDown(screen.getByRole("tab", { name: "Team" }), { button: 0 });
   fireEvent.click(screen.getByRole("tab", { name: "Team" }));
-  view.rerender(<AidenUiBlock visual={{ ...base, state: { plan: "solo", seats: 10, annual: false, note: "" } }} />);
+  view.rerender(
+    <AidenUiBlock
+      visual={{ ...base, state: { plan: "solo", seats: 10, annual: false, note: "" } }}
+    />,
+  );
   assert.equal(screen.getByRole("tab", { name: "Team" }).getAttribute("aria-selected"), "true");
 });
 
 test("an attachment-backed Image draws its picture when given the attachment, and alt text otherwise", () => {
-  const compiled = compileAum(`<Visual><Image attachment="photo-1" alt="Original chart" /></Visual>`);
+  const compiled = compileAum(
+    `<Visual><Image attachment="photo-1" alt="Original chart" /></Visual>`,
+  );
   assert.deepEqual(compiled.diagnostics, []);
   assert.ok(compiled.tree);
   const visual: ChatUiVisualV1 = {
@@ -259,25 +308,42 @@ test("an attachment-backed Image draws its picture when given the attachment, an
   assert.equal(view.container.querySelector("img") === null, true);
   assert.ok(screen.getByText("Original chart"));
 
-  view.rerender(<AidenUiBlock visual={visual} attachments={[{ id: "photo-1", mimeType: "image/png", data: "iVBORw0KGgo=" }]} />);
+  view.rerender(
+    <AidenUiBlock
+      visual={visual}
+      attachments={[{ id: "photo-1", mimeType: "image/png", data: "iVBORw0KGgo=" }]}
+    />,
+  );
   const picture = screen.getByRole("img", { name: "Original chart" });
   assert.equal(picture.getAttribute("src"), "data:image/png;base64,iVBORw0KGgo=");
 
   // An image stored beside the chat arrives as its private link, with no bytes.
   const link = `aiden-attachment://image/chat-1/${"a".repeat(64)}`;
-  view.rerender(<AidenUiBlock visual={visual} attachments={[{ id: "photo-1", mimeType: "image/png", url: link }]} />);
+  view.rerender(
+    <AidenUiBlock
+      visual={visual}
+      attachments={[{ id: "photo-1", mimeType: "image/png", url: link }]}
+    />,
+  );
   assert.equal(screen.getByRole("img", { name: "Original chart" }).getAttribute("src"), link);
 
   // Any other URL is never loaded.
   view.rerender(
-    <AidenUiBlock visual={visual} attachments={[{ id: "photo-1", mimeType: "image/png", url: "https://example.test/photo.png" }]} />,
+    <AidenUiBlock
+      visual={visual}
+      attachments={[
+        { id: "photo-1", mimeType: "image/png", url: "https://example.test/photo.png" },
+      ]}
+    />,
   );
   assert.equal(view.container.querySelector("img"), null);
   assert.ok(screen.getByText("Original chart"));
 });
 
 test("a computed Image reference draws its picture from the snapshot's image set", () => {
-  const compiled = compileAum(`<Visual><Image attachment={"photo-" + 1} alt="Original chart" /></Visual>`);
+  const compiled = compileAum(
+    `<Visual><Image attachment={"photo-" + 1} alt="Original chart" /></Visual>`,
+  );
   assert.deepEqual(compiled.diagnostics, []);
   assert.ok(compiled.tree);
   const visual: ChatUiVisualV1 = {
@@ -290,8 +356,22 @@ test("a computed Image reference draws its picture from the snapshot's image set
     fallbackText: compiled.fallbackText,
   };
   const messageImages: Attachment[] = [
-    { id: "photo-1", name: "photo-1.png", mimeType: "image/png", kind: "image", size: 4, data: "iVBORw0KGgo=" },
-    { id: "photo-2", name: "photo-2.png", mimeType: "image/png", kind: "image", size: 4, data: "AAAA" },
+    {
+      id: "photo-1",
+      name: "photo-1.png",
+      mimeType: "image/png",
+      kind: "image",
+      size: 4,
+      data: "iVBORw0KGgo=",
+    },
+    {
+      id: "photo-2",
+      name: "photo-2.png",
+      mimeType: "image/png",
+      kind: "image",
+      size: 4,
+      data: "AAAA",
+    },
   ];
   // The capture renders with exactly the images the snapshot helper selects.
   const snapshotImages = visualSnapshotImages(visual, messageImages);
@@ -360,7 +440,10 @@ test("visual Markdown never loads a remote image or navigates a link directly", 
       <AidenUiBlock visual={visual} draft />
     </LinkOpenerProvider>,
   );
-  assert.equal((screen.getByRole("button", { name: "Open report" }) as HTMLButtonElement).disabled, true);
+  assert.equal(
+    (screen.getByRole("button", { name: "Open report" }) as HTMLButtonElement).disabled,
+    true,
+  );
 });
 
 test("inherited names in a persisted tree draw nothing and the rest of the visual still shows", () => {
@@ -378,7 +461,12 @@ test("inherited names in a persisted tree draw nothing and the rest of the visua
         { t: "Text", k: "0.0", c: [{ t: "#text", k: "0.0.0", s: "Still here" }] },
         { t: "constructor", k: "0.1", c: [{ t: "#text", k: "0.1.0", s: "Dropped" }] },
         { t: "toString", k: "0.2" },
-        { t: "Text", k: "0.3", p: { tone: { op: "lit", v: "constructor" } }, c: [{ t: "#text", k: "0.3.0", s: "Plain tone" }] },
+        {
+          t: "Text",
+          k: "0.3",
+          p: { tone: { op: "lit", v: "constructor" } },
+          c: [{ t: "#text", k: "0.3.0", s: "Plain tone" }],
+        },
       ],
     },
     fallbackText: "Still here",
@@ -422,7 +510,13 @@ test("a bound key that is an inherited member starts unset", () => {
     tree: {
       t: "Visual",
       k: "0",
-      c: [{ t: "Switch", k: "0.0", p: { bind: { op: "lit", v: "constructor" }, label: { op: "lit", v: "Flag" } } }],
+      c: [
+        {
+          t: "Switch",
+          k: "0.0",
+          p: { bind: { op: "lit", v: "constructor" }, label: { op: "lit", v: "Flag" } },
+        },
+      ],
     },
     fallbackText: "Flag",
   };
@@ -460,7 +554,16 @@ test("an artifact page's run() and compose() buttons hand the host the evaluated
   const actions: AidenUiAction[] = [];
   render(
     <AidenUiBlock
-      visual={{ version: 1, kind: "ui", id: "art", title: "PRs", catalogVersion: 1, tree: compiled.tree, dataJson: '{"pulls":[{"number":12},{"number":15}]}', fallbackText: "" }}
+      visual={{
+        version: 1,
+        kind: "ui",
+        id: "art",
+        title: "PRs",
+        catalogVersion: 1,
+        tree: compiled.tree,
+        dataJson: '{"pulls":[{"number":12},{"number":15}]}',
+        fallbackText: "",
+      }}
       onAction={(action) => actions.push(action)}
     />,
   );

@@ -5,7 +5,10 @@
  * this Mac's own workspaces, models or files.
  */
 
-import { isGenerationThinkingLevel, type GenerationThinkingLevel } from "../../shared/generation-thinking";
+import {
+  isGenerationThinkingLevel,
+  type GenerationThinkingLevel,
+} from "../../shared/generation-thinking";
 
 export interface HostModel {
   id: string;
@@ -87,7 +90,9 @@ export interface HostNewChatInput {
 }
 
 function record(value: unknown): Record<string, unknown> {
-  return value !== null && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : {};
+  return value !== null && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : {};
 }
 
 function text(value: unknown): string | undefined {
@@ -123,19 +128,23 @@ export function mapHostModelCatalog(value: unknown): HostModelCatalog {
       const modelId = text(model.id);
       if (!modelId) return [];
       const thinkingLevels = list(model.thinkingLevels).filter(isGenerationThinkingLevel);
-      const defaultThinkingLevel = isGenerationThinkingLevel(model.defaultThinkingLevel) && thinkingLevels.includes(model.defaultThinkingLevel)
-        ? model.defaultThinkingLevel
-        : undefined;
-      return [{
-        id: modelId,
-        label: text(model.label) ?? modelId,
-        supportsImages: model.supportsImages === true,
-        thinkingLevels,
-        ...(defaultThinkingLevel ? { defaultThinkingLevel } : {}),
-        thinkingCanDisable: model.thinkingCanDisable !== false,
-        // Hidden models stay usable by existing chats but are not offered for new ones.
-        hidden: model.hidden === true,
-      }];
+      const defaultThinkingLevel =
+        isGenerationThinkingLevel(model.defaultThinkingLevel) &&
+        thinkingLevels.includes(model.defaultThinkingLevel)
+          ? model.defaultThinkingLevel
+          : undefined;
+      return [
+        {
+          id: modelId,
+          label: text(model.label) ?? modelId,
+          supportsImages: model.supportsImages === true,
+          thinkingLevels,
+          ...(defaultThinkingLevel ? { defaultThinkingLevel } : {}),
+          thinkingCanDisable: model.thinkingCanDisable !== false,
+          // Hidden models stay usable by existing chats but are not offered for new ones.
+          hidden: model.hidden === true,
+        },
+      ];
     });
     return models.length > 0 ? [{ id, label: text(provider.label) ?? id, models }] : [];
   });
@@ -145,7 +154,10 @@ export function mapHostModelCatalog(value: unknown): HostModelCatalog {
   return { providers, defaults: providerId && modelId ? { providerId, modelId } : {} };
 }
 
-export function findHostModel(catalog: HostModelCatalog | undefined, choice: HostModelChoice | undefined): HostModel | undefined {
+export function findHostModel(
+  catalog: HostModelCatalog | undefined,
+  choice: HostModelChoice | undefined,
+): HostModel | undefined {
   if (!catalog || !choice) return undefined;
   return catalog.providers
     .find((provider) => provider.id === choice.providerId)
@@ -153,16 +165,22 @@ export function findHostModel(catalog: HostModelCatalog | undefined, choice: Hos
 }
 
 /** A model a new chat may start on: listed and not hidden on the host. */
-export function findOfferedHostModel(catalog: HostModelCatalog | undefined, choice: HostModelChoice | undefined): HostModel | undefined {
+export function findOfferedHostModel(
+  catalog: HostModelCatalog | undefined,
+  choice: HostModelChoice | undefined,
+): HostModel | undefined {
   const model = findHostModel(catalog, choice);
   return model && !model.hidden ? model : undefined;
 }
 
 /** The host default when it is still offered, else the first offered model. */
-export function defaultHostModel(catalog: HostModelCatalog | undefined): HostModelChoice | undefined {
+export function defaultHostModel(
+  catalog: HostModelCatalog | undefined,
+): HostModelChoice | undefined {
   if (!catalog) return undefined;
   const { providerId, modelId } = catalog.defaults;
-  if (providerId && modelId && findOfferedHostModel(catalog, { providerId, modelId })) return { providerId, modelId };
+  if (providerId && modelId && findOfferedHostModel(catalog, { providerId, modelId }))
+    return { providerId, modelId };
   for (const provider of catalog.providers) {
     const model = provider.models.find((entry) => !entry.hidden);
     if (model) return { providerId: provider.id, modelId: model.id };
@@ -173,7 +191,11 @@ export function defaultHostModel(catalog: HostModelCatalog | undefined): HostMod
 export function mapHostBrowserRoots(value: unknown): HostBrowserRoot[] {
   return list(record(value).roots).map((entry) => {
     const root = record(entry);
-    return { id: required(root.id), label: text(root.label) ?? required(root.id), location: required(root.location) };
+    return {
+      id: required(root.id),
+      label: text(root.label) ?? required(root.id),
+      location: required(root.location),
+    };
   });
 }
 
@@ -189,7 +211,11 @@ export function mapHostBrowserPage(value: unknown): HostBrowserPage {
     }),
     entries: list(page.entries).map((entry) => {
       const item = record(entry);
-      return { id: required(item.id), name: required(item.name), location: required(item.location) };
+      return {
+        id: required(item.id),
+        name: required(item.name),
+        location: required(item.location),
+      };
     }),
     ...(nextCursor ? { nextCursor } : {}),
   };
@@ -208,5 +234,9 @@ export function mapHostCreatedWorkspace(value: unknown): HostCreatedWorkspace {
 export function mapHostCreatedChat(value: unknown): HostCreatedChat {
   const body = record(value);
   const botId = text(body.botId);
-  return { id: required(body.id), workspaceId: required(body.workspaceId), ...(botId ? { botId } : {}) };
+  return {
+    id: required(body.id),
+    workspaceId: required(body.workspaceId),
+    ...(botId ? { botId } : {}),
+  };
 }

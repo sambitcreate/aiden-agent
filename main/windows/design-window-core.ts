@@ -44,7 +44,8 @@ export function canWidenForDesign(
   workAreaFor: (bounds: Rectangle) => Rectangle,
   target = DESIGN_WIDEN_TARGET,
 ): boolean {
-  if (!window || window.isDestroyed() || window.isFullScreen() || window.isMaximized()) return false;
+  if (!window || window.isDestroyed() || window.isFullScreen() || window.isMaximized())
+    return false;
   const current = window.getBounds();
   return current.width < target && workAreaFor(current).width >= target;
 }
@@ -68,6 +69,7 @@ export function widenWindowForDesign(
   const current = window.getBounds();
   const next = widenedBounds(current, workAreaFor(current));
   if (!next) return { widened: false };
-  if (next.width !== current.width || next.x !== current.x) window.setBounds(next, options.reduceMotion !== true);
+  if (next.width !== current.width || next.x !== current.x)
+    window.setBounds(next, options.reduceMotion !== true);
   return { widened: true };
 }

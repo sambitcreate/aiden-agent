@@ -1,5 +1,11 @@
 import type { Locator } from "@playwright/test";
-import { expect, finishLmStudioOnboarding, test, E2E_MODEL_ID, LM_STUDIO_PROVIDER_ID } from "./fixtures";
+import {
+  expect,
+  finishLmStudioOnboarding,
+  test,
+  E2E_MODEL_ID,
+  LM_STUDIO_PROVIDER_ID,
+} from "./fixtures";
 
 const PROMPT = "Stream a long structured answer for the follow-the-bottom check.";
 
@@ -13,13 +19,21 @@ function replyChunks(): Chunk[] {
     if (step === 1) chunks.push({ text: `## Section ${index}\n\n`, marker: `Section ${index}` });
     else if (step < 5) {
       chunks.push({
-        text: `Paragraph ${index} explains one more step in enough words to wrap the line. `.repeat(2) + "\n\n",
+        text:
+          `Paragraph ${index} explains one more step in enough words to wrap the line. `.repeat(2) +
+          "\n\n",
         marker: `Paragraph ${index} explains`,
       });
     } else if (step < 8) {
-      chunks.push({ text: `- List item ${index} with a short note\n${step === 7 ? "\n" : ""}`, marker: `List item ${index}` });
+      chunks.push({
+        text: `- List item ${index} with a short note\n${step === 7 ? "\n" : ""}`,
+        marker: `List item ${index}`,
+      });
     } else if (step === 8) {
-      chunks.push({ text: `| Step | Result |\n| --- | --- |\n| ${index} | row ${index} |\n`, marker: `row ${index}` });
+      chunks.push({
+        text: `| Step | Result |\n| --- | --- |\n| ${index} | row ${index} |\n`,
+        marker: `row ${index}`,
+      });
     } else chunks.push({ text: `| ${index} | row ${index} |\n\n`, marker: `row ${index}` });
   }
   return chunks;
@@ -28,15 +42,24 @@ function replyChunks(): Chunk[] {
 /** Waits until the reveal has caught up with `chunk` in the transcript. */
 async function revealed(viewport: Locator, chunk: Chunk): Promise<void> {
   await expect
-    .poll(() => viewport.evaluate((element, marker) => element.textContent?.includes(marker) ?? false, chunk.marker), {
-      message: `"${chunk.marker}" is on screen`,
-      timeout: 15_000,
-    })
+    .poll(
+      () =>
+        viewport.evaluate(
+          (element, marker) => element.textContent?.includes(marker) ?? false,
+          chunk.marker,
+        ),
+      {
+        message: `"${chunk.marker}" is on screen`,
+        timeout: 15_000,
+      },
+    )
     .toBe(true);
 }
 
 function distanceFromBottom(viewport: Locator): Promise<number> {
-  return viewport.evaluate((element) => element.scrollHeight - element.clientHeight - element.scrollTop);
+  return viewport.evaluate(
+    (element) => element.scrollHeight - element.clientHeight - element.scrollTop,
+  );
 }
 
 test("the transcript follows a streaming reply until the reader scrolls up, and the jump lands at the bottom", async ({
@@ -69,7 +92,11 @@ test("the transcript follows a streaming reply until the reader scrolls up, and 
     .last()
     .evaluate((element) => {
       const style = getComputedStyle(element);
-      return { property: style.transitionProperty, transform: style.transform, translate: style.translate };
+      return {
+        property: style.transitionProperty,
+        transform: style.transform,
+        translate: style.translate,
+      };
     });
   expect(motion).toEqual({ property: "opacity", transform: "none", translate: "none" });
   expect(
@@ -98,7 +125,10 @@ test("the transcript follows a streaming reply until the reader scrolls up, and 
   for (const chunk of chunks.slice(40, 46)) {
     reply.push(chunk.text);
     await revealed(viewport, chunk);
-    expect(await viewport.evaluate((element) => element.scrollTop), "the reader keeps their place").toBe(readingAt);
+    expect(
+      await viewport.evaluate((element) => element.scrollTop),
+      "the reader keeps their place",
+    ).toBe(readingAt);
   }
   await expect(viewport).toHaveAttribute("data-follow", "false");
 
@@ -120,10 +150,15 @@ test("the transcript follows a streaming reply until the reader scrolls up, and 
   await expect.poll(() => distanceFromBottom(viewport)).toBeLessThanOrEqual(1);
   await expect(viewport).toHaveAttribute("data-follow", "true");
   // The settled reply keeps its tree and stops fading anything in.
-  await expect(page.locator(".streaming-reveal").last()).not.toHaveAttribute("data-streaming", /.*/);
+  await expect(page.locator(".streaming-reveal").last()).not.toHaveAttribute(
+    "data-streaming",
+    /.*/,
+  );
 });
 
-test("older transcript content remains findable, copyable and keyboard reachable with reduced motion", async ({ aiden }) => {
+test("older transcript content remains findable, copyable and keyboard reachable with reduced motion", async ({
+  aiden,
+}) => {
   test.skip(!aiden.lmStudio.enqueueStreamedReply, "requires the deterministic streaming fixture");
   const { mkdir, readFile, writeFile } = await import("node:fs/promises");
   const { join } = await import("node:path");
@@ -132,14 +167,34 @@ test("older transcript content remains findable, copyable and keyboard reachable
     const folder = join(aiden.userDataDir, "chats");
     const indexPath = join(folder, "index.json");
     await mkdir(folder, { recursive: true });
-    const index = JSON.parse(await readFile(indexPath, "utf8").catch((error: NodeJS.ErrnoException) => { if (error.code === "ENOENT") return "[]"; throw error; }));
-    const meta = { providerId: LM_STUDIO_PROVIDER_ID, model: E2E_MODEL_ID, id: "long-transcript-fixture", title: "Long transcript fixture", createdAt: Date.now(), updatedAt: Date.now() };
-    const messages = Array.from({ length: 100 }, (_, i) => ({ id: `history-${i}`, role: i % 2 ? "assistant" : "user", content: `History marker ${i}.\n\n${"A stable historical paragraph. ".repeat((i % 7 + 1) * 4)}`, createdAt: meta.createdAt + i }));
+    const index = JSON.parse(
+      await readFile(indexPath, "utf8").catch((error: NodeJS.ErrnoException) => {
+        if (error.code === "ENOENT") return "[]";
+        throw error;
+      }),
+    );
+    const meta = {
+      providerId: LM_STUDIO_PROVIDER_ID,
+      model: E2E_MODEL_ID,
+      id: "long-transcript-fixture",
+      title: "Long transcript fixture",
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+    };
+    const messages = Array.from({ length: 100 }, (_, i) => ({
+      id: `history-${i}`,
+      role: i % 2 ? "assistant" : "user",
+      content: `History marker ${i}.\n\n${"A stable historical paragraph. ".repeat(((i % 7) + 1) * 4)}`,
+      createdAt: meta.createdAt + i,
+    }));
     await writeFile(join(folder, `${meta.id}.json`), JSON.stringify({ ...meta, messages }));
     await writeFile(indexPath, JSON.stringify([...index, meta]));
   });
   await page.emulateMedia({ reducedMotion: "reduce" });
-  await page.getByRole("complementary").getByRole("button", { name: "Long transcript fixture", exact: true }).click();
+  await page
+    .getByRole("complementary")
+    .getByRole("button", { name: "Long transcript fixture", exact: true })
+    .click();
   const viewport = page.locator("[data-follow]").first();
   await expect(page.getByText("History marker 99.", { exact: false })).toBeVisible();
   await expect.poll(() => distanceFromBottom(viewport)).toBeLessThanOrEqual(1);
@@ -150,8 +205,16 @@ test("older transcript content remains findable, copyable and keyboard reachable
   // Find must reach the oldest row from wherever the caret is: startup can
   // leave one in the composer, below the transcript, so wrap like Find does.
   const found = await page.evaluate(() =>
-    (window as unknown as { find(text: string, caseSensitive: boolean, backwards: boolean, wrapAround: boolean): boolean })
-      .find("History marker 0.", false, false, true),
+    (
+      window as unknown as {
+        find(
+          text: string,
+          caseSensitive: boolean,
+          backwards: boolean,
+          wrapAround: boolean,
+        ): boolean;
+      }
+    ).find("History marker 0.", false, false, true),
   );
   expect(found).toBe(true);
   expect(await page.evaluate(() => window.getSelection()?.toString())).toBe("History marker 0.");
@@ -164,7 +227,9 @@ test("older transcript content remains findable, copyable and keyboard reachable
   await expect(copy).toBeFocused();
   await expect(copy).toBeInViewport();
   await copy.press("Enter");
-  await expect.poll(() => aiden.app.evaluate(({ clipboard }) => clipboard.readText())).toContain("History marker 0.");
+  await expect
+    .poll(() => aiden.app.evaluate(({ clipboard }) => clipboard.readText()))
+    .toContain("History marker 0.");
   await page.getByRole("button", { name: "Scroll to bottom" }).click();
   await expect.poll(() => distanceFromBottom(viewport)).toBeLessThanOrEqual(1);
   await expect(page.getByText("History marker 99.", { exact: false })).toBeInViewport();

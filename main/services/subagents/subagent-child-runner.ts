@@ -1,4 +1,7 @@
-import type { CompactionEngine, CompactionModelOverrides } from "../../../renderer/shared/compaction.js";
+import type {
+  CompactionEngine,
+  CompactionModelOverrides,
+} from "../../../renderer/shared/compaction.js";
 import type { AssistantMessage } from "@earendil-works/pi-ai";
 import type {
   AgentEvent,
@@ -62,11 +65,23 @@ import type {
 } from "./subagent-mcp-mutation.js";
 import type { SubagentShellGateV2, SubagentShellToolBindingV2 } from "./subagent-shell.js";
 
-import { SUBAGENT_PARTIAL_WORK_NOTE, SUBAGENT_TIME_LIMIT_WARNING, type SubagentTimeLimit, DEFAULT_SUBAGENT_CHILD_DEADLINE_MS, DEFAULT_SUBAGENT_CANCELLATION_GRACE_MS, MAX_SUBAGENT_CHILD_TURNS, MAX_SUBAGENT_CHILD_TOOL_CALLS, MAX_SUBAGENT_CHILD_EVENTS, MAX_SUBAGENT_CHILD_OUTPUT_CHARS, MAX_SUBAGENT_CHILD_PROTOCOL_CHARS } from "./subagent-child-policy.js";
+import {
+  SUBAGENT_PARTIAL_WORK_NOTE,
+  SUBAGENT_TIME_LIMIT_WARNING,
+  type SubagentTimeLimit,
+  DEFAULT_SUBAGENT_CHILD_DEADLINE_MS,
+  DEFAULT_SUBAGENT_CANCELLATION_GRACE_MS,
+  MAX_SUBAGENT_CHILD_TURNS,
+  MAX_SUBAGENT_CHILD_TOOL_CALLS,
+  MAX_SUBAGENT_CHILD_EVENTS,
+  MAX_SUBAGENT_CHILD_OUTPUT_CHARS,
+  MAX_SUBAGENT_CHILD_PROTOCOL_CHARS,
+} from "./subagent-child-policy.js";
 export * from "./subagent-child-policy.js";
 const SAFE_CHILD_PROVIDER_FAILURE = "The model provider returned an error.";
 const CHILD_TURN_LIMIT_WARNING = "The child reached its turn limit.";
-const CHILD_REPORT_INSTRUCTION = "Your remaining allowance is for one text-only final report. No tools or further actions are available. Report only what the settled history supports: partial findings, checks actually run and their observed results, remaining checks and blockers. Work is incomplete and unverified; do not claim task acceptance or that interrupted/unknown effects succeeded. Keep the report concise.";
+const CHILD_REPORT_INSTRUCTION =
+  "Your remaining allowance is for one text-only final report. No tools or further actions are available. Report only what the settled history supports: partial findings, checks actually run and their observed results, remaining checks and blockers. Work is incomplete and unverified; do not claim task acceptance or that interrupted/unknown effects succeeded. Keep the report concise.";
 
 export interface SubagentChildRunnerPolicy {
   deadlineMs?: number;
@@ -94,7 +109,7 @@ export interface SubagentChildRunnerDependencies {
     transformRuntime?: SubagentRuntimeTransform;
     thinkingLevel: ThinkingLevel;
     compactionEngine?: CompactionEngine;
-  compactionModelOverrides?: CompactionModelOverrides;
+    compactionModelOverrides?: CompactionModelOverrides;
     systemPrompt: string;
     tools: AgentTool[];
     initialMessages: AgentMessage[];
@@ -306,18 +321,23 @@ export function subagentPartialWorkNotes(
     const listed = changedFiles.slice(0, MAX_PARTIAL_CHANGED_FILES_LISTED);
     const more = changedFiles.length - listed.length + untrackedChangedFiles;
     // One path per line: a name can itself contain ", " or " and ".
-    notes.push([
-      "Files it changed:",
-      ...listed.map((path) => `- ${path}`),
-      ...(more > 0 ? [`- and ${more} more`] : []),
-      ...(options.mayBeIncomplete ? [CHANGED_FILES_MAY_BE_INCOMPLETE_NOTE] : []),
-    ].join("\n"));
+    notes.push(
+      [
+        "Files it changed:",
+        ...listed.map((path) => `- ${path}`),
+        ...(more > 0 ? [`- and ${more} more`] : []),
+        ...(options.mayBeIncomplete ? [CHANGED_FILES_MAY_BE_INCOMPLETE_NOTE] : []),
+      ].join("\n"),
+    );
   }
   if (ranCommands) notes.push(RAN_COMMANDS_NOTE);
   return notes;
 }
 
-function timedOutResult(request: SubagentTaskRequest, timeLimit: SubagentTimeLimit): SubagentTaskResult {
+function timedOutResult(
+  request: SubagentTaskRequest,
+  timeLimit: SubagentTimeLimit,
+): SubagentTaskResult {
   return {
     role: request.role,
     label: request.label,
@@ -706,23 +726,30 @@ export async function runSubagentChild(input: RunSubagentChildInput): Promise<Su
         // is never interrupted to manufacture a report or given extra time.
         // Only a Bot reply's limit is a real deadline worth reporting against;
         // the chat limit is a 24-hour safety net.
-        if (turns >= policy.maxTurns - 1 || toolCalls >= policy.maxToolCalls ||
+        if (
+          turns >= policy.maxTurns - 1 ||
+          toolCalls >= policy.maxToolCalls ||
           (policy.timeLimit === "bot" &&
-            now() >= deadlineAt - Math.min(30_000, policy.deadlineMs * 0.1))) {
-          reportingWarning ??= turns >= policy.maxTurns - 1
-            ? CHILD_TURN_LIMIT_WARNING
-            : toolCalls >= policy.maxToolCalls
-              ? "The child reached its tool-call limit."
-              : "The child reserved its remaining deadline for reporting.";
+            now() >= deadlineAt - Math.min(30_000, policy.deadlineMs * 0.1))
+        ) {
+          reportingWarning ??=
+            turns >= policy.maxTurns - 1
+              ? CHILD_TURN_LIMIT_WARNING
+              : toolCalls >= policy.maxToolCalls
+                ? "The child reached its tool-call limit."
+                : "The child reserved its remaining deadline for reporting.";
           return {
             context: {
               ...context,
               tools: [],
-              messages: [...context.messages, {
-                role: "user",
-                content: [{ type: "text", text: CHILD_REPORT_INSTRUCTION }],
-                timestamp: Date.now(),
-              }],
+              messages: [
+                ...context.messages,
+                {
+                  role: "user",
+                  content: [{ type: "text", text: CHILD_REPORT_INSTRUCTION }],
+                  timestamp: Date.now(),
+                },
+              ],
             },
           };
         }
@@ -730,10 +757,15 @@ export async function runSubagentChild(input: RunSubagentChildInput): Promise<Su
       },
       // A noncompliant model can still emit a stale tool name. End after this
       // one report response, and deny it before any approval or effect dispatch.
-      finishTurn: () => reportingWarning ? { action: "end" } : undefined,
+      finishTurn: () => (reportingWarning ? { action: "end" } : undefined),
       beforeToolCall: async (context, signal) => {
         const decide = async () => {
-          if (reportingWarning) return { block: true, terminate: true, reason: "Only a final text report is permitted." };
+          if (reportingWarning)
+            return {
+              block: true,
+              terminate: true,
+              reason: "Only a final text report is permitted.",
+            };
           const workspaceResult = await workspaceWriteApproval?.beforeToolCall(context, signal);
           if (workspaceResult !== undefined) return workspaceResult;
           const mutationResult = await mcpMutationApproval?.beforeToolCall(context, signal);
@@ -990,30 +1022,33 @@ export async function runSubagentChild(input: RunSubagentChildInput): Promise<Su
       return withPartial(safeFailure(input.request));
     }
     if (outcome.runtimeOutcome.kind === "provider_failed") {
-      return withPartial(safeFailure(
-        input.request,
-        outcome.runtimeOutcome.reason === "output-limit"
-          ? "The child reached its output limit."
-          : SAFE_CHILD_PROVIDER_FAILURE,
-      ));
+      return withPartial(
+        safeFailure(
+          input.request,
+          outcome.runtimeOutcome.reason === "output-limit"
+            ? "The child reached its output limit."
+            : SAFE_CHILD_PROVIDER_FAILURE,
+        ),
+      );
     }
     if (outcome.runtimeOutcome.kind === "app_cancelled") return withPartial(interruptedResult());
     if (terminalError) return withPartial(safeFailure(input.request, terminalError));
     if (terminalAborted) return withPartial(interruptedResult());
     if (reportingWarning) {
       if (!observedTerminalAssistant || !terminalOutput.trim()) {
-        return withPartial(safeFailure(
-          input.request,
-          `${reportingWarning} The child did not provide a final text report.`,
-        ));
+        return withPartial(
+          safeFailure(
+            input.request,
+            `${reportingWarning} The child did not provide a final text report.`,
+          ),
+        );
       }
       return withPartial(safeFailure(input.request, reportingWarning));
     }
     if (!observedTerminalAssistant || !terminalOutput.trim()) {
-      return withPartial(safeFailure(
-        input.request,
-        "The child completed without a textual assistant result.",
-      ));
+      return withPartial(
+        safeFailure(input.request, "The child completed without a textual assistant result."),
+      );
     }
     return {
       role: input.request.role,

@@ -108,7 +108,11 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-function exactKeys(value: Record<string, unknown>, required: readonly string[], optional: readonly string[] = []): boolean {
+function exactKeys(
+  value: Record<string, unknown>,
+  required: readonly string[],
+  optional: readonly string[] = [],
+): boolean {
   const keys = Object.keys(value);
   return (
     required.every((key) => key in value) &&
@@ -122,12 +126,17 @@ function positiveInteger(value: unknown): value is number {
   return Number.isSafeInteger(value) && (value as number) >= 1;
 }
 
-
-
 function parseMigration(value: unknown): SubagentRunMigrationV2 | undefined {
   if (
     !isRecord(value) ||
-    !exactKeys(value, ["status", "adapterVersion", "source", "sourceGeneration", "sourceSha256", "migratedAt"]) ||
+    !exactKeys(value, [
+      "status",
+      "adapterVersion",
+      "source",
+      "sourceGeneration",
+      "sourceSha256",
+      "migratedAt",
+    ]) ||
     (value.status !== "prepared" && value.status !== "committed") ||
     value.adapterVersion !== MIGRATION_ADAPTER_VERSION ||
     (value.source !== "missing" && value.source !== "v1") ||
@@ -153,7 +162,9 @@ function parseMigration(value: unknown): SubagentRunMigrationV2 | undefined {
 }
 
 function boundedPrivateString(value: unknown): value is string {
-  return typeof value === "string" && value.length > 0 && value.length <= 256 && !value.includes("\0");
+  return (
+    typeof value === "string" && value.length > 0 && value.length <= 256 && !value.includes("\0")
+  );
 }
 
 function parseAuthority(value: unknown): SubagentAuthorityV2 | undefined {
@@ -201,7 +212,9 @@ function parseAuthority(value: unknown): SubagentAuthorityV2 | undefined {
   }
 }
 
-function parseImportedManifest(value: Record<string, unknown>): ImportedSubagentPrivateRunManifestV2 | undefined {
+function parseImportedManifest(
+  value: Record<string, unknown>,
+): ImportedSubagentPrivateRunManifestV2 | undefined {
   if (
     !exactKeys(value, [
       "version",
@@ -217,7 +230,9 @@ function parseImportedManifest(value: Record<string, unknown>): ImportedSubagent
     value.version !== STORE_VERSION ||
     value.provenance !== "v1_import" ||
     value.reusableAuthority !== false ||
-    ![value.runId, value.generationId, value.childId, value.chatId, value.workspaceId].every(isSafeSubagentIdentifier) ||
+    ![value.runId, value.generationId, value.childId, value.chatId, value.workspaceId].every(
+      isSafeSubagentIdentifier,
+    ) ||
     typeof value.task !== "string" ||
     value.task.length === 0 ||
     value.task.length > 240 ||
@@ -238,7 +253,9 @@ function parseImportedManifest(value: Record<string, unknown>): ImportedSubagent
   };
 }
 
-function parseNativeManifest(value: Record<string, unknown>): NativeSubagentPrivateRunManifestV2 | undefined {
+function parseNativeManifest(
+  value: Record<string, unknown>,
+): NativeSubagentPrivateRunManifestV2 | undefined {
   if (
     !exactKeys(value, [
       "version",
@@ -255,7 +272,9 @@ function parseNativeManifest(value: Record<string, unknown>): NativeSubagentPriv
     value.version !== STORE_VERSION ||
     value.provenance !== "v2_native" ||
     value.reusableAuthority !== false ||
-    ![value.runId, value.generationId, value.childId, value.chatId, value.workspaceId].every(isSafeSubagentIdentifier) ||
+    ![value.runId, value.generationId, value.childId, value.chatId, value.workspaceId].every(
+      isSafeSubagentIdentifier,
+    ) ||
     typeof value.task !== "string" ||
     value.task.length === 0 ||
     value.task.length > 240 ||
@@ -279,12 +298,21 @@ function parseNativeManifest(value: Record<string, unknown>): NativeSubagentPriv
   };
 }
 
-export function parseMutableSubagentPrivateRunManifestV2(value: unknown): MutableSubagentPrivateRunManifestV2 | undefined {
+export function parseMutableSubagentPrivateRunManifestV2(
+  value: unknown,
+): MutableSubagentPrivateRunManifestV2 | undefined {
   if (!isRecord(value)) return undefined;
-  return value.provenance === "v1_import" ? parseImportedManifest(value) : value.provenance === "v2_native" ? parseNativeManifest(value) : undefined;
+  return value.provenance === "v1_import"
+    ? parseImportedManifest(value)
+    : value.provenance === "v2_native"
+      ? parseNativeManifest(value)
+      : undefined;
 }
 
-function manifestMatchesSnapshot(manifest: MutableSubagentPrivateRunManifestV2, snapshot: SubagentRunSnapshotV2): boolean {
+function manifestMatchesSnapshot(
+  manifest: MutableSubagentPrivateRunManifestV2,
+  snapshot: SubagentRunSnapshotV2,
+): boolean {
   if (
     manifest.runId !== snapshot.runId ||
     manifest.generationId !== snapshot.generationId ||
@@ -310,20 +338,26 @@ function manifestMatchesSnapshot(manifest: MutableSubagentPrivateRunManifestV2, 
   );
 }
 
-export function parseMutableSubagentRunDatabaseV2(value: unknown): MutableSubagentRunDatabaseV2 | undefined {
+export function parseMutableSubagentRunDatabaseV2(
+  value: unknown,
+): MutableSubagentRunDatabaseV2 | undefined {
   if (
     !isRecord(value) ||
-    !exactKeys(value, [
-      "version",
-      "storeRevision",
-      "migration",
-      "snapshots",
-      "manifests",
-      "approvals",
-      "effects",
-      "pendingChatDeletions",
-      "deletionTransactions",
-    ], ["backgroundRuns"]) ||
+    !exactKeys(
+      value,
+      [
+        "version",
+        "storeRevision",
+        "migration",
+        "snapshots",
+        "manifests",
+        "approvals",
+        "effects",
+        "pendingChatDeletions",
+        "deletionTransactions",
+      ],
+      ["backgroundRuns"],
+    ) ||
     value.version !== STORE_VERSION ||
     !positiveInteger(value.storeRevision) ||
     !Array.isArray(value.snapshots) ||
@@ -336,7 +370,8 @@ export function parseMutableSubagentRunDatabaseV2(value: unknown): MutableSubage
     value.effects.length > MAX_DURABLE_SUBAGENT_EFFECTS ||
     value.effects.length !== value.approvals.length ||
     (value.backgroundRuns !== undefined && !Array.isArray(value.backgroundRuns)) ||
-    (Array.isArray(value.backgroundRuns) && value.backgroundRuns.length > MAX_STORED_SUBAGENT_RUNS) ||
+    (Array.isArray(value.backgroundRuns) &&
+      value.backgroundRuns.length > MAX_STORED_SUBAGENT_RUNS) ||
     !Array.isArray(value.pendingChatDeletions) ||
     value.pendingChatDeletions.length > MAX_SUBAGENT_CHAT_TOMBSTONES ||
     !Array.isArray(value.deletionTransactions) ||
@@ -390,14 +425,21 @@ export function parseMutableSubagentRunDatabaseV2(value: unknown): MutableSubage
     parsedApprovals.some(({ approvalId }) => effectsById.has(approvalId)) ||
     new Set(parsedApprovals.map(({ effectId }) => effectId)).size !== parsedApprovals.length ||
     new Set(parsedEffects.map(({ approvalId }) => approvalId)).size !== parsedEffects.length ||
-    new Set(parsedEffects.map(({ runId, toolCallId }) => `${runId}\0${toolCallId}`)).size !== parsedEffects.length ||
+    new Set(parsedEffects.map(({ runId, toolCallId }) => `${runId}\0${toolCallId}`)).size !==
+      parsedEffects.length ||
     backgroundIds.size !== parsedBackgroundRuns.length ||
     parsedBackgroundRuns.some((run) => {
       const snapshot = snapshotsById.get(run.snapshot.runId);
       const manifest = manifestsById.get(run.snapshot.runId);
-      return !snapshot || !manifest || manifest.provenance !== "v2_native" ||
-        !isDeepStrictEqual(snapshot, run.snapshot) || !isDeepStrictEqual(manifest.authority, run.manifest.authority) ||
-        manifest.task !== run.manifest.task || pendingSet.has(run.snapshot.chatId);
+      return (
+        !snapshot ||
+        !manifest ||
+        manifest.provenance !== "v2_native" ||
+        !isDeepStrictEqual(snapshot, run.snapshot) ||
+        !isDeepStrictEqual(manifest.authority, run.manifest.authority) ||
+        manifest.task !== run.manifest.task ||
+        pendingSet.has(run.snapshot.chatId)
+      );
     }) ||
     parsedEffects.some((effect) => {
       const approval = approvalsById.get(effect.approvalId);
@@ -463,12 +505,18 @@ function parseDurableContents(contents: Buffer): MutableSubagentRunDatabaseV2 {
     throw new Error("Subagent V2 storage contains unreadable evidence and was preserved.");
   }
   const database = parseMutableSubagentRunDatabaseV2(value);
-  if (!database) throw new Error("Subagent V2 storage contains invalid evidence and was preserved.");
+  if (!database)
+    throw new Error("Subagent V2 storage contains invalid evidence and was preserved.");
   return database;
 }
 
 function newestFirst(values: readonly SubagentRunSnapshotV2[]): SubagentRunSnapshotV2[] {
-  return [...values].sort((left, right) => right.updatedAt - left.updatedAt || right.revision - left.revision || left.runId.localeCompare(right.runId));
+  return [...values].sort(
+    (left, right) =>
+      right.updatedAt - left.updatedAt ||
+      right.revision - left.revision ||
+      left.runId.localeCompare(right.runId),
+  );
 }
 
 function interrupt(snapshot: SubagentRunSnapshotV2, now: number): SubagentRunSnapshotV2 {
@@ -519,14 +567,28 @@ function reconcileEffectsAfterRestart(
 ): Pick<MutableSubagentRunDatabaseV2, "approvals" | "effects"> | undefined {
   let changed = false;
   const effects = database.effects.map((effect) => {
-    if (effect.state !== "prepared" && effect.state !== "authorized" && effect.state !== "dispatch_started") {
+    if (
+      effect.state !== "prepared" &&
+      effect.state !== "authorized" &&
+      effect.state !== "dispatch_started"
+    ) {
       return effect;
     }
     changed = true;
     const updatedAt = Math.max(effect.updatedAt, restartTime);
     return effect.state === "dispatch_started"
-      ? { ...effect, state: "unknown" as const, updatedAt, terminalDigest: STARTUP_UNKNOWN_EFFECT_DIGEST }
-      : { ...effect, state: "cancelled_before_dispatch" as const, updatedAt, terminalDigest: STARTUP_CANCELLED_EFFECT_DIGEST };
+      ? {
+          ...effect,
+          state: "unknown" as const,
+          updatedAt,
+          terminalDigest: STARTUP_UNKNOWN_EFFECT_DIGEST,
+        }
+      : {
+          ...effect,
+          state: "cancelled_before_dispatch" as const,
+          updatedAt,
+          terminalDigest: STARTUP_CANCELLED_EFFECT_DIGEST,
+        };
   });
   if (!changed) return undefined;
   const effectsByApproval = new Map(effects.map((effect) => [effect.approvalId, effect]));
@@ -534,7 +596,10 @@ function reconcileEffectsAfterRestart(
     const effect = effectsByApproval.get(approval.approvalId)!;
     return {
       ...approval,
-      state: effect.state === "cancelled_before_dispatch" ? "cancelled" as const : "consumed" as const,
+      state:
+        effect.state === "cancelled_before_dispatch"
+          ? ("cancelled" as const)
+          : ("consumed" as const),
       updatedAt: effect.updatedAt,
     };
   });
@@ -561,14 +626,18 @@ export function createSubagentRunStoreV2(
 
   function serialized<T>(operation: () => Promise<T>): Promise<T> {
     const result = operationTail.then(operation, operation);
-    operationTail = result.then(() => undefined, () => undefined);
+    operationTail = result.then(
+      () => undefined,
+      () => undefined,
+    );
     return result;
   }
 
   async function storage(): Promise<SubagentRunStoreStorage> {
     if (!storagePromise) {
       storagePromise = resolveDirectory().then((directory) => {
-        if (!directory.startsWith("/")) throw new Error("Subagent V2 storage requires an absolute directory.");
+        if (!directory.startsWith("/"))
+          throw new Error("Subagent V2 storage requires an absolute directory.");
         return storageFactory(directory);
       });
     }
@@ -585,10 +654,14 @@ export function createSubagentRunStoreV2(
     return value;
   }
 
-  async function read(): Promise<{ database: MutableSubagentRunDatabaseV2; generation: SubagentRunStoreGeneration }> {
+  async function read(): Promise<{
+    database: MutableSubagentRunDatabaseV2;
+    generation: SubagentRunStoreGeneration;
+  }> {
     const durable = await (await storage()).read();
     if (durable.status === "missing") throw new Error("Committed subagent V2 storage is missing.");
-    if (durable.status === "oversized") throw new Error("Subagent V2 storage contains oversized evidence and was preserved.");
+    if (durable.status === "oversized")
+      throw new Error("Subagent V2 storage contains oversized evidence and was preserved.");
     const database = parseDurableContents(durable.contents);
     if (database.migration.status !== "committed") {
       throw new Error("Subagent V2 storage is not committed.");
@@ -611,7 +684,10 @@ export function createSubagentRunStoreV2(
     return { database, generation: durable.generation };
   }
 
-  async function write(expected: SubagentRunStoreGeneration, database: MutableSubagentRunDatabaseV2): Promise<void> {
+  async function write(
+    expected: SubagentRunStoreGeneration,
+    database: MutableSubagentRunDatabaseV2,
+  ): Promise<void> {
     await (await storage()).write(expected, serializedDatabase(database));
   }
 
@@ -626,7 +702,11 @@ export function createSubagentRunStoreV2(
         await write(current.generation, next);
         return next;
       } catch (error) {
-        if (!(error instanceof SubagentRunStoreStorageError) || error.failure !== "destination_changed" || attempt >= MAX_NATIVE_GENERATION_CONFLICT_RETRIES) {
+        if (
+          !(error instanceof SubagentRunStoreStorageError) ||
+          error.failure !== "destination_changed" ||
+          attempt >= MAX_NATIVE_GENERATION_CONFLICT_RETRIES
+        ) {
           throw error;
         }
       }
@@ -648,15 +728,21 @@ export function createSubagentRunStoreV2(
       let transitioned: DurableSubagentEffectV2 | undefined;
       let expiredBeforeDispatch = false;
       await mutate((database) => {
-        const effectIndex = database.effects.findIndex(({ effectId }) => effectId === owner.effectId);
+        const effectIndex = database.effects.findIndex(
+          ({ effectId }) => effectId === owner.effectId,
+        );
         const effect = database.effects[effectIndex];
         if (!effect || !effectOwnerMatches(effect, owner)) {
           throw new Error("Durable subagent V2 effect ownership mismatch.");
         }
         if (effect.state !== expectedState) {
-          throw new Error(`Durable subagent V2 effect cannot move from ${effect.state} to ${nextState}.`);
+          throw new Error(
+            `Durable subagent V2 effect cannot move from ${effect.state} to ${nextState}.`,
+          );
         }
-        const approvalIndex = database.approvals.findIndex(({ approvalId }) => approvalId === owner.approvalId);
+        const approvalIndex = database.approvals.findIndex(
+          ({ approvalId }) => approvalId === owner.approvalId,
+        );
         const approval = database.approvals[approvalIndex]!;
         if (expectedState === "prepared" && approval.expiresAt <= updatedAt) {
           throw new Error("Durable subagent V2 approval expired before authorization.");
@@ -690,7 +776,11 @@ export function createSubagentRunStoreV2(
           updatedAt: Math.max(effect.updatedAt, updatedAt),
         };
         const approvals = [...database.approvals];
-        approvals[approvalIndex] = { ...approval, state: approvalState, updatedAt: transitioned.updatedAt };
+        approvals[approvalIndex] = {
+          ...approval,
+          state: approvalState,
+          updatedAt: transitioned.updatedAt,
+        };
         const effects = [...database.effects];
         effects[effectIndex] = transitioned;
         return { ...database, storeRevision: database.storeRevision + 1, approvals, effects };
@@ -702,7 +792,9 @@ export function createSubagentRunStoreV2(
     });
   }
 
-  function nativeManifestForBackground(run: BackgroundSubagentRunV2): NativeSubagentPrivateRunManifestV2 {
+  function nativeManifestForBackground(
+    run: BackgroundSubagentRunV2,
+  ): NativeSubagentPrivateRunManifestV2 {
     return {
       version: STORE_VERSION,
       provenance: "v2_native",
@@ -740,7 +832,7 @@ export function createSubagentRunStoreV2(
 
     async put(value, expectedRevision) {
       const run = parseBackgroundSubagentRunV2(value);
-      if (!run || (expectedRevision !== null && (!positiveInteger(expectedRevision)))) {
+      if (!run || (expectedRevision !== null && !positiveInteger(expectedRevision))) {
         throw new Error("Invalid private background lifecycle record.");
       }
       return serialized(async () => {
@@ -756,7 +848,8 @@ export function createSubagentRunStoreV2(
           const current = database.backgroundRuns[currentIndex];
           if (
             expectedRevision === null
-              ? current !== undefined || database.snapshots.some(({ runId }) => runId === run.snapshot.runId)
+              ? current !== undefined ||
+                database.snapshots.some(({ runId }) => runId === run.snapshot.runId)
               : !current || current.snapshot.revision !== expectedRevision
           ) {
             applied = false;
@@ -867,7 +960,8 @@ export function createSubagentRunStoreV2(
             snapshots.every((snapshot, index) => snapshot === database.snapshots[index]) &&
             backgroundRuns.every((run, index) => run === database.backgroundRuns[index]) &&
             !reconciledEffects
-          ) return undefined;
+          )
+            return undefined;
           return {
             ...database,
             storeRevision: database.storeRevision + 1,
@@ -888,34 +982,51 @@ export function createSubagentRunStoreV2(
       }
       return serialized(async () => {
         requireInitialized();
-        if (deletedChats.has(snapshot.chatId)) throw new Error("Subagent history is no longer available for this chat.");
+        if (deletedChats.has(snapshot.chatId))
+          throw new Error("Subagent history is no longer available for this chat.");
         await mutate((database) => {
           if (database.pendingChatDeletions.includes(snapshot.chatId)) {
             deletedChats.add(snapshot.chatId);
             throw new Error("Subagent history is no longer available for this chat.");
           }
-          const existingIndex = database.snapshots.findIndex(({ runId }) => runId === snapshot.runId);
+          const existingIndex = database.snapshots.findIndex(
+            ({ runId }) => runId === snapshot.runId,
+          );
           if (existingIndex >= 0) {
             const existing = database.snapshots[existingIndex]!;
-            const existingManifest = database.manifests.find(({ runId }) => runId === snapshot.runId)!;
-            if (!sameSubagentRunSnapshotIdentity(existing, snapshot) || !isDeepStrictEqual(existingManifest, manifest)) {
+            const existingManifest = database.manifests.find(
+              ({ runId }) => runId === snapshot.runId,
+            )!;
+            if (
+              !sameSubagentRunSnapshotIdentity(existing, snapshot) ||
+              !isDeepStrictEqual(existingManifest, manifest)
+            ) {
               throw new Error("Subagent V2 run identity or authority cannot change.");
             }
             if (snapshot.revision <= existing.revision) {
               if (isDeepStrictEqual(snapshot, existing)) return undefined;
               throw new Error("Subagent V2 run revisions must increase monotonically.");
             }
-            if (!subagentRunSnapshotProgresses(existing, snapshot)) throw new Error("Subagent V2 lifecycle cannot move backward.");
+            if (!subagentRunSnapshotProgresses(existing, snapshot))
+              throw new Error("Subagent V2 lifecycle cannot move backward.");
           } else if (
             database.snapshots.length +
               runReservations.size -
               (runReservations.has(snapshot.runId) ? 1 : 0) >=
             maxRuns
           ) {
-            throw new Error("Subagent V2 history is at capacity. Delete an older chat before starting more delegated work.");
+            throw new Error(
+              "Subagent V2 history is at capacity. Delete an older chat before starting more delegated work.",
+            );
           }
-          const snapshots = newestFirst([snapshot, ...database.snapshots.filter(({ runId }) => runId !== snapshot.runId)]);
-          const manifests = [manifest, ...database.manifests.filter(({ runId }) => runId !== snapshot.runId)];
+          const snapshots = newestFirst([
+            snapshot,
+            ...database.snapshots.filter(({ runId }) => runId !== snapshot.runId),
+          ]);
+          const manifests = [
+            manifest,
+            ...database.manifests.filter(({ runId }) => runId !== snapshot.runId),
+          ];
           return { ...database, storeRevision: database.storeRevision + 1, snapshots, manifests };
         });
         runReservations.delete(snapshot.runId);
@@ -939,7 +1050,9 @@ export function createSubagentRunStoreV2(
         requireInitialized();
         const { database } = await read();
         if (deletedChats.has(chatId)) return [];
-        return newestFirst(database.snapshots.filter((snapshot) => snapshot.chatId === chatId)).map((snapshot) => structuredClone(snapshot));
+        return newestFirst(database.snapshots.filter((snapshot) => snapshot.chatId === chatId)).map(
+          (snapshot) => structuredClone(snapshot),
+        );
       });
     },
 
@@ -949,10 +1062,14 @@ export function createSubagentRunStoreV2(
       return serialized(async () => {
         requireInitialized();
         const preparedAt = currentTime();
-        if (input.expiresAt <= preparedAt) throw new Error("Durable subagent V2 approval is already expired.");
+        if (input.expiresAt <= preparedAt)
+          throw new Error("Durable subagent V2 approval is already expired.");
         let prepared: DurableSubagentEffectV2 | undefined;
         await mutate((database) => {
-          if (database.pendingChatDeletions.includes(input.chatId) || deletedChats.has(input.chatId)) {
+          if (
+            database.pendingChatDeletions.includes(input.chatId) ||
+            deletedChats.has(input.chatId)
+          ) {
             throw new Error("Subagent history is no longer available for this chat.");
           }
           const manifest = database.manifests.find(({ runId }) => runId === input.runId);
@@ -970,12 +1087,13 @@ export function createSubagentRunStoreV2(
           }
           if (
             input.approvalId === input.effectId ||
-            database.effects.some((effect) =>
-              effect.effectId === input.effectId ||
-              effect.approvalId === input.approvalId ||
-              effect.effectId === input.approvalId ||
-              effect.approvalId === input.effectId ||
-              (effect.runId === input.runId && effect.toolCallId === input.toolCallId)
+            database.effects.some(
+              (effect) =>
+                effect.effectId === input.effectId ||
+                effect.approvalId === input.approvalId ||
+                effect.effectId === input.approvalId ||
+                effect.approvalId === input.effectId ||
+                (effect.runId === input.runId && effect.toolCallId === input.toolCallId),
             )
           ) {
             throw new Error("Durable subagent V2 effect identity was reused.");
@@ -1033,7 +1151,10 @@ export function createSubagentRunStoreV2(
       return transitionEffect(value, "authorized", "dispatch_started", "consumed");
     },
 
-    async cancelEffectBeforeDispatch(value: unknown, unsent?: McpToolCallNotSentError): Promise<DurableSubagentEffectV2> {
+    async cancelEffectBeforeDispatch(
+      value: unknown,
+      unsent?: McpToolCallNotSentError,
+    ): Promise<DurableSubagentEffectV2> {
       const owner = parseDurableSubagentEffectOwnerV2(value);
       if (!owner) throw new Error("Invalid durable subagent V2 effect owner.");
       return serialized(async () => {
@@ -1041,10 +1162,15 @@ export function createSubagentRunStoreV2(
         const updatedAt = currentTime();
         let cancelled: DurableSubagentEffectV2 | undefined;
         await mutate((database) => {
-          const effectIndex = database.effects.findIndex(({ effectId }) => effectId === owner.effectId);
+          const effectIndex = database.effects.findIndex(
+            ({ effectId }) => effectId === owner.effectId,
+          );
           const effect = database.effects[effectIndex];
-          if (!effect || !effectOwnerMatches(effect, owner)) throw new Error("Durable subagent V2 effect ownership mismatch.");
-          const provenUnsent = effect.state === "dispatch_started" && effect.effectKind === "mcp_mutation" &&
+          if (!effect || !effectOwnerMatches(effect, owner))
+            throw new Error("Durable subagent V2 effect ownership mismatch.");
+          const provenUnsent =
+            effect.state === "dispatch_started" &&
+            effect.effectKind === "mcp_mutation" &&
             unsent instanceof McpToolCallNotSentError;
           if (effect.state !== "prepared" && effect.state !== "authorized" && !provenUnsent) {
             throw new Error("Durable subagent V2 effect cannot be cancelled after dispatch.");
@@ -1055,9 +1181,15 @@ export function createSubagentRunStoreV2(
             updatedAt: Math.max(effect.updatedAt, updatedAt),
             terminalDigest: EXPLICIT_CANCELLED_EFFECT_DIGEST,
           };
-          const approvalIndex = database.approvals.findIndex(({ approvalId }) => approvalId === owner.approvalId);
+          const approvalIndex = database.approvals.findIndex(
+            ({ approvalId }) => approvalId === owner.approvalId,
+          );
           const approvals = [...database.approvals];
-          approvals[approvalIndex] = { ...approvals[approvalIndex]!, state: "cancelled", updatedAt: cancelled.updatedAt };
+          approvals[approvalIndex] = {
+            ...approvals[approvalIndex]!,
+            state: "cancelled",
+            updatedAt: cancelled.updatedAt,
+          };
           const effects = [...database.effects];
           effects[effectIndex] = cancelled;
           return { ...database, storeRevision: database.storeRevision + 1, approvals, effects };
@@ -1084,11 +1216,16 @@ export function createSubagentRunStoreV2(
           const updatedAt = currentTime();
           let finished: DurableSubagentEffectV2 | undefined;
           await mutate((database) => {
-            const effectIndex = database.effects.findIndex(({ effectId }) => effectId === input.effectId);
+            const effectIndex = database.effects.findIndex(
+              ({ effectId }) => effectId === input.effectId,
+            );
             const effect = database.effects[effectIndex];
-            if (!effect || !effectOwnerMatches(effect, input)) throw new Error("Durable subagent V2 effect ownership mismatch.");
+            if (!effect || !effectOwnerMatches(effect, input))
+              throw new Error("Durable subagent V2 effect ownership mismatch.");
             if (effect.state !== "dispatch_started") {
-              throw new Error("Durable subagent V2 effect must be dispatch-started before completion.");
+              throw new Error(
+                "Durable subagent V2 effect must be dispatch-started before completion.",
+              );
             }
             dispatched = structuredClone(effect);
             finished = {
@@ -1097,9 +1234,14 @@ export function createSubagentRunStoreV2(
               updatedAt: Math.max(effect.updatedAt, updatedAt),
               terminalDigest: input.terminalDigest,
             };
-            const approvalIndex = database.approvals.findIndex(({ approvalId }) => approvalId === input.approvalId);
+            const approvalIndex = database.approvals.findIndex(
+              ({ approvalId }) => approvalId === input.approvalId,
+            );
             const approvals = [...database.approvals];
-            approvals[approvalIndex] = { ...approvals[approvalIndex]!, updatedAt: finished.updatedAt };
+            approvals[approvalIndex] = {
+              ...approvals[approvalIndex]!,
+              updatedAt: finished.updatedAt,
+            };
             const effects = [...database.effects];
             effects[effectIndex] = finished;
             return { ...database, storeRevision: database.storeRevision + 1, approvals, effects };
@@ -1155,8 +1297,12 @@ export function createSubagentRunStoreV2(
       if (!isSafeSubagentIdentifier(chatId) || deletedChats.has(chatId)) return [];
       return serialized(async () => {
         requireInitialized();
-        const durable = (await read()).database.effects.filter((effect) => effect.chatId === chatId);
-        return durable.map((effect) => structuredClone(localUnknownEffects.get(effect.effectId) ?? effect));
+        const durable = (await read()).database.effects.filter(
+          (effect) => effect.chatId === chatId,
+        );
+        return durable.map((effect) =>
+          structuredClone(localUnknownEffects.get(effect.effectId) ?? effect),
+        );
       });
     },
 
@@ -1170,7 +1316,10 @@ export function createSubagentRunStoreV2(
         return database.effects
           .filter((effect) => effect.runId === runId && effect.chatId === chatId)
           .map((effect) => localUnknownEffects.get(effect.effectId) ?? effect)
-          .sort((left, right) => left.updatedAt - right.updatedAt || left.effectId.localeCompare(right.effectId))
+          .sort(
+            (left, right) =>
+              left.updatedAt - right.updatedAt || left.effectId.localeCompare(right.effectId),
+          )
           .map(projectDurableSubagentEffectActivityV1);
       });
     },
@@ -1202,26 +1351,42 @@ export function createSubagentRunStoreV2(
         await serialized(async () => {
           requireInitialized();
           await mutate((database) => {
-            if (database.effects.some((effect) => {
-              if (effect.chatId !== chatId) return false;
-              const local = localUnknownEffects.get(effect.effectId);
-              return !local && !isDurableSubagentEffectTerminalV2(effect.state);
-            })) {
+            if (
+              database.effects.some((effect) => {
+                if (effect.chatId !== chatId) return false;
+                const local = localUnknownEffects.get(effect.effectId);
+                return !local && !isDurableSubagentEffectTerminalV2(effect.state);
+              })
+            ) {
               throw new Error("Subagent V2 chat has active durable effects and cannot be deleted.");
             }
-          const snapshots = database.snapshots.filter((snapshot) => snapshot.chatId !== chatId);
-          const manifests = database.manifests.filter((manifest) => manifest.chatId !== chatId);
-          const approvals = database.approvals.filter((approval) => approval.chatId !== chatId);
-          const effects = database.effects.filter((effect) => effect.chatId !== chatId);
-          const backgroundRuns = database.backgroundRuns.filter(
-            (run) => run.snapshot.chatId !== chatId,
-          );
-          const pendingChatDeletions = database.pendingChatDeletions.includes(chatId)
-            ? database.pendingChatDeletions
-            : [...database.pendingChatDeletions, chatId];
-          if (pendingChatDeletions.length > MAX_SUBAGENT_CHAT_TOMBSTONES) throw new Error("Too many subagent V2 history deletions are pending.");
-          if (snapshots.length === database.snapshots.length && pendingChatDeletions === database.pendingChatDeletions) return undefined;
-          return { ...database, storeRevision: database.storeRevision + 1, snapshots, manifests, approvals, effects, backgroundRuns, pendingChatDeletions };
+            const snapshots = database.snapshots.filter((snapshot) => snapshot.chatId !== chatId);
+            const manifests = database.manifests.filter((manifest) => manifest.chatId !== chatId);
+            const approvals = database.approvals.filter((approval) => approval.chatId !== chatId);
+            const effects = database.effects.filter((effect) => effect.chatId !== chatId);
+            const backgroundRuns = database.backgroundRuns.filter(
+              (run) => run.snapshot.chatId !== chatId,
+            );
+            const pendingChatDeletions = database.pendingChatDeletions.includes(chatId)
+              ? database.pendingChatDeletions
+              : [...database.pendingChatDeletions, chatId];
+            if (pendingChatDeletions.length > MAX_SUBAGENT_CHAT_TOMBSTONES)
+              throw new Error("Too many subagent V2 history deletions are pending.");
+            if (
+              snapshots.length === database.snapshots.length &&
+              pendingChatDeletions === database.pendingChatDeletions
+            )
+              return undefined;
+            return {
+              ...database,
+              storeRevision: database.storeRevision + 1,
+              snapshots,
+              manifests,
+              approvals,
+              effects,
+              backgroundRuns,
+              pendingChatDeletions,
+            };
           });
           for (const [effectId, effect] of localUnknownEffects) {
             if (effect.chatId === chatId) localUnknownEffects.delete(effectId);
@@ -1251,8 +1416,11 @@ export function createSubagentRunStoreV2(
       await serialized(async () => {
         requireInitialized();
         await mutate((database) => {
-          const pendingChatDeletions = database.pendingChatDeletions.filter((pending) => pending !== chatId);
-          if (pendingChatDeletions.length === database.pendingChatDeletions.length) return undefined;
+          const pendingChatDeletions = database.pendingChatDeletions.filter(
+            (pending) => pending !== chatId,
+          );
+          if (pendingChatDeletions.length === database.pendingChatDeletions.length)
+            return undefined;
           return { ...database, storeRevision: database.storeRevision + 1, pendingChatDeletions };
         });
         deletedChats.delete(chatId);

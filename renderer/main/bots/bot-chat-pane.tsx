@@ -1,6 +1,12 @@
 import { BOT_UNKNOWN_COST_CONFIRMATION } from "../../shared/bot-execution-resume";
 import { BotPeerExchangeDialog } from "./bot-peers";
-import { BOT_RESUME_JOURNAL_EVENT, pendingBotResumes, recordBotResume, settleBotResume, type BotResumeAttempt } from "./bot-resume-journal";
+import {
+  BOT_RESUME_JOURNAL_EVENT,
+  pendingBotResumes,
+  recordBotResume,
+  settleBotResume,
+  type BotResumeAttempt,
+} from "./bot-resume-journal";
 import { AccessRequestCard } from "../../components/bots/access-request-card";
 import { useBotAccessRequestActions } from "./use-bot-access-request-actions";
 // A Bot's one conversation, rendered from the durable projection (`useBotLive`).
@@ -18,8 +24,18 @@ import { HeldSettingsCard } from "../../components/bots/settings-change-cards";
 import type { BotSettingsChangeStatus } from "../../shared/bot-settings-changes";
 import { BotInstructionsDialog } from "./bot-instructions-editor";
 import { BotIssueCard } from "../../components/bots/bot-issue-card";
-import { HandoffCard, handoffNoNoteComposerText, handoffSignInComposerText } from "../../components/bots/handoff-card";
-import { NeedsYouAnnouncer, NeedsYouFocusScope, NeedsYouHeader, needsYouSlotState, type NeedsYouItem } from "../../components/bots/needs-you-slot";
+import {
+  HandoffCard,
+  handoffNoNoteComposerText,
+  handoffSignInComposerText,
+} from "../../components/bots/handoff-card";
+import {
+  NeedsYouAnnouncer,
+  NeedsYouFocusScope,
+  NeedsYouHeader,
+  needsYouSlotState,
+  type NeedsYouItem,
+} from "../../components/bots/needs-you-slot";
 import { PlanCard } from "../../components/bots/plan-card";
 import { ApprovalStatusLine } from "../../components/chat-approval-card";
 import { useApprovalStatusLine } from "../../lib/use-approval-status-line";
@@ -27,7 +43,15 @@ import { SafeMessageBubble } from "../../components/message-bubble";
 import { MessageAttachmentPreviewProvider } from "../../components/message-attachments";
 import { insertTextIntoTextarea } from "../../lib/composer-type-focus";
 import { composerHistoryFromBotEntries } from "../../lib/composer-history";
-import { AlertDialog, Button, Callout, EmptyState, ScrollArea, Text, toast } from "../../components/ui";
+import {
+  AlertDialog,
+  Button,
+  Callout,
+  EmptyState,
+  ScrollArea,
+  Text,
+  toast,
+} from "../../components/ui";
 import { BotNoticeCard } from "../../components/bots/bot-notice-card";
 import { botListLocation } from "../../lib/bot-routes";
 import { settingsLocation } from "../../lib/settings-section";
@@ -39,7 +63,12 @@ import { botChatActivityOnDevice, showsBotToolActivity } from "../../shared/bots
 import { queryKeys, useBot, useBots } from "../../lib/queries";
 import { useBotLive } from "../../lib/use-bot-live";
 import { prefersReducedMotion } from "../../lib/appearance-runtime";
-import { botLastReplyAt, botLastTurnEnd, type BotLiveSnapshot, type BotPendingQuestion } from "../../shared/bot-live";
+import {
+  botLastReplyAt,
+  botLastTurnEnd,
+  type BotLiveSnapshot,
+  type BotPendingQuestion,
+} from "../../shared/bot-live";
 import type { AskUserQuestionResponseV1 } from "../../shared/ask-user-question";
 import {
   BOT_HANDOFF_NOTE_MAX_CHARS,
@@ -47,7 +76,10 @@ import {
   type BotPendingHandoff,
 } from "../../shared/bot-handoffs";
 import type { BotApprovalPrompt } from "../../../main/services/bot-runtime/bot-approvals";
-import type { BotRoutineProposalDecision, BotRoutineProposalDeclineReason } from "../../shared/bot-routine-proposals";
+import type {
+  BotRoutineProposalDecision,
+  BotRoutineProposalDeclineReason,
+} from "../../shared/bot-routine-proposals";
 import type { BotIssueAction } from "../../shared/bot-issues";
 import { BotChatActions, BotChatNamePill, BotPanelToggle } from "./bot-chat-header";
 import { BOT_CHAT_COMPOSER_SURFACES } from "./bot-chat-mode";
@@ -57,7 +89,13 @@ import { BotPausedCard, botPausedText } from "./bot-paused-card";
 import { useAppearancePreference } from "../../lib/use-appearance-preference";
 import { BotStatusAnnouncer, BotStatusLine, botStatusSpeech } from "./bot-status-line";
 import { BotMessageActions, botReplyQuote } from "./bot-message-actions";
-import { BotApprovalCard, botApprovalGroupKey, groupBotApprovalPrompts, questionPrompt, useBotApprovals } from "./bot-approvals";
+import {
+  BotApprovalCard,
+  botApprovalGroupKey,
+  groupBotApprovalPrompts,
+  questionPrompt,
+  useBotApprovals,
+} from "./bot-approvals";
 import { BOT_INTERRUPTED_TEXT, BotQueuedBubble, TranscriptEntries } from "./bot-transcript-entries";
 import { BotBubbleCard, useBotChatHome } from "./bot-bubble-card";
 import { useBotMenuActions } from "./bot-menu";
@@ -69,7 +107,11 @@ import { botRoutinesKey } from "./bot-routines";
 import { pickBotStatus } from "./bot-status-slot";
 import { useConnectionSetup } from "./use-connection-setup";
 import { useChatFind } from "../../components/chat-find-bar";
-import { retryUsageLimitNow, useUsageLimitNow, useUsageLimitWait } from "../../lib/use-usage-limit-wait";
+import {
+  retryUsageLimitNow,
+  useUsageLimitNow,
+  useUsageLimitWait,
+} from "../../lib/use-usage-limit-wait";
 import { formatUsageLimitTime, type UsageLimitWaitView } from "../../shared/usage-limits";
 import { useSpendingStatus } from "../../lib/use-spending-status";
 import { SpendingLimitNotice } from "../../components/spending/spending-limit-notice";
@@ -122,14 +164,12 @@ export function BotInterruptedCard({
   );
 }
 
-
 function attachmentText(attachments: readonly Attachment[]): string {
   return attachments
     .filter((attachment) => attachment.kind === "text" && attachment.text)
     .map((attachment) => `\n\n${attachment.name}:\n${attachment.text}`)
     .join("");
 }
-
 
 /** A reply waiting for a provider usage limit: when it tries again, and Retry now. */
 export function BotUsageLimitCard({
@@ -251,8 +291,16 @@ function botSendMorphOrigin(box: HTMLTextAreaElement | null): BotSendMorphOrigin
   if (rect.width === 0 || rect.height === 0) return null;
   const style = getComputedStyle(box);
   return {
-    left: rect.left + (parseFloat(style.borderLeftWidth) || 0) + (parseFloat(style.paddingLeft) || 0) - box.scrollLeft,
-    top: rect.top + (parseFloat(style.borderTopWidth) || 0) + (parseFloat(style.paddingTop) || 0) - box.scrollTop,
+    left:
+      rect.left +
+      (parseFloat(style.borderLeftWidth) || 0) +
+      (parseFloat(style.paddingLeft) || 0) -
+      box.scrollLeft,
+    top:
+      rect.top +
+      (parseFloat(style.borderTopWidth) || 0) +
+      (parseFloat(style.paddingTop) || 0) -
+      box.scrollTop,
   };
 }
 
@@ -372,16 +420,27 @@ export function botVisibleSendIds(snapshot: BotLiveSnapshot): Set<string> {
  * entry, or a queued message, with the same text that was not there when the
  * echo was made. Keyed by request id; the value is the arrival's id.
  */
-export function matchBotPendingSends(pending: readonly BotPendingSend[], snapshot: BotLiveSnapshot): Map<string, string> {
+export function matchBotPendingSends(
+  pending: readonly BotPendingSend[],
+  snapshot: BotLiveSnapshot,
+): Map<string, string> {
   const matches = new Map<string, string>();
   if (pending.length === 0) return matches;
   const arrivals = [
-    ...snapshot.entries.flatMap((entry) => (entry.type === "user" ? [{ id: entry.id, text: entry.text }] : [])),
-    ...(snapshot.queued ?? []).map((message) => ({ id: `queued:${message.submissionId}`, text: message.text })),
+    ...snapshot.entries.flatMap((entry) =>
+      entry.type === "user" ? [{ id: entry.id, text: entry.text }] : [],
+    ),
+    ...(snapshot.queued ?? []).map((message) => ({
+      id: `queued:${message.submissionId}`,
+      text: message.text,
+    })),
   ];
   const taken = new Set<string>();
   for (const send of pending) {
-    const match = arrivals.find((arrival) => !taken.has(arrival.id) && !send.seen.has(arrival.id) && arrival.text === send.text);
+    const match = arrivals.find(
+      (arrival) =>
+        !taken.has(arrival.id) && !send.seen.has(arrival.id) && arrival.text === send.text,
+    );
     if (!match) continue;
     taken.add(match.id);
     matches.set(send.requestId, match.id);
@@ -394,7 +453,9 @@ function botArrivalDrawnLast(snapshot: BotLiveSnapshot, arrivalId: string): bool
   const queued = snapshot.queued ?? [];
   const lastQueued = queued[queued.length - 1];
   if (lastQueued) return arrivalId === `queued:${lastQueued.submissionId}`;
-  return snapshot.entries[snapshot.entries.length - 1]?.id === arrivalId && !snapshot.partial?.trim();
+  return (
+    snapshot.entries[snapshot.entries.length - 1]?.id === arrivalId && !snapshot.partial?.trim()
+  );
 }
 
 /**
@@ -414,7 +475,6 @@ export function settleBotPendingSends(
 /** How long an acknowledged send stays as an echo when its entry never shows (a hidden input, a routine). */
 export const PENDING_SEND_SETTLE_MS = 4000;
 
-
 /**
  * When the live chat last moved: any new event (an entry, a step, a state) or
  * streamed text. The status line uses it to say a turn is taking longer than
@@ -432,7 +492,11 @@ function useLastProgressAt(seq: number, partial: string | null): number {
 /** Bubble-shaped placeholders while a chat opens. */
 function BotChatSkeleton() {
   return (
-    <div role="status" aria-label="Loading chat" className="aiden-dock-inset chat-content-column flex flex-col gap-4 py-6">
+    <div
+      role="status"
+      aria-label="Loading chat"
+      className="aiden-dock-inset chat-content-column flex flex-col gap-4 py-6"
+    >
       <div className="ml-auto h-9 w-48 rounded-card bg-well motion-safe:animate-pulse" />
       <div className="h-16 w-72 max-w-full rounded-card bg-well motion-safe:animate-pulse" />
       <div className="ml-auto h-9 w-36 rounded-card bg-well motion-safe:animate-pulse" />
@@ -474,34 +538,60 @@ export function BotChatPane({ botId }: { botId: string }) {
   // comes back only if that request fails; `interruptedRequestIds` keeps one
   // request id per interrupted turn so a second click after a failure replays,
   // never doubles. A Bot the person paused shows BotPausedCard instead.
-  const [hiddenInterruptedSubmission, setHiddenInterruptedSubmission] = React.useState<string | null>(null);
+  const [hiddenInterruptedSubmission, setHiddenInterruptedSubmission] = React.useState<
+    string | null
+  >(null);
   const interruptedRequestIds = React.useRef(new Map<string, string>());
   const [resumeSending, setResumeSending] = React.useState(false);
-  const [resumeJournalVersion, refreshResumeJournal] = React.useReducer((value: number) => value + 1, 0);
+  const [resumeJournalVersion, refreshResumeJournal] = React.useReducer(
+    (value: number) => value + 1,
+    0,
+  );
   const savedResumes = React.useMemo(() => {
-    try { return { rows: pendingBotResumes(botId), error: null as string | null }; }
-    catch (error) { return { rows: [] as BotResumeAttempt[], error: userFacingErrorMessage(error, "Saved Resume requests need review.") }; }
+    try {
+      return { rows: pendingBotResumes(botId), error: null as string | null };
+    } catch (error) {
+      return {
+        rows: [] as BotResumeAttempt[],
+        error: userFacingErrorMessage(error, "Saved Resume requests need review."),
+      };
+    }
   }, [botId, resumeJournalVersion]);
   React.useEffect(() => {
     window.addEventListener("storage", refreshResumeJournal);
     window.addEventListener(BOT_RESUME_JOURNAL_EVENT, refreshResumeJournal);
-    return () => { window.removeEventListener("storage", refreshResumeJournal); window.removeEventListener(BOT_RESUME_JOURNAL_EVENT, refreshResumeJournal); };
+    return () => {
+      window.removeEventListener("storage", refreshResumeJournal);
+      window.removeEventListener(BOT_RESUME_JOURNAL_EVENT, refreshResumeJournal);
+    };
   }, []);
-  const [costConsent, setCostConsent] = React.useState<{ botId: string; submissionId: string; expectedSubmissionId: string; expectedCostReceiptId: string } | null>(null);
+  const [costConsent, setCostConsent] = React.useState<{
+    botId: string;
+    submissionId: string;
+    expectedSubmissionId: string;
+    expectedCostReceiptId: string;
+  } | null>(null);
   // Sends show at once as pending echoes, each under one request id. A send
   // that failed keeps its id, so the same words sent again are deduplicated by
   // main instead of delivered twice; Retry reuses one id per failed turn.
   const [pendingSends, setPendingSends] = React.useState<readonly BotPendingSend[]>([]);
-  const [peerExchange, setPeerExchange] = React.useState<{ botId: string; exchangeId: string } | null>(null);
+  const [peerExchange, setPeerExchange] = React.useState<{
+    botId: string;
+    exchangeId: string;
+  } | null>(null);
   // Sends whose words are still moving from the composer into their bubble:
   // each keeps its echo until it lands, and the entry that answers it waits unseen.
   const sendMorphs = React.useRef(new Map<string, BotSendMorphOrigin>());
   const [morphing, setMorphing] = React.useState<ReadonlySet<string>>(() => new Set());
-  const unsettledSend = React.useRef<{ text: string; images: string; requestId: string } | null>(null);
+  const unsettledSend = React.useRef<{ text: string; images: string; requestId: string } | null>(
+    null,
+  );
   const retryRequestIds = React.useRef(new Map<string, string>());
   // Failed turns whose Retry was sent: main keeps the failed entry in the view, so the card
   // stays hidden here once its retry left; a retry that fails to leave shows it again.
-  const [hiddenFailedTurns, setHiddenFailedTurns] = React.useState<ReadonlySet<string>>(() => new Set());
+  const [hiddenFailedTurns, setHiddenFailedTurns] = React.useState<ReadonlySet<string>>(
+    () => new Set(),
+  );
   const [statusLayout, setStatusLayout] = React.useState("");
   const composerRef = React.useRef<HTMLTextAreaElement | null>(null);
   const snapshot = live.snapshot;
@@ -512,21 +602,36 @@ export function BotChatPane({ botId }: { botId: string }) {
   );
   const quietSince = useLastProgressAt(snapshot?.seq ?? 0, snapshot?.partial ?? null);
   const latestSnapshot = React.useRef(snapshot);
-  React.useLayoutEffect(() => { latestSnapshot.current = snapshot; }, [snapshot]);
+  React.useLayoutEffect(() => {
+    latestSnapshot.current = snapshot;
+  }, [snapshot]);
   const interruptedControlLifetime = React.useRef<{ botId: string; active: boolean } | null>(null);
   React.useLayoutEffect(() => {
     let focused = true;
     const visit = () => {
       if (interruptedControlLifetime.current) interruptedControlLifetime.current.active = false;
       interruptedControlLifetime.current = { botId, active: focused && !document.hidden };
-      setCostConsent(null); setHiddenInterruptedSubmission(null); setResumeSending(false);
+      setCostConsent(null);
+      setHiddenInterruptedSubmission(null);
+      setResumeSending(false);
     };
-    const blur = () => { focused = false; visit(); }, focus = () => { focused = true; visit(); };
+    const blur = () => {
+        focused = false;
+        visit();
+      },
+      focus = () => {
+        focused = true;
+        visit();
+      };
     visit();
-    window.addEventListener("blur", blur); window.addEventListener("focus", focus); document.addEventListener("visibilitychange", visit);
+    window.addEventListener("blur", blur);
+    window.addEventListener("focus", focus);
+    document.addEventListener("visibilitychange", visit);
     return () => {
       if (interruptedControlLifetime.current) interruptedControlLifetime.current.active = false;
-      window.removeEventListener("blur", blur); window.removeEventListener("focus", focus); document.removeEventListener("visibilitychange", visit);
+      window.removeEventListener("blur", blur);
+      window.removeEventListener("focus", focus);
+      document.removeEventListener("visibilitychange", visit);
     };
   }, [botId]);
   const replyAt = snapshot ? botLastReplyAt(snapshot.entries) : null;
@@ -553,7 +658,8 @@ export function BotChatPane({ botId }: { botId: string }) {
       return next.length === current.length ? current : next;
     });
   }, [snapshot, morphing]);
-  const state: BotSessionState | undefined = snapshot?.state ?? (bubbled ? liveSummary.data?.state : undefined);
+  const state: BotSessionState | undefined =
+    snapshot?.state ?? (bubbled ? liveSummary.data?.state : undefined);
   const running = state?.kind === "running";
   const usageLimitWait = useUsageLimitWait("bot", botId);
   const spending = useSpendingStatus("bot", botId);
@@ -561,7 +667,10 @@ export function BotChatPane({ botId }: { botId: string }) {
   React.useEffect(() => {
     // The card hides for one interrupted turn; any other state (running, idle,
     // paused by the person, or a later interruption) clears that.
-    if (hiddenInterruptedSubmission && (state?.kind !== "interrupted" || state.submissionId !== hiddenInterruptedSubmission)) {
+    if (
+      hiddenInterruptedSubmission &&
+      (state?.kind !== "interrupted" || state.submissionId !== hiddenInterruptedSubmission)
+    ) {
       setHiddenInterruptedSubmission(null);
     }
   }, [hiddenInterruptedSubmission, state]);
@@ -581,8 +690,14 @@ export function BotChatPane({ botId }: { botId: string }) {
   // The Needs-you item the person moved to with Previous or Next, by key.
   const [needsYouChoice, setNeedsYouChoice] = React.useState<string | null>(null);
   // Edit on a held "Update instructions?" card: the editor, seeded with the proposed text.
-  const [instructionsEdit, setInstructionsEdit] = React.useState<{ changeId: string; seed: string } | null>(null);
-  const accessRequestActions = useBotAccessRequestActions(botId, live.snapshot?.accessRequest?.waitId);
+  const [instructionsEdit, setInstructionsEdit] = React.useState<{
+    changeId: string;
+    seed: string;
+  } | null>(null);
+  const accessRequestActions = useBotAccessRequestActions(
+    botId,
+    live.snapshot?.accessRequest?.waitId,
+  );
   const handoffActions = useBotHandoffActions(botId, live.snapshot?.handoff?.waitId);
   // The header face follows the running turn's phase, waits with the person while a card
   // needs them, and has a done (or error) moment when the turn ends; a turn the person
@@ -595,7 +710,12 @@ export function BotChatPane({ botId }: { botId: string }) {
     stopped: lastTurnEnd === "stopped",
     awaitingPerson:
       approvals.prompts.length > 0 ||
-      Boolean(snapshot?.question || snapshot?.handoff || snapshot?.accessRequest || snapshot?.plan?.status === "pending"),
+      Boolean(
+        snapshot?.question ||
+        snapshot?.handoff ||
+        snapshot?.accessRequest ||
+        snapshot?.plan?.status === "pending",
+      ),
   });
 
   // The Bot's routines, read only when its chat shows a wake-up chip.
@@ -607,13 +727,17 @@ export function BotChatPane({ botId }: { botId: string }) {
   });
   const wakeUpPending = (wakeUpId: string): boolean | undefined => {
     if (!routines.data) return undefined;
-    return routines.data.some((routine) => routine.id === wakeUpId && routine.wakeUp !== undefined && routine.enabled);
+    return routines.data.some(
+      (routine) => routine.id === wakeUpId && routine.wakeUp !== undefined && routine.enabled,
+    );
   };
   /** Cancel on a wake-up chip: gone from the routines at once, back if main refuses. */
   const cancelWakeUp = async (wakeUpId: string) => {
     const key = botRoutinesKey(botId);
     const before = qc.getQueryData<typeof routines.data>(key);
-    qc.setQueryData<typeof routines.data>(key, (rows) => rows?.filter((routine) => routine.id !== wakeUpId));
+    qc.setQueryData<typeof routines.data>(key, (rows) =>
+      rows?.filter((routine) => routine.id !== wakeUpId),
+    );
     try {
       await botsApi.routines.delete({ botId, id: wakeUpId });
     } catch (error) {
@@ -628,7 +752,10 @@ export function BotChatPane({ botId }: { botId: string }) {
   const back = () => void navigate(botListLocation());
   const current = bot.data ?? null;
   // A Bot over its spending limit sends nothing until the person allows more.
-  const spendingReached = spending.status?.state === "reached" ? spendingNotice(spending.status, current?.name)?.title : undefined;
+  const spendingReached =
+    spending.status?.state === "reached"
+      ? spendingNotice(spending.status, current?.name)?.title
+      : undefined;
   // A Bot's settings live in the side panel's Advanced tab (plan §4.4).
   const openAdvanced = () => panel.show("advanced", { botId, section: "model" });
   // Memory, Files and Routines live in the side panel beside the chat (spec §8).
@@ -649,7 +776,10 @@ export function BotChatPane({ botId }: { botId: string }) {
             onOpenProfile={() => panel.show("advanced", { botId: current.id })}
           />
         ) : bot.isLoading ? (
-          <span className="block h-4 w-28 rounded-full bg-control motion-safe:animate-pulse" aria-hidden="true" />
+          <span
+            className="block h-4 w-28 rounded-full bg-control motion-safe:animate-pulse"
+            aria-hidden="true"
+          />
         ) : (
           "Bot"
         )
@@ -770,7 +900,10 @@ export function BotChatPane({ botId }: { botId: string }) {
   const sendArrivals = matchBotPendingSends(pendingSends, snapshot);
   const heldArrivals = new Set(
     [...sendArrivals]
-      .filter(([requestId, arrivalId]) => morphing.has(requestId) && botArrivalDrawnLast(snapshot, arrivalId))
+      .filter(
+        ([requestId, arrivalId]) =>
+          morphing.has(requestId) && botArrivalDrawnLast(snapshot, arrivalId),
+      )
       .map(([, arrivalId]) => arrivalId),
   );
   const shownSends = pendingSends.filter((send) => {
@@ -779,7 +912,10 @@ export function BotChatPane({ botId }: { botId: string }) {
   });
   // A message just sent says "Getting ready" at once, before main's state
   // catches up (as on the phones); a failed send drops its echo and the line.
-  const startingTurn = !running && !question && !handoff && !pendingPlan ? shownSends.find((send) => !send.queued) : undefined;
+  const startingTurn =
+    !running && !question && !handoff && !pendingPlan
+      ? shownSends.find((send) => !send.queued)
+      : undefined;
   const statusActivity =
     snapshot.activity && !replyStreaming
       ? snapshot.activity
@@ -818,17 +954,27 @@ export function BotChatPane({ botId }: { botId: string }) {
   ): Promise<void> => {
     const images = attachments
       .filter((attachment) => attachment.kind === "image" && attachment.data)
-      .map((attachment) => ({ type: "image" as const, mimeType: attachment.mimeType, data: attachment.data! }));
-    if (attachments.some((attachment) => attachment.kind !== "image" && attachment.kind !== "text")) {
+      .map((attachment) => ({
+        type: "image" as const,
+        mimeType: attachment.mimeType,
+        data: attachment.data!,
+      }));
+    if (
+      attachments.some((attachment) => attachment.kind !== "image" && attachment.kind !== "text")
+    ) {
       toast.error("Bots take photos and text files for now.");
       return;
     }
     const body = `${text}${attachmentText(attachments)}`;
-    const imageIdentity = images.map((image) => `${image.mimeType}:${image.data.length}:${image.data.slice(0, 64)}`).join("|");
+    const imageIdentity = images
+      .map((image) => `${image.mimeType}:${image.data.length}:${image.data.slice(0, 64)}`)
+      .join("|");
     // The same words and photos sent again after a failure replay under the first request id.
     const unsettled = unsettledSend.current;
     const requestId =
-      unsettled && unsettled.text === body && unsettled.images === imageIdentity ? unsettled.requestId : crypto.randomUUID();
+      unsettled && unsettled.text === body && unsettled.images === imageIdentity
+        ? unsettled.requestId
+        : crypto.randomUUID();
     unsettledSend.current = null;
     // Read before the composer redraws empty: the words still sit where they were typed.
     const origin = text.trim() ? botSendMorphOrigin(composerRef.current) : null;
@@ -866,7 +1012,10 @@ export function BotChatPane({ botId }: { botId: string }) {
     return minted;
   };
 
-  const performResume = async (input: Omit<BotResumeAttempt, "version" | "createdAt" | "attempts">, retry: boolean) => {
+  const performResume = async (
+    input: Omit<BotResumeAttempt, "version" | "createdAt" | "attempts">,
+    retry: boolean,
+  ) => {
     const lifetime = interruptedControlLifetime.current;
     if (!lifetime?.active || lifetime.botId !== current.id || resumeSending) return;
     const before = latestSnapshot.current;
@@ -875,13 +1024,37 @@ export function BotChatPane({ botId }: { botId: string }) {
       const attempt = recordBotResume(input, retry);
       setHiddenInterruptedSubmission(attempt.submissionId);
       const after = await botsApi.resume(attempt.botId, attempt.requestId, attempt.acknowledgement);
-      if (!after || !["idle", "running", "interrupted", "needs_model", "model_error", "unavailable", "paused"].includes(after.kind) || (after.kind === "running" || after.kind === "interrupted") && !after.submissionId) throw new Error("The computer did not confirm the Resume request.");
+      if (
+        !after ||
+        ![
+          "idle",
+          "running",
+          "interrupted",
+          "needs_model",
+          "model_error",
+          "unavailable",
+          "paused",
+        ].includes(after.kind) ||
+        ((after.kind === "running" || after.kind === "interrupted") && !after.submissionId)
+      )
+        throw new Error("The computer did not confirm the Resume request.");
       settleBotResume(attempt);
-      if (lifetime.active && (after.kind === "interrupted" || latestSnapshot.current !== before && latestSnapshot.current?.state.kind === "interrupted")) setHiddenInterruptedSubmission(null);
+      if (
+        lifetime.active &&
+        (after.kind === "interrupted" ||
+          (latestSnapshot.current !== before &&
+            latestSnapshot.current?.state.kind === "interrupted"))
+      )
+        setHiddenInterruptedSubmission(null);
     } catch (error) {
       if (lifetime.active) {
         setHiddenInterruptedSubmission(null);
-        toast.error(userFacingErrorMessage(error, "The Resume outcome is unconfirmed. Retry the saved request."));
+        toast.error(
+          userFacingErrorMessage(
+            error,
+            "The Resume outcome is unconfirmed. Retry the saved request.",
+          ),
+        );
       }
     } finally {
       if (lifetime.active) setResumeSending(false);
@@ -889,7 +1062,12 @@ export function BotChatPane({ botId }: { botId: string }) {
     }
   };
 
-  const answerInterrupted = async (action: "resume" | "dismiss", acknowledgeUnknownCost = false, expectedSubmissionId?: string, expectedCostReceiptId?: string) => {
+  const answerInterrupted = async (
+    action: "resume" | "dismiss",
+    acknowledgeUnknownCost = false,
+    expectedSubmissionId?: string,
+    expectedCostReceiptId?: string,
+  ) => {
     if (state?.kind !== "interrupted" || hiddenInterruptedSubmission || resumeSending) return;
     const lifetime = interruptedControlLifetime.current;
     if (!lifetime?.active || lifetime.botId !== current.id) return;
@@ -898,37 +1076,82 @@ export function BotChatPane({ botId }: { botId: string }) {
     try {
       if (action === "resume") {
         const pending = pendingBotResumes(current.id);
-        if (pending.length) { await performResume(pending[0]!, true); return; }
+        if (pending.length) {
+          await performResume(pending[0]!, true);
+          return;
+        }
         if (!acknowledgeUnknownCost) {
           setHiddenInterruptedSubmission(submissionId);
           const status = await botsApi.routineModels.resumeStatus(current.id);
           if (!lifetime.active) return;
           const latest = latestSnapshot.current;
-          if (latest?.botId !== current.id || latest.state.kind !== "interrupted" || latest.state.submissionId !== submissionId || status.interruptedSubmissionId !== undefined && status.interruptedSubmissionId !== submissionId) throw new Error("This Bot’s interrupted work changed. Review its current state before resuming.");
+          if (
+            latest?.botId !== current.id ||
+            latest.state.kind !== "interrupted" ||
+            latest.state.submissionId !== submissionId ||
+            (status.interruptedSubmissionId !== undefined &&
+              status.interruptedSubmissionId !== submissionId)
+          )
+            throw new Error(
+              "This Bot’s interrupted work changed. Review its current state before resuming.",
+            );
           if (status.requiresUnknownCostAcknowledgement) {
-            if (!status.interruptedSubmissionId || !status.costReceiptId) throw new Error("The interrupted work needs a fresh confirmation.");
-            setHiddenInterruptedSubmission(null); setCostConsent({ botId: current.id, submissionId, expectedSubmissionId: status.interruptedSubmissionId, expectedCostReceiptId: status.costReceiptId }); return;
+            if (!status.interruptedSubmissionId || !status.costReceiptId)
+              throw new Error("The interrupted work needs a fresh confirmation.");
+            setHiddenInterruptedSubmission(null);
+            setCostConsent({
+              botId: current.id,
+              submissionId,
+              expectedSubmissionId: status.interruptedSubmissionId,
+              expectedCostReceiptId: status.costReceiptId,
+            });
+            return;
           }
         }
-        if (acknowledgeUnknownCost && (!expectedSubmissionId || !expectedCostReceiptId)) throw new Error("The interrupted work needs a fresh confirmation.");
-        await performResume({ botId: current.id, submissionId, requestId: crypto.randomUUID(), acknowledgement: acknowledgeUnknownCost ? { acknowledgeUnknownCost: true, expectedSubmissionId, expectedCostReceiptId } : {} }, false);
+        if (acknowledgeUnknownCost && (!expectedSubmissionId || !expectedCostReceiptId))
+          throw new Error("The interrupted work needs a fresh confirmation.");
+        await performResume(
+          {
+            botId: current.id,
+            submissionId,
+            requestId: crypto.randomUUID(),
+            acknowledgement: acknowledgeUnknownCost
+              ? { acknowledgeUnknownCost: true, expectedSubmissionId, expectedCostReceiptId }
+              : {},
+          },
+          false,
+        );
         return;
       }
       setHiddenInterruptedSubmission(submissionId);
       const after = await botsApi.dismiss(current.id, interruptedRequestId(action, submissionId));
       interruptedRequestIds.current.delete(`${action}:${submissionId}`);
-      if (after.kind === "interrupted" || latestSnapshot.current !== before && latestSnapshot.current?.state.kind === "interrupted") setHiddenInterruptedSubmission(null);
+      if (
+        after.kind === "interrupted" ||
+        (latestSnapshot.current !== before && latestSnapshot.current?.state.kind === "interrupted")
+      )
+        setHiddenInterruptedSubmission(null);
     } catch (error) {
       if (lifetime.active) {
-        setHiddenInterruptedSubmission((hidden) => hidden === submissionId ? null : hidden);
-        toast.error(userFacingErrorMessage(error, action === "resume" ? `Aiden couldn’t resume ${current.name}.` : `Aiden couldn’t dismiss that for ${current.name}.`));
+        setHiddenInterruptedSubmission((hidden) => (hidden === submissionId ? null : hidden));
+        toast.error(
+          userFacingErrorMessage(
+            error,
+            action === "resume"
+              ? `Aiden couldn’t resume ${current.name}.`
+              : `Aiden couldn’t dismiss that for ${current.name}.`,
+          ),
+        );
       }
     }
   };
   const resume = () => answerInterrupted("resume");
   const dismiss = () => answerInterrupted("dismiss");
 
-  const answerQuestion = async (question: BotPendingQuestion, response: AskUserQuestionResponseV1) => {
+  const answerQuestion = async (
+    question: BotPendingQuestion,
+    response: AskUserQuestionResponseV1,
+  ) => {
     setAnswering(true);
     try {
       const { answered } = await botsApi.answerQuestion(current.id, question.waitId, response);
@@ -945,7 +1168,11 @@ export function BotChatPane({ botId }: { botId: string }) {
    * their words as the note, whichever way the composer sends. A throw keeps
    * the draft in the composer, which shows the error's message.
    */
-  const answerHandoffWithNote = async (pending: BotPendingHandoff, text: string, attachments: Attachment[]) => {
+  const answerHandoffWithNote = async (
+    pending: BotPendingHandoff,
+    text: string,
+    attachments: Attachment[],
+  ) => {
     // Never a note for a sign-in or a password-or-code card: whatever is typed here reaches the Bot.
     if (pending.kind === "sign_in") throw new Error(handoffSignInComposerText(current.name));
     if (!botHandoffTakesNote(pending)) throw new Error(handoffNoNoteComposerText(current.name));
@@ -958,7 +1185,9 @@ export function BotChatPane({ botId }: { botId: string }) {
     }
     const note = text.trim();
     if ([...note].length > BOT_HANDOFF_NOTE_MAX_CHARS) {
-      throw new Error(`Keep the note under ${BOT_HANDOFF_NOTE_MAX_CHARS.toLocaleString()} characters.`);
+      throw new Error(
+        `Keep the note under ${BOT_HANDOFF_NOTE_MAX_CHARS.toLocaleString()} characters.`,
+      );
     }
     const problem = await handoffActions.send(pending, "done", note || undefined);
     if (problem) throw new Error(problem);
@@ -1014,7 +1243,9 @@ export function BotChatPane({ botId }: { botId: string }) {
 
   const removeQueued = async (submissionId: string, button: HTMLButtonElement) => {
     // The row leaves the page, so keyboard focus moves on first: the next Remove, else the composer.
-    const removes = Array.from(document.querySelectorAll<HTMLButtonElement>("[data-bot-queued-remove]"));
+    const removes = Array.from(
+      document.querySelectorAll<HTMLButtonElement>("[data-bot-queued-remove]"),
+    );
     const next = removes[removes.indexOf(button) + 1];
     (next ?? composerRef.current)?.focus();
     setRemoving((ids) => new Set(ids).add(submissionId));
@@ -1034,13 +1265,24 @@ export function BotChatPane({ botId }: { botId: string }) {
 
   const respondToSkill = async (proposalId: string, decision: "add" | "dismiss") => {
     try {
-      return (await botsApi.skillProposals.respond({ botId: current.id, proposalId, decision })).status;
+      return (await botsApi.skillProposals.respond({ botId: current.id, proposalId, decision }))
+        .status;
     } catch (error) {
-      toast.error(userFacingErrorMessage(error, decision === "add" ? "Aiden couldn’t add that skill." : "Aiden couldn’t save that choice."));
+      toast.error(
+        userFacingErrorMessage(
+          error,
+          decision === "add"
+            ? "Aiden couldn’t add that skill."
+            : "Aiden couldn’t save that choice.",
+        ),
+      );
       throw error;
     }
   };
-  const respondToSettings = async (changeId: string, decision: "undo" | "apply" | "edited" | "dismiss"): Promise<BotSettingsChangeStatus> => {
+  const respondToSettings = async (
+    changeId: string,
+    decision: "undo" | "apply" | "edited" | "dismiss",
+  ): Promise<BotSettingsChangeStatus> => {
     let result: Awaited<ReturnType<typeof botsApi.settingsChanges.respond>>;
     try {
       result = await botsApi.settingsChanges.respond({ botId: current.id, changeId, decision });
@@ -1071,15 +1313,21 @@ export function BotChatPane({ botId }: { botId: string }) {
   ) => {
     try {
       const result = await botsApi.routineProposals.respond({
-        botId: current.id, proposalId, decision, ...(reason ? { reason } : {}),
+        botId: current.id,
+        proposalId,
+        decision,
+        ...(reason ? { reason } : {}),
       });
-      if (result.status === "accepted") void qc.invalidateQueries({ queryKey: botRoutinesKey(current.id) });
+      if (result.status === "accepted")
+        void qc.invalidateQueries({ queryKey: botRoutinesKey(current.id) });
       return result;
     } catch (error) {
       toast.error(
         userFacingErrorMessage(
           error,
-          decision === "accept" ? "Aiden couldn’t add that routine." : "Aiden couldn’t save that choice.",
+          decision === "accept"
+            ? "Aiden couldn’t add that routine."
+            : "Aiden couldn’t save that choice.",
         ),
       );
       throw error;
@@ -1135,10 +1383,16 @@ export function BotChatPane({ botId }: { botId: string }) {
   };
 
   /** One answer for a group of identical waiting calls; only the waits it decided leave. */
-  const answerApprovalGroup = async (group: readonly BotApprovalPrompt[], decision: "allow" | "deny", scope?: "always") => {
+  const answerApprovalGroup = async (
+    group: readonly BotApprovalPrompt[],
+    decision: "allow" | "deny",
+    scope?: "always",
+  ) => {
     for (const prompt of group) answeringApprovals.current.add(prompt.waitId);
     const results = await Promise.allSettled(
-      group.map((prompt, index) => botsApi.approve(prompt.waitId, decision, index === 0 ? scope : undefined)),
+      group.map((prompt, index) =>
+        botsApi.approve(prompt.waitId, decision, index === 0 ? scope : undefined),
+      ),
     ).finally(() => {
       for (const prompt of group) answeringApprovals.current.delete(prompt.waitId);
     });
@@ -1157,7 +1411,11 @@ export function BotChatPane({ botId }: { botId: string }) {
     });
     // Always rides on the first wait only, so it counts only when that one was decided.
     const always = scope === "always" && decided(0) ? scope : undefined;
-    approvalStatus.show(decision === "deny" ? { decision: "deny" } : { decision: "allow", ...(always ? { scope: always } : {}) });
+    approvalStatus.show(
+      decision === "deny"
+        ? { decision: "deny" }
+        : { decision: "allow", ...(always ? { scope: always } : {}) },
+    );
     if (always) {
       toast.success("Always allow requested.", {
         action: { label: "Manage", onClick: () => void navigate(settingsLocation("approvals")) },
@@ -1212,8 +1470,14 @@ export function BotChatPane({ botId }: { botId: string }) {
       key: `access:${accessRequest.waitId}`,
       kind: "access",
       render: () => (
-        <AccessRequestCard key={accessRequest.waitId} request={accessRequest} botName={current.name} avatar={current.avatar}
-          busy={accessRequestActions.busy} onAnswer={(choice) => void accessRequestActions.answer(accessRequest, choice)} />
+        <AccessRequestCard
+          key={accessRequest.waitId}
+          request={accessRequest}
+          botName={current.name}
+          avatar={current.avatar}
+          busy={accessRequestActions.busy}
+          onAnswer={(choice) => void accessRequestActions.answer(accessRequest, choice)}
+        />
       ),
     });
   }
@@ -1227,8 +1491,13 @@ export function BotChatPane({ botId }: { botId: string }) {
           botName={current.name}
           avatar={current.avatar}
           onRespond={async (decision) => {
-            const { result } = await botsApi.respondPlan({ botId: current.id, planId: plan.planId, decision });
-            if (result === "not_waiting") throw new Error("That plan was already answered or closed.");
+            const { result } = await botsApi.respondPlan({
+              botId: current.id,
+              planId: plan.planId,
+              decision,
+            });
+            if (result === "not_waiting")
+              throw new Error("That plan was already answered or closed.");
           }}
         />
       ),
@@ -1236,7 +1505,12 @@ export function BotChatPane({ botId }: { botId: string }) {
   }
   // A change the Bot asked for in a run the person didn't start (§4.6).
   for (const entry of snapshot.entries) {
-    if (entry.type !== "settings_change" || entry.change.mode !== "held" || entry.status !== "pending") continue;
+    if (
+      entry.type !== "settings_change" ||
+      entry.change.mode !== "held" ||
+      entry.status !== "pending"
+    )
+      continue;
     const change = entry.change;
     slotItems.push({
       key: `change:${change.changeId}`,
@@ -1249,7 +1523,9 @@ export function BotChatPane({ botId }: { botId: string }) {
           onRespond={async (decision) => {
             await respondToSettings(change.changeId, decision);
           }}
-          onEdit={(instructions) => setInstructionsEdit({ changeId: change.changeId, seed: instructions })}
+          onEdit={(instructions) =>
+            setInstructionsEdit({ changeId: change.changeId, seed: instructions })
+          }
         />
       ),
     });
@@ -1263,7 +1539,13 @@ export function BotChatPane({ botId }: { botId: string }) {
     slotItems.push({
       key: `issue:${issue.id}`,
       kind: "issue",
-      render: () => <BotIssueCard key={issue.id} issue={issue} onAct={(action) => actOnIssue(issue.id, action)} />,
+      render: () => (
+        <BotIssueCard
+          key={issue.id}
+          issue={issue}
+          onAct={(action) => actOnIssue(issue.id, action)}
+        />
+      ),
     });
   }
   if (question) {
@@ -1279,7 +1561,10 @@ export function BotChatPane({ botId }: { botId: string }) {
     spending_reached: spending.status?.state === "reached",
     paused: state?.kind === "paused",
     saved_resume: savedResumes.rows.length > 0,
-    interrupted: state?.kind === "interrupted" && hiddenInterruptedSubmission !== state.submissionId && !startingTurn,
+    interrupted:
+      state?.kind === "interrupted" &&
+      hiddenInterruptedSubmission !== state.submissionId &&
+      !startingTurn,
     usage_limit: running && usageLimitWait !== null && usageLimitWait !== undefined,
     spending_nearing: spending.status?.state === "nearing",
     plan: plan !== null && plan !== undefined && !pendingPlan,
@@ -1289,7 +1574,10 @@ export function BotChatPane({ botId }: { botId: string }) {
     <NeedsYouFocusScope currentKey={slot.current?.key} className="flex flex-col">
       <NeedsYouAnnouncer slot={slot} />
       {slot.count > 0 || approvalStatus.status ? (
-        <div className="aiden-dock-inset chat-content-column flex flex-col gap-2 pb-2" data-needs-you-slot>
+        <div
+          className="aiden-dock-inset chat-content-column flex flex-col gap-2 pb-2"
+          data-needs-you-slot
+        >
           <NeedsYouHeader slot={slot} />
           {slot.current?.render ? (
             <div key={slot.current.key} className="contents" data-needs-you-card>
@@ -1323,7 +1611,13 @@ export function BotChatPane({ botId }: { botId: string }) {
         <Composer
           key={`bot:${current.id}`}
           // A sign-in or a password-or-code card is answered on the card: a password typed here would reach the Bot.
-          ready={!pendingPlan && !noteRefused && !questionElsewhere && !spendingReached && (!state || (state.kind !== "unavailable" && state.kind !== "paused"))}
+          ready={
+            !pendingPlan &&
+            !noteRefused &&
+            !questionElsewhere &&
+            !spendingReached &&
+            (!state || (state.kind !== "unavailable" && state.kind !== "paused"))
+          }
           readinessMessage={
             pendingPlan
               ? slot.current?.kind === "plan"
@@ -1331,28 +1625,34 @@ export function BotChatPane({ botId }: { botId: string }) {
                 : "Answer the plan under Needs you, then send a message."
               : questionElsewhere
                 ? `Answer ${current.name}’s question first. It’s ${slot.count} of ${slot.count} above.`
-              : state?.kind === "unavailable"
-              ? BOT_UNAVAILABLE_LABEL
-              : state?.kind === "paused"
-                ? botPausedText(current.name)
-                : signInWaits
-                  ? handoffSignInComposerText(current.name)
-                  : noteRefused
-                    ? handoffNoNoteComposerText(current.name)
-                    : spendingReached
+                : state?.kind === "unavailable"
+                  ? BOT_UNAVAILABLE_LABEL
+                  : state?.kind === "paused"
+                    ? botPausedText(current.name)
+                    : signInWaits
+                      ? handoffSignInComposerText(current.name)
+                      : noteRefused
+                        ? handoffNoNoteComposerText(current.name)
+                        : spendingReached
           }
           hasMessages={snapshot.entries.length > 0}
           historyEntries={composerHistory}
           chatId={`bot:${current.id}`}
-          placeholder={handoff && !noteRefused ? "Add a note and send to mark it done" : `Ask ${current.name}`}
+          placeholder={
+            handoff && !noteRefused ? "Add a note and send to mark it done" : `Ask ${current.name}`
+          }
           onSend={(text, attachments) =>
             handoff ? answerHandoffWithNote(handoff, text, attachments) : send(text, attachments)
           }
           onQueue={(text, attachments) =>
-            handoff ? answerHandoffWithNote(handoff, text, attachments) : send(text, attachments, "followUp")
+            handoff
+              ? answerHandoffWithNote(handoff, text, attachments)
+              : send(text, attachments, "followUp")
           }
           onSteer={(text, attachments) =>
-            handoff ? answerHandoffWithNote(handoff, text, attachments) : send(text, attachments, "steer")
+            handoff
+              ? answerHandoffWithNote(handoff, text, attachments)
+              : send(text, attachments, "steer")
           }
           onStop={stop}
           // While a hand-off waits, sending answers the card: a plain Send, never Queue or Steer.
@@ -1376,7 +1676,10 @@ export function BotChatPane({ botId }: { botId: string }) {
 
   // A Bot's transcript is data, never instructions: Aiden Live sees only how many rows it has.
   return shell(
-    <div className="aiden-dock-inset chat-content-column flex flex-col gap-3 py-6" data-live-content="chat">
+    <div
+      className="aiden-dock-inset chat-content-column flex flex-col gap-3 py-6"
+      data-live-content="chat"
+    >
       {live.failed && live.stale ? (
         <Callout color="red" role="alert" className="flex-row items-center justify-between gap-3">
           <Text variant="small" color="red">
@@ -1392,7 +1695,9 @@ export function BotChatPane({ botId }: { botId: string }) {
           name={current.name}
           entries={
             hiddenFailedTurns.size || heldArrivals.size
-              ? snapshot.entries.filter((entry) => !hiddenFailedTurns.has(entry.id) && !heldArrivals.has(entry.id))
+              ? snapshot.entries.filter(
+                  (entry) => !hiddenFailedTurns.has(entry.id) && !heldArrivals.has(entry.id),
+                )
               : snapshot.entries
           }
           partial={snapshot.partial}
@@ -1400,7 +1705,9 @@ export function BotChatPane({ botId }: { botId: string }) {
           level={chatActivity.level}
           queued={
             heldArrivals.size
-              ? (snapshot.queued ?? []).filter((message) => !heldArrivals.has(`queued:${message.submissionId}`))
+              ? (snapshot.queued ?? []).filter(
+                  (message) => !heldArrivals.has(`queued:${message.submissionId}`),
+                )
               : (snapshot.queued ?? [])
           }
           removing={removing}
@@ -1423,7 +1730,9 @@ export function BotChatPane({ botId }: { botId: string }) {
           onRespondToSkill={respondToSkill}
           onRespondToLesson={async (lessonId, decision) => {
             try {
-              return (await botsApi.learning.respondLesson({ botId: current.id, lessonId, decision })).status;
+              return (
+                await botsApi.learning.respondLesson({ botId: current.id, lessonId, decision })
+              ).status;
             } catch (error) {
               toast.error(userFacingErrorMessage(error, "Aiden couldn’t save that choice."));
               throw error;
@@ -1438,7 +1747,11 @@ export function BotChatPane({ botId }: { botId: string }) {
               throw error;
             }
             if (!result.ok) {
-              toast.error(result.code === "conflict" ? "This changed since. Edit it on the Memory page." : "Aiden couldn’t undo that.");
+              toast.error(
+                result.code === "conflict"
+                  ? "This changed since. Edit it on the Memory page."
+                  : "Aiden couldn’t undo that.",
+              );
               throw new Error(result.code);
             }
           }}
@@ -1457,9 +1770,16 @@ export function BotChatPane({ botId }: { botId: string }) {
           );
         })}
       </MessageAttachmentPreviewProvider>
-      <BotStatusAnnouncer text={statusActivity ? botStatusSpeech(statusActivity, chatActivity.wording) : ""} />
+      <BotStatusAnnouncer
+        text={statusActivity ? botStatusSpeech(statusActivity, chatActivity.wording) : ""}
+      />
       {statusActivity ? (
-        <BotStatusLine activity={statusActivity} wording={chatActivity.wording} quietSince={quietSince} onLayoutChange={setStatusLayout} />
+        <BotStatusLine
+          activity={statusActivity}
+          wording={chatActivity.wording}
+          quietSince={quietSince}
+          onLayoutChange={setStatusLayout}
+        />
       ) : null}
       {/* The one status slot (§4.7): only the most important status card shows. */}
       {status === "usage_limit" && usageLimitWait ? (
@@ -1479,27 +1799,71 @@ export function BotChatPane({ botId }: { botId: string }) {
         />
       ) : null}
       {status === "paused" ? <BotPausedCard bot={current} /> : null}
-      {savedResumes.error && <Text as="p" variant="small" role="alert" className="px-4 py-3">{savedResumes.error}</Text>}
+      {savedResumes.error && (
+        <Text as="p" variant="small" role="alert" className="px-4 py-3">
+          {savedResumes.error}
+        </Text>
+      )}
       {/* A saved Resume belongs to the interrupted turn, so it shows with that card too. */}
-      {(status === "saved_resume" || (status === "interrupted" && savedResumes.rows.length > 0)) && <div className="space-y-2 px-4 py-3">
-        <Text as="p" variant="small" color="secondary" role="status">A saved Resume request is awaiting confirmation. Retry keeps its original request and cost acknowledgement.</Text>
-        {savedResumes.rows.map((attempt) => <Button key={attempt.requestId} size="small" disabled={resumeSending} onClick={() => void performResume(attempt, true)}>Retry saved Resume</Button>)}
-      </div>}
+      {(status === "saved_resume" ||
+        (status === "interrupted" && savedResumes.rows.length > 0)) && (
+        <div className="space-y-2 px-4 py-3">
+          <Text as="p" variant="small" color="secondary" role="status">
+            A saved Resume request is awaiting confirmation. Retry keeps its original request and
+            cost acknowledgement.
+          </Text>
+          {savedResumes.rows.map((attempt) => (
+            <Button
+              key={attempt.requestId}
+              size="small"
+              disabled={resumeSending}
+              onClick={() => void performResume(attempt, true)}
+            >
+              Retry saved Resume
+            </Button>
+          ))}
+        </div>
+      )}
       {status === "plan" && plan ? (
         <PlanCard
           plan={plan}
           botName={current.name}
           avatar={current.avatar}
           onRespond={async (decision) => {
-            const { result } = await botsApi.respondPlan({ botId: current.id, planId: plan.planId, decision });
-            if (result === "not_waiting") throw new Error("That plan was already answered or closed.");
+            const { result } = await botsApi.respondPlan({
+              botId: current.id,
+              planId: plan.planId,
+              decision,
+            });
+            if (result === "not_waiting")
+              throw new Error("That plan was already answered or closed.");
           }}
         />
       ) : null}
-      <AlertDialog open={costConsent !== null} onOpenChange={(open) => { if (!open) setCostConsent(null); }} title={`Resume ${current.name} with an unconfirmed charge?`} description={BOT_UNKNOWN_COST_CONFIRMATION} confirmLabel="Resume" onConfirm={() => {
-        const consent = costConsent; setCostConsent(null);
-        if (consent?.botId === current.id && state?.kind === "interrupted" && consent.submissionId === state.submissionId) void answerInterrupted("resume", true, consent.expectedSubmissionId, consent.expectedCostReceiptId);
-      }} />
+      <AlertDialog
+        open={costConsent !== null}
+        onOpenChange={(open) => {
+          if (!open) setCostConsent(null);
+        }}
+        title={`Resume ${current.name} with an unconfirmed charge?`}
+        description={BOT_UNKNOWN_COST_CONFIRMATION}
+        confirmLabel="Resume"
+        onConfirm={() => {
+          const consent = costConsent;
+          setCostConsent(null);
+          if (
+            consent?.botId === current.id &&
+            state?.kind === "interrupted" &&
+            consent.submissionId === state.submissionId
+          )
+            void answerInterrupted(
+              "resume",
+              true,
+              consent.expectedSubmissionId,
+              consent.expectedCostReceiptId,
+            );
+        }}
+      />
       {instructionsEdit ? (
         <BotInstructionsDialog
           key={instructionsEdit.changeId}
@@ -1514,7 +1878,14 @@ export function BotChatPane({ botId }: { botId: string }) {
           }}
         />
       ) : null}
-      {peerExchange?.botId === current.id && <BotPeerExchangeDialog key={`${peerExchange.botId}:${peerExchange.exchangeId}`} botId={current.id} exchangeId={peerExchange.exchangeId} onClose={() => setPeerExchange(null)} />}
+      {peerExchange?.botId === current.id && (
+        <BotPeerExchangeDialog
+          key={`${peerExchange.botId}:${peerExchange.exchangeId}`}
+          botId={current.id}
+          exchangeId={peerExchange.exchangeId}
+          onClose={() => setPeerExchange(null)}
+        />
+      )}
       {/* A new message dismisses the interrupted turn, so the card leaves with the send and comes back if it fails. */}
       {status === "interrupted" && state?.kind === "interrupted" ? (
         <BotInterruptedCard

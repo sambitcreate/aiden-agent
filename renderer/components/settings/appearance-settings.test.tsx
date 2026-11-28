@@ -18,7 +18,10 @@ async function mount() {
   const held: HeldMode[] = [];
   let themeSource: AppearanceMode = "system";
   installBotTestIpc({
-    "settings:getAppearanceState": () => ({ appearance: { ...createDefaultAppearanceConfig(), mode: "system" }, pending: false }),
+    "settings:getAppearanceState": () => ({
+      appearance: { ...createDefaultAppearanceConfig(), mode: "system" },
+      pending: false,
+    }),
     "settings:previewAppearance": (appearance: unknown) => appearance,
     "settings:set": (patch: unknown) => patch,
     "bots:list": () => [],
@@ -47,13 +50,23 @@ async function mount() {
     </TooltipProvider>,
   );
   const group = await screen.findByRole("radiogroup", { name: "Theme mode" });
-  await waitFor(() => assert.equal(within(group).getByRole("radio", { name: /System/u }).getAttribute("aria-checked"), "true"));
+  await waitFor(() =>
+    assert.equal(
+      within(group)
+        .getByRole("radio", { name: /System/u })
+        .getAttribute("aria-checked"),
+      "true",
+    ),
+  );
   return { group, held };
 }
 
-const radio = (group: HTMLElement, name: string) => within(group).getByRole("radio", { name: new RegExp(name, "u") });
+const radio = (group: HTMLElement, name: string) =>
+  within(group).getByRole("radio", { name: new RegExp(name, "u") });
 const checkedMode = (group: HTMLElement) =>
-  within(group).getAllByRole("radio").find((option) => option.getAttribute("aria-checked") === "true")?.textContent;
+  within(group)
+    .getAllByRole("radio")
+    .find((option) => option.getAttribute("aria-checked") === "true")?.textContent;
 
 test("arrowing through theme modes keeps focus on the radios while each change is pending, and the last one wins", async () => {
   const { group, held } = await mount();
@@ -96,7 +109,8 @@ test("a theme mode the system refuses puts the previous mode back", async () => 
 function luminance(color: string): number {
   const hex = /^#([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/iu.exec(color);
   const rgb = /^rgba?\((\d+),\s*(\d+),\s*(\d+)/u.exec(color);
-  const channels = (hex ? hex.slice(1).map((part) => Number.parseInt(part, 16)) : rgb?.slice(1).map(Number)) ?? [];
+  const channels =
+    (hex ? hex.slice(1).map((part) => Number.parseInt(part, 16)) : rgb?.slice(1).map(Number)) ?? [];
   assert.equal(channels.length, 3, `unreadable color ${color}`);
   const [r, g, b] = channels.map((value) => {
     const unit = value / 255;
@@ -108,28 +122,36 @@ function luminance(color: string): number {
 /** Each theme tile's name and how bright its preview is. */
 function tileBrightness(): Array<{ name: string; luminance: number }> {
   const themes = screen.getByRole("radiogroup", { name: "Themes" });
-  return within(themes).getAllByRole("radio").map((tile) => ({
-    name: tile.textContent ?? "",
-    luminance: luminance((tile.querySelector(".appearance-tile-swatch") as HTMLElement).style.backgroundColor),
-  }));
+  return within(themes)
+    .getAllByRole("radio")
+    .map((tile) => ({
+      name: tile.textContent ?? "",
+      luminance: luminance(
+        (tile.querySelector(".appearance-tile-swatch") as HTMLElement).style.backgroundColor,
+      ),
+    }));
 }
 
 test("every theme tile previews the light or dark look the chosen mode gives it", async () => {
   const { group, held } = await mount();
   // System on a computer in light mode: every tile, Graphite, Dusk and Midnight included, shows its light look.
-  for (const tile of tileBrightness()) assert.ok(tile.luminance > 0.5, `${tile.name} should preview light`);
+  for (const tile of tileBrightness())
+    assert.ok(tile.luminance > 0.5, `${tile.name} should preview light`);
 
   fireEvent.click(radio(group, "Dark"));
   await waitFor(() => assert.equal(held.length, 1));
   // The tiles follow the choice at once, before the system confirms it.
-  for (const tile of tileBrightness()) assert.ok(tile.luminance < 0.1, `${tile.name} should preview dark`);
+  for (const tile of tileBrightness())
+    assert.ok(tile.luminance < 0.1, `${tile.name} should preview dark`);
   await act(async () => held[0]!.finish());
   await act(async () => new Promise((resolve) => setTimeout(resolve, 0)));
-  for (const tile of tileBrightness()) assert.ok(tile.luminance < 0.1, `${tile.name} should stay dark`);
+  for (const tile of tileBrightness())
+    assert.ok(tile.luminance < 0.1, `${tile.name} should stay dark`);
 
   fireEvent.click(radio(group, "Light"));
   await waitFor(() => assert.equal(held.length, 2));
   await act(async () => held[1]!.finish());
   await act(async () => new Promise((resolve) => setTimeout(resolve, 0)));
-  for (const tile of tileBrightness()) assert.ok(tile.luminance > 0.5, `${tile.name} should preview light again`);
+  for (const tile of tileBrightness())
+    assert.ok(tile.luminance > 0.5, `${tile.name} should preview light again`);
 });

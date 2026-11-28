@@ -20,7 +20,10 @@ import { remoteExecScript } from "./ssh-device-host.js";
 interface FakeHost {
   home: string;
   bin: string;
-  run(mode: SshDeviceScriptMode, options?: { allowInstall?: boolean; owner?: string }): Promise<{ code: number; stdout: string; stderr: string }>;
+  run(
+    mode: SshDeviceScriptMode,
+    options?: { allowInstall?: boolean; owner?: string },
+  ): Promise<{ code: number; stdout: string; stderr: string }>;
 }
 
 async function fakeHost(options: { npm?: boolean; xcrun?: boolean } = {}): Promise<FakeHost> {
@@ -63,7 +66,11 @@ http.createServer((req, res) => { res.statusCode = req.url === "/readyz" ? 200 :
       child.stdout.setEncoding("utf8").on("data", (chunk: string) => (stdout += chunk));
       child.stderr.setEncoding("utf8").on("data", (chunk: string) => (stderr += chunk));
       child.once("close", (code) => resolve({ code: code ?? 1, stdout, stderr }));
-      child.stdin.end(remoteDeviceScript(runOptions.owner ?? "owner-1", mode, { allowInstall: runOptions.allowInstall }));
+      child.stdin.end(
+        remoteDeviceScript(runOptions.owner ?? "owner-1", mode, {
+          allowInstall: runOptions.allowInstall,
+        }),
+      );
     });
   return { home, bin, run };
 }
@@ -73,9 +80,16 @@ async function executable(file: string, content: string): Promise<void> {
   await chmod(file, 0o755);
 }
 
-async function installed(home: string, name: string, version: string, entry: string[]): Promise<void> {
+async function installed(
+  home: string,
+  name: string,
+  version: string,
+  entry: string[],
+): Promise<void> {
   const directory = path.join(home, ".aiden", "devices", "tools", `${name}@${version}`);
-  await mkdir(path.join(directory, "node_modules", name, ...entry.slice(0, -1)), { recursive: true });
+  await mkdir(path.join(directory, "node_modules", name, ...entry.slice(0, -1)), {
+    recursive: true,
+  });
   await writeFile(path.join(directory, "node_modules", name, ...entry), "");
   await writeFile(path.join(directory, ".install-complete"), `${version}\n`);
 }
@@ -90,11 +104,21 @@ test("the probe reports Node, iOS support, and installed versions without instal
   const probe = JSON.parse(result.stdout.trim()) as {
     nodeVersion: string;
     platforms: Array<{ platform: string; available: boolean }>;
-    tools: { hub: { requiredVersion: string; installedVersions: string[] }; agent: { installedVersions: string[] } };
+    tools: {
+      hub: { requiredVersion: string; installedVersions: string[] };
+      agent: { installedVersions: string[] };
+    };
   };
   assert.equal(probe.nodeVersion, process.versions.node);
-  assert.deepEqual(probe.platforms.map((platform) => [platform.platform, platform.available]), [["ios", darwin]]);
-  assert.deepEqual(probe.tools.hub, { requiredVersion: DEVICE_HUB.version, installedVersions: ["0.11.0"], runningVersion: null });
+  assert.deepEqual(
+    probe.platforms.map((platform) => [platform.platform, platform.available]),
+    [["ios", darwin]],
+  );
+  assert.deepEqual(probe.tools.hub, {
+    requiredVersion: DEVICE_HUB.version,
+    installedVersions: ["0.11.0"],
+    runningVersion: null,
+  });
   assert.deepEqual(probe.tools.agent.installedVersions, []);
   const tools = await readdir(path.join(host.home, ".aiden", "devices", "tools"));
   assert.deepEqual(tools, [`${DEVICE_HUB.name}@0.11.0`], "a probe writes nothing");
@@ -136,7 +160,11 @@ test("an approved start installs the pinned hub, reclaims old versions, and stop
   assert.equal(value.tools.hub.runningVersion, DEVICE_HUB.version);
 
   const again = await host.run("start");
-  assert.equal(JSON.parse(again.stdout.trim()).hubPort, value.hubPort, "a second start reuses the healthy hub");
+  assert.equal(
+    JSON.parse(again.stdout.trim()).hubPort,
+    value.hubPort,
+    "a second start reuses the healthy hub",
+  );
 
   const stopped = await host.run("stop");
   assert.equal(stopped.code, 0, stopped.stderr);
@@ -147,8 +175,12 @@ test("an approved start installs the pinned hub, reclaims old versions, and stop
 test("another owner's hub on the same host is left running", async (t) => {
   if (!darwin) return t.skip("iOS hosts are Macs");
   const host = await fakeHost();
-  const mine = JSON.parse((await host.run("start", { allowInstall: true, owner: "mine" })).stdout.trim()) as { hubPort: number };
-  const theirs = JSON.parse((await host.run("start", { owner: "theirs" })).stdout.trim()) as { hubPort: number };
+  const mine = JSON.parse(
+    (await host.run("start", { allowInstall: true, owner: "mine" })).stdout.trim(),
+  ) as { hubPort: number };
+  const theirs = JSON.parse((await host.run("start", { owner: "theirs" })).stdout.trim()) as {
+    hubPort: number;
+  };
   t.after(() => void host.run("stop", { owner: "theirs" }));
   assert.notEqual(mine.hubPort, theirs.hubPort);
   await host.run("stop", { owner: "mine" });
@@ -156,7 +188,10 @@ test("another owner's hub on the same host is left running", async (t) => {
 });
 
 test("the agent-device version a host reports matches the pinned one", () => {
-  assert.match(remoteDeviceScript("o", "probe"), new RegExp(`"${AGENT_DEVICE.version.replace(/\./gu, "\\.")}"`, "u"));
+  assert.match(
+    remoteDeviceScript("o", "probe"),
+    new RegExp(`"${AGENT_DEVICE.version.replace(/\./gu, "\\.")}"`, "u"),
+  );
 });
 
 test("remote commands survive the remote shell exactly as passed", () => {
@@ -166,8 +201,19 @@ test("remote commands survive the remote shell exactly as passed", () => {
   const remote = ["sh", "-c", quoteRemoteArg(script)].join(" ");
   const result = spawnSync("/bin/sh", ["-c", remote], { encoding: "utf8" });
   assert.equal(result.stdout, "it's|$HOME|a b|`id`|--|");
-  const env = spawnSync("/bin/sh", ["-c", ["sh", "-c", quoteRemoteArg(remoteExecScript("printenv", ["AIDEN_X"], { AIDEN_X: "y'z" }))].join(" ")], {
-    encoding: "utf8",
-  });
+  const env = spawnSync(
+    "/bin/sh",
+    [
+      "-c",
+      [
+        "sh",
+        "-c",
+        quoteRemoteArg(remoteExecScript("printenv", ["AIDEN_X"], { AIDEN_X: "y'z" })),
+      ].join(" "),
+    ],
+    {
+      encoding: "utf8",
+    },
+  );
   assert.equal(env.stdout.trim(), "y'z");
 });

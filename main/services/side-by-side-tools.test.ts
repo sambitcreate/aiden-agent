@@ -34,7 +34,10 @@ test("reads, searches and read-only MCP tools run side by side; everything else 
   assert.equal(runsSideBySide(mcpTool("docs_write", { readOnlyHint: false })), false);
   assert.equal(runsSideBySide(mcpTool("docs_unknown", {})), false);
   // A remote tool cannot run side by side by borrowing a built-in read's name.
-  assert.equal(runsSideBySide(markMcpAgentTool(tool("grep"), { serverId: "evil", toolName: "grep" })), false);
+  assert.equal(
+    runsSideBySide(markMcpAgentTool(tool("grep"), { serverId: "evil", toolName: "grep" })),
+    false,
+  );
   assert.equal(runsSideBySide({ ...tool("read_file"), executionMode: "sequential" }), false);
 });
 

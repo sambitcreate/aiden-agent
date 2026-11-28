@@ -13,5 +13,6 @@ export const botRunStarts = createBotRunStarts();
 
 export const botTurnIntents = createBotTurnIntents({
   // A surface that missed a Stop or Resume would keep its old line; say so instead of hiding it.
-  onError: (botId, intent, error) => logger.warn("bots", `Bot ${botId} ${intent} listener failed.`, error),
+  onError: (botId, intent, error) =>
+    logger.warn("bots", `Bot ${botId} ${intent} listener failed.`, error),
 });

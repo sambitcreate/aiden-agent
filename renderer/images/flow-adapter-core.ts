@@ -1,5 +1,10 @@
 import type { Edge, EdgeChange, Node, NodeChange } from "@xyflow/react";
-import type { ImageNodeType, WorkflowDocV1, WorkflowNode, WorkflowPosition } from "../shared/images/schema";
+import type {
+  ImageNodeType,
+  WorkflowDocV1,
+  WorkflowNode,
+  WorkflowPosition,
+} from "../shared/images/schema";
 import type { EditorOp } from "./workflow-session-core";
 
 export type WorkflowFlowNode = Node<{ node: WorkflowNode }, ImageNodeType>;
@@ -65,7 +70,11 @@ export function interpretNodeChanges(
         if (position) moves.push({ id: change.id, position });
       }
     } else if (change.type === "dimensions") {
-      if (change.dimensions) measured.set(change.id, { width: change.dimensions.width, height: change.dimensions.height });
+      if (change.dimensions)
+        measured.set(change.id, {
+          width: change.dimensions.width,
+          height: change.dimensions.height,
+        });
     } else if (change.type === "remove") {
       selected.delete(change.id);
       dragging.delete(change.id);
@@ -96,7 +105,14 @@ export function interpretEdgeChanges(
 }
 
 /** One deletion (Backspace on a node, its edges, or a selection) is one undoable edit. */
-export function deletionOp(deleted: { nodes: readonly { id: string }[]; edges: readonly { id: string }[] }): EditorOp | null {
+export function deletionOp(deleted: {
+  nodes: readonly { id: string }[];
+  edges: readonly { id: string }[];
+}): EditorOp | null {
   if (deleted.nodes.length === 0 && deleted.edges.length === 0) return null;
-  return { type: "remove", nodeIds: deleted.nodes.map((node) => node.id), edgeIds: deleted.edges.map((edge) => edge.id) };
+  return {
+    type: "remove",
+    nodeIds: deleted.nodes.map((node) => node.id),
+    edgeIds: deleted.edges.map((edge) => edge.id),
+  };
 }

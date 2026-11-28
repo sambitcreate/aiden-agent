@@ -39,7 +39,11 @@ export async function buildMcpPresetStates<
   validate: (server: Server) => void;
   isReady: (preset: Preset, serverId: string, existing: Server | undefined) => Promise<boolean>;
   /** OAuth sign-in state of a saved preset record; undefined for presets without browser sign-in. */
-  signIn?: (preset: Preset, serverId: string, existing: Server) => Promise<{ needsSignIn: boolean; hasSession: boolean } | undefined>;
+  signIn?: (
+    preset: Preset,
+    serverId: string,
+    existing: Server,
+  ) => Promise<{ needsSignIn: boolean; hasSession: boolean } | undefined>;
 }): Promise<McpPresetStateRecord<Preset>[]> {
   return Promise.all(
     presets.map(async (preset) => {

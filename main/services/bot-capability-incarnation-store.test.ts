@@ -58,18 +58,24 @@ test("namespaces and target partitions reconcile independently", async (t) => {
   const [provider] = await store.reconcileNamespace("provider", [
     { sourceId: "same-id", credentialSignature: hash("none") },
   ]);
-  const [skillA] = await store.reconcileNamespace("skill", [
-    { sourceId: "same-id", credentialSignature: hash("none") },
-  ], { partition: "bot:a" });
-  const [skillB] = await store.reconcileNamespace("skill", [
-    { sourceId: "same-id", credentialSignature: hash("none") },
-  ], { partition: "bot:b" });
+  const [skillA] = await store.reconcileNamespace(
+    "skill",
+    [{ sourceId: "same-id", credentialSignature: hash("none") }],
+    { partition: "bot:a" },
+  );
+  const [skillB] = await store.reconcileNamespace(
+    "skill",
+    [{ sourceId: "same-id", credentialSignature: hash("none") }],
+    { partition: "bot:b" },
+  );
   assert.notEqual(provider?.resourceIncarnation, skillA?.resourceIncarnation);
   assert.notEqual(skillA?.resourceIncarnation, skillB?.resourceIncarnation);
 
   await store.reconcileNamespace("skill", [], { partition: "bot:a" });
-  const [skillBAgain] = await store.reconcileNamespace("skill", [
-    { sourceId: "same-id", credentialSignature: hash("none") },
-  ], { partition: "bot:b" });
+  const [skillBAgain] = await store.reconcileNamespace(
+    "skill",
+    [{ sourceId: "same-id", credentialSignature: hash("none") }],
+    { partition: "bot:b" },
+  );
   assert.deepEqual(skillBAgain, skillB);
 });

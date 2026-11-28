@@ -1,6 +1,12 @@
-import { configuredCompactionReserveTokens, resolveCompactionModelBudget } from "../../../renderer/shared/compaction.js";
+import {
+  configuredCompactionReserveTokens,
+  resolveCompactionModelBudget,
+} from "../../../renderer/shared/compaction.js";
 import { createVccRecallTool } from "../pi-vcc/recall.js";
-import type { CompactionEngine, CompactionModelOverrides } from "../../../renderer/shared/compaction.js";
+import type {
+  CompactionEngine,
+  CompactionModelOverrides,
+} from "../../../renderer/shared/compaction.js";
 import { randomUUID } from "node:crypto";
 import { convertToLlm } from "../pi-legacy-harness.js";
 import type {
@@ -17,7 +23,11 @@ import { buildAgentRuntimeOptions } from "../generation-runtime.js";
 import { isAcpHarnessProvider } from "../../../renderer/shared/acp-harness.js";
 import type { UsageLimitOwner } from "../usage-limit-core.js";
 import { withUsageLimitWait, type UsageLimitStreamOptions } from "../usage-limit-stream.js";
-import { createSpendingMeter, spendCounts, type SpendingMeterOptions } from "../spending-service.js";
+import {
+  createSpendingMeter,
+  spendCounts,
+  type SpendingMeterOptions,
+} from "../spending-service.js";
 import {
   assertGenerationContextCapacity,
   createGenerationContextTransform,
@@ -28,7 +38,11 @@ import { isLocalProviderDeployment } from "../../../renderer/shared/provider-dep
 import { SubagentConcurrencyGate, type SubagentDeployment } from "./concurrency-gate.js";
 import type { SubagentHealthMetricsSink } from "./subagent-health-metrics-core.js";
 import { createPiCompactionModels } from "../pi-compaction-core.js";
-import { createSideCallPrefixLedger, withSideCallPrefixLedger, type SideCallPrefixLedger } from "../side-call-prefix.js";
+import {
+  createSideCallPrefixLedger,
+  withSideCallPrefixLedger,
+  type SideCallPrefixLedger,
+} from "../side-call-prefix.js";
 import {
   PiAgentRuntimeHarness,
   type PiRuntimeSessionBinding,
@@ -113,7 +127,11 @@ export interface SubagentRuntimeRegistryOptions {
   /** Separate crash-safe tool-effect journal; omitted by isolated unit registries. */
   effectStore?: PiRuntimeEffectStore;
   /** Waits out provider usage limits for the parent chat; omitted by unit registries. */
-  usageLimits?: (owner: UsageLimitOwner, providerLabel: string, extra: { observeFetch: boolean }) => UsageLimitStreamOptions;
+  usageLimits?: (
+    owner: UsageLimitOwner,
+    providerLabel: string,
+    extra: { observeFetch: boolean },
+  ) => UsageLimitStreamOptions;
   /** Counts the child's spending toward the parent chat's limit; omitted by unit registries. */
   spending?: SpendingMeterOptions["spending"];
 }
@@ -213,37 +231,49 @@ export class SubagentRuntimeRegistry {
     prefixes: SideCallPrefixLedger,
   ) {
     const options = buildAgentRuntimeOptions(sessionId, childRuntime);
-    if (!options.streamFn || isAcpHarnessProvider(spec.runtime.provider.id)) return { agentOptions: options, keepsPrefix: false };
+    if (!options.streamFn || isAcpHarnessProvider(spec.runtime.provider.id))
+      return { agentOptions: options, keepsPrefix: false };
     const owner = { kind: "chat", id: spec.authority.chatId } as const;
     // A task-owned transform records this request under its frozen Bot/root
     // scopes; the ordinary foreground-chat meter would count it a second time.
     const spending = spec.transformRuntime ? undefined : this.spending;
-    const spendingMeter = spending ? createSpendingMeter({
-      spending,
-      owner,
-      refuse: true,
-      counts: () => spendCounts({
-        local: isLocalProviderDeployment(spec.runtime.provider),
-        provider: spec.runtime.provider,
-        models: spec.runtime.models,
-      }),
-    }) : undefined;
-    const beforeSendRefusal = spending && spendingMeter ? async () => {
-      await spendingMeter.settled();
-      return spending.refusal(owner);
-    } : undefined;
+    const spendingMeter = spending
+      ? createSpendingMeter({
+          spending,
+          owner,
+          refuse: true,
+          counts: () =>
+            spendCounts({
+              local: isLocalProviderDeployment(spec.runtime.provider),
+              provider: spec.runtime.provider,
+              models: spec.runtime.models,
+            }),
+        })
+      : undefined;
+    const beforeSendRefusal =
+      spending && spendingMeter
+        ? async () => {
+            await spendingMeter.settled();
+            return spending.refusal(owner);
+          }
+        : undefined;
     let streamFn = options.streamFn;
     if (this.usageLimits) {
       const limits = this.usageLimits(owner, spec.runtime.provider.label, {
         observeFetch: childRuntime === spec.runtime,
       });
-      streamFn = withUsageLimitWait(streamFn, beforeSendRefusal ? {
-        ...limits,
-        beforeSendRefusal: async () => {
-          // The cap or shared chat spending can change while this request waits.
-          return (await limits.beforeSendRefusal?.()) ?? beforeSendRefusal();
-        },
-      } : limits);
+      streamFn = withUsageLimitWait(
+        streamFn,
+        beforeSendRefusal
+          ? {
+              ...limits,
+              beforeSendRefusal: async () => {
+                // The cap or shared chat spending can change while this request waits.
+                return (await limits.beforeSendRefusal?.()) ?? beforeSendRefusal();
+              },
+            }
+          : limits,
+      );
     }
     if (spendingMeter) {
       // A helper's spending is its chat's, including requests after a provider wait.
@@ -252,8 +282,14 @@ export class SubagentRuntimeRegistry {
     // The child's compactions continue its own last request, as a chat's do.
     // A Bot helper keeps none, as a Bot chat keeps none.
     const keepsPrefix = !spec.transformRuntime;
-    if (keepsPrefix) streamFn = withSideCallPrefixLedger(streamFn, { ledger: prefixes, chatKey: sessionId });
-    return { agentOptions: { ...options, streamFn }, spendingMeter, beforeSendRefusal, keepsPrefix };
+    if (keepsPrefix)
+      streamFn = withSideCallPrefixLedger(streamFn, { ledger: prefixes, chatKey: sessionId });
+    return {
+      agentOptions: { ...options, streamFn },
+      spendingMeter,
+      beforeSendRefusal,
+      keepsPrefix,
+    };
   }
 
   get activeCount(): number {
@@ -289,14 +325,33 @@ export class SubagentRuntimeRegistry {
         generationId: spec.authority.generationId,
         childId,
       }) ?? spec.runtime;
-    const childRuntime = spec.transformRuntime?.(isolatedRuntime, { childId, runId: spec.runId ?? childId }) ?? isolatedRuntime;
-    if (childRuntime.provider.id !== spec.runtime.provider.id || childRuntime.model.provider !== spec.runtime.model.provider || childRuntime.model.id !== spec.runtime.model.id) throw new Error("A child runtime transform cannot switch its admitted model.");
+    const childRuntime =
+      spec.transformRuntime?.(isolatedRuntime, { childId, runId: spec.runId ?? childId }) ??
+      isolatedRuntime;
+    if (
+      childRuntime.provider.id !== spec.runtime.provider.id ||
+      childRuntime.model.provider !== spec.runtime.model.provider ||
+      childRuntime.model.id !== spec.runtime.model.id
+    )
+      throw new Error("A child runtime transform cannot switch its admitted model.");
     // One child, one session: its ledger holds only its own last request and goes with it.
     const prefixes = createSideCallPrefixLedger({ maxChats: 1 });
-    const { agentOptions, spendingMeter, beforeSendRefusal, keepsPrefix } =
-      this.childStreamOptions(sessionId, childRuntime, spec, prefixes);
-    const budget = resolveCompactionModelBudget(spec.compactionModelOverrides, childRuntime.model, spec.compactionEngine);
-    const inputReserveTokens = configuredCompactionReserveTokens(spec.compactionModelOverrides, childRuntime.model, spec.compactionEngine);
+    const { agentOptions, spendingMeter, beforeSendRefusal, keepsPrefix } = this.childStreamOptions(
+      sessionId,
+      childRuntime,
+      spec,
+      prefixes,
+    );
+    const budget = resolveCompactionModelBudget(
+      spec.compactionModelOverrides,
+      childRuntime.model,
+      spec.compactionEngine,
+    );
+    const inputReserveTokens = configuredCompactionReserveTokens(
+      spec.compactionModelOverrides,
+      childRuntime.model,
+      spec.compactionEngine,
+    );
     const contextOptions = {
       compactionReserveTokens: inputReserveTokens,
       contextWindow: childRuntime.model.contextWindow,
@@ -311,11 +366,15 @@ export class SubagentRuntimeRegistry {
     const compactionOptions = {
       engine: spec.compactionEngine,
       settings: budget,
-      models: createPiCompactionModels(childRuntime, async (message) => {
-        spendingMeter?.count(message);
-        await spendingMeter?.settled();
-        await this.recordCompactionUsage?.(message, spec.runtime);
-      }, beforeSendRefusal),
+      models: createPiCompactionModels(
+        childRuntime,
+        async (message) => {
+          spendingMeter?.count(message);
+          await spendingMeter?.settled();
+          await this.recordCompactionUsage?.(message, spec.runtime);
+        },
+        beforeSendRefusal,
+      ),
       model: childRuntime.model,
       thinkingLevel: spec.thinkingLevel,
       signal: cancellation.signal,

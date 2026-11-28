@@ -90,7 +90,10 @@ const isAbsolutePath = (path: string) => path.startsWith("/") || /^[a-z]:\//i.te
  * `path` relative to `folder` with `.` and `..` resolved, "" for the folder
  * itself, or null when it leaves the folder.
  */
-export function workspaceRelativePath(path: string, folder: string | null | undefined): string | null {
+export function workspaceRelativePath(
+  path: string,
+  folder: string | null | undefined,
+): string | null {
   let rest = path.replace(/\\/g, "/");
   if (isAbsolutePath(rest)) {
     const root = folder?.replace(/\\/g, "/").replace(/\/+$/, "");
@@ -114,7 +117,13 @@ function fileRoute(href: string, workspaceFolder: string | null | undefined): Li
   const workspacePath = path.startsWith("~") ? null : workspaceRelativePath(path, workspaceFolder);
   // An absolute path outside the workspace with no file extension (an app
   // route such as /settings) is not treated as a file.
-  if (workspacePath === null && isAbsolutePath(path) && !/^file:/i.test(href) && !/\.[^/]+$/.test(path)) return null;
+  if (
+    workspacePath === null &&
+    isAbsolutePath(path) &&
+    !/^file:/i.test(href) &&
+    !/\.[^/]+$/.test(path)
+  )
+    return null;
   return { kind: "file", path, preview: PREVIEW_EXTENSION.test(path), workspacePath };
 }
 

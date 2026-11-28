@@ -29,14 +29,21 @@ const PULL_REQUEST_ROOT = root(queryKeys.gitPullRequestStatus(undefined));
 export const TOOL_RESULT_REFRESH_MS = 5_000;
 
 function workspaceOf(payload: unknown): string | undefined {
-  const id = payload && typeof payload === "object" ? (payload as { workspaceId?: unknown }).workspaceId : undefined;
+  const id =
+    payload && typeof payload === "object"
+      ? (payload as { workspaceId?: unknown }).workspaceId
+      : undefined;
   return typeof id === "string" && id ? id : undefined;
 }
 
 function matches(roots: ReadonlySet<string>, workspaceId?: string) {
   return (query: Query) => {
     const [root, id] = query.queryKey;
-    return typeof root === "string" && roots.has(root) && (workspaceId === undefined || id === workspaceId);
+    return (
+      typeof root === "string" &&
+      roots.has(root) &&
+      (workspaceId === undefined || id === workspaceId)
+    );
   };
 }
 
@@ -83,7 +90,8 @@ export function subscribeGitQuerySync(
       if (workspaceId) refreshWorkingTree(workspaceId);
     }),
     subscribe("chat:tool", (payload) => {
-      const phase = payload && typeof payload === "object" ? (payload as { phase?: unknown }).phase : undefined;
+      const phase =
+        payload && typeof payload === "object" ? (payload as { phase?: unknown }).phase : undefined;
       if (phase !== "result" && phase !== "error") return;
       if (pendingToolRefresh) return;
       const wait = Math.max(0, lastToolRefresh + TOOL_RESULT_REFRESH_MS - now());
@@ -95,13 +103,20 @@ export function subscribeGitQuerySync(
       }, wait);
     }),
     onWindowActivated(() => {
-      const gitQuery = (query: Query) => matches(REPOSITORY_ROOTS)(query) || query.queryKey[0] === PULL_REQUEST_ROOT;
+      const gitQuery = (query: Query) =>
+        matches(REPOSITORY_ROOTS)(query) || query.queryKey[0] === PULL_REQUEST_ROOT;
       // Safety-net intervals were switched off while inactive; re-evaluating
       // each observer's options restarts them without a fetch.
-      for (const query of queryClient.getQueryCache().findAll({ predicate: gitQuery, type: "active" })) {
+      for (const query of queryClient
+        .getQueryCache()
+        .findAll({ predicate: gitQuery, type: "active" })) {
         for (const observer of query.observers) observer.setOptions(observer.options);
       }
-      void queryClient.refetchQueries({ predicate: matches(REPOSITORY_ROOTS), type: "active", stale: true });
+      void queryClient.refetchQueries({
+        predicate: matches(REPOSITORY_ROOTS),
+        type: "active",
+        stale: true,
+      });
       refreshPullRequestIfStale();
     }),
   ];

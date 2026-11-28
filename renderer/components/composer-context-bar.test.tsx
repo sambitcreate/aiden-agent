@@ -29,7 +29,13 @@ const WORKSPACE: Workspace = {
 
 const CLEAN_REPO: GitInfo = { isRepo: true, branch: "main", uncommitted: 0, hasRemote: true };
 
-const DRAFT = { id: "chat-1", title: "New chat", messages: [], createdAt: 1, updatedAt: 1 } as unknown as Chat;
+const DRAFT = {
+  id: "chat-1",
+  title: "New chat",
+  messages: [],
+  createdAt: 1,
+  updatedAt: 1,
+} as unknown as Chat;
 const STARTED = {
   ...DRAFT,
   messages: [{ id: "m1", role: "user", content: "Fix the login", createdAt: 2 }],
@@ -115,7 +121,9 @@ async function mount(props: HarnessProps) {
 }
 
 function bar(): HTMLElement {
-  const element = document.querySelector<HTMLElement>('[role="group"][aria-label="Composer workspace bar"]');
+  const element = document.querySelector<HTMLElement>(
+    '[role="group"][aria-label="Composer workspace bar"]',
+  );
   assert.ok(element !== null, "the context bar is mounted");
   return element;
 }
@@ -129,7 +137,11 @@ function workspaceButton() {
 }
 
 function status(): string {
-  const live = [...document.querySelectorAll('[role="group"][aria-label="Composer workspace bar"] [role="status"]')];
+  const live = [
+    ...document.querySelectorAll(
+      '[role="group"][aria-label="Composer workspace bar"] [role="status"]',
+    ),
+  ];
   return live.map((node) => node.textContent ?? "").join("");
 }
 
@@ -157,7 +169,10 @@ test("a plain folder draft shows the workspace only: no Local label and no PR ch
   assert.ok(workspaceButton() !== null);
   assert.ok(screen.queryByText("Local") === null);
   assert.ok(pullRequestChip() === null);
-  assert.ok(!calls.some((call) => call.channel.startsWith("pullRequests:")), "a draft reads no PR state");
+  assert.ok(
+    !calls.some((call) => call.channel.startsWith("pullRequests:")),
+    "a draft reads no PR state",
+  );
 });
 
 test("a git draft shows the branch with its uncommitted change count", async () => {
@@ -229,7 +244,10 @@ test("the changes count follows Git status after the branch menu has been opened
     fireEvent.keyDown(trigger, { key: "Enter" });
   });
   await settle();
-  assert.ok(calls.some((call) => call.channel === "git:branches"), "the open menu read branches");
+  assert.ok(
+    calls.some((call) => call.channel === "git:branches"),
+    "the open menu read branches",
+  );
   await act(async () => {
     fireEvent.keyDown(document.activeElement ?? document.body, { key: "Escape" });
   });

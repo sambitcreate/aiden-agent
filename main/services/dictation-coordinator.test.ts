@@ -694,8 +694,7 @@ test("needs-setup never starts recording and shows the setup message", async () 
     warmUp: () => {
       warmups += 1;
     },
-    resolveVoice: async () =>
-      setupReady ? { ok: true } : { ok: false, message: SETUP_MESSAGE },
+    resolveVoice: async () => (setupReady ? { ok: true } : { ok: false, message: SETUP_MESSAGE }),
   });
   await subject.coordinator.ready();
   await subject.coordinator.press();
@@ -730,7 +729,10 @@ test("a freshly created pill still receives the setup message once it is ready",
     [{ state: "error", message: SETUP_MESSAGE }],
     "the cold pill missed the first broadcast, so ready() replays it",
   );
-  assert.equal(subject.events.some((event) => event.state === "recording"), false);
+  assert.equal(
+    subject.events.some((event) => event.state === "recording"),
+    false,
+  );
   assert.equal(subject.coordinator.currentStage, "idle");
   // The replay happens once.
   const afterReplay = subject.events.length;
@@ -773,11 +775,16 @@ test("a hybrid tap during a slow provider check still latches recording on", asy
   await pressed;
   await new Promise((resolve) => setImmediate(resolve));
   assert.equal(subject.coordinator.currentStage, "recording", "the quick tap latched on");
-  assert.equal(subject.events.some((event) => event.state === "stopping"), false);
+  assert.equal(
+    subject.events.some((event) => event.state === "stopping"),
+    false,
+  );
 });
 
 test("a hybrid setup failure stops watching the key", async () => {
-  const subject = hybridHarness({ resolveVoice: async () => ({ ok: false, message: SETUP_MESSAGE }) });
+  const subject = hybridHarness({
+    resolveVoice: async () => ({ ok: false, message: SETUP_MESSAGE }),
+  });
   await subject.coordinator.ready();
   await subject.coordinator.press();
   assert.equal(subject.watches[0]?.stopped, true);
@@ -800,7 +807,10 @@ test("the watchdog grows with long recordings so it never preempts the worker", 
   // Ten minutes of audio: the on-device worker may take 20× real time.
   await subject.coordinator.progress("finalizing", operationId, 600);
   const fence = fences[fences.length - 1]!;
-  assert.ok(fence > 20_000 * 600, `fence ${fence} must outlast the worker's 20× real-time deadline`);
+  assert.ok(
+    fence > 20_000 * 600,
+    `fence ${fence} must outlast the worker's 20× real-time deadline`,
+  );
   // A three-second clip: the supervised on-device budget (615 s) plus 10 s.
   await subject.coordinator.progress("finalizing", operationId, 3);
   assert.equal(fences[fences.length - 1], 625_000);
@@ -813,7 +823,12 @@ test("an absurd recording length cannot overflow the watchdog timer", () => {
 });
 
 test("the pill is told which provider the press resolved, so it starts without asking again", async () => {
-  const voice = { kind: "ready", provider: "local", modelId: "parakeet-v3", automatic: true } as const;
+  const voice = {
+    kind: "ready",
+    provider: "local",
+    modelId: "parakeet-v3",
+    automatic: true,
+  } as const;
   const subject = harness({ resolveVoice: async () => ({ ok: true, voice }) });
   await subject.coordinator.press();
   await subject.coordinator.ready();
@@ -879,7 +894,14 @@ test("each delivered dictation reports how long every stage took", async () => {
   clock += 300;
   await subject.coordinator.result("hello", operationId);
   assert.deepEqual(timings, [
-    { operationId, startMs: 120, speechMs: 2_000, transcribeMs: 300, deliverMs: 40, outcome: "pasted" },
+    {
+      operationId,
+      startMs: 120,
+      speechMs: 2_000,
+      transcribeMs: 300,
+      deliverMs: 40,
+      outcome: "pasted",
+    },
   ]);
 });
 
@@ -912,7 +934,12 @@ test("a pill recreated ahead of time must report ready before recording starts",
 test("a dictation that reached the text field counts once by its engine, and a discarded one counts nothing", async (t) => {
   const sent = captureAnalyticsEvents(t);
   const dictate = async (text: string) => {
-    const voice = { kind: "ready", provider: "local", modelId: "parakeet-v3", automatic: true } as const;
+    const voice = {
+      kind: "ready",
+      provider: "local",
+      modelId: "parakeet-v3",
+      automatic: true,
+    } as const;
     const subject = harness({ resolveVoice: async () => ({ ok: true, voice }) });
     await subject.coordinator.ready();
     await subject.coordinator.toggle();

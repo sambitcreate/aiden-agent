@@ -150,10 +150,7 @@ test("activity typography keeps summaries above compact details", () => {
     />,
   );
 
-  assert.match(
-    markup,
-    /text-small-strong font-medium text-secondary activity-feed-summary-label/u,
-  );
+  assert.match(markup, /text-small-strong font-medium text-secondary activity-feed-summary-label/u);
   assert.match(markup, /activity-feed-detail-label[^"]*text-mini text-secondary/u);
   assert.match(markup, /text-secondary font-medium">Read/u);
   assert.match(markup, /font-normal text-tertiary"> package\.json/u);
@@ -209,7 +206,12 @@ test("a compaction the person stopped reads stopped, not as an issue", () => {
     <ActivityFeed
       timeline={timeline(
         "cancelled",
-        [step(0, "compact_context", "cancelled", { label: "Compact context", stoppedByUser: true })],
+        [
+          step(0, "compact_context", "cancelled", {
+            label: "Compact context",
+            stoppedByUser: true,
+          }),
+        ],
         { cancellationOrigin: "user_stop" },
       )}
     />,
@@ -228,7 +230,10 @@ test("a stopped call among other work leaves the trail closed", () => {
     <ActivityFeed
       timeline={timeline(
         "cancelled",
-        [step(0, "read_file", "completed", { target: "package.json" }), step(1, "run_command", "cancelled", { label: "Run command", stoppedByUser: true })],
+        [
+          step(0, "read_file", "completed", { target: "package.json" }),
+          step(1, "run_command", "cancelled", { label: "Run command", stoppedByUser: true }),
+        ],
         { cancellationOrigin: "user_stop" },
       )}
     />,
@@ -246,19 +251,20 @@ test("cancellations the person did not ask for, and failures, are still flagged"
         cancellationOrigin: "application_shutdown",
       }),
     ],
-    [
-      "compact_context cancelled",
-      timeline("cancelled", [step(0, "compact_context", "cancelled")]),
-    ],
+    ["compact_context cancelled", timeline("cancelled", [step(0, "compact_context", "cancelled")])],
     [
       "compact_context failed",
-      timeline("cancelled", [step(0, "compact_context", "failed")], { cancellationOrigin: "user_stop" }),
+      timeline("cancelled", [step(0, "compact_context", "failed")], {
+        cancellationOrigin: "user_stop",
+      }),
     ],
     // A Stop ends the generation, but this call was cancelled earlier for
     // another reason (an agent permission cancelled on detach): no mark.
     [
       "compact_context cancelled",
-      timeline("cancelled", [step(0, "compact_context", "cancelled")], { cancellationOrigin: "user_stop" }),
+      timeline("cancelled", [step(0, "compact_context", "cancelled")], {
+        cancellationOrigin: "user_stop",
+      }),
     ],
   ];
   for (const [line, flagged] of cases) {
@@ -272,10 +278,14 @@ test("cancellations the person did not ask for, and failures, are still flagged"
 test("a stopped call that a claim check names stays an issue", () => {
   const markup = renderToStaticMarkup(
     <ActivityFeed
-      timeline={timeline("cancelled", [step(0, "read_file"), step(1, "run_command", "cancelled", { stoppedByUser: true })], {
-        cancellationOrigin: "user_stop",
-        claimCheck: { kind: "unverified_success", stepIds: ["tool-2"] },
-      })}
+      timeline={timeline(
+        "cancelled",
+        [step(0, "read_file"), step(1, "run_command", "cancelled", { stoppedByUser: true })],
+        {
+          cancellationOrigin: "user_stop",
+          claimCheck: { kind: "unverified_success", stepIds: ["tool-2"] },
+        },
+      )}
     />,
   );
   assert.match(markup, />1 issue</u);
@@ -315,9 +325,7 @@ test("compaction among other work still expands into the trail", () => {
 
 test("a failed compact-only trail stays expandable without repeating the summary line", () => {
   const markup = renderToStaticMarkup(
-    <ActivityFeed
-      timeline={timeline("completed", [step(0, "compact_context", "failed")])}
-    />,
+    <ActivityFeed timeline={timeline("completed", [step(0, "compact_context", "failed")])} />,
   );
   assert.match(markup, /<details/u);
   assert.match(markup, /Compacted context/u);
@@ -365,7 +373,13 @@ test("the ticker preserves rows and only fades new content", () => {
   const css = styles();
   assert.doesNotMatch(css, /aiden-activity-stack-shift/u);
   assert.match(css, /animation: aiden-activity-row-in 120ms ease-out/u);
-  assert.doesNotMatch(css.slice(css.indexOf("@keyframes aiden-activity-row-in"), css.indexOf("@keyframes aiden-environment-summary-in")), /blur|transform/u);
+  assert.doesNotMatch(
+    css.slice(
+      css.indexOf("@keyframes aiden-activity-row-in"),
+      css.indexOf("@keyframes aiden-environment-summary-in"),
+    ),
+    /blur|transform/u,
+  );
   assert.match(
     css,
     /\.activity-feed-window\[data-masked="true"\]\s*\{[^}]*mask-image:\s*linear-gradient/u,
@@ -375,11 +389,16 @@ test("the ticker preserves rows and only fades new content", () => {
   assert.doesNotMatch(css, /aiden-agent-step-label-(?:in|out)/u);
 });
 
-
 test("successful produced files render explicit host provenance", () => {
-  const markup = renderToStaticMarkup(<ActivityFeed timeline={timeline("completed", [
-    step(0, "write_file", "completed", { producedFile: { relativePath: "out/report.txt", operation: "written", bytes: 12 } }),
-  ])} />);
+  const markup = renderToStaticMarkup(
+    <ActivityFeed
+      timeline={timeline("completed", [
+        step(0, "write_file", "completed", {
+          producedFile: { relativePath: "out/report.txt", operation: "written", bytes: 12 },
+        }),
+      ])}
+    />,
+  );
   assert.match(markup, /File written/u);
   assert.match(markup, /report.txt/u);
   assert.match(markup, /title="out\/report.txt"/u);

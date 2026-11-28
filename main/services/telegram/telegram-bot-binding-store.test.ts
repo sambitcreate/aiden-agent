@@ -28,16 +28,13 @@ async function fixture() {
       bind: (input: TestBindingInput) =>
         bindingStore.bind({
           ...input,
-          backingWorkspaceId:
-            input.backingWorkspaceId ?? `bot-home-${input.botId}`,
+          backingWorkspaceId: input.backingWorkspaceId ?? `bot-home-${input.botId}`,
         }),
     },
   };
 }
 
-function memoryAuthority(
-  initial: string | null = null,
-): TelegramBotBindingRollbackAuthority & {
+function memoryAuthority(initial: string | null = null): TelegramBotBindingRollbackAuthority & {
   clear(): void;
 } {
   let value = initial;
@@ -209,9 +206,7 @@ test("bindings survive a new store instance and keep exact projections", async (
   const loaded = await restarted.get("persistent");
   assert.deepEqual(loaded, created);
   assert.notStrictEqual(loaded, created);
-  const disk = JSON.parse(
-    await readFile(join(root, "telegram-bot-bindings.json"), "utf8"),
-  ) as {
+  const disk = JSON.parse(await readFile(join(root, "telegram-bot-bindings.json"), "utf8")) as {
     version: number;
     bindings: unknown[];
   };
@@ -292,10 +287,7 @@ test("future binding state fails closed for reads and cannot be overwritten", as
   await writeFile(file, future, "utf8");
   const store = createTelegramBotBindingStore({ root: () => root });
   await assert.rejects(store.list(true), /routing data is unavailable/u);
-  await assert.rejects(
-    store.resolve("default", 8),
-    /routing data is unavailable/u,
-  );
+  await assert.rejects(store.resolve("default", 8), /routing data is unavailable/u);
   await assert.rejects(
     store.bind({
       botId: "must-not-overwrite",
@@ -374,10 +366,7 @@ test("v1 enabled and disabled bindings durably migrate without changing backing 
     migrated.find(({ botId }) => botId === "enabled-v1")?.backingChatId,
     enabled.backingChatId,
   );
-  assert.equal(
-    migrated.find(({ botId }) => botId === "disabled-v1")?.enabled,
-    false,
-  );
+  assert.equal(migrated.find(({ botId }) => botId === "disabled-v1")?.enabled, false);
   assert.equal((await store.resolve("default", 71))?.botId, "enabled-v1");
   assert.equal((await store.resolve("work", 72))?.botId, "second-enabled-v1");
 
@@ -392,11 +381,7 @@ test("v1 enabled and disabled bindings durably migrate without changing backing 
   assert.equal(disk.version, 3);
   assert.equal((disk as { generation?: number }).generation, 0);
   assert.equal(disk.bindings.length, 3);
-  assert(
-    disk.bindings.every(
-      ({ backingWorkspaceId }) => typeof backingWorkspaceId === "string",
-    ),
-  );
+  assert(disk.bindings.every(({ backingWorkspaceId }) => typeof backingWorkspaceId === "string"));
   assert.equal(
     disk.bindings.find(({ botId }) => botId === "enabled-v1")?.backingChatId,
     enabled.backingChatId,
@@ -404,9 +389,7 @@ test("v1 enabled and disabled bindings durably migrate without changing backing 
 });
 
 test("protected generation rejects an offline restore of a pre-unbind route", async (t) => {
-  const root = await mkdtemp(
-    join(tmpdir(), "aiden-telegram-binding-rollback-"),
-  );
+  const root = await mkdtemp(join(tmpdir(), "aiden-telegram-binding-rollback-"));
   t.after(() => rm(root, { recursive: true, force: true }));
   const authority = { head: memoryAuthority(), bootstrap: memoryAuthority() };
   const first = createTelegramBotBindingStore({ root: () => root, authority });
@@ -437,8 +420,7 @@ test("protected generation rejects an offline restore of a pre-unbind route", as
 });
 
 test("protected binding transitions reconcile every crash checkpoint", async (t) => {
-  type CrashStage =
-    "beforePending" | "afterPending" | "afterFile" | "afterCommit";
+  type CrashStage = "beforePending" | "afterPending" | "afterFile" | "afterCommit";
   const scenarios: Array<{ stage: CrashStage; remainsBound: boolean }> = [
     { stage: "beforePending" as const, remainsBound: true },
     { stage: "afterPending" as const, remainsBound: true },
@@ -447,9 +429,7 @@ test("protected binding transitions reconcile every crash checkpoint", async (t)
   ];
   for (const scenario of scenarios) {
     await t.test(scenario.stage, async () => {
-      const root = await mkdtemp(
-        join(tmpdir(), "aiden-telegram-binding-crash-"),
-      );
+      const root = await mkdtemp(join(tmpdir(), "aiden-telegram-binding-crash-"));
       t.after(() => rm(root, { recursive: true, force: true }));
       const authority = {
         head: memoryAuthority(),
@@ -478,29 +458,21 @@ test("protected binding transitions reconcile every crash checkpoint", async (t)
         backingWorkspaceId: "managed-home",
       });
       crash = scenario.stage;
-      await assert.rejects(
-        first.unbind(bound.botId),
-        new RegExp(`crash:${scenario.stage}`, "u"),
-      );
+      await assert.rejects(first.unbind(bound.botId), new RegExp(`crash:${scenario.stage}`, "u"));
 
       const restarted = createTelegramBotBindingStore({
         root: () => root,
         authority,
       });
       const resolved = await restarted.resolve("default", 91);
-      assert.equal(
-        resolved?.botId ?? null,
-        scenario.remainsBound ? bound.botId : null,
-      );
+      assert.equal(resolved?.botId ?? null, scenario.remainsBound ? bound.botId : null);
       await restarted.assertHealthy();
     });
   }
 });
 
 test("consumed bootstrap marker rejects anchor loss with an older restored route", async (t) => {
-  const root = await mkdtemp(
-    join(tmpdir(), "aiden-telegram-binding-anchor-loss-"),
-  );
+  const root = await mkdtemp(join(tmpdir(), "aiden-telegram-binding-anchor-loss-"));
   t.after(() => rm(root, { recursive: true, force: true }));
   const authority = { head: memoryAuthority(), bootstrap: memoryAuthority() };
   const first = createTelegramBotBindingStore({ root: () => root, authority });
@@ -522,10 +494,7 @@ test("consumed bootstrap marker rejects anchor loss with an older restored route
     root: () => root,
     authority,
   });
-  await assert.rejects(
-    restarted.resolve("default", 92),
-    /routing data is unavailable/u,
-  );
+  await assert.rejects(restarted.resolve("default", 92), /routing data is unavailable/u);
   assert.equal(await authority.bootstrap.load(), "consumed");
   assert.equal(await authority.head.load(), null);
 });

@@ -43,17 +43,11 @@ test("catalog native-menu ownership exactly matches derived Electron accelerator
 
 test("shortcut recording removes the application menu before capture begins", () => {
   const main = readFileSync(new URL("../index.ts", import.meta.url), "utf8");
-  assert.match(
-    main,
-    /if \(!acceleratorsEnabled\) \{\s*Menu\.setApplicationMenu\(null\)/u,
-  );
+  assert.match(main, /if \(!acceleratorsEnabled\) \{\s*Menu\.setApplicationMenu\(null\)/u);
 });
 
 test("same-document recorder starts join one owned suspension request", () => {
-  const handler = readFileSync(
-    new URL("../handlers/shortcuts.ts", import.meta.url),
-    "utf8",
-  );
+  const handler = readFileSync(new URL("../handlers/shortcuts.ts", import.meta.url), "utf8");
   assert.match(handler, /startPromise: Promise<KeybindingSnapshot> \| null/u);
   assert.match(handler, /if \(owner\.startPromise\) return owner\.startPromise/u);
   assert.match(handler, /if \(suspended\) return startRecorder\(claimRecorder\(event\)\)/u);

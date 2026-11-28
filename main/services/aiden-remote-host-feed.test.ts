@@ -56,7 +56,10 @@ class RecordingResponse extends EventEmitter {
       .filter((block) => block.length > 0 && !block.startsWith(":"))
       .map((block) => {
         const field = (name: string) =>
-          block.split("\n").find((line) => line.startsWith(`${name}: `))?.slice(name.length + 2);
+          block
+            .split("\n")
+            .find((line) => line.startsWith(`${name}: `))
+            ?.slice(name.length + 2);
         return {
           id: field("id"),
           event: field("event")!,
@@ -99,7 +102,11 @@ function workspace(id: string, name = "Project") {
   };
 }
 
-function run(runId: string, chatId: string, state: HostRunSummary["state"] = "working"): HostRunSummary {
+function run(
+  runId: string,
+  chatId: string,
+  state: HostRunSummary["state"] = "working",
+): HostRunSummary {
   return {
     runId,
     chatId,
@@ -118,15 +125,17 @@ const desktop = (id: string, extra: AidenRemoteCapability[] = []) => ({
   capabilities: new Set<AidenRemoteCapability>(["host:events", ...extra]),
 });
 
-function harness(options: {
-  maxEvents?: number;
-  maxBytes?: number;
-  heartbeatMs?: number;
-  debounceMs?: number;
-  snapshotChunkBytes?: number;
-  attentionSummary?: (runId: string) => string | undefined;
-  liveRuns?: () => readonly HostRunSummary[];
-} = {}) {
+function harness(
+  options: {
+    maxEvents?: number;
+    maxBytes?: number;
+    heartbeatMs?: number;
+    debounceMs?: number;
+    snapshotChunkBytes?: number;
+    attentionSummary?: (runId: string) => string | undefined;
+    liveRuns?: () => readonly HostRunSummary[];
+  } = {},
+) {
   const state: { current: AidenRemoteHostFeedState; reads: number } = {
     current: {
       summaries: [summary("chat-1")],
@@ -168,7 +177,11 @@ function harness(options: {
   return { feed, state, holdNextRead, releaseRead: () => gate.release?.() };
 }
 
-async function open(feed: AidenRemoteHostFeedService, device: ReturnType<typeof desktop>, cursor?: string) {
+async function open(
+  feed: AidenRemoteHostFeedService,
+  device: ReturnType<typeof desktop>,
+  cursor?: string,
+) {
   const response = new RecordingResponse();
   await feed.open(device, cursor, response.asServerResponse());
   return response;
@@ -227,7 +240,10 @@ test("a new subscriber receives a snapshot, then upserts, removals and run state
       state: "working",
       unread: true,
     });
-    assert.deepEqual(live.map((frame) => frame.data.sequence), [1, 2, 3, 4]);
+    assert.deepEqual(
+      live.map((frame) => frame.data.sequence),
+      [1, 2, 3, 4],
+    );
   } finally {
     feed.close();
   }
@@ -246,7 +262,9 @@ test("Last-Event-ID resumes after the last delivered event without a snapshot", 
 
     const resumed = await open(feed, desktop("device-a"), "epoch_feed_01:1");
     assert.deepEqual(
-      resumed.frames().map((frame) => [frame.id, frame.event, (frame.data.payload as { id: string }).id]),
+      resumed
+        .frames()
+        .map((frame) => [frame.id, frame.event, (frame.data.payload as { id: string }).id]),
       [
         ["epoch_feed_01:2", "chat.upsert", "chat-3"],
         ["epoch_feed_01:3", "chat.upsert", "chat-4"],
@@ -282,7 +300,10 @@ test("a cursor behind retention, from another epoch, malformed or ahead gets a f
 
     // The oldest retained cursor still replays.
     const replay = await open(feed, desktop("device-replay"), "epoch_feed_01:2");
-    assert.deepEqual(replay.frames().map((frame) => frame.event), ["chat.upsert", "chat.upsert"]);
+    assert.deepEqual(
+      replay.frames().map((frame) => frame.event),
+      ["chat.upsert", "chat.upsert"],
+    );
   } finally {
     feed.close();
   }
@@ -301,7 +322,10 @@ test("a byte budget overflow also forces a snapshot instead of a partial replay"
       await feed.refresh();
     }
     const response = await open(feed, desktop("device-a"), "epoch_feed_01:1");
-    assert.deepEqual(response.frames().map((frame) => frame.event), ["snapshot"]);
+    assert.deepEqual(
+      response.frames().map((frame) => frame.event),
+      ["snapshot"],
+    );
   } finally {
     feed.close();
   }
@@ -326,10 +350,9 @@ test("Bots and Bot-chat run states reach only devices that also hold bot:read", 
   const botAware = await open(feed, desktop("device-bots", ["bot:read"]));
   try {
     assert.deepEqual((plain.frames()[0]!.data.payload as { bots: unknown[] }).bots, []);
-    assert.deepEqual(
-      (botAware.frames()[0]!.data.payload as { bots: unknown[] }).bots,
-      [{ id: "bot-1", name: "Planner" }],
-    );
+    assert.deepEqual((botAware.frames()[0]!.data.payload as { bots: unknown[] }).bots, [
+      { id: "bot-1", name: "Planner" },
+    ]);
 
     state.current = { ...state.current, bots: [{ id: "bot-1", name: "Renamed" }] };
     feed.noteRun(run("run-bot", "bot-chat-1", "needs_approval"), false);
@@ -339,12 +362,22 @@ test("Bots and Bot-chat run states reach only devices that also hold bot:read", 
     await feed.refresh();
 
     assert.deepEqual(
-      plain.frames().slice(1).map((frame) => [frame.event, (frame.data.payload as { runId?: string }).runId]),
+      plain
+        .frames()
+        .slice(1)
+        .map((frame) => [frame.event, (frame.data.payload as { runId?: string }).runId]),
       [["run.state", "run-plain"]],
     );
     assert.deepEqual(
-      botAware.frames().slice(1).map((frame) => [frame.event, (frame.data.payload as { runId?: string }).runId]),
-      [["bot.upsert", undefined], ["run.state", "run-bot"], ["run.state", "run-plain"]],
+      botAware
+        .frames()
+        .slice(1)
+        .map((frame) => [frame.event, (frame.data.payload as { runId?: string }).runId]),
+      [
+        ["bot.upsert", undefined],
+        ["run.state", "run-bot"],
+        ["run.state", "run-plain"],
+      ],
     );
   } finally {
     feed.close();
@@ -356,10 +389,16 @@ test("a paused Bot reads as paused only on desktops that hold bot:handoffs", asy
   const idle = { id: "bot-1", name: "Planner", sessionState: "idle" };
   state.current = { ...state.current, bots: [idle], handoffBots: [idle] };
   const legacy = await open(feed, desktop("device-legacy", ["bot:read"]));
-  const holderDevice = { ...desktop("device-holder", ["bot:read", "bot:handoffs"]), botHandoffs: true };
+  const holderDevice = {
+    ...desktop("device-holder", ["bot:read", "bot:handoffs"]),
+    botHandoffs: true,
+  };
   const holder = await open(feed, holderDevice);
   const botEvents = (response: RecordingResponse) =>
-    response.frames().slice(1).map((frame) => [frame.event, frame.data.payload]);
+    response
+      .frames()
+      .slice(1)
+      .map((frame) => [frame.event, frame.data.payload]);
   const lastId = (response: RecordingResponse) => response.frames().slice(-1)[0]!.id;
   try {
     const beforePause = lastId(holder);
@@ -371,7 +410,9 @@ test("a paused Bot reads as paused only on desktops that hold bot:handoffs", asy
     feed.invalidate();
     await feed.refresh();
     assert.deepEqual(botEvents(legacy), [["bot.upsert", { ...idle, sessionState: "unavailable" }]]);
-    assert.deepEqual(botEvents(holder), [["bot.upsert", { ...idle, sessionState: "paused", paused: true }]]);
+    assert.deepEqual(botEvents(holder), [
+      ["bot.upsert", { ...idle, sessionState: "paused", paused: true }],
+    ]);
 
     // A Bot both audiences read alike is one change for each, not two.
     const renamed = { ...idle, name: "Renamed" };
@@ -395,12 +436,14 @@ test("a paused Bot reads as paused only on desktops that hold bot:handoffs", asy
     };
     feed.invalidate();
     await feed.refresh();
-    const snapshotBots = (response: RecordingResponse) => (response.frames()[0]!.data.payload as { bots: unknown[] }).bots;
-    assert.deepEqual(snapshotBots(await open(feed, holderDevice)), [{ ...renamed, sessionState: "paused", paused: true }]);
-    assert.deepEqual(
-      snapshotBots(await open(feed, desktop("device-legacy-2", ["bot:read"]))),
-      [{ ...renamed, sessionState: "unavailable" }],
-    );
+    const snapshotBots = (response: RecordingResponse) =>
+      (response.frames()[0]!.data.payload as { bots: unknown[] }).bots;
+    assert.deepEqual(snapshotBots(await open(feed, holderDevice)), [
+      { ...renamed, sessionState: "paused", paused: true },
+    ]);
+    assert.deepEqual(snapshotBots(await open(feed, desktop("device-legacy-2", ["bot:read"]))), [
+      { ...renamed, sessionState: "unavailable" },
+    ]);
 
     state.current = { ...state.current, bots: [], handoffBots: [] };
     feed.invalidate();
@@ -416,30 +459,46 @@ test("a paused Bot reads as paused only on desktops that hold bot:handoffs", asy
 test("a desktop that gains bot:handoffs on reconnect gets a fresh snapshot instead of replaying its old Bot rows", async () => {
   const { feed, state } = harness();
   const bot = { id: "bot-1", name: "Planner" };
-  state.current = { ...state.current, bots: [{ ...bot, sessionState: "unavailable" }], handoffBots: [{ ...bot, sessionState: "paused", paused: true }] };
+  state.current = {
+    ...state.current,
+    bots: [{ ...bot, sessionState: "unavailable" }],
+    handoffBots: [{ ...bot, sessionState: "paused", paused: true }],
+  };
   const legacyDevice = desktop("device-1", ["bot:read"]);
   const first = await open(feed, legacyDevice);
   const cursor = first.frames().slice(-1)[0]!.id;
   try {
     // The same desktop reconnects holding bot:handoffs, with the cursor it kept; the Bot hasn't changed.
-    const upgradedDevice = { ...desktop("device-1", ["bot:read", "bot:handoffs"]), botHandoffs: true };
+    const upgradedDevice = {
+      ...desktop("device-1", ["bot:read", "bot:handoffs"]),
+      botHandoffs: true,
+    };
     const upgraded = await open(feed, upgradedDevice, cursor);
     const frames = upgraded.frames();
     assert.equal(frames[0]!.event, "snapshot");
-    assert.deepEqual((frames[0]!.data.payload as { bots: unknown[] }).bots, [{ ...bot, sessionState: "paused", paused: true }]);
+    assert.deepEqual((frames[0]!.data.payload as { bots: unknown[] }).bots, [
+      { ...bot, sessionState: "paused", paused: true },
+    ]);
 
     // That snapshot never fully arrived, so the desktop kept its old cursor: trying again still snapshots.
     const retried = (await open(feed, upgradedDevice, cursor)).frames();
     assert.equal(retried[0]?.event, "snapshot");
-    assert.deepEqual((retried[0]!.data.payload as { bots: unknown[] }).bots, [{ ...bot, sessionState: "paused", paused: true }]);
+    assert.deepEqual((retried[0]!.data.payload as { bots: unknown[] }).bots, [
+      { ...bot, sessionState: "paused", paused: true },
+    ]);
 
     // Back without it, the cursor from the holder's snapshot doesn't replay either.
     const back = await open(feed, legacyDevice, retried.slice(-1)[0]!.id);
-    assert.deepEqual((back.frames()[0]!.data.payload as { bots: unknown[] }).bots, [{ ...bot, sessionState: "unavailable" }]);
+    assert.deepEqual((back.frames()[0]!.data.payload as { bots: unknown[] }).bots, [
+      { ...bot, sessionState: "unavailable" },
+    ]);
 
     // A cursor kept on the same rows still resumes without a snapshot.
     const resumed = await open(feed, legacyDevice, back.frames().slice(-1)[0]!.id);
-    assert.equal(resumed.frames().some((frame) => frame.event === "snapshot"), false);
+    assert.equal(
+      resumed.frames().some((frame) => frame.event === "snapshot"),
+      false,
+    );
   } finally {
     feed.close();
   }
@@ -459,7 +518,13 @@ test("revocation closes only the revoked device's feeds", async () => {
     state.current = { ...state.current, summaries: [summary("chat-1"), summary("chat-2")] };
     feed.invalidate();
     await feed.refresh();
-    assert.deepEqual(kept.frames().slice(1).map((frame) => frame.event), ["chat.upsert"]);
+    assert.deepEqual(
+      kept
+        .frames()
+        .slice(1)
+        .map((frame) => frame.event),
+      ["chat.upsert"],
+    );
     assert.equal(revoked.frames().length, 1);
   } finally {
     feed.close();
@@ -506,7 +571,8 @@ test("a revocation that lands while a feed is opening refuses the subscription",
   const { feed, state, holdNextRead, releaseRead } = harness();
   let revoked = false;
   const admit = () => {
-    if (revoked) throw new AidenRemoteServiceError("credential_revoked", "This device was revoked.", 403);
+    if (revoked)
+      throw new AidenRemoteServiceError("credential_revoked", "This device was revoked.", 403);
   };
   const response = new RecordingResponse();
   const reading = holdNextRead();
@@ -516,8 +582,11 @@ test("a revocation that lands while a feed is opening refuses the subscription",
   revoked = true;
   feed.revokeDevice("device-a");
   releaseRead();
-  await assert.rejects(opening, (error: unknown) =>
-    error instanceof AidenRemoteServiceError && error.code === "credential_revoked");
+  await assert.rejects(
+    opening,
+    (error: unknown) =>
+      error instanceof AidenRemoteServiceError && error.code === "credential_revoked",
+  );
   assert.equal(response.status, 0);
   assert.equal(response.body, "");
 
@@ -560,11 +629,14 @@ test("a change signalled during the opening read reaches the new subscriber", as
   releaseRead();
   await opening;
   try {
-    await eventually(() => response.frames().some((frame) => frame.event === "chat.upsert"), "chat.upsert");
+    await eventually(
+      () => response.frames().some((frame) => frame.event === "chat.upsert"),
+      "chat.upsert",
+    );
     const [snapshot, upsert] = response.frames();
     assert.equal(snapshot!.event, "snapshot");
     assert.equal(
-      ((snapshot!.data.payload as { summaries: Array<{ title: string }> }).summaries[0]!).title,
+      (snapshot!.data.payload as { summaries: Array<{ title: string }> }).summaries[0]!.title,
       "Chat chat-1",
     );
     assert.equal((upsert!.data.payload as { title: string }).title, "Renamed");
@@ -578,16 +650,25 @@ test("a large host snapshot arrives as bounded frames that reassemble every row"
   const ids = Array.from({ length: 4_000 }, (_, index) => `chat-${String(index).padStart(4, "0")}`);
   state.current = {
     ...state.current,
-    summaries: ids.map((id) => summary(id, { title: `${id} `.padEnd(50, "t"), revision: "a".repeat(40) })),
+    summaries: ids.map((id) =>
+      summary(id, { title: `${id} `.padEnd(50, "t"), revision: "a".repeat(40) }),
+    ),
   };
   const response = await open(feed, desktop("device-a", ["bot:read"]));
   try {
-    assert.ok(Buffer.byteLength(response.body) > 1_048_576, "the host is larger than one SSE frame");
+    assert.ok(
+      Buffer.byteLength(response.body) > 1_048_576,
+      "the host is larger than one SSE frame",
+    );
 
     // The real peer reader enforces the 1 MiB frame limit and accepts every frame.
     const reader = new PeerEventFrames();
     const raw: string[] = [];
-    reader.push(Buffer.from(response.body), (frame) => raw.push(frame), () => {});
+    reader.push(
+      Buffer.from(response.body),
+      (frame) => raw.push(frame),
+      () => {},
+    );
     const frames = response.frames();
     assert.equal(raw.length, frames.length);
     assert.ok(frames.length > 1);
@@ -596,11 +677,20 @@ test("a large host snapshot arrives as bounded frames that reassemble every row"
     const partial = frames.slice(0, -1);
     const final = frames[frames.length - 1]!;
     // Only the final frame moves Last-Event-ID, so an interrupted snapshot is retried whole.
-    assert.ok(partial.every((frame) => frame.id === undefined && (frame.data.payload as { partial?: boolean }).partial === true));
+    assert.ok(
+      partial.every(
+        (frame) =>
+          frame.id === undefined && (frame.data.payload as { partial?: boolean }).partial === true,
+      ),
+    );
     assert.equal(final.id, "epoch_feed_01:0");
     assert.equal((final.data.payload as { partial?: boolean }).partial, undefined);
 
-    const merged = { summaries: [] as Array<{ id: string }>, workspaces: [] as Array<{ id: string }>, bots: [] as Array<{ id: string }> };
+    const merged = {
+      summaries: [] as Array<{ id: string }>,
+      workspaces: [] as Array<{ id: string }>,
+      bots: [] as Array<{ id: string }>,
+    };
     for (const frame of frames) {
       const payload = frame.data.payload as typeof merged & { epoch: string; sequence: number };
       assert.equal(payload.epoch, "epoch_feed_01");
@@ -609,9 +699,18 @@ test("a large host snapshot arrives as bounded frames that reassemble every row"
       merged.workspaces.push(...payload.workspaces);
       merged.bots.push(...payload.bots);
     }
-    assert.deepEqual(merged.summaries.map((item) => item.id), ids);
-    assert.deepEqual(merged.workspaces.map((item) => item.id), ["workspace-1"]);
-    assert.deepEqual(merged.bots.map((item) => item.id), ["bot-1"]);
+    assert.deepEqual(
+      merged.summaries.map((item) => item.id),
+      ids,
+    );
+    assert.deepEqual(
+      merged.workspaces.map((item) => item.id),
+      ["workspace-1"],
+    );
+    assert.deepEqual(
+      merged.bots.map((item) => item.id),
+      ["bot-1"],
+    );
   } finally {
     feed.close();
   }
@@ -631,8 +730,17 @@ test("a waiting run's ask reaches only runs:observe desktops, clipped, and only 
     await feed.refresh();
 
     const runStates = (response: RecordingResponse) =>
-      response.frames().filter((frame) => frame.event === "run.state").map((frame) => frame.data.payload as Record<string, unknown>);
-    assert.deepEqual(runStates(plain).map((payload) => [payload.runId, "attentionSummary" in payload]), [["run-ask", false], ["run-busy", false]]);
+      response
+        .frames()
+        .filter((frame) => frame.event === "run.state")
+        .map((frame) => frame.data.payload as Record<string, unknown>);
+    assert.deepEqual(
+      runStates(plain).map((payload) => [payload.runId, "attentionSummary" in payload]),
+      [
+        ["run-ask", false],
+        ["run-busy", false],
+      ],
+    );
     const [ask, busy] = runStates(observer);
     assert.equal(ask!.runId, "run-ask");
     const summaryText = ask!.attentionSummary as string;
@@ -659,25 +767,43 @@ test("a run already waiting when an observer connects reaches it after the snaps
     run("run-bot-ask", "bot-chat-1", "needs_input"),
     run("run-hidden", "chat-unknown", "needs_approval"),
   ];
-  const asks = new Map([["run-ask", "Allow writing notes.md"], ["run-bot-ask", "Which branch?"]]);
+  const asks = new Map([
+    ["run-ask", "Allow writing notes.md"],
+    ["run-bot-ask", "Which branch?"],
+  ]);
   const { feed } = harness({ attentionSummary: (runId) => asks.get(runId), liveRuns: () => live });
   const runStates = (response: RecordingResponse) =>
-    response.frames().filter((frame) => frame.event === "run.state").map((frame) => frame.data.payload as Record<string, unknown>);
+    response
+      .frames()
+      .filter((frame) => frame.event === "run.state")
+      .map((frame) => frame.data.payload as Record<string, unknown>);
   try {
     // The runs went waiting before anyone subscribed: no journal entry holds them.
     const plain = await open(feed, desktop("device-plain"));
     const observer = await open(feed, desktop("device-observer", ["runs:observe"]));
-    const botObserver = await open(feed, desktop("device-bot-observer", ["runs:observe", "bot:read"]));
+    const botObserver = await open(
+      feed,
+      desktop("device-bot-observer", ["runs:observe", "bot:read"]),
+    );
 
     assert.deepEqual(runStates(plain), []);
     assert.equal(observer.frames()[0]!.event, "snapshot");
     assert.deepEqual(runStates(observer), [
-      { chatId: "chat-1", runId: "run-ask", state: "needs_approval", unread: false, attentionSummary: "Allow writing notes.md" },
+      {
+        chatId: "chat-1",
+        runId: "run-ask",
+        state: "needs_approval",
+        unread: false,
+        attentionSummary: "Allow writing notes.md",
+      },
     ]);
-    assert.deepEqual(runStates(botObserver).map((payload) => [payload.runId, payload.attentionSummary]), [
-      ["run-ask", "Allow writing notes.md"],
-      ["run-bot-ask", "Which branch?"],
-    ]);
+    assert.deepEqual(
+      runStates(botObserver).map((payload) => [payload.runId, payload.attentionSummary]),
+      [
+        ["run-ask", "Allow writing notes.md"],
+        ["run-bot-ask", "Which branch?"],
+      ],
+    );
 
     // A paired desktop's feed cache applies them on top of the snapshot.
     const cache = new PeerHostFeedCache("host-1");
@@ -690,19 +816,27 @@ test("a run already waiting when an observer connects reaches it after the snaps
     feed.noteRun(run("run-busy", "chat-1", "done"), false);
     await feed.refresh();
     const resumed = await open(feed, desktop("device-plain"), cursor);
-    assert.deepEqual(runStates(resumed).map((payload) => [payload.runId, payload.state, "attentionSummary" in payload]), [
-      ["run-busy", "done", false],
-    ]);
+    assert.deepEqual(
+      runStates(resumed).map((payload) => [
+        payload.runId,
+        payload.state,
+        "attentionSummary" in payload,
+      ]),
+      [["run-busy", "done", false]],
+    );
   } finally {
     feed.close();
   }
 });
 
 test("an observer's waiting-run announcements never push a cursor taken at the snapshot out of the journal", async () => {
-  const live = Array.from({ length: 20 }, (_, index) => run(`run-ask-${index}`, "chat-1", "needs_approval"));
+  const live = Array.from({ length: 20 }, (_, index) =>
+    run(`run-ask-${index}`, "chat-1", "needs_approval"),
+  );
   const ask = "Allow writing the release notes and the migration guide for this change. ".repeat(3);
   const { feed } = harness({ maxBytes: 4_000, attentionSummary: () => ask, liveRuns: () => live });
-  const runStates = (response: RecordingResponse) => response.frames().filter((frame) => frame.event === "run.state");
+  const runStates = (response: RecordingResponse) =>
+    response.frames().filter((frame) => frame.event === "run.state");
   try {
     const plain = await open(feed, desktop("device-plain"));
     const cursor = plain.frames()[0]!.id;
@@ -715,31 +849,62 @@ test("an observer's waiting-run announcements never push a cursor taken at the s
 
     // The other device resumes where it was instead of starting over.
     const resumed = await open(feed, desktop("device-plain"), cursor);
-    assert.deepEqual(resumed.frames().filter((frame) => frame.event === "snapshot"), []);
+    assert.deepEqual(
+      resumed.frames().filter((frame) => frame.event === "snapshot"),
+      [],
+    );
   } finally {
     feed.close();
   }
 });
 
 test("a Bot row's Inbox signals hold only what its live summary says", () => {
-  const idle = { state: { kind: "idle" } as BotSessionState, needsYou: false, lastReplyAt: null as number | null };
+  const idle = {
+    state: { kind: "idle" } as BotSessionState,
+    needsYou: false,
+    lastReplyAt: null as number | null,
+  };
   const read = { summarized: true };
-  assert.deepEqual(hostFeedBotSignals(undefined), {}, "an unread summary says nothing, not even that the Bot is empty");
-  assert.deepEqual(hostFeedBotSignals(idle), read, "a Bot with no message yet is still marked summarized");
   assert.deepEqual(
-    hostFeedBotSignals({ ...idle, needsYou: true, lastReplyAt: 3_000 }),
-    { needsYou: true, lastReplyAt: new Date(3_000).toISOString(), ...read },
+    hostFeedBotSignals(undefined),
+    {},
+    "an unread summary says nothing, not even that the Bot is empty",
   );
+  assert.deepEqual(
+    hostFeedBotSignals(idle),
+    read,
+    "a Bot with no message yet is still marked summarized",
+  );
+  assert.deepEqual(hostFeedBotSignals({ ...idle, needsYou: true, lastReplyAt: 3_000 }), {
+    needsYou: true,
+    lastReplyAt: new Date(3_000).toISOString(),
+    ...read,
+  });
   for (const kind of ["interrupted", "model_error"]) {
-    assert.deepEqual(hostFeedBotSignals({ ...idle, state: { kind } as BotSessionState }), { failed: true, ...read }, kind);
+    assert.deepEqual(
+      hostFeedBotSignals({ ...idle, state: { kind } as BotSessionState }),
+      { failed: true, ...read },
+      kind,
+    );
   }
-  assert.deepEqual(hostFeedBotSignals({ ...idle, lastReplyAt: -1 }), read, "a negative time is unknown");
-  assert.deepEqual(hostFeedBotSignals({ ...idle, lastReplyAt: 1.5 }), read, "a fractional time is unknown");
+  assert.deepEqual(
+    hostFeedBotSignals({ ...idle, lastReplyAt: -1 }),
+    read,
+    "a negative time is unknown",
+  );
+  assert.deepEqual(
+    hostFeedBotSignals({ ...idle, lastReplyAt: 1.5 }),
+    read,
+    "a fractional time is unknown",
+  );
 });
 
 test("a refresh reads again only the Bots whose own change arrived, and never keeps a failed or overtaken read", async () => {
   const reads = new Map<string, number>();
-  const replies = new Map<string, number>([["a", 1_000], ["b", 2_000]]);
+  const replies = new Map<string, number>([
+    ["a", 1_000],
+    ["b", 2_000],
+  ]);
   let failNext: string | undefined;
   let hold: { botId: string; release: () => void } | undefined;
   const cache = createHostFeedBotSignalsCache({
@@ -750,7 +915,10 @@ test("a refresh reads again only the Bots whose own change arrived, and never ke
         throw Object.assign(new Error("busy"), { code: "EBUSY" });
       }
       const lastReplyAt = replies.get(botId) ?? null;
-      if (hold?.botId === botId) await new Promise<void>((resolve) => { hold!.release = resolve; });
+      if (hold?.botId === botId)
+        await new Promise<void>((resolve) => {
+          hold!.release = resolve;
+        });
       return { state: { kind: "idle" } as BotSessionState, needsYou: false, lastReplyAt };
     },
   });
@@ -763,18 +931,30 @@ test("a refresh reads again only the Bots whose own change arrived, and never ke
   assert.deepEqual(Object.fromEntries(reads), { a: 1, b: 1 }, "unchanged Bots are not read again");
 
   replies.set("a", 5_000);
-  assert.equal(await replyOf("a"), new Date(1_000).toISOString(), "kept until the Bot itself changes");
+  assert.equal(
+    await replyOf("a"),
+    new Date(1_000).toISOString(),
+    "kept until the Bot itself changes",
+  );
   cache.invalidate("a");
   assert.equal(await replyOf("a"), new Date(5_000).toISOString());
   assert.deepEqual(Object.fromEntries(reads), { a: 2, b: 1 }, "only the changed Bot is read again");
 
   cache.invalidate();
   await cache.signals(bots);
-  assert.deepEqual(Object.fromEntries(reads), { a: 3, b: 2 }, "a change naming no Bot reads every Bot");
+  assert.deepEqual(
+    Object.fromEntries(reads),
+    { a: 3, b: 2 },
+    "a change naming no Bot reads every Bot",
+  );
 
   cache.invalidate("b");
   failNext = "b";
-  assert.deepEqual((await cache.signals(bots)).get("b"), {}, "a failed read sends the row without signals");
+  assert.deepEqual(
+    (await cache.signals(bots)).get("b"),
+    {},
+    "a failed read sends the row without signals",
+  );
   assert.equal(await replyOf("b"), new Date(2_000).toISOString(), "and is read again next refresh");
 
   cache.invalidate("a");
@@ -786,25 +966,58 @@ test("a refresh reads again only the Bots whose own change arrived, and never ke
   hold.release();
   hold = undefined;
   assert.equal((await overtaken).get("a")?.lastReplyAt, new Date(5_000).toISOString());
-  assert.equal(await replyOf("a"), new Date(9_000).toISOString(), "a read a change overtook is not kept");
+  assert.equal(
+    await replyOf("a"),
+    new Date(9_000).toISOString(),
+    "a read a change overtook is not kept",
+  );
 });
 
 test("a Bot row's preview is the host's own row line, as one plain line a paired Mac can trust", async () => {
   const { parseAidenRemoteHostFeedBot } = await import("./aiden-remote-protocol.js");
-  const idle = { state: { kind: "idle" } as BotSessionState, needsYou: false, lastReplyAt: null as number | null };
-  assert.deepEqual(hostFeedBotSignals({ ...idle, preview: null }), { summarized: true }, "no preview, no key");
-  assert.deepEqual(hostFeedBotSignals({ ...idle, preview: "  \n " }), { summarized: true }, "a blank preview sends no key");
-  assert.equal(hostFeedBotSignals({ ...idle, preview: "Release moved\nto Friday" }).preview, "Release moved to Friday");
+  const idle = {
+    state: { kind: "idle" } as BotSessionState,
+    needsYou: false,
+    lastReplyAt: null as number | null,
+  };
+  assert.deepEqual(
+    hostFeedBotSignals({ ...idle, preview: null }),
+    { summarized: true },
+    "no preview, no key",
+  );
+  assert.deepEqual(
+    hostFeedBotSignals({ ...idle, preview: "  \n " }),
+    { summarized: true },
+    "a blank preview sends no key",
+  );
+  assert.equal(
+    hostFeedBotSignals({ ...idle, preview: "Release moved\nto Friday" }).preview,
+    "Release moved to Friday",
+  );
   const long = hostFeedBotSignals({ ...idle, preview: `${"word ".repeat(60)}\u202Eend` }).preview!;
   assert.equal(Array.from(long).length, 140);
   assert.ok(long.endsWith("…"));
   // Whatever the transcript held, the row it makes passes the contract's own check.
   const row = {
-    id: "bot_1", name: "Scout", purpose: "", health: "ready", revision: "r1",
+    id: "bot_1",
+    name: "Scout",
+    purpose: "",
+    health: "ready",
+    revision: "r1",
     avatar: { semantic: { version: 1, shape: "orb", color: "rose" } },
-    createdAt: "2026-11-01T00:00:00.000Z", updatedAt: "2026-11-01T00:00:00.000Z",
+    createdAt: "2026-11-01T00:00:00.000Z",
+    updatedAt: "2026-11-01T00:00:00.000Z",
   };
-  for (const preview of ["\u0000\u0007bell", "tab\there", `${"😀".repeat(200)}`, "\u2028para\u2029graph", "\u200Bzero width"]) {
-    assert.doesNotThrow(() => parseAidenRemoteHostFeedBot({ ...row, ...hostFeedBotSignals({ ...idle, preview }) }), JSON.stringify(preview));
+  for (const preview of [
+    "\u0000\u0007bell",
+    "tab\there",
+    `${"😀".repeat(200)}`,
+    "\u2028para\u2029graph",
+    "\u200Bzero width",
+  ]) {
+    assert.doesNotThrow(
+      () => parseAidenRemoteHostFeedBot({ ...row, ...hostFeedBotSignals({ ...idle, preview }) }),
+      JSON.stringify(preview),
+    );
   }
 });

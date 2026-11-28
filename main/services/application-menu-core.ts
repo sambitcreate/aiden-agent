@@ -52,10 +52,7 @@ export function applicationMenuTemplate({
   /** Commands the renderer can run now; null until it says, when all are enabled. */
   available?: ReadonlySet<string> | null;
 }): MenuItemConstructorOptions[] {
-  const commandItem = (
-    label: string,
-    commandId: string,
-  ): MenuItemConstructorOptions => ({
+  const commandItem = (label: string, commandId: string): MenuItemConstructorOptions => ({
     label,
     accelerator: platformMenuAccelerator(bindings[commandId], platform),
     click: () => actions.deliverCommand(commandId),
@@ -79,10 +76,7 @@ export function applicationMenuTemplate({
     commandItem("New Chat", "chat.new"),
     commandItem("New Chat in…", "chat.newIn"),
     commandItem("Open Folder…", "workspace.openFolder"),
-    commandItem(
-      "Open Workspace in Preferred Editor",
-      "workspace.openPreferredEditor",
-    ),
+    commandItem("Open Workspace in Preferred Editor", "workspace.openPreferredEditor"),
   ];
   if (platform !== "darwin") {
     fileItems.push(

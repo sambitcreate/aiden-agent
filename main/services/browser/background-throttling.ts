@@ -6,10 +6,12 @@
  */
 export class BrowserBackgroundThrottling {
   private releases = new Set<() => void>();
-  constructor(private readonly target: {
-    isDestroyed(): boolean;
-    setBackgroundThrottling(enabled: boolean): void;
-  }) {}
+  constructor(
+    private readonly target: {
+      isDestroyed(): boolean;
+      setBackgroundThrottling(enabled: boolean): void;
+    },
+  ) {}
 
   acquire(signal?: AbortSignal): () => void {
     if (signal?.aborted || this.target.isDestroyed()) return () => {};

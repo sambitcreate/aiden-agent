@@ -81,7 +81,9 @@ async function seedInstalledFakeHub(userDataDir: string): Promise<void> {
   const installDir = path.join(baseDir, "tools", "expo-device-hub", HUB_VERSION);
   const entryDir = path.join(installDir, "node_modules", "expo-device-hub", "dist", "server");
   await mkdir(entryDir, { recursive: true });
-  const fakeHub = pathToFileURL(path.join(REPOSITORY_ROOT, "tests", "e2e", "device-hub-fake.mjs")).href;
+  const fakeHub = pathToFileURL(
+    path.join(REPOSITORY_ROOT, "tests", "e2e", "device-hub-fake.mjs"),
+  ).href;
   await writeFile(path.join(entryDir, "cli.mjs"), `import ${JSON.stringify(fakeHub)};\n`);
   await writeFile(path.join(installDir, ".install-complete"), `${HUB_VERSION}\n`);
   await writeFile(
@@ -199,11 +201,16 @@ test.describe("Simulator stream", () => {
     const frameToggle = panel.getByRole("button", { name: "3D view" });
     await expect(frameToggle).toHaveAttribute("aria-disabled", "true");
     await expect(frameToggle).toHaveAttribute("aria-pressed", "false");
-    await expect(frameToggle).toHaveAccessibleDescription("3D view unavailable with the compatibility stream");
+    await expect(frameToggle).toHaveAccessibleDescription(
+      "3D view unavailable with the compatibility stream",
+    );
     await frameToggle.focus();
     await expect(frameToggle).toBeFocused();
     // The flat view is what is showing.
-    await expect(panel.getByRole("button", { name: "Flat view" })).toHaveAttribute("aria-pressed", "true");
+    await expect(panel.getByRole("button", { name: "Flat view" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
 
     // The tools drawer takes focus on open and hands it back on Escape.
     const toolsToggle = panel.getByRole("button", { name: "Device tools" });
@@ -231,7 +238,8 @@ test.describe("Simulator stream", () => {
     // Float it over the chat: the panel steps aside and the player streams and takes input.
     const touchEnds = async () =>
       (await readHubLog()).filter(
-        (entry) => entry.kind === "ws-message" && entry.tag === MSG_TOUCH && entry.body?.type === "end",
+        (entry) =>
+          entry.kind === "ws-message" && entry.tag === MSG_TOUCH && entry.body?.type === "end",
       ).length;
     const before = await touchEnds();
     await panel.getByRole("button", { name: "Float over chat" }).click();
@@ -251,7 +259,10 @@ test.describe("Simulator stream", () => {
     await handle.hover();
     const start = await handle.boundingBox();
     const box = await player.boundingBox();
-    const viewport = await page.locator("[data-browser-floating-container] [data-scroll-top]").first().boundingBox();
+    const viewport = await page
+      .locator("[data-browser-floating-container] [data-scroll-top]")
+      .first()
+      .boundingBox();
     expect(start && box && viewport).toBeTruthy();
     // Grab the handle by its grip (a narrow player's header buttons fill the rest of it, and a press on a
     // button never starts a drag) and drop the player just inside the chat's top-left corner.
@@ -259,7 +270,11 @@ test.describe("Simulator stream", () => {
     const grabY = start!.y + start!.height / 2;
     await page.mouse.move(grabX, grabY);
     await page.mouse.down();
-    await page.mouse.move(viewport!.x + 20 + (grabX - box!.x), viewport!.y + 30 + (grabY - box!.y), { steps: 12 });
+    await page.mouse.move(
+      viewport!.x + 20 + (grabX - box!.x),
+      viewport!.y + 30 + (grabY - box!.y),
+      { steps: 12 },
+    );
     await page.mouse.up();
     await expect
       .poll(async () => Math.round((await player.boundingBox())!.x - viewport!.x))
@@ -278,7 +293,9 @@ test.describe("Simulator stream", () => {
     await page.getByRole("menuitem", { name: "Float over chat" }).click();
     await expect(player).toBeVisible();
     // Compare whole pixels: the dragged frame can sit on a subpixel offset that the restored frame lands on as a whole pixel.
-    await expect.poll(async () => Math.round((await player.boundingBox())!.x)).toBe(Math.round(floated!.x));
+    await expect
+      .poll(async () => Math.round((await player.boundingBox())!.x))
+      .toBe(Math.round(floated!.x));
     await player.getByRole("button", { name: "Dock device in its tab" }).click();
     await expect(player).toHaveCount(0);
 
@@ -287,7 +304,8 @@ test.describe("Simulator stream", () => {
     await expect(deviceTab("Checkout flow")).toHaveCount(0);
     await tools.getByRole("button", { name: "New workspace tab" }).click();
     const deviceLauncher = tools.getByRole("button", { name: "Device", exact: true });
-    if (!(await deviceLauncher.isVisible())) await tools.getByRole("button", { name: "More tools…", exact: true }).click();
+    if (!(await deviceLauncher.isVisible()))
+      await tools.getByRole("button", { name: "More tools…", exact: true }).click();
     await deviceLauncher.click();
     await expect(panel.getByRole("button", { name: `Open ${DEVICE_NAME}` })).toBeVisible();
     await expect(deviceTab("Checkout flow")).toHaveCount(0);

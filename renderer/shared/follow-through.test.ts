@@ -25,20 +25,40 @@ test("a stored notice is read back only in its exact shape, cleaned to one line 
   });
   assert.equal(notice.title, "A check failed");
   assert.deepEqual(parseAgentNoticeV1(JSON.parse(JSON.stringify(notice))), notice);
-  assert.equal(parseAgentNoticeV1({ ...notice, html: "<b>x</b>" }), undefined, "unknown fields are refused");
+  assert.equal(
+    parseAgentNoticeV1({ ...notice, html: "<b>x</b>" }),
+    undefined,
+    "unknown fields are refused",
+  );
   assert.equal(parseAgentNoticeV1({ ...notice, source: "email" }), undefined);
   assert.equal(parseAgentNoticeV1({ ...notice, tone: "warning" }), undefined);
-  assert.equal(parseAgentNoticeV1({ ...notice, title: "   " }), undefined, "a notice needs a title");
+  assert.equal(
+    parseAgentNoticeV1({ ...notice, title: "   " }),
+    undefined,
+    "a notice needs a title",
+  );
   assert.equal(parseAgentNoticeV1({ ...notice, version: 2 }), undefined);
   assert.equal(parseAgentNoticeV1({ ...notice, summary: "x".repeat(500) })!.summary.length, 240);
 });
 
 test("phones and other clients without the card show one readable line", () => {
   assert.equal(
-    agentNoticeDisplayText(agentNotice({ source: "check", tone: "success", title: "Check passed", summary: "npm test · check 2 of 5" })),
+    agentNoticeDisplayText(
+      agentNotice({
+        source: "check",
+        tone: "success",
+        title: "Check passed",
+        summary: "npm test · check 2 of 5",
+      }),
+    ),
     "Check passed: npm test · check 2 of 5",
   );
-  assert.equal(agentNoticeDisplayText(agentNotice({ source: "check", tone: "info", title: "Stopped", summary: "" })), "Stopped");
+  assert.equal(
+    agentNoticeDisplayText(
+      agentNotice({ source: "check", tone: "info", title: "Stopped", summary: "" }),
+    ),
+    "Stopped",
+  );
 });
 
 test("fenced data always outlasts any backticks inside it", () => {
@@ -60,12 +80,23 @@ test("long output keeps its end, starts on a line where it can, and never splits
 
   const emoji = `${"😀".repeat(10)}`;
   const cut = tailText(emoji, 5);
-  assert.equal([...cut.text].every((character) => character === "😀"), true);
+  assert.equal(
+    [...cut.text].every((character) => character === "😀"),
+    true,
+  );
   assert.deepEqual(tailText("short", 50), { text: "short", truncated: false });
 });
 
 function job(state: BackgroundJobView["state"]): BackgroundJobView {
-  return { id: "job_1a2b3c4d", chatId: "c", workspaceId: "w", command: "npm run dev", state, startedAt: 1, outputBytes: 0 };
+  return {
+    id: "job_1a2b3c4d",
+    chatId: "c",
+    workspaceId: "w",
+    command: "npm run dev",
+    state,
+    startedAt: 1,
+    outputBytes: 0,
+  };
 }
 
 test("the composer shows chips only while something is still going on", () => {
@@ -73,10 +104,30 @@ test("the composer shows chips only while something is still going on", () => {
   assert.equal(hasActiveFollowThrough(empty), false);
   assert.equal(hasActiveFollowThrough({ ...empty, jobs: [job("exited"), job("stopped")] }), false);
   assert.equal(hasActiveFollowThrough({ ...empty, jobs: [job("running")] }), true);
-  const follow = { host: "github.com", repository: "acme/app", number: 1, url: "https://github.com/acme/app/pull/1", startedAt: 1, startedBy: "agent" as const, noticesSent: 0 };
-  assert.equal(hasActiveFollowThrough({ ...empty, pullRequests: [{ ...follow, state: "ended" }] }), false);
-  assert.equal(hasActiveFollowThrough({ ...empty, pullRequests: [{ ...follow, state: "following" }] }), true);
-  assert.equal(hasActiveFollowThrough({ ...empty, checkBacks: [{ id: "cb_1", fireAt: 2, note: "Look again", setAt: 1 }] }), true);
+  const follow = {
+    host: "github.com",
+    repository: "acme/app",
+    number: 1,
+    url: "https://github.com/acme/app/pull/1",
+    startedAt: 1,
+    startedBy: "agent" as const,
+    noticesSent: 0,
+  };
+  assert.equal(
+    hasActiveFollowThrough({ ...empty, pullRequests: [{ ...follow, state: "ended" }] }),
+    false,
+  );
+  assert.equal(
+    hasActiveFollowThrough({ ...empty, pullRequests: [{ ...follow, state: "following" }] }),
+    true,
+  );
+  assert.equal(
+    hasActiveFollowThrough({
+      ...empty,
+      checkBacks: [{ id: "cb_1", fireAt: 2, note: "Look again", setAt: 1 }],
+    }),
+    true,
+  );
   assert.equal(hasActiveFollowThrough(null), false);
 });
 
@@ -93,7 +144,12 @@ test("the follow-through answer is checked for shape and drops malformed rows", 
 });
 
 test("a check-back notice round-trips and reads as one line on clients without the card", () => {
-  const notice = agentNotice({ source: "check_back", tone: "info", title: "Checking back", summary: "See whether the deploy finished" });
+  const notice = agentNotice({
+    source: "check_back",
+    tone: "info",
+    title: "Checking back",
+    summary: "See whether the deploy finished",
+  });
   assert.deepEqual(parseAgentNoticeV1(JSON.parse(JSON.stringify(notice))), notice);
   assert.equal(agentNoticeDisplayText(notice), "Checking back: See whether the deploy finished");
 });
@@ -102,7 +158,10 @@ test("pending check-backs are part of the answer and keep the chips showing", ()
   const empty = emptyChatFollowThrough("c");
   const checkBack = { id: "cb_1", fireAt: 2, note: "look again", setAt: 1 };
   assert.equal(hasActiveFollowThrough({ ...empty, checkBacks: [checkBack] }), true);
-  const parsed = parseChatFollowThrough({ ...empty, checkBacks: [checkBack, { id: "cb_2", note: "no time" }] });
+  const parsed = parseChatFollowThrough({
+    ...empty,
+    checkBacks: [checkBack, { id: "cb_2", note: "no time" }],
+  });
   assert.deepEqual(parsed?.checkBacks, [checkBack], "a malformed row is dropped");
   // An answer from a main process older than check-backs still parses.
   const { checkBacks: _omitted, ...older } = empty;
@@ -117,7 +176,12 @@ test("/until takes the rest of the line as the check", () => {
 });
 
 test("a started chat's notice round-trips, and an unknown source is refused", () => {
-  const notice = agentNotice({ source: "chat", tone: "success", title: "“Docs” finished", summary: "" });
+  const notice = agentNotice({
+    source: "chat",
+    tone: "success",
+    title: "“Docs” finished",
+    summary: "",
+  });
   assert.deepEqual(parseAgentNoticeV1(JSON.parse(JSON.stringify(notice))), notice);
   assert.equal(agentNoticeDisplayText(notice), "“Docs” finished");
   assert.equal(parseAgentNoticeV1({ ...notice, source: "lead" }), undefined);

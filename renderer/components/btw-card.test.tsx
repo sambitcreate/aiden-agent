@@ -27,7 +27,15 @@ function followUp(): HTMLTextAreaElement {
 
 test("BTW follow-up ignores the Enter that confirms an IME composition", () => {
   const asked: string[] = [];
-  render(<BtwCard view={answered} onAsk={(question) => void asked.push(question)} onCancel={noop} onClear={noop} onClose={noop} />);
+  render(
+    <BtwCard
+      view={answered}
+      onAsk={(question) => void asked.push(question)}
+      onCancel={noop}
+      onClear={noop}
+      onClose={noop}
+    />,
+  );
   const textarea = followUp();
   fireEvent.change(textarea, { target: { value: "にほんご" } });
   fireEvent.keyDown(textarea, { key: "Enter", isComposing: true });
@@ -80,10 +88,19 @@ test("BTW reducer orders deltas, resets overflow attempts, and settles authorita
     contextTrimmed: false,
   });
   view = reduceBtwView(view, {
-    version: 1, chatId: "chat-1", requestId: "btw-1", sequence: 1, type: "delta", delta: "draft",
+    version: 1,
+    chatId: "chat-1",
+    requestId: "btw-1",
+    sequence: 1,
+    type: "delta",
+    delta: "draft",
   });
   view = reduceBtwView(view, {
-    version: 1, chatId: "chat-1", requestId: "btw-1", sequence: 2, type: "reset",
+    version: 1,
+    chatId: "chat-1",
+    requestId: "btw-1",
+    sequence: 2,
+    type: "reset",
   });
   view = reduceBtwView(view, {
     version: 1,

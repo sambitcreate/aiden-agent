@@ -1,7 +1,11 @@
 // Pure parsing for Aiden's nested settings block. Reads are deliberately
 // tolerant because settings.json is user-editable.
 
-import type { AppSettings, AssistantConfig, AssistantSettingsPermission } from "../services/types.js";
+import type {
+  AppSettings,
+  AssistantConfig,
+  AssistantSettingsPermission,
+} from "../services/types.js";
 
 const TIME = /^([01]\d|2[0-3]):([0-5]\d)$/u;
 const PERMISSIONS: ReadonlySet<AssistantSettingsPermission> = new Set(["full", "ask", "none"]);
@@ -97,10 +101,7 @@ export function assistantConfigFrom(settings: AppSettings): AssistantConfig {
       input.quietHoursEnabled,
       DEFAULT_ASSISTANT_CONFIG.quietHoursEnabled,
     ),
-    quietHoursStart: storedTime(
-      input.quietHoursStart,
-      DEFAULT_ASSISTANT_CONFIG.quietHoursStart,
-    ),
+    quietHoursStart: storedTime(input.quietHoursStart, DEFAULT_ASSISTANT_CONFIG.quietHoursStart),
     quietHoursEnd: storedTime(input.quietHoursEnd, DEFAULT_ASSISTANT_CONFIG.quietHoursEnd),
     maxNudgesPerDay: storedInteger(
       input.maxNudgesPerDay,

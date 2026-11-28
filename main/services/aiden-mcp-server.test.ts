@@ -6,10 +6,18 @@ import { setTimeout as delay } from "node:timers/promises";
 import { McpClient, StreamableHttpTransport, type CallToolResult } from "@earendil-works/pi-mcp";
 
 import { AIDEN_MCP_BODY_LIMIT, AidenMcpHost } from "./aiden-mcp-server.js";
-import { AidenMcpProvenanceLog, emptyAidenMcpProvenanceDocument, type AidenMcpProvenanceDocument } from "./aiden-mcp-provenance.js";
+import {
+  AidenMcpProvenanceLog,
+  emptyAidenMcpProvenanceDocument,
+  type AidenMcpProvenanceDocument,
+} from "./aiden-mcp-provenance.js";
 import { AidenMcpToolRunner, type AidenMcpLimits } from "./aiden-mcp-tools.js";
 import { AidenRemoteChatService } from "./aiden-remote-chats.js";
-import { analyticsSettled, captureAnalyticsEvents, type CapturedAnalyticsEvent } from "./analytics/test-support.js";
+import {
+  analyticsSettled,
+  captureAnalyticsEvents,
+  type CapturedAnalyticsEvent,
+} from "./analytics/test-support.js";
 import { revokeAidenRemoteRuntimeDevice } from "./aiden-remote-revocation.js";
 import {
   AidenRemoteStateRegistry,
@@ -78,15 +86,17 @@ async function freePort(): Promise<number> {
  * listener on loopback. Only the model run is fake: it either answers at once
  * or stays running until the test finishes it.
  */
-async function harness(options: {
-  hold?: boolean;
-  /** Awaited before a chat's provenance is recorded: between its durable create and its first turn. */
-  beforeProvenance?: (chatId: string) => Promise<void>;
-  limits?: Partial<AidenMcpLimits>;
-  supported?: boolean;
-  stored?: AidenRemoteStateDocument;
-  defaultPort?: number;
-} = {}) {
+async function harness(
+  options: {
+    hold?: boolean;
+    /** Awaited before a chat's provenance is recorded: between its durable create and its first turn. */
+    beforeProvenance?: (chatId: string) => Promise<void>;
+    limits?: Partial<AidenMcpLimits>;
+    supported?: boolean;
+    stored?: AidenRemoteStateDocument;
+    defaultPort?: number;
+  } = {},
+) {
   let stored: unknown = options.stored ?? createDefaultAidenRemoteState(() => Buffer.alloc(24, 7));
   let random = 0;
   let clock = 1_000_000;
@@ -214,7 +224,12 @@ async function harness(options: {
             if (finished || owner.isDestroyed()) return;
             finished = true;
             const chat = chats.get(chatId)!;
-            const assistant: ChatMessage = { id: `assistant-${streamId}`, role: "assistant", content: text, createdAt: 4_000 };
+            const assistant: ChatMessage = {
+              id: `assistant-${streamId}`,
+              role: "assistant",
+              content: text,
+              createdAt: 4_000,
+            };
             chat.messages.push(assistant);
             owner.send("chat:done", { streamId, chat: structuredClone(chat) });
           },
@@ -234,7 +249,9 @@ async function harness(options: {
       }),
     },
     // One real Bot, so its chat classifies as a Bot chat rather than a missing one.
-    bots: { get: async (id: string) => (id === "bot-1" ? ({ id: "bot-1", name: "Ada" } as never) : null) },
+    bots: {
+      get: async (id: string) => (id === "bot-1" ? ({ id: "bot-1", name: "Ada" } as never) : null),
+    },
     botMutations: new BotMutationGate(),
     botTurnAuthorityPreflight: async () => undefined,
   });
@@ -247,8 +264,13 @@ async function harness(options: {
     },
   });
   const tools = new AidenMcpToolRunner({
-    services: async () => ({ chats: service, streams, workspaces: { list: async () => ({ workspaces: WORKSPACES }) } }),
-    acquireAuthorization: (appId, tracksMutationDrain) => registry.acquireDeviceAuthorization(appId, tracksMutationDrain),
+    services: async () => ({
+      chats: service,
+      streams,
+      workspaces: { list: async () => ({ workspaces: WORKSPACES }) },
+    }),
+    acquireAuthorization: (appId, tracksMutationDrain) =>
+      registry.acquireDeviceAuthorization(appId, tracksMutationDrain),
     recordProvenance: async (chatId, entry) => {
       await options.beforeProvenance?.(chatId);
       return provenance.record(chatId, entry);
@@ -265,7 +287,12 @@ async function harness(options: {
     defaultPort: options.defaultPort ?? (await freePort()),
     revokeDevice: (deviceId) =>
       revokeAidenRemoteRuntimeDevice(
-        { state: registry, streams, chats: service, workspaceOwners: { revokeDevice: () => undefined } },
+        {
+          state: registry,
+          streams,
+          chats: service,
+          workspaceOwners: { revokeDevice: () => undefined },
+        },
         deviceId,
       ),
     appVersion: "9.9.9",
@@ -277,13 +304,21 @@ async function harness(options: {
     const status = await host.status();
     const client = new McpClient({ name: "test-app", version: "1.0.0" });
     await client.connect(
-      new StreamableHttpTransport({ url: status.url!, headers: { authorization: `Bearer ${credential}` } }),
+      new StreamableHttpTransport({
+        url: status.url!,
+        headers: { authorization: `Bearer ${credential}` },
+      }),
     );
     clients.push(client);
     return {
       listTools: async () => ({ tools: await client.listTools() }),
-      callTool: ({ name, arguments: args }: { name: string; arguments?: Record<string, unknown> }) =>
-        client.callTool(name, args),
+      callTool: ({
+        name,
+        arguments: args,
+      }: {
+        name: string;
+        arguments?: Record<string, unknown>;
+      }) => client.callTool(name, args),
     };
   };
 
@@ -338,13 +373,23 @@ const INITIALIZE = JSON.stringify({
   jsonrpc: "2.0",
   id: 1,
   method: "initialize",
-  params: { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "raw", version: "1" } },
+  params: {
+    protocolVersion: "2025-06-18",
+    capabilities: {},
+    clientInfo: { name: "raw", version: "1" },
+  },
 });
 
 /** A raw request, so tests can send the Host and Origin headers a browser would. */
 function raw(
   port: number,
-  options: { method?: string; path?: string; headers?: Record<string, string>; body?: string | Buffer; chunked?: boolean },
+  options: {
+    method?: string;
+    path?: string;
+    headers?: Record<string, string>;
+    body?: string | Buffer;
+    chunked?: boolean;
+  },
 ): Promise<{ status: number; headers: IncomingHttpHeaders; body: string }> {
   return new Promise((resolve, reject) => {
     const body = options.body ?? "";
@@ -358,7 +403,9 @@ function raw(
           host: `127.0.0.1:${port}`,
           "content-type": "application/json",
           accept: "application/json, text/event-stream",
-          ...(options.chunked ? { "transfer-encoding": "chunked" } : { "content-length": String(Buffer.byteLength(body)) }),
+          ...(options.chunked
+            ? { "transfer-encoding": "chunked" }
+            : { "content-length": String(Buffer.byteLength(body)) }),
           ...options.headers,
         },
       },
@@ -367,7 +414,11 @@ function raw(
         const chunks: Buffer[] = [];
         response.on("data", (chunk) => chunks.push(Buffer.from(chunk)));
         response.on("end", () => {
-          resolve({ status: response.statusCode ?? 0, headers: response.headers, body: Buffer.concat(chunks).toString("utf8") });
+          resolve({
+            status: response.statusCode ?? 0,
+            headers: response.headers,
+            body: Buffer.concat(chunks).toString("utf8"),
+          });
           request.destroy();
         });
       },
@@ -401,7 +452,11 @@ function raw(
 test("the MCP server is off until turned on, keeps its port, and reports a busy saved port", async () => {
   const first = await harness();
   try {
-    assert.deepEqual(await first.host.status(), { supported: true, enabled: false, running: false });
+    assert.deepEqual(await first.host.status(), {
+      supported: true,
+      enabled: false,
+      running: false,
+    });
     const on = await first.enable();
     assert.equal(on.enabled, true);
     assert.equal(on.url, `http://127.0.0.1:${on.port}/mcp`);
@@ -426,7 +481,9 @@ test("the MCP server is off until turned on, keeps its port, and reports a busy 
 
   // Another app took the saved port: Aiden says so instead of moving silently.
   const squatter = createServer();
-  await new Promise<void>((resolve) => squatter.listen(saved.mcpServer!.port!, "127.0.0.1", resolve));
+  await new Promise<void>((resolve) =>
+    squatter.listen(saved.mcpServer!.port!, "127.0.0.1", resolve),
+  );
   const third = await harness({ stored: saved });
   try {
     const status = await third.host.initialize();
@@ -444,8 +501,15 @@ test("a host without the MCP capability never starts the server or connects an a
   const unsupported = await harness({ supported: false });
   try {
     await assert.rejects(unsupported.host.setEnabled(true), /cannot run Aiden's MCP server/u);
-    await assert.rejects(unsupported.host.issueApp({ name: "Codex", access: "read" }), /cannot run/u);
-    assert.deepEqual(await unsupported.host.status(), { supported: false, enabled: false, running: false });
+    await assert.rejects(
+      unsupported.host.issueApp({ name: "Codex", access: "read" }),
+      /cannot run/u,
+    );
+    assert.deepEqual(await unsupported.host.status(), {
+      supported: false,
+      enabled: false,
+      running: false,
+    });
     await analyticsSettled();
     assert.deepEqual(mcpEvents(events), [], "an app that was never connected is not counted");
   } finally {
@@ -457,8 +521,16 @@ test("a missing, wrong or revoked token gets 401 and no tool runs", async () => 
   const fixture = await harness();
   try {
     const { port } = await fixture.enable();
-    const { credential, app } = await fixture.host.issueApp({ name: "Claude Code", access: "supervised" });
-    for (const authorization of [undefined, `Bearer ${"x".repeat(43)}`, `Basic ${credential}`, credential]) {
+    const { credential, app } = await fixture.host.issueApp({
+      name: "Claude Code",
+      access: "supervised",
+    });
+    for (const authorization of [
+      undefined,
+      `Bearer ${"x".repeat(43)}`,
+      `Basic ${credential}`,
+      credential,
+    ]) {
       const response = await raw(port!, {
         body: INITIALIZE,
         ...(authorization ? { headers: { authorization } } : {}),
@@ -470,7 +542,10 @@ test("a missing, wrong or revoked token gets 401 and no tool runs", async () => 
     assert.ok((await client.listTools()).tools.length > 0);
 
     assert.equal(await fixture.host.revokeApp(app.id), true);
-    const after = await raw(port!, { body: INITIALIZE, headers: { authorization: `Bearer ${credential}` } });
+    const after = await raw(port!, {
+      body: INITIALIZE,
+      headers: { authorization: `Bearer ${credential}` },
+    });
     assert.equal(after.status, 401);
     await assert.rejects(client.listTools());
     assert.equal(fixture.generationStarts(), 0);
@@ -490,7 +565,10 @@ test("a phone's or a Mac's Remote credential is refused on /mcp, and cannot be r
         clientVersion: "1",
         capabilities: ["server:read", "chat:read", "chat:write"],
       });
-      const response = await raw(port!, { body: INITIALIZE, headers: { authorization: `Bearer ${paired.credential}` } });
+      const response = await raw(port!, {
+        body: INITIALIZE,
+        headers: { authorization: `Bearer ${paired.credential}` },
+      });
       assert.equal(response.status, 401);
       // The app controls only disconnect outside apps.
       assert.equal(await fixture.host.revokeApp(paired.device.id), false);
@@ -516,7 +594,10 @@ test("a foreign Host or Origin is refused, so a web page cannot reach the server
       { host: `127.0.0.1:${port}`, origin: "null" },
     ];
     for (const headers of refused) {
-      const response = await raw(port!, { body: INITIALIZE, headers: { authorization, ...headers } });
+      const response = await raw(port!, {
+        body: INITIALIZE,
+        headers: { authorization, ...headers },
+      });
       assert.equal(response.status, 403, JSON.stringify(headers));
       assert.equal(response.headers["access-control-allow-origin"], undefined);
     }
@@ -578,15 +659,23 @@ test("a Read app sees only read tools and cannot start, send or stop a turn", as
   const fixture = await harness({ hold: true });
   try {
     await fixture.enable();
-    const writer = await fixture.connect((await fixture.host.issueApp({ name: "Writer", access: "supervised" })).credential);
+    const writer = await fixture.connect(
+      (await fixture.host.issueApp({ name: "Writer", access: "supervised" })).credential,
+    );
     const started = structured(
       await writer.callTool({
         name: "aiden_chat_start",
-        arguments: { clientRequestId: "writer-request-1", workspaceId: "workspace-1", text: "Hello" },
+        arguments: {
+          clientRequestId: "writer-request-1",
+          workspaceId: "workspace-1",
+          text: "Hello",
+        },
       }),
     );
 
-    const reader = await fixture.connect((await fixture.host.issueApp({ name: "Reader", access: "read" })).credential);
+    const reader = await fixture.connect(
+      (await fixture.host.issueApp({ name: "Reader", access: "read" })).credential,
+    );
     const listed = (await reader.listTools()).tools;
     assert.deepEqual(listed.map((tool) => tool.name).sort(), [
       "aiden_chat_list",
@@ -600,12 +689,17 @@ test("a Read app sees only read tools and cannot start, send or stop a turn", as
     assert.deepEqual(info.app, { name: "Reader", access: "read" });
     assert.equal(info.computer, "Studio Mac");
 
-    const readOnly = "This app is connected to Aiden with Read access, so it cannot start, send or stop turns.";
+    const readOnly =
+      "This app is connected to Aiden with Read access, so it cannot start, send or stop turns.";
     assert.equal(
       refusal(
         await reader.callTool({
           name: "aiden_chat_start",
-          arguments: { clientRequestId: "reader-request-1", workspaceId: "workspace-1", text: "Hi" },
+          arguments: {
+            clientRequestId: "reader-request-1",
+            workspaceId: "workspace-1",
+            text: "Hi",
+          },
         }),
       ),
       readOnly,
@@ -620,7 +714,12 @@ test("a Read app sees only read tools and cannot start, send or stop a turn", as
       readOnly,
     );
     assert.equal(
-      refusal(await reader.callTool({ name: "aiden_chat_stop", arguments: { chatId: started.chatId, runId: started.runId } })),
+      refusal(
+        await reader.callTool({
+          name: "aiden_chat_stop",
+          arguments: { chatId: started.chatId, runId: started.runId },
+        }),
+      ),
       readOnly,
     );
     assert.equal(fixture.chats.size, 1);
@@ -635,7 +734,9 @@ test("a Read app sees only read tools and cannot start, send or stop a turn", as
     ]);
 
     // Reads work, and the no-workspace folders Aiden makes for one chat are not offered.
-    const workspaces = structured(await reader.callTool({ name: "aiden_workspace_list", arguments: {} }));
+    const workspaces = structured(
+      await reader.callTool({ name: "aiden_workspace_list", arguments: {} }),
+    );
     assert.deepEqual(workspaces.workspaces, [
       { id: "workspace-1", name: "Website", hasFolder: true, toolPermission: "ask" },
     ]);
@@ -653,9 +754,16 @@ test("aiden_chat_start with the same clientRequestId starts one chat and one tur
   const fixture = await harness();
   try {
     await fixture.enable();
-    const { credential, app } = await fixture.host.issueApp({ name: "Claude Code", access: "supervised" });
+    const { credential, app } = await fixture.host.issueApp({
+      name: "Claude Code",
+      access: "supervised",
+    });
     const client = await fixture.connect(credential);
-    const args = { clientRequestId: "retry-request-1", workspaceId: "workspace-1", text: "Summarize the README" };
+    const args = {
+      clientRequestId: "retry-request-1",
+      workspaceId: "workspace-1",
+      text: "Summarize the README",
+    };
     const [first, second] = await Promise.all([
       client.callTool({ name: "aiden_chat_start", arguments: args }),
       client.callTool({ name: "aiden_chat_start", arguments: args }),
@@ -675,15 +783,23 @@ test("aiden_chat_start with the same clientRequestId starts one chat and one tur
     ]);
 
     const finished = structured(
-      await client.callTool({ name: "aiden_chat_wait", arguments: { chatId: started.chatId, runId: started.runId } }),
+      await client.callTool({
+        name: "aiden_chat_wait",
+        arguments: { chatId: started.chatId, runId: started.runId },
+      }),
     );
     assert.equal(finished.state, "done");
     assert.equal(finished.outcome, "completed");
     assert.equal((finished.reply as { text: string }).text, "Answer");
 
-    const read = structured(await client.callTool({ name: "aiden_chat_read", arguments: { chatId: started.chatId } }));
+    const read = structured(
+      await client.callTool({ name: "aiden_chat_read", arguments: { chatId: started.chatId } }),
+    );
     assert.deepEqual(
-      (read.messages as Array<{ role: string; text: string }>).map(({ role, text }) => [role, text]),
+      (read.messages as Array<{ role: string; text: string }>).map(({ role, text }) => [
+        role,
+        text,
+      ]),
       [
         ["user", "Summarize the README"],
         ["assistant", "Answer"],
@@ -691,9 +807,12 @@ test("aiden_chat_start with the same clientRequestId starts one chat and one tur
     );
 
     // Which app started the chat is noted on this computer only, never in what any client reads.
-    assert.deepEqual(fixture.provenance().entries.map(({ chatId, kind, appId, name }) => ({ chatId, kind, appId, name })), [
-      { chatId: started.chatId, kind: "app", appId: app.id, name: "Claude Code" },
-    ]);
+    assert.deepEqual(
+      fixture
+        .provenance()
+        .entries.map(({ chatId, kind, appId, name }) => ({ chatId, kind, appId, name })),
+      [{ chatId: started.chatId, kind: "app", appId: app.id, name: "Claude Code" }],
+    );
     const list = await client.callTool({ name: "aiden_chat_list", arguments: {} });
     assert.equal(JSON.stringify(list).includes(app.id), false);
     assert.equal(JSON.stringify(read).includes(app.id), false);
@@ -702,23 +821,43 @@ test("aiden_chat_start with the same clientRequestId starts one chat and one tur
     structured(
       await client.callTool({
         name: "aiden_chat_send",
-        arguments: { clientRequestId: "retry-send-1", chatId: started.chatId, text: "And the tests?" },
+        arguments: {
+          clientRequestId: "retry-send-1",
+          chatId: started.chatId,
+          text: "And the tests?",
+        },
       }),
     );
     // A different id is a different request.
     const another = structured(
       await client.callTool({
         name: "aiden_chat_start",
-        arguments: { ...args, clientRequestId: "retry-request-2", providerId: "provider-2", modelId: "model-2" },
+        arguments: {
+          ...args,
+          clientRequestId: "retry-request-2",
+          providerId: "provider-2",
+          modelId: "model-2",
+        },
       }),
     );
     assert.notEqual(another.chatId, started.chatId);
     assert.equal(fixture.generationStarts(), 3);
     await analyticsSettled();
     const sent = mcpEvents(events);
-    assert.deepEqual(sent.slice(2), [{ event: "mcp_chat_started", props: { model_choice: "chosen" } }]);
+    assert.deepEqual(sent.slice(2), [
+      { event: "mcp_chat_started", props: { model_choice: "chosen" } },
+    ]);
     // Nothing the app or the person typed, and no id, reaches the report.
-    for (const secret of ["Summarize", "Claude Code", "workspace-1", "provider-2", "model-2", started.chatId, app.id, credential]) {
+    for (const secret of [
+      "Summarize",
+      "Claude Code",
+      "workspace-1",
+      "provider-2",
+      "model-2",
+      started.chatId,
+      app.id,
+      credential,
+    ]) {
       assert.equal(JSON.stringify(sent).includes(String(secret)), false, String(secret));
     }
   } finally {
@@ -730,17 +869,30 @@ test("an approval waits for the person in Aiden; the app can see it but never an
   const fixture = await harness({ hold: true });
   try {
     await fixture.enable();
-    const { credential } = await fixture.host.issueApp({ name: "Claude Code", access: "supervised" });
-    assert.equal((await fixture.registry.authenticate(credential))?.capabilities.has("approval:respond"), false);
+    const { credential } = await fixture.host.issueApp({
+      name: "Claude Code",
+      access: "supervised",
+    });
+    assert.equal(
+      (await fixture.registry.authenticate(credential))?.capabilities.has("approval:respond"),
+      false,
+    );
     const client = await fixture.connect(credential);
     const started = structured(
       await client.callTool({
         name: "aiden_chat_start",
-        arguments: { clientRequestId: "approval-request-1", workspaceId: "workspace-1", text: "Run the tests" },
+        arguments: {
+          clientRequestId: "approval-request-1",
+          workspaceId: "workspace-1",
+          text: "Run the tests",
+        },
       }),
     );
     const runId = started.runId as string;
-    const waiting = client.callTool({ name: "aiden_chat_wait", arguments: { chatId: started.chatId, runId, timeoutSeconds: 20 } });
+    const waiting = client.callTool({
+      name: "aiden_chat_wait",
+      arguments: { chatId: started.chatId, runId, timeoutSeconds: 20 },
+    });
     setTimeout(() => fixture.held.get(runId)!.approval("approval-1"), 50);
     const approval = structured(await waiting);
     assert.equal(approval.state, "waiting_for_approval");
@@ -749,25 +901,44 @@ test("an approval waits for the person in Aiden; the app can see it but never an
 
     // There is no tool for it, and naming one does nothing.
     const names = (await client.listTools()).tools.map((tool) => tool.name);
-    assert.equal(names.some((name) => /approv|question|answer|respond/u.test(name)), false);
+    assert.equal(
+      names.some((name) => /approv|question|answer|respond/u.test(name)),
+      false,
+    );
     for (const name of ["aiden_approval_respond", "aiden_chat_approve"]) {
       assert.equal(
-        refusal(await client.callTool({ name, arguments: { approvalId: "approval-1", decision: "allow" } })),
+        refusal(
+          await client.callTool({
+            name,
+            arguments: { approvalId: "approval-1", decision: "allow" },
+          }),
+        ),
         "Aiden has no tool with that name.",
       );
     }
     // Waiting again does not settle it either.
     const still = structured(
-      await client.callTool({ name: "aiden_chat_wait", arguments: { chatId: started.chatId, runId, timeoutSeconds: 1 } }),
+      await client.callTool({
+        name: "aiden_chat_wait",
+        arguments: { chatId: started.chatId, runId, timeoutSeconds: 1 },
+      }),
     );
     assert.equal(still.state, "waiting_for_approval");
     assert.deepEqual(fixture.settled, []);
 
     // The person allows it in Aiden on this computer, and the run carries on.
-    assert.equal(fixture.streams.respondApprovalFromHost(started.chatId as string, "approval-1", "allow"), true);
+    assert.equal(
+      fixture.streams.respondApprovalFromHost(started.chatId as string, "approval-1", "allow"),
+      true,
+    );
     assert.deepEqual(fixture.settled, [{ approvalId: "approval-1", decision: "allow" }]);
     fixture.held.get(runId)!.finish("All green");
-    const done = structured(await client.callTool({ name: "aiden_chat_wait", arguments: { chatId: started.chatId, runId } }));
+    const done = structured(
+      await client.callTool({
+        name: "aiden_chat_wait",
+        arguments: { chatId: started.chatId, runId },
+      }),
+    );
     assert.equal(done.state, "done");
     assert.equal((done.reply as { text: string }).text, "All green");
   } finally {
@@ -779,31 +950,59 @@ test("an app stops only its own runs, and another app cannot see them", async ()
   const fixture = await harness({ hold: true });
   try {
     await fixture.enable();
-    const owner = await fixture.connect((await fixture.host.issueApp({ name: "Owner", access: "supervised" })).credential);
-    const other = await fixture.connect((await fixture.host.issueApp({ name: "Other", access: "supervised" })).credential);
+    const owner = await fixture.connect(
+      (await fixture.host.issueApp({ name: "Owner", access: "supervised" })).credential,
+    );
+    const other = await fixture.connect(
+      (await fixture.host.issueApp({ name: "Other", access: "supervised" })).credential,
+    );
     const started = structured(
       await owner.callTool({
         name: "aiden_chat_start",
-        arguments: { clientRequestId: "stop-request-1", workspaceId: "workspace-1", text: "Long job" },
+        arguments: {
+          clientRequestId: "stop-request-1",
+          workspaceId: "workspace-1",
+          text: "Long job",
+        },
       }),
     );
     const target = { chatId: started.chatId, runId: started.runId };
-    const notTracked = "Aiden no longer tracks this run. Read the chat with aiden_chat_read for its result.";
-    assert.equal(refusal(await other.callTool({ name: "aiden_chat_stop", arguments: target })), notTracked);
-    assert.equal(refusal(await other.callTool({ name: "aiden_chat_wait", arguments: { ...target, timeoutSeconds: 1 } })), notTracked);
+    const notTracked =
+      "Aiden no longer tracks this run. Read the chat with aiden_chat_read for its result.";
+    assert.equal(
+      refusal(await other.callTool({ name: "aiden_chat_stop", arguments: target })),
+      notTracked,
+    );
+    assert.equal(
+      refusal(
+        await other.callTool({
+          name: "aiden_chat_wait",
+          arguments: { ...target, timeoutSeconds: 1 },
+        }),
+      ),
+      notTracked,
+    );
     assert.deepEqual(fixture.cancelled, []);
 
-    assert.deepEqual(structured(await owner.callTool({ name: "aiden_chat_stop", arguments: target })), { ...target, stopped: true });
+    assert.deepEqual(
+      structured(await owner.callTool({ name: "aiden_chat_stop", arguments: target })),
+      { ...target, stopped: true },
+    );
     assert.deepEqual(fixture.cancelled, [started.runId]);
-    const stopped = structured(await owner.callTool({ name: "aiden_chat_wait", arguments: target }));
+    const stopped = structured(
+      await owner.callTool({ name: "aiden_chat_wait", arguments: target }),
+    );
     assert.equal(stopped.state, "done");
     assert.equal(stopped.outcome, "stopped");
     // Stopping a finished run does nothing.
-    assert.deepEqual(structured(await owner.callTool({ name: "aiden_chat_stop", arguments: target })), {
-      ...target,
-      stopped: false,
-      state: "done",
-    });
+    assert.deepEqual(
+      structured(await owner.callTool({ name: "aiden_chat_stop", arguments: target })),
+      {
+        ...target,
+        stopped: false,
+        state: "done",
+      },
+    );
     assert.deepEqual(fixture.cancelled, [started.runId]);
   } finally {
     await fixture.close();
@@ -814,12 +1013,19 @@ test("disconnecting an app ends its wait, stops its run and retires its token", 
   const fixture = await harness({ hold: true });
   try {
     await fixture.enable();
-    const { credential, app } = await fixture.host.issueApp({ name: "Claude Code", access: "supervised" });
+    const { credential, app } = await fixture.host.issueApp({
+      name: "Claude Code",
+      access: "supervised",
+    });
     const client = await fixture.connect(credential);
     const started = structured(
       await client.callTool({
         name: "aiden_chat_start",
-        arguments: { clientRequestId: "revoke-request-1", workspaceId: "workspace-1", text: "Long job" },
+        arguments: {
+          clientRequestId: "revoke-request-1",
+          workspaceId: "workspace-1",
+          text: "Long job",
+        },
       }),
     );
     const begun = Date.now();
@@ -832,7 +1038,10 @@ test("disconnecting an app ends its wait, stops its run and retires its token", 
     assert.equal(refusal(await waiting), "This app was disconnected from Aiden.");
     assert.ok(Date.now() - begun < 10_000);
     assert.deepEqual(fixture.cancelled, [started.runId]);
-    assert.equal((await fixture.host.listApps()).find((entry) => entry.id === app.id)?.revokedAt !== undefined, true);
+    assert.equal(
+      (await fixture.host.listApps()).find((entry) => entry.id === app.id)?.revokedAt !== undefined,
+      true,
+    );
     await assert.rejects(client.callTool({ name: "aiden_chat_list", arguments: {} }));
   } finally {
     await fixture.close();
@@ -843,9 +1052,14 @@ test("each app has its own turn rate limit and run cap, and a retry does not cou
   const fixture = await harness({ hold: true, limits: { turnsPerMinute: 3, concurrentRuns: 2 } });
   try {
     await fixture.enable();
-    const client = await fixture.connect((await fixture.host.issueApp({ name: "Busy", access: "supervised" })).credential);
+    const client = await fixture.connect(
+      (await fixture.host.issueApp({ name: "Busy", access: "supervised" })).credential,
+    );
     const start = (id: string) =>
-      client.callTool({ name: "aiden_chat_start", arguments: { clientRequestId: id, workspaceId: "workspace-1", text: "Go" } });
+      client.callTool({
+        name: "aiden_chat_start",
+        arguments: { clientRequestId: id, workspaceId: "workspace-1", text: "Go" },
+      });
 
     const first = structured(await start("limit-request-1"));
     const second = structured(await start("limit-request-2"));
@@ -856,10 +1070,16 @@ test("each app has its own turn rate limit and run cap, and a retry does not cou
       "This app already has 2 runs going in Aiden. Wait for one to finish or stop one first.",
     );
     fixture.held.get(first.runId as string)!.finish();
-    await client.callTool({ name: "aiden_chat_wait", arguments: { chatId: first.chatId, runId: first.runId } });
+    await client.callTool({
+      name: "aiden_chat_wait",
+      arguments: { chatId: first.chatId, runId: first.runId },
+    });
     const third = structured(await start("limit-request-3"));
     fixture.held.get(third.runId as string)!.finish();
-    await client.callTool({ name: "aiden_chat_wait", arguments: { chatId: third.chatId, runId: third.runId } });
+    await client.callTool({
+      name: "aiden_chat_wait",
+      arguments: { chatId: third.chatId, runId: third.runId },
+    });
 
     assert.equal(
       refusal(await start("limit-request-4")),
@@ -877,11 +1097,17 @@ test("each app has its own turn rate limit and run cap, and a retry does not cou
     assert.equal(fixture.generationStarts(), 3);
 
     // Another app is not held back by this one.
-    const neighbour = await fixture.connect((await fixture.host.issueApp({ name: "Calm", access: "supervised" })).credential);
+    const neighbour = await fixture.connect(
+      (await fixture.host.issueApp({ name: "Calm", access: "supervised" })).credential,
+    );
     structured(
       await neighbour.callTool({
         name: "aiden_chat_start",
-        arguments: { clientRequestId: "neighbour-request-1", workspaceId: "workspace-1", text: "Hi" },
+        arguments: {
+          clientRequestId: "neighbour-request-1",
+          workspaceId: "workspace-1",
+          text: "Hi",
+        },
       }),
     );
 
@@ -895,19 +1121,34 @@ test("each app has its own turn rate limit and run cap, and a retry does not cou
 
 test("a retry the server's request cache has forgotten still replays, without counting as a new turn", async (t) => {
   const events = captureAnalyticsEvents(t);
-  const chatsStarted = () => mcpEvents(events).filter(({ event }) => event === "mcp_chat_started").length;
+  const chatsStarted = () =>
+    mcpEvents(events).filter(({ event }) => event === "mcp_chat_started").length;
   // Room for exactly the first start, its send and 128 more: then the rate limit is spent.
   const fixture = await harness({ limits: { turnsPerMinute: 130, concurrentRuns: 130 } });
   try {
     await fixture.enable();
-    const client = await fixture.connect((await fixture.host.issueApp({ name: "Retrier", access: "supervised" })).credential);
+    const client = await fixture.connect(
+      (await fixture.host.issueApp({ name: "Retrier", access: "supervised" })).credential,
+    );
     const start = (id: string) =>
-      client.callTool({ name: "aiden_chat_start", arguments: { clientRequestId: id, workspaceId: "workspace-1", text: "Go" } });
-    const sendArgs = (chatId: unknown) => ({ clientRequestId: "evicted-send-1", chatId, text: "More" });
+      client.callTool({
+        name: "aiden_chat_start",
+        arguments: { clientRequestId: id, workspaceId: "workspace-1", text: "Go" },
+      });
+    const sendArgs = (chatId: unknown) => ({
+      clientRequestId: "evicted-send-1",
+      chatId,
+      text: "More",
+    });
 
     const first = structured(await start("evicted-start-1"));
-    await client.callTool({ name: "aiden_chat_wait", arguments: { chatId: first.chatId, runId: first.runId } });
-    const sent = structured(await client.callTool({ name: "aiden_chat_send", arguments: sendArgs(first.chatId) }));
+    await client.callTool({
+      name: "aiden_chat_wait",
+      arguments: { chatId: first.chatId, runId: first.runId },
+    });
+    const sent = structured(
+      await client.callTool({ name: "aiden_chat_send", arguments: sendArgs(first.chatId) }),
+    );
     // 128 newer requests push both out of the in-memory cache.
     for (let index = 0; index < 128; index += 1) structured(await start(`filler-start-${index}`));
     assert.equal(fixture.generationStarts(), 130);
@@ -915,7 +1156,12 @@ test("a retry the server's request cache has forgotten still replays, without co
     assert.equal(chatsStarted(), 129);
 
     assert.deepEqual(structured(await start("evicted-start-1")), first);
-    assert.deepEqual(structured(await client.callTool({ name: "aiden_chat_send", arguments: sendArgs(first.chatId) })), sent);
+    assert.deepEqual(
+      structured(
+        await client.callTool({ name: "aiden_chat_send", arguments: sendArgs(first.chatId) }),
+      ),
+      sent,
+    );
     assert.equal(fixture.generationStarts(), 130);
     // A new request is still held to the limit.
     assert.match(refusal(await start("fresh-start-1")), /started 130 turns in the last minute/u);
@@ -945,9 +1191,14 @@ test("a start still running when 128 newer requests arrive is joined by its retr
   });
   try {
     await fixture.enable();
-    const client = await fixture.connect((await fixture.host.issueApp({ name: "Retrier", access: "supervised" })).credential);
+    const client = await fixture.connect(
+      (await fixture.host.issueApp({ name: "Retrier", access: "supervised" })).credential,
+    );
     const start = (id: string) =>
-      client.callTool({ name: "aiden_chat_start", arguments: { clientRequestId: id, workspaceId: "workspace-1", text: "Go" } });
+      client.callTool({
+        name: "aiden_chat_start",
+        arguments: { clientRequestId: id, workspaceId: "workspace-1", text: "Go" },
+      });
 
     // The first start has created its chat and waits before its first turn.
     const first = start("slow-start-1");
@@ -979,9 +1230,14 @@ test("an app with 8 starts still unanswered is refused a new one, while a retry 
   });
   try {
     await fixture.enable();
-    const client = await fixture.connect((await fixture.host.issueApp({ name: "Flooder", access: "supervised" })).credential);
+    const client = await fixture.connect(
+      (await fixture.host.issueApp({ name: "Flooder", access: "supervised" })).credential,
+    );
     const start = (id: string) =>
-      client.callTool({ name: "aiden_chat_start", arguments: { clientRequestId: id, workspaceId: "workspace-1", text: "Go" } });
+      client.callTool({
+        name: "aiden_chat_start",
+        arguments: { clientRequestId: id, workspaceId: "workspace-1", text: "Go" },
+      });
 
     const stalled = Array.from({ length: 8 }, (_, index) => start(`stalled-start-${index}`));
     while (fixture.chats.size < 8) await new Promise((resolve) => setImmediate(resolve));
@@ -1015,14 +1271,21 @@ test("unanswered requests of a revoked app still count toward the host's limit u
   try {
     await fixture.enable();
     const startWith = (client: Awaited<ReturnType<typeof fixture.connect>>) => (id: string) =>
-      client.callTool({ name: "aiden_chat_start", arguments: { clientRequestId: id, workspaceId: "workspace-1", text: "Go" } });
+      client.callTool({
+        name: "aiden_chat_start",
+        arguments: { clientRequestId: id, workspaceId: "workspace-1", text: "Go" },
+      });
     const old = await fixture.host.issueApp({ name: "Old", access: "supervised" });
     const startOld = startWith(await fixture.connect(old.credential));
     const stalled = [startOld("old-start-1"), startOld("old-start-2")];
     while (fixture.chats.size < 2) await new Promise((resolve) => setImmediate(resolve));
     // Revocation waits for the stalled writes to drain; the replacement is connected meanwhile.
     const revoked = fixture.host.revokeApp(old.app.id);
-    const startNew = startWith(await fixture.connect((await fixture.host.issueApp({ name: "New", access: "supervised" })).credential));
+    const startNew = startWith(
+      await fixture.connect(
+        (await fixture.host.issueApp({ name: "New", access: "supervised" })).credential,
+      ),
+    );
     const third = startNew("new-start-1");
     while (fixture.chats.size < 3) await new Promise((resolve) => setImmediate(resolve));
     assert.equal(
@@ -1050,14 +1313,23 @@ test("Bot chats and the folders Aiden makes for one chat are out of an app's rea
       botId: "bot-1",
       createdAt: 1_000,
       updatedAt: 9_000,
-      messages: [{ id: "bot-message-1", role: "assistant", content: "Private Bot note", createdAt: 1_500 }],
+      messages: [
+        { id: "bot-message-1", role: "assistant", content: "Private Bot note", createdAt: 1_500 },
+      ],
     } as Chat);
-    const client = await fixture.connect((await fixture.host.issueApp({ name: "Codex", access: "supervised" })).credential);
+    const client = await fixture.connect(
+      (await fixture.host.issueApp({ name: "Codex", access: "supervised" })).credential,
+    );
 
     const listed = structured(await client.callTool({ name: "aiden_chat_list", arguments: {} }));
     assert.deepEqual(listed.chats, []);
     const missing = "This Aiden chat no longer exists.";
-    assert.equal(refusal(await client.callTool({ name: "aiden_chat_read", arguments: { chatId: "bot-chat-1" } })), missing);
+    assert.equal(
+      refusal(
+        await client.callTool({ name: "aiden_chat_read", arguments: { chatId: "bot-chat-1" } }),
+      ),
+      missing,
+    );
     assert.equal(
       refusal(
         await client.callTool({
@@ -1093,7 +1365,10 @@ test("assistant and design-project chats answer every chat tool exactly as an un
     await fixture.enable();
     const hidden: Record<string, Partial<Chat>> = {
       "assistant-chat-1": { workspaceId: "assistant" },
-      "design-chat-1": { workspaceId: "workspace-1", owner: { kind: "design-project", projectId: "project-1" } },
+      "design-chat-1": {
+        workspaceId: "workspace-1",
+        owner: { kind: "design-project", projectId: "project-1" },
+      },
     };
     for (const [id, fields] of Object.entries(hidden)) {
       fixture.chats.set(id, {
@@ -1103,23 +1378,37 @@ test("assistant and design-project chats answer every chat tool exactly as an un
         model: "model-1",
         createdAt: 1_000,
         updatedAt: 9_000,
-        messages: [{ id: `${id}-message`, role: "assistant", content: "Private note", createdAt: 1_500 }],
+        messages: [
+          { id: `${id}-message`, role: "assistant", content: "Private note", createdAt: 1_500 },
+        ],
         ...fields,
       } as Chat);
     }
-    const client = await fixture.connect((await fixture.host.issueApp({ name: "Codex", access: "supervised" })).credential);
-    assert.deepEqual(structured(await client.callTool({ name: "aiden_chat_list", arguments: {} })).chats, []);
+    const client = await fixture.connect(
+      (await fixture.host.issueApp({ name: "Codex", access: "supervised" })).credential,
+    );
+    assert.deepEqual(
+      structured(await client.callTool({ name: "aiden_chat_list", arguments: {} })).chats,
+      [],
+    );
 
     const answers = async (chatId: string) => [
       refusal(await client.callTool({ name: "aiden_chat_read", arguments: { chatId } })),
-      refusal(await client.callTool({ name: "aiden_chat_wait", arguments: { chatId, runId: "run-1", timeoutSeconds: 1 } })),
+      refusal(
+        await client.callTool({
+          name: "aiden_chat_wait",
+          arguments: { chatId, runId: "run-1", timeoutSeconds: 1 },
+        }),
+      ),
       refusal(
         await client.callTool({
           name: "aiden_chat_send",
           arguments: { clientRequestId: `send-${chatId}`, chatId, text: "Hi" },
         }),
       ),
-      refusal(await client.callTool({ name: "aiden_chat_stop", arguments: { chatId, runId: "run-1" } })),
+      refusal(
+        await client.callTool({ name: "aiden_chat_stop", arguments: { chatId, runId: "run-1" } }),
+      ),
     ];
     const unknown = await answers("chat-that-never-existed");
     assert.deepEqual(unknown, Array(4).fill("This Aiden chat no longer exists."));
@@ -1167,7 +1456,7 @@ test("AidenMcpToolRunner releases write authorization on unexpected errors, stop
           messages: [],
           hasOlder: false,
         }),
-        classify: async () => ({ botId: undefined, workspaceId: "ws-1" } as never),
+        classify: async () => ({ botId: undefined, workspaceId: "ws-1" }) as never,
         isListedChat: async () => true,
         hasRecordedRequest: () => false,
         runMutation: async (_appId, _chatId, _c, fn) => fn(),
@@ -1178,14 +1467,19 @@ test("AidenMcpToolRunner releases write authorization on unexpected errors, stop
           turnId: "t1",
           streamId: "run-1",
           status: "accepted" as const,
-          message: { id: "m1", role: "user" as const, text: "Hello", createdAt: "2026-11-24T00:00:00.000Z" },
+          message: {
+            id: "m1",
+            role: "user" as const,
+            text: "Hello",
+            createdAt: "2026-11-24T00:00:00.000Z",
+          },
         }),
       },
       streams: {
-        status: () => ({ state: statusState, chatId: "chat-1", streamId: "run-1" } as never),
+        status: () => ({ state: statusState, chatId: "chat-1", streamId: "run-1" }) as never,
         pendingApproval: () => null,
         pendingQuestion: () => null,
-        cancel: async () => ({ ok: true } as never),
+        cancel: async () => ({ ok: true }) as never,
         watch: () => {
           return () => {
             watchDetached = true;
@@ -1210,9 +1504,19 @@ test("AidenMcpToolRunner releases write authorization on unexpected errors, stop
   // 2. Stopping an already-finished run reports stopped: false without invoking cancel().
   statusState = "done";
   const stoppedFinished = structured(
-    await runner.call(app, "aiden_chat_stop", { chatId: "chat-1", runId: "run-1" }, new AbortController().signal),
+    await runner.call(
+      app,
+      "aiden_chat_stop",
+      { chatId: "chat-1", runId: "run-1" },
+      new AbortController().signal,
+    ),
   );
-  assert.deepEqual(stoppedFinished, { chatId: "chat-1", runId: "run-1", stopped: false, state: "done" });
+  assert.deepEqual(stoppedFinished, {
+    chatId: "chat-1",
+    runId: "run-1",
+    stopped: false,
+    state: "done",
+  });
   assert.equal(releases, 2);
 
   // 3. Aborting the request signal during aiden_chat_wait ends the wait cleanly, detaches the watcher, and releases authorization.

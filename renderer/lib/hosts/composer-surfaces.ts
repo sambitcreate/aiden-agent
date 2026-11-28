@@ -38,7 +38,9 @@ const REMOTE_ATTACHING_COMPOSER_SURFACES: ComposerSurfaces = Object.freeze({
  * remote chat may attach files when its host stages uploads; its skills come
  * from the host's own catalog, never from this Mac's slash palette.
  */
-export function composerSurfacesFor(capabilities: ReadonlySet<HostChatCapability>): ComposerSurfaces {
+export function composerSurfacesFor(
+  capabilities: ReadonlySet<HostChatCapability>,
+): ComposerSurfaces {
   if (capabilities.has("localPanels")) return LOCAL_COMPOSER_SURFACES;
   return capabilities.has("attach") ? REMOTE_ATTACHING_COMPOSER_SURFACES : REMOTE_COMPOSER_SURFACES;
 }

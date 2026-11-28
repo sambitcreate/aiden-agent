@@ -1,7 +1,11 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import type { ChatContextPressureV1 } from "../shared/context-pressure";
-import { EXPIRED_CACHE_RETURN_GRACE_MS, ExpiredCacheReturns, promptCacheExpiresAt } from "./expired-cache-return";
+import {
+  EXPIRED_CACHE_RETURN_GRACE_MS,
+  ExpiredCacheReturns,
+  promptCacheExpiresAt,
+} from "./expired-cache-return";
 
 const MINUTE = 60_000;
 const LAST_REQUEST = 1_000_000;
@@ -41,7 +45,12 @@ const llm = (reading: ChatContextPressureV1 | null, now = AFTER_EXPIRY, idle = t
 
 /** A fresh tracker over in-memory storage, so restarts can be simulated. */
 function tracker(saved: { value: Record<string, number> } = { value: {} }) {
-  return new ExpiredCacheReturns({ load: () => ({ ...saved.value }), save: (handled) => { saved.value = handled; } });
+  return new ExpiredCacheReturns({
+    load: () => ({ ...saved.value }),
+    save: (handled) => {
+      saved.value = handled;
+    },
+  });
 }
 
 test("returning to a large chat after its cache expired compacts with pi-vcc exactly once", () => {
@@ -53,9 +62,14 @@ test("returning to a large chat after its cache expired compacts with pi-vcc exa
   returns.settle("chat", pressure(), AFTER_EXPIRY + 2_000);
   // Later focus changes and keystrokes in the same window do nothing either.
   returns.returned("chat", AFTER_EXPIRY + 1);
-  assert.equal(returns.takeAutomatic("chat", vcc(pressure({ contextTokens: 120_000 }), AFTER_EXPIRY + 1)), false);
+  assert.equal(
+    returns.takeAutomatic("chat", vcc(pressure({ contextTokens: 120_000 }), AFTER_EXPIRY + 1)),
+    false,
+  );
   // A new request opens a new window, which expires and compacts again on return.
-  const later = pressure({ promptCache: { ttlMs: 5 * MINUTE, lastRequestAt: LAST_REQUEST + 20 * MINUTE } });
+  const later = pressure({
+    promptCache: { ttlMs: 5 * MINUTE, lastRequestAt: LAST_REQUEST + 20 * MINUTE },
+  });
   returns.returned("chat", LAST_REQUEST + 30 * MINUTE);
   assert.equal(returns.takeAutomatic("chat", vcc(later, LAST_REQUEST + 30 * MINUTE)), true);
 });
@@ -98,7 +112,10 @@ test("a return waits briefly for the reading to load and the chat to settle", ()
   // A chat that only becomes ready long after the return waits for the next one.
   const late = tracker();
   late.returned("chat", AFTER_EXPIRY);
-  assert.equal(late.takeAutomatic("chat", vcc(pressure(), AFTER_EXPIRY + EXPIRED_CACHE_RETURN_GRACE_MS + 1)), false);
+  assert.equal(
+    late.takeAutomatic("chat", vcc(pressure(), AFTER_EXPIRY + EXPIRED_CACHE_RETURN_GRACE_MS + 1)),
+    false,
+  );
 });
 
 test("small, already-compacting, uncompressible or untimed chats are left alone", () => {

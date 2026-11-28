@@ -17,7 +17,10 @@ export interface AidenUiRenderContext {
   /** Image attachments of the message, by id, as data URLs. */
   attachmentSource: (id: string) => string | undefined;
   /** Renders child nodes in a (possibly extended) scope. */
-  renderChildren: (nodes: readonly AidenUiNodeV1[] | undefined, scope?: AidenUiScope) => React.ReactNode;
+  renderChildren: (
+    nodes: readonly AidenUiNodeV1[] | undefined,
+    scope?: AidenUiScope,
+  ) => React.ReactNode;
 }
 
 export const AidenUiContext = React.createContext<AidenUiRenderContext | null>(null);
@@ -30,10 +33,10 @@ export function readProp(node: AidenUiNodeV1, name: string, scope: AidenUiScope)
   return isExpr(value) ? evaluate(value, scope) : undefined;
 }
 
-
 export function asNumber(value: unknown, fallback: number): number {
   if (typeof value === "number" && Number.isFinite(value)) return value;
-  if (typeof value === "string" && value.trim() !== "" && Number.isFinite(Number(value))) return Number(value);
+  if (typeof value === "string" && value.trim() !== "" && Number.isFinite(Number(value)))
+    return Number(value);
   return fallback;
 }
 
@@ -55,11 +58,14 @@ export function normalizeOptions(raw: unknown): NormalizedOption[] {
   for (const entry of raw.slice(0, 50)) {
     const record = asRecord(entry);
     const value = typeof entry === "object" && entry !== null ? record.value : entry;
-    if (typeof value !== "string" && typeof value !== "number" && typeof value !== "boolean") continue;
+    if (typeof value !== "string" && typeof value !== "number" && typeof value !== "boolean")
+      continue;
     const key = `${typeof value}:${String(value)}`;
     if (seen.has(key)) continue;
     seen.add(key);
-    const label = asString(typeof entry === "object" && entry !== null ? record.label ?? value : value);
+    const label = asString(
+      typeof entry === "object" && entry !== null ? (record.label ?? value) : value,
+    );
     options.push({ key, value, label: label || String(value) });
   }
   return options;

@@ -19,7 +19,8 @@ export function workflowFromTemplate(input: {
   const base: WorkflowDocV1 = {
     schemaVersion: IMAGE_WORKFLOW_SCHEMA_VERSION,
     id: input.workflowId,
-    title: input.title ?? (input.template === "starter" ? "Prompt to image" : "Untitled image workflow"),
+    title:
+      input.title ?? (input.template === "starter" ? "Prompt to image" : "Untitled image workflow"),
     revision: 1,
     createdAt: input.now,
     updatedAt: input.now,
@@ -44,8 +45,20 @@ export function workflowFromTemplate(input: {
     { id: outputId, type: "output", position: { x: 780, y: 140 }, data: {} },
   ];
   base.edges = [
-    { id: input.nextId(), source: promptId, sourcePort: "text", target: generateId, targetPort: "prompt" },
-    { id: input.nextId(), source: generateId, sourcePort: "images", target: outputId, targetPort: "images" },
+    {
+      id: input.nextId(),
+      source: promptId,
+      sourcePort: "text",
+      target: generateId,
+      targetPort: "prompt",
+    },
+    {
+      id: input.nextId(),
+      source: generateId,
+      sourcePort: "images",
+      target: outputId,
+      targetPort: "images",
+    },
   ];
   return base;
 }

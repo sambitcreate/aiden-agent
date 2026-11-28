@@ -6,7 +6,12 @@ import * as fs from "node:fs/promises";
 import { tmpdir } from "node:os";
 import * as path from "node:path";
 import test from "node:test";
-import { GitRepoWatcher, resolveGitWatchTargets, type GitRepoWatcherOptions, type GitWatchTargets } from "./git-repo-watcher.js";
+import {
+  GitRepoWatcher,
+  resolveGitWatchTargets,
+  type GitRepoWatcherOptions,
+  type GitWatchTargets,
+} from "./git-repo-watcher.js";
 
 type GitRunner = (cwd: string, ...args: string[]) => Buffer;
 
@@ -16,7 +21,11 @@ async function makeRepo(t: test.TestContext) {
   const repo = path.join(root, "repo");
   await fs.mkdir(path.join(repo, "src"), { recursive: true });
   const git: GitRunner = (cwd: string, ...args: string[]) =>
-    execFileSync("git", args, { cwd, stdio: "pipe", env: { ...process.env, GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_NOSYSTEM: "1" } });
+    execFileSync("git", args, {
+      cwd,
+      stdio: "pipe",
+      env: { ...process.env, GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_NOSYSTEM: "1" },
+    });
   git(repo, "init", "--initial-branch=main");
   git(repo, "config", "user.name", "Synthetic");
   git(repo, "config", "user.email", "s@example.test");
@@ -78,12 +87,21 @@ function syntheticWatchHarness(
   };
 }
 
-function nativeWatchHarness(t: test.TestContext, options: Omit<GitRepoWatcherOptions, "notify" | "watch"> = {}) {
+function nativeWatchHarness(
+  t: test.TestContext,
+  options: Omit<GitRepoWatcherOptions, "notify" | "watch"> = {},
+) {
   let phase = "setup";
   let rawSeq = 0;
   let sentinelSeq = 0;
   const targets: { target: string; recursive: boolean }[] = [];
-  const rawEvents: { seq: number; phase: string; target: string; event: string; filename: string | null }[] = [];
+  const rawEvents: {
+    seq: number;
+    phase: string;
+    target: string;
+    event: string;
+    filename: string | null;
+  }[] = [];
   const events: { workspaceId: string; generation: number; phase: string; rawSeq: number }[] = [];
 
   const watcher = new GitRepoWatcher({
@@ -149,19 +167,27 @@ function nativeWatchHarness(t: test.TestContext, options: Omit<GitRepoWatcherOpt
           );
           if (
             sentinelRaw &&
-            events.some((entry) => entry.workspaceId === workspaceId && entry.rawSeq >= sentinelRaw.seq)
+            events.some(
+              (entry) => entry.workspaceId === workspaceId && entry.rawSeq >= sentinelRaw.seq,
+            )
           ) {
             return watcher.generation(workspaceId);
           }
           await new Promise((resolve) => setTimeout(resolve, 15));
         }
       }
-      assert.fail(`timed out waiting for native Git watcher readiness on ${workspaceId}: ${diagnostics(workspaceId)}`);
+      assert.fail(
+        `timed out waiting for native Git watcher readiness on ${workspaceId}: ${diagnostics(workspaceId)}`,
+      );
     },
     async waitForGeneration(workspaceId: string, minGeneration: number): Promise<void> {
       const deadline = Date.now() + 5_000;
       while (Date.now() < deadline) {
-        if (events.some((entry) => entry.workspaceId === workspaceId && entry.generation >= minGeneration)) {
+        if (
+          events.some(
+            (entry) => entry.workspaceId === workspaceId && entry.generation >= minGeneration,
+          )
+        ) {
           return;
         }
         await new Promise((resolve) => setTimeout(resolve, 15));
@@ -185,7 +211,10 @@ test("resolves the administrative and shared Git directories for checkouts, subf
   const { root, repo, git } = await makeRepo(t);
   const gitDir = path.join(repo, ".git");
   assert.deepEqual(await resolveGitWatchTargets(repo), { gitDir, commonDir: gitDir });
-  assert.deepEqual(await resolveGitWatchTargets(path.join(repo, "src")), { gitDir, commonDir: gitDir });
+  assert.deepEqual(await resolveGitWatchTargets(path.join(repo, "src")), {
+    gitDir,
+    commonDir: gitDir,
+  });
 
   const linked = path.join(root, "linked");
   git(repo, "worktree", "add", "-b", "feature", linked);
@@ -210,7 +239,14 @@ test("coalesces metadata bursts across the quiet period, ignores unrelated Git f
   assert.equal(harness.handles.get(gitDir)?.recursive, false);
   assert.equal(harness.handles.get(refsDir)?.recursive, true);
 
-  for (const ignored of ["COMMIT_EDITMSG", "index.lock", "HEAD.lock", "config", "logs", "objects"]) {
+  for (const ignored of [
+    "COMMIT_EDITMSG",
+    "index.lock",
+    "HEAD.lock",
+    "config",
+    "logs",
+    "objects",
+  ]) {
     harness.emit(gitDir, "change", ignored);
   }
   t.mock.timers.tick(500);
@@ -250,11 +286,14 @@ test("coalesces metadata bursts across the quiet period, ignores unrelated Git f
   // Platforms or overflowed event queues that omit the filename still invalidate conservatively.
   harness.emit(gitDir, "change", null);
   t.mock.timers.tick(250);
-  assert.deepEqual([...harness.events], [
-    { workspaceId: "ws-1", generation: 1 },
-    { workspaceId: "ws-1", generation: 2 },
-    { workspaceId: "ws-1", generation: 3 },
-  ]);
+  assert.deepEqual(
+    [...harness.events],
+    [
+      { workspaceId: "ws-1", generation: 1 },
+      { workspaceId: "ws-1", generation: 2 },
+      { workspaceId: "ws-1", generation: 3 },
+    ],
+  );
   assert.equal(harness.watcher.generation("ws-1"), 3);
 
   // Closing and re-observing a workspace never rewinds its generation counter.

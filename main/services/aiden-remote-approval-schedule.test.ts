@@ -69,13 +69,15 @@ test("a scheduled-task approval becomes a card with the facts a person decides o
 });
 
 test("a full-access task lists its connectors by name", () => {
-  const card = approvalScheduleCard(details({
-    permission: "full",
-    workspaceId: null,
-    workspaceName: null,
-    mcpServerIds: ["gmail", "linear"],
-    mcpServerNames: ["Gmail", "Linear"],
-  }));
+  const card = approvalScheduleCard(
+    details({
+      permission: "full",
+      workspaceId: null,
+      workspaceName: null,
+      mcpServerIds: ["gmail", "linear"],
+      mcpServerNames: ["Gmail", "Linear"],
+    }),
+  );
   assert.equal(card?.permission, "full");
   assert.deepEqual(card?.connectors, ["Gmail", "Linear"]);
   assert.equal(card?.workspaceName, undefined);
@@ -100,26 +102,38 @@ test("a card names the next run only while the task will run on its own", () => 
 });
 
 test("a pause or resume card says what the task will be once approved, not what it is while it waits", () => {
-  const resumed = approvalScheduleCard(details({ action: "resume", taskId: "task-1", expectedUpdatedAt: 5, enabled: false }));
+  const resumed = approvalScheduleCard(
+    details({ action: "resume", taskId: "task-1", expectedUpdatedAt: 5, enabled: false }),
+  );
   assert.equal(resumed?.enabled, true);
-  assert.equal(resumed?.nextRunAt, "2026-10-23T16:00:00.000Z", "a resumed task runs on its own again");
+  assert.equal(
+    resumed?.nextRunAt,
+    "2026-10-23T16:00:00.000Z",
+    "a resumed task runs on its own again",
+  );
 
-  const paused = approvalScheduleCard(details({ action: "pause", taskId: "task-1", expectedUpdatedAt: 5, enabled: true }));
+  const paused = approvalScheduleCard(
+    details({ action: "pause", taskId: "task-1", expectedUpdatedAt: 5, enabled: true }),
+  );
   assert.equal(paused?.enabled, false);
   assert.equal(paused?.nextRunAt, undefined);
 
   // Running a paused task once leaves it paused.
-  const ranNow = approvalScheduleCard(details({ action: "run_now", taskId: "task-1", expectedUpdatedAt: 5, enabled: false }));
+  const ranNow = approvalScheduleCard(
+    details({ action: "run_now", taskId: "task-1", expectedUpdatedAt: 5, enabled: false }),
+  );
   assert.equal(ranNow?.enabled, false);
   assert.equal(ranNow?.nextRunAt, undefined);
 });
 
 test("a script task carries its command and never a model or instructions", () => {
-  const card = approvalScheduleCard(details({
-    mode: "script",
-    prompt: null,
-    script: "npm outdated --json > reports/outdated.json",
-  }));
+  const card = approvalScheduleCard(
+    details({
+      mode: "script",
+      prompt: null,
+      script: "npm outdated --json > reports/outdated.json",
+    }),
+  );
   assert.equal(card?.mode, "script");
   assert.equal(card?.script, "npm outdated --json > reports/outdated.json");
   assert.equal(card?.prompt, undefined);
@@ -141,7 +155,15 @@ test("long instructions are cut to the wire bound and marked, without splitting 
 });
 
 test("the Assistant's own new task gets the same card, and its edits keep the summary", () => {
-  const { kind: _kind, taskId: _taskId, expectedUpdatedAt: _expected, enabled: _enabled, script: _script, legacyGlobalMcp: _legacy, ...shared } = details();
+  const {
+    kind: _kind,
+    taskId: _taskId,
+    expectedUpdatedAt: _expected,
+    enabled: _enabled,
+    script: _script,
+    legacyGlobalMcp: _legacy,
+    ...shared
+  } = details();
   const proposal = { ...shared, kind: "assistant-automation", action: "create" };
   const card = approvalScheduleCard(proposal);
   assert.equal(card?.action, "create");
@@ -149,9 +171,16 @@ test("the Assistant's own new task gets the same card, and its edits keep the su
   assert.equal(card?.nextRunAt, "2026-10-23T16:00:00.000Z");
   assert.equal(card?.workspaceName, "Aiden Agent");
   assert.equal(card?.prompt, proposal.prompt);
-  assert.equal(JSON.stringify(card).includes("workspace-1"), false, "the project id stays on the host");
+  assert.equal(
+    JSON.stringify(card).includes("workspace-1"),
+    false,
+    "the project id stays on the host",
+  );
 
-  assert.equal(approvalScheduleCard({ ...proposal, action: "edit", taskId: "task-1", enabled: false }), undefined);
+  assert.equal(
+    approvalScheduleCard({ ...proposal, action: "edit", taskId: "task-1", enabled: false }),
+    undefined,
+  );
 });
 
 test("other approvals and details that fail validation yield no card", () => {
@@ -161,7 +190,10 @@ test("other approvals and details that fail validation yield no card", () => {
     ["an automation edit", { kind: "automation", action: "update", name: "Nightly" }],
     ["a bidi override in the name", details({ name: "Morning‮ briefing" })],
     ["a control character in the prompt", details({ prompt: "Run\u0007 now" })],
-    ["connectors on a project task", details({ mcpServerIds: ["gmail"], mcpServerNames: ["Gmail"] })],
+    [
+      "connectors on a project task",
+      details({ mcpServerIds: ["gmail"], mcpServerNames: ["Gmail"] }),
+    ],
   ] as const) {
     assert.equal(approvalScheduleCard(value), undefined, label);
   }
@@ -169,8 +201,16 @@ test("other approvals and details that fail validation yield no card", () => {
 
 test("the wire validator accepts every shared fixture card and rejects every malformed one", async () => {
   const fixture = JSON.parse(
-    await fs.readFile(new URL("../../protocol/aiden-remote/v1/fixtures/contract.json", import.meta.url), "utf8"),
-  ) as { scheduleCards: { cards: Array<{ label: string; schedule: unknown }>; rejected: Array<{ label: string; schedule: unknown }> } };
+    await fs.readFile(
+      new URL("../../protocol/aiden-remote/v1/fixtures/contract.json", import.meta.url),
+      "utf8",
+    ),
+  ) as {
+    scheduleCards: {
+      cards: Array<{ label: string; schedule: unknown }>;
+      rejected: Array<{ label: string; schedule: unknown }>;
+    };
+  };
   assert.ok(fixture.scheduleCards.cards.length > 0);
   for (const { label, schedule } of fixture.scheduleCards.cards) {
     assert.deepEqual(parseAidenRemoteApprovalSchedule(schedule), schedule, label);

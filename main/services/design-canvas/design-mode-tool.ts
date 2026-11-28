@@ -43,15 +43,27 @@ export class DesignModeConsent {
 
   constructor(private readonly timeoutMs = DESIGN_MODE_CONSENT_TIMEOUT_MS) {}
 
-  request(input: { chatId: string; reason: string; owner?: ChatGenerationOwner; signal?: AbortSignal }): Promise<ConsentResult> {
+  request(input: {
+    chatId: string;
+    reason: string;
+    owner?: ChatGenerationOwner;
+    signal?: AbortSignal;
+  }): Promise<ConsentResult> {
     const { owner, signal } = input;
-    if (!owner || owner.kind === "remote" || owner.id === 0 || owner.isDestroyed() || signal?.aborted) {
+    if (
+      !owner ||
+      owner.kind === "remote" ||
+      owner.id === 0 ||
+      owner.isDestroyed() ||
+      signal?.aborted
+    ) {
       return Promise.resolve("unavailable");
     }
     // Not now holds for the rest of the chat: no second card.
     if (this.declined.has(input.chatId)) return Promise.resolve("declined");
     // One card per chat: a newer request replaces an older one still showing.
-    for (const entry of [...this.pending.values()]) if (entry.chatId === input.chatId) entry.finish("unavailable");
+    for (const entry of [...this.pending.values()])
+      if (entry.chatId === input.chatId) entry.finish("unavailable");
     if (this.pending.size >= 16) return Promise.resolve("unavailable");
     const requestId = randomUUID();
     return new Promise<ConsentResult>((resolve) => {
@@ -63,7 +75,9 @@ export class DesignModeConsent {
         signal?.removeEventListener("abort", abort);
         if (!owner.isDestroyed()) {
           try {
-            owner.send("designCanvas:consentClosed", { requestId } satisfies DesignModeConsentClosed);
+            owner.send("designCanvas:consentClosed", {
+              requestId,
+            } satisfies DesignModeConsentClosed);
           } catch {
             // The window went away; nothing is showing the card.
           }
@@ -113,7 +127,8 @@ export class DesignModeConsent {
     if (answer === "decline") {
       this.declined.delete(request.chatId);
       this.declined.add(request.chatId);
-      if (this.declined.size > DECLINED_CHATS_KEPT) this.declined.delete(this.declined.values().next().value!);
+      if (this.declined.size > DECLINED_CHATS_KEPT)
+        this.declined.delete(this.declined.values().next().value!);
       request.finish("declined");
       reportAnalyticsEvent("design_mode_declined", {});
       return true;
@@ -145,57 +160,66 @@ export type DesignModeToolDeps = {
   canvasToolNames: readonly string[];
 };
 
-const result = (value: unknown) => ({ content: [{ type: "text" as const, text: JSON.stringify(value) }], details: null });
+const result = (value: unknown) => ({
+  content: [{ type: "text" as const, text: JSON.stringify(value) }],
+  details: null,
+});
 
 export function createDesignModeTool(deps: DesignModeToolDeps): AgentTool {
   return declareOnDemandSummary(
     declarePiRuntimeReplay(
-    {
-      name: DESIGN_MODE_TOOL_NAME,
-      label: "Design mode",
-      description:
-        "Ask to open design mode when the person wants whole pages, app screens or several design directions to see and compare side by side. It puts an infinite design canvas beside this chat; the person chooses on a card. Leave design mode when the design work is done.",
-      parameters: Type.Object({
-        action: Type.Union([Type.Literal("enter"), Type.Literal("exit")]),
-        reason: Type.String({
-          maxLength: DESIGN_MODE_REASON_CHARS,
-          description: "One short sentence the person reads on the card, such as why side by side helps.",
+      {
+        name: DESIGN_MODE_TOOL_NAME,
+        label: "Design mode",
+        description:
+          "Ask to open design mode when the person wants whole pages, app screens or several design directions to see and compare side by side. It puts an infinite design canvas beside this chat; the person chooses on a card. Leave design mode when the design work is done.",
+        parameters: Type.Object({
+          action: Type.Union([Type.Literal("enter"), Type.Literal("exit")]),
+          reason: Type.String({
+            maxLength: DESIGN_MODE_REASON_CHARS,
+            description:
+              "One short sentence the person reads on the card, such as why side by side helps.",
+          }),
         }),
-      }),
-      execute: async (_id, args, signal) => {
-        const { action, reason } = args as { action?: unknown; reason?: unknown };
-        if (action !== "enter" && action !== "exit") {
-          return result({ status: "error", message: 'action must be "enter" or "exit".' });
-        }
-        const on = await deps.isOn();
-        if (action === "exit") {
-          if (!on) return result({ status: "already" });
-          await deps.exit();
-          return result({ status: "exited" });
-        }
-        if (on) return result({ status: "already" });
-        const text = typeof reason === "string" ? reason.trim().slice(0, DESIGN_MODE_REASON_CHARS) : "";
-        if (!text) return result({ status: "error", message: "reason must say in a sentence why the canvas helps." });
-        const answer = await deps.requestEnter(text, signal);
-        if (answer === "entered") {
+        execute: async (_id, args, signal) => {
+          const { action, reason } = args as { action?: unknown; reason?: unknown };
+          if (action !== "enter" && action !== "exit") {
+            return result({ status: "error", message: 'action must be "enter" or "exit".' });
+          }
+          const on = await deps.isOn();
+          if (action === "exit") {
+            if (!on) return result({ status: "already" });
+            await deps.exit();
+            return result({ status: "exited" });
+          }
+          if (on) return result({ status: "already" });
+          const text =
+            typeof reason === "string" ? reason.trim().slice(0, DESIGN_MODE_REASON_CHARS) : "";
+          if (!text)
+            return result({
+              status: "error",
+              message: "reason must say in a sentence why the canvas helps.",
+            });
+          const answer = await deps.requestEnter(text, signal);
+          if (answer === "entered") {
+            return result({
+              status: "entered",
+              next:
+                deps.canvasToolNames.length > 0
+                  ? `The canvas is open beside the chat. ${deps.canvasToolNames.join(", ")} work from your next step; load the aiden-design skill first.`
+                  : "The canvas is open beside the chat, but its tools are not available in this chat. Carry on in the chat.",
+            });
+          }
           return result({
-            status: "entered",
+            status: answer,
             next:
-              deps.canvasToolNames.length > 0
-                ? `The canvas is open beside the chat. ${deps.canvasToolNames.join(", ")} work from your next step; load the aiden-design skill first.`
-                : "The canvas is open beside the chat, but its tools are not available in this chat. Carry on in the chat.",
+              answer === "declined"
+                ? "The person chose Not now for this chat. Carry on in the chat without the canvas and do not ask again; they can open design mode themselves with the Design button."
+                : "The card closed without an answer, or no window could show it. Carry on in the chat without the canvas; the person can open design mode themselves with the Design button.",
           });
-        }
-        return result({
-          status: answer,
-          next:
-            answer === "declined"
-              ? "The person chose Not now for this chat. Carry on in the chat without the canvas and do not ask again; they can open design mode themselves with the Design button."
-              : "The card closed without an answer, or no window could show it. Carry on in the chat without the canvas; the person can open design mode themselves with the Design button.",
-        });
+        },
       },
-    },
-    "never",
+      "never",
     ),
     "Ask to open the design canvas; use when the person wants whole pages, app screens or several directions to compare side by side.",
   );

@@ -13,16 +13,11 @@ import {
 import { chatPullRequestService } from "../services/chat-pull-request-service-main.js";
 
 function asChatId(value: unknown): string {
-  if (!isSafeChatPullRequestChatId(value))
-    throw new Error("The chat identifier is invalid.");
+  if (!isSafeChatPullRequestChatId(value)) throw new Error("The chat identifier is invalid.");
   return value;
 }
 
-function asBoundedString(
-  value: unknown,
-  name: string,
-  maxLength: number,
-): string {
+function asBoundedString(value: unknown, name: string, maxLength: number): string {
   if (typeof value !== "string") throw new Error(`${name} must be a string.`);
   const trimmed = value.replace(/\p{Cc}+/gu, " ").trim();
   if (!trimmed || trimmed.length > maxLength) {
@@ -95,61 +90,43 @@ export function registerPullRequestHandlers(): void {
     chatPullRequestService.sidebar(parseSidebarChatIds(chatIds)),
   );
 
-  ipcMain.handle(
-    "pullRequests:candidates",
-    async (_event, chatId: unknown, workspaceId: unknown) =>
-      chatPullRequestService.candidates(
-        asChatId(chatId),
-        asOptionalBoundedString(workspaceId, "workspaceId", 128),
-      ),
+  ipcMain.handle("pullRequests:candidates", async (_event, chatId: unknown, workspaceId: unknown) =>
+    chatPullRequestService.candidates(
+      asChatId(chatId),
+      asOptionalBoundedString(workspaceId, "workspaceId", 128),
+    ),
   );
 
-  ipcMain.handle(
-    "pullRequests:link",
-    async (_event, chatId: unknown, input: unknown) =>
-      chatPullRequestService.link(asChatId(chatId), asLinkInput(input)),
+  ipcMain.handle("pullRequests:link", async (_event, chatId: unknown, input: unknown) =>
+    chatPullRequestService.link(asChatId(chatId), asLinkInput(input)),
   );
 
-  ipcMain.handle(
-    "pullRequests:linkRef",
-    async (_event, chatId: unknown, input: unknown) => {
-      const record = asRecord(input, "input");
-      return chatPullRequestService.linkExisting(
-        asChatId(chatId),
-        asPullRequestRef(record),
-        record.source === "branch-discovered" ? "branch-discovered" : "manual",
-      );
-    },
+  ipcMain.handle("pullRequests:linkRef", async (_event, chatId: unknown, input: unknown) => {
+    const record = asRecord(input, "input");
+    return chatPullRequestService.linkExisting(
+      asChatId(chatId),
+      asPullRequestRef(record),
+      record.source === "branch-discovered" ? "branch-discovered" : "manual",
+    );
+  });
+
+  ipcMain.handle("pullRequests:unlink", async (_event, chatId: unknown, ref: unknown) =>
+    chatPullRequestService.unlink(asChatId(chatId), asPullRequestRef(ref)),
   );
 
-  ipcMain.handle(
-    "pullRequests:unlink",
-    async (_event, chatId: unknown, ref: unknown) =>
-      chatPullRequestService.unlink(asChatId(chatId), asPullRequestRef(ref)),
+  ipcMain.handle("pullRequests:refresh", async (_event, chatId: unknown, ref: unknown) =>
+    chatPullRequestService.refresh(
+      asChatId(chatId),
+      ref === undefined || ref === null ? undefined : asPullRequestRef(ref),
+    ),
   );
 
-  ipcMain.handle(
-    "pullRequests:refresh",
-    async (_event, chatId: unknown, ref: unknown) =>
-      chatPullRequestService.refresh(
-        asChatId(chatId),
-        ref === undefined || ref === null ? undefined : asPullRequestRef(ref),
-      ),
+  ipcMain.handle("pullRequests:detectAfterPush", async (_event, chatId: unknown, input: unknown) =>
+    chatPullRequestService.detectAfterPush(asChatId(chatId), asDetectInput(input)),
   );
 
-  ipcMain.handle(
-    "pullRequests:detectAfterPush",
-    async (_event, chatId: unknown, input: unknown) =>
-      chatPullRequestService.detectAfterPush(
-        asChatId(chatId),
-        asDetectInput(input),
-      ),
-  );
-
-  ipcMain.handle(
-    "pullRequests:create",
-    async (_event, chatId: unknown, input: unknown) =>
-      chatPullRequestService.create(asChatId(chatId), asCreateInput(input)),
+  ipcMain.handle("pullRequests:create", async (_event, chatId: unknown, input: unknown) =>
+    chatPullRequestService.create(asChatId(chatId), asCreateInput(input)),
   );
 
   ipcMain.handle(

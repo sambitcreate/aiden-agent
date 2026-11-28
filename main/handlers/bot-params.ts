@@ -1,5 +1,8 @@
 import { parseBotResumeAcknowledgement } from "../../renderer/shared/bot-execution-resume.js";
-import { parseBotAccessChoice, type BotAccessChoice } from "../../renderer/shared/bot-access-requests.js";
+import {
+  parseBotAccessChoice,
+  type BotAccessChoice,
+} from "../../renderer/shared/bot-access-requests.js";
 import {
   BOT_LIMITS,
   isBotAvatar,
@@ -15,9 +18,20 @@ import {
   type BotAccessUpdate,
 } from "../../renderer/shared/bot-capabilities.js";
 import type { BotMemoryEditInput, BotMemoryTarget } from "../../renderer/shared/bot-memory.js";
-import { BOT_ROUTINE_THINKING_LEVELS, type BotRoutineThinkingLevel } from "../../renderer/shared/bot-routine-models.js";
-import { BOT_HANDOFF_NOTE_MAX_CHARS, type BotHandoffOutcome } from "../../renderer/shared/bot-handoffs.js";
-import { isBotRuleBehavior, type BotRuleBehavior, type BotRuleChange, type BotRulesUpdateInput } from "../../renderer/shared/bot-rules.js";
+import {
+  BOT_ROUTINE_THINKING_LEVELS,
+  type BotRoutineThinkingLevel,
+} from "../../renderer/shared/bot-routine-models.js";
+import {
+  BOT_HANDOFF_NOTE_MAX_CHARS,
+  type BotHandoffOutcome,
+} from "../../renderer/shared/bot-handoffs.js";
+import {
+  isBotRuleBehavior,
+  type BotRuleBehavior,
+  type BotRuleChange,
+  type BotRulesUpdateInput,
+} from "../../renderer/shared/bot-rules.js";
 import {
   ASK_USER_MAX_CUSTOM_ANSWER_LENGTH,
   ASK_USER_MAX_LABEL_LENGTH,
@@ -28,14 +42,19 @@ import {
   type AskUserQuestionResponseV1,
 } from "../../renderer/shared/ask-user-question.js";
 
-const CREATE_KEYS = new Set([
-  "avatar",
-  "description",
-  "instructions",
-  "name",
-]);
+const CREATE_KEYS = new Set(["avatar", "description", "instructions", "name"]);
 const CREATE_WITH_ACCESS_KEYS = new Set(["access", "bot"]);
-const UPDATE_KEYS = new Set([...CREATE_KEYS, "chatActivity", "interruptions", "selfWakeUps", "acceptsBotMessages", "messagesOtherBots", "thinkingLevel", "expectedRevision", "id"]);
+const UPDATE_KEYS = new Set([
+  ...CREATE_KEYS,
+  "chatActivity",
+  "interruptions",
+  "selfWakeUps",
+  "acceptsBotMessages",
+  "messagesOtherBots",
+  "thinkingLevel",
+  "expectedRevision",
+  "id",
+]);
 const CHAT_KEYS = new Set(["botId", "model", "providerId", "workspaceId"]);
 const ACCESS_UPDATE_KEYS = new Set(["access", "botId", "expectedRevision"]);
 function exact(value: unknown, keys: ReadonlySet<string>, label: string) {
@@ -90,15 +109,29 @@ const PRESET_ID = /^[a-z0-9][a-z0-9-]{0,63}$/u;
  * `bots:createFromPreset`: a template id, optionally the template version the
  * person was shown, and optionally the access they confirmed.
  */
-export function parseBotCreateFromPreset(value: unknown): { presetId: string; version?: number; access?: BotAccessUpdate } {
+export function parseBotCreateFromPreset(value: unknown): {
+  presetId: string;
+  version?: number;
+  access?: BotAccessUpdate;
+} {
   const record = value as Record<string, unknown> | null;
-  if (!record || typeof record !== "object" || Array.isArray(record) || !Object.keys(record).every((key) => FROM_PRESET_KEYS.has(key))) {
+  if (
+    !record ||
+    typeof record !== "object" ||
+    Array.isArray(record) ||
+    !Object.keys(record).every((key) => FROM_PRESET_KEYS.has(key))
+  ) {
     throw new Error("Invalid starter Bot fields.");
   }
   if (typeof record.presetId !== "string" || !PRESET_ID.test(record.presetId)) {
     throw new Error("Invalid starter Bot id.");
   }
-  if (record.version !== undefined && (typeof record.version !== "number" || !Number.isSafeInteger(record.version) || record.version < 1)) {
+  if (
+    record.version !== undefined &&
+    (typeof record.version !== "number" ||
+      !Number.isSafeInteger(record.version) ||
+      record.version < 1)
+  ) {
     throw new Error("Invalid template version.");
   }
   return {
@@ -110,39 +143,66 @@ export function parseBotCreateFromPreset(value: unknown): { presetId: string; ve
 
 /** A catalog plugin id, as stored by connection dismissals. */
 export function parseConnectionPluginId(value: unknown): string {
-  if (typeof value !== "string" || !PRESET_ID.test(value)) throw new Error("Invalid connection id.");
+  if (typeof value !== "string" || !PRESET_ID.test(value))
+    throw new Error("Invalid connection id.");
   return value;
 }
 
 export function parseBotUpdate(value: unknown): BotUpdateInput {
   const record = exact(value, UPDATE_KEYS, "bot update fields");
-  const chatActivity = record.chatActivity === undefined ? undefined : parseBotChatActivity(record.chatActivity);
-  if (record.chatActivity !== undefined && !chatActivity) throw new Error("Invalid bot chat activity.");
+  const chatActivity =
+    record.chatActivity === undefined ? undefined : parseBotChatActivity(record.chatActivity);
+  if (record.chatActivity !== undefined && !chatActivity)
+    throw new Error("Invalid bot chat activity.");
   return {
     id: parseBotId(record.id),
     expectedRevision: parseBotRevision(record.expectedRevision),
     ...createFields(record),
     ...(chatActivity ? { chatActivity } : {}),
-    ...(record.interruptions !== undefined ? { interruptions: parseBotInterruptions(record.interruptions) } : {}),
-    ...(record.acceptsBotMessages !== undefined ? {acceptsBotMessages: parseMessagingSwitch(record.acceptsBotMessages)} : {}),
-    ...(record.messagesOtherBots !== undefined ? {messagesOtherBots: parseMessagingSwitch(record.messagesOtherBots)} : {}),
-    ...(record.selfWakeUps !== undefined ? { selfWakeUps: parseSelfWakeUps(record.selfWakeUps) } : {}),
-    ...(record.thinkingLevel !== undefined ? { thinkingLevel: parseBotThinkingLevel(record.thinkingLevel) } : {}),
+    ...(record.interruptions !== undefined
+      ? { interruptions: parseBotInterruptions(record.interruptions) }
+      : {}),
+    ...(record.acceptsBotMessages !== undefined
+      ? { acceptsBotMessages: parseMessagingSwitch(record.acceptsBotMessages) }
+      : {}),
+    ...(record.messagesOtherBots !== undefined
+      ? { messagesOtherBots: parseMessagingSwitch(record.messagesOtherBots) }
+      : {}),
+    ...(record.selfWakeUps !== undefined
+      ? { selfWakeUps: parseSelfWakeUps(record.selfWakeUps) }
+      : {}),
+    ...(record.thinkingLevel !== undefined
+      ? { thinkingLevel: parseBotThinkingLevel(record.thinkingLevel) }
+      : {}),
   };
 }
 
 /** One catalog model to read thinking levels for: the picker's opaque ids, never provider ids. */
-export function parseBotModelThinkingLevelsInput(value: unknown): { botId?: string; providerId: string; modelId: string } {
-  const record = exact(value, new Set(["botId", "providerId", "modelId"]), "model thinking level fields");
+export function parseBotModelThinkingLevelsInput(value: unknown): {
+  botId?: string;
+  providerId: string;
+  modelId: string;
+} {
+  const record = exact(
+    value,
+    new Set(["botId", "providerId", "modelId"]),
+    "model thinking level fields",
+  );
   const id = (raw: unknown) => {
-    if (typeof raw !== "string" || raw.length === 0 || raw.length > 256) throw new Error("Invalid model id.");
+    if (typeof raw !== "string" || raw.length === 0 || raw.length > 256)
+      throw new Error("Invalid model id.");
     return raw;
   };
-  return { ...(record.botId === undefined ? {} : { botId: parseBotId(record.botId) }), providerId: id(record.providerId), modelId: id(record.modelId) };
+  return {
+    ...(record.botId === undefined ? {} : { botId: parseBotId(record.botId) }),
+    providerId: id(record.providerId),
+    modelId: id(record.modelId),
+  };
 }
 
 function parseBotThinkingLevel(value: unknown): BotRoutineThinkingLevel {
-  if (!BOT_ROUTINE_THINKING_LEVELS.includes(value as BotRoutineThinkingLevel)) throw new Error("Invalid Bot thinking level.");
+  if (!BOT_ROUTINE_THINKING_LEVELS.includes(value as BotRoutineThinkingLevel))
+    throw new Error("Invalid Bot thinking level.");
   return value as BotRoutineThinkingLevel;
 }
 
@@ -188,16 +248,22 @@ export function parseBotSend(input: unknown): {
   whenBusy?: "steer" | "followUp";
   attachments?: Array<{ type: "image"; mimeType: string; data: string }>;
 } {
-  if (!input || typeof input !== "object" || Array.isArray(input)) throw new Error("Invalid bot message fields.");
+  if (!input || typeof input !== "object" || Array.isArray(input))
+    throw new Error("Invalid bot message fields.");
   const fields = input as Record<string, unknown>;
-  if (!Object.keys(fields).every((key) => BOT_SEND_KEYS.has(key))) throw new Error("Invalid bot message fields.");
+  if (!Object.keys(fields).every((key) => BOT_SEND_KEYS.has(key)))
+    throw new Error("Invalid bot message fields.");
   if (typeof fields.text !== "string" || fields.text.length > BOT_SEND_TEXT_CHARS) {
     throw new Error("Invalid bot message text.");
   }
   if (typeof fields.requestId !== "string" || !BOT_SEND_REQUEST_ID.test(fields.requestId)) {
     throw new Error("Invalid bot message request id.");
   }
-  if (fields.whenBusy !== undefined && fields.whenBusy !== "steer" && fields.whenBusy !== "followUp") {
+  if (
+    fields.whenBusy !== undefined &&
+    fields.whenBusy !== "steer" &&
+    fields.whenBusy !== "followUp"
+  ) {
     throw new Error("Invalid bot message busy mode.");
   }
   let attachments: Array<{ type: "image"; mimeType: string; data: string }> | undefined;
@@ -238,18 +304,44 @@ export function parseBotSend(input: unknown): {
 export function parseBotSessionAction(
   input: unknown,
   action: "resume" | "dismiss",
-): { botId: string; requestId: string; acknowledgeUnknownCost?: true; expectedSubmissionId?: string; expectedCostReceiptId?: string } {
+): {
+  botId: string;
+  requestId: string;
+  acknowledgeUnknownCost?: true;
+  expectedSubmissionId?: string;
+  expectedCostReceiptId?: string;
+} {
   if (!input || typeof input !== "object" || Array.isArray(input)) {
     throw new Error(`Invalid bot ${action} fields.`);
   }
   const fields = input as Record<string, unknown>;
-  if (!Object.keys(fields).every((key) => key === "botId" || key === "requestId" || action === "resume" && (key === "acknowledgeUnknownCost" || key === "expectedSubmissionId" || key === "expectedCostReceiptId"))) {
+  if (
+    !Object.keys(fields).every(
+      (key) =>
+        key === "botId" ||
+        key === "requestId" ||
+        (action === "resume" &&
+          (key === "acknowledgeUnknownCost" ||
+            key === "expectedSubmissionId" ||
+            key === "expectedCostReceiptId")),
+    )
+  ) {
     throw new Error(`Invalid bot ${action} fields.`);
   }
   if (typeof fields.requestId !== "string" || !BOT_SESSION_REQUEST_ID.test(fields.requestId)) {
     throw new Error(`Invalid bot ${action} request id.`);
   }
-  const confirmation = parseBotResumeAcknowledgement({ ...(fields.acknowledgeUnknownCost === undefined ? {} : { acknowledgeUnknownCost: fields.acknowledgeUnknownCost }), ...(fields.expectedSubmissionId === undefined ? {} : { expectedSubmissionId: fields.expectedSubmissionId }), ...(fields.expectedCostReceiptId === undefined ? {} : { expectedCostReceiptId: fields.expectedCostReceiptId }) });
+  const confirmation = parseBotResumeAcknowledgement({
+    ...(fields.acknowledgeUnknownCost === undefined
+      ? {}
+      : { acknowledgeUnknownCost: fields.acknowledgeUnknownCost }),
+    ...(fields.expectedSubmissionId === undefined
+      ? {}
+      : { expectedSubmissionId: fields.expectedSubmissionId }),
+    ...(fields.expectedCostReceiptId === undefined
+      ? {}
+      : { expectedCostReceiptId: fields.expectedCostReceiptId }),
+  });
   return { botId: parseBotId(fields.botId), requestId: fields.requestId, ...confirmation };
 }
 
@@ -258,7 +350,8 @@ const BOT_SUBMISSION_ID = /^\d{1,15}$/u;
 
 /** Remove on a queued message: the Bot and one durable submission id. */
 export function parseBotWithdraw(input: unknown): { botId: string; submissionId: string } {
-  if (!input || typeof input !== "object" || Array.isArray(input)) throw new Error("Invalid bot withdraw fields.");
+  if (!input || typeof input !== "object" || Array.isArray(input))
+    throw new Error("Invalid bot withdraw fields.");
   const fields = input as Record<string, unknown>;
   if (!Object.keys(fields).every((key) => key === "botId" || key === "submissionId")) {
     throw new Error("Invalid bot withdraw fields.");
@@ -272,34 +365,54 @@ export function parseBotWithdraw(input: unknown): { botId: string; submissionId:
 const BOT_APPROVAL_WAIT_ID = /^[A-Za-z0-9-]{1,64}$/u;
 
 /** A Bot approval answer: the durable `waitId` and allow or deny. */
-export function parseBotApprovalDecision(input: unknown): { waitId: string; decision: "allow" | "deny"; scope?: "always" } {
-  if (!input || typeof input !== "object" || Array.isArray(input)) throw new Error("Invalid bot approval fields.");
+export function parseBotApprovalDecision(input: unknown): {
+  waitId: string;
+  decision: "allow" | "deny";
+  scope?: "always";
+} {
+  if (!input || typeof input !== "object" || Array.isArray(input))
+    throw new Error("Invalid bot approval fields.");
   const fields = input as Record<string, unknown>;
-  if (!Object.keys(fields).every((key) => key === "waitId" || key === "decision" || key === "scope") ||
-      (Object.prototype.hasOwnProperty.call(fields, "scope") && (fields.scope !== "always" || fields.decision !== "allow"))) {
+  if (
+    !Object.keys(fields).every(
+      (key) => key === "waitId" || key === "decision" || key === "scope",
+    ) ||
+    (Object.prototype.hasOwnProperty.call(fields, "scope") &&
+      (fields.scope !== "always" || fields.decision !== "allow"))
+  ) {
     throw new Error("Invalid bot approval fields.");
   }
   if (typeof fields.waitId !== "string" || !BOT_APPROVAL_WAIT_ID.test(fields.waitId)) {
     throw new Error("Invalid bot approval id.");
   }
-  if (fields.decision !== "allow" && fields.decision !== "deny") throw new Error("Invalid bot approval decision.");
-  return { waitId: fields.waitId, decision: fields.decision, ...(fields.scope === "always" ? { scope: "always" } : {}) };
+  if (fields.decision !== "allow" && fields.decision !== "deny")
+    throw new Error("Invalid bot approval decision.");
+  return {
+    waitId: fields.waitId,
+    decision: fields.decision,
+    ...(fields.scope === "always" ? { scope: "always" } : {}),
+  };
 }
 
 /** Omission selects all Bots; a renderer cannot supply an audience or target. */
 export function parseBotAllowedList(input: unknown): string | undefined {
   if (input === undefined) return undefined;
-  if (!input || typeof input !== "object" || Array.isArray(input)) throw new Error("Invalid bot allowed list fields.");
+  if (!input || typeof input !== "object" || Array.isArray(input))
+    throw new Error("Invalid bot allowed list fields.");
   const fields = input as Record<string, unknown>;
-  if (!Object.keys(fields).every(key => key === "botId")) throw new Error("Invalid bot allowed list fields.");
+  if (!Object.keys(fields).every((key) => key === "botId"))
+    throw new Error("Invalid bot allowed list fields.");
   return fields.botId === undefined ? undefined : parseBotId(fields.botId);
 }
 
 export function parseBotAllowedRemove(input: unknown): { botId: string; entryId: string } {
-  if (!input || typeof input !== "object" || Array.isArray(input)) throw new Error("Invalid bot allowed remove fields.");
+  if (!input || typeof input !== "object" || Array.isArray(input))
+    throw new Error("Invalid bot allowed remove fields.");
   const fields = input as Record<string, unknown>;
-  if (!Object.keys(fields).every(key => key === "botId" || key === "entryId")) throw new Error("Invalid bot allowed remove fields.");
-  if (typeof fields.entryId !== "string" || !/^[A-Za-z0-9_-]{1,80}$/u.test(fields.entryId)) throw new Error("Invalid bot allowed entry id.");
+  if (!Object.keys(fields).every((key) => key === "botId" || key === "entryId"))
+    throw new Error("Invalid bot allowed remove fields.");
+  if (typeof fields.entryId !== "string" || !/^[A-Za-z0-9_-]{1,80}$/u.test(fields.entryId))
+    throw new Error("Invalid bot allowed entry id.");
   return { botId: parseBotId(fields.botId), entryId: fields.entryId };
 }
 
@@ -310,9 +423,17 @@ const MULTI_ANSWER_KEYS = new Set(["questionIndex", "kind", "selected"]);
 
 function questionAnswerItem(value: unknown): AskUserQuestionAnswerV1 {
   const kind = value && typeof value === "object" ? (value as { kind?: unknown }).kind : undefined;
-  const record = exact(value, kind === "multi" ? MULTI_ANSWER_KEYS : TEXT_ANSWER_KEYS, "bot question answer");
+  const record = exact(
+    value,
+    kind === "multi" ? MULTI_ANSWER_KEYS : TEXT_ANSWER_KEYS,
+    "bot question answer",
+  );
   const questionIndex = record.questionIndex;
-  if (!Number.isSafeInteger(questionIndex) || (questionIndex as number) < 0 || (questionIndex as number) >= ASK_USER_MAX_QUESTIONS) {
+  if (
+    !Number.isSafeInteger(questionIndex) ||
+    (questionIndex as number) < 0 ||
+    (questionIndex as number) >= ASK_USER_MAX_QUESTIONS
+  ) {
     throw new Error("Invalid bot question answer.");
   }
   const index = questionIndex as number;
@@ -324,12 +445,18 @@ function questionAnswerItem(value: unknown): AskUserQuestionAnswerV1 {
     return {
       questionIndex: index,
       kind,
-      selected: selected.map((label) => text(label, "bot question answer", ASK_USER_MAX_LABEL_LENGTH)!),
+      selected: selected.map(
+        (label) => text(label, "bot question answer", ASK_USER_MAX_LABEL_LENGTH)!,
+      ),
     };
   }
   if (kind !== "option" && kind !== "custom") throw new Error("Invalid bot question answer.");
   const maximum = kind === "custom" ? ASK_USER_MAX_CUSTOM_ANSWER_LENGTH : ASK_USER_MAX_LABEL_LENGTH;
-  return { questionIndex: index, kind, answer: text(record.answer, "bot question answer", maximum)! };
+  return {
+    questionIndex: index,
+    kind,
+    answer: text(record.answer, "bot question answer", maximum)!,
+  };
 }
 
 /**
@@ -338,7 +465,11 @@ function questionAnswerItem(value: unknown): AskUserQuestionAnswerV1 {
  * membership and the question count are checked against the waiting question
  * itself when it settles.
  */
-export function parseBotQuestionAnswer(input: unknown): { botId: string; waitId: string; answer: AskUserQuestionResponseV1 } {
+export function parseBotQuestionAnswer(input: unknown): {
+  botId: string;
+  waitId: string;
+  answer: AskUserQuestionResponseV1;
+} {
   const fields = exact(input, ANSWER_KEYS, "bot question answer fields");
   if (typeof fields.waitId !== "string" || !BOT_APPROVAL_WAIT_ID.test(fields.waitId)) {
     throw new Error("Invalid bot question id.");
@@ -369,7 +500,8 @@ const HANDOFF_ANSWER_KEYS = new Set(["botId", "waitId", "outcome", "note"]);
 const HANDOFF_OPEN_KEYS = new Set(["botId", "waitId"]);
 
 function handoffWaitId(value: unknown): string {
-  if (typeof value !== "string" || !BOT_APPROVAL_WAIT_ID.test(value)) throw new Error("Invalid bot hand-off id.");
+  if (typeof value !== "string" || !BOT_APPROVAL_WAIT_ID.test(value))
+    throw new Error("Invalid bot hand-off id.");
   return value;
 }
 
@@ -382,7 +514,8 @@ export function parseBotHandoffAnswer(input: unknown): {
 } {
   const fields = exact(input, HANDOFF_ANSWER_KEYS, "bot hand-off answer fields");
   const waitId = handoffWaitId(fields.waitId);
-  if (fields.outcome !== "done" && fields.outcome !== "skipped") throw new Error("Invalid bot hand-off answer.");
+  if (fields.outcome !== "done" && fields.outcome !== "skipped")
+    throw new Error("Invalid bot hand-off answer.");
   const note = text(fields.note, "bot hand-off note", BOT_HANDOFF_NOTE_MAX_CHARS, true);
   return {
     botId: parseBotId(fields.botId),
@@ -394,7 +527,11 @@ export function parseBotHandoffAnswer(input: unknown): {
 
 const ACCESS_ANSWER_KEYS = new Set(["botId", "waitId", "choice"]);
 
-export function parseBotAccessAnswer(input: unknown): { botId: string; waitId: string; choice: BotAccessChoice } {
+export function parseBotAccessAnswer(input: unknown): {
+  botId: string;
+  waitId: string;
+  choice: BotAccessChoice;
+} {
   const fields = exact(input, ACCESS_ANSWER_KEYS, "bot access answer fields");
   if (typeof fields.waitId !== "string" || !BOT_APPROVAL_WAIT_ID.test(fields.waitId))
     throw new Error("Invalid bot access request id.");
@@ -423,7 +560,6 @@ export function parseBotChatCreate(value: unknown) {
   };
 }
 
-
 export function parseBotAccessUpdateInput(value: unknown): {
   botId: string;
   expectedRevision: string;
@@ -451,7 +587,8 @@ function memoryTarget(value: unknown): BotMemoryTarget {
 }
 
 function memoryEntryId(value: unknown): string {
-  if (typeof value !== "string" || !MEMORY_ENTRY_ID.test(value)) throw new Error("Invalid bot memory entry id.");
+  if (typeof value !== "string" || !MEMORY_ENTRY_ID.test(value))
+    throw new Error("Invalid bot memory entry id.");
   return value;
 }
 
@@ -466,7 +603,10 @@ export function parseBotMemoryEdit(value: unknown): BotMemoryEditInput {
   }
   if (kind === "remove") {
     const edit = exact(record.edit, MEMORY_REMOVE_KEYS, "bot memory edit");
-    return { botId, edit: { kind, target: memoryTarget(edit.target), entryId: memoryEntryId(edit.entryId) } };
+    return {
+      botId,
+      edit: { kind, target: memoryTarget(edit.target), entryId: memoryEntryId(edit.entryId) },
+    };
   }
   if (kind === "replace") {
     const edit = exact(record.edit, MEMORY_REPLACE_KEYS, "bot memory edit");
@@ -475,7 +615,12 @@ export function parseBotMemoryEdit(value: unknown): BotMemoryEditInput {
     }
     return {
       botId,
-      edit: { kind, target: memoryTarget(edit.target), entryId: memoryEntryId(edit.entryId), text: edit.text },
+      edit: {
+        kind,
+        target: memoryTarget(edit.target),
+        entryId: memoryEntryId(edit.entryId),
+        text: edit.text,
+      },
     };
   }
   throw new Error("Invalid bot memory edit.");
@@ -504,7 +649,8 @@ function ruleBehavior(value: unknown): BotRuleBehavior {
 }
 
 function ruleText(value: unknown): string {
-  if (typeof value !== "string" || value.length > RULE_TEXT_CHARS) throw new Error("Invalid bot rule text.");
+  if (typeof value !== "string" || value.length > RULE_TEXT_CHARS)
+    throw new Error("Invalid bot rule text.");
   return value;
 }
 
@@ -516,11 +662,20 @@ function ruleChange(value: unknown): BotRuleChange {
   const change = exact(value, RULE_CHANGE_KEYS[type as BotRuleChange["type"]], "bot rule change");
   switch (type as BotRuleChange["type"]) {
     case "set_behavior":
-      return { type: "set_behavior", ruleId: ruleId(change.ruleId), behavior: ruleBehavior(change.behavior) };
+      return {
+        type: "set_behavior",
+        ruleId: ruleId(change.ruleId),
+        behavior: ruleBehavior(change.behavior),
+      };
     case "add_custom":
-      return { type: "add_custom", text: ruleText(change.text), behavior: ruleBehavior(change.behavior) };
+      return {
+        type: "add_custom",
+        text: ruleText(change.text),
+        behavior: ruleBehavior(change.behavior),
+      };
     case "edit_custom":
-      if (change.text === undefined && change.behavior === undefined) throw new Error("Invalid bot rule change.");
+      if (change.text === undefined && change.behavior === undefined)
+        throw new Error("Invalid bot rule change.");
       return {
         type: "edit_custom",
         ruleId: ruleId(change.ruleId),
@@ -543,14 +698,28 @@ export function parseBotRulesUpdate(value: unknown): BotRulesUpdateInput {
 }
 
 /** The person's answer to a settings change from chat (§4.6): exact keys, a known decision. */
-export function parseBotSettingsChangeResponse(input: unknown): { botId: string; changeId: string; decision: "undo" | "apply" | "edited" | "dismiss" } {
+export function parseBotSettingsChangeResponse(input: unknown): {
+  botId: string;
+  changeId: string;
+  decision: "undo" | "apply" | "edited" | "dismiss";
+} {
   const fail = (): never => {
     throw new Error("Invalid settings response.");
   };
   if (!input || typeof input !== "object" || Array.isArray(input)) return fail();
   const fields = input as Record<string, unknown>;
-  if (Object.keys(fields).some((key) => key !== "botId" && key !== "changeId" && key !== "decision")) return fail();
-  if (fields.decision !== "undo" && fields.decision !== "apply" && fields.decision !== "edited" && fields.decision !== "dismiss") return fail();
-  if (typeof fields.changeId !== "string" || !/^[0-9a-f-]{36}$/iu.test(fields.changeId)) return fail();
+  if (
+    Object.keys(fields).some((key) => key !== "botId" && key !== "changeId" && key !== "decision")
+  )
+    return fail();
+  if (
+    fields.decision !== "undo" &&
+    fields.decision !== "apply" &&
+    fields.decision !== "edited" &&
+    fields.decision !== "dismiss"
+  )
+    return fail();
+  if (typeof fields.changeId !== "string" || !/^[0-9a-f-]{36}$/iu.test(fields.changeId))
+    return fail();
   return { botId: parseBotId(fields.botId), changeId: fields.changeId, decision: fields.decision };
 }

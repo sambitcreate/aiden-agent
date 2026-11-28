@@ -26,7 +26,6 @@ test("downloaded updates appear immediately above Profile in the sidebar footer"
   assert.ok(profileIndex < settingsIndex, "Profile and Settings should keep their stable order");
 });
 
-
 test("update banner reports progress, failure recovery, and a guarded restart action", () => {
   const sidebar = source("./chat-sidebar.tsx");
   const banner = between(

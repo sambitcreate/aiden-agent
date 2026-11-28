@@ -5,7 +5,9 @@ import { fold, matchItem, matchSegments, matchText, rankMatches, titleRanges } f
 function highlighted(text: string, query: string): string[] {
   const match = matchText(text, query);
   assert.ok(match, `${query} should match ${text}`);
-  return matchSegments(text, match.ranges).filter((part) => part.match).map((part) => part.text);
+  return matchSegments(text, match.ranges)
+    .filter((part) => part.match)
+    .map((part) => part.text);
 }
 
 test("case and accents don't count, and the highlight covers the original letters", () => {
@@ -67,9 +69,10 @@ test("a keyword matches without a highlight, below any title match", () => {
 test("every typed word can match across the title and keywords", () => {
   const match = matchItem("Use dark appearance", ["theme"], "dark theme");
   assert.ok(match);
-  assert.deepEqual(matchSegments("Use dark appearance", match.ranges).filter((part) => part.match), [
-    { text: "dark", match: true },
-  ]);
+  assert.deepEqual(
+    matchSegments("Use dark appearance", match.ranges).filter((part) => part.match),
+    [{ text: "dark", match: true }],
+  );
 });
 
 test("ranking keeps input order for equal scores and drops non-matches", () => {
@@ -83,12 +86,18 @@ test("ranking keeps input order for equal scores and drops non-matches", () => {
 });
 
 test("segments cover the whole text in order", () => {
-  assert.deepEqual(matchSegments("Git push", [{ start: 0, end: 1 }, { start: 4, end: 5 }]), [
-    { text: "G", match: true },
-    { text: "it ", match: false },
-    { text: "p", match: true },
-    { text: "ush", match: false },
-  ]);
+  assert.deepEqual(
+    matchSegments("Git push", [
+      { start: 0, end: 1 },
+      { start: 4, end: 5 },
+    ]),
+    [
+      { text: "G", match: true },
+      { text: "it ", match: false },
+      { text: "p", match: true },
+      { text: "ush", match: false },
+    ],
+  );
   assert.deepEqual(matchSegments("Plain", []), [{ text: "Plain", match: false }]);
 });
 
@@ -109,7 +118,10 @@ test("a decomposed query matches a composed label", () => {
 
 test("titles ranked by another field mark only whole, word-start or initials matches", () => {
   assert.deepEqual(titleRanges("Rename chat", "renam"), [{ start: 0, end: 5 }]);
-  assert.deepEqual(titleRanges("Git push", "gp"), [{ start: 0, end: 1 }, { start: 4, end: 5 }]);
+  assert.deepEqual(titleRanges("Git push", "gp"), [
+    { start: 0, end: 1 },
+    { start: 4, end: 5 },
+  ]);
   // Scattered letters ("n", "a", "m", "e" from an alias like "name") mark nothing.
   assert.deepEqual(titleRanges("New chat message", "name"), []);
 });

@@ -1,6 +1,9 @@
 import { withoutWorkspaceDisabledMcpServers } from "../workspace-capabilities.js";
 import type { McpServer } from "../types.js";
-import { mcpServerOffersTools, mcpToolsOfferedToModel } from "../../../renderer/shared/mcp-exposure.js";
+import {
+  mcpServerOffersTools,
+  mcpToolsOfferedToModel,
+} from "../../../renderer/shared/mcp-exposure.js";
 import {
   MAX_SUBAGENT_MCP_SCOPES,
   MAX_SUBAGENT_MCP_TOOLS_PER_SCOPE,
@@ -172,8 +175,17 @@ export async function resolveBoundedSubagentMcpInventory(
       controller.abort(new Error("MCP inventory discovery deadline elapsed."));
       return [];
     }
-    const servers = withoutWorkspaceDisabledMcpServers(listed.servers, dependencies.disabledMcpServerIds)
-      .filter((server) => server.enabled && server.transport !== "stdio" && !server.authProvider && mcpServerOffersTools(server))
+    const servers = withoutWorkspaceDisabledMcpServers(
+      listed.servers,
+      dependencies.disabledMcpServerIds,
+    )
+      .filter(
+        (server) =>
+          server.enabled &&
+          server.transport !== "stdio" &&
+          !server.authProvider &&
+          mcpServerOffersTools(server),
+      )
       .slice(0, MAX_SUBAGENT_MCP_SCOPES);
     const byId = new Map(servers.map((server) => [server.id, server] as const));
     const tasks = servers.map(async (server) => {
@@ -215,10 +227,17 @@ export async function resolveBoundedSubagentMcpInventory(
     if (outcome === "aborted") throw abortReason(parentSignal);
     controller.abort(new Error("MCP inventory discovery deadline elapsed."));
     // Hidden tools are withheld from children; the cache keeps the full inspection.
-    return projectInventory(completed.map((inspected) => {
-      const server = byId.get(inspected.serverId);
-      return server ? { ...inspected, tools: mcpToolsOfferedToModel(server, inspected.tools, (tool) => tool.toolName) } : inspected;
-    }));
+    return projectInventory(
+      completed.map((inspected) => {
+        const server = byId.get(inspected.serverId);
+        return server
+          ? {
+              ...inspected,
+              tools: mcpToolsOfferedToModel(server, inspected.tools, (tool) => tool.toolName),
+            }
+          : inspected;
+      }),
+    );
   } finally {
     if (timeout) clearTimeout(timeout);
     parentSignal.removeEventListener("abort", relay);

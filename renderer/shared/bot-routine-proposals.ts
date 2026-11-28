@@ -11,17 +11,18 @@ export const BOT_ROUTINE_PROPOSAL_ENTRY_KIND = "aiden.routine-proposal";
 export const BOT_ROUTINE_PROPOSAL_STATUS_ENTRY_KIND = "aiden.routine-proposal-status";
 export type BotRoutineProposalStatus = "pending" | "accepted" | "dismissed";
 interface BotRoutineProposalEntryBase {
-  proposalId: string;           // UUID minted by the tool
-  name: string;                 // ≤ BOT_ROUTINE_NAME_LIMIT
-  prompt: string;               // ≤ BOT_ROUTINE_PROMPT_LIMIT
-  label: string;                // host label, e.g. "Every day at 9:00 AM"
-  reason?: string;              // ≤ 280
+  proposalId: string; // UUID minted by the tool
+  name: string; // ≤ BOT_ROUTINE_NAME_LIMIT
+  prompt: string; // ≤ BOT_ROUTINE_PROMPT_LIMIT
+  label: string; // host label, e.g. "Every day at 9:00 AM"
+  reason?: string; // ≤ 280
 }
 /** A scheduled routine (runs at a time, in `timezone`) or an event routine (runs when `trigger` happens). */
-export type BotRoutineProposalEntryData = BotRoutineProposalEntryBase & (
-  | { schedule: BotRoutineSchedule; timezone: string; trigger?: never }
-  | { trigger: BotRoutineTrigger; schedule?: never; timezone?: never }
-);
+export type BotRoutineProposalEntryData = BotRoutineProposalEntryBase &
+  (
+    | { schedule: BotRoutineSchedule; timezone: string; trigger?: never }
+    | { trigger: BotRoutineTrigger; schedule?: never; timezone?: never }
+  );
 export interface BotRoutineProposalStatusEntryData {
   proposalId: string;
   status: Exclude<BotRoutineProposalStatus, "pending">;
@@ -34,7 +35,10 @@ export interface BotRoutineProposalStatusEntryData {
 export function botRoutineTimezoneName(timezone: string, at: Date = new Date()): string {
   if (/^(?:Etc\/)?(?:UTC|UCT|GMT|Zulu|Universal)$/iu.test(timezone)) return "UTC";
   try {
-    const name = new Intl.DateTimeFormat("en-US", { timeZone: timezone, timeZoneName: "longGeneric" })
+    const name = new Intl.DateTimeFormat("en-US", {
+      timeZone: timezone,
+      timeZoneName: "longGeneric",
+    })
       .formatToParts(at)
       .find((part) => part.type === "timeZoneName")?.value;
     return name || timezone;
@@ -44,38 +48,58 @@ export function botRoutineTimezoneName(timezone: string, at: Date = new Date()):
 }
 
 /** When a suggested routine runs, as its card says it: the time and its timezone, or what starts it. */
-export function botRoutineProposalWhen(proposal: Pick<BotRoutineProposalEntryData, "label" | "timezone" | "trigger">): string {
+export function botRoutineProposalWhen(
+  proposal: Pick<BotRoutineProposalEntryData, "label" | "timezone" | "trigger">,
+): string {
   if (proposal.trigger || !proposal.timezone) return proposal.label;
   return `${proposal.label} · ${botRoutineTimezoneName(proposal.timezone)}`;
 }
 export type BotRoutineProposalDecision = "accept" | "dismiss";
 /** Optional chips after Not now; skipping them is fine. */
-export type BotRoutineProposalDeclineReason = "not_useful" | "wrong_time" | "already_have" | "other";
+export type BotRoutineProposalDeclineReason =
+  | "not_useful"
+  | "wrong_time"
+  | "already_have"
+  | "other";
 export const BOT_ROUTINE_PROPOSAL_DECLINE_REASONS: readonly BotRoutineProposalDeclineReason[] = [
-  "not_useful", "wrong_time", "already_have", "other",
+  "not_useful",
+  "wrong_time",
+  "already_have",
+  "other",
 ];
-export const BOT_ROUTINE_PROPOSAL_DECLINE_LABELS: Record<BotRoutineProposalDeclineReason, string> = {
-  not_useful: "Not useful",
-  wrong_time: "Wrong time",
-  already_have: "Already have this",
-  other: "Something else",
-};
+export const BOT_ROUTINE_PROPOSAL_DECLINE_LABELS: Record<BotRoutineProposalDeclineReason, string> =
+  {
+    not_useful: "Not useful",
+    wrong_time: "Wrong time",
+    already_have: "Already have this",
+    other: "Something else",
+  };
 export interface BotRoutineProposalRespondInput {
-  botId: string; proposalId: string; decision: BotRoutineProposalDecision;
+  botId: string;
+  proposalId: string;
+  decision: BotRoutineProposalDecision;
   /** Only with dismiss. */
   reason?: BotRoutineProposalDeclineReason;
 }
 /** What the Bot's `routines list` reports about past suggestions. */
 export interface BotRoutineProposalDecisionSummary {
-  name: string; label: string; status: "accepted" | "dismissed";
-  reason?: BotRoutineProposalDeclineReason; decidedAt: number;
+  name: string;
+  label: string;
+  status: "accepted" | "dismissed";
+  reason?: BotRoutineProposalDeclineReason;
+  decidedAt: number;
 }
 /** Backing off after the person keeps saying Not now (spec §6 P3). */
 export const BOT_ROUTINE_PROPOSAL_COOLING = {
-  window: 5, dismissals: 3, coolMs: 7 * 86_400_000, sameNameMs: 30 * 86_400_000, recent: 10,
+  window: 5,
+  dismissals: 3,
+  coolMs: 7 * 86_400_000,
+  sameNameMs: 30 * 86_400_000,
+  recent: 10,
 } as const;
 export interface BotRoutineProposalRespondResult {
-  status: Exclude<BotRoutineProposalStatus, "pending">; routineId?: string;
+  status: Exclude<BotRoutineProposalStatus, "pending">;
+  routineId?: string;
   /**
    * Only on the desktop answer that just added a link routine: the link the
    * person can call, shown once like the profile's (null while Aiden On The
@@ -85,11 +109,15 @@ export interface BotRoutineProposalRespondResult {
 }
 export const BOT_ROUTINE_PROPOSAL_CHANNELS = { respond: "bots:routineProposals:respond" } as const;
 export interface BotRoutineSuggestion {
-  id: "daily-check-in"; name: string; prompt: string; schedule: BotRoutineSchedule;
+  id: "daily-check-in";
+  name: string;
+  prompt: string;
+  schedule: BotRoutineSchedule;
 }
 export const BOT_DAILY_CHECKIN_SUGGESTION: BotRoutineSuggestion = {
   id: "daily-check-in",
   name: "Daily check-in",
   schedule: { kind: "daily", time: "09:00" },
-  prompt: "Check in briefly. Using what you remember about me and anything new you can see, share one or two things worth knowing today.",
+  prompt:
+    "Check in briefly. Using what you remember about me and anything new you can see, share one or two things worth knowing today.",
 };

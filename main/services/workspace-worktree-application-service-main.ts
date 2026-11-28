@@ -30,7 +30,11 @@ import {
   gitResolveWorktreeBase,
   gitRollbackOwnedWorktree,
 } from "./git.js";
-import { checkCreateCapacity, checkSnapshotCapacity, checkWorktreeAllocation } from "./managed-worktree-capacity.js";
+import {
+  checkCreateCapacity,
+  checkSnapshotCapacity,
+  checkWorktreeAllocation,
+} from "./managed-worktree-capacity.js";
 import { provisionWorktreeIncludedFiles } from "./managed-worktree-provisioner.js";
 import { closeWorkspaceFollowThrough } from "./follow-through/follow-through-main.js";
 import { llmClient } from "./llm-client.js";
@@ -55,44 +59,49 @@ export const workspaceWorktreeApplicationService = createWorkspaceWorktreeApplic
   localBranchNames: gitLocalBranchNames,
   rollbackOwnedWorktree: gitRollbackOwnedWorktree,
   rollbackWorktree: gitRollbackWorktree,
-  deleteManagedWorktree: (managed, signal, lifecycle) => gitDeleteManagedWorktree(
-    managed.repositoryPath,
-    managed.worktreePath,
-    managed.branch,
-    managed.createdFromHead,
-    signal,
-    managed.worktreeGitDir,
-    managed.ownershipToken,
-    managed.worktreeDevice,
-    managed.worktreeInode,
-    lifecycle,
-  ),
-  managedWorktreeDeletionPending: (managed) => gitManagedWorktreeDeletionPending(
-    managed.worktreePath,
-    managed.worktreeGitDir!,
-    managed.ownershipToken!,
-  ),
-  managedWorktreeRegistered: (managed) => gitManagedWorktreeRegistered(
-    managed.repositoryPath,
-    managed.worktreePath,
-    managed.branch,
-    managed.worktreeGitDir,
-    managed.ownershipToken,
-  ),
-  managedWorktreeUsable: (managed) => gitManagedWorktreeUsable(
-    managed.repositoryPath,
-    managed.worktreePath,
-    managed.branch,
-    managed.worktreeGitDir,
-    managed.ownershipToken,
-    managed.worktreeDevice,
-    managed.worktreeInode,
-  ),
-  finalizeManagedWorktreeDeletion: (managed) => gitFinalizeManagedWorktreeDeletion(
-    managed.worktreePath,
-    managed.worktreeGitDir!,
-    managed.ownershipToken!,
-  ),
+  deleteManagedWorktree: (managed, signal, lifecycle) =>
+    gitDeleteManagedWorktree(
+      managed.repositoryPath,
+      managed.worktreePath,
+      managed.branch,
+      managed.createdFromHead,
+      signal,
+      managed.worktreeGitDir,
+      managed.ownershipToken,
+      managed.worktreeDevice,
+      managed.worktreeInode,
+      lifecycle,
+    ),
+  managedWorktreeDeletionPending: (managed) =>
+    gitManagedWorktreeDeletionPending(
+      managed.worktreePath,
+      managed.worktreeGitDir!,
+      managed.ownershipToken!,
+    ),
+  managedWorktreeRegistered: (managed) =>
+    gitManagedWorktreeRegistered(
+      managed.repositoryPath,
+      managed.worktreePath,
+      managed.branch,
+      managed.worktreeGitDir,
+      managed.ownershipToken,
+    ),
+  managedWorktreeUsable: (managed) =>
+    gitManagedWorktreeUsable(
+      managed.repositoryPath,
+      managed.worktreePath,
+      managed.branch,
+      managed.worktreeGitDir,
+      managed.ownershipToken,
+      managed.worktreeDevice,
+      managed.worktreeInode,
+    ),
+  finalizeManagedWorktreeDeletion: (managed) =>
+    gitFinalizeManagedWorktreeDeletion(
+      managed.worktreePath,
+      managed.worktreeGitDir!,
+      managed.ownershipToken!,
+    ),
   checkoutBytes: gitManagedWorktreeCheckoutBytes,
   checkWorktreeAllocation,
   checkCreateCapacity: async (root, estimatedBytes) => {
@@ -116,17 +125,18 @@ export const workspaceWorktreeApplicationService = createWorkspaceWorktreeApplic
     gitDeleteManagedWorktreeSnapshotRef(repositoryPath, snapshotId, expectedCommit),
   restoreManagedCheckout: gitRestoreManagedWorktreeCheckout,
   resumeManagedCheckout: gitResumeManagedWorktreeCheckout,
-  restoreDeletedCheckout: (managed, root, workspaceSubpath, commit, signal) => gitRestoreDeletedManagedWorktreeCheckout(
-    managed.repositoryPath,
-    root,
-    managed.worktreePath,
-    managed.branch,
-    managed.worktreeGitDir!,
-    managed.ownershipToken!,
-    workspaceSubpath,
-    commit,
-    signal,
-  ),
+  restoreDeletedCheckout: (managed, root, workspaceSubpath, commit, signal) =>
+    gitRestoreDeletedManagedWorktreeCheckout(
+      managed.repositoryPath,
+      root,
+      managed.worktreePath,
+      managed.branch,
+      managed.worktreeGitDir!,
+      managed.ownershipToken!,
+      workspaceSubpath,
+      commit,
+      signal,
+    ),
   applyWorktreeSnapshot: (worktreePath, snapshotCommit, signal) =>
     gitApplyManagedWorktreeSnapshot(worktreePath, worktreePath, snapshotCommit, signal),
   workspacePathExists: async (worktreePath) => {

@@ -58,8 +58,7 @@ export function hostPlatformCapabilities(
 ): HostPlatformCapabilities {
   const darwin = platform === "darwin";
   return {
-    platform:
-      platform === "darwin" || platform === "linux" ? platform : "other",
+    platform: platform === "darwin" || platform === "linux" ? platform : "other",
     bots: darwin || platform === "linux",
     computerUse: darwin,
     botComputers: darwin && arch === "arm64",

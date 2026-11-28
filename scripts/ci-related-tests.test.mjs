@@ -17,7 +17,8 @@ import {
 const files = {
   "main/services/x.ts": 'import { helper } from "./helper.js";\nexport const x = helper;\n',
   "main/services/helper.ts": "export const helper = 1;\n",
-  "main/services/x.test.ts": 'import { x } from "./x.js";\nimport test from "node:test";\ntest("x", () => x);\n',
+  "main/services/x.test.ts":
+    'import { x } from "./x.js";\nimport test from "node:test";\ntest("x", () => x);\n',
   "main/services/importer.test.ts": 'import { x } from "./x.js";\n',
   "main/services/unrelated.test.ts": 'import { helper } from "./helper.js";\n',
   "main/services/acp/test-support.ts": "export const FAKE_FLASH = 1;\n",
@@ -40,7 +41,9 @@ function readFile(file) {
 
 test("import specifiers include static, export-from, and require forms", () => {
   assert.deepEqual(
-    parseImportSpecifiers('import { a } from "./a.ts"; export { b } from "../b.js"; require("./c"); import("./d");'),
+    parseImportSpecifiers(
+      'import { a } from "./a.ts"; export { b } from "../b.js"; require("./c"); import("./d");',
+    ),
     ["./a.ts", "../b.js", "./c", "./d"],
   );
 });
@@ -145,7 +148,10 @@ test("a test that joins production path segments is selected when that file chan
 test("a handler change selects the registered IPC contract inventory test", () => {
   const contract = "main/handlers/ipc-contract.test.ts";
   const sources = {
-    [contract]: readFileSync(new URL("../main/handlers/ipc-contract.test.ts", import.meta.url), "utf8"),
+    [contract]: readFileSync(
+      new URL("../main/handlers/ipc-contract.test.ts", import.meta.url),
+      "utf8",
+    ),
     "main/handlers/chats.ts": "export const chats = 1;\n",
     "main/handlers/index.ts": "export const handlers = 1;\n",
     "main/handlers/attachments.ts": "export const attachments = 1;\n",
@@ -256,25 +262,42 @@ test("a chat-fork service change selects the fork spec rather than falling throu
 test("pull requests send only their selected macOS-only specs to a Mac; other events keep the full macOS suite", () => {
   const specs = discoverSpecs();
   const map = readE2ESpecMap();
-  const plan = (eventName, changedPaths, desktop = true) => planMacE2E({
-    eventName,
-    desktop,
-    e2e: selectRelatedE2ESpecs({ changedPaths, specs, map }),
-    map,
-    shardCount: 5,
-  });
+  const plan = (eventName, changedPaths, desktop = true) =>
+    planMacE2E({
+      eventName,
+      desktop,
+      e2e: selectRelatedE2ESpecs({ changedPaths, specs, map }),
+      map,
+      shardCount: 5,
+    });
 
   for (const eventName of ["push", "merge_group", "workflow_dispatch"]) {
-    assert.deepEqual(plan(eventName, ["main/services/chat-fork-service.ts"]), {
-      run: true, scope: "all", shards: [1, 2, 3, 4, 5], specs: [],
-    }, eventName);
+    assert.deepEqual(
+      plan(eventName, ["main/services/chat-fork-service.ts"]),
+      {
+        run: true,
+        scope: "all",
+        shards: [1, 2, 3, 4, 5],
+        specs: [],
+      },
+      eventName,
+    );
   }
   assert.equal(plan("push", ["main/services/chat-fork-service.ts"], false).run, false);
 
   // A chat change still has E2E specs to run, but none of them needs a Mac.
-  const chat = selectRelatedE2ESpecs({ changedPaths: ["main/services/chat-fork-service.ts"], specs, map });
+  const chat = selectRelatedE2ESpecs({
+    changedPaths: ["main/services/chat-fork-service.ts"],
+    specs,
+    map,
+  });
   assert.ok(chat.specs.length > 0);
-  assert.deepEqual(plan("pull_request", ["main/services/chat-fork-service.ts"]), { run: false, scope: "none", shards: [], specs: [] });
+  assert.deepEqual(plan("pull_request", ["main/services/chat-fork-service.ts"]), {
+    run: false,
+    scope: "none",
+    shards: [],
+    specs: [],
+  });
 
   // A devices change keeps the iOS Simulator specs, which skip off macOS, on one Mac.
   const devices = plan("pull_request", ["main/services/devices/device-hub.ts"]);
@@ -289,13 +312,24 @@ test("pull requests send only their selected macOS-only specs to a Mac; other ev
   const harness = plan("pull_request", ["tests/e2e/fixtures.ts"]);
   assert.equal(harness.scope, "macos");
   assert.deepEqual(harness.specs.toSorted(), map.macos.toSorted());
-  assert.deepEqual(plan("pull_request", ["tests/e2e/fixtures.ts"], false), { run: false, scope: "none", shards: [], specs: [] });
+  assert.deepEqual(plan("pull_request", ["tests/e2e/fixtures.ts"], false), {
+    run: false,
+    scope: "none",
+    shards: [],
+    specs: [],
+  });
 });
 
 test("the macOS-only spec list names each runnable spec once", () => {
   const specs = discoverSpecs();
   const map = validateE2ESpecMap(specs, readE2ESpecMap());
   assert.ok(map.macos.length > 0);
-  assert.throws(() => validateE2ESpecMap(specs, { ...map, macos: [...map.macos, "not-a-spec.spec.ts"] }), /not-a-spec\.spec\.ts/u);
-  assert.throws(() => validateE2ESpecMap(specs, { ...map, macos: [map.macos[0], map.macos[0]] }), /macos list is malformed/u);
+  assert.throws(
+    () => validateE2ESpecMap(specs, { ...map, macos: [...map.macos, "not-a-spec.spec.ts"] }),
+    /not-a-spec\.spec\.ts/u,
+  );
+  assert.throws(
+    () => validateE2ESpecMap(specs, { ...map, macos: [map.macos[0], map.macos[0]] }),
+    /macos list is malformed/u,
+  );
 });

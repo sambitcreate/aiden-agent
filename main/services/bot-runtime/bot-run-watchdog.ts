@@ -61,7 +61,10 @@ export function createBotRunWatchdog(dependencies: BotRunWatchdogDependencies): 
         handledUntil.set(botId, now);
         continue;
       }
-      const progress = Math.max(dependencies.lastProgressAt(botId) ?? now, handledUntil.get(botId) ?? 0);
+      const progress = Math.max(
+        dependencies.lastProgressAt(botId) ?? now,
+        handledUntil.get(botId) ?? 0,
+      );
       if (now - progress < BOT_RUN_STALL_MS) continue;
       // Only an unattended routine run is acted on; an unknown run never is.
       if (dependencies.runKind(botId) !== "routine") continue;

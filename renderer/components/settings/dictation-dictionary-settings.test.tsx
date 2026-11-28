@@ -62,7 +62,10 @@ test("saved rules list the spoken form, its replacement, and a named remove acti
   assert.match(html, /aria-label="Custom dictionary"/);
   assert.match(html, /aiden.*Aiden/s);
   assert.match(html, /Kubernetes.*exact spelling/s);
-  const [removeSecond] = findAll(tree, (element) => element.props["aria-label"] === "Remove Kubernetes");
+  const [removeSecond] = findAll(
+    tree,
+    (element) => element.props["aria-label"] === "Remove Kubernetes",
+  );
   assert.ok(removeSecond);
   (removeSecond.props.onClick as () => void)();
   assert.deepEqual(removed, [1]);
@@ -88,13 +91,21 @@ test("submitting the form adds the rule without reloading the page", () => {
   assert.equal(added, 1);
 });
 
-
 test("dictionary row keys remain distinct under Turkish locale casing", () => {
   const original = String.prototype.toLocaleLowerCase;
   let keys: Array<string | null>;
   try {
-    String.prototype.toLocaleLowerCase = function () { return original.call(this, "tr"); };
-    const tree = DictationDictionaryView(props({ entries: [{ from: "I", to: "" }, { from: "ı", to: "" }] }));
+    String.prototype.toLocaleLowerCase = function () {
+      return original.call(this, "tr");
+    };
+    const tree = DictationDictionaryView(
+      props({
+        entries: [
+          { from: "I", to: "" },
+          { from: "ı", to: "" },
+        ],
+      }),
+    );
     keys = findAll(tree, (element) => element.type === "li").map((element) => element.key);
   } finally {
     String.prototype.toLocaleLowerCase = original;

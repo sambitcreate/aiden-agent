@@ -1,6 +1,13 @@
 import { ImageIcon, MoreHorizontal } from "lucide-react";
 import * as React from "react";
-import { Button, DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger, Text } from "../components/ui";
+import {
+  Button,
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+  Text,
+} from "../components/ui";
 import type { WorkflowSummary } from "../shared/images/schema";
 import { imageCountLabel, relativeTime } from "./gallery-core";
 import type { WorkflowImageSummary } from "./library-core";
@@ -30,12 +37,20 @@ function WorkflowCard({
   const metaId = React.useId();
   const meta = summary
     ? `${imageCountLabel(summary.count)} · ${relativeTime(summary.latest.createdAt, now, (timestamp) => dateFormat.format(timestamp))}`
-    : galleryReady ? "No images yet" : null;
+    : galleryReady
+      ? "No images yet"
+      : null;
   return (
     <li className="image-workflow-card">
       <div className="image-workflow-card-media">
         {summary?.latest.thumbUrl ? (
-          <img src={summary.latest.thumbUrl} alt="" loading="lazy" decoding="async" draggable={false} />
+          <img
+            src={summary.latest.thumbUrl}
+            alt=""
+            loading="lazy"
+            decoding="async"
+            draggable={false}
+          />
         ) : (
           <ImageIcon aria-hidden="true" className="size-6 text-tertiary" />
         )}
@@ -52,17 +67,27 @@ function WorkflowCard({
             {workflow.title}
           </button>
           {/* A non-breaking space keeps the card's height while the gallery loads. */}
-          <Text id={metaId} variant="small" color="secondary" truncate>{meta ?? " "}</Text>
+          <Text id={metaId} variant="small" color="secondary" truncate>
+            {meta ?? " "}
+          </Text>
         </div>
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
-            <Button variant="transparent" size="small" iconOnly className="image-workflow-card-menu" aria-label={`More actions for ${workflow.title}`}>
+            <Button
+              variant="transparent"
+              size="small"
+              iconOnly
+              className="image-workflow-card-menu"
+              aria-label={`More actions for ${workflow.title}`}
+            >
               <MoreHorizontal />
             </Button>
           </DropdownMenuTrigger>
           <DropdownMenuContent align="end">
             <DropdownMenuItem onSelect={() => actions.rename(workflow)}>Rename…</DropdownMenuItem>
-            <DropdownMenuItem onSelect={() => actions.duplicate(workflow)}>Duplicate</DropdownMenuItem>
+            <DropdownMenuItem onSelect={() => actions.duplicate(workflow)}>
+              Duplicate
+            </DropdownMenuItem>
             <DropdownMenuItem onSelect={() => actions.remove(workflow)}>Delete…</DropdownMenuItem>
           </DropdownMenuContent>
         </DropdownMenu>

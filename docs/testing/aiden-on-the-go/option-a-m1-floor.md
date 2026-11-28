@@ -4,10 +4,10 @@ Evidence for Task 5 (`2d7b79341`, "require iOS 26"). Compare with `option-a-base
 
 ## Results
 
-| Runtime | Scope | Passed | Skipped | Failed |
-| --- | --- | --- | --- | --- |
-| iOS 27.0, iPhone 18 Pro (Xcode 27.1) | full run, `AidenOnTheGoTests` | 1,334 | 7 | 0 |
-| iOS 26.5, iPhone 17 Pro (Xcode 27.1) | `-only-testing:AidenOnTheGoTests` | 1,334 | 7 | 0 |
+| Runtime                              | Scope                             | Passed | Skipped | Failed |
+| ------------------------------------ | --------------------------------- | ------ | ------- | ------ |
+| iOS 27.0, iPhone 18 Pro (Xcode 27.1) | full run, `AidenOnTheGoTests`     | 1,334  | 7       | 0      |
+| iOS 26.5, iPhone 17 Pro (Xcode 27.1) | `-only-testing:AidenOnTheGoTests` | 1,334  | 7       | 0      |
 
 The baseline at the 18.0 floor was 1,333 passed and 7 skipped. The one extra test is the chrome glass mode test added in Task 5.
 

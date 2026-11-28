@@ -1,6 +1,15 @@
 import * as React from "react";
 import { useQueryClient } from "@tanstack/react-query";
-import { CheckCircle2, KeyRound, Laptop, Link2, Loader2, Monitor, RotateCw, TriangleAlert } from "lucide-react";
+import {
+  CheckCircle2,
+  KeyRound,
+  Laptop,
+  Link2,
+  Loader2,
+  Monitor,
+  RotateCw,
+  TriangleAlert,
+} from "lucide-react";
 import { Badge, Button, Callout, Dialog, Input, Text, Textarea } from "../ui";
 import { peerHostsApi } from "../../lib/ipc";
 import { hostQueryKeys } from "../../lib/hosts/host-query-keys";
@@ -36,7 +45,11 @@ export type PeerAddDeviceStep =
       progress?: { matchCode: string; expiresAt: string };
     }
   | { kind: "paired"; host: PeerHostView }
-  | { kind: "failed"; copy: PeerPairingOutcomeCopy; retry: Exclude<PeerAddDeviceStep, { kind: "waiting" | "paired" | "failed" }> };
+  | {
+      kind: "failed";
+      copy: PeerPairingOutcomeCopy;
+      retry: Exclude<PeerAddDeviceStep, { kind: "waiting" | "paired" | "failed" }>;
+    };
 
 export interface PeerAddDeviceActions {
   connect(device: PickedDevice): void;
@@ -75,7 +88,12 @@ function DiscoveredList({
         </Text>
         <span className="flex items-center gap-1.5">
           {discovery.scanning ? (
-            <Text variant="small" color="secondary" role="status" className="flex items-center gap-1.5">
+            <Text
+              variant="small"
+              color="secondary"
+              role="status"
+              className="flex items-center gap-1.5"
+            >
               <Loader2 className="size-3.5 animate-spin" aria-hidden="true" />
               Searching…
             </Text>
@@ -102,7 +120,13 @@ function DiscoveredList({
             tailnet. You can also pair with a setup code.
           </Text>
           {!discovery.scanning && discovery.tailscale?.status === "unavailable" ? (
-            <Text as="p" variant="small" color="secondary" role="status" className="mt-3 flex items-center justify-center gap-1.5">
+            <Text
+              as="p"
+              variant="small"
+              color="secondary"
+              role="status"
+              className="mt-3 flex items-center justify-center gap-1.5"
+            >
               <TriangleAlert className="size-3.5 shrink-0 text-status-warning" aria-hidden="true" />
               {discovery.tailscale.reason === "timed-out"
                 ? "Tailscale didn't respond in time. Check it and search again."
@@ -121,8 +145,12 @@ function DiscoveredList({
             >
               <DeviceIcon platform={device.platform} />
               <span className="min-w-0 flex-1">
-                <Text variant="small-strong" truncate className="block">{device.name}</Text>
-                <Text variant="small" color="secondary" className="block">{note}</Text>
+                <Text variant="small-strong" truncate className="block">
+                  {device.name}
+                </Text>
+                <Text variant="small" color="secondary" className="block">
+                  {note}
+                </Text>
               </span>
               {!connect && !setupCode ? <Badge>Paired</Badge> : null}
               {setupCode ? (
@@ -184,8 +212,8 @@ function SetupCodeForm({
     >
       <Text as="p" variant="small" color="secondary">
         On {device ? device.name : "the other computer"}, open Settings → Connections → Control this
-        device and choose Connect a device. Enter the {device ? "setup code" : "address and setup code"} it
-        shows.
+        device and choose Connect a device. Enter the{" "}
+        {device ? "setup code" : "address and setup code"} it shows.
       </Text>
       {device ? null : (
         <label htmlFor={addressId} className="flex flex-col gap-1.5">
@@ -214,8 +242,12 @@ function SetupCodeForm({
         />
       </label>
       <div className="flex gap-2">
-        <Button type="button" variant="filled" onClick={actions.back}>Back</Button>
-        <Button type="submit" variant="accent" disabled={!ready}>Pair</Button>
+        <Button type="button" variant="filled" onClick={actions.back}>
+          Back
+        </Button>
+        <Button type="submit" variant="accent" disabled={!ready}>
+          Pair
+        </Button>
       </div>
     </form>
   );
@@ -248,8 +280,12 @@ function PairingLinkForm({ actions }: { actions: PeerAddDeviceActions }) {
         A one-time link copied from the other computer. It expires after a few minutes.
       </Text>
       <div className="flex gap-2">
-        <Button type="button" variant="filled" onClick={actions.back}>Back</Button>
-        <Button type="submit" variant="accent" disabled={!link.trim()}>Pair</Button>
+        <Button type="button" variant="filled" onClick={actions.back}>
+          Back
+        </Button>
+        <Button type="submit" variant="accent" disabled={!link.trim()}>
+          Pair
+        </Button>
       </div>
     </form>
   );
@@ -271,7 +307,9 @@ function Waiting({
           className="flex flex-col items-center gap-1 rounded-control bg-well px-4 py-4 text-center"
           data-pairing-match-code={matchCode}
         >
-          <Text variant="small" color="secondary" className="block">Match code</Text>
+          <Text variant="small" color="secondary" className="block">
+            Match code
+          </Text>
           <span
             role="img"
             aria-label={`Match code ${matchCode.split("").join(" ")}`}
@@ -281,10 +319,16 @@ function Waiting({
           </span>
         </div>
         <Text as="p" variant="small" color="secondary" role="status">
-          Check that {name} shows this code, then choose Allow there. Don’t allow a request whose code
-          doesn’t match.
+          Check that {name} shows this code, then choose Allow there. Don’t allow a request whose
+          code doesn’t match.
         </Text>
-        <Text variant="small" color="secondary" role="timer" aria-live="off" className="tabular-nums">
+        <Text
+          variant="small"
+          color="secondary"
+          role="timer"
+          aria-live="off"
+          className="tabular-nums"
+        >
           Expires in {formatCountdown(pairingRequestSecondsLeft(expiresAt, now))}
         </Text>
       </div>
@@ -316,7 +360,9 @@ export function PeerAddDeviceSheetBody({
 }) {
   switch (step.kind) {
     case "choose":
-      return <DiscoveredList discovery={discovery} replaceHostId={replaceHostId} actions={actions} />;
+      return (
+        <DiscoveredList discovery={discovery} replaceHostId={replaceHostId} actions={actions} />
+      );
     case "setup":
       return <SetupCodeForm device={step.device} actions={actions} />;
     case "link":
@@ -325,7 +371,10 @@ export function PeerAddDeviceSheetBody({
       return <Waiting step={step} now={now} />;
     case "paired":
       return (
-        <div className="flex items-start gap-3 rounded-card bg-status-green-surface px-4 py-4" role="status">
+        <div
+          className="flex items-start gap-3 rounded-card bg-status-green-surface px-4 py-4"
+          role="status"
+        >
           <CheckCircle2 className="mt-0.5 size-4 shrink-0 text-status-green" aria-hidden="true" />
           <span className="min-w-0">
             <Text variant="small-strong" className="block break-words">
@@ -342,15 +391,24 @@ export function PeerAddDeviceSheetBody({
         <div className="flex flex-col gap-3">
           <Callout role="alert">
             <span className="flex items-start gap-2">
-              <TriangleAlert className="mt-0.5 size-4 shrink-0 text-status-warning" aria-hidden="true" />
+              <TriangleAlert
+                className="mt-0.5 size-4 shrink-0 text-status-warning"
+                aria-hidden="true"
+              />
               <span className="min-w-0">
-                <Text variant="small-strong" className="block">{step.copy.title}</Text>
-                <Text variant="small" color="secondary" className="block break-words">{step.copy.message}</Text>
+                <Text variant="small-strong" className="block">
+                  {step.copy.title}
+                </Text>
+                <Text variant="small" color="secondary" className="block break-words">
+                  {step.copy.message}
+                </Text>
               </span>
             </span>
           </Callout>
           <div className="flex gap-2">
-            <Button variant="filled" onClick={actions.back}>Back</Button>
+            <Button variant="filled" onClick={actions.back}>
+              Back
+            </Button>
           </div>
         </div>
       );
@@ -418,7 +476,10 @@ export function PeerAddDeviceSheet({
     return peerHostsApi.onPairingProgress((progress: PeerPairingProgress) => {
       setStep((current) =>
         current.kind === "waiting" && current.attemptId === progress.attemptId
-          ? { ...current, progress: { matchCode: progress.matchCode, expiresAt: progress.expiresAt } }
+          ? {
+              ...current,
+              progress: { matchCode: progress.matchCode, expiresAt: progress.expiresAt },
+            }
           : current,
       );
     });
@@ -456,10 +517,12 @@ export function PeerAddDeviceSheet({
     attemptRef.current = attemptId;
     setStep({ kind: "waiting", attemptId, method, ...(name ? { name } : {}) });
     void start(attemptId)
-      .catch((): PeerPairingResult => ({
-        ok: false,
-        outcome: { status: "failed", message: "The other device could not complete pairing." },
-      }))
+      .catch(
+        (): PeerPairingResult => ({
+          ok: false,
+          outcome: { status: "failed", message: "The other device could not complete pairing." },
+        }),
+      )
       .then((result) => {
         if (attemptRef.current !== attemptId) return;
         attemptRef.current = null;
@@ -483,12 +546,16 @@ export function PeerAddDeviceSheet({
     openLink: () => setStep({ kind: "link" }),
     submitSetup: ({ code, address }) => {
       const device = step.kind === "setup" ? step.device : undefined;
-      run("code", device?.name ?? replaceHost?.name, device ? { kind: "setup", device } : { kind: "setup" }, (attemptId) =>
-        peerHostsApi.pairSetupCode(
-          attemptId,
-          device ? { deviceId: device.id, code } : { address: address ?? "", code },
-          replaceHostId,
-        ),
+      run(
+        "code",
+        device?.name ?? replaceHost?.name,
+        device ? { kind: "setup", device } : { kind: "setup" },
+        (attemptId) =>
+          peerHostsApi.pairSetupCode(
+            attemptId,
+            device ? { deviceId: device.id, code } : { address: address ?? "", code },
+            replaceHostId,
+          ),
       );
     },
     submitLink: (link) =>

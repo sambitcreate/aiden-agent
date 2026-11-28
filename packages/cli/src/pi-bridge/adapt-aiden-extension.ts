@@ -18,12 +18,12 @@ import type { ExtensionFactory } from "@earendil-works/pi-coding-agent";
  * (main/services/pi-agent-runtime-harness.ts) — the members the CLI consumes.
  */
 export interface AidenExtensionShape {
-	/** Stable identity used for diagnostics. */
-	id: string;
-	/** Static prompt contribution appended after the engine's system prompt. */
-	systemPrompt?: string;
-	/** Pi-native tools contributed to this session. */
-	tools?: readonly unknown[];
+  /** Stable identity used for diagnostics. */
+  id: string;
+  /** Static prompt contribution appended after the engine's system prompt. */
+  systemPrompt?: string;
+  /** Pi-native tools contributed to this session. */
+  tools?: readonly unknown[];
 }
 
 /**
@@ -32,24 +32,24 @@ export interface AidenExtensionShape {
  * compatible); system prompt contributions chain onto before_agent_start.
  */
 export function aidenExtensionToInlineFactory(
-	name: string,
-	extension: AidenExtensionShape,
+  name: string,
+  extension: AidenExtensionShape,
 ): { name: string; factory: ExtensionFactory } {
-	return {
-		name,
-		factory: (pi) => {
-			for (const tool of extension.tools ?? []) {
-				pi.registerTool(tool as Parameters<typeof pi.registerTool>[0]);
-			}
-			const promptBlock = extension.systemPrompt?.trim();
-			if (promptBlock) {
-				pi.on("before_agent_start", (event) => {
-					// Aiden prompt blocks are cache-stable contributions; append at
-					// the end so the engine prompt (and its provider cache prefix)
-					// stays intact.
-					return { systemPrompt: `${event.systemPrompt}\n\n${promptBlock}` };
-				});
-			}
-		},
-	};
+  return {
+    name,
+    factory: (pi) => {
+      for (const tool of extension.tools ?? []) {
+        pi.registerTool(tool as Parameters<typeof pi.registerTool>[0]);
+      }
+      const promptBlock = extension.systemPrompt?.trim();
+      if (promptBlock) {
+        pi.on("before_agent_start", (event) => {
+          // Aiden prompt blocks are cache-stable contributions; append at
+          // the end so the engine prompt (and its provider cache prefix)
+          // stays intact.
+          return { systemPrompt: `${event.systemPrompt}\n\n${promptBlock}` };
+        });
+      }
+    },
+  };
 }

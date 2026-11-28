@@ -52,7 +52,12 @@ const modelValue = (providerId: string, model: string) => `${providerId}::${mode
 function useSettingsPatch() {
   const queryClient = useQueryClient();
   const [saving, setSaving] = React.useState(false);
-  const save = async (patch: Omit<Partial<AppSettings>, "approvalModel"> & { approvalModel?: AppSettings["approvalModel"] | null }, failure: string) => {
+  const save = async (
+    patch: Omit<Partial<AppSettings>, "approvalModel"> & {
+      approvalModel?: AppSettings["approvalModel"] | null;
+    },
+    failure: string,
+  ) => {
     const previous = queryClient.getQueryData<AppSettings>(queryKeys.settings);
     queryClient.setQueryData<AppSettings>(queryKeys.settings, (current) => {
       const next = { ...(current ?? {}), ...patch } as AppSettings & { approvalModel?: unknown };
@@ -61,7 +66,10 @@ function useSettingsPatch() {
     });
     setSaving(true);
     try {
-      queryClient.setQueryData<AppSettings>(queryKeys.settings, await settingsApi.set(patch as Partial<AppSettings>));
+      queryClient.setQueryData<AppSettings>(
+        queryKeys.settings,
+        await settingsApi.set(patch as Partial<AppSettings>),
+      );
     } catch {
       queryClient.setQueryData(queryKeys.settings, previous);
       toast.error(failure);
@@ -79,7 +87,9 @@ function useSettingsPatch() {
  * messaging for every Bot (its `bots` anchor scrolls there) and the legacy
  * routines switch for people who had it on.
  */
-export function ApprovalModeSettings({ children }: { /** The rules page, under the mode and above Advanced. */ children?: React.ReactNode } = {}) {
+export function ApprovalModeSettings({
+  children,
+}: { /** The rules page, under the mode and above Advanced. */ children?: React.ReactNode } = {}) {
   const settings = useSettings();
   const providers = useProviders();
   const { save, saving } = useSettingsPatch();
@@ -91,10 +101,13 @@ export function ApprovalModeSettings({ children }: { /** The rules page, under t
   // Matches `childChats` in host-platform-capabilities: the Mac and Linux desktop.
   const offersChildChats = platform !== "other";
   const modes = APPROVAL_MODES.filter((value) => value !== "auto" || usableModel);
-  const showChanges = settings.data?.approvalModeOrigin === "upgrade" && settings.data.approvalChangesSeen !== true;
+  const showChanges =
+    settings.data?.approvalModeOrigin === "upgrade" && settings.data.approvalChangesSeen !== true;
   const legacyRoutines = botRoutinesGoAhead(settings.data);
   const approvalModel = parseApprovalModel(settings.data?.approvalModel);
-  const modelChoice = approvalModel ? modelValue(approvalModel.providerId, approvalModel.model) : CHAT_MODEL;
+  const modelChoice = approvalModel
+    ? modelValue(approvalModel.providerId, approvalModel.model)
+    : CHAT_MODEL;
   const anchor = React.useContext(SettingsAnchorContext);
   const scrollRequest = anchor?.section === "bots" ? anchor.request : null;
   const messagingRow = React.useRef<HTMLDivElement>(null);
@@ -119,13 +132,29 @@ export function ApprovalModeSettings({ children }: { /** The rules page, under t
         <Callout role="note" aria-label="What changed" className="mb-7 gap-2 p-4">
           <Text variant="strong">What changed</Text>
           <ul className="flex list-disc flex-col gap-1 pl-5 text-small text-secondary">
-            <li>Approvals now follow one mode for this {computer}. You're on {APPROVAL_MODE_LABELS[mode]}, so Aiden asks as before.</li>
-            <li>Auto lets a model approve routine actions and ask you about the rest. It's your choice and never turns on by itself.</li>
-            <li>Workspaces with Full access now use Never ask, with commands and file changes still allowed there.</li>
-            <li>A routine no longer waits for your OK. A step that needs it is skipped and the Bot tells you.</li>
+            <li>
+              Approvals now follow one mode for this {computer}. You're on{" "}
+              {APPROVAL_MODE_LABELS[mode]}, so Aiden asks as before.
+            </li>
+            <li>
+              Auto lets a model approve routine actions and ask you about the rest. It's your choice
+              and never turns on by itself.
+            </li>
+            <li>
+              Workspaces with Full access now use Never ask, with commands and file changes still
+              allowed there.
+            </li>
+            <li>
+              A routine no longer waits for your OK. A step that needs it is skipped and the Bot
+              tells you.
+            </li>
           </ul>
           <div>
-            <Button size="small" variant="filled" onClick={() => void save({ approvalChangesSeen: true }, "Couldn't save that.")}>
+            <Button
+              size="small"
+              variant="filled"
+              onClick={() => void save({ approvalChangesSeen: true }, "Couldn't save that.")}
+            >
               Got it
             </Button>
           </div>
@@ -135,7 +164,8 @@ export function ApprovalModeSettings({ children }: { /** The rules page, under t
         title="When Aiden asks"
         hint={
           <InfoHint topic="approval modes">
-            Every Bot and workspace follows this, unless a workspace has its own in Workspace settings. Purchases, passwords and money always come to you.
+            Every Bot and workspace follows this, unless a workspace has its own in Workspace
+            settings. Purchases, passwords and money always come to you.
           </InfoHint>
         }
       >
@@ -173,7 +203,9 @@ export function ApprovalModeSettings({ children }: { /** The rules page, under t
           </Text>
         ) : null}
       </FieldSet>
-      <ApprovalsContentSettledContext.Provider value={settleChildren}>{children}</ApprovalsContentSettledContext.Provider>
+      <ApprovalsContentSettledContext.Provider value={settleChildren}>
+        {children}
+      </ApprovalsContentSettledContext.Provider>
       <FieldSet title="Advanced">
         <Field
           label="Approval model"
@@ -189,7 +221,10 @@ export function ApprovalModeSettings({ children }: { /** The rules page, under t
                 return;
               }
               const [providerId, ...rest] = value.split("::");
-              void save({ approvalModel: { providerId: providerId!, model: rest.join("::") } }, "Couldn't change the approval model.");
+              void save(
+                { approvalModel: { providerId: providerId!, model: rest.join("::") } },
+                "Couldn't change the approval model.",
+              );
             }}
           >
             <SelectTrigger aria-label="Approval model">
@@ -199,13 +234,23 @@ export function ApprovalModeSettings({ children }: { /** The rules page, under t
               <SelectItem value={CHAT_MODEL}>The chat's model</SelectItem>
               {usable.flatMap((provider) =>
                 provider.models.map((model) => (
-                  <SelectItem key={modelValue(provider.id, model)} value={modelValue(provider.id, model)}>
+                  <SelectItem
+                    key={modelValue(provider.id, model)}
+                    value={modelValue(provider.id, model)}
+                  >
                     {`${provider.label} · ${model}`}
                   </SelectItem>
                 )),
               )}
-              {approvalModel && !usable.some((provider) => provider.id === approvalModel.providerId && provider.models.includes(approvalModel.model)) ? (
-                <SelectItem value={modelChoice}>{`${approvalModel.model} (unavailable)`}</SelectItem>
+              {approvalModel &&
+              !usable.some(
+                (provider) =>
+                  provider.id === approvalModel.providerId &&
+                  provider.models.includes(approvalModel.model),
+              ) ? (
+                <SelectItem
+                  value={modelChoice}
+                >{`${approvalModel.model} (unavailable)`}</SelectItem>
               ) : null}
             </SelectContent>
           </Select>
@@ -219,7 +264,9 @@ export function ApprovalModeSettings({ children }: { /** The rules page, under t
               aria-label="Bot messaging"
               checked={botMessagingEnabled(settings.data)}
               disabled={settings.isLoading || saving}
-              onCheckedChange={(next) => void save({ botMessaging: next }, "Couldn't change Bot messaging.")}
+              onCheckedChange={(next) =>
+                void save({ botMessaging: next }, "Couldn't change Bot messaging.")
+              }
             />
           </div>
         </Field>
@@ -232,7 +279,12 @@ export function ApprovalModeSettings({ children }: { /** The rules page, under t
               aria-label="Chats can start other chats"
               checked={childChatsEnabled(settings.data)}
               disabled={settings.isLoading || saving}
-              onCheckedChange={(next) => void save({ childChats: next }, "Couldn't change whether chats can start other chats.")}
+              onCheckedChange={(next) =>
+                void save(
+                  { childChats: next },
+                  "Couldn't change whether chats can start other chats.",
+                )
+              }
             />
           </Field>
         ) : null}
@@ -246,7 +298,11 @@ export function ApprovalModeSettings({ children }: { /** The rules page, under t
               checked
               disabled={saving}
               onCheckedChange={(next) => {
-                if (!next) void save({ botRoutinesGoAhead: false }, "Couldn't change how routines handle these steps.");
+                if (!next)
+                  void save(
+                    { botRoutinesGoAhead: false },
+                    "Couldn't change how routines handle these steps.",
+                  );
               }}
             />
           </Field>

@@ -53,15 +53,26 @@ export const contextLifecycleService = new ContextLifecycleService({
   resolveLocalModel: resolveCompactionModelMetadata,
   getCompactionPreferences: async () => {
     const settings = await configStore.getSettings();
-    return { compactionEngine: compactionEngineFrom(settings.compactionEngine), compactionModelOverrides: settings.compactionModelOverrides };
+    return {
+      compactionEngine: compactionEngineFrom(settings.compactionEngine),
+      compactionModelOverrides: settings.compactionModelOverrides,
+    };
   },
   recordUsage: async (message, runtime, chatId) => {
     // A compaction summary is the chat's spending too.
     const cost = responseCostUsd(message);
     if (cost > 0) {
       const chat = await chatStore.get(chatId).catch(() => undefined);
-      const owner = chat?.botId ? { kind: "bot" as const, id: chat.botId } : { kind: "chat" as const, id: chatId };
-      if (await spendCounts({ local: isLocalModelProvider(runtime.provider), provider: runtime.provider, models: runtime.models })) {
+      const owner = chat?.botId
+        ? { kind: "bot" as const, id: chat.botId }
+        : { kind: "chat" as const, id: chatId };
+      if (
+        await spendCounts({
+          local: isLocalModelProvider(runtime.provider),
+          provider: runtime.provider,
+          models: runtime.models,
+        })
+      ) {
         await spending.record(owner, cost).catch(() => undefined);
       }
     }
@@ -88,10 +99,14 @@ export const contextLifecycleService = new ContextLifecycleService({
     ) {
       return undefined;
     }
-    const workspace = chat.workspaceId ? await configStore.getWorkspace(chat.workspaceId) : undefined;
+    const workspace = chat.workspaceId
+      ? await configStore.getWorkspace(chat.workspaceId)
+      : undefined;
     const hooks = createWorkspaceChatHooks({
       chatId: chat.id,
-      ...(workspace?.folderPath && workspace.noWorkspace !== true ? { workspaceRoot: workspace.folderPath } : {}),
+      ...(workspace?.folderPath && workspace.noWorkspace !== true
+        ? { workspaceRoot: workspace.folderPath }
+        : {}),
     });
     return preCompactSummaryInstructions(hooks, {
       trigger,
@@ -118,8 +133,11 @@ export const contextLifecycleService = new ContextLifecycleService({
             ? settings.codexThinkingByModel?.[chat.model!]
             : chat.providerId === ANTHROPIC_PROVIDER_ID
               ? settings.anthropicThinkingByModel?.[chat.model!]
-              : runtime.provider.isBuiltin || (runtime.provider.kind === "openai" &&
-                  customModelThinkingLevels(runtime.provider.modelMetadata?.[chat.model!]?.overrides))
+              : runtime.provider.isBuiltin ||
+                  (runtime.provider.kind === "openai" &&
+                    customModelThinkingLevels(
+                      runtime.provider.modelMetadata?.[chat.model!]?.overrides,
+                    ))
                 ? settings.providerThinkingByModel?.[chat.providerId!]?.[chat.model!]
                 : undefined;
     return resolveGenerationThinkingLevel(chat.providerId!, runtime.model, requested);

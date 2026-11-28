@@ -338,10 +338,7 @@ test("restart recovery installs one durable no-repeat boundary before releasing 
     const childBoundary = recoveredContext.messages[recoveredContext.messages.length - 1];
     assert.equal(childBoundary?.role, "assistant");
     assert.match(JSON.stringify(childBoundary), /write_file/u);
-    assert.equal(
-      (await childRestart.listEffectsNeedingRecoveryByChat("chat-recovery")).length,
-      0,
-    );
+    assert.equal((await childRestart.listEffectsNeedingRecoveryByChat("chat-recovery")).length, 0);
   });
 });
 
@@ -401,11 +398,17 @@ test("prepare, dispatch, and terminal writes are durable, minimal, and idempoten
     assert.equal((await store.getEffect(effectOwner(input)))?.state, "completed");
     const finished = await store.finishOperation(operationInput.operationId, "completed");
     assert.equal(finished.state, "completed");
-    const receipts = await store.verification.list(operationInput.chatId, toolOutputScope({ runId: operationInput.runId, sessionId: operationInput.sessionId }));
+    const receipts = await store.verification.list(
+      operationInput.chatId,
+      toolOutputScope({ runId: operationInput.runId, sessionId: operationInput.sessionId }),
+    );
     assert.equal(receipts.length, 1);
     assert.equal(receipts[0]?.kind, "response_ended");
     assert.deepEqual(receipts[0]?.limitations, ["lifecycle_only"]);
-    assert.equal(receipts.some((receipt) => receipt.kind === "task_predicate"), false);
+    assert.equal(
+      receipts.some((receipt) => receipt.kind === "task_predicate"),
+      false,
+    );
     assert.deepEqual(
       await store.finishOperation(operationInput.operationId, "completed"),
       finished,
@@ -836,7 +839,9 @@ test("concurrent startup callers share recovery and cannot interrupt newly admit
     const check = dataStore.loadedFromCorruptFile.bind(dataStore);
     let loadCalls = 0;
     let releaseSecond!: () => void;
-    const secondGate = new Promise<void>((resolve) => { releaseSecond = resolve; });
+    const secondGate = new Promise<void>((resolve) => {
+      releaseSecond = resolve;
+    });
     dataStore.loadedFromCorruptFile = async () => {
       loadCalls += 1;
       if (loadCalls === 2) await secondGate;
@@ -856,7 +861,12 @@ test("concurrent startup callers share recovery and cannot interrupt newly admit
     assert.equal(loadCalls, 1);
     assert.equal((await restarted.getEffect(effectOwner(sent)))?.state, "unknown");
     assert.equal((await restarted.getEffect(effectOwner(freshEffect)))?.state, "dispatch_started");
-    assert.equal((await restarted.listOperationsByChat(fresh.chatId)).find((entry) => entry.operationId === fresh.operationId)?.state, "running");
+    assert.equal(
+      (await restarted.listOperationsByChat(fresh.chatId)).find(
+        (entry) => entry.operationId === fresh.operationId,
+      )?.state,
+      "running",
+    );
   });
 });
 
@@ -872,7 +882,10 @@ test("failed shared startup stays closed and can retry recovery", async () => {
     };
     const store = new PiRuntimeEffectStore({ root: () => directory, dataStore });
     const results = await Promise.allSettled([store.initialize(), store.initialize()]);
-    assert.deepEqual(results.map((result) => result.status), ["rejected", "rejected"]);
+    assert.deepEqual(
+      results.map((result) => result.status),
+      ["rejected", "rejected"],
+    );
     await assert.rejects(store.startOperation(operation()), /not initialized/u);
     await store.initialize();
     await store.startOperation(operation());
@@ -921,7 +934,10 @@ test("a failed durable recovery write can retry without repeating external effec
     });
     const restarted = new PiRuntimeEffectStore({ root: () => directory, dataStore });
     const results = await Promise.allSettled([restarted.initialize(), restarted.initialize()]);
-    assert.deepEqual(results.map((result) => result.status), ["rejected", "rejected"]);
+    assert.deepEqual(
+      results.map((result) => result.status),
+      ["rejected", "rejected"],
+    );
     assert.equal(await readFile(filename, "utf8"), before);
     await assert.rejects(restarted.startOperation(operation("new")), /not initialized/u);
     failRecovery = false;
@@ -936,13 +952,18 @@ test("a failed durable recovery write can retry without repeating external effec
 
 test("restart retries lifecycle receipt publication after effect recovery already committed", async () => {
   await withTempDirectory(async (directory) => {
-    const first = makeStore(directory); await first.initialize();
-    const input = operation("interrupted-receipt"); await first.startOperation(input);
+    const first = makeStore(directory);
+    await first.initialize();
+    const input = operation("interrupted-receipt");
+    await first.startOperation(input);
     const restarted = makeStore(directory);
     const publish = restarted.verification.check.bind(restarted.verification);
     let fail = true;
     restarted.verification.check = (...args) => {
-      if (fail) { fail = false; return Promise.reject(new Error("receipt publication failed")); }
+      if (fail) {
+        fail = false;
+        return Promise.reject(new Error("receipt publication failed"));
+      }
       return publish(...args);
     };
     // A failed receipt never blocks startup; the next restart retries it.
@@ -951,7 +972,9 @@ test("restart retries lifecycle receipt publication after effect recovery alread
     const scope = toolOutputScope({ runId: input.runId, sessionId: input.sessionId });
     assert.equal((await restarted.verification.list(input.chatId, scope)).length, 0);
     assert.equal((await restarted.listOperationsByChat(input.chatId))[0]?.state, "interrupted");
-    const again = makeStore(directory); await again.initialize(); await again.settleVerificationReceipts();
+    const again = makeStore(directory);
+    await again.initialize();
+    await again.settleVerificationReceipts();
     const receipts = await again.verification.list(input.chatId, scope);
     assert.equal(receipts.length, 1);
     assert.equal(receipts[0]?.result, "inconclusive");
@@ -960,35 +983,57 @@ test("restart retries lifecycle receipt publication after effect recovery alread
 
 test("startup chat reconciliation completes with unreadable private evidence files", async () => {
   await withTempDirectory(async (directory) => {
-    const first = makeStore(directory); await first.initialize();
-    const orphan = operation("orphan", "deleted-chat"); await first.startOperation(orphan);
+    const first = makeStore(directory);
+    await first.initialize();
+    const orphan = operation("orphan", "deleted-chat");
+    await first.startOperation(orphan);
     await writeFile(path.join(directory, "pi-verification-receipts.json"), "{not json");
-    await writeFile(path.join(directory, "workflow-evidence.json"), JSON.stringify({ version: 99 }));
-    const restarted = makeStore(directory); await restarted.initialize();
+    await writeFile(
+      path.join(directory, "workflow-evidence.json"),
+      JSON.stringify({ version: 99 }),
+    );
+    const restarted = makeStore(directory);
+    await restarted.initialize();
     await reconcileChatScopedStores({ list: async () => [] }, [restarted]);
     assert.deepEqual(await restarted.listOperationsByChat(orphan.chatId), []);
-    assert.equal(await readFile(path.join(directory, "pi-verification-receipts.json"), "utf8"), "{not json");
+    assert.equal(
+      await readFile(path.join(directory, "pi-verification-receipts.json"), "utf8"),
+      "{not json",
+    );
   });
 });
 
 test("reconciliation fences receipt catch-up items that have not been published yet", async () => {
   await withTempDirectory(async (directory) => {
-    const first = makeStore(directory); await first.initialize();
+    const first = makeStore(directory);
+    await first.initialize();
     first.verification.check = () => Promise.reject(new Error("receipt publication failed"));
     const kept = operation("kept-op", "kept-chat");
     const deleted = operation("deleted-op", "deleted-chat");
-    for (const input of [kept, deleted]) { await first.startOperation(input); await first.finishOperation(input.operationId, "completed"); }
+    for (const input of [kept, deleted]) {
+      await first.startOperation(input);
+      await first.finishOperation(input.operationId, "completed");
+    }
     const restarted = makeStore(directory);
     const publish = restarted.verification.check.bind(restarted.verification);
     let release!: () => void;
-    const gate = new Promise<void>((resolve) => { release = resolve; });
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
     let calls = 0;
-    restarted.verification.check = async (...args) => { if (calls++ === 0) await gate; return publish(...args); };
+    restarted.verification.check = async (...args) => {
+      if (calls++ === 0) await gate;
+      return publish(...args);
+    };
     await restarted.initialize();
     await restarted.reconcileChats(new Set(["kept-chat"]));
     release();
     await restarted.settleVerificationReceipts();
-    const receipts = (input: typeof kept) => restarted.verification.list(input.chatId, toolOutputScope({ runId: input.runId, sessionId: input.sessionId }));
+    const receipts = (input: typeof kept) =>
+      restarted.verification.list(
+        input.chatId,
+        toolOutputScope({ runId: input.runId, sessionId: input.sessionId }),
+      );
     assert.equal((await receipts(kept)).length, 1);
     assert.equal((await receipts(deleted)).length, 0);
   });
@@ -996,26 +1041,44 @@ test("reconciliation fences receipt catch-up items that have not been published 
 
 test("unreadable verification receipts never block startup or fail a finished run", async () => {
   await withTempDirectory(async (directory) => {
-    const first = makeStore(directory); await first.initialize();
-    const interrupted = operation("before-corruption"); await first.startOperation(interrupted);
+    const first = makeStore(directory);
+    await first.initialize();
+    const interrupted = operation("before-corruption");
+    await first.startOperation(interrupted);
     await writeFile(path.join(directory, "pi-verification-receipts.json"), "{not json");
     const restarted = makeStore(directory);
     await restarted.initialize();
     await restarted.settleVerificationReceipts();
-    assert.equal((await restarted.listOperationsByChat(interrupted.chatId))[0]?.state, "interrupted");
-    const next = operation("after-corruption"); await restarted.startOperation(next);
-    assert.equal((await restarted.finishOperation(next.operationId, "completed")).state, "completed");
+    assert.equal(
+      (await restarted.listOperationsByChat(interrupted.chatId))[0]?.state,
+      "interrupted",
+    );
+    const next = operation("after-corruption");
+    await restarted.startOperation(next);
+    assert.equal(
+      (await restarted.finishOperation(next.operationId, "completed")).state,
+      "completed",
+    );
   });
 });
 
 test("legacy printable runtime identities remain usable with private receipt identities", async () => {
   await withTempDirectory(async (directory) => {
-    const store = new PiRuntimeEffectStore({ root: () => directory }); await store.initialize();
-    const input = { ...operation("operation.valid"), runId: "run.valid", sessionId: "session.valid" };
+    const store = new PiRuntimeEffectStore({ root: () => directory });
+    await store.initialize();
+    const input = {
+      ...operation("operation.valid"),
+      runId: "run.valid",
+      sessionId: "session.valid",
+    };
     await store.startOperation(input);
     assert.equal((await store.finishOperation(input.operationId, "completed")).state, "completed");
-    const reopened = new PiRuntimeEffectStore({ root: () => directory }); await reopened.initialize();
-    const receipts = await reopened.verification.list(input.chatId, toolOutputScope({ runId: input.runId, sessionId: input.sessionId }));
+    const reopened = new PiRuntimeEffectStore({ root: () => directory });
+    await reopened.initialize();
+    const receipts = await reopened.verification.list(
+      input.chatId,
+      toolOutputScope({ runId: input.runId, sessionId: input.sessionId }),
+    );
     assert.equal(receipts.length, 1);
     assert.equal(receipts[0]?.result, "passed");
     assert.equal(JSON.stringify(receipts).includes("run.valid"), false);
@@ -1031,14 +1094,19 @@ test("a recovery boundary carries what the caller knows a cut-off call already d
     await first.initialize();
     const startOperation = operation("operation-start", "chat-lead");
     await first.startOperation(startOperation);
-    const startEffect = effect(startOperation, "effect-start", { toolName: "child_chats", replay: "never" });
+    const startEffect = effect(startOperation, "effect-start", {
+      toolName: "child_chats",
+      replay: "never",
+    });
     await first.prepareEffect(startEffect);
     await first.markEffectDispatchStarted(effectOwner(startEffect));
 
     const restarted = makeStore(effectRoot, 2_000);
     await restarted.initialize();
     const pending = await restarted.listEffectsNeedingRecoveryByChat("chat-lead");
-    const session = await new PiCompactionSessionStore({ root: async () => piRoot }).openChat("chat-lead");
+    const session = await new PiCompactionSessionStore({ root: async () => piRoot }).openChat(
+      "chat-lead",
+    );
     await session.appendMessage({ role: "user", content: "start two chats", timestamp: 1 });
     const described: string[][] = [];
     const describe = async (effects: readonly { toolCallId: string }[]) => {
@@ -1054,7 +1122,10 @@ test("a recovery boundary carries what the caller knows a cut-off call already d
     assert.equal(boundaries.length, 1);
     const text = JSON.stringify(boundaries[0]);
     assert.match(text, /Do not repeat these operations automatically/u);
-    assert.match(text, /Your start call call-effect-start had already started \\"Docs\\" \(chat_id chat-9\)\./u);
+    assert.match(
+      text,
+      /Your start call call-effect-start had already started \\"Docs\\" \(chat_id chat-9\)\./u,
+    );
     assert.deepEqual(described, [["call-effect-start"]]);
   });
 });

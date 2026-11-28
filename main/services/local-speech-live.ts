@@ -9,7 +9,8 @@ import { isModelInstalled, specFor } from "./local-speech-models.js";
 import { transcribeLocalPcm16 } from "./local-speech.js";
 
 export const localLivePreviews = new LivePreviewManager({
-  supportsLivePreview: (modelId) => specFor(modelId)?.livePreview === true && isModelInstalled(modelId),
+  supportsLivePreview: (modelId) =>
+    specFor(modelId)?.livePreview === true && isModelInstalled(modelId),
   decode: (pcm, modelId) => transcribeLocalPcm16(pcm, modelId),
   newId: randomUUID,
   warn: (message) => logger.warn("local-speech", message),

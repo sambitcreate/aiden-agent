@@ -13,7 +13,10 @@ afterEach(cleanup);
 async function mount(
   settings: Record<string, unknown> = {},
   capabilities?: AppCapabilities,
-  { microphone = "granted", withScheduledTasks = false }: { microphone?: string; withScheduledTasks?: boolean } = {},
+  {
+    microphone = "granted",
+    withScheduledTasks = false,
+  }: { microphone?: string; withScheduledTasks?: boolean } = {},
 ) {
   let stored = { ...settings };
   installBotTestIpc({
@@ -22,11 +25,19 @@ async function mount(
     "schedule:settings": (patch: unknown) => {
       const enabled = (patch as { enabled?: boolean } | undefined)?.enabled;
       if (typeof enabled === "boolean") stored = { ...stored, scheduledTasksEnabled: enabled };
-      return { enabled: stored.scheduledTasksEnabled !== false, defaultPermission: "read-only", defaultMcpEnabled: false };
+      return {
+        enabled: stored.scheduledTasksEnabled !== false,
+        defaultPermission: "read-only",
+        defaultMcpEnabled: false,
+      };
     },
     "schedule:list": () => [],
     "mcp:list": () => [],
-    "assistant-live:status": () => ({ available: false, reason: "missing-provider", state: "idle" }),
+    "assistant-live:status": () => ({
+      available: false,
+      reason: "missing-provider",
+      state: "idle",
+    }),
     "computerUse:status": () => ({ ready: false, detail: "Computer Use is off." }),
     "shortcut:get": () => ({ global: [] }),
   });
@@ -96,7 +107,11 @@ test("a microphone the host can't report on is not shown as a problem", async ()
 });
 
 test("on Linux the microphone is ready with nothing to allow, since Linux has no app permission for it", async () => {
-  await mount({}, { ...DISABLED_APP_CAPABILITIES, geminiLive: true, platform: "linux" }, { microphone: "unknown" });
+  await mount(
+    {},
+    { ...DISABLED_APP_CAPABILITIES, geminiLive: true, platform: "linux" },
+    { microphone: "unknown" },
+  );
   const row = await screen.findByRole("group", { name: "Microphone" });
   await within(row).findByText("Ready");
   within(row).getByText(/Linux doesn’t ask apps for microphone permission/u);

@@ -10,7 +10,9 @@ import { isWireSafeKey, parseChatUiVisualV1 } from "./visual.js";
 
 const FIXTURES = new URL("./fixtures/markup/", import.meta.url);
 const fixture = (name: string) => readFileSync(new URL(`${name}.aum`, FIXTURES), "utf8");
-const fixtureNames = readdirSync(FIXTURES).filter((file) => file.endsWith(".aum")).map((file) => file.slice(0, -4));
+const fixtureNames = readdirSync(FIXTURES)
+  .filter((file) => file.endsWith(".aum"))
+  .map((file) => file.slice(0, -4));
 
 function names(node: AidenUiNodeV1 | undefined): string[] {
   if (!node) return [];
@@ -47,7 +49,15 @@ test("the dashboard keeps its structure, data, state, and a readable fallback", 
   assert.equal(compiled.title, "Q3 revenue by region");
   assert.deepEqual(compiled.state, { metric: "revenue" });
   assert.deepEqual(names(compiled.tree), [
-    "Visual", "Row", "Stat", "Stat", "Segmented", "Chart", "Table", "Button", "#text",
+    "Visual",
+    "Row",
+    "Stat",
+    "Stat",
+    "Segmented",
+    "Chart",
+    "Table",
+    "Button",
+    "#text",
   ]);
   assert.equal(JSON.parse(compiled.dataJson!).data.totals.revenue, 6930);
   assert.match(compiled.fallbackText, /Total: \$6,930\.00/u);
@@ -61,7 +71,8 @@ test("the dashboard keeps its structure, data, state, and a readable fallback", 
 
 test("HTML-ish and React-ish markup is reported and its content kept", () => {
   const compiled = compileAum(fixture("broken"));
-  const codes = (code: string) => compiled.diagnostics.filter((diagnostic) => diagnostic.code === code);
+  const codes = (code: string) =>
+    compiled.diagnostics.filter((diagnostic) => diagnostic.code === code);
   assert.ok(codes("unknown_element").some((diagnostic) => diagnostic.at === "div"));
   assert.ok(codes("unknown_element").some((diagnostic) => diagnostic.at === "p"));
   assert.ok(codes("unknown_prop").some((diagnostic) => diagnostic.message.includes("onClick")));
@@ -88,7 +99,9 @@ test("markup without a Visual root is wrapped; empty markup has no tree", () => 
 });
 
 test("binding to an undeclared state key is reported and the binding dropped", () => {
-  const compiled = compileAum(`<Visual state={{tab: "a"}}><Switch bind="ghost" label="Ghost" /><Switch bind="tab" label="Tab" /></Visual>`);
+  const compiled = compileAum(
+    `<Visual state={{tab: "a"}}><Switch bind="ghost" label="Ghost" /><Switch bind="tab" label="Tab" /></Visual>`,
+  );
   assert.ok(compiled.diagnostics.some((diagnostic) => diagnostic.message.includes("ghost")));
   const [ghost, tab] = compiled.tree!.c!;
   assert.equal(ghost!.p?.bind, undefined);
@@ -105,7 +118,10 @@ test("props are coerced by kind, and enums and icons are checked", () => {
   assert.equal(badge!.p?.color, undefined);
   assert.equal(badge!.p?.icon, undefined);
   assert.deepEqual(icon!.p?.name, { op: "lit", v: "rocket" });
-  assert.equal(compiled.diagnostics.filter((diagnostic) => diagnostic.code === "invalid_literal").length, 2);
+  assert.equal(
+    compiled.diagnostics.filter((diagnostic) => diagnostic.code === "invalid_literal").length,
+    2,
+  );
 });
 
 test("literal props carrying wire-unsafe keys are dropped", () => {
@@ -118,7 +134,9 @@ test("inherited Object.prototype names are never catalog components or props", (
   for (const name of ["constructor", "toString", "hasOwnProperty", "valueOf"]) {
     const compiled = compileAum(`<Visual><Text>Kept</Text><${name} /></Visual>`);
     assert.ok(
-      compiled.diagnostics.some((diagnostic) => diagnostic.code === "unknown_element" && diagnostic.at === name),
+      compiled.diagnostics.some(
+        (diagnostic) => diagnostic.code === "unknown_element" && diagnostic.at === name,
+      ),
       `${name} is reported as an unknown element`,
     );
     assert.equal(names(compiled.tree).includes(name), false, `${name} is not a node`);
@@ -128,7 +146,11 @@ test("inherited Object.prototype names are never catalog components or props", (
   const underscored = compileAum("<Visual><__proto__ /><Text>Kept</Text></Visual>");
   assert.equal(names(underscored.tree).includes("__proto__"), false);
   const prop = compileAum(`<Visual><Text toString="x">Kept</Text></Visual>`);
-  assert.ok(prop.diagnostics.some((diagnostic) => diagnostic.code === "unknown_prop" && diagnostic.message.includes("toString")));
+  assert.ok(
+    prop.diagnostics.some(
+      (diagnostic) => diagnostic.code === "unknown_prop" && diagnostic.message.includes("toString"),
+    ),
+  );
   assert.equal(Object.keys(prop.tree!.c![0]!.p ?? {}).includes("toString"), false);
 });
 
@@ -137,14 +159,20 @@ test("node and depth caps truncate with a limit diagnostic", () => {
   const wide = compileAum(many);
   assert.ok(names(wide.tree).length <= AIDEN_UI_LIMITS.nodes);
   assert.ok(wide.diagnostics.some((diagnostic) => diagnostic.code === "limit"));
-  const deep = compileAum(`<Visual>${"<Stack>".repeat(40)}<Text>deep</Text>${"</Stack>".repeat(40)}</Visual>`);
+  const deep = compileAum(
+    `<Visual>${"<Stack>".repeat(40)}<Text>deep</Text>${"</Stack>".repeat(40)}</Visual>`,
+  );
   assert.ok(deep.diagnostics.some((diagnostic) => diagnostic.code === "limit"));
   assert.ok(asVisual(deep));
 });
 
 test("oversized data is dropped instead of stored", () => {
-  const big = JSON.stringify({ rows: Array.from({ length: 4000 }, (_, index) => ({ name: `row ${index}`, value: index })) });
-  const compiled = compileAum(`<Visual><Table rows={$data.rows} /><Data name="data">${big}</Data></Visual>`);
+  const big = JSON.stringify({
+    rows: Array.from({ length: 4000 }, (_, index) => ({ name: `row ${index}`, value: index })),
+  });
+  const compiled = compileAum(
+    `<Visual><Table rows={$data.rows} /><Data name="data">${big}</Data></Visual>`,
+  );
   assert.equal(compiled.dataJson, undefined);
   assert.ok(compiled.diagnostics.some((diagnostic) => diagnostic.code === "limit"));
 });
@@ -159,9 +187,13 @@ test("a streaming prefix compiles to a partial tree without throwing", () => {
 
 test("the catalog speaks only wire-safe prop names and offers no brain icons", () => {
   for (const [component, entry] of Object.entries(AIDEN_UI_CATALOG)) {
-    for (const prop of Object.keys(entry.props)) assert.ok(isWireSafeKey(prop), `${component}.${prop}`);
+    for (const prop of Object.keys(entry.props))
+      assert.ok(isWireSafeKey(prop), `${component}.${prop}`);
   }
-  assert.equal(AIDEN_UI_ICONS.some((icon) => icon.startsWith("brain")), false);
+  assert.equal(
+    AIDEN_UI_ICONS.some((icon) => icon.startsWith("brain")),
+    false,
+  );
 });
 
 test("hostile nesting never throws: deep unknown tags, deep catalog tags in text, deep data", () => {
@@ -182,7 +214,9 @@ test("hostile nesting never throws: deep unknown tags, deep catalog tags in text
 });
 
 test("reserved data names are refused with a diagnostic", () => {
-  const compiled = compileAum(`<Visual><Data name="__proto__">{"a":1}</Data><Text>x</Text></Visual>`);
+  const compiled = compileAum(
+    `<Visual><Data name="__proto__">{"a":1}</Data><Text>x</Text></Visual>`,
+  );
   assert.ok(compiled.diagnostics.some((diagnostic) => diagnostic.code === "data_invalid"));
   assert.equal(compiled.dataJson, undefined);
 });
@@ -217,7 +251,9 @@ test("the fallback stops expanding once it is full, so the work tracks the cap, 
     return item;
   };
   const items = Array.from({ length: 1000 }, countedItem);
-  const text = fallbackTextFor(compiled.tree, { vars: { items, repeat: Array.from({ length: 100 }, () => 0) } });
+  const text = fallbackTextFor(compiled.tree, {
+    vars: { items, repeat: Array.from({ length: 100 }, () => 0) },
+  });
   assert.equal(text, compiled.fallbackText);
   // Each item adds at least a few characters, so reads stay within a small multiple of the cap.
   assert.ok(reads <= 2 * AIDEN_UI_LIMITS.fallbackChars, `read ${reads} item fields`);
@@ -229,7 +265,11 @@ test("run() and compose() compile only for workspace artifacts", () => {
   const buttons = (tree: AidenUiNodeV1 | undefined): AidenUiNodeV1[] =>
     tree ? [...(tree.t === "Button" ? [tree] : []), ...(tree.c ?? []).flatMap(buttons)] : [];
   assert.ok(buttons(inline.tree).every((button) => button.p?.action === undefined));
-  assert.ok(inline.diagnostics.some((diagnostic) => /works only in workspace artifacts/u.test(diagnostic.message)));
+  assert.ok(
+    inline.diagnostics.some((diagnostic) =>
+      /works only in workspace artifacts/u.test(diagnostic.message),
+    ),
+  );
 
   const artifact = compileAum(markup, { artifactActions: true });
   assert.deepEqual(artifact.diagnostics, []);
@@ -245,8 +285,12 @@ test("run() and compose() compile only for workspace artifacts", () => {
   assert.deepEqual(ask!.p?.action, { act: "compose", text: { op: "lit", v: "Summarize these" } });
   assert.ok(asVisual(artifact), "run and compose trees stay storable and wire-safe");
 
-  const unnamed = compileAum(`<Visual title="X"><Button action={run($name)}>Go</Button></Visual>`, { artifactActions: true });
-  assert.ok(unnamed.diagnostics.some((diagnostic) => /action name first/u.test(diagnostic.message)));
+  const unnamed = compileAum(`<Visual title="X"><Button action={run($name)}>Go</Button></Visual>`, {
+    artifactActions: true,
+  });
+  assert.ok(
+    unnamed.diagnostics.some((diagnostic) => /action name first/u.test(diagnostic.message)),
+  );
 });
 
 test("a text-only reader gets each chart's data as a table, in the chart's own columns and format", () => {
@@ -260,9 +304,14 @@ test("a text-only reader gets each chart's data as a table, in the chart's own c
   // Without the option, the chart stays one summary line (memory and desktop text).
   assert.doesNotMatch(compileAum(markup).fallbackText, /\| Jan \|/u);
 
-  const implicit = compileAum(`<Visual><Chart kind="bar" data={[{"region":"EMEA","sales":3,"note":7}]} /></Visual>`);
+  const implicit = compileAum(
+    `<Visual><Chart kind="bar" data={[{"region":"EMEA","sales":3,"note":7}]} /></Visual>`,
+  );
   assert.ok(implicit.tree);
-  assert.match(fallbackTextFor(implicit.tree, { vars: {} }, { chartTables: true }), /\| region \| sales \|\n\| --- \| --- \|\n\| EMEA \| 3 \|/u);
+  assert.match(
+    fallbackTextFor(implicit.tree, { vars: {} }, { chartTables: true }),
+    /\| region \| sales \|\n\| --- \| --- \|\n\| EMEA \| 3 \|/u,
+  );
 });
 
 test("a text-only reader also gets sparkline values, heatmap cells and every numeric column of an unlabelled scatter", () => {
@@ -272,7 +321,10 @@ test("a text-only reader also gets sparkline values, heatmap cells and every num
   // Heatmap cells read as the drawn heatmap names them, by row and column, never by field name.
   assert.match(text, /Load \(heatmap, 2 cells\)\nMon · 9am: 4\nTue · 10am: 7/u);
   assert.doesNotMatch(text, /\br\b|\bn\b/u);
-  assert.match(text, /\| height \| weight \| age \|\n\| --- \| --- \| --- \|\n\| 170 \| 65 \| 30 \|/u);
+  assert.match(
+    text,
+    /\| height \| weight \| age \|\n\| --- \| --- \| --- \|\n\| 170 \| 65 \| 30 \|/u,
+  );
   // Without the option they stay one summary line each.
   const plain = compileAum(markup).fallbackText;
   assert.doesNotMatch(plain, /1,200|Mon|170/u);
@@ -280,7 +332,10 @@ test("a text-only reader also gets sparkline values, heatmap cells and every num
 
 test("a long sparkline keeps where it started and its latest values, with the count", () => {
   const values = Array.from({ length: 100 }, (_, index) => index + 1);
-  const text = compileAum(`<Visual title="T"><Sparkline values={${JSON.stringify(values)}} label="Load" /></Visual>`, { fallback: { chartTables: true } }).fallbackText;
+  const text = compileAum(
+    `<Visual title="T"><Sparkline values={${JSON.stringify(values)}} label="Load" /></Visual>`,
+    { fallback: { chartTables: true } },
+  ).fallbackText;
   const line = text.split("\n").find((entry) => entry.startsWith("Load"));
   assert.ok(line, text);
   const listed = line.slice(line.indexOf(": ") + 2).split(", ");
@@ -290,30 +345,51 @@ test("a long sparkline keeps where it started and its latest values, with the co
   assert.match(line, /100 values/u);
 });
 
-test("a sparkline's \"…\" always stands for two or more values left out", () => {
+test('a sparkline\'s "…" always stands for two or more values left out', () => {
   const line = (count: number) => {
     const values = Array.from({ length: count }, (_, index) => index + 1);
-    const text = compileAum(`<Visual title="T"><Sparkline values={${JSON.stringify(values)}} label="Load" /></Visual>`, { fallback: { chartTables: true } }).fallbackText;
+    const text = compileAum(
+      `<Visual title="T"><Sparkline values={${JSON.stringify(values)}} label="Load" /></Visual>`,
+      { fallback: { chartTables: true } },
+    ).fallbackText;
     return text.split("\n").find((entry) => entry.startsWith("Load"))!;
   };
   // Leaving out one value would save nothing, so 31 and 32 values are all listed.
   for (const count of [31, 32]) {
-    const listed = line(count).slice(line(count).indexOf(": ") + 2).split(", ").map(Number);
-    assert.deepEqual(listed, Array.from({ length: count }, (_, index) => index + 1));
+    const listed = line(count)
+      .slice(line(count).indexOf(": ") + 2)
+      .split(", ")
+      .map(Number);
+    assert.deepEqual(
+      listed,
+      Array.from({ length: count }, (_, index) => index + 1),
+    );
   }
-  const listed = line(33).slice(line(33).indexOf(": ") + 2).split(", ");
+  const listed = line(33)
+    .slice(line(33).indexOf(": ") + 2)
+    .split(", ");
   assert.equal(listed[1], "…");
   assert.equal(33 - (listed.length - 1), 2, "the … stands for the two values not listed");
   assert.match(line(33), /33 values/u);
 });
 
 test("chart, sparkline and heatmap labels reach a text reader on one line, without control or direction characters", () => {
-  const compiled = compileAum(`<Visual title="T"><Chart kind="bar" data={$rows} label={$label} /><Sparkline values={[1, 2]} label={$label} /><Heatmap rows={[{"x":"a","y":"b","value":1}]} label={$label} /></Visual>`);
+  const compiled = compileAum(
+    `<Visual title="T"><Chart kind="bar" data={$rows} label={$label} /><Sparkline values={[1, 2]} label={$label} /><Heatmap rows={[{"x":"a","y":"b","value":1}]} label={$label} /></Visual>`,
+  );
   assert.ok(compiled.tree);
   const label = "Sales\u202egnp.exe\nnext\u0007line\u2066";
-  const text = fallbackTextFor(compiled.tree, { vars: { rows: [{ name: "A", n: 1 }], label } }, { chartTables: true, plainTables: true });
+  const text = fallbackTextFor(
+    compiled.tree,
+    { vars: { rows: [{ name: "A", n: 1 }], label } },
+    { chartTables: true, plainTables: true },
+  );
   /* eslint-disable no-control-regex -- matching control characters is the point */
-  assert.doesNotMatch(text, /[\u0000-\u0008\u000b-\u001f\u007f-\u009f\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]/u, JSON.stringify(text));
+  assert.doesNotMatch(
+    text,
+    /[\u0000-\u0008\u000b-\u001f\u007f-\u009f\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]/u,
+    JSON.stringify(text),
+  );
   /* eslint-enable no-control-regex */
   const lines = text.split("\n");
   assert.ok(lines.includes("Salesgnp.exe next line (bar chart, 1 points)"), text);
@@ -322,10 +398,18 @@ test("chart, sparkline and heatmap labels reach a text reader on one line, witho
 });
 
 test("a plain table row of many columns is clipped so it stays readable", () => {
-  const compiled = compileAum(`<Visual title="T"><Data name="rows">[]</Data><Table rows={$rows} /></Visual>`);
+  const compiled = compileAum(
+    `<Visual title="T"><Data name="rows">[]</Data><Table rows={$rows} /></Visual>`,
+  );
   assert.ok(compiled.tree);
-  const row = Object.fromEntries(Array.from({ length: 30 }, (_, index) => [`column${index}`, "v".repeat(40)]));
-  const text = fallbackTextFor(compiled.tree, { vars: { rows: [row, { column0: "short" }] } }, { plainTables: true });
+  const row = Object.fromEntries(
+    Array.from({ length: 30 }, (_, index) => [`column${index}`, "v".repeat(40)]),
+  );
+  const text = fallbackTextFor(
+    compiled.tree,
+    { vars: { rows: [row, { column0: "short" }] } },
+    { plainTables: true },
+  );
   const [wide, narrow] = text.split("\n");
   assert.equal([...wide!].length, 400);
   assert.ok(wide!.startsWith(`column0: ${"v".repeat(40)} · column1:`), wide);
@@ -335,30 +419,51 @@ test("a plain table row of many columns is clipped so it stays readable", () => 
 
 test("a reader that shows text as-is in a proportional font gets each table row as labelled pairs, not pipes or padded columns", () => {
   const markup = `<Visual title="T"><Chart kind="pie" data={[{"name":"Alpha","share":0.4},{"name":"B","share":0.6}]} format="percent" label="Split" /><Table columns={[{"key":"plan","label":"Plan"},{"key":"seats","label":"Seats"},{"key":"note","label":"Note"}]} rows={[{"plan":"Team | annual","seats":12},{"plan":"Solo","seats":1,"note":"Ends\\nsoon"}]} /></Visual>`;
-  const text = compileAum(markup, { fallback: { chartTables: true, plainTables: true } }).fallbackText;
+  const text = compileAum(markup, {
+    fallback: { chartTables: true, plainTables: true },
+  }).fallbackText;
   assert.doesNotMatch(text, /---/u);
   // Every row stands on its own, so nothing depends on the reader's font lining columns up.
   assert.ok(text.includes(["name: Alpha · share: 40%", "name: B · share: 60%"].join("\n")), text);
   // Column labels name the values, a cell's own pipe is kept as written, and an empty cell says so.
-  assert.ok(text.includes(["Plan: Team | annual · Seats: 12 · Note: —", "Plan: Solo · Seats: 1 · Note: Ends soon"].join("\n")), text);
+  assert.ok(
+    text.includes(
+      ["Plan: Team | annual · Seats: 12 · Note: —", "Plan: Solo · Seats: 1 · Note: Ends soon"].join(
+        "\n",
+      ),
+    ),
+    text,
+  );
   assert.doesNotMatch(text, / {2}/u, "no padding runs");
 });
 
 test("table cells never carry control or direction characters that could reorder or break a line", () => {
   const cell = "safe\u202Egnp.exe\u2066x\u0007y\u0000z";
-  const compiled = compileAum(`<Visual title="T"><Data name="rows">[]</Data><Table rows={$rows} /></Visual>`);
+  const compiled = compileAum(
+    `<Visual title="T"><Data name="rows">[]</Data><Table rows={$rows} /></Visual>`,
+  );
   assert.ok(compiled.tree);
   for (const plainTables of [true, false]) {
-    const text = fallbackTextFor(compiled.tree, { vars: { rows: [{ name: cell, n: 1 }] } }, { plainTables });
+    const text = fallbackTextFor(
+      compiled.tree,
+      { vars: { rows: [{ name: cell, n: 1 }] } },
+      { plainTables },
+    );
     /* eslint-disable no-control-regex -- matching control characters is the point */
-    assert.doesNotMatch(text, /[\u0000-\u0008\u000b-\u001f\u007f-\u009f\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]/u, JSON.stringify(text));
+    assert.doesNotMatch(
+      text,
+      /[\u0000-\u0008\u000b-\u001f\u007f-\u009f\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]/u,
+      JSON.stringify(text),
+    );
     /* eslint-enable no-control-regex */
     assert.match(text, /safegnp\.exex y z/u);
   }
 });
 
 test("table cells drop characters drawn as nothing before they are clipped, keep emoji joiners, and never end inside a character", () => {
-  const compiled = compileAum(`<Visual title="T"><Data name="rows">[]</Data><Table rows={$rows} /></Visual>`);
+  const compiled = compileAum(
+    `<Visual title="T"><Data name="rows">[]</Data><Table rows={$rows} /></Visual>`,
+  );
   assert.ok(compiled.tree);
   const loneSurrogate = /\p{Cs}/u;
   const rows = [
@@ -371,34 +476,55 @@ test("table cells drop characters drawn as nothing before they are clipped, keep
   ];
   for (const plainTables of [true, false]) {
     const text = fallbackTextFor(compiled.tree, { vars: { rows } }, { plainTables });
-    assert.doesNotMatch(text, /[\u200b\u2060-\u2064\ufeff\ufff9-\ufffb\u2028\u2029]/u, JSON.stringify(text));
+    assert.doesNotMatch(
+      text,
+      /[\u200b\u2060-\u2064\ufeff\ufff9-\ufffb\u2028\u2029]/u,
+      JSON.stringify(text),
+    );
     assert.match(text, /payrollnote end/u);
     assert.match(text, /visible/u);
     assert.match(text, /\u{1f469}\u200d\u{1f4bb} team/u);
   }
   // However the text's cap falls among emoji, no half of one is left at the end.
   for (const lead of ["", "a"]) {
-    const text = fallbackTextFor(compiled.tree, { vars: { rows: [{ name: `${lead}${"\u{1f600}".repeat(2_100)}`, n: 1 }] } });
+    const text = fallbackTextFor(compiled.tree, {
+      vars: { rows: [{ name: `${lead}${"\u{1f600}".repeat(2_100)}`, n: 1 }] },
+    });
     assert.ok(text.endsWith("…"));
     assert.doesNotMatch(text, loneSurrogate, `lead ${JSON.stringify(lead)}`);
   }
   // A lone half of a pair in the data is dropped from a cell.
-  assert.doesNotMatch(fallbackTextFor(compiled.tree, { vars: { rows: [{ name: "a\ud800b", n: 1 }] } }), loneSurrogate);
+  assert.doesNotMatch(
+    fallbackTextFor(compiled.tree, { vars: { rows: [{ name: "a\ud800b", n: 1 }] } }),
+    loneSurrogate,
+  );
   // Including one that falls where the text is read in slices, without taking the emoji after it along.
   for (const plainTables of [true, false]) {
-    const text = fallbackTextFor(compiled.tree, { vars: { rows: [{ name: `${"\u200b".repeat(1_023)}\ud800\u{1f600} Revenue`, n: 1 }] } }, { plainTables });
+    const text = fallbackTextFor(
+      compiled.tree,
+      { vars: { rows: [{ name: `${"\u200b".repeat(1_023)}\ud800\u{1f600} Revenue`, n: 1 }] } },
+      { plainTables },
+    );
     assert.match(text, /\u{1f600} Revenue/u);
     assert.doesNotMatch(text, loneSurrogate);
   }
 });
 
 test("a cell reads the same however long its invisible runs are and however many columns show it", () => {
-  const compiled = compileAum(`<Visual title="T"><Data name="rows">[]</Data><Data name="cols">[]</Data><Table rows={$rows} columns={$cols} /></Visual>`);
+  const compiled = compileAum(
+    `<Visual title="T"><Data name="rows">[]</Data><Data name="cols">[]</Data><Table rows={$rows} columns={$cols} /></Visual>`,
+  );
   assert.ok(compiled.tree);
   const one = [{ key: "name", label: "name" }];
   const cell = (name: string, plainTables: boolean) => {
-    const text = fallbackTextFor(compiled.tree!, { vars: { rows: [{ name }], cols: one } }, { plainTables });
-    return plainTables ? text.replace(/^name: /u, "") : text.split("\n")[2]!.replace(/^\| | \|$/gu, "");
+    const text = fallbackTextFor(
+      compiled.tree!,
+      { vars: { rows: [{ name }], cols: one } },
+      { plainTables },
+    );
+    return plainTables
+      ? text.replace(/^name: /u, "")
+      : text.split("\n")[2]!.replace(/^\| | \|$/gu, "");
   };
   // Ten thousand invisible characters before the words leave just the words.
   assert.equal(cell(`${"​".repeat(10_000)}visible text`, true), "visible text");
@@ -419,14 +545,24 @@ test("a cell reads the same however long its invisible runs are and however many
   // Many columns showing one long cell each show it clipped the same way.
   const long = `${"​".repeat(20_000)}${"y".repeat(20_000)}`;
   const cols = Array.from({ length: 5 }, (_, index) => ({ key: "name", label: `c${index}` }));
-  const plain = fallbackTextFor(compiled.tree, { vars: { rows: [{ name: long }], cols } }, { plainTables: true });
+  const plain = fallbackTextFor(
+    compiled.tree,
+    { vars: { rows: [{ name: long }], cols } },
+    { plainTables: true },
+  );
   assert.equal(plain, [0, 1, 2, 3, 4].map((index) => `c${index}: ${"y".repeat(39)}…`).join(" · "));
 });
 
 test("the same text is a chart's label as written and a Markdown cell with its pipes escaped", () => {
-  const compiled = compileAum(`<Visual title="T"><Data name="rows">[]</Data><Chart kind="bar" data={$rows} x="q" y="n" label={$label} /></Visual>`);
+  const compiled = compileAum(
+    `<Visual title="T"><Data name="rows">[]</Data><Chart kind="bar" data={$rows} x="q" y="n" label={$label} /></Visual>`,
+  );
   assert.ok(compiled.tree);
-  const text = fallbackTextFor(compiled.tree, { vars: { rows: [{ q: "Q|A", n: 1 }], label: "Q|A" } }, { chartTables: true });
+  const text = fallbackTextFor(
+    compiled.tree,
+    { vars: { rows: [{ q: "Q|A", n: 1 }], label: "Q|A" } },
+    { chartTables: true },
+  );
   assert.match(text, /^Q\|A \(bar chart, 1 points\)$/mu);
   assert.match(text, /^\| Q\\\|A \| 1 \|$/mu);
 });

@@ -3,7 +3,14 @@
 
 export const BOT_SKILL_PROPOSAL_ENTRY_KIND = "aiden.skill-proposal";
 export const BOT_SKILL_PROPOSAL_STATUS_ENTRY_KIND = "aiden.skill-proposal-status";
-export const BOT_SKILL_PROPOSAL_LIMITS = { nameChars: 48, descriptionChars: 240, instructionsBytes: 16_384, reasonChars: 280, pendingPerBot: 1, previewChars: 64 * 1024 } as const;
+export const BOT_SKILL_PROPOSAL_LIMITS = {
+  nameChars: 48,
+  descriptionChars: 240,
+  instructionsBytes: 16_384,
+  reasonChars: 280,
+  pendingPerBot: 1,
+  previewChars: 64 * 1024,
+} as const;
 
 export type BotSkillProposalStatus = "pending" | "added" | "dismissed";
 export type BotSkillProposalOrigin = "bot" | "folder";
@@ -29,7 +36,12 @@ export interface BotSkillProposalStatusEntryData {
 export function botSkillProposalOf(value: unknown): BotSkillProposalEntryData | null {
   if (!value || typeof value !== "object" || Array.isArray(value)) return null;
   const data = value as Record<string, unknown>;
-  if (typeof data.proposalId !== "string" || typeof data.name !== "string" || typeof data.description !== "string") return null;
+  if (
+    typeof data.proposalId !== "string" ||
+    typeof data.name !== "string" ||
+    typeof data.description !== "string"
+  )
+    return null;
   if (data.origin !== "bot" && data.origin !== "folder") return null;
   if (typeof data.preview !== "string" || typeof data.update !== "boolean") return null;
   if (data.reason !== undefined && typeof data.reason !== "string") return null;

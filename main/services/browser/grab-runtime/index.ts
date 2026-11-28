@@ -1,6 +1,10 @@
 import { AnimationFreezer } from "./freeze.js";
 import { deepElementFromPoint, rectInTopViewport, type ViewportRect } from "./hit-test.js";
-import { collectSensitiveFieldRects, containsSensitiveField, inspectDomElement } from "./inspect-dom.js";
+import {
+  collectSensitiveFieldRects,
+  containsSensitiveField,
+  inspectDomElement,
+} from "./inspect-dom.js";
 import { inspectFrameworkElement } from "./inspect-frameworks.js";
 import {
   findReactComponentBoundaryElement,
@@ -118,11 +122,13 @@ class FrameShield {
 
   /** Runs a hit test with the frames hittable again; no event can dispatch in between. */
   hittable<T>(test: () => T): T {
-    for (const [frame, previous] of this.saved) frame.style.setProperty("pointer-events", previous.value, previous.priority);
+    for (const [frame, previous] of this.saved)
+      frame.style.setProperty("pointer-events", previous.value, previous.priority);
     try {
       return test();
     } finally {
-      for (const frame of this.saved.keys()) frame.style.setProperty("pointer-events", "none", "important");
+      for (const frame of this.saved.keys())
+        frame.style.setProperty("pointer-events", "none", "important");
     }
   }
 
@@ -164,7 +170,8 @@ class FrameShield {
   stop(): void {
     this.observer?.disconnect();
     this.observer = null;
-    for (const [frame, previous] of this.saved) frame.style.setProperty("pointer-events", previous.value, previous.priority);
+    for (const [frame, previous] of this.saved)
+      frame.style.setProperty("pointer-events", previous.value, previous.priority);
     this.saved.clear();
   }
 
@@ -223,7 +230,9 @@ class FrameShield {
 function eventTarget(event: Event): Node | null {
   const first = typeof event.composedPath === "function" ? event.composedPath()[0] : undefined;
   if (first && typeof (first as Node).nodeType === "number") return first as Node;
-  return event.target && typeof (event.target as Node).nodeType === "number" ? (event.target as Node) : null;
+  return event.target && typeof (event.target as Node).nodeType === "number"
+    ? (event.target as Node)
+    : null;
 }
 
 function formatHoverLabel(element: Element, crossOriginIframe: boolean): string {
@@ -236,11 +245,7 @@ function formatHoverLabel(element: Element, crossOriginIframe: boolean): string 
   return dom.domLabel;
 }
 
-function buildPayload(
-  element: Element,
-  inIframe: boolean,
-  keepActive: boolean,
-): RawGrabPayload {
+function buildPayload(element: Element, inIframe: boolean, keepActive: boolean): RawGrabPayload {
   const dom = inspectDomElement(element);
   const sensitiveTarget = containsSensitiveField(element);
   const react = inspectReactElement(element, sensitiveTarget);
@@ -278,7 +283,10 @@ function buildPayload(
     viewport: {
       width: Math.max(1, Math.round(window.innerWidth || 1)),
       height: Math.max(1, Math.round(window.innerHeight || 1)),
-      devicePixelRatio: Number.isFinite(window.devicePixelRatio) && window.devicePixelRatio > 0 ? window.devicePixelRatio : 1,
+      devicePixelRatio:
+        Number.isFinite(window.devicePixelRatio) && window.devicePixelRatio > 0
+          ? window.devicePixelRatio
+          : 1,
     },
     ...(inIframe ? { inIframe: true } : {}),
     ...(sensitiveRects.length > 0 ? { sensitiveRects } : {}),
@@ -443,7 +451,12 @@ function startSession(options?: GrabStartOptions): boolean {
       stopSession();
       return;
     }
-    if ((event.metaKey || event.ctrlKey) && event.shiftKey && !event.altKey && event.key.toLowerCase() === "g") {
+    if (
+      (event.metaKey || event.ctrlKey) &&
+      event.shiftKey &&
+      !event.altKey &&
+      event.key.toLowerCase() === "g"
+    ) {
       event.preventDefault();
       event.stopImmediatePropagation();
       stopSession();

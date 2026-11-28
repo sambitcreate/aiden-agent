@@ -30,7 +30,13 @@ function connected(hostId: string, generation: number): PeerHostStatus {
 }
 
 function blocked(hostId: string, generation: number): PeerHostStatus {
-  return { hostId, generation, state: { kind: "blocked", reason: "auth" }, feed: "live", stale: false };
+  return {
+    hostId,
+    generation,
+    state: { kind: "blocked", reason: "auth" },
+    feed: "live",
+    stale: false,
+  };
 }
 
 function feed(hostId: string, sequence: number, chatIds: string[]): PeerHostFeedSnapshot {
@@ -92,7 +98,9 @@ function fakeMain() {
       broadcast("remote:peers-changed");
     },
     setStatus(status: PeerHostStatus) {
-      state.statuses = state.statuses.map((entry) => (entry.hostId === status.hostId ? status : entry));
+      state.statuses = state.statuses.map((entry) =>
+        entry.hostId === status.hostId ? status : entry,
+      );
       broadcast("remote:peer-host-state", status);
     },
     addChat(hostId: string, chatId: string) {
@@ -113,7 +121,11 @@ function fakeMain() {
 
 /** A minimal document for react-dom; the hook renders nothing itself. */
 function installDocument(ipc: unknown) {
-  const document = new DOMImplementation().createDocument(null, "html", null) as unknown as Document;
+  const document = new DOMImplementation().createDocument(
+    null,
+    "html",
+    null,
+  ) as unknown as Document;
   const body = document.createElement("body");
   const container = document.createElement("div");
   body.appendChild(container);
@@ -135,7 +147,9 @@ function installDocument(ipc: unknown) {
   };
   Object.defineProperty(document, "defaultView", { configurable: true, value: windowValue });
   const keys = ["window", "document", "navigator", "Node", "Element", "HTMLElement"] as const;
-  const previous = new Map(keys.map((key) => [key, Object.getOwnPropertyDescriptor(globalThis, key)]));
+  const previous = new Map(
+    keys.map((key) => [key, Object.getOwnPropertyDescriptor(globalThis, key)]),
+  );
   const ElementConstructor = Object.getPrototypeOf(document.documentElement).constructor;
   Object.defineProperties(globalThis, {
     window: { configurable: true, value: windowValue },

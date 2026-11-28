@@ -3,7 +3,10 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import test, { type TestContext } from "node:test";
-import { applyChatMetadataUpdate, type ChatMetadataUpdatedPatch } from "../../renderer/shared/chat-metadata-update.js";
+import {
+  applyChatMetadataUpdate,
+  type ChatMetadataUpdatedPatch,
+} from "../../renderer/shared/chat-metadata-update.js";
 import { createChatStore } from "./chat-store-core.js";
 import { reconcileTurnThinkingLevel } from "./chat-thinking-level-reconcile.js";
 import { resolveGenerationThinkingLevel } from "./generation-runtime.js";
@@ -47,8 +50,15 @@ test("a chat level the model no longer supports is replaced by the level the tur
 
   assert.equal(wrote, true);
   assert.equal((await f.chatStore.get("chat-1"))?.thinkingLevel, sent);
-  assert.equal((await f.chatStore.list()).find((meta) => meta.id === "chat-1")?.thinkingLevel, sent);
-  assert.equal((await createChatStore(async () => f.root).get("chat-1"))?.thinkingLevel, sent, "a fresh read agrees");
+  assert.equal(
+    (await f.chatStore.list()).find((meta) => meta.id === "chat-1")?.thinkingLevel,
+    sent,
+  );
+  assert.equal(
+    (await createChatStore(async () => f.root).get("chat-1"))?.thinkingLevel,
+    sent,
+    "a fresh read agrees",
+  );
   assert.equal(f.broadcasts.length, 1);
   rendererCopy = applyChatMetadataUpdate(rendererCopy, f.broadcasts[0]!);
   assert.equal(rendererCopy.thinkingLevel, sent, "the open chat shows the level that ran");
@@ -138,6 +148,9 @@ test("a chat with no level of its own stays without one after its saved level is
 
   assert.equal(wrote, false);
   assert.equal((await f.chatStore.get("chat-1"))?.thinkingLevel, undefined);
-  assert.equal((await f.chatStore.list()).find((meta) => meta.id === "chat-1")?.thinkingLevel, undefined);
+  assert.equal(
+    (await f.chatStore.list()).find((meta) => meta.id === "chat-1")?.thinkingLevel,
+    undefined,
+  );
   assert.deepEqual(f.broadcasts, []);
 });

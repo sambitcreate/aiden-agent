@@ -32,7 +32,8 @@ class Child implements RecorderChild {
   once(event: "error", listener: (error: Error) => void): this;
   once(event: "exit" | "error", listener: unknown) {
     // This child always spawns, so it only ever reports `exit`.
-    if (event === "exit") this.listeners.push(listener as (code: number | null, signal: NodeJS.Signals | null) => void);
+    if (event === "exit")
+      this.listeners.push(listener as (code: number | null, signal: NodeJS.Signals | null) => void);
     return this;
   }
 }
@@ -72,7 +73,12 @@ function harness(
     events.push(`run:${args[1]}`);
     return { stdout: args[1] === "pbpaste" ? "from device" : "", stderr: "", code: 0 };
   };
-  const ready = { nodePath: "/node", hub: { origin: "http://127.0.0.1:1" }, helpers: { axSettings: null, serveSimCli: null }, run };
+  const ready = {
+    nodePath: "/node",
+    hub: { origin: "http://127.0.0.1:1" },
+    helpers: { axSettings: null, serveSimCli: null },
+    run,
+  };
   const setState = (next: Partial<DeviceServiceState>) => {
     state = { ...state, ...next };
     for (const listener of stateListeners) listener(state);
@@ -122,7 +128,11 @@ function harness(
     setTimeout: () => 0 as unknown as ReturnType<typeof setTimeout>,
     clearTimeout: () => undefined,
   });
-  const host = { text: options.hostText ?? "hello", formats: options.hostFormats ?? ["text/plain"], written: [] as string[] };
+  const host = {
+    text: options.hostText ?? "hello",
+    formats: options.hostFormats ?? ["text/plain"],
+    written: [] as string[],
+  };
   const features = createDeviceFeatures({
     service,
     recorder,
@@ -162,7 +172,10 @@ test("erase stops the simulator's recordings, shuts it down, erases it, and refr
   const result = await h.features.erase(TARGET);
   assert.deepEqual(result, { wasBooted: true, deviceId: UDID });
   assert.deepEqual(h.children[0]!.signals, ["SIGINT"]);
-  assert.equal(h.features.recordings().find((info) => info.id === recording.id), undefined);
+  assert.equal(
+    h.features.recordings().find((info) => info.id === recording.id),
+    undefined,
+  );
   assert.deepEqual(h.events, ["run:shutdown", "run:erase", "refresh"]);
 });
 
@@ -174,15 +187,24 @@ test("a simulator labelled Android is refused before its recording ends or any c
   await assert.rejects(h.features.pasteFromHost(mislabelled), /no longer available/u);
   await assert.rejects(h.features.copyToHost(mislabelled), /no longer available/u);
   await assert.rejects(h.features.startRecording("chat-2", mislabelled), /no longer available/u);
-  assert.equal(h.features.recordings().find((info) => info.id === recording.id)?.status, "recording");
+  assert.equal(
+    h.features.recordings().find((info) => info.id === recording.id)?.status,
+    "recording",
+  );
   assert.deepEqual(h.children[0]!.signals, []);
   assert.deepEqual(h.events, []);
 });
 
 test("erase is refused for a simulator the listing does not have, and only for this Mac", async () => {
   const h = harness();
-  await assert.rejects(h.features.erase({ ...TARGET, deviceId: "5C1E4B7A-0000-4000-8000-0000000000FF" }), /no longer available/u);
-  await assert.rejects(h.features.erase({ ...TARGET, hostId: "peer-mac" }), /simulators on this Mac/u);
+  await assert.rejects(
+    h.features.erase({ ...TARGET, deviceId: "5C1E4B7A-0000-4000-8000-0000000000FF" }),
+    /no longer available/u,
+  );
+  await assert.rejects(
+    h.features.erase({ ...TARGET, hostId: "peer-mac" }),
+    /simulators on this Mac/u,
+  );
   assert.deepEqual(h.events, []);
 });
 
@@ -211,7 +233,10 @@ test("copy puts the simulator's text on the host clipboard", async () => {
 test("a stopped recording is moved where the user chooses, with a dated default name", async () => {
   const h = harness();
   const recording = await h.features.startRecording("chat-1", TARGET);
-  await assert.rejects(h.features.saveRecording(recording.id, async () => "/x.mp4"), /Stop the recording/u);
+  await assert.rejects(
+    h.features.saveRecording(recording.id, async () => "/x.mp4"),
+    /Stop the recording/u,
+  );
   assert.equal((await h.features.stopRecording(recording.id)).status, "ready");
   const offered: string[] = [];
   const saved = await h.features.saveRecording(recording.id, async (name) => {
@@ -230,7 +255,9 @@ test("cancelling the save dialog deletes the recording", async () => {
   const h = harness();
   const recording = await h.features.startRecording("chat-1", TARGET);
   await h.features.stopRecording(recording.id);
-  assert.deepEqual(await h.features.saveRecording(recording.id, async () => null), { status: "cancelled" });
+  assert.deepEqual(await h.features.saveRecording(recording.id, async () => null), {
+    status: "cancelled",
+  });
   assert.equal(h.files.size, 0);
   assert.deepEqual(h.features.recordings(), []);
 });
@@ -288,34 +315,54 @@ test("a recording still resolving its simulator when its chat is deleted or the 
 test("screenshots save to the chosen file and can then be revealed", async () => {
   const h = harness();
   const offered: string[] = [];
-  const saved = await h.features.saveScreenshot({ hostId: "local", deviceId: UDID }, async (name) => {
-    offered.push(name);
-    return "/Users/me/Downloads/shot.png";
-  });
+  const saved = await h.features.saveScreenshot(
+    { hostId: "local", deviceId: UDID },
+    async (name) => {
+      offered.push(name);
+      return "/Users/me/Downloads/shot.png";
+    },
+  );
   assert.deepEqual(offered, ["iPhone-17-Pro-2026-10-08-093000.png"]);
   assert.deepEqual(saved, { status: "saved", path: "/Users/me/Downloads/shot.png" });
-  assert.deepEqual([...(h.files.get("/Users/me/Downloads/shot.png") as Uint8Array)], [0x89, 0x50, 0x4e, 0x47]);
+  assert.deepEqual(
+    [...(h.files.get("/Users/me/Downloads/shot.png") as Uint8Array)],
+    [0x89, 0x50, 0x4e, 0x47],
+  );
   assert.equal(h.features.isSavedPath("/Users/me/Downloads/shot.png"), true);
-  assert.deepEqual(await h.features.saveScreenshot({ hostId: "local", deviceId: UDID }, async () => null), {
-    status: "cancelled",
-  });
+  assert.deepEqual(
+    await h.features.saveScreenshot({ hostId: "local", deviceId: UDID }, async () => null),
+    {
+      status: "cancelled",
+    },
+  );
 });
 
 test("a framed 3D screenshot saves the renderer's image under a distinct name and can be revealed", async () => {
   const h = harness();
   const offered: string[] = [];
   const png = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1, 2, 3]);
-  const saved = await h.features.saveFramedScreenshot({ hostId: "local", deviceId: UDID }, png, async (name) => {
-    offered.push(name);
-    return "/Users/me/Downloads/framed.png";
-  });
+  const saved = await h.features.saveFramedScreenshot(
+    { hostId: "local", deviceId: UDID },
+    png,
+    async (name) => {
+      offered.push(name);
+      return "/Users/me/Downloads/framed.png";
+    },
+  );
   assert.deepEqual(offered, ["iPhone-17-Pro-framed-2026-10-08-093000.png"]);
   assert.deepEqual(saved, { status: "saved", path: "/Users/me/Downloads/framed.png" });
   assert.deepEqual([...(h.files.get("/Users/me/Downloads/framed.png") as Uint8Array)], [...png]);
   assert.equal(h.features.isSavedPath("/Users/me/Downloads/framed.png"), true);
-  assert.deepEqual(await h.features.saveFramedScreenshot({ hostId: "local", deviceId: UDID }, png, async () => null), {
-    status: "cancelled",
-  });
+  assert.deepEqual(
+    await h.features.saveFramedScreenshot(
+      { hostId: "local", deviceId: UDID },
+      png,
+      async () => null,
+    ),
+    {
+      status: "cancelled",
+    },
+  );
 });
 
 test("quit kills a recorder that ignores SIGINT once its deadline passes, and deletes the recording", async () => {
@@ -332,7 +379,11 @@ test("quit kills a recorder that ignores SIGINT once its deadline passes, and de
 
   expire();
   await quitting;
-  assert.deepEqual(h.children[0]!.signals, ["SIGINT", "SIGKILL"], "the deadline force-kills the recorder");
+  assert.deepEqual(
+    h.children[0]!.signals,
+    ["SIGINT", "SIGKILL"],
+    "the deadline force-kills the recorder",
+  );
   assert.deepEqual(h.features.recordings(), []);
   assert.equal(h.files.size, 0);
 });

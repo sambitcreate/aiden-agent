@@ -63,7 +63,8 @@ export function parseBotRoutineSchedule(value: unknown): BotRoutineSchedule {
     case "weekly": {
       exactKeys(record, ["kind", "days", "time"]);
       parseBotRoutineTime(record.time);
-      if (!Array.isArray(record.days) || record.days.length === 0 || record.days.length > 7) invalid();
+      if (!Array.isArray(record.days) || record.days.length === 0 || record.days.length > 7)
+        invalid();
       const days = new Set<number>();
       for (const day of record.days) {
         if (typeof day !== "number" || !Number.isInteger(day) || day < 0 || day > 6) invalid();

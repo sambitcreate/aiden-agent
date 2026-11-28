@@ -33,7 +33,10 @@ test("classifies authority drift as access_changed", () => {
   assert.equal(failure.code, "model_changed");
 
   // Precedence: the authority classification wins over a provider message.
-  const both = classifyBotRoutineFailure({ authority: "capability_changed", detail: "503 Service Unavailable" });
+  const both = classifyBotRoutineFailure({
+    authority: "capability_changed",
+    detail: "503 Service Unavailable",
+  });
   assert.equal(both.kind, "access_changed");
   assert.equal(both.code, "capability_changed");
 });
@@ -44,7 +47,10 @@ test("classifies a missing model as model_setup", () => {
   assert.equal(failure.code, "needs_model");
 
   // An exhausted account cannot run the routine either.
-  const quota = classifyBotRoutineFailure({ reason: "model_error", detail: "insufficient_quota: billing required" });
+  const quota = classifyBotRoutineFailure({
+    reason: "model_error",
+    detail: "insufficient_quota: billing required",
+  });
   assert.equal(quota.kind, "model_setup");
   assert.equal(quota.code, "quota");
 });
@@ -80,7 +86,12 @@ test("a stored failure must carry a known kind", () => {
   assert.equal(parseBotRoutineFailure({ kind: "other" }), undefined);
   assert.equal(parseBotRoutineFailure("temporary"), undefined);
   assert.deepEqual(
-    parseBotRoutineFailure({ kind: "tool_error", code: "claim_check", detail: "x".repeat(2_000), toolName: "read" }),
+    parseBotRoutineFailure({
+      kind: "tool_error",
+      code: "claim_check",
+      detail: "x".repeat(2_000),
+      toolName: "read",
+    }),
     {
       kind: "tool_error",
       code: "claim_check",

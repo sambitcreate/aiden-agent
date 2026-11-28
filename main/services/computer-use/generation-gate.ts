@@ -65,23 +65,26 @@ export async function cancelComputerUseAndSettle(input: {
   timeoutMs: number;
 }): Promise<void> {
   input.gate.close();
-  const entries = [...input.initializations(), ...input.active()]
-    .filter(([, entry]) => entry.computerUseActivated === true && entry.computerUse !== undefined);
+  const entries = [...input.initializations(), ...input.active()].filter(
+    ([, entry]) => entry.computerUseActivated === true && entry.computerUse !== undefined,
+  );
   const ids = new Set(entries.map(([id]) => id));
   for (const id of ids) input.cancel(id);
   let draining = true;
   let failed = false;
-  const drain = Promise.allSettled(entries.flatMap(([, entry]) => [
-    Promise.resolve().then(() => entry.computerUse!.closeAndSettle()),
-    ...(entry.completion ? [entry.completion] : []),
-  ])).then((results) => {
+  const drain = Promise.allSettled(
+    entries.flatMap(([, entry]) => [
+      Promise.resolve().then(() => entry.computerUse!.closeAndSettle()),
+      ...(entry.completion ? [entry.completion] : []),
+    ]),
+  ).then((results) => {
     failed = results.some((result) => result.status === "rejected");
     draining = false;
   });
   await waitForWorkspaceGenerationSettlement({
-    completions: () => draining ? [drain] : [],
-    isBusy: () => draining || [...ids].some((id) =>
-      input.initializations().has(id) || input.active().has(id)),
+    completions: () => (draining ? [drain] : []),
+    isBusy: () =>
+      draining || [...ids].some((id) => input.initializations().has(id) || input.active().has(id)),
     timeoutMs: input.timeoutMs,
     timeoutMessage: "Computer Use has not stopped yet. The model was not removed. Try again.",
   });

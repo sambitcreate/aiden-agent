@@ -15,6 +15,8 @@ export function registerPeerIntentHandlers<Event>(dependencies: {
   });
   dependencies.handle("remote:peerIntentsRemove", (event, hostId, chatId, key) => {
     dependencies.active(event);
-    return dependencies.store().remove(hostIdentifier(hostId), hostIdentifier(chatId), hostIdentifier(key));
+    return dependencies
+      .store()
+      .remove(hostIdentifier(hostId), hostIdentifier(chatId), hostIdentifier(key));
   });
 }

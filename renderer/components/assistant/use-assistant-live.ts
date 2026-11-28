@@ -1,5 +1,10 @@
 import * as React from "react";
-import { captureLiveMicrophone, LiveAudioDeviceError, readLiveAudioDevices, routeLiveAudioOutput } from "../../lib/live-audio-devices";
+import {
+  captureLiveMicrophone,
+  LiveAudioDeviceError,
+  readLiveAudioDevices,
+  routeLiveAudioOutput,
+} from "../../lib/live-audio-devices";
 import { playLiveConnectionCue } from "../../lib/dictation-sounds";
 import { assistantLiveApi, computerUseApi } from "../../lib/ipc";
 import { useAppCapabilities } from "../../lib/app-capabilities";
@@ -276,7 +281,9 @@ export class PcmPlayer {
 
   /** True when nothing is queued, held back or playing. */
   get idle(): boolean {
-    return !this.source && !this.starting && this.queue.queuedChunks === 0 && !this.stretcher.pending;
+    return (
+      !this.source && !this.starting && this.queue.queuedChunks === 0 && !this.stretcher.pending
+    );
   }
 
   /** Counts every flush, including a resumption's. */
@@ -425,7 +432,13 @@ export class PcmPlayer {
       }
     }
     const samples = this.nextSamples();
-    if (!samples || samples.length === 0 || epoch !== this.epoch || this.paused || context !== this.context) {
+    if (
+      !samples ||
+      samples.length === 0 ||
+      epoch !== this.epoch ||
+      this.paused ||
+      context !== this.context
+    ) {
       this.starting = false;
       if (!samples && epoch === this.epoch && this.stretcher.pending) this.armStarvation();
       return;
@@ -469,7 +482,11 @@ interface AssistantLiveApi {
   bindDisplay?(sourceId?: string): Promise<string | null>;
   releaseDisplay?(bindingId: string): Promise<boolean>;
   sendFrame?(sessionId: string, frame: Uint8Array): Promise<boolean>;
-  toolResult?(sessionId: string, requestId: string, response: Record<string, unknown>): Promise<boolean>;
+  toolResult?(
+    sessionId: string,
+    requestId: string,
+    response: Record<string, unknown>,
+  ): Promise<boolean>;
   note?(sessionId: string, text: string, options?: { awaitDelivery?: boolean }): Promise<boolean>;
   onEvent(handler: (event: AssistantLiveRendererEvent) => void): () => void;
 }
@@ -493,9 +510,7 @@ export interface AssistantLiveDependencies {
   prepareAudioSession?(signal: AbortSignal): Promise<void>;
   playConnectionCue?(kind: "connected" | "disconnected"): Promise<void>;
   getDisplayMedia?(): Promise<DisplayMediaStream>;
-  createDisplayFrameSource?(
-    stream: DisplayMediaStream,
-  ): Promise<GeminiLiveDisplayFrameSource>;
+  createDisplayFrameSource?(stream: DisplayMediaStream): Promise<GeminiLiveDisplayFrameSource>;
   computerUse: {
     status(): Promise<ComputerUseStatus>;
     setEnabled?(enabled: boolean): Promise<ComputerUseStatus>;
@@ -537,8 +552,7 @@ function defaultDependencies(geminiLive: boolean): AssistantLiveDependencies {
         console.info("[aiden-live] cue-failed");
       }
     },
-    getDisplayMedia: () =>
-      navigator.mediaDevices.getDisplayMedia({ video: true, audio: false }),
+    getDisplayMedia: () => navigator.mediaDevices.getDisplayMedia({ video: true, audio: false }),
     createDisplayFrameSource: async (stream) => {
       const video = document.createElement("video");
       video.muted = true;
@@ -686,26 +700,31 @@ export function useAssistantLiveWithDependencies(
   // began. Speech that talks over a reply is followed by that reply's
   // leftovers (a late caption, a last chunk, its turn end), so such an
   // utterance ends only on Google's finished mark or the quiet timer.
-  const pendingUtterance = React.useRef<
-    { receiptId: number; startedAt: number; text: string; overReply: boolean } | null
-  >(null);
+  const pendingUtterance = React.useRef<{
+    receiptId: number;
+    startedAt: number;
+    text: string;
+    overReply: boolean;
+  } | null>(null);
   /** Bus start mark of the utterance under way, taken on its first input caption, interim or final. */
   const utteranceStartedAt = React.useRef<number | null>(null);
   /** Speech onsets heard at the microphone, which come before any caption. */
-  const [speechOnsets] = React.useState(() => new LiveSpeechOnsets(() => liveSessionBus.beginVoiceInput()));
+  const [speechOnsets] = React.useState(
+    () => new LiveSpeechOnsets(() => liveSessionBus.beginVoiceInput()),
+  );
   /** Reads the microphone's capture clock (its AudioContext's time) while capture runs. */
   const captureClock = React.useRef<(() => number) | null>(null);
   React.useEffect(
-    () => liveSessionBus.onVoiceInputFence((fence) => speechOnsets.fenced(fence, captureClock.current?.())),
+    () =>
+      liveSessionBus.onVoiceInputFence((fence) =>
+        speechOnsets.fenced(fence, captureClock.current?.()),
+      ),
     [speechOnsets],
   );
   /** Whether Live's latest reply is still producing output, including a reply the user cut off. */
   const liveReplyOpen = React.useRef(false);
   const utteranceQuietTimer = React.useRef<ReturnType<typeof setTimeout> | null>(null);
-  const latestVoiceApprovalReceiptId = React.useCallback(
-    () => voiceApprovalReceiptId.current,
-    [],
-  );
+  const latestVoiceApprovalReceiptId = React.useCallback(() => voiceApprovalReceiptId.current, []);
   const retainVoiceApprovalReceiptsAfter = React.useCallback((receiptId: number | null) => {
     voiceApprovalReceiptRetentionFloor.current = receiptId;
   }, []);
@@ -782,8 +801,9 @@ export function useAssistantLiveWithDependencies(
   const [screenActive, setScreenActive] = React.useState(false);
   const [screenBusy, setScreenBusy] = React.useState(false);
   const [screenError, setScreenError] = React.useState<string | null>(null);
-  const [screenSourceChoices, setScreenSourceChoices] =
-    React.useState<readonly LiveDisplaySourceSummary[] | null>(null);
+  const [screenSourceChoices, setScreenSourceChoices] = React.useState<
+    readonly LiveDisplaySourceSummary[] | null
+  >(null);
   const screenPickResolver = React.useRef<((sourceId: string | null) => void) | null>(null);
   const pickScreenSource = React.useCallback((sourceId: string | null) => {
     const resolve = screenPickResolver.current;
@@ -879,8 +899,7 @@ export function useAssistantLiveWithDependencies(
           ? undefined
           : next.find(
               (candidate) =>
-                candidate.id > floor &&
-                assistantLiveVoiceApprovalDecision(candidate.text) !== null,
+                candidate.id > floor && assistantLiveVoiceApprovalDecision(candidate.text) !== null,
             );
       const tail = next.slice(protectedReceipt ? -255 : -256);
       return protectedReceipt && !tail.some((candidate) => candidate.id === protectedReceipt.id)
@@ -944,7 +963,8 @@ export function useAssistantLiveWithDependencies(
         endUtterance();
       }
       if (liveOutput) liveReplyOpen.current = true;
-      else if (event.type === "turn" && event.state === "turn_complete") liveReplyOpen.current = false;
+      else if (event.type === "turn" && event.state === "turn_complete")
+        liveReplyOpen.current = false;
       else if (event.type === "playback_flush" && pendingUtterance.current) {
         pendingUtterance.current.overReply = true;
       }
@@ -1036,7 +1056,14 @@ export function useAssistantLiveWithDependencies(
       void dependencies.api.stop().catch(() => undefined);
       releaseDisplayAuthority();
     };
-  }, [acceptEvent, dependencies.api, dependencies.geminiLive, discardUtterance, releaseDisplayAuthority, teardownMedia]);
+  }, [
+    acceptEvent,
+    dependencies.api,
+    dependencies.geminiLive,
+    discardUtterance,
+    releaseDisplayAuthority,
+    teardownMedia,
+  ]);
 
   React.useEffect(() => {
     const generation = ++availabilityGeneration.current;
@@ -1091,7 +1118,8 @@ export function useAssistantLiveWithDependencies(
       setComputerUseStatus(null);
       return;
     }
-    void dependencies.computerUse.status()
+    void dependencies.computerUse
+      .status()
       .then((status) => {
         if (!mounted.current || computerUseGeneration.current !== generation) return;
         setComputerUseStatus(status);
@@ -1106,10 +1134,7 @@ export function useAssistantLiveWithDependencies(
     return () => {
       computerUseGeneration.current += 1;
     };
-  }, [
-    dependencies.computerUse,
-    dependencies.geminiLive,
-  ]);
+  }, [dependencies.computerUse, dependencies.geminiLive]);
 
   const setComputerUse = React.useCallback(
     async (enabled: boolean) => {
@@ -1163,11 +1188,7 @@ export function useAssistantLiveWithDependencies(
     } finally {
       if (mounted.current) setComputerUseBusy(false);
     }
-  }, [
-    computerUseBusy,
-    computerUseStatus,
-    dependencies.computerUse,
-  ]);
+  }, [computerUseBusy, computerUseStatus, dependencies.computerUse]);
 
   const releaseScreen = React.useCallback(() => {
     stopScreenCapture();
@@ -1192,7 +1213,9 @@ export function useAssistantLiveWithDependencies(
       // On Linux under X11 the person picks from Aiden's own list first; under
       // Wayland the desktop's portal picks during capture; macOS lists nothing.
       let sourceId: string | null = null;
-      const listing = (await dependencies.api.displaySources?.()) ?? { mode: "unavailable" as const };
+      const listing = (await dependencies.api.displaySources?.()) ?? {
+        mode: "unavailable" as const,
+      };
       if (!mounted.current || screenPickerGeneration.current !== generation) return;
       if (listing.mode === "list") {
         if (listing.sources.length === 0) {
@@ -1259,7 +1282,8 @@ export function useAssistantLiveWithDependencies(
         setScreenError(
           name === "AbortError" || name === "NotAllowedError"
             ? null
-            : cause instanceof Error && cause.message === "Aiden couldn’t find a screen or window to share."
+            : cause instanceof Error &&
+                cause.message === "Aiden couldn’t find a screen or window to share."
               ? cause.message
               : "Aiden could not open the screen picker. Try again.",
         );
@@ -1313,10 +1337,7 @@ export function useAssistantLiveWithDependencies(
             inFlight = false;
           }
         };
-        const timer = setInterval(
-          () => void sendOnce(),
-          GEMINI_LIVE_FRAME_INTERVAL_MS,
-        );
+        const timer = setInterval(() => void sendOnce(), GEMINI_LIVE_FRAME_INTERVAL_MS);
         screenPumpRef.current = { sessionId, timer, source };
         setScreenActive(true);
         void sendOnce();
@@ -1517,9 +1538,14 @@ export function useAssistantLiveWithDependencies(
     setMicrophoneMuted(false);
     try {
       await dependencies.prepareAudioSession?.(setupAbort.signal);
-      if (setupAbort.signal.aborted || !mounted.current || operationGeneration.current !== generation) return;
+      if (
+        setupAbort.signal.aborted ||
+        !mounted.current ||
+        operationGeneration.current !== generation
+      )
+        return;
       const computerUseAuthorization = computerUseEnabled
-        ? (await dependencies.api.authorizeComputerUse?.()) ?? null
+        ? ((await dependencies.api.authorizeComputerUse?.()) ?? null)
         : null;
       if (
         computerUseEnabled &&
@@ -1683,7 +1709,10 @@ export function useAssistantLiveWithDependencies(
 
   const availabilityDetail = assistantLiveAvailabilityDetail(snapshot);
   const microphonePermissionReady = ["granted", "not-determined"].includes(microphonePermission);
-  const microphonePermissionDetail = assistantLiveMicrophonePermissionDetail(microphonePermission, dependencies.platform);
+  const microphonePermissionDetail = assistantLiveMicrophonePermissionDetail(
+    microphonePermission,
+    dependencies.platform,
+  );
   // Computer Use is an optional extra: without it Live still talks, uses the
   // open chat and moves through Aiden's own window. Linux never has it.
   const setupComplete = snapshot.available && microphonePermission === "granted";
@@ -1766,7 +1795,14 @@ export function useAssistantLive(
       availabilityRefreshToken: providers.dataUpdatedAt,
       ordinaryBusyReason,
     }),
-    [audioDependencies, geminiLive, ordinaryBusyReason, platform, providers.dataUpdatedAt, providers.fetchStatus],
+    [
+      audioDependencies,
+      geminiLive,
+      ordinaryBusyReason,
+      platform,
+      providers.dataUpdatedAt,
+      providers.fetchStatus,
+    ],
   );
   return useAssistantLiveWithDependencies(dependencies);
 }
@@ -1774,7 +1810,8 @@ export function useAssistantLive(
 /** The microphone's full input latency in seconds when the browser reports one, else 0. A long delay only widens the fence. */
 function reportedInputLatencySeconds(stream: MediaStream): number {
   try {
-    const latency = (stream.getTracks()[0]?.getSettings?.() as { latency?: unknown } | undefined)?.latency;
+    const latency = (stream.getTracks()[0]?.getSettings?.() as { latency?: unknown } | undefined)
+      ?.latency;
     return typeof latency === "number" && Number.isFinite(latency) && latency > 0 ? latency : 0;
   } catch {
     return 0;

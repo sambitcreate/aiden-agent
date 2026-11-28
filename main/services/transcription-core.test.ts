@@ -106,7 +106,11 @@ test("transcription deadlines grow with audio size up to a cap", () => {
 });
 
 test("Gemini batch requests carry a language hint only when one is chosen", () => {
-  const hinted = buildGeminiTranscriptionRequest({ audioBase64: "AA==", mimeType: "audio/wav", language: "de" });
+  const hinted = buildGeminiTranscriptionRequest({
+    audioBase64: "AA==",
+    mimeType: "audio/wav",
+    language: "de",
+  });
   assert.deepEqual(hinted.generation_config.transcription_config, {
     mode: { type: "verbatim" },
     language_codes: ["de"],
@@ -128,7 +132,11 @@ test("OpenAI transcription forms send the language field only when one is chosen
   assert.equal(file.type, "audio/ogg");
   assert.deepEqual([...new Uint8Array(await file.arrayBuffer())], [1, 2, 3]);
 
-  const automatic = buildOpenAITranscriptionForm({ bytes: new Uint8Array([1]), mimeType: "", model: "whisper-1" });
+  const automatic = buildOpenAITranscriptionForm({
+    bytes: new Uint8Array([1]),
+    mimeType: "",
+    model: "whisper-1",
+  });
   assert.equal(automatic.has("language"), false);
   assert.equal((automatic.get("file") as File).type, "audio/webm");
 });

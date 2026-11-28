@@ -23,7 +23,10 @@ export interface DeviceFeatureHandlerDeps {
   owner(event: DeviceIpcEvent): RendererDocumentOwner;
   features(): DeviceFeatures;
   /** The save dialog for the calling window, starting in Downloads. */
-  chooseSavePath(event: DeviceIpcEvent, options: { defaultName: string; kind: "png" | "mp4" }): Promise<string | null>;
+  chooseSavePath(
+    event: DeviceIpcEvent,
+    options: { defaultName: string; kind: "png" | "mp4" },
+  ): Promise<string | null>;
   revealInFinder(file: string): void;
 }
 
@@ -93,7 +96,14 @@ export function registerDeviceFeatureHandlersWith(deps: DeviceFeatureHandlerDeps
   };
 
   const guarded =
-    <T>(run: (features: DeviceFeatures, args: unknown[], event: DeviceIpcEvent, owner: RendererDocumentOwner) => Promise<T>) =>
+    <T>(
+      run: (
+        features: DeviceFeatures,
+        args: unknown[],
+        event: DeviceIpcEvent,
+        owner: RendererDocumentOwner,
+      ) => Promise<T>,
+    ) =>
     async (event: DeviceIpcEvent, ...args: unknown[]): Promise<T> => {
       if (!deps.enabled()) throw new Error("Simulator devices are not enabled.");
       const owner = deps.owner(event);
@@ -132,7 +142,8 @@ export function registerDeviceFeatureHandlersWith(deps: DeviceFeatureHandlerDeps
     "devices:recording-start",
     guarded(async (features, [input], _event, owner) => {
       const request = requireRecord(input);
-      if (!isDeviceChatId(request.chatId)) throw new Error("A valid chat is required for a recording.");
+      if (!isDeviceChatId(request.chatId))
+        throw new Error("A valid chat is required for a recording.");
       subscribe(owner, features);
       return features.startRecording(request.chatId, requireTarget(request));
     }),
@@ -170,7 +181,11 @@ export function registerDeviceFeatureHandlersWith(deps: DeviceFeatureHandlerDeps
     guarded(async (features, [input], event, owner) => {
       const request = requireRecord(input);
       const target = requireSaveTarget(request);
-      return features.saveFramedScreenshot(target, requirePng(request.png), chooser(event, owner, "png"));
+      return features.saveFramedScreenshot(
+        target,
+        requirePng(request.png),
+        chooser(event, owner, "png"),
+      );
     }),
   );
   deps.handle(

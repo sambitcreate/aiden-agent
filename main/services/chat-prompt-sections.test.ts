@@ -12,15 +12,20 @@ import { InMemorySessionRepo } from "./pi-session-repository-port.js";
 import type { PiDiscoverableTool } from "./pi-tool-discovery.js";
 
 async function journal() {
-  return createPiSessionPort(await new InMemorySessionRepo().create({ id: `sections-${Math.random()}` }));
+  return createPiSessionPort(
+    await new InMemorySessionRepo().create({ id: `sections-${Math.random()}` }),
+  );
 }
 
 function serverTool(serverId: string, label: string, description: string): PiDiscoverableTool {
-  return markMcpAgentTool({
-    name: `${serverId}_search`,
-    description: `Search ${label}.`,
-    discovery: { namespace: `mcp:${serverId}`, label, alias: serverId, description },
-  } as PiDiscoverableTool, { serverId, toolName: "search" });
+  return markMcpAgentTool(
+    {
+      name: `${serverId}_search`,
+      description: `Search ${label}.`,
+      discovery: { namespace: `mcp:${serverId}`, label, alias: serverId, description },
+    } as PiDiscoverableTool,
+    { serverId, toolName: "search" },
+  );
 }
 
 const declared = new Set(["codemode"]);
@@ -33,7 +38,10 @@ async function generation(
 ) {
   let reads = 0;
   const section = createChatMcpServersSection({
-    inventory: () => { reads += 1; return inventory; },
+    inventory: () => {
+      reads += 1;
+      return inventory;
+    },
     declared,
     journaled: journaledMcpServersSection(await port.getBranch()),
     connectorsWithheld,
@@ -42,7 +50,10 @@ async function generation(
   await section.record(port);
   // The section text the generation's system carries ("" for none).
   const shown = prepared.messages
-    .map((message) => (message as { sections?: Record<string, string> }).sections?.["mcp-servers"] ?? "")
+    .map(
+      (message) =>
+        (message as { sections?: Record<string, string> }).sections?.["mcp-servers"] ?? "",
+    )
     .join("");
   return { shown, turnNote: section.turnNote, reads };
 }
@@ -64,7 +75,10 @@ test("a follow-up that withholds connectors shows the section the chat last show
 
 test("a section is journaled only when it changes, and the latest one wins", async () => {
   const port = await journal();
-  const count = async () => (await port.getBranch()).filter((entry) => entry.type === "custom" && entry.customType === MCP_SERVERS_SECTION_ENTRY).length;
+  const count = async () =>
+    (await port.getBranch()).filter(
+      (entry) => entry.type === "custom" && entry.customType === MCP_SERVERS_SECTION_ENTRY,
+    ).length;
   await generation(port, [linear]);
   await generation(port, [linear]);
   assert.equal(await count(), 1, "an unchanged section is not journaled again");
@@ -92,10 +106,17 @@ test("a chat with nothing journaled withholds an empty section and no note", asy
 test("a compaction keeps the journaled section; malformed or oversized entries are ignored", async () => {
   const port = await journal();
   const attended = await generation(port, [linear]);
-  await port.appendCompaction({ id: "cut", summary: "earlier", retainedTail: [], tokensBefore: 10 });
+  await port.appendCompaction({
+    id: "cut",
+    summary: "earlier",
+    retainedTail: [],
+    tokensBefore: 10,
+  });
   await port.appendCustomEntry(MCP_SERVERS_SECTION_ENTRY, { text: 42 });
   await port.appendCustomEntry(MCP_SERVERS_SECTION_ENTRY, {
-    text: "x".repeat(MCP_SERVERS_SECTION_LIMITS.totalBytes + MCP_SERVERS_SECTION_LIMITS.guidanceBytes + 1),
+    text: "x".repeat(
+      MCP_SERVERS_SECTION_LIMITS.totalBytes + MCP_SERVERS_SECTION_LIMITS.guidanceBytes + 1,
+    ),
   });
   const followUp = await generation(port, [], true);
   assert.equal(followUp.shown, attended.shown);

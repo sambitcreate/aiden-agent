@@ -132,8 +132,8 @@ test("unavailable OS encryption refuses writes and reads without leaking the key
 
   await assert.rejects(
     h.piCredentialStore.modify("anthropic", async () => ({ type: "api_key", key: CHAT_SENTINEL })),
-    (error: Error) => /Secure storage is unavailable/.test(error.message) &&
-      !error.message.includes(CHAT_SENTINEL),
+    (error: Error) =>
+      /Secure storage is unavailable/.test(error.message) && !error.message.includes(CHAT_SENTINEL),
   );
   await assert.rejects(h.piCredentialStore.read("openrouter"), /Secure storage is unavailable/);
   assert.equal(await diskContents(h.userData), before);

@@ -11,8 +11,15 @@ import {
 } from "./provision.js";
 import type { BotComputerGuestCommandResult } from "./types.js";
 
-const HOST_KEY = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIKfakeHostKeyForAidenBotComputerTests0123456789 root@guest";
-const ok: BotComputerGuestCommandResult = { exitCode: 0, stdout: "", stderr: "", truncated: false, timedOut: false };
+const HOST_KEY =
+  "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIKfakeHostKeyForAidenBotComputerTests0123456789 root@guest";
+const ok: BotComputerGuestCommandResult = {
+  exitCode: 0,
+  stdout: "",
+  stderr: "",
+  truncated: false,
+  timedOut: false,
+};
 
 interface Event {
   channel: "lume_ssh" | "guest_ssh" | "lume" | "store" | "known_hosts";
@@ -24,10 +31,15 @@ interface Event {
 function context(events: Event[], overrides: Partial<ProvisionContext> = {}): ProvisionContext {
   let counter = 0;
   return {
-    publicKey: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAidenKeyForBotComputerProvisioningTests012345678",
+    publicKey:
+      "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAidenKeyForBotComputerProvisioningTests012345678",
     lumeSsh: async (command) => {
       events.push({ channel: "lume_ssh", command });
-      return { exitCode: 0, stdout: command.includes("ssh_host_ed25519_key.pub") ? `${HOST_KEY}\n` : "", stderr: "" };
+      return {
+        exitCode: 0,
+        stdout: command.includes("ssh_host_ed25519_key.pub") ? `${HOST_KEY}\n` : "",
+        stderr: "",
+      };
     },
     guestSsh: async (command, options) => {
       events.push({ channel: "guest_ssh", command, stdin: options.stdin });
@@ -51,7 +63,10 @@ test("the steps run in order: key and host key over lume ssh, the rest over Aide
   const events: Event[] = [];
   const steps: string[] = [];
   await provisionBase(context(events), { onStep: (step) => steps.push(step) });
-  assert.deepEqual(steps, BASE_PROVISION_STEPS.map((step) => step.id));
+  assert.deepEqual(
+    steps,
+    BASE_PROVISION_STEPS.map((step) => step.id),
+  );
   assert.deepEqual(steps, [
     "install_key",
     "capture_host_key",
@@ -66,13 +81,33 @@ test("the steps run in order: key and host key over lume ssh, the rest over Aide
   ]);
   assert.deepEqual(
     events.map((event) => event.channel),
-    ["lume_ssh", "lume_ssh", "known_hosts", "store", "guest_ssh", "guest_ssh", "guest_ssh", "guest_ssh", "guest_ssh", "lume"],
+    [
+      "lume_ssh",
+      "lume_ssh",
+      "known_hosts",
+      "store",
+      "guest_ssh",
+      "guest_ssh",
+      "guest_ssh",
+      "guest_ssh",
+      "guest_ssh",
+      "lume",
+    ],
   );
   assert.ok(events[0]?.command?.includes("authorized_keys"));
   assert.equal(events[2]?.value, HOST_KEY);
-  assert.match(events.find((event) => event.command?.includes("sshd_config.d"))?.command ?? "", /PasswordAuthentication no/u);
-  assert.match(events.find((event) => event.command?.includes("SoftwareUpdate"))?.command ?? "", /AutomaticDownload -bool false/u);
-  assert.match(events.find((event) => event.command?.includes("My Shared Files"))?.command ?? "", /\$HOME\/Shared/u);
+  assert.match(
+    events.find((event) => event.command?.includes("sshd_config.d"))?.command ?? "",
+    /PasswordAuthentication no/u,
+  );
+  assert.match(
+    events.find((event) => event.command?.includes("SoftwareUpdate"))?.command ?? "",
+    /AutomaticDownload -bool false/u,
+  );
+  assert.match(
+    events.find((event) => event.command?.includes("My Shared Files"))?.command ?? "",
+    /\$HOME\/Shared/u,
+  );
 });
 
 test("the new password is stored before the guest changes, travels only on stdin, and unlocks sudo afterwards", async () => {
@@ -82,7 +117,8 @@ test("the new password is stored before the guest changes, travels only on stdin
   const rotate = events.findIndex((event) => event.command?.includes("dscl"));
   assert.ok(events.findIndex((event) => event.channel === "store") < rotate);
   assert.ok(events[rotate]?.stdin?.startsWith(`lume\n${stored}\n`));
-  for (const event of events) assert.equal(event.command?.includes(stored) ?? false, false, "never in a command line");
+  for (const event of events)
+    assert.equal(event.command?.includes(stored) ?? false, false, "never in a command line");
   const sudoAfter = events.slice(rotate + 1).filter((event) => event.command?.includes("sudo"));
   assert.ok(sudoAfter.length >= 3);
   for (const event of sudoAfter) assert.equal(event.stdin?.split("\n")[0], stored);
@@ -97,7 +133,11 @@ test("the guest driver installs and waits for its grants with the rotated passwo
         install: async (password) => void driver.push(`install:${password}`),
         grant: async (password) => {
           driver.push(`grant:${password}`);
-          assert.equal(events.some((event) => event.channel === "lume"), false, "the base is still running");
+          assert.equal(
+            events.some((event) => event.channel === "lume"),
+            false,
+            "the base is still running",
+          );
         },
       },
     }),
@@ -120,7 +160,11 @@ test("a failing step stops provisioning there", async () => {
     ),
     /harden_sshd/u,
   );
-  assert.equal(events.some((event) => event.channel === "lume"), false, "no later step ran");
+  assert.equal(
+    events.some((event) => event.channel === "lume"),
+    false,
+    "no later step ran",
+  );
 });
 
 test("the restore image is deleted only after the base is complete", async () => {

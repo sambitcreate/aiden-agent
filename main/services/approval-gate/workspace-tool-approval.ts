@@ -37,8 +37,11 @@ const WRITE_FILE_TOOL = "write_file";
  * itself already asks every time (it is paid and explicit-only).
  */
 export function fileWriteRuleTool(toolName: string, args: unknown): string | undefined {
-  const savesFile = toolName === GENERATE_IMAGE_TOOL &&
-    args !== null && typeof args === "object" && typeof (args as { savePath?: unknown }).savePath === "string";
+  const savesFile =
+    toolName === GENERATE_IMAGE_TOOL &&
+    args !== null &&
+    typeof args === "object" &&
+    typeof (args as { savePath?: unknown }).savePath === "string";
   return savesFile ? WRITE_FILE_TOOL : undefined;
 }
 
@@ -140,7 +143,8 @@ export function workspaceMacClass(toolName: string, args: unknown): MacGrantClas
   // A background job runs a shell command the model chose.
   if (backgroundJobRequiresApproval(toolName, args)) return "shell";
   // A device screenshot with `saveTo` writes a file into the workspace.
-  if (toolName === DEVICE_SCREENSHOT_TOOL && deviceToolRequiresApproval(toolName, args)) return "files";
+  if (toolName === DEVICE_SCREENSHOT_TOOL && deviceToolRequiresApproval(toolName, args))
+    return "files";
   return undefined;
 }
 
@@ -154,10 +158,12 @@ export function workspaceGateAction(input: WorkspaceToolApprovalInput): GateActi
   const macClass = workspaceMacClass(toolName, args);
   // The legacy Full access already allowed shell and files; a chosen mode
   // allows them only once "Allowed in this workspace".
-  const macGranted = macClass !== undefined &&
+  const macGranted =
+    macClass !== undefined &&
     (input.approval ? input.approval.macGrants.has(macClass) : input.permission !== "ask");
   const consequential =
-    (input.connector !== undefined && connectorToolEffect(input.connector.remoteName, input.connector) === "write") ||
+    (input.connector !== undefined &&
+      connectorToolEffect(input.connector.remoteName, input.connector) === "write") ||
     APPROVAL_TOOL_NAMES.has(toolName) ||
     BROWSER_MUTATION_TOOL_NAMES.has(toolName) ||
     deviceToolRequiresApproval(toolName, args) ||
@@ -175,17 +181,20 @@ export function workspaceGateAction(input: WorkspaceToolApprovalInput): GateActi
   const memory = toolName === REMEMBER_MEMORY_TOOL_NAME || toolName === FORGET_MEMORY_TOOL_NAME;
   // Only the parent's plain workspace tools can be remembered, and never for
   // Bot-bound turns whose authority is policy-owned.
-  const ruleTarget = !input.botBound && APPROVAL_TOOL_NAMES.has(toolName)
-    ? toolApprovalRuleTarget(toolName, args, input.workspaceId)
-    : undefined;
+  const ruleTarget =
+    !input.botBound && APPROVAL_TOOL_NAMES.has(toolName)
+      ? toolApprovalRuleTarget(toolName, args, input.workspaceId)
+      : undefined;
   // A rules file that can't be read may hide a Block on any tool.
-  const unreadableAsks = input.pageRule === "unreadable" && toolName !== ASK_USER_QUESTION_TOOL_NAME;
+  const unreadableAsks =
+    input.pageRule === "unreadable" && toolName !== ASK_USER_QUESTION_TOOL_NAME;
   return {
     toolName,
     ...(macClass ? { mac: true, macClass, ...(macGranted ? { macGranted: true } : {}) } : {}),
     ...(input.newDestination ? { newDestination: true } : {}),
-    ...(input.pageRule === "block" || unreadableAsks ||
-      (input.pageRule && input.pageRule !== "unreadable" && !input.botBound && input.approval)
+    ...(input.pageRule === "block" ||
+    unreadableAsks ||
+    (input.pageRule && input.pageRule !== "unreadable" && !input.botBound && input.approval)
       ? { pageRule: input.pageRule }
       : {}),
     ...(input.judge ? { judge: input.judge } : {}),
@@ -203,7 +212,9 @@ export function workspaceGateAction(input: WorkspaceToolApprovalInput): GateActi
  * enabled and the chat's Computer Use access was granted
  * (`computer-use/access-gate.ts`).
  */
-export function workspaceToolApproval(input: WorkspaceToolApprovalInput): WorkspaceToolApprovalDecision {
+export function workspaceToolApproval(
+  input: WorkspaceToolApprovalInput,
+): WorkspaceToolApprovalDecision {
   const context: GateContext = {
     surface: "workspace",
     access: input.permission,
@@ -218,21 +229,29 @@ export function workspaceToolApproval(input: WorkspaceToolApprovalInput): Worksp
     : undefined;
   switch (decision.outcome) {
     case "block":
-      return { decision: { outcome: "block", reason: decision.reason === "rule" ? "rule" : "hook" } };
+      return {
+        decision: { outcome: "block", reason: decision.reason === "rule" ? "rule" : "hook" },
+      };
     case "delegate":
       return { decision: { outcome: "memory" } };
     case "lookup":
       if (decision.lookup === "judge") return { decision: { outcome: "ask" }, readsJudge: true };
       // Until the remembered approval is read, the call would ask with scopes.
       return {
-        decision: { outcome: "ask", ...(ruleTarget ? { ruleTarget } : {}), ...(action.macClass ? { macGrant: action.macClass } : {}) },
+        decision: {
+          outcome: "ask",
+          ...(ruleTarget ? { ruleTarget } : {}),
+          ...(action.macClass ? { macGrant: action.macClass } : {}),
+        },
         ...(ruleTarget ? { readsRemembered: ruleTarget } : {}),
       };
     case "ask":
       return {
         decision: {
           outcome: "ask",
-          ...((decision.offer === "workspace-scopes" || decision.offer === "mac") && ruleTarget ? { ruleTarget } : {}),
+          ...((decision.offer === "workspace-scopes" || decision.offer === "mac") && ruleTarget
+            ? { ruleTarget }
+            : {}),
           ...(decision.offer === "mac" && action.macClass ? { macGrant: action.macClass } : {}),
         },
       };
@@ -240,7 +259,9 @@ export function workspaceToolApproval(input: WorkspaceToolApprovalInput): Worksp
       return {
         decision: {
           outcome: "allow",
-          ...(decision.via === "remembered" || decision.via === "hook-allow" ? { via: decision.via } : {}),
+          ...(decision.via === "remembered" || decision.via === "hook-allow"
+            ? { via: decision.via }
+            : {}),
         },
       };
     case "hand-off":
@@ -259,7 +280,10 @@ export function workspaceToolApproval(input: WorkspaceToolApprovalInput): Worksp
 export function workspaceAutoWouldJudge(input: WorkspaceToolApprovalInput): boolean {
   if (input.approval?.mode !== "ask" || input.judgeAvailable !== true) return false;
   const { judge: _judge, remembered: _remembered, ...call } = input;
-  return workspaceToolApproval({ ...call, approval: { ...input.approval, mode: "auto" } }).readsJudge === true;
+  return (
+    workspaceToolApproval({ ...call, approval: { ...input.approval, mode: "auto" } }).readsJudge ===
+    true
+  );
 }
 
 /**

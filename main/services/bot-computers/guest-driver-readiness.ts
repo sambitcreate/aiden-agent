@@ -27,7 +27,9 @@ export interface GuestDriverRecord {
 }
 
 function asRecord(value: unknown): Record<string, unknown> | undefined {
-  return value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : undefined;
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : undefined;
 }
 
 function structured(result: unknown): Record<string, unknown> | undefined {
@@ -62,7 +64,8 @@ export async function guestDriverPermissions(
   return {
     accessibility: report?.accessibility === true,
     // A probe that did run and could not capture vetoes the preflight.
-    screenRecording: report?.screen_recording === true && report.screen_recording_capturable !== false,
+    screenRecording:
+      report?.screen_recording === true && report.screen_recording_capturable !== false,
   };
 }
 
@@ -70,17 +73,25 @@ export async function guestDriverPermissions(
  * The readiness probe: the pinned version, both grants, the app list, and one
  * real window capture with pixels. Any failure leaves the base on the VNC lane.
  */
-export async function probeGuestDriver(session: CuaDriverSessionLike, signal?: AbortSignal): Promise<GuestDriverProbe> {
+export async function probeGuestDriver(
+  session: CuaDriverSessionLike,
+  signal?: AbortSignal,
+): Promise<GuestDriverProbe> {
   const call = (name: string, args: Record<string, unknown>) =>
     session.callTool(name, args, { signal, timeoutMs: PROBE_TIMEOUT_MS });
   const permissions = await guestDriverPermissions(session, { prompt: false, signal });
   const health = structured(await call("health_report", {}));
-  if (health?.driver_version !== CUA_DRIVER_VERSION || health.schema_version !== CUA_DRIVER_TOOL_SCHEMA) {
+  if (
+    health?.driver_version !== CUA_DRIVER_VERSION ||
+    health.schema_version !== CUA_DRIVER_TOOL_SCHEMA
+  ) {
     return { ready: false, permissions, reason: "wrong_version" };
   }
-  if (!permissions.accessibility || !permissions.screenRecording) return { ready: false, permissions, reason: "permissions" };
+  if (!permissions.accessibility || !permissions.screenRecording)
+    return { ready: false, permissions, reason: "permissions" };
   const apps = structured(await call("list_apps", {}));
-  if (!Array.isArray(apps?.apps) || apps.apps.length === 0) return { ready: false, permissions, reason: "no_apps" };
+  if (!Array.isArray(apps?.apps) || apps.apps.length === 0)
+    return { ready: false, permissions, reason: "no_apps" };
   const listed = structured(await call("list_windows", { on_screen_only: true }));
   const windows = Array.isArray(listed?.windows) ? listed.windows.map(asRecord) : [];
   for (const window of windows.slice(0, 5)) {

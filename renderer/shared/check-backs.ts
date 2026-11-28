@@ -31,7 +31,11 @@ export interface CheckBackView {
 
 /** "3:10 PM" in `zone` (the host's when omitted). */
 export function checkBackClock(timestamp: number, zone?: string): string {
-  return new Intl.DateTimeFormat("en-US", { timeZone: zone, hour: "numeric", minute: "2-digit" }).format(new Date(timestamp));
+  return new Intl.DateTimeFormat("en-US", {
+    timeZone: zone,
+    hour: "numeric",
+    minute: "2-digit",
+  }).format(new Date(timestamp));
 }
 
 /**

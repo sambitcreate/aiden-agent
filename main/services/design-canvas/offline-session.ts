@@ -28,10 +28,14 @@ const missingFileWatchers = new Map<number, (url: string) => void>();
  * asked for and the scheme answered as missing, until the returned function
  * is called.
  */
-export function watchDesignOfflineMissingFiles(webContentsId: number, onMissing: (url: string) => void): () => void {
+export function watchDesignOfflineMissingFiles(
+  webContentsId: number,
+  onMissing: (url: string) => void,
+): () => void {
   missingFileWatchers.set(webContentsId, onMissing);
   return () => {
-    if (missingFileWatchers.get(webContentsId) === onMissing) missingFileWatchers.delete(webContentsId);
+    if (missingFileWatchers.get(webContentsId) === onMissing)
+      missingFileWatchers.delete(webContentsId);
   };
 }
 
@@ -46,13 +50,23 @@ export function designOfflineSession(): { session: Session; ready: Promise<void>
   if (offline) return offline;
   const target = session.fromPartition(DESIGN_OFFLINE_PARTITION, { cache: false });
   const design = designProtocolHandler({ grants: designGrants });
-  target.protocol.handle(DESIGN_SCHEME, async (request) => withDesignOfflineSandbox(await design(request)));
-  target.protocol.handle(GENERATIVE_UI_PROTOCOL_SCHEME, async (request) =>
-    withDesignOfflineSandbox(await generativeUiProtocolResponse(request), GENERATIVE_UI_OFFLINE_SANDBOX_POLICY),
+  target.protocol.handle(DESIGN_SCHEME, async (request) =>
+    withDesignOfflineSandbox(await design(request)),
   );
-  target.webRequest.onBeforeRequest((details, callback) => callback({ cancel: !designOfflineRequestAllowed(details.url) }));
+  target.protocol.handle(GENERATIVE_UI_PROTOCOL_SCHEME, async (request) =>
+    withDesignOfflineSandbox(
+      await generativeUiProtocolResponse(request),
+      GENERATIVE_UI_OFFLINE_SANDBOX_POLICY,
+    ),
+  );
+  target.webRequest.onBeforeRequest((details, callback) =>
+    callback({ cancel: !designOfflineRequestAllowed(details.url) }),
+  );
   target.webRequest.onCompleted((details) => {
-    const watcher = details.webContentsId === undefined ? undefined : missingFileWatchers.get(details.webContentsId);
+    const watcher =
+      details.webContentsId === undefined
+        ? undefined
+        : missingFileWatchers.get(details.webContentsId);
     const missing = watcher ? designOfflineMissingFile(details) : null;
     if (watcher && missing) watcher(missing);
   });

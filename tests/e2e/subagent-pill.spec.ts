@@ -5,13 +5,22 @@ test.use({ workspaceSeed: true });
 
 /** Scrolls the transcript that holds `inside` to its top, as reading back up the chat does. */
 async function scrollTranscriptToTop(page: Page, inside: string) {
-  await page.locator(inside).first().evaluate((element) => {
-    let node: HTMLElement | null = element.parentElement;
-    while (node && !(node.scrollHeight > node.clientHeight && /auto|scroll/u.test(getComputedStyle(node).overflowY))) {
-      node = node.parentElement;
-    }
-    node?.scrollTo({ top: 0, behavior: "instant" as ScrollBehavior });
-  });
+  await page
+    .locator(inside)
+    .first()
+    .evaluate((element) => {
+      let node: HTMLElement | null = element.parentElement;
+      while (
+        node &&
+        !(
+          node.scrollHeight > node.clientHeight &&
+          /auto|scroll/u.test(getComputedStyle(node).overflowY)
+        )
+      ) {
+        node = node.parentElement;
+      }
+      node?.scrollTo({ top: 0, behavior: "instant" as ScrollBehavior });
+    });
 }
 
 test("one subagent indicator at a time: the card while it is on screen, the pill once it scrolls away", async ({
@@ -26,7 +35,8 @@ test("one subagent indicator at a time: the card while it is on screen, the pill
   const earlier = lmStudio.enqueueStreamedReply!(earlierPrompt);
   await composer.fill(earlierPrompt);
   await page.getByRole("button", { name: "Send message" }).click();
-  for (let index = 1; index <= 40; index += 1) earlier.push(`Paragraph ${index} of the earlier note.\n\n`);
+  for (let index = 1; index <= 40; index += 1)
+    earlier.push(`Paragraph ${index} of the earlier note.\n\n`);
   earlier.finish();
   await expect(page.getByText("Paragraph 40 of the earlier note.")).toBeVisible();
 

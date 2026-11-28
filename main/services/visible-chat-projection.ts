@@ -6,7 +6,11 @@ import { safeStoredAttachments } from "./attachment-contract.js";
 import { storedImageHashOf } from "./chat-image-store.js";
 import { imagePixelSize } from "../../renderer/shared/image-dimensions.js";
 import { chatImageUrl } from "./chat-attachment-request-handler.js";
-import { parseChatHtmlArtifacts, parseChatImagePlacements, parseHtmlArtifactPlacements } from "../../renderer/shared/chat-artifacts.js";
+import {
+  parseChatHtmlArtifacts,
+  parseChatImagePlacements,
+  parseHtmlArtifactPlacements,
+} from "../../renderer/shared/chat-artifacts.js";
 import { parseChatUiVisuals } from "../../renderer/shared/aiden-ui/visual.js";
 import { parseVisualSnapshots } from "../../renderer/shared/visual-snapshots.js";
 import {
@@ -68,8 +72,13 @@ export interface VisibleChatMessage {
  * link instead of its base64 bytes; an image only held inline (an older chat
  * not saved since) keeps its bytes.
  */
-function attachmentsForRenderer(chatId: string, attachments: Attachment[] | undefined): Attachment[] | undefined {
-  if (!attachments?.some((attachment) => attachment.kind === "image" && storedImageHashOf(attachment))) {
+function attachmentsForRenderer(
+  chatId: string,
+  attachments: Attachment[] | undefined,
+): Attachment[] | undefined {
+  if (
+    !attachments?.some((attachment) => attachment.kind === "image" && storedImageHashOf(attachment))
+  ) {
     return attachments;
   }
   return attachments.map((attachment) => {
@@ -77,7 +86,9 @@ function attachmentsForRenderer(chatId: string, attachments: Attachment[] | unde
     if (!sha256) return attachment;
     const { data, ...reference } = attachment;
     const pixels =
-      reference.width === undefined && data !== undefined ? imagePixelSize(attachment.mimeType, data) : undefined;
+      reference.width === undefined && data !== undefined
+        ? imagePixelSize(attachment.mimeType, data)
+        : undefined;
     return { ...reference, sha256, ...(pixels ?? {}), url: chatImageUrl(chatId, sha256) };
   });
 }
@@ -148,13 +159,7 @@ export function projectVisibleChatMetadata(input: {
       MAX_WORKSPACE_ID_BYTES,
       true,
     ),
-    botId: boundedString(
-      input.botId,
-      "bot identifier",
-      MAX_CHAT_ID_CHARS,
-      MAX_CHAT_ID_BYTES,
-      true,
-    ),
+    botId: boundedString(input.botId, "bot identifier", MAX_CHAT_ID_CHARS, MAX_CHAT_ID_BYTES, true),
     providerId: boundedString(
       input.providerId,
       "provider identifier",
@@ -178,12 +183,7 @@ export function projectVisibleChatMessage(value: unknown): VisibleChatMessage | 
   }
   const message = value as Record<string, unknown>;
   if (message.role !== "user" && message.role !== "assistant") return undefined;
-  const id = boundedString(
-    message.id,
-    "message identifier",
-    MAX_CHAT_ID_CHARS,
-    MAX_CHAT_ID_BYTES,
-  )!;
+  const id = boundedString(message.id, "message identifier", MAX_CHAT_ID_CHARS, MAX_CHAT_ID_BYTES)!;
   if (
     typeof message.content !== "string" ||
     message.content.length > MAX_VISIBLE_MESSAGE_CONTENT_CHARS
@@ -201,9 +201,7 @@ export function projectVisibleChatMessage(value: unknown): VisibleChatMessage | 
     true,
   );
   const grabbedElements =
-    message.role === "user"
-      ? parseGrabbedElements(message.grabbedElements, "stored")
-      : undefined;
+    message.role === "user" ? parseGrabbedElements(message.grabbedElements, "stored") : undefined;
   return {
     id,
     role: message.role,
@@ -214,33 +212,22 @@ export function projectVisibleChatMessage(value: unknown): VisibleChatMessage | 
     ...(grabbedElements ? { grabbedElements } : {}),
     appPanels: message.role === "assistant" ? parseAppControlPanels(message.appPanels) : undefined,
     htmlArtifacts:
-      message.role === "assistant"
-        ? parseChatHtmlArtifacts(message.htmlArtifacts)
-        : undefined,
+      message.role === "assistant" ? parseChatHtmlArtifacts(message.htmlArtifacts) : undefined,
     htmlArtifactPlacements:
       message.role === "assistant" && message.htmlArtifacts
         ? parseHtmlArtifactPlacements(message.htmlArtifactPlacements)
         : undefined,
-    imagePlacements: message.role === "assistant" ? parseChatImagePlacements(message.imagePlacements) : undefined,
+    imagePlacements:
+      message.role === "assistant" ? parseChatImagePlacements(message.imagePlacements) : undefined,
     uiVisuals: message.role === "assistant" ? parseChatUiVisuals(message.uiVisuals) : undefined,
-    visualSnapshots: message.role === "assistant" ? parseVisualSnapshots(message.visualSnapshots) : undefined,
-    skill:
-      message.role === "user"
-        ? parseSkillProvenanceV1(message.skill)
-        : undefined,
-    notice:
-      message.role === "user"
-        ? parseAgentNoticeV1(message.notice)
-        : undefined,
-    inputSource:
-      message.role === "user"
-        ? parseChatInputSource(message.inputSource)
-        : undefined,
+    visualSnapshots:
+      message.role === "assistant" ? parseVisualSnapshots(message.visualSnapshots) : undefined,
+    skill: message.role === "user" ? parseSkillProvenanceV1(message.skill) : undefined,
+    notice: message.role === "user" ? parseAgentNoticeV1(message.notice) : undefined,
+    inputSource: message.role === "user" ? parseChatInputSource(message.inputSource) : undefined,
     ...hookBlockedField(message),
     providerFailure:
-      message.role === "assistant"
-        ? parseProviderFailureV1(message.providerFailure)
-        : undefined,
+      message.role === "assistant" ? parseProviderFailureV1(message.providerFailure) : undefined,
   };
 }
 

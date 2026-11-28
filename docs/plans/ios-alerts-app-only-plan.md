@@ -5,6 +5,7 @@
 **Goal:** Make Aiden On The Go's Live Activity, Dynamic Island and run alerts plain text on a clean background, and let people answer from them, without any server or contract change.
 
 **Architecture:**
+
 - **Presentation:** a pure `AgentRunTextPresentation` decides every word the widget shows. The widget only renders it with `.primary`/`.secondary` text on the system background.
 - **Actions:** Live Activity buttons (`LiveActivityIntent`) and notification actions all go through one `AidenBackgroundActionBroker`. The broker calls the existing approval/question routes on the paired Mac.
 - **Settings:** a new Notifications page stores its choices in `AidenNotificationPreferences`, and the alert notifier and Live Activity manager read them.
@@ -43,6 +44,7 @@
   ```
 
   Drop `-only-testing` for the full suite before each commit that touches shared files.
+
 - **Tests (AGENTS.md).** Tests are behavioral: call the real function and assert on its output. No source-grep tests and no exact-string snapshots of SwiftUI trees. Extend `AidenNativeIntegrationTests` for Live Activity behavior, as the existing Live Activity tests do.
 - **Docs in the same task.** Each task updates the docs it makes stale: `docs/aiden-on-the-go-remote-access.md`, `ios/CHANGELOG.md` (under `## Unreleased`), `ios/README.md`, `PRODUCT.md`, and the status row in `docs/plans/README.md`.
 
@@ -59,10 +61,12 @@
 ### Task 1: Text-only presentation model
 
 **Files:**
+
 - Modify: `ios/AidenOnTheGo/LiveActivities/AgentRunActivityAttributes.swift`. Add `AgentRunTextPresentation` next to `AgentRunStalePresentation` (the file is already in both the app and widget targets), and delete `AgentRunFreshness.toolCallLabel(count:)`.
 - Test: `ios/AidenOnTheGoTests/AidenNativeIntegrationTests.swift`. Delete `testLiveActivityToolCallChipIsBoundedAndSingular` and add the tests below.
 
 **Interfaces:**
+
 - Consumes: `AgentRunActivityAttributes.ContentState`, `AgentRunFreshness.isStale(_:systemMarkedStale:)`, `AgentRunStalePresentation.copy(for:systemMarkedStale:)`, `AgentRunActivityStatus.compactTitle`.
 - Produces:
 
@@ -133,6 +137,7 @@ Expected: compile failure, `cannot find 'AgentRunTextPresentation' in scope`.
 - [ ] **Step 3: Implement `AgentRunTextPresentation.make(state:systemMarkedStale:)`**
 
 Rules, applied in this order:
+
 1. **Final** (`state.isFinal`):
    - `.complete` → "Done". `detail` is the excerpt when it isn't empty.
    - `.failed` → `errorSummary` if set, otherwise "Failed".
@@ -164,6 +169,7 @@ git commit -m "Add text-only Live Activity presentation"
 ### Task 2: Restyle the Live Activity and Dynamic Island as plain text
 
 **Files:**
+
 - Modify: `ios/AidenLiveActivityWidget/AgentRunLiveActivityWidget.swift`
   - Rebuild the Lock Screen, island and small-family views on `AgentRunTextPresentation`.
   - Delete `AgentRunIslandBadge`, `AgentRunIslandStatusView`, `AgentRunIslandCompactMark`, `AgentRunStatusDot`, `AgentRunStatusMark`, `AgentRunProgressRail`, `AgentRunTimerPill`, `AgentRunFreshnessChips`, `AgentRunStatusStyle`, `AgentRunLiveActivityTheme` and `AgentRunExpandedIslandBottomView`.
@@ -171,6 +177,7 @@ git commit -m "Add text-only Live Activity presentation"
 - Modify: `ios/CHANGELOG.md`, `ios/README.md` (if it describes the card).
 
 **Interfaces:**
+
 - Consumes: `AgentRunTextPresentation.make(state:systemMarkedStale:)` from Task 1, and `AidenDeepLink.chatURL(instanceId:chatId:)`.
 - Produces: `private struct AgentRunTextCard: View`, initialized with `(presentation: AgentRunTextPresentation, chatURL: URL?)`. Task 3 adds actions to it.
 
@@ -199,6 +206,7 @@ Expected: `** BUILD SUCCEEDED **`, with no warnings about unused private types.
 - [ ] **Step 3: Check it visually on the simulator**
 
 Use the `device-interaction` skill.
+
 - Run a chat against a demo host, lock the simulator and take a Lock Screen screenshot.
 - Expand the island and take a screenshot.
 - Repeat both in light and dark appearance.
@@ -221,6 +229,7 @@ git commit -m "Restyle the Live Activity and Dynamic Island as plain text"
 ### Task 3: Deny and Review on the card, and the shared action broker
 
 **Files:**
+
 - Modify: `ios/AidenOnTheGo/LiveActivities/AgentRunActivityAttributes.swift`:
   - `ContentState.approval: AgentRunApprovalTarget?` (decoded with `decodeIfPresent`, default `nil`).
   - The reducer sets and clears it.
@@ -237,6 +246,7 @@ git commit -m "Restyle the Live Activity and Dynamic Island as plain text"
 - Test: `ios/AidenOnTheGoTests/AidenNativeIntegrationTests.swift`.
 
 **Interfaces:**
+
 - Consumes: `AidenRemoteClient.respondToApproval(id:decision:scope:idempotencyKey:)`, `respondToRunApproval(runId:approvalId:decision:scope:idempotencyKey:)`, `respondToQuestion(id:request:idempotencyKey:)`, `respondToRunQuestion(runId:promptId:request:idempotencyKey:)`, `AidenRemoteCoordinator.requestContext(for:)`, `remoteClient(for:)`, and `AidenRemoteClientError.server(statusCode:body:)`.
 - Produces (Task 4 relies on these):
 
@@ -389,6 +399,7 @@ git commit -m "Add Deny and Review to the Live Activity"
 ### Task 4: Approve, Deny and Reply on run alerts
 
 **Files:**
+
 - Modify: `ios/AidenOnTheGo/Features/Remote/AidenScheduledRunNotifier.swift`:
   - Pull the content building out of `AidenRunAlertNotifier.notify` into `AidenRunAlertContent`.
   - `notify` gains `detail: AidenRunAlertDetail?`.
@@ -401,6 +412,7 @@ git commit -m "Add Deny and Review to the Live Activity"
 - Docs: `docs/aiden-on-the-go-remote-access.md`. Add a "Notifications" subsection covering actions, Face ID for Approve, and Deny anywhere.
 
 **Interfaces:**
+
 - Consumes: `AgentRunApprovalTarget`, `AidenAlertAction`, `AidenBackgroundActionBroker` (Task 3), and `AidenNotificationPreferences.showMessageText` (Task 5).
   - Task 4 can run before Task 5. In that case, hard-code `true` behind a `showMessageText: Bool` parameter, and Task 5 wires the preference in.
 - Produces:
@@ -491,6 +503,7 @@ git commit -m "Add Approve, Deny and Reply to run alerts"
 ### Task 5: Settings → Notifications
 
 **Files:**
+
 - Create: `ios/AidenOnTheGo/Features/Remote/AidenNotificationPreferences.swift` (app target).
 - Create: `ios/AidenOnTheGo/Features/Workspace/AidenNotificationSettingsView.swift` (app target).
 - Modify: `ios/AidenOnTheGo/Features/Workspace/AidenAppSettingsView.swift`. Add a `Section { NavigationLink { AidenNotificationSettingsView() } label: { Label("Notifications", systemImage: "bell") } }` after Appearance.
@@ -503,6 +516,7 @@ git commit -m "Add Approve, Deny and Reply to run alerts"
 - Docs: `docs/aiden-on-the-go-remote-access.md`, `ios/CHANGELOG.md`, `PRODUCT.md` (the iOS feature list).
 
 **Interfaces:**
+
 - Produces:
 
 ```swift
@@ -592,6 +606,7 @@ git commit -m "Add Settings → Notifications on iPhone"
 ### Task 6: One summary card for several runs on the same Mac
 
 **Files:**
+
 - Create: `ios/AidenOnTheGo/LiveActivities/AidenRunsSummaryActivityAttributes.swift` (app **and** widget targets). It holds the attributes and `AidenRunsSummaryPolicy`.
 - Create: `ios/AidenLiveActivityWidget/AidenRunsSummaryLiveActivityWidget.swift` (widget target).
 - Modify: `ios/AidenLiveActivityWidget/AgentRunLiveActivityWidget.swift`. Add the new widget to `AidenLiveActivityWidgetBundle`.
@@ -600,6 +615,7 @@ git commit -m "Add Settings → Notifications on iPhone"
 - Test: `ios/AidenOnTheGoTests/AidenNativeIntegrationTests.swift`.
 
 **Interfaces:**
+
 - Produces:
 
 ```swift
@@ -690,12 +706,14 @@ git commit -m "Merge several runs on one Mac into a summary Live Activity"
 ### Task 7: Background grace so a run that's about to finish still alerts
 
 **Files:**
+
 - Create: `ios/AidenOnTheGo/Features/Remote/AidenBackgroundGrace.swift` (app target).
 - Modify: `ios/AidenOnTheGo/LiveActivities/AidenRemoteLiveActivityManager.swift`. Expose `var hasLiveRuns: Bool` and `var onLiveRunsChange: (@MainActor (Bool) -> Void)?`.
 - Modify: `ios/AidenOnTheGo/AidenOnTheGoApp.swift`. On `scenePhase` `.background`, call `appDidEnterBackground`. On `.active`, call `appWillEnterForeground`. Wire `onLiveRunsChange` to `liveRunsDidChange`.
 - Test: `ios/AidenOnTheGoTests/AidenNativeIntegrationTests.swift`.
 
 **Interfaces:**
+
 - Produces:
 
 ```swift

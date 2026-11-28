@@ -45,7 +45,11 @@ function workspaceRow(id: string, name: string, extra: Record<string, unknown> =
   return { id, name, createdAt: iso(0), updatedAt: iso(1), revision: "r1", ...extra };
 }
 
-function summaryRow(id: string, workspaceId: string, extra: Record<string, unknown> = {}): PeerFeedRow {
+function summaryRow(
+  id: string,
+  workspaceId: string,
+  extra: Record<string, unknown> = {},
+): PeerFeedRow {
   return {
     id,
     workspaceId,
@@ -73,13 +77,31 @@ function snapshot(hostId: string, rows: Partial<PeerHostFeedSnapshot> = {}): Pee
   };
 }
 
-function host(id: string, label: string, availability: SidebarHost["availability"] = "online"): SidebarHost {
+function host(
+  id: string,
+  label: string,
+  availability: SidebarHost["availability"] = "online",
+): SidebarHost {
   return { id, label, availability };
 }
 
 const localWorkspaces: Workspace[] = [
-  { id: "ws-1", name: "aiden", folderPath: "/code/aiden", permission: "full", createdAt: 5, updatedAt: 50 },
-  { id: "ws-2", name: "notes", folderPath: "/code/notes", permission: "full", createdAt: 6, updatedAt: 40 },
+  {
+    id: "ws-1",
+    name: "aiden",
+    folderPath: "/code/aiden",
+    permission: "full",
+    createdAt: 5,
+    updatedAt: 50,
+  },
+  {
+    id: "ws-2",
+    name: "notes",
+    folderPath: "/code/notes",
+    permission: "full",
+    createdAt: 6,
+    updatedAt: 40,
+  },
 ];
 const localChats = [
   { id: "chat-1", title: "Local one", workspaceId: "ws-1", createdAt: 7, updatedAt: 60 },
@@ -123,14 +145,39 @@ test("hosts list only enabled hosts and suffix names shared with another host or
     ],
   );
   assert.deepEqual(
-    hosts.map(({ id, label, availability, blockedReason }) => ({ id, label, availability, blockedReason })),
+    hosts.map(({ id, label, availability, blockedReason }) => ({
+      id,
+      label,
+      availability,
+      blockedReason,
+    })),
     [
-      { id: "host-aaaa1111", label: "Studio (1111)", availability: "online", blockedReason: undefined },
-      { id: "host-bbbb2222", label: "studio (2222)", availability: "offline", blockedReason: undefined },
+      {
+        id: "host-aaaa1111",
+        label: "Studio (1111)",
+        availability: "online",
+        blockedReason: undefined,
+      },
+      {
+        id: "host-bbbb2222",
+        label: "studio (2222)",
+        availability: "offline",
+        blockedReason: undefined,
+      },
       // The disabled host with the same name does not force a suffix.
       { id: "host-cccc3333", label: "Laptop", availability: "blocked", blockedReason: "auth" },
-      { id: "host-eeee5555", label: "This Mac (5555)", availability: "connecting", blockedReason: undefined },
-      { id: "host-ffff6666", label: "Paired computer", availability: "connecting", blockedReason: undefined },
+      {
+        id: "host-eeee5555",
+        label: "This Mac (5555)",
+        availability: "connecting",
+        blockedReason: undefined,
+      },
+      {
+        id: "host-ffff6666",
+        label: "Paired computer",
+        availability: "connecting",
+        blockedReason: undefined,
+      },
     ],
   );
 });
@@ -179,8 +226,16 @@ test("with no paired host the combined rows reproduce the local projection exact
   const before = organize(local.projects, local.chats);
   const after = organize(combined.projects, combined.chats);
   assert.deepEqual(
-    after.projectGroups.map((group) => ({ key: group.project.key, primary: group.project.primary, chats: group.chats })),
-    before.projectGroups.map((group) => ({ key: group.project.key, primary: group.project, chats: group.chats })),
+    after.projectGroups.map((group) => ({
+      key: group.project.key,
+      primary: group.project.primary,
+      chats: group.chats,
+    })),
+    before.projectGroups.map((group) => ({
+      key: group.project.key,
+      primary: group.project,
+      chats: group.chats,
+    })),
   );
   assert.deepEqual(after.projectOrder, before.projectOrder);
   // Local chat objects pass through untouched.
@@ -192,7 +247,10 @@ test("the machine filter narrows rows and an unknown host falls back to all mach
   const remote = hosts.map((h) =>
     remoteSidebarRows(
       h,
-      snapshot(h.id, { workspaces: [workspaceRow(`${h.id}-ws`, h.label)], summaries: [summaryRow(`${h.id}-chat`, `${h.id}-ws`)] }),
+      snapshot(h.id, {
+        workspaces: [workspaceRow(`${h.id}-ws`, h.label)],
+        summaries: [summaryRow(`${h.id}-chat`, `${h.id}-ws`)],
+      }),
     ),
   );
   const machines = (filter: Parameters<typeof combineSidebarRows>[0]["filter"]) => {
@@ -213,7 +271,9 @@ test("the machine filter narrows rows and an unknown host falls back to all mach
 });
 
 test("grouping merges by repository, optionally by path, one workspace per machine", () => {
-  const repo = (canonicalKey: string, relativePath = "") => ({ repository: { canonicalKey, relativePath } });
+  const repo = (canonicalKey: string, relativePath = "") => ({
+    repository: { canonicalKey, relativePath },
+  });
   const hosts = [host("studio", "Studio"), host("laptop", "Laptop")];
   const remote: RemoteSidebarRows[] = [
     remoteSidebarRows(
@@ -238,7 +298,9 @@ test("grouping merges by repository, optionally by path, one workspace per machi
     ),
   ];
   const localRepository = (project: (typeof local.projects)[number]) =>
-    project.workspace.id === "ws-1" ? { canonicalKey: "github.com/acme/aiden", relativePath: "" } : null;
+    project.workspace.id === "ws-1"
+      ? { canonicalKey: "github.com/acme/aiden", relativePath: "" }
+      : null;
   const grouped = (grouping: "separate" | "repository" | "repository_path") =>
     combineSidebarRows({ local, remote, hosts, filter: "all", grouping, localRepository });
 
@@ -251,7 +313,11 @@ test("grouping merges by repository, optionally by path, one workspace per machi
   // Studio's root workspace joins first; its docs workspace is a second Studio match and stays apart.
   assert.deepEqual(projectEntryMachineLabels(merged, "darwin"), ["This Mac", "Studio", "Laptop"]);
   assert.equal(byRepository.projects.length, 5);
-  assert.ok(byRepository.projects.some((entry) => entry.primary.name === "aiden docs" && entry.members.length === 1));
+  assert.ok(
+    byRepository.projects.some(
+      (entry) => entry.primary.name === "aiden docs" && entry.members.length === 1,
+    ),
+  );
   // Projects with no repository identity never merge, even with equal names.
   assert.equal(byRepository.projects.filter((entry) => entry.name === "scratch").length, 2);
   // The Studio chat now belongs to the merged group.
@@ -265,8 +331,14 @@ test("grouping merges by repository, optionally by path, one workspace per machi
   const byPath = grouped("repository_path");
   const pathMerged = byPath.projects.filter((entry) => entry.members.length > 1);
   assert.equal(pathMerged.length, 1);
-  assert.deepEqual(projectEntryMachineLabels(pathMerged[0], "darwin"), ["This Mac", "Studio", "Laptop"]);
-  assert.ok(byPath.projects.some((entry) => entry.name === "aiden docs" && entry.members.length === 1));
+  assert.deepEqual(projectEntryMachineLabels(pathMerged[0], "darwin"), [
+    "This Mac",
+    "Studio",
+    "Laptop",
+  ]);
+  assert.ok(
+    byPath.projects.some((entry) => entry.name === "aiden docs" && entry.members.length === 1),
+  );
 });
 
 test("remote rows without this Mac merge under the first host's key", () => {
@@ -275,11 +347,21 @@ test("remote rows without this Mac merge under the first host's key", () => {
     remoteSidebarRows(
       h,
       snapshot(h.id, {
-        workspaces: [workspaceRow("w", `api on ${h.label}`, { repository: { canonicalKey: "github.com/acme/api", relativePath: "" } })],
+        workspaces: [
+          workspaceRow("w", `api on ${h.label}`, {
+            repository: { canonicalKey: "github.com/acme/api", relativePath: "" },
+          }),
+        ],
       }),
     ),
   );
-  const { projects } = combineSidebarRows({ local, remote, hosts, filter: "all", grouping: "repository" });
+  const { projects } = combineSidebarRows({
+    local,
+    remote,
+    hosts,
+    filter: "all",
+    grouping: "repository",
+  });
   const merged = projects.find((entry) => entry.members.length === 2)!;
   assert.equal(merged.key, "studio:w");
   assert.equal(merged.name, "api on Studio");
@@ -345,7 +427,10 @@ test("reading a chat on its host clears the unread left by its finished run", ()
     hostId: "studio",
     epoch: "e1",
     sequence: 5,
-    change: { type: "chat.upsert", row: summaryRow("done", "w", { unread: false, revision: "r2" }) },
+    change: {
+      type: "chat.upsert",
+      row: summaryRow("done", "w", { unread: false, revision: "r2" }),
+    },
   });
   if (read === FEED_RESYNC) assert.fail("the read marker should apply in sequence");
   const after = remoteSidebarRows(studio, read);
@@ -375,7 +460,11 @@ test("an offline host's rows stay listed, stale, and stop claiming work in progr
   assert.ok(online.chats.every((chat) => !chat.stale));
   assert.equal(online.chats[0].rowState, "working");
   // A connected host whose feed is marked stale is still last-known data.
-  assert.ok(remoteSidebarRows(host("studio", "Studio"), { ...feed, stale: true }).chats.every((chat) => chat.stale));
+  assert.ok(
+    remoteSidebarRows(host("studio", "Studio"), { ...feed, stale: true }).chats.every(
+      (chat) => chat.stale,
+    ),
+  );
   // A snapshot for another host never leaks into this one.
   assert.deepEqual(remoteSidebarRows(host("laptop", "Laptop"), feed), { projects: [], chats: [] });
 });
@@ -432,8 +521,20 @@ test("a revision-50 row carries its run times, triage and the waiting ask; an ol
         summaryRow("old", "w", { pinnedAt: iso(1), attentionSince: "yesterday" }),
       ],
       runs: [
-        { chatId: "waiting", runId: "r1", state: "needs_approval", unread: false, attentionSummary: "Run npm test" },
-        { chatId: "busy", runId: "r2", state: "working", unread: false, attentionSummary: "Stale ask" },
+        {
+          chatId: "waiting",
+          runId: "r1",
+          state: "needs_approval",
+          unread: false,
+          attentionSummary: "Run npm test",
+        },
+        {
+          chatId: "busy",
+          runId: "r2",
+          state: "working",
+          unread: false,
+          attentionSummary: "Stale ask",
+        },
       ],
     }),
   );
@@ -445,7 +546,12 @@ test("a revision-50 row carries its run times, triage and the waiting ask; an ol
   assert.equal(waiting.lastAssistantAt, T0 + 2.75 * 3_600_000);
   assert.equal(waiting.attentionSummary, "Run npm test");
   assert.deepEqual(
-    { revision: waiting.triage?.revision, pinnedAt: waiting.triage?.pinnedAt, snoozedUntil: waiting.triage?.snoozedUntil, doneAt: waiting.triage?.doneAt },
+    {
+      revision: waiting.triage?.revision,
+      pinnedAt: waiting.triage?.pinnedAt,
+      snoozedUntil: waiting.triage?.snoozedUntil,
+      doneAt: waiting.triage?.doneAt,
+    },
     { revision: 4, pinnedAt: T0 + 3_600_000, snoozedUntil: T0 + 30 * 3_600_000, doneAt: undefined },
   );
   // A cleared entry still reports its revision, so a newer local change can be told from it.
@@ -507,8 +613,13 @@ function countingReads(rows: RemoteSidebarRows, counter: { reads: number }): Rem
 for (const hostCount of [1, 5, 10]) {
   test(`organizing ${hostCount} host(s) of 2,000 chats stays near-linear and shows every chat once`, () => {
     const chatsPerHost = 2_000;
-    const views = Array.from({ length: hostCount }, (_, index) => view(`host_${index}`, `Mac ${index}`));
-    const hosts = sidebarHosts(views, views.map((entry) => status(entry.id, connected)));
+    const views = Array.from({ length: hostCount }, (_, index) =>
+      view(`host_${index}`, `Mac ${index}`),
+    );
+    const hosts = sidebarHosts(
+      views,
+      views.map((entry) => status(entry.id, connected)),
+    );
     const counter = { reads: 0 };
     const remote = hosts.map((host) =>
       countingReads(remoteSidebarRows(host, crowdedFeed(host.id, chatsPerHost, 40)), counter),
@@ -546,7 +657,10 @@ for (const hostCount of [1, 5, 10]) {
         );
 
         // Same-repository projects merge across machines; separate keeps one per host.
-        assert.equal(organized.projectGroups.length, grouping === "repository" ? 40 : 40 * hostCount);
+        assert.equal(
+          organized.projectGroups.length,
+          grouping === "repository" ? 40 : 40 * hostCount,
+        );
         const shown =
           sidebarView === "projects"
             ? organized.projectGroups.flatMap((group) => group.chats)
@@ -555,7 +669,10 @@ for (const hostCount of [1, 5, 10]) {
         assert.equal(new Set(shown.map((chat) => chat.key)).size, total);
         if (sidebarView === "recent") {
           const times = shown.map((chat) => chat.lastActivityAt ?? 0);
-          assert.ok(times.every((at, index) => index === 0 || times[index - 1]! >= at), "newest first");
+          assert.ok(
+            times.every((at, index) => index === 0 || times[index - 1]! >= at),
+            "newest first",
+          );
         }
       }
     }

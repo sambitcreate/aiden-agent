@@ -32,7 +32,9 @@ export function parseGuestBridgeMessage(data: unknown): GuestBridgeMessage | und
     return { type: "ready" };
   }
   if (record.type === GENERATIVE_UI_RESIZE_MESSAGE && exactKeys(record, ["type", "height"])) {
-    return typeof record.height === "number" ? { type: "resize", height: record.height } : undefined;
+    return typeof record.height === "number"
+      ? { type: "resize", height: record.height }
+      : undefined;
   }
   if (record.type === GENERATIVE_UI_PROMPT_MESSAGE && exactKeys(record, ["type", "text"])) {
     return typeof record.text === "string" ? { type: "prompt", text: record.text } : undefined;
@@ -67,7 +69,10 @@ export function admitGuestPrompt(input: GuestPromptInput): GuestPromptDecision {
   if (input.text.length > MAX_GUEST_PROMPT_CHARS) return { action: "reject", reason: "too_long" };
   const text = input.text.trim();
   if (!text) return { action: "reject", reason: "empty" };
-  if (input.lastAcceptedAt !== undefined && input.now - input.lastAcceptedAt < GUEST_PROMPT_COOLDOWN_MS) {
+  if (
+    input.lastAcceptedAt !== undefined &&
+    input.now - input.lastAcceptedAt < GUEST_PROMPT_COOLDOWN_MS
+  ) {
     return { action: "reject", reason: "cooldown" };
   }
   return { action: "confirm", text };

@@ -22,6 +22,7 @@ Bring pi-web-access v0.45.0's extract mode into Aiden as a native feature, witho
    - `null` when the page has no value.
 
    The Clairic adapter (`web-extract-models.ts`) rotates pool keys on 401, 403 and 429. When extraction fails, the tool returns the page text with the reason.
+
 4. **Settings.** Settings → Web Search → Web pages holds the reading switch, the extract switch with its status badge, the Cloudflare account ID, the key pool and a privacy line. Portable config carries the settings without keys.
 5. **Transcript.** A completed extract step carries a bounded, display-only recap (`renderer/shared/web-extract.ts`). The desktop, iOS and Android show it as a card under the step's activity line. Remote contract revision 38 adds `extraction` to `GenerationToolStep`.
 6. **Smaller tool definitions.** The web and browser tool descriptions were trimmed, measured with o200k:

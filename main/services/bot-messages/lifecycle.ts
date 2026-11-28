@@ -15,7 +15,11 @@ export function createBotMessageLifecycle(deps: {
   return {
     post: (input) =>
       closed
-        ? Promise.resolve({ status: "refused", code: "unavailable", message: "Bot messaging is shut down." })
+        ? Promise.resolve({
+            status: "refused",
+            code: "unavailable",
+            message: "Bot messaging is shut down.",
+          })
         : requireCurrent().post(input),
     async start() {
       // Only explicit runtime initialization may open a new lifecycle.

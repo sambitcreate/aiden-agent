@@ -45,7 +45,9 @@ function stubPanel(state: PanelState, calls: Calls): EnvironmentPanelContextValu
   const panel: Partial<EnvironmentPanelContextValue> = {
     devicesEnabled: false,
     subagentsEnabled: state.subagentsEnabled ?? true,
-    subagents: { chatId: state.viewsChatId ?? "chat-1" } as EnvironmentPanelContextValue["subagents"],
+    subagents: {
+      chatId: state.viewsChatId ?? "chat-1",
+    } as EnvironmentPanelContextValue["subagents"],
     subagentViews: state.runs,
     artifacts: { views: [] } as unknown as EnvironmentPanelContextValue["artifacts"],
     toolsPresented: state.tab !== undefined,
@@ -100,7 +102,9 @@ test("working subagents add no running count to the toolbar; the card and pill c
 test("the Subagents tool stays one menu choice away while subagents work", async () => {
   const { calls } = renderToolbar({ runs: [run("a", "running")] });
   await act(async () => {
-    fireEvent.keyDown(screen.getByRole("button", { name: "More workspace tools" }), { key: "Enter" });
+    fireEvent.keyDown(screen.getByRole("button", { name: "More workspace tools" }), {
+      key: "Enter",
+    });
   });
   const item = await screen.findByRole("menuitem", { name: /Subagents/u });
   await act(async () => {
@@ -112,7 +116,9 @@ test("the Subagents tool stays one menu choice away while subagents work", async
 test("with subagents off, or no workspace, the menu offers no Subagents tool", async () => {
   renderToolbar({ runs: [run("a", "running")], subagentsEnabled: false });
   await act(async () => {
-    fireEvent.keyDown(screen.getByRole("button", { name: "More workspace tools" }), { key: "Enter" });
+    fireEvent.keyDown(screen.getByRole("button", { name: "More workspace tools" }), {
+      key: "Enter",
+    });
   });
   await screen.findAllByRole("menuitem");
   assert.equal(screen.queryByRole("menuitem", { name: /Subagents/u }), null);

@@ -76,10 +76,14 @@ test("the handler installs before the store opens and serves granted assets once
   assert.ok(db.isFile());
   // The same early handler now reads the opened store.
   const asset = await f.store.put({ bytes: pngBytes(8, 8, 9) });
-  const original = await f.handlers[0]!(new Request(f.grants.issue(f.owner, asset.assetId, "original")));
+  const original = await f.handlers[0]!(
+    new Request(f.grants.issue(f.owner, asset.assetId, "original")),
+  );
   assert.equal(original.status, 200);
   assert.equal(original.headers.get("content-type"), "image/png");
-  const thumb = await f.handlers[0]!(new Request(f.grants.issue(f.owner, asset.assetId, "thumb-512")));
+  const thumb = await f.handlers[0]!(
+    new Request(f.grants.issue(f.owner, asset.assetId, "thumb-512")),
+  );
   assert.equal(thumb.status, 200);
   assert.ok((await thumb.arrayBuffer()).byteLength > 0);
 });

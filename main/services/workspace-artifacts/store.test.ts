@@ -4,7 +4,10 @@ import * as os from "node:os";
 import * as path from "node:path";
 import test from "node:test";
 import { compileAum } from "../../../renderer/shared/aiden-ui/compile.js";
-import { AIDEN_UI_CATALOG_VERSION, type ChatUiVisualV1 } from "../../../renderer/shared/aiden-ui/types.js";
+import {
+  AIDEN_UI_CATALOG_VERSION,
+  type ChatUiVisualV1,
+} from "../../../renderer/shared/aiden-ui/types.js";
 import {
   resolveWorkspaceArtifactCommand,
   WORKSPACE_ARTIFACT_LIMITS,
@@ -24,7 +27,12 @@ async function openStore(t: test.TestContext) {
   t.after(() => fs.rm(dir, { recursive: true, force: true }));
   let clock = 1_000;
   let ids = 0;
-  const make = () => new WorkspaceArtifactStore({ root: () => dir, now: () => (clock += 1), newId: () => `art${++ids}` });
+  const make = () =>
+    new WorkspaceArtifactStore({
+      root: () => dir,
+      now: () => (clock += 1),
+      newId: () => `art${++ids}`,
+    });
   return { dir, store: make(), reopen: make };
 }
 
@@ -41,10 +49,22 @@ function page(title = "Open PRs"): ChatUiVisualV1 {
   };
 }
 
-const pulls: WorkspaceArtifactSourceV1 = { name: "pulls", kind: "shell", command: "gh pr list --json number", parse: "json" };
+const pulls: WorkspaceArtifactSourceV1 = {
+  name: "pulls",
+  kind: "shell",
+  command: "gh pr list --json number",
+  parse: "json",
+};
 
 function content(overrides: Partial<WorkspaceArtifactContent> = {}): WorkspaceArtifactContent {
-  return { title: "Open PRs", visual: page(), sources: [pulls], actions: [], refresh: { onOpen: true }, ...overrides };
+  return {
+    title: "Open PRs",
+    visual: page(),
+    sources: [pulls],
+    actions: [],
+    refresh: { onOpen: true },
+    ...overrides,
+  };
 }
 
 /** What a tool call passes after the person allowed a card showing exactly these commands. */
@@ -71,19 +91,32 @@ test("a workspace keeps titles unique and stops at its artifact limit", async (t
   const { store } = await openStore(t);
   const first = await store.create("ws1", content());
   // The refusal names the page to update, so the caller need not list again.
-  await assert.rejects(store.create("ws1", content()), new RegExp(`already exists here \\(id ${first.id}\\)`, "u"));
+  await assert.rejects(
+    store.create("ws1", content()),
+    new RegExp(`already exists here \\(id ${first.id}\\)`, "u"),
+  );
   const second = await store.create("ws1", content({ title: "Second" }));
-  await assert.rejects(store.rename("ws1", second.id, "Open PRs"), new RegExp(`\\(id ${first.id}\\) is already named "Open PRs"`, "u"));
+  await assert.rejects(
+    store.rename("ws1", second.id, "Open PRs"),
+    new RegExp(`\\(id ${first.id}\\) is already named "Open PRs"`, "u"),
+  );
   for (let index = 2; index < WORKSPACE_ARTIFACT_LIMITS.perWorkspace; index += 1) {
     await store.create("ws1", content({ title: `Page ${index}` }));
   }
-  await assert.rejects(store.create("ws1", content({ title: "One more" })), /Update or delete one first/u);
+  await assert.rejects(
+    store.create("ws1", content({ title: "One more" })),
+    /Update or delete one first/u,
+  );
 });
 
 test("an approval covers only the exact commands that were approved", async (t) => {
   const { store } = await openStore(t);
   // A card that showed other commands approves nothing.
-  const stale = await store.create("ws1", content({ title: "Stale" }), allowed(content({ sources: [] })));
+  const stale = await store.create(
+    "ws1",
+    content({ title: "Stale" }),
+    allowed(content({ sources: [] })),
+  );
   assert.equal(stale.approvedDigest, undefined);
   await store.delete("ws1", stale.id);
 
@@ -91,15 +124,26 @@ test("an approval covers only the exact commands that were approved", async (t) 
   assert.equal(created.approvedDigest, workspaceArtifactDigest([pulls], []));
 
   // Same commands, new page: the approval stays.
-  const repaged = await store.replace("ws1", created.id, content({ visual: page("Pulls") , title: "Pulls" }));
+  const repaged = await store.replace(
+    "ws1",
+    created.id,
+    content({ visual: page("Pulls"), title: "Pulls" }),
+  );
   assert.equal(repaged.revision, 2);
   assert.equal(repaged.approvedDigest, created.approvedDigest);
   assert.equal(repaged.visual.title, "Pulls");
 
   // A changed command drops it until approved again.
-  const changed = await store.replace("ws1", created.id, content({ sources: [{ ...pulls, command: "rm -rf ." }] }));
+  const changed = await store.replace(
+    "ws1",
+    created.id,
+    content({ sources: [{ ...pulls, command: "rm -rf ." }] }),
+  );
   assert.equal(changed.approvedDigest, undefined);
-  await assert.rejects(store.approve("ws1", created.id, created.approvedDigest!), /changed after you looked/u);
+  await assert.rejects(
+    store.approve("ws1", created.id, created.approvedDigest!),
+    /changed after you looked/u,
+  );
   const view = (await store.get("ws1", created.id))!;
   const approved = await store.approve("ws1", created.id, view.digest);
   assert.equal(approved.approvedDigest, view.digest);
@@ -109,36 +153,64 @@ test("an unchanged save makes no version but still records an approval the perso
   const { store } = await openStore(t);
   const created = await store.create("ws1", content());
   // Key order in the saved value does not make an identical page look new.
-  const reordered = { refresh: { onOpen: true }, actions: [], sources: [pulls], visual: page(), title: "Open PRs" };
+  const reordered = {
+    refresh: { onOpen: true },
+    actions: [],
+    sources: [pulls],
+    visual: page(),
+    title: "Open PRs",
+  };
   const same = await store.replace("ws1", created.id, reordered);
   assert.equal(same.revision, 1);
   assert.deepEqual(await store.history("ws1", created.id), []);
   const approved = await store.replace("ws1", created.id, content(), allowed(content()));
   assert.equal(approved.revision, 1);
   assert.equal(approved.approvedDigest, workspaceArtifactDigest([pulls], []));
-  assert.equal((await store.get("ws1", created.id))!.artifact.approvedDigest, approved.approvedDigest);
+  assert.equal(
+    (await store.get("ws1", created.id))!.artifact.approvedDigest,
+    approved.approvedDigest,
+  );
 });
 
 test("replacing the revision a caller saved earlier keeps no version for it", async (t) => {
   const { store } = await openStore(t);
   const created = await store.create("ws1", content());
   const first = await store.replace("ws1", created.id, content({ description: "one" }));
-  const second = await store.replace("ws1", created.id, content({ description: "two" }), { fold: { revision: first.revision, title: first.visual.title } });
+  const second = await store.replace("ws1", created.id, content({ description: "two" }), {
+    fold: { revision: first.revision, title: first.visual.title },
+  });
   // A stale fold revision does not fold: the version it would drop is not the caller's.
-  await store.replace("ws1", created.id, content({ description: "three" }), { fold: { revision: first.revision, title: first.visual.title } });
-  assert.deepEqual((await store.history("ws1", created.id)).map((entry) => entry.revision), [second.revision, created.revision]);
+  await store.replace("ws1", created.id, content({ description: "three" }), {
+    fold: { revision: first.revision, title: first.visual.title },
+  });
+  assert.deepEqual(
+    (await store.history("ws1", created.id)).map((entry) => entry.revision),
+    [second.revision, created.revision],
+  );
 });
 
 test("a failed refresh keeps the last good data and drops sources that were removed", async (t) => {
   const { store } = await openStore(t);
-  const todo: WorkspaceArtifactSourceV1 = { name: "todo", kind: "file", file: "TODO.md", parse: "lines" };
+  const todo: WorkspaceArtifactSourceV1 = {
+    name: "todo",
+    kind: "file",
+    file: "TODO.md",
+    parse: "lines",
+  };
   const artifact = await store.create("ws1", content({ sources: [pulls, todo] }));
   await store.saveSnapshot("ws1", artifact, {
     pulls: { status: "ok", at: 1, dataJson: "[1]" },
     todo: { status: "ok", at: 1, dataJson: '["a"]' },
   });
-  const after = await store.saveSnapshot("ws1", artifact, { pulls: { status: "error", at: 2, error: "gh: offline" } });
-  assert.deepEqual(after.sources.pulls, { status: "error", at: 2, error: "gh: offline", dataJson: "[1]" });
+  const after = await store.saveSnapshot("ws1", artifact, {
+    pulls: { status: "error", at: 2, error: "gh: offline" },
+  });
+  assert.deepEqual(after.sources.pulls, {
+    status: "error",
+    at: 2,
+    error: "gh: offline",
+    dataJson: "[1]",
+  });
   assert.deepEqual(after.sources.todo, { status: "ok", at: 1, dataJson: '["a"]' });
 
   const narrowed = await store.replace("ws1", artifact.id, content({ sources: [pulls] }));
@@ -156,7 +228,10 @@ test("deleting an artifact removes its snapshot, and removing the workspace remo
 
   await store.create("ws1", content());
   await store.removeWorkspace("ws1");
-  assert.deepEqual((await fs.readdir(dir)).filter((name) => name.startsWith("ws1")), []);
+  assert.deepEqual(
+    (await fs.readdir(dir)).filter((name) => name.startsWith("ws1")),
+    [],
+  );
   assert.deepEqual(await store.list("ws1"), []);
 });
 
@@ -165,45 +240,78 @@ test("an entry edited into an invalid shape is set aside, not repaired, and surv
   await store.create("ws1", content());
   await store.create("ws1", content({ title: "Second" }));
   const file = path.join(dir, "ws1.json");
-  const document = JSON.parse(await fs.readFile(file, "utf8")) as { artifacts: Record<string, unknown>[] };
+  const document = JSON.parse(await fs.readFile(file, "utf8")) as {
+    artifacts: Record<string, unknown>[];
+  };
   document.artifacts[0]!.sources = [{ name: "x", kind: "file", file: "../../etc/passwd" }];
   await fs.writeFile(file, JSON.stringify(document));
   const reopened = reopen();
   const listed = await reopened.list("ws1");
-  assert.deepEqual(listed.map((view) => view.artifact.visual.title), ["Second"]);
+  assert.deepEqual(
+    listed.map((view) => view.artifact.visual.title),
+    ["Second"],
+  );
   await reopened.create("ws1", content({ title: "Third" }));
-  const written = JSON.parse(await fs.readFile(file, "utf8")) as { unreadable?: { sources: unknown }[] };
-  assert.deepEqual(written.unreadable?.[0]?.sources, [{ name: "x", kind: "file", file: "../../etc/passwd" }]);
+  const written = JSON.parse(await fs.readFile(file, "utf8")) as {
+    unreadable?: { sources: unknown }[];
+  };
+  assert.deepEqual(written.unreadable?.[0]?.sources, [
+    { name: "x", kind: "file", file: "../../etc/passwd" },
+  ]);
 });
 
 test("a page saved before a placeholder rule tightened stays listed, with that action turned off", async (t) => {
   const { store, reopen, dir } = await openStore(t);
-  const fetch: WorkspaceArtifactActionV1 = { name: "fetch", label: "Fetch", command: "git fetch origin {{ref}}", params: [{ name: "ref", type: "string" }] };
+  const fetch: WorkspaceArtifactActionV1 = {
+    name: "fetch",
+    label: "Fetch",
+    command: "git fetch origin {{ref}}",
+    params: [{ name: "ref", type: "string" }],
+  };
   const created = await store.create("ws1", content({ actions: [fetch] }));
   // Written by an earlier release, whose rules let a value reach --upload-pack.
   const file = path.join(dir, "ws1.json");
-  const document = JSON.parse(await fs.readFile(file, "utf8")) as { artifacts: { actions: WorkspaceArtifactActionV1[] }[] };
-  const stale = { ...fetch, name: "probe", label: "Probe", command: "git fetch --upload-p {{ref}} ." };
+  const document = JSON.parse(await fs.readFile(file, "utf8")) as {
+    artifacts: { actions: WorkspaceArtifactActionV1[] }[];
+  };
+  const stale = {
+    ...fetch,
+    name: "probe",
+    label: "Probe",
+    command: "git fetch --upload-p {{ref}} .",
+  };
   document.artifacts[0]!.actions.push(stale);
   await fs.writeFile(file, JSON.stringify(document));
 
   const reopened = reopen();
   const kept = (await reopened.get("ws1", created.id))!.artifact;
-  assert.deepEqual(kept.actions.map((action) => action.name), ["fetch", "probe"]);
+  assert.deepEqual(
+    kept.actions.map((action) => action.name),
+    ["fetch", "probe"],
+  );
   const probe = kept.actions.find((action) => action.name === "probe")!;
   assert.match(workspaceArtifactActionProblem(probe) ?? "", /names/u);
   assert.throws(() => resolveWorkspaceArtifactCommand(probe, ["./x.sh"]), /Probe is turned off/u);
   assert.equal(workspaceArtifactActionProblem(kept.actions[0]!), undefined);
-  assert.equal(resolveWorkspaceArtifactCommand(kept.actions[0]!, ["main"]).preview, "GIT_LITERAL_PATHSPECS=1 git fetch origin 'main'");
+  assert.equal(
+    resolveWorkspaceArtifactCommand(kept.actions[0]!, ["main"]).preview,
+    "GIT_LITERAL_PATHSPECS=1 git fetch origin 'main'",
+  );
 
   // Later writes keep the page, and replacing it keeps the old version in its history.
   await reopened.create("ws1", content({ title: "Second" }));
   await reopened.replace("ws1", created.id, content({ actions: [fetch] }));
-  const written = JSON.parse(await fs.readFile(file, "utf8")) as { artifacts: unknown[]; unreadable?: unknown[] };
+  const written = JSON.parse(await fs.readFile(file, "utf8")) as {
+    artifacts: unknown[];
+    unreadable?: unknown[];
+  };
   assert.equal(written.artifacts.length, 2);
   assert.equal(written.unreadable, undefined);
   const earlier = (await reopen().revision("ws1", created.id, created.revision))!;
-  assert.deepEqual(earlier.actions.map((action) => action.name), ["fetch", "probe"]);
+  assert.deepEqual(
+    earlier.actions.map((action) => action.name),
+    ["fetch", "probe"],
+  );
 });
 
 test("an approval given while a button was turned off asks again once a later release's rules turn it on", async (t) => {
@@ -212,14 +320,19 @@ test("an approval given while a button was turned off asks again once a later re
     name: "comment",
     label: "Comment",
     command: "gh issue comment {{issue}} --body {{text}}",
-    params: [{ name: "issue", type: "string" }, { name: "text", type: "string" }],
+    params: [
+      { name: "issue", type: "string" },
+      { name: "text", type: "string" },
+    ],
   };
   const created = await store.create("ws1", content({ actions: [comment] }));
   assert.equal(workspaceArtifactActionProblem(comment), undefined);
   // The person allowed the card an earlier release showed, whose rules turned Comment off.
   const shownWhileOff = workspaceArtifactDigest([pulls], [comment], () => true);
   const file = path.join(dir, "ws1.json");
-  const document = JSON.parse(await fs.readFile(file, "utf8")) as { artifacts: { approvedDigest?: string }[] };
+  const document = JSON.parse(await fs.readFile(file, "utf8")) as {
+    artifacts: { approvedDigest?: string }[];
+  };
   document.artifacts[0]!.approvedDigest = shownWhileOff;
   await fs.writeFile(file, JSON.stringify(document));
 
@@ -227,7 +340,10 @@ test("an approval given while a button was turned off asks again once a later re
   assert.equal(view.artifact.approvedDigest, shownWhileOff);
   assert.notEqual(view.digest, shownWhileOff, "Comment runs now, which the approval never allowed");
   // Allowed while every button ran, the page keeps its approval across a rule change that leaves them all on.
-  assert.equal(view.digest, workspaceArtifactDigest([pulls], [comment], () => false));
+  assert.equal(
+    view.digest,
+    workspaceArtifactDigest([pulls], [comment], () => false),
+  );
   const approved = await store.approve("ws1", created.id, view.digest);
   assert.equal(approved.approvedDigest, view.digest);
 });
@@ -237,9 +353,15 @@ test("a page set aside earlier comes back once it reads again, and a copy of a l
   const first = await store.create("ws1", content());
   const second = await store.create("ws1", content({ title: "Second" }));
   const file = path.join(dir, "ws1.json");
-  const document = JSON.parse(await fs.readFile(file, "utf8")) as { artifacts: Record<string, unknown>[]; unreadable?: unknown[] };
+  const document = JSON.parse(await fs.readFile(file, "utf8")) as {
+    artifacts: Record<string, unknown>[];
+    unreadable?: unknown[];
+  };
   // An earlier release set Second aside; a copy of the first page sits there too.
-  document.unreadable = [document.artifacts[1], { ...document.artifacts[0], description: "stale copy" }];
+  document.unreadable = [
+    document.artifacts[1],
+    { ...document.artifacts[0], description: "stale copy" },
+  ];
   document.artifacts = [document.artifacts[0]!];
   await fs.writeFile(file, JSON.stringify(document));
 
@@ -248,9 +370,15 @@ test("a page set aside earlier comes back once it reads again, and a copy of a l
   assert.deepEqual(listed.map((view) => view.artifact.id).sort(), [first.id, second.id].sort());
   assert.equal((await reopened.get("ws1", first.id))!.artifact.description, undefined);
   await reopened.rename("ws1", second.id, "Back");
-  const written = JSON.parse(await fs.readFile(file, "utf8")) as { artifacts: unknown[]; unreadable?: { description?: string }[] };
+  const written = JSON.parse(await fs.readFile(file, "utf8")) as {
+    artifacts: unknown[];
+    unreadable?: { description?: string }[];
+  };
   assert.equal(written.artifacts.length, 2);
-  assert.deepEqual(written.unreadable?.map((entry) => entry.description), ["stale copy"]);
+  assert.deepEqual(
+    written.unreadable?.map((entry) => entry.description),
+    ["stale copy"],
+  );
 });
 
 test("page state is saved only while it stays small and wire-safe", async (t) => {
@@ -258,21 +386,34 @@ test("page state is saved only while it stays small and wire-safe", async (t) =>
   const artifact = await store.create("ws1", content());
   await store.saveState("ws1", artifact.id, artifact.revision, { tab: "mine" });
   assert.deepEqual((await store.get("ws1", artifact.id))!.artifact.visual.state, { tab: "mine" });
-  await assert.rejects(store.saveState("ws1", artifact.id, artifact.revision, { blob: "x".repeat(5_000) }), /too large/u);
-  await assert.rejects(store.saveState("ws1", artifact.id, artifact.revision, { token: "x" }), /reserved/u);
+  await assert.rejects(
+    store.saveState("ws1", artifact.id, artifact.revision, { blob: "x".repeat(5_000) }),
+    /too large/u,
+  );
+  await assert.rejects(
+    store.saveState("ws1", artifact.id, artifact.revision, { token: "x" }),
+    /reserved/u,
+  );
 });
 
 test("the state the markup declared is kept apart from the state the person saves", async (t) => {
   const { store, reopen } = await openStore(t);
   const declared = { tab: "all" };
-  const created = await store.create("ws1", content({ visual: { ...page(), state: declared }, initialState: declared }));
+  const created = await store.create(
+    "ws1",
+    content({ visual: { ...page(), state: declared }, initialState: declared }),
+  );
   await store.saveState("ws1", created.id, created.revision, { tab: "mine" });
   let saved = (await reopen().get("ws1", created.id))!.artifact;
   assert.deepEqual(saved.visual.state, { tab: "mine" });
   assert.deepEqual(saved.initialState, declared);
 
   // An update sets it from the new markup, and a restore brings the old one back.
-  await store.replace("ws1", created.id, content({ visual: { ...page(), state: { tab: "open" } }, initialState: { tab: "open" } }));
+  await store.replace(
+    "ws1",
+    created.id,
+    content({ visual: { ...page(), state: { tab: "open" } }, initialState: { tab: "open" } }),
+  );
   assert.deepEqual((await store.get("ws1", created.id))!.artifact.initialState, { tab: "open" });
   await store.replace("ws1", created.id, content());
   assert.equal((await store.get("ws1", created.id))!.artifact.initialState, undefined);
@@ -320,8 +461,15 @@ test("each update keeps the version it replaced, at most five per page, newest f
 
 test("restore brings an earlier page back as a new revision under the current name, and can itself be undone", async (t) => {
   const { store } = await openStore(t);
-  const created = await store.create("ws1", content({ visual: heading("first"), description: "Before" }));
-  await store.replace("ws1", created.id, content({ visual: heading("second"), title: "Pulls", description: "After" }));
+  const created = await store.create(
+    "ws1",
+    content({ visual: heading("first"), description: "Before" }),
+  );
+  await store.replace(
+    "ws1",
+    created.id,
+    content({ visual: heading("second"), title: "Pulls", description: "After" }),
+  );
 
   const restored = await store.restore("ws1", created.id, 1);
   assert.equal(restored.revision, 3);
@@ -330,10 +478,13 @@ test("restore brings an earlier page back as a new revision under the current na
   assert.match(restored.visual.fallbackText ?? "", /first/u);
 
   const history = await store.history("ws1", created.id);
-  assert.deepEqual(history.map((entry) => [entry.revision, entry.title]), [
-    [2, "Pulls"],
-    [1, "Open PRs"],
-  ]);
+  assert.deepEqual(
+    history.map((entry) => [entry.revision, entry.title]),
+    [
+      [2, "Pulls"],
+      [1, "Open PRs"],
+    ],
+  );
   const undone = await store.restore("ws1", created.id, 2);
   assert.equal(undone.revision, 4);
   assert.match(undone.visual.fallbackText ?? "", /second/u);
@@ -345,7 +496,12 @@ test("a restore keeps an approval only when it brings back the commands already 
   const risky = { ...pulls, command: "gh pr list --json number,title" };
   // Revision 2: same commands, new page. Revision 3: different commands.
   await store.replace("ws1", created.id, content({ visual: heading("two") }));
-  await store.replace("ws1", created.id, content({ sources: [risky] }), allowed(content({ sources: [risky] })));
+  await store.replace(
+    "ws1",
+    created.id,
+    content({ sources: [risky] }),
+    allowed(content({ sources: [risky] })),
+  );
   const summaries = await store.history("ws1", created.id);
   assert.deepEqual(
     summaries.map((entry) => [entry.revision, entry.needsApproval]),
@@ -401,7 +557,10 @@ test("restoring a version that is no longer kept fails clearly", async (t) => {
   for (let version = 2; version <= 7; version += 1) {
     await store.replace("ws1", created.id, content({ visual: heading(`v${version}`) }));
   }
-  await assert.rejects(store.restore("ws1", created.id, 1), /Revision 1 of this artifact is no longer kept/u);
+  await assert.rejects(
+    store.restore("ws1", created.id, 1),
+    /Revision 1 of this artifact is no longer kept/u,
+  );
   await assert.rejects(store.restore("ws1", created.id, 7), /no longer kept/u);
   assert.equal((await store.get("ws1", created.id))!.artifact.revision, 7);
 });
@@ -426,7 +585,9 @@ test("a delete that lands while a replace is still keeping its earlier version l
   await replacing;
   assert.equal(await deleting, true);
   assert.deepEqual(await reopen().earlierRevisions("ws1"), {});
-  const file = JSON.parse(await fs.readFile(path.join(dir, "ws1.history.json"), "utf8")) as { revisions: object };
+  const file = JSON.parse(await fs.readFile(path.join(dir, "ws1.history.json"), "utf8")) as {
+    revisions: object;
+  };
   assert.deepEqual(file.revisions, {});
 });
 
@@ -444,7 +605,11 @@ test("a history file that cannot be cleared does not stop a delete", async (t) =
   t.after(() => fs.rm(dir, { recursive: true, force: true }));
   const errors: unknown[] = [];
   let ids = 0;
-  const store = new WorkspaceArtifactStore({ root: () => dir, newId: () => `art${++ids}`, onHistoryError: (error) => errors.push(error) });
+  const store = new WorkspaceArtifactStore({
+    root: () => dir,
+    newId: () => `art${++ids}`,
+    onHistoryError: (error) => errors.push(error),
+  });
   const created = await store.create("ws1", content());
   await fs.mkdir(path.join(dir, "ws1.history.json"));
   assert.equal(await store.delete("ws1", created.id), true);
@@ -457,7 +622,9 @@ test("a damaged history file is tolerated: bad entries are dropped and pages sti
   const created = await store.create("ws1", content());
   await store.replace("ws1", created.id, content({ visual: heading("two") }));
   const file = path.join(dir, "ws1.history.json");
-  const document = JSON.parse(await fs.readFile(file, "utf8")) as { revisions: Record<string, Record<string, unknown>[]> };
+  const document = JSON.parse(await fs.readFile(file, "utf8")) as {
+    revisions: Record<string, Record<string, unknown>[]>;
+  };
   const good = document.revisions[created.id]![0]!;
   document.revisions[created.id] = [
     good,
@@ -473,7 +640,11 @@ test("a damaged history file is tolerated: bad entries are dropped and pages sti
 
   await fs.writeFile(file, "{ not json");
   const afterCorruption = reopen();
-  const saved = await afterCorruption.replace("ws1", created.id, content({ visual: heading("three") }));
+  const saved = await afterCorruption.replace(
+    "ws1",
+    created.id,
+    content({ visual: heading("three") }),
+  );
   assert.equal(saved.revision, 4);
   assert.deepEqual(await afterCorruption.earlierRevisions("ws1"), { [created.id]: [3] });
 });
@@ -492,10 +663,17 @@ test("history that would outgrow its file drops the oldest versions instead of f
     onHistoryError: (error) => errors.push(error),
   });
   const first = await store.create("ws1", content({ visual: heading("a".repeat(800)) }));
-  const second = await store.create("ws1", content({ title: "Second", visual: heading("b".repeat(800)) }));
+  const second = await store.create(
+    "ws1",
+    content({ title: "Second", visual: heading("b".repeat(800)) }),
+  );
   for (let version = 0; version < 4; version += 1) {
     await store.replace("ws1", first.id, content({ visual: heading(`a${version}`.repeat(400)) }));
-    await store.replace("ws1", second.id, content({ title: "Second", visual: heading(`b${version}`.repeat(400)) }));
+    await store.replace(
+      "ws1",
+      second.id,
+      content({ title: "Second", visual: heading(`b${version}`.repeat(400)) }),
+    );
   }
   assert.deepEqual(errors, []);
   assert.ok((await fs.stat(path.join(dir, "ws1.history.json"))).size <= 7_000);
@@ -520,10 +698,15 @@ test("history that would outgrow its file drops older versions' markup before an
       onHistoryError: (error) => errors.push(error),
     });
   const store = make();
-  const markup = (version: number) => `<Visual title="Open PRs">${`v${version} `.repeat(600)}</Visual>`;
+  const markup = (version: number) =>
+    `<Visual title="Open PRs">${`v${version} `.repeat(600)}</Visual>`;
   await store.create("ws1", content({ visual: heading("v1"), markup: markup(1) }));
   for (let version = 2; version <= 6; version += 1) {
-    await store.replace("ws1", "art1", content({ visual: heading(`v${version}`), markup: markup(version) }));
+    await store.replace(
+      "ws1",
+      "art1",
+      content({ visual: heading(`v${version}`), markup: markup(version) }),
+    );
   }
   assert.deepEqual(errors, []);
   assert.ok((await fs.stat(path.join(dir, "ws1.history.json"))).size <= 9_000);
@@ -548,16 +731,27 @@ test("pages that would outgrow their file drop the least recently changed pages'
   let clock = 1_000;
   let ids = 0;
   const make = () =>
-    new WorkspaceArtifactStore({ root: () => dir, now: () => (clock += 1), newId: () => `art${++ids}`, artifactsMaxBytes: 12_000 });
+    new WorkspaceArtifactStore({
+      root: () => dir,
+      now: () => (clock += 1),
+      newId: () => `art${++ids}`,
+      artifactsMaxBytes: 12_000,
+    });
   const store = make();
   const markup = (word: string) => `<Visual title="x">${`${word} `.repeat(1_000)}</Visual>`;
   await store.create("ws1", content({ title: "A", markup: markup("aaa") }));
   await store.create("ws1", content({ title: "B", markup: markup("bbb") }));
   // A changed since B, so B is now the least recently changed page.
-  await store.replace("ws1", "art1", content({ title: "A", visual: heading("a2"), markup: markup("aa2") }));
+  await store.replace(
+    "ws1",
+    "art1",
+    content({ title: "A", visual: heading("a2"), markup: markup("aa2") }),
+  );
   await store.create("ws1", content({ title: "C", markup: markup("ccc") }));
   assert.ok((await fs.stat(path.join(dir, "ws1.json"))).size <= 12_000);
-  const pages = new Map((await make().list("ws1")).map((view) => [view.artifact.visual.title, view.artifact]));
+  const pages = new Map(
+    (await make().list("ws1")).map((view) => [view.artifact.visual.title, view.artifact]),
+  );
   assert.equal(pages.size, 3);
   assert.equal(pages.get("B")!.markup, undefined);
   assert.equal(pages.get("B")!.markupDropped, true);
@@ -567,13 +761,19 @@ test("pages that would outgrow their file drop the least recently changed pages'
   const huge = await store.create("ws1", content({ title: "D", markup: markup("d".repeat(12)) }));
   assert.equal(huge.markup, undefined);
   assert.equal(huge.markupDropped, true);
-  const after = new Map((await make().list("ws1")).map((view) => [view.artifact.visual.title, view.artifact.markup]));
+  const after = new Map(
+    (await make().list("ws1")).map((view) => [view.artifact.visual.title, view.artifact.markup]),
+  );
   assert.equal(after.get("A"), markup("aa2"));
   assert.equal(after.get("C"), markup("ccc"));
   // Saving B's markup again (here, its unchanged page) keeps it once there is room.
   await store.delete("ws1", huge.id);
   await store.delete("ws1", "art3");
-  const resaved = await store.replace("ws1", "art2", content({ title: "B", markup: markup("bbb") }));
+  const resaved = await store.replace(
+    "ws1",
+    "art2",
+    content({ title: "B", markup: markup("bbb") }),
+  );
   assert.equal(resaved.revision, 1);
   assert.equal(resaved.markup, markup("bbb"));
   assert.equal(resaved.markupDropped, undefined);
@@ -584,7 +784,11 @@ test("saving one page's state near the size cap drops only that page's markup, a
   t.after(() => fs.rm(dir, { recursive: true, force: true }));
   let ids = 0;
   const make = (artifactsMaxBytes?: number) =>
-    new WorkspaceArtifactStore({ root: () => dir, newId: () => `art${++ids}`, ...(artifactsMaxBytes ? { artifactsMaxBytes } : {}) });
+    new WorkspaceArtifactStore({
+      root: () => dir,
+      newId: () => `art${++ids}`,
+      ...(artifactsMaxBytes ? { artifactsMaxBytes } : {}),
+    });
   const markup = (word: string) => `<Visual title="x">${`${word} `.repeat(1_000)}</Visual>`;
   const loose = make();
   const other = await loose.create("ws1", content({ title: "Other", markup: markup("aaa") }));
@@ -600,7 +804,9 @@ test("saving one page's state near the size cap drops only that page's markup, a
   assert.deepEqual(pages.get(saving.id)!.visual.state, { note: "x".repeat(2_000) });
   // With no markup of its own left to drop, a state that does not fit is refused and nothing changes.
   const full = make((await size()) + 100);
-  await assert.rejects(full.saveState("ws1", saving.id, saving.revision, { note: "y".repeat(4_000) }));
+  await assert.rejects(
+    full.saveState("ws1", saving.id, saving.revision, { note: "y".repeat(4_000) }),
+  );
   pages = new Map((await make().list("ws1")).map((view) => [view.artifact.id, view.artifact]));
   assert.equal(pages.get(other.id)!.markup, markup("aaa"));
   assert.deepEqual(pages.get(saving.id)!.visual.state, { note: "x".repeat(2_000) });
@@ -611,7 +817,11 @@ test("a history write that fails is reported, and the update still succeeds", as
   t.after(() => fs.rm(dir, { recursive: true, force: true }));
   const errors: unknown[] = [];
   let ids = 0;
-  const store = new WorkspaceArtifactStore({ root: () => dir, newId: () => `art${++ids}`, onHistoryError: (error) => errors.push(error) });
+  const store = new WorkspaceArtifactStore({
+    root: () => dir,
+    newId: () => `art${++ids}`,
+    onHistoryError: (error) => errors.push(error),
+  });
   const created = await store.create("ws1", content());
   // A directory where the history file belongs: the history write cannot land.
   await fs.mkdir(path.join(dir, "ws1.history.json"));
@@ -626,7 +836,11 @@ test("a restore that cannot keep the current version is refused, and nothing is 
   t.after(() => fs.rm(dir, { recursive: true, force: true }));
   const errors: unknown[] = [];
   let ids = 0;
-  const store = new WorkspaceArtifactStore({ root: () => dir, newId: () => `art${++ids}`, onHistoryError: (error) => errors.push(error) });
+  const store = new WorkspaceArtifactStore({
+    root: () => dir,
+    newId: () => `art${++ids}`,
+    onHistoryError: (error) => errors.push(error),
+  });
   const created = await store.create("ws1", content({ visual: heading("one") }));
   await store.replace("ws1", created.id, content({ visual: heading("two") }));
   // A directory where the history file belongs: revision 1 still reads, but no write can land.
@@ -642,7 +856,10 @@ test("a restore that cannot keep the current version is refused, and nothing is 
   await fs.rmdir(historyFile);
   const restored = await store.restore("ws1", created.id, 1);
   assert.equal(restored.revision, 3);
-  assert.deepEqual((await store.history("ws1", created.id)).map((entry) => entry.revision), [2, 1]);
+  assert.deepEqual(
+    (await store.history("ws1", created.id)).map((entry) => entry.revision),
+    [2, 1],
+  );
 });
 
 test("state saved from a revision the page has left does not overwrite the new one", async (t) => {
@@ -666,26 +883,62 @@ test("ids from outside are checked before they reach the file system", async (t)
 
 test("legacy file-source snapshots are purged before the first list and remain absent on disk", async (t) => {
   const { dir, store, reopen } = await openStore(t);
-  const artifact = await store.create("ws1", content({ sources: [{ name: "old", kind: "file", file: "alias.txt", parse: "text" }] }));
-  await fs.writeFile(path.join(dir, "ws1.snapshots.json"), JSON.stringify({ version: 1, snapshots: {
-    [artifact.id]: { revision: 1, refreshedAt: 1, sources: { old: { status: "ok", at: 1, dataJson: '"LEGACY_PRIVATE_VALUE"' } } },
-  } }));
+  const artifact = await store.create(
+    "ws1",
+    content({ sources: [{ name: "old", kind: "file", file: "alias.txt", parse: "text" }] }),
+  );
+  await fs.writeFile(
+    path.join(dir, "ws1.snapshots.json"),
+    JSON.stringify({
+      version: 1,
+      snapshots: {
+        [artifact.id]: {
+          revision: 1,
+          refreshedAt: 1,
+          sources: { old: { status: "ok", at: 1, dataJson: '"LEGACY_PRIVATE_VALUE"' } },
+        },
+      },
+    }),
+  );
   const listed = await reopen().list("ws1");
   assert.equal(listed[0]!.artifact.sources.length, 1, "legacy definition remains editable");
   assert.equal(listed[0]!.snapshot!.sources.old!.dataJson, undefined);
   assert.equal(JSON.stringify(listed).includes("LEGACY_PRIVATE_VALUE"), false);
-  assert.equal((await fs.readFile(path.join(dir, "ws1.snapshots.json"), "utf8")).includes("LEGACY_PRIVATE_VALUE"), false);
+  assert.equal(
+    (await fs.readFile(path.join(dir, "ws1.snapshots.json"), "utf8")).includes(
+      "LEGACY_PRIVATE_VALUE",
+    ),
+    false,
+  );
 });
 
 test("canonical policy changes invalidate validated caches before get while transient IO preserves ordinary data", async (t) => {
   const { dir, store } = await openStore(t);
-  const artifact = await store.create("ws1", content({ sources: [{ name: "data", kind: "file", file: "alias.txt", parse: "text" }] }));
-  await store.saveSnapshot("ws1", artifact, { data: { status: "ok", at: 1, dataJson: '"previous-data"' } });
-  const transient = new WorkspaceArtifactStore({ root: () => dir, fileSourceAllowed: async () => { throw Object.assign(new Error("missing"), { code: "ENOENT" }); } });
-  assert.equal((await transient.get("ws1", artifact.id))!.snapshot!.sources.data!.dataJson, '"previous-data"');
-  const denied = new WorkspaceArtifactStore({ root: () => dir, fileSourceAllowed: async () => false });
+  const artifact = await store.create(
+    "ws1",
+    content({ sources: [{ name: "data", kind: "file", file: "alias.txt", parse: "text" }] }),
+  );
+  await store.saveSnapshot("ws1", artifact, {
+    data: { status: "ok", at: 1, dataJson: '"previous-data"' },
+  });
+  const transient = new WorkspaceArtifactStore({
+    root: () => dir,
+    fileSourceAllowed: async () => {
+      throw Object.assign(new Error("missing"), { code: "ENOENT" });
+    },
+  });
+  assert.equal(
+    (await transient.get("ws1", artifact.id))!.snapshot!.sources.data!.dataJson,
+    '"previous-data"',
+  );
+  const denied = new WorkspaceArtifactStore({
+    root: () => dir,
+    fileSourceAllowed: async () => false,
+  });
   assert.equal((await denied.get("ws1", artifact.id))!.snapshot!.sources.data!.dataJson, undefined);
-  await denied.saveSnapshot("ws1", artifact, { data: { status: "error", at: 2, policyDenied: true, error: "denied" } });
+  await denied.saveSnapshot("ws1", artifact, {
+    data: { status: "error", at: 2, policyDenied: true, error: "denied" },
+  });
   assert.equal((await denied.get("ws1", artifact.id))!.snapshot!.sources.data!.dataJson, undefined);
 });
 
@@ -693,9 +946,21 @@ test("one listing asks the file policy once per file however many pages read it,
   const { dir, store } = await openStore(t);
   const shared = { name: "data", kind: "file" as const, file: "notes.md", parse: "text" as const };
   await store.create("ws1", content({ title: "One", sources: [shared] }));
-  await store.create("ws1", content({ title: "Two", sources: [shared, { name: "other", kind: "file", file: "todo.md", parse: "text" }] }));
+  await store.create(
+    "ws1",
+    content({
+      title: "Two",
+      sources: [shared, { name: "other", kind: "file", file: "todo.md", parse: "text" }],
+    }),
+  );
   const asked: string[] = [];
-  const counting = new WorkspaceArtifactStore({ root: () => dir, fileSourceAllowed: async (_workspace, file) => { asked.push(file); return true; } });
+  const counting = new WorkspaceArtifactStore({
+    root: () => dir,
+    fileSourceAllowed: async (_workspace, file) => {
+      asked.push(file);
+      return true;
+    },
+  });
   assert.equal((await counting.list("ws1")).length, 2);
   assert.deepEqual([...asked].sort(), ["notes.md", "todo.md"]);
   await counting.list("ws1");
@@ -704,20 +969,41 @@ test("one listing asks the file policy once per file however many pages read it,
 
 test("no write stores a file source that names a credential path", async (t) => {
   const { store } = await openStore(t);
-  const secrets: WorkspaceArtifactSourceV1 = { name: "env", kind: "file", file: ".env", parse: "text" };
+  const secrets: WorkspaceArtifactSourceV1 = {
+    name: "env",
+    kind: "file",
+    file: ".env",
+    parse: "text",
+  };
   await assert.rejects(store.create("ws1", content({ sources: [secrets] })), /Credential files/u);
   const created = await store.create("ws1", content());
-  await assert.rejects(store.replace("ws1", created.id, content({ sources: [secrets] })), /Credential files/u);
+  await assert.rejects(
+    store.replace("ws1", created.id, content({ sources: [secrets] })),
+    /Credential files/u,
+  );
   assert.deepEqual((await store.get("ws1", created.id))!.artifact.sources, created.sources);
 });
 
 test("each version keeps the markup it was saved from, up to the markup limit, across a restart", async (t) => {
   const { store, reopen } = await openStore(t);
-  await store.create("ws1", content({ markup: "<Visual title=\"Open PRs\">first</Visual>" }));
-  await store.replace("ws1", "art1", content({ markup: "<Visual title=\"Open PRs\">second</Visual>", visual: { ...page(), layout: "wide" } }));
+  await store.create("ws1", content({ markup: '<Visual title="Open PRs">first</Visual>' }));
+  await store.replace(
+    "ws1",
+    "art1",
+    content({
+      markup: '<Visual title="Open PRs">second</Visual>',
+      visual: { ...page(), layout: "wide" },
+    }),
+  );
   const reopened = reopen();
-  assert.equal((await reopened.get("ws1", "art1"))!.artifact.markup, "<Visual title=\"Open PRs\">second</Visual>");
-  assert.equal((await reopened.revision("ws1", "art1", 1))!.markup, "<Visual title=\"Open PRs\">first</Visual>");
+  assert.equal(
+    (await reopened.get("ws1", "art1"))!.artifact.markup,
+    '<Visual title="Open PRs">second</Visual>',
+  );
+  assert.equal(
+    (await reopened.revision("ws1", "art1", 1))!.markup,
+    '<Visual title="Open PRs">first</Visual>',
+  );
   // Markup longer than the limit is not kept; the page itself still saves.
   const long = "x".repeat(WORKSPACE_ARTIFACT_LIMITS.markupChars + 1);
   const saved = await reopened.replace("ws1", "art1", content({ markup: long }));

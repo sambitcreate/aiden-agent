@@ -17,7 +17,11 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
-import { createTelegramServiceCore, telegramBotBindingKey, telegramCompactionCallback } from "./telegram-service-core.js";
+import {
+  createTelegramServiceCore,
+  telegramBotBindingKey,
+  telegramCompactionCallback,
+} from "./telegram-service-core.js";
 import { createTelegramBotBindingStore } from "./telegram-bot-binding-store.js";
 import { createTelegramButtonStore } from "./telegram-outbound.js";
 import { telegramChatId } from "./telegram-turn.js";
@@ -27,7 +31,11 @@ import { createBotTurnIntents, stopWithIntents } from "../bot-runtime/bot-turn-i
 import { recordingDeps } from "../bot-runtime/test-support/fixtures.js";
 import { createFauxModels, FAUX_MODEL_REF } from "../bot-runtime/test-support/faux.js";
 import { fauxAssistantMessage } from "@earendil-works/pi-ai/providers/faux";
-import { createTelegramBotIngress, telegramBotRequestId, type TelegramBotReply } from "./bot-reply-outbox.js";
+import {
+  createTelegramBotIngress,
+  telegramBotRequestId,
+  type TelegramBotReply,
+} from "./bot-reply-outbox.js";
 import { mkdirSync, rmSync } from "node:fs";
 import type {
   TelegramBotApi,
@@ -123,7 +131,9 @@ function createMockApi(opts: MockApiOptions) {
     editedReplyMarkups,
     callbackAnswers,
     commandRegistrations,
-    async setMyCommands(commands: readonly { command: string; description: string }[]) { commandRegistrations.push(commands); },
+    async setMyCommands(commands: readonly { command: string; description: string }[]) {
+      commandRegistrations.push(commands);
+    },
     richMessages,
     voiceMessages,
     calls,
@@ -214,7 +224,9 @@ function createMockApi(opts: MockApiOptions) {
     async editMessageText(params: Parameters<TelegramBotApi["editMessageText"]>[0]): Promise<void> {
       editedMessages.push(params);
     },
-    async editMessageReplyMarkup(params: Parameters<TelegramBotApi["editMessageReplyMarkup"]>[0]): Promise<void> {
+    async editMessageReplyMarkup(
+      params: Parameters<TelegramBotApi["editMessageReplyMarkup"]>[0],
+    ): Promise<void> {
       editedReplyMarkups.push(params);
     },
     async answerCallbackQuery(id: string, text?: string): Promise<void> {
@@ -666,7 +678,10 @@ async function waitFor(predicate: () => boolean, timeoutMs = 2000): Promise<void
 // ---------------------------------------------------------------------------
 
 test("Connect fails and stays saved as off when another process owns polling", async () => {
-  const h = harness({ enabled: false, acquireOwnership: () => ({ acquired: false, recovered: false, ownerPid: 4242 }) });
+  const h = harness({
+    enabled: false,
+    acquireOwnership: () => ({ acquired: false, recovered: false, ownerPid: 4242 }),
+  });
 
   await assert.rejects(h.service.setEnabled(true), /already owned by process 4242/u);
 
@@ -676,7 +691,9 @@ test("Connect fails and stays saved as off when another process owns polling", a
 
 test("Connect stops polling again when the on setting cannot be saved", async () => {
   const h = harness({ enabled: false, autoStop: false, delayAfterFirstBatch: true });
-  h.config.setSettings = async () => { throw new Error("disk full"); };
+  h.config.setSettings = async () => {
+    throw new Error("disk full");
+  };
 
   await assert.rejects(h.service.setEnabled(true), /disk full/u);
 
@@ -695,9 +712,15 @@ test("Connect starts polling and saves the bridge as on", async () => {
 
 test("Disconnect fails when the running Telegram turn cannot be stopped, with polling off", async () => {
   const h = harness({
-    enabled: true, allowedUserId: 42, autoStop: false, pendingTurn: true, delayAfterFirstBatch: true,
+    enabled: true,
+    allowedUserId: 42,
+    autoStop: false,
+    pendingTurn: true,
+    delayAfterFirstBatch: true,
     batches: [[makeUpdate(1, makeMessage(1, person(42), "long job"))]],
-    abortChat: async () => { throw new Error("The running turn did not stop in time."); },
+    abortChat: async () => {
+      throw new Error("The running turn did not stop in time.");
+    },
   });
   await h.service.start();
   await waitFor(() => h.turnMock.startCalls() === 1);
@@ -712,9 +735,16 @@ test("Disconnect fails when the running Telegram turn cannot be stopped, with po
 test("Disconnect ends the running Telegram turn and succeeds", async () => {
   const stopped: string[] = [];
   const h = harness({
-    enabled: true, allowedUserId: 42, autoStop: false, pendingTurn: true, delayAfterFirstBatch: true,
+    enabled: true,
+    allowedUserId: 42,
+    autoStop: false,
+    pendingTurn: true,
+    delayAfterFirstBatch: true,
     batches: [[makeUpdate(1, makeMessage(1, person(42), "long job"))]],
-    abortChat: async (chatId) => { stopped.push(chatId); h.turnMock.completePendingTurn(); },
+    abortChat: async (chatId) => {
+      stopped.push(chatId);
+      h.turnMock.completePendingTurn();
+    },
   });
   await h.service.start();
   await waitFor(() => h.turnMock.startCalls() === 1);
@@ -808,7 +838,9 @@ test("a bot check that fails after stop() leaves the stopped bridge clean", asyn
   let fail: (cause: Error) => void = () => undefined;
   api.getMe = (requestSignal) => {
     signal = requestSignal;
-    return new Promise((_resolve, reject) => { fail = reject; });
+    return new Promise((_resolve, reject) => {
+      fail = reject;
+    });
   };
 
   await service.start();
@@ -825,7 +857,10 @@ test("a stale bot check cannot end the session that replaced it", async () => {
   const { service, api } = harness({ enabled: true, hasToken: true, autoStop: false });
   const realGetMe = api.getMe;
   let fail: (cause: Error) => void = () => undefined;
-  api.getMe = () => new Promise((_resolve, reject) => { fail = reject; });
+  api.getMe = () =>
+    new Promise((_resolve, reject) => {
+      fail = reject;
+    });
 
   await service.connect();
   service.stop();
@@ -920,15 +955,18 @@ test("unhealthy binding authority blocks both pairing and ordinary Telegram fall
         hasToken: true,
         allowedUserId,
         assertBotBindingStoreHealthy: async () => {
-          throw new Error("Telegram routing data is unavailable. Open Aiden on your computer to repair it.");
+          throw new Error(
+            "Telegram routing data is unavailable. Open Aiden on your computer to repair it.",
+          );
         },
         batches: [[makeUpdate(1, makeMessage(10, sender, "must not fall back"))]],
         autoStop: true,
       });
 
       await service.start();
-      await waitFor(() => api.sentMessages.some(({ text }) =>
-        text.includes("Telegram routing data is unavailable")));
+      await waitFor(() =>
+        api.sentMessages.some(({ text }) => text.includes("Telegram routing data is unavailable")),
+      );
 
       assert.equal(turnMock.startCalls(), 0);
       assert.equal(service.queueSize, 0);
@@ -1302,7 +1340,7 @@ test("bot-bound Telegram turns use the profile/bot backing chat and normal Pi mo
     enabled: true,
     allowedUserId: 42,
     profile: "work",
-    resolveBotBinding: async (input) => input.profile === "work" ? binding : undefined,
+    resolveBotBinding: async (input) => (input.profile === "work" ? binding : undefined),
     workspaces: [{ id: "work", name: "Work", folderPath: "/work" }],
     existingChats: [{ id: binding.backingChatId, workspaceId: "bot-home-a", botId: "bot-a" }],
     batches: [[makeUpdate(1, makeMessage(10, owner, "bot prompt"))]],
@@ -1310,7 +1348,11 @@ test("bot-bound Telegram turns use the profile/bot backing chat and normal Pi mo
   });
 
   await service.start();
-  await waitFor(() => turnMock.startCalls() === 1 && api.sentMessages.some(({ text }) => text.includes("Mock reply")));
+  await waitFor(
+    () =>
+      turnMock.startCalls() === 1 &&
+      api.sentMessages.some(({ text }) => text.includes("Mock reply")),
+  );
 
   assert.deepEqual(turnMock.createdChats(), []);
   assert.equal(turnMock.startedParams()[0]?.chatId, "telegram-work-bot-a");
@@ -1338,7 +1380,9 @@ test("a Bot-bound message is admitted to the durable Bot session before the offs
     allowedUserId: 42,
     profile: "work",
     resolveBotBinding: async () => durableBinding,
-    existingChats: [{ id: durableBinding.backingChatId, workspaceId: "bot-home-a", botId: "bot-a" }],
+    existingChats: [
+      { id: durableBinding.backingChatId, workspaceId: "bot-home-a", botId: "bot-a" },
+    ],
     batches: [[makeUpdate(7, makeMessage(10, owner, "plan dinner"))]],
     autoStop: true,
     botIngress: {
@@ -1368,7 +1412,9 @@ test("a Bot message whose admission fails keeps the offset so Telegram redeliver
     allowedUserId: 42,
     profile: "work",
     resolveBotBinding: async () => durableBinding,
-    existingChats: [{ id: durableBinding.backingChatId, workspaceId: "bot-home-a", botId: "bot-a" }],
+    existingChats: [
+      { id: durableBinding.backingChatId, workspaceId: "bot-home-a", botId: "bot-a" },
+    ],
     batches: [[makeUpdate(7, makeMessage(10, owner, "plan dinner"))]],
     autoStop: true,
     botIngress: {
@@ -1393,7 +1439,9 @@ test("a Bot message that keeps failing is retried with a growing pause, not in a
     allowedUserId: 42,
     profile: "work",
     resolveBotBinding: async () => durableBinding,
-    existingChats: [{ id: durableBinding.backingChatId, workspaceId: "bot-home-a", botId: "bot-a" }],
+    existingChats: [
+      { id: durableBinding.backingChatId, workspaceId: "bot-home-a", botId: "bot-a" },
+    ],
     // Telegram redelivers the same update on every poll while it stays unacknowledged.
     batches: [[update], [update], [update]],
     autoStop: false,
@@ -1412,9 +1460,16 @@ test("a Bot message that keeps failing is retried with a growing pause, not in a
   assert.equal(attempts, 3, "each redelivery is retried once");
   assert.equal(sleepMock.calls(), 3, "every failed attempt waits before the next poll");
   const pauses = sleepMock.lastArgs();
-  assert.ok(pauses.every((ms, index) => ms > 0 && (index === 0 || ms >= pauses[index - 1]!)), `pauses grow: ${pauses.join(", ")}`);
+  assert.ok(
+    pauses.every((ms, index) => ms > 0 && (index === 0 || ms >= pauses[index - 1]!)),
+    `pauses grow: ${pauses.join(", ")}`,
+  );
   assert.equal(config.persistOffsetCalls(), 0, "the offset is kept so Telegram redelivers");
-  assert.equal(api.sentMessages.length, 0, "no error is sent while the failure may still be transient");
+  assert.equal(
+    api.sentMessages.length,
+    0,
+    "no error is sent while the failure may still be transient",
+  );
 });
 
 test("a Bot message that fails the same way on every redelivery is reported to the chat and skipped", async () => {
@@ -1428,7 +1483,9 @@ test("a Bot message that fails the same way on every redelivery is reported to t
     allowedUserId: 42,
     profile: "work",
     resolveBotBinding: async () => durableBinding,
-    existingChats: [{ id: durableBinding.backingChatId, workspaceId: "bot-home-a", botId: "bot-a" }],
+    existingChats: [
+      { id: durableBinding.backingChatId, workspaceId: "bot-home-a", botId: "bot-a" },
+    ],
     batches: [[poison], [poison], [poison], [poison], [poison], [poison, next]],
     autoStop: true,
     botIngress: {
@@ -1448,10 +1505,15 @@ test("a Bot message that fails the same way on every redelivery is reported to t
 
   assert.equal(attempts, 5, "the poison update is given a bounded number of attempts");
   assert.deepEqual(
-    api.sentMessages.filter(({ chatId }) => chatId === durableBinding.chatId).map(({ text }) => text),
+    api.sentMessages
+      .filter(({ chatId }) => chatId === durableBinding.chatId)
+      .map(({ text }) => text),
     ["⚠️ Error: The Bot's storage is unreadable."],
   );
-  assert.ok(config.persistOffsetCalls() >= 2, "the offset moves past the poison update and the one after it");
+  assert.ok(
+    config.persistOffsetCalls() >= 2,
+    "the offset moves past the poison update and the one after it",
+  );
   assert.deepEqual(admitted, ["plan lunch"], "later updates on the profile are no longer blocked");
 });
 
@@ -1464,7 +1526,9 @@ test("a Bot turn accepted before its reply row could be written is never skipped
     allowedUserId: 42,
     profile: "work",
     resolveBotBinding: async () => durableBinding,
-    existingChats: [{ id: durableBinding.backingChatId, workspaceId: "bot-home-a", botId: "bot-a" }],
+    existingChats: [
+      { id: durableBinding.backingChatId, workspaceId: "bot-home-a", botId: "bot-a" },
+    ],
     batches: [[accepted], [accepted], [accepted], [accepted], [accepted], [accepted], [accepted]],
     autoStop: true,
     botIngress: {
@@ -1516,7 +1580,9 @@ test("an accepted Bot turn stays unskippable when later redeliveries fail on the
     allowedUserId: 42,
     profile: "work",
     resolveBotBinding: async () => durableBinding,
-    existingChats: [{ id: durableBinding.backingChatId, workspaceId: "bot-home-a", botId: "bot-a" }],
+    existingChats: [
+      { id: durableBinding.backingChatId, workspaceId: "bot-home-a", botId: "bot-a" },
+    ],
     batches: Array.from({ length: 8 }, () => [accepted]),
     autoStop: true,
     botIngress: {
@@ -1556,7 +1622,9 @@ test("a Bot that cannot take messages at all is told once and the update is not 
     allowedUserId: 42,
     profile: "work",
     resolveBotBinding: async () => durableBinding,
-    existingChats: [{ id: durableBinding.backingChatId, workspaceId: "bot-home-a", botId: "bot-a" }],
+    existingChats: [
+      { id: durableBinding.backingChatId, workspaceId: "bot-home-a", botId: "bot-a" },
+    ],
     batches: [[makeUpdate(7, makeMessage(10, owner, "plan dinner"))]],
     autoStop: true,
     botIngress: {
@@ -1572,7 +1640,9 @@ test("a Bot that cannot take messages at all is told once and the update is not 
 
   assert.equal(attempts, 1, "a Bot without a model is not retried");
   assert.deepEqual(
-    api.sentMessages.filter(({ chatId }) => chatId === durableBinding.chatId).map(({ text }) => text),
+    api.sentMessages
+      .filter(({ chatId }) => chatId === durableBinding.chatId)
+      .map(({ text }) => text),
     ["⚠️ Error: This Bot needs an AI model."],
   );
 });
@@ -1602,7 +1672,9 @@ test("a message to a paused Bot is answered with its one line, consumed once, an
     allowedUserId: 42,
     profile: "work",
     resolveBotBinding: async () => durableBinding,
-    existingChats: [{ id: durableBinding.backingChatId, workspaceId: "bot-home-a", botId: "bot-a" }],
+    existingChats: [
+      { id: durableBinding.backingChatId, workspaceId: "bot-home-a", botId: "bot-a" },
+    ],
     batches: [[makeUpdate(7, makeMessage(10, owner, "plan dinner"))]],
     autoStop: true,
     botIngress: ingress,
@@ -1611,8 +1683,15 @@ test("a message to a paused Bot is answered with its one line, consumed once, an
     await service.start();
     await waitFor(() => config.persistOffsetCalls() === 1);
     assert.equal(sends, 1, "the update is not redelivered");
-    assert.deepEqual(delivered.map(({ text }) => text), ["Ada is paused. Resume it in Aiden to continue."]);
-    assert.equal(api.sentMessages.filter(({ text }) => text.startsWith("⚠️")).length, 0, "a pause is not an error");
+    assert.deepEqual(
+      delivered.map(({ text }) => text),
+      ["Ada is paused. Resume it in Aiden to continue."],
+    );
+    assert.equal(
+      api.sentMessages.filter(({ text }) => text.startsWith("⚠️")).length,
+      0,
+      "a pause is not an error",
+    );
     assert.equal(api.sendChatActionCalls(), 0, "a paused Bot is not typing");
     assert.deepEqual(await ingress.rows(), []);
   } finally {
@@ -1674,24 +1753,24 @@ test("a persisted Bot binding dispatches in its managed home while retaining its
       enabled: true,
       allowedUserId: 42,
       profile: "work",
-      resolveBotBinding: (input) => bindings.resolve(
-        input.profile,
-        input.chatId,
-        input.threadId,
-      ),
-      existingChats: [{
-        id: binding.backingChatId,
-        workspaceId: binding.backingWorkspaceId,
-        botId: binding.botId,
-      }],
+      resolveBotBinding: (input) => bindings.resolve(input.profile, input.chatId, input.threadId),
+      existingChats: [
+        {
+          id: binding.backingChatId,
+          workspaceId: binding.backingWorkspaceId,
+          botId: binding.botId,
+        },
+      ],
       batches: [[makeUpdate(1, makeMessage(10, owner, "managed prompt"))]],
       autoStop: true,
     });
 
     await service.start();
-    await waitFor(() => turnMock.startCalls() === 1 && api.sentMessages.some(
-      ({ text }) => text.includes("Mock reply"),
-    ));
+    await waitFor(
+      () =>
+        turnMock.startCalls() === 1 &&
+        api.sentMessages.some(({ text }) => text.includes("Mock reply")),
+    );
 
     assert.equal(binding.workspaceId, "external-work");
     assert.equal(turnMock.startedParams()[0]?.workspaceId, "managed-bot-home");
@@ -1735,11 +1814,13 @@ test("Bot-bound Telegram files carry exact Bot identity into managed-home storag
       createdAt: 1,
       updatedAt: 1,
     }),
-    existingChats: [{
-      id: "telegram-work-bot-a",
-      workspaceId: "managed-bot-home",
-      botId: "bot-a",
-    }],
+    existingChats: [
+      {
+        id: "telegram-work-bot-a",
+        workspaceId: "managed-bot-home",
+        botId: "bot-a",
+      },
+    ],
     storeInboundFile: async (input) => {
       stored.push({
         workspaceId: input.workspaceId,
@@ -1753,15 +1834,19 @@ test("Bot-bound Telegram files carry exact Bot identity into managed-home storag
   });
 
   await service.start();
-  await waitFor(() => turnMock.startCalls() === 1 && api.sentMessages.some(
-    ({ text }) => text.includes("Mock reply"),
-  ));
+  await waitFor(
+    () =>
+      turnMock.startCalls() === 1 &&
+      api.sentMessages.some(({ text }) => text.includes("Mock reply")),
+  );
 
-  assert.deepEqual(stored, [{
-    workspaceId: "managed-bot-home",
-    botId: "bot-a",
-    name: "report.pdf",
-  }]);
+  assert.deepEqual(stored, [
+    {
+      workspaceId: "managed-bot-home",
+      botId: "bot-a",
+      name: "report.pdf",
+    },
+  ]);
 });
 
 test("bot binding validation rejects archived or missing bot identities before queue admission", async () => {
@@ -1785,7 +1870,9 @@ test("bot binding validation rejects archived or missing bot identities before q
   });
 
   await service.start();
-  await waitFor(() => api.sentMessages.some(({ text }) => text.includes("unavailable or archived")));
+  await waitFor(() =>
+    api.sentMessages.some(({ text }) => text.includes("unavailable or archived")),
+  );
 
   assert.equal(turnMock.startCalls(), 0);
   assert.equal(service.queueSize, 0);
@@ -1838,16 +1925,18 @@ test("queued turns retain their captured backing chat when a source is rebound",
     enabled: true,
     allowedUserId: 42,
     pendingTurn: true,
-    resolveBotBinding: async () => resolveCalls++ === 0 ? first : second,
+    resolveBotBinding: async () => (resolveCalls++ === 0 ? first : second),
     workspaces: [{ id: "work", name: "Work", folderPath: "/work" }],
     existingChats: [
       { id: first.backingChatId, workspaceId: "bot-home-a", botId: "bot-a" },
       { id: second.backingChatId, workspaceId: "bot-home-b", botId: "bot-b" },
     ],
-    batches: [[
-      makeUpdate(1, makeMessage(10, owner, "first")),
-      makeUpdate(2, makeMessage(11, owner, "second")),
-    ]],
+    batches: [
+      [
+        makeUpdate(1, makeMessage(10, owner, "first")),
+        makeUpdate(2, makeMessage(11, owner, "second")),
+      ],
+    ],
     autoStop: false,
   });
 
@@ -2207,7 +2296,8 @@ test("bound Bot compaction callback targets the immutable canonical backing chat
   assert.deepEqual(compactedChatIds, [binding.backingChatId]);
   assert.ok(
     result.api.sentMessages.some(({ text }) =>
-      text.includes("Session compacted from about 123,456 tokens")),
+      text.includes("Session compacted from about 123,456 tokens"),
+    ),
   );
   result.service.stop();
 });
@@ -2245,43 +2335,77 @@ test("manual Telegram compaction preserves the shared busy admission result", as
   assert.deepEqual(compactedChatIds, [telegramChatId(owner.id, "workspace-a", "work")]);
   assert.ok(
     result.api.sentMessages.some(({ text }) =>
-      text.includes("Wait for the active turn to finish or abort it first")),
+      text.includes("Wait for the active turn to finish or abort it first"),
+    ),
   );
   assert.equal(result.turnMock.startCalls(), 0);
   result.service.stop();
 });
 
-
 test("a skill queued before global disable is rejected at dispatch and command registration refreshes", async () => {
   let skillsEnabled = true;
   let validations = 0;
   const h = harness({
-    enabled: true, hasToken: true, allowedUserId: 42, pendingTurn: true, autoStop: false,
+    enabled: true,
+    hasToken: true,
+    allowedUserId: 42,
+    pendingTurn: true,
+    autoStop: false,
     telegramWorkspaceId: "project",
     workspaces: [{ id: "project", name: "Project", folderPath: "/tmp/project" }],
-    batches: [[makeUpdate(1, makeMessage(10, person(42), "ordinary work")),
-      makeUpdate(2, makeMessage(11, person(42), "/review inspect the patch"))]],
-    listPromptCommands: async () => skillsEnabled ? [{ command: "review", description: "Review code",
-      skillInvocation: { workspaceId: "project", invocationId: "opaque-skill" } }] : [],
-    validateSkillInvocation: async () => { validations += 1; if (!skillsEnabled) throw new Error("Skills are disabled"); },
+    batches: [
+      [
+        makeUpdate(1, makeMessage(10, person(42), "ordinary work")),
+        makeUpdate(2, makeMessage(11, person(42), "/review inspect the patch")),
+      ],
+    ],
+    listPromptCommands: async () =>
+      skillsEnabled
+        ? [
+            {
+              command: "review",
+              description: "Review code",
+              skillInvocation: { workspaceId: "project", invocationId: "opaque-skill" },
+            },
+          ]
+        : [],
+    validateSkillInvocation: async () => {
+      validations += 1;
+      if (!skillsEnabled) throw new Error("Skills are disabled");
+    },
   });
   await h.service.start();
   await waitFor(() => h.turnMock.startCalls() === 1 && h.service.queueSize === 1);
-  assert(h.api.commandRegistrations[h.api.commandRegistrations.length - 1]?.some(({ command }) => command === "review"));
+  assert(
+    h.api.commandRegistrations[h.api.commandRegistrations.length - 1]?.some(
+      ({ command }) => command === "review",
+    ),
+  );
   skillsEnabled = false;
   await h.service.refreshCommands();
-  assert(!h.api.commandRegistrations[h.api.commandRegistrations.length - 1]?.some(({ command }) => command === "review"));
+  assert(
+    !h.api.commandRegistrations[h.api.commandRegistrations.length - 1]?.some(
+      ({ command }) => command === "review",
+    ),
+  );
   h.turnMock.completePendingTurn();
   await waitFor(() => h.api.sentMessages.some(({ text }) => text.includes("Skills are disabled")));
   assert.equal(validations, 1);
   assert.equal(h.turnMock.startCalls(), 1, "disabled queued skill never starts inference");
-  assert.equal(h.turnMock.appendCalls(), 1, "expanded or disabled skill text never enters visible history");
+  assert.equal(
+    h.turnMock.appendCalls(),
+    1,
+    "expanded or disabled skill text never enters visible history",
+  );
   skillsEnabled = true;
   await h.service.refreshCommands();
-  assert(h.api.commandRegistrations[h.api.commandRegistrations.length - 1]?.some(({ command }) => command === "review"));
+  assert(
+    h.api.commandRegistrations[h.api.commandRegistrations.length - 1]?.some(
+      ({ command }) => command === "review",
+    ),
+  );
   h.service.stop();
 });
-
 
 test("unchanged final HTML draft still delivers remaining chunks and voice actions once", async () => {
   const reply = "a".repeat(5_000);
@@ -2292,19 +2416,34 @@ test("unchanged final HTML draft still delivers remaining chunks and voice actio
     draft: reply,
     reply: `${reply}\n<!-- telegram_voice {"text":"Done"} -->`,
     batches: [[makeUpdate(1, makeMessage(10, person(42), "hello"))]],
-    synthesizeVoice: async () => ({ bytes: new Uint8Array([1]), name: "voice.ogg", mimeType: "audio/ogg" }),
+    synthesizeVoice: async () => ({
+      bytes: new Uint8Array([1]),
+      name: "voice.ogg",
+      mimeType: "audio/ogg",
+    }),
   });
   h.api.editMessageText = async (params) => {
     h.api.editedMessages.push(params);
-    assert.equal(params.text, h.api.sentMessages[0]?.text, "final edit matches the persisted preview");
-    throw new TelegramApiError("Bad Request: message is not modified: specified new message content is exactly the same", 400);
+    assert.equal(
+      params.text,
+      h.api.sentMessages[0]?.text,
+      "final edit matches the persisted preview",
+    );
+    throw new TelegramApiError(
+      "Bad Request: message is not modified: specified new message content is exactly the same",
+      400,
+    );
   };
   try {
     await h.service.start();
     await waitFor(() => h.turnMock.startCalls() === 1 && !h.service.isActive);
     assert.deepEqual(h.logs.errors, []);
     assert.equal(h.api.editedMessages.length, 1);
-    assert.equal(h.api.sentMessages.length, 2, "preview and remaining chunk without a duplicate first chunk");
+    assert.equal(
+      h.api.sentMessages.length,
+      2,
+      "preview and remaining chunk without a duplicate first chunk",
+    );
     assert.equal(h.api.sentMessages.map(({ text }) => text).join(""), reply);
     assert.equal(h.api.voiceMessages.length, 1, "final delivery continues to outbound actions");
   } finally {
@@ -2363,23 +2502,33 @@ for (const failure of [
       reply: "Final answer",
       batches: [[makeUpdate(1, makeMessage(10, person(42), "hello"))]],
     });
-    h.api.editMessageText = async () => { throw failure; };
+    h.api.editMessageText = async () => {
+      throw failure;
+    };
     try {
       await h.service.start();
       await waitFor(() => h.turnMock.startCalls() === 1 && !h.service.isActive);
       assert.equal(h.logs.errors.length, 1);
       assert.equal(h.logs.errors[0]?.cause, failure);
-      assert.equal(h.api.sentMessages.filter(({ text }) => text === "Final answer").length, 1, "no speculative resend after uncertain edit failure");
+      assert.equal(
+        h.api.sentMessages.filter(({ text }) => text === "Final answer").length,
+        1,
+        "no speculative resend after uncertain edit failure",
+      );
     } finally {
       h.service.stop();
     }
   });
 }
 
-
 test("duplicate Telegram updates admit one prompt", async () => {
   const update = makeUpdate(1, makeMessage(1, person(42), "one prompt"));
-  const h = harness({ enabled: true, allowedUserId: 42, batches: [[update, update]], autoStop: false });
+  const h = harness({
+    enabled: true,
+    allowedUserId: 42,
+    batches: [[update, update]],
+    autoStop: false,
+  });
   await h.service.start();
   await waitFor(() => h.turnMock.startCalls() === 1);
   await new Promise<void>((resolve) => setImmediate(resolve));
@@ -2389,15 +2538,25 @@ test("duplicate Telegram updates admit one prompt", async () => {
 
 test("Stop cancels a prompt still resolving its workspace", async () => {
   let release!: (value: { kind: "assistant" }) => void;
-  const waiting = new Promise<{ kind: "assistant" }>((resolve) => { release = resolve; });
+  const waiting = new Promise<{ kind: "assistant" }>((resolve) => {
+    release = resolve;
+  });
   const owner = person(42);
   const h = harness({
-    enabled: true, allowedUserId: 42, autoStop: false, delayAfterFirstBatch: true,
-    batches: [[makeUpdate(1, makeMessage(1, owner, "work"))], [makeUpdate(2, makeMessage(2, owner, "/stop"))]],
+    enabled: true,
+    allowedUserId: 42,
+    autoStop: false,
+    delayAfterFirstBatch: true,
+    batches: [
+      [makeUpdate(1, makeMessage(1, owner, "work"))],
+      [makeUpdate(2, makeMessage(2, owner, "/stop"))],
+    ],
   });
   h.turnMock.turn.resolveWorkspace = async () => waiting;
   await h.service.start();
-  await waitFor(() => h.api.sentMessages.some(({ text }) => text.includes("active turn was aborted")));
+  await waitFor(() =>
+    h.api.sentMessages.some(({ text }) => text.includes("active turn was aborted")),
+  );
   release({ kind: "assistant" });
   await new Promise<void>((resolve) => setImmediate(resolve));
   assert.equal(h.turnMock.startCalls(), 0);
@@ -2406,26 +2565,48 @@ test("Stop cancels a prompt still resolving its workspace", async () => {
 });
 
 test("Bot /new offers compaction without creating or replacing a chat", async () => {
-  const binding = { botId: "bot", profile: "default", chatId: 100, ownerUserId: 42, workspaceId: "home", backingWorkspaceId: "home", backingChatId: "forever" };
-  const h = harness({ enabled: true, allowedUserId: 42, autoStop: false,
-    resolveBotBinding: async () => binding, validateBotBinding: () => true,
+  const binding = {
+    botId: "bot",
+    profile: "default",
+    chatId: 100,
+    ownerUserId: 42,
+    workspaceId: "home",
+    backingWorkspaceId: "home",
+    backingChatId: "forever",
+  };
+  const h = harness({
+    enabled: true,
+    allowedUserId: 42,
+    autoStop: false,
+    resolveBotBinding: async () => binding,
+    validateBotBinding: () => true,
     batches: [[makeUpdate(1, makeMessage(1, person(42), "/new"))]],
   });
   await h.service.start();
-  await waitFor(() => h.api.sentMessages.some(({ text }) => text.includes("one permanent conversation")));
+  await waitFor(() =>
+    h.api.sentMessages.some(({ text }) => text.includes("one permanent conversation")),
+  );
   assert.equal(h.turnMock.createCalls(), 0);
   assert.equal(h.turnMock.startCalls(), 0);
   h.service.stop();
 });
 
-
 test("busy admission acknowledges once and bounds a flood without blocking Stop", async () => {
   const owner = person(42);
   let h!: ReturnType<typeof harness>;
-  h = harness({ enabled: true, allowedUserId: 42, autoStop: false, pendingTurn: true, delayAfterFirstBatch: true,
-    batches: [[makeUpdate(1, makeMessage(1, owner, "active"))],
-      Array.from({ length: 21 }, (_, i) => makeUpdate(i + 2, makeMessage(i + 2, owner, `queued-${i}`))),
-      [makeUpdate(30, makeMessage(30, owner, "/stop"))]],
+  h = harness({
+    enabled: true,
+    allowedUserId: 42,
+    autoStop: false,
+    pendingTurn: true,
+    delayAfterFirstBatch: true,
+    batches: [
+      [makeUpdate(1, makeMessage(1, owner, "active"))],
+      Array.from({ length: 21 }, (_, i) =>
+        makeUpdate(i + 2, makeMessage(i + 2, owner, `queued-${i}`)),
+      ),
+      [makeUpdate(30, makeMessage(30, owner, "/stop"))],
+    ],
     abortChat: async () => h.turnMock.completePendingTurn(),
   });
   await h.service.start();
@@ -2439,13 +2620,24 @@ test("busy admission acknowledges once and bounds a flood without blocking Stop"
 test("Interrupt runs an accepted replacement after the active turn settles", async () => {
   const owner = person(42);
   let h!: ReturnType<typeof harness>;
-  h = harness({ enabled: true, allowedUserId: 42, autoStop: false, pendingTurn: true, delayAfterFirstBatch: true,
-    batches: [[makeUpdate(1, makeMessage(1, owner, "active"))], [makeUpdate(2, makeMessage(2, owner, "/interrupt replacement"))]],
+  h = harness({
+    enabled: true,
+    allowedUserId: 42,
+    autoStop: false,
+    pendingTurn: true,
+    delayAfterFirstBatch: true,
+    batches: [
+      [makeUpdate(1, makeMessage(1, owner, "active"))],
+      [makeUpdate(2, makeMessage(2, owner, "/interrupt replacement"))],
+    ],
     abortChat: async () => h.turnMock.completePendingTurn(),
   });
   await h.service.start();
   await waitFor(() => h.turnMock.startCalls() === 2);
-  assert.deepEqual(h.turnMock.startedParams().map(({ content }) => content), ["active", "replacement"]);
+  assert.deepEqual(
+    h.turnMock.startedParams().map(({ content }) => content),
+    ["active", "replacement"],
+  );
   h.turnMock.completePendingTurn();
   h.service.stop();
 });
@@ -2455,8 +2647,16 @@ type SteerAdmission = Parameters<NonNullable<HarnessOptions["admitRunInput"]>>[0
 test("/steer admits guidance into this route's running turn without stopping or queueing it", async () => {
   const owner = person(42);
   const admissions: SteerAdmission[] = [];
-  const h = harness({ enabled: true, allowedUserId: 42, autoStop: false, pendingTurn: true, delayAfterFirstBatch: true,
-    batches: [[makeUpdate(1, makeMessage(1, owner, "active"))], [makeUpdate(2, makeMessage(2, owner, "/steer  keep it short"))]],
+  const h = harness({
+    enabled: true,
+    allowedUserId: 42,
+    autoStop: false,
+    pendingTurn: true,
+    delayAfterFirstBatch: true,
+    batches: [
+      [makeUpdate(1, makeMessage(1, owner, "active"))],
+      [makeUpdate(2, makeMessage(2, owner, "/steer  keep it short"))],
+    ],
     abortChat: async () => assert.fail("/steer must never abort the active turn"),
     admitRunInput: async (input) => {
       admissions.push(input);
@@ -2466,13 +2666,15 @@ test("/steer admits guidance into this route's running turn without stopping or 
   await h.service.start();
   await waitFor(() => h.api.sentMessages.some(({ text }) => text.includes("Guidance accepted")));
   const [started] = h.turnMock.startedStreams();
-  assert.deepEqual(admissions, [{
-    streamId: started.streamId,
-    chatId: h.turnMock.startedParams()[0].chatId,
-    mode: "steer",
-    text: "keep it short",
-    ownerDocumentId: started.ownerDocumentId,
-  }]);
+  assert.deepEqual(admissions, [
+    {
+      streamId: started.streamId,
+      chatId: h.turnMock.startedParams()[0].chatId,
+      mode: "steer",
+      text: "keep it short",
+      ownerDocumentId: started.ownerDocumentId,
+    },
+  ]);
   assert.equal(h.service.queueSize, 0);
   assert.equal(h.turnMock.startCalls(), 1);
   h.turnMock.completePendingTurn();
@@ -2481,18 +2683,42 @@ test("/steer admits guidance into this route's running turn without stopping or 
   h.service.stop();
 });
 
-const steerReceipts: Array<{ name: string; receipt?: Awaited<ReturnType<NonNullable<HarnessOptions["admitRunInput"]>>>; reply: RegExp }> = [
-  { name: "a committed receipt after the run ended", receipt: { admitted: false, reason: "run_not_active", committed: true, messageId: "m" }, reply: /saved to the conversation/u },
-  { name: "a capacity rejection", receipt: { admitted: false, reason: "capacity", committed: false }, reply: /maximum pending guidance\. Use \/queue/u },
-  { name: "a cancelled rejection", receipt: { admitted: false, reason: "cancelled", committed: false }, reply: /stopping, so it can't take guidance/u },
+const steerReceipts: Array<{
+  name: string;
+  receipt?: Awaited<ReturnType<NonNullable<HarnessOptions["admitRunInput"]>>>;
+  reply: RegExp;
+}> = [
+  {
+    name: "a committed receipt after the run ended",
+    receipt: { admitted: false, reason: "run_not_active", committed: true, messageId: "m" },
+    reply: /saved to the conversation/u,
+  },
+  {
+    name: "a capacity rejection",
+    receipt: { admitted: false, reason: "capacity", committed: false },
+    reply: /maximum pending guidance\. Use \/queue/u,
+  },
+  {
+    name: "a cancelled rejection",
+    receipt: { admitted: false, reason: "cancelled", committed: false },
+    reply: /stopping, so it can't take guidance/u,
+  },
   { name: "an unknown outcome", reply: /couldn't confirm the guidance/u },
 ];
 for (const { name, receipt, reply } of steerReceipts) {
   test(`/steer reports ${name} once and never queues or retries it`, async () => {
     const owner = person(42);
     let calls = 0;
-    const h = harness({ enabled: true, allowedUserId: 42, autoStop: false, pendingTurn: true, delayAfterFirstBatch: true,
-      batches: [[makeUpdate(1, makeMessage(1, owner, "active"))], [makeUpdate(2, makeMessage(2, owner, "/steer use tables"))]],
+    const h = harness({
+      enabled: true,
+      allowedUserId: 42,
+      autoStop: false,
+      pendingTurn: true,
+      delayAfterFirstBatch: true,
+      batches: [
+        [makeUpdate(1, makeMessage(1, owner, "active"))],
+        [makeUpdate(2, makeMessage(2, owner, "/steer use tables"))],
+      ],
       admitRunInput: async () => {
         calls++;
         if (!receipt) throw new Error("operation outcome requires reconciliation");
@@ -2513,10 +2739,20 @@ for (const { name, receipt, reply } of steerReceipts) {
 
 test("/steer without a running turn on this route never reaches admission", async () => {
   const owner = person(42);
-  const topic = (id: number, thread: number, text: string) => makeUpdate(id, { ...makeMessage(id, owner, text), message_thread_id: thread });
+  const topic = (id: number, thread: number, text: string) =>
+    makeUpdate(id, { ...makeMessage(id, owner, text), message_thread_id: thread });
   let calls = 0;
-  const h = harness({ enabled: true, allowedUserId: 42, autoStop: false, pendingTurn: true, delayAfterFirstBatch: true,
-    batches: [[makeUpdate(1, makeMessage(1, owner, "/steer nothing is running"))], [topic(2, 10, "active")], [topic(3, 20, "/steer other topic"), topic(4, 10, "/steer")]],
+  const h = harness({
+    enabled: true,
+    allowedUserId: 42,
+    autoStop: false,
+    pendingTurn: true,
+    delayAfterFirstBatch: true,
+    batches: [
+      [makeUpdate(1, makeMessage(1, owner, "/steer nothing is running"))],
+      [topic(2, 10, "active")],
+      [topic(3, 20, "/steer other topic"), topic(4, 10, "/steer")],
+    ],
     admitRunInput: async () => {
       calls++;
       return { admitted: true, committed: true };
@@ -2525,8 +2761,18 @@ test("/steer without a running turn on this route never reaches admission", asyn
   await h.service.start();
   await waitFor(() => h.config.persistOffsetCalls() === 4);
   assert.equal(calls, 0);
-  assert.equal(h.api.sentMessages.filter(({ text }) => text.startsWith("No response here is accepting guidance")).length, 2);
-  assert.equal(h.api.sentMessages.filter(({ text }) => text === "Use /steer followed by guidance for the running response.").length, 1);
+  assert.equal(
+    h.api.sentMessages.filter(({ text }) =>
+      text.startsWith("No response here is accepting guidance"),
+    ).length,
+    2,
+  );
+  assert.equal(
+    h.api.sentMessages.filter(
+      ({ text }) => text === "Use /steer followed by guidance for the running response.",
+    ).length,
+    1,
+  );
   assert.equal(h.service.queueSize, 0);
   h.service.stop();
   h.turnMock.completePendingTurn();
@@ -2535,15 +2781,25 @@ test("/steer without a running turn on this route never reaches admission", asyn
 test("an edited /steer is never sent as guidance", async () => {
   const owner = person(42);
   let calls = 0;
-  const h = harness({ enabled: true, allowedUserId: 42, autoStop: false, pendingTurn: true, delayAfterFirstBatch: true,
-    batches: [[makeUpdate(1, makeMessage(1, owner, "active"))], [{ update_id: 2, edited_message: makeMessage(1, owner, "/steer edited") }]],
+  const h = harness({
+    enabled: true,
+    allowedUserId: 42,
+    autoStop: false,
+    pendingTurn: true,
+    delayAfterFirstBatch: true,
+    batches: [
+      [makeUpdate(1, makeMessage(1, owner, "active"))],
+      [{ update_id: 2, edited_message: makeMessage(1, owner, "/steer edited") }],
+    ],
     admitRunInput: async () => {
       calls++;
       return { admitted: true, committed: true };
     },
   });
   await h.service.start();
-  await waitFor(() => h.api.sentMessages.some(({ text }) => text.startsWith("Edited /steer commands are not sent")));
+  await waitFor(() =>
+    h.api.sentMessages.some(({ text }) => text.startsWith("Edited /steer commands are not sent")),
+  );
   assert.equal(calls, 0);
   assert.equal(h.service.queueSize, 0);
   h.service.stop();
@@ -2552,14 +2808,24 @@ test("an edited /steer is never sent as guidance", async () => {
 
 test("unbound topic Stop cannot clear or abort another topic", async () => {
   const owner = person(42);
-  const topic = (id: number, thread: number, text: string) => makeUpdate(id, { ...makeMessage(id, owner, text), message_thread_id: thread });
+  const topic = (id: number, thread: number, text: string) =>
+    makeUpdate(id, { ...makeMessage(id, owner, text), message_thread_id: thread });
   let aborts = 0;
-  const h = harness({ enabled: true, allowedUserId: 42, autoStop: false, pendingTurn: true, delayAfterFirstBatch: true,
+  const h = harness({
+    enabled: true,
+    allowedUserId: 42,
+    autoStop: false,
+    pendingTurn: true,
+    delayAfterFirstBatch: true,
     batches: [[topic(1, 10, "active"), topic(2, 10, "pending")], [topic(3, 20, "/stop")]],
-    abortChat: async () => { aborts++; },
+    abortChat: async () => {
+      aborts++;
+    },
   });
   await h.service.start();
-  await waitFor(() => h.api.sentMessages.some(({ text }) => text.includes("No messages were queued")));
+  await waitFor(() =>
+    h.api.sentMessages.some(({ text }) => text.includes("No messages were queued")),
+  );
   assert.equal(aborts, 0);
   assert.equal(h.service.queueSize, 1);
   h.service.stop();
@@ -2567,12 +2833,39 @@ test("unbound topic Stop cannot clear or abort another topic", async () => {
 });
 
 test("stale Bot compaction confirmation cannot target a replacement binding", async () => {
-  const binding = { botId: "old", profile: "default", chatId: 100, ownerUserId: 42, workspaceId: "home", backingWorkspaceId: "home", backingChatId: "old-chat" };
+  const binding = {
+    botId: "old",
+    profile: "default",
+    chatId: 100,
+    ownerUserId: 42,
+    workspaceId: "home",
+    backingWorkspaceId: "home",
+    backingChatId: "old-chat",
+  };
   let compactions = 0;
-  const h = harness({ enabled: true, allowedUserId: 42, autoStop: false,
-    resolveBotBinding: async () => ({ ...binding, botId: "new", backingChatId: "new-chat" }), validateBotBinding: () => true,
-    compactChat: async () => { compactions++; return { compacted: true }; },
-    batches: [[{ update_id: 1, callback_query: { id: "stale", from: person(42), message: makeMessage(1, BOT, "confirm"), data: telegramCompactionCallback(binding) } }]],
+  const h = harness({
+    enabled: true,
+    allowedUserId: 42,
+    autoStop: false,
+    resolveBotBinding: async () => ({ ...binding, botId: "new", backingChatId: "new-chat" }),
+    validateBotBinding: () => true,
+    compactChat: async () => {
+      compactions++;
+      return { compacted: true };
+    },
+    batches: [
+      [
+        {
+          update_id: 1,
+          callback_query: {
+            id: "stale",
+            from: person(42),
+            message: makeMessage(1, BOT, "confirm"),
+            data: telegramCompactionCallback(binding),
+          },
+        },
+      ],
+    ],
   });
   await h.service.start();
   await waitFor(() => h.api.answerCallbackQueryCalls() > 0);
@@ -2581,13 +2874,21 @@ test("stale Bot compaction confirmation cannot target a replacement binding", as
 });
 
 test("dispatch waits for durable polling offset before executing admitted work", async () => {
-  const h = harness({ enabled: true, allowedUserId: 42, autoStop: false,
+  const h = harness({
+    enabled: true,
+    allowedUserId: 42,
+    autoStop: false,
     batches: [[makeUpdate(1, makeMessage(1, person(42), "work"))]],
   });
   let release!: () => void;
-  const persisted = new Promise<void>((resolve) => { release = resolve; });
+  const persisted = new Promise<void>((resolve) => {
+    release = resolve;
+  });
   let persisting = false;
-  h.config.persistOffset = async () => { persisting = true; await persisted; };
+  h.config.persistOffset = async () => {
+    persisting = true;
+    await persisted;
+  };
   await h.service.start();
   await waitFor(() => persisting);
   assert.equal(h.turnMock.startCalls(), 0);
@@ -2599,30 +2900,58 @@ test("dispatch waits for durable polling offset before executing admitted work",
 test("a failed update is retried before later updates advance the offset", async () => {
   const first = makeUpdate(1, makeMessage(1, person(42), "one"));
   const second = makeUpdate(2, makeMessage(2, person(42), "two"));
-  const h = harness({ enabled: true, allowedUserId: 42, autoStop: false,
-    batches: [[first, second], [first, second]],
+  const h = harness({
+    enabled: true,
+    allowedUserId: 42,
+    autoStop: false,
+    batches: [
+      [first, second],
+      [first, second],
+    ],
   });
   const settings = h.config.getSettings;
   let failed = false;
   h.config.getSettings = async () => {
-    if (h.api.getUpdatesCalls() > 0 && !failed) { failed = true; throw new Error("temporary read failure"); }
+    if (h.api.getUpdatesCalls() > 0 && !failed) {
+      failed = true;
+      throw new Error("temporary read failure");
+    }
     return settings();
   };
   await h.service.start();
   await waitFor(() => h.turnMock.startCalls() === 2);
-  assert.deepEqual(h.turnMock.startedParams().map(({ content }) => content), ["one", "two"]);
+  assert.deepEqual(
+    h.turnMock.startedParams().map(({ content }) => content),
+    ["one", "two"],
+  );
   h.service.stop();
 });
 
 test("pairing reset aborts an already running bound Bot turn", async () => {
-  const binding = { botId: "bot", profile: "default", chatId: 100, ownerUserId: 42, workspaceId: "home", backingWorkspaceId: "home", backingChatId: "forever" };
+  const binding = {
+    botId: "bot",
+    profile: "default",
+    chatId: 100,
+    ownerUserId: 42,
+    workspaceId: "home",
+    backingWorkspaceId: "home",
+    backingChatId: "forever",
+  };
   const aborted: string[] = [];
   let h!: ReturnType<typeof harness>;
-  h = harness({ enabled: true, allowedUserId: 42, autoStop: false, pendingTurn: true,
-    resolveBotBinding: async () => binding, validateBotBinding: () => true,
+  h = harness({
+    enabled: true,
+    allowedUserId: 42,
+    autoStop: false,
+    pendingTurn: true,
+    resolveBotBinding: async () => binding,
+    validateBotBinding: () => true,
     existingChats: [{ id: "forever", workspaceId: "home", botId: "bot" }],
     batches: [[makeUpdate(1, makeMessage(1, person(42), "work"))]],
-    abortChat: async (chatId) => { aborted.push(chatId); h.turnMock.completePendingTurn(); },
+    abortChat: async (chatId) => {
+      aborted.push(chatId);
+      h.turnMock.completePendingTurn();
+    },
   });
   await h.service.start();
   await waitFor(() => h.turnMock.startCalls() === 1);
@@ -2634,14 +2963,28 @@ test("pairing reset aborts an already running bound Bot turn", async () => {
 test("offset storage failure stops active work before polling waits for recovery", async () => {
   let h!: ReturnType<typeof harness>;
   let aborts = 0;
-  h = harness({ enabled: true, allowedUserId: 42, autoStop: false, pendingTurn: true, delayAfterFirstBatch: true,
-    batches: [[makeUpdate(1, makeMessage(1, person(42), "active"))], [makeUpdate(2, makeMessage(2, person(42), "queued"))]],
-    abortChat: async () => { aborts++; h.turnMock.completePendingTurn(); },
+  h = harness({
+    enabled: true,
+    allowedUserId: 42,
+    autoStop: false,
+    pendingTurn: true,
+    delayAfterFirstBatch: true,
+    batches: [
+      [makeUpdate(1, makeMessage(1, person(42), "active"))],
+      [makeUpdate(2, makeMessage(2, person(42), "queued"))],
+    ],
+    abortChat: async () => {
+      aborts++;
+      h.turnMock.completePendingTurn();
+    },
   });
   const persist = h.config.persistOffset;
   let failed = false;
   h.config.persistOffset = async (offset) => {
-    if (offset === 3 && !failed) { failed = true; throw new Error("storage unavailable"); }
+    if (offset === 3 && !failed) {
+      failed = true;
+      throw new Error("storage unavailable");
+    }
     await persist(offset);
   };
   await h.service.start();
@@ -2652,42 +2995,74 @@ test("offset storage failure stops active work before polling waits for recovery
 
 test("a cancelled dispatch rejection does not send a late error reply", async () => {
   let reject!: (cause: Error) => void;
-  const waiting = new Promise<{ kind: "assistant" }>((_resolve, fail) => { reject = fail; });
-  const h = harness({ enabled: true, allowedUserId: 42, autoStop: false, delayAfterFirstBatch: true,
-    batches: [[makeUpdate(1, makeMessage(1, person(42), "work"))], [makeUpdate(2, makeMessage(2, person(42), "/stop"))]],
+  const waiting = new Promise<{ kind: "assistant" }>((_resolve, fail) => {
+    reject = fail;
+  });
+  const h = harness({
+    enabled: true,
+    allowedUserId: 42,
+    autoStop: false,
+    delayAfterFirstBatch: true,
+    batches: [
+      [makeUpdate(1, makeMessage(1, person(42), "work"))],
+      [makeUpdate(2, makeMessage(2, person(42), "/stop"))],
+    ],
   });
   h.turnMock.turn.resolveWorkspace = async () => waiting;
   await h.service.start();
-  await waitFor(() => h.api.sentMessages.some(({ text }) => text.includes("active turn was aborted")));
+  await waitFor(() =>
+    h.api.sentMessages.some(({ text }) => text.includes("active turn was aborted")),
+  );
   reject(new Error("late preparation failure"));
   await new Promise<void>((resolve) => setImmediate(resolve));
-  assert.equal(h.api.sentMessages.some(({ text }) => text.includes("late preparation failure")), false);
+  assert.equal(
+    h.api.sentMessages.some(({ text }) => text.includes("late preparation failure")),
+    false,
+  );
   assert.equal(h.turnMock.startCalls(), 0);
   h.service.stop();
 });
-
 
 for (const command of ["/queue follow-up", "/continue follow-up"]) {
   for (const preparing of [false, true]) {
     test(`${command} sends one confirmation while ${preparing ? "preparing" : "running"}`, async () => {
       let release!: () => void;
-      const preparation = new Promise<{ kind: "assistant" }>((resolve) => { release = () => resolve({ kind: "assistant" }); });
-      const h = harness({ enabled: true, allowedUserId: 42, autoStop: false, pendingTurn: true, delayAfterFirstBatch: true,
-        batches: [[makeUpdate(1, makeMessage(1, person(42), "active"))], [makeUpdate(2, makeMessage(2, person(42), command))]],
+      const preparation = new Promise<{ kind: "assistant" }>((resolve) => {
+        release = () => resolve({ kind: "assistant" });
+      });
+      const h = harness({
+        enabled: true,
+        allowedUserId: 42,
+        autoStop: false,
+        pendingTurn: true,
+        delayAfterFirstBatch: true,
+        batches: [
+          [makeUpdate(1, makeMessage(1, person(42), "active"))],
+          [makeUpdate(2, makeMessage(2, person(42), command))],
+        ],
       });
       if (preparing) h.turnMock.turn.resolveWorkspace = async () => preparation;
       await h.service.start();
       await waitFor(() => h.config.persistOffsetCalls() === 2);
-      const confirmations = h.api.sentMessages.filter(({ text }) => /Queued for the next turn|Follow-up accepted|Continuation queued/u.test(text));
+      const confirmations = h.api.sentMessages.filter(({ text }) =>
+        /Queued for the next turn|Follow-up accepted|Continuation queued/u.test(text),
+      );
       assert.equal(confirmations.length, 1);
       assert.equal(h.service.queueSize, 1);
-      h.service.stop(); release(); h.turnMock.completePendingTurn();
+      h.service.stop();
+      release();
+      h.turnMock.completePendingTurn();
     });
   }
 
   test(`${command} acknowledgment failure cannot replay admission`, async () => {
     const update = makeUpdate(2, makeMessage(2, person(42), command));
-    const h = harness({ enabled: true, allowedUserId: 42, autoStop: false, pendingTurn: true, delayAfterFirstBatch: true,
+    const h = harness({
+      enabled: true,
+      allowedUserId: 42,
+      autoStop: false,
+      pendingTurn: true,
+      delayAfterFirstBatch: true,
       batches: [[makeUpdate(1, makeMessage(1, person(42), "active"))], [update], [update]],
     });
     const send = h.api.sendMessage;
@@ -2702,52 +3077,97 @@ for (const command of ["/queue follow-up", "/continue follow-up"]) {
     await h.service.start();
     await waitFor(() => h.api.getUpdatesCalls() >= 3);
     assert.equal(confirmations, 1);
-    assert.equal(h.config.persistOffsetCalls(), 2, "accepted command advances offset despite acknowledgment failure");
+    assert.equal(
+      h.config.persistOffsetCalls(),
+      2,
+      "accepted command advances offset despite acknowledgment failure",
+    );
     assert.equal(h.service.queueSize, 1);
     h.turnMock.completePendingTurn();
     await waitFor(() => h.turnMock.startCalls() === 2);
-    assert.deepEqual(h.turnMock.startedParams().map(({ content }) => content), ["active", "follow-up"]);
-    h.service.stop(); h.turnMock.completePendingTurn();
+    assert.deepEqual(
+      h.turnMock.startedParams().map(({ content }) => content),
+      ["active", "follow-up"],
+    );
+    h.service.stop();
+    h.turnMock.completePendingTurn();
   });
 }
 
-
 for (const command of ["/queue", "/continue"]) {
   test(`editing queued ${command} reports unchanged text without contradictory success`, async () => {
-    const h = harness({ enabled: true, allowedUserId: 42, autoStop: false, pendingTurn: true, delayAfterFirstBatch: true,
-      batches: [[makeUpdate(1, makeMessage(1, person(42), "active"))], [
-        makeUpdate(2, makeMessage(2, person(42), `${command} original`)),
-        { update_id: 3, edited_message: makeMessage(2, person(42), `${command} edited`) },
-      ]],
+    const h = harness({
+      enabled: true,
+      allowedUserId: 42,
+      autoStop: false,
+      pendingTurn: true,
+      delayAfterFirstBatch: true,
+      batches: [
+        [makeUpdate(1, makeMessage(1, person(42), "active"))],
+        [
+          makeUpdate(2, makeMessage(2, person(42), `${command} original`)),
+          { update_id: 3, edited_message: makeMessage(2, person(42), `${command} edited`) },
+        ],
+      ],
     });
     await h.service.start();
     await waitFor(() => h.config.persistOffsetCalls() === 3);
     assert.equal(h.service.queueSize, 1);
-    assert.equal(h.api.sentMessages.filter(({ text }) => /Follow-up accepted|Continuation queued/u.test(text)).length, 1);
-    assert.equal(h.api.sentMessages.filter(({ text }) => text === "This message is already queued; its saved text is unchanged. Use /queue to manage it.").length, 1);
+    assert.equal(
+      h.api.sentMessages.filter(({ text }) => /Follow-up accepted|Continuation queued/u.test(text))
+        .length,
+      1,
+    );
+    assert.equal(
+      h.api.sentMessages.filter(
+        ({ text }) =>
+          text ===
+          "This message is already queued; its saved text is unchanged. Use /queue to manage it.",
+      ).length,
+      1,
+    );
     h.turnMock.completePendingTurn();
     await waitFor(() => h.turnMock.startCalls() === 2);
-    assert.deepEqual(h.turnMock.startedParams().map(({ content }) => content), ["active", "original"]);
-    h.service.stop(); h.turnMock.completePendingTurn();
+    assert.deepEqual(
+      h.turnMock.startedParams().map(({ content }) => content),
+      ["active", "original"],
+    );
+    h.service.stop();
+    h.turnMock.completePendingTurn();
   });
 }
 
-
 for (const command of ["/queue", "/continue", "/interrupt"]) {
   test(`editing dequeued ${command} cannot start or interrupt another turn`, async () => {
-    const h = harness({ enabled: true, allowedUserId: 42, autoStop: false, pendingTurn: true, delayAfterFirstBatch: true,
-      batches: [[makeUpdate(1, makeMessage(1, person(42), `${command} original`))], [
-        { update_id: 2, edited_message: makeMessage(1, person(42), `${command} edited`) },
-      ]],
+    const h = harness({
+      enabled: true,
+      allowedUserId: 42,
+      autoStop: false,
+      pendingTurn: true,
+      delayAfterFirstBatch: true,
+      batches: [
+        [makeUpdate(1, makeMessage(1, person(42), `${command} original`))],
+        [{ update_id: 2, edited_message: makeMessage(1, person(42), `${command} edited`) }],
+      ],
       abortChat: async () => assert.fail("a command edit must not abort the active turn"),
     });
     await h.service.start();
     await waitFor(() => h.config.persistOffsetCalls() === 2);
     assert.equal(h.turnMock.startCalls(), 1);
     assert.equal(h.service.queueSize, 0);
-    assert.equal(h.api.sentMessages.filter(({ text }) => text === "This command edit was not sent because the original message is not queued.").length, 1);
-    assert.deepEqual(h.turnMock.startedParams().map(({ content }) => content), ["original"]);
-    h.service.stop(); h.turnMock.completePendingTurn();
+    assert.equal(
+      h.api.sentMessages.filter(
+        ({ text }) =>
+          text === "This command edit was not sent because the original message is not queued.",
+      ).length,
+      1,
+    );
+    assert.deepEqual(
+      h.turnMock.startedParams().map(({ content }) => content),
+      ["original"],
+    );
+    h.service.stop();
+    h.turnMock.completePendingTurn();
   });
 }
 
@@ -2762,11 +3182,23 @@ test("Telegram never answers an approval: 'Allow' is a message and an approval b
     allowedUserId: 42,
     profile: "work",
     resolveBotBinding: async () => durableBinding,
-    existingChats: [{ id: durableBinding.backingChatId, workspaceId: "bot-home-a", botId: "bot-a" }],
-    batches: [[
-      makeUpdate(7, makeMessage(10, owner, "Allow")),
-      { update_id: 8, callback_query: { id: "approval-press", from: owner, message: makeMessage(11, BOT, "Send the note?"), data: "approval:wait-61:allow" } },
-    ]],
+    existingChats: [
+      { id: durableBinding.backingChatId, workspaceId: "bot-home-a", botId: "bot-a" },
+    ],
+    batches: [
+      [
+        makeUpdate(7, makeMessage(10, owner, "Allow")),
+        {
+          update_id: 8,
+          callback_query: {
+            id: "approval-press",
+            from: owner,
+            message: makeMessage(11, BOT, "Send the note?"),
+            data: "approval:wait-61:allow",
+          },
+        },
+      ],
+    ],
     autoStop: false,
     botIngress: {
       admit: async (message) => {
@@ -2778,7 +3210,11 @@ test("Telegram never answers an approval: 'Allow' is a message and an approval b
   try {
     await h.service.start();
     await waitFor(() => h.api.answerCallbackQueryCalls() > 0 && admitted.length === 1);
-    assert.deepEqual(admitted.map((message) => message.text), ["Allow"], "the reply reaches the Bot as its own words, and the button press admits nothing");
+    assert.deepEqual(
+      admitted.map((message) => message.text),
+      ["Allow"],
+      "the reply reaches the Bot as its own words, and the button press admits nothing",
+    );
     assert.equal(h.turnMock.startCalls(), 0);
   } finally {
     h.service.stop();
@@ -2798,8 +3234,14 @@ test("Bot-bound /queue, /continue, expanded prompt templates, and tgbtn: callbac
     ownerUserId: owner.id,
     bindingKey: telegramBotBindingKey(durableBinding),
   };
-  const buttonA = buttonStore.register({ label: "Approve", prompt: "Approve the plan", selectedStyle: "success" }, scope);
-  const buttonB = buttonStore.register({ label: "Revise", prompt: "Revise the plan", selectedStyle: "primary" }, scope);
+  const buttonA = buttonStore.register(
+    { label: "Approve", prompt: "Approve the plan", selectedStyle: "success" },
+    scope,
+  );
+  const buttonB = buttonStore.register(
+    { label: "Revise", prompt: "Revise the plan", selectedStyle: "primary" },
+    scope,
+  );
   buttonStore.bindMessage([buttonA, buttonB], 50);
 
   const admitted: import("./bot-reply-outbox.js").TelegramBotMessage[] = [];
@@ -2820,7 +3262,9 @@ test("Bot-bound /queue, /continue, expanded prompt templates, and tgbtn: callbac
     profile: "work",
     buttonStore,
     resolveBotBinding: async () => durableBinding,
-    existingChats: [{ id: durableBinding.backingChatId, workspaceId: "bot-home-a", botId: "bot-a" }],
+    existingChats: [
+      { id: durableBinding.backingChatId, workspaceId: "bot-home-a", botId: "bot-a" },
+    ],
     listPromptCommands: async () => [
       {
         command: "summarize",
@@ -2836,21 +3280,23 @@ test("Bot-bound /queue, /continue, expanded prompt templates, and tgbtn: callbac
         },
       },
     ],
-    batches: [[
-      makeUpdate(1, makeMessage(11, owner, "/queue remember Y")),
-      makeUpdate(2, makeMessage(12, owner, "/continue")),
-      makeUpdate(3, makeMessage(13, owner, "/continue check step 2")),
-      makeUpdate(4, makeMessage(14, owner, "/summarize Q4 notes")),
-      makeUpdate(5, makeMessage(15, owner, "/pingext ok")),
-      {
-        update_id: 6,
-        callback_query: { id: "cb-approve", from: owner, message: replyMessage, data: buttonA },
-      },
-      {
-        update_id: 7,
-        callback_query: { id: "cb-revise", from: owner, message: replyMessage, data: buttonB },
-      },
-    ]],
+    batches: [
+      [
+        makeUpdate(1, makeMessage(11, owner, "/queue remember Y")),
+        makeUpdate(2, makeMessage(12, owner, "/continue")),
+        makeUpdate(3, makeMessage(13, owner, "/continue check step 2")),
+        makeUpdate(4, makeMessage(14, owner, "/summarize Q4 notes")),
+        makeUpdate(5, makeMessage(15, owner, "/pingext ok")),
+        {
+          update_id: 6,
+          callback_query: { id: "cb-approve", from: owner, message: replyMessage, data: buttonA },
+        },
+        {
+          update_id: 7,
+          callback_query: { id: "cb-revise", from: owner, message: replyMessage, data: buttonB },
+        },
+      ],
+    ],
     autoStop: true,
     botIngress: {
       admit: async (message) => {
@@ -2879,10 +3325,30 @@ test("Bot-bound /queue, /continue, expanded prompt templates, and tgbtn: callbac
     [
       { botId: "bot-a", text: "remember Y", whenBusy: "followUp", requestId: "tg:bot-a:100:0:11" },
       { botId: "bot-a", text: "Continue.", whenBusy: "followUp", requestId: "tg:bot-a:100:0:12" },
-      { botId: "bot-a", text: "check step 2", whenBusy: "followUp", requestId: "tg:bot-a:100:0:13" },
-      { botId: "bot-a", text: "Summarize concisely: Q4 notes", whenBusy: "followUp", requestId: "tg:bot-a:100:0:14" },
-      { botId: "bot-a", text: "Approve the plan", whenBusy: "followUp", requestId: "tg:bot-a:100:0:cbq:cb-approve" },
-      { botId: "bot-a", text: "Revise the plan", whenBusy: "followUp", requestId: "tg:bot-a:100:0:cbq:cb-revise" },
+      {
+        botId: "bot-a",
+        text: "check step 2",
+        whenBusy: "followUp",
+        requestId: "tg:bot-a:100:0:13",
+      },
+      {
+        botId: "bot-a",
+        text: "Summarize concisely: Q4 notes",
+        whenBusy: "followUp",
+        requestId: "tg:bot-a:100:0:14",
+      },
+      {
+        botId: "bot-a",
+        text: "Approve the plan",
+        whenBusy: "followUp",
+        requestId: "tg:bot-a:100:0:cbq:cb-approve",
+      },
+      {
+        botId: "bot-a",
+        text: "Revise the plan",
+        whenBusy: "followUp",
+        requestId: "tg:bot-a:100:0:cbq:cb-revise",
+      },
     ],
   );
   assert.equal(h.api.editedReplyMarkups.length, 2, "tapped buttons mark selected styles");
@@ -2892,7 +3358,9 @@ test("Bot-bound command admission waits before offset persistence and ignores fa
   const owner = person(42, "owner");
   const admitted: string[] = [];
   let releaseGate!: () => void;
-  const gate = new Promise<void>((resolve) => { releaseGate = resolve; });
+  const gate = new Promise<void>((resolve) => {
+    releaseGate = resolve;
+  });
   const queueUpdate = makeUpdate(1, makeMessage(21, owner, "/queue follow-up once"));
 
   const h = harness({
@@ -2938,9 +3406,15 @@ test("Bot-bound command admission waits before offset persistence and ignores fa
     releaseGate();
     await waitFor(() => h.config.persistOffsetCalls() === 3);
 
-    assert.deepEqual(admitted, ["tg:bot-a:100:0:21"], "failed acknowledgment and edited commands never re-admit");
+    assert.deepEqual(
+      admitted,
+      ["tg:bot-a:100:0:21"],
+      "failed acknowledgment and edited commands never re-admit",
+    );
     assert.equal(
-      h.api.sentMessages.filter(({ text }) => text.startsWith("Edited commands are not sent to this Bot.")).length,
+      h.api.sentMessages.filter(({ text }) =>
+        text.startsWith("Edited commands are not sent to this Bot."),
+      ).length,
       2,
     );
     assert.equal(h.turnMock.startCalls(), 0);
@@ -2959,8 +3433,12 @@ test("Bot-bound unsupported operations (/interrupt, /next, /steer, explicit skil
     allowedUserId: owner.id,
     profile: "work",
     resolveBotBinding: async () => durableBinding,
-    existingChats: [{ id: durableBinding.backingChatId, workspaceId: "bot-home-a", botId: "bot-a" }],
-    abortChat: async () => { legacyAborts += 1; },
+    existingChats: [
+      { id: durableBinding.backingChatId, workspaceId: "bot-home-a", botId: "bot-a" },
+    ],
+    abortChat: async () => {
+      legacyAborts += 1;
+    },
     listPromptCommands: async () => [
       {
         command: "review",
@@ -2968,20 +3446,32 @@ test("Bot-bound unsupported operations (/interrupt, /next, /steer, explicit skil
         skillInvocation: { workspaceId: "bot-home-a", invocationId: "skill:review" },
       },
     ],
-    batches: [[
-      makeUpdate(1, makeMessage(31, owner, "/interrupt urgent replacement")),
-      makeUpdate(2, makeMessage(32, owner, "/next")),
-      makeUpdate(3, makeMessage(33, owner, "/steer shorter please")),
-      makeUpdate(4, makeMessage(34, owner, "/review src/index.ts")),
-      {
-        update_id: 5,
-        callback_query: { id: "cb-next", from: owner, message: makeMessage(35, BOT, "menu"), data: "turn:next" },
-      },
-      {
-        update_id: 6,
-        callback_query: { id: "cb-q-clear", from: owner, message: makeMessage(36, BOT, "queue"), data: "queue:clear:yes" },
-      },
-    ]],
+    batches: [
+      [
+        makeUpdate(1, makeMessage(31, owner, "/interrupt urgent replacement")),
+        makeUpdate(2, makeMessage(32, owner, "/next")),
+        makeUpdate(3, makeMessage(33, owner, "/steer shorter please")),
+        makeUpdate(4, makeMessage(34, owner, "/review src/index.ts")),
+        {
+          update_id: 5,
+          callback_query: {
+            id: "cb-next",
+            from: owner,
+            message: makeMessage(35, BOT, "menu"),
+            data: "turn:next",
+          },
+        },
+        {
+          update_id: 6,
+          callback_query: {
+            id: "cb-q-clear",
+            from: owner,
+            message: makeMessage(36, BOT, "queue"),
+            data: "queue:clear:yes",
+          },
+        },
+      ],
+    ],
     autoStop: true,
     botIngress: {
       admit: async (message) => {
@@ -3000,12 +3490,24 @@ test("Bot-bound unsupported operations (/interrupt, /next, /steer, explicit skil
   assert.equal(legacyAborts, 0, "legacy abortChat never called");
 
   const texts = h.api.sentMessages.map(({ text }) => text);
-  assert.ok(texts.some((text) => text.includes("Interrupt is unavailable on Bot-bound Telegram chats")));
-  assert.ok(texts.some((text) => text.includes("/next is unavailable on Bot-bound Telegram chats")));
-  assert.ok(texts.some((text) => text.includes("Steering is unavailable on Bot-bound Telegram chats")));
-  assert.ok(texts.some((text) => text.includes("/review is unavailable on Bot-bound Telegram chats")));
+  assert.ok(
+    texts.some((text) => text.includes("Interrupt is unavailable on Bot-bound Telegram chats")),
+  );
+  assert.ok(
+    texts.some((text) => text.includes("/next is unavailable on Bot-bound Telegram chats")),
+  );
+  assert.ok(
+    texts.some((text) => text.includes("Steering is unavailable on Bot-bound Telegram chats")),
+  );
+  assert.ok(
+    texts.some((text) => text.includes("/review is unavailable on Bot-bound Telegram chats")),
+  );
   assert.ok(texts.some((text) => text.includes("Next is unavailable on Bot-bound Telegram chats")));
-  assert.ok(h.api.callbackAnswers.some(({ id, text }) => id === "cb-q-clear" && text?.includes("unavailable")));
+  assert.ok(
+    h.api.callbackAnswers.some(
+      ({ id, text }) => id === "cb-q-clear" && text?.includes("unavailable"),
+    ),
+  );
 });
 
 test("Bot-bound tgbtn: callback retries transient failures without losing the button, recovers across restart, and fails closed on stale or rebound routes", async () => {
@@ -3024,12 +3526,18 @@ test("Bot-bound tgbtn: callback retries transient failures without losing the bu
       ownerUserId: owner.id,
       bindingKey: telegramBotBindingKey(durableBinding),
     };
-    const transientBtn = transientStore.register({ label: "Deploy", prompt: "Deploy build" }, scope);
+    const transientBtn = transientStore.register(
+      { label: "Deploy", prompt: "Deploy build" },
+      scope,
+    );
     transientStore.bindMessage([transientBtn], 60);
-    const otherThreadBtn = transientStore.register({ label: "WrongThread", prompt: "Must not run" }, {
-      ...scope,
-      threadId: 99,
-    });
+    const otherThreadBtn = transientStore.register(
+      { label: "WrongThread", prompt: "Must not run" },
+      {
+        ...scope,
+        threadId: 99,
+      },
+    );
     transientStore.bindMessage([otherThreadBtn], 60);
 
     const callbackMsg: TelegramMessage = {
@@ -3046,11 +3554,21 @@ test("Bot-bound tgbtn: callback retries transient failures without losing the bu
     };
     const wrongScopeUpdate: TelegramUpdate = {
       update_id: 12,
-      callback_query: { id: "cb-wrong-thread", from: owner, message: callbackMsg, data: otherThreadBtn },
+      callback_query: {
+        id: "cb-wrong-thread",
+        from: owner,
+        message: callbackMsg,
+        data: otherThreadBtn,
+      },
     };
     const unknownBtnUpdate: TelegramUpdate = {
       update_id: 13,
-      callback_query: { id: "cb-unknown", from: owner, message: callbackMsg, data: "tgbtn:unknown" },
+      callback_query: {
+        id: "cb-unknown",
+        from: owner,
+        message: callbackMsg,
+        data: "tgbtn:unknown",
+      },
     };
 
     let attempts = 0;
@@ -3077,11 +3595,17 @@ test("Bot-bound tgbtn: callback retries transient failures without losing the bu
     await h1.service.start();
     await waitFor(() => h1.config.persistOffsetCalls() === 4);
 
-    assert.equal(attempts, 2, "transient failure retried once and succeeded; consumed/invalid buttons never reached admit");
+    assert.equal(
+      attempts,
+      2,
+      "transient failure retried once and succeeded; consumed/invalid buttons never reached admit",
+    );
     assert.deepEqual(h1.sleepMock.lastArgs(), [3_000]);
     assert.equal(h1.turnMock.startCalls(), 0);
     assert.deepEqual(
-      h1.api.callbackAnswers.filter(({ text }) => text === "This action has expired.").map(({ id }) => id),
+      h1.api.callbackAnswers
+        .filter(({ text }) => text === "This action has expired.")
+        .map(({ id }) => id),
       ["cb-deploy-2", "cb-wrong-thread", "cb-unknown"],
     );
 
@@ -3098,14 +3622,22 @@ test("Bot-bound tgbtn: callback retries transient failures without losing the bu
     };
 
     const storeBeforeCrash = createTelegramButtonStore(() => 200, { file: buttonsFile });
-    const durableToken = storeBeforeCrash.register({ label: "Ship", prompt: "Ship release" }, scope);
+    const durableToken = storeBeforeCrash.register(
+      { label: "Ship", prompt: "Ship release" },
+      scope,
+    );
     storeBeforeCrash.bindMessage([durableToken], 70);
     await storeBeforeCrash.flush();
 
     const crashMsg = makeMessage(70, BOT, "Ship?", durableBinding.chatId);
     const crashTap: TelegramUpdate = {
       update_id: 20,
-      callback_query: { id: "cb-crash-recover", from: owner, message: crashMsg, data: durableToken },
+      callback_query: {
+        id: "cb-crash-recover",
+        from: owner,
+        message: crashMsg,
+        data: durableToken,
+      },
     };
 
     const ingress1 = createTelegramBotIngress({
@@ -3125,7 +3657,11 @@ test("Bot-bound tgbtn: callback retries transient failures without losing the bu
     });
     await run1.service.start();
     await waitFor(() => sessionSends === 1 && run1.logs.errors.length === 1);
-    assert.equal(run1.config.persistOffsetCalls(), 0, "unrecorded outbox failure holds offset before crash");
+    assert.equal(
+      run1.config.persistOffsetCalls(),
+      0,
+      "unrecorded outbox failure holds offset before crash",
+    );
     run1.service.stop();
     ingress1.stop();
 
@@ -3152,8 +3688,14 @@ test("Bot-bound tgbtn: callback retries transient failures without losing the bu
     await ingress2.idle();
     ingress2.stop();
 
-    assert.equal(sessionSends, 2, "replayed callback deduplicated in session and wrote missing outbox row");
-    assert.deepEqual(deliveredReplies, [{ chatId: durableBinding.chatId, ownerUserId: owner.id, text: "Deployed cleanly." }]);
+    assert.equal(
+      sessionSends,
+      2,
+      "replayed callback deduplicated in session and wrote missing outbox row",
+    );
+    assert.deepEqual(deliveredReplies, [
+      { chatId: durableBinding.chatId, ownerUserId: owner.id, text: "Deployed cleanly." },
+    ]);
 
     // Rebinding the route rejects any remaining button registered for the previous Bot.
     const storeRebound = createTelegramButtonStore(() => 300, { file: buttonsFile });
@@ -3166,11 +3708,24 @@ test("Bot-bound tgbtn: callback retries transient failures without losing the bu
       allowedUserId: owner.id,
       profile: "work",
       buttonStore: storeRebound,
-      resolveBotBinding: async () => ({ ...durableBinding, botId: "bot-b", backingChatId: "telegram-work-bot-b" }),
-      batches: [[{
-        update_id: 30,
-        callback_query: { id: "cb-rebound", from: owner, message: makeMessage(80, BOT, "Old?", durableBinding.chatId), data: oldBotToken },
-      }]],
+      resolveBotBinding: async () => ({
+        ...durableBinding,
+        botId: "bot-b",
+        backingChatId: "telegram-work-bot-b",
+      }),
+      batches: [
+        [
+          {
+            update_id: 30,
+            callback_query: {
+              id: "cb-rebound",
+              from: owner,
+              message: makeMessage(80, BOT, "Old?", durableBinding.chatId),
+              data: oldBotToken,
+            },
+          },
+        ],
+      ],
       autoStop: true,
       botIngress: {
         admit: async () => {
@@ -3182,7 +3737,11 @@ test("Bot-bound tgbtn: callback retries transient failures without losing the bu
     await run3.service.start();
     await waitFor(() => run3.config.persistOffsetCalls() === 1);
     assert.equal(reboundAdmissions, 0, "button scoped to bot-a never fires against rebound bot-b");
-    assert.ok(run3.api.callbackAnswers.some(({ id, text }) => id === "cb-rebound" && text === "This action has expired."));
+    assert.ok(
+      run3.api.callbackAnswers.some(
+        ({ id, text }) => id === "cb-rebound" && text === "This action has expired.",
+      ),
+    );
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
@@ -3211,7 +3770,9 @@ test("Bot-bound /stop, /abort, /cancel, /status, /queue and /help reflect durabl
     buttonStore,
     resolveBotBinding: async () => durableBinding,
     workspaces: [{ id: "work", name: "Work", folderPath: "/work" }],
-    abortChat: async () => { legacyAbortCalls += 1; },
+    abortChat: async () => {
+      legacyAbortCalls += 1;
+    },
     botIngress: {
       admit: async (message) => ({ requestId: telegramBotRequestId(message), deduped: false }),
     },
@@ -3219,14 +3780,23 @@ test("Bot-bound /stop, /abort, /cancel, /status, /queue and /help reflect durabl
       state: async () => currentState,
       stop: async (botId, options) =>
         stopWithIntents(intents, botId, async () => {
-          stopCalls.push({ botId, ...(options?.expectedSubmissionId ? { expectedSubmissionId: options.expectedSubmissionId } : {}) });
+          stopCalls.push({
+            botId,
+            ...(options?.expectedSubmissionId
+              ? { expectedSubmissionId: options.expectedSubmissionId }
+              : {}),
+          });
           if (firstStop) {
             firstStop = false;
             // Submission 101 finishes/stops, successor 102 starts, and this call throws transiently so Telegram redelivers stopUpdate!
             currentState = { kind: "running", submissionId: "102" };
             throw new Error("transient IPC timeout after 101 ended");
           }
-          if (currentState.kind === "running" && (!options?.expectedSubmissionId || currentState.submissionId === options.expectedSubmissionId)) {
+          if (
+            currentState.kind === "running" &&
+            (!options?.expectedSubmissionId ||
+              currentState.submissionId === options.expectedSubmissionId)
+          ) {
             currentState = { kind: "idle" };
           }
           return currentState;
@@ -3239,7 +3809,12 @@ test("Bot-bound /stop, /abort, /cancel, /status, /queue and /help reflect durabl
       [
         {
           update_id: 3,
-          callback_query: { id: "cb-stale-stop", from: owner, message: makeMessage(203, BOT, "status"), data: "turn:stop:101" },
+          callback_query: {
+            id: "cb-stale-stop",
+            from: owner,
+            message: makeMessage(203, BOT, "status"),
+            data: "turn:stop:101",
+          },
         },
         makeUpdate(4, makeMessage(204, owner, "/abort")),
         makeUpdate(5, makeMessage(205, owner, "/queue")),
@@ -3262,17 +3837,16 @@ test("Bot-bound /stop, /abort, /cancel, /status, /queue and /help reflect durabl
     ],
     "replayed /stop for 101 and stale turn:stop:101 button both spared successor 102; only fresh /abort stopped 102",
   );
-  assert.deepEqual(intentLog, [
-    "bot-a:stopping",
-    "bot-a:stopCancelled",
-    "bot-a:stopping",
-  ]);
+  assert.deepEqual(intentLog, ["bot-a:stopping", "bot-a:stopCancelled", "bot-a:stopping"]);
   assert.equal(currentState.kind, "idle");
 
-  const statusMsg = hClean.api.sentMessages.find(({ text }) => text.includes("<b>Status:</b> working"));
+  const statusMsg = hClean.api.sentMessages.find(({ text }) =>
+    text.includes("<b>Status:</b> working"),
+  );
   assert.ok(statusMsg, "bound /status reflects live durable running state");
   assert.match(statusMsg.text, /<b>Queue:<\/b> managed in Bot session/u);
-  const statusCallbacks = statusMsg.replyMarkup?.inline_keyboard.flat().map((b) => b.callback_data) ?? [];
+  const statusCallbacks =
+    statusMsg.replyMarkup?.inline_keyboard.flat().map((b) => b.callback_data) ?? [];
   assert.ok(statusCallbacks.includes("turn:stop:101"));
 
   assert.ok(
@@ -3280,8 +3854,10 @@ test("Bot-bound /stop, /abort, /cancel, /status, /queue and /help reflect durabl
     "replayed /stop and stale button report that the targeted reply already finished",
   );
   assert.ok(
-    hClean.api.sentMessages.some(({ text }) =>
-      text === "🛑 Stopped the Bot's active reply and withdrew any queued follow-ups."),
+    hClean.api.sentMessages.some(
+      ({ text }) =>
+        text === "🛑 Stopped the Bot's active reply and withdrew any queued follow-ups.",
+    ),
     "/abort reports truthful durable Stop behavior (withdraws queued follow-ups)",
   );
   assert.ok(
@@ -3289,7 +3865,9 @@ test("Bot-bound /stop, /abort, /cancel, /status, /queue and /help reflect durabl
     "bound /queue explains durable follow-ups instead of showing an empty legacy queue",
   );
   assert.ok(
-    hClean.api.sentMessages.some(({ text }) => text.includes("Unavailable on durable Bot chats: /interrupt, /next")),
+    hClean.api.sentMessages.some(({ text }) =>
+      text.includes("Unavailable on durable Bot chats: /interrupt, /next"),
+    ),
     "bound /help documents durable Bot commands and unavailable commands accurately",
   );
 });
@@ -3300,15 +3878,21 @@ test("Bot-bound /queue and tgbtn: share the Bot's real durable conversation hist
   const seenPrompts: string[][] = [];
   const faux = createFauxModels([
     (context) => {
-      seenPrompts.push(context.messages.filter((m) => m.role === "user").map((m) => JSON.stringify(m.content)));
+      seenPrompts.push(
+        context.messages.filter((m) => m.role === "user").map((m) => JSON.stringify(m.content)),
+      );
       return fauxAssistantMessage("Noted: marigold.");
     },
     (context) => {
-      seenPrompts.push(context.messages.filter((m) => m.role === "user").map((m) => JSON.stringify(m.content)));
+      seenPrompts.push(
+        context.messages.filter((m) => m.role === "user").map((m) => JSON.stringify(m.content)),
+      );
       return fauxAssistantMessage("The code word is marigold.");
     },
     (context) => {
-      seenPrompts.push(context.messages.filter((m) => m.role === "user").map((m) => JSON.stringify(m.content)));
+      seenPrompts.push(
+        context.messages.filter((m) => m.role === "user").map((m) => JSON.stringify(m.content)),
+      );
       return fauxAssistantMessage("Confirmed marigold from button.");
     },
   ]);
@@ -3351,10 +3935,17 @@ test("Bot-bound /queue and tgbtn: share the Bot's real durable conversation hist
     batches: [
       [makeUpdate(1, makeMessage(10, owner, "Remember the code word is marigold."))],
       [makeUpdate(2, makeMessage(11, owner, "/queue What was the code word?"))],
-      [{
-        update_id: 3,
-        callback_query: { id: "cb-history-1", from: owner, message: makeMessage(99, BOT, "Confirm?", durableBinding.chatId), data: confirmBtn },
-      }],
+      [
+        {
+          update_id: 3,
+          callback_query: {
+            id: "cb-history-1",
+            from: owner,
+            message: makeMessage(99, BOT, "Confirm?", durableBinding.chatId),
+            data: confirmBtn,
+          },
+        },
+      ],
     ],
     autoStop: true,
     delayAfterFirstBatch: true,
@@ -3373,8 +3964,14 @@ test("Bot-bound /queue and tgbtn: share the Bot's real durable conversation hist
       "Confirmed marigold from button.",
     ]);
     assert.equal(seenPrompts.length, 3);
-    assert.ok(seenPrompts[1]!.some((entry) => entry.includes("marigold")), "/queue turn sees earlier plain Bot message");
-    assert.ok(seenPrompts[2]!.some((entry) => entry.includes("What was the code word?")), "tgbtn: turn sees earlier /queue turn");
+    assert.ok(
+      seenPrompts[1]!.some((entry) => entry.includes("marigold")),
+      "/queue turn sees earlier plain Bot message",
+    );
+    assert.ok(
+      seenPrompts[2]!.some((entry) => entry.includes("What was the code word?")),
+      "tgbtn: turn sees earlier /queue turn",
+    );
   } finally {
     h.service.stop();
     ingress.stop();
@@ -3402,7 +3999,9 @@ function makePhotoAlbumMessage(
     chat: { id: chatId, type: "private" },
     ...(threadId !== undefined ? { message_thread_id: threadId } : {}),
     media_group_id: mediaGroupId,
-    photo: [{ file_id: fileId, file_unique_id: `u-${fileId}`, width: 640, height: 480, file_size: 4 }],
+    photo: [
+      { file_id: fileId, file_unique_id: `u-${fileId}`, width: 640, height: 480, file_size: 4 },
+    ],
     date: 0,
     ...(caption !== undefined ? { caption } : {}),
   };
@@ -3443,11 +4042,19 @@ test("Bot-bound two-photo album retries transient admission failure without re-d
     profile: "work",
     resolveBotBinding: async () => threadBinding,
     scheduleTimer: manualTimers.scheduleTimer,
-    batches: [[
-      // Caption on the second item verifies no "Please review the attached file." prefix leaks in.
-      makeUpdate(1, makePhotoAlbumMessage(501, owner, "album-trip", "photo-a", undefined, 100, 7)),
-      makeUpdate(2, makePhotoAlbumMessage(502, owner, "album-trip", "photo-b", "Trip receipts", 100, 7)),
-    ]],
+    batches: [
+      [
+        // Caption on the second item verifies no "Please review the attached file." prefix leaks in.
+        makeUpdate(
+          1,
+          makePhotoAlbumMessage(501, owner, "album-trip", "photo-a", undefined, 100, 7),
+        ),
+        makeUpdate(
+          2,
+          makePhotoAlbumMessage(502, owner, "album-trip", "photo-b", "Trip receipts", 100, 7),
+        ),
+      ],
+    ],
     autoStop: false,
     botIngress: {
       admit: async (message) => {
@@ -3463,22 +4070,38 @@ test("Bot-bound two-photo album retries transient admission failure without re-d
   try {
     await h.service.start();
     await waitFor(() => h.config.persistOffsetCalls() === 2);
-    assert.equal(manualTimers.pendingCount(), 1, "one debounced timer remains after coalescing two album photos");
+    assert.equal(
+      manualTimers.pendingCount(),
+      1,
+      "one debounced timer remains after coalescing two album photos",
+    );
     assert.equal(h.api.downloadFileCalls(), 2, "each photo downloaded once while buffering");
 
     assert.equal(manualTimers.flushNext(), true);
     await waitFor(() => attempts.length === 2 && h.api.sendChatActionCalls() === 1);
 
-    assert.equal(h.api.downloadFileCalls(), 2, "retries reuse frozen attachments without re-downloading");
+    assert.equal(
+      h.api.downloadFileCalls(),
+      2,
+      "retries reuse frozen attachments without re-downloading",
+    );
     assert.deepEqual(h.sleepMock.lastArgs(), [3_000], "first retry backs off 3s");
     assert.equal(h.turnMock.startCalls(), 0, "no legacy dispatch");
-    assert.equal(h.api.sentMessages.length, 0, "no user-facing error sent on recovered transient failure");
+    assert.equal(
+      h.api.sentMessages.length,
+      0,
+      "no user-facing error sent on recovered transient failure",
+    );
 
     const finalMsg = attempts[1]!;
     assert.equal(finalMsg.botId, "bot-a");
     assert.equal(finalMsg.chatId, 100);
     assert.equal(finalMsg.threadId, 7);
-    assert.equal(finalMsg.messageId, 501, "original first album message ID is retained for deduplication");
+    assert.equal(
+      finalMsg.messageId,
+      501,
+      "original first album message ID is retained for deduplication",
+    );
     assert.equal(finalMsg.text, "Trip receipts");
     assert.equal(finalMsg.attachments?.length, 2);
     assert.notEqual(finalMsg.attachments?.[0]?.data, finalMsg.attachments?.[1]?.data);
@@ -3496,7 +4119,9 @@ test("Bot-bound album retry exhaustion reports one error after five attempts, ac
   const sleepGates: Array<() => void> = [];
   const recordedSleeps: number[] = [];
   let releaseSecondBatch!: () => void;
-  const secondBatchReady = new Promise<void>((resolve) => { releaseSecondBatch = resolve; });
+  const secondBatchReady = new Promise<void>((resolve) => {
+    releaseSecondBatch = resolve;
+  });
 
   const h = harness({
     enabled: true,
@@ -3550,7 +4175,11 @@ test("Bot-bound album retry exhaustion reports one error after five attempts, ac
     // Flush album-fail out of mediaGroups and into retryingMediaGroups BEFORE batch 2 arrives!
     assert.equal(manualTimers.flushNext(), true);
     await waitFor(() => albumAttempts === 1 && sleepGates.length === 1);
-    assert.equal(manualTimers.pendingCount(), 0, "album-fail left mediaGroups and is now in retryingMediaGroups");
+    assert.equal(
+      manualTimers.pendingCount(),
+      0,
+      "album-fail left mediaGroups and is now in retryingMediaGroups",
+    );
 
     releaseSecondBatch();
     await waitFor(() => h.config.persistOffsetCalls() >= 22);
@@ -3565,9 +4194,10 @@ test("Bot-bound album retry exhaustion reports one error after five attempts, ac
       if (sleepGates.length > 0) sleepGates.shift()!();
       await new Promise<void>((resolve) => setImmediate(resolve));
     }
-    await waitFor(() =>
-      h.api.sentMessages.some(({ text }) => text === "⚠️ Error: Temporary disk failure.") &&
-      plainAdmitted.length === 1,
+    await waitFor(
+      () =>
+        h.api.sentMessages.some(({ text }) => text === "⚠️ Error: Temporary disk failure.") &&
+        plainAdmitted.length === 1,
     );
 
     assert.equal(albumAttempts, 5, "five total attempts before giving up");
@@ -3577,7 +4207,11 @@ test("Bot-bound album retry exhaustion reports one error after five attempts, ac
       ["⚠️ Error: Temporary disk failure."],
       "exactly one error message sent upon exhaustion",
     );
-    assert.deepEqual(plainAdmitted, ["After exhaustion"], "polling continues normally after album exhaustion");
+    assert.deepEqual(
+      plainAdmitted,
+      ["After exhaustion"],
+      "polling continues normally after album exhaustion",
+    );
   } finally {
     releaseSecondBatch();
     h.service.stop();
@@ -3595,10 +4229,12 @@ test("Bot-bound album terminal BotSessionError reports immediately without retri
     profile: "work",
     resolveBotBinding: async () => durableBinding,
     scheduleTimer: terminalTimers.scheduleTimer,
-    batches: [[
-      makeUpdate(1, makePhotoAlbumMessage(901, owner, "album-term", "p1", "Needs model")),
-      makeUpdate(2, makePhotoAlbumMessage(902, owner, "album-term", "p2")),
-    ]],
+    batches: [
+      [
+        makeUpdate(1, makePhotoAlbumMessage(901, owner, "album-term", "p1", "Needs model")),
+        makeUpdate(2, makePhotoAlbumMessage(902, owner, "album-term", "p2")),
+      ],
+    ],
     autoStop: false,
     botIngress: {
       admit: async () => {
@@ -3635,13 +4271,20 @@ test("Bot-bound album terminal BotSessionError reports immediately without retri
     sleep: async (_ms, signal) => {
       await new Promise<void>((resolve, reject) => {
         releaseSleep = resolve;
-        signal?.addEventListener("abort", () => {
-          abortedSignals += 1;
-          reject(new Error("aborted"));
-        }, { once: true });
+        signal?.addEventListener(
+          "abort",
+          () => {
+            abortedSignals += 1;
+            reject(new Error("aborted"));
+          },
+          { once: true },
+        );
       });
     },
-    batches: [[makeUpdate(1, makePhotoAlbumMessage(910, owner, "album-stop", "p1", "Cancel me"))], []],
+    batches: [
+      [makeUpdate(1, makePhotoAlbumMessage(910, owner, "album-stop", "p1", "Cancel me"))],
+      [],
+    ],
     autoStop: false,
     botIngress: {
       admit: async () => {
@@ -3684,7 +4327,10 @@ test("Bot-bound album with BotReplyAdmittedUnrecordedError keeps retrying past f
     file: outboxFile,
     session: {
       send: async (_botId, input) => {
-        sessionCalls.push({ requestId: input.requestId, imageCount: input.attachments?.length ?? 0 });
+        sessionCalls.push({
+          requestId: input.requestId,
+          imageCount: input.attachments?.length ?? 0,
+        });
         if (sessionCalls.length === 1) mkdirSync(outboxFile);
         return { submissionId: "88", deduped: sessionCalls.length > 1 };
       },
@@ -3706,10 +4352,12 @@ test("Bot-bound album with BotReplyAdmittedUnrecordedError keeps retrying past f
       return true;
     },
     scheduleTimer: manualTimers.scheduleTimer,
-    batches: [[
-      makeUpdate(1, makePhotoAlbumMessage(950, owner, "album-sticky", "img-1", "Receipts")),
-      makeUpdate(2, makePhotoAlbumMessage(951, owner, "album-sticky", "img-2")),
-    ]],
+    batches: [
+      [
+        makeUpdate(1, makePhotoAlbumMessage(950, owner, "album-sticky", "img-1", "Receipts")),
+        makeUpdate(2, makePhotoAlbumMessage(951, owner, "album-sticky", "img-2")),
+      ],
+    ],
     autoStop: false,
     botIngress: {
       admit: async (message) => {
@@ -3729,18 +4377,32 @@ test("Bot-bound album with BotReplyAdmittedUnrecordedError keeps retrying past f
     await waitFor(() => delivered.length === 1, 5_000);
     await ingress.idle();
 
-    assert.equal(admitAttempts, 8, "sticky admitted state retries past the 5-attempt cutoff until outbox row is written");
-    assert.equal(revalidations, 10, "2 inbound updates + 8 admission attempts each revalidate the captured binding");
+    assert.equal(
+      admitAttempts,
+      8,
+      "sticky admitted state retries past the 5-attempt cutoff until outbox row is written",
+    );
+    assert.equal(
+      revalidations,
+      10,
+      "2 inbound updates + 8 admission attempts each revalidate the captured binding",
+    );
     assert.deepEqual(
       h.sleepMock.lastArgs(),
       [3_000, 6_000, 12_000, 24_000, 48_000, 60_000, 60_000],
       "exponential backoff caps at 60s",
     );
     assert.equal(h.api.sentMessages.length, 0, "no error sent for an already-accepted album");
-    assert.equal(sessionCalls.length, 2, "attempt 1 admitted; attempts 2..7 failed reading outbox; attempt 8 deduplicated via tg:bot-a:100:0:950");
+    assert.equal(
+      sessionCalls.length,
+      2,
+      "attempt 1 admitted; attempts 2..7 failed reading outbox; attempt 8 deduplicated via tg:bot-a:100:0:950",
+    );
     assert.deepEqual(sessionCalls[0], { requestId: "tg:bot-a:100:0:950", imageCount: 2 });
     assert.deepEqual(sessionCalls[1], { requestId: "tg:bot-a:100:0:950", imageCount: 2 });
-    assert.deepEqual(delivered, [{ chatId: 100, ownerUserId: 42, text: "Reviewed both receipts." }]);
+    assert.deepEqual(delivered, [
+      { chatId: 100, ownerUserId: 42, text: "Reviewed both receipts." },
+    ]);
   } finally {
     h.service.stop();
     ingress.stop();
@@ -3753,10 +4415,12 @@ test("Bot-bound album with BotReplyAdmittedUnrecordedError keeps retrying past f
     enabled: true,
     allowedUserId: owner.id,
     scheduleTimer: unboundTimers.scheduleTimer,
-    batches: [[
-      makeUpdate(1, makePhotoAlbumMessage(960, owner, "album-unbound", "u1", "Unbound album")),
-      makeUpdate(2, makePhotoAlbumMessage(961, owner, "album-unbound", "u2")),
-    ]],
+    batches: [
+      [
+        makeUpdate(1, makePhotoAlbumMessage(960, owner, "album-unbound", "u1", "Unbound album")),
+        makeUpdate(2, makePhotoAlbumMessage(961, owner, "album-unbound", "u2")),
+      ],
+    ],
     autoStop: false,
     reply: "Unbound album reply",
   });
@@ -3764,7 +4428,11 @@ test("Bot-bound album with BotReplyAdmittedUnrecordedError keeps retrying past f
     await hUnbound.service.start();
     await waitFor(() => hUnbound.config.persistOffsetCalls() === 2);
     unboundTimers.flushNext();
-    await waitFor(() => hUnbound.turnMock.startCalls() === 1 && hUnbound.api.sentMessages.some(({ text }) => text.includes("Unbound album reply")));
+    await waitFor(
+      () =>
+        hUnbound.turnMock.startCalls() === 1 &&
+        hUnbound.api.sentMessages.some(({ text }) => text.includes("Unbound album reply")),
+    );
     assert.equal(hUnbound.turnMock.startedParams()[0]?.content, "Unbound album");
   } finally {
     hUnbound.service.stop();

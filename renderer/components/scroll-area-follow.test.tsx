@@ -66,7 +66,12 @@ function scrollport(viewport = document.querySelector<HTMLElement>("[data-scroll
 
 function Transcript({ chunks, streaming = true }: { chunks: number; streaming?: boolean }) {
   return (
-    <ScrollArea autoScrollToBottom autoScrollDeps={[chunks]} showScrollToBottomButton streaming={streaming}>
+    <ScrollArea
+      autoScrollToBottom
+      autoScrollDeps={[chunks]}
+      showScrollToBottomButton
+      streaming={streaming}
+    >
       {Array.from({ length: chunks }, (_, index) => (
         <p key={index}>chunk {index}</p>
       ))}
@@ -80,7 +85,10 @@ const wait = (ms: number) => act(() => new Promise<void>((resolve) => setTimeout
  * A wheel event stamped with an explicit gesture time, so momentum windows are
  * decided by the timeline the test describes rather than by real waits.
  */
-function wheel(target: Element, { deltaY, deltaX = 0, at }: { deltaY: number; deltaX?: number; at: number }) {
+function wheel(
+  target: Element,
+  { deltaY, deltaX = 0, at }: { deltaY: number; deltaX?: number; at: number },
+) {
   const { WheelEvent: DomWheelEvent } = window as unknown as typeof globalThis;
   const event = new DomWheelEvent("wheel", { deltaY, deltaX, bubbles: true, cancelable: true });
   Object.defineProperty(event, "timeStamp", { value: at });
@@ -196,7 +204,8 @@ test("wheel momentum from before a jump neither breaks follow nor drags the view
   wheel(port.viewport, { deltaY: -120, at: 1_000 });
   port.moveTo(300);
   // The trackpad keeps coasting while the reader reaches for the jump button.
-  for (let tick = 1; tick <= 5; tick += 1) wheel(port.viewport, { deltaY: -20, at: 1_000 + tick * 40 });
+  for (let tick = 1; tick <= 5; tick += 1)
+    wheel(port.viewport, { deltaY: -20, at: 1_000 + tick * 40 });
   fireEvent.click(await screen.findByRole("button", { name: "Scroll to bottom" }));
   assert.equal(port.top(), port.bottom());
 
@@ -223,13 +232,21 @@ test("a scrollbar press keeps follow until the thumb is dragged away, and re-arm
   const port = scrollport();
   fireEvent.pointerDown(port.viewport);
   fireEvent.pointerUp(window);
-  assert.equal(port.following(), true, "a click on the scrollbar is not a reason to stop following");
+  assert.equal(
+    port.following(),
+    true,
+    "a click on the scrollbar is not a reason to stop following",
+  );
   assert.equal(port.viewport.style.overflowAnchor, "none", "following owns the bottom edge");
 
   fireEvent.pointerDown(port.viewport);
   port.moveTo(port.bottom() - 500);
   assert.equal(port.following(), false);
-  assert.equal(port.viewport.style.overflowAnchor, "", "a reader away from the end keeps scroll anchoring");
+  assert.equal(
+    port.viewport.style.overflowAnchor,
+    "",
+    "a reader away from the end keeps scroll anchoring",
+  );
   port.grow(80);
   view.rerender(<Transcript chunks={2} />);
   assert.equal(port.top(), port.bottom() - 580, "growth does not pull the held thumb down");
@@ -294,7 +311,11 @@ test("scrolling inside a code block that can still scroll up leaves follow alone
 
   Object.defineProperty(code, "scrollTop", { configurable: true, get: () => 0, set: () => {} });
   fireEvent.wheel(code, { deltaY: -120 });
-  assert.equal(port.following(), false, "once the code block is at its top, the transcript scrolls");
+  assert.equal(
+    port.following(),
+    false,
+    "once the code block is at its top, the transcript scrolls",
+  );
 });
 
 test("reading keys break follow; typing in a field does not", () => {
@@ -356,7 +377,11 @@ test("the transcript reserves room for the overlaid toolbar, composer, and float
     assert.ok(viewport);
     assert.equal(viewport.style.paddingTop, "52px");
     assert.equal(viewport.style.paddingBottom, "176px");
-    assert.equal(viewport.contains(screen.getByText("Composer")), false, "the composer is not scrolled away");
+    assert.equal(
+      viewport.contains(screen.getByText("Composer")),
+      false,
+      "the composer is not scrolled away",
+    );
     assert.equal(viewport.contains(screen.getByText("Chat title")), false);
   } finally {
     HTMLElement.prototype.getBoundingClientRect = original;
@@ -422,7 +447,11 @@ test("reading keys in a focused nested scrollable element leave transcript follo
   // Focus the nested element and press PageUp; it can scroll up.
   nested.focus();
   fireEvent.keyDown(nested, { key: "PageUp" });
-  assert.equal(port.following(), true, "the nested element consumed the PageUp; transcript follow unchanged");
+  assert.equal(
+    port.following(),
+    true,
+    "the nested element consumed the PageUp; transcript follow unchanged",
+  );
 
   // Grow content and verify transcript follows.
   port.grow(80);
@@ -441,7 +470,12 @@ test("the jump button is centred on the chat column the composer uses, not on th
   // the footer; the button must share both, so it is positioned against a
   // column wrapper that floats over the scrollport beside the footer (#485).
   const Chat = ({ footer }: { footer?: React.ReactNode }) => (
-    <ScrollArea autoScrollToBottom showScrollToBottomButton alignFooterToScrollContent footer={footer}>
+    <ScrollArea
+      autoScrollToBottom
+      showScrollToBottomButton
+      alignFooterToScrollContent
+      footer={footer}
+    >
       <p>chunk</p>
     </ScrollArea>
   );
@@ -450,19 +484,32 @@ test("the jump button is centred on the chat column the composer uses, not on th
   Object.defineProperty(port.viewport, "offsetWidth", { configurable: true, get: () => 415 });
   Object.defineProperty(port.viewport, "clientWidth", { configurable: true, get: () => 400 });
   // Adding the footer re-measures, so the 15px gutter is picked up.
-  view.rerender(<Chat footer={<div className="aiden-dock-inset chat-content-column">Composer</div>} />);
+  view.rerender(
+    <Chat footer={<div className="aiden-dock-inset chat-content-column">Composer</div>} />,
+  );
   fireEvent.wheel(port.viewport, { deltaY: -120 });
   port.moveTo(200);
 
   const jump = await screen.findByRole("button", { name: "Scroll to bottom" });
   const column = jump.parentElement;
   assert.ok(column, "the button has a positioning wrapper");
-  assert.ok(column.classList.contains("chat-content-column"), "the button is positioned against the chat column");
-  assert.equal(port.viewport.contains(column), false, "the column floats over the scrollport, like the footer");
+  assert.ok(
+    column.classList.contains("chat-content-column"),
+    "the button is positioned against the chat column",
+  );
+  assert.equal(
+    port.viewport.contains(column),
+    false,
+    "the column floats over the scrollport, like the footer",
+  );
   const layer = column.parentElement;
   const footerLayer = screen.getByText("Composer").parentElement;
   assert.ok(layer && footerLayer);
-  assert.equal(layer.style.insetInlineEnd, footerLayer.style.insetInlineEnd, "the button layer keeps the footer's scrollbar gutter");
+  assert.equal(
+    layer.style.insetInlineEnd,
+    footerLayer.style.insetInlineEnd,
+    "the button layer keeps the footer's scrollbar gutter",
+  );
   assert.equal(footerLayer.style.insetInlineEnd, "15px");
   assert.equal(jump.tabIndex, 0, "still reachable by keyboard");
 });
@@ -525,7 +572,9 @@ test("opening another chat starts small upward movement over", () => {
   const Chat = ({ chat, chunks }: { chat: string; chunks: number }) => (
     <ScrollArea autoScrollToBottom autoScrollDeps={[chunks]} autoScrollResetKey={chat} streaming>
       <iframe title="Interactive visual" sandbox="allow-scripts" />
-      <p>{chat} chunk {chunks}</p>
+      <p>
+        {chat} chunk {chunks}
+      </p>
     </ScrollArea>
   );
   const view = render(<Chat chat="first" chunks={1} />);
@@ -539,7 +588,11 @@ test("opening another chat starts small upward movement over", () => {
   view.rerender(<Chat chat="second" chunks={1} />);
   assert.equal(port.top(), port.bottom(), "the new chat opens at its last line");
   port.moveTo(port.bottom() - 0.5);
-  assert.equal(port.following(), true, "movement in the previous chat does not count toward this one");
+  assert.equal(
+    port.following(),
+    true,
+    "movement in the previous chat does not count toward this one",
+  );
 });
 
 test("a content-height clamp after an embedded visual shrinks keeps live follow armed", () => {
@@ -549,7 +602,11 @@ test("a content-height clamp after an embedded visual shrinks keeps live follow 
   view.rerender(<Transcript chunks={2} />);
   port.grow(-300);
   port.moveTo(port.bottom());
-  assert.equal(port.following(), true, "the browser clamped the offset; no reader navigation occurred");
+  assert.equal(
+    port.following(),
+    true,
+    "the browser clamped the offset; no reader navigation occurred",
+  );
   port.grow(80);
   view.rerender(<Transcript chunks={3} />);
   assert.equal(port.top(), port.bottom());
@@ -566,12 +623,20 @@ test("a body replacement stays reachable while the transcript and footer behind 
   );
   const hiddenAncestor = (element: Element) => element.closest("[inert], [aria-hidden='true']");
   const back = screen.getByRole("button", { name: "Back to main chat" });
-  assert.equal(hiddenAncestor(back), null, "the replacement is not inside a hidden or inert subtree");
+  assert.equal(
+    hiddenAncestor(back),
+    null,
+    "the replacement is not inside a hidden or inert subtree",
+  );
   back.focus();
   assert.equal(document.activeElement, back);
 
   assert.ok(hiddenAncestor(screen.getByText("chunk 0")), "the transcript is hidden");
-  assert.equal(screen.queryByRole("button", { name: "Send message" }), null, "the footer is hidden");
+  assert.equal(
+    screen.queryByRole("button", { name: "Send message" }),
+    null,
+    "the footer is hidden",
+  );
 });
 
 test("hover cards and tooltips in a covered transcript stay closed, and the replacement's own still open", () => {
@@ -608,10 +673,17 @@ test("hover cards and tooltips in a covered transcript stay closed, and the repl
       <ScrollArea bodyReplacement={back}>{transcript}</ScrollArea>
     </TooltipProvider>,
   );
-  assert.equal(screen.queryByText("Link preview"), null, "the preview no longer floats over the replacement");
+  assert.equal(
+    screen.queryByText("Link preview"),
+    null,
+    "the preview no longer floats over the replacement",
+  );
   assert.equal(screen.queryByText("Copy reply"), null, "nor does the tooltip");
   fireEvent.focus(screen.getByRole("button", { name: "Back to main chat" }));
-  assert.ok(screen.getAllByText("Back to main chat (Esc)").length > 0, "the replacement's tooltip still shows");
+  assert.ok(
+    screen.getAllByText("Back to main chat (Esc)").length > 0,
+    "the replacement's tooltip still shows",
+  );
 });
 
 const copyReply = (
@@ -637,7 +709,13 @@ const surfacesOpenedFromTheTranscript: Array<[string, React.ReactNode]> = [
   ],
   [
     "an alert dialog",
-    <AlertDialog open onOpenChange={() => undefined} title="Delete reply?" confirmLabel="Delete" key="alert">
+    <AlertDialog
+      open
+      onOpenChange={() => undefined}
+      title="Delete reply?"
+      confirmLabel="Delete"
+      key="alert"
+    >
       {copyReply}
     </AlertDialog>,
   ],
@@ -647,7 +725,9 @@ for (const [name, surface] of surfacesOpenedFromTheTranscript) {
   test(`${name} opened from a covered transcript is a surface of its own, and its tooltips show`, () => {
     render(
       <TooltipProvider delayDuration={0}>
-        <ScrollArea bodyReplacement={<button type="button">Back to main chat</button>}>{surface}</ScrollArea>
+        <ScrollArea bodyReplacement={<button type="button">Back to main chat</button>}>
+          {surface}
+        </ScrollArea>
       </TooltipProvider>,
     );
     fireEvent.focus(screen.getByRole("button", { name: "Copy reply" }));
@@ -678,10 +758,17 @@ test("a side panel floating over the conversation closes its open cards once, an
   assert.ok(screen.getAllByText("Copy reply").length > 0, "and so is the tooltip");
 
   view.rerender(transcript(true));
-  assert.equal(screen.queryByText("Link preview"), null, "the panel floating in closes the preview");
+  assert.equal(
+    screen.queryByText("Link preview"),
+    null,
+    "the panel floating in closes the preview",
+  );
   assert.equal(screen.queryByText("Copy reply"), null, "and the tooltip");
 
   fireEvent.blur(copy);
   fireEvent.focus(copy);
-  assert.ok(screen.getAllByText("Copy reply").length > 0, "with the panel still floating, the strip's tooltip opens again");
+  assert.ok(
+    screen.getAllByText("Copy reply").length > 0,
+    "with the panel still floating, the strip's tooltip opens again",
+  );
 });

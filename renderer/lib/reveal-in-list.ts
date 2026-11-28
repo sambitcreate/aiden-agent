@@ -22,7 +22,10 @@ export function revealInList(row: HTMLElement, stop?: HTMLElement | null): void 
     const style = getComputedStyle(node);
     if (/(auto|scroll)/u.test(style.overflowY) && node.scrollHeight > node.clientHeight) {
       const top =
-        row.getBoundingClientRect().top - node.getBoundingClientRect().top - node.clientTop + node.scrollTop;
+        row.getBoundingClientRect().top -
+        node.getBoundingClientRect().top -
+        node.clientTop +
+        node.scrollTop;
       const shown = scrollToShow(
         node.scrollTop,
         node.clientHeight,

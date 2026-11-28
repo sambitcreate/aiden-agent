@@ -29,7 +29,16 @@ export interface GitRepoWatcherOptions {
   now?: () => number;
 }
 
-const ADMIN_FILES = new Set(["HEAD", "index", "packed-refs", "ORIG_HEAD", "MERGE_HEAD", "FETCH_HEAD", "CHERRY_PICK_HEAD", "REVERT_HEAD"]);
+const ADMIN_FILES = new Set([
+  "HEAD",
+  "index",
+  "packed-refs",
+  "ORIG_HEAD",
+  "MERGE_HEAD",
+  "FETCH_HEAD",
+  "CHERRY_PICK_HEAD",
+  "REVERT_HEAD",
+]);
 const SHARED_FILES = new Set(["packed-refs"]);
 
 async function readGitDirPointer(dotGit: string): Promise<string | undefined> {
@@ -39,14 +48,22 @@ async function readGitDirPointer(dotGit: string): Promise<string | undefined> {
 }
 
 /** Finds the Git directories for a folder the way Git discovery would, following `.git` files and commondir. */
-export async function resolveGitWatchTargets(folderPath: string): Promise<GitWatchTargets | undefined> {
+export async function resolveGitWatchTargets(
+  folderPath: string,
+): Promise<GitWatchTargets | undefined> {
   let dir = path.resolve(folderPath);
   for (;;) {
     const dotGit = path.join(dir, ".git");
     const stat = await fs.stat(dotGit).catch(() => undefined);
-    const gitDir = stat?.isDirectory() ? dotGit : stat?.isFile() ? await readGitDirPointer(dotGit) : undefined;
+    const gitDir = stat?.isDirectory()
+      ? dotGit
+      : stat?.isFile()
+        ? await readGitDirPointer(dotGit)
+        : undefined;
     if (gitDir) {
-      const common = (await fs.readFile(path.join(gitDir, "commondir"), "utf8").catch(() => "")).trim();
+      const common = (
+        await fs.readFile(path.join(gitDir, "commondir"), "utf8").catch(() => "")
+      ).trim();
       return { gitDir, commonDir: common ? path.resolve(gitDir, common) : gitDir };
     }
     const parent = path.dirname(dir);
@@ -95,14 +112,24 @@ export class GitRepoWatcher {
     this.ensureSweep();
     const targets = await this.resolveTargets(folderPath).catch(() => undefined);
     if (entry.closed || !targets) return;
-    const onEvent = (names: ReadonlySet<string> | undefined) => (_event: string, filename: string | Buffer | null) => {
-      const name = filename == null ? undefined : path.basename(filename.toString());
-      if (names && name !== undefined && !names.has(name)) return;
-      this.schedule(workspaceId, entry);
-    };
-    const add = (target: string, names: ReadonlySet<string> | undefined, recursive = false): boolean => {
+    const onEvent =
+      (names: ReadonlySet<string> | undefined) =>
+      (_event: string, filename: string | Buffer | null) => {
+        const name = filename == null ? undefined : path.basename(filename.toString());
+        if (names && name !== undefined && !names.has(name)) return;
+        this.schedule(workspaceId, entry);
+      };
+    const add = (
+      target: string,
+      names: ReadonlySet<string> | undefined,
+      recursive = false,
+    ): boolean => {
       try {
-        const watcher = this.watch(target, { persistent: false, ...(recursive ? { recursive: true } : {}) }, onEvent(names));
+        const watcher = this.watch(
+          target,
+          { persistent: false, ...(recursive ? { recursive: true } : {}) },
+          onEvent(names),
+        );
         watcher.on("error", () => {
           // A deleted or replaced Git dir: drop the entry so the next read re-resolves.
           if (this.entries.get(workspaceId) === entry) this.close(workspaceId);
@@ -150,7 +177,11 @@ export class GitRepoWatcher {
     entry.closed = true;
     if (entry.timer) clearTimeout(entry.timer);
     for (const watcher of entry.watchers) {
-      try { watcher.close(); } catch { /* already closed */ }
+      try {
+        watcher.close();
+      } catch {
+        /* already closed */
+      }
     }
   }
 

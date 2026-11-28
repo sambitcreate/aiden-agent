@@ -70,7 +70,10 @@ const removalKey = (target: BotMemoryTarget, entryId: string) => `${target}:${en
 
 /** A slim neutral meter: how much of the store's character budget is used. */
 function UsageMeter({ title, store }: { title: string; store: BotMemoryStoreView }) {
-  const percent = store.limitChars > 0 ? Math.min(100, Math.round((store.usedChars / store.limitChars) * 100)) : 0;
+  const percent =
+    store.limitChars > 0
+      ? Math.min(100, Math.round((store.usedChars / store.limitChars) * 100))
+      : 0;
   const text = `${numberFormat.format(store.usedChars)} of ${numberFormat.format(store.limitChars)} characters`;
   return (
     <div className="flex items-center gap-3 px-4 py-3">
@@ -118,9 +121,13 @@ function MemoryGroup({
   const title = groupTitle(target, botName);
   const titleId = React.useId();
   const entries = store.entries.filter((entry) => !hidden.has(removalKey(target, entry.id)));
-  const separator = "relative after:absolute after:inset-x-4 after:bottom-0 after:h-px after:bg-separator";
+  const separator =
+    "relative after:absolute after:inset-x-4 after:bottom-0 after:h-px after:bg-separator";
   return (
-    <section aria-labelledby={titleId} className={compact ? "settings-group mb-5" : "settings-group mb-7"}>
+    <section
+      aria-labelledby={titleId}
+      className={compact ? "settings-group mb-5" : "settings-group mb-7"}
+    >
       <h2
         id={titleId}
         className={
@@ -174,12 +181,21 @@ function MemoryRow({
   const textId = React.useId();
   return (
     <li className={`${className} flex min-w-0 items-start gap-3 py-2.5 pl-4 pr-2`}>
-      <p id={textId} className="min-w-0 flex-1 select-text whitespace-pre-wrap py-1 text-regular text-primary [overflow-wrap:anywhere]">
+      <p
+        id={textId}
+        className="min-w-0 flex-1 select-text whitespace-pre-wrap py-1 text-regular text-primary [overflow-wrap:anywhere]"
+      >
         {entry.text}
       </p>
       <DropdownMenu>
         <DropdownMenuTrigger asChild>
-          <Button iconOnly variant="transparent" size="small" aria-label="Memory options" aria-describedby={textId}>
+          <Button
+            iconOnly
+            variant="transparent"
+            size="small"
+            aria-label="Memory options"
+            aria-describedby={textId}
+          >
             <Ellipsis />
           </Button>
         </DropdownMenuTrigger>
@@ -261,7 +277,13 @@ function EditMemoryDialog({
             setError(null);
           }}
         />
-        <Text id={counterId} as="p" variant="small" color="tertiary" className="self-end tabular-nums">
+        <Text
+          id={counterId}
+          as="p"
+          variant="small"
+          color="tertiary"
+          className="self-end tabular-nums"
+        >
           {`${numberFormat.format(text.length)} / ${numberFormat.format(BOT_MEMORY_LIMITS.entryChars)}`}
         </Text>
         {error ? (
@@ -282,7 +304,11 @@ function EditMemoryDialog({
  * toast closes or the page does. Main has no person "add", so this is how Undo
  * restores an entry exactly (same text, same id).
  */
-function useDeferredRemovals(botId: string, onView: (view: BotMemoryView) => void, botName: string) {
+function useDeferredRemovals(
+  botId: string,
+  onView: (view: BotMemoryView) => void,
+  botName: string,
+) {
   const pending = React.useRef(new Map<string, PendingRemoval>());
   const [hidden, setHidden] = React.useState<ReadonlySet<string>>(() => new Set());
   const unhide = React.useCallback((key: string) => {
@@ -359,7 +385,10 @@ export function BotMemoryContent({
 }) {
   const qc = useQueryClient();
   const memory = useBotMemory(bot.id);
-  const [editing, setEditing] = React.useState<{ target: BotMemoryTarget; entry: BotMemoryEntry } | null>(null);
+  const [editing, setEditing] = React.useState<{
+    target: BotMemoryTarget;
+    entry: BotMemoryEntry;
+  } | null>(null);
   const [erasing, setErasing] = React.useState(false);
   const [erasingBusy, setErasingBusy] = React.useState(false);
   const onView = React.useCallback((view: BotMemoryView) => storeBotMemoryView(qc, view), [qc]);
@@ -390,7 +419,11 @@ export function BotMemoryContent({
     body = <BotPageSkeleton label="Loading memory" groups={[2, 2]} />;
   } else if (!view) {
     body = (
-      <Callout color="red" role="alert" className="mb-7 flex-row items-center justify-between gap-4">
+      <Callout
+        color="red"
+        role="alert"
+        className="mb-7 flex-row items-center justify-between gap-4"
+      >
         <Text as="p" variant="small" color="status-red">
           Aiden couldn’t load {bot.name}’s memory.
         </Text>

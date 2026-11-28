@@ -49,7 +49,9 @@ export interface CompactionPrecomputes {
    * Removes the chat's entry and returns it when its summary is finished. One
    * still being written is aborted.
    */
-  take(chatKey: string): { snapshot: CompactionPrecomputeSnapshot; result: CompactResult } | undefined;
+  take(
+    chatKey: string,
+  ): { snapshot: CompactionPrecomputeSnapshot; result: CompactResult } | undefined;
   /** Aborts and drops the chat's entry: the chat stopped, moved, was deleted or compacted. */
   discard(chatKey: string): void;
   /** Whether the chat has an entry, written or still being written. */

@@ -120,7 +120,8 @@ export async function provisionWorktreeIncludedFiles(
   const destinationIdentity = await captureManagedWorktreeRootIdentity(canonicalWorktree);
   if (sourceIdentity.path !== canonicalSource || destinationIdentity.path !== canonicalWorktree) {
     throw new ManagedWorktreeProvisionerError(
-      "unsafe_source", "A managed worktree root changed while provisioning was starting.",
+      "unsafe_source",
+      "A managed worktree root changed while provisioning was starting.",
     );
   }
   if (pathsEqual(canonicalSource, canonicalWorktree)) {
@@ -149,7 +150,9 @@ export async function provisionWorktreeIncludedFiles(
 
   let eligible: string[];
   if (dependencies.checkIgnored) {
-    const ignored = new Set(await dependencies.checkIgnored(canonicalSource, included, options.signal));
+    const ignored = new Set(
+      await dependencies.checkIgnored(canonicalSource, included, options.signal),
+    );
     if (options.signal?.aborted) throw new Error("Provision aborted.");
     eligible = [...new Set(included.filter((entry) => ignored.has(entry)))].sort();
   } else {
@@ -201,12 +204,18 @@ export async function provisionWorktreeIncludedFiles(
     return provisioned;
   } catch (error) {
     if (error instanceof ManagedWorktreeFileIoError) {
-      const code = error.code === "destination_exists" ? "destination_exists"
-        : error.code === "too_many_bytes" ? "too_many_bytes"
-        : error.code === "source_changed" ? "source_changed"
-        : error.code === "unsafe_source" ? "unsafe_source"
-        : error.code === "invalid_input" ? "unsafe_source"
-        : "unsafe_source";
+      const code =
+        error.code === "destination_exists"
+          ? "destination_exists"
+          : error.code === "too_many_bytes"
+            ? "too_many_bytes"
+            : error.code === "source_changed"
+              ? "source_changed"
+              : error.code === "unsafe_source"
+                ? "unsafe_source"
+                : error.code === "invalid_input"
+                  ? "unsafe_source"
+                  : "unsafe_source";
       throw new ManagedWorktreeProvisionerError(
         code,
         code === "destination_exists"

@@ -13,12 +13,12 @@ Give a chat a goal and Aiden keeps working on it in new rounds until it is done,
 
 Other commands:
 
-| Command | What it does |
-| --- | --- |
-| `/goal` | Shows the goal and where it stands. |
-| `/goal pause` | Pauses it after the current answer. |
-| `/goal resume` | Starts it again from round 1. |
-| `/goal clear` | Removes it. |
+| Command        | What it does                        |
+| -------------- | ----------------------------------- |
+| `/goal`        | Shows the goal and where it stands. |
+| `/goal pause`  | Pauses it after the current answer. |
+| `/goal resume` | Starts it again from round 1.       |
+| `/goal clear`  | Removes it.                         |
 
 ## Aiden can suggest a goal
 
@@ -30,13 +30,13 @@ Aiden can only suggest a goal in a turn you started in a chat that can have one 
 
 While a chat has a goal, a bar above the composer shows it:
 
-| State | Shows | Actions |
-| --- | --- | --- |
-| Working | "Working · round 3 of 50" and the objective | Pause, Clear |
-| Paused by you | "Paused" | Resume, Clear |
+| State           | Shows                                                | Actions           |
+| --------------- | ---------------------------------------------------- | ----------------- |
+| Working         | "Working · round 3 of 50" and the objective          | Pause, Clear      |
+| Paused by you   | "Paused"                                             | Resume, Clear     |
 | Paused by Aiden | "Paused" and why (for example "Not making progress") | Keep going, Clear |
-| Needs you | "Needs you" and what it needs | Keep going, Clear |
-| Done | "Done" and the reason | Clear |
+| Needs you       | "Needs you" and what it needs                        | Keep going, Clear |
+| Done            | "Done" and the reason                                | Clear             |
 
 Resume and Keep going both start again from round 1 with a fresh progress count; the limit stays 50 rounds. A round counts only once it starts: if you send a message while Aiden is checking, your message's answer is that round's work and the count stays. Taps take effect at once, and the bar's buttons wait while one change is on its way. If Aiden can't make the change, the bar goes back and says why.
 

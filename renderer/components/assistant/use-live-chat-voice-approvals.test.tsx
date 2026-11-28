@@ -43,14 +43,20 @@ test("approvals left in state from the previous chat are never published under t
   const first = [runTests];
   const view = render(<Pane chatId="c1" approvals={first} />);
   assert.equal(store.get()?.chatId, "c1");
-  assert.deepEqual(store.get()?.approvals.map((prompt) => prompt.approvalId), ["a1"]);
+  assert.deepEqual(
+    store.get()?.approvals.map((prompt) => prompt.approvalId),
+    ["a1"],
+  );
 
   view.rerender(<Pane chatId="c2" approvals={first} />);
   assert.equal(store.get()?.chatId, "c2");
   assert.deepEqual(store.get()?.approvals, [], "c1's approval is not c2's");
 
   view.rerender(<Pane chatId="c2" approvals={[{ ...runTests, approvalId: "b1" }]} />);
-  assert.deepEqual(store.get()?.approvals.map((prompt) => prompt.approvalId), ["b1"]);
+  assert.deepEqual(
+    store.get()?.approvals.map((prompt) => prompt.approvalId),
+    ["b1"],
+  );
 
   view.unmount();
   assert.equal(store.get(), null);
@@ -60,9 +66,12 @@ test("a decide published for one chat refuses once the pane shows another chat",
   const store = new LiveChatApprovalsStore();
   const answered: string[] = [];
   function Pane({ chatId }: { chatId: string }) {
-    const decide = React.useCallback(async (prompt: ApprovalPrompt) => {
-      answered.push(`${chatId}:${prompt.approvalId}`);
-    }, [chatId]);
+    const decide = React.useCallback(
+      async (prompt: ApprovalPrompt) => {
+        answered.push(`${chatId}:${prompt.approvalId}`);
+      },
+      [chatId],
+    );
     usePublishLiveChatApprovals(chatId, [runTests], decide, store);
     return null;
   }
@@ -96,15 +105,26 @@ function mountPane(settings: Record<string, unknown> = {}) {
     },
   });
   bus.setSession("s1", { toolResult: async () => true, note: async () => true });
-  openChat.publish(Symbol("pane"), { chatId: "c1", title: "Fix login", workspaceId: null, busy: true, streamId: "s" });
+  openChat.publish(Symbol("pane"), {
+    chatId: "c1",
+    title: "Fix login",
+    workspaceId: null,
+    busy: true,
+    streamId: "s",
+  });
 
   function Pane() {
     useLiveChatVoiceApprovals(settings, controller);
     const [approvals, setApprovals] = React.useState<ApprovalPrompt[]>([runTests]);
-    const decide = React.useCallback(async (prompt: ApprovalPrompt, decision: "allow" | "deny", options?: object) => {
-      await chatsApi.approve(prompt.approvalId, decision, options);
-      setApprovals((current) => current.filter((candidate) => candidate.approvalId !== prompt.approvalId));
-    }, []);
+    const decide = React.useCallback(
+      async (prompt: ApprovalPrompt, decision: "allow" | "deny", options?: object) => {
+        await chatsApi.approve(prompt.approvalId, decision, options);
+        setApprovals((current) =>
+          current.filter((candidate) => candidate.approvalId !== prompt.approvalId),
+        );
+      },
+      [],
+    );
     usePublishLiveChatApprovals("c1", approvals, decide, store);
     const pending = approvals[0];
     const liveVoice = useLiveApprovalVoiceHint(pending?.approvalId, controller);
@@ -122,7 +142,8 @@ function mountPane(settings: Record<string, unknown> = {}) {
       <Pane />
     </TooltipProvider>,
   );
-  const approveCalls = () => calls.filter((call) => call.channel === "chat:approve").map((call) => call.args);
+  const approveCalls = () =>
+    calls.filter((call) => call.channel === "chat:approve").map((call) => call.args);
   return { bus, approveCalls };
 }
 
@@ -130,7 +151,9 @@ test("a spoken allow sends the same chat:approve as tapping Allow once", async (
   const tapped = mountPane();
   await screen.findByText("Live is listening. Say “allow” or “deny”.");
   assert.ok(
-    screen.getAllByRole("status").some((status) => /Live is listening: say allow or deny/u.test(status.textContent ?? "")),
+    screen
+      .getAllByRole("status")
+      .some((status) => /Live is listening: say allow or deny/u.test(status.textContent ?? "")),
     "screen readers hear that voice is active",
   );
   fireEvent.click(screen.getByRole("button", { name: "Allow once" }));

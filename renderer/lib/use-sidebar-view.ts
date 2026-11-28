@@ -110,8 +110,15 @@ export function useSidebarPreferencesFromOtherWindows(
 
 /** The sidebar view, shared by every place that switches it. */
 export function useSidebarView(): { view: SidebarView; setView: (view: SidebarView) => void } {
-  const view = React.useSyncExternalStore(subscribe, () => snapshot().view, () => snapshot().view);
-  const setView = React.useCallback((next: SidebarView) => writeSidebarPreferences({ view: next }), []);
+  const view = React.useSyncExternalStore(
+    subscribe,
+    () => snapshot().view,
+    () => snapshot().view,
+  );
+  const setView = React.useCallback(
+    (next: SidebarView) => writeSidebarPreferences({ view: next }),
+    [],
+  );
   return { view, setView };
 }
 
@@ -133,7 +140,10 @@ export function useWorkingShelfCollapsed(): {
 export function useInboxDockBadge(): { enabled: boolean; setEnabled: (enabled: boolean) => void } {
   const read = () => snapshot().dockBadge;
   const enabled = React.useSyncExternalStore(subscribe, read, read);
-  const setEnabled = React.useCallback((next: boolean) => writeSidebarPreferences({ dockBadge: next }), []);
+  const setEnabled = React.useCallback(
+    (next: boolean) => writeSidebarPreferences({ dockBadge: next }),
+    [],
+  );
   return { enabled, setEnabled };
 }
 

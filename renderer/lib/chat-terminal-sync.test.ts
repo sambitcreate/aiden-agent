@@ -132,7 +132,10 @@ test("a revisited chat retains and advances its detached answer and subagent pro
   for (const handler of listeners.get("chat:reasoning-delta") ?? []) {
     handler({ streamId: owner.streamId, delta: " more" });
   }
-  assert.equal(detachedLifecycleChatProjection("chat-a", "workspace-1")?.reasoning, "Initial reasoning more");
+  assert.equal(
+    detachedLifecycleChatProjection("chat-a", "workspace-1")?.reasoning,
+    "Initial reasoning more",
+  );
   for (const handler of listeners.get("chat:delta") ?? []) {
     handler({ streamId: owner.streamId, delta: "", reset: true });
   }
@@ -141,7 +144,10 @@ test("a revisited chat retains and advances its detached answer and subagent pro
   for (const handler of listeners.get("chat:done") ?? []) {
     handler({ streamId: owner.streamId, chat: chat("chat-a", "durable") });
   }
-  assert.equal(cachedTerminalChat?.messages[cachedTerminalChat.messages.length - 1]?.role, "assistant");
+  assert.equal(
+    cachedTerminalChat?.messages[cachedTerminalChat.messages.length - 1]?.role,
+    "assistant",
+  );
   // The pane must mask Stop/steer using the durable cache while this raw
   // projection remains retained until terminal reconciliation finishes.
   assert.notEqual(detachedLifecycleChatProjection("chat-a", "workspace-1"), null);
@@ -238,8 +244,13 @@ test("a detached saved UUID accepts only its own terminal transcript", () => {
   const listeners = new Map<string, (payload: unknown) => void>();
   const completed: Chat[] = [];
   const unsubscribe = subscribeDetachedTerminalChats(
-    (channel, handler) => { listeners.set(channel, handler); return () => listeners.delete(channel); },
-    (updated) => { completed.push(updated); },
+    (channel, handler) => {
+      listeners.set(channel, handler);
+      return () => listeners.delete(channel);
+    },
+    (updated) => {
+      completed.push(updated);
+    },
   );
   const durable = chat(owner.chatId, "durable");
   const done = listeners.get("chat:done")!;
@@ -492,15 +503,18 @@ test("a replacement renderer refetches after delayed main-process settlement", (
 test("a provisional stale read survives a missed settlement event until authoritative refetch", async () => {
   const stale = chat("d2492706-6417-42f1-974d-0c12a2fad0b4", "stale before old owner persisted");
   const durable = chat(stale.id, "durable with subagent references");
-  const response = parseChatReadResponse({
-    chat: stale,
-    imageArtifactRecoveryPending: false,
-    imageArtifactRecoveryUnavailable: false,
-    reconciliation: {
-      chatId: stale.id,
-      workspaceId: stale.workspaceId,
+  const response = parseChatReadResponse(
+    {
+      chat: stale,
+      imageArtifactRecoveryPending: false,
+      imageArtifactRecoveryUnavailable: false,
+      reconciliation: {
+        chatId: stale.id,
+        workspaceId: stale.workspaceId,
+      },
     },
-  }, stale.id);
+    stale.id,
+  );
   assert.ok(response?.reconciliation);
 
   let replacementCache = response.chat;
@@ -545,7 +559,11 @@ test("a provisional stale read survives a missed settlement event until authorit
 });
 
 test("an inactive snapshot repairs a missed terminal without clearing active work", () => {
-  const staleOwner = detached("missed-terminal", "d2492706-6417-42f1-974d-0c12a2fad0b4", "workspace-1");
+  const staleOwner = detached(
+    "missed-terminal",
+    "d2492706-6417-42f1-974d-0c12a2fad0b4",
+    "workspace-1",
+  );
   const activeOwner = detached("still-running", "chat-still-running", "workspace-1");
   rememberDetachedLifecycleStream(staleOwner, {
     content: "Durable response that outlived the route",
@@ -557,8 +575,16 @@ test("an inactive snapshot repairs a missed terminal without clearing active wor
   rememberDetachedLifecycleStream(activeOwner);
 
   assert.deepEqual(pendingDetachedLifecycleChats(), [
-    { chatId: staleOwner.chatId, workspaceId: staleOwner.workspaceId, streamIds: [staleOwner.streamId] },
-    { chatId: activeOwner.chatId, workspaceId: activeOwner.workspaceId, streamIds: [activeOwner.streamId] },
+    {
+      chatId: staleOwner.chatId,
+      workspaceId: staleOwner.workspaceId,
+      streamIds: [staleOwner.streamId],
+    },
+    {
+      chatId: activeOwner.chatId,
+      workspaceId: activeOwner.workspaceId,
+      streamIds: [activeOwner.streamId],
+    },
   ]);
   const staleTarget = captureDetachedLifecycleChat(staleOwner);
   const activeTarget = captureDetachedLifecycleChat(activeOwner);
@@ -588,7 +614,10 @@ test("authoritative recovery is stream-exact when newer work starts in the same 
   assert.equal(isDetachedLifecycleChatDraining(owner.chatId, "workspace-2"), true);
 
   const newerTarget = captureDetachedLifecycleChat(newerOwner);
-  const otherTarget = captureDetachedLifecycleChat({ chatId: owner.chatId, workspaceId: "workspace-2" });
+  const otherTarget = captureDetachedLifecycleChat({
+    chatId: owner.chatId,
+    workspaceId: "workspace-2",
+  });
   assert.ok(newerTarget);
   assert.ok(otherTarget);
   assert.equal(clearInactiveDetachedLifecycleChat(newerTarget, new Set()), true);
@@ -598,12 +627,15 @@ test("authoritative recovery is stream-exact when newer work starts in the same 
 test("chat read reconciliation metadata is bounded, content-free, and owner-bound", () => {
   const stale = chat("chat-a", "stale transcript remains only inside chat");
   assert.deepEqual(
-    parseChatReadResponse({
-      chat: stale,
-      imageArtifactRecoveryPending: true,
-      imageArtifactRecoveryUnavailable: false,
-      reconciliation: null,
-    }, stale.id),
+    parseChatReadResponse(
+      {
+        chat: stale,
+        imageArtifactRecoveryPending: true,
+        imageArtifactRecoveryUnavailable: false,
+        reconciliation: null,
+      },
+      stale.id,
+    ),
     {
       chat: stale,
       imageArtifactRecoveryPending: true,
@@ -612,12 +644,15 @@ test("chat read reconciliation metadata is bounded, content-free, and owner-boun
     },
   );
   assert.deepEqual(
-    parseChatReadResponse({
-      chat: stale,
-      imageArtifactRecoveryPending: false,
-      imageArtifactRecoveryUnavailable: true,
-      reconciliation: null,
-    }, stale.id),
+    parseChatReadResponse(
+      {
+        chat: stale,
+        imageArtifactRecoveryPending: false,
+        imageArtifactRecoveryUnavailable: true,
+        reconciliation: null,
+      },
+      stale.id,
+    ),
     {
       chat: stale,
       imageArtifactRecoveryPending: false,
@@ -667,14 +702,26 @@ test("only an exact requested read accepts a saved UUID rejected by the child pr
   assert.equal(parseChatReadResponse(response, "chat-other"), null);
   assert.equal(parseChatReadResponse({ ...response, chat: null }, "chat-other"), null);
   assert.equal(parseChatReadResponse({ ...response, reconciliation: null }, "chat-other"), null);
-  assert.equal(parseChatReadResponse({ ...response, reconciliation: { ...owner, workspaceId: "other" } }, id), null);
+  assert.equal(
+    parseChatReadResponse({ ...response, reconciliation: { ...owner, workspaceId: "other" } }, id),
+    null,
+  );
   assert.equal(parseChatSettlementNotification(owner), null);
   rememberChatReadReconciliation(owner, "chat-other");
   assert.equal(isDetachedLifecycleChatDraining(id, owner.workspaceId), false);
   for (const value of ["/private/path", id + "\n", "550e8400-e29b-41d4-a716-2f612f622f63"]) {
-    assert.equal(parseChatReadResponse({ ...response, chat: chat(value, "alien"), reconciliation: null }, id), null);
+    assert.equal(
+      parseChatReadResponse({ ...response, chat: chat(value, "alien"), reconciliation: null }, id),
+      null,
+    );
   }
-  assert.equal(parseChatReadResponse({ ...response, chat: chat("/private/path", "unsafe"), reconciliation: null }, "/private/path"), null);
+  assert.equal(
+    parseChatReadResponse(
+      { ...response, chat: chat("/private/path", "unsafe"), reconciliation: null },
+      "/private/path",
+    ),
+    null,
+  );
 });
 
 test("authoritative reconciliation stops without refetching after a deletion tombstone", async () => {
@@ -721,7 +768,9 @@ test("a settled detached stream stops draining while the phone's newer turn keep
       },
       refreshChat: async (chatId) => {
         // The transcript is re-read before the marker goes, so nothing flashes away.
-        order.push(`refresh:${chatId}:draining=${isDetachedLifecycleChatDraining(chatId, "workspace-1")}`);
+        order.push(
+          `refresh:${chatId}:draining=${isDetachedLifecycleChatDraining(chatId, "workspace-1")}`,
+        );
       },
     },
   );
@@ -741,7 +790,10 @@ test("a settled detached stream stops draining while the phone's newer turn keep
     false,
   );
   assert.equal(isDetachedLifecycleChatDraining(finished.chatId, finished.workspaceId), true);
-  assert.equal(clearInactiveDetachedLifecycleChat(captureDetachedLifecycleChat(stillRunning)!, new Set()), true);
+  assert.equal(
+    clearInactiveDetachedLifecycleChat(captureDetachedLifecycleChat(stillRunning)!, new Set()),
+    true,
+  );
   assert.equal(
     await releaseSettledDetachedLifecycleStreams(finished, {
       settled: async () => assert.fail("a chat with no marker asks main nothing"),
@@ -782,7 +834,10 @@ test("a settled stream's release survives a competing read cancelling its refres
     }),
   );
   assert.equal(isDetachedLifecycleChatDraining(unreadable.chatId, unreadable.workspaceId), true);
-  assert.equal(clearInactiveDetachedLifecycleChat(captureDetachedLifecycleChat(unreadable)!, new Set()), true);
+  assert.equal(
+    clearInactiveDetachedLifecycleChat(captureDetachedLifecycleChat(unreadable)!, new Set()),
+    true,
+  );
 });
 
 test("an observed run shows as the chat's live projection until it is cleared", () => {
@@ -791,7 +846,11 @@ test("an observed run shows as the chat's live projection until it is cleared", 
   const unsubscribe = subscribeDetachedLifecycleStreams(() => notifications++);
   try {
     assert.equal(
-      publishObservedRunProjection(owner, { text: "Hel", reasoning: "Thinking", timeline: null, textStreaming: true }, 1_000),
+      publishObservedRunProjection(
+        owner,
+        { text: "Hel", reasoning: "Thinking", timeline: null, textStreaming: true },
+        1_000,
+      ),
       true,
     );
     assert.equal(isDetachedLifecycleChatDraining(owner.chatId, owner.workspaceId), true);
@@ -802,11 +861,22 @@ test("an observed run shows as the chat's live projection until it is cleared", 
     assert.equal(projection?.observed, true);
 
     // Reasoning after text keeps the last prose time; an identical snapshot is not re-published.
-    publishObservedRunProjection(owner, { text: "Hel", reasoning: "Thinking more", timeline: null, textStreaming: false }, 2_000);
-    assert.equal(detachedLifecycleChatProjection(owner.chatId, owner.workspaceId)?.lastTextDeltaAt, 1_000);
+    publishObservedRunProjection(
+      owner,
+      { text: "Hel", reasoning: "Thinking more", timeline: null, textStreaming: false },
+      2_000,
+    );
+    assert.equal(
+      detachedLifecycleChatProjection(owner.chatId, owner.workspaceId)?.lastTextDeltaAt,
+      1_000,
+    );
     const before = notifications;
     assert.equal(
-      publishObservedRunProjection(owner, { text: "Hel", reasoning: "Thinking more", timeline: null, textStreaming: false }, 3_000),
+      publishObservedRunProjection(
+        owner,
+        { text: "Hel", reasoning: "Thinking more", timeline: null, textStreaming: false },
+        3_000,
+      ),
       false,
     );
     assert.equal(notifications, before);
@@ -825,15 +895,29 @@ test("an observed run shows as the chat's live projection until it is cleared", 
 
 test("a run this document started is never mirrored over its own detached projection", () => {
   const own = detached("own-detached-run", "chat-own-run", "workspace-1");
-  rememberDetachedLifecycleStream(own, { content: "Mine", reasoning: "", timeline: null, artifacts: [], subagents: [] });
+  rememberDetachedLifecycleStream(own, {
+    content: "Mine",
+    reasoning: "",
+    timeline: null,
+    artifacts: [],
+    subagents: [],
+  });
   assert.equal(
-    publishObservedRunProjection(own, { text: "Mine plus mirror", reasoning: "", timeline: null, textStreaming: true }),
+    publishObservedRunProjection(own, {
+      text: "Mine plus mirror",
+      reasoning: "",
+      timeline: null,
+      textStreaming: true,
+    }),
     false,
   );
   const projection = detachedLifecycleChatProjection(own.chatId, own.workspaceId);
   assert.equal(projection?.content, "Mine");
   assert.equal(projection?.observed, undefined);
-  assert.equal(clearInactiveDetachedLifecycleChat(captureDetachedLifecycleChat(own)!, new Set()), true);
+  assert.equal(
+    clearInactiveDetachedLifecycleChat(captureDetachedLifecycleChat(own)!, new Set()),
+    true,
+  );
 });
 
 test("a run this document started is not mirrored back after its own terminal settles", async () => {
@@ -852,7 +936,13 @@ test("a run this document started is not mirrored back after its own terminal se
   );
   const own = detached("own-stopped-run", "chat-own-stopped", "workspace-1");
   try {
-    rememberDetachedLifecycleStream(own, { content: "Partial", reasoning: "", timeline: null, artifacts: [], subagents: [] });
+    rememberDetachedLifecycleStream(own, {
+      content: "Partial",
+      reasoning: "",
+      timeline: null,
+      artifacts: [],
+      subagents: [],
+    });
     for (const handler of listeners.get("chat:done") ?? []) {
       handler({ streamId: own.streamId, chat: chat(own.chatId, "Partial") });
     }
@@ -874,10 +964,18 @@ test("a run this document started is not mirrored back after its own terminal se
     // A run another device started in the same chat is still mirrored.
     const phone = detached("phone-run-after-stop", own.chatId, own.workspaceId);
     assert.equal(
-      publishObservedRunProjection(phone, { text: "Hi", reasoning: "", timeline: null, textStreaming: true }),
+      publishObservedRunProjection(phone, {
+        text: "Hi",
+        reasoning: "",
+        timeline: null,
+        textStreaming: true,
+      }),
       true,
     );
-    assert.equal(detachedLifecycleChatProjection(own.chatId, own.workspaceId)?.streamId, phone.streamId);
+    assert.equal(
+      detachedLifecycleChatProjection(own.chatId, own.workspaceId)?.streamId,
+      phone.streamId,
+    );
     assert.equal(clearObservedRunProjection(own.chatId, own.workspaceId, phone.streamId), true);
   } finally {
     unsubscribe();
@@ -888,7 +986,13 @@ test("a run this document started without detaching is never mirrored", () => {
   const own = detached("own-attached-run", "chat-own-attached", "workspace-1");
   rememberOwnGenerationStream(own.streamId);
   assert.equal(
-    publishObservedRunProjection(own, { text: "Done", reasoning: "", timeline: null, textStreaming: false, finished: true }),
+    publishObservedRunProjection(own, {
+      text: "Done",
+      reasoning: "",
+      timeline: null,
+      textStreaming: false,
+      finished: true,
+    }),
     false,
   );
   assert.equal(isDetachedLifecycleChatDraining(own.chatId, own.workspaceId), false);
@@ -926,7 +1030,10 @@ test("a saved reply hides an own run, but a mirrored run only by its own reply",
   // A phone's turn starts while the cache still ends with the previous reply.
   assert.equal(visibleDetachedLifecycleProjection(mirrored, [reply("run-old")]), mirrored);
   assert.equal(visibleDetachedLifecycleProjection(mirrored, [reply()]), mirrored);
-  assert.equal(visibleDetachedLifecycleProjection(mirrored, [reply("run-old"), reply("run-new")]), null);
+  assert.equal(
+    visibleDetachedLifecycleProjection(mirrored, [reply("run-old"), reply("run-new")]),
+    null,
+  );
 
   assert.equal(visibleDetachedLifecycleProjection(null, [reply("run-new")]), null);
 });
@@ -961,8 +1068,14 @@ test("a detached stream's tokens notify subscribers once a frame, structural cha
     }
     channels.emit("chat:reasoning-delta", { streamId: owner.streamId, delta: "Thinking" });
     // The projection is current for any render, but nobody was told per token.
-    assert.equal(detachedLifecycleChatProjection(owner.chatId, owner.workspaceId)?.content, "Hello world");
-    assert.equal(detachedLifecycleChatProjection(owner.chatId, owner.workspaceId)?.reasoning, "Thinking");
+    assert.equal(
+      detachedLifecycleChatProjection(owner.chatId, owner.workspaceId)?.content,
+      "Hello world",
+    );
+    assert.equal(
+      detachedLifecycleChatProjection(owner.chatId, owner.workspaceId)?.reasoning,
+      "Thinking",
+    );
     assert.equal(notifications, 0);
     await nextFrame();
     assert.equal(notifications, 1);
@@ -971,12 +1084,21 @@ test("a detached stream's tokens notify subscribers once a frame, structural cha
     channels.emit("chat:delta", { streamId: owner.streamId, delta: "!" });
     channels.emit("chat:timeline", {
       streamId: owner.streamId,
-      timeline: { version: 3, generationId: owner.streamId, status: "running", startedAt: 1, steps: [] },
+      timeline: {
+        version: 3,
+        generationId: owner.streamId,
+        status: "running",
+        startedAt: 1,
+        steps: [],
+      },
     });
     assert.equal(notifications, 2);
     await nextFrame();
     assert.equal(notifications, 2);
-    assert.equal(detachedLifecycleChatProjection(owner.chatId, owner.workspaceId)?.content, "Hello world!");
+    assert.equal(
+      detachedLifecycleChatProjection(owner.chatId, owner.workspaceId)?.content,
+      "Hello world!",
+    );
 
     // A reset clears the reply now rather than a frame later.
     channels.emit("chat:delta", { streamId: owner.streamId, reset: true });
@@ -994,11 +1116,23 @@ test("a mirrored run's growing text notifies once a frame; its end notifies at o
   let notifications = 0;
   const unsubscribe = subscribeDetachedLifecycleStreams(() => notifications++);
   try {
-    publishObservedRunProjection(owner, { text: "A", reasoning: "", timeline: null, textStreaming: true }, 1);
+    publishObservedRunProjection(
+      owner,
+      { text: "A", reasoning: "", timeline: null, textStreaming: true },
+      1,
+    );
     // A new run is structural.
     assert.equal(notifications, 1);
-    publishObservedRunProjection(owner, { text: "AB", reasoning: "", timeline: null, textStreaming: true }, 2);
-    publishObservedRunProjection(owner, { text: "ABC", reasoning: "", timeline: null, textStreaming: true }, 3);
+    publishObservedRunProjection(
+      owner,
+      { text: "AB", reasoning: "", timeline: null, textStreaming: true },
+      2,
+    );
+    publishObservedRunProjection(
+      owner,
+      { text: "ABC", reasoning: "", timeline: null, textStreaming: true },
+      3,
+    );
     assert.equal(notifications, 1);
     assert.equal(detachedLifecycleChatProjection(owner.chatId, owner.workspaceId)?.content, "ABC");
     await nextFrame();
@@ -1042,7 +1176,20 @@ test("a chat read that keeps failing backs off and gives up instead of polling e
 
 test("settlement waits keep waiting while main reports busy but give up when the wait keeps failing", async () => {
   // Busy is main's bounded grace running out on a long run: keep waiting.
-  const outcomes = [false, false, false, false, false, false, false, false, false, false, false, true];
+  const outcomes = [
+    false,
+    false,
+    false,
+    false,
+    false,
+    false,
+    false,
+    false,
+    false,
+    false,
+    false,
+    true,
+  ];
   assert.equal(
     await waitForDetachedLifecycleSettlement(
       async () => outcomes.shift() ?? true,

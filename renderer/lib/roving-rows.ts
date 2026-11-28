@@ -37,7 +37,8 @@ export function isTypeaheadTarget(target: EventTarget | null): boolean {
 
 function setMuted(element: Element, muted: boolean): void {
   if (muted) {
-    if (!element.hasAttribute(MUTED)) element.setAttribute(MUTED, element.getAttribute("tabindex") ?? "");
+    if (!element.hasAttribute(MUTED))
+      element.setAttribute(MUTED, element.getAttribute("tabindex") ?? "");
     if (element.getAttribute("tabindex") !== "-1") element.setAttribute("tabindex", "-1");
     return;
   }
@@ -59,7 +60,10 @@ export function rovingItems(container: ParentNode): HTMLElement[] {
  * Leave exactly one row in the Tab order, plus the other buttons of that row,
  * and return it. `preferred` wins while it is still a row here.
  */
-export function syncRovingTabStops(container: ParentNode, preferred: HTMLElement | null): HTMLElement | null {
+export function syncRovingTabStops(
+  container: ParentNode,
+  preferred: HTMLElement | null,
+): HTMLElement | null {
   const items = rovingItems(container);
   const stop =
     (preferred && items.includes(preferred) ? preferred : null) ??
@@ -83,7 +87,12 @@ function isRightToLeft(element: Element): boolean {
 }
 
 function fold(text: string): string {
-  return text.normalize("NFD").replace(/\p{M}+/gu, "").toLocaleLowerCase().replace(/\s+/g, " ").trim();
+  return text
+    .normalize("NFD")
+    .replace(/\p{M}+/gu, "")
+    .toLocaleLowerCase()
+    .replace(/\s+/g, " ")
+    .trim();
 }
 
 /**
@@ -114,7 +123,8 @@ export function typeaheadMatch(labels: readonly string[], current: number, query
   if (!folded) return -1;
   const starts = labels.map(fold);
   const repeated = folded.length > 1 && [...folded].every((letter) => letter === folded[0]);
-  const search = repeated && !starts.some((label) => label.startsWith(folded)) ? folded[0]! : folded;
+  const search =
+    repeated && !starts.some((label) => label.startsWith(folded)) ? folded[0]! : folded;
   const from = search.length === 1 ? current + 1 : Math.max(current, 0);
   for (let offset = 0; offset < starts.length; offset += 1) {
     const index = (from + offset) % starts.length;
@@ -123,7 +133,11 @@ export function typeaheadMatch(labels: readonly string[], current: number, query
   return -1;
 }
 
-function rovingTarget(container: HTMLElement, current: HTMLElement, key: string): HTMLElement | "toggle" | null {
+function rovingTarget(
+  container: HTMLElement,
+  current: HTMLElement,
+  key: string,
+): HTMLElement | "toggle" | null {
   const items = rovingItems(container);
   const index = items.indexOf(current);
   if (index < 0) return null;
@@ -182,9 +196,11 @@ export function useRovingRows(ref: React.RefObject<HTMLElement | null>): void {
       resetQuery();
     };
     const onFocusIn = (event: FocusEvent) => {
-      const item = event.target instanceof HTMLElement ? event.target.closest<HTMLElement>(ITEM) : null;
+      const item =
+        event.target instanceof HTMLElement ? event.target.closest<HTMLElement>(ITEM) : null;
       // A click leaves typing to the message box; Tab, F6 and the arrows search the list.
-      const modality = container.ownerDocument.documentElement.getAttribute(INPUT_MODALITY_ATTRIBUTE);
+      const modality =
+        container.ownerDocument.documentElement.getAttribute(INPUT_MODALITY_ATTRIBUTE);
       if (modality === "keyboard" || modality === "pointer") arrival = modality;
       if (item) setTypeahead(arrival === "keyboard");
       if (!item || item === preferred) return;
@@ -241,7 +257,10 @@ export function useRovingRows(ref: React.RefObject<HTMLElement | null>): void {
     const stopRecovery = watchFocusRecovery(
       container,
       () => rovingItems(container),
-      (target) => target.closest<HTMLElement>(ITEM) ?? target.closest(ROW)?.querySelector<HTMLElement>(ITEM) ?? null,
+      (target) =>
+        target.closest<HTMLElement>(ITEM) ??
+        target.closest(ROW)?.querySelector<HTMLElement>(ITEM) ??
+        null,
       () => syncRovingTabStops(container, null),
     );
     container.addEventListener("pointerdown", onPointerDown, true);

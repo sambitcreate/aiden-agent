@@ -11,7 +11,12 @@ import type { BotMemoryAdmission } from "./review.js";
 import type { BotMemoryOperation } from "./store.js";
 import { oneOffCallOptions } from "../side-call-prefix.js";
 
-export const BOT_MEMORY_TIDY = { usageRatio: 0.8, entries: 56, minIntervalMs: 24 * 3_600_000, maxTokens: 1_536 } as const;
+export const BOT_MEMORY_TIDY = {
+  usageRatio: 0.8,
+  entries: 56,
+  minIntervalMs: 24 * 3_600_000,
+  maxTokens: 1_536,
+} as const;
 
 export const TIDY_SYSTEM_PROMPT = [
   "You tidy a helper Bot's saved memory so it stays useful.",
@@ -22,7 +27,10 @@ export const TIDY_SYSTEM_PROMPT = [
 export function needsMemoryTidy(view: BotMemoryView): BotMemoryTarget[] {
   return (["memory", "user"] as const).filter((target) => {
     const store = view[target];
-    return store.usedChars > store.limitChars * BOT_MEMORY_TIDY.usageRatio || store.entries.length > BOT_MEMORY_TIDY.entries;
+    return (
+      store.usedChars > store.limitChars * BOT_MEMORY_TIDY.usageRatio ||
+      store.entries.length > BOT_MEMORY_TIDY.entries
+    );
   });
 }
 
@@ -31,11 +39,13 @@ const TIDY_TOOL: Tool = {
   description: "Replace or remove saved entries. No additions.",
   parameters: Type.Object({
     target: Type.Union([Type.Literal("memory"), Type.Literal("user")]),
-    operations: Type.Array(Type.Object({
-      action: Type.Union([Type.Literal("replace"), Type.Literal("remove")]),
-      match: Type.String(),
-      content: Type.Optional(Type.String()),
-    })),
+    operations: Type.Array(
+      Type.Object({
+        action: Type.Union([Type.Literal("replace"), Type.Literal("remove")]),
+        match: Type.String(),
+        content: Type.Optional(Type.String()),
+      }),
+    ),
   }),
 };
 
@@ -63,18 +73,22 @@ export async function proposeMemoryTidy(
   signal: AbortSignal,
 ): Promise<BotMemoryOperation[] | undefined> {
   const entries = view[target].entries.map(({ text }) => `- ${escapePromptText(text)}`).join("\n");
-  const messages: Message[] = [{
-    role: "user",
-    content: `Target: ${target} (${view[target].usedChars}/${view[target].limitChars} characters, ${view[target].entries.length} entries)\n<entries>\n${entries}\n</entries>`,
-    timestamp: Date.now(),
-  }];
+  const messages: Message[] = [
+    {
+      role: "user",
+      content: `Target: ${target} (${view[target].usedChars}/${view[target].limitChars} characters, ${view[target].entries.length} entries)\n<entries>\n${entries}\n</entries>`,
+      timestamp: Date.now(),
+    },
+  ];
   await admission.lease.revalidate();
   const answer = await admission.model.models.completeSimple(
     admission.model.model,
     { systemPrompt: TIDY_SYSTEM_PROMPT, messages, tools: [TIDY_TOOL] },
     oneOffCallOptions({ maxTokens: BOT_MEMORY_TIDY.maxTokens, signal }),
   );
-  const call = answer.content.find((part): part is ToolCall => part.type === "toolCall" && part.name === "tidy_memory");
+  const call = answer.content.find(
+    (part): part is ToolCall => part.type === "toolCall" && part.name === "tidy_memory",
+  );
   if (!call) return undefined;
   const args = call.arguments as { target?: unknown; operations?: unknown };
   if (args.target !== target) return undefined;

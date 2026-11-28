@@ -124,7 +124,10 @@ test("records physical letter and exact modifiers", () => {
 
 test("Linux uses Control as the portable primary modifier", () => {
   assert.equal(prettyAcceleratorForPlatform("Command+Alt+Space", "linux"), "Ctrl+Alt+Space");
-  assert.equal(electronAcceleratorForPlatform("Command+Shift+D", "linux"), "CommandOrControl+Shift+D");
+  assert.equal(
+    electronAcceleratorForPlatform("Command+Shift+D", "linux"),
+    "CommandOrControl+Shift+D",
+  );
   assert.equal(
     acceleratorFromKeyboardEvent(
       {
@@ -251,7 +254,12 @@ test("a shortcut saved before New chat in… existed keeps Command+Shift+N", () 
 test("back, forward, stop and attach get their keys unless a saved shortcut already uses them", () => {
   const defaults = effectiveBindings(undefined);
   assert.deepEqual(
-    [defaults["navigate.back"], defaults["navigate.forward"], defaults["chat.stop"], defaults["composer.attach"]],
+    [
+      defaults["navigate.back"],
+      defaults["navigate.forward"],
+      defaults["chat.stop"],
+      defaults["composer.attach"],
+    ],
     ["Command+[", "Command+]", "Command+.", "Command+U"],
   );
   assert.equal(defaults["model.change"], "Command+Shift+M");
@@ -265,7 +273,10 @@ test("back, forward, stop and attach get their keys unless a saved shortcut alre
   assert.equal(effectiveBinding("navigate.back", repaired), "Command+[");
   assert.equal(effectiveBinding("chat.stop", repaired), "Command+.");
   // Attach can then take a free shortcut instead.
-  const rebound = applyKeybindingMutation(repaired, { commandId: "composer.attach", binding: "Command+Shift+U" });
+  const rebound = applyKeybindingMutation(repaired, {
+    commandId: "composer.attach",
+    binding: "Command+Shift+U",
+  });
   assert.equal(effectiveBinding("composer.attach", rebound), "Command+Shift+U");
 });
 
@@ -288,7 +299,10 @@ test("the Agent Slider steps get ⌥⌘[ and ⌥⌘] unless a saved shortcut alr
   assert.equal(effectiveBinding("agentSlider.previous", repaired), "Command+Alt+[");
 
   // Both are rebindable like any other command.
-  const rebound = applyKeybindingMutation(undefined, { commandId: "agentSlider.next", binding: "Command+Alt+N" });
+  const rebound = applyKeybindingMutation(undefined, {
+    commandId: "agentSlider.next",
+    binding: "Command+Alt+N",
+  });
   assert.equal(effectiveBinding("agentSlider.next", rebound), "Command+Alt+N");
 });
 
@@ -301,13 +315,23 @@ test("Find in chat gets Command+F unless a saved shortcut already uses it", () =
 });
 
 test("design mode toggles on Command+Shift+L unless a saved shortcut already uses it", () => {
-  assert.equal(effectiveBinding("design.toggle", repairKeybindingOverrides(undefined)), "Command+Shift+L");
+  assert.equal(
+    effectiveBinding("design.toggle", repairKeybindingOverrides(undefined)),
+    "Command+Shift+L",
+  );
   const saved = { version: 1, commands: { "chat.search": { binding: "Command+Shift+L" } } };
   const repaired = repairKeybindingOverrides(saved);
-  assert.equal(effectiveBinding("chat.search", repaired), "Command+Shift+L", "the saved choice wins");
+  assert.equal(
+    effectiveBinding("chat.search", repaired),
+    "Command+Shift+L",
+    "the saved choice wins",
+  );
   assert.equal(effectiveBinding("design.toggle", repaired), null);
   // Dictation keeps Command+Shift+D, so turning it on never collides with design mode.
-  const dictation = applyKeybindingMutation(undefined, { commandId: "dictation.toggle", disabled: false });
+  const dictation = applyKeybindingMutation(undefined, {
+    commandId: "dictation.toggle",
+    disabled: false,
+  });
   assert.deepEqual(
     [effectiveBinding("dictation.toggle", dictation), effectiveBinding("design.toggle", dictation)],
     ["Command+Shift+D", "Command+Shift+L"],
@@ -351,7 +375,11 @@ test("a shortcut saved for New chat keeps Command+Shift+O ahead of Open folder",
     [effectiveBinding("chat.new", repaired), effectiveBinding("workspace.openFolder", repaired)],
     ["Command+Shift+O", null],
   );
-  assert.deepEqual(migrateLegacyKeybindings(saved), repaired, "startup repairs through the same path");
+  assert.deepEqual(
+    migrateLegacyKeybindings(saved),
+    repaired,
+    "startup repairs through the same path",
+  );
   assert.equal(shouldPersistCanonicalKeybindings(saved, repaired), true, "the yield is saved once");
   // Once saved, later repairs leave both choices alone, and the user can bind
   // Open folder… to a free shortcut.
@@ -371,13 +399,19 @@ test("a shortcut saved before the subagent tray existed keeps Command+Shift+S", 
   const saved = { version: 1, commands: { "model.change": { binding: "Command+Shift+S" } } };
   const repaired = migrateLegacyKeybindings(saved);
   assert.deepEqual(
-    [effectiveBinding("model.change", repaired), effectiveBinding("subagents.toggleTray", repaired)],
+    [
+      effectiveBinding("model.change", repaired),
+      effectiveBinding("subagents.toggleTray", repaired),
+    ],
     ["Command+Shift+S", null],
   );
   assert.deepEqual(repairKeybindingOverrides(repaired), repaired);
   // Without that claim the tray gets its default.
   assert.equal(
-    effectiveBinding("subagents.toggleTray", repairKeybindingOverrides({ version: 1, commands: {} })),
+    effectiveBinding(
+      "subagents.toggleTray",
+      repairKeybindingOverrides({ version: 1, commands: {} }),
+    ),
     "Command+Shift+S",
   );
 });

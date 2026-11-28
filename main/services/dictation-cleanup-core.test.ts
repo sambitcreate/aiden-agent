@@ -52,7 +52,10 @@ test("cleanup usage local flag follows the resolved provider, then preset ids", 
 });
 
 test("the cleanup request is a one-off that writes no prompt cache", async () => {
-  const sent: Array<{ context: { systemPrompt?: string; messages: unknown[] }; options: Record<string, unknown> }> = [];
+  const sent: Array<{
+    context: { systemPrompt?: string; messages: unknown[] };
+    options: Record<string, unknown>;
+  }> = [];
   const runtime = {
     model: { id: "model-a", api: "openai-completions", provider: "openai", input: ["text"] },
     apiKey: "cleanup-secret",
@@ -60,7 +63,9 @@ test("the cleanup request is a one-off that writes no prompt cache", async () =>
     streams: {
       streamSimple: (_model: unknown, context: unknown, options: unknown) => {
         sent.push({ context: context as never, options: options as Record<string, unknown> });
-        return { result: async () => ({ role: "assistant", content: [{ type: "text", text: "Hello." }] }) };
+        return {
+          result: async () => ({ role: "assistant", content: [{ type: "text", text: "Hello." }] }),
+        };
       },
     },
   } as unknown as Parameters<typeof requestDictationCleanup>[0];

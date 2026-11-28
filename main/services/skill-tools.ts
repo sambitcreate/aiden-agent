@@ -3,7 +3,12 @@ import type { AgentTool, AgentToolResult } from "@earendil-works/pi-agent-core";
 import type { AgentHarnessResources } from "./pi-legacy-harness.js";
 import { declarePiRuntimeReplay } from "./pi-runtime-tool.js";
 import * as path from "node:path";
-import { findSkillByName, modelInvocableSkills, type RegisteredSkill, type SkillRegistrySnapshot } from "./skill-registry.js";
+import {
+  findSkillByName,
+  modelInvocableSkills,
+  type RegisteredSkill,
+  type SkillRegistrySnapshot,
+} from "./skill-registry.js";
 import { SKILL_TOOL_NAME } from "./skill-registry-core.js";
 
 export { SKILL_TOOL_NAME };
@@ -43,13 +48,22 @@ export function makeSkillTool(
       parameters: Type.Object({ name: Type.String({ minLength: 1, maxLength: 256 }) }),
       execute: async (_id, args): Promise<AgentToolResult<null>> => {
         if (!(await isEnabled())) throw new Error("Skills are disabled in Settings → Skills.");
-        const requested = typeof (args as { name?: unknown })?.name === "string" ? (args as { name: string }).name : "";
+        const requested =
+          typeof (args as { name?: unknown })?.name === "string"
+            ? (args as { name: string }).name
+            : "";
         const skill = findSkillByName(skills, requested);
         if (!skill) {
-          const names = skills.slice(0, 40).map(({ name }) => name).join(", ");
-          throw new Error(`No skill named "${requested.slice(0, 80)}" is available here. Available: ${names}.`);
+          const names = skills
+            .slice(0, 40)
+            .map(({ name }) => name)
+            .join(", ");
+          throw new Error(
+            `No skill named "${requested.slice(0, 80)}" is available here. Available: ${names}.`,
+          );
         }
-        if (skill.modelInvocable === false) throw new Error("This skill does not allow model invocation.");
+        if (skill.modelInvocable === false)
+          throw new Error("This skill does not allow model invocation.");
         return textResult(skillContent(skill));
       },
     },

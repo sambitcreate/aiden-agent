@@ -9,11 +9,18 @@ const IMAGE_ONE = { name: "Generated image 1", exact: true };
 
 /** The image really decoded. A failed `aiden-asset:` load still renders a visible img role, just with no pixels. */
 async function expectDecoded(image: Locator) {
-  await expect.poll(() => image.evaluate((element: HTMLImageElement) => (element.complete ? element.naturalWidth : 0))).toBeGreaterThan(0);
+  await expect
+    .poll(() =>
+      image.evaluate((element: HTMLImageElement) => (element.complete ? element.naturalWidth : 0)),
+    )
+    .toBeGreaterThan(0);
 }
 
 async function openImages(page: Page) {
-  await page.getByRole("navigation", { name: "Primary" }).getByRole("button", { name: "Images", exact: true }).click();
+  await page
+    .getByRole("navigation", { name: "Primary" })
+    .getByRole("button", { name: "Images", exact: true })
+    .click();
 }
 
 async function newStarter(page: Page, prompt: string) {
@@ -31,19 +38,26 @@ async function newStarter(page: Page, prompt: string) {
 async function invokeImages<T>(page: Page, channel: string, request: unknown): Promise<T> {
   return page.evaluate(
     ([name, payload]) =>
-      (window as unknown as { aidenAPI: { ipc: { invoke(channel: string, ...args: unknown[]): Promise<unknown> } } }).aidenAPI.ipc.invoke(
-        name,
-        payload,
-      ),
+      (
+        window as unknown as {
+          aidenAPI: { ipc: { invoke(channel: string, ...args: unknown[]): Promise<unknown> } };
+        }
+      ).aidenAPI.ipc.invoke(name, payload),
     [channel, request] as const,
   ) as Promise<T>;
 }
 
 /** Saves a new revision of the Starter workflow from outside the open editor. */
 async function saveElsewhere(page: Page, change: (doc: WorkflowDocV1) => WorkflowDocV1) {
-  const { workflows } = await invokeImages<{ workflows: { id: string; title: string }[] }>(page, "imageWorkflows:list", {});
+  const { workflows } = await invokeImages<{ workflows: { id: string; title: string }[] }>(
+    page,
+    "imageWorkflows:list",
+    {},
+  );
   const workflowId = workflows.find((workflow) => workflow.title === "Prompt to image")!.id;
-  const { workflow } = await invokeImages<{ workflow: WorkflowDocV1 }>(page, "imageWorkflows:get", { workflowId });
+  const { workflow } = await invokeImages<{ workflow: WorkflowDocV1 }>(page, "imageWorkflows:get", {
+    workflowId,
+  });
   const saved = await invokeImages<{ ok: boolean }>(page, "imageWorkflows:save", {
     workflowId,
     baseRevision: workflow.revision,
@@ -52,13 +66,18 @@ async function saveElsewhere(page: Page, change: (doc: WorkflowDocV1) => Workflo
   expect(saved.ok).toBe(true);
 }
 
-const withPrompt = (text: string) => (doc: WorkflowDocV1): WorkflowDocV1 => ({
-  ...doc,
-  nodes: doc.nodes.map((node) => (node.type === "prompt" ? { ...node, data: { text } } : node)),
-});
+const withPrompt =
+  (text: string) =>
+  (doc: WorkflowDocV1): WorkflowDocV1 => ({
+    ...doc,
+    nodes: doc.nodes.map((node) => (node.type === "prompt" ? { ...node, data: { text } } : node)),
+  });
 
 async function openStarterFromList(page: Page) {
-  await page.getByRole("list", { name: "Image workflows" }).getByRole("button", { name: "Prompt to image", exact: true }).click();
+  await page
+    .getByRole("list", { name: "Image workflows" })
+    .getByRole("button", { name: "Prompt to image", exact: true })
+    .click();
   const canvas = page.getByRole("region", { name: "Images canvas" });
   await expect(canvas).toBeVisible();
   return canvas;
@@ -128,7 +147,9 @@ test.describe("Create Images", () => {
     expect(aiden.openRouter!.imageRequests).toEqual([]);
   });
 
-  test("Stop aborts the request on the wire, records it may have been billed, and sends nothing after it", async ({ aiden }) => {
+  test("Stop aborts the request on the wire, records it may have been billed, and sends nothing after it", async ({
+    aiden,
+  }) => {
     const { page } = aiden;
     const openRouter = aiden.openRouter!;
     await newStarter(page, "A yellow balloon");
@@ -138,14 +159,30 @@ test.describe("Create Images", () => {
     await saveElsewhere(page, (doc) => {
       const prompt = doc.nodes.find((node) => node.type === "prompt")!;
       const first = doc.nodes.find((node) => node.type === "generate-image")!;
-      const second = { ...first, id: "second-step", position: { x: first.position.x, y: first.position.y + 320 } };
+      const second = {
+        ...first,
+        id: "second-step",
+        position: { x: first.position.x, y: first.position.y + 320 },
+      };
       return {
         ...doc,
         nodes: [...doc.nodes, second],
         edges: [
           ...doc.edges,
-          { id: "second-prompt", source: prompt.id, sourcePort: "text", target: second.id, targetPort: "prompt" },
-          { id: "second-reference", source: first.id, sourcePort: "images", target: second.id, targetPort: "references" },
+          {
+            id: "second-prompt",
+            source: prompt.id,
+            sourcePort: "text",
+            target: second.id,
+            targetPort: "prompt",
+          },
+          {
+            id: "second-reference",
+            source: first.id,
+            sourcePort: "images",
+            target: second.id,
+            targetPort: "references",
+          },
         ],
       };
     });
@@ -153,7 +190,10 @@ test.describe("Create Images", () => {
 
     openRouter.hold();
     await page.getByRole("button", { name: "Run All" }).click();
-    await page.getByRole("dialog", { name: "Send 2 image requests?" }).getByRole("button", { name: "Generate" }).click();
+    await page
+      .getByRole("dialog", { name: "Send 2 image requests?" })
+      .getByRole("button", { name: "Generate" })
+      .click();
     await expect.poll(() => openRouter.imageRequests.length).toBe(1);
     const panel = page.getByRole("region", { name: "Run" });
     await panel.getByRole("button", { name: "Stop" }).click();
@@ -163,7 +203,9 @@ test.describe("Create Images", () => {
     openRouter.release();
     expect(openRouter.imageRequests).toHaveLength(1);
 
-    const requests = panel.getByRole("list", { name: "Image requests in this run" }).getByRole("listitem");
+    const requests = panel
+      .getByRole("list", { name: "Image requests in this run" })
+      .getByRole("listitem");
     await expect(requests).toHaveCount(2);
     await expect(requests.nth(0)).toContainText("may have been billed");
     await expect(requests.nth(1)).toContainText("Stopped");
@@ -186,7 +228,9 @@ test.describe("Create Images", () => {
     await expect(canvas.getByText("Out of date")).toHaveCount(0);
   });
 
-  test("Retry this node only keeps the previous output and marks it out of date", async ({ aiden }) => {
+  test("Retry this node only keeps the previous output and marks it out of date", async ({
+    aiden,
+  }) => {
     const openRouter = aiden.openRouter!;
     const { canvas, panel } = await succeedThenFail(aiden.page, openRouter, "A blue kite");
     const firstImage = await canvas.getByRole("img", IMAGE_ONE).getAttribute("src");
@@ -202,7 +246,9 @@ test.describe("Create Images", () => {
     await expect(canvas.getByRole("img", IMAGE_ONE)).toHaveAttribute("src", firstImage!);
   });
 
-  test("a crash mid-run shows Interrupted, and a fresh consent sends exactly one more request", async ({ aiden }) => {
+  test("a crash mid-run shows Interrupted, and a fresh consent sends exactly one more request", async ({
+    aiden,
+  }) => {
     aiden.openRouter!.hold();
     await newStarter(aiden.page, "A green lantern");
     await (await reviewRun(aiden.page)).getByRole("button", { name: "Generate" }).click();
@@ -224,35 +270,49 @@ test.describe("Create Images", () => {
     expect(aiden.openRouter!.imageRequests).toHaveLength(1);
 
     await (await reviewRun(page)).getByRole("button", { name: "Generate" }).click();
-    await expect(page.getByRole("region", { name: "Images canvas" }).getByRole("img", IMAGE_ONE)).toBeVisible();
+    await expect(
+      page.getByRole("region", { name: "Images canvas" }).getByRole("img", IMAGE_ONE),
+    ).toBeVisible();
     expect(aiden.openRouter!.imageRequests).toHaveLength(2);
   });
 
-  test("the home shows each workflow's newest image, and All Images opens an image's workflow and comes back to it", async ({ aiden }) => {
+  test("the home shows each workflow's newest image, and All Images opens an image's workflow and comes back to it", async ({
+    aiden,
+  }) => {
     const canvas = await newStarter(aiden.page, "A copper kettle");
     await (await reviewRun(aiden.page)).getByRole("button", { name: "Generate" }).click();
     await expect(canvas.getByRole("img", IMAGE_ONE)).toBeVisible();
 
     await openImages(aiden.page);
-    const card = aiden.page.getByRole("list", { name: "Image workflows" }).getByRole("listitem").filter({ hasText: "Prompt to image" });
+    const card = aiden.page
+      .getByRole("list", { name: "Image workflows" })
+      .getByRole("listitem")
+      .filter({ hasText: "Prompt to image" });
     await expect(card).toContainText("1 image");
     await expect(card.locator("img")).toHaveCount(1);
     await expectDecoded(card.locator("img"));
 
     await aiden.page.getByRole("tab", { name: "All Images" }).click();
     await expect(aiden.page.getByRole("heading", { name: "Today" })).toBeVisible();
-    await aiden.page.getByRole("button", { name: "Image 1 of 1, Prompt to image: A copper kettle" }).click();
+    await aiden.page
+      .getByRole("button", { name: "Image 1 of 1, Prompt to image: A copper kettle" })
+      .click();
     const viewer = aiden.page.getByRole("dialog");
     await expect(viewer).toContainText("A copper kettle");
     await viewer.getByRole("button", { name: "Open Workflow" }).click();
     await expect(aiden.page.getByRole("region", { name: "Images canvas" })).toBeVisible();
 
     await aiden.page.getByRole("button", { name: "Go back" }).click();
-    await expect(aiden.page.getByRole("tab", { name: "All Images" })).toHaveAttribute("aria-selected", "true");
+    await expect(aiden.page.getByRole("tab", { name: "All Images" })).toHaveAttribute(
+      "aria-selected",
+      "true",
+    );
     expect(aiden.openRouter!.imageRequests).toHaveLength(1);
   });
 
-  test("deleting a workflow names its image count and removes it after confirmation", async ({ aiden }) => {
+  test("deleting a workflow names its image count and removes it after confirmation", async ({
+    aiden,
+  }) => {
     const canvas = await newStarter(aiden.page, "A paper crane");
     await (await reviewRun(aiden.page)).getByRole("button", { name: "Generate" }).click();
     await expect(canvas.getByRole("img", IMAGE_ONE)).toBeVisible();
@@ -278,19 +338,35 @@ test.describe("Create Images", () => {
     await aiden.page.getByRole("button", { name: "More actions for Prompt to image" }).click();
     await aiden.page.getByRole("menuitem", { name: "Delete…" }).click();
     try {
-      await aiden.page.getByRole("alertdialog", { name: "Delete “Prompt to image”?" }).getByRole("button", { name: "Delete", exact: true }).click();
-      await expect(aiden.page.getByRole("alert")).toContainText("Stop the run first, then delete this workflow.");
-      await expect(aiden.page.getByRole("list", { name: "Image workflows" }).getByRole("button", { name: "Prompt to image", exact: true })).toBeVisible();
+      await aiden.page
+        .getByRole("alertdialog", { name: "Delete “Prompt to image”?" })
+        .getByRole("button", { name: "Delete", exact: true })
+        .click();
+      await expect(aiden.page.getByRole("alert")).toContainText(
+        "Stop the run first, then delete this workflow.",
+      );
+      await expect(
+        aiden.page
+          .getByRole("list", { name: "Image workflows" })
+          .getByRole("button", { name: "Prompt to image", exact: true }),
+      ).toBeVisible();
     } finally {
       // Let the held request finish so the app can quit without a native confirmation.
       aiden.openRouter!.release();
     }
     // The held run finished in the background; reopening the workflow shows its image.
-    await aiden.page.getByRole("list", { name: "Image workflows" }).getByRole("button", { name: "Prompt to image", exact: true }).click();
-    await expect(aiden.page.getByRole("region", { name: "Images canvas" }).getByRole("img", IMAGE_ONE)).toBeVisible();
+    await aiden.page
+      .getByRole("list", { name: "Image workflows" })
+      .getByRole("button", { name: "Prompt to image", exact: true })
+      .click();
+    await expect(
+      aiden.page.getByRole("region", { name: "Images canvas" }).getByRole("img", IMAGE_ONE),
+    ).toBeVisible();
   });
 
-  test("deleting a node is one undo step that restores it with its connections", async ({ aiden }) => {
+  test("deleting a node is one undo step that restores it with its connections", async ({
+    aiden,
+  }) => {
     const canvas = await newStarter(aiden.page, "A copper kettle");
     const nodes = canvas.locator(".react-flow__node");
     const edges = canvas.locator(".react-flow__edge");
@@ -305,7 +381,9 @@ test.describe("Create Images", () => {
     await expect(edges).toHaveCount(2);
   });
 
-  test("an edit that cannot be saved keeps the editor open until the user chooses", async ({ aiden }) => {
+  test("an edit that cannot be saved keeps the editor open until the user chooses", async ({
+    aiden,
+  }) => {
     const { page } = aiden;
     const canvas = await newStarter(page, "A red bicycle");
     await expect(page.getByText("Saved", { exact: true })).toBeVisible();
@@ -328,7 +406,9 @@ test.describe("Create Images", () => {
     await openImages(page);
     await expect(leave).toHaveCount(0);
     await expect(page.locator("html")).toHaveAttribute("data-aiden-dirty", "0");
-    await expect((await openStarterFromList(page)).getByRole("textbox", { name: "Prompt text" })).toHaveValue("My local edit");
+    await expect(
+      (await openStarterFromList(page)).getByRole("textbox", { name: "Prompt text" }),
+    ).toHaveValue("My local edit");
   });
 
   test("reloading after a conflict asks before it discards the local edit", async ({ aiden }) => {
@@ -345,15 +425,21 @@ test.describe("Create Images", () => {
 
     await page.getByRole("button", { name: "Discard and Reload…" }).click();
     await discard.getByRole("button", { name: "Discard and Reload" }).click();
-    await expect(canvas.getByRole("textbox", { name: "Prompt text" })).toHaveValue("Saved elsewhere");
+    await expect(canvas.getByRole("textbox", { name: "Prompt text" })).toHaveValue(
+      "Saved elsewhere",
+    );
     await expect(page.locator("html")).toHaveAttribute("data-aiden-dirty", "0");
   });
 
-  test("quitting right after an edit saves it instead of stopping on the unsaved prompt", async ({ aiden }) => {
+  test("quitting right after an edit saves it instead of stopping on the unsaved prompt", async ({
+    aiden,
+  }) => {
     await newStarter(aiden.page, "A quick quit");
     await expect(aiden.page.getByText("Unsaved changes", { exact: true })).toBeVisible();
     const page = await aiden.relaunch();
     await openImages(page);
-    await expect((await openStarterFromList(page)).getByRole("textbox", { name: "Prompt text" })).toHaveValue("A quick quit");
+    await expect(
+      (await openStarterFromList(page)).getByRole("textbox", { name: "Prompt text" }),
+    ).toHaveValue("A quick quit");
   });
 });

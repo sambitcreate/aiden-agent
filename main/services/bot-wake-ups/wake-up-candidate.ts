@@ -6,12 +6,18 @@ import type { BotToolCandidate } from "../bot-runtime/bot-tool-assembly.js";
 import { createWakeUpTool } from "./wake-up-tool.js";
 import type { BotWakeUps } from "./wake-ups.js";
 
-export function wakeUpCandidate(botId: string, wakeUps: Pick<BotWakeUps, "set" | "pending" | "cancel">): BotToolCandidate {
+export function wakeUpCandidate(
+  botId: string,
+  wakeUps: Pick<BotWakeUps, "set" | "pending" | "cancel">,
+): BotToolCandidate {
   return {
     tool: createWakeUpTool(botId, wakeUps, async () => {
       throw new Error("Setting a wake-up needs a Bot conversation.");
     }),
     replay: "unsafe",
-    bind: (call) => createWakeUpTool(botId, wakeUps, (kind, data) => call.appendEntry(kind, data as unknown as JsonValue)),
+    bind: (call) =>
+      createWakeUpTool(botId, wakeUps, (kind, data) =>
+        call.appendEntry(kind, data as unknown as JsonValue),
+      ),
   };
 }

@@ -52,8 +52,14 @@ export interface HtmlArtifactSlots {
   draftsByRowKey: Map<string, PlacedVisualDraft[]>;
 }
 
-function sameArtifacts(a: readonly ChatHtmlArtifactV1[], b: readonly ChatHtmlArtifactV1[]): boolean {
-  return a.length === b.length && a.every((item, index) => item.mediaId === b[index]?.mediaId && item.id === b[index]?.id);
+function sameArtifacts(
+  a: readonly ChatHtmlArtifactV1[],
+  b: readonly ChatHtmlArtifactV1[],
+): boolean {
+  return (
+    a.length === b.length &&
+    a.every((item, index) => item.mediaId === b[index]?.mediaId && item.id === b[index]?.id)
+  );
 }
 
 /**

@@ -29,10 +29,7 @@ export async function setWindowWidth(
 }
 
 /** Pretends the window's display has a work area this wide, as a laptop or a large monitor would. */
-export async function setDisplayWidth(
-  app: ElectronApplication,
-  width: number,
-): Promise<void> {
+export async function setDisplayWidth(app: ElectronApplication, width: number): Promise<void> {
   await app.evaluate(({ screen }, workAreaWidth) => {
     const workArea = { x: 0, y: 0, width: workAreaWidth, height: 900 };
     screen.getDisplayMatching = () => ({
@@ -50,17 +47,11 @@ type AppearanceIpc = {
 };
 
 /** Previews an appearance the way Settings does, without saving it. */
-export async function previewAppearance(
-  page: Page,
-  mode: "light" | "dark" | null,
-): Promise<void> {
+export async function previewAppearance(page: Page, mode: "light" | "dark" | null): Promise<void> {
   await page.evaluate(async (nextMode) => {
     const { ipc } = (window as unknown as AppearanceIpc).aidenAPI;
     const saved = await ipc.invoke<{ mode: string }>("settings:getAppearance");
-    await ipc.invoke(
-      "settings:previewAppearance",
-      nextMode ? { ...saved, mode: nextMode } : saved,
-    );
+    await ipc.invoke("settings:previewAppearance", nextMode ? { ...saved, mode: nextMode } : saved);
   }, mode);
 }
 
@@ -70,10 +61,7 @@ export async function capture(page: Page, name: string): Promise<void> {
   await page.mouse.move(1, 1);
   for (const scheme of ["light", "dark"] as const) {
     await previewAppearance(page, scheme);
-    await expect(page.locator("html")).toHaveAttribute(
-      "data-appearance-scheme",
-      scheme,
-    );
+    await expect(page.locator("html")).toHaveAttribute("data-appearance-scheme", scheme);
     await page.screenshot({
       path: path.join(SCREENSHOT_DIR, `${name}-${scheme}.png`),
       animations: "disabled",
@@ -90,10 +78,7 @@ export async function chooseWorkspace(page: Page, name: RegExp): Promise<void> {
   await expect(option).toHaveCount(0);
 }
 
-export async function sendFirstMessage(
-  page: Page,
-  text: string,
-): Promise<void> {
+export async function sendFirstMessage(page: Page, text: string): Promise<void> {
   const composer = page.locator("textarea").first();
   await composer.fill(text);
   await composer.press("Enter");
@@ -113,10 +98,7 @@ export async function sendFirstMessage(
   await expect(page.locator("[data-chat-title-menu]")).toContainText(text);
 }
 
-export async function typeSlashCommand(
-  page: Page,
-  command: string,
-): Promise<void> {
+export async function typeSlashCommand(page: Page, command: string): Promise<void> {
   const composer = page.locator("textarea").first();
   await composer.click();
   await composer.pressSequentially(command);
@@ -124,9 +106,7 @@ export async function typeSlashCommand(
   await expect(composer).toHaveValue("");
 }
 
-export const designLayout = (page: Page) =>
-  page.locator("[data-design-layout]");
+export const designLayout = (page: Page) => page.locator("[data-design-layout]");
 export const designCanvas = (page: Page) =>
   page.getByRole("region", { name: "Design canvas", exact: true });
-export const canvasRegion = (page: Page) =>
-  page.locator("[data-design-canvas-region]");
+export const canvasRegion = (page: Page) => page.locator("[data-design-canvas-region]");

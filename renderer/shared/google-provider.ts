@@ -8,9 +8,7 @@ export const LEGACY_MOONSHOT_PROVIDER_ID = "moonshot";
 
 /** Aiden's Google chat catalog excludes legacy families, including dated variants. */
 export function isSelectableGoogleCatalogModel(modelId: string): boolean {
-  return !/^gemini-(?:2\.5|2\.0|1\.5)(?:-|$)/iu.test(
-    modelId.replace(/^models\//iu, ""),
-  );
+  return !/^gemini-(?:2\.5|2\.0|1\.5)(?:-|$)/iu.test(modelId.replace(/^models\//iu, ""));
 }
 
 /** Preserve legacy voice-mode ids while remapping Pi chat-provider ownership. */

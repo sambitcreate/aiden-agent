@@ -41,7 +41,13 @@ export function ProviderSetupRow({
           {subtitle}
         </Text>
       </div>
-      <Button ref={actionRef} variant="filled" size="small" aria-label={actionAriaLabel} onClick={onAction}>
+      <Button
+        ref={actionRef}
+        variant="filled"
+        size="small"
+        aria-label={actionAriaLabel}
+        onClick={onAction}
+      >
         {actionLabel}
       </Button>
     </div>

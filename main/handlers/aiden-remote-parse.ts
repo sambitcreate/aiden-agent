@@ -32,6 +32,7 @@ export function parseAidenRemoteScopedIdentifier(value: unknown): string {
     value.length >= 1 &&
     value.length <= 128 &&
     /^[A-Za-z0-9._:-]+$/u.test(value)
-  ) return value;
+  )
+    return value;
   throw new Error("Invalid Aiden Remote approval identifier.");
 }

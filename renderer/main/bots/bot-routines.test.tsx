@@ -33,10 +33,17 @@ test("routines show the label the host gives them", async () => {
 });
 
 test("routines show pending recovery and overdue fires", async () => {
-  installBotTestIpc({ "bots:routines:list": () => [
-    routine({ pendingFireCount: 1 }),
-    routine({ id: "task-2", name: "Morning brief", pendingFireCount: 0, overdueSince: Date.parse("2026-10-22T09:00:00Z") }),
-  ] });
+  installBotTestIpc({
+    "bots:routines:list": () => [
+      routine({ pendingFireCount: 1 }),
+      routine({
+        id: "task-2",
+        name: "Morning brief",
+        pendingFireCount: 0,
+        overdueSince: Date.parse("2026-10-22T09:00:00Z"),
+      }),
+    ],
+  });
   await mountWithBotRouter(<BotRoutines bot={bot} />, { initialPath: "/bots/bot-1" });
   assert.ok(await screen.findByText("Finishing an earlier run"));
   assert.ok(screen.getByText(/Overdue since/u));
@@ -45,13 +52,16 @@ test("routines show pending recovery and overdue fires", async () => {
 test("Add routine builds a weekly schedule from the picked days and time", async () => {
   const calls = installBotTestIpc({
     "bots:routines:list": () => [],
-    "bots:routines:create": (input) => routine({ ...(input as object), id: "task-2", label: "Every Sunday at 8:41 AM" }),
+    "bots:routines:create": (input) =>
+      routine({ ...(input as object), id: "task-2", label: "Every Sunday at 8:41 AM" }),
   });
   await mountWithBotRouter(<BotRoutines bot={bot} />, { initialPath: "/bots/bot-1" });
   fireEvent.click(await screen.findByRole("button", { name: /Add routine/u }));
   const dialog = await screen.findByRole("dialog", { name: "Add routine" });
 
-  fireEvent.change(within(dialog).getByRole("textbox", { name: "Name" }), { target: { value: "Weekly meal prep" } });
+  fireEvent.change(within(dialog).getByRole("textbox", { name: "Name" }), {
+    target: { value: "Weekly meal prep" },
+  });
   fireEvent.click(within(dialog).getByRole("radio", { name: "Weekly" }));
   // Weekly starts on Monday; switch it to Sunday.
   fireEvent.click(within(dialog).getByRole("button", { name: "Monday" }));
@@ -63,8 +73,13 @@ test("Add routine builds a weekly schedule from the picked days and time", async
   assert.ok(within(dialog).getByText("Every Sunday at 8:41 AM"));
   fireEvent.click(within(dialog).getByRole("button", { name: "Save" }));
 
-  await waitFor(() => assert.equal(calls.filter((call) => call.channel === "bots:routines:create").length, 1));
-  const input = calls.find((call) => call.channel === "bots:routines:create")!.args[0] as Record<string, unknown>;
+  await waitFor(() =>
+    assert.equal(calls.filter((call) => call.channel === "bots:routines:create").length, 1),
+  );
+  const input = calls.find((call) => call.channel === "bots:routines:create")!.args[0] as Record<
+    string,
+    unknown
+  >;
   assert.equal(input.botId, "bot-1");
   assert.equal(input.name, "Weekly meal prep");
   assert.equal(input.prompt, "Plan this week's meals.");
@@ -81,7 +96,9 @@ test("a saved routine can be edited and deleted from its editor", async () => {
   fireEvent.click(await screen.findByRole("button", { name: /^Weekly meal prep\b/u }));
   const dialog = await screen.findByRole("dialog", { name: "Edit routine" });
   fireEvent.click(within(dialog).getByRole("button", { name: "Delete routine" }));
-  await waitFor(() => assert.equal(calls.filter((call) => call.channel === "bots:routines:delete").length, 1));
+  await waitFor(() =>
+    assert.equal(calls.filter((call) => call.channel === "bots:routines:delete").length, 1),
+  );
   assert.deepEqual(calls.find((call) => call.channel === "bots:routines:delete")!.args[0], {
     botId: "bot-1",
     id: "task-1",
@@ -93,27 +110,51 @@ test("editing a routine starts from its saved name, schedule, and message, and s
   const calls = installBotTestIpc({
     "bots:routines:list": () => [
       routine(),
-      routine({ id: "task-2", name: "Morning brief", prompt: "Brief me.", schedule: { kind: "daily", time: "07:30" }, label: "Every day at 7:30 AM" }),
+      routine({
+        id: "task-2",
+        name: "Morning brief",
+        prompt: "Brief me.",
+        schedule: { kind: "daily", time: "07:30" },
+        label: "Every day at 7:30 AM",
+      }),
     ],
     "bots:routines:update": (input) => routine(input as Record<string, unknown>),
   });
   await mountWithBotRouter(<BotRoutines bot={bot} />, { initialPath: "/bots/bot-1" });
   // Open Add first, then close it: the next editor must not keep the blank form.
   fireEvent.click(await screen.findByRole("button", { name: /Add routine/u }));
-  fireEvent.click(within(await screen.findByRole("dialog", { name: "Add routine" })).getByRole("button", { name: "Cancel" }));
+  fireEvent.click(
+    within(await screen.findByRole("dialog", { name: "Add routine" })).getByRole("button", {
+      name: "Cancel",
+    }),
+  );
   fireEvent.click(await screen.findByRole("button", { name: /^Weekly meal prep\b/u }));
   const dialog = await screen.findByRole("dialog", { name: "Edit routine" });
-  assert.equal((within(dialog).getByRole("textbox", { name: "Name" }) as HTMLInputElement).value, "Weekly meal prep");
   assert.equal(
-    (within(dialog).getByRole("textbox", { name: "What should it do?" }) as HTMLTextAreaElement).value,
+    (within(dialog).getByRole("textbox", { name: "Name" }) as HTMLInputElement).value,
+    "Weekly meal prep",
+  );
+  assert.equal(
+    (within(dialog).getByRole("textbox", { name: "What should it do?" }) as HTMLTextAreaElement)
+      .value,
     "Plan this week's meals.",
   );
-  assert.equal(within(dialog).getByRole("radio", { name: "Weekly" }).getAttribute("aria-checked"), "true");
-  assert.equal(within(dialog).getByRole("button", { name: "Sunday" }).getAttribute("aria-pressed"), "true");
+  assert.equal(
+    within(dialog).getByRole("radio", { name: "Weekly" }).getAttribute("aria-checked"),
+    "true",
+  );
+  assert.equal(
+    within(dialog).getByRole("button", { name: "Sunday" }).getAttribute("aria-pressed"),
+    "true",
+  );
   assert.equal((within(dialog).getByLabelText("Time") as HTMLInputElement).value, "08:41");
-  fireEvent.change(within(dialog).getByRole("textbox", { name: "Name" }), { target: { value: "Sunday meal prep" } });
+  fireEvent.change(within(dialog).getByRole("textbox", { name: "Name" }), {
+    target: { value: "Sunday meal prep" },
+  });
   fireEvent.click(within(dialog).getByRole("button", { name: "Save" }));
-  await waitFor(() => assert.equal(calls.filter((call) => call.channel === "bots:routines:update").length, 1));
+  await waitFor(() =>
+    assert.equal(calls.filter((call) => call.channel === "bots:routines:update").length, 1),
+  );
   assert.deepEqual(calls.find((call) => call.channel === "bots:routines:update")!.args[0], {
     botId: "bot-1",
     id: "task-1",
@@ -128,8 +169,14 @@ test("editing a routine starts from its saved name, schedule, and message, and s
   await waitFor(() => assert.equal(screen.queryByRole("dialog", { name: "Edit routine" }), null));
   fireEvent.click(await screen.findByRole("button", { name: /^Morning brief\b/u }));
   const second = await screen.findByRole("dialog", { name: "Edit routine" });
-  assert.equal((within(second).getByRole("textbox", { name: "Name" }) as HTMLInputElement).value, "Morning brief");
-  assert.equal(within(second).getByRole("radio", { name: "Every day" }).getAttribute("aria-checked"), "true");
+  assert.equal(
+    (within(second).getByRole("textbox", { name: "Name" }) as HTMLInputElement).value,
+    "Morning brief",
+  );
+  assert.equal(
+    within(second).getByRole("radio", { name: "Every day" }).getAttribute("aria-checked"),
+    "true",
+  );
 });
 
 test("an incomplete routine is not saved and says what is missing", async () => {
@@ -140,11 +187,15 @@ test("an incomplete routine is not saved and says what is missing", async () => 
   fireEvent.click(within(dialog).getByRole("button", { name: "Save" }));
   assert.ok(await within(dialog).findByText("Give the routine a name."));
 
-  fireEvent.change(within(dialog).getByRole("textbox", { name: "Name" }), { target: { value: "Weekly" } });
+  fireEvent.change(within(dialog).getByRole("textbox", { name: "Name" }), {
+    target: { value: "Weekly" },
+  });
   fireEvent.click(within(dialog).getByRole("button", { name: "Save" }));
   assert.ok(await within(dialog).findByText("Tell the Bot what to do."));
 
-  fireEvent.change(within(dialog).getByRole("textbox", { name: "What should it do?" }), { target: { value: "Check in." } });
+  fireEvent.change(within(dialog).getByRole("textbox", { name: "What should it do?" }), {
+    target: { value: "Check in." },
+  });
   fireEvent.click(within(dialog).getByRole("radio", { name: "Weekly" }));
   fireEvent.click(within(dialog).getByRole("button", { name: "Monday" }));
   fireEvent.click(within(dialog).getByRole("button", { name: "Save" }));
@@ -154,20 +205,28 @@ test("an incomplete routine is not saved and says what is missing", async () => 
   fireEvent.change(within(dialog).getByLabelText("Time"), { target: { value: "" } });
   fireEvent.click(within(dialog).getByRole("button", { name: "Save" }));
   assert.ok(await within(dialog).findByText("Choose a time."));
-  assert.equal(calls.some((call) => call.channel === "bots:routines:create"), false);
+  assert.equal(
+    calls.some((call) => call.channel === "bots:routines:create"),
+    false,
+  );
 });
 
 test("a time the host refuses keeps the editor open with its reason", async () => {
   installBotTestIpc({
     "bots:routines:list": () => [],
-    "bots:routines:create": () => Promise.reject(new Error("Pick a time in the future for this routine.")),
+    "bots:routines:create": () =>
+      Promise.reject(new Error("Pick a time in the future for this routine.")),
   });
   await mountWithBotRouter(<BotRoutines bot={bot} />, { initialPath: "/bots/bot-1" });
   fireEvent.click(await screen.findByRole("button", { name: /Add routine/u }));
   const dialog = await screen.findByRole("dialog", { name: "Add routine" });
-  fireEvent.change(within(dialog).getByRole("textbox", { name: "Name" }), { target: { value: "Reminder" } });
+  fireEvent.change(within(dialog).getByRole("textbox", { name: "Name" }), {
+    target: { value: "Reminder" },
+  });
   fireEvent.click(within(dialog).getByRole("radio", { name: "Once" }));
-  fireEvent.change(within(dialog).getByRole("textbox", { name: "What should it do?" }), { target: { value: "Remind me." } });
+  fireEvent.change(within(dialog).getByRole("textbox", { name: "What should it do?" }), {
+    target: { value: "Remind me." },
+  });
   fireEvent.click(within(dialog).getByRole("button", { name: "Save" }));
   assert.ok(await within(dialog).findByText("Pick a time in the future for this routine."));
   assert.ok(screen.getByRole("dialog", { name: "Add routine" }));
@@ -176,7 +235,8 @@ test("a time the host refuses keeps the editor open with its reason", async () =
 test("with no routines, Try a daily check-in opens a prefilled editor and creates nothing until Save", async () => {
   const calls = installBotTestIpc({
     "bots:routines:list": () => [],
-    "bots:routines:create": (input) => routine({ ...(input as object), id: "task-3", label: "Every day at 9:00 AM" }),
+    "bots:routines:create": (input) =>
+      routine({ ...(input as object), id: "task-3", label: "Every day at 9:00 AM" }),
   });
   await mountWithBotRouter(<BotRoutines bot={bot} />, { initialPath: "/bots/bot-1" });
   const suggestion = await screen.findByRole("button", { name: /Try a daily check-in/u });
@@ -184,25 +244,44 @@ test("with no routines, Try a daily check-in opens a prefilled editor and create
   fireEvent.click(suggestion);
 
   const dialog = await screen.findByRole("dialog", { name: "Add routine" });
-  assert.equal((within(dialog).getByRole("textbox", { name: "Name" }) as HTMLInputElement).value, "Daily check-in");
+  assert.equal(
+    (within(dialog).getByRole("textbox", { name: "Name" }) as HTMLInputElement).value,
+    "Daily check-in",
+  );
   assert.match(
-    (within(dialog).getByRole("textbox", { name: "What should it do?" }) as HTMLTextAreaElement).value,
+    (within(dialog).getByRole("textbox", { name: "What should it do?" }) as HTMLTextAreaElement)
+      .value,
     /^Check in briefly\. Using what you remember about me/u,
   );
-  assert.equal(within(dialog).getByRole("radio", { name: "Every day" }).getAttribute("aria-checked"), "true");
+  assert.equal(
+    within(dialog).getByRole("radio", { name: "Every day" }).getAttribute("aria-checked"),
+    "true",
+  );
   assert.equal((within(dialog).getByLabelText("Time") as HTMLInputElement).value, "09:00");
-  assert.equal(calls.some((call) => call.channel === "bots:routines:create"), false, "opening creates nothing");
+  assert.equal(
+    calls.some((call) => call.channel === "bots:routines:create"),
+    false,
+    "opening creates nothing",
+  );
 
   // Cancel leaves no routine behind; opening it again still starts prefilled.
   fireEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
   await waitFor(() => assert.equal(document.querySelector("[role=dialog]") === null, true));
-  assert.equal(calls.some((call) => call.channel === "bots:routines:create"), false);
+  assert.equal(
+    calls.some((call) => call.channel === "bots:routines:create"),
+    false,
+  );
 
   fireEvent.click(await screen.findByRole("button", { name: /Try a daily check-in/u }));
   const again = await screen.findByRole("dialog", { name: "Add routine" });
   fireEvent.click(within(again).getByRole("button", { name: "Save" }));
-  await waitFor(() => assert.equal(calls.filter((call) => call.channel === "bots:routines:create").length, 1));
-  const input = calls.find((call) => call.channel === "bots:routines:create")!.args[0] as Record<string, unknown>;
+  await waitFor(() =>
+    assert.equal(calls.filter((call) => call.channel === "bots:routines:create").length, 1),
+  );
+  const input = calls.find((call) => call.channel === "bots:routines:create")!.args[0] as Record<
+    string,
+    unknown
+  >;
   assert.equal(input.name, "Daily check-in");
   assert.deepEqual(input.schedule, { kind: "daily", time: "09:00" });
 });
@@ -238,15 +317,25 @@ test("a saved or deleted routine changes the list at once, without waiting for i
       // Only the first read answers; later rereads hang, so the list must come from the editor's answer.
       return listReads === 1 ? [routine()] : new Promise<never>(() => undefined);
     },
-    "bots:routines:create": (input) => routine({ ...(input as Record<string, unknown>), id: "task-2", label: "Every day at 7:30 AM", updatedAt: 20 }),
+    "bots:routines:create": (input) =>
+      routine({
+        ...(input as Record<string, unknown>),
+        id: "task-2",
+        label: "Every day at 7:30 AM",
+        updatedAt: 20,
+      }),
     "bots:routines:delete": () => undefined,
   });
   await mountWithBotRouter(<BotRoutines bot={bot} />, { initialPath: "/bots/bot-1" });
   await screen.findByRole("button", { name: /^Weekly meal prep\b/u });
   fireEvent.click(screen.getByRole("button", { name: /Add routine/u }));
   const add = await screen.findByRole("dialog", { name: "Add routine" });
-  fireEvent.change(within(add).getByRole("textbox", { name: "Name" }), { target: { value: "Morning brief" } });
-  fireEvent.change(within(add).getByRole("textbox", { name: "What should it do?" }), { target: { value: "Brief me." } });
+  fireEvent.change(within(add).getByRole("textbox", { name: "Name" }), {
+    target: { value: "Morning brief" },
+  });
+  fireEvent.change(within(add).getByRole("textbox", { name: "What should it do?" }), {
+    target: { value: "Brief me." },
+  });
   fireEvent.click(within(add).getByRole("radio", { name: "Every day" }));
   fireEvent.click(within(add).getByRole("button", { name: "Save" }));
   assert.ok(await screen.findByRole("button", { name: /^Morning brief\b/u }));
@@ -255,6 +344,8 @@ test("a saved or deleted routine changes the list at once, without waiting for i
   fireEvent.click(screen.getByRole("button", { name: /^Weekly meal prep\b/u }));
   const edit = await screen.findByRole("dialog", { name: "Edit routine" });
   fireEvent.click(within(edit).getByRole("button", { name: "Delete routine" }));
-  await waitFor(() => assert.equal(screen.queryByRole("button", { name: /^Weekly meal prep\b/u }), null));
+  await waitFor(() =>
+    assert.equal(screen.queryByRole("button", { name: /^Weekly meal prep\b/u }), null),
+  );
   assert.ok(screen.getByRole("button", { name: /^Morning brief\b/u }));
 });

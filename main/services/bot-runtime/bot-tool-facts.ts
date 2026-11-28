@@ -4,7 +4,10 @@
 // instructions are used. Each join runs at most once per facts object and is
 // skipped when the authority grants nothing of that kind.
 
-import type { BotCatalogConnectionResource, BotCatalogSkillResource } from "../bot-capability-catalog-core.js";
+import type {
+  BotCatalogConnectionResource,
+  BotCatalogSkillResource,
+} from "../bot-capability-catalog-core.js";
 import type { BotRuntimeMcpToolAuthority } from "../bot-runtime-authority.js";
 import type { BotRuntimeResolvedSkill } from "../bot-skill-inventory.js";
 import {
@@ -47,7 +50,10 @@ export interface BotToolFactsInput {
    */
   liveMcpTools(): Promise<ReadonlyMap<string, SubagentMcpRemoteTool>>;
   /** The skill registry snapshot for the Bot folder and the Bot's resolved skill bindings. */
-  skills(): Promise<{ snapshot: SkillRegistrySnapshot; resolved: readonly BotRuntimeResolvedSkill[] }>;
+  skills(): Promise<{
+    snapshot: SkillRegistrySnapshot;
+    resolved: readonly BotRuntimeResolvedSkill[];
+  }>;
 }
 
 function once<T>(load: () => Promise<T>): () => Promise<T> {
@@ -67,12 +73,20 @@ export function createBotToolFacts(input: BotToolFactsInput): BotToolFactsWithSk
     // A changed live tool (for example read-only turned mutating) is not the
     // granted tool, so it is neither offered nor dispatched under the old effect.
     const live = await liveMcpTools();
-    return new Map([...granted].filter(([name, grant]) => botMcpLiveToolMatchesGrant(grant, live.get(name))));
+    return new Map(
+      [...granted].filter(([name, grant]) => botMcpLiveToolMatchesGrant(grant, live.get(name))),
+    );
   });
   const skills = once(async () => {
-    if (authority.skills.length === 0) return { names: new Set<string>() as ReadonlySet<string>, snapshot: undefined };
+    if (authority.skills.length === 0)
+      return { names: new Set<string>() as ReadonlySet<string>, snapshot: undefined };
     const [current, runtime] = await Promise.all([catalog(), input.skills()]);
-    const names = exactBotSkillToolNames(authority, current.skills, runtime.resolved, runtime.snapshot);
+    const names = exactBotSkillToolNames(
+      authority,
+      current.skills,
+      runtime.resolved,
+      runtime.snapshot,
+    );
     // Prove the captured instructions still match the admitted catalog before
     // either the prompt or a tool schema can expose them.
     await admission.revalidateBeforeEffect();
@@ -91,6 +105,7 @@ export function createBotToolFacts(input: BotToolFactsInput): BotToolFactsWithSk
     },
     skillSnapshot: async () => (await skills()).snapshot,
     // Only a granted tool's entry: the same live inventory the grant was checked against.
-    mcpToolDescriptor: async (name) => ((await mcpTools()).has(name) ? (await liveMcpTools()).get(name) : undefined),
+    mcpToolDescriptor: async (name) =>
+      (await mcpTools()).has(name) ? (await liveMcpTools()).get(name) : undefined,
   };
 }

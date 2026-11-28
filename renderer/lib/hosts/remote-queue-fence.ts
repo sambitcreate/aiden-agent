@@ -36,7 +36,10 @@ const SETTLED_RUN_STATES = new Set(["done", "failed", "cancelled"]);
  * host saves a reply before it releases the turn, and a chat's idle/active
  * row can't say which run it describes, so neither counts.
  */
-export function remoteQueueFenceHolds(fence: RemoteQueueFence | null, view: RemoteQueueFenceView): boolean {
+export function remoteQueueFenceHolds(
+  fence: RemoteQueueFence | null,
+  view: RemoteQueueFenceView,
+): boolean {
   if (!fence) return false;
   if (view.now - fence.since >= REMOTE_QUEUE_FENCE_STALL_MS) return false;
   // Sent, receipt not in yet: the host may already be running it.

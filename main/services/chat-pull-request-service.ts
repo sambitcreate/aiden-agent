@@ -105,14 +105,11 @@ function snapshotChanged(
   const { syncedAt: _nextSyncedAt, ...after } = next;
   const keys = new Set([...Object.keys(before), ...Object.keys(after)]);
   return [...keys].some(
-    (key) =>
-      before[key as keyof typeof before] !== after[key as keyof typeof after],
+    (key) => before[key as keyof typeof before] !== after[key as keyof typeof after],
   );
 }
 
-function snapshotFromSummary(
-  summary: GitHubPullRequestSummary,
-): ChatPullRequestSnapshot {
+function snapshotFromSummary(summary: GitHubPullRequestSummary): ChatPullRequestSnapshot {
   return {
     title: summary.title,
     state: summary.state,
@@ -121,15 +118,9 @@ function snapshotFromSummary(
     baseBranch: summary.baseBranch,
     ...(summary.headSha ? { headSha: summary.headSha } : {}),
     ...(summary.author ? { author: summary.author } : {}),
-    ...(summary.reviewDecision !== undefined
-      ? { reviewDecision: summary.reviewDecision }
-      : {}),
-    ...(summary.mergeable !== undefined
-      ? { mergeable: summary.mergeable }
-      : {}),
-    ...(summary.checksState !== undefined
-      ? { checksState: summary.checksState }
-      : {}),
+    ...(summary.reviewDecision !== undefined ? { reviewDecision: summary.reviewDecision } : {}),
+    ...(summary.mergeable !== undefined ? { mergeable: summary.mergeable } : {}),
+    ...(summary.checksState !== undefined ? { checksState: summary.checksState } : {}),
     syncedAt: Date.now(),
   };
 }
@@ -152,15 +143,9 @@ function viewFromSummary(
     baseBranch: summary.baseBranch,
     ...(summary.headSha ? { headSha: summary.headSha } : {}),
     ...(summary.author ? { author: summary.author } : {}),
-    ...(summary.reviewDecision !== undefined
-      ? { reviewDecision: summary.reviewDecision }
-      : {}),
-    ...(summary.mergeable !== undefined
-      ? { mergeable: summary.mergeable }
-      : {}),
-    ...(summary.checksState !== undefined
-      ? { checksState: summary.checksState }
-      : {}),
+    ...(summary.reviewDecision !== undefined ? { reviewDecision: summary.reviewDecision } : {}),
+    ...(summary.mergeable !== undefined ? { mergeable: summary.mergeable } : {}),
+    ...(summary.checksState !== undefined ? { checksState: summary.checksState } : {}),
     syncedAt: Date.now(),
     ...extras,
   };
@@ -183,11 +168,8 @@ export class ChatPullRequestService {
     host?: string;
     repository?: string;
   }> {
-    const workspaceId =
-      workspaceIdOverride ?? (await this.deps.chatWorkspaceId(chatId));
-    const folderPath = workspaceId
-      ? await this.deps.workspaceFolderPath(workspaceId)
-      : undefined;
+    const workspaceId = workspaceIdOverride ?? (await this.deps.chatWorkspaceId(chatId));
+    const folderPath = workspaceId ? await this.deps.workspaceFolderPath(workspaceId) : undefined;
     if (!folderPath) return {};
     const context: {
       folderPath?: string;
@@ -199,9 +181,7 @@ export class ChatPullRequestService {
     };
     const [info, repo] = await Promise.all([
       this.deps.gitInfo(folderPath, signal).catch(() => undefined),
-      this.deps.github
-        .resolveRepository(folderPath, signal)
-        .catch(() => undefined),
+      this.deps.github.resolveRepository(folderPath, signal).catch(() => undefined),
     ]);
     if (info?.isRepo && info.branch) context.branch = info.branch;
     if (repo?.availability === "ready" && repo.repository) {
@@ -215,9 +195,7 @@ export class ChatPullRequestService {
 
   private async cwdFor(chatId: string): Promise<string> {
     const workspaceId = await this.deps.chatWorkspaceId(chatId);
-    const folderPath = workspaceId
-      ? await this.deps.workspaceFolderPath(workspaceId)
-      : undefined;
+    const folderPath = workspaceId ? await this.deps.workspaceFolderPath(workspaceId) : undefined;
     return folderPath ?? os.homedir();
   }
 
@@ -228,9 +206,7 @@ export class ChatPullRequestService {
   async list(chatId: string): Promise<ChatPullRequestListResult> {
     const links = await this.deps.store.list(chatId);
     return {
-      links: [...links]
-        .sort((a, b) => b.linkedAt - a.linkedAt)
-        .map(pullRequestViewFromLink),
+      links: [...links].sort((a, b) => b.linkedAt - a.linkedAt).map(pullRequestViewFromLink),
     };
   }
 
@@ -261,20 +237,15 @@ export class ChatPullRequestService {
     let message: string | undefined;
     let rateLimitedUntil: number | undefined;
     if (context.folderPath && context.branch) {
-      const discovered = await this.deps.github.currentPullRequest(
-        context.folderPath,
-      );
+      const discovered = await this.deps.github.currentPullRequest(context.folderPath);
       const dismissed = await this.deps.store.listDismissed(chatId);
       const identity =
-        discovered.pullRequest &&
-        pullRequestIdentityFromSummary(discovered.pullRequest);
+        discovered.pullRequest && pullRequestIdentityFromSummary(discovered.pullRequest);
       if (
         discovered.availability === "ready" &&
         discovered.pullRequest &&
         identity &&
-        !dismissed.some(
-          (ref) => pullRequestRefKey(ref) === pullRequestRefKey(identity),
-        )
+        !dismissed.some((ref) => pullRequestRefKey(ref) === pullRequestRefKey(identity))
       ) {
         resolverContext.discovered = viewFromSummary(discovered.pullRequest, {
           linked: false,
@@ -297,9 +268,7 @@ export class ChatPullRequestService {
    * read from local stores only. Never contacts GitHub, so the sidebar can ask
    * for every listed chat at once; chats with neither are omitted.
    */
-  async sidebar(
-    chatIds: readonly string[],
-  ): Promise<Record<string, ChatSidebarPullRequests>> {
+  async sidebar(chatIds: readonly string[]): Promise<Record<string, ChatSidebarPullRequests>> {
     const entries = await Promise.all(
       chatIds.map(async (chatId) => {
         // A chat deleted while the sidebar asked has no store; it simply shows nothing.
@@ -324,10 +293,7 @@ export class ChatPullRequestService {
   }
 
   /** Link a pull request by pasted URL — canonical identity comes from GitHub. */
-  async link(
-    chatId: string,
-    input: { url: string },
-  ): Promise<ChatPullRequestLinkResult> {
+  async link(chatId: string, input: { url: string }): Promise<ChatPullRequestLinkResult> {
     const ref = parseGitHubPullRequestUrl(input.url);
     if (!ref) {
       return {
@@ -336,12 +302,13 @@ export class ChatPullRequestService {
       };
     }
     const cwd = await this.cwdFor(chatId);
-    const status = await this.deps.github.getPullRequestByUrl(cwd, input.url, undefined, { interactive: true });
+    const status = await this.deps.github.getPullRequestByUrl(cwd, input.url, undefined, {
+      interactive: true,
+    });
     if (status.availability !== "ready" || !status.pullRequest) {
       return {
         ok: false,
-        message:
-          status.message ?? "The pull request could not be found on GitHub.",
+        message: status.message ?? "The pull request could not be found on GitHub.",
       };
     }
     return this.linkSummary(chatId, status.pullRequest, "manual");
@@ -364,8 +331,7 @@ export class ChatPullRequestService {
     if (status.availability !== "ready" || !status.pullRequest) {
       return {
         ok: false,
-        message:
-          status.message ?? "The pull request could not be read from GitHub.",
+        message: status.message ?? "The pull request could not be read from GitHub.",
       };
     }
     return this.linkSummary(chatId, status.pullRequest, source);
@@ -402,10 +368,7 @@ export class ChatPullRequestService {
   }
 
   /** Remove the Aiden-side relationship only — never touches GitHub. */
-  async unlink(
-    chatId: string,
-    ref: ChatPullRequestRef,
-  ): Promise<{ ok: boolean }> {
+  async unlink(chatId: string, ref: ChatPullRequestRef): Promise<{ ok: boolean }> {
     const removed = await this.deps.store.unlink(chatId, ref);
     if (removed) this.notify(chatId);
     return { ok: removed };
@@ -415,15 +378,10 @@ export class ChatPullRequestService {
    * Refresh cached snapshots from GitHub. Failures keep the stale snapshot —
    * the cache is display state, not authority. `ref` limits to one link.
    */
-  async refresh(
-    chatId: string,
-    ref?: ChatPullRequestRef,
-  ): Promise<ChatPullRequestListResult> {
+  async refresh(chatId: string, ref?: ChatPullRequestRef): Promise<ChatPullRequestListResult> {
     const links = await this.deps.store.list(chatId);
     const targets = ref
-      ? links.filter(
-          (link) => pullRequestRefKey(link) === pullRequestRefKey(ref),
-        )
+      ? links.filter((link) => pullRequestRefKey(link) === pullRequestRefKey(ref))
       : links;
     const cwd = await this.cwdFor(chatId);
     // Issued together so the GitHub reader answers them in one request.
@@ -460,10 +418,7 @@ export class ChatPullRequestService {
    * Chooser candidates: open PRs on the workspace branch first, then other open
    * PRs in the repository — each marked when already linked to this chat.
    */
-  async candidates(
-    chatId: string,
-    workspaceId?: string,
-  ): Promise<ChatPullRequestCandidatesResult> {
+  async candidates(chatId: string, workspaceId?: string): Promise<ChatPullRequestCandidatesResult> {
     const context = await this.chatContext(chatId, workspaceId);
     if (!context.folderPath) {
       return {
@@ -617,11 +572,7 @@ export class ChatPullRequestService {
     // A same-branch PR whose head SHA could not be read may itself be the
     // pushed result: surfacing an explicit error keeps "Create pull request"
     // off the table instead of inviting a duplicate create.
-    if (
-      unverifiable.length > 0 &&
-      matches.length === 0 &&
-      refreshed.length === 0
-    ) {
+    if (unverifiable.length > 0 && matches.length === 0 && refreshed.length === 0) {
       return {
         availability: "error",
         message:
@@ -661,17 +612,12 @@ export class ChatPullRequestService {
         message: "This workspace has no accessible folder.",
       };
     }
-    const repo = await this.deps.github.resolveRepository(
-      folderPath,
-      undefined,
-      repository,
-    );
+    const repo = await this.deps.github.resolveRepository(folderPath, undefined, repository);
     if (repo.availability !== "ready" || !repo.repository) {
       return {
         kind: "failed",
         message:
-          repo.message ??
-          "This workspace's remote repository could not be identified on GitHub.",
+          repo.message ?? "This workspace's remote repository could not be identified on GitHub.",
       };
     }
     const intent: ChatPullRequestCreateIntent = {
@@ -724,18 +670,10 @@ export class ChatPullRequestService {
           : { kind: "failed", message: linked.message };
       }
       if (result.kind === "failed") {
-        await this.deps.store.clearCreateIntent(
-          chatId,
-          recordedIntent.operationId,
-        );
+        await this.deps.store.clearCreateIntent(chatId, recordedIntent.operationId);
         return { kind: "failed", message: result.message };
       }
-      return await this.reconcileIntent(
-        chatId,
-        folderPath,
-        recordedIntent,
-        result.message,
-      );
+      return await this.reconcileIntent(chatId, folderPath, recordedIntent, result.message);
     } finally {
       // Publish pending/ambiguous/failed outcomes as well as successful links.
       // Do not notify while the remote create is still running: a pending
@@ -790,9 +728,7 @@ export class ChatPullRequestService {
   }
 
   /** Pending create intents + ambiguous candidates for the renderer to surface. */
-  async pendingCreates(
-    chatId: string,
-  ): Promise<ChatPullRequestPendingIntent[]> {
+  async pendingCreates(chatId: string): Promise<ChatPullRequestPendingIntent[]> {
     const intents = await this.deps.store.listCreateIntents(chatId);
     return intents.map((intent) => ({ intent }));
   }
@@ -835,8 +771,7 @@ export class ChatPullRequestService {
     if (status.availability !== "ready" || !status.pullRequest) {
       return {
         ok: false,
-        message:
-          status.message ?? "The pull request could not be read from GitHub.",
+        message: status.message ?? "The pull request could not be read from GitHub.",
       };
     }
     if (!matchesCreateIntent(intent, status.pullRequest)) {
@@ -845,12 +780,7 @@ export class ChatPullRequestService {
         message: "That pull request does not match the pending create.",
       };
     }
-    const linked = await this.linkSummary(
-      chatId,
-      status.pullRequest,
-      "created",
-      operationId,
-    );
+    const linked = await this.linkSummary(chatId, status.pullRequest, "created", operationId);
     return linked;
   }
 
@@ -859,27 +789,20 @@ export class ChatPullRequestService {
    * supplies a cwd the branch lookup can run in — without a workspace folder
    * the intents stay pending rather than being guessed at.
    */
-  async reconcilePending(
-    chatId: string,
-  ): Promise<ChatPullRequestPendingIntent[]> {
+  async reconcilePending(chatId: string): Promise<ChatPullRequestPendingIntent[]> {
     const intents = await this.deps.store.listCreateIntents(chatId);
     if (intents.length === 0) return [];
     const cwd = await this.cwdFor(chatId);
     const resolved = new Map<string, ChatPullRequestCreateResult>();
     for (const intent of intents) {
-      resolved.set(
-        intent.operationId,
-        await this.reconcileIntent(chatId, cwd, intent, ""),
-      );
+      resolved.set(intent.operationId, await this.reconcileIntent(chatId, cwd, intent, ""));
     }
     // Only intents still recorded (ambiguous/unavailable) survive reconcile;
     // attach their candidates so the renderer can offer "Use this PR".
     const remaining = await this.deps.store.listCreateIntents(chatId);
     return remaining.map((intent) => {
       const result = resolved.get(intent.operationId);
-      return result?.kind === "ambiguous"
-        ? { intent, candidates: result.candidates }
-        : { intent };
+      return result?.kind === "ambiguous" ? { intent, candidates: result.candidates } : { intent };
     });
   }
 

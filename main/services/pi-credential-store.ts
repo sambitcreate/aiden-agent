@@ -27,9 +27,11 @@ export const piCredentialStore = new EncryptedPiCredentialStore({
   // account or API-key change), never for an in-place token refresh, and never
   // for an `aiden-internal:*` slot (image keys, Model Pad), which no Bot uses.
   beforeWritePublish: (change) => {
-    if (piCredentialChangeFencesBotAuthority(change)) invalidateBotRuntimeInventoryAuthority("provider_credential");
+    if (piCredentialChangeFencesBotAuthority(change))
+      invalidateBotRuntimeInventoryAuthority("provider_credential");
   },
   afterWritePublish: (change) => {
-    if (piCredentialChangeFencesBotAuthority(change)) invalidateBotRuntimeInventoryAuthority("provider_credential");
+    if (piCredentialChangeFencesBotAuthority(change))
+      invalidateBotRuntimeInventoryAuthority("provider_credential");
   },
 });

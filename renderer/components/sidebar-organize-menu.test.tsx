@@ -3,7 +3,10 @@ import test from "node:test";
 import { renderToStaticMarkup } from "react-dom/server";
 import { DOMParser } from "@xmldom/xmldom";
 import { DropdownMenu as DropdownMenuPrimitive } from "radix-ui";
-import { SidebarOrganizeMenuItems, type SidebarOrganizeMenuItemsProps } from "./sidebar-organize-menu";
+import {
+  SidebarOrganizeMenuItems,
+  type SidebarOrganizeMenuItemsProps,
+} from "./sidebar-organize-menu";
 
 const noop = () => undefined;
 

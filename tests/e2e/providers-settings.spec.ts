@@ -99,7 +99,10 @@ type HarnessRuntime = Record<string, unknown> & { status: string };
  * renderer and dialog see install progress, completion and failure arrive
  * asynchronously, as the main process sends them, without downloading anything.
  */
-async function stubAgentRuntime(app: import("@playwright/test").ElectronApplication, runtime: HarnessRuntime) {
+async function stubAgentRuntime(
+  app: import("@playwright/test").ElectronApplication,
+  runtime: HarnessRuntime,
+) {
   await app.evaluate(({ ipcMain }, initial) => {
     const state = globalThis as unknown as {
       harnessRuntime: Record<string, unknown>;
@@ -113,31 +116,63 @@ async function stubAgentRuntime(app: import("@playwright/test").ElectronApplicat
       signedIn: false,
       busy: false,
     });
-    for (const channel of ["providers:harness:status", "providers:harness:install", "providers:harness:cancel", "providers:harness:remove"]) {
+    for (const channel of [
+      "providers:harness:status",
+      "providers:harness:install",
+      "providers:harness:cancel",
+      "providers:harness:remove",
+    ]) {
       ipcMain.removeHandler(channel);
     }
     ipcMain.handle("providers:harness:status", () => status());
     // Install resolves only when the test finishes it, like a real download.
-    ipcMain.handle("providers:harness:install", () => new Promise((resolve) => {
-      state.finishInstall = () => resolve(status());
-    }));
+    ipcMain.handle(
+      "providers:harness:install",
+      () =>
+        new Promise((resolve) => {
+          state.finishInstall = () => resolve(status());
+        }),
+    );
     ipcMain.handle("providers:harness:cancel", () => undefined);
     ipcMain.handle("providers:harness:remove", () => {
-      state.harnessRuntime = { status: "not_installed", version: "1.3.0", downloadBytes: 111_456_962, requiredBytes: 900_000_000, downloadHost: "dl.google.com" };
+      state.harnessRuntime = {
+        status: "not_installed",
+        version: "1.3.0",
+        downloadBytes: 111_456_962,
+        requiredBytes: 900_000_000,
+        downloadHost: "dl.google.com",
+      };
       return status();
     });
   }, runtime);
 }
 
 /** Push a runtime state the way the main process broadcasts it. */
-async function sendAgentRuntime(app: import("@playwright/test").ElectronApplication, runtime: HarnessRuntime, finishInstall = false) {
-  await app.evaluate(({ BrowserWindow }, { next, finish }) => {
-    const state = globalThis as unknown as { harnessRuntime: Record<string, unknown>; finishInstall?: () => void };
-    state.harnessRuntime = next;
-    const status = { providerId: "antigravity", publisher: "Google", runtime: next, signedIn: false, busy: false };
-    for (const window of BrowserWindow.getAllWindows()) window.webContents.send("providers:harness:changed", status);
-    if (finish) state.finishInstall?.();
-  }, { next: runtime, finish: finishInstall });
+async function sendAgentRuntime(
+  app: import("@playwright/test").ElectronApplication,
+  runtime: HarnessRuntime,
+  finishInstall = false,
+) {
+  await app.evaluate(
+    ({ BrowserWindow }, { next, finish }) => {
+      const state = globalThis as unknown as {
+        harnessRuntime: Record<string, unknown>;
+        finishInstall?: () => void;
+      };
+      state.harnessRuntime = next;
+      const status = {
+        providerId: "antigravity",
+        publisher: "Google",
+        runtime: next,
+        signedIn: false,
+        busy: false,
+      };
+      for (const window of BrowserWindow.getAllWindows())
+        window.webContents.send("providers:harness:changed", status);
+      if (finish) state.finishInstall?.();
+    },
+    { next: runtime, finish: finishInstall },
+  );
 }
 
 async function openAntigravitySetup(page: import("@playwright/test").Page) {
@@ -150,9 +185,14 @@ async function openAntigravitySetup(page: import("@playwright/test").Page) {
   return dialog;
 }
 
-test("agent runtime focus follows its actions when install finishes or fails in the background", async ({ aiden }) => {
+test("agent runtime focus follows its actions when install finishes or fails in the background", async ({
+  aiden,
+}) => {
   const { page, app } = aiden;
-  test.skip(process.platform !== "darwin" && process.platform !== "linux", "Antigravity is offered on macOS and Linux only.");
+  test.skip(
+    process.platform !== "darwin" && process.platform !== "linux",
+    "Antigravity is offered on macOS and Linux only.",
+  );
   await openProviders(page);
   await stubAgentRuntime(app, {
     status: "not_installed",
@@ -162,18 +202,36 @@ test("agent runtime focus follows its actions when install finishes or fails in 
     downloadHost: "dl.google.com",
   });
   const dialog = await openAntigravitySetup(page);
-  await expect(dialog).toContainText("Installing downloads 111 MB from dl.google.com and needs about 900 MB free.");
+  await expect(dialog).toContainText(
+    "Installing downloads 111 MB from dl.google.com and needs about 900 MB free.",
+  );
 
   // Install from the keyboard: the button disables, then unmounts when progress arrives.
   await dialog.getByRole("button", { name: "Install Google Antigravity" }).focus();
   await page.keyboard.press("Enter");
-  await sendAgentRuntime(app, { status: "installing", version: "1.3.0", phase: "downloading", receivedBytes: 55_000_000, totalBytes: 110_000_000 });
+  await sendAgentRuntime(app, {
+    status: "installing",
+    version: "1.3.0",
+    phase: "downloading",
+    receivedBytes: 55_000_000,
+    totalBytes: 110_000_000,
+  });
   const cancel = dialog.getByRole("button", { name: "Cancel installation" });
   await expect(cancel).toBeFocused();
   await expect(dialog.getByRole("progressbar")).toHaveAttribute("aria-valuenow", "50");
 
   // A failure arriving while Cancel has focus hands focus to Retry, not the dialog.
-  await sendAgentRuntime(app, { status: "failed", version: "1.3.0", message: "The download was interrupted.", downloadBytes: 1, requiredBytes: 2 }, true);
+  await sendAgentRuntime(
+    app,
+    {
+      status: "failed",
+      version: "1.3.0",
+      message: "The download was interrupted.",
+      downloadBytes: 1,
+      requiredBytes: 2,
+    },
+    true,
+  );
   const retry = dialog.getByRole("button", { name: "Retry installation" });
   await expect(retry).toBeFocused();
 
@@ -193,7 +251,6 @@ test("agent runtime focus follows its actions when install finishes or fails in 
   await expect(dialog).toBeVisible();
   await expect(remove).toBeFocused();
 });
-
 
 test("Settings connects from a key and keeps catalog updates in Advanced", async ({ aiden }) => {
   const { page } = aiden;

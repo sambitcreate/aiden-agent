@@ -147,7 +147,9 @@ function sameSecret(expected: string, actual: string | string[] | undefined): bo
 
 function mjpegPart(image: Buffer): Buffer {
   return Buffer.concat([
-    Buffer.from(`--${MJPEG_BOUNDARY}\r\nContent-Type: image/jpeg\r\nContent-Length: ${image.length}\r\n\r\n`),
+    Buffer.from(
+      `--${MJPEG_BOUNDARY}\r\nContent-Type: image/jpeg\r\nContent-Length: ${image.length}\r\n\r\n`,
+    ),
     image,
     Buffer.from("\r\n"),
   ]);
@@ -170,10 +172,19 @@ function closeFrame(code: number): Buffer {
 }
 
 function screenConfig(width: number, height: number): Buffer {
-  return wsFrame(0x2, Buffer.concat([Buffer.from([TAG_SCREEN_CONFIG]), Buffer.from(JSON.stringify({ width, height, orientation: "portrait" }))]));
+  return wsFrame(
+    0x2,
+    Buffer.concat([
+      Buffer.from([TAG_SCREEN_CONFIG]),
+      Buffer.from(JSON.stringify({ width, height, orientation: "portrait" })),
+    ]),
+  );
 }
 
-type ParsedFrame = { opcode: number; payload: Buffer; length: number } | { error: number } | undefined;
+type ParsedFrame =
+  | { opcode: number; payload: Buffer; length: number }
+  | { error: number }
+  | undefined;
 
 /** Reads one client frame from `buffer`: masked, final, and small. Undefined until it is complete. */
 function readFrame(buffer: Buffer): ParsedFrame {
@@ -204,21 +215,29 @@ function readFrame(buffer: Buffer): ParsedFrame {
 function parseJson(payload: Buffer): Record<string, unknown> | undefined {
   try {
     const value: unknown = JSON.parse(payload.subarray(1).toString("utf8"));
-    return value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : undefined;
+    return value && typeof value === "object" && !Array.isArray(value)
+      ? (value as Record<string, unknown>)
+      : undefined;
   } catch {
     return undefined;
   }
 }
 
 function unit(value: unknown): number | undefined {
-  return typeof value === "number" && Number.isFinite(value) ? Math.min(1, Math.max(0, value)) : undefined;
+  return typeof value === "number" && Number.isFinite(value)
+    ? Math.min(1, Math.max(0, value))
+    : undefined;
 }
 
 function finite(value: unknown, limit: number): number | undefined {
-  return typeof value === "number" && Number.isFinite(value) ? Math.min(limit, Math.max(-limit, value)) : undefined;
+  return typeof value === "number" && Number.isFinite(value)
+    ? Math.min(limit, Math.max(-limit, value))
+    : undefined;
 }
 
-export async function startBotComputerViewerHub(options: BotComputerViewerHubOptions): Promise<BotComputerViewerHub> {
+export async function startBotComputerViewerHub(
+  options: BotComputerViewerHubOptions,
+): Promise<BotComputerViewerHub> {
   const frameIntervalMs = options.frameIntervalMs ?? 100;
   const jpegQuality = options.jpegQuality ?? 70;
   const maxFrameWidth = options.maxFrameWidth ?? 2_560;
@@ -312,7 +331,13 @@ export async function startBotComputerViewerHub(options: BotComputerViewerHubOpt
 
   const sendPart = (target: Device, client: MjpegClient) => {
     const latest = target.latest;
-    if (!latest || client.blocked || client.sentVersion === latest.version || client.response.destroyed) return;
+    if (
+      !latest ||
+      client.blocked ||
+      client.sentVersion === latest.version ||
+      client.response.destroyed
+    )
+      return;
     client.sentVersion = latest.version;
     if (!client.response.write(latest.part)) {
       // A slow viewer skips frames rather than buffering them; it gets the newest once drained.
@@ -325,7 +350,8 @@ export async function startBotComputerViewerHub(options: BotComputerViewerHubOpt
   };
 
   const scheduleFrame = (target: Device) => {
-    if (closed || target.encoding || target.frameTimer || target.mjpeg.size === 0 || !target.dirty) return;
+    if (closed || target.encoding || target.frameTimer || target.mjpeg.size === 0 || !target.dirty)
+      return;
     const wait = Math.max(0, target.lastFrameAt + frameIntervalMs - now());
     target.frameTimer = setTimeout(() => {
       target.frameTimer = undefined;
@@ -381,11 +407,15 @@ export async function startBotComputerViewerHub(options: BotComputerViewerHubOpt
 
   async function handleRequest(request: IncomingMessage, response: ServerResponse) {
     const answer = (status: number, message: string) => {
-      response.writeHead(status, { "content-type": "text/plain; charset=utf-8", "cache-control": "no-store" });
+      response.writeHead(status, {
+        "content-type": "text/plain; charset=utf-8",
+        "cache-control": "no-store",
+      });
       response.end(message);
     };
     if (forbidden(request)) return answer(403, "Forbidden");
-    if (request.method !== "GET" && request.method !== "HEAD") return answer(405, "Method Not Allowed");
+    if (request.method !== "GET" && request.method !== "HEAD")
+      return answer(405, "Method Not Allowed");
     const rawPath = (request.url ?? "").split("?", 1)[0];
     const match = STREAM_PATH.exec(rawPath);
     const target = deviceFor(match?.[1]);
@@ -427,7 +457,11 @@ export async function startBotComputerViewerHub(options: BotComputerViewerHubOpt
     socket.destroy();
   };
 
-  function enqueue(target: Device, input: InputClient, run: (screen: BotComputerLiveScreen) => Promise<void>) {
+  function enqueue(
+    target: Device,
+    input: InputClient,
+    run: (screen: BotComputerLiveScreen) => Promise<void>,
+  ) {
     input.queue = input.queue
       .then(async () => {
         // Input queued behind a run that has since ended goes nowhere.
@@ -481,7 +515,12 @@ export async function startBotComputerViewerHub(options: BotComputerViewerHubOpt
       const phase = body.type;
       const x = unit(body.x);
       const y = unit(body.y);
-      if ((phase !== "begin" && phase !== "move" && phase !== "end") || x === undefined || y === undefined) return;
+      if (
+        (phase !== "begin" && phase !== "move" && phase !== "end") ||
+        x === undefined ||
+        y === undefined
+      )
+        return;
       if (phase === "begin") {
         if (!personDrives(target)) {
           input.swallowTouch = true;
@@ -517,7 +556,12 @@ export async function startBotComputerViewerHub(options: BotComputerViewerHubOpt
     if (tag === MSG_KEY) {
       const phase = body.type;
       const usage = body.usage;
-      if ((phase !== "down" && phase !== "up") || typeof usage !== "number" || !Number.isInteger(usage)) return;
+      if (
+        (phase !== "down" && phase !== "up") ||
+        typeof usage !== "number" ||
+        !Number.isInteger(usage)
+      )
+        return;
       const keysym = keysymForHidUsage(usage);
       if (keysym === undefined) return;
       if (phase === "down") {
@@ -584,7 +628,8 @@ export async function startBotComputerViewerHub(options: BotComputerViewerHubOpt
     }
     const [rawPath, query = ""] = (request.url ?? "").split("?", 2);
     const devicesNamed = new URLSearchParams(query).getAll("device");
-    const target = rawPath === SOCKET_PATH && devicesNamed.length === 1 ? deviceFor(devicesNamed[0]) : undefined;
+    const target =
+      rawPath === SOCKET_PATH && devicesNamed.length === 1 ? deviceFor(devicesNamed[0]) : undefined;
     if (!target) return refuseUpgrade(socket, 404, "Not Found");
     let screen: BotComputerLiveScreen;
     try {
@@ -594,7 +639,8 @@ export async function startBotComputerViewerHub(options: BotComputerViewerHubOpt
       return refuseUpgrade(socket, 503, "Service Unavailable");
     }
     if (socket.destroyed) return;
-    if (devices.get(target.vmName) !== target) return refuseUpgrade(socket, 503, "Service Unavailable");
+    if (devices.get(target.vmName) !== target)
+      return refuseUpgrade(socket, 503, "Service Unavailable");
     const accept = createHash("sha1").update(`${key}${WS_GUID}`).digest("base64");
     socket.write(
       `HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: ${accept}\r\n\r\n`,
@@ -624,7 +670,10 @@ export async function startBotComputerViewerHub(options: BotComputerViewerHubOpt
       if (!target.inputs.delete(input)) return;
       // Only the person's own presses are lifted (while the Bot drives they never reached the
       // computer), and only on a run that is still current.
-      if (devices.get(target.vmName) === target && options.control.controller(target.botId) === "person") {
+      if (
+        devices.get(target.vmName) === target &&
+        options.control.controller(target.botId) === "person"
+      ) {
         releaseHeld(target, input);
       }
       viewersChanged(target);
@@ -700,7 +749,10 @@ export async function startBotComputerViewerHub(options: BotComputerViewerHubOpt
 
   return {
     origin: `http://127.0.0.1:${port}`,
-    viewers: (botId) => [...devices.values()].filter((target) => target.botId === botId).reduce((sum, target) => sum + viewerCount(target), 0),
+    viewers: (botId) =>
+      [...devices.values()]
+        .filter((target) => target.botId === botId)
+        .reduce((sum, target) => sum + viewerCount(target), 0),
     closeVm,
     close: () =>
       new Promise<void>((resolve) => {

@@ -16,24 +16,78 @@ import {
 test("main's projection of every install state survives the renderer parser", () => {
   const states = [
     { status: "unsupported", reason: "No build for this computer." },
-    { status: "not_installed", version: "1.3.0", downloadBytes: 111_456_962, requiredBytes: 900_000_000 },
-    { status: "installing", version: "1.3.0", progress: { phase: "downloading", receivedBytes: 10, totalBytes: 20 } },
+    {
+      status: "not_installed",
+      version: "1.3.0",
+      downloadBytes: 111_456_962,
+      requiredBytes: 900_000_000,
+    },
+    {
+      status: "installing",
+      version: "1.3.0",
+      progress: { phase: "downloading", receivedBytes: 10, totalBytes: 20 },
+    },
     { status: "installed", version: "1.3.0", runtimeDir: "/private/path" },
-    { status: "update_available", installedVersion: "1.2.1", version: "1.3.0", downloadBytes: 1, requiredBytes: 2 },
-    { status: "failed", version: "1.3.0", message: "Disk full.", downloadBytes: 1, requiredBytes: 2 },
+    {
+      status: "update_available",
+      installedVersion: "1.2.1",
+      version: "1.3.0",
+      downloadBytes: 1,
+      requiredBytes: 2,
+    },
+    {
+      status: "failed",
+      version: "1.3.0",
+      message: "Disk full.",
+      downloadBytes: 1,
+      requiredBytes: 2,
+    },
   ] as const;
   for (const state of states) {
-    const parsed = parseAcpHarnessStatus({ providerId: "antigravity", runtime: projectRuntime(state), signedIn: false, busy: false });
+    const parsed = parseAcpHarnessStatus({
+      providerId: "antigravity",
+      runtime: projectRuntime(state),
+      signedIn: false,
+      busy: false,
+    });
     assert.equal(parsed?.runtime.status, state.status);
-    assert.equal(JSON.stringify(parsed).includes("/private/path"), false, "local paths never reach the renderer");
+    assert.equal(
+      JSON.stringify(parsed).includes("/private/path"),
+      false,
+      "local paths never reach the renderer",
+    );
   }
 });
 
 test("the parser rejects malformed or unknown status", () => {
   assert.equal(parseAcpHarnessStatus(null), undefined);
-  assert.equal(parseAcpHarnessStatus({ providerId: "Antigravity!", runtime: { status: "installed" }, signedIn: true, busy: false }), undefined);
-  assert.equal(parseAcpHarnessStatus({ providerId: "antigravity", runtime: { status: "exploded" }, signedIn: true, busy: false }), undefined);
-  assert.equal(parseAcpHarnessStatus({ providerId: "antigravity", runtime: { status: "installed" }, signedIn: "yes", busy: false }), undefined);
+  assert.equal(
+    parseAcpHarnessStatus({
+      providerId: "Antigravity!",
+      runtime: { status: "installed" },
+      signedIn: true,
+      busy: false,
+    }),
+    undefined,
+  );
+  assert.equal(
+    parseAcpHarnessStatus({
+      providerId: "antigravity",
+      runtime: { status: "exploded" },
+      signedIn: true,
+      busy: false,
+    }),
+    undefined,
+  );
+  assert.equal(
+    parseAcpHarnessStatus({
+      providerId: "antigravity",
+      runtime: { status: "installed" },
+      signedIn: "yes",
+      busy: false,
+    }),
+    undefined,
+  );
   const parsed = parseAcpHarnessStatus({
     providerId: "antigravity",
     runtime: { status: "installing", phase: "teleporting", receivedBytes: -1 },
@@ -47,12 +101,24 @@ test("summaries describe sizes and progress in plain terms", () => {
   assert.equal(formatHarnessBytes(111_456_962), "111 MB");
   assert.equal(formatHarnessBytes(1_234_000_000), "1.2 GB");
   assert.equal(
-    harnessRuntimeSummary({ status: "installing", phase: "downloading", receivedBytes: 50_000_000, totalBytes: 111_000_000 }),
+    harnessRuntimeSummary({
+      status: "installing",
+      phase: "downloading",
+      receivedBytes: 50_000_000,
+      totalBytes: 111_000_000,
+    }),
     "Downloading 50 MB of 111 MB…",
   );
-  assert.equal(harnessRuntimeSummary({ status: "installing", phase: "validating" }), "Starting it once to confirm it works…");
   assert.equal(
-    harnessRuntimeSummary({ status: "not_installed", downloadBytes: 111_456_962, downloadHost: "dl.google.com" }),
+    harnessRuntimeSummary({ status: "installing", phase: "validating" }),
+    "Starting it once to confirm it works…",
+  );
+  assert.equal(
+    harnessRuntimeSummary({
+      status: "not_installed",
+      downloadBytes: 111_456_962,
+      downloadHost: "dl.google.com",
+    }),
     "Not installed.",
   );
 });
@@ -61,14 +127,23 @@ test("the publisher and download host reach the renderer only as plain names", (
   const parsed = parseAcpHarnessStatus({
     providerId: "antigravity",
     publisher: "Google",
-    runtime: projectRuntime({ status: "not_installed", version: "1.3.0", downloadBytes: 1, requiredBytes: 2 }, "dl.google.com"),
+    runtime: projectRuntime(
+      { status: "not_installed", version: "1.3.0", downloadBytes: 1, requiredBytes: 2 },
+      "dl.google.com",
+    ),
     signedIn: false,
     busy: false,
   });
   assert.equal(parsed?.publisher, "Google");
   assert.equal(parsed?.runtime.downloadHost, "dl.google.com");
   // Anything that is not a bare host name (a URL, a path, credentials) is dropped.
-  for (const downloadHost of ["https://dl.google.com/x.zip", "user@dl.google.com", "dl.google.com/agy", "", 42]) {
+  for (const downloadHost of [
+    "https://dl.google.com/x.zip",
+    "user@dl.google.com",
+    "dl.google.com/agy",
+    "",
+    42,
+  ]) {
     const rejected = parseAcpHarnessStatus({
       providerId: "antigravity",
       runtime: { status: "not_installed", downloadHost },
@@ -78,8 +153,13 @@ test("the publisher and download host reach the renderer only as plain names", (
     assert.equal(rejected?.runtime.downloadHost, undefined, String(downloadHost));
   }
   assert.equal(
-    parseAcpHarnessStatus({ providerId: "antigravity", publisher: "x".repeat(65), runtime: { status: "installed" }, signedIn: false, busy: false })
-      ?.publisher,
+    parseAcpHarnessStatus({
+      providerId: "antigravity",
+      publisher: "x".repeat(65),
+      runtime: { status: "installed" },
+      signedIn: false,
+      busy: false,
+    })?.publisher,
     undefined,
   );
 });
@@ -88,16 +168,31 @@ test("unattended surfaces never inherit an agent-backed last-used provider", () 
   assert.equal(unattendedFallbackProviderId("antigravity"), undefined);
   assert.equal(unattendedFallbackProviderId("openai"), "openai");
   assert.equal(unattendedFallbackProviderId(undefined), undefined);
-  assert.match(acpHarnessUnavailableReason("antigravity") ?? "", /^Google Antigravity runs only in chats/u);
+  assert.match(
+    acpHarnessUnavailableReason("antigravity") ?? "",
+    /^Google Antigravity runs only in chats/u,
+  );
   assert.equal(acpHarnessUnavailableReason("openai"), undefined);
 });
 
 test("the sign-in hint tells the user what the runtime still needs, and only that", () => {
-  assert.equal(harnessSignInHint({ status: "not_installed" }), "Install the runtime above before signing in.");
-  assert.equal(harnessSignInHint({ status: "failed", message: "Disk full." }), "Install the runtime above before signing in.");
+  assert.equal(
+    harnessSignInHint({ status: "not_installed" }),
+    "Install the runtime above before signing in.",
+  );
+  assert.equal(
+    harnessSignInHint({ status: "failed", message: "Disk full." }),
+    "Install the runtime above before signing in.",
+  );
   // There is no Install button to point at in these states.
-  assert.equal(harnessSignInHint({ status: "update_available" }), "Update the runtime above before signing in.");
-  assert.equal(harnessSignInHint({ status: "installing", phase: "extracting" }), "You can sign in when the installation finishes.");
+  assert.equal(
+    harnessSignInHint({ status: "update_available" }),
+    "Update the runtime above before signing in.",
+  );
+  assert.equal(
+    harnessSignInHint({ status: "installing", phase: "extracting" }),
+    "You can sign in when the installation finishes.",
+  );
   assert.equal(
     harnessSignInHint({ status: "unsupported", message: "No build for this computer." }),
     "Sign-in needs the runtime, which isn't available for this computer.",
@@ -123,7 +218,12 @@ test("Assistant and Bot chats explain up front that an agent-backed model cannot
 });
 
 test("a signed-out agent model explains the surface first, then asks for a sign-in, never an API key", () => {
-  const signedOut = { id: "antigravity", label: "Google Antigravity", hasKey: false, needsKey: true };
+  const signedOut = {
+    id: "antigravity",
+    label: "Google Antigravity",
+    hasKey: false,
+    needsKey: true,
+  };
   // Signing in would not help in an Assistant chat, so that reason wins.
   assert.equal(
     acpHarnessReadinessMessage(signedOut, "assistant"),
@@ -135,5 +235,11 @@ test("a signed-out agent model explains the surface first, then asks for a sign-
   );
   assert.equal(acpHarnessReadinessMessage({ ...signedOut, hasKey: true }, undefined), undefined);
   // Other providers keep the composer's ordinary API-key copy.
-  assert.equal(acpHarnessReadinessMessage({ id: "openai", label: "OpenAI", hasKey: false, needsKey: true }, "assistant"), undefined);
+  assert.equal(
+    acpHarnessReadinessMessage(
+      { id: "openai", label: "OpenAI", hasKey: false, needsKey: true },
+      "assistant",
+    ),
+    undefined,
+  );
 });

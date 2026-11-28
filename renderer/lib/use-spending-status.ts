@@ -30,7 +30,8 @@ export function useSpendingStatus(
     read();
     reread.current = read;
     const unsubscribe = spendingApi.onChanged((event) => {
-      if (event.ownerKind === ownerKind && (event.ownerId === ownerId || event.ownerId === "*")) read();
+      if (event.ownerKind === ownerKind && (event.ownerId === ownerId || event.ownerId === "*"))
+        read();
     });
     return () => {
       current = false;

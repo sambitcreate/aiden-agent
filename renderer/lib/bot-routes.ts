@@ -86,7 +86,11 @@ function pathnameOf(href: string): string {
  * other Bots) and ends when the person leaves Bots; an entry that says either
  * way itself keeps what it says.
  */
-function nextBotListState<T extends object>(current: HistoryStateLike, pathname: string, state: T): T {
+function nextBotListState<T extends object>(
+  current: HistoryStateLike,
+  pathname: string,
+  state: T,
+): T {
   if (!isBotsPath(pathname)) {
     if (!("aidenBotList" in state)) return state;
     const { aidenBotList: _dropped, ...rest } = state as T & { aidenBotList?: unknown };
@@ -102,10 +106,15 @@ function nextBotListState<T extends object>(current: HistoryStateLike, pathname:
  * so the router compares the state the entry will really have: opening the
  * Bot that's already open stays a no-op instead of pushing a duplicate entry.
  */
-export function carryBotListRequest<T extends Pick<AnyRouter, "history" | "commitLocation">>(router: T): T {
+export function carryBotListRequest<T extends Pick<AnyRouter, "history" | "commitLocation">>(
+  router: T,
+): T {
   const commit = router.commitLocation;
   router.commitLocation = (next) =>
-    commit({ ...next, state: nextBotListState(router.history.location.state, next.pathname, next.state) });
+    commit({
+      ...next,
+      state: nextBotListState(router.history.location.state, next.pathname, next.state),
+    });
   return router;
 }
 
@@ -117,7 +126,10 @@ export function carryBotListRequest<T extends Pick<AnyRouter, "history" | "commi
  * A notification or redirect that opens a Bot from inside an ask keeps the
  * list, since the ask carries through Bots.
  */
-export function sidebarShowsBotList(location: { pathname: string; state?: HistoryStateLike }, inboxView: boolean): boolean {
+export function sidebarShowsBotList(
+  location: { pathname: string; state?: HistoryStateLike },
+  inboxView: boolean,
+): boolean {
   if (!isBotsPath(location.pathname)) return false;
   return !inboxView || location.state?.aidenBotList === true;
 }

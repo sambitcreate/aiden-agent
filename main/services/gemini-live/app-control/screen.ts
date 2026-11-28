@@ -13,7 +13,11 @@
 //   `focus`, then what is visible, and the rest is counted as omitted.
 
 import type { LiveGuard } from "../../../../renderer/shared/live-app-control.js";
-import type { AidenContentKind, AidenContentRegionFacts, AidenElementFacts } from "./page-action.js";
+import type {
+  AidenContentKind,
+  AidenContentRegionFacts,
+  AidenElementFacts,
+} from "./page-action.js";
 
 export interface CdpAxValue {
   type?: string;
@@ -223,20 +227,27 @@ export function buildAidenScreen(input: {
     if (!node) continue;
     let dialog = entry.dialog;
     let region = entry.region;
-    const content = node.backendDOMNodeId !== undefined ? regions.get(node.backendDOMNodeId) : undefined;
+    const content =
+      node.backendDOMNodeId !== undefined ? regions.get(node.backendDOMNodeId) : undefined;
     if (content) {
       // Chat and page text is data, not instructions: Live sees one line, never the text.
       if (!summarized.has(content.group)) {
         summarized.add(content.group);
         const label = AIDEN_CONTENT_SUMMARIES[content.kind](content.count);
-        items.push({ order: order++, kind: "orientation", line: () => label, score: 20 + (dialog ? 100 : 0) });
+        items.push({
+          order: order++,
+          kind: "orientation",
+          line: () => label,
+          score: 20 + (dialog ? 100 : 0),
+        });
       }
       continue;
     }
     if (!node.ignored) {
       const nodeRole = axRole(node);
       const name = clip(text(node.name), MAX_NAME);
-      const dom = node.backendDOMNodeId !== undefined ? facts.get(node.backendDOMNodeId) : undefined;
+      const dom =
+        node.backendDOMNodeId !== undefined ? facts.get(node.backendDOMNodeId) : undefined;
       // Inside chat or page content that slipped past its region root: never read, never descend.
       if (dom?.content) continue;
       const visible = dom?.visible === true;
@@ -266,14 +277,20 @@ export function buildAidenScreen(input: {
         });
       } else if (nodeRole === "alert" && name) {
         const label = `! ${name}`;
-        items.push({ order: order++, kind: "orientation", line: () => label, score: visible ? 20 : 0 });
+        items.push({
+          order: order++,
+          kind: "orientation",
+          line: () => label,
+          score: visible ? 20 : 0,
+        });
       } else if (INTERACTIVE_ROLES.has(nodeRole) && dom && !dom.content) {
         const guard = dom.guard;
         const nodeStates = states(node, nodeRole);
         if (nodeStates.includes("focused")) focusedName = name || nodeRole;
         // Credential and API key fields live in "you" regions; their text never leaves.
         const hideValue = dom.secret || (guard === "you" && TEXT_ROLES.has(nodeRole));
-        const rawValue = VALUE_ROLES.has(nodeRole) && !hideValue ? clip(text(node.value), MAX_VALUE) : "";
+        const rawValue =
+          VALUE_ROLES.has(nodeRole) && !hideValue ? clip(text(node.value), MAX_VALUE) : "";
         const value = rawValue && rawValue !== name ? rawValue : "";
         const signature = `${nodeRole}\u0000${name}`;
         const marks = [
@@ -321,10 +338,16 @@ export function buildAidenScreen(input: {
   let elementCount = 0;
   let orientationCount = 0;
   const chosen = new Set<number>();
-  const ranked = [...items].sort((left, right) => right.score - left.score || left.order - right.order);
+  const ranked = [...items].sort(
+    (left, right) => right.score - left.score || left.order - right.order,
+  );
   for (const item of ranked) {
     if (item.kind === "element" && elementCount >= limits.elements) continue;
-    if (item.kind === "orientation" && (orientationCount >= MAX_ORIENTATION_LINES || item.score < 10)) continue;
+    if (
+      item.kind === "orientation" &&
+      (orientationCount >= MAX_ORIENTATION_LINES || item.score < 10)
+    )
+      continue;
     // Numbers are at most three digits under the element limit.
     const cost = item.line(limits.elements).length + 1;
     if (characters + cost > limits.characters) continue;
@@ -354,7 +377,9 @@ export function buildAidenScreen(input: {
   }
   if (elements.length === 0) lines.push("Nothing to press or type in is showing.");
   if (omitted > 0) {
-    lines.push(`${omitted} more controls are not listed. Look again with a focus to narrow it down.`);
+    lines.push(
+      `${omitted} more controls are not listed. Look again with a focus to narrow it down.`,
+    );
   }
   return { text: lines.join("\n"), elements, omitted, signatures };
 }

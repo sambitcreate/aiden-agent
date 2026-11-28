@@ -23,15 +23,23 @@ export interface ComposioCalendarTransportContext {
 export interface ComposioCalendarHostTransport {
   /** Must validate installed executor/upstream schemas and real account routing.
    * Saved fingerprints and inspection files never establish this authority. */
-  prepare(context: ComposioCalendarTransportContext, expected?: ComposioCalendarContract): Promise<{
+  prepare(
+    context: ComposioCalendarTransportContext,
+    expected?: ComposioCalendarContract,
+  ): Promise<{
     contract: ComposioCalendarContract;
     port: ComposioCalendarReadPort;
   }>;
 }
 let installed: ComposioCalendarHostTransport | undefined;
 /** Host code installs only after reviewed real read/schema/account acceptance. */
-export function installComposioCalendarHostTransport(transport: ComposioCalendarHostTransport): void {
-  if (installed && installed !== transport) throw new Error("The Calendar host transport is already installed.");
+export function installComposioCalendarHostTransport(
+  transport: ComposioCalendarHostTransport,
+): void {
+  if (installed && installed !== transport)
+    throw new Error("The Calendar host transport is already installed.");
   installed = transport;
 }
-export function composioCalendarHostTransport(): ComposioCalendarHostTransport | undefined { return installed; }
+export function composioCalendarHostTransport(): ComposioCalendarHostTransport | undefined {
+  return installed;
+}

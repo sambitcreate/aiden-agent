@@ -106,7 +106,13 @@ test("shutdown still waits for a cancelled attempt after the same job is reclaim
   const job = await service.enqueue(input, "actor", "job");
   const first = worker.tick();
   await until("the first attempt to run", () => executions === 1);
-  f.store.control({ actor: "actor", key: "cancel", jobId: job.id, expectedRevision: f.store.get(job.id).revision, action: "cancel" });
+  f.store.control({
+    actor: "actor",
+    key: "cancel",
+    jobId: job.id,
+    expectedRevision: f.store.get(job.id).revision,
+    action: "cancel",
+  });
   worker.notifyControl(job.id);
   // The cancel released the lease, so a later tick reclaims the job to reconcile it.
   await worker.tick();

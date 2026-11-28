@@ -64,7 +64,10 @@ export function BotPanelActivity({
     return (
       <div role="status" aria-label="Loading activity" className="flex flex-col gap-2 px-1">
         {[0, 1, 2].map((row) => (
-          <span key={row} className="h-3 w-full rounded-full bg-control motion-safe:animate-pulse" />
+          <span
+            key={row}
+            className="h-3 w-full rounded-full bg-control motion-safe:animate-pulse"
+          />
         ))}
       </div>
     );

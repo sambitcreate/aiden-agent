@@ -35,5 +35,11 @@ export function desktopChatExecutionOptions(
   onTurnAccepted: () => void,
   onTurnSettings?: (snapshot: TurnSettingsSnapshot) => void,
 ) {
-  return { allowSubagents: true, usageSource: "chat" as const, turnId, onTurnAccepted, onTurnSettings };
+  return {
+    allowSubagents: true,
+    usageSource: "chat" as const,
+    turnId,
+    onTurnAccepted,
+    onTurnSettings,
+  };
 }

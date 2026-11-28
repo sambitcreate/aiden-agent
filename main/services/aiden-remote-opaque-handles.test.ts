@@ -39,14 +39,38 @@ test("opaque handles store only a digest and bind identity, root policy, path id
   assert.match(token, /^file_[A-Za-z0-9_-]{43}$/);
   assert.equal(store.storedTokenMaterialForTesting().includes(token), false);
   assert.deepEqual(store.resolve(token, "file", claims(), { now: 1_000 }), claims());
-  rejectsCode(() => store.resolve(token, "file", claims({ deviceId: "device-2" }), { now: 1_000 }), "handle_wrong_device");
-  rejectsCode(() => store.resolve(token, "file", claims({ workspaceId: "workspace-2" }), { now: 1_000 }), "root_policy_changed");
-  rejectsCode(() => store.resolve(token, "file", claims({ workspaceId: undefined }), { now: 1_000 }), "root_policy_changed");
-  rejectsCode(() => store.resolve(token, "file", claims({ policyRevision: "policy-2" }), { now: 1_000 }), "root_policy_changed");
-  rejectsCode(() => store.resolve(token, "file", claims({ filesystemInode: "inode-2" }), { now: 1_000 }), "filesystem_identity_changed");
-  rejectsCode(() => store.resolve(token, "file", claims({ canonicalPath: "/outside/file.swift" }), { now: 1_000 }), "path_outside_root");
+  rejectsCode(
+    () => store.resolve(token, "file", claims({ deviceId: "device-2" }), { now: 1_000 }),
+    "handle_wrong_device",
+  );
+  rejectsCode(
+    () => store.resolve(token, "file", claims({ workspaceId: "workspace-2" }), { now: 1_000 }),
+    "root_policy_changed",
+  );
+  rejectsCode(
+    () => store.resolve(token, "file", claims({ workspaceId: undefined }), { now: 1_000 }),
+    "root_policy_changed",
+  );
+  rejectsCode(
+    () => store.resolve(token, "file", claims({ policyRevision: "policy-2" }), { now: 1_000 }),
+    "root_policy_changed",
+  );
+  rejectsCode(
+    () => store.resolve(token, "file", claims({ filesystemInode: "inode-2" }), { now: 1_000 }),
+    "filesystem_identity_changed",
+  );
+  rejectsCode(
+    () =>
+      store.resolve(token, "file", claims({ canonicalPath: "/outside/file.swift" }), {
+        now: 1_000,
+      }),
+    "path_outside_root",
+  );
   rejectsCode(() => store.resolve(token, "file", claims(), { now: 2_000 }), "handle_expired");
-  rejectsCode(() => store.issue("file", claims({ workspaceId: undefined, expiresAt: 3_000 })), "handle_invalid");
+  rejectsCode(
+    () => store.issue("file", claims({ workspaceId: undefined, expiresAt: 3_000 })),
+    "handle_invalid",
+  );
 });
 
 test("filesystem inspection canonicalizes roots and rejects symlink escapes", async () => {
@@ -61,9 +85,15 @@ test("filesystem inspection canonicalizes roots and rejects symlink escapes", as
     const safe = await inspectAidenFilesystemIdentity(root, path.join(root, "safe.txt"));
     assert.equal(safe.canonicalPath.startsWith(`${safe.canonicalRootPath}${path.sep}`), true);
     await symlink(path.join(outside, "secret.txt"), path.join(root, "escape.txt"));
-    await assert.rejects(() => inspectAidenFilesystemIdentity(root, path.join(root, "escape.txt")), (error) => error instanceof AidenOpaqueHandleError && error.code === "path_outside_root");
+    await assert.rejects(
+      () => inspectAidenFilesystemIdentity(root, path.join(root, "escape.txt")),
+      (error) => error instanceof AidenOpaqueHandleError && error.code === "path_outside_root",
+    );
     await link(path.join(outside, "secret.txt"), path.join(root, "hardlink.txt"));
-    await assert.rejects(() => inspectAidenFilesystemIdentity(root, path.join(root, "hardlink.txt")), (error) => error instanceof AidenOpaqueHandleError && error.code === "path_outside_root");
+    await assert.rejects(
+      () => inspectAidenFilesystemIdentity(root, path.join(root, "hardlink.txt")),
+      (error) => error instanceof AidenOpaqueHandleError && error.code === "path_outside_root",
+    );
     const directoryIdentity = await inspectAidenFilesystemIdentity(root, root);
     assert.equal(directoryIdentity.kind, "directory");
   } finally {
@@ -73,25 +103,55 @@ test("filesystem inspection canonicalizes roots and rejects symlink escapes", as
 
 test("selection handles are atomic single-use even under concurrent consumers", async () => {
   const store = new AidenOpaqueHandleStore({ now: () => 1_000 });
-  const selectionClaims = claims({ workspaceId: undefined, snapshotId: undefined, kind: "directory" });
+  const selectionClaims = claims({
+    workspaceId: undefined,
+    snapshotId: undefined,
+    kind: "directory",
+  });
   const token = store.issue("sel", selectionClaims);
   const attempts = await Promise.allSettled([
-    Promise.resolve().then(() => store.consumeSelection(token, selectionClaims, () => "workspace-1", 1_000)),
-    Promise.resolve().then(() => store.consumeSelection(token, selectionClaims, () => "workspace-2", 1_000)),
+    Promise.resolve().then(() =>
+      store.consumeSelection(token, selectionClaims, () => "workspace-1", 1_000),
+    ),
+    Promise.resolve().then(() =>
+      store.consumeSelection(token, selectionClaims, () => "workspace-2", 1_000),
+    ),
   ]);
   assert.equal(attempts.filter((entry) => entry.status === "fulfilled").length, 1);
   assert.equal(attempts.filter((entry) => entry.status === "rejected").length, 1);
   const retryStore = new AidenOpaqueHandleStore({ now: () => 1_000 });
   const retryToken = retryStore.issue("sel", selectionClaims);
-  assert.throws(() => retryStore.consumeSelection(retryToken, selectionClaims, () => { throw new Error("workspace write failed"); }, 1_000), /workspace write failed/);
-  rejectsCode(() => retryStore.consumeSelection(retryToken, selectionClaims, () => "workspace-retried", 1_000), "handle_invalid");
+  assert.throws(
+    () =>
+      retryStore.consumeSelection(
+        retryToken,
+        selectionClaims,
+        () => {
+          throw new Error("workspace write failed");
+        },
+        1_000,
+      ),
+    /workspace write failed/,
+  );
+  rejectsCode(
+    () =>
+      retryStore.consumeSelection(retryToken, selectionClaims, () => "workspace-retried", 1_000),
+    "handle_invalid",
+  );
   const fileSelection = claims({ snapshotId: undefined, kind: "file" });
   const fileToken = retryStore.issue("sel", fileSelection);
-  rejectsCode(() => retryStore.consumeSelection(fileToken, fileSelection, () => "bad", 1_000), "handle_invalid");
+  rejectsCode(
+    () => retryStore.consumeSelection(fileToken, fileSelection, () => "bad", 1_000),
+    "handle_invalid",
+  );
 });
 
 test("selection transactions reject async callbacks before invocation and consume promise escape attempts", async () => {
-  const selectionClaims = claims({ workspaceId: undefined, snapshotId: undefined, kind: "directory" });
+  const selectionClaims = claims({
+    workspaceId: undefined,
+    snapshotId: undefined,
+    kind: "directory",
+  });
   const asyncStore = new AidenOpaqueHandleStore({ now: () => 1_000 });
   const asyncToken = asyncStore.issue("sel", selectionClaims);
   let invoked = false;
@@ -100,21 +160,33 @@ test("selection transactions reject async callbacks before invocation and consum
     return "workspace-async";
   };
   rejectsCode(
-    () => asyncStore.consumeSelection(asyncToken, selectionClaims, asyncMutation as unknown as () => never, 1_000),
+    () =>
+      asyncStore.consumeSelection(
+        asyncToken,
+        selectionClaims,
+        asyncMutation as unknown as () => never,
+        1_000,
+      ),
     "handle_invalid",
   );
   assert.equal(invoked, false);
-  assert.equal(asyncStore.consumeSelection(asyncToken, selectionClaims, () => "workspace-sync", 1_000), "workspace-sync");
+  assert.equal(
+    asyncStore.consumeSelection(asyncToken, selectionClaims, () => "workspace-sync", 1_000),
+    "workspace-sync",
+  );
 
   const escapedStore = new AidenOpaqueHandleStore({ now: () => 1_000 });
   const escapedToken = escapedStore.issue("sel", selectionClaims);
-  const promiseReturningMutation = (() => Promise.resolve("workspace-escaped")) as unknown as () => never;
+  const promiseReturningMutation = (() =>
+    Promise.resolve("workspace-escaped")) as unknown as () => never;
   rejectsCode(
-    () => escapedStore.consumeSelection(escapedToken, selectionClaims, promiseReturningMutation, 1_000),
+    () =>
+      escapedStore.consumeSelection(escapedToken, selectionClaims, promiseReturningMutation, 1_000),
     "handle_invalid",
   );
   rejectsCode(
-    () => escapedStore.consumeSelection(escapedToken, selectionClaims, () => "must-not-retry", 1_000),
+    () =>
+      escapedStore.consumeSelection(escapedToken, selectionClaims, () => "must-not-retry", 1_000),
     "handle_invalid",
   );
 });
@@ -131,7 +203,9 @@ test("opaque handle storage prunes consumed and expired entries and fails closed
   assert.doesNotThrow(() => store.issue("file", claims({ filesystemInode: "inode-3" })));
   now = 2_000;
   rejectsCode(() => store.resolve(second, "file", secondClaims, { now }), "handle_expired");
-  assert.doesNotThrow(() => store.issue("file", claims({ filesystemInode: "inode-4", expiresAt: 3_000 })));
+  assert.doesNotThrow(() =>
+    store.issue("file", claims({ filesystemInode: "inode-4", expiresAt: 3_000 })),
+  );
   assert.equal(store.storedTokenMaterialForTesting().length <= 2, true);
 });
 
@@ -141,29 +215,53 @@ test("failed identity inspection drains its other path lookup before releasing m
   const original = fsPromises.realpath;
   let release!: () => void;
   let failed!: () => void;
-  const held = new Promise<void>(resolve => { release = resolve; });
-  const failedLookup = new Promise<void>(resolve => { failed = resolve; });
+  const held = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const failedLookup = new Promise<void>((resolve) => {
+    failed = resolve;
+  });
   fsPromises.realpath = (async (...args: Parameters<typeof fsPromises.realpath>) => {
     if (args[0] === root) await held;
-    try { return await original(...args); }
-    catch (error) { failed(); throw error; }
+    try {
+      return await original(...args);
+    } catch (error) {
+      failed();
+      throw error;
+    }
   }) as typeof fsPromises.realpath;
   syncBuiltinESMExports();
-  t.after(() => { fsPromises.realpath = original; syncBuiltinESMExports(); });
+  t.after(() => {
+    fsPromises.realpath = original;
+    syncBuiltinESMExports();
+  });
   let settled = false;
-  const inspection = inspectAidenFilesystemIdentity(root, path.join(root, "missing")).finally(() => { settled = true; });
-  const rejection = assert.rejects(inspection, (error: unknown) => (error as NodeJS.ErrnoException).code === "ENOENT");
+  const inspection = inspectAidenFilesystemIdentity(root, path.join(root, "missing")).finally(
+    () => {
+      settled = true;
+    },
+  );
+  const rejection = assert.rejects(
+    inspection,
+    (error: unknown) => (error as NodeJS.ErrnoException).code === "ENOENT",
+  );
   try {
     await failedLookup;
-    await new Promise<void>(resolve => setImmediate(resolve));
+    await new Promise<void>((resolve) => setImmediate(resolve));
     assert.equal(settled, false, "failed candidate must not leave the root lookup detached");
-  } finally { release(); }
+  } finally {
+    release();
+  }
   await rejection;
 });
 
 test("one device cannot take the whole handle store from other paired devices", () => {
   const now = 1_000;
-  const store = new AidenOpaqueHandleStore({ maxEntries: 4, maxEntriesPerDevice: 2, now: () => now });
+  const store = new AidenOpaqueHandleStore({
+    maxEntries: 4,
+    maxEntriesPerDevice: 2,
+    now: () => now,
+  });
   const phone = (inode: string) => claims({ deviceId: "phone", filesystemInode: inode });
   store.issue("file", phone("1"), { listing: "phone:workspace" });
   store.issue("file", phone("2"), { listing: "phone:workspace" });
@@ -181,7 +279,11 @@ test("one device cannot take the whole handle store from other paired devices", 
 
 test("pressure reclamation prunes expired first, then superseded, then device-local lazy LRU while preserving protected and other-device handles", () => {
   let now = 1_000;
-  const store = new AidenOpaqueHandleStore({ maxEntries: 6, maxEntriesPerDevice: 5, now: () => now });
+  const store = new AidenOpaqueHandleStore({
+    maxEntries: 6,
+    maxEntriesPerDevice: 5,
+    now: () => now,
+  });
   const dev1 = (inode: string, extra: Partial<AidenOpaqueHandleClaims> = {}) =>
     claims({ deviceId: "device-1", filesystemInode: inode, expiresAt: 10_000, ...extra });
   const dev2 = (inode: string, extra: Partial<AidenOpaqueHandleClaims> = {}) =>
@@ -223,7 +325,10 @@ test("pressure reclamation prunes expired first, then superseded, then device-lo
     lazyPage: true,
   });
   // Navigating dirOlder moves it ahead of dirUntouched in LRU without making it immortal.
-  store.resolve(dirOlder, "file", dev1("dir-older", { kind: "directory" }), { now, navigation: true });
+  store.resolve(dirOlder, "file", dev1("dir-older", { kind: "directory" }), {
+    now,
+    navigation: true,
+  });
 
   // 1. Advance past expiringSoon (1,500): expired entry is pruned BEFORE supersededUnopened!
   now = 1_600;
@@ -256,7 +361,11 @@ test("pressure reclamation prunes expired first, then superseded, then device-lo
   assert.equal(store.claimsFor(saveReserved, "file").filesystemInode, "save-reserved");
 
   // 4. Continued pressure CAN still reclaim dirOlder (navigation did not make it immortal), while preserving device-2.
-  store.issue("file", dev1("next-1"), { listing: "lazy\u0000device-1\u0000ws\u0000r\u0000d3", generation: "gen-3", lazyPage: true });
+  store.issue("file", dev1("next-1"), {
+    listing: "lazy\u0000device-1\u0000ws\u0000r\u0000d3",
+    generation: "gen-3",
+    lazyPage: true,
+  });
   rejectsCode(() => store.claimsFor(dirOlder, "file"), "handle_invalid");
   assert.equal(store.claimsFor(otherDeviceHandle, "file").filesystemInode, "other-1");
   assert.equal(store.storedTokenMaterialForTesting().length <= 6, true);
@@ -264,18 +373,34 @@ test("pressure reclamation prunes expired first, then superseded, then device-lo
 
 test("retireGeneration retires only the targeted generation and batch assembly protects in-flight handles and rolls back failures", () => {
   const now = 1_000;
-  const store = new AidenOpaqueHandleStore({ maxEntries: 4, maxEntriesPerDevice: 4, now: () => now });
+  const store = new AidenOpaqueHandleStore({
+    maxEntries: 4,
+    maxEntriesPerDevice: 4,
+    now: () => now,
+  });
   const c = (inode: string, extra: Partial<AidenOpaqueHandleClaims> = {}) =>
     claims({ deviceId: "device-1", filesystemInode: inode, expiresAt: 10_000, ...extra });
 
   const scope = "lazy\u0000device-1\u0000ws\u0000r\u0000dir";
-  const gen1Open = store.issue("file", c("g1-open"), { listing: scope, generation: "gen-1", lazyPage: true });
-  const gen1Idle = store.issue("file", c("g1-idle"), { listing: scope, generation: "gen-1", lazyPage: true });
+  const gen1Open = store.issue("file", c("g1-open"), {
+    listing: scope,
+    generation: "gen-1",
+    lazyPage: true,
+  });
+  const gen1Idle = store.issue("file", c("g1-idle"), {
+    listing: scope,
+    generation: "gen-1",
+    lazyPage: true,
+  });
   store.resolve(gen1Open, "file", c("g1-open"), { now });
 
   // Start gen-2 on the same scope, then retire gen-1 explicitly: gen-2 stays active, gen1Open stays protected.
   store.supersedeListing(scope);
-  const gen2Live = store.issue("file", c("g2-live"), { listing: scope, generation: "gen-2", lazyPage: true });
+  const gen2Live = store.issue("file", c("g2-live"), {
+    listing: scope,
+    generation: "gen-2",
+    lazyPage: true,
+  });
   store.retireGeneration("gen-1");
   const sibling = store.issue("file", c("sib-1"), {
     listing: "lazy\u0000device-1\u0000ws\u0000r\u0000sib",
@@ -291,14 +416,23 @@ test("retireGeneration retires only the targeted generation and batch assembly p
   let b1 = "";
   let b2 = "";
   try {
-    b1 = failedBatch.issue("file", c("batch-1"), { listing: "lazy\u0000device-1\u0000ws\u0000r\u0000b", generation: "gen-b", lazyPage: true });
-    b2 = failedBatch.issue("file", c("batch-2"), { listing: "lazy\u0000device-1\u0000ws\u0000r\u0000b", generation: "gen-b", lazyPage: true });
+    b1 = failedBatch.issue("file", c("batch-1"), {
+      listing: "lazy\u0000device-1\u0000ws\u0000r\u0000b",
+      generation: "gen-b",
+      lazyPage: true,
+    });
+    b2 = failedBatch.issue("file", c("batch-2"), {
+      listing: "lazy\u0000device-1\u0000ws\u0000r\u0000b",
+      generation: "gen-b",
+      lazyPage: true,
+    });
     rejectsCode(
-      () => failedBatch.issue("cur", c("batch-cur", { kind: undefined, cursorOffset: 200 }), {
-        listing: "lazy\u0000device-1\u0000ws\u0000r\u0000b",
-        generation: "gen-b",
-        lazyPage: true,
-      }),
+      () =>
+        failedBatch.issue("cur", c("batch-cur", { kind: undefined, cursorOffset: 200 }), {
+          listing: "lazy\u0000device-1\u0000ws\u0000r\u0000b",
+          generation: "gen-b",
+          lazyPage: true,
+        }),
       "handle_capacity",
     );
   } finally {
@@ -318,7 +452,11 @@ test("retireGeneration retires only the targeted generation and batch assembly p
   let okFile = "";
   let okCursor = "";
   try {
-    okFile = okBatch.issue("file", c("ok-file"), { listing: "lazy\u0000device-1\u0000ws\u0000r\u0000ok", generation: "gen-ok", lazyPage: true });
+    okFile = okBatch.issue("file", c("ok-file"), {
+      listing: "lazy\u0000device-1\u0000ws\u0000r\u0000ok",
+      generation: "gen-ok",
+      lazyPage: true,
+    });
     okCursor = okBatch.issue("cur", c("ok-cur", { kind: undefined, cursorOffset: 200 }), {
       listing: "lazy\u0000device-1\u0000ws\u0000r\u0000ok",
       generation: "gen-ok",

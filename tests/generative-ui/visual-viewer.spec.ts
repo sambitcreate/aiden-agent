@@ -6,7 +6,10 @@ import type { Page } from "@playwright/test";
 import { compileAum } from "../../renderer/shared/aiden-ui/compile";
 import { parseChatUiVisualV1 } from "../../renderer/shared/aiden-ui/visual";
 import { AIDEN_UI_CATALOG_VERSION } from "../../renderer/shared/aiden-ui/types";
-import { buildVisualViewerDocument, type VisualViewerBundle } from "../../main/services/visual-viewer-document";
+import {
+  buildVisualViewerDocument,
+  type VisualViewerBundle,
+} from "../../main/services/visual-viewer-document";
 import { loadGenerativeUiHostLibraries } from "../../main/services/generative-ui-host-libraries";
 
 // Playwright's config loader resolves this ESM repo through the CommonJS
@@ -36,7 +39,12 @@ async function openDocument(page: Page, document: string): Promise<Loaded> {
   const requests: string[] = [];
   const entry = "https://viewer.invalid/";
   await page.route("**/*", (route) => {
-    if (route.request().url() === entry) return route.fulfill({ status: 200, contentType: "text/html; charset=utf-8", body: document });
+    if (route.request().url() === entry)
+      return route.fulfill({
+        status: 200,
+        contentType: "text/html; charset=utf-8",
+        body: document,
+      });
     requests.push(route.request().url());
     return route.abort();
   });
@@ -45,14 +53,18 @@ async function openDocument(page: Page, document: string): Promise<Loaded> {
     if (window.top !== window) return;
     const sent: string[] = [];
     Object.defineProperty(window, "__viewerMessages", { value: sent });
-    Object.defineProperty(window, "AidenVisualBridge", { value: { postMessage: (json: string) => sent.push(json) } });
+    Object.defineProperty(window, "AidenVisualBridge", {
+      value: { postMessage: (json: string) => sent.push(json) },
+    });
   });
   await page.goto(entry);
   return {
     requests,
     messages: () =>
       page.evaluate(() =>
-        ((window as unknown as { __viewerMessages: string[] }).__viewerMessages ?? []).map((json) => JSON.parse(json) as Record<string, unknown>),
+        ((window as unknown as { __viewerMessages: string[] }).__viewerMessages ?? []).map(
+          (json) => JSON.parse(json) as Record<string, unknown>,
+        ),
       ),
   };
 }
@@ -75,7 +87,9 @@ function uiVisual(markup: string) {
   return visual;
 }
 
-test("a native visual draws its chart offline in the phone's dark theme and hands follow-ups to the host", async ({ page }) => {
+test("a native visual draws its chart offline in the phone's dark theme and hands follow-ups to the host", async ({
+  page,
+}) => {
   const visual = uiVisual(`<Visual title="Weekly active users">
   <Chart kind="bar" data={$data.weeks} x="week" y="users" height={220} label="Users per week" />
   <Button variant="accent" action={sendPrompt("Break down W3")}>Drill into W3</Button>
@@ -100,11 +114,15 @@ test("a native visual draws its chart offline in the phone's dark theme and hand
   await expect(page.getByRole("button", { name: "Send" })).toHaveCount(0);
   // Links go to the phone, which asks before opening them.
   await page.getByRole("button", { name: "Open report" }).click();
-  await expect.poll(loaded.messages).toContainEqual({ type: "openUrl", url: "https://example.com/report" });
+  await expect
+    .poll(loaded.messages)
+    .toContainEqual({ type: "openUrl", url: "https://example.com/report" });
   expect(loaded.requests).toEqual([]);
 });
 
-test("an HTML visual runs sandboxed with its inlined library, takes the phone's theme, and its prompts are admitted once", async ({ page }) => {
+test("an HTML visual runs sandboxed with its inlined library, takes the phone's theme, and its prompts are admitted once", async ({
+  page,
+}) => {
   const html = `<canvas id="c" width="300" height="150"></canvas>
 <p id="scheme"></p>
 <script>
@@ -130,7 +148,9 @@ test("an HTML visual runs sandboxed with its inlined library, takes the phone's 
   const guest = page.frameLocator("iframe");
   await expect(guest.locator("#scheme")).toHaveText("dark");
   await expect(guest.locator("body")).toHaveAttribute("data-parent", "blocked");
-  expect(await page.frames()[1]!.evaluate(() => typeof (window as unknown as { Chart?: unknown }).Chart)).toBe("function");
+  expect(
+    await page.frames()[1]!.evaluate(() => typeof (window as unknown as { Chart?: unknown }).Chart),
+  ).toBe("function");
   expect(await page.frames()[1]!.evaluate(() => "AidenVisualBridge" in window)).toBe(false);
 
   await expect.poll(loaded.messages).toContainEqual({ type: "ready" });
@@ -140,17 +160,28 @@ test("an HTML visual runs sandboxed with its inlined library, takes the phone's 
   expect(loaded.requests).toEqual([]);
 });
 
-test("tall visuals scroll on a phone-sized screen so below-the-fold actions stay reachable", async ({ page }) => {
+test("tall visuals scroll on a phone-sized screen so below-the-fold actions stay reachable", async ({
+  page,
+}) => {
   await page.setViewportSize({ width: 390, height: 600 });
   const bundle = await viewerBundle();
-  const scrolled = () => page.evaluate(() => document.querySelector("main")!.parentElement!.scrollTop);
+  const scrolled = () =>
+    page.evaluate(() => document.querySelector("main")!.parentElement!.scrollTop);
 
   const visual = uiVisual(`<Visual title="Tall">
   <Chart kind="bar" data={$data.rows} x="k" y="v" height={900} label="Tall chart" />
   <Button action={sendPrompt("From the bottom")}>Bottom action</Button>
   <Data name="data">{"rows": [{"k": "a", "v": 1}, {"k": "b", "v": 2}]}</Data>
 </Visual>`);
-  const native = await openDocument(page, buildVisualViewerDocument({ kind: "ui", title: "Tall", visual, attachments: [] }, { scheme: "light", preset: "aiden" }, bundle, {}));
+  const native = await openDocument(
+    page,
+    buildVisualViewerDocument(
+      { kind: "ui", title: "Tall", visual, attachments: [] },
+      { scheme: "light", preset: "aiden" },
+      bundle,
+      {},
+    ),
+  );
   await expect.poll(native.messages).toContainEqual({ type: "ready" });
   await page.mouse.move(195, 300);
   await page.mouse.wheel(0, 2000);
@@ -161,7 +192,15 @@ test("tall visuals scroll on a phone-sized screen so below-the-fold actions stay
 
   await page.unrouteAll();
   const html = `<div style="height: 1600px"></div><button id="b" onclick="aiden.sendPrompt('Guest bottom')">Guest bottom</button>`;
-  const guest = await openDocument(page, buildVisualViewerDocument({ kind: "html", title: "Tall guest", html }, { scheme: "light", preset: "aiden" }, bundle, {}));
+  const guest = await openDocument(
+    page,
+    buildVisualViewerDocument(
+      { kind: "html", title: "Tall guest", html },
+      { scheme: "light", preset: "aiden" },
+      bundle,
+      {},
+    ),
+  );
   await expect.poll(guest.messages).toContainEqual({ type: "ready" });
   await page.mouse.move(195, 300);
   await page.mouse.wheel(0, 3000);

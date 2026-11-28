@@ -54,10 +54,19 @@ export function BotSpendingSection({ bot }: { bot: Pick<BotDefinition, "id" | "n
   const change = async (value: string) => {
     const previous = choice;
     const next: BotSpendingLimitChoice =
-      value === "default" ? { kind: "default" } : value === "none" ? { kind: "none" } : { kind: "amount", usd: Number(value) };
+      value === "default"
+        ? { kind: "default" }
+        : value === "none"
+          ? { kind: "none" }
+          : { kind: "amount", usd: Number(value) };
     setChoice(next);
     try {
-      setChoice(await spendingApi.setBotLimit(bot.id, next.kind === "default" ? "default" : next.kind === "none" ? null : next.usd));
+      setChoice(
+        await spendingApi.setBotLimit(
+          bot.id,
+          next.kind === "default" ? "default" : next.kind === "none" ? null : next.usd,
+        ),
+      );
     } catch {
       setChoice(previous);
       toast.error(`Couldn’t change ${bot.name}’s spending limit.`);

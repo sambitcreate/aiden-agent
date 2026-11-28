@@ -48,7 +48,11 @@ test("native macOS helper builds keep a fixed environment plus the selected Xcod
     output: "/repo/build/helper",
     environment: { HOME: "/Users/someone" },
   });
-  assert.deepEqual(unselected.env, { PATH: "/usr/bin:/bin:/usr/sbin:/sbin", LANG: "C", LC_ALL: "C" });
+  assert.deepEqual(unselected.env, {
+    PATH: "/usr/bin:/bin:/usr/sbin:/sbin",
+    LANG: "C",
+    LC_ALL: "C",
+  });
 });
 
 test("native helper Linux builds use a host compiler without redefining source feature macros", async (context) => {
@@ -100,8 +104,14 @@ test("native helper compiles are skipped only while sources, local headers, flag
   await mkdir(path.join(root, "native", "shared"), { recursive: true });
   const source = path.join(root, "native", "helper", "main.c");
   await mkdir(path.dirname(source));
-  await writeFile(source, '#include <stdio.h>\n#include "../shared/platform.h"\nint main(void) { return 0; }\n');
-  await writeFile(path.join(root, "native", "shared", "platform.h"), '#include "limits.h"\n#define AIDEN 1\n');
+  await writeFile(
+    source,
+    '#include <stdio.h>\n#include "../shared/platform.h"\nint main(void) { return 0; }\n',
+  );
+  await writeFile(
+    path.join(root, "native", "shared", "platform.h"),
+    '#include "limits.h"\n#define AIDEN 1\n',
+  );
   await writeFile(path.join(root, "native", "shared", "limits.h"), "#define AIDEN_LIMIT 4\n");
   const output = path.join(root, "build", "native", "aiden-helper");
 
@@ -114,9 +124,16 @@ test("native helper compiles are skipped only while sources, local headers, flag
     if (failNext) throw new Error("compiler failed");
     await chmod(target, 0o755);
   };
-  const compile = (args = ["-O2", source, "-o", output]) => compileNativeC({
-    executeFile, executable: "/usr/bin/cc", args, env: { LANG: "C" }, cwd: root, source, output,
-  });
+  const compile = (args = ["-O2", source, "-o", output]) =>
+    compileNativeC({
+      executeFile,
+      executable: "/usr/bin/cc",
+      args,
+      env: { LANG: "C" },
+      cwd: root,
+      source,
+      output,
+    });
 
   assert.equal(await compile(), true, "first build compiles");
   assert.equal(await compile(), false, "an unchanged build is skipped");
@@ -124,7 +141,11 @@ test("native helper compiles are skipped only while sources, local headers, flag
 
   await writeFile(path.join(root, "native", "shared", "limits.h"), "#define AIDEN_LIMIT 8\n");
   assert.equal(await compile(), true, "a transitively included header invalidates the build");
-  assert.equal(await compile(["-O0", source, "-o", output]), true, "changed flags invalidate the build");
+  assert.equal(
+    await compile(["-O0", source, "-o", output]),
+    true,
+    "changed flags invalidate the build",
+  );
   await rm(output);
   assert.equal(await compile(["-O0", source, "-o", output]), true, "a missing output is rebuilt");
 

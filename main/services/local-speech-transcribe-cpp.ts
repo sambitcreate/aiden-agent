@@ -22,7 +22,10 @@ const WARM_UP_SAMPLES = SAMPLE_RATE;
 
 // The slice of the transcribe-cpp 0.4.0 API this engine uses.
 export interface TranscribeCppSession {
-  run(pcm: Float32Array, options: { timestamps: "none" }): Promise<{ text: string; language?: string }>;
+  run(
+    pcm: Float32Array,
+    options: { timestamps: "none" },
+  ): Promise<{ text: string; language?: string }>;
   dispose(): void;
 }
 export interface TranscribeCppModel {
@@ -31,7 +34,12 @@ export interface TranscribeCppModel {
 }
 export interface TranscribeCppModule {
   initialize(): Promise<void>;
-  TranscribeModel: { load(file: string, options?: { backend?: "auto" | "metal" | "cpu" }): Promise<TranscribeCppModel> };
+  TranscribeModel: {
+    load(
+      file: string,
+      options?: { backend?: "auto" | "metal" | "cpu" },
+    ): Promise<TranscribeCppModel>;
+  };
 }
 
 /** The model needs transcribe.cpp, which this host or build cannot load. */
@@ -47,7 +55,12 @@ export interface TranscribeCppEngineDeps {
   exists?: (filePath: string) => boolean;
 }
 
-interface Slot { id: string; directory: string; model: TranscribeCppModel; session: TranscribeCppSession }
+interface Slot {
+  id: string;
+  directory: string;
+  model: TranscribeCppModel;
+  session: TranscribeCppSession;
+}
 
 const LANGUAGE = /^[a-z]{2,3}$/;
 
@@ -152,11 +165,19 @@ export function createTranscribeCppEngine(deps: TranscribeCppEngineDeps) {
       const texts: string[] = [];
       let detected: string | null = null;
       for (const range of decodeRanges(samples, request.spec, request, deps.detectRegions)) {
-        const result = await session.run(atLeastOneSecond(samples.subarray(range.start, range.end)), { timestamps: "none" });
+        const result = await session.run(
+          atLeastOneSecond(samples.subarray(range.start, range.end)),
+          { timestamps: "none" },
+        );
         texts.push(result.text);
-        if (!detected && result.language && LANGUAGE.test(result.language)) detected = result.language;
+        if (!detected && result.language && LANGUAGE.test(result.language))
+          detected = result.language;
       }
-      return { text: joinSegmentTexts(texts), language: detected, decodeMs: performance.now() - started };
+      return {
+        text: joinSegmentTexts(texts),
+        language: detected,
+        decodeMs: performance.now() - started,
+      };
     },
 
     release(): void {

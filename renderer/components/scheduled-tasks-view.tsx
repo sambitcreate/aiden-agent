@@ -165,7 +165,11 @@ function newTask(
   };
 }
 
-function statusPresentation(task: ScheduledTask): { label: string; dot: string; badge: BadgeColor } {
+function statusPresentation(task: ScheduledTask): {
+  label: string;
+  dot: string;
+  badge: BadgeColor;
+} {
   const status = scheduledTaskStatus(task);
   if (status === "error") return { label: "Needs attention", dot: "bg-red", badge: "red" };
   if (status === "paused") return { label: "Paused", dot: "bg-tertiary", badge: "gray" };
@@ -236,8 +240,8 @@ function ScheduledTaskDetail({
               : task.trigger?.kind === "connector"
                 ? "Runs when a connected app has news"
                 : task.trigger
-                ? "Runs when something changes"
-                : `Next run ${formatNextRun(task.nextRunAt)}`}
+                  ? "Runs when something changes"
+                  : `Next run ${formatNextRun(task.nextRunAt)}`}
         </Text>
 
         <div className="mt-4 rounded-control bg-background px-3 py-2.5">
@@ -289,7 +293,9 @@ function ScheduledTaskDetail({
           </div>
         </dl>
 
-        {task.trigger?.kind === "webhook" ? <ScheduledTaskLinkPanel taskId={task.id} busy={busy} /> : null}
+        {task.trigger?.kind === "webhook" ? (
+          <ScheduledTaskLinkPanel taskId={task.id} busy={busy} />
+        ) : null}
 
         {task.lastError ? (
           <Callout className="mb-3" color="red">
@@ -426,7 +432,8 @@ export function ScheduledTasksView() {
   const editingTask = editing?.id ? tasks.data?.find((task) => task.id === editing.id) : undefined;
   const originChats = useChats(editingTask?.originChatId ? editingTask.workspaceId : undefined);
   const editingOriginChatTitle = editingTask?.originChatId
-    ? (originChats.data?.find((chat) => chat.id === editingTask.originChatId)?.title ?? "the chat it was made in")
+    ? (originChats.data?.find((chat) => chat.id === editingTask.originChatId)?.title ??
+      "the chat it was made in")
     : undefined;
   const moveToOwnChat = async () => {
     if (!editingTask) return;

@@ -16,10 +16,10 @@ Additional executed coverage is recorded below: chat failure with a successful c
 
 Executed comparison on 2026-09-27, Xcode 27.0 (27A5252f), iPhone 17 Pro simulator / iOS 27.0, destination `9F4FDF41-3FE3-477D-B92B-127C43FE927E`, serial XCTest with `CODE_SIGNING_ALLOWED=NO`:
 
-| Version | Held-catalog result |
-| --- | --- |
-| Original loader at the base commit | One regression executed, seven assertion failures: both catalog outcomes blocked publication/persistence before release; the 503 produced a transcript load error. |
-| Fixed loader | Same held-catalog regression passed: transcript callback, visible message and persisted message all available before release for both success and 503; nondefault user choice retained. |
+| Version                            | Held-catalog result                                                                                                                                                                     |
+| ---------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Original loader at the base commit | One regression executed, seven assertion failures: both catalog outcomes blocked publication/persistence before release; the 503 produced a transcript load error.                      |
+| Fixed loader                       | Same held-catalog regression passed: transcript callback, visible message and persisted message all available before release for both success and 503; nondefault user choice retained. |
 
 The first baseline attempt failed before XCTest execution because Simulator returned no process handle for the test runner. Its one `test-without-building` retry executed and produced the expected behavioral failures. Initial fixed-source chat suite: 211 tests passed. Final-source validation (including a fourth added test and stronger nondefault choice assertion): **212 chat tests executed, zero failures**. The final run launched successfully without retry. Release-policy checks passed: 20 Ruby tests / 42 assertions and 32 Node tests.
 

@@ -21,7 +21,11 @@ let appliedCacheValue: string | null | undefined;
 export function readCurrentAppearance(): AppearanceConfig | null {
   if (appliedConfig) {
     try {
-      if (appliedCacheValue === undefined || localStorage.getItem(APPEARANCE_STORAGE_KEY) === appliedCacheValue) return appliedConfig;
+      if (
+        appliedCacheValue === undefined ||
+        localStorage.getItem(APPEARANCE_STORAGE_KEY) === appliedCacheValue
+      )
+        return appliedConfig;
     } catch {
       return appliedConfig;
     }
@@ -118,8 +122,7 @@ export function reconcileRuntimeAppearanceEvent(
 ): ReconciledRuntimeAppearance {
   return {
     config: normalizeAppearanceConfig(config),
-    supersedesPending:
-      pendingRevision !== null && pendingRevision !== currentRevision,
+    supersedesPending: pendingRevision !== null && pendingRevision !== currentRevision,
   };
 }
 
@@ -141,10 +144,7 @@ export function rebaseAppearanceIntentAfterFailure(
 export function announceAppearanceIntentFailure(revision: number): void {
   if (typeof window === "undefined") return;
   window.dispatchEvent(
-    new CustomEvent<{ revision: number }>(
-      APPEARANCE_INTENT_FAILED_EVENT,
-      { detail: { revision } },
-    ),
+    new CustomEvent<{ revision: number }>(APPEARANCE_INTENT_FAILED_EVENT, { detail: { revision } }),
   );
 }
 
@@ -158,10 +158,7 @@ export function reconcileNativeThemeChange(
   signal: NativeAppearanceSignal,
 ): ReconciledNativeAppearance | null {
   const normalized = normalizeAppearanceConfig(config);
-  if (
-    signal.themeSource !== undefined &&
-    signal.themeSource !== normalized.mode
-  ) {
+  if (signal.themeSource !== undefined && signal.themeSource !== normalized.mode) {
     return null;
   }
   return {
@@ -172,13 +169,17 @@ export function reconcileNativeThemeChange(
 }
 
 function systemUsesDarkColors(): boolean {
-  return typeof window !== "undefined"
-    && window.matchMedia?.("(prefers-color-scheme: dark)").matches === true;
+  return (
+    typeof window !== "undefined" &&
+    window.matchMedia?.("(prefers-color-scheme: dark)").matches === true
+  );
 }
 
 function systemUsesReducedMotion(): boolean {
-  return typeof window !== "undefined"
-    && window.matchMedia?.("(prefers-reduced-motion: reduce)").matches === true;
+  return (
+    typeof window !== "undefined" &&
+    window.matchMedia?.("(prefers-reduced-motion: reduce)").matches === true
+  );
 }
 
 /**
@@ -187,7 +188,8 @@ function systemUsesReducedMotion(): boolean {
  * the OS. Before the first appearance is applied the system preference stands in.
  */
 export function prefersReducedMotion(): boolean {
-  const applied = typeof document === "undefined" ? undefined : document.documentElement.dataset.reduceMotion;
+  const applied =
+    typeof document === "undefined" ? undefined : document.documentElement.dataset.reduceMotion;
   return applied === undefined ? systemUsesReducedMotion() : applied === "true";
 }
 
@@ -202,16 +204,21 @@ export function effectiveAppearanceScheme(
 
 /** The scheme this window is drawn in right now, from `:root[data-appearance-scheme]`; the system's before any appearance is applied. */
 export function readAppliedAppearanceScheme(): AppearanceScheme {
-  const applied = typeof document === "undefined" ? undefined : document.documentElement.dataset.appearanceScheme;
+  const applied =
+    typeof document === "undefined" ? undefined : document.documentElement.dataset.appearanceScheme;
   if (applied === "light" || applied === "dark") return applied;
   return systemUsesDarkColors() ? "dark" : "light";
 }
 
 /** Calls `onChange` whenever the window's applied light or dark scheme attribute changes. */
 export function subscribeAppliedAppearanceScheme(onChange: () => void): () => void {
-  if (typeof document === "undefined" || typeof MutationObserver === "undefined") return () => undefined;
+  if (typeof document === "undefined" || typeof MutationObserver === "undefined")
+    return () => undefined;
   const observer = new MutationObserver(onChange);
-  observer.observe(document.documentElement, { attributes: true, attributeFilter: ["data-appearance-scheme"] });
+  observer.observe(document.documentElement, {
+    attributes: true,
+    attributeFilter: ["data-appearance-scheme"],
+  });
   return () => observer.disconnect();
 }
 
@@ -242,9 +249,10 @@ export function applyAppearanceConfig(
   const config = normalizeAppearanceConfig(value);
   const scheme = effectiveAppearanceScheme(config, nativeUsesDarkColors);
   const requestedVariant = config[scheme];
-  const variant = themeVariantSafetyIssues(requestedVariant, scheme).length === 0
-    ? requestedVariant
-    : getPresetVariant("aiden", scheme);
+  const variant =
+    themeVariantSafetyIssues(requestedVariant, scheme).length === 0
+      ? requestedVariant
+      : getPresetVariant("aiden", scheme);
   const root = document.documentElement;
   const tokens = resolveThemeTokens(variant, scheme, systemHighContrast);
 
@@ -258,8 +266,8 @@ export function applyAppearanceConfig(
   root.dataset.fontSmoothing = String(config.fontSmoothing);
   root.dataset.sidebarTranslucent = String(variant.translucentSidebar);
   root.dataset.reduceMotionPreference = config.reduceMotion;
-  const reduceMotion = config.reduceMotion === "on"
-    || (config.reduceMotion === "system" && systemUsesReducedMotion());
+  const reduceMotion =
+    config.reduceMotion === "on" || (config.reduceMotion === "system" && systemUsesReducedMotion());
   root.dataset.reduceMotion = String(reduceMotion);
   root.style.setProperty("--font-ui-family", uiFontStack(variant.uiFont));
   root.style.setProperty("--font-code-family", codeFontStack(variant.codeFont));

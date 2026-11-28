@@ -3,14 +3,7 @@
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { spawnSync } from "node:child_process";
-import {
-  existsSync,
-  mkdirSync,
-  mkdtempSync,
-  readFileSync,
-  readdirSync,
-  renameSync,
-} from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -25,7 +18,9 @@ const TEST_TARGET_NAME = "AidenOnTheGoTests";
 // in an order of its own, so the unit target is found by name, never by index.
 export function unitTestTargetPath(xctestrun) {
   const targets = xctestrun?.TestConfigurations?.[0]?.TestTargets ?? [];
-  const matches = targets.flatMap((target, index) => (target?.BlueprintName === TEST_TARGET_NAME ? [index] : []));
+  const matches = targets.flatMap((target, index) =>
+    target?.BlueprintName === TEST_TARGET_NAME ? [index] : [],
+  );
   if (matches.length !== 1) {
     throw new Error(
       `the xctestrun must hold exactly one ${TEST_TARGET_NAME} test target, found ${matches.length}`,
@@ -40,7 +35,9 @@ export function parseActivityProcessProofOptions(argv, env = process.env) {
   for (let index = 0; index < argv.length; index += 1) {
     const name = argv[index];
     if (!known.has(name)) {
-      throw new Error(name.startsWith("--") ? `unknown option: ${name}` : `unexpected argument: ${name}`);
+      throw new Error(
+        name.startsWith("--") ? `unknown option: ${name}` : `unexpected argument: ${name}`,
+      );
     }
     const value = argv[index + 1];
     if (!value || value.startsWith("--")) throw new Error(`${name} requires a value`);
@@ -52,7 +49,9 @@ export function parseActivityProcessProofOptions(argv, env = process.env) {
   const xcodeDeviceId = values.get("--xcode-device-id") ?? env.AIDEN_IOS_XCODE_DEVICE_ID;
   const coreDeviceId = values.get("--core-device-id") ?? env.AIDEN_IOS_CORE_DEVICE_ID;
   if (!XCODE_DEVICE_ID_PATTERN.test(xcodeDeviceId ?? "")) {
-    throw new Error("an exact physical --xcode-device-id (or AIDEN_IOS_XCODE_DEVICE_ID) is required");
+    throw new Error(
+      "an exact physical --xcode-device-id (or AIDEN_IOS_XCODE_DEVICE_ID) is required",
+    );
   }
   if (!CORE_DEVICE_ID_PATTERN.test(coreDeviceId ?? "")) {
     throw new Error("an exact physical --core-device-id (or AIDEN_IOS_CORE_DEVICE_ID) is required");
@@ -154,7 +153,8 @@ function configureDestinationArtifacts(xctestrun, targetPath) {
     `${targetPath}:UITargetAppBundleIdentifier`,
   ];
   for (const entry of entriesToReplace) deletePlistEntryIfPresent(xctestrun, entry);
-  for (const command of destinationArtifactPlistCommands(targetPath).slice(0, 3)) plistBuddy(xctestrun, command);
+  for (const command of destinationArtifactPlistCommands(targetPath).slice(0, 3))
+    plistBuddy(xctestrun, command);
   for (const entry of [
     `${targetPath}:TestBundlePath`,
     `${targetPath}:TestHostPath`,
@@ -240,14 +240,25 @@ function ensureProcessBoundary(coreDeviceId, temporaryRoot, repositoryRoot) {
     if (!Number.isSafeInteger(pid) || pid <= 0) throw new Error("Aiden test-host PID is invalid");
     execute(
       "xcrun",
-      ["devicectl", "device", "process", "terminate", "--device", coreDeviceId, "--pid", String(pid), "--quiet"],
+      [
+        "devicectl",
+        "device",
+        "process",
+        "terminate",
+        "--device",
+        coreDeviceId,
+        "--pid",
+        String(pid),
+        "--quiet",
+      ],
       { cwd: repositoryRoot, capture: true },
     );
   }
 
   const afterPath = join(temporaryRoot, "processes-after-termination.json");
   const remaining = mainAppProcesses(readAidenProcesses(coreDeviceId, afterPath, repositoryRoot));
-  if (remaining.length !== 0) throw new Error("Aiden test host did not terminate before reconciliation");
+  if (remaining.length !== 0)
+    throw new Error("Aiden test host did not terminate before reconciliation");
 }
 
 function moveProofToTrash(temporaryRoot) {

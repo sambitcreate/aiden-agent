@@ -1,8 +1,16 @@
-import type { BrowserBounds, BrowserCommandResult, BrowserElement, BrowserState, BrowserViewport } from "../shared/browser";
+import type {
+  BrowserBounds,
+  BrowserCommandResult,
+  BrowserElement,
+  BrowserState,
+  BrowserViewport,
+} from "../shared/browser";
 import { BROWSER_VIEWPORT_PRESETS } from "../shared/browser";
 
 /** Chromium's standard device catalog, matching the reference browser. */
-export const BROWSER_DEVICE_PRESETS = BROWSER_VIEWPORT_PRESETS.map((preset) => [preset.name, preset.width, preset.height] as const);
+export const BROWSER_DEVICE_PRESETS = BROWSER_VIEWPORT_PRESETS.map(
+  (preset) => [preset.name, preset.width, preset.height] as const,
+);
 
 // Each renderer owns one native stacking order, including when it switches workspaces.
 let lastPresentation = Promise.resolve();
@@ -12,19 +20,34 @@ export function enqueueBrowserPresentation(operation: () => Promise<unknown>): P
   return next;
 }
 
-export function acceptBrowserState(current: BrowserState | null, next: BrowserState, workspaceId: string): BrowserState | null {
+export function acceptBrowserState(
+  current: BrowserState | null,
+  next: BrowserState,
+  workspaceId: string,
+): BrowserState | null {
   if (next.workspaceId !== workspaceId) return current;
   if (current?.workspaceId === workspaceId && current.revision > next.revision) return current;
   return next;
 }
 
 export function validBrowserViewport(width: number, height: number): boolean {
-  return Number.isInteger(width) && Number.isInteger(height)
-    && width >= 240 && height >= 240 && width <= 3840 && height <= 3840
-    && width * height <= 3840 * 2160;
+  return (
+    Number.isInteger(width) &&
+    Number.isInteger(height) &&
+    width >= 240 &&
+    height >= 240 &&
+    width <= 3840 &&
+    height <= 3840 &&
+    width * height <= 3840 * 2160
+  );
 }
 
-export function resizeBrowserViewport(viewport: BrowserViewport, width: number, height: number, dimension: "width" | "height" = "width"): BrowserViewport | null {
+export function resizeBrowserViewport(
+  viewport: BrowserViewport,
+  width: number,
+  height: number,
+  dimension: "width" | "height" = "width",
+): BrowserViewport | null {
   let nextWidth = Math.round(width);
   let nextHeight = Math.round(height);
   if (viewport.ratioLocked) {
@@ -33,22 +56,62 @@ export function resizeBrowserViewport(viewport: BrowserViewport, width: number, 
     else nextWidth = Math.round(nextHeight * ratio);
   }
   return validBrowserViewport(nextWidth, nextHeight)
-    ? { mode: "responsive", width: nextWidth, height: nextHeight, ratioLocked: viewport.ratioLocked }
+    ? {
+        mode: "responsive",
+        width: nextWidth,
+        height: nextHeight,
+        ratioLocked: viewport.ratioLocked,
+      }
     : null;
 }
 
-export function browserAnnotationRegion(start: { x: number; y: number }, end: { x: number; y: number }): BrowserBounds {
-  return { x: Math.min(start.x, end.x), y: Math.min(start.y, end.y), width: Math.abs(end.x - start.x), height: Math.abs(end.y - start.y) };
+export function browserAnnotationRegion(
+  start: { x: number; y: number },
+  end: { x: number; y: number },
+): BrowserBounds {
+  return {
+    x: Math.min(start.x, end.x),
+    y: Math.min(start.y, end.y),
+    width: Math.abs(end.x - start.x),
+    height: Math.abs(end.y - start.y),
+  };
 }
 
-export function browserElementAtPoint(elements: BrowserElement[], point: { x: number; y: number }): BrowserElement | null {
-  return elements.filter(({ bounds: b }) => b.width > 0 && b.height > 0 && point.x >= b.x && point.y >= b.y && point.x <= b.x + b.width && point.y <= b.y + b.height)
-    .sort((a, b) => a.bounds.width * a.bounds.height - b.bounds.width * b.bounds.height)[0] ?? null;
+export function browserElementAtPoint(
+  elements: BrowserElement[],
+  point: { x: number; y: number },
+): BrowserElement | null {
+  return (
+    elements
+      .filter(
+        ({ bounds: b }) =>
+          b.width > 0 &&
+          b.height > 0 &&
+          point.x >= b.x &&
+          point.y >= b.y &&
+          point.x <= b.x + b.width &&
+          point.y <= b.y + b.height,
+      )
+      .sort((a, b) => a.bounds.width * a.bounds.height - b.bounds.width * b.bounds.height)[0] ??
+    null
+  );
 }
 
-export function browserBoundsFromRect(rect: Pick<DOMRect, "x" | "y" | "width" | "height">): BrowserBounds | null {
-  if (![rect.x, rect.y, rect.width, rect.height].every(Number.isFinite) || rect.width <= 0 || rect.height <= 0) return null;
-  return { x: Math.round(rect.x), y: Math.round(rect.y), width: Math.max(1, Math.round(rect.width)), height: Math.max(1, Math.round(rect.height)) };
+export function browserBoundsFromRect(
+  rect: Pick<DOMRect, "x" | "y" | "width" | "height">,
+): BrowserBounds | null {
+  if (
+    ![rect.x, rect.y, rect.width, rect.height].every(Number.isFinite) ||
+    rect.width <= 0 ||
+    rect.height <= 0
+  )
+    return null;
+  return {
+    x: Math.round(rect.x),
+    y: Math.round(rect.y),
+    width: Math.max(1, Math.round(rect.width)),
+    height: Math.max(1, Math.round(rect.height)),
+  };
 }
 
 /** Floating chrome that can sit above the native WebContentsView. */
@@ -73,10 +136,12 @@ export function browserNativeViewObstructed(
   return overlays.some((overlay) => {
     const cover = browserBoundsFromRect(overlay);
     if (!cover) return false;
-    return page.x < cover.x + cover.width
-      && page.x + page.width > cover.x
-      && page.y < cover.y + cover.height
-      && page.y + page.height > cover.y;
+    return (
+      page.x < cover.x + cover.width &&
+      page.x + page.width > cover.x &&
+      page.y < cover.y + cover.height &&
+      page.y + page.height > cover.y
+    );
   });
 }
 
@@ -85,9 +150,11 @@ function isElementNode(node: Node | EventTarget | null | undefined): node is Ele
 }
 
 function holdsOccluder(element: Element, occluders: readonly Node[]): boolean {
-  return element.matches(BROWSER_NATIVE_OCCLUDER_SELECTOR)
-    || occluders.some((occluder) => element.contains(occluder))
-    || element.querySelector(BROWSER_NATIVE_OCCLUDER_SELECTOR) !== null;
+  return (
+    element.matches(BROWSER_NATIVE_OCCLUDER_SELECTOR) ||
+    occluders.some((occluder) => element.contains(occluder)) ||
+    element.querySelector(BROWSER_NATIVE_OCCLUDER_SELECTOR) !== null
+  );
 }
 
 /**
@@ -96,47 +163,65 @@ function holdsOccluder(element: Element, occluders: readonly Node[]): boolean {
  * must not cost a layout read and an occluder scan every frame. `occluders` are
  * the ones found visible on the last presentation.
  */
-export function browserOcclusionMutated(records: readonly MutationRecord[], host: Node, occluders: readonly Node[]): boolean {
+export function browserOcclusionMutated(
+  records: readonly MutationRecord[],
+  host: Node,
+  occluders: readonly Node[],
+): boolean {
   return records.some((record) => {
     const target = record.target;
     if (!isElementNode(target)) return false;
     // The host's ancestors, and the siblings along that chain, decide where its slot is.
     if (target.contains(host) || target.closest(BROWSER_NATIVE_OCCLUDER_SELECTOR)) return true;
-    if (record.type === "attributes") return Boolean(target.parentElement?.contains(host)) || holdsOccluder(target, occluders);
+    if (record.type === "attributes")
+      return Boolean(target.parentElement?.contains(host)) || holdsOccluder(target, occluders);
     for (const nodes of [record.addedNodes, record.removedNodes]) {
-      for (const node of Array.from(nodes)) if (isElementNode(node) && holdsOccluder(node, occluders)) return true;
+      for (const node of Array.from(nodes))
+        if (isElementNode(node) && holdsOccluder(node, occluders)) return true;
     }
     return false;
   });
 }
 
 /** Whether a scroll can move the native view's slot or a visible occluder. */
-export function browserOcclusionScrolled(target: EventTarget | null, host: Node, occluders: readonly Node[]): boolean {
+export function browserOcclusionScrolled(
+  target: EventTarget | null,
+  host: Node,
+  occluders: readonly Node[],
+): boolean {
   if (!isElementNode(target)) return true;
   return target.contains(host) || occluders.some((occluder) => target.contains(occluder));
 }
 
 export function visibleBrowserNativeOccluders(root: ParentNode = document): HTMLElement[] {
-  return Array.from(root.querySelectorAll<HTMLElement>(BROWSER_NATIVE_OCCLUDER_SELECTOR)).filter((element) => {
-    // A modal's `hideOthers` isolation (aria-hidden plus its `data-aria-hidden`
-    // marker) only hides siblings from assistive tech; they remain painted,
-    // including the modal's own full-window overlay, so they still occlude.
-    if (element.closest('[data-state="closed"], [aria-hidden="true"]:not([data-aria-hidden="true"]), [inert]')) return false;
-    if (element.hasAttribute("popover")) {
-      try {
-        if (!element.matches(":popover-open")) return false;
-      } catch {
+  return Array.from(root.querySelectorAll<HTMLElement>(BROWSER_NATIVE_OCCLUDER_SELECTOR)).filter(
+    (element) => {
+      // A modal's `hideOthers` isolation (aria-hidden plus its `data-aria-hidden`
+      // marker) only hides siblings from assistive tech; they remain painted,
+      // including the modal's own full-window overlay, so they still occlude.
+      if (
+        element.closest(
+          '[data-state="closed"], [aria-hidden="true"]:not([data-aria-hidden="true"]), [inert]',
+        )
+      )
         return false;
+      if (element.hasAttribute("popover")) {
+        try {
+          if (!element.matches(":popover-open")) return false;
+        } catch {
+          return false;
+        }
       }
-    }
-    const rect = element.getBoundingClientRect();
-    return rect.width > 0 && rect.height > 0;
-  });
+      const rect = element.getBoundingClientRect();
+      return rect.width > 0 && rect.height > 0;
+    },
+  );
 }
 
 /** Save-dialog cancellation is a successful command without a written file. */
 export function savedBrowserScreenshotPath(result: BrowserCommandResult | null): string | null {
   const value = result?.value;
-  if (!value || typeof value !== "object" || Array.isArray(value) || !("path" in value)) return null;
+  if (!value || typeof value !== "object" || Array.isArray(value) || !("path" in value))
+    return null;
   return typeof value.path === "string" && value.path.trim() ? value.path : null;
 }

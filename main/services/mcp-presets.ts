@@ -28,8 +28,9 @@ export type McpPresetAuth = SharedMcpPresetAuth;
 export type McpPreset = SharedMcpPreset;
 export type { MacAppMcpPreset };
 
-export const MCP_PRESETS: readonly McpPreset[] = CONNECTOR_CATALOG.map((entry): McpPreset =>
-  entry.macApp ? { ...entry, transport: "stdio" } : { ...entry, transport: "http" },
+export const MCP_PRESETS: readonly McpPreset[] = CONNECTOR_CATALOG.map(
+  (entry): McpPreset =>
+    entry.macApp ? { ...entry, transport: "stdio" } : { ...entry, transport: "http" },
 );
 
 /** The host a Mac app preset is checked against; tests pass their own. */
@@ -71,7 +72,9 @@ function presetOrigin(preset: Pick<HttpConnectorCatalogEntry, "url" | "local">):
 
 const MCP_PRESET_ALLOWED_ORIGINS: Readonly<Record<string, string>> = Object.freeze(
   Object.fromEntries(
-    MCP_PRESETS.flatMap((preset) => (preset.transport === "http" ? [[preset.id, presetOrigin(preset)]] : [])),
+    MCP_PRESETS.flatMap((preset) =>
+      preset.transport === "http" ? [[preset.id, presetOrigin(preset)]] : [],
+    ),
   ),
 );
 
@@ -93,9 +96,7 @@ export function getMcpPreset(presetId: string): McpPreset | undefined {
  * DCR `client_name` for this server. Aiden registers as itself everywhere;
  * this stays the single source every OAuth registration reads.
  */
-export function mcpOAuthClientNameForServer(
-  _server: Pick<McpServer, "id" | "presetId">,
-): string {
+export function mcpOAuthClientNameForServer(_server: Pick<McpServer, "id" | "presetId">): string {
   return DEFAULT_MCP_OAUTH_CLIENT_NAME;
 }
 
@@ -118,21 +119,32 @@ export function assertMcpPresetServer(
   const idPreset = getMcpPresetForServerId(server.id);
   const declaredPreset = server.presetId ? getMcpPreset(server.presetId) : undefined;
   if (!idPreset && !server.presetId) return undefined;
-  if (server.authProvider !== undefined || server.authServerMetadataUrl !== undefined || server.oauthClientId !== undefined || server.oauthClientSecret !== undefined) throw new Error("OAuth overrides require a custom MCP server.");
+  if (
+    server.authProvider !== undefined ||
+    server.authServerMetadataUrl !== undefined ||
+    server.oauthClientId !== undefined ||
+    server.oauthClientSecret !== undefined
+  )
+    throw new Error("OAuth overrides require a custom MCP server.");
   if (!idPreset || !declaredPreset || idPreset.id !== declaredPreset.id) {
     throw new Error("This MCP preset has an invalid identity.");
   }
   if (!isConnectorAvailable(declaredPreset)) {
     throw new Error(declaredPreset.availability!.reason);
   }
-  if (declaredPreset.transport === "stdio") return assertMacAppPresetServer(server, declaredPreset, host);
+  if (declaredPreset.transport === "stdio")
+    return assertMacAppPresetServer(server, declaredPreset, host);
   if (server.transport !== declaredPreset.transport || !server.url) {
     throw new Error(`${declaredPreset.name} must use its own HTTP connection.`);
   }
   if ((declaredPreset.auth.kind === "oauth") !== Boolean(server.oauth)) {
     throw new Error(`${declaredPreset.name} has an invalid authentication mode.`);
   }
-  if (declaredPreset.auth.kind === "none" && server.headers && Object.keys(server.headers).length > 0) {
+  if (
+    declaredPreset.auth.kind === "none" &&
+    server.headers &&
+    Object.keys(server.headers).length > 0
+  ) {
     throw new Error(`${declaredPreset.name} does not take headers.`);
   }
 
@@ -159,7 +171,11 @@ export function assertMcpPresetServer(
  * A Mac app preset runs exactly its app's server, with no arguments,
  * environment, address or credential, and only on a Mac.
  */
-function assertMacAppPresetServer(server: McpServer, preset: MacAppMcpPreset, host: McpPresetHost): MacAppMcpPreset {
+function assertMacAppPresetServer(
+  server: McpServer,
+  preset: MacAppMcpPreset,
+  host: McpPresetHost,
+): MacAppMcpPreset {
   if (host.platform !== "darwin") throw new Error(`${preset.name} works only on a Mac.`);
   if (
     server.transport !== "stdio" ||
@@ -172,8 +188,13 @@ function assertMacAppPresetServer(server: McpServer, preset: MacAppMcpPreset, ho
   if ((server.args?.length ?? 0) > 0 || (server.env && Object.keys(server.env).length > 0)) {
     throw new Error(`${preset.name} takes no arguments or environment.`);
   }
-  if (!server.command || !macAppServerCommands(preset.macApp, host.homedir).includes(server.command)) {
-    throw new Error(`${preset.name} only runs the server inside ${preset.macApp.bundleName} in your Applications folder.`);
+  if (
+    !server.command ||
+    !macAppServerCommands(preset.macApp, host.homedir).includes(server.command)
+  ) {
+    throw new Error(
+      `${preset.name} only runs the server inside ${preset.macApp.bundleName} in your Applications folder.`,
+    );
   }
   return preset;
 }
@@ -183,16 +204,26 @@ function assertMacAppPresetServer(server: McpServer, preset: MacAppMcpPreset, ho
  * preset's address (blank: the catalog default) or, for a Mac app preset,
  * the installed app's server command.
  */
-export function serverFromPreset(preset: McpPreset, location?: string, host?: McpPresetHost): McpServer {
-  const base = { id: presetServerId(preset.id), name: preset.name, presetId: preset.id, enabled: true };
-  const server: McpServer = preset.transport === "stdio"
-    ? { ...base, transport: "stdio", command: location?.trim() ?? "", args: [] }
-    : {
-        ...base,
-        transport: preset.transport,
-        url: location?.trim() || preset.url,
-        oauth: preset.auth.kind === "oauth" ? true : undefined,
-      };
+export function serverFromPreset(
+  preset: McpPreset,
+  location?: string,
+  host?: McpPresetHost,
+): McpServer {
+  const base = {
+    id: presetServerId(preset.id),
+    name: preset.name,
+    presetId: preset.id,
+    enabled: true,
+  };
+  const server: McpServer =
+    preset.transport === "stdio"
+      ? { ...base, transport: "stdio", command: location?.trim() ?? "", args: [] }
+      : {
+          ...base,
+          transport: preset.transport,
+          url: location?.trim() || preset.url,
+          oauth: preset.auth.kind === "oauth" ? true : undefined,
+        };
   assertMcpPresetServer(server, host);
   return server;
 }

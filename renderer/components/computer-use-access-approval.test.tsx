@@ -55,7 +55,8 @@ function mountCard({
   afterRequest?: ComputerUseStatus;
   statusHandler?: () => ComputerUseStatus;
 }) {
-  const decisions: Array<{ decision: "allow" | "deny"; options?: ChatApprovalDecisionOptions }> = [];
+  const decisions: Array<{ decision: "allow" | "deny"; options?: ChatApprovalDecisionOptions }> =
+    [];
   const calls = installBotTestIpc({
     "computerUse:status": statusHandler ?? (() => initial ?? status()),
     "computerUse:requestPermissions": () => afterRequest ?? initial ?? status(),
@@ -86,9 +87,13 @@ async function chooseAlwaysAllow() {
 test("the access request offers this chat or every chat, never a one-off allow", async () => {
   mountCard({});
   assert.ok(await screen.findByRole("region", { name: "Use your Mac with Computer Use?" }));
-  await waitFor(() => assert.equal((button("Allow in this chat") as HTMLButtonElement).disabled, false));
+  await waitFor(() =>
+    assert.equal((button("Allow in this chat") as HTMLButtonElement).disabled, false),
+  );
   assert.deepEqual(
-    screen.getAllByRole("button").map((entry) => entry.getAttribute("aria-label") ?? entry.textContent),
+    screen
+      .getAllByRole("button")
+      .map((entry) => entry.getAttribute("aria-label") ?? entry.textContent),
     ["Deny", "Allow in this chat", "More ways to allow"],
   );
   assert.equal(screen.queryByRole("button", { name: /Allow once/u }), null);
@@ -97,7 +102,9 @@ test("the access request offers this chat or every chat, never a one-off allow",
 
 test("each choice answers with the scope it names", async () => {
   const { decisions } = mountCard({});
-  await waitFor(() => assert.equal((button("Allow in this chat") as HTMLButtonElement).disabled, false));
+  await waitFor(() =>
+    assert.equal((button("Allow in this chat") as HTMLButtonElement).disabled, false),
+  );
   fireEvent.click(button("Allow in this chat"));
   await chooseAlwaysAllow();
   fireEvent.click(button("Deny"));
@@ -109,9 +116,14 @@ test("each choice answers with the scope it names", async () => {
 });
 
 test("missing macOS permissions hold both allows until System Settings grants them", async () => {
-  const { decisions, calls } = mountCard({ initial: missingScreenRecording, afterRequest: status() });
+  const { decisions, calls } = mountCard({
+    initial: missingScreenRecording,
+    afterRequest: status(),
+  });
   const checklist = await screen.findByRole("list", { name: "macOS permissions" });
-  const rows = within(checklist).getAllByRole("listitem").map((row) => row.textContent);
+  const rows = within(checklist)
+    .getAllByRole("listitem")
+    .map((row) => row.textContent);
   assert.deepEqual(rows, ["AccessibilityAllowed", "Screen RecordingNot allowed"]);
   screen.getByText(/quit and reopen Aiden/u);
 
@@ -121,13 +133,18 @@ test("missing macOS permissions hold both allows until System Settings grants th
   assert.equal(allowAlways.disabled, true);
   const reasonId = allowChat.getAttribute("aria-describedby")?.split(" ")[0];
   assert.ok(reasonId);
-  assert.match(document.getElementById(reasonId)?.textContent ?? "", /Accessibility and Screen Recording/u);
+  assert.match(
+    document.getElementById(reasonId)?.textContent ?? "",
+    /Accessibility and Screen Recording/u,
+  );
 
   fireEvent.click(button("Deny"));
   assert.deepEqual(decisions, [{ decision: "deny", options: undefined }]);
 
   fireEvent.click(button("Open System Settings"));
-  await waitFor(() => assert.equal((button("Allow in this chat") as HTMLButtonElement).disabled, false));
+  await waitFor(() =>
+    assert.equal((button("Allow in this chat") as HTMLButtonElement).disabled, false),
+  );
   assert.equal((button("More ways to allow") as HTMLButtonElement).disabled, false);
   assert.ok(calls.some((call) => call.channel === "computerUse:requestPermissions"));
   assert.equal(screen.queryByRole("list", { name: "macOS permissions" }), null);
@@ -163,7 +180,9 @@ test("a failed readiness check stops checking until Check again forces a fresh p
 
   failing = false;
   fireEvent.click(button("Check again"));
-  await waitFor(() => assert.equal((button("Allow in this chat") as HTMLButtonElement).disabled, false));
+  await waitFor(() =>
+    assert.equal((button("Allow in this chat") as HTMLButtonElement).disabled, false),
+  );
   assert.equal(statusChecks().length, 2);
   // Every check bypasses the main process's cached status.
   assert.deepEqual(
@@ -180,7 +199,10 @@ test("a remote viewer leaves setup to the host Mac and never checks this Mac", a
   await chooseAlwaysAllow();
   assert.deepEqual(decisions, [{ decision: "allow", options: { scope: "always" } }]);
   assert.equal(screen.queryByRole("list", { name: "macOS permissions" }), null);
-  assert.equal(calls.some((call) => call.channel.startsWith("computerUse:")), false);
+  assert.equal(
+    calls.some((call) => call.channel.startsWith("computerUse:")),
+    false,
+  );
 });
 
 function mountCallout(initial: ComputerUseStatus, continueDisabledReason?: string) {

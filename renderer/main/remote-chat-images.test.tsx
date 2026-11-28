@@ -5,7 +5,12 @@ import { cleanup, screen, waitFor } from "@testing-library/react";
 import { mountWithBotRouter } from "./bots/test-providers";
 import { ChatIntentLedger } from "../lib/hosts/chat-intent-ledger";
 import { ChatSessionControl } from "../lib/hosts/chat-session-control";
-import type { HostChatAdapter, HostChatCapability, HostChatResult, HostChatStatus } from "../lib/hosts/host-chat-adapter";
+import type {
+  HostChatAdapter,
+  HostChatCapability,
+  HostChatResult,
+  HostChatStatus,
+} from "../lib/hosts/host-chat-adapter";
 import type { RemoteChatSnapshot } from "../lib/hosts/remote-chat-session";
 import { initialRemoteRunView } from "../lib/hosts/remote-stream-translator";
 import type { SidebarHost } from "../lib/sidebar-remote-groups";
@@ -30,7 +35,9 @@ class ImageHost implements HostChatAdapter {
   active = 0;
   mostAtOnce = 0;
   private readonly current: HostChatStatus = { availability: "online", generation: 1 };
-  constructor(private readonly bytes: (attachmentId: string) => HostChatResult<PeerAttachmentContent>) {}
+  constructor(
+    private readonly bytes: (attachmentId: string) => HostChatResult<PeerAttachmentContent>,
+  ) {}
   capabilities(): ReadonlySet<HostChatCapability> {
     return new Set<HostChatCapability>(["messagesWindow", "observe", "send"]);
   }
@@ -89,14 +96,30 @@ const TWO_IMAGES: ChatMessage[] = [
     role: "user",
     content: "Here is the mockup",
     createdAt: 1,
-    attachments: [{ id: "att-1", name: "mockup.png", mimeType: "image/png", kind: "image", size: PIXEL.byteLength }],
+    attachments: [
+      {
+        id: "att-1",
+        name: "mockup.png",
+        mimeType: "image/png",
+        kind: "image",
+        size: PIXEL.byteLength,
+      },
+    ],
   },
   {
     id: "m2",
     role: "assistant",
     content: "I drew a cleaner version",
     createdAt: 2,
-    attachments: [{ id: "att-2", name: "cleaner.png", mimeType: "image/png", kind: "image", size: PIXEL.byteLength }],
+    attachments: [
+      {
+        id: "att-2",
+        name: "cleaner.png",
+        mimeType: "image/png",
+        kind: "image",
+        size: PIXEL.byteLength,
+      },
+    ],
   },
 ];
 
@@ -106,7 +129,11 @@ async function mount(
 ) {
   installBotTestIpc({});
   const adapter = new ImageHost(bytes);
-  const control = new ChatSessionControl(adapter, { hostId: "host-b", chatId: "chat-1" }, new ChatIntentLedger());
+  const control = new ChatSessionControl(
+    adapter,
+    { hostId: "host-b", chatId: "chat-1" },
+    new ChatIntentLedger(),
+  );
   control.attach();
   const snapshot: RemoteChatSnapshot = {
     hostId: "host-b",
@@ -136,7 +163,10 @@ async function mount(
 }
 
 test("images in another Mac's chat draw here once their bytes are read from that Mac", async () => {
-  const host = await mount(() => ({ ok: true, value: { mimeType: "image/png", bytes: new Uint8Array(PIXEL) } }));
+  const host = await mount(() => ({
+    ok: true,
+    value: { mimeType: "image/png", bytes: new Uint8Array(PIXEL) },
+  }));
   const source = `data:image/png;base64,${PIXEL.toString("base64")}`;
   const sent = (await screen.findByRole("img", { name: "mockup.png" })) as HTMLImageElement;
   const reply = (await screen.findByRole("img", { name: "cleaner.png" })) as HTMLImageElement;
@@ -158,24 +188,66 @@ test("an image the other Mac cannot hand over, or hands over changed, stays a na
   await waitFor(() => assert.ok(host.reads.includes("att-1") && host.reads.includes("att-2")));
   assert.ok(await screen.findByText("mockup.png"));
   assert.ok(screen.getByText("cleaner.png"));
-  assert.ok(!screen.queryByRole("img", { name: "mockup.png" }), "no picture for an unreadable image");
-  assert.ok(!screen.queryByRole("img", { name: "cleaner.png" }), "no picture for bytes that differ from the listing");
+  assert.ok(
+    !screen.queryByRole("img", { name: "mockup.png" }),
+    "no picture for an unreadable image",
+  );
+  assert.ok(
+    !screen.queryByRole("img", { name: "cleaner.png" }),
+    "no picture for bytes that differ from the listing",
+  );
 });
 
 test("a paired Mac's generated image appears beneath its step and before the explanation", async () => {
   const message = mapRemoteMessage({
-    id: "generated-reply", role: "assistant", text: "Explanation after the generated image.", createdAt: "2026-11-02T00:00:00Z",
-    attachments: [{ id: "generated-photo", name: "Generated.png", mimeType: "image/png", kind: "image", size: PIXEL.length, toolCallId: "call-1" }],
+    id: "generated-reply",
+    role: "assistant",
+    text: "Explanation after the generated image.",
+    createdAt: "2026-11-02T00:00:00Z",
+    attachments: [
+      {
+        id: "generated-photo",
+        name: "Generated.png",
+        mimeType: "image/png",
+        kind: "image",
+        size: PIXEL.length,
+        toolCallId: "call-1",
+      },
+    ],
     timeline: {
-      version: 3, generationId: "generation-image", status: "completed", startedAt: 1, finishedAt: 2,
-      steps: [{ id: "tool-1", order: 0, kind: "tool", toolCallId: "call-1", toolName: "generate_image", label: "Generate image", status: "completed", startedAt: 1, updatedAt: 2, finishedAt: 2, contentOffset: 0 }],
+      version: 3,
+      generationId: "generation-image",
+      status: "completed",
+      startedAt: 1,
+      finishedAt: 2,
+      steps: [
+        {
+          id: "tool-1",
+          order: 0,
+          kind: "tool",
+          toolCallId: "call-1",
+          toolName: "generate_image",
+          label: "Generate image",
+          status: "completed",
+          startedAt: 1,
+          updatedAt: 2,
+          finishedAt: 2,
+          contentOffset: 0,
+        },
+      ],
     },
   });
   assert.ok(message);
-  await mount(() => ({ ok: true, value: { mimeType: "image/png", bytes: new Uint8Array(PIXEL) } }), [message]);
+  await mount(
+    () => ({ ok: true, value: { mimeType: "image/png", bytes: new Uint8Array(PIXEL) } }),
+    [message],
+  );
   const photo = await screen.findByRole("img", { name: "Generated.png" });
   const explanation = screen.getByText("Explanation after the generated image.");
-  assert.ok(photo.compareDocumentPosition(explanation) & Node.DOCUMENT_POSITION_FOLLOWING, "the generated image precedes the prose written after its call");
+  assert.ok(
+    photo.compareDocumentPosition(explanation) & Node.DOCUMENT_POSITION_FOLLOWING,
+    "the generated image precedes the prose written after its call",
+  );
 });
 
 test("a chat full of pictures reads them from the other Mac a few at a time, so the host never refuses one", async () => {
@@ -185,11 +257,21 @@ test("a chat full of pictures reads them from the other Mac a few at a time, so 
     content: `Screen ${index}`,
     createdAt: 10 + index,
     attachments: [
-      { id: `shot-${index}`, name: `screen-${index}.png`, mimeType: "image/png", kind: "image", size: PIXEL.byteLength },
+      {
+        id: `shot-${index}`,
+        name: `screen-${index}.png`,
+        mimeType: "image/png",
+        kind: "image",
+        size: PIXEL.byteLength,
+      },
     ],
   }));
-  const host = await mount(() => ({ ok: true, value: { mimeType: "image/png", bytes: new Uint8Array(PIXEL) } }), shots);
-  for (let index = 0; index < shots.length; index += 1) assert.ok(await screen.findByRole("img", { name: `screen-${index}.png` }));
+  const host = await mount(
+    () => ({ ok: true, value: { mimeType: "image/png", bytes: new Uint8Array(PIXEL) } }),
+    shots,
+  );
+  for (let index = 0; index < shots.length; index += 1)
+    assert.ok(await screen.findByRole("img", { name: `screen-${index}.png` }));
   assert.equal(host.reads.length, 8, "each picture is read once");
   // The host takes 8 requests from a Mac at once; pictures leave room for sends and approvals.
   assert.ok(host.mostAtOnce <= 3, `read ${host.mostAtOnce} at once`);

@@ -47,7 +47,8 @@ function markupPattern(text: string): string {
   while (index < text.length) {
     const char = text[index]!;
     if (/\s/u.test(char) && char !== "\u00a0") {
-      while (index < text.length && /\s/u.test(text[index]!) && text[index] !== "\u00a0") index += 1;
+      while (index < text.length && /\s/u.test(text[index]!) && text[index] !== "\u00a0")
+        index += 1;
       pattern += "\\s+";
       continue;
     }
@@ -59,13 +60,18 @@ function markupPattern(text: string): string {
 
 /** Text written back into markup: only what has to be escaped is. */
 export function escapeDesignText(text: string): string {
-  return text.replace(/&/gu, "&amp;").replace(/</gu, "&lt;").replace(/>/gu, "&gt;").replace(/\u00a0/gu, "&nbsp;");
+  return text
+    .replace(/&/gu, "&amp;")
+    .replace(/</gu, "&lt;")
+    .replace(/>/gu, "&gt;")
+    .replace(/\u00a0/gu, "&nbsp;");
 }
 
 /** Ranges of the file where page text never is: tags, comments, scripts, styles and the title. */
 function excludedRanges(source: string): Array<[number, number]> {
   const ranges: Array<[number, number]> = [];
-  const blocks = /<!--[\s\S]*?(?:-->|$)|<(script|style|title|textarea|template)\b[\s\S]*?(?:<\/\1\s*>|$)|<[^>]*>?/giu;
+  const blocks =
+    /<!--[\s\S]*?(?:-->|$)|<(script|style|title|textarea|template)\b[\s\S]*?(?:<\/\1\s*>|$)|<[^>]*>?/giu;
   for (let match = blocks.exec(source); match; match = blocks.exec(source)) {
     ranges.push([match.index, match.index + match[0].length]);
     if (match[0].length === 0) blocks.lastIndex += 1;
@@ -75,7 +81,8 @@ function excludedRanges(source: string): Array<[number, number]> {
 
 function lineAt(source: string, index: number): number {
   let line = 1;
-  for (let at = source.indexOf("\n"); at !== -1 && at < index; at = source.indexOf("\n", at + 1)) line += 1;
+  for (let at = source.indexOf("\n"); at !== -1 && at < index; at = source.indexOf("\n", at + 1))
+    line += 1;
   return line;
 }
 
@@ -88,7 +95,21 @@ export function stampLine(stamp: string | undefined, path: string): number | und
   return Number.isInteger(line) && line > 0 ? line : undefined;
 }
 
-const VOID_TAGS = new Set(["area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "source", "track", "wbr"]);
+const VOID_TAGS = new Set([
+  "area",
+  "base",
+  "br",
+  "col",
+  "embed",
+  "hr",
+  "img",
+  "input",
+  "link",
+  "meta",
+  "source",
+  "track",
+  "wbr",
+]);
 
 /** Elements whose content is raw text, never more elements; their tags are skipped with them. */
 const RAW_TEXT_TAGS = new Set(["script", "style", "title", "textarea", "template"]);
@@ -102,7 +123,11 @@ const RAW_TEXT_TAGS = new Set(["script", "style", "title", "textarea", "template
  * Tags in comments, scripts and styles do not count. One pass over the tags,
  * so a page that stamps every element costs no more than one that stamps few.
  */
-function stampedRanges(source: string, stamp: string, excluded: ReadonlyArray<[number, number]>): Array<[number, number]> {
+function stampedRanges(
+  source: string,
+  stamp: string,
+  excluded: ReadonlyArray<[number, number]>,
+): Array<[number, number]> {
   // A tag of its own starts an excluded range; one inside a comment or script starts after it.
   let skip = 0;
   const inExcluded = (index: number) => {
@@ -148,12 +173,18 @@ function stampedRanges(source: string, stamp: string, excluded: ReadonlyArray<[n
 
 type Where = { line: number } | { stamp: string } | undefined;
 
-function findOnce(source: string, before: string, where: Where): { start: number; end: number } | "not-found" | "ambiguous" {
+function findOnce(
+  source: string,
+  before: string,
+  where: Where,
+): { start: number; end: number } | "not-found" | "ambiguous" {
   const pattern = markupPattern(before);
   if (pattern.length === 0) return "not-found";
   const excluded = excludedRanges(source);
-  const inside = (start: number, end: number) => excluded.some(([from, to]) => start < to && end > from);
-  const stamped = where && "stamp" in where ? stampedRanges(source, where.stamp, excluded) : undefined;
+  const inside = (start: number, end: number) =>
+    excluded.some(([from, to]) => start < to && end > from);
+  const stamped =
+    where && "stamp" in where ? stampedRanges(source, where.stamp, excluded) : undefined;
   if (stamped?.length === 0) return "not-found";
   const found: Array<{ start: number; end: number }> = [];
   const search = new RegExp(pattern, "gu");
@@ -192,7 +223,11 @@ export function planDesignTextEdit(
   if (real.length === 0) return { ok: false, reason: "unchanged" };
   if (
     real.length > DESIGN_TEXT_EDIT_LIMITS.changes ||
-    real.some((change) => change.before.length > DESIGN_TEXT_EDIT_LIMITS.chars || change.after.length > DESIGN_TEXT_EDIT_LIMITS.chars)
+    real.some(
+      (change) =>
+        change.before.length > DESIGN_TEXT_EDIT_LIMITS.chars ||
+        change.after.length > DESIGN_TEXT_EDIT_LIMITS.chars,
+    )
   ) {
     return { ok: false, reason: "too-long" };
   }
@@ -202,7 +237,8 @@ export function planDesignTextEdit(
     // A stale line misses: look inside the elements stamped the same way,
     // where the text must still be unique, and nowhere else.
     let at = findOnce(next, change.before, line === undefined ? undefined : { line });
-    if (at === "not-found" && line !== undefined) at = findOnce(next, change.before, { stamp: stamp!.stamp! });
+    if (at === "not-found" && line !== undefined)
+      at = findOnce(next, change.before, { stamp: stamp!.stamp! });
     if (typeof at === "string") return { ok: false, reason: at };
     next = next.slice(0, at.start) + escapeDesignText(change.after) + next.slice(at.end);
   }

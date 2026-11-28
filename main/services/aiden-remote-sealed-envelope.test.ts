@@ -80,7 +80,10 @@ test("match code inputs are validated rather than coerced", async () => {
   assert.throws(() => pairingRequestMatchCode({ ...vector!, serverSpkiSha256: "sha256/nope" }));
   assert.throws(() => pairingRequestMatchCode({ ...vector!, hostNonce: "AAAA" }));
   assert.throws(() =>
-    pairingRequestMatchCode({ ...vector!, requesterPublicKey: Buffer.alloc(32).toString("base64url") }),
+    pairingRequestMatchCode({
+      ...vector!,
+      requesterPublicKey: Buffer.alloc(32).toString("base64url"),
+    }),
   );
 });
 
@@ -167,7 +170,11 @@ test("a sealed grant opens only with the requester's private key and exact bindi
 
 test("sealing refuses empty or oversized grants and invalid requester keys", () => {
   const requester = generatePairingRequestKeyPair();
-  const base = { requestId: REQUEST_ID, expiresAt: EXPIRES_AT, requesterPublicKey: requester.publicKey };
+  const base = {
+    requestId: REQUEST_ID,
+    expiresAt: EXPIRES_AT,
+    requesterPublicKey: requester.publicKey,
+  };
   assert.throws(() => sealPairingRequestEnvelope({ ...base, plaintext: Buffer.alloc(0) }));
   assert.throws(() => sealPairingRequestEnvelope({ ...base, plaintext: Buffer.alloc(8_193, 1) }));
   assert.throws(() =>

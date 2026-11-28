@@ -14,7 +14,12 @@ import { createHash } from "node:crypto";
 import { createKeyedSerial } from "../bot-routine-notes.js";
 import type { ScheduledTask } from "../types.js";
 import { BOT_DELIVERY_COUNTED_CLASSES } from "./gate.js";
-import { BotDeliveryHistoryFullError, type BotDeliveryClass, type BotDeliveryLog, type BotDeliveryRow } from "./log.js";
+import {
+  BotDeliveryHistoryFullError,
+  type BotDeliveryClass,
+  type BotDeliveryLog,
+  type BotDeliveryRow,
+} from "./log.js";
 
 export interface BotDeliveryInput {
   botId: string;
@@ -30,7 +35,7 @@ export interface BotDeliveryInput {
   /** Host-derived notification preference from the accepted originating task. */
   quiet?: boolean;
   /** Host-only original identity fence; never persisted in a delivery row. */
-  publication?: {incarnation?:string;assertCurrent():Promise<void>};
+  publication?: { incarnation?: string; assertCurrent(): Promise<void> };
 }
 
 export interface BotDeliveryGate {
@@ -78,9 +83,12 @@ export function createBotDeliveryFunnel(deps: {
   telegram(input: BotDeliveryInput): Promise<void>;
   now(): number;
   ownsPeerFinal?(botId: string, requestId: string): Promise<boolean>;
-  peerPublication?(botId:string,rootId:string):Promise<{incarnation?:string;assertCurrent():Promise<void>}|undefined>;
-  peerSettled?(botId:string,rootId:string):Promise<void>;
-  peerPending?(botId:string,rootId:string):Promise<void>;
+  peerPublication?(
+    botId: string,
+    rootId: string,
+  ): Promise<{ incarnation?: string; assertCurrent(): Promise<void> } | undefined>;
+  peerSettled?(botId: string, rootId: string): Promise<void>;
+  peerPending?(botId: string, rootId: string): Promise<void>;
   /** The Bot's name for a digest's title; falls back to "Your Bot". */
   botName?(botId: string): Promise<string | undefined>;
   /** Whether that Bot's chat is open in a focused window while the person is at the Mac. */
@@ -91,32 +99,78 @@ export function createBotDeliveryFunnel(deps: {
    * `sentAt` is the row's "all channels done"; a row that has both stamps from
    * an earlier attempt is finalized without contacting either port again.
    */
-  function rowRoots(row:Pick<BotDeliveryRow,"class"|"requestId"|"peerRootIds">):string[]{return row.peerRootIds??(row.class==="peer_result"&&row.requestId?[row.requestId]:[]);}
-  function rootsPublication(botId:string,roots:readonly string[]):BotDeliveryInput["publication"]{if(!roots.length||!deps.peerPublication)return undefined;return {assertCurrent:async()=>{for(const id of roots){const current=await deps.peerPublication!(botId,id);if(!current)throw new Error("This delayed peer result belongs to a retired Bot.");await current.assertCurrent();}}};}
-  async function settled(row:BotDeliveryRow):Promise<void>{if(row.peerSettledAt!==undefined||!rowRoots(row).length)return;await deps.log.settlePeerReferences(row.botId,row.id,async facts=>{for(const root of facts.pending)await deps.peerPending?.(row.botId,root);for(const root of facts.settled)await deps.peerSettled?.(row.botId,root);},deps.now());}
+  function rowRoots(row: Pick<BotDeliveryRow, "class" | "requestId" | "peerRootIds">): string[] {
+    return row.peerRootIds ?? (row.class === "peer_result" && row.requestId ? [row.requestId] : []);
+  }
+  function rootsPublication(
+    botId: string,
+    roots: readonly string[],
+  ): BotDeliveryInput["publication"] {
+    if (!roots.length || !deps.peerPublication) return undefined;
+    return {
+      assertCurrent: async () => {
+        for (const id of roots) {
+          const current = await deps.peerPublication!(botId, id);
+          if (!current) throw new Error("This delayed peer result belongs to a retired Bot.");
+          await current.assertCurrent();
+        }
+      },
+    };
+  }
+  async function settled(row: BotDeliveryRow): Promise<void> {
+    if (row.peerSettledAt !== undefined || !rowRoots(row).length) return;
+    await deps.log.settlePeerReferences(
+      row.botId,
+      row.id,
+      async (facts) => {
+        for (const root of facts.pending) await deps.peerPending?.(row.botId, root);
+        for (const root of facts.settled) await deps.peerSettled?.(row.botId, root);
+      },
+      deps.now(),
+    );
+  }
   async function send(row: BotDeliveryRow, input: BotDeliveryInput, at: number) {
-    const storedPublication=rootsPublication(row.botId,rowRoots(row));
-    if(storedPublication){const original=input.publication,first=await deps.peerPublication!(row.botId,rowRoots(row)[0]!);if(!first)throw new Error("This peer result belongs to a retired Bot.");const incarnation=original?.incarnation??first.incarnation;input={...input,publication:{...(incarnation?{incarnation}:{}),assertCurrent:async()=>{await original?.assertCurrent();await storedPublication.assertCurrent();}}};}
+    const storedPublication = rootsPublication(row.botId, rowRoots(row));
+    if (storedPublication) {
+      const original = input.publication,
+        first = await deps.peerPublication!(row.botId, rowRoots(row)[0]!);
+      if (!first) throw new Error("This peer result belongs to a retired Bot.");
+      const incarnation = original?.incarnation ?? first.incarnation;
+      input = {
+        ...input,
+        publication: {
+          ...(incarnation ? { incarnation } : {}),
+          assertCurrent: async () => {
+            await original?.assertCurrent();
+            await storedPublication.assertCurrent();
+          },
+        },
+      };
+    }
     await input.publication?.assertCurrent();
     const sending: BotDeliveryInput =
       row.class === "routine_result"
         ? input
         : { ...input, requestId: `${BOT_DELIVERY_REQUEST_PREFIX}${row.id}` };
-    if (row.quiet === true) { await deps.log.markSent(row.botId, row.id, at,input.publication); await settled(row);return "suppressed"; }
+    if (row.quiet === true) {
+      await deps.log.markSent(row.botId, row.id, at, input.publication);
+      await settled(row);
+      return "suppressed";
+    }
     let delivered = false;
     if (row.macSentAt === undefined) {
       await input.publication?.assertCurrent();
       await deps.mac(sending);
-      await deps.log.markChannel(row.botId, row.id, "mac", at,input.publication);
+      await deps.log.markChannel(row.botId, row.id, "mac", at, input.publication);
       delivered = true;
     }
     if (row.telegramSentAt === undefined) {
       await input.publication?.assertCurrent();
       await deps.telegram(sending);
-      await deps.log.markChannel(row.botId, row.id, "telegram", at,input.publication);
+      await deps.log.markChannel(row.botId, row.id, "telegram", at, input.publication);
       delivered = true;
     }
-    await deps.log.markSent(row.botId, row.id, at,input.publication);
+    await deps.log.markSent(row.botId, row.id, at, input.publication);
     await settled(row);
     return delivered ? "sent" : "duplicate";
   }
@@ -126,7 +180,9 @@ export function createBotDeliveryFunnel(deps: {
     return {
       botId: row.botId,
       class: row.class,
-      ...(row.requiredCapability === undefined ? {} : { requiredCapability: row.requiredCapability }),
+      ...(row.requiredCapability === undefined
+        ? {}
+        : { requiredCapability: row.requiredCapability }),
       dedupeKey: row.dedupeKey,
       title: row.title,
       body: row.body,
@@ -136,72 +192,145 @@ export function createBotDeliveryFunnel(deps: {
   }
 
   /** `peerRootIds` keeps the suppressed finals' roots protected until this note's channels settle. */
-  async function limitNote(botId: string, key: string | undefined, at: number, peerRootIds: readonly string[], publication?: BotDeliveryInput["publication"]) {
+  async function limitNote(
+    botId: string,
+    key: string | undefined,
+    at: number,
+    peerRootIds: readonly string[],
+    publication?: BotDeliveryInput["publication"],
+  ) {
     if (!key) return;
     const note = await deps.log.find(botId, key);
     if (note) {
       if (peerRootIds.length) await deps.log.addPeerRoots(botId, note.id, peerRootIds, publication);
       return;
     }
-    const { row } = await deps.log.append({
-      botId, class: "digest", dedupeKey: key, title: (await deps.botName?.(botId)) ?? "Your Bot",
-      body: BOT_DELIVERY_LIMIT_NOTE, status: "info", createdAt: at, deliverAfter: at,
-      ...(peerRootIds.length ? { peerRootIds: [...peerRootIds] } : {}),
-    }, publication);
+    const { row } = await deps.log.append(
+      {
+        botId,
+        class: "digest",
+        dedupeKey: key,
+        title: (await deps.botName?.(botId)) ?? "Your Bot",
+        body: BOT_DELIVERY_LIMIT_NOTE,
+        status: "info",
+        createdAt: at,
+        deliverAfter: at,
+        ...(peerRootIds.length ? { peerRootIds: [...peerRootIds] } : {}),
+      },
+      publication,
+    );
     await send(row, { ...inputOf(row), publication }, at).catch(() => undefined);
   }
 
   /** Asks the gate and stores the row it decided for. */
-  async function record(input: BotDeliveryInput, at: number): Promise<{ row: BotDeliveryRow; now: boolean }> {
+  async function record(
+    input: BotDeliveryInput,
+    at: number,
+  ): Promise<{ row: BotDeliveryRow; now: boolean }> {
     let quiet = input.quiet === true || input.routineTask?.notify === false;
-    if (!quiet) { try { quiet = deps.inFront?.(input.botId) === true; } catch { /* Unknown means not in front: the person is told. */ } }
-    const decision = quiet ? {kind:"now" as const} : await deps.gate.decide(input, at);
-    if (decision.kind === "suppress") await limitNote(input.botId, decision.digestKey, at, input.class === "peer_result" && input.requestId ? [input.requestId] : [], input.publication);
+    if (!quiet) {
+      try {
+        quiet = deps.inFront?.(input.botId) === true;
+      } catch {
+        /* Unknown means not in front: the person is told. */
+      }
+    }
+    const decision = quiet ? { kind: "now" as const } : await deps.gate.decide(input, at);
+    if (decision.kind === "suppress")
+      await limitNote(
+        input.botId,
+        decision.digestKey,
+        at,
+        input.class === "peer_result" && input.requestId ? [input.requestId] : [],
+        input.publication,
+      );
     await input.publication?.assertCurrent();
-    const { row } = await deps.log.append({
-      botId: input.botId,
-      class: input.class,
-      ...(input.requiredCapability === undefined ? {} : { requiredCapability: input.requiredCapability }),
-      dedupeKey: input.dedupeKey,
-      title: input.title,
-      body: input.body,
-      status: input.status,
-      ...(input.routineTask !== undefined ? { routineId: input.routineTask.id } : {}),
-      ...(input.requestId !== undefined ? { requestId: input.requestId } : {}),
-      ...(input.class==="peer_result"&&input.requestId?{peerRootIds:[input.requestId]}:{}),
-      ...(quiet ? { quiet: true } : {}),
-      createdAt: at,
-      deliverAfter: decision.kind === "defer" ? decision.until : at,
-      ...(decision.kind === "suppress" ? { suppressed: true } : {}),
-      ...(decision.kind === "now" ? { stampNow: true } : {}),
-    },input.publication);
+    const { row } = await deps.log.append(
+      {
+        botId: input.botId,
+        class: input.class,
+        ...(input.requiredCapability === undefined
+          ? {}
+          : { requiredCapability: input.requiredCapability }),
+        dedupeKey: input.dedupeKey,
+        title: input.title,
+        body: input.body,
+        status: input.status,
+        ...(input.routineTask !== undefined ? { routineId: input.routineTask.id } : {}),
+        ...(input.requestId !== undefined ? { requestId: input.requestId } : {}),
+        ...(input.class === "peer_result" && input.requestId
+          ? { peerRootIds: [input.requestId] }
+          : {}),
+        ...(quiet ? { quiet: true } : {}),
+        createdAt: at,
+        deliverAfter: decision.kind === "defer" ? decision.until : at,
+        ...(decision.kind === "suppress" ? { suppressed: true } : {}),
+        ...(decision.kind === "now" ? { stampNow: true } : {}),
+      },
+      input.publication,
+    );
     return { row, now: decision.kind === "now" };
   }
 
   const serial = createKeyedSerial();
 
   async function flushBot(botId: string, at: number): Promise<number | undefined> {
-    const retained=await deps.log.list(botId),rows:BotDeliveryRow[]=[];
+    const retained = await deps.log.list(botId),
+      rows: BotDeliveryRow[] = [];
     // Reconcile durable stamps before filtering delivery authority: one digest
     // may have settled/pruned its first root before a crash left another owed.
     // This bookkeeping grants no send or execution authority.
-    for(const row of retained)if(row.suppressed===true||row.quiet===true||row.sentAt!==undefined&&(!row.coveredBy||retained.some(digest=>digest.dedupeKey===row.coveredBy&&digest.sentAt!==undefined)))await settled(row);
-    for(const row of retained){try{await rootsPublication(botId,rowRoots(row))?.assertCurrent();rows.push(row);}catch{/* Retired peer rows never become a new owner notification or digest. */}}
-    const held = rows.filter((row) => row.quiet !== true && row.suppressed !== true && row.sentAt === undefined && row.deliverAfter > row.createdAt);
+    for (const row of retained)
+      if (
+        row.suppressed === true ||
+        row.quiet === true ||
+        (row.sentAt !== undefined &&
+          (!row.coveredBy ||
+            retained.some(
+              (digest) => digest.dedupeKey === row.coveredBy && digest.sentAt !== undefined,
+            )))
+      )
+        await settled(row);
+    for (const row of retained) {
+      try {
+        await rootsPublication(botId, rowRoots(row))?.assertCurrent();
+        rows.push(row);
+      } catch {
+        /* Retired peer rows never become a new owner notification or digest. */
+      }
+    }
+    const held = rows.filter(
+      (row) =>
+        row.quiet !== true &&
+        row.suppressed !== true &&
+        row.sentAt === undefined &&
+        row.deliverAfter > row.createdAt,
+    );
     let due = held.filter((row) => row.deliverAfter <= at);
     const later = held.filter((row) => row.deliverAfter > at).map((row) => row.deliverAfter);
     // A digest whose channels didn't all go out last time: only the owed ones.
-    const digests = rows.filter((row) => row.class === "digest" && row.sentAt === undefined && row.suppressed !== true);
-    const quietUntil = due.length || digests.length ? await deps.gate.quietUntil?.(botId, at) : undefined;
+    const digests = rows.filter(
+      (row) => row.class === "digest" && row.sentAt === undefined && row.suppressed !== true,
+    );
+    const quietUntil =
+      due.length || digests.length ? await deps.gate.quietUntil?.(botId, at) : undefined;
     for (const row of digests) {
       if (quietUntil !== undefined && row.dedupeKey.startsWith("digest:away:")) continue;
       await send(row, inputOf(row), at).catch(() => undefined);
     }
-    for(const row of rows.filter(row=>row.quiet===true&&row.sentAt===undefined)) await deps.log.markSent(row.botId,row.id,at,rootsPublication(botId,rowRoots(row)));
+    for (const row of rows.filter((row) => row.quiet === true && row.sentAt === undefined))
+      await deps.log.markSent(row.botId, row.id, at, rootsPublication(botId, rowRoots(row)));
     if (quietUntil !== undefined) return Math.min(quietUntil, ...later);
-    const unreleased = due.filter((row) => row.releasedAt === undefined && row.macSentAt === undefined && row.telegramSentAt === undefined);
+    const unreleased = due.filter(
+      (row) =>
+        row.releasedAt === undefined &&
+        row.macSentAt === undefined &&
+        row.telegramSentAt === undefined,
+    );
     const counted = unreleased.filter((row) => BOT_DELIVERY_COUNTED_CLASSES.has(row.class));
-    const decision = counted.length ? await deps.gate.reviewHeld?.(inputOf(counted[0]!), at) : undefined;
+    const decision = counted.length
+      ? await deps.gate.reviewHeld?.(inputOf(counted[0]!), at)
+      : undefined;
     if (decision?.kind === "defer") return Math.min(decision.until, ...later);
     // The root check above predates the gate's awaits, so every write that makes
     // a held row or its note visible asserts the roots again. A failure aborts
@@ -211,7 +340,14 @@ export function createBotDeliveryFunnel(deps: {
       await limitNote(botId, decision.digestKey, at, roots, rootsPublication(botId, roots));
     }
     const suppressed = new Set(decision?.kind === "suppress" ? counted.map((row) => row.id) : []);
-    if (unreleased.length) await deps.log.releaseHeld(botId, unreleased.map((row) => row.id), at, suppressed, rootsPublication(botId, [...new Set(unreleased.flatMap(rowRoots))]));
+    if (unreleased.length)
+      await deps.log.releaseHeld(
+        botId,
+        unreleased.map((row) => row.id),
+        at,
+        suppressed,
+        rootsPublication(botId, [...new Set(unreleased.flatMap(rowRoots))]),
+      );
     due = due.filter((row) => !suppressed.has(row.id));
     const issues = due.filter((row) => row.class === "issue");
     const others = due.filter((row) => row.class !== "issue");
@@ -221,17 +357,38 @@ export function createBotDeliveryFunnel(deps: {
       // The digest is a row of its own, keyed by the rows it covers: a crash
       // or a failed channel resumes the same digest (same Telegram request
       // id), and the Mac banner is stamped once it went out.
-      async function digest(group:BotDeliveryRow[]):Promise<void>{
-        const ids=group.map(row=>row.id).sort(),peerRootIds=[...new Set(group.flatMap(rowRoots))],publication=rootsPublication(botId,peerRootIds);
-        const {row:summary}=await deps.log.append({botId,class:"digest",dedupeKey:`digest:away:${createHash("sha256").update(ids.join("\0")).digest("hex").slice(0,32)}`,title:(await deps.botName?.(botId))??"Your Bot",body:awayDigestBody(group.length),...(peerRootIds.length?{peerRootIds}:{}),status:"info",createdAt:at,deliverAfter:at},publication);
-        await deps.log.markCovered(botId,ids,summary.dedupeKey,at,publication);
-        await send(summary,{...inputOf(summary),publication},at);
+      async function digest(group: BotDeliveryRow[]): Promise<void> {
+        const ids = group.map((row) => row.id).sort(),
+          peerRootIds = [...new Set(group.flatMap(rowRoots))],
+          publication = rootsPublication(botId, peerRootIds);
+        const { row: summary } = await deps.log.append(
+          {
+            botId,
+            class: "digest",
+            dedupeKey: `digest:away:${createHash("sha256").update(ids.join("\0")).digest("hex").slice(0, 32)}`,
+            title: (await deps.botName?.(botId)) ?? "Your Bot",
+            body: awayDigestBody(group.length),
+            ...(peerRootIds.length ? { peerRootIds } : {}),
+            status: "info",
+            createdAt: at,
+            deliverAfter: at,
+          },
+          publication,
+        );
+        await deps.log.markCovered(botId, ids, summary.dedupeKey, at, publication);
+        await send(summary, { ...inputOf(summary), publication }, at);
       }
-      try{await digest(others);}catch(error){if(!(error instanceof BotDeliveryHistoryFullError))throw error;
+      try {
+        await digest(others);
+      } catch (error) {
+        if (!(error instanceof BotDeliveryHistoryFullError)) throw error;
         // A full retained queue has no room for its digest control row. Drain
         // one existing delivery completely, then reuse only that settled slot.
-        const first=others[others.length-1]!;await send(first,inputOf(first),at);
-        const remainder=others.slice(0,-1);if(remainder.length===1)await send(remainder[0]!,inputOf(remainder[0]!),at);else if(remainder.length>1)await digest(remainder);
+        const first = others[others.length - 1]!;
+        await send(first, inputOf(first), at);
+        const remainder = others.slice(0, -1);
+        if (remainder.length === 1) await send(remainder[0]!, inputOf(remainder[0]!), at);
+        else if (remainder.length > 1) await digest(remainder);
       }
     }
     return later.length ? Math.min(...later) : undefined;
@@ -253,9 +410,16 @@ export function createBotDeliveryFunnel(deps: {
     },
   };
 
-  async function deliverOnce(input: BotDeliveryInput): Promise<"sent" | "deferred" | "suppressed" | "duplicate"> {
+  async function deliverOnce(
+    input: BotDeliveryInput,
+  ): Promise<"sent" | "deferred" | "suppressed" | "duplicate"> {
     {
-      if (input.class === "routine_result" && input.requestId && await deps.ownsPeerFinal?.(input.botId,input.requestId)) return "suppressed";
+      if (
+        input.class === "routine_result" &&
+        input.requestId &&
+        (await deps.ownsPeerFinal?.(input.botId, input.requestId))
+      )
+        return "suppressed";
       await input.publication?.assertCurrent();
       const at = deps.now();
       // An existing row keeps its stored decision: asking the gate again would
@@ -264,16 +428,25 @@ export function createBotDeliveryFunnel(deps: {
       const stored = await deps.log.find(input.botId, input.dedupeKey);
       const created = stored ? undefined : await record(input, at);
       const row = stored ?? created!.row;
-      if (row.suppressed === true) {await settled(row);return "suppressed";}
+      if (row.suppressed === true) {
+        await settled(row);
+        return "suppressed";
+      }
       // Only a row that went out on every channel is a duplicate.
-      if (row.sentAt !== undefined) {await settled(row);return "duplicate";}
+      if (row.sentAt !== undefined) {
+        await settled(row);
+        return "duplicate";
+      }
       // A row the gate just released goes now; a stored one waits for its time.
       if (created ? !created.now : row.deliverAfter > at) return "deferred";
       if (stored && row.deliverAfter > row.createdAt) {
         // Only the flush releases held rows, including retries after a restart.
         await flushBot(input.botId, at);
         const released = await deps.log.find(input.botId, input.dedupeKey);
-        if (released?.suppressed) {await settled(released);return "suppressed";}
+        if (released?.suppressed) {
+          await settled(released);
+          return "suppressed";
+        }
         return released?.sentAt === undefined ? "deferred" : "sent";
       }
       return send(row, input, at);

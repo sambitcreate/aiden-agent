@@ -11,7 +11,10 @@ import {
 } from "./chat-fork-service.js";
 import { createChatStore } from "./chat-store-core.js";
 import type { Chat, Workspace } from "./types.js";
-import { createWorkspaceApplicationService, type WorkspaceApplicationDependencies } from "./workspace-application-service.js";
+import {
+  createWorkspaceApplicationService,
+  type WorkspaceApplicationDependencies,
+} from "./workspace-application-service.js";
 import { workspaceFolderMissing } from "./workspace-folder-presence.js";
 import { WorkspaceMutationGate } from "./workspace-mutation-gate.js";
 
@@ -28,7 +31,12 @@ async function fixture(t: TestContext) {
   return {
     store,
     source,
-    ids: { firstPrompt: firstPrompt!, firstReply: firstReply!, secondPrompt: secondPrompt!, secondReply: secondReply! },
+    ids: {
+      firstPrompt: firstPrompt!,
+      firstReply: firstReply!,
+      secondPrompt: secondPrompt!,
+      secondReply: secondReply!,
+    },
   };
 }
 
@@ -66,9 +74,15 @@ test("a fork is published once and starts its summary", async (t) => {
     caller,
   );
 
-  assert.deepEqual(fork.messages.map(({ content }) => content), ["Why does it fail?", "A missing token."]);
+  assert.deepEqual(
+    fork.messages.map(({ content }) => content),
+    ["Why does it fail?", "A missing token."],
+  );
   assert.equal(fork.forkedFrom?.summary?.state, "pending");
-  assert.deepEqual(published.map(({ id }) => id), [fork.id]);
+  assert.deepEqual(
+    published.map(({ id }) => id),
+    [fork.id],
+  );
   assert.deepEqual(summaries, [fork.id]);
 });
 
@@ -101,7 +115,10 @@ test("a summary needs a host that can summarize", async (t) => {
 
 test("only one copy runs at a time and a busy source is refused", async (t) => {
   const { store, source } = await fixture(t);
-  await rejectsWith(service(store, { beginChatCopy: () => null }).fork({ chatId: source.id }, caller), "busy");
+  await rejectsWith(
+    service(store, { beginChatCopy: () => null }).fork({ chatId: source.id }, caller),
+    "busy",
+  );
 
   let release!: () => void;
   const gate = new Promise<void>((resolve) => {
@@ -202,9 +219,15 @@ test("a journal that cannot be carried degrades the fork instead of failing it",
       deleteChat: async () => undefined,
     },
     reportDegraded: (error) => degraded.push(error),
-  }).fork({ chatId: source.id, forkAt: { messageId: ids.secondPrompt, position: "before" } }, caller);
+  }).fork(
+    { chatId: source.id, forkAt: { messageId: ids.secondPrompt, position: "before" } },
+    caller,
+  );
 
-  assert.deepEqual(fork.messages.map(({ content }) => content), ["Why does it fail?", "A missing token."]);
+  assert.deepEqual(
+    fork.messages.map(({ content }) => content),
+    ["Why does it fail?", "A missing token."],
+  );
   assert.deepEqual(degraded, [failure]);
 });
 
@@ -243,19 +266,28 @@ test("a host whose turns read only the journal refuses a fork it cannot journal"
     reportDegraded: (error) => degraded.push(error),
   });
   const fork = () =>
-    forks.fork({ chatId: source.id, forkAt: { messageId: ids.secondPrompt, position: "before" } }, caller);
+    forks.fork(
+      { chatId: source.id, forkAt: { messageId: ids.secondPrompt, position: "before" } },
+      caller,
+    );
 
   await rejectsWith(fork(), "unavailable");
   // A partly written journal is discarded with the fork it was for.
   assert.deepEqual(deleted, ["fork-target"]);
   forkChat = async () => false;
   await rejectsWith(fork(), "unavailable");
-  assert.deepEqual((await store.list()).map(({ id }) => id), [source.id]);
+  assert.deepEqual(
+    (await store.list()).map(({ id }) => id),
+    [source.id],
+  );
   assert.deepEqual(degraded, []);
 
   forkChat = async () => true;
   const forked = await fork();
-  assert.deepEqual(forked.messages.map(({ content }) => content), ["Why does it fail?", "A missing token."]);
+  assert.deepEqual(
+    forked.messages.map(({ content }) => content),
+    ["Why does it fail?", "A missing token."],
+  );
 });
 
 test("a caller can refuse the copy before it is installed", async (t) => {
@@ -268,7 +300,10 @@ test("a caller can refuse the copy before it is installed", async (t) => {
       {
         ...caller,
         assertInstallable: (chat) => {
-          assert.deepEqual(chat.messages.map(({ content }) => content), ["Why does it fail?", "A missing token."]);
+          assert.deepEqual(
+            chat.messages.map(({ content }) => content),
+            ["Why does it fail?", "A missing token."],
+          );
           throw refused;
         },
       },
@@ -316,36 +351,67 @@ test("feature-owned chats are ineligible for copy and fork", async (t) => {
   assert.equal((await store.list()).length, 1);
 });
 
-async function privateForkWorkspaces(t: TestContext, store: ReturnType<typeof createChatStore>, hidden = true) {
+async function privateForkWorkspaces(
+  t: TestContext,
+  store: ReturnType<typeof createChatStore>,
+  hidden = true,
+) {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-private-fork-"));
   t.after(() => fs.rm(root, { recursive: true, force: true }));
   const originalFolder = path.join(root, "original");
   await fs.mkdir(originalFolder);
   await fs.writeFile(path.join(originalFolder, "private.txt"), "source-only content");
-  const records = new Map<string, Workspace>([["workspace-fork", {
-    id: "workspace-fork", name: "Source", folderPath: originalFolder, permission: "none",
-    ...(hidden ? { noWorkspace: true as const } : {}), createdAt: 1, updatedAt: 1,
-  }]]);
+  const records = new Map<string, Workspace>([
+    [
+      "workspace-fork",
+      {
+        id: "workspace-fork",
+        name: "Source",
+        folderPath: originalFolder,
+        permission: "none",
+        ...(hidden ? { noWorkspace: true as const } : {}),
+        createdAt: 1,
+        updatedAt: 1,
+      },
+    ],
+  ]);
   let next = 0;
   const application = createWorkspaceApplicationService({
     configStore: {
       listWorkspaces: async () => [...records.values()],
       getWorkspace: async (id) => records.get(id),
-      saveWorkspace: async (workspace) => { records.set(workspace.id, workspace); return workspace; },
-      removeWorkspace: async (id) => { records.delete(id); },
+      saveWorkspace: async (workspace) => {
+        records.set(workspace.id, workspace);
+        return workspace;
+      },
+      removeWorkspace: async (id) => {
+        records.delete(id);
+      },
     },
     llmClient: { cancelWorkspaceAndSettle: async () => undefined },
-    scheduleService: { cancelWorkspace: async () => undefined, resumeWorkspace: async () => undefined },
+    scheduleService: {
+      cancelWorkspace: async () => undefined,
+      resumeWorkspace: async () => undefined,
+    },
     terminalService: { closeForWorkspace: () => undefined },
     workspaceMutationGate: new WorkspaceMutationGate(),
     workspaceOperationRegistry: { cancelAndSettle: async () => undefined },
     noWorkspace: {
-      createDirectory: async () => { const folderPath = path.join(root, `fresh-${next + 1}`); await fs.mkdir(folderPath); return { folderPath }; },
+      createDirectory: async () => {
+        const folderPath = path.join(root, `fresh-${next + 1}`);
+        await fs.mkdir(folderPath);
+        return { folderPath };
+      },
       chatIdsIn: async (id) => (await store.list(id)).map((chat) => chat.id),
-      workspaceIdsWithChats: async () => new Set((await store.list()).map((chat) => chat.workspaceId!)),
-      trash: async (folder) => { await fs.rm(folder, { recursive: true }); },
+      workspaceIdsWithChats: async () =>
+        new Set((await store.list()).map((chat) => chat.workspaceId!)),
+      trash: async (folder) => {
+        await fs.rm(folder, { recursive: true });
+      },
     },
-    createScratchWorkspaceDirectory: async () => { throw new Error("Scratch creation is outside this fixture."); },
+    createScratchWorkspaceDirectory: async () => {
+      throw new Error("Scratch creation is outside this fixture.");
+    },
     realpath: (folder) => fs.realpath(folder),
     stat: (folder) => fs.stat(folder),
     removeEmptyDirectory: (folder) => fs.rmdir(folder),
@@ -365,8 +431,14 @@ test("No workspace copy and populated forks isolate files and access, without ch
   });
   const copies = [
     await forks.fork({ chatId: source.id }, caller),
-    await forks.fork({ chatId: source.id, forkAt: { messageId: ids.firstReply, position: "after" } }, caller),
-    await forks.fork({ chatId: source.id, forkAt: { messageId: ids.secondPrompt, position: "before" } }, caller),
+    await forks.fork(
+      { chatId: source.id, forkAt: { messageId: ids.firstReply, position: "after" } },
+      caller,
+    ),
+    await forks.fork(
+      { chatId: source.id, forkAt: { messageId: ids.secondPrompt, position: "before" } },
+      caller,
+    ),
   ];
   assert.equal(new Set([source.workspaceId, ...copies.map((chat) => chat.workspaceId)]).size, 4);
   for (const copy of copies) {
@@ -400,9 +472,18 @@ test("a refused private fork releases its unused folder, but a committed one sur
     prepareWorkspace: (id) => application.reserveNoWorkspaceChat(id),
     releaseUnusedWorkspace: (id) => application.releaseNoWorkspaceAfterChat(id),
   });
-  await assert.rejects(forks.fork({ chatId: source.id }, {
-    ...caller, assertInstallable: () => { throw new Error("owner revoked"); },
-  }), /owner revoked/u);
+  await assert.rejects(
+    forks.fork(
+      { chatId: source.id },
+      {
+        ...caller,
+        assertInstallable: () => {
+          throw new Error("owner revoked");
+        },
+      },
+    ),
+    /owner revoked/u,
+  );
   assert.equal(records.size, 1);
   const copy = await forks.fork({ chatId: source.id }, caller);
   await application.releaseNoWorkspaceAfterChat(copy.workspaceId!);
@@ -416,11 +497,24 @@ async function missingFolderWorkspaces(t: TestContext, store: ReturnType<typeof 
   const root = path.dirname(originalFolder);
   const elsewhere = path.join(root, "elsewhere");
   await fs.mkdir(elsewhere);
-  records.set("elsewhere", { id: "elsewhere", name: "Elsewhere", folderPath: elsewhere, permission: "ask", createdAt: 2, updatedAt: 2 });
+  records.set("elsewhere", {
+    id: "elsewhere",
+    name: "Elsewhere",
+    folderPath: elsewhere,
+    permission: "ask",
+    createdAt: 2,
+    updatedAt: 2,
+  });
   const home = path.join(root, "home");
   await fs.mkdir(home);
   records.set("default", {
-    id: "default", name: "No workspace", folderPath: home, permission: "ask", noWorkspace: true, createdAt: 3, updatedAt: 3,
+    id: "default",
+    name: "No workspace",
+    folderPath: home,
+    permission: "ask",
+    noWorkspace: true,
+    createdAt: 3,
+    updatedAt: 3,
   });
   const movedFolder = `${originalFolder}-moved`;
   await fs.rename(originalFolder, movedFolder);
@@ -442,12 +536,20 @@ test("a chat whose folder is gone continues in another workspace with its histor
   const admitted: string[] = [];
   const continued = await forks.fork(
     { chatId: source.id, continueIn: { workspaceId: "elsewhere" } },
-    { admitWorkspace: (id) => { admitted.push(id); return caller.admitWorkspace(id); } },
+    {
+      admitWorkspace: (id) => {
+        admitted.push(id);
+        return caller.admitWorkspace(id);
+      },
+    },
   );
 
   assert.equal(continued.workspaceId, "elsewhere");
   assert.notEqual(continued.id, source.id);
-  assert.deepEqual(continued.messages.map(({ content }) => content), ["Why does it fail?", "A missing token.", "Fix it.", "Fixed."]);
+  assert.deepEqual(
+    continued.messages.map(({ content }) => content),
+    ["Why does it fail?", "A missing token.", "Fix it.", "Fixed."],
+  );
   assert.equal(continued.forkedFrom?.chatId, source.id);
   assert.equal(continued.forkedFrom?.messageId, ids.secondReply);
   // Both workspaces are held still while the copy is made.
@@ -455,7 +557,10 @@ test("a chat whose folder is gone continues in another workspace with its histor
 
   const original = await store.get(source.id);
   assert.equal(original?.workspaceId, "workspace-fork");
-  assert.deepEqual(original?.messages.map(({ id }) => id), source.messages.map(({ id }) => id));
+  assert.deepEqual(
+    original?.messages.map(({ id }) => id),
+    source.messages.map(({ id }) => id),
+  );
   assert.equal(original?.forkedFrom, undefined);
   // Nothing in the moved folder was touched or copied.
   assert.deepEqual(await fs.readdir(movedFolder), ["private.txt"]);
@@ -469,15 +574,32 @@ test("a destination workspace that refuses its hold releases the source workspac
     admitWorkspace: (id) => {
       if (id === refuse) throw new ChatForkError("busy", "That workspace is being changed.");
       held.add(id);
-      return { isAborted: () => false, release: () => { held.delete(id); } };
+      return {
+        isAborted: () => false,
+        release: () => {
+          held.delete(id);
+        },
+      };
     },
   });
 
-  await rejectsWith(forks.fork({ chatId: source.id, continueIn: { workspaceId: "elsewhere" } }, holdingCaller("elsewhere")), "busy");
+  await rejectsWith(
+    forks.fork(
+      { chatId: source.id, continueIn: { workspaceId: "elsewhere" } },
+      holdingCaller("elsewhere"),
+    ),
+    "busy",
+  );
   assert.deepEqual([...held], []);
-  assert.deepEqual((await store.list()).map(({ id }) => id), [source.id]);
+  assert.deepEqual(
+    (await store.list()).map(({ id }) => id),
+    [source.id],
+  );
   // Nothing is left held, so the next attempt goes through.
-  const continued = await forks.fork({ chatId: source.id, continueIn: { workspaceId: "elsewhere" } }, holdingCaller());
+  const continued = await forks.fork(
+    { chatId: source.id, continueIn: { workspaceId: "elsewhere" } },
+    holdingCaller(),
+  );
   assert.equal(continued.workspaceId, "elsewhere");
   assert.deepEqual([...held], []);
 });
@@ -485,9 +607,15 @@ test("a destination workspace that refuses its hold releases the source workspac
 test("No workspace as the destination uses its home, then a fresh hidden folder once the home is taken", async (t) => {
   const { store, source } = await fixture(t);
   const { forks, records } = await missingFolderWorkspaces(t, store);
-  const first = await forks.fork({ chatId: source.id, continueIn: { workspaceId: "default" } }, caller);
+  const first = await forks.fork(
+    { chatId: source.id, continueIn: { workspaceId: "default" } },
+    caller,
+  );
   assert.equal(first.workspaceId, "default");
-  const second = await forks.fork({ chatId: source.id, continueIn: { workspaceId: "default" } }, caller);
+  const second = await forks.fork(
+    { chatId: source.id, continueIn: { workspaceId: "default" } },
+    caller,
+  );
   assert.notEqual(second.workspaceId, "default");
   const fresh = records.get(second.workspaceId!);
   assert.equal(fresh?.noWorkspace, true);
@@ -498,24 +626,44 @@ test("No workspace as the destination uses its home, then a fresh hidden folder 
 test("continuing is only for a chat whose folder is gone, into a usable workspace, with the whole conversation", async (t) => {
   const { store, source, ids } = await fixture(t);
   const { forks, records, originalFolder, movedFolder } = await missingFolderWorkspaces(t, store);
-  const continueIn = (workspaceId: string) => forks.fork({ chatId: source.id, continueIn: { workspaceId } }, caller);
+  const continueIn = (workspaceId: string) =>
+    forks.fork({ chatId: source.id, continueIn: { workspaceId } }, caller);
 
   await rejectsWith(continueIn("workspace-fork"), "ineligible");
   await rejectsWith(continueIn("assistant"), "ineligible");
   await rejectsWith(continueIn("removed-workspace"), "not_found");
   const elsewhere = records.get("elsewhere")!;
-  records.set("elsewhere", { ...elsewhere, folderPath: path.join(path.dirname(originalFolder), "gone") });
+  records.set("elsewhere", {
+    ...elsewhere,
+    folderPath: path.join(path.dirname(originalFolder), "gone"),
+  });
   await rejectsWith(continueIn("elsewhere"), "folder_missing");
   records.set("elsewhere", elsewhere);
   await rejectsWith(
-    forks.fork({ chatId: source.id, continueIn: { workspaceId: "elsewhere" }, forkAt: { messageId: ids.firstReply, position: "after" } }, caller),
+    forks.fork(
+      {
+        chatId: source.id,
+        continueIn: { workspaceId: "elsewhere" },
+        forkAt: { messageId: ids.firstReply, position: "after" },
+      },
+      caller,
+    ),
     "ineligible",
   );
-  await rejectsWith(forks.fork({ chatId: source.id, continueIn: { workspaceId: "elsewhere" }, summary: {} }, caller), "ineligible");
+  await rejectsWith(
+    forks.fork(
+      { chatId: source.id, continueIn: { workspaceId: "elsewhere" }, summary: {} },
+      caller,
+    ),
+    "ineligible",
+  );
   // Once the folder is back the chat keeps working where it is.
   await fs.rename(movedFolder, originalFolder);
   await rejectsWith(continueIn("elsewhere"), "ineligible");
-  assert.deepEqual((await store.list()).map(({ id }) => id), [source.id]);
+  assert.deepEqual(
+    (await store.list()).map(({ id }) => id),
+    [source.id],
+  );
 });
 
 test("a chat with no reply yet, or a Bot chat, is not continued elsewhere", async (t) => {
@@ -523,7 +671,10 @@ test("a chat with no reply yet, or a Bot chat, is not continued elsewhere", asyn
   const { forks } = await missingFolderWorkspaces(t, store);
   const fresh = await store.create({ title: "Fresh", workspaceId: "workspace-fork" });
   await store.appendMessage(fresh.id, { role: "user", content: "Hello?" });
-  await rejectsWith(forks.fork({ chatId: fresh.id, continueIn: { workspaceId: "elsewhere" } }, caller), "ineligible");
+  await rejectsWith(
+    forks.fork({ chatId: fresh.id, continueIn: { workspaceId: "elsewhere" } }, caller),
+    "ineligible",
+  );
 
   const bot = await store.create({ title: "Bot", workspaceId: "workspace-fork", botId: "bot-one" });
   await store.appendMessage(bot.id, { role: "user", content: "Hello" });
@@ -532,7 +683,13 @@ test("a chat with no reply yet, or a Bot chat, is not continued elsewhere", asyn
   await rejectsWith(
     forks.fork(
       { chatId: bot.id, continueIn: { workspaceId: "elsewhere" } },
-      { ...caller, copyBotChat: async (chat) => { botCopies += 1; return chat; } },
+      {
+        ...caller,
+        copyBotChat: async (chat) => {
+          botCopies += 1;
+          return chat;
+        },
+      },
     ),
     "ineligible",
   );
@@ -544,5 +701,8 @@ test("a host that cannot check folders refuses to continue", async (t) => {
   const { store, source } = await fixture(t);
   const forks = service(store);
   assert.equal(forks.supportsContinue, false);
-  await rejectsWith(forks.fork({ chatId: source.id, continueIn: { workspaceId: "elsewhere" } }, caller), "unavailable");
+  await rejectsWith(
+    forks.fork({ chatId: source.id, continueIn: { workspaceId: "elsewhere" } }, caller),
+    "unavailable",
+  );
 });

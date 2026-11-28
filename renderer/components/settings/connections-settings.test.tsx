@@ -30,13 +30,38 @@ const actions: PeerAddDeviceActions = {
 const DISCOVERED: PeerDiscoveryState = {
   scanning: false,
   devices: [
-    { id: "install_open", name: "Studio Mac", platform: "mac", route: "tailscale", pairingRequests: true, paired: false },
-    { id: "install_closed", name: "Lab Linux", platform: "linux", route: "lan", pairingRequests: false, paired: false },
-    { id: "install_saved", name: "Office Mac", platform: "mac", route: "lan", pairingRequests: true, paired: true },
+    {
+      id: "install_open",
+      name: "Studio Mac",
+      platform: "mac",
+      route: "tailscale",
+      pairingRequests: true,
+      paired: false,
+    },
+    {
+      id: "install_closed",
+      name: "Lab Linux",
+      platform: "linux",
+      route: "lan",
+      pairingRequests: false,
+      paired: false,
+    },
+    {
+      id: "install_saved",
+      name: "Office Mac",
+      platform: "mac",
+      route: "lan",
+      pairingRequests: true,
+      paired: true,
+    },
   ],
 };
 
-function body(step: PeerAddDeviceStep, discovery: PeerDiscoveryState = DISCOVERED, replaceHostId?: string) {
+function body(
+  step: PeerAddDeviceStep,
+  discovery: PeerDiscoveryState = DISCOVERED,
+  replaceHostId?: string,
+) {
   return renderToStaticMarkup(
     <PeerAddDeviceSheetBody
       step={step}
@@ -52,9 +77,13 @@ function body(step: PeerAddDeviceStep, discovery: PeerDiscoveryState = DISCOVERE
 function buttons(html: string): string[] {
   return [...html.matchAll(/<button\b([^>]*)>([\s\S]*?)<\/button>/gu)]
     .filter(([, attributes]) => !/\bdisabled=""/u.test(attributes!))
-    .map(([, attributes, content]) =>
-      /aria-label="([^"]*)"/u.exec(attributes!)?.[1] ??
-      content!.replace(/<[^>]+>/gu, "").replace(/\s+/gu, " ").trim(),
+    .map(
+      ([, attributes, content]) =>
+        /aria-label="([^"]*)"/u.exec(attributes!)?.[1] ??
+        content!
+          .replace(/<[^>]+>/gu, "")
+          .replace(/\s+/gu, " ")
+          .trim(),
     );
 }
 
@@ -63,7 +92,10 @@ test("the device list offers Connect only to devices taking requests and nothing
   assert.ok(names.includes("Connect to Studio Mac"));
   assert.ok(!names.includes("Connect to Lab Linux"));
   assert.ok(names.includes("Enter setup code for Lab Linux"));
-  assert.ok(!names.some((name) => name.endsWith("Office Mac")), "a paired device cannot be paired twice");
+  assert.ok(
+    !names.some((name) => name.endsWith("Office Mac")),
+    "a paired device cannot be paired twice",
+  );
   // The manual paths stay available whatever was found.
   assert.ok(names.includes("Enter setup code"));
   assert.ok(names.includes("Paste pairing link"));
@@ -73,15 +105,23 @@ test("while searching with nothing found yet, the sheet says so and cannot resta
   const html = body({ kind: "choose" }, { scanning: true, devices: [] });
   assert.match(html, /role="status"[^>]*>[\s\S]*?Searching/u);
   assert.ok(!buttons(html).includes("Search again"));
-  assert.ok(buttons(body({ kind: "choose" }, { scanning: false, devices: [] })).includes("Search again"));
+  assert.ok(
+    buttons(body({ kind: "choose" }, { scanning: false, devices: [] })).includes("Search again"),
+  );
 });
 
 test("an empty scan explains a failed Tailscale read but an empty tailnet does not", () => {
-  const failed = body({ kind: "choose" }, { scanning: false, devices: [], tailscale: { status: "unavailable", reason: "timed-out" } });
+  const failed = body(
+    { kind: "choose" },
+    { scanning: false, devices: [], tailscale: { status: "unavailable", reason: "timed-out" } },
+  );
   assert.match(failed, /No computers found/u);
   assert.match(failed, /Tailscale didn&#x27;t respond in time/u);
   assert.ok(buttons(failed).includes("Search again"));
-  assert.doesNotMatch(body({ kind: "choose" }, { scanning: false, devices: [] }), /respond in time|device list/u);
+  assert.doesNotMatch(
+    body({ kind: "choose" }, { scanning: false, devices: [] }),
+    /respond in time|device list/u,
+  );
 });
 
 test("re-pairing lists the replaced host and lets it be connected again", () => {
@@ -105,14 +145,25 @@ test("while waiting for the other device, the match code is shown grouped with i
 });
 
 test("before the code exists, waiting is announced without a code", () => {
-  const html = body({ kind: "waiting", attemptId: "attempt_0001", method: "request", name: "Studio Mac" });
+  const html = body({
+    kind: "waiting",
+    attemptId: "attempt_0001",
+    method: "request",
+    name: "Studio Mac",
+  });
   assert.doesNotMatch(html, /Match code/u);
   assert.match(html, /role="status"[\s\S]*Asking Studio Mac/u);
-  assert.equal(peerAddDeviceTitle({ kind: "waiting", attemptId: "attempt_0001", method: "request" }), "Pairing…");
+  assert.equal(
+    peerAddDeviceTitle({ kind: "waiting", attemptId: "attempt_0001", method: "request" }),
+    "Pairing…",
+  );
 });
 
 test("a setup code for a discovered device needs no address; a typed one does", () => {
-  assert.doesNotMatch(body({ kind: "setup", device: { id: "install_closed", name: "Lab Linux" } }), /Computer address/u);
+  assert.doesNotMatch(
+    body({ kind: "setup", device: { id: "install_closed", name: "Lab Linux" } }),
+    /Computer address/u,
+  );
   assert.match(body({ kind: "setup" }), /Computer address/u);
   // Pair stays off until the fields are filled.
   assert.ok(!buttons(body({ kind: "setup" })).includes("Pair"));
@@ -177,15 +228,40 @@ test("a paired host row offers the action its state calls for", () => {
 
 test("a turned-off host shows its switch off and offers no reconnect", () => {
   const html = row(host({ enabled: false, state: "disabled" }));
-  assert.match(html, /role="switch"[^>]*aria-checked="false"[^>]*aria-label="Control Studio Mac"|aria-label="Control Studio Mac"[^>]*aria-checked="false"|aria-checked="false"[^>]*aria-label="Control Studio Mac"/u);
+  assert.match(
+    html,
+    /role="switch"[^>]*aria-checked="false"[^>]*aria-label="Control Studio Mac"|aria-label="Control Studio Mac"[^>]*aria-checked="false"|aria-checked="false"[^>]*aria-label="Control Studio Mac"/u,
+  );
   assert.ok(!buttons(html).includes("Reconnect"));
   assert.match(html, />Off</u);
 });
 
 test("transport connection stays syncing until the host feed is live", () => {
-  const view = host({ routes: [{ id: "route_lan", kind: "lan", origin: "paired", active: true }], activeRouteKind: "lan" });
-  const status: PeerHostStatus = { hostId: view.id, generation: 1, state: { kind: "connected", since: NOW }, feed: "syncing", stale: true };
-  const render = (status: PeerHostStatus) => renderToStaticMarkup(<PeerHostRow host={view} status={status} now={NOW} busy={false} onEnabledChange={noop} onReconnect={noop} onRename={noop} onRepair={noop} onForget={noop} />);
+  const view = host({
+    routes: [{ id: "route_lan", kind: "lan", origin: "paired", active: true }],
+    activeRouteKind: "lan",
+  });
+  const status: PeerHostStatus = {
+    hostId: view.id,
+    generation: 1,
+    state: { kind: "connected", since: NOW },
+    feed: "syncing",
+    stale: true,
+  };
+  const render = (status: PeerHostStatus) =>
+    renderToStaticMarkup(
+      <PeerHostRow
+        host={view}
+        status={status}
+        now={NOW}
+        busy={false}
+        onEnabledChange={noop}
+        onReconnect={noop}
+        onRename={noop}
+        onRepair={noop}
+        onForget={noop}
+      />,
+    );
   assert.match(render(status), /Syncing chats/);
   assert.match(render(status), /Local network/);
   assert.doesNotMatch(render(status), />Ready</);
@@ -197,9 +273,22 @@ test("a failed initial paired-computer read offers retry instead of a false empt
   const { QueryClient, QueryClientProvider } = await import("@tanstack/react-query");
   const { PeerHostsSettings } = await import("./peer-hosts-settings");
   const { hostQueryKeys } = await import("../../lib/hosts/host-query-keys");
-  const client = new QueryClient({ defaultOptions: { queries: { retry: false, retryOnMount: false } } });
-  await client.fetchQuery({ queryKey: hostQueryKeys.list(), queryFn: async () => { throw new Error("Storage locked"); } }).catch(() => {});
-  const html = renderToStaticMarkup(<QueryClientProvider client={client}><PeerHostsSettings hostLabel="computer" /></QueryClientProvider>);
+  const client = new QueryClient({
+    defaultOptions: { queries: { retry: false, retryOnMount: false } },
+  });
+  await client
+    .fetchQuery({
+      queryKey: hostQueryKeys.list(),
+      queryFn: async () => {
+        throw new Error("Storage locked");
+      },
+    })
+    .catch(() => {});
+  const html = renderToStaticMarkup(
+    <QueryClientProvider client={client}>
+      <PeerHostsSettings hostLabel="computer" />
+    </QueryClientProvider>,
+  );
   assert.match(html, /role="alert"/);
   assert.match(html, /Couldn&#x27;t load paired computers/);
   assert.ok(buttons(html).includes("Try again"));

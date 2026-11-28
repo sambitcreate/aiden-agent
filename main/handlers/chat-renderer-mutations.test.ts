@@ -16,7 +16,10 @@ import { assertRenameAllowedFromChat } from "../services/chat-title-policy.js";
 import type { ChatTurnLease } from "../services/chat-turn-admission.js";
 import { WorkspaceMutationGate } from "../services/workspace-mutation-gate.js";
 import { WorkspaceOperationRegistry } from "../services/workspace-operation-registry.js";
-import { createRendererChatMutationHandlers, type ChatDesignModeChange } from "./chat-renderer-mutations.js";
+import {
+  createRendererChatMutationHandlers,
+  type ChatDesignModeChange,
+} from "./chat-renderer-mutations.js";
 import type { Workspace } from "../services/types.js";
 
 type Handler = (event: IpcMainInvokeEvent, ...args: unknown[]) => unknown;
@@ -70,9 +73,16 @@ async function fixture(
     return write;
   };
   let triageWrites = 0;
-  const triage = new ChatTriageStore(() => root, { onChange: () => { triageWrites += 1; } });
+  const triage = new ChatTriageStore(() => root, {
+    onChange: () => {
+      triageWrites += 1;
+    },
+  });
   const readMarkers = new ChatReadMarkerStore(() => root);
-  await chatStore.create({ id: "design-chat", owner: { kind: "design-project", projectId: "project-1" } });
+  await chatStore.create({
+    id: "design-chat",
+    owner: { kind: "design-project", projectId: "project-1" },
+  });
   await chatStore.create({ id: "regular-chat", title: "Regular" });
   const busyChats = options.busyChats ?? new Set<string>();
   const broadcasts: ChatDesignModeChange[] = [];
@@ -82,7 +92,14 @@ async function fixture(
       getWorkspace: async (workspaceId: string) => {
         const workspace = options.workspaces?.[workspaceId];
         return workspace
-          ? ({ id: workspaceId, name: workspaceId, permission: "ask", createdAt: 1, updatedAt: 1, ...workspace } as Workspace)
+          ? ({
+              id: workspaceId,
+              name: workspaceId,
+              permission: "ask",
+              createdAt: 1,
+              updatedAt: 1,
+              ...workspace,
+            } as Workspace)
           : null;
       },
     },
@@ -163,7 +180,8 @@ async function fixture(
     ["chats:appendMessage", rendererChats.appendMessage as Handler],
     ["chats:dismissComputerUseContinue", rendererChats.dismissComputerUseContinue as Handler],
   ]);
-  const invoke = async (channel: string, ...args: unknown[]) => handlers.get(channel)!(event, ...args);
+  const invoke = async (channel: string, ...args: unknown[]) =>
+    handlers.get(channel)!(event, ...args);
   return {
     chatStore,
     invoke,
@@ -176,7 +194,11 @@ async function fixture(
 }
 
 const append = (chatId: string, turnId: string) =>
-  [chatId, { role: "user", content: "Make it calmer" }, { providerId: "openrouter", model: "model-a", turnId }] as const;
+  [
+    chatId,
+    { role: "user", content: "Make it calmer" },
+    { providerId: "openrouter", model: "model-a", turnId },
+  ] as const;
 
 test("renderer chat channels refuse a Design project's hidden chat and leave it unchanged", async (t) => {
   const f = await fixture(t);
@@ -191,7 +213,11 @@ test("renderer chat channels refuse a Design project's hidden chat and leave it 
   for (const [channel, args] of attempts) {
     await assert.rejects(f.invoke(channel, ...args), /belongs to another Aiden feature/u, channel);
   }
-  assert.deepEqual(await f.chatStore.get("design-chat"), before, "the hidden chat is exactly as it was");
+  assert.deepEqual(
+    await f.chatStore.get("design-chat"),
+    before,
+    "the hidden chat is exactly as it was",
+  );
 });
 
 test("the same channels still rename, append to and delete an ordinary chat", async (t) => {
@@ -202,7 +228,10 @@ test("the same channels still rename, append to and delete an ordinary chat", as
   assert.equal((await f.chatStore.get("regular-chat"))?.title, "Titled by model");
   await f.invoke("chats:appendMessage", ...append("regular-chat", "turn-2"));
   assert.deepEqual(
-    (await f.chatStore.get("regular-chat"))?.messages.map((message) => [message.role, message.content]),
+    (await f.chatStore.get("regular-chat"))?.messages.map((message) => [
+      message.role,
+      message.content,
+    ]),
     [["user", "Make it calmer"]],
   );
   await f.invoke("chats:remove", "regular-chat");
@@ -271,12 +300,23 @@ test("picking a model in one chat changes only that chat", async (t) => {
   assert.deepEqual([updated.providerId, updated.model], ["anthropic", "model-b"]);
   const stored = await f.chatStore.get("regular-chat");
   assert.deepEqual([stored?.providerId, stored?.model], ["anthropic", "model-b"]);
-  assert.equal(stored?.updatedAt, before?.updatedAt, "a model pick does not move the chat in the sidebar");
+  assert.equal(
+    stored?.updatedAt,
+    before?.updatedAt,
+    "a model pick does not move the chat in the sidebar",
+  );
   assert.deepEqual(stored?.messages, before?.messages, "the history is untouched");
-  assert.deepEqual(await f.chatStore.get("other-chat"), otherBefore, "the other chat keeps its own model");
+  assert.deepEqual(
+    await f.chatStore.get("other-chat"),
+    otherBefore,
+    "the other chat keeps its own model",
+  );
   const listed = await f.chatStore.list();
   assert.deepEqual(
-    listed.filter((meta) => meta.id !== "design-chat").map((meta) => [meta.id, meta.providerId, meta.model]).sort(),
+    listed
+      .filter((meta) => meta.id !== "design-chat")
+      .map((meta) => [meta.id, meta.providerId, meta.model])
+      .sort(),
     [
       ["other-chat", "openrouter", "model-a"],
       ["regular-chat", "anthropic", "model-b"],
@@ -290,16 +330,30 @@ test("a chat's model cannot change mid-reply, for a Bot chat, or with an empty p
     f.invoke("chats:setModel", "regular-chat", "anthropic", "model-b"),
     /current response/u,
   );
-  await f.chatStore.create({ id: "bot-chat", botId: "bot-1", providerId: "openrouter", model: "model-a" });
-  await assert.rejects(f.invoke("chats:setModel", "bot-chat", "anthropic", "model-b"), /Bot's settings/u);
+  await f.chatStore.create({
+    id: "bot-chat",
+    botId: "bot-1",
+    providerId: "openrouter",
+    model: "model-a",
+  });
+  await assert.rejects(
+    f.invoke("chats:setModel", "bot-chat", "anthropic", "model-b"),
+    /Bot's settings/u,
+  );
   assert.deepEqual(
     [(await f.chatStore.get("bot-chat"))?.providerId, (await f.chatStore.get("bot-chat"))?.model],
     ["openrouter", "model-a"],
   );
   await f.chatStore.create({ id: "idle-chat" });
-  await assert.rejects(f.invoke("chats:setModel", "idle-chat", "anthropic", "   "), /Invalid model/u);
+  await assert.rejects(
+    f.invoke("chats:setModel", "idle-chat", "anthropic", "   "),
+    /Invalid model/u,
+  );
   await assert.rejects(f.invoke("chats:setModel", "idle-chat", "", "model-b"), /non-empty string/u);
-  await assert.rejects(f.invoke("chats:setModel", "missing-chat", "anthropic", "model-b"), /not found/u);
+  await assert.rejects(
+    f.invoke("chats:setModel", "missing-chat", "anthropic", "model-b"),
+    /not found/u,
+  );
 });
 
 test("a chat's own thinking level is set, kept with its model, and cleared with null or a new model", async (t) => {
@@ -308,36 +362,67 @@ test("a chat's own thinking level is set, kept with its model, and cleared with 
   const level = async () => {
     const stored = await f.chatStore.get("regular-chat");
     const listed = (await f.chatStore.list()).find((meta) => meta.id === "regular-chat");
-    assert.equal(listed?.thinkingLevel, stored?.thinkingLevel, "the sidebar index agrees with the chat");
+    assert.equal(
+      listed?.thinkingLevel,
+      stored?.thinkingLevel,
+      "the sidebar index agrees with the chat",
+    );
     return [stored?.providerId, stored?.model, stored?.thinkingLevel];
   };
 
-  const updated = (await f.invoke("chats:setModel", "regular-chat", "openrouter", "model-a", "high")) as {
+  const updated = (await f.invoke(
+    "chats:setModel",
+    "regular-chat",
+    "openrouter",
+    "model-a",
+    "high",
+  )) as {
     thinkingLevel?: string;
   };
   assert.equal(updated.thinkingLevel, "high");
-  assert.deepEqual(await level(), ["openrouter", "model-a", "high"], "a level-only change on the same model persists");
+  assert.deepEqual(
+    await level(),
+    ["openrouter", "model-a", "high"],
+    "a level-only change on the same model persists",
+  );
 
   await f.invoke("chats:setModel", "regular-chat", "openrouter", "model-a", "low");
   assert.deepEqual(await level(), ["openrouter", "model-a", "low"]);
 
   await f.invoke("chats:setModel", "regular-chat", "openrouter", "model-a");
-  assert.deepEqual(await level(), ["openrouter", "model-a", "low"], "picking the same model again keeps its level");
+  assert.deepEqual(
+    await level(),
+    ["openrouter", "model-a", "low"],
+    "picking the same model again keeps its level",
+  );
 
   await f.invoke("chats:setModel", "regular-chat", "openrouter", "model-a", null);
   assert.deepEqual(await level(), ["openrouter", "model-a", undefined], "null clears the level");
 
   await f.invoke("chats:setModel", "regular-chat", "openrouter", "model-a", "max");
   await f.invoke("chats:setModel", "regular-chat", "anthropic", "model-b");
-  assert.deepEqual(await level(), ["anthropic", "model-b", undefined], "another model without a level starts without one");
+  assert.deepEqual(
+    await level(),
+    ["anthropic", "model-b", undefined],
+    "another model without a level starts without one",
+  );
 
   await f.invoke("chats:setModel", "regular-chat", "openrouter", "model-a", "medium");
-  await f.invoke("chats:appendMessage", "regular-chat", { role: "user", content: "Next" }, {
-    providerId: "anthropic",
-    model: "model-b",
-    turnId: "turn-other-model",
-  });
-  assert.deepEqual(await level(), ["anthropic", "model-b", undefined], "a send on another model drops the old model's level");
+  await f.invoke(
+    "chats:appendMessage",
+    "regular-chat",
+    { role: "user", content: "Next" },
+    {
+      providerId: "anthropic",
+      model: "model-b",
+      turnId: "turn-other-model",
+    },
+  );
+  assert.deepEqual(
+    await level(),
+    ["anthropic", "model-b", undefined],
+    "a send on another model drops the old model's level",
+  );
 });
 
 test("an unknown thinking level is refused before anything changes, and a Bot chat takes none", async (t) => {
@@ -351,8 +436,16 @@ test("an unknown thinking level is refused before anything changes, and a Bot ch
     );
   }
   assert.deepEqual(await f.chatStore.get("regular-chat"), before);
-  await f.chatStore.create({ id: "bot-chat", botId: "bot-1", providerId: "openrouter", model: "model-a" });
-  await assert.rejects(f.invoke("chats:setModel", "bot-chat", "openrouter", "model-a", "high"), /Bot's settings/u);
+  await f.chatStore.create({
+    id: "bot-chat",
+    botId: "bot-1",
+    providerId: "openrouter",
+    model: "model-a",
+  });
+  await assert.rejects(
+    f.invoke("chats:setModel", "bot-chat", "openrouter", "model-a", "high"),
+    /Bot's settings/u,
+  );
   assert.equal((await f.chatStore.get("bot-chat"))?.thinkingLevel, undefined);
 });
 
@@ -388,11 +481,18 @@ test("design mode turns on for a project chat, tells every window, and turns off
   await f.chatStore.create({ id: "site-chat", title: "Landing hero", workspaceId: "site" });
   const before = await f.chatStore.get("site-chat");
 
-  const on = (await f.invoke("chats:setDesignMode", "site-chat", true, "shortcut")) as { id: string; designMode?: true };
+  const on = (await f.invoke("chats:setDesignMode", "site-chat", true, "shortcut")) as {
+    id: string;
+    designMode?: true;
+  };
   assert.deepEqual([on.id, on.designMode], ["site-chat", true]);
   const stored = await f.chatStore.get("site-chat");
   assert.equal(stored?.designMode, true);
-  assert.equal(stored?.updatedAt, before?.updatedAt, "design mode does not move the chat in the sidebar");
+  assert.equal(
+    stored?.updatedAt,
+    before?.updatedAt,
+    "design mode does not move the chat in the sidebar",
+  );
   assert.deepEqual(f.broadcasts, [{ chatId: "site-chat", designMode: true }]);
 
   const off = (await f.invoke("chats:setDesignMode", "site-chat", false)) as { designMode?: true };
@@ -405,11 +505,15 @@ test("design mode turns on for a project chat, tells every window, and turns off
   assert.equal((await f.chatStore.get("regular-chat"))?.designMode, true);
   // Asking again for the state a chat already has changes nothing and counts nothing.
   await f.invoke("chats:setDesignMode", "regular-chat", true, "slash");
-  assert.deepEqual(events, [
-    { event: "design_mode_entered", props: { source: "shortcut" } },
-    { event: "design_mode_exited", props: {} },
-    { event: "design_mode_entered", props: { source: "toggle" } },
-  ], "an unknown source counts as the toggle");
+  assert.deepEqual(
+    events,
+    [
+      { event: "design_mode_entered", props: { source: "shortcut" } },
+      { event: "design_mode_exited", props: {} },
+      { event: "design_mode_entered", props: { source: "toggle" } },
+    ],
+    "an unknown source counts as the toggle",
+  );
 });
 
 test("design mode is refused outside project chats and leaves them unchanged", async (t) => {
@@ -419,10 +523,17 @@ test("design mode is refused outside project chats and leaves them unchanged", a
   await f.chatStore.create({ id: "bot-chat", botId: "bot-1" });
   await f.chatStore.create({ id: "assistant-chat", workspaceId: "assistant" });
   for (const chatId of ["folderless-chat", "orphan-chat", "bot-chat", "assistant-chat"]) {
-    await assert.rejects(f.invoke("chats:setDesignMode", chatId, true), /project chats only/u, chatId);
+    await assert.rejects(
+      f.invoke("chats:setDesignMode", chatId, true),
+      /project chats only/u,
+      chatId,
+    );
     assert.equal((await f.chatStore.get(chatId))?.designMode, undefined, chatId);
   }
-  await assert.rejects(f.invoke("chats:setDesignMode", "design-chat", true), /belongs to another Aiden feature/u);
+  await assert.rejects(
+    f.invoke("chats:setDesignMode", "design-chat", true),
+    /belongs to another Aiden feature/u,
+  );
   assert.deepEqual(f.broadcasts, [], "a refusal tells no window");
 });
 
@@ -447,7 +558,11 @@ test("a rename and a design mode change racing on one chat both land", async (t)
   ]);
   const stored = await f.chatStore.get("regular-chat");
   assert.deepEqual([stored?.title, stored?.designMode], ["Pricing page", true]);
-  assert.deepEqual(f.broadcasts, [{ chatId: "regular-chat", designMode: true }], "the change carries no title to undo the rename");
+  assert.deepEqual(
+    f.broadcasts,
+    [{ chatId: "regular-chat", designMode: true }],
+    "the change carries no title to undo the rename",
+  );
 });
 
 test("assertChatAccess blocks unauthorized remove and appendMessage and onChatRemoved fires on authorized delete", async (t) => {
@@ -472,7 +587,12 @@ test("assertChatAccess blocks unauthorized remove and appendMessage and onChatRe
   assert.ok(await f.chatStore.get("regular-chat"), "unauthorized remove must leave chat untouched");
 
   await assert.rejects(
-    f.invoke("chats:appendMessage", "regular-chat", { role: "user", content: "hi" }, { turnId: "t-1" }),
+    f.invoke(
+      "chats:appendMessage",
+      "regular-chat",
+      { role: "user", content: "hi" },
+      { turnId: "t-1" },
+    ),
     /Unauthorized Quick Chat conversation access/u,
   );
   assert.equal((await f.chatStore.get("regular-chat"))?.messages.length, 0);

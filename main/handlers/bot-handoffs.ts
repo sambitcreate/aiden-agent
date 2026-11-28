@@ -25,15 +25,26 @@ export interface BotHandoffHandlerDependencies<Event = unknown> {
   open(botId: string, waitId: string, event: Event): Promise<BotHandoffOpened>;
 }
 
-export function registerBotHandoffHandlers<Event = unknown>(dependencies: BotHandoffHandlerDependencies<Event>): void {
-  dependencies.handle(BOT_ANSWER_HANDOFF_CHANNEL, async (_event, input): Promise<{ answered: boolean }> => {
-    const { botId, waitId, outcome, note } = parseBotHandoffAnswer(input);
-    const result = dependencies.handoffs.answer(botId, waitId, { outcome, ...(note === undefined ? {} : { note }) });
-    if (result === "invalid") throw new Error("That answer doesn’t match the card.");
-    return { answered: result === "answered" };
-  });
-  dependencies.handle(BOT_OPEN_HANDOFF_CHANNEL, async (event, input): Promise<{ opened: BotHandoffOpened }> => {
-    const { botId, waitId } = parseBotHandoffOpen(input);
-    return { opened: await dependencies.open(botId, waitId, event) };
-  });
+export function registerBotHandoffHandlers<Event = unknown>(
+  dependencies: BotHandoffHandlerDependencies<Event>,
+): void {
+  dependencies.handle(
+    BOT_ANSWER_HANDOFF_CHANNEL,
+    async (_event, input): Promise<{ answered: boolean }> => {
+      const { botId, waitId, outcome, note } = parseBotHandoffAnswer(input);
+      const result = dependencies.handoffs.answer(botId, waitId, {
+        outcome,
+        ...(note === undefined ? {} : { note }),
+      });
+      if (result === "invalid") throw new Error("That answer doesn’t match the card.");
+      return { answered: result === "answered" };
+    },
+  );
+  dependencies.handle(
+    BOT_OPEN_HANDOFF_CHANNEL,
+    async (event, input): Promise<{ opened: BotHandoffOpened }> => {
+      const { botId, waitId } = parseBotHandoffOpen(input);
+      return { opened: await dependencies.open(botId, waitId, event) };
+    },
+  );
 }

@@ -4,7 +4,11 @@
 // `bot-bubbles-main.ts` wires the real paths, settings and broadcasts.
 
 import * as fs from "node:fs/promises";
-import type { BotBubblePlacement, BotBubbleSide, BotBubbleState } from "../../../renderer/shared/bot-bubbles.js";
+import type {
+  BotBubblePlacement,
+  BotBubbleSide,
+  BotBubbleState,
+} from "../../../renderer/shared/bot-bubbles.js";
 import { writeJsonAtomic } from "../durable-fs.js";
 import {
   EMPTY_BOT_BUBBLE_LIST,
@@ -46,7 +50,10 @@ export interface BotBubbleService {
   /** The latest state without waiting (empty until loaded). */
   current(): BotBubbleState;
   openBotId(): string | null;
-  bubble(botId: string, options?: { side?: BotBubbleSide; displayId?: number | null }): Promise<BotBubbleState>;
+  bubble(
+    botId: string,
+    options?: { side?: BotBubbleSide; displayId?: number | null },
+  ): Promise<BotBubbleState>;
   close(botId: string): Promise<BotBubbleState>;
   /** With `ifOpen`, nothing changes unless that head's chat is the open one. */
   open(botId: string | null, options?: { ifOpen?: string }): Promise<BotBubbleState>;
@@ -57,7 +64,10 @@ export interface BotBubbleService {
   /** A Bot changed or went away (no id: any Bot may have). */
   botsChanged(botId?: string): Promise<BotBubbleState>;
   /** Displays were added or removed; heads on a missing one go to the primary display. */
-  displaysChanged(liveDisplayIds: ReadonlySet<number>, primaryDisplayId: number): Promise<BotBubbleState>;
+  displaysChanged(
+    liveDisplayIds: ReadonlySet<number>,
+    primaryDisplayId: number,
+  ): Promise<BotBubbleState>;
   onChange(listener: BotBubbleChangeListener): () => void;
 }
 
@@ -67,7 +77,9 @@ const sameList = (left: BotBubbleList, right: BotBubbleList) =>
 export function createBotBubbleService(deps: BotBubbleServiceDependencies): BotBubbleService {
   const readFile = deps.readFile ?? ((filePath: string) => fs.readFile(filePath, "utf8"));
   const writeFile =
-    deps.writeFile ?? ((filePath: string, value: unknown) => writeJsonAtomic(filePath, value, { space: 2, trailingNewline: true }));
+    deps.writeFile ??
+    ((filePath: string, value: unknown) =>
+      writeJsonAtomic(filePath, value, { space: 2, trailingNewline: true }));
   const warn = (message: string, error: unknown) => deps.onWarning?.(message, error);
 
   let list: BotBubbleList = EMPTY_BOT_BUBBLE_LIST;
@@ -93,7 +105,10 @@ export function createBotBubbleService(deps: BotBubbleServiceDependencies): BotB
     }
   };
 
-  const commit = async (nextList: BotBubbleList, nextSettings = settings): Promise<BotBubbleState> => {
+  const commit = async (
+    nextList: BotBubbleList,
+    nextSettings = settings,
+  ): Promise<BotBubbleState> => {
     const listChanged = !sameList(list, nextList);
     const previous = state;
     list = nextList;
@@ -139,9 +154,14 @@ export function createBotBubbleService(deps: BotBubbleServiceDependencies): BotB
         }
         saved = parseBotBubbleFile(raw);
         rewrite = !parsed || JSON.stringify(serializeBotBubbleFile(saved)) !== JSON.stringify(raw);
-        if (parsed && rewrite) warn("The saved Bot bubble list had entries Aiden can't use; starting without them.", null);
+        if (parsed && rewrite)
+          warn(
+            "The saved Bot bubble list had entries Aiden can't use; starting without them.",
+            null,
+          );
       } catch (error) {
-        if ((error as NodeJS.ErrnoException)?.code !== "ENOENT") warn("Could not read the saved Bot bubble list.", error);
+        if ((error as NodeJS.ErrnoException)?.code !== "ENOENT")
+          warn("Could not read the saved Bot bubble list.", error);
       }
       let nextSettings = settings;
       try {
@@ -193,9 +213,18 @@ export function createBotBubbleService(deps: BotBubbleServiceDependencies): BotB
     botsChanged: (botId) =>
       mutate(async (current) => {
         if (botId !== undefined) {
-          const named = current.bubbles.some((bubble) => bubble.botId === botId) || current.recents.includes(botId);
+          const named =
+            current.bubbles.some((bubble) => bubble.botId === botId) ||
+            current.recents.includes(botId);
           if (!named || (await deps.botExists(botId))) return current;
-          return pruneBubbles(current, new Set([...current.bubbles.map((b) => b.botId), ...current.recents].filter((id) => id !== botId)));
+          return pruneBubbles(
+            current,
+            new Set(
+              [...current.bubbles.map((b) => b.botId), ...current.recents].filter(
+                (id) => id !== botId,
+              ),
+            ),
+          );
         }
         return prune(current);
       }),

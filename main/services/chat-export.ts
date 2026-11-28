@@ -115,7 +115,9 @@ export function projectAidenChatExport(
       throw new Error("This chat has too many messages to export safely.");
     }
     if (message.appPanels?.length) {
-      message.content = [message.content, ...message.appPanels.map((panel) => panel.fallback)].filter(Boolean).join("\n\n");
+      message.content = [message.content, ...message.appPanels.map((panel) => panel.fallback)]
+        .filter(Boolean)
+        .join("\n\n");
       delete message.appPanels;
     }
     if (message.attachments) message.attachments = portableAttachments(message.attachments);
@@ -191,10 +193,7 @@ export async function writeAidenChatExport(
   }
 }
 
-export async function writeAidenChatExportForRenderer(
-  target: string,
-  chat: Chat,
-): Promise<void> {
+export async function writeAidenChatExportForRenderer(target: string, chat: Chat): Promise<void> {
   try {
     await writeAidenChatExport(target, chat);
   } catch {

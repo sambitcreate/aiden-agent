@@ -55,7 +55,8 @@ export const STORAGE_CATEGORIES: readonly StorageCategoryDefinition[] = [
   {
     id: "browser",
     label: "Browser data",
-    description: "What the built-in browser and Bots’ browsers saved: sign-ins, site data and cached pages.",
+    description:
+      "What the built-in browser and Bots’ browsers saved: sign-ins, site data and cached pages.",
     action: { kind: "clear-browser-cache" },
   },
   {

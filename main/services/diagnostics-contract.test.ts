@@ -17,15 +17,27 @@ const sessionId = "session-test";
 test("main-generated renderer references survive normalization without admitting arbitrary content", () => {
   const referenceId = "RD-e20a0162-266b-49ab-ae0a-078f74efe71c";
   assert.equal(normalizeDiagnosticFields({ referenceId })?.referenceId, referenceId);
-  assert.equal(createDiagnosticEvent({ level: "error", area: "renderer", event: "renderer-global-error", fields: { referenceId } }, sessionId).fields?.referenceId, referenceId);
-  for (const value of [`${referenceId}\nprivate`, `https://private/${referenceId}`, `Bearer ${referenceId}`]) {
+  assert.equal(
+    createDiagnosticEvent(
+      { level: "error", area: "renderer", event: "renderer-global-error", fields: { referenceId } },
+      sessionId,
+    ).fields?.referenceId,
+    referenceId,
+  );
+  for (const value of [
+    `${referenceId}\nprivate`,
+    `https://private/${referenceId}`,
+    `Bearer ${referenceId}`,
+  ]) {
     assert.equal(normalizeDiagnosticFields({ referenceId: value }), undefined);
   }
 });
 
 test("structural causes retain HTTP evidence and cancellation without payloads", () => {
   const secret = "private-prompt-auth-endpoint-task-content";
-  const error = Object.assign(new Error(secret), { cause: { status: 429, message: secret, request: secret } });
+  const error = Object.assign(new Error(secret), {
+    cause: { status: 429, message: secret, request: secret },
+  });
   const projected = projectDiagnosticError(error);
   assert.equal(projected.code, "rate-limited");
   assert.equal(projected.causeCode, "rate-limited");
@@ -40,23 +52,42 @@ test("structural causes retain HTTP evidence and cancellation without payloads",
   const outerStatus = projectDiagnosticError({ status: 429, cause: { status: 503 } });
   assert.equal(outerStatus.code, "rate-limited");
   assert.equal(outerStatus.httpStatus, 429);
-  assert.equal(projectDiagnosticError({ code: "ECONNRESET", cause: { status: 503 } }).httpStatus, undefined);
+  assert.equal(
+    projectDiagnosticError({ code: "ECONNRESET", cause: { status: 503 } }).httpStatus,
+    undefined,
+  );
   assert.equal(projectDiagnosticError({ status: 404 }).code, "not-found");
-  assert.equal(projectDiagnosticError(Object.assign(new Error(secret), { cause: { code: "ABORT_ERR" } })).code, "cancelled");
-  assert.equal(projectDiagnosticError(Object.assign(new Error(secret), { name: "AbortError" })).code, "cancelled");
+  assert.equal(
+    projectDiagnosticError(Object.assign(new Error(secret), { cause: { code: "ABORT_ERR" } })).code,
+    "cancelled",
+  );
+  assert.equal(
+    projectDiagnosticError(Object.assign(new Error(secret), { name: "AbortError" })).code,
+    "cancelled",
+  );
   assert.equal(projectDiagnosticError(new TypeError(secret)).errorType, "TypeError");
   assert.equal(projectDiagnosticError(new (class extends Error {})(secret)).errorType, "Error");
-  assert.equal(projectDiagnosticError(new (class extends TypeError {})(secret)).errorType, "TypeError");
+  assert.equal(
+    projectDiagnosticError(new (class extends TypeError {})(secret)).errorType,
+    "TypeError",
+  );
 });
 
 test("renderer cancellation is counted as cancelled, not a process crash or failure", () => {
   for (const suppressed of [0, 5]) {
     assert.deepEqual(rendererDiagnosticClassification("AbortError", suppressed), {
-      code: "cancelled", outcome: "cancelled",
+      code: "cancelled",
+      outcome: "cancelled",
     });
   }
-  assert.deepEqual(rendererDiagnosticClassification("TypeError"), { code: "renderer-exception", outcome: "failed" });
-  assert.deepEqual(rendererDiagnosticClassification("UnknownError", 5), { code: "renderer-exception", outcome: "degraded" });
+  assert.deepEqual(rendererDiagnosticClassification("TypeError"), {
+    code: "renderer-exception",
+    outcome: "failed",
+  });
+  assert.deepEqual(rendererDiagnosticClassification("UnknownError", 5), {
+    code: "renderer-exception",
+    outcome: "degraded",
+  });
 });
 
 test("unknown cyclic and accessor errors stay bounded and content-free", () => {
@@ -67,15 +98,34 @@ test("unknown cyclic and accessor errors stay bounded and content-free", () => {
   const cycle: { cause?: unknown } = {};
   cycle.cause = cycle;
   assert.equal(projectDiagnosticError(cycle).code, "unknown");
-  const getters = Object.defineProperties({}, Object.fromEntries(
-    ["name", "code", "status", "statusCode", "cause", "stack"].map((key) => [key, { get() { throw new Error("private"); } }]),
-  ));
+  const getters = Object.defineProperties(
+    {},
+    Object.fromEntries(
+      ["name", "code", "status", "statusCode", "cause", "stack"].map((key) => [
+        key,
+        {
+          get() {
+            throw new Error("private");
+          },
+        },
+      ]),
+    ),
+  );
   assert.equal(projectDiagnosticError(getters).code, "unknown");
   let traps = 0;
-  const hostile = new Proxy({}, {
-    getOwnPropertyDescriptor() { traps += 1; throw new Error("private trap"); },
-    getPrototypeOf() { traps += 1; throw new Error("private prototype"); },
-  });
+  const hostile = new Proxy(
+    {},
+    {
+      getOwnPropertyDescriptor() {
+        traps += 1;
+        throw new Error("private trap");
+      },
+      getPrototypeOf() {
+        traps += 1;
+        throw new Error("private prototype");
+      },
+    },
+  );
   assert.equal(projectDiagnosticError(hostile).code, "unknown");
   assert.equal(projectDiagnosticError({ cause: hostile }).code, "unknown");
   const revoked = Proxy.revocable({}, {});
@@ -83,30 +133,76 @@ test("unknown cyclic and accessor errors stay bounded and content-free", () => {
   assert.equal(projectDiagnosticError(revoked.proxy).code, "unknown");
   assert.equal(traps, 0);
   assert.equal(projectDiagnosticError({ code: "X".repeat(100_000) }).code, "unknown");
-  assert.equal(projectDiagnosticError({ code: "private-a" }).fingerprint, projectDiagnosticError({ code: "private-b" }).fingerprint);
-  function alpha() { return new Error("private-a"); }
-  function beta() { return new Error("private-b"); }
-  assert.equal(projectDiagnosticError(alpha()).fingerprint, projectDiagnosticError(beta()).fingerprint);
-  assert.notEqual(projectDiagnosticError({ status: 429 }).fingerprint, projectDiagnosticError({ status: 503 }).fingerprint);
-  assert.deepEqual(normalizeDiagnosticFields({
-    httpStatus: 429, causeCode: "cancelled", failurePhase: "mcp-tool-discovery", providerCategory: "model_unavailable",
-  }), { httpStatus: 429, causeCode: "cancelled", failurePhase: "mcp-tool-discovery", providerCategory: "model_unavailable" });
+  assert.equal(
+    projectDiagnosticError({ code: "private-a" }).fingerprint,
+    projectDiagnosticError({ code: "private-b" }).fingerprint,
+  );
+  function alpha() {
+    return new Error("private-a");
+  }
+  function beta() {
+    return new Error("private-b");
+  }
+  assert.equal(
+    projectDiagnosticError(alpha()).fingerprint,
+    projectDiagnosticError(beta()).fingerprint,
+  );
+  assert.notEqual(
+    projectDiagnosticError({ status: 429 }).fingerprint,
+    projectDiagnosticError({ status: 503 }).fingerprint,
+  );
+  assert.deepEqual(
+    normalizeDiagnosticFields({
+      httpStatus: 429,
+      causeCode: "cancelled",
+      failurePhase: "mcp-tool-discovery",
+      providerCategory: "model_unavailable",
+    }),
+    {
+      httpStatus: 429,
+      causeCode: "cancelled",
+      failurePhase: "mcp-tool-discovery",
+      providerCategory: "model_unavailable",
+    },
+  );
   for (const httpStatus of [99, 600, 429.5, Number.NaN, Infinity, "429"]) {
     assert.equal(normalizeDiagnosticFields({ httpStatus }), undefined);
   }
-  assert.equal(normalizeDiagnosticFields({ causeCode: "secret", failurePhase: "secret", providerCategory: "secret" }), undefined);
-  assert.deepEqual(normalizeDiagnosticFields({
-    compactionReason: "threshold", compactionFailure: "summary-budget",
-    inputTokens: 251_994, outputTokens: 13_107, safetyTokens: 13_600,
-    contextWindowTokens: 272_000, overBudgetTokens: 6_701,
-    transportCause: "connection-error", privatePrompt: "secret",
-  }), {
-    compactionReason: "threshold", compactionFailure: "summary-budget",
-    inputTokens: 251_994, outputTokens: 13_107, safetyTokens: 13_600,
-    contextWindowTokens: 272_000, overBudgetTokens: 6_701,
-    transportCause: "connection-error",
-  });
-  assert.equal(normalizeDiagnosticFields({ compactionFailure: "secret", transportCause: "private-host" }), undefined);
+  assert.equal(
+    normalizeDiagnosticFields({
+      causeCode: "secret",
+      failurePhase: "secret",
+      providerCategory: "secret",
+    }),
+    undefined,
+  );
+  assert.deepEqual(
+    normalizeDiagnosticFields({
+      compactionReason: "threshold",
+      compactionFailure: "summary-budget",
+      inputTokens: 251_994,
+      outputTokens: 13_107,
+      safetyTokens: 13_600,
+      contextWindowTokens: 272_000,
+      overBudgetTokens: 6_701,
+      transportCause: "connection-error",
+      privatePrompt: "secret",
+    }),
+    {
+      compactionReason: "threshold",
+      compactionFailure: "summary-budget",
+      inputTokens: 251_994,
+      outputTokens: 13_107,
+      safetyTokens: 13_600,
+      contextWindowTokens: 272_000,
+      overBudgetTokens: 6_701,
+      transportCause: "connection-error",
+    },
+  );
+  assert.equal(
+    normalizeDiagnosticFields({ compactionFailure: "secret", transportCause: "private-host" }),
+    undefined,
+  );
 });
 
 test("diagnostic events normalize names and allowlisted scalar fields", () => {
@@ -148,16 +244,30 @@ test("diagnostic events normalize names and allowlisted scalar fields", () => {
 });
 
 test("compaction budget events keep aggregate counts without private content", () => {
-  for (const name of ["compaction-budget-exceeded", "compaction-budget-recovered", "compaction-failed"] as const) {
-    const event = createDiagnosticEvent({
-      level: "warn", area: "generation", event: name, outcome: "degraded",
-      fields: {
-        compactionReason: "threshold", compactionFailure: "summary-budget",
-        inputTokens: 251_994, outputTokens: 13_107, safetyTokens: 13_600,
-        contextWindowTokens: 272_000, overBudgetTokens: 6_701,
-        privatePrompt: "PRIVATE_PROMPT_CANARY",
+  for (const name of [
+    "compaction-budget-exceeded",
+    "compaction-budget-recovered",
+    "compaction-failed",
+  ] as const) {
+    const event = createDiagnosticEvent(
+      {
+        level: "warn",
+        area: "generation",
+        event: name,
+        outcome: "degraded",
+        fields: {
+          compactionReason: "threshold",
+          compactionFailure: "summary-budget",
+          inputTokens: 251_994,
+          outputTokens: 13_107,
+          safetyTokens: 13_600,
+          contextWindowTokens: 272_000,
+          overBudgetTokens: 6_701,
+          privatePrompt: "PRIVATE_PROMPT_CANARY",
+        },
       },
-    }, sessionId);
+      sessionId,
+    );
     assert.equal(event.event, name);
     assert.equal(event.fields?.overBudgetTokens, 6_701);
     assert.doesNotMatch(diagnosticEventLine(event), /PRIVATE_PROMPT_CANARY/u);
@@ -202,15 +312,18 @@ test("diagnostic field normalization rejects unsafe keys and non-scalars", () =>
 });
 
 test("categorical fields reject grammar-valid but unregistered strings", () => {
-  assert.deepEqual(normalizeDiagnosticFields({
-    origin: "PrivateSecret",
-    processType: "SecretProcess",
-    reason: "private-reason",
-    remoteCode: "private_code",
-    storeClass: "private-store",
-    platform: "darwin",
-    arch: "arm64",
-  }), { platform: "darwin", arch: "arm64" });
+  assert.deepEqual(
+    normalizeDiagnosticFields({
+      origin: "PrivateSecret",
+      processType: "SecretProcess",
+      reason: "private-reason",
+      remoteCode: "private_code",
+      storeClass: "private-store",
+      platform: "darwin",
+      arch: "arm64",
+    }),
+    { platform: "darwin", arch: "arm64" },
+  );
 });
 
 test("remote request diagnostics admit bounded methods and route templates only", () => {
@@ -235,38 +348,62 @@ test("remote request diagnostics admit bounded methods and route templates only"
   assert.equal(event.fields?.route, "/chats/:id/turns");
   assert.equal(event.fields?.routeCategory, "chats");
   assert.equal(event.fields?.remoteCode, "not_found");
-  assert.deepEqual(normalizeDiagnosticFields({
-    method: "GET",
-    route: "/scheduled-tasks/:id/runs",
-  }), { method: "GET", route: "/scheduled-tasks/:id/runs" });
-  assert.deepEqual(normalizeDiagnosticFields({
-    method: "DELETE",
-    route: "/workspaces/:id/git/managed-worktree",
-  }), { method: "DELETE", route: "/workspaces/:id/git/managed-worktree" });
+  assert.deepEqual(
+    normalizeDiagnosticFields({
+      method: "GET",
+      route: "/scheduled-tasks/:id/runs",
+    }),
+    { method: "GET", route: "/scheduled-tasks/:id/runs" },
+  );
+  assert.deepEqual(
+    normalizeDiagnosticFields({
+      method: "DELETE",
+      route: "/workspaces/:id/git/managed-worktree",
+    }),
+    { method: "DELETE", route: "/workspaces/:id/git/managed-worktree" },
+  );
 });
 
 test("remote request diagnostics reject unregistered methods and untrusted route strings", () => {
-  assert.deepEqual(normalizeDiagnosticFields({
-    method: "STEAL",
-    route: "/chats/:id/turns",
-  }), { route: "/chats/:id/turns" });
-  assert.deepEqual(normalizeDiagnosticFields({
-    method: "POST",
-    route: "/chats/:id/turns?token=hidden",
-  }), { method: "POST" });
-  assert.deepEqual(normalizeDiagnosticFields({
-    method: "GET",
-    route: "/Users/alice/private.ts",
-  }), { method: "GET" });
-  assert.equal(normalizeDiagnosticFields({
-    route: "chats/:id",
-  }), undefined);
-  assert.equal(normalizeDiagnosticFields({
-    route: "/chats//:id",
-  }), undefined);
-  assert.equal(normalizeDiagnosticFields({
-    route: `/${"x".repeat(500)}`,
-  }), undefined);
+  assert.deepEqual(
+    normalizeDiagnosticFields({
+      method: "STEAL",
+      route: "/chats/:id/turns",
+    }),
+    { route: "/chats/:id/turns" },
+  );
+  assert.deepEqual(
+    normalizeDiagnosticFields({
+      method: "POST",
+      route: "/chats/:id/turns?token=hidden",
+    }),
+    { method: "POST" },
+  );
+  assert.deepEqual(
+    normalizeDiagnosticFields({
+      method: "GET",
+      route: "/Users/alice/private.ts",
+    }),
+    { method: "GET" },
+  );
+  assert.equal(
+    normalizeDiagnosticFields({
+      route: "chats/:id",
+    }),
+    undefined,
+  );
+  assert.equal(
+    normalizeDiagnosticFields({
+      route: "/chats//:id",
+    }),
+    undefined,
+  );
+  assert.equal(
+    normalizeDiagnosticFields({
+      route: `/${"x".repeat(500)}`,
+    }),
+    undefined,
+  );
 });
 
 test("Tailscale status diagnostics retain only closed failure categories", () => {
@@ -364,5 +501,11 @@ test("MCP failure fields admit only hostnames, error codes and fixed vocabularie
   for (const fields of rejected) {
     assert.equal(normalizeDiagnosticFields(fields), undefined, JSON.stringify(fields));
   }
-  assert.equal(createDiagnosticEvent({ level: "info", area: "mcp", event: "mcp-recovered", outcome: "recovered" }, sessionId).event, "mcp-recovered");
+  assert.equal(
+    createDiagnosticEvent(
+      { level: "info", area: "mcp", event: "mcp-recovered", outcome: "recovered" },
+      sessionId,
+    ).event,
+    "mcp-recovered",
+  );
 });

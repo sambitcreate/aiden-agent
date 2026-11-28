@@ -12,7 +12,9 @@ import {
   type InterruptedWaitV1,
 } from "../../renderer/shared/interrupted-reply.js";
 
-type OperationReader = { listOperationsByChat(chatId: string): Promise<DurablePiRuntimeOperation[]> };
+type OperationReader = {
+  listOperationsByChat(chatId: string): Promise<DurablePiRuntimeOperation[]>;
+};
 
 /** The chat's latest foreground run when a quit or crash cut it short. */
 export async function latestInterruptedRun(
@@ -28,7 +30,10 @@ export async function latestInterruptedRun(
   return latest?.state === "interrupted" ? latest : undefined;
 }
 
-export async function chatReplyInterrupted(store: OperationReader, chatId: string): Promise<boolean> {
+export async function chatReplyInterrupted(
+  store: OperationReader,
+  chatId: string,
+): Promise<boolean> {
   return (await latestInterruptedRun(store, chatId)) !== undefined;
 }
 
@@ -52,7 +57,9 @@ export function emptyInterruptedWaits(): InterruptedWaitDatabase {
 }
 
 function shortText(value: unknown, maximum: number): string | undefined {
-  return typeof value === "string" && value.trim() && Array.from(value).length <= maximum ? value : undefined;
+  return typeof value === "string" && value.trim() && Array.from(value).length <= maximum
+    ? value
+    : undefined;
 }
 
 function parseInterruptedWait(value: unknown): InterruptedWaitRecord | undefined {
@@ -61,7 +68,8 @@ function parseInterruptedWait(value: unknown): InterruptedWaitRecord | undefined
   const chatId = shortText(input.chatId, 200);
   const waitId = shortText(input.waitId, 200);
   const askedAt = input.askedAt;
-  if (!chatId || !waitId || typeof askedAt !== "number" || !Number.isFinite(askedAt)) return undefined;
+  if (!chatId || !waitId || typeof askedAt !== "number" || !Number.isFinite(askedAt))
+    return undefined;
   if (input.kind === "question") {
     const questions = parseAskUserQuestions(input.questions);
     return questions ? { kind: "question", chatId, waitId, askedAt, questions } : undefined;
@@ -112,7 +120,9 @@ function waitsForRun(
 ): InterruptedWaitV1[] {
   return waits
     .filter((item) => item.chatId === chatId && item.askedAt >= runStartedAt)
-    .sort((left, right) => (left.kind === right.kind ? left.askedAt - right.askedAt : left.kind === "question" ? -1 : 1))
+    .sort((left, right) =>
+      left.kind === right.kind ? left.askedAt - right.askedAt : left.kind === "question" ? -1 : 1,
+    )
     .map(({ chatId: _chatId, ...view }) => view);
 }
 
@@ -120,7 +130,8 @@ export function createInterruptedWaitStore(
   persistence: InterruptedWaitPersistence,
   now: () => number = Date.now,
 ) {
-  const fresh = (wait: InterruptedWaitRecord) => now() - wait.askedAt <= INTERRUPTED_WAIT_MAX_AGE_MS;
+  const fresh = (wait: InterruptedWaitRecord) =>
+    now() - wait.askedAt <= INTERRUPTED_WAIT_MAX_AGE_MS;
   return {
     /** Save a card a chat's reply is waiting on; a reply can wait on a question and an approval at once. */
     remember(chatId: string, wait: InterruptedWaitV1): Promise<void> {
@@ -129,15 +140,21 @@ export function createInterruptedWaitStore(
       return persistence.update((draft) => {
         const kept = draft.waits.filter((item) => item.waitId !== record.waitId && fresh(item));
         const sameChat = kept.filter((item) => item.chatId === chatId);
-        const dropped = new Set(sameChat.slice(0, Math.max(0, sameChat.length - MAX_INTERRUPTED_WAITS_PER_CHAT + 1)));
-        draft.waits = [...kept.filter((item) => !dropped.has(item)), record].slice(-MAX_INTERRUPTED_WAITS);
+        const dropped = new Set(
+          sameChat.slice(0, Math.max(0, sameChat.length - MAX_INTERRUPTED_WAITS_PER_CHAT + 1)),
+        );
+        draft.waits = [...kept.filter((item) => !dropped.has(item)), record].slice(
+          -MAX_INTERRUPTED_WAITS,
+        );
       });
     },
     /** The card was answered, dismissed or withdrawn: nothing to offer again. Resolves true when a saved wait was removed. */
     forget(waitId: string, chatId?: string): Promise<boolean> {
       return persistence.update((draft) => {
         const before = draft.waits.length;
-        draft.waits = draft.waits.filter((item) => item.waitId !== waitId || (chatId !== undefined && item.chatId !== chatId));
+        draft.waits = draft.waits.filter(
+          (item) => item.waitId !== waitId || (chatId !== undefined && item.chatId !== chatId),
+        );
         return draft.waits.length < before;
       });
     },

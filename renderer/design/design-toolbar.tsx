@@ -39,7 +39,11 @@ import { prettyAccelerator } from "../shared/keybindings";
 import { DESIGN_DRAW_SHORTCUTS } from "./canvas-keymap-core";
 import { DesignCommentsPanel } from "./design-comments-panel";
 import type { DesignDrawTool } from "./design-drawing";
-import { activeDesignPage, DESIGN_CANVAS_LIMITS, type DesignCanvas } from "../shared/design-canvas/schema";
+import {
+  activeDesignPage,
+  DESIGN_CANVAS_LIMITS,
+  type DesignCanvas,
+} from "../shared/design-canvas/schema";
 
 export type DesignAddKind = "note" | "group" | "file" | "image";
 
@@ -274,7 +278,13 @@ function DrawToolMenu({
 }
 
 /** The page picker: every page, and what can be done to the one on screen. */
-function DesignPageMenu({ doc, onPage }: { doc: DesignCanvas; onPage(action: DesignPageAction): void }) {
+function DesignPageMenu({
+  doc,
+  onPage,
+}: {
+  doc: DesignCanvas;
+  onPage(action: DesignPageAction): void;
+}) {
   const page = activeDesignPage(doc);
   const at = doc.pages.indexOf(page);
   const [renaming, setRenaming] = React.useState(false);
@@ -308,7 +318,10 @@ function DesignPageMenu({ doc, onPage }: { doc: DesignCanvas; onPage(action: Des
           }}
         >
           <DropdownMenuLabel>Pages</DropdownMenuLabel>
-          <DropdownMenuRadioGroup value={page.id} onValueChange={(id) => onPage({ type: "show", id })}>
+          <DropdownMenuRadioGroup
+            value={page.id}
+            onValueChange={(id) => onPage({ type: "show", id })}
+          >
             {doc.pages.map((entry) => (
               <DropdownMenuRadioItem key={entry.id} value={entry.id}>
                 <span className="min-w-0 truncate">{entry.name}</span>
@@ -326,10 +339,16 @@ function DesignPageMenu({ doc, onPage }: { doc: DesignCanvas; onPage(action: Des
           >
             Rename page…
           </DropdownMenuItem>
-          <DropdownMenuItem disabled={!canAddPage(doc)} onSelect={() => onPage({ type: "duplicate", id: page.id })}>
+          <DropdownMenuItem
+            disabled={!canAddPage(doc)}
+            onSelect={() => onPage({ type: "duplicate", id: page.id })}
+          >
             Duplicate page
           </DropdownMenuItem>
-          <DropdownMenuItem disabled={at <= 0} onSelect={() => onPage({ type: "move", id: page.id, step: -1 })}>
+          <DropdownMenuItem
+            disabled={at <= 0}
+            onSelect={() => onPage({ type: "move", id: page.id, step: -1 })}
+          >
             Move up
           </DropdownMenuItem>
           <DropdownMenuItem

@@ -92,7 +92,10 @@ export function createTestRuntime(options: { reduced?: boolean; blankProbe?: boo
         },
       };
     },
-    createEnvironment: () => ({ texture: new Texture(), dispose: () => void environmentsDisposed++ }),
+    createEnvironment: () => ({
+      texture: new Texture(),
+      dispose: () => void environmentsDisposed++,
+    }),
     createCanvas(width, height): ViewerCanvas {
       const canvas = {
         width,
@@ -185,13 +188,17 @@ export function minimalGlb(
     return bufferViews.length - 1;
   };
   const groups = [...new Set(meshes.flatMap((mesh) => (mesh.group ? [mesh.group] : [])))];
-  const nodes: Array<{ name: string; mesh?: number; children?: number[] }> = groups.map((name) => ({ name, children: [] }));
+  const nodes: Array<{ name: string; mesh?: number; children?: number[] }> = groups.map((name) => ({
+    name,
+    children: [],
+  }));
   const roots: number[] = groups.map((_, index) => index);
   const gltfMeshes = meshes.map((mesh, index) => {
     const geometry = mesh.geometry;
     const position = geometry.getAttribute("position");
     const positions = new Float32Array(position.count * 3);
-    for (let i = 0; i < position.count; i++) positions.set([position.getX(i), position.getY(i), position.getZ(i)], i * 3);
+    for (let i = 0; i < position.count; i++)
+      positions.set([position.getX(i), position.getY(i), position.getZ(i)], i * 3);
     geometry.computeBoundingBox();
     const box = geometry.boundingBox!;
     accessors.push({
@@ -206,14 +213,25 @@ export function minimalGlb(
     const normal = geometry.getAttribute("normal");
     if (normal) {
       const normals = new Float32Array(normal.count * 3);
-      for (let i = 0; i < normal.count; i++) normals.set([normal.getX(i), normal.getY(i), normal.getZ(i)], i * 3);
-      accessors.push({ bufferView: push(new Uint8Array(normals.buffer), 34962), componentType: 5126, count: normal.count, type: "VEC3" });
+      for (let i = 0; i < normal.count; i++)
+        normals.set([normal.getX(i), normal.getY(i), normal.getZ(i)], i * 3);
+      accessors.push({
+        bufferView: push(new Uint8Array(normals.buffer), 34962),
+        componentType: 5126,
+        count: normal.count,
+        type: "VEC3",
+      });
       attributes.NORMAL = accessors.length - 1;
     }
     const primitive: Record<string, unknown> = { attributes };
     if (geometry.index) {
       const indices = Uint32Array.from(geometry.index.array as ArrayLike<number>);
-      accessors.push({ bufferView: push(new Uint8Array(indices.buffer), 34963), componentType: 5125, count: indices.length, type: "SCALAR" });
+      accessors.push({
+        bufferView: push(new Uint8Array(indices.buffer), 34963),
+        componentType: 5125,
+        count: indices.length,
+        type: "SCALAR",
+      });
       primitive.indices = accessors.length - 1;
     }
     nodes.push({ name: mesh.name, mesh: index });
@@ -261,6 +279,7 @@ export function testCanvas(): HTMLCanvasElement {
   return Object.assign(new EventTarget(), {
     width: 0,
     height: 0,
-    toBlob: (callback: (blob: Blob | null) => void) => callback(new Blob(["png"], { type: "image/png" })),
+    toBlob: (callback: (blob: Blob | null) => void) =>
+      callback(new Blob(["png"], { type: "image/png" })),
   }) as unknown as HTMLCanvasElement;
 }

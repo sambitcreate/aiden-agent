@@ -4,7 +4,11 @@ import { request as httpRequest, type IncomingMessage } from "node:http";
 import { connect } from "node:net";
 import test from "node:test";
 
-import { createDeviceStreamClient, type DeviceScreenSize, type DeviceStreamRuntime } from "../../../renderer/lib/device-stream.js";
+import {
+  createDeviceStreamClient,
+  type DeviceScreenSize,
+  type DeviceStreamRuntime,
+} from "../../../renderer/lib/device-stream.js";
 import { BOT_COMPUTER_VIEWER_HOST_ID } from "../../../renderer/shared/bot-computers.js";
 import { startDeviceHubProxy, type DeviceHubProxy } from "../devices/device-hub-proxy.js";
 import { createBotComputerControl } from "./control.js";
@@ -13,7 +17,11 @@ import { connectRfb } from "./rfb-client.js";
 import { FakeRfbServer } from "./rfb-fake-server.js";
 import { createRfbScreen, type BotComputerLiveScreen } from "./rfb-screen.js";
 import { BotComputerTakenOverError } from "./types.js";
-import { BOT_COMPUTER_VIEWER_KEY_HEADER, startBotComputerViewerHub, type BotComputerViewerHub } from "./viewer-hub.js";
+import {
+  BOT_COMPUTER_VIEWER_KEY_HEADER,
+  startBotComputerViewerHub,
+  type BotComputerViewerHub,
+} from "./viewer-hub.js";
 
 const VM = "aiden-bot-0123456789abcdef";
 const BOT = "bot-ada";
@@ -21,7 +29,8 @@ const BOT = "bot-ada";
 async function until(condition: () => boolean, timeoutMs = 3_000): Promise<void> {
   const deadline = Date.now() + timeoutMs;
   while (!condition()) {
-    if (Date.now() > deadline) throw new Error(`Timed out waiting for ${condition.toString().slice(0, 160)}`);
+    if (Date.now() > deadline)
+      throw new Error(`Timed out waiting for ${condition.toString().slice(0, 160)}`);
     await new Promise((resolve) => setTimeout(resolve, 5));
   }
 }
@@ -38,12 +47,16 @@ interface Harness {
   takeOvers: string[];
 }
 
-async function withHub(run: (harness: Harness) => Promise<void>, options: { keepAliveMs?: number } = {}) {
+async function withHub(
+  run: (harness: Harness) => Promise<void>,
+  options: { keepAliveMs?: number } = {},
+) {
   const server = new FakeRfbServer({ width: 40, height: 30, password: "run-pass-1" });
   const port = await server.listen();
   let encodes = 0;
   const screen = await createRfbScreen({
-    connect: (signal) => connectRfb(connect({ host: "127.0.0.1", port }), { password: "run-pass-1", signal }),
+    connect: (signal) =>
+      connectRfb(connect({ host: "127.0.0.1", port }), { password: "run-pass-1", signal }),
     // Each JPEG names the pixel at (0, 0), so a part shows which picture it carries.
     encode: async (bgra, width, height) => {
       encodes += 1;
@@ -74,7 +87,17 @@ async function withHub(run: (harness: Harness) => Promise<void>, options: { keep
     hubHeaders: { [BOT_COMPUTER_VIEWER_KEY_HEADER]: key },
   });
   try {
-    await run({ server, screen, hub, proxy, key, control, touches, encodes: () => encodes, takeOvers });
+    await run({
+      server,
+      screen,
+      hub,
+      proxy,
+      key,
+      control,
+      touches,
+      encodes: () => encodes,
+      takeOvers,
+    });
   } finally {
     await proxy.close();
     await hub.close();
@@ -120,7 +143,10 @@ function parts(chunks: Buffer[]): Part[] {
     const headerEnd = bytes.indexOf("\r\n\r\n", start);
     if (headerEnd < 0) return found;
     const headers: Record<string, string> = {};
-    for (const line of bytes.subarray(start + 9, headerEnd).toString().split("\r\n")) {
+    for (const line of bytes
+      .subarray(start + 9, headerEnd)
+      .toString()
+      .split("\r\n")) {
       const [name, ...value] = line.split(":");
       headers[name.toLowerCase()] = value.join(":").trim();
     }
@@ -177,12 +203,24 @@ async function openSocket(origin: string, path: string, headers: Record<string, 
   });
   socket.on("error", () => undefined);
   await until(() => status !== 0 || closed);
-  const frame = (opcode: number, payload: Buffer, options: { masked?: boolean; fin?: boolean } = {}) => {
+  const frame = (
+    opcode: number,
+    payload: Buffer,
+    options: { masked?: boolean; fin?: boolean } = {},
+  ) => {
     const masked = options.masked ?? true;
     const header =
       payload.length < 126
-        ? Buffer.from([(options.fin ?? true ? 0x80 : 0) | opcode, (masked ? 0x80 : 0) | payload.length])
-        : Buffer.from([(options.fin ?? true ? 0x80 : 0) | opcode, (masked ? 0x80 : 0) | 126, payload.length >> 8, payload.length & 0xff]);
+        ? Buffer.from([
+            ((options.fin ?? true) ? 0x80 : 0) | opcode,
+            (masked ? 0x80 : 0) | payload.length,
+          ])
+        : Buffer.from([
+            ((options.fin ?? true) ? 0x80 : 0) | opcode,
+            (masked ? 0x80 : 0) | 126,
+            payload.length >> 8,
+            payload.length & 0xff,
+          ]);
     const mask = masked ? randomBytes(4) : Buffer.alloc(0);
     const body = Buffer.from(payload);
     if (masked) for (let index = 0; index < body.length; index += 1) body[index] ^= mask[index % 4];
@@ -198,25 +236,46 @@ async function openSocket(origin: string, path: string, headers: Record<string, 
         const length = message[1] & 0x7f;
         return [message[0] & 0x0f, message.subarray(length === 126 ? 4 : 2)] as const;
       }),
-    send: (tag: number, body: unknown) => socket.write(frame(0x2, Buffer.concat([Buffer.from([tag]), Buffer.from(JSON.stringify(body))]))),
-    sendRaw: (opcode: number, payload: Buffer, options?: { masked?: boolean; fin?: boolean }) => socket.write(frame(opcode, payload, options)),
+    send: (tag: number, body: unknown) =>
+      socket.write(
+        frame(0x2, Buffer.concat([Buffer.from([tag]), Buffer.from(JSON.stringify(body))])),
+      ),
+    sendRaw: (opcode: number, payload: Buffer, options?: { masked?: boolean; fin?: boolean }) =>
+      socket.write(frame(opcode, payload, options)),
     close: () => socket.destroy(),
   };
 }
 
-const hubHeaders = (hub: BotComputerViewerHub, key: string) => ({ host: new URL(hub.origin).host, [BOT_COMPUTER_VIEWER_KEY_HEADER]: key });
+const hubHeaders = (hub: BotComputerViewerHub, key: string) => ({
+  host: new URL(hub.origin).host,
+  [BOT_COMPUTER_VIEWER_KEY_HEADER]: key,
+});
 
 /** A Bot action that runs until something aborts it. */
 function botAction(control: ReturnType<typeof createBotComputerControl>) {
-  return control.run(BOT, undefined, (signal) => new Promise<never>((_resolve, reject) => signal.addEventListener("abort", () => reject(signal.reason))));
+  return control.run(
+    BOT,
+    undefined,
+    (signal) =>
+      new Promise<never>((_resolve, reject) =>
+        signal.addEventListener("abort", () => reject(signal.reason)),
+      ),
+  );
 }
 
 test("the screen streams as multipart JPEG through the proxy, a part per change, and a late viewer gets the current picture at once", async () => {
   await withHub(async ({ server, proxy, encodes }) => {
     server.paint({ x: 0, y: 0, width: 40, height: 30 }, [10, 20, 30]);
-    const first = await get(proxy.origin, proxied(proxy, `/vendor/serve-sim/helper/${VM}/stream.mjpeg`), { origin: "file://" });
+    const first = await get(
+      proxy.origin,
+      proxied(proxy, `/vendor/serve-sim/helper/${VM}/stream.mjpeg`),
+      { origin: "file://" },
+    );
     assert.equal(first.response.statusCode, 200);
-    assert.match(String(first.response.headers["content-type"]), /^multipart\/x-mixed-replace; boundary=frame$/u);
+    assert.match(
+      String(first.response.headers["content-type"]),
+      /^multipart\/x-mixed-replace; boundary=frame$/u,
+    );
     assert.equal(first.response.headers["cache-control"], "no-store, no-transform");
     await until(() => parts(first.chunks).length >= 1);
     assert.deepEqual(parts(first.chunks)[0], {
@@ -227,7 +286,11 @@ test("the screen streams as multipart JPEG through the proxy, a part per change,
     await until(() => parts(first.chunks).some((part) => part.body === "JPEG 200,0,0"));
     const encoded = encodes();
     // Nothing changed: a second viewer is sent the picture already taken, without encoding another.
-    const second = await get(proxy.origin, proxied(proxy, `/vendor/serve-sim/helper/${VM}/stream.mjpeg`), { origin: "file://" });
+    const second = await get(
+      proxy.origin,
+      proxied(proxy, `/vendor/serve-sim/helper/${VM}/stream.mjpeg`),
+      { origin: "file://" },
+    );
     await until(() => parts(second.chunks).length >= 1);
     assert.equal(parts(second.chunks)[0].body, "JPEG 200,0,0");
     assert.equal(encodes(), encoded);
@@ -238,7 +301,11 @@ test("the screen streams as multipart JPEG through the proxy, a part per change,
 
 test("frames are no faster than the frame interval however often the screen changes", async () => {
   await withHub(async ({ server, hub, key, encodes }) => {
-    const stream = await get(hub.origin, `/vendor/serve-sim/helper/${VM}/stream.mjpeg`, hubHeaders(hub, key));
+    const stream = await get(
+      hub.origin,
+      `/vendor/serve-sim/helper/${VM}/stream.mjpeg`,
+      hubHeaders(hub, key),
+    );
     await until(() => parts(stream.chunks).length >= 1);
     const before = encodes();
     const started = Date.now();
@@ -249,7 +316,10 @@ test("frames are no faster than the frame interval however often the screen chan
     await new Promise((resolve) => setTimeout(resolve, 40));
     const elapsed = Date.now() - started;
     // One frame per 30 ms interval at most, plus the one in flight when painting began.
-    assert.ok(encodes() - before <= Math.ceil(elapsed / 30) + 1, `${encodes() - before} frames in ${elapsed} ms`);
+    assert.ok(
+      encodes() - before <= Math.ceil(elapsed / 30) + 1,
+      `${encodes() - before} frames in ${elapsed} ms`,
+    );
     assert.ok(encodes() - before >= 2, "changes keep producing frames");
     stream.response.destroy();
   });
@@ -265,34 +335,87 @@ test("only main's proxy reaches the hub: no key, another Host or Origin, other r
     };
     const { host } = new URL(hub.origin);
     assert.equal(await status(hub.origin, path, { host }), 403, "no key");
-    assert.equal(await status(hub.origin, path, { host, [BOT_COMPUTER_VIEWER_KEY_HEADER]: `${key}x` }), 403, "wrong key");
-    assert.equal(await status(hub.origin, path, { host: "localhost", [BOT_COMPUTER_VIEWER_KEY_HEADER]: key }), 403, "rebound Host");
-    assert.equal(await status(hub.origin, path, { ...hubHeaders(hub, key), origin: "https://evil.example" }), 403, "foreign Origin");
-    assert.equal(await status(hub.origin, path, { ...hubHeaders(hub, key), origin: hub.origin }), 200, "the hub's own Origin");
-    assert.equal(await status(hub.origin, `/vendor/serve-sim/helper/aiden-bot-ffffffffffffffff/stream.mjpeg`, hubHeaders(hub, key)), 404);
-    assert.equal(await status(hub.origin, `/vendor/serve-sim/helper/${VM}/stream.avcc`, hubHeaders(hub, key)), 404);
+    assert.equal(
+      await status(hub.origin, path, { host, [BOT_COMPUTER_VIEWER_KEY_HEADER]: `${key}x` }),
+      403,
+      "wrong key",
+    );
+    assert.equal(
+      await status(hub.origin, path, { host: "localhost", [BOT_COMPUTER_VIEWER_KEY_HEADER]: key }),
+      403,
+      "rebound Host",
+    );
+    assert.equal(
+      await status(hub.origin, path, { ...hubHeaders(hub, key), origin: "https://evil.example" }),
+      403,
+      "foreign Origin",
+    );
+    assert.equal(
+      await status(hub.origin, path, { ...hubHeaders(hub, key), origin: hub.origin }),
+      200,
+      "the hub's own Origin",
+    );
+    assert.equal(
+      await status(
+        hub.origin,
+        `/vendor/serve-sim/helper/aiden-bot-ffffffffffffffff/stream.mjpeg`,
+        hubHeaders(hub, key),
+      ),
+      404,
+    );
+    assert.equal(
+      await status(hub.origin, `/vendor/serve-sim/helper/${VM}/stream.avcc`, hubHeaders(hub, key)),
+      404,
+    );
     assert.equal(await status(hub.origin, `/vendor/serve-sim/api`, hubHeaders(hub, key)), 404);
     // Through the proxy: a grant and the renderer's Origin are needed.
-    assert.equal(await status(proxy.origin, `${path}?host=${BOT_COMPUTER_VIEWER_HOST_ID}`, { origin: "file://" }), 401);
-    assert.equal(await status(proxy.origin, proxied(proxy, path), { origin: "https://evil.example" }), 403);
-    assert.equal(await status(proxy.origin, proxied(proxy, path).replace(`host=${BOT_COMPUTER_VIEWER_HOST_ID}`, "host=local"), { origin: "file://" }), 503);
+    assert.equal(
+      await status(proxy.origin, `${path}?host=${BOT_COMPUTER_VIEWER_HOST_ID}`, {
+        origin: "file://",
+      }),
+      401,
+    );
+    assert.equal(
+      await status(proxy.origin, proxied(proxy, path), { origin: "https://evil.example" }),
+      403,
+    );
+    assert.equal(
+      await status(
+        proxy.origin,
+        proxied(proxy, path).replace(`host=${BOT_COMPUTER_VIEWER_HOST_ID}`, "host=local"),
+        { origin: "file://" },
+      ),
+      503,
+    );
 
     const noKey = await openSocket(hub.origin, `/vendor/serve-sim/helper/ws?device=${VM}`);
     assert.equal(noKey.status(), 403);
-    const otherVm = await openSocket(hub.origin, `/vendor/serve-sim/helper/ws?device=aiden-bot-ffffffffffffffff`, {
-      [BOT_COMPUTER_VIEWER_KEY_HEADER]: key,
-    });
+    const otherVm = await openSocket(
+      hub.origin,
+      `/vendor/serve-sim/helper/ws?device=aiden-bot-ffffffffffffffff`,
+      {
+        [BOT_COMPUTER_VIEWER_KEY_HEADER]: key,
+      },
+    );
     assert.equal(otherVm.status(), 404);
-    const twoDevices = await openSocket(hub.origin, `/vendor/serve-sim/helper/ws?device=${VM}&device=${VM}`, {
-      [BOT_COMPUTER_VIEWER_KEY_HEADER]: key,
-    });
+    const twoDevices = await openSocket(
+      hub.origin,
+      `/vendor/serve-sim/helper/ws?device=${VM}&device=${VM}`,
+      {
+        [BOT_COMPUTER_VIEWER_KEY_HEADER]: key,
+      },
+    );
     assert.equal(twoDevices.status(), 404);
   });
 });
 
 test("the input socket tells the viewer the screen size on open and again after a resize", async () => {
   await withHub(async ({ server, proxy }) => {
-    const socket = await openSocket(proxy.origin, proxied(proxy, `/vendor/serve-sim/helper/ws?device=${VM}`), { origin: "file://" });
+    const socket = await openSocket(
+      proxy.origin,
+      proxied(proxy, `/vendor/serve-sim/helper/ws?device=${VM}`),
+      { origin: "file://" },
+    );
     assert.equal(socket.status(), 101);
     const configs = () =>
       socket
@@ -311,7 +434,11 @@ test("the input socket tells the viewer the screen size on open and again after 
 test("a touch while the Bot drives takes over, interrupting the Bot's action, and that whole touch is swallowed", async () => {
   await withHub(async ({ server, proxy, control, takeOvers }) => {
     const action = botAction(control);
-    const socket = await openSocket(proxy.origin, proxied(proxy, `/vendor/serve-sim/helper/ws?device=${VM}`), { origin: "file://" });
+    const socket = await openSocket(
+      proxy.origin,
+      proxied(proxy, `/vendor/serve-sim/helper/ws?device=${VM}`),
+      { origin: "file://" },
+    );
     socket.send(0x03, { type: "begin", x: 0.5, y: 0.5 });
     await assert.rejects(action, BotComputerTakenOverError);
     assert.equal(control.controller(BOT), "person");
@@ -335,7 +462,11 @@ test("a touch while the Bot drives takes over, interrupting the Bot's action, an
 
 test("a key that takes over is swallowed with its release; the person's later keys reach the computer as keysyms", async () => {
   await withHub(async ({ server, proxy, control }) => {
-    const socket = await openSocket(proxy.origin, proxied(proxy, `/vendor/serve-sim/helper/ws?device=${VM}`), { origin: "file://" });
+    const socket = await openSocket(
+      proxy.origin,
+      proxied(proxy, `/vendor/serve-sim/helper/ws?device=${VM}`),
+      { origin: "file://" },
+    );
     socket.send(0x06, { type: "down", usage: 0x04 });
     await until(() => control.controller(BOT) === "person");
     socket.send(0x06, { type: "up", usage: 0x04 });
@@ -362,7 +493,11 @@ test("a key that takes over is swallowed with its release; the person's later ke
 test("Give back lifts whatever the person still holds, and the rest of that gesture never reaches the Bot's computer", async () => {
   await withHub(async ({ server, proxy, control }) => {
     control.takeOver(BOT, "viewer");
-    const socket = await openSocket(proxy.origin, proxied(proxy, `/vendor/serve-sim/helper/ws?device=${VM}`), { origin: "file://" });
+    const socket = await openSocket(
+      proxy.origin,
+      proxied(proxy, `/vendor/serve-sim/helper/ws?device=${VM}`),
+      { origin: "file://" },
+    );
     socket.send(0x03, { type: "begin", x: 0.5, y: 0.5 });
     socket.send(0x06, { type: "down", usage: 0xe1 });
     const connection = server.connections[0];
@@ -385,7 +520,11 @@ test("Give back lifts whatever the person still holds, and the rest of that gest
 test("closing the viewer while the person holds a key or button lifts it", async () => {
   await withHub(async ({ server, proxy, control }) => {
     control.takeOver(BOT, "viewer");
-    const socket = await openSocket(proxy.origin, proxied(proxy, `/vendor/serve-sim/helper/ws?device=${VM}`), { origin: "file://" });
+    const socket = await openSocket(
+      proxy.origin,
+      proxied(proxy, `/vendor/serve-sim/helper/ws?device=${VM}`),
+      { origin: "file://" },
+    );
     socket.send(0x03, { type: "begin", x: 0, y: 0 });
     socket.send(0x06, { type: "down", usage: 0xe0 });
     const connection = server.connections[0];
@@ -399,7 +538,11 @@ test("closing the viewer while the person holds a key or button lifts it", async
 
 test("scrolling takes over like any input, then becomes wheel clicks at the point, a step per 40 pixels", async () => {
   await withHub(async ({ server, proxy, control }) => {
-    const socket = await openSocket(proxy.origin, proxied(proxy, `/vendor/serve-sim/helper/ws?device=${VM}`), { origin: "file://" });
+    const socket = await openSocket(
+      proxy.origin,
+      proxied(proxy, `/vendor/serve-sim/helper/ws?device=${VM}`),
+      { origin: "file://" },
+    );
     socket.send(0x20, { x: 0.5, y: 0.5, dx: 0, dy: 400 });
     await until(() => control.controller(BOT) === "person");
     socket.send(0x20, { x: 0.5, y: 0.5, dx: 0, dy: 80 });
@@ -431,12 +574,17 @@ test("malformed WebSocket frames close the socket without reaching the computer"
       const close = socket.messages().find(([opcode]) => opcode === 0x8);
       return close ? close[1].readUInt16BE(0) : undefined;
     };
-    const touch = Buffer.concat([Buffer.from([0x03]), Buffer.from(JSON.stringify({ type: "begin", x: 0.5, y: 0.5 }))]);
+    const touch = Buffer.concat([
+      Buffer.from([0x03]),
+      Buffer.from(JSON.stringify({ type: "begin", x: 0.5, y: 0.5 })),
+    ]);
     const unmasked = await openSocket(hub.origin, path, { [BOT_COMPUTER_VIEWER_KEY_HEADER]: key });
     unmasked.sendRaw(0x2, touch, { masked: false });
     await until(() => unmasked.closed());
     assert.equal(closeCode(unmasked), 1002);
-    const fragmented = await openSocket(hub.origin, path, { [BOT_COMPUTER_VIEWER_KEY_HEADER]: key });
+    const fragmented = await openSocket(hub.origin, path, {
+      [BOT_COMPUTER_VIEWER_KEY_HEADER]: key,
+    });
     fragmented.sendRaw(0x2, touch, { fin: false });
     await until(() => fragmented.closed());
     assert.equal(closeCode(fragmented), 1003);
@@ -460,8 +608,14 @@ test("malformed WebSocket frames close the socket without reaching the computer"
 test("an open viewer keeps the computer awake, and the last one closing restarts its idle timer", async () => {
   await withHub(
     async ({ hub, key, touches }) => {
-      const stream = await get(hub.origin, `/vendor/serve-sim/helper/${VM}/stream.mjpeg`, hubHeaders(hub, key));
-      const socket = await openSocket(hub.origin, `/vendor/serve-sim/helper/ws?device=${VM}`, { [BOT_COMPUTER_VIEWER_KEY_HEADER]: key });
+      const stream = await get(
+        hub.origin,
+        `/vendor/serve-sim/helper/${VM}/stream.mjpeg`,
+        hubHeaders(hub, key),
+      );
+      const socket = await openSocket(hub.origin, `/vendor/serve-sim/helper/ws?device=${VM}`, {
+        [BOT_COMPUTER_VIEWER_KEY_HEADER]: key,
+      });
       await until(() => hub.viewers(BOT) === 2);
       const opened = touches.length;
       await until(() => touches.length >= opened + 2);
@@ -478,7 +632,10 @@ test("an open viewer keeps the computer awake, and the last one closing restarts
 });
 
 test("input left over from a computer's last run never ends the viewers of its next run", async () => {
-  const servers = [new FakeRfbServer({ width: 40, height: 30, password: "run-1" }), new FakeRfbServer({ width: 40, height: 30, password: "run-2" })];
+  const servers = [
+    new FakeRfbServer({ width: 40, height: 30, password: "run-1" }),
+    new FakeRfbServer({ width: 40, height: 30, password: "run-2" }),
+  ];
   const screens: BotComputerLiveScreen[] = [];
   for (const [index, server] of servers.entries()) {
     const port = await server.listen();
@@ -511,7 +668,13 @@ test("input left over from a computer's last run never ends the viewers of its n
   const control = createBotComputerControl();
   control.takeOver(BOT, "viewer");
   const key = randomBytes(32).toString("base64url");
-  const hub = await startBotComputerViewerHub({ key, botForVm: (vm) => (vm === VM ? BOT : undefined), screen: async () => current, control, touch: () => undefined });
+  const hub = await startBotComputerViewerHub({
+    key,
+    botForVm: (vm) => (vm === VM ? BOT : undefined),
+    screen: async () => current,
+    control,
+    touch: () => undefined,
+  });
   const path = `/vendor/serve-sim/helper/ws?device=${VM}`;
   try {
     const first = await openSocket(hub.origin, path, { [BOT_COMPUTER_VIEWER_KEY_HEADER]: key });
@@ -535,7 +698,11 @@ test("input left over from a computer's last run never ends the viewers of its n
     assert.equal(hub.viewers(BOT), 1);
     next.send(0x06, { type: "down", usage: 0x06 });
     await until(() => servers[1].connections[0]?.keys.length === 1);
-    assert.deepEqual(servers[1].connections[0].keys, [{ keysym: 0x63, down: true }], "and only its own input reaches its computer");
+    assert.deepEqual(
+      servers[1].connections[0].keys,
+      [{ keysym: 0x63, down: true }],
+      "and only its own input reaches its computer",
+    );
     next.close();
   } finally {
     await hub.close();
@@ -546,8 +713,14 @@ test("input left over from a computer's last run never ends the viewers of its n
 
 test("closing a VM ends its streams and sockets", async () => {
   await withHub(async ({ hub, key }) => {
-    const stream = await get(hub.origin, `/vendor/serve-sim/helper/${VM}/stream.mjpeg`, hubHeaders(hub, key));
-    const socket = await openSocket(hub.origin, `/vendor/serve-sim/helper/ws?device=${VM}`, { [BOT_COMPUTER_VIEWER_KEY_HEADER]: key });
+    const stream = await get(
+      hub.origin,
+      `/vendor/serve-sim/helper/${VM}/stream.mjpeg`,
+      hubHeaders(hub, key),
+    );
+    const socket = await openSocket(hub.origin, `/vendor/serve-sim/helper/ws?device=${VM}`, {
+      [BOT_COMPUTER_VIEWER_KEY_HEADER]: key,
+    });
     await until(() => hub.viewers(BOT) === 2);
     let ended = false;
     stream.response.once("close", () => {
@@ -566,12 +739,19 @@ test("the Simulator's device stream client drives the Bot's computer through the
     let mjpegUrl: string | undefined;
     const runtime: DeviceStreamRuntime = {
       fetch: (url, init) => fetch(url, init),
-      createSocket: (url) => new WebSocket(url) as unknown as ReturnType<DeviceStreamRuntime["createSocket"]>,
+      createSocket: (url) =>
+        new WebSocket(url) as unknown as ReturnType<DeviceStreamRuntime["createSocket"]>,
       setTimeout: (callback, ms) => setTimeout(callback, ms),
       clearTimeout: (timer) => clearTimeout(timer),
     };
     const client = createDeviceStreamClient(
-      { hostId: BOT_COMPUTER_VIEWER_HOST_ID, deviceId: VM, grant: proxy.mintGrant(), platform: "ios", preferMjpeg: true },
+      {
+        hostId: BOT_COMPUTER_VIEWER_HOST_ID,
+        deviceId: VM,
+        grant: proxy.mintGrant(),
+        platform: "ios",
+        preferMjpeg: true,
+      },
       { present: () => true },
       {
         onStatus: () => undefined,

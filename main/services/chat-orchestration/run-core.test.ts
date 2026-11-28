@@ -28,7 +28,14 @@ function fakeServices(replies: Record<string, string> = {}) {
       messagesWindow: async (chatId: string) => ({
         chatId,
         messages: replies[chatId]
-          ? [{ id: `${chatId}-reply`, role: "assistant", text: replies[chatId], createdAt: "2026-11-22T10:00:00.000Z" }]
+          ? [
+              {
+                id: `${chatId}-reply`,
+                role: "assistant",
+                text: replies[chatId],
+                createdAt: "2026-11-22T10:00:00.000Z",
+              },
+            ]
           : [],
       }),
     },
@@ -61,7 +68,10 @@ function fakeServices(replies: Record<string, string> = {}) {
 }
 
 function core() {
-  return new ChatRunCore({ answerIn: async () => "Aiden on Studio", untrackedRun: () => new Untracked("untracked") });
+  return new ChatRunCore({
+    answerIn: async () => "Aiden on Studio",
+    untrackedRun: () => new Untracked("untracked"),
+  });
 }
 
 const never = () => new AbortController().signal;
@@ -70,7 +80,10 @@ test("a run reaching a terminal state answers the wait with its reply", async ()
   const fake = fakeServices({ "chat-1": "All done." });
   fake.add("app-a", "chat-1", "run-1");
   const runs = core();
-  const waiting = runs.wait(fake.services, "app-a", "chat-1", "run-1", { timeoutMs: 60_000, signal: never() });
+  const waiting = runs.wait(fake.services, "app-a", "chat-1", "run-1", {
+    timeoutMs: 60_000,
+    signal: never(),
+  });
   await new Promise((resolve) => setImmediate(resolve));
   assert.equal(fake.watching("run-1"), 1);
   fake.set("run-1", { state: "done" });
@@ -82,7 +95,12 @@ test("a run reaching a terminal state answers the wait with its reply", async ()
       runId: "run-1",
       state: "done",
       outcome: "completed",
-      reply: { id: "chat-1-reply", role: "assistant", text: "All done.", createdAt: "2026-11-22T10:00:00.000Z" },
+      reply: {
+        id: "chat-1-reply",
+        role: "assistant",
+        text: "All done.",
+        createdAt: "2026-11-22T10:00:00.000Z",
+      },
     },
   });
   assert.equal(fake.watching("run-1"), 0, "the wait detaches once answered");
@@ -92,11 +110,16 @@ test("waiting for the person answers the wait; text events alone do not", async 
   const fake = fakeServices();
   fake.add("app-a", "chat-1", "run-1");
   const runs = core();
-  const waiting = runs.wait(fake.services, "app-a", "chat-1", "run-1", { timeoutMs: 60_000, signal: never() });
+  const waiting = runs.wait(fake.services, "app-a", "chat-1", "run-1", {
+    timeoutMs: 60_000,
+    signal: never(),
+  });
   await new Promise((resolve) => setImmediate(resolve));
   fake.set("run-1", {});
   await new Promise((resolve) => setImmediate(resolve));
-  fake.set("run-1", { approval: { toolName: "bash", summary: "Run tests", expiresAt: "2026-11-22T10:05:00.000Z" } });
+  fake.set("run-1", {
+    approval: { toolName: "bash", summary: "Run tests", expiresAt: "2026-11-22T10:05:00.000Z" },
+  });
   const outcome = await waiting;
   assert.equal(outcome.kind, "snapshot");
   assert.deepEqual(outcome.kind === "snapshot" && outcome.snapshot, {
@@ -113,8 +136,14 @@ test("a timeout answers running and leaves the run running", async () => {
   fake.add("app-a", "chat-1", "run-1");
   const runs = core();
   runs.track("app-a", "run-1");
-  const outcome = await runs.wait(fake.services, "app-a", "chat-1", "run-1", { timeoutMs: 20, signal: never() });
-  assert.deepEqual(outcome, { kind: "snapshot", snapshot: { chatId: "chat-1", runId: "run-1", state: "running" } });
+  const outcome = await runs.wait(fake.services, "app-a", "chat-1", "run-1", {
+    timeoutMs: 20,
+    signal: never(),
+  });
+  assert.deepEqual(outcome, {
+    kind: "snapshot",
+    snapshot: { chatId: "chat-1", runId: "run-1", state: "running" },
+  });
   assert.equal(fake.services.streams.status("app-a", "run-1").state, "running");
   assert.equal(runs.liveRuns(fake.services, "app-a"), 1);
   assert.equal(fake.watching("run-1"), 0);
@@ -126,8 +155,14 @@ test("aborting the caller's signal ends the wait; forgetting the owner closes it
   fake.add("app-a", "chat-1", "run-2");
   const runs = core();
   const controller = new AbortController();
-  const aborted = runs.wait(fake.services, "app-a", "chat-1", "run-1", { timeoutMs: 60_000, signal: controller.signal });
-  const closed = runs.wait(fake.services, "app-a", "chat-1", "run-2", { timeoutMs: 60_000, signal: never() });
+  const aborted = runs.wait(fake.services, "app-a", "chat-1", "run-1", {
+    timeoutMs: 60_000,
+    signal: controller.signal,
+  });
+  const closed = runs.wait(fake.services, "app-a", "chat-1", "run-2", {
+    timeoutMs: 60_000,
+    signal: never(),
+  });
   await new Promise((resolve) => setImmediate(resolve));
   controller.abort();
   assert.deepEqual(await aborted, { kind: "aborted" });
@@ -166,7 +201,12 @@ test("more than two runs go at once, each wait answering its own run", async () 
     outcomes.map((outcome) => outcome.kind === "snapshot" && outcome.snapshot),
     [
       { chatId: "chat-run-1", runId: "run-1", state: "done", outcome: "stopped" },
-      { chatId: "chat-run-2", runId: "run-2", state: "waiting_for_input", answerIn: "Aiden on Studio" },
+      {
+        chatId: "chat-run-2",
+        runId: "run-2",
+        state: "waiting_for_input",
+        answerIn: "Aiden on Studio",
+      },
       { chatId: "chat-run-3", runId: "run-3", state: "failed", reason: "error" },
       { chatId: "chat-run-4", runId: "run-4", state: "failed", reason: "interrupted" },
     ],
@@ -209,5 +249,9 @@ test("a retried request joins the first; a failed one is not remembered", async 
   assert.equal(started, 1, "a refused admission never runs the work");
 
   runs.forget("app-a");
-  assert.equal(await runs.request("app-a", "req-1", async () => "fresh"), "fresh", "a forgotten owner starts over");
+  assert.equal(
+    await runs.request("app-a", "req-1", async () => "fresh"),
+    "fresh",
+    "a forgotten owner starts over",
+  );
 });

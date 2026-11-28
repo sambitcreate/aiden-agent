@@ -10,7 +10,10 @@ import { randomUUID as nodeRandomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { release } from "node:os";
 import { dirname, join } from "node:path";
-import { ANALYTICS_BUILD_CONFIG, type AnalyticsBuildConfig } from "../../../main/services/analytics/analytics-build-config.js";
+import {
+  ANALYTICS_BUILD_CONFIG,
+  type AnalyticsBuildConfig,
+} from "../../../main/services/analytics/analytics-build-config.js";
 import type { PostHogTransport } from "../../../main/services/analytics/analytics-client.js";
 import {
   DEFAULT_ANALYTICS_STATE,
@@ -22,10 +25,23 @@ import {
   type AnalyticsBlockReason,
   type AnalyticsState,
 } from "../../../main/services/analytics/analytics-consent.js";
-import type { AnalyticsCore, AnalyticsMessage } from "../../../main/services/analytics/analytics-core.js";
-import type { AnalyticsEventProps, AnalyticsSuperProperties } from "../../../main/services/analytics/analytics-events.js";
-import { setAnalyticsReporter, type AnalyticsReporter } from "../../../main/services/analytics/analytics-report.js";
-import type { SanitizedException, isSystemErrorCode, sanitizeException } from "../../../main/services/analytics/analytics-sanitize.js";
+import type {
+  AnalyticsCore,
+  AnalyticsMessage,
+} from "../../../main/services/analytics/analytics-core.js";
+import type {
+  AnalyticsEventProps,
+  AnalyticsSuperProperties,
+} from "../../../main/services/analytics/analytics-events.js";
+import {
+  setAnalyticsReporter,
+  type AnalyticsReporter,
+} from "../../../main/services/analytics/analytics-report.js";
+import type {
+  SanitizedException,
+  isSystemErrorCode,
+  sanitizeException,
+} from "../../../main/services/analytics/analytics-sanitize.js";
 import { tryAcquireProcessLifetimeLock } from "../../../main/services/process-lifetime-lock.ts";
 import { atomicJson, cliLeaseHelperPath, leaseGuardPath } from "./state.ts";
 
@@ -34,7 +50,8 @@ export type ServerLaunch = AnalyticsEventProps<"server_started">["launch"];
 
 export const SERVER_ANALYTICS_FILE = "aiden-analytics.json";
 export const SERVER_CRASH_COUNT_FILE = "aiden-analytics-crashes.json";
-export const SERVER_ANALYTICS_NOTICE = "This Aiden server sends anonymous usage and crash data. Turn off: aiden telemetry off\n";
+export const SERVER_ANALYTICS_NOTICE =
+  "This Aiden server sends anonymous usage and crash data. Turn off: aiden telemetry off\n";
 /** How long a crash may wait for its report before the process dies as it would have. */
 export const CRASH_FLUSH_CAP_MS = 1_000;
 /** A server drains its own work first; analytics adds no more than this to a stop. */
@@ -56,7 +73,10 @@ export type ServerTransportFactory = (allowSend?: SendGate) => Promise<PostHogTr
 /** The parts of `process` crash capture touches. Tests pass a fake. */
 export interface CrashHost {
   on(event: "uncaughtException", listener: (error: unknown, origin: string) => void): unknown;
-  removeListener(event: "uncaughtException", listener: (error: unknown, origin: string) => void): unknown;
+  removeListener(
+    event: "uncaughtException",
+    listener: (error: unknown, origin: string) => void,
+  ): unknown;
   listenerCount(event: "uncaughtException"): number;
 }
 
@@ -79,7 +99,12 @@ export interface ServerAnalyticsContext {
 
 export function serverAnalyticsContext(agentDir: string): ServerAnalyticsContext {
   const entry = process.env.AIDEN_CLI_ENTRY;
-  return { agentDir, appDir: entry ? dirname(entry) : process.cwd(), env: process.env, stderr: process.stderr };
+  return {
+    agentDir,
+    appDir: entry ? dirname(entry) : process.cwd(),
+    env: process.env,
+    stderr: process.stderr,
+  };
 }
 
 export function serverAnalyticsFile(agentDir: string): string {
@@ -95,7 +120,9 @@ export function readServerAnalyticsState(agentDir: string): AnalyticsState {
   try {
     text = readFileSync(serverAnalyticsFile(agentDir), "utf8");
   } catch (error) {
-    return (error as NodeJS.ErrnoException).code === "ENOENT" ? DEFAULT_ANALYTICS_STATE : UNREADABLE_STATE;
+    return (error as NodeJS.ErrnoException).code === "ENOENT"
+      ? DEFAULT_ANALYTICS_STATE
+      : UNREADABLE_STATE;
   }
   try {
     const raw = JSON.parse(text) as { enabled?: unknown } | null;
@@ -126,12 +153,17 @@ function withConsentLock<T>(agentDir: string, waitMs: number, work: () => T): T 
         unlock();
       }
     }
-    if (Date.now() >= deadline) throw new Error(`Another Aiden process is changing ${file}. Try again.`);
+    if (Date.now() >= deadline)
+      throw new Error(`Another Aiden process is changing ${file}. Try again.`);
     Atomics.wait(lockRetryClock, 0, 0, LOCK_RETRY_MS);
   }
 }
 
-export function updateServerAnalyticsState(agentDir: string, mutate: (state: AnalyticsState) => AnalyticsState, waitMs = SERVER_LOCK_WAIT_MS): AnalyticsState {
+export function updateServerAnalyticsState(
+  agentDir: string,
+  mutate: (state: AnalyticsState) => AnalyticsState,
+  waitMs = SERVER_LOCK_WAIT_MS,
+): AnalyticsState {
   return withConsentLock(agentDir, waitMs, () => {
     const current = readServerAnalyticsState(agentDir);
     const next = mutate(current);
@@ -150,11 +182,17 @@ function admitted<T>(agentDir: string, allowSend: SendGate, send: () => T): T | 
 }
 
 export type ServerBlockReason = AnalyticsBlockReason | "ci";
-export type ServerSendStatus = { readonly canSend: true } | { readonly canSend: false; readonly reason: ServerBlockReason };
+export type ServerSendStatus =
+  | { readonly canSend: true }
+  | { readonly canSend: false; readonly reason: ServerBlockReason };
 
 /** The desktop's rules plus one of the server's own: nothing is ever sent with `CI` set. */
-export function serverSendStatus(state: AnalyticsState, context: { readonly env: Env; readonly hasKey: boolean }): ServerSendStatus {
-  if (!envDisablesAnalytics(context.env) && context.env.CI !== undefined) return { canSend: false, reason: "ci" };
+export function serverSendStatus(
+  state: AnalyticsState,
+  context: { readonly env: Env; readonly hasKey: boolean },
+): ServerSendStatus {
+  if (!envDisablesAnalytics(context.env) && context.env.CI !== undefined)
+    return { canSend: false, reason: "ci" };
   return analyticsSendStatus(state, context);
 }
 
@@ -162,19 +200,25 @@ export function serverSendStatus(state: AnalyticsState, context: { readonly env:
  * The transport this build can use, or undefined: only a keyed build sends. A
  * keyless build can write would-be events to stderr with AIDEN_ANALYTICS_DEBUG=1.
  */
-export function serverTransportFactory(context: ServerAnalyticsContext): ServerTransportFactory | undefined {
+export function serverTransportFactory(
+  context: ServerAnalyticsContext,
+): ServerTransportFactory | undefined {
   if (context.createTransport) return context.createTransport;
   const apiKey = (context.buildConfig ?? ANALYTICS_BUILD_CONFIG).projectKey;
   if (apiKey) {
     return async (allowSend) => {
-      const { createPostHogTransport } = await import("../../../main/services/analytics/analytics-client.js");
+      const { createPostHogTransport } =
+        await import("../../../main/services/analytics/analytics-client.js");
       return createPostHogTransport({
         apiKey,
         ...(allowSend
           ? {
               fetch: async (url, options) => {
                 // Answered here because the SDK prints a stack trace for a failed flush.
-                return admitted(context.agentDir, allowSend, () => fetch(url, options)) ?? new Response("{}", { status: 200 });
+                return (
+                  admitted(context.agentDir, allowSend, () => fetch(url, options)) ??
+                  new Response("{}", { status: 200 })
+                );
               },
             }
           : {}),
@@ -183,7 +227,8 @@ export function serverTransportFactory(context: ServerAnalyticsContext): ServerT
   }
   if (context.env.AIDEN_ANALYTICS_DEBUG === "1") {
     return async () => {
-      const { createLoggingTransport } = await import("../../../main/services/analytics/analytics-service.js");
+      const { createLoggingTransport } =
+        await import("../../../main/services/analytics/analytics-service.js");
       return createLoggingTransport((line) => context.stderr.write(`${line}\n`));
     };
   }
@@ -191,11 +236,16 @@ export function serverTransportFactory(context: ServerAnalyticsContext): ServerT
 }
 
 function superProperties(context: ServerAnalyticsContext): AnalyticsSuperProperties {
-  const { version } = JSON.parse(readFileSync(join(context.appDir, "package.json"), "utf8")) as { version: string };
+  const { version } = JSON.parse(readFileSync(join(context.appDir, "package.json"), "utf8")) as {
+    version: string;
+  };
   const major = Number.parseInt(release(), 10);
   return {
     app_version: version,
-    platform: process.platform === "darwin" || process.platform === "linux" || process.platform === "win32" ? process.platform : "other",
+    platform:
+      process.platform === "darwin" || process.platform === "linux" || process.platform === "win32"
+        ? process.platform
+        : "other",
     arch: process.arch === "arm64" || process.arch === "x64" ? process.arch : "other",
     os_major: Number.isSafeInteger(major) && major >= 0 && major <= 999 ? major : 0,
     surface: "server",
@@ -205,7 +255,10 @@ function superProperties(context: ServerAnalyticsContext): AnalyticsSuperPropert
 
 function crashesToday(agentDir: string, day: string): number {
   try {
-    const saved = JSON.parse(readFileSync(join(agentDir, SERVER_CRASH_COUNT_FILE), "utf8")) as { day?: unknown; count?: unknown };
+    const saved = JSON.parse(readFileSync(join(agentDir, SERVER_CRASH_COUNT_FILE), "utf8")) as {
+      day?: unknown;
+      count?: unknown;
+    };
     return saved.day === day && Number.isSafeInteger(saved.count) ? (saved.count as number) : 0;
   } catch {
     return 0;
@@ -220,8 +273,13 @@ function today(context: ServerAnalyticsContext): string {
 function within(work: Promise<unknown>, ms: number): Promise<void> {
   let timer: ReturnType<typeof setTimeout> | undefined;
   return Promise.race([
-    work.then(() => undefined, () => undefined),
-    new Promise<void>((resolve) => { timer = setTimeout(resolve, ms); }),
+    work.then(
+      () => undefined,
+      () => undefined,
+    ),
+    new Promise<void>((resolve) => {
+      timer = setTimeout(resolve, ms);
+    }),
   ]).finally(() => clearTimeout(timer));
 }
 
@@ -267,13 +325,21 @@ function stackBelowHeader(stack: unknown, message: unknown): string | undefined 
 function withoutMessage(value: unknown, depth = 0): MessagelessError {
   try {
     if (typeof value !== "object" || value === null) return { name: "NonError", message: "" };
-    const { name, stack, message, code, cause } = value as { name?: unknown; stack?: unknown; message?: unknown; code?: unknown; cause?: unknown };
+    const { name, stack, message, code, cause } = value as {
+      name?: unknown;
+      stack?: unknown;
+      message?: unknown;
+      code?: unknown;
+      cause?: unknown;
+    };
     return {
       name,
       stack: stackBelowHeader(stack, message),
       message: "",
       code,
-      ...(cause !== undefined && cause !== null && depth < MAX_REPORTED_CAUSES ? { cause: withoutMessage(cause, depth + 1) } : {}),
+      ...(cause !== undefined && cause !== null && depth < MAX_REPORTED_CAUSES
+        ? { cause: withoutMessage(cause, depth + 1) }
+        : {}),
     };
   } catch {
     // Reading an exotic thrown object can itself throw.
@@ -287,7 +353,11 @@ function withoutMessage(value: unknown, depth = 0): MessagelessError {
  * code goes back in the message field afterwards if it is on the fixed list,
  * which is also all the outgoing guard admits from a server.
  */
-function serverException(value: unknown, sanitizer: Sanitizer, appRoots: readonly string[]): SanitizedException {
+function serverException(
+  value: unknown,
+  sanitizer: Sanitizer,
+  appRoots: readonly string[],
+): SanitizedException {
   let link: MessagelessError | undefined = withoutMessage(value);
   const exception = sanitizer.sanitizeException(link, { appRoots });
   const errors = exception.errors.map((error) => {
@@ -318,9 +388,19 @@ export function reportServerRejection(reason: unknown): void {
   }
 }
 
-function createRun(launch: ServerLaunch, context: ServerAnalyticsContext, createTransport: ServerTransportFactory): ServerAnalyticsRun {
+function createRun(
+  launch: ServerLaunch,
+  context: ServerAnalyticsContext,
+  createTransport: ServerTransportFactory,
+): ServerAnalyticsRun {
   const crashHost = context.crashHost ?? process;
-  const rethrow = context.rethrow ?? ((error: unknown) => { setImmediate(() => { throw error; }); });
+  const rethrow =
+    context.rethrow ??
+    ((error: unknown) => {
+      setImmediate(() => {
+        throw error;
+      });
+    });
   const early: ((ready: AnalyticsCore) => void)[] = [];
   let core: AnalyticsCore | undefined;
   let sanitizer: Sanitizer | undefined;
@@ -357,15 +437,23 @@ function createRun(launch: ServerLaunch, context: ServerAnalyticsContext, create
 
   async function activate(): Promise<void> {
     if (stopped) return;
-    const state = updateServerAnalyticsState(context.agentDir, (current) => ensureInstallId(current, context.randomUUID ?? nodeRandomUUID));
-    if (!state.enabled || !state.installId) { stop(); return; }
+    const state = updateServerAnalyticsState(context.agentDir, (current) =>
+      ensureInstallId(current, context.randomUUID ?? nodeRandomUUID),
+    );
+    if (!state.enabled || !state.installId) {
+      stop();
+      return;
+    }
     installId = state.installId;
     const [{ createAnalyticsCore }, loadedSanitizer, created] = await Promise.all([
       import("../../../main/services/analytics/analytics-core.js"),
       import("../../../main/services/analytics/analytics-sanitize.js"),
       createTransport(consentHolds),
     ]);
-    if (stopped) { await created.discard(); return; }
+    if (stopped) {
+      await created.discard();
+      return;
+    }
     transport = created;
     sanitizer = loadedSanitizer;
     const ready = createAnalyticsCore({
@@ -381,10 +469,15 @@ function createRun(launch: ServerLaunch, context: ServerAnalyticsContext, create
 
   const reporter: AnalyticsReporter = (event, props) => {
     if (core) core.track(event, props);
-    else if (!stopped && early.length < MAX_EARLY_EVENTS) early.push((ready) => ready.track(event, props));
+    else if (!stopped && early.length < MAX_EARLY_EVENTS)
+      early.push((ready) => ready.track(event, props));
   };
 
-  function capture(error: unknown, level: "fatal" | "error", origin: "uncaught_exception" | "unhandled_rejection"): void {
+  function capture(
+    error: unknown,
+    level: "fatal" | "error",
+    origin: "uncaught_exception" | "unhandled_rejection",
+  ): void {
     try {
       if (!core || !sanitizer) return;
       core.captureSanitizedException(serverException(error, sanitizer, [context.appDir]), {
@@ -406,17 +499,30 @@ function createRun(launch: ServerLaunch, context: ServerAnalyticsContext, create
     if (fatal) {
       try {
         const day = today(context);
-        atomicJson(join(context.agentDir, SERVER_CRASH_COUNT_FILE), { day, count: crashesToday(context.agentDir, day) + 1 });
+        atomicJson(join(context.agentDir, SERVER_CRASH_COUNT_FILE), {
+          day,
+          count: crashesToday(context.agentDir, day) + 1,
+        });
       } catch {
         // Without the count a crash loop is limited only by its restart delay.
       }
     }
-    const reported = within(activation.then(() => {
-      capture(error, fatal ? "fatal" : "error", origin === "unhandledRejection" ? "unhandled_rejection" : "uncaught_exception");
-      return transport?.flush();
-    }), context.crashFlushCapMs ?? CRASH_FLUSH_CAP_MS);
+    const reported = within(
+      activation.then(() => {
+        capture(
+          error,
+          fatal ? "fatal" : "error",
+          origin === "unhandledRejection" ? "unhandled_rejection" : "uncaught_exception",
+        );
+        return transport?.flush();
+      }),
+      context.crashFlushCapMs ?? CRASH_FLUSH_CAP_MS,
+    );
     crash = reported.then(() => {
-      if (!fatal) { crash = undefined; return undefined; }
+      if (!fatal) {
+        crash = undefined;
+        return undefined;
+      }
       crashHost.removeListener("uncaughtException", onUncaught);
       rethrow(error);
       return new Promise<void>(() => undefined);
@@ -430,7 +536,9 @@ function createRun(launch: ServerLaunch, context: ServerAnalyticsContext, create
   };
 
   // Off the startup path: nothing here delays the server that is starting.
-  const activation: Promise<void> = new Promise<void>((resolve) => { setImmediate(resolve); })
+  const activation: Promise<void> = new Promise<void>((resolve) => {
+    setImmediate(resolve);
+  })
     .then(activate)
     .catch(() => stop());
 
@@ -443,7 +551,10 @@ function createRun(launch: ServerLaunch, context: ServerAnalyticsContext, create
     async finish() {
       // A fatal crash ends the process through its own rethrow, whatever exit was coming.
       await crash;
-      await within(activation.then(() => transport?.shutdown(SERVE_EXIT_FLUSH_CAP_MS)), SERVE_EXIT_FLUSH_CAP_MS);
+      await within(
+        activation.then(() => transport?.shutdown(SERVE_EXIT_FLUSH_CAP_MS)),
+        SERVE_EXIT_FLUSH_CAP_MS,
+      );
       // A failure during the stop decides how the process ends, not this stop.
       while (crash) await crash;
       stopped = true;
@@ -460,7 +571,10 @@ function createRun(launch: ServerLaunch, context: ServerAnalyticsContext, create
 export function showServerNotice(context: ServerAnalyticsContext): void {
   try {
     if (!serverTransportFactory(context)) return;
-    const status = serverSendStatus(readServerAnalyticsState(context.agentDir), { env: context.env, hasKey: true });
+    const status = serverSendStatus(readServerAnalyticsState(context.agentDir), {
+      env: context.env,
+      hasKey: true,
+    });
     if (status.canSend || status.reason !== "notice_pending") return;
     context.stderr.write(SERVER_ANALYTICS_NOTICE);
     const now = (context.now ?? (() => new Date()))();
@@ -479,14 +593,18 @@ export function showServerNoticeInTerminal(context: ServerAnalyticsContext): voi
  * Starts reporting for this `aiden serve` process if it may send. A server that
  * never showed the notice stays silent. Returns at once and never throws.
  */
-export function startServerAnalytics(launch: ServerLaunch, context: ServerAnalyticsContext): ServerAnalyticsRun {
+export function startServerAnalytics(
+  launch: ServerLaunch,
+  context: ServerAnalyticsContext,
+): ServerAnalyticsRun {
   try {
     showServerNoticeInTerminal(context);
     const createTransport = serverTransportFactory(context);
     if (!createTransport) return INERT_RUN;
     const state = readServerAnalyticsState(context.agentDir);
     if (!serverSendStatus(state, { env: context.env, hasKey: true }).canSend) return INERT_RUN;
-    if (crashesToday(context.agentDir, today(context)) >= MAX_CRASH_REPORTS_PER_DAY) return INERT_RUN;
+    if (crashesToday(context.agentDir, today(context)) >= MAX_CRASH_REPORTS_PER_DAY)
+      return INERT_RUN;
     return createRun(launch, context, createTransport);
   } catch {
     return INERT_RUN;
@@ -497,15 +615,24 @@ export function startServerAnalytics(launch: ServerLaunch, context: ServerAnalyt
  * The last event of an install, built by the same core as every other event
  * and sent on its own client. Never throws: the switch is already saved.
  */
-export async function sendServerOptOut(installId: string, context: ServerAnalyticsContext, createTransport: ServerTransportFactory): Promise<void> {
+export async function sendServerOptOut(
+  installId: string,
+  context: ServerAnalyticsContext,
+  createTransport: ServerTransportFactory,
+): Promise<void> {
   let transport: PostHogTransport | undefined;
   try {
-    const { createAnalyticsCore } = await import("../../../main/services/analytics/analytics-core.js");
+    const { createAnalyticsCore } =
+      await import("../../../main/services/analytics/analytics-core.js");
     const created = await createTransport();
     transport = created;
     let finalMessage: AnalyticsMessage | undefined;
     createAnalyticsCore({
-      transport: { capture: (message) => { finalMessage = message; } },
+      transport: {
+        capture: (message) => {
+          finalMessage = message;
+        },
+      },
       getDistinctId: () => installId,
       superProperties: superProperties(context),
       appRoots: [context.appDir],

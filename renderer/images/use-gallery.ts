@@ -27,11 +27,23 @@ export function useGallery(workflowId?: string) {
     try {
       const gallery = await createImagesIpc.gallery(workflowId === undefined ? {} : { workflowId });
       if (current !== sequence.current) return;
-      setState({ status: "ready", items: gallery.items, saveFolderLabel: gallery.saveFolderLabel, error: null });
+      setState({
+        status: "ready",
+        items: gallery.items,
+        saveFolderLabel: gallery.saveFolderLabel,
+        error: null,
+      });
     } catch (failure) {
       if (current !== sequence.current) return;
-      const error = failure instanceof Error && failure.message ? failure.message : "Aiden couldn't read your images.";
-      setState((previous) => ({ ...previous, status: previous.status === "ready" ? "ready" : "error", error }));
+      const error =
+        failure instanceof Error && failure.message
+          ? failure.message
+          : "Aiden couldn't read your images.";
+      setState((previous) => ({
+        ...previous,
+        status: previous.status === "ready" ? "ready" : "error",
+        error,
+      }));
     }
   }, [workflowId]);
 

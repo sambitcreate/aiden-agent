@@ -59,7 +59,9 @@ export const WEB_EXTRACT_FIELD_TYPE_HINT =
  */
 export function parseWebExtractFields(fields: unknown): WebExtractFieldSpecs {
   if (fields === null || typeof fields !== "object" || Array.isArray(fields)) {
-    throw new Error("fields must map each name to a type, such as \"number: Pro plan monthly price\".");
+    throw new Error(
+      'fields must map each name to a type, such as "number: Pro plan monthly price".',
+    );
   }
   const entries = Object.entries(fields);
   if (entries.length === 0 || entries.length > WEB_EXTRACT_MAX_FIELDS) {
@@ -80,19 +82,35 @@ export function parseWebExtractFields(fields: unknown): WebExtractFieldSpecs {
     const type = (colon === -1 ? raw : raw.slice(0, colon)).trim();
     const instructions = colon === -1 ? "" : raw.slice(colon + 1).trim();
     if (instructions.length > WEB_EXTRACT_MAX_INSTRUCTION_CHARS) {
-      throw new Error(`Field ${name} describes what to find in more than ${WEB_EXTRACT_MAX_INSTRUCTION_CHARS} characters.`);
+      throw new Error(
+        `Field ${name} describes what to find in more than ${WEB_EXTRACT_MAX_INSTRUCTION_CHARS} characters.`,
+      );
     }
     const [base, sub, extra] = type.split(".");
     let spec: WebExtractFieldSpec | undefined;
-    if (sub === undefined && (base === "text" || base === "number" || base === "date" || base === "time" || base === "datetime" || base === "duration")) {
+    if (
+      sub === undefined &&
+      (base === "text" ||
+        base === "number" ||
+        base === "date" ||
+        base === "time" ||
+        base === "datetime" ||
+        base === "duration")
+    ) {
       spec = { type: base };
     } else if (sub === undefined && base === "integer") spec = { type: "number", integer: true };
     else if (sub === undefined && base === "list") spec = { type: "list", items: "text" };
-    else if (base === "duration" && (WEB_EXTRACT_DURATION_UNITS as readonly string[]).includes(sub ?? "")) {
+    else if (
+      base === "duration" &&
+      (WEB_EXTRACT_DURATION_UNITS as readonly string[]).includes(sub ?? "")
+    ) {
       spec = { type: "duration", unit: sub as WebExtractFieldSpec["unit"] };
-    } else if (base === "list" && (sub === "number" || sub === "date")) spec = { type: "list", items: sub };
+    } else if (base === "list" && (sub === "number" || sub === "date"))
+      spec = { type: "list", items: sub };
     if (!spec || extra !== undefined) {
-      throw new Error(`Field ${name} has unknown type "${type.slice(0, 40)}"; use ${WEB_EXTRACT_FIELD_TYPE_HINT}.`);
+      throw new Error(
+        `Field ${name} has unknown type "${type.slice(0, 40)}"; use ${WEB_EXTRACT_FIELD_TYPE_HINT}.`,
+      );
     }
     specs[name] = instructions ? { ...spec, instructions } : spec;
   }
@@ -139,7 +157,9 @@ export type WebPageExtraction =
 
 function realDate(year: number, month: number, day: number): boolean {
   const date = new Date(Date.UTC(year, month - 1, day));
-  return date.getUTCFullYear() === year && date.getUTCMonth() === month - 1 && date.getUTCDate() === day;
+  return (
+    date.getUTCFullYear() === year && date.getUTCMonth() === month - 1 && date.getUTCDate() === day
+  );
 }
 
 function realTime(text: string): boolean {
@@ -155,12 +175,19 @@ function isoDate(value: string): { year: number; month: number; day: number } | 
 }
 
 /** Whether the value has the field's type; dates and times must also exist. */
-function matchesType(spec: Pick<WebExtractFieldSpec, "type" | "integer" | "items">, value: unknown): boolean {
+function matchesType(
+  spec: Pick<WebExtractFieldSpec, "type" | "integer" | "items">,
+  value: unknown,
+): boolean {
   switch (spec.type) {
     case "text":
       return typeof value === "string" && value.trim() !== "";
     case "number":
-      return typeof value === "number" && Number.isFinite(value) && (!spec.integer || Number.isInteger(value));
+      return (
+        typeof value === "number" &&
+        Number.isFinite(value) &&
+        (!spec.integer || Number.isInteger(value))
+      );
     case "duration":
       return typeof value === "number" && Number.isFinite(value) && value >= 0;
     case "date":
@@ -170,7 +197,9 @@ function matchesType(spec: Pick<WebExtractFieldSpec, "type" | "integer" | "items
     case "datetime": {
       const match =
         typeof value === "string"
-          ? /^(\d{4}-\d{2}-\d{2})T(\d{2}:\d{2}(?::\d{2})?)(?:\.\d+)?(?:Z|[+-](\d{2}:\d{2}))?$/u.exec(value)
+          ? /^(\d{4}-\d{2}-\d{2})T(\d{2}:\d{2}(?::\d{2})?)(?:\.\d+)?(?:Z|[+-](\d{2}:\d{2}))?$/u.exec(
+              value,
+            )
           : null;
       return (
         match !== null &&
@@ -180,13 +209,24 @@ function matchesType(spec: Pick<WebExtractFieldSpec, "type" | "integer" | "items
       );
     }
     case "list":
-      return Array.isArray(value) && value.every((item) => matchesType({ type: spec.items ?? "text" }, item));
+      return (
+        Array.isArray(value) &&
+        value.every((item) => matchesType({ type: spec.items ?? "text" }, item))
+      );
   }
 }
 
 type Verdict =
-  | { readonly status: "extracted"; readonly value: WebExtractJsonValue; readonly confidence: number }
-  | { readonly status: "uncertain"; readonly guess: WebExtractJsonValue; readonly confidence?: number }
+  | {
+      readonly status: "extracted";
+      readonly value: WebExtractJsonValue;
+      readonly confidence: number;
+    }
+  | {
+      readonly status: "uncertain";
+      readonly guess: WebExtractJsonValue;
+      readonly confidence?: number;
+    }
   | { readonly status: "null" };
 
 function verdictFor(spec: WebExtractFieldSpec, answer: unknown): Verdict {
@@ -195,13 +235,23 @@ function verdictFor(spec: WebExtractFieldSpec, answer: unknown): Verdict {
   }
   // A missing value (only `p_null` sent) and an explicit null both mean "not on
   // the page". The fallback guess a model may still send then is not evidence.
-  const { value = null, confidence: rawConfidence } = answer as { value?: WebExtractJsonValue; confidence?: unknown };
+  const { value = null, confidence: rawConfidence } = answer as {
+    value?: WebExtractJsonValue;
+    confidence?: unknown;
+  };
   if (value === null) return { status: "null" };
   const confidence =
-    typeof rawConfidence === "number" && Number.isFinite(rawConfidence) && rawConfidence >= 0 && rawConfidence <= 1
+    typeof rawConfidence === "number" &&
+    Number.isFinite(rawConfidence) &&
+    rawConfidence >= 0 &&
+    rawConfidence <= 1
       ? rawConfidence
       : undefined;
-  if (confidence !== undefined && confidence >= WEB_EXTRACT_CONFIDENCE_THRESHOLD && matchesType(spec, value)) {
+  if (
+    confidence !== undefined &&
+    confidence >= WEB_EXTRACT_CONFIDENCE_THRESHOLD &&
+    matchesType(spec, value)
+  ) {
     return { status: "extracted", value, confidence };
   }
   return { status: "uncertain", guess: value, ...(confidence === undefined ? {} : { confidence }) };
@@ -260,10 +310,15 @@ export function citeLine(line: string, start: number, end: number): string | und
   if (characters.length <= WEB_EXTRACT_MAX_SOURCE_LINE_CHARS) return text;
   // Match offsets are raw UTF-16 indices. Translate their flattened prefixes
   // to code-point indices before budgeting or slicing, as the recap validator does.
-  const before = (at: number) => Array.from(line.slice(0, at).replace(/\s+/gu, " ").trimStart()).length;
+  const before = (at: number) =>
+    Array.from(line.slice(0, at).replace(/\s+/gu, " ").trimStart()).length;
   const first = before(start);
   const last = before(end);
-  const room = WEB_EXTRACT_MAX_SOURCE_LINE_CHARS - (last - first) - Number(first > 0) - Number(last < characters.length);
+  const room =
+    WEB_EXTRACT_MAX_SOURCE_LINE_CHARS -
+    (last - first) -
+    Number(first > 0) -
+    Number(last < characters.length);
   if (room < 0) return undefined;
   let beforeContext = Math.min(first, Math.floor(room / 2));
   const afterContext = Math.min(characters.length - last, room - beforeContext);
@@ -364,7 +419,8 @@ function locateText(value: string, page: WebExtractPage): Located | undefined {
 
 // Thousands separators seen on pages: comma, period, space, no-break and narrow no-break space, apostrophe.
 const NUMBER_SEPARATORS = new Set([",", ".", " ", " ", " ", "'"]);
-const isDigit = (character: string | undefined) => character !== undefined && character >= "0" && character <= "9";
+const isDigit = (character: string | undefined) =>
+  character !== undefined && character >= "0" && character <= "9";
 
 /** The values one run of digit groups can mean: "1.299" is 1.299 or 1299, "1.299,00" is 1299. */
 function groupReadings(groups: readonly string[], separators: readonly string[]): number[] {
@@ -383,7 +439,15 @@ function groupReadings(groups: readonly string[], separators: readonly string[])
   return readings;
 }
 
-const MULTIPLIERS: Readonly<Record<string, number>> = { k: 1e3, thousand: 1e3, m: 1e6, million: 1e6, b: 1e9, bn: 1e9, billion: 1e9 };
+const MULTIPLIERS: Readonly<Record<string, number>> = {
+  k: 1e3,
+  thousand: 1e3,
+  m: 1e6,
+  million: 1e6,
+  b: 1e9,
+  bn: 1e9,
+  billion: 1e9,
+};
 
 function sameNumber(left: number, right: number): boolean {
   return Math.abs(left - right) <= 1e-9 * Math.max(1, Math.abs(right));
@@ -414,17 +478,22 @@ function locateNumber(value: number, page: WebExtractPage): Located | undefined 
         separators.push(line[end]!);
         end++;
       }
-      const suffix = /^(?:([kmb]|bn)(?![\p{L}\p{N}])|\s+(thousand|million|billion)\b)/iu.exec(line.slice(end));
-      const multiplier = suffix ? MULTIPLIERS[(suffix[1] ?? suffix[2] ?? "").toLowerCase()] : undefined;
+      const suffix = /^(?:([kmb]|bn)(?![\p{L}\p{N}])|\s+(thousand|million|billion)\b)/iu.exec(
+        line.slice(end),
+      );
+      const multiplier = suffix
+        ? MULTIPLIERS[(suffix[1] ?? suffix[2] ?? "").toLowerCase()]
+        : undefined;
       // A minus, optionally before a currency sign, that does not join two words or numbers ("2026-11").
       let sign = index - 1;
       if (/[$€£¥]/u.test(line[sign] ?? "")) sign--;
-      const negative = (line[sign] === "-" || line[sign] === "−") && !/[\p{L}\p{N}]/u.test(line[sign - 1] ?? "");
+      const negative =
+        (line[sign] === "-" || line[sign] === "−") && !/[\p{L}\p{N}]/u.test(line[sign - 1] ?? "");
       const signed = (reading: number) => (negative ? -reading : reading);
-      const matches = (reading: number) =>
-        sameNumber(signed(reading * (multiplier ?? 1)), value);
+      const matches = (reading: number) => sameNumber(signed(reading * (multiplier ?? 1)), value);
       const readings = groupReadings(groups, separators);
-      if (readings.some(matches)) return { line, start: negative ? sign : index, end: end + (suffix?.[0].length ?? 0) };
+      if (readings.some(matches))
+        return { line, start: negative ? sign : index, end: end + (suffix?.[0].length ?? 0) };
       if (readings.length === 0) {
         for (const [groupIndex, group] of groups.entries()) {
           if (sameNumber(groupIndex === 0 ? signed(Number(group)) : Number(group), value)) {
@@ -440,16 +509,39 @@ function locateNumber(value: number, page: WebExtractPage): Located | undefined 
 }
 
 const MONTH_NUMBERS: Readonly<Record<string, number>> = {
-  jan: 1, january: 1, feb: 2, february: 2, mar: 3, march: 3, apr: 4, april: 4, may: 5,
-  jun: 6, june: 6, jul: 7, july: 7, aug: 8, august: 8, sep: 9, sept: 9, september: 9,
-  oct: 10, october: 10, nov: 11, november: 11, dec: 12, december: 12,
+  jan: 1,
+  january: 1,
+  feb: 2,
+  february: 2,
+  mar: 3,
+  march: 3,
+  apr: 4,
+  april: 4,
+  may: 5,
+  jun: 6,
+  june: 6,
+  jul: 7,
+  july: 7,
+  aug: 8,
+  august: 8,
+  sep: 9,
+  sept: 9,
+  september: 9,
+  oct: 10,
+  october: 10,
+  nov: 11,
+  november: 11,
+  dec: 12,
+  december: 12,
 };
 const MONTH =
   "(jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|june?|july?|aug(?:ust)?|sept?(?:ember)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)";
 /** Each pattern reads a match as [month, day, year]; a year-less form has no year. */
 const DATE_PATTERNS: readonly {
   readonly pattern: RegExp;
-  readonly read: (match: RegExpExecArray) => readonly (readonly [number, number, number | undefined])[];
+  readonly read: (
+    match: RegExpExecArray,
+  ) => readonly (readonly [number, number, number | undefined])[];
 }[] = [
   // 2026-11-03, 2026/11/03
   {
@@ -458,20 +550,41 @@ const DATE_PATTERNS: readonly {
   },
   // Nov 3, 2026 · November 3rd 2026 · Nov. 3
   {
-    pattern: new RegExp(`(?<!\\p{L})${MONTH}\\.?\\s+(\\d{1,2})(?:st|nd|rd|th)?(?!\\d)(?:,?\\s+(\\d{4})(?!\\d))?`, "giu"),
-    read: (match) => [[MONTH_NUMBERS[match[1]!.toLowerCase()]!, Number(match[2]), match[3] === undefined ? undefined : Number(match[3])]],
+    pattern: new RegExp(
+      `(?<!\\p{L})${MONTH}\\.?\\s+(\\d{1,2})(?:st|nd|rd|th)?(?!\\d)(?:,?\\s+(\\d{4})(?!\\d))?`,
+      "giu",
+    ),
+    read: (match) => [
+      [
+        MONTH_NUMBERS[match[1]!.toLowerCase()]!,
+        Number(match[2]),
+        match[3] === undefined ? undefined : Number(match[3]),
+      ],
+    ],
   },
   // 3 November 2026 · 3rd of Nov
   {
-    pattern: new RegExp(`(?<!\\d)(\\d{1,2})(?:st|nd|rd|th)?\\s+(?:of\\s+)?${MONTH}(?!\\p{L})\\.?(?:,?\\s+(\\d{4})(?!\\d))?`, "giu"),
-    read: (match) => [[MONTH_NUMBERS[match[2]!.toLowerCase()]!, Number(match[1]), match[3] === undefined ? undefined : Number(match[3])]],
+    pattern: new RegExp(
+      `(?<!\\d)(\\d{1,2})(?:st|nd|rd|th)?\\s+(?:of\\s+)?${MONTH}(?!\\p{L})\\.?(?:,?\\s+(\\d{4})(?!\\d))?`,
+      "giu",
+    ),
+    read: (match) => [
+      [
+        MONTH_NUMBERS[match[2]!.toLowerCase()]!,
+        Number(match[1]),
+        match[3] === undefined ? undefined : Number(match[3]),
+      ],
+    ],
   },
   // 11/03/2026 or 03/11/2026, 03.11.26
   {
     pattern: /(?<![\d/.-])(\d{1,2})[/.-](\d{1,2})[/.-](\d{4}|\d{2})(?![\d/.-])/gu,
     read: (match) => {
       const year = match[3]!.length === 2 ? 2000 + Number(match[3]) : Number(match[3]);
-      return [[Number(match[1]), Number(match[2]), year], [Number(match[2]), Number(match[1]), year]];
+      return [
+        [Number(match[1]), Number(match[2]), year],
+        [Number(match[2]), Number(match[1]), year],
+      ];
     },
   },
 ];
@@ -484,7 +597,14 @@ function dateInLine(wanted: IsoDate, line: string): Located | undefined {
   for (const { pattern, read } of DATE_PATTERNS) {
     pattern.lastIndex = 0;
     for (let match = pattern.exec(line); match; match = pattern.exec(line)) {
-      if (read(match).some(([month, day, year]) => month === wanted.month && day === wanted.day && (year === undefined || year === wanted.year))) {
+      if (
+        read(match).some(
+          ([month, day, year]) =>
+            month === wanted.month &&
+            day === wanted.day &&
+            (year === undefined || year === wanted.year),
+        )
+      ) {
         return { line, start: match.index, end: match.index + match[0].length };
       }
     }
@@ -512,8 +632,14 @@ function locateTime(value: string, page: WebExtractPage): Located | undefined {
 }
 
 /** A time on one line in 24-hour form, 12-hour form with am/pm, or "noon"/"midnight". */
-function timeInLine(hours: number, minutes: number, seconds: number, line: string): Located | undefined {
-  const pattern = /(?<![\d:])(\d{1,2})(?::(\d{2}))?(?::(\d{2}))?(?:\s*([ap])\.?\s?m\b\.?)?(?![\d:])|\b(noon|midnight)\b/giu;
+function timeInLine(
+  hours: number,
+  minutes: number,
+  seconds: number,
+  line: string,
+): Located | undefined {
+  const pattern =
+    /(?<![\d:])(\d{1,2})(?::(\d{2}))?(?::(\d{2}))?(?:\s*([ap])\.?\s?m\b\.?)?(?![\d:])|\b(noon|midnight)\b/giu;
   for (let match = pattern.exec(line); match; match = pattern.exec(line)) {
     let hour: number;
     let minute = 0;
@@ -552,7 +678,10 @@ function zonePattern(zone: string): RegExp {
   const numeric = `(?<![\\d:])${sign}${hours}:?${minutes}(?!\\d)`;
   if (hours === "00" && minutes === "00") {
     // UTC itself ("09:00Z", "UTC", "GMT"), but not "UTC+9".
-    return new RegExp(`(?:(?<=\\d)Z|(?<!\\p{L})(?:UTC|GMT))(?!\\p{L})(?!\\s?[-+−]\\s?\\d)|${numeric}`, "u");
+    return new RegExp(
+      `(?:(?<=\\d)Z|(?<!\\p{L})(?:UTC|GMT))(?!\\p{L})(?!\\s?[-+−]\\s?\\d)|${numeric}`,
+      "u",
+    );
   }
   // "UTC+9", "GMT+09:00", "UTC+5:30", but "UTC+9" is never the start of "UTC+9:30".
   const minutesPart = minutes === "00" ? "(?::?00)?" : `:?${minutes}`;
@@ -560,7 +689,8 @@ function zonePattern(zone: string): RegExp {
   return new RegExp(`${named}|${numeric}`, "iu");
 }
 
-const ISO_DATETIME = /^(\d{4}-\d{2}-\d{2})T(\d{2}):(\d{2})(?::(\d{2}))?(?:\.(\d+))?(Z|[+-]\d{2}:\d{2})?$/u;
+const ISO_DATETIME =
+  /^(\d{4}-\d{2}-\d{2})T(\d{2}):(\d{2})(?::(\d{2}))?(?:\.(\d+))?(Z|[+-]\d{2}:\d{2})?$/u;
 
 /**
  * The date, the time and any UTC offset on one line. A date from one line and
@@ -581,11 +711,12 @@ function locateDateTime(value: string, page: WebExtractPage): Located | undefine
     const date = dateInLine(wanted, line);
     const time = date && timeInLine(hours, minutes, seconds, line);
     const offset = zone?.exec(line);
-    if (date && time && (!zone || offset)) return {
-      line,
-      start: Math.min(date.start, time.start, offset?.index ?? Infinity),
-      end: Math.max(date.end, time.end, offset ? offset.index + offset[0].length : 0),
-    };
+    if (date && time && (!zone || offset))
+      return {
+        line,
+        start: Math.min(date.start, time.start, offset?.index ?? Infinity),
+        end: Math.max(date.end, time.end, offset ? offset.index + offset[0].length : 0),
+      };
   }
   return undefined;
 }
@@ -593,23 +724,66 @@ function locateDateTime(value: string, page: WebExtractPage): Located | undefine
 type DurationUnit = (typeof WEB_EXTRACT_DURATION_UNITS)[number];
 
 const DURATION_UNIT_ALIASES: Readonly<Record<string, DurationUnit>> = {
-  s: "seconds", sec: "seconds", secs: "seconds", second: "seconds", seconds: "seconds",
-  min: "minutes", mins: "minutes", minute: "minutes", minutes: "minutes",
-  h: "hours", hr: "hours", hrs: "hours", hour: "hours", hours: "hours",
-  d: "days", day: "days", days: "days",
-  w: "weeks", wk: "weeks", wks: "weeks", week: "weeks", weeks: "weeks",
-  mo: "months", mos: "months", month: "months", months: "months",
-  y: "years", yr: "years", yrs: "years", year: "years", years: "years",
+  s: "seconds",
+  sec: "seconds",
+  secs: "seconds",
+  second: "seconds",
+  seconds: "seconds",
+  min: "minutes",
+  mins: "minutes",
+  minute: "minutes",
+  minutes: "minutes",
+  h: "hours",
+  hr: "hours",
+  hrs: "hours",
+  hour: "hours",
+  hours: "hours",
+  d: "days",
+  day: "days",
+  days: "days",
+  w: "weeks",
+  wk: "weeks",
+  wks: "weeks",
+  week: "weeks",
+  weeks: "weeks",
+  mo: "months",
+  mos: "months",
+  month: "months",
+  months: "months",
+  y: "years",
+  yr: "years",
+  yrs: "years",
+  year: "years",
+  years: "years",
 };
 /** Units from smallest to largest; a compound duration writes them largest first. */
-const DURATION_UNIT_ORDER: readonly DurationUnit[] = ["seconds", "minutes", "hours", "days", "weeks", "months", "years"];
+const DURATION_UNIT_ORDER: readonly DurationUnit[] = [
+  "seconds",
+  "minutes",
+  "hours",
+  "days",
+  "weeks",
+  "months",
+  "years",
+];
 /** Units with an exact size. Months and years only convert to each other. */
-const SECONDS_IN: Partial<Record<DurationUnit, number>> = { seconds: 1, minutes: 60, hours: 3_600, days: 86_400, weeks: 604_800 };
+const SECONDS_IN: Partial<Record<DurationUnit, number>> = {
+  seconds: 1,
+  minutes: 60,
+  hours: 3_600,
+  days: 86_400,
+  weeks: 604_800,
+};
 const MONTHS_IN: Partial<Record<DurationUnit, number>> = { months: 1, years: 12 };
-const DURATION = /(?<![\d.,])(\d+(?:\.\d+)?)\s?-?\s?(seconds?|secs?|minutes?|mins?|hours?|hrs?|days?|weeks?|wks?|months?|mos?|years?|yrs?|[shdwy])(?![\p{L}\p{N}])/giu;
+const DURATION =
+  /(?<![\d.,])(\d+(?:\.\d+)?)\s?-?\s?(seconds?|secs?|minutes?|mins?|hours?|hrs?|days?|weeks?|wks?|months?|mos?|years?|yrs?|[shdwy])(?![\p{L}\p{N}])/giu;
 
 /** An amount in `unit` expressed in `wanted`, or undefined when the two do not convert exactly. */
-function convertDuration(amount: number, unit: DurationUnit, wanted: DurationUnit): number | undefined {
+function convertDuration(
+  amount: number,
+  unit: DurationUnit,
+  wanted: DurationUnit,
+): number | undefined {
   for (const table of [SECONDS_IN, MONTHS_IN]) {
     const from = table[unit];
     const to = table[wanted];
@@ -627,9 +801,14 @@ function convertDuration(amount: number, unit: DurationUnit, wanted: DurationUni
  * 4 hours") are one duration, so only their total counts, never one part of
  * it. Amounts in the same or a rising unit ("7 days, 14 days") stand alone.
  */
-function locateDuration(value: number, unit: DurationUnit, page: WebExtractPage): Located | undefined {
+function locateDuration(
+  value: number,
+  unit: DurationUnit,
+  page: WebExtractPage,
+): Located | undefined {
   for (const line of page.lines) {
-    const groups: { start: number; end: number; total: number | undefined; smallest: number }[] = [];
+    const groups: { start: number; end: number; total: number | undefined; smallest: number }[] =
+      [];
     DURATION.lastIndex = 0;
     for (let match = DURATION.exec(line); match; match = DURATION.exec(line)) {
       const written = DURATION_UNIT_ALIASES[match[2]!.toLowerCase()]!;
@@ -637,36 +816,54 @@ function locateDuration(value: number, unit: DurationUnit, page: WebExtractPage)
       const amount = convertDuration(Number(match[1]), written, unit);
       const end = match.index + match[0].length;
       const previous = groups[groups.length - 1];
-      if (previous && rank < previous.smallest && /^\s*(?:,|and)?\s*$/iu.test(line.slice(previous.end, match.index))) {
+      if (
+        previous &&
+        rank < previous.smallest &&
+        /^\s*(?:,|and)?\s*$/iu.test(line.slice(previous.end, match.index))
+      ) {
         previous.end = end;
         previous.smallest = rank;
-        previous.total = previous.total === undefined || amount === undefined ? undefined : previous.total + amount;
+        previous.total =
+          previous.total === undefined || amount === undefined
+            ? undefined
+            : previous.total + amount;
       } else {
         groups.push({ start: match.index, end, total: amount, smallest: rank });
       }
     }
     for (const group of groups) {
-      if (group.total !== undefined && sameNumber(group.total, value)) return { line, start: group.start, end: group.end };
+      if (group.total !== undefined && sameNumber(group.total, value))
+        return { line, start: group.start, end: group.end };
     }
   }
   return undefined;
 }
 
-function locateItem(type: WebExtractItemType, value: unknown, page: WebExtractPage): Located | undefined {
+function locateItem(
+  type: WebExtractItemType,
+  value: unknown,
+  page: WebExtractPage,
+): Located | undefined {
   if (type === "number") return typeof value === "number" ? locateNumber(value, page) : undefined;
   if (type === "date") return typeof value === "string" ? locateDate(value, page) : undefined;
   return typeof value === "string" ? locateText(value, page) : undefined;
 }
 
 /** Where on the page a well-typed value is, or undefined when it is not there. */
-function locateTyped(spec: WebExtractFieldSpec, value: unknown, page: WebExtractPage): Located | undefined {
+function locateTyped(
+  spec: WebExtractFieldSpec,
+  value: unknown,
+  page: WebExtractPage,
+): Located | undefined {
   switch (spec.type) {
     case "text":
       return locateItem("text", value, page);
     case "number":
       return locateItem("number", value, page);
     case "duration":
-      return typeof value === "number" ? locateDuration(value, spec.unit ?? "seconds", page) : undefined;
+      return typeof value === "number"
+        ? locateDuration(value, spec.unit ?? "seconds", page)
+        : undefined;
     case "date":
       return locateItem("date", value, page);
     case "time":
@@ -693,7 +890,9 @@ function locateTyped(spec: WebExtractFieldSpec, value: unknown, page: WebExtract
       }
       // Separate source spans are joined with an explicit omission marker.
       // Every item's support must fit, rather than citing only the first item.
-      const line = locations.map((located) => located.line.slice(located.start, located.end)).join(" … ");
+      const line = locations
+        .map((located) => located.line.slice(located.start, located.end))
+        .join(" … ");
       return { line, start: 0, end: line.length };
     }
   }
@@ -703,7 +902,11 @@ function locateTyped(spec: WebExtractFieldSpec, value: unknown, page: WebExtract
  * Apply the page check to the model's verdict. An extracted value must be on
  * the page; one that is not becomes an uncertain guess marked `notFound`.
  */
-function checkedAgainstPage(spec: WebExtractFieldSpec, verdict: Verdict, page: WebExtractPage): WebExtractFieldResult {
+function checkedAgainstPage(
+  spec: WebExtractFieldSpec,
+  verdict: Verdict,
+  page: WebExtractPage,
+): WebExtractFieldResult {
   if (verdict.status === "null") return { status: "null", value: null };
   const value = verdict.status === "extracted" ? verdict.value : verdict.guess;
   const located = matchesType(spec, value)
@@ -766,7 +969,9 @@ export async function extractWebPageFields(input: {
     const page = new WebExtractPage(state);
     const fields: Record<string, WebExtractFieldResult> = {};
     for (const [name, spec] of Object.entries(input.fields)) {
-      const answer = Object.prototype.hasOwnProperty.call(answers, name) ? answers[name] : undefined;
+      const answer = Object.prototype.hasOwnProperty.call(answers, name)
+        ? answers[name]
+        : undefined;
       fields[name] = checkedAgainstPage(spec, verdictFor(spec, answer), page);
     }
     return { fields, cut: state.length < input.page.length || response.truncated === true };
@@ -790,7 +995,8 @@ function shown(value: unknown): string {
 
 /** One line per field, as the model sees it. Scripts get the typed results. */
 export function formatWebPageExtraction(extraction: WebPageExtraction): string {
-  if ("error" in extraction) return `Extraction failed: ${WEB_EXTRACT_ERROR_MESSAGES[extraction.error]}.`;
+  if ("error" in extraction)
+    return `Extraction failed: ${WEB_EXTRACT_ERROR_MESSAGES[extraction.error]}.`;
   const lines = Object.entries(extraction.fields).map(([name, result]) => {
     if (result.status === "null") return `${name}: not on the page`;
     const from = result.sourceLine ? ` from "${result.sourceLine}"` : "";
@@ -802,7 +1008,9 @@ export function formatWebPageExtraction(extraction: WebPageExtraction): string {
   });
   if (extraction.cut) lines.push("(Only the first part of the page was read.)");
   if (Object.values(extraction.fields).some(({ status }) => status === "uncertain")) {
-    lines.push("Uncertain values are guesses, not read from the page; check them before relying on them.");
+    lines.push(
+      "Uncertain values are guesses, not read from the page; check them before relying on them.",
+    );
   }
   return lines.join("\n");
 }

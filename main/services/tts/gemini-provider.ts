@@ -20,16 +20,10 @@ import type { TtsProviderPort } from "./service.js";
 /** Minimal structural surface the service needs from the SDK client. */
 interface GeminiTtsClient {
   interactions: {
-    create(
-      params: Record<string, unknown>,
-      options?: Record<string, unknown>,
-    ): Promise<unknown>;
+    create(params: Record<string, unknown>, options?: Record<string, unknown>): Promise<unknown>;
   };
   voices: {
-    list(
-      params?: Record<string, unknown>,
-      options?: Record<string, unknown>,
-    ): Promise<unknown>;
+    list(params?: Record<string, unknown>, options?: Record<string, unknown>): Promise<unknown>;
   };
 }
 
@@ -80,10 +74,7 @@ export function createGeminiTtsProvider(
       }
     },
 
-    async listVoices(input: {
-      apiKey: string;
-      pageToken?: string;
-    }): Promise<TtsVoicesPage> {
+    async listVoices(input: { apiKey: string; pageToken?: string }): Promise<TtsVoicesPage> {
       const client = factory.createClient({
         apiKey: input.apiKey,
         httpOptions: baseHttpOptions,

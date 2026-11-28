@@ -385,14 +385,8 @@ test("subagentRunStateProgresses enforces the exhaustive transition matrix for a
   }
 
   // Unrecognized states at runtime are rejected rather than falling through.
-  assert.equal(
-    subagentRunStateProgresses("bogus" as SubagentRunStateV2, "running"),
-    false,
-  );
-  assert.equal(
-    subagentRunStateProgresses("queued", "bogus" as SubagentRunStateV2),
-    false,
-  );
+  assert.equal(subagentRunStateProgresses("bogus" as SubagentRunStateV2, "running"), false);
+  assert.equal(subagentRunStateProgresses("queued", "bogus" as SubagentRunStateV2), false);
 });
 
 test("subagentRunSnapshotUpdateIsMonotonic enforces state, identity, and exact-replay rules", () => {
@@ -428,12 +422,24 @@ test("subagentRunSnapshotUpdateIsMonotonic enforces state, identity, and exact-r
 
   assert.equal(subagentRunSnapshotUpdateIsMonotonic(queued, running), true);
   assert.equal(subagentRunSnapshotUpdateIsMonotonic(running, attention), true);
-  assert.equal(subagentRunSnapshotUpdateIsMonotonic(attention, { ...running, revision: 4, updatedAt: 2_650 }), true);
+  assert.equal(
+    subagentRunSnapshotUpdateIsMonotonic(attention, { ...running, revision: 4, updatedAt: 2_650 }),
+    true,
+  );
   assert.equal(subagentRunSnapshotUpdateIsMonotonic(attention, stopped), true);
-  assert.equal(subagentRunSnapshotUpdateIsMonotonic(stopped, { ...running, revision: 5, updatedAt: 2_800 }), false);
-  assert.equal(subagentRunSnapshotUpdateIsMonotonic(running, { ...queued, revision: 3, updatedAt: 2_600 }), false);
+  assert.equal(
+    subagentRunSnapshotUpdateIsMonotonic(stopped, { ...running, revision: 5, updatedAt: 2_800 }),
+    false,
+  );
+  assert.equal(
+    subagentRunSnapshotUpdateIsMonotonic(running, { ...queued, revision: 3, updatedAt: 2_600 }),
+    false,
+  );
   assert.equal(subagentRunSnapshotUpdateIsMonotonic(running, running), false);
-  assert.equal(subagentRunSnapshotUpdateIsMonotonic(running, running, { allowExactReplay: true }), true);
+  assert.equal(
+    subagentRunSnapshotUpdateIsMonotonic(running, running, { allowExactReplay: true }),
+    true,
+  );
   assert.equal(
     subagentRunSnapshotUpdateIsMonotonic(queued, { ...running, label: "Renamed" }),
     false,

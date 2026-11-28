@@ -274,10 +274,7 @@ export class SubagentControlRegistryV2 {
     return cloneSnapshot(this.ownedRecord(owner, runId).snapshot);
   }
 
-  update(
-    owner: SubagentControlOwnerV2,
-    candidate: SubagentRunSnapshotV2,
-  ): SubagentRunSnapshotV2 {
+  update(owner: SubagentControlOwnerV2, candidate: SubagentRunSnapshotV2): SubagentRunSnapshotV2 {
     const record = this.ownedRecord(owner, candidate.runId);
     const next = parseSubagentRunSnapshotV2(candidate);
     if (!next || !sameSubagentRunSnapshotIdentity(record.snapshot, next)) {
@@ -361,8 +358,7 @@ export class SubagentControlRegistryV2 {
     const pendingCount = record.steering.length + (record.steeringActive ? 1 : 0);
     if (
       pendingCount >= MAX_SUBAGENT_CONTROL_STEERING_PER_RUN ||
-      record.steeringChars + parsed.instruction.length >
-        MAX_SUBAGENT_CONTROL_STEERING_CHARS_PER_RUN
+      record.steeringChars + parsed.instruction.length > MAX_SUBAGENT_CONTROL_STEERING_CHARS_PER_RUN
     ) {
       throw new Error("The subagent steering queue is full.");
     }
@@ -495,8 +491,7 @@ export class SubagentControlRegistryV2 {
       .filter(([, record]) => isSubagentRunStateTerminal(record.snapshot.state))
       .sort(
         ([leftId, left], [rightId, right]) =>
-          left.snapshot.updatedAt - right.snapshot.updatedAt ||
-          leftId.localeCompare(rightId),
+          left.snapshot.updatedAt - right.snapshot.updatedAt || leftId.localeCompare(rightId),
       )[0];
     if (candidate) this.records.delete(candidate[0]);
   }

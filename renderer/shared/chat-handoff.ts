@@ -83,8 +83,12 @@ export function parseClaimHandoffRequest(input: unknown): ClaimHandoffRequest {
     if (!Object.prototype.hasOwnProperty.call(record, key)) continue;
     if (!CLAIM_KEYS.has(key)) throw new Error("Invalid handoff claim fields.");
   }
-  const chatId = typeof record.chatId === "string" && record.chatId.trim() ? record.chatId.trim() : undefined;
-  const ticketId = typeof record.ticketId === "string" && record.ticketId.trim() ? record.ticketId.trim() : undefined;
+  const chatId =
+    typeof record.chatId === "string" && record.chatId.trim() ? record.chatId.trim() : undefined;
+  const ticketId =
+    typeof record.ticketId === "string" && record.ticketId.trim()
+      ? record.ticketId.trim()
+      : undefined;
   if (!chatId && !ticketId) {
     throw new Error('Expected either "chatId" or "ticketId" to claim a handoff.');
   }

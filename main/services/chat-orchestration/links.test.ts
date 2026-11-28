@@ -2,7 +2,11 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import type { AppSettings, Workspace } from "../types.js";
-import { approvalCeilingOf, currentWorkspaceApproval, generationApprovalPolicy } from "../approval-gate/run-approval.js";
+import {
+  approvalCeilingOf,
+  currentWorkspaceApproval,
+  generationApprovalPolicy,
+} from "../approval-gate/run-approval.js";
 import {
   CHAT_LINK_LIMIT,
   CHAT_LINK_RESULTS_KEPT,
@@ -59,8 +63,15 @@ test("links survive a restart and answer by child, by key and by lead", async ()
   await restarted.restore();
   assert.equal(restarted.get("child-1")?.leadChatId, "lead-1");
   assert.equal(restarted.byKey("lead-1", "agent-chat:lead-1:k:child-1")?.childChatId, "child-1");
-  assert.deepEqual(restarted.childrenOf("lead-2").map((each) => each.childChatId), ["child-2"]);
-  assert.deepEqual(restarted.ceilingFor("child-1"), { mode: "ask", macGrants: ["shell"], chatOnly: false });
+  assert.deepEqual(
+    restarted.childrenOf("lead-2").map((each) => each.childChatId),
+    ["child-2"],
+  );
+  assert.deepEqual(restarted.ceilingFor("child-1"), {
+    mode: "ask",
+    macGrants: ["shell"],
+    chatOnly: false,
+  });
   assert.equal(restarted.ceilingFor("unrelated"), undefined);
 });
 
@@ -73,11 +84,18 @@ test("a damaged file reads as empty and damaged links are dropped one by one", a
       link("child-1"),
       { ...link("child-2"), ceiling: { mode: "sometimes", macGrants: [], chatOnly: false } },
       { ...link("child-3"), leadChatId: "child-3" },
-      { ...link("child-4"), owed: { runId: "run-1", end: "exploded", at: 5 }, delivered: ["run-0", 7] },
+      {
+        ...link("child-4"),
+        owed: { runId: "run-1", end: "exploded", at: 5 },
+        delivered: ["run-0", 7],
+      },
       { ...link("child-1"), leadChatId: "lead-9" },
     ],
   });
-  assert.deepEqual(document.links.map((each) => each.childChatId), ["child-1", "child-4"]);
+  assert.deepEqual(
+    document.links.map((each) => each.childChatId),
+    ["child-1", "child-4"],
+  );
   // The first link for a chat wins; a damaged optional part is dropped, not the link.
   assert.equal(document.links[0]?.leadChatId, "lead-1");
   assert.equal(document.links[1]?.owed, undefined);
@@ -107,7 +125,10 @@ test("a failed save keeps the link in memory and the next save writes it", async
   await store.update("child-1", (draft) => {
     draft.tookOverAt = 2_000;
   });
-  assert.deepEqual(memory.saved()?.links.map((each) => [each.childChatId, each.tookOverAt]), [["child-1", 2_000]]);
+  assert.deepEqual(
+    memory.saved()?.links.map((each) => [each.childChatId, each.tookOverAt]),
+    [["child-1", 2_000]],
+  );
 });
 
 test("a chat keeps its first link, an edit can't damage or move a link, and deleting a lead frees its chats", async () => {
@@ -117,12 +138,16 @@ test("a chat keeps its first link, an edit can't damage or move a link, and dele
   await store.add(link("child-1"));
   const again = await store.add(link("child-1", { leadChatId: "lead-2" }));
   assert.equal(again.leadChatId, "lead-1");
-  await assert.rejects(store.update("child-1", (draft) => {
-    draft.leadChatId = "lead-2";
-  }));
-  await assert.rejects(store.update("child-1", (draft) => {
-    draft.ceiling = { mode: "always" as never, macGrants: [], chatOnly: false };
-  }));
+  await assert.rejects(
+    store.update("child-1", (draft) => {
+      draft.leadChatId = "lead-2";
+    }),
+  );
+  await assert.rejects(
+    store.update("child-1", (draft) => {
+      draft.ceiling = { mode: "always" as never, macGrants: [], chatOnly: false };
+    }),
+  );
   assert.equal(store.get("child-1")?.ceiling.mode, "ask");
   assert.equal(await store.update("missing", () => undefined), undefined);
 
@@ -153,9 +178,15 @@ test("the delivered list keeps the newest 16 runs, and links beyond the memory g
 test("a started chat whose link is lost runs as Ask with no Mac grants; an ordinary chat has no ceiling", async () => {
   const store = new ChatLinkStore(memoryStorage().storage);
   await store.restore();
-  assert.deepEqual(startedChatCeiling(store, "child-1", { chatId: "lead-1" }), { mode: "ask", macGrants: [], chatOnly: false });
+  assert.deepEqual(startedChatCeiling(store, "child-1", { chatId: "lead-1" }), {
+    mode: "ask",
+    macGrants: [],
+    chatOnly: false,
+  });
   assert.equal(startedChatCeiling(store, "chat-1", undefined), undefined);
-  await store.add(link("child-1", { ceiling: { mode: "never", macGrants: ["files"], chatOnly: false } }));
+  await store.add(
+    link("child-1", { ceiling: { mode: "never", macGrants: ["files"], chatOnly: false } }),
+  );
   assert.equal(startedChatCeiling(store, "child-1", { chatId: "lead-1" })?.mode, "never");
 });
 
@@ -188,7 +219,9 @@ test("only the newest links keep a result schema and result, so old ones can't g
   await store.restore();
   const schema = { type: "object" };
   for (let index = 0; index < CHAT_LINK_RESULTS_KEPT + 2; index += 1) {
-    await store.add(link(`child-${index}`, { resultSchema: schema, result: { value: { index }, at: 1_000 } }));
+    await store.add(
+      link(`child-${index}`, { resultSchema: schema, result: { value: { index }, at: 1_000 } }),
+    );
   }
   assert.equal(store.get("child-0")?.resultSchema, undefined);
   assert.equal(store.get("child-1")?.result, undefined);
@@ -201,7 +234,12 @@ test("only the newest links keep a result schema and result, so old ones can't g
 /** A workspace the approval policy reads, in the given mode. */
 function workspaceIn(id: string, approvalMode: "ask" | "auto" | "never"): Workspace {
   return {
-    id, name: id, folderPath: `/tmp/${id}`, permission: "ask", createdAt: 0, approvalMode,
+    id,
+    name: id,
+    folderPath: `/tmp/${id}`,
+    permission: "ask",
+    createdAt: 0,
+    approvalMode,
     macGrants: { shell: true, files: true },
   } as unknown as Workspace;
 }
@@ -232,7 +270,13 @@ test("a started chat's turn follows its lead's workspace as it is now: tightenin
       },
     });
     return generationApprovalPolicy(
-      { workspace: workspaces.get("worktree-1"), botBound: false, mode: undefined, permission: undefined, ceiling },
+      {
+        workspace: workspaces.get("worktree-1"),
+        botBound: false,
+        mode: undefined,
+        permission: undefined,
+        ceiling,
+      },
       ports.getSettings,
     );
   };
@@ -258,14 +302,25 @@ test("a started chat whose link is lost starts its turn under Ask with no Mac gr
   });
   assert.deepEqual(ceiling, { mode: "ask", macGrants: [], chatOnly: false });
   const policy = await generationApprovalPolicy(
-    { workspace: workspaceIn("w1", "never"), botBound: false, mode: undefined, permission: undefined, ceiling },
+    {
+      workspace: workspaceIn("w1", "never"),
+      botBound: false,
+      mode: undefined,
+      permission: undefined,
+      ceiling,
+    },
     async () => ({ approvalMode: "never" }),
   );
   assert.equal(policy?.mode, "ask");
   assert.equal(policy?.macGrants.size, 0);
   // A chat no chat started has no ceiling.
   assert.equal(
-    await startedChatTurnCeiling({ links: store, chatId: "chat-1", startedBy: undefined, leadCeiling: async () => undefined }),
+    await startedChatTurnCeiling({
+      links: store,
+      chatId: "chat-1",
+      startedBy: undefined,
+      leadCeiling: async () => undefined,
+    }),
     undefined,
   );
 });

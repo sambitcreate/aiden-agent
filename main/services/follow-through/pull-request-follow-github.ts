@@ -11,11 +11,18 @@
 // costs nothing to check.
 
 import type { GitHubApi, GitHubApiResult } from "../github/github-api.js";
-import { PULL_REQUEST_FRAGMENT, pullRequestFromGraphQl } from "../github/github-pull-request-graphql.js";
+import {
+  PULL_REQUEST_FRAGMENT,
+  pullRequestFromGraphQl,
+} from "../github/github-pull-request-graphql.js";
 import { boundedString, isRecord, safeHttpUrl } from "../github/github-pull-request-parse.js";
 import { tailText } from "../../../renderer/shared/agent-notices.js";
 import { normalizeSubagentModelText } from "../subagents/model-text.js";
-import type { FollowedCheck, FollowedComment, PullRequestObservation } from "./pull-request-follow.js";
+import type {
+  FollowedCheck,
+  FollowedComment,
+  PullRequestObservation,
+} from "./pull-request-follow.js";
 
 const MAX_BODY_CHARS = 20_000;
 export const FOLLOW_LOG_TAIL_CHARS = 3_000;
@@ -84,7 +91,10 @@ interface RawComment {
 /** Comment text keeps its lines; other control characters go. */
 export function commentBody(value: unknown): string {
   if (typeof value !== "string") return "";
-  return value.replace(/\r\n?/gu, "\n").replace(/[^\P{Cc}\n\t]+/gu, "").slice(0, MAX_BODY_CHARS);
+  return value
+    .replace(/\r\n?/gu, "\n")
+    .replace(/[^\P{Cc}\n\t]+/gu, "")
+    .slice(0, MAX_BODY_CHARS);
 }
 
 function timestamp(value: unknown): number {
@@ -96,7 +106,11 @@ function nodes(connection: unknown): unknown[] {
   return isRecord(connection) && Array.isArray(connection.nodes) ? connection.nodes : [];
 }
 
-function rawComment(node: unknown, kind: FollowedComment["kind"], timeField: string): RawComment | undefined {
+function rawComment(
+  node: unknown,
+  kind: FollowedComment["kind"],
+  timeField: string,
+): RawComment | undefined {
   if (!isRecord(node)) return undefined;
   const id = boundedString(node.id, 200);
   const author = isRecord(node.author) ? boundedString(node.author.login, 128) : undefined;
@@ -129,8 +143,15 @@ export function commentsFromPullRequest(pullRequest: Record<string, unknown>): R
     const review = rawComment(node, "review", "submittedAt");
     // An approval or a change request is news even without a body; an empty
     // "commented" review only wraps the inline comments below.
-    if (review && (review.body.trim() || (review.reviewState && review.reviewState !== "COMMENTED"))) {
-      comments.push(review.body.trim() ? review : { ...review, body: `(${review.reviewState!.toLowerCase().replace(/_/gu, " ")})` });
+    if (
+      review &&
+      (review.body.trim() || (review.reviewState && review.reviewState !== "COMMENTED"))
+    ) {
+      comments.push(
+        review.body.trim()
+          ? review
+          : { ...review, body: `(${review.reviewState!.toLowerCase().replace(/_/gu, " ")})` },
+      );
     }
     if (!isRecord(node)) continue;
     for (const inner of nodes(node.comments)) {
@@ -163,14 +184,25 @@ export function cleanJobLog(text: string): string {
 function retryable(result: GitHubApiResult<unknown>): FollowReadResult {
   switch (result.kind) {
     case "rate-limited":
-      return { kind: "retry", message: "GitHub's rate limit was reached; Aiden will try again later.", ...(result.retryAt ? { retryAt: result.retryAt } : {}) };
+      return {
+        kind: "retry",
+        message: "GitHub's rate limit was reached; Aiden will try again later.",
+        ...(result.retryAt ? { retryAt: result.retryAt } : {}),
+      };
     case "unavailable":
     case "unauthorized":
-      return { kind: "retry", message: "Aiden is not signed in to GitHub. Sign in with the gh command-line tool." };
+      return {
+        kind: "retry",
+        message: "Aiden is not signed in to GitHub. Sign in with the gh command-line tool.",
+      };
     case "not-found":
       return { kind: "gone", message: "GitHub could not find this pull request." };
     default:
-      return { kind: "retry", message: "message" in result && result.message ? result.message : "GitHub could not be read." };
+      return {
+        kind: "retry",
+        message:
+          "message" in result && result.message ? result.message : "GitHub could not be read.",
+      };
   }
 }
 
@@ -187,7 +219,11 @@ export interface FollowProbe {
 }
 
 /** The REST objects whose entity tags show a change: the pull request and its head commit's checks. */
-export function followProbePaths(follow: { repository: string; number: number; headSha?: string }): string[] {
+export function followProbePaths(follow: {
+  repository: string;
+  number: number;
+  headSha?: string;
+}): string[] {
   const paths = [`/repos/${follow.repository}/pulls/${follow.number}`];
   if (follow.headSha && /^[0-9a-f]{40}$/u.test(follow.headSha)) {
     paths.push(
@@ -233,26 +269,42 @@ export class PullRequestFollowReader {
     const data = result.data;
     const repository = isRecord(data.repository) ? data.repository : undefined;
     const raw = repository && isRecord(repository.pullRequest) ? repository.pullRequest : undefined;
-    if (!repository || !raw) return { kind: "gone", message: "GitHub could not find this pull request." };
+    if (!repository || !raw)
+      return { kind: "gone", message: "GitHub could not find this pull request." };
     let summary;
     try {
       summary = pullRequestFromGraphQl(raw);
     } catch (error) {
-      return { kind: "retry", message: error instanceof Error ? error.message : "GitHub returned an invalid pull request." };
+      return {
+        kind: "retry",
+        message:
+          error instanceof Error ? error.message : "GitHub returned an invalid pull request.",
+      };
     }
-    const repositoryOwner = isRecord(repository.owner) ? boundedString(repository.owner.login, 128)?.toLowerCase() : undefined;
+    const repositoryOwner = isRecord(repository.owner)
+      ? boundedString(repository.owner.login, 128)?.toLowerCase()
+      : undefined;
     const viewer = isRecord(data.viewer) ? boundedString(data.viewer.login, 128) : undefined;
     const comments: FollowedComment[] = [];
     for (const comment of commentsFromPullRequest(raw)) {
       signal?.throwIfAborted();
-      const trusted = await this.trusted(follow.host, follow.repository, comment, repositoryOwner, viewer, signal);
+      const trusted = await this.trusted(
+        follow.host,
+        follow.repository,
+        comment,
+        repositoryOwner,
+        viewer,
+        signal,
+      );
       comments.push({
         id: comment.id,
         kind: comment.kind,
         author: comment.author,
         trusted,
         ...(comment.bot ? { bot: true } : {}),
-        ...(viewer && comment.author.toLowerCase() === viewer.toLowerCase() ? { byViewer: true } : {}),
+        ...(viewer && comment.author.toLowerCase() === viewer.toLowerCase()
+          ? { byViewer: true }
+          : {}),
         body: comment.body,
         ...(comment.url ? { url: comment.url } : {}),
         createdAt: comment.createdAt,

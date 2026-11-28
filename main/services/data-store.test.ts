@@ -59,18 +59,30 @@ for (const protectedPublication of [false, true]) {
       const error = new Error(`${stage} publication failure`);
       const store = new DataStore("receipt.json", { value: "previous" }, () => directory, {
         rejectExternalChanges: protectedPublication,
-        beforeWritePublish: () => { if (fail && stage === "before") throw error; },
-        afterWritePublish: () => { if (fail && stage === "after") throw error; },
+        beforeWritePublish: () => {
+          if (fail && stage === "before") throw error;
+        },
+        afterWritePublish: () => {
+          if (fail && stage === "after") throw error;
+        },
       });
       await store.update(() => undefined);
       const receipt: DataStorePublicationReceipt = { state: "uncertain" };
       fail = true;
-      const update = store.update((draft) => { draft.value = "next"; }, undefined, receipt);
+      const update = store.update(
+        (draft) => {
+          draft.value = "next";
+        },
+        undefined,
+        receipt,
+      );
       if (stage === "success") await update;
       else await assert.rejects(update, (caught) => caught === error);
       assert.equal(receipt.state, stage === "before" ? "not-published" : "published");
-      assert.equal(JSON.parse(await fs.readFile(path.join(directory, "receipt.json"), "utf8")).value,
-        stage === "before" ? "previous" : "next");
+      assert.equal(
+        JSON.parse(await fs.readFile(path.join(directory, "receipt.json"), "utf8")).value,
+        stage === "before" ? "previous" : "next",
+      );
     });
   }
 }
@@ -83,9 +95,14 @@ test("a compact store writes single-line JSON and still loads an indented file",
   // Written by an earlier release with indentation.
   await fs.writeFile(file, `${JSON.stringify(previous, null, 2)}\n`);
 
-  const compact = new DataStore("journal.json", { version: 1, streams: [] as unknown[] }, () => directory, {
-    compact: true,
-  });
+  const compact = new DataStore(
+    "journal.json",
+    { version: 1, streams: [] as unknown[] },
+    () => directory,
+    {
+      compact: true,
+    },
+  );
   assert.deepEqual(await compact.load(), previous);
   assert.equal(await compact.loadedFromCorruptFile(), false);
 
@@ -93,7 +110,14 @@ test("a compact store writes single-line JSON and still loads an indented file",
   await compact.save(next);
   const written = await fs.readFile(file, "utf-8");
   assert.equal(written, `${JSON.stringify(next)}\n`);
-  assert.deepEqual(await new DataStore("journal.json", { version: 1, streams: [] as unknown[] }, () => directory).load(), next);
+  assert.deepEqual(
+    await new DataStore(
+      "journal.json",
+      { version: 1, streams: [] as unknown[] },
+      () => directory,
+    ).load(),
+    next,
+  );
 });
 
 test("a storage preparation failure does not load defaults or publish over existing data", async (t) => {
@@ -102,32 +126,52 @@ test("a storage preparation failure does not load defaults or publish over exist
   const target = path.join(root, "config.json");
   await fs.writeFile(target, '{"value":"preserve"}');
   const store = new DataStore("config.json", { value: "default" }, () => root, {
-    beforeAccess: async () => { throw Object.assign(new Error("permission hardening failed"), { code: "EACCES" }); },
+    beforeAccess: async () => {
+      throw Object.assign(new Error("permission hardening failed"), { code: "EACCES" });
+    },
   });
   await assert.rejects(store.load(), /permission hardening failed/u);
-  await assert.rejects(store.update((draft) => { draft.value = "lost"; }), /permission hardening failed/u);
+  await assert.rejects(
+    store.update((draft) => {
+      draft.value = "lost";
+    }),
+    /permission hardening failed/u,
+  );
   assert.equal(await fs.readFile(target, "utf8"), '{"value":"preserve"}');
 });
-
 
 test("a concurrent private-store read accepts only its own active publication link", async (t) => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-private-publication-"));
   t.after(() => fs.rm(root, { recursive: true, force: true }));
-  const file = path.join(root, "config.json"), outside = path.join(root, "unapproved-link");
+  const file = path.join(root, "config.json"),
+    outside = path.join(root, "unapproved-link");
   await fs.writeFile(file, '{"value":1}');
-  const store: DataStore<{ value: number }> = new DataStore("config.json", { value: 0 }, () => root, {
-    fileMode: 0o600, reloadBeforeWrite: true, rejectExternalChanges: true,
-    beforeAccess: async (ownedPaths) => hardenPrivateFile(file, ownedPaths),
-    afterProtectedPublish: async (): Promise<void> => {
-      assert.equal((await fs.stat(file)).nlink, 2, "publication temporarily owns canonical and staging names");
-      assert.equal((await store.load()).value, 2);
-      await fs.link(file, outside);
-      await assert.rejects(store.load(), /storage must be a private/u);
-      await fs.unlink(outside);
-      assert.equal((await store.load()).value, 2);
+  const store: DataStore<{ value: number }> = new DataStore(
+    "config.json",
+    { value: 0 },
+    () => root,
+    {
+      fileMode: 0o600,
+      reloadBeforeWrite: true,
+      rejectExternalChanges: true,
+      beforeAccess: async (ownedPaths) => hardenPrivateFile(file, ownedPaths),
+      afterProtectedPublish: async (): Promise<void> => {
+        assert.equal(
+          (await fs.stat(file)).nlink,
+          2,
+          "publication temporarily owns canonical and staging names",
+        );
+        assert.equal((await store.load()).value, 2);
+        await fs.link(file, outside);
+        await assert.rejects(store.load(), /storage must be a private/u);
+        await fs.unlink(outside);
+        assert.equal((await store.load()).value, 2);
+      },
     },
+  );
+  await store.update((draft) => {
+    draft.value = 2;
   });
-  await store.update((draft) => { draft.value = 2; });
   assert.equal((await fs.stat(file)).nlink, 1);
   assert.equal((await store.load()).value, 2);
 });

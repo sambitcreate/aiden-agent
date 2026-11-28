@@ -7,7 +7,10 @@ import { botSkillContentFingerprint } from "../bot-skill-approvals.js";
 
 const offered = new Set<string>();
 
-export async function reviewHomeSkills(botId: string, found: readonly DiscoveredSkill[]): Promise<void> {
+export async function reviewHomeSkills(
+  botId: string,
+  found: readonly DiscoveredSkill[],
+): Promise<void> {
   const { botSkillProposals } = await import("./skill-proposals-main.js");
   for (const skill of found) {
     const key = `${botId}\0${skill.id}\0${botSkillContentFingerprint(skill)}`;

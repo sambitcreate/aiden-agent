@@ -960,7 +960,9 @@ export class ProviderAuthFlowCoordinator {
       flowId: session.flowId,
       providerId: session.providerId,
       cancelled,
-      ...(warning ? { warning: boundedCopy(warning, "Provider catalog refresh failed.", 512) } : {}),
+      ...(warning
+        ? { warning: boundedCopy(warning, "Provider catalog refresh failed.", 512) }
+        : {}),
     } satisfies ProviderAuthDoneDto);
   }
 

@@ -25,10 +25,11 @@ function fakePort(blocked = new Set<string>()) {
 }
 
 const handler = () => undefined;
-const registered = (
-  commandId: CommandId,
-  accelerator: string,
-): RegisteredGlobalShortcut => ({ commandId, accelerator, handler });
+const registered = (commandId: CommandId, accelerator: string): RegisteredGlobalShortcut => ({
+  commandId,
+  accelerator,
+  handler,
+});
 
 test("changes only the affected registration", async () => {
   const { active, port } = fakePort();
@@ -111,11 +112,19 @@ test("an unrelated settings reconciliation preserves exclusive portal dictation 
     registered("dictation.toggle", "Command+Shift+D"),
     registered("assistant.open", "Command+Alt+A"),
   ];
-  const portalOwned = await reconcileGlobalShortcuts(port, current, excludePortalDictationShortcut(desired, true));
+  const portalOwned = await reconcileGlobalShortcuts(
+    port,
+    current,
+    excludePortalDictationShortcut(desired, true),
+  );
   assert.equal(portalOwned.ok, true);
   assert.equal(portalOwned.registered.has("dictation.toggle"), false);
   assert.deepEqual([...active].sort(), ["Command+Alt+A", "Command+Alt+Space"]);
-  const fallback = await reconcileGlobalShortcuts(port, portalOwned.registered, excludePortalDictationShortcut(desired, false));
+  const fallback = await reconcileGlobalShortcuts(
+    port,
+    portalOwned.registered,
+    excludePortalDictationShortcut(desired, false),
+  );
   assert.equal(fallback.ok, true);
   assert.equal(active.has("Command+Shift+D"), true);
 });

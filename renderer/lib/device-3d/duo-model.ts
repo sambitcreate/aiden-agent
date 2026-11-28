@@ -96,7 +96,11 @@ function sideKey(parts: PartList, kit: MaterialKit, fromTop: number, length: num
     curveSegments: 10,
   });
   // Keys sit on the right leaf's outer edge, centred in its thickness.
-  parts.add(kit.key, key, place(L.leafWidth - 0.25, L.leafHeight / 2 - fromTop, -L.thickness / 2, 0, Math.PI / 2));
+  parts.add(
+    kit.key,
+    key,
+    place(L.leafWidth - 0.25, L.leafHeight / 2 - fromTop, -L.thickness / 2, 0, Math.PI / 2),
+  );
   key.dispose();
 }
 
@@ -123,7 +127,9 @@ function buildLeaf(side: Side, kit: MaterialKit): Group {
       continuousRect(
         halfWidth,
         L.displayHeight,
-        side === "left" ? [L.displayRadius, 0, 0, L.displayRadius] : [0, L.displayRadius, L.displayRadius, 0],
+        side === "left"
+          ? [L.displayRadius, 0, 0, L.displayRadius]
+          : [0, L.displayRadius, L.displayRadius, 0],
         (sign * halfWidth) / 2,
         0,
       ),
@@ -167,7 +173,8 @@ function buildLeaf(side: Side, kit: MaterialKit): Group {
     punch.dispose();
     // Speaker slots on the top edge.
     const slot = face(capsule(4.2, 1.1), 0);
-    for (const x of [-26, -32, -38]) parts.add(kit.dark, slot, place(x, L.leafHeight / 2 + 0.03, -t / 2, -Math.PI / 2));
+    for (const x of [-26, -32, -38])
+      parts.add(kit.dark, slot, place(x, L.leafHeight / 2 + 0.03, -t / 2, -Math.PI / 2));
     slot.dispose();
   } else {
     // Frosted back glass under a full-width camera plateau.
@@ -196,7 +203,13 @@ function buildLeaf(side: Side, kit: MaterialKit): Group {
     const shelfBottom = plateauBottom + shelfRail;
     const corner = L.cornerRadius - L.rail - shelfRail;
     const shelf = slab(
-      continuousRect(shelfRight - shelfLeft, shelfTop - shelfBottom, [1.5, corner, 6, 4], (shelfLeft + shelfRight) / 2, (shelfTop + shelfBottom) / 2),
+      continuousRect(
+        shelfRight - shelfLeft,
+        shelfTop - shelfBottom,
+        [1.5, corner, 6, 4],
+        (shelfLeft + shelfRight) / 2,
+        (shelfTop + shelfBottom) / 2,
+      ),
       -t - L.plateau.rise,
       -t + 0.4,
       shelfRail,
@@ -231,7 +244,11 @@ function buildLeaf(side: Side, kit: MaterialKit): Group {
     sideKey(parts, kit, 70, 26);
     // USB-C port and speaker slots on the bottom edge.
     const port = face(capsule(9.0, 2.6), 0);
-    parts.add(kit.dark, port, place(L.leafWidth / 2, -L.leafHeight / 2 - 0.03, -t / 2, Math.PI / 2));
+    parts.add(
+      kit.dark,
+      port,
+      place(L.leafWidth / 2, -L.leafHeight / 2 - 0.03, -t / 2, Math.PI / 2),
+    );
     port.dispose();
     const slot = face(capsule(4.2, 1.1), 0);
     for (const x of [L.leafWidth / 2 + 14, L.leafWidth / 2 + 20, L.leafWidth / 2 + 26]) {
@@ -256,7 +273,16 @@ export function buildDuoModel(): Group {
   const left = buildLeaf("left", kit);
   const right = buildLeaf("right", kit);
   const barrel = new Mesh(
-    new CylinderGeometry(L.thickness, L.thickness, L.leafHeight - L.rail * 2 - 0.4, 40, 1, false, Math.PI / 2, Math.PI),
+    new CylinderGeometry(
+      L.thickness,
+      L.thickness,
+      L.leafHeight - L.rail * 2 - 0.4,
+      40,
+      1,
+      false,
+      Math.PI / 2,
+      Math.PI,
+    ),
     kit.polished,
   );
   barrel.name = "hinge-barrel";

@@ -9,13 +9,7 @@ import {
   type JobRuntimeSession,
 } from "./service.js";
 import { DurableJobWorker } from "./worker.js";
-import {
-  checkpoint,
-  deferred,
-  evidence,
-  fixture,
-  input,
-} from "./test-fixture.js";
+import { checkpoint, deferred, evidence, fixture, input } from "./test-fixture.js";
 import { type RecoveryEvidence, JobError } from "./contract.js";
 
 function setup(t: TestContext) {
@@ -27,9 +21,7 @@ function setup(t: TestContext) {
   const messages = new Set<string>();
   const modes: string[] = [];
   const errors: unknown[] = [];
-  let execute = async (
-    context: JobExecutionContext,
-  ): Promise<RecoveryEvidence> => {
+  let execute = async (context: JobExecutionContext): Promise<RecoveryEvidence> => {
     context.beforeEffect();
     calls++;
     modes.push(context.mode);
@@ -101,9 +93,8 @@ test("accepted request completes with one input and no duplicate after reopen", 
   assert.equal(f.store.get(job.id).state, "succeeded");
   assert.deepEqual(f.counts(), { calls: 1, appendCalls: 1 });
   assert.equal(f.messages.size, 1);
-  const restarted = new DurableJobWorker(
-    new DurableJobService(f.open(), f.runtime),
-    (error) => assert.fail(String(error)),
+  const restarted = new DurableJobWorker(new DurableJobService(f.open(), f.runtime), (error) =>
+    assert.fail(String(error)),
   );
   await restarted.tick();
   assert.equal(f.counts().calls, 1);
@@ -282,9 +273,8 @@ test("in-flight control fences callback before its external effect and next owne
   const running = f.worker.tick();
   await entered.promise;
   f.store.control(control(f.store.get(job.id), "cancel"));
-  const replacement = new DurableJobWorker(
-    new DurableJobService(f.open(), f.runtime),
-    (error) => assert.fail(String(error)),
+  const replacement = new DurableJobWorker(new DurableJobService(f.open(), f.runtime), (error) =>
+    assert.fail(String(error)),
   );
   await replacement.tick();
   assert.equal(f.store.get(job.id).state, "needs_attention");
@@ -308,9 +298,8 @@ test("lease expiry while the old handler is alive cannot admit overlapping execu
   const first = f.worker.tick();
   await entered.promise;
   f.clock(100_000);
-  const second = new DurableJobWorker(
-    new DurableJobService(f.open(), f.runtime),
-    (error) => assert.fail(String(error)),
+  const second = new DurableJobWorker(new DurableJobService(f.open(), f.runtime), (error) =>
+    assert.fail(String(error)),
   );
   await second.tick();
   assert.equal(f.store.get(job.id).recovery, "unsettled");
@@ -346,10 +335,7 @@ test("invalid durable input is never acknowledged", async (t) => {
   f.runtime.validateInput = async () => {
     throw new Error("missing staged input");
   };
-  await assert.rejects(
-    f.service.enqueue(input, "actor", "key"),
-    /missing staged/u,
-  );
+  await assert.rejects(f.service.enqueue(input, "actor", "key"), /missing staged/u);
   assert.equal(f.store.claim("one"), null);
 });
 
@@ -492,8 +478,7 @@ test(
       },
     );
     t.after(() => {
-      if (child.exitCode === null && child.signalCode === null)
-        child.kill("SIGKILL");
+      if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
     });
     const exit = once(child, "exit");
     await once(child, "message");
@@ -525,9 +510,8 @@ test("original audience survives restart and revoked authority cannot resume", a
       close: async () => {},
     };
   };
-  const worker = new DurableJobWorker(
-    new DurableJobService(f.open(), f.runtime),
-    (error) => assert.fail(String(error)),
+  const worker = new DurableJobWorker(new DurableJobService(f.open(), f.runtime), (error) =>
+    assert.fail(String(error)),
   );
   await worker.tick();
   assert.equal(f.store.get(job.id).state, "needs_attention");
@@ -552,16 +536,13 @@ test("shutdown preserves a resumable durable checkpoint for restart reconciliati
   await running;
   assert.equal(f.store.get(job.id).state, "running");
   f.clock(100_000);
-  const restarted = new DurableJobWorker(
-    new DurableJobService(f.open(), f.runtime),
-    (error) => assert.fail(String(error)),
+  const restarted = new DurableJobWorker(new DurableJobService(f.open(), f.runtime), (error) =>
+    assert.fail(String(error)),
   );
   await restarted.tick();
   assert.equal(f.store.get(job.id).recovery, "checkpoint");
   assert.equal(f.store.get(job.id).state, "interrupted");
-  assert.doesNotThrow(() =>
-    f.store.control(control(f.store.get(job.id), "resume")),
-  );
+  assert.doesNotThrow(() => f.store.control(control(f.store.get(job.id), "resume")));
 });
 
 test("equivalent checkpoint property order cannot reject safe Resume", async (t) => {
@@ -603,9 +584,8 @@ test("control during asynchronous input preparation fences the transcript commit
   const running = f.worker.tick();
   await entered.promise;
   f.store.control(control(f.store.get(job.id), "cancel"));
-  const replacement = new DurableJobWorker(
-    new DurableJobService(f.open(), f.runtime),
-    (error) => assert.fail(String(error)),
+  const replacement = new DurableJobWorker(new DurableJobService(f.open(), f.runtime), (error) =>
+    assert.fail(String(error)),
   );
   await replacement.tick();
   assert.equal(f.store.get(job.id).recovery, "unsettled");

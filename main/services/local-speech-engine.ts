@@ -53,11 +53,19 @@ export interface EngineTranscribeRequest {
   trimSilence: boolean;
   vadModelPath: string;
 }
-export interface EngineTranscribeResult { text: string; language: string | null; decodeMs: number }
+export interface EngineTranscribeResult {
+  text: string;
+  language: string | null;
+  decodeMs: number;
+}
 
 type ConfigOptions = { language: string | null; task: "transcribe" | "translate" };
 
-export function buildRecognizerConfig(spec: SpeechModelSpec, dir: string, opts: ConfigOptions): Record<string, unknown> {
+export function buildRecognizerConfig(
+  spec: SpeechModelSpec,
+  dir: string,
+  opts: ConfigOptions,
+): Record<string, unknown> {
   const file = (role: string): string => {
     const relative = spec.files[role];
     if (!relative) throw new Error(`${spec.id} has no ${role} file.`);
@@ -67,7 +75,10 @@ export function buildRecognizerConfig(spec: SpeechModelSpec, dir: string, opts: 
   let family: Record<string, unknown>;
   switch (spec.family) {
     case "nemo-transducer":
-      family = { transducer: { encoder: file("encoder"), decoder: file("decoder"), joiner: file("joiner") }, modelType: "nemo_transducer" };
+      family = {
+        transducer: { encoder: file("encoder"), decoder: file("decoder"), joiner: file("joiner") },
+        modelType: "nemo_transducer",
+      };
       break;
     case "nemo-canary":
       family = {
@@ -81,10 +92,23 @@ export function buildRecognizerConfig(spec: SpeechModelSpec, dir: string, opts: 
       };
       break;
     case "whisper":
-      family = { whisper: { encoder: file("encoder"), decoder: file("decoder"), language: language ?? "", task: "transcribe" } };
+      family = {
+        whisper: {
+          encoder: file("encoder"),
+          decoder: file("decoder"),
+          language: language ?? "",
+          task: "transcribe",
+        },
+      };
       break;
     case "sense-voice":
-      family = { senseVoice: { model: file("model"), language: language ?? "auto", useInverseTextNormalization: 1 } };
+      family = {
+        senseVoice: {
+          model: file("model"),
+          language: language ?? "auto",
+          useInverseTextNormalization: 1,
+        },
+      };
       break;
     case "moonshine-v2":
       family = { moonshine: { encoder: file("encoder"), mergedDecoder: file("mergedDecoder") } };
@@ -108,7 +132,8 @@ export function joinSegmentTexts(texts: readonly string[]): string {
     const text = raw.trim();
     if (!text) continue;
     if (!joined) joined = text;
-    else if (NO_SPACE_SCRIPT.test(joined[joined.length - 1]!) && NO_SPACE_SCRIPT.test(text[0]!)) joined += text;
+    else if (NO_SPACE_SCRIPT.test(joined[joined.length - 1]!) && NO_SPACE_SCRIPT.test(text[0]!))
+      joined += text;
     else joined += ` ${text}`;
   }
   return joined;
@@ -133,9 +158,14 @@ function languageUpdate(spec: SpeechModelSpec): LanguageUpdate {
   return "none";
 }
 
-function configOptions(spec: SpeechModelSpec, language: string | null, task: ConfigOptions["task"]): ConfigOptions {
+function configOptions(
+  spec: SpeechModelSpec,
+  language: string | null,
+  task: ConfigOptions["task"],
+): ConfigOptions {
   if (spec.family === "nemo-canary") return { language, task };
-  if (spec.family === "whisper" || spec.family === "sense-voice") return { language, task: "transcribe" };
+  if (spec.family === "whisper" || spec.family === "sense-voice")
+    return { language, task: "transcribe" };
   return { language: null, task: "transcribe" };
 }
 
@@ -151,7 +181,12 @@ export function atLeastOneSecond(samples: Float32Array): Float32Array {
   return padded;
 }
 
-interface Slot { id: string; directory: string; configKey: string; recognizer: SherpaRecognizer }
+interface Slot {
+  id: string;
+  directory: string;
+  configKey: string;
+  recognizer: SherpaRecognizer;
+}
 
 export interface SpeechEngineDeps {
   /** File probe used before building a recognizer (defaults to `existsSync`). */
@@ -169,14 +204,27 @@ export function warnToStderr(message: string): void {
 }
 
 /** Speech regions found by sherpa's Silero VAD, or null when VAD fails and the whole clip should be decoded. */
-export type SpeechRegionDetector = (samples: Float32Array, vadModelPath: string) => SampleRange[] | null;
+export type SpeechRegionDetector = (
+  samples: Float32Array,
+  vadModelPath: string,
+) => SampleRange[] | null;
 
-export function createSileroRegionDetector(load: () => SherpaModule, warn: (message: string) => void = warnToStderr): SpeechRegionDetector {
+export function createSileroRegionDetector(
+  load: () => SherpaModule,
+  warn: (message: string) => void = warnToStderr,
+): SpeechRegionDetector {
   return (samples, vadModelPath) => {
     try {
       const vad = new (load().Vad)(
         {
-          sileroVad: { model: vadModelPath, threshold: 0.3, minSilenceDuration: 0.45, minSpeechDuration: 0.06, windowSize: VAD_WINDOW, maxSpeechDuration: 28 },
+          sileroVad: {
+            model: vadModelPath,
+            threshold: 0.3,
+            minSilenceDuration: 0.45,
+            minSpeechDuration: 0.06,
+            windowSize: VAD_WINDOW,
+            maxSpeechDuration: 28,
+          },
           sampleRate: SAMPLE_RATE,
           numThreads: 1,
           provider: "cpu",
@@ -200,7 +248,9 @@ export function createSileroRegionDetector(load: () => SherpaModule, warn: (mess
       drain();
       return regions;
     } catch (error) {
-      warn(`Voice activity detection failed; decoding the whole clip: ${error instanceof Error ? error.message : String(error)}`);
+      warn(
+        `Voice activity detection failed; decoding the whole clip: ${error instanceof Error ? error.message : String(error)}`,
+      );
       return null;
     }
   };
@@ -215,7 +265,9 @@ export function decodeRanges(
 ): SampleRange[] {
   const maxWindow = spec.capabilities.maxWindowSeconds;
   const regions = request.trimSilence ? detectRegions(samples, request.vadModelPath) : null;
-  return regions ? planSegments(regions, samples.length, maxWindow) : fixedChunks(samples.length, maxWindow);
+  return regions
+    ? planSegments(regions, samples.length, maxWindow)
+    : fixedChunks(samples.length, maxWindow);
 }
 
 export function createSpeechEngine(load: () => SherpaModule, deps: SpeechEngineDeps = {}) {
@@ -286,13 +338,20 @@ export function createSpeechEngine(load: () => SherpaModule, deps: SpeechEngineD
       let detected: string | null = null;
       for (const range of ranges) {
         const stream = recognizer.createStream();
-        stream.acceptWaveform({ sampleRate: SAMPLE_RATE, samples: atLeastOneSecond(samples.subarray(range.start, range.end)) });
+        stream.acceptWaveform({
+          sampleRate: SAMPLE_RATE,
+          samples: atLeastOneSecond(samples.subarray(range.start, range.end)),
+        });
         recognizer.decode(stream);
         const result = recognizer.getResult(stream);
         texts.push(result.text);
         detected ??= detectedLanguage(result.lang);
       }
-      return { text: joinSegmentTexts(texts), language: detected, decodeMs: performance.now() - started };
+      return {
+        text: joinSegmentTexts(texts),
+        language: detected,
+        decodeMs: performance.now() - started,
+      };
     },
 
     release(): void {

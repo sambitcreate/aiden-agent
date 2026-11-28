@@ -20,7 +20,10 @@ import { compileResultSchema } from "./result-schema.js";
 
 export interface ChildChatsToolOptions {
   leadChatId: string;
-  childChats: Pick<ChildChats, "start" | "send" | "wait" | "read" | "list" | "stop" | "childTainted">;
+  childChats: Pick<
+    ChildChats,
+    "start" | "send" | "wait" | "read" | "list" | "stop" | "childTainted"
+  >;
   /** This turn's refusal for a call, checked again here in case the call skipped the turn policy. */
   refusal?(args: unknown): string | undefined;
   /**
@@ -59,7 +62,11 @@ type Params = {
  * outside content (`childTainted`), so the lead's run is tainted from here
  * on (`toolResultSaysOutside`). Every other result is the lead's own.
  */
-function result(value: unknown, isError = false, outside = false): AgentToolResult<{ outside?: true }> {
+function result(
+  value: unknown,
+  isError = false,
+  outside = false,
+): AgentToolResult<{ outside?: true }> {
   return {
     content: [{ type: "text", text: JSON.stringify(value) }],
     details: outside ? { outside: true } : {},
@@ -108,16 +115,31 @@ export function createChildChatsTool(options: ChildChatsToolOptions): AgentTool 
                   }),
                 ),
                 base_ref: Type.Optional(
-                  Type.String({ maxLength: 255, description: "new_worktree only: the branch to start from. Default: the repository's default branch, or this chat's branch when it is itself in a worktree." }),
+                  Type.String({
+                    maxLength: 255,
+                    description:
+                      "new_worktree only: the branch to start from. Default: the repository's default branch, or this chat's branch when it is itself in a worktree.",
+                  }),
                 ),
-                branch_name: Type.Optional(Type.String({ maxLength: 255, description: "new_worktree only: the new branch's name. Default: named from the task." })),
+                branch_name: Type.Optional(
+                  Type.String({
+                    maxLength: 255,
+                    description:
+                      "new_worktree only: the new branch's name. Default: named from the task.",
+                  }),
+                ),
                 result_schema: Type.Optional(
                   Type.Record(Type.String(), Type.Unknown(), {
                     description:
                       "A JSON Schema (up to 16 KB, local $ref only) for the chat's result. The chat hands it back with submit_result, and wait returns it as result.",
                   }),
                 ),
-                model: Type.Optional(Type.String({ maxLength: 256, description: "A model id; the default model when absent." })),
+                model: Type.Optional(
+                  Type.String({
+                    maxLength: 256,
+                    description: "A model id; the default model when absent.",
+                  }),
+                ),
               },
               { additionalProperties: false },
             ),
@@ -125,12 +147,21 @@ export function createChildChatsTool(options: ChildChatsToolOptions): AgentTool 
           ),
         ),
         chat_id: Type.Optional(Type.String({ maxLength: 128 })),
-        chat_ids: Type.Optional(Type.Array(Type.String({ maxLength: 128 }), { minItems: 1, maxItems: CHILD_CHATS_LIMITS.waitChats })),
+        chat_ids: Type.Optional(
+          Type.Array(Type.String({ maxLength: 128 }), {
+            minItems: 1,
+            maxItems: CHILD_CHATS_LIMITS.waitChats,
+          }),
+        ),
         text: Type.Optional(Type.String({ minLength: 1, maxLength: CHILD_CHATS_LIMITS.taskChars })),
         mode: Type.Optional(Type.Union(CHILD_CHATS_SEND_MODES.map((mode) => Type.Literal(mode)))),
-        timeout_seconds: Type.Optional(Type.Integer({ minimum: 1, maximum: CHILD_CHATS_LIMITS.waitMaxSeconds })),
+        timeout_seconds: Type.Optional(
+          Type.Integer({ minimum: 1, maximum: CHILD_CHATS_LIMITS.waitMaxSeconds }),
+        ),
         until: Type.Optional(Type.Union([Type.Literal("any"), Type.Literal("all")])),
-        limit: Type.Optional(Type.Integer({ minimum: 1, maximum: CHILD_CHATS_LIMITS.readMessages })),
+        limit: Type.Optional(
+          Type.Integer({ minimum: 1, maximum: CHILD_CHATS_LIMITS.readMessages }),
+        ),
       },
       { additionalProperties: false },
     ),
@@ -143,15 +174,29 @@ export function createChildChatsTool(options: ChildChatsToolOptions): AgentTool 
       try {
         switch (params.action) {
           case "start": {
-            if (!Array.isArray(params.chats) || params.chats.length === 0 || params.chats.length > CHILD_CHATS_LIMITS.startChats) {
-              return refuse(`start needs chats: a list of 1 to ${CHILD_CHATS_LIMITS.startChats} {title, task}.`);
+            if (
+              !Array.isArray(params.chats) ||
+              params.chats.length === 0 ||
+              params.chats.length > CHILD_CHATS_LIMITS.startChats
+            ) {
+              return refuse(
+                `start needs chats: a list of 1 to ${CHILD_CHATS_LIMITS.startChats} {title, task}.`,
+              );
             }
             const requests = [];
             for (const entry of params.chats as Array<Record<string, unknown>>) {
-              if (typeof entry?.title !== "string" || typeof entry.task !== "string" || !entry.task.trim()) {
+              if (
+                typeof entry?.title !== "string" ||
+                typeof entry.task !== "string" ||
+                !entry.task.trim()
+              ) {
                 return refuse("Each chat needs a title and a task.");
               }
-              if (entry.workspace !== undefined && entry.workspace !== "same" && entry.workspace !== "new_worktree") {
+              if (
+                entry.workspace !== undefined &&
+                entry.workspace !== "same" &&
+                entry.workspace !== "new_worktree"
+              ) {
                 return refuse('workspace is "same" or "new_worktree".');
               }
               const worktree = entry.workspace === "new_worktree";
@@ -159,25 +204,37 @@ export function createChildChatsTool(options: ChildChatsToolOptions): AgentTool 
                 return refuse('base_ref and branch_name need workspace: "new_worktree".');
               }
               for (const field of ["base_ref", "branch_name"] as const) {
-                if (entry[field] !== undefined && (typeof entry[field] !== "string" || !entry[field].trim())) {
+                if (
+                  entry[field] !== undefined &&
+                  (typeof entry[field] !== "string" || !entry[field].trim())
+                ) {
                   return refuse(`${field} must be a branch name.`);
                 }
               }
               if (entry.result_schema !== undefined) {
                 const compiled = compileResultSchema(entry.result_schema);
-                if (!compiled.ok) return refuse(`“${entry.title}”: ${compiled.error} Nothing was started.`);
+                if (!compiled.ok)
+                  return refuse(`“${entry.title}”: ${compiled.error} Nothing was started.`);
               }
               requests.push({
                 title: entry.title,
                 task: entry.task,
-                ...(typeof entry.model === "string" && entry.model.trim() ? { model: entry.model.trim() } : {}),
+                ...(typeof entry.model === "string" && entry.model.trim()
+                  ? { model: entry.model.trim() }
+                  : {}),
                 ...(worktree ? { workspace: "new_worktree" as const } : {}),
                 ...(typeof entry.base_ref === "string" ? { baseRef: entry.base_ref.trim() } : {}),
-                ...(typeof entry.branch_name === "string" ? { branchName: entry.branch_name.trim() } : {}),
-                ...(entry.result_schema !== undefined ? { resultSchema: entry.result_schema as Record<string, unknown> } : {}),
+                ...(typeof entry.branch_name === "string"
+                  ? { branchName: entry.branch_name.trim() }
+                  : {}),
+                ...(entry.result_schema !== undefined
+                  ? { resultSchema: entry.result_schema as Record<string, unknown> }
+                  : {}),
               });
             }
-            const started = await options.childChats.start(lead, toolCallId, requests, { tainted: options.leadTainted?.() === true });
+            const started = await options.childChats.start(lead, toolCallId, requests, {
+              tainted: options.leadTainted?.() === true,
+            });
             return result({
               ok: started.some((outcome) => "chatId" in outcome),
               started,
@@ -186,42 +243,78 @@ export function createChildChatsTool(options: ChildChatsToolOptions): AgentTool 
           }
           case "send": {
             const chatId = id(params.chat_id);
-            if (!chatId || typeof params.text !== "string" || !params.text.trim()) return refuse("send needs chat_id and text.");
-            const mode = (CHILD_CHATS_SEND_MODES as readonly unknown[]).includes(params.mode) ? (params.mode as ChildChatsSendMode) : "auto";
+            if (!chatId || typeof params.text !== "string" || !params.text.trim())
+              return refuse("send needs chat_id and text.");
+            const mode = (CHILD_CHATS_SEND_MODES as readonly unknown[]).includes(params.mode)
+              ? (params.mode as ChildChatsSendMode)
+              : "auto";
             return result({
               ok: true,
-              ...(await options.childChats.send(lead, toolCallId, { chatId, text: params.text, mode }, { tainted: options.leadTainted?.() === true })),
+              ...(await options.childChats.send(
+                lead,
+                toolCallId,
+                { chatId, text: params.text, mode },
+                { tainted: options.leadTainted?.() === true },
+              )),
             });
           }
           case "wait": {
             const chatIds = Array.isArray(params.chat_ids) ? params.chat_ids.map(id) : [];
-            if (chatIds.length === 0 || chatIds.length > CHILD_CHATS_LIMITS.waitChats || chatIds.some((each) => !each)) {
-              return refuse(`wait needs chat_ids: 1 to ${CHILD_CHATS_LIMITS.waitChats} chats this chat started.`);
+            if (
+              chatIds.length === 0 ||
+              chatIds.length > CHILD_CHATS_LIMITS.waitChats ||
+              chatIds.some((each) => !each)
+            ) {
+              return refuse(
+                `wait needs chat_ids: 1 to ${CHILD_CHATS_LIMITS.waitChats} chats this chat started.`,
+              );
             }
-            const seconds = typeof params.timeout_seconds === "number" ? params.timeout_seconds : CHILD_CHATS_LIMITS.waitDefaultSeconds;
+            const seconds =
+              typeof params.timeout_seconds === "number"
+                ? params.timeout_seconds
+                : CHILD_CHATS_LIMITS.waitDefaultSeconds;
             const chats = await options.childChats.wait(
               lead,
               {
                 chatIds: [...new Set(chatIds as string[])],
-                timeoutMs: Math.min(Math.max(1, seconds), CHILD_CHATS_LIMITS.waitMaxSeconds) * 1_000,
+                timeoutMs:
+                  Math.min(Math.max(1, seconds), CHILD_CHATS_LIMITS.waitMaxSeconds) * 1_000,
                 until: params.until === "all" ? "all" : "any",
               },
               signal ?? new AbortController().signal,
             );
-            const tainted = chats.some((view) => viewHasWords(view) && options.childChats.childTainted(view.chatId));
+            const tainted = chats.some(
+              (view) => viewHasWords(view) && options.childChats.childTainted(view.chatId),
+            );
             return result({ ok: true, chats }, false, tainted);
           }
           case "read": {
             const chatId = id(params.chat_id);
             if (!chatId) return refuse("read needs chat_id.");
-            const limit = typeof params.limit === "number" ? params.limit : CHILD_CHATS_LIMITS.readDefaultMessages;
-            const read = await options.childChats.read(lead, { chatId, limit: Math.min(Math.max(1, limit), CHILD_CHATS_LIMITS.readMessages) });
-            return result({ ok: true, ...read }, false, read.messages.length > 0 && options.childChats.childTainted(read.chatId));
+            const limit =
+              typeof params.limit === "number"
+                ? params.limit
+                : CHILD_CHATS_LIMITS.readDefaultMessages;
+            const read = await options.childChats.read(lead, {
+              chatId,
+              limit: Math.min(Math.max(1, limit), CHILD_CHATS_LIMITS.readMessages),
+            });
+            return result(
+              { ok: true, ...read },
+              false,
+              read.messages.length > 0 && options.childChats.childTainted(read.chatId),
+            );
           }
           case "list": {
             // A list has no replies, but a chat's result or approval summary is its own words.
             const chats = await options.childChats.list(lead);
-            return result({ ok: true, chats }, false, chats.some((view) => viewHasWords(view) && options.childChats.childTainted(view.chatId)));
+            return result(
+              { ok: true, chats },
+              false,
+              chats.some(
+                (view) => viewHasWords(view) && options.childChats.childTainted(view.chatId),
+              ),
+            );
           }
           case "stop": {
             const chatId = id(params.chat_id);

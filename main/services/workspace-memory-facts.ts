@@ -2,7 +2,10 @@
 // person delete a fact. It reads the same scope chats use (memory-context.ts),
 // so what is listed here is exactly what a chat in that workspace can recall.
 
-import { DEFAULT_CHAT_WORKSPACE_ID, persistedChatWorkspaceId } from "../../renderer/shared/chat-workspace.js";
+import {
+  DEFAULT_CHAT_WORKSPACE_ID,
+  persistedChatWorkspaceId,
+} from "../../renderer/shared/chat-workspace.js";
 import { sharedWorkspaceScopeId } from "./memory-shared.js";
 import type { MemoryFact, MemoryScope } from "./memory-store.js";
 
@@ -18,7 +21,9 @@ export interface WorkspaceMemoryFactView {
 }
 
 export interface WorkspaceMemoryFactsDeps {
-  getWorkspace(id: string): Promise<{ id: string; folderPath?: string; noWorkspace?: true } | null | undefined>;
+  getWorkspace(
+    id: string,
+  ): Promise<{ id: string; folderPath?: string; noWorkspace?: true } | null | undefined>;
   store: {
     list(scope: MemoryScope): Promise<MemoryFact[]>;
     remove(scope: MemoryScope, id: string): Promise<boolean>;
@@ -48,7 +53,10 @@ export function createWorkspaceMemoryFacts(deps: WorkspaceMemoryFactsDeps) {
     async list(workspaceId: unknown): Promise<WorkspaceMemoryFactView[]> {
       const now = (deps.now ?? Date.now)();
       return (await deps.store.list(await scopeFor(workspaceId)))
-        .filter((fact) => fact.state === "active" && (fact.expiresAt === undefined || fact.expiresAt > now))
+        .filter(
+          (fact) =>
+            fact.state === "active" && (fact.expiresAt === undefined || fact.expiresAt > now),
+        )
         .sort((a, b) => b.updatedAt - a.updatedAt)
         .map((fact) => ({
           id: fact.id,

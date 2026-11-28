@@ -32,7 +32,10 @@ function presetAvatar(preset: BotPreset) {
 }
 
 /** "Weekdays at 8:00 AM, paused until you turn it on". */
-export function templateRoutineLine(preset: BotPreset, currentYear = new Date().getFullYear()): string | null {
+export function templateRoutineLine(
+  preset: BotPreset,
+  currentYear = new Date().getFullYear(),
+): string | null {
   const routine = preset.suggestedRoutine;
   if (!routine) return null;
   return `${formatBotRoutineLabel(botPresetRoutineSchedule(routine.schedule), { currentYear })}, paused until you turn it on`;
@@ -44,10 +47,19 @@ function Sample({ preset, className }: { preset: BotPreset; className?: string }
     <div
       aria-label={`What ${preset.name} writes`}
       role="group"
-      className={cn("rounded-card bg-well p-3 [mask-image:linear-gradient(to_bottom,black_45%,transparent)]", className)}
+      className={cn(
+        "rounded-card bg-well p-3 [mask-image:linear-gradient(to_bottom,black_45%,transparent)]",
+        className,
+      )}
     >
       {preset.sample.map((line) => (
-        <Text key={line} as="p" variant="small" color="secondary" className="[overflow-wrap:anywhere]">
+        <Text
+          key={line}
+          as="p"
+          variant="small"
+          color="secondary"
+          className="[overflow-wrap:anywhere]"
+        >
           {line}
         </Text>
       ))}
@@ -80,7 +92,13 @@ function AddsRow({ title, children }: { title: string; children?: React.ReactNod
         <Text as="span" variant="small">
           {title}
         </Text>
-        <ChevronDown aria-hidden="true" className={cn("size-4 shrink-0 text-tertiary transition-transform motion-reduce:transition-none", open && "rotate-180")} />
+        <ChevronDown
+          aria-hidden="true"
+          className={cn(
+            "size-4 shrink-0 text-tertiary transition-transform motion-reduce:transition-none",
+            open && "rotate-180",
+          )}
+        />
       </button>
       {open ? (
         <div id={bodyId} className="px-3 pb-3">
@@ -147,13 +165,22 @@ function TemplateDetail({
             {apps.map((app) => {
               const connected = setup.isConnected(app.pluginId);
               return (
-                <li key={app.pluginId} className="flex items-center gap-2 py-1" data-works-with={app.pluginId}>
+                <li
+                  key={app.pluginId}
+                  className="flex items-center gap-2 py-1"
+                  data-works-with={app.pluginId}
+                >
                   <ConnectionIconTile suggestion={app} size="small" />
                   <Text as="span" variant="small" className="flex-1">
                     {app.name}
                   </Text>
                   {connected ? (
-                    <Text as="span" variant="small" color="secondary" className="inline-flex items-center gap-1">
+                    <Text
+                      as="span"
+                      variant="small"
+                      color="secondary"
+                      className="inline-flex items-center gap-1"
+                    >
                       <Check aria-hidden="true" className="size-3.5 text-status-green" />
                       Connected
                     </Text>
@@ -215,7 +242,10 @@ export function BotTemplatesDialog({
     setBusy(true);
     setError(null);
     try {
-      const { bot } = await botsApi.createFromPreset({ presetId: preset.id, version: preset.version });
+      const { bot } = await botsApi.createFromPreset({
+        presetId: preset.id,
+        version: preset.version,
+      });
       addBotToCache(qc, bot);
       void qc.invalidateQueries({ queryKey: queryKeys.bots });
       void qc.invalidateQueries({ queryKey: BOT_PRESET_BOTS_QUERY_KEY });
@@ -245,7 +275,11 @@ export function BotTemplatesDialog({
         onOpenChange={onOpenChange}
         size={preset ? undefined : "large"}
         title={preset ? preset.name : "Templates"}
-        description={preset ? undefined : "Ready-made Bots. Each one starts with its own instructions, and any routine stays paused until you turn it on."}
+        description={
+          preset
+            ? undefined
+            : "Ready-made Bots. Each one starts with its own instructions, and any routine stays paused until you turn it on."
+        }
         {...(preset
           ? {
               confirmLabel: existingId ? "Open" : busy ? "Creating…" : "Create bot",
@@ -283,7 +317,11 @@ export function BotTemplatesDialog({
                   className="flex h-full w-full flex-col gap-3 rounded-card bg-well p-4 text-left outline-none transition-colors hover:bg-list-hover focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring motion-reduce:transition-none"
                 >
                   <div className="flex items-center gap-3">
-                    <BotAvatar avatar={presetAvatar(candidate)} name={candidate.name} size="medium" />
+                    <BotAvatar
+                      avatar={presetAvatar(candidate)}
+                      name={candidate.name}
+                      size="medium"
+                    />
                     <div className="min-w-0">
                       <Text as="span" variant="strong" className="block truncate">
                         {candidate.name}

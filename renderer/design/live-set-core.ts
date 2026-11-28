@@ -35,7 +35,8 @@ export function selectLiveFrames(input: {
     if (live.size < DESIGN_LIVE_LIMIT) live.add(id);
   };
 
-  if (input.entered !== null && candidates.some((frame) => frame.id === input.entered)) add(input.entered);
+  if (input.entered !== null && candidates.some((frame) => frame.id === input.entered))
+    add(input.entered);
   for (const frame of candidates) if (input.selected.has(frame.id)) add(frame.id);
 
   const ranked: Array<{ id: string; score: number; order: number }> = [];

@@ -67,10 +67,7 @@ export function createWorkspaceEnvironmentApplicationService(
   const run = async <T>(
     owner: WorkspaceOperationDocumentOwner,
     workspaceIdValue: string,
-    operation: (
-      resolved: WorkspaceEnvironmentDirectory,
-      signal: AbortSignal,
-    ) => Promise<T>,
+    operation: (resolved: WorkspaceEnvironmentDirectory, signal: AbortSignal) => Promise<T>,
     options: { allowNoAccess?: boolean } = {},
   ): Promise<T> => {
     const id = workspaceId(workspaceIdValue);
@@ -135,13 +132,14 @@ export function createWorkspaceEnvironmentApplicationService(
       resolved: WorkspaceEnvironmentDirectory | undefined,
       signal: AbortSignal,
     ) => Promise<T>,
-  ): Promise<T> => runRecord(owner, workspaceIdValue, async (_workspace, signal) => {
-    const resolved = await resolve(workspaceIdValue, false);
-    if (signal.aborted || dependencies.workspaceMutationGate.isChanging(workspaceIdValue)) {
-      throw new Error("The workspace changed before the operation could start.");
-    }
-    return operation(resolved, signal);
-  });
+  ): Promise<T> =>
+    runRecord(owner, workspaceIdValue, async (_workspace, signal) => {
+      const resolved = await resolve(workspaceIdValue, false);
+      if (signal.aborted || dependencies.workspaceMutationGate.isChanging(workspaceIdValue)) {
+        throw new Error("The workspace changed before the operation could start.");
+      }
+      return operation(resolved, signal);
+    });
 
   return { resolve, run, runRecord, runOptional };
 }

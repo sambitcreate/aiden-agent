@@ -34,7 +34,10 @@ export function whenAnimationsSettle(element: Element | null, done: () => void):
   }
   const remaining = Math.max(
     0,
-    ...animations.map((animation) => endsAt(animation) - (Number(animation.effect?.getComputedTiming().localTime) || 0)),
+    ...animations.map(
+      (animation) =>
+        endsAt(animation) - (Number(animation.effect?.getComputedTiming().localTime) || 0),
+    ),
   );
   timer = setTimeout(finish, remaining + SETTLE_MARGIN_MS);
   void Promise.allSettled(animations.map((animation) => animation.finished)).then(finish);

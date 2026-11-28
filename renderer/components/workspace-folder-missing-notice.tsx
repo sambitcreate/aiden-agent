@@ -68,14 +68,22 @@ export function WorkspaceFolderMissingNotice({
   const canContinue = Boolean(onContinueIn && (workspaceChoices.length > 0 || noWorkspaceChoice));
   return (
     <div className="aiden-dock-inset chat-content-column pb-2">
-      <Callout role="status" aria-label={worktree ? "Worktree folder missing" : "Workspace folder missing"}>
+      <Callout
+        role="status"
+        aria-label={worktree ? "Worktree folder missing" : "Workspace folder missing"}
+      >
         <p className="flex items-start gap-2 text-small text-secondary">
           <FolderX className="mt-0.5 size-3.5 shrink-0" aria-hidden="true" />
           <span>{message}</span>
         </p>
         <div className="mt-1 flex flex-wrap justify-end gap-1.5">
           {/* Putting the folder back from the Trash keeps uncommitted work, so Check again stays. */}
-          <Button variant="transparent" size="small" disabled={checking || busy} onClick={onCheckAgain}>
+          <Button
+            variant="transparent"
+            size="small"
+            disabled={checking || busy}
+            onClick={onCheckAgain}
+          >
             {checking ? "Checking…" : "Check again"}
           </Button>
           {canContinue ? (
@@ -94,13 +102,21 @@ export function WorkspaceFolderMissingNotice({
                 <DropdownMenuLabel>Continue in</DropdownMenuLabel>
                 {noWorkspaceChoice ? (
                   <DropdownMenuItem onSelect={() => onContinueIn!(noWorkspaceChoice.workspaceId)}>
-                    <MessageCircle className="size-3.5 shrink-0 text-secondary" aria-hidden="true" />
+                    <MessageCircle
+                      className="size-3.5 shrink-0 text-secondary"
+                      aria-hidden="true"
+                    />
                     <span className="truncate">{noWorkspaceChoice.name}</span>
                   </DropdownMenuItem>
                 ) : null}
-                {noWorkspaceChoice && workspaceChoices.length > 0 ? <DropdownMenuSeparator /> : null}
+                {noWorkspaceChoice && workspaceChoices.length > 0 ? (
+                  <DropdownMenuSeparator />
+                ) : null}
                 {workspaceChoices.map((choice) => (
-                  <DropdownMenuItem key={choice.workspaceId} onSelect={() => onContinueIn!(choice.workspaceId)}>
+                  <DropdownMenuItem
+                    key={choice.workspaceId}
+                    onSelect={() => onContinueIn!(choice.workspaceId)}
+                  >
                     <Folder className="size-3.5 shrink-0 text-secondary" aria-hidden="true" />
                     <span className="truncate">{choice.name}</span>
                   </DropdownMenuItem>
@@ -114,7 +130,11 @@ export function WorkspaceFolderMissingNotice({
               size="small"
               disabled={busy}
               onClick={onNewChatInMain}
-              title={worktree?.mainWorkspaceName ? `New chat in ${worktree.mainWorkspaceName}` : undefined}
+              title={
+                worktree?.mainWorkspaceName
+                  ? `New chat in ${worktree.mainWorkspaceName}`
+                  : undefined
+              }
             >
               New chat in main checkout
             </Button>

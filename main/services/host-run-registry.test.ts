@@ -129,11 +129,19 @@ test("a delta read by an observer is final, so later text takes the next sequenc
   registry.publish("run-1", "chat:delta", { delta: "re" });
   const next = events(registry.read("run-1", last(seen).sequence));
 
-  assert.deepEqual(seen.map(({ sequence, payload }) => [sequence, payload.text]), [[2, "Hello"]]);
-  assert.deepEqual(next.map(({ sequence, payload }) => [sequence, payload.text]), [[3, " there"]]);
+  assert.deepEqual(
+    seen.map(({ sequence, payload }) => [sequence, payload.text]),
+    [[2, "Hello"]],
+  );
+  assert.deepEqual(
+    next.map(({ sequence, payload }) => [sequence, payload.text]),
+    [[3, " there"]],
+  );
   // A reader that resumes from the start still sees every character once.
   assert.equal(
-    events(registry.read("run-1", 1)).map(({ payload }) => payload.text).join(""),
+    events(registry.read("run-1", 1))
+      .map(({ payload }) => payload.text)
+      .join(""),
     "Hello there",
   );
 });
@@ -158,7 +166,8 @@ test("folding keeps deltas ordered around other events and closes after its wind
 
   assert.deepEqual(
     events(registry.read("run-1", 1)).map(({ type, payload }) =>
-      typeof payload.text === "string" ? `${type}:${payload.text}` : type),
+      typeof payload.text === "string" ? `${type}:${payload.text}` : type,
+    ),
     [
       "text_delta:ab",
       "reasoning_delta:thinking",
@@ -181,11 +190,21 @@ test("a folded delta stays within the text bound and a frame mobile clients acce
   registry.publish("run-1", "chat:delta", { delta: chunk });
   // Control characters serialize as six-byte escapes.
   const escaped = "\u0001".repeat(20_000);
-  for (let index = 0; index < 5; index += 1) registry.publish("run-1", "chat:delta", { delta: escaped });
+  for (let index = 0; index < 5; index += 1)
+    registry.publish("run-1", "chat:delta", { delta: escaped });
 
   const texts = events(registry.read("run-1", 1));
-  assert.deepEqual(texts.slice(0, 2).map(({ payload }) => (payload.text as string).length), [150_000, 150_000]);
-  assert.equal(texts.slice(2).map(({ payload }) => payload.text).join(""), escaped.repeat(5));
+  assert.deepEqual(
+    texts.slice(0, 2).map(({ payload }) => (payload.text as string).length),
+    [150_000, 150_000],
+  );
+  assert.equal(
+    texts
+      .slice(2)
+      .map(({ payload }) => payload.text)
+      .join(""),
+    escaped.repeat(5),
+  );
   assert.ok(texts.length > 3, "escaped text split before a frame grew too large");
   for (const event of texts) assert.ok(Buffer.byteLength(JSON.stringify(event)) <= 1_048_576);
 });
@@ -205,7 +224,10 @@ test("a late observer replays a long answer instead of needing a snapshot", () =
   const replayed = read.events;
   assert.ok(replayed.length < 400, `journal holds ${replayed.length} events`);
   assert.equal(
-    replayed.filter(({ type }) => type === "text_delta").map(({ payload }) => payload.text).join(""),
+    replayed
+      .filter(({ type }) => type === "text_delta")
+      .map(({ payload }) => payload.text)
+      .join(""),
     "t ".repeat(10_000),
   );
   assert.equal(last(replayed).type, "done");
@@ -235,7 +257,13 @@ test("a run needs approval until its last pending approval resolves", () => {
   const journal = events(registry.read("run-1", 1));
   assert.deepEqual(
     journal.map(({ type }) => type),
-    ["approval_required", "approval_required", "text_delta", "approval_resolved", "approval_resolved"],
+    [
+      "approval_required",
+      "approval_required",
+      "text_delta",
+      "approval_resolved",
+      "approval_resolved",
+    ],
   );
   assert.deepEqual(journal[0]!.payload, {
     approvalId: "approval-1",
@@ -281,7 +309,12 @@ test("chat:done ends the run, clears pending prompts and freezes the journal", (
   registry.begin({ runId: "run-1", chatId: "chat-1", origin: "renderer" });
   registry.publish("run-1", "chat:approval", approval("approval-1"));
   registry.publish("run-1", "chat:done", {
-    chat: { messages: [{ id: "user-1", role: "user" }, { id: "assistant-1", role: "assistant" }] },
+    chat: {
+      messages: [
+        { id: "user-1", role: "user" },
+        { id: "assistant-1", role: "assistant" },
+      ],
+    },
   });
 
   const summary = registry.summary("run-1")!;
@@ -379,7 +412,10 @@ test("terminal runs past retention are pruned lazily and their observers woken",
   assert.equal(wakes, 1);
 
   clock.now += 60_000;
-  assert.deepEqual(registry.list().map(({ runId }) => runId), ["run-1"]);
+  assert.deepEqual(
+    registry.list().map(({ runId }) => runId),
+    ["run-1"],
+  );
 
   clock.now += 1;
   assert.deepEqual(registry.list(), []);
@@ -401,10 +437,16 @@ test("the total byte budget evicts terminal runs before trimming live ones", () 
   registry.begin({ runId: "live", chatId: "chat-2", origin: "remote" });
   registry.publish("live", "chat:delta", { delta: kilobyte });
   registry.publish("live", "chat:delta", { delta: kilobyte });
-  assert.deepEqual(registry.list().map(({ runId }) => runId), ["finished", "live"]);
+  assert.deepEqual(
+    registry.list().map(({ runId }) => runId),
+    ["finished", "live"],
+  );
 
   registry.publish("live", "chat:delta", { delta: kilobyte });
-  assert.deepEqual(registry.list().map(({ runId }) => runId), ["live"]);
+  assert.deepEqual(
+    registry.list().map(({ runId }) => runId),
+    ["live"],
+  );
   assert.deepEqual(
     changes.filter(({ removed }) => removed).map(({ summary }) => summary.runId),
     ["finished"],
@@ -414,7 +456,10 @@ test("the total byte budget evicts terminal runs before trimming live ones", () 
   // With no terminal run left to evict, the live run loses its oldest events.
   registry.publish("live", "chat:delta", { delta: kilobyte });
   assert.equal(registry.read("live", 0).kind, "snapshot_required");
-  assert.deepEqual(events(registry.read("live", 4)).map(({ sequence }) => sequence), [5]);
+  assert.deepEqual(
+    events(registry.read("live", 4)).map(({ sequence }) => sequence),
+    [5],
+  );
 });
 
 test("the run cap evicts the oldest terminal run, then the oldest-updated live run", () => {
@@ -426,13 +471,19 @@ test("the run cap evicts the oldest terminal run, then the oldest-updated live r
   registry.publish("b", "chat:done", {});
   clock.now += 1;
   registry.begin({ runId: "c", chatId: "chat-1", origin: "renderer" });
-  assert.deepEqual(registry.list().map(({ runId }) => runId), ["a", "c"]);
+  assert.deepEqual(
+    registry.list().map(({ runId }) => runId),
+    ["a", "c"],
+  );
 
   clock.now += 1;
   registry.publish("a", "chat:delta", { delta: "keep a fresh" });
   clock.now += 1;
   registry.begin({ runId: "d", chatId: "chat-1", origin: "renderer" });
-  assert.deepEqual(registry.list().map(({ runId }) => runId), ["a", "d"]);
+  assert.deepEqual(
+    registry.list().map(({ runId }) => runId),
+    ["a", "d"],
+  );
   assert.deepEqual(
     changes.filter(({ removed }) => removed).map(({ summary }) => summary.runId),
     ["b", "c"],
@@ -467,7 +518,16 @@ test("malformed or oversized payloads never throw", () => {
   ] as const;
   const cyclic: Record<string, unknown> = {};
   cyclic.self = cyclic;
-  const malformed: unknown[] = [null, undefined, [], ["a"], 42, "text", { details: () => 1 }, cyclic];
+  const malformed: unknown[] = [
+    null,
+    undefined,
+    [],
+    ["a"],
+    42,
+    "text",
+    { details: () => 1 },
+    cyclic,
+  ];
   for (const channel of channels) {
     for (const payload of malformed) {
       assert.doesNotThrow(() => registry.publish("run-1", channel, payload));
@@ -477,7 +537,10 @@ test("malformed or oversized payloads never throw", () => {
   assert.deepEqual(registry.summary("run-1")!.pendingApprovalIds, []);
   assert.deepEqual(registry.summary("run-1")!.pendingQuestionIds, []);
 
-  registry.publish("run-1", "chat:approval", { approvalId: "a".repeat(129), summary: "too long id" });
+  registry.publish("run-1", "chat:approval", {
+    approvalId: "a".repeat(129),
+    summary: "too long id",
+  });
   registry.publish("run-1", "chat:approval", {
     approvalId: "approval-1",
     summary: "s".repeat(10_000),
@@ -493,7 +556,10 @@ test("malformed or oversized payloads never throw", () => {
   assert.equal((required.payload.toolCallId as string).length, 128);
   assert.equal("details" in required.payload, false);
 
-  registry.publish("run-1", "chat:questionnaire", { ...questionnaire("prompt-1", "run-1"), questions: [] });
+  registry.publish("run-1", "chat:questionnaire", {
+    ...questionnaire("prompt-1", "run-1"),
+    questions: [],
+  });
   assert.deepEqual(registry.summary("run-1")!.pendingQuestionIds, []);
 });
 

@@ -6,7 +6,12 @@ import type {
   AgentToolResult,
   AgentToolUpdateCallback,
 } from "@earendil-works/pi-agent-core";
-import { type AssistantMessage, type Message, type SimpleStreamOptions, type TranscriptContext } from "@earendil-works/pi-ai";
+import {
+  type AssistantMessage,
+  type Message,
+  type SimpleStreamOptions,
+  type TranscriptContext,
+} from "@earendil-works/pi-ai";
 import { Type } from "typebox";
 import type {
   AskUserQuestionResponseV1,
@@ -30,7 +35,12 @@ import { declarePiRuntimeReplay } from "./pi-runtime-tool.js";
 import { isNonChatModel } from "../../renderer/shared/model-eligibility.js";
 import type { Provider } from "./types.js";
 import { isAcpHarnessProvider } from "../../renderer/shared/acp-harness.js";
-import { oneOffCallOptions, sideCallContinuation, sideCallModelKey, type SideCallPrefix } from "./side-call-prefix.js";
+import {
+  oneOffCallOptions,
+  sideCallContinuation,
+  sideCallModelKey,
+  type SideCallPrefix,
+} from "./side-call-prefix.js";
 
 export const ADVISOR_EXTENSION_ID = "aiden.rpiv.advisor";
 export const ADVISOR_TOOL_NAME = "advisor";
@@ -180,7 +190,11 @@ export interface AdvisorRuntimeDependencies {
     signal?: AbortSignal,
     conversationId?: string,
   ): Promise<ResolvedModelRuntime>;
-  recordUsage(message: AssistantMessage, runtime: ResolvedModelRuntime, attemptId: string): Promise<void>;
+  recordUsage(
+    message: AssistantMessage,
+    runtime: ResolvedModelRuntime,
+    attemptId: string,
+  ): Promise<void>;
   recordUnreportedUsage(
     runtime: ResolvedModelRuntime,
     status: "failed" | "cancelled",
@@ -236,7 +250,8 @@ function advisorContinuationMessages(
     completed.set(id, { role, toolCallId: id, toolName, content, isError, timestamp: at });
   }
   const calls = prefix.response.content.filter(
-    (part): part is Extract<AssistantMessage["content"][number], { type: "toolCall" }> => part.type === "toolCall",
+    (part): part is Extract<AssistantMessage["content"][number], { type: "toolCall" }> =>
+      part.type === "toolCall",
   );
   const advisorAt = calls.findIndex((part) => part.id === toolCallId);
   const results: Message[] = [];
@@ -251,19 +266,26 @@ function advisorContinuationMessages(
       role: "toolResult",
       toolCallId: part.id,
       toolName: part.name,
-      content: [{
-        type: "text",
-        text: index === advisorAt
-          ? "Advisor review requested; the instruction follows."
-          : "Not run: the task is paused for an advisor review.",
-      }],
+      content: [
+        {
+          type: "text",
+          text:
+            index === advisorAt
+              ? "Advisor review requested; the instruction follows."
+              : "Not run: the task is paused for an advisor review.",
+        },
+      ],
       isError: false,
       timestamp,
     });
   }
   return [
     ...results,
-    { role: "user", content: [{ type: "text", text: ADVISOR_CONTINUATION_INSTRUCTION }], timestamp },
+    {
+      role: "user",
+      content: [{ type: "text", text: ADVISOR_CONTINUATION_INSTRUCTION }],
+      timestamp,
+    },
   ];
 }
 
@@ -278,9 +300,14 @@ async function continuableAdvisorPrefix(
   selection: AdvisorSelectionV1,
   toolCallId: string,
 ): Promise<SideCallPrefix | undefined> {
-  if (selection.providerId !== input.executor.providerId || selection.modelId !== input.executor.modelId) return undefined;
+  if (
+    selection.providerId !== input.executor.providerId ||
+    selection.modelId !== input.executor.modelId
+  )
+    return undefined;
   const prefix = await input.sideCallPrefix?.();
-  if (!prefix?.response.content.some((part) => part.type === "toolCall" && part.id === toolCallId)) return undefined;
+  if (!prefix?.response.content.some((part) => part.type === "toolCall" && part.id === toolCallId))
+    return undefined;
   if (selection.effort && selection.effort !== prefix.options.reasoning) return undefined;
   return prefix;
 }
@@ -535,7 +562,10 @@ async function chooseAdvisorSelection(
   return questionnaireSelection(response, choices, candidates, effort);
 }
 
-function executorPrompt(candidates: readonly AdvisorCandidate[], chooser: "always" | "by-turn" | "never"): string {
+function executorPrompt(
+  candidates: readonly AdvisorCandidate[],
+  chooser: "always" | "by-turn" | "never",
+): string {
   const catalog = candidates
     .slice(0, MAX_ADVISOR_PROMPT_CANDIDATES)
     .map((candidate) => `- ${candidateDescriptor(candidate)}`)
@@ -647,7 +677,11 @@ export class AdvisorRuntime {
           let runtime: ResolvedModelRuntime;
           let parentPrefix = await continuableAdvisorPrefix(input, selection, toolCallId);
           const continuation = parentPrefix
-            ? advisorContinuationMessages(parentPrefix, toolCallId, input.getLiveMessages(toolCallId))
+            ? advisorContinuationMessages(
+                parentPrefix,
+                toolCallId,
+                input.getLiveMessages(toolCallId),
+              )
             : undefined;
           if (!continuation) parentPrefix = undefined;
           try {
@@ -666,7 +700,8 @@ export class AdvisorRuntime {
             );
             assertAdvisorRuntimeSelection(selection, runtime);
             await preflightAdvisorRuntimeAuth(runtime, signal);
-            if (parentPrefix && parentPrefix.modelKey !== sideCallModelKey(runtime.model)) parentPrefix = undefined;
+            if (parentPrefix && parentPrefix.modelKey !== sideCallModelKey(runtime.model))
+              parentPrefix = undefined;
           } catch (error) {
             this.dependencies.reportFailure?.("resolve", error);
             return normalResult(
@@ -684,9 +719,12 @@ export class AdvisorRuntime {
           };
 
           // One consultation: its own attempt record and usage, whatever it returns.
-          const consult = async (
-            request: { context: TranscriptContext; options: SimpleStreamOptions },
-          ): Promise<{ state: "completed" | "failed" | "cancelled"; response?: AssistantMessage } | undefined> => {
+          const consult = async (request: {
+            context: TranscriptContext;
+            options: SimpleStreamOptions;
+          }): Promise<
+            { state: "completed" | "failed" | "cancelled"; response?: AssistantMessage } | undefined
+          > => {
             const attemptId = randomUUID();
             try {
               await this.dependencies.attempts.prepare(
@@ -707,7 +745,10 @@ export class AdvisorRuntime {
               response = await withRequestSignal(signal, async (requestSignal, timedOut) => {
                 try {
                   return await runtime.streams
-                    .streamSimple(runtime.model, request.context, { ...request.options, signal: requestSignal })
+                    .streamSimple(runtime.model, request.context, {
+                      ...request.options,
+                      signal: requestSignal,
+                    })
                     .result();
                 } catch (error) {
                   failure = abortReason(requestSignal, timedOut());
@@ -760,9 +801,10 @@ export class AdvisorRuntime {
           // fails or answers nothing, the separate tool-free review follows,
           // as if there had been no prefix; a cancelled or timed-out one does
           // not, since the time is spent.
-          const continued = parentPrefix && continuation
-            ? sideCallContinuation(parentPrefix, continuation, callOptions)
-            : undefined;
+          const continued =
+            parentPrefix && continuation
+              ? sideCallContinuation(parentPrefix, continuation, callOptions)
+              : undefined;
           let outcome = continued ? await consult(continued) : undefined;
           if (!continued || outcome?.state === "failed") {
             let request: { context: TranscriptContext; options: SimpleStreamOptions };

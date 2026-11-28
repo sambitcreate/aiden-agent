@@ -4,10 +4,19 @@ import { AidenRemoteServiceError } from "./aiden-remote-errors.js";
 import { projectAidenRemoteChat } from "./aiden-remote-chats.js";
 import { projectAidenRemoteWorkspace } from "./aiden-remote-workspaces.js";
 import { PeerTransportError, type PeerRequest } from "./peer-transport.js";
-import { CAPABILITIES, FakeHost, FEATURES, UNHANDLED, setup } from "./peer-remote-chat-test-host.js";
+import {
+  CAPABILITIES,
+  FakeHost,
+  FEATURES,
+  UNHANDLED,
+  setup,
+} from "./peer-remote-chat-test-host.js";
 import type { Workspace } from "./types.js";
 import type { Chat, ChatMessage } from "../../renderer/lib/types.js";
-import { HostChatControlError, isOutcomeUnknown } from "../../renderer/lib/hosts/host-chat-adapter.js";
+import {
+  HostChatControlError,
+  isOutcomeUnknown,
+} from "../../renderer/lib/hosts/host-chat-adapter.js";
 import { defaultHostModel } from "../../renderer/lib/hosts/host-resources.js";
 import { remoteAttachmentUploads } from "../../renderer/lib/hosts/remote-attachments.js";
 import { ChatIntentLedger } from "../../renderer/lib/hosts/chat-intent-ledger.js";
@@ -40,7 +49,17 @@ function code(expected: string) {
 class StudioHost {
   readonly host = new FakeHost("host_b", []);
   readonly workspaces = new Map<string, Workspace>([
-    ["ws-site", { id: "ws-site", name: "Site", folderPath: "/Users/b/site", permission: "ask", createdAt: 1, updatedAt: 2 }],
+    [
+      "ws-site",
+      {
+        id: "ws-site",
+        name: "Site",
+        folderPath: "/Users/b/site",
+        permission: "ask",
+        createdAt: 1,
+        updatedAt: 2,
+      },
+    ],
   ]);
   readonly chats = new Map<string, Chat>();
   readonly staged = new Map<string, { chatId: string; name: string }>();
@@ -60,14 +79,23 @@ class StudioHost {
   }
 
   constructor() {
-    this.host.capabilities = [...CAPABILITIES, "workspace:read", "workspace:browse", "workspace:manage", "bot:read", "bot:write"];
+    this.host.capabilities = [
+      ...CAPABILITIES,
+      "workspace:read",
+      "workspace:browse",
+      "workspace:manage",
+      "bot:read",
+      "bot:write",
+    ];
     this.host.features = [...FEATURES];
     this.host.routes = (input, deviceId) => this.answer(input, deviceId);
   }
 
   /** Every request this Mac sent to the host after `from`, minus the supervisor's own. */
   requests(from = 0): string[] {
-    return this.host.calls.slice(from).filter((call) => !/^(GET \/server|GET \/device\/capabilities|EVENTS )/u.test(call));
+    return this.host.calls
+      .slice(from)
+      .filter((call) => !/^(GET \/server|GET \/device\/capabilities|EVENTS )/u.test(call));
   }
 
   private lose(step: keyof StudioHost["drop"]): void {
@@ -110,7 +138,8 @@ class StudioHost {
           entries: [{ id: "e-launch", name: "launch", location: this.launchHandle() }],
         };
       }
-      if (!this.launchHandles.has(location)) throw new AidenRemoteServiceError("not_found", "No such folder.", 404);
+      if (!this.launchHandles.has(location))
+        throw new AidenRemoteServiceError("not_found", "No such folder.", 404);
       return {
         rootId: "root-1",
         label: "launch",
@@ -135,15 +164,31 @@ class StudioHost {
           if (body.mode === "selected-folder") {
             // A selection names one browsed folder, once.
             const location = this.selections.get(String(body.selection));
-            if (!location || !this.launchHandles.has(location)) throw new AidenRemoteServiceError("invalid_request", "That folder selection expired.", 400);
+            if (!location || !this.launchHandles.has(location))
+              throw new AidenRemoteServiceError(
+                "invalid_request",
+                "That folder selection expired.",
+                400,
+              );
             this.selections.delete(String(body.selection));
             if ([...this.workspaces.values()].some((workspace) => workspace.name === "launch")) {
-              throw new AidenRemoteServiceError("already_exists", "That folder is already registered as an Aiden workspace.", 409);
+              throw new AidenRemoteServiceError(
+                "already_exists",
+                "That folder is already registered as an Aiden workspace.",
+                409,
+              );
             }
             name = "launch";
           }
           const id = `ws-${this.workspaces.size + 1}`;
-          const created: Workspace = { id, name, permission: "ask", createdAt: 3, updatedAt: 3, ...(body.mode === "selected-folder" ? { folderPath: "/Users/b/Projects/launch" } : {}) };
+          const created: Workspace = {
+            id,
+            name,
+            permission: "ask",
+            createdAt: 3,
+            updatedAt: 3,
+            ...(body.mode === "selected-folder" ? { folderPath: "/Users/b/Projects/launch" } : {}),
+          };
           this.workspaces.set(id, created);
           return projectAidenRemoteWorkspace(created);
         },
@@ -157,7 +202,8 @@ class StudioHost {
         body,
         async () => {
           const workspaceId = String(body.workspaceId);
-          if (!this.workspaces.has(workspaceId)) throw new AidenRemoteServiceError("not_found", "No such project.", 404);
+          if (!this.workspaces.has(workspaceId))
+            throw new AidenRemoteServiceError("not_found", "No such project.", 404);
           return this.project(this.create(workspaceId, body));
         },
       );
@@ -167,13 +213,17 @@ class StudioHost {
     const bot = /^\/bots\/([^/]+)\/chats$/u.exec(url.pathname);
     if (bot && method === "POST") {
       const botId = decodeURIComponent(bot[1]!);
-      return this.host.idempotent({ deviceId, route: "POST /bots/{id}/chats", resourceId: botId, key }, body, async () => {
-        // A Bot has one chat; asking again returns it.
-        const existing = this.botChats.get(botId);
-        const chat = existing ? this.chats.get(existing)! : this.create("ws-bots", {}, botId);
-        this.botChats.set(botId, chat.id);
-        return this.project(chat);
-      });
+      return this.host.idempotent(
+        { deviceId, route: "POST /bots/{id}/chats", resourceId: botId, key },
+        body,
+        async () => {
+          // A Bot has one chat; asking again returns it.
+          const existing = this.botChats.get(botId);
+          const chat = existing ? this.chats.get(existing)! : this.create("ws-bots", {}, botId);
+          this.botChats.set(botId, chat.id);
+          return this.project(chat);
+        },
+      );
     }
     const chat = /^\/chats\/(new-[0-9]+)(\/attachments|\/turns)?$/u.exec(url.pathname);
     if (!chat) return UNHANDLED;
@@ -184,7 +234,14 @@ class StudioHost {
     if (chat[2] === "/attachments" && method === "POST") {
       const id = token("att", ++this.minted);
       this.staged.set(id, { chatId, name: String(body.name) });
-      return { id, name: String(body.name), mimeType: String(body.mimeType), kind: body.kind, size: String(body.text ?? body.data ?? "").length, expiresAt: NOW };
+      return {
+        id,
+        name: String(body.name),
+        mimeType: String(body.mimeType),
+        kind: body.kind,
+        size: String(body.text ?? body.data ?? "").length,
+        expiresAt: NOW,
+      };
     }
     if (chat[2] === "/turns" && method === "POST") {
       const receipt = await this.host.idempotent(
@@ -193,13 +250,23 @@ class StudioHost {
         async () => {
           const attachments = (body.attachmentIds as string[] | undefined) ?? [];
           for (const id of attachments) {
-            if (this.staged.get(id)?.chatId !== chatId) throw new AidenRemoteServiceError("invalid_request", "That upload is gone.", 400);
+            if (this.staged.get(id)?.chatId !== chatId)
+              throw new AidenRemoteServiceError("invalid_request", "That upload is gone.", 400);
           }
           // A turn consumes the uploads it names.
           for (const id of attachments) this.staged.delete(id);
           const turn = this.turns.push({ chatId, text: String(body.text), attachments });
-          const message: ChatMessage = { id: `${chatId}-m${turn}`, role: "user", content: String(body.text), createdAt: 4_000 + turn };
-          this.chats.set(chatId, { ...current, messages: [...current.messages, message], updatedAt: current.updatedAt + 1 });
+          const message: ChatMessage = {
+            id: `${chatId}-m${turn}`,
+            role: "user",
+            content: String(body.text),
+            createdAt: 4_000 + turn,
+          };
+          this.chats.set(chatId, {
+            ...current,
+            messages: [...current.messages, message],
+            updatedAt: current.updatedAt + 1,
+          });
           return {
             turnId: `turn_${turn}`,
             streamId: `stream_${turn}`,
@@ -240,7 +307,10 @@ class StudioHost {
 async function start(studio: StudioHost) {
   const harness = await setup(studio.host);
   const ledger = new ChatIntentLedger();
-  const control = new RemoteNewChatControl(harness.adapter, { ledger, memory: new RemoteNewChatMemory() });
+  const control = new RemoteNewChatControl(harness.adapter, {
+    ledger,
+    memory: new RemoteNewChatMemory(),
+  });
   control.attach();
   return { harness, control, ledger };
 }
@@ -253,12 +323,27 @@ test("a new chat on B starts in B's project with B's model, and its attachments 
     const models = await harness.adapter.models();
     assert.ok(models.ok);
     const model = defaultHostModel(models.value);
-    assert.deepEqual(model, { providerId: "prov-b", modelId: "model-b" }, "B's own default, never a hidden model");
+    assert.deepEqual(
+      model,
+      { providerId: "prov-b", modelId: "model-b" },
+      "B's own default, never a hidden model",
+    );
 
     const uploads = remoteAttachmentUploads([
-      { id: "local-1", kind: "text", name: "brief.md", mimeType: "text/markdown", size: 12, text: "# Launch plan" },
+      {
+        id: "local-1",
+        kind: "text",
+        name: "brief.md",
+        mimeType: "text/markdown",
+        size: 12,
+        text: "# Launch plan",
+      },
     ]);
-    const started = await control.start({ workspaceId: "ws-site", model: model! }, "Plan the launch", uploads);
+    const started = await control.start(
+      { workspaceId: "ws-site", model: model! },
+      "Plan the launch",
+      uploads,
+    );
 
     const chat = studio.chats.get(started.chatId);
     assert.equal(chat?.workspaceId, "ws-site", "the chat lives in B's project");
@@ -285,14 +370,20 @@ test("a lost create answer is retried with the same key and makes exactly one ch
   const { harness, control } = await start(studio);
   try {
     studio.drop.create = 1;
-    await assert.rejects(control.start({ workspaceId: "ws-site" }, "Draft the notes"), code("create_unconfirmed"));
+    await assert.rejects(
+      control.start({ workspaceId: "ws-site" }, "Draft the notes"),
+      code("create_unconfirmed"),
+    );
     assert.equal(studio.chats.size, 1, "the host created the chat before its answer was lost");
     assert.equal(studio.turns.length, 0, "nothing was sent into a chat this Mac never confirmed");
 
     const started = await control.start({ workspaceId: "ws-site" }, "Draft the notes");
     assert.equal(studio.chats.size, 1, "the retry replayed the same chat");
     assert.equal(started.chatId, [...studio.chats.keys()][0]);
-    assert.deepEqual(studio.turns.map((turn) => turn.text), ["Draft the notes"]);
+    assert.deepEqual(
+      studio.turns.map((turn) => turn.text),
+      ["Draft the notes"],
+    );
   } finally {
     harness.close();
   }
@@ -322,11 +413,19 @@ test("a first message whose answer was lost is retried with its key and never se
     await assert.rejects(control.start({ workspaceId: "ws-site" }, "Ship it"), isOutcomeUnknown);
     const unresolved = control.getSnapshot().unresolved;
     assert.equal(unresolved?.text, "Ship it");
-    assert.deepEqual(studio.turns.map((turn) => turn.text), ["Ship it"], "the host started the turn");
+    assert.deepEqual(
+      studio.turns.map((turn) => turn.text),
+      ["Ship it"],
+      "the host started the turn",
+    );
 
     await assert.rejects(control.start({ workspaceId: "ws-site" }, "Another"), code("unresolved"));
     assert.equal(await control.retryUnresolved(), unresolved?.chatId);
-    assert.deepEqual(studio.turns.map((turn) => turn.text), ["Ship it"], "the retry replayed the original turn");
+    assert.deepEqual(
+      studio.turns.map((turn) => turn.text),
+      ["Ship it"],
+      "the retry replayed the original turn",
+    );
     assert.equal(studio.chats.size, 1);
     assert.equal(control.getSnapshot().unresolved, null);
   } finally {
@@ -340,18 +439,36 @@ test("a first message lost on B is offered in that chat once opened, and its ret
   try {
     studio.drop.turn = 1;
     const uploads = remoteAttachmentUploads([
-      { id: "local-1", kind: "text", name: "brief.md", mimeType: "text/markdown", size: 12, text: "# Launch plan" },
+      {
+        id: "local-1",
+        kind: "text",
+        name: "brief.md",
+        mimeType: "text/markdown",
+        size: 12,
+        text: "# Launch plan",
+      },
     ]);
-    await assert.rejects(control.start({ workspaceId: "ws-site" }, "Ship it", uploads), isOutcomeUnknown);
+    await assert.rejects(
+      control.start({ workspaceId: "ws-site" }, "Ship it", uploads),
+      isOutcomeUnknown,
+    );
     const chatId = control.getSnapshot().unresolved?.chatId;
     assert.ok(chatId);
 
     // Open chat: the chat's own session, on the same window ledger, shows the message and retries it.
-    const session = new ChatSessionControl(harness.adapter, { hostId: harness.adapter.hostId, chatId }, ledger);
+    const session = new ChatSessionControl(
+      harness.adapter,
+      { hostId: harness.adapter.hostId, chatId },
+      ledger,
+    );
     session.attach();
     assert.equal(session.getSnapshot().unresolved?.text, "Ship it");
     await session.retryUnresolved();
-    assert.deepEqual(studio.turns.map((turn) => turn.text), ["Ship it"], "the retry replayed the original turn");
+    assert.deepEqual(
+      studio.turns.map((turn) => turn.text),
+      ["Ship it"],
+      "the retry replayed the original turn",
+    );
     assert.equal(studio.turns[0]?.attachments.length, 1, "with the uploads it was staged with");
     assert.equal(session.getSnapshot().unresolved, null);
     assert.equal(control.getSnapshot().unresolved, null, "the new-chat page no longer offers it");
@@ -368,7 +485,10 @@ test("a folder browsed on B becomes B's project, and a lost answer still makes o
     const browse = async () => {
       const roots = await harness.adapter.roots();
       assert.ok(roots.ok);
-      assert.deepEqual(roots.value.map((root) => root.label), ["Projects"]);
+      assert.deepEqual(
+        roots.value.map((root) => root.label),
+        ["Projects"],
+      );
       const root = hostFolderPlaces.root(roots.value[0]!);
       const listing = await harness.adapter.children(root.location.location);
       assert.ok(listing.ok);
@@ -394,7 +514,8 @@ test("a folder browsed on B becomes B's project, and a lost answer still makes o
       "the retry reused its key instead of spending the selection twice",
     );
     assert.equal(
-      studio.requests(0).filter((request) => request === "POST /workspace-browser/selections").length,
+      studio.requests(0).filter((request) => request === "POST /workspace-browser/selections")
+        .length,
       1,
       "one selection was minted for the one project",
     );

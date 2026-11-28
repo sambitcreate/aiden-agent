@@ -8,7 +8,10 @@ export interface BulkResult {
   error: unknown;
 }
 
-export async function runInOrder(ids: readonly string[], act: (id: string) => Promise<void>): Promise<BulkResult> {
+export async function runInOrder(
+  ids: readonly string[],
+  act: (id: string) => Promise<void>,
+): Promise<BulkResult> {
   const done: string[] = [];
   for (const id of ids) {
     try {
@@ -22,6 +25,11 @@ export async function runInOrder(ids: readonly string[], act: (id: string) => Pr
 }
 
 /** "Deleted 2 of 5; <reason>", for a run that stopped part way. */
-export function bulkFailureMessage(verb: string, result: BulkResult, total: number, reason: string): string {
+export function bulkFailureMessage(
+  verb: string,
+  result: BulkResult,
+  total: number,
+  reason: string,
+): string {
   return `${verb} ${result.done.length} of ${total}; ${reason}`;
 }

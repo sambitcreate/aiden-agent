@@ -40,10 +40,7 @@ export const FORM_FILL_TOOL_NAME = "form_fill";
 export function currentFormFillAttachments(
   messages: readonly Pick<ChatMessage, "role" | "attachments">[],
 ): readonly Attachment[] {
-  return (
-    [...messages].reverse().find((message) => message.role === "user")
-      ?.attachments ?? []
-  );
+  return [...messages].reverse().find((message) => message.role === "user")?.attachments ?? [];
 }
 
 export interface FormFillToolArgs {
@@ -68,16 +65,10 @@ export function normalizeFormFillArgs(raw: unknown): FormFillToolArgs {
     );
   }
   if (!Number.isSafeInteger(pid) || (pid as number) < 1) {
-    throw new FormFillServiceError(
-      "invalid_args",
-      "form_fill requires an exact pid.",
-    );
+    throw new FormFillServiceError("invalid_args", "form_fill requires an exact pid.");
   }
   if (!Number.isSafeInteger(window_id) || (window_id as number) < 1) {
-    throw new FormFillServiceError(
-      "invalid_args",
-      "form_fill requires an exact window_id.",
-    );
+    throw new FormFillServiceError("invalid_args", "form_fill requires an exact window_id.");
   }
   return { attachment_id, pid: pid as number, window_id: window_id as number };
 }
@@ -113,11 +104,7 @@ export interface FormFillControllerLike {
     plan: FormFillBatchPlan,
     options?: {
       signal?: AbortSignal;
-      onRow?: (
-        row: { order: number },
-        completed: number,
-        total: number,
-      ) => void;
+      onRow?: (row: { order: number }, completed: number, total: number) => void;
     },
   ): Promise<FormFillBatchResult>;
 }
@@ -178,10 +165,7 @@ export class FormFillService {
    * → plan → mint. The card IS the approval surface, so the model call happens
    * here, before the user is asked.
    */
-  async approvalFor(
-    rawArgs: unknown,
-    signal?: AbortSignal,
-  ): Promise<FormFillApprovalDescriptor> {
+  async approvalFor(rawArgs: unknown, signal?: AbortSignal): Promise<FormFillApprovalDescriptor> {
     this.assertActive();
     signal?.throwIfAborted();
     const args = normalizeFormFillArgs(rawArgs);
@@ -279,10 +263,7 @@ export class FormFillService {
       .map((row) => ({
         label: row.label.trim() || `Element ${row.elementIndex}`,
         reason:
-          row.reason ??
-          (row.outcome === "needs_review"
-            ? "Needs review."
-            : "Left unchanged."),
+          row.reason ?? (row.outcome === "needs_review" ? "Needs review." : "Left unchanged."),
       }));
 
     const details: FormFillBatchApprovalDetails = {
@@ -324,11 +305,7 @@ export class FormFillService {
     excludedOrders: readonly number[] = [],
   ): void {
     this.assertActive();
-    const { token, plan } = this.ledger.authorize(
-      planId,
-      expectedDigest,
-      excludedOrders,
-    );
+    const { token, plan } = this.ledger.authorize(planId, expectedDigest, excludedOrders);
     this.authorized.set(toolCallId, { token, plan });
   }
 
@@ -344,10 +321,7 @@ export class FormFillService {
     const authorized = this.authorized.get(toolCallId);
     this.authorized.delete(toolCallId);
     if (!authorized) {
-      throw new FormFillBatchError(
-        "not_authorized",
-        "The form-fill batch was not approved.",
-      );
+      throw new FormFillBatchError("not_authorized", "The form-fill batch was not approved.");
     }
     const { token, plan } = authorized;
     // Args identity is bound to the approved plan, not trusted from the tool call.
@@ -361,32 +335,17 @@ export class FormFillService {
         "The form-fill request does not match the approved plan.",
       );
     }
-    const attachment = this.deps
-      .attachmentResolver()
-      .find((item) => item.id === plan.attachmentId);
-    if (
-      !attachment ||
-      this.extract(attachment).contentHash !== plan.attachmentHash
-    ) {
-      throw new FormFillBatchError(
-        "plan_mismatch",
-        "The source document changed after review.",
-      );
+    const attachment = this.deps.attachmentResolver().find((item) => item.id === plan.attachmentId);
+    if (!attachment || this.extract(attachment).contentHash !== plan.attachmentHash) {
+      throw new FormFillBatchError("plan_mismatch", "The source document changed after review.");
     }
     const authoritativePlan = this.ledger.consume(token, plan);
     try {
-      const result = await this.deps.controller.executeFormFillBatch(
-        authoritativePlan,
-        {
-          signal,
-          onRow: (_row, completed, total) =>
-            (this.progressSink ?? this.deps.onProgress)?.(
-              toolCallId,
-              completed,
-              total,
-            ),
-        },
-      );
+      const result = await this.deps.controller.executeFormFillBatch(authoritativePlan, {
+        signal,
+        onRow: (_row, completed, total) =>
+          (this.progressSink ?? this.deps.onProgress)?.(toolCallId, completed, total),
+      });
       return { ...result, sourceDocument: plan.attachmentName };
     } catch (error) {
       if (error instanceof FormFillBatchError) throw error;
@@ -403,15 +362,12 @@ export class FormFillService {
 
   sourceReferences(): string {
     return JSON.stringify(
-      this.deps
-        .attachmentResolver()
-        .map(({ id, name }) => ({ attachment_id: id, name })),
+      this.deps.attachmentResolver().map(({ id, name }) => ({ attachment_id: id, name })),
     );
   }
 
   private assertActive(): void {
-    if (this.revoked)
-      throw new FormFillBatchError("plan_revoked", "Form fill was cancelled.");
+    if (this.revoked) throw new FormFillBatchError("plan_revoked", "Form fill was cancelled.");
   }
 
   private extract(attachment: Attachment): FormFillExtraction {

@@ -26,16 +26,16 @@ Status: implemented on this branch, 2026-10-19 (Tasks 1–6, 8 and 9). Task 7 (o
 
 ### A. Breaking changes that stop the 0.34.1 adapter on 0.36.0
 
-| Upstream change | Aiden impact | Fix |
-| --- | --- | --- |
-| `get_window_state` is lean by default: no `elements` array, no `_note`/`background_input`, 250-node cap, closed menus collapsed to menu-bar titles (#4743, #4892, 0.35.0) | `normalizeElements` reads `structured.elements` and gets nothing; every `som`/`ax` capture reports zero elements | Send `tree_format: "elements"` on every non-vision capture, keep `max_elements`; tell the model menu items are no longer in captures and `menu` takes a path |
-| macOS `type_text` sends `\n`/`\r` as Return and `\t` as Tab on key-typed routes (#4821, 0.35.0) | Text with a line break now submits a form or address bar | Refuse `\n`, `\r`, `\t` in `type` text in `safety.ts` with a hint to use `press_key` Return/Tab, so submission stays an explicit, separately approved action |
-| Vertex-compatible schemas (#4888, 0.35.0): `target` is a plain object, `scope` is an enum, nullable defaults dropped; `run_steps` (hidden alias `run_actions`) and `run_script` join `tools/list` | The checked-in catalog fixture and the fake driver carry 0.34.1 shapes; the broker's forbidden-tool test does not name the new tools | Regenerate `fixtures/cua-driver-catalog.mjs` from the real 0.36.0 `tools/list`; update the fake driver; add `run_steps`, `run_actions`, `run_script` to the broker's forbidden-tool test |
-| `list_apps` omits `bundle_id`, `launch_path`, `kind`, `last_used` when unknown and drops `windows: []` (#4916) | `publicApp` normalization may assume present-but-null fields | Treat those fields as optional |
-| Pixel `double_click` routes through `click`, needs a same-session screenshot, result reads "Posted double-click to pid …" (#4976) | Already capture-first; result text differs | Update fake driver and any result-text assertion |
-| `click` refuses an unknown AX action name; accepts `show_alternate_ui`/`show_default_ui` (#5005) | Aiden sends no `action` field | None; pin by test that Aiden never forwards an `action` field |
-| New refusal codes: `write_not_applied` (set_value read-back shows no change, was "Sent (unverified)"), `window_not_key`, `windowserver_connection_invalid`, `target_focus_unconfirmed`, `direct_capture_consent_required`, `desktop_coordinate_scope_required`, `foreground_partial_unknown`, `electron_main_process_unavailable`, `element_bounds_unavailable`, `permission_required` | Fall through to the generic refusal message | Map each to an Aiden error with a one-line recovery instruction (see Task 4). The macOS 0.36.0 driver actually sends `write_not_applied`, `window_not_key`, `desktop_coordinate_scope_required` and `element_bounds_unavailable` as codes; `windowserver_connection_invalid` arrives only as a `reason` under `background_unavailable` (`tools/mod.rs`), `permission_required` only as an escalation reason, and `direct_capture_consent_required`, `electron_main_process_unavailable`, `target_focus_unconfirmed` (post-0.36) and `foreground_partial_unknown` (Linux/Hyprland only) not at all on macOS. Those are kept as forward-compatible mappings. |
-| `verify_state.include_screenshot` is `boolean`, not `["boolean","null"]` | None (Aiden sends `true` or omits) | Covered by the regenerated catalog |
+| Upstream change                                                                                                                                                                                                                                                                                                                                                                        | Aiden impact                                                                                                                         | Fix                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
+| -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `get_window_state` is lean by default: no `elements` array, no `_note`/`background_input`, 250-node cap, closed menus collapsed to menu-bar titles (#4743, #4892, 0.35.0)                                                                                                                                                                                                              | `normalizeElements` reads `structured.elements` and gets nothing; every `som`/`ax` capture reports zero elements                     | Send `tree_format: "elements"` on every non-vision capture, keep `max_elements`; tell the model menu items are no longer in captures and `menu` takes a path                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
+| macOS `type_text` sends `\n`/`\r` as Return and `\t` as Tab on key-typed routes (#4821, 0.35.0)                                                                                                                                                                                                                                                                                        | Text with a line break now submits a form or address bar                                                                             | Refuse `\n`, `\r`, `\t` in `type` text in `safety.ts` with a hint to use `press_key` Return/Tab, so submission stays an explicit, separately approved action                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
+| Vertex-compatible schemas (#4888, 0.35.0): `target` is a plain object, `scope` is an enum, nullable defaults dropped; `run_steps` (hidden alias `run_actions`) and `run_script` join `tools/list`                                                                                                                                                                                      | The checked-in catalog fixture and the fake driver carry 0.34.1 shapes; the broker's forbidden-tool test does not name the new tools | Regenerate `fixtures/cua-driver-catalog.mjs` from the real 0.36.0 `tools/list`; update the fake driver; add `run_steps`, `run_actions`, `run_script` to the broker's forbidden-tool test                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
+| `list_apps` omits `bundle_id`, `launch_path`, `kind`, `last_used` when unknown and drops `windows: []` (#4916)                                                                                                                                                                                                                                                                         | `publicApp` normalization may assume present-but-null fields                                                                         | Treat those fields as optional                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
+| Pixel `double_click` routes through `click`, needs a same-session screenshot, result reads "Posted double-click to pid …" (#4976)                                                                                                                                                                                                                                                      | Already capture-first; result text differs                                                                                           | Update fake driver and any result-text assertion                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
+| `click` refuses an unknown AX action name; accepts `show_alternate_ui`/`show_default_ui` (#5005)                                                                                                                                                                                                                                                                                       | Aiden sends no `action` field                                                                                                        | None; pin by test that Aiden never forwards an `action` field                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
+| New refusal codes: `write_not_applied` (set_value read-back shows no change, was "Sent (unverified)"), `window_not_key`, `windowserver_connection_invalid`, `target_focus_unconfirmed`, `direct_capture_consent_required`, `desktop_coordinate_scope_required`, `foreground_partial_unknown`, `electron_main_process_unavailable`, `element_bounds_unavailable`, `permission_required` | Fall through to the generic refusal message                                                                                          | Map each to an Aiden error with a one-line recovery instruction (see Task 4). The macOS 0.36.0 driver actually sends `write_not_applied`, `window_not_key`, `desktop_coordinate_scope_required` and `element_bounds_unavailable` as codes; `windowserver_connection_invalid` arrives only as a `reason` under `background_unavailable` (`tools/mod.rs`), `permission_required` only as an escalation reason, and `direct_capture_consent_required`, `electron_main_process_unavailable`, `target_focus_unconfirmed` (post-0.36) and `foreground_partial_unknown` (Linux/Hyprland only) not at all on macOS. Those are kept as forward-compatible mappings. |
+| `verify_state.include_screenshot` is `boolean`, not `["boolean","null"]`                                                                                                                                                                                                                                                                                                               | None (Aiden sends `true` or omits)                                                                                                   | Covered by the regenerated catalog                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
 
 ### B. Improvements that arrive with the re-pin
 
@@ -54,20 +54,20 @@ Status: implemented on this branch, 2026-10-19 (Tasks 1–6, 8 and 9). Task 7 (o
 
 ### C. New upstream capabilities, with a decision each
 
-| Capability | Decision | Reason |
-| --- | --- | --- |
-| `run_steps` batch tool (find, wait, check, act in one call; #4737, #4820, #4935) | Defer | One call would carry several mutations, which breaks Aiden's exact-target, one-use grants. Revisit as the executor for an already-approved form-fill batch plan, where the whole plan is approved as one unit. |
-| `run_script` sandboxed JavaScript, on by default (#4822, #4936) | Decline permanently | Arbitrary loops and branches inside one call defeat per-action approval. Broker allowlist already blocks it; also set `CUA_DRIVER_DISABLE_RUN_SCRIPT=1` in the driver environment. |
-| `get_guide` on-demand skill sections (#5491, unreleased) | Defer to the next pin | Aiden ships its own guidance in `tool.ts`; use the compiled sections as the source when refreshing it. |
-| Recovery hints `hint` + `next_call` on every refusal (#5493, unreleased) | Adopt at the next pin | Aiden already reads `error.hint`; `next_call` is a safe read the model can be offered verbatim. |
-| `screen_locked` refusal and display keep-awake assertion (#5483, unreleased) | Adopt at the next pin | Surface a "screen is locked" state instead of a foreground suggestion; decide the `CUA_DRIVER_KEEP_DISPLAY_AWAKE` default then. |
-| Pointer excluded from window screenshots (#5480, unreleased) | Adopt at the next pin | Fixes a ~37 px pixel-target miss when the user's pointer sits outside the captured window. Strong reason to re-pin promptly after 0.37 ships. |
-| `press_key` refuses when target focus cannot be confirmed (#5372, #5402, unreleased) | Adopt at the next pin | New `target_focus_unconfirmed` code (already mapped forward-compatibly in Task 4). |
-| `CUA_DRIVER_ALLOW_BRIEF_FOREGROUND=1` auto-escalates a refused drag to a brief foreground drag (#5481, unreleased) | Decline | Daemon-level escalation bypasses Aiden's explicit foreground approval. Keep the explicit `delivery_mode:"foreground"` retry. |
-| Agents approving Cua Driver's own macOS TCC prompts (#5467) | Not applicable | Aiden's broker owns the prompts and the user clicks them. |
-| Browser tools (`browser_prepare`, `browser_select`, background Chrome attach on another Space, CDP trusted pointer staying in the background) | Out of scope | Browsers belong to the Web Access rehaul; Aiden keeps CDP tools off the allowlist. |
-| Cursor motion crate, timing presets, PiP preview, cursor themes | Not applicable | `--direct` mode has no overlay. |
-| Spaces / relay targets, cua-bench, lume, Fleet (removed upstream) | Out of scope | Aiden drives the local Mac only. |
+| Capability                                                                                                                                    | Decision              | Reason                                                                                                                                                                                                         |
+| --------------------------------------------------------------------------------------------------------------------------------------------- | --------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `run_steps` batch tool (find, wait, check, act in one call; #4737, #4820, #4935)                                                              | Defer                 | One call would carry several mutations, which breaks Aiden's exact-target, one-use grants. Revisit as the executor for an already-approved form-fill batch plan, where the whole plan is approved as one unit. |
+| `run_script` sandboxed JavaScript, on by default (#4822, #4936)                                                                               | Decline permanently   | Arbitrary loops and branches inside one call defeat per-action approval. Broker allowlist already blocks it; also set `CUA_DRIVER_DISABLE_RUN_SCRIPT=1` in the driver environment.                             |
+| `get_guide` on-demand skill sections (#5491, unreleased)                                                                                      | Defer to the next pin | Aiden ships its own guidance in `tool.ts`; use the compiled sections as the source when refreshing it.                                                                                                         |
+| Recovery hints `hint` + `next_call` on every refusal (#5493, unreleased)                                                                      | Adopt at the next pin | Aiden already reads `error.hint`; `next_call` is a safe read the model can be offered verbatim.                                                                                                                |
+| `screen_locked` refusal and display keep-awake assertion (#5483, unreleased)                                                                  | Adopt at the next pin | Surface a "screen is locked" state instead of a foreground suggestion; decide the `CUA_DRIVER_KEEP_DISPLAY_AWAKE` default then.                                                                                |
+| Pointer excluded from window screenshots (#5480, unreleased)                                                                                  | Adopt at the next pin | Fixes a ~37 px pixel-target miss when the user's pointer sits outside the captured window. Strong reason to re-pin promptly after 0.37 ships.                                                                  |
+| `press_key` refuses when target focus cannot be confirmed (#5372, #5402, unreleased)                                                          | Adopt at the next pin | New `target_focus_unconfirmed` code (already mapped forward-compatibly in Task 4).                                                                                                                             |
+| `CUA_DRIVER_ALLOW_BRIEF_FOREGROUND=1` auto-escalates a refused drag to a brief foreground drag (#5481, unreleased)                            | Decline               | Daemon-level escalation bypasses Aiden's explicit foreground approval. Keep the explicit `delivery_mode:"foreground"` retry.                                                                                   |
+| Agents approving Cua Driver's own macOS TCC prompts (#5467)                                                                                   | Not applicable        | Aiden's broker owns the prompts and the user clicks them.                                                                                                                                                      |
+| Browser tools (`browser_prepare`, `browser_select`, background Chrome attach on another Space, CDP trusted pointer staying in the background) | Out of scope          | Browsers belong to the Web Access rehaul; Aiden keeps CDP tools off the allowlist.                                                                                                                             |
+| Cursor motion crate, timing presets, PiP preview, cursor themes                                                                               | Not applicable        | `--direct` mode has no overlay.                                                                                                                                                                                |
+| Spaces / relay targets, cua-bench, lume, Fleet (removed upstream)                                                                             | Out of scope          | Aiden drives the local Mac only.                                                                                                                                                                               |
 
 ### D. Form Fill Specialist: still blocked
 
@@ -94,6 +94,7 @@ Inputs the spec implies but no existing test exercises, each pinned to a task be
 ### Task 1: vendor, pins, launch requirement, fixtures
 
 **Files:**
+
 - Modify: `resources/computer-use/cua-driver-artifact.json`
 - Modify: `scripts/computer-use-signing-pins.mjs` (`CUA_DRIVER_CDHASHES`, provenance)
 - Modify: `native/computer-use-broker/src/darwin_security.m` (regenerated DER), `native/computer-use-broker/src/driver.rs` (DER length/hash pins, `CUA_DRIVER_DISABLE_RUN_SCRIPT=1`)
@@ -102,6 +103,7 @@ Inputs the spec implies but no existing test exercises, each pinned to a task be
 - Test: `scripts/vendor-cua-driver.test.mjs`, `native/computer-use-broker/src/jsonrpc.rs` tests, `native/computer-use-broker/src/driver.rs` tests, `main/services/computer-use/computer-use-foundation.test.ts`
 
 **Interfaces:**
+
 - Produces: `CUA_DRIVER_VERSION === "0.36.0"`; a catalog fixture whose `tools` array is the exact 0.36.0 `tools/list` result.
 
 - [x] **Step 1: Write the failing broker test**: extend `allowlist_is_exact_and_has_no_cursor_or_persistence_surface` in `jsonrpc.rs` so the forbidden list includes `"run_steps"`, `"run_actions"`, `"run_script"`, `"get_guide"`, `"move_cursor"`, `"launch_app"`, `"kill_app"`; extend `driver_environment_is_an_explicit_secret_free_allowlist` to require `CUA_DRIVER_DISABLE_RUN_SCRIPT=1`.
@@ -116,10 +118,12 @@ Inputs the spec implies but no existing test exercises, each pinned to a task be
 ### Task 2: lean `get_window_state`
 
 **Files:**
+
 - Modify: `main/services/computer-use/controller.ts:1110-1190` (capture call), `fixtures/fake-cua-driver.mjs`
 - Test: `main/services/computer-use/computer-use-tool.test.ts`
 
 **Interfaces:**
+
 - Produces: `som`/`ax` captures send `{ tree_format: "elements", max_elements, include_screenshot, ... }`; `vision` captures send `{ tree_format: "markdown", include_accessibility_tree: false, ... }` (`tree_format` enum in the 0.36 manifest: `markdown` default, `elements`, `both`).
 
 - [x] **Step 1: Write the failing test** `som capture requests the elements tree_format and still mints tokens` asserting the driver received `tree_format: "elements"` and the result lists `elements.length > 0` from the fake driver's lean default (the fake returns no `elements` unless asked).
@@ -131,10 +135,12 @@ Inputs the spec implies but no existing test exercises, each pinned to a task be
 ### Task 3: newline-safe `type`
 
 **Files:**
+
 - Modify: `main/services/computer-use/safety.ts:360-410`
 - Test: `main/services/computer-use/safety.test.ts`
 
 **Interfaces:**
+
 - Produces: `evaluateTypeText(text)` (existing entry point in `safety.ts`) fails with code `"blocked_text"` and message `Line breaks and tabs are not typed through Computer Use because cua-driver sends them as Return and Tab. Type the text without them, then press_key Return or Tab as its own action.` when `text` contains `\n`, `\r` or `\t`.
 
 - [x] **Step 1: Write failing tests**: `rejects trailing newline`, `rejects embedded tab`, `accepts text with no control characters`.
@@ -145,10 +151,12 @@ Inputs the spec implies but no existing test exercises, each pinned to a task be
 ### Task 4: new refusal codes
 
 **Files:**
+
 - Modify: `main/services/computer-use/controller.ts:200-215` (`WINDOW_TARGET_REFUSALS`), `controller.ts:900-960` (refusal mapping)
 - Test: `main/services/computer-use/computer-use-tool.test.ts`
 
 **Interfaces:**
+
 - Produces: one `CuaDriverError` message per code (only `write_not_applied`, `window_not_key`, `desktop_coordinate_scope_required` and `element_bounds_unavailable` are sent as codes by the macOS 0.36.0 driver; the rest are forward-compatible mappings, see §A):
   - `write_not_applied`: invalidates the capture; "cua-driver read the control back and the value did not change. Capture the window again and choose another route (an element click or the key action) instead of repeating set_value."
   - `window_not_key`, `target_focus_unconfirmed`: "The target did not have keyboard focus, so nothing was sent. Click the element first or capture again."
@@ -166,6 +174,7 @@ Inputs the spec implies but no existing test exercises, each pinned to a task be
 ### Task 5: drag defaults to background
 
 **Files:**
+
 - Modify: `main/services/computer-use/controller.ts:1410-1430` (drag branch), `controller.ts:1491` (foreground gating), `main/services/computer-use/schema.ts` (drag description), `main/services/computer-use/tool.ts` (description and guidance no longer list drag as always foreground)
 - Test: `main/services/computer-use/computer-use-tool.test.ts`, `main/services/tool-approval.test.ts` if drag approval text is asserted there
 
@@ -178,10 +187,12 @@ Inputs the spec implies but no existing test exercises, each pinned to a task be
 ### Task 6: cheaper captures
 
 **Files:**
+
 - Modify: `main/services/computer-use/controller.ts` (capture by app, `since`), `schema.ts` (new optional capture field), `fixtures/fake-cua-driver.mjs`
 - Test: `main/services/computer-use/computer-use-tool.test.ts`
 
 **Interfaces:**
+
 - Produces: capture by `app` calls `list_windows({ app })` instead of the host-wide list; a new optional capture field `changes_only: boolean` sends `since: <previous snapshot_id of the same window>` and returns the driver's diff rows plus `no_change: true` when the driver reports no change. Tokens are still minted only from a full capture, so `changes_only` results never carry or keep element numbers, `no_change` included; the element map is cleared and the result says to take a full capture before acting by number.
 
 - [x] **Step 1: Write failing tests**: `capture by app filters list_windows host-side`; `changes_only capture sends since and reports no_change`.
@@ -191,10 +202,12 @@ Inputs the spec implies but no existing test exercises, each pinned to a task be
 ### Task 7 (optional): `hover` action
 
 **Files:**
+
 - Modify: `main/services/computer-use/contract.ts` (add `move_cursor` to both allowlists), `native/computer-use-broker/src/jsonrpc.rs` (`ALLOWED_TOOLS`, test count 21), `schema.ts`, `controller.ts`, `safety.ts`
 - Test: broker tests, `computer-use-tool.test.ts`, `access-gate.test.ts`
 
 **Interfaces:**
+
 - Produces: action `hover` with `element_index` or `x`/`y`, always a window target (`target.kind === "window"`), `delivery_mode` fixed to `"background"`; a desktop target or `foreground` is refused by Aiden before the driver (`move_cursor` on the desktop warps the user's pointer). Approval: the chat's Computer Use grant, like `click`.
 
 - [ ] **Step 1: Write failing tests**: `hover forwards move_cursor with a window target`; `hover on a desktop target is refused before the driver`; broker test for the new allowlist length.
@@ -207,6 +220,7 @@ Skip this task if the owner prefers not to widen the broker allowlist in this re
 ### Task 8: model guidance refresh
 
 **Files:**
+
 - Modify: `main/services/computer-use/tool.ts` (`COMPUTER_USE_TOOL_DESCRIPTION`, `COMPUTER_USE_AGENT_GUIDANCE`), `schema.ts` descriptions
 - Test: `main/services/assistant/system-prompt.test.ts` if it asserts guidance fragments
 
@@ -216,6 +230,7 @@ Skip this task if the owner prefers not to widen the broker allowlist in this re
 ### Task 9: documentation
 
 **Files:**
+
 - Modify: `docs/computer-use-integration.md` (pin paragraph: 0.36.0, tag, commit, upgrade date; "Process boundary" item 1 mention of the consent probe on the prompting call; drag sentence in the safety rules; screenshot default 1366 px), `docs/plans/README.md` (this plan's row: Proposed → Implemented), `docs/plans/form-fill-specialist-plan.md` (status line), `docs/plans/linux-cua-driver-gap-audit.md` (0.36 addendum from section E), `.memory/upgrade-form-fill-specialist.md`, `docs/plans/cua-driver-0-34-upgrade-plan.md` (one line: superseded by this plan)
 
 - [x] **Step 1:** `grep -rn "0\.34\.1" README.md PRODUCT.md docs .memory` and fix every claim that describes the current pin (history entries stay).

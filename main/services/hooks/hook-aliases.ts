@@ -64,7 +64,8 @@ function own(table: Readonly<Record<string, string>>, key: string): string | und
 export function claudeToolName(aidenName: string): string {
   const alias = own(AIDEN_TO_CLAUDE, aidenName);
   if (alias) return alias;
-  if (!aidenName.startsWith(MCP_PREFIX) && aidenName.includes("__")) return `${MCP_PREFIX}${aidenName}`;
+  if (!aidenName.startsWith(MCP_PREFIX) && aidenName.includes("__"))
+    return `${MCP_PREFIX}${aidenName}`;
   return aidenName;
 }
 
@@ -72,7 +73,8 @@ export function claudeToolName(aidenName: string): string {
 export function aidenToolName(name: string): string {
   const alias = own(CLAUDE_TO_AIDEN, name);
   if (alias) return alias;
-  if (name.startsWith(MCP_PREFIX) && name.length > MCP_PREFIX.length) return name.slice(MCP_PREFIX.length);
+  if (name.startsWith(MCP_PREFIX) && name.length > MCP_PREFIX.length)
+    return name.slice(MCP_PREFIX.length);
   return name;
 }
 
@@ -99,7 +101,9 @@ export function toolNameSpellings(name: string): string[] {
  * guards paths sees the same file the approval names; a savePath the tool
  * would refuse gets no `file_path`.
  */
-export function claudeToolInput(input: Record<string, unknown> | undefined): Record<string, unknown> | undefined {
+export function claudeToolInput(
+  input: Record<string, unknown> | undefined,
+): Record<string, unknown> | undefined {
   if (!input) return input;
   const result: Record<string, unknown> = { ...input };
   if (!("file_path" in input)) {

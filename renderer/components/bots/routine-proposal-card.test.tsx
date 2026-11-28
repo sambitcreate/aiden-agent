@@ -27,17 +27,31 @@ test("Not now turns the suggestion down at once; the receipt's optional Why not?
   assert.ok(screen.getByText("Add a routine?"));
   fireEvent.click(screen.getByRole("button", { name: "Not now" }));
   await waitFor(() => assert.ok(screen.getByText("Not added: Morning brief")));
-  assert.deepEqual(answers, [["dismiss", undefined]], "no question stands between Not now and the answer");
+  assert.deepEqual(
+    answers,
+    [["dismiss", undefined]],
+    "no question stands between Not now and the answer",
+  );
   fireEvent.click(screen.getByRole("button", { name: "Why not Morning brief?" }));
-  for (const label of ["Not useful", "Already have this", "Something else"]) assert.ok(screen.getByRole("button", { name: label }));
+  for (const label of ["Not useful", "Already have this", "Something else"])
+    assert.ok(screen.getByRole("button", { name: label }));
   fireEvent.click(screen.getByRole("button", { name: "Wrong time" }));
   await waitFor(() => assert.ok(screen.getByText("Not added: Morning brief. Noted, thanks.")));
-  assert.deepEqual(answers, [["dismiss", undefined], ["dismiss", "wrong_time"]]);
-  assert.equal(screen.queryByRole("button", { name: /Why not/u }), null, "a reason is asked for once");
+  assert.deepEqual(answers, [
+    ["dismiss", undefined],
+    ["dismiss", "wrong_time"],
+  ]);
+  assert.equal(
+    screen.queryByRole("button", { name: /Why not/u }),
+    null,
+    "a reason is asked for once",
+  );
 });
 
 test("a card turned down on another device reads Not added with no Why not? here", () => {
-  render(<RoutineProposalCard proposal={PROPOSAL} status="dismissed" onRespond={async () => null} />);
+  render(
+    <RoutineProposalCard proposal={PROPOSAL} status="dismissed" onRespond={async () => null} />,
+  );
   assert.ok(screen.getByText("Not added: Morning brief"));
   assert.equal(screen.queryAllByRole("button").length, 0);
 });
@@ -52,7 +66,9 @@ test("a schedule card names its timezone, before and after Add", async () => {
   );
   assert.ok(screen.getByText("Morning brief · Every day at 8:00 AM · Pacific Time"));
   fireEvent.click(screen.getByRole("button", { name: "Add" }));
-  await waitFor(() => assert.ok(screen.getByText("Added Morning brief · Every day at 8:00 AM · Pacific Time")));
+  await waitFor(() =>
+    assert.ok(screen.getByText("Added Morning brief · Every day at 8:00 AM · Pacific Time")),
+  );
   assert.equal(screen.queryAllByRole("button").length, 0);
 });
 
@@ -73,7 +89,11 @@ test("accepting a link card shows Copy link once, with the profile's guidance", 
     <RoutineProposalCard
       proposal={LINK_PROPOSAL}
       status="pending"
-      onRespond={async () => ({ status: "accepted", routineId: "r1", link: "https://mac.tail.ts.net:7443/hooks/bot-routines/secret" })}
+      onRespond={async () => ({
+        status: "accepted",
+        routineId: "r1",
+        link: "https://mac.tail.ts.net:7443/hooks/bot-routines/secret",
+      })}
     />,
   );
   assert.ok(screen.getByText("Deploy watcher · When this routine's link is called"));
@@ -83,7 +103,9 @@ test("accepting a link card shows Copy link once, with the profile's guidance", 
   // The link itself is copied, never printed into the transcript.
   assert.equal(screen.queryByText(/secret/u), null);
   fireEvent.click(screen.getByRole("button", { name: "Copy link" }));
-  await waitFor(() => assert.deepEqual(copied, ["https://mac.tail.ts.net:7443/hooks/bot-routines/secret"]));
+  await waitFor(() =>
+    assert.deepEqual(copied, ["https://mac.tail.ts.net:7443/hooks/bot-routines/secret"]),
+  );
 });
 
 test("a link card accepted while Aiden On The Go is off says how to turn it on", async () => {

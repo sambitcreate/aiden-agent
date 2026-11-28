@@ -18,9 +18,12 @@ async function fixture(t) {
     "lazy-settings.js": "x".repeat(50_000),
     "styles.css": "body { color: red; }\n",
   };
-  for (const [name, contents] of Object.entries(files)) await writeFile(path.join(root, "assets", name), contents);
+  for (const [name, contents] of Object.entries(files))
+    await writeFile(path.join(root, "assets", name), contents);
   const html = path.join(root, "main-window.html");
-  await writeFile(html, `<!doctype html><html><head>
+  await writeFile(
+    html,
+    `<!doctype html><html><head>
     <script type="module" crossorigin src="./assets/entry.js"></script>
     <link rel="modulepreload" crossorigin href="./assets/runtime.js">
     <link rel="modulepreload" href="./assets/vendor.js">
@@ -28,7 +31,8 @@ async function fixture(t) {
     <link rel="prefetch" href="./assets/lazy-settings.js">
     <link rel="stylesheet" href="./assets/styles.css">
     <script src="https://cdn.example.test/remote.js"></script>
-  </head></html>`);
+  </head></html>`,
+  );
   return { html, files };
 }
 
@@ -36,9 +40,18 @@ test("initial JS counts the entry and each modulepreload once, but not lazy chun
   const { html, files } = await fixture(t);
   const measurement = await measureInitialJavaScript(html);
   const eager = ["entry.js", "runtime.js", "vendor.js"];
-  assert.deepEqual(measurement.files.map((file) => path.basename(file.source)), eager);
-  assert.equal(measurement.raw, eager.reduce((total, name) => total + Buffer.byteLength(files[name]), 0));
-  assert.ok(measurement.gzip > 0 && measurement.gzip < measurement.raw, "repetitive code compresses");
+  assert.deepEqual(
+    measurement.files.map((file) => path.basename(file.source)),
+    eager,
+  );
+  assert.equal(
+    measurement.raw,
+    eager.reduce((total, name) => total + Buffer.byteLength(files[name]), 0),
+  );
+  assert.ok(
+    measurement.gzip > 0 && measurement.gzip < measurement.raw,
+    "repetitive code compresses",
+  );
 });
 
 test("the budget fails on either raw or gzip growth and passes at the limit", async (t) => {

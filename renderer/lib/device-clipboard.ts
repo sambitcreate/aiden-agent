@@ -30,7 +30,9 @@ export function isDevicePasteShortcut(event: {
   altKey: boolean;
   shiftKey: boolean;
 }): boolean {
-  return event.code === "KeyV" && event.metaKey && !event.ctrlKey && !event.altKey && !event.shiftKey;
+  return (
+    event.code === "KeyV" && event.metaKey && !event.ctrlKey && !event.altKey && !event.shiftKey
+  );
 }
 
 /**
@@ -49,7 +51,8 @@ export async function pasteHostClipboardToDevice(input: {
   const noun = input.target.platform === "android" ? "emulator" : "simulator";
   const sendKey = input.sendKey;
   if (!sendKey) throw new Error(`The ${noun} is not accepting input right now.`);
-  const wait = input.wait ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
+  const wait =
+    input.wait ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
   const result = await input.copy(input.target);
   if (input.target.platform === "ios") {
     for (const [index, [code, phase]] of DEVICE_PASTE_KEYS.entries()) {

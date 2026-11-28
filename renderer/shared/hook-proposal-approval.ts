@@ -50,7 +50,15 @@ export interface HookProposalApprovalDetails extends HookProposalApprovalHook {
   scriptCoverage?: "partial";
 }
 
-const HOOK_KEYS = ["event", "matcher", "command", "timeoutSeconds", "async", "failClosed", "envAllow"] as const;
+const HOOK_KEYS = [
+  "event",
+  "matcher",
+  "command",
+  "timeoutSeconds",
+  "async",
+  "failClosed",
+  "envAllow",
+] as const;
 const DETAIL_KEYS = [
   "kind",
   "action",
@@ -72,7 +80,9 @@ function exactKeys(value: Record<string, unknown>, keys: readonly string[]): boo
 }
 
 function plainRecord(value: unknown): Record<string, unknown> | undefined {
-  return value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : undefined;
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : undefined;
 }
 
 function isApprovalHook(value: Record<string, unknown>): boolean {
@@ -93,7 +103,9 @@ function isApprovalHook(value: Record<string, unknown>): boolean {
 }
 
 /** Exact shape, bounded text with no control or bidi characters; anything else blocks the card. */
-export function isHookProposalApprovalDetails(value: unknown): value is HookProposalApprovalDetails {
+export function isHookProposalApprovalDetails(
+  value: unknown,
+): value is HookProposalApprovalDetails {
   const details = plainRecord(value);
   if (!details) return false;
   const optional = OPTIONAL_DETAIL_KEYS.filter((key) => key in details);
@@ -108,10 +120,12 @@ export function isHookProposalApprovalDetails(value: unknown): value is HookProp
   }
   if ("scriptCoverage" in details && details.scriptCoverage !== "partial") return false;
   if (details.kind !== HOOK_PROPOSAL_APPROVAL_KIND) return false;
-  if (details.action !== "create" && details.action !== "update" && details.action !== "delete") return false;
+  if (details.action !== "create" && details.action !== "update" && details.action !== "delete")
+    return false;
   if (!safeApprovalText(details.name, HOOK_PROPOSAL_LABEL_LIMIT)) return false;
   if (!safeApprovalText(details.scopeLabel, HOOK_PROPOSAL_LABEL_LIMIT)) return false;
-  if (!safeApprovalText(details.digestPrefix, 64) || !/^[a-f0-9]+$/u.test(details.digestPrefix)) return false;
+  if (!safeApprovalText(details.digestPrefix, 64) || !/^[a-f0-9]+$/u.test(details.digestPrefix))
+    return false;
   if (
     !Array.isArray(details.warnings) ||
     details.warnings.length > HOOK_PROPOSAL_MAX_WARNINGS ||
@@ -122,5 +136,10 @@ export function isHookProposalApprovalDetails(value: unknown): value is HookProp
   if (!isApprovalHook(details)) return false;
   if (details.previous === null) return details.action !== "update";
   const previous = plainRecord(details.previous);
-  return details.action === "update" && previous !== undefined && exactKeys(previous, HOOK_KEYS) && isApprovalHook(previous);
+  return (
+    details.action === "update" &&
+    previous !== undefined &&
+    exactKeys(previous, HOOK_KEYS) &&
+    isApprovalHook(previous)
+  );
 }

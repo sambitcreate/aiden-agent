@@ -43,7 +43,8 @@ function loopbackOrigin(name, forbiddenPort) {
 
 const lmStudio = loopbackOrigin("AIDEN_E2E_LMSTUDIO_REDIRECT_ORIGIN", "1234");
 if (lmStudio) {
-  for (const origin of ["http://127.0.0.1:1234", "http://localhost:1234"]) redirects.set(origin, lmStudio);
+  for (const origin of ["http://127.0.0.1:1234", "http://localhost:1234"])
+    redirects.set(origin, lmStudio);
 }
 // The whole OpenRouter origin goes to the fake: the stale-catalog check and
 // image generation both stay on loopback, and nothing reaches the real host.
@@ -85,13 +86,15 @@ app.once("will-finish-launching", () => {
 });
 const loaderEmit = app.emit;
 app.emit = function emitWithStartupMilestones(event, ...args) {
-  if (event === "ready" && startupMilestones.nativeReady === null) startupMilestones.nativeReady = sinceProcessStart();
+  if (event === "ready" && startupMilestones.nativeReady === null)
+    startupMilestones.nativeReady = sinceProcessStart();
   return loaderEmit.call(this, event, ...args);
 };
 const playwrightRun = globalThis.__playwright_run;
 if (typeof playwrightRun === "function") {
   globalThis.__playwright_run = function runWithStartupMilestone(...args) {
-    if (startupMilestones.playwrightRun === null) startupMilestones.playwrightRun = sinceProcessStart();
+    if (startupMilestones.playwrightRun === null)
+      startupMilestones.playwrightRun = sinceProcessStart();
     return playwrightRun.apply(this, args);
   };
 }

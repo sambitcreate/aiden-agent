@@ -39,7 +39,20 @@ export const SETTINGS_DESTINATIONS: ReadonlyArray<{
   tabLabel?: string;
   keywords: string[];
 }> = [
-  { id: "providers", title: "Providers", keywords: ["models", "api", "keys", "connect my ai", "chatgpt", "lm studio", "ollama", "custom provider"] },
+  {
+    id: "providers",
+    title: "Providers",
+    keywords: [
+      "models",
+      "api",
+      "keys",
+      "connect my ai",
+      "chatgpt",
+      "lm studio",
+      "ollama",
+      "custom provider",
+    ],
+  },
   {
     id: "agentSlider",
     title: "Agent Slider",
@@ -87,7 +100,19 @@ export const SETTINGS_DESTINATIONS: ReadonlyArray<{
   {
     id: "hooks",
     title: "Hooks",
-    keywords: ["hooks", "hooks.json", "pretooluse", "posttooluse", "shell command", "scripts", "lint", "format", "block a tool", "claude code hooks", "automation"],
+    keywords: [
+      "hooks",
+      "hooks.json",
+      "pretooluse",
+      "posttooluse",
+      "shell command",
+      "scripts",
+      "lint",
+      "format",
+      "block a tool",
+      "claude code hooks",
+      "automation",
+    ],
   },
   {
     id: "websearch",
@@ -128,22 +153,69 @@ export const SETTINGS_DESTINATIONS: ReadonlyArray<{
     id: "remoteAccess",
     title: "Connections",
     tabLabel: "Control this device",
-    keywords: ["aiden on the go", "remote access", "iphone", "ipad", "android", "connect my phone", "connect my tablet", "away from home", "tailscale", "local network", "pairing"],
+    keywords: [
+      "aiden on the go",
+      "remote access",
+      "iphone",
+      "ipad",
+      "android",
+      "connect my phone",
+      "connect my tablet",
+      "away from home",
+      "tailscale",
+      "local network",
+      "pairing",
+    ],
   },
   {
     id: "peerHosts",
     title: "Control other devices",
-    keywords: ["control other computers", "other devices", "multiple computers", "paired computers", "add device", "tailscale", "pairing"],
+    keywords: [
+      "control other computers",
+      "other devices",
+      "multiple computers",
+      "paired computers",
+      "add device",
+      "tailscale",
+      "pairing",
+    ],
   },
   {
     id: "otherApps",
     title: "Apps using Aiden",
-    keywords: ["mcp server", "model context protocol", "claude code", "codex", "other apps", "outside apps", "connect an app", "access token", "localhost"],
+    keywords: [
+      "mcp server",
+      "model context protocol",
+      "claude code",
+      "codex",
+      "other apps",
+      "outside apps",
+      "connect an app",
+      "access token",
+      "localhost",
+    ],
   },
   {
     id: "scheduledTasks",
     title: "Scheduled tasks",
-    keywords: ["automation", "cron", "recurring", "background", "scripts", "notifications", "do this every day", "run later", "awake", "sleep", "caffeinate", "keep awake", "check back", "check-backs", "come back later", "while you're away"],
+    keywords: [
+      "automation",
+      "cron",
+      "recurring",
+      "background",
+      "scripts",
+      "notifications",
+      "do this every day",
+      "run later",
+      "awake",
+      "sleep",
+      "caffeinate",
+      "keep awake",
+      "check back",
+      "check-backs",
+      "come back later",
+      "while you're away",
+    ],
   },
   {
     id: "geminiLive",
@@ -185,32 +257,85 @@ export const SETTINGS_DESTINATIONS: ReadonlyArray<{
   {
     id: "appControls",
     title: "Controls in chat",
-    keywords: ["chat controls", "app controls", "agent app actions", "paired-device", "change settings from chat"],
+    keywords: [
+      "chat controls",
+      "app controls",
+      "agent app actions",
+      "paired-device",
+      "change settings from chat",
+    ],
   },
   {
     id: "computerUse",
     title: "Computer Use",
-    keywords: ["desktop", "native apps", "accessibility", "screen recording", "beta", "control my computer", "see my screen", "permissions"],
+    keywords: [
+      "desktop",
+      "native apps",
+      "accessibility",
+      "screen recording",
+      "beta",
+      "control my computer",
+      "see my screen",
+      "permissions",
+    ],
   },
   {
     id: "bots",
     title: "Bot messaging",
-    keywords: ["bot", "bots", "message each other", "other bots", "bot to bot", "peers", "ask another bot"],
+    keywords: [
+      "bot",
+      "bots",
+      "message each other",
+      "other bots",
+      "bot to bot",
+      "peers",
+      "ask another bot",
+    ],
   },
   {
     id: "botComputers",
     title: "Bot computers",
-    keywords: ["virtual machine", "vm", "lume", "macos", "bot computer", "disk space", "apple silicon"],
+    keywords: [
+      "virtual machine",
+      "vm",
+      "lume",
+      "macos",
+      "bot computer",
+      "disk space",
+      "apple silicon",
+    ],
   },
   {
     id: "botBubbles",
     title: "Bots",
-    keywords: ["bubble", "bubbles", "chat heads", "heads", "floating", "float over apps", "on top", "mini chat", "edge"],
+    keywords: [
+      "bubble",
+      "bubbles",
+      "chat heads",
+      "heads",
+      "floating",
+      "float over apps",
+      "on top",
+      "mini chat",
+      "edge",
+    ],
   },
   {
     id: "simulator",
     title: "Simulator",
-    keywords: ["ios", "iphone", "ipad", "simulator", "xcode", "devices", "agent-device", "npm", "paired macs", "floating", "auto-show"],
+    keywords: [
+      "ios",
+      "iphone",
+      "ipad",
+      "simulator",
+      "xcode",
+      "devices",
+      "agent-device",
+      "npm",
+      "paired macs",
+      "floating",
+      "auto-show",
+    ],
   },
   {
     id: "memory",
@@ -220,7 +345,15 @@ export const SETTINGS_DESTINATIONS: ReadonlyArray<{
   {
     id: "voice",
     title: "Voice",
-    keywords: ["microphone", "audio", "transcription", "dictation", "use my voice", "microphone not working", "talk to aiden"],
+    keywords: [
+      "microphone",
+      "audio",
+      "transcription",
+      "dictation",
+      "use my voice",
+      "microphone not working",
+      "talk to aiden",
+    ],
   },
   {
     id: "tts",
@@ -239,7 +372,15 @@ export const SETTINGS_DESTINATIONS: ReadonlyArray<{
   {
     id: "links",
     title: "Links",
-    keywords: ["browser", "open links", "chat links", "external", "system browser", "aiden browser", "url"],
+    keywords: [
+      "browser",
+      "open links",
+      "chat links",
+      "external",
+      "system browser",
+      "aiden browser",
+      "url",
+    ],
   },
   {
     id: "shortcut",
@@ -290,7 +431,19 @@ export const SETTINGS_DESTINATIONS: ReadonlyArray<{
   {
     id: "about",
     title: "About",
-    keywords: ["version", "build", "github", "repository", "app information", "update", "diagnostics", "logs", "reset", "onboarding", "restart"],
+    keywords: [
+      "version",
+      "build",
+      "github",
+      "repository",
+      "app information",
+      "update",
+      "diagnostics",
+      "logs",
+      "reset",
+      "onboarding",
+      "restart",
+    ],
   },
 ];
 
@@ -350,15 +503,46 @@ export const SETTINGS_PAGES: readonly SettingsPageEntry[] = [
   { id: "mcp", title: "Connectors", group: "Capabilities", tabs: ["mcp"] },
   { id: "hooks", title: "Hooks", group: "Capabilities", tabs: ["hooks"] },
   { id: "websearch", title: "Web Search", group: "Capabilities", tabs: ["websearch"] },
-  { id: "imageGeneration", title: "Image Generation", group: "Capabilities", tabs: ["imageGeneration"] },
+  {
+    id: "imageGeneration",
+    title: "Image Generation",
+    group: "Capabilities",
+    tabs: ["imageGeneration"],
+  },
   { id: "memory", title: "Memory", group: "Capabilities", tabs: ["memory"] },
-  { id: "approvals", title: "Approvals", group: "Autonomy & Devices", tabs: ["approvals", "appControls"], anchors: ["bots"] },
-  { id: "scheduledTasks", title: "Scheduled tasks", group: "Autonomy & Devices", tabs: ["scheduledTasks"] },
-  { id: "computers", title: "Computers & VMs", group: "Autonomy & Devices", tabs: ["computerUse", "botComputers"] },
+  {
+    id: "approvals",
+    title: "Approvals",
+    group: "Autonomy & Devices",
+    tabs: ["approvals", "appControls"],
+    anchors: ["bots"],
+  },
+  {
+    id: "scheduledTasks",
+    title: "Scheduled tasks",
+    group: "Autonomy & Devices",
+    tabs: ["scheduledTasks"],
+  },
+  {
+    id: "computers",
+    title: "Computers & VMs",
+    group: "Autonomy & Devices",
+    tabs: ["computerUse", "botComputers"],
+  },
   { id: "botBubbles", title: "Bots", group: "Autonomy & Devices", tabs: ["botBubbles"] },
   { id: "simulator", title: "Simulator", group: "Autonomy & Devices", tabs: ["simulator"] },
-  { id: "voiceSpeech", title: "Voice & Speech", group: "Voice & Channels", tabs: ["voice", "tts", "geminiLive"] },
-  { id: "connections", title: "Connections", group: "Voice & Channels", tabs: ["remoteAccess", "peerHosts", "otherApps", "telegram"] },
+  {
+    id: "voiceSpeech",
+    title: "Voice & Speech",
+    group: "Voice & Channels",
+    tabs: ["voice", "tts", "geminiLive"],
+  },
+  {
+    id: "connections",
+    title: "Connections",
+    group: "Voice & Channels",
+    tabs: ["remoteAccess", "peerHosts", "otherApps", "telegram"],
+  },
   { id: "appearance", title: "Appearance", group: "App", tabs: ["appearance"], anchors: ["links"] },
   { id: "shortcut", title: "Keyboard shortcuts", group: "App", tabs: ["shortcut"] },
   { id: "storage", title: "Storage", group: "App", tabs: ["storage"] },
@@ -409,7 +593,9 @@ export function availableSettingsDestinations(
 export function assistantSettingsPages(capabilities: SettingsCapabilities): string[] {
   return availableSettingsPages(capabilities).map((page) => {
     const parts = [...(page.tabs.length > 1 ? page.tabs : []), ...(page.anchors ?? [])];
-    return parts.length > 0 ? `${page.title} (${parts.map(settingsTabLabel).join(", ")})` : page.title;
+    return parts.length > 0
+      ? `${page.title} (${parts.map(settingsTabLabel).join(", ")})`
+      : page.title;
   });
 }
 
@@ -507,9 +693,7 @@ export function matchesSettingsSearch(
   if (terms.length === 0) return true;
   const keywords =
     typeof destination.keywords === "string" ? [destination.keywords] : destination.keywords;
-  const haystack = [destination.title, ...keywords, description]
-    .join(" ")
-    .toLocaleLowerCase();
+  const haystack = [destination.title, ...keywords, description].join(" ").toLocaleLowerCase();
   return terms.every((term) => haystack.includes(term));
 }
 

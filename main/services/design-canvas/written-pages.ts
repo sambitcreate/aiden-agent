@@ -135,7 +135,9 @@ export async function readDesignWidthHint(absolutePath: string): Promise<DesignW
  */
 export function writtenPagePath(toolName: string, details: unknown): string | undefined {
   const produced = parseProducedFile(
-    details && typeof details === "object" ? (details as { producedFile?: unknown }).producedFile : undefined,
+    details && typeof details === "object"
+      ? (details as { producedFile?: unknown }).producedFile
+      : undefined,
     toolName,
   );
   if (!produced) return undefined;
@@ -157,7 +159,9 @@ export async function scanDesignPages(workspaceRoot: string): Promise<DesignPage
   const walk = async (relativeDir: string, depth: number): Promise<void> => {
     let entries: Dirent[];
     try {
-      entries = await fs.readdir(path.join(workspaceRoot, ...relativeDir.split("/")), { withFileTypes: true });
+      entries = await fs.readdir(path.join(workspaceRoot, ...relativeDir.split("/")), {
+        withFileTypes: true,
+      });
     } catch {
       return;
     }
@@ -167,7 +171,11 @@ export async function scanDesignPages(workspaceRoot: string): Promise<DesignPage
       seen += 1;
       const relativePath = `${relativeDir}/${entry.name}`;
       if (entry.isDirectory()) {
-        if (depth < DESIGN_PAGE_SCAN_LIMITS.depth && !entry.name.startsWith(".") && entry.name !== "node_modules") {
+        if (
+          depth < DESIGN_PAGE_SCAN_LIMITS.depth &&
+          !entry.name.startsWith(".") &&
+          entry.name !== "node_modules"
+        ) {
           await walk(relativePath, depth + 1);
         }
       } else if (entry.isFile() && isAutoPlacedPagePath(relativePath)) {
@@ -197,14 +205,21 @@ export const DESIGN_PAGE_CLOCK_SLACK_MS = 100;
  * had also counts when it was modified at or after that time: the first look
  * runs while the first command may already be writing.
  */
-export function changedDesignPages(before: DesignPageStamps, after: DesignPageStamps, changedSince?: number): string[] {
+export function changedDesignPages(
+  before: DesignPageStamps,
+  after: DesignPageStamps,
+  changedSince?: number,
+): string[] {
   return [...after]
     .filter(([relativePath, stamp]) => {
       const earlier = before.get(relativePath);
       if (!earlier || earlier.mtimeMs !== stamp.mtimeMs || earlier.size !== stamp.size) return true;
       return changedSince !== undefined && stamp.mtimeMs >= changedSince;
     })
-    .sort(([pathA, a], [pathB, b]) => a.mtimeMs - b.mtimeMs || (pathA < pathB ? -1 : pathA > pathB ? 1 : 0))
+    .sort(
+      ([pathA, a], [pathB, b]) =>
+        a.mtimeMs - b.mtimeMs || (pathA < pathB ? -1 : pathA > pathB ? 1 : 0),
+    )
     .map(([relativePath]) => relativePath);
 }
 
@@ -301,8 +316,14 @@ export function pagesWrittenInChat(
   for (const message of messages) {
     for (const step of message.timeline?.steps ?? []) {
       if (!step || typeof step !== "object") continue;
-      const tool = step as { kind?: unknown; toolName?: unknown; status?: unknown; producedFile?: unknown };
-      if (tool.kind !== "tool" || tool.status !== "completed" || typeof tool.toolName !== "string") continue;
+      const tool = step as {
+        kind?: unknown;
+        toolName?: unknown;
+        status?: unknown;
+        producedFile?: unknown;
+      };
+      if (tool.kind !== "tool" || tool.status !== "completed" || typeof tool.toolName !== "string")
+        continue;
       const relativePath = writtenPagePath(tool.toolName, { producedFile: tool.producedFile });
       if (!relativePath) continue;
       // A page edited again moves to the end, so the newest pages are kept.
@@ -438,7 +459,11 @@ export async function placeWrittenPagesOnCanvas(input: {
 }
 
 async function retractPlacedFrames(
-  input: { chatId: string; store: Pick<DesignCanvasStore, "update">; broadcast(update: { chatId: string; revision: number }): void },
+  input: {
+    chatId: string;
+    store: Pick<DesignCanvasStore, "update">;
+    broadcast(update: { chatId: string; revision: number }): void;
+  },
   savedRevision: number,
   placedIds: readonly string[],
   shouldSave: () => Promise<boolean> | boolean,

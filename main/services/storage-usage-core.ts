@@ -97,8 +97,10 @@ export function createStorageScanBudget(
  * what it really occupies. Windows reports no blocks, so it falls back to size.
  */
 export function diskBytes(stats: Pick<Stats, "size" | "blocks">): number {
-  return typeof stats.blocks === "number" && Number.isFinite(stats.blocks) && stats.blocks >= 0
-    && process.platform !== "win32"
+  return typeof stats.blocks === "number" &&
+    Number.isFinite(stats.blocks) &&
+    stats.blocks >= 0 &&
+    process.platform !== "win32"
     ? stats.blocks * 512
     : stats.size;
 }
@@ -368,7 +370,11 @@ export function planStorageCleanup(
       // Every cache folder lives in a Browser data entry, so a partial walk there
       // makes the clearable amount a minimum too.
       const browser = report.categories.find((category) => category.id === "browser");
-      return planBrowserCacheCleanup(request.inactiveDays, report.browserCacheBytes, browser?.complete !== false);
+      return planBrowserCacheCleanup(
+        request.inactiveDays,
+        report.browserCacheBytes,
+        browser?.complete !== false,
+      );
     }
     case "clear-logs": {
       const logs = report.categories.find((category) => category.id === "logs");
@@ -388,9 +394,7 @@ export function planStorageCleanup(
 export const recheckWorktreeRemoval = worktreeProtectionReason;
 
 /** Force every category into the report in scan order, filling gaps with zero. */
-export function orderCategories(
-  usage: readonly StorageCategoryUsage[],
-): StorageCategoryUsage[] {
+export function orderCategories(usage: readonly StorageCategoryUsage[]): StorageCategoryUsage[] {
   return STORAGE_CATEGORY_IDS.map((id: StorageCategoryId) => {
     const found = usage.filter((category) => category.id === id);
     return {

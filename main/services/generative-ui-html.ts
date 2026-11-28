@@ -25,7 +25,17 @@ import {
   MAX_GUEST_PROMPT_CHARS,
 } from "../../renderer/shared/generative-ui-bridge.js";
 import { generativeUiKitCss } from "./generative-ui-kit.js";
-import { FOREIGN_END_LIMIT, HtmlScanner, readExcerpt, SELECT_FOREIGN_LIMIT, SELECT_RAW_TEXT_LIMIT, XML_DECLARATIONS_LIMIT, XML_HTML_TEXT_LIMIT, XML_MARKUP_IN_DECLARATION_LIMIT, type HtmlFindings } from "./generative-ui-html-scan.js";
+import {
+  FOREIGN_END_LIMIT,
+  HtmlScanner,
+  readExcerpt,
+  SELECT_FOREIGN_LIMIT,
+  SELECT_RAW_TEXT_LIMIT,
+  XML_DECLARATIONS_LIMIT,
+  XML_HTML_TEXT_LIMIT,
+  XML_MARKUP_IN_DECLARATION_LIMIT,
+  type HtmlFindings,
+} from "./generative-ui-html-scan.js";
 
 // The admission check (generative-ui-html-scan.ts) reads the HTML the way a
 // browser does and refuses only what would load or run something; the
@@ -35,21 +45,26 @@ const MAX_QUOTED_MATCH_CHARS = 60;
 function quoteMatch(excerpt: string): string {
   const { text, joined } = readExcerpt(excerpt);
   const flat = text.replace(/\s+/gu, " ").trim();
-  const quoted = JSON.stringify(flat.length > MAX_QUOTED_MATCH_CHARS ? `${flat.slice(0, MAX_QUOTED_MATCH_CHARS - 1)}…` : flat);
+  const quoted = JSON.stringify(
+    flat.length > MAX_QUOTED_MATCH_CHARS ? `${flat.slice(0, MAX_QUOTED_MATCH_CHARS - 1)}…` : flat,
+  );
   return joined ? `${quoted}, which a script joins from strings` : quoted;
 }
 
 /** What to change for a visual refused as too complex to check. */
 function limitAdvice(limit: string): string {
-  if (limit === XML_DECLARATIONS_LIMIT) return "Remove the DOCTYPE internal subset and the <!ENTITY> and <!ATTLIST> declarations from the XML the script parses.";
+  if (limit === XML_DECLARATIONS_LIMIT)
+    return "Remove the DOCTYPE internal subset and the <!ENTITY> and <!ATTLIST> declarations from the XML the script parses.";
   if (limit === XML_HTML_TEXT_LIMIT) {
     return "Give those elements text only (no child elements, comments or CDATA sections holding < or &), build them with document.createElement, or parse the markup as text/html.";
   }
-  if (limit === XML_MARKUP_IN_DECLARATION_LIMIT) return "Remove the < and > from the processing instruction or DOCTYPE in the XML the script parses.";
+  if (limit === XML_MARKUP_IN_DECLARATION_LIMIT)
+    return "Remove the < and > from the processing instruction or DOCTYPE in the XML the script parses.";
   if (limit.endsWith(FOREIGN_END_LIMIT)) {
     return "Close the HTML elements in an SVG <desc> or <title> or in MathML text before ending the element around them.";
   }
-  if (limit.endsWith(SELECT_RAW_TEXT_LIMIT)) return `Move the ${limit.slice(0, limit.indexOf(">") + 1)} out of the <select>.`;
+  if (limit.endsWith(SELECT_RAW_TEXT_LIMIT))
+    return `Move the ${limit.slice(0, limit.indexOf(">") + 1)} out of the <select>.`;
   if (limit.endsWith(SELECT_FOREIGN_LIMIT)) {
     return "Keep only SVG or MathML inside an <svg> or <math> in a <select>, closing each with its own end tag, and move HTML such as <div> out of the select.";
   }
@@ -247,9 +262,7 @@ function legacyDerivedVars(record: Record<string, unknown>): Record<string, stri
   return derived;
 }
 
-export function parseGenerativeUiTheme(
-  value: unknown,
-): GenerativeUiThemeTokens {
+export function parseGenerativeUiTheme(value: unknown): GenerativeUiThemeTokens {
   if (!value || typeof value !== "object" || Array.isArray(value)) return DEFAULT_THEME;
   // The built-in default keeps its own light token values rather than deriving
   // them from its four legacy colors.
@@ -336,7 +349,8 @@ export function createGenerativeUiDraftCheck(): GenerativeUiDraftCheck {
       }
     }
     const findings = mergeFindings(scanner.findings(), withoutScripting?.findings());
-    refused = findings.embed !== undefined || findings.url !== undefined || findings.limit !== undefined;
+    refused =
+      findings.embed !== undefined || findings.url !== undefined || findings.limit !== undefined;
     return refused ? false : chunk;
   };
   return {
@@ -348,7 +362,10 @@ export function createGenerativeUiDraftCheck(): GenerativeUiDraftCheck {
         return false;
       }
       held += chunk;
-      const unfinished = Math.max(scanner.unfinishedSize(), withoutScripting?.unfinishedSize() ?? 0);
+      const unfinished = Math.max(
+        scanner.unfinishedSize(),
+        withoutScripting?.unfinishedSize() ?? 0,
+      );
       return held.length >= Math.min(DRAFT_CHECK_BATCH_CHARS, unfinished) ? check() : "";
     },
     finish() {
@@ -382,7 +399,11 @@ const NOSCRIPT_TAG = /<noscript/iu;
 
 function mergeFindings(first: HtmlFindings, second: HtmlFindings | undefined): HtmlFindings {
   if (second === undefined) return first;
-  return { limit: first.limit ?? second.limit, embed: first.embed ?? second.embed, url: first.url ?? second.url };
+  return {
+    limit: first.limit ?? second.limit,
+    embed: first.embed ?? second.embed,
+    url: first.url ?? second.url,
+  };
 }
 
 /**
@@ -399,7 +420,11 @@ function scanGuestBody(markup: string): HtmlFindings {
     return scanner.finish();
   };
   const findings = scan(true);
-  if (findings.limit !== undefined || (findings.embed !== undefined && findings.url !== undefined) || !NOSCRIPT_TAG.test(markup)) {
+  if (
+    findings.limit !== undefined ||
+    (findings.embed !== undefined && findings.url !== undefined) ||
+    !NOSCRIPT_TAG.test(markup)
+  ) {
     return findings;
   }
   return mergeFindings(findings, scan(false));
@@ -423,7 +448,8 @@ function admit(html: string): { fragment: string } {
     } catch (error) {
       admission = { error: (error as Error).message };
     }
-    if (admissions.size >= MAX_CACHED_ADMISSIONS) admissions.delete(admissions.keys().next().value!);
+    if (admissions.size >= MAX_CACHED_ADMISSIONS)
+      admissions.delete(admissions.keys().next().value!);
     admissions.set(html, admission);
   }
   if ("error" in admission) throw new Error(admission.error);
@@ -449,9 +475,17 @@ function check(html: string): { fragment: string } {
   // string can't hide what the cut-out fragment does.
   const fragment = extractFragment(html);
   let findings = scanGuestBody(fragment);
-  if (fragment !== html && findings.limit === undefined && (findings.embed === undefined || findings.url === undefined)) {
+  if (
+    fragment !== html &&
+    findings.limit === undefined &&
+    (findings.embed === undefined || findings.url === undefined)
+  ) {
     const written = scanGuestBody(html);
-    findings = { limit: written.limit, embed: findings.embed ?? written.embed, url: findings.url ?? written.url };
+    findings = {
+      limit: written.limit,
+      embed: findings.embed ?? written.embed,
+      url: findings.url ?? written.url,
+    };
   }
   const { embed, url, limit } = findings;
   if (limit !== undefined) {
@@ -479,7 +513,10 @@ export function validateGenerativeUiHtml(html: string): Buffer {
 }
 
 /** The visual's title, or an error naming the tool that was called. */
-export function requireGenerativeUiTitle(value: unknown, toolName: "render_artifact" | "render_ui" = "render_artifact"): string {
+export function requireGenerativeUiTitle(
+  value: unknown,
+  toolName: "render_artifact" | "render_ui" = "render_artifact",
+): string {
   if (!isHtmlArtifactTitle(value)) {
     throw new Error(`${toolName} requires a 1–120 character title without control characters.`);
   }
@@ -534,7 +571,10 @@ function stripTags(html: string, pattern: RegExp): string {
 
 const INLINE_HEAD_TAG = /<(style|script)\b/giu;
 const SRC_ATTRIBUTE = /\bsrc\s*=/giu;
-const INLINE_CLOSE: Readonly<Record<string, RegExp>> = { style: /<\/style>/giu, script: /<\/script>/giu };
+const INLINE_CLOSE: Readonly<Record<string, RegExp>> = {
+  style: /<\/style>/giu,
+  script: /<\/script>/giu,
+};
 
 /** The head's inline `<style>` and `<script>` elements (no `src`), in order. */
 function extractHeadInline(html: string): string {
@@ -562,7 +602,8 @@ function extractHeadInline(html: string): string {
       const tagText = head.slice(at, tagEnd);
       lastSrc = -1;
       SRC_ATTRIBUTE.lastIndex = 0;
-      for (let src = SRC_ATTRIBUTE.exec(tagText); src; src = SRC_ATTRIBUTE.exec(tagText)) lastSrc = at + src.index;
+      for (let src = SRC_ATTRIBUTE.exec(tagText); src; src = SRC_ATTRIBUTE.exec(tagText))
+        lastSrc = at + src.index;
     }
     if (lastSrc > at + name.length) continue;
     const closeAt = searchFrom(head, INLINE_CLOSE[name]!, tagEnd + 1);
@@ -721,7 +762,9 @@ export function inlineGenerativeUiHostLibraries(
   let inlined = guestDocument.replace(GENERATIVE_UI_GUEST_CSP, GENERATIVE_UI_EXPORT_CSP);
   for (const name of GENERATIVE_UI_HOST_LIBS) {
     const href = `${GENERATIVE_UI_PROTOCOL_SCHEME}://${name}`;
-    const tag = name.endsWith(".css") ? `<link rel="stylesheet" href="${href}">` : `<script src="${href}"></script>`;
+    const tag = name.endsWith(".css")
+      ? `<link rel="stylesheet" href="${href}">`
+      : `<script src="${href}"></script>`;
     if (!include(name)) {
       inlined = inlined.replace(tag, "");
       continue;
@@ -731,7 +774,9 @@ export function inlineGenerativeUiHostLibraries(
       throw new Error(`Export is missing host library ${name}.`);
     }
     // A function replacement, so `$&` and friends in library source stay literal.
-    inlined = inlined.replace(tag, () => (name.endsWith(".css") ? `<style>\n${source}\n</style>` : `<script>\n${source}\n</script>`));
+    inlined = inlined.replace(tag, () =>
+      name.endsWith(".css") ? `<style>\n${source}\n</style>` : `<script>\n${source}\n</script>`,
+    );
   }
   return inlined;
 }
@@ -742,7 +787,10 @@ export function generativeUiExportDocument(
   libraries: Readonly<Record<string, string>>,
   theme?: GenerativeUiThemeTokens,
 ): string {
-  const guestDocument = inlineGenerativeUiHostLibraries(wrapGenerativeUiHtml(html, title, theme), libraries);
+  const guestDocument = inlineGenerativeUiHostLibraries(
+    wrapGenerativeUiHtml(html, title, theme),
+    libraries,
+  );
   const safeTitle = escapeHtml(title);
   return `<!DOCTYPE html>
 <html lang="en">

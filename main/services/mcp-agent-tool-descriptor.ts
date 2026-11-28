@@ -28,8 +28,13 @@ export function mcpRemoteToolDescriptor(tool: {
 }
 
 /** Attach the tools/list entry to a built MCP agent tool (survives object spread, like its identity). */
-export function tagMcpAgentTool<T extends object>(agentTool: T, remote: Parameters<typeof mcpRemoteToolDescriptor>[0]): T {
-  return Object.assign(agentTool, { [MCP_TOOL_DESCRIPTOR]: Object.freeze(mcpRemoteToolDescriptor(remote)) });
+export function tagMcpAgentTool<T extends object>(
+  agentTool: T,
+  remote: Parameters<typeof mcpRemoteToolDescriptor>[0],
+): T {
+  return Object.assign(agentTool, {
+    [MCP_TOOL_DESCRIPTOR]: Object.freeze(mcpRemoteToolDescriptor(remote)),
+  });
 }
 
 /** The tools/list entry this agent tool was built from, when it is an MCP tool. */

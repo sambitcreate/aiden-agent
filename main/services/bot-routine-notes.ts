@@ -42,7 +42,10 @@ export function createKeyedSerial() {
   return function serial<T>(key: string, action: () => Promise<T>): Promise<T> {
     const previous = tails.get(key) ?? Promise.resolve();
     const run = previous.then(action, action);
-    const tail = run.then(() => undefined, () => undefined);
+    const tail = run.then(
+      () => undefined,
+      () => undefined,
+    );
     tails.set(key, tail);
     void tail.then(() => {
       if (tails.get(key) === tail) tails.delete(key);
@@ -59,11 +62,21 @@ export function botSessionDirectory(profileDir: string, botId: string): string {
 function isNote(value: unknown): value is BotRoutineNote {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
   const note = value as Record<string, unknown>;
-  return typeof note.value === "string" && typeof note.updatedAt === "number" && Number.isFinite(note.updatedAt);
+  return (
+    typeof note.value === "string" &&
+    typeof note.updatedAt === "number" &&
+    Number.isFinite(note.updatedAt)
+  );
 }
 
 function validKey(key: unknown): key is string {
-  return typeof key === "string" && key.trim() === key && key.length > 0 && [...key].length <= BOT_ROUTINE_NOTES_LIMITS.keyChars && !/[\r\n]/u.test(key);
+  return (
+    typeof key === "string" &&
+    key.trim() === key &&
+    key.length > 0 &&
+    [...key].length <= BOT_ROUTINE_NOTES_LIMITS.keyChars &&
+    !/[\r\n]/u.test(key)
+  );
 }
 
 /** Every routine's notes; unreadable or malformed content reads as no notes. */
@@ -80,7 +93,12 @@ function parseFile(text: string): Record<string, BotRoutineNotes> {
     if (!notes || typeof notes !== "object" || Array.isArray(notes)) continue;
     const kept: BotRoutineNotes = {};
     for (const [key, note] of Object.entries(notes as Record<string, unknown>)) {
-      if (validKey(key) && isNote(note) && [...note.value].length <= BOT_ROUTINE_NOTES_LIMITS.valueChars) kept[key] = note;
+      if (
+        validKey(key) &&
+        isNote(note) &&
+        [...note.value].length <= BOT_ROUTINE_NOTES_LIMITS.valueChars
+      )
+        kept[key] = note;
     }
     if (Object.keys(kept).length > 0) routines[taskId] = kept;
   }
@@ -89,7 +107,8 @@ function parseFile(text: string): Record<string, BotRoutineNotes> {
 
 function totalBytes(notes: BotRoutineNotes): number {
   let total = 0;
-  for (const [key, note] of Object.entries(notes)) total += Buffer.byteLength(key) + Buffer.byteLength(note.value);
+  for (const [key, note] of Object.entries(notes))
+    total += Buffer.byteLength(key) + Buffer.byteLength(note.value);
   return total;
 }
 
@@ -109,7 +128,8 @@ export interface BotRoutineNotesStoreOptions {
 export function createBotRoutineNotesStore(options: BotRoutineNotesStoreOptions) {
   const now = options.now ?? Date.now;
   const serial = createKeyedSerial();
-  const fileOf = (botId: string) => path.join(botSessionDirectory(options.profileDir(), botId), BOT_ROUTINE_NOTES_FILE);
+  const fileOf = (botId: string) =>
+    path.join(botSessionDirectory(options.profileDir(), botId), BOT_ROUTINE_NOTES_FILE);
 
   async function load(botId: string): Promise<Record<string, BotRoutineNotes>> {
     try {
@@ -134,18 +154,36 @@ export function createBotRoutineNotesStore(options: BotRoutineNotesStoreOptions)
     },
 
     /** Set one note. A write over a cap changes nothing and returns `notes_full`. */
-    set(botId: string, taskId: string, key: unknown, value: unknown): Promise<BotRoutineNotesWriteResult> {
+    set(
+      botId: string,
+      taskId: string,
+      key: unknown,
+      value: unknown,
+    ): Promise<BotRoutineNotesWriteResult> {
       return serial(botId, async () => {
         const routines = await load(botId);
         const current = routines[taskId] ?? {};
         if (!validKey(key)) {
-          return { ok: false, code: "invalid", error: `A note key is 1 to ${BOT_ROUTINE_NOTES_LIMITS.keyChars} characters on one line.`, notes: current };
+          return {
+            ok: false,
+            code: "invalid",
+            error: `A note key is 1 to ${BOT_ROUTINE_NOTES_LIMITS.keyChars} characters on one line.`,
+            notes: current,
+          };
         }
         if (typeof value !== "string" || [...value].length > BOT_ROUTINE_NOTES_LIMITS.valueChars) {
-          return { ok: false, code: "invalid", error: `A note value is at most ${BOT_ROUTINE_NOTES_LIMITS.valueChars} characters.`, notes: current };
+          return {
+            ok: false,
+            code: "invalid",
+            error: `A note value is at most ${BOT_ROUTINE_NOTES_LIMITS.valueChars} characters.`,
+            notes: current,
+          };
         }
         const next: BotRoutineNotes = { ...current, [key]: { value, updatedAt: now() } };
-        if (Object.keys(next).length > BOT_ROUTINE_NOTES_LIMITS.keys || totalBytes(next) > BOT_ROUTINE_NOTES_LIMITS.totalBytes) {
+        if (
+          Object.keys(next).length > BOT_ROUTINE_NOTES_LIMITS.keys ||
+          totalBytes(next) > BOT_ROUTINE_NOTES_LIMITS.totalBytes
+        ) {
           return {
             ok: false,
             code: "notes_full",
@@ -206,7 +244,7 @@ export function createRoutineNotesTool(options: {
     name: ROUTINE_NOTES_TOOL_NAME,
     label: "Routine notes",
     description:
-      "Keep short notes for this routine's next run, like what you already reported. They appear at the top of the routine's message next time. Only available while a routine runs. action \"set\" needs key and value; \"delete\" needs key.",
+      'Keep short notes for this routine\'s next run, like what you already reported. They appear at the top of the routine\'s message next time. Only available while a routine runs. action "set" needs key and value; "delete" needs key.',
     parameters: Type.Object(
       {
         action: Type.Union([Type.Literal("set"), Type.Literal("delete")]),
@@ -219,16 +257,31 @@ export function createRoutineNotesTool(options: {
       const params = (rawParams ?? {}) as { action?: unknown; key?: unknown; value?: unknown };
       const taskId = await options.taskId();
       if (taskId === undefined) {
-        return json({ ok: false, code: "unavailable", error: "Routine notes are only available while a routine runs." });
+        return json({
+          ok: false,
+          code: "unavailable",
+          error: "Routine notes are only available while a routine runs.",
+        });
       }
       const outcome =
         params.action === "set" && typeof params.value === "string"
           ? await options.notes.set(options.botId, taskId, params.key, params.value)
           : params.action === "delete" && params.value === undefined
             ? await options.notes.delete(options.botId, taskId, params.key)
-            : ({ ok: false, code: "invalid", error: "Use set with key and value, or delete with key.", notes: {} } as const);
-      const notes = Object.fromEntries(Object.entries(outcome.notes).map(([key, note]) => [key, note.value]));
-      return json(outcome.ok ? { ok: true, notes } : { ok: false, code: outcome.code, error: outcome.error, notes });
+            : ({
+                ok: false,
+                code: "invalid",
+                error: "Use set with key and value, or delete with key.",
+                notes: {},
+              } as const);
+      const notes = Object.fromEntries(
+        Object.entries(outcome.notes).map(([key, note]) => [key, note.value]),
+      );
+      return json(
+        outcome.ok
+          ? { ok: true, notes }
+          : { ok: false, code: outcome.code, error: outcome.error, notes },
+      );
     },
   };
 }

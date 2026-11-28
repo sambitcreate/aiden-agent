@@ -849,7 +849,9 @@ test("models.dev cost and canonical id are display-only metadata on the matched 
     resolveRuntimeLimits(
       parseModelCatalog({
         openai: {
-          models: { "gpt-priced": { name: "GPT Priced", limit: { context: 200_000, output: 32_000 } } },
+          models: {
+            "gpt-priced": { name: "GPT Priced", limit: { context: 200_000, output: 32_000 } },
+          },
         },
       }),
       "openai",
@@ -1141,14 +1143,8 @@ test("catalog non-chat types survive a local provider's generic LLM classificati
     },
   };
 
-  assert.equal(
-    resolveModelInfo(catalog, provider, "opaque-embedding").modelType,
-    "embedding",
-  );
-  assert.equal(
-    resolveModelInfo(catalog, provider, "voyage/rerank-2.5-lite").modelType,
-    "reranker",
-  );
+  assert.equal(resolveModelInfo(catalog, provider, "opaque-embedding").modelType, "embedding");
+  assert.equal(resolveModelInfo(catalog, provider, "voyage/rerank-2.5-lite").modelType, "reranker");
 });
 
 test("runtime metadata stays offline and only models.dev data is packaged", async () => {

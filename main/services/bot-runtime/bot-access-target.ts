@@ -13,7 +13,10 @@ import {
 import { withoutBotHandoffControls } from "../../../renderer/shared/bot-handoffs.js";
 
 /** Whole app-owned directories, shared by target validation and temporary file access. */
-export function botAccessPrivateRoots(userData: string, configDirectory: string): readonly string[] {
+export function botAccessPrivateRoots(
+  userData: string,
+  configDirectory: string,
+): readonly string[] {
   return [path.resolve(userData), path.resolve(configDirectory)];
 }
 
@@ -46,19 +49,24 @@ export interface BotAccessTargetDeps {
     stat(p: string): Promise<{ dev: bigint; ino: bigint; isDirectory(): boolean }>;
   };
 }
-type AccessInventoryRoot = Pick<AidenRemoteApprovedRoot, "id" | "folderPath"> & Partial<Pick<AidenRemoteApprovedRoot, "device" | "inode">>;
+type AccessInventoryRoot = Pick<AidenRemoteApprovedRoot, "id" | "folderPath"> &
+  Partial<Pick<AidenRemoteApprovedRoot, "device" | "inode">>;
 export function botAccessRootInventoryRevision(
   roots: readonly AccessInventoryRoot[],
   targetRoot: string,
 ): string {
   return createHash("sha256")
     .update(
-      JSON.stringify(
-        [targetRoot, roots
-          .filter(({ folderPath }) => isPathInside(folderPath, targetRoot) || isPathInside(targetRoot, folderPath))
+      JSON.stringify([
+        targetRoot,
+        roots
+          .filter(
+            ({ folderPath }) =>
+              isPathInside(folderPath, targetRoot) || isPathInside(targetRoot, folderPath),
+          )
           .map(({ id, folderPath, device, inode }) => [id, folderPath, device, inode])
-          .sort((a, b) => (a[0]! < b[0]! ? -1 : a[0]! > b[0]! ? 1 : 0))],
-      ),
+          .sort((a, b) => (a[0]! < b[0]! ? -1 : a[0]! > b[0]! ? 1 : 0)),
+      ]),
     )
     .digest("hex");
 }
@@ -99,7 +107,8 @@ export async function resolveBotAccessTarget(
   for (const privateRoot of deps.privateRoots()) {
     // Keep the lexical guard even when a private directory has not been provisioned yet.
     const canonical = await filesystem.realpath(privateRoot).catch(() => path.resolve(privateRoot));
-    if (isPathInside(canonical, root) || (root !== realHome && isPathInside(root, canonical))) return { kind: "refused", reason: "private" };
+    if (isPathInside(canonical, root) || (root !== realHome && isPathInside(root, canonical)))
+      return { kind: "refused", reason: "private" };
   }
   const roots = await deps.approvedRoots();
   let always: BotAccessAlways = { kind: "new" };

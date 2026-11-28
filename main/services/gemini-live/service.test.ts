@@ -186,7 +186,6 @@ function fakeDisplayBinding(
   };
 }
 
-
 test("explicit acceptance recorder corroborates ready, provider audio, and Stop teardown", async () => {
   const server = new FakeGeminiLiveServer();
   const evidence: string[] = [];
@@ -424,9 +423,7 @@ test("a Computer Use result produced during transport rotation fails the session
   });
   server.latest.emit({
     toolCall: {
-      functionCalls: [
-        { id: "rotating-call", name: "computer_use", args: { action: "list_apps" } },
-      ],
+      functionCalls: [{ id: "rotating-call", name: "computer_use", args: { action: "list_apps" } }],
     },
   });
   await new Promise((resolve) => setImmediate(resolve));
@@ -953,10 +950,7 @@ test("microphone PCM is admitted only for the current consenting exact-document 
   );
   (
     subject.service as unknown as {
-      handleProtocolEvent(
-        session: typeof owned,
-        event: { type: "state"; state: "open" },
-      ): void;
+      handleProtocolEvent(session: typeof owned, event: { type: "state"; state: "open" }): void;
     }
   ).handleProtocolEvent(owned, { type: "state", state: "open" });
   assert.equal(received.length, beforeResumptionBuffer + 1);
@@ -995,7 +989,11 @@ test("Computer Use is absent unless the Live start explicitly requests it", asyn
 test("screen intent stays fail-closed without the screen gate or a bound document", async () => {
   const subject = serviceHarness();
   await assert.rejects(
-    subject.service.start(new FakeOwner(33, "33:1:doc"), { microphone: true, screen: true, computerUseAuthorization: null }),
+    subject.service.start(new FakeOwner(33, "33:1:doc"), {
+      microphone: true,
+      screen: true,
+      computerUseAuthorization: null,
+    }),
     (error: unknown) =>
       error instanceof GeminiLiveStartError && error.reason === "live_start_failed",
   );
@@ -1005,7 +1003,11 @@ test("screen intent stays fail-closed without the screen gate or a bound documen
   // intent is still rejected.
   const gated = serviceHarness(undefined, { screenShareEnabled: () => true });
   await assert.rejects(
-    gated.service.start(new FakeOwner(34, "34:1:doc"), { microphone: true, screen: true, computerUseAuthorization: null }),
+    gated.service.start(new FakeOwner(34, "34:1:doc"), {
+      microphone: true,
+      screen: true,
+      computerUseAuthorization: null,
+    }),
     (error: unknown) =>
       error instanceof GeminiLiveStartError && error.reason === "live_start_failed",
   );
@@ -1031,9 +1033,7 @@ test("screen frames are admitted only for a bound, gated, open session", async (
   const newest = new Uint8Array([0xff, 0xd8, 0x02, 0xff, 0xd9]);
   const received = subject.servers[0]!.latest.received;
   const videoInputs = () =>
-    received.filter(
-      (message) => message.type === "realtime_input" && "video" in message.value,
-    );
+    received.filter((message) => message.type === "realtime_input" && "video" in message.value);
 
   // Latest-frame-wins buffering across a controlled resumption, before any
   // frame has been sent, so the protocol's 1 FPS limiter sends it at once.
@@ -1044,19 +1044,13 @@ test("screen frames are admitted only for a bound, gated, open session", async (
   assert.equal(videoInputs().length, 0, "resumption buffers instead of sending");
   (
     subject.service as unknown as {
-      handleProtocolEvent(
-        session: typeof owned,
-        event: { type: "state"; state: "open" },
-      ): void;
+      handleProtocolEvent(session: typeof owned, event: { type: "state"; state: "open" }): void;
     }
   ).handleProtocolEvent(owned, { type: "state", state: "open" });
   const flushed = videoInputs();
   assert.equal(flushed.length, 1, "only one buffered frame flushes on reopen");
   assert.deepEqual(
-    Buffer.from(
-      (flushed[0]!.value as { video: { data: string } }).video.data,
-      "base64",
-    ),
+    Buffer.from((flushed[0]!.value as { video: { data: string } }).video.data, "base64"),
     Buffer.from(newest),
     "the newest buffered frame wins",
   );
@@ -1072,7 +1066,11 @@ test("screen frames are admitted only for a bound, gated, open session", async (
   subject.service.stop(owner);
   assert.deepEqual(subject.service.displayMediaBindings(), []);
   await assert.rejects(
-    subject.service.start(owner, { microphone: false, screen: true, computerUseAuthorization: null }),
+    subject.service.start(owner, {
+      microphone: false,
+      screen: true,
+      computerUseAuthorization: null,
+    }),
     (error: unknown) =>
       error instanceof GeminiLiveStartError && error.reason === "live_start_failed",
   );
@@ -1081,12 +1079,18 @@ test("screen frames are admitted only for a bound, gated, open session", async (
 test("a display binding dies with its document and never survives shutdown", async () => {
   const subject = serviceHarness(undefined, { screenShareEnabled: () => true });
   const owner = new FakeOwner(37, "37:1:doc");
-  assert.equal(subject.service.bindDisplayMedia(owner, fakeDisplayBinding(owner)), `binding-${owner.documentId}`);
+  assert.equal(
+    subject.service.bindDisplayMedia(owner, fakeDisplayBinding(owner)),
+    `binding-${owner.documentId}`,
+  );
   owner.navigate();
   assert.deepEqual(subject.service.displayMediaBindings(), []);
 
   const next = new FakeOwner(38, "38:1:doc");
-  assert.equal(subject.service.bindDisplayMedia(next, fakeDisplayBinding(next)), `binding-${next.documentId}`);
+  assert.equal(
+    subject.service.bindDisplayMedia(next, fakeDisplayBinding(next)),
+    `binding-${next.documentId}`,
+  );
   subject.service.shutdown();
   assert.deepEqual(subject.service.displayMediaBindings(), []);
   assert.equal(
@@ -1110,7 +1114,9 @@ test("an older display release cannot revoke its replacement binding", () => {
 test("a Live session that became available counts once, and one with no credential counts nothing", async (t) => {
   const sent = captureAnalyticsEvents(t);
   const missing = serviceHarness(null);
-  await missing.service.start(new FakeOwner(2, "2:1:aiden-live-missing"), intent).catch(() => undefined);
+  await missing.service
+    .start(new FakeOwner(2, "2:1:aiden-live-missing"), intent)
+    .catch(() => undefined);
   assert.deepEqual(sent, []);
 
   const { service } = serviceHarness();
@@ -1133,8 +1139,13 @@ test("a Live tool runs in the window and its result goes back to Live for that c
   const owner = new FakeOwner(51, "51:1:live-chat-tools");
   const session = await subject.service.start(owner, intent);
   const server = subject.servers[0]!;
-  const tools = server.latest.params.config?.tools as Array<{ functionDeclarations?: Array<{ name?: string }> }>;
-  assert.deepEqual(tools.flatMap((tool) => tool.functionDeclarations ?? []).map((d) => d.name), ["read_open_chat"]);
+  const tools = server.latest.params.config?.tools as Array<{
+    functionDeclarations?: Array<{ name?: string }>;
+  }>;
+  assert.deepEqual(
+    tools.flatMap((tool) => tool.functionDeclarations ?? []).map((d) => d.name),
+    ["read_open_chat"],
+  );
 
   server.latest.emit({
     toolCall: { functionCalls: [{ id: "call-1", name: "read_open_chat", args: { limit: 5 } }] },
@@ -1146,10 +1157,30 @@ test("a Live tool runs in the window and its result goes back to Live for that c
   assert.deepEqual(request.args, { limit: 5 });
 
   // Another document or another session cannot answer it.
-  assert.equal(subject.service.rendererToolResult(new FakeOwner(52, "52:1:other"), session.sessionId!, request.requestId, { ok: true }), false);
-  assert.equal(subject.service.rendererToolResult(owner, "session-other", request.requestId, { ok: true }), false);
-  assert.equal(subject.service.rendererToolResult(owner, session.sessionId!, request.requestId, { ok: true, title: "Fix login" }), true);
-  assert.equal(subject.service.rendererToolResult(owner, session.sessionId!, request.requestId, { ok: true }), false);
+  assert.equal(
+    subject.service.rendererToolResult(
+      new FakeOwner(52, "52:1:other"),
+      session.sessionId!,
+      request.requestId,
+      { ok: true },
+    ),
+    false,
+  );
+  assert.equal(
+    subject.service.rendererToolResult(owner, "session-other", request.requestId, { ok: true }),
+    false,
+  );
+  assert.equal(
+    subject.service.rendererToolResult(owner, session.sessionId!, request.requestId, {
+      ok: true,
+      title: "Fix login",
+    }),
+    true,
+  );
+  assert.equal(
+    subject.service.rendererToolResult(owner, session.sessionId!, request.requestId, { ok: true }),
+    false,
+  );
   await new Promise((resolve) => setImmediate(resolve));
   const reply = server.latest.received.find((message) => message.type === "tool_response");
   assert.ok(reply && reply.type === "tool_response");
@@ -1169,7 +1200,9 @@ test("Live notes are bounded, spaced out, and a burst beyond the queue is refuse
   const server = subject.servers[0]!;
   const notes = () =>
     server.latest.received
-      .filter((message) => message.type === "realtime_input" && typeof message.value.text === "string")
+      .filter(
+        (message) => message.type === "realtime_input" && typeof message.value.text === "string",
+      )
       .map((message) => (message.value as { text: string }).text);
 
   assert.equal(subject.service.sendNote(owner, session.sessionId!, "   "), false);
@@ -1186,7 +1219,12 @@ test("Live notes are bounded, spaced out, and a burst beyond the queue is refuse
   t.mock.timers.tick(2_000);
   assert.equal(notes().length, 2);
   for (let step = 0; step < 3; step += 1) t.mock.timers.tick(2_000);
-  assert.deepEqual(notes().slice(1).map((note) => note.replace(/^\[[^\]]+\] /u, "")), ["two", "three", "four", "five"]);
+  assert.deepEqual(
+    notes()
+      .slice(1)
+      .map((note) => note.replace(/^\[[^\]]+\] /u, "")),
+    ["two", "three", "four", "five"],
+  );
   subject.service.stop(owner);
 });
 
@@ -1197,11 +1235,17 @@ test("a note sent while Live resumes waits and goes out once the session reopens
   const received = subject.servers[0]!.latest.received;
   const notes = () =>
     received
-      .filter((message) => message.type === "realtime_input" && typeof message.value.text === "string")
+      .filter(
+        (message) => message.type === "realtime_input" && typeof message.value.text === "string",
+      )
       .map((message) => (message.value as { text: string }).text);
   const owned = subject.service.sessions.get(owner)!;
   owned.state = "resuming";
-  assert.equal(subject.service.sendNote(owner, session.sessionId!, "Tests passed."), true, "accepted while resuming");
+  assert.equal(
+    subject.service.sendNote(owner, session.sessionId!, "Tests passed."),
+    true,
+    "accepted while resuming",
+  );
   assert.deepEqual(notes(), [], "nothing is sent on a rotating transport");
   (
     subject.service as unknown as {
@@ -1210,7 +1254,11 @@ test("a note sent while Live resumes waits and goes out once the session reopens
   ).handleProtocolEvent(owned, { type: "state", state: "open" });
   assert.deepEqual(notes(), ["[Aiden update, not spoken by the user] Tests passed."]);
   owned.state = "closing";
-  assert.equal(subject.service.sendNote(owner, session.sessionId!, "Late."), false, "a closing session takes no notes");
+  assert.equal(
+    subject.service.sendNote(owner, session.sessionId!, "Late."),
+    false,
+    "a closing session takes no notes",
+  );
   owned.state = "open";
   subject.service.stop(owner);
 });
@@ -1223,10 +1271,13 @@ test("a delivery-awaited note settles when it is sent, not when it is queued beh
   const server = subject.servers[0]!;
   const notes = () =>
     server.latest.received
-      .filter((message) => message.type === "realtime_input" && typeof message.value.text === "string")
+      .filter(
+        (message) => message.type === "realtime_input" && typeof message.value.text === "string",
+      )
       .map((message) => (message.value as { text: string }).text.replace(/^\[[^\]]+\] /u, ""));
   const settled: Array<[string, boolean]> = [];
-  const track = (label: string, delivery: Promise<boolean>) => void delivery.then((value) => settled.push([label, value]));
+  const track = (label: string, delivery: Promise<boolean>) =>
+    void delivery.then((value) => settled.push([label, value]));
 
   track("first", subject.service.deliverNote(owner, session.sessionId!, "Tests passed."));
   await Promise.resolve();
@@ -1252,7 +1303,11 @@ test("a delivery-awaited note settles when it is sent, not when it is queued beh
   assert.deepEqual(settled[settled.length - 1], ["refused", false]);
   subject.service.stop(owner);
   await Promise.resolve();
-  assert.deepEqual(settled[settled.length - 1], ["cleared", false], "a note cleared with the session is reported lost");
+  assert.deepEqual(
+    settled[settled.length - 1],
+    ["cleared", false],
+    "a note cleared with the session is reported lost",
+  );
   assert.ok(!notes().includes("Deploy?"));
 });
 
@@ -1269,7 +1324,9 @@ test("a delivery-awaited note held while Live resumes settles once the session r
     ).handleProtocolEvent(owned, { type: "state", state: "open" });
   let delivered: boolean | null = null;
   owned.state = "resuming";
-  void subject.service.deliverNote(owner, session.sessionId!, "Run npm test?").then((value) => (delivered = value));
+  void subject.service
+    .deliverNote(owner, session.sessionId!, "Run npm test?")
+    .then((value) => (delivered = value));
   await new Promise((resolve) => setImmediate(resolve));
   assert.equal(delivered, null, "accepted into the queue is not delivered");
   reopen();
@@ -1280,7 +1337,9 @@ test("a delivery-awaited note held while Live resumes settles once the session r
   // Past the two-second spacing, so the reopened session sends at once.
   owned.lastNoteAt = Number.NEGATIVE_INFINITY;
   owned.state = "resuming";
-  void subject.service.deliverNote(owner, session.sessionId!, "Deploy?").then((value) => (failed = value));
+  void subject.service
+    .deliverNote(owner, session.sessionId!, "Deploy?")
+    .then((value) => (failed = value));
   const protocol = owned.protocol!;
   const sendText = protocol.sendText.bind(protocol);
   protocol.sendText = () => {
@@ -1330,13 +1389,22 @@ test("saying goodbye lets the window end Live, and talking over the goodbye canc
   const owner = new FakeOwner(63, "63:1:live-end-session");
   const session = await subject.service.start(owner, intent);
   const server = subject.servers[0]!;
-  const tools = server.latest.params.config?.tools as Array<{ functionDeclarations?: Array<{ name?: string }> }>;
-  assert.ok(tools.flatMap((tool) => tool.functionDeclarations ?? []).some((d) => d.name === "end_session"));
-  assert.match(String(server.latest.params.config?.systemInstruction), /Call end_session only when the user clearly wants to end/u);
+  const tools = server.latest.params.config?.tools as Array<{
+    functionDeclarations?: Array<{ name?: string }>;
+  }>;
+  assert.ok(
+    tools.flatMap((tool) => tool.functionDeclarations ?? []).some((d) => d.name === "end_session"),
+  );
+  assert.match(
+    String(server.latest.params.config?.systemInstruction),
+    /Call end_session only when the user clearly wants to end/u,
+  );
 
   // Gemini's arguments never reach the window.
   server.latest.emit({
-    toolCall: { functionCalls: [{ id: "bye-1", name: "end_session", args: { reason: "<script>" } }] },
+    toolCall: {
+      functionCalls: [{ id: "bye-1", name: "end_session", args: { reason: "<script>" } }],
+    },
   });
   await new Promise((resolve) => setImmediate(resolve));
   const first = owner.events.find((event) => event.type === "tool_request");
@@ -1353,7 +1421,10 @@ test("saying goodbye lets the window end Live, and talking over the goodbye canc
   const flushIndex = owner.events.findIndex((event) => event.type === "playback_flush");
   assert.ok(cancelIndex >= 0, "the pending end request is cancelled");
   assert.ok(flushIndex > cancelIndex, "cancellation reaches the window before the flush");
-  assert.equal(subject.service.rendererToolResult(owner, session.sessionId!, first.requestId, { ok: true }), false);
+  assert.equal(
+    subject.service.rendererToolResult(owner, session.sessionId!, first.requestId, { ok: true }),
+    false,
+  );
 
   // A later goodbye goes through when the window answers.
   server.latest.emit({
@@ -1363,6 +1434,12 @@ test("saying goodbye lets the window end Live, and talking over the goodbye canc
   const requests = owner.events.filter((event) => event.type === "tool_request");
   const second = requests[requests.length - 1];
   assert.ok(second && second.type === "tool_request" && second.requestId !== first.requestId);
-  assert.equal(subject.service.rendererToolResult(owner, session.sessionId!, second.requestId, { ok: true, ended: true }), true);
+  assert.equal(
+    subject.service.rendererToolResult(owner, session.sessionId!, second.requestId, {
+      ok: true,
+      ended: true,
+    }),
+    true,
+  );
   await subject.service.stop(owner);
 });

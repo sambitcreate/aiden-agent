@@ -20,7 +20,9 @@ import { rovingItems } from "./roving-rows";
 const SELECTABLE = "[data-roving-item][data-select-id]";
 
 function selectableOrder(container: HTMLElement): string[] {
-  return rovingItems(container).flatMap((item) => (item.dataset.selectId ? [item.dataset.selectId] : []));
+  return rovingItems(container).flatMap((item) =>
+    item.dataset.selectId ? [item.dataset.selectId] : [],
+  );
 }
 
 export interface RowSelection {
@@ -60,8 +62,11 @@ export function useRowSelection(
       if (!item) return;
       const id = item.dataset.selectId!;
       if (event.shiftKey) {
-        const open = container.querySelector<HTMLElement>(`${SELECTABLE}[aria-current="page"]`)?.dataset.selectId;
-        setSelection((current) => extendSelection(current, selectableOrder(container), id, open ?? id));
+        const open = container.querySelector<HTMLElement>(`${SELECTABLE}[aria-current="page"]`)
+          ?.dataset.selectId;
+        setSelection((current) =>
+          extendSelection(current, selectableOrder(container), id, open ?? id),
+        );
       } else if (mac ? event.metaKey : event.ctrlKey) {
         setSelection((current) => toggleSelection(current, id));
       } else {
@@ -82,7 +87,8 @@ export function useRowSelection(
       }
       if (!event.shiftKey || event.altKey || event.ctrlKey || event.metaKey) return;
       if (event.key !== "ArrowDown" && event.key !== "ArrowUp") return;
-      if (!(event.target instanceof HTMLElement) || !event.target.matches("[data-roving-item]")) return;
+      if (!(event.target instanceof HTMLElement) || !event.target.matches("[data-roving-item]"))
+        return;
       const items = rovingItems(container);
       const index = items.indexOf(event.target);
       if (index < 0) return;

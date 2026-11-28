@@ -3,16 +3,20 @@ import { isDeepStrictEqual } from "node:util";
 import { constants as fsConstants } from "node:fs";
 import { chmod, lstat, open, readFile, readdir, rename, unlink } from "node:fs/promises";
 import path from "node:path";
-import {
-  type AgentMessage,
-} from "@earendil-works/pi-agent-core";
+import { type AgentMessage } from "@earendil-works/pi-agent-core";
 import { cleanupSessionResources, type Api, type Model } from "@earendil-works/pi-ai";
 import { ensureUserDataDir } from "./data-store.js";
 import { writeFileAtomic } from "./durable-fs.js";
 import { isDevelopmentRuntime } from "../runtime-mode-core.js";
 import { chatMessageToPiMessage } from "./generation-messages.js";
 import { isHookBlockedPrompt, withoutHookBlockedPrompts } from "./hook-blocked-prompt.js";
-import type { PiPersistentSessionMetadata, PiSessionMetadata, PiSessionPort, PiSessionEntry, PiEntryProjector } from "./pi-session-port.js";
+import type {
+  PiPersistentSessionMetadata,
+  PiSessionMetadata,
+  PiSessionPort,
+  PiSessionEntry,
+  PiEntryProjector,
+} from "./pi-session-port.js";
 import {
   createCurrentPiSessionRepository,
   type PiSessionRepositoryPort,
@@ -168,8 +172,8 @@ function currentJournalHeaderOwnsChat(headerLine: string, chatId: string): boole
       header.kind === "header" &&
       (header.version === 4 || (header.v === 4 && header.storageVersion === 1)) &&
       header.id === chatId &&
-      (header.v === 4 || (header.metadata?.kind === SESSION_METADATA_KIND &&
-      header.metadata.chatId === chatId))
+      (header.v === 4 ||
+        (header.metadata?.kind === SESSION_METADATA_KIND && header.metadata.chatId === chatId))
     );
   } catch {
     return false;
@@ -177,19 +181,30 @@ function currentJournalHeaderOwnsChat(headerLine: string, chatId: string): boole
 }
 
 /** Read a stable descriptor without decoding or retaining the private journal body. */
-async function inspectJournalHistory(filePath: string): Promise<{ chatId: string; hasBody: boolean }> {
-  const handle = await open(filePath, fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW | fsConstants.O_NONBLOCK);
+async function inspectJournalHistory(
+  filePath: string,
+): Promise<{ chatId: string; hasBody: boolean }> {
+  const handle = await open(
+    filePath,
+    fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW | fsConstants.O_NONBLOCK,
+  );
   try {
-    if (!(await handle.stat()).isFile()) throw new Error("Pi journal history is not a regular file.");
+    if (!(await handle.stat()).isFile())
+      throw new Error("Pi journal history is not a regular file.");
     const buffer = Buffer.alloc(JOURNAL_HEADER_SCAN_BYTES);
     const { bytesRead } = await handle.read(buffer, 0, buffer.length, 0);
     const bytes = buffer.subarray(0, bytesRead);
     const newline = bytes.indexOf(10);
     const prefix = decodeUtf8(newline >= 0 ? bytes.subarray(0, newline) : bytes);
     const header: unknown = JSON.parse(prefix);
-    const id = header && typeof header === "object" && !Array.isArray(header)
-      ? (header as { id?: unknown }).id : undefined;
-    if (typeof id !== "string" || !(journalHeaderOwnsChat(prefix, id) || currentJournalHeaderOwnsChat(prefix, id))) {
+    const id =
+      header && typeof header === "object" && !Array.isArray(header)
+        ? (header as { id?: unknown }).id
+        : undefined;
+    if (
+      typeof id !== "string" ||
+      !(journalHeaderOwnsChat(prefix, id) || currentJournalHeaderOwnsChat(prefix, id))
+    ) {
       throw new Error("Pi journal history contains an unreadable session header.");
     }
     const currentHeader = JSON.parse(prefix) as { v?: number; storageVersion?: number };
@@ -200,13 +215,18 @@ async function inspectJournalHistory(filePath: string): Promise<{ chatId: string
       let pending = Buffer.alloc(0);
       let position = newline + 1;
       const substantive = (line: Buffer): boolean => {
-        if (line.every((byte) => byte === 9 || byte === 10 || byte === 13 || byte === 32)) return false;
+        if (line.every((byte) => byte === 9 || byte === 10 || byte === 13 || byte === 32))
+          return false;
         let record: Record<string, unknown>;
-        try { record = JSON.parse(decodeUtf8(line)) as Record<string, unknown>; }
-        catch { return true; }
+        try {
+          record = JSON.parse(decodeUtf8(line)) as Record<string, unknown>;
+        } catch {
+          return true;
+        }
         if (!record || typeof record !== "object" || Array.isArray(record)) return true;
         if (record.kind !== "value" || record.op !== "set") return true;
-        if (record.namespace === "pi.branch.tip" && record.key === "main" && record.value === null) return false;
+        if (record.namespace === "pi.branch.tip" && record.key === "main" && record.value === null)
+          return false;
         if (record.namespace === "aiden" && record.key === "session-metadata") {
           const value = record.value as { kind?: unknown; chatId?: unknown } | undefined;
           return value?.kind !== SESSION_METADATA_KIND || value.chatId !== id;
@@ -215,7 +235,8 @@ async function inspectJournalHistory(filePath: string): Promise<{ chatId: string
       };
       while (true) {
         const next = await handle.read(buffer, 0, buffer.length, position);
-        if (next.bytesRead === 0) return { chatId: id, hasBody: pending.length > 0 && substantive(pending) };
+        if (next.bytesRead === 0)
+          return { chatId: id, hasBody: pending.length > 0 && substantive(pending) };
         position += next.bytesRead;
         const chunk = Buffer.concat([pending, buffer.subarray(0, next.bytesRead)]);
         let start = 0;
@@ -230,8 +251,10 @@ async function inspectJournalHistory(filePath: string): Promise<{ chatId: string
     }
     // Even a malformed body is private state worth preserving. Only an exact
     // validated header followed by ASCII JSON whitespace counts as empty.
-    const hasContent = (chunk: Buffer) => chunk.some((byte) => byte !== 9 && byte !== 10 && byte !== 13 && byte !== 32);
-    if (newline >= 0 && hasContent(bytes.subarray(newline + 1))) return { chatId: id, hasBody: true };
+    const hasContent = (chunk: Buffer) =>
+      chunk.some((byte) => byte !== 9 && byte !== 10 && byte !== 13 && byte !== 32);
+    if (newline >= 0 && hasContent(bytes.subarray(newline + 1)))
+      return { chatId: id, hasBody: true };
     let position = bytesRead;
     while (true) {
       const next = await handle.read(buffer, 0, buffer.length, position);
@@ -245,54 +268,135 @@ async function inspectJournalHistory(filePath: string): Promise<{ chatId: string
 }
 
 /** Only the exact scaffolding produced by a completed migration of an empty v3 journal is disposable. */
-async function isCompletedEmptyMigration(promotedPath: string, chatId: string, root: string): Promise<boolean> {
+async function isCompletedEmptyMigration(
+  promotedPath: string,
+  chatId: string,
+  root: string,
+): Promise<boolean> {
   const backupPath = `${promotedPath}.v3-backup`;
   const receiptPath = `${promotedPath}.migration-v1.json`;
   if (!path.resolve(promotedPath).startsWith(`${path.resolve(root)}${path.sep}`)) return false;
   try {
-    const receipt = parsePiSessionMigrationReceipt(JSON.parse(decodeUtf8(await readRegularFile(receiptPath, JOURNAL_HEADER_SCAN_BYTES))));
-    if (receipt.chatId !== chatId || receipt.validation !== "passed" ||
-        path.resolve(receipt.promotedPath) !== path.resolve(promotedPath) ||
-        path.resolve(receipt.backupPath) !== path.resolve(backupPath) ||
-        Object.values(receipt.counts).some((count) => count !== 0)) return false;
+    const receipt = parsePiSessionMigrationReceipt(
+      JSON.parse(decodeUtf8(await readRegularFile(receiptPath, JOURNAL_HEADER_SCAN_BYTES))),
+    );
+    if (
+      receipt.chatId !== chatId ||
+      receipt.validation !== "passed" ||
+      path.resolve(receipt.promotedPath) !== path.resolve(promotedPath) ||
+      path.resolve(receipt.backupPath) !== path.resolve(backupPath) ||
+      Object.values(receipt.counts).some((count) => count !== 0)
+    )
+      return false;
     const backup = await readRegularFile(backupPath, JOURNAL_HEADER_SCAN_BYTES);
     if (createHash("sha256").update(backup).digest("hex") !== receipt.sourceSha256) return false;
     const backupText = decodeUtf8(backup);
     if (backupText.split("\n").filter((line) => line.trim()).length !== 1) return false;
     const legacy = decodeLegacyPiSession(backupText);
-    if (legacy.header.id !== chatId || legacy.entries.length !== 0 || legacy.tornFinalLine ||
-        !journalHeaderOwnsChat(backupText.split("\n", 1)[0]!, chatId)) return false;
+    if (
+      legacy.header.id !== chatId ||
+      legacy.entries.length !== 0 ||
+      legacy.tornFinalLine ||
+      !journalHeaderOwnsChat(backupText.split("\n", 1)[0]!, chatId)
+    )
+      return false;
     const current = decodeUtf8(await readRegularFile(promotedPath, JOURNAL_HEADER_SCAN_BYTES));
-    const records: unknown[] = current.split("\n").filter((line) => line.trim()).map((line) => JSON.parse(line));
+    const records: unknown[] = current
+      .split("\n")
+      .filter((line) => line.trim())
+      .map((line) => JSON.parse(line));
     if (records.length !== 5 || !current.endsWith("\n")) return false;
     const [header, metadataValue, lane, startedValue, finishedValue] = records;
-    if (!startedValue || typeof startedValue !== "object" || !finishedValue || typeof finishedValue !== "object") return false;
-    const started = (startedValue as Record<string, unknown>).value as Record<string, unknown> | undefined;
-    const finished = (finishedValue as Record<string, unknown>).value as Record<string, unknown> | undefined;
+    if (
+      !startedValue ||
+      typeof startedValue !== "object" ||
+      !finishedValue ||
+      typeof finishedValue !== "object"
+    )
+      return false;
+    const started = (startedValue as Record<string, unknown>).value as
+      | Record<string, unknown>
+      | undefined;
+    const finished = (finishedValue as Record<string, unknown>).value as
+      | Record<string, unknown>
+      | undefined;
     if (!started || !finished) return false;
     const uuid = "[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}";
-    if (typeof started.id !== "string" || !new RegExp(`^migration-${uuid}$`, "u").test(started.id) ||
-        typeof finished.id !== "string" || !new RegExp(`^migration-finished-${uuid}$`, "u").test(finished.id) ||
-        !Number.isSafeInteger(started.timestamp) || Number(started.timestamp) < 0 ||
-        !Number.isSafeInteger(finished.timestamp) || Number(finished.timestamp) < Number(started.timestamp)) return false;
-    return isDeepStrictEqual(header, {
-      v: 4, kind: "header", id: chatId, storageVersion: 1, nextSeq: 5,
-      createdAt: Date.parse(legacy.header.timestamp), cwd: legacy.header.cwd,
-      ...(legacy.header.parentSession === undefined ? {} : { legacyParentSessionPath: legacy.header.parentSession }),
-    }) && isDeepStrictEqual(metadataValue, {
-      kind: "value", op: "set", seq: 1, namespace: "aiden", key: "session-metadata",
-      value: legacy.header.metadata,
-    }) && isDeepStrictEqual(lane, {
-      kind: "value", op: "set", seq: 2, namespace: "pi.branch.tip", key: "main", value: null,
-    }) && isDeepStrictEqual(startedValue, {
-      kind: "value", op: "set", seq: 3, namespace: "aiden.pi-legacy-record", key: started.id,
-      value: { kind: "record", seq: 2, id: started.id, lane: "main", type: "operation_started", timestamp: started.timestamp,
-        sourceLeafId: null, intent: { kind: "navigation", targetId: null, summarize: false } },
-    }) && isDeepStrictEqual(finishedValue, {
-      kind: "value", op: "set", seq: 4, namespace: "aiden.pi-legacy-record", key: finished.id,
-      value: { kind: "record", seq: 3, id: finished.id, lane: "main", type: "operation_finished", timestamp: finished.timestamp,
-        runId: started.id, outcome: "completed" },
-    });
+    if (
+      typeof started.id !== "string" ||
+      !new RegExp(`^migration-${uuid}$`, "u").test(started.id) ||
+      typeof finished.id !== "string" ||
+      !new RegExp(`^migration-finished-${uuid}$`, "u").test(finished.id) ||
+      !Number.isSafeInteger(started.timestamp) ||
+      Number(started.timestamp) < 0 ||
+      !Number.isSafeInteger(finished.timestamp) ||
+      Number(finished.timestamp) < Number(started.timestamp)
+    )
+      return false;
+    return (
+      isDeepStrictEqual(header, {
+        v: 4,
+        kind: "header",
+        id: chatId,
+        storageVersion: 1,
+        nextSeq: 5,
+        createdAt: Date.parse(legacy.header.timestamp),
+        cwd: legacy.header.cwd,
+        ...(legacy.header.parentSession === undefined
+          ? {}
+          : { legacyParentSessionPath: legacy.header.parentSession }),
+      }) &&
+      isDeepStrictEqual(metadataValue, {
+        kind: "value",
+        op: "set",
+        seq: 1,
+        namespace: "aiden",
+        key: "session-metadata",
+        value: legacy.header.metadata,
+      }) &&
+      isDeepStrictEqual(lane, {
+        kind: "value",
+        op: "set",
+        seq: 2,
+        namespace: "pi.branch.tip",
+        key: "main",
+        value: null,
+      }) &&
+      isDeepStrictEqual(startedValue, {
+        kind: "value",
+        op: "set",
+        seq: 3,
+        namespace: "aiden.pi-legacy-record",
+        key: started.id,
+        value: {
+          kind: "record",
+          seq: 2,
+          id: started.id,
+          lane: "main",
+          type: "operation_started",
+          timestamp: started.timestamp,
+          sourceLeafId: null,
+          intent: { kind: "navigation", targetId: null, summarize: false },
+        },
+      }) &&
+      isDeepStrictEqual(finishedValue, {
+        kind: "value",
+        op: "set",
+        seq: 4,
+        namespace: "aiden.pi-legacy-record",
+        key: finished.id,
+        value: {
+          kind: "record",
+          seq: 3,
+          id: finished.id,
+          lane: "main",
+          type: "operation_finished",
+          timestamp: finished.timestamp,
+          runId: started.id,
+          outcome: "completed",
+        },
+      })
+    );
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
     throw error;
@@ -307,7 +411,11 @@ const PI084_BACKUP_SUFFIX = ".jsonl.pi084-backup";
  * is itself the completed scaffolding of an empty v3 migration. Any other body
  * is private history.
  */
-async function isDisposablePi084Backup(backupPath: string, chatId: string, root: string): Promise<boolean> {
+async function isDisposablePi084Backup(
+  backupPath: string,
+  chatId: string,
+  root: string,
+): Promise<boolean> {
   const history = await inspectJournalHistory(backupPath);
   if (history.chatId !== chatId) return false;
   let backupText: string;
@@ -320,12 +428,21 @@ async function isDisposablePi084Backup(backupPath: string, chatId: string, root:
   // inspectJournalHistory also accepts v3 and current headers; this suffix is
   // only ever written for an owned Pi 0.84.4 journal.
   const header = parseOldPiV4Header(backupText.split("\n", 1)[0] ?? "");
-  if (header?.id !== chatId || header.metadata?.kind !== SESSION_METADATA_KIND || header.metadata.chatId !== chatId) return false;
+  if (
+    header?.id !== chatId ||
+    header.metadata?.kind !== SESSION_METADATA_KIND ||
+    header.metadata.chatId !== chatId
+  )
+    return false;
   if (!history.hasBody) return true;
   const promotedPath = backupPath.slice(0, -".pi084-backup".length);
   if (!(await isCompletedEmptyMigration(promotedPath, chatId, root))) return false;
   let converted: string;
-  try { converted = convertOldPiV4Journal(backupText).journal; } catch { return false; }
+  try {
+    converted = convertOldPiV4Journal(backupText).journal;
+  } catch {
+    return false;
+  }
   return converted === decodeUtf8(await readRegularFile(promotedPath, JOURNAL_HEADER_SCAN_BYTES));
 }
 
@@ -356,7 +473,9 @@ async function computePiJournalDirSignature(root: string): Promise<string> {
     }
     const entries = await readdir(current.abs, { withFileTypes: true });
     entries.sort((left, right) => (left.name < right.name ? -1 : left.name > right.name ? 1 : 0));
-    parts.push(`d:${current.rel}:${dirStat.dev}:${dirStat.ino}:${dirStat.mtimeMs}:${dirStat.ctimeMs}:${entries.length}`);
+    parts.push(
+      `d:${current.rel}:${dirStat.dev}:${dirStat.ino}:${dirStat.mtimeMs}:${dirStat.ctimeMs}:${entries.length}`,
+    );
     const fileEntries: Array<{ abs: string; rel: string }> = [];
     for (const entry of entries) {
       if (entry.isSymbolicLink()) {
@@ -376,14 +495,19 @@ async function computePiJournalDirSignature(root: string): Promise<string> {
         if (st.isSymbolicLink()) {
           throw new Error("Pi journal storage contains an uninspectable symbolic link.");
         }
-        parts.push(`f:${fileEntries[i]!.rel}:${st.dev}:${st.ino}:${st.mode}:${st.size}:${st.mtimeMs}:${st.ctimeMs}`);
+        parts.push(
+          `f:${fileEntries[i]!.rel}:${st.dev}:${st.ino}:${st.mode}:${st.size}:${st.mtimeMs}:${st.ctimeMs}`,
+        );
       }
     }
   }
   return parts.join("\n");
 }
 
-async function scanMigrationJournalIds(root: string, chatId: string): Promise<{
+async function scanMigrationJournalIds(
+  root: string,
+  chatId: string,
+): Promise<{
   matches: string[];
   allLegacyChatIds: Set<string>;
 }> {
@@ -410,7 +534,10 @@ async function scanMigrationJournalIds(root: string, chatId: string): Promise<{
         // Record any chat ID that owns a legacy or mid-migration journal so the
         // brand-new chat fast path never skips an existing migration candidate.
         try {
-          const parsed = JSON.parse(firstLine) as { id?: unknown; metadata?: { chatId?: unknown } } | null;
+          const parsed = JSON.parse(firstLine) as {
+            id?: unknown;
+            metadata?: { chatId?: unknown };
+          } | null;
           if (parsed && typeof parsed === "object") {
             const ownerId =
               typeof parsed.metadata?.chatId === "string"
@@ -473,7 +600,10 @@ export async function syncChatMessagesToPiSession(
    * transaction (the chat head's state), so a message the branch already
    * holds skips them with it.
    */
-  precedingEntries: ReadonlyMap<string, readonly { customType: string; data: unknown }[]> = new Map(),
+  precedingEntries: ReadonlyMap<
+    string,
+    readonly { customType: string; data: unknown }[]
+  > = new Map(),
 ): Promise<void> {
   const entries = await session.getBranch();
   const synchronized = new Set(
@@ -539,67 +669,114 @@ export async function projectVisibleHistoryWithoutSkills<M extends PiSessionMeta
   const originalLeafId = await session.getLeafId();
   const cutoff = originalEntries.reduce((latest, entry) => Math.max(latest, entry.seq), -1);
   const forkSummaryEntry = (marker: PiSessionEntry): PiSessionEntry[] =>
-    forkSummary?.state === "ready" && forkSummary.text && marker.id === `visible-skill-free-marker-${forkSummary.afterMessageId}`
-      ? [{
-          type: "message", id: `visible-skill-free-${FORK_SUMMARY_ENTRY_PREFIX}${forkSummary.afterMessageId}`, parentId: null,
-          seq: marker.seq, timestamp: marker.timestamp,
-          message: { role: "branchSummary", summary: forkSummaryModelText(forkSummary), fromId: null, timestamp: marker.timestamp },
-        }]
+    forkSummary?.state === "ready" &&
+    forkSummary.text &&
+    marker.id === `visible-skill-free-marker-${forkSummary.afterMessageId}`
+      ? [
+          {
+            type: "message",
+            id: `visible-skill-free-${FORK_SUMMARY_ENTRY_PREFIX}${forkSummary.afterMessageId}`,
+            parentId: null,
+            seq: marker.seq,
+            timestamp: marker.timestamp,
+            message: {
+              role: "branchSummary",
+              summary: forkSummaryModelText(forkSummary),
+              fromId: null,
+              timestamp: marker.timestamp,
+            },
+          },
+        ]
       : [];
   const durableBranch = await session.getBranch();
   const notesAfter = canvasStatusNotesByMessage(durableBranch);
   const visibleMessageIds = new Set(messages.map((message) => message.id));
   const attachedNotes = workspaceAttachedNotesByMessage(durableBranch, visibleMessageIds);
   const visible: PiSessionEntry[] = [
-    ...attachedNotes.beforeFirst.map((note): PiSessionEntry => ({
-      ...note,
-      seq: -messages.length * 2 - 1,
-    })),
+    ...attachedNotes.beforeFirst.map(
+      (note): PiSessionEntry => ({
+        ...note,
+        seq: -messages.length * 2 - 1,
+      }),
+    ),
   ];
   for (const [index, message] of messages.entries()) {
     const marker: PiSessionEntry = {
-      type: "custom", id: `visible-skill-free-marker-${message.id}`, parentId: null,
-      seq: index * 2 + 1 - messages.length * 2, timestamp: message.createdAt,
-      customType: AIDEN_CHAT_MESSAGE_MARKER, data: { chatMessageId: message.id },
+      type: "custom",
+      id: `visible-skill-free-marker-${message.id}`,
+      parentId: null,
+      seq: index * 2 + 1 - messages.length * 2,
+      timestamp: message.createdAt,
+      customType: AIDEN_CHAT_MESSAGE_MARKER,
+      data: { chatMessageId: message.id },
     };
     visible.push(
-      { type: "message", id: `visible-skill-free-${message.id}`, parentId: null, seq: index * 2 - messages.length * 2,
-        timestamp: message.createdAt, message: chatMessageToPiMessage(message, model, true) },
+      {
+        type: "message",
+        id: `visible-skill-free-${message.id}`,
+        parentId: null,
+        seq: index * 2 - messages.length * 2,
+        timestamp: message.createdAt,
+        message: chatMessageToPiMessage(message, model, true),
+      },
       marker,
       // A fork's ready summary follows its last copied message here too; the
       // durable journal's copy is hidden with the rest of the skill-era entries.
       ...forkSummaryEntry(marker),
       // Design canvas notes earlier turns sent stay where they were, so
       // a turn whose counts are unchanged adds no note and the prefix holds.
-      ...(notesAfter.get(message.id) ?? []).map((note): PiSessionEntry => ({
-        type: "message", id: `visible-skill-free-note-${note.id}`, parentId: null,
-        seq: marker.seq, timestamp: note.timestamp, message: note.message,
-      })),
+      ...(notesAfter.get(message.id) ?? []).map(
+        (note): PiSessionEntry => ({
+          type: "message",
+          id: `visible-skill-free-note-${note.id}`,
+          parentId: null,
+          seq: marker.seq,
+          timestamp: note.timestamp,
+          message: note.message,
+        }),
+      ),
       // Workspace-attached transition notes stay anchored to the turn where
       // the chat moved folders rather than sliding ahead of newer messages.
-      ...(attachedNotes.afterMessage.get(message.id) ?? []).map((note): PiSessionEntry => ({
-        ...note,
-        seq: marker.seq,
-      })),
+      ...(attachedNotes.afterMessage.get(message.id) ?? []).map(
+        (note): PiSessionEntry => ({
+          ...note,
+          seq: marker.seq,
+        }),
+      ),
     );
   }
   // The on-demand tools the last run declared hold only tool names. Carried
   // forward, the next run declares them in the same place, so its cached tool
   // prefix holds; a run that declares a different list journals a new record
   // after the cutoff, which then wins.
-  if (durableBranch.some((entry) => entry.type === "custom" && entry.customType === ON_DEMAND_DECLARED_ENTRY)) {
+  if (
+    durableBranch.some(
+      (entry) => entry.type === "custom" && entry.customType === ON_DEMAND_DECLARED_ENTRY,
+    )
+  ) {
     visible.push({
-      type: "custom", id: "visible-skill-free-on-demand-declared", parentId: null, seq: -1, timestamp: 0,
-      customType: ON_DEMAND_DECLARED_ENTRY, data: { names: onDemandDeclaredOfBranch(durableBranch) },
+      type: "custom",
+      id: "visible-skill-free-on-demand-declared",
+      parentId: null,
+      seq: -1,
+      timestamp: 0,
+      customType: ON_DEMAND_DECLARED_ENTRY,
+      data: { names: onDemandDeclaredOfBranch(durableBranch) },
     });
   }
-  for (const [index, entry] of visible.entries()) entry.parentId = index === 0 ? null : visible[index - 1]!.id;
+  for (const [index, entry] of visible.entries())
+    entry.parentId = index === 0 ? null : visible[index - 1]!.id;
   // Compaction fences writes against the real durable leaf. Keep that identity
   // as an inert boundary after the synthetic prefix, without exposing its data.
-  if (originalLeafId) visible.push({
-    type: "custom", id: originalLeafId, parentId: visible[visible.length - 1]?.id ?? null,
-    seq: cutoff, timestamp: 0, customType: "aiden.skills-hidden-context-boundary.v1",
-  });
+  if (originalLeafId)
+    visible.push({
+      type: "custom",
+      id: originalLeafId,
+      parentId: visible[visible.length - 1]?.id ?? null,
+      seq: cutoff,
+      timestamp: 0,
+      customType: "aiden.skills-hidden-context-boundary.v1",
+    });
   const view = (projectors: Readonly<Record<string, PiEntryProjector>> = {}): PiSessionPort<M> => {
     const getBranch = async () => [
       ...structuredClone(visible),
@@ -611,20 +788,29 @@ export async function projectVisibleHistoryWithoutSkills<M extends PiSessionMeta
       appendCompaction: (input) => session.appendCompaction(input),
       appendBranchSummary: () =>
         Promise.reject(new Error("A projected Pi session cannot append a branch summary.")),
-      importBranch: () => Promise.reject(new Error("A projected Pi session cannot import a branch.")),
+      importBranch: () =>
+        Promise.reject(new Error("A projected Pi session cannot import a branch.")),
       getBranch,
       // Recall must not bypass the projection by traversing historical branches.
       getEntries: getBranch,
       buildContext: async (given) => {
-        const branch = given ?? await getBranch();
-        const lastCompaction = branch.findIndex((entry, index) =>
-          entry.type === "compaction" && !branch.slice(index + 1).some((later) => later.type === "compaction"));
+        const branch = given ?? (await getBranch());
+        const lastCompaction = branch.findIndex(
+          (entry, index) =>
+            entry.type === "compaction" &&
+            !branch.slice(index + 1).some((later) => later.type === "compaction"),
+        );
         const entries = lastCompaction < 0 ? branch : branch.slice(lastCompaction);
         const messages: AgentMessage[] = [];
         for (const [index, entry] of entries.entries()) {
           if (entry.type === "message") messages.push(entry.message);
           else if (entry.type === "compaction") {
-            messages.push({ role: "compactionSummary", summary: entry.summary, tokensBefore: entry.tokensBefore, timestamp: entry.timestamp });
+            messages.push({
+              role: "compactionSummary",
+              summary: entry.summary,
+              tokensBefore: entry.tokensBefore,
+              timestamp: entry.timestamp,
+            });
             messages.push(...entry.retainedTail);
           } else if (entry.type === "custom") {
             messages.push(...(projectors[entry.customType]?.(entry, index, entries) ?? []));
@@ -686,14 +872,22 @@ function workspaceAttachedNotesByMessage(
   return { beforeFirst, afterMessage };
 }
 
-function canvasStatusNotesByMessage(branch: readonly PiSessionEntry[]): Map<string, Extract<PiSessionEntry, { type: "message" }>[]> {
+function canvasStatusNotesByMessage(
+  branch: readonly PiSessionEntry[],
+): Map<string, Extract<PiSessionEntry, { type: "message" }>[]> {
   const notes = new Map<string, Extract<PiSessionEntry, { type: "message" }>[]>();
   let after: string | undefined;
   for (const entry of branch) {
-    if (entry.type === "custom" && entry.customType === AIDEN_CHAT_MESSAGE_MARKER) after = markerId(entry.data) ?? after;
+    if (entry.type === "custom" && entry.customType === AIDEN_CHAT_MESSAGE_MARKER)
+      after = markerId(entry.data) ?? after;
     if (entry.type !== "message" || after === undefined) continue;
-    const sections = (entry.message as { role?: unknown; sections?: Record<string, unknown> }).sections;
-    if (entry.message.role !== "system" || !sections || !(CANVAS_STATUS_SECTION in sections || DESIGN_PAGE_INSPECT_SECTION in sections)) {
+    const sections = (entry.message as { role?: unknown; sections?: Record<string, unknown> })
+      .sections;
+    if (
+      entry.message.role !== "system" ||
+      !sections ||
+      !(CANVAS_STATUS_SECTION in sections || DESIGN_PAGE_INSPECT_SECTION in sections)
+    ) {
       continue;
     }
     notes.set(after, [...(notes.get(after) ?? []), entry]);
@@ -921,10 +1115,7 @@ export interface PiWorkspaceAttachedBoundaryInfo {
 function parseWorkspaceAttachedBoundaryData(data: unknown): PiWorkspaceAttachedBoundaryInfo | null {
   if (!data || typeof data !== "object" || Array.isArray(data)) return null;
   const record = data as Record<string, unknown>;
-  if (
-    typeof record.targetWorkspaceId !== "string" ||
-    typeof record.targetFolderPath !== "string"
-  ) {
+  if (typeof record.targetWorkspaceId !== "string" || typeof record.targetFolderPath !== "string") {
     return null;
   }
   const targetWorkspaceName =
@@ -947,9 +1138,8 @@ function workspaceAttachedBoundaryMessage(
   timestamp = Date.now(),
 ): AgentMessage {
   const copied = (info.copiedPaths ?? []).slice(0, 40);
-  const copiedSuffix = copied.length > 0
-    ? ` Copied scratch files now in this workspace: ${copied.join(", ")}.`
-    : "";
+  const copiedSuffix =
+    copied.length > 0 ? ` Copied scratch files now in this workspace: ${copied.join(", ")}.` : "";
   return {
     role: "assistant",
     content: [
@@ -1212,7 +1402,10 @@ export class PiCompactionSessionStore {
 
   private async preserveUnreadableIndex(target: string, bytes: Buffer): Promise<void> {
     const digest = createHash("sha256").update(bytes).digest("hex").slice(0, 16);
-    const preserved = path.join(path.dirname(target), `.${path.basename(target)}.${digest}.corrupt`);
+    const preserved = path.join(
+      path.dirname(target),
+      `.${path.basename(target)}.${digest}.corrupt`,
+    );
     try {
       await writeFileAtomic(preserved, bytes, { mode: 0o600, exclusive: true });
     } catch (error) {
@@ -1224,7 +1417,9 @@ export class PiCompactionSessionStore {
     const operation = this.indexMutation.then(async () => {
       const index = await this.readIndex(root);
       mutation(index);
-      await writeFileAtomic(path.join(root, JOURNAL_INDEX_FILE), `${JSON.stringify(index)}\n`, { mode: 0o600 });
+      await writeFileAtomic(path.join(root, JOURNAL_INDEX_FILE), `${JSON.stringify(index)}\n`, {
+        mode: 0o600,
+      });
     });
     this.indexMutation = operation.catch(() => undefined);
     return operation;
@@ -1322,7 +1517,9 @@ export class PiCompactionSessionStore {
   ): PiSessionPort<PiPersistentSessionMetadata> {
     if (outcome.session) return outcome.session;
     if (outcome.reason === "legacy_migration_deferred") {
-      throw new Error("This legacy Pi journal is outside the active device rollout stage; its v3 bytes remain unchanged.");
+      throw new Error(
+        "This legacy Pi journal is outside the active device rollout stage; its v3 bytes remain unchanged.",
+      );
     }
     throw new Error("Pi v4 journal creation is outside the active device rollout stage.");
   }
@@ -1398,7 +1595,10 @@ export class PiCompactionSessionStore {
         this.opening.size <= 1
       ) {
         const afterScanSignature = await computePiJournalDirSignature(root).catch(() => undefined);
-        if (afterScanSignature === beforeSignature && this.dirMutationVersion === scanStartVersion) {
+        if (
+          afterScanSignature === beforeSignature &&
+          this.dirMutationVersion === scanStartVersion
+        ) {
           const knownChatIds = new Set<string>();
           for (const metadata of listed) {
             if (metadata.metadata?.kind === SESSION_METADATA_KIND) knownChatIds.add(metadata.id);
@@ -1446,7 +1646,9 @@ export class PiCompactionSessionStore {
       return { session: undefined, reason: "legacy_migration_deferred" };
     }
     if (
-      !session && rollout && rolloutOptions &&
+      !session &&
+      rollout &&
+      rolloutOptions &&
       !piUpgradeJournalCreationEligible(rollout, chat?.createdAt, rolloutOptions)
     ) {
       return { session: undefined, reason: "v4_creation_rollout" };
@@ -1475,7 +1677,10 @@ export class PiCompactionSessionStore {
       ) {
         const updatedSignature = await computePiJournalDirSignature(root).catch(() => undefined);
         const beforeFiles = new Set(
-          beforeSignature.split("\n").filter((line) => line.startsWith("f:")).map((line) => line.split(":", 2)[1]),
+          beforeSignature
+            .split("\n")
+            .filter((line) => line.startsWith("f:"))
+            .map((line) => line.split(":", 2)[1]),
         );
         const expectedRel = path.relative(root, persisted.path).split(path.sep).join("/");
         const addedUnexpected =
@@ -1511,11 +1716,13 @@ export class PiCompactionSessionStore {
     if (!SAFE_SESSION_ID.test(chatId)) {
       throw new Error("Invalid chat identity for the Pi compaction journal.");
     }
-    if (this.sessions.has(chatId) || this.opening.has(chatId) || this.quarantined.has(chatId)) return true;
+    if (this.sessions.has(chatId) || this.opening.has(chatId) || this.quarantined.has(chatId))
+      return true;
     await this.indexMutation;
     const root = await (this.options.readOnlyRoot ?? this.options.root)();
     try {
-      if (!(await lstat(root)).isDirectory()) throw new Error("Pi journal history root is not a directory.");
+      if (!(await lstat(root)).isDirectory())
+        throw new Error("Pi journal history root is not a directory.");
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
       throw error;
@@ -1528,13 +1735,24 @@ export class PiCompactionSessionStore {
     }
     if (indexBytes) {
       const index: unknown = JSON.parse(decodeUtf8(indexBytes));
-      if (!index || typeof index !== "object" || Array.isArray(index) ||
-          (index as Partial<JournalIndex>).version !== 1) {
+      if (
+        !index ||
+        typeof index !== "object" ||
+        Array.isArray(index) ||
+        (index as Partial<JournalIndex>).version !== 1
+      ) {
         throw new Error("Pi journal history index could not be read safely.");
       }
       const chats = (index as Partial<JournalIndex>).chats;
-      if (!chats || typeof chats !== "object" || Array.isArray(chats) ||
-          Object.values(chats).some((paths) => !Array.isArray(paths) || paths.some((file) => typeof file !== "string" || !file))) {
+      if (
+        !chats ||
+        typeof chats !== "object" ||
+        Array.isArray(chats) ||
+        Object.values(chats).some(
+          (paths) =>
+            !Array.isArray(paths) || paths.some((file) => typeof file !== "string" || !file),
+        )
+      ) {
         throw new Error("Pi journal history index could not be read safely.");
       }
       if (Object.prototype.hasOwnProperty.call(chats, chatId)) {
@@ -1543,7 +1761,10 @@ export class PiCompactionSessionStore {
           if (!candidate.startsWith(`${path.resolve(root)}${path.sep}`)) {
             throw new Error("Pi journal history index escaped its private storage root.");
           }
-          if (candidate.endsWith(".jsonl.v3-backup") || candidate.endsWith(".jsonl.migration-v1.json")) {
+          if (
+            candidate.endsWith(".jsonl.v3-backup") ||
+            candidate.endsWith(".jsonl.migration-v1.json")
+          ) {
             const promoted = candidate.replace(/\.(?:v3-backup|migration-v1\.json)$/u, "");
             if (!(await isCompletedEmptyMigration(promoted, chatId, root))) return true;
             continue;
@@ -1560,7 +1781,11 @@ export class PiCompactionSessionStore {
           if (!candidate.endsWith(".jsonl")) return true;
           try {
             const history = await inspectJournalHistory(candidate);
-            if (history.chatId !== chatId || (history.hasBody && !(await isCompletedEmptyMigration(candidate, chatId, root)))) return true;
+            if (
+              history.chatId !== chatId ||
+              (history.hasBody && !(await isCompletedEmptyMigration(candidate, chatId, root)))
+            )
+              return true;
           } catch (error) {
             if ((error as NodeJS.ErrnoException).code === "ENOENT") return true;
             throw error;
@@ -1573,22 +1798,46 @@ export class PiCompactionSessionStore {
       const directory = directories.pop()!;
       for (const entry of await readdir(directory, { withFileTypes: true })) {
         const candidate = path.join(directory, entry.name);
-        if (entry.isSymbolicLink()) throw new Error("Pi journal history contains an uninspectable symbolic link.");
-        if (entry.isDirectory()) { directories.push(candidate); continue; }
+        if (entry.isSymbolicLink())
+          throw new Error("Pi journal history contains an uninspectable symbolic link.");
+        if (entry.isDirectory()) {
+          directories.push(candidate);
+          continue;
+        }
         if (!entry.name.includes(".jsonl")) continue;
         if (entry.name.endsWith(".migration-v1.json")) {
-          const receipt = parsePiSessionMigrationReceipt(JSON.parse(decodeUtf8(await readRegularFile(candidate, 65_536))));
-          if (receipt.chatId === chatId && !(await isCompletedEmptyMigration(candidate.slice(0, -".migration-v1.json".length), chatId, root))) return true;
+          const receipt = parsePiSessionMigrationReceipt(
+            JSON.parse(decodeUtf8(await readRegularFile(candidate, 65_536))),
+          );
+          if (
+            receipt.chatId === chatId &&
+            !(await isCompletedEmptyMigration(
+              candidate.slice(0, -".migration-v1.json".length),
+              chatId,
+              root,
+            ))
+          )
+            return true;
           continue;
         }
         const history = await inspectJournalHistory(candidate);
         if (history.chatId === chatId) {
           if (entry.name.endsWith(".jsonl.v3-backup")) {
-            if (!(await isCompletedEmptyMigration(candidate.slice(0, -".v3-backup".length), chatId, root))) return true;
+            if (
+              !(await isCompletedEmptyMigration(
+                candidate.slice(0, -".v3-backup".length),
+                chatId,
+                root,
+              ))
+            )
+              return true;
           } else if (entry.name.endsWith(PI084_BACKUP_SUFFIX)) {
             if (!(await isDisposablePi084Backup(candidate, chatId, root))) return true;
-          } else if (!entry.name.endsWith(".jsonl") ||
-              (history.hasBody && !(await isCompletedEmptyMigration(candidate, chatId, root)))) return true;
+          } else if (
+            !entry.name.endsWith(".jsonl") ||
+            (history.hasBody && !(await isCompletedEmptyMigration(candidate, chatId, root)))
+          )
+            return true;
         }
       }
     }
@@ -1621,7 +1870,8 @@ export class PiCompactionSessionStore {
     if (!(await this.hasChatHistory(sourceChatId))) return false;
     const rollout = await this.options.rollout?.load();
     if (
-      rollout && this.options.rollout &&
+      rollout &&
+      this.options.rollout &&
       !piUpgradeJournalCreationEligible(rollout, input.targetCreatedAt, {
         development: this.options.rollout.development,
         behaviorEnabled: this.options.rollout.behaviorEnabled,
@@ -1670,7 +1920,10 @@ export class PiCompactionSessionStore {
    * a fork summary. Undefined when the chat has no journal or the boundary is
    * not provable; nothing is created or migrated for a chat without history.
    */
-  async journalEntriesAfter(chatId: string, messageId: string): Promise<PiSessionEntry[] | undefined> {
+  async journalEntriesAfter(
+    chatId: string,
+    messageId: string,
+  ): Promise<PiSessionEntry[] | undefined> {
     if (!(await this.hasChatHistory(chatId))) return undefined;
     const opened = await this.openChatIfEligible(chatId);
     if (!opened.session) return undefined;
@@ -1769,7 +2022,8 @@ export class PiCompactionSessionStore {
 
 export const piCompactionSessionStore = new PiCompactionSessionStore({
   root: () => ensureUserDataDir("pi-compaction-sessions"),
-  readOnlyRoot: async () => path.join((await import("../platform.js")).app.getPath("userData"), "pi-compaction-sessions"),
+  readOnlyRoot: async () =>
+    path.join((await import("../platform.js")).app.getPath("userData"), "pi-compaction-sessions"),
   rollout: {
     load: () => piUpgradeRolloutStore.load(),
     development: isDevelopmentRuntime(process.env, Boolean(process.versions.electron)),

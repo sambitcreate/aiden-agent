@@ -32,7 +32,10 @@ export interface ViewerEnvironment {
 export interface ViewerCanvas {
   width: number;
   height: number;
-  getContext(kind: "2d", options?: CanvasRenderingContext2DSettings): CanvasRenderingContext2D | null;
+  getContext(
+    kind: "2d",
+    options?: CanvasRenderingContext2DSettings,
+  ): CanvasRenderingContext2D | null;
 }
 
 export interface ViewerRuntime {
@@ -51,7 +54,12 @@ export interface ViewerRuntime {
 export function browserViewerRuntime(): ViewerRuntime {
   return {
     createRenderer(canvas) {
-      const renderer = new WebGLRenderer({ canvas, alpha: true, antialias: true, powerPreference: "low-power" });
+      const renderer = new WebGLRenderer({
+        canvas,
+        alpha: true,
+        antialias: true,
+        powerPreference: "low-power",
+      });
       renderer.outputColorSpace = SRGBColorSpace;
       return renderer;
     },

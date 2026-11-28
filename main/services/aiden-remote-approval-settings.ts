@@ -59,27 +59,48 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 function exactKeys(value: Record<string, unknown>, keys: readonly string[], label: string): void {
-  for (const key of Object.keys(value)) if (!keys.includes(key)) throw new Error(`${label} has an unknown field.`);
+  for (const key of Object.keys(value))
+    if (!keys.includes(key)) throw new Error(`${label} has an unknown field.`);
 }
 function boundedText(value: unknown, label: string, max: number): string {
-  if (typeof value !== "string" || value.length === 0 || value.length > max) throw new Error(`${label} is invalid.`);
+  if (typeof value !== "string" || value.length === 0 || value.length > max)
+    throw new Error(`${label} is invalid.`);
   return value;
 }
 
 function parseRow(value: unknown): ApprovalRuleRow {
   if (!isRecord(value)) throw new Error("Rule row must be an object.");
-  exactKeys(value, ["ref", "group", "title", "kind", "scope", "legacy", "decisions", "handOff", "createdAt"], "Rule row");
-  if (!(GROUPS as readonly unknown[]).includes(value.group)) throw new Error("Rule row group is invalid.");
-  if (!isRecord(value.scope) || !(SCOPES as readonly unknown[]).includes(value.scope.kind)) throw new Error("Rule row scope is invalid.");
+  exactKeys(
+    value,
+    ["ref", "group", "title", "kind", "scope", "legacy", "decisions", "handOff", "createdAt"],
+    "Rule row",
+  );
+  if (!(GROUPS as readonly unknown[]).includes(value.group))
+    throw new Error("Rule row group is invalid.");
+  if (!isRecord(value.scope) || !(SCOPES as readonly unknown[]).includes(value.scope.kind))
+    throw new Error("Rule row scope is invalid.");
   exactKeys(value.scope, ["kind", "label"], "Rule row scope");
-  if (!Array.isArray(value.decisions) || value.decisions.length > APPROVAL_RULE_DECISIONS.length || value.decisions.some((decision) => !parseApprovalRuleDecision(decision))) {
+  if (
+    !Array.isArray(value.decisions) ||
+    value.decisions.length > APPROVAL_RULE_DECISIONS.length ||
+    value.decisions.some((decision) => !parseApprovalRuleDecision(decision))
+  ) {
     throw new Error("Rule row decisions are invalid.");
   }
-  if (value.legacy !== undefined && value.legacy !== true) throw new Error("Rule row legacy is invalid.");
-  if (value.handOff !== undefined && (!isRecord(value.handOff) || typeof value.handOff.on !== "boolean" || Object.keys(value.handOff).length !== 1)) {
+  if (value.legacy !== undefined && value.legacy !== true)
+    throw new Error("Rule row legacy is invalid.");
+  if (
+    value.handOff !== undefined &&
+    (!isRecord(value.handOff) ||
+      typeof value.handOff.on !== "boolean" ||
+      Object.keys(value.handOff).length !== 1)
+  ) {
     throw new Error("Rule row handOff is invalid.");
   }
-  if (value.createdAt !== undefined && (typeof value.createdAt !== "string" || Number.isNaN(Date.parse(value.createdAt)))) {
+  if (
+    value.createdAt !== undefined &&
+    (typeof value.createdAt !== "string" || Number.isNaN(Date.parse(value.createdAt)))
+  ) {
     throw new Error("Rule row createdAt is invalid.");
   }
   return {
@@ -89,7 +110,9 @@ function parseRow(value: unknown): ApprovalRuleRow {
     kind: boundedText(value.kind, "Rule row kind", KIND_MAX),
     scope: {
       kind: value.scope.kind as ApprovalRuleRow["scope"]["kind"],
-      ...(value.scope.label !== undefined ? { label: boundedText(value.scope.label, "Rule row scope label", LABEL_MAX) } : {}),
+      ...(value.scope.label !== undefined
+        ? { label: boundedText(value.scope.label, "Rule row scope label", LABEL_MAX) }
+        : {}),
     },
     ...(value.legacy === true ? { legacy: true as const } : {}),
     decisions: value.decisions as ApprovalRuleRow["decisions"],
@@ -102,16 +125,24 @@ function parseRow(value: unknown): ApprovalRuleRow {
 export function parseAidenRemoteApprovalRulesView(value: unknown): ApprovalRulesView {
   if (!isRecord(value)) throw new Error("Rules view must be an object.");
   exactKeys(value, ["rows", "unreadable"], "Rules view");
-  if (!Array.isArray(value.rows) || value.rows.length > ROWS_MAX) throw new Error("Rules view rows are invalid.");
-  if (value.unreadable !== undefined && value.unreadable !== true) throw new Error("Rules view unreadable is invalid.");
-  return { rows: value.rows.map(parseRow), ...(value.unreadable === true ? { unreadable: true as const } : {}) };
+  if (!Array.isArray(value.rows) || value.rows.length > ROWS_MAX)
+    throw new Error("Rules view rows are invalid.");
+  if (value.unreadable !== undefined && value.unreadable !== true)
+    throw new Error("Rules view unreadable is invalid.");
+  return {
+    rows: value.rows.map(parseRow),
+    ...(value.unreadable === true ? { unreadable: true as const } : {}),
+  };
 }
 
 /** `GET /approvals/rules/picker`: Add rule's options. */
-export function parseAidenRemoteApprovalRulePicker(value: unknown): { options: ApprovalRulePickerOption[] } {
+export function parseAidenRemoteApprovalRulePicker(value: unknown): {
+  options: ApprovalRulePickerOption[];
+} {
   if (!isRecord(value)) throw new Error("Rule picker must be an object.");
   exactKeys(value, ["options"], "Rule picker");
-  if (!Array.isArray(value.options) || value.options.length > PICKER_MAX) throw new Error("Rule picker options are invalid.");
+  if (!Array.isArray(value.options) || value.options.length > PICKER_MAX)
+    throw new Error("Rule picker options are invalid.");
   return {
     options: value.options.map((option) => {
       if (!isRecord(option)) throw new Error("Rule picker option must be an object.");
@@ -122,7 +153,9 @@ export function parseAidenRemoteApprovalRulePicker(value: unknown): { options: A
         target,
         label: boundedText(option.label, "Rule picker label", LABEL_MAX),
         group: boundedText(option.group, "Rule picker group", LABEL_MAX),
-        ...(option.description !== undefined ? { description: boundedText(option.description, "Rule picker description", TITLE_MAX) } : {}),
+        ...(option.description !== undefined
+          ? { description: boundedText(option.description, "Rule picker description", TITLE_MAX) }
+          : {}),
       };
     }),
   };
@@ -187,7 +220,8 @@ export class AidenRemoteApprovalSettingsService {
   async removeRule(input: unknown): Promise<ApprovalRulesView> {
     let ref: ApprovalRuleRowRef;
     try {
-      if (!isRecord(input) || Object.keys(input).some((key) => key !== "ref")) throw new Error("Invalid rule.");
+      if (!isRecord(input) || Object.keys(input).some((key) => key !== "ref"))
+        throw new Error("Invalid rule.");
       ref = parseApprovalRuleRowRef(input.ref);
     } catch {
       throw invalid("The rule is invalid.");

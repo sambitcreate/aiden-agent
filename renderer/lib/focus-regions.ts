@@ -19,13 +19,17 @@ const TABBABLE =
   'a[href], button:not([disabled]), input:not([disabled]):not([type="hidden"]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
 
 function shown(element: HTMLElement): boolean {
-  if (!element.isConnected || element.closest("[hidden], [inert], [aria-hidden='true']")) return false;
+  if (!element.isConnected || element.closest("[hidden], [inert], [aria-hidden='true']"))
+    return false;
   // Not in test DOMs, which lay nothing out.
   return typeof element.checkVisibility !== "function" || element.checkVisibility();
 }
 
 /** The shown element for an area, if this page has one. */
-export function focusRegionElement(region: FocusRegion, root: ParentNode = document): HTMLElement | null {
+export function focusRegionElement(
+  region: FocusRegion,
+  root: ParentNode = document,
+): HTMLElement | null {
   for (const element of root.querySelectorAll<HTMLElement>(`[data-focus-region="${region}"]`)) {
     // A closed side panel stays mounted as it animates away. (On the area only:
     // a row that is a tooltip trigger also says data-state="closed".)
@@ -37,7 +41,9 @@ export function focusRegionElement(region: FocusRegion, root: ParentNode = docum
 /** The area that holds `element`, if any. */
 export function focusRegionOf(element: Element | null): FocusRegion | null {
   const region = element?.closest("[data-focus-region]")?.getAttribute("data-focus-region");
-  return (FOCUS_REGIONS as readonly string[]).includes(region ?? "") ? (region as FocusRegion) : null;
+  return (FOCUS_REGIONS as readonly string[]).includes(region ?? "")
+    ? (region as FocusRegion)
+    : null;
 }
 
 function regionEntry(element: HTMLElement): HTMLElement | null {
@@ -50,11 +56,18 @@ function regionEntry(element: HTMLElement): HTMLElement | null {
       (candidate) => candidate.getAttribute("role") !== "separator",
     ),
   ];
-  return candidates.find((candidate): candidate is HTMLElement => candidate !== null && shown(candidate)) ?? null;
+  return (
+    candidates.find(
+      (candidate): candidate is HTMLElement => candidate !== null && shown(candidate),
+    ) ?? null
+  );
 }
 
 /** Where focus would land in `region` (its entry point), if the area is on screen. */
-export function focusRegionEntry(region: FocusRegion, root: ParentNode = document): HTMLElement | null {
+export function focusRegionEntry(
+  region: FocusRegion,
+  root: ParentNode = document,
+): HTMLElement | null {
   const element = focusRegionElement(region, root);
   return element ? regionEntry(element) : null;
 }
@@ -83,7 +96,12 @@ export function focusRegionWhenShown(region: FocusRegion, timeoutMs = 2000): () 
   const attempt = () => {
     if (performance.now() - started >= timeoutMs) return;
     const active = document.activeElement;
-    if (!active || active === document.body || active === document.documentElement || !active.isConnected) {
+    if (
+      !active ||
+      active === document.body ||
+      active === document.documentElement ||
+      !active.isConnected
+    ) {
       if (focusRegion(region)) focused = document.activeElement;
     } else if (active !== focused) {
       return;
@@ -118,7 +136,11 @@ const REPLY = "[data-transcript-reply]";
  * Focus the reply after (1) or before (-1) the one holding `from` in the
  * conversation; from outside a reply, ⌥↑ starts at the latest reply.
  */
-export function stepReply(direction: 1 | -1, from: Element | null, root: ParentNode = document): HTMLElement | null {
+export function stepReply(
+  direction: 1 | -1,
+  from: Element | null,
+  root: ParentNode = document,
+): HTMLElement | null {
   const conversation = focusRegionElement("chat", root);
   if (!conversation) return null;
   const replies = Array.from(conversation.querySelectorAll<HTMLElement>(REPLY));
@@ -126,11 +148,7 @@ export function stepReply(direction: 1 | -1, from: Element | null, root: ParentN
   const currentReply = from?.closest<HTMLElement>(REPLY);
   const index = currentReply ? replies.indexOf(currentReply) : -1;
   const next =
-    index >= 0
-      ? replies[index + direction]
-      : direction === -1
-        ? replies[replies.length - 1]
-        : null;
+    index >= 0 ? replies[index + direction] : direction === -1 ? replies[replies.length - 1] : null;
   if (!next) return null;
   // The reply's own actions (Copy, then Fork) when it has them, else the reply.
   const action = next.querySelector<HTMLElement>(
@@ -158,7 +176,8 @@ function isEmptyMessageBox(element: Element | null): boolean {
 
 /** The command dispatcher calls this after saved keys, before nested inputs. */
 export function handleAreaFocusKey(event: KeyboardEvent): void {
-  if (event.key !== "F6" || !keyIsPlain(event) || event.defaultPrevented || event.isComposing) return;
+  if (event.key !== "F6" || !keyIsPlain(event) || event.defaultPrevented || event.isComposing)
+    return;
   const active = document.activeElement;
   if (typingRedirectBlockedByOverlay(active)) return;
   if (cycleFocusRegion(event.shiftKey ? -1 : 1, active)) {

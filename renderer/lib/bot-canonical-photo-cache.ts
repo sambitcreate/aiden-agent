@@ -113,8 +113,8 @@ export class BotCanonicalPhotoCache {
     const activeSubscribers = [...this.subscribers.entries()].map(([botId, subscribers]) => ({
       botId,
       priority: [...subscribers].some(({ priority }) => priority === "selected")
-        ? "selected" as const
-        : "visible" as const,
+        ? ("selected" as const)
+        : ("visible" as const),
     }));
     this.notifyAll();
     for (const { botId, priority } of activeSubscribers) this.request(botId, priority);
@@ -142,26 +142,27 @@ export class BotCanonicalPhotoCache {
       this.pending.delete(next.botId);
       this.active += 1;
       this.activeBotEpochs.set(next.botId, next.epoch);
-      void this.load(next.botId).then(
-        (value) => this.publish(next, value),
-        () => this.publish(next, null),
-      ).finally(() => {
-        if (this.activeBotEpochs.get(next.botId) === next.epoch) {
-          this.activeBotEpochs.delete(next.botId);
-        }
-        this.active -= 1;
-        this.drain();
-        this.resolveIdle();
-      });
+      void this.load(next.botId)
+        .then(
+          (value) => this.publish(next, value),
+          () => this.publish(next, null),
+        )
+        .finally(() => {
+          if (this.activeBotEpochs.get(next.botId) === next.epoch) {
+            this.activeBotEpochs.delete(next.botId);
+          }
+          this.active -= 1;
+          this.drain();
+          this.resolveIdle();
+        });
     }
   }
 
   private publish(pending: Pending, value: BotRendererCanonicalPhoto | null): void {
     if (pending.epoch !== this.epoch) return;
     const decodedBytes = value ? decodedDataUrlBytes(value) : 0;
-    const accepted = decodedBytes !== null && decodedBytes <= BOT_CANONICAL_PHOTO_MAX_BYTES
-      ? value
-      : null;
+    const accepted =
+      decodedBytes !== null && decodedBytes <= BOT_CANONICAL_PHOTO_MAX_BYTES ? value : null;
     const bytes = accepted ? decodedBytes! : 0;
     const previous = this.entries.get(pending.botId);
     if (previous) this.bytes -= previous.bytes;
@@ -176,11 +177,15 @@ export class BotCanonicalPhotoCache {
       const oldest = [...this.entries.entries()]
         .filter(([botId]) => botId !== protectedBotId)
         .sort((left, right) => {
-          const leftSelected = [...(this.subscribers.get(left[0]) ?? [])]
-            .some(({ priority }) => priority === "selected");
-          const rightSelected = [...(this.subscribers.get(right[0]) ?? [])]
-            .some(({ priority }) => priority === "selected");
-          return Number(leftSelected) - Number(rightSelected) || left[1].lastUsed - right[1].lastUsed;
+          const leftSelected = [...(this.subscribers.get(left[0]) ?? [])].some(
+            ({ priority }) => priority === "selected",
+          );
+          const rightSelected = [...(this.subscribers.get(right[0]) ?? [])].some(
+            ({ priority }) => priority === "selected",
+          );
+          return (
+            Number(leftSelected) - Number(rightSelected) || left[1].lastUsed - right[1].lastUsed
+          );
         })[0];
       if (!oldest) {
         const only = this.entries.get(protectedBotId);
@@ -221,13 +226,12 @@ export function useBotCanonicalPhoto(
   priority: Priority,
 ): Snapshot {
   const subscribe = React.useCallback(
-    (listener: () => void) => botId && enabled
-      ? botCanonicalPhotos.subscribe(botId, priority, listener)
-      : () => undefined,
+    (listener: () => void) =>
+      botId && enabled ? botCanonicalPhotos.subscribe(botId, priority, listener) : () => undefined,
     [botId, enabled, priority],
   );
   const getSnapshot = React.useCallback(
-    () => botId && enabled ? botCanonicalPhotos.snapshot(botId) : undefined,
+    () => (botId && enabled ? botCanonicalPhotos.snapshot(botId) : undefined),
     [botId, enabled],
   );
   const value = React.useSyncExternalStore(subscribe, getSnapshot, () => undefined);

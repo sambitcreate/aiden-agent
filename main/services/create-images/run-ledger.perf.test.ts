@@ -53,24 +53,49 @@ function fiveHundredNodes(doc: WorkflowDocV1): WorkflowDocV1 {
   doc.nodes = [{ id: "p", type: "prompt", position: at, data: { text: "A red bicycle at dawn" } }];
   doc.edges = [];
   for (let index = 0; index < 4; index += 1) {
-    doc.nodes.push({ id: `g${index}`, type: "generate-image", position: at, data: { model: { ...NANO_BANANA }, count: 1 } });
-    doc.edges.push({ id: `p-g${index}`, source: "p", sourcePort: "text", target: `g${index}`, targetPort: "prompt" });
+    doc.nodes.push({
+      id: `g${index}`,
+      type: "generate-image",
+      position: at,
+      data: { model: { ...NANO_BANANA }, count: 1 },
+    });
+    doc.edges.push({
+      id: `p-g${index}`,
+      source: "p",
+      sourcePort: "text",
+      target: `g${index}`,
+      targetPort: "prompt",
+    });
   }
   for (let index = 0; index < 495; index += 1) {
     doc.nodes.push({ id: `o${index}`, type: "output", position: at, data: {} });
-    doc.edges.push({ id: `g-o${index}`, source: `g${index % 4}`, sourcePort: "images", target: `o${index}`, targetPort: "images" });
+    doc.edges.push({
+      id: `g-o${index}`,
+      source: `g${index % 4}`,
+      sourcePort: "images",
+      target: `o${index}`,
+      targetPort: "images",
+    });
   }
   return doc;
 }
 
 test("a 500-node run spends under one second inside the ledger", async (t) => {
   const directory = await root(t);
-  const assets = new StudioAssetStore({ root: () => path.join(directory, "assets"), thumbnailer: fakeThumbnailer().thumbnailer });
+  const assets = new StudioAssetStore({
+    root: () => path.join(directory, "assets"),
+    thumbnailer: fakeThumbnailer().thumbnailer,
+  });
   await assets.initialize();
   t.after(() => assets.close());
-  const workflows = new ImageWorkflowStore({ root: () => path.join(directory, "create-images"), assets });
+  const workflows = new ImageWorkflowStore({
+    root: () => path.join(directory, "create-images"),
+    assets,
+  });
   await workflows.initialize();
-  const timing = timedLedger(ImageRunLedger.open({ directory: path.join(directory, "create-images") }));
+  const timing = timedLedger(
+    ImageRunLedger.open({ directory: path.join(directory, "create-images") }),
+  );
   const fake = fakeImageModels();
   const coordinator = new ImageRunCoordinator({
     ledger: timing.ledger,
@@ -83,7 +108,11 @@ test("a 500-node run spends under one second inside the ledger", async (t) => {
 
   const doc = await saveWorkflow(workflows, fiveHundredNodes);
   assert.equal(doc.nodes.length, 500);
-  const prepared = await coordinator.prepare("1:doc", { workflowId: doc.id, revision: doc.revision, scope: { kind: "all" } });
+  const prepared = await coordinator.prepare("1:doc", {
+    workflowId: doc.id,
+    revision: doc.revision,
+    scope: { kind: "all" },
+  });
   assert.ok("plan" in prepared);
   const started = await coordinator.start("1:doc", prepared.plan.consentId);
   assert.ok("runId" in started);
@@ -110,7 +139,12 @@ test("500 provider-shaped attempts claim and finish in under one second", async 
     workflowRevision: 1,
     scope: { kind: "all" },
     requestLimit: 500,
-    attempts: nodes.map((nodeId) => ({ nodeId, variant: 0, provider: "openrouter", model: NANO_BANANA.id })),
+    attempts: nodes.map((nodeId) => ({
+      nodeId,
+      variant: 0,
+      provider: "openrouter",
+      model: NANO_BANANA.id,
+    })),
   });
   for (const nodeId of nodes) {
     assert.equal(ledger.claimProviderRequest("perf", nodeId, 0), true);

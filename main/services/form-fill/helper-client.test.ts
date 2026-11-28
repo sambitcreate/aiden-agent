@@ -6,11 +6,7 @@ import { PassThrough } from "node:stream";
 import assert from "node:assert/strict";
 import test from "node:test";
 import type { ChildProcess, spawn } from "node:child_process";
-import {
-  FormFillHelperClient,
-  FormFillHelperError,
-  formFillHelperPaths,
-} from "./helper-client.js";
+import { FormFillHelperClient, FormFillHelperError, formFillHelperPaths } from "./helper-client.js";
 
 interface FakeChild extends EventEmitter {
   stdin: PassThrough;
@@ -63,14 +59,8 @@ function makeChild(): {
   return { child, requests };
 }
 
-function respond(
-  child: FakeChild,
-  id: string,
-  result: Record<string, unknown>,
-): void {
-  child.stdout.write(
-    `${JSON.stringify({ version: 1, id, ok: true, result })}\n`,
-  );
+function respond(child: FakeChild, id: string, result: Record<string, unknown>): void {
+  child.stdout.write(`${JSON.stringify({ version: 1, id, ok: true, result })}\n`);
 }
 
 function makeClient() {
@@ -211,9 +201,7 @@ test("a stdin EPIPE after the helper dies fails in-flight work instead of crashi
     const promise = client.score("c", ["a", "b"]);
     // The helper died and the next write hit a closed pipe before its exit
     // event arrived.
-    spawned[0].stdin.destroy(
-      Object.assign(new Error("write EPIPE"), { code: "EPIPE" }),
-    );
+    spawned[0].stdin.destroy(Object.assign(new Error("write EPIPE"), { code: "EPIPE" }));
     await assert.rejects(promise, (error: unknown) => {
       assert.ok(error instanceof FormFillHelperError);
       assert.equal(error.code, "transport");

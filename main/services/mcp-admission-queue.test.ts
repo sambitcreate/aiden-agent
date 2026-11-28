@@ -1,10 +1,16 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { createMcpAdmissionQueue, McpPendingJournalState, singleFlight } from "./mcp-admission-queue.js";
+import {
+  createMcpAdmissionQueue,
+  McpPendingJournalState,
+  singleFlight,
+} from "./mcp-admission-queue.js";
 
 function gate() {
   let open!: () => void;
-  const opened = new Promise<void>((resolve) => { open = resolve; });
+  const opened = new Promise<void>((resolve) => {
+    open = resolve;
+  });
   return { open, opened };
 }
 
@@ -14,11 +20,23 @@ test("admissions for different servers run concurrently while one server's admis
   const queue = createMcpAdmissionQueue();
   const slow = gate();
   const events: string[] = [];
-  const slowAdmission = queue.shared("slow", async () => { events.push("slow:start"); await slow.opened; events.push("slow:end"); });
-  const slowAgain = queue.shared("slow", async () => { events.push("slow-again"); });
-  const fast = queue.shared("fast", async () => { events.push("fast"); });
+  const slowAdmission = queue.shared("slow", async () => {
+    events.push("slow:start");
+    await slow.opened;
+    events.push("slow:end");
+  });
+  const slowAgain = queue.shared("slow", async () => {
+    events.push("slow-again");
+  });
+  const fast = queue.shared("fast", async () => {
+    events.push("fast");
+  });
   await fast;
-  assert.deepEqual(events, ["slow:start", "fast"], "a slow server does not hold another server's admission");
+  assert.deepEqual(
+    events,
+    ["slow:start", "fast"],
+    "a slow server does not hold another server's admission",
+  );
   slow.open();
   await Promise.all([slowAdmission, slowAgain]);
   assert.deepEqual(events, ["slow:start", "fast", "slow:end", "slow-again"]);
@@ -29,9 +47,20 @@ test("a mutation waits for in-flight admissions and later admissions wait for th
   const admitting = gate();
   const mutating = gate();
   const events: string[] = [];
-  const first = queue.shared("a", async () => { events.push("admit-a"); await admitting.opened; events.push("admit-a:end"); });
-  const mutation = queue.exclusive(async () => { events.push("mutate"); await mutating.opened; events.push("mutate:end"); return "saved"; });
-  const later = queue.shared("b", async () => { events.push("admit-b"); });
+  const first = queue.shared("a", async () => {
+    events.push("admit-a");
+    await admitting.opened;
+    events.push("admit-a:end");
+  });
+  const mutation = queue.exclusive(async () => {
+    events.push("mutate");
+    await mutating.opened;
+    events.push("mutate:end");
+    return "saved";
+  });
+  const later = queue.shared("b", async () => {
+    events.push("admit-b");
+  });
   await tick();
   assert.deepEqual(events, ["admit-a"]);
   assert.ok(queue.exclusiveBusy());
@@ -48,8 +77,12 @@ test("a mutation waits for in-flight admissions and later admissions wait for th
 
 test("a failed operation does not block the operations queued behind it", async () => {
   const queue = createMcpAdmissionQueue();
-  const failedMutation = queue.exclusive(async () => { throw new Error("publication failed"); });
-  const failedAdmission = queue.shared("a", async () => { throw new Error("configuration changed"); });
+  const failedMutation = queue.exclusive(async () => {
+    throw new Error("publication failed");
+  });
+  const failedAdmission = queue.shared("a", async () => {
+    throw new Error("configuration changed");
+  });
   await assert.rejects(failedMutation, /publication failed/u);
   await assert.rejects(failedAdmission, /configuration changed/u);
   assert.equal(await queue.shared("a", async () => "admitted"), "admitted");
@@ -69,7 +102,9 @@ test("the journal is read until this process knows it is empty, and again after 
       journal.cleared();
     }
   });
-  const admit = async () => { if (!journal.knownEmpty()) await reconcile(); };
+  const admit = async () => {
+    if (!journal.knownEmpty()) await reconcile();
+  };
 
   // Startup: unknown state; concurrent admissions share one read and cleanup.
   await Promise.all([admit(), admit(), admit()]);

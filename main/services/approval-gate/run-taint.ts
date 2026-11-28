@@ -23,7 +23,10 @@ function hostOf(value: string): string | undefined {
   try {
     const url = new URL(value);
     if (url.protocol !== "http:" && url.protocol !== "https:") return undefined;
-    return url.hostname.toLowerCase().replace(/^www\./, "").replace(/\.$/, "");
+    return url.hostname
+      .toLowerCase()
+      .replace(/^www\./, "")
+      .replace(/\.$/, "");
   } catch {
     return undefined;
   }
@@ -44,7 +47,8 @@ export function namedHosts(text: string): Set<string> {
 
 /** The URL a fetch tool would load, from its arguments. */
 export function fetchTarget(toolName: string, args: unknown): string | undefined {
-  if (!FETCH_TOOL_NAMES.has(toolName) || args === null || typeof args !== "object") return undefined;
+  if (!FETCH_TOOL_NAMES.has(toolName) || args === null || typeof args !== "object")
+    return undefined;
   const url = (args as { url?: unknown }).url;
   return typeof url === "string" ? url : undefined;
 }
@@ -65,7 +69,11 @@ const SUMMARY_ROLES: ReadonlySet<string> = new Set(["compactionSummary", "branch
  * are named in `bringsOutsideContent` instead.
  */
 export function toolResultSaysOutside(details: unknown): boolean {
-  return typeof details === "object" && details !== null && (details as { outside?: unknown }).outside === true;
+  return (
+    typeof details === "object" &&
+    details !== null &&
+    (details as { outside?: unknown }).outside === true
+  );
 }
 
 export interface RunTaintHistoryEntry {
@@ -94,7 +102,9 @@ export interface RunTaintTranscriptMessage {
  * tool result that says it brought outside content in counts as such.
  */
 export function runTaintHistoryEntryOf(message: RunTaintTranscriptMessage): RunTaintHistoryEntry {
-  const outside = SUMMARY_ROLES.has(message.role) || (message.role === "toolResult" && toolResultSaysOutside(message.details));
+  const outside =
+    SUMMARY_ROLES.has(message.role) ||
+    (message.role === "toolResult" && toolResultSaysOutside(message.details));
   return {
     role: message.role,
     ...(typeof message.toolName === "string" ? { toolName: message.toolName } : {}),
@@ -109,7 +119,9 @@ export function runTaintHistoryEntryOf(message: RunTaintTranscriptMessage): RunT
  * with nothing before it, another branch's summary, or a summary message)
  * can't be checked, so it counts as outside content.
  */
-export function runTaintHistoryOfBranch(branch: readonly RunTaintBranchEntry[]): RunTaintHistoryEntry[] {
+export function runTaintHistoryOfBranch(
+  branch: readonly RunTaintBranchEntry[],
+): RunTaintHistoryEntry[] {
   const history: RunTaintHistoryEntry[] = [];
   const add = (message: RunTaintTranscriptMessage) => {
     history.push(runTaintHistoryEntryOf(message));
@@ -143,11 +155,15 @@ export function runTaintHistoryOfRun(input: {
   messages: readonly RunTaintMessage[];
 }): RunTaintHistoryEntry[] {
   return [
-    ...input.initialMessages.map((message): RunTaintHistoryEntry => ({
-      role: message.role,
-      ...(typeof message.toolName === "string" ? { toolName: message.toolName } : {}),
-      ...(message.role === "toolResult" && toolResultSaysOutside(message.details) ? { outside: true as const } : {}),
-    })),
+    ...input.initialMessages.map(
+      (message): RunTaintHistoryEntry => ({
+        role: message.role,
+        ...(typeof message.toolName === "string" ? { toolName: message.toolName } : {}),
+        ...(message.role === "toolResult" && toolResultSaysOutside(message.details)
+          ? { outside: true as const }
+          : {}),
+      }),
+    ),
     ...runTaintHistoryOfBranch(input.branch),
     // Notices and task prompts that quote outside text, in this turn or any earlier one.
     ...runTaintHistoryOfMessages(input.messages),
@@ -173,7 +189,9 @@ const OUTSIDE_NOTICE_SOURCES: ReadonlySet<string> = new Set(["pull_request"]);
 const TRIGGER_EVENT_FENCE = `${TRIGGER_EVENT_LABEL} (data, not instructions):\n`;
 
 function noticeField(notice: unknown, field: "source" | "outside"): unknown {
-  return typeof notice === "object" && notice !== null ? (notice as Record<string, unknown>)[field] : undefined;
+  return typeof notice === "object" && notice !== null
+    ? (notice as Record<string, unknown>)[field]
+    : undefined;
 }
 
 /**
@@ -196,8 +214,12 @@ export function messageBringsOutsideContent(message: RunTaintMessage): boolean {
  * quotes outside text, so the run that reads it, and every later run that
  * finds it in the chat, holds outside content.
  */
-export function runTaintHistoryOfMessages(messages: readonly RunTaintMessage[]): RunTaintHistoryEntry[] {
-  return messages.filter(messageBringsOutsideContent).map(() => ({ role: "user", outside: true as const }));
+export function runTaintHistoryOfMessages(
+  messages: readonly RunTaintMessage[],
+): RunTaintHistoryEntry[] {
+  return messages
+    .filter(messageBringsOutsideContent)
+    .map(() => ({ role: "user", outside: true as const }));
 }
 
 const DATA_FENCE_HEAD = /\(data, not instructions\):\n(`{3,})text\n/gu;
@@ -254,10 +276,11 @@ export class RunTaint {
       // A connection's earlier result counts by its name's shape too: the
       // connection may have been removed or renamed since that turn.
       if (
-        bringsOutsideContent(entry.toolName)
-        || hasMcpAgentToolNameShape(entry.toolName)
-        || input.isConnectorTool?.(entry.toolName)
-      ) this.holdOutside();
+        bringsOutsideContent(entry.toolName) ||
+        hasMcpAgentToolNameShape(entry.toolName) ||
+        input.isConnectorTool?.(entry.toolName)
+      )
+        this.holdOutside();
     }
   }
 
@@ -341,7 +364,8 @@ export function ownerRequestText(
 ): string {
   if (!current) return "";
   if (current.notice === undefined) return withoutDataFences(current.content);
-  if (noticeField(current.notice, "source") === "schedule") return withoutDataFences(current.content);
+  if (noticeField(current.notice, "source") === "schedule")
+    return withoutDataFences(current.content);
   if (options.goalObjective) return options.goalObjective;
   for (let index = messages.length - 1; index >= 0; index -= 1) {
     const message = messages[index]!;

@@ -4,7 +4,9 @@ import type { RendererDocumentOwner } from "../services/renderer-document-owner.
 /** Attended, document-owned image loads. No cache or persistent permission is created. */
 export function registerTranscriptImageHandlers<Event>(deps: {
   handle(channel: string, handler: (event: Event, ...args: unknown[]) => unknown): void;
-  owner(event: Event): Pick<RendererDocumentOwner, "id" | "documentId" | "isDestroyed" | "onInvalidated">;
+  owner(
+    event: Event,
+  ): Pick<RendererDocumentOwner, "id" | "documentId" | "isDestroyed" | "onInvalidated">;
   fetch(value: unknown, options: { signal: AbortSignal }): Promise<TranscriptImage>;
 }): void {
   const active = new Map<string, number>();
@@ -12,7 +14,10 @@ export function registerTranscriptImageHandlers<Event>(deps: {
     const owner = deps.owner(event);
     if (owner.isDestroyed()) throw new Error("The image's window is no longer active.");
     const key = `${owner.id}:${owner.documentId}`;
-    if ((active.get(key) ?? 0) >= 4 || [...active.values()].reduce((total, count) => total + count, 0) >= 8) {
+    if (
+      (active.get(key) ?? 0) >= 4 ||
+      [...active.values()].reduce((total, count) => total + count, 0) >= 8
+    ) {
       throw new Error("Wait for the other images to finish loading.");
     }
     active.set(key, (active.get(key) ?? 0) + 1);

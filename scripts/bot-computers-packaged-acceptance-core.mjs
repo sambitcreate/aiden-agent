@@ -71,7 +71,8 @@ export function acceptanceSharedFileName(nonce) {
 export function isAcceptanceRequest(request) {
   if (!offeredTools(request).has(COMPUTER)) return false;
   return requestMessages(request).some(
-    (message) => message?.role === "user" && contentText(message.content).includes(ACCEPTANCE_MARKER),
+    (message) =>
+      message?.role === "user" && contentText(message.content).includes(ACCEPTANCE_MARKER),
   );
 }
 
@@ -85,9 +86,10 @@ function imagesAfter(messages, index) {
   if (follow?.role !== "user" || !Array.isArray(follow.content)) return [];
   if (follow.content[0]?.type !== "text" || follow.content[0].text !== ATTACHED_IMAGES) return [];
   return follow.content.flatMap((part) => {
-    const type = part?.type === "image_url" && typeof part.image_url?.url === "string"
-      ? /^data:(image\/(?:png|jpeg|webp));base64,/u.exec(part.image_url.url)?.[1]
-      : undefined;
+    const type =
+      part?.type === "image_url" && typeof part.image_url?.url === "string"
+        ? /^data:(image\/(?:png|jpeg|webp));base64,/u.exec(part.image_url.url)?.[1]
+        : undefined;
     return type ? [type] : [];
   });
 }
@@ -109,13 +111,18 @@ export function acceptanceHistory(request) {
       } catch {
         args = undefined;
       }
-      const at = messages.findIndex((entry) => entry?.role === "tool" && entry.tool_call_id === call.id);
+      const at = messages.findIndex(
+        (entry) => entry?.role === "tool" && entry.tool_call_id === call.id,
+      );
       const imageTypes = at < 0 ? [] : imagesAfter(messages, at);
       calls.push({
         id: call.id,
         name: call.function?.name,
         args,
-        result: at < 0 ? null : { text: contentText(messages[at].content), images: imageTypes.length, imageTypes },
+        result:
+          at < 0
+            ? null
+            : { text: contentText(messages[at].content), images: imageTypes.length, imageTypes },
       });
     }
   }
@@ -180,11 +187,15 @@ export function acceptanceToolCall(history, { giveBackNote, nonce }) {
     return { name: COMPUTER, arguments: { action: "wait", seconds: ACCEPTANCE_WAIT_SECONDS } };
   }
   const after = history.slice(handedBack + 1);
-  if (!after.some((call) => isAction(call, "capture"))) return { name: COMPUTER, arguments: { action: "capture" } };
+  if (!after.some((call) => isAction(call, "capture")))
+    return { name: COMPUTER, arguments: { action: "capture" } };
   if (!after.some((call) => call.name === COMPUTER_SHELL)) {
     return {
       name: COMPUTER_SHELL,
-      arguments: { command: shellCommand(nonce), description: "Print the macOS version and write a shared file" },
+      arguments: {
+        command: shellCommand(nonce),
+        description: "Print the macOS version and write a shared file",
+      },
     };
   }
   return null;
@@ -241,7 +252,12 @@ export function acceptanceResponse(request, context) {
   const call = acceptanceToolCall(history, context);
   return call
     ? { kind: "call", history, call, chunks: openAiToolCallChunks(history.length, call) }
-    : { kind: "done", history, call: null, chunks: openAiTextChunks("done", ACCEPTANCE_FINAL_TEXT) };
+    : {
+        kind: "done",
+        history,
+        call: null,
+        chunks: openAiTextChunks("done", ACCEPTANCE_FINAL_TEXT),
+      };
 }
 
 /** Each call, with the result from the first request that carried it (later requests may trim old screenshots). */
@@ -262,10 +278,15 @@ export function evaluateAcceptanceRequests(requests, { giveBackNote, nonce, shar
   const turns = requests.filter(isAcceptanceRequest);
   const evidence = { captureSize: null, waits: 0, interrupted: null, macosVersion: null };
   if (turns.length === 0) {
-    return { ok: false, failures: ["The Bot never sent the acceptance prompt with its computer tools."], evidence };
+    return {
+      ok: false,
+      failures: ["The Bot never sent the acceptance prompt with its computer tools."],
+      evidence,
+    };
   }
   const tools = offeredTools(turns[0]);
-  if (!tools.has(COMPUTER_SHELL)) failures.push("The Bot was offered computer but not computer_shell.");
+  if (!tools.has(COMPUTER_SHELL))
+    failures.push("The Bot was offered computer but not computer_shell.");
   const calls = firstResults(turns);
 
   const [capture, click] = calls;
@@ -273,8 +294,13 @@ export function evaluateAcceptanceRequests(requests, { giveBackNote, nonce, shar
   if (!capture || !isAction(capture, "capture") || !evidence.captureSize) {
     failures.push("The first capture did not return a screenshot of the Bot's computer.");
   } else {
-    if (Math.max(evidence.captureSize.width, evidence.captureSize.height) > ACCEPTANCE_CAPTURE_MAX_EDGE) {
-      failures.push(`The capture was larger than ${ACCEPTANCE_CAPTURE_MAX_EDGE} px on its long side.`);
+    if (
+      Math.max(evidence.captureSize.width, evidence.captureSize.height) >
+      ACCEPTANCE_CAPTURE_MAX_EDGE
+    ) {
+      failures.push(
+        `The capture was larger than ${ACCEPTANCE_CAPTURE_MAX_EDGE} px on its long side.`,
+      );
     }
     if (!isJpegCapture(capture.result)) failures.push("The first capture was not a JPEG.");
   }
@@ -285,21 +311,28 @@ export function evaluateAcceptanceRequests(requests, { giveBackNote, nonce, shar
     // Only the tool's own report that it clicked counts: a click Take over
     // interrupted returns the give-back note and never landed.
     const [x, y] = click.args.coordinate;
-    if (click.result.text !== `Clicked at (${x}, ${y}).`) failures.push(`The click did not land: ${click.result.text}`);
-    if (click.result.images !== 0) failures.push("The click returned an image it was not asked for.");
+    if (click.result.text !== `Clicked at (${x}, ${y}).`)
+      failures.push(`The click did not land: ${click.result.text}`);
+    if (click.result.images !== 0)
+      failures.push("The click returned an image it was not asked for.");
   }
 
   evidence.waits = calls.filter((call) => isAction(call, "wait")).length;
   const handedBack = calls.findIndex((call) => call.result?.text === giveBackNote);
   if (handedBack < 0) {
-    failures.push("No call was interrupted by Take over and returned the give-back note after Give back.");
+    failures.push(
+      "No call was interrupted by Take over and returned the give-back note after Give back.",
+    );
   } else {
     const interrupted = calls[handedBack];
     evidence.interrupted = interrupted.args?.action ?? null;
-    if (interrupted.result.images !== 0) failures.push("The give-back note carried a capture of what the person did.");
+    if (interrupted.result.images !== 0)
+      failures.push("The give-back note carried a capture of what the person did.");
     const fresh = calls.slice(handedBack + 1).find((call) => isAction(call, "capture"));
-    if (!fresh || !captureSize(fresh.result)) failures.push("The capture after Give back did not return a screenshot.");
-    else if (!isJpegCapture(fresh.result)) failures.push("The capture after Give back was not a JPEG.");
+    if (!fresh || !captureSize(fresh.result))
+      failures.push("The capture after Give back did not return a screenshot.");
+    else if (!isJpegCapture(fresh.result))
+      failures.push("The capture after Give back was not a JPEG.");
   }
 
   const shell = calls.find((call) => call.name === COMPUTER_SHELL);
@@ -308,15 +341,20 @@ export function evaluateAcceptanceRequests(requests, { giveBackNote, nonce, shar
   } else {
     const lines = shell.result.text.split(/\r?\n/u).map((line) => line.trim());
     evidence.macosVersion = lines.find((line) => /^\d+\.\d+(?:\.\d+)?$/u.test(line)) ?? null;
-    if (!evidence.macosVersion) failures.push("computer_shell did not print the guest's macOS version.");
-    if (!lines.includes(nonce)) failures.push("computer_shell did not read back the file it wrote to ~/Shared.");
+    if (!evidence.macosVersion)
+      failures.push("computer_shell did not print the guest's macOS version.");
+    if (!lines.includes(nonce))
+      failures.push("computer_shell did not read back the file it wrote to ~/Shared.");
   }
   if (typeof sharedFileText !== "string" || sharedFileText.trim() !== nonce) {
     failures.push("The file the Bot wrote to ~/Shared did not reach its Computer folder.");
   }
 
   const last = acceptanceHistory(turns[turns.length - 1]);
-  if (acceptanceToolCall(last, { giveBackNote, nonce }) !== null || !last.some((call) => call.name === COMPUTER_SHELL)) {
+  if (
+    acceptanceToolCall(last, { giveBackNote, nonce }) !== null ||
+    !last.some((call) => call.name === COMPUTER_SHELL)
+  ) {
     failures.push("The acceptance sequence did not reach its end.");
   }
   return { ok: failures.length === 0, failures, evidence };
@@ -325,7 +363,9 @@ export function evaluateAcceptanceRequests(requests, { giveBackNote, nonce, shar
 /** Who paused the Bot, from Aiden's `bot-service/bot-pauses.json`; undefined when it runs or the file is unreadable. */
 export function pausedBy(document, botId) {
   const record = document?.bots?.[botId];
-  return record && typeof record.by === "string" && Number.isSafeInteger(record.since) ? record.by : undefined;
+  return record && typeof record.by === "string" && Number.isSafeInteger(record.since)
+    ? record.by
+    : undefined;
 }
 
 function vmState(vms, name) {
@@ -347,21 +387,30 @@ export function evaluateComputerTimeline(timeline, { baseVm }) {
   if (!given) failures.push("The Bot's computer was never observed before the prompt.");
   else {
     if (!given.baseBuild) failures.push("Set up did not finish a base.");
-    if (vmState(given.vms, baseVm) !== "stopped") failures.push("The base VM was not in Lume's list, stopped.");
-    if (computers.length !== 1 || !vmName) failures.push("Exactly one Bot should have been given a computer.");
-    else if (vmState(given.vms, vmName) === undefined) failures.push("Give did not clone a VM for the Bot.");
-    else if (vmState(given.vms, vmName) !== "stopped") failures.push("Giving the Bot a computer started it.");
+    if (vmState(given.vms, baseVm) !== "stopped")
+      failures.push("The base VM was not in Lume's list, stopped.");
+    if (computers.length !== 1 || !vmName)
+      failures.push("Exactly one Bot should have been given a computer.");
+    else if (vmState(given.vms, vmName) === undefined)
+      failures.push("Give did not clone a VM for the Bot.");
+    else if (vmState(given.vms, vmName) !== "stopped")
+      failures.push("Giving the Bot a computer started it.");
   }
   if (vmName) {
-    if (vmState(working?.vms, vmName) !== "running") failures.push("The Bot's capture did not start its computer.");
+    if (vmState(working?.vms, vmName) !== "running")
+      failures.push("The Bot's capture did not start its computer.");
     if (paused?.pausedBy !== "mac") failures.push("The Bot was not paused from this Mac.");
-    if (vmState(paused?.vms, vmName) !== "stopped") failures.push("Pause did not stop the Bot's computer.");
-    if (paused?.vmProcesses !== 0) failures.push("The paused computer's Lume process kept running.");
+    if (vmState(paused?.vms, vmName) !== "stopped")
+      failures.push("Pause did not stop the Bot's computer.");
+    if (paused?.vmProcesses !== 0)
+      failures.push("The paused computer's Lume process kept running.");
     if (!deleted || (Array.isArray(deleted.computers) ? deleted.computers.length : 1) !== 0) {
       failures.push("Deleting the Bot left its computer in Aiden's state.");
     }
-    if (!deleted || vmState(deleted.vms, vmName) !== undefined) failures.push("Deleting the Bot left its VM in Lume.");
-    if (!deleted || vmState(deleted.vms, baseVm) === undefined) failures.push("Deleting the Bot removed the shared base.");
+    if (!deleted || vmState(deleted.vms, vmName) !== undefined)
+      failures.push("Deleting the Bot left its VM in Lume.");
+    if (!deleted || vmState(deleted.vms, baseVm) === undefined)
+      failures.push("Deleting the Bot removed the shared base.");
   }
   if (!removed || !Array.isArray(removed.vms) || removed.vms.length !== 0 || removed.baseBuild) {
     failures.push("Remove everything left a VM or a base behind.");
@@ -381,7 +430,9 @@ export function acceptanceFixture(port, capability) {
           label: ACCEPTANCE_PROVIDER_LABEL,
           baseUrl: acceptanceCapabilityBaseUrl(port, capability),
           models: [ACCEPTANCE_MODEL],
-          modelMetadata: { [ACCEPTANCE_MODEL]: { source: "provider", vision: true, toolCall: true } },
+          modelMetadata: {
+            [ACCEPTANCE_MODEL]: { source: "provider", vision: true, toolCall: true },
+          },
           defaultModel: ACCEPTANCE_MODEL,
           needsKey: false,
         },

@@ -30,7 +30,12 @@ import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } fr
 import { createServer } from "node:http";
 import path from "node:path";
 import { Readable, Writable } from "node:stream";
-import { AgentSideConnection, ndJsonStream, PROTOCOL_VERSION, RequestError } from "@agentclientprotocol/sdk";
+import {
+  AgentSideConnection,
+  ndJsonStream,
+  PROTOCOL_VERSION,
+  RequestError,
+} from "@agentclientprotocol/sdk";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 
@@ -51,7 +56,8 @@ const saveState = (state) => {
   if (stateFile) writeFileSync(stateFile, JSON.stringify(state));
 };
 
-if (process.env.FAKE_AGENT_NOISE === "1") process.stdout.write("Opening in existing browser session.\n");
+if (process.env.FAKE_AGENT_NOISE === "1")
+  process.stdout.write("Opening in existing browser session.\n");
 process.stderr.write("I1006 fake agent starting\n");
 
 const MODELS = ["fake-flash-low", "fake-flash-high", "fake-pro"];
@@ -80,14 +86,27 @@ function configOptions(session) {
 }
 
 function newSessionState(id, cwd, mcpServers) {
-  return { id, cwd, mcpServers, model: MODELS[0], mode: "default", prompts: 0, cancelled: false, wake: undefined };
+  return {
+    id,
+    cwd,
+    mcpServers,
+    model: MODELS[0],
+    mode: "default",
+    prompts: 0,
+    cancelled: false,
+    wake: undefined,
+  };
 }
 
 const stream = ndJsonStream(Writable.toWeb(process.stdout), Readable.toWeb(process.stdin));
 const connection = new AgentSideConnection(
   () => ({
     async initialize(params) {
-      log({ method: "initialize", fs: params.clientCapabilities?.fs, terminal: params.clientCapabilities?.terminal });
+      log({
+        method: "initialize",
+        fs: params.clientCapabilities?.fs,
+        terminal: params.clientCapabilities?.terminal,
+      });
       return {
         protocolVersion: PROTOCOL_VERSION,
         agentCapabilities: {
@@ -118,12 +137,16 @@ const connection = new AgentSideConnection(
           server.close();
           if (url.searchParams.get("state") !== state) reject(new Error("state mismatch"));
           else if (url.searchParams.get("error")) {
-            reject(new RequestError(-32000, `Google sign-in failed: ${url.searchParams.get("error")}`));
-          }
-          else {
+            reject(
+              new RequestError(-32000, `Google sign-in failed: ${url.searchParams.get("error")}`),
+            );
+          } else {
             const dir = path.join(process.env.GEMINI_HOME, "antigravity-acp");
             mkdirSync(dir, { recursive: true });
-            writeFileSync(path.join(dir, "acp_token.json"), JSON.stringify({ refresh_token: "1//fake" }));
+            writeFileSync(
+              path.join(dir, "acp_token.json"),
+              JSON.stringify({ refresh_token: "1//fake" }),
+            );
             resolve();
           }
         });
@@ -143,7 +166,12 @@ const connection = new AgentSideConnection(
       const state = loadState();
       state[id] = { cwd: params.cwd, prompts: 0 };
       saveState(state);
-      log({ method: "newSession", sessionId: id, cwd: params.cwd, mcpServers: params.mcpServers.length });
+      log({
+        method: "newSession",
+        sessionId: id,
+        cwd: params.cwd,
+        mcpServers: params.mcpServers.length,
+      });
       return { sessionId: id, configOptions: configOptions(session) };
     },
     async resumeSession(params) {
@@ -181,11 +209,20 @@ const connection = new AgentSideConnection(
       const state = loadState();
       state[session.id] = { cwd: session.cwd, prompts: session.prompts };
       saveState(state);
-      const text = params.prompt
-        .filter((block) => block.type === "text")
-        .map((block) => block.text)
-        .at(-1) ?? "";
-      log({ method: "prompt", sessionId: session.id, model: session.model, mode: session.mode, blocks: params.prompt.map((b) => b.type), contextText: params.prompt[0]?.resource?.text, text });
+      const text =
+        params.prompt
+          .filter((block) => block.type === "text")
+          .map((block) => block.text)
+          .at(-1) ?? "";
+      log({
+        method: "prompt",
+        sessionId: session.id,
+        model: session.model,
+        mode: session.mode,
+        blocks: params.prompt.map((b) => b.type),
+        contextText: params.prompt[0]?.resource?.text,
+        text,
+      });
       const say = (value) =>
         connection.sessionUpdate({
           sessionId: session.id,
@@ -196,22 +233,71 @@ const connection = new AgentSideConnection(
       switch (command) {
         case "stream-diff": {
           const file = path.join(session.cwd, "streamed.txt");
-          const content = (count) => [{ type: "diff", path: file, oldText: "old line\n", newText: Array.from({ length: argument === "unchanged" ? 300 : count }, (_, i) => `new ${i}\n`).join("") }];
-          await connection.sessionUpdate({ sessionId: session.id, update: { sessionUpdate: "tool_call", toolCallId: "stream-1", title: "Edit streamed.txt", kind: "edit", status: "in_progress", content: content(0) } });
+          const content = (count) => [
+            {
+              type: "diff",
+              path: file,
+              oldText: "old line\n",
+              newText: Array.from(
+                { length: argument === "unchanged" ? 300 : count },
+                (_, i) => `new ${i}\n`,
+              ).join(""),
+            },
+          ];
+          await connection.sessionUpdate({
+            sessionId: session.id,
+            update: {
+              sessionUpdate: "tool_call",
+              toolCallId: "stream-1",
+              title: "Edit streamed.txt",
+              kind: "edit",
+              status: "in_progress",
+              content: content(0),
+            },
+          });
           for (let count = 1; count <= 300; count += 1) {
-            await connection.sessionUpdate({ sessionId: session.id, update: { sessionUpdate: "tool_call_update", toolCallId: "stream-1", title: "Edit streamed.txt", kind: "edit", status: "in_progress", content: content(count), rawInput: { text: `chunk ${count}` } } });
+            await connection.sessionUpdate({
+              sessionId: session.id,
+              update: {
+                sessionUpdate: "tool_call_update",
+                toolCallId: "stream-1",
+                title: "Edit streamed.txt",
+                kind: "edit",
+                status: "in_progress",
+                content: content(count),
+                rawInput: { text: `chunk ${count}` },
+              },
+            });
           }
           // Completion may carry no content. The last streamed diff must survive.
-          await connection.sessionUpdate({ sessionId: session.id, update: { sessionUpdate: "tool_call_update", toolCallId: "stream-1", status: "completed" } });
+          await connection.sessionUpdate({
+            sessionId: session.id,
+            update: {
+              sessionUpdate: "tool_call_update",
+              toolCallId: "stream-1",
+              status: "completed",
+            },
+          });
           break;
         }
         case "tool-updates": {
           for (const entry of JSON.parse(argument)) {
             if (entry.permission) {
-              const decision = await connection.requestPermission({ sessionId: session.id, toolCall: entry.permission, options: [{ optionId: "allow", name: "Allow once", kind: "allow_once" }, { optionId: "deny", name: "Deny", kind: "reject_once" }] });
+              const decision = await connection.requestPermission({
+                sessionId: session.id,
+                toolCall: entry.permission,
+                options: [
+                  { optionId: "allow", name: "Allow once", kind: "allow_once" },
+                  { optionId: "deny", name: "Deny", kind: "reject_once" },
+                ],
+              });
               log({ method: "permissionResult", outcome: decision.outcome });
             } else if (entry.write) {
-              await connection.writeTextFile({ sessionId: session.id, path: entry.write.path, content: entry.write.content });
+              await connection.writeTextFile({
+                sessionId: session.id,
+                path: entry.write.path,
+                content: entry.write.content,
+              });
             } else {
               await connection.sessionUpdate({ sessionId: session.id, update: entry });
             }
@@ -224,7 +310,10 @@ const connection = new AgentSideConnection(
         case "think":
           await connection.sessionUpdate({
             sessionId: session.id,
-            update: { sessionUpdate: "agent_thought_chunk", content: { type: "text", text: "pondering" } },
+            update: {
+              sessionUpdate: "agent_thought_chunk",
+              content: { type: "text", text: "pondering" },
+            },
           });
           await say(argument);
           break;
@@ -244,10 +333,22 @@ const connection = new AgentSideConnection(
           if (session.mode !== "yolo") {
             const decision = await connection.requestPermission({
               sessionId: session.id,
-              toolCall: { toolCallId, title: `Edit ${argument}`, kind: "edit", locations: [{ path: argument }] },
+              toolCall: {
+                toolCallId,
+                title: `Edit ${argument}`,
+                kind: "edit",
+                locations: [{ path: argument }],
+              },
               options: [
                 { optionId: "allow", name: "Allow once", kind: "allow_once" },
-                { optionId: "always", name: "Allow for this chat", kind: "allow_always", _meta: { "agy.security.warning": { title: "Careful", message: "Prompt injection risk" } } },
+                {
+                  optionId: "always",
+                  name: "Allow for this chat",
+                  kind: "allow_always",
+                  _meta: {
+                    "agy.security.warning": { title: "Careful", message: "Prompt injection risk" },
+                  },
+                },
                 { optionId: "deny", name: "Deny", kind: "reject_once" },
               ],
             });
@@ -263,7 +364,11 @@ const connection = new AgentSideConnection(
           }
           let written = "write failed";
           try {
-            await connection.writeTextFile({ sessionId: session.id, path: argument, content: "new line\n" });
+            await connection.writeTextFile({
+              sessionId: session.id,
+              path: argument,
+              content: "new line\n",
+            });
             written = "edit applied";
           } catch (error) {
             written = `write refused: ${error.message}`;
@@ -274,7 +379,9 @@ const connection = new AgentSideConnection(
               sessionUpdate: "tool_call_update",
               toolCallId,
               status: written === "edit applied" ? "completed" : "failed",
-              content: [{ type: "diff", path: argument, oldText: "old line\n", newText: "new line\n" }],
+              content: [
+                { type: "diff", path: argument, oldText: "old line\n", newText: "new line\n" },
+              ],
             },
           });
           await say(written);
@@ -293,22 +400,34 @@ const connection = new AgentSideConnection(
           const toolCallId = "exec-1";
           await connection.sessionUpdate({
             sessionId: session.id,
-            update: { sessionUpdate: "tool_call", toolCallId, title: "rm -rf build", kind: "execute", status: "pending" },
+            update: {
+              sessionUpdate: "tool_call",
+              toolCallId,
+              title: "rm -rf build",
+              kind: "execute",
+              status: "pending",
+            },
           });
-          const decision = session.mode === "yolo"
-            ? { outcome: { outcome: "selected", optionId: "allow" } }
-            : await connection.requestPermission({
-                sessionId: session.id,
-                toolCall: { toolCallId, title: "rm -rf build", kind: "execute" },
-                options: [
-                  { optionId: "allow", name: "Allow once", kind: "allow_once" },
-                  { optionId: "deny", name: "Deny", kind: "reject_once" },
-                ],
-              });
-          const allowed = decision.outcome.outcome === "selected" && decision.outcome.optionId === "allow";
+          const decision =
+            session.mode === "yolo"
+              ? { outcome: { outcome: "selected", optionId: "allow" } }
+              : await connection.requestPermission({
+                  sessionId: session.id,
+                  toolCall: { toolCallId, title: "rm -rf build", kind: "execute" },
+                  options: [
+                    { optionId: "allow", name: "Allow once", kind: "allow_once" },
+                    { optionId: "deny", name: "Deny", kind: "reject_once" },
+                  ],
+                });
+          const allowed =
+            decision.outcome.outcome === "selected" && decision.outcome.optionId === "allow";
           await connection.sessionUpdate({
             sessionId: session.id,
-            update: { sessionUpdate: "tool_call_update", toolCallId, status: allowed ? "completed" : "failed" },
+            update: {
+              sessionUpdate: "tool_call_update",
+              toolCallId,
+              status: allowed ? "completed" : "failed",
+            },
           });
           await say(allowed ? "command ran" : "command denied");
           break;
@@ -322,7 +441,9 @@ const connection = new AgentSideConnection(
               { optionId: "blue", name: "Blue", kind: "allow_once" },
             ],
           });
-          await say(`answer:${decision.outcome.outcome === "selected" ? decision.outcome.optionId : "none"}`);
+          await say(
+            `answer:${decision.outcome.outcome === "selected" ? decision.outcome.optionId : "none"}`,
+          );
           break;
         }
         case "bridge": {
@@ -331,14 +452,25 @@ const connection = new AgentSideConnection(
             await say("no bridge");
             break;
           }
-          const headers = Object.fromEntries(server.headers.map((header) => [header.name, header.value]));
+          const headers = Object.fromEntries(
+            server.headers.map((header) => [header.name, header.value]),
+          );
           const client = new Client({ name: "fake-agent", version: "1.0.0" });
-          await client.connect(new StreamableHTTPClientTransport(new URL(server.url), { requestInit: { headers } }));
+          await client.connect(
+            new StreamableHTTPClientTransport(new URL(server.url), { requestInit: { headers } }),
+          );
           const tools = await client.listTools();
           log({ method: "bridgeTools", names: tools.tools.map((tool) => tool.name) });
           await connection.sessionUpdate({
             sessionId: session.id,
-            update: { sessionUpdate: "tool_call", toolCallId: "mcp-1", title: `aiden/${argument}`, kind: "other", status: "in_progress", _meta: { is_mcp_tool_call: true } },
+            update: {
+              sessionUpdate: "tool_call",
+              toolCallId: "mcp-1",
+              title: `aiden/${argument}`,
+              kind: "other",
+              status: "in_progress",
+              _meta: { is_mcp_tool_call: true },
+            },
           });
           const result = await client.callTool({ name: argument, arguments: { value: "hello" } });
           await client.close();
@@ -349,17 +481,29 @@ const connection = new AgentSideConnection(
         case "bridge-late":
         case "bridge-abandon": {
           const server = session.mcpServers.find((candidate) => candidate.type === "http");
-          const headers = Object.fromEntries(server.headers.map((header) => [header.name, header.value]));
+          const headers = Object.fromEntries(
+            server.headers.map((header) => [header.name, header.value]),
+          );
           const client = new Client({ name: "fake-agent", version: "1.0.0" });
-          await client.connect(new StreamableHTTPClientTransport(new URL(server.url), { requestInit: { headers } }));
+          await client.connect(
+            new StreamableHTTPClientTransport(new URL(server.url), { requestInit: { headers } }),
+          );
           const call = (value) =>
             client
-              .callTool({ name: argument, arguments: { value } }, undefined, command === "bridge-abandon" ? { timeout: 300 } : undefined)
+              .callTool(
+                { name: argument, arguments: { value } },
+                undefined,
+                command === "bridge-abandon" ? { timeout: 300 } : undefined,
+              )
               .then((result) => result.content.map((item) => item.text ?? "").join(""))
               .catch(() => "gave-up");
-          const results = command === "bridge-late"
-            ? await Promise.all([call("first"), new Promise((resolve) => setTimeout(resolve, 400)).then(() => call("second"))])
-            : [await call("only")];
+          const results =
+            command === "bridge-late"
+              ? await Promise.all([
+                  call("first"),
+                  new Promise((resolve) => setTimeout(resolve, 400)).then(() => call("second")),
+                ])
+              : [await call("only")];
           await client.close().catch(() => {});
           await say(`${command}:${results.join(",")}`);
           break;
@@ -376,7 +520,11 @@ const connection = new AgentSideConnection(
         }
         case "write": {
           try {
-            await connection.writeTextFile({ sessionId: session.id, path: argument, content: "unasked\n" });
+            await connection.writeTextFile({
+              sessionId: session.id,
+              path: argument,
+              content: "unasked\n",
+            });
             await say("wrote");
           } catch (error) {
             await say(`write refused: ${error.message}`);
@@ -407,7 +555,10 @@ const connection = new AgentSideConnection(
           await say(`unknown:${text}`);
       }
       if (session.cancelled) return { stopReason: "cancelled" };
-      return { stopReason: "end_turn", usage: { totalTokens: 15, inputTokens: 10, outputTokens: 5 } };
+      return {
+        stopReason: "end_turn",
+        usage: { totalTokens: 15, inputTokens: 10, outputTokens: 5 },
+      };
     },
   }),
   stream,

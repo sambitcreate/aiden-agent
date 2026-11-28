@@ -45,10 +45,9 @@ test("a text delta projects a running text_delta event", () => {
 
 test("empty or non-text deltas are handled without producing an event", () => {
   const state = createRunProjectionState();
-  assert.deepEqual(
-    projectRunContentNotification(state, "chat:delta", { delta: "" }, context()),
-    { kind: "ignored" },
-  );
+  assert.deepEqual(projectRunContentNotification(state, "chat:delta", { delta: "" }, context()), {
+    kind: "ignored",
+  });
   assert.deepEqual(
     projectRunContentNotification(state, "chat:reasoning-delta", { delta: 42 }, context()),
     { kind: "ignored" },
@@ -59,11 +58,23 @@ test("a reasoning delta projects reasoning_delta and status projects running", (
   const state = createRunProjectionState();
   assert.deepEqual(
     projectRunContentNotification(state, "chat:reasoning-delta", { delta: "Think" }, context()),
-    { kind: "event", type: "reasoning_delta", payload: { text: "Think" }, terminal: false, state: "running" },
+    {
+      kind: "event",
+      type: "reasoning_delta",
+      payload: { text: "Think" },
+      terminal: false,
+      state: "running",
+    },
   );
   assert.deepEqual(
     projectRunContentNotification(state, "chat:status", { status: "anything" }, context()),
-    { kind: "event", type: "status", payload: { state: "running" }, terminal: false, state: "running" },
+    {
+      kind: "event",
+      type: "status",
+      payload: { state: "running" },
+      terminal: false,
+      state: "running",
+    },
   );
 });
 
@@ -137,7 +148,10 @@ test("tool projection state is per run", () => {
     context(),
   );
   assert.equal(result.kind, "event");
-  assert.deepEqual(result.kind === "event" ? result.payload : null, { toolId: "tool_1", name: "a" });
+  assert.deepEqual(result.kind === "event" ? result.payload : null, {
+    toolId: "tool_1",
+    name: "a",
+  });
 });
 
 test("a tool without a name is labelled Tool", () => {
@@ -147,7 +161,10 @@ test("a tool without a name is labelled Tool", () => {
     { phase: "call" },
     context(),
   );
-  assert.deepEqual(result.kind === "event" ? result.payload : null, { toolId: "tool_1", name: "Tool" });
+  assert.deepEqual(result.kind === "event" ? result.payload : null, {
+    toolId: "tool_1",
+    name: "Tool",
+  });
 });
 
 test("chat:done with cancelled true is a terminal server cancellation by default", () => {
@@ -250,7 +267,10 @@ test("chat:error is a terminal internal error unless the run was cancelled", () 
     {
       kind: "event",
       type: "error",
-      payload: { code: "internal_error", message: "The model provider could not complete this response." },
+      payload: {
+        code: "internal_error",
+        message: "The model provider could not complete this response.",
+      },
       terminal: true,
       state: "error",
     },
@@ -262,7 +282,13 @@ test("chat:error is a terminal internal error unless the run was cancelled", () 
       { cancelled: true },
       context(),
     ),
-    { kind: "event", type: "cancelled", payload: { source: "server" }, terminal: true, state: "cancelled" },
+    {
+      kind: "event",
+      type: "cancelled",
+      payload: { source: "server" },
+      terminal: true,
+      state: "cancelled",
+    },
   );
 });
 
@@ -275,7 +301,12 @@ test("a valid timeline projects a running timeline event and an invalid one is i
     steps: [],
   };
   assert.deepEqual(
-    projectRunContentNotification(createRunProjectionState(), "chat:timeline", { timeline }, context()),
+    projectRunContentNotification(
+      createRunProjectionState(),
+      "chat:timeline",
+      { timeline },
+      context(),
+    ),
     { kind: "event", type: "timeline", payload: { timeline }, terminal: false, state: "running" },
   );
   assert.deepEqual(

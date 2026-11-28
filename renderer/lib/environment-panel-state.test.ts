@@ -20,23 +20,41 @@ test("Simulator tab sits after Browser only when the devices capability is on", 
     "files",
     "browser",
     "devices",
-    "new-tab", "context", "terminal", "artifacts",
+    "new-tab",
+    "context",
+    "terminal",
+    "artifacts",
   ]);
   assert.deepEqual(availableEnvironmentPanelTabs(false, true), [
     "review",
     "files",
     "browser",
     "devices",
-    "new-tab", "context", "terminal", "artifacts",
+    "new-tab",
+    "context",
+    "terminal",
+    "artifacts",
   ]);
   assert.deepEqual(availableEnvironmentPanelTabs(true, false), [
     "review",
     "subagents",
     "files",
     "browser",
-    "new-tab", "context", "terminal", "artifacts",
+    "new-tab",
+    "context",
+    "terminal",
+    "artifacts",
   ]);
-  assert.deepEqual(availableEnvironmentPanelTabs(true), ["review", "subagents", "files", "browser", "new-tab", "context", "terminal", "artifacts"]);
+  assert.deepEqual(availableEnvironmentPanelTabs(true), [
+    "review",
+    "subagents",
+    "files",
+    "browser",
+    "new-tab",
+    "context",
+    "terminal",
+    "artifacts",
+  ]);
 });
 
 test("a disabled Simulator tab normalizes to Review without rewriting storage", () => {
@@ -62,9 +80,11 @@ test("stored tab parsing accepts every known tab and rejects anything else", () 
   assert.equal(storedEnvironmentPanelTab(storage(null), "tab", true, true), "review");
 });
 
-
 test("launcher replaces itself with a tool; repeat opens select a singleton and closing the last tab returns home", () => {
-  let state = reduceEnvironmentSurfaceState({ toolsOpen: false, quickViewOpen: true, toolsTab: "review", frontSurface: "quick-view" }, { type: "show-tools" });
+  let state = reduceEnvironmentSurfaceState(
+    { toolsOpen: false, quickViewOpen: true, toolsTab: "review", frontSurface: "quick-view" },
+    { type: "show-tools" },
+  );
   assert.equal(state.toolsTab, "new-tab");
   assert.equal(state.quickViewOpen, true);
   state = reduceEnvironmentSurfaceState(state, { type: "show-tools", tab: "files" });
@@ -79,7 +99,13 @@ test("launcher replaces itself with a tool; repeat opens select a singleton and 
 });
 
 test("hide preserves open tabs, and generic reopening returns to the launcher", () => {
-  const state = { toolsOpen: true, quickViewOpen: false, toolsTab: "context" as const, openTabs: ["context" as const], frontSurface: "tools" as const };
+  const state = {
+    toolsOpen: true,
+    quickViewOpen: false,
+    toolsTab: "context" as const,
+    openTabs: ["context" as const],
+    frontSurface: "tools" as const,
+  };
   const hidden = reduceEnvironmentSurfaceState(state, { type: "close-tools" });
   assert.deepEqual(hidden.openTabs, ["context"]);
   const reopened = reduceEnvironmentSurfaceState(hidden, { type: "toggle-tools", tab: "new-tab" });
@@ -88,16 +114,60 @@ test("hide preserves open tabs, and generic reopening returns to the launcher", 
 });
 
 test("tab storage filters unknown and duplicate values and migrates malformed/legacy storage", () => {
-  assert.deepEqual(parseEnvironmentOpenTabs('{"version":1,"tabs":["files","files","unknown","context",null]}', "review"), ["files", "context"]);
-  assert.deepEqual(parseEnvironmentOpenTabs('{"version":2,"tabs":["context"]}', "files"), ["files"]);
-  assert.deepEqual(parseEnvironmentOpenTabs('broken', "review"), ["review"]);
+  assert.deepEqual(
+    parseEnvironmentOpenTabs(
+      '{"version":1,"tabs":["files","files","unknown","context",null]}',
+      "review",
+    ),
+    ["files", "context"],
+  );
+  assert.deepEqual(parseEnvironmentOpenTabs('{"version":2,"tabs":["context"]}', "files"), [
+    "files",
+  ]);
+  assert.deepEqual(parseEnvironmentOpenTabs("broken", "review"), ["review"]);
 });
 
 test("the tools surface mounts workspace views in a fixed order and leaves out disabled ones", () => {
-  assert.deepEqual(environmentPanelViewOrder(false, false), ["new-tab", "context", "terminal", "review", "files", "browser", "artifacts"]);
-  assert.deepEqual(environmentPanelViewOrder(true, false), ["new-tab", "context", "terminal", "review", "subagents", "files", "browser", "artifacts"]);
-  assert.deepEqual(environmentPanelViewOrder(false, true), ["new-tab", "context", "terminal", "review", "files", "browser", "devices", "artifacts"]);
-  assert.deepEqual(environmentPanelViewOrder(true, true), ["new-tab", "context", "terminal", "review", "subagents", "files", "browser", "devices", "artifacts"]);
+  assert.deepEqual(environmentPanelViewOrder(false, false), [
+    "new-tab",
+    "context",
+    "terminal",
+    "review",
+    "files",
+    "browser",
+    "artifacts",
+  ]);
+  assert.deepEqual(environmentPanelViewOrder(true, false), [
+    "new-tab",
+    "context",
+    "terminal",
+    "review",
+    "subagents",
+    "files",
+    "browser",
+    "artifacts",
+  ]);
+  assert.deepEqual(environmentPanelViewOrder(false, true), [
+    "new-tab",
+    "context",
+    "terminal",
+    "review",
+    "files",
+    "browser",
+    "devices",
+    "artifacts",
+  ]);
+  assert.deepEqual(environmentPanelViewOrder(true, true), [
+    "new-tab",
+    "context",
+    "terminal",
+    "review",
+    "subagents",
+    "files",
+    "browser",
+    "devices",
+    "artifacts",
+  ]);
 });
 
 test("the view order is a permutation of the tab list, so every tab has a mounted view", () => {

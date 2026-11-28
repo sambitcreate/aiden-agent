@@ -34,13 +34,24 @@ export interface SpendingLimitsSettings {
 
 /** A limit as stored: more than zero, at most the maximum, whole cents. */
 export function parseSpendingLimitUsd(value: unknown): number | undefined {
-  if (typeof value !== "number" || !Number.isFinite(value) || value <= 0 || value > SPENDING_LIMIT_MAX_USD) return undefined;
+  if (
+    typeof value !== "number" ||
+    !Number.isFinite(value) ||
+    value <= 0 ||
+    value > SPENDING_LIMIT_MAX_USD
+  )
+    return undefined;
   const cents = Math.round(value * 100);
   return cents > 0 ? cents / 100 : undefined;
 }
 
 export function isSpendingMonthStartDay(value: unknown): value is number {
-  return typeof value === "number" && Number.isInteger(value) && value >= 1 && value <= SPENDING_MONTH_START_DAY_MAX;
+  return (
+    typeof value === "number" &&
+    Number.isInteger(value) &&
+    value >= 1 &&
+    value <= SPENDING_MONTH_START_DAY_MAX
+  );
 }
 
 /**
@@ -92,7 +103,11 @@ export function meteredProviderConnected(providers: readonly SpendingProviderFie
 
 /** Whether the owner already set any spending limit, so the controls stay in reach to change it. */
 export function anySpendingLimitSet(limits: SpendingLimitsSettings): boolean {
-  return limits.chatUsd !== undefined || limits.botMonthUsd !== undefined || limits.routineRunUsd !== undefined;
+  return (
+    limits.chatUsd !== undefined ||
+    limits.botMonthUsd !== undefined ||
+    limits.routineRunUsd !== undefined
+  );
 }
 
 /** "$5.00", "$0.42", "$1,250.00". An amount under a cent reads "less than $0.01". */
@@ -133,7 +148,9 @@ export interface SpendingChangedEvent {
   ownerId: string;
 }
 
-export function spendingAllowedUsd(view: Pick<SpendingStatusView, "limitUsd" | "extraUsd">): number {
+export function spendingAllowedUsd(
+  view: Pick<SpendingStatusView, "limitUsd" | "extraUsd">,
+): number {
   return view.limitUsd + view.extraUsd;
 }
 
@@ -143,7 +160,12 @@ export function spendingState(spentUsd: number, allowedUsd: number): SpendingSta
 }
 
 function amount(value: unknown): value is number {
-  return typeof value === "number" && Number.isFinite(value) && value >= 0 && value <= SPENDING_LIMIT_MAX_USD * 100;
+  return (
+    typeof value === "number" &&
+    Number.isFinite(value) &&
+    value >= 0 &&
+    value <= SPENDING_LIMIT_MAX_USD * 100
+  );
 }
 
 function time(value: unknown): value is number {
@@ -191,16 +213,17 @@ export function spendingNotice(
   name?: string,
 ): { title: string; body: string; allowMoreLabel: string } | undefined {
   if (view.state === "under") return undefined;
-  const who = view.ownerKind === "bot" ? (name?.trim() || "This Bot") : "This chat";
+  const who = view.ownerKind === "bot" ? name?.trim() || "This Bot" : "This chat";
   const allowed = spendingAllowedUsd(view);
   const period = view.period === "month" ? " this month" : "";
   const allowMoreLabel = `Allow ${formatUsd(view.limitUsd)} more`;
   if (view.state === "nearing") {
     return {
       title: `${who} has used ${formatUsd(view.spentUsd)} of its ${formatUsd(allowed)} limit${period}.`,
-      body: view.ownerKind === "bot"
-        ? `${who} stops when it reaches the limit.`
-        : "Replies stop when the chat reaches its limit.",
+      body:
+        view.ownerKind === "bot"
+          ? `${who} stops when it reaches the limit.`
+          : "Replies stop when the chat reaches its limit.",
       allowMoreLabel,
     };
   }

@@ -34,7 +34,9 @@ test("Live may use chats by default, and turning it off saves the switch", async
   const toggle = await screen.findByRole("switch", { name });
   await waitFor(() => assert.equal(toggle.getAttribute("aria-checked"), "true"));
   fireEvent.click(toggle);
-  await waitFor(() => assert.equal(screen.getByRole("switch", { name }).getAttribute("aria-checked"), "false"));
+  await waitFor(() =>
+    assert.equal(screen.getByRole("switch", { name }).getAttribute("aria-checked"), "false"),
+  );
   assert.ok(calls.some((call) => call.channel === "settings:set"));
   assert.equal(current().aidenLiveChatAccess, false);
 });

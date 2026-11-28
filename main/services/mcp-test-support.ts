@@ -1,7 +1,10 @@
 // MCP test support: serve an official-SDK `Server` fixture to Pi's MCP client over
 // an in-memory pair. Production MCP client code never imports this module.
 import type { JsonRpcMessage } from "@earendil-works/pi-mcp";
-import { createInMemoryTransportPair, type InMemoryTransport } from "@earendil-works/pi-mcp/testing";
+import {
+  createInMemoryTransportPair,
+  type InMemoryTransport,
+} from "@earendil-works/pi-mcp/testing";
 import type { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
 import type { JSONRPCMessage } from "@modelcontextprotocol/sdk/types.js";

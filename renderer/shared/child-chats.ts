@@ -69,7 +69,13 @@ export function parseStartedChatViews(value: unknown): StartedChatView[] {
   for (const entry of value) {
     if (!entry || typeof entry !== "object") continue;
     const row = entry as Record<string, unknown>;
-    if (typeof row.chatId !== "string" || !row.chatId || typeof row.title !== "string" || !STARTED_CHAT_STATES.has(row.state as string)) continue;
+    if (
+      typeof row.chatId !== "string" ||
+      !row.chatId ||
+      typeof row.title !== "string" ||
+      !STARTED_CHAT_STATES.has(row.state as string)
+    )
+      continue;
     views.push({
       chatId: row.chatId,
       title: row.title,
@@ -85,7 +91,11 @@ export function parseStartedChatViews(value: unknown): StartedChatView[] {
 
 /** Still going: running, or waiting for the person's approval or answer. */
 export function startedChatWorking(view: StartedChatView): boolean {
-  return view.state === "running" || view.state === "waiting_for_input" || view.state === "waiting_for_approval";
+  return (
+    view.state === "running" ||
+    view.state === "waiting_for_input" ||
+    view.state === "waiting_for_approval"
+  );
 }
 
 /** The chip's label: how many are working, or how many there are once none is. */

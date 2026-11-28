@@ -47,7 +47,15 @@ export type DesignTweakAxis = {
 export type DesignTweakControl = { id: string; label: string; group?: string } & (
   | { type: "switch"; target: DesignTweakTarget; default: boolean }
   | { type: "choice"; target: DesignTweakTarget; options: string[]; default: string }
-  | { type: "number"; target: DesignTweakTarget; min: number; max: number; step: number; unit: string; default: number }
+  | {
+      type: "number";
+      target: DesignTweakTarget;
+      min: number;
+      max: number;
+      step: number;
+      unit: string;
+      default: number;
+    }
   | { type: "color"; target: DesignTweakTarget; default: string }
   | { type: "text"; target: { attr: string }; default: string }
   | { type: "pad"; x: DesignTweakAxis; y: DesignTweakAxis }
@@ -90,7 +98,11 @@ export function isDesignTweakTarget(name: unknown): name is string {
 }
 
 export function isDesignTweakValue(value: unknown): value is string {
-  return typeof value === "string" && value.length <= DESIGN_TWEAK_LIMITS.valueChars && !UNSAFE.test(value);
+  return (
+    typeof value === "string" &&
+    value.length <= DESIGN_TWEAK_LIMITS.valueChars &&
+    !UNSAFE.test(value)
+  );
 }
 
 /**
@@ -149,7 +161,9 @@ function text(value: unknown, max: number): string | null {
 }
 
 function number(value: unknown): number | null {
-  return typeof value === "number" && Number.isFinite(value) && Math.abs(value) <= 1_000_000 ? value : null;
+  return typeof value === "number" && Number.isFinite(value) && Math.abs(value) <= 1_000_000
+    ? value
+    : null;
 }
 
 function targetOf(entry: Record<string, unknown>): DesignTweakTarget | null {
@@ -159,7 +173,9 @@ function targetOf(entry: Record<string, unknown>): DesignTweakTarget | null {
 }
 
 /** A number's range, step, unit and default, as a slider and each pad axis read them. */
-function range(entry: Record<string, unknown>): { min: number; max: number; step: number; unit: string; default: number } | null {
+function range(
+  entry: Record<string, unknown>,
+): { min: number; max: number; step: number; unit: string; default: number } | null {
   const min = number(entry.min) ?? 0;
   const max = number(entry.max) ?? 100;
   if (max <= min) return null;
@@ -181,7 +197,11 @@ function axis(raw: unknown, fallbackLabel: string): DesignTweakAxis | null {
   const target = targetOf(entry);
   const numbers = range(entry);
   if (!target || !numbers) return null;
-  return { label: text(entry.label, DESIGN_TWEAK_LIMITS.labelChars) ?? fallbackLabel, target, ...numbers };
+  return {
+    label: text(entry.label, DESIGN_TWEAK_LIMITS.labelChars) ?? fallbackLabel,
+    target,
+    ...numbers,
+  };
 }
 
 function control(raw: unknown): DesignTweakControl | null {
@@ -214,7 +234,10 @@ function control(raw: unknown): DesignTweakControl | null {
       ),
     ].slice(0, DESIGN_TWEAK_LIMITS.options);
     if (options.length < 2) return null;
-    const fallback = typeof entry.default === "string" && options.includes(entry.default) ? entry.default : options[0]!;
+    const fallback =
+      typeof entry.default === "string" && options.includes(entry.default)
+        ? entry.default
+        : options[0]!;
     return { ...base, target, type: "choice", options, default: fallback };
   }
   if (entry.type === "number") {
@@ -222,7 +245,10 @@ function control(raw: unknown): DesignTweakControl | null {
     return numbers ? { ...base, target, type: "number", ...numbers } : null;
   }
   if (entry.type === "color") {
-    const fallback = typeof entry.default === "string" && HEX.test(entry.default) ? entry.default.toLowerCase() : "#000000";
+    const fallback =
+      typeof entry.default === "string" && HEX.test(entry.default)
+        ? entry.default.toLowerCase()
+        : "#000000";
     return { ...base, target, type: "color", default: fallback };
   }
   if (entry.type === "text") {
@@ -248,7 +274,9 @@ export function parseDesignTweakControls(value: unknown): DesignTweakControl[] {
 function declarationList(value: unknown): unknown[] {
   return Array.isArray(value)
     ? value
-    : value && typeof value === "object" && Array.isArray((value as { controls?: unknown }).controls)
+    : value &&
+        typeof value === "object" &&
+        Array.isArray((value as { controls?: unknown }).controls)
       ? (value as { controls: unknown[] }).controls
       : [];
 }
@@ -342,7 +370,12 @@ function eachOpeningTag(html: string, visit: (tag: OpeningTag) => boolean | void
 }
 
 /** The first `<name ...>` element whose opening tag passes `accept`. `closed` elements also need their `</name>`. */
-function findElement(html: string, name: string, accept: (tag: string) => boolean, closed: boolean): FoundElement | null {
+function findElement(
+  html: string,
+  name: string,
+  accept: (tag: string) => boolean,
+  closed: boolean,
+): FoundElement | null {
   let found: FoundElement | null = null;
   eachOpeningTag(html, (opening) => {
     if (opening.name !== name || !accept(opening.tag)) return false;
@@ -354,7 +387,8 @@ function findElement(html: string, name: string, accept: (tag: string) => boolea
     const close = new RegExp(`</${name}\\s*>`, "giu");
     close.lastIndex = tagEnd;
     const ending = close.exec(html);
-    if (ending) found = { start, tagEnd, tag, bodyEnd: ending.index, end: ending.index + ending[0].length };
+    if (ending)
+      found = { start, tagEnd, tag, bodyEnd: ending.index, end: ending.index + ending[0].length };
     return true;
   });
   return found;
@@ -378,27 +412,47 @@ export function extractDesignTweakControls(html: string): DesignTweakControl[] {
   }
 }
 
-function formatNumber(numbers: { min: number; max: number; default: number }, unit: string, value: unknown): string {
+function formatNumber(
+  numbers: { min: number; max: number; default: number },
+  unit: string,
+  value: unknown,
+): string {
   const raw = typeof value === "number" ? value : Number(value);
-  const clamped = Math.min(numbers.max, Math.max(numbers.min, Number.isFinite(raw) ? raw : numbers.default));
+  const clamped = Math.min(
+    numbers.max,
+    Math.max(numbers.min, Number.isFinite(raw) ? raw : numbers.default),
+  );
   return `${Number(clamped.toFixed(4))}${unit}`;
 }
 
-function readNumber(numbers: { min: number; max: number; default: number }, stored: string | undefined): number {
+function readNumber(
+  numbers: { min: number; max: number; default: number },
+  stored: string | undefined,
+): number {
   if (stored === undefined) return numbers.default;
   const parsed = Number.parseFloat(stored);
-  return Number.isFinite(parsed) ? Math.min(numbers.max, Math.max(numbers.min, parsed)) : numbers.default;
+  return Number.isFinite(parsed)
+    ? Math.min(numbers.max, Math.max(numbers.min, parsed))
+    : numbers.default;
 }
 
 function point(value: DesignTweakValue | undefined): DesignTweakPoint | null {
-  return value && typeof value === "object" && typeof value.x === "number" && typeof value.y === "number" ? value : null;
+  return value &&
+    typeof value === "object" &&
+    typeof value.x === "number" &&
+    typeof value.y === "number"
+    ? value
+    : null;
 }
 
 /**
  * The text each of a control's targets puts on the page, keyed by target.
  * An action has none.
  */
-export function formatDesignTweakTargets(control: DesignTweakControl, value: DesignTweakValue): Record<string, string> {
+export function formatDesignTweakTargets(
+  control: DesignTweakControl,
+  value: DesignTweakValue,
+): Record<string, string> {
   switch (control.type) {
     case "pad": {
       const at = point(value) ?? { x: control.x.default, y: control.y.default };
@@ -442,7 +496,10 @@ export function designTweakDefault(control: DesignTweakControl): DesignTweakValu
 }
 
 /** What the panel shows for a control: the frame's value read back, or the page's default. */
-export function readDesignTweak(control: DesignTweakControl, values: DesignTweakValues | undefined): DesignTweakValue {
+export function readDesignTweak(
+  control: DesignTweakControl,
+  values: DesignTweakValues | undefined,
+): DesignTweakValue {
   if (control.type === "action") return false;
   if (control.type === "pad") {
     return {
@@ -488,9 +545,16 @@ export function withDesignTweak(
 }
 
 /** What the bridge applies: the Dark switch and the frame's values, split by kind of target. */
-export type DesignTweakState = { dark: boolean; vars: Record<string, string>; attrs: Record<string, string> };
+export type DesignTweakState = {
+  dark: boolean;
+  vars: Record<string, string>;
+  attrs: Record<string, string>;
+};
 
-export function designTweakState(frame: { dark?: true; tweaks?: DesignTweakValues }): DesignTweakState {
+export function designTweakState(frame: {
+  dark?: true;
+  tweaks?: DesignTweakValues;
+}): DesignTweakState {
   const state: DesignTweakState = { dark: frame.dark === true, vars: {}, attrs: {} };
   for (const [name, value] of Object.entries(parseDesignTweakValues(frame.tweaks) ?? {})) {
     if (VAR.test(name)) state.vars[name] = value;
@@ -511,7 +575,9 @@ export function withDesignTweakQuery(url: string, state: DesignTweakState): stri
   const params: string[] = [];
   if (state.dark) params.push(`${DESIGN_DARK_PARAM}=1`);
   if (Object.keys(state.vars).length > 0 || Object.keys(state.attrs).length > 0) {
-    params.push(`${DESIGN_TWEAKS_PARAM}=${encodeURIComponent(JSON.stringify({ vars: state.vars, attrs: state.attrs }))}`);
+    params.push(
+      `${DESIGN_TWEAKS_PARAM}=${encodeURIComponent(JSON.stringify({ vars: state.vars, attrs: state.attrs }))}`,
+    );
   }
   if (params.length === 0) return url;
   const hash = url.indexOf("#");
@@ -571,7 +637,8 @@ function withTweakStyle(source: string, vars: Record<string, string>): string {
   const merged = new Map<string, string>();
   if (found) {
     const body = source.slice(found.tagEnd, found.bodyEnd);
-    for (const match of body.matchAll(/(--[A-Za-z0-9_-]{1,60})\s*:\s*([^;}]*)/gu)) merged.set(match[1]!, match[2]!.trim());
+    for (const match of body.matchAll(/(--[A-Za-z0-9_-]{1,60})\s*:\s*([^;}]*)/gu))
+      merged.set(match[1]!, match[2]!.trim());
   }
   for (const [name, value] of Object.entries(vars)) merged.set(name, value);
   // As strong as the live tweaks were (inline on the root): it wins over the
@@ -611,7 +678,13 @@ function fillMarkedText(source: string, attr: string, after: string): string | n
   eachOpeningTag(source, (opening) => {
     if (!marker.test(opening.tag)) return false;
     const bodyEnd = source.indexOf("<", opening.tagEnd);
-    if (bodyEnd === -1 || !source.slice(bodyEnd, bodyEnd + opening.name.length + 2).toLowerCase().startsWith(`</${opening.name}`)) {
+    if (
+      bodyEnd === -1 ||
+      !source
+        .slice(bodyEnd, bodyEnd + opening.name.length + 2)
+        .toLowerCase()
+        .startsWith(`</${opening.name}`)
+    ) {
       markup = true;
       return true;
     }
@@ -631,7 +704,10 @@ function fillMarkedText(source: string, attr: string, after: string): string | n
  * and writes the file. A text control's words change in the page too; when
  * they can't be placed, that control is left as it was and listed in `kept`.
  */
-export function bakeDesignTweakDefaults(source: string, values: DesignTweakValues | undefined): DesignTweakBake {
+export function bakeDesignTweakDefaults(
+  source: string,
+  values: DesignTweakValues | undefined,
+): DesignTweakBake {
   const found = findDeclaration(source.slice(0, DESIGN_TWEAK_LIMITS.scanChars));
   if (!found) return { ok: false, reason: "not-found" };
   let json: unknown;
@@ -673,7 +749,8 @@ export function bakeDesignTweakDefaults(source: string, values: DesignTweakValue
       else attrs[name] = formatted[name]!;
     }
   }
-  if (Object.keys(vars).length === 0 && Object.keys(attrs).length === 0) return { ok: false, reason: "unchanged" };
+  if (Object.keys(vars).length === 0 && Object.keys(attrs).length === 0)
+    return { ok: false, reason: "unchanged" };
 
   // Words first: a control whose words can't be placed keeps its old default
   // everywhere in the file, so the file never disagrees with itself.
@@ -695,10 +772,13 @@ export function bakeDesignTweakDefaults(source: string, values: DesignTweakValue
     text.raw.default = text.after;
   }
   // Only words, and none of them could be placed.
-  if (Object.keys(vars).length === 0 && Object.keys(attrs).length === 0) return { ok: false, reason: "words" };
+  if (Object.keys(vars).length === 0 && Object.keys(attrs).length === 0)
+    return { ok: false, reason: "words" };
 
   // Placed words never sit inside a script, so the declaration is where it was, give or take.
-  const declaration = findDeclaration(next.slice(0, DESIGN_TWEAK_LIMITS.scanChars + Math.max(0, next.length - source.length)));
+  const declaration = findDeclaration(
+    next.slice(0, DESIGN_TWEAK_LIMITS.scanChars + Math.max(0, next.length - source.length)),
+  );
   if (!declaration) return { ok: false, reason: "not-found" };
   next = `${next.slice(0, declaration.tagEnd)}\n${scriptSafeJson(json)}\n${next.slice(declaration.bodyEnd)}`;
   if (Object.keys(vars).length > 0) next = withTweakStyle(next, vars);
@@ -721,7 +801,10 @@ export function bakeDesignTweakDefaults(source: string, values: DesignTweakValue
 
 // ---- Shuffle and hand-off --------------------------------------------------
 
-function randomStep(numbers: { min: number; max: number; step: number }, random: () => number): number {
+function randomStep(
+  numbers: { min: number; max: number; step: number },
+  random: () => number,
+): number {
   const steps = Math.floor((numbers.max - numbers.min) / numbers.step + 1e-9);
   return Number((numbers.min + Math.floor(random() * (steps + 1)) * numbers.step).toFixed(4));
 }
@@ -758,7 +841,13 @@ export function shuffleDesignTweaks(
         next = withDesignTweak(next, control, random() < 0.5);
         break;
       case "choice":
-        next = withDesignTweak(next, control, control.options[Math.min(control.options.length - 1, Math.floor(random() * control.options.length))]!);
+        next = withDesignTweak(
+          next,
+          control,
+          control.options[
+            Math.min(control.options.length - 1, Math.floor(random() * control.options.length))
+          ]!,
+        );
         break;
       case "number":
         next = withDesignTweak(next, control, randomStep(control, random));
@@ -767,7 +856,10 @@ export function shuffleDesignTweaks(
         next = withDesignTweak(next, control, randomColor(random));
         break;
       case "pad":
-        next = withDesignTweak(next, control, { x: randomStep(control.x, random), y: randomStep(control.y, random) });
+        next = withDesignTweak(next, control, {
+          x: randomStep(control.x, random),
+          y: randomStep(control.y, random),
+        });
         break;
       case "text":
       case "action":
@@ -817,13 +909,19 @@ export function designTweakSummary(
   if (options.dark) lines.push({ text: "- Dark: on", changed: true });
   const heading = options.version ? `Tweaks values (${options.version}):` : "Tweaks values:";
   const note = (kept: typeof lines, left: number) =>
-    [heading, ...kept.map((line) => line.text), ...(left > 0 ? [`- …and ${left} more`] : [])].join("\n");
+    [heading, ...kept.map((line) => line.text), ...(left > 0 ? [`- …and ${left} more`] : [])].join(
+      "\n",
+    );
   const max = options.maxChars ?? Infinity;
   if (note(lines, 0).length <= max) return note(lines, 0);
   // Too long for one note: the changed values come first, then as many of the rest as fit.
-  const ordered = [...lines.filter((line) => line.changed), ...lines.filter((line) => !line.changed)];
+  const ordered = [
+    ...lines.filter((line) => line.changed),
+    ...lines.filter((line) => !line.changed),
+  ];
   let kept = ordered;
-  while (kept.length > 0 && note(kept, ordered.length - kept.length).length > max) kept = kept.slice(0, -1);
+  while (kept.length > 0 && note(kept, ordered.length - kept.length).length > max)
+    kept = kept.slice(0, -1);
   return note(kept, ordered.length - kept.length).slice(0, max);
 }
 
@@ -834,7 +932,10 @@ export function designTweakSummary(
  * while the file was written, a value outside a control's range, and values
  * no control declares (Aiden may set any variable on a frame).
  */
-export function tweaksAfterBake(current: DesignTweakValues | undefined, written: DesignTweakValues): DesignTweakValues | undefined {
+export function tweaksAfterBake(
+  current: DesignTweakValues | undefined,
+  written: DesignTweakValues,
+): DesignTweakValues | undefined {
   const next: DesignTweakValues = {};
   for (const [name, value] of Object.entries(current ?? {})) {
     if (written[name] !== value) next[name] = value;
@@ -854,7 +955,9 @@ export function tweaksTakenBackDuringBake(
   submitted: DesignTweakValues,
   written: DesignTweakValues,
 ): boolean {
-  return Object.keys(written).some((name) => submitted[name] !== undefined && current?.[name] === undefined);
+  return Object.keys(written).some(
+    (name) => submitted[name] !== undefined && current?.[name] === undefined,
+  );
 }
 
 /**
@@ -871,7 +974,12 @@ export function tweaksAfterTakenBackBake(
 ): DesignTweakValues | undefined {
   const next: DesignTweakValues = { ...tweaksAfterBake(current, written) };
   for (const name of Object.keys(written)) {
-    if (submitted[name] !== undefined && current?.[name] === undefined && previous[name] !== undefined) next[name] = previous[name];
+    if (
+      submitted[name] !== undefined &&
+      current?.[name] === undefined &&
+      previous[name] !== undefined
+    )
+      next[name] = previous[name];
   }
   return Object.keys(next).length > 0 ? next : undefined;
 }
@@ -888,7 +996,12 @@ export function tweaksAfterBakeUndo(
 // ---- Versions --------------------------------------------------------------
 
 /** A saved set of a frame's values, with the Dark switch, that the person can come back to. */
-export type DesignTweakVersion = { id: string; name: string; tweaks?: DesignTweakValues; dark?: true };
+export type DesignTweakVersion = {
+  id: string;
+  name: string;
+  tweaks?: DesignTweakValues;
+  dark?: true;
+};
 
 export const DESIGN_TWEAK_VERSION_LIMITS = { versions: 12, nameChars: 40 } as const;
 
@@ -906,7 +1019,12 @@ export function parseDesignTweakVersions(value: unknown): DesignTweakVersion[] |
     if (!id || !name || ids.has(id)) continue;
     ids.add(id);
     const tweaks = parseDesignTweakValues(entry.tweaks);
-    versions.push({ id, name, ...(tweaks ? { tweaks } : {}), ...(entry.dark === true ? { dark: true as const } : {}) });
+    versions.push({
+      id,
+      name,
+      ...(tweaks ? { tweaks } : {}),
+      ...(entry.dark === true ? { dark: true as const } : {}),
+    });
   }
   return versions.length > 0 ? versions : undefined;
 }
@@ -922,11 +1040,15 @@ export function showsDesignTweakVersion(
   frame: { tweaks?: DesignTweakValues; dark?: true },
   version: { tweaks?: DesignTweakValues; dark?: true },
 ): boolean {
-  return sameValues(frame.tweaks, version.tweaks) && (frame.dark === true) === (version.dark === true);
+  return (
+    sameValues(frame.tweaks, version.tweaks) && (frame.dark === true) === (version.dark === true)
+  );
 }
 
 /** The next free "V<n>" name; V1 is always the page as its file says. */
-export function nextDesignTweakVersionName(versions: readonly DesignTweakVersion[] | undefined): string {
+export function nextDesignTweakVersionName(
+  versions: readonly DesignTweakVersion[] | undefined,
+): string {
   const used = new Set((versions ?? []).map((version) => version.name));
   for (let n = 2; ; n += 1) if (!used.has(`V${n}`)) return `V${n}`;
 }

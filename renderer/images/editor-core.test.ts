@@ -14,20 +14,73 @@ import {
 import { IMAGE_NODE_WIDTH, MEDIA_NODE_FRAME, fitNodeToMediaAspect } from "./node-dimensions-core";
 
 const node = (id: string, type: WorkflowNode["type"]): WorkflowNode =>
-  ({ id, type, position: { x: 0, y: 0 }, data: type === "prompt" ? { text: "x" } : type === "generate-image" ? { count: 1 } : {} }) as WorkflowNode;
-const doc = (nodes: WorkflowNode[], edges: WorkflowDocV1["edges"] = []): WorkflowDocV1 =>
-  ({ schemaVersion: 1, id: "wf", title: "T", revision: 1, createdAt: 0, updatedAt: 0, nodes, edges, settings: { concurrency: 2 } });
+  ({
+    id,
+    type,
+    position: { x: 0, y: 0 },
+    data: type === "prompt" ? { text: "x" } : type === "generate-image" ? { count: 1 } : {},
+  }) as WorkflowNode;
+const doc = (nodes: WorkflowNode[], edges: WorkflowDocV1["edges"] = []): WorkflowDocV1 => ({
+  schemaVersion: 1,
+  id: "wf",
+  title: "T",
+  revision: 1,
+  createdAt: 0,
+  updatedAt: 0,
+  nodes,
+  edges,
+  settings: { concurrency: 2 },
+});
 
 test("connections follow typed ports and refuse duplicates, limits and cycles", () => {
-  const base = doc([node("p", "prompt"), node("g1", "generate-image"), node("g2", "generate-image"), node("o", "output")]);
-  const ok = decideCanvasConnection(base, { source: "p", sourcePort: "text", target: "g1", targetPort: "prompt" }, "e1");
-  assert.deepEqual(ok, { allowed: true, edge: { id: "e1", source: "p", sourcePort: "text", target: "g1", targetPort: "prompt" } });
+  const base = doc([
+    node("p", "prompt"),
+    node("g1", "generate-image"),
+    node("g2", "generate-image"),
+    node("o", "output"),
+  ]);
+  const ok = decideCanvasConnection(
+    base,
+    { source: "p", sourcePort: "text", target: "g1", targetPort: "prompt" },
+    "e1",
+  );
+  assert.deepEqual(ok, {
+    allowed: true,
+    edge: { id: "e1", source: "p", sourcePort: "text", target: "g1", targetPort: "prompt" },
+  });
   const withPrompt = doc(base.nodes, [ok.allowed ? ok.edge : assert.fail("expected an edge")]);
-  assert.equal(decideCanvasConnection(withPrompt, { source: "p", sourcePort: "text", target: "g1", targetPort: "prompt" }, "e2").allowed, false);
-  assert.equal(decideCanvasConnection(base, { source: "p", sourcePort: "text", target: "g1", targetPort: "references" }, "e3").allowed, false);
-  assert.equal(decideCanvasConnection(base, { source: "o", sourcePort: "images", target: "g1", targetPort: "references" }, "e4").allowed, false);
-  const chained = doc(base.nodes, [{ id: "c1", source: "g1", sourcePort: "images", target: "g2", targetPort: "references" }]);
-  const cycle = decideCanvasConnection(chained, { source: "g2", sourcePort: "images", target: "g1", targetPort: "references" }, "c2");
+  assert.equal(
+    decideCanvasConnection(
+      withPrompt,
+      { source: "p", sourcePort: "text", target: "g1", targetPort: "prompt" },
+      "e2",
+    ).allowed,
+    false,
+  );
+  assert.equal(
+    decideCanvasConnection(
+      base,
+      { source: "p", sourcePort: "text", target: "g1", targetPort: "references" },
+      "e3",
+    ).allowed,
+    false,
+  );
+  assert.equal(
+    decideCanvasConnection(
+      base,
+      { source: "o", sourcePort: "images", target: "g1", targetPort: "references" },
+      "e4",
+    ).allowed,
+    false,
+  );
+  const chained = doc(base.nodes, [
+    { id: "c1", source: "g1", sourcePort: "images", target: "g2", targetPort: "references" },
+  ]);
+  const cycle = decideCanvasConnection(
+    chained,
+    { source: "g2", sourcePort: "images", target: "g1", targetPort: "references" },
+    "c2",
+  );
   assert.equal(cycle.allowed, false);
   assert.match(cycle.allowed ? "" : cycle.message, /Cycles/u);
 });
@@ -61,11 +114,23 @@ test("an image node is sized so the rendered frame holds its image at the image'
     width: size.width - MEDIA_NODE_FRAME.horizontal,
     height: size.height - MEDIA_NODE_FRAME.vertical,
   });
-  for (const [mediaWidth, mediaHeight] of [[1024, 1024], [1920, 1080], [768, 1024], [1080, 1920]] as const) {
+  for (const [mediaWidth, mediaHeight] of [
+    [1024, 1024],
+    [1920, 1080],
+    [768, 1024],
+    [1080, 1920],
+  ] as const) {
     const size = fitNodeToMediaAspect(undefined, mediaWidth, mediaHeight)!;
-    assert.equal(size.width, IMAGE_NODE_WIDTH, "a new node takes the width every image node renders at");
+    assert.equal(
+      size.width,
+      IMAGE_NODE_WIDTH,
+      "a new node takes the width every image node renders at",
+    );
     const box = imageBox(size);
-    assert.ok(Math.abs(box.width / box.height - mediaWidth / mediaHeight) < 0.01, `${mediaWidth}×${mediaHeight}`);
+    assert.ok(
+      Math.abs(box.width / box.height - mediaWidth / mediaHeight) < 0.01,
+      `${mediaWidth}×${mediaHeight}`,
+    );
   }
   // A square image in a default node: a 256px image under a 36px title, above the 48px controls.
   assert.deepEqual(fitNodeToMediaAspect(undefined, 512, 512), { width: 280, height: 340 });

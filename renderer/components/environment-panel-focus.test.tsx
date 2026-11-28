@@ -4,7 +4,11 @@ import { afterEach, test } from "node:test";
 import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
 import { QueryClientProvider } from "@tanstack/react-query";
 import { createBotTestQueryClient } from "../main/bots/test-providers";
-import { EnvironmentPanelProvider, useEnvironmentPanel, type EnvironmentPanelContextValue } from "./environment-panel";
+import {
+  EnvironmentPanelProvider,
+  useEnvironmentPanel,
+  type EnvironmentPanelContextValue,
+} from "./environment-panel";
 import { WorkspaceTerminalProvider } from "./terminal-drawer";
 import { WorkspaceProvider } from "../lib/workspace-context";
 import { AppCapabilitiesProvider, DISABLED_APP_CAPABILITIES } from "../lib/app-capabilities";

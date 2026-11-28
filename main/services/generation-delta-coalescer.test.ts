@@ -6,8 +6,10 @@ import { GenerationDeltaCoalescer } from "./generation-delta-coalescer.js";
 function harness(options: { maxBufferedChars?: number } = {}) {
   const timers = new Map<number, () => void>();
   let nextTimer = 1;
-  const sent: Array<{ channel: NotificationChannel; payload: { streamId: string; delta: string } }> =
-    [];
+  const sent: Array<{
+    channel: NotificationChannel;
+    payload: { streamId: string; delta: string };
+  }> = [];
   let destroyed = false;
   const recipient = {
     isDestroyed: () => destroyed,
@@ -60,7 +62,10 @@ test("a 2,000-token stream reaches the renderer intact in far fewer messages", (
   const tokens = Array.from({ length: 2_000 }, (_, index) => `t${index} `);
   // About 200 tokens/s: twenty tokens arrive in each 100 ms, i.e. ~3 per 16 ms window.
   tokens.forEach((token, index) => {
-    assert.equal(h.coalescer.push("s1", "chat:delta", { streamId: "s1", delta: token }, h.recipient), true);
+    assert.equal(
+      h.coalescer.push("s1", "chat:delta", { streamId: "s1", delta: token }, h.recipient),
+      true,
+    );
     if (index % 3 === 2) h.fireTimers();
   });
   h.coalescer.flush("s1");
@@ -124,7 +129,10 @@ test("streams are isolated and a destroyed document receives nothing", () => {
   h.coalescer.push("a", "chat:delta", { streamId: "a", delta: "A" }, h.recipient);
   h.coalescer.push("b", "chat:delta", { streamId: "b", delta: "B" }, h.recipient);
   h.coalescer.flush("a");
-  assert.deepEqual(h.sent.map(({ payload }) => payload), [{ streamId: "a", delta: "A" }]);
+  assert.deepEqual(
+    h.sent.map(({ payload }) => payload),
+    [{ streamId: "a", delta: "A" }],
+  );
   h.destroy();
   h.fireTimers();
   assert.equal(h.sent.length, 1);

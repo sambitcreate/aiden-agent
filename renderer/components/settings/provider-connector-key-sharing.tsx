@@ -9,7 +9,9 @@ import { providersApi } from "../../lib/ipc";
 import { queryKeys } from "../../lib/queries";
 import type { Provider } from "../../lib/types";
 
-export function providerKeyShareable(provider: Pick<Provider, "isBuiltin" | "hasKey" | "credentialType">): boolean {
+export function providerKeyShareable(
+  provider: Pick<Provider, "isBuiltin" | "hasKey" | "credentialType">,
+): boolean {
   return provider.isBuiltin === true && provider.hasKey && provider.credentialType === "api_key";
 }
 
@@ -17,7 +19,10 @@ export function ProviderConnectorKeySharing({ provider }: { provider: Provider }
   const queryClient = useQueryClient();
   const [allowed, setAllowed] = React.useState(provider.connectorKeySharing === true);
   const [busy, setBusy] = React.useState(false);
-  React.useEffect(() => setAllowed(provider.connectorKeySharing === true), [provider.connectorKeySharing]);
+  React.useEffect(
+    () => setAllowed(provider.connectorKeySharing === true),
+    [provider.connectorKeySharing],
+  );
   if (!providerKeyShareable(provider)) return null;
 
   const change = async (next: boolean) => {

@@ -28,18 +28,18 @@ Status: Implemented and accepted after two review rounds on 2026-08-31.
 
 Frozen SHA-256 source/declaration hashes:
 
-| Installed artifact | SHA-256 |
-| --- | --- |
-| `dist/index.d.ts` | `72fbca27169b0f2e5f7a565a6d2e5e953ec962a9a7c5694f827f2c9a14b01842` |
-| `dist/harness/session/session.d.ts` | `2a0d56977ac196eda75cff679f0634f8d4eb5a625cb19d492afa1a0f614d6a6c` |
-| `dist/harness/session/jsonl-repo.d.ts` | `a61c6320f7117d393a1673ed5bc77fb8e466600754a2626cb051daabff25cce7` |
+| Installed artifact                        | SHA-256                                                            |
+| ----------------------------------------- | ------------------------------------------------------------------ |
+| `dist/index.d.ts`                         | `72fbca27169b0f2e5f7a565a6d2e5e953ec962a9a7c5694f827f2c9a14b01842` |
+| `dist/harness/session/session.d.ts`       | `2a0d56977ac196eda75cff679f0634f8d4eb5a625cb19d492afa1a0f614d6a6c` |
+| `dist/harness/session/jsonl-repo.d.ts`    | `a61c6320f7117d393a1673ed5bc77fb8e466600754a2626cb051daabff25cce7` |
 | `dist/harness/session/jsonl-storage.d.ts` | `a352527296e00aa28baead14a82e5f8893c4911743def47be3fd475e3e0d6f14` |
 | `dist/harness/compaction/compaction.d.ts` | `8c3311d33df571503dc62c154a9e41f77a91aedb5682f4d70e82b25aaa6b8684` |
-| `dist/harness/messages.js` | `ddd128106ed362d03011e25c083e411ee8f3d2de2118939c2289fccec3dbe9e6` |
-| `dist/harness/session/session.js` | `ccfebee2a16fb2bc78a0ae647326e0f3f09952006f54a67916dc8ec4cefa94e0` |
-| `dist/harness/session/jsonl-repo.js` | `21cf89c4dd4fb6ed8620d1ce43516003d457c042749696eecea74bbe0b59eb08` |
-| `dist/harness/session/jsonl-storage.js` | `8806c1ed37d5e48c48a8c5819fa909626f0fa5a4cd909ed61d6628dd827430d1` |
-| `dist/harness/compaction/compaction.js` | `29c6a3d4a70668c40515f63de49493730708457106dcf8ded766ac297cb2da4a` |
+| `dist/harness/messages.js`                | `ddd128106ed362d03011e25c083e411ee8f3d2de2118939c2289fccec3dbe9e6` |
+| `dist/harness/session/session.js`         | `ccfebee2a16fb2bc78a0ae647326e0f3f09952006f54a67916dc8ec4cefa94e0` |
+| `dist/harness/session/jsonl-repo.js`      | `21cf89c4dd4fb6ed8620d1ce43516003d457c042749696eecea74bbe0b59eb08` |
+| `dist/harness/session/jsonl-storage.js`   | `8806c1ed37d5e48c48a8c5819fa909626f0fa5a4cd909ed61d6628dd827430d1` |
+| `dist/harness/compaction/compaction.js`   | `29c6a3d4a70668c40515f63de49493730708457106dcf8ded766ac297cb2da4a` |
 
 Frozen exported API/signature inventory used by Aiden:
 
@@ -60,18 +60,18 @@ Frozen exported API/signature inventory used by Aiden:
 
 Default branches were shallow-fetched immediately before Phase 0 implementation.
 
-| Reference | Resolved revision | Inspected paths | Decision |
-| --- | --- | --- | --- |
-| `mksglu/context-mode` | `6b8bf61f83abed6c3faf4e7c3ba02c162fadfedf` | `src/store.ts`, `src/truncate.ts`, `src/session/db.ts`, `src/session/snapshot.ts`, `src/session/purge.ts` | Keep bounded FTS5/BM25 retrieval, attribution, purge, and compact snapshots as Phase 6 design inputs. Reject a parallel MCP/session owner. |
-| `nicobailon/pi-subagents` | `3f879722f96fdec19364ccd9a18f8176d797fedc` | `src/runs/shared/session-lease.ts`, `permissions.ts`, `single-output.ts`, `child-protocol.ts` | Reuse fail-closed session leasing and bounded child-output ideas. Preserve Aiden's main-owned immutable capability ceilings and journal. |
-| `juicesharp/rpiv-mono` | `d13677c7b6f012335da6dc86217e18213e32faf6` | `packages/rpiv-todo/state/replay.ts`, `todo.session-isolation.test.ts`, `rpiv-ask-user-question/reconcile.ts` | Re-run installed rpiv replay/isolation contracts after the session port and Pi upgrade; do not merge rpiv state into memory. |
-| `nicobailon/pi-web-access` | `5741f303a4f5b89fed18e02ec3fed038844e0e98` | `src/`, `README.md` | Retain bounded source references as a future recall input. Do not persist raw web output as a memory fact. |
-| `nicobailon/pi-mcp-adapter` | `ff234b862359e722bf4dc1c99cde62278d4b8eb3` | `src/`, `skills/mcp-scripting/SKILL.md` | Adopt compact, explicit result envelopes where applicable. Reject a second MCP lifecycle or session owner. |
-| `DietrichGebert/ponytail` | `2ed6c52c9d7e5e56942508591085fd45dea277d3` | `README.md`, `skills/ponytail/SKILL.md` | Workflow-only simplicity reference; no memory or compaction authority. |
-| `@gotgenes/pi-permission-system` | npm `29.1.0`, integrity `sha512-b4mYae/YhWN9kAChOGVMc/xcxgbc5n5spW0VsHddg2CuNAlxSQl5APMUsbiIHVRVyGdytxcPOSFdB7mMceZWvA==` | package metadata and public policy contract | Carry deterministic allow/ask/deny and child-to-owner forwarding into Phase 6. Do not import its unresolved durable-approval semantics. |
-| `MattDevy/pi-extensions` | `86cbbbb1d65eeca88ce2f820dd958301625e394c` | `packages/`, including continuous-learning and review packages | Confidence/feedback can inform suggestions, but model output never commits memory and code simplification is not context compaction. |
-| `narumiruna/pi-extensions` | `36c2421544f0defaebd3d44b793d39b2a7f5fb47` | `packages/`, extension readmes | Re-audit native compaction only in Phase 7; local Pi checkpoints remain the cross-provider baseline. |
-| `injaneity/pi-computer-use` | `4b8dbd7eaa13328ab1a8a4b55d0be0b077de7d62` | `src/output.ts`, `src/runtime.ts`, `README.md` | Keep text/image output bounding and re-fetchable references in the replay matrix. Do not weaken Aiden's screenshot retention and authority boundaries. |
+| Reference                        | Resolved revision                                                                                                         | Inspected paths                                                                                               | Decision                                                                                                                                               |
+| -------------------------------- | ------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `mksglu/context-mode`            | `6b8bf61f83abed6c3faf4e7c3ba02c162fadfedf`                                                                                | `src/store.ts`, `src/truncate.ts`, `src/session/db.ts`, `src/session/snapshot.ts`, `src/session/purge.ts`     | Keep bounded FTS5/BM25 retrieval, attribution, purge, and compact snapshots as Phase 6 design inputs. Reject a parallel MCP/session owner.             |
+| `nicobailon/pi-subagents`        | `3f879722f96fdec19364ccd9a18f8176d797fedc`                                                                                | `src/runs/shared/session-lease.ts`, `permissions.ts`, `single-output.ts`, `child-protocol.ts`                 | Reuse fail-closed session leasing and bounded child-output ideas. Preserve Aiden's main-owned immutable capability ceilings and journal.               |
+| `juicesharp/rpiv-mono`           | `d13677c7b6f012335da6dc86217e18213e32faf6`                                                                                | `packages/rpiv-todo/state/replay.ts`, `todo.session-isolation.test.ts`, `rpiv-ask-user-question/reconcile.ts` | Re-run installed rpiv replay/isolation contracts after the session port and Pi upgrade; do not merge rpiv state into memory.                           |
+| `nicobailon/pi-web-access`       | `5741f303a4f5b89fed18e02ec3fed038844e0e98`                                                                                | `src/`, `README.md`                                                                                           | Retain bounded source references as a future recall input. Do not persist raw web output as a memory fact.                                             |
+| `nicobailon/pi-mcp-adapter`      | `ff234b862359e722bf4dc1c99cde62278d4b8eb3`                                                                                | `src/`, `skills/mcp-scripting/SKILL.md`                                                                       | Adopt compact, explicit result envelopes where applicable. Reject a second MCP lifecycle or session owner.                                             |
+| `DietrichGebert/ponytail`        | `2ed6c52c9d7e5e56942508591085fd45dea277d3`                                                                                | `README.md`, `skills/ponytail/SKILL.md`                                                                       | Workflow-only simplicity reference; no memory or compaction authority.                                                                                 |
+| `@gotgenes/pi-permission-system` | npm `29.1.0`, integrity `sha512-b4mYae/YhWN9kAChOGVMc/xcxgbc5n5spW0VsHddg2CuNAlxSQl5APMUsbiIHVRVyGdytxcPOSFdB7mMceZWvA==` | package metadata and public policy contract                                                                   | Carry deterministic allow/ask/deny and child-to-owner forwarding into Phase 6. Do not import its unresolved durable-approval semantics.                |
+| `MattDevy/pi-extensions`         | `86cbbbb1d65eeca88ce2f820dd958301625e394c`                                                                                | `packages/`, including continuous-learning and review packages                                                | Confidence/feedback can inform suggestions, but model output never commits memory and code simplification is not context compaction.                   |
+| `narumiruna/pi-extensions`       | `36c2421544f0defaebd3d44b793d39b2a7f5fb47`                                                                                | `packages/`, extension readmes                                                                                | Re-audit native compaction only in Phase 7; local Pi checkpoints remain the cross-provider baseline.                                                   |
+| `injaneity/pi-computer-use`      | `4b8dbd7eaa13328ab1a8a4b55d0be0b077de7d62`                                                                                | `src/output.ts`, `src/runtime.ts`, `README.md`                                                                | Keep text/image output bounding and re-fetchable references in the replay matrix. Do not weaken Aiden's screenshot retention and authority boundaries. |
 
 ### Frozen fixtures and verifier
 
@@ -89,13 +89,13 @@ Default branches were shallow-fetched immediately before Phase 0 implementation.
 
 ### Expected surface bindings
 
-| Surface | Authoritative context/binding |
-| --- | --- |
-| Workspace | Persistent chat journal plus chat-saved provider/model and workspace prompt/tools. |
-| Canonical Bot | Canonical Bot backing chat plus Bot-saved provider/model, persona, and authority. |
-| Ordinary Telegram | Telegram profile/workspace backing chat and that chat's exact saved selection. |
-| Bot-bound Telegram | The canonical Bot backing chat and Bot-saved selection; never the Telegram profile default. |
-| Child | In-memory bounded fork with inherited immutable provider/model/authority ceiling and child-local compaction session. |
+| Surface            | Authoritative context/binding                                                                                        |
+| ------------------ | -------------------------------------------------------------------------------------------------------------------- |
+| Workspace          | Persistent chat journal plus chat-saved provider/model and workspace prompt/tools.                                   |
+| Canonical Bot      | Canonical Bot backing chat plus Bot-saved provider/model, persona, and authority.                                    |
+| Ordinary Telegram  | Telegram profile/workspace backing chat and that chat's exact saved selection.                                       |
+| Bot-bound Telegram | The canonical Bot backing chat and Bot-saved selection; never the Telegram profile default.                          |
+| Child              | In-memory bounded fork with inherited immutable provider/model/authority ceiling and child-local compaction session. |
 
 ## Phase 1 — Current-version correctness
 

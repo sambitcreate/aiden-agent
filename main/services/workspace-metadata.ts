@@ -49,14 +49,18 @@ export async function mapWorkspaceMetadata<T, R>(
     try {
       checkCancelled(signal);
       const settled = await Promise.allSettled(
-        items.slice(offset, offset + WORKSPACE_METADATA_CONCURRENCY).map(async item => inspect(item)),
+        items
+          .slice(offset, offset + WORKSPACE_METADATA_CONCURRENCY)
+          .map(async (item) => inspect(item)),
       );
       checkCancelled(signal);
       for (const result of settled) {
         if (result.status === "rejected") throw result.reason;
         results.push(result.value);
       }
-    } finally { release(); }
+    } finally {
+      release();
+    }
   }
   return results;
 }

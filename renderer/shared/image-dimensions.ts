@@ -26,10 +26,12 @@ function prefixBytes(base64: string, byteCount: number): Uint8Array | undefined 
 const u16be = (b: Uint8Array, o: number) => (b[o]! << 8) | b[o + 1]!;
 const u16le = (b: Uint8Array, o: number) => b[o]! | (b[o + 1]! << 8);
 const u24le = (b: Uint8Array, o: number) => b[o]! | (b[o + 1]! << 8) | (b[o + 2]! << 16);
-const u32be = (b: Uint8Array, o: number) => ((b[o]! << 24) >>> 0) + ((b[o + 1]! << 16) | (b[o + 2]! << 8) | b[o + 3]!);
+const u32be = (b: Uint8Array, o: number) =>
+  ((b[o]! << 24) >>> 0) + ((b[o + 1]! << 16) | (b[o + 2]! << 8) | b[o + 3]!);
 
 function png(b: Uint8Array): ImagePixelSize | undefined {
-  if (b.length < 24 || b[0] !== 0x89 || b[1] !== 0x50 || b[12] !== 0x49 || b[15] !== 0x52) return undefined;
+  if (b.length < 24 || b[0] !== 0x89 || b[1] !== 0x50 || b[12] !== 0x49 || b[15] !== 0x52)
+    return undefined;
   return { width: u32be(b, 16), height: u32be(b, 20) };
 }
 
@@ -45,7 +47,11 @@ function bmp(b: Uint8Array): ImagePixelSize | undefined {
 }
 
 function webp(b: Uint8Array): ImagePixelSize | undefined {
-  if (b.length < 30 || String.fromCharCode(...b.subarray(0, 4)) !== "RIFF" || String.fromCharCode(...b.subarray(8, 12)) !== "WEBP")
+  if (
+    b.length < 30 ||
+    String.fromCharCode(...b.subarray(0, 4)) !== "RIFF" ||
+    String.fromCharCode(...b.subarray(8, 12)) !== "WEBP"
+  )
     return undefined;
   const chunk = String.fromCharCode(...b.subarray(12, 16));
   if (chunk === "VP8 ") return { width: u16le(b, 26) & 0x3fff, height: u16le(b, 28) & 0x3fff };
@@ -81,12 +87,17 @@ function jpeg(b: Uint8Array): ImagePixelSize | undefined {
 /** Undefined when the header is unreadable or the mime type has no reader here. */
 export function imagePixelSize(mimeType: string, base64: string): ImagePixelSize | undefined {
   const reader =
-    mimeType === "image/png" ? png
-    : mimeType === "image/gif" ? gif
-    : mimeType === "image/webp" ? webp
-    : mimeType === "image/bmp" ? bmp
-    : mimeType === "image/jpeg" ? jpeg
-    : undefined;
+    mimeType === "image/png"
+      ? png
+      : mimeType === "image/gif"
+        ? gif
+        : mimeType === "image/webp"
+          ? webp
+          : mimeType === "image/bmp"
+            ? bmp
+            : mimeType === "image/jpeg"
+              ? jpeg
+              : undefined;
   if (!reader) return undefined;
   const bytes = prefixBytes(base64, mimeType === "image/jpeg" ? MAX_HEADER_BYTES : 64);
   const size = bytes ? reader(bytes) : undefined;

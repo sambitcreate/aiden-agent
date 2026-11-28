@@ -76,7 +76,8 @@ const KNOWN_ERROR_NAMES: ReadonlySet<string> = new Set([
   "WrongDocumentError",
   "ZodError",
 ]);
-const SAFE_RELATIVE_PATH = /^[A-Za-z0-9_@+][A-Za-z0-9._@+-]*(?:\/[A-Za-z0-9_@+][A-Za-z0-9._@+-]*)*$/u;
+const SAFE_RELATIVE_PATH =
+  /^[A-Za-z0-9_@+][A-Za-z0-9._@+-]*(?:\/[A-Za-z0-9_@+][A-Za-z0-9._@+-]*)*$/u;
 // Only code can run from the bundle, so nothing else belongs in a frame.
 const CODE_FILE = /\.(?:[cm]?js|[cm]?ts|[jt]sx|html)$/u;
 const NODE_MODULES: ReadonlySet<string> = new Set([
@@ -90,7 +91,8 @@ const FUNCTION_ALIAS = / \[as [^\]]*\]$/u;
 const V8_FRAME = /^\s*at (?:(.+?) \()?(.+?):(\d+):(\d+)\)?\s*$/u;
 // What a sanitized frame or error may contain, checked again wherever one
 // is read back (a pending-crash file, the outgoing guard).
-const SAFE_FILENAME = /^(?:app:\/\/\/[A-Za-z0-9_@+][A-Za-z0-9._@+/-]*|node:[a-z_0-9]{1,30}|<external>|<anonymous>)$/u;
+const SAFE_FILENAME =
+  /^(?:app:\/\/\/[A-Za-z0-9_@+][A-Za-z0-9._@+/-]*|node:[a-z_0-9]{1,30}|<external>|<anonymous>)$/u;
 // Any address-shaped token, including ones inside otherwise harmless text.
 const EMAIL_ADDRESS = /[\p{L}\p{N}._%+-]+@[\p{L}\p{N}-]+(?:\.[\p{L}\p{N}-]+)*\.\p{L}{2,}/gu;
 const V8_LOCATIONLESS_FRAME = /^\s*at (?:(.+?) \()?(native|<anonymous>)\)?\s*$/u;
@@ -134,20 +136,53 @@ const FILE_SYSTEM_ERRORS: Readonly<Record<string, string>> = {
   ETIMEDOUT: "connection timed out",
   EXDEV: "cross-device link not permitted",
 };
-const SYSTEM_ERROR = Object.entries(FILE_SYSTEM_ERRORS).map(([code, text]) => `${code}: ${text}`).join("|");
-const SYSTEM_CALL = "access|chmod|chown|close|copyfile|cp|fstat|fsync|ftruncate|futime|lchown|link|lstat|mkdir|mkdtemp|open|opendir|read|readdir|readlink|realpath|rename|rm|rmdir|scandir|stat|symlink|unlink|utime|write";
-const NETWORK_ERROR = "EACCES|EADDRINUSE|EAI_AGAIN|ECONNREFUSED|ECONNRESET|EHOSTUNREACH|ENETUNREACH|ENOTFOUND|EPIPE|ETIMEDOUT";
+const SYSTEM_ERROR = Object.entries(FILE_SYSTEM_ERRORS)
+  .map(([code, text]) => `${code}: ${text}`)
+  .join("|");
+const SYSTEM_CALL =
+  "access|chmod|chown|close|copyfile|cp|fstat|fsync|ftruncate|futime|lchown|link|lstat|mkdir|mkdtemp|open|opendir|read|readdir|readlink|realpath|rename|rm|rmdir|scandir|stat|symlink|unlink|utime|write";
+const NETWORK_ERROR =
+  "EACCES|EADDRINUSE|EAI_AGAIN|ECONNREFUSED|ECONNRESET|EHOSTUNREACH|ENETUNREACH|ENOTFOUND|EPIPE|ETIMEDOUT";
 // The codes a server's crash report may send in place of a message. Each one is
 // a fixed name from the lists above, never text a thrown object made up.
-const SYSTEM_ERROR_CODES: ReadonlySet<string> = new Set([...Object.keys(FILE_SYSTEM_ERRORS), ...NETWORK_ERROR.split("|")]);
+const SYSTEM_ERROR_CODES: ReadonlySet<string> = new Set([
+  ...Object.keys(FILE_SYSTEM_ERRORS),
+  ...NETWORK_ERROR.split("|"),
+]);
 const KNOWN_ENGINE_MESSAGES: readonly (readonly [RegExp, string?])[] = [
   [/^Cannot (?:read|set) propert(?:y|ies) of (?:undefined|null)$/u],
-  [new RegExp(`^Cannot (read|set) propert(?:y|ies) of (undefined|null) \\((reading|setting) '${VARIABLE}'\\)$`, "u"), `Cannot $1 properties of $2 ($3 '${NAME}')`],
-  [new RegExp(`^Cannot destructure property '${VARIABLE}' of '${ACCESS_PATH}' as it is (undefined|null)\\.$`, "u"), `Cannot destructure property '${NAME}' of '${NAME}' as it is $1.`],
-  [new RegExp(`^${ACCESS_PATH} is not (a function|a constructor|iterable|async iterable|defined)$`, "u"), `${NAME} is not $1`],
-  [/^(?:undefined|object null) is not iterable \(cannot read property Symbol\(Symbol\.(?:async)?[iI]terator\)\)$/u],
-  [new RegExp(`^Cannot access '${VARIABLE}' before initialization$`, "u"), `Cannot access '${NAME}' before initialization`],
-  [new RegExp(`^Class constructor ${VARIABLE} cannot be invoked without 'new'$`, "u"), `Class constructor ${NAME} cannot be invoked without 'new'`],
+  [
+    new RegExp(
+      `^Cannot (read|set) propert(?:y|ies) of (undefined|null) \\((reading|setting) '${VARIABLE}'\\)$`,
+      "u",
+    ),
+    `Cannot $1 properties of $2 ($3 '${NAME}')`,
+  ],
+  [
+    new RegExp(
+      `^Cannot destructure property '${VARIABLE}' of '${ACCESS_PATH}' as it is (undefined|null)\\.$`,
+      "u",
+    ),
+    `Cannot destructure property '${NAME}' of '${NAME}' as it is $1.`,
+  ],
+  [
+    new RegExp(
+      `^${ACCESS_PATH} is not (a function|a constructor|iterable|async iterable|defined)$`,
+      "u",
+    ),
+    `${NAME} is not $1`,
+  ],
+  [
+    /^(?:undefined|object null) is not iterable \(cannot read property Symbol\(Symbol\.(?:async)?[iI]terator\)\)$/u,
+  ],
+  [
+    new RegExp(`^Cannot access '${VARIABLE}' before initialization$`, "u"),
+    `Cannot access '${NAME}' before initialization`,
+  ],
+  [
+    new RegExp(`^Class constructor ${VARIABLE} cannot be invoked without 'new'$`, "u"),
+    `Class constructor ${NAME} cannot be invoked without 'new'`,
+  ],
   [/^Assignment to constant variable\.$/u],
   [/^Maximum call stack size exceeded$/u],
   [/^Invalid (?:array|string) length$/u],
@@ -161,9 +196,16 @@ const KNOWN_ENGINE_MESSAGES: readonly (readonly [RegExp, string?])[] = [
   [/^Render frame was disposed before WebFrameMain could be accessed$/u],
   [/^ResizeObserver loop (?:limit exceeded|completed with undelivered notifications\.)$/u],
   [/^Script error\.$/u],
-  [/^Minified React error #\d{1,4}; visit \[REDACTED URL\] for the full message or use the non-minified dev environment for full errors and additional helpful warnings\.$/u],
+  [
+    /^Minified React error #\d{1,4}; visit \[REDACTED URL\] for the full message or use the non-minified dev environment for full errors and additional helpful warnings\.$/u,
+  ],
   // Any path in these has already been replaced by the redactor.
-  [new RegExp(`^(?:${SYSTEM_ERROR})(?:, (?:${SYSTEM_CALL})(?: '\\[REDACTED PATH\\]')?(?: -> '\\[REDACTED PATH\\]')?)?$`, "u")],
+  [
+    new RegExp(
+      `^(?:${SYSTEM_ERROR})(?:, (?:${SYSTEM_CALL})(?: '\\[REDACTED PATH\\]')?(?: -> '\\[REDACTED PATH\\]')?)?$`,
+      "u",
+    ),
+  ],
   [new RegExp(`^(?:connect|read|write|getaddrinfo|listen) (?:${NETWORK_ERROR})$`, "u")],
 ];
 
@@ -207,8 +249,12 @@ export interface SanitizeOptions {
   readonly appRoots: readonly string[];
 }
 
-function errorLike(value: unknown): { name?: unknown; message?: unknown; stack?: unknown; cause?: unknown } | undefined {
-  return typeof value === "object" && value !== null ? (value as Record<string, unknown>) : undefined;
+function errorLike(
+  value: unknown,
+): { name?: unknown; message?: unknown; stack?: unknown; cause?: unknown } | undefined {
+  return typeof value === "object" && value !== null
+    ? (value as Record<string, unknown>)
+    : undefined;
 }
 
 function isSafeErrorName(value: unknown): value is string {
@@ -226,11 +272,15 @@ function safeErrorName(value: unknown): string {
 // app built around prompts and replies an error can easily quote one. The type
 // and stack still identify the failure.
 export function redactExceptionMessage(value: string): string {
-  const bounded = value.slice(0, MAX_RAW_MESSAGE_LENGTH).normalize("NFKC").replace(EMAIL_ADDRESS, "[REDACTED EMAIL]");
+  const bounded = value
+    .slice(0, MAX_RAW_MESSAGE_LENGTH)
+    .normalize("NFKC")
+    .replace(EMAIL_ADDRESS, "[REDACTED EMAIL]");
   const redacted = sanitizeDiagnosticText(bounded, MAX_EXCEPTION_MESSAGE_LENGTH);
   if (OWN_MESSAGES.has(redacted)) return redacted;
   for (const [pattern, fixed] of KNOWN_ENGINE_MESSAGES) {
-    if (pattern.test(redacted)) return fixed === undefined ? redacted : redacted.replace(pattern, fixed);
+    if (pattern.test(redacted))
+      return fixed === undefined ? redacted : redacted.replace(pattern, fixed);
   }
   return WITHHELD_MESSAGE;
 }
@@ -244,7 +294,9 @@ function safeMessage(value: unknown): string {
 }
 
 function normalizeRoot(root: string): string {
-  const withoutScheme = root.startsWith("file://") ? safeDecode(root.slice("file://".length)) : root;
+  const withoutScheme = root.startsWith("file://")
+    ? safeDecode(root.slice("file://".length))
+    : root;
   const slashed = withoutScheme.replace(/\\/gu, "/");
   return slashed.endsWith("/") ? slashed : `${slashed}/`;
 }
@@ -264,11 +316,18 @@ function nodeFrameFile(module: string): string {
   return NODE_MODULES.has(name) ? `node:${name}` : EXTERNAL_FILE;
 }
 
-export function rewriteFramePath(location: string, appRoots: readonly string[]): { filename: string; inApp: boolean } {
-  if (location === "native" || location === ANONYMOUS_FILE) return { filename: ANONYMOUS_FILE, inApp: false };
-  if (location.startsWith("node:")) return { filename: nodeFrameFile(location.slice("node:".length)), inApp: false };
+export function rewriteFramePath(
+  location: string,
+  appRoots: readonly string[],
+): { filename: string; inApp: boolean } {
+  if (location === "native" || location === ANONYMOUS_FILE)
+    return { filename: ANONYMOUS_FILE, inApp: false };
+  if (location.startsWith("node:"))
+    return { filename: nodeFrameFile(location.slice("node:".length)), inApp: false };
   if (location.startsWith("internal/")) return { filename: nodeFrameFile(location), inApp: false };
-  const path = (location.startsWith("file://") ? safeDecode(location.slice("file://".length)) : location).replace(/\\/gu, "/");
+  const path = (
+    location.startsWith("file://") ? safeDecode(location.slice("file://".length)) : location
+  ).replace(/\\/gu, "/");
   let relative: string | undefined;
   for (const root of appRoots) {
     const normalized = normalizeRoot(root);
@@ -278,7 +337,12 @@ export function rewriteFramePath(location: string, appRoots: readonly string[]):
     }
   }
   relative = relative?.split(/[?#]/u)[0];
-  if (!relative || relative.includes("..") || !SAFE_RELATIVE_PATH.test(relative) || !CODE_FILE.test(relative)) {
+  if (
+    !relative ||
+    relative.includes("..") ||
+    !SAFE_RELATIVE_PATH.test(relative) ||
+    !CODE_FILE.test(relative)
+  ) {
     return { filename: EXTERNAL_FILE, inApp: false };
   }
   return { filename: `app:///${relative}`, inApp: !relative.split("/").includes("node_modules") };
@@ -290,7 +354,11 @@ function isSafeFunctionName(value: string): boolean {
 
 function safeFunctionName(value: string | undefined): string {
   if (!value) return "?";
-  const trimmed = value.replace(/^async /u, "").replace(/^new /u, "").replace(FUNCTION_ALIAS, "").trim();
+  const trimmed = value
+    .replace(/^async /u, "")
+    .replace(/^new /u, "")
+    .replace(FUNCTION_ALIAS, "")
+    .trim();
   return isSafeFunctionName(trimmed) ? trimmed : "?";
 }
 
@@ -305,7 +373,11 @@ function validPosition(value: number): boolean {
   return Number.isSafeInteger(value) && value >= 0 && value <= MAX_FRAME_POSITION;
 }
 
-export function parseStackFrames(stack: unknown, appRoots: readonly string[], message?: unknown): SanitizedFrame[] {
+export function parseStackFrames(
+  stack: unknown,
+  appRoots: readonly string[],
+  message?: unknown,
+): SanitizedFrame[] {
   if (typeof stack !== "string") return [];
   const frames: SanitizedFrame[] = [];
   for (const line of stackFrameLines(stack, message)) {
@@ -348,7 +420,11 @@ function sanitizeOne(value: unknown, appRoots: readonly string[]): SanitizedErro
   // Errors from another realm or serialized over IPC are plain objects, so
   // anything with a string message or stack counts as an error.
   if (!error || (typeof error.message !== "string" && typeof error.stack !== "string")) {
-    return { type: typeof value === "string" ? "Error" : "NonError", value: safeMessage(value), frames: [] };
+    return {
+      type: typeof value === "string" ? "Error" : "NonError",
+      value: safeMessage(value),
+      frames: [],
+    };
   }
   return {
     type: safeErrorName(error.name),
@@ -358,21 +434,27 @@ function sanitizeOne(value: unknown, appRoots: readonly string[]): SanitizedErro
 }
 
 function record(value: unknown): Record<string, unknown> | undefined {
-  return typeof value === "object" && value !== null && !Array.isArray(value) ? (value as Record<string, unknown>) : undefined;
+  return typeof value === "object" && value !== null && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : undefined;
 }
 
 export function parseSanitizedFrame(raw: unknown): SanitizedFrame | undefined {
   const frame = record(raw);
   if (!frame) return undefined;
   const { filename, function: fn, lineno, colno, inApp } = frame;
-  if (typeof filename !== "string" || !SAFE_FILENAME.test(filename) || filename.includes("..")) return undefined;
+  if (typeof filename !== "string" || !SAFE_FILENAME.test(filename) || filename.includes(".."))
+    return undefined;
   const inBundle = filename.startsWith("app:///");
-  if (typeof fn !== "string" || (fn !== "?" && !(inBundle && isSafeFunctionName(fn)))) return undefined;
+  if (typeof fn !== "string" || (fn !== "?" && !(inBundle && isSafeFunctionName(fn))))
+    return undefined;
   if (inBundle && !CODE_FILE.test(filename)) return undefined;
-  if (filename.startsWith("node:") && nodeFrameFile(filename.slice("node:".length)) !== filename) return undefined;
+  if (filename.startsWith("node:") && nodeFrameFile(filename.slice("node:".length)) !== filename)
+    return undefined;
   if (typeof inApp !== "boolean") return undefined;
   const hasPosition = lineno !== undefined || colno !== undefined;
-  if (hasPosition && !(validPosition(lineno as number) && validPosition(colno as number))) return undefined;
+  if (hasPosition && !(validPosition(lineno as number) && validPosition(colno as number)))
+    return undefined;
   return {
     filename,
     function: fn,
@@ -390,11 +472,15 @@ export function isSystemErrorCode(value: unknown): value is string {
 // Only a server's report sets `allowSystemErrorCode`, because a server sends a
 // listed code where a desktop report sends a message. The desktop keeps a bare
 // code withheld.
-export function parseSanitizedError(raw: unknown, options: { allowSystemErrorCode?: boolean } = {}): SanitizedError | undefined {
+export function parseSanitizedError(
+  raw: unknown,
+  options: { allowSystemErrorCode?: boolean } = {},
+): SanitizedError | undefined {
   const error = record(raw);
   if (!error) return undefined;
   if (!isSafeErrorName(error.type)) return undefined;
-  if (typeof error.value !== "string" || error.value.length > MAX_EXCEPTION_MESSAGE_LENGTH) return undefined;
+  if (typeof error.value !== "string" || error.value.length > MAX_EXCEPTION_MESSAGE_LENGTH)
+    return undefined;
   if (!Array.isArray(error.frames) || error.frames.length > MAX_EXCEPTION_FRAMES) return undefined;
   const frames: SanitizedFrame[] = [];
   for (const rawFrame of error.frames) {
@@ -402,20 +488,31 @@ export function parseSanitizedError(raw: unknown, options: { allowSystemErrorCod
     if (!frame) return undefined;
     frames.push(frame);
   }
-  const value = options.allowSystemErrorCode && isSystemErrorCode(error.value) ? error.value : redactExceptionMessage(error.value);
+  const value =
+    options.allowSystemErrorCode && isSystemErrorCode(error.value)
+      ? error.value
+      : redactExceptionMessage(error.value);
   return { type: error.type, value, frames };
 }
 
 export function exceptionFingerprint(primary: SanitizedError): string {
   const top = primary.frames.slice(0, 3).map((frame) => `${frame.filename}:${frame.function}`);
-  return createHash("sha256").update([primary.type, ...top].join("\n")).digest("hex").slice(0, 32);
+  return createHash("sha256")
+    .update([primary.type, ...top].join("\n"))
+    .digest("hex")
+    .slice(0, 32);
 }
 
 export function sanitizeException(error: unknown, options: SanitizeOptions): SanitizedException {
   const errors: SanitizedError[] = [sanitizeOne(error, options.appRoots)];
   const seen = new Set<unknown>([error]);
   let cause = errorLike(error)?.cause;
-  while (cause !== undefined && cause !== null && errors.length <= MAX_CAUSE_DEPTH && !seen.has(cause)) {
+  while (
+    cause !== undefined &&
+    cause !== null &&
+    errors.length <= MAX_CAUSE_DEPTH &&
+    !seen.has(cause)
+  ) {
     seen.add(cause);
     errors.push(sanitizeOne(cause, options.appRoots));
     cause = errorLike(cause)?.cause;

@@ -6,7 +6,12 @@ import { after, test } from "node:test";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import { getCurrentTools, type Message } from "@earendil-works/pi-ai";
 import { fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-ai/providers/faux";
-import { Harness, MemoryStorage, ToolResultEntry, type Conversation } from "@earendil-works/pi-durable";
+import {
+  Harness,
+  MemoryStorage,
+  ToolResultEntry,
+  type Conversation,
+} from "@earendil-works/pi-durable";
 import {
   BUILT_IN_BROWSER_PROFILES,
   DEFAULT_BROWSER_SETTINGS,
@@ -17,7 +22,11 @@ import {
 import { botRuleLabel, defaultBotRules, type BotRule } from "../../../renderer/shared/bot-rules.js";
 import type { BrowserCommandContext, BrowserFieldProbe } from "../browser/service.js";
 import type { RendererDocumentOwner } from "../renderer-document-owner.js";
-import { BROWSER_STATE_SELECTOR_REFUSED, BROWSER_VALUE_SELECTOR_REFUSED, BROWSER_XPATH_SELECTOR_REFUSED } from "../browser/credential-boundary.js";
+import {
+  BROWSER_STATE_SELECTOR_REFUSED,
+  BROWSER_VALUE_SELECTOR_REFUSED,
+  BROWSER_XPATH_SELECTOR_REFUSED,
+} from "../browser/credential-boundary.js";
 import { createBotHandoffs, ruleHandoffRequest } from "./bot-handoffs.js";
 import { createBotRegistry, type BotExtensionDeps } from "./bot-extension.js";
 import {
@@ -30,13 +39,22 @@ import {
 import { botIngressAllowsTool, botToolVerdict } from "./bot-tool-policy.js";
 import { withheldUntilDisclosed } from "./bot-tool-disclosure.js";
 import { OLDER_BROWSER_SCREENSHOT_NOTE } from "../screenshot-trimming.js";
-import { assemblyDeps, assemblyState, FULL_GRANTS, testAuthority } from "./test-support/assembly-fixtures.js";
+import {
+  assemblyDeps,
+  assemblyState,
+  FULL_GRANTS,
+  testAuthority,
+} from "./test-support/assembly-fixtures.js";
 import { createFauxModels, FAUX_MODEL_REF, waitFor, type FauxModels } from "./test-support/faux.js";
 
 const ctx = BACKGROUND_CONTEXT;
 const BOT = "bot-1";
 const SLACK = "https://app.slack.com/client/T1/C2";
-const COMPOSER: BrowserFieldProbe = { tag: "div", role: "textbox", accessibleName: "Message #general" };
+const COMPOSER: BrowserFieldProbe = {
+  tag: "div",
+  role: "textbox",
+  accessibleName: "Message #general",
+};
 
 const roots: string[] = [];
 after(() => {
@@ -45,9 +63,24 @@ after(() => {
 
 function tab(id: string, url: string): BrowserTab {
   return {
-    id, workspaceId: "bot-home-1", profileId: `bot:${BOT}`, url, title: id, loading: false, canGoBack: false,
-    canGoForward: false, crashed: false, audible: false, muted: false, viewport: { mode: "fill", width: 1280, height: 720 },
-    appearance: "system", zoom: 1, recording: false, agentControlling: false, floating: false, visible: true,
+    id,
+    workspaceId: "bot-home-1",
+    profileId: `bot:${BOT}`,
+    url,
+    title: id,
+    loading: false,
+    canGoBack: false,
+    canGoForward: false,
+    crashed: false,
+    audible: false,
+    muted: false,
+    viewport: { mode: "fill", width: 1280, height: 720 },
+    appearance: "system",
+    zoom: 1,
+    recording: false,
+    agentControlling: false,
+    floating: false,
+    visible: true,
   };
 }
 
@@ -60,8 +93,13 @@ const WINDOW: RendererDocumentOwner = {
 };
 
 /** The browser service as the Bot sees it: one Bot workspace with live page and control revisions. */
-function fakeBrowser(options: { owned?: boolean; window?: RendererDocumentOwner | undefined } = {}) {
-  const tabs: BrowserTab[] = [tab("slack", SLACK), tab("shop", "https://shop.example.com/checkout")];
+function fakeBrowser(
+  options: { owned?: boolean; window?: RendererDocumentOwner | undefined } = {},
+) {
+  const tabs: BrowserTab[] = [
+    tab("slack", SLACK),
+    tab("shop", "https://shop.example.com/checkout"),
+  ];
   const page = { document: 1, control: 0 };
   let owner: RendererDocumentOwner | undefined = options.owned === false ? undefined : WINDOW;
   let probe: BrowserFieldProbe | undefined = COMPOSER;
@@ -72,9 +110,16 @@ function fakeBrowser(options: { owned?: boolean; window?: RendererDocumentOwner 
   /** Runs inside a command before its effect: the page changing under the Bot. */
   let duringCommand: (() => void) | undefined;
   const state = (workspaceId: string): BrowserState => ({
-    workspaceId, revision: 1, tabs: structuredClone(tabs), activeTabId: tabs[0]?.id ?? null,
-    profiles: structuredClone(BUILT_IN_BROWSER_PROFILES), defaults: structuredClone(DEFAULT_BROWSER_SETTINGS),
-    agentAccessOverride: "inherit", agentAccessAllowed: true, history: [], servers: [],
+    workspaceId,
+    revision: 1,
+    tabs: structuredClone(tabs),
+    activeTabId: tabs[0]?.id ?? null,
+    profiles: structuredClone(BUILT_IN_BROWSER_PROFILES),
+    defaults: structuredClone(DEFAULT_BROWSER_SETTINGS),
+    agentAccessOverride: "inherit",
+    agentAccessAllowed: true,
+    history: [],
+    servers: [],
   });
   const service: BotBrowserService = {
     getState: state,
@@ -89,14 +134,23 @@ function fakeBrowser(options: { owned?: boolean; window?: RendererDocumentOwner 
       return {
         state: state(workspaceId),
         snapshot: {
-          tab: tabs[0]!, text: "Inbox", elements: [], diagnostics: [],
+          tab: tabs[0]!,
+          text: "Inbox",
+          elements: [],
+          diagnostics: [],
           image: { data: shot, mimeType: "image/png", width: 1280, height: 720 },
         },
       };
     },
     getApprovalTarget(workspaceId, tabId) {
       const target = tabs.find((candidate) => candidate.id === tabId) ?? tabs[0]!;
-      return { workspaceId, tabId: target.id, url: target.url, documentRevision: `doc:${page.document}`, controlRevision: page.control };
+      return {
+        workspaceId,
+        tabId: target.id,
+        url: target.url,
+        documentRevision: `doc:${page.document}`,
+        controlRevision: page.control,
+      };
     },
     hasOwner: () => owner !== undefined,
     transferOwner(_workspaceId, next) {
@@ -114,7 +168,13 @@ function fakeBrowser(options: { owned?: boolean; window?: RendererDocumentOwner 
     mintOwner: () => ("window" in options ? options.window : WINDOW),
   });
   return {
-    browser, service, tabs, page, commands, transfers, closed,
+    browser,
+    service,
+    tabs,
+    page,
+    commands,
+    transfers,
+    closed,
     probes: () => probes,
     setProbe(next: BrowserFieldProbe | undefined) {
       probe = next;
@@ -125,28 +185,52 @@ function fakeBrowser(options: { owned?: boolean; window?: RendererDocumentOwner 
   };
 }
 
-const TURN: BotBrowserTurn = { workspaceId: "bot-home-1", chatId: "chat-1", generationId: "gen-1", supportsImages: true, botName: "Ada" };
+const TURN: BotBrowserTurn = {
+  workspaceId: "bot-home-1",
+  chatId: "chat-1",
+  generationId: "gen-1",
+  supportsImages: true,
+  botName: "Ada",
+};
 
 function textOf(result: { content: Array<{ type: string; text?: string }> }): string {
-  return result.content.map((part) => (part.type === "text" ? part.text ?? "" : "")).join("");
+  return result.content.map((part) => (part.type === "text" ? (part.text ?? "") : "")).join("");
 }
 
 test("a Bot's browser offers its gateway and the browser tools, without page scripts or recording", async () => {
   const fake = fakeBrowser();
   const candidates = await fake.browser.candidates(BOT, TURN);
-  assert.deepEqual(candidates.map(({ tool }) => tool.name), [
-    "browser", "browser_status", "browser_open", "browser_navigate", "browser_resize", "browser_set_appearance",
-    "browser_snapshot", "browser_click", "browser_type", "browser_press", "browser_scroll", "browser_wait_for",
-  ]);
+  assert.deepEqual(
+    candidates.map(({ tool }) => tool.name),
+    [
+      "browser",
+      "browser_status",
+      "browser_open",
+      "browser_navigate",
+      "browser_resize",
+      "browser_set_appearance",
+      "browser_snapshot",
+      "browser_click",
+      "browser_type",
+      "browser_press",
+      "browser_scroll",
+      "browser_wait_for",
+    ],
+  );
   // Only the gateway, the status and a look at the page are safe to run again after a crash.
-  const safe = candidates.filter(({ replay }) => replay === "safe").map(({ tool }) => tool.name).sort();
+  const safe = candidates
+    .filter(({ replay }) => replay === "safe")
+    .map(({ tool }) => tool.name)
+    .sort();
   assert.deepEqual(safe, ["browser", "browser_snapshot", "browser_status"]);
 });
 
 test("the gateway explains the browser and lists the Bot's tabs, marking the ones the person is using", async () => {
   const fake = fakeBrowser();
   fake.tabs[1]!.heldForPerson = { reason: "sign_in" };
-  const gateway = (await fake.browser.candidates(BOT, TURN)).find(({ tool }) => tool.name === "browser")!.tool;
+  const gateway = (await fake.browser.candidates(BOT, TURN)).find(
+    ({ tool }) => tool.name === "browser",
+  )!.tool;
   const text = textOf(await gateway.execute("gateway-1", {}));
   assert.ok(text.startsWith(BOT_BROWSER_GUIDANCE));
   const listing = JSON.parse(text.slice(text.indexOf("{"))) as {
@@ -154,7 +238,10 @@ test("the gateway explains the browser and lists the Bot's tabs, marking the one
   };
   assert.deepEqual(
     listing.tabs.map((entry) => [entry.tabId, entry.url, entry.usedByThePerson === true]),
-    [["slack", SLACK, false], ["shop", "", true]],
+    [
+      ["slack", SLACK, false],
+      ["shop", "", true],
+    ],
     "a tab the person is using shows no address while they use it",
   );
   assert.equal(text.includes("checkout"), false);
@@ -162,12 +249,19 @@ test("the gateway explains the browser and lists the Bot's tabs, marking the one
 
 test("with no window to show it in, the Bot is told to ask the person to open Aiden; a window that appears owns it", async () => {
   const closedApp = fakeBrowser({ owned: false, window: undefined });
-  const gateway = (await closedApp.browser.candidates(BOT, TURN)).find(({ tool }) => tool.name === "browser")!.tool;
-  await assert.rejects(gateway.execute("gateway-1", {}), new RegExp(botBrowserOwnerMissing("Ada").replace(/[.]/gu, "\\.")));
+  const gateway = (await closedApp.browser.candidates(BOT, TURN)).find(
+    ({ tool }) => tool.name === "browser",
+  )!.tool;
+  await assert.rejects(
+    gateway.execute("gateway-1", {}),
+    new RegExp(botBrowserOwnerMissing("Ada").replace(/[.]/gu, "\\.")),
+  );
   assert.equal(closedApp.transfers.length, 0);
 
   const open = fakeBrowser({ owned: false });
-  const owned = (await open.browser.candidates(BOT, TURN)).find(({ tool }) => tool.name === "browser")!.tool;
+  const owned = (await open.browser.candidates(BOT, TURN)).find(
+    ({ tool }) => tool.name === "browser",
+  )!.tool;
   await owned.execute("gateway-1", {});
   assert.deepEqual(open.transfers, [WINDOW]);
 });
@@ -181,10 +275,23 @@ test("a click runs only under the person's approval of that exact call, on the t
   await assert.rejects(click.execute("call-0", args), /needs the person's approval/u);
   assert.equal(fake.commands.length, 0, "an unapproved click never reaches the page");
 
-  const live = await fake.browser.approvalFor(BOT, "browser_click", { callId: "call-1", args, signal: undefined });
+  const live = await fake.browser.approvalFor(BOT, "browser_click", {
+    callId: "call-1",
+    args,
+    signal: undefined,
+  });
   assert.ok(live?.approval);
-  assert.equal(live.approval.summary, `Click getByRole('button', { name: 'Send' }) in its browser\n${SLACK}`);
-  assert.deepEqual(live.action, { surface: "browser", tool: "browser_click", url: SLACK, locator: args.locator, field: COMPOSER });
+  assert.equal(
+    live.approval.summary,
+    `Click getByRole('button', { name: 'Send' }) in its browser\n${SLACK}`,
+  );
+  assert.deepEqual(live.action, {
+    surface: "browser",
+    tool: "browser_click",
+    url: SLACK,
+    locator: args.locator,
+    field: COMPOSER,
+  });
   // Asked but not answered yet: still refused.
   await assert.rejects(click.execute("call-1", args), /needs the person's approval/u);
 
@@ -193,7 +300,11 @@ test("a click runs only under the person's approval of that exact call, on the t
   assert.equal(fake.commands.length, 1);
   const [{ command, context }] = fake.commands;
   assert.equal(command.action, "click");
-  assert.equal((command as { tabId?: string }).tabId, "slack", "the approved tab, though the Bot named none");
+  assert.equal(
+    (command as { tabId?: string }).tabId,
+    "slack",
+    "the approved tab, though the Bot named none",
+  );
   assert.equal(context.source, "agent");
   assert.equal(context.credentialBoundary, true);
 
@@ -204,10 +315,16 @@ test("a click runs only under the person's approval of that exact call, on the t
 
 test("an approved click expires when the page navigates, the person takes over, or the arguments change", async () => {
   const fake = fakeBrowser();
-  const click = (await fake.browser.candidates(BOT, TURN)).find(({ tool }) => tool.name === "browser_click")!.tool;
+  const click = (await fake.browser.candidates(BOT, TURN)).find(
+    ({ tool }) => tool.name === "browser_click",
+  )!.tool;
   const args = { locator: "getByRole('button', { name: 'Send' })" };
   const approve = async (callId: string) => {
-    const live = await fake.browser.approvalFor(BOT, "browser_click", { callId, args, signal: undefined });
+    const live = await fake.browser.approvalFor(BOT, "browser_click", {
+      callId,
+      args,
+      signal: undefined,
+    });
     live!.approval!.onAllow!();
   };
 
@@ -220,7 +337,10 @@ test("an approved click expires when the page navigates, the person takes over, 
   await assert.rejects(click.execute("taken-over", args), /user took control/u);
 
   await approve("changed");
-  await assert.rejects(click.execute("changed", { locator: "getByRole('button', { name: 'Delete' })" }), /arguments changed/u);
+  await assert.rejects(
+    click.execute("changed", { locator: "getByRole('button', { name: 'Delete' })" }),
+    /arguments changed/u,
+  );
 
   await approve("other-tab");
   await assert.rejects(click.execute("other-tab", { ...args, tabId: "shop" }), /tab changed/u);
@@ -232,7 +352,11 @@ test("an approved click expires when the page navigates, the person takes over, 
   assert.equal(fake.commands.length, 0);
 
   // The person answers after the page moved on: Allow itself refuses.
-  const stale = await fake.browser.approvalFor(BOT, "browser_click", { callId: "stale", args, signal: undefined });
+  const stale = await fake.browser.approvalFor(BOT, "browser_click", {
+    callId: "stale",
+    args,
+    signal: undefined,
+  });
   fake.page.document += 1;
   assert.throws(() => stale!.approval!.onAllow!(), /page navigated/u);
 });
@@ -242,7 +366,11 @@ test("a tab the person is using refuses the Bot before anything is asked", async
   await fake.browser.candidates(BOT, TURN);
   fake.tabs[0]!.heldForPerson = { reason: "handoff" };
   await assert.rejects(
-    fake.browser.approvalFor(BOT, "browser_click", { callId: "c", args: { locator: "text=Send" }, signal: undefined }),
+    fake.browser.approvalFor(BOT, "browser_click", {
+      callId: "c",
+      args: { locator: "text=Send" },
+      signal: undefined,
+    }),
     /The person is using this tab\. Wait for them to finish\./u,
   );
 });
@@ -253,7 +381,10 @@ test("a selector that tests what a field holds is refused before anything reads 
   for (const [args, refusal] of [
     [{ selector: "input[value^='h']", text: "x" }, BROWSER_VALUE_SELECTOR_REFUSED],
     [{ locator: "xpath=//textarea[starts-with(.,'4111')]" }, BROWSER_XPATH_SELECTOR_REFUSED],
-    [{ locator: "select[autocomplete=cc-exp-month] option:nth-child(5):checked" }, BROWSER_STATE_SELECTOR_REFUSED],
+    [
+      { locator: "select[autocomplete=cc-exp-month] option:nth-child(5):checked" },
+      BROWSER_STATE_SELECTOR_REFUSED,
+    ],
   ] as const) {
     await assert.rejects(
       fake.browser.approvalFor(BOT, "browser_click", { callId: "v", args, signal: undefined }),
@@ -275,7 +406,10 @@ test("the card shows what the Bot will type, except into a password, code or car
     });
     return live!.approval!.summary;
   };
-  assert.equal(await typed(COMPOSER), `Type “hunter2 rocks” into getByLabel('Field') in its browser\n${SLACK}`);
+  assert.equal(
+    await typed(COMPOSER),
+    `Type “hunter2 rocks” into getByLabel('Field') in its browser\n${SLACK}`,
+  );
   for (const secret of [
     { tag: "input", type: "password" },
     { tag: "input", type: "text", autocomplete: "one-time-code" },
@@ -298,10 +432,26 @@ test("a key press is classified with the focused field and its chord, never with
     signal: undefined,
   });
   assert.equal(live!.approval!.summary, `Press Control+Enter in its browser\n${SLACK}`);
-  assert.deepEqual(live!.action, { surface: "browser", tool: "browser_press", url: SLACK, key: "Control+Enter", field: COMPOSER });
+  assert.deepEqual(live!.action, {
+    surface: "browser",
+    tool: "browser_press",
+    url: SLACK,
+    key: "Control+Enter",
+    field: COMPOSER,
+  });
   // Reading a page asks nothing and isn't classified.
-  assert.deepEqual(await fake.browser.approvalFor(BOT, "browser_snapshot", { callId: "s", args: {}, signal: undefined }), { approval: null });
-  assert.equal(await fake.browser.approvalFor(BOT, "web_search", { callId: "w", args: {}, signal: undefined }), undefined);
+  assert.deepEqual(
+    await fake.browser.approvalFor(BOT, "browser_snapshot", {
+      callId: "s",
+      args: {},
+      signal: undefined,
+    }),
+    { approval: null },
+  );
+  assert.equal(
+    await fake.browser.approvalFor(BOT, "web_search", { callId: "w", args: {}, signal: undefined }),
+    undefined,
+  );
 });
 
 test("a deleted Bot's browser closes its tabs and forgets its approvals", async () => {
@@ -317,25 +467,47 @@ test("a deleted Bot's browser closes its tabs and forgets its approvals", async 
 
 test("browser tools stay out of a request until the gateway has answered it", () => {
   const result = (toolName: string, isError: boolean): Message =>
-    ({ role: "toolResult", toolCallId: `${toolName}-1`, toolName, content: [], isError, timestamp: 0 }) as Message;
+    ({
+      role: "toolResult",
+      toolCallId: `${toolName}-1`,
+      toolName,
+      content: [],
+      isError,
+      timestamp: 0,
+    }) as Message;
   const before = withheldUntilDisclosed([]);
   assert.equal(before("browser_click"), true);
   assert.equal(before("browser_status"), true);
   assert.equal(before("browser"), false, "the gateway itself is always offered");
   assert.equal(before("web_search"), false);
-  assert.equal(withheldUntilDisclosed([result("browser", true)])("browser_click"), true, "a failed gateway discloses nothing");
+  assert.equal(
+    withheldUntilDisclosed([result("browser", true)])("browser_click"),
+    true,
+    "a failed gateway discloses nothing",
+  );
   assert.equal(withheldUntilDisclosed([result("web_search", false)])("browser_click"), true);
   assert.equal(withheldUntilDisclosed([result("browser", false)])("browser_click"), false);
 });
 
 test("the browser needs the Browser access and a person there to answer: never on routines or Telegram, never scripts", async () => {
   const facts = (kinds: string[]) =>
-    ({ authority: { otherCapabilities: kinds.map((kind) => ({ kind })) } }) as unknown as Parameters<typeof botToolVerdict>[1];
+    ({
+      authority: { otherCapabilities: kinds.map((kind) => ({ kind })) },
+    }) as unknown as Parameters<typeof botToolVerdict>[1];
   for (const name of ["browser", "browser_click", "browser_snapshot"]) {
     assert.deepEqual(await botToolVerdict(name, facts(["browser"]), {}), { allowed: true }, name);
-    assert.deepEqual(await botToolVerdict(name, facts(["web"]), {}), { allowed: false, reason: "The browser is off for this Bot." });
-    assert.equal((await botToolVerdict(name, facts(["browser"]), { routine: true })).allowed, false);
-    assert.equal((await botToolVerdict(name, facts(["browser"]), { telegram: true })).allowed, false);
+    assert.deepEqual(await botToolVerdict(name, facts(["web"]), {}), {
+      allowed: false,
+      reason: "The browser is off for this Bot.",
+    });
+    assert.equal(
+      (await botToolVerdict(name, facts(["browser"]), { routine: true })).allowed,
+      false,
+    );
+    assert.equal(
+      (await botToolVerdict(name, facts(["browser"]), { telegram: true })).allowed,
+      false,
+    );
     assert.equal(botIngressAllowsTool(name, ["desk-1"]), true);
     assert.equal(botIngressAllowsTool(name, ["routine:task-1:2026-10-07T09:00:00.000Z"]), false);
     assert.equal(botIngressAllowsTool(name, ["tg:bot:1:0:5"]), false);
@@ -359,7 +531,11 @@ function tempHome(): string {
 async function botTurn(deps: BotExtensionDeps, fauxModels: FauxModels) {
   const registry = createBotRegistry(BOT, deps);
   await registry.refresh();
-  const harness = await Harness.open(new MemoryStorage(), { models: fauxModels.models, registry }, ctx);
+  const harness = await Harness.open(
+    new MemoryStorage(),
+    { models: fauxModels.models, registry },
+    ctx,
+  );
   registry.attachHarness(harness);
   const root = await harness.root(ctx, { agent: { model: FAUX_MODEL_REF } });
   return { harness, root };
@@ -374,8 +550,18 @@ async function toolResults(conversation: Conversation): Promise<ToolResultModel[
     .map((entry) => (entry as unknown as { model: ToolResultModel[] }).model[0]!);
 }
 
-async function browserDeps(fake: ReturnType<typeof fakeBrowser>, options: Partial<Parameters<typeof assemblyDeps>[1]> = {}) {
-  const state = assemblyState(testAuthority({ mode: "full", home: tempHome(), ...FULL_GRANTS, other: [...FULL_GRANTS.other, "browser"] }));
+async function browserDeps(
+  fake: ReturnType<typeof fakeBrowser>,
+  options: Partial<Parameters<typeof assemblyDeps>[1]> = {},
+) {
+  const state = assemblyState(
+    testAuthority({
+      mode: "full",
+      home: tempHome(),
+      ...FULL_GRANTS,
+      other: [...FULL_GRANTS.other, "browser"],
+    }),
+  );
   const candidates = await fake.browser.candidates(BOT, TURN);
   return assemblyDeps(state, {
     candidates: () => candidates,
@@ -388,14 +574,23 @@ async function browserDeps(fake: ReturnType<typeof fakeBrowser>, options: Partia
 test("a Bot turn sees the browser tools only after calling the gateway, then clicks once under the person's Allow", async () => {
   const fake = fakeBrowser();
   const offered: string[][] = [];
-  const record = (reply: () => ReturnType<typeof fauxAssistantMessage>) => (context: { messages: readonly Message[] }) => {
-    offered.push(getCurrentTools(context.messages as Message[]).map((tool) => tool.name));
-    return reply();
-  };
+  const record =
+    (reply: () => ReturnType<typeof fauxAssistantMessage>) =>
+    (context: { messages: readonly Message[] }) => {
+      offered.push(getCurrentTools(context.messages as Message[]).map((tool) => tool.name));
+      return reply();
+    };
   const fauxModels = createFauxModels([
-    record(() => fauxAssistantMessage([fauxToolCall("browser", {}, { id: "gateway" })], { stopReason: "toolUse" })),
     record(() =>
-      fauxAssistantMessage([fauxToolCall("browser_click", { locator: "text=Archive" }, { id: "click" })], { stopReason: "toolUse" }),
+      fauxAssistantMessage([fauxToolCall("browser", {}, { id: "gateway" })], {
+        stopReason: "toolUse",
+      }),
+    ),
+    record(() =>
+      fauxAssistantMessage(
+        [fauxToolCall("browser_click", { locator: "text=Archive" }, { id: "click" })],
+        { stopReason: "toolUse" },
+      ),
     ),
     record(() => fauxAssistantMessage("archived")),
   ]);
@@ -404,10 +599,23 @@ test("a Bot turn sees the browser tools only after calling the gateway, then cli
   try {
     await (await root.submit({ type: "input", content: "archive it" }, ctx)).wait(ctx);
     assert.ok(offered[0]!.includes("browser"));
-    assert.equal(offered[0]!.some((name) => name.startsWith("browser_")), false, "no browser_* before the gateway answers");
-    assert.ok(offered[1]!.includes("browser_click"), "the gateway's answer discloses the browser tools");
-    assert.deepEqual(deps.approvals.map((request) => request.summary), [`Click text=Archive in its browser\n${SLACK}`]);
-    assert.deepEqual(fake.commands.map(({ command }) => command.action), ["click"]);
+    assert.equal(
+      offered[0]!.some((name) => name.startsWith("browser_")),
+      false,
+      "no browser_* before the gateway answers",
+    );
+    assert.ok(
+      offered[1]!.includes("browser_click"),
+      "the gateway's answer discloses the browser tools",
+    );
+    assert.deepEqual(
+      deps.approvals.map((request) => request.summary),
+      [`Click text=Archive in its browser\n${SLACK}`],
+    );
+    assert.deepEqual(
+      fake.commands.map(({ command }) => command.action),
+      ["click"],
+    );
   } finally {
     await harness.close(ctx);
   }
@@ -416,8 +624,12 @@ test("a Bot turn sees the browser tools only after calling the gateway, then cli
 test("Enter in a web message box falls under the Send a message rule, and a Deny never presses it", async () => {
   const fake = fakeBrowser();
   const fauxModels = createFauxModels([
-    fauxAssistantMessage([fauxToolCall("browser", {}, { id: "gateway" })], { stopReason: "toolUse" }),
-    fauxAssistantMessage([fauxToolCall("browser_press", { key: "Enter" }, { id: "send" })], { stopReason: "toolUse" }),
+    fauxAssistantMessage([fauxToolCall("browser", {}, { id: "gateway" })], {
+      stopReason: "toolUse",
+    }),
+    fauxAssistantMessage([fauxToolCall("browser_press", { key: "Enter" }, { id: "send" })], {
+      stopReason: "toolUse",
+    }),
     fauxAssistantMessage("not sent"),
   ]);
   const rules = defaultBotRules();
@@ -426,9 +638,10 @@ test("Enter in a web message box falls under the Send a message rule, and a Deny
   const { harness, root } = await botTurn(deps, fauxModels);
   try {
     await (await root.submit({ type: "input", content: "send it" }, ctx)).wait(ctx);
-    assert.deepEqual(deps.approvals.map((request) => request.summary), [
-      `Rule · ${botRuleLabel(communicate)} — Press Enter in its browser\n${SLACK}`,
-    ]);
+    assert.deepEqual(
+      deps.approvals.map((request) => request.summary),
+      [`Rule · ${botRuleLabel(communicate)} — Press Enter in its browser\n${SLACK}`],
+    );
     assert.equal(fake.commands.length, 0);
     const results = await toolResults(root);
     assert.equal(results.find((result) => result.toolName === "browser_press")?.isError, true);
@@ -442,10 +655,21 @@ test("typing into a password field hands the step to the person on that page, an
   fake.setProbe({ tag: "input", type: "password", accessibleName: "Password" });
   const handoffs = createBotHandoffs();
   const fauxModels = createFauxModels([
-    fauxAssistantMessage([fauxToolCall("browser", {}, { id: "gateway" })], { stopReason: "toolUse" }),
-    fauxAssistantMessage([fauxToolCall("browser_type", { locator: "getByLabel('Password')", text: "hunter2" }, { id: "type" })], {
+    fauxAssistantMessage([fauxToolCall("browser", {}, { id: "gateway" })], {
       stopReason: "toolUse",
     }),
+    fauxAssistantMessage(
+      [
+        fauxToolCall(
+          "browser_type",
+          { locator: "getByLabel('Password')", text: "hunter2" },
+          { id: "type" },
+        ),
+      ],
+      {
+        stopReason: "toolUse",
+      },
+    ),
     fauxAssistantMessage("handed off"),
   ]);
   const rules: BotRule[] = [];
@@ -462,7 +686,11 @@ test("typing into a password field hands the step to the person on that page, an
     assert.equal(handoffs.browserTarget(BOT, card.waitId)?.tabId, "slack");
     assert.equal("browserTarget" in card, false, "the tab identity stays on the host");
     assert.equal(JSON.stringify(card).includes("hunter2"), false);
-    assert.deepEqual(card.open, { url: SLACK }, "Open takes the person to the page the Bot was on, in its own tab");
+    assert.deepEqual(
+      card.open,
+      { url: SLACK },
+      "Open takes the person to the page the Bot was on, in its own tab",
+    );
     handoffs.answer(BOT, card.waitId, { outcome: "done" });
     await run.wait(ctx);
     assert.equal(fake.commands.length, 0, "the Bot never typed it");
@@ -478,7 +706,11 @@ test("a Bot's request carries its screenshots until a ninth cuts them to the new
   const looks = (context: { messages: readonly Message[] }) => {
     // The conversation after the head: the browser gateway's disclosure
     // changes the head's tool list, which screenshot trimming never touches.
-    requests.push(context.messages.filter((message) => (message.role as string) !== "system").map((message) => JSON.stringify(message)));
+    requests.push(
+      context.messages
+        .filter((message) => (message.role as string) !== "system")
+        .map((message) => JSON.stringify(message)),
+    );
     let images = 0;
     let notes = 0;
     for (const message of context.messages) {
@@ -490,13 +722,24 @@ test("a Bot's request carries its screenshots until a ninth cuts them to the new
     }
     seen.push({ images, notes });
   };
-  const step = (reply: () => ReturnType<typeof fauxAssistantMessage>) => (context: { messages: readonly Message[] }) => {
-    looks(context);
-    return reply();
-  };
-  const snapshot = (id: string) => step(() => fauxAssistantMessage([fauxToolCall("browser_snapshot", {}, { id })], { stopReason: "toolUse" }));
+  const step =
+    (reply: () => ReturnType<typeof fauxAssistantMessage>) =>
+    (context: { messages: readonly Message[] }) => {
+      looks(context);
+      return reply();
+    };
+  const snapshot = (id: string) =>
+    step(() =>
+      fauxAssistantMessage([fauxToolCall("browser_snapshot", {}, { id })], {
+        stopReason: "toolUse",
+      }),
+    );
   const fauxModels = createFauxModels([
-    step(() => fauxAssistantMessage([fauxToolCall("browser", {}, { id: "gateway" })], { stopReason: "toolUse" })),
+    step(() =>
+      fauxAssistantMessage([fauxToolCall("browser", {}, { id: "gateway" })], {
+        stopReason: "toolUse",
+      }),
+    ),
     ...Array.from({ length: 10 }, (_, index) => snapshot(`look-${index + 1}`)),
     step(() => fauxAssistantMessage("read it")),
   ]);
@@ -504,15 +747,30 @@ test("a Bot's request carries its screenshots until a ninth cuts them to the new
   const { harness, root } = await botTurn(deps, fauxModels);
   try {
     await (await root.submit({ type: "input", content: "read my inbox" }, ctx)).wait(ctx);
-    assert.deepEqual(seen.map(({ images }) => images), [0, 0, 1, 2, 3, 4, 5, 6, 7, 8, 3, 4]);
-    assert.deepEqual(seen[seen.length - 1], { images: 4, notes: 6 }, "the six oldest screenshots became notes");
+    assert.deepEqual(
+      seen.map(({ images }) => images),
+      [0, 0, 1, 2, 3, 4, 5, 6, 7, 8, 3, 4],
+    );
+    assert.deepEqual(
+      seen[seen.length - 1],
+      { images: 4, notes: 6 },
+      "the six oldest screenshots became notes",
+    );
     const edited = requests.flatMap((request, index) =>
-      index > 0 && requests[index - 1]!.some((message, at) => request[at] !== message) ? [index + 1] : []);
+      index > 0 && requests[index - 1]!.some((message, at) => request[at] !== message)
+        ? [index + 1]
+        : [],
+    );
     assert.deepEqual(edited, [11], "only the cut edits an earlier message");
-    const kept = (await toolResults(root)).filter((result) => result.toolName === "browser_snapshot");
+    const kept = (await toolResults(root)).filter(
+      (result) => result.toolName === "browser_snapshot",
+    );
     assert.equal(kept.length, 10);
     for (const result of kept) {
-      assert.ok((result.content as Array<{ type?: string }>).some((part) => part.type === "image"), "the transcript keeps every screenshot");
+      assert.ok(
+        (result.content as Array<{ type?: string }>).some((part) => part.type === "image"),
+        "the transcript keeps every screenshot",
+      );
     }
   } finally {
     await harness.close(ctx);

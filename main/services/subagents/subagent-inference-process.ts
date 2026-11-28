@@ -324,7 +324,9 @@ function readProcessTable(pid: number): Promise<string> {
   });
 }
 
-async function readOwnedProcessIdentity(pid: number | undefined): Promise<OwnedProcessIdentityResult> {
+async function readOwnedProcessIdentity(
+  pid: number | undefined,
+): Promise<OwnedProcessIdentityResult> {
   if (typeof pid !== "number" || !Number.isSafeInteger(pid) || pid <= 1) {
     return { kind: "indeterminate" };
   }
@@ -506,11 +508,14 @@ export class ElectronSubagentInferenceIsolation implements SubagentInferenceIsol
   private readonly owner: Pick<SubagentInferenceProcessOwner, "stream" | "shutdown">;
 
   constructor(owner?: Pick<SubagentInferenceProcessOwner, "stream" | "shutdown">) {
-    this.owner = owner ?? new SubagentInferenceProcessOwner(
-      launchElectronInferenceProcess, undefined, (error) => {
-        writeDevLog("error", "subagents", ["Could not verify isolated subagent inference process cleanup.", error]);
-      },
-    );
+    this.owner =
+      owner ??
+      new SubagentInferenceProcessOwner(launchElectronInferenceProcess, undefined, (error) => {
+        writeDevLog("error", "subagents", [
+          "Could not verify isolated subagent inference process cleanup.",
+          error,
+        ]);
+      });
   }
 
   wrap(
@@ -529,152 +534,172 @@ export class ElectronSubagentInferenceIsolation implements SubagentInferenceIsol
       const startupRetryEnabled = firstIsolatedRequest;
       firstIsolatedRequest = false;
       return lazyStream(model, async () => {
-        const preparationSignal = AbortSignal.any([this.shutdownController.signal, ...(options?.signal ? [options.signal] : []), ...(authority?.signal ? [authority.signal] : [])]);
+        const preparationSignal = AbortSignal.any([
+          this.shutdownController.signal,
+          ...(options?.signal ? [options.signal] : []),
+          ...(authority?.signal ? [authority.signal] : []),
+        ]);
         try {
-        preparationSignal.throwIfAborted();
-        await authority?.revalidate();
-        preparationSignal.throwIfAborted();
-        const diagnosticId = createSubagentDiagnosticId();
-        let requestModel: Model<Api>;
-        let requestOptions: ModelsSimpleStreamOptions;
-        let leaseSignal: AbortSignal | undefined;
-        let observeResult:
-          | ((message: AssistantMessage, metadata?: { authenticationFailure?: boolean }) => void)
-          | undefined;
-        if (!canDispatchSubagentModel(model.provider)) {
-          throw new Error("Subagents are not available for agent-backed providers.");
-        }
-        if (model.provider === OPENAI_CODEX_PROVIDER_ID) {
-          if (!runtime.prepareIsolatedStream) {
-            throw new Error("OpenAI Codex isolated dispatch is unavailable.");
+          preparationSignal.throwIfAborted();
+          await authority?.revalidate();
+          preparationSignal.throwIfAborted();
+          const diagnosticId = createSubagentDiagnosticId();
+          let requestModel: Model<Api>;
+          let requestOptions: ModelsSimpleStreamOptions;
+          let leaseSignal: AbortSignal | undefined;
+          let observeResult:
+            | ((message: AssistantMessage, metadata?: { authenticationFailure?: boolean }) => void)
+            | undefined;
+          if (!canDispatchSubagentModel(model.provider)) {
+            throw new Error("Subagents are not available for agent-backed providers.");
           }
-          const lease = await runtime.prepareIsolatedStream(model, { ...options, signal: preparationSignal });
-          requestModel = lease.model;
-          const allowedEnv = ambientProviderEnv(model.provider, lease.options.env);
-          requestOptions = {
-            ...lease.options,
-            env: Object.keys(allowedEnv).length > 0 ? allowedEnv : undefined,
-          };
-          leaseSignal = lease.signal;
-          observeResult = lease.observeResult;
-        } else {
-          const resolution = await runtime.models.getAuth(model, {
-            apiKey: options?.apiKey ?? runtime.apiKey,
-            env: options?.env,
-          });
-          if (!resolution) throw new Error(`Provider is not configured: ${model.provider}`);
-          const apiKey = authority ? resolution.auth.apiKey : options?.apiKey ?? resolution.auth.apiKey;
-          let headers = authority ? mergeHeaders(options?.headers, resolution.auth.headers ?? runtime.headers) : mergeHeaders(resolution.auth.headers ?? runtime.headers, options?.headers);
-          if (options?.transformHeaders) headers = await options.transformHeaders(headers ?? {});
-          if (authority) headers = mergeHeaders(headers, resolution.auth.headers ?? runtime.headers);
-          requestModel = resolution.auth.baseUrl
-            ? { ...model, baseUrl: resolution.auth.baseUrl }
-            : model;
-          // Only reviewed provider configuration crosses the worker boundary.
-          // The worker bootstrap disables every child_process entry point, so
-          // static/role/SSO profiles can resolve but credential_process cannot
-          // escape the owned UtilityProcess.
-          const envSource = authority ? { ...(resolution.env ?? {}) } : {
-            ...process.env,
-            ...(resolution.env ?? {}),
-            ...(options?.env ?? {}),
-          };
-          const allowedEnv = ambientProviderEnv(model.provider, envSource);
-          const env = Object.keys(allowedEnv).length > 0 ? allowedEnv : undefined;
-          requestOptions = { ...options, apiKey, headers, env };
-        }
-        await authority?.revalidate();
-        preparationSignal.throwIfAborted();
-        if (authority && (requestModel.provider !== runtime.model.provider || requestModel.id !== runtime.model.id)) throw new Error("Isolated authentication cannot switch the originating task's model.");
-        const { signal } = requestOptions;
-        const prepared = prepareSubagentInferenceOptions(requestOptions);
-        const requestSignals = [leaseSignal, signal, preparationSignal].filter(
-          (candidate): candidate is AbortSignal => candidate !== undefined,
-        );
-        const requestSignal =
-          requestSignals.length > 1 ? AbortSignal.any(requestSignals) : requestSignals[0];
-        return withZeroActivityStartupRetry(
-          requestModel,
-          () => lazyStream(requestModel, async () => {
-            await authority?.revalidate();
-            if (requestSignal?.aborted) return abortedInferenceStream(requestModel);
-            return this.owner.stream(
-              {
-                kind: "start",
-                version: SUBAGENT_INFERENCE_PROTOCOL_VERSION,
-                requestId: randomUUID(),
-                model: requestModel,
-                context: prepareSubagentInferenceContext(context),
-                options: prepared,
-              },
-              {
-                model: requestModel,
-                onPayload: requestOptions.onPayload,
-                onResponse: requestOptions.onResponse,
-                onTerminal: (message, metadata) => {
-                  try {
-                    observeResult?.(message, metadata);
-                  } finally {
-                    if (metadata.providerFailureCategory) {
-                      const record = {
-                        diagnosticId,
-                        ...diagnosticContext,
-                        providerId: requestModel.provider,
-                        modelId: requestModel.id,
-                        failure: "provider",
-                        attempts: 1,
-                        diagnostics: [
-                          {
-                            stage: "provider",
-                            code: "provider_failure",
-                            providerCategory: metadata.providerFailureCategory,
-                          },
-                        ],
-                      } as const;
-                      writeSubagentRuntimeFailure(record);
-                      writeDevLog("error", "subagents", [
-                        "Subagent provider request failed.",
-                        {
-                          diagnosticId,
-                          category: metadata.providerFailureCategory,
-                        },
-                      ]);
-                    }
-                  }
-                },
-              },
-              requestSignal,
-            );
-          }),
-          requestSignal,
-          startupRetryEnabled,
-          SUBAGENT_STARTUP_RETRY_DELAYS_MS,
-          (report) => {
-            pendingHostFailure = report.failure === "policy" ? "policy" : "inference";
-            const record = {
-              diagnosticId,
-              ...diagnosticContext,
-              providerId: requestModel.provider,
-              modelId: requestModel.id,
-              failure: report.failure,
-              attempts: report.attempts,
-              diagnostics: report.diagnostics,
-            } as const;
-            writeSubagentRuntimeFailure(record);
-            const last = report.diagnostics[report.diagnostics.length - 1];
-            writeDevLog("error", "subagents", [
-              "Subagent inference failed.",
-              {
+          if (model.provider === OPENAI_CODEX_PROVIDER_ID) {
+            if (!runtime.prepareIsolatedStream) {
+              throw new Error("OpenAI Codex isolated dispatch is unavailable.");
+            }
+            const lease = await runtime.prepareIsolatedStream(model, {
+              ...options,
+              signal: preparationSignal,
+            });
+            requestModel = lease.model;
+            const allowedEnv = ambientProviderEnv(model.provider, lease.options.env);
+            requestOptions = {
+              ...lease.options,
+              env: Object.keys(allowedEnv).length > 0 ? allowedEnv : undefined,
+            };
+            leaseSignal = lease.signal;
+            observeResult = lease.observeResult;
+          } else {
+            const resolution = await runtime.models.getAuth(model, {
+              apiKey: options?.apiKey ?? runtime.apiKey,
+              env: options?.env,
+            });
+            if (!resolution) throw new Error(`Provider is not configured: ${model.provider}`);
+            const apiKey = authority
+              ? resolution.auth.apiKey
+              : (options?.apiKey ?? resolution.auth.apiKey);
+            let headers = authority
+              ? mergeHeaders(options?.headers, resolution.auth.headers ?? runtime.headers)
+              : mergeHeaders(resolution.auth.headers ?? runtime.headers, options?.headers);
+            if (options?.transformHeaders) headers = await options.transformHeaders(headers ?? {});
+            if (authority)
+              headers = mergeHeaders(headers, resolution.auth.headers ?? runtime.headers);
+            requestModel = resolution.auth.baseUrl
+              ? { ...model, baseUrl: resolution.auth.baseUrl }
+              : model;
+            // Only reviewed provider configuration crosses the worker boundary.
+            // The worker bootstrap disables every child_process entry point, so
+            // static/role/SSO profiles can resolve but credential_process cannot
+            // escape the owned UtilityProcess.
+            const envSource = authority
+              ? { ...(resolution.env ?? {}) }
+              : {
+                  ...process.env,
+                  ...(resolution.env ?? {}),
+                  ...(options?.env ?? {}),
+                };
+            const allowedEnv = ambientProviderEnv(model.provider, envSource);
+            const env = Object.keys(allowedEnv).length > 0 ? allowedEnv : undefined;
+            requestOptions = { ...options, apiKey, headers, env };
+          }
+          await authority?.revalidate();
+          preparationSignal.throwIfAborted();
+          if (
+            authority &&
+            (requestModel.provider !== runtime.model.provider ||
+              requestModel.id !== runtime.model.id)
+          )
+            throw new Error("Isolated authentication cannot switch the originating task's model.");
+          const { signal } = requestOptions;
+          const prepared = prepareSubagentInferenceOptions(requestOptions);
+          const requestSignals = [leaseSignal, signal, preparationSignal].filter(
+            (candidate): candidate is AbortSignal => candidate !== undefined,
+          );
+          const requestSignal =
+            requestSignals.length > 1 ? AbortSignal.any(requestSignals) : requestSignals[0];
+          return withZeroActivityStartupRetry(
+            requestModel,
+            () =>
+              lazyStream(requestModel, async () => {
+                await authority?.revalidate();
+                if (requestSignal?.aborted) return abortedInferenceStream(requestModel);
+                return this.owner.stream(
+                  {
+                    kind: "start",
+                    version: SUBAGENT_INFERENCE_PROTOCOL_VERSION,
+                    requestId: randomUUID(),
+                    model: requestModel,
+                    context: prepareSubagentInferenceContext(context),
+                    options: prepared,
+                  },
+                  {
+                    model: requestModel,
+                    onPayload: requestOptions.onPayload,
+                    onResponse: requestOptions.onResponse,
+                    onTerminal: (message, metadata) => {
+                      try {
+                        observeResult?.(message, metadata);
+                      } finally {
+                        if (metadata.providerFailureCategory) {
+                          const record = {
+                            diagnosticId,
+                            ...diagnosticContext,
+                            providerId: requestModel.provider,
+                            modelId: requestModel.id,
+                            failure: "provider",
+                            attempts: 1,
+                            diagnostics: [
+                              {
+                                stage: "provider",
+                                code: "provider_failure",
+                                providerCategory: metadata.providerFailureCategory,
+                              },
+                            ],
+                          } as const;
+                          writeSubagentRuntimeFailure(record);
+                          writeDevLog("error", "subagents", [
+                            "Subagent provider request failed.",
+                            {
+                              diagnosticId,
+                              category: metadata.providerFailureCategory,
+                            },
+                          ]);
+                        }
+                      }
+                    },
+                  },
+                  requestSignal,
+                );
+              }),
+            requestSignal,
+            startupRetryEnabled,
+            SUBAGENT_STARTUP_RETRY_DELAYS_MS,
+            (report) => {
+              pendingHostFailure = report.failure === "policy" ? "policy" : "inference";
+              const record = {
                 diagnosticId,
+                ...diagnosticContext,
+                providerId: requestModel.provider,
+                modelId: requestModel.id,
                 failure: report.failure,
                 attempts: report.attempts,
-                stage: last?.stage ?? "runtime",
-                code: last?.code ?? "unknown",
-                exitCode: last?.exitCode,
-              },
-            ]);
-          },
-        );
+                diagnostics: report.diagnostics,
+              } as const;
+              writeSubagentRuntimeFailure(record);
+              const last = report.diagnostics[report.diagnostics.length - 1];
+              writeDevLog("error", "subagents", [
+                "Subagent inference failed.",
+                {
+                  diagnosticId,
+                  failure: report.failure,
+                  attempts: report.attempts,
+                  stage: last?.stage ?? "runtime",
+                  code: last?.code ?? "unknown",
+                  exitCode: last?.exitCode,
+                },
+              ]);
+            },
+          );
         } catch (error) {
           if (preparationSignal.aborted) return abortedInferenceStream(model);
           throw error;

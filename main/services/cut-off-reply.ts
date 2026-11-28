@@ -48,4 +48,3 @@ export function cutOffContinuationMessage(timestamp: number = Date.now()): UserM
     timestamp,
   };
 }
-

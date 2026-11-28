@@ -45,7 +45,8 @@ export function BotDeleteDialog({
     setBusy(true);
     try {
       await botsApi.delete(bot.id);
-      if (!forgetBotPendingChanges(bot.id)) toast.error("The Bot was deleted, but this device couldn’t clear all its saved changes.");
+      if (!forgetBotPendingChanges(bot.id))
+        toast.error("The Bot was deleted, but this device couldn’t clear all its saved changes.");
       // Here, not in a list prune: deleting the last Bot leaves an empty list, which never prunes.
       botSidebarPreferenceActions.forget(bot.id);
       forgetBotLiveView(bot.id);

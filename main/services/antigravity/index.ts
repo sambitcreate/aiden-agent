@@ -30,7 +30,9 @@ export function antigravityEnabled(
 let service: AntigravityService | undefined;
 
 export function antigravityService(): AntigravityService {
-  service ??= new AntigravityService({ baseDir: path.join(app.getPath("userData"), "acp", "antigravity") });
+  service ??= new AntigravityService({
+    baseDir: path.join(app.getPath("userData"), "acp", "antigravity"),
+  });
   return service;
 }
 
@@ -44,7 +46,8 @@ export function antigravityProvider(): Provider<Api> {
   const definition = createAntigravityDefinition({ hasSignIn: async () => false });
   return createAcpHarnessProvider({
     definition,
-    stream: (model, context, options) => antigravityService().runtime.stream(model, context, options),
+    stream: (model, context, options) =>
+      antigravityService().runtime.stream(model, context, options),
     signIn: {
       name: "Google account",
       loginLabel: "Sign in with Google",

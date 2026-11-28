@@ -70,7 +70,11 @@ export function elementToken(snapshotId: number, index: number): string;
 export function pngHeaderBase64(width: number, height: number): string;
 
 export class FakeSnapshotStore {
-  publish(pid: number, windowId: number, withScreenshot: boolean): {
+  publish(
+    pid: number,
+    windowId: number,
+    withScreenshot: boolean,
+  ): {
     id: number;
     invalidated: string[];
   };

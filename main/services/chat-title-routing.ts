@@ -1,7 +1,4 @@
-import type {
-  ChatTitleProviderId,
-  FoundationModelsConnectionStatus,
-} from "./types.js";
+import type { ChatTitleProviderId, FoundationModelsConnectionStatus } from "./types.js";
 
 export type ChatTitleRoute = "apple-foundation-models" | "chat-model" | "seed-only";
 

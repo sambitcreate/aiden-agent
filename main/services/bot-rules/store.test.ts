@@ -1,5 +1,14 @@
 import assert from "node:assert/strict";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { after, test } from "node:test";
@@ -25,7 +34,10 @@ function profile(known = new Set([BOT, OTHER])) {
   const root = mkdtempSync(path.join(os.tmpdir(), "aiden-bot-rules-"));
   roots.push(root);
   const file = path.join(root, "bots", BOT_DIR, "rules.json");
-  const store = createBotRuleStore({ profileDir: root, knownBot: async (botId) => known.has(botId) });
+  const store = createBotRuleStore({
+    profileDir: root,
+    knownBot: async (botId) => known.has(botId),
+  });
   return { root, file, store, known };
 }
 
@@ -48,9 +60,17 @@ test("a Bot with no rules file has the defaults at revision 0, without creating 
 
 test("changes persist across stores, bump the revision and keep the order locked, built-in, custom", async () => {
   const p = profile();
-  const changed = await p.store.update(BOT, 0, { type: "set_behavior", ruleId: "default.purchase", behavior: "hand_off" });
+  const changed = await p.store.update(BOT, 0, {
+    type: "set_behavior",
+    ruleId: "default.purchase",
+    behavior: "hand_off",
+  });
   assert.equal(changed.ok, true);
-  const added = await p.store.update(BOT, 1, { type: "add_custom", text: "  book   a flight. ", behavior: "ask" });
+  const added = await p.store.update(BOT, 1, {
+    type: "add_custom",
+    text: "  book   a flight. ",
+    behavior: "ask",
+  });
   assert.equal(added.ok, true);
   assert.equal(added.view.revision, 2);
 
@@ -76,12 +96,24 @@ test("changes persist across stores, bump the revision and keep the order locked
 
 test("edit and remove a custom rule", async () => {
   const p = profile();
-  const added = await p.store.update(BOT, 0, { type: "add_custom", text: "email my landlord", behavior: "ask" });
+  const added = await p.store.update(BOT, 0, {
+    type: "add_custom",
+    text: "email my landlord",
+    behavior: "ask",
+  });
   const id = added.view.rules[added.view.rules.length - 1]!.id;
-  const edited = await p.store.update(BOT, 1, { type: "edit_custom", ruleId: id, behavior: "hand_off" });
+  const edited = await p.store.update(BOT, 1, {
+    type: "edit_custom",
+    ruleId: id,
+    behavior: "hand_off",
+  });
   assert.equal(byId(edited.view.rules, id)?.behavior, "hand_off");
   assert.equal(byId(edited.view.rules, id)?.text, "email my landlord");
-  const renamed = await p.store.update(BOT, 2, { type: "edit_custom", ruleId: id, text: "email the landlord" });
+  const renamed = await p.store.update(BOT, 2, {
+    type: "edit_custom",
+    ruleId: id,
+    text: "email the landlord",
+  });
   assert.equal(byId(renamed.view.rules, id)?.text, "email the landlord");
   const removed = await p.store.update(BOT, 3, { type: "remove_custom", ruleId: id });
   assert.equal(removed.ok, true);
@@ -110,7 +142,12 @@ test("a tampered file can't remove or weaken a locked rule", async () => {
   const p = profile();
   handWrite(
     p.file,
-    JSON.stringify({ version: 1, revision: 4, behaviors: { money: "ask", purchase: "hand_off" }, custom: [] }),
+    JSON.stringify({
+      version: 1,
+      revision: 4,
+      behaviors: { money: "ask", purchase: "hand_off" },
+      custom: [],
+    }),
   );
   const view = await p.store.get(BOT);
   // `money` is not a stored behavior, so the whole file is invalid.
@@ -134,7 +171,13 @@ test("a file that doesn't parse exactly fails closed: calls can't read it, and t
     { ...valid, custom: [{ id, text: "x".repeat(BOT_RULE_TEXT_MAX_CHARS + 1), behavior: "ask" }] },
     { ...valid, custom: [{ id: "custom.1", text: "book a flight", behavior: "ask" }] },
     { ...valid, custom: [{ id, text: "book a flight", behavior: "ask", locked: true }] },
-    { ...valid, custom: [{ id, text: "book a flight", behavior: "ask" }, { id, text: "order food", behavior: "ask" }] },
+    {
+      ...valid,
+      custom: [
+        { id, text: "book a flight", behavior: "ask" },
+        { id, text: "order food", behavior: "ask" },
+      ],
+    },
     { ...valid, custom: [{ id, text: "  book a flight", behavior: "ask" }] },
   ];
   for (const variant of variants) {
@@ -149,17 +192,32 @@ test("a file that doesn't parse exactly fails closed: calls can't read it, and t
   }
 
   // A refused change still says the file is unreadable; a saved one replaces it, and the Bot reads its rules again.
-  const refused = await p.store.update(BOT, 0, { type: "set_behavior", ruleId: "locked.money", behavior: "ask" });
+  const refused = await p.store.update(BOT, 0, {
+    type: "set_behavior",
+    ruleId: "locked.money",
+    behavior: "ask",
+  });
   assert.equal(refused.ok ? undefined : refused.reason, "locked");
   assert.equal(refused.view.unreadable, true);
-  const saved = await p.store.update(BOT, 0, { type: "set_behavior", ruleId: "default.purchase", behavior: "hand_off" });
+  const saved = await p.store.update(BOT, 0, {
+    type: "set_behavior",
+    ruleId: "default.purchase",
+    behavior: "hand_off",
+  });
   assert.equal(saved.ok, true);
   assert.equal(saved.view.unreadable, undefined);
   assert.equal(saved.view.revision, 1);
   assert.equal(byId(await p.store.rules(BOT), "default.purchase")?.behavior, "hand_off");
-  assert.equal(byId(await p.store.rules(BOT), "default.delete")?.behavior, "ask", "the lost file's settings are not guessed at");
+  assert.equal(
+    byId(await p.store.rules(BOT), "default.delete")?.behavior,
+    "ask",
+    "the lost file's settings are not guessed at",
+  );
 
-  handWrite(p.file, JSON.stringify({ ...valid, custom: [{ id, text: "book a flight", behavior: "ask" }] }));
+  handWrite(
+    p.file,
+    JSON.stringify({ ...valid, custom: [{ id, text: "book a flight", behavior: "ask" }] }),
+  );
   const view = await p.store.get(BOT);
   assert.equal(view.unreadable, undefined);
   assert.equal(view.revision, 3);
@@ -172,7 +230,11 @@ test("replacing a damaged rules file keeps each damaged version beside it, and d
   const directory = path.dirname(p.file);
   const first = '{"version":1,"revision":4,"custom":[{"text":"never book flights over 500 dollars"';
   handWrite(p.file, first);
-  const saved = await p.store.update(BOT, 0, { type: "set_behavior", ruleId: "default.purchase", behavior: "hand_off" });
+  const saved = await p.store.update(BOT, 0, {
+    type: "set_behavior",
+    ruleId: "default.purchase",
+    behavior: "hand_off",
+  });
   assert.equal(saved.ok, true);
   assert.equal(readFileSync(path.join(directory, "rules.json.unreadable"), "utf8"), first);
 
@@ -180,15 +242,26 @@ test("replacing a damaged rules file keeps each damaged version beside it, and d
   // The copy is the file's exact bytes, even ones that aren't valid UTF-8.
   const second = Buffer.from([0x7b, 0x22, 0x63, 0x61, 0x66, 0xe9, 0x22, 0x3a]);
   writeFileSync(p.file, second);
-  const refused = await p.store.update(BOT, 0, { type: "set_behavior", ruleId: "locked.money", behavior: "ask" });
+  const refused = await p.store.update(BOT, 0, {
+    type: "set_behavior",
+    ruleId: "locked.money",
+    behavior: "ask",
+  });
   assert.equal(refused.ok, false);
   assert.equal(existsSync(path.join(directory, "rules.json.unreadable.2")), false);
-  assert.equal((await p.store.update(BOT, 0, { type: "add_custom", text: "order food", behavior: "ask" })).ok, true);
+  assert.equal(
+    (await p.store.update(BOT, 0, { type: "add_custom", text: "order food", behavior: "ask" })).ok,
+    true,
+  );
   assert.equal(readFileSync(path.join(directory, "rules.json.unreadable"), "utf8"), first);
   assert.deepEqual(readFileSync(path.join(directory, "rules.json.unreadable.2")), second);
 
   // A readable file is replaced without a copy.
-  assert.equal((await p.store.update(BOT, 1, { type: "add_custom", text: "book a flight", behavior: "ask" })).ok, true);
+  assert.equal(
+    (await p.store.update(BOT, 1, { type: "add_custom", text: "book a flight", behavior: "ask" }))
+      .ok,
+    true,
+  );
   assert.equal(existsSync(path.join(directory, "rules.json.unreadable.3")), false);
 
   writeFileSync(path.join(directory, "notes.txt"), "kept");
@@ -205,8 +278,16 @@ test("an unreadable rules file throws instead of reading as the defaults", async
 
 test("an edit made against an old revision is refused with the current rules", async () => {
   const p = profile();
-  await p.store.update(BOT, 0, { type: "set_behavior", ruleId: "default.install", behavior: "hand_off" });
-  const stale = await p.store.update(BOT, 0, { type: "set_behavior", ruleId: "default.install", behavior: "ask" });
+  await p.store.update(BOT, 0, {
+    type: "set_behavior",
+    ruleId: "default.install",
+    behavior: "hand_off",
+  });
+  const stale = await p.store.update(BOT, 0, {
+    type: "set_behavior",
+    ruleId: "default.install",
+    behavior: "ask",
+  });
   assert.equal(stale.ok, false);
   assert.equal(stale.ok ? undefined : stale.reason, "stale");
   assert.equal(stale.view.revision, 1);
@@ -231,24 +312,51 @@ test("invalid text and the custom-rule limit are refusals, not throws", async ()
   }
   let revision = 0;
   for (let index = 0; index < BOT_CUSTOM_RULES_MAX; index += 1) {
-    const result = await p.store.update(BOT, revision, { type: "add_custom", text: `water plant ${index}`, behavior: "ask" });
+    const result = await p.store.update(BOT, revision, {
+      type: "add_custom",
+      text: `water plant ${index}`,
+      behavior: "ask",
+    });
     assert.equal(result.ok, true);
     revision = result.view.revision;
   }
-  const over = await p.store.update(BOT, revision, { type: "add_custom", text: "one more thing to stop at", behavior: "ask" });
+  const over = await p.store.update(BOT, revision, {
+    type: "add_custom",
+    text: "one more thing to stop at",
+    behavior: "ask",
+  });
   assert.equal(over.ok ? undefined : over.reason, "limit");
-  assert.equal(over.view.rules.filter((rule) => rule.text !== undefined).length, BOT_CUSTOM_RULES_MAX);
+  assert.equal(
+    over.view.rules.filter((rule) => rule.text !== undefined).length,
+    BOT_CUSTOM_RULES_MAX,
+  );
 });
 
 test("set_behavior is for built-in rules and edit_custom for custom ones", async () => {
   const p = profile();
-  const added = await p.store.update(BOT, 0, { type: "add_custom", text: "order food", behavior: "ask" });
+  const added = await p.store.update(BOT, 0, {
+    type: "add_custom",
+    text: "order food",
+    behavior: "ask",
+  });
   const id = added.view.rules[added.view.rules.length - 1]!.id;
-  const wrongKind = await p.store.update(BOT, 1, { type: "set_behavior", ruleId: id, behavior: "hand_off" });
+  const wrongKind = await p.store.update(BOT, 1, {
+    type: "set_behavior",
+    ruleId: id,
+    behavior: "hand_off",
+  });
   assert.equal(wrongKind.ok ? undefined : wrongKind.reason, "invalid");
-  const builtIn = await p.store.update(BOT, 1, { type: "edit_custom", ruleId: "default.publish", text: "post" });
+  const builtIn = await p.store.update(BOT, 1, {
+    type: "edit_custom",
+    ruleId: "default.publish",
+    text: "post",
+  });
   assert.equal(builtIn.ok ? undefined : builtIn.reason, "invalid");
-  const unknown = await p.store.update(BOT, 1, { type: "set_behavior", ruleId: "default.nothing", behavior: "ask" });
+  const unknown = await p.store.update(BOT, 1, {
+    type: "set_behavior",
+    ruleId: "default.nothing",
+    behavior: "ask",
+  });
   assert.equal(unknown.ok ? undefined : unknown.reason, "not_found");
   const empty = await p.store.update(BOT, 1, { type: "edit_custom", ruleId: id });
   assert.equal(empty.ok ? undefined : empty.reason, "invalid");
@@ -266,7 +374,11 @@ test("a Bot the Bot store doesn't know can't write rules", async () => {
 test("deleting a Bot removes its rules, refuses later writes and never brings its directory back", async () => {
   const p = profile();
   await p.store.update(BOT, 0, { type: "add_custom", text: "order food", behavior: "hand_off" });
-  await p.store.update(OTHER, 0, { type: "set_behavior", ruleId: "default.delete", behavior: "hand_off" });
+  await p.store.update(OTHER, 0, {
+    type: "set_behavior",
+    ruleId: "default.delete",
+    behavior: "hand_off",
+  });
   // Deleting the Bot's session removes its directory first (`host.destroy`).
   rmSync(path.join(p.root, "bots", BOT_DIR), { recursive: true, force: true });
 

@@ -6,12 +6,7 @@ import {
 export const MAX_WORKTREE_BRANCH_CHARS = 100;
 export const MAX_WORKTREE_BRANCH_BYTES = 400;
 
-function boundedString(
-  value: unknown,
-  label: string,
-  maxChars: number,
-  maxBytes: number,
-): string {
+function boundedString(value: unknown, label: string, maxChars: number, maxBytes: number): string {
   if (
     typeof value !== "string" ||
     value.length === 0 ||
@@ -41,7 +36,8 @@ export function parseWorktreeCreateParams(
   );
   const branch = rawBranch.trim();
   if (
-    !branch || branch !== rawBranch ||
+    !branch ||
+    branch !== rawBranch ||
     /[\s~^:?*\\\p{Cc}\p{Cf}]/u.test(branch) ||
     branch.includes("[") ||
     branch.includes("]") ||

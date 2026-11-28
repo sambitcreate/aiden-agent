@@ -16,11 +16,11 @@ Google Antigravity runs Google's own coding agent on your computer, and bills yo
 
 Antigravity follows the chat folder's permission setting.
 
-| Setting | What happens |
-| --- | --- |
-| **Ask** | File changes, commands and web fetches wait for Aiden's approval card. "Allow in this chat" covers the rest of the conversation. |
-| **Full** | Antigravity edits files and runs commands without asking. Its commands run with your account's permissions. |
-| **Read-only** or **No access** | Changes and commands are refused. |
+| Setting                        | What happens                                                                                                                     |
+| ------------------------------ | -------------------------------------------------------------------------------------------------------------------------------- |
+| **Ask**                        | File changes, commands and web fetches wait for Aiden's approval card. "Allow in this chat" covers the rest of the conversation. |
+| **Full**                       | Antigravity edits files and runs commands without asking. Its commands run with your account's permissions.                      |
+| **Read-only** or **No access** | Changes and commands are refused.                                                                                                |
 
 How Aiden routes its work:
 

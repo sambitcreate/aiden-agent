@@ -1,4 +1,7 @@
-import { BOT_FULL_ACCESS_NOTICE_VERSION, type BotCapabilityCatalog } from "../../shared/bot-capabilities";
+import {
+  BOT_FULL_ACCESS_NOTICE_VERSION,
+  type BotCapabilityCatalog,
+} from "../../shared/bot-capabilities";
 import { DEFAULT_BOT_AVATAR, type BotDefinition } from "../../shared/bots";
 
 export function botFixture(overrides: Partial<BotDefinition> = {}): BotDefinition {
@@ -15,7 +18,9 @@ export function botFixture(overrides: Partial<BotDefinition> = {}): BotDefinitio
   };
 }
 
-export function catalogFixture(options: { models?: boolean; accepted?: boolean } = {}): BotCapabilityCatalog {
+export function catalogFixture(
+  options: { models?: boolean; accepted?: boolean } = {},
+): BotCapabilityCatalog {
   const models = options.models ?? true;
   return {
     revision: "catalog-1",
@@ -40,13 +45,14 @@ export function catalogFixture(options: { models?: boolean; accepted?: boolean }
     connections: [{ id: "conn-mail", label: "Mail", available: true }],
     skills: [],
     otherCapabilities: [],
-    notice: options.accepted === false
-      ? { version: BOT_FULL_ACCESS_NOTICE_VERSION, requiresAcknowledgement: true }
-      : {
-          version: BOT_FULL_ACCESS_NOTICE_VERSION,
-          requiresAcknowledgement: false,
-          acceptedAt: "2026-10-01T00:00:00.000Z",
-          acceptedDecision: "continue_full",
-        },
+    notice:
+      options.accepted === false
+        ? { version: BOT_FULL_ACCESS_NOTICE_VERSION, requiresAcknowledgement: true }
+        : {
+            version: BOT_FULL_ACCESS_NOTICE_VERSION,
+            requiresAcknowledgement: false,
+            acceptedAt: "2026-10-01T00:00:00.000Z",
+            acceptedDecision: "continue_full",
+          },
   };
 }

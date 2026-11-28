@@ -1,4 +1,7 @@
-import type { ComputerUseApprovalDescriptor, ComputerUseController } from "../computer-use/controller.js";
+import type {
+  ComputerUseApprovalDescriptor,
+  ComputerUseController,
+} from "../computer-use/controller.js";
 import type { ComputerUseArgs } from "../computer-use/schema.js";
 import type { BotClassifiableAction } from "../bot-rules/classify.js";
 import type { BotToolCallCheck } from "./bot-extension.js";
@@ -12,14 +15,19 @@ export const BOT_COMPUTER_USE_REVOKED_REASON =
  * the window, and the role and label of the element it touches. Typed text
  * and field values never reach the classifier.
  */
-function classifiableAction(args: ComputerUseArgs, descriptor: ComputerUseApprovalDescriptor): BotClassifiableAction {
+function classifiableAction(
+  args: ComputerUseArgs,
+  descriptor: ComputerUseApprovalDescriptor,
+): BotClassifiableAction {
   return {
     surface: "computer_use",
     action: args.action,
     ...(descriptor.target.app === undefined ? {} : { app: descriptor.target.app }),
     ...(descriptor.target.title === undefined ? {} : { windowTitle: descriptor.target.title }),
     ...(descriptor.element === undefined ? {} : { element: { ...descriptor.element } }),
-    ...(descriptor.focusedElement === undefined ? {} : { focusedElement: { ...descriptor.focusedElement } }),
+    ...(descriptor.focusedElement === undefined
+      ? {}
+      : { focusedElement: { ...descriptor.focusedElement } }),
     ...(descriptor.secureFieldInCapture === true ? { secureFieldInCapture: true } : {}),
     ...(descriptor.menuPath === undefined ? {} : { menuPath: [...descriptor.menuPath] }),
     ...(args.action === "key" && typeof args.keys === "string" ? { keys: args.keys } : {}),

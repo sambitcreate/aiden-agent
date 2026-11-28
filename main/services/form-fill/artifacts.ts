@@ -19,6 +19,5 @@ export const formFillArtifacts = new FormFillArtifactStore({
 });
 
 export const formFillRuntime = new FormFillRuntime(formFillArtifacts, {
-  clientFactory: () =>
-    new FormFillHelperClient({ pathsResolver: defaultFormFillHelperPaths }),
+  clientFactory: () => new FormFillHelperClient({ pathsResolver: defaultFormFillHelperPaths }),
 });

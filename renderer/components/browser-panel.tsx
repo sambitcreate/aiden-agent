@@ -1,10 +1,53 @@
 import * as React from "react";
 import { createPortal } from "react-dom";
-import { ArrowLeft, ArrowRight, ExternalLink, Globe, History, Link2, Loader2, MessageCirclePlus, MoreVertical, MousePointer2, PictureInPicture2, Plus, RadioTower, RotateCw, Square, Unlink2, Volume2, VolumeX, X } from "lucide-react";
-import type { BrowserAnnotation, BrowserCommand, BrowserCommandResult, BrowserGrabSource, BrowserImage, BrowserSnapshot, BrowserState, BrowserStylePreview, BrowserTab, BrowserViewport } from "../shared/browser";
+import {
+  ArrowLeft,
+  ArrowRight,
+  ExternalLink,
+  Globe,
+  History,
+  Link2,
+  Loader2,
+  MessageCirclePlus,
+  MoreVertical,
+  MousePointer2,
+  PictureInPicture2,
+  Plus,
+  RadioTower,
+  RotateCw,
+  Square,
+  Unlink2,
+  Volume2,
+  VolumeX,
+  X,
+} from "lucide-react";
+import type {
+  BrowserAnnotation,
+  BrowserCommand,
+  BrowserCommandResult,
+  BrowserGrabSource,
+  BrowserImage,
+  BrowserSnapshot,
+  BrowserState,
+  BrowserStylePreview,
+  BrowserTab,
+  BrowserViewport,
+} from "../shared/browser";
 import { resolveGrabAccent, type GrabbedElementAccent } from "../shared/browser-element-grab";
 import { browserApi } from "../lib/ipc";
-import { acceptBrowserState, BROWSER_DEVICE_PRESETS, browserBoundsFromRect, enqueueBrowserPresentation, resizeBrowserViewport, savedBrowserScreenshotPath, validBrowserViewport, visibleBrowserNativeOccluders, browserNativeViewObstructed, browserOcclusionMutated, browserOcclusionScrolled } from "../lib/browser-ui-state";
+import {
+  acceptBrowserState,
+  BROWSER_DEVICE_PRESETS,
+  browserBoundsFromRect,
+  enqueueBrowserPresentation,
+  resizeBrowserViewport,
+  savedBrowserScreenshotPath,
+  validBrowserViewport,
+  visibleBrowserNativeOccluders,
+  browserNativeViewObstructed,
+  browserOcclusionMutated,
+  browserOcclusionScrolled,
+} from "../lib/browser-ui-state";
 import { Button, Input, Text, TooltipProvider, toast } from "./ui";
 import { Kbd, Tooltip } from "./ui-primitives";
 import { BrowserMenuButton, type BrowserMenuOption } from "./browser-menu-button";
@@ -12,8 +55,14 @@ import { BrowserSettings } from "./browser-settings";
 import { BrowserFloatingFrame } from "./browser-floating-frame";
 import { BrowserAnnotationEditor } from "./browser-annotation-editor";
 import { captureBrowserAnnotation } from "../lib/browser-annotation-capture";
-import { BROWSER_ANNOTATION_UNAVAILABLE, browserAnnotationDelivery } from "../lib/browser-annotation-delivery";
-import { BROWSER_ELEMENT_GRAB_UNAVAILABLE, browserElementGrabDelivery } from "../lib/browser-element-grab-delivery";
+import {
+  BROWSER_ANNOTATION_UNAVAILABLE,
+  browserAnnotationDelivery,
+} from "../lib/browser-annotation-delivery";
+import {
+  BROWSER_ELEMENT_GRAB_UNAVAILABLE,
+  browserElementGrabDelivery,
+} from "../lib/browser-element-grab-delivery";
 import { BrowserAnnotationPreviewQueue } from "../lib/browser-annotation-preview-queue";
 import { isEscapeKey } from "../lib/dismiss-key";
 import { isMacPlatform } from "../lib/ghostty-terminal/host-platform";
@@ -24,7 +73,9 @@ import { cn } from "../lib/ui-utils";
  * navigation rows follow the supplied reference; page content owns the area.
  * Existing Aiden tokens supply color, focus, motion and control feedback. */
 
-const ZOOM_STEPS = [.25, .33, .5, .67, .75, .8, .9, 1, 1.1, 1.25, 1.5, 1.75, 2, 2.5, 3, 4, 5];
+const ZOOM_STEPS = [
+  0.25, 0.33, 0.5, 0.67, 0.75, 0.8, 0.9, 1, 1.1, 1.25, 1.5, 1.75, 2, 2.5, 3, 4, 5,
+];
 type RunCommand = (command: BrowserCommand) => Promise<BrowserCommandResult | null>;
 
 function readActiveThemeGrabAccent(): GrabbedElementAccent {
@@ -42,7 +93,10 @@ function readActiveThemeGrabAccent(): GrabbedElementAccent {
 export type BrowserPanelVariant = "workspace" | "bot";
 
 /** What the strip says while the person holds a Bot's tab. */
-export function browserHoldNotice(reason: NonNullable<BrowserTab["heldForPerson"]>["reason"], agentName = "The Bot"): string {
+export function browserHoldNotice(
+  reason: NonNullable<BrowserTab["heldForPerson"]>["reason"],
+  agentName = "The Bot",
+): string {
   switch (reason) {
     case "sign_in":
       return `This tab is yours: sign in, then choose I’m done on ${agentName}’s card. ${agentName} can’t see or use it until then.`;
@@ -53,7 +107,23 @@ export function browserHoldNotice(reason: NonNullable<BrowserTab["heldForPerson"
   }
 }
 
-export function BrowserPanel({ workspaceId, active, onDock, integratedTabs = false, onStateChange, variant = "workspace", agentName }: { workspaceId: string; active: boolean; onDock?: () => void; integratedTabs?: boolean; onStateChange?: (state: BrowserState | null) => void; variant?: BrowserPanelVariant; agentName?: string }) {
+export function BrowserPanel({
+  workspaceId,
+  active,
+  onDock,
+  integratedTabs = false,
+  onStateChange,
+  variant = "workspace",
+  agentName,
+}: {
+  workspaceId: string;
+  active: boolean;
+  onDock?: () => void;
+  integratedTabs?: boolean;
+  onStateChange?: (state: BrowserState | null) => void;
+  variant?: BrowserPanelVariant;
+  agentName?: string;
+}) {
   // A Bot's own browser: no profile choice, annotations, DevTools, capture, recording or floating.
   const bot = variant === "bot";
   const [state, setState] = React.useState<BrowserState | null>(null);
@@ -61,7 +131,11 @@ export function BrowserPanel({ workspaceId, active, onDock, integratedTabs = fal
   const [loadAttempt, setLoadAttempt] = React.useState(0);
   const [settingsOpen, setSettingsOpen] = React.useState(false);
   const [pickerActive, setPickerActive] = React.useState(false);
-  const [annotation, setAnnotation] = React.useState<{ tabId: string; snapshot: BrowserSnapshot; initial?: BrowserAnnotation } | null>(null);
+  const [annotation, setAnnotation] = React.useState<{
+    tabId: string;
+    snapshot: BrowserSnapshot;
+    initial?: BrowserAnnotation;
+  } | null>(null);
   const [annotationPending, setAnnotationPending] = React.useState(false);
   const annotationSubmissionRef = React.useRef({ revision: 0, pending: false });
   const annotationTargetRef = React.useRef<{ workspaceId: string; tabId: string } | null>(null);
@@ -86,18 +160,29 @@ export function BrowserPanel({ workspaceId, active, onDock, integratedTabs = fal
     if (!focused || focused === document.body) annotateButtonRef.current?.focus();
   }, [annotationOpen]);
   const presentationRef = React.useRef<(() => void) | null>(null);
-  const floatingSourceRef = React.useRef<{ tabId: string; width: number; height: number } | null>(null);
+  const floatingSourceRef = React.useRef<{ tabId: string; width: number; height: number } | null>(
+    null,
+  );
   const [address, setAddress] = React.useState("");
   const [addressFocused, setAddressFocused] = React.useState(false);
   ownerRef.current = workspaceId;
   const visibleState = state?.workspaceId === workspaceId ? state : null;
-  React.useEffect(() => { onStateChange?.(visibleState); }, [visibleState, onStateChange]);
+  React.useEffect(() => {
+    onStateChange?.(visibleState);
+  }, [visibleState, onStateChange]);
   const tab = visibleState?.tabs.find((item) => item.id === visibleState.activeTabId) ?? null;
   const surfaceActive = active || Boolean(tab?.floating);
   activeRef.current = surfaceActive;
-  if (tab?.floating && floatingSourceRef.current?.tabId !== tab.id) floatingSourceRef.current = { tabId: tab.id, width: tab.viewport.width, height: tab.viewport.height };
+  if (tab?.floating && floatingSourceRef.current?.tabId !== tab.id)
+    floatingSourceRef.current = {
+      tabId: tab.id,
+      width: tab.viewport.width,
+      height: tab.viewport.height,
+    };
   if (!tab?.floating) floatingSourceRef.current = null;
-  const floatingLayout = React.useCallback(() => { presentationRef.current?.(); }, []);
+  const floatingLayout = React.useCallback(() => {
+    presentationRef.current?.();
+  }, []);
   tabIdRef.current = tab?.id ?? null;
   const ready = Boolean(tab?.url && tab.url !== "about:blank" && !tab.error && !tab.crashed);
   const grabActive = !bot && Boolean(tab?.grabbing);
@@ -107,8 +192,20 @@ export function BrowserPanel({ workspaceId, active, onDock, integratedTabs = fal
   const cancelAnnotation = React.useCallback(() => {
     const target = annotationTargetRef.current;
     annotationTargetRef.current = null;
-    void annotationPreviewQueueRef.current.reset(() => target ? browserApi.command(target.workspaceId, { action: "annotation_reset", tabId: target.tabId }) : Promise.resolve()).catch(() => undefined);
-    annotationSubmissionRef.current = { revision: annotationSubmissionRef.current.revision + 1, pending: false };
+    void annotationPreviewQueueRef.current
+      .reset(() =>
+        target
+          ? browserApi.command(target.workspaceId, {
+              action: "annotation_reset",
+              tabId: target.tabId,
+            })
+          : Promise.resolve(),
+      )
+      .catch(() => undefined);
+    annotationSubmissionRef.current = {
+      revision: annotationSubmissionRef.current.revision + 1,
+      pending: false,
+    };
     setAnnotationPending(false);
     setAnnotation(null);
   }, []);
@@ -117,29 +214,47 @@ export function BrowserPanel({ workspaceId, active, onDock, integratedTabs = fal
     if (!mountedRef.current) return;
     setState((current) => acceptBrowserState(current, next, ownerRef.current));
   }, []);
-  const run = React.useCallback<RunCommand>(async (command) => {
-    const owner = workspaceId;
-    try {
-      const result = await browserApi.command(owner, command);
-      if (!mountedRef.current || ownerRef.current !== owner) return null;
-      commit(result.state);
-      setError(null);
-      return result;
-    } catch (cause) {
-      if (mountedRef.current && ownerRef.current === owner) setError(cause instanceof Error ? cause.message : "The browser action could not be completed. Try again.");
-      return null;
-    }
-  }, [workspaceId, commit]);
+  const run = React.useCallback<RunCommand>(
+    async (command) => {
+      const owner = workspaceId;
+      try {
+        const result = await browserApi.command(owner, command);
+        if (!mountedRef.current || ownerRef.current !== owner) return null;
+        commit(result.state);
+        setError(null);
+        return result;
+      } catch (cause) {
+        if (mountedRef.current && ownerRef.current === owner)
+          setError(
+            cause instanceof Error
+              ? cause.message
+              : "The browser action could not be completed. Try again.",
+          );
+        return null;
+      }
+    },
+    [workspaceId, commit],
+  );
 
-  const previewAnnotation = React.useCallback((changes: BrowserStylePreview[]) => {
-    const target = annotationTargetRef.current;
-    if (!target) return Promise.resolve(null);
-    return annotationPreviewQueueRef.current.run(() => run({ action: "annotation_preview", tabId: target.tabId, changes })).then((result) => {
-      if (!result || annotationTargetRef.current !== target) return null;
-      if (result.snapshot) setAnnotation((current) => current?.tabId === target.tabId ? { ...current, snapshot: result.snapshot! } : current);
-      return result;
-    });
-  }, [run]);
+  const previewAnnotation = React.useCallback(
+    (changes: BrowserStylePreview[]) => {
+      const target = annotationTargetRef.current;
+      if (!target) return Promise.resolve(null);
+      return annotationPreviewQueueRef.current
+        .run(() => run({ action: "annotation_preview", tabId: target.tabId, changes }))
+        .then((result) => {
+          if (!result || annotationTargetRef.current !== target) return null;
+          if (result.snapshot)
+            setAnnotation((current) =>
+              current?.tabId === target.tabId
+                ? { ...current, snapshot: result.snapshot! }
+                : current,
+            );
+          return result;
+        });
+    },
+    [run],
+  );
 
   React.useEffect(() => {
     mountedRef.current = true;
@@ -147,12 +262,25 @@ export function BrowserPanel({ workspaceId, active, onDock, integratedTabs = fal
       mountedRef.current = false;
       const target = annotationTargetRef.current;
       annotationTargetRef.current = null;
-      void annotationPreviewQueueRef.current.reset(() => target ? browserApi.command(target.workspaceId, { action: "annotation_reset", tabId: target.tabId }) : Promise.resolve()).catch(() => undefined);
+      void annotationPreviewQueueRef.current
+        .reset(() =>
+          target
+            ? browserApi.command(target.workspaceId, {
+                action: "annotation_reset",
+                tabId: target.tabId,
+              })
+            : Promise.resolve(),
+        )
+        .catch(() => undefined);
     };
   }, []);
   React.useEffect(() => {
     let cancelled = false;
-    setState(null); setError(null); cancelAnnotation(); setPickerActive(false); setAddressFocused(false);
+    setState(null);
+    setError(null);
+    cancelAnnotation();
+    setPickerActive(false);
+    setAddressFocused(false);
     const unsubscribe = browserApi.onEvent((event) => {
       if (event.type === "state") {
         commit(event.state);
@@ -163,16 +291,34 @@ export function BrowserPanel({ workspaceId, active, onDock, integratedTabs = fal
         }
       }
     });
-    void browserApi.getState(workspaceId).then((next) => { if (!cancelled) commit(next); }, (cause) => { if (!cancelled) setError(cause instanceof Error ? cause.message : "Could not open the browser."); });
-    return () => { cancelled = true; unsubscribe(); };
+    void browserApi.getState(workspaceId).then(
+      (next) => {
+        if (!cancelled) commit(next);
+      },
+      (cause) => {
+        if (!cancelled)
+          setError(cause instanceof Error ? cause.message : "Could not open the browser.");
+      },
+    );
+    return () => {
+      cancelled = true;
+      unsubscribe();
+    };
   }, [workspaceId, bot, commit, cancelAnnotation, loadAttempt]);
 
   React.useEffect(() => {
-    cancelAnnotation(); setAddressFocused(false); setPickerActive(false);
+    cancelAnnotation();
+    setAddressFocused(false);
+    setPickerActive(false);
     return () => {
       if (tab?.id) {
-        void browserApi.command(workspaceId, { action: "annotate", tabId: tab.id, enabled: false }).catch(() => undefined);
-        if (!bot) void browserApi.command(workspaceId, { action: "grab", tabId: tab.id, enabled: false }).catch(() => undefined);
+        void browserApi
+          .command(workspaceId, { action: "annotate", tabId: tab.id, enabled: false })
+          .catch(() => undefined);
+        if (!bot)
+          void browserApi
+            .command(workspaceId, { action: "grab", tabId: tab.id, enabled: false })
+            .catch(() => undefined);
       }
     };
   }, [workspaceId, tab?.id, bot, cancelAnnotation]);
@@ -180,8 +326,13 @@ export function BrowserPanel({ workspaceId, active, onDock, integratedTabs = fal
   React.useEffect(() => {
     if (surfaceActive || !tab?.id) return;
     setPickerActive(false);
-    void browserApi.command(workspaceId, { action: "annotate", tabId: tab.id, enabled: false }).catch(() => undefined);
-    if (!bot) void browserApi.command(workspaceId, { action: "grab", tabId: tab.id, enabled: false }).catch(() => undefined);
+    void browserApi
+      .command(workspaceId, { action: "annotate", tabId: tab.id, enabled: false })
+      .catch(() => undefined);
+    if (!bot)
+      void browserApi
+        .command(workspaceId, { action: "grab", tabId: tab.id, enabled: false })
+        .catch(() => undefined);
   }, [surfaceActive, workspaceId, tab?.id, bot]);
 
   React.useEffect(() => {
@@ -213,10 +364,19 @@ export function BrowserPanel({ workspaceId, active, onDock, integratedTabs = fal
       const bounds = browserBoundsFromRect(host.getBoundingClientRect());
       occluders = visibleBrowserNativeOccluders();
       const overlay = bounds
-        ? browserNativeViewObstructed(bounds, occluders.map((element) => element.getBoundingClientRect()))
+        ? browserNativeViewObstructed(
+            bounds,
+            occluders.map((element) => element.getBoundingClientRect()),
+          )
         : false;
-      const visible = surfaceActive && ready && !annotation && !settingsOpen && !overlay && Boolean(bounds);
-      const command: BrowserCommand = { action: "present", tabId, visible, ...(bounds ? { bounds } : {}) };
+      const visible =
+        surfaceActive && ready && !annotation && !settingsOpen && !overlay && Boolean(bounds);
+      const command: BrowserCommand = {
+        action: "present",
+        tabId,
+        visible,
+        ...(bounds ? { bounds } : {}),
+      };
       const key = JSON.stringify(command);
       if (previous === key) return;
       previous = key;
@@ -226,120 +386,222 @@ export function BrowserPanel({ workspaceId, active, onDock, integratedTabs = fal
         if (previous === key) previous = "";
       });
     };
-    const schedule = () => { if (!frame) frame = window.requestAnimationFrame(present); };
+    const schedule = () => {
+      if (!frame) frame = window.requestAnimationFrame(present);
+    };
     presentationRef.current = schedule;
     const resize = new ResizeObserver(schedule);
     resize.observe(host);
-    const overlays = new MutationObserver((records) => { if (browserOcclusionMutated(records, host, occluders)) schedule(); });
-    const scrolled = (event: Event) => { if (browserOcclusionScrolled(event.target, host, occluders)) schedule(); };
-    overlays.observe(document.body, { childList: true, subtree: true, attributes: true, attributeFilter: ["data-state", "aria-hidden", "inert", "data-presence", "popover", "style"] });
+    const overlays = new MutationObserver((records) => {
+      if (browserOcclusionMutated(records, host, occluders)) schedule();
+    });
+    const scrolled = (event: Event) => {
+      if (browserOcclusionScrolled(event.target, host, occluders)) schedule();
+    };
+    overlays.observe(document.body, {
+      childList: true,
+      subtree: true,
+      attributes: true,
+      attributeFilter: ["data-state", "aria-hidden", "inert", "data-presence", "popover", "style"],
+    });
     window.addEventListener("resize", schedule);
     window.addEventListener("scroll", scrolled, true);
     document.addEventListener("transitionend", schedule, true);
     present();
     return () => {
-      disposed = true; window.cancelAnimationFrame(frame); resize.disconnect(); overlays.disconnect();
+      disposed = true;
+      window.cancelAnimationFrame(frame);
+      resize.disconnect();
+      overlays.disconnect();
       if (presentationRef.current === schedule) presentationRef.current = null;
-      window.removeEventListener("resize", schedule); window.removeEventListener("scroll", scrolled, true); document.removeEventListener("transitionend", schedule, true);
-      void enqueueBrowserPresentation(() => browserApi.command(workspaceId, { action: "present", tabId, visible: false })).catch(() => undefined);
+      window.removeEventListener("resize", schedule);
+      window.removeEventListener("scroll", scrolled, true);
+      document.removeEventListener("transitionend", schedule, true);
+      void enqueueBrowserPresentation(() =>
+        browserApi.command(workspaceId, { action: "present", tabId, visible: false }),
+      ).catch(() => undefined);
     };
   }, [workspaceId, tab?.id, tab?.floating, surfaceActive, ready, annotation, settingsOpen]);
 
-  const submitAddress = React.useCallback((url: string) => {
-    if (!url.trim()) return;
-    void run(tab ? { action: "navigate", tabId: tab.id, url: url.trim() } : { action: "create", url: url.trim() }).then((result) => {
-      if (result?.state.activeTabId && activeRef.current && document.activeElement === document.body) void run({ action: "focus", tabId: result.state.activeTabId });
-    });
-    setAddressFocused(false); addressRef.current?.blur();
-  }, [run, tab]);
-  const capture = React.useCallback(async (record: boolean) => {
-    if (!tab) return;
-    if (tab.recording) {
-      const result = await run({ action: "record_stop", tabId: tab.id });
-      if (result?.recording) {
-        const recording = result.recording;
-        toast.success("Recording saved", { description: recording.path, action: { label: "Show in Finder", onClick: () => void run({ action: "reveal_recording", recordingId: recording.id }) } });
+  const submitAddress = React.useCallback(
+    (url: string) => {
+      if (!url.trim()) return;
+      void run(
+        tab
+          ? { action: "navigate", tabId: tab.id, url: url.trim() }
+          : { action: "create", url: url.trim() },
+      ).then((result) => {
+        if (
+          result?.state.activeTabId &&
+          activeRef.current &&
+          document.activeElement === document.body
+        )
+          void run({ action: "focus", tabId: result.state.activeTabId });
+      });
+      setAddressFocused(false);
+      addressRef.current?.blur();
+    },
+    [run, tab],
+  );
+  const capture = React.useCallback(
+    async (record: boolean) => {
+      if (!tab) return;
+      if (tab.recording) {
+        const result = await run({ action: "record_stop", tabId: tab.id });
+        if (result?.recording) {
+          const recording = result.recording;
+          toast.success("Recording saved", {
+            description: recording.path,
+            action: {
+              label: "Show in Finder",
+              onClick: () => void run({ action: "reveal_recording", recordingId: recording.id }),
+            },
+          });
+        }
+      } else if (record) await run({ action: "record_start", tabId: tab.id });
+      else {
+        const result = await run({ action: "screenshot", tabId: tab.id });
+        if (result?.image) {
+          const image = result.image;
+          const saved = await run({ action: "save_image", image });
+          const path = savedBrowserScreenshotPath(saved);
+          if (path)
+            toast.success("Screenshot saved", {
+              description: path,
+              action: {
+                label: "Copy image",
+                onClick: () =>
+                  void copyBrowserImage(image).catch(() =>
+                    toast.error("Could not copy the screenshot."),
+                  ),
+              },
+            });
+        }
       }
-    } else if (record) await run({ action: "record_start", tabId: tab.id });
-    else {
-      const result = await run({ action: "screenshot", tabId: tab.id });
-      if (result?.image) {
-        const image = result.image;
-        const saved = await run({ action: "save_image", image });
-        const path = savedBrowserScreenshotPath(saved);
-        if (path) toast.success("Screenshot saved", { description: path, action: { label: "Copy image", onClick: () => void copyBrowserImage(image).catch(() => toast.error("Could not copy the screenshot.")) } });
+    },
+    [run, tab],
+  );
+  const toggleGrab = React.useCallback(
+    async (source: BrowserGrabSource = "toolbar") => {
+      if (bot || !tab || !ready) return;
+      if (grabActive) {
+        await run({ action: "grab", tabId: tab.id, enabled: false });
+        return;
       }
-    }
-  }, [run, tab]);
-  const toggleGrab = React.useCallback(async (source: BrowserGrabSource = "toolbar") => {
-    if (bot || !tab || !ready) return;
-    if (grabActive) {
-      await run({ action: "grab", tabId: tab.id, enabled: false });
-      return;
-    }
-    if (annotation) cancelAnnotation();
-    if (pickerActive) setPickerActive(false);
-    await run({
-      action: "grab",
-      tabId: tab.id,
-      enabled: true,
-      accent: readActiveThemeGrabAccent(),
-      source,
-    });
-  }, [bot, tab, ready, grabActive, annotation, pickerActive, cancelAnnotation, run]);
+      if (annotation) cancelAnnotation();
+      if (pickerActive) setPickerActive(false);
+      await run({
+        action: "grab",
+        tabId: tab.id,
+        enabled: true,
+        accent: readActiveThemeGrabAccent(),
+        source,
+      });
+    },
+    [bot, tab, ready, grabActive, annotation, pickerActive, cancelAnnotation, run],
+  );
 
   const annotate = React.useCallback(async () => {
     if (!tab || !ready) return;
     if (grabActive) await run({ action: "grab", tabId: tab.id, enabled: false });
-    if (annotation) { cancelAnnotation(); return; }
-    if (pickerActive) { await run({ action: "annotate", tabId: tab.id, enabled: false }); setPickerActive(false); return; }
+    if (annotation) {
+      cancelAnnotation();
+      return;
+    }
+    if (pickerActive) {
+      await run({ action: "annotate", tabId: tab.id, enabled: false });
+      setPickerActive(false);
+      return;
+    }
     const tabId = tab.id;
     setPickerActive(true);
     const result = await run({ action: "annotate", tabId, enabled: true });
-    if (!mountedRef.current || ownerRef.current !== workspaceId || tabIdRef.current !== tabId || !activeRef.current) return;
+    if (
+      !mountedRef.current ||
+      ownerRef.current !== workspaceId ||
+      tabIdRef.current !== tabId ||
+      !activeRef.current
+    )
+      return;
     setPickerActive(false);
     if (!result?.annotation) return;
-    const snapshot = await run({ action: "snapshot", tabId, includeImage: true, includeAllElements: true });
+    const snapshot = await run({
+      action: "snapshot",
+      tabId,
+      includeImage: true,
+      includeAllElements: true,
+    });
     if (tabIdRef.current !== tabId || !activeRef.current) return;
-    const capturedSnapshot = snapshot?.snapshot ?? { tab, text: result.annotation.selectedText ?? "", elements: result.annotation.elements, diagnostics: [], image: result.annotation.image };
-    if (!capturedSnapshot.image) toast.error("Screenshot unavailable. Your selected text and elements were kept.");
+    const capturedSnapshot = snapshot?.snapshot ?? {
+      tab,
+      text: result.annotation.selectedText ?? "",
+      elements: result.annotation.elements,
+      diagnostics: [],
+      image: result.annotation.image,
+    };
+    if (!capturedSnapshot.image)
+      toast.error("Screenshot unavailable. Your selected text and elements were kept.");
     annotationTargetRef.current = { workspaceId, tabId };
     setAnnotation({ tabId, initial: result.annotation, snapshot: capturedSnapshot });
   }, [run, tab, ready, annotation, pickerActive, workspaceId, cancelAnnotation]);
 
-  const submitAnnotation = React.useCallback(async (value: BrowserAnnotation) => {
-    if (!annotation || annotationSubmissionRef.current.pending) return;
-    const recipient = browserAnnotationDelivery.capture(workspaceId);
-    if (!recipient) { setError(BROWSER_ANNOTATION_UNAVAILABLE); return; }
-    const submission = { revision: annotationSubmissionRef.current.revision + 1, pending: true };
-    annotationSubmissionRef.current = submission;
-    setAnnotationPending(true);
-    try {
-      const prepared = await captureBrowserAnnotation(value, annotation.snapshot).catch(() => {
-        toast.error("Could not capture the selection. Your annotation was kept without an image.");
-        return { ...value, image: undefined, imageBounds: undefined };
-      });
-      if (annotationSubmissionRef.current !== submission || !mountedRef.current) return;
-      const result = await run({ action: "annotation_submit", tabId: annotation.tabId, annotation: prepared, delivery: "renderer" });
-      if (!result || annotationSubmissionRef.current !== submission || !mountedRef.current) return;
-      if (result.annotation && recipient.deliver(result.annotation)) cancelAnnotation();
-      else setError(BROWSER_ANNOTATION_UNAVAILABLE);
-    } finally {
-      if (annotationSubmissionRef.current === submission) {
-        submission.pending = false;
-        if (mountedRef.current) setAnnotationPending(false);
+  const submitAnnotation = React.useCallback(
+    async (value: BrowserAnnotation) => {
+      if (!annotation || annotationSubmissionRef.current.pending) return;
+      const recipient = browserAnnotationDelivery.capture(workspaceId);
+      if (!recipient) {
+        setError(BROWSER_ANNOTATION_UNAVAILABLE);
+        return;
       }
-    }
-  }, [annotation, workspaceId, run, cancelAnnotation]);
+      const submission = { revision: annotationSubmissionRef.current.revision + 1, pending: true };
+      annotationSubmissionRef.current = submission;
+      setAnnotationPending(true);
+      try {
+        const prepared = await captureBrowserAnnotation(value, annotation.snapshot).catch(() => {
+          toast.error(
+            "Could not capture the selection. Your annotation was kept without an image.",
+          );
+          return { ...value, image: undefined, imageBounds: undefined };
+        });
+        if (annotationSubmissionRef.current !== submission || !mountedRef.current) return;
+        const result = await run({
+          action: "annotation_submit",
+          tabId: annotation.tabId,
+          annotation: prepared,
+          delivery: "renderer",
+        });
+        if (!result || annotationSubmissionRef.current !== submission || !mountedRef.current)
+          return;
+        if (result.annotation && recipient.deliver(result.annotation)) cancelAnnotation();
+        else setError(BROWSER_ANNOTATION_UNAVAILABLE);
+      } finally {
+        if (annotationSubmissionRef.current === submission) {
+          submission.pending = false;
+          if (mountedRef.current) setAnnotationPending(false);
+        }
+      }
+    },
+    [annotation, workspaceId, run, cancelAnnotation],
+  );
 
   React.useEffect(() => {
     if (!surfaceActive) return;
     return browserApi.onEvent((event) => {
-      if (event.type !== "shortcut" || event.workspaceId !== workspaceId || event.tabId !== tab?.id) return;
-      if (event.shortcut === "annotate") { if (!bot) void annotate(); }
-      else if (event.shortcut === "grab") { if (!bot) void toggleGrab("shortcut"); }
-      else if (event.shortcut === "focus_address") { addressRef.current?.focus(); addressRef.current?.select(); }
-      else void run({ action: "reload", tabId: event.tabId, ignoreCache: event.shortcut === "hard_reload" });
+      if (event.type !== "shortcut" || event.workspaceId !== workspaceId || event.tabId !== tab?.id)
+        return;
+      if (event.shortcut === "annotate") {
+        if (!bot) void annotate();
+      } else if (event.shortcut === "grab") {
+        if (!bot) void toggleGrab("shortcut");
+      } else if (event.shortcut === "focus_address") {
+        addressRef.current?.focus();
+        addressRef.current?.select();
+      } else
+        void run({
+          action: "reload",
+          tabId: event.tabId,
+          ignoreCache: event.shortcut === "hard_reload",
+        });
     });
   }, [surfaceActive, workspaceId, tab?.id, bot, annotate, toggleGrab, run]);
 
@@ -350,10 +612,26 @@ export function BrowserPanel({ workspaceId, active, onDock, integratedTabs = fal
       const key = event.key.toLowerCase();
       // ⌘. marks up the page only from inside the browser; elsewhere it stops a reply.
       // Window capture runs before the app's command keys, so focus here wins.
-      if (key === "." && !bot && panelRef.current?.contains(document.activeElement)) { event.preventDefault(); event.stopPropagation(); void annotate(); }
-      else if (key === "g" && event.shiftKey && !bot && panelRef.current?.contains(document.activeElement)) { event.preventDefault(); event.stopPropagation(); if (!event.repeat) void toggleGrab("shortcut"); }
-      else if (key === "l" && panelRef.current?.contains(document.activeElement)) { event.preventDefault(); addressRef.current?.focus(); }
-      else if (key === "r" && panelRef.current?.contains(document.activeElement) && tab) { event.preventDefault(); void run({ action: "reload", tabId: tab.id, ignoreCache: event.shiftKey }); }
+      if (key === "." && !bot && panelRef.current?.contains(document.activeElement)) {
+        event.preventDefault();
+        event.stopPropagation();
+        void annotate();
+      } else if (
+        key === "g" &&
+        event.shiftKey &&
+        !bot &&
+        panelRef.current?.contains(document.activeElement)
+      ) {
+        event.preventDefault();
+        event.stopPropagation();
+        if (!event.repeat) void toggleGrab("shortcut");
+      } else if (key === "l" && panelRef.current?.contains(document.activeElement)) {
+        event.preventDefault();
+        addressRef.current?.focus();
+      } else if (key === "r" && panelRef.current?.contains(document.activeElement) && tab) {
+        event.preventDefault();
+        void run({ action: "reload", tabId: tab.id, ignoreCache: event.shiftKey });
+      }
     };
     const bubbleKeyboard = (event: KeyboardEvent) => {
       if (event.defaultPrevented || bot || !ready) return;
@@ -374,233 +652,865 @@ export function BrowserPanel({ workspaceId, active, onDock, integratedTabs = fal
   // A menu belongs to the tab and surface that opened it.
   const menuOwner = JSON.stringify([workspaceId, tab?.id, surfaceActive]);
   const defaultProfile = tab?.profileId ?? visibleState?.defaults.profileId;
-  const content = <div ref={panelRef} className="browser-panel" data-browser-workspace={workspaceId} data-live-content="web">
-    <div className="browser-tab-strip">
-      <div style={integratedTabs && !tab?.floating ? { display: "none" } : undefined} className="browser-tabs" role="tablist" aria-label="Browser tabs">
-        {visibleState?.tabs.map((item, index) => <div key={item.id} className="browser-tab" data-selected={item.id === tab?.id}>
-          <button type="button" className="browser-tab-select" role="tab" aria-label={item.title || "New tab"} aria-selected={item.id === tab?.id} tabIndex={item.id === tab?.id ? 0 : -1} onClick={() => void run({ action: "select", tabId: item.id })} onKeyDown={(event) => {
-            if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
-            event.preventDefault();
-            const tabs = visibleState.tabs;
-            const next = event.key === "Home" ? tabs[0] : event.key === "End" ? tabs[tabs.length - 1] : tabs[(index + (event.key === "ArrowRight" ? 1 : -1) + tabs.length) % tabs.length];
-            void run({ action: "select", tabId: next.id }).then(() => panelRef.current?.querySelector<HTMLElement>('[role="tab"][aria-selected="true"]')?.focus());
-          }}>{item.loading ? <Loader2 className="animate-spin" /> : <BrowserFavicon src={item.favicon} />}<span>{item.title || "New tab"}</span></button>
-          {item.audible || item.muted ? <button type="button" className="browser-tab-close" aria-label={item.muted ? "Unmute tab" : "Mute tab"} onClick={() => void run({ action: "mute", tabId: item.id, muted: !item.muted })}>{item.muted ? <VolumeX /> : <Volume2 />}</button> : null}
-          <button type="button" className="browser-tab-close" aria-label={`Close ${item.title || "new tab"}`} onClick={() => void run({ action: "close", tabId: item.id })}><X /></button>
-        </div>)}
+  const content = (
+    <div
+      ref={panelRef}
+      className="browser-panel"
+      data-browser-workspace={workspaceId}
+      data-live-content="web"
+    >
+      <div className="browser-tab-strip">
+        <div
+          style={integratedTabs && !tab?.floating ? { display: "none" } : undefined}
+          className="browser-tabs"
+          role="tablist"
+          aria-label="Browser tabs"
+        >
+          {visibleState?.tabs.map((item, index) => (
+            <div key={item.id} className="browser-tab" data-selected={item.id === tab?.id}>
+              <button
+                type="button"
+                className="browser-tab-select"
+                role="tab"
+                aria-label={item.title || "New tab"}
+                aria-selected={item.id === tab?.id}
+                tabIndex={item.id === tab?.id ? 0 : -1}
+                onClick={() => void run({ action: "select", tabId: item.id })}
+                onKeyDown={(event) => {
+                  if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
+                  event.preventDefault();
+                  const tabs = visibleState.tabs;
+                  const next =
+                    event.key === "Home"
+                      ? tabs[0]
+                      : event.key === "End"
+                        ? tabs[tabs.length - 1]
+                        : tabs[
+                            (index + (event.key === "ArrowRight" ? 1 : -1) + tabs.length) %
+                              tabs.length
+                          ];
+                  void run({ action: "select", tabId: next.id }).then(() =>
+                    panelRef.current
+                      ?.querySelector<HTMLElement>('[role="tab"][aria-selected="true"]')
+                      ?.focus(),
+                  );
+                }}
+              >
+                {item.loading ? (
+                  <Loader2 className="animate-spin" />
+                ) : (
+                  <BrowserFavicon src={item.favicon} />
+                )}
+                <span>{item.title || "New tab"}</span>
+              </button>
+              {item.audible || item.muted ? (
+                <button
+                  type="button"
+                  className="browser-tab-close"
+                  aria-label={item.muted ? "Unmute tab" : "Mute tab"}
+                  onClick={() => void run({ action: "mute", tabId: item.id, muted: !item.muted })}
+                >
+                  {item.muted ? <VolumeX /> : <Volume2 />}
+                </button>
+              ) : null}
+              <button
+                type="button"
+                className="browser-tab-close"
+                aria-label={`Close ${item.title || "new tab"}`}
+                onClick={() => void run({ action: "close", tabId: item.id })}
+              >
+                <X />
+              </button>
+            </div>
+          ))}
+        </div>
+        <Button
+          variant="transparent"
+          size="small"
+          iconOnly
+          aria-label="New browser tab"
+          title="New browser tab"
+          onClick={() => void run({ action: "create" }).then(() => addressRef.current?.focus())}
+        >
+          <Plus />
+        </Button>
+        {bot ? null : (
+          <BrowserMenuButton
+            scope={menuOwner}
+            className="browser-profile-button"
+            title="Browser profile"
+            aria-label="Choose browser profile"
+            options={[
+              { label: "Open a new tab in" },
+              ...(visibleState?.profiles ?? []).map((profile) => ({
+                label: profile.name,
+                checked: profile.id === defaultProfile,
+                select: () => void run({ action: "create", profileId: profile.id }),
+              })),
+              null,
+              { label: "Browser settings…", select: () => setSettingsOpen(true) },
+            ]}
+          >
+            {visibleState?.profiles.find((profile) => profile.id === defaultProfile)?.name ??
+              "Default"}
+          </BrowserMenuButton>
+        )}
       </div>
-      <Button variant="transparent" size="small" iconOnly aria-label="New browser tab" title="New browser tab" onClick={() => void run({ action: "create" }).then(() => addressRef.current?.focus())}><Plus /></Button>
-      {bot ? null : <BrowserMenuButton scope={menuOwner} className="browser-profile-button" title="Browser profile" aria-label="Choose browser profile"
-        options={[
-          { label: "Open a new tab in" },
-          ...(visibleState?.profiles ?? []).map((profile) => ({
-            label: profile.name, checked: profile.id === defaultProfile, select: () => void run({ action: "create", profileId: profile.id }),
-          })),
-          null, { label: "Browser settings…", select: () => setSettingsOpen(true) },
-        ]}>{visibleState?.profiles.find((profile) => profile.id === defaultProfile)?.name ?? "Default"}</BrowserMenuButton>}
-    </div>
-    <div className="browser-chrome" data-loading={tab?.loading ?? false}>
-      <div className="browser-control-group" role="group" aria-label="Browser navigation">
-        <Button variant="transparent" size="small" iconOnly aria-label="Back" disabled={!tab?.canGoBack} onClick={() => tab && void run({ action: "back", tabId: tab.id })}><ArrowLeft /></Button>
-        <Button variant="transparent" size="small" iconOnly aria-label="Forward" disabled={!tab?.canGoForward} onClick={() => tab && void run({ action: "forward", tabId: tab.id })}><ArrowRight /></Button>
-        <Button variant="transparent" size="small" iconOnly aria-label={tab?.loading ? "Stop loading" : "Reload"} disabled={!tab?.url} onClick={() => tab && void run({ action: tab.loading ? "stop" : "reload", tabId: tab.id })}>{tab?.loading ? <Square /> : <RotateCw />}</Button>
-      </div>
-      <form className="browser-address-form" onSubmit={(event) => { event.preventDefault(); submitAddress(address); }}>
-        <Input ref={addressRef} aria-label="Search or enter URL" placeholder="Search or enter URL" spellCheck={false} autoComplete="off" value={addressFocused ? address : tab?.url === "about:blank" ? "" : tab?.url ?? ""} onChange={(event) => setAddress(event.target.value)} onFocus={() => { setAddress(tab?.url === "about:blank" ? "" : tab?.url ?? ""); setAddressFocused(true); queueMicrotask(() => addressRef.current?.select()); }} onBlur={() => setAddressFocused(false)} onKeyDown={(event) => { if (isEscapeKey(event)) { event.stopPropagation(); setAddressFocused(false); event.currentTarget.blur(); } }} />
-      </form>
-      {bot ? null : (
-        <TooltipProvider>
-          <Tooltip
-            content={
-              grabActive ? (
-                <span className="inline-flex items-center gap-1.5">
-                  Stop grabbing <Kbd>Esc</Kbd>
-                </span>
-              ) : (
-                <span className="inline-flex items-center gap-1.5">
-                  Grab element <Kbd>{grabShortcutLabel}</Kbd>
-                </span>
-              )
+      <div className="browser-chrome" data-loading={tab?.loading ?? false}>
+        <div className="browser-control-group" role="group" aria-label="Browser navigation">
+          <Button
+            variant="transparent"
+            size="small"
+            iconOnly
+            aria-label="Back"
+            disabled={!tab?.canGoBack}
+            onClick={() => tab && void run({ action: "back", tabId: tab.id })}
+          >
+            <ArrowLeft />
+          </Button>
+          <Button
+            variant="transparent"
+            size="small"
+            iconOnly
+            aria-label="Forward"
+            disabled={!tab?.canGoForward}
+            onClick={() => tab && void run({ action: "forward", tabId: tab.id })}
+          >
+            <ArrowRight />
+          </Button>
+          <Button
+            variant="transparent"
+            size="small"
+            iconOnly
+            aria-label={tab?.loading ? "Stop loading" : "Reload"}
+            disabled={!tab?.url}
+            onClick={() =>
+              tab && void run({ action: tab.loading ? "stop" : "reload", tabId: tab.id })
             }
           >
-            <Button
-              ref={grabButtonRef}
-              variant="transparent"
-              size="small"
-              iconOnly
-              className={cn(grabActive && "bg-list-selection text-accent-text hover:bg-list-selection")}
-              aria-label={grabActive ? "Stop grabbing" : "Grab element"}
-              aria-pressed={grabActive}
-              aria-keyshortcuts={grabAriaShortcut}
-              disabled={!ready}
-              onClick={() => void toggleGrab("toolbar")}
+            {tab?.loading ? <Square /> : <RotateCw />}
+          </Button>
+        </div>
+        <form
+          className="browser-address-form"
+          onSubmit={(event) => {
+            event.preventDefault();
+            submitAddress(address);
+          }}
+        >
+          <Input
+            ref={addressRef}
+            aria-label="Search or enter URL"
+            placeholder="Search or enter URL"
+            spellCheck={false}
+            autoComplete="off"
+            value={addressFocused ? address : tab?.url === "about:blank" ? "" : (tab?.url ?? "")}
+            onChange={(event) => setAddress(event.target.value)}
+            onFocus={() => {
+              setAddress(tab?.url === "about:blank" ? "" : (tab?.url ?? ""));
+              setAddressFocused(true);
+              queueMicrotask(() => addressRef.current?.select());
+            }}
+            onBlur={() => setAddressFocused(false)}
+            onKeyDown={(event) => {
+              if (isEscapeKey(event)) {
+                event.stopPropagation();
+                setAddressFocused(false);
+                event.currentTarget.blur();
+              }
+            }}
+          />
+        </form>
+        {bot ? null : (
+          <TooltipProvider>
+            <Tooltip
+              content={
+                grabActive ? (
+                  <span className="inline-flex items-center gap-1.5">
+                    Stop grabbing <Kbd>Esc</Kbd>
+                  </span>
+                ) : (
+                  <span className="inline-flex items-center gap-1.5">
+                    Grab element <Kbd>{grabShortcutLabel}</Kbd>
+                  </span>
+                )
+              }
             >
-              <MousePointer2 className="size-4" fill={grabActive ? "currentColor" : "none"} />
+              <Button
+                ref={grabButtonRef}
+                variant="transparent"
+                size="small"
+                iconOnly
+                className={cn(
+                  grabActive && "bg-list-selection text-accent-text hover:bg-list-selection",
+                )}
+                aria-label={grabActive ? "Stop grabbing" : "Grab element"}
+                aria-pressed={grabActive}
+                aria-keyshortcuts={grabAriaShortcut}
+                disabled={!ready}
+                onClick={() => void toggleGrab("toolbar")}
+              >
+                <MousePointer2 className="size-4" fill={grabActive ? "currentColor" : "none"} />
+              </Button>
+            </Tooltip>
+          </TooltipProvider>
+        )}
+        {bot ? null : (
+          <Button
+            ref={annotateButtonRef}
+            variant={pickerActive || annotation ? "muted" : "transparent"}
+            size="small"
+            iconOnly
+            aria-label={pickerActive || annotation ? "Cancel annotation" : "Annotate"}
+            aria-pressed={pickerActive || Boolean(annotation)}
+            aria-keyshortcuts="Meta+."
+            title="Annotate ⌘."
+            disabled={!ready}
+            onClick={() => void annotate()}
+          >
+            <MessageCirclePlus />
+          </Button>
+        )}
+        {integratedTabs && tab && (tab.audible || tab.muted) ? (
+          <Button
+            variant="transparent"
+            size="small"
+            iconOnly
+            aria-label={tab.muted ? "Unmute tab" : "Mute tab"}
+            onClick={() => void run({ action: "mute", tabId: tab.id, muted: !tab.muted })}
+          >
+            {tab.muted ? <VolumeX /> : <Volume2 />}
+          </Button>
+        ) : null}
+        <BrowserMoreMenu
+          scope={menuOwner}
+          bot={bot}
+          tab={tab}
+          state={visibleState}
+          run={run}
+          onCapture={capture}
+          onSettings={() => setSettingsOpen(true)}
+          onDock={onDock}
+        />
+      </div>
+      {tab?.viewport.mode === "responsive" ? <BrowserDeviceToolbar tab={tab} run={run} /> : null}
+      {grabActive ? (
+        <div
+          className="browser-picker-status flex items-center justify-between gap-2"
+          role="status"
+        >
+          <span>
+            Click an element to grab for chat · ↑↓ parent/child · ⇧Click to add multiple · Esc to
+            cancel
+          </span>
+          <Button
+            variant="transparent"
+            size="small"
+            onClick={() => tab && void run({ action: "grab", tabId: tab.id, enabled: false })}
+          >
+            Cancel
+          </Button>
+        </div>
+      ) : null}
+      {pickerActive ? (
+        <div className="browser-picker-status" role="status">
+          Select an element or highlighted text. Press Esc to cancel.
+        </div>
+      ) : null}
+      {tab?.agentControlling ? (
+        <div className="browser-agent-status" role="status">
+          {agentName ?? "Aiden"} is using this browser
+        </div>
+      ) : null}
+      {bot && tab?.heldForPerson ? (
+        <div className="browser-agent-status" role="status">
+          {browserHoldNotice(tab.heldForPerson.reason, agentName)}
+        </div>
+      ) : null}
+      {error ? (
+        <div className="browser-action-error" role="alert">
+          <span>{error}</span>
+          <Button
+            size="small"
+            variant="transparent"
+            iconOnly
+            aria-label="Dismiss browser error"
+            onClick={() => setError(null)}
+          >
+            <X />
+          </Button>
+        </div>
+      ) : null}
+      <div className="browser-content" data-responsive={tab?.viewport.mode === "responsive"}>
+        <div className="browser-native-slot" ref={hostRef} data-browser-viewport />
+        {ready && tab && !annotation ? (
+          <button
+            type="button"
+            className="browser-page-focus"
+            onFocus={() => void run({ action: "focus", tabId: tab.id })}
+            onClick={() => void run({ action: "focus", tabId: tab.id })}
+          >
+            Focus browser page
+          </button>
+        ) : null}
+        {tab?.viewport.mode === "responsive" && ready && !annotation && !tab.floating ? (
+          <BrowserViewportResizeHandles tab={tab} run={run} />
+        ) : null}
+        {annotation ? (
+          <BrowserAnnotationEditor
+            snapshot={annotation.snapshot}
+            initial={annotation.initial}
+            pending={annotationPending}
+            onCancel={cancelAnnotation}
+            onPreview={previewAnnotation}
+            onSubmit={(value) => void submitAnnotation(value)}
+          />
+        ) : tab?.error || tab?.crashed ? (
+          <div className="browser-empty">
+            <Globe />
+            <Text variant="strong">
+              {tab.crashed ? "This page stopped responding" : "This page could not be loaded"}
+            </Text>
+            <p>{tab.error || "Reload the page to continue."}</p>
+            <Button size="small" onClick={() => void run({ action: "reload", tabId: tab.id })}>
+              Reload page
             </Button>
-          </Tooltip>
-        </TooltipProvider>
-      )}
-      {bot ? null : <Button ref={annotateButtonRef} variant={pickerActive || annotation ? "muted" : "transparent"} size="small" iconOnly aria-label={pickerActive || annotation ? "Cancel annotation" : "Annotate"} aria-pressed={pickerActive || Boolean(annotation)} aria-keyshortcuts="Meta+." title="Annotate ⌘." disabled={!ready} onClick={() => void annotate()}><MessageCirclePlus /></Button>}
-      {integratedTabs && tab && (tab.audible || tab.muted) ? <Button variant="transparent" size="small" iconOnly aria-label={tab.muted ? "Unmute tab" : "Mute tab"} onClick={() => void run({ action: "mute", tabId: tab.id, muted: !tab.muted })}>{tab.muted ? <VolumeX /> : <Volume2 />}</Button> : null}
-      <BrowserMoreMenu scope={menuOwner} bot={bot} tab={tab} state={visibleState} run={run} onCapture={capture} onSettings={() => setSettingsOpen(true)} onDock={onDock} />
+          </div>
+        ) : !ready ? (
+          <BrowserEmptyState
+            bot={bot}
+            agentName={agentName}
+            state={visibleState}
+            loadFailed={!visibleState && Boolean(error)}
+            onRetryLoad={() => setLoadAttempt((attempt) => attempt + 1)}
+            onOpen={submitAddress}
+            run={run}
+          />
+        ) : null}
+      </div>
+      {visibleState && !bot ? (
+        <BrowserSettings
+          state={visibleState}
+          open={settingsOpen}
+          onOpenChange={setSettingsOpen}
+          run={run}
+          error={error}
+        />
+      ) : null}
     </div>
-    {tab?.viewport.mode === "responsive" ? <BrowserDeviceToolbar tab={tab} run={run} /> : null}
-    {grabActive ? (
-      <div className="browser-picker-status flex items-center justify-between gap-2" role="status">
-        <span>Click an element to grab for chat · ↑↓ parent/child · ⇧Click to add multiple · Esc to cancel</span>
-        <Button variant="transparent" size="small" onClick={() => tab && void run({ action: "grab", tabId: tab.id, enabled: false })}>
-          Cancel
+  );
+  if (!tab?.floating) return content;
+  const dock = () => {
+    void run({ action: "float", tabId: tab.id, floating: false }).then((result) => {
+      if (result) onDock?.();
+    });
+  };
+  return (
+    <>
+      <div className="browser-empty">
+        <PictureInPicture2 />
+        <Text variant="strong">Browser is floating over chat</Text>
+        <Button size="small" onClick={dock}>
+          Return to Environment
         </Button>
       </div>
-    ) : null}
-    {pickerActive ? <div className="browser-picker-status" role="status">Select an element or highlighted text. Press Esc to cancel.</div> : null}
-    {tab?.agentControlling ? <div className="browser-agent-status" role="status">{agentName ?? "Aiden"} is using this browser</div> : null}
-    {bot && tab?.heldForPerson ? <div className="browser-agent-status" role="status">{browserHoldNotice(tab.heldForPerson.reason, agentName)}</div> : null}
-    {error ? <div className="browser-action-error" role="alert"><span>{error}</span><Button size="small" variant="transparent" iconOnly aria-label="Dismiss browser error" onClick={() => setError(null)}><X /></Button></div> : null}
-    <div className="browser-content" data-responsive={tab?.viewport.mode === "responsive"}>
-      <div className="browser-native-slot" ref={hostRef} data-browser-viewport />
-      {ready && tab && !annotation ? <button type="button" className="browser-page-focus" onFocus={() => void run({ action: "focus", tabId: tab.id })} onClick={() => void run({ action: "focus", tabId: tab.id })}>Focus browser page</button> : null}
-      {tab?.viewport.mode === "responsive" && ready && !annotation && !tab.floating ? <BrowserViewportResizeHandles tab={tab} run={run} /> : null}
-      {annotation ? <BrowserAnnotationEditor snapshot={annotation.snapshot} initial={annotation.initial} pending={annotationPending} onCancel={cancelAnnotation} onPreview={previewAnnotation} onSubmit={(value) => void submitAnnotation(value)} />
-        : tab?.error || tab?.crashed ? <div className="browser-empty"><Globe /><Text variant="strong">{tab.crashed ? "This page stopped responding" : "This page could not be loaded"}</Text><p>{tab.error || "Reload the page to continue."}</p><Button size="small" onClick={() => void run({ action: "reload", tabId: tab.id })}>Reload page</Button></div>
-        : !ready ? <BrowserEmptyState bot={bot} agentName={agentName} state={visibleState} loadFailed={!visibleState && Boolean(error)} onRetryLoad={() => setLoadAttempt((attempt) => attempt + 1)} onOpen={submitAddress} run={run} /> : null}
-    </div>
-    {visibleState && !bot ? <BrowserSettings state={visibleState} open={settingsOpen} onOpenChange={setSettingsOpen} run={run} error={error} /> : null}
-  </div>;
-  if (!tab?.floating) return content;
-  const dock = () => { void run({ action: "float", tabId: tab.id, floating: false }).then((result) => { if (result) onDock?.(); }); };
-  return <>
-    <div className="browser-empty"><PictureInPicture2 /><Text variant="strong">Browser is floating over chat</Text><Button size="small" onClick={dock}>Return to Environment</Button></div>
-    {createPortal(<BrowserFloatingFrame key={workspaceId} frameKey={workspaceId} source={floatingSourceRef.current ?? tab.viewport} chromeHeight={114 + (tab.viewport.mode === "responsive" ? 54 : 0)} pictureInPicture={tab.pictureInPicture} onDock={dock} onClose={() => void run({ action: "float", tabId: tab.id, floating: false })} onPictureInPicture={() => void run({ action: "picture_in_picture", tabId: tab.id, enabled: !tab.pictureInPicture })} onLayout={floatingLayout}>{content}</BrowserFloatingFrame>, document.body)}
-  </>;
+      {createPortal(
+        <BrowserFloatingFrame
+          key={workspaceId}
+          frameKey={workspaceId}
+          source={floatingSourceRef.current ?? tab.viewport}
+          chromeHeight={114 + (tab.viewport.mode === "responsive" ? 54 : 0)}
+          pictureInPicture={tab.pictureInPicture}
+          onDock={dock}
+          onClose={() => void run({ action: "float", tabId: tab.id, floating: false })}
+          onPictureInPicture={() =>
+            void run({
+              action: "picture_in_picture",
+              tabId: tab.id,
+              enabled: !tab.pictureInPicture,
+            })
+          }
+          onLayout={floatingLayout}
+        >
+          {content}
+        </BrowserFloatingFrame>,
+        document.body,
+      )}
+    </>
+  );
 }
 
 function BrowserFavicon({ src }: { src?: string }) {
   const [failedSource, setFailedSource] = React.useState<string | null>(null);
-  return src && failedSource !== src
-    ? <img src={src} alt="" onError={() => setFailedSource(src)} />
-    : <Globe aria-hidden="true" />;
+  return src && failedSource !== src ? (
+    <img src={src} alt="" onError={() => setFailedSource(src)} />
+  ) : (
+    <Globe aria-hidden="true" />
+  );
 }
 
-export function BrowserEmptyState({ state, loadFailed = false, onRetryLoad, onOpen, run, bot = false, agentName }: { state: BrowserState | null; loadFailed?: boolean; onRetryLoad?: () => void; onOpen: (url: string) => void; run: RunCommand; bot?: boolean; agentName?: string }) {
+export function BrowserEmptyState({
+  state,
+  loadFailed = false,
+  onRetryLoad,
+  onOpen,
+  run,
+  bot = false,
+  agentName,
+}: {
+  state: BrowserState | null;
+  loadFailed?: boolean;
+  onRetryLoad?: () => void;
+  onOpen: (url: string) => void;
+  run: RunCommand;
+  bot?: boolean;
+  agentName?: string;
+}) {
   // The error itself is announced by the panel's alert strip; this replaces the endless spinner with a way out.
-  if (!state && loadFailed) return <div className="browser-empty"><Globe aria-hidden="true" /><Text variant="strong">Couldn’t open the browser</Text>{onRetryLoad ? <Button size="small" onClick={onRetryLoad}>Try again</Button> : null}</div>;
-  if (!state) return <div className="browser-empty"><Loader2 className="animate-spin motion-reduce:animate-none" aria-hidden="true" /><Text color="secondary" role="status">Opening browser…</Text></div>;
+  if (!state && loadFailed)
+    return (
+      <div className="browser-empty">
+        <Globe aria-hidden="true" />
+        <Text variant="strong">Couldn’t open the browser</Text>
+        {onRetryLoad ? (
+          <Button size="small" onClick={onRetryLoad}>
+            Try again
+          </Button>
+        ) : null}
+      </div>
+    );
+  if (!state)
+    return (
+      <div className="browser-empty">
+        <Loader2 className="animate-spin motion-reduce:animate-none" aria-hidden="true" />
+        <Text color="secondary" role="status">
+          Opening browser…
+        </Text>
+      </div>
+    );
   // A Bot's browser keeps its own sign-ins: the person's history and local servers don't belong here.
-  if (bot) return <div className="browser-empty"><Globe aria-hidden="true" /><Text variant="strong">No page open</Text><p>{agentName ?? "The Bot"} opens pages here, with its own sign-ins. You can also enter a URL above.</p></div>;
+  if (bot)
+    return (
+      <div className="browser-empty">
+        <Globe aria-hidden="true" />
+        <Text variant="strong">No page open</Text>
+        <p>
+          {agentName ?? "The Bot"} opens pages here, with its own sign-ins. You can also enter a URL
+          above.
+        </p>
+      </div>
+    );
   const history = state.history.slice(0, 10);
-  if (!history.length && !state.servers.length) return <div className="browser-empty"><Globe /><Text variant="strong">No page open</Text><p>Enter a URL above, or run a dev server in your workspace. Local servers appear here automatically.</p></div>;
-  return <div className="browser-start-page">
-    {history.length ? <section><h3><History />Recently used</h3><div className="browser-recent-list">{history.map((entry) => <div key={entry.url} className="browser-recent-row"><button type="button" onClick={() => onOpen(entry.url)}><span>{entry.title || entry.url}</span><small>{entry.url}</small></button><Button size="small" variant="transparent" iconOnly aria-label={`Remove ${entry.title || entry.url} from history`} onClick={() => void run({ action: "history_remove", url: entry.url })}><X /></Button></div>)}</div></section> : null}
-    {state.servers.length ? <section><h3><RadioTower />Local servers</h3><div className="browser-recent-list">{state.servers.map((server) => <div key={server.url} className="browser-recent-row"><button type="button" onClick={() => onOpen(server.url)}><span>{server.label}</span><small>{server.url}</small></button><ExternalLink className="size-4 text-tertiary" /></div>)}</div></section> : null}
-  </div>;
+  if (!history.length && !state.servers.length)
+    return (
+      <div className="browser-empty">
+        <Globe />
+        <Text variant="strong">No page open</Text>
+        <p>
+          Enter a URL above, or run a dev server in your workspace. Local servers appear here
+          automatically.
+        </p>
+      </div>
+    );
+  return (
+    <div className="browser-start-page">
+      {history.length ? (
+        <section>
+          <h3>
+            <History />
+            Recently used
+          </h3>
+          <div className="browser-recent-list">
+            {history.map((entry) => (
+              <div key={entry.url} className="browser-recent-row">
+                <button type="button" onClick={() => onOpen(entry.url)}>
+                  <span>{entry.title || entry.url}</span>
+                  <small>{entry.url}</small>
+                </button>
+                <Button
+                  size="small"
+                  variant="transparent"
+                  iconOnly
+                  aria-label={`Remove ${entry.title || entry.url} from history`}
+                  onClick={() => void run({ action: "history_remove", url: entry.url })}
+                >
+                  <X />
+                </Button>
+              </div>
+            ))}
+          </div>
+        </section>
+      ) : null}
+      {state.servers.length ? (
+        <section>
+          <h3>
+            <RadioTower />
+            Local servers
+          </h3>
+          <div className="browser-recent-list">
+            {state.servers.map((server) => (
+              <div key={server.url} className="browser-recent-row">
+                <button type="button" onClick={() => onOpen(server.url)}>
+                  <span>{server.label}</span>
+                  <small>{server.url}</small>
+                </button>
+                <ExternalLink className="size-4 text-tertiary" />
+              </div>
+            ))}
+          </div>
+        </section>
+      ) : null}
+    </div>
+  );
 }
 
-function BrowserMoreMenu({ scope, bot, tab, state, run, onCapture, onSettings, onDock }: {
-  scope: string; bot: boolean; tab: BrowserTab | null; state: BrowserState | null; run: RunCommand;
-  onCapture: (record: boolean) => Promise<void>; onSettings: () => void; onDock?: () => void;
+function BrowserMoreMenu({
+  scope,
+  bot,
+  tab,
+  state,
+  run,
+  onCapture,
+  onSettings,
+  onDock,
+}: {
+  scope: string;
+  bot: boolean;
+  tab: BrowserTab | null;
+  state: BrowserState | null;
+  run: RunCommand;
+  onCapture: (record: boolean) => Promise<void>;
+  onSettings: () => void;
+  onDock?: () => void;
 }) {
   const pageItem = (label: string, select: (page: BrowserTab) => void): BrowserMenuOption => ({
-    label, disabled: !tab?.url, select: () => { if (tab) select(tab); },
+    label,
+    disabled: !tab?.url,
+    select: () => {
+      if (tab) select(tab);
+    },
   });
   const options: BrowserMenuOption[] = [
-    pageItem("Open in system browser", page => void run({ action: "open_external", tabId: page.id })),
-    pageItem("Hard reload", page => void run({ action: "reload", tabId: page.id, ignoreCache: true })),
+    pageItem(
+      "Open in system browser",
+      (page) => void run({ action: "open_external", tabId: page.id }),
+    ),
+    pageItem(
+      "Hard reload",
+      (page) => void run({ action: "reload", tabId: page.id, ignoreCache: true }),
+    ),
   ];
   if (!bot) {
-    options.push(pageItem("Open DevTools", page => void run({ action: "devtools", tabId: page.id })), null);
-    const canCapture = Boolean(tab?.url && !tab.error && !tab.crashed);
-    if (!tab?.recording) options.push({ label: "Capture screenshot (⇧ to record)", disabled: !canCapture, select: shift => void onCapture(shift) });
     options.push(
-      { label: tab?.recording ? "Stop recording" : "Record browser", disabled: !tab?.recording && !canCapture, select: () => void onCapture(true) },
-      pageItem(tab?.floating ? "Return to Environment" : "Float browser over chat", async page => {
-        const result = await run({ action: "float", tabId: page.id, floating: !page.floating });
-        if (result && page.floating) onDock?.();
-      }),
-      pageItem(tab?.pictureInPicture ? "Close separate preview window" : "Open separate preview window",
-        page => void run({ action: "picture_in_picture", tabId: page.id, enabled: !page.pictureInPicture })),
+      pageItem("Open DevTools", (page) => void run({ action: "devtools", tabId: page.id })),
+      null,
+    );
+    const canCapture = Boolean(tab?.url && !tab.error && !tab.crashed);
+    if (!tab?.recording)
+      options.push({
+        label: "Capture screenshot (⇧ to record)",
+        disabled: !canCapture,
+        select: (shift) => void onCapture(shift),
+      });
+    options.push(
+      {
+        label: tab?.recording ? "Stop recording" : "Record browser",
+        disabled: !tab?.recording && !canCapture,
+        select: () => void onCapture(true),
+      },
+      pageItem(
+        tab?.floating ? "Return to Environment" : "Float browser over chat",
+        async (page) => {
+          const result = await run({ action: "float", tabId: page.id, floating: !page.floating });
+          if (result && page.floating) onDock?.();
+        },
+      ),
+      pageItem(
+        tab?.pictureInPicture ? "Close separate preview window" : "Open separate preview window",
+        (page) =>
+          void run({
+            action: "picture_in_picture",
+            tabId: page.id,
+            enabled: !page.pictureInPicture,
+          }),
+      ),
     );
   }
-  options.push(pageItem(tab?.viewport.mode === "responsive" ? "Hide device toolbar" : "Show device toolbar",
-    page => void run({ action: "viewport", tabId: page.id, viewport: { ...page.viewport, mode: page.viewport.mode === "fill" ? "responsive" : "fill" } })),
-    null, { label: "Appearance" });
+  options.push(
+    pageItem(
+      tab?.viewport.mode === "responsive" ? "Hide device toolbar" : "Show device toolbar",
+      (page) =>
+        void run({
+          action: "viewport",
+          tabId: page.id,
+          viewport: {
+            ...page.viewport,
+            mode: page.viewport.mode === "fill" ? "responsive" : "fill",
+          },
+        }),
+    ),
+    null,
+    { label: "Appearance" },
+  );
   for (const appearance of ["system", "light", "dark"] as const) {
-    options.push({ label: appearance[0].toUpperCase() + appearance.slice(1), checked: tab?.appearance === appearance,
-      disabled: !tab?.url, select: () => tab && void run({ action: "appearance", tabId: tab.id, appearance }) });
+    options.push({
+      label: appearance[0].toUpperCase() + appearance.slice(1),
+      checked: tab?.appearance === appearance,
+      disabled: !tab?.url,
+      select: () => tab && void run({ action: "appearance", tabId: tab.id, appearance }),
+    });
   }
   const zoom = tab?.zoom ?? 1;
   const zoomItem = (label: string, value?: number): BrowserMenuOption => ({
-    label, disabled: !tab?.url || value === undefined, select: () => { if (tab && value !== undefined) void run({ action: "zoom", tabId: tab.id, zoom: value }); },
+    label,
+    disabled: !tab?.url || value === undefined,
+    select: () => {
+      if (tab && value !== undefined) void run({ action: "zoom", tabId: tab.id, zoom: value });
+    },
   });
-  options.push(null, { label: `Zoom · ${Math.round(zoom * 100)}%` },
-    zoomItem("Zoom out", [...ZOOM_STEPS].reverse().find(step => step < zoom - .001)), zoomItem("Reset zoom", 1),
-    zoomItem("Zoom in", ZOOM_STEPS.find(step => step > zoom + .001)));
+  options.push(
+    null,
+    { label: `Zoom · ${Math.round(zoom * 100)}%` },
+    zoomItem(
+      "Zoom out",
+      [...ZOOM_STEPS].reverse().find((step) => step < zoom - 0.001),
+    ),
+    zoomItem("Reset zoom", 1),
+    zoomItem(
+      "Zoom in",
+      ZOOM_STEPS.find((step) => step > zoom + 0.001),
+    ),
+  );
   if (!bot) {
     const profileId = tab?.profileId ?? state?.defaults.profileId ?? "default";
-    options.push(null, { label: `Profile: ${state?.profiles.find(profile => profile.id === profileId)?.name ?? "Default"}` },
+    options.push(
+      null,
+      {
+        label: `Profile: ${state?.profiles.find((profile) => profile.id === profileId)?.name ?? "Default"}`,
+      },
       { label: "Clear cookies", select: () => void run({ action: "clear_cookies", profileId }) },
       { label: "Clear cache", select: () => void run({ action: "clear_cache", profileId }) },
-      null, { label: "Browser settings…", select: onSettings });
+      null,
+      { label: "Browser settings…", select: onSettings },
+    );
   }
-  return <BrowserMenuButton scope={scope} iconOnly aria-label="Browser menu" title="Browser menu" options={options}><MoreVertical /></BrowserMenuButton>;
+  return (
+    <BrowserMenuButton
+      scope={scope}
+      iconOnly
+      aria-label="Browser menu"
+      title="Browser menu"
+      options={options}
+    >
+      <MoreVertical />
+    </BrowserMenuButton>
+  );
 }
 
 export function BrowserDeviceToolbar({ tab, run }: { tab: BrowserTab; run: RunCommand }) {
   const [width, setWidth] = React.useState(String(tab.viewport.width));
   const [height, setHeight] = React.useState(String(tab.viewport.height));
-  React.useEffect(() => { setWidth(String(tab.viewport.width)); setHeight(String(tab.viewport.height)); }, [tab.id, tab.viewport.width, tab.viewport.height]);
+  React.useEffect(() => {
+    setWidth(String(tab.viewport.width));
+    setHeight(String(tab.viewport.height));
+  }, [tab.id, tab.viewport.width, tab.viewport.height]);
   const valid = validBrowserViewport(Number(width), Number(height));
-  const apply = (viewport: BrowserViewport) => void run({ action: "viewport", tabId: tab.id, viewport });
+  const apply = (viewport: BrowserViewport) =>
+    void run({ action: "viewport", tabId: tab.id, viewport });
   const commitSize = (dimension: "width" | "height") => {
     const viewport = resizeBrowserViewport(tab.viewport, Number(width), Number(height), dimension);
     if (viewport) apply(viewport);
   };
-  return <div className="browser-device-toolbar" role="group" aria-label="Browser device toolbar">
-    <select className="browser-select" aria-label="Browser device preset" value={tab.viewport.deviceName ?? "responsive"} onChange={(event) => {
-      const preset = BROWSER_DEVICE_PRESETS.find(([label]) => label === event.target.value);
-      apply(preset ? { mode: "responsive", deviceName: preset[0], width: preset[1], height: preset[2], ratioLocked: tab.viewport.ratioLocked } : { ...tab.viewport, deviceName: undefined });
-    }}><option value="responsive">Responsive</option>{BROWSER_DEVICE_PRESETS.map(([label, presetWidth, presetHeight]) => <option key={label} value={label}>{label} ({presetWidth} × {presetHeight})</option>)}</select>
-    <input aria-label="Viewport width" type="number" min={240} max={3840} value={width} aria-invalid={!valid} onChange={(event) => setWidth(event.target.value)} onBlur={() => commitSize("width")} onKeyDown={(event) => { if (event.key === "Enter") commitSize("width"); }} /><span>×</span>
-    <input aria-label="Viewport height" type="number" min={240} max={3840} value={height} aria-invalid={!valid} onChange={(event) => setHeight(event.target.value)} onBlur={() => commitSize("height")} onKeyDown={(event) => { if (event.key === "Enter") commitSize("height"); }} />
-    <Button variant="transparent" size="small" iconOnly aria-label={tab.viewport.ratioLocked ? "Unlock viewport aspect ratio" : "Lock viewport aspect ratio"} aria-pressed={tab.viewport.ratioLocked ?? false} onClick={() => apply({ ...tab.viewport, ratioLocked: !tab.viewport.ratioLocked })}>{tab.viewport.ratioLocked ? <Link2 /> : <Unlink2 />}</Button>
-    <Button variant="transparent" size="small" iconOnly aria-label="Rotate viewport" onClick={() => apply({ ...tab.viewport, width: tab.viewport.height, height: tab.viewport.width })}><RotateCw /></Button>
-    <Button variant="transparent" size="small" iconOnly aria-label="Close device toolbar" onClick={() => apply({ ...tab.viewport, mode: "fill" })}><X /></Button>
-  </div>;
+  return (
+    <div className="browser-device-toolbar" role="group" aria-label="Browser device toolbar">
+      <select
+        className="browser-select"
+        aria-label="Browser device preset"
+        value={tab.viewport.deviceName ?? "responsive"}
+        onChange={(event) => {
+          const preset = BROWSER_DEVICE_PRESETS.find(([label]) => label === event.target.value);
+          apply(
+            preset
+              ? {
+                  mode: "responsive",
+                  deviceName: preset[0],
+                  width: preset[1],
+                  height: preset[2],
+                  ratioLocked: tab.viewport.ratioLocked,
+                }
+              : { ...tab.viewport, deviceName: undefined },
+          );
+        }}
+      >
+        <option value="responsive">Responsive</option>
+        {BROWSER_DEVICE_PRESETS.map(([label, presetWidth, presetHeight]) => (
+          <option key={label} value={label}>
+            {label} ({presetWidth} × {presetHeight})
+          </option>
+        ))}
+      </select>
+      <input
+        aria-label="Viewport width"
+        type="number"
+        min={240}
+        max={3840}
+        value={width}
+        aria-invalid={!valid}
+        onChange={(event) => setWidth(event.target.value)}
+        onBlur={() => commitSize("width")}
+        onKeyDown={(event) => {
+          if (event.key === "Enter") commitSize("width");
+        }}
+      />
+      <span>×</span>
+      <input
+        aria-label="Viewport height"
+        type="number"
+        min={240}
+        max={3840}
+        value={height}
+        aria-invalid={!valid}
+        onChange={(event) => setHeight(event.target.value)}
+        onBlur={() => commitSize("height")}
+        onKeyDown={(event) => {
+          if (event.key === "Enter") commitSize("height");
+        }}
+      />
+      <Button
+        variant="transparent"
+        size="small"
+        iconOnly
+        aria-label={
+          tab.viewport.ratioLocked ? "Unlock viewport aspect ratio" : "Lock viewport aspect ratio"
+        }
+        aria-pressed={tab.viewport.ratioLocked ?? false}
+        onClick={() => apply({ ...tab.viewport, ratioLocked: !tab.viewport.ratioLocked })}
+      >
+        {tab.viewport.ratioLocked ? <Link2 /> : <Unlink2 />}
+      </Button>
+      <Button
+        variant="transparent"
+        size="small"
+        iconOnly
+        aria-label="Rotate viewport"
+        onClick={() =>
+          apply({ ...tab.viewport, width: tab.viewport.height, height: tab.viewport.width })
+        }
+      >
+        <RotateCw />
+      </Button>
+      <Button
+        variant="transparent"
+        size="small"
+        iconOnly
+        aria-label="Close device toolbar"
+        onClick={() => apply({ ...tab.viewport, mode: "fill" })}
+      >
+        <X />
+      </Button>
+    </div>
+  );
 }
 
 function BrowserViewportResizeHandles({ tab, run }: { tab: BrowserTab; run: RunCommand }) {
   const [dragging, setDragging] = React.useState(false);
-  const dragRef = React.useRef<{ x: number; y: number; width: number; height: number; dimension: "width" | "height" | "both" } | null>(null);
+  const dragRef = React.useRef<{
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+    dimension: "width" | "height" | "both";
+  } | null>(null);
   const latestRef = React.useRef(tab.viewport);
   const timerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
-  React.useEffect(() => () => { if (timerRef.current) clearTimeout(timerRef.current); }, []);
-  const commit = () => { if (timerRef.current) clearTimeout(timerRef.current); timerRef.current = null; void run({ action: "viewport", tabId: tab.id, viewport: latestRef.current }); };
-  return <>
-    {(["width", "height", "both"] as const).map((dimension) => <div key={dimension} className={`browser-viewport-resize browser-viewport-resize-${dimension}`} role="separator" tabIndex={0} aria-label={`Resize browser viewport ${dimension === "both" ? "diagonally" : dimension}`} aria-orientation={dimension === "height" ? "horizontal" : "vertical"} aria-valuemin={240} aria-valuemax={3840} aria-valuenow={dimension === "height" ? tab.viewport.height : tab.viewport.width} onKeyDown={(event) => {
-      const amount = event.shiftKey ? 40 : 10;
-      const delta = ["ArrowRight", "ArrowDown"].includes(event.key) ? amount : ["ArrowLeft", "ArrowUp"].includes(event.key) ? -amount : 0;
-      if (!delta) return;
-      event.preventDefault();
-      const viewport = resizeBrowserViewport(tab.viewport, tab.viewport.width + (dimension !== "height" ? delta : 0), tab.viewport.height + (dimension !== "width" ? delta : 0), dimension === "height" ? "height" : "width");
-      if (viewport) void run({ action: "viewport", tabId: tab.id, viewport });
-    }} onPointerDown={(event) => {
-      if (event.button !== 0) return;
-      event.preventDefault(); event.currentTarget.setPointerCapture(event.pointerId); setDragging(true);
-      latestRef.current = tab.viewport;
-      dragRef.current = { x: event.clientX, y: event.clientY, width: tab.viewport.width, height: tab.viewport.height, dimension };
-    }} onPointerMove={(event) => {
-      const drag = dragRef.current;
-      if (!drag) return;
-      const viewport = resizeBrowserViewport(tab.viewport, drag.width + (drag.dimension !== "height" ? (event.clientX - drag.x) * 2 : 0), drag.height + (drag.dimension !== "width" ? event.clientY - drag.y : 0), drag.dimension === "height" ? "height" : "width");
-      if (!viewport) return;
-      latestRef.current = viewport;
-      if (!timerRef.current) timerRef.current = setTimeout(commit, 60);
-    }} onPointerUp={() => { if (dragRef.current) commit(); dragRef.current = null; setDragging(false); }} onPointerCancel={() => { if (dragRef.current) commit(); dragRef.current = null; setDragging(false); }} />)}
-    {dragging ? <div className="browser-viewport-drag-shield" aria-hidden="true" /> : null}
-  </>;
+  React.useEffect(
+    () => () => {
+      if (timerRef.current) clearTimeout(timerRef.current);
+    },
+    [],
+  );
+  const commit = () => {
+    if (timerRef.current) clearTimeout(timerRef.current);
+    timerRef.current = null;
+    void run({ action: "viewport", tabId: tab.id, viewport: latestRef.current });
+  };
+  return (
+    <>
+      {(["width", "height", "both"] as const).map((dimension) => (
+        <div
+          key={dimension}
+          className={`browser-viewport-resize browser-viewport-resize-${dimension}`}
+          role="separator"
+          tabIndex={0}
+          aria-label={`Resize browser viewport ${dimension === "both" ? "diagonally" : dimension}`}
+          aria-orientation={dimension === "height" ? "horizontal" : "vertical"}
+          aria-valuemin={240}
+          aria-valuemax={3840}
+          aria-valuenow={dimension === "height" ? tab.viewport.height : tab.viewport.width}
+          onKeyDown={(event) => {
+            const amount = event.shiftKey ? 40 : 10;
+            const delta = ["ArrowRight", "ArrowDown"].includes(event.key)
+              ? amount
+              : ["ArrowLeft", "ArrowUp"].includes(event.key)
+                ? -amount
+                : 0;
+            if (!delta) return;
+            event.preventDefault();
+            const viewport = resizeBrowserViewport(
+              tab.viewport,
+              tab.viewport.width + (dimension !== "height" ? delta : 0),
+              tab.viewport.height + (dimension !== "width" ? delta : 0),
+              dimension === "height" ? "height" : "width",
+            );
+            if (viewport) void run({ action: "viewport", tabId: tab.id, viewport });
+          }}
+          onPointerDown={(event) => {
+            if (event.button !== 0) return;
+            event.preventDefault();
+            event.currentTarget.setPointerCapture(event.pointerId);
+            setDragging(true);
+            latestRef.current = tab.viewport;
+            dragRef.current = {
+              x: event.clientX,
+              y: event.clientY,
+              width: tab.viewport.width,
+              height: tab.viewport.height,
+              dimension,
+            };
+          }}
+          onPointerMove={(event) => {
+            const drag = dragRef.current;
+            if (!drag) return;
+            const viewport = resizeBrowserViewport(
+              tab.viewport,
+              drag.width + (drag.dimension !== "height" ? (event.clientX - drag.x) * 2 : 0),
+              drag.height + (drag.dimension !== "width" ? event.clientY - drag.y : 0),
+              drag.dimension === "height" ? "height" : "width",
+            );
+            if (!viewport) return;
+            latestRef.current = viewport;
+            if (!timerRef.current) timerRef.current = setTimeout(commit, 60);
+          }}
+          onPointerUp={() => {
+            if (dragRef.current) commit();
+            dragRef.current = null;
+            setDragging(false);
+          }}
+          onPointerCancel={() => {
+            if (dragRef.current) commit();
+            dragRef.current = null;
+            setDragging(false);
+          }}
+        />
+      ))}
+      {dragging ? <div className="browser-viewport-drag-shield" aria-hidden="true" /> : null}
+    </>
+  );
 }
 
 async function copyBrowserImage(image: BrowserImage) {
   const bytes = Uint8Array.from(atob(image.data), (character) => character.charCodeAt(0));
-  await navigator.clipboard.write([new ClipboardItem({ [image.mimeType]: new Blob([bytes], { type: image.mimeType }) })]);
+  await navigator.clipboard.write([
+    new ClipboardItem({ [image.mimeType]: new Blob([bytes], { type: image.mimeType }) }),
+  ]);
 }

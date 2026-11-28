@@ -32,7 +32,10 @@ export function undo(
 ): { history: CanvasHistory; doc: DesignCanvas } | null {
   const doc = history.past[history.past.length - 1];
   if (!doc) return null;
-  return { doc, history: { past: history.past.slice(0, -1), future: [current, ...history.future] } };
+  return {
+    doc,
+    history: { past: history.past.slice(0, -1), future: [current, ...history.future] },
+  };
 }
 
 export function redo(
@@ -60,7 +63,10 @@ export function takeIn(
 ): CanvasHistory {
   if (change.aidenTurn === undefined) {
     const carry = changesBetween(change.from, change.to);
-    const kept: CanvasHistory = { past: history.past.map(carry), future: history.future.map(carry) };
+    const kept: CanvasHistory = {
+      past: history.past.map(carry),
+      future: history.future.map(carry),
+    };
     return history.aidenTurn === undefined ? kept : { ...kept, aidenTurn: history.aidenTurn };
   }
   // Undoing the reply's step takes its changes away, so older steps never hold them.
@@ -79,9 +85,16 @@ export function takeIn(
  * instead, and the reply's later changes still join the reply's step. After
  * the person's own step it joins that step, the way the rest of a drag does.
  */
-export function carryUnrecorded(history: CanvasHistory, edit: (doc: DesignCanvas) => DesignCanvas): CanvasHistory {
+export function carryUnrecorded(
+  history: CanvasHistory,
+  edit: (doc: DesignCanvas) => DesignCanvas,
+): CanvasHistory {
   if (history.aidenTurn === undefined) return history;
-  return { past: history.past.map(edit), future: history.future.map(edit), aidenTurn: history.aidenTurn };
+  return {
+    past: history.past.map(edit),
+    future: history.future.map(edit),
+    aidenTurn: history.aidenTurn,
+  };
 }
 
 /**
@@ -97,7 +110,11 @@ export function keepUnchanged(from: DesignCanvas, to: DesignCanvas): DesignCanva
       return same && JSON.stringify(same) === JSON.stringify(item) ? same : item;
     });
   };
-  return { ...to, frames: reuse(from.frames, to.frames), comments: reuse(from.comments, to.comments) };
+  return {
+    ...to,
+    frames: reuse(from.frames, to.frames),
+    comments: reuse(from.comments, to.comments),
+  };
 }
 
 /**
@@ -115,7 +132,8 @@ export function changesBetween(
 ): (doc: DesignCanvas) => DesignCanvas {
   const frameEdit = itemChanges(from.frames, to.frames);
   const commentEdit = itemChanges(from.comments, to.comments);
-  const outline = (doc: DesignCanvas) => JSON.stringify(doc.pages.map((page) => [page.id, page.name]));
+  const outline = (doc: DesignCanvas) =>
+    JSON.stringify(doc.pages.map((page) => [page.id, page.name]));
   const pagesChanged = outline(from) !== outline(to);
   const activeChanged = from.activePageId !== to.activePageId;
   return (doc) => {
@@ -143,7 +161,10 @@ export function changesBetween(
 }
 
 /** Adds, removes and replaces only the items (by id) that differ between `from` and `to`. */
-function itemChanges<T extends { id: string }>(from: readonly T[], to: readonly T[]): (items: readonly T[]) => T[] {
+function itemChanges<T extends { id: string }>(
+  from: readonly T[],
+  to: readonly T[],
+): (items: readonly T[]) => T[] {
   const before = new Map(from.map((item) => [item.id, item]));
   const after = new Map(to.map((item) => [item.id, item]));
   return (items) => {

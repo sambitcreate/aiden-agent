@@ -8,12 +8,12 @@ replays a file into `connectRfb` and checks the decoded framebuffer. All of
 these use security type None and a 32-bit little-endian true-colour
 ServerInit (shifts 16/8/0, so the client sends no SetPixelFormat).
 
-| File | After the 1024×768 ServerInit (`aiden-fixture`) |
-|---|---|
-| `server-init-1024x768.bin` | nothing |
-| `raw-rect.bin` | one update: a Raw 4×2 rect at (100, 200), red, green, blue, white, then white, blue, green, red |
-| `copy-rect.bin` | a Raw 2×2 rect at (0, 0) (red, green / blue, white), then a CopyRect of it to (500, 300) |
-| `desktop-size.bin` | a DesktopSize to 800×600, then a Raw green pixel at (799, 599) |
+| File                       | After the 1024×768 ServerInit (`aiden-fixture`)                                                 |
+| -------------------------- | ----------------------------------------------------------------------------------------------- |
+| `server-init-1024x768.bin` | nothing                                                                                         |
+| `raw-rect.bin`             | one update: a Raw 4×2 rect at (100, 200), red, green, blue, white, then white, blue, green, red |
+| `copy-rect.bin`            | a Raw 2×2 rect at (0, 0) (red, green / blue, white), then a CopyRect of it to (500, 300)        |
+| `desktop-size.bin`         | a DesktopSize to 800×600, then a Raw green pixel at (799, 599)                                  |
 
 ## Recording real transcripts on the owner Mac
 

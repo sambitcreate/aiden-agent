@@ -116,15 +116,15 @@ async function setPlistString(plistPath, key, value, run = runCommand) {
 }
 
 async function readPlistString(plistPath, key, run = runCommand) {
-  return (
-    await run("/usr/bin/plutil", ["-extract", key, "raw", "-o", "-", plistPath])
-  ).trim();
+  return (await run("/usr/bin/plutil", ["-extract", key, "raw", "-o", "-", plistPath])).trim();
 }
 
 async function assertExecutable(executablePath) {
   const info = await stat(executablePath);
   if (!info.isFile() || (info.mode & 0o111) === 0) {
-    throw new Error(`Development runtime executable is missing or not executable: ${executablePath}`);
+    throw new Error(
+      `Development runtime executable is missing or not executable: ${executablePath}`,
+    );
   }
 }
 
@@ -204,12 +204,7 @@ export async function validateMacDevRuntime(
   const frameworks = path.join(appPath, "Contents", "Frameworks");
   for (const helper of layout.helpers) {
     const helperApp = path.join(frameworks, `${helper.destinationName}.app`);
-    const helperExecutable = path.join(
-      helperApp,
-      "Contents",
-      "MacOS",
-      helper.destinationName,
-    );
+    const helperExecutable = path.join(helperApp, "Contents", "MacOS", helper.destinationName);
     await assertExecutable(helperExecutable);
     const helperArchitectures = await inspectArchitectures(helperExecutable, run);
     if (
@@ -238,13 +233,7 @@ export async function validateMacDevRuntime(
 
 export async function brandMacDevRuntime(
   appPath,
-  {
-    appId,
-    iconPath,
-    productName,
-    version,
-    run = runCommand,
-  },
+  { appId, iconPath, productName, version, run = runCommand },
 ) {
   const layout = macDevRuntimeLayout({ appId, productName });
   const frameworks = path.join(appPath, "Contents", "Frameworks");
@@ -254,12 +243,7 @@ export async function brandMacDevRuntime(
     const destinationApp = path.join(frameworks, `${helper.destinationName}.app`);
     const plist = path.join(sourceApp, "Contents", "Info.plist");
     const sourceExecutable = path.join(sourceApp, "Contents", "MacOS", helper.sourceName);
-    const destinationExecutable = path.join(
-      sourceApp,
-      "Contents",
-      "MacOS",
-      helper.destinationName,
-    );
+    const destinationExecutable = path.join(sourceApp, "Contents", "MacOS", helper.destinationName);
 
     await rename(sourceExecutable, destinationExecutable);
     await setPlistString(plist, "CFBundleDisplayName", helper.destinationName, run);
@@ -422,9 +406,13 @@ export async function prepareMacDevRuntime(root = repositoryRoot) {
       sourceArchitectures: electronArchitectures,
       sourceHelperArchitectures: electronHelperArchitectures,
     });
-    await writeFile(path.join(stagingRoot, "manifest.json"), `${JSON.stringify(manifest, null, 2)}\n`, {
-      mode: 0o600,
-    });
+    await writeFile(
+      path.join(stagingRoot, "manifest.json"),
+      `${JSON.stringify(manifest, null, 2)}\n`,
+      {
+        mode: 0o600,
+      },
+    );
     await rm(outputRoot, { force: true, recursive: true });
     await rename(stagingRoot, outputRoot);
     return {

@@ -34,7 +34,13 @@ test("a Stop before the run starts cancels that run once, not the one after", ()
 });
 
 test("a Stop during a run does not carry into the next one", () => {
-  const state = run(["run-started", "agent-started", "stop-requested", "run-settled", "run-started"]);
+  const state = run([
+    "run-started",
+    "agent-started",
+    "stop-requested",
+    "run-settled",
+    "run-started",
+  ]);
   assert.equal(state.stop, "none");
 });
 
@@ -56,8 +62,15 @@ test("a shutdown is recorded for one finish only", () => {
 
 test("generated event orders never admit input after a Stop in the same run", () => {
   const types: PiManagedRunEvent["type"][] = [
-    "run-started", "agent-started", "queue-closed", "stop-requested", "shutdown-requested",
-    "parent-aborted", "shutdown-recorded", "run-settled", "reset",
+    "run-started",
+    "agent-started",
+    "queue-closed",
+    "stop-requested",
+    "shutdown-requested",
+    "parent-aborted",
+    "shutdown-recorded",
+    "run-settled",
+    "reset",
   ];
   let seed = 20261104;
   const next = () => {
@@ -77,11 +90,13 @@ test("generated event orders never admit input after a Stop in the same run", ()
       state = transitionPiManagedRun(state, { type });
       if (type === "run-started") stoppedThisRun = before.stopBeforeRun;
       if (type === "reset") stoppedThisRun = false;
-      if (state.running && (type === "stop-requested" || type === "parent-aborted")) stoppedThisRun = true;
+      if (state.running && (type === "stop-requested" || type === "parent-aborted"))
+        stoppedThisRun = true;
       if (state.running && stoppedThisRun) {
         assert.notEqual(piManagedQueueBlock(state, false), undefined, trace.join(" "));
       }
-      if (!state.running) assert.notEqual(piManagedQueueBlock(state, false), undefined, trace.join(" "));
+      if (!state.running)
+        assert.notEqual(piManagedQueueBlock(state, false), undefined, trace.join(" "));
     }
   }
 });

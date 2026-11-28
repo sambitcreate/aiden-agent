@@ -189,9 +189,7 @@ function AgentModelPopoverInner({
   }, [slider, allEntries, providers, hiddenModelsByProvider]);
   const position = React.useMemo(
     () =>
-      slider
-        ? agentSliderPosition(slider, views, { providerId, model, thinkingLevel })
-        : undefined,
+      slider ? agentSliderPosition(slider, views, { providerId, model, thinkingLevel }) : undefined,
     [slider, views, providerId, model, thinkingLevel],
   );
   const homeIndex = slider ? homeStopIndex(slider) : 0;
@@ -315,7 +313,8 @@ function AgentModelPopoverInner({
     closePopover();
   };
 
-  const reassignStop = view.kind === "reassign" ? slider?.stops.find((stop) => stop.id === view.stopId) : undefined;
+  const reassignStop =
+    view.kind === "reassign" ? slider?.stops.find((stop) => stop.id === view.stopId) : undefined;
   const reassignView = reassignStop ? views.find((stop) => stop.id === reassignStop.id) : undefined;
   const reassign = async (entry: ModelEntry) => {
     if (!slider || !reassignStop || saving) return;
@@ -324,7 +323,11 @@ function AgentModelPopoverInner({
       return;
     }
     const provider = providers.find((candidate) => candidate.id === entry.providerId);
-    const { levels, defaultLevel } = composerThinkingLevels(provider, entry.model, entry.info?.reasoning);
+    const { levels, defaultLevel } = composerThinkingLevels(
+      provider,
+      entry.model,
+      entry.info?.reasoning,
+    );
     const level = levels.length ? defaultLevel : undefined;
     const next: AgentSliderSettings = {
       ...slider,
@@ -474,7 +477,10 @@ function AgentModelPopoverInner({
               {slider && views.some((stop) => !stop.available) ? (
                 // The track's own stop targets are pointer-only; these give every
                 // stop that can't run a keyboard path to the same reassign view.
-                <ul aria-label="Stops without a model to run" className="mt-1.5 flex flex-col px-1.5">
+                <ul
+                  aria-label="Stops without a model to run"
+                  className="mt-1.5 flex flex-col px-1.5"
+                >
                   {views.map((stop) =>
                     stop.available ? null : (
                       <li key={stop.id}>
@@ -484,7 +490,9 @@ function AgentModelPopoverInner({
                           className="w-full justify-start gap-1.5 px-2.5 font-normal"
                           onClick={() => showList({ kind: "reassign", stopId: stop.id })}
                         >
-                          <span className="min-w-0 shrink-0 truncate text-primary">{stop.label}</span>{" "}
+                          <span className="min-w-0 shrink-0 truncate text-primary">
+                            {stop.label}
+                          </span>{" "}
                           <span className="min-w-0 flex-1 truncate text-left text-tertiary">
                             · {stop.reasonText}
                           </span>
@@ -494,7 +502,9 @@ function AgentModelPopoverInner({
                   )}
                 </ul>
               ) : null}
-              {slider ? <div role="separator" className="mx-2 mt-2.5 mb-1 h-px bg-separator" /> : null}
+              {slider ? (
+                <div role="separator" className="mx-2 mt-2.5 mb-1 h-px bg-separator" />
+              ) : null}
               <div className="flex flex-col px-1.5">
                 <Button
                   ref={otherModelsRef}

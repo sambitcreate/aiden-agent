@@ -18,10 +18,16 @@ export const FOLLOW_PULL_REQUEST_TOOL_NAME = "follow_pull_request";
 export interface PullRequestFollowToolOptions {
   chatId: string;
   /** A pull request link, or the chat's current pull request when undefined. */
-  resolve(url: string | undefined): Promise<{ host: string; repository: string; number: number; url: string; title?: string }>;
+  resolve(
+    url: string | undefined,
+  ): Promise<{ host: string; repository: string; number: number; url: string; title?: string }>;
   follows: {
     follow(input: StartFollowInput): PullRequestFollowView;
-    stop(chatId: string, key: { host: string; repository: string; number: number }, reason: "agent"): boolean;
+    stop(
+      chatId: string,
+      key: { host: string; repository: string; number: number },
+      reason: "agent",
+    ): boolean;
     list(chatId: string): PullRequestFollowView[];
   };
 }
@@ -51,7 +57,10 @@ export function createPullRequestFollowTool(options: PullRequestFollowToolOption
     parameters: Type.Object({
       action: Type.Union([Type.Literal("follow"), Type.Literal("stop"), Type.Literal("list")]),
       url: Type.Optional(
-        Type.String({ description: "The pull request link, e.g. https://github.com/owner/repo/pull/12. Omit for this chat's current pull request." }),
+        Type.String({
+          description:
+            "The pull request link, e.g. https://github.com/owner/repo/pull/12. Omit for this chat's current pull request.",
+        }),
       ),
     }),
     execute: async (_id, params, signal): Promise<AgentToolResult<null>> => {
@@ -59,15 +68,27 @@ export function createPullRequestFollowTool(options: PullRequestFollowToolOption
       const { action, url } = params as { action: "follow" | "stop" | "list"; url?: string };
       if (action === "list") {
         const follows = options.follows.list(options.chatId);
-        return textResult(follows.length ? follows.map((follow) => `- ${describe(follow)}`).join("\n") : "This chat follows no pull requests.");
+        return textResult(
+          follows.length
+            ? follows.map((follow) => `- ${describe(follow)}`).join("\n")
+            : "This chat follows no pull requests.",
+        );
       }
       const target = await options.resolve(url?.trim() || undefined);
       signal?.throwIfAborted();
       if (action === "stop") {
         const stopped = options.follows.stop(options.chatId, target, "agent");
-        return textResult(stopped ? `Stopped following #${target.number} in ${target.repository}.` : `This chat was not following #${target.number} in ${target.repository}.`);
+        return textResult(
+          stopped
+            ? `Stopped following #${target.number} in ${target.repository}.`
+            : `This chat was not following #${target.number} in ${target.repository}.`,
+        );
       }
-      const follow = options.follows.follow({ chatId: options.chatId, ...target, startedBy: "agent" });
+      const follow = options.follows.follow({
+        chatId: options.chatId,
+        ...target,
+        startedBy: "agent",
+      });
       return textResult(
         `Following ${describe(follow)}. You will get a message in this chat when there is something to act on; end your answer when your current work is done.`,
       );

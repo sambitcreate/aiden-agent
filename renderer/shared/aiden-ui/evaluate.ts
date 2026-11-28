@@ -18,7 +18,13 @@ export interface AidenUiScope {
 
 export type AidenUiRead =
   | { kind: "var"; expr: Extract<AidenUiExprV1, { op: "var" }>; found: boolean }
-  | { kind: "member"; expr: Extract<AidenUiExprV1, { op: "get" }>; object: unknown; key: unknown; value: unknown };
+  | {
+      kind: "member";
+      expr: Extract<AidenUiExprV1, { op: "get" }>;
+      object: unknown;
+      key: unknown;
+      value: unknown;
+    };
 
 const DEFAULT_STEPS = 20_000;
 /** Longest string `+` may build; repeated concatenation cannot balloon memory. */
@@ -39,7 +45,9 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function readMember(base: unknown, key: unknown): unknown {
   if (Array.isArray(base)) {
-    return typeof key === "number" && Number.isInteger(key) && key >= 0 && key < base.length ? base[key] : undefined;
+    return typeof key === "number" && Number.isInteger(key) && key >= 0 && key < base.length
+      ? base[key]
+      : undefined;
   }
   if (!isRecord(base)) return undefined;
   const name = typeof key === "number" ? String(key) : key;
@@ -66,7 +74,8 @@ function toNumber(value: unknown): number | undefined {
 
 function compare(left: unknown, right: unknown): number | undefined {
   if (typeof left === "number" && typeof right === "number") return left - right;
-  if (typeof left === "string" && typeof right === "string") return left < right ? -1 : left > right ? 1 : 0;
+  if (typeof left === "string" && typeof right === "string")
+    return left < right ? -1 : left > right ? 1 : 0;
   return undefined;
 }
 
@@ -80,7 +89,11 @@ export function formatValue(
   try {
     if (format === "date") {
       const date =
-        typeof value === "number" ? new Date(value) : typeof value === "string" ? new Date(value) : undefined;
+        typeof value === "number"
+          ? new Date(value)
+          : typeof value === "string"
+            ? new Date(value)
+            : undefined;
       if (!date || Number.isNaN(date.getTime())) return displayString(value);
       return new Intl.DateTimeFormat(locale, { dateStyle: "medium", timeZone: "UTC" }).format(date);
     }
@@ -90,7 +103,9 @@ export function formatValue(
       return new Intl.NumberFormat(locale, { style: "currency", currency }).format(number);
     }
     if (format === "percent") {
-      return new Intl.NumberFormat(locale, { style: "percent", maximumFractionDigits: 1 }).format(number);
+      return new Intl.NumberFormat(locale, { style: "percent", maximumFractionDigits: 1 }).format(
+        number,
+      );
     }
     return new Intl.NumberFormat(locale, { maximumFractionDigits: 2 }).format(number);
   } catch {
@@ -103,7 +118,9 @@ function numbersFrom(args: unknown[]): number[] {
   if (Array.isArray(first)) {
     const items = first.slice(0, MAX_LIST_ITEMS);
     const values = typeof field === "string" ? items.map((item) => readMember(item, field)) : items;
-    return values.filter((item): item is number => typeof item === "number" && Number.isFinite(item));
+    return values.filter(
+      (item): item is number => typeof item === "number" && Number.isFinite(item),
+    );
   }
   return args.filter((item): item is number => typeof item === "number" && Number.isFinite(item));
 }
@@ -112,7 +129,12 @@ function callFunction(fn: string, args: unknown[], scope: AidenUiScope): unknown
   switch (fn) {
     case "fmt": {
       const [value, format, currency] = args;
-      if (format !== "currency" && format !== "percent" && format !== "number" && format !== "date") {
+      if (
+        format !== "currency" &&
+        format !== "percent" &&
+        format !== "number" &&
+        format !== "date"
+      ) {
         return displayString(value);
       }
       const code = typeof currency === "string" && /^[A-Z]{3}$/u.test(currency) ? currency : "USD";
@@ -136,7 +158,10 @@ function callFunction(fn: string, args: unknown[], scope: AidenUiScope): unknown
       const [value, digits] = args;
       const number = toNumber(value);
       if (number === undefined) return undefined;
-      const places = typeof digits === "number" && Number.isInteger(digits) ? Math.min(Math.max(digits, 0), 6) : 0;
+      const places =
+        typeof digits === "number" && Number.isInteger(digits)
+          ? Math.min(Math.max(digits, 0), 6)
+          : 0;
       const factor = 10 ** places;
       return Math.round(number * factor) / factor;
     }
@@ -149,7 +174,8 @@ function callFunction(fn: string, args: unknown[], scope: AidenUiScope): unknown
       const [list, field, direction] = args;
       if (!Array.isArray(list)) return [];
       const sign = direction === "desc" ? -1 : 1;
-      const pick = (item: unknown) => (typeof field === "string" && isRecord(item) ? readMember(item, field) : item);
+      const pick = (item: unknown) =>
+        typeof field === "string" && isRecord(item) ? readMember(item, field) : item;
       return list
         .slice(0, MAX_LIST_ITEMS)
         .map((item, index) => ({ item, index }))
@@ -187,7 +213,9 @@ function run(expr: AidenUiExprV1, scope: AidenUiScope, budget: { steps: number }
     case "not":
       return !truthy(run(expr.e, scope, budget));
     case "if":
-      return truthy(run(expr.test, scope, budget)) ? run(expr.then, scope, budget) : run(expr.else, scope, budget);
+      return truthy(run(expr.test, scope, budget))
+        ? run(expr.then, scope, budget)
+        : run(expr.else, scope, budget);
     case "bin": {
       if (expr.o === "&&") {
         const left = run(expr.l, scope, budget);
@@ -219,7 +247,11 @@ function run(expr: AidenUiExprV1, scope: AidenUiScope, budget: { steps: number }
       }
     }
     case "call":
-      return callFunction(expr.fn, expr.a.map((arg) => run(arg, scope, budget)), scope);
+      return callFunction(
+        expr.fn,
+        expr.a.map((arg) => run(arg, scope, budget)),
+        scope,
+      );
     default:
       return undefined;
   }

@@ -34,7 +34,9 @@ export interface SshDeviceHostDraft {
   port: string;
 }
 
-export type SshDeviceHostDraftErrors = Partial<Record<"label" | "target" | "identityFile" | "port", string>>;
+export type SshDeviceHostDraftErrors = Partial<
+  Record<"label" | "target" | "identityFile" | "port", string>
+>;
 
 function hasControlCharacter(value: string): boolean {
   return Array.from(value).some((character) => {
@@ -50,14 +52,20 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 /** Validates a draft field by field, so the editor can show each problem beside its input. */
 export function validateSshDeviceHostDraft(
   draft: SshDeviceHostDraft,
-): { config: SshDeviceHostConfig; errors?: undefined } | { config?: undefined; errors: SshDeviceHostDraftErrors } {
+):
+  | { config: SshDeviceHostConfig; errors?: undefined }
+  | { config?: undefined; errors: SshDeviceHostDraftErrors } {
   const errors: SshDeviceHostDraftErrors = {};
   const target = draft.target.trim();
   const label = draft.label.trim() || target;
   const identityFile = draft.identityFile.trim();
   const portText = draft.port.trim();
   if (!target) errors.target = "Enter an SSH alias or user@host.";
-  else if (target.length > MAX_TARGET_LENGTH || !SSH_TARGET_PATTERN.test(target) || hasControlCharacter(target)) {
+  else if (
+    target.length > MAX_TARGET_LENGTH ||
+    !SSH_TARGET_PATTERN.test(target) ||
+    hasControlCharacter(target)
+  ) {
     errors.target = "Use an SSH alias or user@host without spaces, and not starting with a dash.";
   }
   if (label.length > MAX_LABEL_LENGTH || hasControlCharacter(label)) {
@@ -73,9 +81,11 @@ export function validateSshDeviceHostDraft(
   let port: number | undefined;
   if (portText) {
     port = /^[0-9]{1,5}$/u.test(portText) ? Number(portText) : Number.NaN;
-    if (!Number.isInteger(port) || port < 1 || port > 65_535) errors.port = "Use a port from 1 to 65535.";
+    if (!Number.isInteger(port) || port < 1 || port > 65_535)
+      errors.port = "Use a port from 1 to 65535.";
   }
-  if (!SSH_DEVICE_HOST_ID_PATTERN.test(draft.id)) errors.target ??= "This host could not be saved. Close the editor and try again.";
+  if (!SSH_DEVICE_HOST_ID_PATTERN.test(draft.id))
+    errors.target ??= "This host could not be saved. Close the editor and try again.";
   if (Object.keys(errors).length > 0) return { errors };
   return {
     config: {
@@ -101,7 +111,8 @@ export function sshDeviceHostDraft(config: SshDeviceHostConfig): SshDeviceHostDr
 export function parseSshDeviceHostConfig(value: unknown): SshDeviceHostConfig | null {
   if (!isRecord(value)) return null;
   const { id, label, target, identityFile, port } = value;
-  if (typeof id !== "string" || typeof label !== "string" || typeof target !== "string") return null;
+  if (typeof id !== "string" || typeof label !== "string" || typeof target !== "string")
+    return null;
   if (identityFile !== undefined && typeof identityFile !== "string") return null;
   if (port !== undefined && typeof port !== "number") return null;
   const result = validateSshDeviceHostDraft({
@@ -112,7 +123,8 @@ export function parseSshDeviceHostConfig(value: unknown): SshDeviceHostConfig | 
     port: port === undefined ? "" : String(port),
   });
   // A stored label must already be trimmed and present; the draft fallback to the target is for typing only.
-  if (!result.config || result.config.label !== label || result.config.target !== target) return null;
+  if (!result.config || result.config.label !== label || result.config.target !== target)
+    return null;
   return result.config;
 }
 
@@ -131,7 +143,9 @@ export function parseSshDeviceHostConfigs(value: unknown): SshDeviceHostConfig[]
 }
 
 /** Two configs reach the same machine the same way, so testing one tests the other. */
-export function sshDeviceHostConnectionKey(host: Pick<SshDeviceHostConfig, "target" | "port" | "identityFile">): string {
+export function sshDeviceHostConnectionKey(
+  host: Pick<SshDeviceHostConfig, "target" | "port" | "identityFile">,
+): string {
   return JSON.stringify([host.target.trim(), host.port ?? null, host.identityFile?.trim() || null]);
 }
 
@@ -147,13 +161,18 @@ export function updateSshDeviceHosts(
 ): SshDeviceHostConfig[] {
   if (remove) return hosts.filter((candidate) => candidate.id !== host.id);
   const key = sshDeviceHostConnectionKey(host);
-  if (hosts.some((candidate) => candidate.id !== host.id && sshDeviceHostConnectionKey(candidate) === key)) {
+  if (
+    hosts.some(
+      (candidate) => candidate.id !== host.id && sshDeviceHostConnectionKey(candidate) === key,
+    )
+  ) {
     throw new Error("Another SSH host already uses this destination.");
   }
   if (hosts.some((candidate) => candidate.id === host.id)) {
     return hosts.map((candidate) => (candidate.id === host.id ? { ...host } : candidate));
   }
-  if (hosts.length >= MAX_SSH_DEVICE_HOSTS) throw new Error(`Aiden supports up to ${MAX_SSH_DEVICE_HOSTS} SSH hosts.`);
+  if (hosts.length >= MAX_SSH_DEVICE_HOSTS)
+    throw new Error(`Aiden supports up to ${MAX_SSH_DEVICE_HOSTS} SSH hosts.`);
   return [...hosts, { ...host }];
 }
 
@@ -198,18 +217,24 @@ export function parseDeviceToolVersions(value: unknown): DeviceToolVersions | nu
   return hub && agent ? { hub, agent } : null;
 }
 
-const compareVersions = (left: string, right: string) => left.localeCompare(right, "en", { numeric: true });
+const compareVersions = (left: string, right: string) =>
+  left.localeCompare(right, "en", { numeric: true });
 
 /** The newest completed install other than the pinned one, used to word an update. */
 export function previousToolVersion(tool: DeviceToolVersion): string | null {
-  if (tool.runningVersion && tool.runningVersion !== tool.requiredVersion) return tool.runningVersion;
-  const older = tool.installedVersions.filter((version) => version !== tool.requiredVersion).sort(compareVersions);
+  if (tool.runningVersion && tool.runningVersion !== tool.requiredVersion)
+    return tool.runningVersion;
+  const older = tool.installedVersions
+    .filter((version) => version !== tool.requiredVersion)
+    .sort(compareVersions);
   return older[older.length - 1] ?? null;
 }
 
 /** The pinned version is missing but an older one is installed: an update rather than a first install. */
 export function toolNeedsUpdate(tool: DeviceToolVersion | undefined): boolean {
-  return Boolean(tool && !tool.installedVersions.includes(tool.requiredVersion) && previousToolVersion(tool));
+  return Boolean(
+    tool && !tool.installedVersions.includes(tool.requiredVersion) && previousToolVersion(tool),
+  );
 }
 
 /** The pinned version is not installed on the host at all. */
@@ -218,7 +243,10 @@ export function toolMissing(tool: DeviceToolVersion | undefined): boolean {
 }
 
 /** Progress copy for an install, worded as an update when an older version is on the host. */
-export function deviceToolInstallMessage(name: string, tool: DeviceToolVersion | undefined): string {
+export function deviceToolInstallMessage(
+  name: string,
+  tool: DeviceToolVersion | undefined,
+): string {
   if (!tool) return `Installing ${name}…`;
   const previous = previousToolVersion(tool);
   return previous && !tool.installedVersions.includes(tool.requiredVersion)
@@ -241,7 +269,12 @@ export type DeviceHostCheck =
   | { status: "pending" }
   /** The target resolves to this Mac; its simulators already appear under This Mac. */
   | { status: "local" }
-  | { status: "connected"; nodeVersion: string; platforms: DeviceHostPlatformCheck[]; tools?: DeviceToolVersions }
+  | {
+      status: "connected";
+      nodeVersion: string;
+      platforms: DeviceHostPlatformCheck[];
+      tools?: DeviceToolVersions;
+    }
   | { status: "failed"; error: string };
 
 const MAX_CHECK_ERROR_LENGTH = 4000;
@@ -256,11 +289,13 @@ export function parseDeviceHostCheck(value: unknown): DeviceHostCheck | null {
         ? { status: "failed", error: value.error.slice(0, MAX_CHECK_ERROR_LENGTH) }
         : null;
     case "connected": {
-      if (typeof value.nodeVersion !== "string" || !TOOL_VERSION_PATTERN.test(value.nodeVersion)) return null;
+      if (typeof value.nodeVersion !== "string" || !TOOL_VERSION_PATTERN.test(value.nodeVersion))
+        return null;
       if (!Array.isArray(value.platforms) || value.platforms.length > 4) return null;
       const platforms: DeviceHostPlatformCheck[] = [];
       for (const item of value.platforms) {
-        if (!isRecord(item) || item.platform !== "ios" || typeof item.available !== "boolean") return null;
+        if (!isRecord(item) || item.platform !== "ios" || typeof item.available !== "boolean")
+          return null;
         if (item.reason !== undefined && typeof item.reason !== "string") return null;
         platforms.push({
           platform: "ios",
@@ -274,7 +309,12 @@ export function parseDeviceHostCheck(value: unknown): DeviceHostCheck | null {
         if (!parsed) return null;
         tools = parsed;
       }
-      return { status: "connected", nodeVersion: value.nodeVersion, platforms, ...(tools ? { tools } : {}) };
+      return {
+        status: "connected",
+        nodeVersion: value.nodeVersion,
+        platforms,
+        ...(tools ? { tools } : {}),
+      };
     }
     default:
       return null;

@@ -87,14 +87,16 @@ test("parseFoundationModelsResponse rejects ok:false with non-boolean retryable"
 
 test("platformFoundationModelsStatus reports unsupported_os for an unparseable system version", () => {
   assert.equal(
-    platformFoundationModelsStatus({ platform: "darwin", arch: "arm64", systemVersion: "abc" })?.state,
+    platformFoundationModelsStatus({ platform: "darwin", arch: "arm64", systemVersion: "abc" })
+      ?.state,
     "unsupported_os",
   );
 });
 
 test("platformFoundationModelsStatus reports unsupported_os when the major version is below 26", () => {
   assert.equal(
-    platformFoundationModelsStatus({ platform: "darwin", arch: "arm64", systemVersion: "15.9.1" })?.state,
+    platformFoundationModelsStatus({ platform: "darwin", arch: "arm64", systemVersion: "15.9.1" })
+      ?.state,
     "unsupported_os",
   );
   // Boundary: 26 is the first supported major.
@@ -108,7 +110,8 @@ test("platformFoundationModelsStatus marks model_preparing availability as retry
   // Verify the retryable flag wiring indirectly: parse accepts model_preparing,
   // and the connection's status() surfaces it. (Direct mapNativeAvailability is
   // not exported, so exercise it through createFoundationModelsConnection.)
-  const { createFoundationModelsConnection } = await import("./foundation-models-connection-core.js");
+  const { createFoundationModelsConnection } =
+    await import("./foundation-models-connection-core.js");
   const connection = createFoundationModelsConnection({
     platform: "darwin",
     arch: "arm64",

@@ -14,30 +14,51 @@ export interface BotPlanCoverCheck {
 }
 
 /** All required surface/rule items, or no coverage. Files and shell never invent an approval. */
-export function botPlanCoveredItems(plan: BotPlanRecord, used: ReadonlyMap<string, number>, check: BotPlanCoverCheck, now: number): string[] | undefined {
-  if (plan.status !== "active" || now < plan.approvedAt || now >= plan.expiresAt ||
-      !plan.requestIds.some((id) => check.requestIds.includes(id)) ||
-      check.toolName === COMPUTER_USE_TOOL_NAME || check.action?.surface === "computer_use") return undefined;
+export function botPlanCoveredItems(
+  plan: BotPlanRecord,
+  used: ReadonlyMap<string, number>,
+  check: BotPlanCoverCheck,
+  now: number,
+): string[] | undefined {
+  if (
+    plan.status !== "active" ||
+    now < plan.approvedAt ||
+    now >= plan.expiresAt ||
+    !plan.requestIds.some((id) => check.requestIds.includes(id)) ||
+    check.toolName === COMPUTER_USE_TOOL_NAME ||
+    check.action?.surface === "computer_use"
+  )
+    return undefined;
   const matched = new Set<string>();
   if (check.baseline) {
     const action = check.action;
     const surfaces = plan.proposal.items.filter((item) => {
       if (item.kind === "connector" && action?.surface === "mcp") {
-        return item.tools.some((tool) => tool.serverId === action.serverId && tool.remoteName === action.remoteName);
+        return item.tools.some(
+          (tool) => tool.serverId === action.serverId && tool.remoteName === action.remoteName,
+        );
       }
       if (item.kind !== "site" || action?.surface !== "browser" || !action.url) return false;
       try {
         const url = new URL(action.url);
-        return ["https:", "http:"].includes(url.protocol) && !isPaymentHost(url.hostname) &&
-          (url.hostname === item.host || url.hostname.endsWith(`.${item.host}`));
-      } catch { return false; }
+        return (
+          ["https:", "http:"].includes(url.protocol) &&
+          !isPaymentHost(url.hostname) &&
+          (url.hostname === item.host || url.hostname.endsWith(`.${item.host}`))
+        );
+      } catch {
+        return false;
+      }
     });
     if (!surfaces.length) return undefined;
     for (const item of surfaces) matched.add(item.id);
   }
   for (const ref of check.rules) {
     if (ref.id === "locked.credentials" || ref.id === "locked.money") return undefined;
-    const items = plan.proposal.items.filter((item) => item.kind === "rule" && item.ruleId === ref.id && item.ruleFingerprint === ref.fingerprint);
+    const items = plan.proposal.items.filter(
+      (item) =>
+        item.kind === "rule" && item.ruleId === ref.id && item.ruleFingerprint === ref.fingerprint,
+    );
     if (!items.length) return undefined;
     for (const item of items) matched.add(item.id);
   }

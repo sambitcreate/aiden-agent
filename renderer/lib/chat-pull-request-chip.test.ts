@@ -24,9 +24,21 @@ test("chip labels are plain text and announce pending creations awaiting review"
 });
 
 test("the popover never claims nothing is linked before links load or after they fail", () => {
-  assert.equal(chatPullRequestListStatus({ rows: 0, linksLoaded: false, linksFailed: false }), "loading");
-  assert.equal(chatPullRequestListStatus({ rows: 0, linksLoaded: false, linksFailed: true }), "error");
-  assert.equal(chatPullRequestListStatus({ rows: 0, linksLoaded: true, linksFailed: false }), "empty");
+  assert.equal(
+    chatPullRequestListStatus({ rows: 0, linksLoaded: false, linksFailed: false }),
+    "loading",
+  );
+  assert.equal(
+    chatPullRequestListStatus({ rows: 0, linksLoaded: false, linksFailed: true }),
+    "error",
+  );
+  assert.equal(
+    chatPullRequestListStatus({ rows: 0, linksLoaded: true, linksFailed: false }),
+    "empty",
+  );
   // Cached or branch-discovered rows stay visible even while a reload fails.
-  assert.equal(chatPullRequestListStatus({ rows: 2, linksLoaded: true, linksFailed: true }), "list");
+  assert.equal(
+    chatPullRequestListStatus({ rows: 2, linksLoaded: true, linksFailed: true }),
+    "list",
+  );
 });

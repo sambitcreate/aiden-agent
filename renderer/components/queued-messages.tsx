@@ -118,7 +118,9 @@ export function QueuedMessages({
                 );
               }
               if (message.grabbedElements?.length) {
-                return <MousePointer2 aria-hidden="true" className="size-4 shrink-0 text-accent-text" />;
+                return (
+                  <MousePointer2 aria-hidden="true" className="size-4 shrink-0 text-accent-text" />
+                );
               }
               return null;
             })()}
@@ -126,7 +128,9 @@ export function QueuedMessages({
               {message.text ||
                 [
                   ...(message.grabbedElements?.map((element) => element.label) ?? []),
-                  ...withoutGrabbedElementThumbnails(message.attachments).map((attachment) => attachment.name),
+                  ...withoutGrabbedElementThumbnails(message.attachments).map(
+                    (attachment) => attachment.name,
+                  ),
                 ].join(", ")}
             </span>
             {onSteer ? (
@@ -205,9 +209,7 @@ export function QueuedMessages({
         confirmLabel="Save changes"
         confirmDisabled={
           !draft ||
-          (!draft.text.trim() &&
-            draft.attachments.length === 0 &&
-            !(draft.grabbedElements?.length))
+          (!draft.text.trim() && draft.attachments.length === 0 && !draft.grabbedElements?.length)
         }
         returnFocus={() =>
           editorTrigger.current?.isConnected ? editorTrigger.current : returnFocus()
@@ -243,15 +245,20 @@ export function QueuedMessages({
             {draft.grabbedElements?.map((element) => (
               <div key={element.id} className="flex items-center gap-2">
                 <MousePointer2 aria-hidden="true" className="size-3.5 shrink-0 text-accent-text" />
-                <span className="min-w-0 flex-1 truncate font-mono text-small">{element.label}</span>
+                <span className="min-w-0 flex-1 truncate font-mono text-small">
+                  {element.label}
+                </span>
                 <Button
                   variant="transparent"
                   size="small"
                   iconOnly
                   aria-label={`Remove queued element ${element.label}`}
                   onClick={() => {
-                    const thumbId = element.thumbnailAttachmentId ?? grabbedElementThumbnailId(element.id);
-                    const nextElements = (draft.grabbedElements ?? []).filter((item) => item.id !== element.id);
+                    const thumbId =
+                      element.thumbnailAttachmentId ?? grabbedElementThumbnailId(element.id);
+                    const nextElements = (draft.grabbedElements ?? []).filter(
+                      (item) => item.id !== element.id,
+                    );
                     setDraft({
                       ...draft,
                       grabbedElements: nextElements.length ? nextElements : undefined,

@@ -32,14 +32,26 @@ test("the line says the phase with its step on the Mac, and only Thinking with A
   cleanup();
   render(<BotStatusLine activity={reading} wording="thinking" now={1_000} />);
   assert.equal(said(), "Thinking");
-  assert.equal(screen.queryByText(/grocery-list\.md/u) === null, true, "Always Thinking never peeks at the step");
+  assert.equal(
+    screen.queryByText(/grocery-list\.md/u) === null,
+    true,
+    "Always Thinking never peeks at the step",
+  );
 });
 
 test("waiting keeps its word under Always Thinking, and an unknown phase reads as Working", () => {
-  render(<BotStatusLine activity={{ phase: "waiting", startedAt: 0 }} wording="thinking" now={0} />);
+  render(
+    <BotStatusLine activity={{ phase: "waiting", startedAt: 0 }} wording="thinking" now={0} />,
+  );
   assert.equal(said(), "Waiting for you");
   cleanup();
-  render(<BotStatusLine activity={{ phase: "browsing" as never, startedAt: 0 }} wording="follows" now={0} />);
+  render(
+    <BotStatusLine
+      activity={{ phase: "browsing" as never, startedAt: 0 }}
+      wording="follows"
+      now={0}
+    />,
+  );
   assert.equal(said(), "Working");
 });
 
@@ -58,11 +70,23 @@ test("after 20 seconds the line shows elapsed time; after 2 minutes, a still-goi
 
 test("the still-going note is only for work in progress, not while it waits on you or stops", () => {
   const late = 1_000 + 121_000;
-  render(<BotStatusLine activity={{ phase: "waiting", startedAt: 1_000 }} wording="follows" now={late} />);
+  render(
+    <BotStatusLine
+      activity={{ phase: "waiting", startedAt: 1_000 }}
+      wording="follows"
+      now={late}
+    />,
+  );
   assert.equal(said(), "Waiting for you");
   assert.equal(screen.queryByRole("note") === null, true, "waiting on the person");
   cleanup();
-  render(<BotStatusLine activity={{ phase: "stopping", startedAt: 1_000 }} wording="thinking" now={late} />);
+  render(
+    <BotStatusLine
+      activity={{ phase: "stopping", startedAt: 1_000 }}
+      wording="thinking"
+      now={late}
+    />,
+  );
   assert.equal(said(), "Stopping");
   assert.equal(screen.queryByRole("note") === null, true, "already stopping");
 });
@@ -70,16 +94,43 @@ test("the still-going note is only for work in progress, not while it waits on y
 test("a turn quiet for 10 minutes says it is taking longer than usual, without asking anything", () => {
   const minute = 60_000;
   // Long but moving: the last progress was a minute ago.
-  render(<BotStatusLine activity={reading} wording="follows" now={1_000 + 30 * minute} quietSince={1_000 + 29 * minute} />);
-  assert.equal(screen.getByRole("note").textContent, "Still going. I'll message you when it's done.");
+  render(
+    <BotStatusLine
+      activity={reading}
+      wording="follows"
+      now={1_000 + 30 * minute}
+      quietSince={1_000 + 29 * minute}
+    />,
+  );
+  assert.equal(
+    screen.getByRole("note").textContent,
+    "Still going. I'll message you when it's done.",
+  );
   cleanup();
   // Nothing has moved for 10 minutes.
-  render(<BotStatusLine activity={reading} wording="follows" now={1_000 + 30 * minute} quietSince={1_000 + 20 * minute} />);
-  assert.equal(screen.getByRole("note").textContent, "This is taking longer than usual. You can stop it from the message box.");
+  render(
+    <BotStatusLine
+      activity={reading}
+      wording="follows"
+      now={1_000 + 30 * minute}
+      quietSince={1_000 + 20 * minute}
+    />,
+  );
+  assert.equal(
+    screen.getByRole("note").textContent,
+    "This is taking longer than usual. You can stop it from the message box.",
+  );
   assert.equal(screen.queryByRole("button"), null, "the line offers no action of its own");
   cleanup();
   // Waiting on the person is never "taking longer".
-  render(<BotStatusLine activity={{ phase: "waiting", startedAt: 1_000 }} wording="follows" now={1_000 + 30 * minute} quietSince={1_000} />);
+  render(
+    <BotStatusLine
+      activity={{ phase: "waiting", startedAt: 1_000 }}
+      wording="follows"
+      now={1_000 + 30 * minute}
+      quietSince={1_000}
+    />,
+  );
   assert.equal(screen.queryByRole("note"), null);
 });
 
@@ -93,9 +144,15 @@ test("the live region starts empty and fills after it mounts, so the first wordi
   const region = screen.getByRole("status");
   assert.equal(announced(), "Getting ready");
   const filledLater = records.some(
-    (record) => record.target === region && Array.from(record.addedNodes).some((node) => node.textContent === "Getting ready"),
+    (record) =>
+      record.target === region &&
+      Array.from(record.addedNodes).some((node) => node.textContent === "Getting ready"),
   );
-  assert.equal(filledLater, true, "the wording arrives as a change inside the already-mounted region");
+  assert.equal(
+    filledLater,
+    true,
+    "the wording arrives as a change inside the already-mounted region",
+  );
 });
 
 test("the announcement changes at most once every 2 seconds, and ends on the newest wording", () => {
@@ -112,7 +169,11 @@ test("the announcement changes at most once every 2 seconds, and ends on the new
   assert.equal(announced(), "Reading, grocery-list.md", "still inside the gap");
 
   act(() => mock.timers.tick(1_000));
-  assert.equal(announced(), "Writing", "the gap passed: the newest wording wins, not the skipped one");
+  assert.equal(
+    announced(),
+    "Writing",
+    "the gap passed: the newest wording wins, not the skipped one",
+  );
 });
 
 test("a change after a quiet spell is announced at once", () => {
@@ -157,7 +218,12 @@ test("running labels share one second clock, stay current across staggered mount
   const Labels = ({ count, fixed = false }: { count: number; fixed?: boolean }) => (
     <>
       {Array.from({ length: count }, (_, index) => (
-        <BotStatusLine key={index} activity={reading} wording="thinking" now={fixed ? 40_250 : undefined} />
+        <BotStatusLine
+          key={index}
+          activity={reading}
+          wording="thinking"
+          now={fixed ? 40_250 : undefined}
+        />
       ))}
     </>
   );
@@ -170,7 +236,11 @@ test("running labels share one second clock, stay current across staggered mount
     assert.equal(pending.size, 1, "new labels join the existing clock");
     assert.equal(scheduled, 1, "staggered mounts do not reschedule its phase");
     act(() => t.mock.timers.tick(500));
-    assert.equal(screen.getAllByText("· 40s").length, 10, "all labels tick on the same wall-clock second");
+    assert.equal(
+      screen.getAllByText("· 40s").length,
+      10,
+      "all labels tick on the same wall-clock second",
+    );
     assert.equal(pending.size, 1);
     view.rerender(<Labels count={2} />);
     assert.equal(pending.size, 1, "unmounting some labels keeps the clock for the others");
@@ -178,7 +248,11 @@ test("running labels share one second clock, stay current across staggered mount
     assert.equal(pending.size, 0, "fixed previews never keep the clock alive");
     act(() => t.mock.timers.tick(5_000));
     view.rerender(<Labels count={2} />);
-    assert.equal(screen.getAllByText("· 45s").length, 2, "resuming after idle refreshes the cached time immediately");
+    assert.equal(
+      screen.getAllByText("· 45s").length,
+      2,
+      "resuming after idle refreshes the cached time immediately",
+    );
     assert.equal(pending.size, 1);
     view.unmount();
     assert.equal(pending.size, 0, "the final unmount cancels the only timer");

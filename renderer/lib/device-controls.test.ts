@@ -17,7 +17,10 @@ function deferred<T>() {
 
 function harness() {
   const reads: Array<ReturnType<typeof deferred<DeviceSettings>>> = [];
-  const runs: Array<{ input: DeviceActionInput; result: ReturnType<typeof deferred<DeviceSettings>> }> = [];
+  const runs: Array<{
+    input: DeviceActionInput;
+    result: ReturnType<typeof deferred<DeviceSettings>>;
+  }> = [];
   const states: DeviceControlsState[] = [];
   const controls = createDeviceControls({
     target: { hostId: "local", deviceId: "UDID" },
@@ -45,17 +48,26 @@ test("actions wait for settings, run one at a time, and adopt the confirmed sett
   assert.equal(await h.controls.act({ type: "setAppearance", value: "dark" }), false);
   h.reads[0]!.resolve({ appearance: "light" });
   await tick();
-  assert.deepEqual(h.controls.getState(), { settings: { appearance: "light" }, pending: false, error: null });
+  assert.deepEqual(h.controls.getState(), {
+    settings: { appearance: "light" },
+    pending: false,
+    error: null,
+  });
 
   const first = h.controls.act({ type: "setAppearance", value: "dark" });
   assert.equal(await h.controls.act({ type: "setTextSize", value: "large" }), false);
-  assert.deepEqual(h.runs.map((run) => run.input), [
-    { hostId: "local", deviceId: "UDID", type: "setAppearance", value: "dark" },
-  ]);
+  assert.deepEqual(
+    h.runs.map((run) => run.input),
+    [{ hostId: "local", deviceId: "UDID", type: "setAppearance", value: "dark" }],
+  );
   assert.equal(h.controls.getState().pending, true);
   h.runs[0]!.result.resolve({ appearance: "dark" });
   assert.equal(await first, true);
-  assert.deepEqual(h.controls.getState(), { settings: { appearance: "dark" }, pending: false, error: null });
+  assert.deepEqual(h.controls.getState(), {
+    settings: { appearance: "dark" },
+    pending: false,
+    error: null,
+  });
 });
 
 test("a failed action keeps the last confirmed settings and reports the error", async () => {
@@ -97,7 +109,11 @@ test("a read that fails leaves settings unknown so controls stay disabled", asyn
   h.controls.show();
   h.reads[0]!.reject(new Error("Simulator is not booted"));
   await tick();
-  assert.deepEqual(h.controls.getState(), { settings: null, pending: false, error: "Simulator is not booted" });
+  assert.deepEqual(h.controls.getState(), {
+    settings: null,
+    pending: false,
+    error: "Simulator is not booted",
+  });
   // A read that lands after hide is ignored.
   h.controls.show();
   h.controls.hide();

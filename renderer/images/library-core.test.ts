@@ -18,21 +18,64 @@ import {
 } from "./library-core";
 
 const item = (seed: string, patch: Partial<GalleryItem> = {}): GalleryItem => ({
-  assetId: seed.repeat(64), width: 8, height: 8, mediaType: "image/png", runId: "r", runState: "succeeded", workflowId: "wf-a",
-  workflowTitle: "Posters", nodeId: "g", nodeTitle: "Generate Image", variant: 0, index: 0, provider: "openrouter", model: "google/flash-image",
-  createdAt: 1_000, saved: true, thumbUrl: `thumb:${seed}`, ...patch,
+  assetId: seed.repeat(64),
+  width: 8,
+  height: 8,
+  mediaType: "image/png",
+  runId: "r",
+  runState: "succeeded",
+  workflowId: "wf-a",
+  workflowTitle: "Posters",
+  nodeId: "g",
+  nodeTitle: "Generate Image",
+  variant: 0,
+  index: 0,
+  provider: "openrouter",
+  model: "google/flash-image",
+  createdAt: 1_000,
+  saved: true,
+  thumbUrl: `thumb:${seed}`,
+  ...patch,
 });
 const ids = (items: readonly GalleryItem[]) => items.map((entry) => entry.assetId[0]).join("");
-const filters = (patch: Partial<LibraryFilters>): LibraryFilters => ({ ...EMPTY_LIBRARY_FILTERS, ...patch });
+const filters = (patch: Partial<LibraryFilters>): LibraryFilters => ({
+  ...EMPTY_LIBRARY_FILTERS,
+  ...patch,
+});
 const MODELS: ImageModelOption[] = [
-  { provider: "openrouter", providerLabel: "OpenRouter", model: "google/flash-image", label: "Nano Banana 2", acceptsReferences: true, textOutput: true },
+  {
+    provider: "openrouter",
+    providerLabel: "OpenRouter",
+    model: "google/flash-image",
+    label: "Nano Banana 2",
+    acceptsReferences: true,
+    textOutput: true,
+  },
 ];
 
 const LIBRARY = [
   item("a", { createdAt: 500, prompt: "A LIGHTHOUSE at dusk, oil painting" }),
-  item("b", { createdAt: 400, workflowId: "wf-b", workflowTitle: "Product shots", nodeTitle: "Hero", model: "black-forest/flux", prompt: "white sneaker" }),
-  item("c", { createdAt: 300, workflowId: "wf-gone", workflowTitle: undefined, nodeTitle: undefined, prompt: "lighthouse in fog" }),
-  item("d", { createdAt: 200, workflowId: "wf-b", workflowTitle: "Product shots", model: "black-forest/flux" }),
+  item("b", {
+    createdAt: 400,
+    workflowId: "wf-b",
+    workflowTitle: "Product shots",
+    nodeTitle: "Hero",
+    model: "black-forest/flux",
+    prompt: "white sneaker",
+  }),
+  item("c", {
+    createdAt: 300,
+    workflowId: "wf-gone",
+    workflowTitle: undefined,
+    nodeTitle: undefined,
+    prompt: "lighthouse in fog",
+  }),
+  item("d", {
+    createdAt: 200,
+    workflowId: "wf-b",
+    workflowTitle: "Product shots",
+    model: "black-forest/flux",
+  }),
 ];
 
 test("search is case-insensitive across prompt, model name, workflow title and node title, with every term required", () => {
@@ -52,9 +95,17 @@ test("search is case-insensitive across prompt, model name, workflow title and n
 test("workflow and model filters combine with the search, and images of deleted workflows share one choice", () => {
   assert.equal(ids(filterLibrary(LIBRARY, filters({ workflow: "wf-b" }))), "bd");
   assert.equal(ids(filterLibrary(LIBRARY, filters({ workflow: DELETED_WORKFLOWS_FACET }))), "c");
-  assert.equal(ids(filterLibrary(LIBRARY, filters({ model: "openrouter::google/flash-image" }))), "ac");
+  assert.equal(
+    ids(filterLibrary(LIBRARY, filters({ model: "openrouter::google/flash-image" }))),
+    "ac",
+  );
   assert.equal(ids(filterLibrary(LIBRARY, filters({ workflow: "wf-b", query: "sneaker" }))), "b");
-  assert.equal(ids(filterLibrary(LIBRARY, filters({ workflow: "wf-a", model: "openrouter::black-forest/flux" }))), "");
+  assert.equal(
+    ids(
+      filterLibrary(LIBRARY, filters({ workflow: "wf-a", model: "openrouter::black-forest/flux" })),
+    ),
+    "",
+  );
 });
 
 test("sorting puts the newest or the oldest first and keeps the gallery's order for ties", () => {
@@ -67,18 +118,40 @@ test("sorting puts the newest or the oldest first and keeps the gallery's order 
 
 test("facet counts follow the search and the other facet, most images first", () => {
   const all = libraryFacets(LIBRARY, EMPTY_LIBRARY_FILTERS, MODELS);
-  assert.deepEqual(all.workflows.map((option) => [option.label, option.count]), [["Product shots", 2], ["Deleted workflows", 1], ["Posters", 1]]);
-  assert.deepEqual(all.models.map((option) => [option.label, option.count]), [["black-forest/flux", 2], ["Nano Banana 2", 2]]);
+  assert.deepEqual(
+    all.workflows.map((option) => [option.label, option.count]),
+    [
+      ["Product shots", 2],
+      ["Deleted workflows", 1],
+      ["Posters", 1],
+    ],
+  );
+  assert.deepEqual(
+    all.models.map((option) => [option.label, option.count]),
+    [
+      ["black-forest/flux", 2],
+      ["Nano Banana 2", 2],
+    ],
+  );
   assert.equal(all.workflowTotal, 4);
 
   // Choosing a workflow narrows the model counts but not the workflow choices themselves.
   const picked = libraryFacets(LIBRARY, filters({ workflow: "wf-b" }), MODELS);
-  assert.deepEqual(picked.models.map((option) => [option.label, option.count]), [["black-forest/flux", 2]]);
+  assert.deepEqual(
+    picked.models.map((option) => [option.label, option.count]),
+    [["black-forest/flux", 2]],
+  );
   assert.equal(picked.workflows.length, 3);
   assert.equal(picked.modelTotal, 2);
 
   const searched = libraryFacets(LIBRARY, filters({ query: "lighthouse" }), MODELS);
-  assert.deepEqual(searched.workflows.map((option) => [option.key, option.count]), [[DELETED_WORKFLOWS_FACET, 1], ["wf-a", 1]]);
+  assert.deepEqual(
+    searched.workflows.map((option) => [option.key, option.count]),
+    [
+      [DELETED_WORKFLOWS_FACET, 1],
+      ["wf-a", 1],
+    ],
+  );
   assert.equal(searched.workflowTotal, 2);
 });
 
@@ -91,21 +164,40 @@ test("day sections read Today, Yesterday, then the date, by local calendar day, 
     item("d", { createdAt: new Date(2026, 9, 2, 12).getTime() }),
     item("e", { createdAt: new Date(2025, 9, 2, 12).getTime() }),
   ];
-  const sections = sectionByDay(sorted, now, (timestamp) => `date ${new Date(timestamp).getFullYear()}`);
-  assert.deepEqual(sections.map((section) => section.label), ["Today", "Yesterday", "date 2026", "date 2025"]);
-  assert.deepEqual(sections.map((section) => ids(section.entries.map((entry) => entry.item))), ["a", "bc", "d", "e"]);
+  const sections = sectionByDay(
+    sorted,
+    now,
+    (timestamp) => `date ${new Date(timestamp).getFullYear()}`,
+  );
+  assert.deepEqual(
+    sections.map((section) => section.label),
+    ["Today", "Yesterday", "date 2026", "date 2025"],
+  );
+  assert.deepEqual(
+    sections.map((section) => ids(section.entries.map((entry) => entry.item))),
+    ["a", "bc", "d", "e"],
+  );
   for (const section of sections) {
     for (const entry of section.entries) assert.equal(sorted[entry.index], entry.item);
   }
   // Oldest first keeps the same days, in the other order.
   const reversed = sectionByDay([...sorted].reverse(), now, () => "date");
-  assert.deepEqual(reversed.map((section) => section.label), ["date", "date", "Yesterday", "Today"]);
+  assert.deepEqual(
+    reversed.map((section) => section.label),
+    ["date", "date", "Yesterday", "Today"],
+  );
 });
 
 test("Save All sends at most the cap, in the order shown, and says when more exist", () => {
   const few = saveAllSelection(LIBRARY);
-  assert.deepEqual(few, { assetIds: LIBRARY.map((entry) => entry.assetId), total: 4, capped: false });
-  const many = Array.from({ length: SAVE_ALL_MAX_IMAGES + 5 }, (_, index) => item(String.fromCharCode(65 + (index % 26)), { createdAt: index }));
+  assert.deepEqual(few, {
+    assetIds: LIBRARY.map((entry) => entry.assetId),
+    total: 4,
+    capped: false,
+  });
+  const many = Array.from({ length: SAVE_ALL_MAX_IMAGES + 5 }, (_, index) =>
+    item(String.fromCharCode(65 + (index % 26)), { createdAt: index }),
+  );
   const capped = saveAllSelection(many);
   assert.equal(capped.assetIds.length, SAVE_ALL_MAX_IMAGES);
   assert.equal(capped.assetIds[0], many[0]!.assetId);
@@ -114,7 +206,10 @@ test("Save All sends at most the cap, in the order shown, and says when more exi
 });
 
 test("a tile's name gives its place, its workflow and a shortened prompt", () => {
-  assert.equal(tileLabel(LIBRARY[0]!, 0, 4), "Image 1 of 4, Posters: A LIGHTHOUSE at dusk, oil painting");
+  assert.equal(
+    tileLabel(LIBRARY[0]!, 0, 4),
+    "Image 1 of 4, Posters: A LIGHTHOUSE at dusk, oil painting",
+  );
   assert.equal(tileLabel(LIBRARY[3]!, 3, 4), "Image 4 of 4, Product shots");
   assert.equal(tileLabel(LIBRARY[2]!, 2, 4), "Image 3 of 4, Deleted workflow: lighthouse in fog");
   const long = tileLabel(item("z", { prompt: `${"word ".repeat(40)}\n\nend` }), 0, 1);

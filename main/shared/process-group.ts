@@ -47,7 +47,10 @@ function readLinuxProcStat(pid: number): LinuxProcStat | undefined {
     const closeParen = stat.lastIndexOf(")");
     if (closeParen < 0) return undefined;
     // Field 3 (state) is index 0 after `) `; field 4 (ppid) is 1; field 5 (pgrp) is 2; field 22 (starttime) is 19.
-    const fields = stat.slice(closeParen + 2).trim().split(" ");
+    const fields = stat
+      .slice(closeParen + 2)
+      .trim()
+      .split(" ");
     const state = fields[0];
     const ppid = Number(fields[1]);
     const pgid = Number(fields[2]);
@@ -151,7 +154,13 @@ export function listObservedProcesses(
       const uid = Number(match[4]);
       const stat = match[5] ?? "";
       const lstart = (match[6] ?? "").trim().replace(/\s+/gu, " ");
-      if (!Number.isSafeInteger(procPid) || procPid <= 0 || !Number.isSafeInteger(ppid) || !Number.isSafeInteger(pgid) || pgid <= 0) {
+      if (
+        !Number.isSafeInteger(procPid) ||
+        procPid <= 0 ||
+        !Number.isSafeInteger(ppid) ||
+        !Number.isSafeInteger(pgid) ||
+        pgid <= 0
+      ) {
         continue;
       }
       const lstartId = lstart ? `lstart:${lstart}` : undefined;
@@ -286,7 +295,9 @@ export function parseLinuxLsofUnixPeerInodes(
       localInodes.has(currentInode) &&
       currentName !== undefined
     ) {
-      const match = currentName.trim().match(/^type=(?:STREAM|SEQPACKET|DGRAM)\s+->INO=(\d+)(?:\s|$)/u);
+      const match = currentName
+        .trim()
+        .match(/^type=(?:STREAM|SEQPACKET|DGRAM)\s+->INO=(\d+)(?:\s|$)/u);
       const peerInode = match?.[1];
       if (peerInode && peerInode !== "0" && peerInode !== currentInode) {
         peers.set(currentInode, peerInode);
@@ -455,7 +466,9 @@ export function parseDarwinLsofSharedPipePids(
   transportFds: ReadonlySet<number>,
   candidatePids: ReadonlySet<number>,
 ): Set<number> {
-  return new Set(parseDarwinLsofSharedPipeMatches(stdout, selfPid, transportFds, candidatePids).keys());
+  return new Set(
+    parseDarwinLsofSharedPipeMatches(stdout, selfPid, transportFds, candidatePids).keys(),
+  );
 }
 
 function findTransportPipeVerifiedPids(
@@ -508,11 +521,15 @@ function findTransportPipeVerifiedPids(
       }
       if (!peerMap) {
         try {
-          const lsofOut = spawnSync("lsof", ["+E", "-nP", "-a", "-p", String(selfPid), "-F", "pftin"], {
-            encoding: "utf8",
-            timeout: 2_000,
-            maxBuffer: 4 * 1024 * 1024,
-          });
+          const lsofOut = spawnSync(
+            "lsof",
+            ["+E", "-nP", "-a", "-p", String(selfPid), "-F", "pftin"],
+            {
+              encoding: "utf8",
+              timeout: 2_000,
+              maxBuffer: 4 * 1024 * 1024,
+            },
+          );
           if (!lsofOut.error && lsofOut.stdout) {
             peerMap = parseLinuxLsofUnixPeerInodes(
               lsofOut.stdout,
@@ -561,7 +578,8 @@ function findTransportPipeVerifiedPids(
       // Re-verify both ends after FD inspection to close PID-reuse / FD-reuse TOCTOU.
       if (isTransportFdStillOpen && !isTransportFdStillOpen(matchedSourceFd)) continue;
       try {
-        if (readlinkSync(`/proc/self/fd/${matchedSourceFd}`) !== fdTargetByFd.get(matchedSourceFd)) continue;
+        if (readlinkSync(`/proc/self/fd/${matchedSourceFd}`) !== fdTargetByFd.get(matchedSourceFd))
+          continue;
       } catch {
         continue;
       }
@@ -598,7 +616,8 @@ function findTransportPipeVerifiedPids(
       for (const [pid, matchedFds] of matched) {
         const cand = candidateByPid.get(pid);
         if (!cand?.startId) continue;
-        if (![...matchedFds].some((fd) => !isTransportFdStillOpen || isTransportFdStillOpen(fd))) continue;
+        if (![...matchedFds].some((fd) => !isTransportFdStillOpen || isTransportFdStillOpen(fd)))
+          continue;
         if (readProcessStartId(cand.pid) === cand.startId) {
           verified.add(cand.pid);
         }
@@ -629,7 +648,15 @@ function findTransportPipeVerifiedPids(
 export function selectVerifiedProcessGroupSurvivors(
   input: VerifyProcessGroupSurvivorsInput,
 ): ProcessIncarnationSurvivor[] {
-  const { pgid, processes, leaderStartId, parentPid, currentUid, preExitMembers, pipeVerifiedPids } = input;
+  const {
+    pgid,
+    processes,
+    leaderStartId,
+    parentPid,
+    currentUid,
+    preExitMembers,
+    pipeVerifiedPids,
+  } = input;
   if (!Number.isSafeInteger(pgid) || pgid <= 0) return [];
   const byPid = new Map<number, ObservedProcessEntry>();
   const members: ObservedProcessEntry[] = [];
@@ -661,7 +688,12 @@ export function selectVerifiedProcessGroupSurvivors(
   const preExitKeys = new Set<string>();
   if (preExitMembers) {
     for (const entry of preExitMembers) {
-      if (Number.isSafeInteger(entry.pid) && entry.pid > 0 && entry.pid !== pgid && entry.startId.length > 0) {
+      if (
+        Number.isSafeInteger(entry.pid) &&
+        entry.pid > 0 &&
+        entry.pid !== pgid &&
+        entry.startId.length > 0
+      ) {
         preExitKeys.add(`${entry.pid}:${entry.startId}`);
       }
     }
@@ -715,7 +747,13 @@ export function observePreExitProcessGroupMembers(
   const processes = listObservedProcesses({ exactStartIdForPgids: new Set([pgid]) });
   if (!processes) return [];
   const leader = processes.find((proc) => proc.pid === pgid);
-  if (!leader || leader.zombie || leader.pgid !== pgid || leader.ppid !== parentPid || leader.startId !== leaderStartId) {
+  if (
+    !leader ||
+    leader.zombie ||
+    leader.pgid !== pgid ||
+    leader.ppid !== parentPid ||
+    leader.startId !== leaderStartId
+  ) {
     return [];
   }
   const currentUid = typeof process.getuid === "function" ? process.getuid() : undefined;
@@ -740,7 +778,12 @@ export function captureProcessGroupSurvivors(
   pgid: number,
   options: CaptureProcessGroupSurvivorsOptions = {},
 ): ProcessIncarnationSurvivor[] {
-  if (process.platform === "win32" || !Number.isSafeInteger(pgid) || pgid <= 0 || !processGroupExists(pgid)) {
+  if (
+    process.platform === "win32" ||
+    !Number.isSafeInteger(pgid) ||
+    pgid <= 0 ||
+    !processGroupExists(pgid)
+  ) {
     return [];
   }
   const processes = listObservedProcesses({ exactStartIdForPgids: new Set([pgid]) });
@@ -779,7 +822,9 @@ export function captureProcessGroupSurvivors(
       preExitMembers: options.preExitMembers,
     });
     const alreadyVerifiedPids = new Set(alreadyVerified.map((s) => s.pid));
-    const unverifiedCandidates = eligibleCandidates.filter((cand) => !alreadyVerifiedPids.has(cand.pid));
+    const unverifiedCandidates = eligibleCandidates.filter(
+      (cand) => !alreadyVerifiedPids.has(cand.pid),
+    );
     if (unverifiedCandidates.length > 0) {
       pipeVerifiedPids = findTransportPipeVerifiedPids(
         unverifiedCandidates,
@@ -822,15 +867,20 @@ export function processGroupExists(pid: number | undefined): boolean {
 export async function processGroupStillRuns(group: number): Promise<boolean> {
   if (!processGroupExists(group)) return false;
   return new Promise((resolve) => {
-    execFile("ps", ["-A", "-o", "pgid=,stat="], { timeout: 2_000, maxBuffer: 4 * 1024 * 1024 }, (error, stdout) => {
-      if (error || typeof stdout !== "string") return resolve(true);
-      resolve(
-        stdout.split("\n").some((line) => {
-          const [pgid, stat] = line.trim().split(/\s+/u);
-          return Number(pgid) === group && Boolean(stat) && !stat!.startsWith("Z");
-        }),
-      );
-    });
+    execFile(
+      "ps",
+      ["-A", "-o", "pgid=,stat="],
+      { timeout: 2_000, maxBuffer: 4 * 1024 * 1024 },
+      (error, stdout) => {
+        if (error || typeof stdout !== "string") return resolve(true);
+        resolve(
+          stdout.split("\n").some((line) => {
+            const [pgid, stat] = line.trim().split(/\s+/u);
+            return Number(pgid) === group && Boolean(stat) && !stat!.startsWith("Z");
+          }),
+        );
+      },
+    );
   });
 }
 
@@ -870,11 +920,15 @@ export async function groupStoppedWithin(probe: ProcessGroupProbe, ms: number): 
     let timer: ReturnType<typeof setTimeout> | undefined;
     const runs = await Promise.race([
       probe.stillRuns(),
-      new Promise<boolean>((resolve) => { timer = setTimeout(() => resolve(true), remaining); }),
+      new Promise<boolean>((resolve) => {
+        timer = setTimeout(() => resolve(true), remaining);
+      }),
     ]);
     clearTimeout(timer);
     if (!runs) return true;
-    await new Promise((resolve) => setTimeout(resolve, Math.min(STOP_POLL_MS, Math.max(0, deadline - Date.now()))));
+    await new Promise((resolve) =>
+      setTimeout(resolve, Math.min(STOP_POLL_MS, Math.max(0, deadline - Date.now()))),
+    );
   }
 }
 
@@ -903,14 +957,20 @@ export function createProcessGroupTerminator(
 ): ProcessGroupTerminator {
   let requested = false;
   let done: Promise<ProcessGroupSettlement> = Promise.resolve("not_requested");
-  const alive = options.probe?.exists ?? (() =>
-    process.platform === "win32"
-      ? child.exitCode === null && child.signalCode === null
-      : processGroupExists(child.pid));
-  const stillRuns = options.probe?.stillRuns ?? (async () =>
-    process.platform === "win32" ? alive() : processGroupStillRuns(child.pid!));
+  const alive =
+    options.probe?.exists ??
+    (() =>
+      process.platform === "win32"
+        ? child.exitCode === null && child.signalCode === null
+        : processGroupExists(child.pid));
+  const stillRuns =
+    options.probe?.stillRuns ??
+    (async () => (process.platform === "win32" ? alive() : processGroupStillRuns(child.pid!)));
   const confirmKilled = async (): Promise<ProcessGroupSettlement> =>
-    (await groupStoppedWithin({ exists: alive, stillRuns }, options.killConfirmMs ?? KILL_CONFIRM_MS))
+    (await groupStoppedWithin(
+      { exists: alive, stillRuns },
+      options.killConfirmMs ?? KILL_CONFIRM_MS,
+    ))
       ? "exit_confirmed"
       : "cleanup_unconfirmed";
   return {
@@ -984,7 +1044,9 @@ export function waitForChildExit(
         settle(() => resolve({ code, signal, pipesHeld: true }));
       }, options.drainMs);
     });
-    child.once("close", (code, signal) => settle(() => resolve({ code, signal, pipesHeld: false })));
+    child.once("close", (code, signal) =>
+      settle(() => resolve({ code, signal, pipesHeld: false })),
+    );
   });
 }
 

@@ -6,7 +6,11 @@
 import { createHash, randomUUID } from "node:crypto";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import { ManagedWorktreeFileIoError, transferManagedWorktreeFile, type ManagedWorktreeRootIdentity } from "./managed-worktree-file-io.js";
+import {
+  ManagedWorktreeFileIoError,
+  transferManagedWorktreeFile,
+  type ManagedWorktreeRootIdentity,
+} from "./managed-worktree-file-io.js";
 import { syncDirectory } from "./durable-fs.js";
 
 const SNAPSHOT_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/u;
@@ -352,7 +356,9 @@ export async function captureProvisionedFile(
   const blobTarget = path.join(snapshotDirPath, blobPath);
   try {
     if (await pathExists(blobTarget)) {
-      const existing = createHash("sha256").update(await fs.readFile(blobTarget)).digest("hex");
+      const existing = createHash("sha256")
+        .update(await fs.readFile(blobTarget))
+        .digest("hex");
       if (existing !== copied.digest) {
         throw new ManagedWorktreeSnapshotError(
           "blob_corrupt",
@@ -413,10 +419,13 @@ export async function restoreProvisionedFiles(
 ): Promise<void> {
   await verifyProvisionedFileBlobs(snapshotDirPath, provisionedFiles);
   for (const file of provisionedFiles) {
-    if (normalizedRelativePath(file.relativePath) !== file.relativePath ||
-        normalizedRelativePath(file.blobPath) !== file.blobPath) {
+    if (
+      normalizedRelativePath(file.relativePath) !== file.relativePath ||
+      normalizedRelativePath(file.blobPath) !== file.blobPath
+    ) {
       throw new ManagedWorktreeSnapshotError(
-        "snapshot_invalid", "A provisioned-file snapshot entry could not be verified.",
+        "snapshot_invalid",
+        "A provisioned-file snapshot entry could not be verified.",
       );
     }
     try {
@@ -434,8 +443,11 @@ export async function restoreProvisionedFiles(
     } catch (error) {
       const code = error instanceof ManagedWorktreeFileIoError ? error.code : undefined;
       throw new ManagedWorktreeSnapshotError(
-        code === "destination_exists" ? "destination_exists"
-          : code === "blob_corrupt" ? "blob_corrupt" : "snapshot_invalid",
+        code === "destination_exists"
+          ? "destination_exists"
+          : code === "blob_corrupt"
+            ? "blob_corrupt"
+            : "snapshot_invalid",
         "A provisioned-file destination could not be restored safely.",
         error,
       );

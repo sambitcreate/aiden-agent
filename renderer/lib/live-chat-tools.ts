@@ -75,7 +75,9 @@ export class LiveChatRequestGate {
    * Sends a note and moves the fence only once main confirms Live got it. A
    * note that was dropped never reached Live, so it can't have asked for anything.
    */
-  async deliverNote(send: (options: { awaitDelivery: true }) => Promise<boolean>): Promise<boolean> {
+  async deliverNote(
+    send: (options: { awaitDelivery: true }) => Promise<boolean>,
+  ): Promise<boolean> {
     let delivered = false;
     try {
       delivered = await send({ awaitDelivery: true });
@@ -158,7 +160,12 @@ export function createLiveChatToolHandlers(
 
   /** Every handler: switch first, then the one-time notice, then the tool, in turn. */
   const guarded =
-    (run: (args: Record<string, unknown>, context: LiveRendererToolContext) => Promise<LiveRendererToolResult> | LiveRendererToolResult): LiveRendererToolHandler =>
+    (
+      run: (
+        args: Record<string, unknown>,
+        context: LiveRendererToolContext,
+      ) => Promise<LiveRendererToolResult> | LiveRendererToolResult,
+    ): LiveRendererToolHandler =>
     (args, context) => {
       let handedOff: Promise<void> = Promise.resolve();
       const next = tail.then(async () => {
@@ -221,7 +228,10 @@ export function createLiveChatToolHandlers(
           busy: snapshot.busy,
           ...(snapshot.waitingForApproval ? { waitingForApproval: true } : {}),
         },
-        untrusted_chat_content: { title: redactLiveChatSecrets(snapshot.title), messages: snapshot.messages },
+        untrusted_chat_content: {
+          title: redactLiveChatSecrets(snapshot.title),
+          messages: snapshot.messages,
+        },
         ...(snapshot.truncated ? { olderMessagesLeftOut: true } : {}),
       };
     }),
@@ -252,25 +262,34 @@ export function createLiveChatToolHandlers(
       if (context.signal.aborted) return cancelled();
       if (found.kind === "none") return liveChatFailure(LIVE_CHAT_ERRORS.notFound);
       if (found.kind === "ambiguous") {
-        return { ok: true, opened: false, untrusted_chat_content: { closeMatches: found.titles.map(redactLiveChatSecrets) } };
+        return {
+          ok: true,
+          opened: false,
+          untrusted_chat_content: { closeMatches: found.titles.map(redactLiveChatSecrets) },
+        };
       }
       const title = { untrusted_chat_content: { title: redactLiveChatSecrets(found.chat.title) } };
       if (deps.controller()?.chatId === found.chat.id) {
         return { ok: true, opened: true, alreadyOpen: true, ...title };
       }
       if (!commit(context)) return cancelled();
-      if (!(await deps.openChat(found.chat.id))) return liveChatFailure(LIVE_CHAT_ERRORS.navigationBlocked);
+      if (!(await deps.openChat(found.chat.id)))
+        return liveChatFailure(LIVE_CHAT_ERRORS.navigationBlocked);
       return { ok: true, opened: true, ...title };
     }),
 
     start_new_chat: guarded(async (args, context) => {
       const workspaceName =
-        args.workspace === undefined ? null : boundedText(args.workspace, LIVE_CHAT_MAX_WORKSPACE_CHARS);
-      const text = args.text === undefined ? null : boundedText(args.text, LIVE_CHAT_MAX_SEND_CHARS);
+        args.workspace === undefined
+          ? null
+          : boundedText(args.workspace, LIVE_CHAT_MAX_WORKSPACE_CHARS);
+      const text =
+        args.text === undefined ? null : boundedText(args.text, LIVE_CHAT_MAX_SEND_CHARS);
       if ((args.workspace !== undefined && !workspaceName) || (args.text !== undefined && !text)) {
         return liveChatFailure(LIVE_CHAT_ERRORS.invalid);
       }
-      if (text && !deps.requests.allows()) return liveChatFailure(LIVE_CHAT_ERRORS.needsUserRequest);
+      if (text && !deps.requests.allows())
+        return liveChatFailure(LIVE_CHAT_ERRORS.needsUserRequest);
       const workspaces = await deps.listWorkspaces();
       const workspace = workspaceName
         ? findLiveWorkspace(workspaces, workspaceName)
@@ -278,7 +297,11 @@ export function createLiveChatToolHandlers(
       if (!workspace) return liveChatFailure(LIVE_CHAT_ERRORS.workspaceNotFound);
       if (!commit(context)) return cancelled();
       const workspaceLabel = redactLiveChatSecrets(workspace.name);
-      const started = { ok: true, started: true, untrusted_chat_content: { workspace: workspaceLabel } };
+      const started = {
+        ok: true,
+        started: true,
+        untrusted_chat_content: { workspace: workspaceLabel },
+      };
       let draftId: string | null;
       try {
         draftId = await deps.openNewChatIn(workspace.id);
@@ -309,7 +332,8 @@ export function createLiveChatToolHandlers(
 }
 
 /** Shown once, the first time Live uses a chat tool. */
-export const LIVE_CHAT_ACCESS_NOTICE = "Live can read and send to your chats. You can turn this off in Settings.";
+export const LIVE_CHAT_ACCESS_NOTICE =
+  "Live can read and send to your chats. You can turn this off in Settings.";
 
 /**
  * The one-time chat access notice: the first use shows it and remembers that

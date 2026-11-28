@@ -1,6 +1,11 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { BOT_RUN_STALL_MS, BOT_RUN_WATCHDOG_INTERVAL_MS, createBotRunWatchdog, createBotRunStalls } from "./bot-run-watchdog.js";
+import {
+  BOT_RUN_STALL_MS,
+  BOT_RUN_WATCHDOG_INTERVAL_MS,
+  createBotRunWatchdog,
+  createBotRunStalls,
+} from "./bot-run-watchdog.js";
 
 function setup(kind: "routine" | "attended", options: { waiting?: boolean } = {}) {
   let now = 0;
@@ -14,14 +19,19 @@ function setup(kind: "routine" | "attended", options: { waiting?: boolean } = {}
     runKind: () => kind,
     isWaitingOnPerson: () => waiting,
     isWaitingOnUsageLimit: () => limited,
-    stopForStall: async (botId) => { stopped.push(botId); },
+    stopForStall: async (botId) => {
+      stopped.push(botId);
+    },
     now: () => now,
     setInterval: () => ({ cancel: () => undefined }),
   });
   return {
-    watchdog, stopped,
+    watchdog,
+    stopped,
     wakeFromSleep: () => watchdog.resume(),
-    at: (value: number) => { now = value; },
+    at: (value: number) => {
+      now = value;
+    },
     /** Lets the clock run to `value` with the interval checking every minute on the way. */
     advance: async (value: number) => {
       while (now + BOT_RUN_WATCHDOG_INTERVAL_MS < value) {
@@ -30,9 +40,15 @@ function setup(kind: "routine" | "attended", options: { waiting?: boolean } = {}
       }
       now = value;
     },
-    progressAt: (value: number) => { progress = value; },
-    setWaiting: (value: boolean) => { waiting = value; },
-    setLimited: (value: boolean) => { limited = value; },
+    progressAt: (value: number) => {
+      progress = value;
+    },
+    setWaiting: (value: boolean) => {
+      waiting = value;
+    },
+    setLimited: (value: boolean) => {
+      limited = value;
+    },
   };
 }
 
@@ -67,7 +83,11 @@ test("a run waiting out a usage limit is not stopped, and gets a full window onc
   assert.deepEqual(h.stopped, []);
   h.at(30 * 60_000 + BOT_RUN_STALL_MS);
   await h.watchdog.check();
-  assert.deepEqual(h.stopped, ["bot-1"], "a run that stays quiet after the limit clears is still stuck");
+  assert.deepEqual(
+    h.stopped,
+    ["bot-1"],
+    "a run that stays quiet after the limit clears is still stuck",
+  );
 });
 
 test("a run the person started is never stopped, however long it is quiet", async () => {

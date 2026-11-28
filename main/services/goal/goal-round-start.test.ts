@@ -23,10 +23,18 @@ test("a round carries the last run's provider, model, folder, thinking and withh
   assert.equal(params.model, "claude-sonnet");
   assert.equal(params.thinkingLevel, "high");
   assert.deepEqual(params.messages, []);
-  assert.equal("permission" in params, false, "the chat's approval mode applies, as for the person's turns");
+  assert.equal(
+    "permission" in params,
+    false,
+    "the chat's approval mode applies, as for the person's turns",
+  );
   assert.equal(options.turnId, "stream-1");
   assert.deepEqual([...(options.excludeToolNames ?? [])], ["browser"]);
-  assert.notEqual(options.excludeToolNames, context.excludeToolNames, "the round's set is its own copy");
+  assert.notEqual(
+    options.excludeToolNames,
+    context.excludeToolNames,
+    "the round's set is its own copy",
+  );
   assert.equal(options.unattended, undefined, "a round is attended");
 });
 

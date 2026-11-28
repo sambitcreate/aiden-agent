@@ -25,11 +25,11 @@ Each field is `"type"` or `"type: what to find"`, with up to 16 fields per call.
 
 Every field comes back with one of three statuses:
 
-| Status | Meaning | Shape |
-| --- | --- | --- |
-| `extracted` | Typed, confident (0.80 or more) and found on the page | `{ status, value, confidence, sourceLine }` |
+| Status      | Meaning                                                     | Shape                                                    |
+| ----------- | ----------------------------------------------------------- | -------------------------------------------------------- |
+| `extracted` | Typed, confident (0.80 or more) and found on the page       | `{ status, value, confidence, sourceLine }`              |
 | `uncertain` | A guess: low confidence, the wrong type, or not on the page | `{ status, guess, confidence?, sourceLine?, notFound? }` |
-| `null` | The page has no value | `{ status: "null", value: null }` |
+| `null`      | The page has no value                                       | `{ status: "null", value: null }`                        |
 
 A value counts as found only when it appears in the page text (numbers, dates and words are matched the way people write them, so `$1,399` matches `1399`). A scale is part of the number: `1.2k` supports `1200`, never `1.2`. A duration counts only when the page writes it with a unit that converts exactly to the one asked for ("2 weeks" is 14 days, but years never become days), and one written in parts, like "1 hour 30 minutes", counts only as its total. A date and time counts only when the date, the time and the whole UTC offset are on the same line, so "UTC+9:30" never matches +09:00. A value the page doesn't contain is always `uncertain` with `notFound: true`, never `extracted`, however confident the model was. An uncertain value is a `guess`, never a `value`, so code can't mistake one for the other.
 
@@ -73,9 +73,9 @@ A completed extract shows a card under its activity line, on the desktop and on 
 
 The same change trimmed the web and browser tool definitions the model reads on every turn, as pi-web-access 0.45.0 did. Measured with the o200k tokenizer over `web_search`, the browser tool loader, the 14 browser tools and the browser guidance:
 
-| | Before | After |
-| --- | --- | --- |
-| Description text | 1,015 tokens | 440 tokens (−57%) |
+|                                     | Before       | After               |
+| ----------------------------------- | ------------ | ------------------- |
+| Description text                    | 1,015 tokens | 440 tokens (−57%)   |
 | Whole definitions, schemas included | 2,754 tokens | 1,566 tokens (−43%) |
 
 Browser tools no longer show the model their length and range limits. Those limits are still enforced when a tool runs. `web_fetch` itself adds 51 tokens in read mode and 163 with extract mode on.

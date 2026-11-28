@@ -471,7 +471,9 @@ async function childCompactingAfterItsReply(options: { botHelper?: boolean } = {
     },
     ...Array.from({ length: 4 }, () => (context: unknown) => {
       record(context);
-      return fauxAssistantMessage("## Goal\nchild checkpoint\n\n## Next Steps\n1. Report the findings.");
+      return fauxAssistantMessage(
+        "## Goal\nchild checkpoint\n\n## Next Steps\n1. Report the findings.",
+      );
     }),
   ]);
   // A documented five-minute lifetime, so the child's ledger keeps its request.
@@ -494,11 +496,17 @@ async function childCompactingAfterItsReply(options: { botHelper?: boolean } = {
   };
   const registry = new SubagentRuntimeRegistry();
   const child = registry.create({
-    authority: { generationId: "child-prefix-generation", chatId: "child-prefix-chat", workspaceId: "child-prefix-workspace" },
+    authority: {
+      generationId: "child-prefix-generation",
+      chatId: "child-prefix-chat",
+      workspaceId: "child-prefix-workspace",
+    },
     groupId: "child-prefix",
     runtime: modelRuntime,
     ...(options.botHelper ? { transformRuntime: (runtime: ResolvedModelRuntime) => runtime } : {}),
-    compactionModelOverrides: { "aiden-child-prefix/child-prefix": { reserveTokens: 2_048, keepRecentTokens: 1_024 } },
+    compactionModelOverrides: {
+      "aiden-child-prefix/child-prefix": { reserveTokens: 2_048, keepRecentTokens: 1_024 },
+    },
     thinkingLevel: "high",
     systemPrompt: "Complete one bounded child task.",
     tools: [],
@@ -527,6 +535,10 @@ test("a Bot helper child's compaction keeps the isolated summary request", async
   assert.equal(outcome.kind, "completed", JSON.stringify(outcome));
   assert.ok(requests.length >= 2, "the reply crosses the trigger, so a summary is requested");
   const [turn, summary] = requests as [RecordedRequest, RecordedRequest];
-  assert.notDeepEqual(summary.messages[0], turn.messages[0], "the summary has its own system prompt");
+  assert.notDeepEqual(
+    summary.messages[0],
+    turn.messages[0],
+    "the summary has its own system prompt",
+  );
   assert.match(JSON.stringify(summary.messages[0]), /context summarization assistant/u);
 });

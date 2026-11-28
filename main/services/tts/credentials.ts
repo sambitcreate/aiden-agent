@@ -15,7 +15,9 @@ export async function readSavedGoogleTtsKey(
   store: Pick<CredentialStore, "read">,
 ): Promise<string | null> {
   const credential = await store.read("google");
-  return credential?.type === "api_key" && typeof credential.key === "string" && credential.key.trim()
+  return credential?.type === "api_key" &&
+    typeof credential.key === "string" &&
+    credential.key.trim()
     ? credential.key.trim()
     : null;
 }

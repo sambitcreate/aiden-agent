@@ -156,9 +156,7 @@ test("create intents persist, cap, and clear", async (t) => {
   await store.clearCreateIntent("chat-1", "op-1");
   assert.deepEqual(await store.listCreateIntents("chat-1"), []);
 
-  await assert.rejects(
-    store.recordCreateIntent("chat-1", { ...intent, operationId: "bad id" }),
-  );
+  await assert.rejects(store.recordCreateIntent("chat-1", { ...intent, operationId: "bad id" }));
 });
 
 test("pending intents are never evicted — capacity rejects the new intent", async (t) => {
@@ -249,16 +247,9 @@ test("stale create completion cannot resurrect an explicitly unlinked PR", async
   });
   await store.link("chat-1", link(12), "op");
   await store.unlink("chat-1", link(12));
-  await assert.rejects(
-    store.link("chat-1", link(12), "op"),
-    /no longer pending/,
-  );
+  await assert.rejects(store.link("chat-1", link(12), "op"), /no longer pending/);
   assert.deepEqual(await store.list("chat-1"), []);
-  assert.equal(
-    (await new ChatPullRequestStore(() => directory).listDismissed("chat-1"))
-      .length,
-    1,
-  );
+  assert.equal((await new ChatPullRequestStore(() => directory).listDismissed("chat-1")).length, 1);
 });
 
 test("future schema and malformed pending expectations stay write-protected", async (t) => {
@@ -349,10 +340,7 @@ test("deletion waits for a read that is recovering a held PR file", async (t) =>
   const directory = await mkdtemp(path.join(tmpdir(), "aiden-chat-pr-"));
   t.after(() => rm(directory, { recursive: true, force: true }));
   await fs.writeFile(
-    path.join(
-      directory,
-      ".chat-1.json.absent.00000000-0000-4000-8000-000000000000.held",
-    ),
+    path.join(directory, ".chat-1.json.absent.00000000-0000-4000-8000-000000000000.held"),
     JSON.stringify({
       schemaVersion: 1,
       chatId: "chat-1",
@@ -411,24 +399,15 @@ test("deletion consumes failed recovery artifacts before restart without touchin
     pendingCreates: [],
   });
   await fs.writeFile(
-    path.join(
-      directory,
-      ".chat-1.json.absent.00000000-0000-4000-8000-000000000001.held",
-    ),
+    path.join(directory, ".chat-1.json.absent.00000000-0000-4000-8000-000000000001.held"),
     payload,
   );
   await fs.writeFile(
-    path.join(
-      directory,
-      ".chat-1.json.absent.00000000-0000-4000-8000-000000000001.previous",
-    ),
+    path.join(directory, ".chat-1.json.absent.00000000-0000-4000-8000-000000000001.previous"),
     payload,
   );
   await fs.writeFile(
-    path.join(
-      directory,
-      ".chat-10.json.absent.00000000-0000-4000-8000-000000000002.held",
-    ),
+    path.join(directory, ".chat-10.json.absent.00000000-0000-4000-8000-000000000002.held"),
     "other chat",
   );
   const prototype = DataStore.prototype as unknown as {
@@ -452,10 +431,7 @@ test("deletion consumes recovery artifacts even when no store was loaded", async
   const directory = await mkdtemp(path.join(tmpdir(), "aiden-chat-pr-"));
   t.after(() => rm(directory, { recursive: true, force: true }));
   await fs.writeFile(
-    path.join(
-      directory,
-      ".chat-1.json.absent.00000000-0000-4000-8000-000000000003.held",
-    ),
+    path.join(directory, ".chat-1.json.absent.00000000-0000-4000-8000-000000000003.held"),
     JSON.stringify({
       schemaVersion: 1,
       chatId: "chat-1",
@@ -464,10 +440,7 @@ test("deletion consumes recovery artifacts even when no store was loaded", async
     }),
   );
   await new ChatPullRequestStore(() => directory).deleteChat("chat-1");
-  assert.deepEqual(
-    await new ChatPullRequestStore(() => directory).list("chat-1"),
-    [],
-  );
+  assert.deepEqual(await new ChatPullRequestStore(() => directory).list("chat-1"), []);
   assert.deepEqual(await fs.readdir(directory), []);
 });
 
@@ -482,16 +455,12 @@ for (const [deletedId, siblingId] of [
       const store = new ChatPullRequestStore(() => directory);
       if (cached) await store.list(deletedId);
       const siblingNames = ["held", "previous"].map(
-        (suffix) =>
-          `.${siblingId}.json.absent.00000000-0000-4000-8000-000000000004.${suffix}`,
+        (suffix) => `.${siblingId}.json.absent.00000000-0000-4000-8000-000000000004.${suffix}`,
       );
       for (const name of siblingNames)
         await fs.writeFile(path.join(directory, name), "sibling data");
       await fs.writeFile(
-        path.join(
-          directory,
-          `.${deletedId}.json.absent.00000000-0000-4000-8000-000000000005.held`,
-        ),
+        path.join(directory, `.${deletedId}.json.absent.00000000-0000-4000-8000-000000000005.held`),
         "own data",
       );
       await fs.writeFile(
@@ -502,15 +471,9 @@ for (const [deletedId, siblingId] of [
         "own data",
       );
       await store.deleteChat(deletedId);
-      assert.deepEqual(
-        (await fs.readdir(directory)).sort(),
-        siblingNames.sort(),
-      );
+      assert.deepEqual((await fs.readdir(directory)).sort(), siblingNames.sort());
       for (const name of siblingNames)
-        assert.equal(
-          await fs.readFile(path.join(directory, name), "utf8"),
-          "sibling data",
-        );
+        assert.equal(await fs.readFile(path.join(directory, name), "utf8"), "sibling data");
     });
   }
 }
@@ -523,9 +486,7 @@ test("recovery and deletion preserve files with non-generated operation tokens",
     "00000000-0000-1000-8000-000000000000",
     "00000000-0000-4000-0000-000000000000",
   ].flatMap((token) =>
-    ["held", "previous"].map(
-      (suffix) => `.chat-1.json.absent.${token}.${suffix}`,
-    ),
+    ["held", "previous"].map((suffix) => `.chat-1.json.absent.${token}.${suffix}`),
   );
   const payload = JSON.stringify({
     schemaVersion: 1,
@@ -533,15 +494,11 @@ test("recovery and deletion preserve files with non-generated operation tokens",
     links: [link(12)],
     pendingCreates: [],
   });
-  for (const name of names)
-    await fs.writeFile(path.join(directory, name), payload);
+  for (const name of names) await fs.writeFile(path.join(directory, name), payload);
   const store = new ChatPullRequestStore(() => directory);
   assert.deepEqual(await store.list("chat-1"), []);
   await store.deleteChat("chat-1");
   assert.deepEqual((await fs.readdir(directory)).sort(), names.sort());
   for (const name of names)
-    assert.equal(
-      await fs.readFile(path.join(directory, name), "utf8"),
-      payload,
-    );
+    assert.equal(await fs.readFile(path.join(directory, name), "utf8"), payload);
 });

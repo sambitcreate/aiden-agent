@@ -123,7 +123,9 @@ test("owned help and inert settings cards work with no workspace file access; cl
   expect(JSON.stringify(navigation.results)).not.toContain("unavailable");
 });
 
-test("turning Skills off from chat finishes that reply and applies from the next skill call", async ({ aiden }) => {
+test("turning Skills off from chat finishes that reply and applies from the next skill call", async ({
+  aiden,
+}) => {
   const { page, lmStudio } = aiden;
   await finishLmStudioOnboarding(page);
   const invoke = <T>(channel: string, ...args: unknown[]) =>
@@ -177,7 +179,10 @@ test("Aiden changes the color theme and the model for new chats from chat, and t
     // A second ready model so there is somewhere to switch to.
     const providers = await ipc.invoke<{ id: string; models: string[] }[]>("providers:list");
     const lmStudio = providers.find((provider) => provider.id === "custom:lmstudio")!;
-    await ipc.invoke("providers:save", { ...lmStudio, models: [...lmStudio.models, "aiden-e2e-second"] });
+    await ipc.invoke("providers:save", {
+      ...lmStudio,
+      models: [...lmStudio.models, "aiden-e2e-second"],
+    });
     return ipc.invoke<AppSettings>("settings:get");
   });
   const prompt = "App control test: use the Moss theme and the second model for new chats.";
@@ -216,7 +221,9 @@ test("Aiden changes the color theme and the model for new chats from chat, and t
     .poll(() => page.evaluate(() => localStorage.getItem("aiden-agent.model")))
     .toBe("aiden-e2e-second");
   const saved = await page.evaluate(() =>
-    (window as unknown as { aidenAPI: { ipc: Ipc } }).aidenAPI.ipc.invoke<AppSettings>("settings:get"),
+    (window as unknown as { aidenAPI: { ipc: Ipc } }).aidenAPI.ipc.invoke<AppSettings>(
+      "settings:get",
+    ),
   );
   expect(saved.lastModel).toBe("aiden-e2e-second");
 
@@ -227,8 +234,12 @@ test("Aiden changes the color theme and the model for new chats from chat, and t
   await page.getByRole("button", { name: "Send message" }).click();
   await expect.poll(() => reply.completed).toBe(true);
   const after = await page.evaluate(() =>
-    (window as unknown as { aidenAPI: { ipc: Ipc } }).aidenAPI.ipc.invoke<AppSettings>("settings:get"),
+    (window as unknown as { aidenAPI: { ipc: Ipc } }).aidenAPI.ipc.invoke<AppSettings>(
+      "settings:get",
+    ),
   );
   expect(after.lastModel).toBe("aiden-e2e-second");
-  expect(await page.evaluate(() => localStorage.getItem("aiden-agent.model"))).toBe("aiden-e2e-second");
+  expect(await page.evaluate(() => localStorage.getItem("aiden-agent.model"))).toBe(
+    "aiden-e2e-second",
+  );
 });

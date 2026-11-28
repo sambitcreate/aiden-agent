@@ -14,7 +14,8 @@ import { createDeviceGrantSource } from "./device-grant";
 const last = <T>(items: readonly T[]): T | undefined => items[items.length - 1];
 
 const settle = async (rounds = 10) => {
-  for (let index = 0; index < rounds; index++) await new Promise((resolve) => setImmediate(resolve));
+  for (let index = 0; index < rounds; index++)
+    await new Promise((resolve) => setImmediate(resolve));
 };
 
 function envelope(tag: number, payload: number[]): Uint8Array {
@@ -45,7 +46,12 @@ class FakeSocket {
   }
 }
 
-function harness(options: { grants?: ReturnType<typeof createDeviceGrantSource>; refuse?: (url: string) => boolean } = {}) {
+function harness(
+  options: {
+    grants?: ReturnType<typeof createDeviceGrantSource>;
+    refuse?: (url: string) => boolean;
+  } = {},
+) {
   const feeds: Array<{ url: string; signal: AbortSignal; push(bytes: Uint8Array): void }> = [];
   const sockets: FakeSocket[] = [];
   const decoders: Array<{ output: (frame: VideoFrame) => void }> = [];
@@ -54,7 +60,8 @@ function harness(options: { grants?: ReturnType<typeof createDeviceGrantSource>;
   const runtime: DeviceStreamRuntime = {
     fetch: async (url, init) => {
       if (!url.includes("stream.avcc")) return new Response(new Uint8Array([1]), { status: 200 });
-      if (url.includes("/panel/") && panelStatus !== 200) return new Response("unsupported", { status: panelStatus });
+      if (url.includes("/panel/") && panelStatus !== 200)
+        return new Response("unsupported", { status: panelStatus });
       if (options.refuse?.(url)) return new Response("expired", { status: 401 });
       let controller!: ReadableStreamDefaultController<Uint8Array>;
       const body = new ReadableStream<Uint8Array>({
@@ -62,7 +69,9 @@ function harness(options: { grants?: ReturnType<typeof createDeviceGrantSource>;
           controller = value;
         },
       });
-      init.signal.addEventListener("abort", () => controller.error(new DOMException("Aborted", "AbortError")));
+      init.signal.addEventListener("abort", () =>
+        controller.error(new DOMException("Aborted", "AbortError")),
+      );
       feeds.push({ url, signal: init.signal, push: (bytes) => controller.enqueue(bytes) });
       return new Response(body, { status: 200 });
     },
@@ -120,7 +129,11 @@ function harness(options: { grants?: ReturnType<typeof createDeviceGrantSource>;
     cover: { present: (source: CanvasImageSource) => (covers.push(source), true) },
     inner: { present: (source: CanvasImageSource) => (inners.push(source), true) },
   };
-  const config = (screenId: 1 | 3, physical = false, orientation: DeviceScreenSize["orientation"] = "portrait") => {
+  const config = (
+    screenId: 1 | 3,
+    physical = false,
+    orientation: DeviceScreenSize["orientation"] = "portrait",
+  ) => {
     const json = new TextEncoder().encode(
       JSON.stringify({
         width: screenId === 1 ? 1398 : 2007,
@@ -137,7 +150,13 @@ function harness(options: { grants?: ReturnType<typeof createDeviceGrantSource>;
     packet.set(json, 1);
     sockets[0]!.onmessage?.({ data: packet.buffer });
   };
-  const frame = (label: string) => ({ label, displayWidth: 2007, displayHeight: 2853, close: () => undefined }) as unknown as VideoFrame;
+  const frame = (label: string) =>
+    ({
+      label,
+      displayWidth: 2007,
+      displayHeight: 2853,
+      close: () => undefined,
+    }) as unknown as VideoFrame;
   return {
     client,
     feeds,
@@ -311,7 +330,8 @@ test("each display feed opens with a freshly minted grant, and a refused feed re
   const refused = new Set<string>();
   const token = (url: string) => new URL(url).searchParams.get("t") ?? "";
   const h = harness({ grants, refuse: (url) => refused.has(token(url)) });
-  const panelTokens = () => h.feeds.filter((feed) => feed.url.includes("/panel/")).map((feed) => token(feed.url));
+  const panelTokens = () =>
+    h.feeds.filter((feed) => feed.url.includes("/panel/")).map((feed) => token(feed.url));
   h.client.start();
   await settle();
   h.config(3);

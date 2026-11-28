@@ -12,7 +12,13 @@
 // window skipped entries it never showed.
 
 import type { Context } from "@earendil-works/chord/context";
-import type { Conversation, ConversationView, EntryId, EntryRecord, WatchEnd } from "@earendil-works/pi-durable";
+import type {
+  Conversation,
+  ConversationView,
+  EntryId,
+  EntryRecord,
+  WatchEnd,
+} from "@earendil-works/pi-durable";
 
 /** One frame: the conversation's documents and its active transcript, head marker first. */
 export type ActiveConversationView = Omit<ConversationView, "entries" | "before"> & {
@@ -33,7 +39,8 @@ type ActiveReader = Pick<Conversation, "context">;
 /** Newest entry ID a window shows, or what the window starts after when it is empty. */
 function newestShown(view: Pick<ConversationView, "entries" | "before">): EntryId | undefined {
   let newest = view.before;
-  for (const entry of view.entries) if (newest === undefined || entry.id > newest) newest = entry.id;
+  for (const entry of view.entries)
+    if (newest === undefined || entry.id > newest) newest = entry.id;
   return newest;
 }
 
@@ -65,15 +72,22 @@ export class ActiveTranscript {
   }
 
   /** The first frame of a watch: read the active transcript up to what the window shows. */
-  async start(view: Pick<ConversationView, "entries" | "before">, context: Context): Promise<readonly EntryRecord[]> {
+  async start(
+    view: Pick<ConversationView, "entries" | "before">,
+    context: Context,
+  ): Promise<readonly EntryRecord[]> {
     await this.#read(newestShown(view), context);
     return this.#entries;
   }
 
   /** A later frame: append its newer entries, or read again after a head marker or a skipped stretch. */
-  async advance(view: Pick<ConversationView, "entries" | "before">, context: Context): Promise<readonly EntryRecord[]> {
+  async advance(
+    view: Pick<ConversationView, "entries" | "before">,
+    context: Context,
+  ): Promise<readonly EntryRecord[]> {
     const through = newestShown(view);
-    if (through === undefined || (this.#through !== undefined && through <= this.#through)) return this.#entries;
+    if (through === undefined || (this.#through !== undefined && through <= this.#through))
+      return this.#entries;
     const held = this.#through;
     const skipped = view.before !== undefined && (held === undefined || view.before > held);
     const newer = view.entries.filter((entry) => held === undefined || entry.id > held);
@@ -94,7 +108,10 @@ export async function watchActiveConversation(
 ): Promise<ActiveConversationWatch> {
   const watch = await conversation.watch(context);
   const transcript = new ActiveTranscript(conversation);
-  const frame = (view: ConversationView, entries: readonly EntryRecord[]): ActiveConversationView => ({
+  const frame = (
+    view: ConversationView,
+    entries: readonly EntryRecord[],
+  ): ActiveConversationView => ({
     conversation: view.conversation,
     docs: view.docs,
     entries,

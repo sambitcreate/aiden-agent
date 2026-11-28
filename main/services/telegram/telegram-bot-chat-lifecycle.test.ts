@@ -27,10 +27,7 @@ test("enabled backing conversation deletion is rejected with fixed product-safe 
       getBinding: async () => binding,
     }),
     (error: unknown) => {
-      assert.equal(
-        (error as Error).message,
-        TELEGRAM_BACKING_CHAT_DELETE_BLOCKED_MESSAGE,
-      );
+      assert.equal((error as Error).message, TELEGRAM_BACKING_CHAT_DELETE_BLOCKED_MESSAGE);
       return true;
     },
   );

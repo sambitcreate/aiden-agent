@@ -10,10 +10,22 @@ import { createBotRegistry, type BotRegistry } from "./bot-extension.js";
 import { createBotHarnessHost, type BotHarnessHost } from "./harness-host.js";
 import { recordingDeps } from "./test-support/fixtures.js";
 import { createFauxModels, FAUX_MODEL_REF, waitFor } from "./test-support/faux.js";
-import { botAccessRequestCandidate, botSavedLocationForCall, BOT_ACCESS_REQUEST_MEMO, type BotAccessRequestToolDeps } from "./bot-access-request-tool.js";
-import { BotAccessRequestStaleError, createBotAccessRequests, type BotAccessSettle } from "./bot-access-requests.js";
+import {
+  botAccessRequestCandidate,
+  botSavedLocationForCall,
+  BOT_ACCESS_REQUEST_MEMO,
+  type BotAccessRequestToolDeps,
+} from "./bot-access-request-tool.js";
+import {
+  BotAccessRequestStaleError,
+  createBotAccessRequests,
+  type BotAccessSettle,
+} from "./bot-access-requests.js";
 import { createBotAccessAuthorizer } from "./bot-access-authorization.js";
-import { createBotFolderGrantJournal, type BotFolderGrantRecord } from "../bot-folder-grant-journal.js";
+import {
+  createBotFolderGrantJournal,
+  type BotFolderGrantRecord,
+} from "../bot-folder-grant-journal.js";
 import { createBotRunAccess } from "./bot-run-access.js";
 import { botFileCandidates } from "./bot-file-candidates.js";
 import { resolveBotAccessTarget } from "./bot-access-target.js";
@@ -24,7 +36,11 @@ import { createBotIssueService } from "../bot-issues/service.js";
 import { createBotIssueStore } from "../bot-issues/store.js";
 
 const BOT = "ada";
-async function fixture(t: import("node:test").TestContext, folderCommitted?: (botId: string, operationId: string) => Promise<boolean>, d?: Pick<BotAccessRequestToolDeps, "folderOffer"> & { settle?: BotAccessSettle }) {
+async function fixture(
+  t: import("node:test").TestContext,
+  folderCommitted?: (botId: string, operationId: string) => Promise<boolean>,
+  d?: Pick<BotAccessRequestToolDeps, "folderOffer"> & { settle?: BotAccessSettle },
+) {
   const home = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "bot-access-tool-")));
   t.after(() => fs.rm(home, { recursive: true, force: true }));
   const root = path.join(home, "Taxes"),
@@ -126,7 +142,15 @@ async function fixture(t: import("node:test").TestContext, folderCommitted?: (bo
       assert.equal(input.expectedRevision, revision);
       roots.push({ id: input.rootId ?? "root_taxes", folderPath: input.folderPath });
       revision = "rev2";
-      fixed = [...fixed.filter(location => location.root !== input.folderPath), {id:input.rootId ?? "root_taxes",label:"Taxes",root:input.folderPath,expectedIdentity:input.expectedIdentity}];
+      fixed = [
+        ...fixed.filter((location) => location.root !== input.folderPath),
+        {
+          id: input.rootId ?? "root_taxes",
+          label: "Taxes",
+          root: input.folderPath,
+          expectedIdentity: input.expectedIdentity,
+        },
+      ];
       return revision;
     },
     folderCommitted,
@@ -138,12 +162,19 @@ async function fixture(t: import("node:test").TestContext, folderCommitted?: (bo
   ) => candidate.bind!(call(controller)).execute("call-1", value);
   const answer = async (choice: "once" | "always" | "not_now") =>
     requests.answer(BOT, requests.pending()[0]!.waitId, choice, authorize, d?.settle);
-  const fileCandidates = botFileCandidates([{id:"home",label:"Bot folder",root:botHome}], {
-    routine:false,recordOwnWrite(){},
-    runAccess:{resolve:async(current)=>runAccess.location(BOT,await current.runRequestIds!(),revision)},
-    savedAccess:{resolve:(current)=>botSavedLocationForCall(BOT,{runAccess,policyRevision:async()=>revision},current)},
+  const fileCandidates = botFileCandidates([{ id: "home", label: "Bot folder", root: botHome }], {
+    routine: false,
+    recordOwnWrite() {},
+    runAccess: {
+      resolve: async (current) => runAccess.location(BOT, await current.runRequestIds!(), revision),
+    },
+    savedAccess: {
+      resolve: (current) =>
+        botSavedLocationForCall(BOT, { runAccess, policyRevision: async () => revision }, current),
+    },
   });
-  const fileTool = (name: string) => fileCandidates.find(entry=>entry.tool.name===name)!.bind!(call());
+  const fileTool = (name: string) =>
+    fileCandidates.find((entry) => entry.tool.name === name)!.bind!(call());
   return {
     home,
     root,
@@ -227,11 +258,17 @@ test("unattended routine, Telegram, Bot request/reply and joined runs raise issu
     assert.equal(app.requests.pending().length, 0);
     assert.equal(app.raised.length, 1);
     assert.equal(app.raised[0]!.kind, "access_needed");
-    assert.deepEqual(app.raised[0]!.actions, [{ kind: "dismiss_access" }, { kind: "allow_folder" }]);
+    assert.deepEqual(app.raised[0]!.actions, [
+      { kind: "dismiss_access" },
+      { kind: "allow_folder" },
+    ]);
     assert.equal(app.raised[0]!.access!.authorization.policyRevision, "rev1");
     app.raised.length = 0;
     await app.execute({ path: "whole_mac", why: "Need files" });
-    assert.deepEqual(app.raised[0]!.actions, [{ kind: "dismiss_access" }, { kind: "open_settings", section: "access" }]);
+    assert.deepEqual(app.raised[0]!.actions, [
+      { kind: "dismiss_access" },
+      { kind: "open_settings", section: "access" },
+    ]);
     assert.equal(app.raised[0]!.access!.folderPath, undefined);
   }
 });
@@ -328,11 +365,15 @@ test("independent write authority needs no card; a read grant needs a separate w
 test("known stale policy or inode withdraws without declining and a new attempt can approve", async (t) => {
   for (const race of ["policy", "inode", "off", "unattended"] as const) {
     for (const choice of ["once", "always", "not_now"] as const) {
-      const app = await fixture(t), waiting = app.execute();
+      const app = await fixture(t),
+        waiting = app.execute();
       await waitFor(() => app.requests.pending().length === 1);
       const oldId = app.requests.pending()[0]!.waitId;
       if (race === "policy") app.setRevision("rev-changed");
-      if (race === "inode") { await fs.rename(app.root, app.root + "old"); await fs.mkdir(app.root); }
+      if (race === "inode") {
+        await fs.rename(app.root, app.root + "old");
+        await fs.mkdir(app.root);
+      }
       if (race === "off") app.setScoped(false);
       if (race === "unattended") app.setIds(["r1", "routine:task:1"]);
       await assert.rejects(app.answer(choice), BotAccessRequestStaleError);
@@ -340,25 +381,37 @@ test("known stale policy or inode withdraws without declining and a new attempt 
       assert.equal(app.requests.pending().length, 0);
       assert.equal(app.runAccess.declined(BOT, ["r1"], app.root), false);
       assert.equal(app.runAccess.location(BOT, ["r1"], app.revision()), undefined);
-      app.setScoped(true); app.setIds(["r1"]);
+      app.setScoped(true);
+      app.setIds(["r1"]);
       const fresh = app.execute();
       await waitFor(() => app.requests.pending().length === 1);
       assert.notEqual(app.requests.pending()[0]!.waitId, oldId);
-      await app.answer("once"); await fresh;
+      await app.answer("once");
+      await fresh;
       assert.equal(app.runAccess.location(BOT, ["r1"], app.revision())?.root, app.root);
     }
   }
 });
 test("arbitrary fresh fixed authority is future-only for tools bound earlier", async (t) => {
-  const app = await fixture(t), read = app.fileTool("read_file");
+  const app = await fixture(t),
+    read = app.fileTool("read_file");
   app.setRevision("saved-policy");
   app.setFixed([{ id: "new-fixed-root", label: "Taxes", root: app.root }]);
   const result = await app.execute();
   assert.equal(result.details?.outcome, "already_allowed");
   assert.match(JSON.stringify(result.content), /new task/u);
-  await assert.rejects(read.execute("read", { location: "run.saved", path: "report.txt" }), /Ask with request_access first/u);
-  assert.equal(app.runAccess.location(BOT,["r1"],"saved-policy"),undefined);
-  assert.equal(await app.runAccess.savedLocation(BOT,["r1"],"saved-policy",{signal:new AbortController().signal,validate:async()=>{}}),undefined);
+  await assert.rejects(
+    read.execute("read", { location: "run.saved", path: "report.txt" }),
+    /Ask with request_access first/u,
+  );
+  assert.equal(app.runAccess.location(BOT, ["r1"], "saved-policy"), undefined);
+  assert.equal(
+    await app.runAccess.savedLocation(BOT, ["r1"], "saved-policy", {
+      signal: new AbortController().signal,
+      validate: async () => {},
+    }),
+    undefined,
+  );
   assert.equal(app.requests.pending().length, 0);
 });
 test("invalid params and private/root targets never raise an issue or a card", async (t) => {
@@ -477,179 +530,353 @@ test("Allow once then quit before durable result commit requires a fresh decisio
 });
 
 test("person-approved fixed access settles the matching unattended issue without reviving its old run", async (t) => {
-  const app = await fixture(t); app.setIds(["routine:t1:1"]);
-  await app.execute(); const old = (await app.issues.list(BOT,{open:true}))[0]!;
-  app.setRevision("saved-policy"); app.setFixed([{id:"taxes",label:"Taxes",root:app.root}]); app.setIds(["r2"]);
-  assert.equal((await app.execute()).details?.outcome,"already_allowed");
-  assert.deepEqual(await app.issues.list(BOT,{open:true}),[]);
-  assert.equal((await app.issues.list(BOT)).find(issue=>issue.id===old.id)?.resolution,"fixed");
-  assert.equal(app.runAccess.location(BOT,["routine:t1:1"],"saved-policy"),undefined);
-  assert.equal(app.runAccess.location(BOT,["r2"],"saved-policy"),undefined);
-  assert.equal(await app.runAccess.savedLocation(BOT,["r2"],"saved-policy",{signal:new AbortController().signal,validate:async()=>{}}),undefined);
+  const app = await fixture(t);
+  app.setIds(["routine:t1:1"]);
+  await app.execute();
+  const old = (await app.issues.list(BOT, { open: true }))[0]!;
+  app.setRevision("saved-policy");
+  app.setFixed([{ id: "taxes", label: "Taxes", root: app.root }]);
+  app.setIds(["r2"]);
+  assert.equal((await app.execute()).details?.outcome, "already_allowed");
+  assert.deepEqual(await app.issues.list(BOT, { open: true }), []);
+  assert.equal(
+    (await app.issues.list(BOT)).find((issue) => issue.id === old.id)?.resolution,
+    "fixed",
+  );
+  assert.equal(app.runAccess.location(BOT, ["routine:t1:1"], "saved-policy"), undefined);
+  assert.equal(app.runAccess.location(BOT, ["r2"], "saved-policy"), undefined);
+  assert.equal(
+    await app.runAccess.savedLocation(BOT, ["r2"], "saved-policy", {
+      signal: new AbortController().signal,
+      validate: async () => {},
+    }),
+    undefined,
+  );
 });
 
 test("a newly fixed unattended folder stays future-only in the original task", async (t) => {
-  const app=await fixture(t);app.setIds(["routine:t1:1"]);
-  assert.equal((await app.execute()).details?.outcome,"asked_later");
-  app.setRevision("saved-policy");app.setFixed([{id:"taxes",label:"Taxes",root:app.root}]);
-  const result=await app.execute();
-  assert.equal(app.runAccess.location(BOT,["routine:t1:1"],"saved-policy"),undefined);
-  assert.match(JSON.stringify(result.content),/next task|future tasks/u);
-  assert.deepEqual(app.requests.pending(),[]);
+  const app = await fixture(t);
+  app.setIds(["routine:t1:1"]);
+  assert.equal((await app.execute()).details?.outcome, "asked_later");
+  app.setRevision("saved-policy");
+  app.setFixed([{ id: "taxes", label: "Taxes", root: app.root }]);
+  const result = await app.execute();
+  assert.equal(app.runAccess.location(BOT, ["routine:t1:1"], "saved-policy"), undefined);
+  assert.match(JSON.stringify(result.content), /next task|future tasks/u);
+  assert.deepEqual(app.requests.pending(), []);
 });
 
 test("redundant fixed access preserves the person's distinct Once folder", async (t) => {
-  const app=await fixture(t);
-  app.setFixed([{id:"taxes",label:"Taxes",root:app.root}]);
-  const other=path.join(app.home,"Other");await fs.mkdir(other);await fs.writeFile(path.join(other,"other.txt"),"still temporary");
-  const waiting=app.execute({path:other,why:"Use another folder"});
-  await waitFor(()=>app.requests.pending().length===1);await app.answer("once");await waiting;
-  assert.equal(app.runAccess.location(BOT,["r1"],"rev1")?.root,other);
-  assert.equal((await app.execute()).details?.outcome,"already_allowed");
-  assert.equal(app.runAccess.location(BOT,["r1"],"rev1")?.root,other);
-  const read=await app.fileTool("read_file").execute("read-other",{location:"run.access",path:"other.txt"});
-  assert.match(JSON.stringify(read.content),/still temporary/u);
+  const app = await fixture(t);
+  app.setFixed([{ id: "taxes", label: "Taxes", root: app.root }]);
+  const other = path.join(app.home, "Other");
+  await fs.mkdir(other);
+  await fs.writeFile(path.join(other, "other.txt"), "still temporary");
+  const waiting = app.execute({ path: other, why: "Use another folder" });
+  await waitFor(() => app.requests.pending().length === 1);
+  await app.answer("once");
+  await waiting;
+  assert.equal(app.runAccess.location(BOT, ["r1"], "rev1")?.root, other);
+  assert.equal((await app.execute()).details?.outcome, "already_allowed");
+  assert.equal(app.runAccess.location(BOT, ["r1"], "rev1")?.root, other);
+  const read = await app
+    .fileTool("read_file")
+    .execute("read-other", { location: "run.access", path: "other.txt" });
+  assert.match(JSON.stringify(read.content), /still temporary/u);
 });
 
-test("real harness keeps own Always A reachable after its task settles and Once B, without queued inheritance", async(t)=>{
-  const app=await fixture(t),other=path.join(app.home,"Other");
-  await fs.mkdir(other);await fs.writeFile(path.join(other,"b.txt"),"temporary B");
-  const step=(name:string,args:import("@earendil-works/pi-ai").JsonObject)=>fauxAssistantMessage([fauxToolCall(name,args)],{stopReason:"toolUse"});
-  const faux=createFauxModels([
-    step("request_access",{path:app.root,why:"Always A"}),
-    step("request_access",{path:other,why:"Once B"}),
-    step("request_access",{path:app.root,why:"Use A again"}),
-    step("read_file",{location:"run.saved",path:"report.txt"}),
-    step("read_file",{location:"run.access",path:"b.txt"}),
+test("real harness keeps own Always A reachable after its task settles and Once B, without queued inheritance", async (t) => {
+  const app = await fixture(t),
+    other = path.join(app.home, "Other");
+  await fs.mkdir(other);
+  await fs.writeFile(path.join(other, "b.txt"), "temporary B");
+  const step = (name: string, args: import("@earendil-works/pi-ai").JsonObject) =>
+    fauxAssistantMessage([fauxToolCall(name, args)], { stopReason: "toolUse" });
+  const faux = createFauxModels([
+    step("request_access", { path: app.root, why: "Always A" }),
+    step("request_access", { path: other, why: "Once B" }),
+    step("request_access", { path: app.root, why: "Use A again" }),
+    step("read_file", { location: "run.saved", path: "report.txt" }),
+    step("read_file", { location: "run.access", path: "b.txt" }),
     fauxAssistantMessage("first done"),
-    step("read_file",{location:"run.saved",path:"report.txt"}),
-    step("read_file",{location:"run.access",path:"b.txt"}),
+    step("read_file", { location: "run.saved", path: "report.txt" }),
+    step("read_file", { location: "run.access", path: "b.txt" }),
     fauxAssistantMessage("queued done"),
   ]);
-  const registry=createBotRegistry(BOT,recordingDeps({tools:[{...app.candidate,replay:"safe"},...app.fileCandidates.map(candidate=>({...candidate,replay:"safe" as const}))]}));
+  const registry = createBotRegistry(
+    BOT,
+    recordingDeps({
+      tools: [
+        { ...app.candidate, replay: "safe" },
+        ...app.fileCandidates.map((candidate) => ({ ...candidate, replay: "safe" as const })),
+      ],
+    }),
+  );
   await registry.refresh();
-  const harness=await Harness.open(new MemoryStorage(),{registry,models:faux.models},ctx);registry.attachHarness(harness);
+  const harness = await Harness.open(new MemoryStorage(), { registry, models: faux.models }, ctx);
+  registry.attachHarness(harness);
   try {
-    const conversation=await harness.root(ctx,{agent:{model:FAUX_MODEL_REF}});
-    const first=await conversation.submit({type:"input",content:"work",requestId:"r1"},ctx);
-    await waitFor(()=>app.requests.pending().length===1);
+    const conversation = await harness.root(ctx, { agent: { model: FAUX_MODEL_REF } });
+    const first = await conversation.submit(
+      { type: "input", content: "work", requestId: "r1" },
+      ctx,
+    );
+    await waitFor(() => app.requests.pending().length === 1);
     await app.answer("always");
-    await waitFor(()=>app.requests.pending()[0]?.label==="Other");
-    const earlier=(await conversation.context(ctx)).entries.filter(entry=>entry.kind===ToolResultEntry.kind);
-    assert.match(JSON.stringify(earlier.map(entry=>entry.model)),/It stays allowed from your next task/u,"the original request_access task committed before the later calls");
-    const queued=await conversation.submit({type:"input",content:"next",requestId:"queued",whenBusy:"followUp"},ctx);
+    await waitFor(() => app.requests.pending()[0]?.label === "Other");
+    const earlier = (await conversation.context(ctx)).entries.filter(
+      (entry) => entry.kind === ToolResultEntry.kind,
+    );
+    assert.match(
+      JSON.stringify(earlier.map((entry) => entry.model)),
+      /It stays allowed from your next task/u,
+      "the original request_access task committed before the later calls",
+    );
+    const queued = await conversation.submit(
+      { type: "input", content: "next", requestId: "queued", whenBusy: "followUp" },
+      ctx,
+    );
     await app.answer("once");
-    assert.equal((await first.wait(ctx)).status,"done");
-    assert.equal((await queued.wait(ctx)).status,"done");
-    const results=(await conversation.context(ctx)).entries.filter(entry=>entry.kind===ToolResultEntry.kind).map(entry=>JSON.stringify(entry.model));
-    assert.equal(results.filter(result=>result.includes("original")).length,1,`saved A is read once only by its owning run: ${JSON.stringify(results)}`);
-    assert.equal(results.filter(result=>result.includes("temporary B")).length,1,"Once B remains usable independently");
-    assert.equal(results.filter(result=>result.includes("Ask with request_access first")).length,2,"neither alias transfers to queued work");
-    assert.ok(results.some(result=>result.includes('run.saved')&&result.includes('run.access')),"request names the usable saved alias and preserves Once");
-    assert.deepEqual(app.requests.pending(),[]);
-  } finally {app.runAccess.clearAll();await harness.close(ctx);}
+    assert.equal((await first.wait(ctx)).status, "done");
+    assert.equal((await queued.wait(ctx)).status, "done");
+    const results = (await conversation.context(ctx)).entries
+      .filter((entry) => entry.kind === ToolResultEntry.kind)
+      .map((entry) => JSON.stringify(entry.model));
+    assert.equal(
+      results.filter((result) => result.includes("original")).length,
+      1,
+      `saved A is read once only by its owning run: ${JSON.stringify(results)}`,
+    );
+    assert.equal(
+      results.filter((result) => result.includes("temporary B")).length,
+      1,
+      "Once B remains usable independently",
+    );
+    assert.equal(
+      results.filter((result) => result.includes("Ask with request_access first")).length,
+      2,
+      "neither alias transfers to queued work",
+    );
+    assert.ok(
+      results.some((result) => result.includes("run.saved") && result.includes("run.access")),
+      "request names the usable saved alias and preserves Once",
+    );
+    assert.deepEqual(app.requests.pending(), []);
+  } finally {
+    app.runAccess.clearAll();
+    await harness.close(ctx);
+  }
 });
 
-test("historical publication acknowledgement is not a new decline or a claim that access still exists",async(t)=>{
-  const app=await fixture(t),waiting=app.execute();await waitFor(()=>app.requests.pending().length===1);
-  const id=app.requests.pending()[0]!.waitId;
-  assert.equal(await app.requests.answer(BOT,id,"not_now",async()=>({savedForFuture:true})),"saved_for_future");
-  const result=await waiting;
-  assert.equal(result.details?.outcome,"always");
-  assert.match(JSON.stringify(result.content),/records that earlier approval.*does not grant temporary access or restore removed access/u);
-  assert.equal(app.runAccess.declined(BOT,["r1"],app.root),false);
-  assert.equal(await app.runAccess.savedLocation(BOT,["r1"],"rev1",{signal:new AbortController().signal,validate:async()=>{}}),undefined);
-});
-
-test("a bound saved-file read retries a transient inner policy read without asking again", async t => {
-  const app = await fixture(t), waiting = app.execute();
+test("historical publication acknowledgement is not a new decline or a claim that access still exists", async (t) => {
+  const app = await fixture(t),
+    waiting = app.execute();
   await waitFor(() => app.requests.pending().length === 1);
-  await app.answer("always"); await waiting;
+  const id = app.requests.pending()[0]!.waitId;
+  assert.equal(
+    await app.requests.answer(BOT, id, "not_now", async () => ({ savedForFuture: true })),
+    "saved_for_future",
+  );
+  const result = await waiting;
+  assert.equal(result.details?.outcome, "always");
+  assert.match(
+    JSON.stringify(result.content),
+    /records that earlier approval.*does not grant temporary access or restore removed access/u,
+  );
+  assert.equal(app.runAccess.declined(BOT, ["r1"], app.root), false);
+  assert.equal(
+    await app.runAccess.savedLocation(BOT, ["r1"], "rev1", {
+      signal: new AbortController().signal,
+      validate: async () => {},
+    }),
+    undefined,
+  );
+});
+
+test("a bound saved-file read retries a transient inner policy read without asking again", async (t) => {
+  const app = await fixture(t),
+    waiting = app.execute();
+  await waitFor(() => app.requests.pending().length === 1);
+  await app.answer("always");
+  await waiting;
   let reads = 0;
-  const call: BotToolCall = { callId: "saved-read", signal: new AbortController().signal,
-    runRequestIds: async () => ["r1"], assertRunActive: async () => {},
-    entries: async () => [], submissions: async () => [], appendEntry: async () => {},
+  const call: BotToolCall = {
+    callId: "saved-read",
+    signal: new AbortController().signal,
+    runRequestIds: async () => ["r1"],
+    assertRunActive: async () => {},
+    entries: async () => [],
+    submissions: async () => [],
+    appendEntry: async () => {},
     memo: async (_name, value) => value,
   };
   const candidates = botFileCandidates([{ id: "home", label: "Bot folder", root: app.botHome }], {
-    routine: false, recordOwnWrite() {},
-    savedAccess: { resolve: current => botSavedLocationForCall(BOT, {
-      runAccess: app.runAccess, policyRevision: async () => {
-        if (++reads === 2) throw Object.assign(new Error("policy store temporarily unreadable"), { code: "EIO" });
-        return app.revision();
-      },
-    }, current) },
+    routine: false,
+    recordOwnWrite() {},
+    savedAccess: {
+      resolve: (current) =>
+        botSavedLocationForCall(
+          BOT,
+          {
+            runAccess: app.runAccess,
+            policyRevision: async () => {
+              if (++reads === 2)
+                throw Object.assign(new Error("policy store temporarily unreadable"), {
+                  code: "EIO",
+                });
+              return app.revision();
+            },
+          },
+          current,
+        ),
+    },
   });
-  const read = candidates.find(candidate => candidate.tool.name === "read_file")!.bind!(call);
-  await assert.rejects(read.execute("first", { location: "run.saved", path: "report.txt" }), /policy store temporarily unreadable/u);
+  const read = candidates.find((candidate) => candidate.tool.name === "read_file")!.bind!(call);
+  await assert.rejects(
+    read.execute("first", { location: "run.saved", path: "report.txt" }),
+    /policy store temporarily unreadable/u,
+  );
   const result = await read.execute("retry", { location: "run.saved", path: "report.txt" });
   assert.match(JSON.stringify(result.content), /original/u);
-  assert.deepEqual(app.requests.pending(), [], "the retry uses the original publication, not another consent card");
+  assert.deepEqual(
+    app.requests.pending(),
+    [],
+    "the retry uses the original publication, not another consent card",
+  );
 });
 
-test("current file-call validation refuses a formerly attended publication after unattended input joins",async(t)=>{
-  const app=await fixture(t),waiting=app.execute();await waitFor(()=>app.requests.pending().length===1);
-  await app.answer("always");await waiting;
-  const read=app.fileTool("read_file");
-  assert.match(JSON.stringify((await read.execute("own",{location:"run.saved",path:"report.txt"})).content),/original/u);
-  app.setIds(["r1","routine:joined:1"]);
-  await assert.rejects(read.execute("unattended",{location:"run.saved",path:"report.txt"}),/Ask with request_access first/u);
+test("current file-call validation refuses a formerly attended publication after unattended input joins", async (t) => {
+  const app = await fixture(t),
+    waiting = app.execute();
+  await waitFor(() => app.requests.pending().length === 1);
+  await app.answer("always");
+  await waiting;
+  const read = app.fileTool("read_file");
+  assert.match(
+    JSON.stringify(
+      (await read.execute("own", { location: "run.saved", path: "report.txt" })).content,
+    ),
+    /original/u,
+  );
+  app.setIds(["r1", "routine:joined:1"]);
+  await assert.rejects(
+    read.execute("unattended", { location: "run.saved", path: "report.txt" }),
+    /Ask with request_access first/u,
+  );
 });
 
-test("an originally bound fixed ID stays usable only while that exact location remains authorized",async(t)=>{
-  const app=await fixture(t);await fs.writeFile(path.join(app.botHome,"own.txt"),"own fixed");
-  const result=await app.execute({path:app.botHome,why:"Use my folder"});
-  assert.equal(result.details?.outcome,"already_allowed");assert.match(JSON.stringify(result.content),/home/u);
-  assert.match(JSON.stringify((await app.fileTool("read_file").execute("fixed",{location:"home",path:"own.txt"})).content),/own fixed/u);
-  assert.equal(app.runAccess.location(BOT,["r1"],"rev1"),undefined);
+test("an originally bound fixed ID stays usable only while that exact location remains authorized", async (t) => {
+  const app = await fixture(t);
+  await fs.writeFile(path.join(app.botHome, "own.txt"), "own fixed");
+  const result = await app.execute({ path: app.botHome, why: "Use my folder" });
+  assert.equal(result.details?.outcome, "already_allowed");
+  assert.match(JSON.stringify(result.content), /home/u);
+  assert.match(
+    JSON.stringify(
+      (await app.fileTool("read_file").execute("fixed", { location: "home", path: "own.txt" }))
+        .content,
+    ),
+    /own fixed/u,
+  );
+  assert.equal(app.runAccess.location(BOT, ["r1"], "rev1"), undefined);
   app.setFixed([]);
-  const stale = app.execute({path:app.botHome,why:"Use my folder again"});
-  await waitFor(()=>app.requests.pending().length===1);
+  const stale = app.execute({ path: app.botHome, why: "Use my folder again" });
+  await waitFor(() => app.requests.pending().length === 1);
   await app.answer("not_now");
-  assert.equal((await stale).details?.outcome,"not_now","an old bound ID alone cannot prove current access");
+  assert.equal(
+    (await stale).details?.outcome,
+    "not_now",
+    "an old bound ID alone cannot prove current access",
+  );
 });
 
 test("unreadable history after publication withdraws a Not now tap without decline or false tool claims", async (t) => {
   const app = await fixture(t);
-  let readable = true, records: BotFolderGrantRecord[] = [], publications = 0, temporaryGrants = 0;
+  let readable = true,
+    records: BotFolderGrantRecord[] = [],
+    publications = 0,
+    temporaryGrants = 0;
   const journal = createBotFolderGrantJournal({
     read: async () => {
       if (!readable) throw Object.assign(new Error("receipt read failed"), { code: "EIO" });
       return records;
     },
-    write: async value => { records = value; },
+    write: async (value) => {
+      records = value;
+    },
   });
   const authorize = createBotAccessAuthorizer({
-    now: Date.now, audienceId: "desktop", runAccess: { ...app.runAccess, grant: (botId, grant) => { temporaryGrants++; app.runAccess.grant(botId, grant); } }, resolveTarget: app.resolveTarget,
-    folderCommitted: async (botId, operationId) => (await journal.list()).some(record => record.state === "committed" && record.input.botId === botId && record.input.operationId === operationId),
-    revalidate: async (_botId, expected) => { if (app.revision() !== expected) throw new BotAccessRequestStaleError("policy changed after publication"); },
+    now: Date.now,
+    audienceId: "desktop",
+    runAccess: {
+      ...app.runAccess,
+      grant: (botId, grant) => {
+        temporaryGrants++;
+        app.runAccess.grant(botId, grant);
+      },
+    },
+    resolveTarget: app.resolveTarget,
+    folderCommitted: async (botId, operationId) =>
+      (await journal.list()).some(
+        (record) =>
+          record.state === "committed" &&
+          record.input.botId === botId &&
+          record.input.operationId === operationId,
+      ),
+    revalidate: async (_botId, expected) => {
+      if (app.revision() !== expected)
+        throw new BotAccessRequestStaleError("policy changed after publication");
+    },
     grantFolder: async (input, owner) => {
-      owner.assertCurrent(); publications++;
-      await journal.put({ input, rootId: "taxes", ownsRoot: true, optionId: "option", resultRevision: "rev2", state: "committed" });
-      app.setRevision("rev2"); readable = false;
+      owner.assertCurrent();
+      publications++;
+      await journal.put({
+        input,
+        rootId: "taxes",
+        ownsRoot: true,
+        optionId: "option",
+        resultRevision: "rev2",
+        state: "committed",
+      });
+      app.setRevision("rev2");
+      readable = false;
       throw new Error("publication receipt unavailable");
-    }, changed() {},
+    },
+    changed() {},
   });
   const waiting = app.execute();
   await waitFor(() => app.requests.pending().length === 1);
   const id = app.requests.pending()[0]!.waitId;
   try {
-    await assert.rejects(app.requests.answer(BOT, id, "always", authorize), /journal could not be read/u);
+    await assert.rejects(
+      app.requests.answer(BOT, id, "always", authorize),
+      /journal could not be read/u,
+    );
     assert.equal(app.requests.pending()[0]!.waitId, id);
-    await assert.rejects(app.requests.answer(BOT, id, "not_now", authorize), BotAccessRequestStaleError);
+    await assert.rejects(
+      app.requests.answer(BOT, id, "not_now", authorize),
+      BotAccessRequestStaleError,
+    );
     const result = await waiting;
     assert.equal(result.details?.outcome, "access_changed");
     assert.doesNotMatch(JSON.stringify(result.content), /nothing was allowed or declined/iu);
     assert.deepEqual(app.requests.pending(), []);
     assert.equal(app.runAccess.declined(BOT, ["r1"], app.root), false);
     assert.equal(app.runAccess.location(BOT, ["r1"], "rev2"), undefined);
-    assert.equal(await app.runAccess.savedLocation(BOT, ["r1"], "rev2", { signal: new AbortController().signal, validate: async () => {} }), undefined);
+    assert.equal(
+      await app.runAccess.savedLocation(BOT, ["r1"], "rev2", {
+        signal: new AbortController().signal,
+        validate: async () => {},
+      }),
+      undefined,
+    );
     readable = true;
     assert.equal((await journal.list())[0]?.state, "committed");
     assert.equal(publications, 1);
     assert.equal(temporaryGrants, 0);
   } finally {
-    if (app.requests.pending().length) await app.requests.answer(BOT, id, "not_now", async () => {});
+    if (app.requests.pending().length)
+      await app.requests.answer(BOT, id, "not_now", async () => {});
     await waiting;
   }
 });
@@ -657,11 +884,19 @@ test("unreadable history after publication withdraws a Not now tap without decli
 for (const target of ["folder", "whole_mac"] as const) {
   for (const joined of ["routine:joined:1", "bot:joined:1", "botreply:joined:1", "tg:joined:1"]) {
     test(`person Allow once ${target} refuses bound file calls after ${joined} joins`, async (t) => {
-      const app = await fixture(t), read = app.fileTool("read_file");
-      const waiting = app.execute({ path: target === "whole_mac" ? "whole_mac" : app.root, why: "Read my report" });
+      const app = await fixture(t),
+        read = app.fileTool("read_file");
+      const waiting = app.execute({
+        path: target === "whole_mac" ? "whole_mac" : app.root,
+        why: "Read my report",
+      });
       await waitFor(() => app.requests.pending().length === 1);
-      await app.answer("once"); await waiting;
-      const file = { location: "run.access", path: target === "whole_mac" ? path.join(app.root, "report.txt").slice(1) : "report.txt" };
+      await app.answer("once");
+      await waiting;
+      const file = {
+        location: "run.access",
+        path: target === "whole_mac" ? path.join(app.root, "report.txt").slice(1) : "report.txt",
+      };
       app.setIds(["r1", "person-steer"]);
       assert.match(JSON.stringify((await read.execute("person", file)).content), /original/u);
       app.setIds(["r1", joined]);
@@ -671,17 +906,43 @@ for (const target of ["folder", "whole_mac"] as const) {
 }
 
 test("a person-approved plan-owned grant remains usable by a bound Bot-input file call", async (t) => {
-  const app = await fixture(t), stat = await fs.stat(app.root, { bigint: true });
+  const app = await fixture(t),
+    stat = await fs.stat(app.root, { bigint: true });
   app.setIds(["bot:approved-plan:1"]);
   app.runAccess.grant(BOT, {
-    requestIds: ["bot:approved-plan:1"], target: "folder", key: app.root, root: app.root, label: "Taxes",
-    identity: { device: String(stat.dev), inode: String(stat.ino) }, policyRevision: "rev1", access: "read",
-    owner: { kind: "plan", id: "approved-plan" }, grantedAt: Date.now(), expiresAt: Date.now() + 60_000,
+    requestIds: ["bot:approved-plan:1"],
+    target: "folder",
+    key: app.root,
+    root: app.root,
+    label: "Taxes",
+    identity: { device: String(stat.dev), inode: String(stat.ino) },
+    policyRevision: "rev1",
+    access: "read",
+    owner: { kind: "plan", id: "approved-plan" },
+    grantedAt: Date.now(),
+    expiresAt: Date.now() + 60_000,
   });
-  assert.match(JSON.stringify((await app.fileTool("read_file").execute("plan", { location: "run.access", path: "report.txt" })).content), /original/u);
-  await assert.rejects(app.fileTool("write_file").execute("plan-write", { location: "run.access", path: "report.txt", content: "changed" }), /allows reading this folder only/iu);
+  assert.match(
+    JSON.stringify(
+      (
+        await app
+          .fileTool("read_file")
+          .execute("plan", { location: "run.access", path: "report.txt" })
+      ).content,
+    ),
+    /original/u,
+  );
+  await assert.rejects(
+    app
+      .fileTool("write_file")
+      .execute("plan-write", { location: "run.access", path: "report.txt", content: "changed" }),
+    /allows reading this folder only/iu,
+  );
   app.runAccess.revokeOwner(BOT, { kind: "plan", id: "approved-plan" });
-  await assert.rejects(app.fileTool("read_file").execute("revoked", { location: "run.access", path: "report.txt" }), /Ask with request_access first/u);
+  await assert.rejects(
+    app.fileTool("read_file").execute("revoked", { location: "run.access", path: "report.txt" }),
+    /Ask with request_access first/u,
+  );
 });
 
 for (const failure of ["EIO", "schema"] as const) {
@@ -689,47 +950,78 @@ for (const failure of ["EIO", "schema"] as const) {
     test(`the real request tool settles ${choice} under ${failure} history failure with the correct decline state`, async (t) => {
       const journal = createBotFolderGrantJournal({
         read: async () => {
-          if (failure === "EIO") throw Object.assign(new Error("disk unavailable"), { code: "EIO" });
+          if (failure === "EIO")
+            throw Object.assign(new Error("disk unavailable"), { code: "EIO" });
           return [{ unknown: "record" }];
-        }, write: async () => { throw new Error("must not publish"); },
+        },
+        write: async () => {
+          throw new Error("must not publish");
+        },
       });
-      const app = await fixture(t, async () => (await journal.list()).some(record => record.state === "committed"));
+      const app = await fixture(t, async () =>
+        (await journal.list()).some((record) => record.state === "committed"),
+      );
       const waiting = app.execute();
       await waitFor(() => app.requests.pending().length === 1);
       try {
         assert.equal(await app.answer(choice), "answered");
         assert.equal((await waiting).details?.outcome, choice);
         assert.equal(app.runAccess.declined(BOT, ["r1"], app.root), choice === "not_now");
-        assert.equal(app.runAccess.location(BOT, ["r1"], "rev1")?.root, choice === "once" ? app.root : undefined);
+        assert.equal(
+          app.runAccess.location(BOT, ["r1"], "rev1")?.root,
+          choice === "once" ? app.root : undefined,
+        );
         assert.deepEqual(app.requests.pending(), []);
       } finally {
-        if (app.requests.pending().length) await app.requests.answer(BOT, app.requests.pending()[0]!.waitId, "not_now", async () => {});
+        if (app.requests.pending().length)
+          await app.requests.answer(
+            BOT,
+            app.requests.pending()[0]!.waitId,
+            "not_now",
+            async () => {},
+          );
         await waiting;
       }
     });
   }
 }
 
-test("D: an eligible fourth folder card copies the count and its private receipt hint reaches only tool output", async t => {
-  const app = await fixture(t, undefined, { folderOffer: async () => ({ count: 3 }), settle: async () => ({ hint: "Aiden note: folder hint" }) });
-  const result = app.execute(); await waitFor(() => app.requests.pending().length === 1);
+test("D: an eligible fourth folder card copies the count and its private receipt hint reaches only tool output", async (t) => {
+  const app = await fixture(t, undefined, {
+    folderOffer: async () => ({ count: 3 }),
+    settle: async () => ({ hint: "Aiden note: folder hint" }),
+  });
+  const result = app.execute();
+  await waitFor(() => app.requests.pending().length === 1);
   assert.equal(app.requests.pending()[0]?.approvalCount, 3);
   assert.equal("authorizationFingerprint" in app.requests.pending()[0]!, false);
   await app.answer("once");
   const settled = await result;
   assert.deepEqual(settled.details, { target: "folder", label: "Taxes", outcome: "once" });
-  assert.equal(settled.content.filter(item => item.type === "text" && item.text.includes("Aiden note: folder hint")).length, 1);
+  assert.equal(
+    settled.content.filter(
+      (item) => item.type === "text" && item.text.includes("Aiden note: folder hint"),
+    ).length,
+    1,
+  );
 });
 
-test("D: Home and Whole Mac never query a folder offer or display a repeat-approval count", async t => {
+test("D: Home and Whole Mac never query a folder offer or display a repeat-approval count", async (t) => {
   let offers = 0;
-  const app = await fixture(t, undefined, { folderOffer: async () => { offers++; return { count: 3 }; } });
+  const app = await fixture(t, undefined, {
+    folderOffer: async () => {
+      offers++;
+      return { count: 3 };
+    },
+  });
   for (const requested of [app.home, "whole_mac"]) {
     const result = app.execute({ path: requested, why: "Read this" });
     await waitFor(() => app.requests.pending().length === 1);
     const card = app.requests.pending()[0]!;
-    assert.equal(card.approvalCount, undefined); assert.deepEqual(card.choices, ["not_now", "once"]);
-    await app.answer("not_now"); await result;
+    assert.equal(card.approvalCount, undefined);
+    assert.deepEqual(card.choices, ["not_now", "once"]);
+    await app.answer("not_now");
+    await result;
   }
   assert.equal(offers, 0);
 });

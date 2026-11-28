@@ -1,6 +1,13 @@
 import type { DefaultTreeAdapterTypes } from "parse5";
 
-export const BROWSER_DISCOVERY_LIMITS = Object.freeze({ files: 64, sourceBytes: 1024 * 1024, totalSourceBytes: 4 * 1024 * 1024, depth: 8, references: 512, warnings: 20 });
+export const BROWSER_DISCOVERY_LIMITS = Object.freeze({
+  files: 64,
+  sourceBytes: 1024 * 1024,
+  totalSourceBytes: 4 * 1024 * 1024,
+  depth: 8,
+  references: 512,
+  warnings: 20,
+});
 export type BrowserAssetSourceKind = "html" | "css" | "module";
 export interface BrowserAssetReferences {
   urls: string[];
@@ -10,11 +17,16 @@ export interface BrowserAssetReferences {
 
 /** CSS escaping is decoded after tokenization, so escaped delimiters remain data. */
 function cssUnescape(value: string): string {
-  return value.replace(/\\([0-9a-f]{1,6})(?:\r\n|[\t\n\f\r ])?|\\([^\r\n\f])/gi, (_match, hex: string | undefined, character: string | undefined) => {
-    if (!hex) return character ?? "";
-    const code = Number.parseInt(hex, 16);
-    return code === 0 || code > 0x10ffff || (code >= 0xd800 && code <= 0xdfff) ? "\uFFFD" : String.fromCodePoint(code);
-  });
+  return value.replace(
+    /\\([0-9a-f]{1,6})(?:\r\n|[\t\n\f\r ])?|\\([^\r\n\f])/gi,
+    (_match, hex: string | undefined, character: string | undefined) => {
+      if (!hex) return character ?? "";
+      const code = Number.parseInt(hex, 16);
+      return code === 0 || code > 0x10ffff || (code >= 0xd800 && code <= 0xdfff)
+        ? "\uFFFD"
+        : String.fromCodePoint(code);
+    },
+  );
 }
 
 // The HTML, CSS and module parsers load on the first preview asset discovery
@@ -26,8 +38,18 @@ let parsersLoading: Promise<{
   valueParser: typeof import("postcss-value-parser");
 }> | null = null;
 function assetParsers() {
-  parsersLoading ??= Promise.all([import("parse5"), import("acorn"), import("postcss"), import("postcss-value-parser")]).then(
-    ([parse5, acorn, { default: postcss }, { default: valueParser }]) => ({ parseHtml: parse5.parse, parseModule: acorn.parse, postcss, valueParser }),
+  parsersLoading ??= Promise.all([
+    import("parse5"),
+    import("acorn"),
+    import("postcss"),
+    import("postcss-value-parser"),
+  ]).then(
+    ([parse5, acorn, { default: postcss }, { default: valueParser }]) => ({
+      parseHtml: parse5.parse,
+      parseModule: acorn.parse,
+      postcss,
+      valueParser,
+    }),
     (error: unknown) => {
       parsersLoading = null;
       throw error;
@@ -37,61 +59,103 @@ function assetParsers() {
 }
 
 /** Parses references only. No source is evaluated, transformed, or fetched. */
-export async function browserAssetReferences(source: string, kind: BrowserAssetSourceKind): Promise<BrowserAssetReferences> {
+export async function browserAssetReferences(
+  source: string,
+  kind: BrowserAssetSourceKind,
+): Promise<BrowserAssetReferences> {
   const { parseHtml, parseModule, postcss, valueParser } = await assetParsers();
   const result: BrowserAssetReferences = { urls: [], incomplete: false };
   const seen = new Set<string>();
   const add = (url: string | undefined) => {
     if (!url || seen.has(url)) return;
-    if (url.length > 8192 || result.urls.length >= BROWSER_DISCOVERY_LIMITS.references) { result.incomplete = true; return; }
+    if (url.length > 8192 || result.urls.length >= BROWSER_DISCOVERY_LIMITS.references) {
+      result.incomplete = true;
+      return;
+    }
     seen.add(url);
     result.urls.push(url);
   };
   const cssValue = (value: string, isImport = false) => {
     const parsed = valueParser(value);
     if (isImport) {
-      const first = parsed.nodes.find(node => node.type !== "space" && node.type !== "comment");
+      const first = parsed.nodes.find((node) => node.type !== "space" && node.type !== "comment");
       if (first?.type === "string" && !first.unclosed) add(cssUnescape(first.value));
     }
-    parsed.walk(node => {
-      if (node.type === "function" && ["image-set", "-webkit-image-set"].includes(cssUnescape(node.value).toLowerCase()))
-        for (const child of node.nodes) if (child.type === "string" && !child.unclosed) add(cssUnescape(child.value));
-      if (node.type !== "function" || cssUnescape(node.value).toLowerCase() !== "url" || node.unclosed) return;
-      const tokens = node.nodes.filter(child => child.type !== "space" && child.type !== "comment");
-      if (tokens.length === 1 && (tokens[0]!.type === "word" || tokens[0]!.type === "string")) add(cssUnescape(tokens[0]!.value));
+    parsed.walk((node) => {
+      if (
+        node.type === "function" &&
+        ["image-set", "-webkit-image-set"].includes(cssUnescape(node.value).toLowerCase())
+      )
+        for (const child of node.nodes)
+          if (child.type === "string" && !child.unclosed) add(cssUnescape(child.value));
+      if (
+        node.type !== "function" ||
+        cssUnescape(node.value).toLowerCase() !== "url" ||
+        node.unclosed
+      )
+        return;
+      const tokens = node.nodes.filter(
+        (child) => child.type !== "space" && child.type !== "comment",
+      );
+      if (tokens.length === 1 && (tokens[0]!.type === "word" || tokens[0]!.type === "string"))
+        add(cssUnescape(tokens[0]!.value));
       return false;
     });
   };
   const css = (text: string) => {
     try {
       const root = postcss.parse(text);
-      root.walkDecls(declaration => { cssValue(declaration.value); });
-      root.walkAtRules(rule => { if (rule.name.toLowerCase() === "import") cssValue(rule.params, true); });
-    } catch { result.incomplete = true; }
+      root.walkDecls((declaration) => {
+        cssValue(declaration.value);
+      });
+      root.walkAtRules((rule) => {
+        if (rule.name.toLowerCase() === "import") cssValue(rule.params, true);
+      });
+    } catch {
+      result.incomplete = true;
+    }
   };
   const module = (text: string) => {
     try {
       const root = parseModule(text, { ecmaVersion: "latest", sourceType: "module" });
       for (const statement of root.body) {
-        if (statement.type !== "ImportDeclaration" && statement.type !== "ExportNamedDeclaration" && statement.type !== "ExportAllDeclaration") continue;
+        if (
+          statement.type !== "ImportDeclaration" &&
+          statement.type !== "ExportNamedDeclaration" &&
+          statement.type !== "ExportAllDeclaration"
+        )
+          continue;
         const imported = statement.source?.value;
         // Bare imports require a resolver/import map. Never invent filesystem authority.
-        if (typeof imported === "string" && (imported.startsWith(".") || imported.startsWith("/"))) add(imported);
+        if (typeof imported === "string" && (imported.startsWith(".") || imported.startsWith("/")))
+          add(imported);
       }
       const nodes: unknown[] = [root];
       let count = 0;
       while (nodes.length) {
-        if (++count > 50_000) { result.incomplete = true; break; }
+        if (++count > 50_000) {
+          result.incomplete = true;
+          break;
+        }
         const next = nodes.pop();
         if (!next || typeof next !== "object") continue;
         const node = next as Record<string, unknown>;
         if (node.type === "ImportExpression") {
           const imported = node.source as { type?: string; value?: unknown };
-          if (imported.type === "Literal" && typeof imported.value === "string" && (imported.value.startsWith(".") || imported.value.startsWith("/"))) add(imported.value);
+          if (
+            imported.type === "Literal" &&
+            typeof imported.value === "string" &&
+            (imported.value.startsWith(".") || imported.value.startsWith("/"))
+          )
+            add(imported.value);
         }
-        for (const value of Object.values(node)) if (Array.isArray(value)) nodes.push(...value); else if (value && typeof value === "object") nodes.push(value);
+        for (const value of Object.values(node))
+          if (Array.isArray(value)) nodes.push(...value);
+          else if (value && typeof value === "object") nodes.push(value);
       }
-    } catch { result.incomplete = true; }
+    } catch {
+      result.incomplete = true;
+    }
   };
   const srcset = (value: string) => {
     let offset = 0;
@@ -118,25 +182,55 @@ export async function browserAssetReferences(source: string, kind: BrowserAssetS
     const nodes: DefaultTreeAdapterTypes.Node[] = [document];
     let count = 0;
     while (nodes.length) {
-      if (++count > 50_000) { result.incomplete = true; break; }
+      if (++count > 50_000) {
+        result.incomplete = true;
+        break;
+      }
       const node = nodes.pop()!;
       if ("tagName" in node) {
-        const attributes = new Map(node.attrs.map(attribute => [attribute.name, attribute.value]));
+        const attributes = new Map(
+          node.attrs.map((attribute) => [attribute.name, attribute.value]),
+        );
         const tag = node.tagName;
-        if (tag === "base" && result.baseHref === undefined && attributes.has("href")) result.baseHref = attributes.get("href");
+        if (tag === "base" && result.baseHref === undefined && attributes.has("href"))
+          result.baseHref = attributes.get("href");
         const src = attributes.get("src");
-        if (tag === "script" || tag === "img" || tag === "source" || (tag === "input" && attributes.get("type")?.toLowerCase() === "image")) add(src);
-        if ((tag === "img" || tag === "source") && attributes.has("srcset")) srcset(attributes.get("srcset")!);
+        if (
+          tag === "script" ||
+          tag === "img" ||
+          tag === "source" ||
+          (tag === "input" && attributes.get("type")?.toLowerCase() === "image")
+        )
+          add(src);
+        if ((tag === "img" || tag === "source") && attributes.has("srcset"))
+          srcset(attributes.get("srcset")!);
         if (tag === "video") add(attributes.get("poster"));
         if (tag === "link") {
           const rel = new Set((attributes.get("rel") ?? "").toLowerCase().split(/\s+/));
-          if (rel.has("stylesheet") || rel.has("icon") || rel.has("modulepreload") || (rel.has("preload") && ["image", "font", "script", "style"].includes(attributes.get("as") ?? ""))) add(attributes.get("href"));
+          if (
+            rel.has("stylesheet") ||
+            rel.has("icon") ||
+            rel.has("modulepreload") ||
+            (rel.has("preload") &&
+              ["image", "font", "script", "style"].includes(attributes.get("as") ?? ""))
+          )
+            add(attributes.get("href"));
         }
-        const inlineText = node.childNodes.filter((child): child is DefaultTreeAdapterTypes.TextNode => child.nodeName === "#text").map(child => child.value).join("");
+        const inlineText = node.childNodes
+          .filter((child): child is DefaultTreeAdapterTypes.TextNode => child.nodeName === "#text")
+          .map((child) => child.value)
+          .join("");
         if (tag === "style") css(inlineText);
-        if (tag === "script" && !src && attributes.get("type")?.toLowerCase() === "module") module(inlineText);
+        if (tag === "script" && !src && attributes.get("type")?.toLowerCase() === "module")
+          module(inlineText);
         const style = attributes.get("style");
-        if (style) { try { cssValue(style); } catch { result.incomplete = true; } }
+        if (style) {
+          try {
+            cssValue(style);
+          } catch {
+            result.incomplete = true;
+          }
+        }
       }
       // Templates are inert until page code activates them; dynamic work stays explicit.
       if ("childNodes" in node) nodes.push(...[...node.childNodes].reverse());

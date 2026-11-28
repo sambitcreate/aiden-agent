@@ -85,14 +85,11 @@ function checkTimestamp(value: unknown): number {
   return Number.isFinite(ms) ? ms : 0;
 }
 
-export function normalizeGitHubCheckStatus(
-  node: RawStatusCheckNode,
-): GitHubPullRequestCheckStatus {
+export function normalizeGitHubCheckStatus(node: RawStatusCheckNode): GitHubPullRequestCheckStatus {
   const status = boundedString(node.status)?.toUpperCase();
   if (status && status !== "COMPLETED") return "pending";
   const value =
-    boundedString(node.conclusion)?.toUpperCase() ??
-    boundedString(node.state)?.toUpperCase();
+    boundedString(node.conclusion)?.toUpperCase() ?? boundedString(node.state)?.toUpperCase();
   switch (value) {
     case "SUCCESS":
       return "success";
@@ -149,9 +146,7 @@ function worseChecksState(
 
 function extractRawChecks(value: unknown): RawStatusCheckNode[] {
   const nodes =
-    isRecord(value) &&
-    isRecord(value.contexts) &&
-    Array.isArray(value.contexts.nodes)
+    isRecord(value) && isRecord(value.contexts) && Array.isArray(value.contexts.nodes)
       ? value.contexts.nodes
       : isRecord(value) && Array.isArray(value.contexts)
         ? value.contexts
@@ -168,21 +163,15 @@ function shouldReplaceCheck(
   next: { check: GitHubPullRequestCheck; timestamp: number },
 ): boolean {
   if (!previous) return true;
-  const isUnstartedPending = (entry: {
-    check: GitHubPullRequestCheck;
-    timestamp: number;
-  }) =>
+  const isUnstartedPending = (entry: { check: GitHubPullRequestCheck; timestamp: number }) =>
     entry.timestamp === 0 &&
-    (entry.check.status === "pending" ||
-      entry.check.status === "action-required");
+    (entry.check.status === "pending" || entry.check.status === "action-required");
   if (isUnstartedPending(next)) return true;
   if (isUnstartedPending(previous)) return false;
   return next.timestamp >= previous.timestamp;
 }
 
-export function dedupeGitHubChecks(
-  rawChecks: RawStatusCheckNode[],
-): GitHubPullRequestCheck[] {
+export function dedupeGitHubChecks(rawChecks: RawStatusCheckNode[]): GitHubPullRequestCheck[] {
   const entries = new Map<
     string,
     { check: GitHubPullRequestCheck; workflow?: string; timestamp: number }
@@ -192,10 +181,7 @@ export function dedupeGitHubChecks(
     if (!name) continue;
     const workflow = boundedString(raw.workflowName);
     const key = `${workflow ?? ""}${CHECK_IDENTITY_SEPARATOR}${name}`;
-    const timestamp = Math.max(
-      checkTimestamp(raw.completedAt),
-      checkTimestamp(raw.startedAt),
-    );
+    const timestamp = Math.max(checkTimestamp(raw.completedAt), checkTimestamp(raw.startedAt));
     const url = rawCheckUrl(raw);
     const description = boundedString(raw.description);
     const check: GitHubPullRequestCheck = {
@@ -210,10 +196,7 @@ export function dedupeGitHubChecks(
 
   const nameCounts = new Map<string, number>();
   for (const entry of entries.values()) {
-    nameCounts.set(
-      entry.check.name,
-      (nameCounts.get(entry.check.name) ?? 0) + 1,
-    );
+    nameCounts.set(entry.check.name, (nameCounts.get(entry.check.name) ?? 0) + 1);
   }
 
   return [...entries.values()].map(({ check, workflow }) => ({
@@ -228,27 +211,16 @@ export function dedupeGitHubChecks(
 export function rollupGitHubChecksState(
   checks: readonly GitHubPullRequestCheck[],
 ): GitHubPullRequestChecksState | null {
-  if (
-    checks.some(
-      (check) => check.status === "failure" || check.status === "cancelled",
-    )
-  )
+  if (checks.some((check) => check.status === "failure" || check.status === "cancelled"))
     return "failing";
-  if (
-    checks.some(
-      (check) =>
-        check.status === "pending" || check.status === "action-required",
-    )
-  ) {
+  if (checks.some((check) => check.status === "pending" || check.status === "action-required")) {
     return "pending";
   }
   if (checks.some((check) => check.status === "success")) return "passing";
   return null;
 }
 
-function normalizeReviewDecision(
-  value: unknown,
-): GitHubPullRequestReviewDecision | null {
+function normalizeReviewDecision(value: unknown): GitHubPullRequestReviewDecision | null {
   switch (boundedString(value)?.toUpperCase()) {
     case "APPROVED":
       return "approved";
@@ -273,13 +245,9 @@ function normalizeMergeable(value: unknown): boolean | null {
 }
 
 export function parseRawPullRequest(parsed: unknown): GitHubPullRequestSummary {
-  if (!isRecord(parsed))
-    throw new Error("GitHub returned an invalid pull request response.");
+  if (!isRecord(parsed)) throw new Error("GitHub returned an invalid pull request response.");
   const raw = parsed as RawPullRequest;
-  const number =
-    typeof raw.number === "number" && Number.isInteger(raw.number)
-      ? raw.number
-      : 0;
+  const number = typeof raw.number === "number" && Number.isInteger(raw.number) ? raw.number : 0;
   const title = boundedString(raw.title);
   const url = safeHttpUrl(raw.url);
   const stateValue = boundedString(raw.state)?.toUpperCase();
@@ -288,12 +256,7 @@ export function parseRawPullRequest(parsed: unknown): GitHubPullRequestSummary {
   if (!number || !title || !url || !headBranch || !baseBranch) {
     throw new Error("GitHub returned an incomplete pull request response.");
   }
-  const state =
-    stateValue === "MERGED"
-      ? "merged"
-      : stateValue === "CLOSED"
-        ? "closed"
-        : "open";
+  const state = stateValue === "MERGED" ? "merged" : stateValue === "CLOSED" ? "closed" : "open";
   const allChecks = dedupeGitHubChecks(extractRawChecks(raw.statusCheckRollup));
   const rollup = isRecord(raw.statusCheckRollup) ? raw.statusCheckRollup : undefined;
   const contexts = rollup && isRecord(rollup.contexts) ? rollup.contexts : undefined;
@@ -305,9 +268,7 @@ export function parseRawPullRequest(parsed: unknown): GitHubPullRequestSummary {
       ? worseChecksState(fromNodes, fromRollup)
       : fromNodes;
   const headSha = boundedString(raw.headRefOid, 64)?.toLowerCase();
-  const author = isRecord(raw.author)
-    ? boundedString(raw.author.login, 128)
-    : undefined;
+  const author = isRecord(raw.author) ? boundedString(raw.author.login, 128) : undefined;
   const updatedAt = checkTimestamp(raw.updatedAt);
   return {
     number,
@@ -327,20 +288,14 @@ export function parseRawPullRequest(parsed: unknown): GitHubPullRequestSummary {
   };
 }
 
-export function parseGitHubPullRequest(
-  rawJson: string,
-): GitHubPullRequestSummary {
+export function parseGitHubPullRequest(rawJson: string): GitHubPullRequestSummary {
   return parseRawPullRequest(JSON.parse(rawJson) as unknown);
 }
 
-export function parseGitHubPullRequestList(
-  rawJson: string,
-): GitHubPullRequestSummary[] {
+export function parseGitHubPullRequestList(rawJson: string): GitHubPullRequestSummary[] {
   const parsed = JSON.parse(rawJson) as unknown;
   if (!Array.isArray(parsed)) {
-    throw new Error(
-      "GitHub returned an invalid pull request list response.",
-    );
+    throw new Error("GitHub returned an invalid pull request list response.");
   }
   return parsed.map((entry) => parseRawPullRequest(entry));
 }
@@ -353,9 +308,7 @@ export function parseGitHubPullRequestList(
  */
 export function pullRequestIdentityFromSummary(
   summary: GitHubPullRequestSummary,
-):
-  | { host: string; repository: string; number: number; url: string }
-  | undefined {
+): { host: string; repository: string; number: number; url: string } | undefined {
   const ref = parseGitHubPullRequestUrl(summary.url);
   return ref && ref.number === summary.number
     ? { ...ref, url: canonicalGitHubPullRequestUrl(ref) }

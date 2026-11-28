@@ -38,11 +38,22 @@ interface BotTurnVisitor {
 
 const startsTurn = (
   entry: BotTranscriptEntry,
-): entry is Extract<BotTurnStart, { type: "user" | "question_answer" | "handoff_result" | "routine" | "bot_message" }> =>
-  entry.type === "user" || entry.type === "question_answer" || entry.type === "handoff_result" || entry.type === "routine" || entry.type === "bot_message";
+): entry is Extract<
+  BotTurnStart,
+  { type: "user" | "question_answer" | "handoff_result" | "routine" | "bot_message" }
+> =>
+  entry.type === "user" ||
+  entry.type === "question_answer" ||
+  entry.type === "handoff_result" ||
+  entry.type === "routine" ||
+  entry.type === "bot_message";
 
 /** Walks `entries` as turns; the turn still open at the end is live when `running`. */
-export function walkBotTurns(entries: readonly BotTranscriptEntry[], running: boolean, visitor: BotTurnVisitor): void {
+export function walkBotTurns(
+  entries: readonly BotTranscriptEntry[],
+  running: boolean,
+  visitor: BotTurnVisitor,
+): void {
   // Held in an object so the closures below do not narrow it to `never`.
   const state: { turn: BotTurn | null } = { turn: null };
   const byCall = new Map<string, BotRecapStep>();

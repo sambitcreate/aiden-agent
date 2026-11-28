@@ -111,12 +111,16 @@ export function remoteChatRowActions(
   capabilities: ReadonlySet<HostChatCapability>,
 ): RemoteChatRowAction[] {
   const actions: RemoteChatRowAction[] = [{ id: "open", disabled: false }];
-  if (chat.unread && capabilities.has("markRead")) actions.push({ id: "markRead", disabled: chat.stale });
-  if (chat.revision && capabilities.has("rename")) actions.push({ id: "rename", disabled: chat.stale });
+  if (chat.unread && capabilities.has("markRead"))
+    actions.push({ id: "markRead", disabled: chat.stale });
+  if (chat.revision && capabilities.has("rename"))
+    actions.push({ id: "rename", disabled: chat.stale });
   return actions;
 }
 
-export function isRemoteSidebarProject(project: SidebarProjectSummary): project is RemoteSidebarProject {
+export function isRemoteSidebarProject(
+  project: SidebarProjectSummary,
+): project is RemoteSidebarProject {
   return (project as Partial<RemoteSidebarProject>).remote === true;
 }
 
@@ -155,7 +159,10 @@ export function sidebarHosts(
   const nameOf = (view: PeerHostView) => view.name.trim() || UNNAMED_PAIRED_HOST_LABEL;
   // A peer named like this computer's own label gets a suffix on every platform.
   const counts = new Map<string, number>(
-    [thisComputerLabel("darwin"), thisComputerLabel("linux")].map((label) => [label.toLocaleLowerCase(), 1]),
+    [thisComputerLabel("darwin"), thisComputerLabel("linux")].map((label) => [
+      label.toLocaleLowerCase(),
+      1,
+    ]),
   );
   for (const view of enabled) {
     const folded = nameOf(view).toLocaleLowerCase();
@@ -224,12 +231,20 @@ export function remoteSidebarRows(
     const workspaceId = text(row, "workspaceId");
     if (!workspaceId) return [];
     const run = runs.get(row.id);
-    const { rowState, hostUnread, lastRunFailed, attentionSince, runStartedAt, lastAssistantAt, triage } =
-      peerFeedChatState(row, run, stale);
+    const {
+      rowState,
+      hostUnread,
+      lastRunFailed,
+      attentionSince,
+      runStartedAt,
+      lastAssistantAt,
+      triage,
+    } = peerFeedChatState(row, run, stale);
     const unread = !isOpen(host.id, row.id) && hostUnread;
     const revision = text(row, "revision");
     const waiting = rowState === "needs_approval" || rowState === "needs_input";
-    const attentionSummary = waiting && run && PEER_LIVE_RUN_STATES.has(run.state) ? run.attentionSummary : undefined;
+    const attentionSummary =
+      waiting && run && PEER_LIVE_RUN_STATES.has(run.state) ? run.attentionSummary : undefined;
     return [
       {
         key: projectOrderKey(host.id, row.id),
@@ -249,7 +264,9 @@ export function remoteSidebarRows(
         ...(revision ? { revision } : {}),
         ...(attentionSince !== undefined ? { attentionSince } : {}),
         ...(runStartedAt !== undefined ? { runStartedAt } : {}),
-        ...(typeof row.lastAssistantMessageId === "string" ? { lastAssistantMessageId: row.lastAssistantMessageId } : {}),
+        ...(typeof row.lastAssistantMessageId === "string"
+          ? { lastAssistantMessageId: row.lastAssistantMessageId }
+          : {}),
         ...(lastAssistantAt !== undefined ? { lastAssistantAt } : {}),
         ...(triage ? { triage } : {}),
         ...(attentionSummary ? { attentionSummary } : {}),
@@ -288,14 +305,19 @@ export function machineFilterForHost(hostId: string): SidebarMachineFilter {
 }
 
 /** One sidebar project group: a single workspace, or same-repository workspaces across machines. */
-export interface SidebarProjectEntry<L extends SidebarProjectSummary> extends SidebarProjectSummary {
+export interface SidebarProjectEntry<
+  L extends SidebarProjectSummary,
+> extends SidebarProjectSummary {
   /** The member whose name and key the group uses: this Mac's when it has one. */
   primary: L | RemoteSidebarProject;
   /** Every machine's workspace in the group, this Mac first, then by host label. */
   members: (L | RemoteSidebarProject)[];
 }
 
-export interface CombineSidebarRowsInput<L extends SidebarProjectSummary, LC extends SidebarChatSummary> {
+export interface CombineSidebarRowsInput<
+  L extends SidebarProjectSummary,
+  LC extends SidebarChatSummary,
+> {
   local: { projects: readonly L[]; chats: readonly LC[] };
   remote: readonly RemoteSidebarRows[];
   hosts: readonly SidebarHost[];
@@ -305,7 +327,10 @@ export interface CombineSidebarRowsInput<L extends SidebarProjectSummary, LC ext
   localRepository?: (project: L) => PeerRepositoryIdentity | null | undefined;
 }
 
-export interface CombinedSidebarRows<L extends SidebarProjectSummary, LC extends SidebarChatSummary> {
+export interface CombinedSidebarRows<
+  L extends SidebarProjectSummary,
+  LC extends SidebarChatSummary,
+> {
   projects: SidebarProjectEntry<L>[];
   chats: (LC | RemoteSidebarChat)[];
 }
@@ -315,16 +340,22 @@ function machineOf(project: SidebarProjectSummary): string {
 }
 
 function minTime(values: (number | undefined)[]): number | undefined {
-  const usable = values.filter((value): value is number => typeof value === "number" && Number.isFinite(value));
+  const usable = values.filter(
+    (value): value is number => typeof value === "number" && Number.isFinite(value),
+  );
   return usable.length > 0 ? Math.min(...usable) : undefined;
 }
 
 function maxTime(values: (number | undefined)[]): number | undefined {
-  const usable = values.filter((value): value is number => typeof value === "number" && Number.isFinite(value));
+  const usable = values.filter(
+    (value): value is number => typeof value === "number" && Number.isFinite(value),
+  );
   return usable.length > 0 ? Math.max(...usable) : undefined;
 }
 
-function singleEntry<L extends SidebarProjectSummary>(project: L | RemoteSidebarProject): SidebarProjectEntry<L> {
+function singleEntry<L extends SidebarProjectSummary>(
+  project: L | RemoteSidebarProject,
+): SidebarProjectEntry<L> {
   return {
     key: project.key,
     name: project.name,
@@ -347,8 +378,7 @@ export function combineSidebarRows<L extends SidebarProjectSummary, LC extends S
 ): CombinedSidebarRows<L, LC> {
   const filter = effectiveMachineFilter(input.filter, input.hosts);
   const showLocal = filter === "all" || filter === "local";
-  const shownHost = (hostId: string) =>
-    filter === "all" || filter === machineFilterForHost(hostId);
+  const shownHost = (hostId: string) => filter === "all" || filter === machineFilterForHost(hostId);
   const hostOrder = new Map(input.hosts.map((host, index) => [host.id, index]));
   const remoteProjects = input.remote
     .flatMap((rows) => rows.projects)

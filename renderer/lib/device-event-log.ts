@@ -42,7 +42,9 @@ function toEntry(raw: unknown): DeviceEventLogEntry | null {
 }
 
 /** One SSE payload: `{ events: [...] }` seeds (and replaces) the log, `{ event }` appends one entry. */
-export function parseEventLogPayload(data: unknown): { entries: DeviceEventLogEntry[]; reset: boolean } | null {
+export function parseEventLogPayload(
+  data: unknown,
+): { entries: DeviceEventLogEntry[]; reset: boolean } | null {
   if (!isRecord(data)) return null;
   if (Array.isArray(data.events)) {
     return { entries: data.events.flatMap((raw) => toEntry(raw) ?? []), reset: true };
@@ -88,11 +90,15 @@ export function createEventLogBuffer(limit = DEVICE_EVENT_LOG_LIMIT): DeviceEven
 }
 
 /** Case-insensitive match on the summary or kind. */
-export function filterEventLog(entries: readonly DeviceEventLogEntry[], query: string): DeviceEventLogEntry[] {
+export function filterEventLog(
+  entries: readonly DeviceEventLogEntry[],
+  query: string,
+): DeviceEventLogEntry[] {
   const needle = query.trim().toLowerCase();
   if (!needle) return [...entries];
   return entries.filter(
-    (entry) => entry.summary.toLowerCase().includes(needle) || entry.kind.toLowerCase().includes(needle),
+    (entry) =>
+      entry.summary.toLowerCase().includes(needle) || entry.kind.toLowerCase().includes(needle),
   );
 }
 
@@ -108,7 +114,9 @@ export function eventLogTime(timestamp: string): string {
 /** Plain text for the clipboard: one line per entry. */
 export function formatEventLog(entries: readonly DeviceEventLogEntry[]): string {
   return entries
-    .map((entry) => [eventLogTime(entry.timestamp), entry.kind, entry.summary].filter(Boolean).join("  "))
+    .map((entry) =>
+      [eventLogTime(entry.timestamp), entry.kind, entry.summary].filter(Boolean).join("  "),
+    )
     .join("\n");
 }
 
@@ -134,7 +142,8 @@ const LOGCAT_LEVELS: Readonly<Record<string, string>> = {
 };
 
 /** `MM-DD HH:MM:SS.mmm  PID  TID L TAG     : message`, as `-v threadtime` prints it. */
-const THREADTIME = /^\d\d-\d\d\s+\d\d:\d\d:\d\d\.\d{3}\s+(\d+)\s+(\d+)\s+([VDIWEFA])\s+(.*?)\s*:(?: (.*))?$/u;
+const THREADTIME =
+  /^\d\d-\d\d\s+\d\d:\d\d:\d\d\.\d{3}\s+(\d+)\s+(\d+)\s+([VDIWEFA])\s+(.*?)\s*:(?: (.*))?$/u;
 
 export interface LogcatLine {
   pid: number;
@@ -184,15 +193,21 @@ export function parseLogcatPayload(
   if (!isRecord(data)) return null;
   if (Array.isArray(data.lines)) {
     const entries = data.lines.flatMap((raw) =>
-      isRecord(raw) && typeof raw.line === "string" ? [logcatEntry(raw.line, typeof raw.at === "string" ? raw.at : "")] : [],
+      isRecord(raw) && typeof raw.line === "string"
+        ? [logcatEntry(raw.line, typeof raw.at === "string" ? raw.at : "")]
+        : [],
     );
-    const dropped = typeof data.dropped === "number" && Number.isFinite(data.dropped) ? data.dropped : 0;
+    const dropped =
+      typeof data.dropped === "number" && Number.isFinite(data.dropped) ? data.dropped : 0;
     if (dropped > 0) {
       entries.push({
         id: nextLogcatId++,
         timestamp: entries[entries.length - 1]?.timestamp ?? "",
         kind: "logcat",
-        summary: dropped === 1 ? "1 line was skipped to keep up." : `${dropped} lines were skipped to keep up.`,
+        summary:
+          dropped === 1
+            ? "1 line was skipped to keep up."
+            : `${dropped} lines were skipped to keep up.`,
       });
     }
     return { entries };
@@ -214,7 +229,8 @@ export function subscribeAndroidLogcat(
 ): () => void {
   const controller = new AbortController();
   const query = new URLSearchParams({ device: target.deviceId });
-  if (target.packageName && ANDROID_PACKAGE.test(target.packageName)) query.set("package", target.packageName);
+  if (target.packageName && ANDROID_PACKAGE.test(target.packageName))
+    query.set("package", target.packageName);
   const url = deviceHubUrl(target, `/vendor/serve-emu/api/logcat?${query.toString()}`, "http");
   let ended = false;
   const end = (error: string | null) => {
@@ -243,7 +259,11 @@ export function subscribeAndroidLogcat(
     try {
       const response = await runtime.fetch(url, { signal: controller.signal, credentials: "omit" });
       if (!response.ok || !response.body) {
-        end(response.status === 429 ? "Too many logcat readers are open for this emulator." : "Logcat is unavailable for this emulator.");
+        end(
+          response.status === 429
+            ? "Too many logcat readers are open for this emulator."
+            : "Logcat is unavailable for this emulator.",
+        );
         return;
       }
       const reader = response.body.getReader();
@@ -272,8 +292,15 @@ export function subscribeDeviceEventLog(
   runtime: DeviceEventLogRuntime = { fetch: (url, init) => fetch(url, init) },
 ): () => void {
   const controller = new AbortController();
-  const query = new URLSearchParams({ device: target.deviceId, limit: String(DEVICE_EVENT_LOG_SEED) });
-  const url = deviceHubUrl(target, `/vendor/serve-sim/api/event-log/events?${query.toString()}`, "http");
+  const query = new URLSearchParams({
+    device: target.deviceId,
+    limit: String(DEVICE_EVENT_LOG_SEED),
+  });
+  const url = deviceHubUrl(
+    target,
+    `/vendor/serve-sim/api/event-log/events?${query.toString()}`,
+    "http",
+  );
   const parse = createSseParser((data) => {
     let payload: unknown;
     try {

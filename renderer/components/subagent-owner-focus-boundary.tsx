@@ -18,8 +18,7 @@ export function useSubagentSelectionRestoreRunRepair(
   }, [restoreRunIdRef, runs, selectedRunId]);
 }
 
-export interface SubagentOwnerFocusBoundaryProps
-  extends React.HTMLAttributes<HTMLDivElement> {
+export interface SubagentOwnerFocusBoundaryProps extends React.HTMLAttributes<HTMLDivElement> {
   ownerKey: string;
   replacementKey: string;
   active: boolean;
@@ -68,9 +67,7 @@ export class SubagentOwnerFocusBoundary extends React.Component<
 > {
   private readonly boundaryRef = React.createRef<HTMLDivElement>();
 
-  getSnapshotBeforeUpdate(
-    previousProps: Readonly<SubagentOwnerFocusBoundaryProps>,
-  ): boolean {
+  getSnapshotBeforeUpdate(previousProps: Readonly<SubagentOwnerFocusBoundaryProps>): boolean {
     if (
       previousProps.replacementKey === this.props.replacementKey ||
       !previousProps.active ||
@@ -80,8 +77,7 @@ export class SubagentOwnerFocusBoundary extends React.Component<
     }
     const activeElement = document.activeElement;
     return (
-      activeElement instanceof Node &&
-      this.boundaryRef.current?.contains(activeElement) === true
+      activeElement instanceof Node && this.boundaryRef.current?.contains(activeElement) === true
     );
   }
 
@@ -91,10 +87,7 @@ export class SubagentOwnerFocusBoundary extends React.Component<
     restoreFocus: boolean,
   ): void {
     if (!restoreFocus || !this.props.active) return;
-    focusSubagentOwnerReplacement(
-      this.boundaryRef.current,
-      this.props.fallbackFocusTarget,
-    );
+    focusSubagentOwnerReplacement(this.boundaryRef.current, this.props.fallbackFocusTarget);
   }
 
   render() {
@@ -107,11 +100,7 @@ export class SubagentOwnerFocusBoundary extends React.Component<
       ...props
     } = this.props;
     return (
-      <div
-        ref={this.boundaryRef}
-        data-subagent-owner-focus-boundary={ownerKey}
-        {...props}
-      >
+      <div ref={this.boundaryRef} data-subagent-owner-focus-boundary={ownerKey} {...props}>
         {children}
       </div>
     );

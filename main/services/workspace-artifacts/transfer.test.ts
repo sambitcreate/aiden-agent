@@ -36,7 +36,11 @@ async function tempDir(t: test.TestContext, prefix: string): Promise<string> {
  * person change its state, exports it, and imports the file into a fresh
  * workspace's store.
  */
-async function roundTrip(t: test.TestContext, args: Record<string, unknown>, savedState?: Record<string, unknown>) {
+async function roundTrip(
+  t: test.TestContext,
+  args: Record<string, unknown>,
+  savedState?: Record<string, unknown>,
+) {
   const dir = await tempDir(t, "aiden-artifact-roundtrip-");
   const made = new WorkspaceArtifactStore({ root: () => dir, newId: () => "art1" });
   const tool = createWorkspaceArtifactTool({
@@ -53,7 +57,10 @@ async function roundTrip(t: test.TestContext, args: Record<string, unknown>, sav
   const original = (await made.get("ws1", "art1"))!.artifact;
   const text = `${JSON.stringify(workspaceArtifactPageFile(original), null, 2)}\n`;
   const imported = parseWorkspaceArtifactPageFileText(text);
-  const into = new WorkspaceArtifactStore({ root: () => path.join(dir, "other"), newId: () => "art9" });
+  const into = new WorkspaceArtifactStore({
+    root: () => path.join(dir, "other"),
+    newId: () => "art9",
+  });
   const saved = await into.create("ws2", imported, { uniqueTitle: true });
   return { original, file: JSON.parse(text) as Record<string, unknown>, imported, saved };
 }
@@ -68,20 +75,37 @@ function pageFile(overrides: Record<string, unknown> = {}, visual: Record<string
     format: "aiden-artifact-page",
     version: 1,
     title: "Open PRs",
-    visual: { catalogVersion: AIDEN_UI_CATALOG_VERSION, tree: compiled.tree, fallbackText: compiled.fallbackText, ...visual },
+    visual: {
+      catalogVersion: AIDEN_UI_CATALOG_VERSION,
+      tree: compiled.tree,
+      fallbackText: compiled.fallbackText,
+      ...visual,
+    },
     sources: [{ name: "pulls", kind: "shell", command: "gh pr list --json number", parse: "json" }],
-    actions: [{ name: "merge", label: "Merge pull request", command: "gh pr merge {{number}} --squash", params: [{ name: "number", type: "number" }] }],
+    actions: [
+      {
+        name: "merge",
+        label: "Merge pull request",
+        command: "gh pr merge {{number}} --squash",
+        params: [{ name: "number", type: "number" }],
+      },
+    ],
     refresh: { onOpen: true },
     ...overrides,
   };
 }
 
 test("a page file reads back as the page it describes", () => {
-  const content = parseWorkspaceArtifactPageFile(pageFile({ description: "Pull requests waiting on review" }));
+  const content = parseWorkspaceArtifactPageFile(
+    pageFile({ description: "Pull requests waiting on review" }),
+  );
   assert.equal(content.title, "Open PRs");
   assert.equal(content.description, "Pull requests waiting on review");
   assert.equal(content.visual.tree.t, "Visual");
-  assert.deepEqual(content.actions.map((action) => action.name), ["merge"]);
+  assert.deepEqual(
+    content.actions.map((action) => action.name),
+    ["merge"],
+  );
   assert.deepEqual(content.refresh, { onOpen: true });
   // A file's state is what its markup declared: the page starts there and resets to it.
   const stateful = parseWorkspaceArtifactPageFile(pageFile({}, { state: { tab: "all" } }));
@@ -95,7 +119,11 @@ test("a stateful page exports the state its markup declared, not what the person
   <TextInput bind="note" label="Note" />
   <Button action={setState("plan", "solo")}>Solo</Button>
 </Visual>`;
-  const { original, file, imported, saved } = await roundTrip(t, { title: "Plan", markup }, { plan: "solo", note: "private" });
+  const { original, file, imported, saved } = await roundTrip(
+    t,
+    { title: "Plan", markup },
+    { plan: "solo", note: "private" },
+  );
   assert.deepEqual(original.visual.state, { plan: "solo", note: "private" });
   assert.deepEqual((file.visual as Record<string, unknown>).state, { plan: "team", note: "" });
   assert.ok(!JSON.stringify(file).includes("private"));
@@ -110,7 +138,11 @@ test("a wide page with inline data comes back wide with the same data", async (t
   <Data name="weeks">[{"week": "W1", "users": 1180}, {"week": "W2", "users": 1240}]</Data>
   <Chart kind="bar" data={$weeks} x="week" y="users" />
 </Visual>`;
-  const { original, file, saved } = await roundTrip(t, { title: "Weekly users", markup, layout: "wide" });
+  const { original, file, saved } = await roundTrip(t, {
+    title: "Weekly users",
+    markup,
+    layout: "wide",
+  });
   assert.equal(original.visual.layout, "wide");
   assert.equal((file.visual as Record<string, unknown>).state, undefined);
   assert.equal(saved.visual.layout, "wide");
@@ -147,83 +179,189 @@ test("a page saved before its declared state was kept apart exports no state", (
 
 test("an imported page is held to what the compiler enforces and keeps only known keys", () => {
   const tree = (child: unknown) => ({ t: "Visual", k: "0", c: [child] });
-  const button = (action: unknown) => ({ t: "Button", k: "0.0", p: { action }, c: [{ t: "#text", k: "0.0.0", s: "Go" }] });
+  const button = (action: unknown) => ({
+    t: "Button",
+    k: "0.0",
+    p: { action },
+    c: [{ t: "#text", k: "0.0.0", s: "Go" }],
+  });
   assert.throws(
-    () => parseWorkspaceArtifactPageFile(pageFile({}, { tree: tree(button({ act: "open", url: { op: "lit", v: "javascript:alert(1)" } })) })),
+    () =>
+      parseWorkspaceArtifactPageFile(
+        pageFile(
+          {},
+          { tree: tree(button({ act: "open", url: { op: "lit", v: "javascript:alert(1)" } })) },
+        ),
+      ),
     /can’t be imported: openUrl only accepts https/u,
   );
   assert.throws(
-    () => parseWorkspaceArtifactPageFile(pageFile({}, { tree: tree(button({ act: "set", key: "missing", value: { op: "lit", v: 1 } })) })),
+    () =>
+      parseWorkspaceArtifactPageFile(
+        pageFile(
+          {},
+          { tree: tree(button({ act: "set", key: "missing", value: { op: "lit", v: 1 } })) },
+        ),
+      ),
     /doesn’t declare/u,
   );
-  assert.throws(() => parseWorkspaceArtifactPageFile(pageFile({}, { dataJson: "{nope" })), /isn’t valid JSON/u);
+  assert.throws(
+    () => parseWorkspaceArtifactPageFile(pageFile({}, { dataJson: "{nope" })),
+    /isn’t valid JSON/u,
+  );
   const kept = parseWorkspaceArtifactPageFile(
-    pageFile({}, { tree: { ...tree(button({ act: "copy", text: { op: "lit", v: "x" }, extra: 1 })), sneaky: "<script>" } }),
+    pageFile(
+      {},
+      {
+        tree: {
+          ...tree(button({ act: "copy", text: { op: "lit", v: "x" }, extra: 1 })),
+          sneaky: "<script>",
+        },
+      },
+    ),
   );
   assert.deepEqual(kept.visual.tree, {
     t: "Visual",
     k: "0",
-    c: [{ t: "Button", k: "0.0", p: { action: { act: "copy", text: { op: "lit", v: "x" } } }, c: [{ t: "#text", k: "0.0.0", s: "Go" }] }],
+    c: [
+      {
+        t: "Button",
+        k: "0.0",
+        p: { action: { act: "copy", text: { op: "lit", v: "x" } } },
+        c: [{ t: "#text", k: "0.0.0", s: "Go" }],
+      },
+    ],
   });
 });
 
 test("a file of another format, version or kind is refused with the reason", () => {
   assert.throws(() => parseWorkspaceArtifactPageFileText("not json"), /isn’t an Aiden page/u);
-  assert.throws(() => parseWorkspaceArtifactPageFile(pageFile({ format: "aiden-chat" })), /isn’t an Aiden page/u);
+  assert.throws(
+    () => parseWorkspaceArtifactPageFile(pageFile({ format: "aiden-chat" })),
+    /isn’t an Aiden page/u,
+  );
   assert.throws(() => parseWorkspaceArtifactPageFile([pageFile()]), /isn’t an Aiden page/u);
   assert.throws(() => parseWorkspaceArtifactPageFile(pageFile({ version: 2 })), /newer Aiden/u);
-  assert.throws(() => parseWorkspaceArtifactPageFile(pageFile({ version: "1" })), /version isn’t one Aiden can read/u);
-  assert.throws(() => parseWorkspaceArtifactPageFile(pageFile({}, { catalogVersion: AIDEN_UI_CATALOG_VERSION + 1 })), /components this Aiden doesn’t have/u);
+  assert.throws(
+    () => parseWorkspaceArtifactPageFile(pageFile({ version: "1" })),
+    /version isn’t one Aiden can read/u,
+  );
+  assert.throws(
+    () =>
+      parseWorkspaceArtifactPageFile(
+        pageFile({}, { catalogVersion: AIDEN_UI_CATALOG_VERSION + 1 }),
+      ),
+    /components this Aiden doesn’t have/u,
+  );
 });
 
 test("commands are held to the same rules as a page Aiden saves: a refused placeholder imports turned off", () => {
   // A value that would choose the program itself, or sit inside quotes: the
   // page imports, but the action never runs, as on a stored page.
-  const asCommand = { name: "go", label: "Go", command: "{{tool}} --version", params: [{ name: "tool" }] };
-  const quoted = { name: "say", label: "Say", command: "echo \"{{text}}\"", params: [{ name: "text" }] };
+  const asCommand = {
+    name: "go",
+    label: "Go",
+    command: "{{tool}} --version",
+    params: [{ name: "tool" }],
+  };
+  const quoted = {
+    name: "say",
+    label: "Say",
+    command: 'echo "{{text}}"',
+    params: [{ name: "text" }],
+  };
   const content = parseWorkspaceArtifactPageFile(pageFile({ actions: [asCommand, quoted] }));
-  assert.deepEqual(content.actions.map((action) => action.name), ["go", "say"]);
+  assert.deepEqual(
+    content.actions.map((action) => action.name),
+    ["go", "say"],
+  );
   assert.match(workspaceArtifactActionProblem(content.actions[0]!) ?? "", /the command itself/u);
   assert.match(workspaceArtifactActionProblem(content.actions[1]!) ?? "", /inside double quotes/u);
-  assert.throws(() => resolveWorkspaceArtifactCommand(content.actions[0]!, ["rm"]), /Go is turned off/u);
-  assert.throws(() => resolveWorkspaceArtifactCommand(content.actions[1]!, ["hi"]), /Say is turned off/u);
+  assert.throws(
+    () => resolveWorkspaceArtifactCommand(content.actions[0]!, ["rm"]),
+    /Go is turned off/u,
+  );
+  assert.throws(
+    () => resolveWorkspaceArtifactCommand(content.actions[1]!, ["hi"]),
+    /Say is turned off/u,
+  );
   // The import dialog says so beside the command.
   assert.deepEqual(
     workspaceArtifactCommandList(content.sources, content.actions).map((entry) => entry.label),
-    ["Source pulls", "Button “Go” (turned off: it won’t run)", "Button “Say” (turned off: it won’t run)"],
+    [
+      "Source pulls",
+      "Button “Go” (turned off: it won’t run)",
+      "Button “Say” (turned off: it won’t run)",
+    ],
   );
   // Anything else wrong with an action still refuses the file.
   const unknownParam = [{ name: "go", label: "Go", command: "gh pr view {{number}}", params: [] }];
-  assert.throws(() => parseWorkspaceArtifactPageFile(pageFile({ actions: unknownParam })), /can’t be imported: actions\[0\].*not one of its params/u);
-  const hiddenLabel = [{ name: "merge", label: "Merge‮gnp.exe", command: "gh pr merge", params: [] }];
+  assert.throws(
+    () => parseWorkspaceArtifactPageFile(pageFile({ actions: unknownParam })),
+    /can’t be imported: actions\[0\].*not one of its params/u,
+  );
+  const hiddenLabel = [
+    { name: "merge", label: "Merge‮gnp.exe", command: "gh pr merge", params: [] },
+  ];
   assert.throws(() => parseWorkspaceArtifactPageFile(pageFile({ actions: hiddenLabel })), /label/u);
   const outside = [{ name: "keys", kind: "file", file: "../.ssh/id_ed25519", parse: "text" }];
-  assert.throws(() => parseWorkspaceArtifactPageFile(pageFile({ sources: outside })), /may not leave the workspace folder/u);
+  assert.throws(
+    () => parseWorkspaceArtifactPageFile(pageFile({ sources: outside })),
+    /may not leave the workspace folder/u,
+  );
   const secrets = [{ name: "env", kind: "file", file: ".env", parse: "text" }];
-  assert.throws(() => parseWorkspaceArtifactPageFile(pageFile({ sources: secrets })), /can’t be imported: Credential files/u);
+  assert.throws(
+    () => parseWorkspaceArtifactPageFile(pageFile({ sources: secrets })),
+    /can’t be imported: Credential files/u,
+  );
 });
 
 test("a stored page with a turned-off action exports, and imports back with that action still turned off", async (t) => {
   const dir = await tempDir(t, "aiden-artifact-turned-off-");
   const made = new WorkspaceArtifactStore({ root: () => dir, newId: () => "art1" });
-  const fetch: WorkspaceArtifactActionV1 = { name: "fetch", label: "Fetch", command: "git fetch origin {{ref}}", params: [{ name: "ref", type: "string" }] };
+  const fetch: WorkspaceArtifactActionV1 = {
+    name: "fetch",
+    label: "Fetch",
+    command: "git fetch origin {{ref}}",
+    params: [{ name: "ref", type: "string" }],
+  };
   const content = parseWorkspaceArtifactPageFile(pageFile({ sources: [], actions: [fetch] }));
   await made.create("ws1", content);
   // Written by an earlier release, whose rules let a value reach --upload-pack.
   const file = path.join(dir, "ws1.json");
-  const document = JSON.parse(await fs.readFile(file, "utf8")) as { artifacts: { actions: WorkspaceArtifactActionV1[] }[] };
-  document.artifacts[0]!.actions.push({ ...fetch, name: "probe", label: "Probe", command: "git fetch --upload-p {{ref}} ." });
+  const document = JSON.parse(await fs.readFile(file, "utf8")) as {
+    artifacts: { actions: WorkspaceArtifactActionV1[] }[];
+  };
+  document.artifacts[0]!.actions.push({
+    ...fetch,
+    name: "probe",
+    label: "Probe",
+    command: "git fetch --upload-p {{ref}} .",
+  });
   await fs.writeFile(file, JSON.stringify(document));
-  const stored = (await new WorkspaceArtifactStore({ root: () => dir }).get("ws1", "art1"))!.artifact;
-  assert.deepEqual(stored.actions.map((action) => action.name), ["fetch", "probe"]);
+  const stored = (await new WorkspaceArtifactStore({ root: () => dir }).get("ws1", "art1"))!
+    .artifact;
+  assert.deepEqual(
+    stored.actions.map((action) => action.name),
+    ["fetch", "probe"],
+  );
 
   const exported = `${JSON.stringify(workspaceArtifactPageFile(stored), null, 2)}\n`;
   const imported = parseWorkspaceArtifactPageFileText(exported);
-  const into = new WorkspaceArtifactStore({ root: () => path.join(dir, "other"), newId: () => "art9" });
+  const into = new WorkspaceArtifactStore({
+    root: () => path.join(dir, "other"),
+    newId: () => "art9",
+  });
   const saved = await into.create("ws2", imported, { uniqueTitle: true });
   const [kept, probe] = saved.actions;
-  assert.deepEqual(saved.actions.map((action) => action.name), ["fetch", "probe"]);
-  assert.equal(resolveWorkspaceArtifactCommand(kept!, ["main"]).preview, "GIT_LITERAL_PATHSPECS=1 git fetch origin 'main'");
+  assert.deepEqual(
+    saved.actions.map((action) => action.name),
+    ["fetch", "probe"],
+  );
+  assert.equal(
+    resolveWorkspaceArtifactCommand(kept!, ["main"]).preview,
+    "GIT_LITERAL_PATHSPECS=1 git fetch origin 'main'",
+  );
   assert.throws(() => resolveWorkspaceArtifactCommand(probe!, ["./x.sh"]), /Probe is turned off/u);
   assert.equal(saved.approvedDigest, undefined);
 });
@@ -256,7 +394,13 @@ test("the page may use only Aiden's components and their own settings", () => {
     /uses <Visual>, which isn’t one of Aiden’s components/u,
   );
   assert.throws(
-    () => parseWorkspaceArtifactPageFile(pageFile({}, { tree: tree({ t: "Text", k: "0.0", p: { onClick: { op: "lit", v: "x" } } }) })),
+    () =>
+      parseWorkspaceArtifactPageFile(
+        pageFile(
+          {},
+          { tree: tree({ t: "Text", k: "0.0", p: { onClick: { op: "lit", v: "x" } } }) },
+        ),
+      ),
     /<Text> has a setting Aiden doesn’t know/u,
   );
   assert.throws(
@@ -265,17 +409,30 @@ test("the page may use only Aiden's components and their own settings", () => {
   );
   // A name that doesn't read as one is never echoed.
   assert.throws(
-    () => parseWorkspaceArtifactPageFile(pageFile({}, { tree: tree({ t: "<img src=x>", k: "0.0" }) })),
+    () =>
+      parseWorkspaceArtifactPageFile(pageFile({}, { tree: tree({ t: "<img src=x>", k: "0.0" }) })),
     (error: Error) => /uses a component/u.test(error.message) && !error.message.includes("<img"),
   );
 });
 
 test("a title that breaks the title rules, or hides characters, is refused", () => {
   assert.throws(() => parseWorkspaceArtifactPageFile(pageFile({ title: "" })), /title must be/u);
-  assert.throws(() => parseWorkspaceArtifactPageFile(pageFile({ title: "x".repeat(81) })), /title must be/u);
-  assert.throws(() => parseWorkspaceArtifactPageFile(pageFile({ title: "Open\nPRs" })), /title must be/u);
-  assert.throws(() => parseWorkspaceArtifactPageFile(pageFile({ title: "Open PRs‮" })), /title must be/u);
-  assert.equal(parseWorkspaceArtifactPageFile(pageFile({ title: "  Open PRs  " })).title, "Open PRs");
+  assert.throws(
+    () => parseWorkspaceArtifactPageFile(pageFile({ title: "x".repeat(81) })),
+    /title must be/u,
+  );
+  assert.throws(
+    () => parseWorkspaceArtifactPageFile(pageFile({ title: "Open\nPRs" })),
+    /title must be/u,
+  );
+  assert.throws(
+    () => parseWorkspaceArtifactPageFile(pageFile({ title: "Open PRs‮" })),
+    /title must be/u,
+  );
+  assert.equal(
+    parseWorkspaceArtifactPageFile(pageFile({ title: "  Open PRs  " })).title,
+    "Open PRs",
+  );
 });
 
 test("the suggested file name can't be hidden or reach another folder", () => {
@@ -292,30 +449,48 @@ test("a title of 80 CJK characters suggests a name a file system can save", asyn
   assert.ok(Buffer.byteLength(name, "utf8") <= 200, `${Buffer.byteLength(name, "utf8")} bytes`);
   // The name, and a save dialog's " 2", fit and save on this file system.
   const dir = await tempDir(t, "aiden-page-name-");
-  await writeFileAtomic(path.join(dir, name.replace(".aiden-page.json", " 2.aiden-page.json")), "{}");
+  await writeFileAtomic(
+    path.join(dir, name.replace(".aiden-page.json", " 2.aiden-page.json")),
+    "{}",
+  );
   assert.equal((await fs.readdir(dir)).length, 1);
 });
 
-test("an imported file is read through links, never from a FIFO, and only up to the cap", { skip: process.platform === "win32" }, async (t) => {
-  const dir = await tempDir(t, "aiden-page-read-");
-  const real = path.join(dir, "page.aiden-page.json");
-  await fs.writeFile(real, "{\"format\":\"aiden-artifact-page\"}");
-  const link = path.join(dir, "link.json");
-  await fs.symlink(real, link);
-  assert.equal(new TextDecoder().decode(await readWorkspaceArtifactPageFile(link, 1024)), "{\"format\":\"aiden-artifact-page\"}");
+test(
+  "an imported file is read through links, never from a FIFO, and only up to the cap",
+  { skip: process.platform === "win32" },
+  async (t) => {
+    const dir = await tempDir(t, "aiden-page-read-");
+    const real = path.join(dir, "page.aiden-page.json");
+    await fs.writeFile(real, '{"format":"aiden-artifact-page"}');
+    const link = path.join(dir, "link.json");
+    await fs.symlink(real, link);
+    assert.equal(
+      new TextDecoder().decode(await readWorkspaceArtifactPageFile(link, 1024)),
+      '{"format":"aiden-artifact-page"}',
+    );
 
-  await assert.rejects(readWorkspaceArtifactPageFile(real, 8), (error: NodeJS.ErrnoException) => error.code === "EFBIG");
+    await assert.rejects(
+      readWorkspaceArtifactPageFile(real, 8),
+      (error: NodeJS.ErrnoException) => error.code === "EFBIG",
+    );
 
-  const fifo = path.join(dir, "pipe.json");
-  execFileSync("mkfifo", [fifo]);
-  // Nothing ever writes to it: a blocking open would hang here.
-  await assert.rejects(readWorkspaceArtifactPageFile(fifo, 1024), (error: NodeJS.ErrnoException) => error.code === "EFTYPE");
-  await assert.rejects(readWorkspaceArtifactPageFile(dir, 1024));
-});
+    const fifo = path.join(dir, "pipe.json");
+    execFileSync("mkfifo", [fifo]);
+    // Nothing ever writes to it: a blocking open would hang here.
+    await assert.rejects(
+      readWorkspaceArtifactPageFile(fifo, 1024),
+      (error: NodeJS.ErrnoException) => error.code === "EFTYPE",
+    );
+    await assert.rejects(readWorkspaceArtifactPageFile(dir, 1024));
+  },
+);
 
 test("only a few previews wait at once; the oldest goes first", () => {
   let next = 0;
-  const imports = new WorkspaceArtifactImports({ newToken: () => `token-${String(++next).padStart(12, "0")}` });
+  const imports = new WorkspaceArtifactImports({
+    newToken: () => `token-${String(++next).padStart(12, "0")}`,
+  });
   const content = parseWorkspaceArtifactPageFile(pageFile());
   const tokens = Array.from({ length: 9 }, () => imports.hold("ws1", "window-1", content));
   assert.throws(() => imports.take("ws1", "window-1", tokens[0]!), /no longer available/u);

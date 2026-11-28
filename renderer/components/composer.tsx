@@ -1,5 +1,9 @@
 import { readCachedAppearance } from "../lib/appearance-runtime";
-import { compactionEngineFrom, compactionEngineLabel, type CompactionEngine } from "../shared/compaction";
+import {
+  compactionEngineFrom,
+  compactionEngineLabel,
+  type CompactionEngine,
+} from "../shared/compaction";
 import { formatContextTokenCount, type ChatContextPressureV1 } from "../shared/context-pressure";
 // Message composer. On a new chat the top-row folder opens the workspace picker;
 // established chats reveal that folder in the system file manager. Git workspaces also show the
@@ -9,15 +13,7 @@ import { formatContextTokenCount, type ChatContextPressureV1 } from "../shared/c
 
 import * as React from "react";
 import { flushSync } from "react-dom";
-import {
-  AlertDialog,
-  Button,
-  Dialog,
-  Input,
-  Textarea,
-  Text,
-  toast,
-} from "./ui";
+import { AlertDialog, Button, Dialog, Input, Textarea, Text, toast } from "./ui";
 import { ProviderIcon } from "./provider-icon";
 import { cn } from "../lib/ui-utils";
 import {
@@ -66,8 +62,15 @@ import {
   GEMINI_RECORDED_RETRY_TITLE,
 } from "../lib/gemini-recorded-retry";
 import { attachmentsApi, browserApi, chatsApi } from "../lib/ipc";
-import { browserAnnotationAttachments, browserAnnotationContext } from "../lib/browser-annotation-context";
-import { terminalContextAttachment, terminalContextDelivery, type TerminalContextSelection } from "../lib/terminal-context";
+import {
+  browserAnnotationAttachments,
+  browserAnnotationContext,
+} from "../lib/browser-annotation-context";
+import {
+  terminalContextAttachment,
+  terminalContextDelivery,
+  type TerminalContextSelection,
+} from "../lib/terminal-context";
 import { browserAnnotationDelivery } from "../lib/browser-annotation-delivery";
 import {
   browserElementGrabDelivery,
@@ -85,7 +88,12 @@ import {
 } from "../shared/browser-element-grab";
 import { GrabbedElementChips } from "./grabbed-element-chip";
 import { applyDictationDictionary, parseDictationDictionary } from "../shared/dictation-dictionary";
-import { useDiscoveredSkills, useProviders, useSettings, useWorkspaceFileIndex } from "../lib/queries";
+import {
+  useDiscoveredSkills,
+  useProviders,
+  useSettings,
+  useWorkspaceFileIndex,
+} from "../lib/queries";
 import {
   addMention,
   findMentionTrigger,
@@ -238,7 +246,6 @@ const CLIPBOARD_IMAGE_MIME_TYPES = new Set([
   "image/heif",
 ]);
 const MAX_CLIPBOARD_IMAGE_BYTES = 8 * 1024 * 1024;
-
 
 /** Palette commands that run the / command of the same name, so both stay one action. */
 const PALETTE_SLASH_COMMANDS: Partial<Record<CommandId, string>> = {
@@ -450,7 +457,10 @@ const APPROVAL_CHOICE_ICONS: Record<
 function approvalChoicePatch(choice: ApprovalChoice, chatOnly: boolean): ComposerApprovalsPatch {
   if (choice === "chat-only") return { permission: "none" };
   // Leaving Chat only (a No workspace chat) turns folder work back on too.
-  return { approvalMode: choice === "settings" ? null : choice, ...(chatOnly ? { permission: "ask" as const } : {}) };
+  return {
+    approvalMode: choice === "settings" ? null : choice,
+    ...(chatOnly ? { permission: "ask" as const } : {}),
+  };
 }
 
 function skillSourceLabel(source: SkillSource): string {
@@ -629,9 +639,8 @@ export function Composer({
     },
     [chatId],
   );
-  const [historyState, setHistoryState] = React.useState<ComposerHistoryState>(
-    CLOSED_COMPOSER_HISTORY,
-  );
+  const [historyState, setHistoryState] =
+    React.useState<ComposerHistoryState>(CLOSED_COMPOSER_HISTORY);
   const historyStateRef = React.useRef<ComposerHistoryState>(CLOSED_COMPOSER_HISTORY);
   const historyCaretRafRef = React.useRef<number | null>(null);
   const cancelHistoryCaretRaf = React.useCallback(() => {
@@ -792,27 +801,50 @@ export function Composer({
     if (!workspace?.id) return;
     const available = () => {
       const input = inputRef?.current;
-      return Boolean(input?.isConnected && !input.disabled && !input.readOnly && input.getClientRects().length && !input.closest('[aria-hidden="true"], [inert]'));
+      return Boolean(
+        input?.isConnected &&
+        !input.disabled &&
+        !input.readOnly &&
+        input.getClientRects().length &&
+        !input.closest('[aria-hidden="true"], [inert]'),
+      );
     };
     const receive = (annotation: BrowserAnnotation) => {
       if (firstSendPendingRef.current || sendPendingRef.current || !available()) return false;
-      const result = browserAnnotationAttachments(annotation, attachmentsRef.current, visionSupported !== false, crypto.randomUUID());
+      const result = browserAnnotationAttachments(
+        annotation,
+        attachmentsRef.current,
+        visionSupported !== false,
+        crypto.randomUUID(),
+      );
       const comment = annotation.comment.trim();
-      const fallback = result.attachments.some((item) => item.kind === "text") ? "" : browserAnnotationContext(annotation);
-      const addition = [comment || "Use this browser annotation as context.", fallback].filter(Boolean).join("\n\n");
+      const fallback = result.attachments.some((item) => item.kind === "text")
+        ? ""
+        : browserAnnotationContext(annotation);
+      const addition = [comment || "Use this browser annotation as context.", fallback]
+        .filter(Boolean)
+        .join("\n\n");
       const base = closeHistoryForExternalUpdate();
       setText((current) => [(base ?? current).trimEnd(), addition].filter(Boolean).join("\n\n"));
       if (result.attachments.length) {
         attachmentRevisionRef.current += 1;
         updateAttachments((current) => [...current, ...result.attachments]);
       }
-      setAttachmentStatus(result.imageSkipped ? "Browser context added. The screenshot was skipped because of model support or attachment limits." : "Browser annotation added to this message.");
+      setAttachmentStatus(
+        result.imageSkipped
+          ? "Browser context added. The screenshot was skipped because of model support or attachment limits."
+          : "Browser annotation added to this message.",
+      );
       inputRef?.current?.focus({ preventScroll: true });
       return true;
     };
     const receiveTerminalContext = (selection: TerminalContextSelection) => {
       if (firstSendPendingRef.current || sendPendingRef.current || !available()) return false;
-      const attachment = terminalContextAttachment(selection, attachmentsRef.current, crypto.randomUUID());
+      const attachment = terminalContextAttachment(
+        selection,
+        attachmentsRef.current,
+        crypto.randomUUID(),
+      );
       if (!attachment) return false;
       attachmentRevisionRef.current += 1;
       updateAttachments((current) => [...current, attachment]);
@@ -852,16 +884,27 @@ export function Composer({
       }
       return true;
     };
-    const unregister = browserAnnotationDelivery.register({ workspaceId: workspace.id, chatId, available, receive });
+    const unregister = browserAnnotationDelivery.register({
+      workspaceId: workspace.id,
+      chatId,
+      available,
+      receive,
+    });
     const unregisterGrabbedElement = browserElementGrabDelivery.register({
       workspaceId: workspace.id,
       chatId,
       available,
       receive: receiveGrabbedElement,
     });
-    const unregisterTerminalContext = terminalContextDelivery.register({ workspaceId: workspace.id, chatId, available, receive: receiveTerminalContext });
+    const unregisterTerminalContext = terminalContextDelivery.register({
+      workspaceId: workspace.id,
+      chatId,
+      available,
+      receive: receiveTerminalContext,
+    });
     const unsubscribe = browserApi.onEvent((event) => {
-      if (event.type === "annotation" && event.workspaceId === workspace.id) receive(event.annotation);
+      if (event.type === "annotation" && event.workspaceId === workspace.id)
+        receive(event.annotation);
     });
     return () => {
       unregister();
@@ -869,7 +912,16 @@ export function Composer({
       unregisterTerminalContext();
       unsubscribe();
     };
-  }, [workspace?.id, chatId, inputRef, visionSupported, closeHistoryForExternalUpdate, setText, updateAttachments, updateGrabbedElements]);
+  }, [
+    workspace?.id,
+    chatId,
+    inputRef,
+    visionSupported,
+    closeHistoryForExternalUpdate,
+    setText,
+    updateAttachments,
+    updateGrabbedElements,
+  ]);
   const attachmentOperationRef = React.useRef(new ComposerAttachmentOperation());
   const attachmentVisionRef = React.useRef(visionSupported);
   React.useLayoutEffect(() => {
@@ -956,7 +1008,8 @@ export function Composer({
   // can see why tools are off. A No workspace chat has no Workspace settings,
   // so its chip always shows.
   const approvalsChipShown =
-    Boolean(workspace) && (isNoWorkspace(workspace) || approvalPolicy.customized || approvalPolicy.chatOnly);
+    Boolean(workspace) &&
+    (isNoWorkspace(workspace) || approvalPolicy.customized || approvalPolicy.chatOnly);
   const workspaceSettingsId = workspace && !isNoWorkspace(workspace) ? workspace.id : undefined;
   // A choice that hides the chip (Use Settings) also closes its menu.
   const permissionMenuOpen = permissionMenuState && approvalsChipShown;
@@ -967,7 +1020,8 @@ export function Composer({
   dictationDictionaryRef.current = settings.data?.dictationDictionary;
   // A remote chat's skills come from its host; this Mac's catalog is never read for it.
   const localSkillCatalog = useDiscoveredSkills(hostSkills ? undefined : workspace?.id);
-  const skillCatalog: ComposerSkillCatalog | typeof localSkillCatalog = hostSkills ?? localSkillCatalog;
+  const skillCatalog: ComposerSkillCatalog | typeof localSkillCatalog =
+    hostSkills ?? localSkillCatalog;
   const skillScopeId = hostSkills ? hostSkills.scopeId : workspace?.id;
   const skillsOffered = surfaces.slashCommands || Boolean(hostSkills);
   const selectedSkillState = React.useMemo(
@@ -980,19 +1034,16 @@ export function Composer({
             skillCatalog.isError ? "error" : skillCatalog.isFetching ? "loading" : "ready",
           )
         : undefined,
-    [
-      selectedSkill,
-      skillCatalog.data,
-      skillCatalog.isError,
-      skillCatalog.isFetching,
-      skillScopeId,
-    ],
+    [selectedSkill, skillCatalog.data, skillCatalog.isError, skillCatalog.isFetching, skillScopeId],
   );
   /**
    * Where dictation lands, fixed when recording starts. Live words show at this
    * spot in a read-only draft until the final text replaces them.
    */
-  const [dictationAnchor, setDictationAnchor] = React.useState<{ start: number; end: number } | null>(null);
+  const [dictationAnchor, setDictationAnchor] = React.useState<{
+    start: number;
+    end: number;
+  } | null>(null);
   const dictationAnchorRef = React.useRef(dictationAnchor);
   dictationAnchorRef.current = dictationAnchor;
   const insertDictation = React.useCallback(
@@ -1001,12 +1052,15 @@ export function Composer({
       const anchor = dictationAnchorRef.current;
       // Take the live words out of the textarea first, so the insert edits the real draft.
       if (anchor) flushSync(() => setDictationAnchor(null));
-      const selection = anchor ?? (input ? { start: input.selectionStart, end: input.selectionEnd } : null);
+      const selection =
+        anchor ?? (input ? { start: input.selectionStart, end: input.selectionEnd } : null);
       const active = document.activeElement;
       const typingElsewhere =
         active instanceof HTMLElement &&
         active !== input &&
-        (active instanceof HTMLInputElement || active instanceof HTMLTextAreaElement || active.isContentEditable);
+        (active instanceof HTMLInputElement ||
+          active instanceof HTMLTextAreaElement ||
+          active.isContentEditable);
       if (input?.isConnected && !input.readOnly && !input.disabled && !typingElsewhere) {
         const insertion = dictationInsertion(input.value, selection, transcript);
         input.focus({ preventScroll: true });
@@ -1035,15 +1089,25 @@ export function Composer({
   React.useLayoutEffect(() => {
     if (!voice.recording) return;
     const input = inputRef?.current;
-    setDictationAnchor((current) => current ?? (input ? { start: input.selectionStart, end: input.selectionEnd } : selection));
+    setDictationAnchor(
+      (current) =>
+        current ?? (input ? { start: input.selectionStart, end: input.selectionEnd } : selection),
+    );
   }, [inputRef, selection, voice.recording]);
   React.useEffect(() => {
     if (!voice.recording && !voice.transcribing) setDictationAnchor(null);
   }, [voice.recording, voice.transcribing]);
-  const liveDictation = [voice.liveTranscript.committed, voice.liveTranscript.tentative].filter(Boolean).join(" ");
+  const liveDictation = [voice.liveTranscript.committed, voice.liveTranscript.tentative]
+    .filter(Boolean)
+    .join(" ");
   const dictationPreviewing =
-    dictationAnchor !== null && liveDictation.length > 0 && !firstSendPending && (voice.recording || voice.transcribing);
-  const composerValue = dictationPreviewing ? dictationInsertion(text, dictationAnchor, liveDictation).text : text;
+    dictationAnchor !== null &&
+    liveDictation.length > 0 &&
+    !firstSendPending &&
+    (voice.recording || voice.transcribing);
+  const composerValue = dictationPreviewing
+    ? dictationInsertion(text, dictationAnchor, liveDictation).text
+    : text;
   // While live words show, the draft on screen is not the draft that would be
   // sent, so sending waits for the final text.
   const canSend =
@@ -1123,13 +1187,13 @@ export function Composer({
     activeHistoryIndex >= 0 ? effectiveHistoryEntries[activeHistoryIndex] : undefined;
   const canForkActiveHistory = Boolean(
     onForkChat &&
-      !isGenerating &&
-      !sending &&
-      !sessionCommandBusy &&
-      !attaching &&
-      !forkEligibility.cloneBlocked &&
-      !slashSessionBlockedReason &&
-      activeHistoryEntry?.forkMessageId,
+    !isGenerating &&
+    !sending &&
+    !sessionCommandBusy &&
+    !attaching &&
+    !forkEligibility.cloneBlocked &&
+    !slashSessionBlockedReason &&
+    activeHistoryEntry?.forkMessageId,
   );
   const applyHistoryText = React.useCallback(
     (nextText: string, options?: { persist?: boolean; focus?: boolean }) => {
@@ -1168,12 +1232,16 @@ export function Composer({
     }
     if (reconciledHistory.activeId !== historyState.activeId) {
       updateHistoryState(reconciledHistory);
-      const next = effectiveHistoryEntries.find(
-        (entry) => entry.id === reconciledHistory.activeId,
-      );
+      const next = effectiveHistoryEntries.find((entry) => entry.id === reconciledHistory.activeId);
       if (next) applyHistoryText(next.prompt, { persist: false });
     }
-  }, [applyHistoryText, effectiveHistoryEntries, historyState, reconciledHistory, updateHistoryState]);
+  }, [
+    applyHistoryText,
+    effectiveHistoryEntries,
+    historyState,
+    reconciledHistory,
+    updateHistoryState,
+  ]);
   const historyBlocked =
     slashPaletteBlocked ||
     composerInputLocked ||
@@ -1234,23 +1302,22 @@ export function Composer({
     // Without this Mac's palette only `$` skills from the chat's host remain.
     return session && !surfaces.slashCommands && session.kind !== "skill" ? null : session;
   }, [
-      skillsOffered,
-      surfaces.slashCommands,
-      composing,
-      forkDialogOpen,
-      historyOpen,
-      logoutChooserOpen,
-      logoutConfirmOpen,
-      permissionMenuOpen,
-      renameDialogOpen,
-      sessionDialogOpen,
-      selection.end,
-      selection.start,
-      slashTracker,
-      slashPaletteBlocked,
-      text,
-    ],
-  );
+    skillsOffered,
+    surfaces.slashCommands,
+    composing,
+    forkDialogOpen,
+    historyOpen,
+    logoutChooserOpen,
+    logoutConfirmOpen,
+    permissionMenuOpen,
+    renameDialogOpen,
+    sessionDialogOpen,
+    selection.end,
+    selection.start,
+    slashTracker,
+    slashPaletteBlocked,
+    text,
+  ]);
   // /design is offered only where this chat's design mode can be switched.
   const designControls = useDesignModeControls(chatId);
   const designCommandOffered = designControls !== null;
@@ -1306,7 +1373,9 @@ export function Composer({
           : workspace.permission === "none"
             ? "Turn on folder access for this chat first."
             : undefined,
-      goalBlockedReason: surfaces.localContext ? undefined : `Available in chats on this ${localComputerNoun(platform)}.`,
+      goalBlockedReason: surfaces.localContext
+        ? undefined
+        : `Available in chats on this ${localComputerNoun(platform)}.`,
       chatCloneBlockedReason: forkEligibility.cloneBlocked
         ? "This chat has too many messages to clone safely. Fork from an earlier turn instead."
         : undefined,
@@ -1329,11 +1398,13 @@ export function Composer({
       payloadAfterToken: slashSession
         ? Boolean(
             consumeSlashToken(text, slashSession).trim() ||
-              attachments.length > 0 ||
-              grabbedElements.length > 0 ||
-              selectedSkill,
+            attachments.length > 0 ||
+            grabbedElements.length > 0 ||
+            selectedSkill,
           )
-        : Boolean(text.trim() || attachments.length > 0 || grabbedElements.length > 0 || selectedSkill),
+        : Boolean(
+            text.trim() || attachments.length > 0 || grabbedElements.length > 0 || selectedSkill,
+          ),
       hasAttachmentsOrSelectedSkill:
         attachments.length > 0 || grabbedElements.length > 0 || Boolean(selectedSkill),
       designModeAvailable: designCommandOffered,
@@ -1445,7 +1516,10 @@ export function Composer({
   ]);
   // Deleting the `@` forgets its Escape, so a new one there opens the picker.
   React.useEffect(() => {
-    if (mentionDismissedAt !== null && findMentionTrigger(text, mentionDismissedAt + 1)?.start !== mentionDismissedAt) {
+    if (
+      mentionDismissedAt !== null &&
+      findMentionTrigger(text, mentionDismissedAt + 1)?.start !== mentionDismissedAt
+    ) {
       setMentionDismissedAt(null);
     }
   }, [mentionDismissedAt, text]);
@@ -1467,7 +1541,8 @@ export function Composer({
     setActiveMentionIndex(0);
   }, [mentionQuery, mentionTrigger?.start]);
   const effectiveMentionIndex = Math.min(activeMentionIndex, mentionCandidates.length - 1);
-  const activeMention = effectiveMentionIndex >= 0 ? mentionCandidates[effectiveMentionIndex] : undefined;
+  const activeMention =
+    effectiveMentionIndex >= 0 ? mentionCandidates[effectiveMentionIndex] : undefined;
   useLayer(Boolean(mentionTrigger), "popover", {
     name: "composer-mentions",
     onEscape: (event) => {
@@ -1482,7 +1557,9 @@ export function Composer({
     const next = removeMentionTrigger(text, mentionTrigger);
     setText(next.text);
     setSelection({ start: next.caret, end: next.caret });
-    setMentions((current) => addMention(current, { path: candidate.entry.path, kind: candidate.entry.kind }));
+    setMentions((current) =>
+      addMention(current, { path: candidate.entry.path, kind: candidate.entry.kind }),
+    );
     setMentionAnnouncement(`Mentioned ${candidate.entry.path}.`);
     requestAnimationFrame(() => {
       const textarea = inputRef?.current;
@@ -1583,7 +1660,8 @@ export function Composer({
         setCompactionBusy(false);
         setSessionCommandStatus(null);
         // An automatic compaction never pulls focus from wherever the user went.
-        if (!options?.cacheExpired) requestAnimationFrame(() => inputRef?.current?.focus({ preventScroll: true }));
+        if (!options?.cacheExpired)
+          requestAnimationFrame(() => inputRef?.current?.focus({ preventScroll: true }));
       }
     },
     [compactionActive, inputRef, onCompactChat, sessionCommandBusy],
@@ -1595,7 +1673,9 @@ export function Composer({
     chatId,
     pressure: contextHistoryPressure,
     engine:
-      contextHistoryPressure !== undefined && settings.data ? compactionEngineFrom(settings.data.compactionEngine) : undefined,
+      contextHistoryPressure !== undefined && settings.data
+        ? compactionEngineFrom(settings.data.compactionEngine)
+        : undefined,
     idle:
       Boolean(onCompactChat) &&
       ready &&
@@ -1625,7 +1705,8 @@ export function Composer({
     // Starting to type is a return too, unless it is a slash command or transient history browsing.
     if (historyOpen) return;
     const typed = text.trim().length > 0;
-    if (typed && !typedRef.current && !text.trimStart().startsWith("/")) expiredCacheReturn.markReturned();
+    if (typed && !typedRef.current && !text.trimStart().startsWith("/"))
+      expiredCacheReturn.markReturned();
     typedRef.current = typed;
   }, [expiredCacheReturn.markReturned, historyOpen, text]);
 
@@ -1654,7 +1735,13 @@ export function Composer({
         requestAnimationFrame(() => inputRef?.current?.focus({ preventScroll: true }));
       }
     },
-    [inputRef, onCreateGitWorktree, onDraftNewWorktree, onGitOperationBusyChange, sessionCommandBusy],
+    [
+      inputRef,
+      onCreateGitWorktree,
+      onDraftNewWorktree,
+      onGitOperationBusyChange,
+      sessionCommandBusy,
+    ],
   );
 
   const forkFromTurn = React.useCallback(
@@ -1665,7 +1752,9 @@ export function Composer({
       try {
         await onForkChat(messageId, position);
         setForkDialogOpen(false);
-        toast.success(position === "before" ? "Forked — edit your message and send" : "Chat forked");
+        toast.success(
+          position === "before" ? "Forked — edit your message and send" : "Chat forked",
+        );
       } catch (error) {
         toast.error(error instanceof Error ? error.message : "Couldn't fork this chat.");
       } finally {
@@ -1727,7 +1816,10 @@ export function Composer({
       setSending(true);
       try {
         // Reload recovery has only text, so it keeps the mentions as `@path`.
-        markComposerSubmission(chatId, messageWithMentions(payload.mentions ?? [], payload.draftText));
+        markComposerSubmission(
+          chatId,
+          messageWithMentions(payload.mentions ?? [], payload.draftText),
+        );
       } catch (error) {
         sendPendingRef.current = false;
         firstSendPendingRef.current = false;
@@ -1762,7 +1854,9 @@ export function Composer({
           submit = onQueue;
         } else {
           submit =
-            onQueue && (isGenerating || hasQueuedMessages || payload.afterCompaction) && !payload.btw
+            onQueue &&
+            (isGenerating || hasQueuedMessages || payload.afterCompaction) &&
+            !payload.btw
               ? onQueue
               : onSend;
         }
@@ -1799,18 +1893,12 @@ export function Composer({
         // An uncertain append is reconciled by ChatPane; it is never replayed here.
         const currentDraft = draftRef.current.text;
         const restoredDraft = failedSendDraft(payload.draftText, currentDraft);
-        if (
-          textRevisionRef.current === optimisticTextRevision ||
-          restoredDraft !== currentDraft
-        ) {
+        if (textRevisionRef.current === optimisticTextRevision || restoredDraft !== currentDraft) {
           setText(restoredDraft);
         }
 
         const currentAttachments = attachmentsRef.current;
-        const restoredAttachments = failedSendAttachments(
-          payload.attachments,
-          currentAttachments,
-        );
+        const restoredAttachments = failedSendAttachments(payload.attachments, currentAttachments);
         let finalAttachments = currentAttachments;
         if (
           attachmentRevisionRef.current === optimisticAttachmentRevision ||
@@ -1985,7 +2073,9 @@ export function Composer({
           try {
             if (action === "follow") {
               await chatsApi.followPullRequest(chatId);
-              toast.success("Following this pull request. The chat hears about failed checks, conflicts and reviews.");
+              toast.success(
+                "Following this pull request. The chat hears about failed checks, conflicts and reviews.",
+              );
               return true;
             }
             if (!argument) {
@@ -2009,7 +2099,8 @@ export function Composer({
                 return false;
               case "show": {
                 const goal = await chatsApi.goal(chatId);
-                if (!goal) toast.info("This chat has no goal. Type /goal and what Aiden should finish.");
+                if (!goal)
+                  toast.info("This chat has no goal. Type /goal and what Aiden should finish.");
                 else {
                   const view = goalBarView(goal);
                   toast.info(`${view.title}: ${view.detail}`);
@@ -2017,10 +2108,12 @@ export function Composer({
                 return true;
               }
               case "pause":
-                if (!(await chatsApi.pauseGoal(chatId))) toast.info("This chat has no goal to pause.");
+                if (!(await chatsApi.pauseGoal(chatId)))
+                  toast.info("This chat has no goal to pause.");
                 return true;
               case "resume":
-                if (!(await chatsApi.resumeGoal(chatId))) toast.info("This chat has no goal to resume.");
+                if (!(await chatsApi.resumeGoal(chatId)))
+                  toast.info("This chat has no goal to resume.");
                 return true;
               case "clear":
                 await chatsApi.clearGoal(chatId);
@@ -2058,8 +2151,13 @@ export function Composer({
             toast.info(missingPromptMessage);
             return false;
           }
-          if (instruction === "btw" && (attachments.length > 0 || grabbedElements.length > 0 || selectedSkill)) {
-            toast.info("Remove attachments, browser elements, and the selected skill before asking a side question.");
+          if (
+            instruction === "btw" &&
+            (attachments.length > 0 || grabbedElements.length > 0 || selectedSkill)
+          ) {
+            toast.info(
+              "Remove attachments, browser elements, and the selected skill before asking a side question.",
+            );
             return false;
           }
           if (selectedSkillState && selectedSkillState.state !== "valid") {
@@ -2343,7 +2441,9 @@ export function Composer({
       const outcome = executeSlashCommandAction(command, "", paletteSlashHandlers);
       if (outcome instanceof Promise) {
         void outcome.catch((error: unknown) => {
-          toast.error(error instanceof Error ? error.message : "That command could not be completed.");
+          toast.error(
+            error instanceof Error ? error.message : "That command could not be completed.",
+          );
         });
       }
     };
@@ -2367,7 +2467,11 @@ export function Composer({
   useCommandHandler("workspace.access", changeAccess, accessAvailable);
   const attachDisabled =
     attaching || (isGenerating && !onQueue) || sending || gitOperationBusy || composerInputLocked;
-  useCommandHandler("composer.attach", () => void handleAttach(), surfaces.attachments && !attachDisabled);
+  useCommandHandler(
+    "composer.attach",
+    () => void handleAttach(),
+    surfaces.attachments && !attachDisabled,
+  );
   useCommandHandler("chat.stop", onStop, isGenerating && canStopGeneration);
   const attachBinding = commandSystem.binding("composer.attach");
   const stopBinding = commandSystem.binding("chat.stop");
@@ -2469,10 +2573,10 @@ export function Composer({
           const input = inputRef?.current;
           return Boolean(
             input?.isConnected &&
-              !input.disabled &&
-              !input.closest('[aria-hidden="true"], [inert]') &&
-              !firstSendPendingRef.current &&
-              !sendPendingRef.current,
+            !input.disabled &&
+            !input.closest('[aria-hidden="true"], [inert]') &&
+            !firstSendPendingRef.current &&
+            !sendPendingRef.current,
           );
         },
         receive: (files) => void readClipboardImagesRef.current(files),
@@ -2480,7 +2584,7 @@ export function Composer({
     [chatId, inputRef],
   );
 
-  const handleDrop =(event: React.DragEvent<HTMLDivElement>) => {
+  const handleDrop = (event: React.DragEvent<HTMLDivElement>) => {
     setFileDragActive(false);
     if (!surfaces.attachments) return;
     const files = Array.from(event.dataTransfer.files);
@@ -2506,7 +2610,10 @@ export function Composer({
   };
 
   const handlePaste = (event: React.ClipboardEvent<HTMLTextAreaElement>) => {
-    if (firstSendPendingRef.current) { event.preventDefault(); return; }
+    if (firstSendPendingRef.current) {
+      event.preventDefault();
+      return;
+    }
     if (historyOpen) {
       detachHistory(event.currentTarget.selectionStart ?? text.length);
     }
@@ -2550,7 +2657,9 @@ export function Composer({
     const thumbId = removed.thumbnailAttachmentId ?? grabbedElementThumbnailId(removed.id);
     attachmentRevisionRef.current += 1;
     grabbedElementsRevisionRef.current += 1;
-    const nextAttachments = attachmentsRef.current.filter((attachment) => attachment.id !== thumbId);
+    const nextAttachments = attachmentsRef.current.filter(
+      (attachment) => attachment.id !== thumbId,
+    );
     const nextElements = grabbedElementsRef.current.filter((element) => element.id !== id);
     updateAttachments(nextAttachments);
     updateGrabbedElements(nextElements, nextAttachments);
@@ -2610,7 +2719,9 @@ export function Composer({
       return;
     }
     // Surfaces without Aiden's slash commands (remote hosts) send the text as written.
-    const submittedCommand = surfaces.slashCommands ? parseSubmittedSlashCommand(text, slashCommands) : null;
+    const submittedCommand = surfaces.slashCommands
+      ? parseSubmittedSlashCommand(text, slashCommands)
+      : null;
     if (submittedCommand) {
       const availability = slashCommandAvailability(submittedCommand.command, slashActionContext);
       if (!availability.available) {
@@ -2633,8 +2744,13 @@ export function Composer({
       : hasQueuedMessages || queueDuringCompaction || queueForForkSummary
         ? "queue"
         : undefined;
-    if (mode === "steer" && (attachments.length > 0 || grabbedElements.length > 0 || selectedSkill)) {
-      blockSend("Steer accepts text only. Remove attachments, browser elements, and the selected skill first.");
+    if (
+      mode === "steer" &&
+      (attachments.length > 0 || grabbedElements.length > 0 || selectedSkill)
+    ) {
+      blockSend(
+        "Steer accepts text only. Remove attachments, browser elements, and the selected skill first.",
+      );
       return;
     }
     if (selectedSkillState && selectedSkillState.state !== "valid") {
@@ -2655,7 +2771,10 @@ export function Composer({
     if (trayComments) {
       const extra = designCommentAttachments({
         block: trayComments.block,
-        comments: trayComments.comments.map((comment) => ({ id: comment.id, picture: commentCrop(chatId, comment.id) })),
+        comments: trayComments.comments.map((comment) => ({
+          id: comment.id,
+          picture: commentCrop(chatId, comment.id),
+        })),
         existing: attachments,
         supportsImages: visionSupported !== false,
         id: crypto.randomUUID(),
@@ -2679,7 +2798,9 @@ export function Composer({
     if (trayComments) {
       commentSendPendingRef.current = true;
       try {
-        commentSend = await trayComments.markSent(trayComments.comments.map((comment) => comment.id));
+        commentSend = await trayComments.markSent(
+          trayComments.comments.map((comment) => comment.id),
+        );
       } finally {
         commentSendPendingRef.current = false;
       }
@@ -2926,7 +3047,13 @@ export function Composer({
     }
     if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) {
       event.preventDefault();
-      void submit(isGenerating && (event.metaKey || event.ctrlKey) ? (busyMode === "queue" ? "steer" : "queue") : undefined);
+      void submit(
+        isGenerating && (event.metaKey || event.ctrlKey)
+          ? busyMode === "queue"
+            ? "steer"
+            : "queue"
+          : undefined,
+      );
     }
   };
 
@@ -2943,7 +3070,9 @@ export function Composer({
       ? []
       : [
           "settings",
-          ...APPROVAL_MODES.filter((mode) => mode !== "auto" || usableModel || currentApprovalChoice === "auto"),
+          ...APPROVAL_MODES.filter(
+            (mode) => mode !== "auto" || usableModel || currentApprovalChoice === "auto",
+          ),
           ...(noWorkspace ? (["chat-only"] as const) : []),
         ];
   const approvalChoiceLabel = (choice: ApprovalChoice) =>
@@ -2953,11 +3082,14 @@ export function Composer({
         ? "Chat only"
         : APPROVAL_MODE_LABELS[choice];
   // A No workspace chat that follows Settings shows the mode it runs in.
-  const chipChoice: ApprovalChoice = currentApprovalChoice === "settings" ? globalApprovalMode : currentApprovalChoice;
+  const chipChoice: ApprovalChoice =
+    currentApprovalChoice === "settings" ? globalApprovalMode : currentApprovalChoice;
   const approvalsLabel = approvalChoiceLabel(chipChoice);
   const ApprovalsIcon = APPROVAL_CHOICE_ICONS[chipChoice].icon;
   const approvalsHelp =
-    chipChoice === "chat-only" ? "The agent can't read or change this folder." : approvalModeHelp(chipChoice, localComputerNoun(platform));
+    chipChoice === "chat-only"
+      ? "The agent can't read or change this folder."
+      : approvalModeHelp(chipChoice, localComputerNoun(platform));
   const folderName = noWorkspace
     ? NO_WORKSPACE_LABEL
     : workspace?.folderPath
@@ -2968,7 +3100,12 @@ export function Composer({
   const WorkspaceChipIcon = noWorkspace ? MessageCircle : Folder;
   const hasUserMessages =
     sessionChat?.messages.some((message) => message.role === "user") ?? hasMessages;
-  const { chips: contextChips, pullRequestAnnouncement, postingTasks, startedChats } = useComposerContextChips({
+  const {
+    chips: contextChips,
+    pullRequestAnnouncement,
+    postingTasks,
+    startedChats,
+  } = useComposerContextChips({
     chatId,
     started: hasUserMessages,
     workspace,
@@ -3009,8 +3146,15 @@ export function Composer({
 
   return (
     <>
-      <div data-browser-composer-inset="true" className="aiden-dock-inset chat-content-column pointer-events-none pb-4 pt-3 sm:pb-5">
-        {firstSendPending ? <Text as="p" variant="small" color="secondary" role="status" className="px-4 pb-1">{firstSendStatus ?? "Sending…"}</Text> : null}
+      <div
+        data-browser-composer-inset="true"
+        className="aiden-dock-inset chat-content-column pointer-events-none pb-4 pt-3 sm:pb-5"
+      >
+        {firstSendPending ? (
+          <Text as="p" variant="small" color="secondary" role="status" className="px-4 pb-1">
+            {firstSendStatus ?? "Sending…"}
+          </Text>
+        ) : null}
         <div
           data-focus-region="composer"
           // With "Let Live use the open chat" off, Aiden Live can't type or send here through the window either.
@@ -3021,9 +3165,7 @@ export function Composer({
         >
           <ComposerSlashPalettePresence
             present={Boolean(slashSession)}
-            immediate={
-              slashPaletteBlocked || renameDialogOpen || permissionMenuOpen
-            }
+            immediate={slashPaletteBlocked || renameDialogOpen || permissionMenuOpen}
           >
             {slashSession ? (
               <ComposerSlashPalette
@@ -3058,10 +3200,7 @@ export function Composer({
               onPick={pickMention}
             />
           ) : null}
-          <ComposerHistoryPopoverPresence
-            present={historyOpen}
-            immediate={historyBlocked}
-          >
+          <ComposerHistoryPopoverPresence present={historyOpen} immediate={historyBlocked}>
             {historyOpen ? (
               <ComposerHistoryPopover
                 entries={effectiveHistoryEntries}
@@ -3081,124 +3220,135 @@ export function Composer({
           </ComposerHistoryPopoverPresence>
           {queuedMessages}
           {commentTray ? (
-            <DesignCommentTray tray={commentTray} disabled={sending || !submissionAllowed} onSend={() => void submit()} />
+            <DesignCommentTray
+              tray={commentTray}
+              disabled={sending || !submissionAllowed}
+              onSend={() => void submit()}
+            />
           ) : null}
           {/* Workspace context: folder (opens in the system file manager) · local execution · git branch. */}
           {surfaces.localContext ? (
-          <ComposerContextBar mode={contextChips.barMode} inputRef={inputRef}>
-          <div
-            className={cn(
-              "relative z-0 mx-3 flex min-w-0 items-center gap-0.5 rounded-t-xl bg-context-bar px-1.5 backdrop-blur-md transition-[padding,min-height] duration-200 ease-out",
-              contextChips.barMode === "summary" ? "min-h-7 pb-1.5 pt-0.5" : "min-h-8 pb-2 pt-1",
-            )}
-          >
-            {!contextChips.workspace ? null : workspacePickerEnabled && onSelectWorkspace && onCreateScratchWorkspace ? (
-              <WorkspacePicker
-                key={workspaceChangeBlockedReason ? "blocked" : "available"}
-                workspaces={workspaces}
-                activeWorkspaceId={workspace?.id}
-                onSelectWorkspace={onSelectWorkspace}
-                onCreateScratchWorkspace={onCreateScratchWorkspace}
-                onChooseNoWorkspace={onChooseNoWorkspace}
-                onOpenFolder={onOpenFolderAsWorkspace}
-                busyReason={workspaceChangeBusyReason({
-                  sending: sending || firstSendPending,
-                  generating: isGenerating,
-                  gitBusy: gitOperationBusy,
-                })}
-                openRequest={workspaceMenuRequest}
-                returnFocusRef={inputRef}
-                blockedReason={workspaceChangeBlockedReason}
-                trigger={
+            <ComposerContextBar mode={contextChips.barMode} inputRef={inputRef}>
+              <div
+                className={cn(
+                  "relative z-0 mx-3 flex min-w-0 items-center gap-0.5 rounded-t-xl bg-context-bar px-1.5 backdrop-blur-md transition-[padding,min-height] duration-200 ease-out",
+                  contextChips.barMode === "summary"
+                    ? "min-h-7 pb-1.5 pt-0.5"
+                    : "min-h-8 pb-2 pt-1",
+                )}
+              >
+                {!contextChips.workspace ? null : workspacePickerEnabled &&
+                  onSelectWorkspace &&
+                  onCreateScratchWorkspace ? (
+                  <WorkspacePicker
+                    key={workspaceChangeBlockedReason ? "blocked" : "available"}
+                    workspaces={workspaces}
+                    activeWorkspaceId={workspace?.id}
+                    onSelectWorkspace={onSelectWorkspace}
+                    onCreateScratchWorkspace={onCreateScratchWorkspace}
+                    onChooseNoWorkspace={onChooseNoWorkspace}
+                    onOpenFolder={onOpenFolderAsWorkspace}
+                    busyReason={workspaceChangeBusyReason({
+                      sending: sending || firstSendPending,
+                      generating: isGenerating,
+                      gitBusy: gitOperationBusy,
+                    })}
+                    openRequest={workspaceMenuRequest}
+                    returnFocusRef={inputRef}
+                    blockedReason={workspaceChangeBlockedReason}
+                    trigger={
+                      <Button
+                        variant="transparent"
+                        size="small"
+                        className="composer-workspace-trigger h-7 min-w-0 max-w-[16rem] flex-1 shrink gap-1.5 px-2 text-secondary max-[520px]:max-w-[9rem]"
+                        disabled={
+                          isGenerating ||
+                          sending ||
+                          gitOperationBusy ||
+                          Boolean(workspaceChangeBlockedReason)
+                        }
+                        aria-label={
+                          workspaceChangeBlockedReason
+                            ? `${workspaceChipLabel}. Workspace unavailable: ${workspaceChangeBlockedReason}`
+                            : `${workspaceChipLabel}. Choose a workspace.`
+                        }
+                      >
+                        <WorkspaceChipIcon className="size-4 shrink-0" />
+                        <span className="max-w-[16rem] truncate">{workspaceChipLabel}</span>
+                      </Button>
+                    }
+                  />
+                ) : (
                   <Button
                     variant="transparent"
                     size="small"
                     className="composer-workspace-trigger h-7 min-w-0 max-w-[16rem] flex-1 shrink gap-1.5 px-2 text-secondary max-[520px]:max-w-[9rem]"
-                    disabled={
-                      isGenerating ||
-                      sending ||
-                      gitOperationBusy ||
-                      Boolean(workspaceChangeBlockedReason)
-                    }
+                    onClick={onOpenFolder}
+                    disabled={!workspace?.folderPath}
                     aria-label={
-                      workspaceChangeBlockedReason
-                        ? `${workspaceChipLabel}. Workspace unavailable: ${workspaceChangeBlockedReason}`
-                        : `${workspaceChipLabel}. Choose a workspace.`
+                      workspace?.folderPath
+                        ? `${workspaceChipLabel}. Open folder in file manager.`
+                        : workspaceChipLabel
                     }
                   >
                     <WorkspaceChipIcon className="size-4 shrink-0" />
                     <span className="max-w-[16rem] truncate">{workspaceChipLabel}</span>
                   </Button>
-                }
-              />
-            ) : (
-              <Button
-                variant="transparent"
-                size="small"
-                className="composer-workspace-trigger h-7 min-w-0 max-w-[16rem] flex-1 shrink gap-1.5 px-2 text-secondary max-[520px]:max-w-[9rem]"
-                onClick={onOpenFolder}
-                disabled={!workspace?.folderPath}
-                aria-label={
-                  workspace?.folderPath
-                    ? `${workspaceChipLabel}. Open folder in file manager.`
-                    : workspaceChipLabel
-                }
-              >
-                <WorkspaceChipIcon className="size-4 shrink-0" />
-                <span className="max-w-[16rem] truncate">{workspaceChipLabel}</span>
-              </Button>
-            )}
-            {/* Execution location: shown only when a paired Mac could run this new chat. */}
-            {contextChips.machine ? machinePicker : null}
-            {contextChips.branch && gitBranch && workspace?.folderPath ? (
-              <GitBranchPicker
-                key={`git-branch-picker-${worktreeRequest}`}
-                workspaceId={workspace.id}
-                branch={gitBranch}
-                detached={gitDetached}
-                unborn={gitUnborn}
-                disabled={
-                  isGenerating ||
-                  sending ||
-                  attaching ||
-                  permissionSaving ||
-                  Boolean(gitMutationBlockedReason)
-                }
-                disabledReason={gitMutationBlockedReason}
-                onCreateWorktree={onCreateGitWorktree}
-                onBusyChange={onGitOperationBusyChange}
-                worktreeDescription={gitWorktreeDescription}
-                openWorktreeOnMount={worktreeRequest > 0}
-                programmaticReturnFocusRef={inputRef}
-                uncommitted={contextChips.changesBadge}
-                managedWorktree={Boolean(workspace.managedWorktree)}
-                draft={draftGit}
-              />
-            ) : null}
-            {contextChips.pullRequest ? (
-              <span className="composer-context-chip-enter flex shrink-0">
-                <ChatPullRequestsChip chatId={chatId} />
-              </span>
-            ) : null}
-            {contextChips.startedChats ? (
-              <span className="composer-context-chip-enter flex shrink-0">
-                <StartedChatsChip leadChatId={chatId} views={startedChats} />
-              </span>
-            ) : null}
-            {contextChips.followThrough ? <FollowThroughChips chatId={chatId} /> : null}
-            {contextChips.tasks ? (
-              <span className="composer-context-chip-enter flex shrink-0">
-                <ChatTaskChip tasks={postingTasks} />
-              </span>
-            ) : null}
-            {/* Polite, focus-free notice when the PR chip appears mid-chat. */}
-            <span role="status" className="sr-only">
-              {pullRequestAnnouncement}
-            </span>
-          </div>
-          </ComposerContextBar>
+                )}
+                {/* Execution location: shown only when a paired Mac could run this new chat. */}
+                {contextChips.machine ? machinePicker : null}
+                {contextChips.branch && gitBranch && workspace?.folderPath ? (
+                  <GitBranchPicker
+                    key={`git-branch-picker-${worktreeRequest}`}
+                    workspaceId={workspace.id}
+                    branch={gitBranch}
+                    detached={gitDetached}
+                    unborn={gitUnborn}
+                    disabled={
+                      isGenerating ||
+                      sending ||
+                      attaching ||
+                      permissionSaving ||
+                      Boolean(gitMutationBlockedReason)
+                    }
+                    disabledReason={gitMutationBlockedReason}
+                    onCreateWorktree={onCreateGitWorktree}
+                    onBusyChange={onGitOperationBusyChange}
+                    worktreeDescription={gitWorktreeDescription}
+                    openWorktreeOnMount={worktreeRequest > 0}
+                    programmaticReturnFocusRef={inputRef}
+                    uncommitted={contextChips.changesBadge}
+                    managedWorktree={Boolean(workspace.managedWorktree)}
+                    draft={draftGit}
+                  />
+                ) : null}
+                {contextChips.pullRequest ? (
+                  <span className="composer-context-chip-enter flex shrink-0">
+                    <ChatPullRequestsChip chatId={chatId} />
+                  </span>
+                ) : null}
+                {contextChips.startedChats ? (
+                  <span className="composer-context-chip-enter flex shrink-0">
+                    <StartedChatsChip leadChatId={chatId} views={startedChats} />
+                  </span>
+                ) : null}
+                {contextChips.followThrough ? <FollowThroughChips chatId={chatId} /> : null}
+                {contextChips.tasks ? (
+                  <span className="composer-context-chip-enter flex shrink-0">
+                    <ChatTaskChip tasks={postingTasks} />
+                  </span>
+                ) : null}
+                {/* Polite, focus-free notice when the PR chip appears mid-chat. */}
+                <span role="status" className="sr-only">
+                  {pullRequestAnnouncement}
+                </span>
+              </div>
+            </ComposerContextBar>
           ) : remoteContext ? (
-            <ComposerContextBar mode={autoHideContext && hasMessages ? "hidden" : "full"} inputRef={inputRef}>
+            <ComposerContextBar
+              mode={autoHideContext && hasMessages ? "hidden" : "full"}
+              inputRef={inputRef}
+            >
               <div className="relative z-0 mx-3 flex min-h-8 min-w-0 items-center gap-0.5 rounded-t-xl bg-context-bar px-1.5 pb-2 pt-1 backdrop-blur-md">
                 {remoteContext}
               </div>
@@ -3350,7 +3500,9 @@ export function Composer({
               data-focus-region-entry
               value={composerValue}
               readOnly={composerInputLocked || firstSendPending || dictationPreviewing}
-              aria-busy={composerInputLocked || firstSendPending || dictationPreviewing || undefined}
+              aria-busy={
+                composerInputLocked || firstSendPending || dictationPreviewing || undefined
+              }
               onChange={(event) => {
                 if (firstSendPendingRef.current || dictationPreviewing) return;
                 const detachingHistory = historyOpen;
@@ -3364,10 +3516,14 @@ export function Composer({
                   end: event.target.selectionEnd,
                 });
                 // A recalled `/command`, `$skill` or `@mention` stays plain text on the first edit.
-                if (detachingHistory) dismissActiveTriggersFor(event.target.value, event.target.selectionStart);
+                if (detachingHistory)
+                  dismissActiveTriggersFor(event.target.value, event.target.selectionStart);
                 // Until live words appear, dictation follows the caret.
                 if (dictationAnchorRef.current) {
-                  setDictationAnchor({ start: event.target.selectionStart, end: event.target.selectionEnd });
+                  setDictationAnchor({
+                    start: event.target.selectionStart,
+                    end: event.target.selectionEnd,
+                  });
                 }
               }}
               onPointerDown={(event) => {
@@ -3385,7 +3541,10 @@ export function Composer({
                   end: event.currentTarget.selectionEnd,
                 });
                 if (dictationAnchorRef.current) {
-                  setDictationAnchor({ start: event.currentTarget.selectionStart, end: event.currentTarget.selectionEnd });
+                  setDictationAnchor({
+                    start: event.currentTarget.selectionStart,
+                    end: event.currentTarget.selectionEnd,
+                  });
                 }
               }}
               onCompositionStart={(event) => {
@@ -3416,7 +3575,10 @@ export function Composer({
               }}
               aria-autocomplete={slashSession || mentionTrigger || historyOpen ? "list" : undefined}
               aria-describedby={
-                [surfaces.attachments ? attachmentDescriptionId : null, sendBlockedReason ? sendBlockedId : null]
+                [
+                  surfaces.attachments ? attachmentDescriptionId : null,
+                  sendBlockedReason ? sendBlockedId : null,
+                ]
                   .filter(Boolean)
                   .join(" ") || undefined
               }
@@ -3489,7 +3651,12 @@ export function Composer({
                   {formatContextTokenCount(expiredCacheReturn.offer.contextTokens)} tokens.
                 </Text>
                 <div className="flex shrink-0 items-center gap-1">
-                  <Button type="button" variant="muted" size="small" onClick={expiredCacheReturn.accept}>
+                  <Button
+                    type="button"
+                    variant="muted"
+                    size="small"
+                    onClick={expiredCacheReturn.accept}
+                  >
                     Compact first?
                   </Button>
                   <Button
@@ -3517,202 +3684,235 @@ export function Composer({
             </Text>
             {voice.lastError ? (
               <div role="alert" className="flex flex-wrap items-center gap-2 px-1.5 pb-1">
-                <Text variant="small" color="secondary">{voice.lastError} Your draft is still here.</Text>
-                {onOpenSettings ? <Button variant="transparent" size="small" onClick={() => onOpenSettings("voice")}>Open voice settings</Button> : null}
-                <Button variant="transparent" size="small" onClick={voice.dismissError}>Dismiss</Button>
+                <Text variant="small" color="secondary">
+                  {voice.lastError} Your draft is still here.
+                </Text>
+                {onOpenSettings ? (
+                  <Button
+                    variant="transparent"
+                    size="small"
+                    onClick={() => onOpenSettings("voice")}
+                  >
+                    Open voice settings
+                  </Button>
+                ) : null}
+                <Button variant="transparent" size="small" onClick={voice.dismissError}>
+                  Dismiss
+                </Button>
               </div>
             ) : null}
             {!ready && readinessMessage ? (
               <Text as="p" role="status" variant="small" color="tertiary" className="px-1.5 pb-1">
                 {readinessMessage}
-                {onOpenSettings && readinessSettingsSection ? <Button variant="transparent" size="small" onClick={() => onOpenSettings(readinessSettingsSection)}>{CONNECT_PROVIDER_ACTION}</Button> : null}
+                {onOpenSettings && readinessSettingsSection ? (
+                  <Button
+                    variant="transparent"
+                    size="small"
+                    onClick={() => onOpenSettings(readinessSettingsSection)}
+                  >
+                    {CONNECT_PROVIDER_ACTION}
+                  </Button>
+                ) : null}
               </Text>
             ) : null}
             <div className="composer-footer-row mt-1.5 flex min-w-0 flex-nowrap items-center justify-between gap-x-1.5 gap-y-1">
               <div className="flex shrink-0 items-center gap-1">
                 {surfaces.attachments ? (
-                <>
-                <Button
-                  variant="transparent"
-                  size="small"
-                  iconOnly
-                  className="rounded-full"
-                  onClick={handleAttach}
-                  disabled={attachDisabled}
-                  aria-label={
-                    attaching ? "Choosing or loading attachments" : "Attach files or images"
-                  }
-                  aria-keyshortcuts={ariaKeyShortcut(attachBinding)}
-                  title={attachBinding ? `Attach files or images (${prettyAccelerator(attachBinding)})` : undefined}
-                  aria-busy={attaching || undefined}
-                >
-                  {attaching ? <Loader2 className="animate-spin" /> : <Plus />}
-                </Button>
-                <span className="sr-only" role="status" aria-live="polite">
-                  {attachmentStatus}
-                </span>
-                </>
+                  <>
+                    <Button
+                      variant="transparent"
+                      size="small"
+                      iconOnly
+                      className="rounded-full"
+                      onClick={handleAttach}
+                      disabled={attachDisabled}
+                      aria-label={
+                        attaching ? "Choosing or loading attachments" : "Attach files or images"
+                      }
+                      aria-keyshortcuts={ariaKeyShortcut(attachBinding)}
+                      title={
+                        attachBinding
+                          ? `Attach files or images (${prettyAccelerator(attachBinding)})`
+                          : undefined
+                      }
+                      aria-busy={attaching || undefined}
+                    >
+                      {attaching ? <Loader2 className="animate-spin" /> : <Plus />}
+                    </Button>
+                    <span className="sr-only" role="status" aria-live="polite">
+                      {attachmentStatus}
+                    </span>
+                  </>
                 ) : null}
                 {surfaces.localContext && approvalsChipShown ? (
-                <div
-                  // Approvals are the user's to change: Aiden Live never opens or picks them.
-                  data-live-guard="you"
-                  className="composer-permission-control group/access relative h-8 w-34 shrink-0"
-                  data-open={permissionMenuOpen || undefined}
-                  onPointerEnter={() => {
-                    dismissSlash();
-                    setPermissionMenuOpen(true);
-                  }}
-                  onPointerLeave={(event) => {
-                    if (!event.currentTarget.contains(document.activeElement)) setPermissionMenuOpen(false);
-                  }}
-                  onBlur={(event) => {
-                    if (!event.currentTarget.contains(event.relatedTarget)) {
-                      setPermissionMenuOpen(false);
-                    }
-                  }}
-                  onKeyDown={(event) => {
-                    if (!isEscapeKey(event)) return;
-                    event.preventDefault();
-                    setPermissionMenuOpen(false);
-                    inputRef?.current?.focus();
-                  }}
-                >
-                  <button
-                    type="button"
-                    aria-label={`Approvals: ${approvalsLabel}. Show options.`}
-                    aria-expanded={permissionMenuOpen}
-                    aria-controls={permissionOptionsId}
-                    title={approvalsHelp}
-                    onFocus={() => setPermissionMenuOpen(true)}
-                    onClick={() => setPermissionMenuOpen(true)}
-                    onKeyDown={(event) => {
-                      if (!["ArrowUp", "ArrowDown", "Enter", " "].includes(event.key)) return;
-                      event.preventDefault();
-                      setPermissionMenuOpen(true);
-                      requestAnimationFrame(() => permissionControlRef.current?.focus());
-                    }}
-                    className="composer-permission-trigger absolute inset-0 flex items-center gap-2 overflow-hidden whitespace-nowrap rounded-pill bg-transparent px-3 text-regular outline-none transition-opacity duration-100 ease-out"
-                  >
-                    <ApprovalsIcon
-                      className={cn("size-4 shrink-0", APPROVAL_CHOICE_ICONS[chipChoice].className)}
-                    />
-                    <span className="composer-permission-label truncate">
-                      {permissionSaving ? "Updating…" : approvalsLabel}
-                    </span>
-                  </button>
-                  {approvalChoices.length === 0 ? (
-                    <div
-                      id={permissionOptionsId}
-                      className="invisible pointer-events-none absolute bottom-full left-0 z-20 flex min-w-34 translate-y-1 flex-col items-stretch overflow-hidden rounded-dialog bg-popover p-1 opacity-0 shadow-control-hover transition-[opacity,transform,visibility] duration-100 ease-out group-data-[open=true]/access:visible group-data-[open=true]/access:pointer-events-auto group-data-[open=true]/access:translate-y-0 group-data-[open=true]/access:opacity-100"
-                    >
-                      {/* Chat only is a workspace setting, changed where it was set. */}
-                      <button
-                        ref={permissionControlRef}
-                        type="button"
-                        onClick={() => {
-                          setPermissionMenuOpen(false);
-                          if (workspaceSettingsId) openWorkspaceSettings(workspaceSettingsId, "general");
-                        }}
-                        className="flex h-8 w-full items-center gap-2 overflow-hidden whitespace-nowrap rounded-control px-3 text-regular outline-none transition-[background-color,box-shadow,color] duration-100 ease-out hover:bg-list-hover focus-visible:bg-list-selection focus-visible:outline-none active:bg-list-selection"
-                      >
-                        <SlidersHorizontal className="size-4 shrink-0 text-secondary" />
-                        <span className="truncate">Workspace settings…</span>
-                      </button>
-                    </div>
-                  ) : (
                   <div
-                    id={permissionOptionsId}
-                    role="radiogroup"
-                    aria-label="Approvals"
-                    aria-disabled={
-                      !workspace ||
-                      permissionSaving ||
-                      isGenerating ||
-                      sending ||
-                      gitOperationBusy ||
-                      Boolean(workspaceChangeBlockedReason) ||
-                      undefined
-                    }
-                    className="invisible pointer-events-none absolute bottom-full left-0 z-20 flex min-w-34 translate-y-1 flex-col items-stretch overflow-hidden rounded-dialog bg-popover p-1 opacity-0 shadow-control-hover transition-[opacity,transform,visibility] duration-100 ease-out group-data-[open=true]/access:visible group-data-[open=true]/access:pointer-events-auto group-data-[open=true]/access:translate-y-0 group-data-[open=true]/access:opacity-100"
+                    // Approvals are the user's to change: Aiden Live never opens or picks them.
+                    data-live-guard="you"
+                    className="composer-permission-control group/access relative h-8 w-34 shrink-0"
+                    data-open={permissionMenuOpen || undefined}
+                    onPointerEnter={() => {
+                      dismissSlash();
+                      setPermissionMenuOpen(true);
+                    }}
+                    onPointerLeave={(event) => {
+                      if (!event.currentTarget.contains(document.activeElement))
+                        setPermissionMenuOpen(false);
+                    }}
+                    onBlur={(event) => {
+                      if (!event.currentTarget.contains(event.relatedTarget)) {
+                        setPermissionMenuOpen(false);
+                      }
+                    }}
+                    onKeyDown={(event) => {
+                      if (!isEscapeKey(event)) return;
+                      event.preventDefault();
+                      setPermissionMenuOpen(false);
+                      inputRef?.current?.focus();
+                    }}
                   >
-                    {approvalChoices.map((value, index) => {
-                      const meta = APPROVAL_CHOICE_ICONS[value];
-                      const Icon = meta.icon;
-                      const label = approvalChoiceLabel(value);
-                      const selected = value === currentApprovalChoice;
-                      const disabled =
-                        !workspace ||
-                        permissionSaving ||
-                        isGenerating ||
-                        sending ||
-                        gitOperationBusy ||
-                        Boolean(workspaceChangeBlockedReason);
-                      return (
+                    <button
+                      type="button"
+                      aria-label={`Approvals: ${approvalsLabel}. Show options.`}
+                      aria-expanded={permissionMenuOpen}
+                      aria-controls={permissionOptionsId}
+                      title={approvalsHelp}
+                      onFocus={() => setPermissionMenuOpen(true)}
+                      onClick={() => setPermissionMenuOpen(true)}
+                      onKeyDown={(event) => {
+                        if (!["ArrowUp", "ArrowDown", "Enter", " "].includes(event.key)) return;
+                        event.preventDefault();
+                        setPermissionMenuOpen(true);
+                        requestAnimationFrame(() => permissionControlRef.current?.focus());
+                      }}
+                      className="composer-permission-trigger absolute inset-0 flex items-center gap-2 overflow-hidden whitespace-nowrap rounded-pill bg-transparent px-3 text-regular outline-none transition-opacity duration-100 ease-out"
+                    >
+                      <ApprovalsIcon
+                        className={cn(
+                          "size-4 shrink-0",
+                          APPROVAL_CHOICE_ICONS[chipChoice].className,
+                        )}
+                      />
+                      <span className="composer-permission-label truncate">
+                        {permissionSaving ? "Updating…" : approvalsLabel}
+                      </span>
+                    </button>
+                    {approvalChoices.length === 0 ? (
+                      <div
+                        id={permissionOptionsId}
+                        className="invisible pointer-events-none absolute bottom-full left-0 z-20 flex min-w-34 translate-y-1 flex-col items-stretch overflow-hidden rounded-dialog bg-popover p-1 opacity-0 shadow-control-hover transition-[opacity,transform,visibility] duration-100 ease-out group-data-[open=true]/access:visible group-data-[open=true]/access:pointer-events-auto group-data-[open=true]/access:translate-y-0 group-data-[open=true]/access:opacity-100"
+                      >
+                        {/* Chat only is a workspace setting, changed where it was set. */}
                         <button
-                          ref={selected ? permissionControlRef : undefined}
-                          key={value}
+                          ref={permissionControlRef}
                           type="button"
-                          role="radio"
-                          aria-checked={selected}
-                          aria-label={
-                            workspaceChangeBlockedReason
-                              ? `Approvals: ${label}. ${workspaceChangeBlockedReason}.`
-                              : isGenerating || sending
-                                ? `Approvals: ${label}. Finish or stop the current response to change approvals.`
-                                : `Approvals: ${label}`
-                          }
-                          title={value === "settings" || value === "chat-only" ? undefined : approvalModeHelp(value, localComputerNoun(platform))}
-                          tabIndex={selected ? 0 : -1}
-                          aria-disabled={disabled || undefined}
-                          onClick={(event) => {
-                            if (disabled) return;
-                            void chooseApprovals(value);
-                            if (event.detail > 0) {
-                              setPermissionMenuOpen(false);
-                              inputRef?.current?.focus({ preventScroll: true });
-                            }
+                          onClick={() => {
+                            setPermissionMenuOpen(false);
+                            if (workspaceSettingsId)
+                              openWorkspaceSettings(workspaceSettingsId, "general");
                           }}
-                          onKeyDown={(event) => {
-                            if (disabled) return;
-                            if (event.key === "Enter" || event.key === " ") {
-                              event.preventDefault();
-                              if (value !== currentApprovalChoice) void chooseApprovals(value);
-                              return;
-                            }
-                            let nextIndex: number | undefined;
-                            if (event.key === "ArrowDown" || event.key === "ArrowRight") {
-                              nextIndex = (index + 1) % approvalChoices.length;
-                            }
-                            if (event.key === "ArrowUp" || event.key === "ArrowLeft") {
-                              nextIndex =
-                                (index - 1 + approvalChoices.length) % approvalChoices.length;
-                            }
-                            if (event.key === "Home") nextIndex = 0;
-                            if (event.key === "End") nextIndex = approvalChoices.length - 1;
-                            if (nextIndex === undefined) return;
-                            event.preventDefault();
-                            const radios =
-                              event.currentTarget.parentElement?.querySelectorAll<HTMLButtonElement>(
-                                '[role="radio"]',
-                              );
-                            radios?.[nextIndex]?.focus();
-                          }}
-                          className={cn(
-                            "flex h-8 w-full items-center gap-2 overflow-hidden whitespace-nowrap rounded-control px-3 text-regular outline-none transition-[background-color,box-shadow,color] duration-100 ease-out focus-visible:outline-none aria-disabled:cursor-default",
-                            selected
-                              ? "bg-popover shadow-control"
-                              : "hover:bg-list-hover active:bg-list-selection focus-visible:bg-list-selection",
-                          )}
+                          className="flex h-8 w-full items-center gap-2 overflow-hidden whitespace-nowrap rounded-control px-3 text-regular outline-none transition-[background-color,box-shadow,color] duration-100 ease-out hover:bg-list-hover focus-visible:bg-list-selection focus-visible:outline-none active:bg-list-selection"
                         >
-                          <Icon className={cn("size-4 shrink-0", meta.className)} />
-                          <span className="truncate">{label}</span>
+                          <SlidersHorizontal className="size-4 shrink-0 text-secondary" />
+                          <span className="truncate">Workspace settings…</span>
                         </button>
-                      );
-                    })}
+                      </div>
+                    ) : (
+                      <div
+                        id={permissionOptionsId}
+                        role="radiogroup"
+                        aria-label="Approvals"
+                        aria-disabled={
+                          !workspace ||
+                          permissionSaving ||
+                          isGenerating ||
+                          sending ||
+                          gitOperationBusy ||
+                          Boolean(workspaceChangeBlockedReason) ||
+                          undefined
+                        }
+                        className="invisible pointer-events-none absolute bottom-full left-0 z-20 flex min-w-34 translate-y-1 flex-col items-stretch overflow-hidden rounded-dialog bg-popover p-1 opacity-0 shadow-control-hover transition-[opacity,transform,visibility] duration-100 ease-out group-data-[open=true]/access:visible group-data-[open=true]/access:pointer-events-auto group-data-[open=true]/access:translate-y-0 group-data-[open=true]/access:opacity-100"
+                      >
+                        {approvalChoices.map((value, index) => {
+                          const meta = APPROVAL_CHOICE_ICONS[value];
+                          const Icon = meta.icon;
+                          const label = approvalChoiceLabel(value);
+                          const selected = value === currentApprovalChoice;
+                          const disabled =
+                            !workspace ||
+                            permissionSaving ||
+                            isGenerating ||
+                            sending ||
+                            gitOperationBusy ||
+                            Boolean(workspaceChangeBlockedReason);
+                          return (
+                            <button
+                              ref={selected ? permissionControlRef : undefined}
+                              key={value}
+                              type="button"
+                              role="radio"
+                              aria-checked={selected}
+                              aria-label={
+                                workspaceChangeBlockedReason
+                                  ? `Approvals: ${label}. ${workspaceChangeBlockedReason}.`
+                                  : isGenerating || sending
+                                    ? `Approvals: ${label}. Finish or stop the current response to change approvals.`
+                                    : `Approvals: ${label}`
+                              }
+                              title={
+                                value === "settings" || value === "chat-only"
+                                  ? undefined
+                                  : approvalModeHelp(value, localComputerNoun(platform))
+                              }
+                              tabIndex={selected ? 0 : -1}
+                              aria-disabled={disabled || undefined}
+                              onClick={(event) => {
+                                if (disabled) return;
+                                void chooseApprovals(value);
+                                if (event.detail > 0) {
+                                  setPermissionMenuOpen(false);
+                                  inputRef?.current?.focus({ preventScroll: true });
+                                }
+                              }}
+                              onKeyDown={(event) => {
+                                if (disabled) return;
+                                if (event.key === "Enter" || event.key === " ") {
+                                  event.preventDefault();
+                                  if (value !== currentApprovalChoice) void chooseApprovals(value);
+                                  return;
+                                }
+                                let nextIndex: number | undefined;
+                                if (event.key === "ArrowDown" || event.key === "ArrowRight") {
+                                  nextIndex = (index + 1) % approvalChoices.length;
+                                }
+                                if (event.key === "ArrowUp" || event.key === "ArrowLeft") {
+                                  nextIndex =
+                                    (index - 1 + approvalChoices.length) % approvalChoices.length;
+                                }
+                                if (event.key === "Home") nextIndex = 0;
+                                if (event.key === "End") nextIndex = approvalChoices.length - 1;
+                                if (nextIndex === undefined) return;
+                                event.preventDefault();
+                                const radios =
+                                  event.currentTarget.parentElement?.querySelectorAll<HTMLButtonElement>(
+                                    '[role="radio"]',
+                                  );
+                                radios?.[nextIndex]?.focus();
+                              }}
+                              className={cn(
+                                "flex h-8 w-full items-center gap-2 overflow-hidden whitespace-nowrap rounded-control px-3 text-regular outline-none transition-[background-color,box-shadow,color] duration-100 ease-out focus-visible:outline-none aria-disabled:cursor-default",
+                                selected
+                                  ? "bg-popover shadow-control"
+                                  : "hover:bg-list-hover active:bg-list-selection focus-visible:bg-list-selection",
+                              )}
+                            >
+                              <Icon className={cn("size-4 shrink-0", meta.className)} />
+                              <span className="truncate">{label}</span>
+                            </button>
+                          );
+                        })}
+                      </div>
+                    )}
                   </div>
-                  )}
-                </div>
                 ) : null}
               </div>
               <div className="composer-action-row ml-auto flex min-w-0 flex-1 items-center justify-end gap-1.5">
@@ -3740,7 +3940,11 @@ export function Composer({
                     composerInputLocked ||
                     (liveLaunch.sessionActive && !voice.recording)
                   }
-                  title={liveLaunch.sessionActive && !voice.recording ? "Aiden Live is using the microphone" : undefined}
+                  title={
+                    liveLaunch.sessionActive && !voice.recording
+                      ? "Aiden Live is using the microphone"
+                      : undefined
+                  }
                   onClick={() => (voice.recording ? voice.stop() : voice.start())}
                   aria-label={voice.recording ? "Stop recording" : "Start voice input"}
                 >
@@ -3772,7 +3976,9 @@ export function Composer({
                     onClick={onStop}
                     disabled={!canStopGeneration}
                     aria-label="Stop generating"
-                    aria-keyshortcuts={["Escape", ariaKeyShortcut(stopBinding)].filter(Boolean).join(" ")}
+                    aria-keyshortcuts={["Escape", ariaKeyShortcut(stopBinding)]
+                      .filter(Boolean)
+                      .join(" ")}
                     title={
                       stopBinding
                         ? `Stop generating (${prettyAccelerator(stopBinding)}, or Esc from an empty message)`
@@ -4019,7 +4225,11 @@ export function Composer({
                   setLogoutConfirmOpen(true);
                 }}
               >
-                <ProviderIcon providerId={provider.id} providerLabel={provider.label} className="size-4 text-secondary" />
+                <ProviderIcon
+                  providerId={provider.id}
+                  providerLabel={provider.label}
+                  className="size-4 text-secondary"
+                />
                 <span>
                   <span className="block text-small-strong">{provider.label}</span>
                   <span className="block text-small text-tertiary">{provider.detail}</span>
@@ -4043,8 +4253,8 @@ export function Composer({
         description={
           <Text variant="small" color="secondary">
             This removes Aiden&apos;s encrypted {logoutProvider?.label ?? "provider"} credential
-            from this device. Existing chats remain. If no system credential is available, those models
-            cannot run until you sign in again.
+            from this device. Existing chats remain. If no system credential is available, those
+            models cannot run until you sign in again.
           </Text>
         }
         confirmLabel="Sign out"

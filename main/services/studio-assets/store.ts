@@ -282,7 +282,10 @@ export class StudioAssetStore {
    * open whose re-index never completed), so every blob on disk may have lost its row
    * and may be re-indexed.
    */
-  private async connect(file: string, damaged?: unknown): Promise<{ db: DatabaseSync; recovering: boolean }> {
+  private async connect(
+    file: string,
+    damaged?: unknown,
+  ): Promise<{ db: DatabaseSync; recovering: boolean }> {
     let opened: { db: DatabaseSync; recovering: boolean } | undefined;
     let cause = damaged;
     if (cause === undefined) {
@@ -746,7 +749,15 @@ export class StudioAssetStore {
         );
         const mark = db.prepare("INSERT OR IGNORE INTO recovered (asset_id) VALUES (?)");
         for (const asset of recovered) {
-          insert.run(asset.id, asset.mediaType, asset.bytes, asset.width, asset.height, asset.createdAt, now);
+          insert.run(
+            asset.id,
+            asset.mediaType,
+            asset.bytes,
+            asset.width,
+            asset.height,
+            asset.createdAt,
+            now,
+          );
           mark.run(asset.id);
         }
       });
@@ -822,7 +833,9 @@ function openDatabase(file: string): { db: DatabaseSync; recovering: boolean } {
       user_version: number;
     };
     if (Number(version) === 0) {
-      db.exec(`BEGIN IMMEDIATE; ${SCHEMA} ${RECOVERY_SCHEMA} INSERT INTO recovery_pending (id) VALUES (1); COMMIT;`);
+      db.exec(
+        `BEGIN IMMEDIATE; ${SCHEMA} ${RECOVERY_SCHEMA} INSERT INTO recovery_pending (id) VALUES (1); COMMIT;`,
+      );
     } else if (Number(version) > 1) {
       throw new NewerSchemaError();
     } else if (Number(version) !== 1) {

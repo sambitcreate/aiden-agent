@@ -53,7 +53,11 @@ import {
   resolveBotComputersAcceptanceReceipt,
   writeBotComputersAcceptanceReceipt,
 } from "./prepare-macos-package-output.mjs";
-import { discoverPackagedApp, packagedArtifactIdentity, verifyMacPackage } from "./verify-macos-package.mjs";
+import {
+  discoverPackagedApp,
+  packagedArtifactIdentity,
+  verifyMacPackage,
+} from "./verify-macos-package.mjs";
 
 const executeFile = promisify(execFile);
 const modulePath = fileURLToPath(import.meta.url);
@@ -108,7 +112,9 @@ async function startAcceptanceModel({ capability, context, onTurn }) {
       requests.push(body);
       const answer = acceptanceResponse(body, context);
       if (answer.kind !== "other") {
-        await onTurn(answer).catch((error) => observationErrors.push(error instanceof Error ? error.message : String(error)));
+        await onTurn(answer).catch((error) =>
+          observationErrors.push(error instanceof Error ? error.message : String(error)),
+        );
       }
       response.writeHead(200, { "cache-control": "no-store", "content-type": "text/event-stream" });
       for (const chunk of answer.chunks) response.write(`data: ${JSON.stringify(chunk)}\n\n`);
@@ -121,7 +127,8 @@ async function startAcceptanceModel({ capability, context, onTurn }) {
   });
   await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
   const address = server.address();
-  if (!address || typeof address === "string") throw new Error("The loopback model did not bind TCP.");
+  if (!address || typeof address === "string")
+    throw new Error("The loopback model did not bind TCP.");
   return {
     port: address.port,
     requests,
@@ -136,7 +143,10 @@ async function startAcceptanceModel({ capability, context, onTurn }) {
 }
 
 async function processTable() {
-  const { stdout } = await executeFile("/bin/ps", ["-axo", "pid=,command="], { encoding: "utf8", maxBuffer: 16 * 1024 * 1024 });
+  const { stdout } = await executeFile("/bin/ps", ["-axo", "pid=,command="], {
+    encoding: "utf8",
+    maxBuffer: 16 * 1024 * 1024,
+  });
   return stdout
     .split("\n")
     .map((line) => line.match(/^\s*(\d+)\s+(.+)$/u))
@@ -153,15 +163,27 @@ async function observe(paths, lume) {
   const state = parseBotComputersState(await readJson(paths.stateFile));
   let vms = [];
   if (existsSync(paths.storage)) {
-    const listed = await runLume(lume.invocation, { op: "list" }, { storage: paths.storage, env: lume.env, timeoutMs: 60_000 });
+    const listed = await runLume(
+      lume.invocation,
+      { op: "list" },
+      { storage: paths.storage, env: lume.env, timeoutMs: 60_000 },
+    );
     if (listed.exitCode !== 0) throw new Error(`lume ls failed: ${listed.stderr.trim()}`);
-    vms = parseLumeVmList(listed.stdout).map(({ name, state: vmState }) => ({ name, state: vmState }));
+    vms = parseLumeVmList(listed.stdout).map(({ name, state: vmState }) => ({
+      name,
+      state: vmState,
+    }));
   }
-  const processes = (await processTable()).filter((entry) => startedFrom(entry.command, lume.binaryPath));
+  const processes = (await processTable()).filter((entry) =>
+    startedFrom(entry.command, lume.binaryPath),
+  );
   return {
     baseBuild: state.setup.baseBuild,
     baseVersion: state.setup.baseVersion,
-    computers: Object.entries(state.computers).map(([botId, record]) => ({ botId, vmName: record.vmName })),
+    computers: Object.entries(state.computers).map(([botId, record]) => ({
+      botId,
+      vmName: record.vmName,
+    })),
     vms,
     processes,
     pauses: await readJson(paths.pausesFile).catch(() => undefined),
@@ -189,7 +211,8 @@ async function findSharedFile(directory, fileName, depth = 6) {
   }
   for (const entry of entries) {
     const child = path.join(directory, entry.name);
-    if (entry.isFile() && entry.name === fileName && path.basename(directory) === "Computer") return readFile(child, "utf8");
+    if (entry.isFile() && entry.name === fileName && path.basename(directory) === "Computer")
+      return readFile(child, "utf8");
     if (entry.isDirectory() && !entry.isSymbolicLink()) {
       const found = await findSharedFile(child, fileName, depth - 1);
       if (found !== undefined) return found;
@@ -201,12 +224,19 @@ async function findSharedFile(directory, fileName, depth = 6) {
 async function preseedRestoreImage(source, imagesDir) {
   const info = await stat(source);
   if (!info.isFile() || info.size !== BOT_COMPUTER_RESTORE_IMAGE.bytes) {
-    throw new Error(`--restore-image must be macOS ${BOT_COMPUTER_RESTORE_IMAGE.version} (${BOT_COMPUTER_RESTORE_IMAGE.build}), ${BOT_COMPUTER_RESTORE_IMAGE.bytes} bytes.`);
+    throw new Error(
+      `--restore-image must be macOS ${BOT_COMPUTER_RESTORE_IMAGE.version} (${BOT_COMPUTER_RESTORE_IMAGE.build}), ${BOT_COMPUTER_RESTORE_IMAGE.bytes} bytes.`,
+    );
   }
   await mkdir(imagesDir, { recursive: true, mode: 0o700 });
-  const destination = path.join(imagesDir, `UniversalMac_${BOT_COMPUTER_RESTORE_IMAGE.build}_Restore.ipsw`);
+  const destination = path.join(
+    imagesDir,
+    `UniversalMac_${BOT_COMPUTER_RESTORE_IMAGE.build}_Restore.ipsw`,
+  );
   // An APFS clone is instant; fall back to a full copy across volumes.
-  await executeFile("/bin/cp", ["-c", source, destination]).catch(() => copyFile(source, destination));
+  await executeFile("/bin/cp", ["-c", source, destination]).catch(() =>
+    copyFile(source, destination),
+  );
 }
 
 function monitorChild(child) {
@@ -249,10 +279,21 @@ async function emergencyCleanup({ child, paths, lume, model }) {
     if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
   }
   if (lume && paths && existsSync(paths.storage)) {
-    const listed = await runLume(lume.invocation, { op: "list" }, { storage: paths.storage, env: lume.env, timeoutMs: 60_000 }).catch(() => null);
-    const running = listed?.exitCode === 0 ? parseLumeVmList(listed.stdout).filter((vm) => vm.state !== "stopped") : [];
+    const listed = await runLume(
+      lume.invocation,
+      { op: "list" },
+      { storage: paths.storage, env: lume.env, timeoutMs: 60_000 },
+    ).catch(() => null);
+    const running =
+      listed?.exitCode === 0
+        ? parseLumeVmList(listed.stdout).filter((vm) => vm.state !== "stopped")
+        : [];
     for (const vm of running) {
-      await runLume(lume.invocation, { op: "stop", name: vm.name, force: true }, { storage: paths.storage, env: lume.env, timeoutMs: 120_000 }).catch(() => undefined);
+      await runLume(
+        lume.invocation,
+        { op: "stop", name: vm.name, force: true },
+        { storage: paths.storage, env: lume.env, timeoutMs: 120_000 },
+      ).catch(() => undefined);
     }
   }
   await model?.close().catch(() => undefined);
@@ -270,7 +311,10 @@ async function runAcceptance() {
   }
   await invalidateBotComputersAcceptanceReceipt(repositoryRoot);
   const receiptPath = resolveBotComputersAcceptanceReceipt(repositoryRoot);
-  const appPath = path.resolve(argumentValue("--app") ?? (await discoverPackagedApp(path.join(repositoryRoot, "release", "development"))));
+  const appPath = path.resolve(
+    argumentValue("--app") ??
+      (await discoverPackagedApp(path.join(repositoryRoot, "release", "development"))),
+  );
   const restoreImage = argumentValue("--restore-image");
   await verifyMacPackage(appPath);
   const artifact = await packagedArtifactIdentity(appPath);
@@ -317,26 +361,45 @@ async function runAcceptance() {
       const now = await observe(paths, lume);
       timeline.given = now;
       botId = now.computers[0]?.botId;
-      console.log("The Bot's turn started; its first capture boots its computer (this can take a few minutes).");
+      console.log(
+        "The Bot's turn started; its first capture boots its computer (this can take a few minutes).",
+      );
     }
     if (history[0]?.result && !timeline.working) timeline.working = await observe(paths, lume);
-    if (call?.arguments?.action === "wait" && !history.some((entry) => entry.args?.action === "wait")) {
-      console.log("\n>>> NOW: open the Bot's Computer tab, press Take over, use the computer for a moment, then press Give back.\n");
+    if (
+      call?.arguments?.action === "wait" &&
+      !history.some((entry) => entry.args?.action === "wait")
+    ) {
+      console.log(
+        "\n>>> NOW: open the Bot's Computer tab, press Take over, use the computer for a moment, then press Give back.\n",
+      );
     }
-    if (history.some((entry) => entry.name === "computer_shell" && entry.result) && sharedFileText === undefined) {
-      sharedFileText = (await findSharedFile(paths.botService, acceptanceSharedFileName(nonce))) ?? null;
+    if (
+      history.some((entry) => entry.name === "computer_shell" && entry.result) &&
+      sharedFileText === undefined
+    ) {
+      sharedFileText =
+        (await findSharedFile(paths.botService, acceptanceSharedFileName(nonce))) ?? null;
     }
   };
 
   try {
-    if (restoreImage) await preseedRestoreImage(path.resolve(restoreImage), path.join(root, "restore-images"));
+    if (restoreImage)
+      await preseedRestoreImage(path.resolve(restoreImage), path.join(root, "restore-images"));
     model = await startAcceptanceModel({ capability, context, onTurn });
     const fixture = acceptanceFixture(model.port, capability);
     await mkdir(userData, { recursive: true });
-    await writeFile(path.join(userData, "config.json"), JSON.stringify(fixture.config, null, 2), "utf8");
+    await writeFile(
+      path.join(userData, "config.json"),
+      JSON.stringify(fixture.config, null, 2),
+      "utf8",
+    );
 
     const log = path.join(temporary, "aiden.log");
-    child = spawn(executable, [`--user-data-dir=${userData}`], { env: { ...process.env, AIDEN_ANALYTICS: "0" }, stdio: ["ignore", "pipe", "pipe"] });
+    child = spawn(executable, [`--user-data-dir=${userData}`], {
+      env: { ...process.env, AIDEN_ANALYTICS: "0" },
+      stdio: ["ignore", "pipe", "pipe"],
+    });
     if (!child.pid) throw new Error("The packaged Aiden process did not start.");
     const childState = monitorChild(child);
     const logStream = createWriteStream(log, { flags: "a", mode: 0o600 });
@@ -345,33 +408,58 @@ async function runAcceptance() {
     child.once("exit", () => logStream.end());
     const deadline = Date.now() + ACCEPTANCE_TIMEOUT_MS;
 
-    console.log(`\nPackaged Bot computers acceptance is running in ${temporary} (Aiden's log: ${log}).`);
-    console.log("1. If onboarding opens, check that its feature tour shows Bot computers, then finish onboarding.");
-    console.log(`2. Settings → Computers & VMs → Bot computers → Set up${restoreImage ? " (the restore image is pre-seeded; Set up verifies it)" : " (downloads about 20 GB)"}. Wait for Ready.`);
+    console.log(
+      `\nPackaged Bot computers acceptance is running in ${temporary} (Aiden's log: ${log}).`,
+    );
+    console.log(
+      "1. If onboarding opens, check that its feature tour shows Bot computers, then finish onboarding.",
+    );
+    console.log(
+      `2. Settings → Computers & VMs → Bot computers → Set up${restoreImage ? " (the restore image is pre-seeded; Set up verifies it)" : " (downloads about 20 GB)"}. Wait for Ready.`,
+    );
     console.log(`3. Create a Bot with Full access whose AI model is ${ACCEPTANCE_PROVIDER_LABEL}.`);
     console.log("4. In the Bot's profile, give the Bot a computer.");
     console.log(`5. In the Bot's chat, send exactly: ${ACCEPTANCE_PROMPT}`);
-    console.log("6. When this terminal says NOW, Take over in the Computer tab, then Give back (not before: a Take over that interrupts the click fails the run).");
-    console.log("Then follow this terminal: Pause the Bot, Delete the Bot, Remove everything, and quit Aiden.");
+    console.log(
+      "6. When this terminal says NOW, Take over in the Computer tab, then Give back (not before: a Take over that interrupts the click fails the run).",
+    );
+    console.log(
+      "Then follow this terminal: Pause the Bot, Delete the Bot, Remove everything, and quit Aiden.",
+    );
     console.log("No model data leaves this Mac; the model listens only on 127.0.0.1.\n");
 
     await beforeDeadline(
-      Promise.race([model.finished, childState.promise.then(() => Promise.reject(new Error("Aiden quit before the Bot's sequence ended.")))]),
+      Promise.race([
+        model.finished,
+        childState.promise.then(() =>
+          Promise.reject(new Error("Aiden quit before the Bot's sequence ended.")),
+        ),
+      ]),
       deadline,
       "The Bot's acceptance sequence did not end within four hours.",
     );
     if (!botId) throw new Error("No Bot had been given a computer when the prompt arrived.");
     const vmName = timeline.given.computers[0].vmName;
-    const vmProcesses = (now) => now.processes.filter((entry) => entry.command.includes(vmName)).length;
+    const vmProcesses = (now) =>
+      now.processes.filter((entry) => entry.command.includes(vmName)).length;
     const stateOf = (now, name) => now.vms.find((vm) => vm.name === name)?.state;
 
-    console.log("7. The Bot's sequence ended. Pause the Bot now (its profile or chat header → Pause).");
+    console.log(
+      "7. The Bot's sequence ended. Pause the Bot now (its profile or chat header → Pause).",
+    );
     const paused = await waitUntil(
       () => observe(paths, lume),
-      (now) => pausedBy(now.pauses, botId) === "mac" && stateOf(now, vmName) === "stopped" && vmProcesses(now) === 0,
+      (now) =>
+        pausedBy(now.pauses, botId) === "mac" &&
+        stateOf(now, vmName) === "stopped" &&
+        vmProcesses(now) === 0,
       STEP_TIMEOUT_MS,
     );
-    timeline.paused = { pausedBy: pausedBy(paused.pauses, botId), vms: paused.vms, vmProcesses: vmProcesses(paused) };
+    timeline.paused = {
+      pausedBy: pausedBy(paused.pauses, botId),
+      vms: paused.vms,
+      vmProcesses: vmProcesses(paused),
+    };
 
     console.log("8. Paused and stopped. Now delete the Bot (its profile → Delete Bot).");
     timeline.deleted = await waitUntil(
@@ -380,7 +468,9 @@ async function runAcceptance() {
       STEP_TIMEOUT_MS,
     );
 
-    console.log("9. Deleted. Now choose Settings → Computers & VMs → Bot computers → Remove everything.");
+    console.log(
+      "9. Deleted. Now choose Settings → Computers & VMs → Bot computers → Remove everything.",
+    );
     timeline.removed = await waitUntil(
       () => observe(paths, lume),
       (now) => now.vms.length === 0 && !now.baseBuild,
@@ -388,16 +478,26 @@ async function runAcceptance() {
     );
 
     console.log("10. Removed. Quit Aiden normally (Aiden Agent → Quit).");
-    const exit = await beforeDeadline(childState.promise, deadline, "Aiden was not quit before the acceptance deadline.");
+    const exit = await beforeDeadline(
+      childState.promise,
+      deadline,
+      "Aiden was not quit before the acceptance deadline.",
+    );
     if (exit.error) throw exit.error;
-    if (exit.code !== 0 || exit.signal !== null) throw new Error(`Packaged Aiden did not exit normally (${exit.code ?? exit.signal}).`);
+    if (exit.code !== 0 || exit.signal !== null)
+      throw new Error(`Packaged Aiden did not exit normally (${exit.code ?? exit.signal}).`);
     child = null;
     await sleep(3_000);
     timeline.afterQuit = {
-      lumeProcesses: (await processTable()).filter((entry) => startedFrom(entry.command, lume.binaryPath)).length,
+      lumeProcesses: (await processTable()).filter((entry) =>
+        startedFrom(entry.command, lume.binaryPath),
+      ).length,
     };
 
-    const requests = evaluateAcceptanceRequests(model.requests, { ...context, sharedFileText: sharedFileText ?? undefined });
+    const requests = evaluateAcceptanceRequests(model.requests, {
+      ...context,
+      sharedFileText: sharedFileText ?? undefined,
+    });
     const computer = evaluateComputerTimeline(timeline, { baseVm: BOT_COMPUTER_BASE_VM });
     const failures = [...model.observationErrors, ...requests.failures, ...computer.failures];
     if (failures.length > 0) throw new Error(failures.join("\n"));
@@ -449,7 +549,9 @@ async function runAcceptance() {
     if (!completed) {
       await invalidateBotComputersAcceptanceReceipt(repositoryRoot).catch(() => undefined);
       await emergencyCleanup({ child, paths, lume, model });
-      console.error(`Acceptance evidence was kept for diagnosis at ${temporary}. It can hold VM disks; delete it when done.`);
+      console.error(
+        `Acceptance evidence was kept for diagnosis at ${temporary}. It can hold VM disks; delete it when done.`,
+      );
     }
   }
   if (failure) throw failure;

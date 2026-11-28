@@ -3,10 +3,18 @@ import { execFile } from "node:child_process";
 import fsPromises, * as fs from "node:fs/promises";
 import { runInNewContext } from "node:vm";
 import { createRequire } from "node:module";
-import { CODING_GLOB_WORKER_SOURCE, type CodingGlobTask, type CodingGlobReply } from "./coding-tool-glob-worker.js";
+import {
+  CODING_GLOB_WORKER_SOURCE,
+  type CodingGlobTask,
+  type CodingGlobReply,
+} from "./coding-tool-glob-worker.js";
 import { Worker } from "node:worker_threads";
 import { syncBuiltinESMExports } from "node:module";
-import { ForegroundReadOperations, ForegroundReadCleanupError, closeForegroundResource } from "./foreground-read-scope.js";
+import {
+  ForegroundReadOperations,
+  ForegroundReadCleanupError,
+  closeForegroundResource,
+} from "./foreground-read-scope.js";
 import os from "node:os";
 import * as path from "node:path";
 import { setProtectedAgentConfigRoots } from "./protected-agent-config-paths.js";
@@ -40,9 +48,12 @@ test("a caller's canonical read fence covers direct reads, aliases and every rec
   await fs.writeFile(path.join(privateRoot, "secret.txt"), "SECRET FENCED CONTENT");
   await fs.writeFile(path.join(root, "ordinary.txt"), "ORDINARY CONTENT");
   await fs.symlink(privateRoot, path.join(root, "alias"));
-  const tools = buildPinnedCodingTools(root, undefined, undefined, { assertReadPath(canonical) {
-    if (canonical === privateRoot || canonical.startsWith(privateRoot + path.sep)) throw new Error("Private path refused.");
-  } });
+  const tools = buildPinnedCodingTools(root, undefined, undefined, {
+    assertReadPath(canonical) {
+      if (canonical === privateRoot || canonical.startsWith(privateRoot + path.sep))
+        throw new Error("Private path refused.");
+    },
+  });
   const read = tools.find((tool) => tool.name === "read_file")!;
   const text = (result: Awaited<ReturnType<typeof read.execute>>) => JSON.stringify(result.content);
   for (const file of ["private/secret.txt", "alias/secret.txt"]) {
@@ -51,11 +62,17 @@ test("a caller's canonical read fence covers direct reads, aliases and every rec
   assert.match(text(await read.execute("ordinary", { path: "ordinary.txt" })), /ORDINARY CONTENT/u);
   for (const name of ["list_dir", "glob", "grep"]) {
     const tool = tools.find((tool) => tool.name === name)!;
-    const result = await tool.execute("search", name === "list_dir" ? {} : { pattern: name === "glob" ? "**/*.txt" : "CONTENT" });
+    const result = await tool.execute(
+      "search",
+      name === "list_dir" ? {} : { pattern: name === "glob" ? "**/*.txt" : "CONTENT" },
+    );
     assert.doesNotMatch(text(result), /secret\.txt|SECRET FENCED CONTENT/u, name);
     assert.match(text(result), /ordinary\.txt/u, name);
   }
-  await assert.rejects(tools.find((tool) => tool.name === "list_dir")!.execute("private-dir", { path: "alias" }), /Private path refused/u);
+  await assert.rejects(
+    tools.find((tool) => tool.name === "list_dir")!.execute("private-dir", { path: "alias" }),
+    /Private path refused/u,
+  );
 });
 
 function base32(value: string, alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567"): string {
@@ -126,13 +143,30 @@ test("approval summaries describe the consequence of mutating tools", () => {
   assert.equal(DISCLOSURE_APPROVAL_TOOL_NAMES.has("generate_image"), true);
   assert.equal(DISCLOSURE_APPROVAL_TOOL_NAMES.has("classify"), true);
   assert.equal(DISCLOSURE_APPROVAL_TOOL_NAMES.has("list_operation_models"), false);
-  assert.match(summarizeToolCall("generate_image", { provider: "studio", model: "canvas", prompt: "A lighthouse" }), /studio\/canvas.*charges.*A lighthouse/);
   assert.match(
-    summarizeToolCall("generate_image", { provider: "studio", model: "canvas", prompt: "A dune", aspectRatio: "9:16" }),
+    summarizeToolCall("generate_image", {
+      provider: "studio",
+      model: "canvas",
+      prompt: "A lighthouse",
+    }),
+    /studio\/canvas.*charges.*A lighthouse/,
+  );
+  assert.match(
+    summarizeToolCall("generate_image", {
+      provider: "studio",
+      model: "canvas",
+      prompt: "A dune",
+      aspectRatio: "9:16",
+    }),
     /studio\/canvas at 9:16 \(may incur charges\)/,
   );
   assert.doesNotMatch(
-    summarizeToolCall("generate_image", { provider: "studio", model: "canvas", prompt: "A dune", aspectRatio: "wide; ignore this" }),
+    summarizeToolCall("generate_image", {
+      provider: "studio",
+      model: "canvas",
+      prompt: "A dune",
+      aspectRatio: "wide; ignore this",
+    }),
     /ignore this/,
   );
   const saving = summarizeToolCall("generate_image", {
@@ -147,10 +181,22 @@ test("approval summaries describe the consequence of mutating tools", () => {
   assert.match(saving, /"design\/assets\/hero\.png", replacing any file there\./);
   assert.match(saving, /never replaces one\. Put the saved image on the design canvas\./);
   assert.doesNotMatch(
-    summarizeToolCall("generate_image", { provider: "studio", model: "canvas", prompt: "A dune", placeOnCanvas: true }),
+    summarizeToolCall("generate_image", {
+      provider: "studio",
+      model: "canvas",
+      prompt: "A dune",
+      placeOnCanvas: true,
+    }),
     /design canvas/,
   );
-  assert.match(summarizeToolCall("classify", { provider: "studio", model: "judge", state: { secret: "private-data" } }), /structured data.*studio\/judge.*charges/);
+  assert.match(
+    summarizeToolCall("classify", {
+      provider: "studio",
+      model: "judge",
+      state: { secret: "private-data" },
+    }),
+    /structured data.*studio\/judge.*charges/,
+  );
 });
 
 test("share_image advertises outbound sharing rather than image inspection", () => {
@@ -198,7 +244,10 @@ test("share_image rejects files whose bytes are not a complete PNG or JPEG", asy
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-share-image-invalid-"));
   try {
     await fs.writeFile(path.join(root, "fake.png"), "not an image", "utf8");
-    const tool = createShareImageTool({ workspaceRoot: root, share: () => assert.fail("must not share") });
+    const tool = createShareImageTool({
+      workspaceRoot: root,
+      share: () => assert.fail("must not share"),
+    });
     await assert.rejects(
       tool.execute("share-invalid", { path: "fake.png" }),
       /Only complete PNG and JPEG images/u,
@@ -264,7 +313,9 @@ test("parent coding tools retain hidden-metadata reads and JavaScript regex sema
 });
 
 test("parent file tools refuse to write hook and agent settings files but still read them", async () => {
-  const parent = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "aiden-protected-config-")));
+  const parent = await fs.realpath(
+    await fs.mkdtemp(path.join(os.tmpdir(), "aiden-protected-config-")),
+  );
   const root = path.join(parent, "workspace");
   try {
     await fs.mkdir(path.join(root, ".claude", "hooks"), { recursive: true });
@@ -272,7 +323,7 @@ test("parent file tools refuse to write hook and agent settings files but still 
     await fs.mkdir(path.join(root, "src"), { recursive: true });
     const original = '{"hooks":{}}\n';
     await fs.writeFile(path.join(root, ".claude", "settings.json"), original, "utf8");
-    await fs.writeFile(path.join(root, ".codex", "config.toml"), "model = \"x\"\n", "utf8");
+    await fs.writeFile(path.join(root, ".codex", "config.toml"), 'model = "x"\n', "utf8");
     await fs.symlink(path.join(root, ".claude"), path.join(root, "claude-link"));
     const tools = buildCodingTools(root);
     const write = tools.find((tool) => tool.name === "write_file");
@@ -299,17 +350,25 @@ test("parent file tools refuse to write hook and agent settings files but still 
       await assert.rejects(write.execute("w", { path: target, content: "{}\n" }), refusal, target);
     }
     await assert.rejects(
-      edit.execute("e", { path: ".claude/settings.json", old_string: "{}", new_string: "{\"x\":1}" }),
+      edit.execute("e", { path: ".claude/settings.json", old_string: "{}", new_string: '{"x":1}' }),
       refusal,
     );
     await assert.rejects(
-      edit.execute("e", { path: "claude-link/settings.json", old_string: "{}", new_string: "{\"x\":1}" }),
+      edit.execute("e", {
+        path: "claude-link/settings.json",
+        old_string: "{}",
+        new_string: '{"x":1}',
+      }),
       refusal,
     );
     assert.equal(await fs.readFile(path.join(root, ".claude", "settings.json"), "utf8"), original);
     await assert.rejects(fs.stat(path.join(root, ".aiden")), { code: "ENOENT" });
-    await assert.rejects(fs.stat(path.join(root, ".claude", "settings.local.json")), { code: "ENOENT" });
-    await assert.rejects(fs.stat(path.join(root, ".claude", "hooks", "pre.sh")), { code: "ENOENT" });
+    await assert.rejects(fs.stat(path.join(root, ".claude", "settings.local.json")), {
+      code: "ENOENT",
+    });
+    await assert.rejects(fs.stat(path.join(root, ".claude", "hooks", "pre.sh")), {
+      code: "ENOENT",
+    });
 
     const readResult = await read.execute("r", { path: ".claude/settings.json" });
     const readBlock = readResult.content[0];
@@ -320,8 +379,15 @@ test("parent file tools refuse to write hook and agent settings files but still 
       await write.execute("ok", { path: target, content: "# notes\n" });
       assert.equal(await fs.readFile(path.join(root, target), "utf8"), "# notes\n");
     }
-    await edit.execute("ok", { path: ".claude/skills/x/SKILL.md", old_string: "notes", new_string: "steps" });
-    assert.equal(await fs.readFile(path.join(root, ".claude", "skills", "x", "SKILL.md"), "utf8"), "# steps\n");
+    await edit.execute("ok", {
+      path: ".claude/skills/x/SKILL.md",
+      old_string: "notes",
+      new_string: "steps",
+    });
+    assert.equal(
+      await fs.readFile(path.join(root, ".claude", "skills", "x", "SKILL.md"), "utf8"),
+      "# steps\n",
+    );
   } finally {
     await fs.rm(parent, { recursive: true, force: true });
   }
@@ -337,7 +403,10 @@ test("a generated image is written as bytes inside the workspace and never throu
     await fs.symlink(outside, path.join(root, "design", "escape"));
     const bytes = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0xff]);
 
-    assert.equal(await writeWorkspaceBinaryFile(root, "design/assets/hero.png", bytes), "design/assets/hero.png");
+    assert.equal(
+      await writeWorkspaceBinaryFile(root, "design/assets/hero.png", bytes),
+      "design/assets/hero.png",
+    );
     assert.deepEqual(await fs.readFile(path.join(root, "design", "assets", "hero.png")), bytes);
 
     // Replacing keeps the same name and the new bytes.
@@ -346,15 +415,28 @@ test("a generated image is written as bytes inside the workspace and never throu
     assert.deepEqual(await fs.readFile(path.join(root, "design", "assets", "hero.png")), second);
 
     // A create-only write refuses a file already there and leaves it alone.
-    await assert.rejects(writeWorkspaceBinaryFile(root, "design/assets/hero.png", bytes, { replace: false }), /already exists/u);
+    await assert.rejects(
+      writeWorkspaceBinaryFile(root, "design/assets/hero.png", bytes, { replace: false }),
+      /already exists/u,
+    );
     assert.deepEqual(await fs.readFile(path.join(root, "design", "assets", "hero.png")), second);
-    assert.equal(await writeWorkspaceBinaryFile(root, "design/assets/hero-2.png", bytes, { replace: false }), "design/assets/hero-2.png");
+    assert.equal(
+      await writeWorkspaceBinaryFile(root, "design/assets/hero-2.png", bytes, { replace: false }),
+      "design/assets/hero-2.png",
+    );
     assert.deepEqual(await fs.readFile(path.join(root, "design", "assets", "hero-2.png")), bytes);
 
-    for (const target of ["../outside/hero.png", path.join(outside, "hero.png"), "design/escape/hero.png"]) {
+    for (const target of [
+      "../outside/hero.png",
+      path.join(outside, "hero.png"),
+      "design/escape/hero.png",
+    ]) {
       await assert.rejects(writeWorkspaceBinaryFile(root, target, bytes), Error, target);
     }
-    await assert.rejects(writeWorkspaceBinaryFile(root, ".claude/settings.json", bytes), /hook or agent settings/u);
+    await assert.rejects(
+      writeWorkspaceBinaryFile(root, ".claude/settings.json", bytes),
+      /hook or agent settings/u,
+    );
     assert.deepEqual(await fs.readdir(outside), []);
   } finally {
     await fs.rm(parent, { recursive: true, force: true });
@@ -376,20 +458,41 @@ test("a generated image never replaces a file through a link inside the workspac
 
     // The named file is a link to source: refused, whether or not it may replace.
     await assert.rejects(writeWorkspaceBinaryFile(root, "design/hero.png", bytes), /is a link/u);
-    await assert.rejects(writeWorkspaceBinaryFile(root, "design/hero.png", bytes, { replace: false }), /is a link/u);
-    assert.equal(await fs.readFile(path.join(root, "src", "app.ts"), "utf8"), "export const app = 1;\n");
-    assert.ok((await fs.lstat(path.join(root, "design", "hero.png"))).isSymbolicLink(), "the link itself is left alone");
+    await assert.rejects(
+      writeWorkspaceBinaryFile(root, "design/hero.png", bytes, { replace: false }),
+      /is a link/u,
+    );
+    assert.equal(
+      await fs.readFile(path.join(root, "src", "app.ts"), "utf8"),
+      "export const app = 1;\n",
+    );
+    assert.ok(
+      (await fs.lstat(path.join(root, "design", "hero.png"))).isSymbolicLink(),
+      "the link itself is left alone",
+    );
 
     // A linked folder that leads into .git: neither a new file nor a replacement lands there.
-    await assert.rejects(writeWorkspaceBinaryFile(root, "design/repo/hero.png", bytes), /hidden folder/u);
-    await assert.rejects(writeWorkspaceBinaryFile(root, "design/repo/info/exclude", bytes), /hidden folder/u);
+    await assert.rejects(
+      writeWorkspaceBinaryFile(root, "design/repo/hero.png", bytes),
+      /hidden folder/u,
+    );
+    await assert.rejects(
+      writeWorkspaceBinaryFile(root, "design/repo/info/exclude", bytes),
+      /hidden folder/u,
+    );
     await assert.rejects(writeWorkspaceBinaryFile(root, "art/hero.png", bytes), /hidden folder/u);
-    assert.equal(await fs.readFile(path.join(root, ".git", "info", "exclude"), "utf8"), "# local ignores\n");
+    assert.equal(
+      await fs.readFile(path.join(root, ".git", "info", "exclude"), "utf8"),
+      "# local ignores\n",
+    );
     assert.deepEqual((await fs.readdir(path.join(root, ".git"))).sort(), ["info"]);
     assert.deepEqual(await fs.readdir(path.join(root, ".git", "info")), ["exclude"]);
 
     // A real file next to them is still written.
-    assert.equal(await writeWorkspaceBinaryFile(root, "design/hero-2.png", bytes, { replace: false }), "design/hero-2.png");
+    assert.equal(
+      await writeWorkspaceBinaryFile(root, "design/hero-2.png", bytes, { replace: false }),
+      "design/hero-2.png",
+    );
     assert.deepEqual(await fs.readFile(path.join(root, "design", "hero-2.png")), bytes);
   } finally {
     await fs.rm(root, { recursive: true, force: true });
@@ -397,7 +500,9 @@ test("a generated image never replaces a file through a link inside the workspac
 });
 
 test("a workspace opened inside .claude cannot write its settings file", async () => {
-  const parent = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "aiden-protected-root-")));
+  const parent = await fs.realpath(
+    await fs.mkdtemp(path.join(os.tmpdir(), "aiden-protected-root-")),
+  );
   const root = path.join(parent, ".claude");
   try {
     await fs.mkdir(root);
@@ -432,11 +537,25 @@ test("the file tools refuse a registered hook store however it is spelled, and l
   const write = tools.find((tool) => tool.name === "write_file");
   const edit = tools.find((tool) => tool.name === "edit_file");
   assert.ok(write && edit);
-  for (const target of ["profile/hooks/hooks.json", "profile/hooks/nested/state.json", "profile/hooks/new.json", "alias/hooks.json", "profile/../profile/hooks/hooks.json"]) {
-    await assert.rejects(write.execute("w", { path: target, content: "changed\n" }), /cannot change hook or agent settings files/u, target);
+  for (const target of [
+    "profile/hooks/hooks.json",
+    "profile/hooks/nested/state.json",
+    "profile/hooks/new.json",
+    "alias/hooks.json",
+    "profile/../profile/hooks/hooks.json",
+  ]) {
+    await assert.rejects(
+      write.execute("w", { path: target, content: "changed\n" }),
+      /cannot change hook or agent settings files/u,
+      target,
+    );
   }
   for (const target of ["profile/hooks/hooks.json", "alias/nested/state.json"]) {
-    await assert.rejects(edit.execute("e", { path: target, old_string: "{}", new_string: "changed" }), /cannot change hook or agent settings files/u, target);
+    await assert.rejects(
+      edit.execute("e", { path: target, old_string: "{}", new_string: "changed" }),
+      /cannot change hook or agent settings files/u,
+      target,
+    );
   }
   assert.equal(await fs.readFile(path.join(store, "hooks.json"), "utf8"), "{}\n");
   assert.equal(await fs.readFile(path.join(store, "nested", "state.json"), "utf8"), "{}\n");
@@ -444,8 +563,15 @@ test("the file tools refuse a registered hook store however it is spelled, and l
 
   // A sibling whose name only starts the same is not the store.
   await write.execute("ok", { path: "profile/hooks-notes/plan.md", content: "fine\n" });
-  await edit.execute("ok", { path: "profile/hooks-notes/plan.md", old_string: "fine", new_string: "still fine" });
-  assert.equal(await fs.readFile(path.join(parent, "profile", "hooks-notes", "plan.md"), "utf8"), "still fine\n");
+  await edit.execute("ok", {
+    path: "profile/hooks-notes/plan.md",
+    old_string: "fine",
+    new_string: "still fine",
+  });
+  assert.equal(
+    await fs.readFile(path.join(parent, "profile", "hooks-notes", "plan.md"), "utf8"),
+    "still fine\n",
+  );
 });
 
 test("workspace search and read tools exclude credential paths from model-visible results", async () => {
@@ -992,10 +1118,7 @@ test("workspace search and read tools exclude credential paths from model-visibl
       safeSessionGrepBlock?.type === "text" ? safeSessionGrepBlock.text : "",
       /session-source\.ts:1: const session = await createSession\(\);/,
     );
-    for (const visibleFilenameContent of [
-      "ordinary filename content",
-      "ordinary nested content",
-    ]) {
+    for (const visibleFilenameContent of ["ordinary filename content", "ordinary nested content"]) {
       const visibleNameGrep = await grep.execute("test", { pattern: visibleFilenameContent });
       const visibleNameGrepBlock = visibleNameGrep.content[0];
       const visibleNameGrepText =
@@ -1366,7 +1489,11 @@ test("child workspace reads preserve normal semantics and deny explicit credenti
     await fs.writeFile(path.join(root, ".env.example"), "OPENAI_API_KEY=replace-me\n", "utf8");
     await fs.writeFile(path.join(root, ".env"), "OPENAI_API_KEY=do-not-expose\n", "utf8");
     await fs.writeFile(path.join(root, ".ssh", "id_rsa"), "SSH_PRIVATE_KEY\n", "utf8");
-    await fs.writeFile(path.join(root, ".aws", "credentials"), "[default]\naws_secret=hidden\n", "utf8");
+    await fs.writeFile(
+      path.join(root, ".aws", "credentials"),
+      "[default]\naws_secret=hidden\n",
+      "utf8",
+    );
     await fs.writeFile(path.join(root, ".config", "gcloud", "credentials.db"), "hidden\n", "utf8");
     await fs.writeFile(path.join(root, ".npmrc"), "//registry/:_authToken=hidden\n", "utf8");
     await fs.writeFile(path.join(root, "auth.json"), '{"password":"hidden"}\n', "utf8");
@@ -1463,7 +1590,11 @@ test("child grep preserves matching lines from ordinary source and docs", async 
       "utf8",
     );
     await fs.writeFile(path.join(root, encodedFilename), "ordinary encoded filename\n", "utf8");
-    await fs.writeFile(path.join(root, ".env"), "OPENAI_API_KEY=hidden environment value\n", "utf8");
+    await fs.writeFile(
+      path.join(root, ".env"),
+      "OPENAI_API_KEY=hidden environment value\n",
+      "utf8",
+    );
 
     const tools = buildSubagentCodingTools(root, ["read_file", "glob", "grep"]);
     const byName = (name: string) => tools.find((tool) => tool.name === name)!;
@@ -1592,13 +1723,18 @@ test("pinned edit_file cannot overwrite an outside file after a target or ancest
       }).find((tool) => tool.name === "edit_file");
       assert.ok(edit);
       await assert.rejects(
-        edit.execute("swap", { path: "nested/edit.txt", old_string: "before", new_string: "after" }),
+        edit.execute("swap", {
+          path: "nested/edit.txt",
+          old_string: "before",
+          new_string: "after",
+        }),
         /changed before the edit could be committed/u,
       );
       assert.equal(await fs.readFile(outsideFile, "utf8"), "outside\n");
-      const original = swappedPart === "target"
-        ? path.join(directory, "original.txt")
-        : path.join(root, "original-directory", "edit.txt");
+      const original =
+        swappedPart === "target"
+          ? path.join(directory, "original.txt")
+          : path.join(root, "original-directory", "edit.txt");
       assert.equal(await fs.readFile(original, "utf8"), "before\n");
     } finally {
       await fs.rm(root, { recursive: true, force: true });
@@ -1632,9 +1768,10 @@ test("pinned write_file cannot overwrite an outside file after a target or ances
       assert.ok(write);
       await assert.rejects(write.execute("swap", { path: "nested/write.txt", content: "after\n" }));
       assert.equal(await fs.readFile(outsideFile, "utf8"), "outside\n");
-      const original = swappedPart === "target"
-        ? path.join(directory, "original.txt")
-        : path.join(root, "original-directory", "write.txt");
+      const original =
+        swappedPart === "target"
+          ? path.join(directory, "original.txt")
+          : path.join(root, "original-directory", "write.txt");
       assert.equal(await fs.readFile(original, "utf8"), "before\n");
     } finally {
       await fs.rm(root, { recursive: true, force: true });
@@ -1830,7 +1967,11 @@ test("edit_file edits a file of exactly its size limit and refuses one byte more
     const atLimit = path.join(root, "at-limit.log");
     await fs.writeFile(atLimit, "before\n");
     await fs.truncate(atLimit, limit);
-    await edit.execute("at-limit", { path: "at-limit.log", old_string: "before", new_string: "after!" });
+    await edit.execute("at-limit", {
+      path: "at-limit.log",
+      old_string: "before",
+      new_string: "after!",
+    });
     assert.equal(await fileHead(atLimit, 7), "after!\n");
     assert.equal((await fs.stat(atLimit)).size, limit);
 
@@ -1857,12 +1998,19 @@ test("edit_file reads what a file grew to after its size check, and refuses grow
       const handle = await fs.open(target, "a");
       try {
         // Appended after the check: the edit must still see the tail.
-        await handle.write(Buffer.concat([Buffer.alloc(growTo - "head\n".length - "tail\n".length), Buffer.from("tail\n")]));
+        await handle.write(
+          Buffer.concat([
+            Buffer.alloc(growTo - "head\n".length - "tail\n".length),
+            Buffer.from("tail\n"),
+          ]),
+        );
       } finally {
         await handle.close();
       }
     };
-    const edit = buildPinnedCodingTools(root, { afterFileStat: grow }).find((tool) => tool.name === "edit_file");
+    const edit = buildPinnedCodingTools(root, { afterFileStat: grow }).find(
+      (tool) => tool.name === "edit_file",
+    );
     assert.ok(edit);
 
     await fs.writeFile(target, "head\n");
@@ -1895,7 +2043,10 @@ test("edit_file reads what a file grew to after its size check, and refuses grow
 test("run_command reports real exit failures through Pi and codemode without re-executing effects", async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-command-outcome-"));
   try {
-    await fs.writeFile(path.join(root, "failure.cjs"), 'require("node:fs").appendFileSync("attempts", "x"); process.stdout.write("progress\\n".repeat(7000) + "FINAL_ASSERTION_FAILED\\n"); process.exitCode = 7;');
+    await fs.writeFile(
+      path.join(root, "failure.cjs"),
+      'require("node:fs").appendFileSync("attempts", "x"); process.stdout.write("progress\\n".repeat(7000) + "FINAL_ASSERTION_FAILED\\n"); process.exitCode = 7;',
+    );
     const tools = buildCodingTools(root);
     const runCommand = tools.find((tool) => tool.name === "run_command")!;
     const assistantMessage = fauxAssistantMessage("Run the fixture command");
@@ -1903,32 +2054,64 @@ test("run_command reports real exit failures through Pi and codemode without re-
     const codemode = createPiCodemodeTool({
       tools: () => [runCommand],
       executeTool: async (_parent, name, args) => {
-        const outcome = await runToolCall({ type: "toolCall", id: "nested", name, arguments: args as { command: string } }, {
-          tools, assistantMessage, context: { messages: [assistantMessage], tools },
-        });
+        const outcome = await runToolCall(
+          { type: "toolCall", id: "nested", name, arguments: args as { command: string } },
+          {
+            tools,
+            assistantMessage,
+            context: { messages: [assistantMessage], tools },
+          },
+        );
         outcomes.push(outcome.isError);
         return outcome;
       },
     });
-    const first = await codemode.execute("parent", { code: 'const r = await tools.run_command({command:"node failure.cjs", description:"Runs the failing fixture"}); text({isError:r.isError, text:r.content[0].text});' });
+    const first = await codemode.execute("parent", {
+      code: 'const r = await tools.run_command({command:"node failure.cjs", description:"Runs the failing fixture"}); text({isError:r.isError, text:r.content[0].text});',
+    });
     const returned = JSON.parse(first.content[0].type === "text" ? first.content[0].text : "null");
-    assert.equal(returned.isError, true, "a failed process must be visible to programmatic callers");
+    assert.equal(
+      returned.isError,
+      true,
+      "a failed process must be visible to programmatic callers",
+    );
     assert.match(returned.text, /^Command exited with error \(code 7\)\./u);
-    assert.match(returned.text, /Output truncated: \d+ of \d+ characters omitted from the middle; no retained output available/u);
-    assert.match(returned.text, /FINAL_ASSERTION_FAILED\s*$/u, "the failing tail survives truncation");
+    assert.match(
+      returned.text,
+      /Output truncated: \d+ of \d+ characters omitted from the middle; no retained output available/u,
+    );
+    assert.match(
+      returned.text,
+      /FINAL_ASSERTION_FAILED\s*$/u,
+      "the failing tail survives truncation",
+    );
     assert.ok(returned.text.length <= 20_000);
-    assert.equal(first.isError, false, "JavaScript can successfully inspect a nested command failure");
+    assert.equal(
+      first.isError,
+      false,
+      "JavaScript can successfully inspect a nested command failure",
+    );
     assert.deepEqual(outcomes, [true]);
-    assert.equal(await fs.readFile(path.join(root, "attempts"), "utf8"), "x", "reporting a failure must not rerun its effects");
+    assert.equal(
+      await fs.readFile(path.join(root, "attempts"), "utf8"),
+      "x",
+      "reporting a failure must not rerun its effects",
+    );
 
     const firstGuard = advanceAttendedToolErrorState(undefined, [{ isError: outcomes[0] }]);
     assert.equal(firstGuard.shouldStop, false);
     const retry = await runCommand.execute("retry", { command: "node failure.cjs" });
     assert.equal(retry.isError, true);
     assert.equal(advanceAttendedToolErrorState(firstGuard, [retry]).shouldStop, true);
-    assert.equal(await fs.readFile(path.join(root, "attempts"), "utf8"), "xx", "only the explicit retry may execute again");
+    assert.equal(
+      await fs.readFile(path.join(root, "attempts"), "utf8"),
+      "xx",
+      "only the explicit retry may execute again",
+    );
 
-    const success = await runCommand.execute("success", { command: "node -e 'process.stdout.write(\"ok\")'" });
+    const success = await runCommand.execute("success", {
+      command: "node -e 'process.stdout.write(\"ok\")'",
+    });
     assert.notEqual(success.isError, true);
     assert.equal(success.content[0].type === "text" ? success.content[0].text : "", "ok");
     assert.equal(advanceAttendedToolErrorState(firstGuard, [success]).totalFailures, 1);
@@ -1943,24 +2126,48 @@ test("a run_command call without a plain-words description, or with a blank one,
     const tools = buildCodingTools(root);
     const call = (args: Record<string, unknown>) => {
       const assistantMessage = fauxAssistantMessage("Run it");
-      return runToolCall({ type: "toolCall", id: "call", name: "run_command", arguments: args as { command: string } }, {
-        tools, assistantMessage, context: { messages: [assistantMessage], tools },
-      });
+      return runToolCall(
+        {
+          type: "toolCall",
+          id: "call",
+          name: "run_command",
+          arguments: args as { command: string },
+        },
+        {
+          tools,
+          assistantMessage,
+          context: { messages: [assistantMessage], tools },
+        },
+      );
     };
     const missing = await call({ command: "touch ran" });
     assert.equal(missing.isError, true);
     const text = missing.result.content[0];
-    assert.match(text?.type === "text" ? text.text : "", /description: missing/u, "the model is told what to add");
+    assert.match(
+      text?.type === "text" ? text.text : "",
+      /description: missing/u,
+      "the model is told what to add",
+    );
     await assert.rejects(fs.stat(path.join(root, "ran")), "nothing ran");
     for (const blank of ["", "   \n\t"]) {
       const empty = await call({ command: "touch ran", description: blank });
       assert.equal(empty.isError, true, JSON.stringify(blank));
       const message = empty.result.content[0];
-      assert.match(message?.type === "text" ? message.text : "", /description/u, "the model is told the description is the problem");
+      assert.match(
+        message?.type === "text" ? message.text : "",
+        /description/u,
+        "the model is told the description is the problem",
+      );
     }
-    await assert.rejects(fs.stat(path.join(root, "ran")), "a blank description runs nothing either");
+    await assert.rejects(
+      fs.stat(path.join(root, "ran")),
+      "a blank description runs nothing either",
+    );
 
-    const described = await call({ command: "touch ran", description: "Creates an empty file named ran" });
+    const described = await call({
+      command: "touch ran",
+      description: "Creates an empty file named ran",
+    });
     assert.notEqual(described.isError, true);
     await fs.stat(path.join(root, "ran"));
   } finally {
@@ -1971,11 +2178,17 @@ test("a run_command call without a plain-words description, or with a blank one,
 test("run_command output-limit termination is an error even when output starts normally", async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-command-output-limit-"));
   try {
-    await fs.writeFile(path.join(root, "output.cjs"), 'process.stdout.write("x".repeat(11 * 1024 * 1024)); setInterval(() => {}, 1000);');
+    await fs.writeFile(
+      path.join(root, "output.cjs"),
+      'process.stdout.write("x".repeat(11 * 1024 * 1024)); setInterval(() => {}, 1000);',
+    );
     const runCommand = buildCodingTools(root).find((tool) => tool.name === "run_command")!;
     const result = await runCommand.execute("overflow", { command: "node output.cjs" });
     assert.equal(result.isError, true);
-    assert.match(result.content[0].type === "text" ? result.content[0].text : "", /^Command exceeded the output limit\./u);
+    assert.match(
+      result.content[0].type === "text" ? result.content[0].text : "",
+      /^Command exceeded the output limit\./u,
+    );
   } finally {
     await fs.rm(root, { recursive: true, force: true });
   }
@@ -2006,20 +2219,37 @@ test("run_command returns when a background job keeps the shell's output pipe op
     const runCommand = buildCodingTools(root).find((tool) => tool.name === "run_command")!;
     const startedAt = Date.now();
     // The job inherits stdout, so the pipe stays open after the shell exits.
-    const result = await runCommand.execute("held", { command: "sleep 30 &\necho $! > job.pid\necho done" });
+    const result = await runCommand.execute("held", {
+      command: "sleep 30 &\necho $! > job.pid\necho done",
+    });
     assert.ok(Date.now() - startedAt < 10_000, "the command must not wait for the 30 s job");
     assert.notEqual(result.isError, true);
     const text = result.content[0].type === "text" ? result.content[0].text : "";
     assert.match(text, /done/u);
-    assert.match(text, /background processes from this command that still held the output were stopped/u, "the model must learn the job was stopped");
+    assert.match(
+      text,
+      /background processes from this command that still held the output were stopped/u,
+      "the model must learn the job was stopped",
+    );
     // A command with nothing left in the background gets no note.
     const detached = await runCommand.execute("detached", { command: "echo plain" });
-    assert.doesNotMatch(detached.content[0].type === "text" ? detached.content[0].text : "", /were stopped/u);
+    assert.doesNotMatch(
+      detached.content[0].type === "text" ? detached.content[0].text : "",
+      /were stopped/u,
+    );
     background = Number(await fs.readFile(path.join(root, "job.pid"), "utf8"));
-    assert.equal(processRunning(background), false, "the job holding the pipe is stopped with the command's group");
+    assert.equal(
+      processRunning(background),
+      false,
+      "the job holding the pipe is stopped with the command's group",
+    );
   } finally {
     if (background > 0) {
-      try { process.kill(background, "SIGKILL"); } catch { /* Already exited. */ }
+      try {
+        process.kill(background, "SIGKILL");
+      } catch {
+        /* Already exited. */
+      }
     }
     await fs.rm(root, { recursive: true, force: true });
   }
@@ -2032,20 +2262,27 @@ test("run_command waits for resistant process-group cleanup after cancellation, 
     const controller = new AbortController();
     let running: Promise<unknown> | undefined;
     try {
-      await fs.writeFile(path.join(root, "worker.cjs"), `
+      await fs.writeFile(
+        path.join(root, "worker.cjs"),
+        `
 const fs = require("node:fs");
 process.on("SIGTERM", () => {});
 fs.writeFileSync("ready", String(process.pid));
 setInterval(() => fs.appendFileSync("heartbeat", "x"), 25);
-`);
+`,
+      );
       if (trigger === "output") {
-        await fs.writeFile(path.join(root, "output.cjs"), 'process.stdout.write("x".repeat(11 * 1024 * 1024));');
+        await fs.writeFile(
+          path.join(root, "output.cjs"),
+          'process.stdout.write("x".repeat(11 * 1024 * 1024));',
+        );
       }
-      const command = trigger === "foreground"
-        ? "node worker.cjs"
-        : trigger === "output"
-          ? "node worker.cjs >/dev/null 2>&1 & while [ ! -f ready ]; do sleep 0.01; done; node output.cjs; wait"
-          : "node worker.cjs >/dev/null 2>&1 & wait";
+      const command =
+        trigger === "foreground"
+          ? "node worker.cjs"
+          : trigger === "output"
+            ? "node worker.cjs >/dev/null 2>&1 & while [ ! -f ready ]; do sleep 0.01; done; node output.cjs; wait"
+            : "node worker.cjs >/dev/null 2>&1 & wait";
       const runCommand = buildCodingTools(root, undefined, {
         commandTimeoutMs: trigger === "timeout" ? 2_000 : undefined,
       }).find((tool) => tool.name === "run_command")!;
@@ -2055,7 +2292,9 @@ setInterval(() => fs.appendFileSync("heartbeat", "x"), 25);
       const readyDeadline = Date.now() + 5_000;
       while (Date.now() < readyDeadline) {
         pid = Number(await fs.readFile(path.join(root, "ready"), "utf8").catch(() => "0"));
-        const heartbeat = await fs.readFile(path.join(root, "heartbeat")).catch(() => Buffer.alloc(0));
+        const heartbeat = await fs
+          .readFile(path.join(root, "heartbeat"))
+          .catch(() => Buffer.alloc(0));
         if (pid > 0 && heartbeat.length >= 2) break;
         await new Promise((resolve) => setTimeout(resolve, 25));
       }
@@ -2064,7 +2303,7 @@ setInterval(() => fs.appendFileSync("heartbeat", "x"), 25);
         controller.abort(new Error(`${trigger} cancellation`));
         await assert.rejects(running, new RegExp(`${trigger} cancellation`, "u"));
       } else {
-        const result = await running as Awaited<ReturnType<typeof runCommand.execute>>;
+        const result = (await running) as Awaited<ReturnType<typeof runCommand.execute>>;
         assert.equal(result.isError, true);
         assert.match(
           result.content[0].type === "text" ? result.content[0].text : "",
@@ -2079,13 +2318,20 @@ setInterval(() => fs.appendFileSync("heartbeat", "x"), 25);
       const status = await execFileAsync("ps", ["-o", "stat=", "-p", String(pid)])
         .then(({ stdout }) => stdout.trim())
         .catch(() => "");
-      assert.ok(!status || status.startsWith("Z"), `${trigger}: descendant is still executing (${status})`);
+      assert.ok(
+        !status || status.startsWith("Z"),
+        `${trigger}: descendant is still executing (${status})`,
+      );
     } finally {
       controller.abort(new Error("fixture cleanup"));
       await running?.catch(() => {});
       const pid = Number(await fs.readFile(path.join(root, "ready"), "utf8").catch(() => "0"));
       if (pid > 0) {
-        try { process.kill(pid, "SIGKILL"); } catch { /* Already exited. */ }
+        try {
+          process.kill(pid, "SIGKILL");
+        } catch {
+          /* Already exited. */
+        }
       }
       await fs.rm(root, { recursive: true, force: true });
     }
@@ -2123,14 +2369,22 @@ test("run_command applies the macOS agent PATH to its spawned shell", async () =
     assert.ok(runCommand);
     const result = await runCommand.execute("test", { command: `command -v ${commandName}` });
     assert.equal(result.content[0]?.type, "text");
-    assert.ok((result.content[0]?.type === "text" ? result.content[0].text : "").includes(path.join(localBin, commandName)));
+    assert.ok(
+      (result.content[0]?.type === "text" ? result.content[0].text : "").includes(
+        path.join(localBin, commandName),
+      ),
+    );
     // A device shim prefix still wins lookup while the GUI directories stay reachable.
     const pinned = buildCodingTools(home, undefined, { pathPrefix: "/aiden/devices/bin" }).find(
       (tool) => tool.name === "run_command",
     );
     assert.ok(pinned);
-    const pinnedResult = await pinned.execute("pinned", { command: `printf '%s\\n' "$PATH"; command -v ${commandName}` });
-    const [pinnedPath, pinnedLookup] = (pinnedResult.content[0]?.type === "text" ? pinnedResult.content[0].text : "")
+    const pinnedResult = await pinned.execute("pinned", {
+      command: `printf '%s\\n' "$PATH"; command -v ${commandName}`,
+    });
+    const [pinnedPath, pinnedLookup] = (
+      pinnedResult.content[0]?.type === "text" ? pinnedResult.content[0].text : ""
+    )
       .trim()
       .split("\n");
     assert.ok(pinnedPath?.startsWith("/aiden/devices/bin:/usr/bin:/bin:"));
@@ -2147,7 +2401,13 @@ test("run_command applies the macOS agent PATH to its spawned shell", async () =
 test("run_command withholds Aiden's own credentials but keeps tooling variables", async () => {
   if (process.platform === "win32") return;
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-run-command-env-"));
-  const names = ["AIDEN_TELEGRAM_TOKEN", "AIDEN_IMAGE_FAL_KEY", "aiden_image_replicate_api_token", "AIDEN_CONFIG_DIR", "GH_TOKEN"] as const;
+  const names = [
+    "AIDEN_TELEGRAM_TOKEN",
+    "AIDEN_IMAGE_FAL_KEY",
+    "aiden_image_replicate_api_token",
+    "AIDEN_CONFIG_DIR",
+    "GH_TOKEN",
+  ] as const;
   const previous = new Map(names.map((name) => [name, process.env[name]]));
   try {
     process.env.AIDEN_TELEGRAM_TOKEN = "telegram-bot-secret";
@@ -2163,7 +2423,13 @@ test("run_command withholds Aiden's own credentials but keeps tooling variables"
     const output = result.content.map((part) => (part.type === "text" ? part.text : "")).join("");
     // Builds and package managers authenticate through their own variables, and
     // non-secret Aiden settings still reach a nested `aiden` invocation.
-    assert.deepEqual(output.trim().split("\n"), ["unset", "unset", "unset", "/tmp/aiden-config", "gh-tooling-token"]);
+    assert.deepEqual(output.trim().split("\n"), [
+      "unset",
+      "unset",
+      "unset",
+      "/tmp/aiden-config",
+      "gh-tooling-token",
+    ]);
     assert.equal(process.env.AIDEN_TELEGRAM_TOKEN, "telegram-bot-secret");
   } finally {
     for (const [name, value] of previous) {
@@ -2177,14 +2443,28 @@ test("run_command withholds Aiden's own credentials but keeps tooling variables"
 test("agent command PATH preserves inherited entries and non-macOS environments", () => {
   const parent = { HOME: "/Users/example", PATH: "/custom/bin:/Users/example/.local/bin:/usr/bin" };
   const mac = agentCommandEnvironment(parent, "darwin");
-  assert.equal(mac.PATH?.split(":").filter((part) => part === "/Users/example/.local/bin").length, 1);
+  assert.equal(
+    mac.PATH?.split(":").filter((part) => part === "/Users/example/.local/bin").length,
+    1,
+  );
   assert.ok(mac.PATH?.startsWith(parent.PATH));
-  assert.ok(agentCommandEnvironment({ HOME: "/Users/example" }, "darwin").PATH?.startsWith("/usr/bin:/bin:/usr/sbin:/sbin"));
+  assert.ok(
+    agentCommandEnvironment({ HOME: "/Users/example" }, "darwin").PATH?.startsWith(
+      "/usr/bin:/bin:/usr/sbin:/sbin",
+    ),
+  );
   const withEmptyEntries = ":/usr/bin::/bin:";
-  assert.ok(agentCommandEnvironment({ ...parent, PATH: withEmptyEntries }, "darwin").PATH?.startsWith(`${withEmptyEntries}:`));
+  assert.ok(
+    agentCommandEnvironment({ ...parent, PATH: withEmptyEntries }, "darwin").PATH?.startsWith(
+      `${withEmptyEntries}:`,
+    ),
+  );
   assert.ok(agentCommandEnvironment({ ...parent, PATH: "" }, "darwin").PATH?.startsWith(":"));
   assert.deepEqual(agentCommandEnvironment(parent, "linux"), parent);
-  assert.deepEqual(parent, { HOME: "/Users/example", PATH: "/custom/bin:/Users/example/.local/bin:/usr/bin" });
+  assert.deepEqual(parent, {
+    HOME: "/Users/example",
+    PATH: "/custom/bin:/Users/example/.local/bin:/usr/bin",
+  });
 });
 
 test("run_command keeps PATH unless a device shim directory is attached", async () => {
@@ -2199,7 +2479,10 @@ test("run_command keeps PATH unless a device shim directory is attached", async 
   // A getter is read per command, so a revoke drops the shim from the next one.
   let shim: string | null = "/data/devices/bin";
   const live = { pathPrefix: () => shim };
-  assert.equal(runCommandEnv(live, environment).PATH, `/data/devices/bin${path.delimiter}/usr/bin:/bin`);
+  assert.equal(
+    runCommandEnv(live, environment).PATH,
+    `/data/devices/bin${path.delimiter}/usr/bin:/bin`,
+  );
   shim = null;
   assert.equal(runCommandEnv(live, environment), environment);
   if (process.platform === "win32") return;
@@ -2212,8 +2495,14 @@ test("run_command keeps PATH unless a device shim directory is attached", async 
     assert.ok(plain && pinned);
     const text = (result: { content: readonly { type: string; text?: string }[] }) =>
       result.content.map((part) => part.text ?? "").join("");
-    assert.doesNotMatch(text(await plain.execute("plain", { command: 'printf %s "$PATH"' })), /\/aiden\/devices\/bin/u);
-    assert.match(text(await pinned.execute("pinned", { command: 'printf %s "$PATH"' })), /^\/aiden\/devices\/bin:/u);
+    assert.doesNotMatch(
+      text(await plain.execute("plain", { command: 'printf %s "$PATH"' })),
+      /\/aiden\/devices\/bin/u,
+    );
+    assert.match(
+      text(await pinned.execute("pinned", { command: 'printf %s "$PATH"' })),
+      /^\/aiden\/devices\/bin:/u,
+    );
   } finally {
     await fs.rm(root, { recursive: true, force: true });
   }
@@ -2339,7 +2628,11 @@ test("edit_file refuses non-UTF-8 files and leaves their bytes untouched", async
     assert.ok(editFile);
 
     await assert.rejects(
-      editFile.execute("latin1", { path: "latin1.txt", old_string: "TOKEN=1", new_string: "TOKEN=2" }),
+      editFile.execute("latin1", {
+        path: "latin1.txt",
+        old_string: "TOKEN=1",
+        new_string: "TOKEN=2",
+      }),
       /only edits valid UTF-8 text files/,
     );
     assert.ok((await fs.readFile(file)).equals(before), "file bytes must be unchanged");
@@ -2347,7 +2640,11 @@ test("edit_file refuses non-UTF-8 files and leaves their bytes untouched", async
     // A valid UTF-8 file with multi-byte characters still edits and keeps them intact.
     const utf8 = path.join(root, "utf8.txt");
     await fs.writeFile(utf8, "\uFEFFcafé ☕\r\nTOKEN=1\r\n", "utf8");
-    const result = await editFile.execute("utf8", { path: "utf8.txt", old_string: "TOKEN=1", new_string: "TOKEN=2" });
+    const result = await editFile.execute("utf8", {
+      path: "utf8.txt",
+      old_string: "TOKEN=1",
+      new_string: "TOKEN=2",
+    });
     assert.equal(result.isError, undefined);
     assert.equal(await fs.readFile(utf8, "utf8"), "\uFEFFcafé ☕\r\nTOKEN=2\r\n");
   } finally {
@@ -3020,21 +3317,49 @@ test("grep reports protected, oversized, and total-byte incompleteness", async (
   }
 });
 
+test(
+  "POSIX colon filenames retain actual write and edit provenance",
+  { skip: process.platform === "win32" },
+  async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-colon-file-"));
+    try {
+      const tools = buildCodingTools(root);
+      const written = await tools
+        .find((tool) => tool.name === "write_file")!
+        .execute("write", { path: "foo:bar.txt", content: "alpha" });
+      assert.deepEqual((written.details as { producedFile: unknown }).producedFile, {
+        relativePath: "foo:bar.txt",
+        operation: "written",
+        bytes: 5,
+      });
+      const edited = await tools
+        .find((tool) => tool.name === "edit_file")!
+        .execute("edit", { path: "foo:bar.txt", old_string: "alpha", new_string: "beta" });
+      assert.deepEqual((edited.details as { producedFile: unknown }).producedFile, {
+        relativePath: "foo:bar.txt",
+        operation: "edited",
+        bytes: 4,
+      });
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  },
+);
 
-test("POSIX colon filenames retain actual write and edit provenance", { skip: process.platform === "win32" }, async () => {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-colon-file-"));
-  try {
-    const tools = buildCodingTools(root);
-    const written = await tools.find((tool) => tool.name === "write_file")!.execute("write", { path: "foo:bar.txt", content: "alpha" });
-    assert.deepEqual((written.details as { producedFile: unknown }).producedFile, { relativePath: "foo:bar.txt", operation: "written", bytes: 5 });
-    const edited = await tools.find((tool) => tool.name === "edit_file")!.execute("edit", { path: "foo:bar.txt", old_string: "alpha", new_string: "beta" });
-    assert.deepEqual((edited.details as { producedFile: unknown }).producedFile, { relativePath: "foo:bar.txt", operation: "edited", bytes: 4 });
-  } finally { await fs.rm(root, { recursive: true, force: true }); }
-});
-
-async function foregroundText(root: string, name: string, params: Record<string, string>, signal?: AbortSignal, observer?: Parameters<typeof buildCodingTools>[1]): Promise<string> {
-  const result = await buildCodingTools(root, observer).find((tool) => tool.name === name)!.execute("bounded-parent", params, signal);
-  return result.content.filter((block) => block.type === "text").map((block) => block.text).join("\n");
+async function foregroundText(
+  root: string,
+  name: string,
+  params: Record<string, string>,
+  signal?: AbortSignal,
+  observer?: Parameters<typeof buildCodingTools>[1],
+): Promise<string> {
+  const result = await buildCodingTools(root, observer)
+    .find((tool) => tool.name === name)!
+    .execute("bounded-parent", params, signal);
+  return result.content
+    .filter((block) => block.type === "text")
+    .map((block) => block.text)
+    .join("\n");
 }
 
 test("foreground read bounds actual bytes for sparse files and growth after stat, preserving UTF-8", async () => {
@@ -3044,8 +3369,17 @@ test("foreground read bounds actual bytes for sparse files and growth after stat
     await fs.writeFile(full, "a".repeat(199_999) + "😀end");
     let bytes = 0;
     const text = await foregroundText(root, "read_file", { path: "large.txt" }, undefined, {
-      afterFileStat: async () => { const h = await fs.open(full, "r+"); try { await h.truncate(32 * 1024 * 1024); } finally { await h.close(); } },
-      onFileRead: (count) => { bytes += count; },
+      afterFileStat: async () => {
+        const h = await fs.open(full, "r+");
+        try {
+          await h.truncate(32 * 1024 * 1024);
+        } finally {
+          await h.close();
+        }
+      },
+      onFileRead: (count) => {
+        bytes += count;
+      },
     });
     assert.equal(bytes, 200_001);
     assert.equal(text, "a".repeat(199_999) + "\n… [truncated]");
@@ -3055,54 +3389,123 @@ test("foreground read bounds actual bytes for sparse files and growth after stat
     assert.equal(await foregroundText(root, "read_file", { path: "large.txt" }), "[empty file]");
     await fs.symlink("large.txt", path.join(root, "alias"));
     assert.equal(await foregroundText(root, "read_file", { path: "alias" }), "[empty file]");
-  } finally { await fs.rm(root, { recursive: true, force: true }); }
+  } finally {
+    await fs.rm(root, { recursive: true, force: true });
+  }
 });
 
 test("foreground tools reject cancellation before I/O and during reads or enumeration", async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-parent-cancel-"));
   try {
     await fs.writeFile(path.join(root, "a.txt"), "needle".repeat(40_000));
-    for (const [name, params] of [["read_file", { path: "a.txt" }], ["list_dir", {}], ["glob", { pattern: "**/*" }], ["grep", { pattern: "needle" }]] as const) {
-      const pre = new AbortController(); pre.abort(new Error("test cancelled"));
-      let entries = 0; let bytes = 0;
-      await assert.rejects(foregroundText(root, name, params, pre.signal, { onFileRead: () => { bytes++; }, onDirectoryEntry: () => { entries++; } }), /test cancelled/);
+    for (const [name, params] of [
+      ["read_file", { path: "a.txt" }],
+      ["list_dir", {}],
+      ["glob", { pattern: "**/*" }],
+      ["grep", { pattern: "needle" }],
+    ] as const) {
+      const pre = new AbortController();
+      pre.abort(new Error("test cancelled"));
+      let entries = 0;
+      let bytes = 0;
+      await assert.rejects(
+        foregroundText(root, name, params, pre.signal, {
+          onFileRead: () => {
+            bytes++;
+          },
+          onDirectoryEntry: () => {
+            entries++;
+          },
+        }),
+        /test cancelled/,
+      );
       assert.equal(bytes + entries, 0);
       const during = new AbortController();
-      await assert.rejects(foregroundText(root, name, params, during.signal, {
-        onFileRead: () => during.abort(new Error("mid-read cancelled")),
-        onDirectoryEntry: () => during.abort(new Error("mid-scan cancelled")),
-      }), /mid-(read|scan) cancelled/);
+      await assert.rejects(
+        foregroundText(root, name, params, during.signal, {
+          onFileRead: () => during.abort(new Error("mid-read cancelled")),
+          onDirectoryEntry: () => during.abort(new Error("mid-scan cancelled")),
+        }),
+        /mid-(read|scan) cancelled/,
+      );
     }
-  } finally { await fs.rm(root, { recursive: true, force: true }); }
+  } finally {
+    await fs.rm(root, { recursive: true, force: true });
+  }
 });
 
 test("foreground grep retains JS patterns and stays cancellable during catastrophic backtracking", async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-parent-regex-"));
   try {
     await fs.writeFile(path.join(root, "a.txt"), "foobar foofoo\nnope\n");
-    assert.equal(await foregroundText(root, "grep", { pattern: "(?<=foo)bar|\\b(foo)\\1\\b" }), "a.txt:1: foobar foofoo");
-    await assert.rejects(foregroundText(root, "grep", { pattern: "[" }), /Invalid regular expression/);
+    assert.equal(
+      await foregroundText(root, "grep", { pattern: "(?<=foo)bar|\\b(foo)\\1\\b" }),
+      "a.txt:1: foobar foofoo",
+    );
+    await assert.rejects(
+      foregroundText(root, "grep", { pattern: "[" }),
+      /Invalid regular expression/,
+    );
     await fs.writeFile(path.join(root, "a.txt"), "a".repeat(100_000) + "!");
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(new Error("regex cancelled")), 150);
     try {
-      await assert.rejects(foregroundText(root, "grep", { pattern: "^(a+)+$" }, controller.signal), /regex cancelled/);
-    } finally { clearTimeout(timer); }
+      await assert.rejects(
+        foregroundText(root, "grep", { pattern: "^(a+)+$" }, controller.signal),
+        /regex cancelled/,
+      );
+    } finally {
+      clearTimeout(timer);
+    }
     // A subsequent call must have both a live worker and released capacity.
     assert.equal(await foregroundText(root, "grep", { pattern: "not-present" }), "[no matches]");
-    assert.match(await foregroundText(root, "grep", { pattern: "^(a+)+$" }), /search stopped after 5000 ms/);
-  } finally { await fs.rm(root, { recursive: true, force: true }); }
+    assert.match(
+      await foregroundText(root, "grep", { pattern: "^(a+)+$" }),
+      /search stopped after 5000 ms/,
+    );
+  } finally {
+    await fs.rm(root, { recursive: true, force: true });
+  }
 });
 
 test("foreground glob agrees with native glob on normal patterns, hidden paths and safe links", async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-parent-glob-"));
   try {
-    await fs.mkdir(path.join(root, "src/sub"), { recursive: true }); await fs.mkdir(path.join(root, ".meta"));
-    for (const file of ["src/a.ts", "src/b.js", "src/sub/c.ts", "root.txt", ".meta/config.json"]) await fs.writeFile(path.join(root, file), "safe");
+    await fs.mkdir(path.join(root, "src/sub"), { recursive: true });
+    await fs.mkdir(path.join(root, ".meta"));
+    for (const file of ["src/a.ts", "src/b.js", "src/sub/c.ts", "root.txt", ".meta/config.json"])
+      await fs.writeFile(path.join(root, file), "safe");
     await fs.symlink("src", path.join(root, "link"));
     await fs.symlink("sub", path.join(root, "src/alias"));
-    for (const pattern of ["*", "**", "src/**", "src/*/", "src", "src/*.{js,ts}", "src/@(a|b).*", "./src/*.ts", ".meta/*", "link/*.ts", "*/a.ts", "src/**/..", "src/{sub,alias}/*", path.join(root, "src/*.ts"), `{${path.join(root, "src/*.ts")},src/*.js}`, `{src/*.js,${path.join(root, "src/*.ts")}}`, `{${path.join(root, "src")},${path.join(root, "link")}}/*.ts`]) {
-      const expected = (await (async () => { const values: string[] = []; for await (const value of fs.glob(pattern, { cwd: root })) values.push(value); return values; })()).sort().join("\n") || "[no matches]";
+    for (const pattern of [
+      "*",
+      "**",
+      "src/**",
+      "src/*/",
+      "src",
+      "src/*.{js,ts}",
+      "src/@(a|b).*",
+      "./src/*.ts",
+      ".meta/*",
+      "link/*.ts",
+      "*/a.ts",
+      "src/**/..",
+      "src/{sub,alias}/*",
+      path.join(root, "src/*.ts"),
+      `{${path.join(root, "src/*.ts")},src/*.js}`,
+      `{src/*.js,${path.join(root, "src/*.ts")}}`,
+      `{${path.join(root, "src")},${path.join(root, "link")}}/*.ts`,
+    ]) {
+      const expected =
+        (
+          await (async () => {
+            const values: string[] = [];
+            for await (const value of fs.glob(pattern, { cwd: root })) values.push(value);
+            return values;
+          })()
+        )
+          .sort()
+          .join("\n") || "[no matches]";
       assert.equal(await foregroundText(root, "glob", { pattern }), expected, pattern);
     }
     // Node 24.22 (Electron 43.8) never steps into a symlink after `**`; Node 22 still does.
@@ -3112,9 +3515,16 @@ test("foreground glob agrees with native glob on normal patterns, hidden paths a
       ["**/*/*.ts", "src/a.ts src/sub/c.ts"],
       ["**/*/**/c.ts", "src/sub/c.ts"],
       ["**/*/", "src src/sub"],
-      ["{src,link}/**/*", "link/a.ts link/alias link/b.js link/sub link/sub/c.ts src/a.ts src/alias src/b.js src/sub src/sub/c.ts"],
+      [
+        "{src,link}/**/*",
+        "link/a.ts link/alias link/b.js link/sub link/sub/c.ts src/a.ts src/alias src/b.js src/sub src/sub/c.ts",
+      ],
     ]) {
-      assert.equal(await foregroundText(root, "glob", { pattern }), expected.split(" ").join("\n"), pattern);
+      assert.equal(
+        await foregroundText(root, "glob", { pattern }),
+        expected.split(" ").join("\n"),
+        pattern,
+      );
     }
     await fs.writeFile(path.join(root, ".env"), "SECRET");
     assert.equal(await foregroundText(root, "glob", { pattern: ".env" }), "[no matches]");
@@ -3122,29 +3532,57 @@ test("foreground glob agrees with native glob on normal patterns, hidden paths a
     try {
       await fs.writeFile(path.join(outside, "outside.txt"), "PRIVATE");
       const opened: string[] = [];
-      assert.equal(await foregroundText(root, "glob", { pattern: `{${path.join(outside, "*.txt")},src/*.js}` }, undefined, {
-        beforeDirectoryOpen: (directory) => { opened.push(directory); },
-      }), "src/b.js");
+      assert.equal(
+        await foregroundText(
+          root,
+          "glob",
+          { pattern: `{${path.join(outside, "*.txt")},src/*.js}` },
+          undefined,
+          {
+            beforeDirectoryOpen: (directory) => {
+              opened.push(directory);
+            },
+          },
+        ),
+        "src/b.js",
+      );
       assert.ok(opened.every((directory) => !directory.includes(path.basename(outside))));
-    } finally { await fs.rm(outside, { recursive: true, force: true }); }
-
-  } finally { await fs.rm(root, { recursive: true, force: true }); }
+    } finally {
+      await fs.rm(outside, { recursive: true, force: true });
+    }
+  } finally {
+    await fs.rm(root, { recursive: true, force: true });
+  }
 });
 
 test("foreground scans cap work on wide no-match directories and bound output", async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-parent-wide-"));
   try {
     for (let offset = 0; offset < 10_020; offset += 100) {
-      await Promise.all(Array.from({ length: 100 }, (_, index) => fs.writeFile(path.join(root, `file-${offset + index}.txt`), "")));
+      await Promise.all(
+        Array.from({ length: 100 }, (_, index) =>
+          fs.writeFile(path.join(root, `file-${offset + index}.txt`), ""),
+        ),
+      );
     }
-    for (const [name, params] of [["list_dir", {}], ["glob", { pattern: "**/*.absent" }], ["grep", { pattern: "absent" }]] as const) {
+    for (const [name, params] of [
+      ["list_dir", {}],
+      ["glob", { pattern: "**/*.absent" }],
+      ["grep", { pattern: "absent" }],
+    ] as const) {
       let entries = 0;
-      const text = await foregroundText(root, name, params, undefined, { onDirectoryEntry: () => { entries++; } });
+      const text = await foregroundText(root, name, params, undefined, {
+        onDirectoryEntry: () => {
+          entries++;
+        },
+      });
       assert.equal(entries, 10_000, name);
       assert.match(text, /scan stopped after 10000 entries/, name);
       assert.ok(text.length <= 20_000, name);
     }
-  } finally { await fs.rm(root, { recursive: true, force: true }); }
+  } finally {
+    await fs.rm(root, { recursive: true, force: true });
+  }
 });
 
 test("foreground grep caps bytes even when files grow, and skips ignored directories", async () => {
@@ -3154,22 +3592,40 @@ test("foreground grep caps bytes even when files grow, and skips ignored directo
     await fs.writeFile(path.join(root, "node_modules", "ignored.txt"), "needle");
     await fs.mkdir(path.join(root, ".hidden"));
     await fs.writeFile(path.join(root, ".hidden", "ignored.txt"), "needle");
-    for (let index = 0; index < 24; index++) await fs.writeFile(path.join(root, `${index}.txt`), "x".repeat(500_000));
+    for (let index = 0; index < 24; index++)
+      await fs.writeFile(path.join(root, `${index}.txt`), "x".repeat(500_000));
     let bytes = 0;
-    const result = await foregroundText(root, "grep", { pattern: "needle" }, undefined, { onFileRead: (count) => { bytes += count; } });
+    const result = await foregroundText(root, "grep", { pattern: "needle" }, undefined, {
+      onFileRead: (count) => {
+        bytes += count;
+      },
+    });
     assert.equal(bytes, 10 * 1024 * 1024);
     assert.match(result, /scan stopped after 10485760 bytes/);
     assert.doesNotMatch(result, /ignored.txt/);
     const growing = await fs.realpath(path.join(root, "0.txt"));
     let growthBytes = 0;
     const text = await foregroundText(root, "grep", { pattern: "x" }, undefined, {
-      afterFileStat: async (full) => { if (full === growing) { const h = await fs.open(full, "r+"); try { await h.truncate(32 * 1024 * 1024); } finally { await h.close(); } } },
-      onFileRead: (count) => { growthBytes += count; },
+      afterFileStat: async (full) => {
+        if (full === growing) {
+          const h = await fs.open(full, "r+");
+          try {
+            await h.truncate(32 * 1024 * 1024);
+          } finally {
+            await h.close();
+          }
+        }
+      },
+      onFileRead: (count) => {
+        growthBytes += count;
+      },
     });
     assert.match(text, /oversized files skipped/);
     assert.doesNotMatch(text, /^0.txt:/m);
     assert.ok(growthBytes <= 10 * 1024 * 1024);
-  } finally { await fs.rm(root, { recursive: true, force: true }); }
+  } finally {
+    await fs.rm(root, { recursive: true, force: true });
+  }
 });
 
 test("foreground deep scans preserve normal results and ignore dependency and hidden subtrees", async () => {
@@ -3183,249 +3639,473 @@ test("foreground deep scans preserve normal results and ignore dependency and hi
     await fs.mkdir(path.join(root, ".hidden"));
     await fs.writeFile(path.join(root, ".hidden/ignored.txt"), "needle\n");
     const opened: string[] = [];
-    const result = await foregroundText(root, "grep", { pattern: "needle" }, undefined, { beforeDirectoryOpen: (directory) => { opened.push(path.basename(directory)); } });
+    const result = await foregroundText(root, "grep", { pattern: "needle" }, undefined, {
+      beforeDirectoryOpen: (directory) => {
+        opened.push(path.basename(directory));
+      },
+    });
     assert.equal(result, `${relative}${path.sep}leaf.txt:1: needle`);
     assert.ok(!opened.includes("node_modules") && !opened.includes(".hidden"));
     assert.equal(await foregroundText(root, "grep", { pattern: "missing" }), "[no matches]");
-    assert.equal(await foregroundText(root, "glob", { pattern: "nested/**/*.txt" }), path.join(relative, "leaf.txt"));
-    assert.equal(await foregroundText(root, "glob", { pattern: "nested/**/*.missing" }), "[no matches]");
-  } finally { await fs.rm(root, { recursive: true, force: true }); }
+    assert.equal(
+      await foregroundText(root, "glob", { pattern: "nested/**/*.txt" }),
+      path.join(relative, "leaf.txt"),
+    );
+    assert.equal(
+      await foregroundText(root, "glob", { pattern: "nested/**/*.missing" }),
+      "[no matches]",
+    );
+  } finally {
+    await fs.rm(root, { recursive: true, force: true });
+  }
 });
 
 test("foreground collection limits distinguish exact caps and cap rendered output", async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-parent-caps-"));
   try {
-    for (let i = 0; i < 500; i++) await fs.writeFile(path.join(root, `file-${String(i).padStart(3, "0")}.txt`), i < 200 ? "needle\n" : "");
-    for (const [name, params] of [["list_dir", {}], ["glob", { pattern: "*.txt" }], ["grep", { pattern: "needle" }]] as const) {
+    for (let i = 0; i < 500; i++)
+      await fs.writeFile(
+        path.join(root, `file-${String(i).padStart(3, "0")}.txt`),
+        i < 200 ? "needle\n" : "",
+      );
+    for (const [name, params] of [
+      ["list_dir", {}],
+      ["glob", { pattern: "*.txt" }],
+      ["grep", { pattern: "needle" }],
+    ] as const) {
       assert.doesNotMatch(await foregroundText(root, name, params), /truncated|scan stopped/);
     }
     await fs.writeFile(path.join(root, "extra.txt"), "needle\n");
-    for (const [name, params, cap] of [["list_dir", {}, 500], ["glob", { pattern: "*.txt" }, 500], ["grep", { pattern: "needle" }, 200]] as const) {
+    for (const [name, params, cap] of [
+      ["list_dir", {}, 500],
+      ["glob", { pattern: "*.txt" }, 500],
+      ["grep", { pattern: "needle" }, 200],
+    ] as const) {
       const text = await foregroundText(root, name, params);
       assert.match(text, new RegExp(`truncated at ${cap}`));
       assert.ok(text.length <= 20_000);
     }
-    await fs.writeFile(path.join(root, "file-000.txt"), `${"needle".padEnd(300, "x")}\n`.repeat(201));
+    await fs.writeFile(
+      path.join(root, "file-000.txt"),
+      `${"needle".padEnd(300, "x")}\n`.repeat(201),
+    );
     const output = await foregroundText(root, "grep", { pattern: "needle" });
     assert.ok(output.length <= 20_000);
     assert.match(output, /output truncated/);
     assert.match(output, /truncated at 200 matches/);
-  } finally { await fs.rm(root, { recursive: true, force: true }); }
+  } finally {
+    await fs.rm(root, { recursive: true, force: true });
+  }
 });
 
-test("foreground reads reject non-regular FIFOs without waiting for a writer", { skip: process.platform === "win32", timeout: 2_000 }, async () => {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-parent-fifo-"));
-  try {
-    await execFileAsync("mkfifo", [path.join(root, "pipe")]);
-    await assert.rejects(foregroundText(root, "read_file", { path: "pipe" }), /not a regular file/);
-  } finally { await fs.rm(root, { recursive: true, force: true }); }
-});
-
+test(
+  "foreground reads reject non-regular FIFOs without waiting for a writer",
+  { skip: process.platform === "win32", timeout: 2_000 },
+  async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-parent-fifo-"));
+    try {
+      await execFileAsync("mkfifo", [path.join(root, "pipe")]);
+      await assert.rejects(
+        foregroundText(root, "read_file", { path: "pipe" }),
+        /not a regular file/,
+      );
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  },
+);
 
 test("foreground matcher capacity rejects excess work and recovers after concurrent cancellations", async () => {
   const controllers = Array.from({ length: 4 }, () => new AbortController());
-  const ready = controllers.map(() => (() => { let resolve!: () => void; const promise = new Promise<void>((done) => { resolve = done; }); return { resolve, promise }; })());
-  const calls = controllers.map((controller, index) => withCodingToolMatcher(
-    "grep", "^(a+)+$", Date.now() + 5_000, controller.signal,
-    async (match) => { ready[index]!.resolve(); return await match(["a".repeat(100_000) + "!"], 1); },
-  ));
+  const ready = controllers.map(() =>
+    (() => {
+      let resolve!: () => void;
+      const promise = new Promise<void>((done) => {
+        resolve = done;
+      });
+      return { resolve, promise };
+    })(),
+  );
+  const calls = controllers.map((controller, index) =>
+    withCodingToolMatcher(
+      "grep",
+      "^(a+)+$",
+      Date.now() + 5_000,
+      controller.signal,
+      async (match) => {
+        ready[index]!.resolve();
+        return await match(["a".repeat(100_000) + "!"], 1);
+      },
+    ),
+  );
   const settled = Promise.allSettled(calls);
   try {
     await Promise.all(ready.map((entry) => entry.promise));
-    await assert.rejects(withCodingToolMatcher("grep", "safe", Date.now() + 5_000, undefined, async (match) => match(["safe"], 1)), /searches are busy/);
+    await assert.rejects(
+      withCodingToolMatcher("grep", "safe", Date.now() + 5_000, undefined, async (match) =>
+        match(["safe"], 1),
+      ),
+      /searches are busy/,
+    );
   } finally {
     for (const controller of controllers) controller.abort(new Error("capacity test cancelled"));
   }
   const outcomes = await settled;
-  assert.ok(outcomes.every((outcome) => outcome.status === "rejected" && outcome.reason.message === "capacity test cancelled"));
-  assert.deepEqual(await withCodingToolMatcher("grep", "safe", Date.now() + 5_000, undefined, async (match) => match(["other", "safe"], 1)), [1]);
+  assert.ok(
+    outcomes.every(
+      (outcome) =>
+        outcome.status === "rejected" && outcome.reason.message === "capacity test cancelled",
+    ),
+  );
+  assert.deepEqual(
+    await withCodingToolMatcher("grep", "safe", Date.now() + 5_000, undefined, async (match) =>
+      match(["other", "safe"], 1),
+    ),
+    [1],
+  );
 });
 
 function deferred<T = void>() {
   let resolve!: (value: T | PromiseLike<T>) => void;
   let reject!: (error: unknown) => void;
-  const promise = new Promise<T>((yes, no) => { resolve = yes; reject = no; });
+  const promise = new Promise<T>((yes, no) => {
+    resolve = yes;
+    reject = no;
+  });
   return { promise, resolve, reject };
 }
 
-test("foreground callers cancel pending reads and late acquisitions while handles retain an owner", { timeout: 15_000 }, async (t) => {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-parent-pending-"));
-  await fs.writeFile(path.join(root, "a.txt"), "needle");
-  try {
-    for (const phase of ["acquire", "read"] as const) {
-      for (const [name, params] of [["read_file", { path: "a.txt" }], ["list_dir", {}], ["glob", { pattern: "*" }], ["grep", { pattern: "needle" }]] as const) {
-        const entered = deferred(); const release = deferred(); const closed = deferred();
-        const controller = new AbortController();
-        let reads = 0; let closes = 0;
-        const method = name === "read_file" ? "open" : "opendir";
-        const original = fsPromises[method];
-        // Delay the actual descriptor acquisition/read promise, not just a tool hook.
-        t.mock.method(fsPromises, method, async (...args: unknown[]) => {
-          const handle = await Reflect.apply(original, fsPromises, args);
-          const read = handle.read.bind(handle); const close = handle.close.bind(handle);
-          handle.read = async (...readArgs: unknown[]) => {
-            reads++;
-            if (phase === "read") { entered.resolve(); await release.promise; }
-            return Reflect.apply(read, handle, readArgs);
-          };
-          handle.close = async () => { closes++; await close(); closed.resolve(); };
-          if (phase === "acquire") { entered.resolve(); await release.promise; }
-          return handle;
-        });
-        syncBuiltinESMExports();
-        const call = foregroundText(root, name, params, controller.signal);
-        try {
-          await entered.promise;
-          controller.abort(new Error("pending I/O cancelled"));
-          await assert.rejects(call, /pending I\/O cancelled/);
-          assert.equal(closes, 0, "pending I/O still owns its handle");
-          release.resolve();
-          await closed.promise;
-          assert.equal(closes, 1);
-          assert.equal(reads, phase === "acquire" ? 0 : 1, "no subsequent reads after cancellation");
-        } finally {
-          release.resolve();
-          t.mock.restoreAll(); syncBuiltinESMExports();
+test(
+  "foreground callers cancel pending reads and late acquisitions while handles retain an owner",
+  { timeout: 15_000 },
+  async (t) => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-parent-pending-"));
+    await fs.writeFile(path.join(root, "a.txt"), "needle");
+    try {
+      for (const phase of ["acquire", "read"] as const) {
+        for (const [name, params] of [
+          ["read_file", { path: "a.txt" }],
+          ["list_dir", {}],
+          ["glob", { pattern: "*" }],
+          ["grep", { pattern: "needle" }],
+        ] as const) {
+          const entered = deferred();
+          const release = deferred();
+          const closed = deferred();
+          const controller = new AbortController();
+          let reads = 0;
+          let closes = 0;
+          const method = name === "read_file" ? "open" : "opendir";
+          const original = fsPromises[method];
+          // Delay the actual descriptor acquisition/read promise, not just a tool hook.
+          t.mock.method(fsPromises, method, async (...args: unknown[]) => {
+            const handle = await Reflect.apply(original, fsPromises, args);
+            const read = handle.read.bind(handle);
+            const close = handle.close.bind(handle);
+            handle.read = async (...readArgs: unknown[]) => {
+              reads++;
+              if (phase === "read") {
+                entered.resolve();
+                await release.promise;
+              }
+              return Reflect.apply(read, handle, readArgs);
+            };
+            handle.close = async () => {
+              closes++;
+              await close();
+              closed.resolve();
+            };
+            if (phase === "acquire") {
+              entered.resolve();
+              await release.promise;
+            }
+            return handle;
+          });
+          syncBuiltinESMExports();
+          const call = foregroundText(root, name, params, controller.signal);
+          try {
+            await entered.promise;
+            controller.abort(new Error("pending I/O cancelled"));
+            await assert.rejects(call, /pending I\/O cancelled/);
+            assert.equal(closes, 0, "pending I/O still owns its handle");
+            release.resolve();
+            await closed.promise;
+            assert.equal(closes, 1);
+            assert.equal(
+              reads,
+              phase === "acquire" ? 0 : 1,
+              "no subsequent reads after cancellation",
+            );
+          } finally {
+            release.resolve();
+            t.mock.restoreAll();
+            syncBuiltinESMExports();
+          }
         }
       }
+      assert.equal(await foregroundText(root, "read_file", { path: "a.txt" }), "needle");
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
     }
-    assert.equal(await foregroundText(root, "read_file", { path: "a.txt" }), "needle");
-  } finally { await fs.rm(root, { recursive: true, force: true }); }
-});
+  },
+);
 
-test("foreground deadline returns while a directory read is pending and closes it when settled", { timeout: 12_000 }, async (t) => {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-parent-deadline-"));
-  const entered = deferred(); const release = deferred(); const closed = deferred();
-  const original = fsPromises.opendir;
-  let reads = 0; let closes = 0;
-  t.mock.method(fsPromises, "opendir", async (...args: Parameters<typeof original>) => {
-    const directory = await original(...args);
-    const read = directory.read.bind(directory); const close = directory.close.bind(directory);
-    directory.read = (async () => { reads++; entered.resolve(); await release.promise; return read(); }) as typeof directory.read;
-    directory.close = (async () => { closes++; await close(); closed.resolve(); }) as typeof directory.close;
-    return directory;
-  });
-  syncBuiltinESMExports();
-  try {
-    const call = foregroundText(root, "list_dir", {});
-    await entered.promise;
-    assert.match(await call, /search stopped after 5000 ms/);
-    assert.equal(closes, 0);
-    release.resolve(); await closed.promise;
-    assert.equal(reads, 1); assert.equal(closes, 1);
-  } finally {
-    release.resolve(); t.mock.restoreAll(); syncBuiltinESMExports();
-    await fs.rm(root, { recursive: true, force: true });
-  }
-});
+test(
+  "foreground deadline returns while a directory read is pending and closes it when settled",
+  { timeout: 12_000 },
+  async (t) => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-parent-deadline-"));
+    const entered = deferred();
+    const release = deferred();
+    const closed = deferred();
+    const original = fsPromises.opendir;
+    let reads = 0;
+    let closes = 0;
+    t.mock.method(fsPromises, "opendir", async (...args: Parameters<typeof original>) => {
+      const directory = await original(...args);
+      const read = directory.read.bind(directory);
+      const close = directory.close.bind(directory);
+      directory.read = (async () => {
+        reads++;
+        entered.resolve();
+        await release.promise;
+        return read();
+      }) as typeof directory.read;
+      directory.close = (async () => {
+        closes++;
+        await close();
+        closed.resolve();
+      }) as typeof directory.close;
+      return directory;
+    });
+    syncBuiltinESMExports();
+    try {
+      const call = foregroundText(root, "list_dir", {});
+      await entered.promise;
+      assert.match(await call, /search stopped after 5000 ms/);
+      assert.equal(closes, 0);
+      release.resolve();
+      await closed.promise;
+      assert.equal(reads, 1);
+      assert.equal(closes, 1);
+    } finally {
+      release.resolve();
+      t.mock.restoreAll();
+      syncBuiltinESMExports();
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  },
+);
 
-test("foreground operation admission remains bounded through repeated cancellation and late cleanup", { timeout: 5_000 }, async () => {
-  const scope = new ForegroundReadOperations(2);
-  const controllers = [new AbortController(), new AbortController()];
-  const pending = controllers.map(() => deferred());
-  const cleaning = controllers.map(() => deferred());
-  const cleanup = controllers.map(() => deferred());
-  const completed = controllers.map(() => deferred());
-  const started = controllers.map(() => deferred());
-  const calls = controllers.map((controller, i) => scope.run(controller.signal, undefined, async (signal) => {
-    started[i]!.resolve();
-    try { await pending[i]!.promise; signal.throwIfAborted(); return "unexpected"; }
-    finally { cleaning[i]!.resolve(); await cleanup[i]!.promise; completed[i]!.resolve(); }
-  }, () => "deadline"));
-  const rejected = calls.map((call) => assert.rejects(call, /cancelled/));
-  await Promise.all(started.map((gate) => gate.promise));
-  for (let i = 0; i < 2; i++) controllers[i]!.abort(new Error("cancelled"));
-  await Promise.all(rejected);
-  const run = () => scope.run(undefined, undefined, async () => "recovered", () => "deadline");
-  for (let i = 0; i < 8; i++) await assert.rejects(run(), /operations are busy/);
-  pending[0]!.reject(new Error("late I/O failure")); pending[1]!.resolve();
-  await Promise.all(cleaning.map((gate) => gate.promise));
-  await assert.rejects(run(), /operations are busy/, "cleanup retains admission");
-  cleanup.forEach((gate) => gate.resolve());
-  await Promise.all(completed.map((gate) => gate.promise));
-  await new Promise<void>((resolve) => setImmediate(resolve));
-  assert.equal(await run(), "recovered");
-});
+test(
+  "foreground operation admission remains bounded through repeated cancellation and late cleanup",
+  { timeout: 5_000 },
+  async () => {
+    const scope = new ForegroundReadOperations(2);
+    const controllers = [new AbortController(), new AbortController()];
+    const pending = controllers.map(() => deferred());
+    const cleaning = controllers.map(() => deferred());
+    const cleanup = controllers.map(() => deferred());
+    const completed = controllers.map(() => deferred());
+    const started = controllers.map(() => deferred());
+    const calls = controllers.map((controller, i) =>
+      scope.run(
+        controller.signal,
+        undefined,
+        async (signal) => {
+          started[i]!.resolve();
+          try {
+            await pending[i]!.promise;
+            signal.throwIfAborted();
+            return "unexpected";
+          } finally {
+            cleaning[i]!.resolve();
+            await cleanup[i]!.promise;
+            completed[i]!.resolve();
+          }
+        },
+        () => "deadline",
+      ),
+    );
+    const rejected = calls.map((call) => assert.rejects(call, /cancelled/));
+    await Promise.all(started.map((gate) => gate.promise));
+    for (let i = 0; i < 2; i++) controllers[i]!.abort(new Error("cancelled"));
+    await Promise.all(rejected);
+    const run = () =>
+      scope.run(
+        undefined,
+        undefined,
+        async () => "recovered",
+        () => "deadline",
+      );
+    for (let i = 0; i < 8; i++) await assert.rejects(run(), /operations are busy/);
+    pending[0]!.reject(new Error("late I/O failure"));
+    pending[1]!.resolve();
+    await Promise.all(cleaning.map((gate) => gate.promise));
+    await assert.rejects(run(), /operations are busy/, "cleanup retains admission");
+    cleanup.forEach((gate) => gate.resolve());
+    await Promise.all(completed.map((gate) => gate.promise));
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    assert.equal(await run(), "recovered");
+  },
+);
 
 test("foreground cleanup failures quarantine admission and undefined failures still reject", async () => {
   const scope = new ForegroundReadOperations(1);
-  await assert.rejects(scope.run(undefined, undefined, async () => {
-    await closeForegroundResource({ close: async () => { throw new Error("close failed"); } });
-  }, () => undefined), ForegroundReadCleanupError);
-  await assert.rejects(scope.run(undefined, undefined, async () => "unused", () => "timeout"), /operations are busy/);
+  await assert.rejects(
+    scope.run(
+      undefined,
+      undefined,
+      async () => {
+        await closeForegroundResource({
+          close: async () => {
+            throw new Error("close failed");
+          },
+        });
+      },
+      () => undefined,
+    ),
+    ForegroundReadCleanupError,
+  );
+  await assert.rejects(
+    scope.run(
+      undefined,
+      undefined,
+      async () => "unused",
+      () => "timeout",
+    ),
+    /operations are busy/,
+  );
   const fresh = new ForegroundReadOperations(1);
-  const result = await Promise.allSettled([fresh.run(undefined, undefined, async () => { throw undefined; }, () => undefined)]);
+  const result = await Promise.allSettled([
+    fresh.run(
+      undefined,
+      undefined,
+      async () => {
+        throw undefined;
+      },
+      () => undefined,
+    ),
+  ]);
   assert.equal(result[0]!.status, "rejected");
-  assert.equal(await fresh.run(undefined, undefined, async () => "ok", () => "timeout"), "ok");
+  assert.equal(
+    await fresh.run(
+      undefined,
+      undefined,
+      async () => "ok",
+      () => "timeout",
+    ),
+    "ok",
+  );
 });
 
-test("foreground workers terminate on cancellation while traversal callbacks remain pending", { timeout: 8_000 }, async (t) => {
-  const terminated = deferred();
-  let terminationCount = 0;
-  const originalTerminate = Worker.prototype.terminate;
-  t.mock.method(Worker.prototype, "terminate", async function (this: Worker) {
-    const code = await originalTerminate.call(this);
-    if (++terminationCount === 4) terminated.resolve();
-    return code;
-  });
-  const controllers = Array.from({ length: 4 }, () => new AbortController());
-  const started = controllers.map(() => deferred());
-  const release = deferred();
-  const calls = controllers.map((controller, i) => withCodingToolMatcher("grep", "safe", Date.now() + 5_000, controller.signal, async () => {
-    started[i]!.resolve(); await release.promise; controller.signal.throwIfAborted();
-  }));
-  const settled = Promise.allSettled(calls);
-  try {
-    await Promise.all(started.map((gate) => gate.promise));
-    controllers.forEach((controller) => controller.abort(new Error("pending traversal cancelled")));
-    await terminated.promise;
-    assert.equal(terminationCount, 4, "workers terminate without waiting for the traversal callback");
-    await assert.rejects(withCodingToolMatcher("grep", "safe", Date.now() + 5_000, undefined, async () => undefined), /searches are busy/);
-  } finally { release.resolve(); await settled; t.mock.restoreAll(); }
-  assert.deepEqual(await withCodingToolMatcher("grep", "safe", Date.now() + 5_000, undefined, async (match) => match(["safe"], 1)), [0]);
-});
-
-test("foreground tools retain global admission until both root metadata requests settle", { timeout: 8_000 }, async (t) => {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-parent-metadata-"));
-  await fs.writeFile(path.join(root, "a.txt"), "needle");
-  const tool = buildCodingTools(root).find((tool) => tool.name === "read_file")!;
-  const started = deferred(); const release = deferred(); const metadataSettled = deferred();
-  const stat = fsPromises.stat; const realpath = fsPromises.realpath;
-  let pendingStats = 0; let completedStats = 0;
-  t.mock.method(fsPromises, "realpath", async (...args: Parameters<typeof realpath>) => {
-    if (args[0] === root) throw new Error("first metadata request failed");
-    return realpath(...args);
-  });
-  t.mock.method(fsPromises, "stat", async (...args: Parameters<typeof stat>) => {
-    if (args[0] === root) {
-      if (++pendingStats === 4) started.resolve();
-      await release.promise;
+test(
+  "foreground workers terminate on cancellation while traversal callbacks remain pending",
+  { timeout: 8_000 },
+  async (t) => {
+    const terminated = deferred();
+    let terminationCount = 0;
+    const originalTerminate = Worker.prototype.terminate;
+    t.mock.method(Worker.prototype, "terminate", async function (this: Worker) {
+      const code = await originalTerminate.call(this);
+      if (++terminationCount === 4) terminated.resolve();
+      return code;
+    });
+    const controllers = Array.from({ length: 4 }, () => new AbortController());
+    const started = controllers.map(() => deferred());
+    const release = deferred();
+    const calls = controllers.map((controller, i) =>
+      withCodingToolMatcher("grep", "safe", Date.now() + 5_000, controller.signal, async () => {
+        started[i]!.resolve();
+        await release.promise;
+        controller.signal.throwIfAborted();
+      }),
+    );
+    const settled = Promise.allSettled(calls);
+    try {
+      await Promise.all(started.map((gate) => gate.promise));
+      controllers.forEach((controller) =>
+        controller.abort(new Error("pending traversal cancelled")),
+      );
+      await terminated.promise;
+      assert.equal(
+        terminationCount,
+        4,
+        "workers terminate without waiting for the traversal callback",
+      );
+      await assert.rejects(
+        withCodingToolMatcher("grep", "safe", Date.now() + 5_000, undefined, async () => undefined),
+        /searches are busy/,
+      );
+    } finally {
+      release.resolve();
+      await settled;
+      t.mock.restoreAll();
     }
-    const result = await stat(...args);
-    if (args[0] === root && ++completedStats === 4) metadataSettled.resolve();
-    return result;
-  });
-  syncBuiltinESMExports();
-  const controllers = Array.from({ length: 4 }, () => new AbortController());
-  const calls = controllers.map((controller) => tool.execute("pending", { path: "a.txt" }, controller.signal));
-  const rejections = calls.map((call) => assert.rejects(call, /metadata cancelled/));
-  try {
-    await started.promise;
-    controllers.forEach((controller) => controller.abort(new Error("metadata cancelled")));
-    await Promise.all(rejections);
-    for (let i = 0; i < 8; i++) await assert.rejects(tool.execute("excess", { path: "a.txt" }), /operations are busy/);
-    assert.equal(pendingStats, 4, "excess calls never start another syscall");
-  } finally {
-    release.resolve(); t.mock.restoreAll(); syncBuiltinESMExports();
-    // Let all four original owners observe the completed metadata pair.
-    await metadataSettled.promise;
-    await new Promise<void>((resolve) => setImmediate(resolve));
-  }
-  try {
-    assert.equal(await foregroundText(root, "read_file", { path: "a.txt" }), "needle");
-  } finally { await fs.rm(root, { recursive: true, force: true }); }
-});
+    assert.deepEqual(
+      await withCodingToolMatcher("grep", "safe", Date.now() + 5_000, undefined, async (match) =>
+        match(["safe"], 1),
+      ),
+      [0],
+    );
+  },
+);
 
+test(
+  "foreground tools retain global admission until both root metadata requests settle",
+  { timeout: 8_000 },
+  async (t) => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-parent-metadata-"));
+    await fs.writeFile(path.join(root, "a.txt"), "needle");
+    const tool = buildCodingTools(root).find((tool) => tool.name === "read_file")!;
+    const started = deferred();
+    const release = deferred();
+    const metadataSettled = deferred();
+    const stat = fsPromises.stat;
+    const realpath = fsPromises.realpath;
+    let pendingStats = 0;
+    let completedStats = 0;
+    t.mock.method(fsPromises, "realpath", async (...args: Parameters<typeof realpath>) => {
+      if (args[0] === root) throw new Error("first metadata request failed");
+      return realpath(...args);
+    });
+    t.mock.method(fsPromises, "stat", async (...args: Parameters<typeof stat>) => {
+      if (args[0] === root) {
+        if (++pendingStats === 4) started.resolve();
+        await release.promise;
+      }
+      const result = await stat(...args);
+      if (args[0] === root && ++completedStats === 4) metadataSettled.resolve();
+      return result;
+    });
+    syncBuiltinESMExports();
+    const controllers = Array.from({ length: 4 }, () => new AbortController());
+    const calls = controllers.map((controller) =>
+      tool.execute("pending", { path: "a.txt" }, controller.signal),
+    );
+    const rejections = calls.map((call) => assert.rejects(call, /metadata cancelled/));
+    try {
+      await started.promise;
+      controllers.forEach((controller) => controller.abort(new Error("metadata cancelled")));
+      await Promise.all(rejections);
+      for (let i = 0; i < 8; i++)
+        await assert.rejects(tool.execute("excess", { path: "a.txt" }), /operations are busy/);
+      assert.equal(pendingStats, 4, "excess calls never start another syscall");
+    } finally {
+      release.resolve();
+      t.mock.restoreAll();
+      syncBuiltinESMExports();
+      // Let all four original owners observe the completed metadata pair.
+      await metadataSettled.promise;
+      await new Promise<void>((resolve) => setImmediate(resolve));
+    }
+    try {
+      assert.equal(await foregroundText(root, "read_file", { path: "a.txt" }), "needle");
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  },
+);
 
 test("foreground glob worker preserves Windows drive and UNC roots in expanded arms", () => {
   const require = createRequire(import.meta.url);
@@ -3445,13 +4125,20 @@ test("foreground glob worker preserves Windows drive and UNC roots in expanded a
     const engine = runInNewContext(`${CODING_GLOB_WORKER_SOURCE}; ({ seeds, globStep });`, {
       process: { platform: "win32" },
       workerData: { pattern, minimatchPath: require.resolve("minimatch") },
-      require: (name: string) => name === "node:path" ? path.win32 : require(name),
+      require: (name: string) => (name === "node:path" ? path.win32 : require(name)),
     }) as { seeds: CodingGlobTask[]; globStep(request: unknown): CodingGlobReply };
     const matches: string[] = [];
     for (const task of engine.seeds) {
       const prepared = engine.globStep({ task, directory: true });
       matches.push(...prepared.matches);
-      if (!prepared.done) matches.push(...engine.globStep({ task, directory: true, entries: [{ name: "a.ts", directory: false, link: false }] }).matches);
+      if (!prepared.done)
+        matches.push(
+          ...engine.globStep({
+            task,
+            directory: true,
+            entries: [{ name: "a.ts", directory: false, link: false }],
+          }).matches,
+        );
     }
     assert.deepEqual(matches, [expected], pattern);
   }
@@ -3466,7 +4153,12 @@ test("run_command hands what a command leaves running to the chat, whether or no
       path.join(root, "server.cjs"),
       'let tick = 0; console.log("server up"); setInterval(() => console.log(`tick ${++tick}`), 40);',
     );
-    const adoptions: Array<{ group: number; marker: string; hasOutput: boolean; laterOutput?: string }> = [];
+    const adoptions: Array<{
+      group: number;
+      marker: string;
+      hasOutput: boolean;
+      laterOutput?: string;
+    }> = [];
     let marker = "";
     const runCommand = buildCodingTools(root, undefined, {
       leftovers: {
@@ -3487,7 +4179,12 @@ test("run_command hands what a command leaves running to the chat, whether or no
                 output.stderr.resume();
                 await new Promise((resolve) => setTimeout(resolve, 300));
               }
-              adoptions.push({ group, marker: current, hasOutput: Boolean(output), ...(laterOutput !== undefined ? { laterOutput } : {}) });
+              adoptions.push({
+                group,
+                marker: current,
+                hasOutput: Boolean(output),
+                ...(laterOutput !== undefined ? { laterOutput } : {}),
+              });
               return { note: `adopted ${current}`, adopted: true };
             },
           };
@@ -3502,7 +4199,9 @@ test("run_command hands what a command leaves running to the chat, whether or no
     assert.equal(adoptions.length, 0);
 
     // Output sent to a file: the shell returns at once.
-    const redirected = await runCommand.execute("redirected", { command: "node server.cjs > server.log 2>&1 &" });
+    const redirected = await runCommand.execute("redirected", {
+      command: "node server.cjs > server.log 2>&1 &",
+    });
     assert.match(text(redirected), /adopted job_/u);
     assert.equal(adoptions[0]?.hasOutput, false);
 
@@ -3510,16 +4209,28 @@ test("run_command hands what a command leaves running to the chat, whether or no
     // waiting out the 2-minute limit, and the server's output keeps flowing to the adopter.
     const startedAt = Date.now();
     const inherited = await runCommand.execute("inherited", { command: "node server.cjs &" });
-    assert.ok(Date.now() - startedAt < 10_000, "the command returned without waiting for its deadline");
+    assert.ok(
+      Date.now() - startedAt < 10_000,
+      "the command returned without waiting for its deadline",
+    );
     assert.equal(inherited.isError, undefined);
     assert.equal(adoptions[1]?.hasOutput, true);
-    assert.match(text(inherited), /server up/u, "what it printed before returning is in the result");
+    assert.match(
+      text(inherited),
+      /server up/u,
+      "what it printed before returning is in the result",
+    );
     // Nothing it printed between the command returning and the adopter reading is lost.
-    const ticks = (value: string) => [...value.matchAll(/tick (\d+)/gu)].map((match) => Number(match[1]));
+    const ticks = (value: string) =>
+      [...value.matchAll(/tick (\d+)/gu)].map((match) => Number(match[1]));
     const beforeReturn = ticks(text(inherited));
     const afterReturn = ticks(adoptions[1]?.laterOutput ?? "");
     assert.ok(afterReturn.length > 0, "what it prints later reaches the adopter");
-    assert.equal(afterReturn[0], (beforeReturn[beforeReturn.length - 1] ?? 0) + 1, "the adopter reads on from the last line the result showed");
+    assert.equal(
+      afterReturn[0],
+      (beforeReturn[beforeReturn.length - 1] ?? 0) + 1,
+      "the adopter reads on from the last line the result showed",
+    );
     // Each command carried its own marker.
     assert.notEqual(adoptions[0]?.marker, adoptions[1]?.marker);
   } finally {
@@ -3543,7 +4254,10 @@ function runningGroupMembers(group: number): Promise<number[]> {
         String(stdout)
           .split("\n")
           .map((line) => line.trim().split(/\s+/u))
-          .filter(([, pgid, stat]) => Number(pgid) === group && stat !== undefined && !stat.startsWith("Z"))
+          .filter(
+            ([, pgid, stat]) =>
+              Number(pgid) === group && stat !== undefined && !stat.startsWith("Z"),
+          )
           .map(([pid]) => Number(pid)),
       );
     });
@@ -3564,7 +4278,10 @@ test("run_command tells the agent how to stop leftovers no job could take over",
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-command-untracked-"));
   const groups: number[] = [];
   try {
-    await fs.writeFile(path.join(root, "server.cjs"), 'console.log("server up"); setInterval(() => {}, 1000);');
+    await fs.writeFile(
+      path.join(root, "server.cjs"),
+      'console.log("server up"); setInterval(() => {}, 1000);',
+    );
     // An adopter that cannot confirm the marker answers with nothing; a failed look throws.
     for (const outcome of ["unverified", "lookup failed"] as const) {
       const runCommand = buildCodingTools(root, undefined, {
@@ -3581,11 +4298,16 @@ test("run_command tells the agent how to stop leftovers no job could take over",
           },
         },
       }).find((tool) => tool.name === "run_command")!;
-      const result = await runCommand.execute(outcome, { command: "node server.cjs > server.log 2>&1 &" });
+      const result = await runCommand.execute(outcome, {
+        command: "node server.cjs > server.log 2>&1 &",
+      });
       const text = result.content[0]?.type === "text" ? result.content[0].text : "";
       const group = groups[groups.length - 1]!;
       assert.equal(result.isError, undefined, outcome);
-      assert.ok((await runningGroupMembers(group)).length > 0, `${outcome}: the server is still running`);
+      assert.ok(
+        (await runningGroupMembers(group)).length > 0,
+        `${outcome}: the server is still running`,
+      );
       assert.match(text, /not tracked/u, outcome);
       const stop = text.match(/kill -- -(\d+)/u);
       assert.equal(Number(stop?.[1]), group, `${outcome}: the note names the command's own group`);
@@ -3630,9 +4352,14 @@ test("run_command keeps a refused handoff's output flowing and still shows the r
   if (process.platform === "win32") return;
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-command-refused-"));
   const groups: number[] = [];
-  let handed: { stdout: import("node:stream").Readable; stderr: import("node:stream").Readable } | undefined;
+  let handed:
+    | { stdout: import("node:stream").Readable; stderr: import("node:stream").Readable }
+    | undefined;
   try {
-    await fs.writeFile(path.join(root, "server.cjs"), 'console.log("server up"); setInterval(() => console.log("tick"), 40);');
+    await fs.writeFile(
+      path.join(root, "server.cjs"),
+      'console.log("server up"); setInterval(() => console.log("tick"), 40);',
+    );
     const runCommand = buildCodingTools(root, undefined, {
       leftovers: {
         begin() {
@@ -3659,7 +4386,11 @@ test("run_command keeps a refused handoff's output flowing and still shows the r
     process.kill(-group, "SIGTERM");
     assert.deepEqual(await untilGroupStopsRunning(group), [], "the kill it names stops the server");
     assert.ok(handed, "the server kept the command's output open");
-    assert.equal(handed.stdout.isPaused(), false, "nobody reads it, so it is drained rather than left to fill");
+    assert.equal(
+      handed.stdout.isPaused(),
+      false,
+      "nobody reads it, so it is drained rather than left to fill",
+    );
     assert.equal(handed.stderr.isPaused(), false);
   } finally {
     for (const group of groups) {

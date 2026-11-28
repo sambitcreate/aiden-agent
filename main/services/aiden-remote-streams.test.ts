@@ -43,7 +43,14 @@ function fixture() {
       return true;
     },
   });
-  return { service, cancelled, approvals, setNow: (value: number) => { now = value; } };
+  return {
+    service,
+    cancelled,
+    approvals,
+    setNow: (value: number) => {
+      now = value;
+    },
+  };
 }
 
 test("remote stream journals typed events and is isolated to its paired device", () => {
@@ -74,19 +81,21 @@ test("remote stream forwards the renderer-safe chronological timeline without ra
     generationId: "stream-1",
     status: "running",
     startedAt: 1_000,
-    steps: [{
-      id: "tool-1",
-      order: 0,
-      kind: "tool",
-      toolCallId: "call-1",
-      toolName: "run_command",
-      label: "Run command",
-      status: "running",
-      startedAt: 1_000,
-      updatedAt: 1_000,
-      contentOffset: 0,
-      detail: "Check project status",
-    }],
+    steps: [
+      {
+        id: "tool-1",
+        order: 0,
+        kind: "tool",
+        toolCallId: "call-1",
+        toolName: "run_command",
+        label: "Run command",
+        status: "running",
+        startedAt: 1_000,
+        updatedAt: 1_000,
+        contentOffset: 0,
+        detail: "Check project status",
+      },
+    ],
   };
   owner.owner.send("chat:timeline", { timeline, rawCommand: "cat ~/.ssh/id_rsa" });
   const event = app.service.snapshot().streams[0]?.events[1];
@@ -142,15 +151,26 @@ test("Mac-side initialization cancellation without a timeline remains a terminal
 test("provider failure remains a replayable terminal error with its safe message", () => {
   const app = fixture();
   const owner = app.service.create("device-1", "stream-1", "chat-1", "turn-1");
-  owner.owner.send("chat:error", { message: "The model provider could not complete this response." });
+  owner.owner.send("chat:error", {
+    message: "The model provider could not complete this response.",
+  });
   assert.equal(app.service.status("device-1", "stream-1").state, "error");
 
   const output: string[] = [];
   let ended = false;
   const response = Object.assign(new EventEmitter(), {
-    writeHead() { return this; },
-    write(value: string) { output.push(value); return true; },
-    end() { ended = true; (this as unknown as EventEmitter).emit("finish"); return this; },
+    writeHead() {
+      return this;
+    },
+    write(value: string) {
+      output.push(value);
+      return true;
+    },
+    end() {
+      ended = true;
+      (this as unknown as EventEmitter).emit("finish");
+      return this;
+    },
   }) as unknown as ServerResponse;
   app.service.openEvents("device-1", "stream-1", 0, response);
   assert.equal(ended, true);
@@ -192,9 +212,16 @@ test("subscriber disconnect does not cancel work and reconnect replays completio
   const owner = app.service.create("device-1", "stream-1", "chat-1", "turn-1");
   const firstOutput: string[] = [];
   const first = Object.assign(new EventEmitter(), {
-    writeHead() { return this; },
-    write(value: string) { firstOutput.push(value); return true; },
-    end() { return this; },
+    writeHead() {
+      return this;
+    },
+    write(value: string) {
+      firstOutput.push(value);
+      return true;
+    },
+    end() {
+      return this;
+    },
   }) as unknown as ServerResponse;
   app.service.openEvents("device-1", "stream-1", 0, first);
   first.emit("close");
@@ -205,9 +232,18 @@ test("subscriber disconnect does not cancel work and reconnect replays completio
   const replayOutput: string[] = [];
   let replayEnded = false;
   const replay = Object.assign(new EventEmitter(), {
-    writeHead() { return this; },
-    write(value: string) { replayOutput.push(value); return true; },
-    end() { replayEnded = true; (this as unknown as EventEmitter).emit("finish"); return this; },
+    writeHead() {
+      return this;
+    },
+    write(value: string) {
+      replayOutput.push(value);
+      return true;
+    },
+    end() {
+      replayEnded = true;
+      (this as unknown as EventEmitter).emit("finish");
+      return this;
+    },
   }) as unknown as ServerResponse;
   app.service.openEvents("device-1", "stream-1", 1, replay);
   assert.equal(replayEnded, true);
@@ -224,9 +260,19 @@ test("SSE replay emits frozen envelopes and closes after a terminal event", () =
   let status = 0;
   let ended = false;
   const response = Object.assign(new EventEmitter(), {
-    writeHead(value: number) { status = value; return this; },
-    write(value: string) { output.push(value); return true; },
-    end() { ended = true; (this as unknown as EventEmitter).emit("finish"); return this; },
+    writeHead(value: number) {
+      status = value;
+      return this;
+    },
+    write(value: string) {
+      output.push(value);
+      return true;
+    },
+    end() {
+      ended = true;
+      (this as unknown as EventEmitter).emit("finish");
+      return this;
+    },
   }) as unknown as ServerResponse;
   app.service.openEvents("device-1", "stream-1", 0, response);
   assert.equal(status, 200);
@@ -257,7 +303,11 @@ test("approval scopes reach the host only when offered, allowed and chosen", asy
 
   // Unknown names are dropped and the offer is canonicalized.
   ask("scoped", { scopes: ["always", "bogus", "chat"] });
-  assert.deepEqual(service.pendingApproval("device-1", "stream-1")?.scopes, ["once", "chat", "always"]);
+  assert.deepEqual(service.pendingApproval("device-1", "stream-1")?.scopes, [
+    "once",
+    "chat",
+    "always",
+  ]);
   const resolved = await service.respondApproval(
     "device-1",
     "scoped",
@@ -269,7 +319,14 @@ test("approval scopes reach the host only when offered, allowed and chosen", asy
   assert.equal(resolved.scope, "always");
   // A retry with a different scope is a different request.
   await assert.rejects(
-    service.respondApproval("device-1", "scoped", "allow", "scope-allow-key-00001", inputPassthrough, "chat"),
+    service.respondApproval(
+      "device-1",
+      "scoped",
+      "allow",
+      "scope-allow-key-00001",
+      inputPassthrough,
+      "chat",
+    ),
     (error: unknown) => (error as { code?: string }).code === "idempotency_conflict",
   );
 
@@ -277,10 +334,23 @@ test("approval scopes reach the host only when offered, allowed and chosen", asy
   ask("once-only", { scopes: ["once"] });
   assert.equal(service.pendingApproval("device-1", "stream-1")?.scopes, undefined);
   await assert.rejects(
-    service.respondApproval("device-1", "once-only", "allow", "scope-refused-key-001", inputPassthrough, "always"),
+    service.respondApproval(
+      "device-1",
+      "once-only",
+      "allow",
+      "scope-refused-key-001",
+      inputPassthrough,
+      "always",
+    ),
     (error: unknown) => (error as { code?: string }).code === "invalid_request",
   );
-  const once = await service.respondApproval("device-1", "once-only", "allow", "scope-once-key-000001", inputPassthrough);
+  const once = await service.respondApproval(
+    "device-1",
+    "once-only",
+    "allow",
+    "scope-once-key-000001",
+    inputPassthrough,
+  );
   assert.equal(once.scope, undefined);
 
   // Host-only structured approvals are never allowable, so never scoped.
@@ -327,13 +397,24 @@ test("the desktop card's change preview never reaches a paired phone", () => {
   assert.equal(pending?.canAllow, true);
   const output: string[] = [];
   const response = Object.assign(new EventEmitter(), {
-    writeHead() { return this; },
-    write(value: string) { output.push(value); return true; },
-    end() { (this as unknown as EventEmitter).emit("finish"); return this; },
+    writeHead() {
+      return this;
+    },
+    write(value: string) {
+      output.push(value);
+      return true;
+    },
+    end() {
+      (this as unknown as EventEmitter).emit("finish");
+      return this;
+    },
   }) as unknown as ServerResponse;
   app.service.openEvents("device-1", "stream-1", 0, response);
   assert.match(output.join(""), /event: approval_required/u);
-  assert.doesNotMatch(JSON.stringify(pending) + output.join(""), /preview-only-contents|"preview"/u);
+  assert.doesNotMatch(
+    JSON.stringify(pending) + output.join(""),
+    /preview-only-contents|"preview"/u,
+  );
 });
 
 test("cancel and approval decisions are bound to the owning device and owner identity", async () => {
@@ -344,16 +425,40 @@ test("cancel and approval decisions are bound to the owning device and owner ide
     summary: "Write a file",
   });
   await assert.rejects(
-    app.service.respondApproval("device-2", "approval-1", "allow", "wrong-device-key-0001", inputPassthrough),
+    app.service.respondApproval(
+      "device-2",
+      "approval-1",
+      "allow",
+      "wrong-device-key-0001",
+      inputPassthrough,
+    ),
     (error: unknown) => (error as { code?: string }).code === "approval_expired",
   );
-  const resolved = await app.service.respondApproval("device-1", "approval-1", "deny", "approval-deny-key-001", inputPassthrough);
+  const resolved = await app.service.respondApproval(
+    "device-1",
+    "approval-1",
+    "deny",
+    "approval-deny-key-001",
+    inputPassthrough,
+  );
   assert.deepEqual(
-    await app.service.respondApproval("device-1", "approval-1", "deny", "approval-deny-key-001", inputPassthrough),
+    await app.service.respondApproval(
+      "device-1",
+      "approval-1",
+      "deny",
+      "approval-deny-key-001",
+      inputPassthrough,
+    ),
     resolved,
   );
   await assert.rejects(
-    app.service.respondApproval("device-1", "approval-1", "allow", "approval-deny-key-001", inputPassthrough),
+    app.service.respondApproval(
+      "device-1",
+      "approval-1",
+      "allow",
+      "approval-deny-key-001",
+      inputPassthrough,
+    ),
     (error: unknown) => (error as { code?: string }).code === "idempotency_conflict",
   );
   assert.equal(resolved.decision, "deny");
@@ -389,29 +494,22 @@ test("a stop sent before the turn is admitted reaches the generation once it sta
   service.markRunning("device-1", "stream-1");
   assert.deepEqual(cancelled, [`stream-1:${owner.owner.documentId}`]);
   assert.equal(service.status("device-1", "stream-1").state, "reconciling");
-  const states = service.snapshot().streams[0]!.events
-    .filter(({ type }) => type === "status")
+  const states = service
+    .snapshot()
+    .streams[0]!.events.filter(({ type }) => type === "status")
     .map(({ payload }) => payload.state);
   assert.equal(states.includes("running"), false);
 });
 
 test("schedule-tool approvals declare the schedule-write capability boundary", () => {
   const app = fixture();
-  const owner = app.service.create(
-    "device-1",
-    "stream-1",
-    "chat-1",
-    "turn-1",
-  );
+  const owner = app.service.create("device-1", "stream-1", "chat-1", "turn-1");
   owner.owner.send("chat:approval", {
     approvalId: "approval-1",
     summary: "Create a daily brief",
     toolName: "schedule_task",
   });
-  assert.equal(
-    app.service.approvalRequiredCapability("device-1", "approval-1"),
-    "schedule:write",
-  );
+  assert.equal(app.service.approvalRequiredCapability("device-1", "approval-1"), "schedule:write");
 
   owner.owner.send("chat:approval", {
     approvalId: "approval-edit",
@@ -423,8 +521,7 @@ test("schedule-tool approvals declare the schedule-write capability boundary", (
     "schedule:write",
   );
   assert.throws(
-    () =>
-      app.service.approvalRequiredCapability("device-2", "approval-1"),
+    () => app.service.approvalRequiredCapability("device-2", "approval-1"),
     (error: unknown) => (error as { code?: string }).code === "approval_expired",
   );
 
@@ -433,10 +530,7 @@ test("schedule-tool approvals declare the schedule-write capability boundary", (
     summary: "Read a file",
     toolName: "read_file",
   });
-  assert.equal(
-    app.service.approvalRequiredCapability("device-1", "approval-2"),
-    undefined,
-  );
+  assert.equal(app.service.approvalRequiredCapability("device-1", "approval-2"), undefined);
 });
 
 test("approval status is authoritative across reconnect and can be resolved from the host", () => {
@@ -564,8 +658,15 @@ test("implementer run grants remain Mac-only approvals", async () => {
   assert.deepEqual(app.service.pendingApprovalForChat("chat-1")?.details, details);
   assert.equal(app.service.pendingApproval("device-1", "stream-1")?.canAllow, false);
   await assert.rejects(
-    app.service.respondApproval("device-1", "approval-run", "allow", "approval-run-grant-allow-key", inputPassthrough),
-    (error: unknown) => error instanceof AidenRemoteServiceError && error.code === "capability_denied",
+    app.service.respondApproval(
+      "device-1",
+      "approval-run",
+      "allow",
+      "approval-run-grant-allow-key",
+      inputPassthrough,
+    ),
+    (error: unknown) =>
+      error instanceof AidenRemoteServiceError && error.code === "capability_denied",
   );
   assert.deepEqual(app.approvals, []);
 });
@@ -598,11 +699,24 @@ test("agent hook proposals remain Mac-only approvals", async () => {
   assert.equal(pending?.canAllow, false);
   assert.match(pending?.summary ?? "", /on the computer running this chat/u);
   await assert.rejects(
-    app.service.respondApproval("device-1", "approval-hook", "allow", "approval-hook-allow-key", inputPassthrough),
-    (error: unknown) => error instanceof AidenRemoteServiceError && error.code === "capability_denied",
+    app.service.respondApproval(
+      "device-1",
+      "approval-hook",
+      "allow",
+      "approval-hook-allow-key",
+      inputPassthrough,
+    ),
+    (error: unknown) =>
+      error instanceof AidenRemoteServiceError && error.code === "capability_denied",
   );
   assert.deepEqual(app.approvals, []);
-  const denied = await app.service.respondApproval("device-1", "approval-hook", "deny", "approval-hook-deny-key", inputPassthrough);
+  const denied = await app.service.respondApproval(
+    "device-1",
+    "approval-hook",
+    "deny",
+    "approval-hook-deny-key",
+    inputPassthrough,
+  );
   assert.equal(denied.decision, "deny");
 });
 
@@ -661,7 +775,8 @@ test("a schedule card reaches only a device that asks for one and never changes 
   const owner = app.service.create("device-1", "stream-1", "chat-1", "turn-1");
   owner.owner.send("chat:approval", {
     approvalId: "approval-schedule",
-    summary: 'Create scheduled task "Inbox monitor" · Every day at 9:00 AM · Full access · MCP Gmail (gmail)',
+    summary:
+      'Create scheduled task "Inbox monitor" · Every day at 9:00 AM · Full access · MCP Gmail (gmail)',
     scopes: ["once", "chat"],
     details: {
       kind: "scheduled-task",
@@ -799,9 +914,18 @@ test("multiple approvals remain queued and cancellation synchronously clears the
   assert.equal(cancelled.state, "reconciling");
   assert.equal(app.service.pendingApproval("device-1", "stream-1"), null);
   assert.equal(app.service.pendingApprovalForChat("chat-1"), null);
-  assert.equal(app.approvals.some((entry) => entry.includes("approval-2:deny")), true);
+  assert.equal(
+    app.approvals.some((entry) => entry.includes("approval-2:deny")),
+    true,
+  );
   await assert.rejects(
-    app.service.respondApproval("device-1", "approval-2", "allow", "approval-after-cancel-1", inputPassthrough),
+    app.service.respondApproval(
+      "device-1",
+      "approval-2",
+      "allow",
+      "approval-after-cancel-1",
+      inputPassthrough,
+    ),
     (error: unknown) => (error as { code?: string }).code === "approval_expired",
   );
 });
@@ -837,8 +961,7 @@ test("Bot inbox activity is batched and approval response authority stays device
     ],
   );
   assert.equal(
-    app.service.projectChatActivities("device-2", ["chat-1"])[0]
-      ?.canRespondToApproval,
+    app.service.projectChatActivities("device-2", ["chat-1"])[0]?.canRespondToApproval,
     false,
   );
   assert.throws(
@@ -888,13 +1011,17 @@ test("unpaired UTF-16 from provider notifications is sanitized before persistenc
     now: () => 1_000,
     cancel: () => true,
     approve: () => true,
-    persist: async (write) => { mergeAidenRemoteStreamJournal(write.archive ?? { version: 1, streams: [] }, write.live); },
+    persist: async (write) => {
+      mergeAidenRemoteStreamJournal(write.archive ?? { version: 1, streams: [] }, write.live);
+    },
   });
   const owner = service.create("device-1", "stream-1", "chat-1", "turn-1");
   owner.owner.send("chat:delta", { delta: "bad\ud800delta" });
   owner.owner.send("chat:reasoning-delta", { delta: "bad\udc00reasoning" });
   owner.owner.send("chat:tool", { phase: "call", toolName: "bad\ud800tool" });
-  owner.owner.send("chat:timeline", { timeline: { steps: [{ kind: "tool", label: "bad\udc00label" }] } });
+  owner.owner.send("chat:timeline", {
+    timeline: { steps: [{ kind: "tool", label: "bad\udc00label" }] },
+  });
   owner.owner.send("chat:approval", { approvalId: "approval-1", summary: "bad\ud800summary" });
   service.respondApprovalFromHost("chat-1", "approval-1", "deny");
   owner.owner.send("chat:done", { chat: { messages: [{ id: "bad\udc00id", role: "assistant" }] } });
@@ -919,7 +1046,10 @@ test("legacy label-only timeline journals load into the current safe timeline sh
   legacy.streams[0]!.events[1]!.payload = { label: "Run command" };
 
   const restored = new AidenRemoteStreamService({
-    now: () => 2_000, cancel: () => true, approve: () => true, snapshot: legacy,
+    now: () => 2_000,
+    cancel: () => true,
+    approve: () => true,
+    snapshot: legacy,
   });
   assertExactSnapshotBytes(restored);
   const normalized = normalizeAidenRemoteStreamSnapshot(legacy);
@@ -931,17 +1061,19 @@ test("legacy label-only timeline journals load into the current safe timeline sh
       generationId: "stream-1",
       status: "running",
       startedAt: 1_000,
-      steps: [{
-        id: "tool-2",
-        order: 0,
-        kind: "tool",
-        toolCallId: "call-2",
-        toolName: "legacy_activity",
-        label: "Run command",
-        status: "running",
-        startedAt: 1_000,
-        updatedAt: 1_000,
-      }],
+      steps: [
+        {
+          id: "tool-2",
+          order: 0,
+          kind: "tool",
+          toolCallId: "call-2",
+          toolName: "legacy_activity",
+          label: "Run command",
+          status: "running",
+          startedAt: 1_000,
+          updatedAt: 1_000,
+        },
+      ],
     },
   });
 });
@@ -959,27 +1091,21 @@ test("legacy timeline migration strips only label and still rejects unknown payl
     },
   });
   const snapshot = app.service.snapshot();
-  const currentTimeline = structuredClone(
-    snapshot.streams[0]!.events[1]!.payload.timeline,
-  );
+  const currentTimeline = structuredClone(snapshot.streams[0]!.events[1]!.payload.timeline);
   snapshot.streams[0]!.events[1]!.payload = {
     label: "Thinking",
     timeline: currentTimeline,
   };
-  assert.deepEqual(
-    normalizeAidenRemoteStreamSnapshot(snapshot).streams[0]!.events[1]!.payload,
-    { timeline: currentTimeline },
-  );
+  assert.deepEqual(normalizeAidenRemoteStreamSnapshot(snapshot).streams[0]!.events[1]!.payload, {
+    timeline: currentTimeline,
+  });
 
   snapshot.streams[0]!.events[1]!.payload = {
     label: "Thinking",
     timeline: currentTimeline,
     hiddenPrompt: "must remain rejected",
   };
-  assert.throws(
-    () => normalizeAidenRemoteStreamSnapshot(snapshot),
-    /unsupported field/u,
-  );
+  assert.throws(() => normalizeAidenRemoteStreamSnapshot(snapshot), /unsupported field/u);
 });
 
 test("aggregate stream journals stay within the durable snapshot budget", async () => {
@@ -987,12 +1113,19 @@ test("aggregate stream journals stay within the durable snapshot budget", async 
     now: () => 1_000,
     cancel: () => true,
     approve: () => true,
-    persist: async (write) => { mergeAidenRemoteStreamJournal(write.archive ?? { version: 1, streams: [] }, write.live); },
+    persist: async (write) => {
+      mergeAidenRemoteStreamJournal(write.archive ?? { version: 1, streams: [] }, write.live);
+    },
   });
   const old = service.create("device-1", "old", "old-chat", "old-turn");
   old.owner.send("chat:done", { chat: { messages: [{ id: "assistant", role: "assistant" }] } });
   for (let streamIndex = 0; streamIndex < 3; streamIndex += 1) {
-    const owner = service.create("device-1", `stream-${streamIndex}`, `chat-${streamIndex}`, `turn-${streamIndex}`);
+    const owner = service.create(
+      "device-1",
+      `stream-${streamIndex}`,
+      `chat-${streamIndex}`,
+      `turn-${streamIndex}`,
+    );
     for (let index = 0; index < 35; index += 1) {
       owner.owner.send("chat:delta", { delta: `${streamIndex}:${index}:` + "x".repeat(199_990) });
       assertExactSnapshotBytes(service);
@@ -1002,7 +1135,10 @@ test("aggregate stream journals stay within the durable snapshot budget", async 
   const snapshot = service.snapshot();
   assert.doesNotThrow(() => normalizeAidenRemoteStreamSnapshot(snapshot));
   assert.equal(Buffer.byteLength(JSON.stringify(snapshot), "utf8") <= 16 * 1_024 * 1_024, true);
-  assert.equal(snapshot.streams.some((stream) => stream.streamId === "old"), false);
+  assert.equal(
+    snapshot.streams.some((stream) => stream.streamId === "old"),
+    false,
+  );
   assert.equal(service.turnIdFor("old-chat", "old"), "old-turn");
 });
 
@@ -1030,23 +1166,27 @@ test("a journal this build cannot read is kept aside so persistence and revocati
     // Well-formed JSON from a build whose event vocabulary this one rejects.
     const unreadable = JSON.stringify({
       version: 1,
-      streams: [{
-        streamId: "old",
-        chatId: "chat-old",
-        turnId: "turn-old",
-        deviceId: "device-1",
-        state: "done",
-        updatedAt: 1,
-        events: [{
-          protocolVersion: 1,
+      streams: [
+        {
           streamId: "old",
-          sequence: 1,
-          timestamp: "2026-01-01T00:00:00.000Z",
-          type: "finished_v2",
-          terminal: true,
-          payload: {},
-        }],
-      }],
+          chatId: "chat-old",
+          turnId: "turn-old",
+          deviceId: "device-1",
+          state: "done",
+          updatedAt: 1,
+          events: [
+            {
+              protocolVersion: 1,
+              streamId: "old",
+              sequence: 1,
+              timestamp: "2026-01-01T00:00:00.000Z",
+              type: "finished_v2",
+              terminal: true,
+              payload: {},
+            },
+          ],
+        },
+      ],
     });
     await fs.writeFile(path.join(directory, "streams.json"), unreadable);
     const journal = openJournal();
@@ -1071,7 +1211,10 @@ test("a journal this build cannot read is kept aside so persistence and revocati
     assert.equal(await fs.readFile(path.join(directory, rescues[0]!), "utf8"), unreadable);
 
     const restarted = await openJournal().load();
-    assert.deepEqual(restarted.streams.map(({ streamId }) => streamId), ["stream-2"]);
+    assert.deepEqual(
+      restarted.streams.map(({ streamId }) => streamId),
+      ["stream-2"],
+    );
     const restored = new AidenRemoteStreamService({
       now: () => 2_000,
       cancel: () => true,
@@ -1087,9 +1230,15 @@ test("a journal this build cannot read is kept aside so persistence and revocati
 test("a single-file journal from an earlier build restores and is split on the next write", async () => {
   const directory = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-remote-streams-"));
   try {
-    const earlier = new AidenRemoteStreamService({ now: () => 1_000, cancel: () => true, approve: () => true });
+    const earlier = new AidenRemoteStreamService({
+      now: () => 1_000,
+      cancel: () => true,
+      approve: () => true,
+    });
     const finished = earlier.create("device-1", "finished", "chat-1", "turn-1");
-    finished.owner.send("chat:done", { chat: { messages: [{ id: "assistant-1", role: "assistant" }] } });
+    finished.owner.send("chat:done", {
+      chat: { messages: [{ id: "assistant-1", role: "assistant" }] },
+    });
     const running = earlier.create("device-1", "running", "chat-2", "turn-2");
     running.owner.send("chat:delta", { delta: "Partial" });
     await fs.writeFile(path.join(directory, "streams.json"), JSON.stringify(earlier.snapshot()));
@@ -1134,12 +1283,18 @@ test("revocation closes only the selected device streams and approval expiry den
   );
   assert.equal(app.service.status("device-2", "stream-2").state, "queued");
   assert.equal(app.cancelled.length, 1);
-  assert.equal(app.approvals.some((entry) => entry.includes("approval-1:deny")), true);
+  assert.equal(
+    app.approvals.some((entry) => entry.includes("approval-1:deny")),
+    true,
+  );
 
   second.owner.send("chat:approval", { approvalId: "approval-2", summary: "Run a command" });
   app.setNow(1_000 + 5 * 60 * 1_000 + 1);
   const expiredStatus = app.service.status("device-2", "stream-2");
-  assert.equal(app.approvals.some((entry) => entry.includes("approval-2:deny")), true);
+  assert.equal(
+    app.approvals.some((entry) => entry.includes("approval-2:deny")),
+    true,
+  );
   assert.equal(expiredStatus.state, "running");
   assert.equal(app.service.pendingApproval("device-2", "stream-2"), null);
 });
@@ -1162,7 +1317,10 @@ test("revoking one device releases every retained journal without consuming anot
   const owner = app.service.create("device-b", "stream-b", "chat-b", "turn-b");
   assert.equal(owner.owner.documentId.length > 0, true);
   assert.equal(app.service.status("device-b", "stream-b").state, "queued");
-  assert.equal(app.service.snapshot().streams.some(({ deviceId }) => deviceId === "device-a"), false);
+  assert.equal(
+    app.service.snapshot().streams.some(({ deviceId }) => deviceId === "device-a"),
+    false,
+  );
 });
 
 test("restart filtering durably excludes journals owned by authoritative revoked devices", () => {
@@ -1170,7 +1328,10 @@ test("restart filtering durably excludes journals owned by authoritative revoked
   app.service.create("device-a", "stream-a", "chat-a", "turn-a");
   app.service.create("device-b", "stream-b", "chat-b", "turn-b");
   const filtered = removeRevokedDeviceStreams(app.service.snapshot(), new Set(["device-a"]));
-  assert.deepEqual(filtered.streams.map(({ deviceId }) => deviceId), ["device-b"]);
+  assert.deepEqual(
+    filtered.streams.map(({ deviceId }) => deviceId),
+    ["device-b"],
+  );
 });
 
 test("turnIdFor resolves issued turn identities and survives pruning and restart", () => {
@@ -1215,10 +1376,23 @@ function blockedResponse() {
     ended: false,
     autoFinish: true,
     blocked: true,
-    writeHead() { return this; },
-    write(value: string) { output.push(value); return !this.blocked; },
-    end() { this.ended = true; if (this.autoFinish) emitter.emit("finish"); return this; },
-    destroy() { this.destroyed = true; emitter.emit("close"); return this; },
+    writeHead() {
+      return this;
+    },
+    write(value: string) {
+      output.push(value);
+      return !this.blocked;
+    },
+    end() {
+      this.ended = true;
+      if (this.autoFinish) emitter.emit("finish");
+      return this;
+    },
+    destroy() {
+      this.destroyed = true;
+      emitter.emit("close");
+      return this;
+    },
   });
   return { response, output, http: response as unknown as ServerResponse };
 }
@@ -1234,7 +1408,10 @@ test("SSE replay waits for drain and delivers terminal completion in order", () 
   assert.equal(client.response.ended, false);
   client.response.blocked = false;
   client.response.emit("drain");
-  assert.deepEqual(client.output.map((frame) => Number(/^id: (\d+)/u.exec(frame)?.[1])), [1, 2, 3]);
+  assert.deepEqual(
+    client.output.map((frame) => Number(/^id: (\d+)/u.exec(frame)?.[1])),
+    [1, 2, 3],
+  );
   assert.equal(client.response.ended, true);
   assert.equal(client.response.listenerCount("drain"), 0);
 });
@@ -1277,16 +1454,25 @@ test("a reconnecting client replays folded deltas in order with contiguous ids",
   owner.owner.send("chat:done", { chat: { messages: [{ id: "assistant-1", role: "assistant" }] } });
 
   const frames = (output: string[]) =>
-    output.filter((frame) => frame.startsWith("id: ")).map((frame) => {
-      const event = JSON.parse(/^data: (.*)$/mu.exec(frame)![1]!);
-      return { id: event.sequence as number, type: event.type as string, text: event.payload.text as string | undefined };
-    });
+    output
+      .filter((frame) => frame.startsWith("id: "))
+      .map((frame) => {
+        const event = JSON.parse(/^data: (.*)$/mu.exec(frame)![1]!);
+        return {
+          id: event.sequence as number,
+          type: event.type as string,
+          text: event.payload.text as string | undefined,
+        };
+      });
   // A live client was sent each delta as it arrived.
-  assert.deepEqual(frames(live.output).map(({ type, text }) => [type, text]), [
-    ["status", undefined],
-    ["text_delta", "Hel"],
-    ["text_delta", "lo"],
-  ]);
+  assert.deepEqual(
+    frames(live.output).map(({ type, text }) => [type, text]),
+    [
+      ["status", undefined],
+      ["text_delta", "Hel"],
+      ["text_delta", "lo"],
+    ],
+  );
 
   const replay = blockedResponse();
   replay.response.blocked = false;
@@ -1294,13 +1480,16 @@ test("a reconnecting client replays folded deltas in order with contiguous ids",
   const resumeAfter = liveFrames[liveFrames.length - 1]!.id;
   app.service.openEvents("device-1", "stream-1", resumeAfter, replay.http);
   const replayed = frames(replay.output);
-  assert.deepEqual(replayed.map(({ type, text }) => [type, text]), [
-    ["text_delta", " world"],
-    ["tool_started", undefined],
-    ["tool_finished", undefined],
-    ["text_delta", "!!"],
-    ["done", undefined],
-  ]);
+  assert.deepEqual(
+    replayed.map(({ type, text }) => [type, text]),
+    [
+      ["text_delta", " world"],
+      ["tool_started", undefined],
+      ["tool_finished", undefined],
+      ["text_delta", "!!"],
+      ["done", undefined],
+    ],
+  );
   replayed.forEach(({ id }, index) => assert.equal(id, resumeAfter + 1 + index));
   assert.equal(replay.response.ended, true);
 });
@@ -1414,14 +1603,23 @@ test("a synchronous socket write failure cannot interrupt generation publication
   const client = blockedResponse();
   client.response.blocked = false;
   app.service.openEvents("device-1", "stream-1", 0, client.http);
-  client.response.write = () => { throw new Error("socket closed"); };
+  client.response.write = () => {
+    throw new Error("socket closed");
+  };
   assert.doesNotThrow(() => owner.owner.send("chat:delta", { delta: "Saved" }));
   assert.equal(client.response.destroyed, true);
   const events = app.service.snapshot().streams[0]!.events;
   assert.equal(events[events.length - 1]?.payload.text, "Saved");
 });
 
-for (const settlement of ["drain", "timeout", "abort", "finish-abort", "finish-timeout", "retention"] as const) {
+for (const settlement of [
+  "drain",
+  "timeout",
+  "abort",
+  "finish-abort",
+  "finish-timeout",
+  "retention",
+] as const) {
   test(`aggregate pressure preserves blocked terminal delivery until ${settlement}`, (t) => {
     t.mock.timers.enable({ apis: ["setTimeout", "setInterval"] });
     const app = fixture();
@@ -1430,23 +1628,34 @@ for (const settlement of ["drain", "timeout", "abort", "finish-abort", "finish-t
     client.response.blocked = false;
     app.service.openEvents("device-1", "terminal", 0, client.http);
     client.response.blocked = true;
-    owner.owner.send("chat:done", { chat: { messages: [{ id: "assistant-1", role: "assistant" }] } });
+    owner.owner.send("chat:done", {
+      chat: { messages: [{ id: "assistant-1", role: "assistant" }] },
+    });
     assert.match(client.output[1]!, /event: done/u);
     assert.equal(client.response.ended, false);
 
     // Three active journals exceed the shared 16 MiB limit even though each
     // remains below its individual limit. The terminal journal is oldest.
     const producers = Array.from({ length: 3 }, (_, index) =>
-      app.service.create("device-1", `load-${index}`, `chat-${index + 2}`, `turn-${index + 2}`));
+      app.service.create("device-1", `load-${index}`, `chat-${index + 2}`, `turn-${index + 2}`),
+    );
     for (let index = 0; index < 252; index++) {
       app.service.create("device-1", `idle-${index}`, `idle-chat-${index}`, `idle-turn-${index}`);
     }
     for (const producer of producers) {
-      for (let index = 0; index < 30; index++) producer.owner.send("chat:delta", { delta: "x".repeat(200_000) });
+      for (let index = 0; index < 30; index++)
+        producer.owner.send("chat:delta", { delta: "x".repeat(200_000) });
     }
-    assert.equal(client.response.destroyed, false, "pressure must not discard accepted terminal bytes");
+    assert.equal(
+      client.response.destroyed,
+      false,
+      "pressure must not discard accepted terminal bytes",
+    );
     assert.equal(app.service.status("device-1", "terminal").state, "done");
-    assert.equal(Buffer.byteLength(JSON.stringify(app.service.snapshot()), "utf8") <= 16 * 1_024 * 1_024, true);
+    assert.equal(
+      Buffer.byteLength(JSON.stringify(app.service.snapshot()), "utf8") <= 16 * 1_024 * 1_024,
+      true,
+    );
     assert.throws(
       () => app.service.create("device-1", "new-stream", "new-chat", "new-turn"),
       (error: unknown) => error instanceof AidenRemoteServiceError && error.code === "rate_limited",
@@ -1473,11 +1682,15 @@ for (const settlement of ["drain", "timeout", "abort", "finish-abort", "finish-t
       assert.equal(app.service.status("device-1", "terminal").state, "done");
       assert.throws(
         () => app.service.create("device-1", "new-stream", "new-chat", "new-turn"),
-        (error: unknown) => error instanceof AidenRemoteServiceError && error.code === "rate_limited",
+        (error: unknown) =>
+          error instanceof AidenRemoteServiceError && error.code === "rate_limited",
       );
       // New pressure must not evict the disconnected client's replay record.
       producers[0]!.owner.send("chat:delta", { delta: "y".repeat(200_000) });
-      assert.equal(Buffer.byteLength(JSON.stringify(app.service.snapshot()), "utf8") <= 16 * 1_024 * 1_024, true);
+      assert.equal(
+        Buffer.byteLength(JSON.stringify(app.service.snapshot()), "utf8") <= 16 * 1_024 * 1_024,
+        true,
+      );
       if (settlement === "retention") {
         app.setNow(1_000 + 24 * 60 * 60 * 1_000);
       } else {
@@ -1500,7 +1713,6 @@ for (const settlement of ["drain", "timeout", "abort", "finish-abort", "finish-t
   });
 }
 
-
 test("stream capacity does not reclaim genuinely active generations", () => {
   const app = fixture();
   for (let index = 0; index < 256; index++) {
@@ -1518,19 +1730,21 @@ function inputPassthrough<T>(_chatId: string, action: () => Promise<T>): Promise
   return action();
 }
 
-function inputFixture(submitInput?: (input: {
-  streamId: string;
-  chatId: string;
-  mode: "steer" | "queue";
-  text: string;
-  ownerDocumentId?: string;
-}) => Promise<{
-  admitted: boolean;
-  queue?: "steer" | "follow-up";
-  reason?: "run_not_active" | "cancelled" | "capacity" | "invalid";
-  committed: boolean;
-  messageId?: string;
-}>) {
+function inputFixture(
+  submitInput?: (input: {
+    streamId: string;
+    chatId: string;
+    mode: "steer" | "queue";
+    text: string;
+    ownerDocumentId?: string;
+  }) => Promise<{
+    admitted: boolean;
+    queue?: "steer" | "follow-up";
+    reason?: "run_not_active" | "cancelled" | "capacity" | "invalid";
+    committed: boolean;
+    messageId?: string;
+  }>,
+) {
   let now = 1_000;
   const calls: Array<Record<string, unknown>> = [];
   const service = new AidenRemoteStreamService({
@@ -1563,7 +1777,8 @@ test("run input admission binds to the stream owner and returns an accepted rece
     "stream-1",
     { mode: "queue", text: "Follow up after this." },
     "input-key-0000000001",
-    inputPassthrough);
+    inputPassthrough,
+  );
   assert.equal(result.status, "admitted");
   assert.equal(result.queue, "follow-up");
   assert.equal(result.committed, true);
@@ -1581,11 +1796,28 @@ test("run input admission binds to the stream owner and returns an accepted rece
 });
 
 test("input a lead chat sends to a chat it started reaches the host as the lead's, and a phone's as the person's", async () => {
-  const app = inputFixture(async () => ({ admitted: true, queue: "steer", committed: true, messageId: "m" }));
+  const app = inputFixture(async () => ({
+    admitted: true,
+    queue: "steer",
+    committed: true,
+    messageId: "m",
+  }));
   app.service.create("chat:lead-1", "stream-lead", "chat-2", "turn-2");
   app.service.create("device-1", "stream-phone", "chat-3", "turn-3");
-  await app.service.submitInput("chat:lead-1", "stream-lead", { mode: "steer", text: "From the lead" }, "input-key-lead-00001", inputPassthrough);
-  await app.service.submitInput("device-1", "stream-phone", { mode: "steer", text: "From the phone" }, "input-key-phone-0001", inputPassthrough);
+  await app.service.submitInput(
+    "chat:lead-1",
+    "stream-lead",
+    { mode: "steer", text: "From the lead" },
+    "input-key-lead-00001",
+    inputPassthrough,
+  );
+  await app.service.submitInput(
+    "device-1",
+    "stream-phone",
+    { mode: "steer", text: "From the phone" },
+    "input-key-phone-0001",
+    inputPassthrough,
+  );
   assert.equal(app.calls[0]!.fromLeadChat, true);
   assert.equal("fromLeadChat" in app.calls[1]!, false);
 });
@@ -1607,7 +1839,8 @@ test("run input admission rejects terminal and cancelled streams without calling
     "stream-1",
     { mode: "steer", text: "too late" },
     "input-key-0000000002",
-    inputPassthrough);
+    inputPassthrough,
+  );
   assert.deepEqual(terminal, {
     streamId: "stream-1",
     chatId: "chat-1",
@@ -1635,7 +1868,8 @@ test("run input admission rejects terminal and cancelled streams without calling
     "stream-2",
     { mode: "steer", text: "stop racing" },
     "input-key-0000000003",
-    inputPassthrough);
+    inputPassthrough,
+  );
   assert.equal(cancelled.status, "rejected");
   assert.equal(cancelled.reason, "cancelled");
   assert.equal(cancelled.committed, false);
@@ -1652,8 +1886,20 @@ test("run input admission replays the original outcome and rejects conflicting r
   const app = inputFixture(async () => outcome);
   app.service.create("device-1", "stream-1", "chat-1", "turn-1");
   const input = { mode: "queue" as const, text: "Queue this." };
-  const first = await app.service.submitInput("device-1", "stream-1", input, "input-key-0000000004", inputPassthrough);
-  const replay = await app.service.submitInput("device-1", "stream-1", input, "input-key-0000000004", inputPassthrough);
+  const first = await app.service.submitInput(
+    "device-1",
+    "stream-1",
+    input,
+    "input-key-0000000004",
+    inputPassthrough,
+  );
+  const replay = await app.service.submitInput(
+    "device-1",
+    "stream-1",
+    input,
+    "input-key-0000000004",
+    inputPassthrough,
+  );
   assert.deepEqual(replay, first);
   assert.equal(app.calls.length, 1);
   await assert.rejects(
@@ -1662,7 +1908,8 @@ test("run input admission replays the original outcome and rejects conflicting r
       "stream-1",
       { mode: "queue", text: "Different text." },
       "input-key-0000000004",
-      inputPassthrough),
+      inputPassthrough,
+    ),
     (error: unknown) => (error as { code?: string }).code === "idempotency_conflict",
   );
 
@@ -1673,7 +1920,8 @@ test("run input admission replays the original outcome and rejects conflicting r
     "stream-1",
     { mode: "steer", text: "Full queue." },
     "input-key-0000000005",
-    inputPassthrough);
+    inputPassthrough,
+  );
   assert.equal(rejected.status, "rejected");
   assert.equal(rejected.reason, "capacity");
   const rejectedReplay = await app.service.submitInput(
@@ -1681,7 +1929,8 @@ test("run input admission replays the original outcome and rejects conflicting r
     "stream-1",
     { mode: "steer", text: "Full queue." },
     "input-key-0000000005",
-    inputPassthrough);
+    inputPassthrough,
+  );
   assert.deepEqual(rejectedReplay, rejected);
   assert.equal(app.calls.length, 2);
 });
@@ -1699,7 +1948,8 @@ test("run input admission reports committed rejections and stays hidden when unw
     "stream-1",
     { mode: "steer", text: "ended mid-flight" },
     "input-key-0000000006",
-    inputPassthrough);
+    inputPassthrough,
+  );
   assert.equal(result.status, "rejected");
   assert.equal(result.reason, "run_not_active");
   assert.equal(result.committed, true);
@@ -1713,7 +1963,13 @@ test("run input admission reports committed rejections and stays hidden when unw
   unwired.create("device-1", "stream-9", "chat-9", "turn-9");
   assert.equal(unwired.supportsRunInput(), false);
   await assert.rejects(
-    unwired.submitInput("device-1", "stream-9", { mode: "queue", text: "x" }, "input-key-0000000007", inputPassthrough),
+    unwired.submitInput(
+      "device-1",
+      "stream-9",
+      { mode: "queue", text: "x" },
+      "input-key-0000000007",
+      inputPassthrough,
+    ),
     (error: unknown) => (error as { code?: string }).code === "not_found",
   );
   assert.equal(app.service.supportsRunInput(), true);
@@ -1728,19 +1984,43 @@ test("run input admission validates the body and binds to the owning device", as
   }));
   app.service.create("device-1", "stream-1", "chat-1", "turn-1");
   await assert.rejects(
-    app.service.submitInput("device-1", "stream-1", { mode: "read", text: "x" }, "input-key-0000000008", inputPassthrough),
+    app.service.submitInput(
+      "device-1",
+      "stream-1",
+      { mode: "read", text: "x" },
+      "input-key-0000000008",
+      inputPassthrough,
+    ),
     (error: unknown) => (error as { code?: string }).code === "invalid_request",
   );
   await assert.rejects(
-    app.service.submitInput("device-1", "stream-1", { mode: "steer", text: "" }, "input-key-0000000008", inputPassthrough),
+    app.service.submitInput(
+      "device-1",
+      "stream-1",
+      { mode: "steer", text: "" },
+      "input-key-0000000008",
+      inputPassthrough,
+    ),
     (error: unknown) => (error as { code?: string }).code === "invalid_request",
   );
   await assert.rejects(
-    app.service.submitInput("device-2", "stream-1", { mode: "steer", text: "x" }, "input-key-0000000008", inputPassthrough),
+    app.service.submitInput(
+      "device-2",
+      "stream-1",
+      { mode: "steer", text: "x" },
+      "input-key-0000000008",
+      inputPassthrough,
+    ),
     (error: unknown) => (error as { code?: string }).code === "not_found",
   );
   await assert.rejects(
-    app.service.submitInput("device-1", "stream-1", { mode: "steer", text: "x" }, "short", inputPassthrough),
+    app.service.submitInput(
+      "device-1",
+      "stream-1",
+      { mode: "steer", text: "x" },
+      "short",
+      inputPassthrough,
+    ),
     (error: unknown) => (error as { code?: string }).code === "invalid_request",
   );
 });
@@ -1767,7 +2047,8 @@ test("run input admission replays settled outcomes across a durable ledger resto
     "stream-1",
     { mode: "queue", text: "Remember this." },
     "input-key-durable-00001",
-    inputPassthrough);
+    inputPassthrough,
+  );
   assert.equal(original.status, "rejected");
   assert.equal(original.reason, "capacity");
   assert.equal(calls.length, 1);
@@ -1792,7 +2073,8 @@ test("run input admission replays settled outcomes across a durable ledger resto
     "stream-1",
     { mode: "queue", text: "Remember this." },
     "input-key-durable-00001",
-    inputPassthrough);
+    inputPassthrough,
+  );
   assert.deepEqual(replayed, original);
   assert.equal(calls.length, 1);
 });
@@ -1821,9 +2103,9 @@ test("run input admission reports an unknown outcome when outcome persistence fa
       "stream-1",
       { mode: "steer", text: "x" },
       "input-key-durable-00002",
-      inputPassthrough),
-    (error: unknown) =>
-      (error as { code?: string }).code === "idempotency_in_flight",
+      inputPassthrough,
+    ),
+    (error: unknown) => (error as { code?: string }).code === "idempotency_in_flight",
   );
 });
 
@@ -1943,7 +2225,7 @@ test("remote question prompts bind to their stream and resolve once", async () =
         ],
       },
       "question-answer-key-01",
-    inputPassthrough,
+      inputPassthrough,
     ),
     resolved,
   );
@@ -1953,7 +2235,7 @@ test("remote question prompts bind to their stream and resolve once", async () =
       "q-prompt-1",
       { cancelled: true, answers: [] },
       "question-answer-key-01",
-    inputPassthrough,
+      inputPassthrough,
     ),
     (error: unknown) => (error as { code?: string }).code === "idempotency_conflict",
   );
@@ -1963,7 +2245,7 @@ test("remote question prompts bind to their stream and resolve once", async () =
       "q-prompt-1",
       { cancelled: false, answers: [{ questionIndex: 0, kind: "option", answer: "0.5 mm" }] },
       "question-answer-key-02",
-    inputPassthrough,
+      inputPassthrough,
     ),
     (error: unknown) => (error as { code?: string }).code === "question_expired",
   );
@@ -1973,16 +2255,35 @@ test("desktop can recover and answer a phone question without crossing chats or 
   let answers = 0;
   let now = 1_000;
   const service = new AidenRemoteStreamService({
-    now: () => now, cancel: () => true, approve: () => true,
-    respondQuestion: () => { answers += 1; return true; },
+    now: () => now,
+    cancel: () => true,
+    approve: () => true,
+    respondQuestion: () => {
+      answers += 1;
+      return true;
+    },
   });
   const owner = service.create("device-1", "stream-1", "chat-1", "turn-1");
   owner.owner.send("chat:questionnaire", QUESTION_PROMPT);
   assert.equal(service.pendingQuestionForChat("unrelated"), null);
-  assert.equal(service.pendingQuestionForChat("chat-1")?.questions[0]?.question, QUESTION_PROMPT.questions[0]?.question);
-  const answer = { version: 1, promptId: "q-prompt-1", cancelled: false, answers: [{ questionIndex: 0, kind: "custom", answer: "Use 1 mm" }] };
+  assert.equal(
+    service.pendingQuestionForChat("chat-1")?.questions[0]?.question,
+    QUESTION_PROMPT.questions[0]?.question,
+  );
+  const answer = {
+    version: 1,
+    promptId: "q-prompt-1",
+    cancelled: false,
+    answers: [{ questionIndex: 0, kind: "custom", answer: "Use 1 mm" }],
+  };
   assert.equal(service.respondQuestionFromHost("unrelated", "q-prompt-1", answer), false);
-  assert.equal(service.respondQuestionFromHost("chat-1", "q-prompt-1", { ...answer, answers: [{ questionIndex: 0, kind: "option", answer: "Invented option" }] }), false);
+  assert.equal(
+    service.respondQuestionFromHost("chat-1", "q-prompt-1", {
+      ...answer,
+      answers: [{ questionIndex: 0, kind: "option", answer: "Invented option" }],
+    }),
+    false,
+  );
   assert.equal(answers, 0);
   assert.ok(service.pendingQuestionForChat("chat-1"));
   assert.equal(service.respondQuestionFromHost("chat-1", "q-prompt-1", answer), true);
@@ -1995,7 +2296,10 @@ test("desktop can recover and answer a phone question without crossing chats or 
   owner.owner.send("chat:questionnaire", { ...QUESTION_PROMPT, promptId: "q-expired" });
   now += 300_001;
   assert.equal(service.pendingQuestionForChat("chat-1"), null);
-  assert.equal(service.respondQuestionFromHost("chat-1", "q-expired", { ...answer, promptId: "q-expired" }), false);
+  assert.equal(
+    service.respondQuestionFromHost("chat-1", "q-expired", { ...answer, promptId: "q-expired" }),
+    false,
+  );
 });
 
 test("remote question responses are semantically validated against the stored prompt", async () => {
@@ -2014,7 +2318,7 @@ test("remote question responses are semantically validated against the stored pr
       "q-prompt-1",
       { cancelled: false, answers: [{ questionIndex: 0, kind: "option", answer: "2.0 mm" }] },
       "question-answer-key-03",
-    inputPassthrough,
+      inputPassthrough,
     ),
     (error: unknown) => (error as { code?: string }).code === "invalid_request",
   );
@@ -2024,7 +2328,7 @@ test("remote question responses are semantically validated against the stored pr
       "q-prompt-1",
       { cancelled: false, answers: [{ questionIndex: 0, kind: "multi", selected: ["Front"] }] },
       "question-answer-key-04",
-    inputPassthrough,
+      inputPassthrough,
     ),
     (error: unknown) => (error as { code?: string }).code === "invalid_request",
   );
@@ -2034,7 +2338,7 @@ test("remote question responses are semantically validated against the stored pr
       "q-prompt-1",
       { cancelled: false, answers: [{ questionIndex: 9, kind: "option", answer: "0.5 mm" }] },
       "question-answer-key-05",
-    inputPassthrough,
+      inputPassthrough,
     ),
     (error: unknown) => (error as { code?: string }).code === "invalid_request",
   );
@@ -2070,7 +2374,11 @@ test("remote questions expire and are dropped on terminal state", async () => {
   assert.deepEqual(settled, ["q-prompt-1:true"]);
 
   const owner2 = service.create("device-1", "stream-2", "chat-1", "turn-2");
-  owner2.owner.send("chat:questionnaire", { ...QUESTION_PROMPT, promptId: "q-prompt-2", streamId: "stream-2" });
+  owner2.owner.send("chat:questionnaire", {
+    ...QUESTION_PROMPT,
+    promptId: "q-prompt-2",
+    streamId: "stream-2",
+  });
   assert.equal(service.pendingQuestion("device-1", "stream-2")?.promptId, "q-prompt-2");
   owner2.owner.send("chat:done", { chat: { messages: [{ id: "a-1", role: "assistant" }] } });
   assert.equal(service.pendingQuestion("device-1", "stream-2"), null);
@@ -2132,11 +2440,13 @@ test("questionnaire publishes reject unbound prompts and duplicate stream prompt
   });
   const owner = service.create("device-1", "stream-1", "chat-1", "turn-1");
   assert.throws(() =>
-    owner.owner.send("chat:questionnaire", { ...QUESTION_PROMPT, streamId: "stream-9" }));
+    owner.owner.send("chat:questionnaire", { ...QUESTION_PROMPT, streamId: "stream-9" }),
+  );
   assert.equal(service.pendingQuestion("device-1", "stream-1"), null);
   owner.owner.send("chat:questionnaire", QUESTION_PROMPT);
   assert.throws(() =>
-    owner.owner.send("chat:questionnaire", { ...QUESTION_PROMPT, promptId: "q-prompt-3" }));
+    owner.owner.send("chat:questionnaire", { ...QUESTION_PROMPT, promptId: "q-prompt-3" }),
+  );
   assert.equal(service.pendingQuestion("device-1", "stream-1")?.promptId, "q-prompt-1");
 });
 
@@ -2162,7 +2472,13 @@ test("resolving one pending surface keeps the other's waiting prompt", async () 
   assert.equal(service.status("device-1", "stream-1").state, "waiting_for_approval");
 
   // Resolving the approval must not drop the surviving question prompt.
-  await service.respondApproval("device-1", "approval-1", "deny", "approval-coexist-key-01", inputPassthrough);
+  await service.respondApproval(
+    "device-1",
+    "approval-1",
+    "deny",
+    "approval-coexist-key-01",
+    inputPassthrough,
+  );
   assert.equal(service.status("device-1", "stream-1").state, "waiting_for_approval");
   assert.equal(service.pendingQuestion("device-1", "stream-1")?.promptId, "q-prompt-1");
 
@@ -2178,7 +2494,11 @@ test("resolving one pending surface keeps the other's waiting prompt", async () 
 
   // The symmetric case: question first, approval second.
   const owner2 = service.create("device-1", "stream-2", "chat-1", "turn-2");
-  owner2.owner.send("chat:questionnaire", { ...QUESTION_PROMPT, promptId: "q-prompt-2", streamId: "stream-2" });
+  owner2.owner.send("chat:questionnaire", {
+    ...QUESTION_PROMPT,
+    promptId: "q-prompt-2",
+    streamId: "stream-2",
+  });
   owner2.owner.send("chat:approval", { approvalId: "approval-2", summary: "Run a command" });
   await service.respondQuestion(
     "device-1",
@@ -2205,7 +2525,11 @@ test("revocation settles a revoked device's pending question without waiting for
   const owner = service.create("device-1", "stream-1", "chat-1", "turn-1");
   owner.owner.send("chat:questionnaire", QUESTION_PROMPT);
   const other = service.create("device-2", "stream-2", "chat-2", "turn-2");
-  other.owner.send("chat:questionnaire", { ...QUESTION_PROMPT, promptId: "q-prompt-2", streamId: "stream-2" });
+  other.owner.send("chat:questionnaire", {
+    ...QUESTION_PROMPT,
+    promptId: "q-prompt-2",
+    streamId: "stream-2",
+  });
 
   await service.revokeDevice("device-1");
   assert.deepEqual(settled, ["q-prompt-1:true"]);
@@ -2241,12 +2565,11 @@ test("cancellation settles a pending question with a cancelled response", async 
       "q-prompt-1",
       { cancelled: true, answers: [] },
       "question-after-cancel-01",
-    inputPassthrough,
+      inputPassthrough,
     ),
     (error: unknown) => (error as { code?: string }).code === "question_expired",
   );
 });
-
 
 test("snapshot accounting follows Unicode payloads, state changes, pruning, restore and revocation", async () => {
   const app = fixture();
@@ -2255,13 +2578,18 @@ test("snapshot accounting follows Unicode payloads, state changes, pruning, rest
   const owner = app.service.create(device, "stream-1", "chat-1", "turn-1");
   const deltas = Array.from({ length: 120 }, (_, index) => `${index}:雪😀\n\t"\\`);
   for (const delta of deltas) {
-    app.setNow(10 ** (1 + delta.length % 9));
+    app.setNow(10 ** (1 + (delta.length % 9)));
     owner.owner.send("chat:delta", { delta });
     assertExactSnapshotBytes(app.service);
   }
   const retained = app.service.snapshot().streams[0]!;
-  assert.equal(retained.events.filter((event) => event.type === "text_delta")
-    .map((event) => event.payload.text).join(""), deltas.join(""));
+  assert.equal(
+    retained.events
+      .filter((event) => event.type === "text_delta")
+      .map((event) => event.payload.text)
+      .join(""),
+    deltas.join(""),
+  );
   const firstText = retained.events[1]!.payload.text;
   assert.ok(String(firstText).startsWith(deltas[0]!));
   // A consumer may mutate an exported snapshot without changing the journal.
@@ -2275,7 +2603,10 @@ test("snapshot accounting follows Unicode payloads, state changes, pruning, rest
   assertExactSnapshotBytes(app.service);
   const saved = app.service.snapshot();
   const restored = new AidenRemoteStreamService({
-    now: () => 1_000, cancel: () => true, approve: () => true, snapshot: saved,
+    now: () => 1_000,
+    cancel: () => true,
+    approve: () => true,
+    snapshot: saved,
   });
   saved.streams[0]!.events[1]!.payload.text = "mutated restore source";
   assertExactSnapshotBytes(restored);
@@ -2339,16 +2670,49 @@ test("event count and byte trimming keep exact accounting and contiguous newest 
 
 test("classifier approvals remain deny-only remotely even when details are missing or forged", async () => {
   const { classifierApprovalFor } = await import("./pi-model-tools.js");
-  const complete = classifierApprovalFor({ provider: "research", model: "judge", state: { private: "never project to Remote" }, questions: { safe: { type: "bool", instructions: "Inspect", criteria: { true: "Yes", false: "No" } } } });
-  for (const details of [undefined, complete, { kind: "model-classification", payloadComplete: false }, { kind: "invalid" }]) {
+  const complete = classifierApprovalFor({
+    provider: "research",
+    model: "judge",
+    state: { private: "never project to Remote" },
+    questions: {
+      safe: { type: "bool", instructions: "Inspect", criteria: { true: "Yes", false: "No" } },
+    },
+  });
+  for (const details of [
+    undefined,
+    complete,
+    { kind: "model-classification", payloadComplete: false },
+    { kind: "invalid" },
+  ]) {
     const app = fixture();
     const owner = app.service.create("device-1", "stream-1", "chat-1", "turn-1");
-    owner.owner.send("chat:approval", { approvalId: "classifier-approval", toolName: "classify", summary: "Review complete classification inputs on desktop", ...(details ? { details } : {}) });
+    owner.owner.send("chat:approval", {
+      approvalId: "classifier-approval",
+      toolName: "classify",
+      summary: "Review complete classification inputs on desktop",
+      ...(details ? { details } : {}),
+    });
     assert.equal(app.service.pendingApproval("device-1", "stream-1")?.canAllow, false);
     assert.equal(app.service.pendingApproval("device-1", "stream-1")?.details, undefined);
-    await assert.rejects(app.service.respondApproval("device-1", "classifier-approval", "allow", "classifier-forged-allow", inputPassthrough), (error: unknown) => error instanceof AidenRemoteServiceError && error.code === "capability_denied");
+    await assert.rejects(
+      app.service.respondApproval(
+        "device-1",
+        "classifier-approval",
+        "allow",
+        "classifier-forged-allow",
+        inputPassthrough,
+      ),
+      (error: unknown) =>
+        error instanceof AidenRemoteServiceError && error.code === "capability_denied",
+    );
     assert.deepEqual(app.approvals, []);
-    await app.service.respondApproval("device-1", "classifier-approval", "deny", "classifier-valid-deny", inputPassthrough);
+    await app.service.respondApproval(
+      "device-1",
+      "classifier-approval",
+      "deny",
+      "classifier-valid-deny",
+      inputPassthrough,
+    );
     assert.equal(app.approvals.length, 1);
     assert.match(app.approvals[0]!, /:deny:/u);
   }
@@ -2394,7 +2758,10 @@ test("streaming deltas are coalesced into a bounded number of journal writes", a
   assert.ok(app.writes.length <= 3, `expected at most 3 journal writes, saw ${app.writes.length}`);
   const deltas = app.lastWrittenEvents().filter((event) => event.type === "text_delta");
   // Nobody was attached, so the whole window's text folded into one event.
-  assert.deepEqual(deltas.map((event) => event.payload.text), ["x".repeat(500)]);
+  assert.deepEqual(
+    deltas.map((event) => event.payload.text),
+    ["x".repeat(500)],
+  );
   assert.equal(app.lastWrittenEvents()[app.lastWrittenEvents().length - 1]?.type, "text_delta");
 });
 
@@ -2419,7 +2786,11 @@ test("a terminal event is journaled without waiting for the coalescing window", 
   );
   const writesBeforeSettle = app.writes.length;
   await app.service.settlePersistence();
-  assert.equal(app.writes.length, writesBeforeSettle, "the boundary write already covered the pending deltas");
+  assert.equal(
+    app.writes.length,
+    writesBeforeSettle,
+    "the boundary write already covered the pending deltas",
+  );
 });
 
 test("an approval prompt is journaled without waiting for the coalescing window", async () => {
@@ -2448,7 +2819,13 @@ test("tool progress is journaled without waiting for the coalescing window", asy
   owner.owner.send("chat:delta", { delta: "Reading" });
   owner.owner.send("chat:tool", { phase: "call", toolName: "read_file" });
   await afterPendingWrites();
-  assert.deepEqual(app.lastWrittenEvents().slice(-2).map((event) => event.type), ["text_delta", "tool_started"]);
+  assert.deepEqual(
+    app
+      .lastWrittenEvents()
+      .slice(-2)
+      .map((event) => event.type),
+    ["text_delta", "tool_started"],
+  );
 
   owner.owner.send("chat:tool", { phase: "result", toolName: "read_file" });
   await afterPendingWrites();
@@ -2460,7 +2837,9 @@ test("a streaming turn does not rewrite finished streams", async () => {
   const app = persistenceFixture(0);
   const earlier = app.service.create("device-1", "earlier", "chat-1", "turn-1");
   earlier.owner.send("chat:delta", { delta: "x".repeat(10_000) });
-  earlier.owner.send("chat:done", { chat: { messages: [{ id: "assistant-1", role: "assistant" }] } });
+  earlier.owner.send("chat:done", {
+    chat: { messages: [{ id: "assistant-1", role: "assistant" }] },
+  });
   await app.service.settlePersistence();
   const archiveWritesBefore = app.archiveWrites.length;
   const writesBefore = app.writes.length;
@@ -2476,14 +2855,21 @@ test("a streaming turn does not rewrite finished streams", async () => {
   assert.ok(app.writes.length > writesBefore);
   assert.equal(app.archiveWrites.length, archiveWritesBefore, "finished history was not rewritten");
   const latest = app.writes[app.writes.length - 1]!;
-  assert.deepEqual(latest.streams.map(({ streamId, state }) => [streamId, state]), [
-    ["earlier", "done"],
-    ["stream-2", "running"],
-  ]);
+  assert.deepEqual(
+    latest.streams.map(({ streamId, state }) => [streamId, state]),
+    [
+      ["earlier", "done"],
+      ["stream-2", "running"],
+    ],
+  );
 
   owner.owner.send("chat:done", { chat: { messages: [{ id: "assistant-2", role: "assistant" }] } });
   await app.service.settlePersistence();
-  assert.equal(app.archiveWrites.length, archiveWritesBefore + 1, "a finished turn moves to the archive");
+  assert.equal(
+    app.archiveWrites.length,
+    archiveWritesBefore + 1,
+    "a finished turn moves to the archive",
+  );
   assert.deepEqual(
     app.archiveWrites[app.archiveWrites.length - 1]!.streams.map(({ streamId }) => streamId),
     ["earlier", "stream-2"],
@@ -2525,27 +2911,51 @@ test("settling persistence flushes a pending coalesced write exactly once", asyn
   await app.service.settlePersistence();
   assert.equal(app.writes.length, settledWrites + 1);
   assert.deepEqual(
-    app.lastWrittenEvents().filter((event) => event.type === "text_delta").map((event) => event.payload.text),
+    app
+      .lastWrittenEvents()
+      .filter((event) => event.type === "text_delta")
+      .map((event) => event.payload.text),
     ["firstsecond"],
   );
   await app.service.settlePersistence();
   assert.equal(app.writes.length, settledWrites + 1, "a settled journal is not rewritten");
 });
 
-
 test("image prompts cannot be authorized through a truncated Remote summary", async () => {
   const { summarizeToolCall } = await import("./coding-tools.js");
   const app = fixture();
   const owner = app.service.create("device-1", "stream-1", "chat-1", "turn-1");
-  owner.owner.send("chat:approval", { approvalId: "image-approval", toolName: "generate_image",
-    summary: summarizeToolCall("generate_image", { provider: "studio", model: "canvas", prompt: "x".repeat(2400) + "PRIVATE-LATE-PROMPT" }) });
+  owner.owner.send("chat:approval", {
+    approvalId: "image-approval",
+    toolName: "generate_image",
+    summary: summarizeToolCall("generate_image", {
+      provider: "studio",
+      model: "canvas",
+      prompt: "x".repeat(2400) + "PRIVATE-LATE-PROMPT",
+    }),
+  });
   const pending = app.service.pendingApproval("device-1", "stream-1")!;
   assert.equal(pending.canAllow, false);
   assert.doesNotMatch(pending.summary, /PRIVATE-LATE-PROMPT/);
-  await assert.rejects(app.service.respondApproval("device-1", "image-approval", "allow", "image-forged-allow", inputPassthrough),
-    (error: unknown) => error instanceof AidenRemoteServiceError && error.code === "capability_denied");
+  await assert.rejects(
+    app.service.respondApproval(
+      "device-1",
+      "image-approval",
+      "allow",
+      "image-forged-allow",
+      inputPassthrough,
+    ),
+    (error: unknown) =>
+      error instanceof AidenRemoteServiceError && error.code === "capability_denied",
+  );
   assert.deepEqual(app.approvals, []);
-  await app.service.respondApproval("device-1", "image-approval", "deny", "image-valid-deny", inputPassthrough);
+  await app.service.respondApproval(
+    "device-1",
+    "image-approval",
+    "deny",
+    "image-valid-deny",
+    inputPassthrough,
+  );
   assert.equal(app.approvals.length, 1);
   assert.match(app.approvals[0]!, /:deny:/u);
 });
@@ -2605,18 +3015,31 @@ function parseSseEventFrames(rawFrames: readonly string[]) {
 test("lagging-cursor replay on count- and byte-trimmed finished streams synthesizes snapshot(earliest - 1) before the retained tail", async () => {
   for (const terminalKind of ["done", "error", "cancelled"] as const) {
     const app = fixture();
-    const run = app.service.create("device-1", `stream-${terminalKind}`, "chat-1", `turn-${terminalKind}`);
+    const run = app.service.create(
+      "device-1",
+      `stream-${terminalKind}`,
+      "chat-1",
+      `turn-${terminalKind}`,
+    );
     // Alternating text and reasoning prevents offline delta folding so retention trims by event count (> 4,096).
     for (let index = 0; index < 2_055; index++) {
       run.owner.send("chat:delta", { delta: `t${index}` });
       run.owner.send("chat:reasoning-delta", { delta: `r${index}` });
     }
     if (terminalKind === "done") {
-      run.owner.send("chat:done", { chat: { messages: [{ id: "assistant-final", role: "assistant" }] } });
+      run.owner.send("chat:done", {
+        chat: { messages: [{ id: "assistant-final", role: "assistant" }] },
+      });
     } else if (terminalKind === "error") {
-      run.owner.send("chat:error", { message: "The model provider could not complete this response." });
+      run.owner.send("chat:error", {
+        message: "The model provider could not complete this response.",
+      });
     } else {
-      await app.service.cancel("device-1", `stream-${terminalKind}`, `cancel-${terminalKind}-key-01`);
+      await app.service.cancel(
+        "device-1",
+        `stream-${terminalKind}`,
+        `cancel-${terminalKind}-key-01`,
+      );
       run.owner.send("chat:done", { streamId: `stream-${terminalKind}`, chat: { messages: [] } });
     }
 
@@ -2626,10 +3049,15 @@ test("lagging-cursor replay on count- and byte-trimmed finished streams synthesi
     assert.ok(earliest > 10, `expected trimmed earliest sequence > 10, got ${earliest}`);
     assert.equal(journal.length, 4_096);
 
-    for (const [snapshotReasons, afterCursor] of [[true, 0], [false, 3]] as const) {
+    for (const [snapshotReasons, afterCursor] of [
+      [true, 0],
+      [false, 3],
+    ] as const) {
       const replay = blockedResponse();
       replay.response.blocked = false;
-      app.service.openEvents("device-1", `stream-${terminalKind}`, afterCursor, replay.http, { snapshotReasons });
+      app.service.openEvents("device-1", `stream-${terminalKind}`, afterCursor, replay.http, {
+        snapshotReasons,
+      });
       assert.equal(replay.response.ended, true);
       const frames = parseSseEventFrames(replay.output);
       assertOrderedAidenRemoteEvents(frames);
@@ -2640,7 +3068,12 @@ test("lagging-cursor replay on count- and byte-trimmed finished streams synthesi
       assert.deepEqual(
         frames[0]!.payload,
         snapshotReasons
-          ? { chatId: "chat-1", turnId: `turn-${terminalKind}`, reason: "gap", nextSequence: earliest }
+          ? {
+              chatId: "chat-1",
+              turnId: `turn-${terminalKind}`,
+              reason: "gap",
+              nextSequence: earliest,
+            }
           : { chatId: "chat-1", turnId: `turn-${terminalKind}`, nextSequence: earliest },
       );
       assert.equal(frames[1]!.sequence, earliest);
@@ -2656,7 +3089,9 @@ test("lagging-cursor replay on count- and byte-trimmed finished streams synthesi
     // Exact retention boundary (`after = earliest - 1`) replays directly from `earliest` with no synthetic snapshot.
     const exactBoundary = blockedResponse();
     exactBoundary.response.blocked = false;
-    app.service.openEvents("device-1", `stream-${terminalKind}`, earliest - 1, exactBoundary.http, { snapshotReasons: true });
+    app.service.openEvents("device-1", `stream-${terminalKind}`, earliest - 1, exactBoundary.http, {
+      snapshotReasons: true,
+    });
     const boundaryFrames = parseSseEventFrames(exactBoundary.output);
     assert.equal(boundaryFrames.length, journal.length);
     assert.equal(boundaryFrames[0]!.sequence, earliest);
@@ -2667,14 +3102,22 @@ test("lagging-cursor replay on count- and byte-trimmed finished streams synthesi
     // Caught-up cursor on a finished stream ends cleanly with zero frames; ahead-of-head rejects with 400 invalid_request.
     const caughtUp = blockedResponse();
     caughtUp.response.blocked = false;
-    app.service.openEvents("device-1", `stream-${terminalKind}`, head, caughtUp.http, { snapshotReasons: true });
+    app.service.openEvents("device-1", `stream-${terminalKind}`, head, caughtUp.http, {
+      snapshotReasons: true,
+    });
     assert.equal(caughtUp.response.ended, true);
     assert.equal(parseSseEventFrames(caughtUp.output).length, 0);
 
     const ahead = blockedResponse();
     assert.throws(
-      () => app.service.openEvents("device-1", `stream-${terminalKind}`, head + 1, ahead.http, { snapshotReasons: true }),
-      (error: unknown) => error instanceof AidenRemoteServiceError && error.code === "invalid_request" && error.status === 400,
+      () =>
+        app.service.openEvents("device-1", `stream-${terminalKind}`, head + 1, ahead.http, {
+          snapshotReasons: true,
+        }),
+      (error: unknown) =>
+        error instanceof AidenRemoteServiceError &&
+        error.code === "invalid_request" &&
+        error.status === 400,
     );
   }
 
@@ -2685,14 +3128,18 @@ test("lagging-cursor replay on count- and byte-trimmed finished streams synthesi
     byteRun.owner.send("chat:delta", { delta: "x".repeat(65_536) });
     byteRun.owner.send("chat:reasoning-delta", { delta: "r".repeat(65_536) });
   }
-  byteRun.owner.send("chat:done", { chat: { messages: [{ id: "assistant-bytes", role: "assistant" }] } });
+  byteRun.owner.send("chat:done", {
+    chat: { messages: [{ id: "assistant-bytes", role: "assistant" }] },
+  });
   const byteJournal = byteApp.service.snapshot().streams[0]!.events;
   const byteEarliest = byteJournal[0]!.sequence;
   assert.ok(byteEarliest > 2, `expected byte-trimmed earliest > 2, got ${byteEarliest}`);
 
   const byteReplay = blockedResponse();
   byteReplay.response.blocked = false;
-  byteApp.service.openEvents("device-1", "stream-bytes", 1, byteReplay.http, { snapshotReasons: true });
+  byteApp.service.openEvents("device-1", "stream-bytes", 1, byteReplay.http, {
+    snapshotReasons: true,
+  });
   assert.equal(byteReplay.response.ended, true);
   const byteFrames = parseSseEventFrames(byteReplay.output);
   assertOrderedAidenRemoteEvents(byteFrames);
@@ -2742,9 +3189,21 @@ test("lagging-cursor reconnect on a live stream stays connection-local without d
   service.openEvents("device-1", "stream-live", 2, lagging.http, { snapshotReasons: true });
   await service.settlePersistence();
 
-  assert.equal(healthy.output.length, healthyFramesBefore, "up-to-date subscriber received no fan-out snapshot");
-  assert.equal(writes.length, writesBefore, "lagging reconnect caused zero journal persistence writes");
-  assert.deepEqual(service.snapshot(), snapshotBefore, "shared stream journal and timestamps stayed untouched");
+  assert.equal(
+    healthy.output.length,
+    healthyFramesBefore,
+    "up-to-date subscriber received no fan-out snapshot",
+  );
+  assert.equal(
+    writes.length,
+    writesBefore,
+    "lagging reconnect caused zero journal persistence writes",
+  );
+  assert.deepEqual(
+    service.snapshot(),
+    snapshotBefore,
+    "shared stream journal and timestamps stayed untouched",
+  );
 
   const laggingInitial = parseSseEventFrames(lagging.output);
   assertOrderedAidenRemoteEvents(laggingInitial);
@@ -2757,11 +3216,16 @@ test("lagging-cursor reconnect on a live stream stays connection-local without d
 
   // Subsequent live events reach both subscribers contiguously with no snapshot on the healthy connection.
   run.owner.send("chat:delta", { delta: "live-tail" });
-  run.owner.send("chat:done", { chat: { messages: [{ id: "assistant-live", role: "assistant" }] } });
+  run.owner.send("chat:done", {
+    chat: { messages: [{ id: "assistant-live", role: "assistant" }] },
+  });
 
   const healthyAll = parseSseEventFrames(healthy.output);
   assertOrderedAidenRemoteEvents(healthyAll);
-  assert.equal(healthyAll.some((event) => event.type === "snapshot"), false);
+  assert.equal(
+    healthyAll.some((event) => event.type === "snapshot"),
+    false,
+  );
   assert.equal(healthyAll[healthyAll.length - 1]!.type, "done");
   assert.equal(healthy.response.ended, true);
 
@@ -2777,36 +3241,58 @@ test("snapshot reason field is projected only for devices that negotiated stream
   const run = app.service.create("device-1", "stream-reset", "chat-1", "turn-1");
   run.owner.send("chat:delta", { delta: "draft" });
   run.owner.send("chat:delta", { reset: true, delta: "replacement" });
-  run.owner.send("chat:done", { chat: { messages: [{ id: "assistant-reset", role: "assistant" }] } });
+  run.owner.send("chat:done", {
+    chat: { messages: [{ id: "assistant-reset", role: "assistant" }] },
+  });
 
   const legacyOut = blockedResponse();
   legacyOut.response.blocked = false;
   app.service.openEvents("device-1", "stream-reset", 0, legacyOut.http);
-  const legacySnapshot = parseSseEventFrames(legacyOut.output).find((event) => event.type === "snapshot")!;
+  const legacySnapshot = parseSseEventFrames(legacyOut.output).find(
+    (event) => event.type === "snapshot",
+  )!;
   assert.deepEqual(legacySnapshot.payload, { chatId: "chat-1", turnId: "turn-1", nextSequence: 4 });
   assert.equal("reason" in legacySnapshot.payload, false);
 
   const modernOut = blockedResponse();
   modernOut.response.blocked = false;
   app.service.openEvents("device-1", "stream-reset", 0, modernOut.http, { snapshotReasons: true });
-  const modernSnapshot = parseSseEventFrames(modernOut.output).find((event) => event.type === "snapshot")!;
-  assert.deepEqual(modernSnapshot.payload, { chatId: "chat-1", turnId: "turn-1", reason: "reset", nextSequence: 4 });
+  const modernSnapshot = parseSseEventFrames(modernOut.output).find(
+    (event) => event.type === "snapshot",
+  )!;
+  assert.deepEqual(modernSnapshot.payload, {
+    chatId: "chat-1",
+    turnId: "turn-1",
+    reason: "reset",
+    nextSequence: 4,
+  });
 
   // Aggregate budget replacement (`events.length === 1` snapshot) also strips `reason` for legacy readers.
   const pressure = fixture();
   for (let index = 0; index < 90; index++) {
-    const heavy = pressure.service.create("device-1", `heavy-${index}`, `chat-h-${index}`, `turn-h-${index}`);
+    const heavy = pressure.service.create(
+      "device-1",
+      `heavy-${index}`,
+      `chat-h-${index}`,
+      `turn-h-${index}`,
+    );
     heavy.owner.send("chat:delta", { delta: "y".repeat(200_000) });
   }
-  const replacedStream = pressure.service.snapshot().streams.find(
-    (entry) => entry.events.length === 1 && entry.events[0]?.type === "snapshot",
-  )!;
+  const replacedStream = pressure.service
+    .snapshot()
+    .streams.find((entry) => entry.events.length === 1 && entry.events[0]?.type === "snapshot")!;
   assert.ok(replacedStream);
   const replacedSeq = replacedStream.events[0]!.sequence;
 
   const oldLegacy = blockedResponse();
   oldLegacy.response.blocked = false;
-  pressure.service.openEvents("device-1", replacedStream.streamId, replacedSeq - 1, oldLegacy.http, { snapshotReasons: false });
+  pressure.service.openEvents(
+    "device-1",
+    replacedStream.streamId,
+    replacedSeq - 1,
+    oldLegacy.http,
+    { snapshotReasons: false },
+  );
   const oldLegacyFrames = parseSseEventFrames(oldLegacy.output);
   assert.equal(oldLegacyFrames.length, 1);
   assert.equal(oldLegacyFrames[0]!.type, "snapshot");
@@ -2815,7 +3301,13 @@ test("snapshot reason field is projected only for devices that negotiated stream
 
   const oldModern = blockedResponse();
   oldModern.response.blocked = false;
-  pressure.service.openEvents("device-1", replacedStream.streamId, replacedSeq - 1, oldModern.http, { snapshotReasons: true });
+  pressure.service.openEvents(
+    "device-1",
+    replacedStream.streamId,
+    replacedSeq - 1,
+    oldModern.http,
+    { snapshotReasons: true },
+  );
   const oldModernFrames = parseSseEventFrames(oldModern.output);
   assert.equal(oldModernFrames.length, 1);
   assert.equal(oldModernFrames[0]!.type, "snapshot");
@@ -2831,12 +3323,20 @@ test("blocked synthetic gap snapshot drains retained tail in order or disconnect
     doneRun.owner.send("chat:delta", { delta: `a${index}` });
     doneRun.owner.send("chat:reasoning-delta", { delta: `b${index}` });
   }
-  doneRun.owner.send("chat:done", { chat: { messages: [{ id: "assistant-1", role: "assistant" }] } });
+  doneRun.owner.send("chat:done", {
+    chat: { messages: [{ id: "assistant-1", role: "assistant" }] },
+  });
   const earliestDone = finished.service.snapshot().streams[0]!.events[0]!.sequence;
 
   const draining = blockedResponse();
-  finished.service.openEvents("device-1", "stream-drain", 1, draining.http, { snapshotReasons: true });
-  assert.equal(draining.output.length, 1, "wrote only synthetic snapshot while socket was backpressured");
+  finished.service.openEvents("device-1", "stream-drain", 1, draining.http, {
+    snapshotReasons: true,
+  });
+  assert.equal(
+    draining.output.length,
+    1,
+    "wrote only synthetic snapshot while socket was backpressured",
+  );
   assert.equal(draining.response.ended, false);
   draining.response.blocked = false;
   draining.response.emit("drain");
@@ -2855,7 +3355,9 @@ test("blocked synthetic gap snapshot drains retained tail in order or disconnect
     liveRun.owner.send("chat:reasoning-delta", { delta: `d${index}` });
   }
   const stalled = blockedResponse();
-  live.service.openEvents("device-1", "stream-overtake", 1, stalled.http, { snapshotReasons: true });
+  live.service.openEvents("device-1", "stream-overtake", 1, stalled.http, {
+    snapshotReasons: true,
+  });
   assert.equal(stalled.output.length, 1);
   // Advance retention past the `nextSequence` promised in `stalled.output[0]`.
   liveRun.owner.send("chat:delta", { delta: "next-1" });
@@ -2879,15 +3381,38 @@ test("a lead chat's started chat keeps approvals and questions open 30 minutes; 
     respondQuestion: () => true,
   });
   const child = service.create("chat:lead-1", "stream-child", "child-1", "turn-1");
-  child.owner.send("chat:approval", { approvalId: "approval-child", summary: "Run tests", toolCallId: "call-1", toolName: "run_command" });
-  assert.equal(service.pendingApproval("chat:lead-1", "stream-child")?.expiresAt, "2026-11-22T10:30:00.000Z");
+  child.owner.send("chat:approval", {
+    approvalId: "approval-child",
+    summary: "Run tests",
+    toolCallId: "call-1",
+    toolName: "run_command",
+  });
+  assert.equal(
+    service.pendingApproval("chat:lead-1", "stream-child")?.expiresAt,
+    "2026-11-22T10:30:00.000Z",
+  );
   const phone = service.create("device-1", "stream-phone", "chat-2", "turn-2");
-  phone.owner.send("chat:approval", { approvalId: "approval-phone", summary: "Run tests", toolCallId: "call-2", toolName: "run_command" });
-  assert.equal(service.pendingApproval("device-1", "stream-phone")?.expiresAt, "2026-11-22T10:05:00.000Z");
+  phone.owner.send("chat:approval", {
+    approvalId: "approval-phone",
+    summary: "Run tests",
+    toolCallId: "call-2",
+    toolName: "run_command",
+  });
+  assert.equal(
+    service.pendingApproval("device-1", "stream-phone")?.expiresAt,
+    "2026-11-22T10:05:00.000Z",
+  );
 
   const childQuestion = service.create("chat:lead-1", "stream-child-2", "child-2", "turn-3");
-  childQuestion.owner.send("chat:questionnaire", { ...QUESTION_PROMPT, promptId: "q-child", streamId: "stream-child-2" });
-  assert.equal(service.pendingQuestion("chat:lead-1", "stream-child-2")?.expiresAt, "2026-11-22T10:30:00.000Z");
+  childQuestion.owner.send("chat:questionnaire", {
+    ...QUESTION_PROMPT,
+    promptId: "q-child",
+    streamId: "stream-child-2",
+  });
+  assert.equal(
+    service.pendingQuestion("chat:lead-1", "stream-child-2")?.expiresAt,
+    "2026-11-22T10:30:00.000Z",
+  );
   assert.deepEqual(denied, []);
   for (const owner of [child, phone, childQuestion]) {
     owner.owner.send("chat:done", { chat: { messages: [{ id: "a-1", role: "assistant" }] } });
@@ -2895,9 +3420,16 @@ test("a lead chat's started chat keeps approvals and questions open 30 minutes; 
 });
 
 test("revision 69: a phone's stream approval carries the command's plain words only when it holds the opt-in", () => {
-  const service = new AidenRemoteStreamService({ now: () => 1_000, cancel: () => true, approve: () => true });
+  const service = new AidenRemoteStreamService({
+    now: () => 1_000,
+    cancel: () => true,
+    approve: () => true,
+  });
   const owner = service.create("device-1", "stream-1", "chat-1", "turn-1");
-  const reading = { explanation: "Deletes the old build folder", tags: [{ label: "Deletes files", tone: "risk" }] };
+  const reading = {
+    explanation: "Deletes the old build folder",
+    tags: [{ label: "Deletes files", tone: "risk" }],
+  };
   owner.owner.send("chat:approval", {
     approvalId: "approval-1",
     summary: "Run command: rm -rf build",

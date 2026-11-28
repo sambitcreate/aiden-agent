@@ -9,9 +9,31 @@ const catalog: HostModelCatalog = {
       id: "acme",
       label: "Acme",
       models: [
-        { id: "deep", label: "Deep", supportsImages: false, thinkingLevels: ["low", "medium", "high"], defaultThinkingLevel: "medium", thinkingCanDisable: false, hidden: false },
-        { id: "fast", label: "Fast", supportsImages: true, thinkingLevels: [], thinkingCanDisable: true, hidden: false },
-        { id: "old", label: "Old", supportsImages: false, thinkingLevels: [], thinkingCanDisable: true, hidden: true },
+        {
+          id: "deep",
+          label: "Deep",
+          supportsImages: false,
+          thinkingLevels: ["low", "medium", "high"],
+          defaultThinkingLevel: "medium",
+          thinkingCanDisable: false,
+          hidden: false,
+        },
+        {
+          id: "fast",
+          label: "Fast",
+          supportsImages: true,
+          thinkingLevels: [],
+          thinkingCanDisable: true,
+          hidden: false,
+        },
+        {
+          id: "old",
+          label: "Old",
+          supportsImages: false,
+          thinkingLevels: [],
+          thinkingCanDisable: true,
+          hidden: true,
+        },
       ],
     },
   ],
@@ -38,7 +60,10 @@ test("a picked model and effort go with the next turn; picking the chat's own mo
 });
 
 test("an effort the shown model doesn't run at is dropped, and a model without levels hides the control", () => {
-  const switched = resolveRemoteTurnSelection(catalog, deep, { model: fast, thinkingLevel: "high" });
+  const switched = resolveRemoteTurnSelection(catalog, deep, {
+    model: fast,
+    thinkingLevel: "high",
+  });
   assert.deepEqual(switched.levels, []);
   assert.equal(switched.thinkingLevel, undefined);
   assert.deepEqual(switched.extras, { model: fast });
@@ -48,7 +73,9 @@ test("an effort the shown model doesn't run at is dropped, and a model without l
 });
 
 test("a pick the host no longer lists falls back to the chat's model; a hidden model still shows for its chat", () => {
-  const gone = resolveRemoteTurnSelection(catalog, deep, { model: { providerId: "acme", modelId: "removed" } });
+  const gone = resolveRemoteTurnSelection(catalog, deep, {
+    model: { providerId: "acme", modelId: "removed" },
+  });
   assert.deepEqual(gone.model, deep);
   assert.deepEqual(gone.extras, {});
   const hidden = resolveRemoteTurnSelection(catalog, { providerId: "acme", modelId: "old" }, {});
@@ -59,7 +86,11 @@ test("before the host's models arrive, or on a host that doesn't say the chat's 
   const loading = resolveRemoteTurnSelection(undefined, deep, { thinkingLevel: "high" });
   assert.deepEqual(loading.model, deep);
   assert.deepEqual(loading.levels, []);
-  assert.deepEqual(loading.extras, {}, "an effort is never sent for a model whose levels are unknown");
+  assert.deepEqual(
+    loading.extras,
+    {},
+    "an effort is never sent for a model whose levels are unknown",
+  );
   const unknownChat = resolveRemoteTurnSelection(catalog, undefined, {});
   assert.equal(unknownChat.model, undefined);
   assert.deepEqual(unknownChat.extras, {});

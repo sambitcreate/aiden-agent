@@ -7,6 +7,7 @@ Branch: `fix/ios-streaming-rendering`. Baseline: `a74edb0f6` (origin/main).
 The user confirmed `anomalyco/opencode`. Inspected its complete, non-truncated `dev` tree at `63c1a27af5a391d9caa55b82694f496911e1859b` (2026-10-18): no Swift sources/native iOS package, only generated desktop iOS icon assets. The applicable comparison is its shared app renderer, not a separate native client. No upstream code copied and no dependencies added.
 
 Pinned reference files under `https://github.com/anomalyco/opencode/blob/63c1a27af5a391d9caa55b82694f496911e1859b/`:
+
 - `packages/ui/src/hooks/create-auto-scroll.tsx`: explicit user-scrolled latch; recognizes its own deferred scroll events; ResizeObserver follows after layout/before paint; immediate follow avoids catch-up animations; forced jump alone resets the latch. Aiden's existing native controller/observer supplies the analogous behavior.
 - `packages/session-ui/src/components/markdown-stream.ts`: full/live/code blocks, incomplete-tail healing, open-code incremental append, whole-document handling for reference definitions, stable block completion.
 - `packages/session-ui/src/components/markdown.tsx`: retains a live block's DOM through completion to preserve selection; worker-backed projection and stable owners. Aiden already caches sealed Markdown chunks and shares layout between live/settled content; no new parser dependency needed for these fixes.

@@ -3,19 +3,31 @@ import test from "node:test";
 import type { BrowserCommand, BrowserHoldReason } from "../../../renderer/shared/browser.js";
 import type { BrowserCommandContext } from "../browser/service.js";
 import type { RendererDocumentOwner } from "../renderer-document-owner.js";
-import { createBotBrowserHandoffOpener, type BotBrowserHandoffService } from "./bot-browser-handoff.js";
+import {
+  createBotBrowserHandoffOpener,
+  type BotBrowserHandoffService,
+} from "./bot-browser-handoff.js";
 import { createBotHandoffs } from "./bot-handoffs.js";
 
 const BOT = "bot:ada";
 const WORKSPACE = "bot-home-ada";
 
 function owner(id: number): RendererDocumentOwner {
-  return { id, documentId: `document-${id}`, isDestroyed: () => false, send: () => undefined, onInvalidated: () => () => undefined };
+  return {
+    id,
+    documentId: `document-${id}`,
+    isDestroyed: () => false,
+    send: () => undefined,
+    onInvalidated: () => () => undefined,
+  };
 }
 
 /** The Bot's browser: tabs, the holds on them, and the window that shows it. */
 function fakeBrowser(options: { owner?: RendererDocumentOwner } = {}) {
-  const tabs = new Map<string, { url: string; documentRevision?: string; hold?: { holdId: string; reason: BrowserHoldReason } }>();
+  const tabs = new Map<
+    string,
+    { url: string; documentRevision?: string; hold?: { holdId: string; reason: BrowserHoldReason } }
+  >();
   const created: Array<{ command: BrowserCommand; context: BrowserCommandContext }> = [];
   let opened = 0;
   let shownIn = options.owner;
@@ -46,7 +58,13 @@ function fakeBrowser(options: { owner?: RendererDocumentOwner } = {}) {
     getApprovalTarget(workspaceId, tabId) {
       const tab = tabs.get(tabId);
       if (!tab) throw new Error("Tab closed.");
-      return { workspaceId, tabId, url: tab.url, documentRevision: tab.documentRevision ?? "1", controlRevision: 0 };
+      return {
+        workspaceId,
+        tabId,
+        url: tab.url,
+        documentRevision: tab.documentRevision ?? "1",
+        controlRevision: 0,
+      };
     },
     hold(workspaceId, tabId, hold) {
       assert.equal(workspaceId, WORKSPACE);
@@ -71,7 +89,14 @@ function fakeBrowser(options: { owner?: RendererDocumentOwner } = {}) {
   };
 }
 
-function setup(options: { browserAccess?: boolean; owner?: RendererDocumentOwner; window?: RendererDocumentOwner; workspace?: string | null } = {}) {
+function setup(
+  options: {
+    browserAccess?: boolean;
+    owner?: RendererDocumentOwner;
+    window?: RendererDocumentOwner;
+    workspace?: string | null;
+  } = {},
+) {
   const browser = fakeBrowser({ owner: options.owner });
   const handoffs = createBotHandoffs();
   const open = createBotBrowserHandoffOpener({
@@ -85,8 +110,14 @@ function setup(options: { browserAccess?: boolean; owner?: RendererDocumentOwner
     const controller = new AbortController();
     const answer = handoffs
       .request({
-        botId: BOT, waitId, toolCallId: `call-${waitId}`, kind, action: "Sign in to github.com",
-        open: { url: "https://github.com" }, source: "tool", signal: controller.signal,
+        botId: BOT,
+        waitId,
+        toolCallId: `call-${waitId}`,
+        kind,
+        action: "Sign in to github.com",
+        open: { url: "https://github.com" },
+        source: "tool",
+        signal: controller.signal,
       })
       .catch(() => null);
     return { controller, answer };
@@ -101,9 +132,10 @@ test("a sign-in opens a shown tab in the Bot's browser, held for the person unti
   const { browser, handoffs, open, ask } = setup({ owner: owner(1) });
   const card = ask("wait-1");
   assert.equal(await open(BOT, "wait-1", "https://github.com", "sign_in"), true);
-  assert.deepEqual(browser.created.map(({ command, context }) => [command, context.source]), [
-    [{ action: "create", url: "https://github.com", show: true }, "user"],
-  ]);
+  assert.deepEqual(
+    browser.created.map(({ command, context }) => [command, context.source]),
+    [[{ action: "create", url: "https://github.com", show: true }, "user"]],
+  );
   assert.deepEqual(browser.heldBy("tab-1"), { holdId: "wait-1", reason: "sign_in" });
 
   handoffs.answer(BOT, "wait-1", { outcome: "done" });
@@ -170,7 +202,10 @@ test("nothing opens with no window, for a Bot that is gone, or for an action car
   // An action's link then opens in the system browser; a sign-in still opens here.
   const noAccess = setup({ owner: owner(1), browserAccess: false });
   noAccess.ask("wait-1", "action");
-  assert.equal(await noAccess.open(BOT, "wait-1", "https://shop.example.com/cart", "handoff"), false);
+  assert.equal(
+    await noAccess.open(BOT, "wait-1", "https://shop.example.com/cart", "handoff"),
+    false,
+  );
   assert.equal(noAccess.browser.created.length, 0);
   noAccess.ask("wait-2");
   assert.equal(await noAccess.open(BOT, "wait-2", "https://github.com", "sign_in"), true);
@@ -182,9 +217,10 @@ test("an action card's Open shows the Bot's tab already on that page and holds i
   browser.tabs.set("tab-0", { url: "https://shop.example.com/cart" });
   ask("wait-1", "action");
   assert.equal(await open(BOT, "wait-1", "https://shop.example.com/cart", "handoff"), true);
-  assert.deepEqual(browser.created.map(({ command, context }) => [command, context.source]), [
-    [{ action: "open_link", url: "https://shop.example.com/cart" }, "user"],
-  ]);
+  assert.deepEqual(
+    browser.created.map(({ command, context }) => [command, context.source]),
+    [[{ action: "open_link", url: "https://shop.example.com/cart" }, "user"]],
+  );
   assert.equal(browser.tabs.size, 1);
   assert.deepEqual(browser.heldBy("tab-0"), { holdId: "wait-1", reason: "handoff" });
 });
@@ -192,16 +228,29 @@ test("an action card's Open shows the Bot's tab already on that page and holds i
 test("a step that names no page holds the tab the Bot is on, as it is, and opens nothing without one", async () => {
   const { browser, handoffs, open, ask } = setup({ owner: owner(1) });
   const card = ask("wait-1", "action");
-  assert.equal(await open(BOT, "wait-1", undefined, "handoff"), false, "no tab yet: nothing to hold");
+  assert.equal(
+    await open(BOT, "wait-1", undefined, "handoff"),
+    false,
+    "no tab yet: nothing to hold",
+  );
   assert.equal(browser.created.length, 0);
   browser.tabs.set("tab-9", { url: "https://shop.example/checkout" });
   assert.equal(await open(BOT, "wait-1", undefined, "handoff"), true);
-  assert.deepEqual(browser.created.map(({ command, context }) => [command, context.source]), [
-    [{ action: "select", tabId: "tab-9" }, "user"],
-  ]);
-  assert.equal(browser.tabs.get("tab-9")?.url, "https://shop.example/checkout", "the page stays where the Bot left it");
+  assert.deepEqual(
+    browser.created.map(({ command, context }) => [command, context.source]),
+    [[{ action: "select", tabId: "tab-9" }, "user"]],
+  );
+  assert.equal(
+    browser.tabs.get("tab-9")?.url,
+    "https://shop.example/checkout",
+    "the page stays where the Bot left it",
+  );
   assert.deepEqual(browser.heldBy("tab-9"), { holdId: "wait-1", reason: "handoff" });
-  assert.equal(await open(BOT, "wait-2", undefined, "sign_in"), false, "a sign-in always names its page");
+  assert.equal(
+    await open(BOT, "wait-2", undefined, "sign_in"),
+    false,
+    "a sign-in always names its page",
+  );
 
   handoffs.answer(BOT, "wait-1", { outcome: "done" });
   await card.answer;
@@ -216,13 +265,20 @@ test("Open again on the same card brings back the tab it opened; once the person
   await open(BOT, "wait-1", "https://github.com", "sign_in");
   assert.deepEqual(
     browser.created.map(({ command }) => command),
-    [{ action: "create", url: "https://github.com", show: true }, { action: "select", tabId: "tab-1" }],
+    [
+      { action: "create", url: "https://github.com", show: true },
+      { action: "select", tabId: "tab-1" },
+    ],
   );
   assert.equal(browser.tabs.size, 1);
 
   browser.tabs.delete("tab-1");
   await open(BOT, "wait-1", "https://github.com", "sign_in");
-  assert.deepEqual(browser.created[browser.created.length - 1]?.command, { action: "create", url: "https://github.com", show: true });
+  assert.deepEqual(browser.created[browser.created.length - 1]?.command, {
+    action: "create",
+    url: "https://github.com",
+    show: true,
+  });
   assert.deepEqual(browser.heldBy("tab-2"), { holdId: "wait-1", reason: "sign_in" });
 
   handoffs.answer(BOT, "wait-1", { outcome: "done" });
@@ -238,10 +294,17 @@ test("a card asked again under the same wait id keeps the tab the person is usin
   // The same call asks again (a stale invocation is withdrawn): it is the same card.
   const again = ask("wait-1");
   await settled();
-  assert.deepEqual(browser.heldBy("tab-1"), { holdId: "wait-1", reason: "sign_in" }, "the person is still signing in there");
+  assert.deepEqual(
+    browser.heldBy("tab-1"),
+    { holdId: "wait-1", reason: "sign_in" },
+    "the person is still signing in there",
+  );
   await open(BOT, "wait-1", "https://github.com", "sign_in");
   assert.equal(browser.tabs.size, 1, "Open shows the tab the person was using");
-  assert.deepEqual(browser.created[browser.created.length - 1]?.command, { action: "select", tabId: "tab-1" });
+  assert.deepEqual(browser.created[browser.created.length - 1]?.command, {
+    action: "select",
+    tabId: "tab-1",
+  });
 
   handoffs.answer(BOT, "wait-1", { outcome: "done" });
   await again.answer;
@@ -262,7 +325,11 @@ test("a tab two cards opened stays held until neither waits, whichever settles f
     handoffs.answer(BOT, first, { outcome: "done" });
     await cards[first].answer;
     await settled();
-    assert.deepEqual(browser.heldBy("tab-1"), { holdId: second, reason: "handoff" }, `${first} settled first: ${second} still waits`);
+    assert.deepEqual(
+      browser.heldBy("tab-1"),
+      { holdId: second, reason: "handoff" },
+      `${first} settled first: ${second} still waits`,
+    );
 
     handoffs.answer(BOT, second, { outcome: "done" });
     await cards[second].answer;
@@ -277,10 +344,19 @@ test("a rule holds the probed document even when another tab has the same URL", 
   browser.tabs.set("first", { url });
   browser.tabs.set("second", { url });
   const target = browser.service.getApprovalTarget(WORKSPACE, "second");
-  const ask = (waitId: string) => handoffs.request({
-    botId: BOT, waitId, toolCallId: waitId, kind: "action", source: "rule", target: "browser",
-    action: "Finish checkout", open: { url }, browserTarget: target, signal: undefined,
-  });
+  const ask = (waitId: string) =>
+    handoffs.request({
+      botId: BOT,
+      waitId,
+      toolCallId: waitId,
+      kind: "action",
+      source: "rule",
+      target: "browser",
+      action: "Finish checkout",
+      open: { url },
+      browserTarget: target,
+      signal: undefined,
+    });
   const first = ask("purchase");
   assert.equal(await open(BOT, "purchase", url, "handoff"), true);
   assert.equal(browser.heldBy("first"), undefined);
@@ -293,7 +369,11 @@ test("a rule holds the probed document even when another tab has the same URL", 
 
   browser.tabs.set("second", { url, documentRevision: "2" });
   const stale = ask("stale");
-  assert.equal(await open(BOT, "stale", url, "handoff"), false, "a same-URL navigation replaced the document");
+  assert.equal(
+    await open(BOT, "stale", url, "handoff"),
+    false,
+    "a same-URL navigation replaced the document",
+  );
   assert.equal(browser.heldBy("second"), undefined);
   handoffs.answer(BOT, "stale", { outcome: "skipped" });
   await stale;

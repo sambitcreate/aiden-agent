@@ -147,10 +147,7 @@ test("foreground web pauses on the owner renderer and consumes one exact approva
       }),
     /one-shot/u,
   );
-  assert.equal(
-    await broker.beforeToolCall(call("read_file", { path: "README.md" })),
-    undefined,
-  );
+  assert.equal(await broker.beforeToolCall(call("read_file", { path: "README.md" })), undefined);
   assert.equal(prompts.length, 1);
 });
 
@@ -207,8 +204,7 @@ test("argument mutation, expiry, authority revision drift, and revocation fail c
     now: () => clock,
   });
   assert.match(
-    (await mutationBroker.beforeToolCall(call("web_search", args)))?.reason ??
-      "",
+    (await mutationBroker.beforeToolCall(call("web_search", args)))?.reason ?? "",
     /no longer matches/u,
   );
 
@@ -229,10 +225,7 @@ test("argument mutation, expiry, authority revision drift, and revocation fail c
     },
     now: () => clock,
   });
-  assert.match(
-    (await driftBroker.beforeToolCall(call()))?.reason ?? "",
-    /changed after approval/u,
-  );
+  assert.match((await driftBroker.beforeToolCall(call()))?.reason ?? "", /changed after approval/u);
 
   current = original;
   const expiryBroker = createSubagentOutboundApprovalBrokerV2({
@@ -291,9 +284,7 @@ test("execute-time mutation and replay are blocked after renderer authorization"
   });
   const approvedArgs = { query: "approved" };
   assert.equal(
-    await broker.beforeToolCall(
-      call("web_search", approvedArgs, "call-effect"),
-    ),
+    await broker.beforeToolCall(call("web_search", approvedArgs, "call-effect")),
     undefined,
   );
   approvedArgs.query = "changed-after-hook";
@@ -337,10 +328,7 @@ test("only exact read MCP bindings under a foreground authority can be assembled
     },
     now: () => 1_000,
   });
-  assert.equal(
-    await broker.beforeToolCall(call("mcp_docs_search", { term: "one" })),
-    undefined,
-  );
+  assert.equal(await broker.beforeToolCall(call("mcp_docs_search", { term: "one" })), undefined);
   broker.consume({
     toolCallId: "call-1",
     toolName: "mcp_docs_search",
@@ -428,11 +416,12 @@ test("wrong-tool consumption denies the common ledger entry before rejecting", a
   );
   assert.equal(ledger.pendingCount, 1);
   assert.throws(
-    () => broker.consume({
-      toolCallId: "call-wrong-tool",
-      toolName: "mcp_docs_search",
-      arguments: { query: "approved" },
-    }),
+    () =>
+      broker.consume({
+        toolCallId: "call-wrong-tool",
+        toolName: "mcp_docs_search",
+        arguments: { query: "approved" },
+      }),
     /one-shot approval/u,
   );
   assert.equal(ledger.pendingCount, 0);

@@ -15,7 +15,10 @@ export interface QueuedChatMessage {
   grabbedElements?: GrabbedElementContextV1[];
   skillInvocation?: SkillInvocationV1;
   /** inputSource is set only by Aiden Live's chat tools ("By voice"). */
-  options?: { visualize?: boolean; inputSource?: import("../shared/chat-input-source").ChatInputSourceV1 };
+  options?: {
+    visualize?: boolean;
+    inputSource?: import("../shared/chat-input-source").ChatInputSourceV1;
+  };
 }
 
 interface QueueSnapshot {
@@ -69,7 +72,11 @@ export class ChatMessageQueue {
     if (this.listeners.size === 0) this.retention?.unobserved(this);
   }
   private validate(message: QueuedChatMessage) {
-    if (!message.text.trim() && message.attachments.length === 0 && !message.grabbedElements?.length) {
+    if (
+      !message.text.trim() &&
+      message.attachments.length === 0 &&
+      !message.grabbedElements?.length
+    ) {
       throw new Error("Add a message or an attachment before saving.");
     }
     if (new TextEncoder().encode(message.text).byteLength > MAX_CHAT_MESSAGE_CONTENT_BYTES) {
@@ -220,12 +227,14 @@ export class ChatMessageQueue {
 
 /** Nothing queued, held, paused or in flight: a fresh queue would be identical. */
 function holdsNothing(snapshot: QueueSnapshot): boolean {
-  return snapshot.messages.length === 0
-    && !snapshot.paused
-    && !snapshot.sendingId
-    && !snapshot.editingId
-    && !snapshot.holdReason
-    && !snapshot.forkSummaryHeld;
+  return (
+    snapshot.messages.length === 0 &&
+    !snapshot.paused &&
+    !snapshot.sendingId &&
+    !snapshot.editingId &&
+    !snapshot.holdReason &&
+    !snapshot.forkSummaryHeld
+  );
 }
 
 const queues = new Map<string, ChatMessageQueue>();
@@ -243,7 +252,11 @@ export function chatMessageQueue(chatId: string): ChatMessageQueue {
       unobserved: (released) => {
         if (!holdsNothing(released.getSnapshot())) return;
         setTimeout(() => {
-          if (queues.get(chatId) === released && !released.observed && holdsNothing(released.getSnapshot())) {
+          if (
+            queues.get(chatId) === released &&
+            !released.observed &&
+            holdsNothing(released.getSnapshot())
+          ) {
             queues.delete(chatId);
           }
         }, 0);
@@ -331,7 +344,8 @@ export async function admitRunInputOnceStarted(input: {
   delay?: (ms: number) => Promise<void>;
   retryMs?: readonly number[];
 }): Promise<ChatRunInputAdmissionResult> {
-  const delay = input.delay ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
+  const delay =
+    input.delay ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
   const retryMs = input.retryMs ?? RUN_INPUT_START_RETRY_MS;
   for (let attempt = 0; ; attempt += 1) {
     const receipt = await input.admit();
@@ -497,7 +511,12 @@ export function lateSteerQueuedNotice(paused: boolean): string {
  */
 export function withCommittedRunInput<T extends { messages: ChatMessage[] }>(
   chat: T,
-  committed: { messageId: string; text: string; createdAt: number; inputSource?: ChatMessage["inputSource"] },
+  committed: {
+    messageId: string;
+    text: string;
+    createdAt: number;
+    inputSource?: ChatMessage["inputSource"];
+  },
 ): T {
   if (chat.messages.some((message) => message.id === committed.messageId)) return chat;
   return {

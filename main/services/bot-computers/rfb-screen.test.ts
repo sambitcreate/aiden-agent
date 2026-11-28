@@ -25,11 +25,22 @@ interface Encoded {
 /** Records what it was asked to encode; the "image" names the call so results can be told apart. */
 function fakeEncoder() {
   const calls: Encoded[] = [];
-  const encode: BotComputerImageEncoder = async (bgra, width, height, format, quality, maxWidth) => {
+  const encode: BotComputerImageEncoder = async (
+    bgra,
+    width,
+    height,
+    format,
+    quality,
+    maxWidth,
+  ) => {
     // Takes the pixels before it yields, as Electron's createFromBitmap does: the screen hands over its live framebuffer.
     calls.push({ bgra: Buffer.from(bgra), width, height, format, quality, maxWidth });
     const scale = Math.min(1, maxWidth / width);
-    return { image: Buffer.from(`${format}#${calls.length}`), width: Math.round(width * scale), height: Math.round(height * scale) };
+    return {
+      image: Buffer.from(`${format}#${calls.length}`),
+      width: Math.round(width * scale),
+      height: Math.round(height * scale),
+    };
   };
   return { encode, calls };
 }
@@ -47,7 +58,12 @@ async function setup(
   frameIntervalMs = 20,
   extra: Partial<RfbScreenOptions> = {},
 ) {
-  const server = new FakeRfbServer({ width: 40, height: 30, password: "run-pass-1", ...serverOptions });
+  const server = new FakeRfbServer({
+    width: 40,
+    height: 30,
+    password: "run-pass-1",
+    ...serverOptions,
+  });
   const port = await server.listen();
   const encoder = fakeEncoder();
   let connects = 0;
@@ -56,7 +72,10 @@ async function setup(
   const screen = await createRfbScreen({
     connect: async (signal) => {
       connects += 1;
-      const client = await connectRfb(connect({ host: "127.0.0.1", port }), { password: "run-pass-1", signal });
+      const client = await connectRfb(connect({ host: "127.0.0.1", port }), {
+        password: "run-pass-1",
+        signal,
+      });
       const request = client.requestUpdate;
       client.requestUpdate = (incremental) => {
         requested.push({ incremental, at: performance.now() });
@@ -68,10 +87,18 @@ async function setup(
     frameIntervalMs,
     ...extra,
   });
-  return { server, screen: screen as BotComputerLiveScreen, encoder, requested, connects: () => connects };
+  return {
+    server,
+    screen: screen as BotComputerLiveScreen,
+    encoder,
+    requested,
+    connects: () => connects,
+  };
 }
 
-const pixelAt = (bgra: Buffer, width: number, x: number, y: number) => [...bgra.subarray((y * width + x) * 4, (y * width + x) * 4 + 4)];
+const pixelAt = (bgra: Buffer, width: number, x: number, y: number) => [
+  ...bgra.subarray((y * width + x) * 4, (y * width + x) * 4 + 4),
+];
 
 test("a capture asks for the whole screen, waits for it, and encodes it", async () => {
   const { server, screen, encoder } = await setup();
@@ -79,13 +106,26 @@ test("a capture asks for the whole screen, waits for it, and encodes it", async 
     const first = server.connections[0].updateRequests.length;
     server.paint({ x: 5, y: 6, width: 2, height: 2 }, [250, 10, 20]);
     const shot = await screen.capture({ format: "jpeg", maxWidth: 20, quality: 70 });
-    assert.ok(server.connections[0].updateRequests.slice(first).some((request) => !request.incremental), "a full request");
+    assert.ok(
+      server.connections[0].updateRequests.slice(first).some((request) => !request.incremental),
+      "a full request",
+    );
     assert.equal(shot.mimeType, "image/jpeg");
-    assert.deepEqual([shot.width, shot.height, shot.framebufferWidth, shot.framebufferHeight], [20, 15, 40, 30]);
+    assert.deepEqual(
+      [shot.width, shot.height, shot.framebufferWidth, shot.framebufferHeight],
+      [20, 15, 40, 30],
+    );
     assert.equal(shot.image.toString(), "jpeg#1");
     const call = encoder.calls[0];
-    assert.deepEqual([call.width, call.height, call.format, call.quality, call.maxWidth], [40, 30, "jpeg", 70, 20]);
-    assert.deepEqual(pixelAt(call.bgra, 40, 6, 7), [20, 10, 250, 255], "the server's painted pixel, as BGRA");
+    assert.deepEqual(
+      [call.width, call.height, call.format, call.quality, call.maxWidth],
+      [40, 30, "jpeg", 70, 20],
+    );
+    assert.deepEqual(
+      pixelAt(call.bgra, 40, 6, 7),
+      [20, 10, 250, 255],
+      "the server's painted pixel, as BGRA",
+    );
     server.paint({ x: 0, y: 0, width: 40, height: 30 }, [1, 1, 1]);
     await screen.capture({ format: "png", maxWidth: 40 });
     assert.equal(encoder.calls[1].format, "png");
@@ -114,9 +154,18 @@ test("a Take over that aborts a capture surfaces as the take-over, not a screen 
   try {
     const controller = new AbortController();
     controller.abort(new BotComputerTakenOverError());
-    await assert.rejects(screen.capture({ format: "jpeg", maxWidth: 40, signal: controller.signal }), BotComputerTakenOverError);
-    await assert.rejects(screen.pointer({ x: 1, y: 1, buttons: 1 }, controller.signal), BotComputerTakenOverError);
-    await assert.rejects(screen.key({ keysym: 0x61, down: true }, controller.signal), BotComputerTakenOverError);
+    await assert.rejects(
+      screen.capture({ format: "jpeg", maxWidth: 40, signal: controller.signal }),
+      BotComputerTakenOverError,
+    );
+    await assert.rejects(
+      screen.pointer({ x: 1, y: 1, buttons: 1 }, controller.signal),
+      BotComputerTakenOverError,
+    );
+    await assert.rejects(
+      screen.key({ keysym: 0x61, down: true }, controller.signal),
+      BotComputerTakenOverError,
+    );
     assert.deepEqual(server.connections[0].pointer, []);
   } finally {
     await screen.close();
@@ -157,7 +206,9 @@ test("a watched screen keeps asking for changes, no faster than the frame interv
     const seen: number[] = [];
     const stop = live.watch((update) => seen.push(update.version));
     const connection = server.connections[0];
-    await until(() => connection.updateRequests.filter((request) => request.incremental).length >= 1);
+    await until(
+      () => connection.updateRequests.filter((request) => request.incremental).length >= 1,
+    );
     const before = live.version();
     for (let frame = 0; frame < 4; frame += 1) {
       // Each painted frame answers the request the screen made after the one before.
@@ -238,7 +289,11 @@ test("after the screen changes size, the next frame is the repainted screen, nev
     const shot = await frame!;
     assert.deepEqual([shot.width, shot.height], [50, 40]);
     const encoded = encoder.calls[encoder.calls.length - 1];
-    assert.deepEqual(pixelAt(encoded.bgra, 50, 3, 3), [200, 0, 0, 255], "the server's blue screen, not black");
+    assert.deepEqual(
+      pixelAt(encoded.bgra, 50, 3, 3),
+      [200, 0, 0, 255],
+      "the server's blue screen, not black",
+    );
     stop();
   } finally {
     await screen.close();
@@ -270,7 +325,10 @@ test("a new connection asks for the whole screen first; watching it once picture
 });
 
 test("a watched screen reconnects on its own when the VNC connection drops, and an unwatched one waits", async () => {
-  const { server, screen, connects } = await setup({}, 20, { reconnectDelayMs: 10, maxReconnectDelayMs: 40 });
+  const { server, screen, connects } = await setup({}, 20, {
+    reconnectDelayMs: 10,
+    maxReconnectDelayMs: 40,
+  });
   try {
     const seen: number[] = [];
     const stop = screen.watch((update) => seen.push(update.version));

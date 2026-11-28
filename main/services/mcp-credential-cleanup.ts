@@ -24,7 +24,11 @@ import { mutatePortableConfigAndSync } from "./portable-credential-snapshot.js";
 import type { McpServer } from "./types.js";
 import { mcpConfigurationLeases } from "./mcp-config-lease.js";
 import { syncDirectory } from "./durable-fs.js";
-import { createMcpAdmissionQueue, McpPendingJournalState, singleFlight } from "./mcp-admission-queue.js";
+import {
+  createMcpAdmissionQueue,
+  McpPendingJournalState,
+  singleFlight,
+} from "./mcp-admission-queue.js";
 
 const FILE = "pending-mcp-credential-cleanup.json";
 const queue = createMcpAdmissionQueue();

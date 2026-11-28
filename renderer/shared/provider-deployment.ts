@@ -30,9 +30,7 @@ export function isLoopbackProviderBaseUrl(baseUrl: string | undefined): boolean 
  * Preset ids alone are not enough — a remote URL on the lmstudio/ollama preset
  * is hosted unless the user marks it local.
  */
-export function resolveProviderDeployment(
-  provider: ProviderDeploymentFields,
-): ProviderDeployment {
+export function resolveProviderDeployment(provider: ProviderDeploymentFields): ProviderDeployment {
   if (provider.deployment === "local" || provider.deployment === "hosted") {
     return provider.deployment;
   }
@@ -53,6 +51,9 @@ export function providerDeploymentLabel(
   providerId: string,
   isLocal: boolean,
 ): { tag: "Agent" | "Local" | "Hosted"; description: string } {
-  if (isAcpHarnessProvider(providerId)) return { tag: "Agent", description: "Deployment agent on this computer" };
-  return isLocal ? { tag: "Local", description: "Deployment local" } : { tag: "Hosted", description: "Deployment hosted" };
+  if (isAcpHarnessProvider(providerId))
+    return { tag: "Agent", description: "Deployment agent on this computer" };
+  return isLocal
+    ? { tag: "Local", description: "Deployment local" }
+    : { tag: "Hosted", description: "Deployment hosted" };
 }

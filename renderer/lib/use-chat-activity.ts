@@ -10,7 +10,10 @@ import {
 } from "./chat-activity";
 import { applyChatReadMarkersSnapshot } from "./chat-read-markers";
 import { parseChatActivitySnapshot } from "../shared/chat-activity";
-import { parseChatReadMarkersSnapshot, type ChatReadMarkersSnapshot } from "../shared/chat-row-state";
+import {
+  parseChatReadMarkersSnapshot,
+  type ChatReadMarkersSnapshot,
+} from "../shared/chat-row-state";
 import { parseChatTriageSnapshot, type ChatTriageSnapshot } from "../shared/chat-triage";
 
 function selectChatIds(chats: ChatMeta[]): string[] {
@@ -111,7 +114,10 @@ export function useChatTriage(): ChatTriageSnapshot | null {
     let disposed = false;
     const apply = (payload: unknown) => {
       const snapshot = parseChatTriageSnapshot(payload);
-      if (snapshot) setTriage((current) => (current && snapshot.revision < current.revision ? current : snapshot));
+      if (snapshot)
+        setTriage((current) =>
+          current && snapshot.revision < current.revision ? current : snapshot,
+        );
     };
     const unsubscribe = onNotification("chats:triage-changed", apply);
     void chatsApi

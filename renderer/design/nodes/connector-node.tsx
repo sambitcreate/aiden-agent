@@ -13,7 +13,11 @@ import { useDesignNodeContext } from "./design-node-context";
 const HIT_WIDTH = 14;
 
 /** The arrowhead at `tip`, coming from `from`, as an SVG polygon; and where the line should stop. */
-export function arrowHead(from: DesignPoint, tip: DesignPoint, width: number): { points: string; base: DesignPoint } {
+export function arrowHead(
+  from: DesignPoint,
+  tip: DesignPoint,
+  width: number,
+): { points: string; base: DesignPoint } {
   const length = Math.hypot(tip.x - from.x, tip.y - from.y) || 1;
   const ux = (tip.x - from.x) / length;
   const uy = (tip.y - from.y) / length;
@@ -22,11 +26,18 @@ export function arrowHead(from: DesignPoint, tip: DesignPoint, width: number): {
   const spread = size * 0.5;
   const left = { x: base.x - uy * spread, y: base.y + ux * spread };
   const right = { x: base.x + uy * spread, y: base.y - ux * spread };
-  const fmt = (point: DesignPoint) => `${Math.round(point.x * 100) / 100},${Math.round(point.y * 100) / 100}`;
+  const fmt = (point: DesignPoint) =>
+    `${Math.round(point.x * 100) / 100},${Math.round(point.y * 100) / 100}`;
   return { points: `${fmt(tip)} ${fmt(left)} ${fmt(right)}`, base };
 }
 
-export function ConnectorNode({ id, data, selected, positionAbsoluteX, positionAbsoluteY }: NodeProps<DesignNode>) {
+export function ConnectorNode({
+  id,
+  data,
+  selected,
+  positionAbsoluteX,
+  positionAbsoluteY,
+}: NodeProps<DesignNode>) {
   const { frame } = data;
   const canvas = useDesignNodeContext();
   const flow = useReactFlow();
@@ -41,10 +52,10 @@ export function ConnectorNode({ id, data, selected, positionAbsoluteX, positionA
       : [ends[0], dragging.point]
     : ends;
   // Points relative to the node's top left; while an end is dragged it can leave the box, which SVG allows.
-  const local = shown.map((point) => ({ x: point.x - positionAbsoluteX, y: point.y - positionAbsoluteY })) as [
-    DesignPoint,
-    DesignPoint,
-  ];
+  const local = shown.map((point) => ({
+    x: point.x - positionAbsoluteX,
+    y: point.y - positionAbsoluteY,
+  })) as [DesignPoint, DesignPoint];
   const width = frame.strokeWidth ?? DESIGN_DRAW_DEFAULTS.connector.strokeWidth;
   const color = designColorVar(frame.color ?? DESIGN_DRAW_DEFAULTS.connector.color);
   const endHead = frame.arrow ? arrowHead(local[0], local[1], width) : null;
@@ -59,7 +70,8 @@ export function ConnectorNode({ id, data, selected, positionAbsoluteX, positionA
     event.preventDefault();
     const handle = event.currentTarget;
     handle.setPointerCapture(event.pointerId);
-    const at = (move: PointerEvent | React.PointerEvent) => flow.screenToFlowPosition({ x: move.clientX, y: move.clientY });
+    const at = (move: PointerEvent | React.PointerEvent) =>
+      flow.screenToFlowPosition({ x: move.clientX, y: move.clientY });
     setDragging({ index, point: at(event) });
     const onMove = (move: PointerEvent) => setDragging({ index, point: at(move) });
     const onUp = (up: PointerEvent) => {
@@ -100,7 +112,15 @@ export function ConnectorNode({ id, data, selected, positionAbsoluteX, positionA
           strokeWidth={width + 8}
         />
       ) : null}
-      <line x1={lineFrom.x} y1={lineFrom.y} x2={lineTo.x} y2={lineTo.y} stroke={color} strokeWidth={width} strokeLinecap="round" />
+      <line
+        x1={lineFrom.x}
+        y1={lineFrom.y}
+        x2={lineTo.x}
+        y2={lineTo.y}
+        stroke={color}
+        strokeWidth={width}
+        strokeLinecap="round"
+      />
       {endHead ? <polygon points={endHead.points} fill={color} /> : null}
       {startHead ? <polygon points={startHead.points} fill={color} /> : null}
       <line

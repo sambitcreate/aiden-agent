@@ -53,12 +53,16 @@ test("brands Pi OAuth callbacks as Aiden and remains idempotent", async (t) => {
   assert.match(failure, /<title>Aiden Agent sign-in failed<\/title>/u);
   assert.match(failure, /Retry sign-in/u);
 
-  const { startOAuthCallbackServer } = await import(pathToFileURL(
-    path.join(packageRoot, "dist", "auth", "oauth", "callback-server.js"),
-  ).href);
+  const { startOAuthCallbackServer } = await import(
+    pathToFileURL(path.join(packageRoot, "dist", "auth", "oauth", "callback-server.js")).href
+  );
   const server = await startOAuthCallbackServer({
-    providerName: "OpenAI", host: "127.0.0.1", port: 0, path: "/auth/callback",
-    state: "test-state", complete: async (code) => code,
+    providerName: "OpenAI",
+    host: "127.0.0.1",
+    port: 0,
+    path: "/auth/callback",
+    state: "test-state",
+    complete: async (code) => code,
   });
   try {
     const response = await fetch(`${server.redirectUri}?state=test-state&code=accepted`);

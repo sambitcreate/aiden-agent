@@ -1,7 +1,10 @@
 import { COMPOSIO_SERVICE_SERVER_ID } from "../../renderer/shared/composio-service.js";
 import { localComputerNoun } from "../../renderer/shared/computer-noun.js";
 import { createBotCapabilityOpaqueIdMint } from "./bot-capability-bindings.js";
-import { botConnectionCapabilityIdentity, COMPOSIO_SERVICE_ACCESS_IDENTITY } from "./bot-connection-capability-identity.js";
+import {
+  botConnectionCapabilityIdentity,
+  COMPOSIO_SERVICE_ACCESS_IDENTITY,
+} from "./bot-connection-capability-identity.js";
 import { createBotSkillApprovals } from "./bot-skill-approvals.js";
 import type { DiscoveredSkill } from "./types.js";
 import * as fs from "node:fs/promises";
@@ -83,13 +86,17 @@ export const botSkillContentWatcher = new BotSkillContentWatcher(() => {
 });
 
 /** Which home skills of a Bot the person approved (spec 2026-10-27 §7 L0). */
-export const botSkillApprovals = createBotSkillApprovals({ profileDir: () => app.getPath("userData") });
+export const botSkillApprovals = createBotSkillApprovals({
+  profileDir: () => app.getPath("userData"),
+});
 
 /** A skill found in a Bot's folder that nobody approved waits on one review card. */
 function reportUnapprovedHomeSkills(botId: string, found: readonly DiscoveredSkill[]): void {
   void import("./bot-skills/proposals-main.js")
     .then(({ reviewHomeSkills }) => reviewHomeSkills(botId, found))
-    .catch((error: unknown) => logger.warn("bots", `Bot ${botId} skill review card failed.`, error));
+    .catch((error: unknown) =>
+      logger.warn("bots", `Bot ${botId} skill review card failed.`, error),
+    );
 }
 
 /** A Bot skill was added or approved: reload skills and Bot authority. */
@@ -99,7 +106,9 @@ export function invalidateBotSkills(): void {
 }
 
 /** Skill names in use for a Bot, and where each comes from. */
-export async function botSkillNameSources(botId: string): Promise<Map<string, "configured" | "workspace" | "global">> {
+export async function botSkillNameSources(
+  botId: string,
+): Promise<Map<string, "configured" | "workspace" | "global">> {
   const sources = new Map<string, "configured" | "workspace" | "global">();
   const home = (await botManagedWorkspace.resolve(botId)).homePath;
   for (const skill of await discoverSkillCandidates(home)) {
@@ -122,7 +131,8 @@ export async function resolveBotRuntimeSkills(botId: string) {
     loadBotHomePath: async () => (await botManagedWorkspace.resolve(botId)).homePath,
     discover: (workspaceRoot) => discoverSkillCandidates(workspaceRoot),
     // Approval is of exact content, keyed by its fingerprint.
-    isHomeSkillApproved: (_stableId, fingerprint) => botSkillApprovals.isApproved(botId, fingerprint, fingerprint),
+    isHomeSkillApproved: (_stableId, fingerprint) =>
+      botSkillApprovals.isApproved(botId, fingerprint, fingerprint),
     onUnapprovedHomeSkills: (found) => reportUnapprovedHomeSkills(botId, found),
   });
   await botSkillContentWatcher.watchSkillFiles(
@@ -283,7 +293,8 @@ export const botCapabilityCatalog = createBotCapabilityCatalogMainService(
       (await import("./browser/service.js")).browserService.agentAccessDefaultAllowed(),
     // Never on Linux or Intel Macs; elsewhere once Settings → Computers & VMs → Bot computers is set up.
     botComputersReady: async () => {
-      const { botComputers, botComputersEnabled } = await import("./bot-computers/bot-computers-main.js");
+      const { botComputers, botComputersEnabled } =
+        await import("./bot-computers/bot-computers-main.js");
       return botComputersEnabled() && (await botComputers().host.baseReady());
     },
   }),
@@ -305,7 +316,19 @@ export const botCapabilityCatalog = createBotCapabilityCatalogMainService(
 );
 
 /** Model-free source ceilings; no providers, MCP inventory or credentials are read. */
-export async function botConnectorSourceSelectionIds(serverId:string){
-  const mint=createBotCapabilityOpaqueIdMint(await opaqueKeyStore.load());
-  return {connectionId:mint("connection",botConnectionCapabilityIdentity({sourceId:serverId,...(serverId===COMPOSIO_SERVICE_SERVER_ID?{accessIdentity:COMPOSIO_SERVICE_ACCESS_IDENTITY}:{})}),"0".repeat(64)),schedulesId:mint("other","schedules","0".repeat(64))};
+export async function botConnectorSourceSelectionIds(serverId: string) {
+  const mint = createBotCapabilityOpaqueIdMint(await opaqueKeyStore.load());
+  return {
+    connectionId: mint(
+      "connection",
+      botConnectionCapabilityIdentity({
+        sourceId: serverId,
+        ...(serverId === COMPOSIO_SERVICE_SERVER_ID
+          ? { accessIdentity: COMPOSIO_SERVICE_ACCESS_IDENTITY }
+          : {}),
+      }),
+      "0".repeat(64),
+    ),
+    schedulesId: mint("other", "schedules", "0".repeat(64)),
+  };
 }

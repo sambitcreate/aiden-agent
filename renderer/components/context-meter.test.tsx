@@ -24,7 +24,10 @@ function pressure(extra: Partial<ChatContextPressureV1> = {}): ChatContextPressu
 
 test("the runtime compaction rule outranks the presentation threshold", () => {
   assert.equal(contextMeterPhase(pressure(), false, false), "normal");
-  assert.equal(contextMeterPhase(pressure({ percentOfUsableInput: 80 }), false, false), "approaching");
+  assert.equal(
+    contextMeterPhase(pressure({ percentOfUsableInput: 80 }), false, false),
+    "approaching",
+  );
   // shouldCompact trips even below the 80% presentation cue.
   assert.equal(
     contextMeterPhase(pressure({ percentOfUsableInput: 60, shouldCompact: true }), false, false),
@@ -57,13 +60,7 @@ test("the breakdown announces each label as the term and its token count as the 
   );
   assert.deepEqual(
     pairs.map(([term]) => term),
-    [
-      "conversation",
-      "system + tools",
-      "recent work",
-      "reserved",
-      "model context",
-    ],
+    ["conversation", "system + tools", "recent work", "reserved", "model context"],
   );
   for (const [, value] of pairs) assert.match(value, /\d/u);
 });
@@ -84,13 +81,47 @@ test("the trigger reports usable-input pressure without clamping", () => {
   assert.match(over, /text-support-warning/u);
 });
 
-
 test("context details aggregate durable turn totals once without inventing unavailable usage", async () => {
   const { recordedChatUsage, ChatContextPanel } = await import("./chat-context-panel.js");
-  const turn = { id: "a", role: "assistant" as const, content: "done", createdAt: 20, turnStats: { version: 1 as const, startedAt: 10, finishedAt: 20, usage: { input: 100, output: 20, cacheRead: 500, cacheWrite: 40, total: 660, requests: 3 } } };
-  const messages = [turn, turn, { id: "old", role: "assistant" as const, content: "legacy", createdAt: 1 }];
-  assert.deepEqual(recordedChatUsage({ messages }), { input: 100, output: 20, cacheRead: 500, cacheWrite: 40, total: 660, requests: 3, turns: 1, assistantMessages: 2, userMessages: 0 });
-  const html = renderToStaticMarkup(<ChatContextPanel details={{ chat: { id: "chat", title: "Test", createdAt: 1, updatedAt: 20, messages }, pressure: pressure(), compacting: false, providerLabel: "Local", modelLabel: "Model" }} />);
+  const turn = {
+    id: "a",
+    role: "assistant" as const,
+    content: "done",
+    createdAt: 20,
+    turnStats: {
+      version: 1 as const,
+      startedAt: 10,
+      finishedAt: 20,
+      usage: { input: 100, output: 20, cacheRead: 500, cacheWrite: 40, total: 660, requests: 3 },
+    },
+  };
+  const messages = [
+    turn,
+    turn,
+    { id: "old", role: "assistant" as const, content: "legacy", createdAt: 1 },
+  ];
+  assert.deepEqual(recordedChatUsage({ messages }), {
+    input: 100,
+    output: 20,
+    cacheRead: 500,
+    cacheWrite: 40,
+    total: 660,
+    requests: 3,
+    turns: 1,
+    assistantMessages: 2,
+    userMessages: 0,
+  });
+  const html = renderToStaticMarkup(
+    <ChatContextPanel
+      details={{
+        chat: { id: "chat", title: "Test", createdAt: 1, updatedAt: 20, messages },
+        pressure: pressure(),
+        compacting: false,
+        providerLabel: "Local",
+        modelLabel: "Model",
+      }}
+    />,
+  );
   assert.match(html, /Reported by 1 of 2 saved assistant turns/);
   assert.match(html, /Total cost<.*Unavailable/);
   assert.doesNotMatch(html, /\$0\.00/);
@@ -101,27 +132,76 @@ test("context details aggregate durable turn totals once without inventing unava
   assert.match(text, /78% from cache/u);
 });
 
-
 test("cumulative usage past a billion tokens reads in billions", async () => {
   const { ChatContextPanel } = await import("./chat-context-panel.js");
-  const usage = { input: 90_000_000, output: 10_000_000, cacheRead: 1_100_000_000, cacheWrite: 0, total: 1_200_000_000, requests: 900 };
-  const turn = { id: "a", role: "assistant" as const, content: "done", createdAt: 20, turnStats: { version: 1 as const, startedAt: 10, finishedAt: 20, usage } };
-  const html = renderToStaticMarkup(<ChatContextPanel details={{ chat: { id: "chat", title: "Long", createdAt: 1, updatedAt: 20, messages: [turn] }, pressure: null, compacting: false, providerLabel: "Local", modelLabel: "Model" }} />);
+  const usage = {
+    input: 90_000_000,
+    output: 10_000_000,
+    cacheRead: 1_100_000_000,
+    cacheWrite: 0,
+    total: 1_200_000_000,
+    requests: 900,
+  };
+  const turn = {
+    id: "a",
+    role: "assistant" as const,
+    content: "done",
+    createdAt: 20,
+    turnStats: { version: 1 as const, startedAt: 10, finishedAt: 20, usage },
+  };
+  const html = renderToStaticMarkup(
+    <ChatContextPanel
+      details={{
+        chat: { id: "chat", title: "Long", createdAt: 1, updatedAt: 20, messages: [turn] },
+        pressure: null,
+        compacting: false,
+        providerLabel: "Local",
+        modelLabel: "Model",
+      }}
+    />,
+  );
   assert.match(html, />1\.2B</u);
   assert.match(html, /92% from cache/u);
 });
 
 test("a chat that read nothing from its cache shows 0% and names the last miss, but a provider with no cache shows no figure", async () => {
   const { ChatContextPanel } = await import("./chat-context-panel.js");
-  const usage = { input: 9_000, output: 300, cacheRead: 0, cacheWrite: 0, total: 9_300, requests: 2 };
-  const turn = { id: "a", role: "assistant" as const, content: "done", createdAt: 20, turnStats: { version: 1 as const, startedAt: 10, finishedAt: 20, usage } };
+  const usage = {
+    input: 9_000,
+    output: 300,
+    cacheRead: 0,
+    cacheWrite: 0,
+    total: 9_300,
+    requests: 2,
+  };
+  const turn = {
+    id: "a",
+    role: "assistant" as const,
+    content: "done",
+    createdAt: 20,
+    turnStats: { version: 1 as const, startedAt: 10, finishedAt: 20, usage },
+  };
   const render = (extra: Partial<ChatContextPressureV1>) =>
-    renderToStaticMarkup(<ChatContextPanel details={{ chat: { id: "chat", title: "Cold", createdAt: 1, updatedAt: 20, messages: [turn] }, pressure: pressure(extra), compacting: false, providerLabel: "Local", modelLabel: "Model" }} />)
-      .replace(/<[^>]+>/gu, " ").replace(/\s+/gu, " ");
+    renderToStaticMarkup(
+      <ChatContextPanel
+        details={{
+          chat: { id: "chat", title: "Cold", createdAt: 1, updatedAt: 20, messages: [turn] },
+          pressure: pressure(extra),
+          compacting: false,
+          providerLabel: "Local",
+          modelLabel: "Model",
+        }}
+      />,
+    )
+      .replace(/<[^>]+>/gu, " ")
+      .replace(/\s+/gu, " ");
   const missed = render({ lastCacheMiss: { source: "tools", at: 19 } });
   assert.match(missed, /0% from cache/u);
   assert.match(missed, /Cache missed: tools changed/u);
-  assert.match(render({ lastCacheMiss: { source: "system:agents-instructions", at: 19 } }), /Cache missed: system prompt changed/u);
+  assert.match(
+    render({ lastCacheMiss: { source: "system:agents-instructions", at: 19 } }),
+    /Cache missed: system prompt changed/u,
+  );
   assert.doesNotMatch(render({}), /Cache missed/u);
   // A documented cache that was never read is still a real 0%.
   assert.match(render({ promptCache: { ttlMs: 300_000, lastRequestAt: 19 } }), /0% from cache/u);
@@ -133,15 +213,39 @@ test("a chat that read nothing from its cache shows 0% and names the last miss, 
 
 test("a chat whose provider never reported usage says so once instead of a column of Unavailable", async () => {
   const { ChatContextPanel } = await import("./chat-context-panel.js");
-  const messages = [{ id: "old", role: "assistant" as const, content: "local reply", createdAt: 1 }];
-  const html = renderToStaticMarkup(<ChatContextPanel details={{ chat: { id: "chat", title: "Test", createdAt: 1, updatedAt: 20, messages }, pressure: pressure(), compacting: false, providerLabel: "Ollama", modelLabel: "llama3.2" }} />);
+  const messages = [
+    { id: "old", role: "assistant" as const, content: "local reply", createdAt: 1 },
+  ];
+  const html = renderToStaticMarkup(
+    <ChatContextPanel
+      details={{
+        chat: { id: "chat", title: "Test", createdAt: 1, updatedAt: 20, messages },
+        pressure: pressure(),
+        compacting: false,
+        providerLabel: "Ollama",
+        modelLabel: "llama3.2",
+      }}
+    />,
+  );
   assert.match(html, /hasn(?:'|&#x27;)t reported token usage/u);
   assert.doesNotMatch(html, /Unavailable/u);
 });
 
 test("the Session panel's provider chip wears the provider's mark and its model chip the model's own", async () => {
   const { ChatContextPanel } = await import("./chat-context-panel.js");
-  const html = renderToStaticMarkup(<ChatContextPanel details={{ chat: { id: "chat", title: "Test", createdAt: 1, updatedAt: 20, messages: [] }, pressure: null, compacting: false, providerId: "anthropic", providerLabel: "Anthropic", modelId: "claude-opus-4-1", modelLabel: "Claude Opus 4.1" }} />);
+  const html = renderToStaticMarkup(
+    <ChatContextPanel
+      details={{
+        chat: { id: "chat", title: "Test", createdAt: 1, updatedAt: 20, messages: [] },
+        pressure: null,
+        compacting: false,
+        providerId: "anthropic",
+        providerLabel: "Anthropic",
+        modelId: "claude-opus-4-1",
+        modelLabel: "Claude Opus 4.1",
+      }}
+    />,
+  );
   const chipFor = (label: string) => {
     const end = html.indexOf(`${label}</`);
     assert.ok(end > 0, `${label} chip is rendered`);

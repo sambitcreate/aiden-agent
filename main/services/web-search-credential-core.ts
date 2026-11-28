@@ -32,9 +32,11 @@ export const WEB_SEARCH_CREDENTIAL_PREFIX = "web-search:";
 /** Extraction-model credentials share the pool but never a search provider's slot. */
 export const WEB_EXTRACT_CREDENTIAL_PREFIX = "web-extract:";
 /** The fixed origin each pooled extraction credential is bound to. */
-const WEB_EXTRACT_CREDENTIAL_ORIGINS: Readonly<Record<WebExtractKeyPoolId, string>> = Object.freeze({
-  "cloudflare-workers-ai": "https://api.cloudflare.com",
-});
+const WEB_EXTRACT_CREDENTIAL_ORIGINS: Readonly<Record<WebExtractKeyPoolId, string>> = Object.freeze(
+  {
+    "cloudflare-workers-ai": "https://api.cloudflare.com",
+  },
+);
 export const WEB_SEARCH_API_KEY_SLOT = "api-key";
 /** The pre-v2 Exa key is intentionally retained as a read/migration input. */
 export const LEGACY_EXA_SECRET_ID = "exa";

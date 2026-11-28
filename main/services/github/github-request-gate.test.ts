@@ -24,7 +24,12 @@ function clock(start = T0) {
 }
 
 function rateLimitBody(remaining: number, limit = 5_000, cost = 1, resetAt = T0 + 3_600_000) {
-  return { data: { viewer: { login: "octo" }, rateLimit: { cost, limit, remaining, resetAt: new Date(resetAt).toISOString() } } };
+  return {
+    data: {
+      viewer: { login: "octo" },
+      rateLimit: { cost, limit, remaining, resetAt: new Date(resetAt).toISOString() },
+    },
+  };
 }
 
 function harness(responder: ScriptedResponder, start = T0) {
@@ -53,16 +58,26 @@ describe("GitHub rate-limit gate", () => {
     let limited = true;
     const { api, time, requests } = harness(() =>
       limited
-        ? jsonResponse({ message: "You have exceeded a secondary rate limit." }, 403, { "retry-after": "90" })
+        ? jsonResponse({ message: "You have exceeded a secondary rate limit." }, 403, {
+            "retry-after": "90",
+          })
         : jsonResponse({ id: 1 }),
     );
 
-    const first = await api.rest({ host: "github.com", operation: "repo", path: "/repos/acme/app" });
+    const first = await api.rest({
+      host: "github.com",
+      operation: "repo",
+      path: "/repos/acme/app",
+    });
     assert.equal(first.kind, "rate-limited");
     assert.equal(first.kind === "rate-limited" && first.retryAt, T0 + 90_000);
 
     time.advance(60_000);
-    const refused = await api.rest({ host: "github.com", operation: "repo", path: "/repos/acme/app" });
+    const refused = await api.rest({
+      host: "github.com",
+      operation: "repo",
+      path: "/repos/acme/app",
+    });
     assert.deepEqual(
       refused.kind === "rate-limited" ? { retryAt: refused.retryAt, sent: refused.sent } : refused,
       { retryAt: T0 + 90_000, sent: false },
@@ -71,13 +86,19 @@ describe("GitHub rate-limit gate", () => {
 
     limited = false;
     time.advance(30_001);
-    const resumed = await api.rest({ host: "github.com", operation: "repo", path: "/repos/acme/app" });
+    const resumed = await api.rest({
+      host: "github.com",
+      operation: "repo",
+      path: "/repos/acme/app",
+    });
     assert.equal(resumed.kind, "ok");
     assert.equal(requests.length, 2);
   });
 
   it("backs off from one minute and doubles when GitHub names no retry time", async () => {
-    const { api, gate, time } = harness(() => jsonResponse({ message: "API rate limit exceeded" }, 429));
+    const { api, gate, time } = harness(() =>
+      jsonResponse({ message: "API rate limit exceeded" }, 429),
+    );
 
     await api.rest({ host: "github.com", operation: "repo", path: "/repos/acme/app" });
     assert.equal(gate.governor.pausedUntil("github.com:token-a"), T0 + 60_000);
@@ -96,11 +117,21 @@ describe("GitHub rate-limit gate", () => {
     limited = false;
     time.advance(10_000);
 
-    const clicked = await api.rest({ host: "github.com", operation: "repo", path: "/repos/acme/app", interactive: true });
+    const clicked = await api.rest({
+      host: "github.com",
+      operation: "repo",
+      path: "/repos/acme/app",
+      interactive: true,
+    });
     assert.equal(clicked.kind === "rate-limited" && clicked.sent, false);
     assert.equal(requests.length, 1);
     time.advance(50_001);
-    const later = await api.rest({ host: "github.com", operation: "repo", path: "/repos/acme/app", interactive: true });
+    const later = await api.rest({
+      host: "github.com",
+      operation: "repo",
+      path: "/repos/acme/app",
+      interactive: true,
+    });
     assert.equal(later.kind, "ok");
     assert.equal(requests.length, 2);
   });
@@ -112,7 +143,8 @@ describe("GitHub rate-limit gate", () => {
       () =>
         new Promise<Response>((resolve) => {
           call += 1;
-          const response = call === 1 ? jsonResponse({ id: 1 }) : jsonResponse({ message: "rate limit" }, 429);
+          const response =
+            call === 1 ? jsonResponse({ id: 1 }) : jsonResponse({ message: "rate limit" }, 429);
           releases.push(() => resolve(response));
         }),
     );
@@ -133,7 +165,11 @@ describe("GitHub rate-limit gate", () => {
         : jsonResponse({ id: 1 }),
     );
     await api.rest({ host: "github.com", operation: "repo", path: "/repos/acme/app" });
-    const enterprise = await api.rest({ host: "ghe.example.com", operation: "repo", path: "/repos/acme/app" });
+    const enterprise = await api.rest({
+      host: "ghe.example.com",
+      operation: "repo",
+      path: "/repos/acme/app",
+    });
     assert.equal(enterprise.kind, "ok");
     assert.equal(requests.length, 2);
   });
@@ -141,8 +177,15 @@ describe("GitHub rate-limit gate", () => {
   it("asks GitHub for the point budget inside read queries but not mutations", async () => {
     const { api, requests } = harness(() => jsonResponse(rateLimitBody(4_000)));
     await api.graphql(read());
-    await api.graphql({ host: "github.com", operation: "mutate", query: "mutation M { addStar(input: {}) { clientMutationId } }" });
-    assert.match(requests[0]?.json?.query ?? "", /rateLimit\s*\{\s*cost limit remaining resetAt\s*\}/u);
+    await api.graphql({
+      host: "github.com",
+      operation: "mutate",
+      query: "mutation M { addStar(input: {}) { clientMutationId } }",
+    });
+    assert.match(
+      requests[0]?.json?.query ?? "",
+      /rateLimit\s*\{\s*cost limit remaining resetAt\s*\}/u,
+    );
     assert.doesNotMatch(requests[1]?.json?.query ?? "", /rateLimit/u);
   });
 
@@ -174,7 +217,11 @@ describe("GitHub rate-limit gate", () => {
     releases.shift()?.();
     await first;
 
-    const results = Promise.all([api.graphql(read("batch")), api.graphql(read("batch")), api.graphql(read("batch"))]);
+    const results = Promise.all([
+      api.graphql(read("batch")),
+      api.graphql(read("batch")),
+      api.graphql(read("batch")),
+    ]);
     await new Promise((resolve) => setImmediate(resolve));
     releases.splice(0).forEach((release) => release());
     const outcomes = (await results).map((result) => result.kind);
@@ -228,7 +275,9 @@ describe("GitHub rate-limit gate", () => {
 
   it("accounts usage per operation without exposing credentials", async () => {
     const { api, gate, time, logs } = harness((request) =>
-      request.json ? jsonResponse(rateLimitBody(4_990, 5_000, 3)) : jsonResponse({ message: "rate limit" }, 429),
+      request.json
+        ? jsonResponse(rateLimitBody(4_990, 5_000, 3))
+        : jsonResponse({ message: "rate limit" }, 429),
     );
     await api.graphql(read("pr.summary.batch"));
     await api.graphql(read("pr.summary.batch"));
@@ -253,7 +302,8 @@ describe("GitHub rate-limit gate", () => {
 
 describe("withRateLimitSelection", () => {
   it("adds the selection to the operation, not to fragments", () => {
-    const query = "fragment F on PullRequest { number } query Q($n: Int!) { repository(owner: \"a\", name: \"b\") { pullRequest(number: $n) { ...F } } }";
+    const query =
+      'fragment F on PullRequest { number } query Q($n: Int!) { repository(owner: "a", name: "b") { pullRequest(number: $n) { ...F } } }';
     const amended = withRateLimitSelection(query);
     assert.match(amended, /fragment F on PullRequest \{ number \}/u);
     assert.match(amended, /\}\s+rateLimit \{ cost limit remaining resetAt \}\s*\}$/u);

@@ -47,7 +47,8 @@ export function phoneWheelNavigation(input: {
   readonly height: number;
 }): PhoneNavigation | null {
   const { deltaX, deltaY, deltaMode, ctrlKey, width, height } = input;
-  if (![deltaX, deltaY, width, height].every(Number.isFinite) || width <= 0 || height <= 0) return null;
+  if (![deltaX, deltaY, width, height].every(Number.isFinite) || width <= 0 || height <= 0)
+    return null;
   if (deltaMode !== 0 && deltaMode !== 1 && deltaMode !== 2) return null;
   const unit = deltaMode === 1 ? 16 : deltaMode === 2 ? height : 1;
   const clamp = (value: number, limit: number) => Math.min(limit, Math.max(-limit, value));
@@ -70,7 +71,8 @@ export function createPhoneInteraction(options: {
   readonly zoomBy: (logDelta: number) => void;
   readonly onInteractionActive?: (active: boolean, mode: "touch" | "orbit") => void;
 }) {
-  let active: { id: number; mode: "touch" | "orbit"; last: Point; screen: Point | null } | null = null;
+  let active: { id: number; mode: "touch" | "orbit"; last: Point; screen: Point | null } | null =
+    null;
   return {
     active: () => active !== null,
     navigate(gesture: PhoneNavigation) {

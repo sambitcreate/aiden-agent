@@ -43,8 +43,8 @@ export function useTheme(): void {
       return runAppearanceIntent(hydrationRevision, async (isCurrent) => {
         const appearance = await settingsApi.getAppearance();
         if (!active || !isCurrent()) return;
-        let themeInfo = await nativeRevision.readStable(
-          () => window.aidenAPI.nativeTheme.getInfo(),
+        let themeInfo = await nativeRevision.readStable(() =>
+          window.aidenAPI.nativeTheme.getInfo(),
         );
         if (!active || !isCurrent()) return;
         nativeDark = themeInfo.shouldUseDarkColors;
@@ -52,8 +52,8 @@ export function useTheme(): void {
         config = normalizeAppearanceConfig(appearance);
         if (themeInfo.themeSource !== config.mode) {
           await window.aidenAPI.nativeTheme.setThemeSource(config.mode);
-          const updated = await nativeRevision.readStable(
-            () => window.aidenAPI.nativeTheme.getInfo(),
+          const updated = await nativeRevision.readStable(() =>
+            window.aidenAPI.nativeTheme.getInfo(),
           );
           if (!active || !isCurrent()) return;
           themeInfo = updated;
@@ -62,11 +62,7 @@ export function useTheme(): void {
         }
         render();
       }).catch(() => {
-        if (
-          active &&
-          hydrationRevision === readAppearanceIntentRevision()
-        )
-          render();
+        if (active && hydrationRevision === readAppearanceIntentRevision()) render();
       });
     };
     void hydrate();

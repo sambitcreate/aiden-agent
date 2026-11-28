@@ -23,7 +23,12 @@ import type { AcpPlatformAsset, AcpPlatformKey, AcpRelease } from "./harness.js"
 const FREE_SPACE_MARGIN = 256 * 1024 * 1024;
 const COMPLETE_MARKER = ".install-complete.json";
 
-export type AcpInstallPhase = "downloading" | "verifying" | "extracting" | "validating" | "activating";
+export type AcpInstallPhase =
+  | "downloading"
+  | "verifying"
+  | "extracting"
+  | "validating"
+  | "activating";
 
 export interface AcpInstallProgress {
   phase: AcpInstallPhase;
@@ -36,8 +41,20 @@ export type AcpRuntimeState =
   | { status: "not_installed"; version: string; downloadBytes: number; requiredBytes: number }
   | { status: "installing"; version: string; progress: AcpInstallProgress }
   | { status: "installed"; version: string; runtimeDir: string }
-  | { status: "update_available"; installedVersion: string; version: string; downloadBytes: number; requiredBytes: number }
-  | { status: "failed"; version: string; message: string; downloadBytes: number; requiredBytes: number };
+  | {
+      status: "update_available";
+      installedVersion: string;
+      version: string;
+      downloadBytes: number;
+      requiredBytes: number;
+    }
+  | {
+      status: "failed";
+      version: string;
+      message: string;
+      downloadBytes: number;
+      requiredBytes: number;
+    };
 
 export interface AcpRuntimeLease {
   runtimeDir: string;
@@ -61,12 +78,18 @@ interface ActivePointer {
 }
 
 export function requiredInstallBytes(asset: AcpPlatformAsset): number {
-  return asset.archiveBytes + asset.members.reduce((total, member) => total + member.bytes, 0) + FREE_SPACE_MARGIN;
+  return (
+    asset.archiveBytes +
+    asset.members.reduce((total, member) => total + member.bytes, 0) +
+    FREE_SPACE_MARGIN
+  );
 }
 
 export class AcpRuntimeInstaller {
   private readonly asset: AcpPlatformAsset | undefined;
-  private installing: { controller: AbortController; promise: Promise<void>; progress: AcpInstallProgress } | undefined;
+  private installing:
+    | { controller: AbortController; promise: Promise<void>; progress: AcpInstallProgress }
+    | undefined;
   private failure: string | undefined;
   private active: ActivePointer | undefined;
   private leases = 0;
@@ -138,14 +161,28 @@ export class AcpRuntimeInstaller {
     }
     const sizes = { downloadBytes: asset.archiveBytes, requiredBytes: requiredInstallBytes(asset) };
     if (this.installing) {
-      return { status: "installing", version: this.release.version, progress: { ...this.installing.progress } };
+      return {
+        status: "installing",
+        version: this.release.version,
+        progress: { ...this.installing.progress },
+      };
     }
     if (this.active?.sha256 === asset.sha256) {
-      return { status: "installed", version: this.release.version, runtimeDir: this.versionDir(asset.sha256) };
+      return {
+        status: "installed",
+        version: this.release.version,
+        runtimeDir: this.versionDir(asset.sha256),
+      };
     }
-    if (this.failure) return { status: "failed", version: this.release.version, message: this.failure, ...sizes };
+    if (this.failure)
+      return { status: "failed", version: this.release.version, message: this.failure, ...sizes };
     if (this.active) {
-      return { status: "update_available", installedVersion: this.active.version, version: this.release.version, ...sizes };
+      return {
+        status: "update_available",
+        installedVersion: this.active.version,
+        version: this.release.version,
+        ...sizes,
+      };
     }
     return { status: "not_installed", version: this.release.version, ...sizes };
   }
@@ -182,12 +219,20 @@ export class AcpRuntimeInstaller {
   /** Single-flight install of the pinned release. */
   install(): Promise<void> {
     const asset = this.asset;
-    if (!asset) return Promise.reject(new AcpHarnessError("install", "This computer is not supported."));
-    if (this.removing) return Promise.reject(new AcpHarnessError("install", "Wait for the removal to finish first."));
+    if (!asset)
+      return Promise.reject(new AcpHarnessError("install", "This computer is not supported."));
+    if (this.removing)
+      return Promise.reject(
+        new AcpHarnessError("install", "Wait for the removal to finish first."),
+      );
     if (this.installing) return this.installing.promise;
     if (this.active?.sha256 === asset.sha256) return Promise.resolve();
     const controller = new AbortController();
-    const progress: AcpInstallProgress = { phase: "downloading", receivedBytes: 0, totalBytes: asset.archiveBytes };
+    const progress: AcpInstallProgress = {
+      phase: "downloading",
+      receivedBytes: 0,
+      totalBytes: asset.archiveBytes,
+    };
     this.failure = undefined;
     const promise = this.installOnce(asset, controller.signal, progress)
       .then(() => {
@@ -214,9 +259,13 @@ export class AcpRuntimeInstaller {
 
   /** Delete every installed version. Refused while a process or install is running. */
   async remove(): Promise<void> {
-    if (this.installing) throw new AcpHarnessError("install", "Wait for the installation to finish first.");
+    if (this.installing)
+      throw new AcpHarnessError("install", "Wait for the installation to finish first.");
     if (this.leases > 0) {
-      throw new AcpHarnessError("install", "Stop running chats that use this runtime before removing it.");
+      throw new AcpHarnessError(
+        "install",
+        "Stop running chats that use this runtime before removing it.",
+      );
     }
     // Stop new leases before the files go away.
     this.removing = true;
@@ -246,7 +295,11 @@ export class AcpRuntimeInstaller {
     this.emit();
   }
 
-  private async installOnce(asset: AcpPlatformAsset, signal: AbortSignal, progress: AcpInstallProgress): Promise<void> {
+  private async installOnce(
+    asset: AcpPlatformAsset,
+    signal: AbortSignal,
+    progress: AcpInstallProgress,
+  ): Promise<void> {
     await mkdir(this.platformDir, { recursive: true, mode: 0o700 });
     const required = requiredInstallBytes(asset);
     const free = await this.dependencies.freeBytes(this.platformDir);
@@ -299,12 +352,19 @@ export class AcpRuntimeInstaller {
       response = await this.dependencies.fetch(asset.url, { signal });
     } catch (error) {
       if (signal.aborted) throw abortError();
-      throw new AcpHarnessError("install", "Could not reach Google's download server. Check your connection and try again.", {
-        cause: error,
-      });
+      throw new AcpHarnessError(
+        "install",
+        "Could not reach Google's download server. Check your connection and try again.",
+        {
+          cause: error,
+        },
+      );
     }
     if (!response.ok || !response.body) {
-      throw new AcpHarnessError("install", `The download failed (HTTP ${response.status}). Try again later.`);
+      throw new AcpHarnessError(
+        "install",
+        `The download failed (HTTP ${response.status}). Try again later.`,
+      );
     }
     const hash = createHash("sha256");
     let received = 0;
@@ -313,7 +373,12 @@ export class AcpRuntimeInstaller {
       transform: (chunk: Buffer, _encoding, callback) => {
         received += chunk.length;
         if (received > asset.archiveBytes) {
-          callback(new AcpHarnessError("install", "The download was larger than expected. Nothing was installed."));
+          callback(
+            new AcpHarnessError(
+              "install",
+              "The download was larger than expected. Nothing was installed.",
+            ),
+          );
           return;
         }
         hash.update(chunk);
@@ -326,7 +391,9 @@ export class AcpRuntimeInstaller {
     });
     try {
       await pipeline(
-        Readable.fromWeb(response.body as unknown as import("node:stream/web").ReadableStream<Uint8Array>),
+        Readable.fromWeb(
+          response.body as unknown as import("node:stream/web").ReadableStream<Uint8Array>,
+        ),
         meter,
         createWriteStream(destination, { mode: 0o600 }),
         { signal },
@@ -334,28 +401,46 @@ export class AcpRuntimeInstaller {
     } catch (error) {
       if (signal.aborted) throw abortError();
       if (error instanceof AcpHarnessError) throw error;
-      throw new AcpHarnessError("install", "The download was interrupted. Try again.", { cause: error });
+      throw new AcpHarnessError("install", "The download was interrupted. Try again.", {
+        cause: error,
+      });
     }
     this.setProgress(progress, { phase: "verifying", receivedBytes: received });
     if (received !== asset.archiveBytes || hash.digest("hex") !== asset.sha256) {
-      throw new AcpHarnessError("install", "The download failed its size or SHA-256 check. Nothing was installed.");
+      throw new AcpHarnessError(
+        "install",
+        "The download failed its size or SHA-256 check. Nothing was installed.",
+      );
     }
     const info = await stat(destination);
     if (info.size !== asset.archiveBytes) {
-      throw new AcpHarnessError("install", "The download failed its size check. Nothing was installed.");
+      throw new AcpHarnessError(
+        "install",
+        "The download failed its size check. Nothing was installed.",
+      );
     }
   }
 
   private async readPointer(): Promise<ActivePointer | undefined> {
     try {
-      const parsed = JSON.parse(await readFile(this.pointerFile(), "utf8")) as Partial<ActivePointer>;
-      if (typeof parsed.version !== "string" || typeof parsed.sha256 !== "string" || !/^[a-f0-9]{64}$/u.test(parsed.sha256)) {
+      const parsed = JSON.parse(
+        await readFile(this.pointerFile(), "utf8"),
+      ) as Partial<ActivePointer>;
+      if (
+        typeof parsed.version !== "string" ||
+        typeof parsed.sha256 !== "string" ||
+        !/^[a-f0-9]{64}$/u.test(parsed.sha256)
+      ) {
         return undefined;
       }
-      const marker = JSON.parse(await readFile(path.join(this.versionDir(parsed.sha256), COMPLETE_MARKER), "utf8")) as Partial<ActivePointer>;
+      const marker = JSON.parse(
+        await readFile(path.join(this.versionDir(parsed.sha256), COMPLETE_MARKER), "utf8"),
+      ) as Partial<ActivePointer>;
       if (marker.sha256 !== parsed.sha256) return undefined;
       // An incomplete tree (deleted member) is not a usable runtime.
-      const asset = Object.values(this.release.platforms).find((candidate) => candidate?.sha256 === parsed.sha256);
+      const asset = Object.values(this.release.platforms).find(
+        (candidate) => candidate?.sha256 === parsed.sha256,
+      );
       if (asset) {
         for (const member of asset.members) {
           const info = await stat(path.join(this.versionDir(parsed.sha256), member.name));
@@ -387,17 +472,23 @@ export class AcpRuntimeInstaller {
     // pinned version just replaced them for new launches.
     if (this.leases > 0) return;
     await Promise.all(
-      entries.filter((entry) => entry !== keep).map((entry) => rm(path.join(versions, entry), { recursive: true, force: true })),
+      entries
+        .filter((entry) => entry !== keep)
+        .map((entry) => rm(path.join(versions, entry), { recursive: true, force: true })),
     );
   }
 }
 
 function openZip(file: string): Promise<yauzl.ZipFile> {
   return new Promise((resolve, reject) => {
-    yauzl.open(file, { lazyEntries: true, autoClose: true, strictFileNames: true, validateEntrySizes: true }, (error, zip) => {
-      if (error || !zip) reject(error ?? new Error("Could not open the archive."));
-      else resolve(zip);
-    });
+    yauzl.open(
+      file,
+      { lazyEntries: true, autoClose: true, strictFileNames: true, validateEntrySizes: true },
+      (error, zip) => {
+        if (error || !zip) reject(error ?? new Error("Could not open the archive."));
+        else resolve(zip);
+      },
+    );
   });
 }
 
@@ -413,20 +504,32 @@ export async function extractExactMembers(
   const expected = new Map(asset.members.map((member) => [member.name, member.bytes]));
   if (zip.entryCount !== expected.size) {
     zip.close();
-    throw new AcpHarnessError("install", "The archive does not contain the expected files. Nothing was installed.");
+    throw new AcpHarnessError(
+      "install",
+      "The archive does not contain the expected files. Nothing was installed.",
+    );
   }
   const seen = new Set<string>();
   await new Promise<void>((resolve, reject) => {
     const fail = (error: unknown) => {
       zip.close();
-      reject(error instanceof AcpHarnessError ? error : new AcpHarnessError("install", "The archive could not be extracted. Nothing was installed.", { cause: error }));
+      reject(
+        error instanceof AcpHarnessError
+          ? error
+          : new AcpHarnessError(
+              "install",
+              "The archive could not be extracted. Nothing was installed.",
+              { cause: error },
+            ),
+      );
     };
     const onAbort = () => fail(abortError());
     signal.addEventListener("abort", onAbort, { once: true });
     zip.on("error", fail);
     zip.on("end", () => {
       signal.removeEventListener("abort", onAbort);
-      if (seen.size !== expected.size) fail(new AcpHarnessError("install", "The archive is missing files."));
+      if (seen.size !== expected.size)
+        fail(new AcpHarnessError("install", "The archive is missing files."));
       else resolve();
     });
     zip.on("entry", (entry: yauzl.Entry) => {
@@ -442,7 +545,12 @@ export async function extractExactMembers(
         entry.isEncrypted() ||
         (entry.compressionMethod !== 0 && entry.compressionMethod !== 8);
       if (unsafe) {
-        fail(new AcpHarnessError("install", "The archive contains unexpected files. Nothing was installed."));
+        fail(
+          new AcpHarnessError(
+            "install",
+            "The archive contains unexpected files. Nothing was installed.",
+          ),
+        );
         return;
       }
       seen.add(name);
@@ -451,10 +559,13 @@ export async function extractExactMembers(
           fail(error);
           return;
         }
-        pipeline(stream, createWriteStream(path.join(destination, name), { mode: 0o700 }), { signal })
+        pipeline(stream, createWriteStream(path.join(destination, name), { mode: 0o700 }), {
+          signal,
+        })
           .then(async () => {
             const info = await stat(path.join(destination, name));
-            if (info.size !== size) throw new AcpHarnessError("install", "An extracted file has the wrong size.");
+            if (info.size !== size)
+              throw new AcpHarnessError("install", "An extracted file has the wrong size.");
             zip.readEntry();
           })
           .catch(fail);

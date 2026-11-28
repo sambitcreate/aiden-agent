@@ -46,26 +46,17 @@ test("aiden-genui URLs only resolve exact host library names", () => {
 
 test("preview documents require an exact 64-hex token path", () => {
   const token = "a".repeat(64);
-  assert.equal(
-    generativeUiPreviewTokenFromUrl(`aiden-genui://preview/${token}`),
-    token,
-  );
+  assert.equal(generativeUiPreviewTokenFromUrl(`aiden-genui://preview/${token}`), token);
   assert.equal(
     generativeUiPreviewTokenFromUrl(`aiden-genui://preview/${token.toUpperCase()}`),
     token,
   );
-  assert.equal(
-    generativeUiPreviewTokenFromUrl(`aiden-genui://preview/${token}/extra`),
-    undefined,
-  );
+  assert.equal(generativeUiPreviewTokenFromUrl(`aiden-genui://preview/${token}/extra`), undefined);
   assert.equal(
     generativeUiPreviewTokenFromUrl(`aiden-genui://preview/${token}?steal=1`),
     undefined,
   );
-  assert.equal(
-    generativeUiPreviewTokenFromUrl(`aiden-genui://preview/${token}#frag`),
-    undefined,
-  );
+  assert.equal(generativeUiPreviewTokenFromUrl(`aiden-genui://preview/${token}#frag`), undefined);
   assert.equal(generativeUiPreviewTokenFromUrl("aiden-genui://preview/not-hex"), undefined);
   assert.equal(generativeUiPreviewTokenFromUrl("aiden-genui://chart.js"), undefined);
 });

@@ -11,7 +11,10 @@ import {
 } from "./local-speech-process-core.js";
 import { LocalSpeechLane } from "./local-speech-lane.js";
 import { transcriptionBudgetMs } from "../../renderer/lib/dictation-operation-gate.js";
-import { LOCAL_SPEECH_PROTOCOL_VERSION, type LocalSpeechParentMessage } from "./local-speech-protocol.js";
+import {
+  LOCAL_SPEECH_PROTOCOL_VERSION,
+  type LocalSpeechParentMessage,
+} from "./local-speech-protocol.js";
 
 const spec = speechModel("parakeet-v3")!;
 
@@ -38,7 +41,8 @@ function fakePort(respond?: (message: LocalSpeechParentMessage) => unknown): Fak
         sent.push(message);
         if (!respond) return;
         const answer = respond(message);
-        if (answer !== undefined) queueMicrotask(() => handlers.forEach((handler) => handler(answer)));
+        if (answer !== undefined)
+          queueMicrotask(() => handlers.forEach((handler) => handler(answer)));
       },
       onMessage: (handler) => {
         handlers.push(handler);
@@ -71,17 +75,31 @@ function transcribeInput(pcm = new Int16Array(16_000)) {
 test("process client resolves a transcribe result and fails in-flight work on exit", async () => {
   const fake = fakePort((message) =>
     message.kind === "transcribe" && fake.sent.length === 1
-      ? { version: LOCAL_SPEECH_PROTOCOL_VERSION, kind: "result", requestId: message.requestId, text: "hello", language: "en", decodeMs: 5 }
+      ? {
+          version: LOCAL_SPEECH_PROTOCOL_VERSION,
+          kind: "result",
+          requestId: message.requestId,
+          text: "hello",
+          language: "en",
+          decodeMs: 5,
+        }
       : undefined,
   );
   const client = new LocalSpeechProcessClient(fake.port);
-  assert.deepEqual(await client.transcribe(transcribeInput()), { text: "hello", language: "en", decodeMs: 5 });
+  assert.deepEqual(await client.transcribe(transcribeInput()), {
+    text: "hello",
+    language: "en",
+    decodeMs: 5,
+  });
   assert.equal(fake.sent.length, 1);
   assert.ok((fake.sent[0] as { audio: { pcm: unknown } }).audio.pcm instanceof Int16Array);
 
   const pending = client.transcribe(transcribeInput());
   fake.exit(1);
-  await assert.rejects(pending, (error: unknown) => error instanceof WorkerCrashError && /exit 1/.test(error.message));
+  await assert.rejects(
+    pending,
+    (error: unknown) => error instanceof WorkerCrashError && /exit 1/.test(error.message),
+  );
   client.dispose();
 });
 
@@ -174,7 +192,10 @@ test("a hung request kills the worker and rejects as a crash", async () => {
     },
     deadlines: { status: 5, load: 5, transcribe: () => 5 },
   });
-  await assert.rejects(client.status(), (error: unknown) => error instanceof WorkerCrashError && /hang/.test(error.message));
+  await assert.rejects(
+    client.status(),
+    (error: unknown) => error instanceof WorkerCrashError && /hang/.test(error.message),
+  );
   assert.equal(hangs, 1);
   client.dispose();
 });
@@ -187,13 +208,21 @@ test("crash retries once in a fresh worker, then fails clearly; the lane survive
         attempts.push(n);
         throw new WorkerCrashError("exit 9");
       },
-      { isCancelled: () => false, isCrash: (e) => e instanceof WorkerCrashError, onCrash: () => {} },
+      {
+        isCancelled: () => false,
+        isCrash: (e) => e instanceof WorkerCrashError,
+        onCrash: () => {},
+      },
     ),
     /couldn't finish|decode-failed/i,
   );
   assert.deepEqual(attempts, [1, 2]);
   assert.equal(
-    await runWithCrashRetry(async () => "ok", { isCancelled: () => false, isCrash: () => true, onCrash: () => {} }),
+    await runWithCrashRetry(async () => "ok", {
+      isCancelled: () => false,
+      isCrash: () => true,
+      onCrash: () => {},
+    }),
     "ok",
   );
 });
@@ -205,7 +234,11 @@ test("a crash followed by success returns the second attempt and reports the fir
       if (n === 1) throw new WorkerCrashError("exit 134");
       return "recovered";
     },
-    { isCancelled: () => false, isCrash: (e) => e instanceof WorkerCrashError, onCrash: (_e, n) => crashes.push(n) },
+    {
+      isCancelled: () => false,
+      isCrash: (e) => e instanceof WorkerCrashError,
+      onCrash: (_e, n) => crashes.push(n),
+    },
   );
   assert.equal(result, "recovered");
   assert.deepEqual(crashes, [1]);
@@ -233,7 +266,11 @@ test("non-crash errors are not retried", async () => {
         calls += 1;
         throw new Error("model missing");
       },
-      { isCancelled: () => false, isCrash: (e) => e instanceof WorkerCrashError, onCrash: () => {} },
+      {
+        isCancelled: () => false,
+        isCrash: (e) => e instanceof WorkerCrashError,
+        onCrash: () => {},
+      },
     ),
     /model missing/,
   );
@@ -246,7 +283,10 @@ test("stderr tail keeps the last 64 lines and an exit reports a WorkerCrashError
   for (let line = 0; line < 70; line += 1) client.pushStderr(`line ${line}`);
   const pending = client.transcribe(transcribeInput());
   fake.exit(134);
-  await assert.rejects(pending, (error: unknown) => error instanceof WorkerCrashError && /exit 134/.test(error.message));
+  await assert.rejects(
+    pending,
+    (error: unknown) => error instanceof WorkerCrashError && /exit 134/.test(error.message),
+  );
   const tail = client.stderrTail();
   assert.equal(tail.length, 64);
   assert.equal(tail[0], "line 6");
@@ -316,7 +356,11 @@ test("a hung first worker that retries in a fresh worker still finishes inside t
       });
       return client.transcribe(transcribeInput(new Int16Array(seconds * 16_000)));
     },
-    { isCancelled: () => false, isCrash: (error) => error instanceof WorkerCrashError, onCrash: () => {} },
+    {
+      isCancelled: () => false,
+      isCrash: (error) => error instanceof WorkerCrashError,
+      onCrash: () => {},
+    },
   );
   const settle = () => new Promise<void>((resolve) => setImmediate(resolve));
 
@@ -337,5 +381,8 @@ test("a hung first worker that retries in a fresh worker still finishes inside t
 
   assert.equal(result.text, "hallo welt");
   // Hang at 120 s plus the retry at 10 s is 130 s of supervised work.
-  assert.ok(130_000 < transcriptionBudgetMs("local", seconds), "the renderer must not cancel the retry");
+  assert.ok(
+    130_000 < transcriptionBudgetMs("local", seconds),
+    "the renderer must not cancel the retry",
+  );
 });

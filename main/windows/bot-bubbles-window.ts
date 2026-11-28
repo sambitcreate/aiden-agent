@@ -20,12 +20,25 @@ import {
 } from "../../renderer/shared/bot-bubbles.js";
 import { BOT_BUBBLES_NOTIFICATION_CHANNELS } from "../../renderer/bot-bubbles-preload-channels.js";
 import type { BotBubbleWindowPort } from "../handlers/bot-bubbles.js";
-import { BaseWindow, BrowserWindow, logger, registerBroadcastReceiver, screen } from "../platform.js";
-import { botBubbleService, startBotBubbleService, stopBotBubbleService } from "../services/bot-bubbles/bot-bubbles-main.js";
+import {
+  BaseWindow,
+  BrowserWindow,
+  logger,
+  registerBroadcastReceiver,
+  screen,
+} from "../platform.js";
+import {
+  botBubbleService,
+  startBotBubbleService,
+  stopBotBubbleService,
+} from "../services/bot-bubbles/bot-bubbles-main.js";
 import { rendererDocumentOwner } from "../services/renderer-document-owner.js";
 import { markAuxiliaryWindow } from "./auxiliary-windows.js";
 import type { BotBubbleOverlayAccess } from "./bot-bubbles-overlay-access.js";
-import { isBotBubbleOverlayWebContents, registerBotBubbleOverlayWebContents } from "./bot-bubbles-overlay-registry.js";
+import {
+  isBotBubbleOverlayWebContents,
+  registerBotBubbleOverlayWebContents,
+} from "./bot-bubbles-overlay-registry.js";
 import {
   CoverWaits,
   PendingTransitions,
@@ -43,7 +56,11 @@ import {
   windowRectToOverlay,
   type OverlayDisplay,
 } from "./bot-bubbles-window-core.js";
-import { botBubbleOverlayHears, isTrustedBotBubbleSender, withoutFragment } from "./bot-bubbles-window-security.js";
+import {
+  botBubbleOverlayHears,
+  isTrustedBotBubbleSender,
+  withoutFragment,
+} from "./bot-bubbles-window-security.js";
 import { getBotBubblesPreloadPath, getWindowUrl } from "./window-paths.js";
 
 /** How the overlays reach the main window (owned by `main/index.ts`). */
@@ -97,7 +114,9 @@ function botIdsOnDisplay(displayId: number): Set<string> {
   return new Set(
     botBubbleService()
       .current()
-      .bubbles.filter((bubble) => bubbleDisplayId(bubble.placement.displayId, displays, primary) === displayId)
+      .bubbles.filter(
+        (bubble) => bubbleDisplayId(bubble.placement.displayId, displays, primary) === displayId,
+      )
       .map((bubble) => bubble.botId),
   );
 }
@@ -134,7 +153,11 @@ function overlayInfoOf(overlay: Overlay): BotBubbleOverlayInfo {
 
 function holdsOpenChat(overlay: Overlay, state: BotBubbleState): boolean {
   const open = state.bubbles.find((bubble) => bubble.botId === state.openBotId);
-  return Boolean(open && bubbleDisplayId(open.placement.displayId, liveDisplays(), screen.getPrimaryDisplay().id) === overlay.displayId);
+  return Boolean(
+    open &&
+    bubbleDisplayId(open.placement.displayId, liveDisplays(), screen.getPrimaryDisplay().id) ===
+      overlay.displayId,
+  );
 }
 
 /**
@@ -152,7 +175,13 @@ function applyFocus(overlay: Overlay, state: BotBubbleState): void {
     const openBotId = state.openBotId;
     void overlay.loaded.then((ok) => {
       const current = botBubbleService().current();
-      if (!ok || window.isDestroyed() || current.openBotId !== openBotId || !holdsOpenChat(overlay, current)) return;
+      if (
+        !ok ||
+        window.isDestroyed() ||
+        current.openBotId !== openBotId ||
+        !holdsOpenChat(overlay, current)
+      )
+        return;
       overlay.focusedFor = openBotId;
       window.setFocusable(true);
       window.focus();
@@ -166,7 +195,8 @@ function applyFocus(overlay: Overlay, state: BotBubbleState): void {
     passKeyOn: () => passKeyOn(overlay),
     blur: () => window.blur(),
   });
-  if (how === "blurred") logger.debug("bot-bubbles", "The overlay kept the keyboard; it was blurred instead.");
+  if (how === "blurred")
+    logger.debug("bot-bubbles", "The overlay kept the keyboard; it was blurred instead.");
 }
 
 /**
@@ -201,7 +231,10 @@ function passKeyOn(overlay: Overlay): void {
   });
   try {
     // Where the overlay is: every Space and over full-screen apps, so showing it never switches Space.
-    sink.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true, skipTransformProcessType: true });
+    sink.setVisibleOnAllWorkspaces(true, {
+      visibleOnFullScreen: true,
+      skipTransformProcessType: true,
+    });
     sink.setAlwaysOnTop(true, "floating");
     sink.setIgnoreMouseEvents(true);
     sink.showInactive();
@@ -224,7 +257,11 @@ function recoverOverlay(overlay: Overlay, reason: string): void {
     rebuilds.set(displayId, next.times);
     if (!next.allowed) {
       blockedDisplays.add(displayId);
-      logger.warn("bot-bubbles", "A bubble overlay keeps failing; leaving heads off that display.", { reason, displayId });
+      logger.warn(
+        "bot-bubbles",
+        "A bubble overlay keeps failing; leaving heads off that display.",
+        { reason, displayId },
+      );
       return;
     }
     logger.warn("bot-bubbles", "Rebuilding a bubble overlay.", { reason });
@@ -234,7 +271,10 @@ function recoverOverlay(overlay: Overlay, reason: string): void {
 
 function createOverlay(display: OverlayDisplay): Overlay {
   const window = new BrowserWindow(
-    botBubbleOverlayWindowOptions({ preload: getBotBubblesPreloadPath(), workArea: display.workArea }),
+    botBubbleOverlayWindowOptions({
+      preload: getBotBubblesPreloadPath(),
+      workArea: display.workArea,
+    }),
   );
   // Never an app window: it must not keep Aiden open or receive app UI.
   markAuxiliaryWindow(window);
@@ -243,7 +283,10 @@ function createOverlay(display: OverlayDisplay): Overlay {
     botBubbleOverlayHears(channel, payload, botIdsOnDisplay(display.id)),
   );
   // `skipTransformProcessType` keeps Aiden's Dock icon when showing over full-screen Spaces.
-  window.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true, skipTransformProcessType: true });
+  window.setVisibleOnAllWorkspaces(true, {
+    visibleOnFullScreen: true,
+    skipTransformProcessType: true,
+  });
   // Above normal windows, like Quick Chat.
   window.setAlwaysOnTop(true, "floating");
 
@@ -261,7 +304,9 @@ function createOverlay(display: OverlayDisplay): Overlay {
   applyMouse(overlay);
 
   const contents = window.webContents;
-  contents.on("render-process-gone", (_event, details) => recoverOverlay(overlay, `render-process-gone:${details.reason}`));
+  contents.on("render-process-gone", (_event, details) =>
+    recoverOverlay(overlay, `render-process-gone:${details.reason}`),
+  );
   window.on("unresponsive", () => recoverOverlay(overlay, "unresponsive"));
   contents.on("did-start-navigation", (details) => {
     if (!details.isMainFrame || details.isSameDocument) return;
@@ -279,14 +324,17 @@ function createOverlay(display: OverlayDisplay): Overlay {
     if (isZoomShortcut(input)) event.preventDefault();
   });
   contents.on("zoom-changed", () => {
-    if (!contents.isDestroyed()) contents.send(BOT_BUBBLE_CHANNELS.overlayInfoChanged, overlayInfoOf(overlay));
+    if (!contents.isDestroyed())
+      contents.send(BOT_BUBBLE_CHANNELS.overlayInfoChanged, overlayInfoOf(overlay));
   });
 
   window.on("close", (event) => {
     // ⌘W on a focused mini chat tucks it away instead of closing the overlay.
     if (destroying) return;
     event.preventDefault();
-    void botBubbleService().open(null).catch(() => undefined);
+    void botBubbleService()
+      .open(null)
+      .catch(() => undefined);
   });
   window.on("closed", () => {
     if (overlays.get(display.id) === overlay) overlays.delete(display.id);
@@ -349,7 +397,11 @@ function destroyOverlay(overlay: Overlay): void {
 function overlayForBot(state: BotBubbleState, botId: string): Overlay | null {
   const bubble = state.bubbles.find((entry) => entry.botId === botId);
   if (!bubble) return null;
-  return overlays.get(bubbleDisplayId(bubble.placement.displayId, liveDisplays(), screen.getPrimaryDisplay().id)) ?? null;
+  return (
+    overlays.get(
+      bubbleDisplayId(bubble.placement.displayId, liveDisplays(), screen.getPrimaryDisplay().id),
+    ) ?? null
+  );
 }
 
 /** Make the overlays match the state: one per display with heads, none unless the host is the overlay. */
@@ -379,7 +431,11 @@ function syncOverlays(state: BotBubbleState): void {
     overlay.releaseTimer = setTimeout(() => {
       overlay.releaseTimer = null;
       const current = botBubbleService().current();
-      if (!displaysNeedingOverlay(current, liveDisplays(), screen.getPrimaryDisplay().id).has(overlay.displayId)) {
+      if (
+        !displaysNeedingOverlay(current, liveDisplays(), screen.getPrimaryDisplay().id).has(
+          overlay.displayId,
+        )
+      ) {
         destroyOverlay(overlay);
       }
     }, RELEASE_DELAY_MS);
@@ -394,7 +450,9 @@ function onDisplaysChanged(): void {
   const displays = liveDisplays();
   void botBubbleService()
     .displaysChanged(new Set(displays.map((display) => display.id)), screen.getPrimaryDisplay().id)
-    .catch((error: unknown) => logger.warn("bot-bubbles", "Could not move heads off a removed display.", error));
+    .catch((error: unknown) =>
+      logger.warn("bot-bubbles", "Could not move heads off a removed display.", error),
+    );
   for (const overlay of [...overlays.values()]) {
     const display = displays.find((entry) => entry.id === overlay.displayId);
     if (!display) {
@@ -481,7 +539,9 @@ export function isBotBubbleOverlayEvent(event: IpcMainInvokeEvent): boolean {
     const frame = event.senderFrame;
     if (!frame || frame.isDestroyed()) return false;
     const ids = new Set(
-      [...overlays.values()].filter((overlay) => !overlay.window.isDestroyed()).map((overlay) => overlay.window.webContents.id),
+      [...overlays.values()]
+        .filter((overlay) => !overlay.window.isDestroyed())
+        .map((overlay) => overlay.window.webContents.id),
     );
     const trusted = isTrustedBotBubbleSender(ids, overlayUrl, {
       webContentsId: event.sender.id,
@@ -506,7 +566,6 @@ function releasePointerFor(event: IpcMainInvokeEvent): void {
   if (overlay) resetPointer(overlay);
 }
 
-
 function senderOverlay(event: IpcMainInvokeEvent): Overlay {
   const overlay = overlayForWebContents(event.sender.id);
   if (!overlay) throw new Error("This bubble overlay is no longer active.");
@@ -515,7 +574,8 @@ function senderOverlay(event: IpcMainInvokeEvent): Overlay {
 
 function sendTransition(overlay: Overlay, transition: BotBubbleTransition): void {
   const now = overlay.transitions.offer(transition, Date.now());
-  if (now && !overlay.window.isDestroyed()) overlay.window.webContents.send(BOT_BUBBLE_CHANNELS.transition, now);
+  if (now && !overlay.window.isDestroyed())
+    overlay.window.webContents.send(BOT_BUBBLE_CHANNELS.transition, now);
 }
 
 async function showChatInMainWindow(botId: string): Promise<void> {
@@ -547,14 +607,26 @@ export const botBubbleWindowPort: BotBubbleWindowPort<IpcMainInvokeEvent> = {
     // The new head goes on the display under the main window (`displayIdFor`): its overlay takes the picture.
     const overlay = overlays.get(screen.getDisplayMatching(window.getBounds()).id);
     // No overlay there yet, or its page isn't listening: the shrink plays after the bubble instead.
-    if (!overlay || overlay.window.isDestroyed() || !overlay.transitions.listening) return Promise.resolve(false);
+    if (!overlay || overlay.window.isDestroyed() || !overlay.transitions.listening)
+      return Promise.resolve(false);
     const contents = overlay.window.webContents;
     const { cover, shown } = coverWaits.start(contents.id);
     const target = scaleRect(
-      windowRectToOverlay(rect, window.getContentBounds(), overlay.workArea, event.sender.getZoomFactor()),
+      windowRectToOverlay(
+        rect,
+        window.getContentBounds(),
+        overlay.workArea,
+        event.sender.getZoomFactor(),
+      ),
       overlayZoom(overlay),
     );
-    contents.send(BOT_BUBBLE_CHANNELS.transition, { botId, kind: "shrink", rect: target, image, cover } satisfies BotBubbleTransition);
+    contents.send(BOT_BUBBLE_CHANNELS.transition, {
+      botId,
+      kind: "shrink",
+      rect: target,
+      image,
+      cover,
+    } satisfies BotBubbleTransition);
     return shown.then(() => true);
   },
 
@@ -567,7 +639,12 @@ export const botBubbleWindowPort: BotBubbleWindowPort<IpcMainInvokeEvent> = {
     const overlay = overlayForBot(botBubbleService().current(), botId);
     if (!window || window.isDestroyed() || !overlay) return;
     const target = scaleRect(
-      windowRectToOverlay(rect, window.getContentBounds(), overlay.workArea, event.sender.getZoomFactor()),
+      windowRectToOverlay(
+        rect,
+        window.getContentBounds(),
+        overlay.workArea,
+        event.sender.getZoomFactor(),
+      ),
       overlayZoom(overlay),
     );
     sendTransition(overlay, { botId, kind: "shrink", rect: target, image });
@@ -582,7 +659,10 @@ export const botBubbleWindowPort: BotBubbleWindowPort<IpcMainInvokeEvent> = {
       sendTransition(overlay, {
         botId,
         kind: "grow",
-        rect: scaleRect(growTargetRect(main.getContentBounds(), overlay.workArea), overlayZoom(overlay)),
+        rect: scaleRect(
+          growTargetRect(main.getContentBounds(), overlay.workArea),
+          overlayZoom(overlay),
+        ),
         image: null,
       });
       delay = GROW_MS;
@@ -623,7 +703,8 @@ export const botBubbleWindowPort: BotBubbleWindowPort<IpcMainInvokeEvent> = {
     if (waiting.length > 0) {
       setTimeout(() => {
         for (const transition of waiting) {
-          if (!overlay.window.isDestroyed()) overlay.window.webContents.send(BOT_BUBBLE_CHANNELS.transition, transition);
+          if (!overlay.window.isDestroyed())
+            overlay.window.webContents.send(BOT_BUBBLE_CHANNELS.transition, transition);
         }
       }, 0);
     }

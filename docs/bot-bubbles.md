@@ -83,11 +83,11 @@ Bot back to the window plays no grow.
 
 ## Where it works
 
-| Platform | Bubbles |
-| --- | --- |
-| macOS | Heads float over every app (or stay inside the Aiden window with Float over other apps off) |
-| Linux (X11 and Wayland) | Heads stay inside the Aiden window. Electron can pass clicks through a see-through window only on macOS and Windows, so there is no floating overlay here |
-| `aiden serve` (CLI), iOS, Android | No |
+| Platform                          | Bubbles                                                                                                                                                   |
+| --------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| macOS                             | Heads float over every app (or stay inside the Aiden window with Float over other apps off)                                                               |
+| Linux (X11 and Wayland)           | Heads stay inside the Aiden window. Electron can pass clicks through a see-through window only on macOS and Windows, so there is no floating overlay here |
+| `aiden serve` (CLI), iOS, Android | No                                                                                                                                                        |
 
 Bubbles are a view of Bots on this computer. Bots on a paired Mac and Telegram
 chats can't be bubbled.

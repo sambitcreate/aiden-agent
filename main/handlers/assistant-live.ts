@@ -5,9 +5,7 @@ import {
   liveDisplaySourcesFor,
 } from "../services/gemini-live/service-main.js";
 import { rendererDocumentOwner } from "../services/renderer-document-owner.js";
-import {
-  bindGeminiLiveDisplayMediaDocument,
-} from "../services/gemini-live/display-media-contract.js";
+import { bindGeminiLiveDisplayMediaDocument } from "../services/gemini-live/display-media-contract.js";
 import {
   parseAssistantLiveStartIntent,
   parseAssistantLiveAudioIntent,
@@ -25,10 +23,7 @@ import { invokeAssistantLiveStatus } from "./assistant-live-status.js";
 function owner(event: Electron.IpcMainInvokeEvent) {
   return rendererDocumentOwner(
     event,
-    () =>
-      new Error(
-        "Assistant Live must be controlled by the active application document.",
-      ),
+    () => new Error("Assistant Live must be controlled by the active application document."),
   );
 }
 

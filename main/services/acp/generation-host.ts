@@ -64,7 +64,13 @@ export interface AcpGenerationHostOptions {
    */
   stoppedByUser?(): boolean;
   requestApproval(
-    prompt: { streamId: string; toolCallId: string; toolName: string; summary: string; scopes?: readonly ToolApprovalScope[] },
+    prompt: {
+      streamId: string;
+      toolCallId: string;
+      toolName: string;
+      summary: string;
+      scopes?: readonly ToolApprovalScope[];
+    },
     signal: AbortSignal,
   ): Promise<ToolApprovalOutcome>;
   /** The scope the user chose on a settled approval card. */
@@ -105,7 +111,10 @@ const VERB: Record<AcpApprovalRequest["kind"], string> = {
 const FILE_CHANGE_VERB = { delete: "delete files", move: "move files" } as const;
 
 export function approvalSummary(label: string, request: AcpApprovalRequest): string {
-  const verb = request.kind === "file_change" && request.fileChange ? FILE_CHANGE_VERB[request.fileChange] : VERB[request.kind];
+  const verb =
+    request.kind === "file_change" && request.fileChange
+      ? FILE_CHANGE_VERB[request.fileChange]
+      : VERB[request.kind];
   const lines = [`${label} wants to ${verb}: ${request.title}`];
   if (request.paths.length > 0) lines.push(`Files: ${request.paths.join(", ")}`);
   if (request.warning) lines.push(`Warning from ${label}: ${request.warning}`);
@@ -116,10 +125,15 @@ const RESERVED_LABELS = new Set(["Other", "Type something.", "Next"]);
 const MAX_LABEL = 60;
 
 function promptLabel(label: string, index: number, used: Set<string>): string {
-  let candidate = Array.from(label.replace(/\s+/gu, " ").trim()).slice(0, MAX_LABEL).join("").trim();
+  let candidate = Array.from(label.replace(/\s+/gu, " ").trim())
+    .slice(0, MAX_LABEL)
+    .join("")
+    .trim();
   if (!candidate || RESERVED_LABELS.has(candidate) || used.has(candidate)) {
     const suffix = ` (${index + 1})`;
-    candidate = `${Array.from(candidate || "Option").slice(0, MAX_LABEL - suffix.length).join("")}${suffix}`;
+    candidate = `${Array.from(candidate || "Option")
+      .slice(0, MAX_LABEL - suffix.length)
+      .join("")}${suffix}`;
   }
   used.add(candidate);
   return candidate;
@@ -158,7 +172,8 @@ export function createAcpGenerationHost(options: AcpGenerationHostOptions): AcpT
   let notices = 0;
   // Fail closed: without the identity captured at turn start there is no
   // file access at all, never a fallback to the mutable pathname.
-  const roots = () => (options.folderIdentity && options.permission() !== "none" ? [options.folderIdentity] : []);
+  const roots = () =>
+    options.folderIdentity && options.permission() !== "none" ? [options.folderIdentity] : [];
   return {
     chatId: options.chatId,
     cwd: options.folderIdentity?.path ?? options.folderPath ?? options.scratchDir,
@@ -181,7 +196,9 @@ export function createAcpGenerationHost(options: AcpGenerationHostOptions): AcpT
       );
       if (outcome === "allowed") {
         options.timeline.toolRunning(id);
-        return options.takeApprovalScope(options.streamId, publicId) === "chat" ? "allow_always" : "allow_once";
+        return options.takeApprovalScope(options.streamId, publicId) === "chat"
+          ? "allow_always"
+          : "allow_once";
       }
       if (outcome === "denied") return "reject";
       return "cancelled";
@@ -191,7 +208,11 @@ export function createAcpGenerationHost(options: AcpGenerationHostOptions): AcpT
           async askQuestion(question, signal) {
             const mapped = questionFor(question);
             if (!mapped) return undefined;
-            const response = await options.requestQuestion!(`acp-question-${Date.now()}`, [mapped.question], signal);
+            const response = await options.requestQuestion!(
+              `acp-question-${Date.now()}`,
+              [mapped.question],
+              signal,
+            );
             const answer = response.answers[0];
             if (response.cancelled || !answer || answer.kind !== "option") return undefined;
             return mapped.labels.get(answer.answer);

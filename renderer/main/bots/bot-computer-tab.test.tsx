@@ -15,13 +15,26 @@ import { botFixture } from "./test-fixtures";
 import { mountWithBotRouter } from "./test-providers";
 
 const VM = "aiden-bot-0123456789abcdef";
-const MAC: AppCapabilities = { ...DISABLED_APP_CAPABILITIES, platform: "darwin", bots: true, botComputers: true };
+const MAC: AppCapabilities = {
+  ...DISABLED_APP_CAPABILITIES,
+  platform: "darwin",
+  bots: true,
+  botComputers: true,
+};
 
 beforeEach(() => localStorage.clear());
 afterEach(cleanup);
 
 function computer(overrides: Partial<BotComputerStatus> = {}): BotComputerStatus {
-  return { botId: "bot-1", vmName: VM, state: "stopped", baseBuild: "25G83", outdated: false, controller: "bot", ...overrides };
+  return {
+    botId: "bot-1",
+    vmName: VM,
+    state: "stopped",
+    baseBuild: "25G83",
+    outdated: false,
+    controller: "bot",
+    ...overrides,
+  };
 }
 
 function status(computers: BotComputerStatus[]): BotComputersStatus {
@@ -41,7 +54,17 @@ function status(computers: BotComputerStatus[]): BotComputersStatus {
 }
 
 function chatSnapshot(): BotLiveSnapshot {
-  return { botId: "bot-1", epoch: "e1", seq: 0, entries: [], partial: null, state: { kind: "idle" }, question: null, activity: null, queued: [] };
+  return {
+    botId: "bot-1",
+    epoch: "e1",
+    seq: 0,
+    entries: [],
+    partial: null,
+    state: { kind: "idle" },
+    question: null,
+    activity: null,
+    queued: [],
+  };
 }
 
 const never = () => new Promise<never>(() => undefined);
@@ -75,9 +98,12 @@ const botPanel = (): HTMLElement => {
 };
 const panelTabs = () => within(botPanel()).queryAllByRole("tab");
 const tabNames = () => panelTabs().map((tab) => tab.textContent);
-const selectedTab = () => panelTabs().find((tab) => tab.getAttribute("aria-selected") === "true")?.textContent;
+const selectedTab = () =>
+  panelTabs().find((tab) => tab.getAttribute("aria-selected") === "true")?.textContent;
 const computerCalls = (calls: BotTestIpcCall[], channel?: string) =>
-  calls.filter((call) => (channel ? call.channel === channel : call.channel.startsWith("botComputers:")));
+  calls.filter((call) =>
+    channel ? call.channel === channel : call.channel.startsWith("botComputers:"),
+  );
 
 function openPanelOn(tab: string) {
   localStorage.setItem(BOT_PANEL_OPEN_KEY, "true");
@@ -101,10 +127,21 @@ test("Computer joins the panel while the Bot has a computer, and a saved Compute
   assert.equal(tabNames().includes("Computer"), false, "a Bot without a computer");
 
   act(() => emitBotTestNotification(BOT_COMPUTERS_CHANGED_CHANNEL, status([computer()])));
-  await waitFor(() => assert.deepEqual(tabNames(), ["Activity", "Files", "Memory", "Routines", "Computer", "Advanced"]));
+  await waitFor(() =>
+    assert.deepEqual(tabNames(), [
+      "Activity",
+      "Files",
+      "Memory",
+      "Routines",
+      "Computer",
+      "Advanced",
+    ]),
+  );
 
   act(() => emitBotTestNotification(BOT_COMPUTERS_CHANGED_CHANNEL, status([])));
-  await waitFor(() => assert.equal(tabNames().includes("Computer"), false, "the computer was removed"));
+  await waitFor(() =>
+    assert.equal(tabNames().includes("Computer"), false, "the computer was removed"),
+  );
 });
 
 test("a Computer tab restored at launch never starts the computer; the person switching to it does", async () => {
@@ -117,7 +154,15 @@ test("a Computer tab restored at launch never starts the computer; the person sw
         ? new Promise((resolve) => {
             finishStart = () => {
               state.computers = [computer({ state: "running" })];
-              resolve({ hostId: "bot-computers", deviceId: VM, grant: { origin: "http://127.0.0.1:52100", token: "a".repeat(43), expiresAt: Date.now() + 60_000 } });
+              resolve({
+                hostId: "bot-computers",
+                deviceId: VM,
+                grant: {
+                  origin: "http://127.0.0.1:52100",
+                  token: "a".repeat(43),
+                  expiresAt: Date.now() + 60_000,
+                },
+              });
             };
           })
         : never(),
@@ -126,7 +171,11 @@ test("a Computer tab restored at launch never starts the computer; the person sw
   const panel = botPanel();
   await within(panel).findByText("Planner's computer is off");
   assert.ok(within(panel).getByRole("button", { name: "Start" }));
-  assert.deepEqual(computerCalls(calls, "botComputers:viewerGrant"), [], "nothing started on its own");
+  assert.deepEqual(
+    computerCalls(calls, "botComputers:viewerGrant"),
+    [],
+    "nothing started on its own",
+  );
 
   fireEvent.click(within(panel).getByRole("tab", { name: "Activity" }));
   fireEvent.click(within(panel).getByRole("tab", { name: "Computer" }));
@@ -136,7 +185,9 @@ test("a Computer tab restored at launch never starts the computer; the person sw
       [["bot-1", { start: true }]],
     ),
   );
-  const banner = within(panel).getByText("Starting Planner's computer…").closest("[data-bot-computer-banner]");
+  const banner = within(panel)
+    .getByText("Starting Planner's computer…")
+    .closest("[data-bot-computer-banner]");
   assert.equal(banner?.getAttribute("role"), "status", "the start is announced");
 
   await act(async () => finishStart?.());
@@ -151,7 +202,9 @@ test("a Computer tab restored at launch never starts the computer; the person sw
   // The screen asks only for a grant that never starts anything.
   await waitFor(() =>
     assert.deepEqual(
-      computerCalls(calls, "botComputers:viewerGrant").map((call) => (call.args[1] as { start: boolean }).start),
+      computerCalls(calls, "botComputers:viewerGrant").map(
+        (call) => (call.args[1] as { start: boolean }).start,
+      ),
       [true, false],
     ),
   );
@@ -174,7 +227,10 @@ test("while the Bot drives, the screen is read-only with its avatar at the last 
     assert.ok(element);
     return element;
   });
-  assert.match(screenElement.getAttribute("aria-label") ?? "", /Planner is using it; click or type here to take over/u);
+  assert.match(
+    screenElement.getAttribute("aria-label") ?? "",
+    /Planner is using it; click or type here to take over/u,
+  );
   assert.ok(within(panel).getByText("Planner is using it · Click or type to take over"));
   assert.ok(within(panel).getByText("Clicking Save"), "the status line says what the Bot is doing");
   const avatar = await waitFor(() => {
@@ -187,19 +243,37 @@ test("while the Bot drives, the screen is read-only with its avatar at the last 
 
   fireEvent.click(within(panel).getByRole("button", { name: "Take over" }));
   await waitFor(() => assert.ok(within(panel).getByRole("button", { name: "Give back" })));
-  assert.deepEqual(computerCalls(calls, "botComputers:takeOver").map((call) => call.args), [["bot-1"]]);
+  assert.deepEqual(
+    computerCalls(calls, "botComputers:takeOver").map((call) => call.args),
+    [["bot-1"]],
+  );
   assert.ok(within(panel).getByText("You're using Planner's computer"));
   assert.equal(within(panel).queryByText("Planner is using it · Click or type to take over"), null);
-  assert.equal(panel.querySelector("[data-bot-computer-pointer]"), null, "no avatar while the person drives");
+  assert.equal(
+    panel.querySelector("[data-bot-computer-pointer]"),
+    null,
+    "no avatar while the person drives",
+  );
   const polled = computerCalls(calls, "botComputers:pointer").length;
 
   fireEvent.click(within(panel).getByRole("button", { name: "Give back" }));
   await waitFor(() => assert.ok(within(panel).getByRole("button", { name: "Take over" })));
-  assert.deepEqual(computerCalls(calls, "botComputers:giveBack").map((call) => call.args), [["bot-1"]]);
-  assert.ok(computerCalls(calls, "botComputers:pointer").length > polled, "the avatar is read again once the Bot drives");
+  assert.deepEqual(
+    computerCalls(calls, "botComputers:giveBack").map((call) => call.args),
+    [["bot-1"]],
+  );
+  assert.ok(
+    computerCalls(calls, "botComputers:pointer").length > polled,
+    "the avatar is read again once the Bot drives",
+  );
 
   // Input on the screen takes over in main; its broadcast flips the tab the same way.
-  act(() => emitBotTestNotification(BOT_COMPUTERS_CHANGED_CHANNEL, status([{ ...running, controller: "person" }])));
+  act(() =>
+    emitBotTestNotification(
+      BOT_COMPUTERS_CHANGED_CHANNEL,
+      status([{ ...running, controller: "person" }]),
+    ),
+  );
   await waitFor(() => assert.ok(within(panel).getByRole("button", { name: "Give back" })));
 });
 
@@ -207,12 +281,37 @@ test("with Browser and Computer both shown, the six tabs keep their order and Op
   openPanelOn("activity");
   const workspaceId = "bot-home-1";
   const browserState = {
-    workspaceId, revision: 1, activeTabId: "tab-1", profiles: [], defaults: {}, agentAccessOverride: "inherit", agentAccessAllowed: true, history: [], servers: [],
-    tabs: [{
-      id: "tab-1", workspaceId, profileId: "bot:bot-1", url: "https://example.com/", title: "Example", loading: false, canGoBack: false,
-      canGoForward: false, crashed: false, audible: false, muted: false, viewport: { mode: "fill", width: 1280, height: 720 },
-      appearance: "system", zoom: 1, recording: false, agentControlling: false, floating: false, visible: true,
-    }],
+    workspaceId,
+    revision: 1,
+    activeTabId: "tab-1",
+    profiles: [],
+    defaults: {},
+    agentAccessOverride: "inherit",
+    agentAccessAllowed: true,
+    history: [],
+    servers: [],
+    tabs: [
+      {
+        id: "tab-1",
+        workspaceId,
+        profileId: "bot:bot-1",
+        url: "https://example.com/",
+        title: "Example",
+        loading: false,
+        canGoBack: false,
+        canGoForward: false,
+        crashed: false,
+        audible: false,
+        muted: false,
+        viewport: { mode: "fill", width: 1280, height: 720 },
+        appearance: "system",
+        zoom: 1,
+        recording: false,
+        agentControlling: false,
+        floating: false,
+        visible: true,
+      },
+    ],
   };
   const { calls } = await mountBotChat(
     { computers: [computer()] },
@@ -223,10 +322,23 @@ test("with Browser and Computer both shown, the six tabs keep their order and Op
     },
   );
   const panel = botPanel();
-  await waitFor(() => assert.deepEqual(tabNames(), ["Activity", "Files", "Memory", "Routines", "Browser", "Computer", "Advanced"]));
+  await waitFor(() =>
+    assert.deepEqual(tabNames(), [
+      "Activity",
+      "Files",
+      "Memory",
+      "Routines",
+      "Browser",
+      "Computer",
+      "Advanced",
+    ]),
+  );
   fireEvent.keyDown(within(panel).getByRole("button", { name: "Open tabs" }), { key: "Enter" });
   const items = await screen.findAllByRole("menuitem");
-  assert.deepEqual(items.map((item) => item.textContent), ["Activity", "Files", "Memory", "Routines", "Browser", "Computer", "Advanced"]);
+  assert.deepEqual(
+    items.map((item) => item.textContent),
+    ["Activity", "Files", "Memory", "Routines", "Browser", "Computer", "Advanced"],
+  );
   fireEvent.click(screen.getByRole("menuitem", { name: "Computer" }));
   await waitFor(() => assert.equal(selectedTab(), "Computer"));
   await waitFor(() =>
@@ -275,8 +387,15 @@ test("Float over chat moves the screen over the chat, and Escape or Dock brings 
   assert.equal(float.getAttribute("aria-roledescription"), "floating computer");
   assert.ok(within(float).getByText("Planner's computer"));
   assert.equal(labelled(float, "Take over").tagName, "BUTTON", "Take over travels with the screen");
-  assert.ok(float.querySelector(`[data-bot-computer-screen="${VM}"]`), "the float streams the screen");
-  assert.equal(panel.querySelector("[data-bot-computer-screen]"), null, "and the tab does not stream a second copy");
+  assert.ok(
+    float.querySelector(`[data-bot-computer-screen="${VM}"]`),
+    "the float streams the screen",
+  );
+  assert.equal(
+    panel.querySelector("[data-bot-computer-screen]"),
+    null,
+    "and the tab does not stream a second copy",
+  );
   assert.ok(within(panel).getByText("Planner's computer is floating over the chat"));
 
   fireEvent.keyDown(labelled(float, "Move Planner's computer"), { key: "Escape" });
@@ -299,11 +418,22 @@ test("Float over chat moves the screen over the chat, and Escape or Dock brings 
 test("Open Planner's computer on a sign-in card moves the person into the Computer tab, held for them", async () => {
   const state = { computers: [computer({ state: "running" })] };
   const signIn = {
-    botId: "bot-1", waitId: "wait-s", toolCallId: "tool-s", kind: "sign_in" as const, action: "Sign in to github.com",
-    open: { url: "https://github.com" }, origin: "https://github.com", target: "computer" as const, source: "tool" as const,
+    botId: "bot-1",
+    waitId: "wait-s",
+    toolCallId: "tool-s",
+    kind: "sign_in" as const,
+    action: "Sign in to github.com",
+    open: { url: "https://github.com" },
+    origin: "https://github.com",
+    target: "computer" as const,
+    source: "tool" as const,
   };
   const { calls } = await mountBotChat(state, {
-    "bots:live:subscribe": () => ({ ...chatSnapshot(), state: { kind: "running", submissionId: "sub-1" }, handoff: signIn }),
+    "bots:live:subscribe": () => ({
+      ...chatSnapshot(),
+      state: { kind: "running", submissionId: "sub-1" },
+      handoff: signIn,
+    }),
     // As main opens it: the person takes the computer over, then the page opens there.
     "bots:openHandoff": () => {
       state.computers = [computer({ state: "running", controller: "person" })];
@@ -325,17 +455,31 @@ test("Open Planner's computer on a sign-in card moves the person into the Comput
     calls.filter((call) => call.channel === "bots:openHandoff").map((call) => call.args),
     [[{ botId: "bot-1", waitId: "wait-s" }]],
   );
-  assert.ok(await within(botPanel()).findByRole("button", { name: "Give back" }), "the person holds the computer");
+  assert.ok(
+    await within(botPanel()).findByRole("button", { name: "Give back" }),
+    "the person holds the computer",
+  );
 });
 
 test("Finish on your Mac from a phone brings Planner's computer forward here once, without taking focus", async () => {
   const state = { computers: [computer({ state: "running" })] };
   const signIn = {
-    botId: "bot-1", waitId: "wait-p", toolCallId: "tool-p", kind: "sign_in" as const, action: "Sign in to github.com",
-    open: { url: "https://github.com" }, origin: "https://github.com", target: "computer" as const, source: "tool" as const,
+    botId: "bot-1",
+    waitId: "wait-p",
+    toolCallId: "tool-p",
+    kind: "sign_in" as const,
+    action: "Sign in to github.com",
+    open: { url: "https://github.com" },
+    origin: "https://github.com",
+    target: "computer" as const,
+    source: "tool" as const,
   };
   const { calls } = await mountBotChat(state, {
-    "bots:live:subscribe": () => ({ ...chatSnapshot(), state: { kind: "running", submissionId: "sub-1" }, handoff: signIn }),
+    "bots:live:subscribe": () => ({
+      ...chatSnapshot(),
+      state: { kind: "running", submissionId: "sub-1" },
+      handoff: signIn,
+    }),
   });
   const card = await screen.findByRole("group", { name: "Planner needs you" });
   within(card).getByRole("button", { name: "Take control of Planner’s computer" }).focus();
@@ -350,9 +494,19 @@ test("Finish on your Mac from a phone brings Planner's computer forward here onc
   });
   await waitFor(() => assert.equal(selectedTab(), "Computer"));
   assert.notEqual(botPanel().getAttribute("data-state"), "closed");
-  assert.ok(await within(botPanel()).findByRole("button", { name: "Give back" }), "the person holds the computer");
-  assert.equal(botPanel().contains(document.activeElement), false, "focus stays where the person left it");
-  assert.equal(calls.some((call) => call.channel === "bots:openHandoff"), false);
+  assert.ok(
+    await within(botPanel()).findByRole("button", { name: "Give back" }),
+    "the person holds the computer",
+  );
+  assert.equal(
+    botPanel().contains(document.activeElement),
+    false,
+    "focus stays where the person left it",
+  );
+  assert.equal(
+    calls.some((call) => call.channel === "bots:openHandoff"),
+    false,
+  );
 
   // Once shown, a later change for the same card never pulls the panel back to Computer.
   fireEvent.click(within(botPanel()).getByRole("tab", { name: "Files" }));
@@ -372,11 +526,20 @@ test("Finish on your Mac from a phone brings Planner's computer forward here onc
 test("Finish on your Mac for a step on Planner's computer brings the computer forward here too", async () => {
   const state = { computers: [computer({ state: "running" })] };
   const step = {
-    botId: "bot-1", waitId: "wait-a", toolCallId: "tool-a", kind: "action" as const, action: "Approve the payment in the bank app",
-    target: "computer" as const, source: "tool" as const,
+    botId: "bot-1",
+    waitId: "wait-a",
+    toolCallId: "tool-a",
+    kind: "action" as const,
+    action: "Approve the payment in the bank app",
+    target: "computer" as const,
+    source: "tool" as const,
   };
   await mountBotChat(state, {
-    "bots:live:subscribe": () => ({ ...chatSnapshot(), state: { kind: "running", submissionId: "sub-1" }, handoff: step }),
+    "bots:live:subscribe": () => ({
+      ...chatSnapshot(),
+      state: { kind: "running", submissionId: "sub-1" },
+      handoff: step,
+    }),
   });
   await screen.findByRole("group", { name: "Planner needs you" });
   assert.equal(botPanel().getAttribute("data-state"), "closed");
@@ -388,14 +551,25 @@ test("Finish on your Mac for a step on Planner's computer brings the computer fo
   });
   await waitFor(() => assert.equal(selectedTab(), "Computer"));
   assert.ok(await within(botPanel()).findByRole("button", { name: "Give back" }));
-  assert.equal(botPanel().contains(document.activeElement), false, "focus stays where the person left it");
+  assert.equal(
+    botPanel().contains(document.activeElement),
+    false,
+    "focus stays where the person left it",
+  );
 });
 
 test("reopening a chat whose remembered view still shows a sign-in answered since never pulls the panel to Computer", async () => {
   const state = { computers: [computer({ state: "running" })] };
   const signIn = {
-    botId: "bot-1", waitId: "wait-r", toolCallId: "tool-r", kind: "sign_in" as const, action: "Sign in to github.com",
-    open: { url: "https://github.com" }, origin: "https://github.com", target: "computer" as const, source: "tool" as const,
+    botId: "bot-1",
+    waitId: "wait-r",
+    toolCallId: "tool-r",
+    kind: "sign_in" as const,
+    action: "Sign in to github.com",
+    open: { url: "https://github.com" },
+    origin: "https://github.com",
+    target: "computer" as const,
+    source: "tool" as const,
   };
   const running = { kind: "running" as const, submissionId: "sub-1" };
   let subscribe: () => unknown = () => ({ ...chatSnapshot(), state: running, handoff: signIn });
@@ -414,7 +588,10 @@ test("reopening a chat whose remembered view still shows a sign-in answered sinc
   await waitFor(() => assert.ok(computerCalls(calls, "botComputers:status").length > statusReads));
   await act(async () => new Promise((resolve) => setTimeout(resolve, 20)));
   assert.equal(botPanel().getAttribute("data-state"), "closed", "a remembered card moves nothing");
-  assert.ok(screen.getByRole("group", { name: "Planner needs you" }), "the remembered view shows at once");
+  assert.ok(
+    screen.getByRole("group", { name: "Planner needs you" }),
+    "the remembered view shows at once",
+  );
 
   // The fresh snapshot has no card; it lands inside act so its updates settle before the checks.
   await act(async () => {

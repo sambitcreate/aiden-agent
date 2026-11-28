@@ -9,12 +9,32 @@ import {
 test("tracker opens once, appends only new suffixes, and restarts on non-prefix edits", () => {
   const t = createGenerativeUiDraftTracker();
   assert.equal(t.update("c1", { title: "T" }), undefined);
-  assert.deepEqual(t.update("c1", { title: "T", html: "<div>" }), { kind: "open", toolCallId: "c1", title: "T" });
-  assert.deepEqual(t.update("c1", { title: "T", html: "<div>" }), { kind: "append", toolCallId: "c1", chunk: "<div>" });
+  assert.deepEqual(t.update("c1", { title: "T", html: "<div>" }), {
+    kind: "open",
+    toolCallId: "c1",
+    title: "T",
+  });
+  assert.deepEqual(t.update("c1", { title: "T", html: "<div>" }), {
+    kind: "append",
+    toolCallId: "c1",
+    chunk: "<div>",
+  });
   assert.equal(t.update("c1", { title: "T", html: "<div>" }), undefined);
-  assert.deepEqual(t.update("c1", { title: "T", html: "<div><p>hi" }), { kind: "append", toolCallId: "c1", chunk: "<p>hi" });
-  assert.deepEqual(t.update("c1", { title: "T", html: "<section>" }), { kind: "restart", toolCallId: "c1", title: "T" });
-  assert.deepEqual(t.update("c1", { title: "T", html: "<section>" }), { kind: "append", toolCallId: "c1", chunk: "<section>" });
+  assert.deepEqual(t.update("c1", { title: "T", html: "<div><p>hi" }), {
+    kind: "append",
+    toolCallId: "c1",
+    chunk: "<p>hi",
+  });
+  assert.deepEqual(t.update("c1", { title: "T", html: "<section>" }), {
+    kind: "restart",
+    toolCallId: "c1",
+    title: "T",
+  });
+  assert.deepEqual(t.update("c1", { title: "T", html: "<section>" }), {
+    kind: "append",
+    toolCallId: "c1",
+    chunk: "<section>",
+  });
 });
 
 test("path-based, empty, and non-object args never open a draft", () => {
@@ -41,14 +61,30 @@ function fakeSession(publicIds: Record<string, string> = { raw1: "call-1", raw2:
     publicToolCallId: (raw) => publicIds[raw],
     send: (event) => events.push(event),
     open: (title) => {
-      const stream = { title, chunks: [] as string[], closed: false, src: `aiden-genui://preview/${String(streams.length).padStart(64, "0")}` };
+      const stream = {
+        title,
+        chunks: [] as string[],
+        closed: false,
+        src: `aiden-genui://preview/${String(streams.length).padStart(64, "0")}`,
+      };
       streams.push(stream);
-      return { src: stream.src, append: (c) => stream.chunks.push(c), close: () => { stream.closed = true; } };
+      return {
+        src: stream.src,
+        append: (c) => stream.chunks.push(c),
+        close: () => {
+          stream.closed = true;
+        },
+      };
     },
-    schedule: (run) => { timers.push(run); return timers.length; },
+    schedule: (run) => {
+      timers.push(run);
+      return timers.length;
+    },
     cancelScheduled: () => undefined,
   });
-  const flush = () => { while (timers.length) timers.shift()!(); };
+  const flush = () => {
+    while (timers.length) timers.shift()!();
+  };
   return { session, events, streams, flush };
 }
 
@@ -63,7 +99,10 @@ test("a disabled draft session never opens streams or emits events", () => {
       opened += 1;
       return { src: "x", append: () => undefined, close: () => undefined };
     },
-    schedule: (run) => { run(); return 1; },
+    schedule: (run) => {
+      run();
+      return 1;
+    },
     cancelScheduled: () => undefined,
   });
   session.delta("raw1", "render_artifact", { title: "T", html: "<p>a" });
@@ -83,7 +122,13 @@ test("a draft session throttles deltas, then opens one stream and appends suffix
   assert.equal(streams.length, 1);
   assert.deepEqual(streams[0]!.chunks, ["<div><p>1"]);
   assert.deepEqual(events, [
-    { version: 1, operation: "draft", toolCallId: "call-1", title: "Revenue", src: streams[0]!.src },
+    {
+      version: 1,
+      operation: "draft",
+      toolCallId: "call-1",
+      title: "Revenue",
+      src: streams[0]!.src,
+    },
   ]);
   session.delta("raw1", "render_artifact", { title: "Revenue", html: "<div><p>12" });
   flush();
@@ -101,7 +146,14 @@ test("a draft follows the wide layout whenever the streamed arguments name it", 
   assert.equal(streams.length, 1);
   assert.deepEqual(events, [
     { version: 1, operation: "draft", toolCallId: "call-1", title: "Board", src: streams[0]!.src },
-    { version: 1, operation: "draft", toolCallId: "call-1", title: "Board", src: streams[0]!.src, layout: "wide" },
+    {
+      version: 1,
+      operation: "draft",
+      toolCallId: "call-1",
+      title: "Board",
+      src: streams[0]!.src,
+      layout: "wide",
+    },
   ]);
   session.delta("raw1", "render_artifact", { title: "Board", html: "<div><p>1", layout: "wide" });
   flush();
@@ -110,7 +162,12 @@ test("a draft follows the wide layout whenever the streamed arguments name it", 
   session.delta("raw2", "render_artifact", { layout: "wide", title: "Grid", html: "<p>" });
   flush();
   assert.deepEqual(events[2], {
-    version: 1, operation: "draft", toolCallId: "call-2", title: "Grid", src: streams[1]!.src, layout: "wide",
+    version: 1,
+    operation: "draft",
+    toolCallId: "call-2",
+    title: "Grid",
+    src: streams[1]!.src,
+    layout: "wide",
   });
 });
 
@@ -120,9 +177,17 @@ test("other tools, unknown calls, and bad titles never leak into draft events", 
   session.delta("raw-unknown", "render_artifact", { html: "<p>" });
   session.delta("raw2", "render_artifact", { title: " padded ", html: "<p>" });
   flush();
-  assert.deepEqual(events.map((e) => (e as { toolCallId?: string; title?: string })), [
-    { version: 1, operation: "draft", toolCallId: "call-2", src: (events[0] as { src: string }).src },
-  ]);
+  assert.deepEqual(
+    events.map((e) => e as { toolCallId?: string; title?: string }),
+    [
+      {
+        version: 1,
+        operation: "draft",
+        toolCallId: "call-2",
+        src: (events[0] as { src: string }).src,
+      },
+    ],
+  );
 });
 
 test("ending a call flushes and closes its stream but leaves the draft for present to replace", () => {
@@ -131,7 +196,10 @@ test("ending a call flushes and closes its stream but leaves the draft for prese
   session.end("raw1");
   assert.equal(streams[0]!.closed, true);
   assert.deepEqual(streams[0]!.chunks, ["<p>a"]);
-  assert.equal(events.some((e) => (e as { operation: string }).operation === "draft_end"), false);
+  assert.equal(
+    events.some((e) => (e as { operation: string }).operation === "draft_end"),
+    false,
+  );
 });
 
 test("cancel and dispose close streams and retract drafts", () => {
@@ -162,7 +230,10 @@ test("an inadmissible prefix stops the draft without opening more streams", () =
   assert.equal(streams.length, 1);
   assert.equal(streams[0]!.closed, true);
   assert.deepEqual(streams[0]!.chunks, ["<p>ok"]);
-  assert.equal(events.filter((e) => (e as { operation: string }).operation === "draft_end").length, 1);
+  assert.equal(
+    events.filter((e) => (e as { operation: string }).operation === "draft_end").length,
+    1,
+  );
 });
 
 test("a draft reads its chunks as one document, so a tag split across chunks or held in svg <style> still stops it", () => {
@@ -200,7 +271,10 @@ test("a draft shows only text its check has read, and the rest when the call end
     }
     fake.session.delta("raw1", "render_artifact", { html });
     fake.session.end("raw1");
-    return { shown: fake.streams[0]!.chunks.join(""), retracted: fake.events.some((e) => (e as { operation: string }).operation === "draft_end") };
+    return {
+      shown: fake.streams[0]!.chunks.join(""),
+      retracted: fake.events.some((e) => (e as { operation: string }).operation === "draft_end"),
+    };
   };
   // A long tag streamed in short deltas is checked in larger pieces; all of it shows by the end.
   const html = `<p title="${"a".repeat(3000)}">done</p><p>after</p>`;
@@ -214,12 +288,17 @@ test("a draft shows only text its check has read, and the rest when the call end
 });
 
 test("draft admission stops at remote loads and forbidden elements but tolerates partial tags", () => {
-  assert.equal(isDraftHtmlAcceptable("<div class=\"aiden-card\"><p>Revenue"), true);
+  assert.equal(isDraftHtmlAcceptable('<div class="aiden-card"><p>Revenue'), true);
   assert.equal(isDraftHtmlAcceptable("<div><scr"), true);
   assert.equal(isDraftHtmlAcceptable("<iframe src=x>"), false);
-  assert.equal(isDraftHtmlAcceptable("<img src=\"https://tracker.example/x.png\">"), false);
-  assert.equal(isDraftHtmlAcceptable("<a href=\"javascript:alert(1)\">"), false);
+  assert.equal(isDraftHtmlAcceptable('<img src="https://tracker.example/x.png">'), false);
+  assert.equal(isDraftHtmlAcceptable('<a href="javascript:alert(1)">'), false);
   assert.equal(isDraftHtmlAcceptable("x\u0000y"), false);
-  assert.equal(isDraftHtmlAcceptable("<li>JavaScript: 41%</li><script>for (let i = 0; i < object.length; i++) {"), true);
-  assert.equal(isDraftHtmlAcceptable("<p>Chart</p><iframe src=\"https://evil.test"), false);
+  assert.equal(
+    isDraftHtmlAcceptable(
+      "<li>JavaScript: 41%</li><script>for (let i = 0; i < object.length; i++) {",
+    ),
+    true,
+  );
+  assert.equal(isDraftHtmlAcceptable('<p>Chart</p><iframe src="https://evil.test'), false);
 });

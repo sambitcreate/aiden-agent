@@ -57,18 +57,19 @@ export function buildModel(
   limits: RuntimeModelLimits,
 ): Model<Api> {
   const options = provider.modelMetadata?.[modelId]?.overrides;
-  const effortLevels = provider.kind === "openai" && limits.reasoning
-    ? customModelThinkingLevels(options)
+  const effortLevels =
+    provider.kind === "openai" && limits.reasoning ? customModelThinkingLevels(options) : undefined;
+  const customThinkingMap = effortLevels
+    ? {
+        off: effortLevels.includes("off") ? "none" : null,
+        minimal: null,
+        low: effortLevels.includes("low") ? "low" : null,
+        medium: effortLevels.includes("medium") ? "medium" : null,
+        high: effortLevels.includes("high") ? "high" : null,
+        xhigh: effortLevels.includes("xhigh") ? "xhigh" : null,
+        max: effortLevels.includes("max") ? "max" : null,
+      }
     : undefined;
-  const customThinkingMap = effortLevels ? {
-    off: effortLevels.includes("off") ? "none" : null,
-    minimal: null,
-    low: effortLevels.includes("low") ? "low" : null,
-    medium: effortLevels.includes("medium") ? "medium" : null,
-    high: effortLevels.includes("high") ? "high" : null,
-    xhigh: effortLevels.includes("xhigh") ? "xhigh" : null,
-    max: effortLevels.includes("max") ? "max" : null,
-  } : undefined;
   const thinkingCompat =
     provider.kind === "anthropic" && limits.forceAdaptiveThinking
       ? { forceAdaptiveThinking: true }
@@ -86,9 +87,10 @@ export function buildModel(
         : undefined;
   // A listed custom endpoint routes the chat's requests by the chat id, as
   // api.openai.com does by default.
-  const cacheAffinity = provider.kind === "openai"
-    ? customEndpointCacheAffinity(resolveRuntimeBaseUrl(provider))
-    : undefined;
+  const cacheAffinity =
+    provider.kind === "openai"
+      ? customEndpointCacheAffinity(resolveRuntimeBaseUrl(provider))
+      : undefined;
   return {
     id: modelId,
     name: modelId,
@@ -134,23 +136,57 @@ export function withPinnedBotProviderAuth(
   providerStream: ProviderStreams["streamSimple"],
   deferred?: Pick<ProviderStreams, "fetchDeferred" | "cancelDeferred">,
 ): ResolvedModelRuntime {
-  const pinnedOptions = <T extends { apiKey?: string; headers?: ProviderHeaders; env?: Record<string, string> }>(model: Model<Api>, options?: T) => {
-    if (model.provider !== runtime.model.provider || model.id !== runtime.model.id) throw new Error("Pinned Bot provider auth cannot be reused for another model.");
-    return { model: auth.auth.baseUrl ? { ...model, baseUrl: auth.auth.baseUrl } : model, options: { ...options, apiKey: auth.auth.apiKey, headers: { ...(options?.headers ?? {}), ...(auth.auth.headers ?? {}) }, env: { ...(options?.env ?? {}), ...(auth.env ?? {}) } } };
+  const pinnedOptions = <
+    T extends { apiKey?: string; headers?: ProviderHeaders; env?: Record<string, string> },
+  >(
+    model: Model<Api>,
+    options?: T,
+  ) => {
+    if (model.provider !== runtime.model.provider || model.id !== runtime.model.id)
+      throw new Error("Pinned Bot provider auth cannot be reused for another model.");
+    return {
+      model: auth.auth.baseUrl ? { ...model, baseUrl: auth.auth.baseUrl } : model,
+      options: {
+        ...options,
+        apiKey: auth.auth.apiKey,
+        headers: { ...(options?.headers ?? {}), ...(auth.auth.headers ?? {}) },
+        env: { ...(options?.env ?? {}), ...(auth.env ?? {}) },
+      },
+    };
   };
   const models = new Proxy(runtime.models, {
     get(target, property) {
-      if (property === "getAuth") return (async (model) => {
-        // Pi accepts either a provider id or a model. A provider lookup still
-        // refers to this one admitted runtime; it cannot open ambient auth.
-        if (typeof model === "string") {
-          if (model !== runtime.model.provider) throw new Error("Pinned Bot provider auth cannot be reused for another provider.");
-        } else if (model.provider !== runtime.model.provider || model.id !== runtime.model.id || !("contextWindow" in model)) throw new Error("Pinned Bot provider auth cannot be reused for another model.");
-        return { ...auth, auth: { ...auth.auth }, ...(auth.env ? { env: { ...auth.env } } : {}) };
-      }) as Models["getAuth"];
-      if (property === "fetchDeferred") return (async (model, handle, options) => { if (!deferred?.fetchDeferred) throw new Error("This pinned Bot provider does not support deferred responses."); const pinned = pinnedOptions(model, options); return deferred.fetchDeferred(pinned.model, handle, pinned.options).result(); }) as Models["fetchDeferred"];
-      if (property === "cancelDeferred") return (async (model, handle, options) => { if (!deferred?.cancelDeferred) throw new Error("This pinned Bot provider does not support deferred cancellation."); const pinned = pinnedOptions(model, options); await deferred.cancelDeferred(pinned.model, handle, pinned.options); }) as Models["cancelDeferred"];
-      const value = Reflect.get(target, property, target) as unknown; return typeof value === "function" ? value.bind(target) : value;
+      if (property === "getAuth")
+        return (async (model) => {
+          // Pi accepts either a provider id or a model. A provider lookup still
+          // refers to this one admitted runtime; it cannot open ambient auth.
+          if (typeof model === "string") {
+            if (model !== runtime.model.provider)
+              throw new Error("Pinned Bot provider auth cannot be reused for another provider.");
+          } else if (
+            model.provider !== runtime.model.provider ||
+            model.id !== runtime.model.id ||
+            !("contextWindow" in model)
+          )
+            throw new Error("Pinned Bot provider auth cannot be reused for another model.");
+          return { ...auth, auth: { ...auth.auth }, ...(auth.env ? { env: { ...auth.env } } : {}) };
+        }) as Models["getAuth"];
+      if (property === "fetchDeferred")
+        return (async (model, handle, options) => {
+          if (!deferred?.fetchDeferred)
+            throw new Error("This pinned Bot provider does not support deferred responses.");
+          const pinned = pinnedOptions(model, options);
+          return deferred.fetchDeferred(pinned.model, handle, pinned.options).result();
+        }) as Models["fetchDeferred"];
+      if (property === "cancelDeferred")
+        return (async (model, handle, options) => {
+          if (!deferred?.cancelDeferred)
+            throw new Error("This pinned Bot provider does not support deferred cancellation.");
+          const pinned = pinnedOptions(model, options);
+          await deferred.cancelDeferred(pinned.model, handle, pinned.options);
+        }) as Models["cancelDeferred"];
+      const value = Reflect.get(target, property, target) as unknown;
+      return typeof value === "function" ? value.bind(target) : value;
     },
   });
   return {
@@ -177,7 +213,8 @@ export function withPinnedBotProviderAuth(
             headers,
             env,
           });
-        })),
+        }),
+      ),
     },
   };
 }
@@ -232,7 +269,9 @@ export async function resolveModelRuntimeWith(
         `Model "${modelId}" is not available through Pi's ${nativeProvider.label} provider. Choose another model and try again.`,
       );
     }
-    const model = withoutMessageThreads(withOpenCodeSessionAttribution(resolvedModel, conversationId));
+    const model = withoutMessageThreads(
+      withOpenCodeSessionAttribution(resolvedModel, conversationId),
+    );
     return {
       provider: nativeProvider,
       model,
@@ -259,10 +298,9 @@ export async function resolveModelRuntimeWith(
   }
 
   const limits = await dependencies.resolveRuntimeLimits(provider, modelId);
-  const model = withoutMessageThreads(withOpenCodeSessionAttribution(
-    buildModel(provider, modelId, limits),
-    conversationId,
-  ));
+  const model = withoutMessageThreads(
+    withOpenCodeSessionAttribution(buildModel(provider, modelId, limits), conversationId),
+  );
   const headers = resolveRuntimeHeaders(provider);
   const models = createModels();
   models.setProvider(

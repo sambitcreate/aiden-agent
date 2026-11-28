@@ -22,7 +22,10 @@ export interface ControlledWindow {
   close(): void;
 }
 
-type Handle = (channel: string, handler: (event: { sender: { id: number } }, ...args: unknown[]) => unknown) => void;
+type Handle = (
+  channel: string,
+  handler: (event: { sender: { id: number } }, ...args: unknown[]) => unknown,
+) => void;
 
 export interface WindowControlHandlerDeps<W extends ControlledWindow> {
   handle: Handle;
@@ -42,12 +45,15 @@ export function windowControlsState(window: ControlledWindow): WindowControlsSta
 function parseMenuPoint(value: unknown): { x: number; y: number } | null {
   if (typeof value !== "object" || value === null) return null;
   const { x, y } = value as Record<string, unknown>;
-  if (typeof x !== "number" || typeof y !== "number" || !Number.isFinite(x) || !Number.isFinite(y)) return null;
+  if (typeof x !== "number" || typeof y !== "number" || !Number.isFinite(x) || !Number.isFinite(y))
+    return null;
   if (x < 0 || y < 0 || x > 100_000 || y > 100_000) return null;
   return { x: Math.round(x), y: Math.round(y) };
 }
 
-export function registerWindowControlHandlers<W extends ControlledWindow>(deps: WindowControlHandlerDeps<W>): void {
+export function registerWindowControlHandlers<W extends ControlledWindow>(
+  deps: WindowControlHandlerDeps<W>,
+): void {
   const owned = (event: { sender: { id: number } }): W | null => {
     const window = deps.mainWindow();
     if (!window || window.isDestroyed() || event.sender.id !== window.webContents.id) return null;
@@ -101,11 +107,18 @@ export function trackWindowControlsState(
   const publish = () => {
     if (window.isDestroyed()) return;
     const next = windowControlsState(window);
-    if ((last && last.maximized === next.maximized && last.fullScreen === next.fullScreen)) return;
+    if (last && last.maximized === next.maximized && last.fullScreen === next.fullScreen) return;
     last = next;
     send(next);
   };
-  const events = ["maximize", "unmaximize", "enter-full-screen", "leave-full-screen", "restore", "resize"];
+  const events = [
+    "maximize",
+    "unmaximize",
+    "enter-full-screen",
+    "leave-full-screen",
+    "restore",
+    "resize",
+  ];
   for (const name of events) window.on(name, publish);
   return () => {
     for (const name of events) window.removeListener(name, publish);

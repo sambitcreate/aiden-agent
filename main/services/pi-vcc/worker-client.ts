@@ -100,10 +100,7 @@ function executeWorker(
     };
     const abort = () =>
       finish(new DOMException(vccErrorMessage(operation, "cancelled"), "AbortError"));
-    const timer = setTimeout(
-      () => finish(workerError(operation, "timeout")),
-      15_000,
-    );
+    const timer = setTimeout(() => finish(workerError(operation, "timeout")), 15_000);
     signal?.addEventListener("abort", abort, { once: true });
     if (signal?.aborted) abort();
     worker.once("message", (message) =>

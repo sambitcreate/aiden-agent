@@ -126,7 +126,10 @@ export function AgentSliderSettings() {
     () => createModelEntries(providers, modelInfoByValue(providers, catalog.data)),
     [providers, catalog.data],
   );
-  const entries = React.useMemo(() => visibleModelEntries(allEntries, hidden), [allEntries, hidden]);
+  const entries = React.useMemo(
+    () => visibleModelEntries(allEntries, hidden),
+    [allEntries, hidden],
+  );
 
   if (!settings.data || providersQuery.isLoading) {
     return (
@@ -840,7 +843,8 @@ function StopRow({
   const error = draft === undefined ? undefined : agentSliderLabelError(draft);
   const name = stop.label;
   const { levels, defaultLevel } = levelsFor(providers, entry);
-  const reason = view && !view.available && view.reason !== "unassigned" ? view.reasonText : undefined;
+  const reason =
+    view && !view.available && view.reason !== "unassigned" ? view.reasonText : undefined;
   const first = index === 0;
   const last = index === count - 1;
 

@@ -216,10 +216,11 @@ export function ScheduledTasksSettings() {
             description={
               <>
                 <span className="block">
-                  Stops idle sleep while a chat answers or a build, test or check runs, and, when plugged in,
-                  for the hour before a check-back or Bot wake-up is due. After 4 hours with nobody at the computer
-                  it lets go, except for a check-back or wake-up that is due. The display can still sleep, and
-                  closing a laptop&apos;s lid still puts it to sleep.
+                  Stops idle sleep while a chat answers or a build, test or check runs, and, when
+                  plugged in, for the hour before a check-back or Bot wake-up is due. After 4 hours
+                  with nobody at the computer it lets go, except for a check-back or wake-up that is
+                  due. The display can still sleep, and closing a laptop&apos;s lid still puts it to
+                  sleep.
                 </span>
                 {keepAwakeLine ? (
                   <span className="mt-1 block text-tertiary" aria-live="polite">
@@ -288,7 +289,11 @@ export function ScheduledTasksSettings() {
                     {task.name}
                   </Text>
                   <Text variant="small" color="tertiary" truncate className="mt-0.5 block">
-                    {task.enabled ? (task.trigger ? formatScheduledTaskTriggerLabel(task.trigger) : task.cron) : "Paused"}
+                    {task.enabled
+                      ? task.trigger
+                        ? formatScheduledTaskTriggerLabel(task.trigger)
+                        : task.cron
+                      : "Paused"}
                   </Text>
                 </div>
                 <Button

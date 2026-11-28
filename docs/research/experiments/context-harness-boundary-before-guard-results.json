@@ -42,9 +42,7 @@
       "moduleSha256": "ffb82edac6abc49c6bbd32a4a3b310c1e760a57c7754f93654f386c440645ad5",
       "harnessMs": 7.024166999999977,
       "transformMs": 0.5508340000000089,
-      "transformDurations": [
-        0.5508340000000089
-      ],
+      "transformDurations": [0.5508340000000089],
       "peakRssKiB": 128624,
       "seedMessages": 1,
       "seedHash": "773b25428ee347a8e7287d9c86cca05dfdff24e67a0a06d10347fa88e15b4562",
@@ -53,10 +51,7 @@
       "journalPayloadHash": "55002d8f3f7019e055feeae51249f1519c8345a4b27ebb42117a523c69535013",
       "providerCalls": 1,
       "toolCalls": 0,
-      "lifecycle": [
-        "context-transform",
-        "foreground-request"
-      ],
+      "lifecycle": ["context-transform", "foreground-request"],
       "projections": [
         {
           "tokens": 12033,
@@ -66,9 +61,7 @@
       ],
       "faults": [],
       "summaryCalls": 0,
-      "requestHashes": [
-        "c6a82ba8648c152b881e6c440aed1fad8f4e5c502ee9676e6f7a80ef828d4b70"
-      ],
+      "requestHashes": ["c6a82ba8648c152b881e6c440aed1fad8f4e5c502ee9676e6f7a80ef828d4b70"],
       "summaryRequests": [],
       "summaryEvidence": [],
       "transformHashes": [
@@ -138,9 +131,7 @@
       "moduleSha256": "3bec63519e0a81202a42d214008edcab6e7f6a1027f21b22b4aac4f84c809b8b",
       "harnessMs": 7.349084000000005,
       "transformMs": 0.45170799999999645,
-      "transformDurations": [
-        0.45170799999999645
-      ],
+      "transformDurations": [0.45170799999999645],
       "peakRssKiB": 128704,
       "seedMessages": 1,
       "seedHash": "773b25428ee347a8e7287d9c86cca05dfdff24e67a0a06d10347fa88e15b4562",
@@ -149,10 +140,7 @@
       "journalPayloadHash": "55002d8f3f7019e055feeae51249f1519c8345a4b27ebb42117a523c69535013",
       "providerCalls": 1,
       "toolCalls": 0,
-      "lifecycle": [
-        "context-transform",
-        "foreground-request"
-      ],
+      "lifecycle": ["context-transform", "foreground-request"],
       "projections": [
         {
           "tokens": 12033,
@@ -162,9 +150,7 @@
       ],
       "faults": [],
       "summaryCalls": 0,
-      "requestHashes": [
-        "c6a82ba8648c152b881e6c440aed1fad8f4e5c502ee9676e6f7a80ef828d4b70"
-      ],
+      "requestHashes": ["c6a82ba8648c152b881e6c440aed1fad8f4e5c502ee9676e6f7a80ef828d4b70"],
       "summaryRequests": [],
       "summaryEvidence": [],
       "transformHashes": [
@@ -234,9 +220,7 @@
       "moduleSha256": "ffb82edac6abc49c6bbd32a4a3b310c1e760a57c7754f93654f386c440645ad5",
       "harnessMs": 18.946749999999952,
       "transformMs": 0.41641600000002654,
-      "transformDurations": [
-        0.41641600000002654
-      ],
+      "transformDurations": [0.41641600000002654],
       "peakRssKiB": 131328,
       "seedMessages": 201,
       "seedHash": "136dc42a3a48b94bdec45db65e5709e612ffa9609de047ce55af5cc266ab9585",
@@ -245,11 +229,7 @@
       "journalPayloadHash": "7119b955aa154f274e0d0db61316df21a1974f8d6898d69fbeff50a415875e3d",
       "providerCalls": 1,
       "toolCalls": 0,
-      "lifecycle": [
-        "summary-request",
-        "context-transform",
-        "foreground-request"
-      ],
+      "lifecycle": ["summary-request", "context-transform", "foreground-request"],
       "projections": [
         {
           "tokens": 13051,
@@ -264,18 +244,11 @@
       ],
       "faults": [],
       "summaryCalls": 1,
-      "requestHashes": [
-        "cd3fbfc234e2f07a877916d254fb2ccad0f7c113ea0741d7b10e5dec940bd286"
-      ],
-      "summaryRequests": [
-        "f9aabae88b0261a0a254c9a6001eb0b4506ef9daa2589a86264232a381f53be7"
-      ],
+      "requestHashes": ["cd3fbfc234e2f07a877916d254fb2ccad0f7c113ea0741d7b10e5dec940bd286"],
+      "summaryRequests": ["f9aabae88b0261a0a254c9a6001eb0b4506ef9daa2589a86264232a381f53be7"],
       "summaryEvidence": [
         {
-          "roles": [
-            "system",
-            "user"
-          ],
+          "roles": ["system", "user"],
           "textChars": 31110,
           "containsUser": true,
           "containsToolEvidence": true,
@@ -344,9 +317,7 @@
       "moduleSha256": "3bec63519e0a81202a42d214008edcab6e7f6a1027f21b22b4aac4f84c809b8b",
       "harnessMs": 17.53137499999997,
       "transformMs": 0.22683299999999917,
-      "transformDurations": [
-        0.22683299999999917
-      ],
+      "transformDurations": [0.22683299999999917],
       "peakRssKiB": 129632,
       "seedMessages": 201,
       "seedHash": "136dc42a3a48b94bdec45db65e5709e612ffa9609de047ce55af5cc266ab9585",
@@ -355,11 +326,7 @@
       "journalPayloadHash": "7119b955aa154f274e0d0db61316df21a1974f8d6898d69fbeff50a415875e3d",
       "providerCalls": 1,
       "toolCalls": 0,
-      "lifecycle": [
-        "summary-request",
-        "context-transform",
-        "foreground-request"
-      ],
+      "lifecycle": ["summary-request", "context-transform", "foreground-request"],
       "projections": [
         {
           "tokens": 13051,
@@ -374,18 +341,11 @@
       ],
       "faults": [],
       "summaryCalls": 1,
-      "requestHashes": [
-        "cd3fbfc234e2f07a877916d254fb2ccad0f7c113ea0741d7b10e5dec940bd286"
-      ],
-      "summaryRequests": [
-        "f9aabae88b0261a0a254c9a6001eb0b4506ef9daa2589a86264232a381f53be7"
-      ],
+      "requestHashes": ["cd3fbfc234e2f07a877916d254fb2ccad0f7c113ea0741d7b10e5dec940bd286"],
+      "summaryRequests": ["f9aabae88b0261a0a254c9a6001eb0b4506ef9daa2589a86264232a381f53be7"],
       "summaryEvidence": [
         {
-          "roles": [
-            "system",
-            "user"
-          ],
+          "roles": ["system", "user"],
           "textChars": 31110,
           "containsUser": true,
           "containsToolEvidence": true,
@@ -454,9 +414,7 @@
       "moduleSha256": "ffb82edac6abc49c6bbd32a4a3b310c1e760a57c7754f93654f386c440645ad5",
       "harnessMs": 9.037792000000024,
       "transformMs": 0.5128750000000082,
-      "transformDurations": [
-        0.5128750000000082
-      ],
+      "transformDurations": [0.5128750000000082],
       "peakRssKiB": 128336,
       "seedMessages": 2,
       "seedHash": "9ed947ecbcae23c389e9efe7c45fce5f93536ce9a15541a9d43cf8eb913c9824",
@@ -465,11 +423,7 @@
       "journalPayloadHash": "ab3d97aa7749d211920d37ed86e3e6254c6ba53d69965dea4d914d16ffa97750",
       "providerCalls": 1,
       "toolCalls": 0,
-      "lifecycle": [
-        "summary-request",
-        "context-transform",
-        "foreground-request"
-      ],
+      "lifecycle": ["summary-request", "context-transform", "foreground-request"],
       "projections": [
         {
           "tokens": 12033,
@@ -484,18 +438,11 @@
       ],
       "faults": [],
       "summaryCalls": 1,
-      "requestHashes": [
-        "c6a82ba8648c152b881e6c440aed1fad8f4e5c502ee9676e6f7a80ef828d4b70"
-      ],
-      "summaryRequests": [
-        "98d67964509561d8742575d75b540ee8e4ef492221626805bee336ef764c6264"
-      ],
+      "requestHashes": ["c6a82ba8648c152b881e6c440aed1fad8f4e5c502ee9676e6f7a80ef828d4b70"],
+      "summaryRequests": ["98d67964509561d8742575d75b540ee8e4ef492221626805bee336ef764c6264"],
       "summaryEvidence": [
         {
-          "roles": [
-            "system",
-            "user"
-          ],
+          "roles": ["system", "user"],
           "textChars": 1223,
           "containsUser": false,
           "containsToolEvidence": false,
@@ -569,9 +516,7 @@
       "moduleSha256": "3bec63519e0a81202a42d214008edcab6e7f6a1027f21b22b4aac4f84c809b8b",
       "harnessMs": 9.375708000000031,
       "transformMs": 0.49066699999997354,
-      "transformDurations": [
-        0.49066699999997354
-      ],
+      "transformDurations": [0.49066699999997354],
       "peakRssKiB": 128048,
       "seedMessages": 2,
       "seedHash": "9ed947ecbcae23c389e9efe7c45fce5f93536ce9a15541a9d43cf8eb913c9824",
@@ -580,11 +525,7 @@
       "journalPayloadHash": "ab3d97aa7749d211920d37ed86e3e6254c6ba53d69965dea4d914d16ffa97750",
       "providerCalls": 1,
       "toolCalls": 0,
-      "lifecycle": [
-        "summary-request",
-        "context-transform",
-        "foreground-request"
-      ],
+      "lifecycle": ["summary-request", "context-transform", "foreground-request"],
       "projections": [
         {
           "tokens": 12033,
@@ -599,18 +540,11 @@
       ],
       "faults": [],
       "summaryCalls": 1,
-      "requestHashes": [
-        "c6a82ba8648c152b881e6c440aed1fad8f4e5c502ee9676e6f7a80ef828d4b70"
-      ],
-      "summaryRequests": [
-        "98d67964509561d8742575d75b540ee8e4ef492221626805bee336ef764c6264"
-      ],
+      "requestHashes": ["c6a82ba8648c152b881e6c440aed1fad8f4e5c502ee9676e6f7a80ef828d4b70"],
+      "summaryRequests": ["98d67964509561d8742575d75b540ee8e4ef492221626805bee336ef764c6264"],
       "summaryEvidence": [
         {
-          "roles": [
-            "system",
-            "user"
-          ],
+          "roles": ["system", "user"],
           "textChars": 1223,
           "containsUser": false,
           "containsToolEvidence": false,
@@ -684,9 +618,7 @@
       "moduleSha256": "ffb82edac6abc49c6bbd32a4a3b310c1e760a57c7754f93654f386c440645ad5",
       "harnessMs": 16.843833000000018,
       "transformMs": 0.39525000000003274,
-      "transformDurations": [
-        0.39525000000003274
-      ],
+      "transformDurations": [0.39525000000003274],
       "peakRssKiB": 131520,
       "seedMessages": 202,
       "seedHash": "6fab730a4b7472a470372d91243a4c98ced4cd0aa448ef3c2a345b98fc8032a5",
@@ -715,29 +647,21 @@
       ],
       "faults": [],
       "summaryCalls": 2,
-      "requestHashes": [
-        "9a031167e96a405b399db2da99eb769e6f01fb6a388642c43e7655a08946bc42"
-      ],
+      "requestHashes": ["9a031167e96a405b399db2da99eb769e6f01fb6a388642c43e7655a08946bc42"],
       "summaryRequests": [
         "98d67964509561d8742575d75b540ee8e4ef492221626805bee336ef764c6264",
         "f9aabae88b0261a0a254c9a6001eb0b4506ef9daa2589a86264232a381f53be7"
       ],
       "summaryEvidence": [
         {
-          "roles": [
-            "system",
-            "user"
-          ],
+          "roles": ["system", "user"],
           "textChars": 1223,
           "containsUser": false,
           "containsToolEvidence": false,
           "emptyConversation": true
         },
         {
-          "roles": [
-            "system",
-            "user"
-          ],
+          "roles": ["system", "user"],
           "textChars": 31110,
           "containsUser": true,
           "containsToolEvidence": true,
@@ -806,9 +730,7 @@
       "moduleSha256": "3bec63519e0a81202a42d214008edcab6e7f6a1027f21b22b4aac4f84c809b8b",
       "harnessMs": 17.783833000000016,
       "transformMs": 0.22520799999995234,
-      "transformDurations": [
-        0.22520799999995234
-      ],
+      "transformDurations": [0.22520799999995234],
       "peakRssKiB": 130752,
       "seedMessages": 202,
       "seedHash": "6fab730a4b7472a470372d91243a4c98ced4cd0aa448ef3c2a345b98fc8032a5",
@@ -837,29 +759,21 @@
       ],
       "faults": [],
       "summaryCalls": 2,
-      "requestHashes": [
-        "9a031167e96a405b399db2da99eb769e6f01fb6a388642c43e7655a08946bc42"
-      ],
+      "requestHashes": ["9a031167e96a405b399db2da99eb769e6f01fb6a388642c43e7655a08946bc42"],
       "summaryRequests": [
         "98d67964509561d8742575d75b540ee8e4ef492221626805bee336ef764c6264",
         "f9aabae88b0261a0a254c9a6001eb0b4506ef9daa2589a86264232a381f53be7"
       ],
       "summaryEvidence": [
         {
-          "roles": [
-            "system",
-            "user"
-          ],
+          "roles": ["system", "user"],
           "textChars": 1223,
           "containsUser": false,
           "containsToolEvidence": false,
           "emptyConversation": true
         },
         {
-          "roles": [
-            "system",
-            "user"
-          ],
+          "roles": ["system", "user"],
           "textChars": 31110,
           "containsUser": true,
           "containsToolEvidence": true,

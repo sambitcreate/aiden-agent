@@ -42,7 +42,11 @@ import { localComputerNoun } from "../shared/computer-noun";
 import { useAppCapabilities } from "../lib/app-capabilities";
 import { focusRegionWhenShown } from "../lib/focus-regions";
 import { useLayer } from "../lib/layer-stack";
-import { acceptFirstBotAccess, OnboardingBotsStep, type FirstBotAccess } from "./onboarding-bots-step";
+import {
+  acceptFirstBotAccess,
+  OnboardingBotsStep,
+  type FirstBotAccess,
+} from "./onboarding-bots-step";
 import { OnboardingFeatureGallery, onboardingFeatures } from "./onboarding-feature-gallery";
 
 const visibleSteps = ["profile", "provider", "tour"] as const;
@@ -132,14 +136,23 @@ export function OnboardingFlow({
         childChats: capabilities.childChats,
         platform: capabilities.platform,
       }),
-    [capabilities.bots, capabilities.botComputers, capabilities.computerUse, capabilities.designMode, capabilities.mcpServer, capabilities.childChats, capabilities.platform],
+    [
+      capabilities.bots,
+      capabilities.botComputers,
+      capabilities.computerUse,
+      capabilities.designMode,
+      capabilities.mcpServer,
+      capabilities.childChats,
+      capabilities.platform,
+    ],
   );
   const providers = useProviders();
   const settings = useSettings();
   const attempt = React.useRef(0);
   const triggerRef = React.useRef<HTMLButtonElement>(null);
   const continueRef = React.useRef<HTMLButtonElement>(null);
-  const returnFocus = () => triggerRef.current?.isConnected ? triggerRef.current : continueRef.current;
+  const returnFocus = () =>
+    triggerRef.current?.isConnected ? triggerRef.current : continueRef.current;
   const codexStatus = useCodexProviderStatus();
   // Main-owned state is authoritative. Block the workbench until it has been
   // checked so a stale legacy renderer marker cannot expose a bypass window.
@@ -156,7 +169,11 @@ export function OnboardingFlow({
   const [name, setName] = React.useState("");
   const [route, setRoute] = React.useState<ConnectionRoute | null>(null);
   const [customProvider, setCustomProvider] = React.useState<Provider | null>(null);
-  const [connected, setConnected] = React.useState<{ id: string; label: string; model: string } | null>(null);
+  const [connected, setConnected] = React.useState<{
+    id: string;
+    label: string;
+    model: string;
+  } | null>(null);
   const [googleScope, setGoogleScope] = React.useState<GeminiUsageScope | null>(null);
   const [saving, setSaving] = React.useState(false);
   const [providerError, setProviderError] = React.useState<string | null>(null);
@@ -260,15 +277,21 @@ export function OnboardingFlow({
 
   if (!open) return usageNoticeEligible ? <UsageDataNotice /> : null;
   const step = visibleSteps[index];
-  const canContinue = stateReady && (step === "profile" ? name.trim().length > 0 : step === "provider" ? Boolean(connected) : true);
+  const canContinue =
+    stateReady &&
+    (step === "profile" ? name.trim().length > 0 : step === "provider" ? Boolean(connected) : true);
   const routeAttempt = attempt.current;
-  const confirmConnection = async (p: Pick<Provider, "id" | "label" | "defaultModel" | "models" | "needsKey" | "hasKey">) => {
+  const confirmConnection = async (
+    p: Pick<Provider, "id" | "label" | "defaultModel" | "models" | "needsKey" | "hasKey">,
+  ) => {
     void queryClient.invalidateQueries({ queryKey: queryKeys.providers });
     const currentSettings = await settingsApi.get();
     if (routeAttempt !== attempt.current) return;
     const model = availableChatModel(p, currentSettings);
     if (!model)
-      throw new Error("This connection has no available chat model. Check model visibility and chat access in Settings → Providers.");
+      throw new Error(
+        "This connection has no available chat model. Check model visibility and chat access in Settings → Providers.",
+      );
     setProviderSkipped(false);
     setProviderError(null);
     setConnected({ id: p.id, label: p.label, model });
@@ -278,9 +301,14 @@ export function OnboardingFlow({
     if (savingRef.current) return;
     savingRef.current = true;
     setSaving(true);
-    try { await confirmConnection(provider); }
-    catch (cause) { setProviderError(cause instanceof Error ? cause.message : "Couldn’t use this connection."); }
-    finally { savingRef.current = false; setSaving(false); }
+    try {
+      await confirmConnection(provider);
+    } catch (cause) {
+      setProviderError(cause instanceof Error ? cause.message : "Couldn’t use this connection.");
+    } finally {
+      savingRef.current = false;
+      setSaving(false);
+    }
   };
 
   const finishBotsStep = async (startedBotId?: string, access?: FirstBotAccess) => {
@@ -293,7 +321,10 @@ export function OnboardingFlow({
       onboardingSnapshotRef.current = await appApi.setOnboardingProgress("bots");
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Couldn’t save the Bot setup step.");
-    } finally { savingRef.current = false; setSaving(false); }
+    } finally {
+      savingRef.current = false;
+      setSaving(false);
+    }
   };
 
   const skipProvider = () => {
@@ -312,24 +343,50 @@ export function OnboardingFlow({
     setProviderError(null);
     if (nextRoute.kind === "endpoint") {
       const tailnet = nextRoute.template === "tailnet";
-      const existing = tailnet ? providers.data?.find(p => p.id === "custom:onboarding-tailscale" && !p.isBuiltin) : undefined;
-      setCustomProvider(existing ?? {
-        id: tailnet ? "custom:onboarding-tailscale" : `custom:${crypto.randomUUID()}`, label: tailnet ? "Tailscale model server" : "Custom Provider", kind: "openai",
-        baseUrl: "", needsKey: !tailnet, hasKey: false, models: [], deployment: tailnet ? "local" : "hosted",
-      });
+      const existing = tailnet
+        ? providers.data?.find((p) => p.id === "custom:onboarding-tailscale" && !p.isBuiltin)
+        : undefined;
+      setCustomProvider(
+        existing ?? {
+          id: tailnet ? "custom:onboarding-tailscale" : `custom:${crypto.randomUUID()}`,
+          label: tailnet ? "Tailscale model server" : "Custom Provider",
+          kind: "openai",
+          baseUrl: "",
+          needsKey: !tailnet,
+          hasKey: false,
+          models: [],
+          deployment: tailnet ? "local" : "hosted",
+        },
+      );
     }
     setRoute(nextRoute);
   };
   const builtin = route?.kind === "builtin" ? route.provider : null;
-  const keyId = route?.kind === "builtin" && route.method === "api_key" &&
-    (builtin?.id === "anthropic" || builtin?.id === "openai") ? builtin.id : null;
-  const codexProvider = codexStatus.data?.configured && codexStatus.data.needsAttention === false
-    ? { id: "openai-codex", label: "ChatGPT / Codex", kind: "openai" as const, baseUrl: "",
-        models: codexStatus.data.models.map(m => m.id), needsKey: true, hasKey: true }
-    : null;
-  const existingConnections = (providers.data ?? []).filter(p => p.id !== "openai-codex" && (!p.isBuiltin || p.hasKey || p.canLogout));
+  const keyId =
+    route?.kind === "builtin" &&
+    route.method === "api_key" &&
+    (builtin?.id === "anthropic" || builtin?.id === "openai")
+      ? builtin.id
+      : null;
+  const codexProvider =
+    codexStatus.data?.configured && codexStatus.data.needsAttention === false
+      ? {
+          id: "openai-codex",
+          label: "ChatGPT / Codex",
+          kind: "openai" as const,
+          baseUrl: "",
+          models: codexStatus.data.models.map((m) => m.id),
+          needsKey: true,
+          hasKey: true,
+        }
+      : null;
+  const existingConnections = (providers.data ?? []).filter(
+    (p) => p.id !== "openai-codex" && (!p.isBuiltin || p.hasKey || p.canLogout),
+  );
   const needsGoogleChatAccess = (provider: Provider) =>
-    provider.id === "google" && provider.hasKey && settings.data?.geminiUsageScope === "transcription_only";
+    provider.id === "google" &&
+    provider.hasKey &&
+    settings.data?.geminiUsageScope === "transcription_only";
   const repairConnection = (provider: Provider, trigger: HTMLButtonElement) => {
     if (needsGoogleChatAccess(provider)) {
       triggerRef.current = trigger;
@@ -366,16 +423,25 @@ export function OnboardingFlow({
       savingRef.current = true;
       setSaving(true);
       try {
-        onboardingSnapshotRef.current = await appApi.setOnboardingProgress("provider", connected.id);
+        onboardingSnapshotRef.current = await appApi.setOnboardingProgress(
+          "provider",
+          connected.id,
+        );
         readyProviderIdRef.current = connected.id;
         persistModelSelection(connected.id, connected.model);
         // First run: build the Agent Slider around the model just connected.
         // It writes only while no slider exists; a failure leaves the composer
         // to seed it when its popover first opens.
-        void seedAgentSliderForModel(connected.id, connected.model, queryClient).catch(() => undefined);
+        void seedAgentSliderForModel(connected.id, connected.model, queryClient).catch(
+          () => undefined,
+        );
         setIndex(2);
       } catch (cause) {
-        setProviderError(cause instanceof Error ? cause.message : "Couldn’t save the connection. Choose it again to retry.");
+        setProviderError(
+          cause instanceof Error
+            ? cause.message
+            : "Couldn’t save the connection. Choose it again to retry.",
+        );
         setConnected(null);
       } finally {
         savingRef.current = false;
@@ -583,29 +649,94 @@ export function OnboardingFlow({
                   </div>
                 </div>
                 <div className="mt-4 grid gap-3">
-                  {connected ? <div role="status" className="settings-card p-4">
-                    <Text variant="strong">{connected.label} is ready for chat</Text>
-                    <Text as="p" variant="small" color="secondary">{connected.model}</Text>
-                    <Button size="small" variant="transparent" disabled={saving} onClick={() => { setRoute(null); setConnected(null); }}>Choose another connection</Button>
-                  </div> : <>
-                    {providers.isLoading ? <Text role="status">Loading providers…</Text> : providers.isError ?
-                      <div role="alert">Couldn’t load providers. <Button onClick={() => void providers.refetch()}>Try again</Button></div> : <>
-                      {settings.data && existingConnections.map(p => availableChatModel(p, settings.data) ?
-                        <Button key={p.id} variant="filled" disabled={saving} onClick={() => void confirmExisting(p)}>Use this connection: {p.label}</Button> :
-                        <Button key={p.id} variant="filled" disabled={saving} onClick={e => repairConnection(p, e.currentTarget)}>
-                          {needsGoogleChatAccess(p) ? "Review chat access" : "Finish connection"}: {p.label}
-                        </Button>)}
-                      {codexProvider && availableChatModel(codexProvider, settings.data) &&
-                        <Button variant="filled" disabled={saving} onClick={() => void confirmExisting(codexProvider)}>Use this connection: ChatGPT / Codex</Button>}
-                      <GuidedProviderChooser providers={providers.data ?? []} disabled={saving} onChoose={chooseConnection} onBack={() => { attempt.current++; setRoute(null); setProviderError(null); }} />
-                    </>}
-                    {route?.kind === "codex" && <div className="grid gap-2">
-                      <CodexProviderSettings layer="onboarding" />
-                      {codexProvider && !availableChatModel(codexProvider, settings.data) && <details className="settings-card p-3">
-                        <summary>Advanced model visibility</summary><ProviderModelVisibility provider={codexProvider} />
-                      </details>}
-                    </div>}
-                  </>}
+                  {connected ? (
+                    <div role="status" className="settings-card p-4">
+                      <Text variant="strong">{connected.label} is ready for chat</Text>
+                      <Text as="p" variant="small" color="secondary">
+                        {connected.model}
+                      </Text>
+                      <Button
+                        size="small"
+                        variant="transparent"
+                        disabled={saving}
+                        onClick={() => {
+                          setRoute(null);
+                          setConnected(null);
+                        }}
+                      >
+                        Choose another connection
+                      </Button>
+                    </div>
+                  ) : (
+                    <>
+                      {providers.isLoading ? (
+                        <Text role="status">Loading providers…</Text>
+                      ) : providers.isError ? (
+                        <div role="alert">
+                          Couldn’t load providers.{" "}
+                          <Button onClick={() => void providers.refetch()}>Try again</Button>
+                        </div>
+                      ) : (
+                        <>
+                          {settings.data &&
+                            existingConnections.map((p) =>
+                              availableChatModel(p, settings.data) ? (
+                                <Button
+                                  key={p.id}
+                                  variant="filled"
+                                  disabled={saving}
+                                  onClick={() => void confirmExisting(p)}
+                                >
+                                  Use this connection: {p.label}
+                                </Button>
+                              ) : (
+                                <Button
+                                  key={p.id}
+                                  variant="filled"
+                                  disabled={saving}
+                                  onClick={(e) => repairConnection(p, e.currentTarget)}
+                                >
+                                  {needsGoogleChatAccess(p)
+                                    ? "Review chat access"
+                                    : "Finish connection"}
+                                  : {p.label}
+                                </Button>
+                              ),
+                            )}
+                          {codexProvider && availableChatModel(codexProvider, settings.data) && (
+                            <Button
+                              variant="filled"
+                              disabled={saving}
+                              onClick={() => void confirmExisting(codexProvider)}
+                            >
+                              Use this connection: ChatGPT / Codex
+                            </Button>
+                          )}
+                          <GuidedProviderChooser
+                            providers={providers.data ?? []}
+                            disabled={saving}
+                            onChoose={chooseConnection}
+                            onBack={() => {
+                              attempt.current++;
+                              setRoute(null);
+                              setProviderError(null);
+                            }}
+                          />
+                        </>
+                      )}
+                      {route?.kind === "codex" && (
+                        <div className="grid gap-2">
+                          <CodexProviderSettings layer="onboarding" />
+                          {codexProvider && !availableChatModel(codexProvider, settings.data) && (
+                            <details className="settings-card p-3">
+                              <summary>Advanced model visibility</summary>
+                              <ProviderModelVisibility provider={codexProvider} />
+                            </details>
+                          )}
+                        </div>
+                      )}
+                    </>
+                  )}
                 </div>
                 {providerError ? (
                   <Text role="alert" variant="small" color="red" className="mt-3 block">
@@ -641,33 +772,64 @@ export function OnboardingFlow({
                   </div>
                 </div>
                 <UsageDataOnboardingRow onDisplay={setUsageShownEnabled} />
-                {firstBotShown ? <OnboardingBotsStep onBusyChange={setCreatingBot} onReady={(bot, access) => void finishBotsStep(bot.id, access)} /> : null}
+                {firstBotShown ? (
+                  <OnboardingBotsStep
+                    onBusyChange={setCreatingBot}
+                    onReady={(bot, access) => void finishBotsStep(bot.id, access)}
+                  />
+                ) : null}
                 <details className="settings-card mt-3 px-4 py-3">
-                  <summary className="cursor-pointer text-small-strong">Explore Aiden’s features</summary>
-                  <OnboardingFeatureGallery features={visibleFeatureBentos} platform={capabilities.platform} />
+                  <summary className="cursor-pointer text-small-strong">
+                    Explore Aiden’s features
+                  </summary>
+                  <OnboardingFeatureGallery
+                    features={visibleFeatureBentos}
+                    platform={capabilities.platform}
+                  />
                 </details>
                 <details className="settings-card mt-3 px-4 py-3">
-                  <summary className="cursor-pointer text-small-strong">Other features and privacy</summary>
-                    <Text as="p" variant="small" color="tertiary" className="mt-1 block">
-                      Phone and tablet access starts off. After setup, choose Connect a device in
-                      Settings → Connections; Aiden must stay running, and Tailscale is
-                      optional. Paired computers can switch between verified local-network and Tailscale
-                      routes. If delivery is uncertain, review the saved request before choosing Retry.
-                    </Text>
-                <Text as="p" variant="small" color="secondary" className="mt-3 max-w-2xl leading-5" data-onboarding-tts-privacy>
-                  Read aloud is separate and off by default. Configure it later in Settings → Voice & Speech → Text to Speech.
-                  Pressing the speaker sends the latest response text to Google, even for local-model replies;
-                  Google charges may apply. Paired phones and tablets use this {localComputerNoun(capabilities.platform)}’s setup;
-                  they cannot enable or configure Read aloud themselves. This setup screen does not send speech requests.
-                </Text>
-                <Text as="p" variant="small" color="secondary" className="mt-3 max-w-2xl leading-5">
-                  Settings → Context & Limits also offers optional prompt cache warming. It is off by default;
-                  enabling it allows paid refresh requests during active Aiden Agent chats when estimated savings justify the cost.
-                </Text>
-                <Text as="p" variant="small" color="secondary" className="mt-3 max-w-2xl leading-5">
-                  Image generation uses its own keys, added later in Settings → Image Generation. The connection you
-                  choose here is never used for images.
-                </Text>
+                  <summary className="cursor-pointer text-small-strong">
+                    Other features and privacy
+                  </summary>
+                  <Text as="p" variant="small" color="tertiary" className="mt-1 block">
+                    Phone and tablet access starts off. After setup, choose Connect a device in
+                    Settings → Connections; Aiden must stay running, and Tailscale is optional.
+                    Paired computers can switch between verified local-network and Tailscale routes.
+                    If delivery is uncertain, review the saved request before choosing Retry.
+                  </Text>
+                  <Text
+                    as="p"
+                    variant="small"
+                    color="secondary"
+                    className="mt-3 max-w-2xl leading-5"
+                    data-onboarding-tts-privacy
+                  >
+                    Read aloud is separate and off by default. Configure it later in Settings →
+                    Voice & Speech → Text to Speech. Pressing the speaker sends the latest response
+                    text to Google, even for local-model replies; Google charges may apply. Paired
+                    phones and tablets use this {localComputerNoun(capabilities.platform)}’s setup;
+                    they cannot enable or configure Read aloud themselves. This setup screen does
+                    not send speech requests.
+                  </Text>
+                  <Text
+                    as="p"
+                    variant="small"
+                    color="secondary"
+                    className="mt-3 max-w-2xl leading-5"
+                  >
+                    Settings → Context & Limits also offers optional prompt cache warming. It is off
+                    by default; enabling it allows paid refresh requests during active Aiden Agent
+                    chats when estimated savings justify the cost.
+                  </Text>
+                  <Text
+                    as="p"
+                    variant="small"
+                    color="secondary"
+                    className="mt-3 max-w-2xl leading-5"
+                  >
+                    Image generation uses its own keys, added later in Settings → Image Generation.
+                    The connection you choose here is never used for images.
+                  </Text>
                 </details>
               </div>
             ) : null}
@@ -680,15 +842,31 @@ export function OnboardingFlow({
             <Button
               variant="transparent"
               disabled={!stateReady || index === 0 || saving || creatingBot}
-              onClick={() => { attempt.current++; setRoute(null); setIndex(value => Math.max(0, value - 1)); }}
+              onClick={() => {
+                attempt.current++;
+                setRoute(null);
+                setIndex((value) => Math.max(0, value - 1));
+              }}
             >
               <ChevronLeft /> Back
             </Button>
             <div className="flex min-w-0 items-center gap-3">
-              {(step !== "provider" || connected) && <Button ref={continueRef} variant="accent" pressFeedback
-                disabled={!canContinue || saving || creatingBot} onClick={() => void next()}>
-                {step === "tour" ? "Start using Aiden" : step === "provider" ? "Continue setup" : "Next"} <ChevronRight />
-              </Button>}
+              {(step !== "provider" || connected) && (
+                <Button
+                  ref={continueRef}
+                  variant="accent"
+                  pressFeedback
+                  disabled={!canContinue || saving || creatingBot}
+                  onClick={() => void next()}
+                >
+                  {step === "tour"
+                    ? "Start using Aiden"
+                    : step === "provider"
+                      ? "Continue setup"
+                      : "Next"}{" "}
+                  <ChevronRight />
+                </Button>
+              )}
             </div>
           </footer>
         </div>
@@ -712,49 +890,105 @@ export function OnboardingFlow({
           }}
         />
       ) : null}
-      {route?.kind === "local" && <LocalProviderDialog returnFocus={returnFocus} runtime={route.runtime} layer="onboarding" onSaved={confirmConnection}
-        onClose={() => setRoute(null)} onEdit={() => {
-          const existing = providers.data?.find(p => p.id === `custom:${route.runtime}`);
-          setCustomProvider(existing ?? { ...localProviderDraft(route.runtime), hasKey: false });
-          setRoute(null);
-        }} />}
-      {googleScope && <GeminiVoiceSetupDialog open layer="onboarding" activatesVoice={false} returnFocus={returnFocus}
-        scope={googleScope} hasKey={existingConnections.some(p => p.id === "google" && p.hasKey)} busy={saving} error={providerError} provider={existingConnections.find(p => p.id === "google")}
-        onScopeChange={setGoogleScope} onOpenChange={open => { if (!open) setGoogleScope(null); }}
-        onConfirm={async () => {
-          if (savingRef.current) return;
-          savingRef.current = true; setSaving(true); setProviderError(null);
-          try {
-            queryClient.setQueryData(queryKeys.settings, await settingsApi.setGeminiUsageScope(googleScope));
-            if (googleScope === "models_and_transcription") {
-              const refreshed = await providersApi.list();
-              queryClient.setQueryData(queryKeys.providers, refreshed);
-              const google = refreshed.find(provider => provider.id === "google");
-              if (!google) throw new Error("Couldn’t read the saved Google connection.");
-              await confirmConnection(google);
-            }
-            setGoogleScope(null);
-          } catch (cause) { setProviderError(cause instanceof Error ? cause.message : "Couldn’t save Google chat access."); }
-          finally { savingRef.current = false; setSaving(false); }
-        }} />}
-      {keyId && <ProviderKeyDialog returnFocus={returnFocus} id={keyId} layer="onboarding" onSaved={confirmConnection} onClose={() => setRoute(null)} />}
-      {builtin && !keyId && route?.kind === "builtin" && <BuiltinProviderEditor
-        returnFocus={returnFocus} provider={builtin} method={route.method} open layer="onboarding"
-        onOpenChange={nextOpen => { if (!nextOpen && attempt.current === routeAttempt) { attempt.current++; setRoute(null); } }}
-        onSaved={async () => {
-          const refreshed = await providersApi.list();
-          queryClient.setQueryData(queryKeys.providers, refreshed);
-          const ready = refreshed.find(p => p.id === builtin.id);
-          if (!ready) throw new Error("Couldn’t read the saved connection.");
-          const currentSettings = await settingsApi.get();
-          if (routeAttempt !== attempt.current) return;
-          if (ready.id === "google" && currentSettings.geminiUsageScope === "transcription_only") {
+      {route?.kind === "local" && (
+        <LocalProviderDialog
+          returnFocus={returnFocus}
+          runtime={route.runtime}
+          layer="onboarding"
+          onSaved={confirmConnection}
+          onClose={() => setRoute(null)}
+          onEdit={() => {
+            const existing = providers.data?.find((p) => p.id === `custom:${route.runtime}`);
+            setCustomProvider(existing ?? { ...localProviderDraft(route.runtime), hasKey: false });
             setRoute(null);
-            setGoogleScope("transcription_only");
-            return;
-          }
-          await confirmConnection(ready);
-        }} />}
+          }}
+        />
+      )}
+      {googleScope && (
+        <GeminiVoiceSetupDialog
+          open
+          layer="onboarding"
+          activatesVoice={false}
+          returnFocus={returnFocus}
+          scope={googleScope}
+          hasKey={existingConnections.some((p) => p.id === "google" && p.hasKey)}
+          busy={saving}
+          error={providerError}
+          provider={existingConnections.find((p) => p.id === "google")}
+          onScopeChange={setGoogleScope}
+          onOpenChange={(open) => {
+            if (!open) setGoogleScope(null);
+          }}
+          onConfirm={async () => {
+            if (savingRef.current) return;
+            savingRef.current = true;
+            setSaving(true);
+            setProviderError(null);
+            try {
+              queryClient.setQueryData(
+                queryKeys.settings,
+                await settingsApi.setGeminiUsageScope(googleScope),
+              );
+              if (googleScope === "models_and_transcription") {
+                const refreshed = await providersApi.list();
+                queryClient.setQueryData(queryKeys.providers, refreshed);
+                const google = refreshed.find((provider) => provider.id === "google");
+                if (!google) throw new Error("Couldn’t read the saved Google connection.");
+                await confirmConnection(google);
+              }
+              setGoogleScope(null);
+            } catch (cause) {
+              setProviderError(
+                cause instanceof Error ? cause.message : "Couldn’t save Google chat access.",
+              );
+            } finally {
+              savingRef.current = false;
+              setSaving(false);
+            }
+          }}
+        />
+      )}
+      {keyId && (
+        <ProviderKeyDialog
+          returnFocus={returnFocus}
+          id={keyId}
+          layer="onboarding"
+          onSaved={confirmConnection}
+          onClose={() => setRoute(null)}
+        />
+      )}
+      {builtin && !keyId && route?.kind === "builtin" && (
+        <BuiltinProviderEditor
+          returnFocus={returnFocus}
+          provider={builtin}
+          method={route.method}
+          open
+          layer="onboarding"
+          onOpenChange={(nextOpen) => {
+            if (!nextOpen && attempt.current === routeAttempt) {
+              attempt.current++;
+              setRoute(null);
+            }
+          }}
+          onSaved={async () => {
+            const refreshed = await providersApi.list();
+            queryClient.setQueryData(queryKeys.providers, refreshed);
+            const ready = refreshed.find((p) => p.id === builtin.id);
+            if (!ready) throw new Error("Couldn’t read the saved connection.");
+            const currentSettings = await settingsApi.get();
+            if (routeAttempt !== attempt.current) return;
+            if (
+              ready.id === "google" &&
+              currentSettings.geminiUsageScope === "transcription_only"
+            ) {
+              setRoute(null);
+              setGoogleScope("transcription_only");
+              return;
+            }
+            await confirmConnection(ready);
+          }}
+        />
+      )}
     </OnboardingDialogShell>
   );
 }

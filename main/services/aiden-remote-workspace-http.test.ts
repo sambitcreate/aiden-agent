@@ -26,17 +26,20 @@ test("HTTP client completes approved-folder selection and revision-checked works
   const gitWatcher = new GitRepoWatcher({ notify: () => undefined });
   const approvedIdentity = await fs.stat(approvedPath, { bigint: true });
   let sequence = 0;
-  let workspaces: Workspace[] = [{
-    id: "default",
-    name: "Default",
-    permission: "ask",
-    createdAt: 1,
-    updatedAt: 1,
-  }];
+  let workspaces: Workspace[] = [
+    {
+      id: "default",
+      name: "Default",
+      permission: "ask",
+      createdAt: 1,
+      updatedAt: 1,
+    },
+  ];
   const application = createWorkspaceApplicationService({
     configStore: {
       listWorkspaces: async () => structuredClone(workspaces),
-      getWorkspace: async (id) => structuredClone(workspaces.find((workspace) => workspace.id === id)),
+      getWorkspace: async (id) =>
+        structuredClone(workspaces.find((workspace) => workspace.id === id)),
       saveWorkspace: async (workspace) => {
         const saved = { ...workspace, updatedAt: workspace.updatedAt + 1 };
         const index = workspaces.findIndex((candidate) => candidate.id === saved.id);
@@ -70,17 +73,20 @@ test("HTTP client completes approved-folder selection and revision-checked works
     gitWatcher,
   });
   const state = {
-    snapshot: async () => ({
-      approvedRoots: [{
-        id: "root-1",
-        label: "Projects",
-        folderPath: approvedPath,
-        device: approvedIdentity.dev.toString(),
-        inode: approvedIdentity.ino.toString(),
-        policyRevision: "remote-browser-v1:no-hidden-system",
-        createdAt: 1,
-      }],
-    }) as never,
+    snapshot: async () =>
+      ({
+        approvedRoots: [
+          {
+            id: "root-1",
+            label: "Projects",
+            folderPath: approvedPath,
+            device: approvedIdentity.dev.toString(),
+            inode: approvedIdentity.ino.toString(),
+            policyRevision: "remote-browser-v1:no-hidden-system",
+            createdAt: 1,
+          },
+        ],
+      }) as never,
   };
   const browser = new AidenRemoteWorkspaceBrowserService({
     instanceId: "instance-1",
@@ -107,7 +113,11 @@ test("HTTP client completes approved-folder selection and revision-checked works
         ]),
       }),
     },
-    pairing: { exchange: async () => { throw new Error("not used"); } },
+    pairing: {
+      exchange: async () => {
+        throw new Error("not used");
+      },
+    },
     workspaces: workspaceService,
     workspaceBrowser: browser,
     connectionMode: () => "lan",
@@ -129,12 +139,14 @@ test("HTTP client completes approved-folder selection and revision-checked works
   try {
     const roots = await (await fetch(`${base}/workspace-browser/roots`, { headers })).json();
     const page = await (
-      await fetch(
-        `${base}/workspace-browser/children?location=${roots.roots[0].location}`,
-        { headers },
-      )
+      await fetch(`${base}/workspace-browser/children?location=${roots.roots[0].location}`, {
+        headers,
+      })
     ).json();
-    assert.deepEqual(page.entries.map((entry: { name: string }) => entry.name), ["Selected"]);
+    assert.deepEqual(
+      page.entries.map((entry: { name: string }) => entry.name),
+      ["Selected"],
+    );
     const selectionResponse = await fetch(`${base}/workspace-browser/selections`, {
       method: "POST",
       headers: { ...headers, "content-type": "application/json" },
@@ -183,9 +195,16 @@ test("HTTP client completes approved-folder selection and revision-checked works
     });
     assert.equal(deleteResponse.status, 204);
     const listed = await (await fetch(`${base}/workspaces`, { headers })).json();
-    assert.deepEqual(listed.workspaces.map((workspace: { id: string }) => workspace.id), ["default"]);
+    assert.deepEqual(
+      listed.workspaces.map((workspace: { id: string }) => workspace.id),
+      ["default"],
+    );
     assert.equal(await fs.readFile(selectedMarker, "utf8"), "workspace files stay on disk");
-    assert.equal(gitWatcher.watchedWorkspaceCount, 0, "removing a workspace from a paired device closes its Git watcher");
+    assert.equal(
+      gitWatcher.watchedWorkspaceCount,
+      0,
+      "removing a workspace from a paired device closes its Git watcher",
+    );
   } finally {
     gitWatcher.dispose();
     await new Promise<void>((resolve) => server.close(() => resolve()));
@@ -193,44 +212,103 @@ test("HTTP client completes approved-folder selection and revision-checked works
   }
 });
 
-test("project cloning is desktop-only, requires folder browsing, and cancels with its HTTP request", async t => {
+test("project cloning is desktop-only, requires folder browsing, and cancels with its HTTP request", async (t) => {
   let type: "mac" | "iphone" = "iphone";
   let browse = true;
   let calls = 0;
   let captured: AbortSignal | undefined;
   let opened!: () => void;
-  const ready = new Promise<void>(resolve => { opened = resolve; });
+  const ready = new Promise<void>((resolve) => {
+    opened = resolve;
+  });
   const handler = createAidenRemoteRequestHandler({
-    instanceId: "instance", displayName: () => "Host", appVersion: "test", connectionMode: () => "lan", now: Date.now, log: () => undefined,
-    pairing: { exchange: async () => { throw new Error("not used"); } },
-    devices: { acquireDeviceAuthorization: () => () => undefined, authenticate: async () => ({ id: "device", type, revoked: false, capabilities: new Set(["workspace:manage" as const, ...(browse ? ["workspace:browse" as const] : [])]) }) },
+    instanceId: "instance",
+    displayName: () => "Host",
+    appVersion: "test",
+    connectionMode: () => "lan",
+    now: Date.now,
+    log: () => undefined,
+    pairing: {
+      exchange: async () => {
+        throw new Error("not used");
+      },
+    },
+    devices: {
+      acquireDeviceAuthorization: () => () => undefined,
+      authenticate: async () => ({
+        id: "device",
+        type,
+        revoked: false,
+        capabilities: new Set([
+          "workspace:manage" as const,
+          ...(browse ? ["workspace:browse" as const] : []),
+        ]),
+      }),
+    },
     workspaces: {
-      supportsClone: true, list: async () => ({ workspaces: [] }), get: async () => { throw new Error("not used"); }, update: async () => { throw new Error("not used"); }, remove: async () => undefined,
+      supportsClone: true,
+      list: async () => ({ workspaces: [] }),
+      get: async () => {
+        throw new Error("not used");
+      },
+      update: async () => {
+        throw new Error("not used");
+      },
+      remove: async () => undefined,
       create: async (_device, _key, _input, signal) => {
-        calls++; captured = signal; opened();
-        await new Promise<void>(resolve => { if (signal?.aborted) resolve(); else signal?.addEventListener("abort", () => resolve(), { once: true }); });
+        calls++;
+        captured = signal;
+        opened();
+        await new Promise<void>((resolve) => {
+          if (signal?.aborted) resolve();
+          else signal?.addEventListener("abort", () => resolve(), { once: true });
+        });
         throw new Error("cancelled");
       },
     },
   });
   const server = createServer(handler);
-  await new Promise<void>(resolve => server.listen(0, "127.0.0.1", resolve));
-  t.after(() => { server.closeAllConnections(); server.close(); });
-  const address = server.address(); assert.ok(address && typeof address !== "string");
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  t.after(() => {
+    server.closeAllConnections();
+    server.close();
+  });
+  const address = server.address();
+  assert.ok(address && typeof address !== "string");
   const endpoint = `http://127.0.0.1:${address.port}/api/aiden/v1/workspaces`;
-  const options = { method: "POST", headers: { authorization: `Bearer ${"a".repeat(43)}`, "aiden-protocol-version": "1", "idempotency-key": "clone-http-request", "content-type": "application/json" }, body: JSON.stringify({ mode: "clone", selection: `sel_${"a".repeat(43)}`, url: "https://example.invalid/widget.git", files: [] }) };
+  const options = {
+    method: "POST",
+    headers: {
+      authorization: `Bearer ${"a".repeat(43)}`,
+      "aiden-protocol-version": "1",
+      "idempotency-key": "clone-http-request",
+      "content-type": "application/json",
+    },
+    body: JSON.stringify({
+      mode: "clone",
+      selection: `sel_${"a".repeat(43)}`,
+      url: "https://example.invalid/widget.git",
+      files: [],
+    }),
+  };
   assert.equal((await fetch(endpoint, options)).status, 403);
   assert.equal(calls, 0);
-  type = "mac"; browse = false;
+  type = "mac";
+  browse = false;
   assert.equal((await fetch(endpoint, options)).status, 403);
   assert.equal(calls, 0);
   browse = true;
   const controller = new AbortController();
   const cloning = fetch(endpoint, { ...options, signal: controller.signal }).catch(() => undefined);
-  await ready; controller.abort(); await cloning;
-  await new Promise(resolve => setImmediate(resolve));
+  await ready;
+  controller.abort();
+  await cloning;
+  await new Promise((resolve) => setImmediate(resolve));
   // The server observes socket closure asynchronously.
-  if (!captured?.aborted) await new Promise<void>(resolve => captured!.addEventListener("abort", () => resolve(), { once: true }));
+  if (!captured?.aborted)
+    await new Promise<void>((resolve) =>
+      captured!.addEventListener("abort", () => resolve(), { once: true }),
+    );
   assert.equal(captured?.aborted, true);
   assert.equal(calls, 1);
 });

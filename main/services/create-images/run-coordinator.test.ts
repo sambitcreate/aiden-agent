@@ -10,7 +10,14 @@ import { fakeThumbnailer, pngBytes } from "../studio-assets/test-fixture.js";
 import { createPiImageGenerationPort } from "./image-port.js";
 import { ImageRunCoordinator } from "./run-coordinator.js";
 import { ImageRunLedger } from "./run-ledger.js";
-import { fakeImageModels, generateChains, NANO_BANANA, saveWorkflow, until, type FakeImageReply } from "./test-fixture.js";
+import {
+  fakeImageModels,
+  generateChains,
+  NANO_BANANA,
+  saveWorkflow,
+  until,
+  type FakeImageReply,
+} from "./test-fixture.js";
 import { ImageWorkflowStore } from "./workflow-store.js";
 
 const OWNER = "1:document-a";
@@ -35,9 +42,15 @@ interface FixtureOptions {
 async function fixture(t: TestContext, options: FixtureOptions = {}) {
   const root = await mkdtemp(path.join(os.tmpdir(), "aiden-image-coordinator-"));
   t.after(() => rm(root, { recursive: true, force: true }));
-  const assets = new StudioAssetStore({ root: () => path.join(root, "assets"), thumbnailer: fakeThumbnailer().thumbnailer });
+  const assets = new StudioAssetStore({
+    root: () => path.join(root, "assets"),
+    thumbnailer: fakeThumbnailer().thumbnailer,
+  });
   await assets.initialize();
-  const workflows = new ImageWorkflowStore({ root: () => path.join(root, "create-images"), assets });
+  const workflows = new ImageWorkflowStore({
+    root: () => path.join(root, "create-images"),
+    assets,
+  });
   await workflows.initialize();
   const fake = fakeImageModels({
     ...(options.reply ? { reply: (_call, index) => options.reply!(index) } : {}),
@@ -47,10 +60,14 @@ async function fixture(t: TestContext, options: FixtureOptions = {}) {
   const issues: string[] = [];
   const realLedger = ImageRunLedger.open({ directory: path.join(root, "create-images") });
   const ledger = options.wrapLedger ? options.wrapLedger(realLedger) : realLedger;
-  const alter = options.alterDocument ?? (options.beforeDelete ? (doc: WorkflowDocV1) => doc : undefined);
+  const alter =
+    options.alterDocument ?? (options.beforeDelete ? (doc: WorkflowDocV1) => doc : undefined);
   const coordinator = new ImageRunCoordinator({
     ledger,
-    port: createPiImageGenerationPort({ models: fake.models, providerLabel: (id) => (id === "openrouter" ? "OpenRouter" : id) }),
+    port: createPiImageGenerationPort({
+      models: fake.models,
+      providerLabel: (id) => (id === "openrouter" ? "OpenRouter" : id),
+    }),
     assets,
     workflows: alter
       ? {
@@ -69,9 +86,13 @@ async function fixture(t: TestContext, options: FixtureOptions = {}) {
     reportIssue: (message) => void issues.push(message),
     throttleMs: options.throttleMs ?? 0,
     ...(options.now ? { now: options.now } : {}),
-    ...(options.maxRequestsPerRun !== undefined ? { maxRequestsPerRun: options.maxRequestsPerRun } : {}),
+    ...(options.maxRequestsPerRun !== undefined
+      ? { maxRequestsPerRun: options.maxRequestsPerRun }
+      : {}),
     ...(options.retainRuns !== undefined ? { retainRuns: options.retainRuns } : {}),
-    ...(options.shutdownSettleMs !== undefined ? { shutdownSettleMs: options.shutdownSettleMs } : {}),
+    ...(options.shutdownSettleMs !== undefined
+      ? { shutdownSettleMs: options.shutdownSettleMs }
+      : {}),
   });
   t.after(async () => {
     fake.release();
@@ -82,8 +103,16 @@ async function fixture(t: TestContext, options: FixtureOptions = {}) {
   return { workflows, fake, coordinator, snapshots, assets, issues, ledger: realLedger };
 }
 
-async function prepared(env: Awaited<ReturnType<typeof fixture>>, doc: { id: string; revision: number }, owner = OWNER) {
-  const result = await env.coordinator.prepare(owner, { workflowId: doc.id, revision: doc.revision, scope: { kind: "all" } });
+async function prepared(
+  env: Awaited<ReturnType<typeof fixture>>,
+  doc: { id: string; revision: number },
+  owner = OWNER,
+) {
+  const result = await env.coordinator.prepare(owner, {
+    workflowId: doc.id,
+    revision: doc.revision,
+    scope: { kind: "all" },
+  });
   if (!("plan" in result)) assert.fail(`prepare returned issues: ${JSON.stringify(result.issues)}`);
   return result.plan;
 }
@@ -97,11 +126,23 @@ test("prepare sends nothing; start sends exactly the consented requests", async 
   assert.deepEqual(plan.estimate, { kind: "unknown" });
   assert.equal(plan.expiresAt - plan.createdAt, 300_000);
   assert.deepEqual(
-    plan.requests.map((request) => [request.providerLabel, request.modelLabel, request.referenceCount]),
+    plan.requests.map((request) => [
+      request.providerLabel,
+      request.modelLabel,
+      request.referenceCount,
+    ]),
     // The catalog name is provider-supplied, so the consent also names the exact model id.
     [
-      ["OpenRouter", "Google: Nano Banana 2 (Gemini 3.1 Flash Image) (google/gemini-3.1-flash-image)", 0],
-      ["OpenRouter", "Google: Nano Banana 2 (Gemini 3.1 Flash Image) (google/gemini-3.1-flash-image)", 0],
+      [
+        "OpenRouter",
+        "Google: Nano Banana 2 (Gemini 3.1 Flash Image) (google/gemini-3.1-flash-image)",
+        0,
+      ],
+      [
+        "OpenRouter",
+        "Google: Nano Banana 2 (Gemini 3.1 Flash Image) (google/gemini-3.1-flash-image)",
+        0,
+      ],
     ],
   );
   const started = await env.coordinator.start(OWNER, plan.consentId);
@@ -133,20 +174,31 @@ test("an edit after consent, or a model that disappears, stops start without sen
   const env = await fixture(t);
   const doc = await saveWorkflow(env.workflows, generateChains(1));
   const plan = await prepared(env, doc);
-  assert.equal((await env.workflows.save(doc.id, doc.revision, { ...doc, title: "Edited" })).ok, true);
+  assert.equal(
+    (await env.workflows.save(doc.id, doc.revision, { ...doc, title: "Edited" })).ok,
+    true,
+  );
   assert.deepEqual(await env.coordinator.start(OWNER, plan.consentId), { error: "stale" });
   const edited = (await env.workflows.get(doc.id))!;
   const again = await prepared(env, edited);
   env.fake.models.deleteProvider("openrouter");
-  assert.deepEqual(await env.coordinator.start(OWNER, again.consentId), { error: "model-unavailable" });
+  assert.deepEqual(await env.coordinator.start(OWNER, again.consentId), {
+    error: "model-unavailable",
+  });
   assert.equal(env.fake.calls.length, 0);
 });
 
 test("the owner cap holds: a fifth Generate node is refused before any consent exists", async (t) => {
   const env = await fixture(t);
   const doc = await saveWorkflow(env.workflows, generateChains(5));
-  const result = await env.coordinator.prepare(OWNER, { workflowId: doc.id, revision: doc.revision, scope: { kind: "all" } });
-  assert.deepEqual("issues" in result ? result.issues.map((issue) => issue.code) : [], ["request_cap"]);
+  const result = await env.coordinator.prepare(OWNER, {
+    workflowId: doc.id,
+    revision: doc.revision,
+    scope: { kind: "all" },
+  });
+  assert.deepEqual("issues" in result ? result.issues.map((issue) => issue.code) : [], [
+    "request_cap",
+  ]);
   assert.equal(env.fake.calls.length, 0);
 });
 
@@ -157,7 +209,12 @@ test("references wired into a text-only model are plan issues on that node, and 
     draft.nodes = [
       { id: "p", type: "prompt", position: { x: 0, y: 0 }, data: { text: "A lighthouse" } },
       { id: "i", type: "image-input", position: { x: 0, y: 0 }, data: { assetId: image.assetId } },
-      { id: "g", type: "generate-image", position: { x: 0, y: 0 }, data: { model: { provider: "openrouter", id: "flux" }, count: 1 } },
+      {
+        id: "g",
+        type: "generate-image",
+        position: { x: 0, y: 0 },
+        data: { model: { provider: "openrouter", id: "flux" }, count: 1 },
+      },
     ];
     draft.edges = [
       { id: "p-g", source: "p", sourcePort: "text", target: "g", targetPort: "prompt" },
@@ -165,31 +222,58 @@ test("references wired into a text-only model are plan issues on that node, and 
     ];
     return draft;
   });
-  const result = await env.coordinator.prepare(OWNER, { workflowId: doc.id, revision: doc.revision, scope: { kind: "all" } });
-  assert.deepEqual("issues" in result ? result.issues.map((issue) => [issue.code, issue.nodeId]) : result, [["references_unsupported", "g"]]);
+  const result = await env.coordinator.prepare(OWNER, {
+    workflowId: doc.id,
+    revision: doc.revision,
+    scope: { kind: "all" },
+  });
+  assert.deepEqual(
+    "issues" in result ? result.issues.map((issue) => [issue.code, issue.nodeId]) : result,
+    [["references_unsupported", "g"]],
+  );
   assert.equal(env.fake.calls.length, 0);
 });
 
 test("at most four runs are active across all workflows; a fifth prepare or start is refused", async (t) => {
   const env = await fixture(t, { reply: () => ({ kind: "hold" }) });
   const docs = [];
-  for (let index = 0; index < 5; index += 1) docs.push(await saveWorkflow(env.workflows, generateChains(1)));
+  for (let index = 0; index < 5; index += 1)
+    docs.push(await saveWorkflow(env.workflows, generateChains(1)));
   const plans = [];
   for (const doc of docs) plans.push(await prepared(env, doc));
-  for (const plan of plans.slice(0, 4)) assert.ok("runId" in (await env.coordinator.start(OWNER, plan.consentId)));
-  assert.deepEqual(await env.coordinator.start(OWNER, plans[4]!.consentId), { error: "too-many-runs" });
-  const fifth = await env.coordinator.prepare(OWNER, { workflowId: docs[4]!.id, revision: docs[4]!.revision, scope: { kind: "all" } });
-  assert.deepEqual("issues" in fifth ? fifth.issues.map((issue) => issue.code) : fifth, ["too_many_runs"]);
+  for (const plan of plans.slice(0, 4))
+    assert.ok("runId" in (await env.coordinator.start(OWNER, plan.consentId)));
+  assert.deepEqual(await env.coordinator.start(OWNER, plans[4]!.consentId), {
+    error: "too-many-runs",
+  });
+  const fifth = await env.coordinator.prepare(OWNER, {
+    workflowId: docs[4]!.id,
+    revision: docs[4]!.revision,
+    scope: { kind: "all" },
+  });
+  assert.deepEqual("issues" in fifth ? fifth.issues.map((issue) => issue.code) : fifth, [
+    "too_many_runs",
+  ]);
   await until(() => env.fake.calls.length === 4, "four requests");
   env.fake.release();
   await env.coordinator.whenIdle();
   assert.equal(env.fake.calls.length, 4);
-  assert.ok("plan" in (await env.coordinator.prepare(OWNER, { workflowId: docs[4]!.id, revision: docs[4]!.revision, scope: { kind: "all" } })));
+  assert.ok(
+    "plan" in
+      (await env.coordinator.prepare(OWNER, {
+        workflowId: docs[4]!.id,
+        revision: docs[4]!.revision,
+        scope: { kind: "all" },
+      })),
+  );
 });
 
 test("quit waits, within its budget, for in-flight requests to send their provider-side cancel", async (t) => {
   let cancelled = 0;
-  const env = await fixture(t, { reply: () => ({ kind: "hold", cancelMs: 20, onCancelled: () => (cancelled += 1) }), shutdownSettleMs: 1_000 });
+  const env = await fixture(t, {
+    reply: () => ({ kind: "hold", cancelMs: 20, onCancelled: () => (cancelled += 1) }),
+    shutdownSettleMs: 1_000,
+  });
   const doc = await saveWorkflow(env.workflows, generateChains(1));
   const started = await env.coordinator.start(OWNER, (await prepared(env, doc)).consentId);
   assert.ok("runId" in started);
@@ -201,9 +285,14 @@ test("quit waits, within its budget, for in-flight requests to send their provid
 
   // A provider slower than the budget does not hold quit open.
   let slow = 0;
-  const late = await fixture(t, { reply: () => ({ kind: "hold", cancelMs: 500, onCancelled: () => (slow += 1) }), shutdownSettleMs: 20 });
+  const late = await fixture(t, {
+    reply: () => ({ kind: "hold", cancelMs: 500, onCancelled: () => (slow += 1) }),
+    shutdownSettleMs: 20,
+  });
   const lateDoc = await saveWorkflow(late.workflows, generateChains(1));
-  assert.ok("runId" in (await late.coordinator.start(OWNER, (await prepared(late, lateDoc)).consentId)));
+  assert.ok(
+    "runId" in (await late.coordinator.start(OWNER, (await prepared(late, lateDoc)).consentId)),
+  );
   await onTheWire(late);
   const began = Date.now();
   await late.coordinator.shutdown("app-quit");
@@ -212,7 +301,10 @@ test("quit waits, within its budget, for in-flight requests to send their provid
 });
 
 test("a failed request is never retried without a fresh consent", async (t) => {
-  const env = await fixture(t, { reply: (index) => (index === 0 ? { kind: "error", message: "Upstream 500" } : { kind: "images" }) });
+  const env = await fixture(t, {
+    reply: (index) =>
+      index === 0 ? { kind: "error", message: "Upstream 500" } : { kind: "images" },
+  });
   const doc = await saveWorkflow(env.workflows, generateChains(1));
   const first = await env.coordinator.start(OWNER, (await prepared(env, doc)).consentId);
   await env.coordinator.whenIdle();
@@ -239,7 +331,10 @@ test("cancel stops a request on the wire and records it as may-have-been-billed"
   const snapshot = env.coordinator.getRun({ workflowId: doc.id })!;
   assert.equal(snapshot.run.state, "cancelled");
   const generate = snapshot.attempts.find((attempt) => attempt.nodeId === "g1")!;
-  assert.deepEqual([generate.state, generate.cancelRequested, generate.mayHaveBeenBilled], ["cancelled", true, true]);
+  assert.deepEqual(
+    [generate.state, generate.cancelRequested, generate.mayHaveBeenBilled],
+    ["cancelled", true, true],
+  );
   assert.equal(env.coordinator.inFlightRequests(), 0);
   assert.equal(env.coordinator.cancel(started.runId), false);
 });
@@ -254,7 +349,10 @@ test("a run that finishes inside one throttle window publishes at most three ver
   // Initial, one throttled update and the terminal snapshot, despite 9 nodes changing state.
   assert.ok(env.snapshots.length >= 2 && env.snapshots.length <= 3, `got ${env.snapshots.length}`);
   const versions = env.snapshots.map((snapshot) => snapshot.version);
-  assert.deepEqual(versions, [...versions].sort((left, right) => left - right));
+  assert.deepEqual(
+    versions,
+    [...versions].sort((left, right) => left - right),
+  );
   assert.equal(new Set(versions).size, versions.length);
   const last = env.snapshots[env.snapshots.length - 1]!;
   assert.equal(last.run.state, "succeeded");
@@ -266,8 +364,18 @@ function twoStepChain(doc: WorkflowDocV1): WorkflowDocV1 {
   const at = { x: 0, y: 0 };
   doc.nodes = [
     { id: "p", type: "prompt", position: at, data: { text: "A red bicycle" } },
-    { id: "g1", type: "generate-image", position: at, data: { model: { ...NANO_BANANA }, count: 1 as const } },
-    { id: "g2", type: "generate-image", position: at, data: { model: { ...NANO_BANANA }, count: 1 as const } },
+    {
+      id: "g1",
+      type: "generate-image",
+      position: at,
+      data: { model: { ...NANO_BANANA }, count: 1 as const },
+    },
+    {
+      id: "g2",
+      type: "generate-image",
+      position: at,
+      data: { model: { ...NANO_BANANA }, count: 1 as const },
+    },
     { id: "o2", type: "output", position: at, data: {} },
   ];
   doc.edges = [
@@ -281,11 +389,19 @@ function twoStepChain(doc: WorkflowDocV1): WorkflowDocV1 {
 
 test("retry after a failure offers from-here and node-only, each with its own consent and exact request count", async (t) => {
   // Provider calls: 0 and 1 are run 1 (g1, g2); 2 is run 2's g1, which fails; the rest succeed.
-  const env = await fixture(t, { reply: (index) => (index === 2 ? { kind: "error", message: "Upstream 500" } : { kind: "images" }) });
+  const env = await fixture(t, {
+    reply: (index) =>
+      index === 2 ? { kind: "error", message: "Upstream 500" } : { kind: "images" },
+  });
   const doc = await saveWorkflow(env.workflows, twoStepChain);
   const approve = async (scope: RunScope) => {
-    const result = await env.coordinator.prepare(OWNER, { workflowId: doc.id, revision: doc.revision, scope });
-    if (!("plan" in result)) assert.fail(`prepare returned issues: ${JSON.stringify(result.issues)}`);
+    const result = await env.coordinator.prepare(OWNER, {
+      workflowId: doc.id,
+      revision: doc.revision,
+      scope,
+    });
+    if (!("plan" in result))
+      assert.fail(`prepare returned issues: ${JSON.stringify(result.issues)}`);
     return result.plan;
   };
 
@@ -305,8 +421,14 @@ test("retry after a failure offers from-here and node-only, each with its own co
   const fromHere = await approve({ kind: "from-node", nodeId: "g1" });
   const nodeOnly = await approve({ kind: "node-only", nodeId: "g1" });
   assert.deepEqual([fromHere.totalRequests, nodeOnly.totalRequests], [2, 1]);
-  assert.deepEqual(fromHere.requests.map((request) => request.nodeId), ["g1", "g2"]);
-  assert.deepEqual(nodeOnly.requests.map((request) => request.nodeId), ["g1"]);
+  assert.deepEqual(
+    fromHere.requests.map((request) => request.nodeId),
+    ["g1", "g2"],
+  );
+  assert.deepEqual(
+    nodeOnly.requests.map((request) => request.nodeId),
+    ["g1"],
+  );
   assert.notEqual(fromHere.consentId, nodeOnly.consentId);
   assert.equal(env.fake.calls.length, 3);
 
@@ -315,19 +437,31 @@ test("retry after a failure offers from-here and node-only, each with its own co
   await env.coordinator.whenIdle();
   assert.ok("runId" in only);
   const onlyRun = env.coordinator.getRun({ runId: only.runId })!;
-  assert.deepEqual([onlyRun.run.state, onlyRun.run.requestLimit, onlyRun.run.scope], ["succeeded", 1, { kind: "node-only", nodeId: "g1" }]);
-  assert.deepEqual(onlyRun.attempts.map((attempt) => attempt.nodeId), ["p", "g1"]);
+  assert.deepEqual(
+    [onlyRun.run.state, onlyRun.run.requestLimit, onlyRun.run.scope],
+    ["succeeded", 1, { kind: "node-only", nodeId: "g1" }],
+  );
+  assert.deepEqual(
+    onlyRun.attempts.map((attempt) => attempt.nodeId),
+    ["p", "g1"],
+  );
   assert.equal(env.fake.calls.length, 4);
   assert.deepEqual(env.coordinator.staleNodeIds(doc).sort(), ["g2", "o2"]);
   assert.equal(env.coordinator.latestOutputs(doc.id).o2?.length, 1);
 
   // Retry from here (a fresh consent): the node and everything after it run again, and nothing is out of date.
-  const here = await env.coordinator.start(OWNER, (await approve({ kind: "from-node", nodeId: "g1" })).consentId);
+  const here = await env.coordinator.start(
+    OWNER,
+    (await approve({ kind: "from-node", nodeId: "g1" })).consentId,
+  );
   await env.coordinator.whenIdle();
   assert.ok("runId" in here);
   const hereRun = env.coordinator.getRun({ runId: here.runId })!;
   assert.deepEqual([hereRun.run.state, hereRun.run.requestLimit], ["succeeded", 2]);
-  assert.deepEqual(hereRun.attempts.map((attempt) => attempt.nodeId), ["p", "g1", "g2", "o2"]);
+  assert.deepEqual(
+    hereRun.attempts.map((attempt) => attempt.nodeId),
+    ["p", "g1", "g2", "o2"],
+  );
   assert.equal(env.fake.calls.length, 6);
   assert.deepEqual(env.coordinator.staleNodeIds(doc), []);
 });
@@ -339,18 +473,42 @@ test("the request cap holds for every scope", async (t) => {
     const at = { x: 0, y: 0 };
     draft.nodes = [
       { id: "p", type: "prompt", position: at, data: { text: "A red bicycle" } },
-      ...ids.map((id) => ({ id, type: "generate-image" as const, position: at, data: { model: { ...NANO_BANANA }, count: 1 as const } })),
+      ...ids.map((id) => ({
+        id,
+        type: "generate-image" as const,
+        position: at,
+        data: { model: { ...NANO_BANANA }, count: 1 as const },
+      })),
     ];
     draft.edges = [
-      ...ids.map((id) => ({ id: `p-${id}`, source: "p", sourcePort: "text", target: id, targetPort: "prompt" })),
-      ...ids.slice(1).map((id, index) => ({ id: `${ids[index]}-${id}`, source: ids[index]!, sourcePort: "images", target: id, targetPort: "references" })),
+      ...ids.map((id) => ({
+        id: `p-${id}`,
+        source: "p",
+        sourcePort: "text",
+        target: id,
+        targetPort: "prompt",
+      })),
+      ...ids
+        .slice(1)
+        .map((id, index) => ({
+          id: `${ids[index]}-${id}`,
+          source: ids[index]!,
+          sourcePort: "images",
+          target: id,
+          targetPort: "references",
+        })),
     ];
     return draft;
   });
-  const prepare = (scope: RunScope) => env.coordinator.prepare(OWNER, { workflowId: doc.id, revision: doc.revision, scope });
+  const prepare = (scope: RunScope) =>
+    env.coordinator.prepare(OWNER, { workflowId: doc.id, revision: doc.revision, scope });
   for (const scope of [{ kind: "all" }, { kind: "from-node", nodeId: "g1" }] as const) {
     const refused = await prepare(scope);
-    assert.deepEqual("issues" in refused ? refused.issues.map((issue) => issue.code) : [], ["request_cap"], scope.kind);
+    assert.deepEqual(
+      "issues" in refused ? refused.issues.map((issue) => issue.code) : [],
+      ["request_cap"],
+      scope.kind,
+    );
   }
   const single = await prepare({ kind: "node-only", nodeId: "g1" });
   assert.ok("plan" in single);
@@ -370,8 +528,18 @@ test("run from here reuses the latest upstream output and asks for a run when th
     ...draft,
     nodes: [
       { id: "p", type: "prompt", position: at, data: { text: "A red bicycle" } },
-      { id: "g1", type: "generate-image", position: at, data: { model: { ...NANO_BANANA }, count: 1 as const } },
-      { id: "g2", type: "generate-image", position: at, data: { model: { ...NANO_BANANA }, count: 1 as const } },
+      {
+        id: "g1",
+        type: "generate-image",
+        position: at,
+        data: { model: { ...NANO_BANANA }, count: 1 as const },
+      },
+      {
+        id: "g2",
+        type: "generate-image",
+        position: at,
+        data: { model: { ...NANO_BANANA }, count: 1 as const },
+      },
     ],
     edges: [
       { id: "e1", source: "p", sourcePort: "text", target: "g1", targetPort: "prompt" },
@@ -379,9 +547,16 @@ test("run from here reuses the latest upstream output and asks for a run when th
       { id: "e3", source: "g1", sourcePort: "images", target: "g2", targetPort: "references" },
     ],
   }));
-  const fromHere = { workflowId: doc.id, revision: doc.revision, scope: { kind: "from-node", nodeId: "g2" } as const };
+  const fromHere = {
+    workflowId: doc.id,
+    revision: doc.revision,
+    scope: { kind: "from-node", nodeId: "g2" } as const,
+  };
   const blocked = await env.coordinator.prepare(OWNER, fromHere);
-  assert.deepEqual("issues" in blocked ? blocked.issues.map((issue) => [issue.code, issue.nodeId]) : [], [["upstream_not_run", "g1"]]);
+  assert.deepEqual(
+    "issues" in blocked ? blocked.issues.map((issue) => [issue.code, issue.nodeId]) : [],
+    [["upstream_not_run", "g1"]],
+  );
   await env.coordinator.start(OWNER, (await prepared(env, doc)).consentId);
   await env.coordinator.whenIdle();
   const scoped = await env.coordinator.prepare(OWNER, fromHere);
@@ -397,18 +572,25 @@ test("run from here reuses the latest upstream output and asks for a run when th
 
 /** Resolves once exactly one request has reached the provider. */
 function onTheWire(env: Pick<Awaited<ReturnType<typeof fixture>>, "coordinator" | "fake">) {
-  return until(() => env.coordinator.inFlightRequests() === 1 && env.fake.calls.length === 1, "the request to be on the wire");
+  return until(
+    () => env.coordinator.inFlightRequests() === 1 && env.fake.calls.length === 1,
+    "the request to be on the wire",
+  );
 }
 
 /** Wraps a ledger so individual methods can be replaced, as a failing disk would. */
-function withLedgerOverrides(overrides: Partial<Record<keyof ImageRunLedger, (...args: never[]) => unknown>>) {
+function withLedgerOverrides(
+  overrides: Partial<Record<keyof ImageRunLedger, (...args: never[]) => unknown>>,
+) {
   return (ledger: ImageRunLedger): ImageRunLedger =>
     new Proxy(ledger, {
       get(target, property) {
         const replaced = overrides[property as keyof ImageRunLedger];
         if (replaced) return replaced;
         const value: unknown = Reflect.get(target, property, target);
-        return typeof value === "function" ? (value as (...args: unknown[]) => unknown).bind(target) : value;
+        return typeof value === "function"
+          ? (value as (...args: unknown[]) => unknown).bind(target)
+          : value;
       },
     });
 }
@@ -416,8 +598,14 @@ function withLedgerOverrides(overrides: Partial<Record<keyof ImageRunLedger, (..
 test("the owner request cap cannot be raised by configuration", async (t) => {
   const env = await fixture(t, { maxRequestsPerRun: 9 });
   const doc = await saveWorkflow(env.workflows, generateChains(5));
-  const result = await env.coordinator.prepare(OWNER, { workflowId: doc.id, revision: doc.revision, scope: { kind: "all" } });
-  assert.deepEqual("issues" in result ? result.issues.map((issue) => issue.code) : [], ["request_cap"]);
+  const result = await env.coordinator.prepare(OWNER, {
+    workflowId: doc.id,
+    revision: doc.revision,
+    scope: { kind: "all" },
+  });
+  assert.deepEqual("issues" in result ? result.issues.map((issue) => issue.code) : [], [
+    "request_cap",
+  ]);
   assert.equal(env.fake.calls.length, 0);
 });
 
@@ -435,7 +623,10 @@ test("run concurrency is clamped to between one and four and defaults to two", a
     const doc = await saveWorkflow(env.workflows, generateChains(4));
     const started = await env.coordinator.start(OWNER, (await prepared(env, doc)).consentId);
     assert.ok("runId" in started, label);
-    await until(() => env.coordinator.inFlightRequests() === expectedInFlight, `${label}: ${expectedInFlight} in flight`);
+    await until(
+      () => env.coordinator.inFlightRequests() === expectedInFlight,
+      `${label}: ${expectedInFlight} in flight`,
+    );
     for (let tick = 0; tick < 5; tick += 1) await new Promise((resolve) => setImmediate(resolve));
     assert.equal(env.coordinator.inFlightRequests(), expectedInFlight, label);
     assert.equal(env.fake.calls.length, expectedInFlight, label);
@@ -455,7 +646,9 @@ test("cancel aborts the request and records the cancel in one synchronous step; 
   assert.equal(env.coordinator.cancel(started.runId), true);
   // No await since cancel(): both halves of the stop are already visible.
   assert.equal(signal.aborted, true);
-  const attempt = env.ledger.snapshot(started.runId)!.attempts.find((entry) => entry.nodeId === "g1")!;
+  const attempt = env.ledger
+    .snapshot(started.runId)!
+    .attempts.find((entry) => entry.nodeId === "g1")!;
   assert.equal(attempt.cancelRequested, true);
   await env.coordinator.whenIdle();
 
@@ -468,7 +661,10 @@ test("cancel aborts the request and records the cancel in one synchronous step; 
     }),
   });
   const brokenDoc = await saveWorkflow(broken.workflows, generateChains(1));
-  const brokenRun = await broken.coordinator.start(OWNER, (await prepared(broken, brokenDoc)).consentId);
+  const brokenRun = await broken.coordinator.start(
+    OWNER,
+    (await prepared(broken, brokenDoc)).consentId,
+  );
   assert.ok("runId" in brokenRun);
   await onTheWire(broken);
   // The stop still lands, is reported rather than thrown, and the caller is told the run was stopped.
@@ -482,35 +678,63 @@ test("only one run is active per workflow: concurrent starts, and a prepare duri
   const env = await fixture(t, { reply: () => ({ kind: "hold" }) });
   const doc = await saveWorkflow(env.workflows, generateChains(1));
   const [first, second] = [await prepared(env, doc), await prepared(env, doc)];
-  const results = await Promise.all([env.coordinator.start(OWNER, first.consentId), env.coordinator.start(OWNER, second.consentId)]);
-  assert.deepEqual(results.map((result) => ("runId" in result ? "started" : result.error)).sort(), ["stale", "started"]);
+  const results = await Promise.all([
+    env.coordinator.start(OWNER, first.consentId),
+    env.coordinator.start(OWNER, second.consentId),
+  ]);
+  assert.deepEqual(results.map((result) => ("runId" in result ? "started" : result.error)).sort(), [
+    "stale",
+    "started",
+  ]);
   const started = results.find((result): result is { runId: string } => "runId" in result)!;
   await onTheWire(env);
   assert.equal(env.fake.calls.length, 1);
-  const during = await env.coordinator.prepare(OWNER, { workflowId: doc.id, revision: doc.revision, scope: { kind: "all" } });
-  assert.deepEqual("issues" in during ? during.issues.map((issue) => issue.code) : [], ["run_in_progress"]);
+  const during = await env.coordinator.prepare(OWNER, {
+    workflowId: doc.id,
+    revision: doc.revision,
+    scope: { kind: "all" },
+  });
+  assert.deepEqual("issues" in during ? during.issues.map((issue) => issue.code) : [], [
+    "run_in_progress",
+  ]);
   env.coordinator.cancel(started.runId);
   await env.coordinator.whenIdle();
   assert.equal(env.coordinator.hasActiveRun(doc.id), false);
-  assert.ok("plan" in (await env.coordinator.prepare(OWNER, { workflowId: doc.id, revision: doc.revision, scope: { kind: "all" } })));
+  assert.ok(
+    "plan" in
+      (await env.coordinator.prepare(OWNER, {
+        workflowId: doc.id,
+        revision: doc.revision,
+        scope: { kind: "all" },
+      })),
+  );
 });
 
 test("in-flight requests count only requests on the wire, not consents or queued steps", async (t) => {
-  const env = await fixture(t, { reply: () => ({ kind: "hold" }), alterDocument: (doc) => ({ ...doc, settings: { concurrency: 1 } }) });
+  const env = await fixture(t, {
+    reply: () => ({ kind: "hold" }),
+    alterDocument: (doc) => ({ ...doc, settings: { concurrency: 1 } }),
+  });
   const doc = await saveWorkflow(env.workflows, generateChains(2));
   const plan = await prepared(env, doc);
   assert.equal(env.coordinator.inFlightRequests(), 0);
   const started = await env.coordinator.start(OWNER, plan.consentId);
   assert.ok("runId" in started);
   await until(() => env.coordinator.inFlightRequests() === 1, "the first request");
-  assert.equal(env.coordinator.inFlightRequests(), 1, "the second Generate step is queued, not sent");
+  assert.equal(
+    env.coordinator.inFlightRequests(),
+    1,
+    "the second Generate step is queued, not sent",
+  );
   env.coordinator.cancel(started.runId);
   await env.coordinator.whenIdle();
   assert.equal(env.coordinator.inFlightRequests(), 0);
 });
 
 test("deleting a workflow is refused while a run is active, then removes its history and releases its holds", async (t) => {
-  const env = await fixture(t, { reply: (index) => (index === 0 ? { kind: "hold" } : { kind: "images" }) });
+  const env = await fixture(t, {
+    reply: (index) => (index === 0 ? { kind: "hold" } : { kind: "images" }),
+  });
   const doc = await saveWorkflow(env.workflows, generateChains(1));
   const started = await env.coordinator.start(OWNER, (await prepared(env, doc)).consentId);
   assert.ok("runId" in started);
@@ -524,7 +748,9 @@ test("deleting a workflow is refused while a run is active, then removes its his
   const second = await env.coordinator.start(OWNER, (await prepared(env, doc)).consentId);
   assert.ok("runId" in second);
   await env.coordinator.whenIdle();
-  const output = env.coordinator.getRun({ runId: second.runId })!.attempts.find((entry) => entry.nodeId === "g1")!.output[0]!;
+  const output = env.coordinator
+    .getRun({ runId: second.runId })!
+    .attempts.find((entry) => entry.nodeId === "g1")!.output[0]!;
   assert.deepEqual(env.assets.holders(output.assetId), [{ kind: "images-run", id: second.runId }]);
   assert.equal(await env.coordinator.deleteWorkflow(doc.id), "deleted");
   assert.equal(await env.workflows.get(doc.id), null);
@@ -553,7 +779,9 @@ test("finishing a run releases the holds of the runs retention drops", async (t)
   const first = await env.coordinator.start(OWNER, (await prepared(env, doc)).consentId);
   await env.coordinator.whenIdle();
   assert.ok("runId" in first);
-  const firstOutput = env.coordinator.getRun({ runId: first.runId })!.attempts.find((entry) => entry.nodeId === "g1")!.output[0]!;
+  const firstOutput = env.coordinator
+    .getRun({ runId: first.runId })!
+    .attempts.find((entry) => entry.nodeId === "g1")!.output[0]!;
   assert.equal(env.assets.holders(firstOutput.assetId).length, 1);
   const second = await env.coordinator.start(OWNER, (await prepared(env, doc)).consentId);
   await env.coordinator.whenIdle();
@@ -573,7 +801,12 @@ test("image counts are the distinct union of generated images and Image Input as
     { id: "p", type: "prompt", position: at, data: { text: "A red bicycle" } },
     { id: "in1", type: "image-input", position: at, data: { assetId: shared.assetId } },
     { id: "in2", type: "image-input", position: at, data: { assetId: imported.assetId } },
-    { id: "g", type: "generate-image", position: at, data: { model: { ...NANO_BANANA }, count: 1 } },
+    {
+      id: "g",
+      type: "generate-image",
+      position: at,
+      data: { model: { ...NANO_BANANA }, count: 1 },
+    },
     { id: "o", type: "output", position: at, data: {} },
   ];
   const edges: WorkflowDocV1["edges"] = [
@@ -602,7 +835,9 @@ test("a ledger failure inside a run is reported, ends the run as failed and neve
         finishAttempts: (...args: never[]) => {
           const [updates] = args as unknown as [{ state: string }[]];
           if (updates.some((update) => update.state === "succeeded")) throw new Error("disk full");
-          return ledger.finishAttempts(...(args as unknown as Parameters<ImageRunLedger["finishAttempts"]>));
+          return ledger.finishAttempts(
+            ...(args as unknown as Parameters<ImageRunLedger["finishAttempts"]>),
+          );
         },
       })(ledger),
   });
@@ -612,7 +847,10 @@ test("a ledger failure inside a run is reported, ends the run as failed and neve
   await env.coordinator.whenIdle();
   const snapshot = env.coordinator.getRun({ runId: started.runId })!;
   assert.equal(snapshot.run.state, "failed");
-  assert.ok(env.issues.some((message) => message.includes(started.runId)), JSON.stringify(env.issues));
+  assert.ok(
+    env.issues.some((message) => message.includes(started.runId)),
+    JSON.stringify(env.issues),
+  );
   assert.equal(env.coordinator.hasActiveRun(doc.id), false);
 });
 
@@ -634,7 +872,14 @@ test("shutdown ends active runs, closes the ledger even if recording fails, and 
   assert.equal(env.fake.calls[0]!.options!.signal!.aborted, true);
   assert.equal(env.issues.length > 0, true);
   assert.throws(() => env.ledger.snapshot(started.runId), /closed/u);
-  await assert.rejects(env.coordinator.prepare(OWNER, { workflowId: doc.id, revision: doc.revision, scope: { kind: "all" } }), /shutting down/u);
+  await assert.rejects(
+    env.coordinator.prepare(OWNER, {
+      workflowId: doc.id,
+      revision: doc.revision,
+      scope: { kind: "all" },
+    }),
+    /shutting down/u,
+  );
   assert.equal(env.coordinator.cancel(started.runId), false);
 });
 
@@ -701,7 +946,9 @@ test("deleting runs first: a ledger failure leaves the workflow and its holds in
   const started = await env.coordinator.start(OWNER, (await prepared(env, doc)).consentId);
   await env.coordinator.whenIdle();
   assert.ok("runId" in started);
-  const output = env.coordinator.getRun({ runId: started.runId })!.attempts.find((entry) => entry.nodeId === "g1")!.output[0]!;
+  const output = env.coordinator
+    .getRun({ runId: started.runId })!
+    .attempts.find((entry) => entry.nodeId === "g1")!.output[0]!;
   await assert.rejects(env.coordinator.deleteWorkflow(doc.id), /disk full/u);
   assert.notEqual(await env.workflows.get(doc.id), null);
   assert.notEqual(env.coordinator.getRun({ runId: started.runId }), null);
@@ -722,8 +969,15 @@ test("a release that throws is reported and the remaining runs are still release
     runIds.push(started.runId);
   }
   const heldBy = (runId: string) =>
-    env.assets.holders(env.coordinator.getRun({ runId })!.attempts.find((entry) => entry.nodeId === "g1")!.output[0]!.assetId);
-  const outputs = runIds.map((runId) => env.coordinator.getRun({ runId })!.attempts.find((entry) => entry.nodeId === "g1")!.output[0]!.assetId);
+    env.assets.holders(
+      env.coordinator.getRun({ runId })!.attempts.find((entry) => entry.nodeId === "g1")!.output[0]!
+        .assetId,
+    );
+  const outputs = runIds.map(
+    (runId) =>
+      env.coordinator.getRun({ runId })!.attempts.find((entry) => entry.nodeId === "g1")!.output[0]!
+        .assetId,
+  );
   assert.ok(heldBy(runIds[0]!).length >= 1);
   const release = env.assets.releaseAllForHolder.bind(env.assets);
   env.assets.releaseAllForHolder = (holder) => {
@@ -734,7 +988,11 @@ test("a release that throws is reported and the remaining runs are still release
   assert.equal(env.issues.length, 1, "exactly the failing release is reported");
   assert.match(env.issues[0]!, new RegExp(runIds[1]!, "u"));
   assert.deepEqual(env.assets.holders(outputs[0]!), []);
-  assert.deepEqual(env.assets.holders(outputs[1]!), [{ kind: "images-run", id: runIds[1]! }], "only the failed release is left holding");
+  assert.deepEqual(
+    env.assets.holders(outputs[1]!),
+    [{ kind: "images-run", id: runIds[1]! }],
+    "only the failed release is left holding",
+  );
   assert.deepEqual(env.assets.holders(outputs[2]!), []);
   assert.equal(await env.workflows.get(doc.id), null);
 });
@@ -749,7 +1007,9 @@ test("a document delete that fails after the runs are gone is reported and leave
   const started = await env.coordinator.start(OWNER, (await prepared(env, doc)).consentId);
   await env.coordinator.whenIdle();
   assert.ok("runId" in started);
-  const output = env.coordinator.getRun({ runId: started.runId })!.attempts.find((entry) => entry.nodeId === "g1")!.output[0]!;
+  const output = env.coordinator
+    .getRun({ runId: started.runId })!
+    .attempts.find((entry) => entry.nodeId === "g1")!.output[0]!;
   await assert.rejects(env.coordinator.deleteWorkflow(doc.id), /permission denied/u);
   assert.equal(env.issues.length, 1);
   assert.notEqual(await env.workflows.get(doc.id), null);
@@ -764,8 +1024,14 @@ test("preparing while the workflow is being deleted says so", async (t) => {
   const env = await fixture(t, { beforeDelete: () => gate });
   const doc = await saveWorkflow(env.workflows, generateChains(1));
   const deleting = env.coordinator.deleteWorkflow(doc.id);
-  const result = await env.coordinator.prepare(OWNER, { workflowId: doc.id, revision: doc.revision, scope: { kind: "all" } });
-  assert.deepEqual("issues" in result ? result.issues.map((issue) => issue.code) : [], ["workflow_deleting"]);
+  const result = await env.coordinator.prepare(OWNER, {
+    workflowId: doc.id,
+    revision: doc.revision,
+    scope: { kind: "all" },
+  });
+  assert.deepEqual("issues" in result ? result.issues.map((issue) => issue.code) : [], [
+    "workflow_deleting",
+  ]);
   assert.equal(await env.coordinator.deleteWorkflow(doc.id), "busy");
   open();
   assert.equal(await deleting, "deleted");

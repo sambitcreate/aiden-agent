@@ -35,7 +35,10 @@ test("live child snapshots are durable before owner-bound renderer delivery", as
   assert.ok(prepare >= 0);
   assert.ok(persist >= 0);
   assert.ok(notify > persist);
-  assert.match(llm, /await subagentSupervisor\?\.flush\([^)]*\);[\s\S]{0,500}chatStore\.appendMessage/u);
+  assert.match(
+    llm,
+    /await subagentSupervisor\?\.flush\([^)]*\);[\s\S]{0,500}chatStore\.appendMessage/u,
+  );
 });
 
 test("historical inspector reads require a live document and matching chat owner", async () => {
@@ -283,10 +286,7 @@ test("renderer message appends serialize against detached terminal persistence",
     schedule,
     /beginSurfaceGeneration\(llmClient\.beginChatTurn\.bind\(llmClient\), surface\)[\s\S]{0,900}chatStore\.appendMessage\([\s\S]{0,1600}startSurfaceGeneration\(/u,
   );
-  assert.match(
-    surfaces,
-    /return beginChatTurn\(entry\.chatId, entry\.turnId, entry\.ownerId\)/u,
-  );
+  assert.match(surfaces, /return beginChatTurn\(entry\.chatId, entry\.turnId, entry\.ownerId\)/u);
   assert.match(surfaces, /turnId: input\.streamId/u);
   assert.match(
     schedule,
@@ -343,7 +343,10 @@ test("replacement chat reads mark bounded wait timeouts for retained renderer re
     source("main/services/llm-client.ts"),
   ]);
   const getHandler = ipcHandlerStart(handler, "chats:get");
-  assert.match(handler.slice(getHandler), /chatApplicationService\.get\((?:asString\(id, "id"\)|chatId)\)/u);
+  assert.match(
+    handler.slice(getHandler),
+    /chatApplicationService\.get\((?:asString\(id, "id"\)|chatId)\)/u,
+  );
   const inactiveCheck = applicationService.indexOf(
     "deps.llmClient.isChatOwnedByInactiveRenderer(chatId)",
   );
@@ -603,7 +606,9 @@ test("managed worktree cleanup is root-bound, resumable, and packaged as signed 
     packageJson,
     /"from": "build\/native\/aiden-worktree-remover"[\s\S]+"to": "Helpers\/aiden-worktree-remover"/u,
   );
-  const preparation = JSON.parse(packageJson).scripts["pretest:subagents"].split(/\s*&&\s*/u) as string[];
+  const preparation = JSON.parse(packageJson).scripts["pretest:subagents"].split(
+    /\s*&&\s*/u,
+  ) as string[];
   const firstTest = preparation.findIndex((command) => command.startsWith("npm run test:"));
   assert.ok(firstTest >= 0, "the subagent preparation chain must lead into its test suites");
   for (const command of ["npm run build:worktree-remover", "npm run build:subagent-run-store"]) {

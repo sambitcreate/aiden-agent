@@ -16,9 +16,19 @@ import { writeJsonAtomic } from "../durable-fs.js";
 export const BOT_LEARNING_HISTORY_FILE = "learning-history.json";
 
 export interface BotLearningHistory {
-  record(change: Omit<BotLearningChange, "id" | "at" | "fingerprintBefore" | "fingerprintAfter"> & { fingerprintBefore?: string }): Promise<BotLearningChange>;
+  record(
+    change: Omit<BotLearningChange, "id" | "at" | "fingerprintBefore" | "fingerprintAfter"> & {
+      fingerprintBefore?: string;
+    },
+  ): Promise<BotLearningChange>;
   list(botId: string): Promise<BotLearningChange[]>;
-  undo(botId: string, changeId: string): Promise<{ ok: true; change: BotLearningChange } | { ok: false; code: "conflict" | "not_found" | "already_undone" }>;
+  undo(
+    botId: string,
+    changeId: string,
+  ): Promise<
+    | { ok: true; change: BotLearningChange }
+    | { ok: false; code: "conflict" | "not_found" | "already_undone" }
+  >;
 }
 
 export function createBotLearningHistory(deps: {
@@ -30,18 +40,28 @@ export function createBotLearningHistory(deps: {
    * equals `expected`. Returns false, changing nothing, when it moved: the
    * check must sit inside the target's own write boundary.
    */
-  apply(botId: string, target: BotLearningTarget, content: string | null, expected: string | null): Promise<boolean>;
+  apply(
+    botId: string,
+    target: BotLearningTarget,
+    content: string | null,
+    expected: string | null,
+  ): Promise<boolean>;
   fingerprint(botId: string): Promise<string>;
   now?(): number;
 }): BotLearningHistory {
   const now = deps.now ?? Date.now;
   const serial = createKeyedSerial();
-  const fileOf = (botId: string) => path.join(botSessionDirectory(deps.profileDir(), botId), BOT_LEARNING_HISTORY_FILE);
+  const fileOf = (botId: string) =>
+    path.join(botSessionDirectory(deps.profileDir(), botId), BOT_LEARNING_HISTORY_FILE);
 
   async function load(botId: string): Promise<BotLearningChange[]> {
     try {
       const parsed = JSON.parse(await fs.readFile(fileOf(botId), "utf8")) as unknown;
-      return Array.isArray(parsed) ? (parsed as BotLearningChange[]).filter((change) => change?.botId === botId && typeof change.id === "string") : [];
+      return Array.isArray(parsed)
+        ? (parsed as BotLearningChange[]).filter(
+            (change) => change?.botId === botId && typeof change.id === "string",
+          )
+        : [];
     } catch {
       return [];
     }
@@ -51,8 +71,13 @@ export function createBotLearningHistory(deps: {
   function bounded(changes: BotLearningChange[]): BotLearningChange[] {
     let kept = [...changes];
     const size = () => Buffer.byteLength(JSON.stringify(kept), "utf8");
-    while (kept.length > BOT_LEARNING_HISTORY_LIMITS.changes || (kept.length > 1 && size() > BOT_LEARNING_HISTORY_LIMITS.bytes)) {
-      const undone = kept.findIndex((change) => change.undoneAt !== undefined || change.undoOf !== undefined);
+    while (
+      kept.length > BOT_LEARNING_HISTORY_LIMITS.changes ||
+      (kept.length > 1 && size() > BOT_LEARNING_HISTORY_LIMITS.bytes)
+    ) {
+      const undone = kept.findIndex(
+        (change) => change.undoneAt !== undefined || change.undoOf !== undefined,
+      );
       kept.splice(undone >= 0 ? undone : 0, 1);
     }
     return kept;
@@ -90,9 +115,11 @@ export function createBotLearningHistory(deps: {
         const change = changes[index];
         if (!change) return { ok: false, code: "not_found" };
         if (change.undoneAt !== undefined) return { ok: false, code: "already_undone" };
-        if ((await deps.current(botId, change.target)) !== change.after) return { ok: false, code: "conflict" };
+        if ((await deps.current(botId, change.target)) !== change.after)
+          return { ok: false, code: "conflict" };
         const before = await deps.fingerprint(botId);
-        if (!(await deps.apply(botId, change.target, change.before, change.after))) return { ok: false, code: "conflict" };
+        if (!(await deps.apply(botId, change.target, change.before, change.after)))
+          return { ok: false, code: "conflict" };
         const at = now();
         changes[index] = { ...change, undoneAt: at };
         changes.push({

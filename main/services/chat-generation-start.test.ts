@@ -1,7 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { isExplicitUserStop } from "./chat-cancel.js";
-import { desktopChatExecutionOptions, startGenerationAndMaybeTitle } from "./chat-generation-start.js";
+import {
+  desktopChatExecutionOptions,
+  startGenerationAndMaybeTitle,
+} from "./chat-generation-start.js";
 import { ChatTurnAdmission } from "./chat-turn-admission.js";
 import type { ChatStartParams } from "./types.js";
 
@@ -110,9 +113,12 @@ test("desktop execution options hand off the appended turn only for its exact ow
     false,
   );
   assert.equal(admission.releaseMatching("chat-a", "turn-1", "renderer-document-2"), false);
-  assert.equal(admission.handoff("chat-a", options.turnId, "renderer-document-2", () => {
-    events.push("stolen");
-  }), false);
+  assert.equal(
+    admission.handoff("chat-a", options.turnId, "renderer-document-2", () => {
+      events.push("stolen");
+    }),
+    false,
+  );
   assert.equal(events.length, 0);
   assert.equal(admission.isAdmitted("chat-a"), true);
 
@@ -177,9 +183,22 @@ test("throwing generation registration fails closed until the owner releases", (
 
 test("a send is counted once, and only for a turn that actually started", async () => {
   let counted = 0;
-  const dependencies = { startTitle: () => undefined, onStarted: () => { counted += 1; } };
-  await startGenerationAndMaybeTitle({ ...dependencies, start: async () => false }, "stream-1", params);
+  const dependencies = {
+    startTitle: () => undefined,
+    onStarted: () => {
+      counted += 1;
+    },
+  };
+  await startGenerationAndMaybeTitle(
+    { ...dependencies, start: async () => false },
+    "stream-1",
+    params,
+  );
   assert.equal(counted, 0);
-  await startGenerationAndMaybeTitle({ ...dependencies, start: async () => true }, "stream-1", params);
+  await startGenerationAndMaybeTitle(
+    { ...dependencies, start: async () => true },
+    "stream-1",
+    params,
+  );
   assert.equal(counted, 1);
 });

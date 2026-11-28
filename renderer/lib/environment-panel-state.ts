@@ -104,21 +104,46 @@ export function storedEnvironmentPanelTab(
 }
 
 /** Navigation descriptors only. Tool services retain their own durable state. */
-export function openEnvironmentTab(tabs: EnvironmentPanelTab[], tab: EnvironmentPanelTab): EnvironmentPanelTab[] {
+export function openEnvironmentTab(
+  tabs: EnvironmentPanelTab[],
+  tab: EnvironmentPanelTab,
+): EnvironmentPanelTab[] {
   if (tabs.includes(tab)) return tabs;
   const launcher = tabs.indexOf("new-tab");
-  if (tab !== "new-tab" && launcher >= 0) return tabs.map((entry, index) => index === launcher ? tab : entry);
+  if (tab !== "new-tab" && launcher >= 0)
+    return tabs.map((entry, index) => (index === launcher ? tab : entry));
   return [...tabs, tab];
 }
 
-export function parseEnvironmentOpenTabs(value: string | null, legacy: EnvironmentPanelTab): EnvironmentPanelTab[] {
+export function parseEnvironmentOpenTabs(
+  value: string | null,
+  legacy: EnvironmentPanelTab,
+): EnvironmentPanelTab[] {
   try {
     const data: unknown = JSON.parse(value ?? "null");
-    if (data && typeof data === "object" && "version" in data && data.version === 1 && "tabs" in data && Array.isArray(data.tabs)) {
-      const tabs = [...new Set(data.tabs.slice(0, 8).filter((tab): tab is EnvironmentPanelTab => typeof tab === "string" && parseEnvironmentPanelTab(tab) !== null))];
+    if (
+      data &&
+      typeof data === "object" &&
+      "version" in data &&
+      data.version === 1 &&
+      "tabs" in data &&
+      Array.isArray(data.tabs)
+    ) {
+      const tabs = [
+        ...new Set(
+          data.tabs
+            .slice(0, 8)
+            .filter(
+              (tab): tab is EnvironmentPanelTab =>
+                typeof tab === "string" && parseEnvironmentPanelTab(tab) !== null,
+            ),
+        ),
+      ];
       if (tabs.length) return tabs;
     }
-  } catch { /* Legacy state has no tab list. */ }
+  } catch {
+    /* Legacy state has no tab list. */
+  }
   return [legacy];
 }
 
@@ -151,7 +176,13 @@ export function reduceEnvironmentSurfaceState(
             toolsOpen: false,
             frontSurface: state.quickViewOpen ? "quick-view" : null,
           }
-        : { ...state, toolsOpen: true, toolsTab: action.tab, openTabs: openEnvironmentTab(tabs, action.tab), frontSurface: "tools" };
+        : {
+            ...state,
+            toolsOpen: true,
+            toolsTab: action.tab,
+            openTabs: openEnvironmentTab(tabs, action.tab),
+            frontSurface: "tools",
+          };
     case "show-tools":
       return {
         ...state,
@@ -163,7 +194,14 @@ export function reduceEnvironmentSurfaceState(
     case "close-tab": {
       const remaining = tabs.filter((tab) => tab !== action.tab);
       const openTabs: EnvironmentPanelTab[] = remaining.length ? remaining : ["new-tab"];
-      return { ...state, openTabs, toolsTab: state.toolsTab === action.tab ? openTabs[Math.max(0, tabs.indexOf(action.tab) - 1)] ?? openTabs[0] : state.toolsTab };
+      return {
+        ...state,
+        openTabs,
+        toolsTab:
+          state.toolsTab === action.tab
+            ? (openTabs[Math.max(0, tabs.indexOf(action.tab) - 1)] ?? openTabs[0])
+            : state.toolsTab,
+      };
     }
     case "close-tools":
       return {

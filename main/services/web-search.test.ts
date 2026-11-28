@@ -693,7 +693,8 @@ test("a pooled Tavily route fails over between keys, charges each keyed request,
 test("a search that returned evidence counts its provider, and a failed or fenced one counts nothing", async (t) => {
   const sent = captureAnalyticsEvents(t);
   const working = new WebSearchService({
-    getSettings: async () => baseSettings({ mode: "fixed", providerId: "exa", credentialMode: "anonymous" }),
+    getSettings: async () =>
+      baseSettings({ mode: "fixed", providerId: "exa", credentialMode: "anonymous" }),
     adapterFactories: { exa: adapter("exa", async () => evidence()) },
   });
   await working.search({ query: QUERY }, { signal: new AbortController().signal });
@@ -701,7 +702,8 @@ test("a search that returned evidence counts its provider, and a failed or fence
 
   sent.length = 0;
   const failing = new WebSearchService({
-    getSettings: async () => baseSettings({ mode: "fixed", providerId: "exa", credentialMode: "anonymous" }),
+    getSettings: async () =>
+      baseSettings({ mode: "fixed", providerId: "exa", credentialMode: "anonymous" }),
     adapterFactories: {
       exa: adapter("exa", async () => {
         throw webSearchError("quota", "exa");

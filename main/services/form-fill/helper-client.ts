@@ -59,12 +59,7 @@ export function formFillHelperPaths(helpersDir: string): FormFillHelperPaths {
   const appBundle = path.join(helpersDir, FORM_FILL_HELPER_APP_NAME);
   return {
     appBundle,
-    executable: path.join(
-      appBundle,
-      "Contents",
-      "MacOS",
-      FORM_FILL_HELPER_EXECUTABLE,
-    ),
+    executable: path.join(appBundle, "Contents", "MacOS", FORM_FILL_HELPER_EXECUTABLE),
   };
 }
 
@@ -148,15 +143,10 @@ export class FormFillHelperClient {
     // stays after teardown so a late error from this child is still absorbed,
     // and only poisons the client while this child is the current one.
     child.stdin?.on("error", () => {
-      if (this.process === child)
-        this.failTransport("The form-fill helper closed its input.");
+      if (this.process === child) this.failTransport("The form-fill helper closed its input.");
     });
-    child.on("error", () =>
-      this.failTransport("The form-fill helper could not start."),
-    );
-    child.on("exit", () =>
-      this.failTransport("The form-fill helper exited unexpectedly."),
-    );
+    child.on("error", () => this.failTransport("The form-fill helper could not start."));
+    child.on("exit", () => this.failTransport("The form-fill helper exited unexpectedly."));
     this.process = child;
     return child;
   }
@@ -164,9 +154,7 @@ export class FormFillHelperClient {
   private onStdout(chunk: string): void {
     this.stdout += chunk;
     if (this.stdout.length > FORM_FILL_MAX_RESPONSE_BYTES) {
-      this.failTransport(
-        "The form-fill helper produced an oversized response.",
-      );
+      this.failTransport("The form-fill helper produced an oversized response.");
       return;
     }
     let index = this.stdout.indexOf("\n");
@@ -190,8 +178,7 @@ export class FormFillHelperClient {
     if (
       typeof message !== "object" ||
       message === null ||
-      (message as { version?: unknown }).version !==
-        FORM_FILL_HELPER_PROTOCOL_VERSION ||
+      (message as { version?: unknown }).version !== FORM_FILL_HELPER_PROTOCOL_VERSION ||
       typeof (message as { id?: unknown }).id !== "string"
     ) {
       this.failTransport("The form-fill helper produced an invalid response.");
@@ -214,19 +201,13 @@ export class FormFillHelperClient {
     if (!pending) return; // stale/unknown id — ignore, do not poison
     this.pending.delete(response.id);
     clearTimeout(pending.timer);
-    if (
-      response.ok === true &&
-      typeof response.result === "object" &&
-      response.result !== null
-    ) {
+    if (response.ok === true && typeof response.result === "object" && response.result !== null) {
       pending.resolve(response.result as Record<string, unknown>);
       return;
     }
     const code = response.error?.code;
     const safeCode = (
-      typeof code === "string" && ERROR_CODES.has(code)
-        ? code
-        : "internal_failure"
+      typeof code === "string" && ERROR_CODES.has(code) ? code : "internal_failure"
     ) as FormFillHelperErrorCode;
     pending.reject(
       new FormFillHelperError(
@@ -269,9 +250,7 @@ export class FormFillHelperClient {
     signal?: AbortSignal,
   ): Promise<Record<string, unknown>> {
     if (signal?.aborted) {
-      return Promise.reject(
-        new FormFillHelperError("cancelled", "Request cancelled."),
-      );
+      return Promise.reject(new FormFillHelperError("cancelled", "Request cancelled."));
     }
     let child: ChildProcess;
     try {
@@ -280,9 +259,7 @@ export class FormFillHelperClient {
       return Promise.reject(error);
     }
     if (!METHODS.has(method)) {
-      return Promise.reject(
-        new FormFillHelperError("invalid_request", "Unknown method."),
-      );
+      return Promise.reject(new FormFillHelperError("invalid_request", "Unknown method."));
     }
     const id = `ff-${++this.nextId}`;
     const body = JSON.stringify({
@@ -293,19 +270,14 @@ export class FormFillHelperClient {
     });
     if (Buffer.byteLength(body, "utf8") > FORM_FILL_MAX_REQUEST_BYTES) {
       return Promise.reject(
-        new FormFillHelperError(
-          "invalid_request",
-          "The form-fill request is too large.",
-        ),
+        new FormFillHelperError("invalid_request", "The form-fill request is too large."),
       );
     }
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
         this.pending.delete(id);
         this.failTransport("The form-fill helper timed out.");
-        reject(
-          new FormFillHelperError("timeout", "The form-fill helper timed out."),
-        );
+        reject(new FormFillHelperError("timeout", "The form-fill helper timed out."));
       }, timeoutMs);
       const onAbort = (): void => {
         this.pending.delete(id);
@@ -328,15 +300,8 @@ export class FormFillHelperClient {
         if (error) {
           this.pending.delete(id);
           clearTimeout(timer);
-          this.failTransport(
-            "The form-fill helper could not receive the request.",
-          );
-          reject(
-            new FormFillHelperError(
-              "transport",
-              "The form-fill helper closed its input.",
-            ),
-          );
+          this.failTransport("The form-fill helper could not receive the request.");
+          reject(new FormFillHelperError("transport", "The form-fill helper closed its input."));
         }
       });
     });
@@ -348,12 +313,7 @@ export class FormFillHelperClient {
   }
 
   async loadModel(modelPath: string, signal?: AbortSignal): Promise<string> {
-    const result = await this.request(
-      "load",
-      { modelPath },
-      FORM_FILL_LOAD_TIMEOUT_MS,
-      signal,
-    );
+    const result = await this.request("load", { modelPath }, FORM_FILL_LOAD_TIMEOUT_MS, signal);
     const loaded = result.load as { loadedPath?: unknown } | undefined;
     if (typeof loaded?.loadedPath !== "string") {
       throw new FormFillHelperError(
@@ -391,10 +351,7 @@ export class FormFillHelperClient {
     options: string[],
     signal?: AbortSignal,
   ): Promise<FormFillScoreResult> {
-    if (
-      options.length < FORM_FILL_MIN_OPTIONS ||
-      options.length > FORM_FILL_MAX_OPTIONS
-    ) {
+    if (options.length < FORM_FILL_MIN_OPTIONS || options.length > FORM_FILL_MAX_OPTIONS) {
       throw new FormFillHelperError(
         "invalid_request",
         "The form-fill request must contain between 2 and 32 options.",
@@ -427,10 +384,7 @@ export class FormFillHelperClient {
   }
 }
 
-function validateScoreResult(
-  value: unknown,
-  optionCount: number,
-): FormFillScoreResult {
+function validateScoreResult(value: unknown, optionCount: number): FormFillScoreResult {
   const score = value as Partial<FormFillScoreResult> | undefined;
   const numbers = (list: unknown): list is number[] =>
     Array.isArray(list) &&
@@ -451,10 +405,7 @@ function validateScoreResult(
     !Array.isArray(score.truncatedOptionIndices) ||
     score.truncatedOptionIndices.some(
       (index) =>
-        typeof index !== "number" ||
-        !Number.isInteger(index) ||
-        index < 0 ||
-        index >= optionCount,
+        typeof index !== "number" || !Number.isInteger(index) || index < 0 || index >= optionCount,
     )
   ) {
     throw new FormFillHelperError(
@@ -463,21 +414,14 @@ function validateScoreResult(
     );
   }
   if (score.selectedIndex >= score.probabilities.length) {
-    throw new FormFillHelperError(
-      "invalid_output",
-      "The helper selected an out-of-range option.",
-    );
+    throw new FormFillHelperError("invalid_output", "The helper selected an out-of-range option.");
   }
   if (
     score.probabilities.some((p) => p < 0 || p > 1) ||
     Math.abs(score.probabilities.reduce((sum, p) => sum + p, 0) - 1) > 0.0001 ||
-    score.probabilities[score.selectedIndex] !==
-      Math.max(...score.probabilities)
+    score.probabilities[score.selectedIndex] !== Math.max(...score.probabilities)
   ) {
-    throw new FormFillHelperError(
-      "invalid_output",
-      "The helper returned invalid probabilities.",
-    );
+    throw new FormFillHelperError("invalid_output", "The helper returned invalid probabilities.");
   }
   return {
     selectedIndex: score.selectedIndex,

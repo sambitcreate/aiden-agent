@@ -2410,10 +2410,7 @@
     "Private chats, credentials and real providers are not accessed. No default policy or rollout setting changes."
   ],
   "finishedAt": "2026-10-11T21:39:15.142Z",
-  "finalResources": [
-    "TCPServerWrap",
-    "TCPSocketWrap"
-  ],
+  "finalResources": ["TCPServerWrap", "TCPSocketWrap"],
   "finalMemory": {
     "rss": 151748608,
     "heapTotal": 84983808,

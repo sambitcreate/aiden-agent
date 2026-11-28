@@ -19,7 +19,8 @@ export function useReportGoalView(chatId: string | null): void {
       void chatsApi.reportGoalView(null, document.hasFocus()).catch(() => undefined);
       return;
     }
-    const report = () => void chatsApi.reportGoalView(chatId, document.hasFocus()).catch(() => undefined);
+    const report = () =>
+      void chatsApi.reportGoalView(chatId, document.hasFocus()).catch(() => undefined);
     report();
     window.addEventListener("focus", report);
     window.addEventListener("blur", report);

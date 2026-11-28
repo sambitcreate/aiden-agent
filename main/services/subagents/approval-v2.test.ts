@@ -69,10 +69,7 @@ test("canonicalization never invokes object, array, input accessors, or proxy tr
       return "secret";
     },
   });
-  assert.throws(
-    () => subagentApprovalArgumentDigestV2("write_file", arrayWithGetter),
-    /accessor/u,
-  );
+  assert.throws(() => subagentApprovalArgumentDigestV2("write_file", arrayWithGetter), /accessor/u);
   assert.equal(arrayGetterCalls, 0);
 
   let proxyTrapCalls = 0;
@@ -89,10 +86,7 @@ test("canonicalization never invokes object, array, input accessors, or proxy tr
       },
     },
   );
-  assert.throws(
-    () => subagentApprovalArgumentDigestV2("write_file", proxy),
-    /proxy|unsupported/u,
-  );
+  assert.throws(() => subagentApprovalArgumentDigestV2("write_file", proxy), /proxy|unsupported/u);
   assert.equal(proxyTrapCalls, 0);
 
   const arrayProxy = new Proxy(["safe"], {
@@ -132,18 +126,12 @@ test("canonicalization never invokes object, array, input accessors, or proxy tr
 test("canonicalization rejects direct and indirect cycles while preserving repeated acyclic values", () => {
   const direct: Record<string, unknown> = {};
   direct.self = direct;
-  assert.throws(
-    () => subagentApprovalArgumentDigestV2("write_file", direct),
-    /cyclic/u,
-  );
+  assert.throws(() => subagentApprovalArgumentDigestV2("write_file", direct), /cyclic/u);
 
   const first: Record<string, unknown> = {};
   const second: Record<string, unknown> = { first };
   first.second = second;
-  assert.throws(
-    () => subagentApprovalArgumentDigestV2("write_file", first),
-    /cyclic/u,
-  );
+  assert.throws(() => subagentApprovalArgumentDigestV2("write_file", first), /cyclic/u);
 
   const shared = { path: "README.md" };
   assert.doesNotThrow(() =>
@@ -162,30 +150,14 @@ test("approval is owner-bound, exact, authorized once, and consumed once", () =>
   const prepared = ledger.prepare(input());
   assert.equal(prepared.binding.argumentDigest.length, 64);
   assert.equal("arguments" in prepared.binding, false);
+  assert.equal(ledger.authorize(prepared.approvalId, "wrong-document", input()), false);
   assert.equal(
-    ledger.authorize(prepared.approvalId, "wrong-document", input()),
+    ledger.authorize(prepared.approvalId, "document-1", input({ path: "OTHER" })),
     false,
   );
-  assert.equal(
-    ledger.authorize(
-      prepared.approvalId,
-      "document-1",
-      input({ path: "OTHER" }),
-    ),
-    false,
-  );
-  assert.equal(
-    ledger.authorize(prepared.approvalId, "document-1", input()),
-    true,
-  );
-  assert.equal(
-    ledger.authorize(prepared.approvalId, "document-1", input()),
-    false,
-  );
-  assert.equal(
-    ledger.consume(prepared.approvalId, { ...input(), authorityRevision: 2 }),
-    false,
-  );
+  assert.equal(ledger.authorize(prepared.approvalId, "document-1", input()), true);
+  assert.equal(ledger.authorize(prepared.approvalId, "document-1", input()), false);
+  assert.equal(ledger.consume(prepared.approvalId, { ...input(), authorityRevision: 2 }), false);
   assert.equal(ledger.consume(prepared.approvalId, input()), true);
   assert.equal(ledger.consume(prepared.approvalId, input()), false);
   assert.equal(ledger.pendingCount, 0);
@@ -204,16 +176,16 @@ test("expiry, duplicate call ownership, denial, and run cancellation fail closed
   assert.equal(ledger.deny(first.approvalId, "document-1"), true);
   const second = ledger.prepare(input());
   now = 2_000;
-  assert.equal(
-    ledger.authorize(second.approvalId, "document-1", input()),
-    false,
-  );
+  assert.equal(ledger.authorize(second.approvalId, "document-1", input()), false);
   ledger.cancelRun("run-1");
   assert.equal(ledger.pendingCount, 0);
 });
 
 test("an approval cannot be consumed unless it was authorized, and a failed attempt does not burn it", () => {
-  const ledger = new SubagentApprovalLedgerV2(() => 1_000, () => "approval-order");
+  const ledger = new SubagentApprovalLedgerV2(
+    () => 1_000,
+    () => "approval-order",
+  );
   const { approvalId } = ledger.prepare(input());
   assert.equal(ledger.consume(approvalId, input()), false);
   assert.equal(ledger.authorize(approvalId, "document-1", input()), true);
@@ -224,7 +196,10 @@ test("an approval cannot be consumed unless it was authorized, and a failed atte
 test("an authorized approval dies with its run, its denial, or its deadline", () => {
   let now = 1_000;
   let id = 0;
-  const ledger = new SubagentApprovalLedgerV2(() => now, () => `approval-end-${++id}`);
+  const ledger = new SubagentApprovalLedgerV2(
+    () => now,
+    () => `approval-end-${++id}`,
+  );
   const authorized = () => {
     const { approvalId } = ledger.prepare(input());
     assert.equal(ledger.authorize(approvalId, "document-1", input()), true);
@@ -249,7 +224,10 @@ test("an authorized approval dies with its run, its denial, or its deadline", ()
 
 test("cancelling one run leaves another run's approval consumable", () => {
   let id = 0;
-  const ledger = new SubagentApprovalLedgerV2(() => 1_000, () => `approval-run-${++id}`);
+  const ledger = new SubagentApprovalLedgerV2(
+    () => 1_000,
+    () => `approval-run-${++id}`,
+  );
   const other = { ...input(), runId: "run-2" };
   const first = ledger.prepare(input());
   const second = ledger.prepare(other);
@@ -362,8 +340,5 @@ test("stored bindings are data-only copies and never retain raw argument contain
     "treeRootId",
     "workspaceId",
   ]);
-  assert.equal(
-    ledger.authorize(prepared.approvalId, "document-1", input(argumentsValue)),
-    false,
-  );
+  assert.equal(ledger.authorize(prepared.approvalId, "document-1", input(argumentsValue)), false);
 });

@@ -26,7 +26,9 @@ const temporaryDirectories: string[] = [];
 
 afterEach(async () => {
   await Promise.all(
-    temporaryDirectories.splice(0).map((directory) => fs.rm(directory, { recursive: true, force: true })),
+    temporaryDirectories
+      .splice(0)
+      .map((directory) => fs.rm(directory, { recursive: true, force: true })),
   );
 });
 
@@ -50,18 +52,29 @@ test("render_ui is offered only when the host can present native visuals", async
   const renderUi = withUi.tools?.find((tool) => tool.name === "render_ui");
   await renderUi?.execute("call-1", { title: "Board", markup: "<Visual><Text>Hi</Text></Visual>" });
   assert.deepEqual(presented, ["Board"]);
-  const htmlOnly = createGenerativeUiExtension({ workspaceRoot: undefined, onArtifact: () => undefined });
-  assert.deepEqual(htmlOnly.tools?.map((tool) => tool.name), [GENERATIVE_UI_TOOL_NAME, "visualize_guide"]);
+  const htmlOnly = createGenerativeUiExtension({
+    workspaceRoot: undefined,
+    onArtifact: () => undefined,
+  });
+  assert.deepEqual(
+    htmlOnly.tools?.map((tool) => tool.name),
+    [GENERATIVE_UI_TOOL_NAME, "visualize_guide"],
+  );
 });
 
 test("the catalog guide documents every component and its example compiles cleanly", async () => {
-  const extension = createGenerativeUiExtension({ workspaceRoot: undefined, onArtifact: () => undefined });
+  const extension = createGenerativeUiExtension({
+    workspaceRoot: undefined,
+    onArtifact: () => undefined,
+  });
   const guide = extension.tools?.find((tool) => tool.name === "visualize_guide");
   const result = await guide!.execute("g", { modules: ["catalog"] });
   const text = result.content[0]?.type === "text" ? result.content[0].text : "";
-  for (const name of Object.keys(AIDEN_UI_CATALOG)) assert.match(text, new RegExp(`\`${name}\``, "u"), name);
+  for (const name of Object.keys(AIDEN_UI_CATALOG))
+    assert.match(text, new RegExp(`\`${name}\``, "u"), name);
   // List props say what one item looks like, not "any".
-  const line = (name: string) => text.split("\n").find((entry) => entry.startsWith(`- \`${name}\``)) ?? "";
+  const line = (name: string) =>
+    text.split("\n").find((entry) => entry.startsWith(`- \`${name}\``)) ?? "";
   assert.match(line("Checklist"), /items: list of \{label, done\}/u);
   assert.match(line("Timeline"), /items: list of \{title, time\?, description\?\}/u);
   assert.match(line("Sparkline"), /values: list of number/u);
@@ -86,8 +99,13 @@ test("visuals are available without a workspace and follow the inline-visuals mo
 test("turns sent from a paired device follow the desktop's inline visuals setting", () => {
   const enabledFor = (inlineVisuals?: InlineVisualsMode) => {
     const surface = remoteGenerationSurface({
-      chatId: "chat", turnId: "turn", streamId: "stream", ownerId: "owner",
-      workspaceId: "workspace", providerId: "provider", model: "model",
+      chatId: "chat",
+      turnId: "turn",
+      streamId: "stream",
+      ownerId: "owner",
+      workspaceId: "workspace",
+      providerId: "provider",
+      model: "model",
       ...(inlineVisuals ? { inlineVisuals } : {}),
       onTurnAccepted: () => undefined,
     });
@@ -108,24 +126,37 @@ test("turns sent from a paired device follow the desktop's inline visuals settin
 });
 
 test("On request declares the same drawing tools with or without /visualize and refuses them without it", async () => {
-  const build = (preferArtifactThisTurn: boolean) => createGenerativeUiExtension({
-    workspaceRoot: undefined,
-    onArtifact: () => undefined,
-    onUiVisual: () => undefined,
-    onRequest: true,
-    preferArtifactThisTurn,
-  });
+  const build = (preferArtifactThisTurn: boolean) =>
+    createGenerativeUiExtension({
+      workspaceRoot: undefined,
+      onArtifact: () => undefined,
+      onUiVisual: () => undefined,
+      onRequest: true,
+      preferArtifactThisTurn,
+    });
   const declaration = (extension: ReturnType<typeof build>) =>
-    JSON.stringify(extension.tools?.map((tool) => ({ name: tool.name, description: tool.description, parameters: tool.parameters })));
+    JSON.stringify(
+      extension.tools?.map((tool) => ({
+        name: tool.name,
+        description: tool.description,
+        parameters: tool.parameters,
+      })),
+    );
   const plain = build(false);
   const visualize = build(true);
   assert.equal(declaration(plain), declaration(visualize));
   assert.match(plain.systemPrompt ?? "", /On request/u);
 
   const renderArtifact = plain.tools?.find((tool) => tool.name === GENERATIVE_UI_TOOL_NAME);
-  await assert.rejects(renderArtifact!.execute("c1", { title: "T", html: "<p>x</p>" }), /not available in this turn.*\/visualize/su);
+  await assert.rejects(
+    renderArtifact!.execute("c1", { title: "T", html: "<p>x</p>" }),
+    /not available in this turn.*\/visualize/su,
+  );
   const renderUi = plain.tools?.find((tool) => tool.name === "render_ui");
-  await assert.rejects(renderUi!.execute("c2", { title: "B", markup: "<Visual><Text>Hi</Text></Visual>" }), /not available in this turn/u);
+  await assert.rejects(
+    renderUi!.execute("c2", { title: "B", markup: "<Visual><Text>Hi</Text></Visual>" }),
+    /not available in this turn/u,
+  );
   // The design guide is reading, not drawing, so it still answers.
   const guide = plain.tools?.find((tool) => tool.name === "visualize_guide");
   await guide!.execute("g", { modules: ["catalog"] });
@@ -133,11 +164,15 @@ test("On request declares the same drawing tools with or without /visualize and 
   const drawn: string[] = [];
   const allowed = createGenerativeUiExtension({
     workspaceRoot: undefined,
-    onArtifact: (artifact) => { drawn.push(artifact.title); },
+    onArtifact: (artifact) => {
+      drawn.push(artifact.title);
+    },
     onRequest: true,
     preferArtifactThisTurn: true,
   });
-  await allowed.tools?.find((tool) => tool.name === GENERATIVE_UI_TOOL_NAME)!.execute("c3", { title: "Shown", html: "<p>x</p>" });
+  await allowed.tools
+    ?.find((tool) => tool.name === GENERATIVE_UI_TOOL_NAME)!
+    .execute("c3", { title: "Shown", html: "<p>x</p>" });
   assert.deepEqual(drawn, ["Shown"]);
 });
 
@@ -149,17 +184,32 @@ test("an On request chat with broken staging still answers a plain turn and refu
   await store.initialize();
   const chat = { id: "chat-1", messages: [] };
 
-  const plain = await prepareGenerativeUiTurnStore(store, chat, { onRequest: true, visualize: false });
+  const plain = await prepareGenerativeUiTurnStore(store, chat, {
+    onRequest: true,
+    visualize: false,
+  });
   assert.match(plain.unavailableReason ?? "", /unreadable.*needs repair/su);
-  const extension = createGenerativeUiExtension({ onArtifact: () => undefined, onRequest: true, preferArtifactThisTurn: false });
+  const extension = createGenerativeUiExtension({
+    onArtifact: () => undefined,
+    onRequest: true,
+    preferArtifactThisTurn: false,
+  });
   await assert.rejects(
-    extension.tools!.find((tool) => tool.name === GENERATIVE_UI_TOOL_NAME)!.execute("c1", { title: "T", html: "<p>x</p>" }),
+    extension
+      .tools!.find((tool) => tool.name === GENERATIVE_UI_TOOL_NAME)!
+      .execute("c1", { title: "T", html: "<p>x</p>" }),
     /not available in this turn/u,
   );
 
   // A turn that may draw still fails before drawing over a broken store.
-  await assert.rejects(prepareGenerativeUiTurnStore(store, chat, { onRequest: true, visualize: true }), /needs repair/u);
-  await assert.rejects(prepareGenerativeUiTurnStore(store, chat, { onRequest: false, visualize: false }), /needs repair/u);
+  await assert.rejects(
+    prepareGenerativeUiTurnStore(store, chat, { onRequest: true, visualize: true }),
+    /needs repair/u,
+  );
+  await assert.rejects(
+    prepareGenerativeUiTurnStore(store, chat, { onRequest: false, visualize: false }),
+    /needs repair/u,
+  );
   assert.equal(await fs.readFile(file, "utf8"), "{");
 });
 
@@ -168,19 +218,39 @@ test("an On request chat with an unrecovered visual still answers a plain turn",
   const store = new GenerativeUiArtifactStore({ root: () => root });
   await store.initialize();
   const staged: ChatHtmlArtifactV1 = {
-    version: 1, kind: "html", id: "media-1", title: "Chart", mimeType: "text/html", size: 12, mediaId: "media-1",
+    version: 1,
+    kind: "html",
+    id: "media-1",
+    title: "Chart",
+    mimeType: "text/html",
+    size: 12,
+    mediaId: "media-1",
   };
-  await store.stage({ chatId: "chat-1", generationId: "gen-1", artifact: staged, html: "<p>hello</p>" });
+  await store.stage({
+    chatId: "chat-1",
+    generationId: "gen-1",
+    artifact: staged,
+    html: "<p>hello</p>",
+  });
   const orphaned = { id: "chat-1", messages: [] };
 
-  const plain = await prepareGenerativeUiTurnStore(store, orphaned, { onRequest: true, visualize: false });
+  const plain = await prepareGenerativeUiTurnStore(store, orphaned, {
+    onRequest: true,
+    visualize: false,
+  });
   assert.equal(plain.pending.count, 1);
   assert.match(plain.unavailableReason ?? "", /could not be recovered/u);
-  await assert.rejects(prepareGenerativeUiTurnStore(store, orphaned, { onRequest: true, visualize: true }), /could not be recovered/u);
+  await assert.rejects(
+    prepareGenerativeUiTurnStore(store, orphaned, { onRequest: true, visualize: true }),
+    /could not be recovered/u,
+  );
 
   // Once the chat holds the visual, reconcile commits it and drawing is allowed.
   const persisted = { id: "chat-1", messages: [{ role: "assistant", htmlArtifacts: [staged] }] };
-  const visualize = await prepareGenerativeUiTurnStore(store, persisted, { onRequest: true, visualize: true });
+  const visualize = await prepareGenerativeUiTurnStore(store, persisted, {
+    onRequest: true,
+    visualize: true,
+  });
   assert.deepEqual(visualize, { pending: { bytes: 0, count: 0 } });
 });
 
@@ -189,21 +259,40 @@ test("a reconcile failure on a plain On request turn comes back for the log, and
   const real = new GenerativeUiArtifactStore({ root: () => root });
   await real.initialize();
   const staged: ChatHtmlArtifactV1 = {
-    version: 1, kind: "html", id: "media-1", title: "Chart", mimeType: "text/html", size: 12, mediaId: "media-1",
+    version: 1,
+    kind: "html",
+    id: "media-1",
+    title: "Chart",
+    mimeType: "text/html",
+    size: 12,
+    mediaId: "media-1",
   };
-  await real.stage({ chatId: "chat-1", generationId: "gen-1", artifact: staged, html: "<p>hello</p>" });
+  await real.stage({
+    chatId: "chat-1",
+    generationId: "gen-1",
+    artifact: staged,
+    html: "<p>hello</p>",
+  });
   const failure = new Error("Generative UI artifact staging is at capacity.");
   const store = {
     availability: () => real.availability(),
     usageByChat: (chatId: string) => real.usageByChat(chatId),
-    reconcilePersisted: async () => { throw failure; },
+    reconcilePersisted: async () => {
+      throw failure;
+    },
   };
   const persisted = { id: "chat-1", messages: [{ role: "assistant", htmlArtifacts: [staged] }] };
 
-  const plain = await prepareGenerativeUiTurnStore(store, persisted, { onRequest: true, visualize: false });
+  const plain = await prepareGenerativeUiTurnStore(store, persisted, {
+    onRequest: true,
+    visualize: false,
+  });
   assert.match(plain.unavailableReason ?? "", /could not be recovered/u);
   assert.equal(plain.reconcileError, failure);
-  await assert.rejects(prepareGenerativeUiTurnStore(store, persisted, { onRequest: true, visualize: true }), failure);
+  await assert.rejects(
+    prepareGenerativeUiTurnStore(store, persisted, { onRequest: true, visualize: true }),
+    failure,
+  );
 });
 
 test("the turn refusal names the On request condition only for the drawing tools", () => {
@@ -211,14 +300,25 @@ test("the turn refusal names the On request condition only for the drawing tools
   assert.match(generativeUiUnavailableReason(GENERATIVE_UI_TOOL_NAME, off) ?? "", /On request/u);
   assert.match(generativeUiUnavailableReason("render_ui", off) ?? "", /\/visualize/u);
   assert.equal(generativeUiUnavailableReason("visualize_guide", off), undefined);
-  assert.equal(generativeUiUnavailableReason(GENERATIVE_UI_TOOL_NAME, { onRequest: true, visualize: true }), undefined);
-  assert.equal(generativeUiUnavailableReason(GENERATIVE_UI_TOOL_NAME, { onRequest: false, visualize: false }), undefined);
+  assert.equal(
+    generativeUiUnavailableReason(GENERATIVE_UI_TOOL_NAME, { onRequest: true, visualize: true }),
+    undefined,
+  );
+  assert.equal(
+    generativeUiUnavailableReason(GENERATIVE_UI_TOOL_NAME, { onRequest: false, visualize: false }),
+    undefined,
+  );
 });
 
 test("a remote turn tells the model its visuals arrive as still images", () => {
   const surface = remoteGenerationSurface({
-    chatId: "chat", turnId: "turn", streamId: "stream", ownerId: "owner",
-    workspaceId: "workspace", providerId: "provider", model: "model",
+    chatId: "chat",
+    turnId: "turn",
+    streamId: "stream",
+    ownerId: "owner",
+    workspaceId: "workspace",
+    providerId: "provider",
+    model: "model",
     onTurnAccepted: () => undefined,
   });
   const remote = createGenerativeUiExtensionRuntime({
@@ -227,7 +327,10 @@ test("a remote turn tells the model its visuals arrive as still images", () => {
     audience: surface.options.visualAudience,
   });
   assert.match(remote.turnNote, /still image/iu);
-  const desktop = createGenerativeUiExtensionRuntime({ workspaceRoot: undefined, onArtifact: () => undefined });
+  const desktop = createGenerativeUiExtensionRuntime({
+    workspaceRoot: undefined,
+    onArtifact: () => undefined,
+  });
   assert.equal(desktop.turnNote, "");
   // The audience is told after the message, so system is the same on both.
   assert.equal(remote.extension.systemPrompt, desktop.extension.systemPrompt);
@@ -250,7 +353,10 @@ test("path rendering is refused without a workspace while inline html works", as
 
 test("visualize_guide returns only the requested design modules", async () => {
   const root = await workspace();
-  const extension = createGenerativeUiExtension({ workspaceRoot: root, onArtifact: () => undefined });
+  const extension = createGenerativeUiExtension({
+    workspaceRoot: root,
+    onArtifact: () => undefined,
+  });
   const guide = extension.tools?.find((candidate) => candidate.name === "visualize_guide");
   assert.ok(guide);
   assert.equal(piRuntimeReplayPolicy(guide), "never");
@@ -275,16 +381,23 @@ test("with inline visuals off, the guide still teaches artifact markup and never
   assert.match(guide.description, /workspace_artifact/u);
   const result = await guide.execute("g", { modules: ["catalog"] });
   const text = result.content[0]?.type === "text" ? result.content[0].text : "";
-  for (const name of Object.keys(AIDEN_UI_CATALOG)) assert.match(text, new RegExp(`\`${name}\``, "u"), name);
+  for (const name of Object.keys(AIDEN_UI_CATALOG))
+    assert.match(text, new RegExp(`\`${name}\``, "u"), name);
   assert.match(text, /setState/u);
   assert.match(text, /64 KiB/u);
   assert.doesNotMatch(`${guide.description}\n${text}`, /render_ui|render_artifact|inline visual/iu);
   // The HTML-only modules teach render_artifact, which is not offered then.
-  await assert.rejects(guide.execute("g2", { modules: ["html"] }), /must be one or more of: catalog\./u);
+  await assert.rejects(
+    guide.execute("g2", { modules: ["html"] }),
+    /must be one or more of: catalog\./u,
+  );
 });
 
 test("the system prompt points the model at the guide and keeps replies complete without visuals", () => {
-  const extension = createGenerativeUiExtension({ workspaceRoot: undefined, onArtifact: () => undefined });
+  const extension = createGenerativeUiExtension({
+    workspaceRoot: undefined,
+    onArtifact: () => undefined,
+  });
   assert.match(extension.systemPrompt ?? "", /visualize_guide/u);
   assert.match(extension.systemPrompt ?? "", /takeaway/iu);
   const preferred = createGenerativeUiExtensionRuntime({
@@ -302,7 +415,9 @@ test("with the design canvas offered, mockups and pages go to design files rathe
     assert.ok(renderArtifact);
     return { prompt: extension.systemPrompt ?? "", description: renderArtifact.description };
   };
-  const chat = steering(createGenerativeUiExtension({ workspaceRoot: undefined, onArtifact: () => undefined }));
+  const chat = steering(
+    createGenerativeUiExtension({ workspaceRoot: undefined, onArtifact: () => undefined }),
+  );
   assert.match(chat.prompt, /UI mockup/u);
   assert.match(chat.description, /UI mockups/u);
   assert.doesNotMatch(chat.prompt, /design canvas/iu);
@@ -324,7 +439,10 @@ test("with the design canvas offered, mockups and pages go to design files rathe
     // Mockups, screens and dashboards are only ever named as what does not belong inline.
     const inlineUses = canvas.prompt.replace(/[^.]*design canvas[^.]*\./giu, "");
     assert.doesNotMatch(inlineUses, /mockup|dashboard|screen/iu);
-    assert.doesNotMatch(canvas.description.replace(/[^;.]*design canvas[^;.]*/giu, ""), /mockup|dashboard|screen/iu);
+    assert.doesNotMatch(
+      canvas.description.replace(/[^;.]*design canvas[^;.]*/giu, ""),
+      /mockup|dashboard|screen/iu,
+    );
   }
   assert.doesNotMatch(chat.prompt + chat.description, /design_mode/u);
 });
@@ -355,7 +473,11 @@ test("while design mode can be asked for, whole pages and several directions go 
 
 test("one rule says where a visual goes, naming only the destinations this turn has tools for", () => {
   const prompt = (options: Partial<Parameters<typeof createGenerativeUiExtension>[0]>) =>
-    createGenerativeUiExtension({ workspaceRoot: undefined, onArtifact: () => undefined, ...options }).systemPrompt ?? "";
+    createGenerativeUiExtension({
+      workspaceRoot: undefined,
+      onArtifact: () => undefined,
+      ...options,
+    }).systemPrompt ?? "";
   const rule = (text: string) => /Where a visual goes:[^\n]*/u.exec(text)?.[0] ?? "";
 
   // Inline visuals alone leave nothing to choose between.
@@ -364,7 +486,10 @@ test("one rule says where a visual goes, naming only the destinations this turn 
   // In design mode, a dashboard the person will check daily still goes to Artifacts, screens go on the canvas and
   // pictures come from the image tools.
   const designMode = rule(prompt({ designCanvas: true, workspaceArtifacts: true, images: true }));
-  assert.match(designMode, /dashboard they check daily[^;]*workspace_artifact[^;]*even in design mode/u);
+  assert.match(
+    designMode,
+    /dashboard they check daily[^;]*workspace_artifact[^;]*even in design mode/u,
+  );
   assert.match(designMode, /screens[^;]*design canvas as design\/\*\.html/u);
   assert.match(designMode, /generate_image/u);
   assert.doesNotMatch(designMode, /design_mode/u);
@@ -375,10 +500,16 @@ test("one rule says where a visual goes, naming only the destinations this turn 
   assert.doesNotMatch(chatWithArtifacts, /design canvas|design_mode|generate_image/u);
   // A turn that cannot use design mode is not told about it at all.
   assert.doesNotMatch(chatWithArtifacts, /design mode/u);
-  assert.match(rule(prompt({ workspaceArtifacts: true, designModeOffered: true })), /workspace_artifact\), even in design mode/u);
+  assert.match(
+    rule(prompt({ workspaceArtifacts: true, designModeOffered: true })),
+    /workspace_artifact\), even in design mode/u,
+  );
   // A paired-device turn keeps the same system prompt so the chat's cached
   // prefix holds; workspace_artifact calls are refused at call time.
-  assert.equal(prompt({ workspaceArtifacts: true, audience: "remote" }), prompt({ workspaceArtifacts: true }));
+  assert.equal(
+    prompt({ workspaceArtifacts: true, audience: "remote" }),
+    prompt({ workspaceArtifacts: true }),
+  );
 });
 
 test("render_artifact takes a column or wide layout and hands it to the host", async () => {
@@ -395,7 +526,10 @@ test("render_artifact takes a column or wide layout and hands it to the host", a
   await tool.execute("call-1", { title: "Board", html: "<p>a</p>", layout: "wide" });
   await tool.execute("call-2", { title: "Card", html: "<p>b</p>" });
   await tool.execute("call-3", { title: "Card", html: "<p>c</p>", layout: "column" });
-  await assert.rejects(tool.execute("call-4", { title: "X", html: "<p>d</p>", layout: "huge" }), /layout/iu);
+  await assert.rejects(
+    tool.execute("call-4", { title: "X", html: "<p>d</p>", layout: "huge" }),
+    /layout/iu,
+  );
   assert.deepEqual(seen, ["wide", "column", "column"]);
 });
 
@@ -449,7 +583,7 @@ test("render_artifact emits metadata only and never returns HTML to the model", 
   assert.equal(extension.id, GENERATIVE_UI_EXTENSION_ID);
   assert.equal(tool.name, GENERATIVE_UI_TOOL_NAME);
   assert.equal(piRuntimeReplayPolicy(tool), "never");
-  const html = "<h1>Chart</h1><canvas id=\"c\"></canvas>";
+  const html = '<h1>Chart</h1><canvas id="c"></canvas>';
   const result = await tool.execute("call-1", { title: "Chart", html });
   assert.equal(result.content[0]?.type, "text");
   assert.doesNotMatch(result.content[0]?.type === "text" ? result.content[0].text : "", /<canvas/u);
@@ -501,11 +635,16 @@ test("same-generation title replaces the previous staged artifact", async () => 
   });
   const tool = extension.tools?.[0];
   assert.ok(tool);
-  const resultText = (result: { content: { type: string; text?: string }[] }) => result.content.map((part) => part.text ?? "").join("");
+  const resultText = (result: { content: { type: string; text?: string }[] }) =>
+    result.content.map((part) => part.text ?? "").join("");
   const first = await tool.execute("call-a", { title: "Chart", html: "<p>aaa</p>" });
   const second = await tool.execute("call-b", { title: "Chart", html: "<p>bbb</p>" });
   assert.match(resultText(first), /^Rendered artifact "Chart"/u);
-  assert.match(resultText(second), /Replaced the artifact "Chart" in place/u, "Aiden hears that the redraw replaced the first");
+  assert.match(
+    resultText(second),
+    /Replaced the artifact "Chart" in place/u,
+    "Aiden hears that the redraw replaced the first",
+  );
   assert.equal(artifacts.length, 2);
   assert.equal(artifacts[0]?.mediaId, artifacts[1]?.mediaId);
   assert.equal(artifacts[0]?.size, artifacts[1]?.size);
@@ -522,14 +661,21 @@ test("a same-title replace the host does not show is not reported as rendered, a
   });
   const tool = extension.tools?.[0];
   assert.ok(tool);
-  const resultText = (result: { content: { type: string; text?: string }[] }) => result.content.map((part) => part.text ?? "").join("");
+  const resultText = (result: { content: { type: string; text?: string }[] }) =>
+    result.content.map((part) => part.text ?? "").join("");
   await tool.execute("call-a", { title: "Chart", html: "<p>aaa</p>" });
   show = false;
   const hidden = resultText(await tool.execute("call-b", { title: "Chart", html: "<p>bbb</p>" }));
   assert.doesNotMatch(hidden, /Rendered|Replaced/u);
-  assert.match(hidden, /could not show this version of the artifact "Chart"[^]*still sees the version rendered earlier/u);
+  assert.match(
+    hidden,
+    /could not show this version of the artifact "Chart"[^]*still sees the version rendered earlier/u,
+  );
   show = true;
-  assert.match(resultText(await tool.execute("call-c", { title: "Chart", html: "<p>ccc</p>" })), /Replaced the artifact "Chart" in place/u);
+  assert.match(
+    resultText(await tool.execute("call-c", { title: "Chart", html: "<p>ccc</p>" })),
+    /Replaced the artifact "Chart" in place/u,
+  );
 });
 
 test("onArtifact receives the producing toolCallId and replaces keep the first call", async () => {
@@ -610,12 +756,12 @@ test("render_artifact shows a visual whose script will not compile and says whic
 
   const broken = [
     "<h1>Growth</h1>",
-    "<canvas id=\"c\"></canvas>",
+    '<canvas id="c"></canvas>',
     "<script>",
     "const data = [1, 2, 3];",
     "draw(data;",
     "</script>",
-    "<script type=\"application/json\">{not js</script>",
+    '<script type="application/json">{not js</script>',
     "<template><script>also not run (</script></template>",
     "<script>window.ok = true;</script>",
   ].join("\n");
@@ -623,28 +769,52 @@ test("render_artifact shows a visual whose script will not compile and says whic
   // The visual is still shown; the model learns what stops and where.
   assert.deepEqual(shown, [broken]);
   assert.match(result, /Script check: 1 problem found\. The visual is shown as written\./u);
-  assert.match(result, /The script starting on line 3 will not run: .+ \(line 5\)\. The reader sees the visual without anything that script draws/u);
+  assert.match(
+    result,
+    /The script starting on line 3 will not run: .+ \(line 5\)\. The reader sees the visual without anything that script draws/u,
+  );
   assert.match(result, /call render_artifact again with the same title/u);
 
-  const clean = text(await tool.execute("call-2", { title: "Fixed", html: broken.replace("draw(data;", "draw(data);") }));
+  const clean = text(
+    await tool.execute("call-2", {
+      title: "Fixed",
+      html: broken.replace("draw(data;", "draw(data);"),
+    }),
+  );
   assert.match(clean, /Script check: no problems found; all 2 inline scripts compile\./u);
 
-  const plain = text(await tool.execute("call-3", { title: "Plain", html: "<p>No scripts here</p>" }));
+  const plain = text(
+    await tool.execute("call-3", { title: "Plain", html: "<p>No scripts here</p>" }),
+  );
   assert.doesNotMatch(plain, /Script check/u);
 
-  const module = text(await tool.execute("call-4", { title: "Module", html: "<script type=\"module\">import x from './x.js'</script>" }));
+  const module = text(
+    await tool.execute("call-4", {
+      title: "Module",
+      html: "<script type=\"module\">import x from './x.js'</script>",
+    }),
+  );
   assert.match(module, /Not checked: 1 module script \(type="module"\)\./u);
   // Nothing was compiled, so the report does not claim that every script compiles.
-  assert.match(module, /Script check: no problems found; no inline script could be compiled here\./u);
+  assert.match(
+    module,
+    /Script check: no problems found; no inline script could be compiled here\./u,
+  );
   assert.doesNotMatch(module, /compiles/u);
 });
 
 test("a script in another language is not compiled as JavaScript, and one named JavaScript is", async () => {
-  const extension = createGenerativeUiExtension({ workspaceRoot: undefined, artifactNamespace: "gen-language", onArtifact: () => {} });
+  const extension = createGenerativeUiExtension({
+    workspaceRoot: undefined,
+    artifactNamespace: "gen-language",
+    onArtifact: () => {},
+  });
   const tool = extension.tools?.[0];
   assert.ok(tool);
   const run = async (html: string) =>
-    (await tool.execute("call", { title: "Lang", html })).content.map((part) => (part.type === "text" ? part.text : "")).join("");
+    (await tool.execute("call", { title: "Lang", html })).content
+      .map((part) => (part.type === "text" ? part.text : ""))
+      .join("");
   const vbscript = await run('<script language="vbscript">MsgBox "hi"</script>');
   assert.doesNotMatch(vbscript, /Script check/u);
   const javascript = await run('<script language="JavaScript">draw(;</script>');
@@ -655,15 +825,26 @@ test("a script in another language is not compiled as JavaScript, and one named 
 });
 
 test("a JavaScript type with parameters is reported as a script that will not run, while padding and case still run", async () => {
-  const extension = createGenerativeUiExtension({ workspaceRoot: undefined, artifactNamespace: "gen-type-params", onArtifact: () => {} });
+  const extension = createGenerativeUiExtension({
+    workspaceRoot: undefined,
+    artifactNamespace: "gen-type-params",
+    onArtifact: () => {},
+  });
   const tool = extension.tools?.[0];
   assert.ok(tool);
   const run = async (html: string) =>
-    (await tool.execute("call", { title: "Types", html })).content.map((part) => (part.type === "text" ? part.text : "")).join("");
+    (await tool.execute("call", { title: "Types", html })).content
+      .map((part) => (part.type === "text" ? part.text : ""))
+      .join("");
   // Chromium runs neither of these, so the reader sees nothing they draw.
-  const charset = await run('<p>Chart</p>\n<script type="text/javascript; charset=utf-8">draw();</script>');
+  const charset = await run(
+    '<p>Chart</p>\n<script type="text/javascript; charset=utf-8">draw();</script>',
+  );
   assert.match(charset, /Script check: 1 problem found/u);
-  assert.match(charset, /The script on line 2 will not run: its type "text\/javascript; charset=utf-8" has parameters/u);
+  assert.match(
+    charset,
+    /The script on line 2 will not run: its type "text\/javascript; charset=utf-8" has parameters/u,
+  );
   const version = await run('<script type="application/javascript;version=1">draw();</script>');
   assert.match(version, /Script check: 1 problem found/u);
   // A browser trims and lowercases the type before matching, so these run and are compiled.
@@ -675,18 +856,28 @@ test("a JavaScript type with parameters is reported as a script that will not ru
 });
 
 test("a script error after a line or paragraph separator names the line an editor shows", async () => {
-  const extension = createGenerativeUiExtension({ workspaceRoot: undefined, artifactNamespace: "gen-separator", onArtifact: () => {} });
+  const extension = createGenerativeUiExtension({
+    workspaceRoot: undefined,
+    artifactNamespace: "gen-separator",
+    onArtifact: () => {},
+  });
   const tool = extension.tools?.[0];
   assert.ok(tool);
   // HTML counts only the newlines, so the error is on the visual's line 3; JavaScript also breaks at U+2028 and U+2029.
-  const html = ["<p>Chart</p>", "<script>const label = 'a\u2028b\u2029c';", "draw(;</script>"].join("\n");
+  const html = ["<p>Chart</p>", "<script>const label = 'a\u2028b\u2029c';", "draw(;</script>"].join(
+    "\n",
+  );
   const result = await tool.execute("call-1", { title: "Sep", html });
   const text = result.content.map((part) => (part.type === "text" ? part.text : "")).join("");
   assert.match(text, /The script starting on line 2 will not run: .+ \(line 3\)\./u);
 });
 
 test("a script error inside an SVG is reported, and nothing the script says runs while it is checked", async () => {
-  const extension = createGenerativeUiExtension({ workspaceRoot: undefined, artifactNamespace: "gen-svg", onArtifact: () => {} });
+  const extension = createGenerativeUiExtension({
+    workspaceRoot: undefined,
+    artifactNamespace: "gen-svg",
+    onArtifact: () => {},
+  });
   const tool = extension.tools?.[0];
   assert.ok(tool);
   const marker = `__aiden_script_check_${Date.now()}`;
@@ -698,11 +889,18 @@ test("a script error inside an SVG is reported, and nothing the script says runs
 });
 
 test("a long script error is cut short without splitting a character", async () => {
-  const extension = createGenerativeUiExtension({ workspaceRoot: undefined, artifactNamespace: "gen-long-error", onArtifact: () => {} });
+  const extension = createGenerativeUiExtension({
+    workspaceRoot: undefined,
+    artifactNamespace: "gen-long-error",
+    onArtifact: () => {},
+  });
   const tool = extension.tools?.[0];
   assert.ok(tool);
   // V8 quotes the identifier, so the message is long and made of characters two code units wide.
-  const result = await tool.execute("call-1", { title: "Long", html: `<script>let a = 1 a${"𝑥".repeat(150)}</script>` });
+  const result = await tool.execute("call-1", {
+    title: "Long",
+    html: `<script>let a = 1 a${"𝑥".repeat(150)}</script>`,
+  });
   const text = result.content.map((part) => (part.type === "text" ? part.text : "")).join("");
   const message = /will not run: (.*) \(line 1\)/u.exec(text)?.[1] ?? "";
   assert.match(message, /^Unexpected identifier 'a𝑥+…$/u);

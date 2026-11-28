@@ -10,10 +10,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { decodeUtf8, readRegularFile } from "./regular-file-read.js";
 
 /** Match the complete destination basename plus the fixed recovery suffix. */
-export function isDataStoreRecoveryFile(
-  name: string,
-  destination: string,
-): boolean {
+export function isDataStoreRecoveryFile(name: string, destination: string): boolean {
   const prefix = `.${path.basename(destination)}.`;
   return (
     name.startsWith(prefix) &&
@@ -164,14 +161,9 @@ export class DataStore<T> {
           const parsed = JSON.parse(data) as unknown;
           await this.options.beforeLoadCommit?.();
           this.unsafe = this.options.isSafe ? !this.options.isSafe(parsed) : false;
-          const next = this.options.normalize
-            ? this.options.normalize(parsed)
-            : (parsed as T);
+          const next = this.options.normalize ? this.options.normalize(parsed) : (parsed as T);
           if (this.externalReloadPrevious !== undefined) {
-            this.options.beforeExternalCacheCommit?.(
-              this.externalReloadPrevious,
-              next,
-            );
+            this.options.beforeExternalCacheCommit?.(this.externalReloadPrevious, next);
           }
           this.cache = next;
         } catch (error) {
@@ -196,10 +188,7 @@ export class DataStore<T> {
           this.unsafe = false;
           const next = structuredClone(this.defaultValue);
           if (this.externalReloadPrevious !== undefined) {
-            this.options.beforeExternalCacheCommit?.(
-              this.externalReloadPrevious,
-              next,
-            );
+            this.options.beforeExternalCacheCommit?.(this.externalReloadPrevious, next);
           }
           this.cache = next;
         }
@@ -331,8 +320,8 @@ export class DataStore<T> {
     const prefix = `.${path.basename(destination)}.`;
     let names: string[];
     try {
-      names = (await fs.readdir(directory)).filter(
-        (name) => isDataStoreRecoveryFile(name, destination),
+      names = (await fs.readdir(directory)).filter((name) =>
+        isDataStoreRecoveryFile(name, destination),
       );
     } catch {
       return;
@@ -498,7 +487,11 @@ export class DataStore<T> {
    * dies or the disk fills mid-write, which would destroy a config the user
    * maintains by hand rather than merely losing a regenerable cache.
    */
-  private async writeNow(data: T, isCurrent: () => boolean, receipt?: DataStorePublicationReceipt): Promise<void> {
+  private async writeNow(
+    data: T,
+    isCurrent: () => boolean,
+    receipt?: DataStorePublicationReceipt,
+  ): Promise<void> {
     if (!isCurrent()) throw new Error("The renderer document is no longer active.");
     if (this.options.isSafe && !this.options.isSafe(data)) {
       throw new DataStoreUnsafeWriteError();
@@ -541,8 +534,7 @@ export class DataStore<T> {
       const hasPublishHooks =
         this.options.beforeWritePublish !== undefined ||
         this.options.afterWritePublish !== undefined;
-      const previous =
-        !hasPublishHooks || this.cache === null ? null : structuredClone(this.cache);
+      const previous = !hasPublishHooks || this.cache === null ? null : structuredClone(this.cache);
       this.options.beforeWritePublish?.(previous, data);
       // Publish the in-memory view in the same synchronous turn as the durable
       // replacement, before the post-publication authority fence. Work admitted

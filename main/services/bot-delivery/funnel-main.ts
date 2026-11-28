@@ -11,7 +11,11 @@ import { isAidenAppWindowFocused } from "../../windows/bot-bubbles-overlay-regis
 import { requestAppPath } from "../app-navigation.js";
 import { BOT_ROUTINE_FAILED_PREVIEW } from "../scheduled-bot-routines.js";
 import { showScheduledNotification } from "../schedule-notification.js";
-import { BOT_DELIVERY_REQUEST_PREFIX, createBotDeliveryFunnel, type BotDeliveryFunnel } from "./funnel.js";
+import {
+  BOT_DELIVERY_REQUEST_PREFIX,
+  createBotDeliveryFunnel,
+  type BotDeliveryFunnel,
+} from "./funnel.js";
 import { countedToday, createBotDeliveryGate } from "./gate.js";
 import { botStore } from "../bot-store.js";
 import { resolveBotInterruptions } from "../../../renderer/shared/bots.js";
@@ -33,15 +37,21 @@ let liveFunnel: BotDeliveryFunnel | undefined;
 export function botDeliveryFunnel(): BotDeliveryFunnel {
   return (liveFunnel ??= createBotDeliveryFunnel({
     log: botDeliveryLog,
-    ownsPeerFinal: async (botId, requestId) => (await import("../bot-peers/host-main.js")).botPeerHost.ownsFinal(botId, requestId),
-    peerPublication:async(botId,rootId)=>(await import("../bot-peers/host-main.js")).botPeerHost.finalPublication(botId,rootId),
-    peerSettled:async(botId,rootId)=>(await import("../bot-peers/host-main.js")).botPeerHost.settleFinalPublication(botId,rootId),
-    peerPending:async(botId,rootId)=>(await import("../bot-peers/host-main.js")).botPeerHost.retainFinalPublication(botId,rootId),
+    ownsPeerFinal: async (botId, requestId) =>
+      (await import("../bot-peers/host-main.js")).botPeerHost.ownsFinal(botId, requestId),
+    peerPublication: async (botId, rootId) =>
+      (await import("../bot-peers/host-main.js")).botPeerHost.finalPublication(botId, rootId),
+    peerSettled: async (botId, rootId) =>
+      (await import("../bot-peers/host-main.js")).botPeerHost.settleFinalPublication(botId, rootId),
+    peerPending: async (botId, rootId) =>
+      (await import("../bot-peers/host-main.js")).botPeerHost.retainFinalPublication(botId, rootId),
     gate: createBotDeliveryGate({
-      settings: async (botId) => resolveBotInterruptions((await botStore.get(botId))?.interruptions),
+      settings: async (botId) =>
+        resolveBotInterruptions((await botStore.get(botId))?.interruptions),
       // Proactive notifications that reached the person today count; held
       // rows count once released, suppressed ones never do.
-      sentToday: async (botId, dayStart, now) => countedToday(await botDeliveryLog.list(botId), dayStart, now),
+      sentToday: async (botId, dayStart, now) =>
+        countedToday(await botDeliveryLog.list(botId), dayStart, now),
       timeZone: () => Intl.DateTimeFormat().resolvedOptions().timeZone,
     }),
     botName: async (botId) => (await botStore.get(botId))?.name,
@@ -56,11 +66,16 @@ export function botDeliveryFunnel(): BotDeliveryFunnel {
           // A focused bubble mini chat isn't the app in front.
           if (isAidenAppWindowFocused()) return;
           if (!Notification.isSupported()) return;
-          const notification = new Notification({ title: input.title, body: bannerLine(input.body) });
+          const notification = new Notification({
+            title: input.title,
+            body: bannerLine(input.body),
+          });
           notification.on("click", () => {
             void Promise.resolve()
               .then(() => requestAppPath(`/bots/${encodeURIComponent(input.botId)}/chat`))
-              .catch((error: unknown) => logger.warn("bots", "Bot issue notification navigation failed.", error));
+              .catch((error: unknown) =>
+                logger.warn("bots", "Bot issue notification navigation failed.", error),
+              );
           });
           notification.show();
         } catch (error) {
@@ -83,7 +98,9 @@ export function botDeliveryFunnel(): BotDeliveryFunnel {
       const { telegramService } = await import("../telegram/telegram-service.js");
       await input.publication?.assertCurrent();
       await telegramService.deliverBotRoutineResult({
-        ...(input.publication ? {botIncarnation:input.publication.incarnation,publication:input.publication}:{}),
+        ...(input.publication
+          ? { botIncarnation: input.publication.incarnation, publication: input.publication }
+          : {}),
         botId: input.botId,
         requestId: input.requestId ?? `${BOT_DELIVERY_REQUEST_PREFIX}${input.dedupeKey}`,
         routineName: input.title,
@@ -110,10 +127,12 @@ function flushHeld(): Promise<void> {
 
 /** Send what quiet hours held back once it is due; re-arms for the next held row. */
 async function flushHeldOnce(): Promise<void> {
-  const next = await botDeliveryFunnel().flush(Date.now()).catch((error: unknown) => {
-    logger.warn("bots", "Held Bot messages could not be sent.", error);
-    return undefined;
-  });
+  const next = await botDeliveryFunnel()
+    .flush(Date.now())
+    .catch((error: unknown) => {
+      logger.warn("bots", "Held Bot messages could not be sent.", error);
+      return undefined;
+    });
   if (flushTimer) clearTimeout(flushTimer);
   flushTimer = undefined;
   if (next !== undefined && flushInterval) {

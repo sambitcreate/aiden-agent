@@ -3,27 +3,17 @@ import * as fs from "node:fs/promises";
 import test from "node:test";
 
 test("the onboarding reset closes the renderer before destructive cleanup and preserves unrelated local storage", async () => {
-  const source = await fs.readFile(
-    new URL("../index.ts", import.meta.url),
-    "utf8",
-  );
+  const source = await fs.readFile(new URL("../index.ts", import.meta.url), "utf8");
   const start = source.indexOf("async function requestOnboardingReset");
   const end = source.indexOf('ipcMain.handle("app:setCloseGuard"', start);
-  assert.ok(
-    start >= 0 && end > start,
-    "onboarding reset lifecycle is registered in main",
-  );
+  assert.ok(start >= 0 && end > start, "onboarding reset lifecycle is registered in main");
   const reset = source.slice(start, end);
 
   assert.match(reset, /shutdownStarted\s*\|\|\s*updateInstall\.armed/u);
   const authorize = reset.indexOf('authorizeProtectedAction(window, "close"');
-  const clearCompletion = reset.indexOf(
-    "await clearRendererOnboardingCompletion(window)",
-  );
+  const clearCompletion = reset.indexOf("await clearRendererOnboardingCompletion(window)");
   const persistWindowState = reset.indexOf("await persistMainWindowState(window)");
-  const closeRenderer = reset.indexOf(
-    "await closeRendererBeforeShutdown(window)",
-  );
+  const closeRenderer = reset.indexOf("await closeRendererBeforeShutdown(window)");
   const clearData = reset.indexOf("await resetOnboardingData()");
   const relaunch = reset.indexOf("app.relaunch()");
   const shutdown = reset.indexOf("await shutdownAndQuit(true)");
@@ -45,19 +35,9 @@ test("the onboarding reset closes the renderer before destructive cleanup and pr
     clearData > closeRenderer,
     "persistent setup is untouched until the renderer has closed",
   );
-  assert.ok(
-    relaunch > clearData,
-    "relaunch is armed only after destructive cleanup succeeds",
-  );
-  assert.ok(
-    shutdown > relaunch,
-    "normal service shutdown runs after relaunch is armed",
-  );
-  assert.doesNotMatch(
-    reset,
-    /clearStorageData/u,
-    "unrelated renderer preferences are preserved",
-  );
+  assert.ok(relaunch > clearData, "relaunch is armed only after destructive cleanup succeeds");
+  assert.ok(shutdown > relaunch, "normal service shutdown runs after relaunch is armed");
+  assert.doesNotMatch(reset, /clearStorageData/u, "unrelated renderer preferences are preserved");
   assert.match(reset, /protectedAction = "onboarding-reset"/u);
   assert.match(reset, /restoreRendererOnboardingCompletion/u);
   assert.match(
@@ -65,9 +45,5 @@ test("the onboarding reset closes the renderer before destructive cleanup and pr
     /protectedAction = null;[\s\S]*?await createMainWindow\(\)/u,
     "a recovered window restores normal close protection",
   );
-  assert.match(
-    reset,
-    /await createMainWindow\(\)/u,
-    "a failed post-close reset reopens the app",
-  );
+  assert.match(reset, /await createMainWindow\(\)/u, "a failed post-close reset reopens the app");
 });

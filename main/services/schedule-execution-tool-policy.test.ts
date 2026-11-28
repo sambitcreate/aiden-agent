@@ -69,7 +69,10 @@ async function executionHarness(
   webSearch: () => Promise<{ ready?: boolean }>,
   finish: [channel: string, payload: unknown] = ["chat:done", { content: "Done." }],
   extra: {
-    chats?: Record<string, { id: string; providerId?: string; model?: string; [key: string]: unknown }>;
+    chats?: Record<
+      string,
+      { id: string; providerId?: string; model?: string; [key: string]: unknown }
+    >;
     workspace?: { id: string };
     /** Runs while the generation is going, after it switched the chat to the task's model. */
     duringRun?: (chat: { providerId?: string; model?: string }) => void;
@@ -97,36 +100,38 @@ async function executionHarness(
       ipcMain: { broadcast: () => undefined },
       logger: { warn: () => undefined },
     },
-    "./chat-store.js": extra.chatStore ? { chatStore: extra.chatStore } : {
-      chatStore: {
-        get: async (id: string) => extra.chats?.[id] ?? chat,
-        appendMessage: async (
-          chatId: string,
-          message: (typeof appended)[number]["message"],
-          meta?: (typeof appended)[number]["meta"],
-        ) => {
-          appended.push({ chatId, message, meta });
-          // Like the real store, an append's model becomes the chat's model.
-          const target = extra.chats?.[chatId];
-          if (target && meta?.providerId) target.providerId = meta.providerId;
-          if (target && meta?.model) target.model = meta.model;
-          return chat;
+    "./chat-store.js": extra.chatStore
+      ? { chatStore: extra.chatStore }
+      : {
+          chatStore: {
+            get: async (id: string) => extra.chats?.[id] ?? chat,
+            appendMessage: async (
+              chatId: string,
+              message: (typeof appended)[number]["message"],
+              meta?: (typeof appended)[number]["meta"],
+            ) => {
+              appended.push({ chatId, message, meta });
+              // Like the real store, an append's model becomes the chat's model.
+              const target = extra.chats?.[chatId];
+              if (target && meta?.providerId) target.providerId = meta.providerId;
+              if (target && meta?.model) target.model = meta.model;
+              return chat;
+            },
+            setChatModelSelection: async (
+              chatId: string,
+              providerId: string,
+              model: string,
+              assertCurrent: (current: { providerId?: string; model?: string }) => void,
+            ) => {
+              const target = extra.chats?.[chatId];
+              if (!target) throw new Error("Chat not found");
+              assertCurrent(target);
+              target.providerId = providerId;
+              target.model = model;
+              return target;
+            },
+          },
         },
-        setChatModelSelection: async (
-          chatId: string,
-          providerId: string,
-          model: string,
-          assertCurrent: (current: { providerId?: string; model?: string }) => void,
-        ) => {
-          const target = extra.chats?.[chatId];
-          if (!target) throw new Error("Chat not found");
-          assertCurrent(target);
-          target.providerId = providerId;
-          target.model = model;
-          return target;
-        },
-      },
-    },
     "./workspace-folder-presence.js": { assertWorkspaceFolderPresent: async () => undefined },
     "./managed-worktree-admission.js": { assertManagedWorktreeAdmission: async () => undefined },
     "./follow-through/notice-delivery-main.js": {
@@ -140,7 +145,14 @@ async function executionHarness(
         getSettings: async () => ({}),
         getWorkspace: async (id: string) =>
           extra.workspace?.id === id
-            ? { ...extra.workspace, name: "Workspace", permission: "full", folderPath: "/workspace", createdAt: 1, updatedAt: 1 }
+            ? {
+                ...extra.workspace,
+                name: "Workspace",
+                permission: "full",
+                folderPath: "/workspace",
+                createdAt: 1,
+                updatedAt: 1,
+              }
             : null,
         getProvider: async () => null,
       },
@@ -160,7 +172,12 @@ async function executionHarness(
     },
     "./llm-client.js": {
       llmClient: {
-        beginChatTurn: () => ({ release() {}, settleAsyncWork() {}, reserveAppendPayload() {}, isActive: () => true }),
+        beginChatTurn: () => ({
+          release() {},
+          settleAsyncWork() {},
+          reserveAppendPayload() {},
+          isActive: () => true,
+        }),
         start: async (
           _streamId: string,
           params: StartedGeneration["params"],
@@ -171,10 +188,14 @@ async function executionHarness(
           if (extra.chatStore && params.chatId) {
             // As the generation client saves its answer: with the model fields
             // `generationModelMeta` gives for the options the run passed.
-            await extra.chatStore.appendMessage(params.chatId, { role: "assistant", content: "Done.", model: params.model }, {
-              expectedWorkspaceId: "workspace-1",
-              ...generationModelMeta(params, options.keepChatModel),
-            });
+            await extra.chatStore.appendMessage(
+              params.chatId,
+              { role: "assistant", content: "Done.", model: params.model },
+              {
+                expectedWorkspaceId: "workspace-1",
+                ...generationModelMeta(params, options.keepChatModel),
+              },
+            );
             owner.send(...finish);
             return true;
           }
@@ -218,7 +239,9 @@ async function executionHarness(
         name: "synthetic-execution-ports",
         setup(builder) {
           builder.onResolve({ filter: /.*/ }, (args) =>
-            args.importer.endsWith("/schedule-execution.ts") ? { path: args.path, external: true } : undefined,
+            args.importer.endsWith("/schedule-execution.ts")
+              ? { path: args.path, external: true }
+              : undefined,
           );
         },
       },
@@ -237,7 +260,9 @@ async function executionHarness(
     ensureChatId: async () => chat.id,
     recordRun: async (run: object) => ({ ...run, id: "run-1" }),
   };
-  const execution = createScheduleExecution(store as unknown as Parameters<typeof createScheduleExecution>[0]);
+  const execution = createScheduleExecution(
+    store as unknown as Parameters<typeof createScheduleExecution>[0],
+  );
   return {
     async run(scheduled: ScheduledTask) {
       current = scheduled;
@@ -309,7 +334,10 @@ test("an unattended Assistant run carries its approved provider fingerprint into
 
 test("a run stopped by a permission counts as failed", async (t) => {
   const sent = captureAnalyticsEvents(t);
-  const h = await executionHarness(notReady, ["chat:error", { message: "Blocked: this tool is read-only." }]);
+  const h = await executionHarness(notReady, [
+    "chat:error",
+    { message: "Blocked: this tool is read-only." },
+  ]);
   const run = await h.runToEnd(task());
   assert.equal(run.result, "blocked");
   assert.deepEqual(
@@ -320,16 +348,37 @@ test("a run stopped by a permission counts as failed", async (t) => {
 
 test("a scheduled run the person stops with the chat's Stop button is recorded as stopped, not as a failure", async (t) => {
   const sent = captureAnalyticsEvents(t);
-  const stopped = { content: "Half an answ", timeline: { version: 3, generationId: "g", status: "cancelled", startedAt: 1, finishedAt: 2, steps: [], cancellationOrigin: "user_stop" } };
+  const stopped = {
+    content: "Half an answ",
+    timeline: {
+      version: 3,
+      generationId: "g",
+      status: "cancelled",
+      startedAt: 1,
+      finishedAt: 2,
+      steps: [],
+      cancellationOrigin: "user_stop",
+    },
+  };
   const h = await executionHarness(notReady, ["chat:done", stopped]);
   const run = await h.runToEnd(task({ permission: "full", mcpServerIds: [] }));
   assert.equal(run.result, "blocked");
   assert.equal(run.cancelled, true, "the failure count skips it");
   assert.equal(run.output, "Half an answ", "the partial answer is kept");
   await analyticsSettled();
-  assert.deepEqual(sent.filter(({ event }) => event === "scheduled_task_ran"), [], "a stop is neither a success nor a failure");
+  assert.deepEqual(
+    sent.filter(({ event }) => event === "scheduled_task_ran"),
+    [],
+    "a stop is neither a success nor a failure",
+  );
 
-  const finished = await executionHarness(notReady, ["chat:done", { ...stopped, timeline: { ...stopped.timeline, status: "completed", cancellationOrigin: undefined } }]);
+  const finished = await executionHarness(notReady, [
+    "chat:done",
+    {
+      ...stopped,
+      timeline: { ...stopped.timeline, status: "completed", cancellationOrigin: undefined },
+    },
+  ]);
   const done = await finished.runToEnd(task({ permission: "full", mcpServerIds: [] }));
   assert.equal(done.result, "success");
   assert.equal(done.cancelled, undefined);
@@ -350,16 +399,35 @@ test("a task made in a chat runs there under the task's own policy, its prompt s
   // A chat-bound task always has a project, and a project task has no MCP
   // servers, so the policy that matters is the task's permission.
   const h = await executionHarness(notReady, undefined, {
-    chats: { "chat-origin": { id: "chat-origin", title: "Planning", workspaceId: "workspace-1", updatedAt: 1 } },
+    chats: {
+      "chat-origin": {
+        id: "chat-origin",
+        title: "Planning",
+        workspaceId: "workspace-1",
+        updatedAt: 1,
+      },
+    },
     workspace: { id: "workspace-1" },
   });
-  const { params, options } = await h.run(task({
-    permission: "read-only", mcpServerIds: [], workspaceId: "workspace-1", originChatId: "chat-origin",
-  }));
-  assert.equal(params.chatId, "chat-origin", "the answer is generated in the chat the task was made in");
+  const { params, options } = await h.run(
+    task({
+      permission: "read-only",
+      mcpServerIds: [],
+      workspaceId: "workspace-1",
+      originChatId: "chat-origin",
+    }),
+  );
+  assert.equal(
+    params.chatId,
+    "chat-origin",
+    "the answer is generated in the chat the task was made in",
+  );
   for (const name of APPROVAL_TOOL_NAMES) assert.ok(options.excludeToolNames.has(name), name);
   assert.equal(options.allowMcpTools, false);
-  assert.ok(options.excludeToolNames.has(SCHEDULE_TOOL_NAME), "a bound run still can't schedule more work");
+  assert.ok(
+    options.excludeToolNames.has(SCHEDULE_TOOL_NAME),
+    "a bound run still can't schedule more work",
+  );
   const prompt = h.appended.find((entry) => entry.message.role === "user");
   assert.equal(prompt?.chatId, "chat-origin");
   assert.equal(prompt?.message.notice?.source, "schedule");
@@ -370,28 +438,57 @@ test("a task run in its chat saves its prompt and answer there, and the stored c
   const directory = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-task-chat-model-"));
   t.after(() => fs.rm(directory, { recursive: true, force: true }));
   const chats = createChatStore(async () => directory);
-  const chosen = await chats.create({ workspaceId: "workspace-1", providerId: "chat-provider", model: "chat-model" });
+  const chosen = await chats.create({
+    workspaceId: "workspace-1",
+    providerId: "chat-provider",
+    model: "chat-model",
+  });
   const unset = await chats.create({ workspaceId: "workspace-1" });
-  const h = await executionHarness(notReady, undefined, { chatStore: chats, workspace: { id: "workspace-1" } });
+  const h = await executionHarness(notReady, undefined, {
+    chatStore: chats,
+    workspace: { id: "workspace-1" },
+  });
   for (const chat of [chosen, unset]) {
-    const { params } = await h.run(task({ id: `task-${chat.id}`, workspaceId: "workspace-1", originChatId: chat.id }));
+    const { params } = await h.run(
+      task({ id: `task-${chat.id}`, workspaceId: "workspace-1", originChatId: chat.id }),
+    );
     assert.equal(params.chatId, chat.id);
   }
 
   const after = await chats.get(chosen.id);
-  assert.deepEqual([after?.providerId, after?.model], ["chat-provider", "chat-model"], "the chat stays on the model the person chose");
+  assert.deepEqual(
+    [after?.providerId, after?.model],
+    ["chat-provider", "chat-model"],
+    "the chat stays on the model the person chose",
+  );
   const saved = after?.messages ?? [];
   assert.match(saved[0]?.content ?? "", /Summarize my inbox\./u, "the prompt is saved in the chat");
   assert.equal(saved[saved.length - 1]?.content, "Done.");
   assert.equal(saved[saved.length - 1]?.model, "model-1", "the answer says which model wrote it");
   const afterUnset = await chats.get(unset.id);
-  assert.deepEqual([afterUnset?.providerId, afterUnset?.model], [undefined, undefined], "a chat with no model doesn't take the task's");
+  assert.deepEqual(
+    [afterUnset?.providerId, afterUnset?.model],
+    [undefined, undefined],
+    "a chat with no model doesn't take the task's",
+  );
 });
 
 test("a task answering in a chat with another model leaves the chat on its own model", async () => {
-  const origin = { id: "chat-origin", title: "Planning", workspaceId: "workspace-1", updatedAt: 1, providerId: "chat-provider", model: "chat-model" };
-  const h = await executionHarness(notReady, undefined, { chats: { "chat-origin": origin }, workspace: { id: "workspace-1" } });
-  const { params, options } = await h.run(task({ workspaceId: "workspace-1", originChatId: "chat-origin" }));
+  const origin = {
+    id: "chat-origin",
+    title: "Planning",
+    workspaceId: "workspace-1",
+    updatedAt: 1,
+    providerId: "chat-provider",
+    model: "chat-model",
+  };
+  const h = await executionHarness(notReady, undefined, {
+    chats: { "chat-origin": origin },
+    workspace: { id: "workspace-1" },
+  });
+  const { params, options } = await h.run(
+    task({ workspaceId: "workspace-1", originChatId: "chat-origin" }),
+  );
   assert.equal(params.model, "model-1", "the task answers with its own model");
   assert.equal(options.keepChatModel, true, "nothing the run saves changes the chat's model");
   const notice = h.appended.find((entry) => entry.message.notice?.source === "schedule");
@@ -409,11 +506,23 @@ test("a task answering in a chat with another model leaves the chat on its own m
     },
   });
   await during.run(task({ workspaceId: "workspace-1", originChatId: "chat-picked" }));
-  assert.deepEqual([picked.providerId, picked.model], ["picked-provider", "picked-model"], "a model the person picked mid-run wins");
+  assert.deepEqual(
+    [picked.providerId, picked.model],
+    ["picked-provider", "picked-model"],
+    "a model the person picked mid-run wins",
+  );
 
   // A chat with no stored model stays that way.
-  const unset = { id: "chat-unset", title: "Planning", workspaceId: "workspace-1", updatedAt: 1 } as typeof origin;
-  const blank = await executionHarness(notReady, undefined, { chats: { "chat-unset": unset }, workspace: { id: "workspace-1" } });
+  const unset = {
+    id: "chat-unset",
+    title: "Planning",
+    workspaceId: "workspace-1",
+    updatedAt: 1,
+  } as typeof origin;
+  const blank = await executionHarness(notReady, undefined, {
+    chats: { "chat-unset": unset },
+    workspace: { id: "workspace-1" },
+  });
   await blank.run(task({ workspaceId: "workspace-1", originChatId: "chat-unset" }));
   assert.deepEqual([unset.providerId, unset.model], [undefined, undefined]);
 });

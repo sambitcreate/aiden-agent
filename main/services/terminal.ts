@@ -283,7 +283,10 @@ function trySpawnShell(
       // Retryable: try the next candidate.
     }
   }
-  const attempted = candidates.filter(Boolean).map((shell) => JSON.stringify(shell)).join(", ");
+  const attempted = candidates
+    .filter(Boolean)
+    .map((shell) => JSON.stringify(shell))
+    .join(", ");
   const causeMessage =
     lastError instanceof Error
       ? lastError.message
@@ -359,7 +362,9 @@ export class TerminalService {
     const workspaceIds = new Set(
       [...this.sessions.values()].map((session) => session.historyWorkspaceId),
     );
-    await Promise.all([...workspaceIds].map((workspaceId) => this.historyStore!.flush(workspaceId)));
+    await Promise.all(
+      [...workspaceIds].map((workspaceId) => this.historyStore!.flush(workspaceId)),
+    );
   }
 
   /**
@@ -425,14 +430,14 @@ export class TerminalService {
           .join(", ")}). Set $SHELL to an installed executable shell.`,
       );
     }
-    const { pty, shell: resolvedShell, preferredShellSkipped } = trySpawnShell(
-      executableCandidates,
-      this.options.spawnPty ?? spawn,
-      {
-        cwd,
-        env: { ...agentCommandEnvironment(), TERM: "xterm-256color" } as Record<string, string>,
-      },
-    );
+    const {
+      pty,
+      shell: resolvedShell,
+      preferredShellSkipped,
+    } = trySpawnShell(executableCandidates, this.options.spawnPty ?? spawn, {
+      cwd,
+      env: { ...agentCommandEnvironment(), TERM: "xterm-256color" } as Record<string, string>,
+    });
     if (!Number.isSafeInteger(pty.pid) || pty.pid <= 0) {
       // There is no session identity to audit, and node-pty's kill() also
       // signals its reported PID. With 0, either signal would hit our own
@@ -451,7 +456,9 @@ export class TerminalService {
     sessionIds.add(pty.pid);
     const invalidatedAtSpawnBoundary = ownerInvalidated();
     let settleExit: () => void = () => undefined;
-    const exited = new Promise<void>((resolve) => { settleExit = resolve; });
+    const exited = new Promise<void>((resolve) => {
+      settleExit = resolve;
+    });
     const session: TerminalSession = {
       id,
       workspaceId,
@@ -503,7 +510,11 @@ export class TerminalService {
       }
       // Persist new output (the store sanitizes and debounces the disk write).
       this.historyStore?.append(workspaceId, data);
-      try { this.outputObserver?.(workspaceId, data); } catch { /* Browser suggestions cannot interrupt terminal output. */ }
+      try {
+        this.outputObserver?.(workspaceId, data);
+      } catch {
+        /* Browser suggestions cannot interrupt terminal output. */
+      }
       current.pendingOutput += data;
       if (current.pendingOutput.length >= OUTPUT_COALESCE_MAX_CHARS) {
         this.flushOutput(id, current);
@@ -526,9 +537,11 @@ export class TerminalService {
     if (invalidatedDuringSubscription || ownerInvalidated()) {
       if (this.sessions.get(id) === session) this.terminate(id, session);
       removeOwnerInvalidation();
-      throw new Error(invalidatedAtSpawnBoundary
-        ? "The workspace changed before the terminal could start."
-        : "The renderer document changed before the terminal could start.");
+      throw new Error(
+        invalidatedAtSpawnBoundary
+          ? "The workspace changed before the terminal could start."
+          : "The renderer document changed before the terminal could start.",
+      );
     }
     // A shell can exit while the owner subscription is being installed.
     if (this.sessions.get(id) !== session) removeOwnerInvalidation();
@@ -578,7 +591,9 @@ export class TerminalService {
     const shellPid = session.pty.pid;
     const state = await (this.options.readForegroundState ?? readForegroundState)(shellPid);
     if (state === null) return null;
-    return state.group !== shellPid || state.running ? commandBaseName(session.resolvedShell) : null;
+    return state.group !== shellPid || state.running
+      ? commandBaseName(session.resolvedShell)
+      : null;
   }
 
   closeForWebContents(webContentsId: number): void {
@@ -603,7 +618,9 @@ export class TerminalService {
 
   /** Stop Aiden-owned shells and wait for their exit before removing a workspace. */
   async closeForWorkspaceAndWait(workspaceId: string, timeoutMs = 5_000): Promise<void> {
-    const sessions = [...this.sessions].filter(([, session]) => session.workspaceId === workspaceId);
+    const sessions = [...this.sessions].filter(
+      ([, session]) => session.workspaceId === workspaceId,
+    );
     for (const [id, session] of sessions) this.terminate(id, session);
     const pending = [...(this.pendingWorkspaceExits.get(workspaceId) ?? [])];
     if (this.unverifiableWorkspaces.has(workspaceId)) {
@@ -629,7 +646,9 @@ export class TerminalService {
     for (const sessionId of sessionIds) {
       let active: boolean;
       try {
-        active = await (this.options.sessionHasMembers ?? managedWorktreeSessionHasMembers)(sessionId);
+        active = await (this.options.sessionHasMembers ?? managedWorktreeSessionHasMembers)(
+          sessionId,
+        );
       } catch {
         throw new ManagedWorktreeProcessActiveError(
           "Aiden could not verify terminal jobs. Keep this worktree and try again after checking its processes.",

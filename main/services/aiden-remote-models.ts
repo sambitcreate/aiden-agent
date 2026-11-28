@@ -17,7 +17,10 @@ import {
 import { normalizeProviderThinkingLevel } from "../../renderer/shared/provider-thinking.js";
 import { isGenerationThinkingLevel } from "../../renderer/shared/generation-thinking.js";
 import { canUseGeminiChatModel } from "../../renderer/shared/gemini-usage-scope.js";
-import { acpHarnessUnavailableReason, isAcpHarnessProvider } from "../../renderer/shared/acp-harness.js";
+import {
+  acpHarnessUnavailableReason,
+  isAcpHarnessProvider,
+} from "../../renderer/shared/acp-harness.js";
 import { customModelThinkingLevels } from "../../renderer/shared/custom-model-options.js";
 import {
   resolveAgentSliderStop,
@@ -97,9 +100,12 @@ export function fittedThinkingLevel(
   requested: GenerationThinkingLevel | undefined,
 ): GenerationThinkingLevel | undefined {
   if (levels.length === 0) return undefined;
-  if (providerId === "google") return normalizeGoogleThinkingLevel(levels.filter(isGoogleThinkingLevel), requested);
-  if (providerId === "openai-codex") return normalizeCodexThinkingLevel(levels.filter(isCodexThinkingLevel), requested);
-  if (providerId === "anthropic") return normalizeAnthropicThinkingLevel(levels.filter(isAnthropicThinkingLevel), requested);
+  if (providerId === "google")
+    return normalizeGoogleThinkingLevel(levels.filter(isGoogleThinkingLevel), requested);
+  if (providerId === "openai-codex")
+    return normalizeCodexThinkingLevel(levels.filter(isCodexThinkingLevel), requested);
+  if (providerId === "anthropic")
+    return normalizeAnthropicThinkingLevel(levels.filter(isAnthropicThinkingLevel), requested);
   return normalizeProviderThinkingLevel(levels, requested);
 }
 
@@ -126,20 +132,29 @@ function projectAgentSlider(
       if (!stop.providerId || !stop.model) return { ...base, availability: "unassigned" };
       if (isAcpHarnessProvider(stop.providerId)) return { ...base, availability: "computer-only" };
       const resolution = resolveAgentSliderStop(stop, inventory);
-      const configuredProvider = inventory.providers.find((provider) => provider.id === stop.providerId);
-      const providerLabel = configuredProvider ? { providerLabel: bounded(configuredProvider.label, 256) } : {};
+      const configuredProvider = inventory.providers.find(
+        (provider) => provider.id === stop.providerId,
+      );
+      const providerLabel = configuredProvider
+        ? { providerLabel: bounded(configuredProvider.label, 256) }
+        : {};
       if (!resolution.ok) {
         const name = configuredProvider?.modelMetadata?.[stop.model]?.name;
-        const modelLabel = (resolution.reason === "not-signed-in" || resolution.reason === "hidden") && name
-          ? { modelLabel: bounded(name, 256) }
-          : {};
+        const modelLabel =
+          (resolution.reason === "not-signed-in" || resolution.reason === "hidden") && name
+            ? { modelLabel: bounded(name, 256) }
+            : {};
         return { ...base, ...providerLabel, ...modelLabel, availability: resolution.reason };
       }
       const projectedProvider = providers.find((provider) => provider.id === stop.providerId);
       const projected = projectedProvider?.models.find((model) => model.id === stop.model);
       if (!projectedProvider || !projected) return { ...base, availability: "computer-only" };
       const thinkingLevel = stop.thinkingLevel
-        ? fittedThinkingLevel(stop.providerId, (projected.thinkingLevels ?? []).filter(isGenerationThinkingLevel), stop.thinkingLevel)
+        ? fittedThinkingLevel(
+            stop.providerId,
+            (projected.thinkingLevels ?? []).filter(isGenerationThinkingLevel),
+            stop.thinkingLevel,
+          )
         : undefined;
       return {
         ...base,
@@ -197,7 +212,8 @@ export class AidenRemoteModelService {
       this.options.getSettings(),
     ]);
     const slider = readableAgentSlider(settings);
-    let serializedBytes = Buffer.byteLength('{"providers":[],"defaults":{}}', "utf8") +
+    let serializedBytes =
+      Buffer.byteLength('{"providers":[],"defaults":{}}', "utf8") +
       REMOTE_MODEL_CATALOG_RESERVE_BYTES +
       agentSliderBytesBound(slider);
     const providers: AidenRemoteProviderProjection[] = [];
@@ -220,7 +236,7 @@ export class AidenRemoteModelService {
       if (serializedBytes + baseBytes > MAX_REMOTE_MODEL_CATALOG_BYTES) break;
       serializedBytes += baseBytes;
 
-        const candidateArtwork = normalizeProviderArtwork(provider.artwork);
+      const candidateArtwork = normalizeProviderArtwork(provider.artwork);
       if (candidateArtwork) {
         const artworkBytes = Buffer.byteLength(JSON.stringify(candidateArtwork), "utf8") + 12;
         if (serializedBytes + artworkBytes <= MAX_REMOTE_MODEL_CATALOG_BYTES) {
@@ -238,9 +254,10 @@ export class AidenRemoteModelService {
           continue;
         }
         const metadata = provider.modelMetadata?.[id];
-        const configuredLevels = provider.kind === "openai" && metadata?.overrides?.effortControl
-          ? customModelThinkingLevels(metadata.overrides) ?? []
-          : undefined;
+        const configuredLevels =
+          provider.kind === "openai" && metadata?.overrides?.effortControl
+            ? (customModelThinkingLevels(metadata.overrides) ?? [])
+            : undefined;
         const thinkingLevels = (configuredLevels ?? metadata?.thinkingLevels)
           ?.slice(0, 8)
           .map((level) => bounded(level, 32));
@@ -248,35 +265,42 @@ export class AidenRemoteModelService {
         const googleThinkingLevels = safeThinkingLevels.filter(isGoogleThinkingLevel);
         const codexThinkingLevels = safeThinkingLevels.filter(isCodexThinkingLevel);
         const anthropicThinkingLevels = safeThinkingLevels.filter(isAnthropicThinkingLevel);
-        const savedThinkingLevel = provider.id === "google"
-          ? settings.googleThinkingByModel?.[id]
-          : provider.id === "openai-codex"
-            ? settings.codexThinkingByModel?.[id]
-            : provider.id === "anthropic"
-              ? settings.anthropicThinkingByModel?.[id]
-              : settings.providerThinkingByModel?.[provider.id]?.[id];
-        const defaultThinkingLevel = safeThinkingLevels.length === 0
-          ? undefined
-          : provider.id === "google"
-            ? normalizeGoogleThinkingLevel(googleThinkingLevels, savedThinkingLevel)
+        const savedThinkingLevel =
+          provider.id === "google"
+            ? settings.googleThinkingByModel?.[id]
             : provider.id === "openai-codex"
-              ? normalizeCodexThinkingLevel(codexThinkingLevels, savedThinkingLevel)
+              ? settings.codexThinkingByModel?.[id]
               : provider.id === "anthropic"
-                ? normalizeAnthropicThinkingLevel(anthropicThinkingLevels, savedThinkingLevel)
-                : normalizeProviderThinkingLevel(safeThinkingLevels, savedThinkingLevel);
+                ? settings.anthropicThinkingByModel?.[id]
+                : settings.providerThinkingByModel?.[provider.id]?.[id];
+        const defaultThinkingLevel =
+          safeThinkingLevels.length === 0
+            ? undefined
+            : provider.id === "google"
+              ? normalizeGoogleThinkingLevel(googleThinkingLevels, savedThinkingLevel)
+              : provider.id === "openai-codex"
+                ? normalizeCodexThinkingLevel(codexThinkingLevels, savedThinkingLevel)
+                : provider.id === "anthropic"
+                  ? normalizeAnthropicThinkingLevel(anthropicThinkingLevels, savedThinkingLevel)
+                  : normalizeProviderThinkingLevel(safeThinkingLevels, savedThinkingLevel);
         const model: AidenRemoteModelProjection = {
           id,
           label: bounded(metadata?.name ?? id, 256),
-          supportsImages: (metadata?.overrides?.vision ?? metadata?.vision) === true && metadata?.overrides?.maxImages !== 0,
+          supportsImages:
+            (metadata?.overrides?.vision ?? metadata?.vision) === true &&
+            metadata?.overrides?.maxImages !== 0,
           ...(isModelHidden(settings.hiddenModelsByProvider, provider.id, id)
             ? { hidden: true }
             : {}),
-          ...(safeThinkingLevels.length ? {
-            thinkingLevels: safeThinkingLevels,
-            defaultThinkingLevel,
-            thinkingCanDisable: configuredLevels
-              ? safeThinkingLevels.includes("off") : metadata?.thinkingCanDisable !== false,
-          } : {}),
+          ...(safeThinkingLevels.length
+            ? {
+                thinkingLevels: safeThinkingLevels,
+                defaultThinkingLevel,
+                thinkingCanDisable: configuredLevels
+                  ? safeThinkingLevels.includes("off")
+                  : metadata?.thinkingCanDisable !== false,
+              }
+            : {}),
         };
         const modelBytes = Buffer.byteLength(JSON.stringify(model), "utf8") + 1;
         if (serializedBytes + modelBytes > MAX_REMOTE_MODEL_CATALOG_BYTES) break;
@@ -285,9 +309,12 @@ export class AidenRemoteModelService {
       }
 
       if (projected.models.length > 0) providers.push(projected);
-      else serializedBytes -= baseBytes + (projected.artwork
-        ? Buffer.byteLength(JSON.stringify(projected.artwork), "utf8") + 12
-        : 0);
+      else
+        serializedBytes -=
+          baseBytes +
+          (projected.artwork
+            ? Buffer.byteLength(JSON.stringify(projected.artwork), "utf8") + 12
+            : 0);
     }
     const selectedProvider =
       providers.find(
@@ -295,24 +322,28 @@ export class AidenRemoteModelService {
           provider.id === settings.lastProviderId && provider.models.some((model) => !model.hidden),
       ) ?? providers.find((provider) => provider.models.some((model) => !model.hidden));
     // A saved model wins; otherwise the provider's own default (Pi's, for built-ins), then its first shown model.
-    const providerDefault = configured.find((entry) => entry.id === selectedProvider?.id)?.defaultModel;
+    const providerDefault = configured.find(
+      (entry) => entry.id === selectedProvider?.id,
+    )?.defaultModel;
     const selectedModel =
       selectedProvider?.models.find((model) => model.id === settings.lastModel && !model.hidden) ??
       selectedProvider?.models.find((model) => model.id === providerDefault && !model.hidden) ??
       selectedProvider?.models.find((model) => !model.hidden);
     // With a slider, a new chat starts on the computer's last stop, level
     // included, but only when the default is exactly that last model.
-    const lastThinkingLevel = slider &&
-      selectedProvider && selectedModel &&
+    const lastThinkingLevel =
+      slider &&
+      selectedProvider &&
+      selectedModel &&
       selectedProvider.id === settings.lastProviderId &&
       selectedModel.id === settings.lastModel &&
       settings.lastThinkingLevel
-      ? fittedThinkingLevel(
-        selectedProvider.id,
-        (selectedModel.thinkingLevels ?? []).filter(isGenerationThinkingLevel),
-        settings.lastThinkingLevel,
-      )
-      : undefined;
+        ? fittedThinkingLevel(
+            selectedProvider.id,
+            (selectedModel.thinkingLevels ?? []).filter(isGenerationThinkingLevel),
+            settings.lastThinkingLevel,
+          )
+        : undefined;
     const projection: AidenRemoteModelsProjection = {
       providers,
       defaults: {
@@ -320,7 +351,9 @@ export class AidenRemoteModelService {
         ...(selectedModel ? { modelId: selectedModel.id } : {}),
         ...(lastThinkingLevel ? { thinkingLevel: lastThinkingLevel } : {}),
       },
-      ...(slider ? { agentSlider: projectAgentSlider(slider, configured, providers, settings) } : {}),
+      ...(slider
+        ? { agentSlider: projectAgentSlider(slider, configured, providers, settings) }
+        : {}),
     };
     if (Buffer.byteLength(JSON.stringify(projection), "utf8") > MAX_REMOTE_MODEL_CATALOG_BYTES) {
       throw new AidenRemoteServiceError(
@@ -360,11 +393,13 @@ export class AidenRemoteModelService {
         400,
       );
     }
-    if (!canUseGeminiChatModel(
-      settings.geminiUsageScope,
-      provider.id,
-      options.allowExistingPinnedGemini === true,
-    )) {
+    if (
+      !canUseGeminiChatModel(
+        settings.geminiUsageScope,
+        provider.id,
+        options.allowExistingPinnedGemini === true,
+      )
+    ) {
       throw new AidenRemoteServiceError(
         "invalid_request",
         "Google chat models are off while Gemini is configured for transcription only.",

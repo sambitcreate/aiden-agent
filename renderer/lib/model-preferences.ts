@@ -82,7 +82,8 @@ export async function saveModelPreferences(
       queryClient.ensureQueryData({ queryKey: queryKeys.settings, queryFn: settingsApi.get })
     );
   }
-  if (previous) queryClient.setQueryData<AppSettings>(queryKeys.settings, { ...previous, ...patch });
+  if (previous)
+    queryClient.setQueryData<AppSettings>(queryKeys.settings, { ...previous, ...patch });
   const ticket = ++queue.latest;
   const write = queue.tail.catch(() => undefined).then(() => settingsApi.set(patch));
   queue.tail = write;

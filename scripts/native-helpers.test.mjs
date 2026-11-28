@@ -1,7 +1,15 @@
 /* global Buffer */
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -138,13 +146,25 @@ test("checked-in prebuilt trees carry all helpers, executable bits, and a matchi
     for (const helper of NATIVE_HELPERS) {
       const file = path.join(dir, `aiden-${helper}`);
       assert.ok(existsSync(file), `${target} missing aiden-${helper}`);
-      assert.ok((readFileSync(file).readUInt32BE(0) >>> 0) !== 0, `${helper} is empty`);
+      assert.ok(readFileSync(file).readUInt32BE(0) >>> 0 !== 0, `${helper} is empty`);
       // Manifest checksum must match the shipped bytes, and the recorded
       // source hash must match the current sources (staleness detection).
-      assert.equal(nativeHelperFileHash(file), manifest.helpers?.[helper]?.sha256, `${target}/aiden-${helper} checksum mismatch`);
-      assert.equal(nativeHelperSourceHash(repositoryRoot, helper), manifest.helpers?.[helper]?.source, `${target}/aiden-${helper} source hash mismatch`);
+      assert.equal(
+        nativeHelperFileHash(file),
+        manifest.helpers?.[helper]?.sha256,
+        `${target}/aiden-${helper} checksum mismatch`,
+      );
+      assert.equal(
+        nativeHelperSourceHash(repositoryRoot, helper),
+        manifest.helpers?.[helper]?.source,
+        `${target}/aiden-${helper} source hash mismatch`,
+      );
       // Executable bit must survive into the bundle.
-      assert.notEqual(statSync(file).mode & 0o111, 0, `${target}/aiden-${helper} is not executable`);
+      assert.notEqual(
+        statSync(file).mode & 0o111,
+        0,
+        `${target}/aiden-${helper} is not executable`,
+      );
     }
   }
 });

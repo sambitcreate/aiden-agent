@@ -13,7 +13,13 @@ export const APP_CONTROL_IDS = [
   "models.newChat",
 ] as const;
 export type AppControlId = (typeof APP_CONTROL_IDS)[number];
-export const APP_CONTROL_TOPICS = ["appearance", "memory", "web-search", "skills", "models"] as const;
+export const APP_CONTROL_TOPICS = [
+  "appearance",
+  "memory",
+  "web-search",
+  "skills",
+  "models",
+] as const;
 export type AppControlTopic = (typeof APP_CONTROL_TOPICS)[number];
 /**
  * The vocabulary paired phones understand (Remote `chat-ui-panels-v1`). They
@@ -29,12 +35,19 @@ export const REMOTE_APP_CONTROL_IDS: ReadonlySet<AppControlId> = new Set<AppCont
   "webSearch.enabled",
   "skills.enabled",
 ]);
-export const REMOTE_APP_CONTROL_TOPICS: ReadonlySet<AppControlTopic> = new Set(["appearance", "memory", "web-search", "skills"]);
+export const REMOTE_APP_CONTROL_TOPICS: ReadonlySet<AppControlTopic> = new Set([
+  "appearance",
+  "memory",
+  "web-search",
+  "skills",
+]);
 /** A new-chat model value: `provider::model`. */
 export function newChatModelValue(providerId: string, model: string): string {
   return `${providerId}::${model}`;
 }
-export function parseNewChatModelValue(value: string): { providerId: string; model: string } | undefined {
+export function parseNewChatModelValue(
+  value: string,
+): { providerId: string; model: string } | undefined {
   const split = value.indexOf("::");
   if (split <= 0 || split + 2 >= value.length) return undefined;
   return { providerId: value.slice(0, split), model: value.slice(split + 2) };
@@ -49,7 +62,10 @@ export function resolveAppControlPolicy(settings: {
   if (settings.appControlPolicy === undefined && settings.assistant?.settingsPermission === "none")
     return "disabled";
   return settings.appControlPolicy === undefined || settings.appControlPolicy === "safe"
-    ? "safe" : settings.appControlPolicy === "ask" ? "ask" : "disabled";
+    ? "safe"
+    : settings.appControlPolicy === "ask"
+      ? "ask"
+      : "disabled";
 }
 export interface AppControlPanel {
   version: 1;
@@ -112,7 +128,12 @@ export function parseAppControlOperation(value: unknown): AppControlOperation {
     throw new Error("Invalid control operation.");
   }
   if (p.control === "models.newChat") {
-    if (typeof p.value !== "string" || p.value.length > 300 || [...p.value].some((c) => c.charCodeAt(0) < 0x20) || !parseNewChatModelValue(p.value))
+    if (
+      typeof p.value !== "string" ||
+      p.value.length > 300 ||
+      [...p.value].some((c) => c.charCodeAt(0) < 0x20) ||
+      !parseNewChatModelValue(p.value)
+    )
       throw new Error("Unsupported model.");
   } else if (p.control === "appearance.theme") {
     if (typeof p.value !== "string" || !THEME_PRESETS.some((preset) => preset.id === p.value))

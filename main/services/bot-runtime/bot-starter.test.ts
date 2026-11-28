@@ -48,7 +48,10 @@ function botDirectory(root: string, bots = new Map<string, BotDefinition>()) {
     }
     return bot;
   };
-  const deps: Pick<BotStarterDeps, "findBotByCreationKey" | "createBot" | "mintBotId" | "reserveCreation"> = {
+  const deps: Pick<
+    BotStarterDeps,
+    "findBotByCreationKey" | "createBot" | "mintBotId" | "reserveCreation"
+  > = {
     async findBotByCreationKey(key) {
       const botId = await keys.get(key);
       if (botId === null) return null;
@@ -64,7 +67,11 @@ function botDirectory(root: string, bots = new Map<string, BotDefinition>()) {
   return { deps, bots, created, make, control };
 }
 
-async function sessionFor(profileDir: string, fauxModels: FauxModels, model = true): Promise<BotSessionRuntime> {
+async function sessionFor(
+  profileDir: string,
+  fauxModels: FauxModels,
+  model = true,
+): Promise<BotSessionRuntime> {
   return createBotSessionService({
     profileDir,
     models: fauxModels.models,
@@ -83,13 +90,19 @@ async function visibleTranscript(session: BotSessionRuntime, botId: string): Pro
   const { snapshot, unsubscribe } = await projection.subscribe(botId, { send: () => undefined });
   unsubscribe();
   await projection.close();
-  return snapshot.entries.map((entry) => (entry.type === "assistant" || entry.type === "user" ? `${entry.type}:${entry.text}` : entry.type));
+  return snapshot.entries.map((entry) =>
+    entry.type === "assistant" || entry.type === "user"
+      ? `${entry.type}:${entry.text}`
+      : entry.type,
+  );
 }
 
 test("Start Chat twice on one starter Bot makes one Bot and one self-intro", async () => {
   const profile = tempDir();
   const directory = botDirectory(profile);
-  const fauxModels = createFauxModels([fauxAssistantMessage("Hi, I'm your Meal Planner.\nA) Plan this week\nB) Make a list")]);
+  const fauxModels = createFauxModels([
+    fauxAssistantMessage("Hi, I'm your Meal Planner.\nA) Plan this week\nB) Make a list"),
+  ]);
   const session = await sessionFor(profile, fauxModels);
   try {
     const starter = createBotStarter({ ...directory.deps, session });
@@ -148,7 +161,9 @@ test("the self-intro is not sent again when the Bot is reopened after a restart"
     fauxAssistantMessage("never asked"),
   ]);
   const before = await sessionFor(profile, fauxModels);
-  const first = await createBotStarter({ ...directory.deps, session: before }).startFromPreset("researcher");
+  const first = await createBotStarter({ ...directory.deps, session: before }).startFromPreset(
+    "researcher",
+  );
   const running = await before.state(first.bot.id);
   if (running.kind === "running") {
     await before.awaitReply(first.bot.id, running.submissionId, new AbortController().signal);
@@ -167,7 +182,9 @@ test("the self-intro is not sent again when the Bot is reopened after a restart"
     assert.equal(again.created, false);
     assert.equal(again.introduced, false);
     assert.equal(fauxModels.calls(), 1);
-    assert.deepEqual(await visibleTranscript(after, first.bot.id), ["assistant:Hello, I'm your Researcher."]);
+    assert.deepEqual(await visibleTranscript(after, first.bot.id), [
+      "assistant:Hello, I'm your Researcher.",
+    ]);
   } finally {
     await after.shutdown();
   }
@@ -179,7 +196,9 @@ test("a starter Bot without an AI model is created but does not introduce itself
   const fauxModels = createFauxModels([fauxAssistantMessage("never")]);
   const session = await sessionFor(profile, fauxModels, false);
   try {
-    const result = await createBotStarter({ ...directory.deps, session }).startFromPreset("inbox-helper");
+    const result = await createBotStarter({ ...directory.deps, session }).startFromPreset(
+      "inbox-helper",
+    );
     assert.equal(result.created, true);
     assert.equal(result.introduced, false);
     assert.deepEqual(await session.state(result.bot.id), { kind: "needs_model" });
@@ -192,7 +211,10 @@ test("a starter Bot without an AI model is created but does not introduce itself
 test("a phone's Start Chat and the Mac's converge on one Bot and one self-intro", async () => {
   const profile = tempDir();
   const directory = botDirectory(profile);
-  const fauxModels = createFauxModels([fauxAssistantMessage("Hi, I'm your Chief of Staff."), fauxAssistantMessage("never")]);
+  const fauxModels = createFauxModels([
+    fauxAssistantMessage("Hi, I'm your Chief of Staff."),
+    fauxAssistantMessage("never"),
+  ]);
   const session = await sessionFor(profile, fauxModels);
   try {
     const starter = createBotStarter({ ...directory.deps, session });
@@ -212,9 +234,13 @@ test("a phone's Start Chat and the Mac's converge on one Bot and one self-intro"
     assert.equal(directory.created.length, 1);
     assert.equal(phoneAudience.length, 1, "the phone's tap created it for the phone's audience");
     assert.deepEqual(new Set([phone.bot.id, mac.bot.id, later.bot.id, laterPhone.bot.id]).size, 1);
-    assert.deepEqual([phone.introduced, mac.introduced, later.introduced, laterPhone.introduced], [true, false, false, false]);
+    assert.deepEqual(
+      [phone.introduced, mac.introduced, later.introduced, laterPhone.introduced],
+      [true, false, false, false],
+    );
     const state = await session.state(phone.bot.id);
-    if (state.kind === "running") await session.awaitReply(phone.bot.id, state.submissionId, new AbortController().signal);
+    if (state.kind === "running")
+      await session.awaitReply(phone.bot.id, state.submissionId, new AbortController().signal);
     assert.equal(fauxModels.calls(), 1);
   } finally {
     await session.shutdown();
@@ -224,7 +250,10 @@ test("a phone's Start Chat and the Mac's converge on one Bot and one self-intro"
 test("a Bot that is already talking is never asked to introduce itself", async () => {
   const profile = tempDir();
   const directory = botDirectory(profile);
-  const fauxModels = createFauxModels([fauxAssistantMessage("Sure, here is a plan."), fauxAssistantMessage("never")]);
+  const fauxModels = createFauxModels([
+    fauxAssistantMessage("Sure, here is a plan."),
+    fauxAssistantMessage("never"),
+  ]);
   const session = await sessionFor(profile, fauxModels);
   try {
     const bot = await directory.make({ name: "Planner" } as BotCreateInput, "bot:1");
@@ -235,7 +264,10 @@ test("a Bot that is already talking is never asked to introduce itself", async (
     assert.equal(await starter.introduce(bot.id), false);
     await new Promise((resolve) => setTimeout(resolve, 50));
     assert.equal(fauxModels.calls(), 1);
-    assert.deepEqual(await visibleTranscript(session, bot.id), ["user:Plan my week", "assistant:Sure, here is a plan."]);
+    assert.deepEqual(await visibleTranscript(session, bot.id), [
+      "user:Plan my week",
+      "assistant:Sure, here is a plan.",
+    ]);
   } finally {
     await session.shutdown();
   }
@@ -307,7 +339,9 @@ test("a caller that defers the self-intro gets the Bot at once, and one later in
       await session.awaitReply(result.bot.id, state.submissionId, new AbortController().signal);
     }
     assert.equal(fauxModels.calls(), 1);
-    assert.deepEqual(await visibleTranscript(session, result.bot.id), ["assistant:Hi, I'm your Meal Planner."]);
+    assert.deepEqual(await visibleTranscript(session, result.bot.id), [
+      "assistant:Hi, I'm your Meal Planner.",
+    ]);
   } finally {
     await session.shutdown();
   }
@@ -319,7 +353,10 @@ test("a Template shown at an older version refuses to create anything", async ()
   const session = await sessionFor(profile, createFauxModels([fauxAssistantMessage("never")]));
   try {
     const starter = createBotStarter({ ...directory.deps, session });
-    await assert.rejects(starter.startFromPreset("meal-planner", { version: 999 }), /This template changed/u);
+    await assert.rejects(
+      starter.startFromPreset("meal-planner", { version: 999 }),
+      /This template changed/u,
+    );
     assert.equal(directory.created.length, 0);
     assert.deepEqual(await starter.presetBots(), {});
   } finally {
@@ -331,7 +368,10 @@ test("creating a Template twice opens the Bot it made, and its routine arrives p
   const profile = tempDir();
   const directory = botDirectory(profile);
   const routines: { botId: string; name: string }[] = [];
-  const session = await sessionFor(profile, createFauxModels([fauxAssistantMessage("Hi."), fauxAssistantMessage("never")]));
+  const session = await sessionFor(
+    profile,
+    createFauxModels([fauxAssistantMessage("Hi."), fauxAssistantMessage("never")]),
+  );
   try {
     const starter = createBotStarter({
       ...directory.deps,
@@ -346,7 +386,10 @@ test("creating a Template twice opens the Bot it made, and its routine arrives p
     assert.equal(again.bot.id, first.bot.id);
     assert.equal(again.created, false);
     assert.equal(directory.created.length, 1);
-    assert.deepEqual(routines.map((routine) => routine.botId), [first.bot.id]);
+    assert.deepEqual(
+      routines.map((routine) => routine.botId),
+      [first.bot.id],
+    );
     assert.deepEqual(await starter.presetBots(), { "meal-planner": first.bot.id });
   } finally {
     await session.shutdown();
@@ -379,7 +422,10 @@ test("the silent first Bot is made once, however often onboarding asks", async (
   const profile = tempDir();
   const directory = botDirectory(profile);
   const presets: (string | undefined)[] = [];
-  const fauxModels = createFauxModels([fauxAssistantMessage("Hi, I'm Chief. What should I help with?"), fauxAssistantMessage("never")]);
+  const fauxModels = createFauxModels([
+    fauxAssistantMessage("Hi, I'm Chief. What should I help with?"),
+    fauxAssistantMessage("never"),
+  ]);
   const session = await sessionFor(profile, fauxModels);
   try {
     const starter = createBotStarter({
@@ -401,7 +447,8 @@ test("the silent first Bot is made once, however often onboarding asks", async (
     assert.deepEqual(await starter.presetBots(), {}, "it never counts as a Template's Bot");
 
     const state = await session.state(first.bot.id);
-    if (state.kind === "running") await session.awaitReply(first.bot.id, state.submissionId, new AbortController().signal);
+    if (state.kind === "running")
+      await session.awaitReply(first.bot.id, state.submissionId, new AbortController().signal);
     assert.equal(fauxModels.calls(), 1);
   } finally {
     await session.shutdown();
@@ -416,8 +463,12 @@ test("a restart after the first Bot was made finds it instead of making another"
     state: async () => ({ kind: "idle" as const }),
     conversation: async () => ({ context: async () => ({ entries: [] }) }) as never,
   };
-  const first = await createBotStarter({ ...botDirectory(profile, bots).deps, session }).startFirst({ introduce: false });
-  const again = await createBotStarter({ ...botDirectory(profile, bots).deps, session }).startFirst({ introduce: false });
+  const first = await createBotStarter({ ...botDirectory(profile, bots).deps, session }).startFirst(
+    { introduce: false },
+  );
+  const again = await createBotStarter({ ...botDirectory(profile, bots).deps, session }).startFirst(
+    { introduce: false },
+  );
   assert.equal(bots.size, 1);
   assert.equal(again.bot.id, first.bot.id);
   assert.equal(again.created, false);

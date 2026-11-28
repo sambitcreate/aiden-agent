@@ -38,7 +38,7 @@ prints the platform decision without network access.
 You can also download the package for your architecture manually from
 [GitHub Releases](https://github.com/sambitcreate/aiden-agent/releases):
 
-Debian, Ubuntu, Linux Mint, Pop!_OS, and related distributions:
+Debian, Ubuntu, Linux Mint, Pop!\_OS, and related distributions:
 
 ```sh
 sudo apt install ./Aiden-Agent-*-linux.deb

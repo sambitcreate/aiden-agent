@@ -16,7 +16,12 @@ export interface BotBrowserHandlerDependencies {
 }
 
 function botIdOf(value: unknown): string {
-  if (typeof value !== "string" || !value || value.length > MAX_BOT_ID_CHARS || !/^[A-Za-z0-9._:-]+$/u.test(value)) {
+  if (
+    typeof value !== "string" ||
+    !value ||
+    value.length > MAX_BOT_ID_CHARS ||
+    !/^[A-Za-z0-9._:-]+$/u.test(value)
+  ) {
     throw new Error("Invalid bot id.");
   }
   return value;

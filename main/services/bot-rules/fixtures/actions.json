@@ -13,9 +13,7 @@
           "label": "Place your order"
         }
       },
-      "expected": [
-        "purchase"
-      ]
+      "expected": ["purchase"]
     },
     {
       "id": "cu-buy-now",
@@ -29,9 +27,7 @@
           "label": "Buy Now"
         }
       },
-      "expected": [
-        "purchase"
-      ]
+      "expected": ["purchase"]
     },
     {
       "id": "cu-book-now",
@@ -45,9 +41,7 @@
           "label": "Book now"
         }
       },
-      "expected": [
-        "purchase"
-      ]
+      "expected": ["purchase"]
     },
     {
       "id": "cu-subscribe-paid",
@@ -61,9 +55,7 @@
           "label": "Subscribe — $11.99/month"
         }
       },
-      "expected": [
-        "purchase"
-      ]
+      "expected": ["purchase"]
     },
     {
       "id": "cu-start-trial",
@@ -77,9 +69,7 @@
           "label": "Start free trial"
         }
       },
-      "expected": [
-        "purchase"
-      ]
+      "expected": ["purchase"]
     },
     {
       "id": "cu-mail-send",
@@ -93,9 +83,7 @@
           "label": "Send"
         }
       },
-      "expected": [
-        "communicate"
-      ]
+      "expected": ["communicate"]
     },
     {
       "id": "cu-mail-send-chord",
@@ -106,9 +94,7 @@
         "windowTitle": "New Message",
         "keys": "cmd+shift+d"
       },
-      "expected": [
-        "communicate"
-      ]
+      "expected": ["communicate"]
     },
     {
       "id": "cu-messages-return",
@@ -123,9 +109,7 @@
           "label": "iMessage"
         }
       },
-      "expected": [
-        "communicate"
-      ]
+      "expected": ["communicate"]
     },
     {
       "id": "cu-slack-send",
@@ -139,9 +123,7 @@
           "label": "Send now"
         }
       },
-      "expected": [
-        "communicate"
-      ]
+      "expected": ["communicate"]
     },
     {
       "id": "cu-mail-send-again",
@@ -150,14 +132,9 @@
         "action": "menu",
         "app": "Mail",
         "windowTitle": "Inbox",
-        "menuPath": [
-          "Message",
-          "Send Again"
-        ]
+        "menuPath": ["Message", "Send Again"]
       },
-      "expected": [
-        "communicate"
-      ]
+      "expected": ["communicate"]
     },
     {
       "id": "cu-messages-typing",
@@ -191,9 +168,7 @@
     },
     {
       "id": "cu-secure-type",
-      "tags": [
-        "sensitive_field"
-      ],
+      "tags": ["sensitive_field"],
       "action": {
         "surface": "computer_use",
         "action": "type",
@@ -205,15 +180,11 @@
         },
         "secureFieldInCapture": true
       },
-      "expected": [
-        "credentials"
-      ]
+      "expected": ["credentials"]
     },
     {
       "id": "cu-secure-set-value",
-      "tags": [
-        "sensitive_field"
-      ],
+      "tags": ["sensitive_field"],
       "action": {
         "surface": "computer_use",
         "action": "set_value",
@@ -223,15 +194,11 @@
           "role": "AXSecureTextField"
         }
       },
-      "expected": [
-        "credentials"
-      ]
+      "expected": ["credentials"]
     },
     {
       "id": "cu-secure-click",
-      "tags": [
-        "sensitive_field"
-      ],
+      "tags": ["sensitive_field"],
       "action": {
         "surface": "computer_use",
         "action": "click",
@@ -242,16 +209,12 @@
           "label": "Password"
         }
       },
-      "expected": [
-        "credentials"
-      ]
+      "expected": ["credentials"]
     },
     {
       "id": "cu-secure-present-type",
       "note": "Typing while the window shows a secure field is treated as signing in.",
-      "tags": [
-        "sign_in_form"
-      ],
+      "tags": ["sign_in_form"],
       "action": {
         "surface": "computer_use",
         "action": "type",
@@ -263,15 +226,11 @@
         },
         "secureFieldInCapture": true
       },
-      "expected": [
-        "credentials"
-      ]
+      "expected": ["credentials"]
     },
     {
       "id": "cu-secure-present-char",
-      "tags": [
-        "sensitive_field"
-      ],
+      "tags": ["sensitive_field"],
       "action": {
         "surface": "computer_use",
         "action": "key",
@@ -280,9 +239,7 @@
         "keys": "a",
         "secureFieldInCapture": true
       },
-      "expected": [
-        "credentials"
-      ]
+      "expected": ["credentials"]
     },
     {
       "id": "cu-secure-present-tab",
@@ -299,9 +256,7 @@
     },
     {
       "id": "cu-verification-code",
-      "tags": [
-        "sensitive_field"
-      ],
+      "tags": ["sensitive_field"],
       "action": {
         "surface": "computer_use",
         "action": "type",
@@ -312,15 +267,11 @@
           "label": "Verification code"
         }
       },
-      "expected": [
-        "credentials"
-      ]
+      "expected": ["credentials"]
     },
     {
       "id": "cu-2fa-code",
-      "tags": [
-        "sensitive_field"
-      ],
+      "tags": ["sensitive_field"],
       "action": {
         "surface": "computer_use",
         "action": "set_value",
@@ -331,15 +282,11 @@
           "label": "Authentication code"
         }
       },
-      "expected": [
-        "credentials"
-      ]
+      "expected": ["credentials"]
     },
     {
       "id": "cu-one-time-code",
-      "tags": [
-        "sensitive_field"
-      ],
+      "tags": ["sensitive_field"],
       "action": {
         "surface": "computer_use",
         "action": "type",
@@ -350,15 +297,11 @@
           "label": "Enter one-time code"
         }
       },
-      "expected": [
-        "credentials"
-      ]
+      "expected": ["credentials"]
     },
     {
       "id": "cu-card-number",
-      "tags": [
-        "sensitive_field"
-      ],
+      "tags": ["sensitive_field"],
       "action": {
         "surface": "computer_use",
         "action": "type",
@@ -369,15 +312,11 @@
           "label": "Card number"
         }
       },
-      "expected": [
-        "money"
-      ]
+      "expected": ["money"]
     },
     {
       "id": "cu-cvc",
-      "tags": [
-        "sensitive_field"
-      ],
+      "tags": ["sensitive_field"],
       "action": {
         "surface": "computer_use",
         "action": "set_value",
@@ -388,15 +327,11 @@
           "label": "CVC"
         }
       },
-      "expected": [
-        "money"
-      ]
+      "expected": ["money"]
     },
     {
       "id": "cu-expiry",
-      "tags": [
-        "sensitive_field"
-      ],
+      "tags": ["sensitive_field"],
       "action": {
         "surface": "computer_use",
         "action": "set_value",
@@ -407,15 +342,11 @@
           "label": "Expiration date (MM/YY)"
         }
       },
-      "expected": [
-        "money"
-      ]
+      "expected": ["money"]
     },
     {
       "id": "cu-iban",
-      "tags": [
-        "sensitive_field"
-      ],
+      "tags": ["sensitive_field"],
       "action": {
         "surface": "computer_use",
         "action": "type",
@@ -426,9 +357,7 @@
           "label": "IBAN"
         }
       },
-      "expected": [
-        "money"
-      ]
+      "expected": ["money"]
     },
     {
       "id": "cu-pay-button",
@@ -442,9 +371,7 @@
           "label": "Pay $42.10"
         }
       },
-      "expected": [
-        "money"
-      ]
+      "expected": ["money"]
     },
     {
       "id": "cu-transfer",
@@ -458,9 +385,7 @@
           "label": "Transfer"
         }
       },
-      "expected": [
-        "money"
-      ]
+      "expected": ["money"]
     },
     {
       "id": "cu-change-password",
@@ -474,9 +399,7 @@
           "label": "Change Password…"
         }
       },
-      "expected": [
-        "credentials"
-      ]
+      "expected": ["credentials"]
     },
     {
       "id": "cu-turn-on-2fa",
@@ -490,9 +413,7 @@
           "label": "Turn on two-step verification"
         }
       },
-      "expected": [
-        "credentials"
-      ]
+      "expected": ["credentials"]
     },
     {
       "id": "cu-delete-photos",
@@ -506,9 +427,7 @@
           "label": "Delete 3 Photos"
         }
       },
-      "expected": [
-        "delete"
-      ]
+      "expected": ["delete"]
     },
     {
       "id": "cu-empty-trash",
@@ -517,14 +436,9 @@
         "action": "menu",
         "app": "Finder",
         "windowTitle": "Trash",
-        "menuPath": [
-          "Finder",
-          "Empty Trash…"
-        ]
+        "menuPath": ["Finder", "Empty Trash…"]
       },
-      "expected": [
-        "delete"
-      ]
+      "expected": ["delete"]
     },
     {
       "id": "cu-finder-cmd-delete",
@@ -535,9 +449,7 @@
         "windowTitle": "Downloads",
         "keys": "cmd+backspace"
       },
-      "expected": [
-        "delete"
-      ]
+      "expected": ["delete"]
     },
     {
       "id": "cu-textedit-cmd-delete",
@@ -563,9 +475,7 @@
           "label": "Delete my account"
         }
       },
-      "expected": [
-        "delete"
-      ]
+      "expected": ["delete"]
     },
     {
       "id": "cu-app-store-get",
@@ -579,9 +489,7 @@
           "label": "Get"
         }
       },
-      "expected": [
-        "install"
-      ]
+      "expected": ["install"]
     },
     {
       "id": "cu-installer",
@@ -595,9 +503,7 @@
           "label": "Install"
         }
       },
-      "expected": [
-        "install"
-      ]
+      "expected": ["install"]
     },
     {
       "id": "cu-install-update-menu",
@@ -606,14 +512,9 @@
         "action": "menu",
         "app": "Raycast",
         "windowTitle": "Raycast",
-        "menuPath": [
-          "Raycast",
-          "Install Update"
-        ]
+        "menuPath": ["Raycast", "Install Update"]
       },
-      "expected": [
-        "install"
-      ]
+      "expected": ["install"]
     },
     {
       "id": "cu-post",
@@ -627,9 +528,7 @@
           "label": "Post"
         }
       },
-      "expected": [
-        "publish"
-      ]
+      "expected": ["publish"]
     },
     {
       "id": "cu-publish",
@@ -643,9 +542,7 @@
           "label": "Publish"
         }
       },
-      "expected": [
-        "publish"
-      ]
+      "expected": ["publish"]
     },
     {
       "id": "cu-cancel-order",
@@ -757,11 +654,7 @@
         "action": "menu",
         "app": "Pages",
         "windowTitle": "Report",
-        "menuPath": [
-          "File",
-          "Export To",
-          "PDF…"
-        ]
+        "menuPath": ["File", "Export To", "PDF…"]
       },
       "expected": []
     },
@@ -875,15 +768,11 @@
           "label": "Buy"
         }
       },
-      "expected": [
-        "purchase"
-      ]
+      "expected": ["purchase"]
     },
     {
       "id": "co-secure",
-      "tags": [
-        "sensitive_field"
-      ],
+      "tags": ["sensitive_field"],
       "action": {
         "surface": "computer",
         "action": "type",
@@ -893,15 +782,11 @@
           "role": "AXSecureTextField"
         }
       },
-      "expected": [
-        "credentials"
-      ]
+      "expected": ["credentials"]
     },
     {
       "id": "co-otp-field",
-      "tags": [
-        "sensitive_field"
-      ],
+      "tags": ["sensitive_field"],
       "action": {
         "surface": "computer",
         "action": "type",
@@ -912,15 +797,11 @@
           "label": "One-time code"
         }
       },
-      "expected": [
-        "credentials"
-      ]
+      "expected": ["credentials"]
     },
     {
       "id": "co-card",
-      "tags": [
-        "sensitive_field"
-      ],
+      "tags": ["sensitive_field"],
       "action": {
         "surface": "computer",
         "action": "type",
@@ -931,9 +812,7 @@
           "label": "Card number"
         }
       },
-      "expected": [
-        "money"
-      ]
+      "expected": ["money"]
     },
     {
       "id": "co-mail-send",
@@ -947,9 +826,7 @@
           "label": "Send"
         }
       },
-      "expected": [
-        "communicate"
-      ]
+      "expected": ["communicate"]
     },
     {
       "id": "co-open-folder",
@@ -1047,9 +924,7 @@
           "locked": false
         }
       ],
-      "expectedCustom": [
-        "custom.00000000-0000-4000-8000-000000000007"
-      ]
+      "expectedCustom": ["custom.00000000-0000-4000-8000-000000000007"]
     },
     {
       "id": "co-delete-backups",
@@ -1063,9 +938,7 @@
           "label": "Delete"
         }
       },
-      "expected": [
-        "delete"
-      ]
+      "expected": ["delete"]
     },
     {
       "id": "co-post",
@@ -1081,10 +954,7 @@
           "label": "Post"
         }
       },
-      "expected": [
-        "publish",
-        "communicate"
-      ]
+      "expected": ["publish", "communicate"]
     },
     {
       "id": "co-pay-bill",
@@ -1098,9 +968,7 @@
           "label": "Continue"
         }
       },
-      "expected": [
-        "money"
-      ]
+      "expected": ["money"]
     },
     {
       "id": "co-vnc-place-order",
@@ -1110,9 +978,7 @@
         "action": "click",
         "intent": "Click Place order"
       },
-      "expected": [
-        "purchase"
-      ]
+      "expected": ["purchase"]
     },
     {
       "id": "co-vnc-return-send",
@@ -1122,9 +988,7 @@
         "action": "press",
         "intent": "Press Return to send the reply to Bob"
       },
-      "expected": [
-        "communicate"
-      ]
+      "expected": ["communicate"]
     },
     {
       "id": "co-vnc-letter-key",
@@ -1143,9 +1007,7 @@
         "action": "type",
         "intent": "Type the account password"
       },
-      "expected": [
-        "credentials"
-      ]
+      "expected": ["credentials"]
     },
     {
       "id": "co-vnc-code",
@@ -1154,9 +1016,7 @@
         "action": "type",
         "intent": "Enter the verification code from the text message"
       },
-      "expected": [
-        "credentials"
-      ]
+      "expected": ["credentials"]
     },
     {
       "id": "co-vnc-card",
@@ -1165,9 +1025,7 @@
         "action": "type",
         "intent": "Enter the card number"
       },
-      "expected": [
-        "money"
-      ]
+      "expected": ["money"]
     },
     {
       "id": "co-vnc-pay-now",
@@ -1176,9 +1034,7 @@
         "action": "click",
         "intent": "Click Pay now"
       },
-      "expected": [
-        "money"
-      ]
+      "expected": ["money"]
     },
     {
       "id": "co-vnc-trash-key",
@@ -1187,9 +1043,7 @@
         "action": "press",
         "intent": "Press Command-Delete to move the file to the Trash"
       },
-      "expected": [
-        "delete"
-      ]
+      "expected": ["delete"]
     },
     {
       "id": "co-vnc-empty-trash",
@@ -1198,9 +1052,7 @@
         "action": "click",
         "intent": "Empty the Trash"
       },
-      "expected": [
-        "delete"
-      ]
+      "expected": ["delete"]
     },
     {
       "id": "co-vnc-publish",
@@ -1209,9 +1061,7 @@
         "action": "click",
         "intent": "Click Publish to post the article"
       },
-      "expected": [
-        "publish"
-      ]
+      "expected": ["publish"]
     },
     {
       "id": "co-vnc-send-email",
@@ -1220,9 +1070,7 @@
         "action": "click",
         "intent": "Click Send on the email to Sam"
       },
-      "expected": [
-        "communicate"
-      ]
+      "expected": ["communicate"]
     },
     {
       "id": "co-vnc-transfer",
@@ -1231,9 +1079,7 @@
         "action": "click",
         "intent": "Confirm the bank transfer"
       },
-      "expected": [
-        "money"
-      ]
+      "expected": ["money"]
     },
     {
       "id": "co-vnc-open-app",
@@ -1288,9 +1134,7 @@
         "action": "click",
         "intent": "Book the 9am flight to Lisbon"
       },
-      "expected": [
-        "purchase"
-      ],
+      "expected": ["purchase"],
       "customRules": [
         {
           "id": "custom.00000000-0000-4000-8000-0000000000a1",
@@ -1299,15 +1143,11 @@
           "locked": false
         }
       ],
-      "expectedCustom": [
-        "custom.00000000-0000-4000-8000-0000000000a1"
-      ]
+      "expectedCustom": ["custom.00000000-0000-4000-8000-0000000000a1"]
     },
     {
       "id": "br-password",
-      "tags": [
-        "sensitive_field"
-      ],
+      "tags": ["sensitive_field"],
       "action": {
         "surface": "browser",
         "tool": "browser_type",
@@ -1318,15 +1158,11 @@
           "accessibleName": "Enter your password"
         }
       },
-      "expected": [
-        "credentials"
-      ]
+      "expected": ["credentials"]
     },
     {
       "id": "br-otp-autocomplete",
-      "tags": [
-        "sensitive_field"
-      ],
+      "tags": ["sensitive_field"],
       "action": {
         "surface": "browser",
         "tool": "browser_type",
@@ -1338,15 +1174,11 @@
           "accessibleName": "Authentication code"
         }
       },
-      "expected": [
-        "credentials"
-      ]
+      "expected": ["credentials"]
     },
     {
       "id": "br-current-password",
-      "tags": [
-        "sensitive_field"
-      ],
+      "tags": ["sensitive_field"],
       "action": {
         "surface": "browser",
         "tool": "browser_type",
@@ -1358,15 +1190,11 @@
           "accessibleName": "Passcode"
         }
       },
-      "expected": [
-        "credentials"
-      ]
+      "expected": ["credentials"]
     },
     {
       "id": "br-new-password",
-      "tags": [
-        "sensitive_field"
-      ],
+      "tags": ["sensitive_field"],
       "action": {
         "surface": "browser",
         "tool": "browser_type",
@@ -1378,30 +1206,22 @@
           "accessibleName": "Create password"
         }
       },
-      "expected": [
-        "credentials"
-      ]
+      "expected": ["credentials"]
     },
     {
       "id": "br-otp-selector",
-      "tags": [
-        "sensitive_field"
-      ],
+      "tags": ["sensitive_field"],
       "action": {
         "surface": "browser",
         "tool": "browser_type",
         "url": "https://secure.bank.example/verify",
         "selector": "input[name=otp]"
       },
-      "expected": [
-        "credentials"
-      ]
+      "expected": ["credentials"]
     },
     {
       "id": "br-password-enter",
-      "tags": [
-        "sensitive_field"
-      ],
+      "tags": ["sensitive_field"],
       "action": {
         "surface": "browser",
         "tool": "browser_press",
@@ -1413,15 +1233,11 @@
           "accessibleName": "Password"
         }
       },
-      "expected": [
-        "credentials"
-      ]
+      "expected": ["credentials"]
     },
     {
       "id": "br-cc-number",
-      "tags": [
-        "sensitive_field"
-      ],
+      "tags": ["sensitive_field"],
       "action": {
         "surface": "browser",
         "tool": "browser_type",
@@ -1433,16 +1249,12 @@
           "accessibleName": "Card number"
         }
       },
-      "expected": [
-        "money"
-      ]
+      "expected": ["money"]
     },
     {
       "id": "br-cc-csc",
       "note": "A card's security code is the CVC.",
-      "tags": [
-        "sensitive_field"
-      ],
+      "tags": ["sensitive_field"],
       "action": {
         "surface": "browser",
         "tool": "browser_type",
@@ -1454,15 +1266,11 @@
           "accessibleName": "Security code"
         }
       },
-      "expected": [
-        "money"
-      ]
+      "expected": ["money"]
     },
     {
       "id": "br-cc-exp",
-      "tags": [
-        "sensitive_field"
-      ],
+      "tags": ["sensitive_field"],
       "action": {
         "surface": "browser",
         "tool": "browser_type",
@@ -1474,15 +1282,11 @@
           "accessibleName": "MM / YY"
         }
       },
-      "expected": [
-        "money"
-      ]
+      "expected": ["money"]
     },
     {
       "id": "br-card-words",
-      "tags": [
-        "sensitive_field"
-      ],
+      "tags": ["sensitive_field"],
       "action": {
         "surface": "browser",
         "tool": "browser_type",
@@ -1493,15 +1297,11 @@
           "accessibleName": "Credit card number"
         }
       },
-      "expected": [
-        "money"
-      ]
+      "expected": ["money"]
     },
     {
       "id": "br-stripe-form",
-      "tags": [
-        "sensitive_field"
-      ],
+      "tags": ["sensitive_field"],
       "action": {
         "surface": "browser",
         "tool": "browser_type",
@@ -1513,10 +1313,7 @@
           "formActionHost": "api.stripe.com"
         }
       },
-      "expected": [
-        "money",
-        "purchase"
-      ]
+      "expected": ["money", "purchase"]
     },
     {
       "id": "br-paypal-signin",
@@ -1531,9 +1328,7 @@
           "accessibleName": "Email or mobile number"
         }
       },
-      "expected": [
-        "money"
-      ]
+      "expected": ["money"]
     },
     {
       "id": "br-paypal-activity",
@@ -1560,10 +1355,7 @@
           "formActionHost": "checkout.stripe.com"
         }
       },
-      "expected": [
-        "money",
-        "purchase"
-      ]
+      "expected": ["money", "purchase"]
     },
     {
       "id": "br-place-order",
@@ -1577,9 +1369,7 @@
           "accessibleName": "Place your order"
         }
       },
-      "expected": [
-        "purchase"
-      ]
+      "expected": ["purchase"]
     },
     {
       "id": "br-checkout-locator",
@@ -1589,9 +1379,7 @@
         "url": "https://www.etsy.com/cart",
         "locator": "getByRole('button', { name: 'Proceed to checkout' })"
       },
-      "expected": [
-        "purchase"
-      ]
+      "expected": ["purchase"]
     },
     {
       "id": "br-reserve",
@@ -1604,9 +1392,7 @@
           "accessibleName": "Reserve now"
         }
       },
-      "expected": [
-        "purchase"
-      ]
+      "expected": ["purchase"]
     },
     {
       "id": "br-gmail-send",
@@ -1620,9 +1406,7 @@
           "accessibleName": "Send"
         }
       },
-      "expected": [
-        "communicate"
-      ]
+      "expected": ["communicate"]
     },
     {
       "id": "br-x-post",
@@ -1635,9 +1419,7 @@
           "accessibleName": "Post"
         }
       },
-      "expected": [
-        "publish"
-      ]
+      "expected": ["publish"]
     },
     {
       "id": "br-publish-post",
@@ -1650,9 +1432,7 @@
           "accessibleName": "Publish post"
         }
       },
-      "expected": [
-        "publish"
-      ]
+      "expected": ["publish"]
     },
     {
       "id": "br-delete-repo",
@@ -1665,9 +1445,7 @@
           "accessibleName": "Delete this repository"
         }
       },
-      "expected": [
-        "delete"
-      ]
+      "expected": ["delete"]
     },
     {
       "id": "br-delete-selector",
@@ -1677,9 +1455,7 @@
         "url": "https://app.example.com/account",
         "selector": "#delete-account-confirm"
       },
-      "expected": [
-        "delete"
-      ]
+      "expected": ["delete"]
     },
     {
       "id": "br-add-to-chrome",
@@ -1692,9 +1468,7 @@
           "accessibleName": "Add to Chrome"
         }
       },
-      "expected": [
-        "install"
-      ]
+      "expected": ["install"]
     },
     {
       "id": "br-next",
@@ -1808,9 +1582,7 @@
           "accessibleName": "Message #general"
         }
       },
-      "expected": [
-        "communicate"
-      ]
+      "expected": ["communicate"]
     },
     {
       "id": "br-whatsapp-enter",
@@ -1825,9 +1597,7 @@
           "accessibleName": "Type a message"
         }
       },
-      "expected": [
-        "communicate"
-      ]
+      "expected": ["communicate"]
     },
     {
       "id": "br-linkedin-message-enter",
@@ -1842,9 +1612,7 @@
           "accessibleName": "Write a message…"
         }
       },
-      "expected": [
-        "communicate"
-      ]
+      "expected": ["communicate"]
     },
     {
       "id": "br-messenger-unnamed-enter",
@@ -1859,9 +1627,7 @@
           "role": "textbox"
         }
       },
-      "expected": [
-        "communicate"
-      ]
+      "expected": ["communicate"]
     },
     {
       "id": "br-gmail-control-enter",
@@ -1876,9 +1642,7 @@
           "accessibleName": "Message Body"
         }
       },
-      "expected": [
-        "communicate"
-      ]
+      "expected": ["communicate"]
     },
     {
       "id": "br-outlook-meta-enter",
@@ -1893,9 +1657,7 @@
           "accessibleName": "Message body"
         }
       },
-      "expected": [
-        "communicate"
-      ]
+      "expected": ["communicate"]
     },
     {
       "id": "br-slack-shift-enter",
@@ -2033,9 +1795,7 @@
         "destructive": "unknown",
         "description": "Sends an email message from the signed-in account."
       },
-      "expected": [
-        "communicate"
-      ]
+      "expected": ["communicate"]
     },
     {
       "id": "mcp-gmail-draft",
@@ -2064,9 +1824,7 @@
         "summary": "gmail__reply",
         "destructive": "unknown"
       },
-      "expected": [
-        "communicate"
-      ]
+      "expected": ["communicate"]
     },
     {
       "id": "mcp-slack-post-message",
@@ -2083,9 +1841,7 @@
           "readOnlyHint": false
         }
       },
-      "expected": [
-        "communicate"
-      ]
+      "expected": ["communicate"]
     },
     {
       "id": "mcp-github-create-issue",
@@ -2117,9 +1873,7 @@
           "destructiveHint": true
         }
       },
-      "expected": [
-        "delete"
-      ]
+      "expected": ["delete"]
     },
     {
       "id": "mcp-linear-remove-label",
@@ -2153,9 +1907,7 @@
           "destructiveHint": true
         }
       },
-      "expected": [
-        "delete"
-      ]
+      "expected": ["delete"]
     },
     {
       "id": "mcp-drive-trash",
@@ -2171,9 +1923,7 @@
           "destructiveHint": true
         }
       },
-      "expected": [
-        "delete"
-      ]
+      "expected": ["delete"]
     },
     {
       "id": "mcp-stripe-payment-intent",
@@ -2185,9 +1935,7 @@
         "summary": "stripe__create_payment_intent",
         "destructive": "unknown"
       },
-      "expected": [
-        "money"
-      ]
+      "expected": ["money"]
     },
     {
       "id": "mcp-stripe-refund",
@@ -2199,9 +1947,7 @@
         "summary": "stripe__create_refund",
         "destructive": "unknown"
       },
-      "expected": [
-        "money"
-      ]
+      "expected": ["money"]
     },
     {
       "id": "mcp-wise-transfer",
@@ -2213,9 +1959,7 @@
         "summary": "wise__create_transfer",
         "destructive": "unknown"
       },
-      "expected": [
-        "money"
-      ]
+      "expected": ["money"]
     },
     {
       "id": "mcp-venmo-send-money",
@@ -2228,9 +1972,7 @@
         "summary": "venmo__send_money",
         "destructive": "unknown"
       },
-      "expected": [
-        "money"
-      ]
+      "expected": ["money"]
     },
     {
       "id": "mcp-execute-payment",
@@ -2242,9 +1984,7 @@
         "summary": "payments__execute_payment",
         "destructive": "unknown"
       },
-      "expected": [
-        "money"
-      ]
+      "expected": ["money"]
     },
     {
       "id": "mcp-invoice",
@@ -2272,9 +2012,7 @@
         "summary": "shopify__create_order",
         "destructive": "unknown"
       },
-      "expected": [
-        "purchase"
-      ]
+      "expected": ["purchase"]
     },
     {
       "id": "mcp-book-flight",
@@ -2290,9 +2028,7 @@
           "readOnlyHint": false
         }
       },
-      "expected": [
-        "purchase"
-      ]
+      "expected": ["purchase"]
     },
     {
       "id": "mcp-update-book",
@@ -2317,9 +2053,7 @@
         "summary": "billing__subscribe_to_plan",
         "destructive": "unknown"
       },
-      "expected": [
-        "purchase"
-      ]
+      "expected": ["purchase"]
     },
     {
       "id": "mcp-tweet",
@@ -2331,9 +2065,7 @@
         "summary": "twitter__post_tweet",
         "destructive": "unknown"
       },
-      "expected": [
-        "publish"
-      ]
+      "expected": ["publish"]
     },
     {
       "id": "mcp-wp-publish",
@@ -2345,9 +2077,7 @@
         "summary": "wordpress__publish_post",
         "destructive": "unknown"
       },
-      "expected": [
-        "publish"
-      ]
+      "expected": ["publish"]
     },
     {
       "id": "mcp-update-post",
@@ -2360,9 +2090,7 @@
         "summary": "ghost__update_post",
         "destructive": "unknown"
       },
-      "expected": [
-        "publish"
-      ]
+      "expected": ["publish"]
     },
     {
       "id": "mcp-reset-password",
@@ -2378,9 +2106,7 @@
           "destructiveHint": true
         }
       },
-      "expected": [
-        "credentials"
-      ]
+      "expected": ["credentials"]
     },
     {
       "id": "mcp-update-mfa",
@@ -2392,15 +2118,11 @@
         "summary": "okta__update_user_mfa",
         "destructive": "unknown"
       },
-      "expected": [
-        "credentials"
-      ]
+      "expected": ["credentials"]
     },
     {
       "id": "mcp-submit-otp",
-      "tags": [
-        "sensitive_field"
-      ],
+      "tags": ["sensitive_field"],
       "action": {
         "surface": "mcp",
         "modelName": "bank__submit_otp_code",
@@ -2409,15 +2131,11 @@
         "summary": "bank__submit_otp_code",
         "destructive": "unknown"
       },
-      "expected": [
-        "credentials"
-      ]
+      "expected": ["credentials"]
     },
     {
       "id": "mcp-update-card",
-      "tags": [
-        "sensitive_field"
-      ],
+      "tags": ["sensitive_field"],
       "action": {
         "surface": "mcp",
         "modelName": "billing__update_card_details",
@@ -2430,15 +2148,11 @@
           "readOnlyHint": false
         }
       },
-      "expected": [
-        "money"
-      ]
+      "expected": ["money"]
     },
     {
       "id": "mcp-add-payment-method",
-      "tags": [
-        "sensitive_field"
-      ],
+      "tags": ["sensitive_field"],
       "action": {
         "surface": "mcp",
         "modelName": "shop__add_payment_method",
@@ -2447,9 +2161,7 @@
         "summary": "shop__add_payment_method",
         "destructive": "additive"
       },
-      "expected": [
-        "money"
-      ]
+      "expected": ["money"]
     },
     {
       "id": "mcp-email-customer",
@@ -2461,9 +2173,7 @@
         "summary": "crm__email_customer",
         "destructive": "unknown"
       },
-      "expected": [
-        "communicate"
-      ]
+      "expected": ["communicate"]
     },
     {
       "id": "mcp-email-settings",
@@ -2504,9 +2214,7 @@
         "summary": "calendar__send_invitation",
         "destructive": "unknown"
       },
-      "expected": [
-        "communicate"
-      ]
+      "expected": ["communicate"]
     },
     {
       "id": "mcp-drive-share",
@@ -2518,9 +2226,7 @@
         "summary": "drive__share_file",
         "destructive": "unknown"
       },
-      "expected": [
-        "communicate"
-      ]
+      "expected": ["communicate"]
     },
     {
       "id": "mcp-archive-email",
@@ -2556,9 +2262,7 @@
         "summary": "homebrew__install_package",
         "destructive": "unknown"
       },
-      "expected": [
-        "install"
-      ]
+      "expected": ["install"]
     },
     {
       "id": "mcp-comment",
@@ -2588,9 +2292,7 @@
         "destructive": "unknown",
         "description": "Sends an SMS message to a phone number. Charges apply."
       },
-      "expected": [
-        "communicate"
-      ]
+      "expected": ["communicate"]
     },
     {
       "id": "mcp-workflow-description",
@@ -2621,9 +2323,7 @@
           "destructiveHint": true
         }
       },
-      "expected": [
-        "delete"
-      ]
+      "expected": ["delete"]
     },
     {
       "id": "custom-flight",
@@ -2637,9 +2337,7 @@
           "label": "Book"
         }
       },
-      "expected": [
-        "purchase"
-      ],
+      "expected": ["purchase"],
       "customRules": [
         {
           "id": "custom.00000000-0000-4000-8000-000000000001",
@@ -2654,9 +2352,7 @@
           "locked": false
         }
       ],
-      "expectedCustom": [
-        "custom.00000000-0000-4000-8000-000000000001"
-      ]
+      "expectedCustom": ["custom.00000000-0000-4000-8000-000000000001"]
     },
     {
       "id": "custom-hotel-not-flight",
@@ -2670,9 +2366,7 @@
           "label": "Book"
         }
       },
-      "expected": [
-        "purchase"
-      ],
+      "expected": ["purchase"],
       "customRules": [
         {
           "id": "custom.00000000-0000-4000-8000-000000000001",
@@ -2695,9 +2389,7 @@
         "destructive": "unknown",
         "description": "Sends an email message from the signed-in account."
       },
-      "expected": [
-        "communicate"
-      ],
+      "expected": ["communicate"],
       "customRules": [
         {
           "id": "custom.00000000-0000-4000-8000-000000000002",
@@ -2720,9 +2412,7 @@
           "label": "Delete 3 Photos"
         }
       },
-      "expected": [
-        "delete"
-      ],
+      "expected": ["delete"],
       "customRules": [
         {
           "id": "custom.00000000-0000-4000-8000-000000000003",
@@ -2731,9 +2421,7 @@
           "locked": false
         }
       ],
-      "expectedCustom": [
-        "custom.00000000-0000-4000-8000-000000000003"
-      ]
+      "expectedCustom": ["custom.00000000-0000-4000-8000-000000000003"]
     },
     {
       "id": "custom-linkedin",
@@ -2746,9 +2434,7 @@
           "accessibleName": "Post"
         }
       },
-      "expected": [
-        "publish"
-      ],
+      "expected": ["publish"],
       "customRules": [
         {
           "id": "custom.00000000-0000-4000-8000-000000000004",
@@ -2757,9 +2443,7 @@
           "locked": false
         }
       ],
-      "expectedCustom": [
-        "custom.00000000-0000-4000-8000-000000000004"
-      ]
+      "expectedCustom": ["custom.00000000-0000-4000-8000-000000000004"]
     },
     {
       "id": "custom-food",
@@ -2775,9 +2459,7 @@
           "readOnlyHint": false
         }
       },
-      "expected": [
-        "purchase"
-      ],
+      "expected": ["purchase"],
       "customRules": [
         {
           "id": "custom.00000000-0000-4000-8000-000000000005",
@@ -2786,9 +2468,7 @@
           "locked": false
         }
       ],
-      "expectedCustom": [
-        "custom.00000000-0000-4000-8000-000000000005"
-      ]
+      "expectedCustom": ["custom.00000000-0000-4000-8000-000000000005"]
     },
     {
       "id": "custom-thermostat",
@@ -2815,9 +2495,7 @@
           "locked": false
         }
       ],
-      "expectedCustom": [
-        "custom.00000000-0000-4000-8000-000000000006"
-      ]
+      "expectedCustom": ["custom.00000000-0000-4000-8000-000000000006"]
     }
   ]
 }

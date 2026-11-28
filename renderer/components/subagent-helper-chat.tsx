@@ -115,7 +115,10 @@ export interface SubagentHelperChatProps {
  * A helper asking to write stays running in its record; while that question is
  * shown inside this chat, the chat says what the helper is waiting on.
  */
-function shownState(run: SubagentRunSnapshot, waitingOnApproval: boolean): SubagentRunSnapshot["state"] {
+function shownState(
+  run: SubagentRunSnapshot,
+  waitingOnApproval: boolean,
+): SubagentRunSnapshot["state"] {
   return waitingOnApproval && subagentHelperIsActive(run.state) ? "needs_attention" : run.state;
 }
 
@@ -295,7 +298,8 @@ export const SubagentHelperChat = React.forwardRef<HTMLHeadingElement, SubagentH
     const problem = subagentHelperProblem(run, summary, { trimmed: transcript.trimmed });
     const canStop = run.version === 2 && run.execution === "foreground" && active && onStop;
     const stopText = hasActiveHelpers ? "Stop all" : "Stop";
-    const working = !approval && (run.state === "running" || run.state === "queued" || run.state === "starting");
+    const working =
+      !approval && (run.state === "running" || run.state === "queued" || run.state === "starting");
     const growthRevision = transcript.revision * 1_000_000 + run.revision;
 
     const invokeStop = async () => {
@@ -326,7 +330,11 @@ export const SubagentHelperChat = React.forwardRef<HTMLHeadingElement, SubagentH
       const element = scrollRef.current;
       if (!element || typeof window === "undefined") return;
       const next = { runId: run.runId, revision: growthRevision };
-      const action = subagentDetailGrowthAction(previousRef.current, next, userNavigatedRef.current);
+      const action = subagentDetailGrowthAction(
+        previousRef.current,
+        next,
+        userNavigatedRef.current,
+      );
       const first = previousRef.current === null;
       previousRef.current = next;
       if (action === "reset" || first) {
@@ -385,7 +393,10 @@ export const SubagentHelperChat = React.forwardRef<HTMLHeadingElement, SubagentH
       if (!detailsOpen) return;
       const section = detailsRef.current;
       if (!section) return;
-      section.scrollIntoView?.({ block: "nearest", behavior: prefersReducedMotion() ? "auto" : "smooth" });
+      section.scrollIntoView?.({
+        block: "nearest",
+        behavior: prefersReducedMotion() ? "auto" : "smooth",
+      });
       section.focus({ preventScroll: true });
     }, [detailsOpen]);
 
@@ -407,64 +418,66 @@ export const SubagentHelperChat = React.forwardRef<HTMLHeadingElement, SubagentH
       >
         <header className={cn("shrink-0", frame)}>
           <div className={cn("flex min-w-0 items-start gap-2.5 pb-2 pt-3", column)}>
-          <span
-            aria-hidden="true"
-            className={cn("mt-2 size-2 shrink-0 rounded-full", SUBAGENT_HELPER_TONE_DOT[tone])}
-            data-subagent-helper-dot={tone}
-          />
-          <span className="min-w-0 flex-1">
-            <h2
-              ref={headingRef}
-              id={headingId}
-              tabIndex={-1}
-              data-subagent-detail-heading="true"
-              className="break-words rounded-sm text-strong font-medium text-primary outline-none focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+            <span
+              aria-hidden="true"
+              className={cn("mt-2 size-2 shrink-0 rounded-full", SUBAGENT_HELPER_TONE_DOT[tone])}
+              data-subagent-helper-dot={tone}
+            />
+            <span className="min-w-0 flex-1">
+              <h2
+                ref={headingRef}
+                id={headingId}
+                tabIndex={-1}
+                data-subagent-detail-heading="true"
+                className="break-words rounded-sm text-strong font-medium text-primary outline-none focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+              >
+                {run.label}
+              </h2>
+              <Text as="p" variant="small" color="secondary" className="mt-0.5">
+                {role ? `${role} · ` : ""}
+                {status} ·{" "}
+                <span className="tabular-nums">
+                  {formatSubagentElapsed(run.startedAt, endedAt)}
+                </span>
+              </Text>
+            </span>
+            <Button
+              variant="transparent"
+              size="small"
+              iconOnly
+              aria-label="Technical details"
+              aria-expanded={detailsOpen}
+              aria-controls={detailsOpen ? detailsId : undefined}
+              onClick={toggleDetails}
+              className="shrink-0 motion-reduce:transition-none"
+              data-subagent-helper-details-toggle="true"
             >
-              {run.label}
-            </h2>
-            <Text as="p" variant="small" color="secondary" className="mt-0.5">
-              {role ? `${role} · ` : ""}
-              {status} ·{" "}
-              <span className="tabular-nums">{formatSubagentElapsed(run.startedAt, endedAt)}</span>
-            </Text>
-          </span>
-          <Button
-            variant="transparent"
-            size="small"
-            iconOnly
-            aria-label="Technical details"
-            aria-expanded={detailsOpen}
-            aria-controls={detailsOpen ? detailsId : undefined}
-            onClick={toggleDetails}
-            className="shrink-0 motion-reduce:transition-none"
-            data-subagent-helper-details-toggle="true"
-          >
-            <MoreHorizontal aria-hidden="true" />
-          </Button>
+              <MoreHorizontal aria-hidden="true" />
+            </Button>
           </div>
         </header>
 
         {waitingOnMain && onReturnToMain ? (
           <div className={cn("shrink-0", frame)}>
-          <div className={cn("pb-2", column)}>
-            <Callout
-              role="note"
-              className="flex-row items-center justify-between gap-3 bg-status-warning-surface px-3 py-2 text-small"
-              data-subagent-helper-main-waiting={waitingOnMain}
-            >
-              <Text as="p" variant="small" className="min-w-0 text-status-warning">
-                {MAIN_CHAT_WAITING_TEXT[waitingOnMain]}
-              </Text>
-              <Button
-                variant="transparent"
-                size="small"
-                onClick={onReturnToMain}
-                className="shrink-0 motion-reduce:transition-none"
+            <div className={cn("pb-2", column)}>
+              <Callout
+                role="note"
+                className="flex-row items-center justify-between gap-3 bg-status-warning-surface px-3 py-2 text-small"
+                data-subagent-helper-main-waiting={waitingOnMain}
               >
-                {waitingOnMain === "approval" ? "Go to approval" : "Answer question"}
-              </Button>
-            </Callout>
-          </div>
+                <Text as="p" variant="small" className="min-w-0 text-status-warning">
+                  {MAIN_CHAT_WAITING_TEXT[waitingOnMain]}
+                </Text>
+                <Button
+                  variant="transparent"
+                  size="small"
+                  onClick={onReturnToMain}
+                  className="shrink-0 motion-reduce:transition-none"
+                >
+                  {waitingOnMain === "approval" ? "Go to approval" : "Answer question"}
+                </Button>
+              </Callout>
+            </div>
           </div>
         ) : null}
 
@@ -478,7 +491,12 @@ export const SubagentHelperChat = React.forwardRef<HTMLHeadingElement, SubagentH
             className="min-h-0 flex-1 overflow-y-auto pb-6 pt-2"
             data-subagent-scroll-region="true"
           >
-            <div className={cn("flex w-full flex-col gap-4", expanded ? EXPANDED_COLUMN : "mx-auto max-w-2xl px-4")}>
+            <div
+              className={cn(
+                "flex w-full flex-col gap-4",
+                expanded ? EXPANDED_COLUMN : "mx-auto max-w-2xl px-4",
+              )}
+            >
               {detailsOpen ? (
                 <section
                   ref={detailsRef}
@@ -501,7 +519,8 @@ export const SubagentHelperChat = React.forwardRef<HTMLHeadingElement, SubagentH
                         <dd
                           className={cn(
                             "tabular-nums text-secondary",
-                            subagentContextIsApproachingLimit(contextUsage) && "text-support-warning",
+                            subagentContextIsApproachingLimit(contextUsage) &&
+                              "text-support-warning",
                           )}
                           data-subagent-helper-context-usage="true"
                         >
@@ -526,10 +545,17 @@ export const SubagentHelperChat = React.forwardRef<HTMLHeadingElement, SubagentH
                     ) : null}
                     <dt className="text-tertiary">Model ID</dt>
                     <dd className="flex min-w-0 items-center gap-1">
-                      <span className="min-w-0 truncate font-mono text-secondary" title={modelDisplay.model}>
+                      <span
+                        className="min-w-0 truncate font-mono text-secondary"
+                        title={modelDisplay.model}
+                      >
                         {modelDisplay.model}
                       </span>
-                      <CopyButton text={modelDisplay.model} label="Copy model ID" className="shrink-0" />
+                      <CopyButton
+                        text={modelDisplay.model}
+                        label="Copy model ID"
+                        className="shrink-0"
+                      />
                     </dd>
                     <dt className="text-tertiary">Run ID</dt>
                     <dd className="flex min-w-0 items-center gap-1">
@@ -692,7 +718,10 @@ export const SubagentHelperChat = React.forwardRef<HTMLHeadingElement, SubagentH
           ) : null}
         </div>
 
-        <footer className={cn("shrink-0 border-t border-separator", frame)} data-subagent-helper-bar="true">
+        <footer
+          className={cn("shrink-0 border-t border-separator", frame)}
+          data-subagent-helper-bar="true"
+        >
           <div className={cn("flex min-w-0 items-center gap-2 py-2", column)}>
             <Text
               as="p"

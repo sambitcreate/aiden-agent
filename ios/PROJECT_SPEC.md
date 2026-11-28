@@ -178,7 +178,6 @@ The original `docs/plans/aiden-on-the-go-plan.md` phases 0 through 12 remain the
 
 Preserve the imported Hermex upstream MIT license, copyright, and third-party notices while removing Hermes/Hermex product identity. New Aiden protocol and product documentation is owned by this repository.
 
-
 ### September 2026 approved Read Aloud extension
 
 The user's desktop-configured Gemini Read Aloud request supersedes older

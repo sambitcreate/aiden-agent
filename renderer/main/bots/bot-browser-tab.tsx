@@ -23,7 +23,11 @@ export interface BotBrowserPresence {
 const UNKNOWN: BotBrowserPresence = { workspaceId: null, hasTabs: false, resolved: false };
 
 function same(left: BotBrowserPresence, right: BotBrowserPresence): boolean {
-  return left.workspaceId === right.workspaceId && left.hasTabs === right.hasTabs && left.resolved === right.resolved;
+  return (
+    left.workspaceId === right.workspaceId &&
+    left.hasTabs === right.hasTabs &&
+    left.resolved === right.resolved
+  );
 }
 
 /**
@@ -43,7 +47,8 @@ export function useBotBrowserPresence(botId: string, onShow: () => void): BotBro
     // Each hold is revealed once while this chat is open, so a later focus or
     // state change never pulls the panel back to Browser.
     const revealedHolds = new Set<string>();
-    const update = (next: BotBrowserPresence) => setPresence((current) => (same(current, next) ? current : next));
+    const update = (next: BotBrowserPresence) =>
+      setPresence((current) => (same(current, next) ? current : next));
     const revealNewHolds = (state: BrowserState) => {
       let fresh = false;
       for (const tab of state.tabs) {
@@ -70,7 +75,8 @@ export function useBotBrowserPresence(botId: string, onShow: () => void): BotBro
         update({ workspaceId, hasTabs: state.tabs.length > 0, resolved: true });
         revealNewHolds(state);
       } catch {
-        if (!cancelled) setPresence((current) => (current.resolved ? current : { ...current, resolved: true }));
+        if (!cancelled)
+          setPresence((current) => (current.resolved ? current : { ...current, resolved: true }));
       }
     };
     void read();
@@ -98,6 +104,16 @@ export function useBotBrowserPresence(botId: string, onShow: () => void): BotBro
 }
 
 /** The Browser tab's body: the Bot's own browser, live while the tab is shown. */
-export function BotBrowserTab({ workspaceId, botName, active }: { workspaceId: string; botName: string; active: boolean }) {
-  return <BrowserPanel workspaceId={workspaceId} active={active} variant="bot" agentName={botName} />;
+export function BotBrowserTab({
+  workspaceId,
+  botName,
+  active,
+}: {
+  workspaceId: string;
+  botName: string;
+  active: boolean;
+}) {
+  return (
+    <BrowserPanel workspaceId={workspaceId} active={active} variant="bot" agentName={botName} />
+  );
 }

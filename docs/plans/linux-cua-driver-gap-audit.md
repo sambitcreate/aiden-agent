@@ -6,9 +6,9 @@ Status: source audit, 2026-09-12. No Linux Computer Use admission or full-parity
 
 Aiden currently pins only the macOS universal artifact in `resources/computer-use/cua-driver-artifact.json`: Cua 0.8.3, tag `cua-driver-rs-v0.8.3`, source `0612c26b2c7b8556f6de7f6b4f3927ecac914e4f`. The [release API](https://api.github.com/repos/trycua/cua/releases/tags/cua-driver-rs-v0.8.3) advertises Linux bare-binary archives:
 
-| Asset | Archive SHA-256 reported by GitHub | Size |
-| --- | --- | --- |
-| `cua-driver-rs-0.8.3-linux-arm64-binary.tar.gz` | `910456505b927966867f668e37195b130364dcc50f566d4301cd9c3760da9cd3` | 10,856,213 bytes |
+| Asset                                            | Archive SHA-256 reported by GitHub                                 | Size             |
+| ------------------------------------------------ | ------------------------------------------------------------------ | ---------------- |
+| `cua-driver-rs-0.8.3-linux-arm64-binary.tar.gz`  | `910456505b927966867f668e37195b130364dcc50f566d4301cd9c3760da9cd3` | 10,856,213 bytes |
 | `cua-driver-rs-0.8.3-linux-x86_64-binary.tar.gz` | `42bd2cfb2df60b9d635eb52aaf389ff816e6a7ff45c843e815688a8d96feda2f` | 10,828,874 bytes |
 
 Both exact archives were subsequently downloaded through the release, matched the advertised SHA-256 values above, and contained one regular `cua-driver` executable. Static ELF inspection confirmed AArch64 and x86-64 respectively. Extracted executable SHA-256 values:
@@ -24,13 +24,13 @@ The pinned [Wayland selection gate](https://github.com/trycua/cua/blob/0612c26b2
 
 References below use the immutable source commit. The [platform table and background contract](https://github.com/trycua/cua/blob/0612c26b2c7b8556f6de7f6b4f3927ecac914e4f/docs/content/docs/reference/cua-driver/platform-support.mdx#L39-L79) and [validation ledger](https://github.com/trycua/cua/blob/0612c26b2c7b8556f6de7f6b4f3927ecac914e4f/libs/cua-driver/docs/linux-desktop-validation.md#L5-L14) support this matrix:
 
-| Surface | Pinned upstream position | Fedora GNOME acceptance still needed |
-| --- | --- | --- |
-| Accessibility and semantic background actions | AT-SPI actions and native GTK behavior covered; semantic actions can avoid raising a window. | Real GTK and Electron/Tauri actions, focus and foreground noninterference; unavailable semantics must refuse. GNOME shared-renderer coverage remains open upstream. |
-| Geometry, window targeting, foreground input | GNOME route depends on WinRects geometry and verified activation before portal/libei input. | Compatible trusted extension, target/focus checks, grant cancellation and revocation, real input outcomes. |
-| Screenshots | Display capture tries Shell helper, native Wayland protocols, then Screenshot portal; window capture crops a display image using known geometry. | Actual GNOME capture route, consent, scale/multiple displays, occlusion and minimized-window results. A display crop does not establish independent capture of an occluded window. |
-| Raw background input | Ordinary standard Wayland clients cannot address arbitrary occluded surfaces through active-seat input. Semantic hit-test fallbacks cover some pixel-addressed actions. | Preserve structured refusals; do not silently foreground or inject into the occluding application. |
-| Video and broader renderers | GNOME portal video and shared renderer matrix remain open in the ledger. | No accepted recording or complete app/toolkit parity claim. |
+| Surface                                       | Pinned upstream position                                                                                                                                                | Fedora GNOME acceptance still needed                                                                                                                                               |
+| --------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Accessibility and semantic background actions | AT-SPI actions and native GTK behavior covered; semantic actions can avoid raising a window.                                                                            | Real GTK and Electron/Tauri actions, focus and foreground noninterference; unavailable semantics must refuse. GNOME shared-renderer coverage remains open upstream.                |
+| Geometry, window targeting, foreground input  | GNOME route depends on WinRects geometry and verified activation before portal/libei input.                                                                             | Compatible trusted extension, target/focus checks, grant cancellation and revocation, real input outcomes.                                                                         |
+| Screenshots                                   | Display capture tries Shell helper, native Wayland protocols, then Screenshot portal; window capture crops a display image using known geometry.                        | Actual GNOME capture route, consent, scale/multiple displays, occlusion and minimized-window results. A display crop does not establish independent capture of an occluded window. |
+| Raw background input                          | Ordinary standard Wayland clients cannot address arbitrary occluded surfaces through active-seat input. Semantic hit-test fallbacks cover some pixel-addressed actions. | Preserve structured refusals; do not silently foreground or inject into the occluding application.                                                                                 |
+| Video and broader renderers                   | GNOME portal video and shared renderer matrix remain open in the ledger.                                                                                                | No accepted recording or complete app/toolkit parity claim.                                                                                                                        |
 
 The actual [capture dispatcher](https://github.com/trycua/cua/blob/0612c26b2c7b8556f6de7f6b4f3927ecac914e4f/libs/cua-driver/rust/crates/platform-linux/src/wayland/mod.rs#L924-L1001) is more precise than nearby comments: it attempts several routes and crops the composited display for window captures. The existence of a protocol fallback in source does not prove GNOME 50 advertises that protocol or that the release binary succeeds on it.
 
@@ -65,17 +65,17 @@ A source-domain transition from a constrained launcher into main, followed by a 
 
 Source-only re-read of `cua-driver-rs-v0.8.3..cua-driver-rs-v0.34.1` while the macOS pin moved to 0.34.1 ([upgrade plan](cua-driver-0-34-upgrade-plan.md)). Linux stays disabled; nothing here was installed or exercised on the Fedora VM.
 
-| Audit gap | 0.34.1 status | Evidence |
-| --- | --- | --- |
-| WinRects declares Shell 45–48 | Declared 45–50 (API 10); contributor-tested on Ubuntu GNOME 50.1 only | trycua/cua#2565; GNOME 50 capture hardening #2226 |
+| Audit gap                                      | 0.34.1 status                                                                                                                    | Evidence                                                     |
+| ---------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------ |
+| WinRects declares Shell 45–48                  | Declared 45–50 (API 10); contributor-tested on Ubuntu GNOME 50.1 only                                                            | trycua/cua#2565; GNOME 50 capture hardening #2226            |
 | No caller authentication on `org.cua.WinRects` | Still open and wider: new `CaptureWindow`/`CaptureWindowPreview` capture an occluded window by id, `pid=0` skips the owner check | `winrects@cua/extension.js` (no `get_sender()` check); #4882 |
-| Authenticate the service side | Partially closed: the driver resolves the unique bus owner and requires same-UID, root-owned, non-writable `gnome-shell` | `platform-linux/src/wayland/shell_helper.rs` (#2367) |
-| Protect installed extension code | Still open: `install.sh` copies into user-writable `~/.local/share/gnome-shell/extensions` | `wayland-helper/install.sh` |
-| Wayland gate off by default | Unchanged (`CUA_DRIVER_RS_ENABLE_WAYLAND` opt-in) | `wayland/mod.rs::wayland_enabled` |
-| Window capture was a display crop | Closed for helper API ≥ 9 (per-actor capture; refuses locked, greeter, minimized) | #4882 |
-| Portal ScreenCast/RemoteDesktop route | Still open; existing portal code hardened (per-portal zbus connection, libei EIS ack) | #2552, #4880 |
-| GNOME Electron/Tauri renderer coverage | Still open; `linux-desktop-validation.md` unchanged | `platform-support.mdx` open gaps |
-| Linux artifact provenance | Improved: every asset ships a cosign `.sigstore.json` bundle | `cd-rust-cua-driver.yml` |
+| Authenticate the service side                  | Partially closed: the driver resolves the unique bus owner and requires same-UID, root-owned, non-writable `gnome-shell`         | `platform-linux/src/wayland/shell_helper.rs` (#2367)         |
+| Protect installed extension code               | Still open: `install.sh` copies into user-writable `~/.local/share/gnome-shell/extensions`                                       | `wayland-helper/install.sh`                                  |
+| Wayland gate off by default                    | Unchanged (`CUA_DRIVER_RS_ENABLE_WAYLAND` opt-in)                                                                                | `wayland/mod.rs::wayland_enabled`                            |
+| Window capture was a display crop              | Closed for helper API ≥ 9 (per-actor capture; refuses locked, greeter, minimized)                                                | #4882                                                        |
+| Portal ScreenCast/RemoteDesktop route          | Still open; existing portal code hardened (per-portal zbus connection, libei EIS ack)                                            | #2552, #4880                                                 |
+| GNOME Electron/Tauri renderer coverage         | Still open; `linux-desktop-validation.md` unchanged                                                                              | `platform-support.mdx` open gaps                             |
+| Linux artifact provenance                      | Improved: every asset ships a cosign `.sigstore.json` bundle                                                                     | `cd-rust-cua-driver.yml`                                     |
 
 The blocker is now Aiden's trust boundary rather than GNOME compatibility. Minimal path: re-pin the full `linux-*.tar.gz` package (it bundles the API 10 helper), run upstream's `scripts/ci/linux/run-rust-e2e-desktop.sh gnome` and Aiden's GTK/Electron matrix on the Fedora VM, then either land sender authentication in WinRects plus a root-owned system-wide install (fork or upstream PR) or record an explicit residual-risk decision. KWin and Hyprland helpers added upstream do not apply to the GNOME target. Other ACP hosts now co-install the same `winrects@cua` UUID, so a per-user install would inherit their install and downgrade races.
 

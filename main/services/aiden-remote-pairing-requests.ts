@@ -40,12 +40,7 @@ const POLL_SECRET_PATTERN = /^[A-Za-z0-9_-]{43}$/u;
 export type AidenPairingRequestTransport = "lan" | "tailscale";
 export type AidenPairingRequestDeviceType = "mac" | "linux";
 /** The states a requester can observe. `approving` is reported as `pending`. */
-export type AidenPairingRequestState =
-  | "pending"
-  | "approved"
-  | "denied"
-  | "expired"
-  | "cancelled";
+export type AidenPairingRequestState = "pending" | "approved" | "denied" | "expired" | "cancelled";
 type InternalState = AidenPairingRequestState | "approving";
 
 export type AidenPairingRequestTrust =
@@ -148,7 +143,9 @@ interface PairingRequestRecord {
   cancelTimer?: () => void;
 }
 
-function invalidRequest(message = "Connection request details are invalid."): AidenRemoteServiceError {
+function invalidRequest(
+  message = "Connection request details are invalid.",
+): AidenRemoteServiceError {
   return new AidenRemoteServiceError("invalid_request", message, 400);
 }
 
@@ -399,11 +396,7 @@ export class AidenRemotePairingRequestService {
     }
     this.expireIfDue(record);
     if (record.state === "expired") {
-      throw new AidenRemoteServiceError(
-        "pairing_expired",
-        "This connection request expired.",
-        403,
-      );
+      throw new AidenRemoteServiceError("pairing_expired", "This connection request expired.", 403);
     }
     if (record.state !== "pending") throw closed();
     record.matchCode = pairingRequestMatchCode({
@@ -460,7 +453,10 @@ export class AidenRemotePairingRequestService {
    * the cancel is acknowledged. If the revocation cannot be recorded the
    * cancel fails and may be retried; retirement and close() also revoke it.
    */
-  async cancel(requestId: string, secret: string | undefined): Promise<{ requestId: string; state: AidenPairingRequestState }> {
+  async cancel(
+    requestId: string,
+    secret: string | undefined,
+  ): Promise<{ requestId: string; state: AidenPairingRequestState }> {
     const record = this.authorize(requestId, secret);
     this.expireIfDue(record);
     if (isOpen(record)) {
@@ -496,7 +492,9 @@ export class AidenRemotePairingRequestService {
     const now = this.now();
     for (const record of [...this.records.values()]) this.expireIfDue(record);
     return [...this.records.values()]
-      .filter((record) => isOpen(record) && record.matchCode !== undefined && now < record.expiresAt)
+      .filter(
+        (record) => isOpen(record) && record.matchCode !== undefined && now < record.expiresAt,
+      )
       .sort((left, right) => left.createdAt - right.createdAt)
       .map((record) => ({
         requestId: record.requestId,
@@ -548,7 +546,11 @@ export class AidenRemotePairingRequestService {
     this.cancelOpen();
     const revocations: Promise<void>[] = [];
     for (const record of [...this.records.values()]) {
-      if (record.state === "approved" && (!record.delivered || record.withdrawn) && record.issuedDeviceId) {
+      if (
+        record.state === "approved" &&
+        (!record.delivered || record.withdrawn) &&
+        record.issuedDeviceId
+      ) {
         revocations.push(this.revokeIssued(record.issuedDeviceId));
       }
       record.waiter?.();
@@ -684,7 +686,10 @@ export class AidenRemotePairingRequestService {
     if (isOpen(record)) this.finish(record, "expired");
   }
 
-  private finish(record: PairingRequestRecord, state: Exclude<InternalState, "pending" | "approving">): void {
+  private finish(
+    record: PairingRequestRecord,
+    state: Exclude<InternalState, "pending" | "approving">,
+  ): void {
     record.state = state;
     record.cancelTimer?.();
     record.cancelTimer = undefined;
@@ -764,7 +769,8 @@ export class AidenRemotePairingRequestService {
     const soonest = (records: PairingRequestRecord[]) =>
       Math.min(...records.map((record) => record.expiresAt)) - now;
     const fromSource = open.filter((record) => record.source === source);
-    if (fromSource.length >= MAX_OPEN_PAIRING_REQUESTS_PER_SOURCE) throw rateLimited(soonest(fromSource));
+    if (fromSource.length >= MAX_OPEN_PAIRING_REQUESTS_PER_SOURCE)
+      throw rateLimited(soonest(fromSource));
     if (open.length >= MAX_OPEN_PAIRING_REQUESTS) throw rateLimited(soonest(open));
     if (this.records.size >= MAX_RETAINED_PAIRING_REQUESTS) {
       throw rateLimited(PAIRING_REQUEST_RETENTION_MS);

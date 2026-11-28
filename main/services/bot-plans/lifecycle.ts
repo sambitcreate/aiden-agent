@@ -12,8 +12,10 @@ export function createBotPlanLifecycle(deps: {
   const end = (botId: string, reason: "stopped" | "finished"): void => {
     running.delete(botId);
     try {
-      void deps.plans.endRuns(botId, reason).catch(error => deps.onError?.(botId, error));
-    } catch (error) { deps.onError?.(botId, error); }
+      void deps.plans.endRuns(botId, reason).catch((error) => deps.onError?.(botId, error));
+    } catch (error) {
+      deps.onError?.(botId, error);
+    }
   };
   return {
     stateChanged(botId: string, state: Pick<BotSessionState, "kind">): void {
@@ -27,7 +29,9 @@ export function createBotPlanLifecycle(deps: {
       if (completed(state)) end(botId, "finished");
     },
     stopped: (botId: string): void => end(botId, "stopped"),
-    forget: (botId: string): void => { running.delete(botId); },
+    forget: (botId: string): void => {
+      running.delete(botId);
+    },
     clear: (): void => running.clear(),
   };
 }

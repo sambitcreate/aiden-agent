@@ -47,13 +47,19 @@ export function isHookBlockedPrompt(message: MaybeBlockedMessage): boolean {
 }
 
 /** The messages a model may see: every message except hook-blocked prompts. */
-export function withoutHookBlockedPrompts<T extends MaybeBlockedMessage>(messages: readonly T[]): T[] {
+export function withoutHookBlockedPrompts<T extends MaybeBlockedMessage>(
+  messages: readonly T[],
+): T[] {
   return messages.filter((message) => !isHookBlockedPrompt(message));
 }
 
 /** The chat store call that writes or clears the mark. */
 export interface PromptHookBlockStore {
-  setPromptHookBlock(chatId: string, messageId: string, reason: string | undefined): Promise<boolean>;
+  setPromptHookBlock(
+    chatId: string,
+    messageId: string,
+    reason: string | undefined,
+  ): Promise<boolean>;
 }
 
 /**
@@ -121,7 +127,9 @@ export async function clearPromptHookBlock(
  * prompt held in this process counts even when its stored mark never landed,
  * so a fork of it stays blocked under its new id.
  */
-export function hookBlockedField(message: MaybeBlockedMessage): { hookBlocked?: HookBlockedPromptV1 } {
+export function hookBlockedField(message: MaybeBlockedMessage): {
+  hookBlocked?: HookBlockedPromptV1;
+} {
   if (message.role !== "user") return {};
   const held = typeof message.id === "string" ? blockedInThisProcess.get(message.id) : undefined;
   if (held !== undefined) return { hookBlocked: { reason: held } };

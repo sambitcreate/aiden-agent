@@ -20,7 +20,8 @@ export function parseProcNetTcp(table: string): Map<string, number> {
     if (fields.length < 10 || fields[3] !== LISTEN_STATE) continue;
     const port = Number.parseInt(fields[1]!.split(":")[1] ?? "", 16);
     const inode = fields[9]!;
-    if (Number.isInteger(port) && port > 0 && port < 65_536 && inode !== "0") listening.set(inode, port);
+    if (Number.isInteger(port) && port > 0 && port < 65_536 && inode !== "0")
+      listening.set(inode, port);
   }
   return listening;
 }
@@ -44,9 +45,15 @@ export function parseLsofListening(output: string): Map<number, number[]> {
 }
 
 /** The ports `pids` listen on, leaving out any port Aiden's own process (`self`) also listens on. */
-export function portsOfProcesses(byProcess: ReadonlyMap<number, readonly number[]>, pids: readonly number[], self: number): number[] {
+export function portsOfProcesses(
+  byProcess: ReadonlyMap<number, readonly number[]>,
+  pids: readonly number[],
+  self: number,
+): number[] {
   const own = new Set(byProcess.get(self) ?? []);
-  return pids.flatMap((pid) => (pid === self ? [] : (byProcess.get(pid) ?? []).filter((port) => !own.has(port))));
+  return pids.flatMap((pid) =>
+    pid === self ? [] : (byProcess.get(pid) ?? []).filter((port) => !own.has(port)),
+  );
 }
 
 /** The socket inodes a process holds open. */
@@ -72,7 +79,8 @@ async function linuxListeningPorts(pids: readonly number[]): Promise<Map<number,
     ["/proc/net/tcp", "/proc/net/tcp6"].map((file) => fsp.readFile(file, "utf8").catch(() => "")),
   );
   const listening = new Map<string, number>();
-  for (const table of tables) for (const [inode, port] of parseProcNetTcp(table)) listening.set(inode, port);
+  for (const table of tables)
+    for (const [inode, port] of parseProcNetTcp(table)) listening.set(inode, port);
   if (!listening.size) return byProcess;
   const own = new Set(await socketInodes(process.pid));
   for (const pid of pids) {
@@ -104,7 +112,9 @@ function macListeningPorts(pids: readonly number[]): Promise<Map<number, number[
 }
 
 /** The TCP ports each of these processes listens on, from one lookup for all of them. */
-export async function defaultListeningPortsByProcess(pids: readonly number[]): Promise<Map<number, number[]>> {
+export async function defaultListeningPortsByProcess(
+  pids: readonly number[],
+): Promise<Map<number, number[]>> {
   const valid = [...new Set(pids)].filter((pid) => Number.isSafeInteger(pid) && pid > 1);
   if (!valid.length) return new Map();
   return process.platform === "linux"

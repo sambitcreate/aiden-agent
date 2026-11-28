@@ -81,7 +81,9 @@ const CREDENTIAL_RULE_IDS: ReadonlySet<string> = new Set(
  * Mac's card names no rule and says `takesNote: false` instead (Remote
  * contract revision 40).
  */
-export function botHandoffTakesNote(handoff: Pick<BotPendingHandoff, "rule"> & { takesNote?: boolean }): boolean {
+export function botHandoffTakesNote(
+  handoff: Pick<BotPendingHandoff, "rule"> & { takesNote?: boolean },
+): boolean {
   if (handoff.takesNote === false) return false;
   return handoff.rule === undefined || !CREDENTIAL_RULE_IDS.has(handoff.rule.id);
 }
@@ -123,7 +125,8 @@ function boundedText(value: unknown, maximum: number): value is string {
  * as Persian are shaped with them.
  */
 /* eslint-disable no-control-regex -- these are exactly the characters it removes */
-const CARD_CONTROL_CHARACTERS = /[\u0000-\u0008\u000E-\u001F\u007F-\u009F\u00AD\u061C\u180E\u200B\u200E\u200F\u202A-\u202E\u2060-\u2064\u2066-\u206F\uFEFF\uFFF9-\uFFFB]/gu;
+const CARD_CONTROL_CHARACTERS =
+  /[\u0000-\u0008\u000E-\u001F\u007F-\u009F\u00AD\u061C\u180E\u200B\u200E\u200F\u202A-\u202E\u2060-\u2064\u2066-\u206F\uFEFF\uFFF9-\uFFFB]/gu;
 /* eslint-enable no-control-regex */
 /** The line and paragraph separators break a line wherever they are drawn. */
 const UNICODE_LINE_BREAKS = /[\u2028\u2029]/gu;
@@ -140,7 +143,11 @@ export function withoutBotHandoffControls(text: string): string {
 
 /** Collapses whitespace and drops trailing full stops, so "Done" texts never read "code.." */
 export function normalizeBotHandoffAction(text: string): string {
-  return withoutBotHandoffControls(text).replace(/\s+/gu, " ").trim().replace(/[.。]+$/u, "").trimEnd();
+  return withoutBotHandoffControls(text)
+    .replace(/\s+/gu, " ")
+    .trim()
+    .replace(/[.。]+$/u, "")
+    .trimEnd();
 }
 
 /**
@@ -148,7 +155,8 @@ export function normalizeBotHandoffAction(text: string): string {
  * user name or password, no surrounding whitespace, at most 2,048 characters.
  */
 export function isBotHandoffOpenUrl(url: string): boolean {
-  if (typeof url !== "string" || url.length === 0 || url.length > BOT_HANDOFF_URL_MAX_CHARS) return false;
+  if (typeof url !== "string" || url.length === 0 || url.length > BOT_HANDOFF_URL_MAX_CHARS)
+    return false;
   if (url.trim() !== url) return false;
   let parsed: URL;
   try {
@@ -156,7 +164,12 @@ export function isBotHandoffOpenUrl(url: string): boolean {
   } catch {
     return false;
   }
-  return parsed.protocol === "https:" && parsed.hostname.length > 0 && !parsed.username && !parsed.password;
+  return (
+    parsed.protocol === "https:" &&
+    parsed.hostname.length > 0 &&
+    !parsed.username &&
+    !parsed.password
+  );
 }
 
 /** An https origin as `URL.origin` prints it ("https://github.com"). */
@@ -167,7 +180,8 @@ export function isBotHandoffOrigin(value: unknown): value is string {
 
 function ruleOf(value: unknown): BotHandoffRule | undefined {
   if (!isRecord(value)) return undefined;
-  if (!boundedText(value.id, RULE_ID_MAX_CHARS) || !boundedText(value.label, RULE_LABEL_MAX_CHARS)) return undefined;
+  if (!boundedText(value.id, RULE_ID_MAX_CHARS) || !boundedText(value.label, RULE_LABEL_MAX_CHARS))
+    return undefined;
   return { id: value.id, label: value.label };
 }
 
@@ -191,7 +205,8 @@ export function botHandoffResultOf(details: unknown): BotHandoffResultDetails | 
   if (!boundedText(action, BOT_HANDOFF_ACTION_MAX_CHARS)) return undefined;
   if (note !== undefined && !boundedText(note, BOT_HANDOFF_NOTE_MAX_CHARS)) return undefined;
   if (origin !== undefined && !isBotHandoffOrigin(origin)) return undefined;
-  if (toolCallId !== undefined && !boundedText(toolCallId, TOOL_CALL_ID_MAX_CHARS)) return undefined;
+  if (toolCallId !== undefined && !boundedText(toolCallId, TOOL_CALL_ID_MAX_CHARS))
+    return undefined;
   const parsedRule = rule === undefined ? undefined : ruleOf(rule);
   if (rule !== undefined && parsedRule === undefined) return undefined;
   return {
@@ -218,7 +233,9 @@ function signInHost(result: Pick<BotHandoffResultDetails, "action" | "origin">):
 }
 
 /** What the transcript says the person did: "You did this: …", "You skipped this: …", "You signed in to …". */
-export function botHandoffResultLine(result: Pick<BotHandoffResultDetails, "kind" | "outcome" | "action" | "origin">): string {
+export function botHandoffResultLine(
+  result: Pick<BotHandoffResultDetails, "kind" | "outcome" | "action" | "origin">,
+): string {
   if (result.outcome === "skipped") return `You skipped this: ${result.action}`;
   if (result.kind === "sign_in") return `You signed in to ${signInHost(result)}`;
   return `You did this: ${result.action}`;

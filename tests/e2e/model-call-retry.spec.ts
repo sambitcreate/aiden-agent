@@ -2,7 +2,9 @@ import { expect, finishLmStudioOnboarding, test, E2E_ASSISTANT_RESPONSE } from "
 
 const PROMPT = "Answer once the server recovers.";
 
-test("a reply the provider fails with server errors counts down, tries again and answers", async ({ aiden }) => {
+test("a reply the provider fails with server errors counts down, tries again and answers", async ({
+  aiden,
+}) => {
   const { page, lmStudio } = aiden;
   test.skip(!lmStudio.failCompletions, "needs the deterministic model to answer 502");
   await finishLmStudioOnboarding(page);
@@ -11,7 +13,9 @@ test("a reply the provider fails with server errors counts down, tries again and
     lmStudio.requests.filter(
       (request) =>
         request.url === "/v1/chat/completions" &&
-        JSON.stringify((request.body as { messages?: unknown } | null)?.messages ?? "").includes(PROMPT) &&
+        JSON.stringify((request.body as { messages?: unknown } | null)?.messages ?? "").includes(
+          PROMPT,
+        ) &&
         Boolean((request.body as { tools?: unknown[] } | null)?.tools?.length),
     );
 
@@ -38,7 +42,9 @@ test("Stop during a retry wait ends the reply without another request", async ({
     lmStudio.requests.filter(
       (request) =>
         request.url === "/v1/chat/completions" &&
-        JSON.stringify((request.body as { messages?: unknown } | null)?.messages ?? "").includes(PROMPT) &&
+        JSON.stringify((request.body as { messages?: unknown } | null)?.messages ?? "").includes(
+          PROMPT,
+        ) &&
         Boolean((request.body as { tools?: unknown[] } | null)?.tools?.length),
     );
 

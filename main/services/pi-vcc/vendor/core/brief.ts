@@ -12,8 +12,7 @@ const ASSISTANT_TAIL_WORDS = 120;
 
 // Strip common self-reflective assistant prefixes that carry no semantic info.
 // Conservative list: only removes the leading filler, preserves the actual content.
-const SELF_TALK_PREFIX_RE =
-  /^\s*(?:hmm|wait|actually|oh|okay|ok|well|so)[,.!\s-]+/i;
+const SELF_TALK_PREFIX_RE = /^\s*(?:hmm|wait|actually|oh|okay|ok|well|so)[,.!\s-]+/i;
 
 // ── noise filtering ──
 
@@ -32,19 +31,105 @@ const isWord = (seg: { segment: string; isWordLike?: boolean }): boolean =>
 
 // Common stop words — don't count toward budget
 const STOP_WORDS = new Set([
-  "a", "an", "the", "is", "are", "was", "were", "be", "been", "being",
-  "have", "has", "had", "do", "does", "did", "will", "would", "could",
-  "should", "may", "might", "shall", "can", "need", "must",
-  "to", "of", "in", "for", "on", "with", "at", "by", "from", "as",
-  "into", "through", "during", "before", "after", "above", "below",
-  "between", "under", "over",
-  "and", "but", "or", "nor", "not", "so", "yet", "both", "either",
-  "neither", "each", "every", "all", "any", "few", "more", "most",
-  "other", "some", "such", "no",
-  "that", "this", "these", "those", "it", "its",
-  "i", "me", "my", "we", "our", "you", "your", "he", "him", "his",
-  "she", "her", "they", "them", "their", "who", "which", "what",
-  "if", "then", "than", "when", "where", "how", "just", "also",
+  "a",
+  "an",
+  "the",
+  "is",
+  "are",
+  "was",
+  "were",
+  "be",
+  "been",
+  "being",
+  "have",
+  "has",
+  "had",
+  "do",
+  "does",
+  "did",
+  "will",
+  "would",
+  "could",
+  "should",
+  "may",
+  "might",
+  "shall",
+  "can",
+  "need",
+  "must",
+  "to",
+  "of",
+  "in",
+  "for",
+  "on",
+  "with",
+  "at",
+  "by",
+  "from",
+  "as",
+  "into",
+  "through",
+  "during",
+  "before",
+  "after",
+  "above",
+  "below",
+  "between",
+  "under",
+  "over",
+  "and",
+  "but",
+  "or",
+  "nor",
+  "not",
+  "so",
+  "yet",
+  "both",
+  "either",
+  "neither",
+  "each",
+  "every",
+  "all",
+  "any",
+  "few",
+  "more",
+  "most",
+  "other",
+  "some",
+  "such",
+  "no",
+  "that",
+  "this",
+  "these",
+  "those",
+  "it",
+  "its",
+  "i",
+  "me",
+  "my",
+  "we",
+  "our",
+  "you",
+  "your",
+  "he",
+  "him",
+  "his",
+  "she",
+  "her",
+  "they",
+  "them",
+  "their",
+  "who",
+  "which",
+  "what",
+  "if",
+  "then",
+  "than",
+  "when",
+  "where",
+  "how",
+  "just",
+  "also",
 ]);
 
 const normalizeForTokenBudget = (text: string): string =>
@@ -82,7 +167,6 @@ const significantWordSpans = (flat: string): { start: number; end: number }[] =>
   return words;
 };
 
-
 const truncateTokensHeadTail = (text: string, headLimit: number, tailLimit: number): string => {
   const flat = normalizeForTokenBudget(text);
   if (headLimit <= 0 || tailLimit <= 0) return flat;
@@ -93,7 +177,10 @@ const truncateTokensHeadTail = (text: string, headLimit: number, tailLimit: numb
   return `${head}\n...(middle truncated)...\n${tail}`;
 };
 
-const nextRenderableBlock = (blocks: NormalizedBlock[], index: number): NormalizedBlock | undefined => {
+const nextRenderableBlock = (
+  blocks: NormalizedBlock[],
+  index: number,
+): NormalizedBlock | undefined => {
   for (let i = index + 1; i < blocks.length; i++) {
     if (blocks[i].kind !== "tool_result") return blocks[i];
   }
@@ -109,11 +196,13 @@ const isSegmentClosingAssistant = (blocks: NormalizedBlock[], index: number): bo
 // ── bash command compression ──
 
 const BASH_CAP = 240;
-const PIPE_TAIL_RE = /\s*\|\s*(?:head|tail|sort|wc|column|tr|cut|awk|uniq|python3|node|bun)(?:\s[^|]*)?$/;
+const PIPE_TAIL_RE =
+  /\s*\|\s*(?:head|tail|sort|wc|column|tr|cut|awk|uniq|python3|node|bun)(?:\s[^|]*)?$/;
 // Preamble/boilerplate lines that carry no durable fact on their own. Dropped
 // when a script has more informative lines, so `set -euo pipefail\ngit commit`
 // renders the commit rather than the shell option.
-const TRIVIAL_LINE_RE = /^(?:set\s+[-+]|cd\s+\S+$|export\s+\w+=|(?:source|\.)\s+\S+|pwd$|true$|:$|#)/;
+const TRIVIAL_LINE_RE =
+  /^(?:set\s+[-+]|cd\s+\S+$|export\s+\w+=|(?:source|\.)\s+\S+|pwd$|true$|:$|#)/;
 // A real heredoc opener: `<<` at a command boundary — not preceded by a word
 // char or `)`, so shift ops (`8 << 20`, `Rd<<8`) are not misread — with an
 // identifier terminator starting [A-Za-z_], so numeric `<< 10` is rejected too.
@@ -127,7 +216,8 @@ export const HEREDOC_OPEN_RE = /(?<![\w)])<<-?\s*["']?([A-Za-z_]\w*)["']?/;
 const FILEWRITER_HEREDOC_RE = /(?:^|[|&;]\s*)(?:cat|tee|dd)\b/;
 const HEREDOC_BODY_CAP = 80;
 // Body lines that are pure boilerplate and make a poor preview.
-const BODY_NOISE_RE = /^(?:import\s|from\s+\S+\s+import|require\(|const\s+\w+\s*=\s*require|#|\/\/|"""|'''|"use strict"|use\s+strict|<\?php)/;
+const BODY_NOISE_RE =
+  /^(?:import\s|from\s+\S+\s+import|require\(|const\s+\w+\s*=\s*require|#|\/\/|"""|'''|"use strict"|use\s+strict|<\?php)/;
 
 /**
  * If `lines[i]` opens a heredoc whose terminator actually appears on a later
@@ -187,22 +277,27 @@ const compressBash = (raw: string): string => {
       if (t && !BODY_NOISE_RE.test(t)) preview = t;
     }
     if (preview) {
-      const clipped = preview.length > HEREDOC_BODY_CAP ? preview.slice(0, HEREDOC_BODY_CAP - 1) + "\u2026" : preview;
+      const clipped =
+        preview.length > HEREDOC_BODY_CAP
+          ? preview.slice(0, HEREDOC_BODY_CAP - 1) + "\u2026"
+          : preview;
       withoutHeredocBodies[withoutHeredocBodies.length - 1] = `${line.trim()} ${clipped}`;
     }
     i = close; // for-loop's i++ then skips past the terminator line
   }
 
-  const lines = withoutHeredocBodies.map(l => l.trim()).filter(Boolean);
+  const lines = withoutHeredocBodies.map((l) => l.trim()).filter(Boolean);
   if (lines.length === 0) return raw.trim();
 
   const meaningful = lines
-    .filter(l => !TRIVIAL_LINE_RE.test(l))
-    .map(l => stripPipeTail(stripCdPrefix(l)))
+    .filter((l) => !TRIVIAL_LINE_RE.test(l))
+    .map((l) => stripPipeTail(stripCdPrefix(l)))
     .filter(Boolean);
   // If everything was trivial (e.g. a bare `set -e` or `ls`), fall back to the
   // first line so we never emit an empty marker.
-  const chosen = meaningful.length ? meaningful : [stripPipeTail(stripCdPrefix(lines[0]))].filter(Boolean);
+  const chosen = meaningful.length
+    ? meaningful
+    : [stripPipeTail(stripCdPrefix(lines[0]))].filter(Boolean);
 
   const cmd = chosen.join("; ");
   if (cmd.length > BASH_CAP) {
@@ -214,9 +309,14 @@ const compressBash = (raw: string): string => {
 // ── tool summary ──
 
 const TOOL_SUMMARY_FIELDS: Record<string, string> = {
-  Read: "file_path", Edit: "file_path", Write: "file_path",
-  read: "file_path", edit: "file_path", write: "file_path",
-  Glob: "pattern", Grep: "pattern",
+  Read: "file_path",
+  Edit: "file_path",
+  Write: "file_path",
+  read: "file_path",
+  edit: "file_path",
+  write: "file_path",
+  Glob: "pattern",
+  Grep: "pattern",
 };
 
 const toolOneLiner = (name: string, args: Record<string, unknown>): string => {
@@ -299,7 +399,11 @@ export const buildBriefSections = (blocks: NormalizedBlock[]): BriefLine[] => {
           raw = stripped;
         }
         const text = isSegmentClosingAssistant(blocks, blockIndex)
-          ? truncateTokensHeadTail(raw, SEGMENT_CLOSING_ASSISTANT_HEAD_WORDS, SEGMENT_CLOSING_ASSISTANT_TAIL_WORDS)
+          ? truncateTokensHeadTail(
+              raw,
+              SEGMENT_CLOSING_ASSISTANT_HEAD_WORDS,
+              SEGMENT_CLOSING_ASSISTANT_TAIL_WORDS,
+            )
           : truncateTokensHeadTail(raw, ASSISTANT_HEAD_WORDS, ASSISTANT_TAIL_WORDS);
         if (text) {
           const ref = b.sourceIndex != null ? ` (ref:${b.sourceIndex})` : "";
@@ -329,9 +433,7 @@ export const buildBriefSections = (blocks: NormalizedBlock[]): BriefLine[] => {
   const TOOL_CALLS_PER_TURN = 8;
   for (const sec of sections) {
     if (sec.header !== "[assistant]") continue;
-    const toolIdxs = sec.lines
-      .map((l, i) => (l.startsWith("* ") ? i : -1))
-      .filter((i) => i >= 0);
+    const toolIdxs = sec.lines.map((l, i) => (l.startsWith("* ") ? i : -1)).filter((i) => i >= 0);
     if (toolIdxs.length <= TOOL_CALLS_PER_TURN) continue;
     const dropCount = toolIdxs.length - TOOL_CALLS_PER_TURN;
     const dropSet = new Set(toolIdxs.slice(0, dropCount));
@@ -356,17 +458,15 @@ export const buildBriefSections = (blocks: NormalizedBlock[]): BriefLine[] => {
  * Stringify BriefLine sections into text format.
  */
 export const stringifyBrief = (sections: BriefLine[]): string => {
-
   // Emit sections -- suppress blank lines between consecutive tool summaries
   const out: string[] = [];
   for (let i = 0; i < sections.length; i++) {
     const sec = sections[i];
     if (i > 0) {
       const prev = sections[i - 1];
-      const prevIsTools = prev.header === "[assistant]" &&
-        prev.lines.every((l) => l.startsWith("* "));
-      const curIsTools = sec.header === "[assistant]" &&
-        sec.lines.every((l) => l.startsWith("* "));
+      const prevIsTools =
+        prev.header === "[assistant]" && prev.lines.every((l) => l.startsWith("* "));
+      const curIsTools = sec.header === "[assistant]" && sec.lines.every((l) => l.startsWith("* "));
       if (!(prevIsTools && curIsTools)) {
         out.push("");
       }

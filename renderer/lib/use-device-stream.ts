@@ -90,7 +90,8 @@ export function useDeviceStream(input: {
         if (current) setGrant(next);
       })
       .catch((error: unknown) => {
-        if (current) fail(error instanceof Error ? error.message : "Could not reach the simulator.");
+        if (current)
+          fail(error instanceof Error ? error.message : "Could not reach the simulator.");
       });
     return () => {
       current = false;
@@ -176,7 +177,11 @@ export function useDeviceStream(input: {
       if (phase === "down") pressedKeysRef.current.add(event.code);
       else pressedKeysRef.current.delete(event.code);
       // Android takes characters and key names, not HID usages.
-      clientRef.current?.sendKey(event.code, phase, { key: event.key, metaKey: event.metaKey, ctrlKey: event.ctrlKey });
+      clientRef.current?.sendKey(event.code, phase, {
+        key: event.key,
+        metaKey: event.metaKey,
+        ctrlKey: event.ctrlKey,
+      });
     },
     [],
   );

@@ -1,5 +1,9 @@
 // Installs happy-dom and the fake IPC bridge; must stay the first import.
-import { emitBotTestNotification, installBotTestIpc, type BotTestIpcCall } from "../main/bots/test-dom";
+import {
+  emitBotTestNotification,
+  installBotTestIpc,
+  type BotTestIpcCall,
+} from "../main/bots/test-dom";
 import assert from "node:assert/strict";
 import { afterEach, beforeEach, test } from "node:test";
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
@@ -24,8 +28,21 @@ let noWorkspaceChosen: number;
 /** When set, moving the draft waits for this before it finishes. */
 let selectGate: Promise<void> | null;
 
-function workspace(id: string, name: string, createdAt: number, extra: Partial<Workspace> = {}): Workspace {
-  return { id, name, folderPath: `/Users/me/projects/${name}`, permission: "ask", createdAt, updatedAt: createdAt, ...extra };
+function workspace(
+  id: string,
+  name: string,
+  createdAt: number,
+  extra: Partial<Workspace> = {},
+): Workspace {
+  return {
+    id,
+    name,
+    folderPath: `/Users/me/projects/${name}`,
+    permission: "ask",
+    createdAt,
+    updatedAt: createdAt,
+    ...extra,
+  };
 }
 
 const WORKTREE = workspace("api-wt", "api-fix", 900, {
@@ -118,7 +135,11 @@ async function wait(ms = 0) {
   });
 }
 
-async function openMenu(workspaces: Workspace[] = MANY, activeWorkspaceId = "api", menuView: "list" | "clone" = "list") {
+async function openMenu(
+  workspaces: Workspace[] = MANY,
+  activeWorkspaceId = "api",
+  menuView: "list" | "clone" = "list",
+) {
   // Mounted first, then asked to open, as the headline name and the palette do.
   let view!: ReturnType<typeof render>;
   await act(async () => {
@@ -126,14 +147,20 @@ async function openMenu(workspaces: Workspace[] = MANY, activeWorkspaceId = "api
   });
   await act(async () => {
     view.rerender(
-      <Harness workspaces={workspaces} activeWorkspaceId={activeWorkspaceId} request={{ nonce: 1, view: menuView }} />,
+      <Harness
+        workspaces={workspaces}
+        activeWorkspaceId={activeWorkspaceId}
+        request={{ nonce: 1, view: menuView }}
+      />,
     );
   });
   await wait();
 }
 
 function optionNames(): string[] {
-  return screen.queryAllByRole("option").map((option) => (option.textContent ?? "").replace(/\s+/gu, " ").trim());
+  return screen
+    .queryAllByRole("option")
+    .map((option) => (option.textContent ?? "").replace(/\s+/gu, " ").trim());
 }
 
 function search(): HTMLInputElement {
@@ -173,27 +200,40 @@ test("the trigger opens a menu with the five most recent workspaces and the acti
     ["web", "api", "docs", "infra", "mobile"],
   );
   assert.ok(/days? ago$/u.test(names[0] ?? ""), "other workspaces show when they were last active");
-  assert.equal(names.some((name) => name.startsWith("api-fix")), false, "managed worktrees are left out");
+  assert.equal(
+    names.some((name) => name.startsWith("api-fix")),
+    false,
+    "managed worktrees are left out",
+  );
   assert.equal(names[5], "All workspaces (7)");
   assert.ok(names[6]?.startsWith("Open folder…"));
   assert.equal(names[7], "Clone repository…");
   assert.ok(names[8]?.startsWith("Scratch chat"));
   assert.ok(names[9]?.startsWith("No workspace"));
-  assert.equal(names.some((name) => /Don.t work in a workspace/u.test(name)), false);
+  assert.equal(
+    names.some((name) => /Don.t work in a workspace/u.test(name)),
+    false,
+  );
   assert.equal(screen.queryAllByLabelText("Current workspace").length, 1);
   assert.equal(document.activeElement === search(), true, "the search field is focused on open");
 
   await act(async () => {
     fireEvent.click(screen.getByRole("option", { name: "All workspaces (7)" }));
   });
-  assert.equal(optionNames().filter((name) => !/^(Open folder|Clone|Scratch|No workspace)/u.test(name)).length, 7);
+  assert.equal(
+    optionNames().filter((name) => !/^(Open folder|Clone|Scratch|No workspace)/u.test(name)).length,
+    7,
+  );
 });
 
 test("typing searches all workspaces, past the recent five", async () => {
   await openMenu();
   await type(search(), "notes");
   assert.ok(optionNames()[0]?.startsWith("notes"));
-  assert.ok(optionNames().some((name) => name.startsWith("Scratch chat")), "actions stay available");
+  assert.ok(
+    optionNames().some((name) => name.startsWith("Scratch chat")),
+    "actions stay available",
+  );
 });
 
 test("Scratch chat keeps today's scratch-folder behaviour", async () => {
@@ -215,9 +255,16 @@ test("No workspace is one choice: hidden chat folders are never listed, and choo
   await openMenu([...MANY, HIDDEN], "api");
   const names = optionNames();
   assert.equal(names.filter((name) => name.startsWith("No workspace")).length, 1);
-  assert.equal(names.some((name) => name.includes("kind-fern-hike")), false);
+  assert.equal(
+    names.some((name) => name.includes("kind-fern-hike")),
+    false,
+  );
   await type(search(), "fern");
-  assert.equal(optionNames().some((name) => name.includes("kind-fern-hike")), false, "search skips them too");
+  assert.equal(
+    optionNames().some((name) => name.includes("kind-fern-hike")),
+    false,
+    "search skips them too",
+  );
   await type(search(), "");
   await act(async () => {
     fireEvent.click(screen.getByRole("option", { name: /^No workspace/u }));
@@ -257,9 +304,17 @@ test("a typed path offers Open for a folder and moves the draft to the registere
   await afterInspectDelay();
   const option = screen.getByRole("option", { name: /Open \/Users\/me\/repo/u });
   assert.ok((option.textContent ?? "").includes("Git repository"));
-  assert.equal(option.getAttribute("aria-selected"), "true", "the path row becomes the default choice");
+  assert.equal(
+    option.getAttribute("aria-selected"),
+    "true",
+    "the path row becomes the default choice",
+  );
   const inspect = calls.find((call) => call.channel === "workspaces:inspectPath");
-  assert.deepEqual(inspect?.args, ["~/repo", "api"], "relative paths resolve against the current workspace");
+  assert.deepEqual(
+    inspect?.args,
+    ["~/repo", "api"],
+    "relative paths resolve against the current workspace",
+  );
 
   await act(async () => {
     fireEvent.click(option);
@@ -271,7 +326,10 @@ test("a typed path offers Open for a folder and moves the draft to the registere
 });
 
 test("a missing folder offers Create folder and open, which asks main to create it", async () => {
-  handlers["workspaces:inspectPath"] = (): WorkspacePathInspection => ({ kind: "creatable", path: "/Users/me/new" });
+  handlers["workspaces:inspectPath"] = (): WorkspacePathInspection => ({
+    kind: "creatable",
+    path: "/Users/me/new",
+  });
   handlers["workspaces:openPath"] = () => ({
     ok: true,
     workspace: workspace("new", "new", 5),
@@ -282,7 +340,9 @@ test("a missing folder offers Create folder and open, which asks main to create 
   await type(search(), "~/new");
   await afterInspectDelay();
   await act(async () => {
-    fireEvent.click(screen.getByRole("option", { name: /^Create folder and open \/Users\/me\/new/u }));
+    fireEvent.click(
+      screen.getByRole("option", { name: /^Create folder and open \/Users\/me\/new/u }),
+    );
   });
   await wait();
   const open = calls.find((call) => call.channel === "workspaces:openPath");
@@ -306,7 +366,10 @@ test("a path that is already a workspace selects it without registering anything
   });
   await wait();
   assert.deepEqual(selected, ["docs"]);
-  assert.equal(calls.some((call) => call.channel === "workspaces:openPath"), false);
+  assert.equal(
+    calls.some((call) => call.channel === "workspaces:openPath"),
+    false,
+  );
 });
 
 test("an invalid path shows main's reason as a message, not a choice", async () => {
@@ -365,7 +428,9 @@ test("Clone shows progress for its own clone only, then a failure inline with th
   const result = deferred<unknown>();
   handlers["workspaces:clone"] = () => result.promise;
   const url = await startCloneView();
-  assert.ok(screen.queryByText("Uses your git credentials. Runs only when you press Clone.") !== null);
+  assert.ok(
+    screen.queryByText("Uses your git credentials. Runs only when you press Clone.") !== null,
+  );
 
   await act(async () => {
     fireEvent.click(screen.getByRole("button", { name: "Clone" }));
@@ -380,21 +445,39 @@ test("Clone shows progress for its own clone only, then a failure inline with th
   assert.equal(workspaceCloneId(request.cloneId), request.cloneId, "main accepts the clone id");
 
   await act(async () => {
-    emitBotTestNotification("workspaces:clone-progress", { cloneId: "someone-elses", phase: "Resolving deltas", percent: 90 });
-    emitBotTestNotification("workspaces:clone-progress", { cloneId: request.cloneId, phase: "Receiving objects", percent: 40 });
+    emitBotTestNotification("workspaces:clone-progress", {
+      cloneId: "someone-elses",
+      phase: "Resolving deltas",
+      percent: 90,
+    });
+    emitBotTestNotification("workspaces:clone-progress", {
+      cloneId: request.cloneId,
+      phase: "Receiving objects",
+      percent: 40,
+    });
   });
   assert.ok(screen.queryByText("Receiving objects · 40%") !== null);
   // Only the phase is announced; the percentage stays on the progress bar.
   assert.equal(screen.getByRole("status").textContent, "Receiving objects");
   assert.equal(screen.queryByText(/Resolving deltas/u) === null, true);
-  assert.equal(screen.getByRole("progressbar", { name: "Clone progress" }).getAttribute("aria-valuenow"), "40");
+  assert.equal(
+    screen.getByRole("progressbar", { name: "Clone progress" }).getAttribute("aria-valuenow"),
+    "40",
+  );
 
   await act(async () => {
-    result.resolve({ ok: false, code: "not-found", reason: "That repository wasn't found, or you don't have access to it." });
+    result.resolve({
+      ok: false,
+      code: "not-found",
+      reason: "That repository wasn't found, or you don't have access to it.",
+    });
     await result.promise;
   });
   await wait();
-  assert.equal(screen.getByRole("alert").textContent, "That repository wasn't found, or you don't have access to it.");
+  assert.equal(
+    screen.getByRole("alert").textContent,
+    "That repository wasn't found, or you don't have access to it.",
+  );
   assert.equal(url.value, "acme/site");
   assert.equal(screen.queryByRole("progressbar") === null, true);
   assert.deepEqual(selected, []);
@@ -412,7 +495,9 @@ test("an edited destination is sent, and a finished clone moves the draft there"
     fireEvent.click(screen.getByRole("button", { name: "Clone" }));
   });
   await wait();
-  const request = calls.find((call) => call.channel === "workspaces:clone")?.args[0] as { destination?: string };
+  const request = calls.find((call) => call.channel === "workspaces:clone")?.args[0] as {
+    destination?: string;
+  };
   assert.equal(request.destination, "~/code/site");
   assert.deepEqual(selected, ["site"]);
   assert.equal(screen.queryByRole("dialog") === null, true, "the menu closes on success");
@@ -424,20 +509,28 @@ test("Esc during a clone cancels it, then steps back to the list", async () => {
   await act(async () => {
     fireEvent.click(screen.getByRole("button", { name: "Clone" }));
   });
-  const cloneId = (calls.find((call) => call.channel === "workspaces:clone")?.args[0] as { cloneId: string }).cloneId;
+  const cloneId = (
+    calls.find((call) => call.channel === "workspaces:clone")?.args[0] as { cloneId: string }
+  ).cloneId;
   await act(async () => {
     fireEvent.keyDown(document.activeElement ?? document.body, { key: "Escape" });
   });
   await wait();
   const cancel = calls.find((call) => call.channel === "workspaces:cloneCancel");
   assert.deepEqual(cancel?.args, [cloneId]);
-  assert.ok(screen.queryByRole("button", { name: "Clone" }) !== null, "still in the clone view, ready to retry");
+  assert.ok(
+    screen.queryByRole("button", { name: "Clone" }) !== null,
+    "still in the clone view, ready to retry",
+  );
 
   await act(async () => {
     fireEvent.keyDown(document.activeElement ?? document.body, { key: "Escape" });
   });
   await wait();
-  assert.ok(screen.queryByRole("combobox", { name: "Search workspaces" }) !== null, "back to the list");
+  assert.ok(
+    screen.queryByRole("combobox", { name: "Search workspaces" }) !== null,
+    "back to the list",
+  );
 });
 
 test("Esc closes the list and returns focus to the composer", async () => {
@@ -455,10 +548,17 @@ test("the headline names the workspace as a menu button, and a scratch chat asks
   let opened = 0;
   const project = workspace("api", "api", 1);
   const { rerender } = render(
-    <NewChatHeadline workspace={project} workspaces={[project]} onChooseWorkspace={() => (opened += 1)} />,
+    <NewChatHeadline
+      workspace={project}
+      workspaces={[project]}
+      onChooseWorkspace={() => (opened += 1)}
+    />,
   );
   const name = screen.getByRole("button", { name: "api" });
-  assert.equal(name.closest("[data-new-chat-headline]")?.textContent, "What should we build in api?");
+  assert.equal(
+    name.closest("[data-new-chat-headline]")?.textContent,
+    "What should we build in api?",
+  );
   fireEvent.click(name);
   assert.equal(opened, 1);
 
@@ -467,16 +567,41 @@ test("the headline names the workspace as a menu button, and a scratch chat asks
   assert.equal(screen.queryByRole("button", { name: "api" }) === null, true);
 
   // Only a workspace made by Scratch chat is a scratch chat, whatever its folder.
-  const lookalike = { ...workspace("l", "calm-moon-run", 1), folderPath: "/Users/me/aiden/calm-moon-run" };
-  rerender(<NewChatHeadline workspace={lookalike} workspaces={[lookalike]} onChooseWorkspace={() => undefined} />);
+  const lookalike = {
+    ...workspace("l", "calm-moon-run", 1),
+    folderPath: "/Users/me/aiden/calm-moon-run",
+  };
+  rerender(
+    <NewChatHeadline
+      workspace={lookalike}
+      workspaces={[lookalike]}
+      onChooseWorkspace={() => undefined}
+    />,
+  );
   assert.ok(screen.queryByRole("button", { name: "calm-moon-run" }) !== null);
-  const scratch = { ...workspace("s", "Landing page", 1), folderPath: "/srv/home/me/aiden/x", scratch: true as const };
-  rerender(<NewChatHeadline workspace={scratch} workspaces={[scratch]} onChooseWorkspace={() => undefined} />);
+  const scratch = {
+    ...workspace("s", "Landing page", 1),
+    folderPath: "/srv/home/me/aiden/x",
+    scratch: true as const,
+  };
+  rerender(
+    <NewChatHeadline
+      workspace={scratch}
+      workspaces={[scratch]}
+      onChooseWorkspace={() => undefined}
+    />,
+  );
   assert.ok(screen.queryByText("What’s on your mind?") !== null);
   assert.equal(screen.queryByRole("button") === null, true);
 
   // A No workspace chat has no project to name either.
-  rerender(<NewChatHeadline workspace={HIDDEN} workspaces={[HIDDEN]} onChooseWorkspace={() => undefined} />);
+  rerender(
+    <NewChatHeadline
+      workspace={HIDDEN}
+      workspaces={[HIDDEN]}
+      onChooseWorkspace={() => undefined}
+    />,
+  );
   assert.ok(screen.queryByText("What’s on your mind?") !== null);
 });
 
@@ -492,7 +617,12 @@ test("a blocked picker stays closed, even when asked to open, and describes why 
   });
   await act(async () => {
     view.rerender(
-      <Harness workspaces={MANY} activeWorkspaceId="api" blockedReason={reason} request={{ nonce: 1, view: "list" }} />,
+      <Harness
+        workspaces={MANY}
+        activeWorkspaceId="api"
+        blockedReason={reason}
+        request={{ nonce: 1, view: "list" }}
+      />,
     );
   });
   await wait();
@@ -509,18 +639,38 @@ test("a busy draft's menu won't open on request, and its rows can't move the dra
     view = render(<Harness workspaces={MANY} activeWorkspaceId="api" busyReason={busy} />);
   });
   await act(async () => {
-    view.rerender(<Harness workspaces={MANY} activeWorkspaceId="api" busyReason={busy} request={{ nonce: 1, view: "clone" }} />);
+    view.rerender(
+      <Harness
+        workspaces={MANY}
+        activeWorkspaceId="api"
+        busyReason={busy}
+        request={{ nonce: 1, view: "clone" }}
+      />,
+    );
   });
   await wait();
-  assert.equal(screen.queryByRole("dialog") === null, true, "the headline, palette and ⌘⇧O requests are refused");
+  assert.equal(
+    screen.queryByRole("dialog") === null,
+    true,
+    "the headline, palette and ⌘⇧O requests are refused",
+  );
 
   // Already open when the send starts: the rows stop working.
   await act(async () => {
-    view.rerender(<Harness workspaces={MANY} activeWorkspaceId="api" request={{ nonce: 2, view: "list" }} />);
+    view.rerender(
+      <Harness workspaces={MANY} activeWorkspaceId="api" request={{ nonce: 2, view: "list" }} />,
+    );
   });
   await wait();
   await act(async () => {
-    view.rerender(<Harness workspaces={MANY} activeWorkspaceId="api" busyReason={busy} request={{ nonce: 2, view: "list" }} />);
+    view.rerender(
+      <Harness
+        workspaces={MANY}
+        activeWorkspaceId="api"
+        busyReason={busy}
+        request={{ nonce: 2, view: "list" }}
+      />,
+    );
   });
   await act(async () => {
     fireEvent.click(screen.getByRole("option", { name: /^docs/u }));
@@ -531,13 +681,21 @@ test("a busy draft's menu won't open on request, and its rows can't move the dra
 });
 
 test("the invalid-URL reason describes the URL field", async () => {
-  handlers["workspaces:clonePreview"] = () => ({ ok: false, code: "invalid-url", reason: "Enter a repository URL." });
+  handlers["workspaces:clonePreview"] = () => ({
+    ok: false,
+    code: "invalid-url",
+    reason: "Enter a repository URL.",
+  });
   await openMenu(MANY, "api", "clone");
   const url = screen.getByLabelText("Git URL or owner/repo") as HTMLInputElement;
   await type(url, "not a url");
   await wait(300);
   const describedBy = (url.getAttribute("aria-describedby") ?? "").split(" ");
-  assert.ok(describedBy.some((id) => document.getElementById(id)?.textContent === "Enter a repository URL."));
+  assert.ok(
+    describedBy.some(
+      (id) => document.getElementById(id)?.textContent === "Enter a repository URL.",
+    ),
+  );
   assert.equal(url.getAttribute("aria-invalid"), "true");
 });
 
@@ -546,14 +704,21 @@ test("a finished clone stays busy until the draft has moved, so it can't start t
   selectGate = new Promise<void>((resolve) => {
     release = resolve;
   });
-  handlers["workspaces:clone"] = () => ({ ok: true, workspace: workspace("site", "site", 5), destination: "/x/site" });
+  handlers["workspaces:clone"] = () => ({
+    ok: true,
+    workspace: workspace("site", "site", 5),
+    destination: "/x/site",
+  });
   await startCloneView();
   await act(async () => {
     fireEvent.click(screen.getByRole("button", { name: "Clone" }));
   });
   await wait();
   assert.equal(screen.queryByRole("button", { name: "Clone" }) === null, true);
-  assert.equal((screen.getByRole("button", { name: "Cancel" }) as HTMLButtonElement).disabled, true);
+  assert.equal(
+    (screen.getByRole("button", { name: "Cancel" }) as HTMLButtonElement).disabled,
+    true,
+  );
   assert.equal((screen.getByLabelText("Git URL or owner/repo") as HTMLInputElement).disabled, true);
   await act(async () => {
     release();
@@ -582,7 +747,11 @@ test("a clone that finishes after Cancel is added to the list but does not move 
   });
   await wait();
   const cached = queryClient.getQueryData<Workspace[]>(queryKeys.workspaces) ?? [];
-  assert.equal(cached.some((entry) => entry.id === "late"), true, "the registered clone is listed");
+  assert.equal(
+    cached.some((entry) => entry.id === "late"),
+    true,
+    "the registered clone is listed",
+  );
   assert.deepEqual(selected, []);
 });
 
@@ -592,12 +761,16 @@ test("closing the menu mid-clone cancels the clone", async () => {
   await act(async () => {
     fireEvent.click(screen.getByRole("button", { name: "Clone" }));
   });
-  const cloneId = (calls.find((call) => call.channel === "workspaces:clone")?.args[0] as { cloneId: string }).cloneId;
+  const cloneId = (
+    calls.find((call) => call.channel === "workspaces:clone")?.args[0] as { cloneId: string }
+  ).cloneId;
   // The chip toggles the menu closed (the same close path as clicking outside).
   await act(async () => {
     fireEvent.click(screen.getByRole("button", { name: "Choose a workspace" }));
   });
   await wait();
   assert.equal(screen.queryByRole("dialog") === null, true);
-  assert.deepEqual(calls.find((call) => call.channel === "workspaces:cloneCancel")?.args, [cloneId]);
+  assert.deepEqual(calls.find((call) => call.channel === "workspaces:cloneCancel")?.args, [
+    cloneId,
+  ]);
 });

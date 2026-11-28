@@ -40,31 +40,35 @@ let ownership: Awaited<ReturnType<typeof controller.connect>> | undefined;
 
 async function readHealth(url: string): Promise<unknown> {
   return new Promise((resolve, reject) => {
-    const request = httpGet(url, {
-      headers: { accept: "application/json", connection: "close" },
-      timeout: REQUEST_TIMEOUT_MS,
-    }, (response) => {
-      const chunks: Buffer[] = [];
-      let bytes = 0;
-      response.on("data", (chunk: Buffer | string) => {
-        const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
-        bytes += buffer.length;
-        if (bytes > MAX_RESPONSE_BYTES) {
-          request.destroy(new Error("Aiden health response exceeded its size limit."));
-          return;
-        }
-        chunks.push(buffer);
-      });
-      response.once("error", reject);
-      response.on("end", () => {
-        try {
-          assert.equal(response.statusCode, 200);
-          resolve(JSON.parse(Buffer.concat(chunks).toString("utf8")));
-        } catch (error) {
-          reject(error);
-        }
-      });
-    });
+    const request = httpGet(
+      url,
+      {
+        headers: { accept: "application/json", connection: "close" },
+        timeout: REQUEST_TIMEOUT_MS,
+      },
+      (response) => {
+        const chunks: Buffer[] = [];
+        let bytes = 0;
+        response.on("data", (chunk: Buffer | string) => {
+          const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+          bytes += buffer.length;
+          if (bytes > MAX_RESPONSE_BYTES) {
+            request.destroy(new Error("Aiden health response exceeded its size limit."));
+            return;
+          }
+          chunks.push(buffer);
+        });
+        response.once("error", reject);
+        response.on("end", () => {
+          try {
+            assert.equal(response.statusCode, 200);
+            resolve(JSON.parse(Buffer.concat(chunks).toString("utf8")));
+          } catch (error) {
+            reject(error);
+          }
+        });
+      },
+    );
     request.once("timeout", () => request.destroy(new Error("Aiden health request timed out.")));
     request.once("error", reject);
   });
@@ -103,13 +107,15 @@ try {
     process.stdout.write(`${JSON.stringify({ readyForExternalProbe: true })}\n`);
     await waitForExternalProbe();
   } else {
-    process.stdout.write(`${JSON.stringify({
-      ok: true,
-      linuxBinary: true,
-      tailscaleOnline: true,
-      aidenRouteConfigured: true,
-      loopbackHealthVerified: true,
-    })}\n`);
+    process.stdout.write(
+      `${JSON.stringify({
+        ok: true,
+        linuxBinary: true,
+        tailscaleOnline: true,
+        aidenRouteConfigured: true,
+        loopbackHealthVerified: true,
+      })}\n`,
+    );
   }
 } finally {
   if (ownership) await controller.disconnect(target, ownership);

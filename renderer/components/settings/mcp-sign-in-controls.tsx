@@ -40,7 +40,12 @@ export function McpSignInControls({
           </Button>
         </>
       ) : (
-        <Button size="small" variant="filled" onClick={onAuthorize} disabled={disabled || signingOut}>
+        <Button
+          size="small"
+          variant="filled"
+          onClick={onAuthorize}
+          disabled={disabled || signingOut}
+        >
           {needsSignIn ? "Sign in again" : authorized ? "Re-authorize" : "Authorize"}
         </Button>
       )}
@@ -52,7 +57,13 @@ export function McpSignInControls({
         </span>
       ) : null}
       {!authorizing && (authorized || needsSignIn || hasSession) ? (
-        <Button size="small" variant="transparent" data-live-guard="confirm" onClick={onSignOut} disabled={signingOut}>
+        <Button
+          size="small"
+          variant="transparent"
+          data-live-guard="confirm"
+          onClick={onSignOut}
+          disabled={signingOut}
+        >
           {signingOut ? "Signing out…" : "Sign out"}
         </Button>
       ) : null}

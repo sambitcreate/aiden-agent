@@ -42,7 +42,12 @@ export function useHarnessStatus(providerId: string | undefined): HarnessStatusS
         setError(null);
       })
       .catch((reason: unknown) => {
-        if (active) setError(reason instanceof Error && reason.message ? reason.message : "Aiden couldn't read the runtime status.");
+        if (active)
+          setError(
+            reason instanceof Error && reason.message
+              ? reason.message
+              : "Aiden couldn't read the runtime status.",
+          );
       });
     return () => {
       active = false;
@@ -65,12 +70,15 @@ export function installDisclosure(
   const owner = publisher ? `${publisher}'s own agent runtime` : "its own agent runtime";
   const size = runtime.downloadBytes ? ` ${formatHarnessBytes(runtime.downloadBytes)}` : " it";
   const source = runtime.downloadHost ? ` from ${runtime.downloadHost}` : "";
-  const space = runtime.requiredBytes ? ` and needs about ${formatHarnessBytes(runtime.requiredBytes)} free` : "";
+  const space = runtime.requiredBytes
+    ? ` and needs about ${formatHarnessBytes(runtime.requiredBytes)} free`
+    : "";
   return `${label} runs on ${owner}. Installing downloads${size}${source}${space}. Nothing is downloaded until you choose Install.`;
 }
 
 function percent(status: AcpHarnessStatus["runtime"]): number | null {
-  if (status.status !== "installing" || status.phase !== "downloading" || !status.totalBytes) return null;
+  if (status.status !== "installing" || status.phase !== "downloading" || !status.totalBytes)
+    return null;
   return Math.min(100, Math.floor(((status.receivedBytes ?? 0) / status.totalBytes) * 100));
 }
 
@@ -113,7 +121,13 @@ export interface HarnessRuntimeSectionProps {
  * downloaded until the user chooses Install; the size and source are stated
  * before that choice.
  */
-export function HarnessRuntimeSection({ providerId, label, status, loadError, onRetry }: HarnessRuntimeSectionProps) {
+export function HarnessRuntimeSection({
+  providerId,
+  label,
+  status,
+  loadError,
+  onRetry,
+}: HarnessRuntimeSectionProps) {
   const [acting, setActing] = React.useState(false);
   const [confirmRemove, setConfirmRemove] = React.useState(false);
   const sectionRef = React.useRef<HTMLDivElement>(null);
@@ -140,7 +154,8 @@ export function HarnessRuntimeSection({ providerId, label, status, loadError, on
     // was in this section and fell to the page, the section itself, or a
     // container around it (such as the dialog) when its control unmounted or
     // was disabled.
-    const lost = focusedInsideRef.current && (!active || active === section || active.contains(section));
+    const lost =
+      focusedInsideRef.current && (!active || active === section || active.contains(section));
     if (!openedConfirm && !lost) return;
     const target = runtimeFocusTarget(status.runtime, confirmRemove);
     const element = {
@@ -150,7 +165,10 @@ export function HarnessRuntimeSection({ providerId, label, status, loadError, on
       remove: removeRef.current,
       section,
     }[target];
-    (element && !(element instanceof HTMLButtonElement && element.disabled) ? element : section).focus();
+    (element && !(element instanceof HTMLButtonElement && element.disabled)
+      ? element
+      : section
+    ).focus();
     // Re-run only when the visible actions change, not on download progress.
   }, [runtimeStatus, confirmRemove, acting]);
 
@@ -160,7 +178,12 @@ export function HarnessRuntimeSection({ providerId, label, status, loadError, on
     // Escape backs out of the inline confirmation before it can close the dialog.
     // The dialog listens on the document in the capture phase, so this listens on the window first.
     const onKeyDown = (event: KeyboardEvent) => {
-      if (!isDismissKey(event) || !(event.target instanceof Node) || !section?.contains(event.target)) return;
+      if (
+        !isDismissKey(event) ||
+        !(event.target instanceof Node) ||
+        !section?.contains(event.target)
+      )
+        return;
       event.preventDefault();
       event.stopPropagation();
       setConfirmRemove(false);
@@ -212,7 +235,9 @@ export function HarnessRuntimeSection({ providerId, label, status, loadError, on
     }, `Couldn't install ${label}.`);
 
   const canInstall =
-    runtime.status === "not_installed" || runtime.status === "failed" || runtime.status === "update_available";
+    runtime.status === "not_installed" ||
+    runtime.status === "failed" ||
+    runtime.status === "update_available";
 
   return (
     <div
@@ -237,7 +262,9 @@ export function HarnessRuntimeSection({ providerId, label, status, loadError, on
       </Text>
       {/* Announce state and phase changes only; the progress bar carries the value. */}
       <span className="sr-only" aria-live="polite">
-        {runtime.status === "installing" ? `${label}: ${harnessPhaseLabel(runtime.phase)}` : harnessRuntimeSummary(runtime)}
+        {runtime.status === "installing"
+          ? `${label}: ${harnessPhaseLabel(runtime.phase)}`
+          : harnessRuntimeSummary(runtime)}
       </span>
       {canInstall ? (
         <Text variant="small" color="tertiary">
@@ -304,7 +331,12 @@ export function HarnessRuntimeSection({ providerId, label, status, loadError, on
             >
               Remove
             </Button>
-            <Button ref={keepRef} size="small" variant="muted" onClick={() => setConfirmRemove(false)}>
+            <Button
+              ref={keepRef}
+              size="small"
+              variant="muted"
+              onClick={() => setConfirmRemove(false)}
+            >
               Keep
             </Button>
           </div>

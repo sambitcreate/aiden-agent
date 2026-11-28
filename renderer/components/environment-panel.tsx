@@ -1,17 +1,26 @@
 import * as React from "react";
-import {
-  PanelRightClose,
-  PanelRightOpen,
-  Plus,
-} from "lucide-react";
+import { PanelRightClose, PanelRightOpen, Plus } from "lucide-react";
 import { Button, toast } from "./ui";
 import { ChatContextPanel, type ChatContextDetails } from "./chat-context-panel";
-import { WorkspaceToolLauncher, WORKSPACE_TOOLS, workspaceToolLabel } from "./workspace-tool-launcher";
+import {
+  WorkspaceToolLauncher,
+  WORKSPACE_TOOLS,
+  workspaceToolLabel,
+} from "./workspace-tool-launcher";
 import { ArtifactsPanel } from "./artifacts-panel";
-import { useWorkspaceArtifacts, type WorkspaceArtifactsState } from "../lib/use-workspace-artifacts";
-import { revealsWorkspaceArtifact, workspaceArtifactChangeRequest } from "../lib/workspace-artifacts-view";
+import {
+  useWorkspaceArtifacts,
+  type WorkspaceArtifactsState,
+} from "../lib/use-workspace-artifacts";
+import {
+  revealsWorkspaceArtifact,
+  workspaceArtifactChangeRequest,
+} from "../lib/workspace-artifacts-view";
 import { stageComposerText } from "../lib/composer-draft-store";
-import type { WorkspaceArtifactsChangedEvent, WorkspaceArtifactView } from "../shared/workspace-artifacts";
+import type {
+  WorkspaceArtifactsChangedEvent,
+  WorkspaceArtifactView,
+} from "../shared/workspace-artifacts";
 import { sendPromptToChat } from "../lib/chat-prompt-bridge";
 import { TerminalSideTarget, useWorkspaceTerminal, TERMINAL_PANEL_EVENT } from "./terminal-drawer";
 import type { BrowserState } from "../shared/browser";
@@ -138,13 +147,14 @@ import { deviceWorkspace, useFloatingDevice } from "../lib/device-workspace-stor
 import { prefersReducedMotion } from "../lib/appearance-runtime";
 import { usePresence } from "../lib/use-presence";
 import { useLayer } from "../lib/layer-stack";
-import { arrangeByDraft, ReorderAnnouncer, reorderMessage, useReorderDraft } from "../lib/reorder-draft";
-import { useDelayedFlag } from "../lib/use-delayed-flag";
 import {
-  DeviceTabContextMenu,
-  DeviceTabRenameInput,
-  useDeviceTabs,
-} from "./device-workspace-tabs";
+  arrangeByDraft,
+  ReorderAnnouncer,
+  reorderMessage,
+  useReorderDraft,
+} from "../lib/reorder-draft";
+import { useDelayedFlag } from "../lib/use-delayed-flag";
+import { DeviceTabContextMenu, DeviceTabRenameInput, useDeviceTabs } from "./device-workspace-tabs";
 import {
   WorkbenchPanel,
   focusStripTabNextFrame,
@@ -297,7 +307,9 @@ export interface EnvironmentPanelContextValue {
  */
 export const GIT_BUSY_DIM_DELAY_MS = 300;
 
-export const EnvironmentPanelContext = React.createContext<EnvironmentPanelContextValue | null>(null);
+export const EnvironmentPanelContext = React.createContext<EnvironmentPanelContextValue | null>(
+  null,
+);
 
 interface EnvironmentArtifactsContextValue {
   artifacts: WorkspaceArtifactsState;
@@ -306,7 +318,9 @@ interface EnvironmentArtifactsContextValue {
   selectArtifact: (artifactId: string | null) => void;
 }
 
-const EnvironmentArtifactsContext = React.createContext<EnvironmentArtifactsContextValue | null>(null);
+const EnvironmentArtifactsContext = React.createContext<EnvironmentArtifactsContextValue | null>(
+  null,
+);
 const EMPTY_ARTIFACTS_STATE: WorkspaceArtifactsState = {
   workspaceId: null,
   views: [],
@@ -350,7 +364,8 @@ function EnvironmentArtifactsProvider({
   }, []);
   const artifacts = useWorkspaceArtifacts(activeId ?? null, onArtifactsChanged);
   // The launcher and ⌘K offer the tab once this workspace's list has loaded, pages or not.
-  const artifactsOffered = artifacts.loaded && artifacts.workspaceId !== null && artifacts.workspaceId === activeId;
+  const artifactsOffered =
+    artifacts.loaded && artifacts.workspaceId !== null && artifacts.workspaceId === activeId;
   const artifactsSeenRef = React.useRef<{ workspaceId: string | null; count: number } | null>(null);
   React.useEffect(() => {
     // Wait for a workspace and a list that actually loaded: a restored tab must
@@ -362,7 +377,10 @@ function EnvironmentArtifactsProvider({
       // Remember the workspace, so a tab opened on the failure isn't taken as
       // a workspace switch when Try again then finds no pages.
       const sameWorkspace = previous?.workspaceId === artifacts.workspaceId;
-      artifactsSeenRef.current = { workspaceId: artifacts.workspaceId, count: sameWorkspace ? previous.count : 0 };
+      artifactsSeenRef.current = {
+        workspaceId: artifacts.workspaceId,
+        count: sameWorkspace ? previous.count : 0,
+      };
       return;
     }
     const count = artifacts.views.length;
@@ -460,7 +478,12 @@ function initialEnvironmentSurfaceState(
       quickViewOpen,
       toolsOpen,
       toolsTab: "new-tab",
-      openTabs: [...new Set([...parseEnvironmentOpenTabs(localStorage.getItem(TABS_STORAGE_KEY), storedTab), "new-tab" as const])],
+      openTabs: [
+        ...new Set([
+          ...parseEnvironmentOpenTabs(localStorage.getItem(TABS_STORAGE_KEY), storedTab),
+          "new-tab" as const,
+        ]),
+      ],
       frontSurface: quickViewOpen ? "quick-view" : toolsOpen ? "tools" : null,
     };
   }
@@ -477,7 +500,18 @@ function initialEnvironmentSurfaceState(
           : quickViewOpen
             ? "quick-view"
             : null;
-  return { quickViewOpen, toolsOpen, toolsTab: "new-tab", openTabs: [...new Set([...parseEnvironmentOpenTabs(localStorage.getItem(TABS_STORAGE_KEY), storedTab), "new-tab" as const])], frontSurface };
+  return {
+    quickViewOpen,
+    toolsOpen,
+    toolsTab: "new-tab",
+    openTabs: [
+      ...new Set([
+        ...parseEnvironmentOpenTabs(localStorage.getItem(TABS_STORAGE_KEY), storedTab),
+        "new-tab" as const,
+      ]),
+    ],
+    frontSurface,
+  };
 }
 
 export function EnvironmentPanelProvider({ children }: React.PropsWithChildren) {
@@ -495,29 +529,21 @@ export function EnvironmentPanelProvider({ children }: React.PropsWithChildren) 
     width: 0,
     stacked: false,
   });
-  const tab = normalizeEnvironmentPanelTab(
-    surfaceState.toolsTab,
-    subagentsEnabled,
-    devicesEnabled,
-  );
+  const tab = normalizeEnvironmentPanelTab(surfaceState.toolsTab, subagentsEnabled, devicesEnabled);
   const [reviewMode, setReviewMode] = React.useState<EnvironmentReviewMode>("changes");
   const [fileRequest, setFileRequest] = React.useState<EnvironmentFileRequest | null>(null);
   const [editorState, setEditorState] = React.useState<FilesEditorState>(EMPTY_EDITOR_STATE);
   const [agentBusy, setAgentBusy] = React.useState(false);
   const [subagents, setRenderedSubagents] =
     React.useState<EnvironmentSubagentContext>(EMPTY_SUBAGENT_CONTEXT);
-  const [activeChat, setActiveChatState] =
-    React.useState<EnvironmentActiveChat>(EMPTY_ACTIVE_CHAT);
-  const setActiveChat = React.useCallback(
-    (chatId: string | null, workspaceId: string | null) => {
-      setActiveChatState((current) =>
-        current.chatId === chatId && current.workspaceId === workspaceId
-          ? current
-          : { chatId, workspaceId },
-      );
-    },
-    [],
-  );
+  const [activeChat, setActiveChatState] = React.useState<EnvironmentActiveChat>(EMPTY_ACTIVE_CHAT);
+  const setActiveChat = React.useCallback((chatId: string | null, workspaceId: string | null) => {
+    setActiveChatState((current) =>
+      current.chatId === chatId && current.workspaceId === workspaceId
+        ? current
+        : { chatId, workspaceId },
+    );
+  }, []);
   const subagentsRef = React.useRef<EnvironmentSubagentContext>(EMPTY_SUBAGENT_CONTEXT);
   const commitSubagents = React.useCallback(
     (
@@ -619,19 +645,17 @@ export function EnvironmentPanelProvider({ children }: React.PropsWithChildren) 
   const selectedSubagentGenerationId = selectedSubagentView?.generationId;
   const selectedSubagentReferenceMessageId = selectedSubagentView?.referenceMessageId;
 
-  const rememberFocus = React.useCallback(
-    (surface: EnvironmentSurface) => {
-      if (!(document.activeElement instanceof HTMLElement)) return;
-      const target =
-        surface === "tools" ? toolsReturnFocusRef : quickViewReturnFocusRef;
-      target.current = document.activeElement;
-    },
-    [],
-  );
+  const rememberFocus = React.useCallback((surface: EnvironmentSurface) => {
+    if (!(document.activeElement instanceof HTMLElement)) return;
+    const target = surface === "tools" ? toolsReturnFocusRef : quickViewReturnFocusRef;
+    target.current = document.activeElement;
+  }, []);
 
   const [designDockInset, setDesignDockInset] = React.useState<number | null>(null);
   const reportDesignDockInset = React.useCallback((inset: number | null) => {
-    setDesignDockInset(inset !== null && Number.isFinite(inset) && inset >= 0 ? Math.round(inset) : null);
+    setDesignDockInset(
+      inset !== null && Number.isFinite(inset) && inset >= 0 ? Math.round(inset) : null,
+    );
   }, []);
 
   const reportSurfaceLayout = React.useCallback(
@@ -745,12 +769,15 @@ export function EnvironmentPanelProvider({ children }: React.PropsWithChildren) 
     dispatchSurface({ type: "toggle-tools", tab: "new-tab" });
   }, [gitOperationBusy, rememberFocus, restoreSurfaceFocus, surfaceState.toolsOpen]);
 
-  const closeTab = React.useCallback((closing: EnvironmentPanelTab) => {
-    if (gitOperationBusy) return;
-    // Closing this navigation tab hides the editor; its mounted owner retains unsaved edits.
-    if (closing === "terminal") terminal.hide();
-    dispatchSurface({ type: "close-tab", tab: closing });
-  }, [gitOperationBusy, terminal.hide]);
+  const closeTab = React.useCallback(
+    (closing: EnvironmentPanelTab) => {
+      if (gitOperationBusy) return;
+      // Closing this navigation tab hides the editor; its mounted owner retains unsaved edits.
+      if (closing === "terminal") terminal.hide();
+      dispatchSurface({ type: "close-tab", tab: closing });
+    },
+    [gitOperationBusy, terminal.hide],
+  );
 
   React.useEffect(() => {
     const onTerminal = (event: Event) => {
@@ -789,9 +816,14 @@ export function EnvironmentPanelProvider({ children }: React.PropsWithChildren) 
     [activeId, showTools],
   );
 
-  React.useEffect(() => browserApi.onEvent((event) => {
-    if (event.type === "show" && event.workspaceId === (activeId ?? "default")) showTools("browser");
-  }), [activeId, showTools]);
+  React.useEffect(
+    () =>
+      browserApi.onEvent((event) => {
+        if (event.type === "show" && event.workspaceId === (activeId ?? "default"))
+          showTools("browser");
+      }),
+    [activeId, showTools],
+  );
 
   const revealChatId = activeChat.chatId;
   React.useEffect(() => {
@@ -807,7 +839,8 @@ export function EnvironmentPanelProvider({ children }: React.PropsWithChildren) 
         canFloat: true,
       });
       if (action === "ignore") return;
-      if (target) deviceWorkspace.updateTabs(chatId, (tabs) => openDeviceTab(tabs, deviceTabKey(target)));
+      if (target)
+        deviceWorkspace.updateTabs(chatId, (tabs) => openDeviceTab(tabs, deviceTabKey(target)));
       if (action === "float" && target) deviceWorkspace.setFloating(chatId, deviceTabKey(target));
       else showTools("devices");
     });
@@ -952,7 +985,9 @@ export function EnvironmentPanelProvider({ children }: React.PropsWithChildren) 
       if (failedReason !== null) transcriptRefetchMayHaveFailedRef.current = true;
       setTranscriptRefetchFailures((current) => {
         if (current.chatId !== chatId) {
-          return withFailureFlag(failedReason ? { chatId, byRunId: { [runId]: failedReason } } : current);
+          return withFailureFlag(
+            failedReason ? { chatId, byRunId: { [runId]: failedReason } } : current,
+          );
         }
         if (failedReason === null) {
           if (!(runId in current.byRunId)) return withFailureFlag(current);
@@ -997,7 +1032,9 @@ export function EnvironmentPanelProvider({ children }: React.PropsWithChildren) 
       if (!subagentsEnabled || !chatId || transcriptRefetchFailures.chatId !== chatId) return;
       const reason = transcriptRefetchFailures.byRunId[runId];
       if (reason) {
-        transcriptReader.retry(chatId, runId, reason, { final: subagentHelperRefetchAwaitsFinal(reason) });
+        transcriptReader.retry(chatId, runId, reason, {
+          final: subagentHelperRefetchAwaitsFinal(reason),
+        });
       }
     },
     [subagentsEnabled, transcriptReader, transcriptRefetchFailures],
@@ -1028,7 +1065,11 @@ export function EnvironmentPanelProvider({ children }: React.PropsWithChildren) 
       if (!transcriptRefetchMayHaveFailedRef.current) return;
       setTranscriptRefetchFailures((current) => {
         if (current.chatId !== next.chatId) return withFailureFlag(current);
-        const recovered = subagentHelperTranscriptsRecovered(before, next, Object.keys(current.byRunId));
+        const recovered = subagentHelperTranscriptsRecovered(
+          before,
+          next,
+          Object.keys(current.byRunId),
+        );
         if (recovered.length === 0) return withFailureFlag(current);
         const byRunId = { ...current.byRunId };
         for (const runId of recovered) delete byRunId[runId];
@@ -1246,7 +1287,10 @@ export function EnvironmentPanelProvider({ children }: React.PropsWithChildren) 
           helperChatStore.rememberSaved(chatId, detail.transcript);
           // A finished helper's copy saved before it ended does not count as
           // read: its final save is still on its way.
-          if (subagentHelperIsActive(safeSnapshot.state) || subagentTranscriptIsFinal(detail.transcript)) {
+          if (
+            subagentHelperIsActive(safeSnapshot.state) ||
+            subagentTranscriptIsFinal(detail.transcript)
+          ) {
             transcriptReader.noteLoaded(chatId, runId, safeSnapshot.revision);
           }
         }
@@ -1343,7 +1387,10 @@ export function EnvironmentPanelProvider({ children }: React.PropsWithChildren) 
   }, []);
 
   React.useEffect(() => {
-    localStorage.setItem(TABS_STORAGE_KEY, JSON.stringify({ version: 1, tabs: surfaceState.openTabs ?? [surfaceState.toolsTab] }));
+    localStorage.setItem(
+      TABS_STORAGE_KEY,
+      JSON.stringify({ version: 1, tabs: surfaceState.openTabs ?? [surfaceState.toolsTab] }),
+    );
     localStorage.setItem(OPEN_STORAGE_KEY, surfaceState.toolsOpen ? "1" : "0");
     localStorage.setItem(QUICK_VIEW_OPEN_STORAGE_KEY, surfaceState.quickViewOpen ? "1" : "0");
     localStorage.setItem(TAB_STORAGE_KEY, surfaceState.toolsTab);
@@ -1476,7 +1523,10 @@ export function EnvironmentPanelProvider({ children }: React.PropsWithChildren) 
     }),
     [
       activeChat,
-      contextDetails, closeTab, surfaceState.openTabs, surfaceState.toolsTab,
+      contextDetails,
+      closeTab,
+      surfaceState.openTabs,
+      surfaceState.toolsTab,
       setActiveChat,
       activeEditorState,
       agentBusy,
@@ -1599,9 +1649,15 @@ function HelperAwareSubagentsPanel({
   const store = useSubagentHelperChatStore();
   const chatId = props.chatId;
   const runId = props.selectedRunId ?? null;
-  const scoped = useSubagentHelperChatSelector((state) => Boolean(chatId) && state.chatId === chatId);
-  const saved = useSubagentHelperChatSelector((state) => (runId ? state.saved.get(runId) : undefined));
-  const live = useSubagentHelperChatSelector((state) => (runId ? state.live.get(runId) : undefined));
+  const scoped = useSubagentHelperChatSelector(
+    (state) => Boolean(chatId) && state.chatId === chatId,
+  );
+  const saved = useSubagentHelperChatSelector((state) =>
+    runId ? state.saved.get(runId) : undefined,
+  );
+  const live = useSubagentHelperChatSelector((state) =>
+    runId ? state.live.get(runId) : undefined,
+  );
   const approvals = useSubagentHelperChatSelector((state) => state.approvals);
   const decidingApprovalId = useSubagentHelperChatSelector((state) => state.decidingApprovalId);
   const expandedRunId = useSubagentHelperChatSelector((state) => state.expandedRunId);
@@ -1614,7 +1670,10 @@ function HelperAwareSubagentsPanel({
     runs === props.runs
       ? props.selectedRunSnapshot
       : (runs.find((run) => run.runId === runId)?.snapshot ?? props.selectedRunSnapshot);
-  const selectedTranscript = React.useMemo(() => mergeSubagentTranscript(saved, live), [live, saved]);
+  const selectedTranscript = React.useMemo(
+    () => mergeSubagentTranscript(saved, live),
+    [live, saved],
+  );
   const helperChat = React.useMemo<SubagentsPanelHelperChat | undefined>(() => {
     if (!store || !chatId || !scoped) return undefined;
     return {
@@ -1736,7 +1795,9 @@ function EnvironmentPanelSurface({
   const activeFileRequest =
     panel.fileRequest?.workspaceId === active?.id ? panel.fileRequest : null;
   const availableTabs = availableEnvironmentPanelTabs(panel.subagentsEnabled, panel.devicesEnabled);
-  const panelTabs = [...new Set([...panel.openTabs.filter((tab) => availableTabs.includes(tab)), panel.tab])];
+  const panelTabs = [
+    ...new Set([...panel.openTabs.filter((tab) => availableTabs.includes(tab)), panel.tab]),
+  ];
   const runBrowser = async (command: Parameters<typeof browserApi.command>[1]) => {
     const owner = active?.id;
     if (!owner) return;
@@ -1750,7 +1811,10 @@ function EnvironmentPanelSurface({
     return { ...result, state: current };
   };
   const chatId = panel.activeChat.chatId;
-  const devices = useDeviceTabs(chatId, panel.devicesEnabled && fullOpen && panelTabs.includes("devices"));
+  const devices = useDeviceTabs(
+    chatId,
+    panel.devicesEnabled && fullOpen && panelTabs.includes("devices"),
+  );
   const [renamingDevice, setRenamingDevice] = React.useState<string | null>(null);
   const openTool = (tool: EnvironmentPanelTab) => {
     navigationIntentRef.current++;
@@ -1765,11 +1829,37 @@ function EnvironmentPanelSurface({
   type StripTab = WorkbenchTab & { kind: EnvironmentPanelTab; deviceKey?: string | null };
   const toolIcon = (kind: EnvironmentPanelTab) =>
     WORKSPACE_TOOLS.find((tool) => tool.id === kind)?.icon ?? Plus;
-  const stripTabs = panelTabs.flatMap<StripTab>((kind) => kind === "browser" && browser?.tabs.length
-    ? browser.tabs.map((page) => ({ id: page.id, viewId: kind, kind, icon: toolIcon(kind), label: page.title || "Browser", selected: panel.tab === "browser" && browser.activeTabId === page.id }))
-    : kind === "devices"
-      ? devices.entries.map((entry) => ({ id: entry.key ? `device:${entry.key}` : "devices", viewId: kind, kind, icon: toolIcon(kind), label: entry.label, selected: panel.tab === "devices" && entry.selected, deviceKey: entry.key }))
-      : [{ id: kind, viewId: kind, kind, icon: toolIcon(kind), label: workspaceToolLabel(kind), selected: panel.tab === kind }]);
+  const stripTabs = panelTabs.flatMap<StripTab>((kind) =>
+    kind === "browser" && browser?.tabs.length
+      ? browser.tabs.map((page) => ({
+          id: page.id,
+          viewId: kind,
+          kind,
+          icon: toolIcon(kind),
+          label: page.title || "Browser",
+          selected: panel.tab === "browser" && browser.activeTabId === page.id,
+        }))
+      : kind === "devices"
+        ? devices.entries.map((entry) => ({
+            id: entry.key ? `device:${entry.key}` : "devices",
+            viewId: kind,
+            kind,
+            icon: toolIcon(kind),
+            label: entry.label,
+            selected: panel.tab === "devices" && entry.selected,
+            deviceKey: entry.key,
+          }))
+        : [
+            {
+              id: kind,
+              viewId: kind,
+              kind,
+              icon: toolIcon(kind),
+              label: workspaceToolLabel(kind),
+              selected: panel.tab === kind,
+            },
+          ],
+  );
   const selectStripTab = (entry: StripTab) => {
     if (entry.deviceKey !== undefined) {
       navigationIntentRef.current++;
@@ -1777,11 +1867,19 @@ function EnvironmentPanelSurface({
       panel.setTab("devices");
     } else if (entry.kind === "browser" && entry.id !== "browser") {
       const intent = ++navigationIntentRef.current;
-      void runBrowser({ action: "select", tabId: entry.id }).then((result) => {
-        if (!result || intent !== navigationIntentRef.current || result.state.activeTabId !== entry.id || !result.state.tabs.some((page) => page.id === entry.id)) return;
-        panel.setTab("browser");
-        setBrowserFocusRequest(entry.id);
-      }).catch(() => toast.error("Could not select browser tab."));
+      void runBrowser({ action: "select", tabId: entry.id })
+        .then((result) => {
+          if (
+            !result ||
+            intent !== navigationIntentRef.current ||
+            result.state.activeTabId !== entry.id ||
+            !result.state.tabs.some((page) => page.id === entry.id)
+          )
+            return;
+          panel.setTab("browser");
+          setBrowserFocusRequest(entry.id);
+        })
+        .catch(() => toast.error("Could not select browser tab."));
     } else openTool(entry.kind);
   };
   const closeStripTab = (entry: StripTab) => {
@@ -1791,14 +1889,24 @@ function EnvironmentPanelSurface({
       // Closing a device tab ends its viewer session; the simulator keeps running.
       if (devices.close(entry.deviceKey)) panel.closeTab("devices");
     } else if (entry.kind === "browser" && entry.id !== "browser") {
-      void runBrowser({ action: "close", tabId: entry.id }).then((result) => {
-        if (!result || intent !== navigationIntentRef.current || result.state.tabs.some((page) => page.id === entry.id)) return;
-        if (!result.state.tabs.length) panel.closeTab("browser");
-        else if (panel.tab === "browser") setBrowserFocusRequest(result.state.activeTabId);
-      }).catch(() => toast.error("Could not close browser tab."));
+      void runBrowser({ action: "close", tabId: entry.id })
+        .then((result) => {
+          if (
+            !result ||
+            intent !== navigationIntentRef.current ||
+            result.state.tabs.some((page) => page.id === entry.id)
+          )
+            return;
+          if (!result.state.tabs.length) panel.closeTab("browser");
+          else if (panel.tab === "browser") setBrowserFocusRequest(result.state.activeTabId);
+        })
+        .catch(() => toast.error("Could not close browser tab."));
     } else panel.closeTab(entry.kind);
   };
-  const finishRename = () => { setRenamingDevice(null); focusStripTabNextFrame(activeTabRef); };
+  const finishRename = () => {
+    setRenamingDevice(null);
+    focusStripTabNextFrame(activeTabRef);
+  };
   const decoratedTabs = stripTabs.map<StripTab>((entry) => {
     const deviceKey = entry.deviceKey;
     if (!deviceKey) return entry;
@@ -1807,20 +1915,52 @@ function EnvironmentPanelSurface({
       title: `${entry.label} — double-click to rename`,
       onRename: () => setRenamingDevice(deviceKey),
       dataAttributes: { "data-device-tab": deviceKey },
-      editor: renamingDevice === deviceKey
-        ? <DeviceTabRenameInput title={entry.label} onCommit={(title) => { devices.rename(deviceKey, title); finishRename(); }} onCancel={finishRename} />
-        : undefined,
-      wrap: (tabButton) => <DeviceTabContextMenu floating={devices.floating === deviceKey} onRename={() => setRenamingDevice(deviceKey)} onFloat={() => { devices.float(deviceKey); panel.closeTools(); }} onClose={() => closeStripTab(entry)}>{tabButton}</DeviceTabContextMenu>,
+      editor:
+        renamingDevice === deviceKey ? (
+          <DeviceTabRenameInput
+            title={entry.label}
+            onCommit={(title) => {
+              devices.rename(deviceKey, title);
+              finishRename();
+            }}
+            onCancel={finishRename}
+          />
+        ) : undefined,
+      wrap: (tabButton) => (
+        <DeviceTabContextMenu
+          floating={devices.floating === deviceKey}
+          onRename={() => setRenamingDevice(deviceKey)}
+          onFloat={() => {
+            devices.float(deviceKey);
+            panel.closeTools();
+          }}
+          onClose={() => closeStripTab(entry)}
+        >
+          {tabButton}
+        </DeviceTabContextMenu>
+      ),
     };
   });
   const openBrowserUrl = async (url: string) => {
     const intent = ++navigationIntentRef.current;
     const result = await runBrowser({ action: "create", url, show: false });
-    if (!result || intent !== navigationIntentRef.current || !result.tabId || !result.state.tabs.some((page) => page.id === result.tabId)) return;
+    if (
+      !result ||
+      intent !== navigationIntentRef.current ||
+      !result.tabId ||
+      !result.state.tabs.some((page) => page.id === result.tabId)
+    )
+      return;
     // A hidden create deliberately preserves the previous active page. Select it
     // only while this request still owns navigation, then reveal the presenter.
     const selected = await runBrowser({ action: "select", tabId: result.tabId });
-    if (!selected || intent !== navigationIntentRef.current || selected.state.activeTabId !== result.tabId || !selected.state.tabs.some((page) => page.id === result.tabId)) return;
+    if (
+      !selected ||
+      intent !== navigationIntentRef.current ||
+      selected.state.activeTabId !== result.tabId ||
+      !selected.state.tabs.some((page) => page.id === result.tabId)
+    )
+      return;
     panel.setTab("browser");
   };
 
@@ -1856,15 +1996,28 @@ function EnvironmentPanelSurface({
 
   /** The chat beside the Artifacts tab, when it belongs to the page's workspace. */
   const artifactChat = (view: WorkspaceArtifactView): string | null => {
-    const chatId = panel.activeChat.workspaceId === view.artifact.workspaceId ? panel.activeChat.chatId : null;
+    const chatId =
+      panel.activeChat.workspaceId === view.artifact.workspaceId ? panel.activeChat.chatId : null;
     if (!chatId) toast.error("Open a chat in this workspace first.");
     return chatId;
   };
   // New page drafts into the chat beside the tab, which must belong to this workspace.
-  const newPageChatId = active && panel.activeChat.workspaceId === active.id ? panel.activeChat.chatId : null;
+  const newPageChatId =
+    active && panel.activeChat.workspaceId === active.id ? panel.activeChat.chatId : null;
   const viewBodies: Record<EnvironmentPanelTab, () => React.ReactNode> = {
     "new-tab": () => (
-      <WorkspaceToolLauncher hasWorkspace={Boolean(active)} hasFolderAccess={Boolean(active?.folderPath && active.permission !== "none")} canOpenTerminal={terminal.canOpen} subagents={panel.subagentsEnabled} devices={panel.devicesEnabled} artifacts={panel.artifactsOffered} busy={panel.gitOperationBusy} onOpen={openTool} onQuickView={panel.showQuickView} onUrl={openBrowserUrl} />
+      <WorkspaceToolLauncher
+        hasWorkspace={Boolean(active)}
+        hasFolderAccess={Boolean(active?.folderPath && active.permission !== "none")}
+        canOpenTerminal={terminal.canOpen}
+        subagents={panel.subagentsEnabled}
+        devices={panel.devicesEnabled}
+        artifacts={panel.artifactsOffered}
+        busy={panel.gitOperationBusy}
+        onOpen={openTool}
+        onQuickView={panel.showQuickView}
+        onUrl={openBrowserUrl}
+      />
     ),
     context: () => <ChatContextPanel details={panel.contextDetails} />,
     artifacts: () => (
@@ -1876,20 +2029,24 @@ function EnvironmentPanelSurface({
         onSelect={panel.selectArtifact}
         onAskAiden={(view) => {
           const chatId = artifactChat(view);
-          if (chatId) stageComposerText(chatId, workspaceArtifactChangeRequest(view), { notice: null });
+          if (chatId)
+            stageComposerText(chatId, workspaceArtifactChangeRequest(view), { notice: null });
         }}
         onAction={(view, action) => {
           if (action.kind !== "send" && action.kind !== "compose") return;
           const chatId = artifactChat(view);
           if (!chatId) return;
           // A confirmed follow-up sends through the chat's own path; compose only fills its composer.
-          if (action.kind === "compose" || !sendPromptToChat(chatId, action.text)) stageComposerText(chatId, action.text);
+          if (action.kind === "compose" || !sendPromptToChat(chatId, action.text))
+            stageComposerText(chatId, action.text);
         }}
         onDraftNewPage={(request) => {
           // Only ever staged: the person reads the request and sends it.
           if (newPageChatId) stageComposerText(newPageChatId, request, { notice: null });
         }}
-        newPageUnavailable={newPageChatId ? null : "Open a chat in this workspace first, then draft the page there."}
+        newPageUnavailable={
+          newPageChatId ? null : "Open a chat in this workspace first, then draft the page there."
+        }
       />
     ),
     terminal: () => <TerminalSideTarget presented={presented && panel.tab === "terminal"} />,
@@ -1915,8 +2072,7 @@ function EnvironmentPanelSurface({
         handoffSnapshots={panel.subagents.handoffSnapshots}
         selectedRunId={panel.selectedSubagentRunId}
         selectedRunSnapshot={
-          panel.subagentViews.find((run) => run.runId === panel.selectedSubagentRunId)
-            ?.snapshot
+          panel.subagentViews.find((run) => run.runId === panel.selectedSubagentRunId)?.snapshot
         }
         detailLoading={panel.subagentDetailLoading}
         detailError={panel.subagentDetailError}
@@ -2071,7 +2227,9 @@ interface QuickViewDragPreview {
 
 /** A Quick View card's reorder grip. */
 function gripOf(id: QuickViewSectionId): HTMLElement | null {
-  return document.querySelector<HTMLElement>(`[data-quick-view-section="${id}"] [aria-label^="Move "]`);
+  return document.querySelector<HTMLElement>(
+    `[data-quick-view-section="${id}"] [aria-label^="Move "]`,
+  );
 }
 
 /**
@@ -2158,7 +2316,9 @@ export function QuickViewCards({ workspace, live }: { workspace: Workspace; live
     if (card?.contains(document.activeElement)) focusGripRef.current = id;
     commitLayout(moveSection(layout, id, toIndex, visible));
     const position = Math.max(0, Math.min(visible.length - 1, toIndex)) + 1;
-    reorder.setAnnouncement(reorderMessage("drop", QUICK_VIEW_SECTION_TITLES[id], position, visible.length));
+    reorder.setAnnouncement(
+      reorderMessage("drop", QUICK_VIEW_SECTION_TITLES[id], position, visible.length),
+    );
   };
 
   const onDragPreview = (id: QuickViewSectionId, to: number | null) => {
@@ -2180,7 +2340,8 @@ export function QuickViewCards({ workspace, live }: { workspace: Workspace; live
     if (!dragPreview) return 0;
     const from = visible.indexOf(dragPreview.id);
     if (from < 0 || index === from) return 0;
-    if (from < dragPreview.to && index > from && index <= dragPreview.to) return -dragPreview.offset;
+    if (from < dragPreview.to && index > from && index <= dragPreview.to)
+      return -dragPreview.offset;
     if (dragPreview.to < from && index >= dragPreview.to && index < from) return dragPreview.offset;
     return 0;
   };
@@ -2188,7 +2349,10 @@ export function QuickViewCards({ workspace, live }: { workspace: Workspace; live
   const toolsBlocked = panel.gitOperationBusy;
   const sections: Record<
     QuickViewSectionId,
-    Pick<QuickViewSectionProps, "summary" | "summaryLabel" | "headerAction" | "bodyWhileOpen" | "children">
+    Pick<
+      QuickViewSectionProps,
+      "summary" | "summaryLabel" | "headerAction" | "bodyWhileOpen" | "children"
+    >
   > = {
     environment: {
       summary: environmentSummary?.node,
@@ -2229,7 +2393,9 @@ export function QuickViewCards({ workspace, live }: { workspace: Workspace; live
       ),
     },
     context: {
-      summary: pressure ? <ContextSummaryMeter pressure={pressure} compacting={compacting} /> : undefined,
+      summary: pressure ? (
+        <ContextSummaryMeter pressure={pressure} compacting={compacting} />
+      ) : undefined,
       summaryLabel: pressure ? `${contextPressurePercent(pressure)} percent used` : undefined,
       headerAction: {
         kind: "sidebar",
@@ -2425,10 +2591,21 @@ function readSavedWorkbench(): SavedWorkbench | null {
     if (!raw) return null;
     const value = JSON.parse(raw) as Partial<SavedWorkbench> | null;
     const tab = parseEnvironmentPanelTab(typeof value?.tab === "string" ? value.tab : null);
-    if (value?.version !== 1 || !tab || typeof value.width !== "number" || !Number.isFinite(value.width)) {
+    if (
+      value?.version !== 1 ||
+      !tab ||
+      typeof value.width !== "number" ||
+      !Number.isFinite(value.width)
+    ) {
       return null;
     }
-    return { version: 1, tab, toolsOpen: value.toolsOpen === true, quickViewOpen: value.quickViewOpen === true, width: value.width };
+    return {
+      version: 1,
+      tab,
+      toolsOpen: value.toolsOpen === true,
+      quickViewOpen: value.quickViewOpen === true,
+      width: value.width,
+    };
   } catch {
     return null;
   }
@@ -2449,7 +2626,8 @@ function useDesignWorkbenchSuspension(
   panel: EnvironmentPanelContextValue,
   panelWidth: WorkbenchWidthState,
 ): void {
-  const { tab, toolsOpen, quickViewOpen, showTools, closeTools, showQuickView, closeQuickView } = panel;
+  const { tab, toolsOpen, quickViewOpen, showTools, closeTools, showQuickView, closeQuickView } =
+    panel;
   const { preferredWidth, commitPreferredWidth } = panelWidth;
   React.useLayoutEffect(() => {
     if (design === "pending") return;
@@ -2459,7 +2637,13 @@ function useDesignWorkbenchSuspension(
       // what the person had before entry only while both surfaces are still
       // closed. An open surface means it is stale, so the current state wins.
       if (!saved || toolsOpen || quickViewOpen) {
-        const snapshot: SavedWorkbench = { version: 1, tab, toolsOpen, quickViewOpen, width: preferredWidth };
+        const snapshot: SavedWorkbench = {
+          version: 1,
+          tab,
+          toolsOpen,
+          quickViewOpen,
+          width: preferredWidth,
+        };
         try {
           localStorage.setItem(DESIGN_SAVED_WORKBENCH_STORAGE_KEY, JSON.stringify(snapshot));
         } catch {
@@ -2519,18 +2703,10 @@ export function EnvironmentWorkbench({
   const layout = resolveEnvironmentPanelLayout(panelWidth.preferredWidth, containerWidth);
   const renderedWidth = layout.width;
   const inline = layout.inline && design !== "active";
-  const quickViewLayout = resolveQuickViewLayout(
-    containerWidth,
-    toolsOpen,
-    renderedWidth,
-    inline,
-  );
-  const stacked =
-    quickViewOpen && toolsOpen && !quickViewLayout.alongsideTools;
-  const toolsPresented =
-    toolsOpen && (!stacked || panel.frontSurface === "tools");
-  const quickViewPresented =
-    quickViewOpen && (!stacked || panel.frontSurface === "quick-view");
+  const quickViewLayout = resolveQuickViewLayout(containerWidth, toolsOpen, renderedWidth, inline);
+  const stacked = quickViewOpen && toolsOpen && !quickViewLayout.alongsideTools;
+  const toolsPresented = toolsOpen && (!stacked || panel.frontSurface === "tools");
+  const quickViewPresented = quickViewOpen && (!stacked || panel.frontSurface === "quick-view");
   const inlineToolsWidth = fullOpen && inline ? renderedWidth : 0;
   const chatColumn = useChatColumnMetrics();
   // Quick View docks beside the chat when it is the visible card and no floating
@@ -2573,7 +2749,8 @@ export function EnvironmentWorkbench({
         activeElement instanceof HTMLElement &&
         shouldRestoreEnvironmentFocus(activeElement, "quick-view")
           ? "quick-view"
-          : activeElement instanceof HTMLElement && shouldRestoreEnvironmentFocus(activeElement, "tools")
+          : activeElement instanceof HTMLElement &&
+              shouldRestoreEnvironmentFocus(activeElement, "tools")
             ? "tools"
             : panel.frontSurface;
       if (!focusedSurface) return;
@@ -2607,7 +2784,9 @@ export function EnvironmentWorkbench({
             ? ({
                 "--chat-card-inset-end": `${chatCardInset}px`,
                 // Full-width chat has no max; the docked column then fills what the card leaves.
-                "--chat-card-max-width": Number.isFinite(chatColumn.maxWidth) ? `${chatColumn.maxWidth}px` : "100000px",
+                "--chat-card-max-width": Number.isFinite(chatColumn.maxWidth)
+                  ? `${chatColumn.maxWidth}px`
+                  : "100000px",
               } as React.CSSProperties)
             : undefined
         }

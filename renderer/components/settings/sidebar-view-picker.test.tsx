@@ -3,8 +3,16 @@ import * as React from "react";
 import assert from "node:assert/strict";
 import { afterEach, beforeEach, mock, test } from "node:test";
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
-import { AppCapabilitiesProvider, DISABLED_APP_CAPABILITIES, type AppCapabilities } from "../../lib/app-capabilities";
-import { SIDEBAR_PREFERENCES_KEY, useInboxDockBadgeSync, useSidebarView } from "../../lib/use-sidebar-view";
+import {
+  AppCapabilitiesProvider,
+  DISABLED_APP_CAPABILITIES,
+  type AppCapabilities,
+} from "../../lib/app-capabilities";
+import {
+  SIDEBAR_PREFERENCES_KEY,
+  useInboxDockBadgeSync,
+  useSidebarView,
+} from "../../lib/use-sidebar-view";
 import { InboxDockBadgeSetting, SidebarViewPicker } from "./sidebar-view-picker";
 
 /** Stands in for the sidebar's Organize menu: another reader and writer of the same view. */
@@ -27,8 +35,10 @@ function renderPicker() {
   );
 }
 
-const storedView = () => (JSON.parse(localStorage.getItem(SIDEBAR_PREFERENCES_KEY) ?? "{}") as { view?: string }).view;
-const checked = () => screen.getAllByRole("radio").filter((radio) => radio.getAttribute("aria-checked") === "true");
+const storedView = () =>
+  (JSON.parse(localStorage.getItem(SIDEBAR_PREFERENCES_KEY) ?? "{}") as { view?: string }).view;
+const checked = () =>
+  screen.getAllByRole("radio").filter((radio) => radio.getAttribute("aria-checked") === "true");
 
 beforeEach(() => localStorage.clear());
 afterEach(cleanup);
@@ -41,7 +51,9 @@ test("the Sidebar setting offers the three views, checks the stored one and keep
   // Each choice is found by its accessible name, in this order.
   assert.deepEqual(
     screen.getAllByRole("radio"),
-    ["By workspace", "Recent only", "Inbox (Beta)"].map((name) => screen.getByRole("radio", { name })),
+    ["By workspace", "Recent only", "Inbox (Beta)"].map((name) =>
+      screen.getByRole("radio", { name }),
+    ),
   );
   assert.deepEqual(checked(), [screen.getByRole("radio", { name: "Recent only" })]);
   assert.deepEqual(
@@ -55,7 +67,10 @@ test("choosing Inbox switches the sidebar's view, and the Organize menu's change
   fireEvent.click(screen.getByRole("radio", { name: "Inbox (Beta)" }));
   assert.equal(storedView(), "inbox");
   assert.equal(screen.getByTestId("organize").dataset.view, "inbox");
-  assert.equal(screen.getByRole("radio", { name: "Inbox (Beta)" }).getAttribute("aria-checked"), "true");
+  assert.equal(
+    screen.getByRole("radio", { name: "Inbox (Beta)" }).getAttribute("aria-checked"),
+    "true",
+  );
 
   act(() => fireEvent.click(screen.getByTestId("organize")));
   assert.deepEqual(checked(), [screen.getByRole("radio", { name: "Recent only" })]);
@@ -95,10 +110,19 @@ test("ArrowRight and ArrowDown move forward, wrapping past the last choice, and 
 });
 
 /** Stands in for the app root, which tells main whether to show the badge. */
-function BadgeSyncProbe({ reports, available = true }: { reports: boolean[]; available?: boolean }) {
-  const report = React.useCallback(async (enabled: boolean) => {
-    reports.push(enabled);
-  }, [reports]);
+function BadgeSyncProbe({
+  reports,
+  available = true,
+}: {
+  reports: boolean[];
+  available?: boolean;
+}) {
+  const report = React.useCallback(
+    async (enabled: boolean) => {
+      reports.push(enabled);
+    },
+    [reports],
+  );
   useInboxDockBadgeSync(report, available);
   return null;
 }
@@ -122,7 +146,8 @@ const lastReport = async (reports: boolean[]) => {
   return reports[reports.length - 1];
 };
 const storedDockBadge = () =>
-  (JSON.parse(localStorage.getItem(SIDEBAR_PREFERENCES_KEY) ?? "{}") as { dockBadge?: boolean }).dockBadge;
+  (JSON.parse(localStorage.getItem(SIDEBAR_PREFERENCES_KEY) ?? "{}") as { dockBadge?: boolean })
+    .dockBadge;
 
 test("the Dock badge switch shows only while Inbox is the view, on by default, and its choice is stored", async () => {
   localStorage.setItem(SIDEBAR_PREFERENCES_KEY, JSON.stringify({ view: "projects" }));
@@ -137,7 +162,10 @@ test("the Dock badge switch shows only while Inbox is the view, on by default, a
   assert.equal(await lastReport(reports), true);
 
   fireEvent.click(toggle);
-  assert.equal(screen.getByRole("switch", { name: DOCK_SWITCH }).getAttribute("aria-checked"), "false");
+  assert.equal(
+    screen.getByRole("switch", { name: DOCK_SWITCH }).getAttribute("aria-checked"),
+    "false",
+  );
   assert.equal(storedDockBadge(), false);
   assert.equal(await lastReport(reports), false, "switching it off clears the badge");
 
@@ -145,7 +173,10 @@ test("the Dock badge switch shows only while Inbox is the view, on by default, a
   fireEvent.click(screen.getByRole("radio", { name: "Recent only" }));
   assert.equal(screen.queryByRole("switch", { name: DOCK_SWITCH }), null);
   fireEvent.click(screen.getByRole("radio", { name: "Inbox (Beta)" }));
-  assert.equal(screen.getByRole("switch", { name: DOCK_SWITCH }).getAttribute("aria-checked"), "false");
+  assert.equal(
+    screen.getByRole("switch", { name: DOCK_SWITCH }).getAttribute("aria-checked"),
+    "false",
+  );
   assert.equal(await lastReport(reports), false);
 });
 
@@ -179,7 +210,9 @@ test("a main that refuses the badge report leaves the settings usable and is log
     return null;
   }
   render(
-    <AppCapabilitiesProvider capabilities={{ ...DISABLED_APP_CAPABILITIES, platform: "darwin", badgeCount: true }}>
+    <AppCapabilitiesProvider
+      capabilities={{ ...DISABLED_APP_CAPABILITIES, platform: "darwin", badgeCount: true }}
+    >
       <InboxDockBadgeSetting />
       <RefusingSync />
     </AppCapabilitiesProvider>,

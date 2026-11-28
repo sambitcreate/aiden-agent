@@ -26,7 +26,7 @@ test("createSseParser joins data lines, handles CRLF, and waits for complete eve
   const seen: string[] = [];
   const parse = createSseParser((data) => seen.push(data));
   const encode = (text: string) => new TextEncoder().encode(text);
-  parse(encode(": keep-alive\n\ndata: {\"a\":"));
+  parse(encode(': keep-alive\n\ndata: {"a":'));
   assert.deepEqual(seen, []);
   parse(encode("1}\r\n\r\ndata: one\ndata: two\n\n"));
   assert.deepEqual(seen, ['{"a":1}', "one\ntwo"]);

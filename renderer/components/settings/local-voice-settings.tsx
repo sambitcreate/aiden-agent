@@ -43,7 +43,9 @@ export function IdleUnload() {
   const qc = useQueryClient();
   const settings = useSettings();
   const stored = settings.data?.localVoiceIdleUnloadMinutes;
-  const minutes = isLocalVoiceIdleUnloadMinutes(stored) ? stored : DEFAULT_LOCAL_VOICE_IDLE_UNLOAD_MINUTES;
+  const minutes = isLocalVoiceIdleUnloadMinutes(stored)
+    ? stored
+    : DEFAULT_LOCAL_VOICE_IDLE_UNLOAD_MINUTES;
   const choices = LOCAL_VOICE_IDLE_UNLOAD_CHOICES.includes(minutes)
     ? LOCAL_VOICE_IDLE_UNLOAD_CHOICES
     : [...LOCAL_VOICE_IDLE_UNLOAD_CHOICES, minutes].sort((a, b) => a - b);
@@ -60,9 +62,11 @@ export function IdleUnload() {
   return (
     <Field
       label="Free memory when idle"
-      description={minutes === 0
-        ? "The model stays loaded after first use for the fastest start. It is loaded again automatically when you dictate."
-        : "Unloads the model after this long without dictation. It is loaded again automatically when you press the shortcut or start the mic."}
+      description={
+        minutes === 0
+          ? "The model stays loaded after first use for the fastest start. It is loaded again automatically when you dictate."
+          : "Unloads the model after this long without dictation. It is loaded again automatically when you press the shortcut or start the mic."
+      }
     >
       <Select value={String(minutes)} onValueChange={(value) => void change(value)}>
         <SelectTrigger size="small" aria-label="Unload the on-device model">
@@ -99,7 +103,11 @@ function LoadInAdvance() {
       label="Load in advance"
       description="Loads the model when Aiden starts and when you choose one, so the first dictation starts instantly. Off loads it when you start dictating."
     >
-      <Switch aria-label="Load in advance" checked={enabled} onCheckedChange={(value) => void change(value)} />
+      <Switch
+        aria-label="Load in advance"
+        checked={enabled}
+        onCheckedChange={(value) => void change(value)}
+      />
     </Field>
   );
 }
@@ -123,7 +131,11 @@ function TrimSilence() {
       label="Trim silence"
       description="Skips silence and splits long recordings so every model can transcribe them."
     >
-      <Switch aria-label="Trim silence" checked={enabled} onCheckedChange={(value) => void change(value)} />
+      <Switch
+        aria-label="Trim silence"
+        checked={enabled}
+        onCheckedChange={(value) => void change(value)}
+      />
     </Field>
   );
 }
@@ -144,13 +156,19 @@ function EngineStatus() {
           On-device engine unavailable
         </Text>
         <Text variant="small" color="secondary">
-          {status.data?.error ?? (status.error instanceof Error ? status.error.message : "The speech engine failed to load.")}
+          {status.data?.error ??
+            (status.error instanceof Error
+              ? status.error.message
+              : "The speech engine failed to load.")}
         </Text>
       </Callout>
     );
   }
   return (
-    <Field label="Engine" description="Transcription runs locally after you download a speech model.">
+    <Field
+      label="Engine"
+      description="Transcription runs locally after you download a speech model."
+    >
       <Badge color="green">Ready</Badge>
     </Field>
   );
@@ -164,7 +182,17 @@ const FASTER_MODEL: Readonly<Record<string, string>> = { "parakeet-v3": "parakee
  * it and it is not downloaded. A chosen model follows the upgrade; Automatic
  * stays Automatic and picks the faster build up on its own.
  */
-function FasterModelOffer({ inUse, faster, chosen, onBusyChange }: { inUse: LocalVoiceModel; faster: LocalVoiceModel; chosen: boolean; onBusyChange: (busy: boolean) => void }) {
+function FasterModelOffer({
+  inUse,
+  faster,
+  chosen,
+  onBusyChange,
+}: {
+  inUse: LocalVoiceModel;
+  faster: LocalVoiceModel;
+  chosen: boolean;
+  onBusyChange: (busy: boolean) => void;
+}) {
   const qc = useQueryClient();
   const [percentage, setPercentage] = React.useState<number | null>(null);
 
@@ -214,7 +242,10 @@ function FasterModelOffer({ inUse, faster, chosen, onBusyChange }: { inUse: Loca
           <Text variant="small" color="secondary" className="tabular-nums">
             Downloading… {percentage}%
           </Text>
-          <Button variant="transparent" onClick={() => void localVoiceApi.cancelDownload(faster.id)}>
+          <Button
+            variant="transparent"
+            onClick={() => void localVoiceApi.cancelDownload(faster.id)}
+          >
             Cancel
           </Button>
         </div>
@@ -234,11 +265,16 @@ function ActiveModel({ onManage }: { onManage: () => void }) {
   // With no usable choice, dictation falls back to the first installed model.
   const fallbackId = active
     ? undefined
-    : effectiveLocalModelId(undefined, installed.map((m) => m.id));
+    : effectiveLocalModelId(
+        undefined,
+        installed.map((m) => m.id),
+      );
   const fallback = installed.find((m) => m.id === fallbackId);
   const inUse = active ?? fallback;
   const fasterId = inUse ? FASTER_MODEL[inUse.id] : undefined;
-  const faster = fasterId ? (models.data ?? []).find((m) => m.id === fasterId && !m.installed) : undefined;
+  const faster = fasterId
+    ? (models.data ?? []).find((m) => m.id === fasterId && !m.installed)
+    : undefined;
   // Set while a faster build downloads and becomes the choice: the model list can be a step behind settings then.
   const [upgrading, setUpgrading] = React.useState(false);
 
@@ -246,7 +282,9 @@ function ActiveModel({ onManage }: { onManage: () => void }) {
     // A choice is cleared only against a settled model list: one still loading may not list a model just downloaded.
     if (upgrading || models.isFetching) return;
     if (activeId && models.data && !models.data.some((m) => m.id === activeId && m.installed)) {
-      void settingsApi.set({ localVoiceModel: "" }).then(() => qc.invalidateQueries({ queryKey: queryKeys.settings }));
+      void settingsApi
+        .set({ localVoiceModel: "" })
+        .then(() => qc.invalidateQueries({ queryKey: queryKeys.settings }));
     }
   }, [activeId, models.data, models.isFetching, upgrading, qc]);
 
@@ -254,17 +292,32 @@ function ActiveModel({ onManage }: { onManage: () => void }) {
     <>
       {installedCount === 0 ? (
         <Callout color="blue">
-          <Text variant="small">No on-device models yet. Download one to start transcribing locally.</Text>
+          <Text variant="small">
+            No on-device models yet. Download one to start transcribing locally.
+          </Text>
         </Callout>
       ) : (
-        <Field label="Active model" description="Used when you dictate with the on-device provider.">
+        <Field
+          label="Active model"
+          description="Used when you dictate with the on-device provider."
+        >
           <Text variant="small-strong">
             {active ? active.name : fallback ? `${fallback.name} (automatic)` : "None selected"}
           </Text>
         </Field>
       )}
-      {inUse && faster ? <FasterModelOffer inUse={inUse} faster={faster} chosen={active !== undefined} onBusyChange={setUpgrading} /> : null}
-      <Field label="Models" description="Download, remove, and choose your on-device transcription model.">
+      {inUse && faster ? (
+        <FasterModelOffer
+          inUse={inUse}
+          faster={faster}
+          chosen={active !== undefined}
+          onBusyChange={setUpgrading}
+        />
+      ) : null}
+      <Field
+        label="Models"
+        description="Download, remove, and choose your on-device transcription model."
+      >
         <Button variant="filled" onClick={onManage}>
           <Settings2 />
           Manage Models

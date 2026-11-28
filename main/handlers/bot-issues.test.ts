@@ -65,8 +65,17 @@ test("bots:issues:act carries the offered action to the service and reports it s
 });
 test("desktop issue actions opt into allow_folder without accepting model-supplied authorization", async () => {
   const { invoke, acts } = setup();
-  await assert.rejects(invoke(BOT_ISSUE_CHANNELS.act, act({ action: { kind: "allow_folder", authorization: { policyRevision: "fake" } } })), /Invalid bot issue/u);
-  assert.deepEqual(await invoke(BOT_ISSUE_CHANNELS.act, act({ action: { kind: "allow_folder" } })), { result: "done" });
+  await assert.rejects(
+    invoke(
+      BOT_ISSUE_CHANNELS.act,
+      act({ action: { kind: "allow_folder", authorization: { policyRevision: "fake" } } }),
+    ),
+    /Invalid bot issue/u,
+  );
+  assert.deepEqual(
+    await invoke(BOT_ISSUE_CHANNELS.act, act({ action: { kind: "allow_folder" } })),
+    { result: "done" },
+  );
   assert.deepEqual(acts[0]!.action, { kind: "allow_folder" });
 });
 
@@ -87,7 +96,11 @@ test("bots:issues:act rejects unknown action kinds", async () => {
     act({ extra: true }),
   ];
   for (const input of malformed) {
-    await assert.rejects(invoke(BOT_ISSUE_CHANNELS.act, input), /Invalid bot issue/u, JSON.stringify(input));
+    await assert.rejects(
+      invoke(BOT_ISSUE_CHANNELS.act, input),
+      /Invalid bot issue/u,
+      JSON.stringify(input),
+    );
   }
   assert.deepEqual(acts, [], "nothing reaches the service");
 });
@@ -102,31 +115,60 @@ test("bots:issues:act says a settled issue is not open, and refuses an action th
 
 test("bots:issues:list reads one Bot's issues, filtered to open ones when asked", async () => {
   const { invoke, lists } = setup();
-  assert.deepEqual(await invoke(BOT_ISSUE_CHANNELS.list, { botId: ISSUE.botId, open: true }), [ISSUE]);
+  assert.deepEqual(await invoke(BOT_ISSUE_CHANNELS.list, { botId: ISSUE.botId, open: true }), [
+    ISSUE,
+  ]);
   assert.deepEqual(await invoke(BOT_ISSUE_CHANNELS.list, { botId: ISSUE.botId }), [ISSUE]);
   assert.deepEqual(lists, [
     { botId: ISSUE.botId, options: { open: true } },
     { botId: ISSUE.botId, options: undefined },
   ]);
 
-  for (const input of [null, { botId: ISSUE.botId, open: "yes" }, { botId: ISSUE.botId, extra: true }, { botId: "" }]) {
-    await assert.rejects(invoke(BOT_ISSUE_CHANNELS.list, input), /Invalid bot/u, JSON.stringify(input));
+  for (const input of [
+    null,
+    { botId: ISSUE.botId, open: "yes" },
+    { botId: ISSUE.botId, extra: true },
+    { botId: "" },
+  ]) {
+    await assert.rejects(
+      invoke(BOT_ISSUE_CHANNELS.list, input),
+      /Invalid bot/u,
+      JSON.stringify(input),
+    );
   }
 });
 
-
 test("access dismissal is an explicit closed-vocabulary action, never a grant payload", async () => {
-  const {invoke, acts} = setup();
-  assert.equal(botIssueActionOf({kind: "dismiss_access"}), null, "older issue parsers do not adopt the new action");
-  assert.deepEqual(botIssueActionOf({kind: "dismiss_access"}, true), {kind: "dismiss_access"});
-  await assert.rejects(invoke(BOT_ISSUE_CHANNELS.act, act({action: {kind: "dismiss_access", authorization: {policyRevision: "fake"}}})), /Invalid bot issue/u);
-  assert.deepEqual(await invoke(BOT_ISSUE_CHANNELS.act, act({action: {kind: "dismiss_access"}})), {result: "done"});
-  assert.deepEqual(acts.map(item => item.action), [{kind: "dismiss_access"}]);
+  const { invoke, acts } = setup();
+  assert.equal(
+    botIssueActionOf({ kind: "dismiss_access" }),
+    null,
+    "older issue parsers do not adopt the new action",
+  );
+  assert.deepEqual(botIssueActionOf({ kind: "dismiss_access" }, true), { kind: "dismiss_access" });
+  await assert.rejects(
+    invoke(
+      BOT_ISSUE_CHANNELS.act,
+      act({ action: { kind: "dismiss_access", authorization: { policyRevision: "fake" } } }),
+    ),
+    /Invalid bot issue/u,
+  );
+  assert.deepEqual(
+    await invoke(BOT_ISSUE_CHANNELS.act, act({ action: { kind: "dismiss_access" } })),
+    { result: "done" },
+  );
+  assert.deepEqual(
+    acts.map((item) => item.action),
+    [{ kind: "dismiss_access" }],
+  );
 });
 
 test("access-only actions cannot be decoded on ordinary issues", () => {
   for (const kind of ["allow_folder", "dismiss_access"] as const) {
-    assert.equal(botIssueOf({...ISSUE, actions: [{kind}]}), null);
-    assert.deepEqual(botIssueOf({...ISSUE, kind: "access_needed", actions: [{kind}]})?.actions, [{kind}]);
+    assert.equal(botIssueOf({ ...ISSUE, actions: [{ kind }] }), null);
+    assert.deepEqual(
+      botIssueOf({ ...ISSUE, kind: "access_needed", actions: [{ kind }] })?.actions,
+      [{ kind }],
+    );
   }
 });

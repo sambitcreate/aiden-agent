@@ -14,7 +14,9 @@ if (process.platform !== "linux") {
   const source = path.join(root, "native/global-shortcuts-portal/main.c");
   const invocation = await nativeCCompileInvocation({ source, output });
   const { stdout } = await execute("/usr/bin/pkg-config", ["--cflags", "--libs", "gio-unix-2.0"], {
-    env: invocation.env, timeout: 10_000, maxBuffer: 16_384,
+    env: invocation.env,
+    timeout: 10_000,
+    maxBuffer: 16_384,
   });
   await compileNativeC({
     executeFile: execute,

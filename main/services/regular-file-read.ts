@@ -40,8 +40,12 @@ export async function readRegularFile(
   const verify = async (): Promise<void> => {
     if (!expected) return;
     const current = await handle.stat();
-    if (!current.isFile() || current.nlink !== 1 ||
-        String(current.dev) !== expected.device || String(current.ino) !== expected.inode) {
+    if (
+      !current.isFile() ||
+      current.nlink !== 1 ||
+      String(current.dev) !== expected.device ||
+      String(current.ino) !== expected.inode
+    ) {
       throw identityChanged(filePath);
     }
   };

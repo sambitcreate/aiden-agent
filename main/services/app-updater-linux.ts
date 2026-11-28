@@ -1,5 +1,21 @@
 import { createHash, randomUUID } from "node:crypto";
-import { accessSync, closeSync, constants, fchmodSync, fstatSync, fsyncSync, lstatSync, openSync, readFileSync, readSync, realpathSync, renameSync, statSync, unlinkSync, writeSync } from "node:fs";
+import {
+  accessSync,
+  closeSync,
+  constants,
+  fchmodSync,
+  fstatSync,
+  fsyncSync,
+  lstatSync,
+  openSync,
+  readFileSync,
+  readSync,
+  realpathSync,
+  renameSync,
+  statSync,
+  unlinkSync,
+  writeSync,
+} from "node:fs";
 import path from "node:path";
 import { isPathInside } from "../shared/path-containment.js";
 
@@ -18,13 +34,20 @@ export function isRegularAppImage(file: string, uid?: number): boolean {
   try {
     if (!path.isAbsolute(file) || file.includes("\0")) return false;
     const metadata = lstatSync(file);
-    if (!metadata.isFile() || metadata.nlink !== 1 || (uid !== undefined && metadata.uid !== uid)) return false;
+    if (!metadata.isFile() || metadata.nlink !== 1 || (uid !== undefined && metadata.uid !== uid))
+      return false;
     fd = openSync(file, constants.O_RDONLY | constants.O_NOFOLLOW);
     const header = Buffer.alloc(11);
-    return readSync(fd, header, 0, header.length, 0) === header.length &&
+    return (
+      readSync(fd, header, 0, header.length, 0) === header.length &&
       header.subarray(0, 4).equals(Buffer.from([0x7f, 0x45, 0x4c, 0x46])) &&
-      header.subarray(8, 11).equals(Buffer.from([0x41, 0x49, 0x02]));
-  } catch { return false; } finally { if (fd !== undefined) closeSync(fd); }
+      header.subarray(8, 11).equals(Buffer.from([0x41, 0x49, 0x02]))
+    );
+  } catch {
+    return false;
+  } finally {
+    if (fd !== undefined) closeSync(fd);
+  }
 }
 
 /** Only a mounted, replaceable AppImage owns its updates; distro packages stay external. */
@@ -32,32 +55,58 @@ export function canUpdateLinuxAppImage(runtime: LinuxAppImageUpdateRuntime): boo
   try {
     const image = runtime.appImage;
     const appDir = runtime.appDir;
-    if (!image || !appDir || !path.isAbsolute(appDir) || !isRegularAppImage(image, runtime.uid)) return false;
-    if (realpathSync(image) !== image || realpathSync(appDir) !== appDir || !statSync(appDir).isDirectory()) return false;
+    if (!image || !appDir || !path.isAbsolute(appDir) || !isRegularAppImage(image, runtime.uid))
+      return false;
+    if (
+      realpathSync(image) !== image ||
+      realpathSync(appDir) !== appDir ||
+      !statSync(appDir).isDirectory()
+    )
+      return false;
     const resources = realpathSync(runtime.resourcesPath);
     const strict = { allowRoot: false } as const;
-    if (!isPathInside(appDir, resources, strict) || !isPathInside(appDir, realpathSync(runtime.executablePath), strict)) return false;
+    if (
+      !isPathInside(appDir, resources, strict) ||
+      !isPathInside(appDir, realpathSync(runtime.executablePath), strict)
+    )
+      return false;
     const config = path.join(resources, "app-update.yml");
     const configStat = lstatSync(config);
     if (!configStat.isFile() || configStat.size === 0 || configStat.size > 65_536) return false;
     accessSync(config, constants.R_OK);
     try {
-      if (readFileSync(path.join(resources, "package-type"), "utf8").trim() !== "appimage") return false;
-    } catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") return false; }
+      if (readFileSync(path.join(resources, "package-type"), "utf8").trim() !== "appimage")
+        return false;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") return false;
+    }
     if ((lstatSync(image).mode & 0o300) !== 0o300) return false;
     accessSync(image, constants.R_OK | constants.W_OK | constants.X_OK);
     accessSync(path.dirname(image), constants.W_OK | constants.X_OK);
     const mounts = runtime.mountInfo ?? readFileSync("/proc/self/mountinfo", "utf8");
     return mounts.split("\n").some((line) => {
       const [fields, filesystem] = line.split(" - ");
-      const mount = fields?.split(" ")[4]?.replace(/\\([0-7]{3})/gu, (_, octal: string) => String.fromCharCode(Number.parseInt(octal, 8)));
+      const mount = fields
+        ?.split(" ")[4]
+        ?.replace(/\\([0-7]{3})/gu, (_, octal: string) =>
+          String.fromCharCode(Number.parseInt(octal, 8)),
+        );
       const type = filesystem?.split(" ")[0];
-      return mount === appDir && (type === "fuse" || type?.startsWith("fuse.") === true || type === "squashfs");
+      return (
+        mount === appDir &&
+        (type === "fuse" || type?.startsWith("fuse.") === true || type === "squashfs")
+      );
     });
-  } catch { return false; }
+  } catch {
+    return false;
+  }
 }
 
-export interface AppImageIdentity { path: string; dev: number; ino: number; }
+export interface AppImageIdentity {
+  path: string;
+  dev: number;
+  ino: number;
+}
 export function appImageIdentity(file: string): AppImageIdentity {
   const info = lstatSync(file);
   if (!info.isFile()) throw new Error("The current AppImage is no longer a regular file.");
@@ -76,8 +125,13 @@ export function replaceAppImageAtomically(options: {
     const actual = appImageIdentity(current.path);
     return actual.dev === current.dev && actual.ino === current.ino;
   };
-  if (!options.eligible() || !stillCurrent() || !isRegularAppImage(installer) ||
-      !/^[A-Za-z0-9+/]{86}==$/u.test(sha512)) throw new Error("AppImage update installation is unavailable.");
+  if (
+    !options.eligible() ||
+    !stillCurrent() ||
+    !isRegularAppImage(installer) ||
+    !/^[A-Za-z0-9+/]{86}==$/u.test(sha512)
+  )
+    throw new Error("AppImage update installation is unavailable.");
   const temporary = path.join(path.dirname(current.path), `.aiden-update-${randomUUID()}.tmp`);
   let source: number | undefined;
   let target: number | undefined;
@@ -87,13 +141,23 @@ export function replaceAppImageAtomically(options: {
     source = openSync(installer, constants.O_RDONLY | constants.O_NOFOLLOW);
     const sourceInfo = fstatSync(source);
     if (!sourceInfo.isFile()) throw new Error("The downloaded AppImage is unavailable.");
-    target = openSync(temporary, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600);
+    target = openSync(
+      temporary,
+      constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW,
+      0o600,
+    );
     temporaryExists = true;
     const hash = createHash("sha512");
     const buffer = Buffer.alloc(1024 * 1024);
     let copied = 0;
     while (copied < sourceInfo.size) {
-      const count = readSync(source, buffer, 0, Math.min(buffer.length, sourceInfo.size - copied), copied);
+      const count = readSync(
+        source,
+        buffer,
+        0,
+        Math.min(buffer.length, sourceInfo.size - copied),
+        copied,
+      );
       if (count === 0) throw new Error("The downloaded AppImage was truncated.");
       hash.update(buffer.subarray(0, count));
       let written = 0;
@@ -104,12 +168,14 @@ export function replaceAppImageAtomically(options: {
       }
       copied += count;
     }
-    if (fstatSync(source).size !== sourceInfo.size || hash.digest("base64") !== sha512) throw new Error("The downloaded AppImage checksum changed.");
+    if (fstatSync(source).size !== sourceInfo.size || hash.digest("base64") !== sha512)
+      throw new Error("The downloaded AppImage checksum changed.");
     fchmodSync(target, 0o755);
     fsyncSync(target);
     closeSync(target);
     target = undefined;
-    if (!options.eligible() || !stillCurrent()) throw new Error("The current AppImage changed during installation.");
+    if (!options.eligible() || !stillCurrent())
+      throw new Error("The current AppImage changed during installation.");
     renameSync(temporary, current.path);
     temporaryExists = false;
     directory = openSync(path.dirname(current.path), constants.O_RDONLY);

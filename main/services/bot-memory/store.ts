@@ -142,7 +142,12 @@ export function storeView(loaded: LoadedBotMemory, target: BotMemoryTarget): Bot
   const texts = loaded.stores[target].texts;
   const limitChars = memoryLimit(target);
   const used = usedChars(texts);
-  return { entries: toEntries(target, texts), usedChars: used, limitChars, overBudget: used > limitChars };
+  return {
+    entries: toEntries(target, texts),
+    usedChars: used,
+    limitChars,
+    overBudget: used > limitChars,
+  };
 }
 
 export function memoryView(loaded: LoadedBotMemory): BotMemoryView {
@@ -156,7 +161,10 @@ export function memoryView(loaded: LoadedBotMemory): BotMemoryView {
   };
 }
 
-const STORE_LABEL: Readonly<Record<BotMemoryTarget, string>> = { memory: "MEMORY.md", user: "USER.md" };
+const STORE_LABEL: Readonly<Record<BotMemoryTarget, string>> = {
+  memory: "MEMORY.md",
+  user: "USER.md",
+};
 
 function formatCount(value: number): string {
   return value.toLocaleString("en-US");
@@ -164,14 +172,21 @@ function formatCount(value: number): string {
 
 /** Words shared with `match`, for "closest entries" on a miss. */
 function closeness(text: string, match: string): number {
-  const words = new Set(normalizeForMatch(match).split(/[^\p{L}\p{N}]+/u).filter((word) => word.length > 2));
+  const words = new Set(
+    normalizeForMatch(match)
+      .split(/[^\p{L}\p{N}]+/u)
+      .filter((word) => word.length > 2),
+  );
   if (words.size === 0) return 0;
   let shared = 0;
-  for (const word of new Set(normalizeForMatch(text).split(/[^\p{L}\p{N}]+/u))) if (words.has(word)) shared += 1;
+  for (const word of new Set(normalizeForMatch(text).split(/[^\p{L}\p{N}]+/u)))
+    if (words.has(word)) shared += 1;
   return shared / words.size;
 }
 
-type Located = { ok: true; index: number } | { ok: false; code: "no_match" | "ambiguous_match"; candidates: string[] };
+type Located =
+  | { ok: true; index: number }
+  | { ok: false; code: "no_match" | "ambiguous_match"; candidates: string[] };
 
 /** Exactly one entry: an exact whole-entry match wins, otherwise a unique normalized substring. */
 export function locateEntry(texts: readonly string[], rawMatch: string): Located {
@@ -179,9 +194,13 @@ export function locateEntry(texts: readonly string[], rawMatch: string): Located
   const exact = texts.indexOf(match);
   if (exact >= 0) return { ok: true, index: exact };
   const needle = normalizeForMatch(match);
-  const hits = needle.length === 0 ? [] : texts.flatMap((text, index) => (normalizeForMatch(text).includes(needle) ? [index] : []));
+  const hits =
+    needle.length === 0
+      ? []
+      : texts.flatMap((text, index) => (normalizeForMatch(text).includes(needle) ? [index] : []));
   if (hits.length === 1) return { ok: true, index: hits[0]! };
-  if (hits.length > 1) return { ok: false, code: "ambiguous_match", candidates: hits.map((index) => texts[index]!) };
+  if (hits.length > 1)
+    return { ok: false, code: "ambiguous_match", candidates: hits.map((index) => texts[index]!) };
   const closest = texts
     .map((text) => ({ text, score: closeness(text, match) }))
     .filter(({ score }) => score > 0)
@@ -223,7 +242,8 @@ export function createBotMemoryStore(options: BotMemoryStoreOptions): BotMemoryS
 
   async function load(botId: string): Promise<LoadedBotMemory> {
     const files = {} as Record<BotMemoryTarget, RawMemoryFile>;
-    for (const target of BOT_MEMORY_TARGETS) files[target] = await readMemoryFile(botMemoryFile(options.profileDir, botId, target));
+    for (const target of BOT_MEMORY_TARGETS)
+      files[target] = await readMemoryFile(botMemoryFile(options.profileDir, botId, target));
     const readable = BOT_MEMORY_TARGETS.every((target) => files[target].kind !== "unreadable");
     const stores = {} as Record<BotMemoryTarget, LoadedMemoryStore>;
     let updatedAt: number | null = null;
@@ -256,14 +276,18 @@ export function createBotMemoryStore(options: BotMemoryStoreOptions): BotMemoryS
       if (code === "ENOENT") throw new BotMemoryDeletedError(botId);
       if (code !== "EEXIST") throw error;
     }
-    await writeFileAtomic(botMemoryFile(options.profileDir, botId, target), serializeEntries(texts), {
-      mode: 0o600,
-      // The last moment a revoked writer or a deleted Bot can still be refused.
-      beforePublish: async () => {
-        guard(botId);
-        await assertCurrent?.();
+    await writeFileAtomic(
+      botMemoryFile(options.profileDir, botId, target),
+      serializeEntries(texts),
+      {
+        mode: 0o600,
+        // The last moment a revoked writer or a deleted Bot can still be refused.
+        beforePublish: async () => {
+          guard(botId);
+          await assertCurrent?.();
+        },
       },
-    });
+    );
   }
 
   function guard(botId: string): void {
@@ -293,8 +317,15 @@ export function createBotMemoryStore(options: BotMemoryStoreOptions): BotMemoryS
           ...(candidates === undefined ? {} : { candidates }),
           loaded,
         });
-        if (!loaded.readable) return fail("unreadable", "Memory couldn't be read. The person can erase it from the Bot's Profile.");
-        if (applyOptions.expectTexts && JSON.stringify(applyOptions.expectTexts) !== JSON.stringify(current)) {
+        if (!loaded.readable)
+          return fail(
+            "unreadable",
+            "Memory couldn't be read. The person can erase it from the Bot's Profile.",
+          );
+        if (
+          applyOptions.expectTexts &&
+          JSON.stringify(applyOptions.expectTexts) !== JSON.stringify(current)
+        ) {
           return fail("changed", "Memory changed since it was read.");
         }
         if (operations.length === 0) return fail("invalid", "Give at least one operation.");
@@ -304,7 +335,8 @@ export function createBotMemoryStore(options: BotMemoryStoreOptions): BotMemoryS
         let added = 0;
         for (const [position, operation] of operations.entries()) {
           const label = `Operation ${position + 1} (${operation.action})`;
-          if (applyOptions.addOnly && operation.action !== "add") return fail("invalid", "Only adding is allowed here.");
+          if (applyOptions.addOnly && operation.action !== "add")
+            return fail("invalid", "Only adding is allowed here.");
           if (operation.action === "add" || operation.action === "replace") {
             const content = cleanEntryText(operation.content);
             const problem = entryProblem(content);
@@ -335,7 +367,9 @@ export function createBotMemoryStore(options: BotMemoryStoreOptions): BotMemoryS
           const content = cleanEntryText(operation.content);
           if (texts[located.index] === content) continue;
           const key = normalizeForMatch(content);
-          const duplicate = texts.findIndex((text, index) => index !== located.index && normalizeForMatch(text) === key);
+          const duplicate = texts.findIndex(
+            (text, index) => index !== located.index && normalizeForMatch(text) === key,
+          );
           if (duplicate >= 0) texts.splice(located.index, 1);
           else texts[located.index] = content;
           changed += 1;
@@ -368,7 +402,12 @@ export function createBotMemoryStore(options: BotMemoryStoreOptions): BotMemoryS
       return serialize(botId, async (): Promise<BotMemoryEditOutcome> => {
         guard(botId);
         const loaded = await load(botId);
-        const fail = (code: BotMemoryEditErrorCode, message: string): BotMemoryEditOutcome => ({ ok: false, code, message, loaded });
+        const fail = (code: BotMemoryEditErrorCode, message: string): BotMemoryEditOutcome => ({
+          ok: false,
+          code,
+          message,
+          loaded,
+        });
 
         if (edit.kind === "clear") {
           const files = await Promise.all(
@@ -377,18 +416,25 @@ export function createBotMemoryStore(options: BotMemoryStoreOptions): BotMemoryS
               file: await readMemoryFile(botMemoryFile(options.profileDir, botId, target)),
             })),
           );
-          const toClear = files.filter(({ file }) => file.kind === "unreadable" || (file.kind === "ok" && file.content.length > 0));
+          const toClear = files.filter(
+            ({ file }) =>
+              file.kind === "unreadable" || (file.kind === "ok" && file.content.length > 0),
+          );
           for (const { target } of toClear) await writeStore(botId, target, []);
-          return toClear.length > 0 ? { ok: true, changed: true, loaded: await load(botId), previous: loaded } : { ok: true, changed: false, loaded };
+          return toClear.length > 0
+            ? { ok: true, changed: true, loaded: await load(botId), previous: loaded }
+            : { ok: true, changed: false, loaded };
         }
 
-        if (!loaded.readable) return fail("invalid", "Memory couldn't be read. Erase it to start over.");
+        if (!loaded.readable)
+          return fail("invalid", "Memory couldn't be read. Erase it to start over.");
         const target = edit.target;
         const current = loaded.stores[target].texts;
         const index = current.findIndex((text) => memoryEntryId(target, text) === edit.entryId);
 
         if (edit.kind === "remove") {
-          if (index < 0) return fail("entry_not_found", "That memory changed or was already removed.");
+          if (index < 0)
+            return fail("entry_not_found", "That memory changed or was already removed.");
           const texts = current.filter((_, position) => position !== index);
           await writeStore(botId, target, texts);
           return { ok: true, changed: true, loaded: await load(botId), previous: loaded };
@@ -402,20 +448,30 @@ export function createBotMemoryStore(options: BotMemoryStoreOptions): BotMemoryS
         if (index >= 0) {
           if (current[index] === text) return { ok: true, changed: false, loaded };
           const key = normalizeForMatch(text);
-          const duplicate = current.findIndex((other, position) => position !== index && normalizeForMatch(other) === key);
-          texts = duplicate >= 0 ? current.filter((_, position) => position !== index) : current.map((other, position) => (position === index ? text : other));
+          const duplicate = current.findIndex(
+            (other, position) => position !== index && normalizeForMatch(other) === key,
+          );
+          texts =
+            duplicate >= 0
+              ? current.filter((_, position) => position !== index)
+              : current.map((other, position) => (position === index ? text : other));
         } else if (memoryEntryId(target, text) === edit.entryId) {
           // Restoring an entry under its own id (Undo after Delete) re-adds it.
-          if (current.some((other) => normalizeForMatch(other) === normalizeForMatch(text))) return { ok: true, changed: false, loaded };
+          if (current.some((other) => normalizeForMatch(other) === normalizeForMatch(text)))
+            return { ok: true, changed: false, loaded };
           texts = [...current, text];
         } else {
           return fail("entry_not_found", "That memory changed or was already removed.");
         }
         const limit = memoryLimit(target);
         const after = usedChars(texts);
-        const tooMany = texts.length > BOT_MEMORY_LIMITS.maxEntries && texts.length > current.length;
+        const tooMany =
+          texts.length > BOT_MEMORY_LIMITS.maxEntries && texts.length > current.length;
         if ((after > limit && after > usedChars(current)) || tooMany) {
-          return fail("over_budget", "That's more than this memory can hold. Shorten it or delete something first.");
+          return fail(
+            "over_budget",
+            "That's more than this memory can hold. Shorten it or delete something first.",
+          );
         }
         await writeStore(botId, target, texts);
         return { ok: true, changed: true, loaded: await load(botId), previous: loaded };

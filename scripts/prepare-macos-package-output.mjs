@@ -119,7 +119,8 @@ async function writeReceipt(relative, contents, root, label) {
   const context = await safeRoot(root);
   await inspectDescendant(context, path.dirname(relative), { create: true });
   const existing = await inspectDescendant(await safeRoot(root), relative, { leaf: "file" });
-  if (existing.exists) throw new Error(`Refusing to replace existing ${label} acceptance evidence.`);
+  if (existing.exists)
+    throw new Error(`Refusing to replace existing ${label} acceptance evidence.`);
   const receipt = resolvedDescendant(root, relative);
   await writeFile(receipt, contents, { encoding: "utf8", flag: "wx", mode: 0o600 });
   await inspectDescendant(await safeRoot(root), relative, { leaf: "file" });

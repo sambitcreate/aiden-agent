@@ -7,11 +7,13 @@ import { createDeviceMotion, rotationVector } from "./device-motion.js";
 import { createDeviceFraming } from "./framing.js";
 import { nearestDeviceView } from "./view-snap.js";
 
-const snaps = ["portrait", "landscape_left", "portrait_upside_down", "landscape_right"].map((orientation, index) => ({
-  orientation,
-  rotation: new Quaternion().setFromAxisAngle(new Vector3(0, 0, 1), (-index * Math.PI) / 2),
-  yawLimit: Math.PI / 3,
-}));
+const snaps = ["portrait", "landscape_left", "portrait_upside_down", "landscape_right"].map(
+  (orientation, index) => ({
+    orientation,
+    rotation: new Quaternion().setFromAxisAngle(new Vector3(0, 0, 1), (-index * Math.PI) / 2),
+    yawLimit: Math.PI / 3,
+  }),
+);
 const rotation = (x: number, y: number, z = 0) =>
   new Quaternion().setFromAxisAngle(new Vector3(x, y, z).normalize(), Math.hypot(x, y, z));
 
@@ -35,7 +37,10 @@ test("the nearest view keeps a nearby yaw, clamps a far one, and ignores the qua
   assert.ok(nearest.rotation.angleTo(released) < 1e-6);
   const negative = released.clone().set(-released.x, -released.y, -released.z, -released.w);
   assert.ok(nearestDeviceView(negative, snaps)!.rotation.angleTo(nearest.rotation) < 1e-6);
-  assert.ok(nearestDeviceView(rotation(0, 3), snaps)!.rotation.angleTo(new Quaternion()) <= Math.PI / 3 + 1e-6);
+  assert.ok(
+    nearestDeviceView(rotation(0, 3), snaps)!.rotation.angleTo(new Quaternion()) <=
+      Math.PI / 3 + 1e-6,
+  );
 });
 
 test("a drag springs toward its cumulative target and lands the same however events are partitioned", () => {
@@ -198,7 +203,11 @@ test("framing fits a moving assembly on both axes, freezes during contact, and s
   assert.ok(framing.center.x > 0 && framing.center.x < 1.5);
   // Spring lag never clips the fitted assembly.
   for (const x of [next.min.x, next.max.x]) {
-    assert.ok(Math.abs(x - framing.center.x) / ((framing.distance() - next.max.z) * Math.tan(Math.PI / 8) * 0.7) < 1);
+    assert.ok(
+      Math.abs(x - framing.center.x) /
+        ((framing.distance() - next.max.z) * Math.tan(Math.PI / 8) * 0.7) <
+        1,
+    );
   }
   framing.hold(true, 50);
   const center = framing.center.clone();

@@ -121,9 +121,11 @@ export function usePeerHostSidebar(): PeerHostSidebarData {
     // Each host's rows change at most once per frame, so a burst of feed
     // messages re-organizes the sidebar once.
     const batcher = createPeerHostFeedBatcher(animationFrame, {
-      read: (hostId) => queryClient.getQueryData<PeerHostFeedSnapshot | null>(hostQueryKeys.feed(hostId)),
+      read: (hostId) =>
+        queryClient.getQueryData<PeerHostFeedSnapshot | null>(hostQueryKeys.feed(hostId)),
       write: (hostId, next) => queryClient.setQueryData(hostQueryKeys.feed(hostId), next),
-      resync: (hostId) => void queryClient.invalidateQueries({ queryKey: hostQueryKeys.feed(hostId) }),
+      resync: (hostId) =>
+        void queryClient.invalidateQueries({ queryKey: hostQueryKeys.feed(hostId) }),
     });
     const unsubscribeFeed = peerHostsApi.onHostFeed((message) => {
       pending.current.get(message.hostId)?.push(message);

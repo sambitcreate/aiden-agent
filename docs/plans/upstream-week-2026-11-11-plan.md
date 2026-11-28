@@ -19,23 +19,23 @@ This plan covers ten upstream items from Pi, T3 Code and OpenCode. Before writin
 
 Each row is one thread. Rows in the same workstream stack in the order listed. Remote protocol revisions are claimed when a PR merges, not when it is written. iOS, Android and the fixture contract change together.
 
-| ID | PR | Depends on | Surfaces | Protocol |
-| --- | --- | --- | --- | --- |
-| W1a | Pi 1.4.0 → 1.5.2 bump, desktop and CLI in lockstep | — | main, CLI | none |
-| W1b | `aiden serve` refuses turns when the workspace folder is missing (parity with desktop) | W1a | CLI | none |
-| W1c | Relink folder / continue in a new chat here when a folder is gone (Pi #11975 analog) | W1b | desktop, phones | next revision |
-| W2 | MCP OAuth: refresh early, single-flight under a shared lock (OpenCode #63028, #62827) | W1a | main, CLI | none |
-| W3 | Suspendable approvals, hook asks and hand-offs on pi-durable signals (Pi 473515f9c) | next Pi release | main, CLI, phones | next revision |
-| W4a | Use Aiden from other apps over MCP: core server, `agent` audience, loopback listener (T3 #33196) | — | main, CLI core | none |
-| W4b | Settings → Connections → Other apps, Connect sheet, IPC, docs and onboarding tour tile | W4a | desktop | none |
-| W4c | `aiden serve` hosts `/mcp`, plus `aiden apps list/connect/revoke`, CLI docs | W4a | CLI | none |
-| W4d | Analytics events `mcp_app_connected`, `mcp_chat_started` | W4b, W4c | main, CLI | none |
-| W5 | Stopped, not failed: a user-stopped step reads "stopped" and is not an issue (T3 #33291) | — | desktop, iOS, Android | none |
-| W6a | Late steer on desktop falls back to the queue instead of throwing (T3 #32899) | — | renderer | none |
-| W6b | Input saved after the run's queue closed is answered by a new run (T3 #32899) | W1a | main | none |
-| W7 | MCP tool results that break the output schema are returned, not failed (OpenCode #61254) | — | main, CLI | none |
-| W8 | Background jobs can stop when their chat settles (T3 #31857) | — | desktop | next revision |
-| W9 | Followed PRs check right away after local events, with ETag probes (T3 #33548 phase A) | — | desktop | none |
+| ID  | PR                                                                                               | Depends on      | Surfaces              | Protocol      |
+| --- | ------------------------------------------------------------------------------------------------ | --------------- | --------------------- | ------------- |
+| W1a | Pi 1.4.0 → 1.5.2 bump, desktop and CLI in lockstep                                               | —               | main, CLI             | none          |
+| W1b | `aiden serve` refuses turns when the workspace folder is missing (parity with desktop)           | W1a             | CLI                   | none          |
+| W1c | Relink folder / continue in a new chat here when a folder is gone (Pi #11975 analog)             | W1b             | desktop, phones       | next revision |
+| W2  | MCP OAuth: refresh early, single-flight under a shared lock (OpenCode #63028, #62827)            | W1a             | main, CLI             | none          |
+| W3  | Suspendable approvals, hook asks and hand-offs on pi-durable signals (Pi 473515f9c)              | next Pi release | main, CLI, phones     | next revision |
+| W4a | Use Aiden from other apps over MCP: core server, `agent` audience, loopback listener (T3 #33196) | —               | main, CLI core        | none          |
+| W4b | Settings → Connections → Other apps, Connect sheet, IPC, docs and onboarding tour tile           | W4a             | desktop               | none          |
+| W4c | `aiden serve` hosts `/mcp`, plus `aiden apps list/connect/revoke`, CLI docs                      | W4a             | CLI                   | none          |
+| W4d | Analytics events `mcp_app_connected`, `mcp_chat_started`                                         | W4b, W4c        | main, CLI             | none          |
+| W5  | Stopped, not failed: a user-stopped step reads "stopped" and is not an issue (T3 #33291)         | —               | desktop, iOS, Android | none          |
+| W6a | Late steer on desktop falls back to the queue instead of throwing (T3 #32899)                    | —               | renderer              | none          |
+| W6b | Input saved after the run's queue closed is answered by a new run (T3 #32899)                    | W1a             | main                  | none          |
+| W7  | MCP tool results that break the output schema are returned, not failed (OpenCode #61254)         | —               | main, CLI             | none          |
+| W8  | Background jobs can stop when their chat settles (T3 #31857)                                     | —               | desktop               | next revision |
+| W9  | Followed PRs check right away after local events, with ETag probes (T3 #33548 phase A)           | —               | desktop               | none          |
 
 ### W1a: Pi 1.5.2 bump
 

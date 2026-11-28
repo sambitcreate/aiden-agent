@@ -34,13 +34,13 @@ After every phase, two independent GPT-6 Astra reviewers at medium effort review
 
 ## Remaining native parity matrix
 
-| Capability | Current Linux implementation | Next acceptance |
-| --- | --- | --- |
-| Bots and Bot Telegram routes | Linux Secret Service authority implemented; two source reviews cleared | Native keyring, ARM64 packaging and Linux Settings acceptance passed; hosted multi-distro gates remain |
-| Dictation capture/transcription | Available; toggle shortcut and clipboard delivery | Desktop-owned release events and safe paste when available, X11/Wayland acceptance |
-| Computer Use | Gated off; broker and process trust require macOS | Linux capture/input/accessibility backend and equivalent lifecycle/security boundary |
-| Updates | Eligible mounted AppImages support verified downloads and atomic replacement; DEB/RPM remain package-manager owned | Future published-version download/restart acceptance |
-| Apple-only services | Apple Foundation Models and Dock integration unavailable by platform | Preserve local model alternatives and native Linux desktop behavior |
+| Capability                      | Current Linux implementation                                                                                       | Next acceptance                                                                                        |
+| ------------------------------- | ------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------ |
+| Bots and Bot Telegram routes    | Linux Secret Service authority implemented; two source reviews cleared                                             | Native keyring, ARM64 packaging and Linux Settings acceptance passed; hosted multi-distro gates remain |
+| Dictation capture/transcription | Available; toggle shortcut and clipboard delivery                                                                  | Desktop-owned release events and safe paste when available, X11/Wayland acceptance                     |
+| Computer Use                    | Gated off; broker and process trust require macOS                                                                  | Linux capture/input/accessibility backend and equivalent lifecycle/security boundary                   |
+| Updates                         | Eligible mounted AppImages support verified downloads and atomic replacement; DEB/RPM remain package-manager owned | Future published-version download/restart acceptance                                                   |
+| Apple-only services             | Apple Foundation Models and Dock integration unavailable by platform                                               | Preserve local model alternatives and native Linux desktop behavior                                    |
 
 Full parity is not claimed by the shared-feature merge. Native implementation and target desktop acceptance remain required.
 
@@ -92,7 +92,6 @@ Next implementation target is a distro-specific policy prototype (Fedora/SELinux
 Current Linux Computer Use gate stays disabled until this boundary is implemented and validated. Real compositor hold-shortcut acceptance, focused-element-safe dictation paste, and an Electron release carrying libyuv fab11704 also remain before a full parity claim.
 
 - Phase4 fixes: shared subagent generation validation now accepts exactly Linux7-field and macOS9-field identities; migration safety remains unchanged. Linux draft suite5/5 passed. Compact ModelPad layout passes all24native Linux geometry states with160px minimum retained. Guidedsetup now asserts unsupportedComputerUse absence onLinux (3tests passed). Mac focused Electron9/9 passed; lint/typecheck/build and36focused store tests passed. Both Astra medium reviewers cleared final changes.
-
 
 ## Phase 5: Fedora GNOME Computer Use admission prerequisites
 

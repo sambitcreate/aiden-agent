@@ -14,7 +14,10 @@ export interface RectBounds {
 /** Transparent outer shadow padding around the visible floating card (`px-14 pt-10 pb-[68px]`). */
 export const QUICK_CHAT_SHADOW_MARGIN = 56;
 
-export const QUICK_CHAT_STAGE_SIZES: Record<QuickChatWindowMode, { width: number; height: number }> = {
+export const QUICK_CHAT_STAGE_SIZES: Record<
+  QuickChatWindowMode,
+  { width: number; height: number }
+> = {
   // 512x132 visible starter bar + 56px L/R, 40px top, 68px bottom shadow gutter (zero shadow clip).
   starter: { width: 624, height: 240 },
   // Expands upward when ModelPicker / WorkspacePicker popover is open so nothing clips.
@@ -27,10 +30,7 @@ export const QUICK_CHAT_STAGE_SIZES: Record<QuickChatWindowMode, { width: number
  * Clamp a floating stage to fit inside the display's usable workArea, shrinking
  * the stage gracefully on small displays while preserving integer coordinates.
  */
-export function clampBoundsToWorkArea(
-  desired: RectBounds,
-  workArea: RectBounds,
-): RectBounds {
+export function clampBoundsToWorkArea(desired: RectBounds, workArea: RectBounds): RectBounds {
   const width = Math.max(1, Math.min(Math.round(desired.width), Math.round(workArea.width)));
   const height = Math.max(1, Math.min(Math.round(desired.height), Math.round(workArea.height)));
   const minX = Math.round(workArea.x);
@@ -62,9 +62,7 @@ export function computeQuickChatInitialBounds(
       Math.min(workArea.height, QUICK_CHAT_STAGE_SIZES["starter-popover"].height),
     );
   const anchorBottomY =
-    mode === "modal"
-      ? workArea.y + (workArea.height + height) / 2
-      : starterAnchorBottomY;
+    mode === "modal" ? workArea.y + (workArea.height + height) / 2 : starterAnchorBottomY;
   const y = anchorBottomY - height;
   return clampBoundsToWorkArea({ x, y, width, height }, workArea);
 }
@@ -111,9 +109,7 @@ export function shouldHideQuickChatOnBlur(input: {
  * popovers so the next invocation restores the compact starter bar instead of
  * an oversized 600px stage, while preserving an active State 2 mini-modal.
  */
-export function resolveQuickChatModeOnHide(
-  mode: QuickChatWindowMode,
-): QuickChatWindowMode {
+export function resolveQuickChatModeOnHide(mode: QuickChatWindowMode): QuickChatWindowMode {
   return mode === "starter-popover" ? "starter" : mode;
 }
 

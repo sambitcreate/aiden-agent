@@ -44,7 +44,8 @@ const DEFAULT_RECENT_BLOCKS = 16;
 
 const EDIT_TOOL_RE = /^(edit|write|multiedit|quick_edit|target_edit|apply_patch)$/i;
 const READ_TOOL_RE = /^(read|glob|grep|ls|find|semantic_query|semantic_grep|semantic_show)$/i;
-const TEST_COMMAND_RE = /\b(?:bun|npm|pnpm|yarn|node|pytest|cargo|go|mvn|gradle)\b[^\n]*(?:test|spec|check|lint|build|tsc)/i;
+const TEST_COMMAND_RE =
+  /\b(?:bun|npm|pnpm|yarn|node|pytest|cargo|go|mvn|gradle)\b[^\n]*(?:test|spec|check|lint|build|tsc)/i;
 const GH_PR_POLL_RE = /(?:^|\s)gh\s+pr\s+(?:view|checks)\s+(\d+)\b/i;
 // Durable workflow facts: which PR/issue was acted on, and git state changes.
 // Structural (command shape), not prose — same spirit as TEST_COMMAND_RE.
@@ -71,7 +72,10 @@ const isTrivialOnlyBash = (raw: string): boolean => {
     const close = heredocCloseIndex(lines, i);
     if (close !== -1) i = close;
   }
-  const meaningful = kept.map((l) => l.trim()).filter(Boolean).filter((l) => !TRIVIAL_BASH_LINE_RE.test(l));
+  const meaningful = kept
+    .map((l) => l.trim())
+    .filter(Boolean)
+    .filter((l) => !TRIVIAL_BASH_LINE_RE.test(l));
   return meaningful.length === 0;
 };
 
@@ -79,7 +83,11 @@ const asPathSet = (paths?: string[]): Set<string> => new Set((paths ?? []).filte
 
 const bashCommandFromBlock = (block: NormalizedBlock): string | undefined => {
   if (block.kind === "bash") return block.command;
-  if (block.kind === "tool_call" && /^bash$/i.test(block.name) && typeof block.args.command === "string") {
+  if (
+    block.kind === "tool_call" &&
+    /^bash$/i.test(block.name) &&
+    typeof block.args.command === "string"
+  ) {
     return block.args.command;
   }
   return undefined;
@@ -148,7 +156,13 @@ const scoreBlock = (
 
 const boostAdjacency = (ranked: RankedBlock[]) => {
   const important = ranked
-    .filter((r) => r.score >= 34 || r.reasons.includes("edit-tool") || r.reasons.includes("test-command") || r.reasons.includes("nonzero-exit"))
+    .filter(
+      (r) =>
+        r.score >= 34 ||
+        r.reasons.includes("edit-tool") ||
+        r.reasons.includes("test-command") ||
+        r.reasons.includes("nonzero-exit"),
+    )
     .map((r) => r.index);
 
   for (const idx of important) {
@@ -207,10 +221,15 @@ const dedupKey = (block: NormalizedBlock): string | undefined => {
   return undefined;
 };
 
-export const rankBriefBlocks = (blocks: NormalizedBlock[], options: BriefRankingOptions = {}): RankedBlock[] => {
+export const rankBriefBlocks = (
+  blocks: NormalizedBlock[],
+  options: BriefRankingOptions = {},
+): RankedBlock[] => {
   const modifiedFiles = asPathSet(options.fileOps?.modifiedFiles);
   const readFiles = asPathSet(options.fileOps?.readFiles);
-  const ranked = blocks.map((block, index) => scoreBlock(block, index, blocks.length, modifiedFiles, readFiles));
+  const ranked = blocks.map((block, index) =>
+    scoreBlock(block, index, blocks.length, modifiedFiles, readFiles),
+  );
   boostAdjacency(ranked);
   boostSegmentClosingAssistants(ranked);
   return ranked;
@@ -226,7 +245,9 @@ export const selectRankedBriefBlocks = (
   // (maxBriefChars) and the ceiling. Larger transcripts carry more high-value
   // long-tail, so they earn more brief budget; small sessions stay at the floor.
   const maxBriefChars =
-    options.maxBriefChars != null && options.maxBriefCharsCeiling != null && options.briefCharsPerBlock != null
+    options.maxBriefChars != null &&
+    options.maxBriefCharsCeiling != null &&
+    options.briefCharsPerBlock != null
       ? Math.round(
           Math.min(
             options.maxBriefCharsCeiling,
@@ -237,15 +258,19 @@ export const selectRankedBriefBlocks = (
   // Fast path: nothing to trim by count and no char budget to enforce.
   if (blocks.length <= maxBlocks && maxBriefChars == null) return blocks;
 
-  const preserveRecentBlocks = Math.min(options.preserveRecentBlocks ?? DEFAULT_RECENT_BLOCKS, maxBlocks);
+  const preserveRecentBlocks = Math.min(
+    options.preserveRecentBlocks ?? DEFAULT_RECENT_BLOCKS,
+    maxBlocks,
+  );
   const ranked = rankBriefBlocks(blocks, options);
   const selected = new Set<number>();
   const seenKeys = new Set<string>();
 
   // Per-block rendered size, only computed when a char budget is active.
-  const costs = maxBriefChars == null
-    ? null
-    : blocks.map((b) => (b.kind === "tool_result" ? 0 : compileBrief([b]).length + 1));
+  const costs =
+    maxBriefChars == null
+      ? null
+      : blocks.map((b) => (b.kind === "tool_result" ? 0 : compileBrief([b]).length + 1));
   let usedChars = 0;
 
   // Keep the latest blocks to preserve local continuity, iterating NEWEST first

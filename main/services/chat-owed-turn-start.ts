@@ -60,7 +60,10 @@ export function owedTurnStartRequest<Origin extends string>(
       allowSubagents: true,
       excludeToolNames,
       ...(context.visualAudience !== undefined ? { visualAudience: context.visualAudience } : {}),
-      screenedPrompt: { messageId: prompt.messageId, ...(hookContext ? { context: hookContext } : {}) },
+      screenedPrompt: {
+        messageId: prompt.messageId,
+        ...(hookContext ? { context: hookContext } : {}),
+      },
     },
   };
 }

@@ -1,21 +1,60 @@
-import { parseBotRoutineModelDirectory, type BotRoutineModelDirectory } from "../../renderer/shared/bot-routine-model-directory.js";
+import {
+  parseBotRoutineModelDirectory,
+  type BotRoutineModelDirectory,
+} from "../../renderer/shared/bot-routine-model-directory.js";
 import { isChatAudience } from "./chat-orchestration/audience.js";
-import { parseBotExecutionResumeStatus, type BotExecutionResumeStatus } from "../../renderer/shared/bot-execution-resume.js";
-import { parseBotRoutineModelSettings, parseBotRoutineModelCatalog, parseBotRoutineModelResult, parseBotRoutineModelRuns, parseBotRoutineModelSave } from "../../renderer/shared/bot-routine-models.js";
-import { BOT_PEER_LIMITS, parseBotPeerSettings, parseBotPeerCatalog, parseBotPeerMutation, parseBotPeerMutationResult, parseBotPeerExchangeList, parseBotPeerExchangeDetail, parseBotPeerStopMutation, parseBotPeerStopResult, parseBotPeerEvidence } from "../../renderer/shared/bot-peers.js";
+import {
+  parseBotExecutionResumeStatus,
+  type BotExecutionResumeStatus,
+} from "../../renderer/shared/bot-execution-resume.js";
+import {
+  parseBotRoutineModelSettings,
+  parseBotRoutineModelCatalog,
+  parseBotRoutineModelResult,
+  parseBotRoutineModelRuns,
+  parseBotRoutineModelSave,
+} from "../../renderer/shared/bot-routine-models.js";
+import {
+  BOT_PEER_LIMITS,
+  parseBotPeerSettings,
+  parseBotPeerCatalog,
+  parseBotPeerMutation,
+  parseBotPeerMutationResult,
+  parseBotPeerExchangeList,
+  parseBotPeerExchangeDetail,
+  parseBotPeerStopMutation,
+  parseBotPeerStopResult,
+  parseBotPeerEvidence,
+} from "../../renderer/shared/bot-peers.js";
 import type { BotPeerOwnerService } from "./bot-peers/service-main.js";
-import { projectRemoteBotOpenWork, projectRemoteBotOpenWorkResult, remoteBotOpenWorkMutationVisible } from "./aiden-remote-bot-open-work.js";
+import {
+  projectRemoteBotOpenWork,
+  projectRemoteBotOpenWorkResult,
+  remoteBotOpenWorkMutationVisible,
+} from "./aiden-remote-bot-open-work.js";
 import type { createBotRoutineModelService } from "./bot-routine-models.js";
-import { parseBotOpenWorkMutation, type BotOpenWorkMutation, type BotOpenWorkSnapshot, type BotOpenWorkResult, type BotOpenWorkEvidence } from "../../renderer/shared/bot-open-work.js";
+import {
+  parseBotOpenWorkMutation,
+  type BotOpenWorkMutation,
+  type BotOpenWorkSnapshot,
+  type BotOpenWorkResult,
+  type BotOpenWorkEvidence,
+} from "../../renderer/shared/bot-open-work.js";
 import type { BotConnectorWatchService } from "./bot-routine-events/connector-service.js";
 import { BotConnectorWatchError, connectorFields } from "./bot-routine-events/connector-service.js";
 import type { AidenRemoteBotAllowList } from "./aiden-remote-bot-allowed.js";
 import { PEER_PROJECT_CLONE_FEATURE } from "../../renderer/shared/peer-project-clone.js";
 import type { remoteAppControls } from "./aiden-remote-app-controls.js";
 import type { AidenRemoteBotSessionService } from "./aiden-remote-bot-session.js";
-import { projectBotDetailForAudience, projectBotSummaryForAudience } from "./aiden-remote-bot-handoffs.js";
+import {
+  projectBotDetailForAudience,
+  projectBotSummaryForAudience,
+} from "./aiden-remote-bot-handoffs.js";
 import { projectBotSummaryIssuesForAudience } from "./aiden-remote-bot-issues.js";
-import { AIDEN_REMOTE_PROVIDER_CREATE_FEATURE, type AidenRemoteProviderService } from "./aiden-remote-providers.js";
+import {
+  AIDEN_REMOTE_PROVIDER_CREATE_FEATURE,
+  type AidenRemoteProviderService,
+} from "./aiden-remote-providers.js";
 import { AidenRemoteTtsService, REMOTE_TTS_FEATURE } from "./aiden-remote-tts.js";
 import { createHash, randomBytes } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
@@ -134,10 +173,7 @@ import {
 } from "./aiden-remote-protocol.js";
 import type { AidenRemoteHostRunService } from "./aiden-remote-host-runs.js";
 import type { AidenRemoteHostFeedService } from "./aiden-remote-host-feed.js";
-import {
-  AidenRemoteServiceError,
-  asAidenRemoteServiceError,
-} from "./aiden-remote-errors.js";
+import { AidenRemoteServiceError, asAidenRemoteServiceError } from "./aiden-remote-errors.js";
 import type { AidenRemotePairingService } from "./aiden-remote-pairing.js";
 import type { AidenRemotePairingRequestService } from "./aiden-remote-pairing-requests.js";
 import { AIDEN_PAIRING_REQUEST_ID_PATTERN } from "./aiden-remote-sealed-envelope.js";
@@ -146,7 +182,10 @@ import type {
   AidenRemoteConnectionMode,
   AidenRemoteStateRegistry,
 } from "./aiden-remote-state.js";
-import { mayHoldMobileSimulatorCapabilities, normalizeAidenRemoteDisplayName } from "./aiden-remote-state.js";
+import {
+  mayHoldMobileSimulatorCapabilities,
+  normalizeAidenRemoteDisplayName,
+} from "./aiden-remote-state.js";
 import type { AidenRemoteWorkspaceBrowserService } from "./aiden-remote-workspace-browser.js";
 import type { AidenRemoteWorkspaceService } from "./aiden-remote-workspaces.js";
 import type {
@@ -174,9 +213,11 @@ import {
   type AidenRemoteSimulatorRelay,
 } from "./aiden-remote-simulators.js";
 import { refuseUpgrade } from "./devices/device-hub-proxy.js";
-import { AIDEN_REMOTE_MAX_SPEECH_REQUEST_BYTES, decodeAidenRemoteSpeechGzip } from "./aiden-remote-speech-codec.js";
 import {
-} from "../../renderer/shared/bot-capabilities.js";
+  AIDEN_REMOTE_MAX_SPEECH_REQUEST_BYTES,
+  decodeAidenRemoteSpeechGzip,
+} from "./aiden-remote-speech-codec.js";
+import {} from "../../renderer/shared/bot-capabilities.js";
 const MAX_REQUEST_BODY_BYTES = 1_048_576;
 const MAX_FILE_REQUEST_BODY_BYTES = 6 * 1_048_576;
 const MAX_REQUEST_URL_LENGTH = 2_048;
@@ -213,9 +254,7 @@ type AidenRemoteRouterAuthenticatedDevice = Omit<
 };
 
 type AidenRemoteRouterDeviceRegistry = {
-  authenticate(
-    credential: string,
-  ): Promise<AidenRemoteRouterAuthenticatedDevice | null>;
+  authenticate(credential: string): Promise<AidenRemoteRouterAuthenticatedDevice | null>;
   acquireDeviceAuthorization: AidenRemoteStateRegistry["acquireDeviceAuthorization"];
   updateDeviceName?: AidenRemoteStateRegistry["updateDeviceName"];
   upgradeDeviceCapabilities?: AidenRemoteStateRegistry["upgradeDeviceCapabilities"];
@@ -226,7 +265,11 @@ export interface AidenRemoteRouterDependencies {
    * A Bot event routine's link (spec 2026-10-27 §6 P1). Unauthenticated
    * except for the token in the path; absent, the route is `not_found`.
    */
-  botRoutineWebhook?(request: { token: string; contentType?: string; body: Uint8Array }): Promise<{ status: number }>;
+  botRoutineWebhook?(request: {
+    token: string;
+    contentType?: string;
+    body: Uint8Array;
+  }): Promise<{ status: number }>;
   /**
    * Chat tasks' links (`POST /hooks/tasks/{token}`): `admit` runs before the
    * body is read (404, 429, 415), `deliver` gets the body and the header the
@@ -234,9 +277,20 @@ export interface AidenRemoteRouterDependencies {
    * (413) so the call does not keep its place in the link's capacity.
    */
   taskTriggerWebhook?: {
-    admit(request: { token: string; contentType?: string }): Promise<{ status: number } | { accept: true; admission?: string; signatureHeader?: string }>;
+    admit(request: {
+      token: string;
+      contentType?: string;
+    }): Promise<
+      { status: number } | { accept: true; admission?: string; signatureHeader?: string }
+    >;
     tooLarge(request: { token: string; admission?: string }): Promise<{ status: number }>;
-    deliver(request: { token: string; admission?: string; contentType?: string; signature?: string; body: Uint8Array }): Promise<{ status: number }>;
+    deliver(request: {
+      token: string;
+      admission?: string;
+      contentType?: string;
+      signature?: string;
+      body: Uint8Array;
+    }): Promise<{ status: number }>;
   };
   instanceId: string;
   displayName(): string;
@@ -244,8 +298,8 @@ export interface AidenRemoteRouterDependencies {
   /** Trust material disclosed only after authentication by a paired desktop. */
   peerRoutes?(): Promise<import("./peer-transport.js").PeerTrust[]>;
   devices: AidenRemoteRouterDeviceRegistry;
-  pairing: Pick<AidenRemotePairingService, "exchange">
-    & Partial<Pick<AidenRemotePairingService, "manualBootstrap">>;
+  pairing: Pick<AidenRemotePairingService, "exchange"> &
+    Partial<Pick<AidenRemotePairingService, "manualBootstrap">>;
   /**
    * Unauthenticated desktop connection requests (`pairing-requests-v1`).
    * Absent: `/pairing/requests*` is `not_found`, `/health?detail=host`
@@ -255,15 +309,58 @@ export interface AidenRemoteRouterDependencies {
     AidenRemotePairingRequestService,
     "accepting" | "create" | "reveal" | "poll" | "cancel"
   >;
-  workspaces?: Pick<AidenRemoteWorkspaceService, "list" | "get" | "create" | "update" | "remove"> & { supportsClone?: boolean };
+  workspaces?: Pick<
+    AidenRemoteWorkspaceService,
+    "list" | "get" | "create" | "update" | "remove"
+  > & { supportsClone?: boolean };
   workspaceBrowser?: Pick<
     AidenRemoteWorkspaceBrowserService,
     "listRoots" | "listChildren" | "createSelection"
   >;
   chats?: Pick<
     AidenRemoteChatService,
-    "list" | "classify" | "authorizeRetainedBotChat" | "runMutation" | "get" | "create" | "rename" | "move" | "remove" | "startTurn"
-  > & Partial<Pick<AidenRemoteChatService, "listSummaries" | "uploadAttachment" | "removeAttachment" | "attachmentContent" | "visualDocument" | "supportsVisualViewer" | "browserRecording" | "supportsBrowserRecordings" | "chatSkillCatalog" | "markRead" | "supportsReadMarkers" | "messagesWindow" | "fork" | "supportsForks" | "supportsForkSummaries" | "retryForkSummary" | "skipForkSummary" | "cancelForkSummary" | "contextPressure" | "supportsContextPressure" | "moveToNewWorktree" | "supportsNewWorktrees" | "supportsContinueInNewChat" | "supportsAgentSlider" | "setTriage" | "supportsTriage">>;
+    | "list"
+    | "classify"
+    | "authorizeRetainedBotChat"
+    | "runMutation"
+    | "get"
+    | "create"
+    | "rename"
+    | "move"
+    | "remove"
+    | "startTurn"
+  > &
+    Partial<
+      Pick<
+        AidenRemoteChatService,
+        | "listSummaries"
+        | "uploadAttachment"
+        | "removeAttachment"
+        | "attachmentContent"
+        | "visualDocument"
+        | "supportsVisualViewer"
+        | "browserRecording"
+        | "supportsBrowserRecordings"
+        | "chatSkillCatalog"
+        | "markRead"
+        | "supportsReadMarkers"
+        | "messagesWindow"
+        | "fork"
+        | "supportsForks"
+        | "supportsForkSummaries"
+        | "retryForkSummary"
+        | "skipForkSummary"
+        | "cancelForkSummary"
+        | "contextPressure"
+        | "supportsContextPressure"
+        | "moveToNewWorktree"
+        | "supportsNewWorktrees"
+        | "supportsContinueInNewChat"
+        | "supportsAgentSlider"
+        | "setTriage"
+        | "supportsTriage"
+      >
+    >;
   /**
    * Chat-scoped task/agent progress projections (Phase 2 runtime). When
    * absent, the contract routes return `not_found` and `/server` omits the
@@ -309,22 +406,89 @@ export interface AidenRemoteRouterDependencies {
   models?: Pick<AidenRemoteModelService, "list">;
   streams?: Pick<
     AidenRemoteStreamService,
-    "streamChatId" | "status" | "pendingApproval" | "approvalRequiredCapability" | "cancel" | "respondApproval" | "openEvents"
+    | "streamChatId"
+    | "status"
+    | "pendingApproval"
+    | "approvalRequiredCapability"
+    | "cancel"
+    | "respondApproval"
+    | "openEvents"
   > &
     Partial<
       Pick<
         AidenRemoteStreamService,
-        "submitInput" | "supportsRunInput" | "pendingQuestion" | "respondQuestion" | "supportsQuestionPrompts"
+        | "submitInput"
+        | "supportsRunInput"
+        | "pendingQuestion"
+        | "respondQuestion"
+        | "supportsQuestionPrompts"
       >
     >;
-  files?: Pick<AidenRemoteFileService, "list" | "read" | "write"> & Partial<Pick<AidenRemoteFileService, "children">>;
+  files?: Pick<AidenRemoteFileService, "list" | "read" | "write"> &
+    Partial<Pick<AidenRemoteFileService, "children">>;
   botFiles?: Pick<AidenRemoteBotFileService, "list" | "read" | "write">;
-  botRoutineModels?: Pick<ReturnType<typeof createBotRoutineModelService>, "read" | "catalog" | "save" | "readRuns"> & { resumeStatus(botId: string): Promise<BotExecutionResumeStatus>; listRoutines(botId: string): Promise<BotRoutineModelDirectory> };
+  botRoutineModels?: Pick<
+    ReturnType<typeof createBotRoutineModelService>,
+    "read" | "catalog" | "save" | "readRuns"
+  > & {
+    resumeStatus(botId: string): Promise<BotExecutionResumeStatus>;
+    listRoutines(botId: string): Promise<BotRoutineModelDirectory>;
+  };
   botPeers?: BotPeerOwnerService & { isReady?(): boolean };
-  botOpenWork?: { snapshot(botId: string): Promise<BotOpenWorkSnapshot>; mutateByPerson(botId: string, mutation: BotOpenWorkMutation): Promise<BotOpenWorkResult>; evidence(botId: string, id: string, kind: "source" | "result"): Promise<BotOpenWorkEvidence | undefined> };
-  botWatches?: Pick<BotConnectorWatchService, "list" | "discoverSources" | "create" | "update" | "setEnabled" | "remove" | "testCheck" | "runNow">;
-  git?: Pick<AidenRemoteGitService, "review" | "diff" | "branches" | "checkout" | "createBranch" | "commit" | "pushCapability" | "push" | "compare" | "comparisonDiff" | "worktrees" | "createWorktree" | "deleteManagedWorktree">;
-  schedules?: Pick<AidenRemoteScheduleService, "list" | "get" | "create" | "update" | "remove" | "pause" | "resume" | "run" | "runs" | "notifications" | "preview" | "scripts" | "mcpServers" | "settings" | "updateSettings">;
+  botOpenWork?: {
+    snapshot(botId: string): Promise<BotOpenWorkSnapshot>;
+    mutateByPerson(botId: string, mutation: BotOpenWorkMutation): Promise<BotOpenWorkResult>;
+    evidence(
+      botId: string,
+      id: string,
+      kind: "source" | "result",
+    ): Promise<BotOpenWorkEvidence | undefined>;
+  };
+  botWatches?: Pick<
+    BotConnectorWatchService,
+    | "list"
+    | "discoverSources"
+    | "create"
+    | "update"
+    | "setEnabled"
+    | "remove"
+    | "testCheck"
+    | "runNow"
+  >;
+  git?: Pick<
+    AidenRemoteGitService,
+    | "review"
+    | "diff"
+    | "branches"
+    | "checkout"
+    | "createBranch"
+    | "commit"
+    | "pushCapability"
+    | "push"
+    | "compare"
+    | "comparisonDiff"
+    | "worktrees"
+    | "createWorktree"
+    | "deleteManagedWorktree"
+  >;
+  schedules?: Pick<
+    AidenRemoteScheduleService,
+    | "list"
+    | "get"
+    | "create"
+    | "update"
+    | "remove"
+    | "pause"
+    | "resume"
+    | "run"
+    | "runs"
+    | "notifications"
+    | "preview"
+    | "scripts"
+    | "mcpServers"
+    | "settings"
+    | "updateSettings"
+  >;
   appControls?: typeof remoteAppControls;
   providers?: Pick<AidenRemoteProviderService, "create">;
   memorySettings?: Pick<AidenRemoteMemorySettingsService, "get" | "update">;
@@ -353,11 +517,20 @@ export interface AidenRemoteRouterDependencies {
     | "capabilityCatalog"
     | "updateAccess"
     | "createChat"
-  > & Partial<Pick<
-    AidenRemoteBotService,
-    "listConversations" | "putAvatar" | "deleteAvatar" | "avatarContent" | "delete"
-    | "supportsChatActivity" | "supportsBotMessaging" | "updateMessaging"
-  >>;
+  > &
+    Partial<
+      Pick<
+        AidenRemoteBotService,
+        | "listConversations"
+        | "putAvatar"
+        | "deleteAvatar"
+        | "avatarContent"
+        | "delete"
+        | "supportsChatActivity"
+        | "supportsBotMessaging"
+        | "updateMessaging"
+      >
+    >;
   /**
    * Contract revision 68 (`bot:needs-you`): which of these Bots wait on the
    * person (an approval, a question, a hand-off or an open issue). Absent: the
@@ -374,7 +547,10 @@ export interface AidenRemoteRouterDependencies {
    * Contract revision 61 (`approvals:settings`): the Mac's approval mode and
    * rules page. Absent: the routes are `not_found` and the grant is never offered.
    */
-  approvalSettings?: Pick<AidenRemoteApprovalSettingsService, "mode" | "setMode" | "rules" | "picker" | "addRule" | "changeRule" | "removeRule">;
+  approvalSettings?: Pick<
+    AidenRemoteApprovalSettingsService,
+    "mode" | "setMode" | "rules" | "picker" | "addRule" | "changeRule" | "removeRule"
+  >;
   botSessions?: Pick<
     AidenRemoteBotSessionService,
     | "session"
@@ -603,7 +779,9 @@ export type AidenRemoteRouteLabel =
   | "unknown";
 
 /** Canonical template(s) for every router route label. */
-export const AIDEN_REMOTE_ROUTE_TEMPLATES: Readonly<Record<AidenRemoteRouteLabel, readonly string[]>> = {
+export const AIDEN_REMOTE_ROUTE_TEMPLATES: Readonly<
+  Record<AidenRemoteRouteLabel, readonly string[]>
+> = {
   health: ["/health"],
   botRoutineWebhook: ["/hooks/bot-routines/:token"],
   taskTriggerWebhook: ["/hooks/tasks/:token"],
@@ -639,17 +817,43 @@ export const AIDEN_REMOTE_ROUTE_TEMPLATES: Readonly<Record<AidenRemoteRouteLabel
     "/bots/:botId/lessons/:lessonId/remove",
     "/bots/:botId/learning/:changeId/undo",
   ],
-  approvalSettings: ["/approvals/mode", "/approvals/rules", "/approvals/rules/picker", "/approvals/rules/change", "/approvals/rules/remove"],
+  approvalSettings: [
+    "/approvals/mode",
+    "/approvals/rules",
+    "/approvals/rules/picker",
+    "/approvals/rules/change",
+    "/approvals/rules/remove",
+  ],
   botPlanRespond: ["/bots/:botId/plans/:planId/respond"],
   botAccessRequestAnswer: ["/bots/:botId/access-requests/:waitId/answer"],
   botHandoffAnswer: ["/bots/:botId/handoffs/:waitId/answer"],
   botHandoffOpenOnMac: ["/bots/:botId/handoffs/:waitId/open-on-mac"],
   botPause: ["/bots/:botId/pause"],
   botIssueAct: ["/bots/:botId/issues/:issueId/act"],
-  botRoutineModels: ["/bots/:botId/routine-models", "/bots/:botId/routine-resume-status", "/bots/:botId/routine-models/:routineId", "/bots/:botId/routine-models/:routineId/catalog", "/bots/:botId/routine-models/:routineId/runs"],
-  botPeers: ["/bots/:botId/peers", "/bots/:botId/peers/catalog", "/bots/:botId/peer-exchanges", "/bots/:botId/peer-exchanges/:exchangeId", "/bots/:botId/peer-exchanges/:exchangeId/stop", "/bots/:botId/peer-exchanges/:exchangeId/evidence/:kind"],
+  botRoutineModels: [
+    "/bots/:botId/routine-models",
+    "/bots/:botId/routine-resume-status",
+    "/bots/:botId/routine-models/:routineId",
+    "/bots/:botId/routine-models/:routineId/catalog",
+    "/bots/:botId/routine-models/:routineId/runs",
+  ],
+  botPeers: [
+    "/bots/:botId/peers",
+    "/bots/:botId/peers/catalog",
+    "/bots/:botId/peer-exchanges",
+    "/bots/:botId/peer-exchanges/:exchangeId",
+    "/bots/:botId/peer-exchanges/:exchangeId/stop",
+    "/bots/:botId/peer-exchanges/:exchangeId/evidence/:kind",
+  ],
   botOpenWork: ["/bots/:botId/open-work", "/bots/:botId/open-work/:itemId/evidence/:kind"],
-  botWatches: ["/bots/:botId/watches", "/bots/:botId/watches/sources", "/bots/:botId/watches/test", "/bots/:botId/watches/:watchId", "/bots/:botId/watches/:watchId/enabled", "/bots/:botId/watches/:watchId/run"],
+  botWatches: [
+    "/bots/:botId/watches",
+    "/bots/:botId/watches/sources",
+    "/bots/:botId/watches/test",
+    "/bots/:botId/watches/:watchId",
+    "/bots/:botId/watches/:watchId/enabled",
+    "/bots/:botId/watches/:watchId/run",
+  ],
   botRoutines: ["/bots/:botId/routines", "/bots/:botId/routines/:routineId"],
   botConnectionRequests: ["/bots/:botId/connection-requests"],
   botMemory: ["/bots/:botId/memory", "/bots/:botId/memory/edits"],
@@ -686,8 +890,18 @@ export const AIDEN_REMOTE_ROUTE_TEMPLATES: Readonly<Record<AidenRemoteRouteLabel
   providers: ["/providers"],
   memorySettings: ["/memory/settings"],
   usage: ["/usage"],
-  readAloud: ["/read-aloud", "/chats/:id/read-aloud", "/chats/:id/read-aloud/stop", "/chats/:id/read-aloud/audio/:jobId/:segment/:offset"],
-  speech: ["/speech", "/speech/transcriptions", "/speech/models/:modelId/download", "/speech/models/:modelId"],
+  readAloud: [
+    "/read-aloud",
+    "/chats/:id/read-aloud",
+    "/chats/:id/read-aloud/stop",
+    "/chats/:id/read-aloud/audio/:jobId/:segment/:offset",
+  ],
+  speech: [
+    "/speech",
+    "/speech/transcriptions",
+    "/speech/models/:modelId/download",
+    "/speech/models/:modelId",
+  ],
   chats: ["/chats"],
   chatSummaries: ["/chat-summaries"],
   chat: ["/chats/:id"],
@@ -836,7 +1050,12 @@ const GZIP_MIN_RESPONSE_BYTES = 1024;
 /** Members of a comma-separated header list such as `Accept-Encoding` or `If-None-Match`. */
 function listMembers(header: string | string[] | undefined): string[] {
   const value = Array.isArray(header) ? header.join(",") : header;
-  return value ? value.split(",").map((member) => member.trim()).filter(Boolean) : [];
+  return value
+    ? value
+        .split(",")
+        .map((member) => member.trim())
+        .filter(Boolean)
+    : [];
 }
 
 /** True only when the client explicitly accepts gzip (or `*`) with a non-zero weight. */
@@ -915,7 +1134,11 @@ function writeJson(response: ServerResponse, status: number, value: unknown): vo
  * revalidatable by its strong ETag and gzip-compressed when the client asks,
  * since a document inlines its whole viewer.
  */
-function writeVisualDocument(response: ServerResponse, request: IncomingMessage, document: string): void {
+function writeVisualDocument(
+  response: ServerResponse,
+  request: IncomingMessage,
+  document: string,
+): void {
   const body = Buffer.from(document, "utf8");
   const etag = visualViewerDocumentEtag(document);
   const headers = {
@@ -971,11 +1194,7 @@ function writeAttachmentContent(
   response.end(content.bytes);
 }
 
-function writeError(
-  response: ServerResponse,
-  id: string,
-  error: AidenRemoteServiceError,
-): void {
+function writeError(response: ServerResponse, id: string, error: AidenRemoteServiceError): void {
   const envelope: AidenRemoteErrorEnvelope = {
     error: {
       code: error.code,
@@ -995,8 +1214,17 @@ function writeError(
 }
 
 function requireEmptyJsonObject(body: unknown): void {
-  if (body === null || typeof body !== "object" || Array.isArray(body) || Object.keys(body).length > 0) {
-    throw new AidenRemoteServiceError("invalid_request", "This request takes an empty JSON object.", 400);
+  if (
+    body === null ||
+    typeof body !== "object" ||
+    Array.isArray(body) ||
+    Object.keys(body).length > 0
+  ) {
+    throw new AidenRemoteServiceError(
+      "invalid_request",
+      "This request takes an empty JSON object.",
+      400,
+    );
   }
 }
 
@@ -1005,9 +1233,13 @@ const BOT_ROUTINE_WEBHOOK_MAX_BYTES = 16_384;
 const TASK_TRIGGER_WEBHOOK_MAX_BYTES = 256 * 1024;
 
 /** The raw body, or undefined once it passes `maximumBytes`. */
-async function readRawBody(request: IncomingMessage, maximumBytes: number): Promise<Uint8Array | undefined> {
+async function readRawBody(
+  request: IncomingMessage,
+  maximumBytes: number,
+): Promise<Uint8Array | undefined> {
   const declared = request.headers["content-length"];
-  if (typeof declared === "string" && (!/^\d+$/u.test(declared) || Number(declared) > maximumBytes)) return undefined;
+  if (typeof declared === "string" && (!/^\d+$/u.test(declared) || Number(declared) > maximumBytes))
+    return undefined;
   const chunks: Buffer[] = [];
   let bytes = 0;
   for await (const chunk of request) {
@@ -1019,7 +1251,6 @@ async function readRawBody(request: IncomingMessage, maximumBytes: number): Prom
   return Buffer.concat(chunks);
 }
 
-
 /**
  * An attachment upload body (revision 50): the JSON envelope, or one picture's
  * raw bytes with its name in `Aiden-Attachment-Name`, turned into the same
@@ -1030,15 +1261,23 @@ async function readAttachmentUploadBody(
   request: IncomingMessage,
 ): Promise<{ body: unknown; raw: boolean }> {
   const contentType = request.headers["content-type"];
-  const mimeType = typeof contentType === "string"
-    ? contentType.toLowerCase().split(";", 1)[0]?.trim()
-    : undefined;
+  const mimeType =
+    typeof contentType === "string"
+      ? contentType.toLowerCase().split(";", 1)[0]?.trim()
+      : undefined;
   if (!mimeType || !AIDEN_REMOTE_RAW_UPLOAD_MIME_TYPES.has(mimeType)) {
-    return { body: await readJsonBody(request, MAX_AIDEN_REMOTE_ATTACHMENT_REQUEST_BYTES), raw: false };
+    return {
+      body: await readJsonBody(request, MAX_AIDEN_REMOTE_ATTACHMENT_REQUEST_BYTES),
+      raw: false,
+    };
   }
   const declared = request.headers["content-length"];
   if (typeof declared !== "string" || !/^\d{1,10}$/u.test(declared)) {
-    throw new AidenRemoteServiceError("invalid_request", "A picture upload needs its exact Content-Length.", 411);
+    throw new AidenRemoteServiceError(
+      "invalid_request",
+      "A picture upload needs its exact Content-Length.",
+      411,
+    );
   }
   const declaredBytes = Number(declared);
   if (declaredBytes > MAX_IMAGE_BYTES) {
@@ -1050,7 +1289,11 @@ async function readAttachmentUploadBody(
   const encodedName = request.headers["aiden-attachment-name"];
   let name: string;
   try {
-    if (typeof encodedName !== "string" || encodedName.length === 0 || encodedName.length > AIDEN_REMOTE_MAX_ENCODED_ATTACHMENT_NAME) {
+    if (
+      typeof encodedName !== "string" ||
+      encodedName.length === 0 ||
+      encodedName.length > AIDEN_REMOTE_MAX_ENCODED_ATTACHMENT_NAME
+    ) {
       throw new Error("missing name");
     }
     name = decodeURIComponent(encodedName);
@@ -1062,7 +1305,8 @@ async function readAttachmentUploadBody(
     );
   }
   const bytes = await readRawBody(request, MAX_IMAGE_BYTES);
-  if (!bytes) throw new AidenRemoteServiceError("payload_too_large", "The picture is too large.", 413);
+  if (!bytes)
+    throw new AidenRemoteServiceError("payload_too_large", "The picture is too large.", 413);
   if (bytes.length !== declaredBytes) {
     throw new AidenRemoteServiceError("invalid_request", "The picture upload ended early.", 400);
   }
@@ -1093,11 +1337,7 @@ async function readJsonBody(
     typeof declaredLength === "string" &&
     (!/^\d+$/u.test(declaredLength) || Number(declaredLength) > maximumBytes)
   ) {
-    throw new AidenRemoteServiceError(
-      "payload_too_large",
-      "The request body is too large.",
-      413,
-    );
+    throw new AidenRemoteServiceError("payload_too_large", "The request body is too large.", 413);
   }
   const chunks: Buffer[] = [];
   let bytes = 0;
@@ -1105,20 +1345,12 @@ async function readJsonBody(
     const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
     bytes += buffer.length;
     if (bytes > maximumBytes) {
-      throw new AidenRemoteServiceError(
-        "payload_too_large",
-        "The request body is too large.",
-        413,
-      );
+      throw new AidenRemoteServiceError("payload_too_large", "The request body is too large.", 413);
     }
     chunks.push(buffer);
   }
   if (bytes === 0) {
-    throw new AidenRemoteServiceError(
-      "invalid_request",
-      "The request body is required.",
-      400,
-    );
+    throw new AidenRemoteServiceError("invalid_request", "The request body is required.", 400);
   }
   let serialized: string;
   const body = Buffer.concat(chunks);
@@ -1148,7 +1380,9 @@ function speechRequestEncoding(request: IncomingMessage): "identity" | "gzip" {
   if (encoding === undefined || encoding === "identity") return "identity";
   if (encoding === "gzip") return "gzip";
   throw new AidenRemoteServiceError(
-    "invalid_request", "Speech transcription supports only identity or gzip Content-Encoding.", 415,
+    "invalid_request",
+    "Speech transcription supports only identity or gzip Content-Encoding.",
+    415,
   );
 }
 
@@ -1163,17 +1397,19 @@ function negotiatedDeviceCapabilities(
   device: AidenRemoteRouterAuthenticatedDevice,
 ): ReadonlySet<AidenRemoteCapability> {
   return new Set(
-    [...device.capabilities].filter((capability) =>
-      (capability !== "bot:read" && capability !== "bot:write" ||
-        device.acceptsBotCapabilities === true) &&
-      (!(AIDEN_REMOTE_PROGRESS_CAPABILITIES as readonly string[]).includes(capability) ||
-        device.acceptsProgressCapabilities === true) &&
-      (capability !== "simulators:control" &&
-        !(AIDEN_REMOTE_HOST_CAPABILITIES as readonly string[]).includes(capability) ||
-        device.type === "mac" || device.type === "linux" ||
-        (AIDEN_REMOTE_PHONE_RUN_CAPABILITIES as readonly string[]).includes(capability)) &&
-      (!(AIDEN_REMOTE_MOBILE_SIMULATOR_CAPABILITIES as readonly string[]).includes(capability) ||
-        mayHoldMobileSimulatorCapabilities(device.type)),
+    [...device.capabilities].filter(
+      (capability) =>
+        ((capability !== "bot:read" && capability !== "bot:write") ||
+          device.acceptsBotCapabilities === true) &&
+        (!(AIDEN_REMOTE_PROGRESS_CAPABILITIES as readonly string[]).includes(capability) ||
+          device.acceptsProgressCapabilities === true) &&
+        ((capability !== "simulators:control" &&
+          !(AIDEN_REMOTE_HOST_CAPABILITIES as readonly string[]).includes(capability)) ||
+          device.type === "mac" ||
+          device.type === "linux" ||
+          (AIDEN_REMOTE_PHONE_RUN_CAPABILITIES as readonly string[]).includes(capability)) &&
+        (!(AIDEN_REMOTE_MOBILE_SIMULATOR_CAPABILITIES as readonly string[]).includes(capability) ||
+          mayHoldMobileSimulatorCapabilities(device.type)),
     ),
   );
 }
@@ -1185,7 +1421,9 @@ const SIMULATOR_ROUTE_CAPABILITIES = [
 ] as const satisfies readonly AidenRemoteCapability[];
 
 /** A desktop holding `simulators:control`, or a phone holding `simulators:mobile`. */
-function simulatorAudience(device: Pick<AidenRemoteRouterAuthenticatedDevice, "type">): "desktop" | "mobile" {
+function simulatorAudience(
+  device: Pick<AidenRemoteRouterAuthenticatedDevice, "type">,
+): "desktop" | "mobile" {
   return device.type === "mac" || device.type === "linux" ? "desktop" : "mobile";
 }
 
@@ -1233,7 +1471,8 @@ async function authenticateCredential(
     );
   }
   const capabilities = negotiatedDeviceCapabilities(device);
-  const required: readonly AidenRemoteCapability[] = typeof capability === "string" ? [capability] : capability;
+  const required: readonly AidenRemoteCapability[] =
+    typeof capability === "string" ? [capability] : capability;
   if (!required.some((candidate) => capabilities.has(candidate))) {
     throw new AidenRemoteServiceError(
       "capability_denied",
@@ -1277,8 +1516,9 @@ function requireBotChatAccess(
   resource: BotChatResource = "chat",
 ): void {
   if (!chat.botId) return;
-  const allowed = device.capabilities.has("bot:read")
-    && (access === "read" || device.capabilities.has("bot:write"));
+  const allowed =
+    device.capabilities.has("bot:read") &&
+    (access === "read" || device.capabilities.has("bot:write"));
   if (allowed) return;
   throw unavailableBotChatResource(resource);
 }
@@ -1287,13 +1527,16 @@ function requireBotChatAccess(
  * Devices that did not negotiate app-controls:read receive each panel's plain
  * text fallback appended to the message text instead of the structured panel.
  */
-function withAppPanelFallback<T extends { messages: { text: string; appPanels?: { fallback: string }[] }[] }>(
-  device: AidenRemoteRouterAuthenticatedDevice,
-  value: T,
-): T {
+function withAppPanelFallback<
+  T extends { messages: { text: string; appPanels?: { fallback: string }[] }[] },
+>(device: AidenRemoteRouterAuthenticatedDevice, value: T): T {
   if (device.capabilities.has("app-controls:read")) return value;
-  value.messages = value.messages.map(({ appPanels, ...message }) => ({ ...message,
-    text: appPanels?.length ? [message.text, ...appPanels.map((panel) => panel.fallback)].filter(Boolean).join("\n\n") : message.text }));
+  value.messages = value.messages.map(({ appPanels, ...message }) => ({
+    ...message,
+    text: appPanels?.length
+      ? [message.text, ...appPanels.map((panel) => panel.fallback)].filter(Boolean).join("\n\n")
+      : message.text,
+  }));
   return value;
 }
 
@@ -1336,10 +1579,7 @@ async function requireChatAccess(
 }
 
 async function runChatMutation<T>(
-  chats: Pick<
-    AidenRemoteChatService,
-    "classify" | "authorizeRetainedBotChat" | "runMutation"
-  >,
+  chats: Pick<AidenRemoteChatService, "classify" | "authorizeRetainedBotChat" | "runMutation">,
   device: AidenRemoteRouterAuthenticatedDevice,
   chatId: string,
   resource: BotChatResource,
@@ -1388,11 +1628,7 @@ function requestTarget(
     raw.includes("\\") ||
     hasAsciiControl(raw)
   ) {
-    throw new AidenRemoteServiceError(
-      "invalid_request",
-      "The request URL is invalid.",
-      400,
-    );
+    throw new AidenRemoteServiceError("invalid_request", "The request URL is invalid.", 400);
   }
   const query = raw.indexOf("?");
   const path = query < 0 ? raw : raw.slice(0, query);
@@ -1400,22 +1636,14 @@ function requestTarget(
   // traversal. Query values may be encoded (a search with spaces or accents),
   // but only as well-formed UTF-8 escapes that decode to no control character.
   if (path.includes("%") || (query >= 0 && !isSafeEncodedQuery(raw.slice(query + 1)))) {
-    throw new AidenRemoteServiceError(
-      "invalid_request",
-      "The request URL is invalid.",
-      400,
-    );
+    throw new AidenRemoteServiceError("invalid_request", "The request URL is invalid.", 400);
   }
   if (
     !path.startsWith("/") ||
     path.includes("//") ||
     path.split("/").some((segment) => segment === "." || segment === "..")
   ) {
-    throw new AidenRemoteServiceError(
-      "invalid_request",
-      "The request URL is invalid.",
-      400,
-    );
+    throw new AidenRemoteServiceError("invalid_request", "The request URL is invalid.", 400);
   }
   const queryString = query < 0 ? "" : raw.slice(query + 1);
   if (path.startsWith(`${AIDEN_REMOTE_BASE_PATH}/`)) {
@@ -1436,7 +1664,12 @@ function botSessionsOrNotFound(
   return dependencies.botSessions;
 }
 
-type BotSessionFeature = "memory" | "editMemory" | "respondRoutineProposal" | "routineSuggestions" | "routineNotificationFeed";
+type BotSessionFeature =
+  | "memory"
+  | "editMemory"
+  | "respondRoutineProposal"
+  | "routineSuggestions"
+  | "routineNotificationFeed";
 
 /** A revision-27 Bot session method, bound, or not_found when this host does not serve it. */
 function botSessionFeature<Name extends BotSessionFeature>(
@@ -1468,12 +1701,20 @@ function browserQuery(query: string): { location: string; cursor?: string } {
   for (const component of query.split("&")) {
     const separator = component.indexOf("=");
     if (separator <= 0) {
-      throw new AidenRemoteServiceError("invalid_request", "The folder-browser query is invalid.", 400);
+      throw new AidenRemoteServiceError(
+        "invalid_request",
+        "The folder-browser query is invalid.",
+        400,
+      );
     }
     const key = component.slice(0, separator);
     const value = component.slice(separator + 1);
     if (values.has(key) || (key !== "location" && key !== "cursor")) {
-      throw new AidenRemoteServiceError("invalid_request", "The folder-browser query is invalid.", 400);
+      throw new AidenRemoteServiceError(
+        "invalid_request",
+        "The folder-browser query is invalid.",
+        400,
+      );
     }
     values.set(key, value);
   }
@@ -1484,7 +1725,11 @@ function browserQuery(query: string): { location: string; cursor?: string } {
     !/^loc_[A-Za-z0-9_-]{43}$/u.test(location) ||
     (cursor !== undefined && !/^cur_[A-Za-z0-9_-]{43}$/u.test(cursor))
   ) {
-    throw new AidenRemoteServiceError("invalid_request", "The folder-browser query is invalid.", 400);
+    throw new AidenRemoteServiceError(
+      "invalid_request",
+      "The folder-browser query is invalid.",
+      400,
+    );
   }
   return { location, ...(cursor ? { cursor } : {}) };
 }
@@ -1548,7 +1793,11 @@ function chatContextQuery(query: string): { providerId: string; modelId: string 
   const modelId = params.get("modelId")!;
   // A selection is limited to the characters model ids use
   // (`org/model:tag@version` included), whether sent literally or encoded.
-  if (!AIDEN_REMOTE_CONTEXT_MODEL_ID.test(providerId) || !AIDEN_REMOTE_CONTEXT_MODEL_ID.test(modelId)) throw invalid();
+  if (
+    !AIDEN_REMOTE_CONTEXT_MODEL_ID.test(providerId) ||
+    !AIDEN_REMOTE_CONTEXT_MODEL_ID.test(modelId)
+  )
+    throw invalid();
   return { providerId, modelId };
 }
 
@@ -1567,11 +1816,12 @@ function chatSummariesQuery(query: string): { limit: number; cursor?: string } {
     );
   }
   const rawLimit = params.get("limit");
-  const limit = rawLimit === null
-    ? AIDEN_REMOTE_CHAT_SUMMARY_DEFAULT_LIMIT
-    : /^\d{1,3}$/u.test(rawLimit)
-      ? Number(rawLimit)
-      : Number.NaN;
+  const limit =
+    rawLimit === null
+      ? AIDEN_REMOTE_CHAT_SUMMARY_DEFAULT_LIMIT
+      : /^\d{1,3}$/u.test(rawLimit)
+        ? Number(rawLimit)
+        : Number.NaN;
   const cursor = params.get("cursor");
   if (
     !Number.isInteger(limit) ||
@@ -1609,11 +1859,19 @@ function scheduledNotificationsQuery(query: string): { since?: number } {
     query.indexOf("&") >= 0 ||
     !/^(?:0|[1-9]\d{0,15})$/u.test(query.slice(separator + 1))
   ) {
-    throw new AidenRemoteServiceError("invalid_request", "The scheduled-notification query is invalid.", 400);
+    throw new AidenRemoteServiceError(
+      "invalid_request",
+      "The scheduled-notification query is invalid.",
+      400,
+    );
   }
   const parsed = Number(query.slice(separator + 1));
   if (!Number.isSafeInteger(parsed)) {
-    throw new AidenRemoteServiceError("invalid_request", "The scheduled-notification query is invalid.", 400);
+    throw new AidenRemoteServiceError(
+      "invalid_request",
+      "The scheduled-notification query is invalid.",
+      400,
+    );
   }
   return { since: parsed };
 }
@@ -1627,7 +1885,11 @@ function scheduledScriptsQuery(query: string): { workspaceId?: string } {
     query.indexOf("&") >= 0 ||
     !/^[A-Za-z0-9_-]{1,128}$/u.test(query.slice(separator + 1))
   ) {
-    throw new AidenRemoteServiceError("invalid_request", "The scheduled-script query is invalid.", 400);
+    throw new AidenRemoteServiceError(
+      "invalid_request",
+      "The scheduled-script query is invalid.",
+      400,
+    );
   }
   return { workspaceId: query.slice(separator + 1) };
 }
@@ -1636,17 +1898,16 @@ function streamAfter(request: IncomingMessage, query: string): number {
   let after: string | undefined;
   if (query) {
     const separator = query.indexOf("=");
-    if (
-      separator <= 0 ||
-      query.slice(0, separator) !== "after" ||
-      query.indexOf("&") >= 0
-    ) {
+    if (separator <= 0 || query.slice(0, separator) !== "after" || query.indexOf("&") >= 0) {
       throw new AidenRemoteServiceError("invalid_request", "The stream cursor is invalid.", 400);
     }
     after = query.slice(separator + 1);
   }
   const lastEventId = request.headers["last-event-id"];
-  if (Array.isArray(lastEventId) || (lastEventId !== undefined && typeof lastEventId !== "string")) {
+  if (
+    Array.isArray(lastEventId) ||
+    (lastEventId !== undefined && typeof lastEventId !== "string")
+  ) {
     throw new AidenRemoteServiceError("invalid_request", "Last-Event-ID is invalid.", 400);
   }
   if (after !== undefined && lastEventId !== undefined && after !== lastEventId) {
@@ -1667,12 +1928,14 @@ function approvalDecision(value: unknown): {
   decision: "allow" | "deny";
   scope?: ToolApprovalScope;
 } {
-  const record = value && typeof value === "object" && !Array.isArray(value)
-    ? value as Record<string, unknown>
-    : null;
+  const record =
+    value && typeof value === "object" && !Array.isArray(value)
+      ? (value as Record<string, unknown>)
+      : null;
   const keys = record ? Object.keys(record) : [];
   // "workspace" is desktop-only: a Remote answer naming it is invalid.
-  const scope = record && "scope" in record ? parseRemoteToolApprovalScope(record.scope) : undefined;
+  const scope =
+    record && "scope" in record ? parseRemoteToolApprovalScope(record.scope) : undefined;
   if (
     !record ||
     keys.some((key) => key !== "decision" && key !== "scope") ||
@@ -1715,7 +1978,11 @@ function selectionLocation(value: unknown): string {
     typeof (value as { location?: unknown }).location !== "string" ||
     !/^loc_[A-Za-z0-9_-]{43}$/u.test((value as { location: string }).location)
   ) {
-    throw new AidenRemoteServiceError("invalid_request", "The folder selection request is invalid.", 400);
+    throw new AidenRemoteServiceError(
+      "invalid_request",
+      "The folder selection request is invalid.",
+      400,
+    );
   }
   return (value as { location: string }).location;
 }
@@ -1750,10 +2017,10 @@ function sourceIdentity(request: IncomingMessage, tailscale: boolean): string {
 
 function requireEmptyObject(value: unknown): void {
   if (
-    !value
-    || typeof value !== "object"
-    || Array.isArray(value)
-    || Object.keys(value).length !== 0
+    !value ||
+    typeof value !== "object" ||
+    Array.isArray(value) ||
+    Object.keys(value).length !== 0
   ) {
     throw new AidenRemoteServiceError(
       "invalid_request",
@@ -1765,11 +2032,16 @@ function requireEmptyObject(value: unknown): void {
 
 /** Revision 53: whether phones can put an empty chat in a new worktree. */
 function newWorktreesWired(dependencies: AidenRemoteRouterDependencies): boolean {
-  return dependencies.chats?.supportsNewWorktrees === true && dependencies.chats.moveToNewWorktree !== undefined;
+  return (
+    dependencies.chats?.supportsNewWorktrees === true &&
+    dependencies.chats.moveToNewWorktree !== undefined
+  );
 }
 
 function continueInNewChatWired(dependencies: AidenRemoteRouterDependencies): boolean {
-  return dependencies.chats?.supportsContinueInNewChat === true && dependencies.chats.fork !== undefined;
+  return (
+    dependencies.chats?.supportsContinueInNewChat === true && dependencies.chats.fork !== undefined
+  );
 }
 
 function streamSnapshotReasonsWired(dependencies: AidenRemoteRouterDependencies): boolean {
@@ -1799,17 +2071,17 @@ function requireRetainedBotProjectionGrants(
   current: AidenRemoteRouterAuthenticatedDevice,
   projections: readonly AidenRemoteCapability[],
 ): void {
-  requireDeviceCapabilities(current, projections.filter((capability) => previous.capabilities.has(capability)));
+  requireDeviceCapabilities(
+    current,
+    projections.filter((capability) => previous.capabilities.has(capability)),
+  );
 }
 
 function requireNegotiatedProgressCapability(
   device: AidenRemoteRouterAuthenticatedDevice,
   capability: AidenRemoteProgressCapability,
 ): void {
-  if (
-    device.acceptsProgressCapabilities === true &&
-    device.capabilities.has(capability)
-  ) {
+  if (device.acceptsProgressCapabilities === true && device.capabilities.has(capability)) {
     return;
   }
   throw new AidenRemoteServiceError(
@@ -1826,7 +2098,8 @@ function progressCapabilitySupported(
   if (capability === "questions:respond") {
     return dependencies.streams?.supportsQuestionPrompts?.() === true;
   }
-  if (capability === "app-controls:read" || capability === "app-controls:respond") return Boolean(dependencies.appControls);
+  if (capability === "app-controls:read" || capability === "app-controls:respond")
+    return Boolean(dependencies.appControls);
   if (capability === "skills:invoke") {
     return typeof dependencies.chats?.chatSkillCatalog === "function";
   }
@@ -1929,7 +2202,10 @@ export function aidenRemoteServerFeatures(
     ...(support.questionPrompts ? [AIDEN_REMOTE_CHAT_QUESTION_PROMPTS_FEATURE] : []),
     ...(support.skills ? [AIDEN_REMOTE_CHAT_SKILLS_FEATURE] : []),
     ...(support.messagesWindow
-      ? [AIDEN_REMOTE_CHAT_MESSAGES_WINDOW_FEATURE, AIDEN_REMOTE_CHAT_MESSAGES_WINDOW_METADATA_FEATURE]
+      ? [
+          AIDEN_REMOTE_CHAT_MESSAGES_WINDOW_FEATURE,
+          AIDEN_REMOTE_CHAT_MESSAGES_WINDOW_METADATA_FEATURE,
+        ]
       : []),
     ...(support.visuals ? [AIDEN_REMOTE_CHAT_VISUALS_FEATURE] : []),
     ...(support.visualViewer ? [AIDEN_REMOTE_CHAT_VISUAL_VIEWER_FEATURE] : []),
@@ -1938,7 +2214,9 @@ export function aidenRemoteServerFeatures(
     ...(support.forkSummary ? [AIDEN_REMOTE_CHAT_FORK_SUMMARY_FEATURE] : []),
     // Host-wide features are announced to desktops only.
     ...(desktop && support.hostEvents ? [AIDEN_REMOTE_HOST_EVENTS_FEATURE] : []),
-    ...(desktop && support.runs ? [AIDEN_REMOTE_RUN_STREAMS_FEATURE, AIDEN_REMOTE_RUN_CONTROL_FEATURE] : []),
+    ...(desktop && support.runs
+      ? [AIDEN_REMOTE_RUN_STREAMS_FEATURE, AIDEN_REMOTE_RUN_CONTROL_FEATURE]
+      : []),
     ...(desktop && support.pairingRequests ? [AIDEN_REMOTE_PAIRING_REQUESTS_FEATURE] : []),
     // The composer context meter for a paired Mac's chat (contract revision 41).
     ...(desktop && support.contextPressure ? [AIDEN_REMOTE_CHAT_CONTEXT_PRESSURE_FEATURE] : []),
@@ -1993,7 +2271,11 @@ function simulatorListChatId(query: string): string | undefined {
   if (!query) return undefined;
   const match = /^chatId=([A-Za-z0-9._:-]{1,128})$/u.exec(query);
   if (!match) {
-    throw new AidenRemoteServiceError("invalid_request", "The simulator list query is invalid.", 400);
+    throw new AidenRemoteServiceError(
+      "invalid_request",
+      "The simulator list query is invalid.",
+      400,
+    );
   }
   return match[1]!;
 }
@@ -2024,7 +2306,11 @@ function chatMessagesQuery(query: string): { before?: string; limit: number } {
         );
       }
     } else {
-      throw new AidenRemoteServiceError("invalid_request", "The message window query is invalid.", 400);
+      throw new AidenRemoteServiceError(
+        "invalid_request",
+        "The message window query is invalid.",
+        400,
+      );
     }
   }
   return {
@@ -2041,11 +2327,24 @@ function botSessionPageQuery(query: string): { before: string; limit?: number } 
     const separator = component.indexOf("=");
     const name = separator < 0 ? component : component.slice(0, separator);
     const value = separator < 0 ? "" : component.slice(separator + 1);
-    if (name === "before" && before === undefined && /^[A-Za-z0-9._:-]{1,128}$/u.test(value)) before = value;
-    else if (name === "limit" && limit === undefined && /^[1-9]\d{0,2}$/u.test(value) && Number(value) <= AIDEN_REMOTE_BOT_SESSION_MAX_ENTRIES) limit = Number(value);
-    else throw new AidenRemoteServiceError("invalid_request", "The session page query is invalid.", 400);
+    if (name === "before" && before === undefined && /^[A-Za-z0-9._:-]{1,128}$/u.test(value))
+      before = value;
+    else if (
+      name === "limit" &&
+      limit === undefined &&
+      /^[1-9]\d{0,2}$/u.test(value) &&
+      Number(value) <= AIDEN_REMOTE_BOT_SESSION_MAX_ENTRIES
+    )
+      limit = Number(value);
+    else
+      throw new AidenRemoteServiceError(
+        "invalid_request",
+        "The session page query is invalid.",
+        400,
+      );
   }
-  if (before === undefined) throw new AidenRemoteServiceError("invalid_request", "The session page query is invalid.", 400);
+  if (before === undefined)
+    throw new AidenRemoteServiceError("invalid_request", "The session page query is invalid.", 400);
   return { before, ...(limit === undefined ? {} : { limit }) };
 }
 
@@ -2090,14 +2389,23 @@ function agentInterruptSupported(dependencies: AidenRemoteRouterDependencies): b
 
 /** Revision 30: the activity frames and the Chat activity field ship together, or not at all. */
 function botActivityWired(dependencies: AidenRemoteRouterDependencies): boolean {
-  return dependencies.botSessions?.supportsActivity === true && dependencies.bots?.supportsChatActivity === true;
+  return (
+    dependencies.botSessions?.supportsActivity === true &&
+    dependencies.bots?.supportsChatActivity === true
+  );
 }
 
 function botMessagingWired(dependencies: AidenRemoteRouterDependencies): boolean {
-  return dependencies.bots?.supportsBotMessaging === true && typeof dependencies.bots.updateMessaging === "function";
+  return (
+    dependencies.bots?.supportsBotMessaging === true &&
+    typeof dependencies.bots.updateMessaging === "function"
+  );
 }
 
-function holdsBotMessaging(device: AidenRemoteRouterAuthenticatedDevice, dependencies: AidenRemoteRouterDependencies): boolean {
+function holdsBotMessaging(
+  device: AidenRemoteRouterAuthenticatedDevice,
+  dependencies: AidenRemoteRouterDependencies,
+): boolean {
   return device.capabilities.has("bot:messaging") && botMessagingWired(dependencies);
 }
 
@@ -2114,11 +2422,15 @@ function isPlainRecord(value: unknown): value is Record<string, unknown> {
 function approvalCardsWired(dependencies: AidenRemoteRouterDependencies): boolean {
   return Boolean(dependencies.streams || dependencies.hostRuns || dependencies.botSessions);
 }
-function holdsApprovalCards(device: Pick<AidenRemoteRouterAuthenticatedDevice, "capabilities">): boolean {
+function holdsApprovalCards(
+  device: Pick<AidenRemoteRouterAuthenticatedDevice, "capabilities">,
+): boolean {
   return device.capabilities.has("approval:cards");
 }
 /** Revision 69: a card holder that also reads a shell card's plain words. */
-function holdsApprovalPlainWords(device: Pick<AidenRemoteRouterAuthenticatedDevice, "capabilities">): boolean {
+function holdsApprovalPlainWords(
+  device: Pick<AidenRemoteRouterAuthenticatedDevice, "capabilities">,
+): boolean {
   return holdsApprovalCards(device) && device.capabilities.has("approval:plain-words");
 }
 /** Revision 61: the Mac's approval mode and rules page. */
@@ -2126,67 +2438,117 @@ function approvalSettingsWired(dependencies: AidenRemoteRouterDependencies): boo
   return dependencies.approvalSettings !== undefined;
 }
 function botSettingsChangesWired(dependencies: AidenRemoteRouterDependencies): boolean {
-  return dependencies.botSessions?.supportsSettingsChanges === true && typeof dependencies.botSessions.respondSettingsChange === "function";
+  return (
+    dependencies.botSessions?.supportsSettingsChanges === true &&
+    typeof dependencies.botSessions.respondSettingsChange === "function"
+  );
 }
-function holdsBotSettingsChanges(device: AidenRemoteRouterAuthenticatedDevice, dependencies: AidenRemoteRouterDependencies): boolean {
+function holdsBotSettingsChanges(
+  device: AidenRemoteRouterAuthenticatedDevice,
+  dependencies: AidenRemoteRouterDependencies,
+): boolean {
   return device.capabilities.has("bot:settings-changes") && botSettingsChangesWired(dependencies);
 }
 function botSuggestionsWired(dependencies: AidenRemoteRouterDependencies): boolean {
-  return dependencies.botSessions?.supportsSuggestions === true && typeof dependencies.botSessions.respondLesson === "function";
+  return (
+    dependencies.botSessions?.supportsSuggestions === true &&
+    typeof dependencies.botSessions.respondLesson === "function"
+  );
 }
-function holdsBotSuggestions(device: AidenRemoteRouterAuthenticatedDevice, dependencies: AidenRemoteRouterDependencies): boolean {
+function holdsBotSuggestions(
+  device: AidenRemoteRouterAuthenticatedDevice,
+  dependencies: AidenRemoteRouterDependencies,
+): boolean {
   return device.capabilities.has("bot:suggestions") && botSuggestionsWired(dependencies);
 }
 function botTemplatesWired(dependencies: AidenRemoteRouterDependencies): boolean {
-  return dependencies.botSessions?.supportsTemplates === true && typeof dependencies.botSessions.templates === "function";
+  return (
+    dependencies.botSessions?.supportsTemplates === true &&
+    typeof dependencies.botSessions.templates === "function"
+  );
 }
-function holdsBotTemplates(device: AidenRemoteRouterAuthenticatedDevice, dependencies: AidenRemoteRouterDependencies): boolean {
+function holdsBotTemplates(
+  device: AidenRemoteRouterAuthenticatedDevice,
+  dependencies: AidenRemoteRouterDependencies,
+): boolean {
   return device.capabilities.has("bot:templates") && botTemplatesWired(dependencies);
 }
 
 /** The `schedule` card is sent only to a device that opted in and may read schedules. */
-function holdsScheduleCards(device: Pick<AidenRemoteRouterAuthenticatedDevice, "capabilities">): boolean {
+function holdsScheduleCards(
+  device: Pick<AidenRemoteRouterAuthenticatedDevice, "capabilities">,
+): boolean {
   return device.capabilities.has("schedule:cards") && device.capabilities.has("schedule:read");
 }
 
 function botAllowedWired(dependencies: AidenRemoteRouterDependencies): boolean {
-  return typeof dependencies.botAllowed?.list === "function" && typeof dependencies.botAllowed.remove === "function";
+  return (
+    typeof dependencies.botAllowed?.list === "function" &&
+    typeof dependencies.botAllowed.remove === "function"
+  );
 }
-function holdsBotAllowed(device: AidenRemoteRouterAuthenticatedDevice, dependencies: AidenRemoteRouterDependencies): boolean {
+function holdsBotAllowed(
+  device: AidenRemoteRouterAuthenticatedDevice,
+  dependencies: AidenRemoteRouterDependencies,
+): boolean {
   return device.capabilities.has("bot:allowed") && botAllowedWired(dependencies);
 }
 function botAllowedCursorQuery(query: string): string | undefined {
   const params = new URLSearchParams(query);
-  if ([...params.keys()].some(key => key !== "cursor") || params.getAll("cursor").length > 1) throw new AidenRemoteServiceError("invalid_request", "The allow list query is invalid.", 400);
+  if ([...params.keys()].some((key) => key !== "cursor") || params.getAll("cursor").length > 1)
+    throw new AidenRemoteServiceError("invalid_request", "The allow list query is invalid.", 400);
   const cursor = params.get("cursor");
   if (cursor === null) return undefined;
-  try { return parseAidenRemoteBotAllowedCursor(cursor); } catch { throw new AidenRemoteServiceError("invalid_request", "The allow list cursor is invalid. Refresh the list.", 400, true); }
+  try {
+    return parseAidenRemoteBotAllowedCursor(cursor);
+  } catch {
+    throw new AidenRemoteServiceError(
+      "invalid_request",
+      "The allow list cursor is invalid. Refresh the list.",
+      400,
+      true,
+    );
+  }
 }
 
 /** Revision 56: plan projection and response ship together. */
 function botPlansWired(dependencies: AidenRemoteRouterDependencies): boolean {
-  return dependencies.botSessions?.supportsPlans === true && typeof dependencies.botSessions.respondPlan === "function";
+  return (
+    dependencies.botSessions?.supportsPlans === true &&
+    typeof dependencies.botSessions.respondPlan === "function"
+  );
 }
-function holdsBotPlans(device: AidenRemoteRouterAuthenticatedDevice, dependencies: AidenRemoteRouterDependencies): boolean {
+function holdsBotPlans(
+  device: AidenRemoteRouterAuthenticatedDevice,
+  dependencies: AidenRemoteRouterDependencies,
+): boolean {
   return device.capabilities.has("bot:plans") && botPlansWired(dependencies);
 }
 
 /** Revision 55: the request bridge and answer route ship together. */
 function botAccessRequestsWired(dependencies: AidenRemoteRouterDependencies): boolean {
-  return dependencies.botSessions?.supportsAccessRequests === true && typeof dependencies.botSessions.answerAccessRequest === "function";
+  return (
+    dependencies.botSessions?.supportsAccessRequests === true &&
+    typeof dependencies.botSessions.answerAccessRequest === "function"
+  );
 }
-function holdsBotAccessRequests(device: AidenRemoteRouterAuthenticatedDevice, dependencies: AidenRemoteRouterDependencies): boolean {
+function holdsBotAccessRequests(
+  device: AidenRemoteRouterAuthenticatedDevice,
+  dependencies: AidenRemoteRouterDependencies,
+): boolean {
   return device.capabilities.has("bot:access-requests") && botAccessRequestsWired(dependencies);
 }
 
 /** Revision 37: hand-off, pause and holder projection ship together. */
 function botHandoffsWired(dependencies: AidenRemoteRouterDependencies): boolean {
   const sessions = dependencies.botSessions;
-  return sessions?.supportsHandoffs === true &&
+  return (
+    sessions?.supportsHandoffs === true &&
     typeof sessions.answerHandoff === "function" &&
     typeof sessions.openHandoffOnMac === "function" &&
     typeof sessions.pause === "function" &&
-    typeof sessions.unpause === "function";
+    typeof sessions.unpause === "function"
+  );
 }
 
 /** Whether this device is sent revision-37 hand-off and pause shapes. */
@@ -2281,24 +2643,39 @@ async function botSummaryForAudience(
   );
 }
 
-async function issueCountForAudience<T extends { id: string; issueCount?: number }>(summary: T, device: AidenRemoteRouterAuthenticatedDevice, dependencies: AidenRemoteRouterDependencies): Promise<T> {
-  if (!holdsBotIssues(device, dependencies) || holdsBotAccessRequests(device, dependencies) || !dependencies.botSessions?.openIssueCount) return summary;
+async function issueCountForAudience<T extends { id: string; issueCount?: number }>(
+  summary: T,
+  device: AidenRemoteRouterAuthenticatedDevice,
+  dependencies: AidenRemoteRouterDependencies,
+): Promise<T> {
+  if (
+    !holdsBotIssues(device, dependencies) ||
+    holdsBotAccessRequests(device, dependencies) ||
+    !dependencies.botSessions?.openIssueCount
+  )
+    return summary;
   const { issueCount: _hidden, ...rest } = summary;
-  const count = await dependencies.botSessions.openIssueCount(summary.id, { accessRequests: false });
+  const count = await dependencies.botSessions.openIssueCount(summary.id, {
+    accessRequests: false,
+  });
   return { ...rest, ...(count > 0 ? { issueCount: count } : {}) } as T;
 }
 
 /** Revision 50: raw picture uploads ride the chat and Bot upload routes. */
 function rawUploadsWired(dependencies: AidenRemoteRouterDependencies): boolean {
-  return typeof dependencies.chats?.uploadAttachment === "function" || botAttachmentsWired(dependencies);
+  return (
+    typeof dependencies.chats?.uploadAttachment === "function" || botAttachmentsWired(dependencies)
+  );
 }
 
 /** Revision 33: uploads, removals and `attachmentIds` ship together, or not at all. */
 function botAttachmentsWired(dependencies: AidenRemoteRouterDependencies): boolean {
   const sessions = dependencies.botSessions;
-  return sessions?.supportsAttachments === true &&
+  return (
+    sessions?.supportsAttachments === true &&
     typeof sessions.uploadAttachment === "function" &&
-    typeof sessions.removeAttachment === "function";
+    typeof sessions.removeAttachment === "function"
+  );
 }
 
 /**
@@ -2329,18 +2706,32 @@ async function writeBotDetail(
 
 function botRoutineModelsWired(dependencies: AidenRemoteRouterDependencies): boolean {
   const port = dependencies.botRoutineModels;
-  return !!port && (["read", "catalog", "save", "readRuns", "resumeStatus", "listRoutines"] as const).every((method) => typeof port[method] === "function");
+  return (
+    !!port &&
+    (["read", "catalog", "save", "readRuns", "resumeStatus", "listRoutines"] as const).every(
+      (method) => typeof port[method] === "function",
+    )
+  );
 }
 function botPeersWired(dependencies: AidenRemoteRouterDependencies): boolean {
   const port = dependencies.botPeers;
-  return !!port && (port.isReady === undefined || typeof port.isReady === "function" && port.isReady() === true)
-    && (["settings", "catalog", "mutate", "exchanges", "exchange", "stop", "evidence"] as const).every((method) => typeof port[method] === "function");
+  return (
+    !!port &&
+    (port.isReady === undefined ||
+      (typeof port.isReady === "function" && port.isReady() === true)) &&
+    (["settings", "catalog", "mutate", "exchanges", "exchange", "stop", "evidence"] as const).every(
+      (method) => typeof port[method] === "function",
+    )
+  );
 }
 /** Revision 68: the `needsYou` signal ships only where the host can compute it. */
 function botNeedsYouWired(dependencies: AidenRemoteRouterDependencies): boolean {
   return typeof dependencies.botNeedsYou === "function" && dependencies.bots !== undefined;
 }
-function holdsBotNeedsYou(device: AidenRemoteRouterAuthenticatedDevice, dependencies: AidenRemoteRouterDependencies): boolean {
+function holdsBotNeedsYou(
+  device: AidenRemoteRouterAuthenticatedDevice,
+  dependencies: AidenRemoteRouterDependencies,
+): boolean {
   return device.capabilities.has("bot:needs-you") && botNeedsYouWired(dependencies);
 }
 /** Revision 68: `needsYou: true` on the summaries of Bots waiting on the person, for holders only. */
@@ -2352,26 +2743,73 @@ async function withBotNeedsYou(
   const visible = summaries.map(({ needsYou: _hidden, ...summary }) => summary);
   if (!holdsBotNeedsYou(device, dependencies) || visible.length === 0) return visible;
   // A failed read leaves the list as it was, without the signal.
-  const waiting = await dependencies.botNeedsYou!(visible.map(({ id }) => id)).catch(() => new Set<string>());
-  return visible.map((summary) => (waiting.has(summary.id) ? { ...summary, needsYou: true as const } : summary));
+  const waiting = await dependencies.botNeedsYou!(visible.map(({ id }) => id)).catch(
+    () => new Set<string>(),
+  );
+  return visible.map((summary) =>
+    waiting.has(summary.id) ? { ...summary, needsYou: true as const } : summary,
+  );
 }
-function holdsBotPeers(device: AidenRemoteRouterAuthenticatedDevice, dependencies: AidenRemoteRouterDependencies): boolean {
-  return device.acceptsBotCapabilities === true && device.capabilities.has("bot:peers") && botPeersWired(dependencies);
+function holdsBotPeers(
+  device: AidenRemoteRouterAuthenticatedDevice,
+  dependencies: AidenRemoteRouterDependencies,
+): boolean {
+  return (
+    device.acceptsBotCapabilities === true &&
+    device.capabilities.has("bot:peers") &&
+    botPeersWired(dependencies)
+  );
 }
 function botOpenWorkWired(dependencies: AidenRemoteRouterDependencies): boolean {
-  return typeof dependencies.botOpenWork?.snapshot === "function" && typeof dependencies.botOpenWork?.mutateByPerson === "function" && typeof dependencies.botOpenWork?.evidence === "function";
+  return (
+    typeof dependencies.botOpenWork?.snapshot === "function" &&
+    typeof dependencies.botOpenWork?.mutateByPerson === "function" &&
+    typeof dependencies.botOpenWork?.evidence === "function"
+  );
 }
 function botWatchesWired(dependencies: AidenRemoteRouterDependencies): boolean {
   const port = dependencies.botWatches;
-  return !!port && (["list", "discoverSources", "create", "update", "setEnabled", "remove", "testCheck", "runNow"] as const).every((key) => typeof port[key] === "function");
+  return (
+    !!port &&
+    (
+      [
+        "list",
+        "discoverSources",
+        "create",
+        "update",
+        "setEnabled",
+        "remove",
+        "testCheck",
+        "runNow",
+      ] as const
+    ).every((key) => typeof port[key] === "function")
+  );
 }
 async function callBotWatch<T>(operation: () => Promise<T>): Promise<T> {
-  try { return await operation(); } catch (error) {
+  try {
+    return await operation();
+  } catch (error) {
     if (!(error instanceof BotConnectorWatchError)) throw error;
     const code = error.code === "unavailable" ? "capability_denied" : error.code;
-    const status = code === "not_found" ? 404 : code === "invalid_request" ? 400 : code === "capability_denied" ? 403 : code === "idempotency_capacity" ? 429 : 409;
-    throw new AidenRemoteServiceError(code, error.message, status, code === "idempotency_capacity",
-      typeof error.details?.currentRevision === "string" ? { currentRevision: error.details.currentRevision } : undefined);
+    const status =
+      code === "not_found"
+        ? 404
+        : code === "invalid_request"
+          ? 400
+          : code === "capability_denied"
+            ? 403
+            : code === "idempotency_capacity"
+              ? 429
+              : 409;
+    throw new AidenRemoteServiceError(
+      code,
+      error.message,
+      status,
+      code === "idempotency_capacity",
+      typeof error.details?.currentRevision === "string"
+        ? { currentRevision: error.details.currentRevision }
+        : undefined,
+    );
   }
 }
 
@@ -2381,9 +2819,7 @@ function advertisedServerCapabilities(
 ): AidenRemoteCapability[] {
   return [
     ...AIDEN_REMOTE_LEGACY_CAPABILITIES,
-    ...(device.acceptsBotCapabilities === true
-      ? AIDEN_REMOTE_BOT_CAPABILITIES
-      : []),
+    ...(device.acceptsBotCapabilities === true ? AIDEN_REMOTE_BOT_CAPABILITIES : []),
     // Revision 27: the card opt-in is offered wherever Bot sessions are served,
     // so a client can confirm its negotiated grant from `/server`.
     ...(device.acceptsBotCapabilities === true && dependencies.botSessions
@@ -2393,13 +2829,17 @@ function advertisedServerCapabilities(
       ? AIDEN_REMOTE_BOT_ACTIVITY_CAPABILITIES
       : []),
     ...(device.acceptsBotCapabilities === true && botMessagingWired(dependencies)
-      ? AIDEN_REMOTE_BOT_MESSAGING_CAPABILITIES : []),
+      ? AIDEN_REMOTE_BOT_MESSAGING_CAPABILITIES
+      : []),
     ...(device.acceptsBotCapabilities === true && botAllowedWired(dependencies)
-      ? AIDEN_REMOTE_BOT_ALLOWED_CAPABILITIES : []),
+      ? AIDEN_REMOTE_BOT_ALLOWED_CAPABILITIES
+      : []),
     ...(device.acceptsBotCapabilities === true && botPlansWired(dependencies)
-      ? AIDEN_REMOTE_BOT_PLAN_CAPABILITIES : []),
+      ? AIDEN_REMOTE_BOT_PLAN_CAPABILITIES
+      : []),
     ...(device.acceptsBotCapabilities === true && botAccessRequestsWired(dependencies)
-      ? AIDEN_REMOTE_BOT_ACCESS_REQUEST_CAPABILITIES : []),
+      ? AIDEN_REMOTE_BOT_ACCESS_REQUEST_CAPABILITIES
+      : []),
     // Revision 37: offered only while the hand-off and pause routes are wired.
     ...(device.acceptsBotCapabilities === true && botHandoffsWired(dependencies)
       ? AIDEN_REMOTE_BOT_HANDOFF_CAPABILITIES
@@ -2408,12 +2848,22 @@ function advertisedServerCapabilities(
     ...(device.acceptsBotCapabilities === true && botImagesWired(dependencies)
       ? AIDEN_REMOTE_BOT_IMAGE_CAPABILITIES
       : []),
-    ...(device.acceptsBotCapabilities === true && botRoutineModelsWired(dependencies) ? AIDEN_REMOTE_BOT_ROUTINE_MODEL_CAPABILITIES : []),
-    ...(device.acceptsBotCapabilities === true && botPeersWired(dependencies) ? AIDEN_REMOTE_BOT_PEER_CAPABILITIES : []),
+    ...(device.acceptsBotCapabilities === true && botRoutineModelsWired(dependencies)
+      ? AIDEN_REMOTE_BOT_ROUTINE_MODEL_CAPABILITIES
+      : []),
+    ...(device.acceptsBotCapabilities === true && botPeersWired(dependencies)
+      ? AIDEN_REMOTE_BOT_PEER_CAPABILITIES
+      : []),
     // Revision 68: offered only while the host can say which Bots wait on the person.
-    ...(device.acceptsBotCapabilities === true && botNeedsYouWired(dependencies) ? AIDEN_REMOTE_BOT_NEEDS_YOU_CAPABILITIES : []),
-    ...(device.acceptsBotCapabilities === true && botOpenWorkWired(dependencies) ? AIDEN_REMOTE_BOT_OPEN_WORK_CAPABILITIES : []),
-    ...(device.acceptsBotCapabilities === true && botWatchesWired(dependencies) ? AIDEN_REMOTE_BOT_WATCH_CAPABILITIES : []),
+    ...(device.acceptsBotCapabilities === true && botNeedsYouWired(dependencies)
+      ? AIDEN_REMOTE_BOT_NEEDS_YOU_CAPABILITIES
+      : []),
+    ...(device.acceptsBotCapabilities === true && botOpenWorkWired(dependencies)
+      ? AIDEN_REMOTE_BOT_OPEN_WORK_CAPABILITIES
+      : []),
+    ...(device.acceptsBotCapabilities === true && botWatchesWired(dependencies)
+      ? AIDEN_REMOTE_BOT_WATCH_CAPABILITIES
+      : []),
     // Revision 42: offered only while the issue act route is wired.
     ...(device.acceptsBotCapabilities === true && botIssuesWired(dependencies)
       ? AIDEN_REMOTE_BOT_ISSUE_CAPABILITIES
@@ -2425,9 +2875,15 @@ function advertisedServerCapabilities(
     // Revision 69: plain words on shell cards, beside the typed cards.
     ...(approvalCardsWired(dependencies) ? AIDEN_REMOTE_APPROVAL_PLAIN_WORDS_CAPABILITIES : []),
     ...(approvalSettingsWired(dependencies) ? AIDEN_REMOTE_APPROVAL_SETTINGS_CAPABILITIES : []),
-    ...(device.acceptsBotCapabilities === true && botSettingsChangesWired(dependencies) ? AIDEN_REMOTE_BOT_SETTINGS_CHANGE_CAPABILITIES : []),
-    ...(device.acceptsBotCapabilities === true && botSuggestionsWired(dependencies) ? AIDEN_REMOTE_BOT_SUGGESTION_CAPABILITIES : []),
-    ...(device.acceptsBotCapabilities === true && botTemplatesWired(dependencies) ? AIDEN_REMOTE_BOT_TEMPLATE_CAPABILITIES : []),
+    ...(device.acceptsBotCapabilities === true && botSettingsChangesWired(dependencies)
+      ? AIDEN_REMOTE_BOT_SETTINGS_CHANGE_CAPABILITIES
+      : []),
+    ...(device.acceptsBotCapabilities === true && botSuggestionsWired(dependencies)
+      ? AIDEN_REMOTE_BOT_SUGGESTION_CAPABILITIES
+      : []),
+    ...(device.acceptsBotCapabilities === true && botTemplatesWired(dependencies)
+      ? AIDEN_REMOTE_BOT_TEMPLATE_CAPABILITIES
+      : []),
     // Revision 49: offered only while the host runs background jobs.
     ...(dependencies.backgroundJobs ? AIDEN_REMOTE_CHAT_JOB_CAPABILITIES : []),
     // Revision 50: offered while chat or Bot uploads are served.
@@ -2437,7 +2893,9 @@ function advertisedServerCapabilities(
     // Revision 64: offered only while the host can continue a chat elsewhere.
     ...(continueInNewChatWired(dependencies) ? AIDEN_REMOTE_CHAT_CONTINUE_CAPABILITIES : []),
     // Revision 65: offered while stream event replay is served.
-    ...(streamSnapshotReasonsWired(dependencies) ? AIDEN_REMOTE_STREAM_SNAPSHOT_REASON_CAPABILITIES : []),
+    ...(streamSnapshotReasonsWired(dependencies)
+      ? AIDEN_REMOTE_STREAM_SNAPSHOT_REASON_CAPABILITIES
+      : []),
     // Revision 70: offered while turns can save the chat's own model selection.
     ...(agentSliderWired(dependencies) ? AIDEN_REMOTE_AGENT_SLIDER_CAPABILITIES : []),
     ...(device.acceptsProgressCapabilities === true
@@ -2446,8 +2904,7 @@ function advertisedServerCapabilities(
         )
       : []),
     // Desktop-only: phones and tablets are never told this vocabulary exists.
-    ...((device.type === "mac" || device.type === "linux") &&
-    dependencies.simulators?.host()
+    ...((device.type === "mac" || device.type === "linux") && dependencies.simulators?.host()
       ? AIDEN_REMOTE_SIMULATOR_CAPABILITIES
       : []),
     ...(isDesktopDevice(device) && device.acceptsProgressCapabilities === true
@@ -2501,11 +2958,7 @@ function botConversationsQuery(query: string): AidenRemoteBotConversationQuery {
   const allowed = new Set(["cursor", "query", "botId", "limit"]);
   for (const key of params.keys()) {
     if (!allowed.has(key) || params.getAll(key).length !== 1) {
-      throw new AidenRemoteServiceError(
-        "invalid_request",
-        "The Bot inbox query is invalid.",
-        400,
-      );
+      throw new AidenRemoteServiceError("invalid_request", "The Bot inbox query is invalid.", 400);
     }
   }
   const value: Record<string, unknown> = {};
@@ -2518,22 +2971,14 @@ function botConversationsQuery(query: string): AidenRemoteBotConversationQuery {
   if (botId !== null) value.botId = botId;
   if (limit !== null) {
     if (!/^(?:[1-9]|[1-4][0-9]|50)$/u.test(limit)) {
-      throw new AidenRemoteServiceError(
-        "invalid_request",
-        "The Bot inbox query is invalid.",
-        400,
-      );
+      throw new AidenRemoteServiceError("invalid_request", "The Bot inbox query is invalid.", 400);
     }
     value.limit = Number(limit);
   }
   try {
     return parseAidenRemoteBotConversationQuery(value);
   } catch {
-    throw new AidenRemoteServiceError(
-      "invalid_request",
-      "The Bot inbox query is invalid.",
-      400,
-    );
+    throw new AidenRemoteServiceError("invalid_request", "The Bot inbox query is invalid.", 400);
   }
 }
 
@@ -2557,13 +3002,9 @@ export function createAidenRemoteRequestHandler(
     let deviceIdSuffix: string | undefined;
     let releaseDeviceAuthorization: (() => void) | undefined;
     let requestPath: string | undefined;
-    const logRequest = (
-      status: number,
-      options: { errorCode?: string } = {},
-    ) => {
-      const routePath = requestPath === undefined
-        ? undefined
-        : remoteRouteTemplate(route, requestPath);
+    const logRequest = (status: number, options: { errorCode?: string } = {}) => {
+      const routePath =
+        requestPath === undefined ? undefined : remoteRouteTemplate(route, requestPath);
       dependencies.log({
         requestId: id,
         route,
@@ -2583,10 +3024,7 @@ export function createAidenRemoteRequestHandler(
           403,
         );
       }
-      const target = requestTarget(
-        request,
-        dependencies.acceptStrippedBasePath === true,
-      );
+      const target = requestTarget(request, dependencies.acceptStrippedBasePath === true);
       const { path, query } = target;
       requestPath = path;
       const authenticate = async (
@@ -2601,7 +3039,10 @@ export function createAidenRemoteRequestHandler(
         // can wait minutes on a boot and are closed by `revokeDevice` instead.
         releaseDeviceAuthorization = dependencies.devices.acquireDeviceAuthorization(
           device.id,
-          request.method !== "GET" && path !== "/simulators" && !path.startsWith("/simulators/") && !/^\/bots\/[^/]+\/watches\/sources$/u.test(path),
+          request.method !== "GET" &&
+            path !== "/simulators" &&
+            !path.startsWith("/simulators/") &&
+            !/^\/bots\/[^/]+\/watches\/sources$/u.test(path),
         );
         return device;
       };
@@ -2619,13 +3060,16 @@ export function createAidenRemoteRequestHandler(
         }
         requireNoQuery(query);
         const body = await readRawBody(request, BOT_ROUTINE_WEBHOOK_MAX_BYTES);
-        const answer = body === undefined
-          ? { status: 413 }
-          : await dependencies.botRoutineWebhook({
-            token: webhookMatch[1]!,
-            ...(typeof request.headers["content-type"] === "string" ? { contentType: request.headers["content-type"] } : {}),
-            body,
-          });
+        const answer =
+          body === undefined
+            ? { status: 413 }
+            : await dependencies.botRoutineWebhook({
+                token: webhookMatch[1]!,
+                ...(typeof request.headers["content-type"] === "string"
+                  ? { contentType: request.headers["content-type"] }
+                  : {}),
+                body,
+              });
         response.writeHead(answer.status, { "cache-control": "no-store" }).end();
         return;
       }
@@ -2642,24 +3086,36 @@ export function createAidenRemoteRequestHandler(
         }
         requireNoQuery(query);
         const token = taskHookMatch[1]!;
-        const contentType = typeof request.headers["content-type"] === "string" ? request.headers["content-type"] : undefined;
+        const contentType =
+          typeof request.headers["content-type"] === "string"
+            ? request.headers["content-type"]
+            : undefined;
         // An unknown link, too many calls or the wrong type is answered before any body is read.
-        const admitted = await dependencies.taskTriggerWebhook.admit({ token, ...(contentType ? { contentType } : {}) });
+        const admitted = await dependencies.taskTriggerWebhook.admit({
+          token,
+          ...(contentType ? { contentType } : {}),
+        });
         if ("status" in admitted) {
           response.writeHead(admitted.status, { "cache-control": "no-store" }).end();
           return;
         }
         const body = await readRawBody(request, TASK_TRIGGER_WEBHOOK_MAX_BYTES);
-        const signatureValue = admitted.signatureHeader ? request.headers[admitted.signatureHeader] : undefined;
-        const answer = body === undefined
-          ? await dependencies.taskTriggerWebhook.tooLarge({ token, ...(admitted.admission ? { admission: admitted.admission } : {}) })
-          : await dependencies.taskTriggerWebhook.deliver({
-            token,
-            ...(admitted.admission ? { admission: admitted.admission } : {}),
-            ...(contentType ? { contentType } : {}),
-            ...(typeof signatureValue === "string" ? { signature: signatureValue } : {}),
-            body,
-          });
+        const signatureValue = admitted.signatureHeader
+          ? request.headers[admitted.signatureHeader]
+          : undefined;
+        const answer =
+          body === undefined
+            ? await dependencies.taskTriggerWebhook.tooLarge({
+                token,
+                ...(admitted.admission ? { admission: admitted.admission } : {}),
+              })
+            : await dependencies.taskTriggerWebhook.deliver({
+                token,
+                ...(admitted.admission ? { admission: admitted.admission } : {}),
+                ...(contentType ? { contentType } : {}),
+                ...(typeof signatureValue === "string" ? { signature: signatureValue } : {}),
+                body,
+              });
         response.writeHead(answer.status, { "cache-control": "no-store" }).end();
         return;
       }
@@ -2694,7 +3150,8 @@ export function createAidenRemoteRequestHandler(
         return;
       }
       const pairingRequestMatch = /^\/pairing\/requests\/([A-Za-z0-9_-]{1,64})$/u.exec(path);
-      const pairingRequestRevealMatch = /^\/pairing\/requests\/([A-Za-z0-9_-]{1,64})\/reveal$/u.exec(path);
+      const pairingRequestRevealMatch =
+        /^\/pairing\/requests\/([A-Za-z0-9_-]{1,64})\/reveal$/u.exec(path);
       if (path === "/pairing/requests" || pairingRequestMatch || pairingRequestRevealMatch) {
         const requestIdSegment = pairingRequestMatch?.[1] ?? pairingRequestRevealMatch?.[1];
         route = pairingRequestMatch
@@ -2705,7 +3162,8 @@ export function createAidenRemoteRequestHandler(
         const service = dependencies.pairingRequests;
         if (
           !service ||
-          (requestIdSegment !== undefined && !AIDEN_PAIRING_REQUEST_ID_PATTERN.test(requestIdSegment))
+          (requestIdSegment !== undefined &&
+            !AIDEN_PAIRING_REQUEST_ID_PATTERN.test(requestIdSegment))
         ) {
           throw new AidenRemoteServiceError("not_found", "This endpoint is unavailable.", 404);
         }
@@ -2721,7 +3179,11 @@ export function createAidenRemoteRequestHandler(
           return;
         }
         if (route === "pairingRequestReveal" && request.method === "POST") {
-          writeJson(response, 200, service.reveal(requestIdSegment!, secret, await readJsonBody(request, 256)));
+          writeJson(
+            response,
+            200,
+            service.reveal(requestIdSegment!, secret, await readJsonBody(request, 256)),
+          );
           return;
         }
         if (route === "pairingRequest" && request.method === "GET") {
@@ -2748,11 +3210,7 @@ export function createAidenRemoteRequestHandler(
         route = "pairingManualBootstrap";
         requireEmptyObject(await readJsonBody(request, 64));
         if (!dependencies.pairing.manualBootstrap) {
-          throw new AidenRemoteServiceError(
-            "not_found",
-            "This endpoint is unavailable.",
-            404,
-          );
+          throw new AidenRemoteServiceError("not_found", "This endpoint is unavailable.", 404);
         }
         writeJson(response, 200, dependencies.pairing.manualBootstrap());
         return;
@@ -2762,8 +3220,10 @@ export function createAidenRemoteRequestHandler(
         route = "server";
         const device = await authenticate(request, dependencies.devices, "server:read");
         deviceIdSuffix = device.id.slice(-8);
-        const peerRoutes = (device.type === "mac" || device.type === "linux") && dependencies.peerRoutes
-          ? await dependencies.peerRoutes() : undefined;
+        const peerRoutes =
+          (device.type === "mac" || device.type === "linux") && dependencies.peerRoutes
+            ? await dependencies.peerRoutes()
+            : undefined;
         const projection: AidenRemoteServerProjection = {
           protocolVersion: AIDEN_REMOTE_PROTOCOL_VERSION,
           instanceId: dependencies.instanceId,
@@ -2772,13 +3232,9 @@ export function createAidenRemoteRequestHandler(
           ...(peerRoutes === undefined ? {} : { peerRoutes }),
           capabilities: [...device.capabilities],
           ...(device.name ? { deviceName: device.name } : {}),
-          ...(device.acceptsBotCapabilities === true ||
-            device.acceptsProgressCapabilities === true
+          ...(device.acceptsBotCapabilities === true || device.acceptsProgressCapabilities === true
             ? {
-                serverCapabilities: advertisedServerCapabilities(
-                  device,
-                  dependencies,
-                ),
+                serverCapabilities: advertisedServerCapabilities(device, dependencies),
               }
             : {}),
           connectionMode: dependencies.connectionMode(),
@@ -2790,8 +3246,11 @@ export function createAidenRemoteRequestHandler(
             readAloud: Boolean(dependencies.readAloud),
             speech: Boolean(dependencies.speech),
             chatSummaries: Boolean(dependencies.chats?.listSummaries),
-            readState: Boolean(dependencies.chats?.markRead) && dependencies.chats?.supportsReadMarkers === true,
-            triage: Boolean(dependencies.chats?.setTriage) && dependencies.chats?.supportsTriage === true,
+            readState:
+              Boolean(dependencies.chats?.markRead) &&
+              dependencies.chats?.supportsReadMarkers === true,
+            triage:
+              Boolean(dependencies.chats?.setTriage) && dependencies.chats?.supportsTriage === true,
             inboxSignals: Boolean(dependencies.chats?.listSummaries),
             tasks: progressCapabilitySupported(dependencies, "tasks:read"),
             agents: progressCapabilitySupported(dependencies, "agents:read"),
@@ -2801,12 +3260,19 @@ export function createAidenRemoteRequestHandler(
             skills: progressCapabilitySupported(dependencies, "skills:invoke"),
             messagesWindow: Boolean(dependencies.chats?.messagesWindow),
             visuals: Boolean(dependencies.chats),
-            visualViewer: Boolean(dependencies.chats?.visualDocument) && dependencies.chats?.supportsVisualViewer === true,
+            visualViewer:
+              Boolean(dependencies.chats?.visualDocument) &&
+              dependencies.chats?.supportsVisualViewer === true,
             browserRecordings:
-              Boolean(dependencies.chats?.browserRecording) && dependencies.chats?.supportsBrowserRecordings === true,
+              Boolean(dependencies.chats?.browserRecording) &&
+              dependencies.chats?.supportsBrowserRecordings === true,
             fork: Boolean(dependencies.chats?.fork) && dependencies.chats?.supportsForks === true,
-            forkSummary: Boolean(dependencies.chats?.fork) && dependencies.chats?.supportsForkSummaries === true,
-            contextPressure: Boolean(dependencies.chats?.contextPressure) && dependencies.chats?.supportsContextPressure === true,
+            forkSummary:
+              Boolean(dependencies.chats?.fork) &&
+              dependencies.chats?.supportsForkSummaries === true,
+            contextPressure:
+              Boolean(dependencies.chats?.contextPressure) &&
+              dependencies.chats?.supportsContextPressure === true,
             hostEvents: hostCapabilitySupported(dependencies, "host:events"),
             runs: hostCapabilitySupported(dependencies, "runs:observe"),
             pairingRequests: Boolean(dependencies.pairingRequests),
@@ -2833,11 +3299,7 @@ export function createAidenRemoteRequestHandler(
         const device = await authenticate(request, dependencies.devices, "server:read");
         deviceIdSuffix = device.id.slice(-8);
         if (!dependencies.devices.updateDeviceName) {
-          throw new AidenRemoteServiceError(
-            "not_found",
-            "This endpoint is unavailable.",
-            404,
-          );
+          throw new AidenRemoteServiceError("not_found", "This endpoint is unavailable.", 404);
         }
         const input = parseDeviceIdentityRequest(await readJsonBody(request, 1_024));
         const updated = await dependencies.devices.updateDeviceName(device.id, input.name);
@@ -2857,11 +3319,7 @@ export function createAidenRemoteRequestHandler(
         const device = await authenticate(request, dependencies.devices, "server:read");
         deviceIdSuffix = device.id.slice(-8);
         if (!dependencies.devices.upgradeDeviceCapabilities) {
-          throw new AidenRemoteServiceError(
-            "not_found",
-            "This endpoint is unavailable.",
-            404,
-          );
+          throw new AidenRemoteServiceError("not_found", "This endpoint is unavailable.", 404);
         }
         const body = await readJsonBody(request, 1_024);
         let input;
@@ -2875,92 +3333,253 @@ export function createAidenRemoteRequestHandler(
           );
         }
         for (const capability of input.accepts) {
-          if (capability.startsWith("app-controls:") && !await dependencies.appControls?.enabled()) throw new AidenRemoteServiceError("capability_denied", "Allow paired-device chat controls in Aiden Agent on your computer first.", 403);
+          if (
+            capability.startsWith("app-controls:") &&
+            !(await dependencies.appControls?.enabled())
+          )
+            throw new AidenRemoteServiceError(
+              "capability_denied",
+              "Allow paired-device chat controls in Aiden Agent on your computer first.",
+              403,
+            );
           if ((AIDEN_REMOTE_BOT_CARD_CAPABILITIES as readonly string[]).includes(capability)) {
             // An opt-in to two session entry types, not an authority: any
             // device may hold it while the host serves Bot sessions.
             if (!dependencies.botSessions) {
-              throw new AidenRemoteServiceError("not_found", "Bot sessions are unavailable on this Aiden installation.", 404);
+              throw new AidenRemoteServiceError(
+                "not_found",
+                "Bot sessions are unavailable on this Aiden installation.",
+                404,
+              );
             }
-          } else if ((AIDEN_REMOTE_BOT_ACTIVITY_CAPABILITIES as readonly string[]).includes(capability)) {
+          } else if (
+            (AIDEN_REMOTE_BOT_ACTIVITY_CAPABILITIES as readonly string[]).includes(capability)
+          ) {
             // Revision 30: an opt-in to the activity frames and the detail field, offered only while they are wired.
             if (!botActivityWired(dependencies)) {
-              throw new AidenRemoteServiceError("not_found", "Bot chat activity is unavailable on this Aiden installation.", 404);
+              throw new AidenRemoteServiceError(
+                "not_found",
+                "Bot chat activity is unavailable on this Aiden installation.",
+                404,
+              );
             }
-          } else if ((AIDEN_REMOTE_BOT_ALLOWED_CAPABILITIES as readonly string[]).includes(capability)) {
-            if (!botAllowedWired(dependencies)) throw new AidenRemoteServiceError("not_found", "Bot allow lists are unavailable on this Aiden installation.", 404);
-          } else if ((AIDEN_REMOTE_BOT_PLAN_CAPABILITIES as readonly string[]).includes(capability)) {
-            if (!botPlansWired(dependencies)) throw new AidenRemoteServiceError("not_found", "Bot plans are unavailable on this Aiden installation.", 404);
-          } else if ((AIDEN_REMOTE_BOT_ACCESS_REQUEST_CAPABILITIES as readonly string[]).includes(capability)) {
-            if (!botAccessRequestsWired(dependencies)) throw new AidenRemoteServiceError("not_found", "Bot access requests are unavailable on this Aiden installation.", 404);
-          } else if ((AIDEN_REMOTE_BOT_HANDOFF_CAPABILITIES as readonly string[]).includes(capability)) {
+          } else if (
+            (AIDEN_REMOTE_BOT_ALLOWED_CAPABILITIES as readonly string[]).includes(capability)
+          ) {
+            if (!botAllowedWired(dependencies))
+              throw new AidenRemoteServiceError(
+                "not_found",
+                "Bot allow lists are unavailable on this Aiden installation.",
+                404,
+              );
+          } else if (
+            (AIDEN_REMOTE_BOT_PLAN_CAPABILITIES as readonly string[]).includes(capability)
+          ) {
+            if (!botPlansWired(dependencies))
+              throw new AidenRemoteServiceError(
+                "not_found",
+                "Bot plans are unavailable on this Aiden installation.",
+                404,
+              );
+          } else if (
+            (AIDEN_REMOTE_BOT_ACCESS_REQUEST_CAPABILITIES as readonly string[]).includes(capability)
+          ) {
+            if (!botAccessRequestsWired(dependencies))
+              throw new AidenRemoteServiceError(
+                "not_found",
+                "Bot access requests are unavailable on this Aiden installation.",
+                404,
+              );
+          } else if (
+            (AIDEN_REMOTE_BOT_HANDOFF_CAPABILITIES as readonly string[]).includes(capability)
+          ) {
             // Revision 37: an opt-in to hand-off and pause shapes, offered only while their routes are wired.
             if (!botHandoffsWired(dependencies)) {
-              throw new AidenRemoteServiceError("not_found", "Bot hand-offs are unavailable on this Aiden installation.", 404);
+              throw new AidenRemoteServiceError(
+                "not_found",
+                "Bot hand-offs are unavailable on this Aiden installation.",
+                404,
+              );
             }
-          } else if ((AIDEN_REMOTE_BOT_IMAGE_CAPABILITIES as readonly string[]).includes(capability)) {
+          } else if (
+            (AIDEN_REMOTE_BOT_IMAGE_CAPABILITIES as readonly string[]).includes(capability)
+          ) {
             // Revision 45: an opt-in to shared-image entries, offered only while their route is wired.
             if (!botImagesWired(dependencies)) {
-              throw new AidenRemoteServiceError("not_found", "Bot images are unavailable on this Aiden installation.", 404);
+              throw new AidenRemoteServiceError(
+                "not_found",
+                "Bot images are unavailable on this Aiden installation.",
+                404,
+              );
             }
-          } else if ((AIDEN_REMOTE_BOT_ISSUE_CAPABILITIES as readonly string[]).includes(capability)) {
+          } else if (
+            (AIDEN_REMOTE_BOT_ISSUE_CAPABILITIES as readonly string[]).includes(capability)
+          ) {
             // Revision 42: an opt-in to issue cards, offered only while their route is wired.
             if (!botIssuesWired(dependencies)) {
-              throw new AidenRemoteServiceError("not_found", "Bot issues are unavailable on this Aiden installation.", 404);
+              throw new AidenRemoteServiceError(
+                "not_found",
+                "Bot issues are unavailable on this Aiden installation.",
+                404,
+              );
             }
-          } else if ((AIDEN_REMOTE_BOT_NEEDS_YOU_CAPABILITIES as readonly string[]).includes(capability)) {
+          } else if (
+            (AIDEN_REMOTE_BOT_NEEDS_YOU_CAPABILITIES as readonly string[]).includes(capability)
+          ) {
             // Revision 68: a display opt-in, offered only while the signal is wired.
-            if (!botNeedsYouWired(dependencies)) throw new AidenRemoteServiceError("not_found", "Bot attention is unavailable on this Aiden installation.", 404);
-          } else if ((AIDEN_REMOTE_BOT_MESSAGING_CAPABILITIES as readonly string[]).includes(capability)) {
-            if (!botMessagingWired(dependencies)) throw new AidenRemoteServiceError("not_found", "Bot messaging is unavailable on this Aiden installation.", 404);
-          } else if ((AIDEN_REMOTE_APPROVAL_CARD_CAPABILITIES as readonly string[]).includes(capability)) {
+            if (!botNeedsYouWired(dependencies))
+              throw new AidenRemoteServiceError(
+                "not_found",
+                "Bot attention is unavailable on this Aiden installation.",
+                404,
+              );
+          } else if (
+            (AIDEN_REMOTE_BOT_MESSAGING_CAPABILITIES as readonly string[]).includes(capability)
+          ) {
+            if (!botMessagingWired(dependencies))
+              throw new AidenRemoteServiceError(
+                "not_found",
+                "Bot messaging is unavailable on this Aiden installation.",
+                404,
+              );
+          } else if (
+            (AIDEN_REMOTE_APPROVAL_CARD_CAPABILITIES as readonly string[]).includes(capability)
+          ) {
             // Revision 61: typed approval cards; answers still need approval:respond.
-            if (!approvalCardsWired(dependencies)) throw new AidenRemoteServiceError("not_found", "Approval cards are unavailable on this Aiden installation.", 404);
-          } else if ((AIDEN_REMOTE_APPROVAL_PLAIN_WORDS_CAPABILITIES as readonly string[]).includes(capability)) {
+            if (!approvalCardsWired(dependencies))
+              throw new AidenRemoteServiceError(
+                "not_found",
+                "Approval cards are unavailable on this Aiden installation.",
+                404,
+              );
+          } else if (
+            (AIDEN_REMOTE_APPROVAL_PLAIN_WORDS_CAPABILITIES as readonly string[]).includes(
+              capability,
+            )
+          ) {
             // Revision 69: display-only plain words on shell cards; read only with approval:cards.
-            if (!approvalCardsWired(dependencies)) throw new AidenRemoteServiceError("not_found", "Approval cards are unavailable on this Aiden installation.", 404);
-          } else if ((AIDEN_REMOTE_APPROVAL_SETTINGS_CAPABILITIES as readonly string[]).includes(capability)) {
-            if (!approvalSettingsWired(dependencies)) throw new AidenRemoteServiceError("not_found", "Approval settings are unavailable on this Aiden installation.", 404);
-          } else if ((AIDEN_REMOTE_BOT_SETTINGS_CHANGE_CAPABILITIES as readonly string[]).includes(capability)) {
-            if (!botSettingsChangesWired(dependencies)) throw new AidenRemoteServiceError("not_found", "Bot settings changes are unavailable on this Aiden installation.", 404);
-          } else if ((AIDEN_REMOTE_BOT_SUGGESTION_CAPABILITIES as readonly string[]).includes(capability)) {
-            if (!botSuggestionsWired(dependencies)) throw new AidenRemoteServiceError("not_found", "Bot suggestions are unavailable on this Aiden installation.", 404);
-          } else if ((AIDEN_REMOTE_BOT_TEMPLATE_CAPABILITIES as readonly string[]).includes(capability)) {
-            if (!botTemplatesWired(dependencies)) throw new AidenRemoteServiceError("not_found", "Bot templates are unavailable on this Aiden installation.", 404);
-          } else if ((AIDEN_REMOTE_SCHEDULE_CARD_CAPABILITIES as readonly string[]).includes(capability)) {
+            if (!approvalCardsWired(dependencies))
+              throw new AidenRemoteServiceError(
+                "not_found",
+                "Approval cards are unavailable on this Aiden installation.",
+                404,
+              );
+          } else if (
+            (AIDEN_REMOTE_APPROVAL_SETTINGS_CAPABILITIES as readonly string[]).includes(capability)
+          ) {
+            if (!approvalSettingsWired(dependencies))
+              throw new AidenRemoteServiceError(
+                "not_found",
+                "Approval settings are unavailable on this Aiden installation.",
+                404,
+              );
+          } else if (
+            (AIDEN_REMOTE_BOT_SETTINGS_CHANGE_CAPABILITIES as readonly string[]).includes(
+              capability,
+            )
+          ) {
+            if (!botSettingsChangesWired(dependencies))
+              throw new AidenRemoteServiceError(
+                "not_found",
+                "Bot settings changes are unavailable on this Aiden installation.",
+                404,
+              );
+          } else if (
+            (AIDEN_REMOTE_BOT_SUGGESTION_CAPABILITIES as readonly string[]).includes(capability)
+          ) {
+            if (!botSuggestionsWired(dependencies))
+              throw new AidenRemoteServiceError(
+                "not_found",
+                "Bot suggestions are unavailable on this Aiden installation.",
+                404,
+              );
+          } else if (
+            (AIDEN_REMOTE_BOT_TEMPLATE_CAPABILITIES as readonly string[]).includes(capability)
+          ) {
+            if (!botTemplatesWired(dependencies))
+              throw new AidenRemoteServiceError(
+                "not_found",
+                "Bot templates are unavailable on this Aiden installation.",
+                404,
+              );
+          } else if (
+            (AIDEN_REMOTE_SCHEDULE_CARD_CAPABILITIES as readonly string[]).includes(capability)
+          ) {
             // Revision 39: a display opt-in for scheduled-task approvals; it never changes canAllow.
             if (!scheduleCardsWired(dependencies)) {
-              throw new AidenRemoteServiceError("not_found", "Schedule cards are unavailable on this Aiden installation.", 404);
+              throw new AidenRemoteServiceError(
+                "not_found",
+                "Schedule cards are unavailable on this Aiden installation.",
+                404,
+              );
             }
-          } else if ((AIDEN_REMOTE_RAW_UPLOAD_CAPABILITIES as readonly string[]).includes(capability)) {
+          } else if (
+            (AIDEN_REMOTE_RAW_UPLOAD_CAPABILITIES as readonly string[]).includes(capability)
+          ) {
             // Revision 50: raw picture uploads, offered while chat or Bot uploads are served.
             if (!rawUploadsWired(dependencies)) {
-              throw new AidenRemoteServiceError("not_found", "Picture uploads are unavailable on this Aiden installation.", 404);
+              throw new AidenRemoteServiceError(
+                "not_found",
+                "Picture uploads are unavailable on this Aiden installation.",
+                404,
+              );
             }
-          } else if ((AIDEN_REMOTE_CHAT_JOB_CAPABILITIES as readonly string[]).includes(capability)) {
+          } else if (
+            (AIDEN_REMOTE_CHAT_JOB_CAPABILITIES as readonly string[]).includes(capability)
+          ) {
             // Revision 49: offered only while the host runs background jobs.
             if (!dependencies.backgroundJobs) {
-              throw new AidenRemoteServiceError("not_found", "Background jobs are unavailable on this Aiden installation.", 404);
+              throw new AidenRemoteServiceError(
+                "not_found",
+                "Background jobs are unavailable on this Aiden installation.",
+                404,
+              );
             }
-          } else if ((AIDEN_REMOTE_CHAT_NEW_WORKTREE_CAPABILITIES as readonly string[]).includes(capability)) {
+          } else if (
+            (AIDEN_REMOTE_CHAT_NEW_WORKTREE_CAPABILITIES as readonly string[]).includes(capability)
+          ) {
             // Revision 53: offered only while the host makes worktrees for phones.
             if (!newWorktreesWired(dependencies)) {
-              throw new AidenRemoteServiceError("not_found", "New worktrees are unavailable on this Aiden installation.", 404);
+              throw new AidenRemoteServiceError(
+                "not_found",
+                "New worktrees are unavailable on this Aiden installation.",
+                404,
+              );
             }
-          } else if ((AIDEN_REMOTE_CHAT_CONTINUE_CAPABILITIES as readonly string[]).includes(capability)) {
+          } else if (
+            (AIDEN_REMOTE_CHAT_CONTINUE_CAPABILITIES as readonly string[]).includes(capability)
+          ) {
             // Revision 64: offered only while the host can continue a chat elsewhere.
             if (!continueInNewChatWired(dependencies)) {
-              throw new AidenRemoteServiceError("not_found", "Continuing in a new chat is unavailable on this Aiden installation.", 404);
+              throw new AidenRemoteServiceError(
+                "not_found",
+                "Continuing in a new chat is unavailable on this Aiden installation.",
+                404,
+              );
             }
-          } else if ((AIDEN_REMOTE_STREAM_SNAPSHOT_REASON_CAPABILITIES as readonly string[]).includes(capability)) {
+          } else if (
+            (AIDEN_REMOTE_STREAM_SNAPSHOT_REASON_CAPABILITIES as readonly string[]).includes(
+              capability,
+            )
+          ) {
             // Revision 65: offered while stream event replay is served.
             if (!streamSnapshotReasonsWired(dependencies)) {
-              throw new AidenRemoteServiceError("not_found", "Stream snapshot reasons are unavailable on this Aiden installation.", 404);
+              throw new AidenRemoteServiceError(
+                "not_found",
+                "Stream snapshot reasons are unavailable on this Aiden installation.",
+                404,
+              );
             }
-          } else if ((AIDEN_REMOTE_AGENT_SLIDER_CAPABILITIES as readonly string[]).includes(capability)) {
+          } else if (
+            (AIDEN_REMOTE_AGENT_SLIDER_CAPABILITIES as readonly string[]).includes(capability)
+          ) {
             // Revision 70: offered while turns can save the chat's own model selection.
             if (!agentSliderWired(dependencies)) {
-              throw new AidenRemoteServiceError("not_found", "The Agent Slider is unavailable on this Aiden installation.", 404);
+              throw new AidenRemoteServiceError(
+                "not_found",
+                "The Agent Slider is unavailable on this Aiden installation.",
+                404,
+              );
             }
           } else if (capability === "simulators:control") {
             // Refuse non-desktops first so they never learn whether this Mac has simulators.
@@ -2972,7 +3591,9 @@ export function createAidenRemoteRequestHandler(
               );
             }
             if (!dependencies.simulators?.host()) throw simulatorsUnavailable();
-          } else if ((AIDEN_REMOTE_MOBILE_SIMULATOR_CAPABILITIES as readonly string[]).includes(capability)) {
+          } else if (
+            (AIDEN_REMOTE_MOBILE_SIMULATOR_CAPABILITIES as readonly string[]).includes(capability)
+          ) {
             // Desktops use simulators:control; refuse them before revealing the feature.
             if (isDesktopDevice(device)) {
               throw new AidenRemoteServiceError(
@@ -3002,7 +3623,9 @@ export function createAidenRemoteRequestHandler(
                 404,
               );
             }
-          } else if (!progressCapabilitySupported(dependencies, capability as AidenRemoteProgressCapability)) {
+          } else if (
+            !progressCapabilitySupported(dependencies, capability as AidenRemoteProgressCapability)
+          ) {
             throw new AidenRemoteServiceError(
               "not_found",
               "This progress capability is unavailable on this Aiden installation.",
@@ -3030,11 +3653,19 @@ export function createAidenRemoteRequestHandler(
         const device = await authenticate(request, dependencies.devices, "bot:write");
         deviceIdSuffix = device.id.slice(-8);
         requireDeviceCapabilities(device, ["bot:messaging"]);
-        if (!botMessagingWired(dependencies)) throw new AidenRemoteServiceError("not_found", "This endpoint is unavailable.", 404);
+        if (!botMessagingWired(dependencies))
+          throw new AidenRemoteServiceError("not_found", "This endpoint is unavailable.", 404);
         const body = await readJsonBody(request);
         let parsed;
-        try { parsed = parseAidenRemoteBotMessagingSettings(body); }
-        catch { throw new AidenRemoteServiceError("invalid_request", "The Bot messaging settings are invalid.", 400); }
+        try {
+          parsed = parseAidenRemoteBotMessagingSettings(body);
+        } catch {
+          throw new AidenRemoteServiceError(
+            "invalid_request",
+            "The Bot messaging settings are invalid.",
+            400,
+          );
+        }
         writeJson(response, 200, await dependencies.bots!.updateMessaging!(parsed));
         return;
       }
@@ -3046,12 +3677,14 @@ export function createAidenRemoteRequestHandler(
           throw new AidenRemoteServiceError("not_found", "This endpoint is unavailable.", 404);
         }
         requireNoQuery(query);
-        const {messaging, ...list} = await dependencies.bots.list();
+        const { messaging, ...list } = await dependencies.bots.list();
         writeJson(response, 200, {
           ...list,
-          ...(holdsBotMessaging(device, dependencies) && messaging ? {messaging} : {}),
+          ...(holdsBotMessaging(device, dependencies) && messaging ? { messaging } : {}),
           bots: await withBotNeedsYou(
-            await Promise.all(list.bots.map((summary) => botSummaryForAudience(summary, device, dependencies))),
+            await Promise.all(
+              list.bots.map((summary) => botSummaryForAudience(summary, device, dependencies)),
+            ),
             device,
             dependencies,
           ),
@@ -3074,12 +3707,21 @@ export function createAidenRemoteRequestHandler(
         // fills in an empty purpose and the starter text, and the new Bot then
         // introduces itself). Every other device keeps the earlier rule that
         // both are required.
-        const omitsLegacyField = isPlainRecord(body)
-          && (!Object.prototype.hasOwnProperty.call(body, "purpose") || !Object.prototype.hasOwnProperty.call(body, "instructions"));
+        const omitsLegacyField =
+          isPlainRecord(body) &&
+          (!Object.prototype.hasOwnProperty.call(body, "purpose") ||
+            !Object.prototype.hasOwnProperty.call(body, "instructions"));
         if (omitsLegacyField && !holdsBotTemplates(device, dependencies)) {
-          throw new AidenRemoteServiceError("invalid_request", "A Bot needs a purpose and instructions.", 400);
+          throw new AidenRemoteServiceError(
+            "invalid_request",
+            "A Bot needs a purpose and instructions.",
+            400,
+          );
         }
-        const oneField = omitsLegacyField && isPlainRecord(body) && !Object.prototype.hasOwnProperty.call(body, "instructions");
+        const oneField =
+          omitsLegacyField &&
+          isPlainRecord(body) &&
+          !Object.prototype.hasOwnProperty.call(body, "instructions");
         const created = await dependencies.bots.create(device.id, key, body);
         if (oneField) dependencies.botSessions!.introduceCreated!(created.id);
         await writeBotDetail(response, 201, created, device, dependencies);
@@ -3107,10 +3749,7 @@ export function createAidenRemoteRequestHandler(
         writeJson(
           response,
           200,
-          await dependencies.bots.listConversations(
-            device.id,
-            botConversationsQuery(query),
-          ),
+          await dependencies.bots.listConversations(device.id, botConversationsQuery(query)),
         );
         return;
       }
@@ -3133,7 +3772,9 @@ export function createAidenRemoteRequestHandler(
         return;
       }
       const botConversationFileMatch =
-        /^\/bot-conversations\/([A-Za-z0-9._:-]{1,128})\/files\/(file_[A-Za-z0-9_-]{43})$/u.exec(path);
+        /^\/bot-conversations\/([A-Za-z0-9._:-]{1,128})\/files\/(file_[A-Za-z0-9_-]{43})$/u.exec(
+          path,
+        );
       if (botConversationFileMatch && request.method === "GET") {
         requireNoQuery(query);
         route = "botFile";
@@ -3196,8 +3837,7 @@ export function createAidenRemoteRequestHandler(
         });
         return;
       }
-      const botAvatarMatch =
-        /^\/bots\/([A-Za-z0-9._:-]{1,160})\/avatar$/u.exec(path);
+      const botAvatarMatch = /^\/bots\/([A-Za-z0-9._:-]{1,160})\/avatar$/u.exec(path);
       if (botAvatarMatch && request.method === "PUT") {
         requireNoQuery(query);
         route = "botAvatar";
@@ -3240,68 +3880,123 @@ export function createAidenRemoteRequestHandler(
         return;
       }
       // Revision 61 (`bot:settings-changes`): Apply, Dismiss or Undo a settings change.
-      const botSettingsChangeMatch = /^\/bots\/([A-Za-z0-9._:-]{1,160})\/settings-changes\/([A-Za-z0-9._:-]{1,160})\/respond$/u.exec(path);
+      const botSettingsChangeMatch =
+        /^\/bots\/([A-Za-z0-9._:-]{1,160})\/settings-changes\/([A-Za-z0-9._:-]{1,160})\/respond$/u.exec(
+          path,
+        );
       if (botSettingsChangeMatch && request.method === "POST") {
-        route = "botSettingsChange"; requireNoQuery(query);
+        route = "botSettingsChange";
+        requireNoQuery(query);
         const device = await authenticate(request, dependencies.devices, "bot:write");
         deviceIdSuffix = device.id.slice(-8);
-        if (!botSettingsChangesWired(dependencies)) throw new AidenRemoteServiceError("not_found", "This endpoint is unavailable.", 404);
+        if (!botSettingsChangesWired(dependencies))
+          throw new AidenRemoteServiceError("not_found", "This endpoint is unavailable.", 404);
         requireDeviceCapabilities(device, ["bot:read", "bot:settings-changes"]);
         const body = await readJsonBody(request, 256);
-        writeJson(response, 200, await dependencies.botSessions!.respondSettingsChange!(botSettingsChangeMatch[1]!, botSettingsChangeMatch[2]!, body));
+        writeJson(
+          response,
+          200,
+          await dependencies.botSessions!.respondSettingsChange!(
+            botSettingsChangeMatch[1]!,
+            botSettingsChangeMatch[2]!,
+            body,
+          ),
+        );
         return;
       }
       // Revision 61 (`bot:suggestions`): skill and lesson cards, and Undo on learning receipts.
-      const botSkillProposalMatch = /^\/bots\/([A-Za-z0-9._:-]{1,160})\/skill-proposals\/([A-Za-z0-9._:-]{1,160})\/respond$/u.exec(path);
-      const botLessonRespondMatch = /^\/bots\/([A-Za-z0-9._:-]{1,160})\/lessons\/([A-Za-z0-9._:-]{1,160})\/respond$/u.exec(path);
-      const botLessonRemoveMatch = /^\/bots\/([A-Za-z0-9._:-]{1,160})\/lessons\/([A-Za-z0-9._:-]{1,160})\/remove$/u.exec(path);
-      const botLearningUndoMatch = /^\/bots\/([A-Za-z0-9._:-]{1,160})\/learning\/([A-Za-z0-9._:-]{1,160})\/undo$/u.exec(path);
-      const botSuggestion = botSkillProposalMatch ?? botLessonRespondMatch ?? botLessonRemoveMatch ?? botLearningUndoMatch;
+      const botSkillProposalMatch =
+        /^\/bots\/([A-Za-z0-9._:-]{1,160})\/skill-proposals\/([A-Za-z0-9._:-]{1,160})\/respond$/u.exec(
+          path,
+        );
+      const botLessonRespondMatch =
+        /^\/bots\/([A-Za-z0-9._:-]{1,160})\/lessons\/([A-Za-z0-9._:-]{1,160})\/respond$/u.exec(
+          path,
+        );
+      const botLessonRemoveMatch =
+        /^\/bots\/([A-Za-z0-9._:-]{1,160})\/lessons\/([A-Za-z0-9._:-]{1,160})\/remove$/u.exec(path);
+      const botLearningUndoMatch =
+        /^\/bots\/([A-Za-z0-9._:-]{1,160})\/learning\/([A-Za-z0-9._:-]{1,160})\/undo$/u.exec(path);
+      const botSuggestion =
+        botSkillProposalMatch ??
+        botLessonRespondMatch ??
+        botLessonRemoveMatch ??
+        botLearningUndoMatch;
       if (botSuggestion && request.method === "POST") {
-        route = "botSuggestion"; requireNoQuery(query);
+        route = "botSuggestion";
+        requireNoQuery(query);
         const device = await authenticate(request, dependencies.devices, "bot:write");
         deviceIdSuffix = device.id.slice(-8);
-        if (!botSuggestionsWired(dependencies)) throw new AidenRemoteServiceError("not_found", "This endpoint is unavailable.", 404);
+        if (!botSuggestionsWired(dependencies))
+          throw new AidenRemoteServiceError("not_found", "This endpoint is unavailable.", 404);
         requireDeviceCapabilities(device, ["bot:read", "bot:suggestions"]);
         const body = await readJsonBody(request, 256);
         const sessions = dependencies.botSessions!;
         const [botId, itemId] = [botSuggestion[1]!, botSuggestion[2]!];
-        writeJson(response, 200, botSkillProposalMatch
-          ? await sessions.respondSkillProposal!(botId, itemId, body)
-          : botLearningUndoMatch
-            ? await sessions.undoLearning!(botId, itemId, body)
-            : botLessonRemoveMatch
-              ? await sessions.removeLesson!(botId, itemId, body)
-              : await sessions.respondLesson!(botId, itemId, body));
+        writeJson(
+          response,
+          200,
+          botSkillProposalMatch
+            ? await sessions.respondSkillProposal!(botId, itemId, body)
+            : botLearningUndoMatch
+              ? await sessions.undoLearning!(botId, itemId, body)
+              : botLessonRemoveMatch
+                ? await sessions.removeLesson!(botId, itemId, body)
+                : await sessions.respondLesson!(botId, itemId, body),
+        );
         return;
       }
       // Revision 61 (`approvals:settings`): the Mac's approval mode and rules
       // page. Person-only and owner-only: a paired device answering approvals
       // (`approval:respond`) that opted in; nothing a Bot or agent can reach.
-      if (path === "/approvals/mode" || path === "/approvals/rules" || path === "/approvals/rules/picker" || path === "/approvals/rules/change" || path === "/approvals/rules/remove") {
-        const write = path === "/approvals/mode" ? request.method === "PUT" : path === "/approvals/rules" ? request.method === "POST" : path !== "/approvals/rules/picker";
-        const allowed = path === "/approvals/mode"
-          ? request.method === "GET" || request.method === "PUT"
-          : path === "/approvals/rules"
-            ? request.method === "GET" || request.method === "POST"
-            : path === "/approvals/rules/picker" ? request.method === "GET" : request.method === "POST";
+      if (
+        path === "/approvals/mode" ||
+        path === "/approvals/rules" ||
+        path === "/approvals/rules/picker" ||
+        path === "/approvals/rules/change" ||
+        path === "/approvals/rules/remove"
+      ) {
+        const write =
+          path === "/approvals/mode"
+            ? request.method === "PUT"
+            : path === "/approvals/rules"
+              ? request.method === "POST"
+              : path !== "/approvals/rules/picker";
+        const allowed =
+          path === "/approvals/mode"
+            ? request.method === "GET" || request.method === "PUT"
+            : path === "/approvals/rules"
+              ? request.method === "GET" || request.method === "POST"
+              : path === "/approvals/rules/picker"
+                ? request.method === "GET"
+                : request.method === "POST";
         if (allowed) {
-          route = "approvalSettings"; requireNoQuery(query);
+          route = "approvalSettings";
+          requireNoQuery(query);
           const body = write ? await readJsonBody(request, 8_192) : undefined;
           const device = await authenticate(request, dependencies.devices, "approval:respond");
           deviceIdSuffix = device.id.slice(-8);
           const settings = dependencies.approvalSettings;
-          if (!settings) throw new AidenRemoteServiceError("not_found", "This endpoint is unavailable.", 404);
+          if (!settings)
+            throw new AidenRemoteServiceError("not_found", "This endpoint is unavailable.", 404);
           requireDeviceCapabilities(device, ["approvals:settings"]);
-          writeJson(response, 200, path === "/approvals/mode"
-            ? write ? await settings.setMode(body) : await settings.mode()
-            : path === "/approvals/rules"
-              ? write ? await settings.addRule(body) : await settings.rules()
-              : path === "/approvals/rules/picker"
-                ? await settings.picker()
-                : path === "/approvals/rules/change"
-                  ? await settings.changeRule(body)
-                  : await settings.removeRule(body));
+          writeJson(
+            response,
+            200,
+            path === "/approvals/mode"
+              ? write
+                ? await settings.setMode(body)
+                : await settings.mode()
+              : path === "/approvals/rules"
+                ? write
+                  ? await settings.addRule(body)
+                  : await settings.rules()
+                : path === "/approvals/rules/picker"
+                  ? await settings.picker()
+                  : path === "/approvals/rules/change"
+                    ? await settings.changeRule(body)
+                    : await settings.removeRule(body),
+          );
           return;
         }
       }
@@ -3311,9 +4006,13 @@ export function createAidenRemoteRequestHandler(
         const device = await authenticate(request, dependencies.devices, "bot:read");
         deviceIdSuffix = device.id.slice(-8);
         // Revision 61: a `bot:templates` holder also gets each template's version, sample and Open.
-        writeJson(response, 200, holdsBotTemplates(device, dependencies)
-          ? await dependencies.botSessions!.templates!()
-          : botSessionsOrNotFound(dependencies).presets());
+        writeJson(
+          response,
+          200,
+          holdsBotTemplates(device, dependencies)
+            ? await dependencies.botSessions!.templates!()
+            : botSessionsOrNotFound(dependencies).presets(),
+        );
         return;
       }
       if (path === "/bots/from-preset" && request.method === "POST") {
@@ -3324,7 +4023,12 @@ export function createAidenRemoteRequestHandler(
         deviceIdSuffix = device.id.slice(-8);
         requireDeviceCapabilities(device, ["bot:read"]);
         const key = requiredHeader(request, "idempotency-key", /^[\x21-\x7e]{16,128}$/u);
-        const result = await botSessionsOrNotFound(dependencies).createFromPreset(device.id, key, body, { templates: holdsBotTemplates(device, dependencies) });
+        const result = await botSessionsOrNotFound(dependencies).createFromPreset(
+          device.id,
+          key,
+          body,
+          { templates: holdsBotTemplates(device, dependencies) },
+        );
         writeJson(response, result.created ? 201 : 200, {
           ...result,
           bot: await botSummaryForAudience(result.bot, device, dependencies),
@@ -3340,34 +4044,58 @@ export function createAidenRemoteRequestHandler(
         // The session is the Bot's transcript: reading it is a chat read.
         requireDeviceCapabilities(device, ["chat:read"]);
         const session = await botSessionsOrNotFound(dependencies).session(botSessionMatch[1]!, {
-            cards: device.capabilities.has("bot:cards"),
-            activity: device.capabilities.has("bot:activity") && botActivityWired(dependencies),
-            handoffs: holdsBotHandoffs(device, dependencies),
-            handoffNotes: holdsBotHandoffNotes(device, dependencies),
-            handoffOnMac: holdsBotHandoffOnMac(device, dependencies),
-            images: holdsBotImages(device, dependencies),
-            issues: holdsBotIssues(device, dependencies),
-            accessRequests: holdsBotAccessRequests(device, dependencies),
-            plans: holdsBotPlans(device, dependencies),
-            allowed: holdsBotAllowed(device, dependencies),
-            peers: holdsBotPeers(device, dependencies),
-            approvalCards: holdsApprovalCards(device),
-            approvalPlainWords: holdsApprovalPlainWords(device),
-            settingsChanges: holdsBotSettingsChanges(device, dependencies),
-            suggestions: holdsBotSuggestions(device, dependencies),
-          });
+          cards: device.capabilities.has("bot:cards"),
+          activity: device.capabilities.has("bot:activity") && botActivityWired(dependencies),
+          handoffs: holdsBotHandoffs(device, dependencies),
+          handoffNotes: holdsBotHandoffNotes(device, dependencies),
+          handoffOnMac: holdsBotHandoffOnMac(device, dependencies),
+          images: holdsBotImages(device, dependencies),
+          issues: holdsBotIssues(device, dependencies),
+          accessRequests: holdsBotAccessRequests(device, dependencies),
+          plans: holdsBotPlans(device, dependencies),
+          allowed: holdsBotAllowed(device, dependencies),
+          peers: holdsBotPeers(device, dependencies),
+          approvalCards: holdsApprovalCards(device),
+          approvalPlainWords: holdsApprovalPlainWords(device),
+          settingsChanges: holdsBotSettingsChanges(device, dependencies),
+          suggestions: holdsBotSuggestions(device, dependencies),
+        });
         const current = await authenticateCredential(request, dependencies.devices, "bot:read");
         requireDeviceCapabilities(current, ["chat:read"]);
-        if (current.id !== device.id) throw new AidenRemoteServiceError("capability_denied", "Device authorization changed.", 403);
+        if (current.id !== device.id)
+          throw new AidenRemoteServiceError(
+            "capability_denied",
+            "Device authorization changed.",
+            403,
+          );
         requireRetainedBotProjectionGrants(device, current, [
-          "bot:cards", "bot:activity", "bot:handoffs", "bot:handoff-notes", "bot:handoff-on-mac",
-          "bot:images", "bot:issues", "bot:access-requests", "bot:plans", "bot:allowed",
-          "approval:cards", "approval:plain-words", "bot:settings-changes", "bot:suggestions",
+          "bot:cards",
+          "bot:activity",
+          "bot:handoffs",
+          "bot:handoff-notes",
+          "bot:handoff-on-mac",
+          "bot:images",
+          "bot:issues",
+          "bot:access-requests",
+          "bot:plans",
+          "bot:allowed",
+          "approval:cards",
+          "approval:plain-words",
+          "bot:settings-changes",
+          "bot:suggestions",
         ]);
-        writeJson(response, 200, holdsBotPeers(current, dependencies) ? session : { ...session, entries: session.entries.filter((entry) => entry.type !== "peer") });
+        writeJson(
+          response,
+          200,
+          holdsBotPeers(current, dependencies)
+            ? session
+            : { ...session, entries: session.entries.filter((entry) => entry.type !== "peer") },
+        );
         return;
       }
-      const botSessionEventsMatch = /^\/bots\/([A-Za-z0-9._:-]{1,160})\/session\/events$/u.exec(path);
+      const botSessionEventsMatch = /^\/bots\/([A-Za-z0-9._:-]{1,160})\/session\/events$/u.exec(
+        path,
+      );
       if (botSessionEventsMatch && request.method === "GET") {
         requireNoQuery(query);
         route = "botSessionEvents";
@@ -3400,7 +4128,9 @@ export function createAidenRemoteRequestHandler(
         );
         return;
       }
-      const botSessionEntriesMatch = /^\/bots\/([A-Za-z0-9._:-]{1,160})\/session\/entries$/u.exec(path);
+      const botSessionEntriesMatch = /^\/bots\/([A-Za-z0-9._:-]{1,160})\/session\/entries$/u.exec(
+        path,
+      );
       if (botSessionEntriesMatch && request.method === "GET") {
         route = "botSessionEntries";
         const page = botSessionPageQuery(query);
@@ -3408,27 +4138,33 @@ export function createAidenRemoteRequestHandler(
         deviceIdSuffix = device.id.slice(-8);
         // Older entries are the Bot's transcript: reading them is a chat read.
         requireDeviceCapabilities(device, ["chat:read"]);
-        if (!dependencies.botSessions?.olderEntries) throw new AidenRemoteServiceError("not_found", "This endpoint is unavailable.", 404);
+        if (!dependencies.botSessions?.olderEntries)
+          throw new AidenRemoteServiceError("not_found", "This endpoint is unavailable.", 404);
         // The same projection as the session: a page never shows what the snapshot would hide.
-        writeJson(response, 200, await dependencies.botSessions.olderEntries(botSessionEntriesMatch[1]!, page, {
-          cards: device.capabilities.has("bot:cards"),
-          activity: device.capabilities.has("bot:activity") && botActivityWired(dependencies),
-          handoffs: holdsBotHandoffs(device, dependencies),
-          handoffNotes: holdsBotHandoffNotes(device, dependencies),
-          handoffOnMac: holdsBotHandoffOnMac(device, dependencies),
-          images: holdsBotImages(device, dependencies),
-          issues: holdsBotIssues(device, dependencies),
-          accessRequests: holdsBotAccessRequests(device, dependencies),
-          plans: holdsBotPlans(device, dependencies),
-          allowed: holdsBotAllowed(device, dependencies),
-          peers: holdsBotPeers(device, dependencies),
-          approvalCards: holdsApprovalCards(device),
-          settingsChanges: holdsBotSettingsChanges(device, dependencies),
-          suggestions: holdsBotSuggestions(device, dependencies),
-        }));
+        writeJson(
+          response,
+          200,
+          await dependencies.botSessions.olderEntries(botSessionEntriesMatch[1]!, page, {
+            cards: device.capabilities.has("bot:cards"),
+            activity: device.capabilities.has("bot:activity") && botActivityWired(dependencies),
+            handoffs: holdsBotHandoffs(device, dependencies),
+            handoffNotes: holdsBotHandoffNotes(device, dependencies),
+            handoffOnMac: holdsBotHandoffOnMac(device, dependencies),
+            images: holdsBotImages(device, dependencies),
+            issues: holdsBotIssues(device, dependencies),
+            accessRequests: holdsBotAccessRequests(device, dependencies),
+            plans: holdsBotPlans(device, dependencies),
+            allowed: holdsBotAllowed(device, dependencies),
+            peers: holdsBotPeers(device, dependencies),
+            approvalCards: holdsApprovalCards(device),
+            settingsChanges: holdsBotSettingsChanges(device, dependencies),
+            suggestions: holdsBotSuggestions(device, dependencies),
+          }),
+        );
         return;
       }
-      const botQueuedWithdrawMatch = /^\/bots\/([A-Za-z0-9._:-]{1,160})\/queued\/([A-Za-z0-9._:-]{1,64})\/withdraw$/u.exec(path);
+      const botQueuedWithdrawMatch =
+        /^\/bots\/([A-Za-z0-9._:-]{1,160})\/queued\/([A-Za-z0-9._:-]{1,64})\/withdraw$/u.exec(path);
       if (botQueuedWithdrawMatch && request.method === "POST") {
         requireNoQuery(query);
         route = "botQueuedWithdraw";
@@ -3441,9 +4177,17 @@ export function createAidenRemoteRequestHandler(
           throw new AidenRemoteServiceError("not_found", "This endpoint is unavailable.", 404);
         }
         const key = requiredHeader(request, "idempotency-key", /^[\x21-\x7e]{16,128}$/u);
-        writeJson(response, 200, await dependencies.botSessions.withdrawQueued(
-          device.id, botQueuedWithdrawMatch[1]!, botQueuedWithdrawMatch[2]!, key, body,
-        ));
+        writeJson(
+          response,
+          200,
+          await dependencies.botSessions.withdrawQueued(
+            device.id,
+            botQueuedWithdrawMatch[1]!,
+            botQueuedWithdrawMatch[2]!,
+            key,
+            body,
+          ),
+        );
         return;
       }
       const botSessionImageMatch =
@@ -3458,7 +4202,10 @@ export function createAidenRemoteRequestHandler(
         }
         // The image is part of the Bot's transcript: reading it is a chat read.
         requireDeviceCapabilities(device, ["chat:read", "bot:images"]);
-        const image = await dependencies.botSessions!.sharedImage!(botSessionImageMatch[1]!, botSessionImageMatch[2]!);
+        const image = await dependencies.botSessions!.sharedImage!(
+          botSessionImageMatch[1]!,
+          botSessionImageMatch[2]!,
+        );
         writeAttachmentContent(response, { bytes: image.bytes, mimeType: image.mimeType });
         return;
       }
@@ -3474,9 +4221,15 @@ export function createAidenRemoteRequestHandler(
         writeJson(
           response,
           200,
-          await botSessionsOrNotFound(dependencies).send(device.id, botMessagesMatch[1]!, key, body, {
-            handoffs: holdsBotHandoffs(device, dependencies),
-          }),
+          await botSessionsOrNotFound(dependencies).send(
+            device.id,
+            botMessagesMatch[1]!,
+            key,
+            body,
+            {
+              handoffs: holdsBotHandoffs(device, dependencies),
+            },
+          ),
         );
         return;
       }
@@ -3489,19 +4242,34 @@ export function createAidenRemoteRequestHandler(
         deviceIdSuffix = device.id.slice(-8);
         requireDeviceCapabilities(device, ["bot:read", "chat:write"]);
         if (raw) requireDeviceCapabilities(device, AIDEN_REMOTE_RAW_UPLOAD_CAPABILITIES);
-        if (!botAttachmentsWired(dependencies)) throw new AidenRemoteServiceError("not_found", "This endpoint is unavailable.", 404);
-        writeJson(response, 201, await dependencies.botSessions!.uploadAttachment!(device.id, botAttachmentsMatch[1]!, body));
+        if (!botAttachmentsWired(dependencies))
+          throw new AidenRemoteServiceError("not_found", "This endpoint is unavailable.", 404);
+        writeJson(
+          response,
+          201,
+          await dependencies.botSessions!.uploadAttachment!(
+            device.id,
+            botAttachmentsMatch[1]!,
+            body,
+          ),
+        );
         return;
       }
-      const botAttachmentMatch = /^\/bots\/([A-Za-z0-9._:-]{1,160})\/attachments\/(att_[A-Za-z0-9_-]{43})$/u.exec(path);
+      const botAttachmentMatch =
+        /^\/bots\/([A-Za-z0-9._:-]{1,160})\/attachments\/(att_[A-Za-z0-9_-]{43})$/u.exec(path);
       if (botAttachmentMatch && request.method === "DELETE") {
         requireNoQuery(query);
         route = "botAttachment";
         const device = await authenticate(request, dependencies.devices, "bot:write");
         deviceIdSuffix = device.id.slice(-8);
         requireDeviceCapabilities(device, ["bot:read", "chat:write"]);
-        if (!botAttachmentsWired(dependencies)) throw new AidenRemoteServiceError("not_found", "This endpoint is unavailable.", 404);
-        await dependencies.botSessions!.removeAttachment!(device.id, botAttachmentMatch[1]!, botAttachmentMatch[2]!);
+        if (!botAttachmentsWired(dependencies))
+          throw new AidenRemoteServiceError("not_found", "This endpoint is unavailable.", 404);
+        await dependencies.botSessions!.removeAttachment!(
+          device.id,
+          botAttachmentMatch[1]!,
+          botAttachmentMatch[2]!,
+        );
         response.writeHead(204, responseHeaders());
         response.end();
         return;
@@ -3514,12 +4282,26 @@ export function createAidenRemoteRequestHandler(
         const device = await authenticate(request, dependencies.devices, "bot:write");
         deviceIdSuffix = device.id.slice(-8);
         requireDeviceCapabilities(device, ["bot:read"]);
-        if (body && typeof body === "object" && "acknowledgeUnknownCost" in body) requireDeviceCapabilities(device, ["chat:read", "bot:routine-models"]);
+        if (body && typeof body === "object" && "acknowledgeUnknownCost" in body)
+          requireDeviceCapabilities(device, ["chat:read", "bot:routine-models"]);
         const key = requiredHeader(request, "idempotency-key", /^[\x21-\x7e]{16,128}$/u);
-        writeJson(response, 200, await botSessionsOrNotFound(dependencies).resume(device.id, botResumeMatch[1]!, key, body, {
-          handoffs: holdsBotHandoffs(device, dependencies),
-          routineModels: device.acceptsBotCapabilities === true && device.capabilities.has("bot:routine-models") && botRoutineModelsWired(dependencies),
-        }));
+        writeJson(
+          response,
+          200,
+          await botSessionsOrNotFound(dependencies).resume(
+            device.id,
+            botResumeMatch[1]!,
+            key,
+            body,
+            {
+              handoffs: holdsBotHandoffs(device, dependencies),
+              routineModels:
+                device.acceptsBotCapabilities === true &&
+                device.capabilities.has("bot:routine-models") &&
+                botRoutineModelsWired(dependencies),
+            },
+          ),
+        );
         return;
       }
       const botDismissMatch = /^\/bots\/([A-Za-z0-9._:-]{1,160})\/dismiss$/u.exec(path);
@@ -3531,12 +4313,23 @@ export function createAidenRemoteRequestHandler(
         deviceIdSuffix = device.id.slice(-8);
         requireDeviceCapabilities(device, ["bot:read"]);
         const key = requiredHeader(request, "idempotency-key", /^[\x21-\x7e]{16,128}$/u);
-        writeJson(response, 200, await botSessionsOrNotFound(dependencies).dismiss(device.id, botDismissMatch[1]!, key, body, {
-          handoffs: holdsBotHandoffs(device, dependencies),
-        }));
+        writeJson(
+          response,
+          200,
+          await botSessionsOrNotFound(dependencies).dismiss(
+            device.id,
+            botDismissMatch[1]!,
+            key,
+            body,
+            {
+              handoffs: holdsBotHandoffs(device, dependencies),
+            },
+          ),
+        );
         return;
       }
-      const botQuestionAnswerMatch = /^\/bots\/([A-Za-z0-9._:-]{1,160})\/questions\/([A-Za-z0-9-]{1,64})\/answer$/u.exec(path);
+      const botQuestionAnswerMatch =
+        /^\/bots\/([A-Za-z0-9._:-]{1,160})\/questions\/([A-Za-z0-9-]{1,64})\/answer$/u.exec(path);
       if (botQuestionAnswerMatch && request.method === "POST") {
         requireNoQuery(query);
         route = "botQuestionAnswer";
@@ -3559,33 +4352,60 @@ export function createAidenRemoteRequestHandler(
         );
         return;
       }
-      const botPlanRespondMatch = /^\/bots\/([A-Za-z0-9._:-]{1,160})\/plans\/([A-Za-z0-9-]{1,64})\/respond$/u.exec(path);
+      const botPlanRespondMatch =
+        /^\/bots\/([A-Za-z0-9._:-]{1,160})\/plans\/([A-Za-z0-9-]{1,64})\/respond$/u.exec(path);
       if (botPlanRespondMatch && request.method === "POST") {
         requireNoQuery(query);
         route = "botPlanRespond";
         const body = await readJsonBody(request);
         const device = await authenticate(request, dependencies.devices, "bot:write");
         deviceIdSuffix = device.id.slice(-8);
-        if (!botPlansWired(dependencies)) throw new AidenRemoteServiceError("not_found", "This endpoint is unavailable.", 404);
+        if (!botPlansWired(dependencies))
+          throw new AidenRemoteServiceError("not_found", "This endpoint is unavailable.", 404);
         requireDeviceCapabilities(device, ["bot:read", "bot:plans"]);
         const key = requiredHeader(request, "idempotency-key", /^[\x21-\x7e]{16,128}$/u);
-        writeJson(response, 200, await dependencies.botSessions!.respondPlan!(device.id, botPlanRespondMatch[1]!, botPlanRespondMatch[2]!, key, body));
+        writeJson(
+          response,
+          200,
+          await dependencies.botSessions!.respondPlan!(
+            device.id,
+            botPlanRespondMatch[1]!,
+            botPlanRespondMatch[2]!,
+            key,
+            body,
+          ),
+        );
         return;
       }
-      const botAccessAnswerMatch = /^\/bots\/([A-Za-z0-9._:-]{1,160})\/access-requests\/([A-Za-z0-9-]{1,64})\/answer$/u.exec(path);
+      const botAccessAnswerMatch =
+        /^\/bots\/([A-Za-z0-9._:-]{1,160})\/access-requests\/([A-Za-z0-9-]{1,64})\/answer$/u.exec(
+          path,
+        );
       if (botAccessAnswerMatch && request.method === "POST") {
         requireNoQuery(query);
         route = "botAccessRequestAnswer";
         const body = await readJsonBody(request);
         const device = await authenticate(request, dependencies.devices, "bot:write");
         deviceIdSuffix = device.id.slice(-8);
-        if (!botAccessRequestsWired(dependencies)) throw new AidenRemoteServiceError("not_found", "This endpoint is unavailable.", 404);
+        if (!botAccessRequestsWired(dependencies))
+          throw new AidenRemoteServiceError("not_found", "This endpoint is unavailable.", 404);
         requireDeviceCapabilities(device, ["bot:read", "bot:access-requests"]);
         const key = requiredHeader(request, "idempotency-key", /^[\x21-\x7e]{16,128}$/u);
-        writeJson(response, 200, await dependencies.botSessions!.answerAccessRequest!(device.id, botAccessAnswerMatch[1]!, botAccessAnswerMatch[2]!, key, body));
+        writeJson(
+          response,
+          200,
+          await dependencies.botSessions!.answerAccessRequest!(
+            device.id,
+            botAccessAnswerMatch[1]!,
+            botAccessAnswerMatch[2]!,
+            key,
+            body,
+          ),
+        );
         return;
       }
-      const botHandoffAnswerMatch = /^\/bots\/([A-Za-z0-9._:-]{1,160})\/handoffs\/([A-Za-z0-9-]{1,64})\/answer$/u.exec(path);
+      const botHandoffAnswerMatch =
+        /^\/bots\/([A-Za-z0-9._:-]{1,160})\/handoffs\/([A-Za-z0-9-]{1,64})\/answer$/u.exec(path);
       if (botHandoffAnswerMatch && request.method === "POST") {
         requireNoQuery(query);
         route = "botHandoffAnswer";
@@ -3597,13 +4417,23 @@ export function createAidenRemoteRequestHandler(
         writeJson(
           response,
           200,
-          await sessions.answerHandoff!(device.id, botHandoffAnswerMatch[1]!, botHandoffAnswerMatch[2]!, key, body, {
-            handoffs: true,
-          }),
+          await sessions.answerHandoff!(
+            device.id,
+            botHandoffAnswerMatch[1]!,
+            botHandoffAnswerMatch[2]!,
+            key,
+            body,
+            {
+              handoffs: true,
+            },
+          ),
         );
         return;
       }
-      const botHandoffOpenOnMacMatch = /^\/bots\/([A-Za-z0-9._:-]{1,160})\/handoffs\/([A-Za-z0-9-]{1,64})\/open-on-mac$/u.exec(path);
+      const botHandoffOpenOnMacMatch =
+        /^\/bots\/([A-Za-z0-9._:-]{1,160})\/handoffs\/([A-Za-z0-9-]{1,64})\/open-on-mac$/u.exec(
+          path,
+        );
       if (botHandoffOpenOnMacMatch && request.method === "POST") {
         requireNoQuery(query);
         route = "botHandoffOpenOnMac";
@@ -3615,11 +4445,18 @@ export function createAidenRemoteRequestHandler(
         writeJson(
           response,
           200,
-          await sessions.openHandoffOnMac!(device.id, botHandoffOpenOnMacMatch[1]!, botHandoffOpenOnMacMatch[2]!, key, body),
+          await sessions.openHandoffOnMac!(
+            device.id,
+            botHandoffOpenOnMacMatch[1]!,
+            botHandoffOpenOnMacMatch[2]!,
+            key,
+            body,
+          ),
         );
         return;
       }
-      const botIssueActMatch = /^\/bots\/([A-Za-z0-9._:-]{1,160})\/issues\/([A-Za-z0-9._:-]{1,160})\/act$/u.exec(path);
+      const botIssueActMatch =
+        /^\/bots\/([A-Za-z0-9._:-]{1,160})\/issues\/([A-Za-z0-9._:-]{1,160})\/act$/u.exec(path);
       if (botIssueActMatch && request.method === "POST") {
         requireNoQuery(query);
         route = "botIssueAct";
@@ -3631,7 +4468,14 @@ export function createAidenRemoteRequestHandler(
         writeJson(
           response,
           200,
-          await sessions.actIssue!(device.id, botIssueActMatch[1]!, botIssueActMatch[2]!, key, body, { accessRequests: holdsBotAccessRequests(device, dependencies) }),
+          await sessions.actIssue!(
+            device.id,
+            botIssueActMatch[1]!,
+            botIssueActMatch[2]!,
+            key,
+            body,
+            { accessRequests: holdsBotAccessRequests(device, dependencies) },
+          ),
         );
         return;
       }
@@ -3659,35 +4503,62 @@ export function createAidenRemoteRequestHandler(
         route = "botAllowed";
         const device = await authenticate(request, dependencies.devices, "bot:read");
         deviceIdSuffix = device.id.slice(-8);
-        if (!botAllowedWired(dependencies)) throw new AidenRemoteServiceError("not_found", "This endpoint is unavailable.", 404);
+        if (!botAllowedWired(dependencies))
+          throw new AidenRemoteServiceError("not_found", "This endpoint is unavailable.", 404);
         requireDeviceCapabilities(device, ["bot:allowed"]);
         const cursor = botAllowedCursorQuery(query);
-        writeJson(response, 200, await dependencies.botAllowed!.list(device.id, botAllowedReadMatch[1]!, cursor));
+        writeJson(
+          response,
+          200,
+          await dependencies.botAllowed!.list(device.id, botAllowedReadMatch[1]!, cursor),
+        );
         return;
       }
-      const botAllowedRemoveMatch = /^\/bots\/([A-Za-z0-9._:-]{1,160})\/allowed\/([A-Za-z0-9_-]{1,80})\/remove$/u.exec(path);
+      const botAllowedRemoveMatch =
+        /^\/bots\/([A-Za-z0-9._:-]{1,160})\/allowed\/([A-Za-z0-9_-]{1,80})\/remove$/u.exec(path);
       if (botAllowedRemoveMatch && request.method === "POST") {
-        route = "botAllowedRemove"; requireNoQuery(query);
+        route = "botAllowedRemove";
+        requireNoQuery(query);
         const device = await authenticate(request, dependencies.devices, "bot:write");
         deviceIdSuffix = device.id.slice(-8);
-        if (!botAllowedWired(dependencies)) throw new AidenRemoteServiceError("not_found", "This endpoint is unavailable.", 404);
+        if (!botAllowedWired(dependencies))
+          throw new AidenRemoteServiceError("not_found", "This endpoint is unavailable.", 404);
         requireDeviceCapabilities(device, ["bot:read", "bot:allowed"]);
         requireEmptyJsonObject(await readJsonBody(request, 64));
-        writeJson(response, 200, await dependencies.botAllowed!.remove(device.id, botAllowedRemoveMatch[1]!, botAllowedRemoveMatch[2]!));
+        writeJson(
+          response,
+          200,
+          await dependencies.botAllowed!.remove(
+            device.id,
+            botAllowedRemoveMatch[1]!,
+            botAllowedRemoveMatch[2]!,
+          ),
+        );
         return;
       }
       const botSpendingReadMatch = /^\/bots\/([A-Za-z0-9._:-]{1,160})\/spending$/u.exec(path);
-      const botSpendingAllowMatch = /^\/bots\/([A-Za-z0-9._:-]{1,160})\/spending\/allow-more$/u.exec(path);
-      const botSpendingMatch = request.method === "GET" ? botSpendingReadMatch : request.method === "POST" ? botSpendingAllowMatch : null;
+      const botSpendingAllowMatch =
+        /^\/bots\/([A-Za-z0-9._:-]{1,160})\/spending\/allow-more$/u.exec(path);
+      const botSpendingMatch =
+        request.method === "GET"
+          ? botSpendingReadMatch
+          : request.method === "POST"
+            ? botSpendingAllowMatch
+            : null;
       if (botSpendingMatch) {
         requireNoQuery(query);
         route = "botSpending";
         const allowMore = botSpendingMatch === botSpendingAllowMatch;
         if (allowMore) requireEmptyJsonObject(await readJsonBody(request, 64));
-        const device = await authenticate(request, dependencies.devices, allowMore ? "bot:write" : "bot:read");
+        const device = await authenticate(
+          request,
+          dependencies.devices,
+          allowMore ? "bot:write" : "bot:read",
+        );
         deviceIdSuffix = device.id.slice(-8);
         if (allowMore) requireDeviceCapabilities(device, ["bot:read"]);
-        if (!dependencies.spending) throw new AidenRemoteServiceError("not_found", "This endpoint is unavailable.", 404);
+        if (!dependencies.spending)
+          throw new AidenRemoteServiceError("not_found", "This endpoint is unavailable.", 404);
         writeJson(
           response,
           200,
@@ -3709,260 +4580,709 @@ export function createAidenRemoteRequestHandler(
         deviceIdSuffix = device.id.slice(-8);
         requireDeviceCapabilities(device, ["bot:read"]);
         const key = requiredHeader(request, "idempotency-key", /^[\x21-\x7e]{16,128}$/u);
-        writeJson(response, 200, await botSessionsOrNotFound(dependencies).stop(device.id, botStopMatch[1]!, key, body, {
-          handoffs: holdsBotHandoffs(device, dependencies),
-        }));
+        writeJson(
+          response,
+          200,
+          await botSessionsOrNotFound(dependencies).stop(device.id, botStopMatch[1]!, key, body, {
+            handoffs: holdsBotHandoffs(device, dependencies),
+          }),
+        );
         return;
       }
-      const routineModelDirectoryMatch = /^\/bots\/([A-Za-z0-9._:-]{1,160})\/routine-models$/u.exec(path);
+      const routineModelDirectoryMatch = /^\/bots\/([A-Za-z0-9._:-]{1,160})\/routine-models$/u.exec(
+        path,
+      );
       if (routineModelDirectoryMatch && request.method === "GET") {
-        requireNoQuery(query); route = "botRoutineModels";
-        if (!botRoutineModelsWired(dependencies)) throw new AidenRemoteServiceError("not_found", "Routine models are not available on this computer.", 404);
-        const device = await authenticate(request, dependencies.devices, "bot:read"); deviceIdSuffix = device.id.slice(-8);
+        requireNoQuery(query);
+        route = "botRoutineModels";
+        if (!botRoutineModelsWired(dependencies))
+          throw new AidenRemoteServiceError(
+            "not_found",
+            "Routine models are not available on this computer.",
+            404,
+          );
+        const device = await authenticate(request, dependencies.devices, "bot:read");
+        deviceIdSuffix = device.id.slice(-8);
         requireDeviceCapabilities(device, ["chat:read", "bot:routine-models"]);
-        if (device.acceptsBotCapabilities !== true) throw new AidenRemoteServiceError("capability_denied", "Negotiate Bot capabilities first.", 403);
-        const result = parseBotRoutineModelDirectory(await dependencies.botRoutineModels!.listRoutines(routineModelDirectoryMatch[1]!));
+        if (device.acceptsBotCapabilities !== true)
+          throw new AidenRemoteServiceError(
+            "capability_denied",
+            "Negotiate Bot capabilities first.",
+            403,
+          );
+        const result = parseBotRoutineModelDirectory(
+          await dependencies.botRoutineModels!.listRoutines(routineModelDirectoryMatch[1]!),
+        );
         dependencies.devices.acquireDeviceAuthorization(device.id, false)();
         const current = await authenticateCredential(request, dependencies.devices, "bot:read");
-        if (current.id !== device.id || current.acceptsBotCapabilities !== true || result.botId !== routineModelDirectoryMatch[1]) throw new AidenRemoteServiceError("capability_denied", "Device authorization changed.", 403);
+        if (
+          current.id !== device.id ||
+          current.acceptsBotCapabilities !== true ||
+          result.botId !== routineModelDirectoryMatch[1]
+        )
+          throw new AidenRemoteServiceError(
+            "capability_denied",
+            "Device authorization changed.",
+            403,
+          );
         requireDeviceCapabilities(current, ["chat:read", "bot:routine-models"]);
-        writeJson(response, 200, result); return;
+        writeJson(response, 200, result);
+        return;
       }
-      const routineResumeStatusMatch = /^\/bots\/([A-Za-z0-9._:-]{1,160})\/routine-resume-status$/u.exec(path);
+      const routineResumeStatusMatch =
+        /^\/bots\/([A-Za-z0-9._:-]{1,160})\/routine-resume-status$/u.exec(path);
       if (routineResumeStatusMatch && request.method === "GET") {
-        requireNoQuery(query); route = "botRoutineModels";
-        if (!botRoutineModelsWired(dependencies)) throw new AidenRemoteServiceError("not_found", "Routine resume status is not available on this computer.", 404);
-        const device = await authenticate(request, dependencies.devices, "bot:write"); deviceIdSuffix = device.id.slice(-8);
-        requireDeviceCapabilities(device, ["bot:read", "chat:read", "bot:routine-models"]);
-        if (device.acceptsBotCapabilities !== true) throw new AidenRemoteServiceError("capability_denied", "Negotiate Bot capabilities first.", 403);
-        const result = parseBotExecutionResumeStatus(await dependencies.botRoutineModels!.resumeStatus(routineResumeStatusMatch[1]!));
-        dependencies.devices.acquireDeviceAuthorization(device.id, false)();
-        const current = await authenticateCredential(request, dependencies.devices, "bot:write");
-        if (current.id !== device.id || current.acceptsBotCapabilities !== true) throw new AidenRemoteServiceError("capability_denied", "Device authorization changed.", 403);
-        requireDeviceCapabilities(current, ["bot:read", "chat:read", "bot:routine-models"]);
-        writeJson(response, 200, result); return;
-      }
-      const routineModelSettingsMatch = /^\/bots\/([A-Za-z0-9._:-]{1,160})\/routine-models\/([A-Za-z0-9._:-]{1,160})$/u.exec(path);
-      const routineModelCatalogMatch = /^\/bots\/([A-Za-z0-9._:-]{1,160})\/routine-models\/([A-Za-z0-9._:-]{1,160})\/catalog$/u.exec(path);
-      const routineModelRunsMatch = /^\/bots\/([A-Za-z0-9._:-]{1,160})\/routine-models\/([A-Za-z0-9._:-]{1,160})\/runs$/u.exec(path);
-      const routineModelMatch = routineModelSettingsMatch ?? routineModelCatalogMatch ?? routineModelRunsMatch;
-      if (routineModelMatch && (request.method === "GET" || request.method === "POST" && routineModelSettingsMatch)) {
-        requireNoQuery(query); route = "botRoutineModels";
-        if (!botRoutineModelsWired(dependencies)) throw new AidenRemoteServiceError("not_found", "Routine models are not available on this computer.", 404);
-        const editing = request.method === "POST", catalog = Boolean(routineModelCatalogMatch);
-        const device = await authenticate(request, dependencies.devices, editing || catalog ? "bot:write" : "bot:read");
+        requireNoQuery(query);
+        route = "botRoutineModels";
+        if (!botRoutineModelsWired(dependencies))
+          throw new AidenRemoteServiceError(
+            "not_found",
+            "Routine resume status is not available on this computer.",
+            404,
+          );
+        const device = await authenticate(request, dependencies.devices, "bot:write");
         deviceIdSuffix = device.id.slice(-8);
         requireDeviceCapabilities(device, ["bot:read", "chat:read", "bot:routine-models"]);
-        if (device.acceptsBotCapabilities !== true) throw new AidenRemoteServiceError("capability_denied", "Negotiate Bot capabilities first.", 403);
-        const botId = routineModelMatch[1]!, routineId = routineModelMatch[2]!, service = dependencies.botRoutineModels!;
+        if (device.acceptsBotCapabilities !== true)
+          throw new AidenRemoteServiceError(
+            "capability_denied",
+            "Negotiate Bot capabilities first.",
+            403,
+          );
+        const result = parseBotExecutionResumeStatus(
+          await dependencies.botRoutineModels!.resumeStatus(routineResumeStatusMatch[1]!),
+        );
+        dependencies.devices.acquireDeviceAuthorization(device.id, false)();
+        const current = await authenticateCredential(request, dependencies.devices, "bot:write");
+        if (current.id !== device.id || current.acceptsBotCapabilities !== true)
+          throw new AidenRemoteServiceError(
+            "capability_denied",
+            "Device authorization changed.",
+            403,
+          );
+        requireDeviceCapabilities(current, ["bot:read", "chat:read", "bot:routine-models"]);
+        writeJson(response, 200, result);
+        return;
+      }
+      const routineModelSettingsMatch =
+        /^\/bots\/([A-Za-z0-9._:-]{1,160})\/routine-models\/([A-Za-z0-9._:-]{1,160})$/u.exec(path);
+      const routineModelCatalogMatch =
+        /^\/bots\/([A-Za-z0-9._:-]{1,160})\/routine-models\/([A-Za-z0-9._:-]{1,160})\/catalog$/u.exec(
+          path,
+        );
+      const routineModelRunsMatch =
+        /^\/bots\/([A-Za-z0-9._:-]{1,160})\/routine-models\/([A-Za-z0-9._:-]{1,160})\/runs$/u.exec(
+          path,
+        );
+      const routineModelMatch =
+        routineModelSettingsMatch ?? routineModelCatalogMatch ?? routineModelRunsMatch;
+      if (
+        routineModelMatch &&
+        (request.method === "GET" || (request.method === "POST" && routineModelSettingsMatch))
+      ) {
+        requireNoQuery(query);
+        route = "botRoutineModels";
+        if (!botRoutineModelsWired(dependencies))
+          throw new AidenRemoteServiceError(
+            "not_found",
+            "Routine models are not available on this computer.",
+            404,
+          );
+        const editing = request.method === "POST",
+          catalog = Boolean(routineModelCatalogMatch);
+        const device = await authenticate(
+          request,
+          dependencies.devices,
+          editing || catalog ? "bot:write" : "bot:read",
+        );
+        deviceIdSuffix = device.id.slice(-8);
+        requireDeviceCapabilities(device, ["bot:read", "chat:read", "bot:routine-models"]);
+        if (device.acceptsBotCapabilities !== true)
+          throw new AidenRemoteServiceError(
+            "capability_denied",
+            "Negotiate Bot capabilities first.",
+            403,
+          );
+        const botId = routineModelMatch[1]!,
+          routineId = routineModelMatch[2]!,
+          service = dependencies.botRoutineModels!;
         const assertCurrent = async () => {
           dependencies.devices.acquireDeviceAuthorization(device.id, false)();
-          const current = await authenticateCredential(request, dependencies.devices, editing || catalog ? "bot:write" : "bot:read");
-          if (current.id !== device.id || current.acceptsBotCapabilities !== true) throw new AidenRemoteServiceError("capability_denied", "Device authorization changed.", 403);
+          const current = await authenticateCredential(
+            request,
+            dependencies.devices,
+            editing || catalog ? "bot:write" : "bot:read",
+          );
+          if (current.id !== device.id || current.acceptsBotCapabilities !== true)
+            throw new AidenRemoteServiceError(
+              "capability_denied",
+              "Device authorization changed.",
+              403,
+            );
           requireDeviceCapabilities(current, ["bot:read", "chat:read", "bot:routine-models"]);
         };
         if (!editing) {
-          if (catalog) { const result = parseBotRoutineModelCatalog(await service.catalog(botId, routineId)); await assertCurrent(); writeJson(response, 200, result); }
-          else if (routineModelRunsMatch) { const result = parseBotRoutineModelRuns(await service.readRuns(botId, routineId)); await assertCurrent(); writeJson(response, 200, result); }
-          else {
+          if (catalog) {
+            const result = parseBotRoutineModelCatalog(await service.catalog(botId, routineId));
+            await assertCurrent();
+            writeJson(response, 200, result);
+          } else if (routineModelRunsMatch) {
+            const result = parseBotRoutineModelRuns(await service.readRuns(botId, routineId));
+            await assertCurrent();
+            writeJson(response, 200, result);
+          } else {
             const settings = parseBotRoutineModelSettings(await service.read(botId, routineId));
-            if (settings.botId !== botId || settings.routineId !== routineId) throw new Error("Invalid routine model response identity.");
-            await assertCurrent(); writeJson(response, 200, settings);
+            if (settings.botId !== botId || settings.routineId !== routineId)
+              throw new Error("Invalid routine model response identity.");
+            await assertCurrent();
+            writeJson(response, 200, settings);
           }
           return;
         }
         let input;
-        try { input = parseBotRoutineModelSave(await readJsonBody(request, 16 * 1024)); if (input.botId !== botId || input.routineId !== routineId) throw new Error("Identity mismatch."); }
-        catch { throw new AidenRemoteServiceError("invalid_request", "Invalid routine model change.", 400); }
+        try {
+          input = parseBotRoutineModelSave(await readJsonBody(request, 16 * 1024));
+          if (input.botId !== botId || input.routineId !== routineId)
+            throw new Error("Identity mismatch.");
+        } catch {
+          throw new AidenRemoteServiceError(
+            "invalid_request",
+            "Invalid routine model change.",
+            400,
+          );
+        }
         const controller = new AbortController();
         try {
           await assertCurrent();
-          const result = parseBotRoutineModelResult(await service.save(input, { signal: controller.signal, assertCurrent }));
+          const result = parseBotRoutineModelResult(
+            await service.save(input, { signal: controller.signal, assertCurrent }),
+          );
           await assertCurrent();
-          if (result.settings && (result.settings.botId !== botId || result.settings.routineId !== routineId) || result.ok && result.mutationId !== input.mutationId) throw new Error("Invalid routine model response identity.");
+          if (
+            (result.settings &&
+              (result.settings.botId !== botId || result.settings.routineId !== routineId)) ||
+            (result.ok && result.mutationId !== input.mutationId)
+          )
+            throw new Error("Invalid routine model response identity.");
           writeJson(response, 200, result);
-        } finally { controller.abort(); }
+        } finally {
+          controller.abort();
+        }
         return;
       }
       const peerSettingsMatch = /^\/bots\/([A-Za-z0-9._:-]{1,160})\/peers$/u.exec(path);
       const peerCatalogMatch = /^\/bots\/([A-Za-z0-9._:-]{1,160})\/peers\/catalog$/u.exec(path);
       const peerListMatch = /^\/bots\/([A-Za-z0-9._:-]{1,160})\/peer-exchanges$/u.exec(path);
-      const peerDetailMatch = /^\/bots\/([A-Za-z0-9._:-]{1,160})\/peer-exchanges\/([A-Za-z0-9._:-]{1,160})$/u.exec(path);
-      const peerStopMatch = /^\/bots\/([A-Za-z0-9._:-]{1,160})\/peer-exchanges\/([A-Za-z0-9._:-]{1,160})\/stop$/u.exec(path);
-      const peerEvidenceMatch = /^\/bots\/([A-Za-z0-9._:-]{1,160})\/peer-exchanges\/([A-Za-z0-9._:-]{1,160})\/evidence\/(source|result)$/u.exec(path);
-      const peerMatch = peerSettingsMatch ?? peerCatalogMatch ?? peerListMatch ?? peerDetailMatch ?? peerStopMatch ?? peerEvidenceMatch;
-      if (peerMatch && (request.method === "GET" && !peerStopMatch || request.method === "POST" && (peerSettingsMatch || peerStopMatch))) {
-        requireNoQuery(query); route = "botPeers";
-        if (!botPeersWired(dependencies)) throw new AidenRemoteServiceError("not_found", "Bot messaging is not available on this computer.", 404);
-        const editing = request.method === "POST", content = Boolean(peerListMatch || peerDetailMatch || peerStopMatch || peerEvidenceMatch);
-        const device = await authenticate(request, dependencies.devices, editing ? "bot:write" : "bot:read");
+      const peerDetailMatch =
+        /^\/bots\/([A-Za-z0-9._:-]{1,160})\/peer-exchanges\/([A-Za-z0-9._:-]{1,160})$/u.exec(path);
+      const peerStopMatch =
+        /^\/bots\/([A-Za-z0-9._:-]{1,160})\/peer-exchanges\/([A-Za-z0-9._:-]{1,160})\/stop$/u.exec(
+          path,
+        );
+      const peerEvidenceMatch =
+        /^\/bots\/([A-Za-z0-9._:-]{1,160})\/peer-exchanges\/([A-Za-z0-9._:-]{1,160})\/evidence\/(source|result)$/u.exec(
+          path,
+        );
+      const peerMatch =
+        peerSettingsMatch ??
+        peerCatalogMatch ??
+        peerListMatch ??
+        peerDetailMatch ??
+        peerStopMatch ??
+        peerEvidenceMatch;
+      if (
+        peerMatch &&
+        ((request.method === "GET" && !peerStopMatch) ||
+          (request.method === "POST" && (peerSettingsMatch || peerStopMatch)))
+      ) {
+        requireNoQuery(query);
+        route = "botPeers";
+        if (!botPeersWired(dependencies))
+          throw new AidenRemoteServiceError(
+            "not_found",
+            "Bot messaging is not available on this computer.",
+            404,
+          );
+        const editing = request.method === "POST",
+          content = Boolean(peerListMatch || peerDetailMatch || peerStopMatch || peerEvidenceMatch);
+        const device = await authenticate(
+          request,
+          dependencies.devices,
+          editing ? "bot:write" : "bot:read",
+        );
         deviceIdSuffix = device.id.slice(-8);
-        const required: AidenRemoteCapability[] = ["bot:read", "bot:peers", ...(content ? ["chat:read"] as const : [])];
+        const required: AidenRemoteCapability[] = [
+          "bot:read",
+          "bot:peers",
+          ...(content ? (["chat:read"] as const) : []),
+        ];
         requireDeviceCapabilities(device, required);
-        if (device.acceptsBotCapabilities !== true) throw new AidenRemoteServiceError("capability_denied", "Negotiate Bot capabilities first.", 403);
-        const botId = peerMatch[1]!, exchangeId = peerMatch[2], service = dependencies.botPeers!, controller = new AbortController();
-        const abort = () => controller.abort(), closed = () => { if (!response.writableEnded) abort(); };
-        request.once("aborted", abort); response.once("close", closed);
+        if (device.acceptsBotCapabilities !== true)
+          throw new AidenRemoteServiceError(
+            "capability_denied",
+            "Negotiate Bot capabilities first.",
+            403,
+          );
+        const botId = peerMatch[1]!,
+          exchangeId = peerMatch[2],
+          service = dependencies.botPeers!,
+          controller = new AbortController();
+        const abort = () => controller.abort(),
+          closed = () => {
+            if (!response.writableEnded) abort();
+          };
+        request.once("aborted", abort);
+        response.once("close", closed);
         const assertCurrent = async () => {
           controller.signal.throwIfAborted();
           dependencies.devices.acquireDeviceAuthorization(device.id, false)();
-          const current = await authenticateCredential(request, dependencies.devices, editing ? "bot:write" : "bot:read");
-          if (current.id !== device.id || current.acceptsBotCapabilities !== true || !botPeersWired(dependencies)) throw new AidenRemoteServiceError("capability_denied", "Device authorization changed.", 403);
-          requireDeviceCapabilities(current, required); controller.signal.throwIfAborted();
+          const current = await authenticateCredential(
+            request,
+            dependencies.devices,
+            editing ? "bot:write" : "bot:read",
+          );
+          if (
+            current.id !== device.id ||
+            current.acceptsBotCapabilities !== true ||
+            !botPeersWired(dependencies)
+          )
+            throw new AidenRemoteServiceError(
+              "capability_denied",
+              "Device authorization changed.",
+              403,
+            );
+          requireDeviceCapabilities(current, required);
+          controller.signal.throwIfAborted();
         };
         const ownedExchange = (raw: unknown) => {
           const value = parseBotPeerExchangeDetail(raw);
-          if (value.id !== exchangeId || (value.direction === "sent" ? value.sender : value.recipient).botId !== botId) throw new Error("Invalid peer exchange response identity."); return value;
+          if (
+            value.id !== exchangeId ||
+            (value.direction === "sent" ? value.sender : value.recipient).botId !== botId
+          )
+            throw new Error("Invalid peer exchange response identity.");
+          return value;
         };
         try {
           await assertCurrent();
           if (!editing) {
             let value: unknown;
-            if (peerSettingsMatch) { const result = parseBotPeerSettings(await service.settings(botId)); if (result.botId !== botId) throw new Error("Invalid pair settings identity."); value = result; }
-            else if (peerCatalogMatch) { const result = parseBotPeerCatalog(await service.catalog(botId)); if (result.botId !== botId) throw new Error("Invalid pair catalog identity."); value = result; }
-            else if (peerListMatch) { const result = parseBotPeerExchangeList(await service.exchanges(botId)); if (result.botId !== botId) throw new Error("Invalid peer list identity."); value = result; }
-            else if (peerEvidenceMatch) {
-              const kind = peerEvidenceMatch[3] as "source" | "result", raw = await service.evidence(botId, exchangeId!, kind);
-              if (!raw) throw new AidenRemoteServiceError("not_found", "This exchange has no retained evidence of that kind.", 404);
-              const result = parseBotPeerEvidence(raw); if (result.exchangeId !== exchangeId || result.kind !== kind) throw new Error("Invalid exchange evidence identity."); value = result;
+            if (peerSettingsMatch) {
+              const result = parseBotPeerSettings(await service.settings(botId));
+              if (result.botId !== botId) throw new Error("Invalid pair settings identity.");
+              value = result;
+            } else if (peerCatalogMatch) {
+              const result = parseBotPeerCatalog(await service.catalog(botId));
+              if (result.botId !== botId) throw new Error("Invalid pair catalog identity.");
+              value = result;
+            } else if (peerListMatch) {
+              const result = parseBotPeerExchangeList(await service.exchanges(botId));
+              if (result.botId !== botId) throw new Error("Invalid peer list identity.");
+              value = result;
+            } else if (peerEvidenceMatch) {
+              const kind = peerEvidenceMatch[3] as "source" | "result",
+                raw = await service.evidence(botId, exchangeId!, kind);
+              if (!raw)
+                throw new AidenRemoteServiceError(
+                  "not_found",
+                  "This exchange has no retained evidence of that kind.",
+                  404,
+                );
+              const result = parseBotPeerEvidence(raw);
+              if (result.exchangeId !== exchangeId || result.kind !== kind)
+                throw new Error("Invalid exchange evidence identity.");
+              value = result;
             } else {
               const raw = await service.exchange(botId, exchangeId!);
-              if (!raw) throw new AidenRemoteServiceError("not_found", "This exchange is unavailable.", 404); value = ownedExchange(raw);
+              if (!raw)
+                throw new AidenRemoteServiceError(
+                  "not_found",
+                  "This exchange is unavailable.",
+                  404,
+                );
+              value = ownedExchange(raw);
             }
-            await assertCurrent(); writeJson(response, 200, value); return;
+            await assertCurrent();
+            writeJson(response, 200, value);
+            return;
           }
           const raw = await readJsonBody(request, BOT_PEER_LIMITS.mutationBytes);
           let result;
           if (peerStopMatch) {
             let command;
-            try { command = parseBotPeerStopMutation(raw); if (command.botId !== botId || command.exchangeId !== exchangeId) throw new Error("Identity mismatch."); }
-            catch { throw new AidenRemoteServiceError("invalid_request", "Invalid exchange Stop request.", 400); }
-            await assertCurrent(); result = parseBotPeerStopResult(await service.stop(botId, exchangeId!, command, { signal: controller.signal, assertCurrent }));
-            if (result.ok && result.mutationId !== command.mutationId) throw new Error("Invalid Stop decision receipt.");
+            try {
+              command = parseBotPeerStopMutation(raw);
+              if (command.botId !== botId || command.exchangeId !== exchangeId)
+                throw new Error("Identity mismatch.");
+            } catch {
+              throw new AidenRemoteServiceError(
+                "invalid_request",
+                "Invalid exchange Stop request.",
+                400,
+              );
+            }
+            await assertCurrent();
+            result = parseBotPeerStopResult(
+              await service.stop(botId, exchangeId!, command, {
+                signal: controller.signal,
+                assertCurrent,
+              }),
+            );
+            if (result.ok && result.mutationId !== command.mutationId)
+              throw new Error("Invalid Stop decision receipt.");
             if (result.exchange) ownedExchange(result.exchange);
           } else {
             let command;
-            try { command = parseBotPeerMutation(raw); if (command.botId !== botId) throw new Error("Identity mismatch."); }
-            catch { throw new AidenRemoteServiceError("invalid_request", "Invalid pair change.", 400); }
-            await assertCurrent(); result = parseBotPeerMutationResult(await service.mutate(botId, command, { signal: controller.signal, assertCurrent }));
-            if (result.ok && result.mutationId !== command.mutationId || result.snapshot && result.snapshot.botId !== botId) throw new Error("Invalid pair decision receipt.");
+            try {
+              command = parseBotPeerMutation(raw);
+              if (command.botId !== botId) throw new Error("Identity mismatch.");
+            } catch {
+              throw new AidenRemoteServiceError("invalid_request", "Invalid pair change.", 400);
+            }
+            await assertCurrent();
+            result = parseBotPeerMutationResult(
+              await service.mutate(botId, command, { signal: controller.signal, assertCurrent }),
+            );
+            if (
+              (result.ok && result.mutationId !== command.mutationId) ||
+              (result.snapshot && result.snapshot.botId !== botId)
+            )
+              throw new Error("Invalid pair decision receipt.");
           }
-          try { await assertCurrent(); } catch (error) {
-            if (result.ok) throw new AidenRemoteServiceError("idempotency_in_flight", "The change may have completed. Retry the saved request when connected.", 409);
+          try {
+            await assertCurrent();
+          } catch (error) {
+            if (result.ok)
+              throw new AidenRemoteServiceError(
+                "idempotency_in_flight",
+                "The change may have completed. Retry the saved request when connected.",
+                409,
+              );
             throw error;
           }
-          writeJson(response, 200, result); return;
-        } finally { request.removeListener("aborted", abort); response.removeListener("close", closed); controller.abort(); }
+          writeJson(response, 200, result);
+          return;
+        } finally {
+          request.removeListener("aborted", abort);
+          response.removeListener("close", closed);
+          controller.abort();
+        }
       }
-      const openWorkEvidenceMatch = /^\/bots\/([A-Za-z0-9._:-]{1,160})\/open-work\/([A-Za-z0-9._:-]{1,160})\/evidence\/(source|result)$/u.exec(path);
+      const openWorkEvidenceMatch =
+        /^\/bots\/([A-Za-z0-9._:-]{1,160})\/open-work\/([A-Za-z0-9._:-]{1,160})\/evidence\/(source|result)$/u.exec(
+          path,
+        );
       if (openWorkEvidenceMatch && request.method === "GET") {
-        requireNoQuery(query); route = "botOpenWork";
-        if (!botOpenWorkWired(dependencies)) throw new AidenRemoteServiceError("not_found", "Open work is not available on this computer.", 404);
-        const device = await authenticate(request, dependencies.devices, "bot:read"); deviceIdSuffix = device.id.slice(-8);
+        requireNoQuery(query);
+        route = "botOpenWork";
+        if (!botOpenWorkWired(dependencies))
+          throw new AidenRemoteServiceError(
+            "not_found",
+            "Open work is not available on this computer.",
+            404,
+          );
+        const device = await authenticate(request, dependencies.devices, "bot:read");
+        deviceIdSuffix = device.id.slice(-8);
         requireDeviceCapabilities(device, ["chat:read", "bot:open-work"]);
-        if (device.acceptsBotCapabilities !== true) throw new AidenRemoteServiceError("capability_denied", "Negotiate Bot capabilities first.", 403);
+        if (device.acceptsBotCapabilities !== true)
+          throw new AidenRemoteServiceError(
+            "capability_denied",
+            "Negotiate Bot capabilities first.",
+            403,
+          );
         const before = await dependencies.botOpenWork!.snapshot(openWorkEvidenceMatch[1]!);
-        if (!holdsBotPeers(device, dependencies) && !projectRemoteBotOpenWork(before, false).items.some((item) => item.id === openWorkEvidenceMatch[2])) throw new AidenRemoteServiceError("not_found", "This work item is unavailable.", 404);
-        const evidence = await dependencies.botOpenWork!.evidence(openWorkEvidenceMatch[1]!, openWorkEvidenceMatch[2]!, openWorkEvidenceMatch[3] as "source" | "result");
-        if (!evidence) throw new AidenRemoteServiceError("not_found", "This work item has no retained evidence of that kind.", 404);
+        if (
+          !holdsBotPeers(device, dependencies) &&
+          !projectRemoteBotOpenWork(before, false).items.some(
+            (item) => item.id === openWorkEvidenceMatch[2],
+          )
+        )
+          throw new AidenRemoteServiceError("not_found", "This work item is unavailable.", 404);
+        const evidence = await dependencies.botOpenWork!.evidence(
+          openWorkEvidenceMatch[1]!,
+          openWorkEvidenceMatch[2]!,
+          openWorkEvidenceMatch[3] as "source" | "result",
+        );
+        if (!evidence)
+          throw new AidenRemoteServiceError(
+            "not_found",
+            "This work item has no retained evidence of that kind.",
+            404,
+          );
         const current = await authenticateCredential(request, dependencies.devices, "bot:read");
         requireDeviceCapabilities(current, ["chat:read", "bot:open-work"]);
-        if (current.id !== device.id || current.acceptsBotCapabilities !== true || !holdsBotPeers(current, dependencies) && before.items.some((item) => item.id === evidence.itemId && item.source.kind === "peer")) throw new AidenRemoteServiceError("capability_denied", "Device authorization changed.", 403);
-        writeJson(response, 200, evidence); return;
+        if (
+          current.id !== device.id ||
+          current.acceptsBotCapabilities !== true ||
+          (!holdsBotPeers(current, dependencies) &&
+            before.items.some((item) => item.id === evidence.itemId && item.source.kind === "peer"))
+        )
+          throw new AidenRemoteServiceError(
+            "capability_denied",
+            "Device authorization changed.",
+            403,
+          );
+        writeJson(response, 200, evidence);
+        return;
       }
       const openWorkMatch = /^\/bots\/([A-Za-z0-9._:-]{1,160})\/open-work$/u.exec(path);
       if (openWorkMatch && (request.method === "GET" || request.method === "POST")) {
-        requireNoQuery(query); route = "botOpenWork";
-        if (!botOpenWorkWired(dependencies)) throw new AidenRemoteServiceError("not_found", "Open work is not available on this computer.", 404);
-        const device = await authenticate(request, dependencies.devices, request.method === "GET" ? "bot:read" : "bot:write");
+        requireNoQuery(query);
+        route = "botOpenWork";
+        if (!botOpenWorkWired(dependencies))
+          throw new AidenRemoteServiceError(
+            "not_found",
+            "Open work is not available on this computer.",
+            404,
+          );
+        const device = await authenticate(
+          request,
+          dependencies.devices,
+          request.method === "GET" ? "bot:read" : "bot:write",
+        );
         deviceIdSuffix = device.id.slice(-8);
         requireDeviceCapabilities(device, ["bot:read", "chat:read", "bot:open-work"]);
-        if (device.acceptsBotCapabilities !== true) throw new AidenRemoteServiceError("capability_denied", "Negotiate Bot capabilities first.", 403);
+        if (device.acceptsBotCapabilities !== true)
+          throw new AidenRemoteServiceError(
+            "capability_denied",
+            "Negotiate Bot capabilities first.",
+            403,
+          );
         const currentAudience = async () => {
-          const current = await authenticateCredential(request, dependencies.devices, request.method === "GET" ? "bot:read" : "bot:write");
+          const current = await authenticateCredential(
+            request,
+            dependencies.devices,
+            request.method === "GET" ? "bot:read" : "bot:write",
+          );
           requireDeviceCapabilities(current, ["bot:read", "chat:read", "bot:open-work"]);
-          if (current.id !== device.id || current.acceptsBotCapabilities !== true) throw new AidenRemoteServiceError("capability_denied", "Device authorization changed.", 403);
+          if (current.id !== device.id || current.acceptsBotCapabilities !== true)
+            throw new AidenRemoteServiceError(
+              "capability_denied",
+              "Device authorization changed.",
+              403,
+            );
           return holdsBotPeers(current, dependencies);
         };
         if (request.method === "GET") {
           const snapshot = await dependencies.botOpenWork!.snapshot(openWorkMatch[1]!);
-          writeJson(response, 200, projectRemoteBotOpenWork(snapshot, await currentAudience())); return;
+          writeJson(response, 200, projectRemoteBotOpenWork(snapshot, await currentAudience()));
+          return;
         }
         let mutation: BotOpenWorkMutation;
-        try { mutation = parseBotOpenWorkMutation(await readJsonBody(request)); }
-        catch { throw new AidenRemoteServiceError("invalid_request", "Invalid Open work change.", 400); }
-        const beforeMutation = mutation.action === "add" ? undefined : await dependencies.botOpenWork!.snapshot(openWorkMatch[1]!);
-        if (!await currentAudience() && beforeMutation && !remoteBotOpenWorkMutationVisible(beforeMutation, mutation)) throw new AidenRemoteServiceError("not_found", "This work item is unavailable.", 404);
+        try {
+          mutation = parseBotOpenWorkMutation(await readJsonBody(request));
+        } catch {
+          throw new AidenRemoteServiceError("invalid_request", "Invalid Open work change.", 400);
+        }
+        const beforeMutation =
+          mutation.action === "add"
+            ? undefined
+            : await dependencies.botOpenWork!.snapshot(openWorkMatch[1]!);
+        if (
+          !(await currentAudience()) &&
+          beforeMutation &&
+          !remoteBotOpenWorkMutationVisible(beforeMutation, mutation)
+        )
+          throw new AidenRemoteServiceError("not_found", "This work item is unavailable.", 404);
         // An accepted mutation keeps its durable identity across disconnects.
         const result = await dependencies.botOpenWork!.mutateByPerson(openWorkMatch[1]!, mutation);
         let peers: boolean;
-        try { peers = await currentAudience(); } catch (error) {
-          if (result.ok) throw new AidenRemoteServiceError("idempotency_in_flight", "The change may have completed. Retry the saved request when connected.", 409);
+        try {
+          peers = await currentAudience();
+        } catch (error) {
+          if (result.ok)
+            throw new AidenRemoteServiceError(
+              "idempotency_in_flight",
+              "The change may have completed. Retry the saved request when connected.",
+              409,
+            );
           throw error;
         }
-        writeJson(response, 200, projectRemoteBotOpenWorkResult(result, peers)); return;
+        writeJson(response, 200, projectRemoteBotOpenWorkResult(result, peers));
+        return;
       }
       const watchListMatch = /^\/bots\/([A-Za-z0-9._:-]{1,160})\/watches$/u.exec(path);
       const watchSourcesMatch = /^\/bots\/([A-Za-z0-9._:-]{1,160})\/watches\/sources$/u.exec(path);
       const watchTestMatch = /^\/bots\/([A-Za-z0-9._:-]{1,160})\/watches\/test$/u.exec(path);
-      const watchItemMatch = /^\/bots\/([A-Za-z0-9._:-]{1,160})\/watches\/([A-Za-z0-9._:-]{1,160})$/u.exec(path);
-      const watchEnabledMatch = /^\/bots\/([A-Za-z0-9._:-]{1,160})\/watches\/([A-Za-z0-9._:-]{1,160})\/enabled$/u.exec(path);
-      const watchRunMatch = /^\/bots\/([A-Za-z0-9._:-]{1,160})\/watches\/([A-Za-z0-9._:-]{1,160})\/run$/u.exec(path);
-      const botWatchesMatch = watchEnabledMatch ? [...watchEnabledMatch, "enabled"] : watchRunMatch ? [...watchRunMatch, "run"]
-        : watchSourcesMatch ? [...watchSourcesMatch, "sources"] : watchTestMatch ? [...watchTestMatch, "test"] : watchItemMatch ?? watchListMatch;
+      const watchItemMatch =
+        /^\/bots\/([A-Za-z0-9._:-]{1,160})\/watches\/([A-Za-z0-9._:-]{1,160})$/u.exec(path);
+      const watchEnabledMatch =
+        /^\/bots\/([A-Za-z0-9._:-]{1,160})\/watches\/([A-Za-z0-9._:-]{1,160})\/enabled$/u.exec(
+          path,
+        );
+      const watchRunMatch =
+        /^\/bots\/([A-Za-z0-9._:-]{1,160})\/watches\/([A-Za-z0-9._:-]{1,160})\/run$/u.exec(path);
+      const botWatchesMatch = watchEnabledMatch
+        ? [...watchEnabledMatch, "enabled"]
+        : watchRunMatch
+          ? [...watchRunMatch, "run"]
+          : watchSourcesMatch
+            ? [...watchSourcesMatch, "sources"]
+            : watchTestMatch
+              ? [...watchTestMatch, "test"]
+              : (watchItemMatch ?? watchListMatch);
       if (botWatchesMatch) {
-        requireNoQuery(query); route = "botWatches";
-        if (!botWatchesWired(dependencies)) throw new AidenRemoteServiceError("not_found", "Connector watches are not available on this computer.", 404);
-        const device = await authenticate(request, dependencies.devices, request.method === "GET" ? "bot:read" : "bot:write");
-        deviceIdSuffix = device.id.slice(-8); requireDeviceCapabilities(device, ["bot:read", "bot:watches"]);
-        if (device.acceptsBotCapabilities !== true) throw new AidenRemoteServiceError("capability_denied", "Negotiate Bot capabilities first.", 403);
-        const service = dependencies.botWatches!; const botId = botWatchesMatch[1]!; const id = botWatchesMatch[2]; const action = botWatchesMatch[3];
-        if (!id && request.method === "GET") { writeJson(response, 200, await callBotWatch(() => service.list(botId))); return; }
+        requireNoQuery(query);
+        route = "botWatches";
+        if (!botWatchesWired(dependencies))
+          throw new AidenRemoteServiceError(
+            "not_found",
+            "Connector watches are not available on this computer.",
+            404,
+          );
+        const device = await authenticate(
+          request,
+          dependencies.devices,
+          request.method === "GET" ? "bot:read" : "bot:write",
+        );
+        deviceIdSuffix = device.id.slice(-8);
+        requireDeviceCapabilities(device, ["bot:read", "bot:watches"]);
+        if (device.acceptsBotCapabilities !== true)
+          throw new AidenRemoteServiceError(
+            "capability_denied",
+            "Negotiate Bot capabilities first.",
+            403,
+          );
+        const service = dependencies.botWatches!;
+        const botId = botWatchesMatch[1]!;
+        const id = botWatchesMatch[2];
+        const action = botWatchesMatch[3];
+        if (!id && request.method === "GET") {
+          writeJson(response, 200, await callBotWatch(() => service.list(botId)));
+          return;
+        }
         const body = await readJsonBody(request);
         if (id === "sources" && request.method === "POST" && !action) {
           connectorFields(body, []);
-          const controller = new AbortController(); const abort = () => controller.abort();
-          response.once("close", abort); request.once("aborted", abort);
+          const controller = new AbortController();
+          const abort = () => controller.abort();
+          response.once("close", abort);
+          request.once("aborted", abort);
           const assertCurrent = async () => {
-            controller.signal.throwIfAborted(); admitDevice(device.id)();
-            const current = await authenticateCredential(request, dependencies.devices, "bot:write");
-            if (current.id !== device.id || current.acceptsBotCapabilities !== true) throw new AidenRemoteServiceError("capability_denied", "This source inspection is no longer authorized.", 403);
-            requireDeviceCapabilities(current, ["bot:read", "bot:watches"]); admitDevice(device.id)(); controller.signal.throwIfAborted();
+            controller.signal.throwIfAborted();
+            admitDevice(device.id)();
+            const current = await authenticateCredential(
+              request,
+              dependencies.devices,
+              "bot:write",
+            );
+            if (current.id !== device.id || current.acceptsBotCapabilities !== true)
+              throw new AidenRemoteServiceError(
+                "capability_denied",
+                "This source inspection is no longer authorized.",
+                403,
+              );
+            requireDeviceCapabilities(current, ["bot:read", "bot:watches"]);
+            admitDevice(device.id)();
+            controller.signal.throwIfAborted();
           };
           if (response.destroyed || request.aborted) abort();
           try {
             await assertCurrent();
-            const result = await callBotWatch(() => service.discoverSources(botId, { signal: controller.signal, assertCurrent }));
+            const result = await callBotWatch(() =>
+              service.discoverSources(botId, { signal: controller.signal, assertCurrent }),
+            );
             await assertCurrent();
             if (!controller.signal.aborted) writeJson(response, 200, result);
-          } finally { response.off("close", abort); request.off("aborted", abort); }
+          } finally {
+            response.off("close", abort);
+            request.off("aborted", abort);
+          }
           return;
         }
         if (id === "test" && request.method === "POST" && !action) {
-          const fields = connectorFields(body, ["id", "expectedRevision", "sourceChoiceId", "condition"]);
-          writeJson(response, 200, await callBotWatch(() => service.testCheck({ ...fields, botId } as Parameters<typeof service.testCheck>[0]))); return;
+          const fields = connectorFields(body, [
+            "id",
+            "expectedRevision",
+            "sourceChoiceId",
+            "condition",
+          ]);
+          writeJson(
+            response,
+            200,
+            await callBotWatch(() =>
+              service.testCheck({ ...fields, botId } as Parameters<typeof service.testCheck>[0]),
+            ),
+          );
+          return;
         }
         if (!id && request.method === "POST") {
-          const fields = connectorFields(body, ["mutationId", "sourceChoiceId", "name", "prompt", "condition", "everyMinutes"]);
-          writeJson(response, 201, await callBotWatch(() => service.create({ ...fields, botId } as Parameters<typeof service.create>[0]))); return;
+          const fields = connectorFields(body, [
+            "mutationId",
+            "sourceChoiceId",
+            "name",
+            "prompt",
+            "condition",
+            "everyMinutes",
+          ]);
+          writeJson(
+            response,
+            201,
+            await callBotWatch(() =>
+              service.create({ ...fields, botId } as Parameters<typeof service.create>[0]),
+            ),
+          );
+          return;
         }
         if (id && !action && request.method === "PATCH") {
-          const fields = connectorFields(body, ["expectedRevision", "mutationId", "sourceChoiceId", "name", "prompt", "condition", "everyMinutes"]);
-          writeJson(response, 200, await callBotWatch(() => service.update({ ...fields, botId, id } as Parameters<typeof service.update>[0]))); return;
+          const fields = connectorFields(body, [
+            "expectedRevision",
+            "mutationId",
+            "sourceChoiceId",
+            "name",
+            "prompt",
+            "condition",
+            "everyMinutes",
+          ]);
+          writeJson(
+            response,
+            200,
+            await callBotWatch(() =>
+              service.update({ ...fields, botId, id } as Parameters<typeof service.update>[0]),
+            ),
+          );
+          return;
         }
         if (id && !action && request.method === "DELETE") {
           const fields = connectorFields(body, ["expectedRevision", "mutationId"]);
-          writeJson(response, 200, await callBotWatch(() => service.remove({ ...fields, botId, id } as Parameters<typeof service.remove>[0]))); return;
+          writeJson(
+            response,
+            200,
+            await callBotWatch(() =>
+              service.remove({ ...fields, botId, id } as Parameters<typeof service.remove>[0]),
+            ),
+          );
+          return;
         }
         if (id && action === "enabled" && request.method === "POST") {
           const fields = connectorFields(body, ["expectedRevision", "mutationId", "enabled"]);
-          writeJson(response, 200, await callBotWatch(() => service.setEnabled({ ...fields, botId, id } as Parameters<typeof service.setEnabled>[0]))); return;
+          writeJson(
+            response,
+            200,
+            await callBotWatch(() =>
+              service.setEnabled({ ...fields, botId, id } as Parameters<
+                typeof service.setEnabled
+              >[0]),
+            ),
+          );
+          return;
         }
         if (id && action === "run" && request.method === "POST") {
           const fields = connectorFields(body, ["expectedRevision", "mutationId"]);
-          writeJson(response, 200, await callBotWatch(() => service.runNow({ ...fields, botId, id } as Parameters<typeof service.runNow>[0]))); return;
+          writeJson(
+            response,
+            200,
+            await callBotWatch(() =>
+              service.runNow({ ...fields, botId, id } as Parameters<typeof service.runNow>[0]),
+            ),
+          );
+          return;
         }
-        throw new AidenRemoteServiceError("not_found", "This connector watch route does not exist.", 404);
+        throw new AidenRemoteServiceError(
+          "not_found",
+          "This connector watch route does not exist.",
+          404,
+        );
       }
       const botRoutinesMatch = /^\/bots\/([A-Za-z0-9._:-]{1,160})\/routines$/u.exec(path);
       if (botRoutinesMatch && request.method === "GET") {
@@ -3970,7 +5290,11 @@ export function createAidenRemoteRequestHandler(
         route = "botRoutines";
         const device = await authenticate(request, dependencies.devices, "bot:read");
         deviceIdSuffix = device.id.slice(-8);
-        writeJson(response, 200, await botSessionsOrNotFound(dependencies).listRoutines(botRoutinesMatch[1]!));
+        writeJson(
+          response,
+          200,
+          await botSessionsOrNotFound(dependencies).listRoutines(botRoutinesMatch[1]!),
+        );
         return;
       }
       if (botRoutinesMatch && request.method === "POST") {
@@ -3984,11 +5308,17 @@ export function createAidenRemoteRequestHandler(
         writeJson(
           response,
           201,
-          await botSessionsOrNotFound(dependencies).createRoutine(device.id, botRoutinesMatch[1]!, key, body),
+          await botSessionsOrNotFound(dependencies).createRoutine(
+            device.id,
+            botRoutinesMatch[1]!,
+            key,
+            body,
+          ),
         );
         return;
       }
-      const botRoutineMatch = /^\/bots\/([A-Za-z0-9._:-]{1,160})\/routines\/([A-Za-z0-9._:-]{1,160})$/u.exec(path);
+      const botRoutineMatch =
+        /^\/bots\/([A-Za-z0-9._:-]{1,160})\/routines\/([A-Za-z0-9._:-]{1,160})$/u.exec(path);
       if (botRoutineMatch && request.method === "PATCH") {
         requireNoQuery(query);
         route = "botRoutines";
@@ -4016,12 +5346,17 @@ export function createAidenRemoteRequestHandler(
         deviceIdSuffix = device.id.slice(-8);
         requireDeviceCapabilities(device, ["bot:read"]);
         const revision = requiredHeader(request, "if-match", /^[\x21-\x7e]{1,128}$/u);
-        await botSessionsOrNotFound(dependencies).deleteRoutine(botRoutineMatch[1]!, botRoutineMatch[2]!, revision);
+        await botSessionsOrNotFound(dependencies).deleteRoutine(
+          botRoutineMatch[1]!,
+          botRoutineMatch[2]!,
+          revision,
+        );
         response.writeHead(204, responseHeaders());
         response.end();
         return;
       }
-      const botConnectionRequestMatch = /^\/bots\/([A-Za-z0-9._:-]{1,160})\/connection-requests$/u.exec(path);
+      const botConnectionRequestMatch =
+        /^\/bots\/([A-Za-z0-9._:-]{1,160})\/connection-requests$/u.exec(path);
       if (botConnectionRequestMatch && request.method === "POST") {
         requireNoQuery(query);
         route = "botConnectionRequests";
@@ -4033,7 +5368,12 @@ export function createAidenRemoteRequestHandler(
         writeJson(
           response,
           200,
-          await botSessionsOrNotFound(dependencies).requestConnection(device.id, botConnectionRequestMatch[1]!, key, body),
+          await botSessionsOrNotFound(dependencies).requestConnection(
+            device.id,
+            botConnectionRequestMatch[1]!,
+            key,
+            body,
+          ),
         );
         return;
       }
@@ -4045,20 +5385,44 @@ export function createAidenRemoteRequestHandler(
         // Previews quote the Bot's replies: reading them is a chat read.
         requireDeviceCapabilities(device, ["chat:read"]);
         const params = new URLSearchParams(query);
-        if ([...params.keys()].some((name) => name !== "since") || params.getAll("since").length > 1) {
-          throw new AidenRemoteServiceError("invalid_request", "Only the since query is accepted.", 400);
+        if (
+          [...params.keys()].some((name) => name !== "since") ||
+          params.getAll("since").length > 1
+        ) {
+          throw new AidenRemoteServiceError(
+            "invalid_request",
+            "Only the since query is accepted.",
+            400,
+          );
         }
-        const feed = await botSessionFeature(dependencies, "routineNotificationFeed")(params.get("since") ?? undefined, {
+        const feed = await botSessionFeature(dependencies, "routineNotificationFeed")(
+          params.get("since") ?? undefined,
+          {
             issues: holdsBotIssues(device, dependencies),
             accessRequests: holdsBotAccessRequests(device, dependencies),
             messaging: holdsBotMessaging(device, dependencies),
             peers: holdsBotPeers(device, dependencies),
-          });
+          },
+        );
         const current = await authenticateCredential(request, dependencies.devices, "bot:read");
         requireDeviceCapabilities(current, ["chat:read"]);
-        if (current.id !== device.id) throw new AidenRemoteServiceError("capability_denied", "Device authorization changed.", 403);
-        requireRetainedBotProjectionGrants(device, current, ["bot:issues", "bot:access-requests", "bot:messaging"]);
-        writeJson(response, 200, { ...feed, notifications: feed.notifications.filter((entry) => entry.kind !== "peer" || holdsBotPeers(current, dependencies)) });
+        if (current.id !== device.id)
+          throw new AidenRemoteServiceError(
+            "capability_denied",
+            "Device authorization changed.",
+            403,
+          );
+        requireRetainedBotProjectionGrants(device, current, [
+          "bot:issues",
+          "bot:access-requests",
+          "bot:messaging",
+        ]);
+        writeJson(response, 200, {
+          ...feed,
+          notifications: feed.notifications.filter(
+            (entry) => entry.kind !== "peer" || holdsBotPeers(current, dependencies),
+          ),
+        });
         return;
       }
       const botMemoryMatch = /^\/bots\/([A-Za-z0-9._:-]{1,160})\/memory$/u.exec(path);
@@ -4069,7 +5433,11 @@ export function createAidenRemoteRequestHandler(
         deviceIdSuffix = device.id.slice(-8);
         // Memory holds what the person said in chat: reading it is a chat read.
         requireDeviceCapabilities(device, ["chat:read"]);
-        writeJson(response, 200, await botSessionFeature(dependencies, "memory")(botMemoryMatch[1]!));
+        writeJson(
+          response,
+          200,
+          await botSessionFeature(dependencies, "memory")(botMemoryMatch[1]!),
+        );
         return;
       }
       const botMemoryEditsMatch = /^\/bots\/([A-Za-z0-9._:-]{1,160})\/memory\/edits$/u.exec(path);
@@ -4084,12 +5452,19 @@ export function createAidenRemoteRequestHandler(
         writeJson(
           response,
           200,
-          await botSessionFeature(dependencies, "editMemory")(device.id, botMemoryEditsMatch[1]!, key, body),
+          await botSessionFeature(dependencies, "editMemory")(
+            device.id,
+            botMemoryEditsMatch[1]!,
+            key,
+            body,
+          ),
         );
         return;
       }
       const botProposalMatch =
-        /^\/bots\/([A-Za-z0-9._:-]{1,160})\/routine-proposals\/([A-Za-z0-9-]{1,64})\/respond$/u.exec(path);
+        /^\/bots\/([A-Za-z0-9._:-]{1,160})\/routine-proposals\/([A-Za-z0-9-]{1,64})\/respond$/u.exec(
+          path,
+        );
       if (botProposalMatch && request.method === "POST") {
         requireNoQuery(query);
         route = "botRoutineProposals";
@@ -4111,13 +5486,19 @@ export function createAidenRemoteRequestHandler(
         );
         return;
       }
-      const botSuggestionsMatch = /^\/bots\/([A-Za-z0-9._:-]{1,160})\/routine-suggestions$/u.exec(path);
+      const botSuggestionsMatch = /^\/bots\/([A-Za-z0-9._:-]{1,160})\/routine-suggestions$/u.exec(
+        path,
+      );
       if (botSuggestionsMatch && request.method === "GET") {
         requireNoQuery(query);
         route = "botRoutineSuggestions";
         const device = await authenticate(request, dependencies.devices, "bot:read");
         deviceIdSuffix = device.id.slice(-8);
-        writeJson(response, 200, await botSessionFeature(dependencies, "routineSuggestions")(botSuggestionsMatch[1]!));
+        writeJson(
+          response,
+          200,
+          await botSessionFeature(dependencies, "routineSuggestions")(botSuggestionsMatch[1]!),
+        );
         return;
       }
       const botChatsMatch = /^\/bots\/([A-Za-z0-9._:-]{1,160})\/chats$/u.exec(path);
@@ -4135,12 +5516,7 @@ export function createAidenRemoteRequestHandler(
         writeJson(
           response,
           201,
-          await dependencies.bots.createChat(
-            device.id,
-            botChatsMatch[1]!,
-            key,
-            body,
-          ),
+          await dependencies.bots.createChat(device.id, botChatsMatch[1]!, key, body),
         );
         return;
       }
@@ -4159,12 +5535,7 @@ export function createAidenRemoteRequestHandler(
         writeJson(
           response,
           200,
-          await dependencies.bots.updateAccess(
-            device.id,
-            botCapabilitiesMatch[1]!,
-            revision,
-            body,
-          ),
+          await dependencies.bots.updateAccess(device.id, botCapabilitiesMatch[1]!, revision, body),
         );
         return;
       }
@@ -4177,7 +5548,13 @@ export function createAidenRemoteRequestHandler(
         if (!dependencies.bots) {
           throw new AidenRemoteServiceError("not_found", "This endpoint is unavailable.", 404);
         }
-        await writeBotDetail(response, 200, await dependencies.bots.get(botMatch[1]!, device.id), device, dependencies);
+        await writeBotDetail(
+          response,
+          200,
+          await dependencies.bots.get(botMatch[1]!, device.id),
+          device,
+          dependencies,
+        );
         return;
       }
       if (botMatch && request.method === "PATCH") {
@@ -4190,8 +5567,19 @@ export function createAidenRemoteRequestHandler(
         if (!dependencies.bots) {
           throw new AidenRemoteServiceError("not_found", "This endpoint is unavailable.", 404);
         }
-        try { parseAidenRemoteBotIdentityPatchRequest(body, {allowChatActivity: device.capabilities.has("bot:activity") && botActivityWired(dependencies), allowBotMessaging: holdsBotMessaging(device, dependencies)}); }
-        catch { throw new AidenRemoteServiceError("invalid_request", "The Bot identity update is invalid.", 400); }
+        try {
+          parseAidenRemoteBotIdentityPatchRequest(body, {
+            allowChatActivity:
+              device.capabilities.has("bot:activity") && botActivityWired(dependencies),
+            allowBotMessaging: holdsBotMessaging(device, dependencies),
+          });
+        } catch {
+          throw new AidenRemoteServiceError(
+            "invalid_request",
+            "The Bot identity update is invalid.",
+            400,
+          );
+        }
         const revision = requiredHeader(request, "if-match", /^[\x21-\x7e]{1,128}$/u);
         await writeBotDetail(
           response,
@@ -4225,7 +5613,8 @@ export function createAidenRemoteRequestHandler(
         route = "workspaces";
         const device = await authenticate(request, dependencies.devices, "workspace:read");
         deviceIdSuffix = device.id.slice(-8);
-        if (!dependencies.workspaces) throw new AidenRemoteServiceError("not_found", "This endpoint is unavailable.", 404);
+        if (!dependencies.workspaces)
+          throw new AidenRemoteServiceError("not_found", "This endpoint is unavailable.", 404);
         writeJson(response, 200, await dependencies.workspaces.list());
         return;
       }
@@ -4235,10 +5624,19 @@ export function createAidenRemoteRequestHandler(
         const body = await readJsonBody(request);
         const device = await authenticate(request, dependencies.devices, "workspace:manage");
         deviceIdSuffix = device.id.slice(-8);
-        if (!dependencies.workspaces) throw new AidenRemoteServiceError("not_found", "This endpoint is unavailable.", 404);
+        if (!dependencies.workspaces)
+          throw new AidenRemoteServiceError("not_found", "This endpoint is unavailable.", 404);
         const key = requiredHeader(request, "idempotency-key", /^[\x21-\x7e]{16,128}$/u);
-        const cloning = body !== null && typeof body === "object" && (body as { mode?: unknown }).mode === "clone";
-        if (cloning && (!isDesktopDevice(device) || !device.capabilities.has("workspace:browse"))) throw new AidenRemoteServiceError("capability_denied", "Cloning projects requires a paired computer with folder browsing access.", 403);
+        const cloning =
+          body !== null &&
+          typeof body === "object" &&
+          (body as { mode?: unknown }).mode === "clone";
+        if (cloning && (!isDesktopDevice(device) || !device.capabilities.has("workspace:browse")))
+          throw new AidenRemoteServiceError(
+            "capability_denied",
+            "Cloning projects requires a paired computer with folder browsing access.",
+            403,
+          );
         const controller = new AbortController();
         const abort = () => controller.abort();
         if (cloning) {
@@ -4246,9 +5644,16 @@ export function createAidenRemoteRequestHandler(
           if (response.destroyed || request.aborted) abort();
         }
         try {
-          const result = await dependencies.workspaces.create(device.id, key, body, controller.signal);
+          const result = await dependencies.workspaces.create(
+            device.id,
+            key,
+            body,
+            controller.signal,
+          );
           if (!controller.signal.aborted) writeJson(response, 201, result);
-        } finally { response.off("close", abort); }
+        } finally {
+          response.off("close", abort);
+        }
         return;
       }
       const workspaceMatch = /^\/workspaces\/([A-Za-z0-9_-]{1,128})$/u.exec(path);
@@ -4257,7 +5662,8 @@ export function createAidenRemoteRequestHandler(
         route = "workspace";
         const device = await authenticate(request, dependencies.devices, "workspace:read");
         deviceIdSuffix = device.id.slice(-8);
-        if (!dependencies.workspaces) throw new AidenRemoteServiceError("not_found", "This endpoint is unavailable.", 404);
+        if (!dependencies.workspaces)
+          throw new AidenRemoteServiceError("not_found", "This endpoint is unavailable.", 404);
         writeJson(response, 200, await dependencies.workspaces.get(workspaceMatch[1]!));
         return;
       }
@@ -4267,16 +5673,13 @@ export function createAidenRemoteRequestHandler(
         const body = await readJsonBody(request);
         const device = await authenticate(request, dependencies.devices, "workspace:manage");
         deviceIdSuffix = device.id.slice(-8);
-        if (!dependencies.workspaces) throw new AidenRemoteServiceError("not_found", "This endpoint is unavailable.", 404);
+        if (!dependencies.workspaces)
+          throw new AidenRemoteServiceError("not_found", "This endpoint is unavailable.", 404);
         const revision = requiredHeader(request, "if-match", /^[\x21-\x7e]{1,128}$/u);
         writeJson(
           response,
           200,
-          await dependencies.workspaces.update(
-            workspaceMatch[1]!,
-            revision,
-            body,
-          ),
+          await dependencies.workspaces.update(workspaceMatch[1]!, revision, body),
         );
         return;
       }
@@ -4285,7 +5688,8 @@ export function createAidenRemoteRequestHandler(
         route = "workspace";
         const device = await authenticate(request, dependencies.devices, "workspace:manage");
         deviceIdSuffix = device.id.slice(-8);
-        if (!dependencies.workspaces) throw new AidenRemoteServiceError("not_found", "This endpoint is unavailable.", 404);
+        if (!dependencies.workspaces)
+          throw new AidenRemoteServiceError("not_found", "This endpoint is unavailable.", 404);
         const revision = requiredHeader(request, "if-match", /^[\x21-\x7e]{1,128}$/u);
         await dependencies.workspaces.remove(workspaceMatch[1]!, revision);
         response.writeHead(204, responseHeaders());
@@ -4295,29 +5699,53 @@ export function createAidenRemoteRequestHandler(
       const workspaceFilesMatch = /^\/workspaces\/([A-Za-z0-9_-]{1,128})\/files$/u.exec(path);
       if (workspaceFilesMatch && request.method === "GET") {
         const params = new URLSearchParams(query);
-        if (query && (params.get("tree") !== "1" || [...params.keys()].some(key =>
-          !["tree", "directory", "cursor"].includes(key) || params.getAll(key).length !== 1) ||
-          (params.has("directory") && !/^file_[A-Za-z0-9_-]{43}$/u.test(params.get("directory")!)) ||
-          (params.has("cursor") && !/^cur_[A-Za-z0-9_-]{43}$/u.test(params.get("cursor")!)))) {
-          throw new AidenRemoteServiceError("invalid_request", "The file page request is invalid.", 400);
+        if (
+          query &&
+          (params.get("tree") !== "1" ||
+            [...params.keys()].some(
+              (key) =>
+                !["tree", "directory", "cursor"].includes(key) || params.getAll(key).length !== 1,
+            ) ||
+            (params.has("directory") &&
+              !/^file_[A-Za-z0-9_-]{43}$/u.test(params.get("directory")!)) ||
+            (params.has("cursor") && !/^cur_[A-Za-z0-9_-]{43}$/u.test(params.get("cursor")!)))
+        ) {
+          throw new AidenRemoteServiceError(
+            "invalid_request",
+            "The file page request is invalid.",
+            400,
+          );
         }
         route = "workspaceFiles";
         const device = await authenticate(request, dependencies.devices, "files:read");
         deviceIdSuffix = device.id.slice(-8);
-        if (!dependencies.files) throw new AidenRemoteServiceError("not_found", "This endpoint is unavailable.", 404);
-        if (query && !dependencies.files.children) throw new AidenRemoteServiceError("not_found", "This endpoint is unavailable.", 404);
-        writeJson(response, 200, query
-          ? await dependencies.files.children!(device.id, workspaceFilesMatch[1]!, params.get("directory") ?? undefined, params.get("cursor") ?? undefined)
-          : await dependencies.files.list(device.id, workspaceFilesMatch[1]!));
+        if (!dependencies.files)
+          throw new AidenRemoteServiceError("not_found", "This endpoint is unavailable.", 404);
+        if (query && !dependencies.files.children)
+          throw new AidenRemoteServiceError("not_found", "This endpoint is unavailable.", 404);
+        writeJson(
+          response,
+          200,
+          query
+            ? await dependencies.files.children!(
+                device.id,
+                workspaceFilesMatch[1]!,
+                params.get("directory") ?? undefined,
+                params.get("cursor") ?? undefined,
+              )
+            : await dependencies.files.list(device.id, workspaceFilesMatch[1]!),
+        );
         return;
       }
-      const workspaceFileMatch = /^\/workspaces\/([A-Za-z0-9_-]{1,128})\/files\/(file_[A-Za-z0-9_-]{43})$/u.exec(path);
+      const workspaceFileMatch =
+        /^\/workspaces\/([A-Za-z0-9_-]{1,128})\/files\/(file_[A-Za-z0-9_-]{43})$/u.exec(path);
       if (workspaceFileMatch && request.method === "GET") {
         requireNoQuery(query);
         route = "workspaceFile";
         const device = await authenticate(request, dependencies.devices, "files:read");
         deviceIdSuffix = device.id.slice(-8);
-        if (!dependencies.files) throw new AidenRemoteServiceError("not_found", "This endpoint is unavailable.", 404);
+        if (!dependencies.files)
+          throw new AidenRemoteServiceError("not_found", "This endpoint is unavailable.", 404);
         writeJson(
           response,
           200,
@@ -4331,7 +5759,8 @@ export function createAidenRemoteRequestHandler(
         const body = await readJsonBody(request, MAX_FILE_REQUEST_BODY_BYTES);
         const device = await authenticate(request, dependencies.devices, "files:write");
         deviceIdSuffix = device.id.slice(-8);
-        if (!dependencies.files) throw new AidenRemoteServiceError("not_found", "This endpoint is unavailable.", 404);
+        if (!dependencies.files)
+          throw new AidenRemoteServiceError("not_found", "This endpoint is unavailable.", 404);
         writeJson(
           response,
           200,
@@ -4344,7 +5773,10 @@ export function createAidenRemoteRequestHandler(
         );
         return;
       }
-      const gitBaseMatch = /^\/workspaces\/([A-Za-z0-9_-]{1,128})\/git\/(review|diff|branches|checkout|commit|push-capability|push|compare|comparison-diff|worktrees)$/u.exec(path);
+      const gitBaseMatch =
+        /^\/workspaces\/([A-Za-z0-9_-]{1,128})\/git\/(review|diff|branches|checkout|commit|push-capability|push|compare|comparison-diff|worktrees)$/u.exec(
+          path,
+        );
       if (gitBaseMatch) {
         requireNoQuery(query);
         route = "workspaceGit";
@@ -4372,7 +5804,8 @@ export function createAidenRemoteRequestHandler(
             writeRoute ? "git:write" : "git:read",
           );
           deviceIdSuffix = device.id.slice(-8);
-          if (!dependencies.git) throw new AidenRemoteServiceError("not_found", "This endpoint is unavailable.", 404);
+          if (!dependencies.git)
+            throw new AidenRemoteServiceError("not_found", "This endpoint is unavailable.", 404);
           if (action === "review" && request.method === "GET") {
             writeJson(response, 200, await dependencies.git.review(device.id, workspaceId));
             return;
@@ -4387,17 +5820,29 @@ export function createAidenRemoteRequestHandler(
           }
           if (action === "branches" && request.method === "POST") {
             const key = requiredHeader(request, "idempotency-key", /^[\x21-\x7e]{16,128}$/u);
-            writeJson(response, 202, await dependencies.git.createBranch(device.id, workspaceId, key, body));
+            writeJson(
+              response,
+              202,
+              await dependencies.git.createBranch(device.id, workspaceId, key, body),
+            );
             return;
           }
           if (action === "checkout" && request.method === "POST") {
             const key = requiredHeader(request, "idempotency-key", /^[\x21-\x7e]{16,128}$/u);
-            writeJson(response, 202, await dependencies.git.checkout(device.id, workspaceId, key, body));
+            writeJson(
+              response,
+              202,
+              await dependencies.git.checkout(device.id, workspaceId, key, body),
+            );
             return;
           }
           if (action === "commit" && request.method === "POST") {
             const key = requiredHeader(request, "idempotency-key", /^[\x21-\x7e]{16,128}$/u);
-            writeJson(response, 202, await dependencies.git.commit(device.id, workspaceId, key, body));
+            writeJson(
+              response,
+              202,
+              await dependencies.git.commit(device.id, workspaceId, key, body),
+            );
             return;
           }
           if (action === "push-capability" && request.method === "GET") {
@@ -4406,7 +5851,11 @@ export function createAidenRemoteRequestHandler(
           }
           if (action === "push" && request.method === "POST") {
             const key = requiredHeader(request, "idempotency-key", /^[\x21-\x7e]{16,128}$/u);
-            writeJson(response, 202, await dependencies.git.push(device.id, workspaceId, key, body));
+            writeJson(
+              response,
+              202,
+              await dependencies.git.push(device.id, workspaceId, key, body),
+            );
             return;
           }
           if (action === "compare" && request.method === "POST") {
@@ -4414,7 +5863,11 @@ export function createAidenRemoteRequestHandler(
             return;
           }
           if (action === "comparison-diff" && request.method === "POST") {
-            writeJson(response, 200, await dependencies.git.comparisonDiff(device.id, workspaceId, body));
+            writeJson(
+              response,
+              200,
+              await dependencies.git.comparisonDiff(device.id, workspaceId, body),
+            );
             return;
           }
           if (action === "worktrees" && request.method === "GET") {
@@ -4423,19 +5876,25 @@ export function createAidenRemoteRequestHandler(
           }
           if (action === "worktrees" && request.method === "POST") {
             const key = requiredHeader(request, "idempotency-key", /^[\x21-\x7e]{16,128}$/u);
-            writeJson(response, 202, await dependencies.git.createWorktree(device.id, workspaceId, key, body));
+            writeJson(
+              response,
+              202,
+              await dependencies.git.createWorktree(device.id, workspaceId, key, body),
+            );
             return;
           }
         }
       }
-      const managedWorktreeMatch = /^\/workspaces\/([A-Za-z0-9_-]{1,128})\/git\/managed-worktree$/u.exec(path);
+      const managedWorktreeMatch =
+        /^\/workspaces\/([A-Za-z0-9_-]{1,128})\/git\/managed-worktree$/u.exec(path);
       if (managedWorktreeMatch && request.method === "DELETE") {
         requireNoQuery(query);
         route = "workspaceGit";
         const body = await readJsonBody(request);
         const device = await authenticate(request, dependencies.devices, "git:write");
         deviceIdSuffix = device.id.slice(-8);
-        if (!dependencies.git) throw new AidenRemoteServiceError("not_found", "This endpoint is unavailable.", 404);
+        if (!dependencies.git)
+          throw new AidenRemoteServiceError("not_found", "This endpoint is unavailable.", 404);
         const revision = requiredHeader(request, "if-match", /^[\x21-\x7e]{1,128}$/u);
         const key = requiredHeader(request, "idempotency-key", /^[\x21-\x7e]{16,128}$/u);
         writeJson(
@@ -4456,7 +5915,8 @@ export function createAidenRemoteRequestHandler(
         route = "scheduledTasks";
         const device = await authenticate(request, dependencies.devices, "schedule:read");
         deviceIdSuffix = device.id.slice(-8);
-        if (!dependencies.schedules) throw new AidenRemoteServiceError("not_found", "This endpoint is unavailable.", 404);
+        if (!dependencies.schedules)
+          throw new AidenRemoteServiceError("not_found", "This endpoint is unavailable.", 404);
         writeJson(response, 200, await dependencies.schedules.list(device.id));
         return;
       }
@@ -4466,7 +5926,8 @@ export function createAidenRemoteRequestHandler(
         const body = await readJsonBody(request);
         const device = await authenticate(request, dependencies.devices, "schedule:write");
         deviceIdSuffix = device.id.slice(-8);
-        if (!dependencies.schedules) throw new AidenRemoteServiceError("not_found", "This endpoint is unavailable.", 404);
+        if (!dependencies.schedules)
+          throw new AidenRemoteServiceError("not_found", "This endpoint is unavailable.", 404);
         const key = requiredHeader(request, "idempotency-key", /^[\x21-\x7e]{16,128}$/u);
         writeJson(response, 201, await dependencies.schedules.create(device.id, key, body));
         return;
@@ -4477,7 +5938,8 @@ export function createAidenRemoteRequestHandler(
         const body = await readJsonBody(request);
         const device = await authenticate(request, dependencies.devices, "schedule:read");
         deviceIdSuffix = device.id.slice(-8);
-        if (!dependencies.schedules) throw new AidenRemoteServiceError("not_found", "This endpoint is unavailable.", 404);
+        if (!dependencies.schedules)
+          throw new AidenRemoteServiceError("not_found", "This endpoint is unavailable.", 404);
         writeJson(response, 200, dependencies.schedules.preview(body));
         return;
       }
@@ -4485,8 +5947,13 @@ export function createAidenRemoteRequestHandler(
         route = "scheduledTasks";
         const device = await authenticate(request, dependencies.devices, "schedule:read");
         deviceIdSuffix = device.id.slice(-8);
-        if (!dependencies.schedules) throw new AidenRemoteServiceError("not_found", "This endpoint is unavailable.", 404);
-        writeJson(response, 200, await dependencies.schedules.scripts(device.id, scheduledScriptsQuery(query).workspaceId));
+        if (!dependencies.schedules)
+          throw new AidenRemoteServiceError("not_found", "This endpoint is unavailable.", 404);
+        writeJson(
+          response,
+          200,
+          await dependencies.schedules.scripts(device.id, scheduledScriptsQuery(query).workspaceId),
+        );
         return;
       }
       if (path === "/scheduled-tasks/mcp-servers" && request.method === "GET") {
@@ -4494,7 +5961,8 @@ export function createAidenRemoteRequestHandler(
         route = "scheduledTasks";
         const device = await authenticate(request, dependencies.devices, "schedule:read");
         deviceIdSuffix = device.id.slice(-8);
-        if (!dependencies.schedules) throw new AidenRemoteServiceError("not_found", "This endpoint is unavailable.", 404);
+        if (!dependencies.schedules)
+          throw new AidenRemoteServiceError("not_found", "This endpoint is unavailable.", 404);
         writeJson(response, 200, await dependencies.schedules.mcpServers());
         return;
       }
@@ -4502,8 +5970,13 @@ export function createAidenRemoteRequestHandler(
         route = "scheduledTasks";
         const device = await authenticate(request, dependencies.devices, "schedule:read");
         deviceIdSuffix = device.id.slice(-8);
-        if (!dependencies.schedules) throw new AidenRemoteServiceError("not_found", "This endpoint is unavailable.", 404);
-        writeJson(response, 200, await dependencies.schedules.notifications(scheduledNotificationsQuery(query).since));
+        if (!dependencies.schedules)
+          throw new AidenRemoteServiceError("not_found", "This endpoint is unavailable.", 404);
+        writeJson(
+          response,
+          200,
+          await dependencies.schedules.notifications(scheduledNotificationsQuery(query).since),
+        );
         return;
       }
       if (path === "/scheduled-tasks/settings" && request.method === "GET") {
@@ -4511,33 +5984,61 @@ export function createAidenRemoteRequestHandler(
         route = "scheduledTasks";
         const device = await authenticate(request, dependencies.devices, "schedule:read");
         deviceIdSuffix = device.id.slice(-8);
-        if (!dependencies.schedules) throw new AidenRemoteServiceError("not_found", "This endpoint is unavailable.", 404);
+        if (!dependencies.schedules)
+          throw new AidenRemoteServiceError("not_found", "This endpoint is unavailable.", 404);
         writeJson(response, 200, await dependencies.schedules.settings());
         return;
       }
-      const appControlMatch = /^\/chats\/([A-Za-z0-9._:-]{1,128})\/controls\/([A-Za-z0-9_-]{1,128})$/u.exec(path);
+      const appControlMatch =
+        /^\/chats\/([A-Za-z0-9._:-]{1,128})\/controls\/([A-Za-z0-9_-]{1,128})$/u.exec(path);
       if (appControlMatch && (request.method === "GET" || request.method === "POST")) {
-        requireNoQuery(query); route = "appControls";
-        const device = await authenticate(request, dependencies.devices, request.method === "GET" ? "app-controls:read" : "app-controls:respond");
+        requireNoQuery(query);
+        route = "appControls";
+        const device = await authenticate(
+          request,
+          dependencies.devices,
+          request.method === "GET" ? "app-controls:read" : "app-controls:respond",
+        );
         requireDeviceCapabilities(device, ["chat:read", "app-controls:read"]);
-        if (!dependencies.appControls || !dependencies.chats) throw new AidenRemoteServiceError("not_found", "Chat controls are unavailable.", 404);
-        const chatId = appControlMatch[1]!, panelId = appControlMatch[2]!;
+        if (!dependencies.appControls || !dependencies.chats)
+          throw new AidenRemoteServiceError("not_found", "Chat controls are unavailable.", 404);
+        const chatId = appControlMatch[1]!,
+          panelId = appControlMatch[2]!;
         const chats = dependencies.chats;
-        const authority = { deviceId: device.id, capabilities: device.capabilities,
-          current: () => { try { dependencies.devices.acquireDeviceAuthorization(device.id, false)(); return true; } catch { return false; } },
-          authorize: async () => { await requireChatAccess(chats, device, chatId, "read"); },
+        const authority = {
+          deviceId: device.id,
+          capabilities: device.capabilities,
+          current: () => {
+            try {
+              dependencies.devices.acquireDeviceAuthorization(device.id, false)();
+              return true;
+            } catch {
+              return false;
+            }
+          },
+          authorize: async () => {
+            await requireChatAccess(chats, device, chatId, "read");
+          },
         };
-        const value = request.method === "GET"
-          ? await dependencies.appControls.get(authority, chatId, panelId)
-          : await dependencies.appControls.apply(authority, chatId, panelId, await readJsonBody(request, 2048));
-        writeJson(response, 200, value); return;
+        const value =
+          request.method === "GET"
+            ? await dependencies.appControls.get(authority, chatId, panelId)
+            : await dependencies.appControls.apply(
+                authority,
+                chatId,
+                panelId,
+                await readJsonBody(request, 2048),
+              );
+        writeJson(response, 200, value);
+        return;
       }
       if (path === "/memory/settings" && request.method === "GET") {
         requireNoQuery(query);
         route = "memorySettings";
         const device = await authenticate(request, dependencies.devices, "workspace:read");
         deviceIdSuffix = device.id.slice(-8);
-        if (!dependencies.memorySettings) throw new AidenRemoteServiceError("not_found", "This endpoint is unavailable.", 404);
+        if (!dependencies.memorySettings)
+          throw new AidenRemoteServiceError("not_found", "This endpoint is unavailable.", 404);
         writeJson(response, 200, await dependencies.memorySettings.get());
         return;
       }
@@ -4547,7 +6048,8 @@ export function createAidenRemoteRequestHandler(
         const body = await readJsonBody(request);
         const device = await authenticate(request, dependencies.devices, "workspace:manage");
         deviceIdSuffix = device.id.slice(-8);
-        if (!dependencies.memorySettings) throw new AidenRemoteServiceError("not_found", "This endpoint is unavailable.", 404);
+        if (!dependencies.memorySettings)
+          throw new AidenRemoteServiceError("not_found", "This endpoint is unavailable.", 404);
         const revision = requiredHeader(request, "if-match", /^[\x21-\x7e]{1,128}$/u);
         writeJson(response, 200, await dependencies.memorySettings.update(revision, body));
         return;
@@ -4558,7 +6060,8 @@ export function createAidenRemoteRequestHandler(
         const body = await readJsonBody(request);
         const device = await authenticate(request, dependencies.devices, "schedule:write");
         deviceIdSuffix = device.id.slice(-8);
-        if (!dependencies.schedules) throw new AidenRemoteServiceError("not_found", "This endpoint is unavailable.", 404);
+        if (!dependencies.schedules)
+          throw new AidenRemoteServiceError("not_found", "This endpoint is unavailable.", 404);
         const revision = requiredHeader(request, "if-match", /^[\x21-\x7e]{1,128}$/u);
         writeJson(response, 200, await dependencies.schedules.updateSettings(revision, body));
         return;
@@ -4569,28 +6072,39 @@ export function createAidenRemoteRequestHandler(
         route = "scheduledTasks";
         const device = await authenticate(request, dependencies.devices, "schedule:read");
         deviceIdSuffix = device.id.slice(-8);
-        if (!dependencies.schedules) throw new AidenRemoteServiceError("not_found", "This endpoint is unavailable.", 404);
+        if (!dependencies.schedules)
+          throw new AidenRemoteServiceError("not_found", "This endpoint is unavailable.", 404);
         writeJson(response, 200, await dependencies.schedules.runs(scheduledRunsMatch[1]!));
         return;
       }
-      const scheduledActionMatch = /^\/scheduled-tasks\/([A-Za-z0-9._:-]{1,160})\/(pause|resume|run)$/u.exec(path);
+      const scheduledActionMatch =
+        /^\/scheduled-tasks\/([A-Za-z0-9._:-]{1,160})\/(pause|resume|run)$/u.exec(path);
       if (scheduledActionMatch && request.method === "POST") {
         requireNoQuery(query);
         route = "scheduledTasks";
         const device = await authenticate(request, dependencies.devices, "schedule:write");
         deviceIdSuffix = device.id.slice(-8);
-        if (!dependencies.schedules) throw new AidenRemoteServiceError("not_found", "This endpoint is unavailable.", 404);
+        if (!dependencies.schedules)
+          throw new AidenRemoteServiceError("not_found", "This endpoint is unavailable.", 404);
         const taskId = scheduledActionMatch[1]!;
         const action = scheduledActionMatch[2]!;
         const key = requiredHeader(request, "idempotency-key", /^[\x21-\x7e]{16,128}$/u);
         const revision = requiredHeader(request, "if-match", /^[\x21-\x7e]{1,128}$/u);
         if (action === "run") {
-          writeJson(response, 202, await dependencies.schedules.run(device.id, taskId, revision, key));
+          writeJson(
+            response,
+            202,
+            await dependencies.schedules.run(device.id, taskId, revision, key),
+          );
           return;
         }
-        writeJson(response, 202, action === "pause"
-          ? await dependencies.schedules.pause(device.id, taskId, revision, key)
-          : await dependencies.schedules.resume(device.id, taskId, revision, key));
+        writeJson(
+          response,
+          202,
+          action === "pause"
+            ? await dependencies.schedules.pause(device.id, taskId, revision, key)
+            : await dependencies.schedules.resume(device.id, taskId, revision, key),
+        );
         return;
       }
       const scheduledTaskMatch = /^\/scheduled-tasks\/([A-Za-z0-9._:-]{1,160})$/u.exec(path);
@@ -4599,8 +6113,13 @@ export function createAidenRemoteRequestHandler(
         route = "scheduledTasks";
         const device = await authenticate(request, dependencies.devices, "schedule:read");
         deviceIdSuffix = device.id.slice(-8);
-        if (!dependencies.schedules) throw new AidenRemoteServiceError("not_found", "This endpoint is unavailable.", 404);
-        writeJson(response, 200, await dependencies.schedules.get(device.id, scheduledTaskMatch[1]!));
+        if (!dependencies.schedules)
+          throw new AidenRemoteServiceError("not_found", "This endpoint is unavailable.", 404);
+        writeJson(
+          response,
+          200,
+          await dependencies.schedules.get(device.id, scheduledTaskMatch[1]!),
+        );
         return;
       }
       if (scheduledTaskMatch && request.method === "PATCH") {
@@ -4609,9 +6128,14 @@ export function createAidenRemoteRequestHandler(
         const body = await readJsonBody(request);
         const device = await authenticate(request, dependencies.devices, "schedule:write");
         deviceIdSuffix = device.id.slice(-8);
-        if (!dependencies.schedules) throw new AidenRemoteServiceError("not_found", "This endpoint is unavailable.", 404);
+        if (!dependencies.schedules)
+          throw new AidenRemoteServiceError("not_found", "This endpoint is unavailable.", 404);
         const revision = requiredHeader(request, "if-match", /^[\x21-\x7e]{1,128}$/u);
-        writeJson(response, 200, await dependencies.schedules.update(device.id, scheduledTaskMatch[1]!, revision, body));
+        writeJson(
+          response,
+          200,
+          await dependencies.schedules.update(device.id, scheduledTaskMatch[1]!, revision, body),
+        );
         return;
       }
       if (scheduledTaskMatch && request.method === "DELETE") {
@@ -4619,7 +6143,8 @@ export function createAidenRemoteRequestHandler(
         route = "scheduledTasks";
         const device = await authenticate(request, dependencies.devices, "schedule:write");
         deviceIdSuffix = device.id.slice(-8);
-        if (!dependencies.schedules) throw new AidenRemoteServiceError("not_found", "This endpoint is unavailable.", 404);
+        if (!dependencies.schedules)
+          throw new AidenRemoteServiceError("not_found", "This endpoint is unavailable.", 404);
         const revision = requiredHeader(request, "if-match", /^[\x21-\x7e]{1,128}$/u);
         await dependencies.schedules.remove(scheduledTaskMatch[1]!, revision);
         response.writeHead(204, responseHeaders());
@@ -4631,7 +6156,8 @@ export function createAidenRemoteRequestHandler(
         route = "workspaceBrowserRoots";
         const device = await authenticate(request, dependencies.devices, "workspace:browse");
         deviceIdSuffix = device.id.slice(-8);
-        if (!dependencies.workspaceBrowser) throw new AidenRemoteServiceError("not_found", "This endpoint is unavailable.", 404);
+        if (!dependencies.workspaceBrowser)
+          throw new AidenRemoteServiceError("not_found", "This endpoint is unavailable.", 404);
         writeJson(response, 200, await dependencies.workspaceBrowser.listRoots(device.id));
         return;
       }
@@ -4639,7 +6165,8 @@ export function createAidenRemoteRequestHandler(
         route = "workspaceBrowserChildren";
         const device = await authenticate(request, dependencies.devices, "workspace:browse");
         deviceIdSuffix = device.id.slice(-8);
-        if (!dependencies.workspaceBrowser) throw new AidenRemoteServiceError("not_found", "This endpoint is unavailable.", 404);
+        if (!dependencies.workspaceBrowser)
+          throw new AidenRemoteServiceError("not_found", "This endpoint is unavailable.", 404);
         const parsed = browserQuery(query);
         writeJson(
           response,
@@ -4658,14 +6185,12 @@ export function createAidenRemoteRequestHandler(
         const body = await readJsonBody(request);
         const device = await authenticate(request, dependencies.devices, "workspace:browse");
         deviceIdSuffix = device.id.slice(-8);
-        if (!dependencies.workspaceBrowser) throw new AidenRemoteServiceError("not_found", "This endpoint is unavailable.", 404);
+        if (!dependencies.workspaceBrowser)
+          throw new AidenRemoteServiceError("not_found", "This endpoint is unavailable.", 404);
         writeJson(
           response,
           201,
-          await dependencies.workspaceBrowser.createSelection(
-            device.id,
-            selectionLocation(body),
-          ),
+          await dependencies.workspaceBrowser.createSelection(device.id, selectionLocation(body)),
         );
         return;
       }
@@ -4675,15 +6200,31 @@ export function createAidenRemoteRequestHandler(
         const device = await authenticate(request, dependencies.devices, "workspace:manage");
         requireDeviceCapabilities(device, ["server:read"]);
         deviceIdSuffix = device.id.slice(-8);
-        if (!dependencies.providers) throw new AidenRemoteServiceError("not_found", "Creating providers needs a newer Aiden Agent on your computer.", 404);
+        if (!dependencies.providers)
+          throw new AidenRemoteServiceError(
+            "not_found",
+            "Creating providers needs a newer Aiden Agent on your computer.",
+            404,
+          );
         const key = requiredHeader(request, "idempotency-key", /^[\x21-\x7e]{16,128}$/u);
         const body = await readJsonBody(request);
         const release = dependencies.devices.acquireDeviceAuthorization(device.id, true);
         try {
-          writeJson(response, 201, await dependencies.providers.create(device.id, key, body, () => {
-            try { admitDevice(device.id)(); return true; } catch { return false; }
-          }));
-        } finally { release(); }
+          writeJson(
+            response,
+            201,
+            await dependencies.providers.create(device.id, key, body, () => {
+              try {
+                admitDevice(device.id)();
+                return true;
+              } catch {
+                return false;
+              }
+            }),
+          );
+        } finally {
+          release();
+        }
         return;
       }
       if (path === "/models" && request.method === "GET") {
@@ -4691,7 +6232,8 @@ export function createAidenRemoteRequestHandler(
         route = "models";
         const device = await authenticate(request, dependencies.devices, "chat:read");
         deviceIdSuffix = device.id.slice(-8);
-        if (!dependencies.models) throw new AidenRemoteServiceError("not_found", "This endpoint is unavailable.", 404);
+        if (!dependencies.models)
+          throw new AidenRemoteServiceError("not_found", "This endpoint is unavailable.", 404);
         writeJson(response, 200, await dependencies.models.list());
         return;
       }
@@ -4699,39 +6241,92 @@ export function createAidenRemoteRequestHandler(
         route = "usage";
         const device = await authenticate(request, dependencies.devices, "server:read");
         deviceIdSuffix = device.id.slice(-8);
-        if (!dependencies.usage) throw new AidenRemoteServiceError("not_found", "This endpoint is unavailable.", 404);
+        if (!dependencies.usage)
+          throw new AidenRemoteServiceError("not_found", "This endpoint is unavailable.", 404);
         writeJson(response, 200, await dependencies.usage.summary(usageQuery(query)));
         return;
       }
       const readAloudChatMatch = /^\/chats\/([A-Za-z0-9._:-]{1,128})\/read-aloud$/u.exec(path);
-      const readAloudStopMatch = /^\/chats\/([A-Za-z0-9._:-]{1,128})\/read-aloud\/stop$/u.exec(path);
-      const readAloudAudioMatch = /^\/chats\/([A-Za-z0-9._:-]{1,128})\/read-aloud\/audio\/([A-Za-z0-9-]{1,128})\/(\d{1,5})\/(\d{1,9})$/u.exec(path);
+      const readAloudStopMatch = /^\/chats\/([A-Za-z0-9._:-]{1,128})\/read-aloud\/stop$/u.exec(
+        path,
+      );
+      const readAloudAudioMatch =
+        /^\/chats\/([A-Za-z0-9._:-]{1,128})\/read-aloud\/audio\/([A-Za-z0-9-]{1,128})\/(\d{1,5})\/(\d{1,9})$/u.exec(
+          path,
+        );
       const readAloudMatch = readAloudChatMatch ?? readAloudStopMatch ?? readAloudAudioMatch;
       if ((path === "/read-aloud" && request.method === "GET") || readAloudMatch) {
         requireNoQuery(query);
         route = "readAloud";
         const method = request.method;
-        const device = await authenticate(request, dependencies.devices, method === "GET" ? "chat:read" : "chat:write");
+        const device = await authenticate(
+          request,
+          dependencies.devices,
+          method === "GET" ? "chat:read" : "chat:write",
+        );
         deviceIdSuffix = device.id.slice(-8);
         const service = dependencies.readAloud;
-        if (!service || !dependencies.chats) throw new AidenRemoteServiceError("not_found", "Read Aloud needs a newer Aiden Agent on your computer.", 404);
-        if (!readAloudMatch) { writeJson(response, 200, await service.status()); return; }
+        if (!service || !dependencies.chats)
+          throw new AidenRemoteServiceError(
+            "not_found",
+            "Read Aloud needs a newer Aiden Agent on your computer.",
+            404,
+          );
+        if (!readAloudMatch) {
+          writeJson(response, 200, await service.status());
+          return;
+        }
         const chatId = readAloudMatch[1]!;
-        await requireChatAccess(dependencies.chats, device, chatId, method === "GET" ? "read" : "write");
+        await requireChatAccess(
+          dependencies.chats,
+          device,
+          chatId,
+          method === "GET" ? "read" : "write",
+        );
         const chats = dependencies.chats;
         const authority = {
-          deviceId: device.id, chatId,
-          current: () => { try { dependencies.devices.acquireDeviceAuthorization(device.id, false)(); return true; } catch { return false; } },
-          authorize: async () => { await requireChatAccess(chats, device, chatId, "write"); },
+          deviceId: device.id,
+          chatId,
+          current: () => {
+            try {
+              dependencies.devices.acquireDeviceAuthorization(device.id, false)();
+              return true;
+            } catch {
+              return false;
+            }
+          },
+          authorize: async () => {
+            await requireChatAccess(chats, device, chatId, "write");
+          },
         };
         if (method === "GET" && readAloudAudioMatch) {
-          writeJson(response, 200, await service.read(authority, readAloudAudioMatch[2]!, Number(readAloudAudioMatch[3]), Number(readAloudAudioMatch[4])));
+          writeJson(
+            response,
+            200,
+            await service.read(
+              authority,
+              readAloudAudioMatch[2]!,
+              Number(readAloudAudioMatch[3]),
+              Number(readAloudAudioMatch[4]),
+            ),
+          );
         } else if (method === "GET" && readAloudChatMatch) {
           writeJson(response, 200, await service.status(authority));
         } else if (method === "POST" && !readAloudAudioMatch) {
           const body = await readJsonBody(request, 4096);
-          writeJson(response, 200, readAloudStopMatch ? service.stop(authority, body) : await service.start(authority, body));
-        } else throw new AidenRemoteServiceError("not_found", "Read Aloud is set up in Aiden Agent on your computer.", 404);
+          writeJson(
+            response,
+            200,
+            readAloudStopMatch
+              ? service.stop(authority, body)
+              : await service.start(authority, body),
+          );
+        } else
+          throw new AidenRemoteServiceError(
+            "not_found",
+            "Read Aloud is set up in Aiden Agent on your computer.",
+            404,
+          );
         return;
       }
       if (path === "/speech" && request.method === "GET") {
@@ -4739,7 +6334,8 @@ export function createAidenRemoteRequestHandler(
         route = "speech";
         const device = await authenticate(request, dependencies.devices, "server:read");
         deviceIdSuffix = device.id.slice(-8);
-        if (!dependencies.speech) throw new AidenRemoteServiceError("not_found", "This endpoint is unavailable.", 404);
+        if (!dependencies.speech)
+          throw new AidenRemoteServiceError("not_found", "This endpoint is unavailable.", 404);
         writeJson(response, 200, await dependencies.speech.status());
         return;
       }
@@ -4749,18 +6345,26 @@ export function createAidenRemoteRequestHandler(
         const body = await readJsonBody(request, 1_024);
         const device = await authenticate(request, dependencies.devices, "chat:write");
         deviceIdSuffix = device.id.slice(-8);
-        if (!dependencies.speech) throw new AidenRemoteServiceError("not_found", "This endpoint is unavailable.", 404);
+        if (!dependencies.speech)
+          throw new AidenRemoteServiceError("not_found", "This endpoint is unavailable.", 404);
         writeJson(response, 200, await dependencies.speech.select(body));
         return;
       }
-      const speechModelDownloadMatch = /^\/speech\/models\/([A-Za-z0-9._-]{1,64})\/download$/u.exec(path);
+      const speechModelDownloadMatch = /^\/speech\/models\/([A-Za-z0-9._-]{1,64})\/download$/u.exec(
+        path,
+      );
       if (speechModelDownloadMatch && request.method === "POST") {
         requireNoQuery(query);
         route = "speech";
         const device = await authenticate(request, dependencies.devices, "chat:write");
         deviceIdSuffix = device.id.slice(-8);
-        if (!dependencies.speech) throw new AidenRemoteServiceError("not_found", "This endpoint is unavailable.", 404);
-        writeJson(response, 202, await dependencies.speech.startDownload(speechModelDownloadMatch[1]!));
+        if (!dependencies.speech)
+          throw new AidenRemoteServiceError("not_found", "This endpoint is unavailable.", 404);
+        writeJson(
+          response,
+          202,
+          await dependencies.speech.startDownload(speechModelDownloadMatch[1]!),
+        );
         return;
       }
       if (speechModelDownloadMatch && request.method === "DELETE") {
@@ -4768,8 +6372,13 @@ export function createAidenRemoteRequestHandler(
         route = "speech";
         const device = await authenticate(request, dependencies.devices, "chat:write");
         deviceIdSuffix = device.id.slice(-8);
-        if (!dependencies.speech) throw new AidenRemoteServiceError("not_found", "This endpoint is unavailable.", 404);
-        writeJson(response, 200, await dependencies.speech.cancelDownload(speechModelDownloadMatch[1]!));
+        if (!dependencies.speech)
+          throw new AidenRemoteServiceError("not_found", "This endpoint is unavailable.", 404);
+        writeJson(
+          response,
+          200,
+          await dependencies.speech.cancelDownload(speechModelDownloadMatch[1]!),
+        );
         return;
       }
       const speechModelMatch = /^\/speech\/models\/([A-Za-z0-9._-]{1,64})$/u.exec(path);
@@ -4778,7 +6387,8 @@ export function createAidenRemoteRequestHandler(
         route = "speech";
         const device = await authenticate(request, dependencies.devices, "chat:write");
         deviceIdSuffix = device.id.slice(-8);
-        if (!dependencies.speech) throw new AidenRemoteServiceError("not_found", "This endpoint is unavailable.", 404);
+        if (!dependencies.speech)
+          throw new AidenRemoteServiceError("not_found", "This endpoint is unavailable.", 404);
         writeJson(response, 200, await dependencies.speech.deleteModel(speechModelMatch[1]!));
         return;
       }
@@ -4793,7 +6403,8 @@ export function createAidenRemoteRequestHandler(
         const body = await readJsonBody(request, AIDEN_REMOTE_MAX_SPEECH_REQUEST_BYTES, encoding);
         const device = await authenticate(request, dependencies.devices, "chat:write");
         deviceIdSuffix = device.id.slice(-8);
-        if (!dependencies.speech) throw new AidenRemoteServiceError("not_found", "This endpoint is unavailable.", 404);
+        if (!dependencies.speech)
+          throw new AidenRemoteServiceError("not_found", "This endpoint is unavailable.", 404);
         writeJson(response, 200, await dependencies.speech.transcribe(body));
         return;
       }
@@ -4801,7 +6412,8 @@ export function createAidenRemoteRequestHandler(
         route = "chats";
         const device = await authenticate(request, dependencies.devices, "chat:read");
         deviceIdSuffix = device.id.slice(-8);
-        if (!dependencies.chats) throw new AidenRemoteServiceError("not_found", "This endpoint is unavailable.", 404);
+        if (!dependencies.chats)
+          throw new AidenRemoteServiceError("not_found", "This endpoint is unavailable.", 404);
         writeJson(response, 200, await dependencies.chats.list(chatsQuery(query).workspaceId));
         return;
       }
@@ -4813,11 +6425,7 @@ export function createAidenRemoteRequestHandler(
           throw new AidenRemoteServiceError("not_found", "This endpoint is unavailable.", 404);
         }
         const input = chatSummariesQuery(query);
-        writeJson(
-          response,
-          200,
-          await dependencies.chats.listSummaries(input.limit, input.cursor),
-        );
+        writeJson(response, 200, await dependencies.chats.listSummaries(input.limit, input.cursor));
         return;
       }
       if (path === "/chats" && request.method === "POST") {
@@ -4826,7 +6434,8 @@ export function createAidenRemoteRequestHandler(
         const body = await readJsonBody(request);
         const device = await authenticate(request, dependencies.devices, "chat:write");
         deviceIdSuffix = device.id.slice(-8);
-        if (!dependencies.chats) throw new AidenRemoteServiceError("not_found", "This endpoint is unavailable.", 404);
+        if (!dependencies.chats)
+          throw new AidenRemoteServiceError("not_found", "This endpoint is unavailable.", 404);
         const key = requiredHeader(request, "idempotency-key", /^[\x21-\x7e]{16,128}$/u);
         writeJson(response, 201, await dependencies.chats.create(device.id, key, body));
         return;
@@ -4837,7 +6446,8 @@ export function createAidenRemoteRequestHandler(
         route = "chat";
         const device = await authenticate(request, dependencies.devices, "chat:read");
         deviceIdSuffix = device.id.slice(-8);
-        if (!dependencies.chats) throw new AidenRemoteServiceError("not_found", "This endpoint is unavailable.", 404);
+        if (!dependencies.chats)
+          throw new AidenRemoteServiceError("not_found", "This endpoint is unavailable.", 404);
         await requireChatAccess(dependencies.chats, device, chatMatch[1]!, "read");
         const chat = await dependencies.chats.get(chatMatch[1]!);
         writeJson(response, 200, withAppPanelFallback(device, chat));
@@ -4849,13 +6459,15 @@ export function createAidenRemoteRequestHandler(
         const body = await readJsonBody(request);
         const device = await authenticate(request, dependencies.devices, "chat:write");
         deviceIdSuffix = device.id.slice(-8);
-        if (!dependencies.chats) throw new AidenRemoteServiceError("not_found", "This endpoint is unavailable.", 404);
+        if (!dependencies.chats)
+          throw new AidenRemoteServiceError("not_found", "This endpoint is unavailable.", 404);
         const revision = requiredHeader(request, "if-match", /^[\x21-\x7e]{1,128}$/u);
         writeJson(
           response,
           200,
           await runChatMutation(dependencies.chats, device, chatMatch[1]!, "chat", () =>
-            dependencies.chats!.rename(chatMatch[1]!, revision, body)),
+            dependencies.chats!.rename(chatMatch[1]!, revision, body),
+          ),
         );
         return;
       }
@@ -4864,10 +6476,12 @@ export function createAidenRemoteRequestHandler(
         route = "chat";
         const device = await authenticate(request, dependencies.devices, "chat:write");
         deviceIdSuffix = device.id.slice(-8);
-        if (!dependencies.chats) throw new AidenRemoteServiceError("not_found", "This endpoint is unavailable.", 404);
+        if (!dependencies.chats)
+          throw new AidenRemoteServiceError("not_found", "This endpoint is unavailable.", 404);
         const revision = requiredHeader(request, "if-match", /^[\x21-\x7e]{1,128}$/u);
         await runChatMutation(dependencies.chats, device, chatMatch[1]!, "chat", () =>
-          dependencies.chats!.remove(chatMatch[1]!, revision));
+          dependencies.chats!.remove(chatMatch[1]!, revision),
+        );
         response.writeHead(204, responseHeaders());
         response.end();
         return;
@@ -4906,7 +6520,8 @@ export function createAidenRemoteRequestHandler(
           response,
           200,
           await runChatMutation(chats, device, triageMatch[1]!, "chat", () =>
-            chats.setTriage!(device.id, triageMatch[1]!, key, body)),
+            chats.setTriage!(device.id, triageMatch[1]!, key, body),
+          ),
         );
         return;
       }
@@ -4917,14 +6532,16 @@ export function createAidenRemoteRequestHandler(
         const body = await readJsonBody(request);
         const device = await authenticate(request, dependencies.devices, "chat:write");
         deviceIdSuffix = device.id.slice(-8);
-        if (!dependencies.chats) throw new AidenRemoteServiceError("not_found", "This endpoint is unavailable.", 404);
+        if (!dependencies.chats)
+          throw new AidenRemoteServiceError("not_found", "This endpoint is unavailable.", 404);
         const revision = requiredHeader(request, "if-match", /^[\x21-\x7e]{1,128}$/u);
         const key = requiredHeader(request, "idempotency-key", /^[\x21-\x7e]{16,128}$/u);
         writeJson(
           response,
           200,
           await runChatMutation(dependencies.chats, device, moveMatch[1]!, "chat", () =>
-            dependencies.chats!.move(device.id, moveMatch[1]!, revision, key, body)),
+            dependencies.chats!.move(device.id, moveMatch[1]!, revision, key, body),
+          ),
         );
         return;
       }
@@ -4947,7 +6564,8 @@ export function createAidenRemoteRequestHandler(
           response,
           200,
           await runChatMutation(chats, device, newWorktreeMatch[1]!, "chat", () =>
-            chats.moveToNewWorktree!(device.id, newWorktreeMatch[1]!, revision, key, body)),
+            chats.moveToNewWorktree!(device.id, newWorktreeMatch[1]!, revision, key, body),
+          ),
         );
         return;
       }
@@ -4968,11 +6586,13 @@ export function createAidenRemoteRequestHandler(
           response,
           201,
           await runChatMutation(chats, device, forkMatch[1]!, "chat", () =>
-            chats.fork!(device.id, forkMatch[1]!, revision, key, body)),
+            chats.fork!(device.id, forkMatch[1]!, revision, key, body),
+          ),
         );
         return;
       }
-      const forkSummaryMatch = /^\/chats\/([A-Za-z0-9._:-]{1,128})\/fork-summary\/(retry|skip|cancel)$/u.exec(path);
+      const forkSummaryMatch =
+        /^\/chats\/([A-Za-z0-9._:-]{1,128})\/fork-summary\/(retry|skip|cancel)$/u.exec(path);
       if (forkSummaryMatch && request.method === "POST") {
         requireNoQuery(query);
         route = "chatForkSummary";
@@ -4997,7 +6617,8 @@ export function createAidenRemoteRequestHandler(
               ? chats.retryForkSummary!(chatId)
               : action === "skip"
                 ? chats.skipForkSummary!(chatId)
-                : chats.cancelForkSummary!(chatId)),
+                : chats.cancelForkSummary!(chatId),
+          ),
         );
         return;
       }
@@ -5008,16 +6629,16 @@ export function createAidenRemoteRequestHandler(
         const device = await authenticate(request, dependencies.devices, "chat:read");
         deviceIdSuffix = device.id.slice(-8);
         const chatProgress = dependencies.chatProgress;
-        if (!dependencies.chats || !chatProgress || !progressCapabilitySupported(dependencies, "tasks:read")) {
+        if (
+          !dependencies.chats ||
+          !chatProgress ||
+          !progressCapabilitySupported(dependencies, "tasks:read")
+        ) {
           throw new AidenRemoteServiceError("not_found", "This endpoint is unavailable.", 404);
         }
         requireNegotiatedProgressCapability(device, "tasks:read");
         await requireChatAccess(dependencies.chats, device, chatTasksMatch[1]!, "read");
-        writeJson(
-          response,
-          200,
-          await chatProgress.taskSnapshot(device.id, chatTasksMatch[1]!),
-        );
+        writeJson(response, 200, await chatProgress.taskSnapshot(device.id, chatTasksMatch[1]!));
         return;
       }
       const chatAgentsMatch = /^\/chats\/([A-Za-z0-9._:-]{1,128})\/agents$/u.exec(path);
@@ -5027,7 +6648,11 @@ export function createAidenRemoteRequestHandler(
         const device = await authenticate(request, dependencies.devices, "chat:read");
         deviceIdSuffix = device.id.slice(-8);
         const chatProgress = dependencies.chatProgress;
-        if (!dependencies.chats || !chatProgress || !progressCapabilitySupported(dependencies, "agents:read")) {
+        if (
+          !dependencies.chats ||
+          !chatProgress ||
+          !progressCapabilitySupported(dependencies, "agents:read")
+        ) {
           throw new AidenRemoteServiceError("not_found", "This endpoint is unavailable.", 404);
         }
         requireNegotiatedProgressCapability(device, "agents:read");
@@ -5035,23 +6660,25 @@ export function createAidenRemoteRequestHandler(
         writeJson(
           response,
           200,
-          await chatProgress.agentRoster(
-            device.id,
-            chatAgentsMatch[1]!,
-            agentsQuery.turnId,
-          ),
+          await chatProgress.agentRoster(device.id, chatAgentsMatch[1]!, agentsQuery.turnId),
         );
         return;
       }
       const chatAgentInterruptMatch =
-        /^\/chats\/([A-Za-z0-9._:-]{1,128})\/agents\/([A-Za-z0-9._:-]{1,128})\/interrupt$/u.exec(path);
+        /^\/chats\/([A-Za-z0-9._:-]{1,128})\/agents\/([A-Za-z0-9._:-]{1,128})\/interrupt$/u.exec(
+          path,
+        );
       if (chatAgentInterruptMatch && request.method === "POST") {
         requireNoQuery(query);
         route = "chatAgentInterrupt";
         const device = await authenticate(request, dependencies.devices, "chat:write");
         deviceIdSuffix = device.id.slice(-8);
         const chatProgress = dependencies.chatProgress;
-        if (!dependencies.chats || !chatProgress?.interruptAgent || !agentInterruptSupported(dependencies)) {
+        if (
+          !dependencies.chats ||
+          !chatProgress?.interruptAgent ||
+          !agentInterruptSupported(dependencies)
+        ) {
           throw new AidenRemoteServiceError("not_found", "This endpoint is unavailable.", 404);
         }
         // Targeting an agent requires being able to see it: the stop is
@@ -5062,7 +6689,8 @@ export function createAidenRemoteRequestHandler(
           response,
           200,
           await runChatMutation(dependencies.chats, device, chatId!, "chat", () =>
-            chatProgress.interruptAgent!(device.id, chatId!, agentId!)),
+            chatProgress.interruptAgent!(device.id, chatId!, agentId!),
+          ),
         );
         return;
       }
@@ -5080,7 +6708,11 @@ export function createAidenRemoteRequestHandler(
         writeJson(
           response,
           200,
-          await dependencies.chats.chatSkillCatalog(device.id, chatSkillsMatch[1]!, device.capabilities.has("app-controls:read")),
+          await dependencies.chats.chatSkillCatalog(
+            device.id,
+            chatSkillsMatch[1]!,
+            device.capabilities.has("app-controls:read"),
+          ),
         );
         return;
       }
@@ -5098,7 +6730,9 @@ export function createAidenRemoteRequestHandler(
         writeJson(response, 200, await chats.contextPressure(chatContextMatch[1]!, selection));
         return;
       }
-      const chatProgressEventsMatch = /^\/chats\/([A-Za-z0-9._:-]{1,128})\/progress\/events$/u.exec(path);
+      const chatProgressEventsMatch = /^\/chats\/([A-Za-z0-9._:-]{1,128})\/progress\/events$/u.exec(
+        path,
+      );
       if (chatProgressEventsMatch && request.method === "GET") {
         route = "chatProgressEvents";
         const device = await authenticate(request, dependencies.devices, "chat:read");
@@ -5114,15 +6748,21 @@ export function createAidenRemoteRequestHandler(
           device.acceptsProgressCapabilities === true &&
           device.capabilities.has("agents:read") &&
           progressCapabilitySupported(dependencies, "agents:read");
-        const classification = await requireChatAccess(dependencies.chats, device, chatProgressEventsMatch[1]!, "read");
-        const canReadControls = !classification.botId && device.acceptsProgressCapabilities === true &&
-          device.capabilities.has("app-controls:read") && Boolean(dependencies.appControls) &&
-          await dependencies.appControls!.enabled();
+        const classification = await requireChatAccess(
+          dependencies.chats,
+          device,
+          chatProgressEventsMatch[1]!,
+          "read",
+        );
+        const canReadControls =
+          !classification.botId &&
+          device.acceptsProgressCapabilities === true &&
+          device.capabilities.has("app-controls:read") &&
+          Boolean(dependencies.appControls) &&
+          (await dependencies.appControls!.enabled());
         if (!canReadTasks && !canReadAgents && !canReadControls) {
           throw new AidenRemoteServiceError(
-            device.acceptsProgressCapabilities === true
-              ? "not_found"
-              : "capability_denied",
+            device.acceptsProgressCapabilities === true ? "not_found" : "capability_denied",
             device.acceptsProgressCapabilities === true
               ? "This progress capability is unavailable on this Aiden installation."
               : "This device does not have access to that Aiden capability.",
@@ -5138,8 +6778,15 @@ export function createAidenRemoteRequestHandler(
         if (canReadAgents) progressGrants.add("agents:read");
         if (canReadControls) progressGrants.add("app-controls:read");
         const progressEpoch = request.headers["aiden-progress-epoch"];
-        if (progressEpoch !== undefined && (typeof progressEpoch !== "string" || !/^[A-Za-z0-9._:-]{1,64}$/u.test(progressEpoch))) {
-          throw new AidenRemoteServiceError("invalid_request", "The progress epoch is invalid.", 400);
+        if (
+          progressEpoch !== undefined &&
+          (typeof progressEpoch !== "string" || !/^[A-Za-z0-9._:-]{1,64}$/u.test(progressEpoch))
+        ) {
+          throw new AidenRemoteServiceError(
+            "invalid_request",
+            "The progress epoch is invalid.",
+            400,
+          );
         }
         await dependencies.chatProgress.openEvents(
           device.id,
@@ -5158,17 +6805,21 @@ export function createAidenRemoteRequestHandler(
         const body = await readJsonBody(request);
         const device = await authenticate(request, dependencies.devices, "chat:write");
         deviceIdSuffix = device.id.slice(-8);
-        if (!dependencies.chats) throw new AidenRemoteServiceError("not_found", "This endpoint is unavailable.", 404);
+        if (!dependencies.chats)
+          throw new AidenRemoteServiceError("not_found", "This endpoint is unavailable.", 404);
         const key = requiredHeader(request, "idempotency-key", /^[\x21-\x7e]{16,128}$/u);
         writeJson(
           response,
           202,
           await runChatMutation(dependencies.chats, device, turnsMatch[1]!, "chat", () =>
-            dependencies.chats!.startTurn(device.id, turnsMatch[1]!, key, body)),
+            dependencies.chats!.startTurn(device.id, turnsMatch[1]!, key, body),
+          ),
         );
         return;
       }
-      const attachmentCollectionMatch = /^\/chats\/([A-Za-z0-9._:-]{1,128})\/attachments$/u.exec(path);
+      const attachmentCollectionMatch = /^\/chats\/([A-Za-z0-9._:-]{1,128})\/attachments$/u.exec(
+        path,
+      );
       if (attachmentCollectionMatch && request.method === "POST") {
         requireNoQuery(query);
         route = "chatAttachment";
@@ -5176,7 +6827,8 @@ export function createAidenRemoteRequestHandler(
         const device = await authenticate(request, dependencies.devices, "chat:write");
         deviceIdSuffix = device.id.slice(-8);
         if (raw) requireDeviceCapabilities(device, AIDEN_REMOTE_RAW_UPLOAD_CAPABILITIES);
-        if (!dependencies.chats?.uploadAttachment) throw new AidenRemoteServiceError("not_found", "This endpoint is unavailable.", 404);
+        if (!dependencies.chats?.uploadAttachment)
+          throw new AidenRemoteServiceError("not_found", "This endpoint is unavailable.", 404);
         writeJson(
           response,
           201,
@@ -5185,29 +6837,36 @@ export function createAidenRemoteRequestHandler(
             device,
             attachmentCollectionMatch[1]!,
             "chat",
-            () => dependencies.chats!.uploadAttachment!(
-              device.id,
-              attachmentCollectionMatch[1]!,
-              body,
-            ),
+            () =>
+              dependencies.chats!.uploadAttachment!(device.id, attachmentCollectionMatch[1]!, body),
           ),
         );
         return;
       }
-      const attachmentMatch = /^\/chats\/([A-Za-z0-9._:-]{1,128})\/attachments\/(att_[A-Za-z0-9_-]{43})$/u.exec(path);
+      const attachmentMatch =
+        /^\/chats\/([A-Za-z0-9._:-]{1,128})\/attachments\/(att_[A-Za-z0-9_-]{43})$/u.exec(path);
       if (attachmentMatch && request.method === "DELETE") {
         requireNoQuery(query);
         route = "chatAttachment";
         const device = await authenticate(request, dependencies.devices, "chat:write");
         deviceIdSuffix = device.id.slice(-8);
-        if (!dependencies.chats?.removeAttachment) throw new AidenRemoteServiceError("not_found", "This endpoint is unavailable.", 404);
+        if (!dependencies.chats?.removeAttachment)
+          throw new AidenRemoteServiceError("not_found", "This endpoint is unavailable.", 404);
         await runChatMutation(dependencies.chats, device, attachmentMatch[1]!, "chat", () =>
-          dependencies.chats!.removeAttachment!(device.id, attachmentMatch[1]!, attachmentMatch[2]!));
+          dependencies.chats!.removeAttachment!(
+            device.id,
+            attachmentMatch[1]!,
+            attachmentMatch[2]!,
+          ),
+        );
         response.writeHead(204, responseHeaders());
         response.end();
         return;
       }
-      const attachmentContentMatch = /^\/chats\/([A-Za-z0-9._:-]{1,128})\/attachments\/([A-Za-z0-9._:-]{1,256})\/content$/u.exec(path);
+      const attachmentContentMatch =
+        /^\/chats\/([A-Za-z0-9._:-]{1,128})\/attachments\/([A-Za-z0-9._:-]{1,256})\/content$/u.exec(
+          path,
+        );
       if (attachmentContentMatch && request.method === "GET") {
         requireNoQuery(query);
         route = "chatAttachment";
@@ -5226,59 +6885,95 @@ export function createAidenRemoteRequestHandler(
         );
         return;
       }
-      const browserRecordingMatch = /^\/chats\/([A-Za-z0-9._:-]{1,128})\/recordings\/([A-Za-z0-9._:-]{1,128})$/u.exec(path);
+      const browserRecordingMatch =
+        /^\/chats\/([A-Za-z0-9._:-]{1,128})\/recordings\/([A-Za-z0-9._:-]{1,128})$/u.exec(path);
       if (browserRecordingMatch && request.method === "GET") {
         requireNoQuery(query);
         route = "chatBrowserRecording";
         const device = await authenticate(request, dependencies.devices, "chat:read");
         deviceIdSuffix = device.id.slice(-8);
-        if (!dependencies.chats?.browserRecording || dependencies.chats.supportsBrowserRecordings !== true) {
+        if (
+          !dependencies.chats?.browserRecording ||
+          dependencies.chats.supportsBrowserRecordings !== true
+        ) {
           throw new AidenRemoteServiceError("not_found", "This endpoint is unavailable.", 404);
         }
         await requireChatAccess(dependencies.chats, device, browserRecordingMatch[1]!, "read");
         writeAttachmentContent(
           response,
-          await dependencies.chats.browserRecording(browserRecordingMatch[1]!, browserRecordingMatch[2]!),
+          await dependencies.chats.browserRecording(
+            browserRecordingMatch[1]!,
+            browserRecordingMatch[2]!,
+          ),
         );
         return;
       }
-      const visualDocumentMatch = /^\/chats\/([A-Za-z0-9._:-]{1,128})\/visuals\/([A-Za-z0-9._:-]{1,256})\/document$/u.exec(path);
+      const visualDocumentMatch =
+        /^\/chats\/([A-Za-z0-9._:-]{1,128})\/visuals\/([A-Za-z0-9._:-]{1,256})\/document$/u.exec(
+          path,
+        );
       if (visualDocumentMatch && request.method === "GET") {
         route = "chatVisualDocument";
         const device = await authenticate(request, dependencies.devices, "chat:read");
         deviceIdSuffix = device.id.slice(-8);
-        if (!dependencies.chats?.visualDocument || dependencies.chats.supportsVisualViewer !== true) {
+        if (
+          !dependencies.chats?.visualDocument ||
+          dependencies.chats.supportsVisualViewer !== true
+        ) {
           throw new AidenRemoteServiceError("not_found", "This endpoint is unavailable.", 404);
         }
         let appearance: VisualViewerAppearance;
         try {
           appearance = parseVisualViewerQuery(new URLSearchParams(query));
         } catch (error) {
-          throw new AidenRemoteServiceError("invalid_request", error instanceof Error ? error.message : "The visual document query is invalid.", 400);
+          throw new AidenRemoteServiceError(
+            "invalid_request",
+            error instanceof Error ? error.message : "The visual document query is invalid.",
+            400,
+          );
         }
         await requireChatAccess(dependencies.chats, device, visualDocumentMatch[1]!, "read");
         writeVisualDocument(
           response,
           request,
-          await dependencies.chats.visualDocument(visualDocumentMatch[1]!, visualDocumentMatch[2]!, appearance),
+          await dependencies.chats.visualDocument(
+            visualDocumentMatch[1]!,
+            visualDocumentMatch[2]!,
+            appearance,
+          ),
         );
         return;
       }
       const chatSpendingReadMatch = /^\/chats\/([A-Za-z0-9._:-]{1,128})\/spending$/u.exec(path);
-      const chatSpendingAllowMatch = /^\/chats\/([A-Za-z0-9._:-]{1,128})\/spending\/allow-more$/u.exec(path);
-      const chatSpendingMatch = request.method === "GET" ? chatSpendingReadMatch : request.method === "POST" ? chatSpendingAllowMatch : null;
+      const chatSpendingAllowMatch =
+        /^\/chats\/([A-Za-z0-9._:-]{1,128})\/spending\/allow-more$/u.exec(path);
+      const chatSpendingMatch =
+        request.method === "GET"
+          ? chatSpendingReadMatch
+          : request.method === "POST"
+            ? chatSpendingAllowMatch
+            : null;
       if (chatSpendingMatch) {
         requireNoQuery(query);
         route = "chatSpending";
         const allowMore = chatSpendingMatch === chatSpendingAllowMatch;
         // Allow more takes `{}`: the If-Match revision is what it acts on.
         if (allowMore) requireEmptyJsonObject(await readJsonBody(request, 64));
-        const device = await authenticate(request, dependencies.devices, allowMore ? "chat:write" : "chat:read");
+        const device = await authenticate(
+          request,
+          dependencies.devices,
+          allowMore ? "chat:write" : "chat:read",
+        );
         deviceIdSuffix = device.id.slice(-8);
         if (!dependencies.spending || !dependencies.chats) {
           throw new AidenRemoteServiceError("not_found", "This endpoint is unavailable.", 404);
         }
-        await requireChatAccess(dependencies.chats, device, chatSpendingMatch[1]!, allowMore ? "write" : "read");
+        await requireChatAccess(
+          dependencies.chats,
+          device,
+          chatSpendingMatch[1]!,
+          allowMore ? "write" : "read",
+        );
         writeJson(
           response,
           200,
@@ -5292,20 +6987,35 @@ export function createAidenRemoteRequestHandler(
         return;
       }
       const chatJobsListMatch = /^\/chats\/([A-Za-z0-9._:-]{1,128})\/jobs$/u.exec(path);
-      const chatJobStopMatch = /^\/chats\/([A-Za-z0-9._:-]{1,128})\/jobs\/(job_[0-9a-f]{8})\/stop$/u.exec(path);
-      const chatJobsMatch = request.method === "GET" ? chatJobsListMatch : request.method === "POST" ? chatJobStopMatch : null;
+      const chatJobStopMatch =
+        /^\/chats\/([A-Za-z0-9._:-]{1,128})\/jobs\/(job_[0-9a-f]{8})\/stop$/u.exec(path);
+      const chatJobsMatch =
+        request.method === "GET"
+          ? chatJobsListMatch
+          : request.method === "POST"
+            ? chatJobStopMatch
+            : null;
       if (chatJobsMatch) {
         requireNoQuery(query);
         route = "chatBackgroundJobs";
         const stop = chatJobsMatch === chatJobStopMatch;
         if (stop) requireEmptyJsonObject(await readJsonBody(request, 64));
-        const device = await authenticate(request, dependencies.devices, stop ? "chat:write" : "chat:read");
+        const device = await authenticate(
+          request,
+          dependencies.devices,
+          stop ? "chat:write" : "chat:read",
+        );
         deviceIdSuffix = device.id.slice(-8);
         if (!dependencies.backgroundJobs || !dependencies.chats) {
           throw new AidenRemoteServiceError("not_found", "This endpoint is unavailable.", 404);
         }
         requireDeviceCapabilities(device, ["chat:jobs"]);
-        await requireChatAccess(dependencies.chats, device, chatJobsMatch[1]!, stop ? "write" : "read");
+        await requireChatAccess(
+          dependencies.chats,
+          device,
+          chatJobsMatch[1]!,
+          stop ? "write" : "read",
+        );
         writeJson(
           response,
           200,
@@ -5321,7 +7031,8 @@ export function createAidenRemoteRequestHandler(
         route = "stream";
         const device = await authenticate(request, dependencies.devices, "chat:read");
         deviceIdSuffix = device.id.slice(-8);
-        if (!dependencies.streams || !dependencies.chats) throw new AidenRemoteServiceError("not_found", "This endpoint is unavailable.", 404);
+        if (!dependencies.streams || !dependencies.chats)
+          throw new AidenRemoteServiceError("not_found", "This endpoint is unavailable.", 404);
         const chatId = dependencies.streams.streamChatId(device.id, streamMatch[1]!);
         await requireChatAccess(dependencies.chats, device, chatId, "read", "stream");
         const status = dependencies.streams.status(device.id, streamMatch[1]!);
@@ -5333,7 +7044,8 @@ export function createAidenRemoteRequestHandler(
         route = "streamEvents";
         const device = await authenticate(request, dependencies.devices, "chat:read");
         deviceIdSuffix = device.id.slice(-8);
-        if (!dependencies.streams || !dependencies.chats) throw new AidenRemoteServiceError("not_found", "This endpoint is unavailable.", 404);
+        if (!dependencies.streams || !dependencies.chats)
+          throw new AidenRemoteServiceError("not_found", "This endpoint is unavailable.", 404);
         const chatId = dependencies.streams.streamChatId(device.id, eventsMatch[1]!);
         await requireChatAccess(dependencies.chats, device, chatId, "read", "stream");
         dependencies.streams.openEvents(
@@ -5351,24 +7063,20 @@ export function createAidenRemoteRequestHandler(
         route = "streamApproval";
         const device = await authenticate(request, dependencies.devices, "chat:read");
         deviceIdSuffix = device.id.slice(-8);
-        if (!dependencies.streams || !dependencies.chats) throw new AidenRemoteServiceError("not_found", "This endpoint is unavailable.", 404);
+        if (!dependencies.streams || !dependencies.chats)
+          throw new AidenRemoteServiceError("not_found", "This endpoint is unavailable.", 404);
         const chatId = dependencies.streams.streamChatId(device.id, streamApprovalMatch[1]!);
         await requireChatAccess(dependencies.chats, device, chatId, "read", "stream");
-        const pending = dependencies.streams.pendingApproval(
-          device.id,
-          streamApprovalMatch[1]!,
-          { scheduleCard: holdsScheduleCards(device), card: holdsApprovalCards(device), plainWords: holdsApprovalPlainWords(device) },
-        );
+        const pending = dependencies.streams.pendingApproval(device.id, streamApprovalMatch[1]!, {
+          scheduleCard: holdsScheduleCards(device),
+          card: holdsApprovalCards(device),
+          plainWords: holdsApprovalPlainWords(device),
+        });
         const requiredCapability = pending
-          ? dependencies.streams.approvalRequiredCapability(
-              device.id,
-              pending.approvalId,
-            )
+          ? dependencies.streams.approvalRequiredCapability(device.id, pending.approvalId)
           : undefined;
         const approval =
-          pending &&
-          requiredCapability &&
-          !device.capabilities.has(requiredCapability)
+          pending && requiredCapability && !device.capabilities.has(requiredCapability)
             ? { ...pending, canAllow: false }
             : pending;
         writeJson(response, 200, { approval });
@@ -5390,10 +7098,7 @@ export function createAidenRemoteRequestHandler(
         const chatId = dependencies.streams.streamChatId(device.id, streamQuestionMatch[1]!);
         await requireChatAccess(dependencies.chats, device, chatId, "read", "stream");
         writeJson(response, 200, {
-          question: dependencies.streams.pendingQuestion(
-            device.id,
-            streamQuestionMatch[1]!,
-          ),
+          question: dependencies.streams.pendingQuestion(device.id, streamQuestionMatch[1]!),
         });
         return;
       }
@@ -5404,13 +7109,15 @@ export function createAidenRemoteRequestHandler(
         const device = await authenticate(request, dependencies.devices, "chat:write");
         deviceIdSuffix = device.id.slice(-8);
         const key = requiredHeader(request, "idempotency-key", /^[\x21-\x7e]{16,128}$/u);
-        if (!dependencies.streams || !dependencies.chats) throw new AidenRemoteServiceError("not_found", "This endpoint is unavailable.", 404);
+        if (!dependencies.streams || !dependencies.chats)
+          throw new AidenRemoteServiceError("not_found", "This endpoint is unavailable.", 404);
         const chatId = dependencies.streams.streamChatId(device.id, cancelMatch[1]!);
         writeJson(
           response,
           202,
           await runChatMutation(dependencies.chats, device, chatId, "stream", () =>
-            dependencies.streams!.cancel(device.id, cancelMatch[1]!, key)),
+            dependencies.streams!.cancel(device.id, cancelMatch[1]!, key),
+          ),
         );
         return;
       }
@@ -5495,15 +7202,28 @@ export function createAidenRemoteRequestHandler(
         // approval bridge, by a device that may use Bots.
         if (dependencies.botSessions?.ownsApproval(approvalMatch[1]!)) {
           requireDeviceCapabilities(device, ["bot:read", "bot:write"]);
-          if (scope === "always" && !holdsBotAllowed(device, dependencies)) throw new AidenRemoteServiceError("invalid_request", "This Bot approval cannot be remembered by this device.", 400);
+          if (scope === "always" && !holdsBotAllowed(device, dependencies))
+            throw new AidenRemoteServiceError(
+              "invalid_request",
+              "This Bot approval cannot be remembered by this device.",
+              400,
+            );
           writeJson(
             response,
             200,
-            await dependencies.botSessions.respondApproval(device.id, approvalMatch[1]!, decision, key, scope, { allowed: holdsBotAllowed(device, dependencies) }),
+            await dependencies.botSessions.respondApproval(
+              device.id,
+              approvalMatch[1]!,
+              decision,
+              key,
+              scope,
+              { allowed: holdsBotAllowed(device, dependencies) },
+            ),
           );
           return;
         }
-        if (!dependencies.streams || !dependencies.chats) throw new AidenRemoteServiceError("not_found", "This endpoint is unavailable.", 404);
+        if (!dependencies.streams || !dependencies.chats)
+          throw new AidenRemoteServiceError("not_found", "This endpoint is unavailable.", 404);
         writeJson(
           response,
           200,
@@ -5514,11 +7234,10 @@ export function createAidenRemoteRequestHandler(
             key,
             (chatId, action) =>
               runChatMutation(dependencies.chats!, device, chatId, "approval", async () => {
-                const requiredCapability =
-                  dependencies.streams!.approvalRequiredCapability(
-                    device.id,
-                    approvalMatch[1]!,
-                  );
+                const requiredCapability = dependencies.streams!.approvalRequiredCapability(
+                  device.id,
+                  approvalMatch[1]!,
+                );
                 if (decision === "allow" && requiredCapability) {
                   requireDeviceCapabilities(device, [requiredCapability]);
                 }
@@ -5537,7 +7256,11 @@ export function createAidenRemoteRequestHandler(
         deviceIdSuffix = device.id.slice(-8);
         if (!dependencies.hostFeed) throw hostRunsUnavailable();
         await dependencies.hostFeed.open(
-          { id: device.id, capabilities: device.capabilities, botHandoffs: holdsBotHandoffs(device, dependencies) },
+          {
+            id: device.id,
+            capabilities: device.capabilities,
+            botHandoffs: holdsBotHandoffs(device, dependencies),
+          },
           cursor,
           response,
           admitDevice(device.id),
@@ -5555,11 +7278,16 @@ export function createAidenRemoteRequestHandler(
         writeJson(
           response,
           200,
-          withAppPanelFallback(device, await dependencies.chats.messagesWindow(chatMessagesMatch[1]!, input)),
+          withAppPanelFallback(
+            device,
+            await dependencies.chats.messagesWindow(chatMessagesMatch[1]!, input),
+          ),
         );
         return;
       }
-      const currentRunMatch = /^\/chats\/([A-Za-z0-9._:-]{1,128})\/runs\/current\/events$/u.exec(path);
+      const currentRunMatch = /^\/chats\/([A-Za-z0-9._:-]{1,128})\/runs\/current\/events$/u.exec(
+        path,
+      );
       if (currentRunMatch && request.method === "GET") {
         route = "chatCurrentRunEvents";
         const after = streamAfter(request, query);
@@ -5577,7 +7305,14 @@ export function createAidenRemoteRequestHandler(
         }
         await requireChatAccess(dependencies.chats, device, currentRunMatch[1]!, "read", "stream");
         const runId = dependencies.hostRuns.currentRunId(currentRunMatch[1]!);
-        dependencies.hostRuns.openRunEvents(device, runId, 0, response, admitDevice(device.id), request.headers["aiden-run-checkpoint"] === "1");
+        dependencies.hostRuns.openRunEvents(
+          device,
+          runId,
+          0,
+          response,
+          admitDevice(device.id),
+          request.headers["aiden-run-checkpoint"] === "1",
+        );
         return;
       }
       const runEventsMatch = /^\/runs\/([A-Za-z0-9._:-]{1,128})\/events$/u.exec(path);
@@ -5590,23 +7325,32 @@ export function createAidenRemoteRequestHandler(
         if (!dependencies.hostRuns || !dependencies.chats) throw hostRunsUnavailable();
         const chatId = dependencies.hostRuns.chatIdForRun(runEventsMatch[1]!);
         await requireChatAccess(dependencies.chats, device, chatId, "read", "stream");
-        dependencies.hostRuns.openRunEvents(device, runEventsMatch[1]!, after, response, admitDevice(device.id), request.headers["aiden-run-checkpoint"] === "1");
+        dependencies.hostRuns.openRunEvents(
+          device,
+          runEventsMatch[1]!,
+          after,
+          response,
+          admitDevice(device.id),
+          request.headers["aiden-run-checkpoint"] === "1",
+        );
         return;
       }
       const runControlMatch =
-        /^\/runs\/([A-Za-z0-9._:-]{1,128})\/(cancel|inputs|approvals\/([A-Za-z0-9._:-]{1,128})\/respond|questions\/([A-Za-z0-9._:-]{1,128})\/respond)$/u
-          .exec(path);
+        /^\/runs\/([A-Za-z0-9._:-]{1,128})\/(cancel|inputs|approvals\/([A-Za-z0-9._:-]{1,128})\/respond|questions\/([A-Za-z0-9._:-]{1,128})\/respond)$/u.exec(
+          path,
+        );
       if (runControlMatch && request.method === "POST") {
         requireNoQuery(query);
         const runId = runControlMatch[1]!;
         const action = runControlMatch[2]!;
-        route = action === "cancel"
-          ? "runCancel"
-          : action === "inputs"
-            ? "runInputs"
-            : runControlMatch[3] !== undefined
-              ? "runApprovalRespond"
-              : "runQuestionRespond";
+        route =
+          action === "cancel"
+            ? "runCancel"
+            : action === "inputs"
+              ? "runInputs"
+              : runControlMatch[3] !== undefined
+                ? "runApprovalRespond"
+                : "runQuestionRespond";
         const body = await readJsonBody(request);
         const device = await authenticate(request, dependencies.devices, "runs:control");
         deviceIdSuffix = device.id.slice(-8);
@@ -5624,7 +7368,8 @@ export function createAidenRemoteRequestHandler(
         if (!hostRuns || !chats) throw hostRunsUnavailable();
         // Chat-level write access is still required, so a Bot chat's run
         // needs bot:write and the device's own Bot audience.
-        const access = (resource: BotChatResource) =>
+        const access =
+          (resource: BotChatResource) =>
           async <T>(chatId: string, effect: () => Promise<T>): Promise<T> => {
             await requireChatAccess(chats, device, chatId, "write", resource);
             return effect();
@@ -5637,7 +7382,8 @@ export function createAidenRemoteRequestHandler(
             response,
             200,
             await hostRuns.submitInput(device.id, runId, body, key, (chatId, effect) =>
-              runChatMutation(chats, device, chatId, "stream", effect)),
+              runChatMutation(chats, device, chatId, "stream", effect),
+            ),
           );
         } else if (route === "runApprovalRespond") {
           writeJson(
@@ -5674,11 +7420,18 @@ export function createAidenRemoteRequestHandler(
         route = path.startsWith(`${AIDEN_REMOTE_SIMULATOR_HUB_PREFIX}/`)
           ? "simulatorHub"
           : "simulators";
-        const device = await authenticate(request, dependencies.devices, SIMULATOR_ROUTE_CAPABILITIES);
+        const device = await authenticate(
+          request,
+          dependencies.devices,
+          SIMULATOR_ROUTE_CAPABILITIES,
+        );
         deviceIdSuffix = device.id.slice(-8);
         if (!relay) throw simulatorsUnavailable();
         // `GET /simulators?chatId=` also names the chat's simulators; the device must be able to read that chat.
-        const chatId = request.method === "GET" && path === "/simulators" ? simulatorListChatId(query) : undefined;
+        const chatId =
+          request.method === "GET" && path === "/simulators"
+            ? simulatorListChatId(query)
+            : undefined;
         if (chatId !== undefined) {
           if (!device.capabilities.has("chat:read")) {
             throw new AidenRemoteServiceError(
@@ -5688,7 +7441,11 @@ export function createAidenRemoteRequestHandler(
             );
           }
           if (!dependencies.chats) {
-            throw new AidenRemoteServiceError("not_found", "This Aiden chat no longer exists.", 404);
+            throw new AidenRemoteServiceError(
+              "not_found",
+              "This Aiden chat no longer exists.",
+              404,
+            );
           }
           await requireChatAccess(dependencies.chats, device, chatId, "read");
         }
@@ -5716,7 +7473,15 @@ export function createAidenRemoteRequestHandler(
         logRequest(response.statusCode);
       })
       .catch((error: unknown) => {
-        const safe = asAidenRemoteServiceError(error instanceof BotConnectorWatchError ? new AidenRemoteServiceError(error.code === "unavailable" ? "capability_denied" : error.code, error.message, error.code === "invalid_request" ? 400 : 403) : error);
+        const safe = asAidenRemoteServiceError(
+          error instanceof BotConnectorWatchError
+            ? new AidenRemoteServiceError(
+                error.code === "unavailable" ? "capability_denied" : error.code,
+                error.message,
+                error.code === "invalid_request" ? 400 : 403,
+              )
+            : error,
+        );
         if (!response.headersSent) writeError(response, id, safe);
         else response.destroy();
         logRequest(safe.status, { errorCode: safe.code });
@@ -5750,9 +7515,17 @@ export function createAidenRemoteUpgradeHandler(
       }
       const { path, query } = requestTarget(request, dependencies.acceptStrippedBasePath === true);
       if (request.method !== "GET" || !path.startsWith(`${AIDEN_REMOTE_SIMULATOR_HUB_PREFIX}/`)) {
-        throw new AidenRemoteServiceError("not_found", "This Aiden Remote endpoint does not exist.", 404);
+        throw new AidenRemoteServiceError(
+          "not_found",
+          "This Aiden Remote endpoint does not exist.",
+          404,
+        );
       }
-      const device = await authenticateCredential(request, dependencies.devices, SIMULATOR_ROUTE_CAPABILITIES);
+      const device = await authenticateCredential(
+        request,
+        dependencies.devices,
+        SIMULATOR_ROUTE_CAPABILITIES,
+      );
       deviceIdSuffix = device.id.slice(-8);
       // Cross the revocation fence; a long-lived socket must not delay revocation,
       // which closes it through `revokeDevice` instead.
@@ -5773,7 +7546,15 @@ export function createAidenRemoteUpgradeHandler(
         });
       })
       .catch((error: unknown) => {
-        const safe = asAidenRemoteServiceError(error instanceof BotConnectorWatchError ? new AidenRemoteServiceError(error.code === "unavailable" ? "capability_denied" : error.code, error.message, error.code === "invalid_request" ? 400 : 403) : error);
+        const safe = asAidenRemoteServiceError(
+          error instanceof BotConnectorWatchError
+            ? new AidenRemoteServiceError(
+                error.code === "unavailable" ? "capability_denied" : error.code,
+                error.message,
+                error.code === "invalid_request" ? 400 : 403,
+              )
+            : error,
+        );
         refuseUpgrade(socket, safe.status, safe.status === 404 ? "Not Found" : "Refused");
         dependencies.log({
           requestId: id,

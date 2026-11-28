@@ -13,19 +13,35 @@
 
 import { createHash } from "node:crypto";
 import { fenceAsData } from "../../../renderer/shared/agent-notices.js";
-import { CHILD_CHATS_LIMITS, CHILD_CHATS_TOOL_NAME, type ChildChatsSendMode } from "../../../renderer/shared/child-chats.js";
+import {
+  CHILD_CHATS_LIMITS,
+  CHILD_CHATS_TOOL_NAME,
+  type ChildChatsSendMode,
+} from "../../../renderer/shared/child-chats.js";
 import type { AidenRemoteChatService } from "../aiden-remote-chats.js";
 import type { AidenRemoteStreamService } from "../aiden-remote-streams.js";
 import type { ApprovalCeiling } from "../approval-gate/run-approval.js";
 import { chatAudience } from "./audience.js";
 import type { ChatLink, ChatLinkRunEnd, ChatLinkStore } from "./links.js";
 import { checkResult, compileResultSchema } from "./result-schema.js";
-import { CHAT_RUN_TERMINAL_STATES, ChatRunCore, projectRunMessage, type ChatRunSnapshot } from "./run-core.js";
+import {
+  CHAT_RUN_TERMINAL_STATES,
+  ChatRunCore,
+  projectRunMessage,
+  type ChatRunSnapshot,
+} from "./run-core.js";
 
 export interface ChildChatServices {
   chats: Pick<
     AidenRemoteChatService,
-    "create" | "rename" | "remove" | "startTurn" | "runMutation" | "classify" | "messagesWindow" | "moveToNewWorktree"
+    | "create"
+    | "rename"
+    | "remove"
+    | "startTurn"
+    | "runMutation"
+    | "classify"
+    | "messagesWindow"
+    | "moveToNewWorktree"
   >;
   streams: Pick<
     AidenRemoteStreamService,
@@ -140,7 +156,9 @@ const TOOL_NAME = /^[A-Za-z0-9_.:-]{1,128}$/u;
  * word (`judgeTrusted` false), so judged calls show their card. Once the
  * person takes the chat over, the request is theirs again.
  */
-export function startedChatRunTrust(link: Pick<ChatLink, "leadTainted" | "tookOverAt" | "leadSentAt"> | undefined): {
+export function startedChatRunTrust(
+  link: Pick<ChatLink, "leadTainted" | "tookOverAt" | "leadSentAt"> | undefined,
+): {
   tainted: boolean;
   judgeTrusted: boolean;
 } {
@@ -177,7 +195,8 @@ export class ChildChats {
     this.now = dependencies.now ?? Date.now;
     this.core = new ChatRunCore({
       answerIn: () => dependencies.answerIn(),
-      untrackedRun: () => new ChildChatRefusal("Aiden no longer tracks that turn. Read the chat for its result."),
+      untrackedRun: () =>
+        new ChildChatRefusal("Aiden no longer tracks that turn. Read the chat for its result."),
     });
   }
 
@@ -208,11 +227,33 @@ export class ChildChats {
       const title = request.title.trim().slice(0, CHILD_CHATS_LIMITS.titleChars) || "Started chat";
       try {
         let link = this.dependencies.links.byKey(leadChatId, key);
-        if (!link) link = await this.create(services, audience, lead, leadChatId, key, title, request, options);
+        if (!link)
+          link = await this.create(
+            services,
+            audience,
+            lead,
+            leadChatId,
+            key,
+            title,
+            request,
+            options,
+          );
         else if (options.tainted && !link.leadTainted) link = await this.markLeadTainted(link);
         const runId =
-          link.runId ?? (await this.startTurn(services, link, `${key}:turn`, firstMessage(lead.title, request.task, link.resultSchema)));
-        outcomes.push({ chatId: link.childChatId, title: link.title, runId, state: "running", ...(link.branch ? { branch: link.branch } : {}) });
+          link.runId ??
+          (await this.startTurn(
+            services,
+            link,
+            `${key}:turn`,
+            firstMessage(lead.title, request.task, link.resultSchema),
+          ));
+        outcomes.push({
+          chatId: link.childChatId,
+          title: link.title,
+          runId,
+          state: "running",
+          ...(link.branch ? { branch: link.branch } : {}),
+        });
       } catch (error) {
         outcomes.push({ title, error: errorText(error) });
       }
@@ -246,17 +287,26 @@ export class ChildChats {
       if (request.workspace === "new_worktree") {
         // Keyed like the chat, so a replay finds the worktree instead of making another.
         // The branch is named from the title: the task can be far longer than a phone's first message.
-        const moved = await services.chats.moveToNewWorktree(audience, created.id, revision, `${key}:worktree`, { text: title }, {
-          key: `${key}:worktree`,
-          stackOnWorktree: true,
-          ...(request.baseRef ? { baseRef: request.baseRef } : {}),
-          ...(request.branchName ? { branchName: request.branchName } : {}),
-        });
+        const moved = await services.chats.moveToNewWorktree(
+          audience,
+          created.id,
+          revision,
+          `${key}:worktree`,
+          { text: title },
+          {
+            key: `${key}:worktree`,
+            stackOnWorktree: true,
+            ...(request.baseRef ? { baseRef: request.baseRef } : {}),
+            ...(request.branchName ? { branchName: request.branchName } : {}),
+          },
+        );
         revision = moved.chat.revision;
         worktreeId = moved.chat.workspaceId ?? undefined;
         branch = moved.branch;
       }
-      const renamed = await services.chats.rename(created.id, revision, { title }).catch(() => undefined);
+      const renamed = await services.chats
+        .rename(created.id, revision, { title })
+        .catch(() => undefined);
       if (renamed) revision = renamed.revision;
       return await this.dependencies.links.add({
         childChatId: created.id,
@@ -271,7 +321,8 @@ export class ChildChats {
       });
     } catch (error) {
       await services.chats.remove(created.id, revision).catch(() => undefined);
-      if (worktreeId && worktreeId !== lead.workspaceId) await this.dependencies.discardWorktree?.(worktreeId).catch(() => undefined);
+      if (worktreeId && worktreeId !== lead.workspaceId)
+        await this.dependencies.discardWorktree?.(worktreeId).catch(() => undefined);
       throw error;
     }
   }
@@ -300,15 +351,27 @@ export class ChildChats {
     if (link.runId && this.live(services, audience, link.runId)) {
       // A chat owing a structured result finishes its turn first: steering could cut it short.
       const mode = input.mode === "queue" || link.resultSchema ? "queue" : "steer";
-      const admitted = await services.streams.submitInput(audience, link.runId, { mode, text: input.text }, key, (_chatId, action) => action());
+      const admitted = await services.streams.submitInput(
+        audience,
+        link.runId,
+        { mode, text: input.text },
+        key,
+        (_chatId, action) => action(),
+      );
       if (admitted.status === "admitted") {
         await this.dependencies.links.update(link.childChatId, (draft) => {
           draft.leadSentAt = this.now();
         });
-        return { chatId: link.childChatId, runId: link.runId, delivered: mode === "queue" ? "queued" : "steered" };
+        return {
+          chatId: link.childChatId,
+          runId: link.runId,
+          delivered: mode === "queue" ? "queued" : "steered",
+        };
       }
       if (admitted.reason !== "run_not_active") {
-        throw new ChildChatRefusal(`“${link.title}” could not take that message now (${admitted.reason ?? "rejected"}). Wait for it, then send again.`);
+        throw new ChildChatRefusal(
+          `“${link.title}” could not take that message now (${admitted.reason ?? "rejected"}). Wait for it, then send again.`,
+        );
       }
     }
     const runId = await this.startTurn(services, link, `${key}:turn`, input.text);
@@ -337,7 +400,9 @@ export class ChildChats {
       const ended = await Promise.all(
         links.map(async (link) => {
           if (!link.runId) return;
-          const snapshot = await this.untilEnded(services, audience, link, stop.signal).catch(() => undefined);
+          const snapshot = await this.untilEnded(services, audience, link, stop.signal).catch(
+            () => undefined,
+          );
           if (snapshot && ENDED.has(snapshot.state) && input.until === "any") stop.abort();
         }),
       );
@@ -348,13 +413,17 @@ export class ChildChats {
     }
     const views = await Promise.all(links.map((link) => this.view(services, audience, link)));
     for (const view of views) {
-      if (view.runId && (view.state === "done" || view.state === "failed")) await this.markTold(view.chatId, view.runId);
+      if (view.runId && (view.state === "done" || view.state === "failed"))
+        await this.markTold(view.chatId, view.runId);
     }
     return views;
   }
 
   /** The chat's newest messages, oldest first, each fenced as data. */
-  async read(leadChatId: string, input: { chatId: string; limit: number }): Promise<{ chatId: string; title: string; messages: string[] }> {
+  async read(
+    leadChatId: string,
+    input: { chatId: string; limit: number },
+  ): Promise<{ chatId: string; title: string; messages: string[] }> {
     const link = await this.owned(leadChatId, input.chatId);
     const services = await this.dependencies.services();
     const window = await services.chats.messagesWindow(link.childChatId, { limit: input.limit });
@@ -390,7 +459,10 @@ export class ChildChats {
    * under a call's key, so the model finds them instead of starting more.
    * Undefined when none of the calls made a chat.
    */
-  async interruptedStarts(leadChatId: string, callKeys: readonly string[]): Promise<string | undefined> {
+  async interruptedStarts(
+    leadChatId: string,
+    callKeys: readonly string[],
+  ): Promise<string | undefined> {
     await this.dependencies.links.restore();
     const children = this.dependencies.links.childrenOf(leadChatId);
     const lines: string[] = [];
@@ -398,13 +470,19 @@ export class ChildChats {
       const prefix = `agent-chat:${callDigest(leadChatId, callKey)}:`;
       const made = children.filter((link) => link.key.startsWith(prefix));
       if (made.length === 0) continue;
-      const chats = made.map((link) =>
-        `${JSON.stringify(link.title)} (chat_id ${link.childChatId}${link.runId ? "" : ", its task was not sent yet: send it"})`,
+      const chats = made.map(
+        (link) =>
+          `${JSON.stringify(link.title)} (chat_id ${link.childChatId}${link.runId ? "" : ", its task was not sent yet: send it"})`,
       );
-      lines.push(`Your ${CHILD_CHATS_TOOL_NAME} start call ${JSON.stringify(callKey)} had already started ${chats.join(", ")}.`);
+      lines.push(
+        `Your ${CHILD_CHATS_TOOL_NAME} start call ${JSON.stringify(callKey)} had already started ${chats.join(", ")}.`,
+      );
     }
     if (lines.length === 0) return undefined;
-    return [...lines, `Do not start these again: use ${CHILD_CHATS_TOOL_NAME} list or wait to follow them.`].join(" ");
+    return [
+      ...lines,
+      `Do not start these again: use ${CHILD_CHATS_TOOL_NAME} list or wait to follow them.`,
+    ].join(" ");
   }
 
   /**
@@ -442,7 +520,10 @@ export class ChildChats {
     const stopped: string[] = [];
     for (const link of this.dependencies.links.childrenOf(leadChatId)) {
       if (personTookOver(link)) continue;
-      const outcome = await this.stop(leadChatId, link.childChatId).catch(() => ({ chatId: link.childChatId, stopped: false }));
+      const outcome = await this.stop(leadChatId, link.childChatId).catch(() => ({
+        chatId: link.childChatId,
+        stopped: false,
+      }));
       if (outcome.stopped) stopped.push(link.childChatId);
     }
     return stopped;
@@ -455,7 +536,10 @@ export class ChildChats {
   async submitResult(chatId: string, value: unknown): Promise<{ accepted: true }> {
     await this.dependencies.links.restore();
     const link = this.dependencies.links.get(chatId);
-    if (!link?.resultSchema) throw new ChildChatRefusal("This chat has no result to submit: the chat that started it didn't ask for one.");
+    if (!link?.resultSchema)
+      throw new ChildChatRefusal(
+        "This chat has no result to submit: the chat that started it didn't ask for one.",
+      );
     const checked = checkResult(link.resultSchema, value);
     if (!checked.ok) throw new ChildChatRefusal(checked.error);
     await this.dependencies.links.update(chatId, (draft) => {
@@ -468,7 +552,9 @@ export class ChildChats {
     await this.dependencies.links.restore();
     const link = this.dependencies.links.get(chatId);
     if (!link || link.leadChatId !== leadChatId) {
-      throw new ChildChatRefusal("You can only reach chats this chat started. Use list to see them.");
+      throw new ChildChatRefusal(
+        "You can only reach chats this chat started. Use list to see them.",
+      );
     }
     return link;
   }
@@ -489,7 +575,12 @@ export class ChildChats {
     }
   }
 
-  private async startTurn(services: ChildChatServices, link: ChatLink, key: string, text: string): Promise<string> {
+  private async startTurn(
+    services: ChildChatServices,
+    link: ChatLink,
+    key: string,
+    text: string,
+  ): Promise<string> {
     const audience = chatAudience(link.leadChatId);
     const classification = await services.chats.classify(link.childChatId);
     const turn = await services.chats.runMutation(audience, link.childChatId, classification, () =>
@@ -531,7 +622,8 @@ export class ChildChats {
           state === "waiting_for_approval" ||
           Boolean(services.streams.pendingApproval(audience, runId)) ||
           Boolean(services.streams.pendingQuestion(audience, runId));
-        if (waiting !== undefined && now !== waiting) this.dependencies.onChanged?.(link.leadChatId);
+        if (waiting !== undefined && now !== waiting)
+          this.dependencies.onChanged?.(link.leadChatId);
         waiting = now;
         return;
       }
@@ -596,17 +688,25 @@ export class ChildChats {
     });
   }
 
-  private async view(services: ChildChatServices, audience: string, link: ChatLink, withReply = true): Promise<ChildChatView> {
+  private async view(
+    services: ChildChatServices,
+    audience: string,
+    link: ChatLink,
+    withReply = true,
+  ): Promise<ChildChatView> {
     const base = {
       chatId: link.childChatId,
       title: link.title,
       ...(personTookOver(link) ? { tookOver: true as const } : {}),
       ...(link.branch ? { branch: link.branch } : {}),
     };
-    if (!link.runId) return { ...base, state: "idle", ...(link.result ? { result: link.result.value } : {}) };
+    if (!link.runId)
+      return { ...base, state: "idle", ...(link.result ? { result: link.result.value } : {}) };
     let snapshot: ChatRunSnapshot;
     try {
-      snapshot = await this.core.snapshot(services, audience, link.childChatId, link.runId, { withReply });
+      snapshot = await this.core.snapshot(services, audience, link.childChatId, link.runId, {
+        withReply,
+      });
     } catch {
       return { ...base, state: "idle" };
     }
@@ -617,14 +717,17 @@ export class ChildChats {
       // The chat wrote both: the summary is fenced as data, and an odd tool name is not passed on.
       if (snapshot.approval) {
         view.approval = {
-          toolName: TOOL_NAME.test(snapshot.approval.toolName) ? snapshot.approval.toolName : "a tool",
+          toolName: TOOL_NAME.test(snapshot.approval.toolName)
+            ? snapshot.approval.toolName
+            : "a tool",
           summary: fenceAsData(`What “${link.title}” asks to do`, snapshot.approval.summary),
         };
       }
     }
     if (snapshot.state === "done") {
       view.outcome = snapshot.outcome;
-      if (withReply && snapshot.reply) view.reply = fenceAsData(`Last reply in “${link.title}”`, snapshot.reply.text);
+      if (withReply && snapshot.reply)
+        view.reply = fenceAsData(`Last reply in “${link.title}”`, snapshot.reply.text);
     }
     if (snapshot.state === "failed") view.reason = snapshot.reason;
     if (link.result) view.result = link.result.value;
@@ -634,14 +737,19 @@ export class ChildChats {
   private async markTold(chatId: string, runId: string): Promise<void> {
     await this.dependencies.links
       .update(chatId, (draft) => {
-        if (!draft.delivered?.includes(runId)) draft.delivered = [...(draft.delivered ?? []), runId];
+        if (!draft.delivered?.includes(runId))
+          draft.delivered = [...(draft.delivered ?? []), runId];
         if (draft.owed?.runId === runId) delete draft.owed;
       })
       .catch(() => undefined);
   }
 }
 
-function firstMessage(leadTitle: string, task: string, resultSchema?: Record<string, unknown>): string {
+function firstMessage(
+  leadTitle: string,
+  task: string,
+  resultSchema?: Record<string, unknown>,
+): string {
   const ask = resultSchema
     ? `Do this task, then call submit_result with your result as JSON matching this schema (call it again to replace it), and end with a short summary.\n\nSchema:\n\`\`\`json\n${JSON.stringify(resultSchema, null, 2)}\n\`\`\``
     : "Do this task, then end with a short summary of the result.";
@@ -649,5 +757,7 @@ function firstMessage(leadTitle: string, task: string, resultSchema?: Record<str
 }
 
 function errorText(error: unknown): string {
-  return error instanceof Error && error.message ? error.message : "Aiden could not start that chat.";
+  return error instanceof Error && error.message
+    ? error.message
+    : "Aiden could not start that chat.";
 }

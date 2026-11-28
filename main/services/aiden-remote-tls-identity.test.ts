@@ -4,7 +4,12 @@ import * as fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { loadOrCreateAidenRemoteTlsIdentity, classifyAidenRemoteTlsEndpointFailure, AidenRemoteTlsEndpointError, fetchTlsServerSpkiSha256 } from "./aiden-remote-tls-identity.js";
+import {
+  loadOrCreateAidenRemoteTlsIdentity,
+  classifyAidenRemoteTlsEndpointFailure,
+  AidenRemoteTlsEndpointError,
+  fetchTlsServerSpkiSha256,
+} from "./aiden-remote-tls-identity.js";
 
 async function temporaryDirectory(): Promise<string> {
   return fs.mkdtemp(path.join(os.tmpdir(), "aiden-remote-tls-"));
@@ -41,7 +46,10 @@ test("TLS identity reissues its certificate for a new LAN name and keeps the pin
   const directory = await temporaryDirectory();
   try {
     const first = await loadOrCreateAidenRemoteTlsIdentity({ directory, hostnames: ["Mac"] });
-    assert.equal(new X509Certificate(first.certificate).checkHost("sambits-macbook-max.local"), undefined);
+    assert.equal(
+      new X509Certificate(first.certificate).checkHost("sambits-macbook-max.local"),
+      undefined,
+    );
 
     const renamed = await loadOrCreateAidenRemoteTlsIdentity({
       directory,
@@ -126,10 +134,12 @@ test("TLS endpoint probe failures classify into stable pairing codes", () => {
 test("invalid TLS endpoints fail closed without opening a socket", async () => {
   await assert.rejects(
     fetchTlsServerSpkiSha256("not a host"),
-    (error: unknown) => error instanceof AidenRemoteTlsEndpointError && error.code === "invalid_endpoint",
+    (error: unknown) =>
+      error instanceof AidenRemoteTlsEndpointError && error.code === "invalid_endpoint",
   );
   await assert.rejects(
     fetchTlsServerSpkiSha256("aiden.tailnet.ts.net", 0),
-    (error: unknown) => error instanceof AidenRemoteTlsEndpointError && error.code === "invalid_endpoint",
+    (error: unknown) =>
+      error instanceof AidenRemoteTlsEndpointError && error.code === "invalid_endpoint",
   );
 });

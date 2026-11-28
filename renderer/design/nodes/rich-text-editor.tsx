@@ -8,7 +8,13 @@ import { cn } from "../../lib/ui-utils";
 import { richTextHtml, serializeRichText } from "../../shared/design-canvas/rich-text";
 import { readRichDom } from "../rich-text-dom";
 
-export type RichTextCommand = "bold" | "italic" | "underline" | "bullets" | "numbers" | { link: string | null };
+export type RichTextCommand =
+  | "bold"
+  | "italic"
+  | "underline"
+  | "bullets"
+  | "numbers"
+  | { link: string | null };
 
 export type RichTextState = {
   bold: boolean;
@@ -64,10 +70,24 @@ const COMMANDS = {
   numbers: "insertOrderedList",
 } as const;
 
-const escapeAttribute = (value: string) => value.replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;");
+const escapeAttribute = (value: string) =>
+  value.replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;");
 
 export const RichTextEditor = React.forwardRef<RichTextEditorHandle, Props>(function RichTextEditor(
-  { value, onChange, label, placeholder, maxLength, className, style, autoFocus, onFocus, onBlur, onKeyDown, onSelectionChange },
+  {
+    value,
+    onChange,
+    label,
+    placeholder,
+    maxLength,
+    className,
+    style,
+    autoFocus,
+    onFocus,
+    onBlur,
+    onKeyDown,
+    onSelectionChange,
+  },
   ref,
 ) {
   const box = React.useRef<HTMLDivElement | null>(null);
@@ -148,7 +168,8 @@ export const RichTextEditor = React.forwardRef<RichTextEditorHandle, Props>(func
       },
       state() {
         const element = box.current;
-        if (!element || !element.contains(window.getSelection()?.anchorNode ?? null)) return NO_RICH_TEXT_STATE;
+        if (!element || !element.contains(window.getSelection()?.anchorNode ?? null))
+          return NO_RICH_TEXT_STATE;
         return {
           bold: document.queryCommandState("bold"),
           italic: document.queryCommandState("italic"),
@@ -195,7 +216,9 @@ export const RichTextEditor = React.forwardRef<RichTextEditorHandle, Props>(func
       if (!element || !(event.target instanceof Node) || !element.contains(event.target)) return;
       if (event.isComposing || event.shiftKey || event.altKey) return;
       if (!(mac ? event.metaKey && !event.ctrlKey : event.ctrlKey && !event.metaKey)) return;
-      const command = ({ b: "bold", i: "italic", u: "underline" } as const)[event.key.toLowerCase()];
+      const command = ({ b: "bold", i: "italic", u: "underline" } as const)[
+        event.key.toLowerCase()
+      ];
       if (!command) return;
       event.preventDefault();
       handle.run(command);
@@ -207,7 +230,8 @@ export const RichTextEditor = React.forwardRef<RichTextEditorHandle, Props>(func
   // The format bar follows the caret while the editor has it.
   React.useEffect(() => {
     const changed = () => {
-      if (box.current && box.current.contains(window.getSelection()?.anchorNode ?? null)) selectionRef.current?.();
+      if (box.current && box.current.contains(window.getSelection()?.anchorNode ?? null))
+        selectionRef.current?.();
     };
     document.addEventListener("selectionchange", changed);
     return () => document.removeEventListener("selectionchange", changed);

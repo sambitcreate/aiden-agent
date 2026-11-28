@@ -48,10 +48,7 @@ test("fenced code is omitted by default with a notice and included when enabled"
     reading: { inlineCode: true, fencedCode: true },
   });
   assert.ok(included);
-  assert.equal(
-    included.text,
-    "Before.\n\nnpm install\n\nAfter.",
-  );
+  assert.equal(included.text, "Before.\n\nnpm install\n\nAfter.");
   assert.deepEqual(included.omissions, []);
 });
 
@@ -78,10 +75,7 @@ test("lists preserve order without reading bullet markers", () => {
     reading: BOTH,
   });
   assert.ok(result);
-  assert.equal(
-    result.text,
-    "First item\n\nSecond item\n\n1. Step one\n\n2. Step two",
-  );
+  assert.equal(result.text, "First item\n\nSecond item\n\n1. Step one\n\n2. Step two");
 });
 
 test("tables are linearized by row with header context", () => {
@@ -106,7 +100,8 @@ test("oversized tables are skipped with a notice, never summarized", () => {
 
 test("images, embedded HTML, and footnotes are excluded with notices", () => {
   const result = prepareSpeechText({
-    markdown: "Text ![alt](a.png) more.\n\n<div>hidden</div>\n\nA note[^1].\n\n[^1]: The footnote body.",
+    markdown:
+      "Text ![alt](a.png) more.\n\n<div>hidden</div>\n\nA note[^1].\n\n[^1]: The footnote body.",
     reading: BOTH,
   });
   assert.ok(result);
@@ -132,26 +127,16 @@ test("unicode, negations, and mixed languages are preserved exactly", () => {
 });
 
 test("empty or non-prose responses produce no speakable text", () => {
-  assert.equal(
-    prepareSpeechText({ markdown: "", reading: BOTH }),
-    null,
-  );
-  assert.equal(
-    prepareSpeechText({ markdown: "![only an image](x.png)", reading: BOTH }),
-    null,
-  );
-  assert.equal(
-    prepareSpeechText({ markdown: "```js\nonly code\n```", reading: DEFAULTS }),
-    null,
-  );
+  assert.equal(prepareSpeechText({ markdown: "", reading: BOTH }), null);
+  assert.equal(prepareSpeechText({ markdown: "![only an image](x.png)", reading: BOTH }), null);
+  assert.equal(prepareSpeechText({ markdown: "```js\nonly code\n```", reading: DEFAULTS }), null);
 });
 
 test("oversized sources are rejected before parsing", () => {
   const oversized = "a".repeat(TTS_LIMITS.sourceMaxBytes + 1);
   assert.throws(
     () => prepareSpeechText({ markdown: oversized, reading: BOTH }),
-    (error: unknown) =>
-      error instanceof SpeechTextError && error.kind === "source_too_large",
+    (error: unknown) => error instanceof SpeechTextError && error.kind === "source_too_large",
   );
 });
 
@@ -160,17 +145,11 @@ test("deterministic output for identical input", () => {
     markdown: "Same **input** twice.\n\n- a\n- b",
     reading: BOTH,
   };
-  assert.deepEqual(
-    prepareSpeechText(input),
-    prepareSpeechText(input),
-  );
+  assert.deepEqual(prepareSpeechText(input), prepareSpeechText(input));
 });
 
 test("segmentation packs blocks within the target window", () => {
-  const blocks = Array.from(
-    { length: 5 },
-    (_, i) => `Paragraph ${i} ${"x".repeat(300)}`,
-  );
+  const blocks = Array.from({ length: 5 }, (_, i) => `Paragraph ${i} ${"x".repeat(300)}`);
   const segments = segmentSpeechText(blocks.join("\n\n"));
   assert.ok(segments.length >= 2);
   for (const segment of segments) {
@@ -186,10 +165,7 @@ test("segmentation never splits a surrogate pair", () => {
   assert.ok(segments.length > 1);
   for (const segment of segments) {
     // Every segment must start and end on a complete code point.
-    assert.ok(
-      !/[\uD800-\uDBFF]$/u.test(segment) &&
-        !/^[\uDC00-\uDFFF]/u.test(segment),
-    );
+    assert.ok(!/[\uD800-\uDBFF]$/u.test(segment) && !/^[\uDC00-\uDFFF]/u.test(segment));
   }
   assert.equal(segments.join(""), longEmojiRun);
 });

@@ -801,10 +801,7 @@ test("ComputerUseGrantLedger.clear() empties pending grants", () => {
 test("verify is read-only and mirrors verify_state's predicate bounds", () => {
   const verify = (fields: Record<string, unknown>) =>
     normalizeComputerUseArgs({ action: "verify", ...fields } as never);
-  assert.equal(
-    computerUseNeedsApproval(verify({ expect: [{ window: { exists: true } }] })),
-    false,
-  );
+  assert.equal(computerUseNeedsApproval(verify({ expect: [{ window: { exists: true } }] })), false);
   assert.deepEqual(
     verify({
       expect: [{ element: { role: " AXButton ", label_contains: "Save", selected: false } }],
@@ -893,10 +890,12 @@ test("menu needs approval, is foreground-only, and shows its exact path", () => 
     ["Format", "Font", "Show Fonts"],
   ]) {
     assert.deepEqual(
-      (normalizeComputerUseArgs({ action: "menu", menu_path: menuPath } as never) as Record<
-        string,
-        unknown
-      >).menu_path,
+      (
+        normalizeComputerUseArgs({ action: "menu", menu_path: menuPath } as never) as Record<
+          string,
+          unknown
+        >
+      ).menu_path,
       menuPath,
     );
   }
@@ -907,7 +906,13 @@ test("menu needs approval, is foreground-only, and shows its exact path", () => 
       delivery_mode: "background",
     } as never),
   );
-  for (const menuPath of [[], Array.from({ length: 17 }, () => "A"), [""], ["x".repeat(201)], [1]]) {
+  for (const menuPath of [
+    [],
+    Array.from({ length: 17 }, () => "A"),
+    [""],
+    ["x".repeat(201)],
+    [1],
+  ]) {
     assertSafetyError("invalid_menu", () =>
       normalizeComputerUseArgs({ action: "menu", menu_path: menuPath } as never),
     );

@@ -2,10 +2,7 @@ import os from "node:os";
 import { app, ipcMain } from "../platform.js";
 import { DataStore } from "./data-store.js";
 import { writeDiagnosticEvent } from "./diagnostic-journal.js";
-import {
-  EncryptedPeerHostStorage,
-  type PeerEncryptedDocument,
-} from "./peer-host-storage.js";
+import { EncryptedPeerHostStorage, type PeerEncryptedDocument } from "./peer-host-storage.js";
 import { PeerHostRegistry } from "./peer-host-registry.js";
 import { getAidenRemoteRuntime } from "./aiden-remote-service-main.js";
 import { secureStorage } from "./secure-storage.js";
@@ -36,10 +33,7 @@ export function getPeerHostRegistry(): PeerHostRegistry {
       {
         load: async () => {
           const value = await store.load();
-          if (
-            (await store.loadedFromCorruptFile()) ||
-            (await store.loadedFromUnsafeFile())
-          )
+          if ((await store.loadedFromCorruptFile()) || (await store.loadedFromUnsafeFile()))
             throw new Error("Paired-device storage needs recovery.");
           return value;
         },

@@ -3,7 +3,10 @@ import { build } from "esbuild";
 import { readFileSync } from "node:fs";
 import process from "node:process";
 import { pathToFileURL } from "node:url";
-import { analyticsBuildConfigPlugin, resolveAnalyticsBuildConfig } from "./analytics-build-config.mjs";
+import {
+  analyticsBuildConfigPlugin,
+  resolveAnalyticsBuildConfig,
+} from "./analytics-build-config.mjs";
 
 /**
  * Returns the esbuild option sets for the main-process, worker, and preload
@@ -105,6 +108,8 @@ if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
   const analytics = resolveAnalyticsBuildConfig({ env: process.env, version });
   if (analytics?.warning) console.warn(`warning: ${analytics.warning}`);
   await Promise.all(
-    electronBuildOptions({ production, analytics: analytics?.config }).map((options) => build(options)),
+    electronBuildOptions({ production, analytics: analytics?.config }).map((options) =>
+      build(options),
+    ),
   );
 }

@@ -105,7 +105,11 @@ export function startMcpOAuthLoopback(options: McpOAuthLoopbackOptions): Promise
     let answered = false;
 
     const answer = (res: http.ServerResponse, page: McpOAuthCallbackPage): void => {
-      res.writeHead(200, { "content-type": "text/html; charset=utf-8", "cache-control": "no-store", connection: "close" });
+      res.writeHead(200, {
+        "content-type": "text/html; charset=utf-8",
+        "cache-control": "no-store",
+        connection: "close",
+      });
       res.end(render(page));
     };
 

@@ -43,7 +43,10 @@ export function duoFoldCommands(
 ): DuoCommand[] {
   const fold: DuoCommand = { control: "angle", value: angle };
   if (!current.stand) return [fold];
-  return [{ control: "orientation", value: duoHoldOrientation(current.standVertical, current.screenId) }, fold];
+  return [
+    { control: "orientation", value: duoHoldOrientation(current.standVertical, current.screenId) },
+    fold,
+  ];
 }
 
 /**
@@ -51,7 +54,13 @@ export function duoFoldCommands(
  * turns the whole drawing a quarter for a horizontal phone. Stance glyphs are
  * side-on outlines and never rotate.
  */
-export function DeviceDuoGlyph({ pose, rotated = false }: { pose: DuoFold | DuoStand; rotated?: boolean }) {
+export function DeviceDuoGlyph({
+  pose,
+  rotated = false,
+}: {
+  pose: DuoFold | DuoStand;
+  rotated?: boolean;
+}) {
   return (
     <svg
       viewBox="0 0 24 24"
@@ -70,7 +79,9 @@ export function DeviceDuoGlyph({ pose, rotated = false }: { pose: DuoFold | DuoS
           <circle cx="12" cy="6.4" r="0.85" fill="currentColor" stroke="none" />
         </>
       ) : null}
-      {pose === "half" ? <path d="M12 6.5v11M12 6.5 4.5 4v16l7.5-2.5M12 6.5 19.5 4v16L12 17.5" /> : null}
+      {pose === "half" ? (
+        <path d="M12 6.5v11M12 6.5 4.5 4v16l7.5-2.5M12 6.5 19.5 4v16L12 17.5" />
+      ) : null}
       {pose === "open" ? (
         <>
           <rect x="3" y="6" width="18" height="12" rx="2.4" />
@@ -107,7 +118,14 @@ export function DeviceDuoControls(props: {
   // Folding out of a stand sends the rotation back, then the fold, and only one command can
   // wait. Hold the fold buttons until a stand, or anything queued on one, has landed.
   const foldWaits = props.state.pending && (stand || props.state.requested?.control === "pose");
-  const button = (key: string, label: string, pressed: boolean, onClick: () => void, glyph: React.ReactNode, waits = false) => (
+  const button = (
+    key: string,
+    label: string,
+    pressed: boolean,
+    onClick: () => void,
+    glyph: React.ReactNode,
+    waits = false,
+  ) => (
     <Button
       key={key}
       variant={pressed ? "muted" : "transparent"}
@@ -131,7 +149,11 @@ export function DeviceDuoControls(props: {
             duoFoldLabel(id, phoneVertical),
             !stand && fold === id,
             () => {
-              for (const command of duoFoldCommands(angle, { stand, standVertical, screenId: screen.screenId })) {
+              for (const command of duoFoldCommands(angle, {
+                stand,
+                standVertical,
+                screenId: screen.screenId,
+              })) {
                 props.onCommand(command);
               }
             },

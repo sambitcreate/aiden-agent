@@ -15,10 +15,23 @@ export function isUsageLimitWaitHours(value: unknown): value is UsageLimitWaitHo
 }
 
 /** A time as people read it after "resets": "at 3:40 PM" today, "Thursday at 9:00 AM" this week, else "Nov 3 at 9:00 AM". */
-export function formatUsageLimitTime(at: number, now: number, options: { locale?: string; timeZone?: string } = {}): string {
+export function formatUsageLimitTime(
+  at: number,
+  now: number,
+  options: { locale?: string; timeZone?: string } = {},
+): string {
   const zone = options.timeZone ? { timeZone: options.timeZone } : {};
-  const day = new Intl.DateTimeFormat("en-CA", { year: "numeric", month: "2-digit", day: "2-digit", ...zone });
-  const time = new Intl.DateTimeFormat(options.locale, { hour: "numeric", minute: "2-digit", ...zone }).format(at);
+  const day = new Intl.DateTimeFormat("en-CA", {
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    ...zone,
+  });
+  const time = new Intl.DateTimeFormat(options.locale, {
+    hour: "numeric",
+    minute: "2-digit",
+    ...zone,
+  }).format(at);
   if (day.format(at) === day.format(now)) return `at ${time}`;
   if (at > now && at - now < 6 * 24 * 60 * 60_000) {
     return `${new Intl.DateTimeFormat(options.locale, { weekday: "long", ...zone }).format(at)} at ${time}`;
@@ -95,7 +108,12 @@ export function usageLimitWaitFor(
   let found: UsageLimitWaitView | undefined;
   for (const wait of waits) {
     if (wait.ownerKind !== ownerKind || wait.ownerId !== ownerId) continue;
-    if (!found || (wait.trying && !found.trying) || (!found.trying && wait.nextTryAt < found.nextTryAt)) found = wait;
+    if (
+      !found ||
+      (wait.trying && !found.trying) ||
+      (!found.trying && wait.nextTryAt < found.nextTryAt)
+    )
+      found = wait;
   }
   return found;
 }

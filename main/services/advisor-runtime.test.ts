@@ -254,7 +254,9 @@ test("when the chooser follows the turn, system is the same with or without it a
       },
     }),
   );
-  const withoutChooser = await fixtureValue.advisor.extensionForGeneration(input({ chooserByTurn: true }));
+  const withoutChooser = await fixtureValue.advisor.extensionForGeneration(
+    input({ chooserByTurn: true }),
+  );
   assert.ok(withChooser && withoutChooser?.tools?.[0]);
   assert.equal(withChooser.systemPrompt, withoutChooser.systemPrompt);
   assert.deepEqual(
@@ -268,8 +270,14 @@ test("when the chooser follows the turn, system is the same with or without it a
 
   const result = await withoutChooser.tools[0].execute("advisor-no-chooser", {});
   assert.equal(result.details?.status, "blocked");
-  assert.match(result.content[0]?.type === "text" ? result.content[0].text : "", /chooser cannot be shown/u);
-  assert.doesNotMatch(result.content[0]?.type === "text" ? result.content[0].text : "", /did not choose/u);
+  assert.match(
+    result.content[0]?.type === "text" ? result.content[0].text : "",
+    /chooser cannot be shown/u,
+  );
+  assert.doesNotMatch(
+    result.content[0]?.type === "text" ? result.content[0].text : "",
+    /did not choose/u,
+  );
   assert.equal(asked, false);
   assert.equal(fixtureValue.getResolveCalls(), 0);
   assert.deepEqual(fixtureValue.events, []);
@@ -667,13 +675,18 @@ test("unreported usage receives the dispatched attempt identity and persistence 
     preparedId = attemptId;
     return prepare(attemptId, providerId, modelId);
   };
-  value.runtime.streams.streamSimple = () => { throw new Error("No response"); };
+  value.runtime.streams.streamSimple = () => {
+    throw new Error("No response");
+  };
   value.dependencies.recordUnreportedUsage = async (_runtime, status, attemptId) => {
     recorded = { status, attemptId };
     throw new Error("Persistence unavailable");
   };
   const extension = await value.advisor.extensionForGeneration(input());
-  await extension!.tools![0].execute("failed-call", { providerId: candidate.providerId, modelId: candidate.modelId });
+  await extension!.tools![0].execute("failed-call", {
+    providerId: candidate.providerId,
+    modelId: candidate.modelId,
+  });
   assert.deepEqual(recorded, { status: "failed", attemptId: preparedId });
   assert.ok(preparedId);
   assert.equal(value.events.includes("usage_recorded"), false);

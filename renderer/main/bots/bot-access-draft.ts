@@ -13,8 +13,10 @@ import {
 export type BotAccessDraft = BotEditorAccessDraft;
 
 export function botFullAccessAccepted(catalog: BotCapabilityCatalog): boolean {
-  return catalog.notice.requiresAcknowledgement === false
-    && catalog.notice.acceptedDecision === "continue_full";
+  return (
+    catalog.notice.requiresAcknowledgement === false &&
+    catalog.notice.acceptedDecision === "continue_full"
+  );
 }
 
 export function firstAvailableModel(catalog: BotCapabilityCatalog) {
@@ -25,16 +27,22 @@ export function firstAvailableModel(catalog: BotCapabilityCatalog) {
   return provider && model ? { providerId: provider.id, modelId: model.id } : undefined;
 }
 
-export function firstAvailableVisionModel(catalog: BotCapabilityCatalog, preferredProviderId?: string) {
+export function firstAvailableVisionModel(
+  catalog: BotCapabilityCatalog,
+  preferredProviderId?: string,
+) {
   const providers = [
     ...catalog.providers.filter((provider) => provider.id === preferredProviderId),
     ...catalog.providers.filter((provider) => provider.id !== preferredProviderId),
   ];
   const provider = providers.find(
-    (candidate) => candidate.available
-      && candidate.models.some((model) => model.available && model.supportsImages),
+    (candidate) =>
+      candidate.available &&
+      candidate.models.some((model) => model.available && model.supportsImages),
   );
-  const model = provider?.models.find((candidate) => candidate.available && candidate.supportsImages);
+  const model = provider?.models.find(
+    (candidate) => candidate.available && candidate.supportsImages,
+  );
   return provider && model ? { providerId: provider.id, modelId: model.id } : undefined;
 }
 
@@ -43,22 +51,30 @@ export function accessDraftFromState(
   catalog: BotCapabilityCatalog,
 ): BotAccessDraft {
   const fallback = firstAvailableModel(catalog);
-  const selected = state?.modelSelection
-    && catalog.providers.some((provider) =>
-      provider.id === state.modelSelection!.providerId
-      && provider.models.some((model) => model.id === state.modelSelection!.modelId))
+  const selected =
+    state?.modelSelection &&
+    catalog.providers.some(
+      (provider) =>
+        provider.id === state.modelSelection!.providerId &&
+        provider.models.some((model) => model.id === state.modelSelection!.modelId),
+    )
       ? state.modelSelection
       : undefined;
-  const selectedModel = catalog.providers.find(({ id }) => id === (selected?.providerId ?? fallback?.providerId))
+  const selectedModel = catalog.providers
+    .find(({ id }) => id === (selected?.providerId ?? fallback?.providerId))
     ?.models.find(({ id }) => id === (selected?.modelId ?? fallback?.modelId));
   const visionFallback = selectedModel?.supportsImages
     ? undefined
     : firstAvailableVisionModel(catalog, selected?.providerId ?? fallback?.providerId);
-  const visionSelected = state?.visionModelSelection
-    && catalog.providers.some((provider) =>
-      provider.id === state.visionModelSelection!.providerId
-      && provider.models.some((model) =>
-        model.id === state.visionModelSelection!.modelId && model.supportsImages))
+  const visionSelected =
+    state?.visionModelSelection &&
+    catalog.providers.some(
+      (provider) =>
+        provider.id === state.visionModelSelection!.providerId &&
+        provider.models.some(
+          (model) => model.id === state.visionModelSelection!.modelId && model.supportsImages,
+        ),
+    )
       ? state.visionModelSelection
       : visionFallback;
   return {
@@ -92,9 +108,10 @@ export function buildBotAccessUpdate(
   const visionModel = visionProvider?.models.find(
     (candidate) => candidate.id === draft.visionModelId,
   );
-  if (!model.supportsImages && (
-    !visionProvider?.available || !visionModel?.available || !visionModel.supportsImages
-  )) {
+  if (
+    !model.supportsImages &&
+    (!visionProvider?.available || !visionModel?.available || !visionModel.supportsImages)
+  ) {
     throw new Error("Choose an available vision model for photos and screenshots.");
   }
   const visionSelection = model.supportsImages
@@ -124,7 +141,10 @@ export function buildBotAccessUpdate(
   assertAvailable(catalog.fileScopes, draft.fileScopeIds, "file access");
   assertAvailable(catalog.connections, draft.connectionIds, "connection");
   assertAvailable(
-    catalog.skills.map((option) => ({ ...option, available: option.available || catalog.skillsEnabled === false })),
+    catalog.skills.map((option) => ({
+      ...option,
+      available: option.available || catalog.skillsEnabled === false,
+    })),
     draft.skillIds,
     "skill",
   );
@@ -162,25 +182,29 @@ export function botAccessDiffers(
   if (!state) return true;
   if (update.accessMode !== state.access.accessMode) return true;
   if (update.accessMode === "full") {
-    return state.modelSelection?.providerId !== update.providerId
-      || state.modelSelection?.modelId !== update.modelId
-      || (update.webSearchEnabled !== undefined
-        && update.webSearchEnabled !== (state.webSearchEnabled === true))
-      || state.visionModelSelection?.providerId !== update.visionModel?.providerId
-      || state.visionModelSelection?.modelId !== update.visionModel?.modelId;
+    return (
+      state.modelSelection?.providerId !== update.providerId ||
+      state.modelSelection?.modelId !== update.modelId ||
+      (update.webSearchEnabled !== undefined &&
+        update.webSearchEnabled !== (state.webSearchEnabled === true)) ||
+      state.visionModelSelection?.providerId !== update.visionModel?.providerId ||
+      state.visionModelSelection?.modelId !== update.visionModel?.modelId
+    );
   }
   if (state.access.accessMode === "full") return true;
   const current = state.access.custom;
   const next = update.custom;
-  return current.providerId !== next.providerId
-    || current.modelId !== next.modelId
-    || current.shellEnabled !== next.shellEnabled
-    || !sameIdSet(current.fileScopeIds, next.fileScopeIds)
-    || !sameIdSet(current.connectionIds, next.connectionIds)
-    || !sameIdSet(current.skillIds, next.skillIds)
-    || !sameIdSet(current.otherCapabilityIds, next.otherCapabilityIds)
-    || state.visionModelSelection?.providerId !== update.visionModel?.providerId
-    || state.visionModelSelection?.modelId !== update.visionModel?.modelId;
+  return (
+    current.providerId !== next.providerId ||
+    current.modelId !== next.modelId ||
+    current.shellEnabled !== next.shellEnabled ||
+    !sameIdSet(current.fileScopeIds, next.fileScopeIds) ||
+    !sameIdSet(current.connectionIds, next.connectionIds) ||
+    !sameIdSet(current.skillIds, next.skillIds) ||
+    !sameIdSet(current.otherCapabilityIds, next.otherCapabilityIds) ||
+    state.visionModelSelection?.providerId !== update.visionModel?.providerId ||
+    state.visionModelSelection?.modelId !== update.visionModel?.modelId
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -188,7 +212,12 @@ export function botAccessDiffers(
 // Only what I choose picker. Storage is unchanged: an Everything Bot is Full
 // access, and a Bot with a tool turned off is Custom access with the rest on.
 
-export type BotToolKey = "connectionIds" | "skillIds" | "otherCapabilityIds" | "shell" | "webSearch";
+export type BotToolKey =
+  | "connectionIds"
+  | "skillIds"
+  | "otherCapabilityIds"
+  | "shell"
+  | "webSearch";
 
 export interface BotTool {
   key: BotToolKey;
@@ -203,15 +232,60 @@ export interface BotTool {
 const isWeb = (option: BotCapabilityOption) => option.label === BOT_WEB_SEARCH_CAPABILITY_LABEL;
 
 function toolOptions(catalog: BotCapabilityCatalog, draft: BotAccessDraft): BotTool[] {
-  const skillsAvailable = (option: BotCapabilityOption) => option.available || catalog.skillsEnabled === false;
-  const others = catalog.otherCapabilities.filter((option) => option.available && !(draft.usesFullAccess && isWeb(option)));
+  const skillsAvailable = (option: BotCapabilityOption) =>
+    option.available || catalog.skillsEnabled === false;
+  const others = catalog.otherCapabilities.filter(
+    (option) => option.available && !(draft.usesFullAccess && isWeb(option)),
+  );
   return [
-    ...catalog.connections.filter((option) => option.available).map((option) => ({ key: "connectionIds" as const, id: option.id, label: option.label, group: "Connected apps", ...(option.description ? { description: option.description } : {}) })),
-    ...catalog.skills.filter(skillsAvailable).map((option) => ({ key: "skillIds" as const, id: option.id, label: option.label, group: "Skills", ...(option.description ? { description: option.description } : {}) })),
-    ...others.map((option) => ({ key: "otherCapabilityIds" as const, id: option.id, label: option.label, group: "More", ...(option.description ? { description: option.description } : {}) })),
-    ...(catalog.shellAvailable ? [{ key: "shell" as const, id: "shell", label: "Run commands", group: "More", description: "Commands in Terminal on this Mac" }] : []),
+    ...catalog.connections
+      .filter((option) => option.available)
+      .map((option) => ({
+        key: "connectionIds" as const,
+        id: option.id,
+        label: option.label,
+        group: "Connected apps",
+        ...(option.description ? { description: option.description } : {}),
+      })),
+    ...catalog.skills
+      .filter(skillsAvailable)
+      .map((option) => ({
+        key: "skillIds" as const,
+        id: option.id,
+        label: option.label,
+        group: "Skills",
+        ...(option.description ? { description: option.description } : {}),
+      })),
+    ...others.map((option) => ({
+      key: "otherCapabilityIds" as const,
+      id: option.id,
+      label: option.label,
+      group: "More",
+      ...(option.description ? { description: option.description } : {}),
+    })),
+    ...(catalog.shellAvailable
+      ? [
+          {
+            key: "shell" as const,
+            id: "shell",
+            label: "Run commands",
+            group: "More",
+            description: "Commands in Terminal on this Mac",
+          },
+        ]
+      : []),
     // In Full access, Web search is its own switch; in Custom it is one of the capabilities above.
-    ...(draft.usesFullAccess ? [{ key: "webSearch" as const, id: "web", label: BOT_WEB_SEARCH_CAPABILITY_LABEL, group: "More", description: "Look things up with Aiden’s Web Search" }] : []),
+    ...(draft.usesFullAccess
+      ? [
+          {
+            key: "webSearch" as const,
+            id: "web",
+            label: BOT_WEB_SEARCH_CAPABILITY_LABEL,
+            group: "More",
+            description: "Look things up with Aiden’s Web Search",
+          },
+        ]
+      : []),
   ];
 }
 
@@ -223,7 +297,10 @@ function toolIsOn(draft: BotAccessDraft, tool: BotTool): boolean {
 }
 
 /** What this Bot can use and what is off, from the same draft the save sends. */
-export function botToolsOf(catalog: BotCapabilityCatalog, draft: BotAccessDraft): { on: BotTool[]; off: BotTool[] } {
+export function botToolsOf(
+  catalog: BotCapabilityCatalog,
+  draft: BotAccessDraft,
+): { on: BotTool[]; off: BotTool[] } {
   const on: BotTool[] = [];
   const off: BotTool[] = [];
   for (const tool of toolOptions(catalog, draft)) (toolIsOn(draft, tool) ? on : off).push(tool);
@@ -235,8 +312,13 @@ export function botToolsOf(catalog: BotCapabilityCatalog, draft: BotAccessDraft)
  * other tool still on and the widest file access it can name (the whole Mac
  * when offered), so turning a tool off only ever narrows what it can reach.
  */
-export function disableBotTool(catalog: BotCapabilityCatalog, draft: BotAccessDraft, tool: Pick<BotTool, "key" | "id">): BotAccessDraft {
-  if (tool.key === "webSearch") return draft.usesFullAccess ? { ...draft, webSearchEnabled: false } : draft;
+export function disableBotTool(
+  catalog: BotCapabilityCatalog,
+  draft: BotAccessDraft,
+  tool: Pick<BotTool, "key" | "id">,
+): BotAccessDraft {
+  if (tool.key === "webSearch")
+    return draft.usesFullAccess ? { ...draft, webSearchEnabled: false } : draft;
   let next = draft;
   if (draft.usesFullAccess) {
     const whole = catalog.fileScopes.find((scope) => scope.kind === "full_mac" && scope.available);
@@ -244,12 +326,27 @@ export function disableBotTool(catalog: BotCapabilityCatalog, draft: BotAccessDr
     next = {
       ...draft,
       usesFullAccess: false,
-      fileScopeIds: whole ? [whole.id] : home ? [home.id, ...catalog.fileScopes.filter((scope) => scope.kind === "approved_location" && scope.available).map((scope) => scope.id)] : [],
+      fileScopeIds: whole
+        ? [whole.id]
+        : home
+          ? [
+              home.id,
+              ...catalog.fileScopes
+                .filter((scope) => scope.kind === "approved_location" && scope.available)
+                .map((scope) => scope.id),
+            ]
+          : [],
       shellEnabled: catalog.shellAvailable,
-      connectionIds: catalog.connections.filter((option) => option.available).map((option) => option.id),
-      skillIds: catalog.skills.filter((option) => option.available || catalog.skillsEnabled === false).map((option) => option.id),
+      connectionIds: catalog.connections
+        .filter((option) => option.available)
+        .map((option) => option.id),
+      skillIds: catalog.skills
+        .filter((option) => option.available || catalog.skillsEnabled === false)
+        .map((option) => option.id),
       // Web search stays as it was: on only if it was on.
-      otherCapabilityIds: catalog.otherCapabilities.filter((option) => option.available && (draft.webSearchEnabled || !isWeb(option))).map((option) => option.id),
+      otherCapabilityIds: catalog.otherCapabilities
+        .filter((option) => option.available && (draft.webSearchEnabled || !isWeb(option)))
+        .map((option) => option.id),
     };
   }
   if (tool.key === "shell") return { ...next, shellEnabled: false };
@@ -257,9 +354,15 @@ export function disableBotTool(catalog: BotCapabilityCatalog, draft: BotAccessDr
 }
 
 /** Turn one tool back on. It never turns a Custom Bot back into Everything. */
-export function enableBotTool(draft: BotAccessDraft, tool: Pick<BotTool, "key" | "id">): BotAccessDraft {
-  if (tool.key === "webSearch") return draft.usesFullAccess ? { ...draft, webSearchEnabled: true } : draft;
+export function enableBotTool(
+  draft: BotAccessDraft,
+  tool: Pick<BotTool, "key" | "id">,
+): BotAccessDraft {
+  if (tool.key === "webSearch")
+    return draft.usesFullAccess ? { ...draft, webSearchEnabled: true } : draft;
   if (draft.usesFullAccess) return draft;
   if (tool.key === "shell") return { ...draft, shellEnabled: true };
-  return draft[tool.key].includes(tool.id) ? draft : { ...draft, [tool.key]: [...draft[tool.key], tool.id] };
+  return draft[tool.key].includes(tool.id)
+    ? draft
+    : { ...draft, [tool.key]: [...draft[tool.key], tool.id] };
 }

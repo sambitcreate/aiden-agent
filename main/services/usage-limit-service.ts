@@ -2,7 +2,10 @@
 // Mac, saved to `userData/usage-limits.json` so a wait survives a restart, and
 // mirrored to the windows so a waiting reply can say when it tries again.
 
-import type { UsageLimitWaitView, UsageLimitsChangedEvent } from "../../renderer/shared/usage-limits.js";
+import type {
+  UsageLimitWaitView,
+  UsageLimitsChangedEvent,
+} from "../../renderer/shared/usage-limits.js";
 import {
   parseUsageLimitEntries,
   usageLimitMaxWaitMs,
@@ -57,7 +60,10 @@ export class UsageLimitService {
   ready(): Promise<void> {
     this.loading ??= (async () => {
       try {
-        const entries = parseUsageLimitEntries(await this.dependencies.persistence.load(), this.now());
+        const entries = parseUsageLimitEntries(
+          await this.dependencies.persistence.load(),
+          this.now(),
+        );
         // Entries held since startup win over the saved ones.
         const live = new Set(this.gate.snapshot().map((entry) => entry.key));
         this.gate.load(entries.filter((entry) => !live.has(entry.key)));
@@ -111,7 +117,9 @@ export class UsageLimitService {
       providerLabel,
       maxWaitMs: () => this.maxWaitMs(),
       ready: () => this.ready(),
-      ...(this.dependencies.clock ? { now: this.dependencies.clock.now, random: this.dependencies.clock.random } : {}),
+      ...(this.dependencies.clock
+        ? { now: this.dependencies.clock.now, random: this.dependencies.clock.random }
+        : {}),
       ...(this.dependencies.onWait ? { onWait: this.dependencies.onWait } : {}),
       ...(this.dependencies.onGiveUp ? { onGiveUp: this.dependencies.onGiveUp } : {}),
       ...extra,

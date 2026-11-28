@@ -23,24 +23,55 @@ afterEach(cleanup);
 
 function browserTab(overrides: Partial<BrowserTab> = {}): BrowserTab {
   return {
-    id: "tab-1", workspaceId: WORKSPACE, profileId: "bot:bot-1", url: "https://github.com/login", title: "Sign in to GitHub",
-    loading: false, canGoBack: false, canGoForward: false, crashed: false, audible: false, muted: false,
-    viewport: { mode: "fill", width: 1280, height: 720 }, appearance: "system", zoom: 1, recording: false,
-    agentControlling: false, floating: false, visible: true, ...overrides,
+    id: "tab-1",
+    workspaceId: WORKSPACE,
+    profileId: "bot:bot-1",
+    url: "https://github.com/login",
+    title: "Sign in to GitHub",
+    loading: false,
+    canGoBack: false,
+    canGoForward: false,
+    crashed: false,
+    audible: false,
+    muted: false,
+    viewport: { mode: "fill", width: 1280, height: 720 },
+    appearance: "system",
+    zoom: 1,
+    recording: false,
+    agentControlling: false,
+    floating: false,
+    visible: true,
+    ...overrides,
   };
 }
 
 function browserState(tabs: BrowserTab[]): BrowserState {
   return {
-    workspaceId: WORKSPACE, revision: 1, tabs, activeTabId: tabs[0]?.id ?? null,
-    profiles: structuredClone(BUILT_IN_BROWSER_PROFILES), defaults: structuredClone(DEFAULT_BROWSER_SETTINGS),
-    agentAccessOverride: "inherit", agentAccessAllowed: true, history: [{ url: "https://bank.example/", title: "My bank", visitedAt: 1 }],
+    workspaceId: WORKSPACE,
+    revision: 1,
+    tabs,
+    activeTabId: tabs[0]?.id ?? null,
+    profiles: structuredClone(BUILT_IN_BROWSER_PROFILES),
+    defaults: structuredClone(DEFAULT_BROWSER_SETTINGS),
+    agentAccessOverride: "inherit",
+    agentAccessAllowed: true,
+    history: [{ url: "https://bank.example/", title: "My bank", visitedAt: 1 }],
     servers: [],
   };
 }
 
 function chatSnapshot(): BotLiveSnapshot {
-  return { botId: "bot-1", epoch: "e1", seq: 0, entries: [], partial: null, state: { kind: "idle" }, question: null, activity: null, queued: [] };
+  return {
+    botId: "bot-1",
+    epoch: "e1",
+    seq: 0,
+    entries: [],
+    partial: null,
+    state: { kind: "idle" },
+    question: null,
+    activity: null,
+    queued: [],
+  };
 }
 
 /** The browser IPC as the Bot's own browser answers it: `state()` is read on every call. */
@@ -55,7 +86,10 @@ function browserIpc(state: () => BrowserState) {
   };
 }
 
-async function mountBotChat(state: () => BrowserState, handlers: Record<string, (...args: unknown[]) => unknown> = {}) {
+async function mountBotChat(
+  state: () => BrowserState,
+  handlers: Record<string, (...args: unknown[]) => unknown> = {},
+) {
   const calls = installBotTestIpc({
     "bots:get": () => botFixture(),
     "bots:pendingApprovals": () => [],
@@ -75,9 +109,13 @@ const botPanel = (): HTMLElement => {
   assert.ok(panel, "the Bot panel is mounted");
   return panel;
 };
-const panelTabs = () => within(botPanel()).queryAllByRole("tab").filter((tab) => tab.closest(".browser-panel") === null);
+const panelTabs = () =>
+  within(botPanel())
+    .queryAllByRole("tab")
+    .filter((tab) => tab.closest(".browser-panel") === null);
 const tabNames = () => panelTabs().map((tab) => tab.textContent);
-const selectedTab = () => panelTabs().find((tab) => tab.getAttribute("aria-selected") === "true")?.textContent;
+const selectedTab = () =>
+  panelTabs().find((tab) => tab.getAttribute("aria-selected") === "true")?.textContent;
 
 test("Browser joins the Bot panel once its browser has a tab; a saved Browser tab shows Activity until then", async () => {
   localStorage.setItem(BOT_PANEL_OPEN_KEY, "true");
@@ -88,13 +126,30 @@ test("Browser joins the Bot panel once its browser has a tab; a saved Browser ta
   assert.deepEqual(tabNames(), ["Activity", "Files", "Memory", "Routines", "Advanced"]);
 
   tabs = [browserTab()];
-  await act(async () => emitBotTestNotification("browser:event", { type: "state", state: browserState(tabs) }));
-  await waitFor(() => assert.deepEqual(tabNames(), ["Activity", "Files", "Memory", "Routines", "Browser", "Advanced"]));
-  assert.equal(selectedTab(), "Browser", "the saved choice comes back once there is something to show");
+  await act(async () =>
+    emitBotTestNotification("browser:event", { type: "state", state: browserState(tabs) }),
+  );
+  await waitFor(() =>
+    assert.deepEqual(tabNames(), [
+      "Activity",
+      "Files",
+      "Memory",
+      "Routines",
+      "Browser",
+      "Advanced",
+    ]),
+  );
+  assert.equal(
+    selectedTab(),
+    "Browser",
+    "the saved choice comes back once there is something to show",
+  );
 
   // Closing the last tab keeps the Browser view where the person is.
   tabs = [];
-  await act(async () => emitBotTestNotification("browser:event", { type: "state", state: browserState(tabs) }));
+  await act(async () =>
+    emitBotTestNotification("browser:event", { type: "state", state: browserState(tabs) }),
+  );
   assert.equal(selectedTab(), "Browser");
   assert.ok(await within(botPanel()).findByText(/Planner opens pages here/u));
 });
@@ -107,15 +162,31 @@ test("a tab the Bot opens to show reveals its Browser tab without taking focus f
   composer.focus();
 
   tabs = [browserTab({ agentControlling: true, url: "https://shop.example.com/", title: "Shop" })];
-  await act(async () => emitBotTestNotification("browser:event", { type: "show", workspaceId: WORKSPACE, tabId: "tab-1" }));
+  await act(async () =>
+    emitBotTestNotification("browser:event", {
+      type: "show",
+      workspaceId: WORKSPACE,
+      tabId: "tab-1",
+    }),
+  );
   await waitFor(() => assert.equal(botPanel().getAttribute("data-state"), "open"));
   assert.equal(selectedTab(), "Browser");
   assert.ok(await within(botPanel()).findByText("Planner is using this browser"));
   await act(() => new Promise<void>((resolve) => requestAnimationFrame(() => resolve())));
-  assert.equal(document.activeElement === composer, true, "the person keeps typing where they were");
+  assert.equal(
+    document.activeElement === composer,
+    true,
+    "the person keeps typing where they were",
+  );
 
   // Another Bot's browser opening a tab changes nothing here.
-  await act(async () => emitBotTestNotification("browser:event", { type: "show", workspaceId: "bot-home-2", tabId: "x" }));
+  await act(async () =>
+    emitBotTestNotification("browser:event", {
+      type: "show",
+      workspaceId: "bot-home-2",
+      tabId: "x",
+    }),
+  );
   assert.equal(selectedTab(), "Browser");
 });
 
@@ -124,12 +195,15 @@ test("a Bot's browser has no profile choice, annotations, DevTools, capture, rec
   let items: BrowserMenuItem[] = [];
   installBotTestIpc({
     ...browserIpc(() => state),
-    "browser:popup-menu": (_id, _point, choices) => { items = choices as BrowserMenuItem[]; return null; },
+    "browser:popup-menu": (_id, _point, choices) => {
+      items = choices as BrowserMenuItem[];
+      return null;
+    },
   });
   const menuItems = async () => {
     items = [];
     await act(async () => fireEvent.click(screen.getByRole("button", { name: "Browser menu" })));
-    return items.flatMap(item => item?.enabled ? [item.label] : []);
+    return items.flatMap((item) => (item?.enabled ? [item.label] : []));
   };
 
   const workspace = render(<BrowserPanel workspaceId={WORKSPACE} active />);
@@ -138,8 +212,17 @@ test("a Bot's browser has no profile choice, annotations, DevTools, capture, rec
   assert.ok(screen.getByRole("button", { name: "Grab element" }));
   assert.ok(screen.getByRole("button", { name: "Annotate" }));
   const full = await menuItems();
-  for (const item of ["Open DevTools", "Record browser", "Float browser over chat", "Open separate preview window", "Clear cookies"]) {
-    assert.ok(full.some((entry) => entry.includes(item)), item);
+  for (const item of [
+    "Open DevTools",
+    "Record browser",
+    "Float browser over chat",
+    "Open separate preview window",
+    "Clear cookies",
+  ]) {
+    assert.ok(
+      full.some((entry) => entry.includes(item)),
+      item,
+    );
   }
   workspace.unmount();
 
@@ -150,8 +233,20 @@ test("a Bot's browser has no profile choice, annotations, DevTools, capture, rec
   assert.equal(screen.queryByRole("button", { name: "Annotate" }), null);
   const bot = await menuItems();
   assert.ok(bot.some((entry) => entry.includes("Open in system browser")));
-  for (const item of ["Open DevTools", "Capture screenshot", "Record browser", "Float browser over chat", "Open separate preview window", "Clear cookies", "Browser settings"]) {
-    assert.equal(bot.some((entry) => entry.includes(item)), false, item);
+  for (const item of [
+    "Open DevTools",
+    "Capture screenshot",
+    "Record browser",
+    "Float browser over chat",
+    "Open separate preview window",
+    "Clear cookies",
+    "Browser settings",
+  ]) {
+    assert.equal(
+      bot.some((entry) => entry.includes(item)),
+      false,
+      item,
+    );
   }
 });
 
@@ -161,11 +256,14 @@ test("switching tabs dismisses the open menu and discards a delayed selection", 
   const calls = installBotTestIpc({
     ...browserIpc(() => state),
     "browser:dismiss-menu": () => undefined,
-    "browser:popup-menu": (_id, _point, choices) => new Promise<BrowserMenuChoice>(resolve => {
-      const index = (choices as BrowserMenuItem[]).findIndex(item => item?.label === "Hard reload");
-      assert.ok(index >= 0);
-      chooseReload = () => resolve({ index, shiftKey: false });
-    }),
+    "browser:popup-menu": (_id, _point, choices) =>
+      new Promise<BrowserMenuChoice>((resolve) => {
+        const index = (choices as BrowserMenuItem[]).findIndex(
+          (item) => item?.label === "Hard reload",
+        );
+        assert.ok(index >= 0);
+        chooseReload = () => resolve({ index, shiftKey: false });
+      }),
   });
   render(<BrowserPanel workspaceId={WORKSPACE} active />);
   await screen.findByRole("tab", { name: "Sign in to GitHub" });
@@ -176,16 +274,27 @@ test("switching tabs dismisses the open menu and discards a delayed selection", 
   state = { ...state, activeTabId: "tab-2", revision: state.revision + 1 };
   await act(async () => emitBotTestNotification("browser:event", { type: "state", state }));
   assert.equal(trigger.getAttribute("aria-expanded"), "false");
-  assert.ok(calls.some(call => call.channel === "browser:dismiss-menu"));
+  assert.ok(calls.some((call) => call.channel === "browser:dismiss-menu"));
   await act(async () => chooseReload());
-  assert.equal(calls.some(call => call.channel === "browser:command" && (call.args[1] as { action: string }).action === "reload"), false);
+  assert.equal(
+    calls.some(
+      (call) =>
+        call.channel === "browser:command" &&
+        (call.args[1] as { action: string }).action === "reload",
+    ),
+    false,
+  );
 });
 
 test("a tab the person holds says so and names the Bot, and an empty Bot browser never lists the person's history", async () => {
   let state = browserState([browserTab({ heldForPerson: { reason: "sign_in" } })]);
   installBotTestIpc(browserIpc(() => state));
-  const view = render(<BrowserPanel workspaceId={WORKSPACE} active variant="bot" agentName="Planner" />);
-  const notice = await screen.findByText(/This tab is yours: sign in, then choose I’m done on Planner’s card/u);
+  const view = render(
+    <BrowserPanel workspaceId={WORKSPACE} active variant="bot" agentName="Planner" />,
+  );
+  const notice = await screen.findByText(
+    /This tab is yours: sign in, then choose I’m done on Planner’s card/u,
+  );
   assert.equal(notice.getAttribute("role"), "status");
   view.unmount();
 
@@ -211,27 +320,49 @@ test("a sign-in opened from a phone shows its held tab once the chat opens, and 
   fireEvent.click(within(botPanel()).getByRole("tab", { name: "Activity" }));
   assert.equal(selectedTab(), "Activity");
   await act(async () => window.dispatchEvent(new Event("focus")));
-  await act(async () => emitBotTestNotification("browser:event", { type: "state", state: browserState(tabs) }));
+  await act(async () =>
+    emitBotTestNotification("browser:event", { type: "state", state: browserState(tabs) }),
+  );
   assert.equal(selectedTab(), "Activity");
 
   // A later sign-in in another tab is new: it shows.
-  tabs = [...tabs, browserTab({ id: "tab-2", title: "Sign in to Slack", heldForPerson: { reason: "sign_in" } })];
-  await act(async () => emitBotTestNotification("browser:event", { type: "state", state: browserState(tabs) }));
+  tabs = [
+    ...tabs,
+    browserTab({ id: "tab-2", title: "Sign in to Slack", heldForPerson: { reason: "sign_in" } }),
+  ];
+  await act(async () =>
+    emitBotTestNotification("browser:event", { type: "state", state: browserState(tabs) }),
+  );
   await waitFor(() => assert.equal(selectedTab(), "Browser"));
 });
 
 test("Open sign-in on the Mac moves the person into the Bot's Browser tab, where the held sign-in page is", async () => {
   let tabs: BrowserTab[] = [];
   const signIn = {
-    botId: "bot-1", waitId: "wait-s", toolCallId: "tool-s", kind: "sign_in" as const, action: "Sign in to github.com",
-    open: { url: "https://github.com" }, origin: "https://github.com", target: "browser" as const, source: "tool" as const,
+    botId: "bot-1",
+    waitId: "wait-s",
+    toolCallId: "tool-s",
+    kind: "sign_in" as const,
+    action: "Sign in to github.com",
+    open: { url: "https://github.com" },
+    origin: "https://github.com",
+    target: "browser" as const,
+    source: "tool" as const,
   };
   await mountBotChat(() => browserState(tabs), {
-    "bots:live:subscribe": () => ({ ...chatSnapshot(), state: { kind: "running", submissionId: "sub-1" }, handoff: signIn }),
+    "bots:live:subscribe": () => ({
+      ...chatSnapshot(),
+      state: { kind: "running", submissionId: "sub-1" },
+      handoff: signIn,
+    }),
     // As main opens it: a new tab, shown and held for the person, then the answer.
     "bots:openHandoff": () => {
       tabs = [browserTab({ heldForPerson: { reason: "sign_in" } })];
-      emitBotTestNotification("browser:event", { type: "show", workspaceId: WORKSPACE, tabId: "tab-1" });
+      emitBotTestNotification("browser:event", {
+        type: "show",
+        workspaceId: WORKSPACE,
+        tabId: "tab-1",
+      });
       emitBotTestNotification("browser:event", { type: "state", state: browserState(tabs) });
       return { opened: "browser" };
     },
@@ -243,7 +374,11 @@ test("Open sign-in on the Mac moves the person into the Bot's Browser tab, where
   await act(async () => fireEvent.click(open));
 
   await waitFor(() => assert.equal(selectedTab(), "Browser"));
-  assert.ok(await within(botPanel()).findByText(/This tab is yours: sign in, then choose I’m done on Planner’s card/u));
+  assert.ok(
+    await within(botPanel()).findByText(
+      /This tab is yours: sign in, then choose I’m done on Planner’s card/u,
+    ),
+  );
   // The person asked for it, so focus follows them there; a tab the Bot opens leaves focus alone.
   await waitFor(() => assert.equal(document.activeElement?.textContent, "Browser"));
   assert.ok(botPanel().contains(document.activeElement));

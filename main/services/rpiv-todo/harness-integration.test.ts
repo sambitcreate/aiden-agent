@@ -96,7 +96,10 @@ test("harness publishes todo only after the tool result append resolves", async 
   const outcome = await running;
   await harness.settleRuntimeObservers();
   assert.equal(outcome.kind, "completed");
-  assert.deepEqual(published.map((snapshot) => snapshot.tasks[0]?.subject), ["Durable task"]);
+  assert.deepEqual(
+    published.map((snapshot) => snapshot.tasks[0]?.subject),
+    ["Durable task"],
+  );
 });
 
 test("harness never publishes todo when the tool result append fails", async () => {

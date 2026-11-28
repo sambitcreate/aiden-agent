@@ -32,7 +32,12 @@ const CONTINUOUS = 0.18;
 /** Corner reach relative to the nominal radius, so the visible curve matches a circular radius. */
 const CORNER_REACH = 1.3;
 
-export type CornerRadii = readonly [topLeft: number, topRight: number, bottomRight: number, bottomLeft: number];
+export type CornerRadii = readonly [
+  topLeft: number,
+  topRight: number,
+  bottomRight: number,
+  bottomLeft: number,
+];
 
 /**
  * A rectangle centred on (cx, cy) with continuous ("squircle") corners. Each
@@ -53,7 +58,15 @@ export function continuousRect(
   const right = cx + width / 2;
   const bottom = cy - height / 2;
   const top = cy + height / 2;
-  const corner = (reach: number, fromX: number, fromY: number, cornerX: number, cornerY: number, toX: number, toY: number) => {
+  const corner = (
+    reach: number,
+    fromX: number,
+    fromY: number,
+    cornerX: number,
+    cornerY: number,
+    toX: number,
+    toY: number,
+  ) => {
     if (reach <= 0) {
       path.lineTo(cornerX, cornerY);
       return;
@@ -131,7 +144,14 @@ export function face(shape: Shape, z: number, back = false, segments = 18): Buff
 }
 
 /** An extruded slab between `zBack` and `zFront`, with a rounded rail of radius `bevel` on both edges. */
-export function slab(shape: Shape, zBack: number, zFront: number, bevel: number, segments = 4, curveSegments = 14): BufferGeometry {
+export function slab(
+  shape: Shape,
+  zBack: number,
+  zFront: number,
+  bevel: number,
+  segments = 4,
+  curveSegments = 14,
+): BufferGeometry {
   const depth = Math.max(1e-4, zFront - zBack - bevel * 2);
   const geometry = new ExtrudeGeometry(shape, {
     depth,
@@ -150,7 +170,10 @@ export function slab(shape: Shape, zBack: number, zFront: number, bevel: number,
  * A camera lens assembly turned on a lathe: polished guard ring, black barrel,
  * and a recessed glass element. Faces +Z from z = 0; callers rotate it onto the back.
  */
-export function lensProfile(outer: number, height: number): { ring: BufferGeometry; glass: BufferGeometry; iris: BufferGeometry } {
+export function lensProfile(
+  outer: number,
+  height: number,
+): { ring: BufferGeometry; glass: BufferGeometry; iris: BufferGeometry } {
   const wall = outer * 0.16;
   const ring = new LatheGeometry(
     [
@@ -165,11 +188,18 @@ export function lensProfile(outer: number, height: number): { ring: BufferGeomet
   ring.rotateX(Math.PI / 2);
   const glassRadius = outer - wall * 1.1;
   const glass = new LatheGeometry(
-    [new Vector2(0, height * 0.66), new Vector2(glassRadius * 0.6, height * 0.665), new Vector2(glassRadius, height * 0.7)],
+    [
+      new Vector2(0, height * 0.66),
+      new Vector2(glassRadius * 0.6, height * 0.665),
+      new Vector2(glassRadius, height * 0.7),
+    ],
     48,
   );
   glass.rotateX(Math.PI / 2);
-  const iris = new LatheGeometry([new Vector2(0, height * 0.675), new Vector2(glassRadius * 0.42, height * 0.677)], 32);
+  const iris = new LatheGeometry(
+    [new Vector2(0, height * 0.675), new Vector2(glassRadius * 0.42, height * 0.677)],
+    32,
+  );
   iris.rotateX(Math.PI / 2);
   return { ring, glass, iris };
 }
@@ -189,8 +219,18 @@ export function createMaterialKit(finish: { frame: number; back: number; plateau
     name: "frame",
   });
   /** Keys: the frame's metal, a touch smoother where fingers wear it. */
-  const key = new MeshPhysicalMaterial({ color: finish.frame, metalness: 1, roughness: 0.26, name: "key" });
-  const polished = new MeshPhysicalMaterial({ color: new Color(finish.frame).offsetHSL(0, 0, 0.08), metalness: 1, roughness: 0.14, name: "polished" });
+  const key = new MeshPhysicalMaterial({
+    color: finish.frame,
+    metalness: 1,
+    roughness: 0.26,
+    name: "key",
+  });
+  const polished = new MeshPhysicalMaterial({
+    color: new Color(finish.frame).offsetHSL(0, 0, 0.08),
+    metalness: 1,
+    roughness: 0.14,
+    name: "polished",
+  });
   // Glossy, but with muted reflections so a wide bezel reads as black glass rather than a mirror.
   const frontGlass = new MeshPhysicalMaterial({
     color: 0x040507,
@@ -228,12 +268,40 @@ export function createMaterialKit(finish: { frame: number; back: number; plateau
     iridescenceIOR: 1.6,
     name: "lens-glass",
   });
-  const lensIris = new MeshPhysicalMaterial({ color: 0x02030a, metalness: 0.2, roughness: 0.25, clearcoat: 1, name: "lens-iris" });
-  const dark = new MeshStandardMaterial({ color: 0x0b0c0e, metalness: 0.3, roughness: 0.55, name: "dark" });
-  const flash = new MeshStandardMaterial({ color: 0xf1ead8, emissive: 0x2a261c, roughness: 0.35, name: "flash" });
+  const lensIris = new MeshPhysicalMaterial({
+    color: 0x02030a,
+    metalness: 0.2,
+    roughness: 0.25,
+    clearcoat: 1,
+    name: "lens-iris",
+  });
+  const dark = new MeshStandardMaterial({
+    color: 0x0b0c0e,
+    metalness: 0.3,
+    roughness: 0.55,
+    name: "dark",
+  });
+  const flash = new MeshStandardMaterial({
+    color: 0xf1ead8,
+    emissive: 0x2a261c,
+    roughness: 0.35,
+    name: "flash",
+  });
   /** Unlit black: the Dynamic Island and punch-hole read as cut-outs in any light. */
   const cutout = new MeshBasicMaterial({ color: 0x000000, name: "cutout" });
-  return { frame, key, polished, frontGlass, backGlass, plateau, lensGlass, lensIris, dark, flash, cutout };
+  return {
+    frame,
+    key,
+    polished,
+    frontGlass,
+    backGlass,
+    plateau,
+    lensGlass,
+    lensIris,
+    dark,
+    flash,
+    cutout,
+  };
 }
 
 export type MaterialKit = ReturnType<typeof createMaterialKit>;
@@ -265,7 +333,8 @@ export function createPartList() {
     /** Adds one merged mesh per material to `parent`. Source geometries are released. */
     mergeInto(parent: Object3D, prefix: string) {
       for (const [material, geometries] of parts) {
-        const merged = geometries.length === 1 ? geometries[0]! : mergeGeometries(geometries, false);
+        const merged =
+          geometries.length === 1 ? geometries[0]! : mergeGeometries(geometries, false);
         if (!merged) throw new Error(`Could not merge ${prefix} ${material.name}`);
         if (geometries.length > 1) for (const geometry of geometries) geometry.dispose();
         merged.computeBoundingBox();
@@ -282,7 +351,14 @@ export function createPartList() {
 export type PartList = ReturnType<typeof createPartList>;
 
 /** Translation/rotation helper for placing a reusable part. */
-export function place(x: number, y: number, z: number, rotateX = 0, rotateY = 0, rotateZ = 0): Matrix4 {
+export function place(
+  x: number,
+  y: number,
+  z: number,
+  rotateX = 0,
+  rotateY = 0,
+  rotateZ = 0,
+): Matrix4 {
   const matrix = new Matrix4().makeRotationZ(rotateZ);
   if (rotateY) matrix.premultiply(new Matrix4().makeRotationY(rotateY));
   if (rotateX) matrix.premultiply(new Matrix4().makeRotationX(rotateX));

@@ -3,8 +3,14 @@
 // model; nothing here touches permissions, approvals, or workspace roots.
 
 import type { Api, Model } from "@earendil-works/pi-ai";
-import { GENERATION_THINKING_LEVELS, type GenerationThinkingLevel } from "../../../renderer/shared/generation-thinking.js";
-import { isLocalProviderDeployment, type ProviderDeploymentFields } from "../../../renderer/shared/provider-deployment.js";
+import {
+  GENERATION_THINKING_LEVELS,
+  type GenerationThinkingLevel,
+} from "../../../renderer/shared/generation-thinking.js";
+import {
+  isLocalProviderDeployment,
+  type ProviderDeploymentFields,
+} from "../../../renderer/shared/provider-deployment.js";
 import { normalizeProviderThinkingLevel } from "../../../renderer/shared/provider-thinking.js";
 import { ANTHROPIC_PROVIDER_ID } from "../anthropic-provider.js";
 import { OPENAI_CODEX_PROVIDER_ID } from "../codex-provider.js";
@@ -34,7 +40,10 @@ export interface SubagentModelRuntimeLike {
 
 type ThinkingSettings = Pick<
   AppSettings,
-  "googleThinkingByModel" | "codexThinkingByModel" | "anthropicThinkingByModel" | "providerThinkingByModel"
+  | "googleThinkingByModel"
+  | "codexThinkingByModel"
+  | "anthropicThinkingByModel"
+  | "providerThinkingByModel"
 >;
 
 export function savedThinkingLevelFor(
@@ -98,7 +107,10 @@ function eligibleProviderCandidate(
  * keys (allowlist / configured defaults) are kept when they are connected.
  */
 export function subagentModelCandidatesFromProviders(
-  providers: readonly Pick<Provider, "id" | "label" | "needsKey" | "hasKey" | "models" | "defaultModel" | "modelMetadata">[],
+  providers: readonly Pick<
+    Provider,
+    "id" | "label" | "needsKey" | "hasKey" | "models" | "defaultModel" | "modelMetadata"
+  >[],
   prefer: readonly string[] = [],
 ): SubagentModelCandidate[] {
   const byKey = new Map<string, SubagentModelCandidate>();
@@ -106,7 +118,8 @@ export function subagentModelCandidatesFromProviders(
   for (const provider of providers) {
     if (provider.needsKey && !provider.hasKey) continue;
     const models = [...provider.models].sort(
-      (left, right) => Number(right === provider.defaultModel) - Number(left === provider.defaultModel),
+      (left, right) =>
+        Number(right === provider.defaultModel) - Number(left === provider.defaultModel),
     );
     const queue: SubagentModelCandidate[] = [];
     for (const modelId of models) {
@@ -129,14 +142,20 @@ export function subagentModelCandidatesFromProviders(
     candidates.push(candidate);
   };
   for (const key of prefer) add(byKey.get(key));
-  while (candidates.length < MAX_SUBAGENT_MODEL_CANDIDATES && [...queues.values()].some((queue) => queue.length > 0)) {
+  while (
+    candidates.length < MAX_SUBAGENT_MODEL_CANDIDATES &&
+    [...queues.values()].some((queue) => queue.length > 0)
+  ) {
     for (const queue of queues.values()) add(queue.shift());
   }
   return candidates;
 }
 
 export function subagentModelCandidatesFromSettings(
-  providers: readonly Pick<Provider, "id" | "label" | "needsKey" | "hasKey" | "models" | "defaultModel" | "modelMetadata">[],
+  providers: readonly Pick<
+    Provider,
+    "id" | "label" | "needsKey" | "hasKey" | "models" | "defaultModel" | "modelMetadata"
+  >[],
   settings?: SubagentModelSettings,
 ): SubagentModelCandidate[] {
   return subagentModelCandidatesFromProviders(providers, preferredSubagentModelKeys(settings));
@@ -170,14 +189,18 @@ export function createSubagentChildModelResolver<Runtime extends SubagentModelRu
   input: SubagentModelResolverInput<Runtime>,
 ): SubagentChildModelResolver<Runtime> {
   const parentKey = subagentModelKey(input.policy.parent);
-  const runtimes = new Map<string, Promise<Runtime>>([[parentKey, Promise.resolve(input.parentRuntime)]]);
+  const runtimes = new Map<string, Promise<Runtime>>([
+    [parentKey, Promise.resolve(input.parentRuntime)],
+  ]);
   const resolvedParentFacts = subagentModelRuntimeFacts(
     input.parentRuntime,
     input.savedEffort(input.policy.parent.providerId, input.policy.parent.modelId),
   );
   // The parent's level was already resolved for this exact runtime, including
   // custom providers that keep "off" when no level was requested.
-  const parentFacts: SubagentModelRuntimeFacts = resolvedParentFacts.supportedEfforts.includes(input.policy.parent.effort)
+  const parentFacts: SubagentModelRuntimeFacts = resolvedParentFacts.supportedEfforts.includes(
+    input.policy.parent.effort,
+  )
     ? resolvedParentFacts
     : {
         ...resolvedParentFacts,
@@ -217,7 +240,11 @@ export function createSubagentChildModelResolver<Runtime extends SubagentModelRu
     }
     let pending = runtimes.get(key);
     if (!pending) {
-      pending = input.resolveRuntime(planned.value.candidate.providerId, planned.value.candidate.modelId, signal);
+      pending = input.resolveRuntime(
+        planned.value.candidate.providerId,
+        planned.value.candidate.modelId,
+        signal,
+      );
       runtimes.set(key, pending);
       pending.catch(() => runtimes.delete(key));
     }
@@ -229,7 +256,10 @@ export function createSubagentChildModelResolver<Runtime extends SubagentModelRu
     const facts =
       key === parentKey
         ? parentFacts
-        : subagentModelRuntimeFacts(runtime, input.savedEffort(runtime.provider.id, runtime.model.id));
+        : subagentModelRuntimeFacts(
+            runtime,
+            input.savedEffort(runtime.provider.id, runtime.model.id),
+          );
     const finalized = finalizeSubagentModel(input.policy, planned.value, facts, parentFacts);
     if (!finalized.ok) throw new Error(finalized.error);
     return { selection: finalized.value, runtime };

@@ -96,12 +96,17 @@ export function ComposerMentionPicker({
                   selected ? "bg-control" : "hover:bg-list-hover",
                 )}
               >
-                <Icon aria-hidden="true" className={cn("size-4 shrink-0 text-tertiary", selected && "text-secondary")} />
+                <Icon
+                  aria-hidden="true"
+                  className={cn("size-4 shrink-0 text-tertiary", selected && "text-secondary")}
+                />
                 <span className="shrink-0 truncate text-regular text-primary">
                   <MatchText text={entry.name} ranges={candidate.ranges} />
                 </span>
                 {entry.parentPath ? (
-                  <span className="min-w-0 truncate text-small text-tertiary">{entry.parentPath}</span>
+                  <span className="min-w-0 truncate text-small text-tertiary">
+                    {entry.parentPath}
+                  </span>
                 ) : null}
               </div>
             );

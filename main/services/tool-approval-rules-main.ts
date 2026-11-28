@@ -31,9 +31,12 @@ export const toolApprovalRules = new ToolApprovalRuleBook(store, undefined, unde
   knownBot: async (botId) => {
     // Lazy reads keep the remembered-rule module independent of Bot startup.
     const [{ botStore }, { botLifecycleJournal }] = await Promise.all([
-      import("./bot-store.js"), import("./bot-capability-services-main.js"),
+      import("./bot-store.js"),
+      import("./bot-capability-services-main.js"),
     ]);
-    if (!await botStore.get(botId)) return false;
-    return !(await botLifecycleJournal.listPending()).some(operation => operation.kind === "delete_bot" && operation.botId === botId);
+    if (!(await botStore.get(botId))) return false;
+    return !(await botLifecycleJournal.listPending()).some(
+      (operation) => operation.kind === "delete_bot" && operation.botId === botId,
+    );
   },
 });

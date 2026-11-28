@@ -35,7 +35,10 @@ test("decimals and versions do not end a sentence", () => {
 });
 
 test("a finished line counts even without punctuation, and Markdown markers drop", () => {
-  assert.equal(latestReasoningLine("**Mapping hunk boundaries**\n\nREADME has"), "Mapping hunk boundaries");
+  assert.equal(
+    latestReasoningLine("**Mapping hunk boundaries**\n\nREADME has"),
+    "Mapping hunk boundaries",
+  );
   assert.equal(latestReasoningLine("## Plan the split\nStart"), "Plan the split");
   assert.equal(latestReasoningLine("- Stage `hunk 1` with the fix\n"), "Stage hunk 1 with the fix");
   assert.equal(latestReasoningLine("1. Check   the build\n\n\n"), "Check the build");

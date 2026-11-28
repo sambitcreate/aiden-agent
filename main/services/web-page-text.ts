@@ -18,14 +18,63 @@ export interface WebPageText {
 }
 
 const SKIPPED = new Set([
-  "head", "script", "style", "noscript", "template", "svg", "math", "canvas", "iframe",
-  "object", "embed", "nav", "footer", "aside", "dialog", "select", "option",
+  "head",
+  "script",
+  "style",
+  "noscript",
+  "template",
+  "svg",
+  "math",
+  "canvas",
+  "iframe",
+  "object",
+  "embed",
+  "nav",
+  "footer",
+  "aside",
+  "dialog",
+  "select",
+  "option",
 ]);
 const BLOCKS = new Set([
-  "address", "article", "blockquote", "body", "caption", "dd", "details", "div", "dl", "dt",
-  "fieldset", "figcaption", "figure", "form", "h1", "h2", "h3", "h4", "h5", "h6", "header",
-  "hr", "html", "li", "main", "ol", "p", "pre", "section", "summary", "table", "tbody",
-  "td", "tfoot", "th", "thead", "tr", "ul",
+  "address",
+  "article",
+  "blockquote",
+  "body",
+  "caption",
+  "dd",
+  "details",
+  "div",
+  "dl",
+  "dt",
+  "fieldset",
+  "figcaption",
+  "figure",
+  "form",
+  "h1",
+  "h2",
+  "h3",
+  "h4",
+  "h5",
+  "h6",
+  "header",
+  "hr",
+  "html",
+  "li",
+  "main",
+  "ol",
+  "p",
+  "pre",
+  "section",
+  "summary",
+  "table",
+  "tbody",
+  "td",
+  "tfoot",
+  "th",
+  "thead",
+  "tr",
+  "ul",
 ]);
 const CELLS = new Set(["td", "th"]);
 
@@ -39,7 +88,9 @@ function hidden(element: Element): boolean {
   if (attribute(element, "hidden") !== undefined) return true;
   if (attribute(element, "aria-hidden") === "true") return true;
   const style = attribute(element, "style")?.replace(/\s+/gu, "").toLowerCase();
-  return style !== undefined && (style.includes("display:none") || style.includes("visibility:hidden"));
+  return (
+    style !== undefined && (style.includes("display:none") || style.includes("visibility:hidden"))
+  );
 }
 
 class LineWriter {
@@ -73,7 +124,8 @@ class LineWriter {
     const pending = this.current.trim() ? "" : this.prefix;
     this.flush();
     // One blank line before a heading keeps sections apart; nothing else adds lines.
-    if (prefix.startsWith("#") && this.lines.length && this.lines[this.lines.length - 1] !== "") this.lines.push("");
+    if (prefix.startsWith("#") && this.lines.length && this.lines[this.lines.length - 1] !== "")
+      this.lines.push("");
     this.prefix = prefix || pending;
   }
 
@@ -96,9 +148,13 @@ class LineWriter {
 }
 
 function titleOf(head: Element): string {
-  const title = head.childNodes.find((child) => (child as Element).tagName === "title") as Element | undefined;
+  const title = head.childNodes.find((child) => (child as Element).tagName === "title") as
+    | Element
+    | undefined;
   return (title?.childNodes ?? [])
-    .map((child) => (child.nodeName === "#text" ? (child as DefaultTreeAdapterTypes.TextNode).value : ""))
+    .map((child) =>
+      child.nodeName === "#text" ? (child as DefaultTreeAdapterTypes.TextNode).value : "",
+    )
     .join("")
     .replace(/\s+/gu, " ")
     .trim();
@@ -148,7 +204,8 @@ export async function htmlToPageText(html: string): Promise<WebPageText> {
         const inner: Node[] = [...element.childNodes].reverse();
         while (inner.length) {
           const child = inner.pop()!;
-          if (child.nodeName === "#text") text.push((child as DefaultTreeAdapterTypes.TextNode).value);
+          if (child.nodeName === "#text")
+            text.push((child as DefaultTreeAdapterTypes.TextNode).value);
           else if ("childNodes" in child) inner.push(...[...child.childNodes].reverse());
         }
         writer.preformatted(text.join(""));
@@ -157,7 +214,8 @@ export async function htmlToPageText(html: string): Promise<WebPageText> {
       if (CELLS.has(tag)) {
         writer.cell();
         cellDepth += 1;
-      } else if (cellDepth > 0 && BLOCKS.has(tag) && tag !== "tr" && tag !== "table") writer.text(" ");
+      } else if (cellDepth > 0 && BLOCKS.has(tag) && tag !== "tr" && tag !== "table")
+        writer.text(" ");
       else if (BLOCKS.has(tag)) {
         const level = headingLevel(tag);
         writer.startBlock(level ? `${"#".repeat(level)} ` : tag === "li" ? "- " : "");
@@ -165,7 +223,8 @@ export async function htmlToPageText(html: string): Promise<WebPageText> {
       stack.push({ node, exit: tag });
     }
     const children = "childNodes" in node ? node.childNodes : [];
-    for (let index = children.length - 1; index >= 0; index--) stack.push({ node: children[index]! });
+    for (let index = children.length - 1; index >= 0; index--)
+      stack.push({ node: children[index]! });
   }
   return { title, text: writer.result() };
 }

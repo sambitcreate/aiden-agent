@@ -11,7 +11,11 @@ afterEach(cleanup);
 
 const ACTIVE = new Set<SubagentRunViewState>(["queued", "starting", "running", "needs_attention"]);
 
-function runView(runId: string, state: SubagentRunViewState, extra: Partial<SubagentRunSnapshotV2> = {}): SubagentRunView {
+function runView(
+  runId: string,
+  state: SubagentRunViewState,
+  extra: Partial<SubagentRunSnapshotV2> = {},
+): SubagentRunView {
   const terminal = !ACTIVE.has(state);
   const snapshot: SubagentRunSnapshotV2 = {
     version: 2,
@@ -79,7 +83,9 @@ test("groupSubagentRunsByStatus places every state in its group, in display orde
   );
 
   assert.deepEqual(
-    groupSubagentRunsByStatus([runView("a", "failed"), runView("b", "completed")]).map((group) => group.title),
+    groupSubagentRunsByStatus([runView("a", "failed"), runView("b", "completed")]).map(
+      (group) => group.title,
+    ),
     ["Failed", "Done"],
   );
   assert.deepEqual(groupSubagentRunsByStatus([]), []);
@@ -107,7 +113,12 @@ function mount(
 }
 
 test("Done starts folded and opens to show its runs", () => {
-  mount([runView("live", "running"), runView("c1", "completed"), runView("c2", "completed"), runView("c3", "completed")]);
+  mount([
+    runView("live", "running"),
+    runView("c1", "completed"),
+    runView("c2", "completed"),
+    runView("c3", "completed"),
+  ]);
   const fold = screen.getByRole("button", { name: /^Done/u });
   assert.equal(fold.getAttribute("aria-expanded"), "false");
   assert.match(fold.textContent ?? "", /3/u);
@@ -117,7 +128,8 @@ test("Done starts folded and opens to show its runs", () => {
   fireEvent.click(fold);
 
   assert.equal(fold.getAttribute("aria-expanded"), "true");
-  for (const id of ["c1", "c2", "c3"]) assert.ok(within(completed).getByRole("button", { name: new RegExp(`^Run ${id}`, "u") }));
+  for (const id of ["c1", "c2", "c3"])
+    assert.ok(within(completed).getByRole("button", { name: new RegExp(`^Run ${id}`, "u") }));
 });
 
 test("Stop appears only on active runs and stops that run", () => {
@@ -135,7 +147,10 @@ test("Stop appears only on active runs and stops that run", () => {
   assert.ok(screen.getByText("Provider returned 429"));
 
   fireEvent.click(stops[0]);
-  assert.deepEqual(stopped.map((run) => run.runId), ["live"]);
+  assert.deepEqual(
+    stopped.map((run) => run.runId),
+    ["live"],
+  );
 });
 
 test("a run that is already stopping shows a disabled Stopping… control", () => {
@@ -148,7 +163,9 @@ test("a run that is already stopping shows a disabled Stopping… control", () =
 });
 
 test("a failed Stop is reported under that run until the next attempt", () => {
-  mount([runView("live", "running"), runView("other", "running")], [], { live: "Couldn't stop this run." });
+  mount([runView("live", "running"), runView("other", "running")], [], {
+    live: "Couldn't stop this run.",
+  });
   const alert = screen.getByRole("alert");
   assert.equal(alert.textContent, "Couldn't stop this run.");
   // The message sits with the run it belongs to, not the other one.
@@ -175,8 +192,10 @@ test("finished runs show their duration", () => {
 
 test("active runs show live elapsed time that ticks each second", (t) => {
   t.mock.timers.enable({ apis: ["setTimeout", "Date"], now: 11_000 });
-  t.mock.method(window, "setTimeout", (callback: () => void, delay: number) =>
-    setTimeout(callback, delay) as unknown as number,
+  t.mock.method(
+    window,
+    "setTimeout",
+    (callback: () => void, delay: number) => setTimeout(callback, delay) as unknown as number,
   );
   t.mock.method(window, "clearTimeout", (handle: number) =>
     clearTimeout(handle as unknown as ReturnType<typeof setTimeout>),

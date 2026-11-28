@@ -79,14 +79,11 @@ async function withLoopbackServer(
         body,
       };
       captured.push(entry);
-      handle(
-        (json, status = 200) => {
-          response.statusCode = status;
-          response.setHeader("content-type", "application/json");
-          response.end(JSON.stringify(json));
-        },
-        entry,
-      );
+      handle((json, status = 200) => {
+        response.statusCode = status;
+        response.setHeader("content-type", "application/json");
+        response.end(JSON.stringify(json));
+      }, entry);
     });
   });
   await new Promise<void>((resolve, reject) => {

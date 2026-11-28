@@ -19,4 +19,3 @@ export const ACTIVITY_MARKS = [
 ] as const;
 
 export type ActivityMark = (typeof ACTIVITY_MARKS)[number];
-

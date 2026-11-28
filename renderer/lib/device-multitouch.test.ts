@@ -20,7 +20,10 @@ function recordingSink() {
   const sent: Array<{ phase: MultiTouchPhase; pair: [TouchPoint, TouchPoint] }> = [];
   return {
     sent,
-    sink: { sendMultiTouch: (phase: MultiTouchPhase, a: TouchPoint, b: TouchPoint) => sent.push({ phase, pair: [a, b] }) },
+    sink: {
+      sendMultiTouch: (phase: MultiTouchPhase, a: TouchPoint, b: TouchPoint) =>
+        sent.push({ phase, pair: [a, b] }),
+    },
   };
 }
 
@@ -109,10 +112,16 @@ test("a trackpad pinch begins around the pointer, scales with the wheel, and end
     ["begin", "move"],
   );
   close(pairGeometry(sent[0]!.pair).distance, 2 * TRACKPAD_PINCH_START_RADIUS);
-  assert.ok(pairGeometry(out).distance > 2 * TRACKPAD_PINCH_START_RADIUS, "negative delta spreads the fingers");
+  assert.ok(
+    pairGeometry(out).distance > 2 * TRACKPAD_PINCH_START_RADIUS,
+    "negative delta spreads the fingers",
+  );
   close(pairGeometry(out).center.y, 0.4);
   const inward = pinch.wheel({ deltaY: 300, point: { x: 0.9, y: 0.9 } });
-  assert.ok(pairGeometry(inward).distance < pairGeometry(out).distance, "positive delta pinches in");
+  assert.ok(
+    pairGeometry(inward).distance < pairGeometry(out).distance,
+    "positive delta pinches in",
+  );
   close(pairGeometry(inward).center.x, 0.5, "the centre stays where the pinch began");
   assert.equal(timers.size, 1, "each event restarts the idle timer");
 

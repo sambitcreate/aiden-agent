@@ -24,7 +24,11 @@ export interface SubagentTranscriptWriteOptions {
 }
 
 export interface SubagentTranscriptStore {
-  write(chatId: string, transcript: SubagentTranscriptV1, options?: SubagentTranscriptWriteOptions): Promise<void>;
+  write(
+    chatId: string,
+    transcript: SubagentTranscriptV1,
+    options?: SubagentTranscriptWriteOptions,
+  ): Promise<void>;
   /** The saved transcript, or null when there is none or it is unreadable. */
   read(chatId: string, runId: string): Promise<SubagentTranscriptV1 | null>;
   /** Remove every transcript of the chat. Later writes for it are dropped. */
@@ -68,7 +72,8 @@ export function createSubagentTranscriptStore(
 
   async function chatDirectory(chatId: string): Promise<string> {
     const root = await resolveRoot();
-    if (!path.isAbsolute(root)) throw new Error("Helper conversations need an absolute storage folder.");
+    if (!path.isAbsolute(root))
+      throw new Error("Helper conversations need an absolute storage folder.");
     return path.join(root, SUBAGENT_TRANSCRIPTS_DIRECTORY, chatFolderName(chatId));
   }
 
@@ -95,7 +100,8 @@ export function createSubagentTranscriptStore(
     for (const name of all) {
       if (!name.endsWith(".tmp")) continue;
       const stat = await fs.lstat(path.join(directory, name)).catch(() => null);
-      if (stat?.isFile() && stat.mtimeMs < staleBefore) await fs.rm(path.join(directory, name), { force: true }).catch(() => undefined);
+      if (stat?.isFile() && stat.mtimeMs < staleBefore)
+        await fs.rm(path.join(directory, name), { force: true }).catch(() => undefined);
     }
     const names = all.filter((name) => name.endsWith(".json"));
     if (names.length <= maxPerChat) return;
@@ -118,7 +124,10 @@ export function createSubagentTranscriptStore(
   return {
     write(chatId, transcript, writeOptions = {}) {
       requireChatId(chatId);
-      if (!isSafeSubagentIdentifier(transcript.runId) || parseSubagentTranscript(transcript) === undefined) {
+      if (
+        !isSafeSubagentIdentifier(transcript.runId) ||
+        parseSubagentTranscript(transcript) === undefined
+      ) {
         return Promise.reject(new Error("Invalid helper conversation."));
       }
       const serializedJson = JSON.stringify(transcript);

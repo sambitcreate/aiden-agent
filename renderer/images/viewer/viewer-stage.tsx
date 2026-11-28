@@ -82,7 +82,10 @@ export function ViewerStage({
   const fromCentre = (event: React.MouseEvent): Point => {
     const rect = stage.current?.getBoundingClientRect();
     if (!rect) return { x: 0, y: 0 };
-    return { x: event.clientX - rect.left - rect.width / 2, y: event.clientY - rect.top - rect.height / 2 };
+    return {
+      x: event.clientX - rect.left - rect.width / 2,
+      y: event.clientY - rect.top - rect.height / 2,
+    };
   };
 
   const measured = box.width > 0 && box.height > 0;
@@ -109,7 +112,8 @@ export function ViewerStage({
       onPointerUp={(event) => {
         const current = press.current;
         press.current = null;
-        if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId);
+        if (event.currentTarget.hasPointerCapture(event.pointerId))
+          event.currentTarget.releasePointerCapture(event.pointerId);
         if (current && !current.moved) toggleAt(fromCentre(event));
       }}
       onPointerCancel={() => {

@@ -77,10 +77,16 @@ function nodeData(type: WorkflowNode["type"], value: unknown): WorkflowNode["dat
     case "prompt":
       // Prompts are free text sent to the model; only their size is bounded.
       if (!hasExactKeys(value, ["text"]) || typeof value.text !== "string") return undefined;
-      return Buffer.byteLength(value.text, "utf8") <= LIMITS.maxPromptBytes ? { text: value.text } : undefined;
+      return Buffer.byteLength(value.text, "utf8") <= LIMITS.maxPromptBytes
+        ? { text: value.text }
+        : undefined;
     case "image-input": {
       if (!hasExactKeys(value, [], ["assetId", "label"])) return undefined;
-      if (value.assetId !== undefined && !(typeof value.assetId === "string" && IMAGE_ASSET_ID_PATTERN.test(value.assetId))) return undefined;
+      if (
+        value.assetId !== undefined &&
+        !(typeof value.assetId === "string" && IMAGE_ASSET_ID_PATTERN.test(value.assetId))
+      )
+        return undefined;
       if (value.label !== undefined && !label(value.label, LIMITS.maxLabelLength)) return undefined;
       return {
         ...(value.assetId !== undefined ? { assetId: value.assetId as string } : {}),
@@ -101,10 +107,14 @@ function nodeData(type: WorkflowNode["type"], value: unknown): WorkflowNode["dat
 }
 
 function node(value: unknown): WorkflowNode | undefined {
-  if (!isRecord(value) || !hasExactKeys(value, ["id", "type", "position", "data"], ["title", "dimensions"])) {
+  if (
+    !isRecord(value) ||
+    !hasExactKeys(value, ["id", "type", "position", "data"], ["title", "dimensions"])
+  ) {
     return undefined;
   }
-  if (!opaqueId(value.id) || !(IMAGE_NODE_TYPES as readonly unknown[]).includes(value.type)) return undefined;
+  if (!opaqueId(value.id) || !(IMAGE_NODE_TYPES as readonly unknown[]).includes(value.type))
+    return undefined;
   const type = value.type as WorkflowNode["type"];
   const at = position(value.position);
   const data = nodeData(type, value.data);
@@ -123,7 +133,11 @@ function node(value: unknown): WorkflowNode | undefined {
 }
 
 function edge(value: unknown): WorkflowEdge | undefined {
-  if (!isRecord(value) || !hasExactKeys(value, ["id", "source", "sourcePort", "target", "targetPort"])) return undefined;
+  if (
+    !isRecord(value) ||
+    !hasExactKeys(value, ["id", "source", "sourcePort", "target", "targetPort"])
+  )
+    return undefined;
   const ports = [value.sourcePort, value.targetPort];
   if (![value.id, value.source, value.target].every(opaqueId)) return undefined;
   if (!ports.every((port) => typeof port === "string" && PORT_ID.test(port))) return undefined;
@@ -138,12 +152,25 @@ function edge(value: unknown): WorkflowEdge | undefined {
 
 export function parseWorkflowDocV1(value: unknown): ParseResult<WorkflowDocV1> {
   const issues: string[] = [];
-  const fail = (message: string): ParseResult<WorkflowDocV1> => ({ ok: false, issues: [...issues, message] });
+  const fail = (message: string): ParseResult<WorkflowDocV1> => ({
+    ok: false,
+    issues: [...issues, message],
+  });
   if (
     !isRecord(value) ||
     !hasExactKeys(
       value,
-      ["schemaVersion", "id", "title", "revision", "createdAt", "updatedAt", "nodes", "edges", "settings"],
+      [
+        "schemaVersion",
+        "id",
+        "title",
+        "revision",
+        "createdAt",
+        "updatedAt",
+        "nodes",
+        "edges",
+        "settings",
+      ],
       ["viewport"],
     )
   ) {
@@ -151,9 +178,14 @@ export function parseWorkflowDocV1(value: unknown): ParseResult<WorkflowDocV1> {
   }
   if (value.schemaVersion !== 1) return fail("Only schema version 1 is supported.");
   if (!opaqueId(value.id)) return fail("The workflow id is invalid.");
-  if (!label(value.title, LIMITS.maxTitleLength, false)) return fail("The workflow title is invalid.");
-  if (!integerIn(value.revision, 1, Number.MAX_SAFE_INTEGER)) return fail("The revision is invalid.");
-  if (!integerIn(value.createdAt, 0, Number.MAX_SAFE_INTEGER) || !integerIn(value.updatedAt, 0, Number.MAX_SAFE_INTEGER)) {
+  if (!label(value.title, LIMITS.maxTitleLength, false))
+    return fail("The workflow title is invalid.");
+  if (!integerIn(value.revision, 1, Number.MAX_SAFE_INTEGER))
+    return fail("The revision is invalid.");
+  if (
+    !integerIn(value.createdAt, 0, Number.MAX_SAFE_INTEGER) ||
+    !integerIn(value.updatedAt, 0, Number.MAX_SAFE_INTEGER)
+  ) {
     return fail("The timestamps are invalid.");
   }
   let viewport: WorkflowDocV1["viewport"];

@@ -9,7 +9,11 @@ import * as path from "node:path";
 
 /** What the desktop app stored: files in its userData directory, keys in its Pi credential store. */
 export const RETIRED_DESKTOP_MODEL_SCORING = {
-  files: ["openrouter-benchmark-cache.json", "artificial-analysis-model-cache.json", "model-pace.json"],
+  files: [
+    "openrouter-benchmark-cache.json",
+    "artificial-analysis-model-cache.json",
+    "model-pace.json",
+  ],
   credentialIds: ["aiden-internal:model-pad-openrouter-benchmarks-v1", "artificial-analysis"],
 } as const;
 

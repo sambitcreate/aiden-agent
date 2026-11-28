@@ -150,13 +150,36 @@ test("past eight discovered skills, search narrows by name and by description", 
 test("the settings boundary revokes cached skill authority before publishing the saved state, leaving running replies alone", async () => {
   const events: string[] = [];
   const effects = createSettingsApplicationEffects({
-    invalidateSkills: () => { events.push("invalidate"); }, revokeBotSkills: () => { events.push("revoke"); },
-    refreshCommands: async () => { events.push("refresh-commands"); }, reconfigureIdleUnload: async () => { events.push("idle"); },
-    preloadLocalVoice: () => { events.push("preload-voice"); },
-    publishAppearance: () => { events.push("appearance"); }, publishControls: () => { events.push("publish"); },
-    stopCacheWarmers: () => { events.push("stop-warmers"); },
-    revokeComputerUseGrants: async () => { events.push("revoke-computer-use"); },
-    stopLiveSessions: async () => { events.push("stop-live"); },
+    invalidateSkills: () => {
+      events.push("invalidate");
+    },
+    revokeBotSkills: () => {
+      events.push("revoke");
+    },
+    refreshCommands: async () => {
+      events.push("refresh-commands");
+    },
+    reconfigureIdleUnload: async () => {
+      events.push("idle");
+    },
+    preloadLocalVoice: () => {
+      events.push("preload-voice");
+    },
+    publishAppearance: () => {
+      events.push("appearance");
+    },
+    publishControls: () => {
+      events.push("publish");
+    },
+    stopCacheWarmers: () => {
+      events.push("stop-warmers");
+    },
+    revokeComputerUseGrants: async () => {
+      events.push("revoke-computer-use");
+    },
+    stopLiveSessions: async () => {
+      events.push("stop-live");
+    },
   });
   await effects({ skillsEnabled: false }, { skillsEnabled: false });
   assert.deepEqual(events, ["invalidate", "revoke", "refresh-commands", "publish"]);
@@ -168,15 +191,26 @@ test("the settings boundary revokes cached skill authority before publishing the
   assert.deepEqual(events, ["publish"]);
   events.length = 0;
   // Turning a feature off stops the work it owns; turning it on starts nothing.
-  await effects({}, { cacheWarmingEnabled: false, computerUseAlwaysAllow: false, aidenLiveEnabled: false });
+  await effects(
+    {},
+    { cacheWarmingEnabled: false, computerUseAlwaysAllow: false, aidenLiveEnabled: false },
+  );
   assert.deepEqual(events, ["stop-warmers", "revoke-computer-use", "stop-live", "publish"]);
   events.length = 0;
-  await effects({}, { cacheWarmingEnabled: true, computerUseAlwaysAllow: true, aidenLiveEnabled: true });
+  await effects(
+    {},
+    { cacheWarmingEnabled: true, computerUseAlwaysAllow: true, aidenLiveEnabled: true },
+  );
   assert.deepEqual(events, ["publish"]);
 });
 
-
 test("a skill attachment prepared before disabling is checked again before prompt injection", () => {
-  const runtime = readFileSync(new URL("../../../main/services/llm-client.ts", import.meta.url), "utf8");
-  assert.match(runtime, /initialization\.skillPrompt[\s\S]*getSettings\(\)\)\.skillsEnabled === false[\s\S]*contentOverrides\.set\(currentUser\.id, initialization\.skillPrompt\)/u);
+  const runtime = readFileSync(
+    new URL("../../../main/services/llm-client.ts", import.meta.url),
+    "utf8",
+  );
+  assert.match(
+    runtime,
+    /initialization\.skillPrompt[\s\S]*getSettings\(\)\)\.skillsEnabled === false[\s\S]*contentOverrides\.set\(currentUser\.id, initialization\.skillPrompt\)/u,
+  );
 });

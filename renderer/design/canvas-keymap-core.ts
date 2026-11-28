@@ -65,7 +65,8 @@ export function resolveDesignCanvasKey(
       return { type: "delete" };
     }
     if (!event.shiftKey && event.code === "Escape") return { type: "escape" };
-    if (!event.shiftKey && (event.code === "Enter" || event.code === "NumpadEnter")) return { type: "enter" };
+    if (!event.shiftKey && (event.code === "Enter" || event.code === "NumpadEnter"))
+      return { type: "enter" };
     if (event.shiftKey && event.code === "Digit2") return { type: "fitSelection" };
     if (!event.shiftKey && event.code === "F2") return { type: "rename" };
     if (!event.shiftKey && event.code === "KeyN") return { type: "addNote" };

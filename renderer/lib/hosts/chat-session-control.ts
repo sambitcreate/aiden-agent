@@ -4,7 +4,12 @@ import type { ChatRunInputAdmissionResult, ChatRunInputMode } from "../../shared
 import type { GenerationThinkingLevel } from "../../shared/generation-thinking";
 import type { SkillInvocationV1 } from "../../shared/slash-commands";
 import { mintPeerIdempotencyKey } from "../../shared/peer-host";
-import { chatIntentLedger, type ChatIntent, type ChatIntentKind, type ChatIntentLedger } from "./chat-intent-ledger";
+import {
+  chatIntentLedger,
+  type ChatIntent,
+  type ChatIntentKind,
+  type ChatIntentLedger,
+} from "./chat-intent-ledger";
 import {
   HostChatControlError,
   isOutcomeUnknown,
@@ -29,7 +34,14 @@ export interface ChatSessionRef {
   chatId: string;
 }
 
-export type ChatSessionIntentKind = "send" | "cancel" | "respondApproval" | "answerQuestion" | "submitInput" | "rename" | "remove";
+export type ChatSessionIntentKind =
+  | "send"
+  | "cancel"
+  | "respondApproval"
+  | "answerQuestion"
+  | "submitInput"
+  | "rename"
+  | "remove";
 
 /** A mutation whose outcome is unknown: the host may or may not have applied it. */
 export interface ChatSessionUnresolved {
@@ -74,7 +86,8 @@ const OFFLINE_REASON: Record<"connecting" | "offline" | "blocked", string> = {
 const UNSUPPORTED_REASON: Partial<Record<HostChatCapability, string>> = {
   send: "That computer doesn't allow sending from here.",
   cancel: "That computer doesn't allow stopping runs from here.",
-  respondApproval: "Answer this approval on the other computer. It doesn't allow approvals from here.",
+  respondApproval:
+    "Answer this approval on the other computer. It doesn't allow approvals from here.",
   answerQuestion: "Answer this question on the other computer. It doesn't allow answers from here.",
   steer: "That computer doesn't allow steering from here.",
   rename: "That computer doesn't allow renaming from here.",
@@ -133,7 +146,11 @@ export async function stageAttachments(
 }
 
 /** Drops staged uploads no turn will use. Failures are ignored: the host expires them anyway. */
-export function releaseAttachments(adapter: Pick<HostChatAdapter, "removeAttachment">, chatId: string, ids: readonly string[]): void {
+export function releaseAttachments(
+  adapter: Pick<HostChatAdapter, "removeAttachment">,
+  chatId: string,
+  ids: readonly string[],
+): void {
   for (const id of ids) void adapter.removeAttachment?.(chatId, id).catch(() => {});
 }
 
@@ -142,8 +159,12 @@ export function releaseAttachments(adapter: Pick<HostChatAdapter, "removeAttachm
  * can run. Unsupported actions are refused rather than falling back to this
  * Mac; an offline or blocked host refuses every mutation.
  */
-export function chatControlRefusal(adapter: Pick<HostChatAdapter, "capabilities" | "status">, capability: HostChatCapability): string | null {
-  if (!adapter.capabilities().has(capability)) return UNSUPPORTED_REASON[capability] ?? "Not available for this chat.";
+export function chatControlRefusal(
+  adapter: Pick<HostChatAdapter, "capabilities" | "status">,
+  capability: HostChatCapability,
+): string | null {
+  if (!adapter.capabilities().has(capability))
+    return UNSUPPORTED_REASON[capability] ?? "Not available for this chat.";
   const { availability } = adapter.status();
   return availability === "online" ? null : OFFLINE_REASON[availability];
 }
@@ -168,7 +189,11 @@ export class ChatSessionControl {
   private offLedger: (() => void) | null = null;
   private attached = false;
 
-  constructor(adapter: HostChatAdapter, ref: ChatSessionRef, ledger: ChatIntentLedger = chatIntentLedger) {
+  constructor(
+    adapter: HostChatAdapter,
+    ref: ChatSessionRef,
+    ledger: ChatIntentLedger = chatIntentLedger,
+  ) {
     if (adapter.hostId !== ref.hostId) throw new Error("The adapter belongs to another host.");
     this.adapter = adapter;
     this.ref = ref;
@@ -200,7 +225,9 @@ export class ChatSessionControl {
         kind: intent.kind,
         idempotencyKey: intent.idempotencyKey,
         ...(intent.text !== undefined ? { text: intent.text } : {}),
-        message: this.ledger.retryAllowed(intent) ? "Couldn't confirm delivery." : "Delivery is still unconfirmed. The safe retry window has ended; check the conversation on that computer before dismissing this notice.",
+        message: this.ledger.retryAllowed(intent)
+          ? "Couldn't confirm delivery."
+          : "Delivery is still unconfirmed. The safe retry window has ended; check the conversation on that computer before dismissing this notice.",
         retrying,
         retryAllowed: this.ledger.retryAllowed(intent),
       },
@@ -230,7 +257,10 @@ export class ChatSessionControl {
       if (!this.ledger.isReady(this.ref)) await this.ledger.ready(this.ref);
       this.update({ recovering: false, ...this.recorded() });
     } catch {
-      this.update({ recovering: false, recoveryError: "Couldn't restore saved requests. Retry before sending another message." });
+      this.update({
+        recovering: false,
+        recoveryError: "Couldn't restore saved requests. Retry before sending another message.",
+      });
     }
   }
 
@@ -270,7 +300,11 @@ export class ChatSessionControl {
 
   private guard(capability: HostChatCapability): void {
     const reason = this.refusal(capability);
-    if (reason) throw new HostChatControlError({ code: this.adapter.capabilities().has(capability) ? "host_unavailable" : "unsupported", message: reason });
+    if (reason)
+      throw new HostChatControlError({
+        code: this.adapter.capabilities().has(capability) ? "host_unavailable" : "unsupported",
+        message: reason,
+      });
   }
 
   /**
@@ -296,7 +330,14 @@ export class ChatSessionControl {
     this.ledger.begin(this.ref, intent);
     try {
       await this.ledger.persist(this.ref, intent);
-      const result = intent.request ? await replayChatRequest(this.adapter, this.ref.chatId, intent.request, this.ledger.durable) as T : await run(this.adapter, key);
+      const result = intent.request
+        ? ((await replayChatRequest(
+            this.adapter,
+            this.ref.chatId,
+            intent.request,
+            this.ledger.durable,
+          )) as T)
+        : await run(this.adapter, key);
       await this.ledger.forgetSaved(this.ref, key).catch(() => {});
       this.ledger.settle(this.ref, key, "known");
       return result;
@@ -331,9 +372,13 @@ export class ChatSessionControl {
     if (extras.skill) this.guard("skills");
     if (!this.ledger.isReady(this.ref)) await this.ledger.ready(this.ref);
     this.guard("send");
-    if (this.ledger.sending(this.ref)) throw new HostChatControlError({ code: "busy", message: "A message is already being sent." });
+    if (this.ledger.sending(this.ref))
+      throw new HostChatControlError({ code: "busy", message: "A message is already being sent." });
     if (this.ledger.unresolved(this.ref)) {
-      throw new HostChatControlError({ code: "unresolved", message: "Retry or dismiss the message that may not have been sent first." });
+      throw new HostChatControlError({
+        code: "unresolved",
+        message: "Retry or dismiss the message that may not have been sent first.",
+      });
     }
     const { chatId } = this.ref;
     // Recorded before its uploads stage, so a pane reopened meanwhile already sees the text as in flight.
@@ -365,11 +410,24 @@ export class ChatSessionControl {
       throw error;
     }
     if (attachmentIds.length > 0) intent.attachmentIds = attachmentIds;
-    intent.request = { kind: "send", input: { text, idempotencyKey: key,
-      ...(attachmentIds.length ? { attachmentIds } : {}), ...(extras.skill ? { skill: extras.skill } : {}), ...selection } };
+    intent.request = {
+      kind: "send",
+      input: {
+        text,
+        idempotencyKey: key,
+        ...(attachmentIds.length ? { attachmentIds } : {}),
+        ...(extras.skill ? { skill: extras.skill } : {}),
+        ...selection,
+      },
+    };
     try {
       await this.ledger.persist(this.ref, intent);
-      const receipt = await replayChatRequest(this.adapter, chatId, intent.request, this.ledger.durable);
+      const receipt = await replayChatRequest(
+        this.adapter,
+        chatId,
+        intent.request,
+        this.ledger.durable,
+      );
       await this.ledger.forgetSaved(this.ref, key).catch(() => {});
       this.ledger.settle(this.ref, key, "known");
       return receipt as HostChatTurnReceipt;
@@ -390,14 +448,19 @@ export class ChatSessionControl {
     const { intent } = unresolved;
     if (!this.ledger.retryAllowed(intent)) {
       this.update(this.recorded());
-      throw new HostChatControlError({ code: "retry_expired", message: "The safe retry window has ended. Check the conversation on that computer before starting a new attempt." });
+      throw new HostChatControlError({
+        code: "retry_expired",
+        message:
+          "The safe retry window has ended. Check the conversation on that computer before starting a new attempt.",
+      });
     }
     this.guard(intent.kind === "submitInput" ? "steer" : intent.kind);
     this.ledger.retrying(this.ref, intent.idempotencyKey, true);
     try {
       await this.ledger.validateRetry(this.ref, intent);
       this.guard(intent.kind === "submitInput" ? "steer" : intent.kind);
-      if (intent.request) await replayChatRequest(this.adapter, this.ref.chatId, intent.request, this.ledger.durable);
+      if (intent.request)
+        await replayChatRequest(this.adapter, this.ref.chatId, intent.request, this.ledger.durable);
       else await intent.replay(this.adapter, intent.idempotencyKey);
       await this.ledger.forgetSaved(this.ref, intent.idempotencyKey);
       this.ledger.resolve(this.ref, intent.idempotencyKey);
@@ -436,26 +499,39 @@ export class ChatSessionControl {
     const { chatId } = this.ref;
     this.update({ stopping: true });
     try {
-      return await this.intent("cancel", (adapter, idempotencyKey) => adapter.cancel(chatId, { runId, idempotencyKey }), undefined, key => ({ kind: "cancel", input: { runId, idempotencyKey: key } }));
+      return await this.intent(
+        "cancel",
+        (adapter, idempotencyKey) => adapter.cancel(chatId, { runId, idempotencyKey }),
+        undefined,
+        (key) => ({ kind: "cancel", input: { runId, idempotencyKey: key } }),
+      );
     } finally {
       this.update({ stopping: false });
     }
   }
 
   /** Answers one approval at a time. Resolves null while another decision is in flight. */
-  async respondApproval(input: Omit<HostChatApprovalInput, "idempotencyKey">): Promise<HostChatApprovalResult | null> {
+  async respondApproval(
+    input: Omit<HostChatApprovalInput, "idempotencyKey">,
+  ): Promise<HostChatApprovalResult | null> {
     this.guard("respondApproval");
     if (this.snapshot.decidingApprovalId) return null;
     const { chatId } = this.ref;
     this.update({ decidingApprovalId: input.approvalId });
     try {
-      const result = await this.intent("respondApproval", (adapter, idempotencyKey) =>
-        adapter.respondApproval(chatId, { ...input, idempotencyKey }),
-        undefined, key => ({ kind: "respondApproval", input: { ...input, idempotencyKey: key } }),
+      const result = await this.intent(
+        "respondApproval",
+        (adapter, idempotencyKey) => adapter.respondApproval(chatId, { ...input, idempotencyKey }),
+        undefined,
+        (key) => ({ kind: "respondApproval", input: { ...input, idempotencyKey: key } }),
       );
       if (result.resolution === "elsewhere") {
         this.update({
-          elsewhere: { kind: "approval", id: input.approvalId, ...(result.decision ? { decision: result.decision } : {}) },
+          elsewhere: {
+            kind: "approval",
+            id: input.approvalId,
+            ...(result.decision ? { decision: result.decision } : {}),
+          },
         });
       }
       return result;
@@ -464,17 +540,22 @@ export class ChatSessionControl {
     }
   }
 
-  async answerQuestion(input: Omit<HostChatQuestionInput, "idempotencyKey">): Promise<HostChatQuestionResult | null> {
+  async answerQuestion(
+    input: Omit<HostChatQuestionInput, "idempotencyKey">,
+  ): Promise<HostChatQuestionResult | null> {
     this.guard("answerQuestion");
     if (this.snapshot.answeringQuestionId) return null;
     const { chatId } = this.ref;
     this.update({ answeringQuestionId: input.promptId });
     try {
-      const result = await this.intent("answerQuestion", (adapter, idempotencyKey) =>
-        adapter.answerQuestion(chatId, { ...input, idempotencyKey }),
-        undefined, key => ({ kind: "answerQuestion", input: { ...input, idempotencyKey: key } }),
+      const result = await this.intent(
+        "answerQuestion",
+        (adapter, idempotencyKey) => adapter.answerQuestion(chatId, { ...input, idempotencyKey }),
+        undefined,
+        (key) => ({ kind: "answerQuestion", input: { ...input, idempotencyKey: key } }),
       );
-      if (result.status === "elsewhere") this.update({ elsewhere: { kind: "question", id: input.promptId } });
+      if (result.status === "elsewhere")
+        this.update({ elsewhere: { kind: "question", id: input.promptId } });
       return result;
     } finally {
       this.update({ answeringQuestionId: null });
@@ -493,9 +574,15 @@ export class ChatSessionControl {
     return this.intent(
       "submitInput",
       (adapter, idempotencyKey) =>
-        adapter.submitInput(chatId, { runId, mode, text, idempotencyKey, ...(inputSource ? { inputSource } : {}) }),
+        adapter.submitInput(chatId, {
+          runId,
+          mode,
+          text,
+          idempotencyKey,
+          ...(inputSource ? { inputSource } : {}),
+        }),
       text,
-      key => ({
+      (key) => ({
         kind: "submitInput",
         input: { runId, mode, text, idempotencyKey: key, ...(inputSource ? { inputSource } : {}) },
       }),
@@ -518,32 +605,67 @@ export class ChatSessionControl {
    * pane or one reopened on the same chat, returns the fork the host already
    * made instead of a second copy.
    */
-  async fork(input: Omit<HostChatForkInput, "idempotencyKey" | "revision">, revision?: string): Promise<HostForkedChat> {
+  async fork(
+    input: Omit<HostChatForkInput, "idempotencyKey" | "revision">,
+    revision?: string,
+  ): Promise<HostForkedChat> {
     this.guard(input.summary ? "forkSummary" : "fork");
-    if (!this.adapter.fork) throw new HostChatControlError({ code: "unsupported", message: UNSUPPORTED_REASON.fork! });
-    if (!revision) throw new HostChatControlError({ code: "invalid", message: "Load the chat before forking it." });
+    if (!this.adapter.fork)
+      throw new HostChatControlError({ code: "unsupported", message: UNSUPPORTED_REASON.fork! });
+    if (!revision)
+      throw new HostChatControlError({
+        code: "invalid",
+        message: "Load the chat before forking it.",
+      });
     // The host fingerprints the body and the revision together with the key.
-    const signature = JSON.stringify([input.messageId, input.position, input.summary ?? null, revision]);
+    const signature = JSON.stringify([
+      input.messageId,
+      input.position,
+      input.summary ?? null,
+      revision,
+    ]);
     if (!this.ledger.isReady(this.ref)) await this.ledger.ready(this.ref);
     const previous = this.ledger.forkIntent(this.ref);
     if (previous && (!this.ledger.retryAllowed(previous) || previous.signature !== signature)) {
-      throw new HostChatControlError({ code: "retry_expired", message: "An earlier fork is unconfirmed. Check that computer for that fork before creating another." });
+      throw new HostChatControlError({
+        code: "retry_expired",
+        message:
+          "An earlier fork is unconfirmed. Check that computer for that fork before creating another.",
+      });
     }
     const key = previous?.idempotencyKey ?? mintPeerIdempotencyKey();
-    const intent = previous ?? { signature, idempotencyKey: key, request: { kind: "fork" as const, signature, input: { ...input, revision, idempotencyKey: key } } };
+    const intent = previous ?? {
+      signature,
+      idempotencyKey: key,
+      request: {
+        kind: "fork" as const,
+        signature,
+        input: { ...input, revision, idempotencyKey: key },
+      },
+    };
     this.ledger.beginFork(this.ref, intent);
     let sent = false;
     try {
       if (previous) await this.ledger.validateRetry(this.ref, intent);
       else await this.ledger.persist(this.ref, intent);
       sent = true;
-      const forked = await this.adapter.fork(this.ref.chatId, { ...input, revision, idempotencyKey: key, savedIntent: this.ledger.durable });
+      const forked = await this.adapter.fork(this.ref.chatId, {
+        ...input,
+        revision,
+        idempotencyKey: key,
+        savedIntent: this.ledger.durable,
+      });
       await this.ledger.forgetSaved(this.ref, key).catch(() => {});
       this.ledger.settleFork(this.ref, key);
       return forked;
     } catch (error) {
       // Only a lost answer keeps the key; a refusal means the host made no fork.
-      if ((!sent && !previous) || (!isOutcomeUnknown(error) && error instanceof HostChatControlError && error.code !== "retry_expired")) {
+      if (
+        (!sent && !previous) ||
+        (!isOutcomeUnknown(error) &&
+          error instanceof HostChatControlError &&
+          error.code !== "retry_expired")
+      ) {
         await this.ledger.forgetSaved(this.ref, key).catch(() => {});
         this.ledger.settleFork(this.ref, key);
       } else {
@@ -563,14 +685,22 @@ export class ChatSessionControl {
   /** Retries or skips this fork's summary. */
   async forkSummary(action: "retry" | "skip"): Promise<HostChatLineage> {
     this.guard("forkSummary");
-    if (!this.adapter.forkSummary) throw new HostChatControlError({ code: "unsupported", message: UNSUPPORTED_REASON.forkSummary! });
+    if (!this.adapter.forkSummary)
+      throw new HostChatControlError({
+        code: "unsupported",
+        message: UNSUPPORTED_REASON.forkSummary!,
+      });
     return this.adapter.forkSummary(this.ref.chatId, action);
   }
 
   /** Stops this fork's pending summary; false when it had already settled. */
   async cancelForkSummary(): Promise<boolean> {
     this.guard("forkSummary");
-    if (!this.adapter.cancelForkSummary) throw new HostChatControlError({ code: "unsupported", message: UNSUPPORTED_REASON.forkSummary! });
+    if (!this.adapter.cancelForkSummary)
+      throw new HostChatControlError({
+        code: "unsupported",
+        message: UNSUPPORTED_REASON.forkSummary!,
+      });
     return this.adapter.cancelForkSummary(this.ref.chatId);
   }
 

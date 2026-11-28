@@ -13,9 +13,21 @@ const RECAP: WebExtractRecapV1 = {
   host: "acme.example",
   cut: true,
   fields: [
-    { name: "pro_monthly", status: "extracted", value: "20", confidence: 0.97, sourceLine: "Pro is $20 per month, billed monthly." },
+    {
+      name: "pro_monthly",
+      status: "extracted",
+      value: "20",
+      confidence: 0.97,
+      sourceLine: "Pro is $20 per month, billed monthly.",
+    },
     { name: "team_yearly", status: "uncertain", value: "1399", confidence: 0.92, notFound: true },
-    { name: "seats", status: "uncertain", value: "50", confidence: 0.4, sourceLine: "Up to 50 seats on Team." },
+    {
+      name: "seats",
+      status: "uncertain",
+      value: "50",
+      confidence: 0.4,
+      sourceLine: "Up to 50 seats on Team.",
+    },
     { name: "enterprise", status: "null" },
   ],
 };
@@ -50,7 +62,11 @@ test("guesses are labelled, and values missing from the page say so", () => {
 });
 
 test("a failed extraction explains why and that the page was read instead", () => {
-  render(<WebExtractRecap recap={{ version: 1, host: "acme.example", cut: false, error: "quota", fields: [] }} />);
+  render(
+    <WebExtractRecap
+      recap={{ version: 1, host: "acme.example", cut: false, error: "quota", fields: [] }}
+    />,
+  );
   assert.ok(screen.getByText(/rate-limited or out of quota\. The page was read instead\./u));
   assert.equal(screen.queryByRole("term"), null);
 });

@@ -18,11 +18,7 @@ import {
   Workflow,
   type LucideIcon,
 } from "lucide-react";
-import {
-  HoverCard,
-  HoverCardContent,
-  HoverCardTrigger,
-} from "./ui";
+import { HoverCard, HoverCardContent, HoverCardTrigger } from "./ui";
 import {
   describeRichLink,
   type RichLinkDescriptor,
@@ -71,29 +67,15 @@ interface RichLinkBudgetState {
 
 const RichLinkBudgetContext = React.createContext<RichLinkBudgetState | null>(null);
 
-export function RichLinkBudget({
-  children,
-  limit,
-}: {
-  children: React.ReactNode;
-  limit: number;
-}) {
+export function RichLinkBudget({ children, limit }: { children: React.ReactNode; limit: number }) {
   const budget = React.useMemo<RichLinkBudgetState>(
     () => ({ decisions: new Map(), used: 0, limit, waiting: new Set() }),
     [limit],
   );
-  return (
-    <RichLinkBudgetContext.Provider value={budget}>
-      {children}
-    </RichLinkBudgetContext.Provider>
-  );
+  return <RichLinkBudgetContext.Provider value={budget}>{children}</RichLinkBudgetContext.Provider>;
 }
 
-export function RichLink({
-  href,
-  descriptor: suppliedDescriptor,
-  ...props
-}: RichLinkProps) {
+export function RichLink({ href, descriptor: suppliedDescriptor, ...props }: RichLinkProps) {
   const descriptor = suppliedDescriptor ?? describeRichLink(href);
   if (!descriptor) return <a href={href} {...props} />;
   return <BudgetedRichLink href={href} descriptor={descriptor} {...props} />;
@@ -238,7 +220,9 @@ function RichLinkPreview({
             <div className="flex min-w-0 items-center gap-1.5 text-small text-secondary">
               <ProviderIcon aria-hidden="true" className="size-3.5 shrink-0" />
               <span className="truncate">{descriptor.providerLabel}</span>
-              <span aria-hidden="true" className="text-quaternary">·</span>
+              <span aria-hidden="true" className="text-quaternary">
+                ·
+              </span>
               <span className="truncate">{descriptor.resourceLabel}</span>
             </div>
             <div className="mt-1 break-words text-regular font-medium text-primary">
@@ -250,7 +234,9 @@ function RichLinkPreview({
               </div>
             ) : null}
             <div className="mt-2 flex min-w-0 items-center gap-1 text-mini text-tertiary">
-              <span className="truncate" dir="ltr">{descriptor.safeDisplayUrl}</span>
+              <span className="truncate" dir="ltr">
+                {descriptor.safeDisplayUrl}
+              </span>
               <ExternalLink aria-hidden="true" className="size-3 shrink-0" />
               <span className="shrink-0">Opens link</span>
             </div>

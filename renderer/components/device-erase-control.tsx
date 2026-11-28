@@ -64,12 +64,16 @@ export function DeviceEraseSection(props: {
           label: "Boot",
           onClick: () =>
             void api.open({ chatId, hostId, deviceId }).catch((error: unknown) => {
-              toast.error(error instanceof Error ? error.message : "The emulator could not be booted.");
+              toast.error(
+                error instanceof Error ? error.message : "The emulator could not be booted.",
+              );
             }),
         },
       });
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "The emulator could not be erased.", { id: progress });
+      toast.error(error instanceof Error ? error.message : "The emulator could not be erased.", {
+        id: progress,
+      });
     }
   };
 
@@ -94,7 +98,11 @@ export function DeviceEraseSection(props: {
   const boot = async () => {
     setBooting(true);
     try {
-      await api.open({ chatId: props.chatId, hostId: props.target.hostId, deviceId: props.target.deviceId });
+      await api.open({
+        chatId: props.chatId,
+        hostId: props.target.hostId,
+        deviceId: props.target.deviceId,
+      });
       setBootOffer(false);
       props.onReconnect();
     } catch (error) {
@@ -109,7 +117,12 @@ export function DeviceEraseSection(props: {
     <LiveGuard guard="you" wrap={false}>
       <ToolsSection title="Device">
         <div className="device-tools-actions" data-live-guard="you">
-          <Button size="small" variant="muted" disabled={erasing} onClick={() => setConfirmOpen(true)}>
+          <Button
+            size="small"
+            variant="muted"
+            disabled={erasing}
+            onClick={() => setConfirmOpen(true)}
+          >
             <Eraser aria-hidden />
             Erase all content and settings…
           </Button>
@@ -123,8 +136,8 @@ export function DeviceEraseSection(props: {
           title={`Erase ${props.deviceName}?`}
           description={
             <>
-              All content and settings on {props.deviceName} are erased, including installed apps and their data.
-              The {noun} shuts down first if it is running. This cannot be undone.
+              All content and settings on {props.deviceName} are erased, including installed apps
+              and their data. The {noun} shuts down first if it is running. This cannot be undone.
             </>
           }
           confirmLabel={erasing ? "Erasing…" : "Erase"}

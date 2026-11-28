@@ -15,7 +15,10 @@ import { randomUUID } from "node:crypto";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { readFileSync } from "node:fs";
-import { buildBrowserAnnotationPreviewApplyExpression, buildBrowserAnnotationPreviewResetExpression } from "./annotation-preview.js";
+import {
+  buildBrowserAnnotationPreviewApplyExpression,
+  buildBrowserAnnotationPreviewResetExpression,
+} from "./annotation-preview.js";
 import type { RendererDocumentOwner } from "../renderer-document-owner.js";
 import type {
   BrowserAnnotation,
@@ -80,10 +83,24 @@ import {
   type GrabbedElementThumbnail,
 } from "../../../renderer/shared/browser-element-grab.js";
 import { browserImportSources, importBrowserCookies } from "./import.js";
-import { browserFileService, browserPreviewRequestHeaders, type BrowserFileReservation, type PreparedBrowserFile } from "./files.js";
+import {
+  browserFileService,
+  browserPreviewRequestHeaders,
+  type BrowserFileReservation,
+  type PreparedBrowserFile,
+} from "./files.js";
 import type { BrowserApprovalTarget } from "./approval.js";
-import { botBrowserPartition, botBrowserProfileId, botIdOfBrowserProfile, isBotBrowserProfileId } from "./bot-profile.js";
-import { botIdForBrowserWorkspace, browserWorkspacesOfBot, forgetBotBrowserWorkspace } from "./bot-workspaces.js";
+import {
+  botBrowserPartition,
+  botBrowserProfileId,
+  botIdOfBrowserProfile,
+  isBotBrowserProfileId,
+} from "./bot-profile.js";
+import {
+  botIdForBrowserWorkspace,
+  browserWorkspacesOfBot,
+  forgetBotBrowserWorkspace,
+} from "./bot-workspaces.js";
 import {
   assertBoundarySelector,
   boundaryRefusalOf,
@@ -115,7 +132,11 @@ import {
 import { configureBrowserPermissionHandlers } from "./permission-policy.js";
 import { loadBrowserUrl } from "./navigation-load.js";
 import { configStore } from "../config-store.js";
-import { browserRecordingBytesMatch, browserRecordingsFolder, findBrowserRecording } from "./recordings.js";
+import {
+  browserRecordingBytesMatch,
+  browserRecordingsFolder,
+  findBrowserRecording,
+} from "./recordings.js";
 import { browserRecordingExtension } from "../../../renderer/shared/browser-recording.js";
 import { reportAnalyticsEvent } from "../analytics/analytics-report.js";
 import { writeFileAtomic } from "../durable-fs.js";
@@ -165,8 +186,17 @@ export interface BrowserHold {
 const HELD_FIELD_SCAN_MS = 500;
 /** Actions a Bot's browser port never runs. */
 const BOUNDARY_REFUSED_ACTIONS: ReadonlySet<string> = new Set([
-  "evaluate", "record_start", "record_stop", "open_file", "annotate", "grab", "annotation_preview", "annotation_reset",
-  "annotation_submit", "screenshot", "devtools",
+  "evaluate",
+  "record_start",
+  "record_stop",
+  "open_file",
+  "annotate",
+  "grab",
+  "annotation_preview",
+  "annotation_reset",
+  "annotation_submit",
+  "screenshot",
+  "devtools",
 ]);
 interface WorkspaceBrowser {
   state: BrowserState;
@@ -214,10 +244,21 @@ interface LiveTab {
   activeHosts: number;
   bounds?: BrowserBounds;
   closing: boolean;
-  expectedInputs: Array<{ type: string; key?: string; button?: string; modifiers?: number; expires: number }>;
+  expectedInputs: Array<{
+    type: string;
+    key?: string;
+    button?: string;
+    modifiers?: number;
+    expires: number;
+  }>;
   picking?: boolean;
   /** `pageUrl` is the page's URL when the grab started; payloads are judged against it. */
-  grab?: { token: symbol; accent: GrabbedElementAccent; source: BrowserGrabSource; pageUrl: string };
+  grab?: {
+    token: symbol;
+    accent: GrabbedElementAccent;
+    source: BrowserGrabSource;
+    pageUrl: string;
+  };
   crashTimes: number[];
   crashTimer?: ReturnType<typeof setTimeout>;
   pendingNavigationUrl?: string;
@@ -232,7 +273,13 @@ interface LiveTab {
   /** Fields this tab has shown as sensitive, so a "show password" toggle can't uncover one. */
   sensitiveFields: SensitiveFieldMemory;
   /** Reads the fields of a held tab while the person uses it (`watchHeldFields`). */
-  heldFieldWatch?: { timer?: ReturnType<typeof setTimeout>; revision: number; observedDocument?: string; read(): void; invalidate(): void };
+  heldFieldWatch?: {
+    timer?: ReturnType<typeof setTimeout>;
+    revision: number;
+    observedDocument?: string;
+    read(): void;
+    invalidate(): void;
+  };
   /** A released document was never inspected. Later plaintext reads cannot recover its history. */
   heldFieldObservationLost?: true;
 }
@@ -255,7 +302,8 @@ const ACTIONS_AGENT = new Set([
   "record_stop",
 ]);
 const MAX_CAPTURE_BYTES = 32 * 1024 * 1024;
-const HELD_FIELDS_UNOBSERVED = "This tab's password protection was not ready when it was released. Ask the person to close it and open the page in a new tab.";
+const HELD_FIELDS_UNOBSERVED =
+  "This tab's password protection was not ready when it was released. Ask the person to close it and open the page in a new tab.";
 const RECORDING_MAX_BYTES = 128 * 1024 * 1024;
 const PLAYWRIGHT_OPTIONS = {
   isUnderTest: false,
@@ -279,17 +327,20 @@ function redactBrowserData<T>(value: T): T {
     "capture.thumbnail.data",
   ]);
   const visit = (item: unknown, at: string): unknown => {
-    if (typeof item === "string") return imagePaths.has(at) ? item : browserFileService.redactText(item);
+    if (typeof item === "string")
+      return imagePaths.has(at) ? item : browserFileService.redactText(item);
     if (Array.isArray(item)) return item.map((entry, index) => visit(entry, `${at}.${index}`));
     if (item && typeof item === "object") {
       const keys = new Set<string>();
-      return Object.fromEntries(Object.entries(item).map(([key, entry]) => {
-        const base = browserFileService.redactText(key);
-        let safeKey = base;
-        for (let suffix = 2; keys.has(safeKey); suffix += 1) safeKey = `${base} (${suffix})`;
-        keys.add(safeKey);
-        return [safeKey, visit(entry, at ? `${at}.${key}` : key)];
-      }));
+      return Object.fromEntries(
+        Object.entries(item).map(([key, entry]) => {
+          const base = browserFileService.redactText(key);
+          let safeKey = base;
+          for (let suffix = 2; keys.has(safeKey); suffix += 1) safeKey = `${base} (${suffix})`;
+          keys.add(safeKey);
+          return [safeKey, visit(entry, at ? `${at}.${key}` : key)];
+        }),
+      );
     }
     return item;
   };
@@ -312,7 +363,10 @@ function boundedBounds(value: BrowserBounds): BrowserBounds {
 export class BrowserService {
   private readonly workspaces = new Map<string, WorkspaceBrowser>();
   private readonly tabs = new Map<string, LiveTab>();
-  private readonly popupOwners = new Map<number, { workspaceId: string; ownerDocumentId: string }>();
+  private readonly popupOwners = new Map<
+    number,
+    { workspaceId: string; ownerDocumentId: string }
+  >();
   private readonly sessions = new Map<string, Session>();
   private readonly terminalTails = new Map<string, string>();
   private readonly agentFileAcquisitions = new Map<string, Set<AbortController>>();
@@ -321,7 +375,9 @@ export class BrowserService {
   private defaults: BrowserDefaults = clone(DEFAULT_BROWSER_SETTINGS);
   private readonly workspaceAccess = new Map<string, BrowserAgentAccessOverride>();
   private loaded = false;
-  private readonly privateSession = new BrowserPrivateSession(() => this.browserSession("incognito"));
+  private readonly privateSession = new BrowserPrivateSession(() =>
+    this.browserSession("incognito"),
+  );
   private persistence: Promise<unknown> = Promise.resolve();
 
   private storagePath(): string {
@@ -416,14 +472,18 @@ export class BrowserService {
    * keeping its tabs. Each tab is hidden until the new document presents it.
    */
   transferOwner(workspaceId: string, owner: RendererDocumentOwner): void {
-    if (!botIdForBrowserWorkspace(workspaceId)) throw new Error("Only a Bot's browser can move between windows.");
+    if (!botIdForBrowserWorkspace(workspaceId))
+      throw new Error("Only a Bot's browser can move between windows.");
     const workspace = this.workspace(workspaceId);
-    if (owner.isDestroyed()) throw new Error("The browser's application document is no longer active.");
+    if (owner.isDestroyed())
+      throw new Error("The browser's application document is no longer active.");
     if (workspace.owner?.documentId === owner.documentId && workspace.owner.id === owner.id) return;
     workspace.removeOwner?.();
     workspace.removeOwner = undefined;
     workspace.owner = undefined;
-    const tabs = [...this.tabs.values()].filter((tab) => tab.state.workspaceId === workspaceId && !tab.closing);
+    const tabs = [...this.tabs.values()].filter(
+      (tab) => tab.state.workspaceId === workspaceId && !tab.closing,
+    );
     for (const tab of tabs) this.detach(tab);
     this.attachOwner(workspaceId, owner);
     for (const tab of tabs) this.hide(tab);
@@ -434,8 +494,14 @@ export class BrowserService {
    * takeover). Whatever the Bot had queued or approved on it stops.
    */
   hold(workspaceId: string, tabId: string, hold: BrowserHold, show = false): void {
-    if (!botIdForBrowserWorkspace(workspaceId)) throw new Error("Only a Bot's tab can be held for the person.");
-    if (!hold || typeof hold.holdId !== "string" || !hold.holdId || !["sign_in", "handoff", "takeover"].includes(hold.reason))
+    if (!botIdForBrowserWorkspace(workspaceId))
+      throw new Error("Only a Bot's tab can be held for the person.");
+    if (
+      !hold ||
+      typeof hold.holdId !== "string" ||
+      !hold.holdId ||
+      !["sign_in", "handoff", "takeover"].includes(hold.reason)
+    )
       throw new Error("Invalid browser hold.");
     const tab = this.tab(workspaceId, tabId);
     tab.hold = { holdId: hold.holdId, reason: hold.reason };
@@ -452,8 +518,11 @@ export class BrowserService {
       if (tab.state.workspaceId !== workspaceId || tab.hold?.holdId !== holdId) continue;
       // Once the person has shown a field, a later scan cannot establish what
       // it used to be. Keep this tab closed to Bot reads instead of guessing.
-      if (tab.pendingNavigationUrl !== undefined || tab.view.webContents.isLoading() ||
-        tab.heldFieldWatch?.observedDocument !== this.heldFieldDocument(tab))
+      if (
+        tab.pendingNavigationUrl !== undefined ||
+        tab.view.webContents.isLoading() ||
+        tab.heldFieldWatch?.observedDocument !== this.heldFieldDocument(tab)
+      )
         tab.heldFieldObservationLost = true;
       tab.hold = undefined;
       delete tab.state.heldForPerson;
@@ -473,7 +542,8 @@ export class BrowserService {
     try {
       for (const workspaceId of new Set([managedWorkspaceId, ...browserWorkspacesOfBot(botId)]))
         if (this.workspaces.has(workspaceId)) this.closeForWorkspace(workspaceId);
-      for (const tab of [...this.tabs.values()]) if (tab.state.profileId === profileId) this.close(tab);
+      for (const tab of [...this.tabs.values()])
+        if (tab.state.profileId === profileId) this.close(tab);
       const partition = botBrowserPartition(botId);
       const botSession = this.sessions.get(partition) ?? session.fromPartition(partition);
       await botSession.clearStorageData();
@@ -508,7 +578,8 @@ export class BrowserService {
     const profileId = botBrowserProfileId(botId);
     for (const workspaceId of browserWorkspacesOfBot(botId))
       if (this.workspaces.has(workspaceId)) this.closeForWorkspace(workspaceId);
-    for (const tab of [...this.tabs.values()]) if (tab.state.profileId === profileId) this.close(tab);
+    for (const tab of [...this.tabs.values()])
+      if (tab.state.profileId === profileId) this.close(tab);
   }
   /** Whether Browser settings let agents use the browser (the global default; a Bot's browser follows it). */
   agentAccessDefaultAllowed(): boolean {
@@ -562,7 +633,13 @@ export class BrowserService {
     state.tabs = state.tabs.map((tab) => {
       if (!this.tabs.get(tab.id)?.heldFieldObservationLost) return tab;
       const { favicon: _favicon, error: _error, ...rest } = tab;
-      return { ...rest, url: "", title: "Password protection unavailable", canGoBack: false, canGoForward: false };
+      return {
+        ...rest,
+        url: "",
+        title: "Password protection unavailable",
+        canGoBack: false,
+        canGoForward: false,
+      };
     });
     return state;
   }
@@ -571,8 +648,13 @@ export class BrowserService {
     const selected = tabId ?? this.workspace(workspaceId).state.activeTabId;
     if (!selected) throw new Error("Open a browser tab before reviewing this action.");
     const tab = this.tab(workspaceId, selected);
-    return { workspaceId, tabId: selected, url: tab.state.url,
-      documentRevision: `${tab.navigationSequence}:${tab.committedNavigation}`, controlRevision: tab.queue.epoch };
+    return {
+      workspaceId,
+      tabId: selected,
+      url: tab.state.url,
+      documentRevision: `${tab.navigationSequence}:${tab.committedNavigation}`,
+      controlRevision: tab.queue.epoch,
+    };
   }
   /**
    * What a Bot's pending click, typing or key press would touch, for its
@@ -591,7 +673,8 @@ export class BrowserService {
     let pick: string;
     if (target.focused) pick = "__aidenFocused().element";
     else if (target.x !== undefined && target.y !== undefined) {
-      const x = browserBoundedNumber(target.x, 0, 8192, "Click X"), y = browserBoundedNumber(target.y, 0, 8192, "Click Y");
+      const x = browserBoundedNumber(target.x, 0, 8192, "Click X"),
+        y = browserBoundedNumber(target.y, 0, 8192, "Click Y");
       pick = `(()=>{let e=document.elementFromPoint(${x},${y});for(let i=0;i<32&&e&&e.shadowRoot;i+=1){const inner=e.shadowRoot.elementFromPoint(${x},${y});if(!inner||inner===e)break;e=inner;}return e;})()`;
     } else {
       try {
@@ -617,7 +700,14 @@ export class BrowserService {
       this.assertHeldFieldsObserved(tab);
       if (!probe || typeof probe !== "object") return undefined;
       const field: BrowserFieldProbe = {};
-      for (const key of ["tag", "type", "autocomplete", "role", "accessibleName", "formActionHost"] as const) {
+      for (const key of [
+        "tag",
+        "type",
+        "autocomplete",
+        "role",
+        "accessibleName",
+        "formActionHost",
+      ] as const) {
         const value = (probe as Record<string, unknown>)[key];
         if (typeof value === "string" && value.length > 0) field[key] = value.slice(0, 300);
       }
@@ -710,14 +800,12 @@ export class BrowserService {
     const botId = botIdOfBrowserProfile(profileId);
     if (botId !== undefined) {
       // A Bot's own profile is outside the person's profile list.
-      if (this.deletingProfiles.has(profileId)) throw new Error("This Bot's browser is being deleted.");
+      if (this.deletingProfiles.has(profileId))
+        throw new Error("This Bot's browser is being deleted.");
       partition = botBrowserPartition(botId);
     } else {
       const profile = this.profile(profileId);
-      partition = browserPartition(
-        profile.id,
-        profile.kind === "incognito",
-      );
+      partition = browserPartition(profile.id, profile.kind === "incognito");
     }
     let browserSession = this.sessions.get(partition);
     if (!browserSession) {
@@ -732,9 +820,14 @@ export class BrowserService {
         return owned ? contents.getURL() : undefined;
       });
       const navigationTab = (details: { webContentsId?: number; resourceType: string }) =>
-        details.resourceType === "mainFrame" ? [...this.tabs.values()].find((tab) =>
-          !tab.closing && !tab.view.webContents.isDestroyed() && tab.view.webContents.id === details.webContentsId,
-        ) : undefined;
+        details.resourceType === "mainFrame"
+          ? [...this.tabs.values()].find(
+              (tab) =>
+                !tab.closing &&
+                !tab.view.webContents.isDestroyed() &&
+                tab.view.webContents.id === details.webContentsId,
+            )
+          : undefined;
       browserSession.webRequest.onBeforeRequest((details, callback) => {
         const tab = navigationTab(details);
         if (tab?.pendingNavigationUrl === details.url && !tab.pendingNavigationRequest) {
@@ -742,10 +835,18 @@ export class BrowserService {
         }
         callback({});
       });
-      const finishNavigationRequest = (details: { webContentsId?: number; resourceType: string; id: number }) => {
+      const finishNavigationRequest = (details: {
+        webContentsId?: number;
+        resourceType: string;
+        id: number;
+      }) => {
         const tab = navigationTab(details);
-        if (!tab || tab.pendingNavigationRequest?.id !== details.id ||
-          tab.pendingNavigationRequest.sequence !== tab.navigationSequence) return;
+        if (
+          !tab ||
+          tab.pendingNavigationRequest?.id !== details.id ||
+          tab.pendingNavigationRequest.sequence !== tab.navigationSequence
+        )
+          return;
         const wc = tab.view.webContents;
         // A request-specific terminal signal owns this navigation; a global
         // did-stop-loading can race with an uncommitted replacement navigation.
@@ -757,7 +858,8 @@ export class BrowserService {
       browserSession.webRequest.onHeadersReceived((details, callback) => {
         // These responses definitively retain the current document. Handle them
         // before the global loading-stop notification, without a timer heuristic.
-        if (details.statusCode === 204 || details.statusCode === 205) finishNavigationRequest(details);
+        if (details.statusCode === 204 || details.statusCode === 205)
+          finishNavigationRequest(details);
         callback({});
       });
       browserSession.webRequest.onErrorOccurred(finishNavigationRequest);
@@ -766,18 +868,24 @@ export class BrowserService {
         try {
           const contents = details.webContents;
           if (contents && !contents.isDestroyed() && details.frame) {
-            const tab = [...this.tabs.values()].find((candidate) =>
-              !candidate.closing && candidate.view.webContents === contents,
+            const tab = [...this.tabs.values()].find(
+              (candidate) => !candidate.closing && candidate.view.webContents === contents,
             );
             const popup = this.popupOwners.get(contents.id);
             const workspaceId = tab?.state.workspaceId ?? popup?.workspaceId;
             const owner = workspaceId ? this.workspaces.get(workspaceId)?.owner : undefined;
-            if (workspaceId && owner && !owner.isDestroyed() &&
-              (tab || popup?.ownerDocumentId === owner.documentId)) {
+            if (
+              workspaceId &&
+              owner &&
+              !owner.isDestroyed() &&
+              (tab || popup?.ownerDocumentId === owner.documentId)
+            ) {
               // Use the committed frame's security origin, including inherited
               // about:blank origins; the destination URL never supplies authority.
               authorization = browserFileService.authorizationForRequest(
-                workspaceId, details.url, details.frame.origin,
+                workspaceId,
+                details.url,
+                details.frame.origin,
               );
             }
           }
@@ -905,7 +1013,9 @@ export class BrowserService {
         tab.pendingNavigationUrl = url;
         tab.pendingNavigationRequest = undefined;
         this.cancelCrashRecovery(tab);
-        try { this.beginPreviewNavigation(tab, url); } catch (error) {
+        try {
+          this.beginPreviewNavigation(tab, url);
+        } catch (error) {
           tab.pendingNavigationUrl = undefined;
           tab.pendingNavigationRequest = undefined;
           wc.stop();
@@ -914,8 +1024,13 @@ export class BrowserService {
         }
         tab.navigationSequence += 1;
         const command = tab.navigationCommand;
-        if (command && command.sequence === undefined && command.url === url &&
-          command.epoch === tab.queue.epoch) command.sequence = tab.navigationSequence;
+        if (
+          command &&
+          command.sequence === undefined &&
+          command.url === url &&
+          command.epoch === tab.queue.epoch
+        )
+          command.sequence = tab.navigationSequence;
         else tab.navigationCommand = undefined;
         tab.contextId = undefined;
         tab.refs.clear();
@@ -1013,7 +1128,13 @@ export class BrowserService {
       this.emit(tab.state.workspaceId);
     });
     wc.setIgnoreMenuShortcuts(true);
-    const humanInput = (type: string, key?: string, modifiers?: number, button?: string, nativeModifiers?: number) => {
+    const humanInput = (
+      type: string,
+      key?: string,
+      modifiers?: number,
+      button?: string,
+      nativeModifiers?: number,
+    ) => {
       if (tab.picking || tab.grab) return true;
       tab.expectedInputs = tab.expectedInputs.filter((expected) => expected.expires > Date.now());
       // Pinned Electron 43.1.1 keyboard/generic converter exposes _modifiers:
@@ -1023,14 +1144,18 @@ export class BrowserService {
       // Keyboard metadata must be present; missing flags fail closed on upgrade.
       // Electron's specialized mouse converter omits the flags, so those events
       // still require bounded matching and cannot identify an exact collision.
-      const fromDebugger = Number.isSafeInteger(nativeModifiers) && ((nativeModifiers! & (1 << 23)) !== 0);
+      const fromDebugger =
+        Number.isSafeInteger(nativeModifiers) && (nativeModifiers! & (1 << 23)) !== 0;
       const mayMatch = fromDebugger || (key === undefined && nativeModifiers === undefined);
-      const index = mayMatch ? tab.expectedInputs.findIndex(
-        (expected) =>
-          expected.type === type && (expected.key === undefined || expected.key === key) &&
-          (expected.modifiers === undefined || expected.modifiers === modifiers) &&
-          (expected.button === undefined || expected.button === button),
-      ) : -1;
+      const index = mayMatch
+        ? tab.expectedInputs.findIndex(
+            (expected) =>
+              expected.type === type &&
+              (expected.key === undefined || expected.key === key) &&
+              (expected.modifiers === undefined || expected.modifiers === modifiers) &&
+              (expected.button === undefined || expected.button === button),
+          )
+        : -1;
       if (index >= 0) {
         tab.expectedInputs.splice(index, 1);
         return true;
@@ -1046,7 +1171,12 @@ export class BrowserService {
           void this.stopGrab(tab, "escape");
           return;
         }
-        if ((input.meta || input.control) && input.shift && !input.alt && input.key.toLowerCase() === "g") {
+        if (
+          (input.meta || input.control) &&
+          input.shift &&
+          !input.alt &&
+          input.key.toLowerCase() === "g"
+        ) {
           event.preventDefault();
           if (!input.isAutoRepeat) void this.stopGrab(tab, "cancelled");
           return;
@@ -1054,8 +1184,18 @@ export class BrowserService {
       }
       // A repeated physical key is still user control; only debugger-marked
       // echoes may consume expectations, regardless of auto-repeat.
-      const modifiers = Number(input.alt) | (Number(input.control) << 1) | (Number(input.meta) << 2) | (Number(input.shift) << 3);
-      const synthetic = humanInput(input.type, input.key, modifiers, undefined, (input as typeof input & { _modifiers?: number })._modifiers);
+      const modifiers =
+        Number(input.alt) |
+        (Number(input.control) << 1) |
+        (Number(input.meta) << 2) |
+        (Number(input.shift) << 3);
+      const synthetic = humanInput(
+        input.type,
+        input.key,
+        modifiers,
+        undefined,
+        (input as typeof input & { _modifiers?: number })._modifiers,
+      );
       if (synthetic || input.type !== "keyDown" || !(input.meta || input.control) || input.alt)
         return;
       const key = input.key.toLowerCase();
@@ -1085,7 +1225,13 @@ export class BrowserService {
     });
     wc.on("before-mouse-event", (_event, input) => {
       if (input.type !== "mouseMove" && input.type !== "mouseEnter" && input.type !== "mouseLeave")
-        humanInput(input.type, undefined, undefined, input.button, (input as typeof input & { _modifiers?: number })._modifiers);
+        humanInput(
+          input.type,
+          undefined,
+          undefined,
+          input.button,
+          (input as typeof input & { _modifiers?: number })._modifiers,
+        );
     });
     wc.on("console-message", (details) => {
       // What a page logs while the person holds the tab (signing in) is
@@ -1145,28 +1291,54 @@ export class BrowserService {
     wc.on("did-create-window", (window, details) => {
       const consumerId = `browser-popup:${window.webContents.id}`;
       const owner = this.workspaces.get(tab.state.workspaceId)?.owner;
-      if (!owner || owner.isDestroyed()) { window.destroy(); return; }
+      if (!owner || owner.isDestroyed()) {
+        window.destroy();
+        return;
+      }
       this.popupOwners.set(window.webContents.id, {
-        workspaceId: tab.state.workspaceId, ownerDocumentId: owner.documentId,
+        workspaceId: tab.state.workspaceId,
+        ownerDocumentId: owner.documentId,
       });
       const popupId = window.webContents.id;
-      window.once("closed", () => { this.popupOwners.delete(popupId); });
+      window.once("closed", () => {
+        this.popupOwners.delete(popupId);
+      });
       let pending: BrowserFileReservation | undefined;
-      try { pending = browserFileService.reserveUrl(tab.state.workspaceId, details.url); } catch { window.destroy(); return; }
-      const releasePending = () => { const value = pending; pending = undefined; value?.release(); };
+      try {
+        pending = browserFileService.reserveUrl(tab.state.workspaceId, details.url);
+      } catch {
+        window.destroy();
+        return;
+      }
+      const releasePending = () => {
+        const value = pending;
+        pending = undefined;
+        value?.release();
+      };
       window.webContents.on("did-start-navigation", (_event, url, inPlace, mainFrame) => {
         if (!mainFrame || inPlace) return;
         try {
           const next = browserFileService.reserveUrl(tab.state.workspaceId, url);
-          releasePending(); pending = next;
-        } catch { window.webContents.stop(); releasePending(); }
+          releasePending();
+          pending = next;
+        } catch {
+          window.webContents.stop();
+          releasePending();
+        }
       });
       window.webContents.on("did-navigate", () => {
-        browserFileService.commitConsumer(tab.state.workspaceId, consumerId, window.webContents.getURL());
+        browserFileService.commitConsumer(
+          tab.state.workspaceId,
+          consumerId,
+          window.webContents.getURL(),
+        );
         releasePending();
       });
       window.webContents.on("did-stop-loading", releasePending);
-      window.once("closed", () => { releasePending(); browserFileService.releaseConsumer(consumerId); });
+      window.once("closed", () => {
+        releasePending();
+        browserFileService.releaseConsumer(consumerId);
+      });
       window.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
       window.webContents.on("will-navigate", (event, url) => {
         try {
@@ -1222,7 +1394,8 @@ export class BrowserService {
     // A Bot's tabs always use its own profile; no other workspace may open it.
     const botId = botIdForBrowserWorkspace(workspaceId);
     if (botId !== undefined) profileId = botBrowserProfileId(botId);
-    else if (isBotBrowserProfileId(profileId)) throw new Error("This browser profile belongs to a Bot.");
+    else if (isBotBrowserProfileId(profileId))
+      throw new Error("This browser profile belongs to a Bot.");
     const normalized = browserUrl(url);
     const owner = workspace.owner;
     const open = (browserSession: Session): LiveTab => {
@@ -1290,8 +1463,14 @@ export class BrowserService {
       this.observe(tab);
       view.webContents.setZoomFactor(state.zoom);
       this.emit(workspaceId);
-      if (show && !tab.state.floating) this.emit(workspaceId, { type: "show", workspaceId, tabId: state.id });
-      try { this.beginPreviewNavigation(tab, normalized); } catch (error) { this.close(tab); throw error; }
+      if (show && !tab.state.floating)
+        this.emit(workspaceId, { type: "show", workspaceId, tabId: state.id });
+      try {
+        this.beginPreviewNavigation(tab, normalized);
+      } catch (error) {
+        this.close(tab);
+        throw error;
+      }
       tab.initialLoad = view.webContents
         .loadURL(normalized)
         .then(() => {
@@ -1384,7 +1563,8 @@ export class BrowserService {
     const window = this.mainWindow(tab.state.workspaceId);
     if (tab.attached !== window) this.detach(tab);
     for (const candidate of this.tabs.values())
-      if (candidate !== tab && candidate.visible && candidate.attached === window) this.hide(candidate);
+      if (candidate !== tab && candidate.visible && candidate.attached === window)
+        this.hide(candidate);
     const scale = window.webContents.getZoomFactor();
     const area = window.getContentBounds();
     const b = tab.bounds;
@@ -1429,8 +1609,11 @@ export class BrowserService {
     if (workspace) {
       workspace.state.tabs = workspace.state.tabs.filter((t) => t.id !== tab.state.id);
       if (workspace.state.activeTabId === tab.state.id) {
-        workspace.state.activeTabId = workspace.state.tabs[workspace.state.tabs.length - 1]?.id ?? null;
-        const replacement = workspace.state.activeTabId ? this.tabs.get(workspace.state.activeTabId) : undefined;
+        workspace.state.activeTabId =
+          workspace.state.tabs[workspace.state.tabs.length - 1]?.id ?? null;
+        const replacement = workspace.state.activeTabId
+          ? this.tabs.get(workspace.state.activeTabId)
+          : undefined;
         if (tab.state.floating && replacement) this.floating(replacement, true, false);
       }
       this.emit(tab.state.workspaceId);
@@ -1454,7 +1637,11 @@ export class BrowserService {
         workspace.owner = undefined;
         void browserFileService.closeForWorkspace(workspaceId).catch(() => {});
         // Nothing left to show a reopened window: the next use builds a fresh entry.
-        if (!workspace.state.tabs.length && !workspace.state.history.length && !workspace.state.servers.length)
+        if (
+          !workspace.state.tabs.length &&
+          !workspace.state.history.length &&
+          !workspace.state.servers.length
+        )
           this.workspaces.delete(workspaceId);
       }
   }
@@ -1469,7 +1656,8 @@ export class BrowserService {
     void browserFileService.closeForWorkspace(workspaceId).catch(() => {});
   }
   async shutdown(): Promise<void> {
-    for (const workspaceId of this.agentFileAcquisitions.keys()) this.cancelFileAcquisitions(workspaceId);
+    for (const workspaceId of this.agentFileAcquisitions.keys())
+      this.cancelFileAcquisitions(workspaceId);
     for (const tab of [...this.tabs.values()]) this.close(tab);
     await this.persistence;
     await browserFileService.shutdown();
@@ -1502,12 +1690,28 @@ export class BrowserService {
     }
     // Keyboard/generic echoes require Blink's debugger marker; specialized
     // mouse events use bounded matching. No exemption outlives pending dispatch.
-    const expected: LiveTab["expectedInputs"][number] | undefined = method === "Input.dispatchKeyEvent"
-      ? { type: String(params.type), key: String(params.key), modifiers: Number(params.modifiers ?? 0), expires: Date.now() + 500 }
-      : method === "Input.dispatchMouseEvent" && params.type !== "mouseMoved"
-        ? { type: params.type === "mousePressed" ? "mouseDown" : params.type === "mouseReleased" ? "mouseUp" : String(params.type),
-            ...(params.type === "mousePressed" || params.type === "mouseReleased" ? { button: String(params.button ?? "left") } : {}), expires: Date.now() + 500 }
-        : undefined;
+    const expected: LiveTab["expectedInputs"][number] | undefined =
+      method === "Input.dispatchKeyEvent"
+        ? {
+            type: String(params.type),
+            key: String(params.key),
+            modifiers: Number(params.modifiers ?? 0),
+            expires: Date.now() + 500,
+          }
+        : method === "Input.dispatchMouseEvent" && params.type !== "mouseMoved"
+          ? {
+              type:
+                params.type === "mousePressed"
+                  ? "mouseDown"
+                  : params.type === "mouseReleased"
+                    ? "mouseUp"
+                    : String(params.type),
+              ...(params.type === "mousePressed" || params.type === "mouseReleased"
+                ? { button: String(params.button ?? "left") }
+                : {}),
+              expires: Date.now() + 500,
+            }
+          : undefined;
     if (expected) tab.expectedInputs.push(expected);
     try {
       return await browserDeadline(
@@ -1684,7 +1888,10 @@ export class BrowserService {
       const measured = browserMeasuredViewport(
         await this.evaluate(tab, "({width:innerWidth,height:innerHeight})", signal, true),
       );
-      if (!measured) throw new Error("The browser viewport cannot be measured safely. Try resizing the browser.");
+      if (!measured)
+        throw new Error(
+          "The browser viewport cannot be measured safely. Try resizing the browser.",
+        );
       const scaleX = pageBounds.width / measured.width,
         scaleY = pageBounds.height / measured.height;
       captureBounds = {
@@ -1695,11 +1902,15 @@ export class BrowserService {
       };
       captureBounds.width = Math.min(captureBounds.width, pageBounds.width - captureBounds.x);
       captureBounds.height = Math.min(captureBounds.height, pageBounds.height - captureBounds.y);
-      if (!Object.values(captureBounds).every(Number.isSafeInteger) ||
-          captureBounds.x < 0 || captureBounds.y < 0 ||
-          captureBounds.width <= 0 || captureBounds.height <= 0 ||
-          captureBounds.x + captureBounds.width > pageBounds.width ||
-          captureBounds.y + captureBounds.height > pageBounds.height)
+      if (
+        !Object.values(captureBounds).every(Number.isSafeInteger) ||
+        captureBounds.x < 0 ||
+        captureBounds.y < 0 ||
+        captureBounds.width <= 0 ||
+        captureBounds.height <= 0 ||
+        captureBounds.x + captureBounds.width > pageBounds.width ||
+        captureBounds.y + captureBounds.height > pageBounds.height
+      )
         throw new Error("The capture region is outside the browser viewport.");
     }
     for (let attempt = 0; attempt < 3; attempt += 1) {
@@ -1794,7 +2005,8 @@ export class BrowserService {
   /** Remember fields read in renderer process `processId`, unless the tab has moved to another since. */
   private rememberSensitiveFields(tab: LiveTab, processId: number, ids: Iterable<number>): void {
     const wc = tab.view.webContents;
-    if (!wc.isDestroyed() && wc.getProcessId() === processId) tab.sensitiveFields.remember(processId, ids);
+    if (!wc.isDestroyed() && wc.getProcessId() === processId)
+      tab.sensitiveFields.remember(processId, ids);
   }
   private heldFieldDocument(tab: LiveTab): string {
     const wc = tab.view.webContents;
@@ -1811,13 +2023,20 @@ export class BrowserService {
    * snapshot's generated locators) treat it as what it was. Called before
    * each of them.
    */
-  private async recallSensitiveFields(tab: LiveTab, signal?: AbortSignal, mark = true): Promise<void> {
+  private async recallSensitiveFields(
+    tab: LiveTab,
+    signal?: AbortSignal,
+    mark = true,
+  ): Promise<void> {
     if (mark) this.assertHeldFieldsObserved(tab);
     const wc = tab.view.webContents;
     if (wc.isDestroyed()) return;
     const processId = wc.getProcessId();
     try {
-      const scan = await scanSensitiveFields(this.cdpPort(tab, signal), tab.sensitiveFields.of(processId));
+      const scan = await scanSensitiveFields(
+        this.cdpPort(tab, signal),
+        tab.sensitiveFields.of(processId),
+      );
       if (mark) this.assertHeldFieldsObserved(tab);
       this.rememberSensitiveFields(tab, processId, scan.sensitive);
       if (!mark || scan.recalled.length === 0) return;
@@ -1825,12 +2044,27 @@ export class BrowserService {
       const executionContextId = tab.contextId;
       for (const backendNodeId of scan.recalled) {
         // A field that left the page since has nothing to mark.
-        const resolved = await this.send(tab, "DOM.resolveNode", { backendNodeId, executionContextId, objectGroup: "aiden-recall" }, signal).catch(() => undefined);
+        const resolved = await this.send(
+          tab,
+          "DOM.resolveNode",
+          { backendNodeId, executionContextId, objectGroup: "aiden-recall" },
+          signal,
+        ).catch(() => undefined);
         const objectId = resolved?.object?.objectId;
         if (typeof objectId === "string")
-          await this.send(tab, "Runtime.callFunctionOn", { objectId, functionDeclaration: BROWSER_RECALL_FIELD_FUNCTION, returnByValue: true }, signal);
+          await this.send(
+            tab,
+            "Runtime.callFunctionOn",
+            { objectId, functionDeclaration: BROWSER_RECALL_FIELD_FUNCTION, returnByValue: true },
+            signal,
+          );
       }
-      await this.send(tab, "Runtime.releaseObjectGroup", { objectGroup: "aiden-recall" }, signal).catch(() => {});
+      await this.send(
+        tab,
+        "Runtime.releaseObjectGroup",
+        { objectGroup: "aiden-recall" },
+        signal,
+      ).catch(() => {});
     } finally {
       await this.send(tab, "DOM.disable", {}, signal).catch(() => {});
     }
@@ -1844,7 +2078,8 @@ export class BrowserService {
    */
   private watchHeldFields(tab: LiveTab): void {
     if (tab.heldFieldWatch) return;
-    let reading = false, readAgain = false;
+    let reading = false,
+      readAgain = false;
     const read = async () => {
       if (reading) {
         readAgain = true;
@@ -1853,13 +2088,21 @@ export class BrowserService {
       reading = true;
       clearTimeout(watch.timer);
       const started = Date.now();
-      const revision = watch.revision, document = this.heldFieldDocument(tab);
+      const revision = watch.revision,
+        document = this.heldFieldDocument(tab);
       try {
         await this.recallSensitiveFields(tab, undefined, false);
-        if (tab.heldFieldWatch === watch && revision === watch.revision && !tab.view.webContents.isDestroyed() &&
-          !tab.view.webContents.isLoading() && document === this.heldFieldDocument(tab))
+        if (
+          tab.heldFieldWatch === watch &&
+          revision === watch.revision &&
+          !tab.view.webContents.isDestroyed() &&
+          !tab.view.webContents.isLoading() &&
+          document === this.heldFieldDocument(tab)
+        )
           watch.observedDocument = document;
-      } catch { /* An unread document remains unobserved. */ }
+      } catch {
+        /* An unread document remains unobserved. */
+      }
       reading = false;
       if (tab.heldFieldWatch !== watch) return;
       if (!tab.hold || tab.closing || tab.view.webContents.isDestroyed()) {
@@ -1871,12 +2114,18 @@ export class BrowserService {
         void read();
         return;
       }
-      watch.timer = setTimeout(() => void read(), Math.max(HELD_FIELD_SCAN_MS, 20 * (Date.now() - started)));
+      watch.timer = setTimeout(
+        () => void read(),
+        Math.max(HELD_FIELD_SCAN_MS, 20 * (Date.now() - started)),
+      );
     };
     const watch: NonNullable<LiveTab["heldFieldWatch"]> = {
       revision: 0,
       read: () => void read(),
-      invalidate() { watch.revision += 1; watch.observedDocument = undefined; },
+      invalidate() {
+        watch.revision += 1;
+        watch.observedDocument = undefined;
+      },
     };
     tab.heldFieldWatch = watch;
     watch.read();
@@ -1886,10 +2135,17 @@ export class BrowserService {
     tab.heldFieldWatch = undefined;
   }
   private cdpPort(tab: LiveTab, signal?: AbortSignal) {
-    return { call: (method: string, params?: Record<string, unknown>) => this.send(tab, method, params ?? {}, signal) };
+    return {
+      call: (method: string, params?: Record<string, unknown>) =>
+        this.send(tab, method, params ?? {}, signal),
+    };
   }
   /** A capture with every password, code and card field painted over, or why there is none. */
-  private async maskedCapture(tab: LiveTab, signal: AbortSignal | undefined, remembered: ReadonlySet<number>) {
+  private async maskedCapture(
+    tab: LiveTab,
+    signal: AbortSignal | undefined,
+    remembered: ReadonlySet<number>,
+  ) {
     return maskBrowserSnapshotImage({
       cdp: this.cdpPort(tab, signal),
       remembered,
@@ -1901,8 +2157,11 @@ export class BrowserService {
           true,
         );
         return {
-          width: Number(measured?.width), height: Number(measured?.height), scale: Number(measured?.scale),
-          scrollX: Number(measured?.scrollX), scrollY: Number(measured?.scrollY),
+          width: Number(measured?.width),
+          height: Number(measured?.height),
+          scale: Number(measured?.scale),
+          scrollX: Number(measured?.scrollX),
+          scrollY: Number(measured?.scrollY),
         };
       },
       documentRevision: () => `${tab.navigationSequence}:${tab.committedNavigation}`,
@@ -1913,10 +2172,19 @@ export class BrowserService {
         return { width: size.width, height: size.height, data: decoded.toBitmap() };
       },
       encode: (bitmap) => {
-        const painted = nativeImage.createFromBitmap(Buffer.from(bitmap.data.buffer, bitmap.data.byteOffset, bitmap.data.byteLength), {
-          width: bitmap.width, height: bitmap.height,
-        });
-        return { data: painted.toPNG().toString("base64"), mimeType: "image/png", width: bitmap.width, height: bitmap.height };
+        const painted = nativeImage.createFromBitmap(
+          Buffer.from(bitmap.data.buffer, bitmap.data.byteOffset, bitmap.data.byteLength),
+          {
+            width: bitmap.width,
+            height: bitmap.height,
+          },
+        );
+        return {
+          data: painted.toPNG().toString("base64"),
+          mimeType: "image/png",
+          width: bitmap.width,
+          height: bitmap.height,
+        };
       },
     });
   }
@@ -1934,7 +2202,8 @@ export class BrowserService {
       return ref;
     }
     const locator = command.locator ?? command.selector;
-    if (locator && boundary) return browserBoundaryLocatorExpression(text(locator, "selector", 4_000));
+    if (locator && boundary)
+      return browserBoundaryLocatorExpression(text(locator, "selector", 4_000));
     if (locator)
       return `globalThis.__aidenPlaywright.querySelector(globalThis.__aidenPlaywright.parseSelector(${JSON.stringify(text(locator, "selector", 4_000))}),document,true)`;
     return "document.activeElement";
@@ -2021,15 +2290,22 @@ export class BrowserService {
     ).catch(() => {});
   }
 
-  private async stopClickInterceptor(tab: LiveTab, contextId: number | undefined): Promise<unknown> {
+  private async stopClickInterceptor(
+    tab: LiveTab,
+    contextId: number | undefined,
+  ): Promise<unknown> {
     const wc = tab.view.webContents;
     if (!contextId || wc.isDestroyed() || !wc.debugger.isAttached()) return undefined;
     // A cancelled click must never leave an interceptor blocking the person's next input.
-    const result = await browserDeadline(wc.debugger.sendCommand("Runtime.evaluate", {
-      contextId,
-      expression: "(() => { const guard=globalThis.__aidenClickGuard;delete globalThis.__aidenClickGuard;delete globalThis.__aidenClickTarget;return guard?.stop()??'done'; })()",
-      returnByValue: true,
-    }), 1000).catch(() => undefined);
+    const result = await browserDeadline(
+      wc.debugger.sendCommand("Runtime.evaluate", {
+        contextId,
+        expression:
+          "(() => { const guard=globalThis.__aidenClickGuard;delete globalThis.__aidenClickGuard;delete globalThis.__aidenClickTarget;return guard?.stop()??'done'; })()",
+        returnByValue: true,
+      }),
+      1000,
+    ).catch(() => undefined);
     return result?.result?.value;
   }
 
@@ -2038,7 +2314,9 @@ export class BrowserService {
   }
   private activateTab(tab: LiveTab): void {
     const workspace = this.workspace(tab.state.workspaceId);
-    const previous = workspace.state.activeTabId ? this.tabs.get(workspace.state.activeTabId) : undefined;
+    const previous = workspace.state.activeTabId
+      ? this.tabs.get(workspace.state.activeTabId)
+      : undefined;
     if (previous && previous !== tab) {
       if (previous.grab) void this.stopGrab(previous, "cancelled");
       if (previous.state.floating) {
@@ -2093,7 +2371,11 @@ export class BrowserService {
    * The capture loop Picture in Picture uses on Linux, and falls back to when
    * the tab's debugger is unavailable (DevTools is open): a PNG capture every 250 ms.
    */
-  private pipCaptureLoop(tab: LiveTab, pip: BrowserWindow, paint: (source: string) => Promise<unknown>): void {
+  private pipCaptureLoop(
+    tab: LiveTab,
+    pip: BrowserWindow,
+    paint: (source: string) => Promise<unknown>,
+  ): void {
     const current = () => tab.pip === pip && !pip.isDestroyed() && !tab.closing;
     let pending = false;
     let lastFrame = "";
@@ -2127,7 +2409,9 @@ export class BrowserService {
     tab.pipFeed = undefined;
     feed.dispose();
     this.pipCaptureLoop(tab, pip, (source) =>
-      pip.webContents.executeJavaScript(`document.querySelector('img').src=${JSON.stringify(source)}`),
+      pip.webContents.executeJavaScript(
+        `document.querySelector('img').src=${JSON.stringify(source)}`,
+      ),
     );
   }
   private async pictureInPicture(tab: LiveTab, enabled: boolean): Promise<void> {
@@ -2171,7 +2455,9 @@ export class BrowserService {
     }
     if (!current()) return;
     const paint = (source: string) =>
-      pip.webContents.executeJavaScript(`document.querySelector('img').src=${JSON.stringify(source)}`);
+      pip.webContents.executeJavaScript(
+        `document.querySelector('img').src=${JSON.stringify(source)}`,
+      );
     // A still page sends no screencast frame until it changes; show it now.
     try {
       const image = await this.capture(tab);
@@ -2395,7 +2681,12 @@ export class BrowserService {
         15_000,
       );
       const output = (encoded ?? {}) as { type?: unknown; data?: unknown };
-      const mimeType = output.type === "video/mp4" ? "video/mp4" : output.type === "video/webm" ? "video/webm" : undefined;
+      const mimeType =
+        output.type === "video/mp4"
+          ? "video/mp4"
+          : output.type === "video/webm"
+            ? "video/webm"
+            : undefined;
       const base64 = output.data;
       if (!mimeType || typeof base64 !== "string" || base64.length > RECORDING_MAX_BYTES * 1.4)
         throw new Error("Recording output is invalid or too large.");
@@ -2446,7 +2737,10 @@ export class BrowserService {
     this.emit(tab.state.workspaceId);
 
     try {
-      const injected = await wc.executeJavaScript("typeof globalThis.__aidenGrabStart === 'function'", true);
+      const injected = await wc.executeJavaScript(
+        "typeof globalThis.__aidenGrabStart === 'function'",
+        true,
+      );
       if (!injected) {
         await wc.executeJavaScript(browserGrabRuntimeSource, true);
       }
@@ -2503,7 +2797,10 @@ export class BrowserService {
       measuredViewport ??
       browserMeasuredViewport(
         await wc
-          .executeJavaScript("({width:Math.round(innerWidth),height:Math.round(innerHeight)})", true)
+          .executeJavaScript(
+            "({width:Math.round(innerWidth),height:Math.round(innerHeight)})",
+            true,
+          )
           .catch(() => undefined),
       );
     if (!viewport) return undefined;
@@ -2558,7 +2855,9 @@ export class BrowserService {
       const grabPageUrl = tab.grab.pageUrl;
 
       try {
-        const workspace = await configStore.getWorkspace(tab.state.workspaceId).catch(() => undefined);
+        const workspace = await configStore
+          .getWorkspace(tab.state.workspaceId)
+          .catch(() => undefined);
         const sanitized = await sanitizeRawGrabPayload(raw, {
           pageUrl: wc.getURL(),
           grabPageUrl,
@@ -2695,14 +2994,22 @@ export class BrowserService {
           .map(([key, val]) => [key.slice(0, 100), text(val, "style change", 2_000)]),
       );
     if (value.elementStyleChanges) {
-      if (!Array.isArray(value.elementStyleChanges)) throw new Error("Invalid element style changes.");
+      if (!Array.isArray(value.elementStyleChanges))
+        throw new Error("Invalid element style changes.");
       annotation.elementStyleChanges = value.elementStyleChanges.slice(0, 50).map((element) => ({
         ref: text(element.ref, "style element reference", 100),
         selector: text(element.selector, "style element selector", 4_000),
-        changes: Object.fromEntries(Object.entries(element.changes ?? {}).slice(0, 40).map(([property, change]) => [text(property, "CSS property", 100), {
-          previous: text(change.previous, "previous CSS value", 2_000),
-          current: text(change.current, "current CSS value", 2_000),
-        }])),
+        changes: Object.fromEntries(
+          Object.entries(element.changes ?? {})
+            .slice(0, 40)
+            .map(([property, change]) => [
+              text(property, "CSS property", 100),
+              {
+                previous: text(change.previous, "previous CSS value", 2_000),
+                current: text(change.current, "current CSS value", 2_000),
+              },
+            ]),
+        ),
       }));
     }
     if (value.image) annotation.image = this.validImage(value.image);
@@ -2730,8 +3037,9 @@ export class BrowserService {
     command: BrowserCommand,
     context: CommandContext,
   ): Promise<BrowserCommandResult> {
-    try { return await this.runCommand(workspaceId, command, context); }
-    catch (error) {
+    try {
+      return await this.runCommand(workspaceId, command, context);
+    } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       const redacted = browserFileService.redactText(message);
       if (message === redacted) throw error;
@@ -2752,8 +3060,10 @@ export class BrowserService {
     if (!botWorkspace && !(await configStore.getWorkspace(workspaceId)))
       throw new Error("This workspace no longer exists.");
     if (context.credentialBoundary) {
-      if (!botWorkspace || context.source !== "agent") throw new Error("This browser port belongs to a Bot.");
-      if (BOUNDARY_REFUSED_ACTIONS.has(command.action)) throw new Error(BROWSER_BOUNDARY_ACTION_REFUSED);
+      if (!botWorkspace || context.source !== "agent")
+        throw new Error("This browser port belongs to a Bot.");
+      if (BOUNDARY_REFUSED_ACTIONS.has(command.action))
+        throw new Error(BROWSER_BOUNDARY_ACTION_REFUSED);
       const fields = command as { selector?: unknown; locator?: unknown };
       for (const selector of [fields.selector, fields.locator])
         if (typeof selector === "string") assertBoundarySelector(selector);
@@ -2766,8 +3076,10 @@ export class BrowserService {
       // window's panel layout (a stale hide) never pulls it back.
       const current = this.workspaces.get(workspaceId)?.owner;
       const owned = current && !current.isDestroyed();
-      const same = owned && current.id === context.owner.id && current.documentId === context.owner.documentId;
-      if (owned && !same && command.action === "present") return { state: this.getState(workspaceId) };
+      const same =
+        owned && current.id === context.owner.id && current.documentId === context.owner.documentId;
+      if (owned && !same && command.action === "present")
+        return { state: this.getState(workspaceId) };
       this.transferOwner(workspaceId, context.owner);
     } else if (context.owner) this.attachOwner(workspaceId, context.owner);
     const workspace = this.workspace(workspaceId);
@@ -2785,18 +3097,25 @@ export class BrowserService {
       case "open_file": {
         const controller = context.source === "agent" ? new AbortController() : undefined;
         if (controller) {
-          const acquisitions = this.agentFileAcquisitions.get(workspaceId) ?? new Set<AbortController>();
-          acquisitions.add(controller); this.agentFileAcquisitions.set(workspaceId, acquisitions);
+          const acquisitions =
+            this.agentFileAcquisitions.get(workspaceId) ?? new Set<AbortController>();
+          acquisitions.add(controller);
+          this.agentFileAcquisitions.set(workspaceId, acquisitions);
         }
-        const acquisitionSignal = controller ? AbortSignal.any([controller.signal, ...(signal ? [signal] : [])]) : signal;
+        const acquisitionSignal = controller
+          ? AbortSignal.any([controller.signal, ...(signal ? [signal] : [])])
+          : signal;
         let reservation: BrowserFileReservation | undefined;
         let created: LiveTab | undefined;
         try {
           // Only a direct user open may discover static local dependencies. The
           // agent's approved descriptor and explicit asset list remain unchanged.
-          const userPreview = context.source === "user" && command.assetPaths === undefined && !context.preparedFile
-            ? await browserFileService.prepareUserPreview(workspaceId, command.path, { signal: acquisitionSignal })
-            : undefined;
+          const userPreview =
+            context.source === "user" && command.assetPaths === undefined && !context.preparedFile
+              ? await browserFileService.prepareUserPreview(workspaceId, command.path, {
+                  signal: acquisitionSignal,
+                })
+              : undefined;
           reservation = await browserFileService.open(workspaceId, command.path, {
             preparedFile: userPreview?.preparedFile ?? context.preparedFile,
             assetPaths: userPreview?.preparedFile.assetPaths ?? command.assetPaths,
@@ -2805,20 +3124,40 @@ export class BrowserService {
           browserAbort(acquisitionSignal);
           const show = command.show ?? (context.source === "user" || this.defaults.autoShow);
           if (command.tabId) {
-            await this.command(workspaceId, { action: "navigate", tabId: command.tabId, url: reservation.url, readiness: command.readiness, timeoutMs: command.timeoutMs }, { ...context, signal: acquisitionSignal });
+            await this.command(
+              workspaceId,
+              {
+                action: "navigate",
+                tabId: command.tabId,
+                url: reservation.url,
+                readiness: command.readiness,
+                timeoutMs: command.timeoutMs,
+              },
+              { ...context, signal: acquisitionSignal },
+            );
             result.tabId = command.tabId;
-            if (show) await this.command(workspaceId, { action: "select", tabId: command.tabId }, context);
+            if (show)
+              await this.command(workspaceId, { action: "select", tabId: command.tabId }, context);
           } else {
             created = await this.create(workspaceId, reservation.url, undefined, show);
             result.tabId = created.state.id;
-            if (command.readiness !== "none") await browserDeadline(created.initialLoad!, command.timeoutMs ?? 15000, acquisitionSignal);
+            if (command.readiness !== "none")
+              await browserDeadline(
+                created.initialLoad!,
+                command.timeoutMs ?? 15000,
+                acquisitionSignal,
+              );
           }
           browserAbort(acquisitionSignal);
           const openedTab = result.tabId ? this.tabs.get(result.tabId) : undefined;
           if (openedTab && userPreview?.warnings.length) {
-            openedTab.diagnostics.push(...userPreview.warnings.map((message) => ({
-              level: "warning", message: browserFileService.redactText(message).slice(0, 4_000), timestamp: Date.now(),
-            })));
+            openedTab.diagnostics.push(
+              ...userPreview.warnings.map((message) => ({
+                level: "warning",
+                message: browserFileService.redactText(message).slice(0, 4_000),
+                timestamp: Date.now(),
+              })),
+            );
             openedTab.diagnostics = openedTab.diagnostics.slice(-200);
           }
         } catch (error) {
@@ -2881,7 +3220,8 @@ export class BrowserService {
       case "defaults":
         this.defaults = this.validDefaults(command.defaults);
         for (const workspaceId of this.agentFileAcquisitions.keys())
-          if (!this.getState(workspaceId).agentAccessAllowed) this.cancelFileAcquisitions(workspaceId);
+          if (!this.getState(workspaceId).agentAccessAllowed)
+            this.cancelFileAcquisitions(workspaceId);
         for (const tab of this.tabs.values())
           if (!this.getState(tab.state.workspaceId).agentAccessAllowed) tab.queue.interrupt();
         this.save();
@@ -2945,7 +3285,9 @@ export class BrowserService {
       case "import_cookies":
         // The person's cookies never move into a Bot's browser.
         if (isBotBrowserProfileId(command.profileId))
-          throw new Error("A Bot's browser keeps its own sign-ins. Sign in from its Browser tab instead.");
+          throw new Error(
+            "A Bot's browser keeps its own sign-ins. Sign in from its Browser tab instead.",
+          );
         result.importResult = await importBrowserCookies(
           command.sourceId,
           this.browserSession(command.profileId),
@@ -3024,333 +3366,423 @@ export class BrowserService {
           tab.timeline.push(actionEvent);
           tab.timeline = tab.timeline.slice(-200);
         }
-        await tab.queue.run(async (queueCheck) => {
-          const check = () => {
-            queueCheck();
-            if (context.source === "agent") this.assertHeldFieldsObserved(tab);
-          };
-          const signals = [context.signal, tab.queue.signal].filter(
-            (candidate): candidate is AbortSignal => Boolean(candidate),
-          );
-          const signal = signals.length ? AbortSignal.any(signals) : undefined;
-          // Playwright actionability waits use animation frames, including user
-          // initiated automation. Acquire only after the action leaves the queue.
-          const release = tab.backgroundThrottling.acquire(signal);
-          const unhost = this.hostWhileActive(tab);
-          tab.state.agentControlling = context.source === "agent";
-          this.emit(workspaceId);
-          try {
-            check();
-            context.beforeEffect?.();
-            switch (command.action) {
-              case "navigate": {
-                const url = browserUrl(command.url);
-                this.beginPreviewNavigation(tab, url);
-                const sequence = tab.committedNavigation;
-                const navigation = { url, epoch: tab.queue.epoch, sequence: undefined as number | undefined };
-                tab.navigationCommand = navigation;
-                try {
-                  // Settles on this page's own load, never on a still-loading page it replaced.
-                  const loading = loadBrowserUrl(wc, url);
-                  if (input.readiness === "none") void loading.catch(() => {});
-                  else if (input.readiness === "domContentLoaded") {
-                    void loading.catch(() => {});
-                    await this.wait(
-                      tab,
-                      { text: "", timeoutMs: input.timeoutMs ?? 15000, readiness: true, navigationAfter: sequence },
-                      signal,
-                      check,
-                    );
-                  } else await browserDeadline(loading, input.timeoutMs ?? 15000, signal);
-                } catch (error) {
-                  if (!wc.isDestroyed() && tab.navigationCommand === navigation &&
-                    navigation.sequence !== undefined && tab.navigationSequence === navigation.sequence &&
-                    tab.queue.epoch === navigation.epoch) {
-                    tab.pendingNavigationUrl = undefined;
-                    tab.pendingNavigationRequest = undefined;
-                    wc.stop();
-                    this.finishPreviewNavigation(tab);
+        await tab.queue.run(
+          async (queueCheck) => {
+            const check = () => {
+              queueCheck();
+              if (context.source === "agent") this.assertHeldFieldsObserved(tab);
+            };
+            const signals = [context.signal, tab.queue.signal].filter(
+              (candidate): candidate is AbortSignal => Boolean(candidate),
+            );
+            const signal = signals.length ? AbortSignal.any(signals) : undefined;
+            // Playwright actionability waits use animation frames, including user
+            // initiated automation. Acquire only after the action leaves the queue.
+            const release = tab.backgroundThrottling.acquire(signal);
+            const unhost = this.hostWhileActive(tab);
+            tab.state.agentControlling = context.source === "agent";
+            this.emit(workspaceId);
+            try {
+              check();
+              context.beforeEffect?.();
+              switch (command.action) {
+                case "navigate": {
+                  const url = browserUrl(command.url);
+                  this.beginPreviewNavigation(tab, url);
+                  const sequence = tab.committedNavigation;
+                  const navigation = {
+                    url,
+                    epoch: tab.queue.epoch,
+                    sequence: undefined as number | undefined,
+                  };
+                  tab.navigationCommand = navigation;
+                  try {
+                    // Settles on this page's own load, never on a still-loading page it replaced.
+                    const loading = loadBrowserUrl(wc, url);
+                    if (input.readiness === "none") void loading.catch(() => {});
+                    else if (input.readiness === "domContentLoaded") {
+                      void loading.catch(() => {});
+                      await this.wait(
+                        tab,
+                        {
+                          text: "",
+                          timeoutMs: input.timeoutMs ?? 15000,
+                          readiness: true,
+                          navigationAfter: sequence,
+                        },
+                        signal,
+                        check,
+                      );
+                    } else await browserDeadline(loading, input.timeoutMs ?? 15000, signal);
+                  } catch (error) {
+                    if (
+                      !wc.isDestroyed() &&
+                      tab.navigationCommand === navigation &&
+                      navigation.sequence !== undefined &&
+                      tab.navigationSequence === navigation.sequence &&
+                      tab.queue.epoch === navigation.epoch
+                    ) {
+                      tab.pendingNavigationUrl = undefined;
+                      tab.pendingNavigationRequest = undefined;
+                      wc.stop();
+                      this.finishPreviewNavigation(tab);
+                    }
+                    throw error;
+                  } finally {
+                    if (tab.navigationCommand === navigation) tab.navigationCommand = undefined;
                   }
-                  throw error;
-                } finally {
-                  if (tab.navigationCommand === navigation) tab.navigationCommand = undefined;
+                  break;
                 }
-                break;
-              }
-              case "back":
-                if (wc.navigationHistory.canGoBack()) wc.navigationHistory.goBack();
-                break;
-              case "forward":
-                if (wc.navigationHistory.canGoForward()) wc.navigationHistory.goForward();
-                break;
-              case "stop":
-                this.cancelCrashRecovery(tab);
-                tab.pendingNavigationUrl = undefined;
-                tab.pendingNavigationRequest = undefined;
-                if (tab.state.crashed) tab.state.error = "The page crashed. Reload to recover.";
-                wc.stop();
-                break;
-              case "focus":
-                wc.focus();
-                break;
-              case "reload":
-                this.cancelCrashRecovery(tab);
-                tab.state.crashed = false;
-                tab.state.error = undefined;
-                if (command.ignoreCache) wc.reloadIgnoringCache();
-                else wc.reload();
-                break;
-              case "devtools":
-                if (wc.debugger.isAttached()) wc.debugger.detach();
-                wc.openDevTools({ mode: "detach" });
-                break;
-              case "open_external":
-                await shell.openExternal(browserUrl(wc.getURL()));
-                break;
-              case "viewport":
-                tab.state.viewport = validBrowserViewport(command.viewport);
-                await this.applyEmulation(tab);
-                break;
-              case "appearance":
-                if (!["system", "light", "dark"].includes(command.appearance))
-                  throw new Error("Invalid browser appearance.");
-                tab.state.appearance = command.appearance;
-                await this.applyEmulation(tab);
-                break;
-              case "zoom":
-                tab.state.zoom = browserBoundedNumber(command.zoom, 0.25, 5, "Zoom");
-                wc.setZoomFactor(tab.state.zoom);
-                break;
-              case "mute":
-                if (typeof command.muted !== "boolean")
-                  throw new Error("Invalid audio mute state.");
-                wc.setAudioMuted(command.muted);
-                tab.state.muted = command.muted;
-                break;
-              case "float":
-                this.floating(tab, command.floating);
-                break;
-              case "picture_in_picture":
-                await this.pictureInPicture(tab, command.enabled);
-                break;
-              case "screenshot":
-                result.image = await this.capture(tab, command.fullPage, command.bounds, signal);
-                break;
-              case "snapshot":
-                result.snapshot = await this.snapshot(
-                  tab,
-                  command.includeImage !== false && context.supportsImages !== false,
-                  signal,
-                  context.source === "user" && input.includeAllElements === true,
-                  [],
-                  context.credentialBoundary === true,
-                );
-                break;
-              case "click": {
-                const hasTarget = Boolean(command.ref || command.selector || command.locator);
-                if (hasTarget && (command.x !== undefined || command.y !== undefined))
-                  throw new Error("Provide one click target.");
-                const point = hasTarget
-                  ? await this.elementPoint(tab, command, signal, true, context.credentialBoundary === true)
-                  : {
-                      x: browserBoundedNumber(command.x, 0, 8192, "Click X"),
-                      y: browserBoundedNumber(command.y, 0, 8192, "Click Y"),
-                    };
-                check();
-                const button = command.button ?? "left";
-                if (!["left", "right", "middle"].includes(button))
-                  throw new Error("Invalid mouse button.");
-                const clickCount = browserBoundedNumber(
-                  command.clickCount ?? 1,
-                  1,
-                  3,
-                  "Click count",
-                );
-                const clickContextId = hasTarget ? tab.contextId : undefined;
-                let hit: unknown;
-                try {
-                  await this.showAgentCursor(tab, point, signal);
-                  check();
-                  await this.send(
+                case "back":
+                  if (wc.navigationHistory.canGoBack()) wc.navigationHistory.goBack();
+                  break;
+                case "forward":
+                  if (wc.navigationHistory.canGoForward()) wc.navigationHistory.goForward();
+                  break;
+                case "stop":
+                  this.cancelCrashRecovery(tab);
+                  tab.pendingNavigationUrl = undefined;
+                  tab.pendingNavigationRequest = undefined;
+                  if (tab.state.crashed) tab.state.error = "The page crashed. Reload to recover.";
+                  wc.stop();
+                  break;
+                case "focus":
+                  wc.focus();
+                  break;
+                case "reload":
+                  this.cancelCrashRecovery(tab);
+                  tab.state.crashed = false;
+                  tab.state.error = undefined;
+                  if (command.ignoreCache) wc.reloadIgnoringCache();
+                  else wc.reload();
+                  break;
+                case "devtools":
+                  if (wc.debugger.isAttached()) wc.debugger.detach();
+                  wc.openDevTools({ mode: "detach" });
+                  break;
+                case "open_external":
+                  await shell.openExternal(browserUrl(wc.getURL()));
+                  break;
+                case "viewport":
+                  tab.state.viewport = validBrowserViewport(command.viewport);
+                  await this.applyEmulation(tab);
+                  break;
+                case "appearance":
+                  if (!["system", "light", "dark"].includes(command.appearance))
+                    throw new Error("Invalid browser appearance.");
+                  tab.state.appearance = command.appearance;
+                  await this.applyEmulation(tab);
+                  break;
+                case "zoom":
+                  tab.state.zoom = browserBoundedNumber(command.zoom, 0.25, 5, "Zoom");
+                  wc.setZoomFactor(tab.state.zoom);
+                  break;
+                case "mute":
+                  if (typeof command.muted !== "boolean")
+                    throw new Error("Invalid audio mute state.");
+                  wc.setAudioMuted(command.muted);
+                  tab.state.muted = command.muted;
+                  break;
+                case "float":
+                  this.floating(tab, command.floating);
+                  break;
+                case "picture_in_picture":
+                  await this.pictureInPicture(tab, command.enabled);
+                  break;
+                case "screenshot":
+                  result.image = await this.capture(tab, command.fullPage, command.bounds, signal);
+                  break;
+                case "snapshot":
+                  result.snapshot = await this.snapshot(
                     tab,
-                    "Input.dispatchMouseEvent",
-                    { type: "mouseMoved", ...point },
+                    command.includeImage !== false && context.supportsImages !== false,
                     signal,
+                    context.source === "user" && input.includeAllElements === true,
+                    [],
+                    context.credentialBoundary === true,
                   );
+                  break;
+                case "click": {
+                  const hasTarget = Boolean(command.ref || command.selector || command.locator);
+                  if (hasTarget && (command.x !== undefined || command.y !== undefined))
+                    throw new Error("Provide one click target.");
+                  const point = hasTarget
+                    ? await this.elementPoint(
+                        tab,
+                        command,
+                        signal,
+                        true,
+                        context.credentialBoundary === true,
+                      )
+                    : {
+                        x: browserBoundedNumber(command.x, 0, 8192, "Click X"),
+                        y: browserBoundedNumber(command.y, 0, 8192, "Click Y"),
+                      };
                   check();
-                  if (hasTarget) {
-                    if (tab.contextId !== clickContextId) throw new Error("The browser page changed before the click. Take a fresh snapshot.");
-                    // Hover can move the target or open an overlay. Recheck the pinned
-                    // element after mouseMoved, then guard the actual trusted input events.
-                    await this.evaluate(tab, `(() => {
+                  const button = command.button ?? "left";
+                  if (!["left", "right", "middle"].includes(button))
+                    throw new Error("Invalid mouse button.");
+                  const clickCount = browserBoundedNumber(
+                    command.clickCount ?? 1,
+                    1,
+                    3,
+                    "Click count",
+                  );
+                  const clickContextId = hasTarget ? tab.contextId : undefined;
+                  let hit: unknown;
+                  try {
+                    await this.showAgentCursor(tab, point, signal);
+                    check();
+                    await this.send(
+                      tab,
+                      "Input.dispatchMouseEvent",
+                      { type: "mouseMoved", ...point },
+                      signal,
+                    );
+                    check();
+                    if (hasTarget) {
+                      if (tab.contextId !== clickContextId)
+                        throw new Error(
+                          "The browser page changed before the click. Take a fresh snapshot.",
+                        );
+                      // Hover can move the target or open an overlay. Recheck the pinned
+                      // element after mouseMoved, then guard the actual trusted input events.
+                      await this.evaluate(
+                        tab,
+                        `(() => {
                       const node=globalThis.__aidenClickTarget;
                       globalThis.__aidenClickGuard?.stop();
                       const guard=globalThis.__aidenPlaywright.setupHitTargetInterceptor(node,'mouse',${JSON.stringify(point)},false);
                       if(typeof guard==='string')throw new Error(${context.credentialBoundary ? JSON.stringify(BROWSER_COVERED_OR_MOVED_TARGET) : "'Another element covers the target or it moved: '+guard"});
                       globalThis.__aidenClickGuard=guard;
-                    })()`, signal, true);
-                    check();
-                    if (tab.contextId !== clickContextId) throw new Error("The browser page changed before the click. Take a fresh snapshot.");
-                  }
-                  context.beforeEffect?.();
-                  try {
-                    await this.send(tab, "Input.dispatchMouseEvent", { type: "mousePressed", button, clickCount, ...point }, signal);
-                    check();
-                  } finally {
-                    await this.send(tab, "Input.dispatchMouseEvent", { type: "mouseReleased", button, clickCount, ...point });
-                  }
-                } finally {
-                  hit = await this.stopClickInterceptor(tab, clickContextId);
-                }
-                if (hit !== undefined && hit !== "done") throw new Error("Another element covered the target during the click. Take a fresh snapshot.");
-                break;
-              }
-              case "type": {
-                text(command.text, "browser input");
-                if (command.ref || command.selector || command.locator) {
-                  const point = await this.elementPoint(tab, command, signal, false, context.credentialBoundary === true);
-                  await this.showAgentCursor(tab, point, signal);
-                }
-                check();
-                const target = this.target(tab, command, context.credentialBoundary === true);
-                if (context.credentialBoundary) {
-                  await this.recallSensitiveFields(tab, signal);
-                  check();
-                }
-                // A Bot never types into a secret field, whether named or focused.
-                const guard = context.credentialBoundary ? `${BROWSER_SENSITIVE_FIELD_SOURCE}if(__aidenSensitive(e))throw new Error(${JSON.stringify(BROWSER_SENSITIVE_TYPING_REFUSED)});` : "";
-                const focusedGuard = context.credentialBoundary ? browserTypingGuardSource("e") : "";
-                context.beforeEffect?.();
-                await this.evaluate(
-                  tab,
-                  `(()=>{const e=${target};if(!e)throw new Error('Input not found');${guard}if(!globalThis.__aidenPlaywright.elementState(e,'editable').matches)throw new Error('Target is not editable or is read-only');e.focus();${focusedGuard}${command.clear ? "if('select' in e)e.select();else {const range=document.createRange();range.selectNodeContents(e);const selection=getSelection();selection.removeAllRanges();selection.addRange(range);}" : ""}})()`,
-                  signal,
-                  true,
-                ).catch((error: unknown) => {
-                  throw boundaryRefusalOf(error);
-                });
-                check();
-                context.beforeEffect?.();
-                if (command.clear && command.text === "")
-                  await this.press(tab, "Backspace", undefined, signal, check, context.beforeEffect);
-                else await this.send(tab, "Input.insertText", { text: command.text }, signal);
-                break;
-              }
-              case "press":
-                if (context.credentialBoundary && browserKeyInsertsText(text(command.key, "keyboard key", 100), command.modifiers ?? [])) {
-                  await this.recallSensitiveFields(tab, signal);
-                  check();
-                  await this.evaluate(tab, `(()=>{${BROWSER_SENSITIVE_FIELD_SOURCE}${browserTypingGuardSource("null")}})()`, signal, true).catch(
-                    (error: unknown) => {
-                      throw boundaryRefusalOf(error);
-                    },
-                  );
-                  check();
-                }
-                await this.press(tab, command.key, command.modifiers, signal, check, context.beforeEffect);
-                break;
-              case "scroll": {
-                const point =
-                  input.selector || input.locator
-                    ? await this.elementPoint(
-                        tab,
-                        { selector: input.selector, locator: input.locator },
+                    })()`,
                         signal,
-                        false,
-                        context.credentialBoundary === true,
-                      )
-                    : { x: command.x ?? 200, y: command.y ?? 200 };
-                check();
-                await this.showAgentCursor(tab, point, signal);
-                check();
-                context.beforeEffect?.();
-                await this.send(
-                  tab,
-                  "Input.dispatchMouseEvent",
-                  {
-                    type: "mouseWheel",
-                    x: browserBoundedNumber(point.x, 0, 8192, "Scroll X"),
-                    y: browserBoundedNumber(point.y, 0, 8192, "Scroll Y"),
-                    deltaX: browserBoundedNumber(
-                      command.deltaX,
-                      -100000,
-                      100000,
-                      "Horizontal scroll",
-                    ),
-                    deltaY: browserBoundedNumber(
-                      command.deltaY,
-                      -100000,
-                      100000,
-                      "Vertical scroll",
-                    ),
-                  },
-                  signal,
-                );
-                break;
-              }
-              case "evaluate":
-                context.beforeEffect?.();
-                result.value = browserResult(
+                        true,
+                      );
+                      check();
+                      if (tab.contextId !== clickContextId)
+                        throw new Error(
+                          "The browser page changed before the click. Take a fresh snapshot.",
+                        );
+                    }
+                    context.beforeEffect?.();
+                    try {
+                      await this.send(
+                        tab,
+                        "Input.dispatchMouseEvent",
+                        { type: "mousePressed", button, clickCount, ...point },
+                        signal,
+                      );
+                      check();
+                    } finally {
+                      await this.send(tab, "Input.dispatchMouseEvent", {
+                        type: "mouseReleased",
+                        button,
+                        clickCount,
+                        ...point,
+                      });
+                    }
+                  } finally {
+                    hit = await this.stopClickInterceptor(tab, clickContextId);
+                  }
+                  if (hit !== undefined && hit !== "done")
+                    throw new Error(
+                      "Another element covered the target during the click. Take a fresh snapshot.",
+                    );
+                  break;
+                }
+                case "type": {
+                  text(command.text, "browser input");
+                  if (command.ref || command.selector || command.locator) {
+                    const point = await this.elementPoint(
+                      tab,
+                      command,
+                      signal,
+                      false,
+                      context.credentialBoundary === true,
+                    );
+                    await this.showAgentCursor(tab, point, signal);
+                  }
+                  check();
+                  const target = this.target(tab, command, context.credentialBoundary === true);
+                  if (context.credentialBoundary) {
+                    await this.recallSensitiveFields(tab, signal);
+                    check();
+                  }
+                  // A Bot never types into a secret field, whether named or focused.
+                  const guard = context.credentialBoundary
+                    ? `${BROWSER_SENSITIVE_FIELD_SOURCE}if(__aidenSensitive(e))throw new Error(${JSON.stringify(BROWSER_SENSITIVE_TYPING_REFUSED)});`
+                    : "";
+                  const focusedGuard = context.credentialBoundary
+                    ? browserTypingGuardSource("e")
+                    : "";
+                  context.beforeEffect?.();
                   await this.evaluate(
                     tab,
-                    text(command.expression, "JavaScript expression"),
+                    `(()=>{const e=${target};if(!e)throw new Error('Input not found');${guard}if(!globalThis.__aidenPlaywright.elementState(e,'editable').matches)throw new Error('Target is not editable or is read-only');e.focus();${focusedGuard}${command.clear ? "if('select' in e)e.select();else {const range=document.createRange();range.selectNodeContents(e);const selection=getSelection();selection.removeAllRanges();selection.addRange(range);}" : ""}})()`,
                     signal,
-                    false,
-                    input.awaitPromise !== false,
-                    input.returnByValue !== false,
-                  ),
-                );
-                break;
-              case "annotation_preview":
-                result.elementStyleChanges = await this.evaluate(tab, buildBrowserAnnotationPreviewApplyExpression(command.changes), signal, true);
-                result.snapshot = await this.snapshot(tab, true, signal, true, command.changes);
-                break;
-              case "annotation_reset":
-                await this.evaluate(tab, buildBrowserAnnotationPreviewResetExpression(), signal, true);
-                break;
-              case "wait":
-                await this.wait(tab, input, signal, check, context.credentialBoundary === true);
-                break;
-              case "record_start":
-                await this.startRecording(tab, command.fps ?? this.defaults.recordingFps, signal);
-                break;
-              case "record_stop":
-                result.recording = await this.stopRecording(tab);
-                break;
-              case "annotate":
-                Object.assign(result, { annotation: await this.pick(tab, signal) });
-                break;
-              case "annotation_submit": {
-                const annotation = this.sanitizeAnnotation(command.annotation);
-                result.annotation = annotation;
-                if (command.delivery !== "renderer") {
-                  this.emit(workspaceId, {
-                    type: "annotation",
-                    workspaceId,
-                    tabId: tab.state.id,
-                    annotation,
+                    true,
+                  ).catch((error: unknown) => {
+                    throw boundaryRefusalOf(error);
                   });
+                  check();
+                  context.beforeEffect?.();
+                  if (command.clear && command.text === "")
+                    await this.press(
+                      tab,
+                      "Backspace",
+                      undefined,
+                      signal,
+                      check,
+                      context.beforeEffect,
+                    );
+                  else await this.send(tab, "Input.insertText", { text: command.text }, signal);
+                  break;
                 }
-                break;
+                case "press":
+                  if (
+                    context.credentialBoundary &&
+                    browserKeyInsertsText(
+                      text(command.key, "keyboard key", 100),
+                      command.modifiers ?? [],
+                    )
+                  ) {
+                    await this.recallSensitiveFields(tab, signal);
+                    check();
+                    await this.evaluate(
+                      tab,
+                      `(()=>{${BROWSER_SENSITIVE_FIELD_SOURCE}${browserTypingGuardSource("null")}})()`,
+                      signal,
+                      true,
+                    ).catch((error: unknown) => {
+                      throw boundaryRefusalOf(error);
+                    });
+                    check();
+                  }
+                  await this.press(
+                    tab,
+                    command.key,
+                    command.modifiers,
+                    signal,
+                    check,
+                    context.beforeEffect,
+                  );
+                  break;
+                case "scroll": {
+                  const point =
+                    input.selector || input.locator
+                      ? await this.elementPoint(
+                          tab,
+                          { selector: input.selector, locator: input.locator },
+                          signal,
+                          false,
+                          context.credentialBoundary === true,
+                        )
+                      : { x: command.x ?? 200, y: command.y ?? 200 };
+                  check();
+                  await this.showAgentCursor(tab, point, signal);
+                  check();
+                  context.beforeEffect?.();
+                  await this.send(
+                    tab,
+                    "Input.dispatchMouseEvent",
+                    {
+                      type: "mouseWheel",
+                      x: browserBoundedNumber(point.x, 0, 8192, "Scroll X"),
+                      y: browserBoundedNumber(point.y, 0, 8192, "Scroll Y"),
+                      deltaX: browserBoundedNumber(
+                        command.deltaX,
+                        -100000,
+                        100000,
+                        "Horizontal scroll",
+                      ),
+                      deltaY: browserBoundedNumber(
+                        command.deltaY,
+                        -100000,
+                        100000,
+                        "Vertical scroll",
+                      ),
+                    },
+                    signal,
+                  );
+                  break;
+                }
+                case "evaluate":
+                  context.beforeEffect?.();
+                  result.value = browserResult(
+                    await this.evaluate(
+                      tab,
+                      text(command.expression, "JavaScript expression"),
+                      signal,
+                      false,
+                      input.awaitPromise !== false,
+                      input.returnByValue !== false,
+                    ),
+                  );
+                  break;
+                case "annotation_preview":
+                  result.elementStyleChanges = await this.evaluate(
+                    tab,
+                    buildBrowserAnnotationPreviewApplyExpression(command.changes),
+                    signal,
+                    true,
+                  );
+                  result.snapshot = await this.snapshot(tab, true, signal, true, command.changes);
+                  break;
+                case "annotation_reset":
+                  await this.evaluate(
+                    tab,
+                    buildBrowserAnnotationPreviewResetExpression(),
+                    signal,
+                    true,
+                  );
+                  break;
+                case "wait":
+                  await this.wait(tab, input, signal, check, context.credentialBoundary === true);
+                  break;
+                case "record_start":
+                  await this.startRecording(tab, command.fps ?? this.defaults.recordingFps, signal);
+                  break;
+                case "record_stop":
+                  result.recording = await this.stopRecording(tab);
+                  break;
+                case "annotate":
+                  Object.assign(result, { annotation: await this.pick(tab, signal) });
+                  break;
+                case "annotation_submit": {
+                  const annotation = this.sanitizeAnnotation(command.annotation);
+                  result.annotation = annotation;
+                  if (command.delivery !== "renderer") {
+                    this.emit(workspaceId, {
+                      type: "annotation",
+                      workspaceId,
+                      tabId: tab.state.id,
+                      annotation,
+                    });
+                  }
+                  break;
+                }
+                default:
+                  throw new Error("Unknown browser command.");
               }
-              default:
-                throw new Error("Unknown browser command.");
+              check();
+              actionEvent.status = "succeeded";
+            } catch (error) {
+              actionEvent.status = "failed";
+              actionEvent.error = error instanceof Error ? error.message : "Browser action failed.";
+              throw error;
+            } finally {
+              release();
+              unhost();
+              await this.removeAgentCursor(tab);
+              actionEvent.completedAt = Date.now();
+              tab.state.agentControlling = false;
+              this.emit(workspaceId);
             }
-            check();
-            actionEvent.status = "succeeded";
-          } catch (error) {
-            actionEvent.status = "failed";
-            actionEvent.error = error instanceof Error ? error.message : "Browser action failed.";
-            throw error;
-          } finally {
-            release();
-            unhost();
-            await this.removeAgentCursor(tab);
-            actionEvent.completedAt = Date.now();
-            tab.state.agentControlling = false;
-            this.emit(workspaceId);
-          }
-        }, signal, context.source);
+          },
+          signal,
+          context.source,
+        );
       }
     }
     result.state = this.getState(workspaceId);

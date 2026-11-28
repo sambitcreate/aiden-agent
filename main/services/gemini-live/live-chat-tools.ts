@@ -169,7 +169,8 @@ export function validateLiveChatToolArgs(
       const next: Record<string, unknown> = {};
       if (args.workspace !== undefined) {
         const workspace = boundedText(args.workspace, LIVE_CHAT_MAX_WORKSPACE_CHARS);
-        if (!workspace) return { ok: false, response: invalid("workspace must be a workspace name.") };
+        if (!workspace)
+          return { ok: false, response: invalid("workspace must be a workspace name.") };
         next.workspace = workspace;
       }
       if (args.text !== undefined) {
@@ -203,13 +204,18 @@ const MUTATING: ReadonlySet<LiveChatToolName> = new Set([
 ]);
 
 /** Live's chat tools. Every call runs in the window that owns the chat on screen. */
-export function createLiveChatToolProvider(input: Pick<LiveToolPrepareInput, "renderer">): LiveToolProvider {
+export function createLiveChatToolProvider(
+  input: Pick<LiveToolPrepareInput, "renderer">,
+): LiveToolProvider {
   return {
     declarations: DECLARATIONS,
     instructions: INSTRUCTIONS,
     async handle(call: LiveToolCall, context: LiveToolContext): Promise<LiveToolResponse> {
       if (!isLiveChatToolName(call.name)) {
-        return liveToolError("tool_unavailable", "That tool is not available in this Live session.");
+        return liveToolError(
+          "tool_unavailable",
+          "That tool is not available in this Live session.",
+        );
       }
       const validated = validateLiveChatToolArgs(call.name, call.args ?? {});
       if (!validated.ok) return validated.response;

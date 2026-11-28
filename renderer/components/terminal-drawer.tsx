@@ -162,12 +162,16 @@ function terminalTheme() {
 export function WorkspaceTerminalProvider({ children }: { children: React.ReactNode }) {
   const { active } = useActiveWorkspace();
   const [open, setOpen] = React.useState(false);
-  const [placement, setPlacement] = React.useState<TerminalPlacement>(() => localStorage.getItem(PLACEMENT_KEY) === "side" ? "side" : "bottom");
+  const [placement, setPlacement] = React.useState<TerminalPlacement>(() =>
+    localStorage.getItem(PLACEMENT_KEY) === "side" ? "side" : "bottom",
+  );
   const [sideTarget, setSideTarget] = React.useState<HTMLDivElement | null>(null);
   const [sidePresented, setSidePresented] = React.useState(false);
   const hide = React.useCallback(() => setOpen(false), []);
   const [sessions, setSessions] = React.useState<TerminalSession[]>([]);
-  const [foregroundCommands, setForegroundCommands] = React.useState<Readonly<Record<string, string>>>({});
+  const [foregroundCommands, setForegroundCommands] = React.useState<
+    Readonly<Record<string, string>>
+  >({});
   const [activeId, setActiveId] = React.useState<string>();
   const [layout, setLayout] = React.useState<Layout>({ direction: "single", ids: [] });
   const sessionsRef = React.useRef<TerminalSession[]>([]);
@@ -210,7 +214,13 @@ export function WorkspaceTerminalProvider({ children }: { children: React.ReactN
   }, []);
 
   React.useEffect(() => {
-    const updateForeground = ({ sessionId, command }: { sessionId: string; command: string | null }) => {
+    const updateForeground = ({
+      sessionId,
+      command,
+    }: {
+      sessionId: string;
+      command: string | null;
+    }) => {
       setForegroundCommands(({ [sessionId]: _previous, ...others }) =>
         command === null ? others : { ...others, [sessionId]: command },
       );
@@ -289,13 +299,18 @@ export function WorkspaceTerminalProvider({ children }: { children: React.ReactN
     );
   }, []);
 
-  const moveTo = React.useCallback((next: TerminalPlacement) => {
-    setPlacement(next);
-    localStorage.setItem(PLACEMENT_KEY, next);
-    setOpen(true);
-    window.dispatchEvent(new CustomEvent(TERMINAL_PANEL_EVENT, { detail: next === "side" ? "show" : "bottom" }));
-    if (!sessionsRef.current.length) void newTerminal();
-  }, [newTerminal]);
+  const moveTo = React.useCallback(
+    (next: TerminalPlacement) => {
+      setPlacement(next);
+      localStorage.setItem(PLACEMENT_KEY, next);
+      setOpen(true);
+      window.dispatchEvent(
+        new CustomEvent(TERMINAL_PANEL_EVENT, { detail: next === "side" ? "show" : "bottom" }),
+      );
+      if (!sessionsRef.current.length) void newTerminal();
+    },
+    [newTerminal],
+  );
 
   const toggle = React.useCallback(() => {
     if (placement === "side" && (!open || !sidePresented)) {
@@ -307,10 +322,13 @@ export function WorkspaceTerminalProvider({ children }: { children: React.ReactN
         document.activeElement instanceof Element &&
         document.activeElement.closest(".terminal-drawer");
       setOpen(false);
-      if (placement === "side") window.dispatchEvent(new CustomEvent(TERMINAL_PANEL_EVENT, { detail: "hide" }));
+      if (placement === "side")
+        window.dispatchEvent(new CustomEvent(TERMINAL_PANEL_EVENT, { detail: "hide" }));
       if (hadTerminalFocus)
         requestAnimationFrame(() =>
-          returnFocus([...document.querySelectorAll<HTMLElement>("[data-terminal-toggle]")], { closing: hadTerminalFocus }),
+          returnFocus([...document.querySelectorAll<HTMLElement>("[data-terminal-toggle]")], {
+            closing: hadTerminalFocus,
+          }),
         );
     } else if (sessions.length > 0) {
       setOpen(true);
@@ -323,7 +341,12 @@ export function WorkspaceTerminalProvider({ children }: { children: React.ReactN
     () => ({
       open: open && (placement === "bottom" || sidePresented),
       requestedOpen: open,
-      placement, sideTarget, setSideTarget, setSidePresented, moveTo, hide,
+      placement,
+      sideTarget,
+      setSideTarget,
+      setSidePresented,
+      moveTo,
+      hide,
       sessions,
       foregroundCommands,
       activeId,
@@ -346,7 +369,11 @@ export function WorkspaceTerminalProvider({ children }: { children: React.ReactN
       close,
     }),
     [
-      placement, sideTarget, sidePresented, moveTo, hide,
+      placement,
+      sideTarget,
+      sidePresented,
+      moveTo,
+      hide,
       active?.folderPath,
       active?.permission,
       activeId,
@@ -406,7 +433,10 @@ function TerminalViewport({
   onUnavailableRef.current = onUnavailable;
   activeRef.current = active;
   visibleRef.current = visible;
-  const [selectionAction, setSelectionAction] = React.useState<{ left: number; top: number } | null>(null);
+  const [selectionAction, setSelectionAction] = React.useState<{
+    left: number;
+    top: number;
+  } | null>(null);
   const [menuHasSelection, setMenuHasSelection] = React.useState(false);
   const focusLeftTerminalRef = React.useRef(false);
 
@@ -653,7 +683,9 @@ function TerminalViewport({
             Paste
           </ContextMenuItem>
           <ContextMenuSeparator />
-          <ContextMenuItem onSelect={() => surfaceRef.current?.selectAll()}>Select all</ContextMenuItem>
+          <ContextMenuItem onSelect={() => surfaceRef.current?.selectAll()}>
+            Select all
+          </ContextMenuItem>
         </ContextMenuContent>
       </ContextMenu>
       {selectionAction ? (
@@ -674,22 +706,50 @@ function TerminalViewport({
 }
 
 export function TerminalDrawer() {
-  const { open, requestedOpen, placement, sideTarget, moveTo, sessions, foregroundCommands, activeId, layout, canOpen, toggle, newTerminal, split, select, close } =
-    useWorkspaceTerminal();
-  const [closeRequest, setCloseRequest] = React.useState<{ id: string; label: string; command: string } | null>(null);
+  const {
+    open,
+    requestedOpen,
+    placement,
+    sideTarget,
+    moveTo,
+    sessions,
+    foregroundCommands,
+    activeId,
+    layout,
+    canOpen,
+    toggle,
+    newTerminal,
+    split,
+    select,
+    close,
+  } = useWorkspaceTerminal();
+  const [closeRequest, setCloseRequest] = React.useState<{
+    id: string;
+    label: string;
+    command: string;
+  } | null>(null);
   // A program can finish while the question is open, and the shell with it.
-  const pendingClose = closeRequest && sessions.some((session) => session.id === closeRequest.id) ? closeRequest : null;
+  const pendingClose =
+    closeRequest && sessions.some((session) => session.id === closeRequest.id)
+      ? closeRequest
+      : null;
   const requestClose = async (id: string, label: string) => {
     const command = await terminalApi.foregroundCommand(id).catch(() => null);
     if (command) setCloseRequest({ id, label, command });
     else close(id);
   };
   const bottomTargetRef = React.useRef<HTMLDivElement>(null);
-  const [portalHost] = React.useState(() => { const node = document.createElement("div"); node.className = "h-full min-h-0"; return node; });
+  const [portalHost] = React.useState(() => {
+    const node = document.createElement("div");
+    node.className = "h-full min-h-0";
+    return node;
+  });
   React.useLayoutEffect(() => {
     const target = placement === "side" ? sideTarget : bottomTargetRef.current;
     target?.appendChild(portalHost);
-    return () => { portalHost.remove(); };
+    return () => {
+      portalHost.remove();
+    };
   }, [placement, sideTarget, portalHost]);
   const [height, setHeight] = React.useState(initialHeight);
   const toggleShortcut = useShortcutLabel("terminal.toggle");
@@ -764,7 +824,13 @@ export function TerminalDrawer() {
       data-state={open ? "open" : "closed"}
       className="terminal-drawer relative shrink-0 overflow-hidden border-t border-separator bg-popover"
       data-placement={placement}
-      style={{ "--terminal-drawer-height": placement === "side" ? "100%" : `${height}px`, "--terminal-drawer-body-height": placement === "side" ? "100%" : `${height - 1}px`, display: (placement === "side" ? !requestedOpen : !present) ? "none" : undefined } as React.CSSProperties}
+      style={
+        {
+          "--terminal-drawer-height": placement === "side" ? "100%" : `${height}px`,
+          "--terminal-drawer-body-height": placement === "side" ? "100%" : `${height - 1}px`,
+          display: (placement === "side" ? !requestedOpen : !present) ? "none" : undefined,
+        } as React.CSSProperties
+      }
     >
       <div
         hidden={placement === "side"}
@@ -773,7 +839,12 @@ export function TerminalDrawer() {
         className="absolute inset-x-0 top-0 z-20 h-2 cursor-row-resize outline-none before:absolute before:inset-x-0 before:top-0 before:h-px before:bg-separator hover:before:bg-accent focus-visible:before:h-0.5 focus-visible:before:bg-focus-ring"
       />
       {/* The settled body height is the drawer's less its 1px top border. */}
-      <div className={cn("flex min-h-0 flex-col", moving ? "h-(--terminal-drawer-body-height)" : "h-full")}>
+      <div
+        className={cn(
+          "flex min-h-0 flex-col",
+          moving ? "h-(--terminal-drawer-body-height)" : "h-full",
+        )}
+      >
         <header className="drag-region flex h-11 shrink-0 items-center gap-2 border-b border-separator px-3">
           <div
             className="no-drag flex min-w-0 flex-1 items-center gap-1.5 overflow-x-auto py-1"
@@ -802,7 +873,10 @@ export function TerminalDrawer() {
                     <TerminalSquare className="size-3.5 shrink-0" />
                     <span className="max-w-28 truncate">{label}</span>
                     {command ? (
-                      <span className="flex min-w-0 items-center gap-1 text-tertiary" title={`Running ${command}`}>
+                      <span
+                        className="flex min-w-0 items-center gap-1 text-tertiary"
+                        title={`Running ${command}`}
+                      >
                         <span aria-hidden className="size-1.5 shrink-0 rounded-full bg-accent" />
                         <span className="max-w-20 truncate">{command}</span>
                       </span>
@@ -868,7 +942,18 @@ export function TerminalDrawer() {
             >
               <Minus />
             </Button>
-            <Button variant="transparent" size="small" iconOnly onClick={() => moveTo(placement === "side" ? "bottom" : "side")} aria-label={placement === "side" ? "Move terminal to bottom" : "Move terminal to side panel"} title={placement === "side" ? "Move to bottom" : "Move to side panel"}><PanelRightOpen /></Button>
+            <Button
+              variant="transparent"
+              size="small"
+              iconOnly
+              onClick={() => moveTo(placement === "side" ? "bottom" : "side")}
+              aria-label={
+                placement === "side" ? "Move terminal to bottom" : "Move terminal to side panel"
+              }
+              title={placement === "side" ? "Move to bottom" : "Move to side panel"}
+            >
+              <PanelRightOpen />
+            </Button>
             <Button
               variant="transparent"
               size="small"
@@ -901,7 +986,8 @@ export function TerminalDrawer() {
                   "relative min-h-0 min-w-0 bg-(--terminal-background)",
                   // The cue sits in the screen's padding, outside the canvas: dimming the
                   // canvas would take its text below the terminal contrast guarantees.
-                  visibleSessions.length > 1 && activeId === session.id &&
+                  visibleSessions.length > 1 &&
+                    activeId === session.id &&
                     "after:pointer-events-none after:absolute after:inset-x-0 after:top-0 after:h-0.5 after:bg-focus-ring",
                 )}
               >
@@ -935,20 +1021,24 @@ export function TerminalDrawer() {
       </div>
     </section>
   );
-  return <>
-    <div ref={bottomTargetRef} className="shrink-0" hidden={placement !== "bottom" || !present} />
-    {createPortal(content, portalHost)}
-    <AlertDialog
-      open={pendingClose !== null}
-      onOpenChange={(next) => { if (!next) setCloseRequest(null); }}
-      title={`Close ${pendingClose?.label ?? "terminal"}?`}
-      description={`${pendingClose?.command ?? "A program"} is still running. Closing the terminal stops it.`}
-      confirmLabel="Close terminal"
-      confirmVariant="destructive"
-      onConfirm={() => {
-        if (pendingClose) close(pendingClose.id);
-        setCloseRequest(null);
-      }}
-    />
-  </>;
+  return (
+    <>
+      <div ref={bottomTargetRef} className="shrink-0" hidden={placement !== "bottom" || !present} />
+      {createPortal(content, portalHost)}
+      <AlertDialog
+        open={pendingClose !== null}
+        onOpenChange={(next) => {
+          if (!next) setCloseRequest(null);
+        }}
+        title={`Close ${pendingClose?.label ?? "terminal"}?`}
+        description={`${pendingClose?.command ?? "A program"} is still running. Closing the terminal stops it.`}
+        confirmLabel="Close terminal"
+        confirmVariant="destructive"
+        onConfirm={() => {
+          if (pendingClose) close(pendingClose.id);
+          setCloseRequest(null);
+        }}
+      />
+    </>
+  );
 }

@@ -1,4 +1,7 @@
-import { displayImageDimensions, validateDisplayImageDimensions } from "../display-image-extension.js";
+import {
+  displayImageDimensions,
+  validateDisplayImageDimensions,
+} from "../display-image-extension.js";
 import {
   STUDIO_ASSET_LIMITS,
   StudioAssetError,
@@ -14,9 +17,12 @@ function ascii(bytes: Uint8Array, start: number, end: number): string {
 
 /** Content decides the type; extensions and declared MIME types never do. */
 export function sniffStudioImageType(bytes: Uint8Array): StudioAssetMediaType | undefined {
-  if (bytes.length >= 8 && PNG_SIGNATURE.every((byte, index) => bytes[index] === byte)) return "image/png";
-  if (bytes.length >= 3 && bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff) return "image/jpeg";
-  if (bytes.length >= 12 && ascii(bytes, 0, 4) === "RIFF" && ascii(bytes, 8, 12) === "WEBP") return "image/webp";
+  if (bytes.length >= 8 && PNG_SIGNATURE.every((byte, index) => bytes[index] === byte))
+    return "image/png";
+  if (bytes.length >= 3 && bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff)
+    return "image/jpeg";
+  if (bytes.length >= 12 && ascii(bytes, 0, 4) === "RIFF" && ascii(bytes, 8, 12) === "WEBP")
+    return "image/webp";
   return undefined;
 }
 
@@ -31,8 +37,15 @@ export function validateStudioImage(
     throw new StudioAssetError("invalid_image", "Only PNG, JPEG and WebP images are supported.");
   }
   const declared = declaredMimeType?.split(";", 1)[0]?.trim().toLowerCase();
-  if (declared !== undefined && declared !== mediaType && !(declared === "image/jpg" && mediaType === "image/jpeg")) {
-    throw new StudioAssetError("invalid_image", "The declared image type does not match its contents.");
+  if (
+    declared !== undefined &&
+    declared !== mediaType &&
+    !(declared === "image/jpg" && mediaType === "image/jpeg")
+  ) {
+    throw new StudioAssetError(
+      "invalid_image",
+      "The declared image type does not match its contents.",
+    );
   }
   const buffer = Buffer.from(bytes.buffer, bytes.byteOffset, bytes.byteLength);
   const dimensions = displayImageDimensions(buffer, mediaType);

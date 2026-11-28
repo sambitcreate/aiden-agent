@@ -38,9 +38,12 @@ function host(options: { refuses?: (chatId: string) => boolean } = {}) {
     owedTurn: { hold: () => owedTurns.hold("stream-1") },
     agent: {
       queueAdmissionBlocked: () => undefined,
-      queueSteer: () => (queueOpen ? { accepted: true, queue: "steer" } : { accepted: false, reason: "not-active" }),
+      queueSteer: () =>
+        queueOpen ? { accepted: true, queue: "steer" } : { accepted: false, reason: "not-active" },
       queueFollowUp: () =>
-        queueOpen ? { accepted: true, queue: "follow-up" } : { accepted: false, reason: "not-active" },
+        queueOpen
+          ? { accepted: true, queue: "follow-up" }
+          : { accepted: false, reason: "not-active" },
     } as unknown as ChatRunInputGenerationRef["agent"],
   };
   const active = new Map([["stream-1", generation]]);
@@ -55,12 +58,18 @@ function host(options: { refuses?: (chatId: string) => boolean } = {}) {
     readChat: async () => null,
     newMessageId: () => `message-${(ids += 1)}`,
   });
-  owedTurns.open("stream-1", { chatId: "chat-1", ownerDocumentId: "doc-1", context: { model: "m" } });
+  owedTurns.open("stream-1", {
+    chatId: "chat-1",
+    ownerDocumentId: "doc-1",
+    context: { model: "m" },
+  });
   /**
    * What main does when the run finishes: record its outcome, end its
    * ownership (every step runs, the first failure is rethrown), settle.
    */
-  const finishRun = (outcome: { committed?: string[]; failed?: boolean; cleanupThrows?: boolean } = {}) => {
+  const finishRun = (
+    outcome: { committed?: string[]; failed?: boolean; cleanupThrows?: boolean } = {},
+  ) => {
     queueOpen = false;
     const recordedStop = generation.cancelRequested;
     owedTurns.settleAfter(
@@ -99,11 +108,25 @@ test("input saved while the run ends is answered by exactly one owed turn once t
   const h = host();
   // agent_end closes the queue and the run settles while the input is saving.
   h.setDuringSave(() => h.finishRun());
-  const receipt = await h.admission.admit({ streamId: "stream-1", mode: "queue", text: "then this" });
-  assert.deepEqual(receipt, { admitted: true, queue: "follow-up", committed: true, messageId: "message-1" });
+  const receipt = await h.admission.admit({
+    streamId: "stream-1",
+    mode: "queue",
+    text: "then this",
+  });
+  assert.deepEqual(receipt, {
+    admitted: true,
+    queue: "follow-up",
+    committed: true,
+    messageId: "message-1",
+  });
   assert.deepEqual(h.turns, [
     {
-      plan: { chatId: "chat-1", settledStreamId: "stream-1", context: { model: "m" }, inputs: [{ messageId: "message-1" }] },
+      plan: {
+        chatId: "chat-1",
+        settledStreamId: "stream-1",
+        context: { model: "m" },
+        inputs: [{ messageId: "message-1" }],
+      },
       outcome: "answered",
     },
   ]);
@@ -134,11 +157,17 @@ test("saved input Pi still held when the run ended comes first, then input regis
   owedTurns.open("s", { chatId: "c", ownerDocumentId: "d", context: { model: "m" } });
   const hold = owedTurns.hold("s")!;
   assert.equal(hold.register({ messageId: "late", hookContext: "ctx" }), true);
-  owedTurns.settle("s", { committed: [{ messageId: "drained" }, { messageId: "late" }], recordedStop: false });
+  owedTurns.settle("s", {
+    committed: [{ messageId: "drained" }, { messageId: "late" }],
+    recordedStop: false,
+  });
   assert.equal(started.length, 0);
   hold.release();
   hold.release();
-  assert.deepEqual(started.map((plan) => plan.inputs), [[{ messageId: "drained" }, { messageId: "late" }]]);
+  assert.deepEqual(
+    started.map((plan) => plan.inputs),
+    [[{ messageId: "drained" }, { messageId: "late" }]],
+  );
   owedTurns.settle("s", { committed: [{ messageId: "again" }], recordedStop: false });
   assert.equal(started.length, 1, "a run settles once");
 });
@@ -163,9 +192,14 @@ test("Stop right after a follow-up receipt leaves exactly one stopped turn and r
       h.stop();
       pending.release();
     }
-    const stoppedTurns = (settled.recordedStop ? 1 : 0) + h.turns.filter((turn) => turn.outcome === "stopped").length;
+    const stoppedTurns =
+      (settled.recordedStop ? 1 : 0) + h.turns.filter((turn) => turn.outcome === "stopped").length;
     assert.equal(stoppedTurns, 1, stopLands);
-    assert.equal(h.turns.filter((turn) => turn.outcome === "answered").length, 0, `${stopLands}: nothing reruns`);
+    assert.equal(
+      h.turns.filter((turn) => turn.outcome === "answered").length,
+      0,
+      `${stopLands}: nothing reruns`,
+    );
     assert.deepEqual(h.saved, ["message-1"], `${stopLands}: the input stays as history`);
   }
 });
@@ -173,7 +207,11 @@ test("Stop right after a follow-up receipt leaves exactly one stopped turn and r
 test("a run that fails after saving the input still starts the owed turn exactly once", async () => {
   const h = host();
   h.setDuringSave(() => h.finishRun({ failed: true }));
-  const receipt = await h.admission.admit({ streamId: "stream-1", mode: "queue", text: "after the failure" });
+  const receipt = await h.admission.admit({
+    streamId: "stream-1",
+    mode: "queue",
+    text: "after the failure",
+  });
   assert.equal(receipt.admitted, true);
   assert.equal(h.turns.length, 1);
   assert.equal(h.turns[0]!.outcome, "answered");
@@ -187,7 +225,10 @@ test("a run whose ownership cleanup throws still answers its saved input with ex
   const h = host();
   // Pi still held this input when the run ended.
   h.closeQueue();
-  assert.throws(() => h.finishRun({ committed: ["message-held"], cleanupThrows: true }), /approval release failed/);
+  assert.throws(
+    () => h.finishRun({ committed: ["message-held"], cleanupThrows: true }),
+    /approval release failed/,
+  );
   assert.deepEqual(
     h.turns.map(({ plan, outcome }) => ({ inputs: plan.inputs, outcome })),
     [{ inputs: [{ messageId: "message-held" }], outcome: "answered" }],
@@ -207,8 +248,17 @@ test("input saved while a run with failing cleanup settles is still answered onc
       thrown.push(error);
     }
   });
-  const receipt = await h.admission.admit({ streamId: "stream-1", mode: "queue", text: "then this" });
-  assert.deepEqual(receipt, { admitted: true, queue: "follow-up", committed: true, messageId: "message-1" });
+  const receipt = await h.admission.admit({
+    streamId: "stream-1",
+    mode: "queue",
+    text: "then this",
+  });
+  assert.deepEqual(receipt, {
+    admitted: true,
+    queue: "follow-up",
+    committed: true,
+    messageId: "message-1",
+  });
   assert.equal(thrown.length, 1);
   assert.deepEqual(
     h.turns.map(({ plan }) => plan.inputs),
@@ -247,8 +297,16 @@ test("input saved while the chat is being deleted or the app quits is reported s
       else h.owedTurns.shutDown();
       h.finishRun();
     });
-    const receipt = await h.admission.admit({ streamId: "stream-1", mode: "queue", text: "orphan" });
-    assert.deepEqual(receipt, { admitted: false, reason: "run_not_active", committed: true, messageId: "message-1" }, closing);
+    const receipt = await h.admission.admit({
+      streamId: "stream-1",
+      mode: "queue",
+      text: "orphan",
+    });
+    assert.deepEqual(
+      receipt,
+      { admitted: false, reason: "run_not_active", committed: true, messageId: "message-1" },
+      closing,
+    );
     assert.equal(h.turns.length, 0, closing);
   }
 });
@@ -257,7 +315,11 @@ test("a chat deleted after its input registered starts no owed turn", async () =
   let deleting = false;
   const h = host({ refuses: () => deleting });
   h.closeQueue();
-  const receipt = await h.admission.admit({ streamId: "stream-1", mode: "queue", text: "registered" });
+  const receipt = await h.admission.admit({
+    streamId: "stream-1",
+    mode: "queue",
+    text: "registered",
+  });
   assert.equal(receipt.admitted, true);
   deleting = true;
   h.finishRun();
@@ -271,7 +333,10 @@ test("a run that ends with nothing owed starts nothing", () => {
 });
 
 test("a Stop naming another document leaves the settled run's owed turn alone", () => {
-  const owedTurns = createChatOwedTurns<Context, Origin>({ refuses: () => false, start: () => undefined });
+  const owedTurns = createChatOwedTurns<Context, Origin>({
+    refuses: () => false,
+    start: () => undefined,
+  });
   owedTurns.open("s", { chatId: "c", ownerDocumentId: "doc-a", context: { model: "m" } });
   assert.equal(owedTurns.stop("s", "user_stop", "doc-b"), false);
   assert.notEqual(owedTurns.hold("s"), undefined);
@@ -289,19 +354,27 @@ async function owedTurnConnectorSend(options: {
   workspace: Workspace;
 }): Promise<string> {
   const plans: Array<OwedTurnPlan<OwedTurnContext, Origin>> = [];
-  const owedTurns = createChatOwedTurns<OwedTurnContext, Origin>({ refuses: () => false, start: (plan) => plans.push(plan) });
+  const owedTurns = createChatOwedTurns<OwedTurnContext, Origin>({
+    refuses: () => false,
+    start: (plan) => plans.push(plan),
+  });
   owedTurns.open("s", {
     chatId: "c",
     ownerDocumentId: "doc-a",
     context: { workspaceId: options.workspace.id, providerId: "p", model: "m" },
   });
-  owedTurns.settleAfter("s", () => undefined, { committed: [{ messageId: "late" }], recordedStop: false });
+  owedTurns.settleAfter("s", () => undefined, {
+    committed: [{ messageId: "late" }],
+    recordedStop: false,
+  });
   assert.equal(plans.length, 1);
   const request = owedTurnStartRequest(plans[0]!, "owed-1");
   const workspaces = new Map([[options.workspace.id, options.workspace]]);
   const policy = await generationApprovalPolicy(
     {
-      workspace: request.params.workspaceId ? workspaces.get(request.params.workspaceId) : undefined,
+      workspace: request.params.workspaceId
+        ? workspaces.get(request.params.workspaceId)
+        : undefined,
       botBound: false,
       mode: request.params.mode,
       permission: request.options.permission,
@@ -323,12 +396,23 @@ async function owedTurnConnectorSend(options: {
 }
 
 test("an owed turn in an Ask workspace still asks, and one in an Auto workspace follows Auto", async () => {
-  const following = { id: "w1", name: "Work", folderPath: "/tmp/work", permission: "ask" } as Workspace;
+  const following = {
+    id: "w1",
+    name: "Work",
+    folderPath: "/tmp/work",
+    permission: "ask",
+  } as Workspace;
   assert.equal(await owedTurnConnectorSend({ globalMode: "ask", workspace: following }), "ask");
   assert.equal(await owedTurnConnectorSend({ globalMode: "auto", workspace: following }), "judge");
   // A workspace's own mode wins over the global one, both ways.
   const customizedAuto = { ...following, approvalMode: "auto" } as Workspace;
   const customizedAsk = { ...following, approvalMode: "ask" } as Workspace;
-  assert.equal(await owedTurnConnectorSend({ globalMode: "ask", workspace: customizedAuto }), "judge");
-  assert.equal(await owedTurnConnectorSend({ globalMode: "auto", workspace: customizedAsk }), "ask");
+  assert.equal(
+    await owedTurnConnectorSend({ globalMode: "ask", workspace: customizedAuto }),
+    "judge",
+  );
+  assert.equal(
+    await owedTurnConnectorSend({ globalMode: "auto", workspace: customizedAsk }),
+    "ask",
+  );
 });

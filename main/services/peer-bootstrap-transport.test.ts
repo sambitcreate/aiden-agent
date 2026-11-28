@@ -34,7 +34,11 @@ test("an unverified session pins the first key it sees and sends nothing to a di
     session.json({
       method: "POST",
       path: "/pairing/requests",
-      body: { deviceName: "Laptop", deviceType: "mac", publicKey: generatePairingRequestKeyPair().publicKey },
+      body: {
+        deviceName: "Laptop",
+        deviceType: "mac",
+        publicKey: generatePairingRequestKeyPair().publicKey,
+      },
     }),
   );
   assert.equal(error.code, "identity_changed");
@@ -70,7 +74,11 @@ test("pairing routes receive the poll secret, and refusals keep their code and r
     session.json({
       method: "POST",
       path: "/pairing/requests",
-      body: { deviceName: "Laptop", deviceType: "mac", publicKey: generatePairingRequestKeyPair().publicKey },
+      body: {
+        deviceName: "Laptop",
+        deviceType: "mac",
+        publicKey: generatePairingRequestKeyPair().publicKey,
+      },
     }) as Promise<{ requestId: string; pollSecret: string }>;
   const created = await create();
 
@@ -109,7 +117,8 @@ test("pairing routes receive the poll secret, and refusals keep their code and r
     assert.doesNotMatch(line, new RegExp(created.pollSecret, "u"));
   }
   assert.equal(
-    requestRoutes.filter(({ headers }) => headers["aiden-pairing-secret"] === created.pollSecret).length,
+    requestRoutes.filter(({ headers }) => headers["aiden-pairing-secret"] === created.pollSecret)
+      .length,
     1,
   );
 });
@@ -121,7 +130,11 @@ test("an aborted request settles at once", async (t) => {
   const created = (await session.json({
     method: "POST",
     path: "/pairing/requests",
-    body: { deviceName: "Laptop", deviceType: "mac", publicKey: generatePairingRequestKeyPair().publicKey },
+    body: {
+      deviceName: "Laptop",
+      deviceType: "mac",
+      publicKey: generatePairingRequestKeyPair().publicKey,
+    },
   })) as { requestId: string; pollSecret: string };
   const controller = new AbortController();
   const started = Date.now();
@@ -161,7 +174,8 @@ async function startStalledHandshake(): Promise<{
   return {
     endpoint: `https://127.0.0.1:${port}/api/aiden/v1`,
     open: () => sockets.size,
-    closed: () => (sockets.size === 0 ? Promise.resolve() : new Promise((resolve) => waiters.push(resolve))),
+    closed: () =>
+      sockets.size === 0 ? Promise.resolve() : new Promise((resolve) => waiters.push(resolve)),
     close: async () => {
       for (const socket of sockets) socket.destroy();
       await new Promise<void>((resolve) => server.close(() => resolve()));
@@ -188,7 +202,10 @@ test("a timed-out or cancelled request closes a connection stuck in the TLS hand
   t.after(() => peer.close());
   const session = new PeerBootstrapTransport({ endpoint: peer.endpoint, mode: "unverified" });
 
-  assert.equal((await rejection(session.json({ path: "/health", timeoutMs: 100 }))).code, "unavailable");
+  assert.equal(
+    (await rejection(session.json({ path: "/health", timeoutMs: 100 }))).code,
+    "unavailable",
+  );
   await settlesWithin(peer.closed(), 1_000, "closing the timed-out connection");
 
   const controller = new AbortController();

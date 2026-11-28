@@ -76,7 +76,8 @@ export function waitForLivePlayback(
         if (now - started >= replyStartMs) return finish("finished");
       } else {
         quietSince ??= now;
-        if (now - quietSince >= settleMs || (first.idle && replyStartMs <= 0)) return finish("finished");
+        if (now - quietSince >= settleMs || (first.idle && replyStartMs <= 0))
+          return finish("finished");
       }
       if (now >= deadline) return finish("timeout");
       timer = setTimeout(check, pollMs);
@@ -87,7 +88,9 @@ export function waitForLivePlayback(
 }
 
 /** True while the ribbon is asking the user to decide something by voice or tap. */
-export function liveActivityAwaitsAnswer(store: Pick<LiveActivityStore, "get"> = liveActivity): boolean {
+export function liveActivityAwaitsAnswer(
+  store: Pick<LiveActivityStore, "get"> = liveActivity,
+): boolean {
   const kind = store.get()?.kind;
   return kind === "approval" || kind === "confirm";
 }
@@ -117,7 +120,10 @@ export const LIVE_END_WHILE_WAITING = {
  * phrase end it. Neither ends Live while an approval or confirmation waits
  * on the user. Pass the bus and activity store only in tests.
  */
-export function useLiveVoiceEnding(live: LiveVoiceEndingTarget, options: LiveVoiceEndingOptions = {}): void {
+export function useLiveVoiceEnding(
+  live: LiveVoiceEndingTarget,
+  options: LiveVoiceEndingOptions = {},
+): void {
   const bus = options.bus ?? liveSessionBus;
   const activity = options.activity ?? liveActivity;
   const { maxWaitMs, settleMs, pollMs } = options;
@@ -132,7 +138,8 @@ export function useLiveVoiceEnding(live: LiveVoiceEndingTarget, options: LiveVoi
     if (!active) return;
     const ending = new AbortController();
     let ended = false;
-    const awaitingAnswer = () => liveActivityAwaitsAnswer(activity) || answerPendingRef.current?.() === true;
+    const awaitingAnswer = () =>
+      liveActivityAwaitsAnswer(activity) || answerPendingRef.current?.() === true;
     const endAfterGoodbye = async (
       signal: AbortSignal,
       replyStartMs: number,
@@ -144,7 +151,8 @@ export function useLiveVoiceEnding(live: LiveVoiceEndingTarget, options: LiveVoi
         ...(settleMs !== undefined ? { settleMs } : {}),
         ...(pollMs !== undefined ? { pollMs } : {}),
       });
-      if (ended || ending.signal.aborted || (result !== "finished" && result !== "timeout")) return "kept";
+      if (ended || ending.signal.aborted || (result !== "finished" && result !== "timeout"))
+        return "kept";
       // A request may have appeared while the goodbye played.
       if (awaitingAnswer()) return "waiting";
       ended = true;

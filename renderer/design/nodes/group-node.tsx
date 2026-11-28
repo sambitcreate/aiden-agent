@@ -16,7 +16,10 @@ export function GroupNode({ data, selected }: NodeProps<DesignNode>) {
         role="group"
         aria-label={frame.title}
         data-selected={selected ? "true" : "false"}
-        className={cn("h-full w-full rounded-button bg-control/50", selected && "bg-list-selection")}
+        className={cn(
+          "h-full w-full rounded-button bg-control/50",
+          selected && "bg-list-selection",
+        )}
       >
         <div className="flex min-w-0 px-3 pt-2">
           <FrameTitle frame={frame} className="text-secondary" />

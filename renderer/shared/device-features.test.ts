@@ -23,7 +23,11 @@ test("Android emulators are feature targets by serial or AVD name", () => {
   }
   // A leading dash or dot could read as an adb or emulator flag, or a hidden path.
   for (const deviceId of ["-wipe-data", ".avd", "emulator 5554", "a/b", ""]) {
-    assert.equal(parseDeviceFeatureTarget({ platform: "android", hostId: "local", deviceId }), null, deviceId);
+    assert.equal(
+      parseDeviceFeatureTarget({ platform: "android", hostId: "local", deviceId }),
+      null,
+      deviceId,
+    );
   }
 });
 
@@ -39,7 +43,10 @@ test("each device offers only the controls that work for it", () => {
   }
   // Clipboard, erase, and recording run simctl or adb, so only devices on this Mac get them.
   assert.equal(androidHere.erase && androidHere.recording && androidHere.clipboardPaste, true);
-  assert.equal(androidElsewhere.erase || androidElsewhere.recording || androidElsewhere.clipboardPaste, false);
+  assert.equal(
+    androidElsewhere.erase || androidElsewhere.recording || androidElsewhere.clipboardPaste,
+    false,
+  );
   // adb cannot read an emulator's clipboard; the control says why instead of failing.
   assert.equal(iosHere.clipboardCopy.available, true);
   assert.equal(androidHere.clipboardCopy.available, false);
@@ -50,21 +57,38 @@ test("each device offers only the controls that work for it", () => {
 });
 
 test("feature targets need a known platform, a host, and a simulator id", () => {
-  assert.deepEqual(parseDeviceFeatureTarget({ platform: "ios", hostId: "local", deviceId: UDID, extra: 1 }), {
-    platform: "ios",
-    hostId: "local",
-    deviceId: UDID,
-  });
-  assert.equal(parseDeviceFeatureTarget({ hostId: "local", deviceId: UDID }), null, "platform is required");
-  assert.equal(parseDeviceFeatureTarget({ platform: "windows", hostId: "local", deviceId: UDID }), null);
-  assert.equal(parseDeviceFeatureTarget({ platform: "ios", hostId: "local", deviceId: "../../etc" }), null);
+  assert.deepEqual(
+    parseDeviceFeatureTarget({ platform: "ios", hostId: "local", deviceId: UDID, extra: 1 }),
+    {
+      platform: "ios",
+      hostId: "local",
+      deviceId: UDID,
+    },
+  );
+  assert.equal(
+    parseDeviceFeatureTarget({ hostId: "local", deviceId: UDID }),
+    null,
+    "platform is required",
+  );
+  assert.equal(
+    parseDeviceFeatureTarget({ platform: "windows", hostId: "local", deviceId: UDID }),
+    null,
+  );
+  assert.equal(
+    parseDeviceFeatureTarget({ platform: "ios", hostId: "local", deviceId: "../../etc" }),
+    null,
+  );
   assert.equal(parseDeviceFeatureTarget({ platform: "ios", hostId: "a b", deviceId: UDID }), null);
   assert.equal(parseDeviceFeatureTarget(null), null);
 });
 
 test("clipboard text is capped at 64 KB of UTF-8, and only non-empty text passes", () => {
   const fits = "a".repeat(DEVICE_CLIPBOARD_MAX_BYTES);
-  assert.deepEqual(checkDeviceClipboardText(fits), { ok: true, text: fits, bytes: DEVICE_CLIPBOARD_MAX_BYTES });
+  assert.deepEqual(checkDeviceClipboardText(fits), {
+    ok: true,
+    text: fits,
+    bytes: DEVICE_CLIPBOARD_MAX_BYTES,
+  });
   const over = checkDeviceClipboardText(`${fits}a`);
   assert.equal(over.ok, false);
   // Multi-byte characters count by their encoded size, not their string length.
@@ -79,8 +103,14 @@ test("clipboard text is capped at 64 KB of UTF-8, and only non-empty text passes
 
 test("capture file names keep the device name readable and safe, with a local timestamp", () => {
   const at = new Date(2026, 9, 8, 14, 5, 9);
-  assert.equal(deviceCaptureFileName("iPhone 17 Pro", at, "png"), "iPhone-17-Pro-2026-10-08-140509.png");
-  assert.equal(deviceCaptureFileName("../../iPad: Air/(M4)", at, "mp4"), "iPad-Air-M4-2026-10-08-140509.mp4");
+  assert.equal(
+    deviceCaptureFileName("iPhone 17 Pro", at, "png"),
+    "iPhone-17-Pro-2026-10-08-140509.png",
+  );
+  assert.equal(
+    deviceCaptureFileName("../../iPad: Air/(M4)", at, "mp4"),
+    "iPad-Air-M4-2026-10-08-140509.mp4",
+  );
   assert.equal(deviceCaptureFileName("///", at, "mp4"), "Simulator-2026-10-08-140509.mp4");
   assert.ok(!deviceCaptureFileName("a/b\\c", at, "png").includes("/"));
 });
@@ -98,7 +128,11 @@ test("recording info and save results are parsed fail-closed", () => {
     stoppedAt: 2,
     reason: "max-duration",
   };
-  assert.deepEqual(parseDeviceRecordingInfo({ ...info, file: "/tmp/secret.mp4" }), info, "the temp path is dropped");
+  assert.deepEqual(
+    parseDeviceRecordingInfo({ ...info, file: "/tmp/secret.mp4" }),
+    info,
+    "the temp path is dropped",
+  );
   assert.equal(parseDeviceRecordingInfo({ ...info, status: "uploading" }), null);
   assert.equal(parseDeviceRecordingInfo({ ...info, id: "x" }), null);
   assert.equal(parseDeviceRecordingInfo({ ...info, reason: "crash" }), null);
@@ -109,6 +143,8 @@ test("recording info and save results are parsed fail-closed", () => {
     status: "saved",
     path: "/Users/me/Downloads/a.png",
   });
-  assert.deepEqual(parseDeviceSaveResult({ status: "cancelled", path: "/x" }), { status: "cancelled" });
+  assert.deepEqual(parseDeviceSaveResult({ status: "cancelled", path: "/x" }), {
+    status: "cancelled",
+  });
   assert.equal(parseDeviceSaveResult({ status: "saved", path: "relative.png" }), null);
 });

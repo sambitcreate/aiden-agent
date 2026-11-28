@@ -125,8 +125,7 @@ const SUBAGENT_FILE_MUTATOR_EXECUTABLE = "aiden-subagent-file-mutator";
 const SUBAGENT_SHELL_RUNNER_EXECUTABLE = "aiden-subagent-shell-runner";
 const FOUNDATION_MODELS_HELPER_APP = "Aiden Foundation Models Helper.app";
 const FOUNDATION_MODELS_HELPER_EXECUTABLE = "aiden-foundation-models-helper";
-const FOUNDATION_MODELS_HELPER_BUNDLE_ID =
-  "com.sambitcreate.aiden-agent.foundation-models-helper";
+const FOUNDATION_MODELS_HELPER_BUNDLE_ID = "com.sambitcreate.aiden-agent.foundation-models-helper";
 const REQUIRED_UNIVERSAL_ARCHITECTURES = Object.freeze(["arm64", "x86_64"]);
 const ELECTRON_HELPER_SUFFIXES = Object.freeze(["", " (GPU)", " (Plugin)", " (Renderer)"]);
 
@@ -182,8 +181,10 @@ const PACKAGE_ROOT_MANIFEST = /\/node_modules\/((?:@[^/]+\/)?[^/]+)\/package\.js
 export function productionLockfilePackages(lockfile) {
   const packages = new Set();
   for (const [key, metadata] of Object.entries(lockfile?.packages ?? {})) {
-    if (!key.includes("node_modules/") || metadata?.dev === true || metadata?.link === true) continue;
-    const name = metadata.name ?? key.slice(key.lastIndexOf("node_modules/") + "node_modules/".length);
+    if (!key.includes("node_modules/") || metadata?.dev === true || metadata?.link === true)
+      continue;
+    const name =
+      metadata.name ?? key.slice(key.lastIndexOf("node_modules/") + "node_modules/".length);
     packages.add(`${name}@${metadata.version}`);
   }
   return packages;
@@ -203,7 +204,8 @@ export function assertSlimPackagedEntries(entries, { manifests = [], productionP
     const entry = raw.replaceAll("\\", "/");
     if (entry.endsWith(".map")) problems.push(`source map ${entry}`);
     else if (/\.d\.[cm]?ts$/u.test(entry)) problems.push(`type declaration ${entry}`);
-    else if (/\/node_modules\/(?:esbuild|@esbuild\/[^/]+)(?:\/|$)/u.test(entry)) problems.push(`esbuild toolchain ${entry}`);
+    else if (/\/node_modules\/(?:esbuild|@esbuild\/[^/]+)(?:\/|$)/u.test(entry))
+      problems.push(`esbuild toolchain ${entry}`);
   }
   if (productionPackages) {
     for (const { entry, name, version } of manifests) {
@@ -867,12 +869,18 @@ export async function verifyPackagedLume(
   await verifyReviewedResource(paths.outerLicenseNotice, reviewedLicense);
 
   const bundle = await lstat(paths.lumeApp);
-  if (!bundle.isDirectory() || bundle.isSymbolicLink() || (await realpath(paths.lumeApp)) !== paths.lumeApp) {
+  if (
+    !bundle.isDirectory() ||
+    bundle.isSymbolicLink() ||
+    (await realpath(paths.lumeApp)) !== paths.lumeApp
+  ) {
     throw new Error(`Expected a regular non-symlinked lume.app: ${paths.lumeApp}`);
   }
   const tree = (await collectComputerUseHelperTree(paths.lumeApp)).sort();
   if (JSON.stringify(tree) !== JSON.stringify([...LUME_APP_TREE])) {
-    throw new Error(`The packaged lume.app tree differs from the pinned release: ${tree.join(", ")}`);
+    throw new Error(
+      `The packaged lume.app tree differs from the pinned release: ${tree.join(", ")}`,
+    );
   }
   const binary = await assertRegularFile(paths.binary);
   assertComputerUseExecutableMode(binary.mode, paths.binary);
@@ -889,7 +897,9 @@ export async function verifyPackagedLume(
   if (profile.size === 0) throw new Error("The packaged Lume provisioning profile is empty.");
 
   const plistValue = async (key) =>
-    (await runCommand("/usr/bin/plutil", ["-extract", key, "raw", "-o", "-", paths.infoPlist])).stdout.trim();
+    (
+      await runCommand("/usr/bin/plutil", ["-extract", key, "raw", "-o", "-", paths.infoPlist])
+    ).stdout.trim();
   if ((await plistValue("CFBundleIdentifier")) !== LUME_ARTIFACT_PROVENANCE.bundleIdentifier) {
     throw new Error(`Unexpected Lume bundle identifier in ${paths.infoPlist}`);
   }
@@ -927,11 +937,7 @@ export async function verifyMacPackage(appPath) {
     "Helpers",
     FOUNDATION_MODELS_HELPER_APP,
   );
-  const foundationModelsInfoPlist = path.join(
-    foundationModelsHelper,
-    "Contents",
-    "Info.plist",
-  );
+  const foundationModelsInfoPlist = path.join(foundationModelsHelper, "Contents", "Info.plist");
   const foundationModelsExecutable = path.join(
     foundationModelsHelper,
     "Contents",
@@ -1043,11 +1049,11 @@ export async function verifyMacPackage(appPath) {
     (await readInfoPlistValue(foundationModelsInfoPlist, "CFBundleExecutable")) !==
     FOUNDATION_MODELS_HELPER_EXECUTABLE
   ) {
-    throw new Error(`Unexpected Foundation Models helper executable in ${foundationModelsInfoPlist}`);
+    throw new Error(
+      `Unexpected Foundation Models helper executable in ${foundationModelsInfoPlist}`,
+    );
   }
-  if (
-    (await readInfoPlistValue(foundationModelsInfoPlist, "LSMinimumSystemVersion")) !== "26.0"
-  ) {
+  if ((await readInfoPlistValue(foundationModelsInfoPlist, "LSMinimumSystemVersion")) !== "26.0") {
     throw new Error(
       `Unexpected Foundation Models helper minimum system version in ${foundationModelsInfoPlist}`,
     );

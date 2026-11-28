@@ -8,14 +8,9 @@ function lastLanPort(firstLanPort: number): number {
   return firstLanPort + (AIDEN_REMOTE_PORT_PAIR_CANDIDATE_COUNT - 1) * 2;
 }
 
-export function isAidenRemoteReservedLanPort(
-  port: number,
-  profile: RuntimeProfileId,
-): boolean {
+export function isAidenRemoteReservedLanPort(port: number, profile: RuntimeProfileId): boolean {
   const firstLanPort = aidenRemoteDefaultLanPort(profile);
-  return Number.isInteger(port)
-    && port >= firstLanPort
-    && port <= lastLanPort(firstLanPort);
+  return Number.isInteger(port) && port >= firstLanPort && port <= lastLanPort(firstLanPort);
 }
 
 export function aidenRemoteDefaultLanPort(profile: RuntimeProfileId): number {
@@ -31,21 +26,17 @@ export function aidenRemotePortCandidatesForRange(
   const values: number[] = [];
   const add = (port: number) => {
     if (
-      Number.isInteger(port)
-      && port > 0
-      && port < 65_535
-      && port % 2 === 0
-      && !values.includes(port)
+      Number.isInteger(port) &&
+      port > 0 &&
+      port < 65_535 &&
+      port % 2 === 0 &&
+      !values.includes(port)
     ) {
       values.push(port);
     }
   };
   add(preferredPort);
-  for (
-    let index = 0;
-    index < AIDEN_REMOTE_PORT_PAIR_CANDIDATE_COUNT;
-    index += 1
-  ) {
+  for (let index = 0; index < AIDEN_REMOTE_PORT_PAIR_CANDIDATE_COUNT; index += 1) {
     add(firstDynamicLanPort + index * 2);
   }
   return values.slice(0, AIDEN_REMOTE_PORT_PAIR_CANDIDATE_COUNT);
@@ -59,8 +50,5 @@ export function aidenRemotePortCandidatesForProfile(
   const safePreferredPort = isAidenRemoteReservedLanPort(preferredPort, otherProfile)
     ? aidenRemoteDefaultLanPort(profile)
     : preferredPort;
-  return aidenRemotePortCandidatesForRange(
-    safePreferredPort,
-    aidenRemoteDefaultLanPort(profile),
-  );
+  return aidenRemotePortCandidatesForRange(safePreferredPort, aidenRemoteDefaultLanPort(profile));
 }

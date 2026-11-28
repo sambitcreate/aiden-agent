@@ -33,12 +33,11 @@ export class SubagentNetworkBudgetV2 {
     if (!existing && this.entries.size >= MAX_SUBAGENT_NETWORK_BUDGETS) {
       throw new Error("Too many subagent network budgets are active.");
     }
-    const entry =
-      existing ?? {
-        signature: exact,
-        used: 0,
-        maximum: authority.budgets.maxNetworkOperations,
-      };
+    const entry = existing ?? {
+      signature: exact,
+      used: 0,
+      maximum: authority.budgets.maxNetworkOperations,
+    };
     if (entry.used >= entry.maximum) {
       throw new Error("Subagent network operation budget exhausted.");
     }

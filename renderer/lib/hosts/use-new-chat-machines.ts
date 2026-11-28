@@ -11,7 +11,10 @@ import { newChatMachines, type NewChatMachine } from "./new-chat-targets";
  */
 export function useNewChatMachines(): NewChatMachine[] {
   const list = useQuery<PeerHostView[]>({ queryKey: hostQueryKeys.list(), queryFn: skipToken });
-  const statuses = useQuery<PeerHostStatus[]>({ queryKey: hostQueryKeys.statuses(), queryFn: skipToken });
+  const statuses = useQuery<PeerHostStatus[]>({
+    queryKey: hostQueryKeys.statuses(),
+    queryFn: skipToken,
+  });
   const { platform } = useAppCapabilities();
   return React.useMemo(
     () => newChatMachines(list.data ?? [], statuses.data ?? [], platform),

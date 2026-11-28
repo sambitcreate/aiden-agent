@@ -13,8 +13,21 @@ import {
 } from "./workspace-menu";
 import { workspaceCloneId } from "../shared/workspace-intake";
 
-function workspace(id: string, name: string, createdAt: number, extra: Partial<Workspace> = {}): Workspace {
-  return { id, name, folderPath: `/Users/me/projects/${name}`, permission: "ask", createdAt, updatedAt: createdAt, ...extra };
+function workspace(
+  id: string,
+  name: string,
+  createdAt: number,
+  extra: Partial<Workspace> = {},
+): Workspace {
+  return {
+    id,
+    name,
+    folderPath: `/Users/me/projects/${name}`,
+    permission: "ask",
+    createdAt,
+    updatedAt: createdAt,
+    ...extra,
+  };
 }
 
 // Seven workspaces, newest first by creation time (no chats).
@@ -27,7 +40,9 @@ const choices = newChatWorkspaceChoices(
 
 test("only /, ~ and . start a path query", () => {
   assert.deepEqual(
-    ["/tmp", "~/code", "./sub", "../up", " ~/padded", "api", "projects/x", ""].map(isWorkspacePathQuery),
+    ["/tmp", "~/code", "./sub", "../up", " ~/padded", "api", "projects/x", ""].map(
+      isWorkspacePathQuery,
+    ),
     [true, true, true, true, true, false, false, false],
   );
 });
@@ -35,7 +50,10 @@ test("only /, ~ and . start a path query", () => {
 test("an empty query lists the five most recent and offers the rest behind All workspaces", () => {
   const recent = workspaceMenuList(choices, { query: "", expanded: false });
   assert.equal(recent.heading, "Recent");
-  assert.deepEqual(recent.rows.map((row) => row.workspace.name), ["web", "api", "docs", "infra", "mobile"]);
+  assert.deepEqual(
+    recent.rows.map((row) => row.workspace.name),
+    ["web", "api", "docs", "infra", "mobile"],
+  );
   assert.equal(recent.allCount, 7);
 
   const all = workspaceMenuList(choices, { query: "", expanded: true });
@@ -56,10 +74,17 @@ test("typing searches every workspace, including ones past the recent five, by n
   assert.equal(byName.rows[0]?.workspace.name, "notes");
 
   const byFolder = workspaceMenuList(
-    newChatWorkspaceChoices([workspace("x", "client", 1, { folderPath: "/Volumes/work/acme-portal" })], [], undefined),
+    newChatWorkspaceChoices(
+      [workspace("x", "client", 1, { folderPath: "/Volumes/work/acme-portal" })],
+      [],
+      undefined,
+    ),
     { query: "acme", expanded: false },
   );
-  assert.deepEqual(byFolder.rows.map((row) => row.workspace.id), ["x"]);
+  assert.deepEqual(
+    byFolder.rows.map((row) => row.workspace.id),
+    ["x"],
+  );
   assert.equal(workspaceMenuList(choices, { query: "zzzz", expanded: false }).rows.length, 0);
 });
 
@@ -71,7 +96,11 @@ test("a path query lists no workspace rows; the path row answers it", () => {
 test("each inspection maps to the row the menu offers", () => {
   const workspaces = [workspace("api", "api", 1)];
   assert.deepEqual(
-    workspacePathRow("~/projects/api", { kind: "existing-workspace", workspaceId: "api", path: "/Users/me/projects/api" }, workspaces),
+    workspacePathRow(
+      "~/projects/api",
+      { kind: "existing-workspace", workspaceId: "api", path: "/Users/me/projects/api" },
+      workspaces,
+    ),
     {
       action: "select",
       input: "~/projects/api",
@@ -81,14 +110,21 @@ test("each inspection maps to the row the menu offers", () => {
       detail: "Already a workspace",
     },
   );
-  assert.deepEqual(workspacePathRow("~/repo", { kind: "folder", path: "/Users/me/repo", isGitRepo: true }, []), {
-    action: "open",
-    input: "~/repo",
-    path: "/Users/me/repo",
-    label: "Open /Users/me/repo",
-    detail: "Git repository",
-  });
-  const plain = workspacePathRow("~/plain", { kind: "folder", path: "/Users/me/plain", isGitRepo: false }, []);
+  assert.deepEqual(
+    workspacePathRow("~/repo", { kind: "folder", path: "/Users/me/repo", isGitRepo: true }, []),
+    {
+      action: "open",
+      input: "~/repo",
+      path: "/Users/me/repo",
+      label: "Open /Users/me/repo",
+      detail: "Git repository",
+    },
+  );
+  const plain = workspacePathRow(
+    "~/plain",
+    { kind: "folder", path: "/Users/me/plain", isGitRepo: false },
+    [],
+  );
   assert.equal(plain.action === "open" ? plain.detail : "wrong action", undefined);
   assert.deepEqual(workspacePathRow("~/new", { kind: "creatable", path: "/Users/me/new" }, []), {
     action: "create",
@@ -97,20 +133,34 @@ test("each inspection maps to the row the menu offers", () => {
     label: "Create folder and open /Users/me/new",
   });
   assert.deepEqual(
-    workspacePathRow("~/a/b", { kind: "invalid", code: "parent-missing", reason: "The parent folder doesn't exist." }, []),
+    workspacePathRow(
+      "~/a/b",
+      { kind: "invalid", code: "parent-missing", reason: "The parent folder doesn't exist." },
+      [],
+    ),
     { action: "invalid", input: "~/a/b", message: "The parent folder doesn't exist." },
   );
 });
 
 test("a registered folder the renderer has not listed yet is named by its path", () => {
-  const row = workspacePathRow("/srv/app", { kind: "existing-workspace", workspaceId: "unlisted", path: "/srv/app" }, []);
+  const row = workspacePathRow(
+    "/srv/app",
+    { kind: "existing-workspace", workspaceId: "unlisted", path: "/srv/app" },
+    [],
+  );
   assert.equal(row.action === "select" ? row.label : "", "/srv/app");
 });
 
 test("clone failures read as main's sentence, cancellation shows nothing, and a stranded clone says where it is", () => {
-  assert.equal(cloneFailureMessage({ ok: false, code: "cancelled", reason: "Clone cancelled." }, "darwin"), null);
   assert.equal(
-    cloneFailureMessage({ ok: false, code: "not-found", reason: "That repository wasn't found." }, "darwin"),
+    cloneFailureMessage({ ok: false, code: "cancelled", reason: "Clone cancelled." }, "darwin"),
+    null,
+  );
+  assert.equal(
+    cloneFailureMessage(
+      { ok: false, code: "not-found", reason: "That repository wasn't found." },
+      "darwin",
+    ),
     "That repository wasn't found.",
   );
   assert.equal(
@@ -118,17 +168,26 @@ test("clone failures read as main's sentence, cancellation shows nothing, and a 
     "Git couldn't reach that host. Check the URL and your connection.",
   );
   assert.equal(
-    cloneFailureMessage({
-      ok: false,
-      code: "register-failed",
-      reason: "Aiden couldn't add that folder.",
-      destination: "/Users/me/projects/site",
-    }, "darwin"),
+    cloneFailureMessage(
+      {
+        ok: false,
+        code: "register-failed",
+        reason: "Aiden couldn't add that folder.",
+        destination: "/Users/me/projects/site",
+      },
+      "darwin",
+    ),
     "Aiden couldn't add that folder. It is in /Users/me/projects/site.",
   );
   // The fallback names this computer the way its platform does.
-  assert.equal(cloneFailureMessage({ ok: false, code: "git-unavailable", reason: "" }, "darwin"), "Git isn't available on this Mac.");
-  assert.equal(cloneFailureMessage({ ok: false, code: "git-unavailable", reason: "" }, "linux"), "Git isn't available on this computer.");
+  assert.equal(
+    cloneFailureMessage({ ok: false, code: "git-unavailable", reason: "" }, "darwin"),
+    "Git isn't available on this Mac.",
+  );
+  assert.equal(
+    cloneFailureMessage({ ok: false, code: "git-unavailable", reason: "" }, "linux"),
+    "Git isn't available on this computer.",
+  );
 });
 
 test("clone progress names Git's phase and a clamped whole percentage", () => {
@@ -156,6 +215,12 @@ test("a busy draft names the first thing to wait for", () => {
   const idle = { sending: false, generating: false, gitBusy: false };
   assert.equal(workspaceChangeBusyReason(idle), undefined);
   assert.match(workspaceChangeBusyReason({ ...idle, gitBusy: true }) ?? "", /Git operation/u);
-  assert.match(workspaceChangeBusyReason({ ...idle, generating: true, gitBusy: true }) ?? "", /current response/u);
-  assert.match(workspaceChangeBusyReason({ sending: true, generating: true, gitBusy: true }) ?? "", /finish sending/u);
+  assert.match(
+    workspaceChangeBusyReason({ ...idle, generating: true, gitBusy: true }) ?? "",
+    /current response/u,
+  );
+  assert.match(
+    workspaceChangeBusyReason({ sending: true, generating: true, gitBusy: true }) ?? "",
+    /finish sending/u,
+  );
 });

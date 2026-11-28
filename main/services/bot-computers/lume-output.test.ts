@@ -3,9 +3,15 @@ import { readFileSync } from "node:fs";
 import path from "node:path";
 import test from "node:test";
 
-import { classifyLumeError, isLoopbackHost, parseLumeVmInfo, parseLumeVmList } from "./lume-output.js";
+import {
+  classifyLumeError,
+  isLoopbackHost,
+  parseLumeVmInfo,
+  parseLumeVmList,
+} from "./lume-output.js";
 
-const fixture = (name: string) => readFileSync(path.resolve("main/services/bot-computers/fixtures", name), "utf8");
+const fixture = (name: string) =>
+  readFileSync(path.resolve("main/services/bot-computers/fixtures", name), "utf8");
 
 test("a running VM reports its IP and loopback VNC endpoint, never its password", () => {
   const info = parseLumeVmInfo(fixture("lume-get-running.json"));
@@ -51,13 +57,21 @@ test("errors map to the VM limit, a missing VM, a stale VM, or a stopped one", (
   assert.equal(classifyLumeError(fixture("lume-error-vm-limit.txt"), 1), "vm_limit");
   assert.equal(classifyLumeError(fixture("lume-error-not-found.txt"), 1), "not_found");
   assert.equal(classifyLumeError("Error: VM 'aiden-base' not found\n", 1), "not_found");
-  assert.equal(classifyLumeError("Error: Virtual machine is still being provisioned: aiden-base\n", 1), "stale");
-  assert.equal(classifyLumeError("Error: Virtual machine not running: aiden-base\n", 1), "not_running");
+  assert.equal(
+    classifyLumeError("Error: Virtual machine is still being provisioned: aiden-base\n", 1),
+    "stale",
+  );
+  assert.equal(
+    classifyLumeError("Error: Virtual machine not running: aiden-base\n", 1),
+    "not_running",
+  );
   assert.equal(classifyLumeError("Error: Disk full\n", 1), "other");
   assert.equal(classifyLumeError(fixture("lume-error-vm-limit.txt"), 0), "other");
 });
 
 test("only loopback hosts count as private (G22)", () => {
-  for (const host of ["127.0.0.1", "::1", "[::1]", "localhost"]) assert.equal(isLoopbackHost(host), true, host);
-  for (const host of ["192.168.1.20", "0.0.0.0", "10.0.0.5", "fe80::1"]) assert.equal(isLoopbackHost(host), false, host);
+  for (const host of ["127.0.0.1", "::1", "[::1]", "localhost"])
+    assert.equal(isLoopbackHost(host), true, host);
+  for (const host of ["192.168.1.20", "0.0.0.0", "10.0.0.5", "fe80::1"])
+    assert.equal(isLoopbackHost(host), false, host);
 });

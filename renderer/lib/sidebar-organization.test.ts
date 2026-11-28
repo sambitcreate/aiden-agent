@@ -25,7 +25,13 @@ const HOUR = 3_600_000;
 const NOW = new Date(2026, 5, 15, 12, 0, 0).getTime();
 
 const projects: SidebarProjectSummary[] = [
-  { key: "local:alpha", name: "Alpha", searchText: "Alpha /code/alpha", createdAt: 10, lastActivityAt: NOW - 50 * HOUR },
+  {
+    key: "local:alpha",
+    name: "Alpha",
+    searchText: "Alpha /code/alpha",
+    createdAt: 10,
+    lastActivityAt: NOW - 50 * HOUR,
+  },
   { key: "local:beta", name: "Beta", createdAt: 30, lastActivityAt: NOW - 60 * HOUR },
   { key: "local:gamma", name: "Gamma", createdAt: 20, lastActivityAt: NOW - 70 * HOUR },
 ];
@@ -38,7 +44,9 @@ function chat(
   return { key, projectKey, title: key, ...overrides };
 }
 
-function input(overrides: Partial<SidebarOrganizeInput<SidebarProjectSummary, SidebarChatSummary>>) {
+function input(
+  overrides: Partial<SidebarOrganizeInput<SidebarProjectSummary, SidebarChatSummary>>,
+) {
   return {
     projects,
     chats: [],
@@ -69,7 +77,11 @@ test("workspace activity includes its newest chat and missing timestamps sort la
   );
   assert.deepEqual(groupKeys(result), ["local:gamma", "local:alpha", "local:beta"]);
   assert.equal(result.projectGroups[0].lastActivityAt, NOW - HOUR);
-  assert.deepEqual(keys(result.projectGroups[1].chats), ["alpha-dated", "alpha-nan", "alpha-undated"]);
+  assert.deepEqual(keys(result.projectGroups[1].chats), [
+    "alpha-dated",
+    "alpha-nan",
+    "alpha-undated",
+  ]);
 });
 
 test("chats sort by creation time when chosen, with title and key breaking ties", () => {
@@ -84,12 +96,10 @@ test("chats sort by creation time when chosen, with title and key breaking ties"
       ],
     }),
   );
-  assert.deepEqual(keys(result.projectGroups.find((group) => group.project.key === "local:alpha")!.chats), [
-    "newest",
-    "aardvark",
-    "a-key",
-    "b-key",
-  ]);
+  assert.deepEqual(
+    keys(result.projectGroups.find((group) => group.project.key === "local:alpha")!.chats),
+    ["newest", "aardvark", "a-key", "b-key"],
+  );
 });
 
 test("the latest chat is the most recently active one under either chat sort", () => {
@@ -121,10 +131,11 @@ test("workspaces sort by creation time or by identical names deterministically",
     { key: "local:twin-a", name: "Twin" },
     { key: "local:dated", name: "Zulu", createdAt: 1 },
   ];
-  assert.deepEqual(
-    groupKeys(organizeSidebar(input({ projects: twins, projectSort: "created" }))),
-    ["local:dated", "local:twin-a", "local:twin-b"],
-  );
+  assert.deepEqual(groupKeys(organizeSidebar(input({ projects: twins, projectSort: "created" }))), [
+    "local:dated",
+    "local:twin-a",
+    "local:twin-b",
+  ]);
 });
 
 test("manual order keeps stored keys first, ignores stale keys, and appends new workspaces", () => {
@@ -154,10 +165,10 @@ test("search keeps every chat of a matching workspace and only matching chats el
   const byTitle = organizeSidebar(input({ chats, search: "ship", view: "recent" }));
   assert.deepEqual(groupKeys(byTitle), ["local:alpha", "local:beta"]);
   assert.deepEqual(keys(byTitle.projectGroups[0].chats), ["alpha-2"]);
-  assert.deepEqual(
-    byTitle.chatSections.flatMap((section) => keys(section.chats)).sort(),
-    ["alpha-2", "beta-1"],
-  );
+  assert.deepEqual(byTitle.chatSections.flatMap((section) => keys(section.chats)).sort(), [
+    "alpha-2",
+    "beta-1",
+  ]);
 });
 
 test("recent view buckets by the chosen timestamp and puts undated chats in Older", () => {
@@ -200,7 +211,11 @@ test("displayed chats follow the visible rows: collapsed groups, previews, and s
   ];
   // Manual order puts the most active workspace (gamma) last on screen.
   const organized = organizeSidebar(
-    input({ chats, projectSort: "manual", projectOrder: ["local:beta", "local:alpha", "local:gamma"] }),
+    input({
+      chats,
+      projectSort: "manual",
+      projectOrder: ["local:beta", "local:alpha", "local:gamma"],
+    }),
   );
   const options = {
     search: "",
@@ -225,7 +240,10 @@ test("displayed chats follow the visible rows: collapsed groups, previews, and s
   const recent = organizeSidebar(input({ chats, view: "recent" }));
   assert.deepEqual(
     displayedSidebarChats(recent, "recent", options).map((section) => keys(section.chats)),
-    [["alpha-1", "alpha-2", "alpha-3", "gamma-1"], ["beta-1", "beta-2"]],
+    [
+      ["alpha-1", "alpha-2", "alpha-3", "gamma-1"],
+      ["beta-1", "beta-2"],
+    ],
   );
 });
 
@@ -280,15 +298,26 @@ test("legacy preferences migrate and invalid input falls back to defaults", () =
   assert.deepEqual(parseSidebarPreferences("[]"), defaults);
   assert.deepEqual(
     parseSidebarPreferences(
-      JSON.stringify({ organization: "recent", expandedWorkspaceIds: ["alpha", "removed", "alpha", "bad/id"] }),
+      JSON.stringify({
+        organization: "recent",
+        expandedWorkspaceIds: ["alpha", "removed", "alpha", "bad/id"],
+      }),
       ["alpha", "beta"],
     ),
     { ...defaults, view: "recent", expandedWorkspaceIds: ["alpha"] },
   );
-  assert.equal(parseSidebarPreferences(JSON.stringify({ organization: "workspace" })).view, "projects");
+  assert.equal(
+    parseSidebarPreferences(JSON.stringify({ organization: "workspace" })).view,
+    "projects",
+  );
   assert.deepEqual(
     parseSidebarPreferences(
-      JSON.stringify({ view: "nonsense", chatSort: "alphabetical", projectSort: 3, organization: "recent" }),
+      JSON.stringify({
+        view: "nonsense",
+        chatSort: "alphabetical",
+        projectSort: 3,
+        organization: "recent",
+      }),
     ),
     { ...defaults, view: "recent" },
   );
@@ -297,24 +326,43 @@ test("legacy preferences migrate and invalid input falls back to defaults", () =
 test("the machine filter and cross-machine grouping tolerate older and malformed stored values", () => {
   // Builds from before multi-host stored neither field.
   const older = parseSidebarPreferences(
-    JSON.stringify({ view: "recent", chatSort: "created", projectSort: "manual", projectOrder: [] }),
+    JSON.stringify({
+      view: "recent",
+      chatSort: "created",
+      projectSort: "manual",
+      projectOrder: [],
+    }),
   );
   assert.equal(older.machineFilter, "all");
   assert.equal(older.projectGrouping, "separate");
   assert.equal(older.view, "recent");
-  for (const machineFilter of ["host:", "host:../escape", "remote:studio", "LOCAL", 7, null, ["local"]]) {
+  for (const machineFilter of [
+    "host:",
+    "host:../escape",
+    "remote:studio",
+    "LOCAL",
+    7,
+    null,
+    ["local"],
+  ]) {
     assert.equal(
       parseSidebarPreferences(JSON.stringify({ machineFilter })).machineFilter,
       "all",
       JSON.stringify(machineFilter),
     );
   }
-  assert.equal(parseSidebarPreferences(JSON.stringify({ machineFilter: "local" })).machineFilter, "local");
+  assert.equal(
+    parseSidebarPreferences(JSON.stringify({ machineFilter: "local" })).machineFilter,
+    "local",
+  );
   assert.equal(
     parseSidebarPreferences(JSON.stringify({ machineFilter: "host:studio.mac-1" })).machineFilter,
     "host:studio.mac-1",
   );
-  assert.equal(parseSidebarPreferences(JSON.stringify({ projectGrouping: "machine" })).projectGrouping, "separate");
+  assert.equal(
+    parseSidebarPreferences(JSON.stringify({ projectGrouping: "machine" })).projectGrouping,
+    "separate",
+  );
   assert.equal(
     parseSidebarPreferences(JSON.stringify({ projectGrouping: "repository" })).projectGrouping,
     "repository",
@@ -327,7 +375,10 @@ test("the Inbox view and its shelf state are stored, and a downgrade falls back 
   // An older build that doesn't know `inbox` reads the legacy organization: By workspace.
   const olderBuildViews = SIDEBAR_VIEWS.filter((view) => view !== "inbox");
   assert.equal(parseSidebarPreferences(stored, undefined, olderBuildViews).view, "projects");
-  const storedRecent = serializeSidebarPreferences({ ...parseSidebarPreferences(null), view: "recent" });
+  const storedRecent = serializeSidebarPreferences({
+    ...parseSidebarPreferences(null),
+    view: "recent",
+  });
   assert.equal(parseSidebarPreferences(storedRecent, undefined, olderBuildViews).view, "recent");
   // The Inbox replaced Needs attention: a stored `attention` reads as `inbox`,
   // whatever legacy organization was written beside it.
@@ -337,7 +388,9 @@ test("the Inbox view and its shelf state are stored, and a downgrade falls back 
     "inbox",
   );
   // Writing the migrated value keeps the older-build fallback to By workspace.
-  const migrated = serializeSidebarPreferences(parseSidebarPreferences(JSON.stringify({ view: "attention" })));
+  const migrated = serializeSidebarPreferences(
+    parseSidebarPreferences(JSON.stringify({ view: "attention" })),
+  );
   assert.equal(JSON.parse(migrated).view, "inbox");
   assert.equal(JSON.parse(migrated).organization, "workspace");
   for (const workingShelfCollapsed of ["true", 1, null, {}]) {
@@ -347,10 +400,17 @@ test("the Inbox view and its shelf state are stored, and a downgrade falls back 
       JSON.stringify(workingShelfCollapsed),
     );
   }
-  assert.equal(parseSidebarPreferences(JSON.stringify({ workingShelfCollapsed: true })).workingShelfCollapsed, true);
+  assert.equal(
+    parseSidebarPreferences(JSON.stringify({ workingShelfCollapsed: true })).workingShelfCollapsed,
+    true,
+  );
   // The Dock badge switch is on unless the person turned it off; only a literal false does.
   for (const dockBadge of ["false", 0, null, {}]) {
-    assert.equal(parseSidebarPreferences(JSON.stringify({ dockBadge })).dockBadge, true, JSON.stringify(dockBadge));
+    assert.equal(
+      parseSidebarPreferences(JSON.stringify({ dockBadge })).dockBadge,
+      true,
+      JSON.stringify(dockBadge),
+    );
   }
   assert.equal(parseSidebarPreferences(JSON.stringify({ dockBadge: false })).dockBadge, false);
 });
@@ -360,7 +420,14 @@ test("stored preferences round-trip, keep a downgrade-safe organization, and pru
     view: "inbox",
     chatSort: "created",
     projectSort: "manual",
-    projectOrder: ["local:beta", "local:removed", "studio:proj", "local:beta", "garbage", "local:bad%2Fid"],
+    projectOrder: [
+      "local:beta",
+      "local:removed",
+      "studio:proj",
+      "local:beta",
+      "garbage",
+      "local:bad%2Fid",
+    ],
     expandedWorkspaceIds: ["beta"],
     machineFilter: "host:studio",
     projectGrouping: "repository_path",
@@ -380,14 +447,19 @@ test("stored preferences round-trip, keep a downgrade-safe organization, and pru
     dockBadge: false,
   });
   assert.equal(
-    JSON.parse(serializeSidebarPreferences({ ...parseSidebarPreferences(null), view: "recent" })).organization,
+    JSON.parse(serializeSidebarPreferences({ ...parseSidebarPreferences(null), view: "recent" }))
+      .organization,
     "recent",
   );
   const many = Array.from({ length: 700 }, (_, index) => `host:project-${index}`);
-  assert.equal(parseSidebarPreferences(JSON.stringify({ projectOrder: many })).projectOrder.length, 500);
+  assert.equal(
+    parseSidebarPreferences(JSON.stringify({ projectOrder: many })).projectOrder.length,
+    500,
+  );
   const manyExpanded = Array.from({ length: 250 }, (_, index) => `workspace-${index}`);
   assert.equal(
-    parseSidebarPreferences(JSON.stringify({ expandedWorkspaceIds: manyExpanded })).expandedWorkspaceIds.length,
+    parseSidebarPreferences(JSON.stringify({ expandedWorkspaceIds: manyExpanded }))
+      .expandedWorkspaceIds.length,
     200,
   );
 });

@@ -41,7 +41,14 @@ test("provider noise never produces negative or fractional counts", () => {
     cacheWrite: Number.POSITIVE_INFINITY,
     total: 12.7,
   });
-  assert.deepEqual(usage, { input: 0, output: 12, cacheRead: 0, cacheWrite: 0, total: 12, requests: 1 });
+  assert.deepEqual(usage, {
+    input: 0,
+    output: 12,
+    cacheRead: 0,
+    cacheWrite: 0,
+    total: 12,
+    requests: 1,
+  });
 });
 
 test("stored stats replay only when every field is plausible", () => {
@@ -127,12 +134,18 @@ test("the footer lists only facts that are actually known", () => {
       usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0, requests: 1 },
     },
   });
-  assert.deepEqual(zero.map((item) => item.kind), ["duration"]);
+  assert.deepEqual(
+    zero.map((item) => item.kind),
+    ["duration"],
+  );
   assert.deepEqual(turnFooterItems({ model: " " }), []);
 });
 
 test("older messages fall back to a settled timeline for duration", () => {
-  const timeline = (status: GenerationTimeline["status"], finishedAt?: number): GenerationTimeline => ({
+  const timeline = (
+    status: GenerationTimeline["status"],
+    finishedAt?: number,
+  ): GenerationTimeline => ({
     version: 3,
     generationId: "g",
     status,

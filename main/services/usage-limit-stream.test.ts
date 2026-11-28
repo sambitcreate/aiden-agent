@@ -11,8 +11,17 @@ import {
   type SimpleStreamOptions,
 } from "@earendil-works/pi-ai";
 import type { StreamFn } from "@earendil-works/pi-agent-core";
-import { UsageLimitGate, usageLimitKeys, usageLimitMaxWaitMs, type UsageLimitGateClock } from "./usage-limit-core.js";
-import { streamSimpleWaitingOutUsageLimits, withUsageLimitWait, type UsageLimitStreamOptions } from "./usage-limit-stream.js";
+import {
+  UsageLimitGate,
+  usageLimitKeys,
+  usageLimitMaxWaitMs,
+  type UsageLimitGateClock,
+} from "./usage-limit-core.js";
+import {
+  streamSimpleWaitingOutUsageLimits,
+  withUsageLimitWait,
+  type UsageLimitStreamOptions,
+} from "./usage-limit-stream.js";
 
 const NOW = Date.UTC(2026, 9, 26, 15, 0, 0);
 const context = normalizeContext({ messages: [] });
@@ -49,7 +58,9 @@ class FakeClock implements UsageLimitGateClock {
   async advance(ms: number): Promise<void> {
     const end = this.time + ms;
     for (;;) {
-      const due = [...this.timers].filter(([, timer]) => timer.at <= end).sort((a, b) => a[1].at - b[1].at)[0];
+      const due = [...this.timers]
+        .filter(([, timer]) => timer.at <= end)
+        .sort((a, b) => a[1].at - b[1].at)[0];
       if (!due) break;
       this.timers.delete(due[0]);
       this.time = Math.max(this.time, due[1].at);
@@ -72,7 +83,11 @@ type Script =
   | { kind: "fail-after-text"; text: string; message: string }
   | { kind: "hang" };
 
-function scripted(m: Model<Api>, script: Script, options: SimpleStreamOptions | undefined): AssistantMessageEventStream {
+function scripted(
+  m: Model<Api>,
+  script: Script,
+  options: SimpleStreamOptions | undefined,
+): AssistantMessageEventStream {
   const stream = createAssistantMessageEventStream();
   void (async () => {
     await Promise.resolve();
@@ -81,7 +96,8 @@ function scripted(m: Model<Api>, script: Script, options: SimpleStreamOptions | 
     stream.push({ type: "start", partial: start });
     if (script.kind === "hang") return;
     if (script.kind === "reject") {
-      if (script.status !== undefined) await options?.onResponse?.({ status: script.status, headers: script.headers ?? {} }, m);
+      if (script.status !== undefined)
+        await options?.onResponse?.({ status: script.status, headers: script.headers ?? {} }, m);
       const error = fauxAssistantMessage("", { stopReason: "error", errorMessage: script.message });
       error.content = [];
       stream.push({ type: "error", reason: "error", error });
@@ -93,7 +109,10 @@ function scripted(m: Model<Api>, script: Script, options: SimpleStreamOptions | 
     stream.push({ type: "text_delta", contentIndex: 0, delta: script.text, partial });
     stream.push({ type: "text_end", contentIndex: 0, content: script.text, partial });
     if (script.kind === "fail-after-text") {
-      const error = fauxAssistantMessage(script.text, { stopReason: "error", errorMessage: script.message });
+      const error = fauxAssistantMessage(script.text, {
+        stopReason: "error",
+        errorMessage: script.message,
+      });
       stream.push({ type: "error", reason: "error", error });
     } else {
       stream.push({ type: "done", reason: "stop", message: fauxAssistantMessage(script.text) });
@@ -131,7 +150,8 @@ async function read(stream: AssistantMessageEventStream): Promise<AssistantMessa
   return events;
 }
 
-const RATE_LIMITED = '429 {"type":"error","error":{"type":"rate_limit_error","message":"Number of request tokens has exceeded your per-minute rate limit"}}';
+const RATE_LIMITED =
+  '429 {"type":"error","error":{"type":"rate_limit_error","message":"Number of request tokens has exceeded your per-minute rate limit"}}';
 
 test("a chat reaching its cap during a rate-limit wait gives up the probe without sending", async () => {
   let refusal: string | undefined;
@@ -146,17 +166,27 @@ test("a chat reaching its cap during a rate-limit wait gives up the probe withou
   await clock.advance(15_000);
   assert.equal((await (await pending).result()).errorMessage, refusal);
   assert.equal(calls.length, 1);
-  assert.ok(gate.entry(usageLimitKeys("anthropic", "opus").model), "only a provider response can clear the limit");
+  assert.ok(
+    gate.entry(usageLimitKeys("anthropic", "opus").model),
+    "only a provider response can clear the limit",
+  );
 });
 
 test("a rate limit before any content waits for the reset and sends the same request again", async () => {
   const { clock, calls, streamFn, gate } = fixture([
-    { kind: "reject", message: RATE_LIMITED, status: 429, headers: { "retry-after": "40", "x-request-id": "secret-id" } },
+    {
+      kind: "reject",
+      message: RATE_LIMITED,
+      status: 429,
+      headers: { "retry-after": "40", "x-request-id": "secret-id" },
+    },
     { kind: "text", text: "Hello again" },
   ]);
   const signal = new AbortController().signal;
   let resolved: AssistantMessageEventStream | undefined;
-  void Promise.resolve(streamFn(model(), context, { signal, maxTokens: 123 })).then((stream) => (resolved = stream));
+  void Promise.resolve(streamFn(model(), context, { signal, maxTokens: 123 })).then(
+    (stream) => (resolved = stream),
+  );
   await settle();
   assert.equal(calls.length, 1);
   assert.equal(resolved, undefined);
@@ -183,7 +213,9 @@ test("a rate limit before any content waits for the reset and sends the same req
 });
 
 test("a failure after content goes through as it does today", async () => {
-  const { calls, streamFn } = fixture([{ kind: "fail-after-text", text: "Half an", message: RATE_LIMITED }]);
+  const { calls, streamFn } = fixture([
+    { kind: "fail-after-text", text: "Half an", message: RATE_LIMITED },
+  ]);
   const stream = await streamFn(model(), context, {});
   const events = await read(stream);
   assert.deepEqual(
@@ -195,9 +227,14 @@ test("a failure after content goes through as it does today", async () => {
 });
 
 test("errors that are not usage limits are not retried", async () => {
-  const { calls, streamFn, gate } = fixture([{ kind: "reject", message: '400 {"error":{"message":"invalid tool schema"}}', status: 400 }]);
+  const { calls, streamFn, gate } = fixture([
+    { kind: "reject", message: '400 {"error":{"message":"invalid tool schema"}}', status: 400 },
+  ]);
   const stream = await streamFn(model(), context, {});
-  assert.equal((await stream.result()).errorMessage, '400 {"error":{"message":"invalid tool schema"}}');
+  assert.equal(
+    (await stream.result()).errorMessage,
+    '400 {"error":{"message":"invalid tool schema"}}',
+  );
   assert.equal(calls.length, 1);
   assert.deepEqual(gate.snapshot(), []);
 });
@@ -217,7 +254,10 @@ test("rejected responses are read through fetch only where the provider adapter 
   const seen: string[] = [];
   const hostFetch = (async (input: string | URL | Request) => {
     seen.push(String(input));
-    return new Response("{}", { status: 429, headers: { "retry-after": "90", "set-cookie": "a=b" } });
+    return new Response("{}", {
+      status: 429,
+      headers: { "retry-after": "90", "set-cookie": "a=b" },
+    });
   }) as typeof fetch;
   await read(await streamFn(model("openai-responses"), context, { fetch: hostFetch }));
   const response = await calls[2]!.fetch!("https://fixture.invalid/v1/responses");
@@ -246,9 +286,15 @@ test("the provider's retry header read through fetch decides the wait", async ()
     now: clock.now,
     random: () => 0,
   });
-  const hostFetch = (async () => new Response("{}", { status: 429, headers: { "retry-after": "600" } })) as unknown as typeof fetch;
+  const hostFetch = (async () =>
+    new Response("{}", {
+      status: 429,
+      headers: { "retry-after": "600" },
+    })) as unknown as typeof fetch;
   let stream: AssistantMessageEventStream | undefined;
-  void Promise.resolve(streamFn(model(), context, { fetch: hostFetch })).then((value) => (stream = value));
+  void Promise.resolve(streamFn(model(), context, { fetch: hostFetch })).then(
+    (value) => (stream = value),
+  );
   await settle();
   await clock.advance(604_999);
   assert.equal(calls.length, 1);
@@ -260,25 +306,40 @@ test("the provider's retry header read through fetch decides the wait", async ()
 test("a limit past the longest wait fails at once with its reset time, and turns the next request away", async () => {
   const resetSeconds = 7 * 3_600;
   const { calls, streamFn, gate } = fixture([
-    { kind: "reject", message: "You have hit your ChatGPT usage limit (plus plan). Try again in ~420 min." },
+    {
+      kind: "reject",
+      message: "You have hit your ChatGPT usage limit (plus plan). Try again in ~420 min.",
+    },
   ]);
   const stream = await streamFn(model(), context, {});
   const message = await stream.result();
   assert.equal(message.stopReason, "error");
-  assert.match(message.errorMessage ?? "", /^You have hit your ChatGPT usage limit \(plus plan\)\. Try again in ~420 min\.\n\nAiden stopped waiting: the limit resets /u);
+  assert.match(
+    message.errorMessage ?? "",
+    /^You have hit your ChatGPT usage limit \(plus plan\)\. Try again in ~420 min\.\n\nAiden stopped waiting: the limit resets /u,
+  );
   assert.match(message.errorMessage ?? "", /after the longest wait you set \(6 hours\)\.$/u);
   assert.equal(gate.entry("anthropic")?.resetAt, NOW + resetSeconds * 1_000);
 
   const next = await streamFn(model(), context, {});
   const refused = await next.result();
   assert.equal(calls.length, 1);
-  assert.match(refused.errorMessage ?? "", /^Claude is still at its usage limit, and Aiden stopped waiting for it a few minutes ago\. It resets /u);
+  assert.match(
+    refused.errorMessage ?? "",
+    /^Claude is still at its usage limit, and Aiden stopped waiting for it a few minutes ago\. It resets /u,
+  );
 });
 
 test("with waiting off, a limit fails as it does today and nothing is held", async () => {
-  const { calls, streamFn, gate } = fixture([{ kind: "reject", message: RATE_LIMITED, status: 429 }, { kind: "text", text: "ok" }], {
-    maxWaitMs: () => 0,
-  });
+  const { calls, streamFn, gate } = fixture(
+    [
+      { kind: "reject", message: RATE_LIMITED, status: 429 },
+      { kind: "text", text: "ok" },
+    ],
+    {
+      maxWaitMs: () => 0,
+    },
+  );
   const failed = await (await streamFn(model(), context, {})).result();
   assert.equal(failed.errorMessage, RATE_LIMITED);
   assert.deepEqual(gate.snapshot(), []);
@@ -289,16 +350,31 @@ test("with waiting off, a limit fails as it does today and nothing is held", asy
 test("a held limit that clears after the longest wait ends the wait, including one already waiting when the setting changes", async () => {
   let maxHours = 1;
   const { calls, streamFn, gate } = fixture(
-    [{ kind: "reject", message: RATE_LIMITED, status: 429 }, { kind: "text", text: "ok" }],
+    [
+      { kind: "reject", message: RATE_LIMITED, status: 429 },
+      { kind: "text", text: "ok" },
+    ],
     { maxWaitMs: () => usageLimitMaxWaitMs(maxHours) },
   );
   const account = usageLimitKeys("anthropic", "opus").account;
   // A four-hour hold left by an earlier run, or by another chat.
-  gate.load([{ key: account, providerId: "anthropic", since: NOW, nextTryAt: NOW + 4 * 3_600_000 + 5_000, resetAt: NOW + 4 * 3_600_000, attempts: 1 }]);
+  gate.load([
+    {
+      key: account,
+      providerId: "anthropic",
+      since: NOW,
+      nextTryAt: NOW + 4 * 3_600_000 + 5_000,
+      resetAt: NOW + 4 * 3_600_000,
+      attempts: 1,
+    },
+  ]);
 
   const joined = await (await streamFn(model(), context, {})).result();
   assert.equal(joined.stopReason, "error");
-  assert.match(joined.errorMessage ?? "", /^Claude is at its usage limit\.\n\nAiden stopped waiting: the limit resets .+, after the longest wait you set \(1 hour\)\.$/u);
+  assert.match(
+    joined.errorMessage ?? "",
+    /^Claude is at its usage limit\.\n\nAiden stopped waiting: the limit resets .+, after the longest wait you set \(1 hour\)\.$/u,
+  );
   assert.equal(calls.length, 0);
 
   // Waiting under six hours, then the owner lowers it to one.
@@ -309,7 +385,10 @@ test("a held limit that clears after the longest wait ends the wait, including o
   assert.equal(gate.waits().length, 1);
   gate.setMaxWait(usageLimitMaxWaitMs(1));
   await settle();
-  assert.match((await waiting!.result()).errorMessage ?? "", /after the longest wait you set \(1 hour\)\.$/u);
+  assert.match(
+    (await waiting!.result()).errorMessage ?? "",
+    /after the longest wait you set \(1 hour\)\.$/u,
+  );
   assert.deepEqual(gate.waits(), []);
   assert.equal(calls.length, 0);
 
@@ -330,7 +409,10 @@ test("a held limit that clears after the longest wait ends the wait, including o
 test("a request is held while it waits for the reset, and not once its test request is out", async () => {
   const owner = { kind: "bot" as const, id: "bot-1" };
   const { calls, clock, gate, streamFn } = fixture(
-    [{ kind: "reject", message: RATE_LIMITED, status: 429, headers: { "retry-after": "60" } }, { kind: "hang" }],
+    [
+      { kind: "reject", message: RATE_LIMITED, status: 429, headers: { "retry-after": "60" } },
+      { kind: "hang" },
+    ],
     { owner },
   );
   void streamFn(model(), context, {});
@@ -343,14 +425,21 @@ test("a request is held while it waits for the reset, and not once its test requ
   await clock.advance(65_000);
   assert.equal(calls.length, 2);
   assert.equal(gate.isHeld(owner), false);
-  assert.deepEqual(gate.waits().map((wait) => wait.trying), [true]);
+  assert.deepEqual(
+    gate.waits().map((wait) => wait.trying),
+    [true],
+  );
 });
 
 test("stopping a waiting reply ends it as stopped without another request", async () => {
-  const { calls, streamFn, gate } = fixture([{ kind: "reject", message: RATE_LIMITED, status: 429, headers: { "retry-after": "300" } }]);
+  const { calls, streamFn, gate } = fixture([
+    { kind: "reject", message: RATE_LIMITED, status: 429, headers: { "retry-after": "300" } },
+  ]);
   const controller = new AbortController();
   let stream: AssistantMessageEventStream | undefined;
-  void Promise.resolve(streamFn(model(), context, { signal: controller.signal })).then((value) => (stream = value));
+  void Promise.resolve(streamFn(model(), context, { signal: controller.signal })).then(
+    (value) => (stream = value),
+  );
   await settle();
   assert.equal(gate.waits().length, 1);
   controller.abort();
@@ -380,7 +469,12 @@ test("the synchronous form returns its stream at once and fills it after the wai
     now: clock.now,
   };
   const m = model("openai-codex-responses");
-  const stream = streamSimpleWaitingOutUsageLimits(m, {}, (options) => scripted(m, scripts.shift()!, options), limits);
+  const stream = streamSimpleWaitingOutUsageLimits(
+    m,
+    {},
+    (options) => scripted(m, scripts.shift()!, options),
+    limits,
+  );
   const events: AssistantMessageEvent[] = [];
   const reading = (async () => {
     for await (const event of stream) events.push(event);
@@ -402,8 +496,20 @@ test("requests that hit a limit another request holds wait behind its test", asy
   const gate = new UsageLimitGate(clock);
   const sent: string[] = [];
   const responses = new Map<string, Script[]>([
-    ["a", [{ kind: "reject", message: RATE_LIMITED, status: 429, headers: { "retry-after": "60" } }, { kind: "text", text: "a" }]],
-    ["b", [{ kind: "reject", message: RATE_LIMITED, status: 429, headers: { "retry-after": "60" } }, { kind: "text", text: "b" }]],
+    [
+      "a",
+      [
+        { kind: "reject", message: RATE_LIMITED, status: 429, headers: { "retry-after": "60" } },
+        { kind: "text", text: "a" },
+      ],
+    ],
+    [
+      "b",
+      [
+        { kind: "reject", message: RATE_LIMITED, status: 429, headers: { "retry-after": "60" } },
+        { kind: "text", text: "b" },
+      ],
+    ],
   ]);
   const streamFor = (id: string) =>
     withUsageLimitWait(

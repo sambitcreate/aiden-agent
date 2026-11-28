@@ -13,7 +13,13 @@ import {
 } from "./device-stream";
 
 interface MobileInputVector {
-  command: { kind: string; phase?: "begin" | "move" | "end"; x?: number; y?: number; button?: string };
+  command: {
+    kind: string;
+    phase?: "begin" | "move" | "end";
+    x?: number;
+    y?: number;
+    button?: string;
+  };
   screen?: { width: number; height: number; orientation: string };
   tag: number;
   payload: Record<string, unknown>;
@@ -21,12 +27,19 @@ interface MobileInputVector {
 
 interface MobileSimulatorsFixture {
   inputMessages: MobileInputVector[];
-  screenConfigs: Array<{ tag: number; payload: Record<string, unknown>; screen: Record<string, unknown> | null }>;
+  screenConfigs: Array<{
+    tag: number;
+    payload: Record<string, unknown>;
+    screen: Record<string, unknown> | null;
+  }>;
 }
 
 const fixture = (
   JSON.parse(
-    readFileSync(new URL("../../protocol/aiden-remote/v1/fixtures/contract.json", import.meta.url), "utf8"),
+    readFileSync(
+      new URL("../../protocol/aiden-remote/v1/fixtures/contract.json", import.meta.url),
+      "utf8",
+    ),
   ) as { mobileSimulators: MobileSimulatorsFixture }
 ).mobileSimulators;
 
@@ -98,7 +111,10 @@ async function connectedClient(screen?: unknown) {
 }
 
 function decodePacket(bytes: Uint8Array) {
-  return { tag: bytes[0], body: JSON.parse(new TextDecoder().decode(bytes.subarray(1))) as unknown };
+  return {
+    tag: bytes[0],
+    body: JSON.parse(new TextDecoder().decode(bytes.subarray(1))) as unknown,
+  };
 }
 
 test("the shared phone input vectors are what the desktop encoder sends", async () => {
@@ -109,7 +125,11 @@ test("the shared phone input vectors are what the desktop encoder sends", async 
     const { command } = vector;
     if (command.kind === "hardwareKeyboard") {
       // The client sends it on its own as soon as the socket opens.
-      assert.deepEqual(decodePacket(socket.sent[0]!), { tag: vector.tag, body: vector.payload }, label);
+      assert.deepEqual(
+        decodePacket(socket.sent[0]!),
+        { tag: vector.tag, body: vector.payload },
+        label,
+      );
       client.stop();
       continue;
     }
@@ -119,7 +139,11 @@ test("the shared phone input vectors are what the desktop encoder sends", async 
     else if (command.kind === "rotate") client.rotate();
     else assert.fail(`unknown command ${command.kind}`);
     assert.equal(socket.sent.length, before + 1, label);
-    assert.deepEqual(decodePacket(socket.sent[before]!), { tag: vector.tag, body: vector.payload }, label);
+    assert.deepEqual(
+      decodePacket(socket.sent[before]!),
+      { tag: vector.tag, body: vector.payload },
+      label,
+    );
     client.stop();
   }
 });
@@ -128,7 +152,9 @@ test("the shared phone screen-config vectors decode as the desktop decodes them"
   for (const vector of fixture.screenConfigs) {
     const { client, screens, deliver } = await connectedClient();
     deliver(vector.tag, vector.payload);
-    const expected = vector.screen ? [`${vector.screen.width}x${vector.screen.height}:${vector.screen.orientation}`] : [];
+    const expected = vector.screen
+      ? [`${vector.screen.width}x${vector.screen.height}:${vector.screen.orientation}`]
+      : [];
     assert.deepEqual(screens, expected, JSON.stringify(vector.payload));
     client.stop();
   }

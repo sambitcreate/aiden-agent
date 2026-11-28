@@ -22,7 +22,9 @@ const SNAPSHOT: BotLiveSnapshot = {
   botId: "bot-1",
   epoch: "epoch-1",
   seq: 0,
-  entries: [{ id: "a1", type: "assistant", text: "Here is your plan.", toolCalls: [], stopReason: "stop" }],
+  entries: [
+    { id: "a1", type: "assistant", text: "Here is your plan.", toolCalls: [], stopReason: "stop" },
+  ],
   partial: null,
   state: { kind: "idle" },
   question: null,
@@ -30,7 +32,10 @@ const SNAPSHOT: BotLiveSnapshot = {
   queued: [],
 };
 
-async function mountChat(state: BotBubbleState, handlers: Record<string, (...args: unknown[]) => unknown> = {}) {
+async function mountChat(
+  state: BotBubbleState,
+  handlers: Record<string, (...args: unknown[]) => unknown> = {},
+) {
   const calls = installBotTestIpc({
     "bots:get": () => botFixture(),
     "bots:live:subscribe": () => SNAPSHOT,
@@ -48,10 +53,20 @@ async function mountChat(state: BotBubbleState, handlers: Record<string, (...arg
 test("a bubbled Bot's chat shows the bubble card instead of the chat, without opening its live feed", async () => {
   const calls = await mountChat(BUBBLED);
   assert.ok(await screen.findByText("Planner is in a bubble"));
-  assert.ok(screen.getByRole("button", { name: "Planner settings" }), "the header and its menus stay");
+  assert.ok(
+    screen.getByRole("button", { name: "Planner settings" }),
+    "the header and its menus stay",
+  );
   assert.equal(screen.queryByText("Here is your plan."), null);
-  assert.equal(screen.queryByPlaceholderText("Ask Planner"), null, "no composer while the chat lives in its bubble");
-  assert.equal(calls.some((call) => call.channel === "bots:live:subscribe"), false);
+  assert.equal(
+    screen.queryByPlaceholderText("Ask Planner"),
+    null,
+    "no composer while the chat lives in its bubble",
+  );
+  assert.equal(
+    calls.some((call) => call.channel === "bots:live:subscribe"),
+    false,
+  );
 });
 
 test("Bring back here and Open bubble ask main to bring the chat back or open its bubble", async () => {
@@ -60,9 +75,17 @@ test("Bring back here and Open bubble ask main to bring the chat back or open it
     "bots:bubbles:open": () => ({ ...BUBBLED, openBotId: "bot-1" }),
   });
   fireEvent.click(await screen.findByRole("button", { name: "Open bubble" }));
-  await waitFor(() => assert.deepEqual(calls.find((call) => call.channel === "bots:bubbles:open")?.args, [{ botId: "bot-1" }]));
+  await waitFor(() =>
+    assert.deepEqual(calls.find((call) => call.channel === "bots:bubbles:open")?.args, [
+      { botId: "bot-1" },
+    ]),
+  );
   fireEvent.click(screen.getByRole("button", { name: "Bring back here" }));
-  await waitFor(() => assert.deepEqual(calls.find((call) => call.channel === "bots:bubbles:bringBack")?.args, [{ botId: "bot-1" }]));
+  await waitFor(() =>
+    assert.deepEqual(calls.find((call) => call.channel === "bots:bubbles:bringBack")?.args, [
+      { botId: "bot-1" },
+    ]),
+  );
   // Main's answer says the Bot is no longer bubbled: its chat is back here.
   assert.ok(await screen.findByText("Here is your plan."));
 });
@@ -79,12 +102,22 @@ test("a bubbled Bot's side panel opens no live feed either", async () => {
   fireEvent.click(screen.getByRole("button", { name: "Show panel" }));
   assert.ok(await screen.findByRole("tab", { name: "Activity" }));
   await new Promise((resolve) => setTimeout(resolve, 20));
-  assert.equal(calls.some((call) => call.channel === "bots:live:subscribe"), false);
+  assert.equal(
+    calls.some((call) => call.channel === "bots:live:subscribe"),
+    false,
+  );
 });
 
 test("while bubbled, the ••• menu knows the Bot is paused from its summary", async () => {
   await mountChat(BUBBLED, {
-    "bots:live:summary": () => ({ botId: "bot-1", preview: null, updatedAt: null, state: { kind: "paused" }, needsYou: false, lastReplyAt: null }),
+    "bots:live:summary": () => ({
+      botId: "bot-1",
+      preview: null,
+      updatedAt: null,
+      state: { kind: "paused" },
+      needsYou: false,
+      lastReplyAt: null,
+    }),
   });
   await screen.findByText("Planner is in a bubble");
   await new Promise((resolve) => setTimeout(resolve, 20));

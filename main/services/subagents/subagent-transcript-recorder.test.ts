@@ -86,21 +86,46 @@ test("a helper run of a task, two tool calls and an answer is recorded in order"
   // Pi agent events, as the desktop helper emits them.
   const events = [
     { type: "message_start", message: { role: "assistant", content: [] } },
-    { type: "message_update", assistantMessageEvent: { type: "text_delta", delta: "I will read " } },
-    { type: "message_update", assistantMessageEvent: { type: "text_delta", delta: "the config files." } },
+    {
+      type: "message_update",
+      assistantMessageEvent: { type: "text_delta", delta: "I will read " },
+    },
+    {
+      type: "message_update",
+      assistantMessageEvent: { type: "text_delta", delta: "the config files." },
+    },
     {
       type: "message_end",
-      message: { role: "assistant", content: [{ type: "text", text: "I will read the config files." }] },
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "I will read the config files." }],
+      },
     },
-    { type: "tool_execution_start", toolCallId: "provider-a", toolName: "read_file", args: { path: "src/config.ts" } },
-    { type: "tool_execution_start", toolCallId: "provider-b", toolName: "read_file", args: { path: "src/retry.ts" } },
+    {
+      type: "tool_execution_start",
+      toolCallId: "provider-a",
+      toolName: "read_file",
+      args: { path: "src/config.ts" },
+    },
+    {
+      type: "tool_execution_start",
+      toolCallId: "provider-b",
+      toolName: "read_file",
+      args: { path: "src/retry.ts" },
+    },
     { type: "tool_execution_end", toolCallId: "provider-a", isError: false },
     { type: "tool_execution_end", toolCallId: "provider-b", isError: true },
     { type: "message_start", message: { role: "assistant", content: [] } },
-    { type: "message_update", assistantMessageEvent: { type: "text_delta", delta: "The limit is read in src/retry.ts." } },
+    {
+      type: "message_update",
+      assistantMessageEvent: { type: "text_delta", delta: "The limit is read in src/retry.ts." },
+    },
     {
       type: "message_end",
-      message: { role: "assistant", content: [{ type: "text", text: "The limit is read in src/retry.ts." }] },
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "The limit is read in src/retry.ts." }],
+      },
     },
   ] as unknown as AgentEvent[];
   for (const event of events) {
@@ -112,8 +137,15 @@ test("a helper run of a task, two tool calls and an answer is recorded in order"
 
   const final = memory.saved[memory.saved.length - 1]!;
   assert.equal(final.final, true);
-  assert.equal(memory.saved.filter((entry) => entry.final).length, 1, "only the last write is final");
-  assert.deepEqual(final.transcript.entries[0], { kind: "task", text: "Find where the retry limit is read." });
+  assert.equal(
+    memory.saved.filter((entry) => entry.final).length,
+    1,
+    "only the last write is final",
+  );
+  assert.deepEqual(final.transcript.entries[0], {
+    kind: "task",
+    text: "Find where the retry limit is read.",
+  });
   const [first, second] = messages(final.transcript);
   assert.equal(first!.text, "I will read the config files.");
   assert.deepEqual(
@@ -128,7 +160,10 @@ test("a helper run of a task, two tool calls and an answer is recorded in order"
 
   // Every revision is saved before it is streamed, and revisions chain.
   for (const update of memory.published) {
-    assert.ok(memory.order.indexOf(`persist:${update.revision}`) < memory.order.indexOf(`publish:${update.revision}`));
+    assert.ok(
+      memory.order.indexOf(`persist:${update.revision}`) <
+        memory.order.indexOf(`publish:${update.revision}`),
+    );
   }
   memory.published.forEach((update, index) => {
     assert.equal(update.baseRevision, index === 0 ? 0 : memory.published[index - 1]!.revision);
@@ -137,14 +172,21 @@ test("a helper run of a task, two tool calls and an answer is recorded in order"
   // A window that saw the whole stream ends up with exactly the saved copy.
   let live: SubagentTranscriptUpdateV1 | undefined;
   for (const update of memory.published) live = accumulateSubagentTranscriptUpdate(live, update);
-  assert.deepEqual(mergeSubagentTranscript(null, live), { transcript: final.transcript, complete: true });
+  assert.deepEqual(mergeSubagentTranscript(null, live), {
+    transcript: final.transcript,
+    complete: true,
+  });
 
   // A window that joined halfway converges from the saved copy it read.
   const half = Math.floor(memory.published.length / 2);
   const savedAtJoin = memory.saved[half - 1]!.transcript;
   let joined: SubagentTranscriptUpdateV1 | undefined;
-  for (const update of memory.published.slice(half)) joined = accumulateSubagentTranscriptUpdate(joined, update);
-  assert.deepEqual(mergeSubagentTranscript(savedAtJoin, joined), { transcript: final.transcript, complete: true });
+  for (const update of memory.published.slice(half))
+    joined = accumulateSubagentTranscriptUpdate(joined, update);
+  assert.deepEqual(mergeSubagentTranscript(savedAtJoin, joined), {
+    transcript: final.transcript,
+    complete: true,
+  });
 
   // Nothing is written after the helper finished.
   recorder.textDelta("late");
@@ -287,7 +329,10 @@ test("a failed save streams nothing, keeps the change and tries again", async ()
   });
   let live: SubagentTranscriptUpdateV1 | undefined;
   for (const update of published) live = accumulateSubagentTranscriptUpdate(live, update);
-  assert.deepEqual(mergeSubagentTranscript(null, live), { transcript: saved[saved.length - 1]!, complete: true });
+  assert.deepEqual(mergeSubagentTranscript(null, live), {
+    transcript: saved[saved.length - 1]!,
+    complete: true,
+  });
   assert.equal(messages(saved[saved.length - 1]!)[0]!.text, "Hello there.");
 });
 
@@ -341,13 +386,19 @@ test("a failed final save is reported even after an earlier failed save was", as
     recorder.messageStarted();
     recorder.textDelta("Hello.");
     await new Promise((resolve) => setTimeout(resolve, 30));
-    assert.deepEqual(errors.map((error) => (error as Error).message), ["disk full"]);
+    assert.deepEqual(
+      errors.map((error) => (error as Error).message),
+      ["disk full"],
+    );
     await recorder.finish("failed");
   } finally {
     clearInterval(keepAlive);
   }
   assert.equal(finalAttempts, 3);
-  assert.deepEqual(errors.map((error) => (error as Error).message), ["disk full", "final save failed"]);
+  assert.deepEqual(
+    errors.map((error) => (error as Error).message),
+    ["disk full", "final save failed"],
+  );
 });
 
 test("a store that keeps failing is reported once and left alone until something changes", async () => {
@@ -377,7 +428,11 @@ test("a store that keeps failing is reported once and left alone until something
     clock.advance(1_000);
     await settle();
   }
-  assert.equal(attempts, SUBAGENT_TRANSCRIPT_RETRIES_BEFORE_PAUSE, "retries stop after a few failures");
+  assert.equal(
+    attempts,
+    SUBAGENT_TRANSCRIPT_RETRIES_BEFORE_PAUSE,
+    "retries stop after a few failures",
+  );
   assert.equal(clock.pending(), 0, "no retry stays armed");
   assert.equal(errors.length, 1, "the failing store is reported once");
 
@@ -437,10 +492,12 @@ test("a slow save keeps one save in flight and the throttle intact", async () =>
         inFlight += 1;
         saves += 1;
         most = Math.max(most, inFlight);
-        return new Promise<void>((resolve) => releases.push(() => {
-          inFlight -= 1;
-          resolve();
-        }));
+        return new Promise<void>((resolve) =>
+          releases.push(() => {
+            inFlight -= 1;
+            resolve();
+          }),
+        );
       },
     },
     now: clock.now,
@@ -530,7 +587,9 @@ test("a key in a tool command or search is hidden in the step", async () => {
   recorder.messageStarted();
   recorder.toolStarted("call-a", "grep", { pattern: FAKE_KEY, path: "src/config" });
   recorder.toolFinished("call-a", "completed");
-  recorder.toolStarted("call-b", "bash", { command: `curl -H "Authorization: Bearer ${FAKE_KEY}" https://example.test` });
+  recorder.toolStarted("call-b", "bash", {
+    command: `curl -H "Authorization: Bearer ${FAKE_KEY}" https://example.test`,
+  });
   recorder.toolFinished("call-b", "completed");
   await recorder.finish("completed");
   const everything = JSON.stringify(memory.saved) + JSON.stringify(memory.published);
@@ -550,19 +609,33 @@ test("a finished file edit shows its line counts", async () => {
     setTimer: () => null,
     clearTimer: () => {},
   });
-  recorder.observe({ type: "message_start", message: { role: "assistant", content: [] } } as unknown as AgentEvent);
-  recorder.observe({ type: "tool_execution_start", toolCallId: "call-a", toolName: "edit_file", args: { path: "src/a.ts", old_string: "a", new_string: "b" } } as unknown as AgentEvent);
+  recorder.observe({
+    type: "message_start",
+    message: { role: "assistant", content: [] },
+  } as unknown as AgentEvent);
+  recorder.observe({
+    type: "tool_execution_start",
+    toolCallId: "call-a",
+    toolName: "edit_file",
+    args: { path: "src/a.ts", old_string: "a", new_string: "b" },
+  } as unknown as AgentEvent);
   recorder.observe({
     type: "tool_execution_end",
     toolCallId: "call-a",
     toolName: "edit_file",
     isError: false,
-    result: { content: [], details: { kind: "file_line_changes", version: 1, additions: 3, deletions: 1 } },
+    result: {
+      content: [],
+      details: { kind: "file_line_changes", version: 1, additions: 3, deletions: 1 },
+    },
   } as unknown as AgentEvent);
   await recorder.finish("completed");
   const [step] = messages(memory.saved[memory.saved.length - 1]!.transcript)[0]!.steps;
   assert.equal(step?.kind, "tool");
-  assert.deepEqual(step?.kind === "tool" ? step.lineChanges : undefined, { additions: 3, deletions: 1 });
+  assert.deepEqual(step?.kind === "tool" ? step.lineChanges : undefined, {
+    additions: 3,
+    deletions: 1,
+  });
 });
 
 test("a tool call shows as pending while its arguments stream, then runs in place", async () => {
@@ -582,31 +655,74 @@ test("a tool call shows as pending while its arguments stream, then runs in plac
   emit({ type: "message_start", message: { role: "assistant", content: [] } });
   emit({ type: "message_update", assistantMessageEvent: { type: "thinking_start" } });
   emit({ type: "message_update", assistantMessageEvent: { type: "thinking_end" } });
-  emit({ type: "message_update", assistantMessageEvent: { type: "text_delta", delta: "Reading it now. " } });
-  emit({ type: "message_update", assistantMessageEvent: { type: "toolcall_start", contentIndex: 0, partial: { content: [toolCall] } } });
+  emit({
+    type: "message_update",
+    assistantMessageEvent: { type: "text_delta", delta: "Reading it now. " },
+  });
+  emit({
+    type: "message_update",
+    assistantMessageEvent: {
+      type: "toolcall_start",
+      contentIndex: 0,
+      partial: { content: [toolCall] },
+    },
+  });
   clock.advance(250);
   await settle();
   const pending = messages(memory.saved[memory.saved.length - 1]!.transcript)[0]!.steps;
-  assert.deepEqual(pending.map((step) => [step.kind, step.kind === "tool" ? step.status : null]), [["thinking", null], ["tool", "pending"]]);
+  assert.deepEqual(
+    pending.map((step) => [step.kind, step.kind === "tool" ? step.status : null]),
+    [
+      ["thinking", null],
+      ["tool", "pending"],
+    ],
+  );
 
   emit({
     type: "message_end",
-    message: { role: "assistant", content: [{ type: "thinking", thinking: "" }, { type: "text", text: "Reading it now." }, toolCall] },
+    message: {
+      role: "assistant",
+      content: [
+        { type: "thinking", thinking: "" },
+        { type: "text", text: "Reading it now." },
+        toolCall,
+      ],
+    },
   });
-  emit({ type: "tool_execution_start", toolCallId: "call-a", toolName: "read_file", args: { path: "src/a.ts" } });
+  emit({
+    type: "tool_execution_start",
+    toolCallId: "call-a",
+    toolName: "read_file",
+    args: { path: "src/a.ts" },
+  });
   emit({ type: "tool_execution_update", toolCallId: "call-a" });
-  emit({ type: "tool_execution_end", toolCallId: "call-a", toolName: "read_file", isError: false, result: { content: [] } });
+  emit({
+    type: "tool_execution_end",
+    toolCallId: "call-a",
+    toolName: "read_file",
+    isError: false,
+    result: { content: [] },
+  });
   await recorder.finish("completed");
   const final = messages(memory.saved[memory.saved.length - 1]!.transcript)[0]!;
   assert.equal(final.text, "Reading it now.");
   const tools = final.steps.filter((step) => step.kind === "tool");
   assert.equal(tools.length, 1, "the pending step became the running tool, not a second one");
-  assert.deepEqual(tools.map((step) => step.kind === "tool" && [step.label, step.target, step.status]), [["Read file", "src/a.ts", "completed"]]);
+  assert.deepEqual(
+    tools.map((step) => step.kind === "tool" && [step.label, step.target, step.status]),
+    [["Read file", "src/a.ts", "completed"]],
+  );
   // Anchored where the settled message puts them: thinking first, the tool after the text.
-  assert.deepEqual(final.steps.map((step) => step.contentOffset), [0, final.text.length]);
+  assert.deepEqual(
+    final.steps.map((step) => step.contentOffset),
+    [0, final.text.length],
+  );
 });
 
-for (const [status, expected] of [["cancelled", "cancelled"], ["failed", "failed"]] as const) {
+for (const [status, expected] of [
+  ["cancelled", "cancelled"],
+  ["failed", "failed"],
+] as const) {
   test(`a helper that ends ${status} marks its unfinished tools ${expected}`, async () => {
     const memory = memorySink();
     const recorder = new SubagentTranscriptRecorder({
@@ -660,7 +776,8 @@ test("content the size cap removed stays removed in later saves", async () => {
   await recorder.finish("completed");
   const final = memory.saved[memory.saved.length - 1]!.transcript;
   assert.ok(messages(final)[0]!.steps.length <= firstSteps);
-  for (const entry of memory.saved.slice(firstTrim)) assert.ok(Buffer.byteLength(JSON.stringify(entry.transcript)) <= 8_000);
+  for (const entry of memory.saved.slice(firstTrim))
+    assert.ok(Buffer.byteLength(JSON.stringify(entry.transcript)) <= 8_000);
   let live: SubagentTranscriptUpdateV1 | undefined;
   for (const update of memory.published) live = accumulateSubagentTranscriptUpdate(live, update);
   assert.deepEqual(mergeSubagentTranscript(null, live), { transcript: final, complete: true });
@@ -672,24 +789,40 @@ test("the supervisor recordings hand back a result without waiting for the final
   const slowSink = {
     ...memory.sink,
     async persist(transcript: SubagentTranscriptV1, final: boolean) {
-      if (final) await new Promise<void>((resolve) => { release = resolve; });
+      if (final)
+        await new Promise<void>((resolve) => {
+          release = resolve;
+        });
       await memory.sink.persist(transcript, final);
     },
   };
   const created: Array<{ runId: string; chatId: string; task: string }> = [];
   const recordings = new SubagentTranscriptRecordings((input) => {
     created.push(input);
-    return new SubagentTranscriptRecorder({ ...input, sink: slowSink, setTimer: () => null, clearTimer: () => {} });
+    return new SubagentTranscriptRecorder({
+      ...input,
+      sink: slowSink,
+      setTimer: () => null,
+      clearTimer: () => {},
+    });
   });
   const runChild = recordings.wrap(async (input) => {
     input.transcript?.messageStarted();
     input.transcript?.textDelta("Done looking.");
     return { status: "completed" } as never;
   });
-  const result = await runChild({ runId: "run-1", authority: { chatId: "chat-1" }, request: { task: "Look." } } as never);
+  const result = await runChild({
+    runId: "run-1",
+    authority: { chatId: "chat-1" },
+    request: { task: "Look." },
+  } as never);
   assert.deepEqual(result, { status: "completed" });
   assert.deepEqual(created, [{ runId: "run-1", chatId: "chat-1", task: "Look." }]);
-  assert.equal(memory.saved.some((entry) => entry.final), false, "the final save is still running");
+  assert.equal(
+    memory.saved.some((entry) => entry.final),
+    false,
+    "the final save is still running",
+  );
 
   const flushed = recordings.flush();
   await settle();
@@ -702,12 +835,20 @@ test("the supervisor recordings hand back a result without waiting for the final
 
 test("a child that throws or never returns still gets its final save", async () => {
   const memory = memorySink();
-  const recordings = new SubagentTranscriptRecordings((input) =>
-    new SubagentTranscriptRecorder({ ...input, sink: memory.sink, setTimer: () => null, clearTimer: () => {} }));
+  const recordings = new SubagentTranscriptRecordings(
+    (input) =>
+      new SubagentTranscriptRecorder({
+        ...input,
+        sink: memory.sink,
+        setTimer: () => null,
+        clearTimer: () => {},
+      }),
+  );
   const failure = new Error("child crashed");
   await assert.rejects(
-    recordings.wrap(async () => { throw failure; })(
-      { runId: "run-2", authority: { chatId: "chat-1" }, request: { task: "Look." } } as never),
+    recordings.wrap(async () => {
+      throw failure;
+    })({ runId: "run-2", authority: { chatId: "chat-1" }, request: { task: "Look." } } as never),
     failure,
   );
   await recordings.flush();

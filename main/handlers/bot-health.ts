@@ -10,9 +10,11 @@ import { BOT_HEALTH_CHANNELS, type BotHealthReport } from "../../renderer/shared
 import { parseBotId } from "./bot-params.js";
 
 function parseBotHealthInput(input: unknown): { botId: string } {
-  if (!input || typeof input !== "object" || Array.isArray(input)) throw new Error("Invalid bot health fields.");
+  if (!input || typeof input !== "object" || Array.isArray(input))
+    throw new Error("Invalid bot health fields.");
   const fields = input as Record<string, unknown>;
-  if (Object.keys(fields).some((key) => key !== "botId")) throw new Error("Invalid bot health fields.");
+  if (Object.keys(fields).some((key) => key !== "botId"))
+    throw new Error("Invalid bot health fields.");
   return { botId: parseBotId(fields.botId) };
 }
 
@@ -22,13 +24,21 @@ export interface BotHealthHandlerDependencies<Event = unknown> {
   check(botId: string): Promise<BotHealthReport>;
 }
 
-export function registerBotHealthHandlers<Event = unknown>(dependencies: BotHealthHandlerDependencies<Event>): void {
-  dependencies.handle(BOT_HEALTH_CHANNELS.report, async (_event, input): Promise<BotHealthReport | null> => {
-    const { botId } = parseBotHealthInput(input);
-    return dependencies.report(botId) ?? null;
-  });
-  dependencies.handle(BOT_HEALTH_CHANNELS.check, async (_event, input): Promise<BotHealthReport> => {
-    const { botId } = parseBotHealthInput(input);
-    return dependencies.check(botId);
-  });
+export function registerBotHealthHandlers<Event = unknown>(
+  dependencies: BotHealthHandlerDependencies<Event>,
+): void {
+  dependencies.handle(
+    BOT_HEALTH_CHANNELS.report,
+    async (_event, input): Promise<BotHealthReport | null> => {
+      const { botId } = parseBotHealthInput(input);
+      return dependencies.report(botId) ?? null;
+    },
+  );
+  dependencies.handle(
+    BOT_HEALTH_CHANNELS.check,
+    async (_event, input): Promise<BotHealthReport> => {
+      const { botId } = parseBotHealthInput(input);
+      return dependencies.check(botId);
+    },
+  );
 }

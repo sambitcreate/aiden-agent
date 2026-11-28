@@ -9,10 +9,23 @@ import { projectAidenRemoteChatTriage } from "./aiden-remote-chats.js";
 import { AidenRemoteServiceError } from "./aiden-remote-errors.js";
 import { ChatTriageStore } from "./chat-triage.js";
 import { PeerTransportError } from "./peer-transport.js";
-import { FakeHost, FEATURES, UNHANDLED, hostControls, numbered, settle, setup, type FakeHostEffects } from "./peer-remote-chat-test-host.js";
+import {
+  FakeHost,
+  FEATURES,
+  UNHANDLED,
+  hostControls,
+  numbered,
+  settle,
+  setup,
+  type FakeHostEffects,
+} from "./peer-remote-chat-test-host.js";
 import { ChatIntentLedger } from "../../renderer/lib/hosts/chat-intent-ledger.js";
 import { ChatSessionControl } from "../../renderer/lib/hosts/chat-session-control.js";
-import { HostChatControlError, isOutcomeUnknown, type HostChatAdapter } from "../../renderer/lib/hosts/host-chat-adapter.js";
+import {
+  HostChatControlError,
+  isOutcomeUnknown,
+  type HostChatAdapter,
+} from "../../renderer/lib/hosts/host-chat-adapter.js";
 import { LocalHostAdapter } from "../../renderer/lib/hosts/local-host-adapter.js";
 
 /**
@@ -23,7 +36,12 @@ import { LocalHostAdapter } from "../../renderer/lib/hosts/local-host-adapter.js
  * itself are stand-ins.
  */
 
-const APPROVAL = { approvalId: "ap-1", summary: "Run the release script", toolCallId: "call-1", toolName: "shell" };
+const APPROVAL = {
+  approvalId: "ap-1",
+  summary: "Run the release script",
+  toolCallId: "call-1",
+  toolName: "shell",
+};
 const QUESTION = {
   version: 1,
   promptId: "q-1",
@@ -46,7 +64,11 @@ function controlFor(
   adapter: HostChatAdapter = harness.adapter,
   ledger = new ChatIntentLedger(),
 ) {
-  const control = new ChatSessionControl(adapter, { hostId: adapter.hostId, chatId: "chat-1" }, ledger);
+  const control = new ChatSessionControl(
+    adapter,
+    { hostId: adapter.hostId, chatId: "chat-1" },
+    ledger,
+  );
   control.attach();
   return control;
 }
@@ -56,7 +78,10 @@ function code(expected: string) {
 }
 
 /** How often `text` appears in the chat as a window opened now reads it. */
-async function sentCopies(harness: Awaited<ReturnType<typeof setup>>, text: string): Promise<number> {
+async function sentCopies(
+  harness: Awaited<ReturnType<typeof setup>>,
+  text: string,
+): Promise<number> {
   const window = await harness.openAnother();
   try {
     return window.read().transcript.messages.filter((message) => message.content === text).length;
@@ -112,10 +137,18 @@ test("a lost send acknowledgement retried with the same key starts exactly one t
 
     await control.retryUnresolved();
     assert.equal(host.turnRequests().length, 2, "the retry reached the host");
-    assert.deepEqual(host.turns, ["Ship the release"], "the host replayed the original turn instead of starting another");
+    assert.deepEqual(
+      host.turns,
+      ["Ship the release"],
+      "the host replayed the original turn instead of starting another",
+    );
     assert.equal(control.getSnapshot().unresolved, null);
 
-    assert.equal(await sentCopies(harness, "Ship the release"), 1, "the chat shows the message once");
+    assert.equal(
+      await sentCopies(harness, "Ship the release"),
+      1,
+      "the chat shows the message once",
+    );
 
     // Once resolved, the next message is a new turn with a new key.
     host.runs.publish("run-turn-1", "chat:done", {});
@@ -133,7 +166,11 @@ test("leaving a chat whose message may not have been sent, then reopening it, ke
     await harness.open();
     const ledger = new ChatIntentLedger();
     const first = await harness.adapterFor();
-    const leaving = new ChatSessionControl(first, { hostId: first.hostId, chatId: "chat-1" }, ledger);
+    const leaving = new ChatSessionControl(
+      first,
+      { hostId: first.hostId, chatId: "chat-1" },
+      ledger,
+    );
     const detach = leaving.attach();
     host.dropAcks = 1;
     await assert.rejects(leaving.send("Ship the release"), isOutcomeUnknown);
@@ -143,8 +180,16 @@ test("leaving a chat whose message may not have been sent, then reopening it, ke
     first.dispose();
 
     const reopened = controlFor(harness, await harness.adapterFor(), ledger);
-    assert.equal(reopened.getSnapshot().unresolved?.text, "Ship the release", "the reopened chat still holds the message");
-    await assert.rejects(reopened.send("Ship the release"), code("unresolved"), "it cannot be resent under a new key");
+    assert.equal(
+      reopened.getSnapshot().unresolved?.text,
+      "Ship the release",
+      "the reopened chat still holds the message",
+    );
+    await assert.rejects(
+      reopened.send("Ship the release"),
+      code("unresolved"),
+      "it cannot be resent under a new key",
+    );
 
     await reopened.retryUnresolved();
     assert.deepEqual(host.turns, ["Ship the release"], "the retry replayed the original turn");
@@ -162,7 +207,11 @@ test("leaving a chat while its message is in flight records the lost answer for 
     await harness.open();
     const ledger = new ChatIntentLedger();
     const first = await harness.adapterFor();
-    const leaving = new ChatSessionControl(first, { hostId: first.hostId, chatId: "chat-1" }, ledger);
+    const leaving = new ChatSessionControl(
+      first,
+      { hostId: first.hostId, chatId: "chat-1" },
+      ledger,
+    );
     const detach = leaving.attach();
 
     let release!: () => void;
@@ -178,7 +227,11 @@ test("leaving a chat while its message is in flight records the lost answer for 
     detach();
     first.dispose();
     const reopened = controlFor(harness, await harness.adapterFor(), ledger);
-    assert.equal(reopened.getSnapshot().sending, true, "the reopened chat knows a message is still on its way");
+    assert.equal(
+      reopened.getSnapshot().sending,
+      true,
+      "the reopened chat knows a message is still on its way",
+    );
 
     host.turnGate = undefined;
     release();
@@ -284,15 +337,27 @@ test("two Macs answering the same approval resolve it exactly once, and the lose
     assert.deepEqual(resolutions, ["applied", "elsewhere"]);
     const winner = host.effects.approvals[0]!.split(":")[1];
     const [loserResult, loser] = fromA?.resolution === "elsewhere" ? [fromA, a] : [fromC, c];
-    assert.equal(loserResult?.resolution === "elsewhere" && loserResult.decision, winner, "the loser is told the winning decision");
-    assert.deepEqual(loser.getSnapshot().elsewhere, { kind: "approval", id: "ap-1", decision: winner });
+    assert.equal(
+      loserResult?.resolution === "elsewhere" && loserResult.decision,
+      winner,
+      "the loser is told the winning decision",
+    );
+    assert.deepEqual(loser.getSnapshot().elsewhere, {
+      kind: "approval",
+      id: "ap-1",
+      decision: winner,
+    });
     const winnerControl = loser === a ? c : a;
     assert.equal(winnerControl.getSnapshot().elsewhere, null);
 
     await settle();
     await first.session.idle();
     await second.session.idle();
-    assert.deepEqual(first.session.getSnapshot().run.approvals, [], "the approval is gone on both Macs");
+    assert.deepEqual(
+      first.session.getSnapshot().run.approvals,
+      [],
+      "the approval is gone on both Macs",
+    );
     assert.deepEqual(second.session.getSnapshot().run.approvals, []);
   } finally {
     first.close();
@@ -306,16 +371,30 @@ test("a command too long to show in full can be denied from this Mac but not all
   try {
     await host.start("run-1");
     const command = `Run command: echo ${"x".repeat(2_100)}; rm -rf ~/work`;
-    host.runs.publish("run-1", "chat:approval", { ...APPROVAL, summary: command, toolName: "run_command" });
+    host.runs.publish("run-1", "chat:approval", {
+      ...APPROVAL,
+      summary: command,
+      toolName: "run_command",
+    });
     await harness.open();
     const [shown] = harness.session.getSnapshot().run.approvals;
-    assert.equal(shown?.summary.includes("rm -rf"), false, "this Mac never saw the end of the command");
+    assert.equal(
+      shown?.summary.includes("rm -rf"),
+      false,
+      "this Mac never saw the end of the command",
+    );
     assert.equal(shown?.canAllow, false);
 
     const control = controlFor(harness);
-    await assert.rejects(control.respondApproval({ runId: "run-1", approvalId: "ap-1", decision: "allow" }));
+    await assert.rejects(
+      control.respondApproval({ runId: "run-1", approvalId: "ap-1", decision: "allow" }),
+    );
     assert.deepEqual(host.effects.approvals, [], "the host refused the allow");
-    const denied = await control.respondApproval({ runId: "run-1", approvalId: "ap-1", decision: "deny" });
+    const denied = await control.respondApproval({
+      runId: "run-1",
+      approvalId: "ap-1",
+      decision: "deny",
+    });
     assert.equal(denied?.resolution, "applied");
     assert.deepEqual(host.effects.approvals, ["ap-1:deny"]);
   } finally {
@@ -335,7 +414,12 @@ test("answers and steering from this Mac reach the run on the host", async () =>
     const answered = await control.answerQuestion({
       runId: "run-1",
       promptId: "q-1",
-      response: { version: 1, promptId: "q-1", cancelled: false, answers: [{ questionIndex: 0, kind: "option", answer: "main" }] },
+      response: {
+        version: 1,
+        promptId: "q-1",
+        cancelled: false,
+        answers: [{ questionIndex: 0, kind: "option", answer: "main" }],
+      },
     });
     assert.equal(answered?.status, "answered");
     assert.equal(host.effects.answers.length, 1);
@@ -353,7 +437,9 @@ test("answers and steering from this Mac reach the run on the host", async () =>
 test("a host that takes no run input or questions (aiden serve) keeps Stop and approvals but offers no steer or answers", async () => {
   const host = new FakeHost("host_b", numbered(2));
   // run-control-v1 without chat-run-input-v1 / chat-question-prompts-v1, as `aiden serve` advertises.
-  host.features = FEATURES.filter((token) => token !== "chat-run-input-v1" && token !== "chat-question-prompts-v1");
+  host.features = FEATURES.filter(
+    (token) => token !== "chat-run-input-v1" && token !== "chat-question-prompts-v1",
+  );
   const harness = await setup(host);
   try {
     await host.start("run-1");
@@ -370,7 +456,11 @@ test("a host that takes no run input or questions (aiden serve) keeps Stop and a
 
     await assert.rejects(control.submitInput("run-1", "steer", "Use tables"), code("unsupported"));
     assert.deepEqual(host.effects.inputs, [], "nothing was sent for the host to refuse");
-    const approved = await control.respondApproval({ runId: "run-1", approvalId: "ap-1", decision: "allow" });
+    const approved = await control.respondApproval({
+      runId: "run-1",
+      approvalId: "ap-1",
+      decision: "allow",
+    });
     assert.equal(approved?.resolution, "applied");
     assert.equal(await control.cancel("run-1"), true);
     assert.deepEqual(host.effects.cancels, ["run-1"]);
@@ -401,7 +491,8 @@ test("a chat renamed from this Mac can be deleted from it next, and a stale dele
     const stale = shown();
     await assert.rejects(
       control.remove(stale),
-      (error: unknown) => error instanceof HostChatControlError && error.remoteCode === "revision_conflict",
+      (error: unknown) =>
+        error instanceof HostChatControlError && error.remoteCode === "revision_conflict",
     );
     assert.equal(host.removed, false, "a delete against an older revision is refused, not forced");
     await reread();
@@ -459,7 +550,10 @@ test("an unreachable host refuses every mutation, and nothing is sent once it is
     assert.notEqual(control.refusal("send"), null);
     await assert.rejects(control.send("Are you there?"), code("host_unavailable"));
     await assert.rejects(control.cancel("run-1"), code("host_unavailable"));
-    await assert.rejects(control.submitInput("run-1", "steer", "Use tables"), code("host_unavailable"));
+    await assert.rejects(
+      control.submitInput("run-1", "steer", "Use tables"),
+      code("host_unavailable"),
+    );
 
     host.down = false;
     harness.manager.reconnect(host.id);
@@ -476,16 +570,28 @@ test("an unreachable host refuses every mutation, and nothing is sent once it is
 test("triage from this Mac lands once on the host across a lost answer, and a stale Undo is refused", async (t) => {
   const directory = await mkdtemp(path.join(os.tmpdir(), "aiden-peer-triage-"));
   t.after(() => rm(directory, { recursive: true, force: true }));
-  const store = new ChatTriageStore(() => directory, { now: () => Date.parse("2026-11-02T10:00:00.000Z") });
+  const store = new ChatTriageStore(() => directory, {
+    now: () => Date.parse("2026-11-02T10:00:00.000Z"),
+  });
   const host = new FakeHost("host_b", numbered(2));
   host.features = [...FEATURES, "chat-triage-v1"];
   let dropNext = 0;
   let writes = 0;
   host.routes = async (input, deviceId) => {
     if (input.path !== "/chats/chat-1/triage" || input.method !== "POST") return UNHANDLED;
-    const body = input.body as { pinned?: boolean; done?: boolean; snoozeUntil?: string | null; ifRevision?: number };
+    const body = input.body as {
+      pinned?: boolean;
+      done?: boolean;
+      snoozeUntil?: string | null;
+      ifRevision?: number;
+    };
     const entry = await host.idempotent(
-      { deviceId, route: "POST /chats/{id}/triage", resourceId: "chat-1", key: input.idempotencyKey ?? "" },
+      {
+        deviceId,
+        route: "POST /chats/{id}/triage",
+        resourceId: "chat-1",
+        key: input.idempotencyKey ?? "",
+      },
       body,
       async () => {
         writes += 1;
@@ -494,13 +600,17 @@ test("triage from this Mac lands once on the host across a lost answer, and a st
           {
             ...(body.pinned !== undefined ? { pinned: body.pinned } : {}),
             ...(body.done !== undefined ? { done: body.done } : {}),
-            ...(body.snoozeUntil !== undefined ? { snoozeUntil: body.snoozeUntil === null ? null : Date.parse(body.snoozeUntil) } : {}),
+            ...(body.snoozeUntil !== undefined
+              ? { snoozeUntil: body.snoozeUntil === null ? null : Date.parse(body.snoozeUntil) }
+              : {}),
           },
           body.ifRevision === undefined ? {} : { ifRevision: body.ifRevision },
         );
         if (result.ok) return projectAidenRemoteChatTriage("chat-1", result.entry);
         throw new AidenRemoteServiceError("revision_conflict", "Changed.", 409, false, {
-          currentRevision: String(result.code === "revision_conflict" ? result.entry?.revision ?? 0 : 0),
+          currentRevision: String(
+            result.code === "revision_conflict" ? (result.entry?.revision ?? 0) : 0,
+          ),
         });
       },
     );
@@ -517,15 +627,31 @@ test("triage from this Mac lands once on the host across a lost answer, and a st
     dropNext = 1;
     const snoozeUntil = Date.parse("2026-11-02T18:00:00.000Z");
     const snoozed = await harness.adapter.setTriage("chat-1", { snoozeUntil }, 0);
-    assert.deepEqual(snoozed, { ok: true, entry: { revision: 1, updatedAt: Date.parse("2026-11-02T10:00:00.000Z"), snoozedUntil: snoozeUntil } });
+    assert.deepEqual(snoozed, {
+      ok: true,
+      entry: {
+        revision: 1,
+        updatedAt: Date.parse("2026-11-02T10:00:00.000Z"),
+        snoozedUntil: snoozeUntil,
+      },
+    });
     assert.equal(writes, 1, "the host applied the snooze once");
 
     // Another device marks it done; an Undo of the snooze built on revision 1 is refused.
     await store.set("chat-1", { done: true });
     const undo = await harness.adapter.setTriage("chat-1", { snoozeUntil: null }, 1);
     // The host names only the revision it holds, so the refusal carries no entry of its own making.
-    assert.deepEqual(undo, { ok: false, code: "revision_conflict", entry: null, currentRevision: 2 });
-    assert.equal((await store.get("chat-1"))?.snoozedUntil, snoozeUntil, "the stale Undo changed nothing");
+    assert.deepEqual(undo, {
+      ok: false,
+      code: "revision_conflict",
+      entry: null,
+      currentRevision: 2,
+    });
+    assert.equal(
+      (await store.get("chat-1"))?.snoozedUntil,
+      snoozeUntil,
+      "the stale Undo changed nothing",
+    );
   } finally {
     harness.close();
   }
@@ -533,7 +659,11 @@ test("triage from this Mac lands once on the host across a lost answer, and a st
 
 /** The pane's control sequence for a run waiting on an approval. */
 async function approveSteerStop(control: ChatSessionControl) {
-  const approval = await control.respondApproval({ runId: "run-1", approvalId: "ap-1", decision: "allow" });
+  const approval = await control.respondApproval({
+    runId: "run-1",
+    approvalId: "ap-1",
+    decision: "allow",
+  });
   const input = await control.submitInput("run-1", "steer", "Use tables");
   const stopped = await control.cancel("run-1");
   return { approval, admitted: input.admitted, queue: input.queue, stopped };
@@ -541,7 +671,11 @@ async function approveSteerStop(control: ChatSessionControl) {
 
 function hostOutcome(runs: HostRunRegistry, effects: FakeHostEffects) {
   const approval = runs.resolution("ap-1");
-  return { state: runs.summary("run-1")?.state, approval: approval?.kind === "approval" ? approval.decision : undefined, effects };
+  return {
+    state: runs.summary("run-1")?.state,
+    approval: approval?.kind === "approval" ? approval.decision : undefined,
+    effects,
+  };
 }
 
 test("the same session control drives a chat on this Mac and one on another Mac to the same outcome", async () => {
@@ -560,10 +694,17 @@ test("the same session control drives a chat on this Mac and one on another Mac 
     respondRemoteApproval: unused,
     respondRemoteQuestion: unused,
     approve: async (approvalId, decision, options) => {
-      local.approve({ runId: localRuns.runForPrompt(approvalId)!, chatId: "chat-1", approvalId, decision, scope: options?.scope });
+      local.approve({
+        runId: localRuns.runForPrompt(approvalId)!,
+        chatId: "chat-1",
+        approvalId,
+        decision,
+        scope: options?.scope,
+      });
     },
     stop: async (runId) => local.cancel(runId),
-    admitRunInput: (streamId, input) => local.admitInput({ streamId, chatId: "chat-1", mode: input.mode, text: input.text }),
+    admitRunInput: (streamId, input) =>
+      local.admitInput({ streamId, chatId: "chat-1", mode: input.mode, text: input.text }),
     observeRun: unused,
     unobserveRun: unused,
     onRunFrame: () => () => {},
@@ -571,7 +712,11 @@ test("the same session control drives a chat on this Mac and one on another Mac 
   });
   localRuns.begin({ runId: "run-1", chatId: "chat-1", origin: "renderer" });
   localRuns.publish("run-1", "chat:approval", APPROVAL);
-  const localControl = new ChatSessionControl(localAdapter, { hostId: localAdapter.hostId, chatId: "chat-1" }, new ChatIntentLedger());
+  const localControl = new ChatSessionControl(
+    localAdapter,
+    { hostId: localAdapter.hostId, chatId: "chat-1" },
+    new ChatIntentLedger(),
+  );
   localControl.attach();
 
   // Another Mac: the remote adapter over the peer connection.
@@ -586,12 +731,22 @@ test("the same session control drives a chat on this Mac and one on another Mac 
     const here = await approveSteerStop(localControl);
     const there = await approveSteerStop(remoteControl);
     assert.deepEqual(there, here);
-    assert.deepEqual(here, { approval: { resolution: "applied" }, admitted: true, queue: "steer", stopped: true });
+    assert.deepEqual(here, {
+      approval: { resolution: "applied" },
+      admitted: true,
+      queue: "steer",
+      stopped: true,
+    });
     assert.deepEqual(hostOutcome(host.runs, host.effects), hostOutcome(localRuns, localEffects));
     assert.deepEqual(hostOutcome(host.runs, host.effects), {
       state: "cancelled",
       approval: "allow",
-      effects: { cancels: ["run-1"], approvals: ["ap-1:allow"], answers: [], inputs: ["run-1:steer:Use tables"] },
+      effects: {
+        cancels: ["run-1"],
+        approvals: ["ap-1:allow"],
+        answers: [],
+        inputs: ["run-1:steer:Use tables"],
+      },
     });
   } finally {
     harness.close();
@@ -601,10 +756,23 @@ test("the same session control drives a chat on this Mac and one on another Mac 
 test("a paired Inbox acknowledges only the displayed reply, including on legacy summary hosts", async () => {
   const host = new FakeHost("host_b", numbered(4));
   let revision = "rev_" + "A".repeat(43);
-  host.routes = async (input) => input.path === "/chat-summaries" ? { summaries: [{
-    id: "chat-1", workspaceId: "ws", title: "Release notes", titlePending: false,
-    createdAt: new Date(1000).toISOString(), updatedAt: new Date(2000).toISOString(), revision, activity: "idle",
-  }] } : UNHANDLED;
+  host.routes = async (input) =>
+    input.path === "/chat-summaries"
+      ? {
+          summaries: [
+            {
+              id: "chat-1",
+              workspaceId: "ws",
+              title: "Release notes",
+              titlePending: false,
+              createdAt: new Date(1000).toISOString(),
+              updatedAt: new Date(2000).toISOString(),
+              revision,
+              activity: "idle",
+            },
+          ],
+        }
+      : UNHANDLED;
   const harness = await setup(host);
   try {
     // The row showed m1, then m3 arrived before the user clicked.
@@ -626,11 +794,25 @@ test("a paired Inbox reads legacy hosts without message windows and refuses stal
   let revision = "rev_" + "A".repeat(43);
   let windowRequests = 0;
   host.routes = async (input) => {
-    if (input.path.startsWith("/chats/chat-1/messages")) { windowRequests += 1; return UNHANDLED; }
-    if (input.path === "/chat-summaries") return { summaries: [{
-      id: "chat-1", workspaceId: "ws", title: "Release notes", titlePending: false,
-      createdAt: new Date(1000).toISOString(), updatedAt: new Date(2000).toISOString(), revision, activity: "idle",
-    }] };
+    if (input.path.startsWith("/chats/chat-1/messages")) {
+      windowRequests += 1;
+      return UNHANDLED;
+    }
+    if (input.path === "/chat-summaries")
+      return {
+        summaries: [
+          {
+            id: "chat-1",
+            workspaceId: "ws",
+            title: "Release notes",
+            titlePending: false,
+            createdAt: new Date(1000).toISOString(),
+            updatedAt: new Date(2000).toISOString(),
+            revision,
+            activity: "idle",
+          },
+        ],
+      };
     return UNHANDLED;
   };
   const harness = await setup(host);
@@ -642,5 +824,7 @@ test("a paired Inbox reads legacy hosts without message windows and refuses stal
     assert.equal((await harness.adapter.markSummaryRead("chat-1", undefined, displayed)).ok, false);
     assert.deepEqual(host.reads, [{ throughMessageId: "m3" }]);
     assert.equal(windowRequests, 0);
-  } finally { harness.close(); }
+  } finally {
+    harness.close();
+  }
 });

@@ -99,7 +99,10 @@ function peerContract(): Promise<PeerContract> {
       const summary = protocol.components.schemas.ChatSummary;
       const schemas = {
         ...protocol.components.schemas,
-        ChatSummary: { ...summary, properties: { ...summary.properties, inboxBucket: {}, inboxSortAt: {} } },
+        ChatSummary: {
+          ...summary,
+          properties: { ...summary.properties, inboxBucket: {}, inboxSortAt: {} },
+        },
       };
       ajv.addSchema({
         $id: "urn:aiden:peer",
@@ -133,11 +136,8 @@ async function validator(operation: string): Promise<ValidateFunction | null> {
         endpoint.operationId !== id
       )
         continue;
-      const responses = (endpoint as { responses: Record<string, unknown> })
-        .responses;
-      const status = Object.keys(responses).find((code) =>
-        /^2\d\d$/u.test(code),
-      );
+      const responses = (endpoint as { responses: Record<string, unknown> }).responses;
+      const status = Object.keys(responses).find((code) => /^2\d\d$/u.test(code));
       if (!status) break;
       if (status === "204") {
         validators.set(operation, null);
@@ -156,31 +156,24 @@ async function validator(operation: string): Promise<ValidateFunction | null> {
 }
 
 /** Validate the entire protocol envelope; content fields are not scanned for secret-like words. */
-export async function validatePeerResponse(
-  operation: string,
-  value: unknown,
-): Promise<void> {
+export async function validatePeerResponse(operation: string, value: unknown): Promise<void> {
   let nodes = 0;
   let bytes = 0;
   const visit = (node: unknown, depth: number): void => {
-    if (++nodes > 50_000 || depth > 64)
-      throw new Error("Peer response exceeds structural limits.");
+    if (++nodes > 50_000 || depth > 64) throw new Error("Peer response exceeds structural limits.");
     if (typeof node === "string") bytes += Buffer.byteLength(node);
     else if (Array.isArray(node)) {
-      if (node.length > 4000)
-        throw new Error("Peer response array exceeds its limit.");
+      if (node.length > 4000) throw new Error("Peer response array exceeds its limit.");
       for (const child of node) visit(child, depth + 1);
     } else if (node && typeof node === "object") {
       const entries = Object.entries(node);
-      if (entries.length > 256)
-        throw new Error("Peer response object exceeds its limit.");
+      if (entries.length > 256) throw new Error("Peer response object exceeds its limit.");
       for (const [key, child] of entries) {
         bytes += Buffer.byteLength(key);
         visit(child, depth + 1);
       }
     }
-    if (bytes > 1_048_576)
-      throw new Error("Peer response exceeds its byte limit.");
+    if (bytes > 1_048_576) throw new Error("Peer response exceeds its byte limit.");
   };
   visit(value, 0);
   const check = await validator(operation);

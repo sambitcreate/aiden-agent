@@ -22,24 +22,25 @@ const OMITTED_IMAGE =
   "[Image omitted from the advisor request because of reviewer modality or request bounds.]";
 
 function redactAdvisorText(value: string): string {
-  const bounded = value.length > ADVISOR_TEXT_MAX_CHARS
-    ? `${value.slice(0, ADVISOR_TEXT_MAX_CHARS)}\n[Text truncated before advisor transfer.]`
-    : value;
+  const bounded =
+    value.length > ADVISOR_TEXT_MAX_CHARS
+      ? `${value.slice(0, ADVISOR_TEXT_MAX_CHARS)}\n[Text truncated before advisor transfer.]`
+      : value;
   return bounded
     .replace(
       /-----BEGIN [^-\n]+ PRIVATE KEY-----[\s\S]*?-----END [^-\n]+ PRIVATE KEY-----/giu,
       "[credential redacted]",
     )
-    .replace(
-      /\bauthorization\s*:\s*bearer\s+[^\s,;]+/giu,
-      "[credential redacted]",
-    )
+    .replace(/\bauthorization\s*:\s*bearer\s+[^\s,;]+/giu, "[credential redacted]")
     .replace(
       /\b(?:api[_ -]?key|access[_ -]?token|password|secret)\s*[:=]\s*["']?[^\s,;'"}]+["']?/giu,
       "[credential redacted]",
     )
     .replace(/\bsk-[A-Za-z0-9_-]{16,}\b/gu, "[credential redacted]")
-    .replace(/\b(?:gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,})\b/gu, "[credential redacted]")
+    .replace(
+      /\b(?:gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,})\b/gu,
+      "[credential redacted]",
+    )
     .replace(/\b(?:AKIA|ASIA)[A-Z0-9]{16}\b/gu, "[credential redacted]")
     .replace(/\bAIza[0-9A-Za-z_-]{30,}\b/gu, "[credential redacted]")
     .replace(/\bxox[baprs]-[A-Za-z0-9-]{20,}\b/gu, "[credential redacted]");

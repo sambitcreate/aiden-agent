@@ -11,8 +11,7 @@ import { selectCanonicalBotChat } from "./bot-canonical-chat.js";
 
 const SAFE_CHAT_ID = /^[A-Za-z0-9._:-]{1,128}$/u;
 const SAFE_BOT_ID = /^[A-Za-z0-9._:-]{1,160}$/u;
-const CURSOR_PATTERN =
-  /^bi1\.([0-9a-z]{1,11})\.([A-Za-z0-9_-]{43})\.([A-Za-z0-9_-]{22})$/u;
+const CURSOR_PATTERN = /^bi1\.([0-9a-z]{1,11})\.([A-Za-z0-9_-]{43})\.([A-Za-z0-9_-]{22})$/u;
 
 export const BOT_INBOX_PROJECTION_LIMITS = Object.freeze({
   botCount: 256,
@@ -73,14 +72,10 @@ export function mergeBotInboxActivityPreviews(
   request: readonly BotInboxBatchRequestItem[],
   activities: readonly BotInboxBatchItem[],
 ): BotInboxBatchItem[] {
-  const previews = new Map(
-    request.map(({ chatId, preview }) => [chatId, preview] as const),
-  );
+  const previews = new Map(request.map(({ chatId, preview }) => [chatId, preview] as const));
   return activities.map((activity) => ({
     ...activity,
-    ...(previews.get(activity.chatId)
-      ? { preview: previews.get(activity.chatId) }
-      : {}),
+    ...(previews.get(activity.chatId) ? { preview: previews.get(activity.chatId) } : {}),
   }));
 }
 
@@ -141,16 +136,12 @@ function normalizedSearchText(value: string): string {
  * projection. The inbox is ambient UI, so path-like and credential-like text
  * is redacted instead of surfacing private content outside the conversation.
  */
-export function sanitizeBotInboxText(
-  value: unknown,
-  maximumScalars: number,
-): string {
+export function sanitizeBotInboxText(value: unknown, maximumScalars: number): string {
   if (typeof value !== "string") return "";
   const boundedInput = scalarPrefix(value, Math.min(maximumScalars * 8, 8_192));
   const withoutControls = Array.from(boundedInput, (character) => {
     const code = character.codePointAt(0)!;
-    return (code <= 0x1f && code !== 0x09 && code !== 0x0a && code !== 0x0d) ||
-      code === 0x7f
+    return (code <= 0x1f && code !== 0x09 && code !== 0x0a && code !== 0x0d) || code === 0x7f
       ? " "
       : character;
   }).join("");
@@ -163,10 +154,7 @@ export function sanitizeBotInboxText(
       /\b(?:api[_-]?key|access[_-]?token|refresh[_-]?token|client[_-]?secret|password)\s*[:=]\s*[^\s,;]+/giu,
       "[private]",
     )
-    .replace(
-      /\b(?:sk|rk|pk|ghp|github_pat|xox[baprs])[-_][A-Za-z0-9_-]{8,}\b/gu,
-      "[private]",
-    )
+    .replace(/\b(?:sk|rk|pk|ghp|github_pat|xox[baprs])[-_][A-Za-z0-9_-]{8,}\b/gu, "[private]")
     .replace(/\b(?:https?|file):\/\/[^\s<>()]+/giu, "[link]")
     .replace(
       /(?:^|\s)(?:\.{0,2}\/|~\/|\/)[^\s<>()]+/gu,
@@ -221,15 +209,9 @@ function encodeCursor(item: IndexedBotChat, scope: string): string {
   return `bi1.${item.updatedAt.toString(36)}.${item.tieBreaker}.${scope}`;
 }
 
-function parseCursor(
-  value: unknown,
-  expectedScope: string,
-): CursorBoundary | undefined {
+function parseCursor(value: unknown, expectedScope: string): CursorBoundary | undefined {
   if (value === undefined) return undefined;
-  if (
-    typeof value !== "string" ||
-    value.length > BOT_INBOX_PROJECTION_LIMITS.cursorChars
-  ) {
+  if (typeof value !== "string" || value.length > BOT_INBOX_PROJECTION_LIMITS.cursorChars) {
     throw new BotInboxProjectionError("The Bot inbox cursor is invalid.");
   }
   const match = CURSOR_PATTERN.exec(value);
@@ -262,9 +244,7 @@ function conversationRevision(item: IndexedBotChat): string {
   )}`;
 }
 
-function projectActivity(
-  value: BotInboxBatchItem | undefined,
-): BotInboxActivity {
+function projectActivity(value: BotInboxBatchItem | undefined): BotInboxActivity {
   if (!value) return { activityState: "idle", canRespondToApproval: false };
   if (value.activityState === "waiting_for_approval") {
     if (typeof value.canRespondToApproval !== "boolean") {
@@ -317,14 +297,8 @@ function projectConversation(
   item: IndexedBotChat,
   batch: BotInboxBatchItem,
 ): AidenRemoteBotConversationItem {
-  const title = sanitizeBotInboxText(
-    item.title,
-    BOT_INBOX_PROJECTION_LIMITS.titleScalars,
-  );
-  const preview = sanitizeBotInboxText(
-    batch.preview,
-    BOT_INBOX_PROJECTION_LIMITS.previewScalars,
-  );
+  const title = sanitizeBotInboxText(item.title, BOT_INBOX_PROJECTION_LIMITS.titleScalars);
+  const preview = sanitizeBotInboxText(batch.preview, BOT_INBOX_PROJECTION_LIMITS.previewScalars);
   return {
     chatId: item.chatId,
     botId: item.botId,
@@ -353,8 +327,7 @@ function boundedResponse(
         : {}),
     };
     if (
-      Buffer.byteLength(JSON.stringify(page), "utf8") <=
-      BOT_INBOX_PROJECTION_LIMITS.responseBytes
+      Buffer.byteLength(JSON.stringify(page), "utf8") <= BOT_INBOX_PROJECTION_LIMITS.responseBytes
     ) {
       return page;
     }
@@ -372,9 +345,7 @@ function indexBotChats(
   botFilter: string | undefined,
 ): IndexedBotChat[] {
   if (metadata.length > BOT_INBOX_PROJECTION_LIMITS.indexEntries) {
-    throw new BotInboxProjectionError(
-      "The Bot inbox is too large to project safely.",
-    );
+    throw new BotInboxProjectionError("The Bot inbox is too large to project safely.");
   }
   const candidates: IndexedBotChat[] = [];
   for (const chat of metadata) {
@@ -430,10 +401,7 @@ function searchableIdentity(bot: BotDefinition): BotSearchIdentity {
       sanitizeBotInboxText(bot.name, BOT_INBOX_PROJECTION_LIMITS.titleScalars),
     ),
     purpose: normalizedSearchText(
-      sanitizeBotInboxText(
-        bot.description ?? "",
-        BOT_INBOX_PROJECTION_LIMITS.previewScalars,
-      ),
+      sanitizeBotInboxText(bot.description ?? "", BOT_INBOX_PROJECTION_LIMITS.previewScalars),
     ),
   };
 }
@@ -469,9 +437,7 @@ export function projectBotFavoriteOrder(
   return projected;
 }
 
-export function createBotInboxProjectionService(
-  dependencies: BotInboxProjectionDependencies,
-) {
+export function createBotInboxProjectionService(dependencies: BotInboxProjectionDependencies) {
   return {
     async list(
       input: Readonly<AidenRemoteBotConversationQuery> = {},
@@ -488,9 +454,7 @@ export function createBotInboxProjectionService(
           dependencies.listChatMetadata(),
         ]);
         if (botList.length > BOT_INBOX_PROJECTION_LIMITS.botCount) {
-          throw new BotInboxProjectionError(
-            "The Bot inbox contains too many Bots.",
-          );
+          throw new BotInboxProjectionError("The Bot inbox contains too many Bots.");
         }
         const bots = new Map<string, BotSearchIdentity>();
         for (const bot of botList) {
@@ -504,9 +468,7 @@ export function createBotInboxProjectionService(
         const afterCursor = indexBotChats(metadata, bots, botFilter).filter(
           (item) => !cursor || isAfterCursor(item, cursor),
         );
-        const candidateLimit = query
-          ? BOT_INBOX_PROJECTION_LIMITS.searchCandidates
-          : limit;
+        const candidateLimit = query ? BOT_INBOX_PROJECTION_LIMITS.searchCandidates : limit;
         const candidates = afterCursor.slice(0, candidateLimit);
         if (candidates.length === 0) return { conversations: [] };
         const batchValues = await dependencies.projectBatch(
@@ -523,10 +485,7 @@ export function createBotInboxProjectionService(
           ? candidates.filter((item) => {
               const identity = bots.get(item.botId)!;
               const title = normalizedSearchText(
-                sanitizeBotInboxText(
-                  item.title,
-                  BOT_INBOX_PROJECTION_LIMITS.titleScalars,
-                ),
+                sanitizeBotInboxText(item.title, BOT_INBOX_PROJECTION_LIMITS.titleScalars),
               );
               const preview = normalizedSearchText(
                 sanitizeBotInboxText(
@@ -566,6 +525,4 @@ export function createBotInboxProjectionService(
   };
 }
 
-export type BotInboxProjectionService = ReturnType<
-  typeof createBotInboxProjectionService
->;
+export type BotInboxProjectionService = ReturnType<typeof createBotInboxProjectionService>;

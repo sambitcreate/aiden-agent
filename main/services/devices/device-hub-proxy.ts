@@ -26,7 +26,11 @@ import { request as httpsRequest } from "node:https";
 import { connect, isIP, type Socket } from "node:net";
 import type { Duplex, Transform } from "node:stream";
 import { connect as tlsConnect, type ConnectionOptions } from "node:tls";
-import { DEVICE_ID_PATTERN, LOCAL_DEVICE_HOST_ID, type DeviceStreamGrant } from "../../../renderer/shared/devices.js";
+import {
+  DEVICE_ID_PATTERN,
+  LOCAL_DEVICE_HOST_ID,
+  type DeviceStreamGrant,
+} from "../../../renderer/shared/devices.js";
 import { mjpegBoundary, repeatStillFrame } from "./mjpeg-still-frame.js";
 
 export const DEVICE_STREAM_GRANT_TTL_MS = 60_000;
@@ -39,7 +43,10 @@ export const DEVICE_HUB_HTTP_PATHS: readonly RegExp[] = [
   /^\/vendor\/serve-sim\/api$/u,
   /^\/vendor\/serve-sim\/api\/screenshot$/u,
   /^\/vendor\/serve-sim\/api\/event-log(\/events)?$/u,
-  new RegExp(`^/vendor/serve-sim/helper/${DEVICE}/(stream\\.mjpeg|stream\\.avcc|config|health|ax|foreground)$`, "u"),
+  new RegExp(
+    `^/vendor/serve-sim/helper/${DEVICE}/(stream\\.mjpeg|stream\\.avcc|config|health|ax|foreground)$`,
+    "u",
+  ),
   new RegExp(`^/vendor/serve-sim/helper/${DEVICE}/panel/(1|3)/stream\\.avcc$`, "u"),
   /^\/vendor\/serve-sim\/appstate$/u,
   // serve-emu (Android), adapted from t3code DeviceHubProxy @ a6ec88f7 (MIT). Device-scoped routes take `?device=<serial>`.
@@ -51,7 +58,10 @@ export const DEVICE_HUB_HTTP_PATHS: readonly RegExp[] = [
  * Read routes are GET/HEAD only. These routes also accept the listed method:
  * screenshot captures, serve-emu's stream tuning, and the Android fold posture.
  */
-export const DEVICE_HUB_MUTABLE_ROUTES: ReadonlyArray<{ path: RegExp; methods: readonly string[] }> = [
+export const DEVICE_HUB_MUTABLE_ROUTES: ReadonlyArray<{
+  path: RegExp;
+  methods: readonly string[];
+}> = [
   { path: /^\/vendor\/serve-sim\/api\/screenshot$/u, methods: ["POST"] },
   { path: /^\/vendor\/serve-emu\/api\/screenshot$/u, methods: ["POST"] },
   { path: /^\/vendor\/serve-emu\/api\/stream-mode$/u, methods: ["PUT"] },
@@ -207,7 +217,11 @@ export function decideDeviceHubRoute(input: {
 }): DeviceHubRoute {
   const { rawPath, search, upgrade } = input;
   // Encoded separators and dot segments never reach the allowlist, so `..%2f` cannot slip through.
-  if (!rawPath.startsWith("/") || rawPath.startsWith("//") || /[%\\?#]|\/\.\.?(\/|$)/u.test(rawPath)) {
+  if (
+    !rawPath.startsWith("/") ||
+    rawPath.startsWith("//") ||
+    /[%\\?#]|\/\.\.?(\/|$)/u.test(rawPath)
+  ) {
     return { ok: false, status: 404, message: "Not Found" };
   }
   if (!isAllowed(upgrade ? DEVICE_HUB_WS_PATHS : DEVICE_HUB_HTTP_PATHS, rawPath)) {
@@ -215,7 +229,10 @@ export function decideDeviceHubRoute(input: {
   }
   const queryDevice = search.get("device");
   const needsDevice = DEVICE_SCOPED_SOCKETS.has(rawPath) || EMU_DEVICE_SCOPED_PATH.test(rawPath);
-  if (needsDevice && (search.getAll("device").length !== 1 || !DEVICE_ID_PATTERN.test(queryDevice ?? ""))) {
+  if (
+    needsDevice &&
+    (search.getAll("device").length !== 1 || !DEVICE_ID_PATTERN.test(queryDevice ?? ""))
+  ) {
     return { ok: false, status: 404, message: "Not Found" };
   }
   const mutableRoute = DEVICE_HUB_MUTABLE_ROUTES.find((route) => route.path.test(rawPath));
@@ -236,10 +253,17 @@ export function decideDeviceHubRoute(input: {
   }
   const query = search.toString();
   const scope: DeviceHubScope =
-    (upgrade && rawPath !== "/api/devices/ws") || (!readOnly && method !== "OPTIONS" && DEVICE_CONTROL_PATH.test(rawPath))
+    (upgrade && rawPath !== "/api/devices/ws") ||
+    (!readOnly && method !== "OPTIONS" && DEVICE_CONTROL_PATH.test(rawPath))
       ? "operate"
       : "read";
-  return { ok: true, upstreamPath: query ? `${rawPath}?${query}` : rawPath, mutable, scope, deviceIds };
+  return {
+    ok: true,
+    upstreamPath: query ? `${rawPath}?${query}` : rawPath,
+    mutable,
+    scope,
+    deviceIds,
+  };
 }
 
 /**
@@ -255,7 +279,8 @@ export function hubRequestHeaders(
 ): OutgoingHttpHeaders {
   const forwarded: OutgoingHttpHeaders = {};
   for (const [name, value] of Object.entries(headers)) {
-    if (value === undefined || DROPPED_REQUEST_HEADERS.has(name) || name.startsWith("proxy-")) continue;
+    if (value === undefined || DROPPED_REQUEST_HEADERS.has(name) || name.startsWith("proxy-"))
+      continue;
     forwarded[name] = value;
   }
   if (headers.origin !== undefined || options.forceOrigin) forwarded.origin = hubOrigin;
@@ -353,7 +378,10 @@ function isUpstream(target: DeviceHubTarget): target is DeviceHubUpstream {
 }
 
 /** Headers for a paired Mac's relay: never the renderer's Origin, which Aiden Remote refuses. */
-function upstreamHeaders(incoming: IncomingHttpHeaders, upstream: DeviceHubUpstream): OutgoingHttpHeaders {
+function upstreamHeaders(
+  incoming: IncomingHttpHeaders,
+  upstream: DeviceHubUpstream,
+): OutgoingHttpHeaders {
   const headers = hubRequestHeaders(incoming, upstream.origin);
   delete headers.origin;
   return { ...headers, ...upstream.headers };
@@ -371,7 +399,10 @@ export async function startDeviceHubProxy(options: DeviceHubProxyOptions): Promi
   const byHost = new Map<string, Set<{ destroy(): void }>>();
   let port = 0;
 
-  const trackHost = (hostId: string, connection: { destroy(): void; once(event: "close", listener: () => void): unknown }) => {
+  const trackHost = (
+    hostId: string,
+    connection: { destroy(): void; once(event: "close", listener: () => void): unknown },
+  ) => {
     const set = byHost.get(hostId) ?? new Set();
     set.add(connection);
     byHost.set(hostId, set);
@@ -391,7 +422,13 @@ export async function startDeviceHubProxy(options: DeviceHubProxyOptions): Promi
     origin ? { "access-control-allow-origin": origin, vary: "Origin" } : { vary: "Origin" };
 
   type Decision =
-    | { ok: true; hostId: string; upstreamPath: string; mutable: boolean; methods: readonly string[] }
+    | {
+        ok: true;
+        hostId: string;
+        upstreamPath: string;
+        mutable: boolean;
+        methods: readonly string[];
+      }
     | { ok: false; status: number; message: string };
 
   function decide(request: IncomingMessage, upgrade: boolean): Decision {
@@ -416,9 +453,15 @@ export async function startDeviceHubProxy(options: DeviceHubProxyOptions): Promi
     // The grant and host selector authenticate here and must not travel on.
     url.searchParams.delete("t");
     url.searchParams.delete("host");
-    const route = decideDeviceHubRoute({ method: request.method ?? "GET", rawPath, search: url.searchParams, upgrade });
+    const route = decideDeviceHubRoute({
+      method: request.method ?? "GET",
+      rawPath,
+      search: url.searchParams,
+      upgrade,
+    });
     if (!route.ok) return route;
-    const methods = DEVICE_HUB_MUTABLE_ROUTES.find((candidate) => candidate.path.test(rawPath))?.methods ?? [];
+    const methods =
+      DEVICE_HUB_MUTABLE_ROUTES.find((candidate) => candidate.path.test(rawPath))?.methods ?? [];
     return { ok: true, hostId, upstreamPath: route.upstreamPath, mutable: route.mutable, methods };
   }
 
@@ -430,10 +473,19 @@ export async function startDeviceHubProxy(options: DeviceHubProxyOptions): Promi
     }
   }
 
-  function refuse(response: ServerResponse, request: IncomingMessage, status: number, message: string) {
+  function refuse(
+    response: ServerResponse,
+    request: IncomingMessage,
+    status: number,
+    message: string,
+  ) {
     const origin = request.headers.origin;
-    const allowed = origin !== undefined && options.allowedOrigins.includes(origin) ? origin : undefined;
-    response.writeHead(status, { "content-type": "text/plain; charset=utf-8", ...corsHeaders(allowed) });
+    const allowed =
+      origin !== undefined && options.allowedOrigins.includes(origin) ? origin : undefined;
+    response.writeHead(status, {
+      "content-type": "text/plain; charset=utf-8",
+      ...corsHeaders(allowed),
+    });
     response.end(message);
   }
 
@@ -503,7 +555,8 @@ export async function startDeviceHubProxy(options: DeviceHubProxyOptions): Promi
   }
 
   async function handleUpgrade(request: IncomingMessage, client: Duplex, head: Buffer) {
-    if (request.headers.upgrade?.toLowerCase() !== "websocket") return refuseUpgrade(client, 400, "Bad Request");
+    if (request.headers.upgrade?.toLowerCase() !== "websocket")
+      return refuseUpgrade(client, 400, "Bad Request");
     const decision = decide(request, true);
     if (!decision.ok) return refuseUpgrade(client, decision.status, decision.message);
     openSockets.add(client);
@@ -554,7 +607,11 @@ export async function startDeviceHubProxy(options: DeviceHubProxyOptions): Promi
       client,
       upstream,
       readyEvent: "connect",
-      requestHead: upgradeRequestHead(decision.upstreamPath, localHeaders(request.headers, target), request.headers),
+      requestHead: upgradeRequestHead(
+        decision.upstreamPath,
+        localHeaders(request.headers, target),
+        request.headers,
+      ),
       head,
       track: openSockets,
     });

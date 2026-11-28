@@ -8,6 +8,16 @@ import { WorkflowEditor } from "./workflow-editor";
  * The route contract is `ImagesRoute({ workflowId?, view? })`: the home without an id (its
  * Workflows or All Images view), the editor with one.
  */
-export function ImagesRoute({ workflowId, view = "workflows" }: { workflowId?: string; view?: ImagesHomeView }) {
-  return workflowId ? <WorkflowEditor key={workflowId} workflowId={workflowId} /> : <ImagesHome view={view} />;
+export function ImagesRoute({
+  workflowId,
+  view = "workflows",
+}: {
+  workflowId?: string;
+  view?: ImagesHomeView;
+}) {
+  return workflowId ? (
+    <WorkflowEditor key={workflowId} workflowId={workflowId} />
+  ) : (
+    <ImagesHome view={view} />
+  );
 }

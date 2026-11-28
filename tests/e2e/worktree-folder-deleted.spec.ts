@@ -5,9 +5,15 @@ import { E2E_ASSISTANT_RESPONSE, expect, finishLmStudioOnboarding, test } from "
 test.use({ workspaceSeed: true });
 
 function worktreePath(repository: string, branch: string): string {
-  const lines = execFileSync("git", ["-C", repository, "worktree", "list", "--porcelain"], { encoding: "utf8" }).split("\n");
+  const lines = execFileSync("git", ["-C", repository, "worktree", "list", "--porcelain"], {
+    encoding: "utf8",
+  }).split("\n");
   const at = lines.indexOf(`branch refs/heads/${branch}`);
-  const path = lines.slice(0, at).reverse().find((line) => line.startsWith("worktree "))?.slice("worktree ".length);
+  const path = lines
+    .slice(0, at)
+    .reverse()
+    .find((line) => line.startsWith("worktree "))
+    ?.slice("worktree ".length);
   if (at < 0 || !path) throw new Error(`No worktree on ${branch}`);
   return path;
 }
@@ -19,20 +25,34 @@ test("a chat whose worktree folder was deleted waits, then restores the worktree
   const { page, workspaceDir } = aiden;
   execFileSync("git", ["init", "-b", "main", workspaceDir]);
   execFileSync("git", [
-    "-C", workspaceDir,
-    "-c", "user.email=e2e@example.com",
-    "-c", "user.name=Aiden E2E",
-    "commit", "--allow-empty", "-m", "init",
+    "-C",
+    workspaceDir,
+    "-c",
+    "user.email=e2e@example.com",
+    "-c",
+    "user.name=Aiden E2E",
+    "commit",
+    "--allow-empty",
+    "-m",
+    "init",
   ]);
   await finishLmStudioOnboarding(page);
-  await page.locator('[role="group"][aria-label="Composer workspace bar"]').getByRole("button", { name: "main", exact: true }).click();
-  await page.getByRole("radiogroup", { name: "Work in" }).getByRole("radio", { name: /^New worktree/u }).click();
+  await page
+    .locator('[role="group"][aria-label="Composer workspace bar"]')
+    .getByRole("button", { name: "main", exact: true })
+    .click();
+  await page
+    .getByRole("radiogroup", { name: "Work in" })
+    .getByRole("radio", { name: /^New worktree/u })
+    .click();
   await page.keyboard.press("Escape");
   const composer = page.locator("textarea");
   await composer.fill("Fix the login bug");
   await composer.press("Enter");
   await expect(page.getByText(E2E_ASSISTANT_RESPONSE)).toHaveCount(1, { timeout: 30_000 });
-  await expect(page.getByRole("button", { name: "Stop generating" })).toHaveCount(0, { timeout: 15_000 });
+  await expect(page.getByRole("button", { name: "Stop generating" })).toHaveCount(0, {
+    timeout: 15_000,
+  });
 
   // The worktree folder is deleted outside Aiden; its branch stays.
   const checkout = worktreePath(workspaceDir, "aiden/fix-the-login-bug");
@@ -58,14 +78,19 @@ test("a chat whose worktree folder was deleted waits, then restores the worktree
 
   // Back in the worktree chat, Restore puts the folder back on its branch and the message can go.
   await page.getByRole("button", { name: /^Expand workspace · aiden\/fix-the-login-bug/u }).click();
-  await page.getByRole("complementary").getByRole("button", { name: /Worktree on aiden\/fix-the-login-bug$/u }).click();
+  await page
+    .getByRole("complementary")
+    .getByRole("button", { name: /Worktree on aiden\/fix-the-login-bug$/u })
+    .click();
   await expect(notice).toBeVisible({ timeout: 15_000 });
 
   // A folder that came back in the meantime refuses the restore, and the
   // notice follows the disk instead of still offering Restore.
   await mkdir(checkout);
   await notice.getByRole("button", { name: "Restore worktree" }).click();
-  await expect(page.getByText(/The worktree folder is already there/u)).toBeVisible({ timeout: 15_000 });
+  await expect(page.getByText(/The worktree folder is already there/u)).toBeVisible({
+    timeout: 15_000,
+  });
   await expect(notice).toHaveCount(0, { timeout: 15_000 });
   await rm(checkout, { recursive: true, force: true });
   await composer.press("Enter");
@@ -74,9 +99,9 @@ test("a chat whose worktree folder was deleted waits, then restores the worktree
   await notice.getByRole("button", { name: "Restore worktree" }).click();
   await expect(notice).toHaveCount(0, { timeout: 30_000 });
   expect((await stat(checkout)).isDirectory()).toBe(true);
-  expect(execFileSync("git", ["-C", checkout, "branch", "--show-current"], { encoding: "utf8" }).trim()).toBe(
-    "aiden/fix-the-login-bug",
-  );
+  expect(
+    execFileSync("git", ["-C", checkout, "branch", "--show-current"], { encoding: "utf8" }).trim(),
+  ).toBe("aiden/fix-the-login-bug");
   await expect(composer).toHaveValue(next);
   await composer.press("Enter");
   await expect(page.getByText(E2E_ASSISTANT_RESPONSE)).toHaveCount(2, { timeout: 30_000 });

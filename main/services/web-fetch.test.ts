@@ -2,12 +2,19 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import type { AgentTool } from "@earendil-works/pi-agent-core";
 
-import { WebFetchService, WEB_FETCH_MAX_TEXT_CHARS, type WebFetchStructuredResult } from "./web-fetch.js";
+import {
+  WebFetchService,
+  WEB_FETCH_MAX_TEXT_CHARS,
+  type WebFetchStructuredResult,
+} from "./web-fetch.js";
 import { WebFetchError, type WebFetchResult } from "./web-fetch-transport.js";
 import { WebSearchKeyPoolTracker, type WebSearchKeyPool } from "./web-search-key-pool-core.js";
 import { codemodeResultSchema } from "./pi-codemode.js";
 import { isPiCodemodeCallable, piRuntimeReplayPolicy } from "./pi-runtime-tool.js";
-import { defaultWebFetchSettings, type WebFetchSettingsV1 } from "../../renderer/shared/web-fetch-settings.js";
+import {
+  defaultWebFetchSettings,
+  type WebFetchSettingsV1,
+} from "../../renderer/shared/web-fetch-settings.js";
 import { parseWebExtractRecap } from "../../renderer/shared/web-extract.js";
 
 const ACCOUNT_ID = "0123456789abcdef0123456789abcdef";
@@ -17,7 +24,10 @@ const PAGE_HTML = `<html><head><title>Acme Pricing</title></head><body>
 
 function extractOn(overrides: Partial<WebFetchSettingsV1["extract"]> = {}): WebFetchSettingsV1 {
   const settings = defaultWebFetchSettings();
-  return { ...settings, extract: { ...settings.extract, enabled: true, accountId: ACCOUNT_ID, ...overrides } };
+  return {
+    ...settings,
+    extract: { ...settings.extract, enabled: true, accountId: ACCOUNT_ID, ...overrides },
+  };
 }
 
 interface Harness {
@@ -51,13 +61,32 @@ function harness(options: {
     fetchPage: async (url) => {
       fetched.push(url);
       if (options.page instanceof Error) throw options.page;
-      return { url: url.href, status: 200, mediaType: "text/html", body: PAGE_HTML, truncated: false, ...options.page };
+      return {
+        url: url.href,
+        status: 200,
+        mediaType: "text/html",
+        body: PAGE_HTML,
+        truncated: false,
+        ...options.page,
+      };
     },
     extractFetch: async (input, init) => {
-      const key = String((init?.headers as Record<string, string>).Authorization).replace(/^Bearer /u, "");
-      extractRequests.push({ url: String(input), key, body: JSON.parse(String(init?.body)) as Record<string, unknown> });
-      const answer = (options.clairic ?? (() => ({ status: 200, body: { success: true, result: { answers: {} } } })))(key);
-      return new Response(answer.body === undefined ? null : JSON.stringify(answer.body), { status: answer.status });
+      const key = String((init?.headers as Record<string, string>).Authorization).replace(
+        /^Bearer /u,
+        "",
+      );
+      extractRequests.push({
+        url: String(input),
+        key,
+        body: JSON.parse(String(init?.body)) as Record<string, unknown>,
+      });
+      const answer = (
+        options.clairic ??
+        (() => ({ status: 200, body: { success: true, result: { answers: {} } } }))
+      )(key);
+      return new Response(answer.body === undefined ? null : JSON.stringify(answer.body), {
+        status: answer.status,
+      });
     },
   });
   return { service, fetched, extractRequests, tracker };
@@ -75,7 +104,12 @@ function properties(tool: AgentTool): string[] {
 
 test("web_fetch is offered only while Web Search and page reading are both on", async () => {
   assert.equal(await harness({ webSearchEnabled: false }).service.toolForGeneration(), undefined);
-  assert.equal(await harness({ settings: { ...defaultWebFetchSettings(), enabled: false } }).service.toolForGeneration(), undefined);
+  assert.equal(
+    await harness({
+      settings: { ...defaultWebFetchSettings(), enabled: false },
+    }).service.toolForGeneration(),
+    undefined,
+  );
   const tool = await toolOf(harness({}));
   assert.equal(tool.name, "web_fetch");
   // Scripts may call it; it is never replayed after a crash.
@@ -105,7 +139,10 @@ test("read mode returns the page as text, with typed structured content for scri
   const result = await (await toolOf(h)).execute("call-1", { url: "acme.example/pricing" });
   assert.equal(h.fetched[0]!.href, "https://acme.example/pricing");
   const text = (result.content[0] as { text: string }).text;
-  assert.equal(text, "Acme Pricing\nhttps://acme.example/pricing\n\n# Pricing\nPro is $20 per month, billed monthly.\nTeam is $1,299 per year.");
+  assert.equal(
+    text,
+    "Acme Pricing\nhttps://acme.example/pricing\n\n# Pricing\nPro is $20 per month, billed monthly.\nTeam is $1,299 per year.",
+  );
   assert.deepEqual(result.structuredContent, {
     url: "https://acme.example/pricing",
     title: "Acme Pricing",
@@ -115,7 +152,9 @@ test("read mode returns the page as text, with typed structured content for scri
   });
   assert.equal(result.details, null);
 
-  const long = harness({ page: { mediaType: "text/plain", body: "y".repeat(WEB_FETCH_MAX_TEXT_CHARS + 10) } });
+  const long = harness({
+    page: { mediaType: "text/plain", body: "y".repeat(WEB_FETCH_MAX_TEXT_CHARS + 10) },
+  });
   const cut = await (await toolOf(long)).execute("call-2", { url: "https://acme.example/big.txt" });
   assert.equal((cut.structuredContent as { text: string }).text.length, WEB_FETCH_MAX_TEXT_CHARS);
   assert.equal((cut.structuredContent as { truncated: boolean }).truncated, true);
@@ -139,16 +178,28 @@ test("extract mode returns typed values with source lines, and the transcript re
       },
     }),
   });
-  const result = await (await toolOf(h)).execute("call-1", {
+  const result = await (
+    await toolOf(h)
+  ).execute("call-1", {
     url: "https://acme.example/pricing",
     mode: "extract",
-    fields: { pro_monthly: "number: Pro plan monthly price", team_yearly: "number", enterprise: "number" },
+    fields: {
+      pro_monthly: "number: Pro plan monthly price",
+      team_yearly: "number",
+      enterprise: "number",
+    },
   });
   const [request] = h.extractRequests;
-  assert.equal(request!.url, `https://api.cloudflare.com/client/v4/accounts/${ACCOUNT_ID}/ai/run/@cf/cloudflare/clairic`);
+  assert.equal(
+    request!.url,
+    `https://api.cloudflare.com/client/v4/accounts/${ACCOUNT_ID}/ai/run/@cf/cloudflare/clairic`,
+  );
   assert.equal(request!.key, "key-a");
   assert.equal(request!.body.reference_date, "2026-10-26");
-  assert.equal(request!.body.state, "# Pricing\nPro is $20 per month, billed monthly.\nTeam is $1,299 per year.");
+  assert.equal(
+    request!.body.state,
+    "# Pricing\nPro is $20 per month, billed monthly.\nTeam is $1,299 per year.",
+  );
   assert.deepEqual(request!.body.fields, {
     pro_monthly: { type: "number", instructions: "Pro plan monthly price" },
     team_yearly: { type: "number" },
@@ -160,7 +211,12 @@ test("extract mode returns typed values with source lines, and the transcript re
     mode: "extract",
     cut: false,
     fields: {
-      pro_monthly: { status: "extracted", value: 20, confidence: 0.97, sourceLine: "Pro is $20 per month, billed monthly." },
+      pro_monthly: {
+        status: "extracted",
+        value: 20,
+        confidence: 0.97,
+        sourceLine: "Pro is $20 per month, billed monthly.",
+      },
       // Confident, but 1,399 is not on the page.
       team_yearly: { status: "uncertain", guess: 1399, confidence: 0.92, notFound: true },
       enterprise: { status: "null", value: null },
@@ -172,7 +228,13 @@ test("extract mode returns typed values with source lines, and the transcript re
     host: "acme.example",
     cut: false,
     fields: [
-      { name: "pro_monthly", status: "extracted", value: "20", confidence: 0.97, sourceLine: "Pro is $20 per month, billed monthly." },
+      {
+        name: "pro_monthly",
+        status: "extracted",
+        value: "20",
+        confidence: 0.97,
+        sourceLine: "Pro is $20 per month, billed monthly.",
+      },
       { name: "team_yearly", status: "uncertain", value: "1399", confidence: 0.92, notFound: true },
       { name: "enterprise", status: "null" },
     ],
@@ -180,39 +242,86 @@ test("extract mode returns typed values with source lines, and the transcript re
   // The model reads three short lines instead of the page.
   const text = (result.content[0] as { text: string }).text;
   assert.doesNotMatch(text, /Team is \$1,299 per year/u);
-  assert.match(text, /^pro_monthly: 20 \(0\.97\) from "Pro is \$20 per month, billed monthly\."$/mu);
+  assert.match(
+    text,
+    /^pro_monthly: 20 \(0\.97\) from "Pro is \$20 per month, billed monthly\."$/mu,
+  );
 });
 
 test("extraction checks reach structured output, model text and the bounded phone recap", async () => {
   const long = "a".repeat(100) + " " + "b".repeat(100);
   for (const page of [
-    { mediaType: "text/html", body: `<p>Seats: 1.3k</p><p>Old: 1.2k</p><p>Price: $1.20</p><p>Ship: New<br>York</p><p>${long}</p>` },
-    { mediaType: "text/plain", body: `Seats: 1.3k\r\nOld: 1.2k\r\nPrice: $1.20\r\nShip: New\r\nYork\r\n${long}` },
+    {
+      mediaType: "text/html",
+      body: `<p>Seats: 1.3k</p><p>Old: 1.2k</p><p>Price: $1.20</p><p>Ship: New<br>York</p><p>${long}</p>`,
+    },
+    {
+      mediaType: "text/plain",
+      body: `Seats: 1.3k\r\nOld: 1.2k\r\nPrice: $1.20\r\nShip: New\r\nYork\r\n${long}`,
+    },
   ]) {
     const h = harness({
-      settings: extractOn(), page,
-      clairic: () => ({ status: 200, body: { success: true, result: { answers: {
-        unsupported: { value: 1.3, confidence: 0.99 },
-        price: { value: 1.2, confidence: 0.99 },
-        destination: { value: "New York", confidence: 0.99 },
-        oversized: { value: long, confidence: 0.99 },
-      } } } }),
+      settings: extractOn(),
+      page,
+      clairic: () => ({
+        status: 200,
+        body: {
+          success: true,
+          result: {
+            answers: {
+              unsupported: { value: 1.3, confidence: 0.99 },
+              price: { value: 1.2, confidence: 0.99 },
+              destination: { value: "New York", confidence: 0.99 },
+              oversized: { value: long, confidence: 0.99 },
+            },
+          },
+        },
+      }),
     });
-    const result = await (await toolOf(h)).execute("call-1", {
-      url: "https://acme.example", mode: "extract",
+    const result = await (
+      await toolOf(h)
+    ).execute("call-1", {
+      url: "https://acme.example",
+      mode: "extract",
       fields: { unsupported: "number", price: "number", destination: "text", oversized: "text" },
     });
     const structured = result.structuredContent as WebFetchStructuredResult;
     assert.ok(structured.mode === "extract" && "fields" in structured);
-    assert.deepEqual(structured.fields.unsupported, { status: "uncertain", guess: 1.3, confidence: 0.99, notFound: true });
-    assert.deepEqual(structured.fields.price, { status: "extracted", value: 1.2, confidence: 0.99, sourceLine: "Price: $1.20" });
-    assert.deepEqual(structured.fields.destination, { status: "extracted", value: "New York", confidence: 0.99, sourceLine: "Ship: New York" });
-    assert.deepEqual(structured.fields.oversized, { status: "uncertain", guess: long, confidence: 0.99 });
+    assert.deepEqual(structured.fields.unsupported, {
+      status: "uncertain",
+      guess: 1.3,
+      confidence: 0.99,
+      notFound: true,
+    });
+    assert.deepEqual(structured.fields.price, {
+      status: "extracted",
+      value: 1.2,
+      confidence: 0.99,
+      sourceLine: "Price: $1.20",
+    });
+    assert.deepEqual(structured.fields.destination, {
+      status: "extracted",
+      value: "New York",
+      confidence: 0.99,
+      sourceLine: "Ship: New York",
+    });
+    assert.deepEqual(structured.fields.oversized, {
+      status: "uncertain",
+      guess: long,
+      confidence: 0.99,
+    });
     const recap = parseWebExtractRecap(JSON.parse(JSON.stringify(result.details)));
     assert.ok(recap, "the result remains a valid persisted and Remote recap");
-    assert.deepEqual(recap.fields.find((field) => field.name === "destination"), {
-      name: "destination", status: "extracted", value: "New York", confidence: 0.99, sourceLine: "Ship: New York",
-    });
+    assert.deepEqual(
+      recap.fields.find((field) => field.name === "destination"),
+      {
+        name: "destination",
+        status: "extracted",
+        value: "New York",
+        confidence: 0.99,
+        sourceLine: "Ship: New York",
+      },
+    );
     assert.equal(recap.fields.find((field) => field.name === "oversized")?.status, "uncertain");
     const text = (result.content[0] as { text: string }).text;
     assert.match(text, /destination: New York \(0\.99\) from "Ship: New York"/u);
@@ -222,18 +331,35 @@ test("extraction checks reach structured output, model text and the bounded phon
 });
 
 test("Unicode citation limits agree through extraction, structured output and the wire recap", async () => {
-  for (const [count, status] of [[101, "extracted"], [200, "extracted"], [201, "uncertain"]] as const) {
+  for (const [count, status] of [
+    [101, "extracted"],
+    [200, "extracted"],
+    [201, "uncertain"],
+  ] as const) {
     const value = "😀".repeat(count);
     const h = harness({
-      settings: extractOn(), page: { mediaType: "text/plain", body: value },
-      clairic: () => ({ status: 200, body: { success: true, result: { answers: { symbols: { value, confidence: 0.99 } } } } }),
+      settings: extractOn(),
+      page: { mediaType: "text/plain", body: value },
+      clairic: () => ({
+        status: 200,
+        body: { success: true, result: { answers: { symbols: { value, confidence: 0.99 } } } },
+      }),
     });
-    const result = await (await toolOf(h)).execute("unicode", { url: "https://acme.example", mode: "extract", fields: { symbols: "text" } });
+    const result = await (
+      await toolOf(h)
+    ).execute("unicode", {
+      url: "https://acme.example",
+      mode: "extract",
+      fields: { symbols: "text" },
+    });
     const structured = result.structuredContent as WebFetchStructuredResult;
     assert.ok(structured.mode === "extract" && "fields" in structured);
-    assert.deepEqual(structured.fields.symbols, status === "extracted"
-      ? { status, value, confidence: 0.99, sourceLine: value }
-      : { status, guess: value, confidence: 0.99 });
+    assert.deepEqual(
+      structured.fields.symbols,
+      status === "extracted"
+        ? { status, value, confidence: 0.99, sourceLine: value }
+        : { status, guess: value, confidence: 0.99 },
+    );
     const recap = parseWebExtractRecap(JSON.parse(JSON.stringify(result.details)));
     assert.ok(recap);
     assert.equal(recap.fields[0]!.status, status);
@@ -250,40 +376,90 @@ test("a rejected or rate-limited key cools down and the next key is tried", asyn
         ? { status: 401 }
         : key === "limited"
           ? { status: 429 }
-          : { status: 200, body: { success: true, result: { answers: { price: { value: 20, confidence: 0.9 } } } } },
+          : {
+              status: 200,
+              body: {
+                success: true,
+                result: { answers: { price: { value: 20, confidence: 0.9 } } },
+              },
+            },
   });
-  const result = await (await toolOf(h)).execute("call-1", { url: "https://acme.example", fields: { price: "number" } });
-  assert.deepEqual(h.extractRequests.map(({ key }) => key), ["bad", "limited", "good"]);
-  assert.equal((result.structuredContent as { fields: Record<string, { status: string }> }).fields.price!.status, "extracted");
+  const result = await (
+    await toolOf(h)
+  ).execute("call-1", { url: "https://acme.example", fields: { price: "number" } });
+  assert.deepEqual(
+    h.extractRequests.map(({ key }) => key),
+    ["bad", "limited", "good"],
+  );
+  assert.equal(
+    (result.structuredContent as { fields: Record<string, { status: string }> }).fields.price!
+      .status,
+    "extracted",
+  );
   // The next call skips the cooled-down keys.
-  await (await toolOf(h)).execute("call-2", { url: "https://acme.example", fields: { price: "number" } });
-  assert.deepEqual(h.extractRequests.slice(3).map(({ key }) => key), ["good"]);
+  await (
+    await toolOf(h)
+  ).execute("call-2", { url: "https://acme.example", fields: { price: "number" } });
+  assert.deepEqual(
+    h.extractRequests.slice(3).map(({ key }) => key),
+    ["good"],
+  );
 });
 
 test("when extraction fails the page text still comes back, with the reason", async () => {
   const h = harness({ settings: extractOn(), keys: ["bad"], clairic: () => ({ status: 403 }) });
-  const result = await (await toolOf(h)).execute("call-1", { url: "https://acme.example", fields: { price: "number" } });
+  const result = await (
+    await toolOf(h)
+  ).execute("call-1", { url: "https://acme.example", fields: { price: "number" } });
   const structured = result.structuredContent as Record<string, unknown>;
   assert.equal(structured.mode, "extract");
   assert.match(String(structured.error), /rejected every saved key/u);
   assert.match(String(structured.text), /Pro is \$20 per month/u);
-  assert.deepEqual(result.details, { version: 1, host: "acme.example", cut: false, error: "auth", fields: [] });
+  assert.deepEqual(result.details, {
+    version: 1,
+    host: "acme.example",
+    cut: false,
+    error: "auth",
+    fields: [],
+  });
 });
 
 test("bad requests fail before anything is fetched", async () => {
   const off = harness({});
-  await assert.rejects((await toolOf(off)).execute("call-1", { url: "https://acme.example", mode: "extract", fields: { a: "text" } }), /Extract mode is off/u);
+  await assert.rejects(
+    (await toolOf(off)).execute("call-1", {
+      url: "https://acme.example",
+      mode: "extract",
+      fields: { a: "text" },
+    }),
+    /Extract mode is off/u,
+  );
   const on = harness({ settings: extractOn() });
   const tool = await toolOf(on);
-  await assert.rejects(tool.execute("call-1", { url: "https://acme.example", fields: { a: "money" } }), /unknown type/u);
-  await assert.rejects(tool.execute("call-2", { url: "https://acme.example", mode: "read", fields: { a: "text" } }), /only with mode "extract"/u);
-  await assert.rejects(tool.execute("call-3", { url: "ftp://acme.example", mode: "read" }), WebFetchError);
+  await assert.rejects(
+    tool.execute("call-1", { url: "https://acme.example", fields: { a: "money" } }),
+    /unknown type/u,
+  );
+  await assert.rejects(
+    tool.execute("call-2", { url: "https://acme.example", mode: "read", fields: { a: "text" } }),
+    /only with mode "extract"/u,
+  );
+  await assert.rejects(
+    tool.execute("call-3", { url: "ftp://acme.example", mode: "read" }),
+    WebFetchError,
+  );
   assert.equal(on.fetched.length + off.fetched.length, 0);
 });
 
 test("scripts see the declared result type, not unknown", async () => {
   const tool = await toolOf(harness({ settings: extractOn() }));
-  const schema = codemodeResultSchema(tool.outputSchema) as { properties: { structuredContent: Record<string, unknown> } };
-  const declared = (schema.properties.structuredContent as { properties?: Record<string, unknown> }).properties;
-  assert.ok(declared?.fields && declared.mode && declared.text, "the typed shape survives the codemode size budget");
+  const schema = codemodeResultSchema(tool.outputSchema) as {
+    properties: { structuredContent: Record<string, unknown> };
+  };
+  const declared = (schema.properties.structuredContent as { properties?: Record<string, unknown> })
+    .properties;
+  assert.ok(
+    declared?.fields && declared.mode && declared.text,
+    "the typed shape survives the codemode size budget",
+  );
 });

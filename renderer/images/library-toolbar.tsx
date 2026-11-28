@@ -1,5 +1,12 @@
 import { Search } from "lucide-react";
-import { Input, Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../components/ui";
+import {
+  Input,
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "../components/ui";
 import type { FacetOption, LibraryFilters, LibrarySort } from "./library-core";
 import { isEscapeKey } from "../lib/dismiss-key";
 
@@ -29,10 +36,15 @@ function FacetSelect({
       <SelectContent>
         <SelectItem value={ALL}>{`${allLabel} (${total})`}</SelectItem>
         {options.map((option) => (
-          <SelectItem key={option.key} value={option.key}>{`${option.label} (${option.count})`}</SelectItem>
+          <SelectItem
+            key={option.key}
+            value={option.key}
+          >{`${option.label} (${option.count})`}</SelectItem>
         ))}
         {/* A choice whose images are all gone stays selectable, so the trigger still names it. */}
-        {value !== null && !options.some((option) => option.key === value) ? <SelectItem value={value}>No longer available (0)</SelectItem> : null}
+        {value !== null && !options.some((option) => option.key === value) ? (
+          <SelectItem value={value}>No longer available (0)</SelectItem>
+        ) : null}
       </SelectContent>
     </Select>
   );
@@ -46,12 +58,20 @@ export function LibraryToolbar({
 }: {
   filters: LibraryFilters;
   onFiltersChange(filters: LibraryFilters): void;
-  facets: { workflows: FacetOption[]; models: FacetOption[]; workflowTotal: number; modelTotal: number };
+  facets: {
+    workflows: FacetOption[];
+    models: FacetOption[];
+    workflowTotal: number;
+    modelTotal: number;
+  };
 }) {
   return (
     <div className="flex flex-wrap items-center gap-2">
       <label className="relative block min-w-48 flex-1">
-        <Search aria-hidden="true" className="pointer-events-none absolute left-2.5 top-1/2 size-3.5 -translate-y-1/2 text-tertiary" />
+        <Search
+          aria-hidden="true"
+          className="pointer-events-none absolute left-2.5 top-1/2 size-3.5 -translate-y-1/2 text-tertiary"
+        />
         <Input
           type="search"
           value={filters.query}
@@ -82,7 +102,10 @@ export function LibraryToolbar({
         total={facets.modelTotal}
         onChange={(model) => onFiltersChange({ ...filters, model })}
       />
-      <Select value={filters.sort} onValueChange={(sort) => onFiltersChange({ ...filters, sort: sort as LibrarySort })}>
+      <Select
+        value={filters.sort}
+        onValueChange={(sort) => onFiltersChange({ ...filters, sort: sort as LibrarySort })}
+      >
         <SelectTrigger aria-label="Sort" className="w-36">
           <SelectValue />
         </SelectTrigger>

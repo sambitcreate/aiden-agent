@@ -12,7 +12,9 @@ export class BotFolderGrantReplayStaleError extends Error {
 export class BotFolderGrantJournalReadError extends Error {
   readonly cause: unknown;
   constructor(cause: unknown) {
-    super("The Bot folder grant journal could not be read. Check access to bot-folder-grants.json, preserve it for repair, then restart Aiden before allowing another folder.");
+    super(
+      "The Bot folder grant journal could not be read. Check access to bot-folder-grants.json, preserve it for repair, then restart Aiden before allowing another folder.",
+    );
     this.name = "BotFolderGrantJournalReadError";
     this.cause = cause;
   }
@@ -20,7 +22,9 @@ export class BotFolderGrantJournalReadError extends Error {
 
 export class BotFolderGrantJournalRepairError extends Error {
   constructor() {
-    super("The Bot folder grant journal needs repair. Its evidence was preserved in bot-folder-grants.json. Restore a verified backup of that file, then restart Aiden before allowing another folder.");
+    super(
+      "The Bot folder grant journal needs repair. Its evidence was preserved in bot-folder-grants.json. Restore a verified backup of that file, then restart Aiden before allowing another folder.",
+    );
     this.name = "BotFolderGrantJournalRepairError";
   }
 }
@@ -67,72 +71,78 @@ export interface BotFolderGrantJournal {
   put(record: BotFolderGrantRecord): Promise<void>;
 }
 function decodeRecords(records: unknown): BotFolderGrantRecord[] {
-    if (records === null) return [];
-    if (!Array.isArray(records) || records.length > 4096)
+  if (records === null) return [];
+  if (!Array.isArray(records) || records.length > 4096)
+    throw new BotFolderGrantJournalRepairError();
+  const ids = new Set<string>();
+  for (const value of records) {
+    const r = value as BotFolderGrantRecord | null;
+    if (
+      !r ||
+      typeof r !== "object" ||
+      Object.keys(r).some(
+        (key) =>
+          !["input", "rootId", "ownsRoot", "optionId", "resultRevision", "state"].includes(key),
+      ) ||
+      !r.input ||
+      typeof r.input !== "object"
+    )
       throw new BotFolderGrantJournalRepairError();
-    const ids = new Set<string>();
-    for (const value of records) {
-      const r = value as BotFolderGrantRecord | null;
-      if (
-        !r ||
-        typeof r !== "object" ||
-        Object.keys(r).some(
-          (key) =>
-            !["input", "rootId", "ownsRoot", "optionId", "resultRevision", "state"].includes(key),
-        ) ||
-        !r.input ||
-        typeof r.input !== "object"
-      )
-        throw new BotFolderGrantJournalRepairError();
-      const input = r.input;
-      const bounded = (v: unknown, max: number) =>
-        typeof v === "string" && v.length > 0 && v.length <= max;
-      if (
-        Object.keys(input).some(
-          (key) =>
-            ![
-              "audienceId",
-              "botId",
-              "folderPath",
-              "rootId",
-              "expectedRevision",
-              "expectedIdentity",
-              "expectedInventoryRevision",
-              "operationId",
-              "approvalTally",
-            ].includes(key),
-        ) ||
-        (input.approvalTally !== undefined && (
-          !input.approvalTally || typeof input.approvalTally !== "object" || Array.isArray(input.approvalTally) ||
-          Object.keys(input.approvalTally).some(key => !["version", "authorizationFingerprint", "offered", "decidedAt"].includes(key)) ||
-          input.approvalTally.version !== 1 || typeof input.approvalTally.authorizationFingerprint !== "string" ||
+    const input = r.input;
+    const bounded = (v: unknown, max: number) =>
+      typeof v === "string" && v.length > 0 && v.length <= max;
+    if (
+      Object.keys(input).some(
+        (key) =>
+          ![
+            "audienceId",
+            "botId",
+            "folderPath",
+            "rootId",
+            "expectedRevision",
+            "expectedIdentity",
+            "expectedInventoryRevision",
+            "operationId",
+            "approvalTally",
+          ].includes(key),
+      ) ||
+      (input.approvalTally !== undefined &&
+        (!input.approvalTally ||
+          typeof input.approvalTally !== "object" ||
+          Array.isArray(input.approvalTally) ||
+          Object.keys(input.approvalTally).some(
+            (key) => !["version", "authorizationFingerprint", "offered", "decidedAt"].includes(key),
+          ) ||
+          input.approvalTally.version !== 1 ||
+          typeof input.approvalTally.authorizationFingerprint !== "string" ||
           !/^[a-f0-9]{64}$/u.test(input.approvalTally.authorizationFingerprint) ||
-          typeof input.approvalTally.offered !== "boolean" || !Number.isSafeInteger(input.approvalTally.decidedAt) || input.approvalTally.decidedAt < 0
-        )) ||
-        !bounded(input.audienceId, 256) ||
-        !bounded(input.botId, 256) ||
-        !bounded(input.operationId, 256) ||
-        !bounded(input.expectedRevision, 256) ||
-        !bounded(input.folderPath, 4096) ||
-        !path.isAbsolute(input.folderPath) ||
-        !input.expectedIdentity ||
-        !/^\d+$/u.test(input.expectedIdentity.device) ||
-        !/^\d+$/u.test(input.expectedIdentity.inode) ||
-        !bounded(r.rootId, 128) ||
-        typeof r.ownsRoot !== "boolean" ||
-        !["pending", "committed", "rolled_back"].includes(r.state) ||
-        (input.expectedInventoryRevision !== undefined &&
-          !/^[a-f0-9]{64}$/u.test(input.expectedInventoryRevision)) ||
-        (input.rootId !== undefined && !bounded(input.rootId, 128)) ||
-        (r.optionId !== undefined && !bounded(r.optionId, 256)) ||
-        (r.resultRevision !== undefined && !bounded(r.resultRevision, 256)) ||
-        (r.state === "committed" && (!r.optionId || !r.resultRevision)) ||
-        ids.has(input.operationId)
-      )
-        throw new BotFolderGrantJournalRepairError();
-      ids.add(input.operationId);
-    }
-    return structuredClone(records);
+          typeof input.approvalTally.offered !== "boolean" ||
+          !Number.isSafeInteger(input.approvalTally.decidedAt) ||
+          input.approvalTally.decidedAt < 0)) ||
+      !bounded(input.audienceId, 256) ||
+      !bounded(input.botId, 256) ||
+      !bounded(input.operationId, 256) ||
+      !bounded(input.expectedRevision, 256) ||
+      !bounded(input.folderPath, 4096) ||
+      !path.isAbsolute(input.folderPath) ||
+      !input.expectedIdentity ||
+      !/^\d+$/u.test(input.expectedIdentity.device) ||
+      !/^\d+$/u.test(input.expectedIdentity.inode) ||
+      !bounded(r.rootId, 128) ||
+      typeof r.ownsRoot !== "boolean" ||
+      !["pending", "committed", "rolled_back"].includes(r.state) ||
+      (input.expectedInventoryRevision !== undefined &&
+        !/^[a-f0-9]{64}$/u.test(input.expectedInventoryRevision)) ||
+      (input.rootId !== undefined && !bounded(input.rootId, 128)) ||
+      (r.optionId !== undefined && !bounded(r.optionId, 256)) ||
+      (r.resultRevision !== undefined && !bounded(r.resultRevision, 256)) ||
+      (r.state === "committed" && (!r.optionId || !r.resultRevision)) ||
+      ids.has(input.operationId)
+    )
+      throw new BotFolderGrantJournalRepairError();
+    ids.add(input.operationId);
+  }
+  return structuredClone(records);
 }
 export function createBotFolderGrantJournal(storage: {
   read(): Promise<unknown>;
@@ -161,7 +171,8 @@ export function createBotFolderGrantJournal(storage: {
           index = records.findIndex((entry) => entry.input.operationId === copy.input.operationId);
         if (index < 0) records.push(copy);
         else {
-          if (!isDeepStrictEqual(records[index]!.input, copy.input)) throw new Error("The folder approval journal input identity changed.");
+          if (!isDeepStrictEqual(records[index]!.input, copy.input))
+            throw new Error("The folder approval journal input identity changed.");
           records[index] = copy;
         }
         // Refuse malformed new context before it can become repair evidence.

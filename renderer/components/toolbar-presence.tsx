@@ -43,7 +43,13 @@ function handOffFocus(leaving: HTMLElement): void {
  * focus to a neighbour. Reduce Motion, a first render and a chat switch skip the
  * motion. Styled by `.toolbar-presence` in styles.css.
  */
-export function ToolbarPresence({ present, children }: { present: boolean; children: React.ReactNode }) {
+export function ToolbarPresence({
+  present,
+  children,
+}: {
+  present: boolean;
+  children: React.ReactNode;
+}) {
   const scope = React.useContext(ToolbarPresenceScopeContext);
   const [tracked, setTracked] = React.useState<Tracked>({
     scope,
@@ -75,7 +81,8 @@ export function ToolbarPresence({ present, children }: { present: boolean; child
   // A chat switch lands on the final state at once, even in the middle of a slide.
   React.useLayoutEffect(() => {
     for (const animation of ref.current?.getAnimations?.() ?? []) {
-      if (Number.isFinite(Number(animation.effect?.getComputedTiming().endTime))) animation.finish();
+      if (Number.isFinite(Number(animation.effect?.getComputedTiming().endTime)))
+        animation.finish();
     }
   }, [scope]);
 

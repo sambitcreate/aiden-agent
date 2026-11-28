@@ -44,7 +44,11 @@ test("streaming reasoning stays one closed row as thoughts arrive", () => {
   assert.equal(header().getAttribute("aria-expanded"), "false");
   assert.equal(screen.queryByRole("region"), null, "nothing opens on its own");
   view.rerender(
-    <ReasoningBlock content={"Read the diff. Then group the hunks by story.\n\nREADME has two"} streaming active />,
+    <ReasoningBlock
+      content={"Read the diff. Then group the hunks by story.\n\nREADME has two"}
+      streaming
+      active
+    />,
   );
   assert.equal(header().getAttribute("aria-expanded"), "false");
   assert.equal(screen.queryByRole("region"), null, "more reasoning never opens it either");
@@ -56,10 +60,14 @@ test("while thinking, the row shows the latest finished sentence and drops it on
   assert.equal(line?.textContent, "Read the diff.");
   assert.equal(line?.classList.contains("opacity-0"), false);
 
-  view.rerender(<ReasoningBlock content="Read the diff. Then group by story. Now" streaming active />);
+  view.rerender(
+    <ReasoningBlock content="Read the diff. Then group by story. Now" streaming active />,
+  );
   assert.equal(line?.textContent, "Then group by story.", "the line rolls in place");
 
-  view.rerender(<ReasoningBlock content="Read the diff. Then group by story. Now" label="Thought briefly" />);
+  view.rerender(
+    <ReasoningBlock content="Read the diff. Then group by story. Now" label="Thought briefly" />,
+  );
   assert.ok(line?.classList.contains("opacity-0"), "the finished thought's line fades out");
   assert.match(header().textContent ?? "", /^Thought briefly/u);
 });
@@ -90,7 +98,11 @@ test("with motion, a close folds the body before it leaves", () => {
   const view = render(<ReasoningBlock content="Readable model thought" />);
   act(() => header().click());
   act(() => header().click());
-  assert.equal(header().getAttribute("aria-expanded"), "false", "the header reports closed right away");
+  assert.equal(
+    header().getAttribute("aria-expanded"),
+    "false",
+    "the header reports closed right away",
+  );
   const body = view.container.querySelector<HTMLElement>(".reasoning-body");
   assert.equal(body?.dataset.state, "closing", "the body stays mounted while it folds");
 
@@ -143,7 +155,11 @@ test("a live thinking shimmer pauses while scrolled away or while the window is 
   assert.equal(document.documentElement.hasAttribute("data-document-hidden"), false);
   visibility = "hidden";
   document.dispatchEvent(new Event("visibilitychange"));
-  assert.equal(document.documentElement.hasAttribute("data-document-hidden"), true, "a hidden window pauses it");
+  assert.equal(
+    document.documentElement.hasAttribute("data-document-hidden"),
+    true,
+    "a hidden window pauses it",
+  );
   visibility = "visible";
   document.dispatchEvent(new Event("visibilitychange"));
   assert.equal(document.documentElement.hasAttribute("data-document-hidden"), false);

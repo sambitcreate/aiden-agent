@@ -18,7 +18,12 @@ function exactKeys(value: Record<string, unknown>, expected: readonly string[]):
 export function parseAssistantLiveStartIntent(value: unknown): AssistantLiveStartIntent {
   if (
     !isRecord(value) ||
-    !exactKeys(value, "screen" in value ? ["computerUseAuthorization", "microphone", "screen"] : ["computerUseAuthorization", "microphone"]) ||
+    !exactKeys(
+      value,
+      "screen" in value
+        ? ["computerUseAuthorization", "microphone", "screen"]
+        : ["computerUseAuthorization", "microphone"],
+    ) ||
     ("screen" in value && typeof value.screen !== "boolean") ||
     typeof value.microphone !== "boolean" ||
     !(
@@ -84,10 +89,7 @@ export function parseAssistantLiveFrameIntent(value: unknown): AssistantLiveFram
   return { sessionId: value.sessionId, frame: Uint8Array.from(value.frame) };
 }
 
-export function parseAssistantLiveEmptyIntent(
-  value: unknown,
-  name: string,
-): void {
+export function parseAssistantLiveEmptyIntent(value: unknown, name: string): void {
   if (!isRecord(value) || !exactKeys(value, [])) {
     throw new Error(`Invalid Assistant Live ${name} request.`);
   }
@@ -105,9 +107,7 @@ export function parseAssistantLiveDisplayBindIntent(value: unknown): { sourceId:
   throw new Error("Invalid Assistant Live display-bind request.");
 }
 
-export function parseAssistantLiveDisplayReleaseIntent(
-  value: unknown,
-): { bindingId: string } {
+export function parseAssistantLiveDisplayReleaseIntent(value: unknown): { bindingId: string } {
   if (
     !isRecord(value) ||
     !exactKeys(value, ["bindingId"]) ||
@@ -168,7 +168,10 @@ export function parseAssistantLiveNoteIntent(value: unknown): AssistantLiveNoteI
   const awaitDelivery = isRecord(value) && "awaitDelivery" in value;
   if (
     !isRecord(value) ||
-    !exactKeys(value, awaitDelivery ? ["awaitDelivery", "sessionId", "text"] : ["sessionId", "text"]) ||
+    !exactKeys(
+      value,
+      awaitDelivery ? ["awaitDelivery", "sessionId", "text"] : ["sessionId", "text"],
+    ) ||
     (awaitDelivery && value.awaitDelivery !== true) ||
     !validSessionId(value.sessionId) ||
     typeof value.text !== "string" ||

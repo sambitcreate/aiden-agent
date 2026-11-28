@@ -14,8 +14,14 @@ import {
   type BotComputerViewerGrant,
 } from "../../renderer/shared/bot-computers.js";
 import { createBotComputerControl } from "../services/bot-computers/control.js";
-import { BotComputerTakenOverError, type BotComputerPointer } from "../services/bot-computers/types.js";
-import { registerBotComputerHandlers, type BotComputerHandlerDependencies } from "./bot-computers.js";
+import {
+  BotComputerTakenOverError,
+  type BotComputerPointer,
+} from "../services/bot-computers/types.js";
+import {
+  registerBotComputerHandlers,
+  type BotComputerHandlerDependencies,
+} from "./bot-computers.js";
 
 const BOT = "bot:ada";
 
@@ -36,7 +42,13 @@ function fakeHost(control: ReturnType<typeof createBotComputerControl>) {
       settings,
       diskUsedBytes: 0,
       computers: [...computers.values()],
-      requirements: { downloadBytes: 19_772_231_540, baseDiskBytes: 50e9, setupFreeBytes: 84_196_731_252, memoryPerComputerBytes: 8 * 1024 ** 3, baseVersion: "26.6.2" },
+      requirements: {
+        downloadBytes: 19_772_231_540,
+        baseDiskBytes: 50e9,
+        setupFreeBytes: 84_196_731_252,
+        memoryPerComputerBytes: 8 * 1024 ** 3,
+        baseVersion: "26.6.2",
+      },
     }),
     setUp: () =>
       new Promise<void>((resolve) => {
@@ -46,7 +58,12 @@ function fakeHost(control: ReturnType<typeof createBotComputerControl>) {
           emit();
         }
         finishSetup = () => {
-          setup = { kind: "ready", baseVersion: "26.6.2", baseBuild: "25G83", updateAvailable: false };
+          setup = {
+            kind: "ready",
+            baseVersion: "26.6.2",
+            baseBuild: "25G83",
+            updateAvailable: false,
+          };
           emit();
           resolve();
         };
@@ -65,7 +82,14 @@ function fakeHost(control: ReturnType<typeof createBotComputerControl>) {
     },
     give: async (botId) => {
       reached.push(`give:${botId}`);
-      const computer: BotComputerStatus = { botId, vmName: "aiden-bot-0123456789abcdef", state: "stopped", baseBuild: "25G83", outdated: false, controller: "bot" };
+      const computer: BotComputerStatus = {
+        botId,
+        vmName: "aiden-bot-0123456789abcdef",
+        state: "stopped",
+        baseBuild: "25G83",
+        outdated: false,
+        controller: "bot",
+      };
       computers.set(botId, computer);
       emit(botId);
       return computer;
@@ -91,7 +115,11 @@ function fakeHost(control: ReturnType<typeof createBotComputerControl>) {
     setUpElementControl: () =>
       new Promise<void>(() => {
         reached.push("setUpElementControl");
-        setup = { kind: "building_base", step: "permissions", permissions: { accessibility: true, screenRecording: false } };
+        setup = {
+          kind: "building_base",
+          step: "permissions",
+          permissions: { accessibility: true, screenRecording: false },
+        };
       }),
     checkPermissions: () => void reached.push("checkPermissions"),
     skipPermissions: () => void reached.push("skipPermissions"),
@@ -114,14 +142,22 @@ function fakeViewer() {
             resolve({
               hostId: "bot-computers",
               deviceId: "aiden-bot-0123456789abcdef",
-              grant: { origin: "http://127.0.0.1:4100", token: "t".repeat(43), expiresAt: Date.now() + 60_000 },
+              grant: {
+                origin: "http://127.0.0.1:4100",
+                token: "t".repeat(43),
+                expiresAt: Date.now() + 60_000,
+              },
             }),
         });
       }),
     grantBase: async () => ({
       hostId: "bot-computers",
       deviceId: "aiden-base",
-      grant: { origin: "http://127.0.0.1:4100", token: "b".repeat(43), expiresAt: Date.now() + 60_000 },
+      grant: {
+        origin: "http://127.0.0.1:4100",
+        token: "b".repeat(43),
+        expiresAt: Date.now() + 60_000,
+      },
     }),
   };
   return { viewer, grants };
@@ -174,10 +210,17 @@ test("Set up returns at once and its progress arrives as coalesced status broadc
   await settle();
   assert.equal(broadcasts.length, 1, "eleven progress changes became one broadcast");
   assert.equal(broadcasts[0]?.channel, BOT_COMPUTERS_CHANGED_CHANNEL);
-  assert.deepEqual(parseBotComputersStatus(broadcasts[0]?.payload)?.setup, { kind: "downloading", receivedBytes: 10, totalBytes: 10 });
+  assert.deepEqual(parseBotComputersStatus(broadcasts[0]?.payload)?.setup, {
+    kind: "downloading",
+    receivedBytes: 10,
+    totalBytes: 10,
+  });
   finish();
   await settle();
-  assert.equal(parseBotComputersStatus(broadcasts[broadcasts.length - 1]?.payload)?.setup.kind, "ready");
+  assert.equal(
+    parseBotComputersStatus(broadcasts[broadcasts.length - 1]?.payload)?.setup.kind,
+    "ready",
+  );
 });
 
 test("a computer is given only to a Bot that exists, with a well-formed id", async () => {
@@ -196,14 +239,24 @@ test("a computer is given only to a Bot that exists, with a well-formed id", asy
 
 test("settings outside the offered choices are refused before they reach the host", async () => {
   const { invoke, reached } = setup();
-  for (const patch of [{ maxRunning: 3 }, { idleStopMinutes: 7 }, { idleStopMinutes: "10" }, { other: true }, null, []]) {
+  for (const patch of [
+    { maxRunning: 3 },
+    { idleStopMinutes: 7 },
+    { idleStopMinutes: "10" },
+    { other: true },
+    null,
+    [],
+  ]) {
     await assert.rejects(invoke(BOT_COMPUTER_CHANNELS.updateSettings, patch));
   }
   assert.deepEqual(reached, []);
-  assert.deepEqual(await invoke(BOT_COMPUTER_CHANNELS.updateSettings, { maxRunning: 1, idleStopMinutes: 30 }), {
-    maxRunning: 1,
-    idleStopMinutes: 30,
-  });
+  assert.deepEqual(
+    await invoke(BOT_COMPUTER_CHANNELS.updateSettings, { maxRunning: 1, idleStopMinutes: 30 }),
+    {
+      maxRunning: 1,
+      idleStopMinutes: 30,
+    },
+  );
 });
 
 test("Remove everything replies with the emptied status", async () => {
@@ -229,9 +282,18 @@ test("the Computer tab's grant starts the computer only when asked, and only for
   for (const grant of grants) grant.settle();
   assert.equal(((await started) as BotComputerViewerGrant).deviceId, "aiden-bot-0123456789abcdef");
   await restored;
-  await assert.rejects(invoke(BOT_COMPUTER_CHANNELS.viewerGrant, "bot:ghost", { start: true }), /no longer exists/u);
-  await assert.rejects(invoke(BOT_COMPUTER_CHANNELS.viewerGrant, BOT, { start: "yes" }), /start: boolean/u);
-  await assert.rejects(invoke(BOT_COMPUTER_CHANNELS.viewerGrant, BOT, { start: true, vm: "other" }), /start: boolean/u);
+  await assert.rejects(
+    invoke(BOT_COMPUTER_CHANNELS.viewerGrant, "bot:ghost", { start: true }),
+    /no longer exists/u,
+  );
+  await assert.rejects(
+    invoke(BOT_COMPUTER_CHANNELS.viewerGrant, BOT, { start: "yes" }),
+    /start: boolean/u,
+  );
+  await assert.rejects(
+    invoke(BOT_COMPUTER_CHANNELS.viewerGrant, BOT, { start: true, vm: "other" }),
+    /start: boolean/u,
+  );
   assert.equal(grants.length, 2);
 });
 
@@ -261,7 +323,14 @@ test("Take over interrupts the Bot's action and Give back returns the computer, 
   await assert.rejects(invoke(BOT_COMPUTER_CHANNELS.takeOver, BOT), /isn't running/u);
   assert.equal(control.controller(BOT), "bot");
   computers.set(BOT, { ...computers.get(BOT)!, state: "running" });
-  const action = control.run(BOT, undefined, (signal) => new Promise<never>((_resolve, reject) => signal.addEventListener("abort", () => reject(signal.reason))));
+  const action = control.run(
+    BOT,
+    undefined,
+    (signal) =>
+      new Promise<never>((_resolve, reject) =>
+        signal.addEventListener("abort", () => reject(signal.reason)),
+      ),
+  );
   const taken = (await invoke(BOT_COMPUTER_CHANNELS.takeOver, BOT)) as BotComputerStatus;
   assert.equal(taken.controller, "person");
   assert.equal(control.takenOverBy(BOT), "viewer");
@@ -290,6 +359,11 @@ test("the pointer is the Bot's last action point, or null before it acted", asyn
   const { invoke, pointers } = setup();
   assert.equal(await invoke(BOT_COMPUTER_CHANNELS.pointer, BOT), null);
   pointers.set(BOT, { x: 512, y: 300, width: 1024, height: 768 });
-  assert.deepEqual(await invoke(BOT_COMPUTER_CHANNELS.pointer, BOT), { x: 512, y: 300, width: 1024, height: 768 });
+  assert.deepEqual(await invoke(BOT_COMPUTER_CHANNELS.pointer, BOT), {
+    x: 512,
+    y: 300,
+    width: 1024,
+    height: 768,
+  });
   await assert.rejects(invoke(BOT_COMPUTER_CHANNELS.pointer, "../escape"), /Invalid bot id/u);
 });

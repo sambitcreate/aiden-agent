@@ -28,9 +28,9 @@ export interface LivePreferenceSaverTarget {
  * saved result is applied only by the newest save, so a quick run of menu
  * choices always ends on the last one.
  */
-export function createLivePreferenceSaver(target: LivePreferenceSaverTarget): (
-  patch: AidenLivePreferencesPatch,
-) => Promise<void> {
+export function createLivePreferenceSaver(
+  target: LivePreferenceSaverTarget,
+): (patch: AidenLivePreferencesPatch) => Promise<void> {
   let queue: Promise<unknown> = Promise.resolve();
   let latest = 0;
   return (patch) => {

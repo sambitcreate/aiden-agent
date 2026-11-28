@@ -8,10 +8,25 @@ import {
 } from "./voice-preferences.js";
 
 test("valid voice preferences pass and invalid shapes are dropped", () => {
-  assert.deepEqual(parseVoicePreferencePatch({ voiceLanguage: "de", voiceTranslateToEnglish: true, voiceTrimSilence: false }),
-    { voiceLanguage: "de", voiceTranslateToEnglish: true, voiceTrimSilence: false });
-  assert.deepEqual(parseVoicePreferencePatch({ voiceLanguage: "klingon!", voiceTranslateToEnglish: "yes", voiceTrimSilence: 0 }), {});
-  assert.deepEqual(parseVoicePreferencePatch({ localVoicePreload: false }), { localVoicePreload: false });
+  assert.deepEqual(
+    parseVoicePreferencePatch({
+      voiceLanguage: "de",
+      voiceTranslateToEnglish: true,
+      voiceTrimSilence: false,
+    }),
+    { voiceLanguage: "de", voiceTranslateToEnglish: true, voiceTrimSilence: false },
+  );
+  assert.deepEqual(
+    parseVoicePreferencePatch({
+      voiceLanguage: "klingon!",
+      voiceTranslateToEnglish: "yes",
+      voiceTrimSilence: 0,
+    }),
+    {},
+  );
+  assert.deepEqual(parseVoicePreferencePatch({ localVoicePreload: false }), {
+    localVoicePreload: false,
+  });
   assert.deepEqual(parseVoicePreferencePatch({ localVoicePreload: "off" }), {});
   assert.deepEqual(parseVoicePreferencePatch({ unrelated: 1 }), {});
 });

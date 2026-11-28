@@ -241,19 +241,20 @@ test("transport closure evicts the client and expires its lease without revoking
   let created = 0;
   let closes = 0;
   const generation = cache.generation("server");
-  const acquire = () => cache.getOrConnect(
-    "server",
-    () => ({ id: ++created }),
-    async (client, isCurrent, onClosed) => {
-      client.onclose = onClosed;
-      client.isCurrent = isCurrent;
-    },
-    async (client) => {
-      closes += 1;
-      client.onclose?.();
-    },
-    generation,
-  );
+  const acquire = () =>
+    cache.getOrConnect(
+      "server",
+      () => ({ id: ++created }),
+      async (client, isCurrent, onClosed) => {
+        client.onclose = onClosed;
+        client.isCurrent = isCurrent;
+      },
+      async (client) => {
+        closes += 1;
+        client.onclose?.();
+      },
+      generation,
+    );
 
   const first = await acquire();
   assert.equal(await acquire(), first);
@@ -283,16 +284,19 @@ test("closure during connect cannot publish a dead client or remove a pending re
   let created = 0;
   const clients: Client[] = [];
   const releases: Array<() => void> = [];
-  const acquire = () => cache.getOrConnect(
-    "server",
-    () => ({ id: ++created }),
-    async (client, _isCurrent, onClosed) => {
-      client.onclose = onClosed;
-      clients.push(client);
-      await new Promise<void>((resolve) => releases.push(resolve));
-    },
-    async (client) => { client.onclose?.(); },
-  );
+  const acquire = () =>
+    cache.getOrConnect(
+      "server",
+      () => ({ id: ++created }),
+      async (client, _isCurrent, onClosed) => {
+        client.onclose = onClosed;
+        clients.push(client);
+        await new Promise<void>((resolve) => releases.push(resolve));
+      },
+      async (client) => {
+        client.onclose?.();
+      },
+    );
 
   const first = acquire();
   const rejected = assert.rejects(first, /superseded/u);
@@ -315,12 +319,19 @@ test("closure during connect cannot publish a dead client or remove a pending re
 test("an immediate close at the end of connect is rejected instead of cached", async () => {
   const cache = new GenerationBoundConnectionCache<object>();
   let closes = 0;
-  await assert.rejects(cache.getOrConnect(
-    "server",
-    () => ({}),
-    async (_client, _isCurrent, onClosed) => { onClosed(); },
-    async () => { closes += 1; },
-  ), /superseded/u);
+  await assert.rejects(
+    cache.getOrConnect(
+      "server",
+      () => ({}),
+      async (_client, _isCurrent, onClosed) => {
+        onClosed();
+      },
+      async () => {
+        closes += 1;
+      },
+    ),
+    /superseded/u,
+  );
   assert.deepEqual(cache.ids(), []);
   assert.equal(closes, 1, "failed setup retains its best-effort cleanup");
 });
@@ -332,20 +343,24 @@ test("real server closure allows the next discovery to establish a fresh session
     await cache.disconnect("server");
     await Promise.all(servers.map((server) => server.close()));
   });
-  const acquire = () => cache.getOrConnect(
-    "server",
-    () => new McpClient({ name: "cache-regression", version: "1" }),
-    async (client, _isCurrent, onClosed) => {
-      client.onClose(onClosed);
-      const server = new Server({ name: "fixture", version: "1" }, { capabilities: { tools: {} } });
-      const session = servers.push(server);
-      server.setRequestHandler(ListToolsRequestSchema, async () => ({ tools: [
-        { name: `session_${session}`, inputSchema: { type: "object" } },
-      ] }));
-      await client.connect(await connectSdkServer(server));
-    },
-    async (client) => client.close(),
-  );
+  const acquire = () =>
+    cache.getOrConnect(
+      "server",
+      () => new McpClient({ name: "cache-regression", version: "1" }),
+      async (client, _isCurrent, onClosed) => {
+        client.onClose(onClosed);
+        const server = new Server(
+          { name: "fixture", version: "1" },
+          { capabilities: { tools: {} } },
+        );
+        const session = servers.push(server);
+        server.setRequestHandler(ListToolsRequestSchema, async () => ({
+          tools: [{ name: `session_${session}`, inputSchema: { type: "object" } }],
+        }));
+        await client.connect(await connectSdkServer(server));
+      },
+      async (client) => client.close(),
+    );
 
   const first = await acquire();
   assert.equal((await first.listTools())[0].name, "session_1");
@@ -357,13 +372,23 @@ test("real server closure allows the next discovery to establish a fresh session
   assert.equal(servers.length, 2);
 });
 
-
 test("settled Settings attempts revoke their transport predicate before asynchronous close", async () => {
   const attempts = new GenerationBoundConnectionAttempts<object>();
   let current!: () => boolean;
   let checkedDuringClose = false;
-  await attempts.run("settings", attempts.generation("settings"), () => ({}), async (_value, isCurrent) => { current = isCurrent; },
-    async () => "status", async () => { checkedDuringClose = true; assert.equal(current(), false); });
+  await attempts.run(
+    "settings",
+    attempts.generation("settings"),
+    () => ({}),
+    async (_value, isCurrent) => {
+      current = isCurrent;
+    },
+    async () => "status",
+    async () => {
+      checkedDuringClose = true;
+      assert.equal(current(), false);
+    },
+  );
   assert.equal(checkedDuringClose, true);
   assert.equal(current(), false);
 });
@@ -399,9 +424,14 @@ test("forgetting a removed server prunes its bookkeeping without reviving stale 
   const attempts = new GenerationBoundConnectionAttempts<{ closed: boolean }>();
   const stale = cache.generation("removed");
   const staleAttempt = attempts.generation("removed");
-  await cache.getOrConnect("removed", () => ({ closed: false }), async () => undefined, async (value) => {
-    value.closed = true;
-  });
+  await cache.getOrConnect(
+    "removed",
+    () => ({ closed: false }),
+    async () => undefined,
+    async (value) => {
+      value.closed = true;
+    },
+  );
   cache.generation("kept");
   attempts.generation("kept");
 
@@ -413,44 +443,74 @@ test("forgetting a removed server prunes its bookkeeping without reviving stale 
 
   // A caller admitted before removal must not connect the removed server.
   await assert.rejects(
-    cache.getOrConnect("removed", () => ({ closed: false }), async () => undefined, async () => undefined, stale),
+    cache.getOrConnect(
+      "removed",
+      () => ({ closed: false }),
+      async () => undefined,
+      async () => undefined,
+      stale,
+    ),
     /superseded/u,
   );
   await assert.rejects(
-    attempts.run("removed", staleAttempt, () => ({ closed: false }), async () => undefined, async () => "used", async () => undefined),
+    attempts.run(
+      "removed",
+      staleAttempt,
+      () => ({ closed: false }),
+      async () => undefined,
+      async () => "used",
+      async () => undefined,
+    ),
     /superseded/u,
   );
 });
 
-test("an initialize response stream that never answers times out the whole connect and drops the pending attempt", { timeout: 10_000 }, async () => {
-  const cache = new GenerationBoundConnectionCache<McpClient>({ connectTimeoutMs: 100 });
-  const streams: AbortSignal[] = [];
-  let created = 0;
-  // The initialize POST opens an event stream that never carries the
-  // response, so McpClient.connect alone would wait for its own timeout.
-  const fetch: typeof globalThis.fetch = async (_input, init) => {
-    streams.push(init!.signal!);
-    return new Response(new ReadableStream<Uint8Array>({ start() {} }), { headers: { "content-type": "text/event-stream" } });
-  };
-  const acquire = () => cache.getOrConnect(
-    "server",
-    () => { created += 1; return new McpClient({ name: "stalled", version: "1" }); },
-    async (client, isCurrent, onClosed) => {
-      client.onClose(onClosed);
-      await client.connect(createMcpRemoteTransport({ serviceUrl: "https://stalled.example/mcp", fetch, isCurrent, onTerminalFailure: onClosed }));
-    },
-    async (client) => client.close(),
-  );
-  const started = Date.now();
-  await assert.rejects(acquire(), { name: "TimeoutError" });
-  assert.ok(Date.now() - started < 2_000);
-  assert.deepEqual(cache.ids(), [], "the timed-out attempt is not handed to later callers");
-  assert.equal(streams.length, 1);
-  assert.equal(streams[0].aborted, true, "the stalled response stream was cancelled");
-  await assert.rejects(acquire(), { name: "TimeoutError" });
-  assert.equal(created, 2, "a later caller starts a fresh attempt");
-  await cache.disconnect("server");
-});
+test(
+  "an initialize response stream that never answers times out the whole connect and drops the pending attempt",
+  { timeout: 10_000 },
+  async () => {
+    const cache = new GenerationBoundConnectionCache<McpClient>({ connectTimeoutMs: 100 });
+    const streams: AbortSignal[] = [];
+    let created = 0;
+    // The initialize POST opens an event stream that never carries the
+    // response, so McpClient.connect alone would wait for its own timeout.
+    const fetch: typeof globalThis.fetch = async (_input, init) => {
+      streams.push(init!.signal!);
+      return new Response(new ReadableStream<Uint8Array>({ start() {} }), {
+        headers: { "content-type": "text/event-stream" },
+      });
+    };
+    const acquire = () =>
+      cache.getOrConnect(
+        "server",
+        () => {
+          created += 1;
+          return new McpClient({ name: "stalled", version: "1" });
+        },
+        async (client, isCurrent, onClosed) => {
+          client.onClose(onClosed);
+          await client.connect(
+            createMcpRemoteTransport({
+              serviceUrl: "https://stalled.example/mcp",
+              fetch,
+              isCurrent,
+              onTerminalFailure: onClosed,
+            }),
+          );
+        },
+        async (client) => client.close(),
+      );
+    const started = Date.now();
+    await assert.rejects(acquire(), { name: "TimeoutError" });
+    assert.ok(Date.now() - started < 2_000);
+    assert.deepEqual(cache.ids(), [], "the timed-out attempt is not handed to later callers");
+    assert.equal(streams.length, 1);
+    assert.equal(streams[0].aborted, true, "the stalled response stream was cancelled");
+    await assert.rejects(acquire(), { name: "TimeoutError" });
+    assert.equal(created, 2, "a later caller starts a fresh attempt");
+    await cache.disconnect("server");
+  },
+);
 
 test("disconnect waits for an in-flight attempt only up to its bound", async () => {
   for (const kind of ["cache", "attempts"] as const) {
@@ -459,13 +519,29 @@ test("disconnect waits for an in-flight attempt only up to its bound", async () 
     const started = Date.now();
     if (kind === "cache") {
       const cache = new GenerationBoundConnectionCache<number>({ disconnectWaitMs: 50 });
-      const pending = cache.getOrConnect("server", () => 1, () => never, async (value) => { closed.push(value); });
+      const pending = cache.getOrConnect(
+        "server",
+        () => 1,
+        () => never,
+        async (value) => {
+          closed.push(value);
+        },
+      );
       void pending.catch(() => undefined);
       await Promise.resolve();
       await cache.disconnect("server");
     } else {
       const attempts = new GenerationBoundConnectionAttempts<number>({ disconnectWaitMs: 50 });
-      const pending = attempts.run("server", attempts.generation("server"), () => 1, () => never, async () => 0, async (value) => { closed.push(value); });
+      const pending = attempts.run(
+        "server",
+        attempts.generation("server"),
+        () => 1,
+        () => never,
+        async () => 0,
+        async (value) => {
+          closed.push(value);
+        },
+      );
       void pending.catch(() => undefined);
       await Promise.resolve();
       await attempts.disconnect("server");
@@ -480,27 +556,61 @@ test("after shutdown no connection or Settings attempt can start", async () => {
   const cache = new GenerationBoundConnectionCache<number>();
   const attempts = new GenerationBoundConnectionAttempts<number>();
   let releaseConnect!: () => void;
-  const racing = cache.getOrConnect("server", () => 1, () => new Promise<void>((resolve) => { releaseConnect = resolve; }), async () => {});
+  const racing = cache.getOrConnect(
+    "server",
+    () => 1,
+    () =>
+      new Promise<void>((resolve) => {
+        releaseConnect = resolve;
+      }),
+    async () => {},
+  );
   const raced = assert.rejects(racing, /superseded/u);
   await Promise.resolve();
   const shuttingDown = cache.shutdown();
   releaseConnect();
   await Promise.all([shuttingDown, attempts.shutdown(), raced]);
   let created = 0;
-  await assert.rejects(cache.getOrConnect("server", () => ++created, async () => {}, async () => {}), /shut down/u);
-  await assert.rejects(attempts.run("server", attempts.generation("server"), () => ++created, async () => {}, async () => 0, async () => {}), /shut down/u);
+  await assert.rejects(
+    cache.getOrConnect(
+      "server",
+      () => ++created,
+      async () => {},
+      async () => {},
+    ),
+    /shut down/u,
+  );
+  await assert.rejects(
+    attempts.run(
+      "server",
+      attempts.generation("server"),
+      () => ++created,
+      async () => {},
+      async () => 0,
+      async () => {},
+    ),
+    /shut down/u,
+  );
   assert.equal(created, 0);
   assert.deepEqual(cache.ids(), []);
 });
-
 
 test("an existing-client probe never connects or revives an expired approval session", async () => {
   const cache = new GenerationBoundConnectionCache<{ id: number }>();
   let created = 0;
   assert.equal(cache.peekConnected("mail"), undefined);
-  const approved = await cache.getOrConnect("mail", () => ({ id: ++created }), async () => {}, async () => {});
+  const approved = await cache.getOrConnect(
+    "mail",
+    () => ({ id: ++created }),
+    async () => {},
+    async () => {},
+  );
   assert.equal(cache.peekConnected("mail"), approved);
   await cache.closeIdle("mail");
   assert.equal(cache.peekConnected("mail"), undefined);
-  assert.equal(created, 1, "observing an absent session cannot start an approval-producing replacement");
+  assert.equal(
+    created,
+    1,
+    "observing an absent session cannot start an approval-producing replacement",
+  );
 });

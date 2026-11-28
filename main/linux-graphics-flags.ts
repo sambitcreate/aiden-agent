@@ -1,5 +1,8 @@
 import { app } from "electron";
-import { disableVulkanFeature, shouldSuppressOzoneWaylandVulkan } from "./linux-wayland-vulkan-core.js";
+import {
+  disableVulkanFeature,
+  shouldSuppressOzoneWaylandVulkan,
+} from "./linux-wayland-vulkan-core.js";
 
 export function applyLinuxGraphicsFlags(): void {
   const ozonePlatformOverride = app.commandLine.hasSwitch("ozone-platform")
@@ -8,5 +11,8 @@ export function applyLinuxGraphicsFlags(): void {
   if (!shouldSuppressOzoneWaylandVulkan(process.platform, process.env, ozonePlatformOverride)) {
     return;
   }
-  app.commandLine.appendSwitch("disable-features", disableVulkanFeature(app.commandLine.getSwitchValue("disable-features")));
+  app.commandLine.appendSwitch(
+    "disable-features",
+    disableVulkanFeature(app.commandLine.getSwitchValue("disable-features")),
+  );
 }

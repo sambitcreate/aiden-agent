@@ -47,10 +47,10 @@ Use the port your Aiden reports if it is not 49400; the Settings sheet fills in 
 
 An app is a Remote device of type `agent`. Its capabilities are set to one of two levels when it is issued. When Aiden loads its Remote state, an app record is stripped of anything beyond the Supervised set, so an edit to the state file cannot widen an app's access:
 
-| Level | Capabilities | Tools |
-| --- | --- | --- |
-| Read | `server:read`, `chat:read` | `aiden_server_info`, `aiden_workspace_list`, `aiden_chat_list`, `aiden_chat_read`, `aiden_chat_wait` |
-| Supervised | Read, plus `chat:write` | Read tools, plus `aiden_chat_start`, `aiden_chat_send`, `aiden_chat_stop` |
+| Level      | Capabilities               | Tools                                                                                                |
+| ---------- | -------------------------- | ---------------------------------------------------------------------------------------------------- |
+| Read       | `server:read`, `chat:read` | `aiden_server_info`, `aiden_workspace_list`, `aiden_chat_list`, `aiden_chat_read`, `aiden_chat_wait` |
+| Supervised | Read, plus `chat:write`    | Read tools, plus `aiden_chat_start`, `aiden_chat_send`, `aiden_chat_stop`                            |
 
 An app is never granted `approval:respond`, files, Git, shell, Bots, schedules, settings, devices or pairing. A Read app does not see the write tools in `tools/list`, and calling one anyway is refused.
 
@@ -58,16 +58,16 @@ At most 16 apps can be connected at once, separately from the phone and Mac devi
 
 ## Tools
 
-| Tool | What it does |
-| --- | --- |
-| `aiden_server_info` | Aiden's version, the computer's name, and this app's access level. |
-| `aiden_workspace_list` | The person's workspaces. It leaves out the folders Aiden makes for a single chat, and the assistant's own workspace. |
-| `aiden_chat_list` | Recent ordinary chats, newest first, with a cursor. It leaves out Bot chats, feature chats and assistant chats. |
-| `aiden_chat_read` | A chat's recent messages, paged with `before`. |
-| `aiden_chat_wait` | Waits up to `timeoutSeconds` (default 25, maximum 55) for a run this app started. Returns `running`, `waiting_for_approval` or `waiting_for_input` (each with `approveIn`/`answerIn`, for example "Aiden on Studio Mac"), `done` with the final reply, or `failed`. It returns early if the app disconnects. |
-| `aiden_chat_start` | Starts a new chat in an offered workspace, with optional `providerId`/`modelId`, and sends the first message. Needs a `clientRequestId`. Retrying with the same one returns the same chat and run, and never starts a second turn. |
-| `aiden_chat_send` | Sends a follow-up to an existing ordinary chat (also idempotent by `clientRequestId`). |
-| `aiden_chat_stop` | Stops a run **this app** started. Another app's runs, and the person's own, cannot be stopped or waited on. |
+| Tool                   | What it does                                                                                                                                                                                                                                                                                                 |
+| ---------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `aiden_server_info`    | Aiden's version, the computer's name, and this app's access level.                                                                                                                                                                                                                                           |
+| `aiden_workspace_list` | The person's workspaces. It leaves out the folders Aiden makes for a single chat, and the assistant's own workspace.                                                                                                                                                                                         |
+| `aiden_chat_list`      | Recent ordinary chats, newest first, with a cursor. It leaves out Bot chats, feature chats and assistant chats.                                                                                                                                                                                              |
+| `aiden_chat_read`      | A chat's recent messages, paged with `before`.                                                                                                                                                                                                                                                               |
+| `aiden_chat_wait`      | Waits up to `timeoutSeconds` (default 25, maximum 55) for a run this app started. Returns `running`, `waiting_for_approval` or `waiting_for_input` (each with `approveIn`/`answerIn`, for example "Aiden on Studio Mac"), `done` with the final reply, or `failed`. It returns early if the app disconnects. |
+| `aiden_chat_start`     | Starts a new chat in an offered workspace, with optional `providerId`/`modelId`, and sends the first message. Needs a `clientRequestId`. Retrying with the same one returns the same chat and run, and never starts a second turn.                                                                           |
+| `aiden_chat_send`      | Sends a follow-up to an existing ordinary chat (also idempotent by `clientRequestId`).                                                                                                                                                                                                                       |
+| `aiden_chat_stop`      | Stops a run **this app** started. Another app's runs, and the person's own, cannot be stopped or waited on.                                                                                                                                                                                                  |
 
 Arguments are validated against each tool's schema, and unknown properties are rejected. A message can be at most 200,000 characters, and messages read back are capped at 20,000 characters each. A chat `aiden_chat_list` leaves out (Bot, feature or assistant) cannot be read, waited on, sent to or stopped by id, even when the id is known. Every chat tool answers it exactly as it answers an unknown id (`This Aiden chat no longer exists.`), so an app cannot tell such a chat exists. MCP apps are trusted less than paired phones, which can open assistant chats.
 
@@ -155,14 +155,14 @@ These are exported from `main/services/aiden-remote-service-main.ts`:
 
 Settings reaches them through `main/handlers/aiden-mcp.ts`, which accepts calls only from the active Aiden window:
 
-| Channel | Returns |
-| --- | --- |
-| `remote:mcpStatus` | The status above. |
-| `remote:mcpSetEnabled` | The new status. Takes only a boolean. |
-| `remote:mcpIssueApp` | `{credential, app}`. The only channel that ever carries a credential. If the asking window closes before the answer arrives, the app is revoked again. |
-| `remote:mcpListApps` | Live apps, newest first, as `{id, name, access, createdAt, lastSeenAt}`. `lastSeenAt` is 0 until the app first connects. |
-| `remote:mcpRevokeApp` | `{revoked}`. |
-| `remote:mcpChatProvenance` | `{name, startedAt}` or `null`. |
+| Channel                    | Returns                                                                                                                                                |
+| -------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `remote:mcpStatus`         | The status above.                                                                                                                                      |
+| `remote:mcpSetEnabled`     | The new status. Takes only a boolean.                                                                                                                  |
+| `remote:mcpIssueApp`       | `{credential, app}`. The only channel that ever carries a credential. If the asking window closes before the answer arrives, the app is revoked again. |
+| `remote:mcpListApps`       | Live apps, newest first, as `{id, name, access, createdAt, lastSeenAt}`. `lastSeenAt` is 0 until the app first connects.                               |
+| `remote:mcpRevokeApp`      | `{revoked}`.                                                                                                                                           |
+| `remote:mcpChatProvenance` | `{name, startedAt}` or `null`.                                                                                                                         |
 
 The renderer keeps the credential only in the state of the sheet that shows it. It is never put in the React Query cache, logged or saved.
 

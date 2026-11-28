@@ -22,7 +22,10 @@ const HOLDER = { handoffs: true };
 
 async function section(): Promise<AidenRemoteBotHandoffsFixture> {
   const raw = JSON.parse(
-    await readFile(path.resolve(process.cwd(), "protocol/aiden-remote/v1/fixtures/contract.json"), "utf8"),
+    await readFile(
+      path.resolve(process.cwd(), "protocol/aiden-remote/v1/fixtures/contract.json"),
+      "utf8",
+    ),
   ) as unknown;
   return parseAidenRemoteContractFixture(raw).botHandoffs!;
 }
@@ -51,14 +54,16 @@ test("a card the password-or-code rule opened tells a holder it takes no note; t
   const fixture = await section();
   const [credentials, money] = BOT_LOCKED_RULES;
   const ruled = (id: string) =>
-    toRemoteBotHandoff(prompt({
-      waitId: fixture.noNoteHandoff.waitId,
-      action: fixture.noNoteHandoff.action,
-      why: undefined,
-      open: undefined,
-      source: "rule",
-      rule: { id, label: "Enter passwords or codes" },
-    }));
+    toRemoteBotHandoff(
+      prompt({
+        waitId: fixture.noNoteHandoff.waitId,
+        action: fixture.noNoteHandoff.action,
+        why: undefined,
+        open: undefined,
+        source: "rule",
+        rule: { id, label: "Enter passwords or codes" },
+      }),
+    );
   assert.deepEqual(ruled(credentials!.id), fixture.noNoteHandoff);
   assert.equal("takesNote" in ruled(money!.id), false);
   assert.equal("takesNote" in toRemoteBotHandoff(prompt()), false);
@@ -67,21 +72,33 @@ test("a card the password-or-code rule opened tells a holder it takes no note; t
 test("a step on the Bot's own browser or computer reaches a phone with no page, as one to finish on the Mac", async () => {
   const fixture = await section();
   const onScreen = (overrides: Partial<BotPendingHandoff>) =>
-    toRemoteBotHandoff(prompt({
-      waitId: fixture.onMacHandoff.waitId,
-      action: fixture.onMacHandoff.action,
-      why: fixture.onMacHandoff.why,
-      open: { url: "https://shop.example.com/checkout" },
-      ...overrides,
-    }));
+    toRemoteBotHandoff(
+      prompt({
+        waitId: fixture.onMacHandoff.waitId,
+        action: fixture.onMacHandoff.action,
+        why: fixture.onMacHandoff.why,
+        open: { url: "https://shop.example.com/checkout" },
+        ...overrides,
+      }),
+    );
   assert.deepEqual(onScreen({ target: "browser" }), fixture.onMacHandoff);
   assert.deepEqual(onScreen({ target: "computer", open: undefined }), fixture.onMacHandoff);
   // A rule that stopped a call in the Bot's browser hands over the same kind of step.
-  const ruled = onScreen({ target: "browser", source: "rule", rule: { id: "rule-buy", label: "Ask before buying" } });
+  const ruled = onScreen({
+    target: "browser",
+    source: "rule",
+    rule: { id: "rule-buy", label: "Ask before buying" },
+  });
   assert.equal(ruled.onMac, true);
   assert.equal("open" in ruled, false);
   // A sign-in keeps its own Finish on your Mac, and a step anywhere else keeps its page.
-  assert.equal("onMac" in toRemoteBotHandoff(prompt({ kind: "sign_in", action: "Sign in to github.com", target: "computer" })), false);
+  assert.equal(
+    "onMac" in
+      toRemoteBotHandoff(
+        prompt({ kind: "sign_in", action: "Sign in to github.com", target: "computer" }),
+      ),
+    false,
+  );
   assert.equal("onMac" in toRemoteBotHandoff(prompt()), false);
   assert.equal(toRemoteBotHandoff(prompt()).open?.url, "https://bank.example.com/verify");
 });
@@ -95,23 +112,33 @@ test("a hand-off link that is not a plain https page, and a blank reason, never 
   ]) {
     const card = toRemoteBotHandoff(prompt({ open: { url } }));
     assert.equal("open" in card, false, url);
-    assert.equal(card.action, "Enter the 2FA code your bank sent you", "the card itself still arrives");
+    assert.equal(
+      card.action,
+      "Enter the 2FA code your bank sent you",
+      "the card itself still arrives",
+    );
   }
   assert.equal("why" in toRemoteBotHandoff(prompt({ why: "   " })), false);
-  const signIn = toRemoteBotHandoff(prompt({
-    kind: "sign_in",
-    action: "Sign in to bank.example.com",
-    why: undefined,
-    open: { url: "https://bank.example.com" },
-    origin: "https://bank.example.com",
-    target: "browser",
-  }));
-  assert.deepEqual(signIn, {
-    waitId: "4f9c2d1e-7a3b-4c5d-9e8f-0a1b2c3d4e5f",
-    kind: "sign_in",
-    action: "Sign in to bank.example.com",
-    open: { url: "https://bank.example.com" },
-  }, "the sign-in target and origin stay on the Mac");
+  const signIn = toRemoteBotHandoff(
+    prompt({
+      kind: "sign_in",
+      action: "Sign in to bank.example.com",
+      why: undefined,
+      open: { url: "https://bank.example.com" },
+      origin: "https://bank.example.com",
+      target: "browser",
+    }),
+  );
+  assert.deepEqual(
+    signIn,
+    {
+      waitId: "4f9c2d1e-7a3b-4c5d-9e8f-0a1b2c3d4e5f",
+      kind: "sign_in",
+      action: "Sign in to bank.example.com",
+      open: { url: "https://bank.example.com" },
+    },
+    "the sign-in target and origin stay on the Mac",
+  );
 });
 
 test("a page the Mac reads in a looser form reaches a phone as the Mac's parser prints it, so every phone can decode the card", () => {
@@ -124,14 +151,24 @@ test("a page the Mac reads in a looser form reaches a phone as the Mac's parser 
     ["https://bank.example.com\\verify", "https://bank.example.com/verify"],
     ["https://bänk.example.com/vérify", "https://xn--bnk-qla.example.com/v%C3%A9rify"],
   ]) {
-    assert.deepEqual(toRemoteBotHandoff(prompt({ open: { url: given } })).open, { url: sent }, JSON.stringify(given));
+    assert.deepEqual(
+      toRemoteBotHandoff(prompt({ open: { url: given } })).open,
+      { url: sent },
+      JSON.stringify(given),
+    );
   }
   // A page already in that form, or a bare origin as a sign-in names it, goes as it is.
-  for (const url of ["https://bank.example.com/verify", "https://github.com", "https://[::1]:8443/a?b=c#d"]) {
+  for (const url of [
+    "https://bank.example.com/verify",
+    "https://github.com",
+    "https://[::1]:8443/a?b=c#d",
+  ]) {
     assert.deepEqual(toRemoteBotHandoff(prompt({ open: { url } })).open, { url }, url);
   }
   // Printed, a page may outgrow what a card may carry: the card then goes without it.
-  const long = toRemoteBotHandoff(prompt({ open: { url: `https://bank.example.com/${"é".repeat(800)}` } }));
+  const long = toRemoteBotHandoff(
+    prompt({ open: { url: `https://bank.example.com/${"é".repeat(800)}` } }),
+  );
   assert.equal("open" in long, false);
   assert.equal(long.action, "Enter the 2FA code your bank sent you");
 });
@@ -140,12 +177,25 @@ test("a legacy device reads a waiting hand-off as one assistant line that names 
   const fixture = await section();
   const notice = fixture.legacy.session.entries[fixture.legacy.session.entries.length - 1];
   assert.deepEqual(legacyHandoffNotice("Scout", prompt()), notice);
-  assert.equal(notice && "createdAt" in notice, false, "the notice never moves a chat's preview or unread state");
+  assert.equal(
+    notice && "createdAt" in notice,
+    false,
+    "the notice never moves a chat's preview or unread state",
+  );
 
-  const spaced = legacyHandoffNotice("  Ada \n Lovelace ", prompt({ action: "Approve the  transfer.\n" }));
-  assert.equal(spaced.type === "message" && spaced.text, "Ada Lovelace needs you on your computer: Approve the transfer");
+  const spaced = legacyHandoffNotice(
+    "  Ada \n Lovelace ",
+    prompt({ action: "Approve the  transfer.\n" }),
+  );
+  assert.equal(
+    spaced.type === "message" && spaced.text,
+    "Ada Lovelace needs you on your computer: Approve the transfer",
+  );
   const unnamed = legacyHandoffNotice(" ", prompt());
-  assert.equal(unnamed.type === "message" && unnamed.text, "Your Bot needs you on your computer: Enter the 2FA code your bank sent you");
+  assert.equal(
+    unnamed.type === "message" && unnamed.text,
+    "Your Bot needs you on your computer: Enter the 2FA code your bank sent you",
+  );
 });
 
 test("only a person's pause reads differently to a legacy device", () => {
@@ -157,16 +207,22 @@ test("only a person's pause reads differently to a legacy device", () => {
     else assert.deepEqual(legacy, view, `${state} for a legacy device`);
   }
   // An interrupted turn the person then paused is still a paused Bot to a holder.
-  assert.deepEqual(
-    stateViewForAudience({ state: "paused", interrupted: true }, LEGACY_AUDIENCE),
-    { state: "unavailable", interrupted: false },
-  );
+  assert.deepEqual(stateViewForAudience({ state: "paused", interrupted: true }, LEGACY_AUDIENCE), {
+    state: "unavailable",
+    interrupted: false,
+  });
 });
 
 test("a paused Bot's summary and detail project to the fixture's two views", async () => {
   const fixture = await section();
-  assert.deepEqual(projectBotSummaryForAudience(fixture.pausedSummary, LEGACY_AUDIENCE), fixture.legacy.pausedSummary);
-  assert.deepEqual(projectBotSummaryForAudience(fixture.pausedSummary, HOLDER), fixture.pausedSummary);
+  assert.deepEqual(
+    projectBotSummaryForAudience(fixture.pausedSummary, LEGACY_AUDIENCE),
+    fixture.legacy.pausedSummary,
+  );
+  assert.deepEqual(
+    projectBotSummaryForAudience(fixture.pausedSummary, HOLDER),
+    fixture.pausedSummary,
+  );
 
   const legacyDetail = projectBotDetailForAudience(fixture.pausedDetail, LEGACY_AUDIENCE);
   assert.equal("paused" in legacyDetail, false);
@@ -174,23 +230,39 @@ test("a paused Bot's summary and detail project to the fixture's two views", asy
   assert.deepEqual(projectBotDetailForAudience(fixture.pausedDetail, HOLDER), fixture.pausedDetail);
 
   // A Bot that is not paused: a holder's detail always says so, a summary stays quiet.
-  const { paused: _summaryFlag, ...idleSummary } = { ...fixture.pausedSummary, sessionState: "idle" as const };
+  const { paused: _summaryFlag, ...idleSummary } = {
+    ...fixture.pausedSummary,
+    sessionState: "idle" as const,
+  };
   assert.deepEqual(projectBotSummaryForAudience(idleSummary, HOLDER), idleSummary);
   assert.deepEqual(projectBotSummaryForAudience(idleSummary, LEGACY_AUDIENCE), idleSummary);
-  const { paused: _detailFlag, ...idleDetail } = { ...fixture.pausedDetail, sessionState: "idle" as const };
+  const { paused: _detailFlag, ...idleDetail } = {
+    ...fixture.pausedDetail,
+    sessionState: "idle" as const,
+  };
   assert.equal(projectBotDetailForAudience(idleDetail, HOLDER).paused, false);
   assert.equal("paused" in projectBotDetailForAudience(idleDetail, LEGACY_AUDIENCE), false);
 });
 
 test("a rule's card reaches a phone without its page: that page is the Bot's own tab on the Mac, and the phone's browser would act on the person's own session", () => {
-  const ruled = toRemoteBotHandoff(prompt({
-    action: "Make a purchase",
-    why: "Your rule “Make a purchase” hands this to you. Scout was about to: Click Place your order in its browser",
-    open: { url: "https://shop.example.com/cart" },
-    source: "rule",
-    rule: { id: "default.purchase", label: "Make a purchase" },
-  }));
+  const ruled = toRemoteBotHandoff(
+    prompt({
+      action: "Make a purchase",
+      why: "Your rule “Make a purchase” hands this to you. Scout was about to: Click Place your order in its browser",
+      open: { url: "https://shop.example.com/cart" },
+      source: "rule",
+      rule: { id: "default.purchase", label: "Make a purchase" },
+    }),
+  );
   assert.equal("open" in ruled, false);
-  assert.equal(ruled.action, "Make a purchase", "the card itself still arrives, answered Done or Skip");
-  assert.deepEqual(toRemoteBotHandoff(prompt()).open, { url: "https://bank.example.com/verify" }, "a link the Bot gave keeps its Open");
+  assert.equal(
+    ruled.action,
+    "Make a purchase",
+    "the card itself still arrives, answered Done or Skip",
+  );
+  assert.deepEqual(
+    toRemoteBotHandoff(prompt()).open,
+    { url: "https://bank.example.com/verify" },
+    "a link the Bot gave keeps its Open",
+  );
 });

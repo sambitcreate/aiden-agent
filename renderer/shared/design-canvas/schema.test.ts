@@ -46,7 +46,9 @@ function parsed(value: unknown): { doc: DesignCanvas; dropped: number } {
 test("an empty canvas parses with nothing dropped", () => {
   const empty = emptyDesignCanvas();
   assert.equal(empty.revision, 0);
-  assert.deepEqual(empty.pages, [{ id: "page-1", name: "Page 1", viewport: { x: 0, y: 0, zoom: 1 } }]);
+  assert.deepEqual(empty.pages, [
+    { id: "page-1", name: "Page 1", viewport: { x: 0, y: 0, zoom: 1 } },
+  ]);
   assert.equal(empty.activePageId, "page-1");
   const { doc, dropped } = parsed(empty);
   assert.equal(dropped, 0);
@@ -116,7 +118,11 @@ test("a page keeps at most 400 frames and the canvas 1 000, in document order", 
   );
   const many = parsed(canvas({ version: 2, pages, activePageId: "a", frames: spread }));
   assert.equal(many.doc.frames.length, 1000);
-  assert.equal(many.doc.frames.filter((entry) => entry.pageId === "c").length, 200, "the third page fills what is left");
+  assert.equal(
+    many.doc.frames.filter((entry) => entry.pageId === "c").length,
+    200,
+    "the third page fills what is left",
+  );
   assert.equal(many.dropped, 200);
 });
 
@@ -161,8 +167,14 @@ test("another version or a non-object is refused", () => {
 });
 
 test("viewport zoom clamps to 0.1..4", () => {
-  assert.equal(parsed(canvas({ viewport: { x: 0, y: 0, zoom: 9 } })).doc.pages[0]!.viewport.zoom, 4);
-  assert.equal(parsed(canvas({ viewport: { x: 0, y: 0, zoom: 0.01 } })).doc.pages[0]!.viewport.zoom, 0.1);
+  assert.equal(
+    parsed(canvas({ viewport: { x: 0, y: 0, zoom: 9 } })).doc.pages[0]!.viewport.zoom,
+    4,
+  );
+  assert.equal(
+    parsed(canvas({ viewport: { x: 0, y: 0, zoom: 0.01 } })).doc.pages[0]!.viewport.zoom,
+    0.1,
+  );
 });
 
 test("a long note is cut to 2000 characters", () => {
@@ -190,14 +202,33 @@ test("a version 1 canvas becomes one page that keeps its view, and reads back th
   const v1 = canvas({
     viewport: { x: -120, y: 40, zoom: 0.5 },
     frames: [frame({ id: "g", kind: "group" }), frame({ id: "n", groupId: "g" })],
-    comments: [{ id: "c1", frameId: "n", x: 1, y: 2, note: "hi", state: "open", anchorState: "anchored", createdAt: "2026-11-05T00:00:00Z" }],
+    comments: [
+      {
+        id: "c1",
+        frameId: "n",
+        x: 1,
+        y: 2,
+        note: "hi",
+        state: "open",
+        anchorState: "anchored",
+        createdAt: "2026-11-05T00:00:00Z",
+      },
+    ],
   });
   const { doc, dropped } = parsed(v1);
   assert.equal(dropped, 0);
   assert.equal(doc.version, 2);
-  assert.deepEqual(doc.pages, [{ id: "page-1", name: "Page 1", viewport: { x: -120, y: 40, zoom: 0.5 } }]);
+  assert.deepEqual(doc.pages, [
+    { id: "page-1", name: "Page 1", viewport: { x: -120, y: 40, zoom: 0.5 } },
+  ]);
   assert.equal(doc.activePageId, "page-1");
-  assert.deepEqual(doc.frames.map((entry) => [entry.id, entry.pageId, entry.groupId]), [["g", "page-1", undefined], ["n", "page-1", "g"]]);
+  assert.deepEqual(
+    doc.frames.map((entry) => [entry.id, entry.pageId, entry.groupId]),
+    [
+      ["g", "page-1", undefined],
+      ["n", "page-1", "g"],
+    ],
+  );
   assert.equal(doc.comments[0]!.pageId, "page-1");
   // Saved as version 2 and read again, nothing changes.
   assert.deepEqual(parsed(JSON.parse(JSON.stringify(doc))).doc, doc);
@@ -217,10 +248,19 @@ test("version 2 pages: duplicates and nameless pages are fixed, and unknown page
     frames: [frame({ id: "on-b", pageId: "b" }), frame({ id: "lost", pageId: "gone" })],
     comments: [],
   });
-  assert.deepEqual(doc.pages.map((page) => [page.id, page.name]), [["a", "Home"], ["b", "Page 2"]]);
+  assert.deepEqual(
+    doc.pages.map((page) => [page.id, page.name]),
+    [
+      ["a", "Home"],
+      ["b", "Page 2"],
+    ],
+  );
   assert.deepEqual(doc.pages[1]!.viewport, { x: 0, y: 0, zoom: 1 });
   assert.equal(doc.activePageId, "a");
-  assert.deepEqual(doc.frames.map((entry) => entry.pageId), ["b", "a"]);
+  assert.deepEqual(
+    doc.frames.map((entry) => entry.pageId),
+    ["b", "a"],
+  );
   const empty = parsed({ version: 2, revision: 0, pages: [], frames: [], comments: [] }).doc;
   assert.equal(empty.pages.length, 1, "a canvas always has a page");
 });
@@ -229,10 +269,28 @@ test("a frame leaves a group on another page, and a comment on a frame moves to 
   const { doc } = parsed({
     version: 2,
     revision: 1,
-    pages: [{ id: "a", name: "A" }, { id: "b", name: "B" }],
+    pages: [
+      { id: "a", name: "A" },
+      { id: "b", name: "B" },
+    ],
     activePageId: "b",
-    frames: [frame({ id: "g", kind: "group", pageId: "a" }), frame({ id: "n", groupId: "g", pageId: "b" })],
-    comments: [{ id: "c", frameId: "n", pageId: "a", x: 0, y: 0, note: "", state: "open", anchorState: "anchored", createdAt: "t" }],
+    frames: [
+      frame({ id: "g", kind: "group", pageId: "a" }),
+      frame({ id: "n", groupId: "g", pageId: "b" }),
+    ],
+    comments: [
+      {
+        id: "c",
+        frameId: "n",
+        pageId: "a",
+        x: 0,
+        y: 0,
+        note: "",
+        state: "open",
+        anchorState: "anchored",
+        createdAt: "t",
+      },
+    ],
   });
   assert.equal(doc.activePageId, "b");
   assert.equal(doc.frames[1]!.groupId, undefined);
@@ -260,8 +318,28 @@ test("relative path check refuses anything outside a plain workspace-relative pa
 test("drawn items keep their own fields, and small boxes, through a save", () => {
   const frames = [
     frame({ id: "t", kind: "text", text: "Checkout", size: "large", color: "red", w: 120, h: 20 }),
-    frame({ id: "s", kind: "shape", shape: "oval", text: "Start", fill: "green", color: "ink", strokeWidth: 3, w: 12, h: 12 }),
-    frame({ id: "c", kind: "connector", ends: [{ x: 0, y: 0 }, { x: 50, y: 0 }], arrow: "both", color: "gray", strokeWidth: 2 }),
+    frame({
+      id: "s",
+      kind: "shape",
+      shape: "oval",
+      text: "Start",
+      fill: "green",
+      color: "ink",
+      strokeWidth: 3,
+      w: 12,
+      h: 12,
+    }),
+    frame({
+      id: "c",
+      kind: "connector",
+      ends: [
+        { x: 0, y: 0 },
+        { x: 50, y: 0 },
+      ],
+      arrow: "both",
+      color: "gray",
+      strokeWidth: 2,
+    }),
     frame({
       id: "p",
       kind: "stroke",
@@ -287,7 +365,13 @@ test("drawn items keep their own fields, and small boxes, through a save", () =>
     ["Checkout", "large", "red", 20],
   );
   assert.deepEqual(
-    [byId.get("s")!.shape, byId.get("s")!.text, byId.get("s")!.fill, byId.get("s")!.color, byId.get("s")!.w],
+    [
+      byId.get("s")!.shape,
+      byId.get("s")!.text,
+      byId.get("s")!.fill,
+      byId.get("s")!.color,
+      byId.get("s")!.w,
+    ],
     ["oval", "Start", "green", "ink", 12],
   );
   assert.equal(byId.get("c")!.arrow, "both");
@@ -308,8 +392,22 @@ test("drawn items that cannot be drawn are dropped, and unknown colours and size
         frame({ id: "no-shape", kind: "shape" }),
         frame({ id: "one-end", kind: "connector", ends: [{ x: 0, y: 0 }] }),
         frame({ id: "one-point", kind: "stroke", points: [[0, 0]] }),
-        frame({ id: "bad-point", kind: "stroke", points: [[0, 0], ["x", 1]] }),
-        frame({ id: "odd", kind: "shape", shape: "rect", fill: "#ff0000", color: "chartreuse", strokeWidth: 400 }),
+        frame({
+          id: "bad-point",
+          kind: "stroke",
+          points: [
+            [0, 0],
+            ["x", 1],
+          ],
+        }),
+        frame({
+          id: "odd",
+          kind: "shape",
+          shape: "rect",
+          fill: "#ff0000",
+          color: "chartreuse",
+          strokeWidth: 400,
+        }),
         frame({ id: "loud", kind: "text", size: "huge" }),
         frame({ id: "tiny-note", kind: "note", w: 5, h: 5 }),
       ],
@@ -348,13 +446,30 @@ test("a note keeps its formatted words, size, text colour and note colour; a pag
   const { doc } = parsed(
     canvas({
       frames: [
-        frame({ id: "n", kind: "note", text: words, size: "large", color: "purple", fill: "yellow" }),
-        frame({ id: "f", kind: "file", path: "design/a.html", size: "large", color: "purple", fill: "yellow" }),
+        frame({
+          id: "n",
+          kind: "note",
+          text: words,
+          size: "large",
+          color: "purple",
+          fill: "yellow",
+        }),
+        frame({
+          id: "f",
+          kind: "file",
+          path: "design/a.html",
+          size: "large",
+          color: "purple",
+          fill: "yellow",
+        }),
       ],
     }),
   );
   const [note, page] = doc.frames;
-  assert.deepEqual([note!.text, note!.size, note!.color, note!.fill], [words, "large", "purple", "yellow"]);
+  assert.deepEqual(
+    [note!.text, note!.size, note!.color, note!.fill],
+    [words, "large", "purple", "yellow"],
+  );
   assert.deepEqual([page!.size, page!.color, page!.fill], [undefined, undefined, undefined]);
 });
 
@@ -362,10 +477,24 @@ test("the side panel's fields: an artboard keeps its background, radius and guid
   const { doc } = parsed(
     canvas({
       frames: [
-        frame({ id: "board", kind: "frame", fill: "teal", radius: 12.4, guide: "columns-12", hidden: true }),
+        frame({
+          id: "board",
+          kind: "frame",
+          fill: "teal",
+          radius: 12.4,
+          guide: "columns-12",
+          hidden: true,
+        }),
         frame({ id: "rect", kind: "shape", shape: "rect", radius: 999, locked: true }),
         frame({ id: "oval", kind: "shape", shape: "oval", radius: 8, guide: "grid-8" }),
-        frame({ id: "page", kind: "file", path: "a.html", guide: "grid-8", radius: 8, hidden: "yes" }),
+        frame({
+          id: "page",
+          kind: "file",
+          path: "a.html",
+          guide: "grid-8",
+          radius: 8,
+          hidden: "yes",
+        }),
         frame({ id: "note", kind: "note", guide: "columns-4", locked: 1 }),
         frame({ id: "odd", kind: "frame", guide: "columns-5", radius: -3 }),
       ],
@@ -373,22 +502,76 @@ test("the side panel's fields: an artboard keeps its background, radius and guid
   );
   const field = (id: string) => {
     const entry = doc.frames.find((item) => item.id === id)!;
-    return { fill: entry.fill, radius: entry.radius, guide: entry.guide, hidden: entry.hidden, locked: entry.locked };
+    return {
+      fill: entry.fill,
+      radius: entry.radius,
+      guide: entry.guide,
+      hidden: entry.hidden,
+      locked: entry.locked,
+    };
   };
-  assert.deepEqual(field("board"), { fill: "teal", radius: 12, guide: "columns-12", hidden: true, locked: undefined });
-  assert.deepEqual(field("rect"), { fill: undefined, radius: 200, guide: undefined, hidden: undefined, locked: true });
-  assert.deepEqual(field("oval"), { fill: undefined, radius: undefined, guide: undefined, hidden: undefined, locked: undefined });
-  assert.deepEqual(field("page"), { fill: undefined, radius: undefined, guide: "grid-8", hidden: undefined, locked: undefined });
-  assert.deepEqual(field("note"), { fill: undefined, radius: undefined, guide: undefined, hidden: undefined, locked: undefined });
-  assert.deepEqual(field("odd"), { fill: undefined, radius: 0, guide: undefined, hidden: undefined, locked: undefined });
+  assert.deepEqual(field("board"), {
+    fill: "teal",
+    radius: 12,
+    guide: "columns-12",
+    hidden: true,
+    locked: undefined,
+  });
+  assert.deepEqual(field("rect"), {
+    fill: undefined,
+    radius: 200,
+    guide: undefined,
+    hidden: undefined,
+    locked: true,
+  });
+  assert.deepEqual(field("oval"), {
+    fill: undefined,
+    radius: undefined,
+    guide: undefined,
+    hidden: undefined,
+    locked: undefined,
+  });
+  assert.deepEqual(field("page"), {
+    fill: undefined,
+    radius: undefined,
+    guide: "grid-8",
+    hidden: undefined,
+    locked: undefined,
+  });
+  assert.deepEqual(field("note"), {
+    fill: undefined,
+    radius: undefined,
+    guide: undefined,
+    hidden: undefined,
+    locked: undefined,
+  });
+  assert.deepEqual(field("odd"), {
+    fill: undefined,
+    radius: 0,
+    guide: undefined,
+    hidden: undefined,
+    locked: undefined,
+  });
 });
 
 test("tweaks: pages and artifacts keep the Dark switch, and only pages keep tweak values, read safely", () => {
   const { doc } = parsed(
     canvas({
       frames: [
-        frame({ id: "page", kind: "file", path: "a.html", dark: true, tweaks: { "--accent": "#ff0055", "data-x": "a;b", color: "red" } }),
-        frame({ id: "chart", kind: "artifact", mediaId: "media-1", dark: true, tweaks: { "--accent": "#ff0055" } }),
+        frame({
+          id: "page",
+          kind: "file",
+          path: "a.html",
+          dark: true,
+          tweaks: { "--accent": "#ff0055", "data-x": "a;b", color: "red" },
+        }),
+        frame({
+          id: "chart",
+          kind: "artifact",
+          mediaId: "media-1",
+          dark: true,
+          tweaks: { "--accent": "#ff0055" },
+        }),
         frame({ id: "note", kind: "note", dark: true }),
         frame({ id: "plain", kind: "file", path: "b.html", dark: "yes", tweaks: { color: "red" } }),
       ],

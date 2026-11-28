@@ -4,7 +4,11 @@
 // (syntax highlighting and per-block copy) via the CodeBlock component.
 
 import * as React from "react";
-import ReactMarkdown, { defaultUrlTransform, type Components, type UrlTransform } from "react-markdown";
+import ReactMarkdown, {
+  defaultUrlTransform,
+  type Components,
+  type UrlTransform,
+} from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { cn } from "../lib/ui-utils";
 import { isLocalFileHref } from "../lib/browser-link-routing";
@@ -189,10 +193,9 @@ const components: Components = {
   code: (props) => renderMarkdownCode(props, true),
   a: ({ node, children, href, ...props }) => {
     void node;
-    const {
-      "data-rich-link": richLink,
-      ...anchorProps
-    } = props as typeof props & { "data-rich-link"?: string };
+    const { "data-rich-link": richLink, ...anchorProps } = props as typeof props & {
+      "data-rich-link"?: string;
+    };
     if (richLink === "true" && href) {
       return (
         <RichLink href={href} {...anchorProps}>
@@ -257,17 +260,31 @@ export const MarkdownContent = React.memo(function MarkdownContent({
   const plugins = useMarkdownPlugins(content, richLinks, streaming);
   return (
     <RestrictedMarkdownContext.Provider value={restricted ?? null}>
-      <ReactMarkdown key={imageScope} {...plugins} components={restricted ? restrictedComponents : components}>
+      <ReactMarkdown
+        key={imageScope}
+        {...plugins}
+        components={restricted ? restrictedComponents : components}
+      >
         {content}
       </ReactMarkdown>
     </RestrictedMarkdownContext.Provider>
   );
 });
 
-export const Markdown = React.memo(function Markdown({ content, richLinks = false, restricted, imageScope }: MarkdownProps) {
+export const Markdown = React.memo(function Markdown({
+  content,
+  richLinks = false,
+  restricted,
+  imageScope,
+}: MarkdownProps) {
   return (
     <div className={MARKDOWN_CLASSNAME}>
-      <MarkdownContent content={content} richLinks={richLinks} restricted={restricted} imageScope={imageScope} />
+      <MarkdownContent
+        content={content}
+        richLinks={richLinks}
+        restricted={restricted}
+        imageScope={imageScope}
+      />
     </div>
   );
 });
@@ -286,7 +303,11 @@ export const MarkdownInline = React.memo(function MarkdownInline({
   const plugins = useMarkdownPlugins(content, richLinks);
   return (
     <RestrictedMarkdownContext.Provider value={restricted ?? null}>
-      <ReactMarkdown key={imageScope} {...plugins} components={restricted ? restrictedInlineComponents : inlineComponents}>
+      <ReactMarkdown
+        key={imageScope}
+        {...plugins}
+        components={restricted ? restrictedInlineComponents : inlineComponents}
+      >
         {content}
       </ReactMarkdown>
     </RestrictedMarkdownContext.Provider>

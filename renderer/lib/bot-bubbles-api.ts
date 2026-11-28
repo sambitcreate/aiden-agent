@@ -16,7 +16,8 @@ import {
   type BotBubbleTransition,
 } from "../shared/bot-bubbles";
 
-const parsed = async (promise: Promise<unknown>): Promise<BotBubbleState> => parseBotBubbleState(await promise);
+const parsed = async (promise: Promise<unknown>): Promise<BotBubbleState> =>
+  parseBotBubbleState(await promise);
 
 export const botBubblesApi = {
   state: () => parsed(invoke(BOT_BUBBLE_CHANNELS.state)),
@@ -27,15 +28,19 @@ export const botBubblesApi = {
     parsed(
       invoke(
         BOT_BUBBLE_CHANNELS.open,
-        (options.ifOpen === undefined ? { botId } : { botId, ifOpen: options.ifOpen }) satisfies BotBubbleOpenRequest,
+        (options.ifOpen === undefined
+          ? { botId }
+          : { botId, ifOpen: options.ifOpen }) satisfies BotBubbleOpenRequest,
       ),
     ),
-  move: (botId: string, placement: BotBubblePlacement) => parsed(invoke(BOT_BUBBLE_CHANNELS.move, { botId, placement })),
+  move: (botId: string, placement: BotBubblePlacement) =>
+    parsed(invoke(BOT_BUBBLE_CHANNELS.move, { botId, placement })),
   bringBack: (botId: string, sourceRect?: BotBubbleRect) =>
     parsed(invoke(BOT_BUBBLE_CHANNELS.bringBack, sourceRect ? { botId, sourceRect } : { botId })),
   forgetRecent: (botId: string) => parsed(invoke(BOT_BUBBLE_CHANNELS.forgetRecent, { botId })),
   /** Overlay only: stop or start passing clicks through to the apps below. */
-  setInteractive: (interactive: boolean) => invoke<void>(BOT_BUBBLE_CHANNELS.setInteractive, { interactive }),
+  setInteractive: (interactive: boolean) =>
+    invoke<void>(BOT_BUBBLE_CHANNELS.setInteractive, { interactive }),
   /** Overlay only: a head is being dragged. */
   setDragging: (dragging: boolean) => invoke<void>(BOT_BUBBLE_CHANNELS.setDragging, { dragging }),
   /** Overlay only: which display this overlay covers and its size. */
@@ -43,7 +48,9 @@ export const botBubblesApi = {
   /** Overlay only: a shrink's still picture is on screen (see `BotBubbleTransition.cover`). */
   transitionShown: (cover: number) => invoke<void>(BOT_BUBBLE_CHANNELS.transitionShown, { cover }),
   onChanged: (handler: (state: BotBubbleState) => void) =>
-    onNotification<unknown>(BOT_BUBBLE_CHANNELS.changed, (payload) => handler(parseBotBubbleState(payload))),
+    onNotification<unknown>(BOT_BUBBLE_CHANNELS.changed, (payload) =>
+      handler(parseBotBubbleState(payload)),
+    ),
   /** Overlay only: the overlay's display changed size or zoom. */
   onOverlayInfoChanged: (handler: (info: BotBubbleOverlayInfo) => void) =>
     onNotification<BotBubbleOverlayInfo>(BOT_BUBBLE_CHANNELS.overlayInfoChanged, handler),
@@ -116,7 +123,11 @@ export const botBubbleStore = createBotBubbleStore();
 
 /** Main's bubble list, open head and settings, kept current in this window. */
 export function useBotBubbles(): BotBubbleState {
-  return React.useSyncExternalStore(botBubbleStore.subscribe, botBubbleStore.getState, () => EMPTY_BOT_BUBBLE_STATE);
+  return React.useSyncExternalStore(
+    botBubbleStore.subscribe,
+    botBubbleStore.getState,
+    () => EMPTY_BOT_BUBBLE_STATE,
+  );
 }
 
 /** Whether this window has heard main's bubble state at least once (or failed to). */
@@ -125,7 +136,9 @@ export function useBotBubblesLoaded(): boolean {
 }
 
 /** Run a bubble mutation and apply its returned state at once. */
-export async function applyBotBubbleChange(change: Promise<BotBubbleState>): Promise<BotBubbleState> {
+export async function applyBotBubbleChange(
+  change: Promise<BotBubbleState>,
+): Promise<BotBubbleState> {
   const next = await change;
   botBubbleStore.accept(next);
   return next;

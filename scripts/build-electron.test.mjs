@@ -41,19 +41,36 @@ async function buildFixture(options) {
 test("production main bundle is smaller but keeps names and symbolicates through an unreferenced external map", async (t) => {
   const development = await buildFixture(electronBuildOptions());
   const production = await buildFixture(electronBuildOptions({ production: true }));
-  t.after(() => Promise.all([development, production].map(({ directory }) => rm(directory, { recursive: true, force: true }))));
+  t.after(() =>
+    Promise.all(
+      [development, production].map(({ directory }) =>
+        rm(directory, { recursive: true, force: true }),
+      ),
+    ),
+  );
 
   const developmentCode = await readFile(development.outfile, "utf8");
   const productionCode = await readFile(production.outfile, "utf8");
   assert.ok(productionCode.length < developmentCode.length, "production output is minified");
-  assert.match(developmentCode, /sourceMappingURL=entry\.mjs\.map/u, "development keeps linked maps for debugging");
-  assert.doesNotMatch(productionCode, /sourceMappingURL/u, "production bundles never point at a map");
+  assert.match(
+    developmentCode,
+    /sourceMappingURL=entry\.mjs\.map/u,
+    "development keeps linked maps for debugging",
+  );
+  assert.doesNotMatch(
+    productionCode,
+    /sourceMappingURL/u,
+    "production bundles never point at a map",
+  );
 
   const loaded = await import(pathToFileURL(production.outfile).href);
   assert.equal(loaded.SessionLedger.name, "SessionLedger");
   assert.equal(loaded.describeFailure.name, "describeFailure");
   // Functions serialized into another context must stay self-contained.
-  assert.deepEqual(new Function("innerWidth", "innerHeight", `return (${loaded.serializedProbe})()`)(3, 4), { width: 3, height: 4 });
+  assert.deepEqual(
+    new Function("innerWidth", "innerHeight", `return (${loaded.serializedProbe})()`)(3, 4),
+    { width: 3, height: 4 },
+  );
 
   let stack = "";
   try {
@@ -72,15 +89,28 @@ test("production main bundle is smaller but keeps names and symbolicates through
   assert.match(sourceLine, /throw new Error\("fixture failure"\)/u);
 });
 
-
-test("the production Linux bundle reads artifact files without a macOS helper", { skip: process.platform !== "linux" }, async (t) => {
-  const directory = await mkdtemp(path.join(os.tmpdir(), "aiden-linux-artifact-bundle-"));
-  t.after(() => rm(directory, { recursive: true, force: true }));
-  const outfile = path.join(directory, "artifact-reader.mjs");
-  const main = electronBuildOptions({ production: true }).find((candidate) => candidate.outfile === "build/main/index.js");
-  const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-  await build({ ...main, entryPoints: [path.join(root, "main/services/workspace-artifacts/file-policy.ts")], outfile, logLevel: "silent" });
-  const bundled = await import(pathToFileURL(outfile).href);
-  await writeFile(path.join(directory, "data.txt"), "bundled Linux workspace data");
-  assert.equal(await bundled.readWorkspaceArtifactFile(directory, "data.txt"), "bundled Linux workspace data");
-});
+test(
+  "the production Linux bundle reads artifact files without a macOS helper",
+  { skip: process.platform !== "linux" },
+  async (t) => {
+    const directory = await mkdtemp(path.join(os.tmpdir(), "aiden-linux-artifact-bundle-"));
+    t.after(() => rm(directory, { recursive: true, force: true }));
+    const outfile = path.join(directory, "artifact-reader.mjs");
+    const main = electronBuildOptions({ production: true }).find(
+      (candidate) => candidate.outfile === "build/main/index.js",
+    );
+    const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+    await build({
+      ...main,
+      entryPoints: [path.join(root, "main/services/workspace-artifacts/file-policy.ts")],
+      outfile,
+      logLevel: "silent",
+    });
+    const bundled = await import(pathToFileURL(outfile).href);
+    await writeFile(path.join(directory, "data.txt"), "bundled Linux workspace data");
+    assert.equal(
+      await bundled.readWorkspaceArtifactFile(directory, "data.txt"),
+      "bundled Linux workspace data",
+    );
+  },
+);

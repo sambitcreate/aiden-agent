@@ -4,13 +4,34 @@ import { createServer, type Server } from "node:http";
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import * as fs from "node:fs";
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, readdirSync, statSync } from "node:fs";
+import {
+  mkdtempSync,
+  mkdirSync,
+  writeFileSync,
+  readFileSync,
+  existsSync,
+  readdirSync,
+  statSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { SpeechModelSpec } from "./local-speech-catalog.js";
-import { createSpeechModelManager, diskFailureMessage, extractFailureMessage, partialDownloadBytes } from "./local-speech-downloads.js";
+import {
+  createSpeechModelManager,
+  diskFailureMessage,
+  extractFailureMessage,
+  partialDownloadBytes,
+} from "./local-speech-downloads.js";
 
-type Mode = "normal" | "ignore-range" | "wrong-offset" | "cut-after-half" | "stall" | "oversize" | "unsatisfiable" | "short";
+type Mode =
+  | "normal"
+  | "ignore-range"
+  | "wrong-offset"
+  | "cut-after-half"
+  | "stall"
+  | "oversize"
+  | "unsatisfiable"
+  | "short";
 
 function fixtureArchive(): { bytes: Buffer; sha256: string } {
   const dir = mkdtempSync(join(tmpdir(), "speech-fixture-"));
@@ -26,13 +47,19 @@ function fixtureArchive(): { bytes: Buffer; sha256: string } {
   return { bytes, sha256: createHash("sha256").update(bytes).digest("hex") };
 }
 
-async function serve(bytes: Buffer, state: { mode: Mode; requests: Array<string | undefined> }): Promise<{ server: Server; url: string }> {
+async function serve(
+  bytes: Buffer,
+  state: { mode: Mode; requests: Array<string | undefined> },
+): Promise<{ server: Server; url: string }> {
   const server = createServer((req, res) => {
     state.requests.push(req.headers.range);
     const range = /^bytes=(\d+)-$/.exec(req.headers.range ?? "");
     let start = range && state.mode !== "ignore-range" ? Number(range[1]) : 0;
     if (state.mode === "wrong-offset" && range) start = Math.max(0, Number(range[1]) - 10);
-    if (state.mode === "unsatisfiable" && range) { res.writeHead(416).end(); return; }
+    if (state.mode === "unsatisfiable" && range) {
+      res.writeHead(416).end();
+      return;
+    }
     const body = state.mode === "oversize" ? Buffer.concat([bytes, Buffer.alloc(10)]) : bytes;
     const slice = body.subarray(start);
     if (state.mode === "short") {
@@ -40,7 +67,9 @@ async function serve(bytes: Buffer, state: { mode: Mode; requests: Array<string 
       const half = slice.subarray(0, Math.floor(slice.length / 2));
       res.writeHead(start > 0 ? 206 : 200, {
         "content-length": String(half.length),
-        ...(start > 0 ? { "content-range": `bytes ${start}-${start + half.length - 1}/${body.length}` } : {}),
+        ...(start > 0
+          ? { "content-range": `bytes ${start}-${start + half.length - 1}/${body.length}` }
+          : {}),
       });
       res.end(half);
       return;
@@ -49,9 +78,15 @@ async function serve(bytes: Buffer, state: { mode: Mode; requests: Array<string 
       "content-length": String(slice.length),
       ...(start > 0 ? { "content-range": `bytes ${start}-${body.length - 1}/${body.length}` } : {}),
     });
-    if (state.mode === "stall") { res.write(slice.subarray(0, 100)); return; }
+    if (state.mode === "stall") {
+      res.write(slice.subarray(0, 100));
+      return;
+    }
     // Destroy only after the half has been flushed, so the client really receives it.
-    if (state.mode === "cut-after-half") { res.write(slice.subarray(0, Math.floor(slice.length / 2)), () => res.destroy()); return; }
+    if (state.mode === "cut-after-half") {
+      res.write(slice.subarray(0, Math.floor(slice.length / 2)), () => res.destroy());
+      return;
+    }
     res.end(slice);
   });
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
@@ -62,10 +97,23 @@ async function serve(bytes: Buffer, state: { mode: Mode; requests: Array<string 
 
 function spec(url: string, bytes: number, sha256: string): SpeechModelSpec {
   return {
-    id: "fixture", name: "Fixture", description: "x", family: "sense-voice",
-    archive: { url, bytes, sha256 }, files: { model: "model.int8.onnx", tokens: "tokens.txt" },
-    languages: ["en"], capabilities: { autoDetect: false, languageHint: false, translateToEnglish: false, maxWindowSeconds: 30 },
-    accuracy: 0.5, speed: 0.5, recommended: true, license: { name: "MIT", url: "https://example.invalid" },
+    id: "fixture",
+    name: "Fixture",
+    description: "x",
+    family: "sense-voice",
+    archive: { url, bytes, sha256 },
+    files: { model: "model.int8.onnx", tokens: "tokens.txt" },
+    languages: ["en"],
+    capabilities: {
+      autoDetect: false,
+      languageHint: false,
+      translateToEnglish: false,
+      maxWindowSeconds: 30,
+    },
+    accuracy: 0.5,
+    speed: 0.5,
+    recommended: true,
+    license: { name: "MIT", url: "https://example.invalid" },
   };
 }
 
@@ -73,9 +121,15 @@ test("installs a verified archive and prunes files outside the spec", async (t) 
   const { bytes, sha256 } = fixtureArchive();
   const state = { mode: "normal" as Mode, requests: [] as Array<string | undefined> };
   const { server, url } = await serve(bytes, state);
-  t.after(() => { server.closeAllConnections(); server.close(); });
+  t.after(() => {
+    server.closeAllConnections();
+    server.close();
+  });
   const root = mkdtempSync(join(tmpdir(), "speech-root-"));
-  const manager = createSpeechModelManager({ root: () => root, catalog: [spec(url, bytes.length, sha256)] });
+  const manager = createSpeechModelManager({
+    root: () => root,
+    catalog: [spec(url, bytes.length, sha256)],
+  });
   await manager.downloadModel("fixture");
   assert.equal(manager.isModelInstalled("fixture"), true);
   assert.deepEqual(readdirSync(join(root, "fixture")).sort(), ["model.int8.onnx", "tokens.txt"]);
@@ -84,9 +138,15 @@ test("installs a verified archive and prunes files outside the spec", async (t) 
 test("a hash mismatch deletes the partial and reports corruption", async (t) => {
   const { bytes } = fixtureArchive();
   const { server, url } = await serve(bytes, { mode: "normal", requests: [] });
-  t.after(() => { server.closeAllConnections(); server.close(); });
+  t.after(() => {
+    server.closeAllConnections();
+    server.close();
+  });
   const root = mkdtempSync(join(tmpdir(), "speech-root-"));
-  const manager = createSpeechModelManager({ root: () => root, catalog: [spec(url, bytes.length, "0".repeat(64))] });
+  const manager = createSpeechModelManager({
+    root: () => root,
+    catalog: [spec(url, bytes.length, "0".repeat(64))],
+  });
   await assert.rejects(manager.downloadModel("fixture"), /corrupted/i);
   assert.equal(manager.isModelInstalled("fixture"), false);
   assert.equal(existsSync(join(root, ".partial", "fixture.tar.bz2.part")), false);
@@ -96,14 +156,23 @@ test("an interrupted download resumes with Range after a relaunch", async (t) =>
   const { bytes, sha256 } = fixtureArchive();
   const state = { mode: "cut-after-half" as Mode, requests: [] as Array<string | undefined> };
   const { server, url } = await serve(bytes, state);
-  t.after(() => { server.closeAllConnections(); server.close(); });
+  t.after(() => {
+    server.closeAllConnections();
+    server.close();
+  });
   const root = mkdtempSync(join(tmpdir(), "speech-root-"));
-  const first = createSpeechModelManager({ root: () => root, catalog: [spec(url, bytes.length, sha256)] });
+  const first = createSpeechModelManager({
+    root: () => root,
+    catalog: [spec(url, bytes.length, sha256)],
+  });
   await assert.rejects(first.downloadModel("fixture"));
   const partial = statSync(join(root, ".partial", "fixture.tar.bz2.part")).size;
   assert.ok(partial > 0 && partial < bytes.length);
   state.mode = "normal";
-  const second = createSpeechModelManager({ root: () => root, catalog: [spec(url, bytes.length, sha256)] });
+  const second = createSpeechModelManager({
+    root: () => root,
+    catalog: [spec(url, bytes.length, sha256)],
+  });
   await second.downloadModel("fixture");
   assert.equal(state.requests[state.requests.length - 1], `bytes=${partial}-`);
   assert.equal(second.isModelInstalled("fixture"), true);
@@ -113,9 +182,15 @@ test("a server that ignores Range restarts from zero and still verifies", async 
   const { bytes, sha256 } = fixtureArchive();
   const state = { mode: "cut-after-half" as Mode, requests: [] as Array<string | undefined> };
   const { server, url } = await serve(bytes, state);
-  t.after(() => { server.closeAllConnections(); server.close(); });
+  t.after(() => {
+    server.closeAllConnections();
+    server.close();
+  });
   const root = mkdtempSync(join(tmpdir(), "speech-root-"));
-  const manager = createSpeechModelManager({ root: () => root, catalog: [spec(url, bytes.length, sha256)] });
+  const manager = createSpeechModelManager({
+    root: () => root,
+    catalog: [spec(url, bytes.length, sha256)],
+  });
   await assert.rejects(manager.downloadModel("fixture"));
   state.mode = "ignore-range";
   await manager.downloadModel("fixture");
@@ -126,9 +201,15 @@ test("a 206 at the wrong offset discards the partial and restarts", async (t) =>
   const { bytes, sha256 } = fixtureArchive();
   const state = { mode: "cut-after-half" as Mode, requests: [] as Array<string | undefined> };
   const { server, url } = await serve(bytes, state);
-  t.after(() => { server.closeAllConnections(); server.close(); });
+  t.after(() => {
+    server.closeAllConnections();
+    server.close();
+  });
   const root = mkdtempSync(join(tmpdir(), "speech-root-"));
-  const manager = createSpeechModelManager({ root: () => root, catalog: [spec(url, bytes.length, sha256)] });
+  const manager = createSpeechModelManager({
+    root: () => root,
+    catalog: [spec(url, bytes.length, sha256)],
+  });
   await assert.rejects(manager.downloadModel("fixture"));
   state.mode = "wrong-offset";
   await assert.rejects(manager.downloadModel("fixture"), /restart|try again/i);
@@ -140,18 +221,31 @@ test("a 206 at the wrong offset discards the partial and restarts", async (t) =>
 test("an oversize stream is cut and rejected", async (t) => {
   const { bytes, sha256 } = fixtureArchive();
   const { server, url } = await serve(bytes, { mode: "oversize", requests: [] });
-  t.after(() => { server.closeAllConnections(); server.close(); });
+  t.after(() => {
+    server.closeAllConnections();
+    server.close();
+  });
   const root = mkdtempSync(join(tmpdir(), "speech-root-"));
-  const manager = createSpeechModelManager({ root: () => root, catalog: [spec(url, bytes.length, sha256)] });
+  const manager = createSpeechModelManager({
+    root: () => root,
+    catalog: [spec(url, bytes.length, sha256)],
+  });
   await assert.rejects(manager.downloadModel("fixture"), /size|corrupted/i);
 });
 
 test("a stalled stream aborts with a retryable error", async (t) => {
   const { bytes, sha256 } = fixtureArchive();
   const { server, url } = await serve(bytes, { mode: "stall", requests: [] });
-  t.after(() => { server.closeAllConnections(); server.close(); });
+  t.after(() => {
+    server.closeAllConnections();
+    server.close();
+  });
   const root = mkdtempSync(join(tmpdir(), "speech-root-"));
-  const manager = createSpeechModelManager({ root: () => root, catalog: [spec(url, bytes.length, sha256)], stallMs: 200 });
+  const manager = createSpeechModelManager({
+    root: () => root,
+    catalog: [spec(url, bytes.length, sha256)],
+    stallMs: 200,
+  });
   await assert.rejects(manager.downloadModel("fixture"), /stalled/i);
   assert.ok(existsSync(join(root, ".partial", "fixture.tar.bz2.part")));
 });
@@ -159,10 +253,19 @@ test("a stalled stream aborts with a retryable error", async (t) => {
 test("progress passes through verify before extract", async (t) => {
   const { bytes, sha256 } = fixtureArchive();
   const { server, url } = await serve(bytes, { mode: "normal", requests: [] });
-  t.after(() => { server.closeAllConnections(); server.close(); });
+  t.after(() => {
+    server.closeAllConnections();
+    server.close();
+  });
   const root = mkdtempSync(join(tmpdir(), "speech-root-"));
   const phases: string[] = [];
-  const manager = createSpeechModelManager({ root: () => root, catalog: [spec(url, bytes.length, sha256)], progress: (p) => { if (phases[phases.length - 1] !== p.phase) phases.push(p.phase); } });
+  const manager = createSpeechModelManager({
+    root: () => root,
+    catalog: [spec(url, bytes.length, sha256)],
+    progress: (p) => {
+      if (phases[phases.length - 1] !== p.phase) phases.push(p.phase);
+    },
+  });
   await manager.downloadModel("fixture");
   assert.deepEqual(phases, ["download", "verify", "extract"]);
 });
@@ -171,9 +274,15 @@ test("replacing an installed model keeps it when the swap fails, and swaps it cl
   const { bytes, sha256 } = fixtureArchive();
   const state = { mode: "normal" as Mode, requests: [] as Array<string | undefined> };
   const { server, url } = await serve(bytes, state);
-  t.after(() => { server.closeAllConnections(); server.close(); });
+  t.after(() => {
+    server.closeAllConnections();
+    server.close();
+  });
   const root = mkdtempSync(join(tmpdir(), "speech-root-"));
-  const manager = createSpeechModelManager({ root: () => root, catalog: [spec(url, bytes.length, sha256)] });
+  const manager = createSpeechModelManager({
+    root: () => root,
+    catalog: [spec(url, bytes.length, sha256)],
+  });
   await manager.downloadModel("fixture");
   const installed = join(root, "fixture");
   const tokensBefore = readFileSync(join(installed, "tokens.txt"), "utf8");
@@ -194,12 +303,23 @@ test("replacing an installed model keeps it when the swap fails, and swaps it cl
   assert.equal(manager.isModelInstalled("fixture"), true, "the previous install is still there");
   assert.deepEqual(readdirSync(installed).sort(), ["model.int8.onnx", "tokens.txt"]);
   assert.equal(readFileSync(join(installed, "tokens.txt"), "utf8"), tokensBefore);
-  assert.deepEqual(readdirSync(root).filter((name) => name !== ".partial").sort(), ["fixture"], "no staging or aside copies are left behind");
+  assert.deepEqual(
+    readdirSync(root)
+      .filter((name) => name !== ".partial")
+      .sort(),
+    ["fixture"],
+    "no staging or aside copies are left behind",
+  );
 
   // A swap that goes through replaces the files and leaves no aside copy.
   await manager.downloadModel("fixture");
   assert.equal(manager.isModelInstalled("fixture"), true);
-  assert.deepEqual(readdirSync(root).filter((name) => name !== ".partial").sort(), ["fixture"]);
+  assert.deepEqual(
+    readdirSync(root)
+      .filter((name) => name !== ".partial")
+      .sort(),
+    ["fixture"],
+  );
 });
 
 test("cleanupLeftovers removes stale staging and unknown partials", async () => {
@@ -247,7 +367,10 @@ test("listModels projects catalog metadata and derived size labels", () => {
   assert.equal(v3?.capabilities.autoDetect, true);
   assert.equal(v3?.languages.length, 25);
   // The default catalog is the portable one, so the CLI never offers the Metal model.
-  assert.equal(manager.listModels().some((m) => m.id === "parakeet-v3-metal"), false);
+  assert.equal(
+    manager.listModels().some((m) => m.id === "parakeet-v3-metal"),
+    false,
+  );
 });
 
 test("a host catalog recommends only its first recommended model", () => {
@@ -261,7 +384,10 @@ test("a host catalog recommends only its first recommended model", () => {
   });
   assert.deepEqual(
     manager.listModels().map((m) => [m.id, m.recommended, m.quant]),
-    [["gpu", true, "Q8_0"], ["cpu", false, "int8"]],
+    [
+      ["gpu", true, "Q8_0"],
+      ["cpu", false, "int8"],
+    ],
   );
 });
 
@@ -270,7 +396,10 @@ test("a single-file model installs the verified download as its one file", async
   const sha256 = createHash("sha256").update(bytes).digest("hex");
   const state = { mode: "cut-after-half" as Mode, requests: [] as Array<string | undefined> };
   const { server, url } = await serve(bytes, state);
-  t.after(() => { server.closeAllConnections(); server.close(); });
+  t.after(() => {
+    server.closeAllConnections();
+    server.close();
+  });
   const root = mkdtempSync(join(tmpdir(), "speech-root-"));
   const single: SpeechModelSpec = {
     ...spec(url, bytes.length, sha256),
@@ -296,13 +425,19 @@ test("cancel keeps the partial and the next download resumes from it", async (t)
   const { bytes, sha256 } = fixtureArchive();
   const state = { mode: "stall" as Mode, requests: [] as Array<string | undefined> };
   const { server, url } = await serve(bytes, state);
-  t.after(() => { server.closeAllConnections(); server.close(); });
+  t.after(() => {
+    server.closeAllConnections();
+    server.close();
+  });
   const root = mkdtempSync(join(tmpdir(), "speech-root-"));
   let cancelled = false;
   const manager = createSpeechModelManager({
     root: () => root,
     catalog: [spec(url, bytes.length, sha256)],
-    progress: (p) => { if (!cancelled && p.phase === "download" && p.downloaded > 0) cancelled = manager.cancelDownload("fixture"); },
+    progress: (p) => {
+      if (!cancelled && p.phase === "download" && p.downloaded > 0)
+        cancelled = manager.cancelDownload("fixture");
+    },
   });
   await assert.rejects(manager.downloadModel("fixture"), /cancelled/i);
   assert.deepEqual(manager.localModelDownloadStates(), []);
@@ -318,9 +453,15 @@ test("a 416 for an incomplete partial fails verification and discards it", async
   const { bytes, sha256 } = fixtureArchive();
   const state = { mode: "cut-after-half" as Mode, requests: [] as Array<string | undefined> };
   const { server, url } = await serve(bytes, state);
-  t.after(() => { server.closeAllConnections(); server.close(); });
+  t.after(() => {
+    server.closeAllConnections();
+    server.close();
+  });
   const root = mkdtempSync(join(tmpdir(), "speech-root-"));
-  const manager = createSpeechModelManager({ root: () => root, catalog: [spec(url, bytes.length, sha256)] });
+  const manager = createSpeechModelManager({
+    root: () => root,
+    catalog: [spec(url, bytes.length, sha256)],
+  });
   await assert.rejects(manager.downloadModel("fixture"));
   state.mode = "unsatisfiable";
   await assert.rejects(manager.downloadModel("fixture"), /corrupted/i);
@@ -332,9 +473,15 @@ test("deleteModel removes the installed model and any partial", async (t) => {
   const { bytes, sha256 } = fixtureArchive();
   const state = { mode: "normal" as Mode, requests: [] as Array<string | undefined> };
   const { server, url } = await serve(bytes, state);
-  t.after(() => { server.closeAllConnections(); server.close(); });
+  t.after(() => {
+    server.closeAllConnections();
+    server.close();
+  });
   const root = mkdtempSync(join(tmpdir(), "speech-root-"));
-  const manager = createSpeechModelManager({ root: () => root, catalog: [spec(url, bytes.length, sha256)] });
+  const manager = createSpeechModelManager({
+    root: () => root,
+    catalog: [spec(url, bytes.length, sha256)],
+  });
   await manager.downloadModel("fixture");
   writeFileSync(join(root, ".partial", "fixture.tar.bz2.part"), "x");
   await manager.deleteModel("fixture");
@@ -345,12 +492,21 @@ test("deleteModel removes the installed model and any partial", async (t) => {
 test("a partial that cannot be written reports a disk error, not an interruption", async (t) => {
   const { bytes, sha256 } = fixtureArchive();
   const { server, url } = await serve(bytes, { mode: "normal", requests: [] });
-  t.after(() => { server.closeAllConnections(); server.close(); });
+  t.after(() => {
+    server.closeAllConnections();
+    server.close();
+  });
   const root = mkdtempSync(join(tmpdir(), "speech-root-"));
   // A directory where the partial file belongs makes every write fail locally.
   mkdirSync(join(root, ".partial", "fixture.tar.bz2.part"), { recursive: true });
-  const manager = createSpeechModelManager({ root: () => root, catalog: [spec(url, bytes.length, sha256)] });
-  const error = await manager.downloadModel("fixture").then(() => undefined, (reason: unknown) => reason as Error);
+  const manager = createSpeechModelManager({
+    root: () => root,
+    catalog: [spec(url, bytes.length, sha256)],
+  });
+  const error = await manager.downloadModel("fixture").then(
+    () => undefined,
+    (reason: unknown) => reason as Error,
+  );
   assert.ok(error instanceof Error);
   assert.match(error.message, /disk/i);
   assert.doesNotMatch(error.message, /interrupted/i);
@@ -365,7 +521,10 @@ test("a non-regular entry at the partial path is a disk failure whatever its siz
   const partial = join(root, "fixture.tar.bz2.part");
   mkdirSync(partial);
   // The directory's own size varies by platform, so the check must not depend on it.
-  const error = await partialDownloadBytes(partial).then(() => undefined, (reason: unknown) => reason as Error);
+  const error = await partialDownloadBytes(partial).then(
+    () => undefined,
+    (reason: unknown) => reason as Error,
+  );
   assert.ok(error instanceof Error);
   assert.match(error.message, /disk.*EISDIR|EISDIR.*disk/i);
   assert.doesNotMatch(error.message, /interrupted/i);
@@ -409,9 +568,15 @@ test("a body that ends cleanly but short keeps the partial and resumes later", a
   const { bytes, sha256 } = fixtureArchive();
   const state = { mode: "short" as Mode, requests: [] as Array<string | undefined> };
   const { server, url } = await serve(bytes, state);
-  t.after(() => { server.closeAllConnections(); server.close(); });
+  t.after(() => {
+    server.closeAllConnections();
+    server.close();
+  });
   const root = mkdtempSync(join(tmpdir(), "speech-root-"));
-  const manager = createSpeechModelManager({ root: () => root, catalog: [spec(url, bytes.length, sha256)] });
+  const manager = createSpeechModelManager({
+    root: () => root,
+    catalog: [spec(url, bytes.length, sha256)],
+  });
   await assert.rejects(manager.downloadModel("fixture"), /interrupted/i);
   const partial = statSync(join(root, ".partial", "fixture.tar.bz2.part")).size;
   assert.ok(partial > 0 && partial < bytes.length);
@@ -425,10 +590,19 @@ test("an archive that tar cannot unpack reports retry advice, not the raw tar co
   const bytes = Buffer.from("this is not a bzip2 archive");
   const sha256 = createHash("sha256").update(bytes).digest("hex");
   const { server, url } = await serve(bytes, { mode: "normal", requests: [] });
-  t.after(() => { server.closeAllConnections(); server.close(); });
+  t.after(() => {
+    server.closeAllConnections();
+    server.close();
+  });
   const root = mkdtempSync(join(tmpdir(), "speech-root-"));
-  const manager = createSpeechModelManager({ root: () => root, catalog: [spec(url, bytes.length, sha256)] });
-  const error = await manager.downloadModel("fixture").then(() => undefined, (reason: unknown) => reason as Error);
+  const manager = createSpeechModelManager({
+    root: () => root,
+    catalog: [spec(url, bytes.length, sha256)],
+  });
+  const error = await manager.downloadModel("fixture").then(
+    () => undefined,
+    (reason: unknown) => reason as Error,
+  );
   assert.ok(error instanceof Error);
   assert.doesNotMatch(error.message, /Command failed|tar /);
   assert.match(error.message, /try again/i);
@@ -436,8 +610,20 @@ test("an archive that tar cannot unpack reports retry advice, not the raw tar co
 });
 
 test("a tar failure from a full disk or a timeout is reported as a disk problem", () => {
-  const full = extractFailureMessage(Object.assign(new Error("Command failed: tar -xjf"), { stderr: "tar: model.onnx: Write failed: No space left on device\n" }));
+  const full = extractFailureMessage(
+    Object.assign(new Error("Command failed: tar -xjf"), {
+      stderr: "tar: model.onnx: Write failed: No space left on device\n",
+    }),
+  );
   assert.equal(full, diskFailureMessage({ code: "ENOSPC" }));
-  assert.match(extractFailureMessage(Object.assign(new Error("Command failed"), { killed: true, signal: "SIGTERM" })), /took too long.*free space/i);
-  assert.doesNotMatch(extractFailureMessage(new Error("Command failed: tar: Unrecognized archive format")), /free up space/i);
+  assert.match(
+    extractFailureMessage(
+      Object.assign(new Error("Command failed"), { killed: true, signal: "SIGTERM" }),
+    ),
+    /took too long.*free space/i,
+  );
+  assert.doesNotMatch(
+    extractFailureMessage(new Error("Command failed: tar: Unrecognized archive format")),
+    /free up space/i,
+  );
 });

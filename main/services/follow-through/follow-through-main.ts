@@ -9,8 +9,16 @@
 import * as fsp from "node:fs/promises";
 import * as path from "node:path";
 import { app, ipcMain, logger } from "../../platform.js";
-import { agentNotice, fenceAsData, tailText, type AgentNoticeV1 } from "../../../renderer/shared/agent-notices.js";
-import type { BackgroundJobOutput, BackgroundJobView } from "../../../renderer/shared/background-jobs.js";
+import {
+  agentNotice,
+  fenceAsData,
+  tailText,
+  type AgentNoticeV1,
+} from "../../../renderer/shared/agent-notices.js";
+import type {
+  BackgroundJobOutput,
+  BackgroundJobView,
+} from "../../../renderer/shared/background-jobs.js";
 import {
   emptyChatFollowThrough,
   type ChatFollowThroughV1,
@@ -18,7 +26,11 @@ import {
 import { parseGitHubPullRequestUrl } from "../../../renderer/shared/chat-pull-requests.js";
 import { agentShellCommandEnvironment } from "../agent-command-environment.js";
 import { assertManagedWorktreeAdmission } from "../managed-worktree-admission.js";
-import { WorkspaceMutationGate, workspaceMutationGate, commitWithWorkspaceMutationAdmission } from "../workspace-mutation-gate.js";
+import {
+  WorkspaceMutationGate,
+  workspaceMutationGate,
+  commitWithWorkspaceMutationAdmission,
+} from "../workspace-mutation-gate.js";
 import { WorkspaceOperationRegistry } from "../workspace-operation-registry.js";
 import { runBoundedShellCommand } from "../bounded-shell-command.js";
 import { chatStore } from "../chat-store.js";
@@ -40,10 +52,19 @@ import {
 import type { RunCommandLeftovers } from "../coding-tools.js";
 import { ChatSettlement } from "./chat-settlement.js";
 import { randomUUID } from "node:crypto";
-import { CheckInterruptedError, DONE_WHEN_TIMEOUT_MS, GoalCheckRunner, migrateDoneWhenRecords, type GoalCheckResult } from "./done-when.js";
+import {
+  CheckInterruptedError,
+  DONE_WHEN_TIMEOUT_MS,
+  GoalCheckRunner,
+  migrateDoneWhenRecords,
+  type GoalCheckResult,
+} from "./done-when.js";
 import { goalChatRefusal } from "../goal/goal-core.js";
 import { noticeDelivery } from "./notice-delivery-main.js";
-import { commandMayChangePullRequest, type PullRequestFollowRecord } from "./pull-request-follow.js";
+import {
+  commandMayChangePullRequest,
+  type PullRequestFollowRecord,
+} from "./pull-request-follow.js";
 import { PullRequestFollowReader } from "./pull-request-follow-github.js";
 import { PullRequestFollows } from "./pull-request-follows.js";
 import { AnsweringRuns } from "./answering-runs.js";
@@ -95,7 +116,13 @@ function scheduleSave(): void {
   saveChain = saveChain
     .then(async () => {
       saveScheduled = false;
-      const state: SavedState = { version: 1, follows: savedFollows, checks: savedLegacyChecks, checkBacks: savedCheckBacks, goals: savedGoals };
+      const state: SavedState = {
+        version: 1,
+        follows: savedFollows,
+        checks: savedLegacyChecks,
+        checkBacks: savedCheckBacks,
+        goals: savedGoals,
+      };
       await fsp.mkdir(followThroughDir(), { recursive: true, mode: 0o700 });
       const target = path.join(followThroughDir(), "state.json");
       const temporary = `${target}.${process.pid}.tmp`;
@@ -110,8 +137,11 @@ function scheduleSave(): void {
 
 async function loadState(): Promise<SavedState> {
   try {
-    const parsed = JSON.parse(await fsp.readFile(path.join(followThroughDir(), "state.json"), "utf8")) as SavedState;
-    if (parsed?.version === 1 && Array.isArray(parsed.follows) && Array.isArray(parsed.checks)) return parsed;
+    const parsed = JSON.parse(
+      await fsp.readFile(path.join(followThroughDir(), "state.json"), "utf8"),
+    ) as SavedState;
+    if (parsed?.version === 1 && Array.isArray(parsed.follows) && Array.isArray(parsed.checks))
+      return parsed;
   } catch {
     // No saved state yet, or unreadable: start empty.
   }
@@ -137,7 +167,8 @@ function observeRemovedRun(summary: HostRunSummary): void {
 }
 
 function observeRun(summary: HostRunSummary): void {
-  const terminal = summary.state === "done" || summary.state === "failed" || summary.state === "cancelled";
+  const terminal =
+    summary.state === "done" || summary.state === "failed" || summary.state === "cancelled";
   if (!terminal) {
     if (deletedChats.has(summary.chatId)) return;
     answeringRuns.hostRunChanged(summary, false);
@@ -218,8 +249,15 @@ export const goalChecks = new GoalCheckRunner({
     const chat = await chatStore.get(record.chatId);
     const workspace = await configStore.getWorkspace(record.workspaceId);
     signal.throwIfAborted();
-    if (!chat || chat.workspaceId !== workspace?.id || !workspace?.folderPath || workspace.permission === "none") {
-      throw new CheckInterruptedError("Folder access is off for this chat, so the check can't run.");
+    if (
+      !chat ||
+      chat.workspaceId !== workspace?.id ||
+      !workspace?.folderPath ||
+      workspace.permission === "none"
+    ) {
+      throw new CheckInterruptedError(
+        "Folder access is off for this chat, so the check can't run.",
+      );
     }
     await assertManagedWorktreeAdmission(workspace);
     signal.throwIfAborted();
@@ -288,7 +326,11 @@ export function pullRequestBranchPushed(repository: string | undefined): void {
   const selector = repository?.toLowerCase();
   if (!selector) return;
   for (const chatId of new Set(pullRequestFollows.all().map((follow) => follow.chatId))) {
-    pullRequestFollows.nudge(chatId, "action", (follow) => `${follow.host}/${follow.repository}`.toLowerCase() === selector);
+    pullRequestFollows.nudge(
+      chatId,
+      "action",
+      (follow) => `${follow.host}/${follow.repository}`.toLowerCase() === selector,
+    );
   }
 }
 
@@ -297,10 +339,15 @@ export function pullRequestBranchPushed(repository: string | undefined): void {
  * job marker, and whatever the command leaves running becomes one of the
  * chat's background jobs.
  */
-export function runCommandLeftovers(input: { chatId: string; workspaceId: string; cwd: string }): RunCommandLeftovers {
+export function runCommandLeftovers(input: {
+  chatId: string;
+  workspaceId: string;
+  cwd: string;
+}): RunCommandLeftovers {
   return {
     begin() {
-      if (workspaceMutationGate.isChanging(input.workspaceId)) throw new Error("The workspace is changing.");
+      if (workspaceMutationGate.isChanging(input.workspaceId))
+        throw new Error("The workspace is changing.");
       const operation = commandHandoffs.admit(input.workspaceId);
       const id = newBackgroundJobId();
       return {
@@ -308,7 +355,8 @@ export function runCommandLeftovers(input: { chatId: string; workspaceId: string
         release: operation.release,
         // A push or `gh pr comment` from the agent: read this chat's follows soon.
         finished: (command) => {
-          if (commandMayChangePullRequest(command)) pullRequestFollows.nudge(input.chatId, "action");
+          if (commandMayChangePullRequest(command))
+            pullRequestFollows.nudge(input.chatId, "action");
         },
         env: { [BACKGROUND_JOB_MARKER]: id },
         adopt: async (processGroup, command, description, output) => {
@@ -351,7 +399,11 @@ let started = false;
 export async function reapFollowThroughProcesses(): Promise<void> {
   if (hostPlatformCapabilities().backgroundJobs) {
     const reaped = await backgroundJobs.reapPreviousLaunch();
-    if (reaped) logger.info("background-jobs", `Stopped ${reaped} background job(s) left from the last launch.`);
+    if (reaped)
+      logger.info(
+        "background-jobs",
+        `Stopped ${reaped} background job(s) left from the last launch.`,
+      );
   }
 }
 
@@ -377,7 +429,11 @@ export async function startFollowThrough(): Promise<void> {
     try {
       eligibility.set(chatId, goalChatRefusal(await chatStore.get(chatId)) === undefined);
     } catch (error) {
-      logger.warn("follow-through", "A saved check's chat could not be read; it stays for the next launch.", error);
+      logger.warn(
+        "follow-through",
+        "A saved check's chat could not be read; it stays for the next launch.",
+        error,
+      );
       eligibility.set(chatId, undefined);
     }
   }
@@ -396,10 +452,16 @@ export async function startFollowThrough(): Promise<void> {
     if (follow.state !== "following") continue;
     try {
       const chat = await chatStore.get(follow.chatId);
-      const workspace = chat?.workspaceId ? await configStore.getWorkspace(chat.workspaceId) : undefined;
+      const workspace = chat?.workspaceId
+        ? await configStore.getWorkspace(chat.workspaceId)
+        : undefined;
       if (workspace?.folderPath && workspace.permission !== "none") continue;
     } catch (error) {
-      logger.warn("follow-through", "Could not verify workspace access for a restored pull request follow.", error);
+      logger.warn(
+        "follow-through",
+        "Could not verify workspace access for a restored pull request follow.",
+        error,
+      );
     }
     pullRequestFollows.stop(follow.chatId, follow, "access-changed");
   }
@@ -447,11 +509,16 @@ export function restoreChatFollowThrough(chatId: string): void {
 }
 
 /** Folder access changed: what ran in that folder stops. */
-export async function closeWorkspaceFollowThrough(workspaceId: string): Promise<(committed: boolean) => Promise<void>> {
+export async function closeWorkspaceFollowThrough(
+  workspaceId: string,
+): Promise<(committed: boolean) => Promise<void>> {
   const chatIds = (await chatStore.list(workspaceId)).map((chat) => chat.id);
   const resumePolls = pullRequestFollows.pauseChats(chatIds);
   try {
-    await Promise.all([goalChecks.interruptWorkspace(workspaceId), commandHandoffs.cancelAndSettle(workspaceId)]);
+    await Promise.all([
+      goalChecks.interruptWorkspace(workspaceId),
+      commandHandoffs.cancelAndSettle(workspaceId),
+    ]);
     // Stopping the jobs clears each chat's quiet window through `jobsChanged`.
     await backgroundJobs.stopWorkspace(workspaceId, "access-changed");
   } catch (error) {
@@ -462,7 +529,8 @@ export async function closeWorkspaceFollowThrough(workspaceId: string): Promise<
     try {
       if (committed) {
         for (const chatId of chatIds) {
-          for (const follow of pullRequestFollows.list(chatId)) pullRequestFollows.stop(chatId, follow, "access-changed");
+          for (const follow of pullRequestFollows.list(chatId))
+            pullRequestFollows.stop(chatId, follow, "access-changed");
         }
         goalTurnHooks().accessChanged(chatIds);
         await saveChain;
@@ -514,13 +582,19 @@ async function configureFollowThrough(
   const admission = chatConfiguration.admit(chatId);
   try {
     const chat = await chatStore.get(chatId);
-    if (!hostPlatformCapabilities().backgroundJobs || !chat?.workspaceId || chat.botId || chat.owner) {
+    if (
+      !hostPlatformCapabilities().backgroundJobs ||
+      !chat?.workspaceId ||
+      chat.botId ||
+      chat.owner
+    ) {
       throw new Error("Follow-through requires a workspace chat on this computer.");
     }
     const workspaceId = chat.workspaceId;
     await commitWithWorkspaceMutationAdmission(workspaceMutationGate, workspaceId, async () => {
       const workspace = await configStore.getWorkspace(workspaceId);
-      if (!workspace?.folderPath || workspace.permission === "none") throw new Error("Folder access is off for this chat.");
+      if (!workspace?.folderPath || workspace.permission === "none")
+        throw new Error("Folder access is off for this chat.");
       await assertManagedWorktreeAdmission(workspace);
       const commit = await prepare(workspaceId);
       return () => {
@@ -537,8 +611,12 @@ async function configureFollowThrough(
 /** A move invalidates in-flight setup. An active check or undelivered result
  * still belongs to the old workspace, so the person must stop it first. */
 export async function beginFollowThroughMove(chatId: string): Promise<() => void> {
-  if (noticeDelivery.hasPending(chatId)) throw new Error("Wait for this chat’s follow-up message before changing workspaces.");
-  if (goalChecks.isRunning(chatId) || pullRequestFollows.list(chatId).some((follow) => follow.state === "following")) {
+  if (noticeDelivery.hasPending(chatId))
+    throw new Error("Wait for this chat’s follow-up message before changing workspaces.");
+  if (
+    goalChecks.isRunning(chatId) ||
+    pullRequestFollows.list(chatId).some((follow) => follow.state === "following")
+  ) {
     throw new Error("Stop this chat’s check or pull request follow before changing workspaces.");
   }
   const goalRefusal = goalTurnHooks().moveRefusal(chatId);
@@ -559,19 +637,28 @@ export function prepareGoalCheck(chatId: string): Promise<void> {
 }
 
 /** Runs a command goal's check in the chat's workspace folder. */
-export async function runGoalCheck(chatId: string, command: string, signal: AbortSignal): Promise<GoalCheckResult> {
+export async function runGoalCheck(
+  chatId: string,
+  command: string,
+  signal: AbortSignal,
+): Promise<GoalCheckResult> {
   const chat = await chatStore.get(chatId);
-  if (!chat?.workspaceId) return { kind: "stopped", summary: "This chat has no folder, so the check can't run." };
+  if (!chat?.workspaceId)
+    return { kind: "stopped", summary: "This chat has no folder, so the check can't run." };
   return goalChecks.run({ chatId, workspaceId: chat.workspaceId, command }, signal);
 }
 
-export function followChatPullRequest(chatId: string, resolve: () => Promise<PullRequestTarget>): Promise<void> {
+export function followChatPullRequest(
+  chatId: string,
+  resolve: () => Promise<PullRequestTarget>,
+): Promise<void> {
   return configureFollowThrough(chatId, async () => {
     const target = await resolve();
-    return () => { pullRequestFollows.follow({ chatId, ...target, startedBy: "person" }); };
+    return () => {
+      pullRequestFollows.follow({ chatId, ...target, startedBy: "person" });
+    };
   });
 }
-
 
 export interface PullRequestTarget {
   host: string;
@@ -585,7 +672,17 @@ export interface PullRequestTarget {
 export async function resolvePullRequestTarget(
   chatId: string,
   url: string | undefined,
-  currentPullRequest: (chatId: string) => Promise<{ pullRequest?: { host: string; repository: string; number: number; url: string; title?: string } | null }>,
+  currentPullRequest: (
+    chatId: string,
+  ) => Promise<{
+    pullRequest?: {
+      host: string;
+      repository: string;
+      number: number;
+      url: string;
+      title?: string;
+    } | null;
+  }>,
 ): Promise<PullRequestTarget> {
   if (url) {
     const ref = parseGitHubPullRequestUrl(url);

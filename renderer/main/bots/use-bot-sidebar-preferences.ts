@@ -35,7 +35,8 @@ function readRaw(): string | null {
 function snapshot(): BotSidebarPreferences {
   if (cache && !stale && listeners.size > 0) return cache.value;
   const raw = readRaw();
-  if (!cache || cache.raw !== raw) cache = { raw, value: parseBotSidebarPreferences(raw, Date.now()) };
+  if (!cache || cache.raw !== raw)
+    cache = { raw, value: parseBotSidebarPreferences(raw, Date.now()) };
   stale = false;
   return cache.value;
 }
@@ -103,7 +104,8 @@ export const botSidebarPreferenceActions = {
    * successful Bots load: an empty set is ignored, but a partial or stale list
    * would still unpin a Bot that exists.
    */
-  prune: (liveIds: ReadonlySet<string>) => update((current) => withoutMissingBots(current, liveIds)),
+  prune: (liveIds: ReadonlySet<string>) =>
+    update((current) => withoutMissingBots(current, liveIds)),
   /** Drops a deleted Bot's pin and view; call it once its delete has succeeded. */
   forget: (botId: string) => update((current) => withoutBot(current, botId)),
 } as const;

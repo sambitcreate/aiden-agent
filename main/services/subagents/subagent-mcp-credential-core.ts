@@ -57,9 +57,7 @@ function frame(
   hmac.update(";");
 }
 
-function oauthRevisionFields(
-  session: McpOAuthSession | undefined,
-): Array<[string, string]> {
+function oauthRevisionFields(session: McpOAuthSession | undefined): Array<[string, string]> {
   if (!session) return [];
   const fields: Array<[string, string]> = [];
   const add = (label: string, value: unknown) => {
@@ -75,14 +73,11 @@ function oauthRevisionFields(
   return fields;
 }
 
-const PUBLIC_PROTOCOL_HEADER_NAME =
-  /^(?:accept|accept-language|content-type|user-agent)$/iu;
+const PUBLIC_PROTOCOL_HEADER_NAME = /^(?:accept|accept-language|content-type|user-agent)$/iu;
 const MIN_REDACTABLE_CREDENTIAL_CHARS = 4;
 export const MAX_SUBAGENT_MCP_OBSERVED_OAUTH_TOKEN_SETS = 128;
 
-function rawSecretValues(
-  input: CreateSubagentMcpCredentialBoundaryInput,
-): string[] {
+function rawSecretValues(input: CreateSubagentMcpCredentialBoundaryInput): string[] {
   const configuredHeaderValues = Object.entries(input.configuredHeaders ?? {})
     // MCP custom headers are opaque and therefore credential-bearing unless
     // they are one of the fixed public HTTP negotiation headers.
@@ -100,12 +95,10 @@ function rawSecretValues(
     const credential = /^(?:basic|bearer|token)\s+(.+)$/iu.exec(value)?.[1];
     if (credential) values.push(credential);
   }
-  const tokens = input.oauthSession?.tokens as
-    Record<string, unknown> | undefined;
+  const tokens = input.oauthSession?.tokens as Record<string, unknown> | undefined;
   if (tokens) {
     for (const [key, value] of Object.entries(tokens)) {
-      if (typeof value === "string" && /(?:token|secret)$/iu.test(key))
-        values.push(value);
+      if (typeof value === "string" && /(?:token|secret)$/iu.test(key)) values.push(value);
     }
   }
   return uniqueRawSecrets(values);
@@ -114,10 +107,7 @@ function rawSecretValues(
 function uniqueRawSecrets(values: readonly unknown[]): string[] {
   const raw = [
     ...new Set(
-      values.filter(
-        (value): value is string =>
-          typeof value === "string" && value.length > 0,
-      ),
+      values.filter((value): value is string => typeof value === "string" && value.length > 0),
     ),
   ];
   if (raw.some((value) => value.length < MIN_REDACTABLE_CREDENTIAL_CHARS)) {
@@ -128,9 +118,7 @@ function uniqueRawSecrets(values: readonly unknown[]): string[] {
 
 function secretValues(raw: readonly string[]): string[] {
   const forms = raw.flatMap((value) => {
-    const queryEncoded = new URLSearchParams([["value", value]])
-      .toString()
-      .slice("value=".length);
+    const queryEncoded = new URLSearchParams([["value", value]]).toString().slice("value=".length);
     const base64 = Buffer.from(value, "utf8").toString("base64");
     return [
       value,
@@ -146,21 +134,15 @@ function secretValues(raw: readonly string[]): string[] {
   );
 }
 
-function redactorForRawSecrets(
-  raw: readonly string[],
-): SubagentMcpCredentialRedactor {
+function redactorForRawSecrets(raw: readonly string[]): SubagentMcpCredentialRedactor {
   const secrets = secretValues(raw);
-  const percentPatterns = [
-    ...new Set(secrets.filter((value) => value.includes("%"))),
-  ]
+  const percentPatterns = [...new Set(secrets.filter((value) => value.includes("%")))]
     .map(percentEncodedPattern)
     .filter((pattern): pattern is RegExp => pattern !== undefined);
   return (text: string) => {
     let redacted = text;
-    for (const secret of secrets)
-      redacted = redacted.split(secret).join(REDACTION);
-    for (const pattern of percentPatterns)
-      redacted = redacted.replace(pattern, REDACTION);
+    for (const secret of secrets) redacted = redacted.split(secret).join(REDACTION);
+    for (const pattern of percentPatterns) redacted = redacted.replace(pattern, REDACTION);
     return redacted;
   };
 }
@@ -169,12 +151,12 @@ function redactorForRawSecrets(
 export function createSubagentMcpOAuthTokenRedactor(
   tokens: Readonly<Record<string, unknown>>,
 ): SubagentMcpCredentialRedactor {
-  return redactorForRawSecrets(uniqueRawSecrets(oauthTokenEntries(tokens).map(([, value]) => value)));
+  return redactorForRawSecrets(
+    uniqueRawSecrets(oauthTokenEntries(tokens).map(([, value]) => value)),
+  );
 }
 
-function oauthTokenEntries(
-  tokens: Readonly<Record<string, unknown>>,
-): Array<[string, string]> {
+function oauthTokenEntries(tokens: Readonly<Record<string, unknown>>): Array<[string, string]> {
   return Object.entries(tokens)
     .filter(
       (entry): entry is [string, string] =>
@@ -241,25 +223,22 @@ export function createSubagentMcpCredentialBoundary(
   }
   const hmac = createHmac("sha256", input.revisionKey);
   hmac.update("aiden-subagent-mcp-credential-v1\0");
-  for (const [name, value] of Object.entries(
-    input.configuredHeaders ?? {},
-  ).sort(([a], [b]) => a.localeCompare(b))) {
+  for (const [name, value] of Object.entries(input.configuredHeaders ?? {}).sort(([a], [b]) =>
+    a.localeCompare(b),
+  )) {
     frame(hmac, `header.${name.toLowerCase()}`, value);
   }
-  for (const [index, value] of [...(input.endpointCredentials ?? [])]
-    .sort()
-    .entries()) {
+  for (const [index, value] of [...(input.endpointCredentials ?? [])].sort().entries()) {
     frame(hmac, `endpoint_credential.${index}`, value);
   }
   frame(hmac, "preset_api_key", input.presetApiKey ?? undefined);
   // Only when set, so revisions of servers without one are unchanged.
-  if (input.oauthClientSecret !== undefined) frame(hmac, "oauth_client_secret", input.oauthClientSecret);
+  if (input.oauthClientSecret !== undefined)
+    frame(hmac, "oauth_client_secret", input.oauthClientSecret);
   frame(hmac, "oauth_generation", input.oauthGeneration);
-  for (const [label, value] of oauthRevisionFields(input.oauthSession))
-    frame(hmac, label, value);
+  for (const [label, value] of oauthRevisionFields(input.oauthSession)) frame(hmac, label, value);
   const revision = hmac.digest("hex");
-  if (!REVISION.test(revision))
-    throw new Error("MCP credential revision is invalid.");
+  if (!REVISION.test(revision)) throw new Error("MCP credential revision is invalid.");
   const redactText = redactorForRawSecrets(rawSecretValues(input));
   return Object.freeze({
     revision,

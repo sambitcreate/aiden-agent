@@ -6,10 +6,20 @@ import { join } from "node:path";
 import { hostname } from "node:os";
 import { spawn, type ChildProcess } from "node:child_process";
 import { VERSION } from "@earendil-works/pi-coding-agent";
-import { AidenRemoteService, DnsSdAidenRemoteBonjourPublisher, type AidenRemoteBonjourPublisher } from "../../../main/services/aiden-remote-service.js";
-import { AidenRemoteStateRegistry, createDefaultAidenRemoteState } from "../../../main/services/aiden-remote-state.js";
+import {
+  AidenRemoteService,
+  DnsSdAidenRemoteBonjourPublisher,
+  type AidenRemoteBonjourPublisher,
+} from "../../../main/services/aiden-remote-service.js";
+import {
+  AidenRemoteStateRegistry,
+  createDefaultAidenRemoteState,
+} from "../../../main/services/aiden-remote-state.js";
 import { AidenRemoteApprovedRootService } from "../../../main/services/aiden-remote-approved-roots.js";
-import { AidenRemoteTailscaleController, createSystemTailscaleCommandRunner } from "../../../main/services/aiden-remote-tailscale.js";
+import {
+  AidenRemoteTailscaleController,
+  createSystemTailscaleCommandRunner,
+} from "../../../main/services/aiden-remote-tailscale.js";
 import { loadOrCreateAidenRemoteTlsIdentity } from "../../../main/services/aiden-remote-tls-identity.js";
 import { aidenRemoteLanHostnames } from "../../../main/services/aiden-remote-lan-hostname.js";
 import { AidenRemoteWorkspaceBrowserService } from "../../../main/services/aiden-remote-workspace-browser.js";
@@ -18,10 +28,16 @@ import { AidenRemoteWorkspaceOwnerRegistry } from "../../../main/services/aiden-
 import { AidenRemoteFileService } from "../../../main/services/aiden-remote-files.js";
 import { AidenRemoteGitService } from "../../../main/services/aiden-remote-git.js";
 import { AidenRemoteMemorySettingsService } from "../../../main/services/aiden-remote-memory-settings.js";
-import { AidenIdempotencyLedger, type AidenIdempotencySnapshot } from "../../../main/services/aiden-remote-operation-contract.js";
+import {
+  AidenIdempotencyLedger,
+  type AidenIdempotencySnapshot,
+} from "../../../main/services/aiden-remote-operation-contract.js";
 import * as git from "../../../main/services/git.js";
 import type { AppSettings } from "../../../main/services/types.js";
-import { createUsageStore, createEmptyUsageDatabase } from "../../../main/services/usage-store-core.js";
+import {
+  createUsageStore,
+  createEmptyUsageDatabase,
+} from "../../../main/services/usage-store-core.js";
 import { JsonStore, readJson, atomicJson } from "./state.ts";
 import { createCliWorkspaceApplication } from "./workspace-application.ts";
 import type { createDaemonChats } from "./daemon-chats.ts";
@@ -30,11 +46,18 @@ import { createCliSpeech } from "./speech.ts";
 import { createCliRemoteChats } from "./remote-chats.ts";
 import { tailscaleSetupMessage, withTailscaleSetupMessage } from "./tailscale-setup-message.ts";
 import { revokeAidenRemoteRuntimeDevice } from "../../../main/services/aiden-remote-revocation.js";
-import { revokeBotNoticeAudience, type BotNoticeRevokePolicy } from "../../../main/services/bot-capability-store-core.js";
+import {
+  revokeBotNoticeAudience,
+  type BotNoticeRevokePolicy,
+} from "../../../main/services/bot-capability-store-core.js";
 import { AidenRemoteScheduleService } from "../../../main/services/aiden-remote-schedules.js";
 import { createScheduledTaskApplicationService } from "../../../main/services/scheduled-task-application-service.js";
 import { listScheduledScripts } from "../../../main/services/schedule-script.js";
-import { nextScheduledRuns, systemTimezone, validateTimezone } from "../../../main/services/schedule-store-core.js";
+import {
+  nextScheduledRuns,
+  systemTimezone,
+  validateTimezone,
+} from "../../../main/services/schedule-store-core.js";
 import { scheduledSettingsPatch } from "../../../main/services/scheduled-settings-core.js";
 import { createCliGitService } from "./git-commands.ts";
 import { createCliRemoteWorktrees } from "./remote-worktrees.ts";
@@ -56,14 +79,22 @@ const BONJOUR_RETRY_MS = 30_000;
  * the phone's network (an mDNS responder such as avahi-daemon), or the person
  * pairs over Tailscale instead.
  */
-export function bonjourPublisher(retryMs = BONJOUR_RETRY_MS, platform: NodeJS.Platform = process.platform) {
+export function bonjourPublisher(
+  retryMs = BONJOUR_RETRY_MS,
+  platform: NodeJS.Platform = process.platform,
+) {
   if (platform === "darwin") return new DnsSdAidenRemoteBonjourPublisher();
   let child: ChildProcess | undefined;
   let retry: NodeJS.Timeout | undefined;
   let generation = 0;
   const warn = (line: string) => process.stderr.write(`aiden: ${line}\n`);
   return {
-    async start(input: { instanceId: string; displayName: string; port: number; hostname?: string }) {
+    async start(input: {
+      instanceId: string;
+      displayName: string;
+      port: number;
+      hostname?: string;
+    }) {
       const host = input.hostname ?? `${hostname()}.local`;
       const ours = ++generation;
       let warnedExit = false;
@@ -71,25 +102,42 @@ export function bonjourPublisher(retryMs = BONJOUR_RETRY_MS, platform: NodeJS.Pl
       const launch = async () => {
         retry = undefined;
         if (ours !== generation) return;
-        const current = spawn("avahi-publish-service", [input.displayName, "_aiden-agent._tcp", String(input.port), "v=1", `instance=${input.instanceId}`], { stdio: "ignore" });
+        const current = spawn(
+          "avahi-publish-service",
+          [
+            input.displayName,
+            "_aiden-agent._tcp",
+            String(input.port),
+            "v=1",
+            `instance=${input.instanceId}`,
+          ],
+          { stdio: "ignore" },
+        );
         child = current;
         const started = await new Promise<boolean>((resolve) => {
           current.once("spawn", () => resolve(true));
           current.once("error", (error: NodeJS.ErrnoException) => {
-            warn(error.code === "ENOENT"
-              ? `avahi-publish-service is not installed, so phones will not discover this server. LAN pairing still needs ${host} to resolve on the phone's network; if no mDNS responder answers for it, install one (\`sudo apt install avahi-daemon avahi-utils\`) or pair over Tailscale with \`aiden remote pair tailscale\`.`
-              : `Local network discovery could not start (${error.message}). LAN pairing needs ${host} to resolve on the phone's network; otherwise pair over Tailscale with \`aiden remote pair tailscale\`.`);
+            warn(
+              error.code === "ENOENT"
+                ? `avahi-publish-service is not installed, so phones will not discover this server. LAN pairing still needs ${host} to resolve on the phone's network; if no mDNS responder answers for it, install one (\`sudo apt install avahi-daemon avahi-utils\`) or pair over Tailscale with \`aiden remote pair tailscale\`.`
+                : `Local network discovery could not start (${error.message}). LAN pairing needs ${host} to resolve on the phone's network; otherwise pair over Tailscale with \`aiden remote pair tailscale\`.`,
+            );
             resolve(false);
           });
         });
         current.on("error", () => undefined);
-        if (!started) { if (child === current) child = undefined; return; }
+        if (!started) {
+          if (child === current) child = undefined;
+          return;
+        }
         current.once("exit", (code) => {
           if (child !== current) return;
           child = undefined;
           if (!warnedExit) {
             warnedExit = true;
-            warn(`avahi-publish-service exited (code ${code}), usually because avahi-daemon is not running, so ${host} may not resolve and phones cannot pair over LAN. Aiden keeps retrying every ${Math.round(retryMs / 1000)}s. Start it (\`sudo apt install avahi-daemon && sudo systemctl enable --now avahi-daemon\`), or pair over Tailscale with \`aiden remote pair tailscale\`.`);
+            warn(
+              `avahi-publish-service exited (code ${code}), usually because avahi-daemon is not running, so ${host} may not resolve and phones cannot pair over LAN. Aiden keeps retrying every ${Math.round(retryMs / 1000)}s. Start it (\`sudo apt install avahi-daemon && sudo systemctl enable --now avahi-daemon\`), or pair over Tailscale with \`aiden remote pair tailscale\`.`,
+            );
           }
           if (ours === generation) retry = setTimeout(() => void launch(), retryMs).unref();
         });
@@ -109,7 +157,10 @@ export function bonjourPublisher(retryMs = BONJOUR_RETRY_MS, platform: NodeJS.Pl
 
 export { tailscaleSetupMessage };
 
-type TailscaleTransportService = Pick<AidenRemoteService, "status" | "setConnectionMode" | "connectTailscale">;
+type TailscaleTransportService = Pick<
+  AidenRemoteService,
+  "status" | "setConnectionMode" | "connectTailscale"
+>;
 type TailscalePairingService = TailscaleTransportService & Pick<AidenRemoteService, "beginPairing">;
 
 /**
@@ -119,21 +170,33 @@ type TailscalePairingService = TailscaleTransportService & Pick<AidenRemoteServi
  * that needs the explicit review and takeover. A mode this call changed is
  * put back when the route cannot be connected.
  */
-export async function connectTailscaleTransport(service: TailscaleTransportService, tailscale: Pick<AidenRemoteTailscaleController, "status">, mode?: "tailscale" | "both") {
+export async function connectTailscaleTransport(
+  service: TailscaleTransportService,
+  tailscale: Pick<AidenRemoteTailscaleController, "status">,
+  mode?: "tailscale" | "both",
+) {
   const before = await service.status();
   const target = mode ?? (before.connectionMode === "lan" ? "both" : before.connectionMode);
   if (before.tailscaleConnected && before.connectionMode === target) return;
   if (!before.tailscaleConnected) {
     const node = await tailscale.status();
-    const blocked = !node.installed ? "tailscale_not_installed" : node.errorCode ? `tailscale_${node.errorCode}`
-      : !node.dnsName ? "tailscale_not_connected" : node.httpsAvailable !== true ? "tailscale_https_unavailable" : undefined;
+    const blocked = !node.installed
+      ? "tailscale_not_installed"
+      : node.errorCode
+        ? `tailscale_${node.errorCode}`
+        : !node.dnsName
+          ? "tailscale_not_connected"
+          : node.httpsAvailable !== true
+            ? "tailscale_https_unavailable"
+            : undefined;
     if (blocked) throw withTailscaleSetupMessage(blocked);
   }
   const changed = before.connectionMode !== target;
   try {
     if (changed) await service.setConnectionMode(target);
     if (!(await service.status()).tailscaleConnected) await service.connectTailscale();
-    if ((await service.status()).tailscaleErrorCode === "permission_denied") throw new Error("tailscale_permission_denied");
+    if ((await service.status()).tailscaleErrorCode === "permission_denied")
+      throw new Error("tailscale_permission_denied");
   } catch (error) {
     if (changed) await service.setConnectionMode(before.connectionMode).catch(() => undefined);
     throw withTailscaleSetupMessage(error);
@@ -141,9 +204,16 @@ export async function connectTailscaleTransport(service: TailscaleTransportServi
 }
 
 /** Pair over Tailscale, first preparing the transport when it is not ready. */
-export async function beginTailscalePairing(service: TailscalePairingService, tailscale: Pick<AidenRemoteTailscaleController, "status">) {
+export async function beginTailscalePairing(
+  service: TailscalePairingService,
+  tailscale: Pick<AidenRemoteTailscaleController, "status">,
+) {
   await connectTailscaleTransport(service, tailscale);
-  try { return await service.beginPairing("tailscale"); } catch (error) { throw withTailscaleSetupMessage(error); }
+  try {
+    return await service.beginPairing("tailscale");
+  } catch (error) {
+    throw withTailscaleSetupMessage(error);
+  }
 }
 
 /** Who can reach this server: the local network only, Tailscale only, or both. */
@@ -151,19 +221,39 @@ export type RemoteNetwork = "local" | "tailscale" | "both";
 export const REMOTE_NETWORKS: readonly RemoteNetwork[] = ["local", "tailscale", "both"];
 
 /** Switch the server to `network`. Local only also removes Aiden's own Tailscale Serve route. */
-export async function setRemoteNetwork(service: TailscaleTransportService, tailscale: Pick<AidenRemoteTailscaleController, "status">, network: RemoteNetwork) {
+export async function setRemoteNetwork(
+  service: TailscaleTransportService,
+  tailscale: Pick<AidenRemoteTailscaleController, "status">,
+  network: RemoteNetwork,
+) {
   // Leaving Tailscale can stop on a route change that never reported back; name the fix rather than the bare code.
-  if (network === "local") await service.setConnectionMode("lan").catch((error: unknown) => { throw withTailscaleSetupMessage(error); });
+  if (network === "local")
+    await service.setConnectionMode("lan").catch((error: unknown) => {
+      throw withTailscaleSetupMessage(error);
+    });
   else await connectTailscaleTransport(service, tailscale, network);
   return service.status();
 }
 
 /** Shared protocol services retain their own identity, revision and authorization checks. */
-export async function createCliRemote(agentDir: string, chats: ReturnType<typeof createDaemonChats>, scheduler: ReturnType<typeof createCliScheduler>, options: { port?: number; mcpPort?: number; discovery?: AidenRemoteBonjourPublisher; bots?: Awaited<ReturnType<typeof createCliBots>> } = {}) {
-  const bots = options.bots ?? await createCliBots(agentDir, chats);
+export async function createCliRemote(
+  agentDir: string,
+  chats: ReturnType<typeof createDaemonChats>,
+  scheduler: ReturnType<typeof createCliScheduler>,
+  options: {
+    port?: number;
+    mcpPort?: number;
+    discovery?: AidenRemoteBonjourPublisher;
+    bots?: Awaited<ReturnType<typeof createCliBots>>;
+  } = {},
+) {
+  const bots = options.bots ?? (await createCliBots(agentDir, chats));
   chats.setBots(bots);
   bots.setScheduler(scheduler);
-  const stateStore = new JsonStore(join(agentDir, "remote.json"), createDefaultAidenRemoteState(undefined, "Aiden CLI", options.port ?? 49320));
+  const stateStore = new JsonStore(
+    join(agentDir, "remote.json"),
+    createDefaultAidenRemoteState(undefined, "Aiden CLI", options.port ?? 49320),
+  );
   const state = new AidenRemoteStateRegistry(stateStore);
   await state.initialize();
   const owners = new AidenRemoteWorkspaceOwnerRegistry();
@@ -172,77 +262,183 @@ export async function createCliRemote(agentDir: string, chats: ReturnType<typeof
   const gitService = createCliGitService();
   const cancelGeneration = async (id: string) => {
     for (const chat of await chats.chatStore.list(id)) await chats.llmClient.cancelChat(chat.id);
-    for (const chat of await chats.chatStore.list(id)) await chats.llmClient.waitForChatIdle(chat.id);
+    for (const chat of await chats.chatStore.list(id))
+      await chats.llmClient.waitForChatIdle(chat.id);
   };
   const workspaces = createCliWorkspaceApplication(agentDir, {
     cancelGeneration,
     assertManagedWorktreeAdmission: async (workspace) => {
       const managed = workspace.managedWorktree;
-      if (managed && !await gitService.managedWorktreeUsable(managed.repositoryPath, managed.worktreePath, managed.branch, managed.worktreeGitDir, managed.ownershipToken, managed.worktreeDevice, managed.worktreeInode)) throw new Error("The managed worktree identity is no longer usable.");
+      if (
+        managed &&
+        !(await gitService.managedWorktreeUsable(
+          managed.repositoryPath,
+          managed.worktreePath,
+          managed.branch,
+          managed.worktreeGitDir,
+          managed.ownershipToken,
+          managed.worktreeDevice,
+          managed.worktreeInode,
+        ))
+      )
+        throw new Error("The managed worktree identity is no longer usable.");
     },
-    cancelSchedules: (id) => scheduler.service.cancelWorkspace(id), resumeSchedules: (id) => scheduler.service.resumeWorkspace(id),
+    cancelSchedules: (id) => scheduler.service.cancelWorkspace(id),
+    resumeSchedules: (id) => scheduler.service.resumeWorkspace(id),
   });
-  const worktreeApplication = createCliRemoteWorktrees(workspaces, scheduler, gitService, cancelGeneration);
-  const operations = new JsonStore<AidenIdempotencySnapshot>(join(agentDir, "remote-operations.json"), new AidenIdempotencyLedger().snapshot());
+  const worktreeApplication = createCliRemoteWorktrees(
+    workspaces,
+    scheduler,
+    gitService,
+    cancelGeneration,
+  );
+  const operations = new JsonStore<AidenIdempotencySnapshot>(
+    join(agentDir, "remote-operations.json"),
+    new AidenIdempotencyLedger().snapshot(),
+  );
   const idempotency = new AidenIdempotencyLedger(await operations.load());
   const persistIdempotency = (snapshot: AidenIdempotencySnapshot) => operations.save(snapshot);
   const settings = new JsonStore<AppSettings>(join(agentDir, "aiden.json"), {});
   const scheduledMcp = createCliMcpPool(agentDir);
-  const scheduleApplication = createScheduledTaskApplicationService({ store: scheduler.store, service: scheduler.service,
-    getSettings: () => settings.load(), setSettings: (patch) => settings.update((value) => { Object.assign(value, patch); return value; }),
-    getWorkspace: workspaces.configStore.getWorkspace, listMcpServers: scheduledMcp.listServers,
-    validateMcpSelection: (configured, selected) => { selectedMcpServers(configured, selected); },
-    listScripts: listScheduledScripts, nextRuns: nextScheduledRuns, systemTimezone, validateTimezone,
-    settingsPatch: (input) => scheduledSettingsPatch(input, validateTimezone), notifyChanged: () => {},
+  const scheduleApplication = createScheduledTaskApplicationService({
+    store: scheduler.store,
+    service: scheduler.service,
+    getSettings: () => settings.load(),
+    setSettings: (patch) =>
+      settings.update((value) => {
+        Object.assign(value, patch);
+        return value;
+      }),
+    getWorkspace: workspaces.configStore.getWorkspace,
+    listMcpServers: scheduledMcp.listServers,
+    validateMcpSelection: (configured, selected) => {
+      selectedMcpServers(configured, selected);
+    },
+    listScripts: listScheduledScripts,
+    nextRuns: nextScheduledRuns,
+    systemTimezone,
+    validateTimezone,
+    settingsPatch: (input) => scheduledSettingsPatch(input, validateTimezone),
+    notifyChanged: () => {},
   });
-  let botSessions: import("../../../main/services/aiden-remote-bot-session.js").AidenRemoteBotSessionService | undefined;
+  let botSessions:
+    | import("../../../main/services/aiden-remote-bot-session.js").AidenRemoteBotSessionService
+    | undefined;
   let botSignals: ReturnType<typeof import("./remote-bots.ts").createCliBotSignals> | undefined;
   let chatApi: Awaited<ReturnType<typeof createCliRemoteChats>> | undefined;
   // One chat runtime for Remote and the MCP server, whichever asks first.
   let chatApiLoad: Promise<Awaited<ReturnType<typeof createCliRemoteChats>>> | undefined;
-  const loadChatApi = () => chatApiLoad ??= createCliRemoteChats(agentDir, chats, workspaces, state, idempotency, persistIdempotency, bots)
-    .then((api) => { chatApi = api; return api; }, (error: unknown) => { chatApiLoad = undefined; throw error; });
+  const loadChatApi = () =>
+    (chatApiLoad ??= createCliRemoteChats(
+      agentDir,
+      chats,
+      workspaces,
+      state,
+      idempotency,
+      persistIdempotency,
+      bots,
+    ).then(
+      (api) => {
+        chatApi = api;
+        return api;
+      },
+      (error: unknown) => {
+        chatApiLoad = undefined;
+        throw error;
+      },
+    ));
   // Host-wide runs and the `/host/events` feed for paired desktops, rebuilt with each Remote start as on the desktop.
   let hostFeed: AidenRemoteHostFeedService | undefined;
   let hostRuns: AidenRemoteHostRunService | undefined;
   let detachHostFeed: (() => void) | undefined;
-  const closeHostFeed = () => { detachHostFeed?.(); detachHostFeed = undefined; hostFeed?.close(); hostFeed = undefined; };
-  const tailscale = new AidenRemoteTailscaleController(await createSystemTailscaleCommandRunner(), { outcomeStore: {
-    begin: (outcome) => state.beginTailscalePendingOutcome(outcome), snapshot: async () => (await state.snapshot()).tailscalePendingOutcome,
-    commit: (ownership) => state.commitTailscaleOutcome(ownership), clear: () => state.clearTailscalePendingOutcome(),
-  } });
+  const closeHostFeed = () => {
+    detachHostFeed?.();
+    detachHostFeed = undefined;
+    hostFeed?.close();
+    hostFeed = undefined;
+  };
+  const tailscale = new AidenRemoteTailscaleController(await createSystemTailscaleCommandRunner(), {
+    outcomeStore: {
+      begin: (outcome) => state.beginTailscalePendingOutcome(outcome),
+      snapshot: async () => (await state.snapshot()).tailscalePendingOutcome,
+      commit: (ownership) => state.commitTailscaleOutcome(ownership),
+      clear: () => state.clearTailscalePendingOutcome(),
+    },
+  });
   const lanHostnames = await aidenRemoteLanHostnames();
-  const service = new AidenRemoteService({ state, appVersion: VERSION, hostname: lanHostnames.endpoint, tailscale, bonjour: options.discovery ?? bonjourPublisher(),
-    loadTlsIdentity: () => loadOrCreateAidenRemoteTlsIdentity({ directory: join(agentDir, "remote-tls"), hostnames: lanHostnames.certificate, opensslPath: "openssl" }),
+  const service = new AidenRemoteService({
+    state,
+    appVersion: VERSION,
+    hostname: lanHostnames.endpoint,
+    tailscale,
+    bonjour: options.discovery ?? bonjourPublisher(),
+    loadTlsIdentity: () =>
+      loadOrCreateAidenRemoteTlsIdentity({
+        directory: join(agentDir, "remote-tls"),
+        hostnames: lanHostnames.certificate,
+        opensslPath: "openssl",
+      }),
     workspaceApi: async (instanceId) => {
-      const browser = new AidenRemoteWorkspaceBrowserService({ instanceId, state, approvalStore: agentDir });
+      const browser = new AidenRemoteWorkspaceBrowserService({
+        instanceId,
+        state,
+        approvalStore: agentDir,
+      });
       const remoteChats = await loadChatApi();
       await botSessions?.close();
       await botSignals?.close();
-      const { signals, ...botApi } = createCliRemoteBots(agentDir, instanceId, bots, chats, remoteChats, idempotency, persistIdempotency);
+      const { signals, ...botApi } = createCliRemoteBots(
+        agentDir,
+        instanceId,
+        bots,
+        chats,
+        remoteChats,
+        idempotency,
+        persistIdempotency,
+      );
       botSessions = botApi.botSessions;
       botSignals = signals;
       const api = remoteChats;
-      hostRuns = new AidenRemoteHostRunService({ registry: chats.runs, now: Date.now, controls: {
-        cancel: (runId) => chats.llmClient.cancelRun(runId),
-        // A phone-owned approval settles through the stream service so its device records stay consistent.
-        approve: ({ chatId, approvalId, decision, scope }) => {
-          // This host keeps no remembered approvals, so only a one-time decision applies.
-          if (scope !== undefined && scope !== "once") throw new AidenRemoteServiceError("invalid_request", "This computer only applies one-time approval decisions.", 400);
-          return api.streams.respondApprovalFromHost(chatId, approvalId, decision) || chats.llmClient.approveAsHost(approvalId, decision);
+      hostRuns = new AidenRemoteHostRunService({
+        registry: chats.runs,
+        now: Date.now,
+        controls: {
+          cancel: (runId) => chats.llmClient.cancelRun(runId),
+          // A phone-owned approval settles through the stream service so its device records stay consistent.
+          approve: ({ chatId, approvalId, decision, scope }) => {
+            // This host keeps no remembered approvals, so only a one-time decision applies.
+            if (scope !== undefined && scope !== "once")
+              throw new AidenRemoteServiceError(
+                "invalid_request",
+                "This computer only applies one-time approval decisions.",
+                400,
+              );
+            return (
+              api.streams.respondApprovalFromHost(chatId, approvalId, decision) ||
+              chats.llmClient.approveAsHost(approvalId, decision)
+            );
+          },
+          // CLI runs ask no questions and take no input while running.
+          answer: () => "rejected",
+          admitInput: async () => ({ admitted: false, reason: "run_not_active", committed: false }),
         },
-        // CLI runs ask no questions and take no input while running.
-        answer: () => "rejected",
-        admitInput: async () => ({ admitted: false, reason: "run_not_active", committed: false }),
-      } });
+      });
       closeHostFeed();
-      const feed = new AidenRemoteHostFeedService({ now: Date.now,
-        attentionSummary: (runId) => { const run = chats.runs.summary(runId); return run ? liveRunAttention(run.chatId, chats.runs)?.summary : undefined; },
+      const feed = new AidenRemoteHostFeedService({
+        now: Date.now,
+        attentionSummary: (runId) => {
+          const run = chats.runs.summary(runId);
+          return run ? liveRunAttention(run.chatId, chats.runs)?.summary : undefined;
+        },
         liveRuns: () => chats.runs.list(),
         // Bot rows carry Needs you, Failed, the last reply and its line from the same live summary the desktop uses.
-        source: createAidenRemoteHostFeedSource({ chats: api.chats, listWorkspaces: () => workspaces.application.list(),
-          repositoryIdentity: git.gitCachedRepositoryIdentity, listBots: () => botApi.bots.list(),
-          ...(signals ? { botSignals: signals.botSignals } : {}) }),
+        source: createAidenRemoteHostFeedSource({
+          chats: api.chats,
+          listWorkspaces: () => workspaces.application.list(),
+          repositoryIdentity: git.gitCachedRepositoryIdentity,
+          listBots: () => botApi.bots.list(),
+          ...(signals ? { botSignals: signals.botSignals } : {}),
+        }),
       });
       hostFeed = feed;
       const detachers = [
@@ -254,20 +450,67 @@ export async function createCliRemote(agentDir: string, chats: ReturnType<typeof
         // A turn started or ended (a new reply), a pause, or an approval opened or settled.
         ...(signals ? [signals.onChange(() => feed.invalidate())] : []),
       ];
-      detachHostFeed = () => { for (const detach of detachers) detach(); };
+      detachHostFeed = () => {
+        for (const detach of detachers) detach();
+      };
       return {
         ...botApi,
-        chats: remoteChats.chats, streams: remoteChats.streams, models: remoteChats.models, hostFeed: feed, hostRuns,
-        schedules: new AidenRemoteScheduleService({ application: scheduleApplication, models: remoteChats.models, idempotency, persistIdempotency }),
-        workspaceBrowser: browser,
-        workspaces: new AidenRemoteWorkspaceService({ application: workspaces.application, browser, idempotency, persistIdempotency }),
-        files: new AidenRemoteFileService({ instanceId, application: workspaces.environment, owners }),
-        git: new AidenRemoteGitService({ application: workspaces.environment, owners, worktrees: worktreeApplication, listWorkspaces: workspaces.configStore.listWorkspaces, idempotency, persistIdempotency,
-          git: { review: git.gitReview, diff: git.gitDiff, branches: git.gitBranches, checkout: git.gitCheckout, createBranch: git.gitCreateBranch, commit: git.gitCommit,
-            pushCapability: git.gitPushCapability, push: git.gitPush, compare: git.gitCompare, comparisonDiff: git.gitComparisonDiff, worktrees: git.gitWorktrees },
+        chats: remoteChats.chats,
+        streams: remoteChats.streams,
+        models: remoteChats.models,
+        hostFeed: feed,
+        hostRuns,
+        schedules: new AidenRemoteScheduleService({
+          application: scheduleApplication,
+          models: remoteChats.models,
+          idempotency,
+          persistIdempotency,
         }),
-        memorySettings: new AidenRemoteMemorySettingsService({ getSettings: () => settings.load(), setSettings: (patch) => settings.update((value) => { Object.assign(value, patch); return value; }) }),
-        usage: createUsageStore({ load: async () => readJson(join(agentDir, "usage.json"), createEmptyUsageDatabase()), save: async (value) => atomicJson(join(agentDir, "usage.json"), value) }),
+        workspaceBrowser: browser,
+        workspaces: new AidenRemoteWorkspaceService({
+          application: workspaces.application,
+          browser,
+          idempotency,
+          persistIdempotency,
+        }),
+        files: new AidenRemoteFileService({
+          instanceId,
+          application: workspaces.environment,
+          owners,
+        }),
+        git: new AidenRemoteGitService({
+          application: workspaces.environment,
+          owners,
+          worktrees: worktreeApplication,
+          listWorkspaces: workspaces.configStore.listWorkspaces,
+          idempotency,
+          persistIdempotency,
+          git: {
+            review: git.gitReview,
+            diff: git.gitDiff,
+            branches: git.gitBranches,
+            checkout: git.gitCheckout,
+            createBranch: git.gitCreateBranch,
+            commit: git.gitCommit,
+            pushCapability: git.gitPushCapability,
+            push: git.gitPush,
+            compare: git.gitCompare,
+            comparisonDiff: git.gitComparisonDiff,
+            worktrees: git.gitWorktrees,
+          },
+        }),
+        memorySettings: new AidenRemoteMemorySettingsService({
+          getSettings: () => settings.load(),
+          setSettings: (patch) =>
+            settings.update((value) => {
+              Object.assign(value, patch);
+              return value;
+            }),
+        }),
+        usage: createUsageStore({
+          load: async () => readJson(join(agentDir, "usage.json"), createEmptyUsageDatabase()),
+          save: async (value) => atomicJson(join(agentDir, "usage.json"), value),
+        }),
         speech: speech.service,
         settle: () => remoteChats.streams.settlePersistence(),
       };
@@ -275,62 +518,153 @@ export async function createCliRemote(agentDir: string, chats: ReturnType<typeof
   });
   // As on the desktop: drain host-wide and Bot subscriptions before and after the revocation fence; no run is cancelled.
   const revokeDevice = async (id: string, botNotices: BotNoticeRevokePolicy = "required") => {
-    const drain = () => { hostFeed?.revokeDevice(id); hostRuns?.revokeDevice(id); botSessions?.revokeDevice(id); chats.releaseDeviceAttendance(id); };
+    const drain = () => {
+      hostFeed?.revokeDevice(id);
+      hostRuns?.revokeDevice(id);
+      botSessions?.revokeDevice(id);
+      chats.releaseDeviceAttendance(id);
+    };
     drain();
-    const revoked = await revokeAidenRemoteRuntimeDevice({ state, streams: chatApi?.streams, chats: chatApi?.chats, workspaceOwners: owners }, id);
+    const revoked = await revokeAidenRemoteRuntimeDevice(
+      { state, streams: chatApi?.streams, chats: chatApi?.chats, workspaceOwners: owners },
+      id,
+    );
     drain();
-    await revokeBotNoticeAudience(() => bots.application.revokeNoticeAudience(id), botNotices, () => {
-      process.stderr.write("aiden: The app is disconnected, but Bot storage needs repair before its Bot notices can be cleared.\n");
-    });
+    await revokeBotNoticeAudience(
+      () => bots.application.revokeNoticeAudience(id),
+      botNotices,
+      () => {
+        process.stderr.write(
+          "aiden: The app is disconnected, but Bot storage needs repair before its Bot notices can be cleared.\n",
+        );
+      },
+    );
     return revoked;
   };
   // The loopback `/mcp` endpoint for outside apps. Its own services, built
   // over the shared chat runtime, so an app's request never rebuilds Remote's.
   let mcpWorkspaces: { instanceId: string; service: AidenRemoteWorkspaceService } | undefined;
-  const mcp = createCliMcpHost({ agentDir, state, revokeDevice: (id) => revokeDevice(id, "when-available"), appVersion: VERSION, defaultPort: options.mcpPort,
+  const mcp = createCliMcpHost({
+    agentDir,
+    state,
+    revokeDevice: (id) => revokeDevice(id, "when-available"),
+    appVersion: VERSION,
+    defaultPort: options.mcpPort,
     services: async () => {
       const api = await loadChatApi();
       const { instanceId } = await state.snapshot();
       if (mcpWorkspaces?.instanceId !== instanceId) {
-        const browser = new AidenRemoteWorkspaceBrowserService({ instanceId, state, approvalStore: agentDir });
-        mcpWorkspaces = { instanceId, service: new AidenRemoteWorkspaceService({ application: workspaces.application, browser, idempotency, persistIdempotency }) };
+        const browser = new AidenRemoteWorkspaceBrowserService({
+          instanceId,
+          state,
+          approvalStore: agentDir,
+        });
+        mcpWorkspaces = {
+          instanceId,
+          service: new AidenRemoteWorkspaceService({
+            application: workspaces.application,
+            browser,
+            idempotency,
+            persistIdempotency,
+          }),
+        };
       }
       return { chats: api.chats, streams: api.streams, workspaces: mcpWorkspaces.service };
     },
   });
-  return { service, state, workspaces, roots, bots, mcp,
+  return {
+    service,
+    state,
+    workspaces,
+    roots,
+    bots,
+    mcp,
     async start() {
-      await service.initialize(); await service.setEnabled(true); const status = await service.status(); if (!status.running) throw new Error(status.error ?? "Remote listeners could not start.");
+      await service.initialize();
+      await service.setEnabled(true);
+      const status = await service.status();
+      if (!status.running) throw new Error(status.error ?? "Remote listeners could not start.");
       // Off until an app is connected; a port problem is reported in `aiden apps list`, never fatal.
-      await mcp.initialize().catch(() => process.stderr.write("aiden: The MCP server could not start.\n"));
+      await mcp
+        .initialize()
+        .catch(() => process.stderr.write("aiden: The MCP server could not start.\n"));
     },
     apps: (args: string[]) => cliAppsCommand(mcp, args),
     // The MCP listener closes first, so no outside app starts a turn while the rest stops.
-    async stop() { await mcp.stop(); closeHostFeed(); chatApi?.stopInbox(); await botSessions?.close(); await botSignals?.close(); await chats.stop(); await service.stopAndSettle(); await speech.stop(); await scheduledMcp.close(); if (!options.bots) await bots.stop(); },
+    async stop() {
+      await mcp.stop();
+      closeHostFeed();
+      chatApi?.stopInbox();
+      await botSessions?.close();
+      await botSignals?.close();
+      await chats.stop();
+      await service.stopAndSettle();
+      await speech.stop();
+      await scheduledMcp.close();
+      if (!options.bots) await bots.stop();
+    },
     async command(args: string[]) {
       const [action = "status", value] = args;
       switch (action) {
-        case "status": return service.status();
-        case "devices": return state.listDevices();
+        case "status":
+          return service.status();
+        case "devices":
+          return state.listDevices();
         case "revoke": {
           if (!value) throw new Error("Provide a paired device id.");
           return { revoked: await revokeDevice(value) };
         }
-        case "pair": { if (value !== "lan" && value !== "tailscale") throw new Error("Usage: remote pair lan|tailscale"); return value === "tailscale" ? beginTailscalePairing(service, tailscale) : service.beginPairing(value); }
-        case "pair-status": return service.pairingStatus() ?? { state: "none" };
-        case "pair-cancel": { if (!value) throw new Error("Provide a pairing session id."); return { closed: await service.closePairing(value) }; }
-        case "roots": return (await state.snapshot()).approvedRoots.map(({ id, label }) => ({ id, label }));
-        case "approve-root": return roots.addLocalFolder(value, { confirmHomeDirectory: args[2] === "--entire-home" });
-        case "remove-root": return roots.removeLocalRoot(value);
-        case "network": { if (!REMOTE_NETWORKS.includes(value as RemoteNetwork)) throw new Error("Usage: remote network local|tailscale|both"); return setRemoteNetwork(service, tailscale, value as RemoteNetwork); }
-        case "mode": { if (!["lan", "tailscale", "both"].includes(value)) throw new Error("Usage: remote mode lan|tailscale|both"); await service.setConnectionMode(value as "lan" | "tailscale" | "both"); return service.status(); }
-        case "tailscale-connect": await service.connectTailscale(); return service.status();
-        case "tailscale-prepare": await connectTailscaleTransport(service, tailscale); return service.status();
-        case "tailscale-disconnect": await service.disconnectTailscale(); return service.status();
-        case "tailscale-review": return service.reviewTailscaleTakeover();
-        case "tailscale-takeover": await service.takeOverTailscale(value); return service.status();
-        case "tailscale-reconcile": await service.reconcileTailscale(); return service.status();
-        default: throw new Error("Usage: remote status|devices|revoke <id>|pair lan|tailscale|pair-status|pair-cancel <session-id>|roots|approve-root <path>|remove-root <id>|network local|tailscale|both|mode lan|tailscale|both|tailscale-connect|tailscale-prepare|tailscale-disconnect|tailscale-review|tailscale-takeover <token>|tailscale-reconcile");
+        case "pair": {
+          if (value !== "lan" && value !== "tailscale")
+            throw new Error("Usage: remote pair lan|tailscale");
+          return value === "tailscale"
+            ? beginTailscalePairing(service, tailscale)
+            : service.beginPairing(value);
+        }
+        case "pair-status":
+          return service.pairingStatus() ?? { state: "none" };
+        case "pair-cancel": {
+          if (!value) throw new Error("Provide a pairing session id.");
+          return { closed: await service.closePairing(value) };
+        }
+        case "roots":
+          return (await state.snapshot()).approvedRoots.map(({ id, label }) => ({ id, label }));
+        case "approve-root":
+          return roots.addLocalFolder(value, { confirmHomeDirectory: args[2] === "--entire-home" });
+        case "remove-root":
+          return roots.removeLocalRoot(value);
+        case "network": {
+          if (!REMOTE_NETWORKS.includes(value as RemoteNetwork))
+            throw new Error("Usage: remote network local|tailscale|both");
+          return setRemoteNetwork(service, tailscale, value as RemoteNetwork);
+        }
+        case "mode": {
+          if (!["lan", "tailscale", "both"].includes(value))
+            throw new Error("Usage: remote mode lan|tailscale|both");
+          await service.setConnectionMode(value as "lan" | "tailscale" | "both");
+          return service.status();
+        }
+        case "tailscale-connect":
+          await service.connectTailscale();
+          return service.status();
+        case "tailscale-prepare":
+          await connectTailscaleTransport(service, tailscale);
+          return service.status();
+        case "tailscale-disconnect":
+          await service.disconnectTailscale();
+          return service.status();
+        case "tailscale-review":
+          return service.reviewTailscaleTakeover();
+        case "tailscale-takeover":
+          await service.takeOverTailscale(value);
+          return service.status();
+        case "tailscale-reconcile":
+          await service.reconcileTailscale();
+          return service.status();
+        default:
+          throw new Error(
+            "Usage: remote status|devices|revoke <id>|pair lan|tailscale|pair-status|pair-cancel <session-id>|roots|approve-root <path>|remove-root <id>|network local|tailscale|both|mode lan|tailscale|both|tailscale-connect|tailscale-prepare|tailscale-disconnect|tailscale-review|tailscale-takeover <token>|tailscale-reconcile",
+          );
       }
     },
   };

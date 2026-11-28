@@ -18,16 +18,21 @@ const repositoryRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url))
 export const MAIN_WINDOW_INITIAL_JS_BUDGET = Object.freeze({ raw: 3_520_000, gzip: 1_075_000 });
 
 const TAG = /<(script|link)\b[^>]*>/giu;
-const attribute = (tag, name) => tag.match(new RegExp(`\\s${name}\\s*=\\s*["']([^"']+)["']`, "iu"))?.[1];
+const attribute = (tag, name) =>
+  tag.match(new RegExp(`\\s${name}\\s*=\\s*["']([^"']+)["']`, "iu"))?.[1];
 
 /** Lists the scripts an HTML entry loads eagerly: module scripts and modulepreloads. */
 export function initialScripts(html) {
   const scripts = [];
   for (const [tag, element] of html.matchAll(TAG)) {
-    const source = element.toLowerCase() === "script"
-      ? attribute(tag, "src")
-      : attribute(tag, "rel")?.toLowerCase() === "modulepreload" ? attribute(tag, "href") : undefined;
-    if (source && !/^[a-z][a-z0-9+.-]*:/iu.test(source) && !scripts.includes(source)) scripts.push(source);
+    const source =
+      element.toLowerCase() === "script"
+        ? attribute(tag, "src")
+        : attribute(tag, "rel")?.toLowerCase() === "modulepreload"
+          ? attribute(tag, "href")
+          : undefined;
+    if (source && !/^[a-z][a-z0-9+.-]*:/iu.test(source) && !scripts.includes(source))
+      scripts.push(source);
   }
   return scripts;
 }
@@ -55,8 +60,10 @@ export function budgetViolations(measurement, budget = MAIN_WINDOW_INITIAL_JS_BU
 if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
   const htmlPath = path.join(repositoryRoot, "build", "renderer", "main-window.html");
   const measurement = await measureInitialJavaScript(htmlPath);
-  if (measurement.files.length === 0) throw new Error(`${htmlPath} loads no scripts; run npm run build first.`);
-  for (const file of measurement.files) console.log(`${file.source}: ${file.raw} B raw, ${file.gzip} B gzip`);
+  if (measurement.files.length === 0)
+    throw new Error(`${htmlPath} loads no scripts; run npm run build first.`);
+  for (const file of measurement.files)
+    console.log(`${file.source}: ${file.raw} B raw, ${file.gzip} B gzip`);
   console.log(`Main window initial JS: ${measurement.raw} B raw, ${measurement.gzip} B gzip`);
   const violations = budgetViolations(measurement);
   if (violations.length > 0) {

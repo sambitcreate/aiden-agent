@@ -14,7 +14,11 @@ export interface BotHandoffActions {
   /** An answer or Open is on its way: the buttons wait for it. */
   busy: boolean;
   /** Send Done or Skip: null once main recorded it, else what to tell the person. */
-  send(pending: BotPendingHandoff, outcome: BotHandoffOutcome, note?: string): Promise<string | null>;
+  send(
+    pending: BotPendingHandoff,
+    outcome: BotHandoffOutcome,
+    note?: string,
+  ): Promise<string | null>;
   /** The card's Done or Skip; a problem shows as a toast. */
   answer(pending: BotPendingHandoff, outcome: BotHandoffOutcome): Promise<void>;
   /**
@@ -59,7 +63,11 @@ export function useBotHandoffActions(botId: string, waitId: string | undefined):
     waitId === undefined ? 0 : (inFlightByCard.get(cardKey(botId, waitId)) ?? 0),
   );
 
-  const send = async (pending: BotPendingHandoff, outcome: BotHandoffOutcome, note?: string): Promise<string | null> => {
+  const send = async (
+    pending: BotPendingHandoff,
+    outcome: BotHandoffOutcome,
+    note?: string,
+  ): Promise<string | null> => {
     const key = cardKey(botId, pending.waitId);
     adjustInFlight(key, 1);
     try {
@@ -79,7 +87,9 @@ export function useBotHandoffActions(botId: string, waitId: string | undefined):
 
   const open = async (pending: BotPendingHandoff) => {
     const signIn = pending.kind === "sign_in";
-    const failed = signIn ? "Aiden couldn’t open the sign-in page." : "Aiden couldn’t open that page.";
+    const failed = signIn
+      ? "Aiden couldn’t open the sign-in page."
+      : "Aiden couldn’t open that page.";
     const key = cardKey(botId, pending.waitId);
     adjustInFlight(key, 1);
     try {
@@ -96,7 +106,9 @@ export function useBotHandoffActions(botId: string, waitId: string | undefined):
     }
   };
 
-  const [taken, take] = useHandoffTaken(waitId === undefined ? undefined : handoffTakenKey(botId, waitId));
+  const [taken, take] = useHandoffTaken(
+    waitId === undefined ? undefined : handoffTakenKey(botId, waitId),
+  );
 
   return { busy: inFlight > 0, send, answer, open, taken, take };
 }

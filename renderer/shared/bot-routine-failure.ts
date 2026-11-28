@@ -48,13 +48,14 @@ const FAILURE_KINDS: ReadonlySet<string> = new Set<BotRoutineFailureKind>([
 ]);
 
 /** Authority failures that the person can fix by reviewing the Bot's setup. */
-const ACCESS_CHANGED_AUTHORITY: ReadonlySet<BotRuntimeAuthorityFailure> = new Set<BotRuntimeAuthorityFailure>([
-  "model_changed",
-  "capability_changed",
-  "access_unavailable",
-  "provider_mismatch",
-  "managed_home_changed",
-]);
+const ACCESS_CHANGED_AUTHORITY: ReadonlySet<BotRuntimeAuthorityFailure> =
+  new Set<BotRuntimeAuthorityFailure>([
+    "model_changed",
+    "capability_changed",
+    "access_unavailable",
+    "provider_mismatch",
+    "managed_home_changed",
+  ]);
 
 const SESSION_REASON_KINDS: Partial<Record<BotSessionErrorReason, BotRoutineFailureKind>> = {
   needs_model: "model_setup",
@@ -87,7 +88,12 @@ function bounded(text: string, maximum: number): string {
 function safeDetail(detail: string | undefined): string | undefined {
   const trimmed = detail?.trim();
   if (!trimmed) return undefined;
-  return bounded(redactCredentialTokens(trimmed, "[redacted]"), BOT_ROUTINE_FAILURE_DETAIL_CHARS).trim() || undefined;
+  return (
+    bounded(
+      redactCredentialTokens(trimmed, "[redacted]"),
+      BOT_ROUTINE_FAILURE_DETAIL_CHARS,
+    ).trim() || undefined
+  );
 }
 
 /**
@@ -117,7 +123,10 @@ export function classifyBotRoutineFailure(input: {
   const withDetail = (failure: { kind: BotRoutineFailureKind; code: string }): BotRoutineFailure =>
     detail ? { ...failure, detail } : failure;
 
-  if (input.authority && ACCESS_CHANGED_AUTHORITY.has(input.authority as BotRuntimeAuthorityFailure)) {
+  if (
+    input.authority &&
+    ACCESS_CHANGED_AUTHORITY.has(input.authority as BotRuntimeAuthorityFailure)
+  ) {
     return withDetail({ kind: "access_changed", code: input.authority });
   }
   const sessionKind = input.sessionReason
@@ -149,9 +158,10 @@ export function parseBotRoutineFailure(value: unknown): BotRoutineFailure | unde
   if (typeof candidate.kind !== "string" || !FAILURE_KINDS.has(candidate.kind)) return undefined;
   if (typeof candidate.code !== "string" || !candidate.code.trim()) return undefined;
   const detail = typeof candidate.detail === "string" ? safeDetail(candidate.detail) : undefined;
-  const toolName = typeof candidate.toolName === "string" && candidate.toolName.trim()
-    ? bounded(candidate.toolName.trim(), FAILURE_TOOL_NAME_CHARS)
-    : undefined;
+  const toolName =
+    typeof candidate.toolName === "string" && candidate.toolName.trim()
+      ? bounded(candidate.toolName.trim(), FAILURE_TOOL_NAME_CHARS)
+      : undefined;
   return {
     kind: candidate.kind as BotRoutineFailureKind,
     code: bounded(candidate.code.trim(), FAILURE_CODE_CHARS),

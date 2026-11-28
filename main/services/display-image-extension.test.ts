@@ -359,11 +359,19 @@ test("image generation runs in folderless chats while workspace chats still need
     { scope: base, generation: true, display: true },
     { scope: { ...base, workspaceRoot: undefined }, generation: true, display: false },
     { scope: { ...base, permission: "none" }, generation: false, display: false },
-    { scope: { ...base, workspaceRoot: undefined, permission: "none" }, generation: true, display: false },
+    {
+      scope: { ...base, workspaceRoot: undefined, permission: "none" },
+      generation: true,
+      display: false,
+    },
     { scope: { ...base, usageSource: "scheduled" }, generation: false, display: false },
     { scope: { ...base, interactionSurface: "telegram" }, generation: false, display: false },
     { scope: { ...base, assistantMode: true }, generation: false, display: false },
-    { scope: { ...base, workspaceRoot: undefined, excluded: true }, generation: false, display: false },
+    {
+      scope: { ...base, workspaceRoot: undefined, excluded: true },
+      generation: false,
+      display: false,
+    },
   ];
   for (const { scope, generation, display } of cases) {
     assert.equal(shouldEnableImageGeneration(scope), generation, JSON.stringify(scope));
@@ -382,7 +390,13 @@ test("a chat turn's model-operations plan keeps folderless chats image-only and 
   };
   const folderless = { ...workspace, workspaceRoot: undefined };
   const ready = { imageGenerationAvailable: true, stagingAvailable: true };
-  const off = { imageTools: false, classify: false, displayImage: false, setupHint: false, staging: "ok" };
+  const off = {
+    imageTools: false,
+    classify: false,
+    displayImage: false,
+    setupHint: false,
+    staging: "ok",
+  };
 
   assert.deepEqual(planModelOperationsForChat(folderless, ready), { ...off, imageTools: true });
   assert.deepEqual(
@@ -401,8 +415,14 @@ test("a chat turn's model-operations plan keeps folderless chats image-only and 
     { ...off, imageTools: true, classify: true, displayImage: true },
     "workspace chats keep the tools so list_operation_models can explain setup",
   );
-  assert.deepEqual(planModelOperationsForChat(workspace, { ...ready, stagingAvailable: false }), { ...off, staging: "fail" });
-  assert.deepEqual(planModelOperationsForChat({ ...folderless, usageSource: "scheduled" }, ready), off);
+  assert.deepEqual(planModelOperationsForChat(workspace, { ...ready, stagingAvailable: false }), {
+    ...off,
+    staging: "fail",
+  });
+  assert.deepEqual(
+    planModelOperationsForChat({ ...folderless, usageSource: "scheduled" }, ready),
+    off,
+  );
 });
 
 test("a runtime without a workspace presents generated images but offers no display_image tool", async () => {
@@ -417,14 +437,22 @@ test("a runtime without a workspace presents generated images but offers no disp
     },
   });
   assert.equal(runtime.extension, undefined);
-  await runtime.presentGeneratedImage("generated", { type: "image", mimeType: "image/png", data: ONE_PIXEL_PNG.toString("base64") });
+  await runtime.presentGeneratedImage("generated", {
+    type: "image",
+    mimeType: "image/png",
+    data: ONE_PIXEL_PNG.toString("base64"),
+  });
   assert.equal(artifacts.length, 1);
   // The producing call travels with the image so its placeholder can claim it.
   assert.deepEqual(sources, [{ tool: "generate_image", toolCallId: "generated" }]);
   assert.equal(artifacts[0]!.attachment.name, "Generated image.png");
   assert.equal(artifacts[0]!.attachment.data, ONE_PIXEL_PNG.toString("base64"));
   await assert.rejects(
-    runtime.presentGeneratedImage("over", { type: "image", mimeType: "image/png", data: ONE_PIXEL_PNG.toString("base64") }),
+    runtime.presentGeneratedImage("over", {
+      type: "image",
+      mimeType: "image/png",
+      data: ONE_PIXEL_PNG.toString("base64"),
+    }),
     /image-count limit/,
     "chat quotas still apply without a workspace",
   );
@@ -483,25 +511,63 @@ test("generated and workspace images share serialized count and pixel budgets", 
   const large = pngWithDimensions(4000, 5000);
   await fs.writeFile(path.join(root, "large.png"), large);
   const artifacts: ChatImageArtifactV1[] = [];
-  const runtime = createDisplayImageExtensionRuntime({ workspaceRoot: root, onArtifact: (artifact) => { artifacts.push(artifact); } });
-  await runtime.presentGeneratedImage("generated", { type: "image", mimeType: "image/png", data: large.toString("base64") });
+  const runtime = createDisplayImageExtensionRuntime({
+    workspaceRoot: root,
+    onArtifact: (artifact) => {
+      artifacts.push(artifact);
+    },
+  });
+  await runtime.presentGeneratedImage("generated", {
+    type: "image",
+    mimeType: "image/png",
+    data: large.toString("base64"),
+  });
   await runtime.extension!.tools![0]!.execute("workspace", { path: "large.png" });
-  await assert.rejects(runtime.presentGeneratedImage("overflow", { type: "image", mimeType: "image/png", data: ONE_PIXEL_PNG.toString("base64") }), /pixel limit/);
+  await assert.rejects(
+    runtime.presentGeneratedImage("overflow", {
+      type: "image",
+      mimeType: "image/png",
+      data: ONE_PIXEL_PNG.toString("base64"),
+    }),
+    /pixel limit/,
+  );
   assert.equal(artifacts.length, 2);
   assert.equal(artifacts[0]!.version, 1);
   assert.equal(artifacts[0]!.attachment.name, "Generated image.png");
-  const limited = createDisplayImageExtensionRuntime({ workspaceRoot: root, existingChatImageCount: MAX_DISPLAY_IMAGES_PER_CHAT - 1, onArtifact: () => undefined });
-  await limited.presentGeneratedImage("last", { type: "image", mimeType: "image/png", data: ONE_PIXEL_PNG.toString("base64") });
-  await assert.rejects(limited.extension!.tools![0]!.execute("over", { path: "large.png" }), /image.*limit/);
+  const limited = createDisplayImageExtensionRuntime({
+    workspaceRoot: root,
+    existingChatImageCount: MAX_DISPLAY_IMAGES_PER_CHAT - 1,
+    onArtifact: () => undefined,
+  });
+  await limited.presentGeneratedImage("last", {
+    type: "image",
+    mimeType: "image/png",
+    data: ONE_PIXEL_PNG.toString("base64"),
+  });
+  await assert.rejects(
+    limited.extension!.tools![0]!.execute("over", { path: "large.png" }),
+    /image.*limit/,
+  );
 });
 
 test("generated images retain dedup identity and do not consume budget on declined presentation", async () => {
   const root = await workspace();
   const seen: string[] = [];
   let accept = false;
-  const runtime = createDisplayImageExtensionRuntime({ workspaceRoot: root, artifactNamespace: "generation", existingChatImageCount: MAX_DISPLAY_IMAGES_PER_CHAT - 1,
-    onArtifact: (artifact) => { seen.push(artifact.attachment.id); return accept; } });
-  const image = { type: "image" as const, mimeType: "image/png", data: ONE_PIXEL_PNG.toString("base64") };
+  const runtime = createDisplayImageExtensionRuntime({
+    workspaceRoot: root,
+    artifactNamespace: "generation",
+    existingChatImageCount: MAX_DISPLAY_IMAGES_PER_CHAT - 1,
+    onArtifact: (artifact) => {
+      seen.push(artifact.attachment.id);
+      return accept;
+    },
+  });
+  const image = {
+    type: "image" as const,
+    mimeType: "image/png",
+    data: ONE_PIXEL_PNG.toString("base64"),
+  };
   await runtime.presentGeneratedImage("call", image);
   accept = true;
   await runtime.presentGeneratedImage("call", image);
@@ -512,15 +578,32 @@ test("generated images retain dedup identity and do not consume budget on declin
 
 test("generated images share existing chat byte budgets and cancellation before staging", async () => {
   const root = await workspace();
-  const image = { type: "image" as const, mimeType: "image/png", data: ONE_PIXEL_PNG.toString("base64") };
+  const image = {
+    type: "image" as const,
+    mimeType: "image/png",
+    data: ONE_PIXEL_PNG.toString("base64"),
+  };
   let staged = 0;
-  const runtime = createDisplayImageExtensionRuntime({ workspaceRoot: root,
+  const runtime = createDisplayImageExtensionRuntime({
+    workspaceRoot: root,
     existingChatImageBytes: MAX_DISPLAY_IMAGE_BYTES_PER_CHAT - ONE_PIXEL_PNG.length + 1,
-    onArtifact: () => { staged++; } });
+    onArtifact: () => {
+      staged++;
+    },
+  });
   await assert.rejects(runtime.presentGeneratedImage("bytes", image), /storage limit/);
   const controller = new AbortController();
-  const cancelled = createDisplayImageExtensionRuntime({ workspaceRoot: root, beforeArtifact: () => controller.abort(), onArtifact: () => { staged++; } });
-  await assert.rejects(cancelled.presentGeneratedImage("cancel", image, controller.signal), /abort/i);
+  const cancelled = createDisplayImageExtensionRuntime({
+    workspaceRoot: root,
+    beforeArtifact: () => controller.abort(),
+    onArtifact: () => {
+      staged++;
+    },
+  });
+  await assert.rejects(
+    cancelled.presentGeneratedImage("cancel", image, controller.signal),
+    /abort/i,
+  );
   assert.equal(staged, 0);
 });
 

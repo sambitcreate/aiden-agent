@@ -56,7 +56,9 @@ export const workspaceArtifactFiles: WorkspaceArtifactFiles = {
       filters: [{ name: "Aiden page", extensions: ["json"] }],
       properties: ["createDirectory", "showOverwriteConfirmation"],
     };
-    const result = parent ? await dialog.showSaveDialog(parent, options) : await dialog.showSaveDialog(options);
+    const result = parent
+      ? await dialog.showSaveDialog(parent, options)
+      : await dialog.showSaveDialog(options);
     return result.canceled || !result.filePath ? null : result.filePath;
   },
   chooseImportFile: async (event) => {
@@ -67,7 +69,9 @@ export const workspaceArtifactFiles: WorkspaceArtifactFiles = {
       properties: ["openFile"],
       filters: [{ name: "Aiden page", extensions: ["json"] }],
     };
-    const result = parent ? await dialog.showOpenDialog(parent, options) : await dialog.showOpenDialog(options);
+    const result = parent
+      ? await dialog.showOpenDialog(parent, options)
+      : await dialog.showOpenDialog(options);
     return result.canceled ? null : (result.filePaths[0] ?? null);
   },
   writeFile: (filePath, text) => writeFileAtomic(filePath, text, { mode: 0o600 }),

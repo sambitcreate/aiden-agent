@@ -1,5 +1,9 @@
 // Installs happy-dom and the fake IPC bridge; must stay the first import.
-import { emitBotTestNotification, installBotTestIpc, type BotTestIpcCall } from "../main/bots/test-dom";
+import {
+  emitBotTestNotification,
+  installBotTestIpc,
+  type BotTestIpcCall,
+} from "../main/bots/test-dom";
 import assert from "node:assert/strict";
 import { afterEach, beforeEach, mock, test } from "node:test";
 import { act, cleanup, render } from "@testing-library/react";
@@ -28,17 +32,33 @@ type SaveReply =
   | { ok: false; reason: "invalid"; issues: string[] };
 
 function note(id: string, x = 0): DesignFrame {
-  return { id, kind: "note", title: id, x, y: 0, w: 200, h: 120, text: id, pageId: "page-1", createdBy: "person" };
+  return {
+    id,
+    kind: "note",
+    title: id,
+    x,
+    y: 0,
+    w: 200,
+    h: 120,
+    text: id,
+    pageId: "page-1",
+    createdBy: "person",
+  };
 }
 function canvas(revision: number, ...frames: DesignFrame[]): DesignCanvas {
   return { ...emptyDesignCanvas(), revision, frames };
 }
-const moveTo = (id: string, x: number) => (doc: DesignCanvas): DesignCanvas => ({
-  ...doc,
-  frames: doc.frames.map((frame) => (frame.id === id ? { ...frame, x } : frame)),
-});
-const addNote = (id: string) => (doc: DesignCanvas): DesignCanvas => ({ ...doc, frames: [...doc.frames, note(id)] });
-const xOf = (doc: DesignCanvas | undefined, id: string) => doc?.frames.find((frame) => frame.id === id)?.x;
+const moveTo =
+  (id: string, x: number) =>
+  (doc: DesignCanvas): DesignCanvas => ({
+    ...doc,
+    frames: doc.frames.map((frame) => (frame.id === id ? { ...frame, x } : frame)),
+  });
+const addNote =
+  (id: string) =>
+  (doc: DesignCanvas): DesignCanvas => ({ ...doc, frames: [...doc.frames, note(id)] });
+const xOf = (doc: DesignCanvas | undefined, id: string) =>
+  doc?.frames.find((frame) => frame.id === id)?.x;
 const ids = (doc: DesignCanvas | undefined) => doc?.frames.map((frame) => frame.id) ?? [];
 
 let calls: BotTestIpcCall[];
@@ -160,19 +180,27 @@ test("an update from elsewhere reloads an idle canvas but waits while an edit is
   assert.equal(gets().length, 1);
 
   stored = canvas(5, note("a"), note("remote"));
-  await act(async () => emitBotTestNotification("designCanvas:updated", { chatId: "chat-1", revision: 5 }));
+  await act(async () =>
+    emitBotTestNotification("designCanvas:updated", { chatId: "chat-1", revision: 5 }),
+  );
   await settle();
   assert.equal(gets().length, 2);
   assert.deepEqual(ids(controller.doc), ["a", "remote"]);
 
-  await act(async () => emitBotTestNotification("designCanvas:updated", { chatId: "other-chat", revision: 9 }));
-  await act(async () => emitBotTestNotification("designCanvas:updated", { chatId: "chat-1", revision: 5 }));
+  await act(async () =>
+    emitBotTestNotification("designCanvas:updated", { chatId: "other-chat", revision: 9 }),
+  );
+  await act(async () =>
+    emitBotTestNotification("designCanvas:updated", { chatId: "chat-1", revision: 5 }),
+  );
   await settle();
   assert.equal(gets().length, 2, "another chat's update and an already-held revision are ignored");
 
   await act(async () => controller.change(moveTo("a", 70)));
   stored = canvas(6, note("a"), note("remote"), note("later"));
-  await act(async () => emitBotTestNotification("designCanvas:updated", { chatId: "chat-1", revision: 6 }));
+  await act(async () =>
+    emitBotTestNotification("designCanvas:updated", { chatId: "chat-1", revision: 6 }),
+  );
   await settle();
   assert.equal(gets().length, 2, "a pending edit is not thrown away by a reload");
   assert.equal(xOf(controller.doc, "a"), 70);
@@ -308,9 +336,25 @@ test("undo and redo step through recorded edits, and unrecorded edits fold into 
 
 test("a save says which pages an undo took off, so the store does not remember them as the person's removals", async () => {
   await mount();
-  const page: DesignFrame = { id: "p", kind: "file", title: "q.html", path: "design/q.html", x: 0, y: 400, w: 640, h: 436, designWidth: 1280, pageId: "page-1", createdBy: "aiden" };
-  const dropPage = (doc: DesignCanvas): DesignCanvas => ({ ...doc, frames: doc.frames.filter((frame) => frame.id !== "p") });
-  const undoneOf = (index: number) => (saves()[index]!.args[3] as { undone?: string[] } | undefined)?.undone;
+  const page: DesignFrame = {
+    id: "p",
+    kind: "file",
+    title: "q.html",
+    path: "design/q.html",
+    x: 0,
+    y: 400,
+    w: 640,
+    h: 436,
+    designWidth: 1280,
+    pageId: "page-1",
+    createdBy: "aiden",
+  };
+  const dropPage = (doc: DesignCanvas): DesignCanvas => ({
+    ...doc,
+    frames: doc.frames.filter((frame) => frame.id !== "p"),
+  });
+  const undoneOf = (index: number) =>
+    (saves()[index]!.args[3] as { undone?: string[] } | undefined)?.undone;
   await act(async () => controller.change((doc) => ({ ...doc, frames: [...doc.frames, page] })));
   await tick(800);
   assert.equal(undoneOf(0), undefined);
@@ -336,14 +380,27 @@ test("a save says which pages an undo took off, so the store does not remember t
   await act(async () => controller.redo());
   await tick(800);
   assert.equal(undoneOf(4), undefined);
-  stored = { ...stored, revision: stored.revision + 1, frames: stored.frames.filter((frame) => frame.id !== "p") };
-  await act(async () => emitBotTestNotification("designCanvas:updated", { chatId: "chat-1", revision: stored.revision }));
+  stored = {
+    ...stored,
+    revision: stored.revision + 1,
+    frames: stored.frames.filter((frame) => frame.id !== "p"),
+  };
+  await act(async () =>
+    emitBotTestNotification("designCanvas:updated", {
+      chatId: "chat-1",
+      revision: stored.revision,
+    }),
+  );
   await settle();
   assert.deepEqual(ids(controller.doc), ["a"]);
   await act(async () => controller.change(moveTo("a", 50)));
   await tick(800);
   assert.equal(saves().length, 6);
-  assert.equal(undoneOf(5), undefined, "the other window's removal is not called an undo of this one");
+  assert.equal(
+    undoneOf(5),
+    undefined,
+    "the other window's removal is not called an undo of this one",
+  );
 });
 
 test("an undo waiting to save does not take back a frame another window added", async () => {
@@ -352,18 +409,30 @@ test("an undo waiting to save does not take back a frame another window added", 
   await act(async () => controller.undo());
   assert.deepEqual(ids(controller.doc), ["a"]);
   // Another window added "c" before this window's edits were saved.
-  saveReplies.push(() => ({ ok: false, reason: "conflict", doc: canvas(5, note("a"), note("c", 900)) }));
+  saveReplies.push(() => ({
+    ok: false,
+    reason: "conflict",
+    doc: canvas(5, note("a"), note("c", 900)),
+  }));
   await tick(800);
 
   const [, retried] = saves()[1]!.args as [string, DesignCanvas, number];
-  assert.deepEqual(ids(retried), ["a", "c"], "their frame is saved, and the undone note stays gone");
+  assert.deepEqual(
+    ids(retried),
+    ["a", "c"],
+    "their frame is saved, and the undone note stays gone",
+  );
   assert.deepEqual(ids(controller.doc), ["a", "c"]);
 });
 
 test("after taking in another window's canvas, undo still takes back this window's edit but not what that window added", async () => {
   await mount();
   await act(async () => controller.change(moveTo("a", 10)));
-  saveReplies.push(() => ({ ok: false, reason: "conflict", doc: canvas(5, note("a"), note("c", 900)) }));
+  saveReplies.push(() => ({
+    ok: false,
+    reason: "conflict",
+    doc: canvas(5, note("a"), note("c", 900)),
+  }));
   await tick(800);
   assert.deepEqual(ids(controller.doc), ["a", "c"]);
   assert.equal(controller.canUndo, true, "taking in their canvas keeps this window's history");
@@ -379,7 +448,13 @@ test("after taking in another window's canvas, undo still takes back this window
 /** Aiden saves `doc` in reply `turn` and an idle canvas hears about it. */
 async function aidenSaves(doc: DesignCanvas, turn: string) {
   stored = doc;
-  await act(async () => emitBotTestNotification("designCanvas:updated", { chatId: "chat-1", revision: doc.revision, aidenTurn: turn }));
+  await act(async () =>
+    emitBotTestNotification("designCanvas:updated", {
+      chatId: "chat-1",
+      revision: doc.revision,
+      aidenTurn: turn,
+    }),
+  );
   await settle();
 }
 
@@ -412,10 +487,22 @@ test("a reply's change the canvas fetched before hearing whose it was still undo
   await tick(800);
   // Aiden has already saved revision 7 by the time the fetch for revision 6 reads the store.
   stored = canvas(7, note("a", 10), note("b", 400), note("c", 800));
-  await act(async () => emitBotTestNotification("designCanvas:updated", { chatId: "chat-1", revision: 6, aidenTurn: "reply-1" }));
+  await act(async () =>
+    emitBotTestNotification("designCanvas:updated", {
+      chatId: "chat-1",
+      revision: 6,
+      aidenTurn: "reply-1",
+    }),
+  );
   await settle();
   assert.deepEqual(ids(controller.doc), ["a", "b", "c"]);
-  await act(async () => emitBotTestNotification("designCanvas:updated", { chatId: "chat-1", revision: 7, aidenTurn: "reply-1" }));
+  await act(async () =>
+    emitBotTestNotification("designCanvas:updated", {
+      chatId: "chat-1",
+      revision: 7,
+      aidenTurn: "reply-1",
+    }),
+  );
   await settle();
 
   await act(async () => controller.undo());
@@ -428,34 +515,68 @@ test("a reply's change the canvas fetched before hearing whose it was still undo
   // A save's conflict can bring a reply's revision before its announcement too.
   await act(async () => controller.redo());
   await act(async () => controller.redo());
-  saveReplies.push(() => ({ ok: false, reason: "conflict", doc: canvas(8, note("a", 10), note("b", 400), note("c", 800), note("d", 1200)) }));
+  saveReplies.push(() => ({
+    ok: false,
+    reason: "conflict",
+    doc: canvas(8, note("a", 10), note("b", 400), note("c", 800), note("d", 1200)),
+  }));
   await tick(800);
   assert.deepEqual(ids(controller.doc).sort(), ["a", "b", "c", "d"]);
-  await act(async () => emitBotTestNotification("designCanvas:updated", { chatId: "chat-1", revision: 8, aidenTurn: "reply-2" }));
+  await act(async () =>
+    emitBotTestNotification("designCanvas:updated", {
+      chatId: "chat-1",
+      revision: 8,
+      aidenTurn: "reply-2",
+    }),
+  );
   await settle();
   await act(async () => controller.undo());
-  assert.deepEqual(ids(controller.doc).sort(), ["a", "b", "c"], "the second reply's frame undoes on its own");
+  assert.deepEqual(
+    ids(controller.doc).sort(),
+    ["a", "b", "c"],
+    "the second reply's frame undoes on its own",
+  );
 });
 
 test("a long pan while a reply's change waits for its announcement does not stop that change undoing with the reply", async () => {
   await mount();
   // Aiden has saved revisions 5 to 7 by the time the fetch for revision 5 reads the store.
   stored = canvas(7, note("a"), note("b", 400), note("c", 800));
-  await act(async () => emitBotTestNotification("designCanvas:updated", { chatId: "chat-1", revision: 5, aidenTurn: "reply-1" }));
+  await act(async () =>
+    emitBotTestNotification("designCanvas:updated", {
+      chatId: "chat-1",
+      revision: 5,
+      aidenTurn: "reply-1",
+    }),
+  );
   await settle();
   assert.deepEqual(ids(controller.doc), ["a", "b", "c"]);
   // Each pan ends in an unrecorded edit of the page's view; far more of them than edits otherwise kept to rebuild from.
   for (let step = 1; step <= 120; step += 1) {
-    await act(async () => controller.change((doc) => withActiveViewport(doc, { x: -step * 10, y: 0, zoom: 1 }), { record: false }));
+    await act(async () =>
+      controller.change((doc) => withActiveViewport(doc, { x: -step * 10, y: 0, zoom: 1 }), {
+        record: false,
+      }),
+    );
   }
   for (const revision of [6, 7]) {
-    await act(async () => emitBotTestNotification("designCanvas:updated", { chatId: "chat-1", revision, aidenTurn: "reply-1" }));
+    await act(async () =>
+      emitBotTestNotification("designCanvas:updated", {
+        chatId: "chat-1",
+        revision,
+        aidenTurn: "reply-1",
+      }),
+    );
   }
   await settle();
 
   await act(async () => controller.undo());
   assert.deepEqual(ids(controller.doc), ["a"], "the reply's frames still undo as one step");
-  assert.deepEqual(activeDesignPage(controller.doc!).viewport, { x: -1200, y: 0, zoom: 1 }, "and the view stays where the person left it");
+  assert.deepEqual(
+    activeDesignPage(controller.doc!).viewport,
+    { x: -1200, y: 0, zoom: 1 },
+    "and the view stays where the person left it",
+  );
 });
 
 test("undoing a reply leaves an edit the person made without a step of its own during it, such as a text frame growing", async () => {
@@ -481,12 +602,19 @@ test("the person's edit between two of a reply's changes, or another reply, star
   await act(async () => controller.change(moveTo("b", 500)));
   await tick(800);
   await aidenSaves(canvas(7, note("a"), note("b", 500), note("c", 800)), "reply-1");
-  await aidenSaves(canvas(8, note("a"), note("b", 500), note("c", 800), note("d", 1200)), "reply-2");
+  await aidenSaves(
+    canvas(8, note("a"), note("b", 500), note("c", 800), note("d", 1200)),
+    "reply-2",
+  );
 
   await act(async () => controller.undo());
   assert.deepEqual(ids(controller.doc), ["a", "b", "c"], "the second reply's change undoes alone");
   await act(async () => controller.undo());
-  assert.deepEqual(ids(controller.doc), ["a", "b"], "then the first reply's change after the person's edit");
+  assert.deepEqual(
+    ids(controller.doc),
+    ["a", "b"],
+    "then the first reply's change after the person's edit",
+  );
   await act(async () => controller.undo());
   assert.equal(xOf(controller.doc, "b"), 400, "then the person's move");
   await act(async () => controller.undo());
@@ -500,14 +628,26 @@ test("a change no reply announced is carried into the history instead of becomin
   await tick(800);
   // Revision 6 came from another window, 7 from Aiden: together they are not one reply's.
   stored = canvas(7, note("a", 10), note("other", 400), note("aiden", 800));
-  await act(async () => emitBotTestNotification("designCanvas:updated", { chatId: "chat-1", revision: 6 }));
-  await act(async () => emitBotTestNotification("designCanvas:updated", { chatId: "chat-1", revision: 7, aidenTurn: "reply-1" }));
+  await act(async () =>
+    emitBotTestNotification("designCanvas:updated", { chatId: "chat-1", revision: 6 }),
+  );
+  await act(async () =>
+    emitBotTestNotification("designCanvas:updated", {
+      chatId: "chat-1",
+      revision: 7,
+      aidenTurn: "reply-1",
+    }),
+  );
   await settle();
   assert.deepEqual(ids(controller.doc), ["a", "other", "aiden"]);
 
   await act(async () => controller.undo());
   assert.deepEqual(ids(controller.doc), ["a", "other", "aiden"]);
-  assert.equal(xOf(controller.doc, "a"), 0, "the person's own move undoes, and nothing of theirs or Aiden's goes");
+  assert.equal(
+    xOf(controller.doc, "a"),
+    0,
+    "the person's own move undoes, and nothing of theirs or Aiden's goes",
+  );
   assert.equal(controller.canUndo, false);
 });
 
@@ -522,7 +662,11 @@ test("a visual the person sent to the open canvas undoes as their own step, one 
   ] as const) {
     stored = canvas(revision, ...frames);
     await act(async () =>
-      emitBotTestNotification("designCanvas:updated", { chatId: "chat-1", revision, step: `send-to-canvas:${revision}` }),
+      emitBotTestNotification("designCanvas:updated", {
+        chatId: "chat-1",
+        revision,
+        step: `send-to-canvas:${revision}`,
+      }),
     );
     await settle();
   }
@@ -601,7 +745,9 @@ test("an update announced while the initial read is still in flight is refetched
 
   // Main's designPagesOnEntry saves revision 1 and broadcasts before the initial get resolves.
   stored = canvas(1, note("entry-page"));
-  await act(async () => emitBotTestNotification("designCanvas:updated", { chatId: "chat-1", revision: 1 }));
+  await act(async () =>
+    emitBotTestNotification("designCanvas:updated", { chatId: "chat-1", revision: 1 }),
+  );
   await act(async () => resolveInitialGet(canvas(0)));
   await settle();
 
@@ -734,13 +880,25 @@ test("a person's own edit ends unsettled late-announcement tracking, and a non-r
   await mount();
   // Revision 6 is fetched before its announcement arrives, so history is unsettled.
   stored = canvas(6, note("a"), note("b", 400));
-  await act(async () => emitBotTestNotification("designCanvas:updated", { chatId: "chat-1", revision: 5, aidenTurn: "reply-1" }));
+  await act(async () =>
+    emitBotTestNotification("designCanvas:updated", {
+      chatId: "chat-1",
+      revision: 5,
+      aidenTurn: "reply-1",
+    }),
+  );
   await settle();
   assert.deepEqual(ids(controller.doc), ["a", "b"]);
 
   // A recorded edit by the person ends unsettled history rebuild before revision 6 is announced.
   await act(async () => controller.change(moveTo("a", 25)));
-  await act(async () => emitBotTestNotification("designCanvas:updated", { chatId: "chat-1", revision: 6, aidenTurn: "reply-1" }));
+  await act(async () =>
+    emitBotTestNotification("designCanvas:updated", {
+      chatId: "chat-1",
+      revision: 6,
+      aidenTurn: "reply-1",
+    }),
+  );
   await settle();
 
   // Undo reverts only the person's move; the previously fetched frame stays carried rather than rebuilt.
@@ -780,9 +938,15 @@ test("reducer: closed retry backoff schedule, cancellation on flush/dispose, and
   assert.deepEqual(selectDesignCanvasGuard(state), { dirty: false, saving: false });
 
   // Edit schedules an 800 ms debounce timer and marks the guard dirty.
-  const edit = reduceDesignCanvasSync(state, { type: "change", mutate: addNote("b"), recordHistory: true });
+  const edit = reduceDesignCanvasSync(state, {
+    type: "change",
+    mutate: addNote("b"),
+    recordHistory: true,
+  });
   state = edit.state;
-  assert.deepEqual(edit.effects, [{ type: "schedule_timer", timer: { kind: "debounce", delayMs: DESIGN_CANVAS_SAVE_DELAY_MS } }]);
+  assert.deepEqual(edit.effects, [
+    { type: "schedule_timer", timer: { kind: "debounce", delayMs: DESIGN_CANVAS_SAVE_DELAY_MS } },
+  ]);
   assert.deepEqual(selectDesignCanvasGuard(state), { dirty: true, saving: false });
 
   // Disposing with unsent edits cancels the debounce timer, unsubscribes, and starts an immediate close save.
@@ -833,7 +997,10 @@ test("reducer: closed retry backoff schedule, cancellation on flush/dispose, and
     flush1.effects.map((effect) => effect.type),
     ["start_save"],
   );
-  const conflict1 = reduceDesignCanvasSync(state, { type: "save_conflicted", doc: canvas(5, note("a"), note("c")) });
+  const conflict1 = reduceDesignCanvasSync(state, {
+    type: "save_conflicted",
+    doc: canvas(5, note("a"), note("c")),
+  });
   state = conflict1.state;
   assert.deepEqual(
     conflict1.effects.map((effect) => effect.type),
@@ -844,7 +1011,11 @@ test("reducer: closed retry backoff schedule, cancellation on flush/dispose, and
     doc: canvas(6, note("a"), note("c"), note("d")),
   });
   state = conflict2.state;
-  assert.deepEqual(conflict2.effects, [], "exhausted closed session does not restart backoff on double conflict");
+  assert.deepEqual(
+    conflict2.effects,
+    [],
+    "exhausted closed session does not restart backoff on double conflict",
+  );
   assert.equal(isDesignCanvasFlushComplete(state), false);
 
   const flush2 = reduceDesignCanvasSync(state, { type: "flush_requested" });
@@ -863,8 +1034,15 @@ test("reducer: closed retry backoff schedule, cancellation on flush/dispose, and
 
 test("reducer: flush during closed retry backoff cancels the pending retry timer and finishes on save", () => {
   let state = createInitialDesignCanvasSyncState();
-  state = reduceDesignCanvasSync(state, { type: "load_succeeded", doc: canvas(4, note("a")) }).state;
-  state = reduceDesignCanvasSync(state, { type: "change", mutate: addNote("b"), recordHistory: true }).state;
+  state = reduceDesignCanvasSync(state, {
+    type: "load_succeeded",
+    doc: canvas(4, note("a")),
+  }).state;
+  state = reduceDesignCanvasSync(state, {
+    type: "change",
+    mutate: addNote("b"),
+    recordHistory: true,
+  }).state;
   state = reduceDesignCanvasSync(state, { type: "dispose" }).state;
   state = reduceDesignCanvasSync(state, { type: "save_failed" }).state;
   assert.equal(state.timer?.kind, "closed_retry");
@@ -885,9 +1063,16 @@ test("reducer: flush during closed retry backoff cancels the pending retry timer
 
 test("reducer: late revision announcement settles unsettled history and forgets old revision entries", () => {
   let state = createInitialDesignCanvasSyncState();
-  state = reduceDesignCanvasSync(state, { type: "load_succeeded", doc: canvas(4, note("a")) }).state;
+  state = reduceDesignCanvasSync(state, {
+    type: "load_succeeded",
+    doc: canvas(4, note("a")),
+  }).state;
   // Announce revision 5 as reply-1, then refetch directly to revision 6 before revision 6 is announced.
-  const ann5 = reduceDesignCanvasSync(state, { type: "announcement", revision: 5, aidenTurn: "reply-1" });
+  const ann5 = reduceDesignCanvasSync(state, {
+    type: "announcement",
+    revision: 5,
+    aidenTurn: "reply-1",
+  });
   state = ann5.state;
   assert.deepEqual(ann5.effects, [{ type: "refetch" }]);
 
@@ -900,10 +1085,18 @@ test("reducer: late revision announcement settles unsettled history and forgets 
   assert.equal(selectDesignCanvasView(state).canUndo, false);
 
   // Late announcement for revision 6 with the same reply settles unsettled history into one undo step.
-  const ann6 = reduceDesignCanvasSync(state, { type: "announcement", revision: 6, aidenTurn: "reply-1" });
+  const ann6 = reduceDesignCanvasSync(state, {
+    type: "announcement",
+    revision: 6,
+    aidenTurn: "reply-1",
+  });
   state = ann6.state;
   assert.deepEqual(ann6.effects, [], "already-held revision does not trigger a refetch");
-  assert.equal(state.unsettled, null, "unsettled history settled once all revisions were announced");
+  assert.equal(
+    state.unsettled,
+    null,
+    "unsettled history settled once all revisions were announced",
+  );
   assert.equal(state.aidenRevisions.size, 0, "old revision announcements pruned after settling");
   assert.equal(selectDesignCanvasView(state).canUndo, true);
 });
@@ -985,7 +1178,11 @@ test("a flush queued during a failing flush-origin or backoff-origin save makes 
   const [firstResult, secondResult] = await Promise.all([firstFlushPromise, secondFlushPromise]);
   await settle();
 
-  assert.equal(saves().length, 2, "queued flush immediately retries restored edits after flush failure");
+  assert.equal(
+    saves().length,
+    2,
+    "queued flush immediately retries restored edits after flush failure",
+  );
   assert.equal(firstResult, true);
   assert.equal(secondResult, true);
   assert.equal(xOf(stored, "a"), 85);
@@ -1031,7 +1228,11 @@ test("a flush queued during a failing flush-origin or backoff-origin save makes 
   await teardownFlush;
   await settle();
 
-  assert.equal(saves().length, 3, "queued teardown flush retries immediately without waiting for the next backoff");
+  assert.equal(
+    saves().length,
+    3,
+    "queued teardown flush retries immediately without waiting for the next backoff",
+  );
   assert.deepEqual(ids(stored), ["a", "b"]);
 });
 
@@ -1071,7 +1272,11 @@ test("save_refused with newer unsent edits and a queued flush immediately attemp
   const flushed = await flushPromise;
   await settle();
 
-  assert.equal(saves().length, 2, "newer unsent edits trigger an immediate follow-up save after refusal");
+  assert.equal(
+    saves().length,
+    2,
+    "newer unsent edits trigger an immediate follow-up save after refusal",
+  );
   assert.equal(flushed, true);
   assert.equal(controller.status, "ready");
   assert.deepEqual(ids(stored), ["a", "c"]);
@@ -1115,7 +1320,11 @@ test("disposing during a failing flush-origin save retries immediately instead o
   await flushPromise;
   await settle();
 
-  assert.equal(saves().length, 2, "close retry runs immediately upon flush failure without waiting for backoff");
+  assert.equal(
+    saves().length,
+    2,
+    "close retry runs immediately upon flush failure without waiting for backoff",
+  );
   assert.deepEqual(ids(stored), ["a", "b"]);
   assert.equal(designDirty(), false, "guard clears once the immediate close attempt succeeds");
 });

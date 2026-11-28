@@ -7,7 +7,14 @@ import type { BotBubbleState } from "../../../renderer/shared/bot-bubbles.js";
 import type { BotBubbleAppSettings } from "./bot-bubbles-core.js";
 import { createBotBubbleService } from "./bot-bubbles-service.js";
 
-async function harness(options: { bots?: string[]; settings?: BotBubbleAppSettings; platform?: NodeJS.Platform; dir?: string } = {}) {
+async function harness(
+  options: {
+    bots?: string[];
+    settings?: BotBubbleAppSettings;
+    platform?: NodeJS.Platform;
+    dir?: string;
+  } = {},
+) {
   const dir = options.dir ?? (await fs.mkdtemp(path.join(os.tmpdir(), "aiden-bot-bubbles-")));
   const filePath = path.join(dir, "bot-bubbles.json");
   const bots = new Set(options.bots ?? ["a", "b", "c", "d", "e", "f"]);
@@ -45,9 +52,16 @@ test("bubbling past the limit pushes the oldest to recents, saves, and broadcast
   assert.deepEqual(state.recents, ["a"]);
   assert.equal(state.host, "overlay");
   assert.deepEqual(heads(h.broadcasts[h.broadcasts.length - 1]!), ["b", "c", "d", "e", "f"]);
-  const saved = (await h.saved()) as { version: number; bubbles: Array<{ botId: string }>; recents: string[] };
+  const saved = (await h.saved()) as {
+    version: number;
+    bubbles: Array<{ botId: string }>;
+    recents: string[];
+  };
   assert.equal(saved.version, 1);
-  assert.deepEqual(saved.bubbles.map((bubble) => bubble.botId), ["b", "c", "d", "e", "f"]);
+  assert.deepEqual(
+    saved.bubbles.map((bubble) => bubble.botId),
+    ["b", "c", "d", "e", "f"],
+  );
   assert.deepEqual(saved.recents, ["a"]);
 });
 
@@ -113,7 +127,10 @@ test("a damaged saved file starts empty and is replaced on the next change", asy
   assert.deepEqual(heads(await h.service.state()), []);
   assert.equal(h.warnings.length, 1);
   await h.service.bubble("a");
-  assert.deepEqual(((await h.saved()) as { bubbles: Array<{ botId: string }> }).bubbles.map((b) => b.botId), ["a"]);
+  assert.deepEqual(
+    ((await h.saved()) as { bubbles: Array<{ botId: string }> }).bubbles.map((b) => b.botId),
+    ["a"],
+  );
 
   await fs.writeFile(h.filePath, JSON.stringify({ version: 7, bubbles: [], recents: [] }));
   const other = await harness({ dir });
@@ -152,7 +169,11 @@ test("change listeners see the previous and next state", async () => {
   await h.service.bubble("a");
   await h.service.open("a");
   await h.service.open(null);
-  assert.deepEqual(seen, [[null, null], [null, "a"], ["a", null]]);
+  assert.deepEqual(seen, [
+    [null, null],
+    [null, "a"],
+    ["a", null],
+  ]);
 });
 
 test("heads on a removed display move to the primary display", async () => {

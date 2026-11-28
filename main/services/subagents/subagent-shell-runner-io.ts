@@ -229,7 +229,9 @@ export async function runSubagentShellProductionInert(input: {
   let helperErrorBytes = 0;
   let controlWriteFailed = false;
   let settleControlWrite!: () => void;
-  const controlWritten = new Promise<void>((resolve) => { settleControlWrite = resolve; });
+  const controlWritten = new Promise<void>((resolve) => {
+    settleControlWrite = resolve;
+  });
   const closeControl = (): void => {
     child.stdin.destroy();
   };

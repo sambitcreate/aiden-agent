@@ -11,9 +11,18 @@
 
 import { spawn, type ChildProcess } from "node:child_process";
 import { CuaDriverSession } from "../computer-use/session.js";
-import type { CuaDriverHostFactory, CuaDriverHostLike, CuaDriverSessionLike } from "../computer-use/controller.js";
+import type {
+  CuaDriverHostFactory,
+  CuaDriverHostLike,
+  CuaDriverSessionLike,
+} from "../computer-use/controller.js";
 import { guestDriverBridgeScript, type GuestDriverLocation } from "./guest-driver-install.js";
-import { guestRemoteCommand, guestSshArgs, type GuestSshPaths, type GuestSshTarget } from "./ssh.js";
+import {
+  guestRemoteCommand,
+  guestSshArgs,
+  type GuestSshPaths,
+  type GuestSshTarget,
+} from "./ssh.js";
 
 /** One child process that speaks MCP on its stdio. */
 export interface GuestDriverBridgeCommand {
@@ -51,7 +60,10 @@ export interface GuestCuaDriverHostOptions {
 
 const STDERR_TAIL_BYTES = 4_096;
 
-function spawnBridge(command: GuestDriverBridgeCommand, spawnImpl: typeof spawn): { child: ChildProcess; diagnostic(): string } {
+function spawnBridge(
+  command: GuestDriverBridgeCommand,
+  spawnImpl: typeof spawn,
+): { child: ChildProcess; diagnostic(): string } {
   const child = spawnImpl(command.command, [...command.args], {
     detached: false,
     env: command.env,
@@ -71,17 +83,21 @@ function spawnBridge(command: GuestDriverBridgeCommand, spawnImpl: typeof spawn)
  * starts a bridge and connects (catalog check plus `start_session`); shutdown
  * closes every session it made.
  */
-export function createGuestCuaDriverHostFactory(options: GuestCuaDriverHostOptions): CuaDriverHostFactory {
+export function createGuestCuaDriverHostFactory(
+  options: GuestCuaDriverHostOptions,
+): CuaDriverHostFactory {
   const spawnImpl = options.spawnImpl ?? spawn;
   return async (factorySignal) => {
     const sessions = new Set<CuaDriverSession>();
     let closed = false;
     const host: CuaDriverHostLike = {
       async createSession(signal?: AbortSignal): Promise<CuaDriverSessionLike> {
-        if (closed || factorySignal.aborted) throw new Error("The guest driver host has shut down.");
+        if (closed || factorySignal.aborted)
+          throw new Error("The guest driver host has shut down.");
         const bridge = await options.bridge();
         // Shutdown may have run while the bridge resolved: it closed only the sessions it saw.
-        if (closed || factorySignal.aborted) throw new Error("The guest driver host has shut down.");
+        if (closed || factorySignal.aborted)
+          throw new Error("The guest driver host has shut down.");
         const { child, diagnostic } = spawnBridge(bridge, spawnImpl);
         child.once("error", () => undefined);
         const session = new CuaDriverSession({
@@ -90,9 +106,15 @@ export function createGuestCuaDriverHostFactory(options: GuestCuaDriverHostOptio
           onClosed: (closedSession) => sessions.delete(closedSession),
         });
         sessions.add(session);
-        const deadline = options.connectTimeoutMs !== undefined ? Date.now() + options.connectTimeoutMs : undefined;
+        const deadline =
+          options.connectTimeoutMs !== undefined
+            ? Date.now() + options.connectTimeoutMs
+            : undefined;
         try {
-          await session.connect(signal ? AbortSignal.any([signal, factorySignal]) : factorySignal, deadline);
+          await session.connect(
+            signal ? AbortSignal.any([signal, factorySignal]) : factorySignal,
+            deadline,
+          );
         } catch (error) {
           sessions.delete(session);
           await session.close().catch(() => undefined);

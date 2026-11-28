@@ -13,12 +13,14 @@ import {
 
 test("bridge accepts the legacy escape string and typed messages only", () => {
   assert.deepEqual(parseGuestBridgeMessage(GENERATIVE_UI_ESCAPE_MESSAGE), { type: "escape" });
-  assert.deepEqual(parseGuestBridgeMessage({ type: "aiden:generative-ui:ready" }), { type: "ready" });
+  assert.deepEqual(parseGuestBridgeMessage({ type: "aiden:generative-ui:ready" }), {
+    type: "ready",
+  });
   assert.equal(parseGuestBridgeMessage({ type: "aiden:generative-ui:ready", extra: 1 }), undefined);
-  assert.deepEqual(
-    parseGuestBridgeMessage({ type: "aiden:generative-ui:resize", height: 412.6 }),
-    { type: "resize", height: 412.6 },
-  );
+  assert.deepEqual(parseGuestBridgeMessage({ type: "aiden:generative-ui:resize", height: 412.6 }), {
+    type: "resize",
+    height: 412.6,
+  });
   assert.deepEqual(
     parseGuestBridgeMessage({ type: "aiden:generative-ui:prompt", text: "Drill into EMEA" }),
     { type: "prompt", text: "Drill into EMEA" },
@@ -48,21 +50,32 @@ test("inline visual height clamps hostile values into the visible range", () => 
 test("a visual's follow-up only ever becomes a confirmation request, never a send", () => {
   const base = { text: "Explain the spike", now: 10_000 };
   assert.deepEqual(admitGuestPrompt(base), { action: "confirm", text: "Explain the spike" });
-  assert.deepEqual(admitGuestPrompt({ ...base, text: "  trim me \n" }), { action: "confirm", text: "trim me" });
-  assert.deepEqual(admitGuestPrompt({ ...base, text: "   " }), { action: "reject", reason: "empty" });
+  assert.deepEqual(admitGuestPrompt({ ...base, text: "  trim me \n" }), {
+    action: "confirm",
+    text: "trim me",
+  });
+  assert.deepEqual(admitGuestPrompt({ ...base, text: "   " }), {
+    action: "reject",
+    reason: "empty",
+  });
 });
 
 test("follow-up text is bounded before trimming and requests are rate-limited per visual", () => {
   const base = { text: "Again", now: 10_000 };
-  assert.equal(admitGuestPrompt({ ...base, text: "x".repeat(MAX_GUEST_PROMPT_CHARS) }).action, "confirm");
-  assert.deepEqual(
-    admitGuestPrompt({ ...base, text: `${" ".repeat(MAX_GUEST_PROMPT_CHARS)}x` }),
-    { action: "reject", reason: "too_long" },
+  assert.equal(
+    admitGuestPrompt({ ...base, text: "x".repeat(MAX_GUEST_PROMPT_CHARS) }).action,
+    "confirm",
   );
+  assert.deepEqual(admitGuestPrompt({ ...base, text: `${" ".repeat(MAX_GUEST_PROMPT_CHARS)}x` }), {
+    action: "reject",
+    reason: "too_long",
+  });
   assert.deepEqual(
     admitGuestPrompt({ ...base, lastAcceptedAt: base.now - GUEST_PROMPT_COOLDOWN_MS + 1 }),
     { action: "reject", reason: "cooldown" },
   );
-  assert.equal(admitGuestPrompt({ ...base, lastAcceptedAt: base.now - GUEST_PROMPT_COOLDOWN_MS }).action, "confirm");
+  assert.equal(
+    admitGuestPrompt({ ...base, lastAcceptedAt: base.now - GUEST_PROMPT_COOLDOWN_MS }).action,
+    "confirm",
+  );
 });
-

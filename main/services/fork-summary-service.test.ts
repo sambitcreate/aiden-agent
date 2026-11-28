@@ -43,8 +43,12 @@ function runtimeFixture() {
   const model = faux.getModel() as Model<Api>;
   const runtime: ResolvedModelRuntime = {
     provider: {
-      id: PROVIDER, kind: "openai", label: "Fork summary test",
-      baseUrl: "https://fork-summary.invalid/v1", models: [MODEL], needsKey: false,
+      id: PROVIDER,
+      kind: "openai",
+      label: "Fork summary test",
+      baseUrl: "https://fork-summary.invalid/v1",
+      models: [MODEL],
+      needsKey: false,
     },
     model,
     models,
@@ -73,19 +77,41 @@ const SOURCE_MESSAGES = [
 /** A source chat and its fork after `a1`, with a pending summary. */
 function chatsFixture(instructions?: string): Map<string, Chat> {
   const source: Chat = {
-    id: "source", title: "Source", providerId: PROVIDER, model: MODEL,
-    messages: SOURCE_MESSAGES, createdAt: 1, updatedAt: 1,
+    id: "source",
+    title: "Source",
+    providerId: PROVIDER,
+    model: MODEL,
+    messages: SOURCE_MESSAGES,
+    createdAt: 1,
+    updatedAt: 1,
   };
   const fork: Chat = {
-    id: "fork", title: "Source (fork)", providerId: PROVIDER, model: MODEL,
-    messages: [visible("f-u1", "user", "PRE_CUT_PROMPT"), visible("f-a1", "assistant", "PRE_CUT_ANSWER")],
+    id: "fork",
+    title: "Source (fork)",
+    providerId: PROVIDER,
+    model: MODEL,
+    messages: [
+      visible("f-u1", "user", "PRE_CUT_PROMPT"),
+      visible("f-a1", "assistant", "PRE_CUT_ANSWER"),
+    ],
     forkedFrom: {
-      chatId: "source", messageId: "a1", position: "after", at: 2,
-      summary: { state: "pending", afterMessageId: "f-a1", ...(instructions ? { instructions } : {}) },
+      chatId: "source",
+      messageId: "a1",
+      position: "after",
+      at: 2,
+      summary: {
+        state: "pending",
+        afterMessageId: "f-a1",
+        ...(instructions ? { instructions } : {}),
+      },
     },
-    createdAt: 2, updatedAt: 2,
+    createdAt: 2,
+    updatedAt: 2,
   };
-  return new Map([[source.id, source], [fork.id, fork]]);
+  return new Map([
+    [source.id, source],
+    [fork.id, fork],
+  ]);
 }
 
 function serviceFixture(
@@ -155,7 +181,10 @@ test("a fork summary covers only what the source did after the fork point", asyn
   assert.equal(ready?.text, "The user asked a follow-up and got POST_CUT_ANSWER.");
   assert.equal(ready?.instructions, "the follow-up");
   assert.equal(forkSummaryHoldsSend(chats.get("fork")!.forkedFrom), false);
-  assert.deepEqual(published.map((item) => item?.state), ["ready"]);
+  assert.deepEqual(
+    published.map((item) => item?.state),
+    ["ready"],
+  );
   assert.equal(usage.length, 1, "the summary's model usage is recorded");
 
   // The fork's next turn sees the summary right after its last copied
@@ -194,8 +223,10 @@ test("with Skills on, the summary reads the source journal after the cut", async
   t.after(() => rm(root, { recursive: true, force: true }));
   const store = new PiCompactionSessionStore({ root: async () => root });
   const { faux, model, runtime } = runtimeFixture();
-  const reply = (content: AssistantMessage["content"], stopReason: AssistantMessage["stopReason"] = "stop") =>
-    fauxAssistantMessage(content, { stopReason });
+  const reply = (
+    content: AssistantMessage["content"],
+    stopReason: AssistantMessage["stopReason"] = "stop",
+  ) => fauxAssistantMessage(content, { stopReason });
 
   // The source's second turn ran a tool; only the journal records the call.
   const journal = await store.openChat("source");
@@ -205,15 +236,30 @@ test("with Skills on, the summary reads the source journal after the cut", async
     await appendPiMessages(journal, generated);
     await lease.commit(assistantId);
   };
-  await settle(SOURCE_MESSAGES.slice(0, 1), [reply([{ type: "text", text: "PRE_CUT_ANSWER" }])], "a1");
-  await settle(SOURCE_MESSAGES.slice(0, 3), [
-    reply([{ type: "toolCall", id: "call-1", name: "read", arguments: { path: "notes.md" } }], "toolUse"),
-    {
-      role: "toolResult", toolCallId: "call-1", toolName: "read",
-      content: [{ type: "text", text: "POST_CUT_TOOL_OUTPUT" }], isError: false, timestamp: 2,
-    },
-    reply([{ type: "text", text: "POST_CUT_ANSWER" }]),
-  ], "a2");
+  await settle(
+    SOURCE_MESSAGES.slice(0, 1),
+    [reply([{ type: "text", text: "PRE_CUT_ANSWER" }])],
+    "a1",
+  );
+  await settle(
+    SOURCE_MESSAGES.slice(0, 3),
+    [
+      reply(
+        [{ type: "toolCall", id: "call-1", name: "read", arguments: { path: "notes.md" } }],
+        "toolUse",
+      ),
+      {
+        role: "toolResult",
+        toolCallId: "call-1",
+        toolName: "read",
+        content: [{ type: "text", text: "POST_CUT_TOOL_OUTPUT" }],
+        isError: false,
+        timestamp: 2,
+      },
+      reply([{ type: "text", text: "POST_CUT_ANSWER" }]),
+    ],
+    "a2",
+  );
 
   const payloads: string[] = [];
   faux.setResponses([
@@ -308,5 +354,8 @@ test("cancelling a running summary leaves it failed, and an interrupted one fail
   const recovery = serviceFixture(interrupted, runtime);
   await recovery.service.settleInterrupted("fork");
   assert.equal(recovery.summary()?.state, "failed");
-  assert.deepEqual(recovery.published.map((item) => item?.state), ["failed"]);
+  assert.deepEqual(
+    recovery.published.map((item) => item?.state),
+    ["failed"],
+  );
 });

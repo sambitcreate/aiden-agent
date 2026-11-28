@@ -18,7 +18,9 @@ type BotIdOf = (args: readonly unknown[], access: BotBubbleOverlayAccess<never>)
 
 const firstArgument = (args: readonly unknown[]): unknown => args[0];
 const botIdField = (args: readonly unknown[]): unknown =>
-  typeof args[0] === "object" && args[0] !== null ? (args[0] as { botId?: unknown }).botId : undefined;
+  typeof args[0] === "object" && args[0] !== null
+    ? (args[0] as { botId?: unknown }).botId
+    : undefined;
 
 /** The request names no Bot, so there is nothing to scope (tucking the chat away, an approval nobody waits on). */
 const OPEN_NONE = Symbol("no Bot");
@@ -52,7 +54,10 @@ export const BOT_BUBBLE_OVERLAY_BOT_ARGUMENT: Readonly<Record<string, BotIdOf>> 
   "bots:withdraw": botIdField,
   "bots:answerQuestion": botIdField,
   "bots:approve": (args, access) => {
-    const waitId = typeof args[0] === "object" && args[0] !== null ? (args[0] as { waitId?: unknown }).waitId : undefined;
+    const waitId =
+      typeof args[0] === "object" && args[0] !== null
+        ? (args[0] as { waitId?: unknown }).waitId
+        : undefined;
     if (typeof waitId !== "string") return undefined;
     // Nothing waits under that id (answered elsewhere a moment ago): the handler
     // decides nothing and says so, which beats a misleading refusal here.
@@ -107,7 +112,9 @@ export function guardBotBubbleOverlayHandlers<Event>(
         const heads = access.bubbledBotIds(event);
         return Promise.resolve(handler(event, ...args)).then((bots) =>
           Array.isArray(bots)
-            ? bots.filter((bot: { id?: unknown }) => typeof bot?.id === "string" && heads.has(bot.id))
+            ? bots.filter(
+                (bot: { id?: unknown }) => typeof bot?.id === "string" && heads.has(bot.id),
+              )
             : bots,
         );
       });
@@ -116,7 +123,8 @@ export function guardBotBubbleOverlayHandlers<Event>(
     if (OVERLAY_UNSCOPED_CHANNELS.has(channel)) {
       handle(channel, (event, ...args) => {
         // Letting go of a feed is always safe; the rest still needs the overlay's own page.
-        if (channel !== "bots:live:unsubscribe" && access.isOverlayEvent(event)) assertTrustedOverlay(access, event);
+        if (channel !== "bots:live:unsubscribe" && access.isOverlayEvent(event))
+          assertTrustedOverlay(access, event);
         return handler(event, ...args);
       });
       return;

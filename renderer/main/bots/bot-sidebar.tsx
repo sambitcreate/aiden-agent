@@ -20,7 +20,13 @@ import {
   SplitView,
   Text,
 } from "../../components/ui";
-import { botChatPath, botChatRouteBotId, botRouteBotId, hostBotChatRouteKey, lastNonBotRoute } from "../../lib/bot-routes";
+import {
+  botChatPath,
+  botChatRouteBotId,
+  botRouteBotId,
+  hostBotChatRouteKey,
+  lastNonBotRoute,
+} from "../../lib/bot-routes";
 import { isBotUnread } from "../../lib/bot-sidebar-preferences";
 import { useProfile } from "../../lib/queries";
 import { cn } from "../../lib/ui-utils";
@@ -115,7 +121,6 @@ function sameRowProps(previous: RowProps, next: RowProps): boolean {
   );
 }
 
-
 /** The row's ⌘ number while ⌘ is held, where its ••• button sits. */
 function ShortcutHint({ binding, className }: { binding: string; className: string }) {
   return (
@@ -131,7 +136,6 @@ function ShortcutHint({ binding, className }: { binding: string; className: stri
     </kbd>
   );
 }
-
 
 /** "Bubble" on the row of a Bot whose chat is a floating head now (docs/bot-bubbles.md). */
 function BotBubbleChip({ botId }: { botId: string }) {
@@ -163,7 +167,10 @@ const BotRow = React.memo(function BotRow({
         bot={row.bot}
         pinned={pinned}
         paused={row.state?.kind === "paused"}
-        moreClassName={cn("right-1.5 top-1/2 -translate-y-1/2", shortcutShown && shortcut && "invisible")}
+        moreClassName={cn(
+          "right-1.5 top-1/2 -translate-y-1/2",
+          shortcutShown && shortcut && "invisible",
+        )}
         onAction={(action) => onAction(row.bot, action)}
       >
         <button
@@ -234,7 +241,8 @@ const PinnedBot = React.memo(function PinnedBot({
   // The hero shows no preview; like the rows, it says when the Bot is working
   // or why it stopped, as its description. "Needs you" is its own badge.
   const line = botRowLine(row);
-  const description = line && (line.kind === "working" || line.kind === "status") ? line.text : null;
+  const description =
+    line && (line.kind === "working" || line.kind === "status") ? line.text : null;
   return (
     <section aria-label="Pinned Bot" data-roving-row className="group relative mb-2">
       <BotRowMenus
@@ -278,7 +286,9 @@ const PinnedBot = React.memo(function PinnedBot({
           ) : null}
         </button>
       </BotRowMenus>
-      {shortcutShown && shortcut ? <ShortcutHint binding={shortcut} className="right-1.5 top-2" /> : null}
+      {shortcutShown && shortcut ? (
+        <ShortcutHint binding={shortcut} className="right-1.5 top-2" />
+      ) : null}
     </section>
   );
 }, sameRowProps);
@@ -330,7 +340,10 @@ export function BotSidebar() {
   const navRef = React.useRef<HTMLElement>(null);
   // The Bot list takes one Tab stop; arrow keys move between its rows.
   useRovingRows(navRef);
-  const [deleting, setDeleting] = React.useState<{ bot: BotDefinition; neighbours: string[] } | null>(null);
+  const [deleting, setDeleting] = React.useState<{
+    bot: BotDefinition;
+    neighbours: string[];
+  } | null>(null);
   // The rows in the order they are on screen: the pinned Bot first, then the list.
   const visibleIdsRef = React.useRef<string[]>([]);
   // Deleting a row's Bot leaves focus on the nearest row on screen (below, then above), else New Bot.
@@ -357,12 +370,16 @@ export function BotSidebar() {
   const pinnedBotId = preferences.pinnedBotId;
   const pinnedRow = searching ? undefined : rows.find((row) => row.bot.id === pinnedBotId);
   const visible = rows.filter((row) => row !== pinnedRow && matchesBotSearch(row, query));
-  visibleIdsRef.current = [...(pinnedRow ? [pinnedRow.bot.id] : []), ...visible.map((row) => row.bot.id)];
+  visibleIdsRef.current = [
+    ...(pinnedRow ? [pinnedRow.bot.id] : []),
+    ...visible.map((row) => row.bot.id),
+  ];
   const remoteShown = remoteBotGroupsMatching(remote.groups, query);
   // Opening the Bot whose chat is already open is a no-op, as in the Bot menu.
   const openChat = React.useCallback(
     (bot: BotDefinition) => {
-      if (botChatRouteBotId(router.state.location.pathname) !== bot.id) void navigate(botChatPath(bot.id));
+      if (botChatRouteBotId(router.state.location.pathname) !== bot.id)
+        void navigate(botChatPath(bot.id));
     },
     [navigate, router],
   );
@@ -383,13 +400,17 @@ export function BotSidebar() {
     COMMAND_CHAT_SHORTCUT_REVEAL_MS,
   );
   const shortcutByBotId = new Map(
-    orderedBots.slice(0, COMMAND_CHAT_SHORTCUT_LIMIT).map((bot, index) => [bot.id, jumpBindings[index] ?? null]),
+    orderedBots
+      .slice(0, COMMAND_CHAT_SHORTCUT_LIMIT)
+      .map((bot, index) => [bot.id, jumpBindings[index] ?? null]),
   );
   React.useEffect(() => {
     const ordered = orderedBotsRef.current;
     const unregister = ordered
       .slice(0, COMMAND_CHAT_SHORTCUT_LIMIT)
-      .map((bot, index) => registerCommand(`chat.jump.${index + 1}` as CommandId, () => openChat(bot)));
+      .map((bot, index) =>
+        registerCommand(`chat.jump.${index + 1}` as CommandId, () => openChat(bot)),
+      );
     const { previous, next } = sidebarChatNavigationTargets(ordered, currentBotId ?? undefined);
     if (previous) unregister.push(registerCommand("chat.previous", () => openChat(previous)));
     if (next) unregister.push(registerCommand("chat.next", () => openChat(next)));
@@ -424,7 +445,9 @@ export function BotSidebar() {
     onAction: act,
   });
 
-  const retry = <SidebarListItem icon={<RotateCcw />} title="Try again" onClick={() => void bots.refetch()} />;
+  const retry = (
+    <SidebarListItem icon={<RotateCcw />} title="Try again" onClick={() => void bots.refetch()} />
+  );
   let list: React.ReactNode;
   if (bots.isPending) {
     list = <RowsSkeleton />;
@@ -541,7 +564,11 @@ export function BotSidebar() {
           >
             <Search />
           </Button>
-          <BotCreateMenu ref={newBotRef} onNewBot={create.newBot} onTemplates={create.openTemplates} />
+          <BotCreateMenu
+            ref={newBotRef}
+            onNewBot={create.newBot}
+            onTemplates={create.openTemplates}
+          />
         </div>
         {searchOpen ? (
           <div className="relative mx-2.5 mb-2">

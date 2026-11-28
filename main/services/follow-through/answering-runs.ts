@@ -55,7 +55,10 @@ export class AnsweringRuns {
     }
     if (!terminal) {
       if (!this.running.has(run.runId)) {
-        this.running.set(run.runId, { chatId: run.chatId, start: Date.parse(run.startedAt) || this.now() });
+        this.running.set(run.runId, {
+          chatId: run.chatId,
+          start: Date.parse(run.startedAt) || this.now(),
+        });
       }
       return;
     }

@@ -44,23 +44,53 @@ test("a target whose hostname resolves only to this Mac's addresses is local", a
   assert.equal(await isLocalSshTarget({ target: "me@localhost" }, loopback.value), true);
   assert.deepEqual(loopback.calls.lookup, [], "an IP needs no name lookup");
 
-  const named = deps(resolved({ hostname: "this-mac.local" }), { "this-mac.local": ["192.168.1.20", "::1"] });
+  const named = deps(resolved({ hostname: "this-mac.local" }), {
+    "this-mac.local": ["192.168.1.20", "::1"],
+  });
   assert.equal(await isLocalSshTarget({ target: "this-mac" }, named.value), true);
-  assert.equal(await isLocalSshTarget({ target: "[::1]" }, deps(resolved({ hostname: "[::1]" })).value), true);
+  assert.equal(
+    await isLocalSshTarget({ target: "[::1]" }, deps(resolved({ hostname: "[::1]" })).value),
+    true,
+  );
 });
 
 test("forwarded ports, proxies, other machines, and failures are never treated as this Mac", async () => {
-  assert.equal(await isLocalSshTarget({ target: "x" }, deps(resolved({ hostname: "127.0.0.1", port: "2222" })).value), false);
   assert.equal(
-    await isLocalSshTarget({ target: "x" }, deps(resolved({ hostname: "127.0.0.1", proxyjump: "bastion" })).value),
+    await isLocalSshTarget(
+      { target: "x" },
+      deps(resolved({ hostname: "127.0.0.1", port: "2222" })).value,
+    ),
     false,
   );
   assert.equal(
-    await isLocalSshTarget({ target: "x" }, deps(resolved({ hostname: "127.0.0.1", proxycommand: "nc %h %p" })).value),
+    await isLocalSshTarget(
+      { target: "x" },
+      deps(resolved({ hostname: "127.0.0.1", proxyjump: "bastion" })).value,
+    ),
     false,
   );
-  const mixed = deps(resolved({ hostname: "both.local" }), { "both.local": ["192.168.1.20", "10.0.0.9"] });
-  assert.equal(await isLocalSshTarget({ target: "both" }, mixed.value), false, "every address must be local");
-  assert.equal(await isLocalSshTarget({ target: "x" }, deps(resolved({ hostname: "nowhere.example" })).value), false);
-  assert.equal(await isLocalSshTarget({ target: "x" }, deps(null).value), false, "ssh -G failing means not local");
+  assert.equal(
+    await isLocalSshTarget(
+      { target: "x" },
+      deps(resolved({ hostname: "127.0.0.1", proxycommand: "nc %h %p" })).value,
+    ),
+    false,
+  );
+  const mixed = deps(resolved({ hostname: "both.local" }), {
+    "both.local": ["192.168.1.20", "10.0.0.9"],
+  });
+  assert.equal(
+    await isLocalSshTarget({ target: "both" }, mixed.value),
+    false,
+    "every address must be local",
+  );
+  assert.equal(
+    await isLocalSshTarget({ target: "x" }, deps(resolved({ hostname: "nowhere.example" })).value),
+    false,
+  );
+  assert.equal(
+    await isLocalSshTarget({ target: "x" }, deps(null).value),
+    false,
+    "ssh -G failing means not local",
+  );
 });

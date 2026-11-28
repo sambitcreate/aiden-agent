@@ -19,7 +19,8 @@ export function normalizeProviderArtwork(value: unknown): ProviderArtwork | unde
   ) {
     return undefined;
   }
-  const decodedBytes = Math.floor((record.dataBase64.length * 3) / 4) -
+  const decodedBytes =
+    Math.floor((record.dataBase64.length * 3) / 4) -
     (record.dataBase64.endsWith("==") ? 2 : record.dataBase64.endsWith("=") ? 1 : 0);
   if (decodedBytes <= 0 || decodedBytes > PROVIDER_ARTWORK_MAX_PNG_BYTES) return undefined;
   try {

@@ -4,10 +4,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { ComputerUseController } from "./controller.js";
 import { ComputerUseSafetyError } from "./safety.js";
-import {
-  FORM_FILL_BATCH_VERSION,
-  type FormFillBatchPlan,
-} from "../form-fill/batch-core.js";
+import { FORM_FILL_BATCH_VERSION, type FormFillBatchPlan } from "../form-fill/batch-core.js";
 
 /**
  * Scripted cua-driver session. Every callTool records its args and pulls the
@@ -19,9 +16,7 @@ class FakeSession {
   calls: Array<{ name: string; args: Record<string, unknown> }> = [];
   closed = false;
 
-  constructor(
-    private readonly script: Record<string, Record<string, unknown>[]>,
-  ) {}
+  constructor(private readonly script: Record<string, Record<string, unknown>[]>) {}
 
   supports(): boolean {
     return false;
@@ -125,10 +120,10 @@ const FILL_ELEMENTS_PRE = () => [
   element(1, "Last name", "", "s00000001:1"),
 ];
 
-
 for (const nextDocument of ["same-url-reload", "same-title-new-origin", "native-document-switch"]) {
   test(`fails closed before capture or writes for ${nextDocument} with identical window and form`, async () => {
-    const { controller, session } = makeController({ list_windows: [WINDOWS],
+    const { controller, session } = makeController({
+      list_windows: [WINDOWS],
       get_window_state: [windowState(FILL_ELEMENTS_PRE()), windowState(FILL_ELEMENTS_PRE())],
       set_value: [
         {
@@ -139,10 +134,15 @@ for (const nextDocument of ["same-url-reload", "same-title-new-origin", "native-
         },
       ],
     });
-    const unavailable = (error: unknown) => error instanceof ComputerUseSafetyError && error.code === "form_fill_unavailable";
+    const unavailable = (error: unknown) =>
+      error instanceof ComputerUseSafetyError && error.code === "form_fill_unavailable";
     await assert.rejects(controller.formFillCapture({ pid: 42, windowId: 7 }), unavailable);
     await assert.rejects(controller.executeFormFillBatch(stalePlan()), unavailable);
-    assert.deepEqual(session.calls, [], "no driver capability or structure can substitute for document authority");
+    assert.deepEqual(
+      session.calls,
+      [],
+      "no driver capability or structure can substitute for document authority",
+    );
     await controller.close();
   });
 }
@@ -154,10 +154,16 @@ test("desktop and Bot share disabled specialist admission, with no enable/downlo
     read("../llm-client.ts"),
     /if \(\s*FORM_FILL_MUTATION_AVAILABLE &&\s*computerUse &&\s*settings\.formFillSpecialistEnabled/u,
   );
-  assert.match(read("../form-fill/settings.ts"), /if \(enabled && !FORM_FILL_MUTATION_AVAILABLE\) throw/u);
+  assert.match(
+    read("../form-fill/settings.ts"),
+    /if \(enabled && !FORM_FILL_MUTATION_AVAILABLE\) throw/u,
+  );
   assert.match(read("../../handlers/form-fill.ts"), /if \(!FORM_FILL_MUTATION_AVAILABLE\) throw/u);
   const settings = read("../../../renderer/components/settings/computer-use-settings.tsx");
-  const field = settings.slice(settings.indexOf("function FormFillSpecialistField"), settings.indexOf("export function ComputerUseSettings"));
+  const field = settings.slice(
+    settings.indexOf("function FormFillSpecialistField"),
+    settings.indexOf("export function ComputerUseSettings"),
+  );
   assert.doesNotMatch(field, /formFillApi\.(download|setEnabled)|<Switch/u);
   assert.match(field, /Unavailable until Computer Use/u);
   assert.match(field, /formFillApi\.remove/u);

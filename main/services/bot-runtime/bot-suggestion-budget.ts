@@ -27,14 +27,22 @@ export interface BotSuggestionBudget {
    * (the person asked for it) it runs even when the window is full, and a
    * shown one still counts.
    */
-  offer(botId: string, kind: BotSuggestionKind, offer: () => Promise<boolean>, options?: { always?: boolean }): Promise<boolean>;
+  offer(
+    botId: string,
+    kind: BotSuggestionKind,
+    offer: () => Promise<boolean>,
+    options?: { always?: boolean },
+  ): Promise<boolean>;
   /** How many the Bot may still offer now. */
   remaining(botId: string): Promise<number>;
 }
 
 const FILE = "suggestion-budget.json";
 
-export function createBotSuggestionBudget(deps: { profileDir(): string; now(): number }): BotSuggestionBudget {
+export function createBotSuggestionBudget(deps: {
+  profileDir(): string;
+  now(): number;
+}): BotSuggestionBudget {
   const serial = createKeyedSerial();
   const fileOf = (botId: string) => path.join(botSessionDirectory(deps.profileDir(), botId), FILE);
 
@@ -64,9 +72,14 @@ export function createBotSuggestionBudget(deps: { profileDir(): string; now(): n
     offer(botId, _kind, offer, options) {
       return serial(botId, async () => {
         const shown = await load(botId);
-        if (shown.length >= BOT_SUGGESTION_BUDGET.perWindow && options?.always !== true) return false;
+        if (shown.length >= BOT_SUGGESTION_BUDGET.perWindow && options?.always !== true)
+          return false;
         if (!(await offer())) return false;
-        await writeJsonAtomic(fileOf(botId), { shown: [...shown, deps.now()] }, { mode: 0o600, mkdirMode: 0o700 });
+        await writeJsonAtomic(
+          fileOf(botId),
+          { shown: [...shown, deps.now()] },
+          { mode: 0o600, mkdirMode: 0o700 },
+        );
         return true;
       });
     },

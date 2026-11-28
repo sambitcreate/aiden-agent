@@ -33,7 +33,9 @@ export const FAL_IMAGE_SIZE_PRESETS: Readonly<Partial<Record<ImageAspectRatio, s
 };
 
 /** `image_size: { width, height }` for ratios fal has no preset for. */
-export const FAL_CUSTOM_IMAGE_SIZES: Readonly<Partial<Record<ImageAspectRatio, { width: number; height: number }>>> = {
+export const FAL_CUSTOM_IMAGE_SIZES: Readonly<
+  Partial<Record<ImageAspectRatio, { width: number; height: number }>>
+> = {
   "3:2": { width: 1536, height: 1024 },
   "2:3": { width: 1024, height: 1536 },
 };

@@ -2,7 +2,10 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { speechModel, type SpeechModelSpec } from "./local-speech-catalog.js";
 import { ModelMissingError, type EngineTranscribeRequest } from "./local-speech-engine.js";
-import { LOCAL_SPEECH_PROTOCOL_VERSION, type LocalSpeechParentMessage } from "./local-speech-protocol.js";
+import {
+  LOCAL_SPEECH_PROTOCOL_VERSION,
+  type LocalSpeechParentMessage,
+} from "./local-speech-protocol.js";
 import { readFile } from "node:fs/promises";
 import { decodeOggOpusToPcm16k, OggOpusTooLongError } from "./local-speech-opus.js";
 import { MAX_PCM_SAMPLES } from "./local-speech-protocol.js";
@@ -19,7 +22,8 @@ const metal = speechModel("parakeet-v3-metal")!;
 
 function fakeEngine(overrides: Partial<LocalSpeechWorkerEngine> = {}) {
   const requests: EngineTranscribeRequest[] = [];
-  const loads: Array<{ spec: SpeechModelSpec; dir: string; language: string | null | undefined }> = [];
+  const loads: Array<{ spec: SpeechModelSpec; dir: string; language: string | null | undefined }> =
+    [];
   let releases = 0;
   const engine: LocalSpeechWorkerEngine = {
     status: () => ({ ready: true, error: null }),
@@ -39,7 +43,10 @@ function fakeEngine(overrides: Partial<LocalSpeechWorkerEngine> = {}) {
   return { engine, requests, loads, releases: () => releases };
 }
 
-function transcribe(spec: SpeechModelSpec, extra: Partial<Extract<LocalSpeechParentMessage, { kind: "transcribe" }>> = {}) {
+function transcribe(
+  spec: SpeechModelSpec,
+  extra: Partial<Extract<LocalSpeechParentMessage, { kind: "transcribe" }>> = {},
+) {
   return {
     version: LOCAL_SPEECH_PROTOCOL_VERSION,
     kind: "transcribe",
@@ -133,15 +140,18 @@ test("a load without a language builds the recognizer with no language, as befor
 
 test("a load with a malformed language is refused before reaching the engine", async () => {
   const fake = fakeEngine();
-  const reply = await replyToWorkerFrame({
-    version: 2,
-    kind: "load",
-    requestId: "l-bad",
-    modelId: parakeet.id,
-    modelDirectory: "/models/x",
-    spec: parakeet,
-    language: "not a language!",
-  }, createLocalSpeechMessageHandler(fake.engine));
+  const reply = await replyToWorkerFrame(
+    {
+      version: 2,
+      kind: "load",
+      requestId: "l-bad",
+      modelId: parakeet.id,
+      modelDirectory: "/models/x",
+      spec: parakeet,
+      language: "not a language!",
+    },
+    createLocalSpeechMessageHandler(fake.engine),
+  );
   assert.equal(reply?.kind === "failure" && reply.code, "invalid-request");
   assert.equal(fake.loads.length, 0);
 });
@@ -167,7 +177,9 @@ test("an engine that cannot load replies engine-unavailable", async () => {
 test("without a decoder, ogg-opus audio is reported as unsupported", async () => {
   const fake = fakeEngine();
   const reply = await createLocalSpeechMessageHandler(fake.engine)(
-    transcribe(parakeet, { audio: { kind: "ogg-opus", bytes: new Uint8Array([79, 103, 103, 83]) } }),
+    transcribe(parakeet, {
+      audio: { kind: "ogg-opus", bytes: new Uint8Array([79, 103, 103, 83]) },
+    }),
   );
   assert.equal(reply.kind === "failure" && reply.code, "unsupported-audio");
   assert.equal(fake.requests.length, 0);
@@ -176,9 +188,9 @@ test("without a decoder, ogg-opus audio is reported as unsupported", async () =>
 test("ogg-opus audio is decoded when a decoder is provided", async () => {
   const fake = fakeEngine();
   const decoded = new Float32Array([0.25, -0.25]);
-  const reply = await createLocalSpeechMessageHandler(fake.engine, { decodeOggOpus: async () => decoded })(
-    transcribe(parakeet, { audio: { kind: "ogg-opus", bytes: new Uint8Array([1]) } }),
-  );
+  const reply = await createLocalSpeechMessageHandler(fake.engine, {
+    decodeOggOpus: async () => decoded,
+  })(transcribe(parakeet, { audio: { kind: "ogg-opus", bytes: new Uint8Array([1]) } }));
   assert.equal(reply.kind, "result");
   assert.equal(fake.requests[0]!.samples, decoded);
 });
@@ -194,18 +206,24 @@ test("the decoder is given the 30-minute cap and its too-long rejection maps to 
   })(transcribe(parakeet, { audio: { kind: "ogg-opus", bytes: new Uint8Array([1]) } }));
   assert.deepEqual(caps, [MAX_PCM_SAMPLES]);
   assert.equal(reply.kind === "failure" && reply.code, "unsupported-audio");
-  assert.equal(reply.kind === "failure" && reply.message, "This voice note is too long for on-device transcription.");
+  assert.equal(
+    reply.kind === "failure" && reply.message,
+    "This voice note is too long for on-device transcription.",
+  );
   assert.equal(fake.requests.length, 0);
 });
 
 test("an Ogg/Opus note that decodes past 30 minutes fails cleanly without reaching the engine", async () => {
   const fake = fakeEngine();
   const tooLong = new Float32Array(16_000 * 60 * 30 + 1);
-  const reply = await createLocalSpeechMessageHandler(fake.engine, { decodeOggOpus: async () => tooLong })(
-    transcribe(parakeet, { audio: { kind: "ogg-opus", bytes: new Uint8Array([1]) } }),
-  );
+  const reply = await createLocalSpeechMessageHandler(fake.engine, {
+    decodeOggOpus: async () => tooLong,
+  })(transcribe(parakeet, { audio: { kind: "ogg-opus", bytes: new Uint8Array([1]) } }));
   assert.equal(reply.kind, "failure");
-  assert.equal(reply.kind === "failure" && reply.message, "This voice note is too long for on-device transcription.");
+  assert.equal(
+    reply.kind === "failure" && reply.message,
+    "This voice note is too long for on-device transcription.",
+  );
   assert.equal(reply.kind === "failure" && reply.code, "unsupported-audio");
   assert.equal(fake.requests.length, 0);
 });
@@ -229,7 +247,14 @@ test("status, load and release answer with engine results", async () => {
     error: null,
   });
   assert.deepEqual(
-    await handle({ version: 2, kind: "load", requestId: "l1", modelId: parakeet.id, modelDirectory: "/m", spec: parakeet }),
+    await handle({
+      version: 2,
+      kind: "load",
+      requestId: "l1",
+      modelId: parakeet.id,
+      modelDirectory: "/m",
+      spec: parakeet,
+    }),
     { version: 2, kind: "result", requestId: "l1", loadMs: 42 },
   );
   assert.equal(fake.loads[0]!.dir, "/m");
@@ -243,19 +268,21 @@ test("status, load and release answer with engine results", async () => {
 
 test("a Telegram-style Ogg/Opus note reaches the engine as 16 kHz samples", async () => {
   const fake = fakeEngine();
-  const bytes = new Uint8Array(await readFile(new URL("./fixtures/voice-note-440hz-left.ogg", import.meta.url)));
-  const reply = await createLocalSpeechMessageHandler(fake.engine, { decodeOggOpus: decodeOggOpusToPcm16k })(
-    transcribe(parakeet, { audio: { kind: "ogg-opus", bytes } }),
+  const bytes = new Uint8Array(
+    await readFile(new URL("./fixtures/voice-note-440hz-left.ogg", import.meta.url)),
   );
+  const reply = await createLocalSpeechMessageHandler(fake.engine, {
+    decodeOggOpus: decodeOggOpusToPcm16k,
+  })(transcribe(parakeet, { audio: { kind: "ogg-opus", bytes } }));
   assert.equal(reply.kind, "result");
   assert.equal(fake.requests[0]!.samples.length, 16_000);
 });
 
 test("corrupt Ogg/Opus fails the request as decode-failed", async () => {
   const fake = fakeEngine();
-  const reply = await createLocalSpeechMessageHandler(fake.engine, { decodeOggOpus: decodeOggOpusToPcm16k })(
-    transcribe(parakeet, { audio: { kind: "ogg-opus", bytes: new Uint8Array(512).fill(3) } }),
-  );
+  const reply = await createLocalSpeechMessageHandler(fake.engine, {
+    decodeOggOpus: decodeOggOpusToPcm16k,
+  })(transcribe(parakeet, { audio: { kind: "ogg-opus", bytes: new Uint8Array(512).fill(3) } }));
   assert.equal(reply.kind === "failure" && reply.code, "decode-failed");
   assert.equal(fake.requests.length, 0);
 });
@@ -288,7 +315,9 @@ test("GGUF models run on transcribe.cpp and every other model on sherpa-onnx, on
       return { text: "from metal", language: null, decodeMs: 3 };
     },
   });
-  const handle = createLocalSpeechMessageHandler(createRoutedSpeechEngine(sherpa.engine, gguf.engine));
+  const handle = createLocalSpeechMessageHandler(
+    createRoutedSpeechEngine(sherpa.engine, gguf.engine),
+  );
 
   const metalReply = await handle(transcribe(metal));
   assert.equal(metalReply.kind === "result" && metalReply.text, "from metal");
@@ -307,7 +336,12 @@ test("a GGUF model on a worker without transcribe.cpp fails as engine-unavailabl
   const reply = await handle(transcribe(metal));
   assert.equal(reply.kind === "failure" && reply.code, "engine-unavailable");
   assert.equal(sherpa.requests.length, 0);
-  const status = await handle({ version: 2, kind: "status", requestId: "s3", family: "parakeet-gguf" });
+  const status = await handle({
+    version: 2,
+    kind: "status",
+    requestId: "s3",
+    family: "parakeet-gguf",
+  });
   assert.equal(status.kind === "result" && status.ready, false);
 });
 
@@ -321,7 +355,9 @@ test("a transcribe.cpp engine that fails to load reports unavailable for Metal m
       throw error;
     },
   });
-  const handle = createLocalSpeechMessageHandler(createRoutedSpeechEngine(sherpa.engine, gguf.engine));
+  const handle = createLocalSpeechMessageHandler(
+    createRoutedSpeechEngine(sherpa.engine, gguf.engine),
+  );
   const reply = await handle({
     version: 2,
     kind: "load",
@@ -332,9 +368,19 @@ test("a transcribe.cpp engine that fails to load reports unavailable for Metal m
   });
   assert.equal(reply.kind === "failure" && reply.code, "engine-unavailable");
 
-  const metalStatus = await handle({ version: 2, kind: "status", requestId: "s1", family: "parakeet-gguf" });
+  const metalStatus = await handle({
+    version: 2,
+    kind: "status",
+    requestId: "s1",
+    family: "parakeet-gguf",
+  });
   assert.equal(metalStatus.kind === "result" && metalStatus.ready, false);
   assert.match(metalStatus.kind === "result" ? (metalStatus.error ?? "") : "", /dlopen/);
-  const sherpaStatus = await handle({ version: 2, kind: "status", requestId: "s2", family: "nemo-transducer" });
+  const sherpaStatus = await handle({
+    version: 2,
+    kind: "status",
+    requestId: "s2",
+    family: "nemo-transducer",
+  });
   assert.equal(sherpaStatus.kind === "result" && sherpaStatus.ready, true);
 });

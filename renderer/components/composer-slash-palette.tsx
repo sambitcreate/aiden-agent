@@ -30,10 +30,7 @@ import {
 } from "lucide-react";
 import { AidenIcon } from "./aiden-icon";
 import { cn } from "../lib/ui-utils";
-import {
-  type SlashResult,
-  type SlashSession,
-} from "../lib/slash-command-core";
+import { type SlashResult, type SlashSession } from "../lib/slash-command-core";
 import type { SlashCommandAvailabilityResult } from "../lib/slash-command-actions";
 import type { SlashCommandIcon } from "../shared/slash-commands";
 import { titleRanges } from "../lib/text-match";
@@ -117,7 +114,10 @@ export function ComposerSlashPalettePresence({
   if (!rendered || (!present && immediate)) return null;
   const content = present ? children : lastContentRef.current;
   return content
-    ? React.cloneElement(content, { presenceState: exiting ? "exiting" : "visible", presenceRef: ref })
+    ? React.cloneElement(content, {
+        presenceState: exiting ? "exiting" : "visible",
+        presenceRef: ref,
+      })
     : null;
 }
 

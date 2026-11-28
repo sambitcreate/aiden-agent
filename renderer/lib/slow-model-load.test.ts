@@ -31,7 +31,11 @@ function clock() {
 test("a warm load never shows the notice", () => {
   const c = clock();
   let shown = 0;
-  const n = new SlowModelLoadNotice(c.deps(() => { shown += 1; }));
+  const n = new SlowModelLoadNotice(
+    c.deps(() => {
+      shown += 1;
+    }),
+  );
   n.observe("loading");
   c.advance(1500);
   n.observe("ready");
@@ -42,7 +46,11 @@ test("a warm load never shows the notice", () => {
 test("a slow load shows once after 2 s and an idle 'unloaded' does not end it", () => {
   const c = clock();
   let shown = 0;
-  const n = new SlowModelLoadNotice(c.deps(() => { shown += 1; }));
+  const n = new SlowModelLoadNotice(
+    c.deps(() => {
+      shown += 1;
+    }),
+  );
   n.observe("loading");
   c.advance(1000);
   n.observe("unloaded");
@@ -57,7 +65,11 @@ test("a slow load shows once after 2 s and an idle 'unloaded' does not end it", 
 test("failure ends the wait without showing", () => {
   const c = clock();
   let shown = 0;
-  const n = new SlowModelLoadNotice(c.deps(() => { shown += 1; }));
+  const n = new SlowModelLoadNotice(
+    c.deps(() => {
+      shown += 1;
+    }),
+  );
   n.observe("loading");
   n.observe("failed");
   c.advance(5000);
@@ -67,7 +79,11 @@ test("failure ends the wait without showing", () => {
 test("disposing mid-load cancels the pending notice", () => {
   const c = clock();
   let shown = 0;
-  const n = new SlowModelLoadNotice(c.deps(() => { shown += 1; }));
+  const n = new SlowModelLoadNotice(
+    c.deps(() => {
+      shown += 1;
+    }),
+  );
   n.observe("loading");
   c.advance(1000);
   n.dispose();

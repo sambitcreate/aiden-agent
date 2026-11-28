@@ -8,31 +8,31 @@ All five ideas, with the owner's 23 answers folded in, come to **44 planned pull
 
 ## Your answers and what they mean
 
-| # | Question | Answer | What gets built |
-| --- | --- | --- | --- |
-| 1 | What Stop stops | a | Stop ends everything running in that chat: the goal pauses, helpers and started chats stop (except a started chat you typed in). Promises for later stay. |
-| 2 | Where results of a chat-made task land | a | In that chat, with a switch on the approval card; the task's own chat if the chat is gone. |
-| 3 | Late check-backs | a | Still run up to 2 hours late; older ones leave a note. |
-| 4 | Deleting a chat a task posts into | a | The task carries on in its own chat; the delete dialog says so. |
-| 5 | Keep awake default | a | On. Running work holds on battery too; a check-back due soon holds only when plugged in. |
-| 6 | Check-back switch | a | One switch in Settings. |
-| 7 | How a goal starts | a | `/goal` or the + menu now; Aiden suggesting a goal comes in a later PR. Aiden never starts one alone. |
-| 8 | Rounds before stopping | 50 rounds, 3 stalls | 50 rounds, then a pause. Keep going starts again at round 1 of 50. Three rounds without progress also pause. See below. |
-| 9 | Who judges done | a | The chat's own model, reusing the cached conversation. |
-| 10 | `/until` | becomes a goal | `/until <command>` becomes a goal checked by that command, with one bar. |
-| 11 | Browser and Computer Use in goals | yes | Allowed while that chat is open and in front on the desktop. New PR A9. |
-| 12 | How many helpers at once | depth 1, no count | No count limit on background helpers; helpers can't start their own helpers. See below. |
-| 13 | A helper finishes while you're away | a | Aiden replies by itself, within the 6-an-hour limit. |
-| 14 | Helpers changing files | a | Read-only first; later, edits only in their own worktree after one approval at launch. |
-| 15 | Quitting with helpers running | a | Quit at once, mark them Interrupted, offer Run again. |
-| 16 | Who can call a task link | a | Your network or Tailscale only. |
-| 17 | Bursts of link calls | a | Up to 20 waiting calls go into the next run. |
-| 18 | Missed scheduled times | a | Run once if under 12 hours late, else skip. |
-| 19 | No-AI checks of connected apps | a | Later, read-only, after links and app checks prove out. |
-| 20 | How many chats one chat runs | depth 1, no count | No count limit; started chats can't start chats. See below. |
-| 21 | Lead starting chats while you're away | a | No. It can read, follow up and stop; new starts wait for you. |
-| 22 | Approval wait inside a started chat | a | 30 minutes, then denied and the chat is told. |
-| 23 | On from the start | a | On, with a switch in Settings → Approvals. |
+| #   | Question                               | Answer              | What gets built                                                                                                                                           |
+| --- | -------------------------------------- | ------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 1   | What Stop stops                        | a                   | Stop ends everything running in that chat: the goal pauses, helpers and started chats stop (except a started chat you typed in). Promises for later stay. |
+| 2   | Where results of a chat-made task land | a                   | In that chat, with a switch on the approval card; the task's own chat if the chat is gone.                                                                |
+| 3   | Late check-backs                       | a                   | Still run up to 2 hours late; older ones leave a note.                                                                                                    |
+| 4   | Deleting a chat a task posts into      | a                   | The task carries on in its own chat; the delete dialog says so.                                                                                           |
+| 5   | Keep awake default                     | a                   | On. Running work holds on battery too; a check-back due soon holds only when plugged in.                                                                  |
+| 6   | Check-back switch                      | a                   | One switch in Settings.                                                                                                                                   |
+| 7   | How a goal starts                      | a                   | `/goal` or the + menu now; Aiden suggesting a goal comes in a later PR. Aiden never starts one alone.                                                     |
+| 8   | Rounds before stopping                 | 50 rounds, 3 stalls | 50 rounds, then a pause. Keep going starts again at round 1 of 50. Three rounds without progress also pause. See below.                                   |
+| 9   | Who judges done                        | a                   | The chat's own model, reusing the cached conversation.                                                                                                    |
+| 10  | `/until`                               | becomes a goal      | `/until <command>` becomes a goal checked by that command, with one bar.                                                                                  |
+| 11  | Browser and Computer Use in goals      | yes                 | Allowed while that chat is open and in front on the desktop. New PR A9.                                                                                   |
+| 12  | How many helpers at once               | depth 1, no count   | No count limit on background helpers; helpers can't start their own helpers. See below.                                                                   |
+| 13  | A helper finishes while you're away    | a                   | Aiden replies by itself, within the 6-an-hour limit.                                                                                                      |
+| 14  | Helpers changing files                 | a                   | Read-only first; later, edits only in their own worktree after one approval at launch.                                                                    |
+| 15  | Quitting with helpers running          | a                   | Quit at once, mark them Interrupted, offer Run again.                                                                                                     |
+| 16  | Who can call a task link               | a                   | Your network or Tailscale only.                                                                                                                           |
+| 17  | Bursts of link calls                   | a                   | Up to 20 waiting calls go into the next run.                                                                                                              |
+| 18  | Missed scheduled times                 | a                   | Run once if under 12 hours late, else skip.                                                                                                               |
+| 19  | No-AI checks of connected apps         | a                   | Later, read-only, after links and app checks prove out.                                                                                                   |
+| 20  | How many chats one chat runs           | depth 1, no count   | No count limit; started chats can't start chats. See below.                                                                                               |
+| 21  | Lead starting chats while you're away  | a                   | No. It can read, follow up and stop; new starts wait for you.                                                                                             |
+| 22  | Approval wait inside a started chat    | a                   | 30 minutes, then denied and the chat is told.                                                                                                             |
+| 23  | On from the start                      | a                   | On, with a switch in Settings → Approvals.                                                                                                                |
 
 ### The rules behind 8, 12 and 20
 
@@ -134,7 +134,7 @@ The "Scheduled Automations" gallery tile shows a check-back chip and a result po
 
 ### How it works
 
-- **Starting (answer 7a).** `/goal <objective>` (up to 2,000 characters) in the composer, or **Keep going until done…** in the + menu, which pre-fills ` /goal  `. The objective is sent as your message; main journals a hidden kickoff note after it. Bare `/goal` shows the goal and last reason; `/goal pause|resume|clear` work too. Any ordinary chat, including scratch chats, with or without folder access. Not Bots, the Assistant, agent-harness (ACP) chats, chats hosted on a paired Mac (v1), or chats another feature owns.
+- **Starting (answer 7a).** `/goal <objective>` (up to 2,000 characters) in the composer, or **Keep going until done…** in the + menu, which pre-fills `/goal `. The objective is sent as your message; main journals a hidden kickoff note after it. Bare `/goal` shows the goal and last reason; `/goal pause|resume|clear` work too. Any ordinary chat, including scratch chats, with or without folder access. Not Bots, the Assistant, agent-harness (ACP) chats, chats hosted on a paired Mac (v1), or chats another feature owns.
 - **The loop.** After any run in the chat settles with nothing owed and no pending notice, wait 1.5 seconds and check the chat is still idle (your queued send wins). If the chat's own helper is still running, the review is skipped; the helper's report wakes the chat and the loop runs again then. Pre-checks pause the goal: Aiden restarted (boot id changed), you pressed Stop, the last answer failed, or 50 rounds reached.
 - **Reviewer (answer 9a).** The chat's own model, sent as `sideCallContinuation` of the chat's last request (same tools, system prompt and thinking, reviewer text as the last user message), short cache retention, 400 output tokens, 60-second timeout. If the cached prefix is stale, fall back to the isolated tool-free projection in `advisor-context.ts`. Any tool call in the reply counts as no verdict; two unusable answers pause. Recorded as a new `UsageRequestSource` `"goal-review"` (`usage-store-core.ts`) and checked against the chat's spending limit before sending through `SpendingLedger` (`spending-core.ts`, `spending-main.ts`).
 - **Verdicts.** `done` → Done. `blocked` → Needs you. `paused` → paused (your latest message asked to stop). `wait` → stay active, offered only while background jobs run (a running helper already skips the review). A 30-minute watchdog covers both jobs and helpers, then pauses the goal. `continue` → update the stall count; 3 stalls pause "Not making progress"; otherwise rounds + 1 and a continuation notice starts the next round.
@@ -329,21 +329,21 @@ Move run snapshot, wait loop, owned-run tracking and request dedupe from `AidenM
 
 Phones, the headless server and the switched-off experiments wait until the desktop shape has settled.
 
-| # | What | Revision | Waits on |
-| --- | --- | --- | --- |
-| A6 | Phones set, pause and clear goals (capability `chat:goal`, routes, feed event, iOS and Android bars) | Yes | A5 |
-| A7 | Goals on `aiden serve` (isolated reviewer until serve records the last request) | No | A6 |
-| B5 | Phones see and stop background helpers (roster includes them, `execution` field, interrupt accepts them) | Yes | B3 |
-| B7 | Helpers that edit files in their own worktree, one approval at launch, no shell | No | B4, B6, Fix |
-| B8 | Packaged soak test and wrap-up | No | B7 |
-| C6 | One-time schedules up to a year ahead; phones can't edit them into a yearly cron | Yes | C4 |
-| C7 | Phones list and cancel check-backs and show "Posts in this chat" | Yes | C2, C4 |
-| C8 | Keep awake for `aiden serve` (`systemd-inhibit` or `caffeinate`, 60-second grace) | No | C1 |
-| D8 | Phones show Started by and From labels | Yes | D7 |
-| D9 | `child_chats` on `aiden serve` (makes `ajv`, already in the CLI lockfile, a direct pinned dependency) | No | D6 |
-| E6 | Phones list trigger tasks, Pause, Resume, Run now, Recent calls (token `chat-task-triggers-v1`) | Yes | E3 |
-| E8 | MCP push-events spike, switched off, written decision only | No | E7 |
-| E9 | No-AI code checks, read-only, switched off (answer 19a) | Maybe | E2, E7 |
+| #   | What                                                                                                     | Revision | Waits on    |
+| --- | -------------------------------------------------------------------------------------------------------- | -------- | ----------- |
+| A6  | Phones set, pause and clear goals (capability `chat:goal`, routes, feed event, iOS and Android bars)     | Yes      | A5          |
+| A7  | Goals on `aiden serve` (isolated reviewer until serve records the last request)                          | No       | A6          |
+| B5  | Phones see and stop background helpers (roster includes them, `execution` field, interrupt accepts them) | Yes      | B3          |
+| B7  | Helpers that edit files in their own worktree, one approval at launch, no shell                          | No       | B4, B6, Fix |
+| B8  | Packaged soak test and wrap-up                                                                           | No       | B7          |
+| C6  | One-time schedules up to a year ahead; phones can't edit them into a yearly cron                         | Yes      | C4          |
+| C7  | Phones list and cancel check-backs and show "Posts in this chat"                                         | Yes      | C2, C4      |
+| C8  | Keep awake for `aiden serve` (`systemd-inhibit` or `caffeinate`, 60-second grace)                        | No       | C1          |
+| D8  | Phones show Started by and From labels                                                                   | Yes      | D7          |
+| D9  | `child_chats` on `aiden serve` (makes `ajv`, already in the CLI lockfile, a direct pinned dependency)    | No       | D6          |
+| E6  | Phones list trigger tasks, Pause, Resume, Run now, Recent calls (token `chat-task-triggers-v1`)          | Yes      | E3          |
+| E8  | MCP push-events spike, switched off, written decision only                                               | No       | E7          |
+| E9  | No-AI code checks, read-only, switched off (answer 19a)                                                  | Maybe    | E2, E7      |
 
 ## Risks
 

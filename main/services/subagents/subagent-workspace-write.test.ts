@@ -124,7 +124,9 @@ test("run grant singleflights concurrent calls and cannot revive after revoke", 
   const grant = new SubagentRunGrantV2(granted, "ask", undefined, () => 1_000);
   const request = () => {
     requests += 1;
-    return new Promise<boolean>((resolve) => { settle = resolve; });
+    return new Promise<boolean>((resolve) => {
+      settle = resolve;
+    });
   };
   const first = grant.ensure(granted, "ask", request);
   const second = grant.ensure(granted, "ask", request);
@@ -141,7 +143,10 @@ test("run grant singleflights concurrent calls and cannot revive after revoke", 
   let clock = 1_000;
   let expiryRequests = 0;
   const expiring = new SubagentRunGrantV2(granted, "ask", undefined, () => clock);
-  const approve = async () => { expiryRequests += 1; return true; };
+  const approve = async () => {
+    expiryRequests += 1;
+    return true;
+  };
   assert.equal(await expiring.ensure(granted, "ask", approve), true);
   clock = granted.expiresAt;
   assert.equal(await expiring.ensure(granted, "ask", approve), false);
@@ -176,7 +181,12 @@ test("attended write binds structured preview and commits exactly once", async (
   });
   assert.match(result.content[0]?.type === "text" ? result.content[0].text : "", /committed/u);
   // Line counts, never contents, so the helper's step can show +1 like the main chat.
-  assert.deepEqual(result.details, { kind: "file_line_changes", version: 1, additions: 1, deletions: 0 });
+  assert.deepEqual(result.details, {
+    kind: "file_line_changes",
+    version: 1,
+    additions: 1,
+    deletions: 0,
+  });
   assert.equal(await readFile(path.join(workspace.folderPath!, "notes.txt"), "utf8"), args.content);
   await assert.rejects(
     broker.execute({
@@ -193,16 +203,18 @@ test("implementer Ask grants writes once across independent file mutations and r
   if (process.platform !== "darwin") return;
   const workspace = await testWorkspace(t);
   let prompts = 0;
-  const broker = createSubagentWorkspaceWriteApprovalBrokerV2(brokerInput(workspace, {
-    implementerRunGrant: true,
-    parentPermission: "ask",
-    requestApproval: async (prompt) => {
-      prompts += 1;
-      assert.equal(isSubagentRunGrantApprovalDetails(prompt.details), true);
-      assert.equal((prompt.details as { lane: string }).lane, "write");
-      return true;
-    },
-  }));
+  const broker = createSubagentWorkspaceWriteApprovalBrokerV2(
+    brokerInput(workspace, {
+      implementerRunGrant: true,
+      parentPermission: "ask",
+      requestApproval: async (prompt) => {
+        prompts += 1;
+        assert.equal(isSubagentRunGrantApprovalDetails(prompt.details), true);
+        assert.equal((prompt.details as { lane: string }).lane, "write");
+        return true;
+      },
+    }),
+  );
   for (const [index, name] of ["first.txt", "second.txt"].entries()) {
     const id = `call-write-${index}`;
     const args = { path: name, content: `value ${index}\n` };
@@ -212,9 +224,21 @@ test("implementer Ask grants writes once across independent file mutations and r
   }
   assert.equal(prompts, 1);
   workspace.updatedAt += 1;
-  assert.equal((await broker.beforeToolCall(call("write_file", {
-    path: "third.txt", content: "blocked\n",
-  }, "call-write-third")))?.block, true);
+  assert.equal(
+    (
+      await broker.beforeToolCall(
+        call(
+          "write_file",
+          {
+            path: "third.txt",
+            content: "blocked\n",
+          },
+          "call-write-third",
+        ),
+      )
+    )?.block,
+    true,
+  );
   assert.equal(prompts, 1);
   await broker.shutdown();
 });
@@ -224,19 +248,29 @@ test("implementer Full makes multiple edits without approval cards", async (t) =
   const workspace = await testWorkspace(t);
   workspace.permission = "full";
   await writeFile(path.join(workspace.folderPath!, "notes.txt"), "one\n");
-  const broker = createSubagentWorkspaceWriteApprovalBrokerV2(brokerInput(workspace, {
-    implementerRunGrant: true,
-    parentPermission: "full",
-    requestApproval: async () => { throw new Error("Full must not request approval"); },
-  }));
+  const broker = createSubagentWorkspaceWriteApprovalBrokerV2(
+    brokerInput(workspace, {
+      implementerRunGrant: true,
+      parentPermission: "full",
+      requestApproval: async () => {
+        throw new Error("Full must not request approval");
+      },
+    }),
+  );
   for (const [index, oldString, newString] of [
-    [0, "one", "two"], [1, "two", "three"],
+    [0, "one", "two"],
+    [1, "two", "three"],
   ] as const) {
     const id = `call-edit-${index}`;
     const args = { path: "notes.txt", old_string: oldString, new_string: newString };
     assert.equal(await broker.beforeToolCall(call("edit_file", args, id)), undefined);
     const result = await broker.execute({ toolCallId: id, toolName: "edit_file", arguments: args });
-    assert.deepEqual(result.details, { kind: "file_line_changes", version: 1, additions: 1, deletions: 1 });
+    assert.deepEqual(result.details, {
+      kind: "file_line_changes",
+      version: 1,
+      additions: 1,
+      deletions: 1,
+    });
   }
   assert.equal(await readFile(path.join(workspace.folderPath!, "notes.txt"), "utf8"), "three\n");
   await broker.shutdown();
@@ -249,11 +283,15 @@ test("implementer Full cannot write hook or agent settings files but still write
   const root = workspace.folderPath!;
   await mkdir(path.join(root, ".claude", "skills", "x"), { recursive: true });
   await writeFile(path.join(root, ".claude", "settings.json"), '{"hooks":{}}\n');
-  const broker = createSubagentWorkspaceWriteApprovalBrokerV2(brokerInput(workspace, {
-    implementerRunGrant: true,
-    parentPermission: "full",
-    requestApproval: async () => { throw new Error("Full must not request approval"); },
-  }));
+  const broker = createSubagentWorkspaceWriteApprovalBrokerV2(
+    brokerInput(workspace, {
+      implementerRunGrant: true,
+      parentPermission: "full",
+      requestApproval: async () => {
+        throw new Error("Full must not request approval");
+      },
+    }),
+  );
   const refusal = /cannot change hook or agent settings files[\s\S]*Settings → Hooks/u;
   const attempts: Array<["write_file" | "edit_file", Record<string, string>]> = [
     ["write_file", { path: ".claude/settings.json", content: "{}\n" }],
@@ -267,14 +305,20 @@ test("implementer Full cannot write hook or agent settings files but still write
     assert.equal(result?.block, true, args.path);
     assert.match(result?.reason ?? "", refusal, args.path);
   }
-  assert.equal(await readFile(path.join(root, ".claude", "settings.json"), "utf8"), '{"hooks":{}}\n');
+  assert.equal(
+    await readFile(path.join(root, ".claude", "settings.json"), "utf8"),
+    '{"hooks":{}}\n',
+  );
   await assert.rejects(stat(path.join(root, ".aiden")), { code: "ENOENT" });
   await assert.rejects(stat(path.join(root, ".claude", "settings.local.json")), { code: "ENOENT" });
 
   const skill = { path: ".claude/skills/x/SKILL.md", content: "# x\n" };
   assert.equal(await broker.beforeToolCall(call("write_file", skill, "call-skill")), undefined);
   await broker.execute({ toolCallId: "call-skill", toolName: "write_file", arguments: skill });
-  assert.equal(await readFile(path.join(root, ".claude", "skills", "x", "SKILL.md"), "utf8"), "# x\n");
+  assert.equal(
+    await readFile(path.join(root, ".claude", "skills", "x", "SKILL.md"), "utf8"),
+    "# x\n",
+  );
   await broker.shutdown();
 });
 
@@ -283,11 +327,16 @@ test("stored Full workspace still asks when the parent turn is Ask", async (t) =
   const workspace = await testWorkspace(t);
   workspace.permission = "full";
   let prompts = 0;
-  const broker = createSubagentWorkspaceWriteApprovalBrokerV2(brokerInput(workspace, {
-    implementerRunGrant: true,
-    parentPermission: "ask",
-    requestApproval: async () => { prompts += 1; return true; },
-  }));
+  const broker = createSubagentWorkspaceWriteApprovalBrokerV2(
+    brokerInput(workspace, {
+      implementerRunGrant: true,
+      parentPermission: "ask",
+      requestApproval: async () => {
+        prompts += 1;
+        return true;
+      },
+    }),
+  );
   const args = { path: "narrowed.txt", content: "authorized\n" };
   assert.equal(await broker.beforeToolCall(call("write_file", args)), undefined);
   await broker.execute({ toolCallId: "call-write", toolName: "write_file", arguments: args });

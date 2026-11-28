@@ -6,7 +6,9 @@ import type { RendererDocumentOwner } from "../../renderer-document-owner.js";
 import { createSharedDebuggerPort, type DebuggableContents } from "./debugger-port.js";
 import type { AidenWindowPort } from "./provider.js";
 
-export function createElectronAidenWindowPort(owner: RendererDocumentOwner): AidenWindowPort | null {
+export function createElectronAidenWindowPort(
+  owner: RendererDocumentOwner,
+): AidenWindowPort | null {
   const contents = webContents.fromId(owner.id);
   if (!contents || contents.isDestroyed()) return null;
   return createSharedDebuggerPort(contents as unknown as DebuggableContents);

@@ -30,13 +30,18 @@ export function positionLabel(index: number, count: number): string {
  * The slice of a long list the filmstrip renders, `[start, end)`, at most `size` long and
  * centred on the active image except where the list starts or ends.
  */
-export function filmstripWindow(index: number, count: number, size: number): { start: number; end: number } {
+export function filmstripWindow(
+  index: number,
+  count: number,
+  size: number,
+): { start: number; end: number } {
   if (count <= size) return { start: 0, end: Math.max(0, count) };
   const start = Math.max(0, Math.min(count - size, index - Math.floor(size / 2)));
   return { start, end: start + size };
 }
 
-const usable = (size: Size) => Number.isFinite(size.width) && Number.isFinite(size.height) && size.width > 0 && size.height > 0;
+const usable = (size: Size) =>
+  Number.isFinite(size.width) && Number.isFinite(size.height) && size.width > 0 && size.height > 0;
 
 /** The scale that fits an image inside the stage. Never above 1: a small image is never upscaled. */
 export function fitScale(natural: Size, box: Size): number {
@@ -55,7 +60,8 @@ export function canZoom(natural: Size, box: Size): boolean {
  */
 export function clampPan(offset: Point, natural: Size, box: Size): Point {
   const limit = (image: number, stage: number) => Math.max(0, (image - stage) / 2);
-  const clamp = (value: number, max: number) => (max === 0 ? 0 : Math.max(-max, Math.min(max, value)));
+  const clamp = (value: number, max: number) =>
+    max === 0 ? 0 : Math.max(-max, Math.min(max, value));
   return {
     x: clamp(offset.x, limit(natural.width, box.width)),
     y: clamp(offset.y, limit(natural.height, box.height)),
@@ -86,11 +92,17 @@ export function modelNames(
   item: Pick<GalleryItem, "provider" | "model">,
   models: readonly ImageModelOption[],
 ): { model?: string; provider?: string } {
-  const option = models.find((candidate) => candidate.provider === item.provider && candidate.model === item.model);
+  const option = models.find(
+    (candidate) => candidate.provider === item.provider && candidate.model === item.model,
+  );
   const providerOption = option ?? models.find((candidate) => candidate.provider === item.provider);
   return {
     ...(option ? { model: option.label } : item.model ? { model: item.model } : {}),
-    ...(providerOption ? { provider: providerOption.providerLabel } : item.provider ? { provider: item.provider } : {}),
+    ...(providerOption
+      ? { provider: providerOption.providerLabel }
+      : item.provider
+        ? { provider: item.provider }
+        : {}),
   };
 }
 
@@ -128,7 +140,15 @@ export function revealLabel(isMac: boolean): string {
   return isMac ? "Show in Finder" : "Show in folder";
 }
 
-export type ImageActionOp = "save-as" | "save-all" | "copy" | "reveal" | "reveal-saved" | "reveal-folder" | "drag" | "view";
+export type ImageActionOp =
+  | "save-as"
+  | "save-all"
+  | "copy"
+  | "reveal"
+  | "reveal-saved"
+  | "reveal-folder"
+  | "drag"
+  | "view";
 
 /** `savedId` names what a save wrote, so the toast can offer to show it (also after a partial Save All). */
 export type ActionOutcome = { kind: "success" | "error"; text: string; savedId?: string } | null;
@@ -178,8 +198,15 @@ function baseOutcome(op: ImageActionOp, response: ImageActionResponse): ActionOu
     case "cancelled":
       return null;
     case "not-found":
-      if (op === "reveal-saved") return { kind: "error", text: "Aiden no longer knows where that was saved." };
-      return { kind: "error", text: op === "save-all" ? "These images are no longer available." : "This image is no longer available." };
+      if (op === "reveal-saved")
+        return { kind: "error", text: "Aiden no longer knows where that was saved." };
+      return {
+        kind: "error",
+        text:
+          op === "save-all"
+            ? "These images are no longer available."
+            : "This image is no longer available.",
+      };
     case "unsupported":
       return { kind: "error", text: UNSUPPORTED[op] };
     case "failed":

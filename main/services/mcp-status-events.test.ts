@@ -1,7 +1,11 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { GenerationBoundConnectionCache } from "./generation-bound-connection-cache.js";
-import { McpLiveStatusRegistry, recordMcpConnectionLifecycle, type McpLiveStatus } from "./mcp-status-events.js";
+import {
+  McpLiveStatusRegistry,
+  recordMcpConnectionLifecycle,
+  type McpLiveStatus,
+} from "./mcp-status-events.js";
 
 function observed() {
   const registry = new McpLiveStatusRegistry();
@@ -34,12 +38,30 @@ test("a connection's lifecycle is pushed as connecting, connected, then closed o
 test("a failed connect reports its error; a transport loss after connecting reports closed", async () => {
   const { registry, cache } = observed();
   await assert.rejects(
-    cache.getOrConnect("docs", () => ({ id: 1 }), async () => { throw new Error("401 Unauthorized"); }, noop),
+    cache.getOrConnect(
+      "docs",
+      () => ({ id: 1 }),
+      async () => {
+        throw new Error("401 Unauthorized");
+      },
+      noop,
+    ),
   );
-  assert.deepEqual(registry.get("docs"), { serverId: "docs", state: "failed", error: "401 Unauthorized" });
+  assert.deepEqual(registry.get("docs"), {
+    serverId: "docs",
+    state: "failed",
+    error: "401 Unauthorized",
+  });
 
   let lose = () => undefined as void;
-  await cache.getOrConnect("docs", () => ({ id: 2 }), async (_value, _current, onClosed) => { lose = onClosed; }, noop);
+  await cache.getOrConnect(
+    "docs",
+    () => ({ id: 2 }),
+    async (_value, _current, onClosed) => {
+      lose = onClosed;
+    },
+    noop,
+  );
   assert.equal(registry.get("docs")?.state, "connected");
   lose();
   assert.equal(registry.get("docs")?.state, "closed");
@@ -51,7 +73,10 @@ test("a superseded attempt is closed, never reported as a failure", async () => 
   const attempt = cache.getOrConnect(
     "docs",
     () => ({ id: 1 }),
-    () => new Promise<void>((_resolve, reject) => { release = () => reject(new Error("aborted")); }),
+    () =>
+      new Promise<void>((_resolve, reject) => {
+        release = () => reject(new Error("aborted"));
+      }),
     noop,
   );
   await new Promise((resolve) => setImmediate(resolve));
@@ -77,7 +102,10 @@ test("a rejected refresh marks the server as needing sign-in until a sign-in suc
   registry.clearAuthFailure("linear");
   assert.equal(registry.needsSignIn("linear"), false);
   assert.equal(registry.get("linear")?.needsSignIn, undefined);
-  assert.deepEqual(events.map((event) => Boolean(event.needsSignIn)), [false, true, true, false]);
+  assert.deepEqual(
+    events.map((event) => Boolean(event.needsSignIn)),
+    [false, true, true, false],
+  );
 });
 
 test("a background sign-in redirect flags only a server that had a stored sign-in", () => {

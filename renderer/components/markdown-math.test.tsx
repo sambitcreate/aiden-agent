@@ -101,7 +101,11 @@ test("a streaming formula that is still being written does not evict settled for
   assert.equal(partialRenders, TYPESET_FORMULA_CACHE_LIMIT + 1);
 
   renderToStaticMarkup(<Markdown content={settled} />);
-  assert.equal(typeset.mock.callCount(), partialRenders, "the settled formula is still a cache hit");
+  assert.equal(
+    typeset.mock.callCount(),
+    partialRenders,
+    "the settled formula is still a cache hit",
+  );
 });
 
 test("messages without math delimiters never use the math plugins", async () => {
@@ -114,7 +118,11 @@ test("messages without math delimiters never use the math plugins", async () => 
 });
 
 test("ordinary chat Markdown requires image consent while links retain their targets", () => {
-  const markup = renderToStaticMarkup(<Markdown content={"![chart](https://example.test/chart.png) [docs](https://example.test/docs)"} />);
+  const markup = renderToStaticMarkup(
+    <Markdown
+      content={"![chart](https://example.test/chart.png) [docs](https://example.test/docs)"}
+    />,
+  );
   assert.doesNotMatch(markup, /<img|rel="preload"/u);
   assert.match(markup, /Load image/u);
   assert.match(markup, /<a href="https:\/\/example\.test\/docs"/u);

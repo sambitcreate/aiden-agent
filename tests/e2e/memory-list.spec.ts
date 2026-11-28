@@ -26,7 +26,9 @@ test("a fact Aiden saves in chat shows in Settings → Memory and can be deleted
   });
   // Read the list once before the fact exists, so the return visit has to read it again.
   await openMemory();
-  await expect(remembered.getByText("Aiden hasn't saved anything in this workspace yet.")).toBeVisible();
+  await expect(
+    remembered.getByText("Aiden hasn't saved anything in this workspace yet."),
+  ).toBeVisible();
   await page.getByRole("button", { name: "Back to app", exact: true }).click();
   await page.getByRole("button", { name: "New Agent", exact: true }).click();
 
@@ -52,7 +54,9 @@ test("a fact Aiden saves in chat shows in Settings → Memory and can be deleted
   const confirm = page.getByRole("alertdialog", { name: "Delete this memory?" });
   await expect(confirm).toBeVisible();
   await confirm.getByRole("button", { name: "Delete", exact: true }).click();
-  await expect(remembered.getByText("Aiden hasn't saved anything in this workspace yet.")).toBeVisible();
+  await expect(
+    remembered.getByText("Aiden hasn't saved anything in this workspace yet."),
+  ).toBeVisible();
   await expect(remembered.getByText(fact, { exact: true })).toHaveCount(0);
 
   await aiden.relaunch();

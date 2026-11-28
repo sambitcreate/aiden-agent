@@ -51,8 +51,7 @@ test("mac signing hook assigns minimal entitlements to privileged and standalone
     COMPUTER_USE_ENTITLEMENTS,
   );
   assert.equal(
-    options.optionsForFile(path.join(app, "Contents", "Helpers", "aiden-lease-flock"))
-      .entitlements,
+    options.optionsForFile(path.join(app, "Contents", "Helpers", "aiden-lease-flock")).entitlements,
     COMPUTER_USE_ENTITLEMENTS,
   );
   assert.equal(
@@ -113,15 +112,22 @@ test("mac signing hook never re-signs the Lume bundle or anything inside it", ()
 
 test("electron-builder's signIgnore covers the Lume bundle directory and its contents", async () => {
   const { readFile } = await import("node:fs/promises");
-  const packageJson = JSON.parse(await readFile(new URL("../package.json", import.meta.url), "utf8"));
+  const packageJson = JSON.parse(
+    await readFile(new URL("../package.json", import.meta.url), "utf8"),
+  );
   const patterns = [packageJson.build.mac.signIgnore].flat().map((pattern) => new RegExp(pattern));
   const ignored = (file) => patterns.some((pattern) => pattern.test(file));
   const app = "/Users/me/release/mac-arm64/Aiden Agent.app";
   const lume = packagedLumePaths(app);
   const cua = packagedComputerUsePaths(app);
   // osx-sign signs every .app directory it walks, so the bundle path itself must match.
-  for (const file of [lume.lumeApp, lume.binary, lume.infoPlist, cua.driver]) assert.equal(ignored(file), true, file);
-  for (const file of [cua.broker, cua.helperApp, path.join(app, "Contents", "MacOS", "Aiden Agent")]) {
+  for (const file of [lume.lumeApp, lume.binary, lume.infoPlist, cua.driver])
+    assert.equal(ignored(file), true, file);
+  for (const file of [
+    cua.broker,
+    cua.helperApp,
+    path.join(app, "Contents", "MacOS", "Aiden Agent"),
+  ]) {
     assert.equal(ignored(file), false, file);
   }
   assert.equal(
@@ -133,14 +139,20 @@ test("electron-builder's signIgnore covers the Lume bundle directory and its con
 
 test("electron-builder places Lume and its provenance where the hook and the verifier look", async () => {
   const { readFile } = await import("node:fs/promises");
-  const packageJson = JSON.parse(await readFile(new URL("../package.json", import.meta.url), "utf8"));
+  const packageJson = JSON.parse(
+    await readFile(new URL("../package.json", import.meta.url), "utf8"),
+  );
   const app = path.resolve("/tmp/Aiden Agent.app");
   const lume = packagedLumePaths(app);
   const contents = path.join(app, "Contents");
-  const extraFile = packageJson.build.mac.extraFiles.find((entry) => entry.from === "build/bot-computers/lume.app");
+  const extraFile = packageJson.build.mac.extraFiles.find(
+    (entry) => entry.from === "build/bot-computers/lume.app",
+  );
   assert.ok(extraFile, "the vendored bundle is copied into the package");
   assert.equal(path.join(contents, extraFile.to), lume.lumeApp);
-  const resources = new Map(packageJson.build.mac.extraResources.map((entry) => [entry.from, entry.to]));
+  const resources = new Map(
+    packageJson.build.mac.extraResources.map((entry) => [entry.from, entry.to]),
+  );
   assert.equal(
     path.join(contents, "Resources", resources.get("resources/bot-computers/lume-artifact.json")),
     lume.outerProvenance,
@@ -173,7 +185,14 @@ test("pinned Lume verification refuses a changed binary before running codesign"
   assert.deepEqual(calls, [
     {
       command: "/usr/bin/codesign",
-      args: ["--verify", "--deep", "--strict", "--verbose=2", `-R=${lumeRequirement()}`, paths.lumeApp],
+      args: [
+        "--verify",
+        "--deep",
+        "--strict",
+        "--verbose=2",
+        `-R=${lumeRequirement()}`,
+        paths.lumeApp,
+      ],
     },
   ]);
 });

@@ -41,18 +41,20 @@ function notFound(error: unknown): boolean {
   );
 }
 
-function fixture(overrides: {
-  device?: Partial<{
-    id: string;
-    revokedAt?: number;
-    capabilities: readonly string[];
-    acceptsProgressCapabilities?: boolean;
-  }>;
-  metadata?: readonly ChatMeta[];
-  readChat?: (chatId: string) => Promise<Chat | undefined>;
-  authorizeBot?: () => Promise<boolean>;
-  events?: ChatProgressEvents;
-} = {}) {
+function fixture(
+  overrides: {
+    device?: Partial<{
+      id: string;
+      revokedAt?: number;
+      capabilities: readonly string[];
+      acceptsProgressCapabilities?: boolean;
+    }>;
+    metadata?: readonly ChatMeta[];
+    readChat?: (chatId: string) => Promise<Chat | undefined>;
+    authorizeBot?: () => Promise<boolean>;
+    events?: ChatProgressEvents;
+  } = {},
+) {
   const events = overrides.events ?? new ChatProgressEvents();
   let held = 0;
   const authorize = createChatProgressAuthorizer({
@@ -84,22 +86,39 @@ test("unknown and revoked devices are refused before any chat read", async () =>
     acquireDeviceAuthorization: () => () => {},
     device: async () => undefined,
     chatMetadata: async () => [meta],
-    readChat: async () => { chatsRead += 1; return chat; },
+    readChat: async () => {
+      chatsRead += 1;
+      return chat;
+    },
     authorizeRetainedBotChat: async () => true,
     events: new ChatProgressEvents(),
   });
   await assert.rejects(missing("ghost", "chat-1", "tasks:read"), /no longer paired/);
 
-  const revoked = fixture({ device: { id: "device-1", revokedAt: 5, capabilities: ["chat:read", "tasks:read"], acceptsProgressCapabilities: true } });
+  const revoked = fixture({
+    device: {
+      id: "device-1",
+      revokedAt: 5,
+      capabilities: ["chat:read", "tasks:read"],
+      acceptsProgressCapabilities: true,
+    },
+  });
   await assert.rejects(revoked.authorize("device-1", "chat-1", "tasks:read"), /no longer paired/);
   assert.equal(chatsRead, 0);
 });
 
 test("progress reads require negotiated chat plus the requested grant", async () => {
   const notNegotiated = fixture({
-    device: { id: "d", capabilities: ["chat:read", "tasks:read"], acceptsProgressCapabilities: false },
+    device: {
+      id: "d",
+      capabilities: ["chat:read", "tasks:read"],
+      acceptsProgressCapabilities: false,
+    },
   });
-  await assert.rejects(notNegotiated.authorize("d", "chat-1", "tasks:read"), /capability_denied|unavailable/i);
+  await assert.rejects(
+    notNegotiated.authorize("d", "chat-1", "tasks:read"),
+    /capability_denied|unavailable/i,
+  );
 
   const noChatRead = fixture({
     device: { id: "d", capabilities: ["tasks:read"], acceptsProgressCapabilities: true },
@@ -107,7 +126,11 @@ test("progress reads require negotiated chat plus the requested grant", async ()
   await assert.rejects(noChatRead.authorize("d", "chat-1", "tasks:read"), /unavailable/);
 
   const wrongGrant = fixture({
-    device: { id: "d", capabilities: ["chat:read", "tasks:read"], acceptsProgressCapabilities: true },
+    device: {
+      id: "d",
+      capabilities: ["chat:read", "tasks:read"],
+      acceptsProgressCapabilities: true,
+    },
   });
   await assert.rejects(wrongGrant.authorize("d", "chat-1", "agents:read"), /unavailable/);
 });
@@ -125,20 +148,32 @@ test("missing chats and the Assistant workspace report not found", async () => {
 test("bot chats require bot read access plus retained authorization", async () => {
   const botMeta: ChatMeta = { ...meta, botId: "bot-1" };
   const noGrant = fixture({
-    device: { id: "d", capabilities: ["chat:read", "tasks:read"], acceptsProgressCapabilities: true },
+    device: {
+      id: "d",
+      capabilities: ["chat:read", "tasks:read"],
+      acceptsProgressCapabilities: true,
+    },
     metadata: [botMeta],
   });
   await assert.rejects(noGrant.authorize("d", "chat-1", "tasks:read"), /unavailable/);
 
   const denied = fixture({
-    device: { id: "d", capabilities: ["chat:read", "tasks:read", "bot:read"], acceptsProgressCapabilities: true },
+    device: {
+      id: "d",
+      capabilities: ["chat:read", "tasks:read", "bot:read"],
+      acceptsProgressCapabilities: true,
+    },
     metadata: [botMeta],
     authorizeBot: async () => false,
   });
   await assert.rejects(denied.authorize("d", "chat-1", "tasks:read"), /unavailable/);
 
   const allowed = fixture({
-    device: { id: "d", capabilities: ["chat:read", "tasks:read", "bot:read"], acceptsProgressCapabilities: true },
+    device: {
+      id: "d",
+      capabilities: ["chat:read", "tasks:read", "bot:read"],
+      acceptsProgressCapabilities: true,
+    },
     metadata: [botMeta],
   });
   const result = await allowed.authorize("d", "chat-1", "tasks:read");
@@ -196,7 +231,10 @@ test("feature-owned chats report not found to progress readers", async () => {
   let chatsRead = 0;
   const owned = fixture({
     metadata: [{ ...meta, owner: { kind: "design-project", projectId: "project-1" } }],
-    readChat: async () => { chatsRead += 1; return chat; },
+    readChat: async () => {
+      chatsRead += 1;
+      return chat;
+    },
   });
   await assert.rejects(owned.authorize("device-1", "chat-1", "tasks:read"), notFound);
   await assert.rejects(owned.authorize("device-1", "chat-1", "agents:read"), notFound);

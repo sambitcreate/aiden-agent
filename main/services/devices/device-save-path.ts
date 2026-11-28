@@ -38,23 +38,37 @@ function inside(root: string, candidate: string): boolean {
  * the workspace. A path without an extension, or ending in a separator, is a
  * folder and gets `defaultName`. Throws when the result is outside every root.
  */
-export function resolveDeviceSavePath(requested: unknown, roots: DeviceSaveRoots, defaultName: string): string {
-  if (typeof requested !== "string" || !requested.trim() || requested.length > MAX_SAVE_PATH_LENGTH) {
+export function resolveDeviceSavePath(
+  requested: unknown,
+  roots: DeviceSaveRoots,
+  defaultName: string,
+): string {
+  if (
+    typeof requested !== "string" ||
+    !requested.trim() ||
+    requested.length > MAX_SAVE_PATH_LENGTH
+  ) {
     throw new Error(`A save path is required. ${DEVICE_SAVE_PATH_HINT}`);
   }
-  if (/[\0\r\n]/u.test(requested)) throw new Error(`That save path is not allowed. ${DEVICE_SAVE_PATH_HINT}`);
-  const allowed = [roots.workspace, roots.downloads].filter((root): root is string => Boolean(root && path.isAbsolute(root)));
+  if (/[\0\r\n]/u.test(requested))
+    throw new Error(`That save path is not allowed. ${DEVICE_SAVE_PATH_HINT}`);
+  const allowed = [roots.workspace, roots.downloads].filter((root): root is string =>
+    Boolean(root && path.isAbsolute(root)),
+  );
   if (allowed.length === 0) throw new Error("Screenshots cannot be saved to a file in this chat.");
   let base: string;
   if (path.isAbsolute(requested)) base = requested;
-  else if (roots.workspace && path.isAbsolute(roots.workspace)) base = path.join(roots.workspace, requested);
+  else if (roots.workspace && path.isAbsolute(roots.workspace))
+    base = path.join(roots.workspace, requested);
   else throw new Error(`Use an absolute path. ${DEVICE_SAVE_PATH_HINT}`);
   const folderLike = /[\\/]$/u.test(requested) || path.extname(requested) === "";
   const resolved = path.resolve(folderLike ? path.join(base, defaultName) : base);
   if (path.extname(resolved).toLowerCase() !== ".png") {
     throw new Error(`Screenshots are PNG files. ${DEVICE_SAVE_PATH_HINT}`);
   }
-  if (!allowed.some((root) => inside(path.resolve(root), resolved) && resolved !== path.resolve(root))) {
+  if (
+    !allowed.some((root) => inside(path.resolve(root), resolved) && resolved !== path.resolve(root))
+  ) {
     throw new Error(`That save path is outside the allowed folders. ${DEVICE_SAVE_PATH_HINT}`);
   }
   return resolved;
@@ -78,14 +92,22 @@ export function resolveDeviceSavePath(requested: unknown, roots: DeviceSaveRoots
  * is created, truncated or replaced. An existing file is replaced as a
  * directory entry, so a hard link to a file elsewhere keeps its contents.
  */
-export async function writeDeviceSaveFile(file: string, roots: DeviceSaveRoots, bytes: Uint8Array): Promise<string> {
+export async function writeDeviceSaveFile(
+  file: string,
+  roots: DeviceSaveRoots,
+  bytes: Uint8Array,
+): Promise<string> {
   if (process.platform !== "darwin") throw new Error("Saving screenshots to a file needs macOS.");
-  const allowed = [roots.workspace, roots.downloads].filter((root): root is string => Boolean(root && path.isAbsolute(root)));
+  const allowed = [roots.workspace, roots.downloads].filter((root): root is string =>
+    Boolean(root && path.isAbsolute(root)),
+  );
   const root = allowed.find((candidate) => inside(path.resolve(candidate), file));
-  if (!root) throw new Error(`That save path is outside the allowed folders. ${DEVICE_SAVE_PATH_HINT}`);
+  if (!root)
+    throw new Error(`That save path is outside the allowed folders. ${DEVICE_SAVE_PATH_HINT}`);
   const identity = await captureManagedWorktreeRootIdentity(root);
   const realRoot = identity.path;
-  const escapes = () => new Error(`That save path leads outside the allowed folders. ${DEVICE_SAVE_PATH_HINT}`);
+  const escapes = () =>
+    new Error(`That save path leads outside the allowed folders. ${DEVICE_SAVE_PATH_HINT}`);
   const relative = path.relative(path.resolve(root), path.dirname(file));
   if (relative.startsWith("..") || path.isAbsolute(relative)) throw escapes();
   let current = realRoot;
@@ -101,9 +123,12 @@ export async function writeDeviceSaveFile(file: string, roots: DeviceSaveRoots, 
     if (stats.isSymbolicLink()) {
       const resolved = await realpath(next).catch(() => null);
       if (resolved === null || !inside(realRoot, resolved)) throw escapes();
-      throw new Error(`That save path goes through a link, which is not allowed. ${DEVICE_SAVE_PATH_HINT}`);
+      throw new Error(
+        `That save path goes through a link, which is not allowed. ${DEVICE_SAVE_PATH_HINT}`,
+      );
     }
-    if (!stats.isDirectory()) throw new Error(`That save path names a file as a folder. ${DEVICE_SAVE_PATH_HINT}`);
+    if (!stats.isDirectory())
+      throw new Error(`That save path names a file as a folder. ${DEVICE_SAVE_PATH_HINT}`);
     const real = await realpath(next);
     if (!inside(realRoot, real)) throw escapes();
     current = real;
@@ -119,7 +144,11 @@ export async function writeDeviceSaveFile(file: string, roots: DeviceSaveRoots, 
   const confined = path.relative(realRoot, target);
   if (!confined || confined.startsWith("..") || path.isAbsolute(confined)) throw escapes();
   try {
-    await saveConfinedWorkspaceFile(identity, confined.split(path.sep).join("/"), Buffer.from(bytes));
+    await saveConfinedWorkspaceFile(
+      identity,
+      confined.split(path.sep).join("/"),
+      Buffer.from(bytes),
+    );
   } catch (error) {
     if (error instanceof ManagedWorktreeFileIoError && error.code === "unsafe_destination") {
       throw new Error(

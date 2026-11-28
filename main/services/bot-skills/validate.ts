@@ -7,7 +7,11 @@ import { parseSkillMd } from "../skills-discovery.js";
 
 const NAME = /^[a-z0-9](?:[a-z0-9-]{0,46}[a-z0-9])?$/u;
 
-export interface BotSkillDraft { name: string; description: string; instructions: string }
+export interface BotSkillDraft {
+  name: string;
+  description: string;
+  instructions: string;
+}
 
 /** YAML-safe one-line scalar. */
 function quoted(text: string): string {
@@ -48,14 +52,18 @@ export function validateBotSkillProposal(
   const name = input.name.trim();
   const description = input.description.trim();
   const instructions = input.instructions.trim();
-  if (!NAME.test(name)) errors.push(`Name must be lowercase letters, numbers and dashes (got “${name}”).`);
+  if (!NAME.test(name))
+    errors.push(`Name must be lowercase letters, numbers and dashes (got “${name}”).`);
   const source = context.existingSources.get(name);
   if (source && !(source === "workspace" && context.current !== undefined)) {
     errors.push(`A ${source} skill is already named “${name}”, so this one would be hidden.`);
   }
-  if (!description) errors.push("The description must say when to use this skill; an unused skill does nothing.");
+  if (!description)
+    errors.push("The description must say when to use this skill; an unused skill does nothing.");
   else if ([...description].length > BOT_SKILL_PROPOSAL_LIMITS.descriptionChars) {
-    errors.push(`The description is at most ${BOT_SKILL_PROPOSAL_LIMITS.descriptionChars} characters.`);
+    errors.push(
+      `The description is at most ${BOT_SKILL_PROPOSAL_LIMITS.descriptionChars} characters.`,
+    );
   }
   const bytes = new TextEncoder().encode(instructions).byteLength;
   if (!instructions) errors.push("The instructions are empty, so the skill would never load.");
@@ -72,8 +80,18 @@ export function validateBotSkillProposal(
   if (errors.length) return { ok: false, errors };
   const file = botSkillFile({ name, description, instructions });
   const parsed = parseSkillMd(file);
-  if (!parsed || parsed.frontmatter.name !== name || (parsed.frontmatter.description ?? "") !== description.replace(/\s+/gu, " ") || parsed.body !== instructions) {
-    return { ok: false, errors: ["The skill would not read back as written; remove unusual characters from its name or description."] };
+  if (
+    !parsed ||
+    parsed.frontmatter.name !== name ||
+    (parsed.frontmatter.description ?? "") !== description.replace(/\s+/gu, " ") ||
+    parsed.body !== instructions
+  ) {
+    return {
+      ok: false,
+      errors: [
+        "The skill would not read back as written; remove unusual characters from its name or description.",
+      ],
+    };
   }
   // The card must carry every proposed line. A diff against a huge current
   // file would be cut short, so then the card shows the whole proposed file.

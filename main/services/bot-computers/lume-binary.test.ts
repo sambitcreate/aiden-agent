@@ -1,5 +1,12 @@
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, readFileSync, symlinkSync, truncateSync, writeFileSync } from "node:fs";
+import {
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  symlinkSync,
+  truncateSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -15,11 +22,12 @@ interface PackagingPins {
 }
 
 test("the compiled pins, the packaging pins and the provenance JSON agree", async () => {
-  const packaging = (await import(path.resolve("scripts/bot-computers-lume-pins.mjs"))) as PackagingPins;
-  const provenance = JSON.parse(readFileSync(path.resolve("resources/bot-computers/lume-artifact.json"), "utf8")) as Record<
-    string,
-    string | number
-  >;
+  const packaging = (await import(
+    path.resolve("scripts/bot-computers-lume-pins.mjs")
+  )) as PackagingPins;
+  const provenance = JSON.parse(
+    readFileSync(path.resolve("resources/bot-computers/lume-artifact.json"), "utf8"),
+  ) as Record<string, string | number>;
   for (const source of [packaging.LUME_ARTIFACT_PROVENANCE, provenance]) {
     assert.equal(source.version, LUME_PINS.version);
     assert.equal(source.tag, LUME_PINS.tag);
@@ -49,13 +57,22 @@ function tools(calls: string[][], overrides: { identifier?: string; codesign?: n
     calls.push([command, ...args]);
     if (command === "/usr/bin/plutil") {
       const key = args[1];
-      return { exitCode: 0, stdout: key === "CFBundleIdentifier" ? (overrides.identifier ?? LUME_PINS.bundleIdentifier) : LUME_PINS.bundleVersion };
+      return {
+        exitCode: 0,
+        stdout:
+          key === "CFBundleIdentifier"
+            ? (overrides.identifier ?? LUME_PINS.bundleIdentifier)
+            : LUME_PINS.bundleVersion,
+      };
     }
     return { exitCode: overrides.codesign ?? 0, stdout: "" };
   };
 }
 
-const options = (appPath: string, extra: Partial<Parameters<typeof resolveLumeInstallation>[0]> = {}) => ({
+const options = (
+  appPath: string,
+  extra: Partial<Parameters<typeof resolveLumeInstallation>[0]> = {},
+) => ({
   platform: "darwin" as const,
   arch: "arm64",
   isPackaged: false,
@@ -78,7 +95,10 @@ test("the pinned development bundle resolves to its own binary after hash, ident
 
 test("a symlinked binary, a changed binary, another bundle id or a failed signature is refused", async () => {
   const refused = async (run: Parameters<typeof resolveLumeInstallation>[0]) =>
-    assert.rejects(resolveLumeInstallation(run), (error: unknown) => error instanceof BotComputerError);
+    assert.rejects(
+      resolveLumeInstallation(run),
+      (error: unknown) => error instanceof BotComputerError,
+    );
 
   const linked = mkdtempSync(path.join(tmpdir(), "p8-lume-link-"));
   const { binary } = bundle(linked);
@@ -112,7 +132,11 @@ test("Linux and Intel never look for Lume", async () => {
   ] as const) {
     const calls: string[][] = [];
     await assert.rejects(
-      resolveLumeInstallation({ ...options("/nonexistent", { run: tools(calls) }), platform, arch }),
+      resolveLumeInstallation({
+        ...options("/nonexistent", { run: tools(calls) }),
+        platform,
+        arch,
+      }),
       (error: unknown) => error instanceof BotComputerError && error.code === "unsupported",
     );
     assert.equal(calls.length, 0);
@@ -129,7 +153,11 @@ test("the packaged bundle is looked up beside Resources in Contents/Helpers", as
   writeFileSync(binary, "", { mode: 0o755 });
   truncateSync(binary, LUME_PINS.binaryBytes);
   const installation = await resolveLumeInstallation(
-    options("/unused", { isPackaged: true, resourcesPath: path.join(contents, "Resources"), run: tools([]) }),
+    options("/unused", {
+      isPackaged: true,
+      resourcesPath: path.join(contents, "Resources"),
+      run: tools([]),
+    }),
   );
   assert.ok(installation.appPath.endsWith(path.join("Contents", "Helpers", "lume.app")));
 });

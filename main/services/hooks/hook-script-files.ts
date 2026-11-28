@@ -106,19 +106,55 @@ export interface HookCommandScan {
   unclosedQuote: boolean;
 }
 
-const PROJECT_DIR_VARIABLE = /^(?:\$\{(?:AIDEN|CLAUDE)_PROJECT_DIR\}|\$(?:AIDEN|CLAUDE)_PROJECT_DIR)(?=\/|$)/u;
+const PROJECT_DIR_VARIABLE =
+  /^(?:\$\{(?:AIDEN|CLAUDE)_PROJECT_DIR\}|\$(?:AIDEN|CLAUDE)_PROJECT_DIR)(?=\/|$)/u;
 const ASSIGNMENT = /^[A-Za-z_][A-Za-z0-9_]*=/u;
 /** Operators after which the next word starts a new command. */
 const COMMAND_SEPARATORS = new Set([";", "&", "|", "(", ")", "\n", "`"]);
 /** Wrappers whose first plain argument is the program they run. */
-const PREFIX_COMMANDS = new Set(["env", "exec", "nohup", "time", "command", "builtin", "nice", "sudo"]);
+const PREFIX_COMMANDS = new Set([
+  "env",
+  "exec",
+  "nohup",
+  "time",
+  "command",
+  "builtin",
+  "nice",
+  "sudo",
+]);
 const SHELLS = new Set(["bash", "sh", "zsh", "dash", "ksh", "fish"]);
 const PACKAGE_SCRIPT_RUNNERS = new Set(["npx", "pnpx", "bunx", "uvx", "pnpm", "yarn"]);
-const NPM_SCRIPT_COMMANDS = new Set(["run", "run-script", "rum", "urn", "test", "t", "tst", "start", "stop", "restart", "exec", "x"]);
+const NPM_SCRIPT_COMMANDS = new Set([
+  "run",
+  "run-script",
+  "rum",
+  "urn",
+  "test",
+  "t",
+  "tst",
+  "start",
+  "stop",
+  "restart",
+  "exec",
+  "x",
+]);
 const BUILD_TOOLS = new Set(["make", "gmake", "just", "rake", "gradle", "gradlew", "mvn", "task"]);
 /** Interpreters and the flags that make them run code given inline or a module found by name. */
 const INLINE_CODE_FLAGS: ReadonlyArray<[RegExp, ReadonlySet<string>]> = [
-  [/^(?:node|nodejs)$/u, new Set(["-e", "--eval", "-p", "--print", "-r", "--require", "--import", "--loader", "--experimental-loader"])],
+  [
+    /^(?:node|nodejs)$/u,
+    new Set([
+      "-e",
+      "--eval",
+      "-p",
+      "--print",
+      "-r",
+      "--require",
+      "--import",
+      "--loader",
+      "--experimental-loader",
+    ]),
+  ],
   [/^(?:python|pypy)(?:\d+(?:\.\d+)?)?$/u, new Set(["-c"])],
   [/^(?:ruby|perl|osascript|php)$/u, new Set(["-e", "-E", "-r"])],
   [/^(?:deno|bun)$/u, new Set(["eval", "-e", "--eval", "-p", "--print"])],
@@ -128,7 +164,11 @@ const CODE_INJECTING_VARIABLES =
   /^(?:NODE_OPTIONS|NODE_PATH|BASH_ENV|ENV|PATH|PYTHONPATH|PYTHONSTARTUP|PERL5OPT|PERL5LIB|RUBYOPT|RUBYLIB|LD_PRELOAD|LD_LIBRARY_PATH|DYLD_INSERT_LIBRARIES|DYLD_LIBRARY_PATH)=/u;
 
 /** The index just before the line after these here-documents' bodies, which start past `newline`. */
-function afterHereDocuments(command: string, newline: number, documents: ReadonlyArray<{ delimiter: string; stripTabs: boolean }>): number {
+function afterHereDocuments(
+  command: string,
+  newline: number,
+  documents: ReadonlyArray<{ delimiter: string; stripTabs: boolean }>,
+): number {
   let lineStart = newline + 1;
   for (const { delimiter, stripTabs } of documents) {
     while (lineStart < command.length) {
@@ -164,7 +204,13 @@ export function scanHookCommand(command: string): HookCommandScan {
    * (`input`). After `>&` or `<&` (`duplicate-*`) a number or `-` names a
    * descriptor, not a file, and any other word is the file.
    */
-  let redirect: "output" | "input" | "duplicate-output" | "duplicate-input" | "here-document" | undefined;
+  let redirect:
+    | "output"
+    | "input"
+    | "duplicate-output"
+    | "duplicate-input"
+    | "here-document"
+    | undefined;
 
   const end = () => {
     if (!inWord) return;
@@ -182,10 +228,15 @@ export function scanHookCommand(command: string): HookCommandScan {
     }
     if (redirect) {
       // A redirection's target is a file, never the program, and leaves the command position alone.
-      const duplicatesDescriptor = redirect.startsWith("duplicate-") && /^(?:\d+-?|-)$/u.test(current);
+      const duplicatesDescriptor =
+        redirect.startsWith("duplicate-") && /^(?:\d+-?|-)$/u.test(current);
       if (!duplicatesDescriptor) {
         const output = redirect === "output" || redirect === "duplicate-output";
-        words.push({ text: current, commandPosition: false, ...(output ? { outputTarget: true } : { inputTarget: true }) });
+        words.push({
+          text: current,
+          commandPosition: false,
+          ...(output ? { outputTarget: true } : { inputTarget: true }),
+        });
       }
       redirect = undefined;
       current = "";
@@ -221,7 +272,11 @@ export function scanHookCommand(command: string): HookCommandScan {
       index += 1;
       for (; index < command.length && command[index] !== '"'; index += 1) {
         const inner = command[index] as string;
-        if (inner === "\\" && index + 1 < command.length && '"\\$`\n'.includes(command[index + 1] as string)) {
+        if (
+          inner === "\\" &&
+          index + 1 < command.length &&
+          '"\\$`\n'.includes(command[index + 1] as string)
+        ) {
           index += 1;
           if (command[index] !== "\n") current += command[index];
           continue;
@@ -254,7 +309,8 @@ export function scanHookCommand(command: string): HookCommandScan {
       // A redirection (`>`, `>>`, `2>&1`, `&>`, `<<`) is not a new command; its target is a plain word.
       end();
       const start = index;
-      while (index + 1 < command.length && "<>&|".includes(command[index + 1] as string)) index += 1;
+      while (index + 1 < command.length && "<>&|".includes(command[index + 1] as string))
+        index += 1;
       const operator = command.slice(start, index + 1);
       if (operator === "<<") {
         stripTabs = command[index + 1] === "-";
@@ -276,7 +332,8 @@ export function scanHookCommand(command: string): HookCommandScan {
       // A redirection still waiting for its target (``>`./x.sh` ``) never claims the next command.
       redirect = undefined;
       atCommand = true;
-      if (char === "\n" && pendingDocuments.length > 0) index = afterHereDocuments(command, index, pendingDocuments.splice(0));
+      if (char === "\n" && pendingDocuments.length > 0)
+        index = afterHereDocuments(command, index, pendingDocuments.splice(0));
       continue;
     }
     current += char;
@@ -304,10 +361,16 @@ export function unfollowedCommands(scan: HookCommandScan): string[] {
     // Look through wrappers and assignments to the program they run.
     while (PREFIX_COMMANDS.has(path.basename(program)) || ASSIGNMENT.test(program)) {
       position += 1;
-      while (position < words.length && (words[position]?.text.startsWith("-") || ASSIGNMENT.test(words[position]?.text ?? ""))) position += 1;
+      while (
+        position < words.length &&
+        (words[position]?.text.startsWith("-") || ASSIGNMENT.test(words[position]?.text ?? ""))
+      )
+        position += 1;
       // `env -C sub ./x.sh` resolves the program from a folder the scan never looks in.
       if (path.basename(program) === "env") {
-        const flag = words.slice(index, position).find(({ text }) => /^(?:-C|-S|--chdir|--split-string)(?:=|$)/u.test(text));
+        const flag = words
+          .slice(index, position)
+          .find(({ text }) => /^(?:-C|-S|--chdir|--split-string)(?:=|$)/u.test(text));
         if (flag) found.add(`env ${flag.text.split("=")[0]}`);
       }
       const next = words[position];
@@ -316,7 +379,8 @@ export function unfollowedCommands(scan: HookCommandScan): string[] {
     }
     const name = path.basename(program);
     const argsUntilNext: string[] = [];
-    for (let at = position + 1; at < words.length && !words[at]?.commandPosition; at += 1) argsUntilNext.push(words[at]?.text ?? "");
+    for (let at = position + 1; at < words.length && !words[at]?.commandPosition; at += 1)
+      argsUntilNext.push(words[at]?.text ?? "");
     const firstPlain = argsUntilNext.find((arg) => !arg.startsWith("-"));
     const inlineFlags = INLINE_CODE_FLAGS.find(([pattern]) => pattern.test(name))?.[1];
     // Only the interpreter's own options, before the script it runs; later ones are the script's.
@@ -324,19 +388,28 @@ export function unfollowedCommands(scan: HookCommandScan): string[] {
     const ownOptions = firstPlainAt === -1 ? argsUntilNext : argsUntilNext.slice(0, firstPlainAt);
     const inlineFlag = inlineFlags
       ? // `deno eval` is a subcommand rather than a flag.
-        (firstPlain !== undefined && inlineFlags.has(firstPlain) ? firstPlain : undefined) ??
-        ownOptions.map((arg) => arg.split("=")[0] as string).find((arg) => inlineFlags.has(arg))
+        ((firstPlain !== undefined && inlineFlags.has(firstPlain) ? firstPlain : undefined) ??
+        ownOptions.map((arg) => arg.split("=")[0] as string).find((arg) => inlineFlags.has(arg)))
       : undefined;
     if (inlineFlag) found.add(`${name} ${inlineFlag}`);
     else if (name === "cd" || name === "pushd") found.add(name);
     else if (name === "source" || name === ".") found.add(name);
     else if (name === "eval") found.add("eval");
-    else if (SHELLS.has(name) && argsUntilNext.some((arg) => /^-[A-Za-z]*c[A-Za-z]*$/u.test(arg))) found.add(`${name} -c`);
+    else if (SHELLS.has(name) && argsUntilNext.some((arg) => /^-[A-Za-z]*c[A-Za-z]*$/u.test(arg)))
+      found.add(`${name} -c`);
     else if (PACKAGE_SCRIPT_RUNNERS.has(name)) found.add(name);
-    else if (name === "npm" && firstPlain && NPM_SCRIPT_COMMANDS.has(firstPlain)) found.add(`npm ${firstPlain}`);
-    else if ((name === "bun" || name === "deno") && firstPlain && ["run", "x", "test", "task"].includes(firstPlain)) found.add(`${name} ${firstPlain}`);
-    else if ((name === "uv" || name === "poetry" || name === "cargo") && firstPlain === "run") found.add(`${name} run`);
-    else if (/^python(?:\d+(?:\.\d+)?)?$/u.test(name) && argsUntilNext.includes("-m")) found.add(`${name} -m`);
+    else if (name === "npm" && firstPlain && NPM_SCRIPT_COMMANDS.has(firstPlain))
+      found.add(`npm ${firstPlain}`);
+    else if (
+      (name === "bun" || name === "deno") &&
+      firstPlain &&
+      ["run", "x", "test", "task"].includes(firstPlain)
+    )
+      found.add(`${name} ${firstPlain}`);
+    else if ((name === "uv" || name === "poetry" || name === "cargo") && firstPlain === "run")
+      found.add(`${name} run`);
+    else if (/^python(?:\d+(?:\.\d+)?)?$/u.test(name) && argsUntilNext.includes("-m"))
+      found.add(`${name} -m`);
     else if (BUILD_TOOLS.has(name) || name === "git") found.add(name);
   }
   return [...found];
@@ -350,7 +423,8 @@ export function unfollowedCommands(scan: HookCommandScan): string[] {
 export function hookCommandWords(command: string): string[] {
   const words: string[] = [];
   let program = "";
-  for (const { text, commandPosition, outputTarget, inputTarget } of scanHookCommand(command).words) {
+  for (const { text, commandPosition, outputTarget, inputTarget } of scanHookCommand(command)
+    .words) {
     if (commandPosition && !ASSIGNMENT.test(text)) program = path.basename(text);
     if (!text || outputTarget) continue;
     // `tee`'s own operands are files it writes; a file redirected into it is still read.
@@ -364,7 +438,10 @@ export function hookCommandWords(command: string): string[] {
 
 function inside(parent: string, candidate: string): boolean {
   const relative = path.relative(parent, candidate);
-  return relative === "" || (!relative.startsWith(`..${path.sep}`) && relative !== ".." && !path.isAbsolute(relative));
+  return (
+    relative === "" ||
+    (!relative.startsWith(`..${path.sep}`) && relative !== ".." && !path.isAbsolute(relative))
+  );
 }
 
 const RUNTIME_EXPANSION = /[$*?[\]{}~]/u;
@@ -437,10 +514,17 @@ async function hashFile(file: string): Promise<Hashed> {
  * hook runs in), and how much of what it runs that covers. Only files inside
  * `workspaceRoot` or `cwd` count.
  */
-export async function hookScriptFiles(command: string, options: { workspaceRoot: string; cwd: string }): Promise<HookScriptScan> {
+export async function hookScriptFiles(
+  command: string,
+  options: { workspaceRoot: string; cwd: string },
+): Promise<HookScriptScan> {
   const roots = [path.resolve(options.workspaceRoot), path.resolve(options.cwd)];
   const commandScan = scanHookCommand(command);
-  const scan: HookScriptScan = { files: [], paths: [], unfollowed: [...unfollowedCommands(commandScan), ...runtimeBuiltPaths(commandScan)] };
+  const scan: HookScriptScan = {
+    files: [],
+    paths: [],
+    unfollowed: [...unfollowedCommands(commandScan), ...runtimeBuiltPaths(commandScan)],
+  };
   if (commandScan.tooLong) {
     scan.overLimit = `the command has more than ${MAX_HOOK_COMMAND_WORDS} words`;
     return scan;
@@ -501,7 +585,12 @@ export async function hookScriptFiles(command: string, options: { workspaceRoot:
       scan.files.push({ word, state: "missing", linkTarget });
       continue;
     }
-    scan.files.push({ word, state: "file", hash: hashed.hash, ...(linkTarget !== undefined ? { linkTarget } : {}) });
+    scan.files.push({
+      word,
+      state: "file",
+      hash: hashed.hash,
+      ...(linkTarget !== undefined ? { linkTarget } : {}),
+    });
     const root = roots.find((candidateRoot) => inside(candidateRoot, candidate.file)) as string;
     scan.paths.push(path.relative(root, candidate.file).split(path.sep).join("/"));
   }
@@ -510,7 +599,12 @@ export async function hookScriptFiles(command: string, options: { workspaceRoot:
 }
 
 /** The hook digest with its script files folded in; unchanged when it references none. */
-export function digestWithScriptFiles(baseDigest: string, files: readonly HookScriptFile[]): string {
+export function digestWithScriptFiles(
+  baseDigest: string,
+  files: readonly HookScriptFile[],
+): string {
   if (files.length === 0) return baseDigest;
-  return createHash("sha256").update(JSON.stringify({ v: 1, base: baseDigest, files })).digest("hex");
+  return createHash("sha256")
+    .update(JSON.stringify({ v: 1, base: baseDigest, files }))
+    .digest("hex");
 }

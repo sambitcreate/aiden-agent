@@ -53,7 +53,10 @@ test("a connection tool is Using {app}, named from the connection, and bounded",
   const tool = "google_calendar__list_events";
   assert.equal(botToolApp(tool), "Google Calendar");
   assert.equal(botToolPhase(tool, botToolApp(tool)), "app");
-  assert.equal(botActivityDisplay("app", "follows", "Google Calendar").word, "Using Google Calendar");
+  assert.equal(
+    botActivityDisplay("app", "follows", "Google Calendar").word,
+    "Using Google Calendar",
+  );
   // Two servers sharing a prefix, a long tool name, and a digit-led server keep their app.
   assert.equal(botToolApp("google_calendar_1a2b3c__list_events"), "Google Calendar");
   assert.equal(botToolApp("notion__search_pages_and_databases_0123abcd"), "Notion");
@@ -68,13 +71,26 @@ test("a connection tool is Using {app}, named from the connection, and bounded",
 test("the Bot's own computer reads as Using its computer, never as the person's Mac", () => {
   const app = botToolApp("computer");
   assert.equal(app, "its computer");
-  assert.equal(botActivityDisplay(botToolPhase("computer", app), "follows", app).word, "Using its computer");
+  assert.equal(
+    botActivityDisplay(botToolPhase("computer", app), "follows", app).word,
+    "Using its computer",
+  );
   assert.equal(botStepPhrase("app", 1, app), "Used its computer");
   assert.equal(botStepInfinitive("app", app), "use its computer");
   assert.equal(botActivityDisplay(botToolPhase("computer_use"), "follows").word, "Using your Mac");
-  assert.equal(botActivityDisplay(botToolPhase("computer_shell"), "follows").word, "Running a command");
+  assert.equal(
+    botActivityDisplay(botToolPhase("computer_shell"), "follows").word,
+    "Running a command",
+  );
   // The Bot's own browser likewise, rather than a bare "Working".
-  assert.equal(botActivityDisplay(botToolPhase("browser_click", botToolApp("browser_click")), "follows", botToolApp("browser_click")).word, "Using its browser");
+  assert.equal(
+    botActivityDisplay(
+      botToolPhase("browser_click", botToolApp("browser_click")),
+      "follows",
+      botToolApp("browser_click"),
+    ).word,
+    "Using its browser",
+  );
   assert.equal(botStepPhrase("app", 2, botToolApp("browser_snapshot")), "Used its browser 2 times");
   assert.equal(botToolApp("browser_wait_for"), "its browser");
   // A connection whose server name starts with "browser" or "computer" keeps its own app.
@@ -91,25 +107,63 @@ test("when tools run in parallel, the most recently started one wins", () => {
     { name: "d", status: "pending" },
   ];
   assert.equal(pickActiveToolSlot(slots)?.name, "c");
-  assert.equal(pickActiveToolSlot([{ name: "x", status: "pending" }, { name: "y", status: "pending" }])?.name, "x");
+  assert.equal(
+    pickActiveToolSlot([
+      { name: "x", status: "pending" },
+      { name: "y", status: "pending" },
+    ])?.name,
+    "x",
+  );
   assert.equal(pickActiveToolSlot([{ name: "z", status: "done" }]), undefined);
   assert.equal(pickActiveToolSlot(undefined), undefined);
 });
 
 test("each phase has the spec's word and mark, and an unknown phase is working", () => {
-  assert.deepEqual(botActivityDisplay("preparing", "follows"), { phase: "preparing", word: "Getting ready", mark: "bounce" });
-  assert.deepEqual(botActivityDisplay("reading", "follows"), { phase: "reading", word: "Reading", mark: "scan-grid" });
-  assert.deepEqual(botActivityDisplay("tidying", "follows"), { phase: "tidying", word: "Tidying up its notes", mark: "bounce" });
-  assert.deepEqual(botActivityDisplay("browsing", "follows"), { phase: "working", word: "Working", mark: "quad-shuffle" });
+  assert.deepEqual(botActivityDisplay("preparing", "follows"), {
+    phase: "preparing",
+    word: "Getting ready",
+    mark: "bounce",
+  });
+  assert.deepEqual(botActivityDisplay("reading", "follows"), {
+    phase: "reading",
+    word: "Reading",
+    mark: "scan-grid",
+  });
+  assert.deepEqual(botActivityDisplay("tidying", "follows"), {
+    phase: "tidying",
+    word: "Tidying up its notes",
+    mark: "bounce",
+  });
+  assert.deepEqual(botActivityDisplay("browsing", "follows"), {
+    phase: "working",
+    word: "Working",
+    mark: "quad-shuffle",
+  });
 });
 
 test("Always Thinking says Thinking for everything except waiting, stopping and reconnecting", () => {
-  for (const phase of ["preparing", "reading", "command", "app", "writing", "tidying", "resuming", "browsing"]) {
-    assert.deepEqual(botActivityDisplay(phase, "thinking", "Notion"), { phase: "thinking", word: "Thinking", mark: "tri-step" }, phase);
+  for (const phase of [
+    "preparing",
+    "reading",
+    "command",
+    "app",
+    "writing",
+    "tidying",
+    "resuming",
+    "browsing",
+  ]) {
+    assert.deepEqual(
+      botActivityDisplay(phase, "thinking", "Notion"),
+      { phase: "thinking", word: "Thinking", mark: "tri-step" },
+      phase,
+    );
   }
   assert.equal(botActivityDisplay("waiting", "thinking").word, "Waiting for you");
   assert.equal(botActivityDisplay("stopping", "thinking").word, "Stopping");
-  assert.equal(botActivityDisplay("reconnecting", "thinking").word, "Reconnecting to your computer");
+  assert.equal(
+    botActivityDisplay("reconnecting", "thinking").word,
+    "Reconnecting to your computer",
+  );
 });
 
 test("elapsed time shows only after 20 seconds, as minutes and seconds", () => {
@@ -129,7 +183,9 @@ test("announcements change at most once every 2 seconds, and the newest wording 
   const same = nextBotAnnouncement(first.shown, "Reading", 1_200);
   assert.equal(same.shown, first.shown);
   assert.equal(same.retryInMs, undefined);
-  assert.deepEqual(nextBotAnnouncement(first.shown, "Editing files", 3_000), { shown: { text: "Editing files", at: 3_000 } });
+  assert.deepEqual(nextBotAnnouncement(first.shown, "Editing files", 3_000), {
+    shown: { text: "Editing files", at: 3_000 },
+  });
 });
 
 test("step phrases read naturally and count repeats", () => {
@@ -143,7 +199,7 @@ test("step phrases read naturally and count repeats", () => {
   assert.equal(botStepInfinitive("app", "Notion"), "use Notion");
 });
 
-test('message_bot labels the peer',()=>{
- assert.equal(botToolStepLabel('message_bot','helper','COS'),'Messaged COS');
- assert.equal(botToolStepLabel('message_bot','helper'),'Messaged a Bot');
+test("message_bot labels the peer", () => {
+  assert.equal(botToolStepLabel("message_bot", "helper", "COS"), "Messaged COS");
+  assert.equal(botToolStepLabel("message_bot", "helper"), "Messaged a Bot");
 });

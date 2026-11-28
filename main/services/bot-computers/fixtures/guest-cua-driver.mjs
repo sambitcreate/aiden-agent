@@ -21,7 +21,11 @@
 
 import { appendFileSync, existsSync, readFileSync, writeFileSync } from "node:fs";
 import readline from "node:readline";
-import { FakeCuaDriver, TOOL_DEFINITIONS, toolListResult } from "../../computer-use/fixtures/cua-driver-catalog.mjs";
+import {
+  FakeCuaDriver,
+  TOOL_DEFINITIONS,
+  toolListResult,
+} from "../../computer-use/fixtures/cua-driver-catalog.mjs";
 
 const argv = process.argv.slice(2);
 const option = (name) => {
@@ -48,12 +52,16 @@ if (exitCode !== undefined) {
 }
 
 const readPermissions = () => {
-  if (!permissionsFile || !existsSync(permissionsFile)) return { accessibility: true, screen_recording: true };
+  if (!permissionsFile || !existsSync(permissionsFile))
+    return { accessibility: true, screen_recording: true };
   return JSON.parse(readFileSync(permissionsFile, "utf8"));
 };
 
 const rows = elementsFile ? JSON.parse(readFileSync(elementsFile, "utf8")) : undefined;
-const driver = new FakeCuaDriver({ permissions: readPermissions(), ...(rows ? { elements: () => rows } : {}) });
+const driver = new FakeCuaDriver({
+  permissions: readPermissions(),
+  ...(rows ? { elements: () => rows } : {}),
+});
 const send = (message) => process.stdout.write(`${JSON.stringify(message)}\n`);
 const listing = { ...toolListResult(Object.keys(TOOL_DEFINITIONS)), schema_version: schemaVersion };
 
@@ -79,7 +87,10 @@ lines.on("line", (line) => {
     if (name === exitOn) process.exit(1);
     if (name === hangOn) return;
     if (name === "check_permissions" && args.prompt === true && grantOnPrompt && permissionsFile) {
-      writeFileSync(permissionsFile, JSON.stringify({ accessibility: true, screen_recording: true }));
+      writeFileSync(
+        permissionsFile,
+        JSON.stringify({ accessibility: true, screen_recording: true }),
+      );
     }
     driver.permissions = readPermissions();
     let result = driver.call(name, args);

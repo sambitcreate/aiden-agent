@@ -1,4 +1,9 @@
-import { appImageIdentity, canUpdateLinuxAppImage, replaceAppImageAtomically, type AppImageIdentity } from "./app-updater-linux.js";
+import {
+  appImageIdentity,
+  canUpdateLinuxAppImage,
+  replaceAppImageAtomically,
+  type AppImageIdentity,
+} from "./app-updater-linux.js";
 import {
   canUpdateLinuxPackage,
   installLinuxPackageUpdate,
@@ -8,10 +13,7 @@ import {
 import { existsSync } from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
-import type {
-  AppUpdater,
-  CancellationToken as UpdaterCancellationToken,
-} from "electron-updater";
+import type { AppUpdater, CancellationToken as UpdaterCancellationToken } from "electron-updater";
 
 import { app, dialog, logger } from "../platform.js";
 import {
@@ -42,7 +44,9 @@ type GuardedPackageUpdater = InstanceType<ReturnType<typeof defineGuardedPackage
 // keeps the install handoff synchronous.
 let loadedUpdaterModule: ElectronUpdaterModule | null = null;
 function electronUpdaterModule(): ElectronUpdaterModule {
-  loadedUpdaterModule ??= createRequire(import.meta.url)("electron-updater") as ElectronUpdaterModule;
+  loadedUpdaterModule ??= createRequire(import.meta.url)(
+    "electron-updater",
+  ) as ElectronUpdaterModule;
   return loadedUpdaterModule;
 }
 
@@ -75,7 +79,8 @@ function defineGuardedAppImageUpdater({ AppImageUpdater }: ElectronUpdaterModule
       });
       // Upstream download/checksum behavior is retained; replace without shell tools
       // and preserve the current filename. A normal quit needs no helper execution.
-      if (options.isForceRunAfter) void this.spawnLog(destination, [], { ...process.env, APPIMAGE_SILENT_INSTALL: "true" });
+      if (options.isForceRunAfter)
+        void this.spawnLog(destination, [], { ...process.env, APPIMAGE_SILENT_INSTALL: "true" });
       return true;
     }
   };
@@ -88,7 +93,10 @@ function defineGuardedAppImageUpdater({ AppImageUpdater }: ElectronUpdaterModule
  * itself with installLinuxPackageUpdate, only when the person chooses
  * Update and restart, never on an ordinary quit.
  */
-function defineGuardedPackageUpdater({ DebUpdater, RpmUpdater }: ElectronUpdaterModule, kind: LinuxPackageKind) {
+function defineGuardedPackageUpdater(
+  { DebUpdater, RpmUpdater }: ElectronUpdaterModule,
+  kind: LinuxPackageKind,
+) {
   // Both share LinuxUpdater's download path; only the file extension they pick differs.
   const Base = (kind === "deb" ? DebUpdater : RpmUpdater) as typeof DebUpdater;
   return class GuardedPackageUpdater extends Base {
@@ -150,14 +158,18 @@ export function supportsAppUpdates(): boolean {
     isPackaged: isPackagedRuntime(),
     platform: process.platform,
     runtimeProfile: currentRuntimeProfile().id,
-    updateConfigExists: typeof process.resourcesPath === "string" && existsSync(path.join(process.resourcesPath, "app-update.yml")),
-    linuxAppImageEligible: process.platform === "linux" && canUpdateLinuxAppImage({
-      appImage: process.env.APPIMAGE,
-      appDir: process.env.APPDIR,
-      resourcesPath: process.resourcesPath,
-      executablePath: process.execPath,
-      uid: process.getuid?.(),
-    }),
+    updateConfigExists:
+      typeof process.resourcesPath === "string" &&
+      existsSync(path.join(process.resourcesPath, "app-update.yml")),
+    linuxAppImageEligible:
+      process.platform === "linux" &&
+      canUpdateLinuxAppImage({
+        appImage: process.env.APPIMAGE,
+        appDir: process.env.APPDIR,
+        resourcesPath: process.resourcesPath,
+        executablePath: process.execPath,
+        uid: process.getuid?.(),
+      }),
     linuxPackageEligible: linuxPackageUpdateKind() !== null,
   });
 }
@@ -278,10 +290,14 @@ export class AppUpdateService {
     const outcome = await this.packageInstall;
     if (outcome === "installed") {
       this.installedPackageVersion = snapshot.version;
-      logger.info("updater", `Installed the Aiden Agent ${snapshot.version} ${packageUpdater.packageKind} package; restarting.`);
+      logger.info(
+        "updater",
+        `Installed the Aiden Agent ${snapshot.version} ${packageUpdater.packageKind} package; restarting.`,
+      );
       return "ready";
     }
-    if (outcome === "cancelled") logger.info("updater", "The update was not installed: the password prompt was closed.");
+    if (outcome === "cancelled")
+      logger.info("updater", "The update was not installed: the password prompt was closed.");
     return outcome;
   }
 
@@ -290,7 +306,8 @@ export class AppUpdateService {
     if (guardedPackageUpdater) {
       // The package manager already replaced the files; start the new version.
       const snapshot = this.snapshot();
-      if (snapshot.status !== "ready" || this.installedPackageVersion !== snapshot.version) return false;
+      if (snapshot.status !== "ready" || this.installedPackageVersion !== snapshot.version)
+        return false;
       app.relaunch();
       app.quit();
       return true;
@@ -311,8 +328,11 @@ export class AppUpdateService {
     if (this.disposed || this.started || !supportsAppUpdates()) return;
     const autoUpdater = updater();
     if (guardedAppImageUpdater) {
-      try { guardedAppImageUpdater.pinCurrentImage(); }
-      catch { return; }
+      try {
+        guardedAppImageUpdater.pinCurrentImage();
+      } catch {
+        return;
+      }
     }
     this.started = true;
     autoUpdater.logger = updaterLogger();
@@ -335,9 +355,10 @@ export class AppUpdateService {
         await dialog.showMessageBox({
           type: "info",
           title: "Updates unavailable in this build",
-          message: process.platform === "linux"
-            ? "In-app updates need the Aiden Agent .deb or .rpm package (with pkexec), or a writable Aiden Agent AppImage. Otherwise, update with your package manager."
-            : "Automatic updates are available in signed Aiden Agent distribution builds.",
+          message:
+            process.platform === "linux"
+              ? "In-app updates need the Aiden Agent .deb or .rpm package (with pkexec), or a writable Aiden Agent AppImage. Otherwise, update with your package manager."
+              : "Automatic updates are available in signed Aiden Agent distribution builds.",
           buttons: ["OK"],
           defaultId: 0,
           noLink: true,

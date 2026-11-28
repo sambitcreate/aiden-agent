@@ -22,7 +22,10 @@ import { duoViewSnaps, nearestDuoView } from "./duo-snap.js";
 import { disposeDeviceModel } from "./model-scene.js";
 
 const close = (actual: number, expected: number, epsilon = 1e-6, label = "") =>
-  assert.ok(Math.abs(actual - expected) <= epsilon, `${label} ${actual} is not within ${epsilon} of ${expected}`);
+  assert.ok(
+    Math.abs(actual - expected) <= epsilon,
+    `${label} ${actual} is not within ${epsilon} of ${expected}`,
+  );
 
 const uvs = (mesh: Mesh, axis: "x" | "y") => {
   const uv = mesh.geometry.getAttribute("uv");
@@ -30,7 +33,9 @@ const uvs = (mesh: Mesh, axis: "x" | "y") => {
 };
 
 const worldNormal = (mesh: Mesh) =>
-  new Vector3().fromBufferAttribute(mesh.geometry.getAttribute("normal"), 0).transformDirection(mesh.matrixWorld);
+  new Vector3()
+    .fromBufferAttribute(mesh.geometry.getAttribute("normal"), 0)
+    .transformDirection(mesh.matrixWorld);
 
 const worldBounds = (object: Object3D) => new Box3().setFromObject(object);
 
@@ -67,7 +72,10 @@ test("the procedural Duo has the hinge rig and the three displays, all with iden
   const { asset, scene, left, right, cover, innerLeft, innerRight } = procedural();
   for (const object of [left, right, cover, innerLeft, innerRight]) {
     assert.ok(object, "rig part present");
-    assert.ok(object.position.length() === 0 && object.quaternion.angleTo(new Quaternion()) === 0, object.name);
+    assert.ok(
+      object.position.length() === 0 && object.quaternion.angleTo(new Quaternion()) === 0,
+      object.name,
+    );
   }
   assert.equal(cover.parent, left, "the cover is on the left leaf's back");
   assert.equal(innerLeft.parent, left);
@@ -82,7 +90,10 @@ test("the inner display is one continuous surface across the hinge, shaped like 
   // Planar UVs meet at the crease with no gap or overlap.
   close(Math.max(...uvs(innerLeft, "x")), 0.5);
   close(Math.min(...uvs(innerRight, "x")), 0.5);
-  const inner = new Box3().union(innerLeft.geometry.boundingBox!).union(innerRight.geometry.boundingBox!).getSize(new Vector3());
+  const inner = new Box3()
+    .union(innerLeft.geometry.boundingBox!)
+    .union(innerRight.geometry.boundingBox!)
+    .getSize(new Vector3());
   close(inner.x / inner.y, DUO_INNER_PIXELS.width / DUO_INNER_PIXELS.height, 2e-3, "inner aspect");
   const outer = cover.geometry.boundingBox!.getSize(new Vector3());
   close(outer.x / outer.y, DUO_COVER_PIXELS.width / DUO_COVER_PIXELS.height, 2e-3, "cover aspect");
@@ -99,11 +110,17 @@ test("closing folds the inner displays face to face, turns the cover outward, an
   scene.setAngle(180);
   scene.root.updateMatrixWorld(true);
   const open = worldBounds(scene.root).getSize(new Vector3());
-  assert.ok(worldNormal(innerLeft).z > 0.999 && worldNormal(innerRight).z > 0.999, "open displays face the viewer");
+  assert.ok(
+    worldNormal(innerLeft).z > 0.999 && worldNormal(innerRight).z > 0.999,
+    "open displays face the viewer",
+  );
   assert.ok(worldNormal(cover).z < -0.999, "the cover faces away while open");
   // Open, the barrel hides inside the leaves' thickness instead of bulging from the back.
   const leafBack = Math.min(worldBounds(left).min.z, worldBounds(right).min.z);
-  assert.ok(worldBounds(barrel).min.z >= worldBounds(innerLeft).min.z - 0.2 && worldBounds(barrel).min.z >= leafBack - 1e-6);
+  assert.ok(
+    worldBounds(barrel).min.z >= worldBounds(innerLeft).min.z - 0.2 &&
+      worldBounds(barrel).min.z >= leafBack - 1e-6,
+  );
 
   scene.setAngle(0);
   scene.root.updateMatrixWorld(true);
@@ -125,7 +142,12 @@ test("touches on the real model reach the active display in raw framebuffer spac
   const { asset, scene, innerLeft, cover } = procedural();
   const view = camera();
   scene.setAngle(180);
-  const inner: DeviceScreenSize = { width: 1125, height: 1600, orientation: "landscape_left", screenId: 3 };
+  const inner: DeviceScreenSize = {
+    width: 1125,
+    height: 1600,
+    orientation: "landscape_left",
+    screenId: 3,
+  };
   scene.root.updateMatrixWorld(true);
   const leftBounds = innerLeft.geometry.boundingBox!;
   const centre = leftBounds.getCenter(new Vector3());
@@ -137,13 +159,31 @@ test("touches on the real model reach the active display in raw framebuffer spac
   close(hit.x, expected.x, 0.01);
   close(hit.y, expected.y, 0.01);
   // The cover is behind the open device and cannot take a touch from the front.
-  const coverScreen: DeviceScreenSize = { width: 1140, height: 784, orientation: "portrait", screenId: 1 };
-  assert.equal(scene.screenPoint(point.x, point.y, view, coverScreen, duoDisplayKey(coverScreen)), null);
+  const coverScreen: DeviceScreenSize = {
+    width: 1140,
+    height: 784,
+    orientation: "portrait",
+    screenId: 1,
+  };
+  assert.equal(
+    scene.screenPoint(point.x, point.y, view, coverScreen, duoDisplayKey(coverScreen)),
+    null,
+  );
   // Turned around, the cover takes touches.
   scene.root.rotation.y = Math.PI;
   scene.root.updateMatrixWorld(true);
-  const coverPoint = project(cover, cover.geometry.boundingBox!.getCenter(new Vector3()).add(new Vector3(0, 0.3, 0)), view);
-  const coverHit = scene.screenPoint(coverPoint.x, coverPoint.y, view, coverScreen, duoDisplayKey(coverScreen));
+  const coverPoint = project(
+    cover,
+    cover.geometry.boundingBox!.getCenter(new Vector3()).add(new Vector3(0, 0.3, 0)),
+    view,
+  );
+  const coverHit = scene.screenPoint(
+    coverPoint.x,
+    coverPoint.y,
+    view,
+    coverScreen,
+    duoDisplayKey(coverScreen),
+  );
   assert.ok(coverHit, "the cover accepts a touch when it faces the viewer");
   close(coverHit.x, 0.5, 0.02);
   assert.ok(coverHit.y < 0.5, "up the cover is up the framebuffer");
@@ -158,14 +198,20 @@ test("the cover's camera cutout lies over the hole in the simulator's cover disp
   scene.root.rotation.y = Math.PI;
   scene.root.updateMatrixWorld(true);
   const cutout = left.children.find(
-    (child): child is Mesh => child instanceof Mesh && !Array.isArray(child.material) && child.material.name === "cutout",
+    (child): child is Mesh =>
+      child instanceof Mesh && !Array.isArray(child.material) && child.material.name === "cutout",
   );
   assert.ok(cutout, "the left leaf carries the cover camera");
   const point = project(cutout, cutout.geometry.boundingBox!.getCenter(new Vector3()), view);
   // Read the display under the camera, not the opaque cutout drawn over it.
   left.remove(cutout);
   scene.root.updateMatrixWorld(true);
-  const coverScreen: DeviceScreenSize = { width: 1398, height: 2034, orientation: "portrait", screenId: 1 };
+  const coverScreen: DeviceScreenSize = {
+    width: 1398,
+    height: 2034,
+    orientation: "portrait",
+    screenId: 1,
+  };
   const hit = scene.screenPoint(point.x, point.y, view, coverScreen, duoDisplayKey(coverScreen));
   assert.ok(hit, "the camera sits on the cover display");
   // Measured on a real iPhone Duo simulator: the mask's hole is centred at (1255, 143) of 1398 × 2034,
@@ -181,7 +227,8 @@ test("a pinch finds the leaf under the fingers on the real model", () => {
   const view = camera();
   scene.setAngle(150);
   scene.root.updateMatrixWorld(true);
-  const over = (mesh: Mesh) => project(mesh, mesh.geometry.boundingBox!.getCenter(new Vector3()), view);
+  const over = (mesh: Mesh) =>
+    project(mesh, mesh.geometry.boundingBox!.getCenter(new Vector3()), view);
   assert.equal(scene.hingeLeafAt(over(innerLeft).x, over(innerLeft).y, view), "left");
   assert.equal(scene.hingeLeafAt(over(innerRight).x, over(innerRight).y, view), "right");
   assert.equal(scene.hingeLeafAt(0.01, 0.01, view), null);
@@ -265,7 +312,12 @@ test("rest views come from the hinged display planes, independent of the inspect
 test("input maps through hardware mounting, only on the active display, and a drag stays on its plane", () => {
   const { scene, camera: view, innerLeft } = fixture();
   scene.setAngle(180);
-  const screen: DeviceScreenSize = { width: 2007, height: 2853, orientation: "portrait", screenId: 3 };
+  const screen: DeviceScreenSize = {
+    width: 2007,
+    height: 2853,
+    orientation: "portrait",
+    screenId: 3,
+  };
   const key = duoDisplayKey(screen);
   scene.root.updateMatrixWorld();
   const world = innerLeft.localToWorld(new Vector3(-0.5, -0.5, 0.06)).project(view);
@@ -275,7 +327,11 @@ test("input maps through hardware mounting, only on the active display, and a dr
   close(hit!.x, 0.75, 1e-6);
   close(hit!.y, 0.75, 1e-6);
   const cover = { ...screen, screenId: 1 };
-  assert.equal(scene.screenPoint(x, y, view, cover, duoDisplayKey(cover)), null, "inactive display");
+  assert.equal(
+    scene.screenPoint(x, y, view, cover, duoDisplayKey(cover)),
+    null,
+    "inactive display",
+  );
   assert.equal(scene.screenPoint(x, y, view, screen, "old"), null, "stale display");
   assert.notEqual(scene.screenPoint(x, y, view, screen, key), null);
   // A captured drag extends past the edge on the plane it started on.
@@ -284,14 +340,26 @@ test("input maps through hardware mounting, only on the active display, and a dr
   scene.dispose();
 });
 
-const insideFrame = { face: "inside" as const, normal: new Vector3(0, 0, 1), up: new Vector3(0, 1, 0), center: new Vector3() };
+const insideFrame = {
+  face: "inside" as const,
+  normal: new Vector3(0, 0, 1),
+  up: new Vector3(0, 1, 0),
+  center: new Vector3(),
+};
 const rotation = (x: number, y: number, z = 0) =>
   new Quaternion().setFromAxisAngle(new Vector3(x, y, z).normalize(), Math.hypot(x, y, z));
 
 test("a leaf-focused seated view wins when it is closer than the middle of the fold", () => {
-  const leaf = { face: "right" as const, normal: new Vector3(0.6, 0, 0.8), up: new Vector3(0, 1, 0), center: new Vector3(1, 0, 0) };
+  const leaf = {
+    face: "right" as const,
+    normal: new Vector3(0.6, 0, 0.8),
+    up: new Vector3(0, 1, 0),
+    center: new Vector3(1, 0, 0),
+  };
   const candidates = duoViewSnaps([insideFrame, leaf], 3);
-  const seat = candidates.find((candidate) => candidate.face === "right" && candidate.orientation === "portrait")!;
+  const seat = candidates.find(
+    (candidate) => candidate.face === "right" && candidate.orientation === "portrait",
+  )!;
   const released = seat.rotation.clone().premultiply(rotation(0.04, 0.05));
   const chosen = nearestDuoView(released, candidates)!;
   assert.equal(chosen.face, "right");
@@ -312,9 +380,11 @@ test("a seated view shows the base, and yaw never turns either inner display awa
   const candidates = duoViewSnaps(folded, 3);
   assert.equal(candidates.filter((candidate) => candidate.face === "right").length, 1);
   for (const candidate of candidates) {
-    for (const frame of folded.slice(1)) assert.ok(frame.normal.clone().applyQuaternion(candidate.rotation).z > 0.2);
+    for (const frame of folded.slice(1))
+      assert.ok(frame.normal.clone().applyQuaternion(candidate.rotation).z > 0.2);
     const side = candidate.rotation.clone().premultiply(rotation(0, 1.5));
     const chosen = nearestDuoView(side, [candidate])!;
-    for (const frame of folded.slice(1)) assert.ok(frame.normal.clone().applyQuaternion(chosen.rotation).z > 0.02);
+    for (const frame of folded.slice(1))
+      assert.ok(frame.normal.clone().applyQuaternion(chosen.rotation).z > 0.02);
   }
 });

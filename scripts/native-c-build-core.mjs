@@ -30,7 +30,15 @@ async function sourceClosure(source, seen = new Map()) {
 export async function nativeCBuildFingerprint({ source, executable, args, env, cwd }) {
   const hash = createHash("sha256");
   const add = (value) => hash.update(`${value.length}:`).update(value);
-  add(JSON.stringify({ executable, args, env, platform: globalThis.process.platform, arch: globalThis.process.arch }));
+  add(
+    JSON.stringify({
+      executable,
+      args,
+      env,
+      platform: globalThis.process.platform,
+      arch: globalThis.process.arch,
+    }),
+  );
   const closure = await sourceClosure(source);
   for (const file of [...closure.keys()].sort()) {
     add(path.relative(cwd, file));
@@ -47,7 +55,10 @@ export async function compileNativeC({ executeFile, executable, args, env, cwd, 
   const stamp = `${output}.stamp`;
   const fingerprint = await nativeCBuildFingerprint({ source, executable, args, env, cwd });
   try {
-    const [recorded] = await Promise.all([readFile(stamp, "utf8"), access(output, fsConstants.X_OK)]);
+    const [recorded] = await Promise.all([
+      readFile(stamp, "utf8"),
+      access(output, fsConstants.X_OK),
+    ]);
     if (recorded.trim() === fingerprint) return false;
   } catch {
     // No usable stamp or output: build.
@@ -127,11 +138,7 @@ export async function nativeCCompileInvocation({
     };
   }
   if (platform === "linux") {
-    const compiler = await firstExecutable([
-      "/usr/bin/cc",
-      "/usr/bin/clang",
-      "/usr/bin/gcc",
-    ]);
+    const compiler = await firstExecutable(["/usr/bin/cc", "/usr/bin/clang", "/usr/bin/gcc"]);
     return {
       executable: compiler,
       // Each helper owns its feature-test macros at the top of the translation

@@ -128,13 +128,18 @@ export function transcribePcm16(
   pcm: Int16Array<ArrayBuffer>,
   options: Omit<TranscribeOptions, "provider" | "model">,
 ): Promise<string> {
-  return withTranscriptionDeadline({ ...options, provider: "local" }, async (scoped, beforeDispatch) => {
-    if (!scoped.localModel) {
-      throw new Error("Download and select an on-device model in Settings → Voice & Speech.");
-    }
-    beforeDispatch();
-    return (await voiceApi.transcribeLocal(pcm.buffer, scoped.localModel, scoped.operationId)).trim();
-  });
+  return withTranscriptionDeadline(
+    { ...options, provider: "local" },
+    async (scoped, beforeDispatch) => {
+      if (!scoped.localModel) {
+        throw new Error("Download and select an on-device model in Settings → Voice & Speech.");
+      }
+      beforeDispatch();
+      return (
+        await voiceApi.transcribeLocal(pcm.buffer, scoped.localModel, scoped.operationId)
+      ).trim();
+    },
+  );
 }
 
 function withTranscriptionDeadline(
@@ -151,8 +156,9 @@ function withTranscriptionDeadline(
   const signal = options.signal
     ? AbortSignal.any([options.signal, timeoutController.signal])
     : timeoutController.signal;
-  const deadline = new DictationDeadline(transcriptionBudgetMs(options.provider, options.audioSeconds), () =>
-    performance.now(),
+  const deadline = new DictationDeadline(
+    transcriptionBudgetMs(options.provider, options.audioSeconds),
+    () => performance.now(),
   );
   const onTimeout = () => {
     if (timeoutController.signal.aborted) return;
@@ -198,7 +204,9 @@ async function convertAndTranscribeBlob(
   }
   const base64 = await blobToBase64(blob);
   beforeDispatch();
-  return (await voiceApi.transcribe(base64, blob.type, "openai", options.model, operationId)).trim();
+  return (
+    await voiceApi.transcribe(base64, blob.type, "openai", options.model, operationId)
+  ).trim();
 }
 
 export function cancelTranscription(provider: VoiceProvider, operationId: string): Promise<void> {

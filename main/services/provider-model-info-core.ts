@@ -49,20 +49,39 @@ function withProviderFallback(
   // A model name in a public catalog is not evidence about a private server.
   // Keep descriptive enrichment, but show the same connection-bound image and
   // reasoning capabilities that resolveProviderRuntimeLimits sends to Pi.
-  const info = catalogProviderSlug(providerId) ? catalogInfo : {
-    ...catalogInfo,
-    vision: metadata?.vision ?? false,
-    reasoning: metadata?.reasoning ?? false,
-    inputModalities: metadata?.vision ? ["text", "image"] : ["text"],
-  };
+  const info = catalogProviderSlug(providerId)
+    ? catalogInfo
+    : {
+        ...catalogInfo,
+        vision: metadata?.vision ?? false,
+        reasoning: metadata?.reasoning ?? false,
+        inputModalities: metadata?.vision ? ["text", "image"] : ["text"],
+      };
   if (!metadata?.overrides) return info;
   const overrides = metadata.overrides;
-  const vision = overrides.maxImages === 0 ? false : overrides.vision ?? info.vision;
+  const vision = overrides.maxImages === 0 ? false : (overrides.vision ?? info.vision);
   const modalities = new Set(info.inputModalities ?? ["text"]);
-  if (vision) modalities.add("image"); else modalities.delete("image");
+  if (vision) modalities.add("image");
+  else modalities.delete("image");
   if (overrides.video === true) modalities.add("video");
   if (overrides.video === false) modalities.delete("video");
-  return { ...info, ...overrides, detectedCapabilities: { vision: info.vision, reasoning: info.reasoning, toolCall: info.toolCall, openWeights: info.openWeights, contextLength: info.contextLength, outputLimit: info.outputLimit, video: info.inputModalities?.includes("video") }, vision, inputModalities: [...modalities], metadataSource: "provider", matched: true };
+  return {
+    ...info,
+    ...overrides,
+    detectedCapabilities: {
+      vision: info.vision,
+      reasoning: info.reasoning,
+      toolCall: info.toolCall,
+      openWeights: info.openWeights,
+      contextLength: info.contextLength,
+      outputLimit: info.outputLimit,
+      video: info.inputModalities?.includes("video"),
+    },
+    vision,
+    inputModalities: [...modalities],
+    metadataSource: "provider",
+    matched: true,
+  };
 }
 
 const CODEX_CATALOG_PROVIDER: ModelCatalogProvider = {
@@ -107,7 +126,12 @@ export function createProviderModelInfo(dependencies: ProviderModelInfoDependenc
       if (providerId !== OPENAI_CODEX_PROVIDER_ID) {
         const provider = await dependencies.legacyProvider(providerId);
         const catalog = await dependencies.modelsCatalog.info(provider, modelId);
-        return withProviderFallback(modelId, catalog, provider.modelMetadata?.[modelId], provider.id);
+        return withProviderFallback(
+          modelId,
+          catalog,
+          provider.modelMetadata?.[modelId],
+          provider.id,
+        );
       }
       const catalog = await dependencies.modelsCatalog.info(CODEX_CATALOG_PROVIDER, modelId);
       return mergeCodexModelInfo(modelId, dependencies.codexModelInfo(modelId), catalog);

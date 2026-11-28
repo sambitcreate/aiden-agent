@@ -13,11 +13,23 @@ const manager = createSpeechModelManager({
   info: (message) => logger.info("local-speech", message),
 });
 
-export const { modelDir, isModelInstalled, listModels, localModelDownloadStates, downloadModel, cancelDownload, deleteModel, specFor } = manager;
+export const {
+  modelDir,
+  isModelInstalled,
+  listModels,
+  localModelDownloadStates,
+  downloadModel,
+  cancelDownload,
+  deleteModel,
+  specFor,
+} = manager;
 
 /** Startup housekeeping: pre-1.0 the unverified Parakeet folder is removed, not migrated. */
 export async function prepareLocalSpeechStorage(): Promise<void> {
-  await rm(path.join(app.getPath("userData"), "parakeet-models"), { recursive: true, force: true }).catch((error: unknown) => {
+  await rm(path.join(app.getPath("userData"), "parakeet-models"), {
+    recursive: true,
+    force: true,
+  }).catch((error: unknown) => {
     logger.warn("local-speech", `Could not remove the legacy Parakeet folder: ${String(error)}`);
   });
   await manager.cleanupLeftovers();

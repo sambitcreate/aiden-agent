@@ -20,7 +20,10 @@ import test from "node:test";
 import { createPackage, createPackageWithOptions } from "@electron/asar";
 import { build } from "esbuild";
 import { electronBuildOptions } from "./build-electron.mjs";
-import { compactModelCatalog, preparePackagedModelCatalog } from "./prepare-packaged-model-catalog.mjs";
+import {
+  compactModelCatalog,
+  preparePackagedModelCatalog,
+} from "./prepare-packaged-model-catalog.mjs";
 import {
   assertByteForByteMatch,
   assertComputerUseBundleExecutable,
@@ -223,10 +226,7 @@ test("packaging compacts the validated snapshot without changing its model data 
     assert.equal(sizes.packagedBytes, Buffer.byteLength(compact));
 
     await writeFile(source, "{}", "utf8");
-    await assert.rejects(
-      preparePackagedModelCatalog({ source, destination }),
-      /empty catalog/u,
-    );
+    await assert.rejects(preparePackagedModelCatalog({ source, destination }), /empty catalog/u);
     assert.equal(await readFile(destination, "utf8"), compact);
     assert.throws(() => compactModelCatalog("not JSON"), SyntaxError);
   } finally {
@@ -271,7 +271,11 @@ test("package verifier rejects source maps, declarations, esbuild, and lockfile 
       ["node_modules/yaml/dist/index.d.ts", "{}\n", /type declaration/u],
       ["node_modules/esbuild/package.json", manifest("esbuild", "0.28.2"), /esbuild toolchain/u],
       ["node_modules/@esbuild/darwin-arm64/bin/esbuild", "{}\n", /esbuild toolchain/u],
-      ["node_modules/react/package.json", manifest("react", "19.0.0"), /development-only package react@19\.0\.0/u],
+      [
+        "node_modules/react/package.json",
+        manifest("react", "19.0.0"),
+        /development-only package react@19\.0\.0/u,
+      ],
     ];
     for (const [index, [relative, contents, expected]] of rejections.entries()) {
       await write(relative, contents);
@@ -293,7 +297,11 @@ test("package verifier rejects source maps, declarations, esbuild, and lockfile 
   assert.throws(() => assertSlimPackagedEntries(many), /and 3 more/u);
 });
 
-function lockdownBootstrap({ importRuntimeFirst = false, sync = true, freezePromises = true } = {}) {
+function lockdownBootstrap({
+  importRuntimeFirst = false,
+  sync = true,
+  freezePromises = true,
+} = {}) {
   const runtime = 'await import("./subagent-inference-worker-runtime.js");\n';
   return [
     'import childProcess from "node:child_process";',
@@ -918,7 +926,11 @@ async function createPackagedLumeFixture(t) {
   return { root, app, paths, reviewedProvenance, reviewedLicense };
 }
 
-function lumeRunner({ entitlements = LUME_ENTITLEMENTS_XML, archs = "arm64\n", bundleIdentifier } = {}) {
+function lumeRunner({
+  entitlements = LUME_ENTITLEMENTS_XML,
+  archs = "arm64\n",
+  bundleIdentifier,
+} = {}) {
   const calls = [];
   const runCommand = async (command, args) => {
     calls.push({ command, args });
@@ -929,7 +941,8 @@ function lumeRunner({ entitlements = LUME_ENTITLEMENTS_XML, archs = "arm64\n", b
           : LUME_ARTIFACT_PROVENANCE.bundleVersion;
       return { stdout: `${value}\n`, stderr: "" };
     }
-    if (command === "/usr/bin/codesign" && args[0] === "--display") return { stdout: entitlements, stderr: "" };
+    if (command === "/usr/bin/codesign" && args[0] === "--display")
+      return { stdout: entitlements, stderr: "" };
     if (command === "/usr/bin/lipo") return { stdout: archs, stderr: "" };
     return { stdout: "", stderr: "" };
   };
@@ -945,7 +958,9 @@ test("package verifier accepts the pinned Lume bundle with its upstream signatur
     reviewedProvenance: fixture.reviewedProvenance,
     reviewedLicense: fixture.reviewedLicense,
   });
-  const deepVerify = calls.find((call) => call.command === "/usr/bin/codesign" && call.args[0] === "--verify");
+  const deepVerify = calls.find(
+    (call) => call.command === "/usr/bin/codesign" && call.args[0] === "--verify",
+  );
   assert.deepEqual(deepVerify.args, [
     "--verify",
     "--deep",
@@ -954,7 +969,11 @@ test("package verifier accepts the pinned Lume bundle with its upstream signatur
     `-R=${lumeRequirement()}`,
     fixture.paths.lumeApp,
   ]);
-  assert.equal(calls.some((call) => call.command === "/usr/bin/vtool"), false, "no universal check for Lume");
+  assert.equal(
+    calls.some((call) => call.command === "/usr/bin/vtool"),
+    false,
+    "no universal check for Lume",
+  );
 });
 
 test("package verifier refuses a changed Lume binary before any tool reads it", async (t) => {
@@ -981,13 +1000,19 @@ test("package verifier refuses extra files, symlinks and substituted Lume proven
   });
   const extra = await createPackagedLumeFixture(t);
   await writeFile(path.join(extra.paths.lumeApp, "Contents", "MacOS", "extra-helper"), "x");
-  await assert.rejects(verifyPackagedLume(extra.app, options(extra, lumeRunner().runCommand)), /tree differs/);
+  await assert.rejects(
+    verifyPackagedLume(extra.app, options(extra, lumeRunner().runCommand)),
+    /tree differs/,
+  );
 
   const linked = await createPackagedLumeFixture(t);
   const real = path.join(linked.root, "real-lume");
   await rename(linked.paths.binary, real);
   await symlink(real, linked.paths.binary);
-  await assert.rejects(verifyPackagedLume(linked.app, options(linked, lumeRunner().runCommand)), /tree differs/);
+  await assert.rejects(
+    verifyPackagedLume(linked.app, options(linked, lumeRunner().runCommand)),
+    /tree differs/,
+  );
 
   const substituted = await createPackagedLumeFixture(t);
   await writeFile(substituted.paths.outerLicenseNotice, "Some other licence\n");
@@ -998,7 +1023,10 @@ test("package verifier refuses extra files, symlinks and substituted Lume proven
 
   const otherBundle = await createPackagedLumeFixture(t);
   await assert.rejects(
-    verifyPackagedLume(otherBundle.app, options(otherBundle, lumeRunner({ bundleIdentifier: "com.example.vm" }).runCommand)),
+    verifyPackagedLume(
+      otherBundle.app,
+      options(otherBundle, lumeRunner({ bundleIdentifier: "com.example.vm" }).runCommand),
+    ),
     /Unexpected Lume bundle identifier/,
   );
 });
@@ -1006,17 +1034,29 @@ test("package verifier refuses extra files, symlinks and substituted Lume proven
 test("package verifier requires Lume's virtualization entitlements and an arm64-only binary", () => {
   assert.doesNotThrow(() => assertLumeEntitlements(LUME_ENTITLEMENTS_XML));
   assert.throws(
-    () => assertLumeEntitlements(LUME_ENTITLEMENTS_XML.replace(/<key>com\.apple\.security\.virtualization<\/key><true\/>/u, "")),
+    () =>
+      assertLumeEntitlements(
+        LUME_ENTITLEMENTS_XML.replace(
+          /<key>com\.apple\.security\.virtualization<\/key><true\/>/u,
+          "",
+        ),
+      ),
     /virtualization entitlements/,
   );
   assert.throws(
     () =>
       assertLumeEntitlements(
-        LUME_ENTITLEMENTS_XML.replace("</dict>", "<key>com.apple.security.cs.disable-library-validation</key><true/></dict>"),
+        LUME_ENTITLEMENTS_XML.replace(
+          "</dict>",
+          "<key>com.apple.security.cs.disable-library-validation</key><true/></dict>",
+        ),
       ),
     /virtualization entitlements/,
   );
-  assert.throws(() => assertLumeEntitlements("<plist><dict></dict></plist>"), /virtualization entitlements/);
+  assert.throws(
+    () => assertLumeEntitlements("<plist><dict></dict></plist>"),
+    /virtualization entitlements/,
+  );
   assert.doesNotThrow(() => assertLumeArchitecture("arm64\n"));
   assert.throws(() => assertLumeArchitecture("x86_64 arm64\n"), /arm64-only/);
   assert.throws(() => assertLumeArchitecture(""), /arm64-only/);

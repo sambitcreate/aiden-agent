@@ -716,7 +716,22 @@ jobs:
   required:
     name: CI required
     if: ${{ always() }}
-    needs: [changes, policy, static, build, verify, catalog, unit, e2e, linux-e2e, apple, ios, android, cli-linux]
+    needs:
+      [
+        changes,
+        policy,
+        static,
+        build,
+        verify,
+        catalog,
+        unit,
+        e2e,
+        linux-e2e,
+        apple,
+        ios,
+        android,
+        cli-linux,
+      ]
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:

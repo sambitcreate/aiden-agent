@@ -191,7 +191,13 @@ const LIVE_USER_ONLY_SECTIONS = new Set<SettingsSection>([
 // switch or checkbox is the user's (main's guard rule treats them as "you").
 const LIVE_SAFE_TOGGLE_SECTIONS = new Set<SettingsSection>(["appearance", "links"]);
 
-function SettingsLiveGuard({ section, children }: { section: SettingsSection; children: React.ReactNode }) {
+function SettingsLiveGuard({
+  section,
+  children,
+}: {
+  section: SettingsSection;
+  children: React.ReactNode;
+}) {
   if (LIVE_USER_ONLY_SECTIONS.has(section)) return <LiveGuard guard="you">{children}</LiveGuard>;
   if (LIVE_SAFE_TOGGLE_SECTIONS.has(section)) {
     return (
@@ -206,19 +212,24 @@ function SettingsLiveGuard({ section, children }: { section: SettingsSection; ch
 /** Each section's description; `computer` names this one ("Mac" on macOS). */
 const settingsDescriptions = (computer: LocalComputerNoun): Record<SettingsSection, string> => ({
   providers: "Connect models to Aiden and manage the providers you use.",
-  agentSlider: "Choose the model and effort behind each stop of the composer’s slider. Changes save as you make them.",
-  limits: "Choose how long chats stay manageable, how replies wait out usage limits, and how much chats and Bots may spend.",
+  agentSlider:
+    "Choose the model and effort behind each stop of the composer’s slider. Changes save as you make them.",
+  limits:
+    "Choose how long chats stay manageable, how replies wait out usage limits, and how much chats and Bots may spend.",
   skills: "Choose the reusable instructions Aiden can load in chats.",
   mcp: "Connect tools and services to extend what Aiden can do.",
-  hooks: "Run your own shell commands at points in a chat, such as before a tool runs. Each one runs only after you approve it.",
+  hooks:
+    "Run your own shell commands at points in a chat, such as before a tool runs. Each one runs only after you approve it.",
   telegram: "Connect your Telegram bots and choose how they respond.",
   remoteAccess: `Use Aiden on this ${computer} from your phone or another computer.`,
   peerHosts: "Pair the other computers you control from here, and manage them.",
-  otherApps: "Let apps on this computer, such as Claude Code and Codex, read your chats and work in them.",
+  otherApps:
+    "Let apps on this computer, such as Claude Code and Codex, read your chats and work in them.",
   websearch: "Choose how Aiden searches and reads the web.",
   imageGeneration: "Connect image providers and choose the models Aiden uses to make images.",
   approvals: "Choose when Aiden asks before acting, and review what it may repeat without asking.",
-  appControls: "Ask Aiden how a feature works or to show its settings. Chat controls use the same settings and permissions as the app.",
+  appControls:
+    "Ask Aiden how a feature works or to show its settings. Chat controls use the same settings and permissions as the app.",
   computerUse: "Manage Aiden’s access to native apps and your screen.",
   bots: "Choose when Aiden asks before acting, and review what it may repeat without asking.",
   botComputers: "Give a Bot its own macOS computer to work in, apart from yours.",
@@ -231,7 +242,8 @@ const settingsDescriptions = (computer: LocalComputerNoun): Record<SettingsSecti
   tts: "Read Aiden’s latest response aloud with Google Gemini.",
   links: "Choose where links you click open.",
   shortcut: "Customize the keyboard controls for Aiden and the app.",
-  appearance: "Pick a theme, choose when Aiden uses its light or dark look, and set how wide conversations read.",
+  appearance:
+    "Pick a theme, choose when Aiden uses its light or dark look, and set how wide conversations read.",
   storage: `See how much disk Aiden uses on this ${computer}, and clear out what you no longer need.`,
   about: "App information, updates, and diagnostics.",
 });
@@ -240,7 +252,10 @@ export function SettingsView({ initialSection }: { initialSection?: SettingsSect
   const router = useRouter();
   const navigate = useNavigate();
   const capabilities = useAppCapabilities();
-  const descriptions = React.useMemo(() => settingsDescriptions(localComputerNoun(capabilities.platform)), [capabilities.platform]);
+  const descriptions = React.useMemo(
+    () => settingsDescriptions(localComputerNoun(capabilities.platform)),
+    [capabilities.platform],
+  );
   const [search, setSearch] = React.useState("");
 
   // The location changes a moment before the page's search does, so for one render the page
@@ -248,9 +263,8 @@ export function SettingsView({ initialSection }: { initialSection?: SettingsSect
   // section it was made for; otherwise leaving the Links spot for Appearance asks for the
   // Links row again on the way out, and that smooth scroll outlives the reset to the top.
   const anchorRequest = useLocation({
-    select: (location) => location.search.section === initialSection
-      ? location.state.aidenSettingsAnchor ?? 0
-      : null,
+    select: (location) =>
+      location.search.section === initialSection ? (location.state.aidenSettingsAnchor ?? 0) : null,
   });
   const query = search.trim().toLocaleLowerCase();
   const section = resolveSettingsSection(initialSection, capabilities);
@@ -283,11 +297,13 @@ export function SettingsView({ initialSection }: { initialSection?: SettingsSect
       storageKey="aiden-agent"
       sidebarSize={{ default: 272, min: 236, max: 340 }}
       sidebar={
-        <Sidebar actions={
-          <SplitView.SidebarToggle>
-            <HistoryNavButtons />
-          </SplitView.SidebarToggle>
-        }>
+        <Sidebar
+          actions={
+            <SplitView.SidebarToggle>
+              <HistoryNavButtons />
+            </SplitView.SidebarToggle>
+          }
+        >
           <div className="flex min-h-full flex-col px-3 pb-4">
             <Button
               variant="transparent"
@@ -374,7 +390,13 @@ export function SettingsView({ initialSection }: { initialSection?: SettingsSect
             description={descriptions[section]}
           >
             <SettingsPageTabs page={activePage} section={section} onSelect={open}>
-              <SettingsAnchorContext.Provider value={isSettingsAnchor(section) && anchorRequest !== null ? { section, request: anchorRequest } : null}>
+              <SettingsAnchorContext.Provider
+                value={
+                  isSettingsAnchor(section) && anchorRequest !== null
+                    ? { section, request: anchorRequest }
+                    : null
+                }
+              >
                 <SettingsLiveGuard section={section}>
                   <ActiveSection />
                 </SettingsLiveGuard>

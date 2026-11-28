@@ -517,8 +517,10 @@ export function createFileBotManagedWorkspaceStorage(
         const currentIncarnation = await captureHomeIncarnation(candidate).catch(() => null);
         const stillCreatedHome = Boolean(
           currentIncarnation &&
-            await assertOwnedVolume(currentIncarnation, existingReceiptInfo ?? undefined)
-              .then(() => sameHomeByInode(currentIncarnation, incarnation), () => false),
+          (await assertOwnedVolume(currentIncarnation, existingReceiptInfo ?? undefined).then(
+            () => sameHomeByInode(currentIncarnation, incarnation),
+            () => false,
+          )),
         );
         if (!existingReceiptInfo && entries?.length === 0 && stillCreatedHome) {
           await fs.rm(ownedReceiptPath, { force: true }).catch(() => undefined);

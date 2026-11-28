@@ -4,13 +4,7 @@
   "generatedAt": "2026-10-11T19:27:07.036Z",
   "baselinePolicy": "current production projectors",
   "candidatePolicy": "research recoverable old non-error-envelope text-only elision, newest two results protected",
-  "windows": [
-    8000,
-    16000,
-    32000,
-    128000,
-    272000
-  ],
+  "windows": [8000, 16000, 32000, 128000, 272000],
   "fixtureCount": 17,
   "pairCount": 85,
   "negativeControlsPassed": 4,

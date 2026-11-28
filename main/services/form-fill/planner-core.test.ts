@@ -57,10 +57,7 @@ test("renderContext matches the upstream byte format", () => {
 });
 
 test("renderContext renders checkbox state and truncates like upstream", () => {
-  const ctx = renderContext(
-    "F",
-    element({ role: "CheckBox", label: "Consent", checked: false }),
-  );
+  const ctx = renderContext("F", element({ role: "CheckBox", label: "Consent", checked: false }));
   assert.equal(
     ctx,
     'TASK fill the form from the document, then submit\nFORM F\nELEMENT CheckBox "Consent" unchecked',
@@ -107,9 +104,7 @@ test("truncateUtf8 stops at the last complete code point and flags truncation", 
 
 test("a matching empty text field produces a verbatim fill", () => {
   const entities = [entity("First name", "Ada")];
-  const elements = [
-    element({ index: 3, role: "AXTextField", label: "First name", value: "" }),
-  ];
+  const elements = [element({ index: 3, role: "AXTextField", label: "First name", value: "" })];
   const plan = planFormFill({
     entities,
     elements,
@@ -208,14 +203,8 @@ test("checkboxes: unknown state never toggles, consequential labels review", () 
   const entities = [entity("Name", "Ada")];
   const optionCount = 4;
   const cases: [Partial<FormFillElement>, string][] = [
-    [
-      { role: "AXCheckBox", label: "Reminders", checked: undefined },
-      "needs_review",
-    ],
-    [
-      { role: "AXCheckBox", label: "I agree to the terms", checked: false },
-      "needs_review",
-    ],
+    [{ role: "AXCheckBox", label: "Reminders", checked: undefined }, "needs_review"],
+    [{ role: "AXCheckBox", label: "I agree to the terms", checked: false }, "needs_review"],
     [{ role: "AXCheckBox", label: "Reminders", checked: true }, "skip"],
     [
       {

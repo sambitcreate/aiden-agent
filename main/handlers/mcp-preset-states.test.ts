@@ -56,8 +56,16 @@ test("a credential lookup failure marks that preset unready instead of rejecting
   const failed = result.find((entry) => entry.preset.id === first!.id)!;
   assert.equal(failed.ready, false);
   assert.equal(failed.error, "Keychain is locked");
-  assert.equal(failed.invalidRecord, undefined, "a valid record is not rebuilt over a credential error");
-  assert.ok(result.filter((entry) => entry.preset.id !== first!.id).every((entry) => !entry.error && !entry.configured));
+  assert.equal(
+    failed.invalidRecord,
+    undefined,
+    "a valid record is not rebuilt over a credential error",
+  );
+  assert.ok(
+    result
+      .filter((entry) => entry.preset.id !== first!.id)
+      .every((entry) => !entry.error && !entry.configured),
+  );
 });
 
 test("a configured preset whose sign-in was rejected reports needsSignIn, not ready", async () => {

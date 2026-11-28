@@ -3,7 +3,12 @@
 
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { GOAL_MAX_ROUNDS, GOAL_WAIT_LIMIT_MS, type GoalRecordV1, type GoalView } from "../../../renderer/shared/goal.js";
+import {
+  GOAL_MAX_ROUNDS,
+  GOAL_WAIT_LIMIT_MS,
+  type GoalRecordV1,
+  type GoalView,
+} from "../../../renderer/shared/goal.js";
 import { agentNotice, type AgentNoticeV1 } from "../../../renderer/shared/agent-notices.js";
 import { createGoal, type GoalRoundActivity } from "./goal-core.js";
 import { GoalLoop, type GoalAnalyticsEvent, type GoalRoundStart } from "./goal-loop.js";
@@ -19,18 +24,23 @@ function last<T>(values: readonly T[]): T | undefined {
 const BOOT = "boot-a";
 const CONTEXT = { providerId: "anthropic", model: "claude" };
 
-type Review = (goal: GoalRecordV1, input: { allowWait: boolean; signal: AbortSignal }) => Promise<GoalReviewOutcome>;
+type Review = (
+  goal: GoalRecordV1,
+  input: { allowWait: boolean; signal: AbortSignal },
+) => Promise<GoalReviewOutcome>;
 
 function continueWith(reason: string): GoalReviewOutcome {
   return { kind: "verdict", verdict: { verdict: "continue", reason }, via: "continuation" };
 }
 
-function harness(options: {
-  enabled?: boolean;
-  refusal?: string;
-  check?: (goal: GoalRecordV1) => Promise<GoalCheckResult>;
-  checkRefusal?: string;
-} = {}) {
+function harness(
+  options: {
+    enabled?: boolean;
+    refusal?: string;
+    check?: (goal: GoalRecordV1) => Promise<GoalCheckResult>;
+    checkRefusal?: string;
+  } = {},
+) {
   let clock = 1_000;
   let ids = 0;
   let reviewCount = 0;
@@ -89,7 +99,8 @@ function harness(options: {
     },
     fallbackContext: async () => {
       if (state.fallbackContext) return state.fallbackContext();
-      if (state.throws.context || state.throws.noticeContext) throw new Error("The chat file could not be read.");
+      if (state.throws.context || state.throws.noticeContext)
+        throw new Error("The chat file could not be read.");
       return CONTEXT;
     },
     review: (goal, input) => {
@@ -118,7 +129,10 @@ function harness(options: {
       await state.holdNoticeStart;
       if (!isCurrent()) return { kind: "unavailable", reason: "Goal changed" };
       noticeRounds.push(notice?.text ?? "(saved)");
-      if (state.noticeStart !== "started") return state.noticeStart === "busy" ? { kind: "busy" } : { kind: "unavailable", reason: "No model" };
+      if (state.noticeStart !== "started")
+        return state.noticeStart === "busy"
+          ? { kind: "busy" }
+          : { kind: "unavailable", reason: "No model" };
       return { kind: "started", streamId: `notice-${chatId}-${noticeRounds.length}` };
     },
     waitForIdle: () => new Promise<void>((resolve) => idleWaiters.push(resolve)),
@@ -137,7 +151,13 @@ function harness(options: {
   }
   /** A run settles; the loop's look starts but isn't waited for. */
   function settle(run: { stopped?: boolean; failed?: boolean } = {}) {
-    loop.runSettled({ chatId: CHAT, streamId: "s", context: CONTEXT, stopped: run.stopped ?? false, failed: run.failed ?? false });
+    loop.runSettled({
+      chatId: CHAT,
+      streamId: "s",
+      context: CONTEXT,
+      stopped: run.stopped ?? false,
+      failed: run.failed ?? false,
+    });
   }
   return {
     loop,
@@ -208,17 +228,33 @@ test("setting a goal reports it, gives the kickoff note once, and keeps the same
   assert.equal(h.loop.reminder(CHAT), undefined, "a cleared goal leaves no reminder");
 
   await h.loop.set(CHAT, { objective: "Make the tests pass", source: "slash" });
-  h.state.review = async () => ({ kind: "verdict", verdict: { verdict: "done", reason: "All green." }, via: "continuation" });
+  h.state.review = async () => ({
+    kind: "verdict",
+    verdict: { verdict: "done", reason: "All green." },
+    via: "continuation",
+  });
   await h.runSettles();
   assert.equal(h.goal()?.status, "done");
   assert.equal(h.loop.reminder(CHAT), undefined, "a goal that is done leaves no reminder");
 });
 
 test("set is refused while the loop is off, for an ineligible chat, and for a command goal without a check runner", async () => {
-  await assert.rejects(harness({ enabled: false }).loop.set(CHAT, { objective: "x", source: "slash" }), /aren't available/);
-  await assert.rejects(harness({ refusal: "Bots keep their own goals." }).loop.set(CHAT, { objective: "x", source: "menu" }), /Bots keep/);
+  await assert.rejects(
+    harness({ enabled: false }).loop.set(CHAT, { objective: "x", source: "slash" }),
+    /aren't available/,
+  );
+  await assert.rejects(
+    harness({ refusal: "Bots keep their own goals." }).loop.set(CHAT, {
+      objective: "x",
+      source: "menu",
+    }),
+    /Bots keep/,
+  );
   const h = harness();
-  await assert.rejects(h.loop.set(CHAT, { objective: "x", source: "until", check: "npm test" }), /command/);
+  await assert.rejects(
+    h.loop.set(CHAT, { objective: "x", source: "until", check: "npm test" }),
+    /command/,
+  );
   await assert.rejects(h.loop.set(CHAT, { objective: "   ", source: "slash" }));
   assert.equal(h.goal(), null);
   assert.deepEqual(h.events, []);
@@ -247,11 +283,21 @@ test("Stop, a failed answer and a restart pause the goal without asking the revi
   await failed.loop.set(CHAT, { objective: "Ship it", source: "slash" });
   await failed.runSettles({ failed: true });
   assert.equal(failed.goal()?.cause, "failed");
-  assert.deepEqual(last(failed.events), { event: "goal_settled", properties: { outcome: "paused", rounds: "1" } });
+  assert.deepEqual(last(failed.events), {
+    event: "goal_settled",
+    properties: { outcome: "paused", rounds: "1" },
+  });
   assert.equal(stopped.reviews() + failed.reviews(), 0);
   assert.equal(stopped.rounds.length + failed.rounds.length, 0);
 
-  const created = createGoal({ id: "goal-old", chatId: CHAT, objective: "Ship it", source: "slash", boot: "boot-before", now: 1 });
+  const created = createGoal({
+    id: "goal-old",
+    chatId: CHAT,
+    objective: "Ship it",
+    source: "slash",
+    boot: "boot-before",
+    now: 1,
+  });
   assert.ok(created.ok);
   const restarted = harness();
   restarted.loop.restore([created.goal]);
@@ -267,7 +313,10 @@ test("a goal pauses at the 50-round limit, and Keep going starts again from roun
   assert.equal(h.rounds.length, GOAL_MAX_ROUNDS - 1, "rounds 2 to 50 started");
   assert.equal(h.goal()?.status, "paused");
   assert.equal(h.goal()?.cause, "round-limit");
-  assert.deepEqual(last(h.events), { event: "goal_settled", properties: { outcome: "paused", rounds: "50" } });
+  assert.deepEqual(last(h.events), {
+    event: "goal_settled",
+    properties: { outcome: "paused", rounds: "50" },
+  });
   assert.equal(h.settled.length, 1);
 
   const resumed = await h.loop.resume(CHAT);
@@ -340,7 +389,13 @@ test("the person's pause during a review wins over its verdict", async () => {
     signal = input.signal;
     return new Promise((resolve) => (finish = resolve));
   };
-  h.loop.runSettled({ chatId: CHAT, streamId: "s", context: CONTEXT, stopped: false, failed: false });
+  h.loop.runSettled({
+    chatId: CHAT,
+    streamId: "s",
+    context: CONTEXT,
+    stopped: false,
+    failed: false,
+  });
   await h.flush();
   assert.equal(h.reviews(), 1);
 
@@ -358,35 +413,62 @@ test("clearing during a review leaves no goal behind and reports it cleared", as
   await h.loop.set(CHAT, { objective: "Ship it", source: "slash" });
   let finish: (outcome: GoalReviewOutcome) => void = () => {};
   h.state.review = () => new Promise((resolve) => (finish = resolve));
-  h.loop.runSettled({ chatId: CHAT, streamId: "s", context: CONTEXT, stopped: false, failed: false });
+  h.loop.runSettled({
+    chatId: CHAT,
+    streamId: "s",
+    context: CONTEXT,
+    stopped: false,
+    failed: false,
+  });
   await h.flush();
   h.loop.clear(CHAT);
   finish(continueWith("Keep going"));
   await h.flush();
   assert.equal(h.goal(), null);
   assert.equal(last(h.changes), null);
-  assert.deepEqual(last(h.events), { event: "goal_settled", properties: { outcome: "cleared", rounds: "1" } });
+  assert.deepEqual(last(h.events), {
+    event: "goal_settled",
+    properties: { outcome: "cleared", rounds: "1" },
+  });
 });
 
 test("verdicts settle the goal: done, needs you, and an unusable review twice pauses it", async () => {
   const done = harness();
   await done.loop.set(CHAT, { objective: "Ship it", source: "slash" });
-  done.state.review = async () => ({ kind: "verdict", verdict: { verdict: "done", reason: "All tests pass" }, via: "continuation" });
+  done.state.review = async () => ({
+    kind: "verdict",
+    verdict: { verdict: "done", reason: "All tests pass" },
+    via: "continuation",
+  });
   await done.runSettles();
   assert.equal(done.goal()?.status, "done");
   assert.equal(done.goal()?.reason, "All tests pass");
-  assert.deepEqual(last(done.events), { event: "goal_settled", properties: { outcome: "done", rounds: "1" } });
+  assert.deepEqual(last(done.events), {
+    event: "goal_settled",
+    properties: { outcome: "done", rounds: "1" },
+  });
 
   const blocked = harness();
   await blocked.loop.set(CHAT, { objective: "Ship it", source: "slash" });
-  blocked.state.review = async () => ({ kind: "verdict", verdict: { verdict: "blocked", reason: "Needs an API key" }, via: "isolated" });
+  blocked.state.review = async () => ({
+    kind: "verdict",
+    verdict: { verdict: "blocked", reason: "Needs an API key" },
+    via: "isolated",
+  });
   await blocked.runSettles();
   assert.equal(blocked.goal()?.status, "needs-you");
-  assert.deepEqual(last(blocked.events), { event: "goal_settled", properties: { outcome: "needs_you", rounds: "1" } });
+  assert.deepEqual(last(blocked.events), {
+    event: "goal_settled",
+    properties: { outcome: "needs_you", rounds: "1" },
+  });
 
   const unusable = harness();
   await unusable.loop.set(CHAT, { objective: "Ship it", source: "slash" });
-  unusable.state.review = async () => ({ kind: "unusable", why: "no-verdict", via: "continuation" });
+  unusable.state.review = async () => ({
+    kind: "unusable",
+    why: "no-verdict",
+    via: "continuation",
+  });
   await unusable.runSettles();
   assert.equal(unusable.reviews(), 2, "one retry");
   assert.equal(unusable.goal()?.status, "paused");
@@ -457,7 +539,10 @@ test("a round's card expiring unanswered moves the goal to Needs you, and the ro
   assert.equal(h.goal()?.status, "needs-you");
   assert.equal(h.goal()?.cause, "unanswered");
   assert.match(h.goal()?.reason ?? "", /30 minutes/);
-  assert.deepEqual(last(h.events), { event: "goal_settled", properties: { outcome: "needs_you", rounds: "2-5" } });
+  assert.deepEqual(last(h.events), {
+    event: "goal_settled",
+    properties: { outcome: "needs_you", rounds: "2-5" },
+  });
   assert.equal(h.settled.length, 1, "the person is told once");
   const reviews = h.reviews();
   await h.runSettles();
@@ -470,14 +555,33 @@ test("a round's card expiring unanswered moves the goal to Needs you, and the ro
 
 test("a waking notice starts a goal round only while the goal is active", async () => {
   const h = harness();
-  assert.equal(await h.loop.noticeRound(CHAT, { text: "job ended", notice: agentNotice({ source: "background_job", tone: "success", title: "Done", summary: "x" }) }), undefined, "no goal: the notice wakes as usual");
+  assert.equal(
+    await h.loop.noticeRound(CHAT, {
+      text: "job ended",
+      notice: agentNotice({
+        source: "background_job",
+        tone: "success",
+        title: "Done",
+        summary: "x",
+      }),
+    }),
+    undefined,
+    "no goal: the notice wakes as usual",
+  );
   await h.loop.set(CHAT, { objective: "Ship it", source: "slash" });
-  const started = await h.loop.noticeRound(CHAT, { text: "job ended", notice: agentNotice({ source: "background_job", tone: "success", title: "Done", summary: "x" }) });
+  const started = await h.loop.noticeRound(CHAT, {
+    text: "job ended",
+    notice: agentNotice({ source: "background_job", tone: "success", title: "Done", summary: "x" }),
+  });
   assert.equal(started?.kind, "started");
   assert.deepEqual(h.noticeRounds, ["job ended"]);
   assert.equal(h.goal()?.rounds, 2, "answering a notice is a round of its own");
   h.loop.pause(CHAT);
-  assert.equal(await h.loop.noticeRound(CHAT), undefined, "a paused goal leaves notices to the usual wake");
+  assert.equal(
+    await h.loop.noticeRound(CHAT),
+    undefined,
+    "a paused goal leaves notices to the usual wake",
+  );
   assert.deepEqual(h.noticeRounds, ["job ended"]);
 });
 
@@ -486,10 +590,19 @@ test("an /until goal runs its check at once in an idle chat, starts a round on f
   const h = harness({
     check: async (goal) => {
       checks.push(goal.rounds);
-      return { kind: "finished", passed: false, summary: "`npm test` failed (exit code 1)", details: "The check printed nothing." };
+      return {
+        kind: "finished",
+        passed: false,
+        summary: "`npm test` failed (exit code 1)",
+        details: "The check printed nothing.",
+      };
     },
   });
-  const view = await h.loop.set(CHAT, { objective: "Keep going until `npm test` passes", source: "until", check: "npm test" });
+  const view = await h.loop.set(CHAT, {
+    objective: "Keep going until `npm test` passes",
+    source: "until",
+    check: "npm test",
+  });
   assert.equal(view.maxRounds, 5);
   assert.equal(h.loop.kickoff(CHAT), undefined, "no objective message, so no kickoff note");
   await h.flush();
@@ -511,10 +624,19 @@ test("an /until goal runs its check at once in an idle chat, starts a round on f
 });
 
 test("an /until goal set during an answer checks when it ends; a pass is done and a stopped check pauses", async () => {
-  let result: GoalCheckResult = { kind: "finished", passed: true, summary: "`npm test` passed", details: "" };
+  let result: GoalCheckResult = {
+    kind: "finished",
+    passed: true,
+    summary: "`npm test` passed",
+    details: "",
+  };
   const h = harness({ check: async () => result });
   h.state.busy = true;
-  await h.loop.set(CHAT, { objective: "Keep going until `npm test` passes", source: "until", check: "npm test" });
+  await h.loop.set(CHAT, {
+    objective: "Keep going until `npm test` passes",
+    source: "until",
+    check: "npm test",
+  });
   await h.flush();
   assert.equal(h.goal()?.status, "active", "nothing runs while the answer is going");
   h.state.busy = false;
@@ -523,7 +645,11 @@ test("an /until goal set during an answer checks when it ends; a pass is done an
   assert.equal(h.goal()?.reason, "`npm test` passed");
 
   result = { kind: "stopped", summary: "The check `npm test` was stopped before it finished" };
-  await h.loop.set(CHAT, { objective: "Keep going until `npm test` passes", source: "until", check: "npm test" });
+  await h.loop.set(CHAT, {
+    objective: "Keep going until `npm test` passes",
+    source: "until",
+    check: "npm test",
+  });
   await h.flush();
   assert.equal(h.goal()?.status, "paused");
   assert.equal(h.goal()?.reason, "The check `npm test` was stopped before it finished");
@@ -531,8 +657,18 @@ test("an /until goal set during an answer checks when it ends; a pass is done an
 });
 
 test("an /until goal is refused where its check can't run", async () => {
-  const h = harness({ check: async () => ({ kind: "stopped", summary: "x" }), checkRefusal: "Folder access is off for this chat." });
-  await assert.rejects(h.loop.set(CHAT, { objective: "Keep going until `npm test` passes", source: "until", check: "npm test" }), /Folder access is off/);
+  const h = harness({
+    check: async () => ({ kind: "stopped", summary: "x" }),
+    checkRefusal: "Folder access is off for this chat.",
+  });
+  await assert.rejects(
+    h.loop.set(CHAT, {
+      objective: "Keep going until `npm test` passes",
+      source: "until",
+      check: "npm test",
+    }),
+    /Folder access is off/,
+  );
   assert.equal(h.goal(), null);
 });
 
@@ -545,7 +681,10 @@ test("the window owning a round closing pauses the goal as closed, and its stopp
   assert.equal(h.goal()?.status, "paused");
   assert.equal(h.goal()?.cause, "chat-closed");
   assert.equal(h.goal()?.reason, "The chat was closed");
-  assert.deepEqual(last(h.events), { event: "goal_settled", properties: { outcome: "paused", rounds: "2-5" } });
+  assert.deepEqual(last(h.events), {
+    event: "goal_settled",
+    properties: { outcome: "paused", rounds: "2-5" },
+  });
   // goal-main stops the round after pausing; that run settles as stopped.
   await h.runSettles({ stopped: true });
   assert.equal(h.goal()?.cause, "chat-closed");
@@ -563,7 +702,11 @@ test("a round off screen wanting the window shows on the goal until a round star
   h.loop.windowWanted(CHAT);
   assert.equal(h.goal()?.revision, revision, "saying it twice changes nothing");
   // The reviewer then says the person is needed: the bar keeps the hint for Continue here.
-  h.state.review = async () => ({ kind: "verdict", verdict: { verdict: "blocked", reason: "It needs the browser" }, via: "continuation" });
+  h.state.review = async () => ({
+    kind: "verdict",
+    verdict: { verdict: "blocked", reason: "It needs the browser" },
+    via: "continuation",
+  });
   await h.runSettles();
   assert.equal(h.goal()?.status, "needs-you");
   assert.equal(h.goal()?.windowWanted, true);
@@ -607,7 +750,11 @@ test("a run that settles during a review is reviewed again: the earlier review's
   await h.runSettles();
   await h.runSettles(); // the person's message was answered while the first review ran
   assert.equal(held.length, 2, "the new run gets its own review");
-  held[0]!.answer({ kind: "verdict", verdict: { verdict: "done", reason: "Shipped" }, via: "continuation" });
+  held[0]!.answer({
+    kind: "verdict",
+    verdict: { verdict: "done", reason: "Shipped" },
+    via: "continuation",
+  });
   await h.flush();
   assert.equal(h.goal()?.status, "active", "the review of the older transcript is not applied");
   held[1]!.answer(continueWith("The changelog is still missing"));
@@ -667,7 +814,10 @@ test("a round still starting stops counting as current once the person pauses, c
 test("a notice round counts as a round: a job that keeps ending can't run past the round limit", async () => {
   const h = harness();
   await h.loop.set(CHAT, { objective: "Ship it", source: "slash" });
-  const news = () => ({ text: "job ended", notice: agentNotice({ source: "background_job", tone: "success", title: "Done", summary: "x" }) });
+  const news = () => ({
+    text: "job ended",
+    notice: agentNotice({ source: "background_job", tone: "success", title: "Done", summary: "x" }),
+  });
   assert.equal((await h.loop.noticeRound(CHAT, news()))?.kind, "started");
   assert.equal(h.goal()?.rounds, 2, "the notice's round is round 2");
 
@@ -679,7 +829,11 @@ test("a notice round counts as a round: a job that keeps ending can't run past t
   for (let round = 3; round <= GOAL_MAX_ROUNDS; round += 1) await h.loop.noticeRound(CHAT, news());
   assert.equal(h.goal()?.rounds, GOAL_MAX_ROUNDS);
   const started = h.noticeRounds.length;
-  assert.equal(await h.loop.noticeRound(CHAT, news()), undefined, "past the limit the notice wakes the chat as usual");
+  assert.equal(
+    await h.loop.noticeRound(CHAT, news()),
+    undefined,
+    "past the limit the notice wakes the chat as usual",
+  );
   assert.equal(h.noticeRounds.length, started, "no 51st round");
   assert.equal(h.goal()?.status, "paused");
   assert.equal(h.goal()?.cause, "round-limit");
@@ -731,7 +885,10 @@ test("a notice round whose chat can't be read leaves the notice saved and the go
   const h = harness();
   await h.loop.set(CHAT, { objective: "Ship it", source: "slash" });
   h.state.throws.noticeContext = true;
-  const news = { text: "job ended", notice: agentNotice({ source: "background_job", tone: "success", title: "Done", summary: "x" }) };
+  const news = {
+    text: "job ended",
+    notice: agentNotice({ source: "background_job", tone: "success", title: "Done", summary: "x" }),
+  };
   const result = await h.loop.noticeRound(CHAT, news);
   assert.equal(result?.kind, "unavailable", "the notice is recorded instead of lost");
   assert.deepEqual(h.noticeRounds, []);
@@ -744,14 +901,27 @@ test("an /until goal's notice rounds spend none of its checks: only the checks c
   const h = harness({
     check: async (goal) => {
       checks.push(goal.rounds);
-      return { kind: "finished", passed: false, summary: "`npm test` failed (exit code 1)", details: "" };
+      return {
+        kind: "finished",
+        passed: false,
+        summary: "`npm test` failed (exit code 1)",
+        details: "",
+      };
     },
   });
   h.state.busy = true;
-  await h.loop.set(CHAT, { objective: "Keep going until `npm test` passes", source: "until", check: "npm test" });
+  await h.loop.set(CHAT, {
+    objective: "Keep going until `npm test` passes",
+    source: "until",
+    check: "npm test",
+  });
   h.state.busy = false;
-  const news = () => ({ text: "job ended", notice: agentNotice({ source: "background_job", tone: "success", title: "Done", summary: "x" }) });
-  for (let notice = 0; notice < 8; notice += 1) assert.equal((await h.loop.noticeRound(CHAT, news()))?.kind, "started");
+  const news = () => ({
+    text: "job ended",
+    notice: agentNotice({ source: "background_job", tone: "success", title: "Done", summary: "x" }),
+  });
+  for (let notice = 0; notice < 8; notice += 1)
+    assert.equal((await h.loop.noticeRound(CHAT, news()))?.kind, "started");
   assert.equal(h.goal()?.status, "active", "news alone never uses up the five checks");
   assert.equal(h.goal()?.rounds, 1);
   assert.deepEqual(checks, [], "no check ran");
@@ -824,9 +994,16 @@ test("news during a review drops that review: its verdict is stale, and the noti
   };
   await h.runSettles();
   assert.equal(held.length, 1, "a review is under way");
-  const news = { text: "job ended", notice: agentNotice({ source: "background_job", tone: "success", title: "Done", summary: "x" }) };
+  const news = {
+    text: "job ended",
+    notice: agentNotice({ source: "background_job", tone: "success", title: "Done", summary: "x" }),
+  };
   assert.equal((await h.loop.noticeRound(CHAT, news))?.kind, "started");
-  assert.equal(signals[0]!.aborted, true, "the review's model call is cancelled rather than paid for and discarded");
+  assert.equal(
+    signals[0]!.aborted,
+    true,
+    "the review's model call is cancelled rather than paid for and discarded",
+  );
   held[0]!.answer(continueWith("Keep going"));
   await h.flush();
   assert.equal(h.rounds.length, 0, "the dropped review starts no round of its own");
@@ -846,13 +1023,20 @@ test("while the loop checks a goal between rounds it holds the computer awake, a
   assert.equal(held.length, 1, "the review is under way");
   assert.deepEqual(keepAwake.read(0).reasons, [{ kind: "goal", id: CHAT }]);
   assert.ok(h.lookingChanges() > before, "keep-awake is told to read again");
-  held[0]!.answer({ kind: "verdict", verdict: { verdict: "done", reason: "Shipped" }, via: "continuation" });
+  held[0]!.answer({
+    kind: "verdict",
+    verdict: { verdict: "done", reason: "Shipped" },
+    via: "continuation",
+  });
   await h.flush();
   assert.deepEqual(keepAwake.read(0).reasons, [], "a finished look holds nothing");
 });
 
 test("news that drops a review but whose round doesn't start leaves the goal looked at again, not stuck at Working", async () => {
-  const news = () => ({ text: "job ended", notice: agentNotice({ source: "background_job", tone: "success", title: "Done", summary: "x" }) });
+  const news = () => ({
+    text: "job ended",
+    notice: agentNotice({ source: "background_job", tone: "success", title: "Done", summary: "x" }),
+  });
   for (const failure of ["unavailable", "busy"] as const) {
     const h = harness();
     await h.loop.set(CHAT, { objective: "Ship it", source: "slash" });
@@ -891,7 +1075,11 @@ test("a 30-minute watchdog pauses a waiting goal, and starting a round or changi
   const waiting = harness();
   await waiting.loop.set(CHAT, { objective: "Wait for CI", source: "slash" });
   waiting.state.jobs = true;
-  waiting.state.review = async () => ({ kind: "verdict", verdict: { verdict: "wait", reason: "Waiting on tests" }, via: "continuation" });
+  waiting.state.review = async () => ({
+    kind: "verdict",
+    verdict: { verdict: "wait", reason: "Waiting on tests" },
+    via: "continuation",
+  });
   await waiting.runSettles();
   assert.equal(waiting.activeTimers(), 1, "wait verdict arms one watchdog timer");
   waiting.tick(GOAL_WAIT_LIMIT_MS - 1);
@@ -921,7 +1109,8 @@ test("a 30-minute watchdog pauses a waiting goal, and starting a round or changi
     h.state.helper = true;
     await h.runSettles();
     assert.equal(h.activeTimers(), 1, `${action}: watchdog armed`);
-    if (action === "replace") await h.loop.set(CHAT, { objective: "Different goal", source: "slash" });
+    if (action === "replace")
+      await h.loop.set(CHAT, { objective: "Different goal", source: "slash" });
     else if (action === "pause") h.loop.pause(CHAT);
     else if (action === "clear") h.loop.clear(CHAT);
     else if (action === "delete") h.loop.deleteChat(CHAT);
@@ -931,12 +1120,17 @@ test("a 30-minute watchdog pauses a waiting goal, and starting a round or changi
 });
 
 test("replacing, pausing, or clearing a goal while noticeRound starts never clobbers or relooks the replacement", async () => {
-  const news = { text: "job ended", notice: agentNotice({ source: "background_job", tone: "success", title: "Done", summary: "x" }) };
+  const news = {
+    text: "job ended",
+    notice: agentNotice({ source: "background_job", tone: "success", title: "Done", summary: "x" }),
+  };
   for (const action of ["pause", "clear", "replace"] as const) {
     const h = harness();
     await h.loop.set(CHAT, { objective: "Old goal", source: "slash" });
     let release!: () => void;
-    h.state.holdNoticeStart = new Promise<void>((resolve) => { release = resolve; });
+    h.state.holdNoticeStart = new Promise<void>((resolve) => {
+      release = resolve;
+    });
     const pending = h.loop.noticeRound(CHAT, news);
     await h.flush();
     assert.equal(h.noticeCurrent.length, 1, action);
@@ -984,7 +1178,10 @@ test("a relook that wakes while the chat is still busy waits again, and shutdown
 });
 
 test("pausing and resuming the same goal while noticeRound awaits fallbackContext fences the stale notice", async () => {
-  const news = { text: "job ended", notice: agentNotice({ source: "background_job", tone: "success", title: "Done", summary: "x" }) };
+  const news = {
+    text: "job ended",
+    notice: agentNotice({ source: "background_job", tone: "success", title: "Done", summary: "x" }),
+  };
   for (const outcome of ["context", "empty", "reject"] as const) {
     const h = harness();
     const initial = await h.loop.set(CHAT, { objective: "Ship it", source: "slash" });
@@ -1029,14 +1226,19 @@ test("pausing and resuming the same goal while noticeRound awaits fallbackContex
   const h = harness();
   await h.loop.set(CHAT, { objective: "Ship it", source: "slash" });
   let releaseStart!: () => void;
-  h.state.holdStart = new Promise<void>((resolve) => { releaseStart = resolve; });
+  h.state.holdStart = new Promise<void>((resolve) => {
+    releaseStart = resolve;
+  });
   h.loop.runSettled({ chatId: CHAT, streamId: "s", stopped: false, failed: false });
   await h.flush();
   assert.equal(h.roundCurrent.length, 1, "the look's round is waiting to start");
   assert.equal(h.goal()?.rounds, 2, "the waiting look counted round 2");
 
   let resolveContext!: (value: typeof CONTEXT | undefined) => void;
-  h.state.fallbackContext = () => new Promise((resolve) => { resolveContext = resolve; });
+  h.state.fallbackContext = () =>
+    new Promise((resolve) => {
+      resolveContext = resolve;
+    });
   const pending = h.loop.noticeRound(CHAT, news);
   await h.flush();
   assert.equal(h.goal()?.rounds, 1, "dropLook restored the uncounted round before fallbackContext");
@@ -1044,7 +1246,11 @@ test("pausing and resuming the same goal while noticeRound awaits fallbackContex
   const started = await pending;
   releaseStart();
   await h.flush();
-  assert.equal(started?.kind, "started", "the current notice still starts after dropLook uncounted");
+  assert.equal(
+    started?.kind,
+    "started",
+    "the current notice still starts after dropLook uncounted",
+  );
   assert.deepEqual(h.noticeRounds, ["job ended"]);
   assert.equal(h.rounds.length, 0, "the dropped look's round never started");
   assert.equal(h.goal()?.rounds, 2);

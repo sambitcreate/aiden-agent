@@ -28,7 +28,10 @@ export interface BotMemoryReviewEntryData {
   failed?: true;
 }
 /** `id` = first 16 hex of sha256(target + "\0" + text); content-addressed. */
-export interface BotMemoryEntry { id: string; text: string }
+export interface BotMemoryEntry {
+  id: string;
+  text: string;
+}
 export interface BotMemoryStoreView {
   entries: BotMemoryEntry[];
   usedChars: number;
@@ -50,15 +53,21 @@ export type BotMemoryEdit =
   | { kind: "replace"; target: BotMemoryTarget; entryId: string; text: string }
   | { kind: "remove"; target: BotMemoryTarget; entryId: string }
   | { kind: "clear" };
-export interface BotMemoryEditInput { botId: string; edit: BotMemoryEdit }
+export interface BotMemoryEditInput {
+  botId: string;
+  edit: BotMemoryEdit;
+}
 export type BotMemoryEditErrorCode = "entry_not_found" | "over_budget" | "blocked" | "invalid";
 export type BotMemoryEditResult =
   | { ok: true; view: BotMemoryView }
   | { ok: false; code: BotMemoryEditErrorCode; message: string; view: BotMemoryView };
-export interface BotMemoryChangedEvent { botId: string; revision: string }
+export interface BotMemoryChangedEvent {
+  botId: string;
+  revision: string;
+}
 export const BOT_MEMORY_CHANNELS = {
-  get: "bots:memory:get",       // invoke(botId) → BotMemoryView
-  edit: "bots:memory:edit",     // invoke(BotMemoryEditInput) → BotMemoryEditResult
+  get: "bots:memory:get", // invoke(botId) → BotMemoryView
+  edit: "bots:memory:edit", // invoke(BotMemoryEditInput) → BotMemoryEditResult
   changed: "bots:memory:changed", // push BotMemoryChangedEvent
 } as const;
 ```
@@ -71,13 +80,13 @@ export const BOT_ROUTINE_PROPOSAL_ENTRY_KIND = "aiden.routine-proposal";
 export const BOT_ROUTINE_PROPOSAL_STATUS_ENTRY_KIND = "aiden.routine-proposal-status";
 export type BotRoutineProposalStatus = "pending" | "accepted" | "dismissed";
 export interface BotRoutineProposalEntryData {
-  proposalId: string;           // UUID minted by the tool
-  name: string;                 // ≤ BOT_ROUTINE_NAME_LIMIT
-  prompt: string;               // ≤ BOT_ROUTINE_PROMPT_LIMIT
+  proposalId: string; // UUID minted by the tool
+  name: string; // ≤ BOT_ROUTINE_NAME_LIMIT
+  prompt: string; // ≤ BOT_ROUTINE_PROMPT_LIMIT
   schedule: BotRoutineSchedule;
   timezone: string;
-  label: string;                // host label, e.g. "Every day at 9:00 AM"
-  reason?: string;              // ≤ 280
+  label: string; // host label, e.g. "Every day at 9:00 AM"
+  reason?: string; // ≤ 280
 }
 export interface BotRoutineProposalStatusEntryData {
   proposalId: string;
@@ -86,20 +95,27 @@ export interface BotRoutineProposalStatusEntryData {
 }
 export type BotRoutineProposalDecision = "accept" | "dismiss";
 export interface BotRoutineProposalRespondInput {
-  botId: string; proposalId: string; decision: BotRoutineProposalDecision;
+  botId: string;
+  proposalId: string;
+  decision: BotRoutineProposalDecision;
 }
 export interface BotRoutineProposalRespondResult {
-  status: Exclude<BotRoutineProposalStatus, "pending">; routineId?: string;
+  status: Exclude<BotRoutineProposalStatus, "pending">;
+  routineId?: string;
 }
 export const BOT_ROUTINE_PROPOSAL_CHANNELS = { respond: "bots:routineProposals:respond" } as const;
 export interface BotRoutineSuggestion {
-  id: "daily-check-in"; name: string; prompt: string; schedule: BotRoutineSchedule;
+  id: "daily-check-in";
+  name: string;
+  prompt: string;
+  schedule: BotRoutineSchedule;
 }
 export const BOT_DAILY_CHECKIN_SUGGESTION: BotRoutineSuggestion = {
   id: "daily-check-in",
   name: "Daily check-in",
   schedule: { kind: "daily", time: "09:00" },
-  prompt: "Check in briefly. Using what you remember about me and anything new you can see, share one or two things worth knowing today.",
+  prompt:
+    "Check in briefly. Using what you remember about me and anything new you can see, share one or two things worth knowing today.",
 };
 ```
 
@@ -111,19 +127,28 @@ export const BOT_DAILY_CHECKIN_SUGGESTION: BotRoutineSuggestion = {
       status: BotRoutineProposalStatus; routineId?: string; at?: number }
 ```
 
-   Then run `npm run type-check`. For every exhaustive switch the compiler flags, add a no-op branch (`return null` or `break`) and nothing else. Expected sites are `renderer/main/bots/bot-transcript-rows.ts` and `main/services/aiden-remote-bot-session.ts`.
+Then run `npm run type-check`. For every exhaustive switch the compiler flags, add a no-op branch (`return null` or `break`) and nothing else. Expected sites are `renderer/main/bots/bot-transcript-rows.ts` and `main/services/aiden-remote-bot-session.ts`.
 
 4. **Create** the stub `main/services/bot-memory/bot-memory-main.ts`. Ownership passes to A, who replaces the body.
 
 ```ts
-import type { BotMemoryEditInput, BotMemoryEditResult, BotMemoryView, BotMemoryChangedEvent } from "../../../renderer/shared/bot-memory.js";
+import type {
+  BotMemoryEditInput,
+  BotMemoryEditResult,
+  BotMemoryView,
+  BotMemoryChangedEvent,
+} from "../../../renderer/shared/bot-memory.js";
 export interface BotMemoryService {
   view(botId: string): Promise<BotMemoryView>;
   edit(input: BotMemoryEditInput): Promise<BotMemoryEditResult>;
   onChanged(listener: (event: BotMemoryChangedEvent) => void): () => void;
 }
 const unavailable = () => Promise.reject(new Error("Bot memory is not available yet."));
-export const botMemoryService: BotMemoryService = { view: unavailable, edit: unavailable, onChanged: () => () => {} };
+export const botMemoryService: BotMemoryService = {
+  view: unavailable,
+  edit: unavailable,
+  onChanged: () => () => {},
+};
 ```
 
 5. **Fixtures** (`protocol/aiden-remote/v1/fixtures/contract.json`; ownership passes to B):
@@ -163,13 +188,13 @@ export const botMemoryService: BotMemoryService = { view: unavailable, edit: una
 
 Routes (spec §14):
 
-| Method | Path | Auth |
-|---|---|---|
-| `GET` | `/bots/{botId}/memory` | bot:read + chat:read |
-| `POST` | `/bots/{botId}/memory/edits` | + bot:write, Idempotency-Key |
+| Method | Path                                                   | Auth                                  |
+| ------ | ------------------------------------------------------ | ------------------------------------- |
+| `GET`  | `/bots/{botId}/memory`                                 | bot:read + chat:read                  |
+| `POST` | `/bots/{botId}/memory/edits`                           | + bot:write, Idempotency-Key          |
 | `POST` | `/bots/{botId}/routine-proposals/{proposalId}/respond` | bot:read + bot:write, Idempotency-Key |
-| `GET` | `/bots/{botId}/routine-suggestions` | bot:read |
-| `GET` | `/bots/routine-notifications?since=` | bot:read + chat:read |
+| `GET`  | `/bots/{botId}/routine-suggestions`                    | bot:read                              |
+| `GET`  | `/bots/routine-notifications?since=`                   | bot:read + chat:read                  |
 
 Rules:
 
@@ -179,15 +204,15 @@ Rules:
 
 ### Cross-track interfaces
 
-| Need | Provided by | Interface |
-|---|---|---|
-| B wires Remote memory routes | A | `botMemoryService` from `main/services/bot-memory/bot-memory-main.ts` (the Step 0 signature) |
-| B appends proposal entries | existing | `(await botSessionRuntime()).conversation(botId)` then `conversation.submit({type:"write", entry:{kind, data}}, BACKGROUND_CONTEXT)`, the same as `appendConnectCard` |
-| B catch-up trigger | existing | `onBotSessionStateChange` from `bot-runtime/bot-session-main.ts` |
-| A withholds `bot_memory` on routine/intro turns | A only | A wraps `turnAllows` in `bot-session-main.ts`: `name === "bot_memory" ? !ids.some(id => id.startsWith("routine:") \|\| id.startsWith("intro:")) : botIngressAllowsTool(name, ids)`. **B never touches `bot_memory`.** |
-| A projects proposal cards | A | A folds `BOT_ROUTINE_PROPOSAL_ENTRY_KIND` + `…_STATUS_ENTRY_KIND` entries (Step 0 data shapes) in `live-projection.ts`. A pending card is the entry; the last status entry for its `proposalId` sets `status`/`routineId`. |
-| B projects cards for Remote | B | B maps the `memory_update` / `routine_proposal` `BotTranscriptEntry` (from A's projection) to wire entries in `aiden-remote-bot-session.ts`, gated on `bot:cards` |
-| `openingGreeting` removal | A + B + C | C removes the UI, B removes the wire, A removes the store/service/types. **A's final type removal (A9) merges after B4 and C3.** |
+| Need                                            | Provided by | Interface                                                                                                                                                                                                                  |
+| ----------------------------------------------- | ----------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| B wires Remote memory routes                    | A           | `botMemoryService` from `main/services/bot-memory/bot-memory-main.ts` (the Step 0 signature)                                                                                                                               |
+| B appends proposal entries                      | existing    | `(await botSessionRuntime()).conversation(botId)` then `conversation.submit({type:"write", entry:{kind, data}}, BACKGROUND_CONTEXT)`, the same as `appendConnectCard`                                                      |
+| B catch-up trigger                              | existing    | `onBotSessionStateChange` from `bot-runtime/bot-session-main.ts`                                                                                                                                                           |
+| A withholds `bot_memory` on routine/intro turns | A only      | A wraps `turnAllows` in `bot-session-main.ts`: `name === "bot_memory" ? !ids.some(id => id.startsWith("routine:") \|\| id.startsWith("intro:")) : botIngressAllowsTool(name, ids)`. **B never touches `bot_memory`.**      |
+| A projects proposal cards                       | A           | A folds `BOT_ROUTINE_PROPOSAL_ENTRY_KIND` + `…_STATUS_ENTRY_KIND` entries (Step 0 data shapes) in `live-projection.ts`. A pending card is the entry; the last status entry for its `proposalId` sets `status`/`routineId`. |
+| B projects cards for Remote                     | B           | B maps the `memory_update` / `routine_proposal` `BotTranscriptEntry` (from A's projection) to wire entries in `aiden-remote-bot-session.ts`, gated on `bot:cards`                                                          |
+| `openingGreeting` removal                       | A + B + C   | C removes the UI, B removes the wire, A removes the store/service/types. **A's final type removal (A9) merges after B4 and C3.**                                                                                           |
 
 ## Track A: memory core (main)
 

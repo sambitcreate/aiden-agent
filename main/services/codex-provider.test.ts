@@ -181,12 +181,18 @@ test("validates Codex thinking choices against the exact selected model", () => 
   // Every built-in Codex model offers Max, so add one without it (as gpt-5.5 was).
   const builtin = builtinModels({ credentials });
   const sol = builtin.getModel("openai-codex", "gpt-5.6-sol")!;
-  const withoutMax = { ...sol, id: "codex-without-max", thinkingLevelMap: { xhigh: "xhigh", minimal: "low" } };
+  const withoutMax = {
+    ...sol,
+    id: "codex-without-max",
+    thinkingLevelMap: { xhigh: "xhigh", minimal: "low" },
+  };
   const models = new Proxy(builtin, {
     get(target, property) {
       if (property === "getModel") {
         return (provider: string, id: string) =>
-          provider === "openai-codex" && id === withoutMax.id ? withoutMax : target.getModel(provider, id);
+          provider === "openai-codex" && id === withoutMax.id
+            ? withoutMax
+            : target.getModel(provider, id);
       }
       const value = Reflect.get(target, property, target);
       return typeof value === "function" ? value.bind(target) : value;
@@ -693,106 +699,114 @@ test("logout invalidates an auth preflight before the old token can dispatch", a
   assert.equal(dispatches, 0);
 });
 
-test("account switch escapes a stalled header hook and dispatches only the replacement token", { timeout: 2_000 }, async () => {
-  const credentials = new InMemoryCredentialStore();
-  await credentials.modify("openai-codex", async () => oauthCredential("old-access"));
-  const builtin = builtinModels({ credentials });
-  const firstTransformStarted = deferred<void>();
-  const releaseFirstTransform = deferred<void>();
-  const dispatchedKeys: Array<string | undefined> = [];
-  let transformCalls = 0;
-  const streamSimple: ProviderStreams["streamSimple"] = (model, _context, options) => {
-    dispatchedKeys.push(options?.apiKey);
-    return terminalStream(model, "stop");
-  };
-  const models = {
-    getProvider: codexProviderWith(builtin, { streamSimple }),
-    getModels: builtin.getModels.bind(builtin),
-    getModel: builtin.getModel.bind(builtin),
-    checkAuth: async () => ({ type: "oauth" as const, source: "OAuth" }),
-  } as unknown as Models;
-  const service = new CodexProviderService(models, credentials);
-  const model = service.getModel("gpt-5.6-sol");
-  assert.ok(model);
+test(
+  "account switch escapes a stalled header hook and dispatches only the replacement token",
+  { timeout: 2_000 },
+  async () => {
+    const credentials = new InMemoryCredentialStore();
+    await credentials.modify("openai-codex", async () => oauthCredential("old-access"));
+    const builtin = builtinModels({ credentials });
+    const firstTransformStarted = deferred<void>();
+    const releaseFirstTransform = deferred<void>();
+    const dispatchedKeys: Array<string | undefined> = [];
+    let transformCalls = 0;
+    const streamSimple: ProviderStreams["streamSimple"] = (model, _context, options) => {
+      dispatchedKeys.push(options?.apiKey);
+      return terminalStream(model, "stop");
+    };
+    const models = {
+      getProvider: codexProviderWith(builtin, { streamSimple }),
+      getModels: builtin.getModels.bind(builtin),
+      getModel: builtin.getModel.bind(builtin),
+      checkAuth: async () => ({ type: "oauth" as const, source: "OAuth" }),
+    } as unknown as Models;
+    const service = new CodexProviderService(models, credentials);
+    const model = service.getModel("gpt-5.6-sol");
+    assert.ok(model);
 
-  const result = service
-    .streamSimple(
-      model,
-      { messages: [] },
-      {
-        transformHeaders: async (headers) => {
-          transformCalls += 1;
-          if (transformCalls === 1) {
-            firstTransformStarted.resolve();
-            await releaseFirstTransform.promise;
-          }
-          return headers;
+    const result = service
+      .streamSimple(
+        model,
+        { messages: [] },
+        {
+          transformHeaders: async (headers) => {
+            transformCalls += 1;
+            if (transformCalls === 1) {
+              firstTransformStarted.resolve();
+              await releaseFirstTransform.promise;
+            }
+            return headers;
+          },
         },
+      )
+      .result();
+    await firstTransformStarted.promise;
+    await service.commitCredential(oauthCredential("replacement-access"));
+
+    assert.equal((await result).stopReason, "stop");
+    releaseFirstTransform.resolve();
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    assert.deepEqual(dispatchedKeys, ["replacement-access"]);
+    assert.equal(transformCalls, 2);
+  },
+);
+
+test(
+  "account switch escapes a stalled payload hook without a stale handshake",
+  { timeout: 2_000 },
+  async (t) => {
+    const credentials = new InMemoryCredentialStore();
+    const oldAccess = codexAccessToken("old-account");
+    await credentials.modify("openai-codex", async () => oauthCredential(oldAccess));
+    const models = builtinModels({ credentials });
+    const service = new CodexProviderService(models, credentials);
+    const model = service.getModel("gpt-5.6-sol");
+    assert.ok(model);
+    const payloadStarted = deferred<void>();
+    const releasePayload = deferred<void>();
+    let websocketConstructorReads = 0;
+    let fetchCalls = 0;
+    const originalWebSocket = Object.getOwnPropertyDescriptor(globalThis, "WebSocket");
+    Object.defineProperty(globalThis, "WebSocket", {
+      configurable: true,
+      get: () => {
+        websocketConstructorReads += 1;
+        return class {};
       },
-    )
-    .result();
-  await firstTransformStarted.promise;
-  await service.commitCredential(oauthCredential("replacement-access"));
+    });
+    t.after(() => {
+      if (originalWebSocket) Object.defineProperty(globalThis, "WebSocket", originalWebSocket);
+      else Reflect.deleteProperty(globalThis, "WebSocket");
+    });
+    t.mock.method(globalThis, "fetch", async () => {
+      fetchCalls += 1;
+      throw new Error("stale fetch must not start");
+    });
 
-  assert.equal((await result).stopReason, "stop");
-  releaseFirstTransform.resolve();
-  await new Promise<void>((resolve) => setImmediate(resolve));
-  assert.deepEqual(dispatchedKeys, ["replacement-access"]);
-  assert.equal(transformCalls, 2);
-});
-
-test("account switch escapes a stalled payload hook without a stale handshake", { timeout: 2_000 }, async (t) => {
-  const credentials = new InMemoryCredentialStore();
-  const oldAccess = codexAccessToken("old-account");
-  await credentials.modify("openai-codex", async () => oauthCredential(oldAccess));
-  const models = builtinModels({ credentials });
-  const service = new CodexProviderService(models, credentials);
-  const model = service.getModel("gpt-5.6-sol");
-  assert.ok(model);
-  const payloadStarted = deferred<void>();
-  const releasePayload = deferred<void>();
-  let websocketConstructorReads = 0;
-  let fetchCalls = 0;
-  const originalWebSocket = Object.getOwnPropertyDescriptor(globalThis, "WebSocket");
-  Object.defineProperty(globalThis, "WebSocket", {
-    configurable: true,
-    get: () => {
-      websocketConstructorReads += 1;
-      return class {};
-    },
-  });
-  t.after(() => {
-    if (originalWebSocket) Object.defineProperty(globalThis, "WebSocket", originalWebSocket);
-    else Reflect.deleteProperty(globalThis, "WebSocket");
-  });
-  t.mock.method(globalThis, "fetch", async () => {
-    fetchCalls += 1;
-    throw new Error("stale fetch must not start");
-  });
-
-  const result = service
-    .streamSimple(
-      model,
-      { messages: [] },
-      {
-        transport: "websocket",
-        onPayload: async (payload) => {
-          payloadStarted.resolve();
-          await releasePayload.promise;
-          return payload;
+    const result = service
+      .streamSimple(
+        model,
+        { messages: [] },
+        {
+          transport: "websocket",
+          onPayload: async (payload) => {
+            payloadStarted.resolve();
+            await releasePayload.promise;
+            return payload;
+          },
         },
-      },
-    )
-    .result();
-  await payloadStarted.promise;
-  await service.commitCredential(oauthCredential(codexAccessToken("replacement-account")));
+      )
+      .result();
+    await payloadStarted.promise;
+    await service.commitCredential(oauthCredential(codexAccessToken("replacement-account")));
 
-  assert.equal((await result).stopReason, "aborted");
-  releasePayload.resolve();
-  await new Promise<void>((resolve) => setImmediate(resolve));
-  assert.equal(websocketConstructorReads, 0);
-  assert.equal(fetchCalls, 0);
-});
+    assert.equal((await result).stopReason, "aborted");
+    releasePayload.resolve();
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    assert.equal(websocketConstructorReads, 0);
+    assert.equal(fetchCalls, 0);
+  },
+);
 
 test("cancelled stalled refresh releases the caller and does not block account recovery", async () => {
   const credentials = new InMemoryCredentialStore();
@@ -1088,7 +1102,14 @@ test("applies resolved Codex auth and caller transforms once to the native provi
   assert.deepEqual(captured?.env, { REGION: "two" });
 });
 
-const PROXY_ENV_NAMES = ["HTTPS_PROXY", "https_proxy", "ALL_PROXY", "all_proxy", "NO_PROXY", "no_proxy"];
+const PROXY_ENV_NAMES = [
+  "HTTPS_PROXY",
+  "https_proxy",
+  "ALL_PROXY",
+  "all_proxy",
+  "NO_PROXY",
+  "no_proxy",
+];
 
 /** Clears the proxy variables for one test and restores them afterwards. */
 function withoutProxyEnv(t: { after(fn: () => void): void }): void {
@@ -1128,7 +1149,11 @@ test("in-process Codex requests use a WebSocket where the runtime has one, and H
     else Reflect.deleteProperty(globalThis, "WebSocket");
   });
 
-  Object.defineProperty(globalThis, "WebSocket", { configurable: true, writable: true, value: class {} });
+  Object.defineProperty(globalThis, "WebSocket", {
+    configurable: true,
+    writable: true,
+    value: class {},
+  });
   // Pi Agent asks for "auto" by default; Aiden sends full requests over the
   // socket rather than Pi's previous-response delta continuation.
   await service.streamSimple(model, { messages: [] }, { transport: "auto" }).result();
@@ -1170,7 +1195,11 @@ test("in-process Codex requests stay on HTTP while a proxy is configured for the
     if (originalWebSocket) Object.defineProperty(globalThis, "WebSocket", originalWebSocket);
     else Reflect.deleteProperty(globalThis, "WebSocket");
   });
-  Object.defineProperty(globalThis, "WebSocket", { configurable: true, writable: true, value: class {} });
+  Object.defineProperty(globalThis, "WebSocket", {
+    configurable: true,
+    writable: true,
+    value: class {},
+  });
 
   // The runtime's WebSocket would bypass the proxy that HTTP requests honor.
   process.env.HTTPS_PROXY = "http://proxy.invalid:3128";
@@ -1368,7 +1397,10 @@ test("a failed credential commit does not discard an in-flight auth failure", as
     checkAuth: async () => ({ type: "oauth" as const, source: "OAuth" }),
   } as unknown as Models;
   const service = new CodexProviderService(models, credentials);
-  const runtimeResult = assert.rejects(service.prepareRuntimeModel("gpt-5.6-sol"), CodexRuntimeError);
+  const runtimeResult = assert.rejects(
+    service.prepareRuntimeModel("gpt-5.6-sol"),
+    CodexRuntimeError,
+  );
   const commitResult = assert.rejects(
     service.commitCredential({
       type: "oauth",
@@ -1403,7 +1435,10 @@ test("a failed logout does not discard an in-flight auth failure", async () => {
     logout: async () => pendingLogout.promise,
   } as unknown as Models;
   const service = new CodexProviderService(models, credentials);
-  const runtimeResult = assert.rejects(service.prepareRuntimeModel("gpt-5.6-sol"), CodexRuntimeError);
+  const runtimeResult = assert.rejects(
+    service.prepareRuntimeModel("gpt-5.6-sol"),
+    CodexRuntimeError,
+  );
   const logoutResult = assert.rejects(service.logout(), /credential delete failed/);
 
   pendingAuth.reject(new Error("invalid_grant"));
@@ -1470,35 +1505,47 @@ test("a completed older auth failure remains visible while a newer check is pend
 });
 
 for (const hook of ["transformHeaders", "onPayload", "onResponse"] as const) {
-  test(`cancelling a stalled Codex ${hook} hook settles before its late rejection`, { timeout: 2_000 }, async (t) => {
-    const credentials = new InMemoryCredentialStore();
-    await credentials.modify("openai-codex", async () => oauthCredential(codexAccessToken("account")));
-    const service = new CodexProviderService(builtinModels({ credentials }), credentials);
-    const model = service.getModel("gpt-5.6-sol");
-    assert.ok(model);
-    const started = deferred<void>();
-    const blocked = deferred<never>();
-    const controller = new AbortController();
-    let fetchCalls = 0;
-    t.mock.method(globalThis, "fetch", async () => {
-      fetchCalls += 1;
-      return new Response("", { status: 200 });
-    });
-    const result = service.streamSimple(model, { messages: [] }, {
-      signal: controller.signal,
-      [hook]: () => {
-        started.resolve();
-        return blocked.promise;
-      },
-    }).result();
-    await started.promise;
-    controller.abort(new Error("user cancelled"));
-    const terminal = await result;
-    assert.equal(terminal.stopReason, hook === "transformHeaders" ? "error" : "aborted");
-    assert.equal(fetchCalls, hook === "onResponse" ? 1 : 0);
-    blocked.reject(new Error("late hook rejection"));
-    await new Promise<void>((resolve) => setImmediate(resolve));
-    assert.equal(fetchCalls, hook === "onResponse" ? 1 : 0);
-    assert.equal((await service.snapshot()).needsAttention, false);
-  });
+  test(
+    `cancelling a stalled Codex ${hook} hook settles before its late rejection`,
+    { timeout: 2_000 },
+    async (t) => {
+      const credentials = new InMemoryCredentialStore();
+      await credentials.modify("openai-codex", async () =>
+        oauthCredential(codexAccessToken("account")),
+      );
+      const service = new CodexProviderService(builtinModels({ credentials }), credentials);
+      const model = service.getModel("gpt-5.6-sol");
+      assert.ok(model);
+      const started = deferred<void>();
+      const blocked = deferred<never>();
+      const controller = new AbortController();
+      let fetchCalls = 0;
+      t.mock.method(globalThis, "fetch", async () => {
+        fetchCalls += 1;
+        return new Response("", { status: 200 });
+      });
+      const result = service
+        .streamSimple(
+          model,
+          { messages: [] },
+          {
+            signal: controller.signal,
+            [hook]: () => {
+              started.resolve();
+              return blocked.promise;
+            },
+          },
+        )
+        .result();
+      await started.promise;
+      controller.abort(new Error("user cancelled"));
+      const terminal = await result;
+      assert.equal(terminal.stopReason, hook === "transformHeaders" ? "error" : "aborted");
+      assert.equal(fetchCalls, hook === "onResponse" ? 1 : 0);
+      blocked.reject(new Error("late hook rejection"));
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      assert.equal(fetchCalls, hook === "onResponse" ? 1 : 0);
+      assert.equal((await service.snapshot()).needsAttention, false);
+    },
+  );
 }

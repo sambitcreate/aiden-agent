@@ -48,14 +48,26 @@ test("only considers the default or original seed replaceable", () => {
   assert.equal(canReplaceGeneratedChatTitle("New agent", "Investigate reconnects"), true);
   assert.equal(canReplaceGeneratedChatTitle("New Agent", "Investigate reconnects"), true);
   assert.equal(canReplaceGeneratedChatTitle("New chat", "Investigate reconnects"), true);
-  assert.equal(canReplaceGeneratedChatTitle("Investigate reconnects", "Investigate reconnects"), true);
+  assert.equal(
+    canReplaceGeneratedChatTitle("Investigate reconnects", "Investigate reconnects"),
+    true,
+  );
   assert.equal(canReplaceGeneratedChatTitle("Keep my title", "Investigate reconnects"), false);
 });
 
 test("normalizes plain, prefixed, JSON, and fenced title responses", () => {
-  assert.equal(sanitizeGeneratedChatTitle('"Reconnect Failures After Restart."'), "Reconnect Failures After Restart");
-  assert.equal(sanitizeGeneratedChatTitle("Title: Fix reconnect spinner!"), "Fix reconnect spinner");
-  assert.equal(sanitizeGeneratedChatTitle('{"title":"Improve chat naming"}'), "Improve chat naming");
+  assert.equal(
+    sanitizeGeneratedChatTitle('"Reconnect Failures After Restart."'),
+    "Reconnect Failures After Restart",
+  );
+  assert.equal(
+    sanitizeGeneratedChatTitle("Title: Fix reconnect spinner!"),
+    "Fix reconnect spinner",
+  );
+  assert.equal(
+    sanitizeGeneratedChatTitle('{"title":"Improve chat naming"}'),
+    "Improve chat naming",
+  );
   assert.equal(
     sanitizeGeneratedChatTitle('```json\n{"title":"Improve chat naming"}\n```'),
     "Improve chat naming",
@@ -89,12 +101,15 @@ test("builds a bounded rename prompt from the original request and recent conver
       attachments: [attachment("image", "sidebar.png")],
       createdAt: 2,
     },
-    ...Array.from({ length: 10 }, (_, index): ChatMessage => ({
-      id: `assistant-${index}`,
-      role: "assistant",
-      content: `Implementation detail ${index} 🧩 `.repeat(1_000),
-      createdAt: 3 + index,
-    })),
+    ...Array.from(
+      { length: 10 },
+      (_, index): ChatMessage => ({
+        id: `assistant-${index}`,
+        role: "assistant",
+        content: `Implementation detail ${index} 🧩 `.repeat(1_000),
+        createdAt: 3 + index,
+      }),
+    ),
     {
       id: "user-2",
       role: "user",
@@ -123,7 +138,10 @@ test("renderer renames refuse a design-owned chat only when asked to", () => {
 });
 
 test("the title request is a tool-free one-off that writes no prompt cache", async () => {
-  const sent: Array<{ context: { tools?: unknown[]; messages: Array<{ role: string; content: unknown }> }; options: Record<string, unknown> }> = [];
+  const sent: Array<{
+    context: { tools?: unknown[]; messages: Array<{ role: string; content: unknown }> };
+    options: Record<string, unknown>;
+  }> = [];
   const runtime = {
     model: {
       id: "model-a",
@@ -142,12 +160,21 @@ test("the title request is a tool-free one-off that writes no prompt cache", asy
     streams: {
       streamSimple: (_model: unknown, context: unknown, options: unknown) => {
         sent.push({ context: context as never, options: options as Record<string, unknown> });
-        return { result: async () => ({ role: "assistant", content: [{ type: "text", text: "Fix login" }] }) };
+        return {
+          result: async () => ({
+            role: "assistant",
+            content: [{ type: "text", text: "Fix login" }],
+          }),
+        };
       },
     },
   } as unknown as Parameters<typeof requestChatTitle>[0];
   const image = { ...attachment("image", "screen.png"), data: "aGVsbG8=" };
-  await requestChatTitle(runtime, { content: "Fix the login redirect", attachments: [image] }, new AbortController().signal);
+  await requestChatTitle(
+    runtime,
+    { content: "Fix the login redirect", attachments: [image] },
+    new AbortController().signal,
+  );
   assert.equal(sent.length, 1);
   assert.equal(sent[0]!.options.cacheRetention, "none");
   assert.equal(sent[0]!.options.apiKey, "title-secret");
@@ -155,5 +182,8 @@ test("the title request is a tool-free one-off that writes no prompt cache", asy
   const user = sent[0]!.context.messages.filter((message) => message.role === "user");
   assert.equal(user.length, 1);
   const content = user[0]!.content as Array<{ type: string }>;
-  assert.deepEqual(content.map((part) => part.type), ["text", "image"]);
+  assert.deepEqual(
+    content.map((part) => part.type),
+    ["text", "image"],
+  );
 });

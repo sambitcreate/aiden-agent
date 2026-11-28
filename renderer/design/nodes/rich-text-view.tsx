@@ -43,7 +43,10 @@ function Line({ line }: { line: RichLine }) {
 export function RichTextView({ value, className }: { value: string; className?: string }) {
   const blocks = React.useMemo(() => parseRichText(value), [value]);
   return (
-    <div className={cn("design-rich-text whitespace-pre-wrap break-words", className)} onClickCapture={openRichLink}>
+    <div
+      className={cn("design-rich-text whitespace-pre-wrap break-words", className)}
+      onClickCapture={openRichLink}
+    >
       {blocks.map((block, index) => {
         if (block.type === "paragraph") {
           return (

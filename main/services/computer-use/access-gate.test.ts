@@ -226,7 +226,10 @@ test("missing permissions mark the chat to continue; an allow before setup finis
   assert.equal(d.forcedStatusReads[d.forcedStatusReads.length - 1], true);
 
   // A later (or parallel) call in the same response does not raise the card again.
-  assert.deepEqual(await gate.authorize("call-2"), { allowed: false, reason: COMPUTER_USE_SETUP_REASON });
+  assert.deepEqual(await gate.authorize("call-2"), {
+    allowed: false,
+    reason: COMPUTER_USE_SETUP_REASON,
+  });
   assert.equal(d.cards.length, 1);
 });
 
@@ -482,7 +485,9 @@ test("a revocation during the readiness recheck after an allow sends the call ba
       if (reads === 2) revokeComputerUseGrants();
       return READY;
     },
-    answer: (toolCallId) => ({ outcome: toolCallId === "call-1" && cards.length === 1 ? "allowed" : "denied" }),
+    answer: (toolCallId) => ({
+      outcome: toolCallId === "call-1" && cards.length === 1 ? "allowed" : "denied",
+    }),
   });
   assert.deepEqual(await gate.authorize("call-1"), {
     allowed: false,
@@ -495,7 +500,8 @@ test("a revocation while a chat grant is saved does not let the allow pass unche
   let saves = 0;
   const { gate, cards } = gateForCards({
     status: () => READY,
-    answer: () => (cards.length === 1 ? { outcome: "allowed", scope: "chat" } : { outcome: "denied" }),
+    answer: () =>
+      cards.length === 1 ? { outcome: "allowed", scope: "chat" } : { outcome: "denied" },
     grantChat: async () => {
       saves += 1;
       revokeComputerUseGrants();
@@ -532,7 +538,10 @@ test("an allow answered during a reset is refused and saves no grant", async () 
     answer: () => {
       reset = resetComputerUseGrants({
         cancelActivatedStreams: () => undefined,
-        clearAlwaysAllow: () => new Promise<void>((resolve) => { finishClearing = resolve; }),
+        clearAlwaysAllow: () =>
+          new Promise<void>((resolve) => {
+            finishClearing = resolve;
+          }),
         clearChatGrants: async () => 0,
       });
       return { outcome: "allowed", scope: "chat" };
@@ -583,7 +592,10 @@ test("a reset that starts during the grant read refuses instead of passing or as
     readGrant: async () => {
       startedReset ??= resetComputerUseGrants({
         cancelActivatedStreams: () => undefined,
-        clearAlwaysAllow: () => new Promise<void>((resolve) => { finishClearing = resolve; }),
+        clearAlwaysAllow: () =>
+          new Promise<void>((resolve) => {
+            finishClearing = resolve;
+          }),
         clearChatGrants: async () => 0,
       });
       return true;
@@ -670,7 +682,11 @@ test("a response that starts while reset is still clearing grants cannot keep a 
 
   d.willAnswer(false);
   assert.equal((await gate.authorize("call-2")).allowed, false);
-  assert.equal(d.cards.length, 1, "after reset the chat asks again instead of reusing the old grant");
+  assert.equal(
+    d.cards.length,
+    1,
+    "after reset the chat asks again instead of reusing the old grant",
+  );
 });
 
 test("an unsupported Mac or build blocks with its own detail and never raises a card", async (t) => {

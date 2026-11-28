@@ -359,9 +359,9 @@ test("process owner normalizes callback-bearing Pi input before IPC", async () =
   })();
   await new Promise((resolve) => setImmediate(resolve));
 
-  const start = child.sent.find(
-    (message) => (message as { kind?: unknown }).kind === "start",
-  ) as SubagentInferenceStartMessage | undefined;
+  const start = child.sent.find((message) => (message as { kind?: unknown }).kind === "start") as
+    | SubagentInferenceStartMessage
+    | undefined;
   assert.ok(start);
   assert.equal(typeof (start.context.tools?.[0] as { execute?: unknown }).execute, "undefined");
   assert.equal(typeof (start.options as { getApiKey?: unknown }).getApiKey, "undefined");
@@ -582,7 +582,10 @@ class AsyncProofProcess extends FakeProcess {
 
 test("asynchronous identity proofs are awaited before escalation is considered settled", async () => {
   const child = new AsyncProofProcess();
-  const owner = new SubagentInferenceProcessOwner(async () => child, { termGraceMs: 2, killGraceMs: 2 });
+  const owner = new SubagentInferenceProcessOwner(async () => child, {
+    termGraceMs: 2,
+    killGraceMs: 2,
+  });
   const cancellation = new AbortController();
   const stream = owner.stream(request, { model }, cancellation.signal);
   const events = (async () => {
@@ -623,47 +626,54 @@ test("an asynchronously indeterminate exit proof still fails closed", async () =
   assert.equal(cleanupFailures, 1);
 });
 
-test("a stop that could not be proven settles the run once the identity read recovers", { timeout: 5_000 }, async (t) => {
-  const child = new AsyncProofProcess();
-  child.killHard = async () => {
-    await new Promise((resolve) => setImmediate(resolve));
-    child.hardKills += 1;
-    if (child.proofFailure) throw child.proofFailure;
-    child.alive = false;
-  };
-  let cleanupFailures = 0;
-  const owner = new SubagentInferenceProcessOwner(
-    async () => child,
-    { termGraceMs: 2, killGraceMs: 2 },
-    () => {
-      cleanupFailures += 1;
-      // The transient `ps` overload clears after the first failed proof.
-      child.proofFailure = undefined;
-    },
-  );
-  const cancellation = new AbortController();
-  const stream = owner.stream(request, { model }, cancellation.signal);
-  for (let turn = 0; turn < 5 && child.sent.length === 0; turn += 1) {
-    await new Promise((resolve) => setImmediate(resolve));
-  }
-  child.proofFailure = new Error("process identity unavailable");
-  cancellation.abort();
+test(
+  "a stop that could not be proven settles the run once the identity read recovers",
+  { timeout: 5_000 },
+  async (t) => {
+    const child = new AsyncProofProcess();
+    child.killHard = async () => {
+      await new Promise((resolve) => setImmediate(resolve));
+      child.hardKills += 1;
+      if (child.proofFailure) throw child.proofFailure;
+      child.alive = false;
+    };
+    let cleanupFailures = 0;
+    const owner = new SubagentInferenceProcessOwner(
+      async () => child,
+      { termGraceMs: 2, killGraceMs: 2 },
+      () => {
+        cleanupFailures += 1;
+        // The transient `ps` overload clears after the first failed proof.
+        child.proofFailure = undefined;
+      },
+    );
+    const cancellation = new AbortController();
+    const stream = owner.stream(request, { model }, cancellation.signal);
+    for (let turn = 0; turn < 5 && child.sent.length === 0; turn += 1) {
+      await new Promise((resolve) => setImmediate(resolve));
+    }
+    child.proofFailure = new Error("process identity unavailable");
+    cancellation.abort();
 
-  // Recovery timers are unref'd so they never hold a quitting app open; keep
-  // the test's event loop alive while the run settles.
-  const keepAlive = setInterval(() => {}, 50);
-  t.after(() => clearInterval(keepAlive));
-  const result = await stream.result();
-  assert.equal(result.stopReason, "aborted", "the parent agent is no longer left waiting");
-  assert.equal(cleanupFailures, 1);
-  assert.ok(child.hardKills >= 2, "the hard kill is retried once identity can be verified");
-  assert.equal(await owner.shutdown(), false, "the earlier unproven stop still fails closed");
-});
+    // Recovery timers are unref'd so they never hold a quitting app open; keep
+    // the test's event loop alive while the run settles.
+    const keepAlive = setInterval(() => {}, 50);
+    t.after(() => clearInterval(keepAlive));
+    const result = await stream.result();
+    assert.equal(result.stopReason, "aborted", "the parent agent is no longer left waiting");
+    assert.equal(cleanupFailures, 1);
+    assert.ok(child.hardKills >= 2, "the hard kill is retried once identity can be verified");
+    assert.equal(await owner.shutdown(), false, "the earlier unproven stop still fails closed");
+  },
+);
 
 test("a worker that exited before its exit listener attached is found by the asynchronous proof", async () => {
   const child = new AsyncProofProcess();
   child.exitedSilently = true;
-  const owner = new SubagentInferenceProcessOwner(async () => child, { termGraceMs: 2, killGraceMs: 2 });
+  const owner = new SubagentInferenceProcessOwner(async () => child, {
+    termGraceMs: 2,
+    killGraceMs: 2,
+  });
   const seen = [];
   for await (const event of owner.stream(request, { model })) seen.push(event);
   assert.equal(seen[seen.length - 1]?.type, "error");
@@ -706,7 +716,9 @@ test("a throwing TERM still escalates to verified hard kill and delivers cancell
   const owner = new SubagentInferenceProcessOwner(
     async () => child,
     { termGraceMs: 2, killGraceMs: 2 },
-    () => { cleanupFailures += 1; },
+    () => {
+      cleanupFailures += 1;
+    },
   );
   const stream = owner.stream(request, { model });
   await new Promise((resolve) => setImmediate(resolve));
@@ -739,51 +751,66 @@ test("out-of-sequence frames and cancellation share one owned shutdown", async (
 
   assert.equal(await owner.shutdown(), true);
   assert.equal((await stream.result()).stopReason, "aborted");
-  assert.equal(child.sent.filter((message) => (message as { kind?: string }).kind === "cancel").length, 1);
-  assert.equal(child.terminations, 1);
-  assert.equal(child.hardKills, 1);
-});
-
-test("out-of-sequence cleanup failure stays owned even when its observer throws", { timeout: 2_000 }, async () => {
-  const child = new StubbornProcess();
-  let cleanupFailures = 0;
-  let observedFailure!: () => void;
-  const failureObserved = new Promise<void>((resolve) => { observedFailure = resolve; });
-  const owner = new SubagentInferenceProcessOwner(
-    async () => child,
-    { termGraceMs: 2, killGraceMs: 2 },
-    () => {
-      cleanupFailures += 1;
-      observedFailure();
-      throw new Error("Diagnostic observer failed");
-    },
+  assert.equal(
+    child.sent.filter((message) => (message as { kind?: string }).kind === "cancel").length,
+    1,
   );
-  const stream = owner.stream(request, { model });
-  let resultDelivered = false;
-  void stream.result().then(() => { resultDelivered = true; });
-  await new Promise((resolve) => setImmediate(resolve));
-  child.emit("message", {
-    kind: "event",
-    version: SUBAGENT_INFERENCE_PROTOCOL_VERSION,
-    requestId: request.requestId,
-    sequence: 1,
-    event: { type: "error", reason: "error", error: assistantError() },
-  });
-
-  await failureObserved;
-  assert.equal(await owner.shutdown(), false);
-  assert.equal(cleanupFailures, 1);
   assert.equal(child.terminations, 1);
   assert.equal(child.hardKills, 1);
-  assert.equal(resultDelivered, false, "unverified process exit must not publish a terminal result");
-  assert.equal(child.listenerCount("exit"), 1, "the unresolved child remains owned");
-
-  child.alive = false;
-  child.emit("exit", 137);
-  assert.equal((await stream.result()).stopReason, "aborted");
-  assert.equal(await owner.shutdown(), false, "late exit must not erase the cleanup failure");
-  assert.equal(child.listenerCount("exit"), 0);
 });
+
+test(
+  "out-of-sequence cleanup failure stays owned even when its observer throws",
+  { timeout: 2_000 },
+  async () => {
+    const child = new StubbornProcess();
+    let cleanupFailures = 0;
+    let observedFailure!: () => void;
+    const failureObserved = new Promise<void>((resolve) => {
+      observedFailure = resolve;
+    });
+    const owner = new SubagentInferenceProcessOwner(
+      async () => child,
+      { termGraceMs: 2, killGraceMs: 2 },
+      () => {
+        cleanupFailures += 1;
+        observedFailure();
+        throw new Error("Diagnostic observer failed");
+      },
+    );
+    const stream = owner.stream(request, { model });
+    let resultDelivered = false;
+    void stream.result().then(() => {
+      resultDelivered = true;
+    });
+    await new Promise((resolve) => setImmediate(resolve));
+    child.emit("message", {
+      kind: "event",
+      version: SUBAGENT_INFERENCE_PROTOCOL_VERSION,
+      requestId: request.requestId,
+      sequence: 1,
+      event: { type: "error", reason: "error", error: assistantError() },
+    });
+
+    await failureObserved;
+    assert.equal(await owner.shutdown(), false);
+    assert.equal(cleanupFailures, 1);
+    assert.equal(child.terminations, 1);
+    assert.equal(child.hardKills, 1);
+    assert.equal(
+      resultDelivered,
+      false,
+      "unverified process exit must not publish a terminal result",
+    );
+    assert.equal(child.listenerCount("exit"), 1, "the unresolved child remains owned");
+
+    child.alive = false;
+    child.emit("exit", 137);
+    assert.equal((await stream.result()).stopReason, "aborted");
+    assert.equal(await owner.shutdown(), false, "late exit must not erase the cleanup failure");
+    assert.equal(child.listenerCount("exit"), 0);
+  },
+);
 
 test("an unverified launch never receives provider request data", async () => {
   const child = new UnverifiedLaunchProcess();

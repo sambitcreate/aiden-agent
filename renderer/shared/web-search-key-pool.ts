@@ -64,7 +64,9 @@ export function isWebSearchKeyPoolProviderId(value: unknown): value is WebSearch
 }
 
 export function isWebExtractKeyPoolId(value: unknown): value is WebExtractKeyPoolId {
-  return typeof value === "string" && (WEB_EXTRACT_KEY_POOL_IDS as readonly string[]).includes(value);
+  return (
+    typeof value === "string" && (WEB_EXTRACT_KEY_POOL_IDS as readonly string[]).includes(value)
+  );
 }
 
 export function isWebKeyPoolId(value: unknown): value is WebKeyPoolId {

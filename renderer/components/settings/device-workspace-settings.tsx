@@ -10,7 +10,10 @@ export interface DeviceWorkspaceSettingsViewProps {
 }
 
 /** How devices appear around the chat. A window preference; nothing is sent anywhere. */
-export function DeviceWorkspaceSettingsView({ autoFloat, onAutoFloatChange }: DeviceWorkspaceSettingsViewProps) {
+export function DeviceWorkspaceSettingsView({
+  autoFloat,
+  onAutoFloatChange,
+}: DeviceWorkspaceSettingsViewProps) {
   return (
     <FieldSet title="Workspace">
       <Field
@@ -18,7 +21,11 @@ export function DeviceWorkspaceSettingsView({ autoFloat, onAutoFloatChange }: De
         description="When Aiden opens a simulator in a chat, show it in a small player over the chat. Turn this off to open it in its Environment tab instead."
       >
         <div className="flex items-center justify-end">
-          <Switch checked={autoFloat} aria-label={AUTO_FLOAT_DEVICE_LABEL} onCheckedChange={onAutoFloatChange} />
+          <Switch
+            checked={autoFloat}
+            aria-label={AUTO_FLOAT_DEVICE_LABEL}
+            onCheckedChange={onAutoFloatChange}
+          />
         </div>
       </Field>
     </FieldSet>
@@ -27,7 +34,12 @@ export function DeviceWorkspaceSettingsView({ autoFloat, onAutoFloatChange }: De
 
 export function DeviceWorkspaceSettings() {
   const autoFloat = useAutoFloatDevice();
-  return <DeviceWorkspaceSettingsView autoFloat={autoFloat} onAutoFloatChange={deviceWorkspace.setAutoFloat} />;
+  return (
+    <DeviceWorkspaceSettingsView
+      autoFloat={autoFloat}
+      onAutoFloatChange={deviceWorkspace.setAutoFloat}
+    />
+  );
 }
 
 /** Settings → Simulator: permissions and helper tools, then how devices appear in the workspace. */

@@ -1,4 +1,9 @@
-import { PiVerificationStore, VERIFICATION_RETENTION_MS, verificationIdentity, verificationSnapshot } from "./pi-verification-store.js";
+import {
+  PiVerificationStore,
+  VERIFICATION_RETENTION_MS,
+  verificationIdentity,
+  verificationSnapshot,
+} from "./pi-verification-store.js";
 import { WorkflowEvidenceStore } from "./workflow-evidence-store.js";
 import { toolOutputScope } from "./tool-output-store.js";
 import { DataStore } from "./data-store.js";
@@ -208,7 +213,9 @@ export class PiRuntimeEffectStore {
         if (operation.state !== "running") return operation;
         changed = true;
         const recovered: DurablePiRuntimeOperation = {
-          ...operation, state: "interrupted", updatedAt: Math.max(operation.updatedAt, restartAt),
+          ...operation,
+          state: "interrupted",
+          updatedAt: Math.max(operation.updatedAt, restartAt),
         };
         return recovered;
       });
@@ -220,8 +227,9 @@ export class PiRuntimeEffectStore {
     // are private evidence and must never delay or fail runtime recovery.
     // Operations past receipt retention would only be pruned again.
     const retainedSince = this.currentTime() - VERIFICATION_RETENTION_MS;
-    const pending = (await this.data.load()).operations
-      .filter((operation) => operation.state !== "running" && operation.updatedAt > retainedSince);
+    const pending = (await this.data.load()).operations.filter(
+      (operation) => operation.state !== "running" && operation.updatedAt > retainedSince,
+    );
     this.receiptCatchUp = (async () => {
       for (const operation of pending) await this.recordOperationVerification(operation);
     })();
@@ -332,12 +340,26 @@ export class PiRuntimeEffectStore {
   }
 
   private async publishOperationVerification(finished: DurablePiRuntimeOperation): Promise<void> {
-    await this.verification.check(finished.chatId, toolOutputScope({ runId: finished.runId, sessionId: finished.sessionId }), {
-      checkId: verificationIdentity("check", finished.operationId), runId: verificationIdentity("run", finished.runId), turnId: verificationIdentity("turn", finished.operationId),
-      artifactId: verificationIdentity("artifact", finished.operationId), kind: "response_ended",
-      snapshot: async () => verificationSnapshot(JSON.stringify(finished)),
-      observe: async () => ({ result: finished.state === "completed" ? "passed" : finished.state === "app_cancelled" ? "not_run" : "inconclusive" }),
-    });
+    await this.verification.check(
+      finished.chatId,
+      toolOutputScope({ runId: finished.runId, sessionId: finished.sessionId }),
+      {
+        checkId: verificationIdentity("check", finished.operationId),
+        runId: verificationIdentity("run", finished.runId),
+        turnId: verificationIdentity("turn", finished.operationId),
+        artifactId: verificationIdentity("artifact", finished.operationId),
+        kind: "response_ended",
+        snapshot: async () => verificationSnapshot(JSON.stringify(finished)),
+        observe: async () => ({
+          result:
+            finished.state === "completed"
+              ? "passed"
+              : finished.state === "app_cancelled"
+                ? "not_run"
+                : "inconclusive",
+        }),
+      },
+    );
   }
 
   async prepareEffect(input: PreparePiRuntimeEffectInput): Promise<DurablePiRuntimeEffect> {
@@ -653,26 +675,22 @@ export class PiRuntimeEffectStore {
     if (!isSafePiRuntimeIdentity(chatId)) return;
     await this.data.update((database) => {
       if (
-        database.operations.some(
-          (operation) => {
-            if (operation.chatId !== chatId || operation.state !== "running") return false;
-            const localTerminal = [...this.localUnknown.values()].some(
-              (effect) => effect.operationId === operation.operationId,
-            );
-            if (!localTerminal) return true;
-            return database.effects.some((effect) => {
-              if (effect.operationId !== operation.operationId) return false;
-              const effective = this.localUnknown.get(effect.effectId) ?? effect;
-              return !isPiRuntimeEffectTerminal(effective.state);
-            });
-          },
-        ) ||
-        database.effects.some(
-          (effect) => {
+        database.operations.some((operation) => {
+          if (operation.chatId !== chatId || operation.state !== "running") return false;
+          const localTerminal = [...this.localUnknown.values()].some(
+            (effect) => effect.operationId === operation.operationId,
+          );
+          if (!localTerminal) return true;
+          return database.effects.some((effect) => {
+            if (effect.operationId !== operation.operationId) return false;
             const effective = this.localUnknown.get(effect.effectId) ?? effect;
-            return effective.chatId === chatId && !isPiRuntimeEffectTerminal(effective.state);
-          },
-        )
+            return !isPiRuntimeEffectTerminal(effective.state);
+          });
+        }) ||
+        database.effects.some((effect) => {
+          const effective = this.localUnknown.get(effect.effectId) ?? effect;
+          return effective.chatId === chatId && !isPiRuntimeEffectTerminal(effective.state);
+        })
       ) {
         throw new Error("Pi runtime chat has active durable effects and cannot be deleted.");
       }

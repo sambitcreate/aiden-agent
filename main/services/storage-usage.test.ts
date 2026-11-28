@@ -55,7 +55,8 @@ async function until(check: () => boolean): Promise<void> {
 /** Allocated bytes of profile files, the oracle for what the scan should report. */
 async function allocated(root: string, ...relativePaths: string[]): Promise<number> {
   let total = 0;
-  for (const relativePath of relativePaths) total += diskBytes(await fs.lstat(path.join(root, relativePath)));
+  for (const relativePath of relativePaths)
+    total += diskBytes(await fs.lstat(path.join(root, relativePath)));
   return total;
 }
 
@@ -88,22 +89,24 @@ function chat(id: string, overrides: Partial<ChatMeta> = {}): ChatMeta {
   };
 }
 
-async function harness(options: {
-  workspaces?: Workspace[];
-  chats?: ChatMeta[];
-  pinned?: string[];
-  pinnedReadFails?: boolean;
-  gitState?: { uncommitted?: number; unpushed?: number; fail?: boolean };
-  profileFiles?: Record<string, number>;
-  routines?: string[] | "fail";
-  /** Put managed worktrees under the profile's own worktree root. */
-  worktreesInProfile?: boolean;
-  /** Stand-ins for the app's deletion paths, run instead of only recording the id. */
-  onRemoveWorktree?: (workspaceId: string, assertStillSafe: () => void) => Promise<void>;
-  onRemoveChat?: (chatId: string, assertStillSafe: () => void) => Promise<void>;
-  onClearLogs?: (root: string) => Promise<void>;
-  onClearBrowserCache?: (root: string) => Promise<void>;
-} = {}): Promise<Harness> {
+async function harness(
+  options: {
+    workspaces?: Workspace[];
+    chats?: ChatMeta[];
+    pinned?: string[];
+    pinnedReadFails?: boolean;
+    gitState?: { uncommitted?: number; unpushed?: number; fail?: boolean };
+    profileFiles?: Record<string, number>;
+    routines?: string[] | "fail";
+    /** Put managed worktrees under the profile's own worktree root. */
+    worktreesInProfile?: boolean;
+    /** Stand-ins for the app's deletion paths, run instead of only recording the id. */
+    onRemoveWorktree?: (workspaceId: string, assertStillSafe: () => void) => Promise<void>;
+    onRemoveChat?: (chatId: string, assertStillSafe: () => void) => Promise<void>;
+    onClearLogs?: (root: string) => Promise<void>;
+    onClearBrowserCache?: (root: string) => Promise<void>;
+  } = {},
+): Promise<Harness> {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-storage-service-"));
   const removed = { worktrees: [] as string[], chats: [] as string[] };
   const broadcasts: string[] = [];
@@ -237,7 +240,11 @@ test("the first read returns at once and the scan fills in behind it", async () 
     { profileFiles: { "chats/index.json": 1_200, "worktrees/w/README": 3_400 } },
     async (h) => {
       const first = await h.service.report();
-      assert.equal(first.scan.status, "scanning", "a cold read never waits on a walk, and says one started");
+      assert.equal(
+        first.scan.status,
+        "scanning",
+        "a cold read never waits on a walk, and says one started",
+      );
       assert.equal(first.totalBytes, 0);
 
       const fresh = await h.service.refresh();
@@ -246,7 +253,10 @@ test("the first read returns at once and the scan fills in behind it", async () 
       const worktrees = fresh.categories.find((entry) => entry.id === "worktrees");
       assert.equal(threads?.bytes, await allocated(h.root, "chats/index.json"));
       assert.equal(worktrees?.bytes, await allocated(h.root, "worktrees/w/README"));
-      assert.equal(fresh.totalBytes, await allocated(h.root, "chats/index.json", "worktrees/w/README"));
+      assert.equal(
+        fresh.totalBytes,
+        await allocated(h.root, "chats/index.json", "worktrees/w/README"),
+      );
       assert.ok(h.broadcasts.includes("scan-started"));
       assert.ok(h.broadcasts.includes("scan-finished"));
     },
@@ -304,7 +314,10 @@ test("cleanup removes only the idle worktree, never the one with local work", as
       gitState: { uncommitted: 1 },
     },
     async (h) => {
-      assert.equal((await h.service.refresh()).worktrees.every((entry) => entry.protected), true);
+      assert.equal(
+        (await h.service.refresh()).worktrees.every((entry) => entry.protected),
+        true,
+      );
       const result = await h.service.cleanup({
         action: "remove-worktrees",
         inactiveDays: 14,
@@ -357,7 +370,11 @@ test("a worktree attached to an active chat is never removed", async () => {
       h.setBusy("chat-a");
       const report = await h.service.refresh();
       assert.equal(report.worktrees[0]?.protectionReason, "active");
-      const result = await h.service.cleanup({ action: "remove-worktrees", inactiveDays: 7, targetIds: ["ws-clean"] });
+      const result = await h.service.cleanup({
+        action: "remove-worktrees",
+        inactiveDays: 7,
+        targetIds: ["ws-clean"],
+      });
       assert.deepEqual(h.removed.worktrees, []);
       assert.equal(result.freedBytes, 0);
     },
@@ -380,12 +397,18 @@ test("a chat's size counts only the pictures no other chat shows", async () => {
         path.join(h.root, "chats", "chat-old.json"),
         JSON.stringify({ attachments: [{ sha256: own }, { sha256: shared }] }),
       );
-      await fs.writeFile(path.join(h.root, "chats", "chat-other.json"), JSON.stringify({ attachments: [{ sha256: shared }] }));
+      await fs.writeFile(
+        path.join(h.root, "chats", "chat-other.json"),
+        JSON.stringify({ attachments: [{ sha256: shared }] }),
+      );
       const report = await h.service.refresh();
       const old = report.threads.find((entry) => entry.chatId === "chat-old");
       const other = report.threads.find((entry) => entry.chatId === "chat-other");
       // Deleting "Old" frees its transcript and its own picture; the shared one stays for "Other".
-      assert.equal(old?.bytes, await allocated(h.root, "chats/chat-old.json", `chats/images/${own.slice(0, 2)}/${own}`));
+      assert.equal(
+        old?.bytes,
+        await allocated(h.root, "chats/chat-old.json", `chats/images/${own.slice(0, 2)}/${own}`),
+      );
       assert.equal(old?.imageCount, 2);
       assert.equal(other?.bytes, await allocated(h.root, "chats/chat-other.json"));
       assert.equal(old?.bytesComplete, true);
@@ -412,18 +435,34 @@ test("chats are deleted only one at a time, and protected chats never", async ()
         "there is no sweep of old chats",
       );
       await assert.rejects(
-        h.service.cleanup({ action: "delete-threads", inactiveDays: 30, targetIds: ["chat-old", "chat-older"] }),
+        h.service.cleanup({
+          action: "delete-threads",
+          inactiveDays: 30,
+          targetIds: ["chat-old", "chat-older"],
+        }),
         /one at a time/u,
       );
       assert.deepEqual(h.removed.chats, []);
 
-      const pinned = await h.service.cleanup({ action: "delete-threads", inactiveDays: 30, targetIds: ["chat-pinned"] });
-      const owned = await h.service.cleanup({ action: "delete-threads", inactiveDays: 30, targetIds: ["chat-owned"] });
+      const pinned = await h.service.cleanup({
+        action: "delete-threads",
+        inactiveDays: 30,
+        targetIds: ["chat-pinned"],
+      });
+      const owned = await h.service.cleanup({
+        action: "delete-threads",
+        inactiveDays: 30,
+        targetIds: ["chat-owned"],
+      });
       assert.equal(pinned.skipped[0]?.reason, "pinned");
       assert.equal(owned.skipped[0]?.reason, "owned");
       assert.deepEqual(h.removed.chats, []);
 
-      const result = await h.service.cleanup({ action: "delete-threads", inactiveDays: 30, targetIds: ["chat-old"] });
+      const result = await h.service.cleanup({
+        action: "delete-threads",
+        inactiveDays: 30,
+        targetIds: ["chat-old"],
+      });
       assert.deepEqual(h.removed.chats, ["chat-old"]);
       assert.equal(result.removed.length, 1);
     },
@@ -440,7 +479,10 @@ test("a worktree a scheduled task runs in is kept, and an unreadable task list k
         "routine",
       );
       const preview = await h.service.preview({ action: "remove-worktrees", inactiveDays: 14 });
-      assert.deepEqual(preview.items.map((item) => item.id), ["ws-clean"]);
+      assert.deepEqual(
+        preview.items.map((item) => item.id),
+        ["ws-clean"],
+      );
 
       // A task added to the clean worktree after the preview keeps it too.
       h.setRoutines(["ws-routine", "ws-clean"]);
@@ -455,8 +497,16 @@ test("a worktree a scheduled task runs in is kept, and an unreadable task list k
       h.setRoutines("fail");
       await h.service.refresh(); // joins the rescan the last cleanup started
       await h.service.refresh();
-      const blind = await h.service.cleanup({ action: "remove-worktrees", inactiveDays: 14, targetIds: ["ws-clean"] });
-      assert.deepEqual(h.removed.worktrees, [], "no worktree is removed while scheduled tasks can't be read");
+      const blind = await h.service.cleanup({
+        action: "remove-worktrees",
+        inactiveDays: 14,
+        targetIds: ["ws-clean"],
+      });
+      assert.deepEqual(
+        h.removed.worktrees,
+        [],
+        "no worktree is removed while scheduled tasks can't be read",
+      );
       assert.equal(blind.skipped[0]?.reason, "unknown-routines");
     },
   );
@@ -466,7 +516,11 @@ test("each worktree is measured once and still listed when the walk runs out of 
   const files: Record<string, number> = {};
   for (let index = 0; index < 30; index += 1) files[`worktrees/repo/ws-a/file-${index}`] = 1_000;
   await withHarness(
-    { workspaces: [workspace("ws-a"), workspace("ws-b")], worktreesInProfile: true, profileFiles: files },
+    {
+      workspaces: [workspace("ws-a"), workspace("ws-b")],
+      worktreesInProfile: true,
+      profileFiles: files,
+    },
     async (h) => {
       const report = await h.service.refresh();
       const a = report.worktrees.find((entry) => entry.workspaceId === "ws-a");
@@ -484,7 +538,10 @@ test("each worktree is measured once and still listed when the walk runs out of 
     }
     const inProfile = (id: string): Workspace =>
       workspace(id, {
-        managedWorktree: { ...workspace(id).managedWorktree!, worktreePath: path.join(root, "worktrees", "repo", id) },
+        managedWorktree: {
+          ...workspace(id).managedWorktree!,
+          worktreePath: path.join(root, "worktrees", "repo", id),
+        },
       });
     const service = createStorageUsageService({
       profileRoot: () => root,
@@ -521,21 +578,35 @@ test("each worktree is measured once and still listed when the walk runs out of 
 test("a folder the walk had to skip makes that category and its cleanup a minimum", async () => {
   const deep = `logs/${Array.from({ length: 30 }, (_, index) => `d${index}`).join("/")}/old.log`;
   await withHarness(
-    { profileFiles: { [deep]: 5_000, "logs/today.log": 2_000, "workspace-artifacts/a.bin": 3_000 } },
+    {
+      profileFiles: { [deep]: 5_000, "logs/today.log": 2_000, "workspace-artifacts/a.bin": 3_000 },
+    },
     async (h) => {
       const report = await h.service.refresh();
       assert.equal(report.scan.status, "ready");
-      assert.equal(report.scan.truncated, true, "a skipped folder is not reported as an exact total");
+      assert.equal(
+        report.scan.truncated,
+        true,
+        "a skipped folder is not reported as an exact total",
+      );
       const logs = report.categories.find((entry) => entry.id === "logs");
       assert.equal(logs?.complete, false);
-      assert.equal(logs?.bytes, await allocated(h.root, "logs/today.log"), "the rest of the folder is still counted");
+      assert.equal(
+        logs?.bytes,
+        await allocated(h.root, "logs/today.log"),
+        "the rest of the folder is still counted",
+      );
       assert.notEqual(
         report.categories.find((entry) => entry.id === "artifacts")?.complete,
         false,
         "other categories are measured in full",
       );
       const preview = await h.service.preview({ action: "clear-logs", inactiveDays: 14 });
-      assert.equal(preview.totalComplete, false, "clearing it can free more than it promises, never less");
+      assert.equal(
+        preview.totalComplete,
+        false,
+        "clearing it can free more than it promises, never less",
+      );
     },
   );
 });
@@ -545,8 +616,12 @@ test("browser data counts the whole profile, and Clear cache frees only its cach
     {
       onClearBrowserCache: async (root) => {
         await fs.rm(path.join(root, "Cache"), { recursive: true });
-        await fs.rm(path.join(root, "Partitions/aiden-browser-profile-abc/Cache"), { recursive: true });
-        await fs.rm(path.join(root, "Partitions/aiden-bot-bot~3a1/Code Cache"), { recursive: true });
+        await fs.rm(path.join(root, "Partitions/aiden-browser-profile-abc/Cache"), {
+          recursive: true,
+        });
+        await fs.rm(path.join(root, "Partitions/aiden-bot-bot~3a1/Code Cache"), {
+          recursive: true,
+        });
       },
       profileFiles: {
         "Partitions/aiden-browser-profile-abc/Cookies": 50_000,
@@ -555,7 +630,7 @@ test("browser data counts the whole profile, and Clear cache frees only its cach
         // A partition Aiden did not create: counted, but Clear cache never touches it.
         "Partitions/someone-else/Cache/Cache_Data/data_2": 70_000,
         "Cache/Cache_Data/data_0": 20_000,
-        "Preferences": 3_000,
+        Preferences: 3_000,
       },
     },
     async (h) => {
@@ -631,14 +706,11 @@ test("a clear reports what really left the disk, not what the plan measured", as
     },
   );
   // A cache a live session kept hold of frees nothing, and says so.
-  await withHarness(
-    { profileFiles: { "Cache/Cache_Data/data_0": 20_000 } },
-    async (h) => {
-      await h.service.refresh();
-      const result = await h.service.cleanup({ action: "clear-browser-cache", inactiveDays: 14 });
-      assert.equal(result.freedBytes, 0);
-    },
-  );
+  await withHarness({ profileFiles: { "Cache/Cache_Data/data_0": 20_000 } }, async (h) => {
+    await h.service.refresh();
+    const result = await h.service.cleanup({ action: "clear-browser-cache", inactiveDays: 14 });
+    assert.equal(result.freedBytes, 0);
+  });
 });
 
 test("a clear that fails partway still counts what it deleted and reports the failure", async () => {
@@ -677,7 +749,11 @@ test("a rescan that raced a removal never brings the removed worktree back", asy
     async (h) => {
       live = h;
       await h.service.refresh();
-      const cleanup = h.service.cleanup({ action: "remove-worktrees", inactiveDays: 14, targetIds: ["ws-a"] });
+      const cleanup = h.service.cleanup({
+        action: "remove-worktrees",
+        inactiveDays: 14,
+        targetIds: ["ws-a"],
+      });
       await until(() => removing);
 
       // The person presses Measure again while the removal runs: this walk has
@@ -690,7 +766,11 @@ test("a rescan that raced a removal never brings the removed worktree back", asy
       releaseGit();
       await racing;
 
-      assert.deepEqual((await h.service.report()).worktrees, [], "the walk that saw it is thrown away");
+      assert.deepEqual(
+        (await h.service.report()).worktrees,
+        [],
+        "the walk that saw it is thrown away",
+      );
     },
   );
 });
@@ -702,12 +782,20 @@ test("something already gone is reported as gone, never as protected", async () 
     chats.length = 0;
     h.workspaces.length = 0;
 
-    const thread = await h.service.cleanup({ action: "delete-threads", inactiveDays: 30, targetIds: ["chat-old"] });
+    const thread = await h.service.cleanup({
+      action: "delete-threads",
+      inactiveDays: 30,
+      targetIds: ["chat-old"],
+    });
     assert.deepEqual(thread.skipped, []);
     assert.match(thread.failed[0]?.reason ?? "", /already gone/u);
 
     // The rescan after that cleanup no longer lists the worktree at all.
-    const worktree = await h.service.cleanup({ action: "remove-worktrees", inactiveDays: 14, targetIds: ["ws-a"] });
+    const worktree = await h.service.cleanup({
+      action: "remove-worktrees",
+      inactiveDays: 14,
+      targetIds: ["ws-a"],
+    });
     assert.deepEqual(worktree.skipped, []);
     assert.match(worktree.failed[0]?.reason ?? "", /already gone/u);
     assert.deepEqual(h.removed, { worktrees: [], chats: [] });
@@ -715,7 +803,11 @@ test("something already gone is reported as gone, never as protected", async () 
   await withHarness({ workspaces: [workspace("ws-a")] }, async (h) => {
     await h.service.refresh();
     h.workspaces.length = 0;
-    const result = await h.service.cleanup({ action: "remove-worktrees", inactiveDays: 14, targetIds: ["ws-a"] });
+    const result = await h.service.cleanup({
+      action: "remove-worktrees",
+      inactiveDays: 14,
+      targetIds: ["ws-a"],
+    });
     assert.deepEqual(result.skipped, [], "listed in a report that is now out of date");
     assert.match(result.failed[0]?.reason ?? "", /already gone/u);
   });
@@ -734,7 +826,11 @@ test("work that starts between the last check and the deletion keeps the item", 
     async (h) => {
       live = h;
       await h.service.refresh();
-      const result = await h.service.cleanup({ action: "delete-threads", inactiveDays: 30, targetIds: ["chat-old"] });
+      const result = await h.service.cleanup({
+        action: "delete-threads",
+        inactiveDays: 30,
+        targetIds: ["chat-old"],
+      });
       assert.deepEqual(h.removed.chats, []);
       assert.deepEqual(result.failed, [], "keeping it is not a failure");
       assert.equal(result.skipped[0]?.reason, "active");
@@ -752,7 +848,11 @@ test("work that starts between the last check and the deletion keeps the item", 
     async (h) => {
       live = h;
       await h.service.refresh();
-      const result = await h.service.cleanup({ action: "remove-worktrees", inactiveDays: 14, targetIds: ["ws-a"] });
+      const result = await h.service.cleanup({
+        action: "remove-worktrees",
+        inactiveDays: 14,
+        targetIds: ["ws-a"],
+      });
       assert.deepEqual(h.removed.worktrees, []);
       assert.equal(result.skipped[0]?.reason, "active");
     },
@@ -768,7 +868,11 @@ test("work that starts between the last check and the deletion keeps the item", 
     async (h) => {
       live = h;
       await h.service.refresh();
-      const result = await h.service.cleanup({ action: "remove-worktrees", inactiveDays: 14, targetIds: ["ws-a"] });
+      const result = await h.service.cleanup({
+        action: "remove-worktrees",
+        inactiveDays: 14,
+        targetIds: ["ws-a"],
+      });
       assert.deepEqual(h.removed.worktrees, []);
       assert.equal(result.skipped[0]?.reason, "terminal");
     },
@@ -779,13 +883,23 @@ test("a worktree with a terminal open is kept, because removal would kill that s
   await withHarness({ workspaces: [workspace("ws-a"), workspace("ws-b")] }, async (h) => {
     h.setTerminalOpen("ws-a");
     const report = await h.service.refresh();
-    assert.equal(report.worktrees.find((entry) => entry.workspaceId === "ws-a")?.protectionReason, "terminal");
+    assert.equal(
+      report.worktrees.find((entry) => entry.workspaceId === "ws-a")?.protectionReason,
+      "terminal",
+    );
     const preview = await h.service.preview({ action: "remove-worktrees", inactiveDays: 14 });
-    assert.deepEqual(preview.items.map((item) => item.id), ["ws-b"]);
+    assert.deepEqual(
+      preview.items.map((item) => item.id),
+      ["ws-b"],
+    );
 
     // Opened after the review, still kept.
     h.setTerminalOpen("ws-b");
-    const result = await h.service.cleanup({ action: "remove-worktrees", inactiveDays: 14, targetIds: ["ws-b"] });
+    const result = await h.service.cleanup({
+      action: "remove-worktrees",
+      inactiveDays: 14,
+      targetIds: ["ws-b"],
+    });
     assert.deepEqual(h.removed.worktrees, []);
     assert.equal(result.skipped[0]?.reason, "terminal");
   });
@@ -797,7 +911,11 @@ test("a worktree path that resolves outside the profile is never walked", async 
     await fs.mkdir(path.join(outside, "ws-a"));
     await fs.writeFile(path.join(outside, "ws-a", "big.bin"), Buffer.alloc(200_000, 0x61));
     await withHarness(
-      { workspaces: [workspace("ws-a")], worktreesInProfile: true, profileFiles: { "chats/index.json": 10 } },
+      {
+        workspaces: [workspace("ws-a")],
+        worktreesInProfile: true,
+        profileFiles: { "chats/index.json": 10 },
+      },
       async (h) => {
         // The lexical path sits under worktrees/, but a parent folder is a link out.
         await fs.mkdir(path.join(h.root, "worktrees"));
@@ -862,7 +980,10 @@ test("quitting stops a sweep at the next item and waits for the one in progress"
       const result = await cleanup;
       assert.deepEqual(h.removed.worktrees, ["ws-a"]);
       assert.equal(result.removed.length, 1);
-      assert.deepEqual(result.failed.map((entry) => entry.id), ["ws-b", "ws-c"]);
+      assert.deepEqual(
+        result.failed.map((entry) => entry.id),
+        ["ws-b", "ws-c"],
+      );
       assert.match(result.failed[0]?.reason ?? "", /quit/u);
     },
   );
@@ -910,18 +1031,23 @@ test("a worktree whose Git state becomes unreadable after the preview is kept", 
 });
 
 test("a chat that starts generating after the preview is kept", async () => {
-  await withHarness(
-    { chats: [chat("chat-old", { updatedAt: NOW - 200 * DAY })] },
-    async (h) => {
-      await h.service.refresh();
-      const preview = await h.service.preview({ action: "delete-threads", inactiveDays: 30, targetIds: ["chat-old"] });
-      assert.equal(preview.items.length, 1);
-      h.setBusy("chat-old");
-      const result = await h.service.cleanup({ action: "delete-threads", inactiveDays: 30, targetIds: ["chat-old"] });
-      assert.deepEqual(h.removed.chats, []);
-      assert.equal(result.skipped[0]?.reason, "active");
-    },
-  );
+  await withHarness({ chats: [chat("chat-old", { updatedAt: NOW - 200 * DAY })] }, async (h) => {
+    await h.service.refresh();
+    const preview = await h.service.preview({
+      action: "delete-threads",
+      inactiveDays: 30,
+      targetIds: ["chat-old"],
+    });
+    assert.equal(preview.items.length, 1);
+    h.setBusy("chat-old");
+    const result = await h.service.cleanup({
+      action: "delete-threads",
+      inactiveDays: 30,
+      targetIds: ["chat-old"],
+    });
+    assert.deepEqual(h.removed.chats, []);
+    assert.equal(result.skipped[0]?.reason, "active");
+  });
 });
 
 test("an unreadable Inbox pin state protects every thread instead of unpinning them", async () => {
@@ -934,9 +1060,17 @@ test("an unreadable Inbox pin state protects every thread instead of unpinning t
   try {
     const report = await h.service.refresh();
     assert.equal(report.threads[0]?.protectionReason, "pinned");
-    const preview = await h.service.preview({ action: "delete-threads", inactiveDays: 30, targetIds: ["chat-old"] });
+    const preview = await h.service.preview({
+      action: "delete-threads",
+      inactiveDays: 30,
+      targetIds: ["chat-old"],
+    });
     assert.equal(preview.items.length, 0);
-    const result = await h.service.cleanup({ action: "delete-threads", inactiveDays: 30, targetIds: ["chat-old"] });
+    const result = await h.service.cleanup({
+      action: "delete-threads",
+      inactiveDays: 30,
+      targetIds: ["chat-old"],
+    });
     assert.deepEqual(h.removed.chats, [], "no chat is deleted while pins are unknown");
     assert.equal(result.removed.length, 0);
     assert.equal(result.skipped[0]?.reason, "pinned");

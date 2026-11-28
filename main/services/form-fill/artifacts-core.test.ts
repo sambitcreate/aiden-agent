@@ -1,12 +1,6 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import {
-  mkdtempSync,
-  mkdirSync,
-  rmSync,
-  symlinkSync,
-  writeFileSync,
-} from "node:fs";
+import { mkdtempSync, mkdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -79,10 +73,7 @@ test("verifyFormFillPackage rejects missing files", async () => {
   try {
     writeTestTree(root);
     rmSync(path.join(root, "LICENSE"));
-    assert.match(
-      (await verifyFormFillPackage(root, TEST_FILES)) ?? "",
-      /missing/u,
-    );
+    assert.match((await verifyFormFillPackage(root, TEST_FILES)) ?? "", /missing/u);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -127,10 +118,7 @@ test("verifyFormFillPackage rejects hash mismatches and wrong sizes", async () =
     );
     // Same size, different bytes → checksum failure specifically.
     writeFileSync(path.join(root, "LICENSE"), "licenze");
-    assert.match(
-      (await verifyFormFillPackage(root, TEST_FILES)) ?? "",
-      /checksum/u,
-    );
+    assert.match((await verifyFormFillPackage(root, TEST_FILES)) ?? "", /checksum/u);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -152,16 +140,12 @@ test("manifest requires the complete pinned file set with stable paths", () => {
     assert.ok(file.bytes > 0);
   }
   assert.ok(
-    FORM_FILL_ARTIFACT_FILES.some(
-      (f) => f.path === `${FORM_FILL_MODEL_PACKAGE_DIR}/Manifest.json`,
-    ),
+    FORM_FILL_ARTIFACT_FILES.some((f) => f.path === `${FORM_FILL_MODEL_PACKAGE_DIR}/Manifest.json`),
   );
   assert.ok(!isAllowedArtifactPath("../escape"));
   assert.ok(!isAllowedArtifactPath("foo/../../bar"));
   assert.ok(!isAllowedArtifactPath(""));
-  assert.ok(
-    !isAllowedArtifactPath("cua_s1_forms_fp16_options32.mlpackage/evil.sh"),
-  );
+  assert.ok(!isAllowedArtifactPath("cua_s1_forms_fp16_options32.mlpackage/evil.sh"));
   assert.equal(
     formFillArtifactUrl("LICENSE"),
     "https://huggingface.co/FluidInference/cua-s1-forms-coreml/resolve/ca2113d260559ee5d2d6463900e39916936aca65/LICENSE",
@@ -202,13 +186,11 @@ test("isFormFillSupported gates on Apple silicon macOS 14.4+", () => {
     false,
   );
   assert.equal(
-    isFormFillSupported({ platform: "linux", arch: "x64", osRelease: "6.8.0" })
-      .supported,
+    isFormFillSupported({ platform: "linux", arch: "x64", osRelease: "6.8.0" }).supported,
     false,
   );
   assert.equal(
-    isFormFillSupported({ platform: "win32", arch: "x64", osRelease: "10.0.0" })
-      .supported,
+    isFormFillSupported({ platform: "win32", arch: "x64", osRelease: "10.0.0" }).supported,
     false,
   );
 });
@@ -254,8 +236,7 @@ test("downloads flush every byte and removal waits for cancellation without repu
       );
     },
     onStatusChanged: (status) => {
-      if (removeAtPreparing && status.state === "preparing")
-        removal = store.remove();
+      if (removeAtPreparing && status.state === "preparing") removal = store.remove();
     },
   });
   try {
@@ -410,7 +391,11 @@ test("disposing the runtime at quit stops the helper without waiting for a runni
 test("removal immediately hides readiness and a prior refresh cannot resurrect it", async () => {
   const root = makeTemp();
   writeTestTree(root);
-  const store = new FormFillArtifactStore({ rootDir: root, files: TEST_FILES, supported: () => ({ supported: true }) });
+  const store = new FormFillArtifactStore({
+    rootDir: root,
+    files: TEST_FILES,
+    supported: () => ({ supported: true }),
+  });
   await store.refresh();
   assert.equal(store.status().state, "ready");
   const refresh = store.refresh();
@@ -425,15 +410,36 @@ test("a completed publish cannot advertise readiness after removal starts", asyn
   const parent = makeTemp();
   let published!: () => void;
   let release!: () => void;
-  const atPublish = new Promise<void>((resolve) => { published = resolve; });
-  const gate = new Promise<void>((resolve) => { release = resolve; });
+  const atPublish = new Promise<void>((resolve) => {
+    published = resolve;
+  });
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
   let removing = false;
   const states: string[] = [];
   const store = new FormFillArtifactStore({
-    rootDir: path.join(parent, "model"), files: TEST_FILES, supported: () => ({ supported: true }),
-    fetchImpl: async (url) => new Response(String(url).endsWith("model.mlmodel") ? "model-bytes" : String(url).endsWith("weight.bin") ? "weights" : "license"),
-    rename: async (from, to) => { await rename(from, to); if (String(from).includes(".staging-")) { published(); await gate; } },
-    onStatusChanged: (status) => { if (removing) states.push(status.state); },
+    rootDir: path.join(parent, "model"),
+    files: TEST_FILES,
+    supported: () => ({ supported: true }),
+    fetchImpl: async (url) =>
+      new Response(
+        String(url).endsWith("model.mlmodel")
+          ? "model-bytes"
+          : String(url).endsWith("weight.bin")
+            ? "weights"
+            : "license",
+      ),
+    rename: async (from, to) => {
+      await rename(from, to);
+      if (String(from).includes(".staging-")) {
+        published();
+        await gate;
+      }
+    },
+    onStatusChanged: (status) => {
+      if (removing) states.push(status.state);
+    },
   });
   try {
     const download = store.download();
@@ -445,30 +451,69 @@ test("a completed publish cannot advertise readiness after removal starts", asyn
     await Promise.all([download, removal]);
     assert.ok(!states.includes("ready"));
     assert.equal(store.status().state, "not-downloaded");
-  } finally { release(); rmSync(parent, { recursive: true, force: true }); }
+  } finally {
+    release();
+    rmSync(parent, { recursive: true, force: true });
+  }
 });
 
 test("removal preserves model files when the execution drain fails", async () => {
   const root = makeTemp();
   writeTestTree(root);
-  const store = new FormFillArtifactStore({ rootDir: root, files: TEST_FILES, supported: () => ({ supported: true }) });
+  const store = new FormFillArtifactStore({
+    rootDir: root,
+    files: TEST_FILES,
+    supported: () => ({ supported: true }),
+  });
   try {
-    await assert.rejects(store.remove(async () => { throw new Error("execution still running"); }), /execution still running/);
+    await assert.rejects(
+      store.remove(async () => {
+        throw new Error("execution still running");
+      }),
+      /execution still running/,
+    );
     assert.equal(await verifyFormFillPackage(root, TEST_FILES), null);
-  } finally { rmSync(root, { recursive: true, force: true }); }
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
 });
 
 test("real cancel-and-settle timeout leaves verified model files on disk", async () => {
-  const { cancelComputerUseAndSettle, ComputerUseGenerationGate } = await import("../computer-use/generation-gate.js");
+  const { cancelComputerUseAndSettle, ComputerUseGenerationGate } =
+    await import("../computer-use/generation-gate.js");
   const root = makeTemp();
   writeTestTree(root);
-  const store = new FormFillArtifactStore({ rootDir: root, files: TEST_FILES, supported: () => ({ supported: true }) });
-  const active = new Map([["cu", { computerUseActivated: true, computerUse: { closeAndSettle: () => new Promise<void>(() => {}) } }]]);
+  const store = new FormFillArtifactStore({
+    rootDir: root,
+    files: TEST_FILES,
+    supported: () => ({ supported: true }),
+  });
+  const active = new Map([
+    [
+      "cu",
+      {
+        computerUseActivated: true,
+        computerUse: { closeAndSettle: () => new Promise<void>(() => {}) },
+      },
+    ],
+  ]);
   try {
-    await assert.rejects(store.remove(() => cancelComputerUseAndSettle({
-      gate: new ComputerUseGenerationGate(), initializations: () => new Map(), active: () => active,
-      cancel: () => { active.clear(); }, timeoutMs: 10,
-    })), /model was not removed/);
+    await assert.rejects(
+      store.remove(() =>
+        cancelComputerUseAndSettle({
+          gate: new ComputerUseGenerationGate(),
+          initializations: () => new Map(),
+          active: () => active,
+          cancel: () => {
+            active.clear();
+          },
+          timeoutMs: 10,
+        }),
+      ),
+      /model was not removed/,
+    );
     assert.equal(await verifyFormFillPackage(root, TEST_FILES), null);
-  } finally { rmSync(root, { recursive: true, force: true }); }
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
 });

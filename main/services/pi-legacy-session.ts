@@ -113,13 +113,11 @@ function validUsage(value: unknown): boolean {
   const cost = record(usage?.cost);
   return Boolean(
     usage &&
-      cost &&
-      ["input", "output", "cacheRead", "cacheWrite", "totalTokens"].every((key) =>
-        finiteNumber(usage[key]),
-      ) &&
-      ["input", "output", "cacheRead", "cacheWrite", "total"].every((key) =>
-        finiteNumber(cost[key]),
-      ),
+    cost &&
+    ["input", "output", "cacheRead", "cacheWrite", "totalTokens"].every((key) =>
+      finiteNumber(usage[key]),
+    ) &&
+    ["input", "output", "cacheRead", "cacheWrite", "total"].every((key) => finiteNumber(cost[key])),
   );
 }
 
@@ -137,9 +135,7 @@ function validLegacyAgentMessage(value: unknown): value is AgentMessage {
         nonEmptyString(message.provider) &&
         nonEmptyString(message.model) &&
         validUsage(message.usage) &&
-        ["stop", "length", "toolUse", "error", "aborted"].includes(
-          String(message.stopReason),
-        )
+        ["stop", "length", "toolUse", "error", "aborted"].includes(String(message.stopReason))
       );
     case "toolResult":
       return (
@@ -189,10 +185,7 @@ function parseHeader(value: unknown): LegacySessionHeader {
   ) {
     throw new Error("The legacy Pi journal has an invalid v3 session header.");
   }
-  if (
-    candidate.parentSession !== undefined &&
-    typeof candidate.parentSession !== "string"
-  ) {
+  if (candidate.parentSession !== undefined && typeof candidate.parentSession !== "string") {
     throw new Error("The legacy Pi journal has an invalid parent session path.");
   }
   const metadata = record(candidate.metadata);
@@ -342,10 +335,7 @@ export function decodeLegacyPiSession(contents: string): LegacyPiSession {
     }
     entries.push(entry);
     byId.set(entry.id, entry);
-    leafId =
-      entry.type === "leaf"
-        ? ((entry.targetId as string | null) ?? null)
-        : entry.id;
+    leafId = entry.type === "leaf" ? ((entry.targetId as string | null) ?? null) : entry.id;
   }
   if (leafId !== null && !byId.has(leafId)) {
     throw new Error("The legacy Pi journal points at a missing active leaf.");
@@ -435,7 +425,9 @@ function messagesFromLegacyContextEntries(entries: readonly LegacyPiEntry[]): Ag
 }
 
 /** Reconstruct Pi's complete v0.80 provider-neutral context and state. */
-function contextStateFromBranch(branch: readonly LegacyPiEntry[]): Omit<LegacyPiContext, "messages"> {
+function contextStateFromBranch(
+  branch: readonly LegacyPiEntry[],
+): Omit<LegacyPiContext, "messages"> {
   let thinkingLevel = "off";
   let model: LegacyPiContext["model"] = null;
   let activeToolNames: string[] | null = null;
@@ -552,11 +544,7 @@ export function buildProjectedPiV4Context(
   );
   return {
     ...contextStateFromBranch(branch as LegacyPiEntry[]),
-    messages: [
-      ...summary,
-      ...(checkpoint.retainedTail as AgentMessage[]),
-      ...later,
-    ],
+    messages: [...summary, ...(checkpoint.retainedTail as AgentMessage[]), ...later],
   };
 }
 
@@ -564,9 +552,7 @@ export function buildProjectedPiV4Context(
  * Build the Phase 3 conversion projection entirely in memory. This shared
  * projection is the verifier's target-side evidence and later migration input.
  */
-export function projectLegacyPiMigration(
-  session: LegacyPiSession,
-): LegacyPiMigrationProjection {
+export function projectLegacyPiMigration(session: LegacyPiSession): LegacyPiMigrationProjection {
   const byId = new Map(session.entries.map((entry) => [entry.id, entry]));
   const entries: LegacyPiEntry[] = session.entries.map((entry) => {
     if (entry.type !== "compaction") return structuredClone(entry);
@@ -608,9 +594,8 @@ export function verifyLegacyPiMigration(contents: string): LegacyPiMigrationVeri
         (entry) => entry.type === "compaction",
       ).length,
       preservedCustomEntries: session.entries.filter((entry) => entry.type === "custom").length,
-      preservedModelChanges: session.entries.filter(
-        (entry) => entry.type === "model_change",
-      ).length,
+      preservedModelChanges: session.entries.filter((entry) => entry.type === "model_change")
+        .length,
       preservedAbandonedEntries: abandonedEntryCount,
     },
     validation: "context_parity",

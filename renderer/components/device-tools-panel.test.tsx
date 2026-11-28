@@ -13,7 +13,13 @@ const noop = () => undefined;
 
 function controls(extra: Partial<DeviceControls> = {}): DeviceControls {
   return {
-    settings: { appearance: "dark", textSize: "large", reduceMotion: true, liquidGlass: "clear", colorFilter: "none" },
+    settings: {
+      appearance: "dark",
+      textSize: "large",
+      reduceMotion: true,
+      liquidGlass: "clear",
+      colorFilter: "none",
+    },
     pending: false,
     error: null,
     disabled: false,
@@ -47,7 +53,11 @@ test("the drawer shows every section with labelled, stateful controls", () => {
 test("the drawer reports errors inline and asks for an app before a push", () => {
   const html = renderToStaticMarkup(
     <DeviceToolsPanel
-      controls={controls({ error: "Could not change the appearance: boom", foregroundApp: null, disabled: true })}
+      controls={controls({
+        error: "Could not change the appearance: boom",
+        foregroundApp: null,
+        disabled: true,
+      })}
       onClose={noop}
     />,
   );
@@ -73,7 +83,8 @@ const duo = (screen: Partial<DeviceScreenSize>, state: DuoControlState = idle) =
       onCommand={noop}
     />,
   );
-const button = (html: string, label: string) => html.match(new RegExp(`<button[^>]*aria-label="${label}"[^>]*>.*?</button>`, "u"))?.[0] ?? "";
+const button = (html: string, label: string) =>
+  html.match(new RegExp(`<button[^>]*aria-label="${label}"[^>]*>.*?</button>`, "u"))?.[0] ?? "";
 
 test("a half fold reads as a book when the phone is held upright and as a laptop when it is held sideways", () => {
   // The inner display is mounted a quarter turn, so landscape_left is an upright phone.
@@ -84,8 +95,10 @@ test("a half fold reads as a book when the phone is held upright and as a laptop
   const sideways = duo({ screenId: 3, orientation: "portrait_upside_down", hingeAngle: 90 });
   assert.match(button(sideways, "Laptop"), /aria-pressed="true"/u);
   // The fold glyphs turn with the phone; the stance glyphs do not.
-  for (const label of ["Closed", "Laptop", "Open"]) assert.match(button(sideways, label), /data-rotated/u, label);
-  for (const label of ["Laptop stand", "Tent stand"]) assert.doesNotMatch(button(sideways, label), /data-rotated/u, label);
+  for (const label of ["Closed", "Laptop", "Open"])
+    assert.match(button(sideways, label), /data-rotated/u, label);
+  for (const label of ["Laptop stand", "Tent stand"])
+    assert.doesNotMatch(button(sideways, label), /data-rotated/u, label);
   assert.equal(duoFoldLabel("half", true), "Book");
   assert.equal(duoFoldLabel("half", false), "Laptop");
 });
@@ -94,18 +107,23 @@ test("a stand is pressed on its own, and folds wait while a stand is landing", (
   const laptop = duo({ screenId: 3, orientation: "portrait", hingeAngle: 90, hingePose: "laptop" });
   assert.match(button(laptop, "Laptop stand"), /aria-pressed="true"/u);
   // A sideways laptop stand's half fold is labelled Laptop; no fold shape claims the stand.
-  for (const label of ["Closed", "Laptop", "Open"]) assert.match(button(laptop, label), /aria-pressed="false"/u, label);
-  for (const label of ["Closed", "Open"]) assert.doesNotMatch(button(laptop, label), /\sdisabled=""/u);
+  for (const label of ["Closed", "Laptop", "Open"])
+    assert.match(button(laptop, label), /aria-pressed="false"/u, label);
+  for (const label of ["Closed", "Open"])
+    assert.doesNotMatch(button(laptop, label), /\sdisabled=""/u);
   const landing = duo(
     { screenId: 3, orientation: "portrait", hingeAngle: 90, hingePose: "laptop" },
     { pending: true, requested: { control: "pose", value: "laptop" }, error: null },
   );
-  for (const label of ["Closed", "Open"]) assert.match(button(landing, label), /\sdisabled=""/u, label);
+  for (const label of ["Closed", "Open"])
+    assert.match(button(landing, label), /\sdisabled=""/u, label);
   assert.doesNotMatch(button(landing, "Tent stand"), /\sdisabled=""/u);
 });
 
 test("leaving a stand turns the phone back to how it was held before the hinge moves", () => {
-  assert.deepEqual(duoFoldCommands(180, { stand: false, standVertical: true, screenId: 3 }), [{ control: "angle", value: 180 }]);
+  assert.deepEqual(duoFoldCommands(180, { stand: false, standVertical: true, screenId: 3 }), [
+    { control: "angle", value: 180 },
+  ]);
   assert.deepEqual(duoFoldCommands(0, { stand: true, standVertical: true, screenId: 3 }), [
     { control: "orientation", value: "landscape_left" },
     { control: "angle", value: 0 },
@@ -119,7 +137,13 @@ test("leaving a stand turns the phone back to how it was held before the hinge m
 test("Duo controls render both groups and surface a failed command", () => {
   const html = renderToStaticMarkup(
     <DeviceDuoControls
-      screen={{ width: 1, height: 1, orientation: "portrait", supportsHingeAngle: true, hingeAngle: 0 }}
+      screen={{
+        width: 1,
+        height: 1,
+        orientation: "portrait",
+        supportsHingeAngle: true,
+        hingeAngle: 0,
+      }}
       state={{ pending: false, requested: null, error: "Device is disconnected." }}
       enabled={false}
       onCommand={noop}
@@ -137,7 +161,12 @@ test("an Android drawer offers only what an emulator can do", () => {
     <DeviceToolsPanel
       platform="android"
       controls={controls({
-        settings: { appearance: "light", textSize: "default", reduceMotion: false, networkEnabled: true },
+        settings: {
+          appearance: "light",
+          textSize: "default",
+          reduceMotion: false,
+          networkEnabled: true,
+        },
         foregroundApp: { id: "com.example.shop" },
       })}
       onClose={noop}
@@ -148,7 +177,10 @@ test("an Android drawer offers only what an emulator can do", () => {
   }
   assert.doesNotMatch(html, />Push notification</u);
   assert.doesNotMatch(html, /Liquid Glass|Color filter|VoiceOver|Increase Contrast/u);
-  assert.match(html, /aria-label="Network \(Wi-Fi and data\)"[^>]*aria-checked="true"|role="switch" aria-checked="true"[^>]*aria-label="Network \(Wi-Fi and data\)"/u);
+  assert.match(
+    html,
+    /aria-label="Network \(Wi-Fi and data\)"[^>]*aria-checked="true"|role="switch" aria-checked="true"[^>]*aria-label="Network \(Wi-Fi and data\)"/u,
+  );
   assert.match(html, /role="group" aria-label="Orientation"/u);
   assert.match(html, />Landscape</u);
   assert.match(html, /aria-label="Package name to launch"/u);
@@ -172,16 +204,22 @@ function fold(extra: Partial<AndroidFoldView> = {}): AndroidFoldView {
 }
 
 test("Android fold controls show the reported posture and a failed command", () => {
-  const html = renderToStaticMarkup(<DeviceAndroidFoldControls fold={fold({ error: "Fold command timed out." })} enabled />);
+  const html = renderToStaticMarkup(
+    <DeviceAndroidFoldControls fold={fold({ error: "Fold command timed out." })} enabled />,
+  );
   assert.match(html, /aria-label="Android fold controls"/u);
   assert.match(html, /aria-label="Fold device" aria-pressed="false"/u);
   assert.match(html, /aria-label="Unfold device" aria-pressed="true"/u);
   assert.match(html, /role="alert"[^>]*>.*Fold command timed out\./u);
-  const pending = renderToStaticMarkup(<DeviceAndroidFoldControls fold={fold({ pending: true })} enabled />);
+  const pending = renderToStaticMarkup(
+    <DeviceAndroidFoldControls fold={fold({ pending: true })} enabled />,
+  );
   assert.match(pending, /aria-busy="true"/u);
   assert.equal(pending.match(/disabled=""/gu)?.length, 2);
   assert.equal(
-    renderToStaticMarkup(<DeviceAndroidFoldControls fold={fold({ supported: false, fold: null })} enabled />),
+    renderToStaticMarkup(
+      <DeviceAndroidFoldControls fold={fold({ supported: false, fold: null })} enabled />,
+    ),
     "",
   );
 });

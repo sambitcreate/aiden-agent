@@ -30,7 +30,8 @@ function unwrapExpression(node) {
     ts.isTypeAssertionExpression(node) ||
     ts.isNonNullExpression(node) ||
     ts.isSatisfiesExpression(node)
-  ) node = node.expression;
+  )
+    node = node.expression;
   return node;
 }
 
@@ -45,7 +46,13 @@ function memberName(node) {
 }
 
 function runtimeConsoleCalls(source, fileName = "fixture.ts") {
-  const file = ts.createSourceFile(fileName, source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
+  const file = ts.createSourceFile(
+    fileName,
+    source,
+    ts.ScriptTarget.Latest,
+    true,
+    ts.ScriptKind.TS,
+  );
   assert.deepEqual(file.parseDiagnostics, [], `Cannot parse diagnostic-policy input: ${fileName}`);
   const calls = [];
   const visit = (node) => {
@@ -53,7 +60,10 @@ function runtimeConsoleCalls(source, fileName = "fixture.ts") {
       const method = unwrapExpression(node.expression);
       if (consoleMethods.has(memberName(method))) {
         const receiver = unwrapExpression(method.expression);
-        if (ts.isIdentifier(receiver) && receiver.text === "console" || memberName(receiver) === "console") {
+        if (
+          (ts.isIdentifier(receiver) && receiver.text === "console") ||
+          memberName(receiver) === "console"
+        ) {
           calls.push(file.getLineAndCharacterOfPosition(node.getStart(file)).line + 1);
         }
       }
@@ -67,14 +77,19 @@ function runtimeConsoleCalls(source, fileName = "fixture.ts") {
 }
 
 test("console policy ignores source strings, comments, regexes and uncalled references", () => {
-  assert.deepEqual(runtimeConsoleCalls([
-    '// console.warn("comment");',
-    '/* globalThis.console.error("comment"); */',
-    'export const injectedSource = "console.log(\\"guest\\")";',
-    "const template = `console.info('guest') ${'console.error(guest)'}`;",
-    'const pattern = /console.log\\(/;',
-    'const reference = console.warn;',
-  ].join("\n")), []);
+  assert.deepEqual(
+    runtimeConsoleCalls(
+      [
+        '// console.warn("comment");',
+        '/* globalThis.console.error("comment"); */',
+        'export const injectedSource = "console.log(\\"guest\\")";',
+        "const template = `console.info('guest') ${'console.error(guest)'}`;",
+        "const pattern = /console.log\\(/;",
+        "const reference = console.warn;",
+      ].join("\n"),
+    ),
+    [],
+  );
 });
 
 test("console policy detects direct, global, computed and optional runtime calls", () => {
@@ -88,28 +103,39 @@ test("console policy detects direct, global, computed and optional runtime calls
     'self.console[`info`]("computed");',
     '(console as Console)!.warn("typed");',
     'console["l\\u006fg"]("escaped method");',
-    'const unrelated = { console: { log() {} } }; unrelated.console.log();',
+    "const unrelated = { console: { log() {} } }; unrelated.console.log();",
     'class Worker { run() { this.console.log("qualified receiver"); } }',
     'getContext().console.error("qualified receiver");',
   ];
-  assert.deepEqual(runtimeConsoleCalls(calls.join("\n")), calls.map((_, index) => index + 1));
+  assert.deepEqual(
+    runtimeConsoleCalls(calls.join("\n")),
+    calls.map((_, index) => index + 1),
+  );
 });
 
 test("console policy traverses nested code and executable template substitutions", () => {
-  assert.deepEqual(runtimeConsoleCalls([
-    'function nested() { return () => { console.error("nested"); }; }',
-    'class Worker { run() { globalThis.console.warn("nested method"); } }',
-    'const template = `guest code ${console.log("main process")}`;',
-    'const tagged = String.raw`guest ${(() => console.debug("main process"))()}`;',
-  ].join("\n")), [1, 2, 3, 4]);
+  assert.deepEqual(
+    runtimeConsoleCalls(
+      [
+        'function nested() { return () => { console.error("nested"); }; }',
+        'class Worker { run() { globalThis.console.warn("nested method"); } }',
+        'const template = `guest code ${console.log("main process")}`;',
+        'const tagged = String.raw`guest ${(() => console.debug("main process"))()}`;',
+      ].join("\n"),
+    ),
+    [1, 2, 3, 4],
+  );
   assert.throws(() => runtimeConsoleCalls('console.log("unterminated)'), /Cannot parse/);
 });
 
 test("desktop runtime console calls are confined to the reviewed sink", () => {
   const offenders = filesUnder("main", ".ts")
     .filter((file) => !file.endsWith(".test.ts") && path.basename(file) !== "platform.ts")
-    .flatMap((file) => runtimeConsoleCalls(fs.readFileSync(file, "utf8"), file)
-      .map((line) => `${path.relative(root, file)}:${line}`));
+    .flatMap((file) =>
+      runtimeConsoleCalls(fs.readFileSync(file, "utf8"), file).map(
+        (line) => `${path.relative(root, file)}:${line}`,
+      ),
+    );
   assert.deepEqual(offenders, []);
 });
 
@@ -117,7 +143,9 @@ test("iOS logging is confined to the typed wrapper", () => {
   const allowed = path.join(root, "ios/AidenOnTheGo/AidenOnTheGoApp.swift");
   const offenders = filesUnder("ios/AidenOnTheGo", ".swift")
     .filter((file) => file !== allowed)
-    .filter((file) => /\b(?:Logger\s*\(|os_log\s*\(|print\s*\()/u.test(fs.readFileSync(file, "utf8")));
+    .filter((file) =>
+      /\b(?:Logger\s*\(|os_log\s*\(|print\s*\()/u.test(fs.readFileSync(file, "utf8")),
+    );
   assert.deepEqual(offenders, []);
 });
 
@@ -134,8 +162,13 @@ test("Android logging is confined to the typed wrapper", () => {
 
 test("Electron crash capture remains explicit and upload-disabled", () => {
   const runtimeFiles = filesUnder("main", ".ts").filter((file) => !file.endsWith(".test.ts"));
-  const starters = runtimeFiles.filter((file) => /crashReporter\.start\s*\(/u.test(fs.readFileSync(file, "utf8")));
-  assert.deepEqual(starters.map((file) => path.relative(root, file)), ["main/handlers/diagnostics.ts"]);
+  const starters = runtimeFiles.filter((file) =>
+    /crashReporter\.start\s*\(/u.test(fs.readFileSync(file, "utf8")),
+  );
+  assert.deepEqual(
+    starters.map((file) => path.relative(root, file)),
+    ["main/handlers/diagnostics.ts"],
+  );
   const handler = fs.readFileSync(starters[0], "utf8");
   assert.match(handler, /uploadToServer:\s*false/u);
   assert.doesNotMatch(handler, /submitURL/u);
@@ -165,7 +198,9 @@ test("release installs Chromium before JavaScript containment tests", () => {
 test("desktop workflows upload only fixed sanitized receipts with short retention", () => {
   for (const workflow of [".github/workflows/ci.yml", ".github/workflows/release.yml"]) {
     const source = fs.readFileSync(path.join(root, workflow), "utf8");
-    const uploadBlocks = source.match(/uses:\s*actions\/upload-artifact@[\s\S]*?(?=\n\s*- name:|\n\s*\w+:\s*$|$)/gu) ?? [];
+    const uploadBlocks =
+      source.match(/uses:\s*actions\/upload-artifact@[\s\S]*?(?=\n\s*- name:|\n\s*\w+:\s*$|$)/gu) ??
+      [];
     const diagnosticUploads = uploadBlocks.filter((block) => /e2e-safe-receipt/u.test(block));
     assert.ok(diagnosticUploads.length >= 1, `${workflow} must retain sanitized failure receipts`);
     for (const block of diagnosticUploads) {

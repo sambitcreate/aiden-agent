@@ -16,7 +16,12 @@ export interface LibraryFilters {
   sort: LibrarySort;
 }
 
-export const EMPTY_LIBRARY_FILTERS: LibraryFilters = { query: "", workflow: null, model: null, sort: "newest" };
+export const EMPTY_LIBRARY_FILTERS: LibraryFilters = {
+  query: "",
+  workflow: null,
+  model: null,
+  sort: "newest",
+};
 
 /** Images of workflows that no longer exist share one facet. Workflow ids are UUIDs, so this never collides. */
 export const DELETED_WORKFLOWS_FACET = ":deleted";
@@ -48,8 +53,14 @@ type Facet = "query" | "workflow" | "model";
 function matcher(filters: LibraryFilters, models: readonly ImageModelOption[], skip?: Facet) {
   const terms = skip === "query" ? [] : queryTerms(filters.query);
   return (item: GalleryItem) => {
-    if (skip !== "workflow" && filters.workflow !== null && workflowFacetKey(item) !== filters.workflow) return false;
-    if (skip !== "model" && filters.model !== null && modelFacetKey(item) !== filters.model) return false;
+    if (
+      skip !== "workflow" &&
+      filters.workflow !== null &&
+      workflowFacetKey(item) !== filters.workflow
+    )
+      return false;
+    if (skip !== "model" && filters.model !== null && modelFacetKey(item) !== filters.model)
+      return false;
     if (terms.length === 0) return true;
     const text = searchText(item, models);
     return terms.every((term) => text.includes(term));
@@ -80,7 +91,8 @@ export interface FacetOption {
   count: number;
 }
 
-const byCountThenLabel = (a: FacetOption, b: FacetOption) => b.count - a.count || a.label.localeCompare(b.label);
+const byCountThenLabel = (a: FacetOption, b: FacetOption) =>
+  b.count - a.count || a.label.localeCompare(b.label);
 
 /**
  * The workflow and model choices with how many images each would show. Each facet counts
@@ -92,7 +104,11 @@ export function libraryFacets(
   filters: LibraryFilters,
   models: readonly ImageModelOption[] = [],
 ): { workflows: FacetOption[]; models: FacetOption[]; workflowTotal: number; modelTotal: number } {
-  const tally = (skip: "workflow" | "model", keyOf: (item: GalleryItem) => string, labelOf: (item: GalleryItem) => string) => {
+  const tally = (
+    skip: "workflow" | "model",
+    keyOf: (item: GalleryItem) => string,
+    labelOf: (item: GalleryItem) => string,
+  ) => {
     const matches = matcher(filters, models, skip);
     const options = new Map<string, FacetOption>();
     let total = 0;
@@ -106,9 +122,22 @@ export function libraryFacets(
     }
     return { options: [...options.values()].sort(byCountThenLabel), total };
   };
-  const workflows = tally("workflow", workflowFacetKey, (item) => item.workflowTitle ?? "Deleted workflows");
-  const modelOptions = tally("model", modelFacetKey, (item) => modelNames(item, models).model ?? "Unknown model");
-  return { workflows: workflows.options, models: modelOptions.options, workflowTotal: workflows.total, modelTotal: modelOptions.total };
+  const workflows = tally(
+    "workflow",
+    workflowFacetKey,
+    (item) => item.workflowTitle ?? "Deleted workflows",
+  );
+  const modelOptions = tally(
+    "model",
+    modelFacetKey,
+    (item) => modelNames(item, models).model ?? "Unknown model",
+  );
+  return {
+    workflows: workflows.options,
+    models: modelOptions.options,
+    workflowTotal: workflows.total,
+    modelTotal: modelOptions.total,
+  };
 }
 
 export interface LibraryDaySection {
@@ -138,7 +167,8 @@ export function sectionByDay(
     const key = localDayKey(item.createdAt);
     let section = sections[sections.length - 1];
     if (!section || section.key !== key) {
-      const label = key === today ? "Today" : key === yesterday ? "Yesterday" : formatDate(item.createdAt);
+      const label =
+        key === today ? "Today" : key === yesterday ? "Yesterday" : formatDate(item.createdAt);
       section = { key, label, entries: [] };
       sections.push(section);
     }
@@ -148,7 +178,11 @@ export function sectionByDay(
 }
 
 /** What Save All sends for a set: at most `SAVE_ALL_MAX_IMAGES`, in the order shown. */
-export function saveAllSelection(items: readonly GalleryItem[]): { assetIds: string[]; total: number; capped: boolean } {
+export function saveAllSelection(items: readonly GalleryItem[]): {
+  assetIds: string[];
+  total: number;
+  capped: boolean;
+} {
   return {
     assetIds: items.slice(0, SAVE_ALL_MAX_IMAGES).map((item) => item.assetId),
     total: items.length,
@@ -217,7 +251,9 @@ export interface WorkflowImageSummary {
 }
 
 /** Each workflow's newest image and how many images the gallery lists for it. */
-export function summarizeWorkflowImages(items: readonly GalleryItem[]): Map<string, WorkflowImageSummary> {
+export function summarizeWorkflowImages(
+  items: readonly GalleryItem[],
+): Map<string, WorkflowImageSummary> {
   const summaries = new Map<string, WorkflowImageSummary>();
   for (const item of items) {
     const summary = summaries.get(item.workflowId);
@@ -231,7 +267,10 @@ export function summarizeWorkflowImages(items: readonly GalleryItem[]): Map<stri
 }
 
 /** Whether the library's Open Workflow can go to an image's workflow. */
-export function workflowAvailable(item: GalleryItem, liveWorkflowIds: ReadonlySet<string> | null): boolean {
+export function workflowAvailable(
+  item: GalleryItem,
+  liveWorkflowIds: ReadonlySet<string> | null,
+): boolean {
   if (item.workflowTitle === undefined) return false;
   return liveWorkflowIds === null || liveWorkflowIds.has(item.workflowId);
 }

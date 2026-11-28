@@ -3,8 +3,17 @@
 // from the Test button, with the digest of the version it shows.
 
 import path from "node:path";
-import { HOOK_EVENTS, type HookEvent, type HookListing, type HookScope } from "../services/hooks/hook-types.js";
-import { MAX_HOOK_COMMAND_LENGTH, maxHookTimeoutSeconds, normalizeWorkspaceRoot } from "../services/hooks/hook-config.js";
+import {
+  HOOK_EVENTS,
+  type HookEvent,
+  type HookListing,
+  type HookScope,
+} from "../services/hooks/hook-types.js";
+import {
+  MAX_HOOK_COMMAND_LENGTH,
+  maxHookTimeoutSeconds,
+  normalizeWorkspaceRoot,
+} from "../services/hooks/hook-config.js";
 import { hostPlatformCapabilities } from "../services/host-platform-capabilities.js";
 import type { HookChange, HookList, HookService } from "../services/hooks/hook-service.js";
 import {
@@ -25,7 +34,13 @@ function invalid(): never {
 }
 
 function id(value: unknown): string {
-  if (typeof value !== "string" || value.length === 0 || value.length > MAX_ID_LENGTH || CONTROL.test(value)) invalid();
+  if (
+    typeof value !== "string" ||
+    value.length === 0 ||
+    value.length > MAX_ID_LENGTH ||
+    CONTROL.test(value)
+  )
+    invalid();
   return value;
 }
 
@@ -72,7 +87,10 @@ export function registerHookHandlers<Event>(dependencies: HookHandlerDependencie
 
   // Every channel checks its sender first: hooks run commands, so a frame that
   // is not an Aiden window never reaches the service.
-  const handle = (channel: string, handler: (event: Event, ...args: unknown[]) => unknown): void => {
+  const handle = (
+    channel: string,
+    handler: (event: Event, ...args: unknown[]) => unknown,
+  ): void => {
     dependencies.handle(channel, async (event, ...args) => {
       dependencies.requireSender(event);
       return handler(event, ...args);
@@ -87,7 +105,12 @@ export function registerHookHandlers<Event>(dependencies: HookHandlerDependencie
     if (!service) throw new Error("Hooks are still starting. Try again in a moment.");
     if (subscribedTo !== service) {
       subscribedTo = service;
-      service.onChange((change) => dependencies.broadcast({ reason: change.reason, ...(change.hookId ? { hookId: change.hookId } : {}) }));
+      service.onChange((change) =>
+        dependencies.broadcast({
+          reason: change.reason,
+          ...(change.hookId ? { hookId: change.hookId } : {}),
+        }),
+      );
     }
     return service;
   };
@@ -96,7 +119,8 @@ export function registerHookHandlers<Event>(dependencies: HookHandlerDependencie
     const seen = new Set<string>();
     const labels: HooksWorkspaceLabel[] = [];
     for (const workspace of await dependencies.workspaces()) {
-      if (typeof workspace.workspaceRoot !== "string" || !path.isAbsolute(workspace.workspaceRoot)) continue;
+      if (typeof workspace.workspaceRoot !== "string" || !path.isAbsolute(workspace.workspaceRoot))
+        continue;
       const workspaceRoot = normalizeWorkspaceRoot(workspace.workspaceRoot);
       if (seen.has(workspaceRoot)) continue;
       seen.add(workspaceRoot);
@@ -124,11 +148,19 @@ export function registerHookHandlers<Event>(dependencies: HookHandlerDependencie
     // Listing a workspace scope by name is what reads its `.aiden/hooks.json`;
     // the unscoped list then covers global, chat and Bot hooks as well.
     const scoped: HookList | undefined = workspaces.length
-      ? await service.listHooks(workspaces.map((workspace): HookScope => ({ kind: "workspace", workspaceRoot: workspace.workspaceRoot })))
+      ? await service.listHooks(
+          workspaces.map(
+            (workspace): HookScope => ({
+              kind: "workspace",
+              workspaceRoot: workspace.workspaceRoot,
+            }),
+          ),
+        )
       : undefined;
     const all = await service.listHooks();
     const hooks = new Map<string, HookListing>();
-    for (const hook of [...all.hooks, ...(scoped?.hooks ?? [])]) if (!hooks.has(hook.id)) hooks.set(hook.id, hook);
+    for (const hook of [...all.hooks, ...(scoped?.hooks ?? [])])
+      if (!hooks.has(hook.id)) hooks.set(hook.id, hook);
     const files = new Map(all.workspaceFiles.map((file) => [file.workspaceRoot, file]));
     for (const file of scoped?.workspaceFiles ?? []) files.set(file.workspaceRoot, file);
     return {
@@ -142,30 +174,50 @@ export function registerHookHandlers<Event>(dependencies: HookHandlerDependencie
     };
   });
 
-  handle("hooks:approveProposal", async (_event, proposalId) => ready().approveProposal(id(proposalId)));
+  handle("hooks:approveProposal", async (_event, proposalId) =>
+    ready().approveProposal(id(proposalId)),
+  );
 
-  handle("hooks:rejectProposal", async (_event, proposalId) => ready().rejectProposal(id(proposalId)));
+  handle("hooks:rejectProposal", async (_event, proposalId) =>
+    ready().rejectProposal(id(proposalId)),
+  );
 
   handle("hooks:save", async (_event, request) => {
     const input = plainObject(request);
     const scopeInput = plainObject(input.scope);
     let scope: HookScope;
     if (scopeInput.kind === "global") scope = { kind: "global" };
-    else if (scopeInput.kind === "workspace" && typeof scopeInput.workspaceRoot === "string" && path.isAbsolute(scopeInput.workspaceRoot)) {
+    else if (
+      scopeInput.kind === "workspace" &&
+      typeof scopeInput.workspaceRoot === "string" &&
+      path.isAbsolute(scopeInput.workspaceRoot)
+    ) {
       const workspaceRoot = normalizeWorkspaceRoot(scopeInput.workspaceRoot);
       // Only folders Aiden already knows as workspaces; Settings never writes a hook for an arbitrary path.
-      if (!(await knownWorkspaces()).some((workspace) => workspace.workspaceRoot === workspaceRoot)) invalid();
+      if (!(await knownWorkspaces()).some((workspace) => workspace.workspaceRoot === workspaceRoot))
+        invalid();
       scope = { kind: "workspace", workspaceRoot };
     } else invalid();
     const hookEvent = event(input.event);
-    if (typeof input.command !== "string" || input.command.includes("\u0000") || input.command.length > MAX_HOOK_COMMAND_LENGTH) invalid();
+    if (
+      typeof input.command !== "string" ||
+      input.command.includes("\u0000") ||
+      input.command.length > MAX_HOOK_COMMAND_LENGTH
+    )
+      invalid();
     const command = input.command.trim();
     if (!command) invalid();
     const isAsync = input.async === undefined ? false : bool(input.async);
     let timeout: number | undefined;
     if (input.timeout !== undefined && input.timeout !== null) {
       // An async hook may run for up to 600 seconds; one Aiden waits for, 120.
-      if (typeof input.timeout !== "number" || !Number.isInteger(input.timeout) || input.timeout < 1 || input.timeout > maxHookTimeoutSeconds(isAsync)) invalid();
+      if (
+        typeof input.timeout !== "number" ||
+        !Number.isInteger(input.timeout) ||
+        input.timeout < 1 ||
+        input.timeout > maxHookTimeoutSeconds(isAsync)
+      )
+        invalid();
       timeout = input.timeout;
     }
     const failClosed = input.failClosed === undefined ? false : bool(input.failClosed);
@@ -191,7 +243,9 @@ export function registerHookHandlers<Event>(dependencies: HookHandlerDependencie
     return ready().approveDigest(id(hookId), digest);
   });
 
-  handle("hooks:setEnabled", async (_event, hookId, enabled) => ready().setEnabled(id(hookId), bool(enabled)));
+  handle("hooks:setEnabled", async (_event, hookId, enabled) =>
+    ready().setEnabled(id(hookId), bool(enabled)),
+  );
 
   handle("hooks:delete", async (_event, hookId) => ready().deleteHook(id(hookId)));
 

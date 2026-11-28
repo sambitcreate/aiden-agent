@@ -107,7 +107,10 @@ export interface BotMessageLedger {
         refused: BotMessageLimitHit;
       }
   >;
-  update(id: string, change: (row: BotMessageDelivery) => BotMessageDelivery): Promise<BotMessageDelivery | undefined>;
+  update(
+    id: string,
+    change: (row: BotMessageDelivery) => BotMessageDelivery,
+  ): Promise<BotMessageDelivery | undefined>;
   open(): Promise<BotMessageDelivery[]>;
   forgetBot(botId: string): Promise<BotMessageDelivery[]>;
 }
@@ -201,7 +204,8 @@ function validRow(row: BotMessageDelivery): boolean {
     row.message.length <= L.messageChars &&
     (row.outcome === undefined || outcomes.has(row.outcome)) &&
     (row.childOutcome === undefined || statusOutcomes.has(row.childOutcome)) &&
-    (row.parentFallbackOutcome === undefined || ["failed", "expired"].includes(row.parentFallbackOutcome)) &&
+    (row.parentFallbackOutcome === undefined ||
+      ["failed", "expired"].includes(row.parentFallbackOutcome)) &&
     (row.childReserved === undefined || typeof row.childReserved === "boolean") &&
     (row.replayTarget === undefined || str(row.replayTarget)) &&
     (row.taskId === undefined || str(row.taskId)) &&
@@ -212,7 +216,8 @@ function validRow(row: BotMessageDelivery): boolean {
     str(row.toName) &&
     ["delivered", "answered", "failed", "expired"].includes(row.status) &&
     (row.settledAt === undefined || finite(row.settledAt)) &&
-    (row.initialAnswer === undefined || (str(row.initialAnswer) && row.initialAnswer.length <= L.replyChars)) &&
+    (row.initialAnswer === undefined ||
+      (str(row.initialAnswer) && row.initialAnswer.length <= L.replyChars)) &&
     Array.isArray(row.waiting) &&
     row.waiting.every((w) => w && str(w.waitId) && str(w.summary) && finite(w.at)) &&
     Array.isArray(row.effects) &&
@@ -224,9 +229,15 @@ function recoverable(row: BotMessageDelivery): boolean {
   return (
     row.effects.some(
       (e) =>
-        e.kind === "target" && e.botId === row.toBotId && e.requestId === row.targetRequestId && e.text === row.message,
+        e.kind === "target" &&
+        e.botId === row.toBotId &&
+        e.requestId === row.targetRequestId &&
+        e.text === row.message,
     ) ||
-    (row.id.startsWith("deleted:") && row.fromBotId === row.toBotId && row.status === "failed" && row.message === "")
+    (row.id.startsWith("deleted:") &&
+      row.fromBotId === row.toBotId &&
+      row.status === "failed" &&
+      row.message === "")
   );
 }
 function validate(book: Book): void {
@@ -248,12 +259,16 @@ function validate(book: Book): void {
     !Array.isArray(book.tombstones) ||
     !book.tombstones.every(str) ||
     !Array.isArray(book.counters?.pairs) ||
-    !book.counters.pairs.every((p) => str(p.key) && str(p.day) && Number.isSafeInteger(p.count) && p.count >= 0) ||
+    !book.counters.pairs.every(
+      (p) => str(p.key) && str(p.day) && Number.isSafeInteger(p.count) && p.count >= 0,
+    ) ||
     !Array.isArray(book.counters?.senders) ||
     !book.counters.senders.every(
-      (s) => str(s.id) && finite(s.cooldownUntil) && Array.isArray(s.times) && s.times.every(finite),
+      (s) =>
+        str(s.id) && finite(s.cooldownUntil) && Array.isArray(s.times) && s.times.every(finite),
     ) ||
-    new Set(book.counters.pairs.map((p) => JSON.stringify([p.key, p.day]))).size !== book.counters.pairs.length ||
+    new Set(book.counters.pairs.map((p) => JSON.stringify([p.key, p.day]))).size !==
+      book.counters.pairs.length ||
     new Set(book.counters.senders.map((s) => s.id)).size !== book.counters.senders.length ||
     new Set(book.rows.map((r) => r.id)).size !== book.rows.length ||
     new Set(book.receipts.map((r) => r.id)).size !== book.receipts.length
@@ -261,15 +276,20 @@ function validate(book: Book): void {
     throw new BotMessageLedgerUnavailable();
 }
 const terminal = (r: BotMessageDelivery) => r.status !== "delivered";
-const pending = (r: BotMessageDelivery) => !terminal(r) || r.effects.some((e) => e.acknowledgedAt === undefined);
+const pending = (r: BotMessageDelivery) =>
+  !terminal(r) || r.effects.some((e) => e.acknowledgedAt === undefined);
 const dayOf = (n: number) => {
   const d = new Date(n);
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 };
 const tombstones = new Map<string, Set<string>>();
 // The host's orphan sweep reserves dot-prefixed directories for profile stores.
-const purgeDirectory = (file: string) => path.join(path.dirname(file), `.${path.basename(file)}.pending-purges`);
-export function createBotMessageLedger(options: { file(): string; now(): number }): BotMessageLedger {
+const purgeDirectory = (file: string) =>
+  path.join(path.dirname(file), `.${path.basename(file)}.pending-purges`);
+export function createBotMessageLedger(options: {
+  file(): string;
+  now(): number;
+}): BotMessageLedger {
   async function read(file: string): Promise<Book> {
     try {
       const book = JSON.parse(await readFile(file, "utf8")) as Book;
@@ -342,7 +362,9 @@ export function createBotMessageLedger(options: { file(): string; now(): number 
             receipt.toBotId !== row.toBotId ||
             receipt.taskId !== row.taskId
           )
-            throw new BotMessageLedgerUnavailable("The saved Bot message does not match this replay.");
+            throw new BotMessageLedgerUnavailable(
+              "The saved Bot message does not match this replay.",
+            );
           // The receipt is immutable; the envelope belongs only to the bounded display/outbox row.
           return {
             value: {
@@ -352,7 +374,9 @@ export function createBotMessageLedger(options: { file(): string; now(): number 
           };
         }
         if (!recoverable(row) || row.status !== "delivered")
-          throw new BotMessageLedgerUnavailable("The Bot message intent is missing its recovery payload.");
+          throw new BotMessageLedgerUnavailable(
+            "The Bot message intent is missing its recovery payload.",
+          );
         const now = options.now(),
           day = dayOf(now),
           pair = JSON.stringify([row.fromBotId, row.toBotId].sort());
@@ -370,9 +394,14 @@ export function createBotMessageLedger(options: { file(): string; now(): number 
           },
         });
         if (sender.cooldownUntil > now) return refuse("burst", sender.cooldownUntil - now);
-        if (b.rows.filter((r) => r.fromBotId === row.fromBotId && pending(r)).length >= L.inFlightPerSender)
+        if (
+          b.rows.filter((r) => r.fromBotId === row.fromBotId && pending(r)).length >=
+          L.inFlightPerSender
+        )
           return refuse("in_flight");
-        const parent = row.parentDeliveryId ? b.rows.find((r) => r.id === row.parentDeliveryId) : undefined;
+        const parent = row.parentDeliveryId
+          ? b.rows.find((r) => r.id === row.parentDeliveryId)
+          : undefined;
         if (
           row.hop === 2 &&
           (!parent ||
@@ -391,7 +420,9 @@ export function createBotMessageLedger(options: { file(): string; now(): number 
             (r) =>
               terminal(r) &&
               !pending(r) &&
-              !b.rows.some((c) => !terminal(c) && (c.parentDeliveryId === r.id || c.id === r.parentDeliveryId)),
+              !b.rows.some(
+                (c) => !terminal(c) && (c.parentDeliveryId === r.id || c.id === r.parentDeliveryId),
+              ),
           );
           if (index < 0) return refuse("capacity");
           b.rows.splice(index, 1);
@@ -400,7 +431,10 @@ export function createBotMessageLedger(options: { file(): string; now(): number 
         // across clock rollback; never discard a still-active cooldown.
         b.counters.pairs = b.counters.pairs.filter((p) => p.day >= day);
         b.counters.senders = b.counters.senders.filter(
-          (s) => s.id === row.fromBotId || s.cooldownUntil > now || s.times.some((t) => t > now - L.burstWindowMs),
+          (s) =>
+            s.id === row.fromBotId ||
+            s.cooldownUntil > now ||
+            s.times.some((t) => t > now - L.burstWindowMs),
         );
         sender.times = sender.times.filter((t) => t > now - L.burstWindowMs);
         sender.times.push(now);
@@ -426,7 +460,8 @@ export function createBotMessageLedger(options: { file(): string; now(): number 
           next = change(copy(old));
         if (next.id !== old.id || next.fromBotId !== old.fromBotId || next.toBotId !== old.toBotId)
           throw new BotMessageLedgerUnavailable("Cannot change delivery identity.");
-        if (terminal(old) && (next.status !== old.status || next.outcome !== old.outcome)) return { value: old };
+        if (terminal(old) && (next.status !== old.status || next.outcome !== old.outcome))
+          return { value: old };
         if (JSON.stringify(old) === JSON.stringify(next)) return { value: old };
         b.rows[index] = next;
         return { value: next, write: true };
@@ -441,11 +476,15 @@ export function createBotMessageLedger(options: { file(): string; now(): number 
         // Immutable independent markers let deletion proceed without reading damaged
         // peer bookkeeping. A nonce also preserves a damaged marker for this Bot.
         const hash = createHash("sha256").update(botId).digest("hex");
-        await writeFileAtomic(path.join(purgeDirectory(file), `${hash}.${randomUUID()}.json`), JSON.stringify(botId), {
-          mode: 0o600,
-          mkdirMode: 0o700,
-          exclusive: true,
-        });
+        await writeFileAtomic(
+          path.join(purgeDirectory(file), `${hash}.${randomUUID()}.json`),
+          JSON.stringify(botId),
+          {
+            mode: 0o600,
+            mkdirMode: 0o700,
+            exclusive: true,
+          },
+        );
         let book: Book;
         let ids: Set<string>;
         try {
@@ -512,7 +551,8 @@ export function createBotMessageLedger(options: { file(): string; now(): number 
       if (row.fromBotId === botId || b.tombstones.includes(row.fromBotId)) continue;
       // A terminal answer with an undelivered reply is still owed to the peer.
       const owed =
-        !terminal(row) || row.effects.some((e) => e.acknowledgedAt === undefined && e.botId === row.fromBotId);
+        !terminal(row) ||
+        row.effects.some((e) => e.acknowledgedAt === undefined && e.botId === row.fromBotId);
       if (!owed || parent) continue; // The surviving parent owns the single origin outcome.
       const id = `deleted:${row.id}`;
       if (b.rows.some((r) => r.id === id)) continue;

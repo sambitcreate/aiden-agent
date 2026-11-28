@@ -6,9 +6,17 @@
 
 import { parseBotNoticeAcknowledgement } from "../../renderer/shared/bot-capabilities.js";
 import type { BotApplicationService } from "../services/bot-application-service.js";
-import { normalizeTelegramProfileName, telegramBotNoticeAudienceId } from "../services/telegram/telegram-profile-config.js";
+import {
+  normalizeTelegramProfileName,
+  telegramBotNoticeAudienceId,
+} from "../services/telegram/telegram-profile-config.js";
 import { botAccessUpdateRendererError, botCreateRendererError } from "./bot-renderer-errors.js";
-import { parseBotAccessUpdateInput, parseBotCreateWithAccess, parseBotId, parseBotModelThinkingLevelsInput } from "./bot-params.js";
+import {
+  parseBotAccessUpdateInput,
+  parseBotCreateWithAccess,
+  parseBotId,
+  parseBotModelThinkingLevelsInput,
+} from "./bot-params.js";
 
 export interface BotAccessTelegramProfile {
   name: string;
@@ -78,8 +86,11 @@ export function registerBotAccessHandlers<Event>(deps: BotAccessHandlerDependenc
   deps.handle("bots:acceptFirstBotAccess", async (event, input: unknown) => {
     const assertCurrent = ownerCheck(event);
     const acknowledgement = parseBotNoticeAcknowledgement(input);
-    if (acknowledgement.decision !== "continue_full") throw new Error("Invalid first Bot access acceptance.");
-    return service.acknowledgeNotice(desktopAudienceId, acknowledgement, assertCurrent, { keepReviewFirst: true });
+    if (acknowledgement.decision !== "continue_full")
+      throw new Error("Invalid first Bot access acceptance.");
+    return service.acknowledgeNotice(desktopAudienceId, acknowledgement, assertCurrent, {
+      keepReviewFirst: true,
+    });
   });
   deps.handle("bots:getTelegramAccessNotice", async (_event, profile: unknown) => {
     const principal = await pairedTelegramAudience(profile);

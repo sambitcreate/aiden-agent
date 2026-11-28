@@ -17,13 +17,20 @@ import {
 import { redirectRetiredRoute, StudioCapabilityRoute } from "./studio-capability-route";
 
 const EVERY_CAPABILITY = Object.fromEntries(
-  Object.entries(DISABLED_APP_CAPABILITIES).map(([key, value]) => [key, typeof value === "boolean" ? true : value]),
+  Object.entries(DISABLED_APP_CAPABILITIES).map(([key, value]) => [
+    key,
+    typeof value === "boolean" ? true : value,
+  ]),
 ) as unknown as AppCapabilities;
 
 async function render(path: string, capabilities: AppCapabilities) {
   const root = createRootRoute({ component: () => <Outlet /> });
   const home = createRoute({ getParentRoute: () => root, path: "/", component: () => <p>home</p> });
-  const design = createRoute({ getParentRoute: () => root, path: "/design", beforeLoad: redirectRetiredRoute });
+  const design = createRoute({
+    getParentRoute: () => root,
+    path: "/design",
+    beforeLoad: redirectRetiredRoute,
+  });
   const designProject = createRoute({
     getParentRoute: () => root,
     path: "/design/$projectId",
@@ -56,7 +63,10 @@ async function render(path: string, capabilities: AppCapabilities) {
 }
 
 test("Images renders only while its capability is on", async () => {
-  assert.equal((await render("/images", DISABLED_APP_CAPABILITIES)).markup.includes("images body"), false);
+  assert.equal(
+    (await render("/images", DISABLED_APP_CAPABILITIES)).markup.includes("images body"),
+    false,
+  );
   assert.match(
     (await render("/images", { ...DISABLED_APP_CAPABILITIES, createImages: true })).markup,
     /images body/u,

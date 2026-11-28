@@ -30,10 +30,18 @@ export interface MultiTouchSink {
 export const SCREEN_CENTER: TouchPoint = { x: 0.5, y: 0.5 };
 
 const clamp01 = (value: number) => Math.min(1, Math.max(0, value));
-const clampPoint = (point: TouchPoint): TouchPoint => ({ x: clamp01(point.x), y: clamp01(point.y) });
+const clampPoint = (point: TouchPoint): TouchPoint => ({
+  x: clamp01(point.x),
+  y: clamp01(point.y),
+});
 
 /** Option alone pinches or rotates; Option+Shift pans; anything else is a normal touch. */
-export function multiTouchMode(modifiers: { altKey: boolean; shiftKey: boolean; metaKey?: boolean; ctrlKey?: boolean }): MultiTouchMode | null {
+export function multiTouchMode(modifiers: {
+  altKey: boolean;
+  shiftKey: boolean;
+  metaKey?: boolean;
+  ctrlKey?: boolean;
+}): MultiTouchMode | null {
   if (!modifiers.altKey || modifiers.metaKey || modifiers.ctrlKey) return null;
   return modifiers.shiftKey ? "pan" : "pinch";
 }
@@ -50,7 +58,11 @@ export function mirroredPair(point: TouchPoint, center: TouchPoint = SCREEN_CENT
 }
 
 /** Midpoint, separation, and angle (radians, screen axes) of a pair. */
-export function pairGeometry([first, second]: TouchPair): { center: TouchPoint; distance: number; angle: number } {
+export function pairGeometry([first, second]: TouchPair): {
+  center: TouchPoint;
+  distance: number;
+  angle: number;
+} {
   return {
     center: { x: (first.x + second.x) / 2, y: (first.y + second.y) / 2 },
     distance: Math.hypot(second.x - first.x, second.y - first.y),
@@ -84,8 +96,14 @@ export interface MultiTouchGesture {
 
 /** One Option-drag (pinch/rotate) or Option+Shift-drag (pan), sent as begin, moves, and end. */
 export function createMultiTouchGesture(sink: MultiTouchSink): MultiTouchGesture {
-  let state: { mode: MultiTouchMode; start: TouchPoint; anchor: TouchPair; last: TouchPair } | null = null;
-  const send = (phase: MultiTouchPhase, pair: TouchPair) => sink.sendMultiTouch(phase, pair[0], pair[1]);
+  let state: {
+    mode: MultiTouchMode;
+    start: TouchPoint;
+    anchor: TouchPair;
+    last: TouchPair;
+  } | null = null;
+  const send = (phase: MultiTouchPhase, pair: TouchPair) =>
+    sink.sendMultiTouch(phase, pair[0], pair[1]);
   return {
     preview: (point) => mirroredPair(point),
     begin(point, mode) {
@@ -100,7 +118,10 @@ export function createMultiTouchGesture(sink: MultiTouchSink): MultiTouchGesture
       const target = clampPoint(point);
       const pair =
         state.mode === "pan"
-          ? translatePair(state.anchor, { x: target.x - state.start.x, y: target.y - state.start.y })
+          ? translatePair(state.anchor, {
+              x: target.x - state.start.x,
+              y: target.y - state.start.y,
+            })
           : mirroredPair(target);
       state.last = pair;
       send("move", pair);
@@ -145,7 +166,8 @@ export function createTrackpadPinch(options: {
   onEnd?(): void;
 }): TrackpadPinch {
   const idleMs = options.idleMs ?? TRACKPAD_PINCH_IDLE_MS;
-  let state: { center: TouchPoint; radius: number; last: TouchPair; timer: Timer | null } | null = null;
+  let state: { center: TouchPoint; radius: number; last: TouchPair; timer: Timer | null } | null =
+    null;
   const pairAt = (center: TouchPoint, radius: number): TouchPair => [
     { x: center.x - radius, y: center.y },
     { x: center.x + radius, y: center.y },

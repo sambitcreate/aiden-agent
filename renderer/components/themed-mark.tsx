@@ -18,11 +18,7 @@ const THEMED_MARK_STYLE = {
 type MarkProps = Omit<React.HTMLAttributes<HTMLSpanElement>, "style" | "children">;
 
 /** A mono SVG mark painted in `currentColor`. Callers add their own `data-*` hook. */
-export function ThemedMark({
-  iconUrl,
-  className,
-  ...props
-}: MarkProps & { iconUrl: string }) {
+export function ThemedMark({ iconUrl, className, ...props }: MarkProps & { iconUrl: string }) {
   return (
     <span
       aria-hidden="true"
@@ -38,11 +34,7 @@ export function ThemedMark({
 }
 
 /** Neutral initial shown when no mark exists for a label. */
-export function MarkInitial({
-  label,
-  className,
-  ...props
-}: MarkProps & { label: string }) {
+export function MarkInitial({ label, className, ...props }: MarkProps & { label: string }) {
   const initial = label.trim().charAt(0).toLocaleUpperCase() || "?";
   return (
     <span

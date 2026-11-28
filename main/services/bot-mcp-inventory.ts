@@ -3,7 +3,10 @@ import { botCapabilityFactsFingerprint } from "./bot-capability-catalog-core.js"
 import type { BotCapabilityIncarnationStore } from "./bot-capability-incarnation-store.js";
 import { mcpAuthorityConnectionSnapshot } from "./mcp-credential-cleanup-core.js";
 import type { McpServer } from "./types.js";
-import { mcpServerOffersTools, mcpToolsOfferedToModel } from "../../renderer/shared/mcp-exposure.js";
+import {
+  mcpServerOffersTools,
+  mcpToolsOfferedToModel,
+} from "../../renderer/shared/mcp-exposure.js";
 import {
   normalizeSubagentMcpInventoryV2,
   type SubagentMcpRemoteTool,
@@ -88,9 +91,7 @@ export async function resolveBotMcpConnectionIdentities(
     })),
   );
   if (signal.aborted) throw abortReason(signal);
-  const incarnationById = new Map(
-    incarnations.map((value) => [value.sourceId, value] as const),
-  );
+  const incarnationById = new Map(incarnations.map((value) => [value.sourceId, value] as const));
   return servers.map((server) => {
     const incarnation = incarnationById.get(server.id);
     if (!incarnation) throw new Error("Bot MCP incarnation was not resolved.");
@@ -253,7 +254,9 @@ export function createBotMcpScopeCache(options: BotMcpScopeCacheOptions = {}): B
   ): FailureRecord => {
     const previous = failures.get(server.id);
     const attempts =
-      previous && previous.connectionFingerprint === connectionFingerprint ? previous.attempts + 1 : 1;
+      previous && previous.connectionFingerprint === connectionFingerprint
+        ? previous.attempts + 1
+        : 1;
     const delay = Math.min(backoffMaxMs, backoffMs * 2 ** Math.min(attempts - 1, 30));
     const record: FailureRecord = {
       connectionFingerprint,
@@ -275,7 +278,12 @@ export function createBotMcpScopeCache(options: BotMcpScopeCacheOptions = {}): B
   ): { pending: Promise<BotMcpScopeTools>; started: boolean } => {
     // An unattended watch must never inherit an in-progress foreground
     // inspection that may be creating a fresh authenticated transport.
-    const key = JSON.stringify([server.id, connectionFingerprint, currentGeneration, connectorScope ?? null]);
+    const key = JSON.stringify([
+      server.id,
+      connectionFingerprint,
+      currentGeneration,
+      connectorScope ?? null,
+    ]);
     const existing = inflight.get(key);
     if (existing) return { pending: existing, started: false };
     const controller = new AbortController();
@@ -327,7 +335,13 @@ export function createBotMcpScopeCache(options: BotMcpScopeCacheOptions = {}): B
     connectorScope: string | undefined,
     inspect: (server: McpServer, signal: AbortSignal) => Promise<readonly SubagentMcpRemoteTool[]>,
   ) => {
-    const { pending, started } = flight(server, connectionFingerprint, currentGeneration, connectorScope, inspect);
+    const { pending, started } = flight(
+      server,
+      connectionFingerprint,
+      currentGeneration,
+      connectorScope,
+      inspect,
+    );
     pending.catch((error: unknown) => {
       if (!started) return;
       try {
@@ -353,7 +367,8 @@ export function createBotMcpScopeCache(options: BotMcpScopeCacheOptions = {}): B
       const failed = failure?.connectionFingerprint === connectionFingerprint ? failure : undefined;
       // A recent failure of this connection holds back retries until its backoff
       // ends; a configuration fence since then makes a retry due at once.
-      const retryDue = !failed || failed.generation !== currentGeneration || now() >= failed.retryAt;
+      const retryDue =
+        !failed || failed.generation !== currentGeneration || now() >= failed.retryAt;
       if (
         entry &&
         entry.connectionFingerprint === connectionFingerprint &&
@@ -363,14 +378,24 @@ export function createBotMcpScopeCache(options: BotMcpScopeCacheOptions = {}): B
         if (age < ttlMs) return entry.tools;
         // Stale but inside the grace window: answer now and refresh behind the turn.
         if (age < graceMs) {
-          if (selected && selected !== server.id) throw new Error("Unattended watch admission cannot discover another connector.");
-          if (retryDue) refreshInBackground(server, connectionFingerprint, currentGeneration, selected, inspect);
+          if (selected && selected !== server.id)
+            throw new Error("Unattended watch admission cannot discover another connector.");
+          if (retryDue)
+            refreshInBackground(
+              server,
+              connectionFingerprint,
+              currentGeneration,
+              selected,
+              inspect,
+            );
           return entry.tools;
         }
       }
-      if (selected && selected !== server.id) throw new Error("Unattended watch admission cannot discover another connector.");
+      if (selected && selected !== server.id)
+        throw new Error("Unattended watch admission cannot discover another connector.");
       if (failed) {
-        if (retryDue) refreshInBackground(server, connectionFingerprint, currentGeneration, selected, inspect);
+        if (retryDue)
+          refreshInBackground(server, connectionFingerprint, currentGeneration, selected, inspect);
         throw new BotMcpInspectionBackoffError(failed.kind);
       }
       return raceAbort(

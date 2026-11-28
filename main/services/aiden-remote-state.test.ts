@@ -36,14 +36,18 @@ function fixture(initial?: unknown, botCapabilitiesSupported = true) {
   };
   let randomCounter = 0;
   let now = 1_000;
-  const registry = new AidenRemoteStateRegistry(storage, {
-    now: () => now,
-    randomBytes: (size) => Buffer.alloc(size, ++randomCounter),
-    deriveCredentialDigest: async (credential, salt) =>
-      createHash("sha256").update(credential).update(salt).digest(),
-  }, {
-    botCapabilitiesSupported: () => botCapabilitiesSupported,
-  });
+  const registry = new AidenRemoteStateRegistry(
+    storage,
+    {
+      now: () => now,
+      randomBytes: (size) => Buffer.alloc(size, ++randomCounter),
+      deriveCredentialDigest: async (credential, salt) =>
+        createHash("sha256").update(credential).update(salt).digest(),
+    },
+    {
+      botCapabilitiesSupported: () => botCapabilitiesSupported,
+    },
+  );
   return {
     registry,
     writes,
@@ -65,7 +69,10 @@ test("desktop device records round-trip without changing existing mobile grants"
   }
   const restored = fixture(state.stored());
   await restored.registry.initialize();
-  assert.deepEqual((await restored.registry.listDevices()).map((device) => device.type), ["mac", "linux"]);
+  assert.deepEqual(
+    (await restored.registry.listDevices()).map((device) => device.type),
+    ["mac", "linux"],
+  );
   assert.ok(state.stored().devices.every((device) => !device.acceptsBotCapabilities));
 });
 
@@ -106,25 +113,16 @@ test("paired device display names can refresh without changing device identity",
   });
   const writesAfterPairing = state.writes.length;
 
-  const updated = await state.registry.updateDeviceName(
-    issued.device.id,
-    "  Sambit’s   iPhone  ",
-  );
+  const updated = await state.registry.updateDeviceName(issued.device.id, "  Sambit’s   iPhone  ");
   assert.equal(updated?.id, issued.device.id);
   assert.equal(updated?.name, "Sambit’s iPhone");
   assert.equal(state.stored().devices[0]?.name, "Sambit’s iPhone");
   assert.equal(state.writes.length, writesAfterPairing + 1);
 
-  const unchanged = await state.registry.updateDeviceName(
-    issued.device.id,
-    "Sambit’s iPhone",
-  );
+  const unchanged = await state.registry.updateDeviceName(issued.device.id, "Sambit’s iPhone");
   assert.equal(unchanged?.name, "Sambit’s iPhone");
   assert.equal(state.writes.length, writesAfterPairing + 1);
-  assert.equal(
-    await state.registry.updateDeviceName("device_missing", "Other iPhone"),
-    null,
-  );
+  assert.equal(await state.registry.updateDeviceName("device_missing", "Other iPhone"), null);
   await assert.rejects(
     state.registry.updateDeviceName(issued.device.id, "Bad\u0000Name"),
     /visible characters/u,
@@ -161,10 +159,7 @@ test("Bot-aware devices preserve only coherent explicitly negotiated Bot grants"
 
   const authenticated = await state.registry.authenticate(issued.credential);
   assert.equal(authenticated?.acceptsBotCapabilities, true);
-  assert.deepEqual(
-    [...authenticated!.capabilities],
-    ["server:read", "bot:read", "bot:write"],
-  );
+  assert.deepEqual([...authenticated!.capabilities], ["server:read", "bot:read", "bot:write"]);
 });
 
 test("post-pairing progress upgrades grant only the negotiated vocabulary", async () => {
@@ -176,10 +171,10 @@ test("post-pairing progress upgrades grant only the negotiated vocabulary", asyn
   });
   const writesAfterPairing = state.writes.length;
 
-  const upgraded = await state.registry.upgradeDeviceCapabilities(
-    issued.device.id,
-    ["tasks:read", "agents:read"],
-  );
+  const upgraded = await state.registry.upgradeDeviceCapabilities(issued.device.id, [
+    "tasks:read",
+    "agents:read",
+  ]);
   assert.deepEqual(upgraded?.capabilities.slice(-2), ["tasks:read", "agents:read"]);
   assert.equal(state.stored().devices[0]?.acceptsProgressCapabilities, true);
   assert.equal(state.writes.length, writesAfterPairing + 1);
@@ -192,10 +187,9 @@ test("post-pairing progress upgrades grant only the negotiated vocabulary", asyn
   assert.equal(authenticated?.acceptsBotCapabilities, false);
 
   const writesAfterFirstAuth = state.writes.length;
-  const unchanged = await state.registry.upgradeDeviceCapabilities(
-    issued.device.id,
-    ["tasks:read"],
-  );
+  const unchanged = await state.registry.upgradeDeviceCapabilities(issued.device.id, [
+    "tasks:read",
+  ]);
   assert.equal(unchanged?.id, issued.device.id);
   assert.equal(state.writes.length, writesAfterFirstAuth);
 });
@@ -217,10 +211,7 @@ test("progress upgrades reject non-negotiable capabilities and revoked devices",
     ["tasks:read", "agents:read", "server:read"],
     ["unknown:read"],
   ]) {
-    assert.equal(
-      await state.registry.upgradeDeviceCapabilities(issued.device.id, accepts),
-      null,
-    );
+    assert.equal(await state.registry.upgradeDeviceCapabilities(issued.device.id, accepts), null);
   }
   assert.equal(
     await state.registry.upgradeDeviceCapabilities("device_missing", ["tasks:read"]),
@@ -362,7 +353,9 @@ test("revocation fences new device work and waits for already-admitted work with
   });
   await Promise.resolve();
   assert.equal(revocationSettled, false);
-  assert.ok((await state.registry.snapshot()).devices.find(({ id }) => id === first.device.id)?.revokedAt);
+  assert.ok(
+    (await state.registry.snapshot()).devices.find(({ id }) => id === first.device.id)?.revokedAt,
+  );
   assert.throws(
     () => state.registry.acquireDeviceAuthorization(first.device.id),
     (error: unknown) => (error as { code?: string }).code === "credential_revoked",
@@ -392,10 +385,7 @@ test("failed revocation persistence reopens authorization for the still-valid de
 
 test("state restore rejects excess keys, duplicate identities, and raw credentials", () => {
   const base = createDefaultAidenRemoteState(() => Buffer.alloc(24, 1));
-  assert.throws(
-    () => parseAidenRemoteStateDocument({ ...base, extra: true }),
-    /state is invalid/u,
-  );
+  assert.throws(() => parseAidenRemoteStateDocument({ ...base, extra: true }), /state is invalid/u);
   assert.throws(
     () =>
       parseAidenRemoteStateDocument({
@@ -448,13 +438,17 @@ test("pending Tailscale outcomes are bounded and commit atomically with ownershi
     /tailscale_reconciliation_required/u,
   );
   await state.registry.commitTailscaleOutcome({ path: "/api/aiden/v1", target });
-  assert.deepEqual((state.stored() as AidenRemoteStateDocument).tailscaleOwnership, { path: "/api/aiden/v1", target });
+  assert.deepEqual((state.stored() as AidenRemoteStateDocument).tailscaleOwnership, {
+    path: "/api/aiden/v1",
+    target,
+  });
   assert.equal((state.stored() as AidenRemoteStateDocument).tailscalePendingOutcome, undefined);
   assert.throws(
-    () => parseAidenRemoteStateDocument({
-      ...state.stored(),
-      tailscalePendingOutcome: { ...pending, beforeFingerprint: "not-a-digest" },
-    }),
+    () =>
+      parseAidenRemoteStateDocument({
+        ...state.stored(),
+        tailscalePendingOutcome: { ...pending, beforeFingerprint: "not-a-digest" },
+      }),
     /invalid pending Tailscale outcome/u,
   );
 });
@@ -492,10 +486,7 @@ test("development migrates the listener while retaining live Serve ownership", (
 
   const migrated = normalizeAidenRemoteStateForRuntimeProfile(legacy, "development");
   assert.equal(migrated.lanPort, AIDEN_REMOTE_DEVELOPMENT_LAN_PORT);
-  assert.equal(
-    migrated.tailscaleOwnership?.target,
-    "http://127.0.0.1:49221/api/aiden/v1",
-  );
+  assert.equal(migrated.tailscaleOwnership?.target, "http://127.0.0.1:49221/api/aiden/v1");
   assert.equal(legacy.lanPort, AIDEN_REMOTE_PRODUCTION_LAN_PORT);
   assert.equal(
     normalizeAidenRemoteStateForRuntimeProfile(legacy, "production").lanPort,
@@ -503,16 +494,10 @@ test("development migrates the listener while retaining live Serve ownership", (
   );
 
   const custom = { ...legacy, lanPort: 51_000 };
-  assert.equal(
-    normalizeAidenRemoteStateForRuntimeProfile(custom, "development").lanPort,
-    51_000,
-  );
+  assert.equal(normalizeAidenRemoteStateForRuntimeProfile(custom, "development").lanPort, 51_000);
   const secondProductionPair = { ...legacy, lanPort: 49_222 };
   assert.equal(
-    normalizeAidenRemoteStateForRuntimeProfile(
-      secondProductionPair,
-      "development",
-    ).lanPort,
+    normalizeAidenRemoteStateForRuntimeProfile(secondProductionPair, "development").lanPort,
     50_222,
   );
 });
@@ -542,8 +527,7 @@ test("legacy devices default Bot vocabulary negotiation to false and persist the
   });
   const legacy = source.stored();
   legacy.devices[0]!.capabilities.push("bot:write");
-  delete (legacy.devices[0] as { acceptsBotCapabilities?: boolean })
-    .acceptsBotCapabilities;
+  delete (legacy.devices[0] as { acceptsBotCapabilities?: boolean }).acceptsBotCapabilities;
 
   const migrated = fixture(legacy);
   const initialized = await migrated.registry.initialize();
@@ -566,20 +550,13 @@ test("legacy devices default Bot vocabulary negotiation to false and persist the
   assert.equal(sanitized.stored().devices[0]?.capabilities.includes("bot:write"), false);
 
   const invalid = source.stored();
-  (invalid.devices[0] as { acceptsBotCapabilities: unknown })
-    .acceptsBotCapabilities = "yes";
-  assert.throws(
-    () => parseAidenRemoteStateDocument(invalid),
-    /invalid device/u,
-  );
+  (invalid.devices[0] as { acceptsBotCapabilities: unknown }).acceptsBotCapabilities = "yes";
+  assert.throws(() => parseAidenRemoteStateDocument(invalid), /invalid device/u);
 
   const writeOnly = source.stored();
   writeOnly.devices[0]!.acceptsBotCapabilities = true;
   writeOnly.devices[0]!.capabilities = ["server:read", "bot:write"];
-  assert.throws(
-    () => parseAidenRemoteStateDocument(writeOnly),
-    /invalid device/u,
-  );
+  assert.throws(() => parseAidenRemoteStateDocument(writeOnly), /invalid device/u);
 });
 
 test("legacy devices default progress vocabulary negotiation to false and persist the migration", async () => {
@@ -621,9 +598,8 @@ test("authentication revalidates Bot negotiation and capability implication", as
     capabilities: ["server:read", "bot:read", "bot:write"],
     acceptsBotCapabilities: true,
   });
-  const strippedDocument = (
-    stripped.registry as unknown as { document: AidenRemoteStateDocument }
-  ).document;
+  const strippedDocument = (stripped.registry as unknown as { document: AidenRemoteStateDocument })
+    .document;
   strippedDocument.devices[0]!.acceptsBotCapabilities = false;
   const strippedAuthentication = await stripped.registry.authenticate(
     strippedCredential.credential,
@@ -641,9 +617,8 @@ test("authentication revalidates Bot negotiation and capability implication", as
     capabilities: ["server:read", "bot:read", "bot:write"],
     acceptsBotCapabilities: true,
   });
-  const rejectedDocument = (
-    rejected.registry as unknown as { document: AidenRemoteStateDocument }
-  ).document;
+  const rejectedDocument = (rejected.registry as unknown as { document: AidenRemoteStateDocument })
+    .document;
   rejectedDocument.devices[0]!.capabilities = ["server:read", "bot:write"];
   assert.equal(await rejected.registry.authenticate(rejectedCredential.credential), null);
 });
@@ -675,7 +650,11 @@ test("legacy state gains a bounded computer label without changing stable identi
   assert.equal(initialized.instanceId, instanceId);
   assert.equal(initialized.displayName, "Aiden Agent");
   assert.equal((persisted.stored() as AidenRemoteStateDocument).displayName, "Aiden Agent");
-  assert.equal(persisted.writes.length, 1, "initialization durably writes the normalized legacy document");
+  assert.equal(
+    persisted.writes.length,
+    1,
+    "initialization durably writes the normalized legacy document",
+  );
 });
 
 test("current state initialization is read-only when no migration is needed", async () => {
@@ -710,7 +689,9 @@ test("production-shaped storage durably seeds missing files and migrates legacy 
 
   try {
     const seeded = await makeRegistry().initialize();
-    const seededDisk = JSON.parse(await readFile(join(root, filename), "utf8")) as AidenRemoteStateDocument;
+    const seededDisk = JSON.parse(
+      await readFile(join(root, filename), "utf8"),
+    ) as AidenRemoteStateDocument;
     assert.equal(seededDisk.instanceId, seeded.instanceId);
     assert.equal(seededDisk.displayName, "Studio Mac");
     assert.equal(seededDisk.lanPortCommitted, false);
@@ -720,7 +701,9 @@ test("production-shaped storage durably seeds missing files and migrates legacy 
     delete (legacy as Partial<AidenRemoteStateDocument>).lanPortCommitted;
     await writeFile(join(root, filename), JSON.stringify(legacy), { mode: 0o600 });
     const migrated = await makeRegistry().initialize();
-    const migratedDisk = JSON.parse(await readFile(join(root, filename), "utf8")) as AidenRemoteStateDocument;
+    const migratedDisk = JSON.parse(
+      await readFile(join(root, filename), "utf8"),
+    ) as AidenRemoteStateDocument;
     assert.equal(migrated.instanceId, legacy.instanceId);
     assert.equal(migratedDisk.displayName, "Studio Mac");
     assert.equal(migratedDisk.lanPortCommitted, false);
@@ -781,7 +764,10 @@ test("concurrent first authenticated requests produce one durable connection tra
     Array.from({ length: 8 }, () => state.registry.authenticate(issued.credential)),
   );
 
-  assert.equal(authenticated.every((device) => device?.id === issued.device.id), true);
+  assert.equal(
+    authenticated.every((device) => device?.id === issued.device.id),
+    true,
+  );
   assert.equal(state.writes.length, writesAfterIssue + 1);
   assert.equal((await state.registry.listDevices())[0]?.lastSeenAt, 2_000);
 });
@@ -843,17 +829,29 @@ test("revocation completed during credential verification wins before authentica
 test("simulator control is negotiable only by paired desktops and never implies progress grants", async () => {
   const state = fixture();
   const mac = await state.registry.issueDevice({ name: "Studio", type: "mac", clientVersion: "1" });
-  const phone = await state.registry.issueDevice({ name: "iPhone", type: "iphone", clientVersion: "1" });
+  const phone = await state.registry.issueDevice({
+    name: "iPhone",
+    type: "iphone",
+    clientVersion: "1",
+  });
   const writesAfterPairing = state.writes.length;
 
-  assert.equal(await state.registry.upgradeDeviceCapabilities(phone.device.id, ["simulators:control"]), null);
   assert.equal(
-    await state.registry.upgradeDeviceCapabilities(phone.device.id, ["tasks:read", "simulators:control"]),
+    await state.registry.upgradeDeviceCapabilities(phone.device.id, ["simulators:control"]),
+    null,
+  );
+  assert.equal(
+    await state.registry.upgradeDeviceCapabilities(phone.device.id, [
+      "tasks:read",
+      "simulators:control",
+    ]),
     null,
   );
   assert.equal(state.writes.length, writesAfterPairing);
 
-  const upgraded = await state.registry.upgradeDeviceCapabilities(mac.device.id, ["simulators:control"]);
+  const upgraded = await state.registry.upgradeDeviceCapabilities(mac.device.id, [
+    "simulators:control",
+  ]);
   assert.equal(upgraded?.capabilities.includes("simulators:control"), true);
   const stored = state.stored().devices.find((device) => device.id === mac.device.id);
   assert.equal(stored?.acceptsProgressCapabilities, false);
@@ -869,7 +867,11 @@ test("simulator control is negotiable only by paired desktops and never implies 
 
 test("a persisted phone record can never hold simulator control", async () => {
   const state = fixture();
-  const phone = await state.registry.issueDevice({ name: "iPhone", type: "iphone", clientVersion: "1" });
+  const phone = await state.registry.issueDevice({
+    name: "iPhone",
+    type: "iphone",
+    clientVersion: "1",
+  });
   const stored = state.stored();
   stored.devices[0]!.capabilities = [
     ...(stored.devices[0]!.capabilities as string[]),
@@ -884,8 +886,16 @@ test("a persisted phone record can never hold simulator control", async () => {
 
 test("phones negotiate only the phone run subset; the host feed stays desktop-only", async () => {
   const state = fixture();
-  const desktop = await state.registry.issueDevice({ name: "Studio", type: "linux", clientVersion: "1" });
-  const phone = await state.registry.issueDevice({ name: "iPhone", type: "iphone", clientVersion: "1" });
+  const desktop = await state.registry.issueDevice({
+    name: "Studio",
+    type: "linux",
+    clientVersion: "1",
+  });
+  const phone = await state.registry.issueDevice({
+    name: "iPhone",
+    type: "iphone",
+    clientVersion: "1",
+  });
   const writesAfterPairing = state.writes.length;
 
   // Pairing never issues run authority to a phone.
@@ -897,16 +907,29 @@ test("phones negotiate only the phone run subset; the host feed stays desktop-on
       capabilities: ["server:read", "runs:observe"],
     }),
   );
-  for (const accepts of [["host:events"], ["host:events", "runs:observe"], ["simulators:control", "runs:control"]] as const) {
-    assert.equal(await state.registry.upgradeDeviceCapabilities(phone.device.id, [...accepts]), null);
+  for (const accepts of [
+    ["host:events"],
+    ["host:events", "runs:observe"],
+    ["simulators:control", "runs:control"],
+  ] as const) {
+    assert.equal(
+      await state.registry.upgradeDeviceCapabilities(phone.device.id, [...accepts]),
+      null,
+    );
   }
   assert.equal(state.writes.length, writesAfterPairing);
 
-  const phoneUpgrade = await state.registry.upgradeDeviceCapabilities(phone.device.id, ["runs:observe", "runs:control"]);
+  const phoneUpgrade = await state.registry.upgradeDeviceCapabilities(phone.device.id, [
+    "runs:observe",
+    "runs:control",
+  ]);
   assert.equal(phoneUpgrade?.capabilities.includes("runs:observe"), true);
   assert.equal(phoneUpgrade?.capabilities.includes("runs:control"), true);
 
-  const upgraded = await state.registry.upgradeDeviceCapabilities(desktop.device.id, ["host:events", "runs:observe"]);
+  const upgraded = await state.registry.upgradeDeviceCapabilities(desktop.device.id, [
+    "host:events",
+    "runs:observe",
+  ]);
   assert.equal(upgraded?.capabilities.includes("host:events"), true);
   assert.equal(upgraded?.capabilities.includes("runs:control"), false);
   const authenticated = await state.registry.authenticate(desktop.credential);
@@ -929,7 +952,11 @@ test("phones negotiate only the phone run subset; the host feed stays desktop-on
 test("Android device identity survives restart without gaining desktop authority", async () => {
   const state = fixture();
   await state.registry.initialize();
-  const issued = await state.registry.issueDevice({ name: "Pixel", type: "android", clientVersion: "1" });
+  const issued = await state.registry.issueDevice({
+    name: "Pixel",
+    type: "android",
+    clientVersion: "1",
+  });
   const restored = fixture(state.stored());
   await restored.registry.initialize();
   const authenticated = await restored.registry.authenticate(issued.credential);
@@ -943,9 +970,21 @@ test("Android device identity survives restart without gaining desktop authority
 test("the phone simulator viewer grant is negotiated only by phones and never issued at pairing", async () => {
   const state = fixture();
   const mac = await state.registry.issueDevice({ name: "Studio", type: "mac", clientVersion: "1" });
-  const phone = await state.registry.issueDevice({ name: "iPhone", type: "iphone", clientVersion: "1" });
-  const tablet = await state.registry.issueDevice({ name: "iPad", type: "ipad", clientVersion: "1" });
-  const android = await state.registry.issueDevice({ name: "Pixel", type: "android", clientVersion: "1" });
+  const phone = await state.registry.issueDevice({
+    name: "iPhone",
+    type: "iphone",
+    clientVersion: "1",
+  });
+  const tablet = await state.registry.issueDevice({
+    name: "iPad",
+    type: "ipad",
+    clientVersion: "1",
+  });
+  const android = await state.registry.issueDevice({
+    name: "Pixel",
+    type: "android",
+    clientVersion: "1",
+  });
   const writesAfterPairing = state.writes.length;
 
   await assert.rejects(
@@ -956,21 +995,33 @@ test("the phone simulator viewer grant is negotiated only by phones and never is
       capabilities: ["server:read", "simulators:mobile"],
     }),
   );
-  assert.equal(await state.registry.upgradeDeviceCapabilities(mac.device.id, ["simulators:mobile"]), null);
   assert.equal(
-    await state.registry.upgradeDeviceCapabilities(phone.device.id, ["simulators:mobile", "simulators:control"]),
+    await state.registry.upgradeDeviceCapabilities(mac.device.id, ["simulators:mobile"]),
+    null,
+  );
+  assert.equal(
+    await state.registry.upgradeDeviceCapabilities(phone.device.id, [
+      "simulators:mobile",
+      "simulators:control",
+    ]),
     null,
   );
   assert.equal(state.writes.length, writesAfterPairing);
 
   for (const device of [phone, tablet, android]) {
-    const upgraded = await state.registry.upgradeDeviceCapabilities(device.device.id, ["simulators:mobile"]);
+    const upgraded = await state.registry.upgradeDeviceCapabilities(device.device.id, [
+      "simulators:mobile",
+    ]);
     assert.equal(upgraded?.capabilities.includes("simulators:mobile"), true);
     const authenticated = await state.registry.authenticate(device.credential);
     assert.equal(authenticated?.capabilities.has("simulators:mobile"), true);
     assert.equal(authenticated?.capabilities.has("simulators:control"), false);
     // The viewer grant alone does not opt the phone into the progress vocabulary.
-    assert.equal(state.stored().devices.find((stored) => stored.id === device.device.id)?.acceptsProgressCapabilities, false);
+    assert.equal(
+      state.stored().devices.find((stored) => stored.id === device.device.id)
+        ?.acceptsProgressCapabilities,
+      false,
+    );
   }
 
   // A persisted desktop record holding the phone grant loses it on load.
@@ -979,27 +1030,57 @@ test("the phone simulator viewer grant is negotiated only by phones and never is
   macRecord.capabilities = [...(macRecord.capabilities as string[]), "simulators:mobile"] as never;
   const restored = fixture(stored);
   await restored.registry.initialize();
-  assert.equal((await restored.registry.authenticate(mac.credential))?.capabilities.has("simulators:mobile"), false);
-  assert.equal((await restored.registry.authenticate(phone.credential))?.capabilities.has("simulators:mobile"), true);
+  assert.equal(
+    (await restored.registry.authenticate(mac.credential))?.capabilities.has("simulators:mobile"),
+    false,
+  );
+  assert.equal(
+    (await restored.registry.authenticate(phone.credential))?.capabilities.has("simulators:mobile"),
+    true,
+  );
 });
 
 test("bot:activity is an opt-in any paired device may negotiate and keep", async () => {
   const state = fixture();
-  const issued = await state.registry.issueDevice({ name: "iPhone", type: "iphone", clientVersion: "1.0" });
-  const upgraded = await state.registry.upgradeDeviceCapabilities(issued.device.id, ["bot:cards", "bot:activity"]);
+  const issued = await state.registry.issueDevice({
+    name: "iPhone",
+    type: "iphone",
+    clientVersion: "1.0",
+  });
+  const upgraded = await state.registry.upgradeDeviceCapabilities(issued.device.id, [
+    "bot:cards",
+    "bot:activity",
+  ]);
   assert.deepEqual(upgraded?.capabilities.slice(-2), ["bot:cards", "bot:activity"]);
   const authenticated = await state.registry.authenticate(issued.credential);
   assert.equal(authenticated?.capabilities.has("bot:activity"), true);
-  assert.equal(authenticated?.acceptsProgressCapabilities, false, "an opt-in is not a progress grant");
+  assert.equal(
+    authenticated?.acceptsProgressCapabilities,
+    false,
+    "an opt-in is not a progress grant",
+  );
 });
 
 test("bot:handoffs, schedule:cards, chat:jobs, chat:new-worktree, chat:continue-in-new-chat, stream:snapshot-reasons, bot:needs-you and chat:agent-slider are opt-ins pairing never issues and any paired device may negotiate and keep", async () => {
-  for (const optIn of ["bot:handoffs", "schedule:cards", "chat:jobs", "chat:new-worktree", "chat:continue-in-new-chat", "stream:snapshot-reasons", "bot:needs-you", "chat:agent-slider"] as const) {
+  for (const optIn of [
+    "bot:handoffs",
+    "schedule:cards",
+    "chat:jobs",
+    "chat:new-worktree",
+    "chat:continue-in-new-chat",
+    "stream:snapshot-reasons",
+    "bot:needs-you",
+    "chat:agent-slider",
+  ] as const) {
     const state = fixture();
     const devices = [];
     for (const type of ["iphone", "android", "mac"] as const) {
       const issued = await state.registry.issueDevice({ name: type, type, clientVersion: "1.0" });
-      assert.equal(issued.device.capabilities.includes(optIn), false, `${optIn} ${type}: pairing never issues it`);
+      assert.equal(
+        issued.device.capabilities.includes(optIn),
+        false,
+        `${optIn} ${type}: pairing never issues it`,
+      );
       const upgraded = await state.registry.upgradeDeviceCapabilities(issued.device.id, [optIn]);
       assert.equal(upgraded?.capabilities.includes(optIn), true, `${optIn} ${type}`);
       devices.push(issued);
@@ -1008,49 +1089,87 @@ test("bot:handoffs, schedule:cards, chat:jobs, chat:new-worktree, chat:continue-
     await restored.registry.initialize();
     for (const issued of devices) {
       const authenticated = await restored.registry.authenticate(issued.credential);
-      assert.equal(authenticated?.capabilities.has(optIn), true, `${optIn}: the grant is persisted`);
-      assert.equal(authenticated?.acceptsProgressCapabilities, false, "an opt-in is not a progress grant");
+      assert.equal(
+        authenticated?.capabilities.has(optIn),
+        true,
+        `${optIn}: the grant is persisted`,
+      );
+      assert.equal(
+        authenticated?.acceptsProgressCapabilities,
+        false,
+        "an opt-in is not a progress grant",
+      );
     }
   }
 });
 
 test("bot:activity survives a restart, dies with revocation, and an older stored state simply lacks it", async () => {
   const state = fixture();
-  const issued = await state.registry.issueDevice({ name: "iPhone", type: "iphone", clientVersion: "1.0" });
+  const issued = await state.registry.issueDevice({
+    name: "iPhone",
+    type: "iphone",
+    clientVersion: "1.0",
+  });
   await state.registry.upgradeDeviceCapabilities(issued.device.id, ["bot:activity"]);
 
   // The grant is persisted: a restored registry still honours it.
   const restored = fixture(state.stored());
   await restored.registry.initialize();
-  assert.equal((await restored.registry.authenticate(issued.credential))?.capabilities.has("bot:activity"), true);
+  assert.equal(
+    (await restored.registry.authenticate(issued.credential))?.capabilities.has("bot:activity"),
+    true,
+  );
 
   // Revoking ends the credential; pairing again starts without the opt-in until it is negotiated anew.
   assert.equal(await state.registry.revokeDevice(issued.device.id), true);
   assert.equal((await state.registry.authenticate(issued.credential))?.revoked, true);
-  const repaired = await state.registry.issueDevice({ name: "iPhone", type: "iphone", clientVersion: "1.0" });
-  assert.equal((await state.registry.authenticate(repaired.credential))?.capabilities.has("bot:activity"), false);
+  const repaired = await state.registry.issueDevice({
+    name: "iPhone",
+    type: "iphone",
+    clientVersion: "1.0",
+  });
+  assert.equal(
+    (await state.registry.authenticate(repaired.credential))?.capabilities.has("bot:activity"),
+    false,
+  );
   await state.registry.upgradeDeviceCapabilities(repaired.device.id, ["bot:activity"]);
-  assert.equal((await state.registry.authenticate(repaired.credential))?.capabilities.has("bot:activity"), true);
+  assert.equal(
+    (await state.registry.authenticate(repaired.credential))?.capabilities.has("bot:activity"),
+    true,
+  );
 
   // A state written before revision 30 has no such grant, loads cleanly, and can still negotiate it.
   const older = fixture();
-  const legacy = await older.registry.issueDevice({ name: "iPhone", type: "iphone", clientVersion: "1.0" });
+  const legacy = await older.registry.issueDevice({
+    name: "iPhone",
+    type: "iphone",
+    clientVersion: "1.0",
+  });
   const reloaded = fixture(older.stored());
   await reloaded.registry.initialize();
-  assert.equal((await reloaded.registry.authenticate(legacy.credential))?.capabilities.has("bot:activity"), false);
+  assert.equal(
+    (await reloaded.registry.authenticate(legacy.credential))?.capabilities.has("bot:activity"),
+    false,
+  );
   await reloaded.registry.upgradeDeviceCapabilities(legacy.device.id, ["bot:activity"]);
-  assert.equal((await reloaded.registry.authenticate(legacy.credential))?.capabilities.has("bot:activity"), true);
+  assert.equal(
+    (await reloaded.registry.authenticate(legacy.credential))?.capabilities.has("bot:activity"),
+    true,
+  );
 });
 
 test("outside apps get only chat capabilities, never approvals, even from a tampered state file", async () => {
   const state = fixture();
   await state.registry.initialize();
   const read = await state.registry.issueAgentApp({ name: "Codex", access: "read" });
-  const supervised = await state.registry.issueAgentApp({ name: "Claude Code", access: "supervised" });
-  assert.deepEqual(
-    [...(await state.registry.authenticate(read.credential))!.capabilities].sort(),
-    ["chat:read", "server:read"],
-  );
+  const supervised = await state.registry.issueAgentApp({
+    name: "Claude Code",
+    access: "supervised",
+  });
+  assert.deepEqual([...(await state.registry.authenticate(read.credential))!.capabilities].sort(), [
+    "chat:read",
+    "server:read",
+  ]);
   assert.deepEqual(
     [...(await state.registry.authenticate(supervised.credential))!.capabilities].sort(),
     ["chat:read", "chat:write", "server:read"],
@@ -1077,10 +1196,19 @@ test("outside apps get only chat capabilities, never approvals, even from a tamp
     assert.equal(app.capabilities.has("approval:respond"), false);
     assert.ok([...app.capabilities].every((capability) => allowed.has(capability)));
   }
-  assert.equal((await restored.registry.authenticate(read.credential))!.capabilities.has("chat:write"), false);
+  assert.equal(
+    (await restored.registry.authenticate(read.credential))!.capabilities.has("chat:write"),
+    false,
+  );
   // Capability negotiation can never add anything to an app either.
-  assert.equal(await restored.registry.upgradeDeviceCapabilities(supervised.app.id, ["approval:respond"]), null);
-  assert.equal(await restored.registry.upgradeDeviceCapabilities(supervised.app.id, ["chat:progress"]), null);
+  assert.equal(
+    await restored.registry.upgradeDeviceCapabilities(supervised.app.id, ["approval:respond"]),
+    null,
+  );
+  assert.equal(
+    await restored.registry.upgradeDeviceCapabilities(supervised.app.id, ["chat:progress"]),
+    null,
+  );
 });
 
 test("outside apps are connected only through their own call, listed apart from paired devices, with their own quota", async () => {
@@ -1094,7 +1222,11 @@ test("outside apps are connected only through their own call, listed apart from 
     state.registry.issueAgentApp({ name: "Wide", access: "full" as never }),
     /Invalid outside app metadata/u,
   );
-  const phone = await state.registry.issueDevice({ name: "iPhone", type: "iphone", clientVersion: "1" });
+  const phone = await state.registry.issueDevice({
+    name: "iPhone",
+    type: "iphone",
+    clientVersion: "1",
+  });
   const issued: Array<Awaited<ReturnType<typeof state.registry.issueAgentApp>>> = [];
   for (let index = 0; index < 16; index += 1) {
     issued.push(await state.registry.issueAgentApp({ name: `App ${index}`, access: "read" }));
@@ -1105,7 +1237,10 @@ test("outside apps are connected only through their own call, listed apart from 
   );
   // A full set of apps never blocks pairing a phone.
   await state.registry.issueDevice({ name: "iPad", type: "ipad", clientVersion: "1" });
-  assert.deepEqual((await state.registry.listDevices()).map((device) => device.type), ["iphone", "ipad"]);
+  assert.deepEqual(
+    (await state.registry.listDevices()).map((device) => device.type),
+    ["iphone", "ipad"],
+  );
   const apps = await state.registry.listAgentApps();
   assert.equal(apps.length, 16);
   assert.deepEqual(apps[0], {
@@ -1116,7 +1251,10 @@ test("outside apps are connected only through their own call, listed apart from 
     createdAt: 1_000,
     lastSeenAt: 0,
   });
-  assert.equal(apps.some((app) => app.id === phone.device.id), false);
+  assert.equal(
+    apps.some((app) => app.id === phone.device.id),
+    false,
+  );
 
   // Revoking one frees its slot; the revoked app stays listed as revoked.
   await state.registry.revokeDevice(issued[3]!.app.id);

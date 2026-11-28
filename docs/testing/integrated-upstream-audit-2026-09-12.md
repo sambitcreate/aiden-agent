@@ -32,33 +32,33 @@ The successful commands were run from the audited worktree using `/Users/sambitb
 
 These findings do not establish that a secret has actually leaked, that users have suffered a crash, or that the current release is universally broken. They identify reproducible code paths and the conditions under which they matter. No incident history or production telemetry was examined.
 
-| Order | Decision | Priority and confidence | Delivery boundary |
-| --- | --- | --- | --- |
-| 1 | Scope configured MCP service headers to their intended origin, including OAuth discovery and redirects | P1; confirmed conditional disclosure path with mocked SDK discovery | Aiden-owned transport fix and regression tests |
-| 2 | Replace lossy/unbounded MCP result normalization with a bounded, explicit content policy | P1; reproduced content loss and early large allocation | First-party normalizer, transport admission, projection tests |
-| 3 | Bound OAuth network requests without shortening the human sign-in window | P2; source-supported reliability gap | Same transport workstream, separately testable change |
-| 4 | Investigate effective child-tool/prompt disagreement and add a narrow regression | P2; source concern, production reachability must be proven | Subagent assembly/prompt contract; no authority expansion |
-| 5 | Refresh background-subagent acceptance requirements before existing Phase 7 activation | P2 prerequisite for that feature, not an active-runtime release blocker | Existing orchestration plan and lifecycle tests |
-| 6 | Keep current web-provider implementations; record upstream fixes already covered | No code change established by this comparison | Provenance update only |
-| 7 | Keep context-mode-derived memory and current local compaction ownership | No required update | No dependency or engine changes |
-| 8 | Exclude nonintegrated plugins and newly added upstream providers | Out of this maintenance scope | No installation, migration, or feature expansion |
+| Order | Decision                                                                                               | Priority and confidence                                                 | Delivery boundary                                             |
+| ----- | ------------------------------------------------------------------------------------------------------ | ----------------------------------------------------------------------- | ------------------------------------------------------------- |
+| 1     | Scope configured MCP service headers to their intended origin, including OAuth discovery and redirects | P1; confirmed conditional disclosure path with mocked SDK discovery     | Aiden-owned transport fix and regression tests                |
+| 2     | Replace lossy/unbounded MCP result normalization with a bounded, explicit content policy               | P1; reproduced content loss and early large allocation                  | First-party normalizer, transport admission, projection tests |
+| 3     | Bound OAuth network requests without shortening the human sign-in window                               | P2; source-supported reliability gap                                    | Same transport workstream, separately testable change         |
+| 4     | Investigate effective child-tool/prompt disagreement and add a narrow regression                       | P2; source concern, production reachability must be proven              | Subagent assembly/prompt contract; no authority expansion     |
+| 5     | Refresh background-subagent acceptance requirements before existing Phase 7 activation                 | P2 prerequisite for that feature, not an active-runtime release blocker | Existing orchestration plan and lifecycle tests               |
+| 6     | Keep current web-provider implementations; record upstream fixes already covered                       | No code change established by this comparison                           | Provenance update only                                        |
+| 7     | Keep context-mode-derived memory and current local compaction ownership                                | No required update                                                      | No dependency or engine changes                               |
+| 8     | Exclude nonintegrated plugins and newly added upstream providers                                       | Out of this maintenance scope                                           | No installation, migration, or feature expansion              |
 
 Here P1 means address in the next focused maintenance cycle; P2 means planned reliability work or a prerequisite before exposing the affected feature. No P0 emergency or proven active exploitation was established.
 
 ## Integration inventory and explicit exclusions
 
-| Supplied source | Actual relationship to Aiden | Audit disposition |
-| --- | --- | --- |
-| `mksglu/context-mode` | Design-derived native memory/retrieval; no imported package or MCP owner | Compare the adopted source concepts; no source delta |
-| `nicobailon/pi-subagents` | Deliberate native adaptation with Aiden-owned tools, approvals, persistence and UI | Compare applicable behavior; selective follow-up |
-| `nicobailon/pi-web-access` | Native provider/search adaptation and catalog research | Compare shipped provider behavior; retain current implementations |
-| `nicobailon/pi-mcp-adapter` | Reference for Aiden's existing native MCP feature; independent SDK lifecycle | Use relevant upstream fixes as evidence to inspect Aiden; no plugin bump |
-| `DietrichGebert/ponytail` | Workflow/simplicity reference only | Excluded |
-| `@gotgenes/pi-permission-system` | Policy reference; native one-shot approval machinery is independent | Excluded as a package update |
-| `MattDevy/pi-extensions` | Memory confidence/feedback and review research only | Excluded |
-| `MattDevy/pi-extensions/packages/pi-simplify` | Same monorepo; code-review reference, not context compaction | Excluded |
-| `narumiruna/pi-extensions` | Provider-native compaction research; deliberately deferred | Scope checked; no integrated package to update |
-| `injaneity/pi-computer-use` | Media/replay research reference | Excluded; not Aiden's Computer Use driver |
+| Supplied source                               | Actual relationship to Aiden                                                       | Audit disposition                                                        |
+| --------------------------------------------- | ---------------------------------------------------------------------------------- | ------------------------------------------------------------------------ |
+| `mksglu/context-mode`                         | Design-derived native memory/retrieval; no imported package or MCP owner           | Compare the adopted source concepts; no source delta                     |
+| `nicobailon/pi-subagents`                     | Deliberate native adaptation with Aiden-owned tools, approvals, persistence and UI | Compare applicable behavior; selective follow-up                         |
+| `nicobailon/pi-web-access`                    | Native provider/search adaptation and catalog research                             | Compare shipped provider behavior; retain current implementations        |
+| `nicobailon/pi-mcp-adapter`                   | Reference for Aiden's existing native MCP feature; independent SDK lifecycle       | Use relevant upstream fixes as evidence to inspect Aiden; no plugin bump |
+| `DietrichGebert/ponytail`                     | Workflow/simplicity reference only                                                 | Excluded                                                                 |
+| `@gotgenes/pi-permission-system`              | Policy reference; native one-shot approval machinery is independent                | Excluded as a package update                                             |
+| `MattDevy/pi-extensions`                      | Memory confidence/feedback and review research only                                | Excluded                                                                 |
+| `MattDevy/pi-extensions/packages/pi-simplify` | Same monorepo; code-review reference, not context compaction                       | Excluded                                                                 |
+| `narumiruna/pi-extensions`                    | Provider-native compaction research; deliberately deferred                         | Scope checked; no integrated package to update                           |
+| `injaneity/pi-computer-use`                   | Media/replay research reference                                                    | Excluded; not Aiden's Computer Use driver                                |
 
 The authoritative adoption decisions are in [the reference ledger](/Users/sambitbiswas/.codex/worktrees/c65a/aiden-agent/docs/plans/pi-compaction-memory-upgrade-implementation-notes.md:65) and [the research scope](/Users/sambitbiswas/.codex/worktrees/c65a/aiden-agent/docs/plans/pi-compaction-memory-upgrade-plan.md:74). The latter explicitly separates research from permission to install third-party extensions.
 
@@ -70,13 +70,13 @@ Likewise, Aiden's native confidence field does not establish an installation of 
 
 These are the exact research snapshots, not proposed production dependencies. All five research checkouts were clean at verification. Existing checkouts were inspected before pulling; absent repositories were cloned into the requested `opp` directory.
 
-| Repository and local directory under `opp` | Recorded comparison baseline | Refreshed HEAD | Refresh outcome |
-| --- | --- | --- | --- |
-| `pi-subagents` | Expansion: `6209b8b035f02d031f23f160840131719f115d51`; later compaction audit: `3f879722f96fdec19364ccd9a18f8176d797fedc` | `940406c0d48890060d1f5f5280925c8f5a5c7389` | Existing clean checkout fast-forwarded from `f6a4caccfddcce04e18afd7fcf28d225ac5b45ad`; v0.67.0 plus 23 commits |
-| `pi-web-access` | `5741f303a4f5b89fed18e02ec3fed038844e0e98` | `192ac1875e3b8f88c78953dbc314949ec9fcaa27` | Existing clean checkout fast-forwarded from v0.27.0-era `8f11a0a`; current package v0.29.0; 33 commits after ledger baseline |
-| `pi-mcp-adapter` | `ff234b862359e722bf4dc1c99cde62278d4b8eb3` | `6f4a8f86f2da5f2acaa8e536396c61296752310b` | New clone; v2.33.0 plus one commit; 40 commits after baseline |
-| `context-mode` | `6b8bf61f83abed6c3faf4e7c3ba02c162fadfedf` | `0c57e6e5a167c19da33e29f1c6158c39728ba260` | New clone; only generated statistics changed |
-| `narumiruna-pi-extensions` | `36c2421544f0defaebd3d44b793d39b2a7f5fb47` | `07ac1d7446deb28472030770a537590427da2dae` | New clone for bounded compaction/scope verification; relevant package 0.51.3 → 0.52.0 |
+| Repository and local directory under `opp` | Recorded comparison baseline                                                                                              | Refreshed HEAD                             | Refresh outcome                                                                                                              |
+| ------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------- |
+| `pi-subagents`                             | Expansion: `6209b8b035f02d031f23f160840131719f115d51`; later compaction audit: `3f879722f96fdec19364ccd9a18f8176d797fedc` | `940406c0d48890060d1f5f5280925c8f5a5c7389` | Existing clean checkout fast-forwarded from `f6a4caccfddcce04e18afd7fcf28d225ac5b45ad`; v0.67.0 plus 23 commits              |
+| `pi-web-access`                            | `5741f303a4f5b89fed18e02ec3fed038844e0e98`                                                                                | `192ac1875e3b8f88c78953dbc314949ec9fcaa27` | Existing clean checkout fast-forwarded from v0.27.0-era `8f11a0a`; current package v0.29.0; 33 commits after ledger baseline |
+| `pi-mcp-adapter`                           | `ff234b862359e722bf4dc1c99cde62278d4b8eb3`                                                                                | `6f4a8f86f2da5f2acaa8e536396c61296752310b` | New clone; v2.33.0 plus one commit; 40 commits after baseline                                                                |
+| `context-mode`                             | `6b8bf61f83abed6c3faf4e7c3ba02c162fadfedf`                                                                                | `0c57e6e5a167c19da33e29f1c6158c39728ba260` | New clone; only generated statistics changed                                                                                 |
+| `narumiruna-pi-extensions`                 | `36c2421544f0defaebd3d44b793d39b2a7f5fb47`                                                                                | `07ac1d7446deb28472030770a537590427da2dae` | New clone for bounded compaction/scope verification; relevant package 0.51.3 → 0.52.0                                        |
 
 Upstream source comparisons: [subagents since the August expansion baseline](https://github.com/nicobailon/pi-subagents/compare/6209b8b035f02d031f23f160840131719f115d51...940406c0d48890060d1f5f5280925c8f5a5c7389), [web access](https://github.com/nicobailon/pi-web-access/compare/5741f303a4f5b89fed18e02ec3fed038844e0e98...192ac1875e3b8f88c78953dbc314949ec9fcaa27), [MCP adapter](https://github.com/nicobailon/pi-mcp-adapter/compare/ff234b862359e722bf4dc1c99cde62278d4b8eb3...6f4a8f86f2da5f2acaa8e536396c61296752310b), [context-mode](https://github.com/mksglu/context-mode/compare/6b8bf61f83abed6c3faf4e7c3ba02c162fadfedf...0c57e6e5a167c19da33e29f1c6158c39728ba260), [Narumi](https://github.com/narumiruna/pi-extensions/compare/36c2421544f0defaebd3d44b793d39b2a7f5fb47...07ac1d7446deb28472030770a537590427da2dae).
 
@@ -130,16 +130,16 @@ Because this may affect transcript/activity/media projection, inspect both iOS a
 
 The 40-commit delta contains important changes that do not map to Aiden's implementation. Recording why they were excluded avoids treating the three selected fixes as an incomplete blanket sync.
 
-| Upstream change | Why it is not immediate Aiden work |
-| --- | --- |
-| Cross-process OAuth credential transactions | Aiden owns an in-process mutation queue and per-server operation/configuration generations. No equivalent shared adapter credential-file writer was found. Revisit if that ownership changes. |
-| Remove inherited `bearerTokenStore` on transport switches | Aiden's server schema has no such inherited field or adapter config-merging system. Its own connection fingerprints and credential cleanup remain the relevant tests. |
-| Session-scoped grants and approval-broker ordering | Aiden's one-shot approvals and immutable child ceilings have different owners and semantics. Importing session grants would change authority. |
-| MCP script intermediates, namespace proxies, direct-tool search, plugin loading and panels | Those adapter execution/UI modules are not integrated. Their absence is not a regression. |
-| Custom CA bundles and disabling inherited stdio environment | Potential separate product/hardening controls. No adopted contract currently promises them; adding them requires explicit configuration and compatibility design. |
-| Stale OAuth-client re-registration | Include a failing-case check during the OAuth work, but do not alter Aiden's transactional credential lifecycle without reproducing the same failure. |
-| Dynamic callback ports | Aiden has a stable callback URI and explicit port-conflict failure. Changing that requires registration/compatibility work, not an automatic patch port. |
-| Node 20 compatibility, extension peer pins, config CLI parsing, TUI themes and install flows | Upstream packaging/runtime-specific changes with no matching Aiden dependency or feature. |
+| Upstream change                                                                              | Why it is not immediate Aiden work                                                                                                                                                            |
+| -------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Cross-process OAuth credential transactions                                                  | Aiden owns an in-process mutation queue and per-server operation/configuration generations. No equivalent shared adapter credential-file writer was found. Revisit if that ownership changes. |
+| Remove inherited `bearerTokenStore` on transport switches                                    | Aiden's server schema has no such inherited field or adapter config-merging system. Its own connection fingerprints and credential cleanup remain the relevant tests.                         |
+| Session-scoped grants and approval-broker ordering                                           | Aiden's one-shot approvals and immutable child ceilings have different owners and semantics. Importing session grants would change authority.                                                 |
+| MCP script intermediates, namespace proxies, direct-tool search, plugin loading and panels   | Those adapter execution/UI modules are not integrated. Their absence is not a regression.                                                                                                     |
+| Custom CA bundles and disabling inherited stdio environment                                  | Potential separate product/hardening controls. No adopted contract currently promises them; adding them requires explicit configuration and compatibility design.                             |
+| Stale OAuth-client re-registration                                                           | Include a failing-case check during the OAuth work, but do not alter Aiden's transactional credential lifecycle without reproducing the same failure.                                         |
+| Dynamic callback ports                                                                       | Aiden has a stable callback URI and explicit port-conflict failure. Changing that requires registration/compatibility work, not an automatic patch port.                                      |
+| Node 20 compatibility, extension peer pins, config CLI parsing, TUI themes and install flows | Upstream packaging/runtime-specific changes with no matching Aiden dependency or feature.                                                                                                     |
 
 These dispositions are source-based maintenance decisions, not assertions that the corresponding Aiden areas could never be improved. The pinned MCP comparison in the ledger provides the complete upstream history.
 
@@ -171,13 +171,13 @@ The Mac currently owns child detail. Desktop Remote filtering and the iOS/Androi
 
 The existing native implementation is documented in [the Web Access plan](/Users/sambitbiswas/.codex/worktrees/c65a/aiden-agent/docs/plans/web-access-rehaul-plan.md:104). Its source was compared against the refreshed upstream v0.29.0, including the 33 commits since the August audit baseline.
 
-| Upstream change | Aiden comparison | Decision |
-| --- | --- | --- |
-| [Tavily plan exhaustion is a quota error](https://github.com/nicobailon/pi-web-access/commit/2cd4f79e5d5d4a0b998d59d62b57ad70998dc8ab) | `web-search-tavily-adapter.ts` already passes 432/433 as quota statuses; focused fixtures assert both | Already covered |
-| OpenAI credential origin mismatch protection (`6dff041`) | Native OpenAI adapter and auth-reuse path bind endpoint/credential identity and revalidate after I/O | Preserve existing stronger binding; no blind cherry-pick |
-| Preserve cited Perplexity sources (`2f5b0bc`) | Aiden deliberately returns bounded source evidence, with search-result and citations-only coverage, rather than upstream's full answer/report contract | No matching regression established |
-| Explicit-only Mistral search (`7ca5cdc`) and SerpApi (`734ab55`) | These are additional upstream providers, not shipped Aiden integrations | Excluded from the requested update scope |
-| Extraction, video, repo cloning, response persistence and fan-out changes | These do not belong to Aiden's native search contract | Excluded |
+| Upstream change                                                                                                                        | Aiden comparison                                                                                                                                       | Decision                                                 |
+| -------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ | -------------------------------------------------------- |
+| [Tavily plan exhaustion is a quota error](https://github.com/nicobailon/pi-web-access/commit/2cd4f79e5d5d4a0b998d59d62b57ad70998dc8ab) | `web-search-tavily-adapter.ts` already passes 432/433 as quota statuses; focused fixtures assert both                                                  | Already covered                                          |
+| OpenAI credential origin mismatch protection (`6dff041`)                                                                               | Native OpenAI adapter and auth-reuse path bind endpoint/credential identity and revalidate after I/O                                                   | Preserve existing stronger binding; no blind cherry-pick |
+| Preserve cited Perplexity sources (`2f5b0bc`)                                                                                          | Aiden deliberately returns bounded source evidence, with search-result and citations-only coverage, rather than upstream's full answer/report contract | No matching regression established                       |
+| Explicit-only Mistral search (`7ca5cdc`) and SerpApi (`734ab55`)                                                                       | These are additional upstream providers, not shipped Aiden integrations                                                                                | Excluded from the requested update scope                 |
+| Extraction, video, repo cloning, response persistence and fan-out changes                                                              | These do not belong to Aiden's native search contract                                                                                                  | Excluded                                                 |
 
 The relevant code is [Tavily](/Users/sambitbiswas/.codex/worktrees/c65a/aiden-agent/main/services/web-search-tavily-adapter.ts:120), [its tests](/Users/sambitbiswas/.codex/worktrees/c65a/aiden-agent/main/services/web-search-wave1-adapters.test.ts:371), [OpenAI](/Users/sambitbiswas/.codex/worktrees/c65a/aiden-agent/main/services/web-search-openai-adapter.ts:76), and [Perplexity](/Users/sambitbiswas/.codex/worktrees/c65a/aiden-agent/main/services/web-search-perplexity-core.ts:291). Exact upstream changes can be inspected in the pinned web comparison in the ledger.
 

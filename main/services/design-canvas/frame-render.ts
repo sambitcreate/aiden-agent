@@ -51,7 +51,10 @@ type HiddenWindow = InstanceType<typeof BrowserWindow>;
 const zoomGate = createDesignZoomGate();
 
 /** A fresh hidden, sandboxed window, in the offline session, that may load one page and go nowhere else. */
-async function openHiddenWindow(width: number, zoom: number): Promise<{ window: HiddenWindow; markLoaded(): void }> {
+async function openHiddenWindow(
+  width: number,
+  zoom: number,
+): Promise<{ window: HiddenWindow; markLoaded(): void }> {
   const offline = designOfflineSession();
   await offline.ready;
   const window = new BrowserWindow({
@@ -94,11 +97,18 @@ async function openHiddenWindow(width: number, zoom: number): Promise<{ window: 
 }
 
 /** Runs `work` against the window, giving up after the render timeout or when `signal` aborts; the window is always destroyed. */
-async function withHiddenWindow<T>(window: HiddenWindow, work: () => Promise<T>, signal?: AbortSignal): Promise<T> {
+async function withHiddenWindow<T>(
+  window: HiddenWindow,
+  work: () => Promise<T>,
+  signal?: AbortSignal,
+): Promise<T> {
   let timer: ReturnType<typeof setTimeout> | undefined;
   let onAbort: (() => void) | undefined;
   const stop = new Promise<never>((_resolve, reject) => {
-    timer = setTimeout(() => reject(new Error("The page took too long to draw.")), RENDER_TIMEOUT_MS);
+    timer = setTimeout(
+      () => reject(new Error("The page took too long to draw.")),
+      RENDER_TIMEOUT_MS,
+    );
     if (signal) {
       onAbort = () => reject(new Error("The inspect was stopped."));
       if (signal.aborted) onAbort();
@@ -127,7 +137,13 @@ export async function renderDesignFrame(request: DesignFrameRenderRequest): Prom
 
 const measureHeight = async (window: HiddenWindow): Promise<number> => {
   const measured = Number(await window.webContents.executeJavaScript(HEIGHT_SCRIPT));
-  return Math.max(1, Math.min(DESIGN_EXPORT_MAX_HEIGHT, Number.isFinite(measured) ? Math.ceil(measured) : START_HEIGHT));
+  return Math.max(
+    1,
+    Math.min(
+      DESIGN_EXPORT_MAX_HEIGHT,
+      Number.isFinite(measured) ? Math.ceil(measured) : START_HEIGHT,
+    ),
+  );
 };
 
 /**
@@ -135,7 +151,9 @@ const measureHeight = async (window: HiddenWindow): Promise<number> => {
  * sticks out, what its console said and which tweak names it reads; with
  * `picture`, a JPEG of part of it sized for a model to read.
  */
-export async function inspectDesignFrame(request: DesignInspectRequest): Promise<DesignInspectProbe> {
+export async function inspectDesignFrame(
+  request: DesignInspectRequest,
+): Promise<DesignInspectProbe> {
   const leave = await zoomGate.enter(1, request.signal);
   try {
     return await inspectInWindow(request);
@@ -147,10 +165,13 @@ export async function inspectDesignFrame(request: DesignInspectRequest): Promise
 async function inspectInWindow(request: DesignInspectRequest): Promise<DesignInspectProbe> {
   const { window, markLoaded } = await openHiddenWindow(request.width, 1);
   const messages: DesignConsoleEntry[] = [];
-  window.webContents.on("console-message", (details) => collectDesignConsoleEntry(messages, details));
+  window.webContents.on("console-message", (details) =>
+    collectDesignConsoleEntry(messages, details),
+  );
   const missingFiles = new Set<string>();
   const stopWatching = watchDesignOfflineMissingFiles(window.webContents.id, (url) => {
-    if (missingFiles.size < 50) missingFiles.add(boundedUnicodePrefix(url, DESIGN_INSPECT_PROBE_STRING_CHARS));
+    if (missingFiles.size < 50)
+      missingFiles.add(boundedUnicodePrefix(url, DESIGN_INSPECT_PROBE_STRING_CHARS));
   });
   try {
     return await withHiddenWindow(
@@ -161,16 +182,20 @@ async function inspectInWindow(request: DesignInspectRequest): Promise<DesignIns
         markLoaded();
         await contents.executeJavaScript(SETTLE_SCRIPT);
         const height = await measureHeight(window);
-        const frame = request.picture ? designInspectPictureWindow(request.width, height, request.picture.top) : undefined;
+        const frame = request.picture
+          ? designInspectPictureWindow(request.width, height, request.picture.top)
+          : undefined;
         if (frame) {
           // Tall enough to hold the part of the page that is captured.
-          window.setContentSize(request.width, Math.min(DESIGN_EXPORT_MAX_HEIGHT, frame.top + frame.height));
+          window.setContentSize(
+            request.width,
+            Math.min(DESIGN_EXPORT_MAX_HEIGHT, frame.top + frame.height),
+          );
           await contents.executeJavaScript(SETTLE_SCRIPT);
         }
-        const seen = (await contents.executeJavaScript(designInspectProbeScript(request.tweakTargets, request.width))) as Omit<
-          DesignInspectProbe,
-          "height" | "console" | "picture" | "missingFiles"
-        >;
+        const seen = (await contents.executeJavaScript(
+          designInspectProbeScript(request.tweakTargets, request.width),
+        )) as Omit<DesignInspectProbe, "height" | "console" | "picture" | "missingFiles">;
         const probe: DesignInspectProbe = {
           height,
           scrollWidth: Number(seen?.scrollWidth) || 0,
@@ -179,12 +204,18 @@ async function inspectInWindow(request: DesignInspectRequest): Promise<DesignIns
           brokenImages: strings(seen?.brokenImages),
           missingFiles: [...missingFiles],
           failedFonts: strings(seen?.failedFonts),
-          tweaksRead: strings(seen?.tweaksRead).filter((name) => request.tweakTargets.includes(name)),
+          tweaksRead: strings(seen?.tweaksRead).filter((name) =>
+            request.tweakTargets.includes(name),
+          ),
           readsTheme: seen?.readsTheme === true,
           console: messages.slice(),
         };
         if (frame) {
-          const picture = await capture(window, { x: 0, y: frame.top, width: request.width, height: frame.height }, frame.scale);
+          const picture = await capture(
+            window,
+            { x: 0, y: frame.top, width: request.width, height: frame.height },
+            frame.scale,
+          );
           if (picture) probe.picture = { ...picture, top: frame.top, height: frame.height };
         }
         return probe;
@@ -212,12 +243,16 @@ async function capture(
   rect: { x: number; y: number; width: number; height: number },
   scale: number,
 ): Promise<{ data: string; mimeType: string } | null> {
-  const size = { width: Math.max(1, Math.round(rect.width * scale)), height: Math.max(1, Math.round(rect.height * scale)) };
+  const size = {
+    width: Math.max(1, Math.round(rect.width * scale)),
+    height: Math.max(1, Math.round(rect.height * scale)),
+  };
   for (let attempt = 0; attempt < 3; attempt += 1) {
     let image = await window.webContents.capturePage(rect, { stayHidden: true });
     if (!image.isEmpty()) {
       const got = image.getSize();
-      if (got.width !== size.width || got.height !== size.height) image = image.resize({ ...size, quality: "best" });
+      if (got.width !== size.width || got.height !== size.height)
+        image = image.resize({ ...size, quality: "best" });
       return { data: image.toJPEG(80).toString("base64"), mimeType: "image/jpeg" };
     }
     await new Promise((resolve) => setTimeout(resolve, 150));
@@ -235,7 +270,11 @@ async function draw(
   onLoaded();
   await contents.executeJavaScript(SETTLE_SCRIPT);
   if (request.format === "pdf") {
-    const layout = designPdfLayout({ paper: request.paper, printMode: request.printMode, width: request.width });
+    const layout = designPdfLayout({
+      paper: request.paper,
+      printMode: request.printMode,
+      width: request.width,
+    });
     return contents.printToPDF({
       pageSize: layout.pageSize,
       printBackground: true,
@@ -251,7 +290,10 @@ async function draw(
   const height = await measureHeight(window);
   // The window is zoomed 2×, so it lays the page out at its own width and
   // draws twice the pixels; it grows to the page's full height for one capture.
-  const pixels = { width: request.width * DESIGN_EXPORT_PNG_SCALE, height: height * DESIGN_EXPORT_PNG_SCALE };
+  const pixels = {
+    width: request.width * DESIGN_EXPORT_PNG_SCALE,
+    height: height * DESIGN_EXPORT_PNG_SCALE,
+  };
   window.setContentSize(pixels.width, pixels.height);
   await contents.executeJavaScript(SETTLE_SCRIPT);
   for (let attempt = 0; attempt < 3; attempt += 1) {
@@ -259,7 +301,8 @@ async function draw(
     if (!image.isEmpty()) {
       // A high-density display captures more pixels than asked for; the file is always 2×.
       const size = image.getSize();
-      if (size.width !== pixels.width || size.height !== pixels.height) image = image.resize({ ...pixels, quality: "best" });
+      if (size.width !== pixels.width || size.height !== pixels.height)
+        image = image.resize({ ...pixels, quality: "best" });
       return image.toPNG();
     }
     await new Promise((resolve) => setTimeout(resolve, 150));

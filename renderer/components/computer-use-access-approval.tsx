@@ -91,7 +91,9 @@ export function ComputerUsePermissionChecklist({
   const request = useRequestComputerUsePermissions();
   const failed = checkError != null;
   const requestError =
-    request.error != null ? userFacingErrorMessage(request.error, "Couldn’t open System Settings.") : null;
+    request.error != null
+      ? userFacingErrorMessage(request.error, "Couldn’t open System Settings.")
+      : null;
   const detail = failed
     ? userFacingErrorMessage(checkError, "Aiden couldn’t check Computer Use.")
     : (status?.detail ?? "Checking Computer Use…");
@@ -211,7 +213,10 @@ export function ComputerUseAccessApproval({
           : "Allow Accessibility and Screen Recording for Aiden first."
       : undefined;
   const disabled = deciding || disabledReason !== undefined;
-  const allowDescription = [allowBlockedReason ? allowBlockedId : undefined, showChecklist ? checklistId : undefined]
+  const allowDescription = [
+    allowBlockedReason ? allowBlockedId : undefined,
+    showChecklist ? checklistId : undefined,
+  ]
     .filter(Boolean)
     .join(" ");
 
@@ -228,11 +233,19 @@ export function ComputerUseAccessApproval({
         <ApprovalIconTile icon={MousePointer2} />
         <Text variant="strong" as="p" id={titleId} className="mt-2.5 text-balance">
           Use your Mac with Computer Use?
-          {pendingCount > 1 ? <span className="ml-1.5 font-normal text-tertiary">1 of {pendingCount}</span> : null}
+          {pendingCount > 1 ? (
+            <span className="ml-1.5 font-normal text-tertiary">1 of {pendingCount}</span>
+          ) : null}
         </Text>
-        <Text variant="small" color="secondary" as="p" id={summaryId} className="mt-1.5 text-pretty">
-          Screenshots and accessibility text from your apps go to the selected model. If you allow it, Aiden can
-          click and type in any app in this chat without asking again.
+        <Text
+          variant="small"
+          color="secondary"
+          as="p"
+          id={summaryId}
+          className="mt-1.5 text-pretty"
+        >
+          Screenshots and accessibility text from your apps go to the selected model. If you allow
+          it, Aiden can click and type in any app in this chat without asking again.
         </Text>
       </div>
       {local ? (
@@ -328,7 +341,9 @@ export function ComputerUseContinueCallout({
         <span
           className={cn(
             "grid size-8 shrink-0 place-items-center rounded-full",
-            ready ? "bg-status-green-surface text-status-green" : "bg-status-warning-surface text-status-warning",
+            ready
+              ? "bg-status-green-surface text-status-green"
+              : "bg-status-warning-surface text-status-warning",
           )}
         >
           <MousePointer2 aria-hidden="true" className="size-4" />
@@ -337,7 +352,13 @@ export function ComputerUseContinueCallout({
           <Text variant="small-strong" as="p" id={titleId}>
             {ready ? "Computer Use is ready." : "Finish setting up Computer Use"}
           </Text>
-          <Text variant="small" color="secondary" as="p" id={descriptionId} className="mt-0.5 text-pretty">
+          <Text
+            variant="small"
+            color="secondary"
+            as="p"
+            id={descriptionId}
+            className="mt-0.5 text-pretty"
+          >
             {ready
               ? "Continue where Aiden left off?"
               : "Aiden paused because macOS permissions were missing. Allow them, then continue."}
@@ -353,12 +374,24 @@ export function ComputerUseContinueCallout({
         />
       ) : null}
       {ready && continueDisabledReason ? (
-        <Text variant="small" color="secondary" as="p" id={blockedId} role="note" className="mt-2.5">
+        <Text
+          variant="small"
+          color="secondary"
+          as="p"
+          id={blockedId}
+          role="note"
+          className="mt-2.5"
+        >
           {continueDisabledReason}
         </Text>
       ) : null}
       <div className="mt-2.5 flex justify-end gap-2">
-        <Button variant="transparent" size="small" disabled={busy !== null} onClick={() => void run("dismiss")}>
+        <Button
+          variant="transparent"
+          size="small"
+          disabled={busy !== null}
+          onClick={() => void run("dismiss")}
+        >
           Dismiss
         </Button>
         {ready ? (

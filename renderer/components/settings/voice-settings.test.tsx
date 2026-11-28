@@ -40,7 +40,8 @@ function mount(
       <Toaster />
     </QueryClientProvider>,
   );
-  const patches = () => calls.filter((call) => call.channel === "settings:set").map((call) => call.args[0]);
+  const patches = () =>
+    calls.filter((call) => call.channel === "settings:set").map((call) => call.args[0]);
   return { calls, patches };
 }
 
@@ -55,7 +56,9 @@ async function optionsOf(name: string): Promise<string[]> {
   const trigger = await screen.findByRole("combobox", { name });
   fireEvent.pointerDown(trigger, { button: 0, ctrlKey: false, pointerType: "mouse" });
   const listbox = await screen.findByRole("listbox");
-  const labels = Array.from(listbox.querySelectorAll("[role=option]")).map((option) => option.textContent ?? "");
+  const labels = Array.from(listbox.querySelectorAll("[role=option]")).map(
+    (option) => option.textContent ?? "",
+  );
   fireEvent.keyDown(listbox, { key: "Escape" });
   return labels;
 }
@@ -77,9 +80,17 @@ test("a language the active model can't hear explains the fallback", async () =>
 });
 
 test("the language list is Automatic then the active model's languages", async () => {
-  mount({ localVoiceModel: "canary-180m-flash" }, localReady("canary-180m-flash", true), ["canary-180m-flash"]);
+  mount({ localVoiceModel: "canary-180m-flash" }, localReady("canary-180m-flash", true), [
+    "canary-180m-flash",
+  ]);
   await screen.findByText("Automatic — using On-device (Canary 180M Flash)");
-  assert.deepEqual(await optionsOf("Language"), ["Automatic", "English", "German", "Spanish", "French"]);
+  assert.deepEqual(await optionsOf("Language"), [
+    "Automatic",
+    "English",
+    "German",
+    "Spanish",
+    "French",
+  ]);
 });
 
 test("a supported language choice has no fallback notice", async () => {
@@ -105,17 +116,26 @@ test("cloud transcription offers the common cloud languages", async () => {
 
 test("the cloud Model picker is named by its row and offers the provider's models", async () => {
   mount({ voiceProvider: "openai" }, { kind: "ready", provider: "openai", automatic: false }, []);
-  assert.deepEqual(await optionsOf("Model"), ["whisper-1", "gpt-4o-transcribe", "gpt-4o-mini-transcribe"]);
+  assert.deepEqual(await optionsOf("Model"), [
+    "whisper-1",
+    "gpt-4o-transcribe",
+    "gpt-4o-mini-transcribe",
+  ]);
 });
 
 test("Translate to English appears only for a model that can translate", async () => {
-  mount({ localVoiceModel: "parakeet-v3" }, localReady("parakeet-v3", true), ["parakeet-v3", "canary-180m-flash"]);
+  mount({ localVoiceModel: "parakeet-v3" }, localReady("parakeet-v3", true), [
+    "parakeet-v3",
+    "canary-180m-flash",
+  ]);
   await screen.findByText("Automatic — using On-device (Parakeet TDT 0.6B v3)");
   assert.equal(screen.queryByRole("switch", { name: "Translate to English" }), null);
 });
 
 test("Automatic on a model that can't detect the language says it uses English", async () => {
-  mount({ localVoiceModel: "canary-180m-flash" }, localReady("canary-180m-flash", true), ["canary-180m-flash"]);
+  mount({ localVoiceModel: "canary-180m-flash" }, localReady("canary-180m-flash", true), [
+    "canary-180m-flash",
+  ]);
   await screen.findByText(
     "Canary 180M Flash can't detect the language, so Automatic uses English. Choose the language you speak.",
   );
@@ -129,7 +149,9 @@ test("Automatic on a model that detects the language lets the model decide", asy
 });
 
 test("Translate to English is unavailable until a non-English source language is chosen", async () => {
-  mount({ localVoiceModel: "canary-180m-flash" }, localReady("canary-180m-flash", true), ["canary-180m-flash"]);
+  mount({ localVoiceModel: "canary-180m-flash" }, localReady("canary-180m-flash", true), [
+    "canary-180m-flash",
+  ]);
   const automatic = await screen.findByRole("switch", { name: "Translate to English" });
   assert.equal((automatic as HTMLButtonElement).disabled, true);
   await screen.findByText("Choose a language other than English to translate.");
@@ -184,7 +206,9 @@ test("choosing Gemini waits for the privacy disclosure before switching voice", 
   const dialog = await screen.findByRole("dialog", { name: "Use Google Gemini for voice?" });
   assert.deepEqual(patches(), []);
   fireEvent.click(within(dialog).getByRole("button", { name: "Use Gemini" }));
-  await waitFor(() => assert.ok(calls.some((call) => call.channel === "settings:setGeminiVoiceSetup")));
+  await waitFor(() =>
+    assert.ok(calls.some((call) => call.channel === "settings:setGeminiVoiceSetup")),
+  );
   assert.deepEqual(patches(), []);
 });
 
@@ -227,7 +251,12 @@ test("Gemini without a key collects one, then saves voice without needing a chat
       authMethods: [{ type: "api_key", label: "Enter API key", canLogin: true }],
     },
   ];
-  const { calls, patches } = mount({}, { kind: "needs-setup", reason: "no-provider" }, [], () => providers);
+  const { calls, patches } = mount(
+    {},
+    { kind: "needs-setup", reason: "no-provider" },
+    [],
+    () => providers,
+  );
   await choose("Voice provider", "Online · Google Gemini");
   const disclosure = await screen.findByRole("dialog", { name: "Use Google Gemini for voice?" });
   fireEvent.click(within(disclosure).getByRole("button", { name: "Continue to API key" }));
@@ -238,16 +267,24 @@ test("Gemini without a key collects one, then saves voice without needing a chat
     fireEvent.click(within(editor).getByRole("button", { name: "Enter API key" }));
   });
   await waitFor(() => assert.ok(calls.some((call) => call.channel === "providers:auth:start")));
-  const start = calls.find((call) => call.channel === "providers:auth:start")!.args[0] as { flowId: string };
+  const start = calls.find((call) => call.channel === "providers:auth:start")!.args[0] as {
+    flowId: string;
+  };
 
   // Pi stores the key; Google still has no chat models, which voice-only setup accepts.
   providers = [{ ...(providers[0] as object), hasKey: true, models: [] }];
   assert.ok(!calls.some((call) => call.channel === "settings:setGeminiVoiceSetup"));
   await act(async () => {
-    emitBotTestNotification("providers:auth:done", { flowId: start.flowId, providerId: "google", cancelled: false });
+    emitBotTestNotification("providers:auth:done", {
+      flowId: start.flowId,
+      providerId: "google",
+      cancelled: false,
+    });
   });
 
-  await waitFor(() => assert.ok(calls.some((call) => call.channel === "settings:setGeminiVoiceSetup")));
+  await waitFor(() =>
+    assert.ok(calls.some((call) => call.channel === "settings:setGeminiVoiceSetup")),
+  );
   assert.equal(screen.queryByText(/no usable chat model/), null);
   assert.deepEqual(patches(), []);
 });
@@ -255,7 +292,9 @@ test("Gemini without a key collects one, then saves voice without needing a chat
 test("a provider change that fails to save tells the user", async () => {
   for (const option of [/^On this (Mac|computer) · Private$/, "Automatic", "Online · OpenAI"]) {
     const start = option === "Automatic" ? { voiceProvider: "local" as const } : {};
-    mount(start, localReady("parakeet-v3", option !== "Automatic"), ["parakeet-v3"], [], { failSave: true });
+    mount(start, localReady("parakeet-v3", option !== "Automatic"), ["parakeet-v3"], [], {
+      failSave: true,
+    });
     await choose("Voice provider", option);
     await screen.findByText("Aiden couldn’t change where your voice is processed.");
     cleanup();

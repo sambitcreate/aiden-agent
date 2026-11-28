@@ -4,7 +4,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { listWorkspaceFiles, readWorkspaceFile } from "../services/workspace-files.js";
-import { BOT_FILES_LIST_CHANNEL, BOT_FILES_READ_CHANNEL, registerBotFileHandlers } from "./bot-files.js";
+import {
+  BOT_FILES_LIST_CHANNEL,
+  BOT_FILES_READ_CHANNEL,
+  registerBotFileHandlers,
+} from "./bot-files.js";
 
 async function setup() {
   const root = await mkdtemp(join(tmpdir(), "aiden-bot-files-"));
@@ -22,7 +26,8 @@ async function setup() {
     list: listWorkspaceFiles,
     read: readWorkspaceFile,
   });
-  const invoke = (channel: string, ...args: unknown[]) => Promise.resolve(handlers.get(channel)!({}, ...args));
+  const invoke = (channel: string, ...args: unknown[]) =>
+    Promise.resolve(handlers.get(channel)!({}, ...args));
   return { root, invoke };
 }
 
@@ -30,11 +35,21 @@ test("bots:files lists and reads files in the Bot's own folder only", async (t) 
   const { root, invoke } = await setup();
   t.after(() => rm(root, { recursive: true, force: true }));
 
-  const index = (await invoke(BOT_FILES_LIST_CHANNEL, "bot:1")) as { entries: Array<{ path: string; kind: string }> };
-  assert.ok(index.entries.some((entry) => entry.path === "lists/groceries.md" && entry.kind === "file"));
-  assert.equal(index.entries.some((entry) => entry.path.includes("secret")), false);
+  const index = (await invoke(BOT_FILES_LIST_CHANNEL, "bot:1")) as {
+    entries: Array<{ path: string; kind: string }>;
+  };
+  assert.ok(
+    index.entries.some((entry) => entry.path === "lists/groceries.md" && entry.kind === "file"),
+  );
+  assert.equal(
+    index.entries.some((entry) => entry.path.includes("secret")),
+    false,
+  );
 
-  const document = (await invoke(BOT_FILES_READ_CHANNEL, "bot:1", "lists/groceries.md")) as { path: string; content: string };
+  const document = (await invoke(BOT_FILES_READ_CHANNEL, "bot:1", "lists/groceries.md")) as {
+    path: string;
+    content: string;
+  };
   assert.deepEqual([document.path, document.content], ["lists/groceries.md", "eggs\nmilk\n"]);
 
   await assert.rejects(invoke(BOT_FILES_READ_CHANNEL, "bot:1", "../secret.txt"));

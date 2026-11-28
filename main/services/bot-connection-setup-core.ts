@@ -17,7 +17,9 @@ export interface ConnectionSetupWindows {
 }
 
 /** The window that should show setup now, or null when no window is open. */
-export function connectionSetupTarget(windows: ConnectionSetupWindows): ConnectionSetupWindow | null {
+export function connectionSetupTarget(
+  windows: ConnectionSetupWindows,
+): ConnectionSetupWindow | null {
   const open = windows.all().filter((window) => !window.isDestroyed());
   const focused = open.find((window) => window.isFocused());
   if (focused) return focused;

@@ -12,11 +12,15 @@ import type { GraphIssue } from "../shared/images/ipc-types";
 
 export function acceptSnapshot(current: RunSnapshot | null, next: RunSnapshot): RunSnapshot {
   if (!current) return next;
-  if (current.run.runId !== next.run.runId) return next.run.createdAt >= current.run.createdAt ? next : current;
+  if (current.run.runId !== next.run.runId)
+    return next.run.createdAt >= current.run.createdAt ? next : current;
   return next.version >= current.version ? next : current;
 }
 
-export function attemptStatus(attempt: AttemptSnapshot): { label: string; tone: "gray" | "blue" | "green" | "red" | "warning" } {
+export function attemptStatus(attempt: AttemptSnapshot): {
+  label: string;
+  tone: "gray" | "blue" | "green" | "red" | "warning";
+} {
   switch (attempt.state) {
     case "queued":
       return { label: "Waiting", tone: "gray" };
@@ -78,7 +82,8 @@ export function runHeadline(run: RunSummary): string {
 
 export function costLabel(attempt: AttemptSnapshot): string | null {
   if (attempt.submittedAt === undefined && attempt.costStatus === undefined) return null;
-  if (attempt.costStatus === "reported" && attempt.costUsd !== undefined) return `$${attempt.costUsd.toFixed(4)} reported`;
+  if (attempt.costStatus === "reported" && attempt.costUsd !== undefined)
+    return `$${attempt.costUsd.toFixed(4)} reported`;
   return "Cost not reported";
 }
 
@@ -92,12 +97,17 @@ export function referenceSummary(request: ImageRunConsentRequest): string | null
   if (request.referenceCount === 0) return null;
   const known = request.referenceCount - request.pendingReferenceCount;
   const parts: string[] = [];
-  if (known > 0) parts.push(`${known} reference image${known === 1 ? "" : "s"} (${formatBytes(request.referenceBytes)})`);
+  if (known > 0)
+    parts.push(
+      `${known} reference image${known === 1 ? "" : "s"} (${formatBytes(request.referenceBytes)})`,
+    );
   if (request.pendingReferenceCount > 0) {
     // pendingReferenceCount is the worst case (each earlier Generate can return several images).
     const steps = request.pendingReferenceSteps ?? 1;
     const most = request.pendingReferenceCount;
-    parts.push(`up to ${most} image${most === 1 ? "" : "s"} from ${steps} earlier step${steps === 1 ? "" : "s"} in this run`);
+    parts.push(
+      `up to ${most} image${most === 1 ? "" : "s"} from ${steps} earlier step${steps === 1 ? "" : "s"} in this run`,
+    );
   }
   return parts.join(" + ");
 }
@@ -110,8 +120,16 @@ export type RetryScopeKind = "from-node" | "node-only";
 
 /** The two choices after a Generate node fails (owner decision 1). Each opens its own consent. */
 export const RETRY_OPTIONS: readonly { kind: RetryScopeKind; label: string; hint: string }[] = [
-  { kind: "from-node", label: "Retry from here", hint: "Runs this node and everything after it again. Earlier results are reused." },
-  { kind: "node-only", label: "Retry this node only", hint: "Runs just this node. Nodes after it keep their images and show Out of date until you run them." },
+  {
+    kind: "from-node",
+    label: "Retry from here",
+    hint: "Runs this node and everything after it again. Earlier results are reused.",
+  },
+  {
+    kind: "node-only",
+    label: "Retry this node only",
+    hint: "Runs just this node. Nodes after it keep their images and show Out of date until you run them.",
+  },
 ];
 
 export const STALE_LABEL = "Out of date";
@@ -147,13 +165,20 @@ export function outputsForNode(
   latest: Readonly<Record<string, readonly OutputRef[]>>,
   nodeId: string,
 ): readonly OutputRef[] {
-  const current = snapshot?.attempts.find((attempt) => attempt.nodeId === nodeId && attempt.state === "succeeded" && attempt.output.length > 0);
+  const current = snapshot?.attempts.find(
+    (attempt) =>
+      attempt.nodeId === nodeId && attempt.state === "succeeded" && attempt.output.length > 0,
+  );
   return current?.output ?? ownValue(latest, nodeId) ?? [];
 }
 
-export const START_ERROR_MESSAGES: Record<"expired" | "stale" | "model-unavailable" | "too-many-runs", string> = {
+export const START_ERROR_MESSAGES: Record<
+  "expired" | "stale" | "model-unavailable" | "too-many-runs",
+  string
+> = {
   expired: "That approval expired. Choose Run again to review it.",
-  "too-many-runs": "Aiden is already running 4 image runs. Wait for one to finish or stop one, then try again.",
+  "too-many-runs":
+    "Aiden is already running 4 image runs. Wait for one to finish or stop one, then try again.",
   stale: "The workflow changed after you reviewed it. Choose Run again to review the new plan.",
   "model-unavailable": "The chosen image model is no longer available. Choose another model.",
 };

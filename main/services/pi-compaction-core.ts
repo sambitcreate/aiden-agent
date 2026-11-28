@@ -4,7 +4,24 @@ import { compileVccInWorker } from "./pi-vcc/worker-client.js";
 import { VccError } from "./pi-vcc/errors.js";
 import { writeDiagnosticEvent } from "./diagnostic-journal.js";
 import { type AgentMessage, type ThinkingLevel } from "@earendil-works/pi-agent-core";
-import { DEFAULT_COMPACTION_SETTINGS, CompactionError, calculateContextTokens, compact, createBranchSummaryMessage, createCompactionSummaryMessage, estimateContextTokens, estimateTokens, prepareCompaction, shouldCompact, uuidv7, TODO_CONTEXT, withAbortSignal, type CompactionSettings, type CompactionPreparation, type CompactResult } from "./pi-legacy-harness.js";
+import {
+  DEFAULT_COMPACTION_SETTINGS,
+  CompactionError,
+  calculateContextTokens,
+  compact,
+  createBranchSummaryMessage,
+  createCompactionSummaryMessage,
+  estimateContextTokens,
+  estimateTokens,
+  prepareCompaction,
+  shouldCompact,
+  uuidv7,
+  TODO_CONTEXT,
+  withAbortSignal,
+  type CompactionSettings,
+  type CompactionPreparation,
+  type CompactResult,
+} from "./pi-legacy-harness.js";
 import {
   isContextOverflow,
   isRetryableAssistantError,
@@ -28,7 +45,12 @@ import {
   modelCallRetryDelayMs,
 } from "./model-call-retry.js";
 import { modelRetainsSystemUpdates, retainedTailSystemTokens } from "./generation-context.js";
-import { memoryFactLinesInBranch, withoutMemoryFacts, withoutMemoryFactsBranch, withoutStatedMemoryFacts } from "./chat-frozen-state.js";
+import {
+  memoryFactLinesInBranch,
+  withoutMemoryFacts,
+  withoutMemoryFactsBranch,
+  withoutStatedMemoryFacts,
+} from "./chat-frozen-state.js";
 import {
   memoryFactLinesIn,
   sideCallContinuation,
@@ -36,7 +58,10 @@ import {
   type ApprovedMemoryFacts,
   type SideCallPrefix,
 } from "./side-call-prefix.js";
-import type { CompactionPrecomputeSnapshot, CompactionPrecomputes } from "./compaction-precompute.js";
+import type {
+  CompactionPrecomputeSnapshot,
+  CompactionPrecomputes,
+} from "./compaction-precompute.js";
 import { isUsageLimitFailure } from "./usage-limit-core.js";
 import type { PiSessionEntry, PiSessionPort } from "./pi-session-port.js";
 
@@ -110,7 +135,10 @@ export interface PiCompactionCoordinatorOptions {
    * summary instructions (a chat's PreCompact hooks). It must bound its own
    * wait; a throw or no text adds none, and the local engine only observes.
    */
-  summaryInstructions?: (reason: PiCompactionReason, signal: AbortSignal) => Promise<string | undefined>;
+  summaryInstructions?: (
+    reason: PiCompactionReason,
+    signal: AbortSignal,
+  ) => Promise<string | undefined>;
   /**
    * Whether `summaryInstructions` can add anything now (the chat has a
    * PreCompact hook). Without it, a set `summaryInstructions` counts as
@@ -177,7 +205,7 @@ export function cachedPrefixSummaryInstruction(customInstructions?: string): str
     "",
     "## Constraints & Preferences",
     "- [Any constraints, preferences, or requirements mentioned by user]",
-    "- [Or \"(none)\" if none were mentioned]",
+    '- [Or "(none)" if none were mentioned]',
     "",
     "## Progress",
     "### Done",
@@ -197,7 +225,7 @@ export function cachedPrefixSummaryInstruction(customInstructions?: string): str
     "",
     "## Critical Context",
     "- [Any data, examples, or references needed to continue]",
-    "- [Or \"(none)\" if not applicable]",
+    '- [Or "(none)" if not applicable]',
     "",
     "Keep each section concise. Preserve exact file paths, function names, and error messages. Include what any earlier summary in the conversation records. The latest messages stay in the conversation word for word after this summary.",
     "",
@@ -214,12 +242,19 @@ function checkpointFileLists(fileOps: CachedPrefixSummaryRequest["fileOps"]) {
   const modifiedFiles = [...modified].sort();
   const sections: string[] = [];
   if (readFiles.length > 0) sections.push(`<read-files>\n${readFiles.join("\n")}\n</read-files>`);
-  if (modifiedFiles.length > 0) sections.push(`<modified-files>\n${modifiedFiles.join("\n")}\n</modified-files>`);
-  return { readFiles, modifiedFiles, text: sections.length > 0 ? `\n\n${sections.join("\n\n")}` : "" };
+  if (modifiedFiles.length > 0)
+    sections.push(`<modified-files>\n${modifiedFiles.join("\n")}\n</modified-files>`);
+  return {
+    readFiles,
+    modifiedFiles,
+    text: sections.length > 0 ? `\n\n${sections.join("\n\n")}` : "",
+  };
 }
 
 function memoryKeyOf(lines: readonly string[]): string {
-  return createHash("sha256").update(JSON.stringify([...lines].sort())).digest("hex");
+  return createHash("sha256")
+    .update(JSON.stringify([...lines].sort()))
+    .digest("hex");
 }
 
 /** Hash of the messages a request built from the journal would send. */
@@ -293,7 +328,9 @@ export interface CachedPrefixSummary {
  * approved facts cannot be read, and when it would not fit, fails, is cut
  * off or calls a tool. Throws when `signal` aborts.
  */
-export async function summaryOnCachedPrefix(request: CachedPrefixSummaryRequest): Promise<CachedPrefixSummary | undefined> {
+export async function summaryOnCachedPrefix(
+  request: CachedPrefixSummaryRequest,
+): Promise<CachedPrefixSummary | undefined> {
   const { prefix, model, signal } = request;
   if (memoryFactLinesIn(prefix.context).length > 0) return undefined;
   try {
@@ -311,7 +348,11 @@ export async function summaryOnCachedPrefix(request: CachedPrefixSummaryRequest)
   if (maxTokens <= 0 || inputTokens + maxTokens > model.contextWindow) return undefined;
   // The summary is never continued, so it writes the short cache even
   // when the parent paid for a longer one.
-  const continuation = sideCallContinuation(prefix, [instruction], { signal, maxTokens, cacheRetention: "short" });
+  const continuation = sideCallContinuation(prefix, [instruction], {
+    signal,
+    maxTokens,
+    cacheRetention: "short",
+  });
   let reply: AssistantMessage;
   try {
     reply = await request.complete(model, continuation.context, continuation.options);
@@ -351,7 +392,9 @@ export class CompactionSummaryBudgetError extends Error {
     readonly safetyTokens: number,
     readonly contextWindowTokens: number,
   ) {
-    super("Compaction summary exceeds the selected model context window; use a larger-context model to compact this history.");
+    super(
+      "Compaction summary exceeds the selected model context window; use a larger-context model to compact this history.",
+    );
   }
 
   get overBudgetTokens(): number {
@@ -389,13 +432,21 @@ export function compactionFailureDiagnosticFields(input: {
   const budget = error instanceof CompactionSummaryBudgetError ? error : budgetFailure;
   return {
     compactionReason: input.reason,
-    compactionFailure: input.sessionFailed ? "journal" :
-      error instanceof CompactionSummaryBudgetError ? "summary-budget" :
-        error instanceof CompactionError && error.code === "summarization_failed" ? "summary-provider" :
-          error instanceof VccError ? "local-compiler" :
-            hostFailure === "inference" ? "host-inference" :
-              hostFailure === "policy" ? "host-policy" :
-                budgetFailure ? "budget-recovery" : "other",
+    compactionFailure: input.sessionFailed
+      ? "journal"
+      : error instanceof CompactionSummaryBudgetError
+        ? "summary-budget"
+        : error instanceof CompactionError && error.code === "summarization_failed"
+          ? "summary-provider"
+          : error instanceof VccError
+            ? "local-compiler"
+            : hostFailure === "inference"
+              ? "host-inference"
+              : hostFailure === "policy"
+                ? "host-policy"
+                : budgetFailure
+                  ? "budget-recovery"
+                  : "other",
     ...(budget ? budgetDiagnosticFields(budget) : {}),
     ...(recoveryStage ? { recoveryStage } : {}),
     ...(error instanceof VccError ? { localCompilerCause: error.code } : {}),
@@ -539,15 +590,19 @@ export class PiCompactionCoordinator {
    * and the journal's context still ends at the prefix's reply, so the
    * continuation covers everything the next request would send.
    */
-  private async usablePrefix(contextMessages?: readonly AgentMessage[]): Promise<SideCallPrefix | undefined> {
-    if (!this.options.cachedPrefix || compactionEngineFrom(this.options.engine) === "vcc") return undefined;
+  private async usablePrefix(
+    contextMessages?: readonly AgentMessage[],
+  ): Promise<SideCallPrefix | undefined> {
+    if (!this.options.cachedPrefix || compactionEngineFrom(this.options.engine) === "vcc")
+      return undefined;
     let prefix: SideCallPrefix | undefined;
     try {
       prefix = await this.options.cachedPrefix();
     } catch {
       return undefined;
     }
-    if (!prefix?.response.usage || prefix.modelKey !== sideCallModelKey(this.options.model)) return undefined;
+    if (!prefix?.response.usage || prefix.modelKey !== sideCallModelKey(this.options.model))
+      return undefined;
     let messages: readonly AgentMessage[];
     try {
       messages = contextMessages ?? (await this.options.session.buildContext()).messages;
@@ -606,7 +661,8 @@ export class PiCompactionCoordinator {
       signal,
       customInstructions,
       approvedMemoryFacts: this.options.approvedMemoryFacts ?? prefix.approvedMemoryFacts,
-      complete: (model, context, options) => this.options.models.completeSimple(model, context, options),
+      complete: (model, context, options) =>
+        this.options.models.completeSimple(model, context, options),
     });
     if (!result) return undefined;
     return {
@@ -632,9 +688,11 @@ export class PiCompactionCoordinator {
     if (snapshot.modelKey !== sideCallModelKey(this.options.model)) return false;
     if (branch.length < snapshot.branchIds.length) return false;
     if (snapshot.branchIds.some((id, index) => branch[index]?.id !== id)) return false;
-    if (branch.slice(snapshot.branchIds.length).some((entry) => entry.type === "compaction")) return false;
+    if (branch.slice(snapshot.branchIds.length).some((entry) => entry.type === "compaction"))
+      return false;
     if (messages.length < snapshot.contextLength) return false;
-    if (contextKeyOf(messages.slice(0, snapshot.contextLength)) !== snapshot.contextKey) return false;
+    if (contextKeyOf(messages.slice(0, snapshot.contextLength)) !== snapshot.contextKey)
+      return false;
     return (await this.memoryKey()) === snapshot.memoryKey;
   }
 
@@ -672,7 +730,12 @@ export class PiCompactionCoordinator {
     }
     const prepared = prepareCompaction(branch, this.settings);
     const preparation = prepared.ok ? prepared.value : undefined;
-    if (!preparation || ![...preparation.messagesToSummarize, ...preparation.turnPrefixMessages].some((message) => message.role !== "system")) {
+    if (
+      !preparation ||
+      ![...preparation.messagesToSummarize, ...preparation.turnPrefixMessages].some(
+        (message) => message.role !== "system",
+      )
+    ) {
       return;
     }
     let messages: readonly AgentMessage[];
@@ -694,7 +757,9 @@ export class PiCompactionCoordinator {
       memoryKey,
       overheadTokens: this.requestOverheadTokens(prefix),
     };
-    precompute.registry.start(precompute.chatKey, snapshot, (signal) => this.cachedSummary(prefix, preparation, signal));
+    precompute.registry.start(precompute.chatKey, snapshot, (signal) =>
+      this.cachedSummary(prefix, preparation, signal),
+    );
   }
 
   /**
@@ -710,12 +775,17 @@ export class PiCompactionCoordinator {
     try {
       if (this.precomputes()) {
         const branch = await this.options.session.getBranch();
-        usable = await this.appendedSince(snapshot, branch, (await this.options.session.buildContext(branch)).messages);
+        usable = await this.appendedSince(
+          snapshot,
+          branch,
+          (await this.options.session.buildContext(branch)).messages,
+        );
       }
     } catch {
       usable = false;
     }
-    if (!usable && precompute.registry.current(precompute.chatKey) === snapshot) precompute.registry.discard(precompute.chatKey);
+    if (!usable && precompute.registry.current(precompute.chatKey) === snapshot)
+      precompute.registry.discard(precompute.chatKey);
   }
 
   /**
@@ -726,9 +796,11 @@ export class PiCompactionCoordinator {
   private requestOverheadTokens(prefix: SideCallPrefix): number {
     const messages = [...prefix.context.messages, prefix.response];
     const counted = prefix.response.usage ? calculateContextTokens(prefix.response.usage) : 0;
-    const estimated = estimatedMessageTokens(messages) + retainedTailSystemTokens(messages, {
-      retainsSystemUpdates: modelRetainsSystemUpdates(this.options.model),
-    });
+    const estimated =
+      estimatedMessageTokens(messages) +
+      retainedTailSystemTokens(messages, {
+        retainsSystemUpdates: modelRetainsSystemUpdates(this.options.model),
+      });
     return Math.max(0, counted - estimated);
   }
 
@@ -763,9 +835,11 @@ export class PiCompactionCoordinator {
     ];
     const { trigger, start } = this.precomputeThresholds();
     const keep = this.settings.keepRecentTokens;
-    const tailTokens = estimatedMessageTokens(retainedTail) + retainedTailSystemTokens(retainedTail, {
-      retainsSystemUpdates: modelRetainsSystemUpdates(this.options.model),
-    });
+    const tailTokens =
+      estimatedMessageTokens(retainedTail) +
+      retainedTailSystemTokens(retainedTail, {
+        retainsSystemUpdates: modelRetainsSystemUpdates(this.options.model),
+      });
     if (tailTokens > keep + Math.min(keep, Math.max(0, trigger - start))) return undefined;
     const summaryTokens = estimateTokens(
       createCompactionSummaryMessage(taken.result.summary, preparation.tokensBefore, Date.now()),
@@ -776,8 +850,7 @@ export class PiCompactionCoordinator {
 
   private isCurrentModel(message: AssistantMessage): boolean {
     return (
-      message.provider === this.options.model.provider &&
-      message.model === this.options.model.id
+      message.provider === this.options.model.provider && message.model === this.options.model.id
     );
   }
 
@@ -809,7 +882,10 @@ export class PiCompactionCoordinator {
   }
 
   /** Tokens sent after a known usage anchor that the anchor's usage cannot include. */
-  private retainedSystemTokensAfter(messages: readonly AgentMessage[], anchorIndex: number): number {
+  private retainedSystemTokensAfter(
+    messages: readonly AgentMessage[],
+    anchorIndex: number,
+  ): number {
     return retainedTailSystemTokens(messages.slice(anchorIndex + 1), {
       retainsSystemUpdates: modelRetainsSystemUpdates(this.options.model),
     });
@@ -890,7 +966,11 @@ export class PiCompactionCoordinator {
     }
     if (!previousAssistant) return { compacted: false, shouldRetry: false };
     if (!this.isCurrentModel(previousAssistant)) {
-      return shouldCompact(this.transcriptEstimateTokens(context.messages), this.options.model.contextWindow, this.settings)
+      return shouldCompact(
+        this.transcriptEstimateTokens(context.messages),
+        this.options.model.contextWindow,
+        this.settings,
+      )
         ? this.run("threshold", false)
         : { compacted: false, shouldRetry: false };
     }
@@ -905,7 +985,10 @@ export class PiCompactionCoordinator {
       : 0;
     let contextTokens =
       directContextTokens +
-      this.retainedSystemTokensAfter(context.messages, context.messages.lastIndexOf(previousAssistant));
+      this.retainedSystemTokensAfter(
+        context.messages,
+        context.messages.lastIndexOf(previousAssistant),
+      );
     if (previousAssistant.stopReason === "error" || directContextTokens === 0) {
       const estimate = estimateContextTokens(context.messages);
       if (estimate.lastUsageIndex === null) {
@@ -920,9 +1003,10 @@ export class PiCompactionCoordinator {
       ) {
         return { compacted: false, shouldRetry: false };
       }
-      contextTokens = usageMessage?.role === "assistant" && !this.isCurrentModel(usageMessage)
-        ? this.transcriptEstimateTokens(context.messages)
-        : this.anchoredEstimateTokens(context.messages, estimate);
+      contextTokens =
+        usageMessage?.role === "assistant" && !this.isCurrentModel(usageMessage)
+          ? this.transcriptEstimateTokens(context.messages)
+          : this.anchoredEstimateTokens(context.messages, estimate);
     }
     if (!shouldCompact(contextTokens, this.options.model.contextWindow, this.settings)) {
       return { compacted: false, shouldRetry: false };
@@ -1082,7 +1166,11 @@ export class PiCompactionCoordinator {
     if (!sameModel) {
       try {
         const context = await sessionOperation(() => this.options.session.buildContext());
-        return shouldCompact(this.transcriptEstimateTokens(context.messages), contextWindow, this.settings)
+        return shouldCompact(
+          this.transcriptEstimateTokens(context.messages),
+          contextWindow,
+          this.settings,
+        )
           ? this.run("threshold", false)
           : { compacted: false, shouldRetry: false };
       } catch (error) {
@@ -1123,13 +1211,15 @@ export class PiCompactionCoordinator {
         ) {
           return { compacted: false, shouldRetry: false };
         }
-        contextTokens = usageMessage?.role === "assistant" && !this.isCurrentModel(usageMessage)
-          ? this.transcriptEstimateTokens(context.messages)
-          : this.anchoredEstimateTokens(context.messages, estimate);
+        contextTokens =
+          usageMessage?.role === "assistant" && !this.isCurrentModel(usageMessage)
+            ? this.transcriptEstimateTokens(context.messages)
+            : this.anchoredEstimateTokens(context.messages, estimate);
       }
     }
 
-    if (shouldCompact(contextTokens, contextWindow, this.settings)) return this.run("threshold", false);
+    if (shouldCompact(contextTokens, contextWindow, this.settings))
+      return this.run("threshold", false);
     if (options.startsBackgroundSummary !== false && assistantMessage.stopReason === "stop") {
       // A failed precompute only means the next boundary compacts as before.
       await this.startPrecompute(contextTokens).catch(() => undefined);
@@ -1160,8 +1250,12 @@ export class PiCompactionCoordinator {
         // LLM serialization omits system messages. A system-only prepared
         // conversation cannot reduce pressure or preserve additional evidence.
         // VCC and explicit manual/overflow operations keep their own semantics.
-        !preparation.messagesToSummarize.some((message) => engine === "vcc" || message.role !== "system") &&
-        !preparation.turnPrefixMessages.some((message) => engine === "vcc" || message.role !== "system")
+        !preparation.messagesToSummarize.some(
+          (message) => engine === "vcc" || message.role !== "system",
+        ) &&
+        !preparation.turnPrefixMessages.some(
+          (message) => engine === "vcc" || message.role !== "system",
+        )
       ) {
         return { compacted: false, shouldRetry: false };
       }
@@ -1186,15 +1280,19 @@ export class PiCompactionCoordinator {
       ];
       // A background summary that no longer fits, or states a fact, is
       // dropped without a word, and this compaction runs as usual.
-      let precomputed = reason === "threshold" ? await this.takePrecomputed(branch, preparation) : undefined;
+      let precomputed =
+        reason === "threshold" ? await this.takePrecomputed(branch, preparation) : undefined;
       if (precomputed) {
         const kept = withoutStatedMemoryFacts(precomputed.summary, facts);
-        precomputed = kept.restated || !kept.text.trim() ? undefined : { ...precomputed, summary: kept.text };
+        precomputed =
+          kept.restated || !kept.text.trim() ? undefined : { ...precomputed, summary: kept.text };
       }
       let customInstructions: string | undefined;
       if (!precomputed) {
         try {
-          customInstructions = (await this.options.summaryInstructions?.(reason, abortController.signal))?.trim() || undefined;
+          customInstructions =
+            (await this.options.summaryInstructions?.(reason, abortController.signal))?.trim() ||
+            undefined;
         } catch {
           customInstructions = undefined;
         }
@@ -1213,7 +1311,10 @@ export class PiCompactionCoordinator {
           {
             branch: withoutMemoryFactsBranch(branch),
             // The compiler matches the tail against the branch, so both lose the same lines.
-            preparation: { ...summaryPreparation, retainedTail: withoutMemoryFacts(preparation.retainedTail) },
+            preparation: {
+              ...summaryPreparation,
+              retainedTail: withoutMemoryFacts(preparation.retainedTail),
+            },
             contextWindow: this.options.model.contextWindow,
           },
           abortController.signal,
@@ -1241,7 +1342,10 @@ export class PiCompactionCoordinator {
       let result: CompactResult;
       // Overflow recovery keeps Pi's isolated request: the prefix it would
       // continue is the one that no longer fits.
-      const prefix = precomputed || engine === "vcc" || reason === "overflow" ? undefined : await this.usablePrefix();
+      const prefix =
+        precomputed || engine === "vcc" || reason === "overflow"
+          ? undefined
+          : await this.usablePrefix();
       const cached = prefix
         ? await this.cachedSummary(prefix, preparation, abortController.signal, customInstructions)
         : undefined;
@@ -1258,8 +1362,11 @@ export class PiCompactionCoordinator {
           if (!(error instanceof CompactionSummaryBudgetError)) throw error;
           budgetFailure = error;
           writeDiagnosticEvent({
-            level: "warn", area: "generation", event: "compaction-budget-exceeded",
-            outcome: "degraded", fields: {
+            level: "warn",
+            area: "generation",
+            event: "compaction-budget-exceeded",
+            outcome: "degraded",
+            fields: {
               compactionReason: reason,
               compactionFailure: "summary-budget",
               ...budgetDiagnosticFields(error),
@@ -1278,14 +1385,22 @@ export class PiCompactionCoordinator {
               abortController.signal,
               customInstructions,
             );
-          const reduceChannel = async (channel: RecoveryChannel, messages: AgentMessage[]): Promise<AgentMessage[]> => {
+          const reduceChannel = async (
+            channel: RecoveryChannel,
+            messages: AgentMessage[],
+          ): Promise<AgentMessage[]> => {
             // A channel whose own Pi request already fits stays raw.
-            if (messages.length === 0 || await spareTokensFor(channel, messages) >= 0) return messages;
+            if (messages.length === 0 || (await spareTokensFor(channel, messages)) >= 0)
+              return messages;
             // Budget the reduction against the complete request Pi will send
             // for this channel: its prompt, the preserved prior checkpoint,
             // output allowance and safety reserve all come out of the window.
             let contentBudget = await spareTokensFor(channel, [recoveryMessage("")]);
-            for (let attempt = 0; attempt < RECOVERY_REDUCTION_ATTEMPTS && contentBudget > 0; attempt += 1) {
+            for (
+              let attempt = 0;
+              attempt < RECOVERY_REDUCTION_ATTEMPTS && contentBudget > 0;
+              attempt += 1
+            ) {
               const local = await (this.options.compileVcc ?? compileVccInWorker)(
                 recoveryChannelInput(
                   messages,
@@ -1303,12 +1418,19 @@ export class PiCompactionCoordinator {
             }
             throw new VccError("insufficient_reduction");
           };
-          const messagesToSummarize = await reduceChannel("history", summaryPreparation.messagesToSummarize);
+          const messagesToSummarize = await reduceChannel(
+            "history",
+            summaryPreparation.messagesToSummarize,
+          );
           const turnPrefixMessages = preparation.isSplitTurn
             ? await reduceChannel("turn-prefix", summaryPreparation.turnPrefixMessages)
             : summaryPreparation.turnPrefixMessages;
           recoveryStage = "semantic-summary";
-          result = await summarize({ ...summaryPreparation, messagesToSummarize, turnPrefixMessages });
+          result = await summarize({
+            ...summaryPreparation,
+            messagesToSummarize,
+            turnPrefixMessages,
+          });
           recoveryStage = "checkpoint";
         }
       }
@@ -1390,8 +1512,11 @@ export class PiCompactionCoordinator {
       };
       if (budgetFailure) {
         writeDiagnosticEvent({
-          level: "info", area: "generation", event: "compaction-budget-recovered",
-          outcome: "recovered", fields: {
+          level: "info",
+          area: "generation",
+          event: "compaction-budget-recovered",
+          outcome: "recovered",
+          fields: {
             compactionReason: reason,
             compactionFailure: "summary-budget",
             ...budgetDiagnosticFields(budgetFailure),
@@ -1416,9 +1541,17 @@ export class PiCompactionCoordinator {
       const aborted = this.activeAbortController?.signal.aborted === true;
       if (!aborted) {
         writeDiagnosticEvent({
-          level: "warn", area: "generation", event: "compaction-failed",
-          outcome: "failed", fields: compactionFailureDiagnosticFields({
-            error, reason, sessionFailed, hostFailure, budgetFailure, recoveryStage,
+          level: "warn",
+          area: "generation",
+          event: "compaction-failed",
+          outcome: "failed",
+          fields: compactionFailureDiagnosticFields({
+            error,
+            reason,
+            sessionFailed,
+            hostFailure,
+            budgetFailure,
+            recoveryStage,
           }),
         });
       }
@@ -1477,7 +1610,9 @@ export function createPiCompactionModels(
   // The registry's own transport carries no cache breakpoints, so a summary
   // through it gets the same ones as the chat's turns: it then reads the
   // turn's cached system blocks instead of writing one unsplit block.
-  const registeredStream = withPromptCacheBreakpoints(runtime.models.streamSimple.bind(runtime.models));
+  const registeredStream = withPromptCacheBreakpoints(
+    runtime.models.streamSimple.bind(runtime.models),
+  );
   const streamSimple: Models["streamSimple"] = (model, context, options) => {
     const stream = runtime.models.getModel(model.provider, model.id)
       ? registeredStream(model, context, options)
@@ -1525,10 +1660,13 @@ function summaryRequestTokens(...[model, context, options]: Parameters<Models["c
     return Buffer.byteLength(nonAscii, "utf8") - nonAscii.length / 4;
   };
   const systemPrompt = context.systemPrompt ?? "";
-  const inputTokens = Math.ceil(systemPrompt.length / 4 + unicodeAllowance(systemPrompt)) +
+  const inputTokens =
+    Math.ceil(systemPrompt.length / 4 + unicodeAllowance(systemPrompt)) +
     context.messages.reduce((total, message) => {
-      const text = typeof message.content === "string" ? message.content : message.content
-        .flatMap((part) => part.type === "text" ? [part.text] : []).join("");
+      const text =
+        typeof message.content === "string"
+          ? message.content
+          : message.content.flatMap((part) => (part.type === "text" ? [part.text] : [])).join("");
       return total + estimateTokens(message) + Math.ceil(unicodeAllowance(text));
     }, 0);
   const outputTokens = options?.maxTokens ?? model.maxTokens;
@@ -1586,21 +1724,30 @@ async function summaryRequestSpareTokens(
 /** Fail closed on estimated summary overflow before provider I/O. */
 function boundedCompactionModels(models: Models): Models {
   const assertFits = (...args: Parameters<Models["completeSimple"]>) => {
-    const { inputTokens, outputTokens, safetyTokens, contextWindow } = summaryRequestTokens(...args);
+    const { inputTokens, outputTokens, safetyTokens, contextWindow } = summaryRequestTokens(
+      ...args,
+    );
     if (inputTokens + outputTokens + safetyTokens > contextWindow) {
-      throw new CompactionSummaryBudgetError(inputTokens, outputTokens, safetyTokens, contextWindow);
+      throw new CompactionSummaryBudgetError(
+        inputTokens,
+        outputTokens,
+        safetyTokens,
+        contextWindow,
+      );
     }
   };
   return new Proxy(models, {
     get(target, property) {
-      if (property === "completeSimple") return (...args: Parameters<Models["completeSimple"]>) => {
-        assertFits(...args);
-        return models.completeSimple(...args);
-      };
-      if (property === "streamSimple") return (...args: Parameters<Models["streamSimple"]>) => {
-        assertFits(...args);
-        return models.streamSimple(...args);
-      };
+      if (property === "completeSimple")
+        return (...args: Parameters<Models["completeSimple"]>) => {
+          assertFits(...args);
+          return models.completeSimple(...args);
+        };
+      if (property === "streamSimple")
+        return (...args: Parameters<Models["streamSimple"]>) => {
+          assertFits(...args);
+          return models.streamSimple(...args);
+        };
       const value = Reflect.get(target, property, target) as unknown;
       return typeof value === "function" ? value.bind(target) : value;
     },

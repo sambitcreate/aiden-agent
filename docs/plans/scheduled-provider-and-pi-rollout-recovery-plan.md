@@ -29,7 +29,7 @@ Two production failures surfaced from the installed app's logs and data:
    - `main/services/llm-client.ts` opens the journal unconditionally and
      hard-fails generation without one, so every chat created before
      activation is blocked from generating until the operator advances the
-   rollout stage.
+     rollout stage.
 3. **Remote 4xx bursts** in rotated diagnostics
    (`remote-request-failed`, route categories workspaces/chats/schedules/usage)
    — cause unknown; needs route/version evidence before a fix.

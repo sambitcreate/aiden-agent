@@ -72,7 +72,10 @@ export function BrowserRecordingCard({ recording }: { recording: BrowserRecordin
   const duration = browserRecordingDurationLabel(recording.durationMs);
   const title = `Browser recording, ${duration}`;
   return (
-    <section aria-label={title} className="browser-recording-card max-w-full rounded-card bg-well px-3.5 py-3">
+    <section
+      aria-label={title}
+      className="browser-recording-card max-w-full rounded-card bg-well px-3.5 py-3"
+    >
       <div className="flex min-w-0 items-center gap-2">
         <p className="flex min-w-0 flex-1 items-center gap-1.5 text-small text-secondary">
           <Video aria-hidden="true" className="size-3.5 shrink-0" />

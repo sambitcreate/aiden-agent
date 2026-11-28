@@ -27,7 +27,9 @@ const DAY = /^\d{4}-\d{2}-\d{2}$/u;
 const VERSION = /^\d{1,4}\.\d{1,4}\.\d{1,6}(?:-[0-9A-Za-z.-]{1,32})?$/u;
 
 function validTimestamp(value: unknown): string | undefined {
-  return typeof value === "string" && value.length <= 40 && Number.isFinite(Date.parse(value)) ? value : undefined;
+  return typeof value === "string" && value.length <= 40 && Number.isFinite(Date.parse(value))
+    ? value
+    : undefined;
 }
 
 function matching(value: unknown, pattern: RegExp): string | undefined {
@@ -39,7 +41,8 @@ function matching(value: unknown, pattern: RegExp): string | undefined {
 export function parseAnalyticsState(raw: unknown): AnalyticsState {
   if (typeof raw !== "object" || raw === null || Array.isArray(raw)) return DEFAULT_ANALYTICS_STATE;
   const record = raw as Record<string, unknown>;
-  const enabled = typeof record.enabled === "boolean" ? record.enabled : DEFAULT_ANALYTICS_STATE.enabled;
+  const enabled =
+    typeof record.enabled === "boolean" ? record.enabled : DEFAULT_ANALYTICS_STATE.enabled;
   const installId = enabled ? matching(record.installId, UUID_V4) : undefined;
   const noticeShownAt = validTimestamp(record.noticeShownAt);
   const lastActiveDay = matching(record.lastActiveDay, DAY);

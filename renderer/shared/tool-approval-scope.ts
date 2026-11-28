@@ -18,11 +18,15 @@ export const TOOL_APPROVAL_SCOPES = ["once", "chat", "always", "workspace"] as c
 export type ToolApprovalScope = (typeof TOOL_APPROVAL_SCOPES)[number];
 
 export function parseToolApprovalScope(value: unknown): ToolApprovalScope | undefined {
-  return value === "once" || value === "chat" || value === "always" || value === "workspace" ? value : undefined;
+  return value === "once" || value === "chat" || value === "always" || value === "workspace"
+    ? value
+    : undefined;
 }
 
 /** A scope a Remote device may answer with: any but the desktop-only `workspace`. */
-export function parseRemoteToolApprovalScope(value: unknown): Exclude<ToolApprovalScope, "workspace"> | undefined {
+export function parseRemoteToolApprovalScope(
+  value: unknown,
+): Exclude<ToolApprovalScope, "workspace"> | undefined {
   const scope = parseToolApprovalScope(value);
   return scope === "workspace" ? undefined : scope;
 }
@@ -121,7 +125,9 @@ export function botApprovalRuleKey(target: BotApprovalRuleTarget): string {
     : JSON.stringify(["site", target.host, target.action]);
 }
 
-export function describeBotApprovalRule(rule: Pick<BotApprovalRuleView, "target" | "label">): string {
+export function describeBotApprovalRule(
+  rule: Pick<BotApprovalRuleView, "target" | "label">,
+): string {
   if (rule.target.kind === "connection") return rule.label;
   const verb = { click: "Click", type: "Type", press: "Press keys" }[rule.target.action];
   return `${verb} on ${rule.target.host}`;
@@ -135,5 +141,13 @@ export function botAlwaysAllowLabel(botName: string): string {
 }
 
 export type BotAllowedEntry =
-  | { kind: "rule"; id: string; botId: string; what: string; createdAt: string; uses: number; lastUsedAt?: string }
+  | {
+      kind: "rule";
+      id: string;
+      botId: string;
+      what: string;
+      createdAt: string;
+      uses: number;
+      lastUsedAt?: string;
+    }
   | { kind: "folder"; id: string; botId: string; what: string; createdAt: string };

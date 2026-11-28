@@ -19,7 +19,9 @@ function mount(saved: Record<string, unknown>, bubbles: Partial<BotBubbleState>)
     "settings:set": (patch: unknown) => ({ ...saved, ...(patch as Record<string, unknown>) }),
     "bots:bubbles:state": () => ({ ...EMPTY_BOT_BUBBLE_STATE, host: "window", ...bubbles }),
   });
-  const client = new QueryClient({ defaultOptions: { queries: { retry: false, refetchOnWindowFocus: false } } });
+  const client = new QueryClient({
+    defaultOptions: { queries: { retry: false, refetchOnWindowFocus: false } },
+  });
   render(
     <QueryClientProvider client={client}>
       <BotBubblesSettings />
@@ -51,7 +53,12 @@ test("both switches start on, and each saves its own setting", async () => {
 test("with bubbles off, Float over other apps can't be changed", async () => {
   mount({ botBubblesEnabled: false }, { floatOverAppsAvailable: true, host: "off" });
   const float = await screen.findByRole("switch", { name: "Float over other apps" });
-  await waitFor(() => assert.equal(screen.getByRole("switch", { name: "Allow bubbles" }).getAttribute("aria-checked"), "false"));
+  await waitFor(() =>
+    assert.equal(
+      screen.getByRole("switch", { name: "Allow bubbles" }).getAttribute("aria-checked"),
+      "false",
+    ),
+  );
   assert.equal((float as HTMLButtonElement).disabled, true);
 });
 

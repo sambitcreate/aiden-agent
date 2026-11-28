@@ -9,14 +9,21 @@ import { app, ipcMain, logger, nativeImage } from "../../platform.js";
 import type { NotificationChannel } from "../../../renderer/preload-channels.js";
 import { invalidateBotRuntimeInventoryAuthority } from "../bot-runtime-inventory-lease.js";
 import { hostPlatformCapabilities } from "../host-platform-capabilities.js";
-import { resolveVendoredCuaDriverExecutable, vendoredCuaDriverNoticePath } from "../computer-use/binary.js";
+import {
+  resolveVendoredCuaDriverExecutable,
+  vendoredCuaDriverNoticePath,
+} from "../computer-use/binary.js";
 import { secrets } from "../secrets.js";
 import { createBotComputerControl, type BotComputerControlRegistry } from "./control.js";
 import { createBotComputerHost } from "./host.js";
 import { resolveLumeInstallation } from "./lume-binary.js";
 import { hostMacosSupportsBotComputers } from "./release.js";
 import { createRfbScreenFactory, nativeImageEncoder } from "./rfb-screen-main.js";
-import { createBotComputerActivity, createBotComputerSessions, type BotComputerActivity } from "./sessions.js";
+import {
+  createBotComputerActivity,
+  createBotComputerSessions,
+  type BotComputerActivity,
+} from "./sessions.js";
 import type { BotComputerHost, BotComputerSessions } from "./types.js";
 import { createBotComputerViewer, type BotComputerViewer } from "./viewer-main.js";
 
@@ -51,13 +58,19 @@ async function botComputerDir(botId: string): Promise<string> {
 
 function hostSupport(): { ok: true } | { ok: false; reason: "platform" | "host_os" } {
   if (!botComputersEnabled()) return { ok: false, reason: "platform" };
-  const version = typeof process.getSystemVersion === "function" ? process.getSystemVersion() : undefined;
+  const version =
+    typeof process.getSystemVersion === "function" ? process.getSystemVersion() : undefined;
   return hostMacosSupportsBotComputers(version) ? { ok: true } : { ok: false, reason: "host_os" };
 }
 
 /** Where Computer Use's vendored helper bundle lives, whose cua-driver the guest driver lane copies. */
 function helperPaths() {
-  return { platform: process.platform, isPackaged: app.isPackaged, resourcesPath: process.resourcesPath, appPath: app.getAppPath() };
+  return {
+    platform: process.platform,
+    isPackaged: app.isPackaged,
+    resourcesPath: process.resourcesPath,
+    appPath: app.getAppPath(),
+  };
 }
 
 /** The process-wide Bot computers. Throws where the platform has none. */
@@ -67,7 +80,9 @@ export function botComputers(): BotComputers {
   const control = createBotComputerControl();
   const activity = createBotComputerActivity();
   const log = (message: string, error?: unknown) =>
-    error === undefined ? logger.warn("bot-computers", message) : logger.warn("bot-computers", message, error);
+    error === undefined
+      ? logger.warn("bot-computers", message)
+      : logger.warn("bot-computers", message, error);
   const host = createBotComputerHost({
     root: path.join(app.getPath("userData"), "bot-computers"),
     lume: async () =>
@@ -114,7 +129,14 @@ export function botComputers(): BotComputers {
   });
   sessions.setScreenFactory(screenFactory);
   // The base's screen, too, while setup waits for the person's grants (the guest driver lane).
-  const viewer = createBotComputerViewer({ host, sessions, control, baseScreen: screenFactory, botName, log });
+  const viewer = createBotComputerViewer({
+    host,
+    sessions,
+    control,
+    baseScreen: screenFactory,
+    botName,
+    log,
+  });
   singleton = { host, control, activity, sessions, viewer };
   return singleton;
 }
@@ -129,8 +151,14 @@ export function botComputerHandlerDependencies(): BotComputerHandlerDependencies
     control,
     sessions,
     onSenderGone: (event, listener) => {
-      const sender = (event as { sender?: { once(name: "destroyed", fn: () => void): unknown; off(name: "destroyed", fn: () => void): unknown } })
-        .sender;
+      const sender = (
+        event as {
+          sender?: {
+            once(name: "destroyed", fn: () => void): unknown;
+            off(name: "destroyed", fn: () => void): unknown;
+          };
+        }
+      ).sender;
       if (!sender) return () => undefined;
       sender.once("destroyed", listener);
       return () => void sender.off("destroyed", listener);
@@ -172,7 +200,9 @@ export async function shutdownBotComputers(timeoutMs: number): Promise<void> {
   // viewer that won't close can't hold up the stops.
   let timer: NodeJS.Timeout | undefined;
   await Promise.race([
-    singleton.viewer.close().catch((error: unknown) => logger.warn("bot-computers", "The viewer did not close.", error)),
+    singleton.viewer
+      .close()
+      .catch((error: unknown) => logger.warn("bot-computers", "The viewer did not close.", error)),
     new Promise<void>((resolve) => {
       timer = setTimeout(() => {
         logger.warn("bot-computers", "The viewer did not close in time.");

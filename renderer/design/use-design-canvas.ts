@@ -31,7 +31,11 @@
 import * as React from "react";
 import { designCanvasApi } from "../lib/ipc";
 import { registerLifecycleFlush, setRendererLifecycleGuard } from "../lib/lifecycle-guard";
-import { shownPagePaths, type DesignCanvas, type DesignViewport } from "../shared/design-canvas/schema";
+import {
+  shownPagePaths,
+  type DesignCanvas,
+  type DesignViewport,
+} from "../shared/design-canvas/schema";
 import {
   carryUnrecorded,
   changesBetween,
@@ -147,7 +151,11 @@ export interface DesignCanvasSyncState {
 export type DesignCanvasSyncEvent =
   | { readonly type: "load_succeeded"; readonly doc: DesignCanvas }
   | { readonly type: "load_failed" }
-  | { readonly type: "change"; readonly mutate: DesignCanvasMutation; readonly recordHistory: boolean }
+  | {
+      readonly type: "change";
+      readonly mutate: DesignCanvasMutation;
+      readonly recordHistory: boolean;
+    }
   | { readonly type: "undo" }
   | { readonly type: "redo" }
   | { readonly type: "debounce_fired" }
@@ -157,14 +165,24 @@ export type DesignCanvasSyncEvent =
   | { readonly type: "save_conflicted"; readonly doc: DesignCanvas }
   | { readonly type: "save_refused" }
   | { readonly type: "save_failed" }
-  | { readonly type: "announcement"; readonly revision: number; readonly aidenTurn?: string; readonly step?: string }
+  | {
+      readonly type: "announcement";
+      readonly revision: number;
+      readonly aidenTurn?: string;
+      readonly step?: string;
+    }
   | { readonly type: "refetch_succeeded"; readonly doc: DesignCanvas }
   | { readonly type: "dispose" };
 
 export type DesignCanvasSyncEffect =
   | { readonly type: "schedule_timer"; readonly timer: DesignCanvasTimer }
   | { readonly type: "cancel_timer" }
-  | { readonly type: "start_save"; readonly doc: DesignCanvas; readonly baseRevision: number; readonly undone: readonly string[] }
+  | {
+      readonly type: "start_save";
+      readonly doc: DesignCanvas;
+      readonly baseRevision: number;
+      readonly undone: readonly string[];
+    }
   | { readonly type: "refetch" }
   | { readonly type: "unsubscribe" }
   | { readonly type: "finish" };
@@ -258,7 +276,9 @@ function viewsMoved(before: DesignCanvas, after: DesignCanvas): Map<string, Desi
 function withViews(doc: DesignCanvas, views: ReadonlyMap<string, DesignViewport>): DesignCanvas {
   return {
     ...doc,
-    pages: doc.pages.map((page) => (views.has(page.id) ? { ...page, viewport: views.get(page.id)! } : page)),
+    pages: doc.pages.map((page) =>
+      views.has(page.id) ? { ...page, viewport: views.get(page.id)! } : page,
+    ),
   };
 }
 
@@ -329,7 +349,9 @@ function settleUnsettledIfKnown(
 ): DesignCanvasUnsettledHistory | null {
   if (!unsettled) return null;
   const open = unsettled.changes.some(
-    (change) => "takenIn" in change && mayBeOneReply(aidenRevisions, change.takenIn.from.revision, change.takenIn.to.revision),
+    (change) =>
+      "takenIn" in change &&
+      mayBeOneReply(aidenRevisions, change.takenIn.from.revision, change.takenIn.to.revision),
   );
   return open ? unsettled : null;
 }
@@ -341,7 +363,8 @@ function forgetOldRevisions(
   server: DesignCanvas | null,
 ): ReadonlyMap<number, string | null> {
   const first = unsettled?.changes.find((change) => "takenIn" in change);
-  const floor = first && "takenIn" in first ? first.takenIn.from.revision : (server?.revision ?? -1);
+  const floor =
+    first && "takenIn" in first ? first.takenIn.from.revision : (server?.revision ?? -1);
   let hasOld = false;
   for (const revision of aidenRevisions.keys()) {
     if (revision <= floor) {
@@ -361,7 +384,10 @@ function forgetOldRevisions(
  * A page an undo took off that is shown again (a redo, Aiden, another window)
  * is no longer undone: if it is taken off later, that removal is someone's own.
  */
-function pruneShownUndonePages(undonePages: ReadonlySet<string>, local: DesignCanvas | null): ReadonlySet<string> {
+function pruneShownUndonePages(
+  undonePages: ReadonlySet<string>,
+  local: DesignCanvas | null,
+): ReadonlySet<string> {
   if (undonePages.size === 0 || !local) return undonePages;
   const shown = shownPagePaths(local);
   let changed = false;
@@ -440,7 +466,12 @@ function startSaveTransition(
   options: { replayed: boolean; source: "open" | "close" | "flush"; clearFlushQueue: boolean },
   effects: DesignCanvasSyncEffect[],
 ): DesignCanvasSyncState {
-  if (!state.server || !state.local || state.unsent.length === 0 || state.savePhase.kind === "saving") {
+  if (
+    !state.server ||
+    !state.local ||
+    state.unsent.length === 0 ||
+    state.savePhase.kind === "saving"
+  ) {
     return state;
   }
   const batch = state.unsent;
@@ -614,11 +645,17 @@ export function reduceDesignCanvasSync(
       if (state.lifecycle !== "open" || !state.local) return { state, effects: [] };
       const step = redo(state.history, state.local);
       if (!step) return { state, effects: [] };
-      return applyLocalEdit(state, changesBetween(state.local, step.doc), () => step.history, false);
+      return applyLocalEdit(
+        state,
+        changesBetween(state.local, step.doc),
+        () => step.history,
+        false,
+      );
     }
 
     case "debounce_fired": {
-      if (state.lifecycle !== "open" || state.timer?.kind !== "debounce") return { state, effects: [] };
+      if (state.lifecycle !== "open" || state.timer?.kind !== "debounce")
+        return { state, effects: [] };
       const cleared: DesignCanvasSyncState = { ...state, timer: null };
       if (cleared.savePhase.kind === "saving") {
         if (cleared.unsent.length > 0 && cleared.server && cleared.local) {
@@ -630,18 +667,32 @@ export function reduceDesignCanvasSync(
         return { state: cleared, effects: [] };
       }
       const effects: DesignCanvasSyncEffect[] = [];
-      const next = startSaveTransition(cleared, { replayed: false, source: "open", clearFlushQueue: false }, effects);
+      const next = startSaveTransition(
+        cleared,
+        { replayed: false, source: "open", clearFlushQueue: false },
+        effects,
+      );
       return { state: next, effects };
     }
 
     case "closed_retry_fired": {
-      if (state.lifecycle !== "closing" || state.timer?.kind !== "closed_retry") return { state, effects: [] };
+      if (state.lifecycle !== "closing" || state.timer?.kind !== "closed_retry")
+        return { state, effects: [] };
       const cleared: DesignCanvasSyncState = { ...state, timer: null };
-      if (cleared.savePhase.kind === "saving" || cleared.unsent.length === 0 || !cleared.server || !cleared.local) {
+      if (
+        cleared.savePhase.kind === "saving" ||
+        cleared.unsent.length === 0 ||
+        !cleared.server ||
+        !cleared.local
+      ) {
         return { state: cleared, effects: [] };
       }
       const effects: DesignCanvasSyncEffect[] = [];
-      const next = startSaveTransition(cleared, { replayed: false, source: "close", clearFlushQueue: false }, effects);
+      const next = startSaveTransition(
+        cleared,
+        { replayed: false, source: "close", clearFlushQueue: false },
+        effects,
+      );
       return { state: next, effects };
     }
 
@@ -654,10 +705,17 @@ export function reduceDesignCanvasSync(
         effects.push({ type: "cancel_timer" });
       }
       if (next.savePhase.kind === "saving") {
-        return { state: { ...next, flushQueuedWhileSaving: true, debounceElapsedWhileSaving: false }, effects };
+        return {
+          state: { ...next, flushQueuedWhileSaving: true, debounceElapsedWhileSaving: false },
+          effects,
+        };
       }
       if (next.unsent.length > 0 && next.server && next.local) {
-        next = startSaveTransition(next, { replayed: false, source: "flush", clearFlushQueue: true }, effects);
+        next = startSaveTransition(
+          next,
+          { replayed: false, source: "flush", clearFlushQueue: true },
+          effects,
+        );
       } else if (next.debounceElapsedWhileSaving) {
         next = { ...next, debounceElapsedWhileSaving: false };
       }
@@ -688,15 +746,26 @@ export function reduceDesignCanvasSync(
       if (next.unsent.length > 0) {
         if (next.flushQueuedWhileSaving || next.lifecycle === "closing") {
           const source = next.lifecycle === "closing" ? "close" : "flush";
-          next = startSaveTransition(next, { replayed: false, source, clearFlushQueue: true }, effects);
+          next = startSaveTransition(
+            next,
+            { replayed: false, source, clearFlushQueue: true },
+            effects,
+          );
           return { state: next, effects };
         }
         if (next.lifecycle === "open" && next.debounceElapsedWhileSaving) {
-          next = startSaveTransition(next, { replayed: false, source: "open", clearFlushQueue: false }, effects);
+          next = startSaveTransition(
+            next,
+            { replayed: false, source: "open", clearFlushQueue: false },
+            effects,
+          );
           return { state: next, effects };
         }
         if (next.lifecycle === "open" && next.timer === null) {
-          const timer: DesignCanvasTimer = { kind: "debounce", delayMs: DESIGN_CANVAS_SAVE_DELAY_MS };
+          const timer: DesignCanvasTimer = {
+            kind: "debounce",
+            delayMs: DESIGN_CANVAS_SAVE_DELAY_MS,
+          };
           next = { ...next, timer };
           effects.push({ type: "schedule_timer", timer });
         }
@@ -705,7 +774,11 @@ export function reduceDesignCanvasSync(
 
       next = { ...next, flushQueuedWhileSaving: false, debounceElapsedWhileSaving: false };
       // Another writer saved while this save was on its way.
-      if (next.lifecycle === "open" && next.timer === null && next.announced > nextServer.revision) {
+      if (
+        next.lifecycle === "open" &&
+        next.timer === null &&
+        next.announced > nextServer.revision
+      ) {
         effects.push({ type: "refetch" });
       }
       return { state: next, effects };
@@ -731,7 +804,11 @@ export function reduceDesignCanvasSync(
       };
 
       if (!save.replayed) {
-        next = startSaveTransition(next, { replayed: true, source: save.source, clearFlushQueue: false }, effects);
+        next = startSaveTransition(
+          next,
+          { replayed: true, source: save.source, clearFlushQueue: false },
+          effects,
+        );
         return { state: next, effects };
       }
 
@@ -740,11 +817,19 @@ export function reduceDesignCanvasSync(
       next = { ...next, failed: true };
       if (next.flushQueuedWhileSaving) {
         const source = next.lifecycle === "closing" ? "close" : "flush";
-        next = startSaveTransition(next, { replayed: false, source, clearFlushQueue: true }, effects);
+        next = startSaveTransition(
+          next,
+          { replayed: false, source, clearFlushQueue: true },
+          effects,
+        );
         return { state: next, effects };
       }
       if (next.lifecycle === "open" && next.debounceElapsedWhileSaving) {
-        next = startSaveTransition(next, { replayed: false, source: "open", clearFlushQueue: false }, effects);
+        next = startSaveTransition(
+          next,
+          { replayed: false, source: "open", clearFlushQueue: false },
+          effects,
+        );
         return { state: next, effects };
       }
       next = { ...next, flushQueuedWhileSaving: false, debounceElapsedWhileSaving: false };
@@ -767,14 +852,25 @@ export function reduceDesignCanvasSync(
       if (next.unsent.length > 0) {
         if (next.flushQueuedWhileSaving || next.lifecycle === "closing") {
           const source = next.lifecycle === "closing" ? "close" : "flush";
-          next = startSaveTransition(next, { replayed: false, source, clearFlushQueue: true }, effects);
+          next = startSaveTransition(
+            next,
+            { replayed: false, source, clearFlushQueue: true },
+            effects,
+          );
           return { state: next, effects };
         }
         if (next.lifecycle === "open" && next.debounceElapsedWhileSaving) {
-          next = startSaveTransition(next, { replayed: false, source: "open", clearFlushQueue: false }, effects);
+          next = startSaveTransition(
+            next,
+            { replayed: false, source: "open", clearFlushQueue: false },
+            effects,
+          );
           return { state: next, effects };
         }
-        return { state: { ...next, flushQueuedWhileSaving: false, debounceElapsedWhileSaving: false }, effects };
+        return {
+          state: { ...next, flushQueuedWhileSaving: false, debounceElapsedWhileSaving: false },
+          effects,
+        };
       }
       next = { ...next, flushQueuedWhileSaving: false, debounceElapsedWhileSaving: false };
       if (next.lifecycle === "closing") {
@@ -795,11 +891,19 @@ export function reduceDesignCanvasSync(
       };
       if (next.flushQueuedWhileSaving) {
         const source = next.lifecycle === "closing" ? "close" : "flush";
-        next = startSaveTransition(next, { replayed: false, source, clearFlushQueue: true }, effects);
+        next = startSaveTransition(
+          next,
+          { replayed: false, source, clearFlushQueue: true },
+          effects,
+        );
         return { state: next, effects };
       }
       if (next.lifecycle === "open" && next.debounceElapsedWhileSaving) {
-        next = startSaveTransition(next, { replayed: false, source: "open", clearFlushQueue: false }, effects);
+        next = startSaveTransition(
+          next,
+          { replayed: false, source: "open", clearFlushQueue: false },
+          effects,
+        );
         return { state: next, effects };
       }
       if (next.lifecycle === "closing") {
@@ -808,7 +912,10 @@ export function reduceDesignCanvasSync(
         return { state: next, effects };
       }
       // After a failure while open, the edits wait for the next edit or explicit flush.
-      return { state: { ...next, flushQueuedWhileSaving: false, debounceElapsedWhileSaving: false }, effects };
+      return {
+        state: { ...next, flushQueuedWhileSaving: false, debounceElapsedWhileSaving: false },
+        effects,
+      };
     }
 
     case "announcement": {
@@ -893,13 +1000,20 @@ export function reduceDesignCanvasSync(
         effects.push({ type: "cancel_timer" });
       }
       if (next.savePhase.kind === "saving") {
-        return { state: { ...next, flushQueuedWhileSaving: true, debounceElapsedWhileSaving: false }, effects };
+        return {
+          state: { ...next, flushQueuedWhileSaving: true, debounceElapsedWhileSaving: false },
+          effects,
+        };
       }
       if (next.unsent.length === 0 || !next.server || !next.local) {
         return { state: finishClosedSession(next, effects), effects };
       }
       // Leaving the canvas saves what is pending now, not after the debounce.
-      next = startSaveTransition(next, { replayed: false, source: "close", clearFlushQueue: true }, effects);
+      next = startSaveTransition(
+        next,
+        { replayed: false, source: "close", clearFlushQueue: true },
+        effects,
+      );
       return { state: next, effects };
     }
   }
@@ -916,10 +1030,15 @@ function publishDesignGuard() {
 }
 
 function viewsEqual(a: DesignCanvasSyncView, b: DesignCanvasSyncView): boolean {
-  return a.doc === b.doc && a.status === b.status && a.canUndo === b.canUndo && a.canRedo === b.canRedo;
+  return (
+    a.doc === b.doc && a.status === b.status && a.canUndo === b.canUndo && a.canRedo === b.canRedo
+  );
 }
 
-function createCanvasSync(chatId: string, publish: (state: DesignCanvasSyncView) => void): CanvasSync {
+function createCanvasSync(
+  chatId: string,
+  publish: (state: DesignCanvasSyncView) => void,
+): CanvasSync {
   let state = createInitialDesignCanvasSyncState();
   let lastView = selectDesignCanvasView(state);
   let timerHandle: ReturnType<typeof setTimeout> | null = null;
@@ -945,7 +1064,9 @@ function createCanvasSync(chatId: string, publish: (state: DesignCanvasSyncView)
     clearScheduledTimer();
     timerHandle = setTimeout(() => {
       timerHandle = null;
-      dispatch(timer.kind === "debounce" ? { type: "debounce_fired" } : { type: "closed_retry_fired" });
+      dispatch(
+        timer.kind === "debounce" ? { type: "debounce_fired" } : { type: "closed_retry_fired" },
+      );
     }, timer.delayMs);
   };
 

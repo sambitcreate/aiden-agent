@@ -570,7 +570,8 @@ export const SLASH_COMMANDS = Object.freeze([
     name: "goal",
     aliases: ["keep-going"],
     title: "Keep going until done",
-    description: "Aiden keeps working in new rounds until the goal is done, up to 50. Type /goal pause, resume or clear to change it.",
+    description:
+      "Aiden keeps working in new rounds until the goal is done, up to 50. Type /goal pause, resume or clear to change it.",
     keywords: ["goal", "loop", "keep going", "until done", "autonomous", "objective"],
     icon: "goal",
     action: { kind: "goal" },
@@ -583,7 +584,8 @@ export const SLASH_COMMANDS = Object.freeze([
     name: "until",
     aliases: ["done-when"],
     title: "Until a check passes",
-    description: "Keep going until a check, such as your tests, passes: Aiden runs it after each answer and keeps fixing, 5 checks at most.",
+    description:
+      "Keep going until a check, such as your tests, passes: Aiden runs it after each answer and keeps fixing, 5 checks at most.",
     keywords: ["test", "check", "loop", "done when", "ci"],
     icon: "check",
     action: { kind: "follow-through", action: "until" },
@@ -596,7 +598,8 @@ export const SLASH_COMMANDS = Object.freeze([
     name: "follow",
     aliases: ["watch"],
     title: "Follow this pull request",
-    description: "Tell this chat about failed checks, merge conflicts and reviewers' comments until it is merged.",
+    description:
+      "Tell this chat about failed checks, merge conflicts and reviewers' comments until it is merged.",
     keywords: ["pull request", "pr", "checks", "ci", "github", "review"],
     icon: "pull-request",
     action: { kind: "follow-through", action: "follow" },

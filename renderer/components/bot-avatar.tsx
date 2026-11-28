@@ -1,8 +1,5 @@
 import * as React from "react";
-import {
-  resolveBotAvatar,
-  type BotAvatar as BotAvatarValue,
-} from "../shared/bots";
+import { resolveBotAvatar, type BotAvatar as BotAvatarValue } from "../shared/bots";
 import type { BotActivityPhase } from "../shared/bot-activity";
 import {
   BOT_SPRITE_SMALL_GLINT_HEX,
@@ -53,7 +50,10 @@ export function AvatarFace({
 }) {
   const appearance = resolveBotAvatar(avatar);
   const tones = BOT_SPRITE_TONES[appearance.color];
-  const grid = React.useMemo(() => botSpriteGrid(appearance.shape, small), [appearance.shape, small]);
+  const grid = React.useMemo(
+    () => botSpriteGrid(appearance.shape, small),
+    [appearance.shape, small],
+  );
   const rows = React.useMemo(() => botSpriteRows(grid), [grid]);
   const face = botSpriteFace(small);
   const props = botSpriteProps(grid);
@@ -84,7 +84,12 @@ export function AvatarFace({
       <g className="bs-rig">
         <g className="bs-body">
           {rows.map((row) => (
-            <g key={row.y} className="bs-row" data-odd={row.pair % 2 === 1 ? "" : undefined} style={{ "--r": row.pair } as SpriteStyle}>
+            <g
+              key={row.y}
+              className="bs-row"
+              data-odd={row.pair % 2 === 1 ? "" : undefined}
+              style={{ "--r": row.pair } as SpriteStyle}
+            >
               {row.runs.map((run) => (
                 <rect
                   key={run.x}
@@ -104,18 +109,26 @@ export function AvatarFace({
         <g className="bs-face">
           {state === "done" ? (
             <g className="bs-happy" {...strokes}>
-              {face.happy.map((d) => <path key={d} d={d} />)}
+              {face.happy.map((d) => (
+                <path key={d} d={d} />
+              ))}
             </g>
           ) : state === "error" ? (
             <g className="bs-wince" {...strokes}>
-              {face.wince.map((d) => <path key={d} d={d} />)}
+              {face.wince.map((d) => (
+                <path key={d} d={d} />
+              ))}
             </g>
           ) : (
             <g className="bs-look">
               <g className="bs-lid">
                 <g className="bs-open">
-                  {face.eyes.map((eye) => <rect key={eye.x} className="bs-eye" {...eye} fill={tones.deep} />)}
-                  {face.glints.map((rect) => <rect key={rect.x} className="bs-glint" {...rect} fill={glint} />)}
+                  {face.eyes.map((eye) => (
+                    <rect key={eye.x} className="bs-eye" {...eye} fill={tones.deep} />
+                  ))}
+                  {face.glints.map((rect) => (
+                    <rect key={rect.x} className="bs-glint" {...rect} fill={glint} />
+                  ))}
                 </g>
               </g>
             </g>
@@ -124,7 +137,13 @@ export function AvatarFace({
         {state === "thinking" ? (
           <g className="bs-think" data-sprite-prop="think">
             {props.thinkDots.map((dot, index) => (
-              <rect key={dot.x} className="bs-dot" {...dot} fill={mark} style={{ "--i": index } as SpriteStyle} />
+              <rect
+                key={dot.x}
+                className="bs-dot"
+                {...dot}
+                fill={mark}
+                style={{ "--i": index } as SpriteStyle}
+              />
             ))}
           </g>
         ) : null}
@@ -160,7 +179,9 @@ export function useBotAvatarState(input: BotAvatarActivityInput): BotAvatarState
   const phase = input.phase ?? null;
   const running = input.session === "running";
   const endsQuietly = botAvatarEndsQuietly(input);
-  const [state, setState] = React.useState<BotAvatarState>(() => (botAvatarStateIsWorking(target) ? target : "idle"));
+  const [state, setState] = React.useState<BotAvatarState>(() =>
+    botAvatarStateIsWorking(target) ? target : "idle",
+  );
   const [settler] = React.useState(() =>
     createBotAvatarSettler({ timers: browserTimers, onChange: setState, initial: state }),
   );
@@ -199,7 +220,12 @@ export function BotSidebarIcon() {
 type BotAvatarSize = "small" | "medium" | "large" | "preview";
 
 /** The face's drawn size inside each avatar tile (tile minus padding), which picks the sprite's cut. */
-const BOT_AVATAR_FACE_PX: Record<BotAvatarSize, number> = { small: 20, medium: 24, large: 36, preview: 104 };
+const BOT_AVATAR_FACE_PX: Record<BotAvatarSize, number> = {
+  small: 20,
+  medium: 24,
+  large: 36,
+  preview: 104,
+};
 
 export function BotAvatar({
   avatar,
@@ -245,9 +271,12 @@ export function BotAvatar({
       setNearViewport(true);
       return;
     }
-    const observer = new IntersectionObserver((entries) => {
-      setNearViewport(entries.some(({ isIntersecting }) => isIntersecting));
-    }, { rootMargin: "160px" });
+    const observer = new IntersectionObserver(
+      (entries) => {
+        setNearViewport(entries.some(({ isIntersecting }) => isIntersecting));
+      },
+      { rootMargin: "160px" },
+    );
     observer.observe(element);
     return () => observer.disconnect();
   }, [photoLoading]);
@@ -284,7 +313,11 @@ export function BotAvatar({
       }`}
     >
       {showPhoto ? null : (
-        <AvatarFace avatar={avatar} small={botSpriteIsSmall(BOT_AVATAR_FACE_PX[size])} state={shownState} />
+        <AvatarFace
+          avatar={avatar}
+          small={botSpriteIsSmall(BOT_AVATAR_FACE_PX[size])}
+          state={shownState}
+        />
       )}
       {showPhoto ? (
         <img
@@ -297,7 +330,10 @@ export function BotAvatar({
       ) : null}
       {showPhoto && busy ? (
         <span className="absolute bottom-0 right-0 grid place-items-center rounded-full bg-background p-px text-primary">
-          <AidenActivityMark mark="glance" size={size === "large" || size === "preview" ? 14 : 10} />
+          <AidenActivityMark
+            mark="glance"
+            size={size === "large" || size === "preview" ? 14 : 10}
+          />
         </span>
       ) : null}
     </span>

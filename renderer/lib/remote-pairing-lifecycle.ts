@@ -1,7 +1,4 @@
-import type {
-  AidenRemoteDeviceView,
-  AidenRemotePairingStatusView,
-} from "../shared/aiden-remote";
+import type { AidenRemoteDeviceView, AidenRemotePairingStatusView } from "../shared/aiden-remote";
 
 export type RemotePairingLifecycle =
   | { state: "unrelated" }

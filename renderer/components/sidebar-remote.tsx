@@ -3,10 +3,7 @@ import { CloudOff, Globe, KeyRound, Loader2, X } from "lucide-react";
 import { Button } from "./ui";
 import { cn } from "../lib/ui-utils";
 import type { SidebarMachineFilter } from "../lib/sidebar-organization";
-import {
-  machineFilterForHost,
-  type SidebarHost,
-} from "../lib/sidebar-remote-groups";
+import { machineFilterForHost, type SidebarHost } from "../lib/sidebar-remote-groups";
 
 /**
  * Sidebar pieces for paired hosts. They render only when a host is paired, so
@@ -64,7 +61,9 @@ export function RemoteHostChip({ host }: { host: SidebarHost }) {
       <span className="min-w-0 truncate">
         <span className="sr-only">Runs on </span>
         {host.label}
-        {host.availability === "online" ? null : <span className="text-secondary">{` · ${status}`}</span>}
+        {host.availability === "online" ? null : (
+          <span className="text-secondary">{` · ${status}`}</span>
+        )}
       </span>
     </span>
   );
@@ -87,7 +86,10 @@ export function RemoteHostMarker({
       aria-label={label}
       title={label}
       data-remote-host-marker="true"
-      className={cn("inline-flex size-5 shrink-0 items-center justify-center text-tertiary", className)}
+      className={cn(
+        "inline-flex size-5 shrink-0 items-center justify-center text-tertiary",
+        className,
+      )}
     >
       <Globe className="size-3.5" aria-hidden="true" />
     </span>
@@ -98,7 +100,10 @@ export function RemoteHostMarker({
 export function MachineBadges({ labels }: { labels: readonly string[] }) {
   if (labels.length < 2) return null;
   return (
-    <span className="flex min-w-0 flex-wrap items-center gap-1" aria-label={`On ${labels.join(", ")}`}>
+    <span
+      className="flex min-w-0 flex-wrap items-center gap-1"
+      aria-label={`On ${labels.join(", ")}`}
+    >
       {labels.map((label) => (
         <span
           key={label}
@@ -210,7 +215,12 @@ export function RemoteHostStatusRow({
  * Offline and blocked hosts whose rows the sidebar is showing. Their rows stay
  * listed as last-known and read-only; this is where the user reconnects.
  */
-export function RemoteHostStatusList({ hosts, filter, onReconnect, onManage }: RemoteHostStatusListProps) {
+export function RemoteHostStatusList({
+  hosts,
+  filter,
+  onReconnect,
+  onManage,
+}: RemoteHostStatusListProps) {
   const unavailable = hosts.filter(
     (host) =>
       (host.availability === "offline" || host.availability === "blocked") &&
@@ -218,9 +228,18 @@ export function RemoteHostStatusList({ hosts, filter, onReconnect, onManage }: R
   );
   if (unavailable.length === 0) return null;
   return (
-    <div role="group" aria-label="Unavailable computers" className="flex flex-col gap-1 px-2.5 pb-2">
+    <div
+      role="group"
+      aria-label="Unavailable computers"
+      className="flex flex-col gap-1 px-2.5 pb-2"
+    >
       {unavailable.map((host) => (
-        <RemoteHostStatusRow key={host.id} host={host} onReconnect={onReconnect} onManage={onManage} />
+        <RemoteHostStatusRow
+          key={host.id}
+          host={host}
+          onReconnect={onReconnect}
+          onManage={onManage}
+        />
       ))}
     </div>
   );

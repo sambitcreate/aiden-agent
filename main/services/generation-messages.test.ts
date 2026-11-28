@@ -8,10 +8,7 @@ import {
   toPiMessages,
 } from "./generation-messages.js";
 import { SkillInvocationError } from "../../renderer/shared/slash-commands.js";
-import {
-  parseStoredPiAssistantMessage,
-  storedPiAssistantMessage,
-} from "./pi-message-storage.js";
+import { parseStoredPiAssistantMessage, storedPiAssistantMessage } from "./pi-message-storage.js";
 import { createPiModelImageReferences } from "./pi-model-image-references.js";
 import {
   GRABBED_ELEMENT_SCHEMA_VERSION,
@@ -81,7 +78,10 @@ test("keeps images only when the generation's effective model accepts them", () 
   );
   assert.equal(JSON.stringify(text.content).includes("note.txt"), true);
   assert.equal(JSON.stringify(text.content).includes("IMAGE_SENTINEL"), false);
-  assert.match(JSON.stringify(text.content), /Attached image reference: image_image \(capture\.png\)/u);
+  assert.match(
+    JSON.stringify(text.content),
+    /Attached image reference: image_image \(capture\.png\)/u,
+  );
 });
 
 test("matches Pi's installed tool-result image serialization gate", () => {
@@ -116,14 +116,23 @@ test("a shared image whose file is gone is named for the model instead of vanish
       content: "What is in this?",
       createdAt: 1,
       attachments: [
-        { id: "lost", name: "receipt.png", mimeType: "image/png", kind: "image", size: 70, sha256: "e".repeat(64) },
+        {
+          id: "lost",
+          name: "receipt.png",
+          mimeType: "image/png",
+          kind: "image",
+          size: 70,
+          sha256: "e".repeat(64),
+        },
       ],
     },
     model,
     true,
   );
   assert.equal(message.role, "user");
-  assert.deepEqual(message.content, [{ type: "text", text: "What is in this?\n\n[Image unavailable: receipt.png]" }]);
+  assert.deepEqual(message.content, [
+    { type: "text", text: "What is in this?\n\n[Image unavailable: receipt.png]" },
+  ]);
 });
 
 test("journal rehydration preserves the authoritative chat timestamp", () => {
@@ -168,10 +177,7 @@ test("journal rehydration preserves bounded continuity for an image-only assista
   assert.deepEqual(message.content, [
     { type: "text", text: "[Assistant displayed 1 inline image.]" },
   ]);
-  assert.doesNotMatch(
-    JSON.stringify(message),
-    /private-name|PRIVATE_IMAGE_BYTES/iu,
-  );
+  assert.doesNotMatch(JSON.stringify(message), /private-name|PRIVATE_IMAGE_BYTES/iu);
 });
 
 test("journal rehydration never counts a visual's snapshot as an image the assistant displayed", () => {
@@ -235,14 +241,8 @@ test("journal rehydration preserves canonical mixed-provider Pi provenance", () 
     false,
   );
   assert.deepEqual(message, canonical);
-  assert.equal(
-    message.role === "assistant" ? message.provider : "",
-    "anthropic",
-  );
-  assert.equal(
-    message.role === "assistant" ? message.model : "",
-    "claude-historical",
-  );
+  assert.equal(message.role === "assistant" ? message.provider : "", "anthropic");
+  assert.equal(message.role === "assistant" ? message.model : "", "claude-historical");
 });
 
 test("stored Pi provenance rejects malformed nested provider protocol", () => {
@@ -333,29 +333,25 @@ test("an explicit invocation overrides only the exact in-memory current turn", (
   assert.match(serialized, /PRIVATE_SKILL_INSTRUCTIONS/u);
   assert.equal(serialized.match(/Attached file: note\.txt/gu)?.length, 1);
   assert.equal(serialized.includes("IMAGE_SENTINEL"), true);
-  assert.ok(
-    serialized.indexOf("PRIVATE_SKILL_INSTRUCTIONS") <
-      serialized.indexOf("note.txt"),
-  );
+  assert.ok(serialized.indexOf("PRIVATE_SKILL_INSTRUCTIONS") < serialized.indexOf("note.txt"));
 });
 
 test("skill message text is rejected before aggregate attachment concatenation exceeds its budget", () => {
   assert.throws(
     () => chatUserTextWithAttachments("12345", undefined, 4),
     (error: unknown) =>
-      error instanceof SkillInvocationError &&
-      error.code === "instructions_too_large",
+      error instanceof SkillInvocationError && error.code === "instructions_too_large",
   );
   assert.throws(
-    () =>
-      chatUserTextWithAttachments("tail", params.messages[0]!.attachments, 30),
+    () => chatUserTextWithAttachments("tail", params.messages[0]!.attachments, 30),
     (error: unknown) =>
-      error instanceof SkillInvocationError &&
-      error.code === "instructions_too_large",
+      error instanceof SkillInvocationError && error.code === "instructions_too_large",
   );
 });
 
-function sampleGrabbedElement(overrides: Partial<GrabbedElementContextV1> = {}): GrabbedElementContextV1 {
+function sampleGrabbedElement(
+  overrides: Partial<GrabbedElementContextV1> = {},
+): GrabbedElementContextV1 {
   const id = overrides.id ?? "el_hero_1";
   return {
     version: GRABBED_ELEMENT_SCHEMA_VERSION,
@@ -367,11 +363,21 @@ function sampleGrabbedElement(overrides: Partial<GrabbedElementContextV1> = {}):
       {
         name: "LandingHeroClient",
         environment: "client",
-        source: { filePath: "src/components/LandingHeroClient.tsx", line: 42, column: 7, symbolicated: true },
+        source: {
+          filePath: "src/components/LandingHeroClient.tsx",
+          line: 42,
+          column: 7,
+          symbolicated: true,
+        },
       },
       { name: "HomePage", environment: "server" },
     ],
-    source: { filePath: "src/components/LandingHeroClient.tsx", line: 42, column: 7, symbolicated: true },
+    source: {
+      filePath: "src/components/LandingHeroClient.tsx",
+      line: 42,
+      column: 7,
+      symbolicated: true,
+    },
     props: { variant: "primary", disabled: false },
     tagName: "section",
     selector: "main > section.hero",
@@ -457,8 +463,18 @@ test("grabbed elements serialize deterministically for vision and text-only mode
     {
       ...message,
       grabbedElements: [
-        { ...firstElement, id: "el_one_v2", thumbnailAttachmentId: grabbedElementThumbnailId("el_one_v2"), capturedAt: 9_999_999 },
-        { ...secondElement, id: "el_two_v2", thumbnailAttachmentId: grabbedElementThumbnailId("el_two_v2"), capturedAt: 9_999_999 },
+        {
+          ...firstElement,
+          id: "el_one_v2",
+          thumbnailAttachmentId: grabbedElementThumbnailId("el_one_v2"),
+          capturedAt: 9_999_999,
+        },
+        {
+          ...secondElement,
+          id: "el_two_v2",
+          thumbnailAttachmentId: grabbedElementThumbnailId("el_two_v2"),
+          capturedAt: 9_999_999,
+        },
       ],
       attachments: [
         { ...attachments[0]!, id: grabbedElementThumbnailId("el_two_v2") },
@@ -480,7 +496,10 @@ test("grabbed elements serialize deterministically for vision and text-only mode
   const textOnly = chatMessageToPiMessage(message, model, false);
   assert.equal(textOnly.role, "user");
   assert.ok(Array.isArray(textOnly.content));
-  assert.equal(textOnly.content.some((part) => part.type === "image"), false);
+  assert.equal(
+    textOnly.content.some((part) => part.type === "image"),
+    false,
+  );
   const textOnlyBody = textOnly.content
     .filter((part) => part.type === "text")
     .map((part) => part.text)
@@ -582,7 +601,10 @@ test("explicit skill invocation includes grabbed elements once and keeps thumbna
 
   const textOnly = chatMessageToPiMessage(persisted, model, false, wrappedPrompt);
   assert.ok(Array.isArray(textOnly.content));
-  assert.equal(textOnly.content.some((part) => part.type === "image"), false);
+  assert.equal(
+    textOnly.content.some((part) => part.type === "image"),
+    false,
+  );
   assert.doesNotMatch(JSON.stringify(textOnly.content), /Attached image reference/u);
 });
 

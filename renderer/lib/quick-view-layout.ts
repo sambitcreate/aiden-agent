@@ -6,7 +6,12 @@ export interface QuickViewLayout {
   expanded: Partial<Record<QuickViewSectionId, true>>;
 }
 
-const SECTION_IDS: readonly QuickViewSectionId[] = ["environment", "changes", "context", "subagents"];
+const SECTION_IDS: readonly QuickViewSectionId[] = [
+  "environment",
+  "changes",
+  "context",
+  "subagents",
+];
 export const QUICK_VIEW_LAYOUT_STORAGE_KEY = "aiden-agent.quick-view.layout";
 export const DEFAULT_QUICK_VIEW_LAYOUT: QuickViewLayout = { order: [...SECTION_IDS], expanded: {} };
 
@@ -72,7 +77,10 @@ export function moveSection(
   return { ...layout, order };
 }
 
-export function toggleSectionExpanded(layout: QuickViewLayout, id: QuickViewSectionId): QuickViewLayout {
+export function toggleSectionExpanded(
+  layout: QuickViewLayout,
+  id: QuickViewSectionId,
+): QuickViewLayout {
   const expanded = { ...layout.expanded };
   if (expanded[id]) delete expanded[id];
   else expanded[id] = true;

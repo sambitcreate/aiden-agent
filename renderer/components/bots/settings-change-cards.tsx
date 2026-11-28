@@ -21,9 +21,15 @@ import {
 import { cn } from "../../lib/ui-utils";
 
 /** What the receipt reads, from its status. */
-export function settingsReceiptText(change: BotSettingsChangeEntryData, status: "pending" | BotSettingsChangeStatus): string {
+export function settingsReceiptText(
+  change: BotSettingsChangeEntryData,
+  status: "pending" | BotSettingsChangeStatus,
+): string {
   const label = botSettingsReceiptLabel(change.fields);
-  const detail = change.fields.includes("instructions") && change.fields.length === 1 ? "" : ` · ${change.lines.join(", ")}`;
+  const detail =
+    change.fields.includes("instructions") && change.fields.length === 1
+      ? ""
+      : ` · ${change.lines.join(", ")}`;
   if (status === "restored") return `${label}${detail} · Restored`;
   if (status === "undo_refused") return `${label}${detail} · Changed again since, so not undone`;
   return `${label}${detail}`;
@@ -44,7 +50,7 @@ export function SettingsChangeReceipt({
 }) {
   const [busy, setBusy] = React.useState(false);
   const [answered, setAnswered] = React.useState<BotSettingsChangeStatus | null>(null);
-  const settled = status !== "pending" ? status : answered ?? "pending";
+  const settled = status !== "pending" ? status : (answered ?? "pending");
   return (
     <ReceiptLine
       icon={<SlidersHorizontal />}
@@ -59,7 +65,9 @@ export function SettingsChangeReceipt({
                 disabled: busy,
                 onClick: () => {
                   setBusy(true);
-                  void onUndo().then(setAnswered, () => undefined).finally(() => setBusy(false));
+                  void onUndo()
+                    .then(setAnswered, () => undefined)
+                    .finally(() => setBusy(false));
                 },
               },
             ]
@@ -89,7 +97,9 @@ export function HeldSettingsCard({
   const respond = (decision: "apply" | "dismiss") => {
     if (busy) return;
     setBusy(decision);
-    void onRespond(decision).catch(() => undefined).finally(() => setBusy(null));
+    void onRespond(decision)
+      .catch(() => undefined)
+      .finally(() => setBusy(null));
   };
   const other = change.lines.filter((line) => line !== "Instructions");
   return (
@@ -100,15 +110,30 @@ export function HeldSettingsCard({
       elevated
       actions={
         <>
-          <Button variant="transparent" size="small" disabled={busy !== null} onClick={() => respond("dismiss")}>
+          <Button
+            variant="transparent"
+            size="small"
+            disabled={busy !== null}
+            onClick={() => respond("dismiss")}
+          >
             Dismiss
           </Button>
           {onEdit && change.instructions !== undefined ? (
-            <Button variant="filled" size="small" disabled={busy !== null} onClick={() => onEdit(change.instructions!)}>
+            <Button
+              variant="filled"
+              size="small"
+              disabled={busy !== null}
+              onClick={() => onEdit(change.instructions!)}
+            >
               Edit
             </Button>
           ) : null}
-          <Button variant="accent" size="small" disabled={busy !== null} onClick={() => respond("apply")}>
+          <Button
+            variant="accent"
+            size="small"
+            disabled={busy !== null}
+            onClick={() => respond("apply")}
+          >
             {busy === "apply" ? "Applying…" : "Apply"}
           </Button>
         </>
@@ -127,7 +152,10 @@ export function HeldSettingsCard({
           <Text as="p" variant="small" color="secondary">
             Apply replaces {botName}&apos;s instructions with this text.
           </Text>
-          <ProposedInstructions proposed={change.instructions} previous={currentInstructions ?? change.previousInstructions} />
+          <ProposedInstructions
+            proposed={change.instructions}
+            previous={currentInstructions ?? change.previousInstructions}
+          />
         </>
       ) : null}
     </BotNoticeCard>
@@ -151,9 +179,10 @@ function heldReasonText(botName: string, reason: BotSettingsHeldReason): string 
  * can't be read, as they were when proposed), added and removed lines are marked.
  */
 function ProposedInstructions({ proposed, previous }: { proposed: string; previous?: string }) {
-  const lines = previous === undefined
-    ? proposed.split(/\r?\n/u).map((text) => ({ kind: "same" as const, text }))
-    : botInstructionsDiff(previous, proposed);
+  const lines =
+    previous === undefined
+      ? proposed.split(/\r?\n/u).map((text) => ({ kind: "same" as const, text }))
+      : botInstructionsDiff(previous, proposed);
   const marked = lines.some((line) => line.kind !== "same");
   return (
     <div

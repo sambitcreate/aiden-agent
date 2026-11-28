@@ -74,7 +74,9 @@ test("fatal diagnostics are appended synchronously", async () => {
     initDevLog(target);
     writeDevLogSync("error", "process", ["fatal", new Error("boom")]);
 
-    const record = JSON.parse((await fs.readFile(path.join(dir, "aiden-fatal.log"), "utf8")).trim()) as {
+    const record = JSON.parse(
+      (await fs.readFile(path.join(dir, "aiden-fatal.log"), "utf8")).trim(),
+    ) as {
       level: string;
       fields: Record<string, unknown>;
     };
@@ -90,12 +92,7 @@ test("credentials are redacted before they reach disk", () => {
   const redacted = redactDevLogSecrets(
     'Authorization: Bearer live-token access_token="oauth-token" client_secret=secret api_key: sk-abcdefghijklmnop',
   );
-  for (const credential of [
-    "live-token",
-    "oauth-token",
-    "=secret",
-    "sk-abcdefghijklmnop",
-  ]) {
+  for (const credential of ["live-token", "oauth-token", "=secret", "sk-abcdefghijklmnop"]) {
     assert.equal(redacted.includes(credential), false);
   }
   assert.match(redacted, /REDACTED/u);
@@ -105,7 +102,11 @@ test("an oversized existing log is discarded before a bounded session starts", a
   await withTempDir(async (dir) => {
     const target = path.join(dir, "aiden-dev.log");
     const legacyStructured = `${JSON.stringify({ version: 1, at: "2026-08-27T12:00:00.000Z" })}\n`;
-    await fs.writeFile(target, legacyStructured.repeat(Math.ceil((3 * 1024 * 1024) / legacyStructured.length)), "utf8");
+    await fs.writeFile(
+      target,
+      legacyStructured.repeat(Math.ceil((3 * 1024 * 1024) / legacyStructured.length)),
+      "utf8",
+    );
     initDevLog(target);
     writeDevLog("info", "main", ["fresh"]);
     await flushDevLog();

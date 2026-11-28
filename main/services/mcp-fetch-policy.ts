@@ -11,7 +11,9 @@ function isJsonRpcBody(body: BodyInit | null | undefined): boolean {
   if (typeof body !== "string") return false;
   try {
     const value: unknown = JSON.parse(body);
-    const isMessage = (entry: unknown) => entry !== null && typeof entry === "object" &&
+    const isMessage = (entry: unknown) =>
+      entry !== null &&
+      typeof entry === "object" &&
       (entry as { jsonrpc?: unknown }).jsonrpc === "2.0";
     return Array.isArray(value) ? value.length > 0 && value.every(isMessage) : isMessage(value);
   } catch {
@@ -30,12 +32,16 @@ const REDIRECT_STATUSES = new Set([301, 302, 303, 307, 308]);
  */
 function networkFailure(url: URL, error: TypeError): TypeError {
   const cause = (error as { cause?: unknown }).cause;
-  const code = cause && typeof cause === "object" && typeof (cause as { code?: unknown }).code === "string"
-    ? (cause as { code: string }).code : undefined;
+  const code =
+    cause && typeof cause === "object" && typeof (cause as { code?: unknown }).code === "string"
+      ? (cause as { code: string }).code
+      : undefined;
   const detail = cause instanceof Error && cause.message ? cause.message : error.message;
   const reason = /redirect/iu.test(detail)
     ? "it answered with a redirect, which Aiden does not follow for sign-in requests"
-    : code ? `${code}${detail && !detail.includes(code) ? ` (${detail})` : ""}` : detail || "network error";
+    : code
+      ? `${code}${detail && !detail.includes(code) ? ` (${detail})` : ""}`
+      : detail || "network error";
   const failure = new TypeError(`Could not reach ${url.host}: ${reason}.`);
   Object.defineProperty(failure, "cause", { value: error, configurable: true, writable: true });
   return failure;
@@ -77,7 +83,10 @@ function issuedTokenKey(url: URL, refreshToken: string): string {
 function issuedRefreshToken(snapshot: SharedTokenResponse): string | undefined {
   try {
     const value: unknown = JSON.parse(new TextDecoder().decode(snapshot.body));
-    const token = value && typeof value === "object" ? (value as { refresh_token?: unknown }).refresh_token : undefined;
+    const token =
+      value && typeof value === "object"
+        ? (value as { refresh_token?: unknown }).refresh_token
+        : undefined;
     return typeof token === "string" && token ? token : undefined;
   } catch {
     return undefined;
@@ -100,14 +109,20 @@ function retireIssuerOf(url: URL, presented: string | null): void {
 
 function refreshFlightKey(url: URL, body: string, headers: Headers): string {
   return createHash("sha256")
-    .update(url.href).update("\0")
-    .update(body).update("\0")
+    .update(url.href)
+    .update("\0")
+    .update(body)
+    .update("\0")
     .update(headers.get("authorization") ?? "")
     .digest("hex");
 }
 
 function sharedResponse(snapshot: SharedTokenResponse): Response {
-  return new Response(snapshot.body.slice(), { status: snapshot.status, statusText: snapshot.statusText, headers: snapshot.headers });
+  return new Response(snapshot.body.slice(), {
+    status: snapshot.status,
+    statusText: snapshot.statusText,
+    headers: snapshot.headers,
+  });
 }
 
 function abortError(signal: AbortSignal): unknown {
@@ -135,11 +150,21 @@ function coalesceRefresh(
   let flight = refreshFlights.get(key);
   if (!flight) {
     const controller = new AbortController();
-    const created: RefreshFlight = { waiters: 0, controller, settled: false, promise: undefined as unknown as Promise<SharedTokenResponse> };
+    const created: RefreshFlight = {
+      waiters: 0,
+      controller,
+      settled: false,
+      promise: undefined as unknown as Promise<SharedTokenResponse>,
+    };
     created.promise = (async () => {
       const response = await run(controller.signal);
       const body = new Uint8Array(await response.arrayBuffer());
-      return { status: response.status, statusText: response.statusText, headers: [...response.headers], body };
+      return {
+        status: response.status,
+        statusText: response.statusText,
+        headers: [...response.headers],
+        body,
+      };
     })();
     created.promise.then(
       (snapshot) => {
@@ -151,7 +176,10 @@ function coalesceRefresh(
         retireIssuerOf(exchange.url, exchange.presented);
         const issued = issuedRefreshToken(snapshot);
         // A non-rotating server re-issues the presented token; nothing was consumed.
-        const issuedKey = issued && issued !== exchange.presented ? issuedTokenKey(exchange.url, issued) : undefined;
+        const issuedKey =
+          issued && issued !== exchange.presented
+            ? issuedTokenKey(exchange.url, issued)
+            : undefined;
         if (issuedKey && refreshFlights.get(key) === created) refreshIssuers.set(issuedKey, key);
         setTimeout(() => {
           if (refreshFlights.get(key) === created) refreshFlights.delete(key);
@@ -186,8 +214,16 @@ function coalesceRefresh(
     };
     callerSignal.addEventListener("abort", onAbort, { once: true });
     joined.promise.then(
-      (snapshot) => { if (left) return; leave(); resolve(sharedResponse(snapshot)); },
-      (error: unknown) => { if (left) return; leave(); reject(error); },
+      (snapshot) => {
+        if (left) return;
+        leave();
+        resolve(sharedResponse(snapshot));
+      },
+      (error: unknown) => {
+        if (left) return;
+        leave();
+        reject(error);
+      },
     );
   });
 }
@@ -236,8 +272,12 @@ export function createMcpFetchPolicy(options: McpFetchPolicyOptions): typeof fet
   const fetchImpl = options.fetch ?? globalThis.fetch;
   const maximumBytes = options.maximumBytes ?? MAX_MCP_RESPONSE_BYTES;
   const timeoutMs = options.oauthTimeoutMs ?? MCP_OAUTH_REQUEST_TIMEOUT_MS;
-  if (!Number.isSafeInteger(maximumBytes) || maximumBytes < 1 ||
-      !Number.isSafeInteger(timeoutMs) || timeoutMs < 1) {
+  if (
+    !Number.isSafeInteger(maximumBytes) ||
+    maximumBytes < 1 ||
+    !Number.isSafeInteger(timeoutMs) ||
+    timeoutMs < 1
+  ) {
     throw new Error("Invalid MCP transport policy.");
   }
   const service = new URL(options.serviceUrl);
@@ -255,17 +295,23 @@ export function createMcpFetchPolicy(options: McpFetchPolicyOptions): typeof fet
     // idle indefinitely. OAuth metadata/registration/token requests do not.
     const acceptsSse = (requestHeaders.get("accept") ?? "").includes("text/event-stream");
     const method = (init?.method ?? request?.method ?? "GET").toUpperCase();
-    const contentType = (requestHeaders.get("content-type") ?? "").split(";", 1)[0].trim().toLowerCase();
+    const contentType = (requestHeaders.get("content-type") ?? "")
+      .split(";", 1)[0]
+      .trim()
+      .toLowerCase();
     // Metadata GETs also carry MCP-Protocol-Version. Initialize sends a
     // JSON-RPC body before that header is available, while OAuth registration
     // is JSON without a JSON-RPC envelope and token requests are form POSTs.
-    const mcpRequest = acceptsSse || (method === "POST" && contentType === "application/json" &&
-      (requestHeaders.has("mcp-protocol-version") || isJsonRpcBody(init?.body)));
+    const mcpRequest =
+      acceptsSse ||
+      (method === "POST" &&
+        contentType === "application/json" &&
+        (requestHeaders.has("mcp-protocol-version") || isJsonRpcBody(init?.body)));
     const controller = new AbortController();
     const signal = AbortSignal.any([
       controller.signal,
       ...(owner.signal ? [owner.signal] : []),
-      ...(owner.caller ? init?.signal ? [init.signal] : request ? [request.signal] : [] : []),
+      ...(owner.caller ? (init?.signal ? [init.signal] : request ? [request.signal] : []) : []),
     ]);
     let timer: ReturnType<typeof setTimeout> | undefined;
     let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
@@ -294,12 +340,23 @@ export function createMcpFetchPolicy(options: McpFetchPolicyOptions): typeof fet
     // transports and discovery read as "network"). Only OAuth metadata GETs
     // follow redirects, and only same-origin ones, without credentials.
     const followsRedirects = !mcpRequest && method === "GET";
-    const send = async (target: Parameters<typeof fetch>[0], sendHeaders: Headers): Promise<Response> => {
+    const send = async (
+      target: Parameters<typeof fetch>[0],
+      sendHeaders: Headers,
+    ): Promise<Response> => {
       try {
-        return await fetchImpl(target, { ...init, headers: sendHeaders, signal, redirect: followsRedirects ? "manual" : "error" });
+        return await fetchImpl(target, {
+          ...init,
+          headers: sendHeaders,
+          signal,
+          redirect: followsRedirects ? "manual" : "error",
+        });
       } catch (error) {
         if (signal.aborted || !(error instanceof TypeError)) throw error;
-        throw networkFailure(new URL(target instanceof Request ? target.url : String(target)), error);
+        throw networkFailure(
+          new URL(target instanceof Request ? target.url : String(target)),
+          error,
+        );
       }
     };
     try {
@@ -310,15 +367,24 @@ export function createMcpFetchPolicy(options: McpFetchPolicyOptions): typeof fet
         const target = response.headers.get("location");
         void response.body?.cancel().catch(() => undefined);
         assertCurrent();
-        if (!target) throw new TypeError(`OAuth metadata at ${location.host} answered with a redirect without a destination.`);
+        if (!target)
+          throw new TypeError(
+            `OAuth metadata at ${location.host} answered with a redirect without a destination.`,
+          );
         const next = new URL(target, location);
         if (next.origin !== location.origin) {
           // Not followed. To discovery this is a miss at that URL ("not
           // here"), so it tries the next candidate instead of failing.
-          response = new Response(null, { status: 404, statusText: `Redirect to another origin (${next.origin}) not followed` });
+          response = new Response(null, {
+            status: 404,
+            statusText: `Redirect to another origin (${next.origin}) not followed`,
+          });
           break;
         }
-        if (hops >= MAX_METADATA_REDIRECTS) throw new TypeError(`OAuth metadata at ${url.host} redirected more than ${MAX_METADATA_REDIRECTS} times.`);
+        if (hops >= MAX_METADATA_REDIRECTS)
+          throw new TypeError(
+            `OAuth metadata at ${url.host} redirected more than ${MAX_METADATA_REDIRECTS} times.`,
+          );
         // Redirect hops carry the request's own headers, never configured
         // service headers or an Authorization header.
         const hopHeaders = new Headers(requestHeaders);
@@ -330,19 +396,32 @@ export function createMcpFetchPolicy(options: McpFetchPolicyOptions): typeof fet
       assertCurrent();
       // OAuth consumes JSON regardless of a server's advertised MIME type.
       // Only successful MCP SSE responses get a per-frame (not total) budget.
-      const sse = acceptsSse && response.ok && (response.headers.get("content-type") ?? "")
-        .split(";", 1)[0].trim().toLowerCase() === "text/event-stream";
+      const sse =
+        acceptsSse &&
+        response.ok &&
+        (response.headers.get("content-type") ?? "").split(";", 1)[0].trim().toLowerCase() ===
+          "text/event-stream";
       const declared = response.headers.get("content-length");
-      if (!sse && declared !== null &&
-          (!/^\d+$/u.test(declared) || !Number.isSafeInteger(Number(declared)) || Number(declared) > maximumBytes)) {
+      if (
+        !sse &&
+        declared !== null &&
+        (!/^\d+$/u.test(declared) ||
+          !Number.isSafeInteger(Number(declared)) ||
+          Number(declared) > maximumBytes)
+      ) {
         void response.body?.cancel(OVERSIZED).catch(() => undefined);
         throw new Error(OVERSIZED);
       }
       const challenge = response.headers.get("www-authenticate");
       // A server may take JSON-RPC at another path of its origin, so any
       // MCP request to the server's origin counts.
-      if (response.status === 403 && challenge && mcpRequest && url.origin === service.origin &&
-          challengeParameter(challenge, "error") === "insufficient_scope") {
+      if (
+        response.status === 403 &&
+        challenge &&
+        mcpRequest &&
+        url.origin === service.origin &&
+        challengeParameter(challenge, "error") === "insufficient_scope"
+      ) {
         const scope = challengeParameter(challenge, "scope");
         if (scope) recordMcpStepUpScope(options.serviceUrl, scope);
       }
@@ -354,7 +433,9 @@ export function createMcpFetchPolicy(options: McpFetchPolicyOptions): typeof fet
       const checkFrame = frameCounter(maximumBytes);
       let observed = 0;
       const body = new ReadableStream<Uint8Array>({
-        start(streamController) { bodyController = streamController; },
+        start(streamController) {
+          bodyController = streamController;
+        },
         async pull(streamController) {
           try {
             assertCurrent();
@@ -400,13 +481,18 @@ export function createMcpFetchPolicy(options: McpFetchPolicyOptions): typeof fet
     const headers = new Headers(init?.headers ?? request?.headers);
     const contentType = (headers.get("content-type") ?? "").split(";", 1)[0].trim().toLowerCase();
     if (formGrant(method, contentType, init?.body) !== "refresh_token") {
-      return policyFetch(input, init, { signal: options.signal, isCurrent: options.isCurrent, caller: true });
+      return policyFetch(input, init, {
+        signal: options.signal,
+        isCurrent: options.isCurrent,
+        caller: true,
+      });
     }
     const callerSignal = AbortSignal.any([
       ...(options.signal ? [options.signal] : []),
       ...(init?.signal ? [init.signal] : request ? [request.signal] : []),
     ]);
-    if (options.isCurrent && !options.isCurrent()) throw new Error("MCP connection is no longer current.");
+    if (options.isCurrent && !options.isCurrent())
+      throw new Error("MCP connection is no longer current.");
     const url = new URL(request?.url ?? String(input));
     const body = String(init?.body ?? "");
     const key = refreshFlightKey(url, body, headers);
@@ -414,7 +500,12 @@ export function createMcpFetchPolicy(options: McpFetchPolicyOptions): typeof fet
     // The shared request belongs to no single caller: it carries only its own
     // deadline and the cancellation of every waiter, and each caller re-checks
     // its own currency before using the result.
-    const response = await coalesceRefresh(key, { url, presented }, (signal) => policyFetch(input, init, { signal, caller: false }), callerSignal);
+    const response = await coalesceRefresh(
+      key,
+      { url, presented },
+      (signal) => policyFetch(input, init, { signal, caller: false }),
+      callerSignal,
+    );
     if (options.isCurrent && !options.isCurrent()) {
       void response.body?.cancel().catch(() => undefined);
       throw new Error("MCP connection is no longer current.");
@@ -423,7 +514,13 @@ export function createMcpFetchPolicy(options: McpFetchPolicyOptions): typeof fet
   };
 }
 
-function formGrant(method: string, contentType: string, body: BodyInit | null | undefined): string | null {
+function formGrant(
+  method: string,
+  contentType: string,
+  body: BodyInit | null | undefined,
+): string | null {
   if (method !== "POST" || contentType !== "application/x-www-form-urlencoded") return null;
-  return new URLSearchParams(typeof body === "string" || body instanceof URLSearchParams ? body : "").get("grant_type");
+  return new URLSearchParams(
+    typeof body === "string" || body instanceof URLSearchParams ? body : "",
+  ).get("grant_type");
 }

@@ -22,7 +22,13 @@ export async function restoreSkillFile(
   if ((await fs.readFile(file, "utf8").catch(() => null)) !== expected) return false;
   const undone = expected === null ? null : parseSkillMd(expected);
   if (revoke && undone?.frontmatter.name && undone.frontmatter.description !== undefined) {
-    await revoke(botSkillContentFingerprint({ name: undone.frontmatter.name, description: undone.frontmatter.description, instructions: undone.body }));
+    await revoke(
+      botSkillContentFingerprint({
+        name: undone.frontmatter.name,
+        description: undone.frontmatter.description,
+        instructions: undone.body,
+      }),
+    );
   }
   if (content === null) {
     await fs.rm(file, { force: true });

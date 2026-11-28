@@ -1,6 +1,9 @@
 import { ipcMain } from "../platform.js";
 import { isBackgroundJobId } from "../../renderer/shared/background-jobs.js";
-import { normalizeGitHubHost, normalizeGitHubRepositoryIdentity } from "../../renderer/shared/chat-pull-requests.js";
+import {
+  normalizeGitHubHost,
+  normalizeGitHubRepositoryIdentity,
+} from "../../renderer/shared/chat-pull-requests.js";
 import { rendererDocumentOwner } from "../services/renderer-document-owner.js";
 import { chatPullRequestService } from "../services/chat-pull-request-service-main.js";
 import {
@@ -14,7 +17,8 @@ import {
 } from "../services/follow-through/follow-through-main.js";
 
 function record(value: unknown): Record<string, unknown> {
-  if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("Invalid request.");
+  if (!value || typeof value !== "object" || Array.isArray(value))
+    throw new Error("Invalid request.");
   return value as Record<string, unknown>;
 }
 
@@ -29,7 +33,10 @@ function jobId(value: unknown): string {
 }
 
 function activeDocument(event: Parameters<typeof rendererDocumentOwner>[0]): void {
-  rendererDocumentOwner(event, () => new Error("Follow-through changes require the active application document."));
+  rendererDocumentOwner(
+    event,
+    () => new Error("Follow-through changes require the active application document."),
+  );
 }
 
 export function registerFollowThroughHandlers(): void {
@@ -49,7 +56,9 @@ export function registerFollowThroughHandlers(): void {
   ipcMain.handle("chats:followThroughFollowPullRequest", async (event, input: unknown) => {
     activeDocument(event);
     const id = chatId(record(input).chatId);
-    await followChatPullRequest(id, () => resolvePullRequestTarget(id, undefined, (chat) => chatPullRequestService.current(chat)));
+    await followChatPullRequest(id, () =>
+      resolvePullRequestTarget(id, undefined, (chat) => chatPullRequestService.current(chat)),
+    );
   });
 
   ipcMain.handle("chats:followThroughStopFollow", (event, input: unknown) => {
@@ -57,7 +66,10 @@ export function registerFollowThroughHandlers(): void {
     const value = record(input);
     const host = normalizeGitHubHost(value.host);
     const repository = normalizeGitHubRepositoryIdentity(value.repository);
-    const number = typeof value.number === "number" && Number.isSafeInteger(value.number) && value.number > 0 ? value.number : undefined;
+    const number =
+      typeof value.number === "number" && Number.isSafeInteger(value.number) && value.number > 0
+        ? value.number
+        : undefined;
     if (!host || !repository || !number) throw new Error("Invalid pull request.");
     pullRequestFollows.stop(chatId(value.chatId), { host, repository, number }, "person");
   });
@@ -77,7 +89,8 @@ export function registerFollowThroughHandlers(): void {
   ipcMain.handle("chats:followThroughCancelCheckBack", (event, input: unknown) => {
     activeDocument(event);
     const value = record(input);
-    if (typeof value.id !== "string" || !value.id || value.id.length > 200) throw new Error("Invalid check-back.");
+    if (typeof value.id !== "string" || !value.id || value.id.length > 200)
+      throw new Error("Invalid check-back.");
     return cancelCheckBackForPerson(chatId(value.chatId), value.id);
   });
 }

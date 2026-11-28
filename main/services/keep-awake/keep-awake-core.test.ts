@@ -22,11 +22,15 @@ function fakeClock() {
       timers.set(id, { at: now + ms, callback });
       return id;
     },
-    clearTimeout: (id: number) => { timers.delete(id); },
+    clearTimeout: (id: number) => {
+      timers.delete(id);
+    },
     advance(ms: number) {
       const end = now + ms;
       for (;;) {
-        const due = [...timers.entries()].filter(([, timer]) => timer.at <= end).sort((a, b) => a[1].at - b[1].at)[0];
+        const due = [...timers.entries()]
+          .filter(([, timer]) => timer.at <= end)
+          .sort((a, b) => a[1].at - b[1].at)[0];
         if (!due) break;
         timers.delete(due[0]);
         now = due[1].at;
@@ -68,7 +72,9 @@ function harness(options: { enabled?: boolean } = {}) {
     blocker,
     controller,
     statuses,
-    setIdle: (seconds: number) => { idle = seconds; },
+    setIdle: (seconds: number) => {
+      idle = seconds;
+    },
     set(next: KeepAwakeReason[]) {
       reasons = next;
       controller.update();
@@ -119,7 +125,13 @@ test("turning the switch off lets go at once, even mid-grace, and on again holds
   h.set([chat("a")]);
   h.controller.setEnabled(false);
   assert.equal(h.blocker.active.size, 0, "off releases without waiting for the grace");
-  assert.deepEqual(h.controller.status(), { supported: true, enabled: false, holding: false, pausedWhileIdle: false, counts: {} });
+  assert.deepEqual(h.controller.status(), {
+    supported: true,
+    enabled: false,
+    holding: false,
+    pausedWhileIdle: false,
+    counts: {},
+  });
   h.controller.setEnabled(true);
   assert.equal(h.blocker.active.size, 1);
 
@@ -173,9 +185,16 @@ test("an input's recheck time re-reads it with no event, and a broken input hold
   let soon = false;
   const dueAt = h.clock.now() + 5 * 60_000;
   h.controller.addInput({
-    read: (now) => (now >= dueAt ? (soon = true, { reasons: [{ kind: "usage-limit", id: "chat:a" }] }) : { reasons: [], recheckAt: dueAt }),
+    read: (now) =>
+      now >= dueAt
+        ? ((soon = true), { reasons: [{ kind: "usage-limit", id: "chat:a" }] })
+        : { reasons: [], recheckAt: dueAt },
   });
-  h.controller.addInput({ read: () => { throw new Error("broken"); } });
+  h.controller.addInput({
+    read: () => {
+      throw new Error("broken");
+    },
+  });
   assert.equal(h.blocker.active.size, 0);
   h.clock.advance(5 * 60_000);
   assert.equal(soon, true);
@@ -199,7 +218,11 @@ test("after 4 idle hours a due check-back or wake-up still holds; other work let
   assert.equal(h.blocker.active.size, 0, "a chat's work lets go when nobody is around");
   for (const kind of ["check-back", "wake-up"] as const) {
     h.set([chat("a"), { kind, id: `${kind}:1` }]);
-    assert.equal(h.blocker.active.size, 1, `a ${kind} due soon keeps the unattended computer awake`);
+    assert.equal(
+      h.blocker.active.size,
+      1,
+      `a ${kind} due soon keeps the unattended computer awake`,
+    );
     assert.equal(h.controller.status().pausedWhileIdle, false);
     h.set([chat("a")]);
     assert.equal(h.blocker.active.size, 0);
@@ -215,7 +238,12 @@ test("a recheck time far ahead (or behind a clock jump) waits at most an hour, n
     idleSeconds: () => 0,
   });
   // Past 2^31-1 ms a plain timer would fire after 1 ms, again and again.
-  controller.addInput({ read: (now) => { reads += 1; return { reasons: [], recheckAt: now + 40 * 24 * 60 * 60_000 }; } });
+  controller.addInput({
+    read: (now) => {
+      reads += 1;
+      return { reasons: [], recheckAt: now + 40 * 24 * 60 * 60_000 };
+    },
+  });
   const afterAdd = reads;
   clock.advance(59 * 60_000);
   assert.equal(reads, afterAdd, "no re-read inside the hour");
@@ -235,7 +263,9 @@ test("removing an input starts the grace period, releases after grace, and is id
         active.add(id);
         return id;
       },
-      stop: (id) => { active.delete(id); },
+      stop: (id) => {
+        active.delete(id);
+      },
     },
     clock,
     idleSeconds: () => 0,
@@ -261,8 +291,13 @@ test("a past recheckAt waits at least a second rather than spinning, and grace i
   const active = new Set<number>();
   const controller = new KeepAwakeController<number, number>({
     blocker: {
-      start: () => { active.add(1); return 1; },
-      stop: (id) => { active.delete(id); },
+      start: () => {
+        active.add(1);
+        return 1;
+      },
+      stop: (id) => {
+        active.delete(id);
+      },
     },
     clock,
     idleSeconds: () => 0,

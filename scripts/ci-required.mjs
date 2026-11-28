@@ -63,7 +63,11 @@ function normalizeDecision(value) {
 
 export function parseChangedAreaDecisions(value) {
   const source = typeof value === "string" ? parseJson(value, "changes") : value;
-  const outputs = isRecord(source?.outputs) ? source.outputs : isRecord(source?.areas) ? source.areas : source;
+  const outputs = isRecord(source?.outputs)
+    ? source.outputs
+    : isRecord(source?.areas)
+      ? source.areas
+      : source;
   if (!isRecord(outputs)) {
     throw new Error("changes-malformed");
   }
@@ -132,7 +136,12 @@ export function evaluateRequiredGate(needs, changes) {
       if (result === "success") {
         continue;
       }
-      if (result === "skipped" && rule.areas && decisions && rule.areas.every((area) => decisions[area] === false)) {
+      if (
+        result === "skipped" &&
+        rule.areas &&
+        decisions &&
+        rule.areas.every((area) => decisions[area] === false)
+      ) {
         continue;
       }
       if (!ACCEPTED_RESULTS.has(result)) {
@@ -155,7 +164,12 @@ export const aggregateRequiredGate = evaluateRequiredGate;
 function outputLines(result) {
   const status = result.ok ? "success" : "failure";
   const summary = `CI required gate ${status} (${result.failures.length} failing checks; ${result.checkedCount} required jobs checked).`;
-  return [`ok=${result.ok ? "true" : "false"}`, `status=${status}`, `failed_count=${result.failures.length}`, `summary=${summary}`];
+  return [
+    `ok=${result.ok ? "true" : "false"}`,
+    `status=${status}`,
+    `failed_count=${result.failures.length}`,
+    `summary=${summary}`,
+  ];
 }
 
 export function writeRequiredOutputs(result, outputPath) {
@@ -180,12 +194,16 @@ export function evaluateRequiredEnvironment(environment = process.env) {
   try {
     needs = parseJson(environment.CI_NEEDS_JSON, "needs");
   } catch (error) {
-    parsingFailures.push(failure("needs", error instanceof Error ? error.message : "needs-malformed"));
+    parsingFailures.push(
+      failure("needs", error instanceof Error ? error.message : "needs-malformed"),
+    );
   }
   try {
     changes = parseJson(environment.CI_CHANGES_JSON, "changes");
   } catch (error) {
-    parsingFailures.push(failure("changes", error instanceof Error ? error.message : "changes-malformed"));
+    parsingFailures.push(
+      failure("changes", error instanceof Error ? error.message : "changes-malformed"),
+    );
   }
 
   const result = evaluateRequiredGate(needs, changes);
@@ -203,7 +221,9 @@ function main() {
   const result = evaluateRequiredEnvironment();
   writeRequiredOutputs(result, process.env.GITHUB_OUTPUT);
   writeRequiredSummary(result, process.env.GITHUB_STEP_SUMMARY);
-  process.stdout.write(`CI required gate ${result.ok ? "passed" : "failed"} after ${result.checkedCount} required jobs.\n`);
+  process.stdout.write(
+    `CI required gate ${result.ok ? "passed" : "failed"} after ${result.checkedCount} required jobs.\n`,
+  );
   if (!result.ok) {
     process.exitCode = 1;
   }

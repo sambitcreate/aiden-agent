@@ -17,7 +17,12 @@ export class McpOAuthCredentialStorageError extends Error {
     super(
       "Aiden could not read the saved sign-in for this MCP server because secure credential storage is unavailable. Unlock the keychain or sign in again in Settings → Connectors.",
     );
-    if (options) Object.defineProperty(this, "cause", { value: options.cause, configurable: true, writable: true });
+    if (options)
+      Object.defineProperty(this, "cause", {
+        value: options.cause,
+        configurable: true,
+        writable: true,
+      });
   }
 }
 
@@ -44,7 +49,9 @@ export function createMcpOAuthSessionCache(source: McpOAuthSessionSource) {
       const loading = source.readMap();
       const entry = { generation, value: loading };
       map = entry;
-      loading.catch(() => { if (map === entry) map = undefined; });
+      loading.catch(() => {
+        if (map === entry) map = undefined;
+      });
     }
     return map.value;
   }

@@ -102,25 +102,27 @@ app.whenReady().then(async () => {
       })),
     };
     const options = { apiKey: richOptions.apiKey };
-    const wireRequest = JSON.parse(JSON.stringify({
-      kind: "start",
-      version: 1,
-      requestId,
-      model: {
-        id: "smoke",
-        name: "Smoke",
-        api: "openai-completions",
-        provider: "smoke",
-        baseUrl: `http://127.0.0.1:${address.port}/v1`,
-        input: ["text"],
-        reasoning: false,
-        contextWindow: 4096,
-        maxTokens: 1,
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-      },
-      context,
-      options,
-    }));
+    const wireRequest = JSON.parse(
+      JSON.stringify({
+        kind: "start",
+        version: 1,
+        requestId,
+        model: {
+          id: "smoke",
+          name: "Smoke",
+          api: "openai-completions",
+          provider: "smoke",
+          baseUrl: `http://127.0.0.1:${address.port}/v1`,
+          input: ["text"],
+          reasoning: false,
+          contextWindow: 4096,
+          maxTokens: 1,
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        },
+        context,
+        options,
+      }),
+    );
     child.postMessage(wireRequest);
   });
   child.on("message", (message) => {

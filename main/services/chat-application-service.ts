@@ -187,9 +187,11 @@ export async function forgetChatInboxState(
 ): Promise<void> {
   await Promise.all(
     [stores?.readMarkers, stores?.triage].map((store) =>
-      store?.remove(chatId).catch((error: unknown) =>
-        logError("chats", "Could not clear the deleted chat's Inbox state.", error),
-      ),
+      store
+        ?.remove(chatId)
+        .catch((error: unknown) =>
+          logError("chats", "Could not clear the deleted chat's Inbox state.", error),
+        ),
     ),
   );
 }
@@ -297,8 +299,7 @@ export function createChatApplicationService(deps: ChatApplicationDependencies) 
         throw new Error("Ordinary chat creation cannot create Aiden Assistant chats.");
       }
       const mutationAdmission = deps.workspaceMutationGate.admit(input.workspaceId);
-      let workspaceOperation:
-        ReturnType<typeof admitOwnedWorkspaceOperation> | undefined;
+      let workspaceOperation: ReturnType<typeof admitOwnedWorkspaceOperation> | undefined;
       try {
         workspaceOperation = admitOwnedWorkspaceOperation(
           deps.workspaceOperationRegistry,
@@ -321,13 +322,17 @@ export function createChatApplicationService(deps: ChatApplicationDependencies) 
           }
         };
         try {
-          const chat = chatForRenderer(await deps.chatStore.create({
-            ...input,
-            ...(options?.startedBy ? { startedBy: options.startedBy } : {}),
-            assertCurrent,
-          }));
+          const chat = chatForRenderer(
+            await deps.chatStore.create({
+              ...input,
+              ...(options?.startedBy ? { startedBy: options.startedBy } : {}),
+              assertCurrent,
+            }),
+          );
           if (options?.reportAnalytics !== false) {
-            reportAnalyticsEvent("chat_created", { workspace_kind: analyticsWorkspaceKind(workspace) });
+            reportAnalyticsEvent("chat_created", {
+              workspace_kind: analyticsWorkspaceKind(workspace),
+            });
           }
           return chat;
         } catch (error) {
@@ -372,7 +377,9 @@ export function createChatApplicationService(deps: ChatApplicationDependencies) 
             assertRenameAllowedFromChat(chat, options);
             await options.assertCurrent?.(chat);
             if (deps.llmClient.isChatBusy(chatId)) {
-              throw new Error("Finish or stop the current response before changing this chat's model.");
+              throw new Error(
+                "Finish or stop the current response before changing this chat's model.",
+              );
             }
           },
           thinkingLevel,
@@ -386,14 +393,20 @@ export function createChatApplicationService(deps: ChatApplicationDependencies) 
      * folder. Turning it off is always allowed. A running reply is not
      * affected, because design mode only changes the layout.
      */
-    async setDesignMode(chatId: string, enabled: boolean, options: ChatApplicationMutationOptions = {}) {
+    async setDesignMode(
+      chatId: string,
+      enabled: boolean,
+      options: ChatApplicationMutationOptions = {},
+    ) {
       let turnedOn = false;
       let workspaceRoot: string | undefined;
       const updated = await deps.chatStore.setDesignMode(chatId, enabled, async (chat) => {
         assertRenameAllowedFromChat(chat, options);
         await options.assertCurrent?.(chat);
         if (!enabled) return;
-        const workspace = await deps.configStore.getWorkspace(persistedChatWorkspaceId(chat.workspaceId));
+        const workspace = await deps.configStore.getWorkspace(
+          persistedChatWorkspaceId(chat.workspaceId),
+        );
         if (!workspace || (!workspace.folderPath && workspace.noWorkspace !== true)) {
           throw new ChatStoreError("design-mode-unavailable", DESIGN_MODE_UNAVAILABLE_MESSAGE);
         }
@@ -550,7 +563,9 @@ export function createChatApplicationService(deps: ChatApplicationDependencies) 
           deps.configStore.getWorkspace(targetWorkspaceId),
         ]);
         if (!oldWorkspace || oldWorkspace.noWorkspace !== true) {
-          throw new Error("Only No workspace or temporary chats can attach to a project workspace.");
+          throw new Error(
+            "Only No workspace or temporary chats can attach to a project workspace.",
+          );
         }
         if (!targetWorkspace) {
           throw new Error(`Workspace ${targetWorkspaceId} not found.`);
@@ -565,7 +580,8 @@ export function createChatApplicationService(deps: ChatApplicationDependencies) 
         if (await checkMissing(targetWorkspace)) {
           throw new WorkspaceFolderMissingError(targetWorkspace);
         }
-        const checkWorktree = deps.assertManagedWorktreeAdmission ?? defaultAssertManagedWorktreeAdmission;
+        const checkWorktree =
+          deps.assertManagedWorktreeAdmission ?? defaultAssertManagedWorktreeAdmission;
         await checkWorktree(targetWorkspace);
 
         // Admit both workspaces in deterministic ID order so concurrent mutations cannot race.
@@ -573,7 +589,11 @@ export function createChatApplicationService(deps: ChatApplicationDependencies) 
           const gate = deps.workspaceMutationGate.admit(wsId);
           admissions.push(gate);
           if (options.owner) {
-            const op = admitOwnedWorkspaceOperation(deps.workspaceOperationRegistry, options.owner, wsId);
+            const op = admitOwnedWorkspaceOperation(
+              deps.workspaceOperationRegistry,
+              options.owner,
+              wsId,
+            );
             admissions.push(op);
           }
         }
@@ -663,7 +683,11 @@ export function createChatApplicationService(deps: ChatApplicationDependencies) 
           deps.logError("chats", "Could not reset workspace session after attach.", error);
         });
         await deps.memoryStore?.deleteSourceChat(chatId).catch((error: unknown) => {
-          deps.logError("memory", "Could not clear old workspace memory index after attach.", error);
+          deps.logError(
+            "memory",
+            "Could not clear old workspace memory index after attach.",
+            error,
+          );
         });
 
         // Release workspace operation admissions BEFORE releasing the old hidden
@@ -671,7 +695,11 @@ export function createChatApplicationService(deps: ChatApplicationDependencies) 
         // would wait on this exact operation and deadlock.
         releaseAdmissions();
         await deps.afterChatRemoved?.(oldWorkspaceId).catch((error: unknown) => {
-          deps.logError("workspace", "Could not release old No workspace folder after attach.", error);
+          deps.logError(
+            "workspace",
+            "Could not release old No workspace folder after attach.",
+            error,
+          );
         });
 
         return {
@@ -707,10 +735,7 @@ export function createChatApplicationService(deps: ChatApplicationDependencies) 
       return swept;
     },
 
-    async remove(
-      chatId: string,
-      options: ChatApplicationMutationOptions = {},
-    ): Promise<void> {
+    async remove(chatId: string, options: ChatApplicationMutationOptions = {}): Promise<void> {
       if (options.rejectFeatureOwned) {
         // Refuse before the deletion window opens, so a live design run never sees
         // its chat as deleting. A chat's owner never changes, so this cannot race
@@ -748,7 +773,9 @@ export function createChatApplicationService(deps: ChatApplicationDependencies) 
           // startup may still observe that tombstone and delete the chat.
           let deletionIsPending = true;
           try {
-            deletionIsPending = (await deps.subagentRunStore.pendingChatDeletions()).includes(chatId);
+            deletionIsPending = (await deps.subagentRunStore.pendingChatDeletions()).includes(
+              chatId,
+            );
           } catch (pendingError) {
             deps.logError(
               "subagents",
@@ -823,27 +850,37 @@ export function createChatApplicationService(deps: ChatApplicationDependencies) 
         void forgetChatInboxState(deps.inboxState, chatId, deps.logError);
         await deps.scheduledTasks?.releaseOriginChat(chatId).catch((error: unknown) => {
           // A run finds the chat gone and falls back anyway; this keeps the editor truthful.
-          deps.logError("schedule", "Could not move the deleted chat's scheduled tasks to their own chats.", error);
+          deps.logError(
+            "schedule",
+            "Could not move the deleted chat's scheduled tasks to their own chats.",
+            error,
+          );
         });
         await deps.subagentRunStore.completeChatDeletion(chatId);
         releaseAdmission = true;
         // Scratch cleanup is best effort and must not delay the delete reply.
-        void deps.forgetDeletedChat?.(chatId).catch((error: unknown) =>
-          deps.logError("chats", "Could not remove the deleted chat's agent scratch folder.", error),
-        );
-        await deps.afterChatRemoved?.(persistedChatWorkspaceId(current.workspaceId)).catch((error: unknown) => {
-          deps.logError("workspace", "Could not release the deleted chat's folder.", error);
-        });
+        void deps
+          .forgetDeletedChat?.(chatId)
+          .catch((error: unknown) =>
+            deps.logError(
+              "chats",
+              "Could not remove the deleted chat's agent scratch folder.",
+              error,
+            ),
+          );
+        await deps
+          .afterChatRemoved?.(persistedChatWorkspaceId(current.workspaceId))
+          .catch((error: unknown) => {
+            deps.logError("workspace", "Could not release the deleted chat's folder.", error);
+          });
       } finally {
         if (!releaseAdmission) {
           try {
-            releaseAdmission = !(await deps.subagentRunStore.pendingChatDeletions()).includes(chatId);
-          } catch (error) {
-            deps.logError(
-              "subagents",
-              "Could not inspect pending chat deletion state.",
-              error,
+            releaseAdmission = !(await deps.subagentRunStore.pendingChatDeletions()).includes(
+              chatId,
             );
+          } catch (error) {
+            deps.logError("subagents", "Could not inspect pending chat deletion state.", error);
           }
         }
         const settlement = chatDeletionSettlement(releaseAdmission, chatRemoved);

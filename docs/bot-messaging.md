@@ -33,13 +33,13 @@ Each accepted exchange has a **30-minute window**, including approval waits. A n
 
 Limits apply to accepted sends:
 
-| Limit | Amount |
-| --- | --- |
-| Message | 4,000 characters |
-| Forwarded answer | 8,000 characters |
-| Unfinished exchanges per sender | 3 |
-| Sends per sender in five minutes | 20, followed by a ten-minute cooldown |
-| Sends per pair of Bots in a local day | 30, counting both directions |
+| Limit                                 | Amount                                |
+| ------------------------------------- | ------------------------------------- |
+| Message                               | 4,000 characters                      |
+| Forwarded answer                      | 8,000 characters                      |
+| Unfinished exchanges per sender       | 3                                     |
+| Sends per sender in five minutes      | 20, followed by a ten-minute cooldown |
+| Sends per pair of Bots in a local day | 30, counting both directions          |
 
 Refused attempts do not spend a quota slot; an accepted exchange that later fails still counts. A recipient that is paused, has no model or is over budget is refused before a new delivery is accepted.
 

@@ -50,10 +50,13 @@ test("an invalid default field keeps its default and the valid fields survive", 
     autoShow: false,
     linkOpening: "browser",
   });
-  assert.deepEqual([...parsed.workspaceAccess], [
-    ["ws-1", "allow"],
-    ["ws-2", "off"],
-  ]);
+  assert.deepEqual(
+    [...parsed.workspaceAccess],
+    [
+      ["ws-1", "allow"],
+      ["ws-2", "off"],
+    ],
+  );
 });
 
 test("a legacy link target still migrates beside other saved defaults", () => {

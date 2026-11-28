@@ -44,7 +44,14 @@ export function BotChatNamePill({
       aria-controls={BOT_PANEL_ID}
       onClick={onOpenProfile}
     >
-      <BotAvatar botId={bot.id} avatar={bot.avatar} name={bot.name} photoLoading="immediate" size="small" state={avatarState === "idle" ? undefined : avatarState} />
+      <BotAvatar
+        botId={bot.id}
+        avatar={bot.avatar}
+        name={bot.name}
+        photoLoading="immediate"
+        size="small"
+        state={avatarState === "idle" ? undefined : avatarState}
+      />
       <span className="truncate text-strong font-medium">{bot.name}</span>
     </Button>
   );

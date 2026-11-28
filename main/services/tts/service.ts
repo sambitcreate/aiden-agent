@@ -89,11 +89,22 @@ export interface TtsUsageReport {
 export function ttsUsageRecord(report: TtsUsageReport): UsageRequestRecord {
   const known = report.inputTokens !== null && report.outputTokens !== null;
   return {
-    source: "text-to-speech", providerId: "google", providerLabel: "Google",
-    modelId: report.model, modelLabel: report.model, local: false,
-    status: report.status, costStatus: "unavailable",
-    tokens: known ? { ...emptyUsageTokens(), input: report.inputTokens!, output: report.outputTokens!,
-      total: report.inputTokens! + report.outputTokens! } : null,
+    source: "text-to-speech",
+    providerId: "google",
+    providerLabel: "Google",
+    modelId: report.model,
+    modelLabel: report.model,
+    local: false,
+    status: report.status,
+    costStatus: "unavailable",
+    tokens: known
+      ? {
+          ...emptyUsageTokens(),
+          input: report.inputTokens!,
+          output: report.outputTokens!,
+          total: report.inputTokens! + report.outputTokens!,
+        }
+      : null,
   };
 }
 
@@ -246,14 +257,26 @@ export function createTtsService(deps: TtsServiceDeps) {
     const entries = soundbites(owner);
     const id = entries.get(identity);
     if (!id) {
-      if (entries.size >= 1024) throw new TtsStartError(safeError("quota", "This session has reached its speech limit."));
+      if (entries.size >= 1024)
+        throw new TtsStartError(safeError("quota", "This session has reached its speech limit."));
       return null;
     }
     const job = retainedJobs.get(id);
-    if (!job || job.phase !== "completed" ||
-      !Array.from({ length: job.totalSegments }, (_, index) => audioStore.has(id, index)).every(Boolean)) {
-      throw new TtsStartError(safeError("playback_unavailable",
-        "This soundbite is no longer available in this session. It will not be generated again automatically.", false, true));
+    if (
+      !job ||
+      job.phase !== "completed" ||
+      !Array.from({ length: job.totalSegments }, (_, index) => audioStore.has(id, index)).every(
+        Boolean,
+      )
+    ) {
+      throw new TtsStartError(
+        safeError(
+          "playback_unavailable",
+          "This soundbite is no longer available in this session. It will not be generated again automatically.",
+          false,
+          true,
+        ),
+      );
     }
     reservation.attach(job);
     emitJob(job);
@@ -321,10 +344,17 @@ export function createTtsService(deps: TtsServiceDeps) {
   }
 
   function reserveStart(owner: TtsOwner) {
-    if (owner.kind === "remote" &&
+    if (
+      owner.kind === "remote" &&
       ((activeJob && activeJob.ownerDocumentId !== owner.documentId) ||
-        (pendingOwnerId && pendingOwnerId !== owner.documentId))) {
-      throw new TtsStartError(safeError("playback_unavailable", "Read Aloud is in use on another device. Stop it there first."));
+        (pendingOwnerId && pendingOwnerId !== owner.documentId))
+    ) {
+      throw new TtsStartError(
+        safeError(
+          "playback_unavailable",
+          "Read Aloud is in use on another device. Stop it there first.",
+        ),
+      );
     }
     revokeStarts();
     cancelActiveJob("replaced");
@@ -452,15 +482,27 @@ export function createTtsService(deps: TtsServiceDeps) {
         const segmentIndex = job.nextSegmentToSynthesize;
         job.phase = "generating";
         emitJob(job);
-        const body = buildTtsInteractionBody({ model: input.model, transcript: segment,
-          voice: input.voice, style: input.style });
+        const body = buildTtsInteractionBody({
+          model: input.model,
+          transcript: segment,
+          voice: input.voice,
+          style: input.style,
+        });
         let accounted = false;
-        const account = (status: TtsUsageReport["status"], usage?: TtsUnarySynthesisResult["usage"]) => {
+        const account = (
+          status: TtsUsageReport["status"],
+          usage?: TtsUnarySynthesisResult["usage"],
+        ) => {
           if (accounted) return;
           accounted = true;
-          deps.recordUsage?.({ kind: job.kind, model: input.model, status,
-            inputTokens: usage?.inputTokens ?? null, outputTokens: usage?.outputTokens ?? null,
-            usageKnown: usage?.inputTokens != null && usage?.outputTokens != null });
+          deps.recordUsage?.({
+            kind: job.kind,
+            model: input.model,
+            status,
+            inputTokens: usage?.inputTokens ?? null,
+            outputTokens: usage?.outputTokens ?? null,
+            usageKnown: usage?.inputTokens != null && usage?.outputTokens != null,
+          });
         };
         job.settleRequest = account;
         // Per-segment request lifetime: pauses do not consume this budget.
@@ -488,7 +530,11 @@ export function createTtsService(deps: TtsServiceDeps) {
           if (job.terminal()) return;
           try {
             for (const [id, retained] of retainedJobs) {
-              if (audioStore.retainedBytes + audio.audio.bytes.byteLength <= TTS_LIMITS.sessionAudioMaxBytes) break;
+              if (
+                audioStore.retainedBytes + audio.audio.bytes.byteLength <=
+                TTS_LIMITS.sessionAudioMaxBytes
+              )
+                break;
               if (retained === activeJob) continue;
               audioStore.releaseJob(id);
               retainedJobs.delete(id);
@@ -509,7 +555,6 @@ export function createTtsService(deps: TtsServiceDeps) {
           job.nextSegmentToSynthesize += 1;
           if (!job.paused) job.phase = "buffering";
           emitJob(job);
-
         } catch (error) {
           if (job.terminal()) return;
           if (job.signal.aborted) {
@@ -580,9 +625,18 @@ export function createTtsService(deps: TtsServiceDeps) {
       );
       await ensureSpeechTextParser();
       reservation.assertCurrent();
-      const identity = JSON.stringify(["read-aloud", request.source.chatId,
-        request.source.messageId, request.source.sourceRevision, settings.model, voice,
-        deliveryStyle(settings), settings.reading.inlineCode, settings.reading.fencedCode, 1]);
+      const identity = JSON.stringify([
+        "read-aloud",
+        request.source.chatId,
+        request.source.messageId,
+        request.source.sourceRevision,
+        settings.model,
+        voice,
+        deliveryStyle(settings),
+        settings.reading.inlineCode,
+        settings.reading.fencedCode,
+        1,
+      ]);
       const existing = replay(owner, identity, reservation);
       if (existing) return existing;
       let preparation;
@@ -740,7 +794,11 @@ export function createTtsService(deps: TtsServiceDeps) {
         return previous.promise.then((snapshot) =>
           activeJob?.id === snapshot.jobId
             ? activeJob.snapshot()
-            : retainedJobs.get(snapshot.jobId)?.snapshot() ?? { ...snapshot, phase: "cancelled", readySegments: 0 },
+            : (retainedJobs.get(snapshot.jobId)?.snapshot() ?? {
+                ...snapshot,
+                phase: "cancelled",
+                readySegments: 0,
+              }),
         );
       }
       // Fail closed at the bound instead of evicting an ID that could be retried.
@@ -766,7 +824,14 @@ export function createTtsService(deps: TtsServiceDeps) {
         reservation.assertCurrent();
         const { settings } = resolved;
         const voice = resolveProviderVoice(settings);
-        const identity = JSON.stringify(["preview", TTS_PREVIEW_SENTENCE, settings.model, voice, deliveryStyle(settings), 1]);
+        const identity = JSON.stringify([
+          "preview",
+          TTS_PREVIEW_SENTENCE,
+          settings.model,
+          voice,
+          deliveryStyle(settings),
+          1,
+        ]);
         const existing = replay(owner, identity, reservation);
         if (existing) return existing;
         const job = new TtsJob({
@@ -795,19 +860,27 @@ export function createTtsService(deps: TtsServiceDeps) {
 
     jobStatus(owner: TtsOwner, jobId: string): TtsJobSnapshot | null {
       const job = activeJob?.id === jobId ? activeJob : retainedJobs.get(jobId);
-      return !owner.isDestroyed() && job?.ownerDocumentId === owner.documentId ? job.snapshot() : null;
+      return !owner.isDestroyed() && job?.ownerDocumentId === owner.documentId
+        ? job.snapshot()
+        : null;
     },
 
     readAudio(owner: TtsOwner, jobId: string, segment: number, offset: number, maxBytes: number) {
       const job = activeJob?.id === jobId ? activeJob : retainedJobs.get(jobId);
-      if (owner.isDestroyed() || !job || job.id !== jobId || job.ownerDocumentId !== owner.documentId) {
+      if (
+        owner.isDestroyed() ||
+        !job ||
+        job.id !== jobId ||
+        job.ownerDocumentId !== owner.documentId
+      ) {
         return null;
       }
       return audioStore.read(jobId, segment, offset, maxBytes);
     },
 
     stop(owner: TtsOwner): void {
-      if (activeJob?.ownerDocumentId !== owner.documentId && pendingOwnerId !== owner.documentId) return;
+      if (activeJob?.ownerDocumentId !== owner.documentId && pendingOwnerId !== owner.documentId)
+        return;
       revokeStarts();
       cancelActiveJob("stopped");
     },

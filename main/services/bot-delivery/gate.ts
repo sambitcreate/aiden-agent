@@ -17,25 +17,57 @@ export type BotDeliveryDecision =
   | { kind: "suppress"; reason: "daily_limit"; digestKey: string };
 
 /** Classes that count toward, and are limited by, the daily cap. */
-export const BOT_DELIVERY_COUNTED_CLASSES: ReadonlySet<BotDeliveryClass> = new Set(["routine_result", "peer_result", "proposal"]);
+export const BOT_DELIVERY_COUNTED_CLASSES: ReadonlySet<BotDeliveryClass> = new Set([
+  "routine_result",
+  "peer_result",
+  "proposal",
+]);
 
-interface WallClock { year: number; month: number; day: number; minutes: number }
+interface WallClock {
+  year: number;
+  month: number;
+  day: number;
+  minutes: number;
+}
 
 function wallClock(at: number, timeZone: string): WallClock {
   const parts = new Intl.DateTimeFormat("en-US", {
-    timeZone, hourCycle: "h23", year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit",
+    timeZone,
+    hourCycle: "h23",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
   }).formatToParts(new Date(at));
   const value = (type: string) => Number(parts.find((part) => part.type === type)?.value ?? 0);
-  return { year: value("year"), month: value("month"), day: value("day"), minutes: value("hour") * 60 + value("minute") };
+  return {
+    year: value("year"),
+    month: value("month"),
+    day: value("day"),
+    minutes: value("hour") * 60 + value("minute"),
+  };
 }
 
 /** The UTC instant of a wall-clock time in `timeZone`, settling DST by re-checking the offset. */
-export function zonedInstant(year: number, month: number, day: number, minutes: number, timeZone: string): number {
+export function zonedInstant(
+  year: number,
+  month: number,
+  day: number,
+  minutes: number,
+  timeZone: string,
+): number {
   const guess = Date.UTC(year, month - 1, day, Math.floor(minutes / 60), minutes % 60);
   let instant = guess;
   for (let pass = 0; pass < 3; pass += 1) {
     const seen = wallClock(instant, timeZone);
-    const seenUtc = Date.UTC(seen.year, seen.month - 1, seen.day, Math.floor(seen.minutes / 60), seen.minutes % 60);
+    const seenUtc = Date.UTC(
+      seen.year,
+      seen.month - 1,
+      seen.day,
+      Math.floor(seen.minutes / 60),
+      seen.minutes % 60,
+    );
     const drift = seenUtc - guess;
     if (drift === 0) break;
     instant -= drift;
@@ -64,7 +96,13 @@ export function quietHoursEnd(settings: BotInterruptions, at: number, timeZone: 
   const today = wallClock(at, timeZone);
   for (let offset = 0; offset < 3; offset += 1) {
     const date = new Date(Date.UTC(today.year, today.month - 1, today.day + offset));
-    const candidate = zonedInstant(date.getUTCFullYear(), date.getUTCMonth() + 1, date.getUTCDate(), end, timeZone);
+    const candidate = zonedInstant(
+      date.getUTCFullYear(),
+      date.getUTCMonth() + 1,
+      date.getUTCDate(),
+      end,
+      timeZone,
+    );
     if (candidate > at) return candidate;
   }
   return at + 24 * 3_600_000;
@@ -91,7 +129,11 @@ export function decideBotDelivery(input: {
   }
   if (input.class === "issue") return { kind: "now" };
   if (input.sentToday >= input.settings.dailyLimit) {
-    return { kind: "suppress", reason: "daily_limit", digestKey: `digest:limit:${localDay(input.now, input.timeZone).key}` };
+    return {
+      kind: "suppress",
+      reason: "daily_limit",
+      digestKey: `digest:limit:${localDay(input.now, input.timeZone).key}`,
+    };
   }
   return { kind: "now" };
 }
@@ -102,11 +144,15 @@ export function createBotDeliveryGate(deps: {
   timeZone(): string;
 }): BotDeliveryGate {
   return {
-    reviewHeld(input, now) { return this.decide(input, now); },
+    reviewHeld(input, now) {
+      return this.decide(input, now);
+    },
     async quietUntil(botId, now) {
       const timeZone = deps.timeZone();
       const settings = await deps.settings(botId);
-      return inQuietHours(settings, now, timeZone) ? quietHoursEnd(settings, now, timeZone) : undefined;
+      return inQuietHours(settings, now, timeZone)
+        ? quietHoursEnd(settings, now, timeZone)
+        : undefined;
     },
     async decide(input: BotDeliveryInput, now: number) {
       const timeZone = deps.timeZone();
@@ -114,7 +160,14 @@ export function createBotDeliveryGate(deps: {
       const sentToday = BOT_DELIVERY_COUNTED_CLASSES.has(input.class)
         ? await deps.sentToday(input.botId, localDay(now, timeZone).start, now)
         : 0;
-      return decideBotDelivery({ settings, class: input.class, botId: input.botId, now, timeZone, sentToday });
+      return decideBotDelivery({
+        settings,
+        class: input.class,
+        botId: input.botId,
+        now,
+        timeZone,
+        sentToday,
+      });
     },
   };
 }
@@ -124,11 +177,20 @@ export function createBotDeliveryGate(deps: {
  * except that rows sent inside one "While you were away" digest count once.
  * Suppressed rows never count. Held rows count on the day of their actual release.
  */
-export function countedToday(rows: readonly BotDeliveryRow[], dayStart: number, now: number): number {
+export function countedToday(
+  rows: readonly BotDeliveryRow[],
+  dayStart: number,
+  now: number,
+): number {
   const digests = new Set<string>();
   let count = 0;
   for (const row of rows) {
-    if (!BOT_DELIVERY_COUNTED_CLASSES.has(row.class) || row.suppressed === true || row.quiet === true) continue;
+    if (
+      !BOT_DELIVERY_COUNTED_CLASSES.has(row.class) ||
+      row.suppressed === true ||
+      row.quiet === true
+    )
+      continue;
     const visibleAt = deliveryVisibleAt(row);
     if (visibleAt === undefined || visibleAt < dayStart || visibleAt > now) continue;
     if (row.coveredBy !== undefined) digests.add(row.coveredBy);

@@ -10,10 +10,19 @@
 
 import type { AgentMessage, AgentTool } from "@earendil-works/pi-agent-core";
 import type { BotDefinition } from "../../renderer/shared/bots.js";
-import { applyCustomModelToolPolicy, type CustomModelOptions } from "../../renderer/shared/custom-model-options.js";
+import {
+  applyCustomModelToolPolicy,
+  type CustomModelOptions,
+} from "../../renderer/shared/custom-model-options.js";
 import type { BotManagedWorkspaceResolution } from "./bot-managed-workspace-core.js";
-import { withBotRuntimeInstructions, type BotWorkspacePromptAuthority } from "./bot-system-prompt.js";
-import { buildSystemPromptWithSections, type ChatSystemPromptPermission } from "./chat-system-prompt.js";
+import {
+  withBotRuntimeInstructions,
+  type BotWorkspacePromptAuthority,
+} from "./bot-system-prompt.js";
+import {
+  buildSystemPromptWithSections,
+  type ChatSystemPromptPermission,
+} from "./chat-system-prompt.js";
 import { MEMORY_EXTENSION_ID } from "./memory-context.js";
 import { createOnDemandTools, type OnDemandTools } from "./on-demand-tools.js";
 import {
@@ -133,26 +142,32 @@ export function assembleChatPrompt(input: ChatPromptAssemblyInput): ChatPromptAs
   const contributions = applyCustomModelToolPolicy(resolved, input.modelOptions);
   const promptSections = {
     skills: (input.baseSkills ?? "") + extensionSkillsPrompt(resolved.extensions),
-    memory: resolved.extensions
-      .find((extension) => extension.id === MEMORY_EXTENSION_ID)
-      ?.volatileSystemPrompt?.trim() ?? "",
+    memory:
+      resolved.extensions
+        .find((extension) => extension.id === MEMORY_EXTENSION_ID)
+        ?.volatileSystemPrompt?.trim() ?? "",
     "bot-instructions": botPrompt.slice(input.basePrompt.length),
   };
   // Freeze only the already-admitted MCP inventory. The provider sees the
   // discovery/script tools; nested calls still use the ordinary host gates.
   const { declared, deferred: deferredTools } = partitionPiCodemodeTools(contributions.tools);
-  const onDemandTools = !bot && input.allowOnDemandTools && declared.some((tool) => tool.name === "codemode")
-    ? createOnDemandTools(declared)
-    : undefined;
+  const onDemandTools =
+    !bot && input.allowOnDemandTools && declared.some((tool) => tool.name === "codemode")
+      ? createOnDemandTools(declared)
+      : undefined;
   // Held-back tools a script can call join the callable inventory the way
   // late MCP tools do, so loading one later never collides with the frozen deferred set.
-  const onDemandCallable = onDemandTools?.onDemand.filter((tool) => isPiCodemodeCallable(tool)) ?? [];
+  const onDemandCallable =
+    onDemandTools?.onDemand.filter((tool) => isPiCodemodeCallable(tool)) ?? [];
   return {
     basePrompt: input.basePrompt,
     botPrompt,
     contributions,
     systemPrompt: contributions.systemPrompt,
-    stableHead: stableHeadOf(contributions.systemPrompt, extensionVolatileSystemPrompt(contributions.extensions)),
+    stableHead: stableHeadOf(
+      contributions.systemPrompt,
+      extensionVolatileSystemPrompt(contributions.extensions),
+    ),
     promptSections,
     declared,
     deferredTools,

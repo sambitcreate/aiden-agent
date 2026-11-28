@@ -94,10 +94,19 @@ test("native Bot inbox writer rejects the wrong managed-home inode before creati
 test("inbox harness does not accept unrelated stdin errors, success, or a signal as rejection", () => {
   const pipeError = Object.assign(new Error("closed pipe"), { code: "EPIPE" });
   const otherError = Object.assign(new Error("other stdin failure"), { code: "EIO" });
-  for (const result of [{ code: 0, signal: null }, { code: null, signal: "SIGTERM" }]) {
-    assert.throws(() => validateStdinOutcome(pipeError, result), (error) => error === pipeError);
+  for (const result of [
+    { code: 0, signal: null },
+    { code: null, signal: "SIGTERM" },
+  ]) {
+    assert.throws(
+      () => validateStdinOutcome(pipeError, result),
+      (error) => error === pipeError,
+    );
   }
-  assert.throws(() => validateStdinOutcome(otherError, { code: 1, signal: null }), (error) => error === otherError);
+  assert.throws(
+    () => validateStdinOutcome(otherError, { code: 1, signal: null }),
+    (error) => error === otherError,
+  );
 });
 
 test("native Bot inbox writer preserves early rejection when stdin gets EPIPE", async (t) => {
@@ -123,10 +132,7 @@ test("native Bot inbox writer rejects extra stdin bytes and removes the leaf", a
   assert.equal(result.code, 1);
   assert.equal(result.signal, null);
   assert.equal(result.stdout, "");
-  assert.deepEqual(
-    await readdir(path.join(root, ".aiden", "telegram-inbox", "default")),
-    [],
-  );
+  assert.deepEqual(await readdir(path.join(root, ".aiden", "telegram-inbox", "default")), []);
 });
 
 test("native Bot inbox writer rejects values above Telegram's 20 MB ceiling", async (t) => {

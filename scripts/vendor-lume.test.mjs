@@ -2,7 +2,17 @@
 
 import assert from "node:assert/strict";
 import { existsSync } from "node:fs";
-import { mkdir, mkdtemp, readFile, readdir, rm, stat, symlink, truncate, writeFile } from "node:fs/promises";
+import {
+  mkdir,
+  mkdtemp,
+  readFile,
+  readdir,
+  rm,
+  stat,
+  symlink,
+  truncate,
+  writeFile,
+} from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -30,7 +40,8 @@ function tarEntry({ name, body = "", type = "0", linkName = "" }) {
   const header = Buffer.alloc(512);
   const content = Buffer.from(body, "utf8");
   const field = (value, offset, length) => header.write(value, offset, length, "utf8");
-  const octal = (value, offset, length) => field(value.toString(8).padStart(length - 1, "0"), offset, length - 1);
+  const octal = (value, offset, length) =>
+    field(value.toString(8).padStart(length - 1, "0"), offset, length - 1);
   field(name, 0, 100);
   octal(type === "5" ? 0o755 : 0o644, 100, 8);
   octal(0, 108, 8);
@@ -51,8 +62,10 @@ function tarEntry({ name, body = "", type = "0", linkName = "" }) {
 
 /** The pinned release layout with tiny stand-in contents. */
 function releaseEntries(overrides = {}) {
-  return LUME_ARCHIVE_MEMBERS.map((name) =>
-    overrides[name] ?? (name.endsWith("/") ? { name, type: "5" } : { name, body: `contents of ${name}` }),
+  return LUME_ARCHIVE_MEMBERS.map(
+    (name) =>
+      overrides[name] ??
+      (name.endsWith("/") ? { name, type: "5" } : { name, body: `contents of ${name}` }),
   );
 }
 
@@ -102,7 +115,10 @@ const pinnedHash = async () => LUME_ARTIFACT_PROVENANCE.binarySha256;
 
 test("checked-in Lume provenance exactly matches the compiled pins", async () => {
   const checkedIn = JSON.parse(
-    await readFile(new URL("../resources/bot-computers/lume-artifact.json", import.meta.url), "utf8"),
+    await readFile(
+      new URL("../resources/bot-computers/lume-artifact.json", import.meta.url),
+      "utf8",
+    ),
   );
   assert.equal(validateArtifact(checkedIn), LUME_ARTIFACT_PROVENANCE);
   assert.deepEqual(checkedIn, LUME_ARTIFACT_PROVENANCE);
@@ -112,7 +128,10 @@ test("Lume provenance validation rejects missing, additional and drifted fields"
   const missing = { ...LUME_ARTIFACT_PROVENANCE };
   delete missing.binarySha256;
   assert.throws(() => validateArtifact(missing), /provenance keys differ/);
-  assert.throws(() => validateArtifact({ ...LUME_ARTIFACT_PROVENANCE, extra: 1 }), /provenance keys differ/);
+  assert.throws(
+    () => validateArtifact({ ...LUME_ARTIFACT_PROVENANCE, extra: 1 }),
+    /provenance keys differ/,
+  );
   for (const field of LUME_ARTIFACT_KEYS) {
     await t.test(field, () => {
       const expected = LUME_ARTIFACT_PROVENANCE[field];
@@ -135,54 +154,91 @@ test("the archive listing must be exactly the pinned release, in any order", () 
     LUME_ARCHIVE_MEMBERS.map((name) => (name === "lume" ? "bin/lume" : name)),
   ];
   for (const listing of cases) {
-    assert.throws(() => assertLumeArchiveListing(listing.join("\n")), /differs from the pinned release/);
+    assert.throws(
+      () => assertLumeArchiveListing(listing.join("\n")),
+      /differs from the pinned release/,
+    );
   }
-  for (const unsafe of ["/lume.app/x", "../lume.app", "lume.app/../../evil", "lume.app\\x", "./lume", "a\0b"]) {
-    assert.throws(() => assertLumeArchiveListing([...LUME_ARCHIVE_MEMBERS, unsafe].join("\n")), /unsafe path/);
+  for (const unsafe of [
+    "/lume.app/x",
+    "../lume.app",
+    "lume.app/../../evil",
+    "lume.app\\x",
+    "./lume",
+    "a\0b",
+  ]) {
+    assert.throws(
+      () => assertLumeArchiveListing([...LUME_ARCHIVE_MEMBERS, unsafe].join("\n")),
+      /unsafe path/,
+    );
   }
 });
 
-test("extraction stages only lume.app, never the wrapper script", { skip: process.platform === "win32" }, async (t) => {
-  const root = await tempRoot(t, "extract");
-  const archive = await writeTarball(root, releaseEntries());
-  const staging = path.join(root, "staging");
-  await mkdir(staging);
-  const app = await extractLumeApp(archive, staging);
-  assert.equal(app, path.join(staging, "lume.app"));
-  assert.deepEqual(await readdir(staging), ["lume.app"]);
-  assert.equal(
-    await readFile(path.join(app, "Contents", "MacOS", "lume"), "utf8"),
-    "contents of lume.app/Contents/MacOS/lume",
-  );
-  await assertExactLumeAppTree(app);
-});
+test(
+  "extraction stages only lume.app, never the wrapper script",
+  { skip: process.platform === "win32" },
+  async (t) => {
+    const root = await tempRoot(t, "extract");
+    const archive = await writeTarball(root, releaseEntries());
+    const staging = path.join(root, "staging");
+    await mkdir(staging);
+    const app = await extractLumeApp(archive, staging);
+    assert.equal(app, path.join(staging, "lume.app"));
+    assert.deepEqual(await readdir(staging), ["lume.app"]);
+    assert.equal(
+      await readFile(path.join(app, "Contents", "MacOS", "lume"), "utf8"),
+      "contents of lume.app/Contents/MacOS/lume",
+    );
+    await assertExactLumeAppTree(app);
+  },
+);
 
-test("extraction refuses a symlink inside the bundle and unsafe members", { skip: process.platform === "win32" }, async (t) => {
-  const root = await tempRoot(t, "unsafe");
-  const outside = path.join(root, "outside");
-  await writeFile(outside, "not lume");
-  const symlinked = path.join(root, "symlinked");
-  await mkdir(path.join(symlinked, "staging"), { recursive: true });
-  const symlinkArchive = await writeTarball(
-    symlinked,
-    releaseEntries({
-      "lume.app/Contents/MacOS/lume": { name: "lume.app/Contents/MacOS/lume", type: "2", linkName: outside },
-    }),
-  );
-  await assert.rejects(extractLumeApp(symlinkArchive, path.join(symlinked, "staging")), /tree differs/);
+test(
+  "extraction refuses a symlink inside the bundle and unsafe members",
+  { skip: process.platform === "win32" },
+  async (t) => {
+    const root = await tempRoot(t, "unsafe");
+    const outside = path.join(root, "outside");
+    await writeFile(outside, "not lume");
+    const symlinked = path.join(root, "symlinked");
+    await mkdir(path.join(symlinked, "staging"), { recursive: true });
+    const symlinkArchive = await writeTarball(
+      symlinked,
+      releaseEntries({
+        "lume.app/Contents/MacOS/lume": {
+          name: "lume.app/Contents/MacOS/lume",
+          type: "2",
+          linkName: outside,
+        },
+      }),
+    );
+    await assert.rejects(
+      extractLumeApp(symlinkArchive, path.join(symlinked, "staging")),
+      /tree differs/,
+    );
 
-  const traversal = path.join(root, "traversal");
-  await mkdir(path.join(traversal, "staging"), { recursive: true });
-  const traversalArchive = await writeTarball(traversal, [...releaseEntries(), { name: "../escaped", body: "x" }]);
-  await assert.rejects(extractLumeApp(traversalArchive, path.join(traversal, "staging")), /unsafe path/);
-  assert.equal(existsSync(path.join(root, "escaped")), false);
-  assert.deepEqual(await readdir(path.join(traversal, "staging")), []);
-});
+    const traversal = path.join(root, "traversal");
+    await mkdir(path.join(traversal, "staging"), { recursive: true });
+    const traversalArchive = await writeTarball(traversal, [
+      ...releaseEntries(),
+      { name: "../escaped", body: "x" },
+    ]);
+    await assert.rejects(
+      extractLumeApp(traversalArchive, path.join(traversal, "staging")),
+      /unsafe path/,
+    );
+    assert.equal(existsSync(path.join(root, "escaped")), false);
+    assert.deepEqual(await readdir(path.join(traversal, "staging")), []);
+  },
+);
 
 test("vendored Lume validation checks size and hash before running anything", async (t) => {
   const { app } = await stagedFixtureApp(t, "hash");
   const wrongHash = recordingRunner();
-  assert.equal(await validateVendoredLume(app, wrongHash.runner, async () => "0".repeat(64)), false);
+  assert.equal(
+    await validateVendoredLume(app, wrongHash.runner, async () => "0".repeat(64)),
+    false,
+  );
   assert.equal(wrongHash.calls.length, 0);
 
   await truncate(path.join(app, "Contents", "MacOS", "lume"), 1024);
@@ -205,7 +261,12 @@ test("vendored Lume validation requires the bundle identity, the deep upstream s
   assert.equal(await validateVendoredLume(app, valid.runner, pinnedHash), true);
   assert.deepEqual(
     valid.calls.map((call) => call.command),
-    ["/usr/bin/plutil", "/usr/bin/plutil", "/usr/bin/codesign", path.join(app, "Contents", "MacOS", "lume")],
+    [
+      "/usr/bin/plutil",
+      "/usr/bin/plutil",
+      "/usr/bin/codesign",
+      path.join(app, "Contents", "MacOS", "lume"),
+    ],
   );
   const codesign = valid.calls[2].args;
   assert.ok(codesign.includes("--deep") && codesign.includes("--strict"));
@@ -222,15 +283,25 @@ test("vendored Lume validation requires the bundle identity, the deep upstream s
   assert.equal(env.DO_NOT_TRACK, "1");
   assert.notEqual(env.HOME, os.homedir());
   assert.ok(env.HOME.startsWith(os.tmpdir()));
-  assert.equal(existsSync(env.HOME), false, "the throwaway HOME is removed after the version check");
+  assert.equal(
+    existsSync(env.HOME),
+    false,
+    "the throwaway HOME is removed after the version check",
+  );
 
   const unsigned = recordingRunner({ codesignFails: true });
   assert.equal(await validateVendoredLume(app, unsigned.runner, pinnedHash), false);
-  assert.equal(unsigned.calls.some((call) => call.args[0] === "--version"), false);
+  assert.equal(
+    unsigned.calls.some((call) => call.args[0] === "--version"),
+    false,
+  );
 
   const otherBundle = recordingRunner({ CFBundleIdentifier: "com.example.lume" });
   assert.equal(await validateVendoredLume(app, otherBundle.runner, pinnedHash), false);
-  assert.equal(otherBundle.calls.some((call) => call.command === "/usr/bin/codesign"), false);
+  assert.equal(
+    otherBundle.calls.some((call) => call.command === "/usr/bin/codesign"),
+    false,
+  );
 
   const otherVersion = recordingRunner({ version: "0.6.2" });
   assert.equal(await validateVendoredLume(app, otherVersion.runner, pinnedHash), false);
@@ -245,7 +316,10 @@ test("install keeps the previous bundle when the new one fails final verificatio
   await mkdir(path.join(staged, "Contents"), { recursive: true });
   await writeFile(path.join(staged, "Contents", "marker"), "new");
 
-  await assert.rejects(installLumeApp(staged, destination, async () => false), /staged lume\.app failed/);
+  await assert.rejects(
+    installLumeApp(staged, destination, async () => false),
+    /staged lume\.app failed/,
+  );
   assert.equal(await readFile(path.join(destination, "Contents", "marker"), "utf8"), "previous");
 
   let checks = 0;
@@ -273,7 +347,10 @@ test("vendoring refuses Linux and Intel hosts before any download", async () => 
     ["linux", "arm64"],
     ["darwin", "x64"],
   ]) {
-    await assert.rejects(vendorLume({ platform, arch, fetchImpl, log: () => {} }), /only on an Apple silicon Mac/);
+    await assert.rejects(
+      vendorLume({ platform, arch, fetchImpl, log: () => {} }),
+      /only on an Apple silicon Mac/,
+    );
   }
 });
 
@@ -310,7 +387,10 @@ test("vendoring refuses an archive with the wrong checksum and installs nothing"
       hashBinary: pinnedHash,
       fetchImpl: async (url, init) => {
         requested.push({ url, redirect: init.redirect });
-        return new Response(tarball, { status: 200, headers: { "content-length": String(tarball.length) } });
+        return new Response(tarball, {
+          status: 200,
+          headers: { "content-length": String(tarball.length) },
+        });
       },
       log: () => {},
     }),
@@ -318,7 +398,11 @@ test("vendoring refuses an archive with the wrong checksum and installs nothing"
   );
   assert.deepEqual(requested, [{ url: LUME_ARTIFACT_PROVENANCE.url, redirect: "follow" }]);
   assert.equal(existsSync(destination), false);
-  assert.deepEqual(await readdir(path.dirname(destination)), [], "the staging directory is removed");
+  assert.deepEqual(
+    await readdir(path.dirname(destination)),
+    [],
+    "the staging directory is removed",
+  );
 });
 
 test("the archive download is capped, private, and never overwrites a file", async (t) => {
@@ -330,7 +414,9 @@ test("the archive download is capped, private, and never overwrites a file", asy
   });
   assert.equal((await stat(archive)).mode & 0o777, 0o600);
   await assert.rejects(
-    downloadLumeArchive(archive, { fetchImpl: async () => new Response(Buffer.from("again"), { status: 200 }) }),
+    downloadLumeArchive(archive, {
+      fetchImpl: async () => new Response(Buffer.from("again"), { status: 200 }),
+    }),
     /EEXIST/,
   );
 
@@ -338,7 +424,8 @@ test("the archive download is capped, private, and never overwrites a file", asy
   await assert.rejects(
     downloadLumeArchive(declared, {
       maxBytes: 4,
-      fetchImpl: async () => new Response(Buffer.from("too large"), { status: 200, headers: { "content-length": "9" } }),
+      fetchImpl: async () =>
+        new Response(Buffer.from("too large"), { status: 200, headers: { "content-length": "9" } }),
     }),
     /exceeds 4 bytes/,
   );
@@ -348,7 +435,8 @@ test("the archive download is capped, private, and never overwrites a file", asy
   await assert.rejects(
     downloadLumeArchive(streamed, {
       maxBytes: 4,
-      fetchImpl: async () => new Response(Buffer.from("too large without a length"), { status: 200 }),
+      fetchImpl: async () =>
+        new Response(Buffer.from("too large without a length"), { status: 200 }),
     }),
     /exceeds 4 bytes/,
   );
@@ -360,11 +448,15 @@ test("the archive download is capped, private, and never overwrites a file", asy
   );
 });
 
-test("a symlinked lume.app is never treated as the vendored bundle", { skip: process.platform === "win32" }, async (t) => {
-  const { root, app } = await stagedFixtureApp(t, "symlink");
-  const link = path.join(root, "linked.app");
-  await symlink(app, link);
-  const { runner, calls } = recordingRunner();
-  assert.equal(await validateVendoredLume(link, runner, pinnedHash), false);
-  assert.equal(calls.length, 0);
-});
+test(
+  "a symlinked lume.app is never treated as the vendored bundle",
+  { skip: process.platform === "win32" },
+  async (t) => {
+    const { root, app } = await stagedFixtureApp(t, "symlink");
+    const link = path.join(root, "linked.app");
+    await symlink(app, link);
+    const { runner, calls } = recordingRunner();
+    assert.equal(await validateVendoredLume(link, runner, pinnedHash), false);
+    assert.equal(calls.length, 0);
+  },
+);

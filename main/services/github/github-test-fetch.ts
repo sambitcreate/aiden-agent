@@ -18,9 +18,13 @@ export type ScriptedResponder = (
 /** A response that never arrives unless the request is aborted. */
 export function hangUntilAborted(signal: AbortSignal): Promise<Response> {
   return new Promise((_resolve, reject) => {
-    signal.addEventListener("abort", () => reject(Object.assign(new Error("aborted"), { name: "AbortError" })), {
-      once: true,
-    });
+    signal.addEventListener(
+      "abort",
+      () => reject(Object.assign(new Error("aborted"), { name: "AbortError" })),
+      {
+        once: true,
+      },
+    );
   });
 }
 
@@ -73,8 +77,19 @@ export function fixedCredentials(tokens: Record<string, string>) {
       resolves.push(host);
       const token = tokens[host];
       return token
-        ? { ok: true as const, credential: { host, token, fingerprint: `${host}:${token}`, source: "environment" as const } }
-        : { ok: false as const, missing: { host, reason: "unauthenticated" as const, message: "Sign in." } };
+        ? {
+            ok: true as const,
+            credential: {
+              host,
+              token,
+              fingerprint: `${host}:${token}`,
+              source: "environment" as const,
+            },
+          }
+        : {
+            ok: false as const,
+            missing: { host, reason: "unauthenticated" as const, message: "Sign in." },
+          };
     },
     invalidate(host: string) {
       invalidated.push(host);

@@ -128,7 +128,9 @@ export function SidebarOrganizeMenuItems({
             onValueChange={pick(machineFilters, machines.onFilterChange)}
           >
             <DropdownMenuRadioItem value="all">All computers</DropdownMenuRadioItem>
-            <DropdownMenuRadioItem value="local">{localMachineLabel(platform)}</DropdownMenuRadioItem>
+            <DropdownMenuRadioItem value="local">
+              {localMachineLabel(platform)}
+            </DropdownMenuRadioItem>
             {machines.hosts.map((host) => (
               <DropdownMenuRadioItem key={host.id} value={`host:${host.id}`}>
                 <span className="min-w-0 truncate">{host.label}</span>

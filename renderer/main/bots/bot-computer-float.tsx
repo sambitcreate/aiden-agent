@@ -41,7 +41,12 @@ function readGeometry(): DeviceMiniPlayerGeometry {
 
 function writeGeometry(next: DeviceMiniPlayerGeometry): void {
   const current = readGeometry();
-  if (current.width === next.width && current.position?.x === next.position?.x && current.position?.y === next.position?.y) return;
+  if (
+    current.width === next.width &&
+    current.position?.x === next.position?.x &&
+    current.position?.y === next.position?.y
+  )
+    return;
   stored = next;
   try {
     localStorage.setItem(BOT_COMPUTER_FLOAT_STORAGE_KEY, serializeDeviceMiniPlayerGeometry(next));
@@ -91,7 +96,14 @@ export function BotComputerFloat({
       dock={{ label: `Dock ${title} in the Bot panel`, title: "Dock in panel", onDock }}
       close={{ label: "Close floating computer", title: "Close floating computer", onClose }}
     >
-      <BotComputerView bot={bot} computer={computer} active={visible} variant="float" start={start} onScreen={setScreen} />
+      <BotComputerView
+        bot={bot}
+        computer={computer}
+        active={visible}
+        variant="float"
+        start={start}
+        onScreen={setScreen}
+      />
     </FloatingPlayerFrame>,
     document.body,
   );

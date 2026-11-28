@@ -35,12 +35,14 @@ async function settingsSnapshot(): Promise<AidenRemoteSettingsSnapshot> {
     status: await runtime.service.status(),
     devices: await runtime.state.listDevices(),
     ...(pairing ? { pairing } : {}),
-    approvedRoots: state.approvedRoots.filter((root) => !root.botsOnly).map((root) => ({
-      id: root.id,
-      label: root.label,
-      folderPath: root.folderPath,
-      createdAt: root.createdAt,
-    })),
+    approvedRoots: state.approvedRoots
+      .filter((root) => !root.botsOnly)
+      .map((root) => ({
+        id: root.id,
+        label: root.label,
+        folderPath: root.folderPath,
+        createdAt: root.createdAt,
+      })),
   };
 }
 
@@ -48,7 +50,10 @@ export function registerAidenRemoteHandlers(): void {
   ipcMain.handle("remote:get", settingsSnapshot);
 
   ipcMain.handle("remote:getPendingQuestion", async (event, chatId: unknown) => {
-    const owner = rendererDocumentOwner(event, () => new Error("Questions require the active application document."));
+    const owner = rendererDocumentOwner(
+      event,
+      () => new Error("Questions require the active application document."),
+    );
     const question = (await getAidenRemoteRuntime()).pendingQuestionForChat(
       parseAidenRemoteScopedIdentifier(chatId),
     );
@@ -56,17 +61,23 @@ export function registerAidenRemoteHandlers(): void {
     return question ? { ...question, version: 1, source: "remote" } : null;
   });
 
-  ipcMain.handle("remote:respondQuestionFromHost", async (event, chatId: unknown, promptId: unknown, response: unknown) => {
-    const owner = rendererDocumentOwner(event, () => new Error("Questions require the active application document."));
-    const runtime = await getAidenRemoteRuntime();
-    if (owner.isDestroyed()) throw new Error("The renderer document is no longer active.");
-    const resolved = runtime.respondQuestionFromHost(
-      parseAidenRemoteScopedIdentifier(chatId),
-      parseAidenRemoteScopedIdentifier(promptId),
-      response,
-    );
-    return { status: resolved ? "answered" : "elsewhere" };
-  });
+  ipcMain.handle(
+    "remote:respondQuestionFromHost",
+    async (event, chatId: unknown, promptId: unknown, response: unknown) => {
+      const owner = rendererDocumentOwner(
+        event,
+        () => new Error("Questions require the active application document."),
+      );
+      const runtime = await getAidenRemoteRuntime();
+      if (owner.isDestroyed()) throw new Error("The renderer document is no longer active.");
+      const resolved = runtime.respondQuestionFromHost(
+        parseAidenRemoteScopedIdentifier(chatId),
+        parseAidenRemoteScopedIdentifier(promptId),
+        response,
+      );
+      return { status: resolved ? "answered" : "elsewhere" };
+    },
+  );
 
   ipcMain.handle("remote:getPendingApproval", async (event, chatId: unknown) => {
     const owner = rendererDocumentOwner(
@@ -114,9 +125,9 @@ export function registerAidenRemoteHandlers(): void {
   });
 
   ipcMain.handle("remote:setConnectionMode", async (_event, mode: unknown) => {
-    await (await getAidenRemoteRuntime()).service.setConnectionMode(
-      parseAidenRemoteConnectionMode(mode),
-    );
+    await (
+      await getAidenRemoteRuntime()
+    ).service.setConnectionMode(parseAidenRemoteConnectionMode(mode));
     return settingsSnapshot();
   });
 
@@ -153,28 +164,46 @@ export function registerAidenRemoteHandlers(): void {
   });
 
   ipcMain.handle("remote:tailscaleTakeOver", async (_event, token: unknown) => {
-    await (await getAidenRemoteRuntime()).service.takeOverTailscale(
-      parseAidenRemoteTakeoverToken(token),
-    );
+    await (
+      await getAidenRemoteRuntime()
+    ).service.takeOverTailscale(parseAidenRemoteTakeoverToken(token));
     return settingsSnapshot();
   });
 
   ipcMain.handle("remote:setupPairing", async (event, transport: unknown, expected: unknown) => {
-    const owner = rendererDocumentOwner(event, () => new Error("Phone setup requires the active application document."));
+    const owner = rendererDocumentOwner(
+      event,
+      () => new Error("Phone setup requires the active application document."),
+    );
     const selectedTransport = parseAidenRemoteTransport(transport);
-    if (!expected || typeof expected !== "object" || Array.isArray(expected)) throw new Error("Invalid phone setup review.");
+    if (!expected || typeof expected !== "object" || Array.isArray(expected))
+      throw new Error("Invalid phone setup review.");
     const review = expected as Record<string, unknown>;
-    if (typeof review.instanceId !== "string" || review.instanceId.length > 128
-      || typeof review.enabled !== "boolean") throw new Error("Invalid phone setup review.");
+    if (
+      typeof review.instanceId !== "string" ||
+      review.instanceId.length > 128 ||
+      typeof review.enabled !== "boolean"
+    )
+      throw new Error("Invalid phone setup review.");
     const connectionMode = parseAidenRemoteConnectionMode(review.connectionMode);
     const service = (await getAidenRemoteRuntime()).service;
     try {
-      const pairing = await service.setupPairing(selectedTransport, {
-        instanceId: review.instanceId, enabled: review.enabled, connectionMode,
-      }, () => !owner.isDestroyed());
-      return { ...pairing.bootstrap, pairingSessionId: pairing.sessionId,
-        qrPayload: pairing.qrPayload ?? service.pairingQrPayload(pairing.bootstrap, selectedTransport),
-        manualCode: pairing.manualCode };
+      const pairing = await service.setupPairing(
+        selectedTransport,
+        {
+          instanceId: review.instanceId,
+          enabled: review.enabled,
+          connectionMode,
+        },
+        () => !owner.isDestroyed(),
+      );
+      return {
+        ...pairing.bootstrap,
+        pairingSessionId: pairing.sessionId,
+        qrPayload:
+          pairing.qrPayload ?? service.pairingQrPayload(pairing.bootstrap, selectedTransport),
+        manualCode: pairing.manualCode,
+      };
     } catch (error) {
       if (error instanceof AidenRemoteTlsEndpointError) {
         return { ok: false as const, code: error.code, message: error.message };
@@ -191,8 +220,8 @@ export function registerAidenRemoteHandlers(): void {
       return {
         ...pairing.bootstrap,
         pairingSessionId: pairing.sessionId,
-        qrPayload: pairing.qrPayload
-          ?? service.pairingQrPayload(pairing.bootstrap, selectedTransport),
+        qrPayload:
+          pairing.qrPayload ?? service.pairingQrPayload(pairing.bootstrap, selectedTransport),
         manualCode: pairing.manualCode,
       };
     } catch (error) {
@@ -204,9 +233,9 @@ export function registerAidenRemoteHandlers(): void {
   });
 
   ipcMain.handle("remote:closePairing", async (_event, sessionId: unknown) => {
-    const closed = await (await getAidenRemoteRuntime()).service.closePairing(
-      parseIdentifier(sessionId, "pairing_"),
-    );
+    const closed = await (
+      await getAidenRemoteRuntime()
+    ).service.closePairing(parseIdentifier(sessionId, "pairing_"));
     return { closed };
   });
 
@@ -236,13 +265,15 @@ export function registerAidenRemoteHandlers(): void {
     try {
       await runtime.approvedRoots.addLocalFolder(selectedPath);
     } catch (error) {
-      if (!(error instanceof Error) || !error.message.includes("entire home directory")) throw error;
+      if (!(error instanceof Error) || !error.message.includes("entire home directory"))
+        throw error;
       const warning = parent
         ? await dialog.showMessageBox(parent, {
             type: "warning",
             title: "Approve your entire home folder?",
             message: "A paired device could browse every non-hidden folder in your home directory.",
-            detail: "Approve a smaller project folder when possible. Provider credentials and hidden/system folders remain excluded by policy.",
+            detail:
+              "Approve a smaller project folder when possible. Provider credentials and hidden/system folders remain excluded by policy.",
             buttons: ["Cancel", "Approve Home Folder"],
             defaultId: 0,
             cancelId: 0,
@@ -252,7 +283,8 @@ export function registerAidenRemoteHandlers(): void {
             type: "warning",
             title: "Approve your entire home folder?",
             message: "A paired device could browse every non-hidden folder in your home directory.",
-            detail: "Approve a smaller project folder when possible. Provider credentials and hidden/system folders remain excluded by policy.",
+            detail:
+              "Approve a smaller project folder when possible. Provider credentials and hidden/system folders remain excluded by policy.",
             buttons: ["Cancel", "Approve Home Folder"],
             defaultId: 0,
             cancelId: 0,

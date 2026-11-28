@@ -83,7 +83,12 @@ interface RulesFile {
   custom: StoredCustomRule[];
 }
 
-const EMPTY: RulesFile = Object.freeze({ version: FILE_VERSION, revision: 0, behaviors: {}, custom: [] }) as RulesFile;
+const EMPTY: RulesFile = Object.freeze({
+  version: FILE_VERSION,
+  revision: 0,
+  behaviors: {},
+  custom: [],
+}) as RulesFile;
 
 /** The rules file is there but doesn't parse, so what the person set is unknown. */
 export class BotRulesUnreadableError extends Error {
@@ -101,7 +106,12 @@ export class BotRulesUnavailableError extends Error {
 }
 
 function plainObject(value: unknown): value is Record<string, unknown> {
-  return value !== null && typeof value === "object" && !Array.isArray(value) && Object.getPrototypeOf(value) === Object.prototype;
+  return (
+    value !== null &&
+    typeof value === "object" &&
+    !Array.isArray(value) &&
+    Object.getPrototypeOf(value) === Object.prototype
+  );
 }
 
 function exactKeys(value: Record<string, unknown>, keys: readonly string[]): boolean {
@@ -121,13 +131,18 @@ export function validCustomRuleText(text: unknown): string | undefined {
 
 /** The file exactly as written by this store, or `undefined`. */
 function parseRulesFile(value: unknown): RulesFile | undefined {
-  if (!plainObject(value) || !exactKeys(value, ["version", "revision", "behaviors", "custom"])) return undefined;
+  if (!plainObject(value) || !exactKeys(value, ["version", "revision", "behaviors", "custom"]))
+    return undefined;
   if (value.version !== FILE_VERSION) return undefined;
   if (!Number.isSafeInteger(value.revision) || (value.revision as number) < 1) return undefined;
   if (!plainObject(value.behaviors) || !Array.isArray(value.custom)) return undefined;
   const behaviors: RulesFile["behaviors"] = {};
   for (const [key, behavior] of Object.entries(value.behaviors)) {
-    if (!(BOT_CHANGEABLE_ACTION_CLASSES as readonly string[]).includes(key) || !isBotRuleBehavior(behavior)) return undefined;
+    if (
+      !(BOT_CHANGEABLE_ACTION_CLASSES as readonly string[]).includes(key) ||
+      !isBotRuleBehavior(behavior)
+    )
+      return undefined;
     behaviors[key as BotChangeableActionClass] = behavior;
   }
   if (value.custom.length > BOT_CUSTOM_RULES_MAX) return undefined;
@@ -135,9 +150,15 @@ function parseRulesFile(value: unknown): RulesFile | undefined {
   const custom: StoredCustomRule[] = [];
   for (const entry of value.custom) {
     if (!plainObject(entry) || !exactKeys(entry, ["id", "text", "behavior"])) return undefined;
-    if (typeof entry.id !== "string" || !BOT_CUSTOM_RULE_ID_PATTERN.test(entry.id) || ids.has(entry.id)) return undefined;
+    if (
+      typeof entry.id !== "string" ||
+      !BOT_CUSTOM_RULE_ID_PATTERN.test(entry.id) ||
+      ids.has(entry.id)
+    )
+      return undefined;
     const text = validCustomRuleText(entry.text);
-    if (text === undefined || text !== entry.text || !isBotRuleBehavior(entry.behavior)) return undefined;
+    if (text === undefined || text !== entry.text || !isBotRuleBehavior(entry.behavior))
+      return undefined;
     ids.add(entry.id);
     custom.push({ id: entry.id, text, behavior: entry.behavior });
   }
@@ -164,7 +185,12 @@ function viewOf(botId: string, stored: StoredRules): BotRulesView {
         ...rule,
         behavior: file.behaviors[rule.actionClass as BotChangeableActionClass] ?? rule.behavior,
       })),
-      ...file.custom.map((rule) => ({ id: rule.id, text: rule.text, behavior: rule.behavior, locked: false })),
+      ...file.custom.map((rule) => ({
+        id: rule.id,
+        text: rule.text,
+        behavior: rule.behavior,
+        locked: false,
+      })),
     ],
   };
 }
@@ -172,43 +198,62 @@ function viewOf(botId: string, stored: StoredRules): BotRulesView {
 type Applied = { ok: true; file: RulesFile } | { ok: false; reason: BotRuleRefusal };
 
 const LOCKED_IDS = new Set(BOT_LOCKED_RULES.map((rule) => rule.id));
-const BUILT_IN = new Map(BOT_DEFAULT_RULES.map((rule) => [rule.id, rule.actionClass as BotChangeableActionClass]));
+const BUILT_IN = new Map(
+  BOT_DEFAULT_RULES.map((rule) => [rule.id, rule.actionClass as BotChangeableActionClass]),
+);
 
 /** The file after `change`, or why it is refused. Never mutates `file`. */
 function applyChange(file: RulesFile, change: BotRuleChange): Applied {
-  const next = (patch: Partial<RulesFile>): Applied => ({ ok: true, file: { ...file, ...patch, revision: file.revision + 1 } });
+  const next = (patch: Partial<RulesFile>): Applied => ({
+    ok: true,
+    file: { ...file, ...patch, revision: file.revision + 1 },
+  });
   if ("ruleId" in change && LOCKED_IDS.has(change.ruleId)) return { ok: false, reason: "locked" };
   switch (change.type) {
     case "set_behavior": {
       const actionClass = BUILT_IN.get(change.ruleId);
       if (actionClass === undefined) {
-        return { ok: false, reason: file.custom.some((rule) => rule.id === change.ruleId) ? "invalid" : "not_found" };
+        return {
+          ok: false,
+          reason: file.custom.some((rule) => rule.id === change.ruleId) ? "invalid" : "not_found",
+        };
       }
       if (!isBotRuleBehavior(change.behavior)) return { ok: false, reason: "invalid" };
       return next({ behaviors: { ...file.behaviors, [actionClass]: change.behavior } });
     }
     case "add_custom": {
       const text = validCustomRuleText(change.text);
-      if (text === undefined || !isBotRuleBehavior(change.behavior)) return { ok: false, reason: "invalid" };
+      if (text === undefined || !isBotRuleBehavior(change.behavior))
+        return { ok: false, reason: "invalid" };
       if (file.custom.length >= BOT_CUSTOM_RULES_MAX) return { ok: false, reason: "limit" };
-      return next({ custom: [...file.custom, { id: `custom.${randomUUID()}`, text, behavior: change.behavior }] });
+      return next({
+        custom: [...file.custom, { id: `custom.${randomUUID()}`, text, behavior: change.behavior }],
+      });
     }
     case "edit_custom": {
       if (BUILT_IN.has(change.ruleId)) return { ok: false, reason: "invalid" };
       const index = file.custom.findIndex((rule) => rule.id === change.ruleId);
       if (index < 0) return { ok: false, reason: "not_found" };
-      if (change.text === undefined && change.behavior === undefined) return { ok: false, reason: "invalid" };
-      const text = change.text === undefined ? file.custom[index]!.text : validCustomRuleText(change.text);
+      if (change.text === undefined && change.behavior === undefined)
+        return { ok: false, reason: "invalid" };
+      const text =
+        change.text === undefined ? file.custom[index]!.text : validCustomRuleText(change.text);
       if (text === undefined) return { ok: false, reason: "invalid" };
-      if (change.behavior !== undefined && !isBotRuleBehavior(change.behavior)) return { ok: false, reason: "invalid" };
+      if (change.behavior !== undefined && !isBotRuleBehavior(change.behavior))
+        return { ok: false, reason: "invalid" };
       const custom = [...file.custom];
-      custom[index] = { id: change.ruleId, text, behavior: change.behavior ?? file.custom[index]!.behavior };
+      custom[index] = {
+        id: change.ruleId,
+        text,
+        behavior: change.behavior ?? file.custom[index]!.behavior,
+      };
       return next({ custom });
     }
     case "remove_custom": {
       // Built-in rules can change behavior but never go away.
       if (BUILT_IN.has(change.ruleId)) return { ok: false, reason: "locked" };
-      if (!file.custom.some((rule) => rule.id === change.ruleId)) return { ok: false, reason: "not_found" };
+      if (!file.custom.some((rule) => rule.id === change.ruleId))
+        return { ok: false, reason: "not_found" };
       return next({ custom: file.custom.filter((rule) => rule.id !== change.ruleId) });
     }
     default:
@@ -219,7 +264,9 @@ function applyChange(file: RulesFile, change: BotRuleChange): Applied {
 const UNREADABLE_COPY_NAME = /^rules\.json\.unreadable(?:\.[1-9]\d*)?$/u;
 
 function errorCode(error: unknown): string | undefined {
-  return error !== null && typeof error === "object" ? (error as NodeJS.ErrnoException).code : undefined;
+  return error !== null && typeof error === "object"
+    ? (error as NodeJS.ErrnoException).code
+    : undefined;
 }
 
 export function createBotRuleStore(options: BotRuleStoreOptions): BotRuleStore {
@@ -234,7 +281,8 @@ export function createBotRuleStore(options: BotRuleStoreOptions): BotRuleStore {
       bytes = await fs.readFile(fileOf(botId));
     } catch (error) {
       // No file (or no directory yet): nothing changed from the defaults.
-      if (errorCode(error) === "ENOENT" || errorCode(error) === "ENOTDIR") return { file: EMPTY, unreadable: false };
+      if (errorCode(error) === "ENOENT" || errorCode(error) === "ENOTDIR")
+        return { file: EMPTY, unreadable: false };
       throw error;
     }
     let parsed: RulesFile | undefined;
@@ -243,7 +291,9 @@ export function createBotRuleStore(options: BotRuleStoreOptions): BotRuleStore {
     } catch {
       parsed = undefined;
     }
-    return parsed === undefined ? { file: EMPTY, unreadable: true, damaged: bytes } : { file: parsed, unreadable: false };
+    return parsed === undefined
+      ? { file: EMPTY, unreadable: true, damaged: bytes }
+      : { file: parsed, unreadable: false };
   }
 
   /** Keeps a damaged file's bytes under the first free copy name, never over an earlier copy. */
@@ -290,7 +340,8 @@ export function createBotRuleStore(options: BotRuleStoreOptions): BotRuleStore {
         await assertWritable(botId);
         // An unreadable file is the defaults at revision 0 here: the editor showed them, and its change replaces the file.
         const current = await read(botId);
-        if (revision !== current.file.revision) return { ok: false, reason: "stale", view: viewOf(botId, current) };
+        if (revision !== current.file.revision)
+          return { ok: false, reason: "stale", view: viewOf(botId, current) };
         const applied = applyChange(current.file, change);
         if (!applied.ok) return { ok: false, reason: applied.reason, view: viewOf(botId, current) };
         await ensureDirectory(botId);
@@ -310,13 +361,23 @@ export function createBotRuleStore(options: BotRuleStoreOptions): BotRuleStore {
       return serial(botId, async () => {
         await fs.rm(fileOf(botId), { force: true });
         const names = await fs.readdir(directory(botId)).catch((error: unknown) => {
-          if (errorCode(error) === "ENOENT" || errorCode(error) === "ENOTDIR") return [] as string[];
+          if (errorCode(error) === "ENOENT" || errorCode(error) === "ENOTDIR")
+            return [] as string[];
           throw error;
         });
-        await Promise.all(names.filter((name) => UNREADABLE_COPY_NAME.test(name)).map((name) => fs.rm(path.join(directory(botId), name), { force: true })));
+        await Promise.all(
+          names
+            .filter((name) => UNREADABLE_COPY_NAME.test(name))
+            .map((name) => fs.rm(path.join(directory(botId), name), { force: true })),
+        );
         // A write that raced the Bot's deletion may have recreated an empty directory.
         await fs.rmdir(directory(botId)).catch((error: unknown) => {
-          if (errorCode(error) !== "ENOENT" && errorCode(error) !== "ENOTEMPTY" && errorCode(error) !== "EEXIST") throw error;
+          if (
+            errorCode(error) !== "ENOENT" &&
+            errorCode(error) !== "ENOTEMPTY" &&
+            errorCode(error) !== "EEXIST"
+          )
+            throw error;
         });
       });
     },

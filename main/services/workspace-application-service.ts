@@ -13,11 +13,17 @@ import type { scheduleService } from "./schedule-service.js";
 import type { createScratchWorkspaceDirectory } from "./scratch-workspace.js";
 import type { terminalService } from "./terminal.js";
 import type { Workspace, WorkspacePermission } from "./types.js";
-import type { FinishWorkspaceFollowThrough, workspaceMutationGate } from "./workspace-mutation-gate.js";
+import type {
+  FinishWorkspaceFollowThrough,
+  workspaceMutationGate,
+} from "./workspace-mutation-gate.js";
 import type { workspaceOperationRegistry } from "./workspace-operation-registry.js";
 import { assertWorkspaceRecordRemovalAllowed } from "./workspace-record-removal.js";
 import { withWorkspaceScheduleRestoration } from "./workspace-schedule-restoration.js";
-import { normalizeDisabledMcpServerIds, normalizeDisabledSkills } from "./workspace-capabilities.js";
+import {
+  normalizeDisabledMcpServerIds,
+  normalizeDisabledSkills,
+} from "./workspace-capabilities.js";
 
 const PERMISSIONS: readonly WorkspacePermission[] = ["full", "ask", "none"];
 
@@ -34,7 +40,11 @@ function nonEmptyString(value: unknown, name: string): string {
 
 /** The approval fields a concurrent Mac grant may change under an update. */
 function approvalFieldsOf(workspace: Workspace | undefined): string {
-  return JSON.stringify([workspace?.permission, workspace?.approvalMode ?? null, workspace?.macGrants ?? null]);
+  return JSON.stringify([
+    workspace?.permission,
+    workspace?.approvalMode ?? null,
+    workspace?.macGrants ?? null,
+  ]);
 }
 
 class StaleWorkspaceGrant extends Error {}
@@ -50,16 +60,15 @@ export interface WorkspaceApplicationDependencies {
     "listWorkspaces" | "getWorkspace" | "saveWorkspace" | "removeWorkspace"
   >;
   llmClient: Pick<typeof llmClient, "cancelWorkspaceAndSettle">;
-  scheduleService: Pick<
-    typeof scheduleService,
-    "cancelWorkspace" | "resumeWorkspace"
-  >;
+  scheduleService: Pick<typeof scheduleService, "cancelWorkspace" | "resumeWorkspace">;
   terminalService: Pick<typeof terminalService, "closeForWorkspace">;
   browserService?: { closeForWorkspace(workspaceId: string): void };
   /** Closes the workspace's Git metadata watcher; a later display read re-observes. */
   gitWatcher?: { close(workspaceId: string): void };
   /** Stops background jobs and goal checks that run in the workspace folder. */
-  followThrough?: { closeForWorkspace(workspaceId: string): Promise<FinishWorkspaceFollowThrough | void> };
+  followThrough?: {
+    closeForWorkspace(workspaceId: string): Promise<FinishWorkspaceFollowThrough | void>;
+  };
   /** Drops the workspace's artifacts once its record is gone. */
   workspaceArtifacts?: { removeWorkspace(workspaceId: string): Promise<void> };
   /** Drops the workspace's own rules on the rules page once its record is gone. */
@@ -120,7 +129,10 @@ export function createWorkspaceApplicationService(deps: WorkspaceApplicationDepe
 
   const serializeFolderCreation = <T>(operation: () => Promise<T>): Promise<T> => {
     const result = folderCreationTail.then(operation, operation);
-    folderCreationTail = result.then(() => undefined, () => undefined);
+    folderCreationTail = result.then(
+      () => undefined,
+      () => undefined,
+    );
     return result;
   };
 
@@ -146,23 +158,30 @@ export function createWorkspaceApplicationService(deps: WorkspaceApplicationDepe
         throw new Error("That folder is already registered as an Aiden workspace.");
       }
       const now = deps.now();
-      const saved = await deps.configStore.saveWorkspace({
-        id: deps.createId(),
-        name: name?.trim() || path.basename(canonicalPath) || "Workspace",
-        folderPath: canonicalPath,
-        permission,
-        createdAt: now,
-        updatedAt: now,
-      }, options.assertCurrent ? async () => {
-        // Revalidate after list/save admission awaits, inside the storage mutation.
-        const currentPath = await deps.realpath(folderPath);
-        const current = await deps.stat(currentPath);
-        if (!current.isDirectory() || currentPath !== canonicalPath) throw new Error("The workspace folder changed before registration.");
-        await options.assertCurrent!({ canonicalPath: currentPath,
-          ...(current.dev === undefined ? {} : { filesystemDevice: String(current.dev) }),
-          ...(current.ino === undefined ? {} : { filesystemInode: String(current.ino) }),
-        });
-      } : undefined);
+      const saved = await deps.configStore.saveWorkspace(
+        {
+          id: deps.createId(),
+          name: name?.trim() || path.basename(canonicalPath) || "Workspace",
+          folderPath: canonicalPath,
+          permission,
+          createdAt: now,
+          updatedAt: now,
+        },
+        options.assertCurrent
+          ? async () => {
+              // Revalidate after list/save admission awaits, inside the storage mutation.
+              const currentPath = await deps.realpath(folderPath);
+              const current = await deps.stat(currentPath);
+              if (!current.isDirectory() || currentPath !== canonicalPath)
+                throw new Error("The workspace folder changed before registration.");
+              await options.assertCurrent!({
+                canonicalPath: currentPath,
+                ...(current.dev === undefined ? {} : { filesystemDevice: String(current.dev) }),
+                ...(current.ino === undefined ? {} : { filesystemInode: String(current.ino) }),
+              });
+            }
+          : undefined,
+      );
       reportAnalyticsEvent("workspace_added", { kind: options.fromPath ? "path" : "folder" });
       return saved;
     });
@@ -178,7 +197,8 @@ export function createWorkspaceApplicationService(deps: WorkspaceApplicationDepe
     try {
       await service.remove(workspace.id, {
         assertCurrent: (current) => {
-          if (!current.noWorkspace) throw new Error("Only a No workspace folder is released with its chat.");
+          if (!current.noWorkspace)
+            throw new Error("Only a No workspace folder is released with its chat.");
         },
       });
     } catch (error) {
@@ -191,7 +211,11 @@ export function createWorkspaceApplicationService(deps: WorkspaceApplicationDepe
       await deps.removeEmptyDirectory(folderPath);
     } catch {
       await deps.noWorkspace?.trash(folderPath).catch((error: unknown) => {
-        deps.logError("workspace", "Could not move a released No workspace folder to the Trash.", error);
+        deps.logError(
+          "workspace",
+          "Could not move a released No workspace folder to the Trash.",
+          error,
+        );
       });
     }
   };
@@ -206,28 +230,30 @@ export function createWorkspaceApplicationService(deps: WorkspaceApplicationDepe
     },
 
     create(input: unknown) {
-      const fields = (
-        typeof input === "object" && input !== null ? input : {}
-      ) as Record<string, unknown>;
+      const fields = (typeof input === "object" && input !== null ? input : {}) as Record<
+        string,
+        unknown
+      >;
       if ("folderPath" in fields) {
         throw new Error("Choose workspace folders through Aiden's folder picker.");
       }
-      const name =
-        (typeof fields.name === "string" && fields.name.trim()) || "Workspace";
+      const name = (typeof fields.name === "string" && fields.name.trim()) || "Workspace";
       const permission = PERMISSIONS.includes(fields.permission as WorkspacePermission)
         ? (fields.permission as WorkspacePermission)
         : "ask";
       const now = deps.now();
-      return deps.configStore.saveWorkspace({
-        id: deps.createId(),
-        name,
-        permission,
-        createdAt: now,
-        updatedAt: now,
-      }).then((saved) => {
-        reportAnalyticsEvent("workspace_added", { kind: "folder" });
-        return saved;
-      });
+      return deps.configStore
+        .saveWorkspace({
+          id: deps.createId(),
+          name,
+          permission,
+          createdAt: now,
+          updatedAt: now,
+        })
+        .then((saved) => {
+          reportAnalyticsEvent("workspace_added", { kind: "folder" });
+          return saved;
+        });
     },
 
     createFromFolder(
@@ -235,12 +261,7 @@ export function createWorkspaceApplicationService(deps: WorkspaceApplicationDepe
       name?: string,
       options: WorkspaceFolderCreationOptions = {},
     ) {
-      return saveFolderWorkspace(
-        nonEmptyString(folderPath, "folderPath"),
-        "ask",
-        name,
-        options,
-      );
+      return saveFolderWorkspace(nonEmptyString(folderPath, "folderPath"), "ask", name, options);
     },
 
     async createScratch() {
@@ -320,7 +341,12 @@ export function createWorkspaceApplicationService(deps: WorkspaceApplicationDepe
       }
       const owners = await noWorkspace.workspaceIdsWithChats();
       for (const workspace of workspaces) {
-        if (!workspace.noWorkspace || workspace.id === DEFAULT_WORKSPACE_ID || owners.has(workspace.id)) continue;
+        if (
+          !workspace.noWorkspace ||
+          workspace.id === DEFAULT_WORKSPACE_ID ||
+          owners.has(workspace.id)
+        )
+          continue;
         await releaseNoWorkspace(workspace);
       }
     },
@@ -341,7 +367,9 @@ export function createWorkspaceApplicationService(deps: WorkspaceApplicationDepe
         if (!deps.noWorkspace || (workspace && !workspace.noWorkspace)) {
           return { workspaceId, release: () => undefined };
         }
-        const available = workspace && !assignedPrivateWorkspaces.has(workspaceId) &&
+        const available =
+          workspace &&
+          !assignedPrivateWorkspaces.has(workspaceId) &&
           (await deps.noWorkspace.chatIdsIn(workspaceId)).length === 0;
         const target = available ? workspaceId : (await service.createNoWorkspace()).id;
         assignedPrivateWorkspaces.add(target);
@@ -377,15 +405,19 @@ export function createWorkspaceApplicationService(deps: WorkspaceApplicationDepe
     ) {
       const id = nonEmptyString(workspaceId, "id");
       const finishMutation = deps.workspaceMutationGate.begin(id);
-      const followThroughChange: { finish?: FinishWorkspaceFollowThrough | void; committed: boolean } = { committed: false };
+      const followThroughChange: {
+        finish?: FinishWorkspaceFollowThrough | void;
+        committed: boolean;
+      } = { committed: false };
       try {
         await deps.workspaceOperationRegistry.cancelAndSettle(id);
         const existing = await deps.configStore.getWorkspace(id);
         if (!existing) throw new Error(`Workspace ${id} not found.`);
         options.assertCurrent?.(existing);
-        const fields = (
-          typeof patch === "object" && patch !== null ? patch : {}
-        ) as Record<string, unknown>;
+        const fields = (typeof patch === "object" && patch !== null ? patch : {}) as Record<
+          string,
+          unknown
+        >;
         if ("folderPath" in fields) {
           throw new Error("Workspace folders cannot be changed from renderer input.");
         }
@@ -423,7 +455,8 @@ export function createWorkspaceApplicationService(deps: WorkspaceApplicationDepe
         } else if (approvalChange) {
           next = applyWorkspaceApprovalChange(next, approvalChange);
         }
-        const reportModeChange = () => reportApprovalModeChanged("workspace", existing.approvalMode, next.approvalMode);
+        const reportModeChange = () =>
+          reportApprovalModeChanged("workspace", existing.approvalMode, next.approvalMode);
         // A Mac card answered "Allow in this workspace" after this update read
         // the workspace: refuse rather than save over the new grant.
         const beforeSave = async (current: Workspace | undefined) => {
@@ -433,8 +466,7 @@ export function createWorkspaceApplicationService(deps: WorkspaceApplicationDepe
           await options.beforeSave?.(current);
         };
         const authorityChanged =
-          next.permission !== existing.permission ||
-          next.memoryEnabled !== existing.memoryEnabled;
+          next.permission !== existing.permission || next.memoryEnabled !== existing.memoryEnabled;
         if (!authorityChanged) {
           const saved = await deps.configStore.saveWorkspace(next, beforeSave);
           deps.onChanged?.();
@@ -457,9 +489,10 @@ export function createWorkspaceApplicationService(deps: WorkspaceApplicationDepe
             deps.terminalService.closeForWorkspace(existing.id);
             deps.browserService?.closeForWorkspace(existing.id);
             await deps.llmClient.cancelWorkspaceAndSettle(existing.id);
-            if (next.permission !== existing.permission) followThroughChange.finish = await deps.followThrough?.closeForWorkspace(existing.id);
+            if (next.permission !== existing.permission)
+              followThroughChange.finish = await deps.followThrough?.closeForWorkspace(existing.id);
             await deps.scheduleService.cancelWorkspace(existing.id);
-            options.assertCurrent?.(await deps.configStore.getWorkspace(id) ?? existing);
+            options.assertCurrent?.((await deps.configStore.getWorkspace(id)) ?? existing);
             const saved = await deps.configStore.saveWorkspace(next, beforeSave);
             followThroughChange.committed = true;
             deps.onChanged?.();
@@ -493,9 +526,13 @@ export function createWorkspaceApplicationService(deps: WorkspaceApplicationDepe
         const existing = await deps.configStore.getWorkspace(workspaceId);
         if (!existing) return undefined;
         try {
-          const saved = await deps.configStore.saveWorkspace(workspaceWithMacGrant(existing, grant), (current) => {
-            if (!current || current.updatedAt !== existing.updatedAt) throw new StaleWorkspaceGrant();
-          });
+          const saved = await deps.configStore.saveWorkspace(
+            workspaceWithMacGrant(existing, grant),
+            (current) => {
+              if (!current || current.updatedAt !== existing.updatedAt)
+                throw new StaleWorkspaceGrant();
+            },
+          );
           deps.onChanged?.();
           return saved;
         } catch (error) {
@@ -511,7 +548,10 @@ export function createWorkspaceApplicationService(deps: WorkspaceApplicationDepe
     ): Promise<void> {
       const id = nonEmptyString(workspaceId, "id");
       const finishMutation = deps.workspaceMutationGate.begin(id);
-      const followThroughChange: { finish?: FinishWorkspaceFollowThrough | void; committed: boolean } = { committed: false };
+      const followThroughChange: {
+        finish?: FinishWorkspaceFollowThrough | void;
+        committed: boolean;
+      } = { committed: false };
       try {
         await deps.workspaceOperationRegistry.cancelAndSettle(id);
         const existing = await deps.configStore.getWorkspace(id);

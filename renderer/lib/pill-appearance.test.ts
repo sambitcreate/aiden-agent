@@ -17,17 +17,11 @@ class FakeMediaQuery {
   matches = false;
   readonly listeners = new Set<(event: MediaQueryListEvent) => void>();
 
-  addEventListener(
-    _type: "change",
-    listener: (event: MediaQueryListEvent) => void,
-  ): void {
+  addEventListener(_type: "change", listener: (event: MediaQueryListEvent) => void): void {
     this.listeners.add(listener);
   }
 
-  removeEventListener(
-    _type: "change",
-    listener: (event: MediaQueryListEvent) => void,
-  ): void {
+  removeEventListener(_type: "change", listener: (event: MediaQueryListEvent) => void): void {
     this.listeners.delete(listener);
   }
 
@@ -47,9 +41,7 @@ function deferred<Value>() {
   return { promise, resolve };
 }
 
-function customAppearance(
-  mode: AppearanceConfig["mode"] = "system",
-): AppearanceConfig {
+function customAppearance(mode: AppearanceConfig["mode"] = "system"): AppearanceConfig {
   const config = createDefaultAppearanceConfig();
   config.mode = mode;
   config.light = {
@@ -61,13 +53,13 @@ function customAppearance(
   return config;
 }
 
-function harness(options: {
-  cached?: AppearanceConfig | null;
-  persisted?: unknown | Promise<unknown>;
-} = {}) {
-  let cached = options.cached === undefined
-    ? createDefaultAppearanceConfig()
-    : options.cached;
+function harness(
+  options: {
+    cached?: AppearanceConfig | null;
+    persisted?: unknown | Promise<unknown>;
+  } = {},
+) {
+  let cached = options.cached === undefined ? createDefaultAppearanceConfig() : options.cached;
   let persisted: unknown = options.persisted ?? null;
   const darkScheme = new FakeMediaQuery();
   const highContrast = new FakeMediaQuery();
@@ -131,9 +123,7 @@ function harness(options: {
         appearance: appearanceListeners.size,
         visibility: visibilityListeners.size,
         media:
-          darkScheme.listeners.size
-          + highContrast.listeners.size
-          + reducedMotion.listeners.size,
+          darkScheme.listeners.size + highContrast.listeners.size + reducedMotion.listeners.size,
       };
     },
   };
@@ -151,10 +141,7 @@ function lastApplied(
 
 test("strict pill cache parsing rejects missing, partial, and malformed values", () => {
   const valid = customAppearance("dark");
-  assert.deepEqual(
-    parsePillAppearanceStorageValue(JSON.stringify(valid)),
-    valid,
-  );
+  assert.deepEqual(parsePillAppearanceStorageValue(JSON.stringify(valid)), valid);
   assert.equal(parsePillAppearanceStorageValue(null), null);
   assert.equal(parsePillAppearanceStorageValue("{"), null);
   assert.equal(parsePillAppearanceStorageValue("{}"), null);
@@ -274,10 +261,7 @@ test("visibility refreshes authoritative state and cleanup removes every listene
 });
 
 test("dictation readiness waits for initial authoritative appearance hydration", () => {
-  const source = readFileSync(
-    new URL("../pill/pill-app.tsx", import.meta.url),
-    "utf8",
-  );
+  const source = readFileSync(new URL("../pill/pill-app.tsx", import.meta.url), "utf8");
   assert.match(
     source,
     /appearanceReadyRef\.current\.then\(\(\) => \{[\s\S]*?dictationApi\.ready\(\)/u,

@@ -7,7 +7,14 @@ import { mcpStdioLaunchFingerprint } from "./mcp-field-secrets-core.js";
 import { createMcpStdioApprovalStore, publishWithLaunchApproval } from "./mcp-stdio-approvals.js";
 import type { McpServer } from "./types.js";
 
-const local: McpServer = { id: "files", name: "Files", transport: "stdio", command: "npx", args: ["server"], enabled: true };
+const local: McpServer = {
+  id: "files",
+  name: "Files",
+  transport: "stdio",
+  command: "npx",
+  args: ["server"],
+  enabled: true,
+};
 
 async function store(t: import("node:test").TestContext) {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-stdio-approvals-"));
@@ -26,7 +33,16 @@ test("a local server runs only with the exact launch that was approved", async (
   assert.equal(await approvals.isApproved({ ...local, args: ["server", "--evil"] }), false);
   assert.equal(await approvals.isApproved({ ...local, env: { PATH: "/tmp" } }), false);
   // Remote servers never need it.
-  assert.equal(await approvals.isApproved({ id: "r", name: "R", transport: "http", url: "https://r.test", enabled: true }), true);
+  assert.equal(
+    await approvals.isApproved({
+      id: "r",
+      name: "R",
+      transport: "http",
+      url: "https://r.test",
+      enabled: true,
+    }),
+    true,
+  );
   // Owner-only file in application support.
   assert.equal((await fs.stat(file)).mode & 0o777, 0o600);
 });
@@ -64,7 +80,11 @@ test("an editor save keeps the configured launch approved until its new command 
   // Publication fails after the approval was written: config.json still runs old.js.
   await assert.rejects(
     publishWithLaunchApproval(approvals, edited, true, async () => {
-      assert.equal(await approvals.isApproved(old), true, "the configured launch stays approved during the save");
+      assert.equal(
+        await approvals.isApproved(old),
+        true,
+        "the configured launch stays approved during the save",
+      );
       throw new Error("disk full");
     }),
     /disk full/u,
@@ -127,11 +147,22 @@ test("reconciling against config never approves a hand-edited command and forget
 
 test("a save that reached disk keeps its launch approved until the next successful save", async (t) => {
   const { approvals } = await store(t);
-  const remote: McpServer = { id: local.id, name: "Files", transport: "http", url: "https://files.example", enabled: true };
+  const remote: McpServer = {
+    id: local.id,
+    name: "Files",
+    transport: "http",
+    url: "https://files.example",
+    enabled: true,
+  };
   const onDisk: McpServer = { ...local, command: "node", args: ["new.js"] };
   // A remote server is switched to a local command; the file is written but publication fails,
   // so the in-memory config may still say it is remote. Nothing prunes the new approval.
-  await assert.rejects(publishWithLaunchApproval(approvals, onDisk, true, async () => { throw new Error("directory sync failed"); }), /directory sync failed/u);
+  await assert.rejects(
+    publishWithLaunchApproval(approvals, onDisk, true, async () => {
+      throw new Error("directory sync failed");
+    }),
+    /directory sync failed/u,
+  );
   assert.equal(await approvals.isApproved(onDisk), true, "the launch on disk can run");
   assert.equal(await approvals.isApproved(remote), true, "remote servers never need approval");
   // A hand edit is still refused: approval is checked against the exact launch.

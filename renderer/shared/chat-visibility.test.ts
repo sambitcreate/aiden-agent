@@ -1,6 +1,11 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { chatRunRefusal, chatSurface, isUserVisibleChat, parseChatOwnerV1 } from "./chat-visibility.js";
+import {
+  chatRunRefusal,
+  chatSurface,
+  isUserVisibleChat,
+  parseChatOwnerV1,
+} from "./chat-visibility.js";
 
 const owner = { kind: "design-project", projectId: "project-1" } as const;
 
@@ -55,7 +60,15 @@ test("the owner project id is bounded to 128 characters and must start with a le
     kind: "design-project",
     projectId: "9a.b-c_d",
   });
-  for (const projectId of [".hidden", "-flag", "_under", "a/b", "a b", "a\nb", `a${"b".repeat(128)}`]) {
+  for (const projectId of [
+    ".hidden",
+    "-flag",
+    "_under",
+    "a/b",
+    "a b",
+    "a\nb",
+    `a${"b".repeat(128)}`,
+  ]) {
     assert.equal(
       parseChatOwnerV1({ kind: "design-project", projectId }),
       undefined,
@@ -93,9 +106,16 @@ test("ephemeral chats stay hidden from user-visible listings while allowing ordi
 test("a malformed owner the parser rejects still refuses the run: fail closed", () => {
   // The store never loads such a chat (its meta fails validation), but the run
   // guard must not depend on that: any present owner refuses.
-  for (const malformed of [{ kind: "bot", projectId: "project-1" }, { kind: "design-project" }, "design-project", null]) {
+  for (const malformed of [
+    { kind: "bot", projectId: "project-1" },
+    { kind: "design-project" },
+    "design-project",
+    null,
+  ]) {
     assert.equal(parseChatOwnerV1(malformed), undefined, JSON.stringify(malformed));
-    const chat = { workspaceId: "workspace-1", owner: malformed } as unknown as Parameters<typeof chatRunRefusal>[0];
+    const chat = { workspaceId: "workspace-1", owner: malformed } as unknown as Parameters<
+      typeof chatRunRefusal
+    >[0];
     assert.notEqual(chatRunRefusal(chat), null, JSON.stringify(malformed));
   }
 });

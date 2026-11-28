@@ -10,7 +10,10 @@ afterEach(cleanup);
 
 /** The shared sprite contract iOS and Android draw from too. */
 const contract = JSON.parse(
-  readFileSync(new URL("../../protocol/aiden-remote/v1/fixtures/contract.json", import.meta.url), "utf8"),
+  readFileSync(
+    new URL("../../protocol/aiden-remote/v1/fixtures/contract.json", import.meta.url),
+    "utf8",
+  ),
 ).botAvatarSprite as { smallGlintHex: string };
 
 const AVATAR = { version: 1, shape: "drop", color: "peach" } as const;
@@ -21,7 +24,9 @@ function sprite(container: HTMLElement) {
 
 /** Fills of the sprite's body cells, upper-cased so they compare against the tone table. */
 function bodyFills(container: HTMLElement) {
-  return [...container.querySelectorAll("rect[data-cell]")].map((rect) => rect.getAttribute("fill")?.toUpperCase());
+  return [...container.querySelectorAll("rect[data-cell]")].map((rect) =>
+    rect.getAttribute("fill")?.toUpperCase(),
+  );
 }
 
 test("a thinking Bot is live and shows its thought dots", () => {
@@ -40,7 +45,9 @@ test("each working state carries its own prop and the resting faces carry none",
   installBotTestIpc();
   const props = (state: "tool" | "editing" | "writing" | "idle" | "done") => {
     const { container, unmount } = render(<BotAvatar avatar={AVATAR} name="Chief" state={state} />);
-    const found = [...container.querySelectorAll("[data-sprite-prop]")].map((node) => node.getAttribute("data-sprite-prop"));
+    const found = [...container.querySelectorAll("[data-sprite-prop]")].map((node) =>
+      node.getAttribute("data-sprite-prop"),
+    );
     unmount();
     return found;
   };
@@ -87,7 +94,9 @@ test("the small cut reaches up to a 24 px face and stops above it", () => {
 
 /** Fills of the open eyes, and strokes of the happy or wince marks, upper-cased. */
 function eyeFills(container: HTMLElement) {
-  return [...container.querySelectorAll(".bs-eye")].map((eye) => eye.getAttribute("fill")?.toUpperCase());
+  return [...container.querySelectorAll(".bs-eye")].map((eye) =>
+    eye.getAttribute("fill")?.toUpperCase(),
+  );
 }
 function markStroke(container: HTMLElement, mark: ".bs-happy" | ".bs-wince") {
   return container.querySelector(mark)?.getAttribute("stroke")?.toUpperCase();
@@ -104,12 +113,25 @@ test("small-cut open eyes are deep with the contract's white glint at each eye's
   installBotTestIpc();
   const white = contract.smallGlintHex.toUpperCase();
   const deep = BOT_SPRITE_TONES.peach.deep.toUpperCase();
-  for (const state of ["idle", "thinking", "reading", "tool", "writing", "editing", "waiting"] as const) {
-    const { container, unmount } = render(<BotAvatar avatar={AVATAR} name="Chief" size="small" state={state} />);
+  for (const state of [
+    "idle",
+    "thinking",
+    "reading",
+    "tool",
+    "writing",
+    "editing",
+    "waiting",
+  ] as const) {
+    const { container, unmount } = render(
+      <BotAvatar avatar={AVATAR} name="Chief" size="small" state={state} />,
+    );
     const eyes = [...container.querySelectorAll(".bs-eye")];
     const glints = [...container.querySelectorAll(".bs-glint")];
     assert.equal(eyes.length, 2, state);
-    assert.ok(eyeFills(container).every((fill) => fill === deep), state);
+    assert.ok(
+      eyeFills(container).every((fill) => fill === deep),
+      state,
+    );
     assert.equal(glints.length, 2, state);
     eyes.forEach((eye, index) => {
       const glint = glints[index]!;
@@ -117,7 +139,10 @@ test("small-cut open eyes are deep with the contract's white glint at each eye's
       assert.equal(num(glint, "x"), num(eye, "x"), `${state} glint x`);
       assert.equal(num(glint, "y"), num(eye, "y"), `${state} glint y`);
       const side = Math.min(num(eye, "width"), num(eye, "height")) * 0.42;
-      assert.ok(Math.abs(num(glint, "width") - side) < 1e-9 && Math.abs(num(glint, "height") - side) < 1e-9, state);
+      assert.ok(
+        Math.abs(num(glint, "width") - side) < 1e-9 && Math.abs(num(glint, "height") - side) < 1e-9,
+        state,
+      );
       // The glint closes with the lid that the blink, reading and editing poses scale.
       assert.ok(glint.closest(".bs-lid"), `${state} glint rides the lid`);
     });
@@ -141,20 +166,33 @@ test("happy and wince marks at the small cut are deep, with no white glint", () 
 
 test("full-size open eyes keep the deep tone and the light glint", () => {
   installBotTestIpc();
-  const { container } = render(<BotAvatar avatar={AVATAR} name="Chief" size="large" state="thinking" />);
+  const { container } = render(
+    <BotAvatar avatar={AVATAR} name="Chief" size="large" state="thinking" />,
+  );
   const tones = BOT_SPRITE_TONES.peach;
   assert.ok(eyeFills(container).every((fill) => fill === tones.deep.toUpperCase()));
-  const glints = [...container.querySelectorAll(".bs-glint")].map((glint) => glint.getAttribute("fill")?.toUpperCase());
+  const glints = [...container.querySelectorAll(".bs-glint")].map((glint) =>
+    glint.getAttribute("fill")?.toUpperCase(),
+  );
   assert.ok(glints.length > 0);
   assert.ok(glints.every((fill) => fill === tones.light.toUpperCase()));
 });
 
 test("a profile photo replaces the sprite, and a working Bot's photo gets the glance badge", async () => {
   installBotTestIpc({
-    "bots:getCanonicalPhoto": () => ({ assetRevision: "photo-1", dataUrl: "data:image/png;base64,AAAA" }),
+    "bots:getCanonicalPhoto": () => ({
+      assetRevision: "photo-1",
+      dataUrl: "data:image/png;base64,AAAA",
+    }),
   });
   const { container } = render(
-    <BotAvatar avatar={AVATAR} botId="bot-1" name="Chief" photoLoading="immediate" state="thinking" />,
+    <BotAvatar
+      avatar={AVATAR}
+      botId="bot-1"
+      name="Chief"
+      photoLoading="immediate"
+      state="thinking"
+    />,
   );
   await waitFor(() => assert.ok(container.querySelector("img")));
   assert.equal(sprite(container), null);
@@ -163,18 +201,28 @@ test("a profile photo replaces the sprite, and a working Bot's photo gets the gl
 });
 
 test("a card answered while no turn runs settles quietly, with no done moment", () => {
-  const { result, rerender } = renderHook((input: BotAvatarActivityInput) => useBotAvatarState(input), {
-    initialProps: { session: "idle", awaitingPerson: true },
-  });
+  const { result, rerender } = renderHook(
+    (input: BotAvatarActivityInput) => useBotAvatarState(input),
+    {
+      initialProps: { session: "idle", awaitingPerson: true },
+    },
+  );
   assert.equal(result.current, "waiting");
   rerender({ session: "idle", awaitingPerson: false });
   assert.equal(result.current, "idle");
 });
 
 test("a card answered mid-turn still ends with done once the turn finishes", async () => {
-  const { result, rerender } = renderHook((input: BotAvatarActivityInput) => useBotAvatarState(input), {
-    initialProps: { session: "running", phase: "command", awaitingPerson: true } as BotAvatarActivityInput,
-  });
+  const { result, rerender } = renderHook(
+    (input: BotAvatarActivityInput) => useBotAvatarState(input),
+    {
+      initialProps: {
+        session: "running",
+        phase: "command",
+        awaitingPerson: true,
+      } as BotAvatarActivityInput,
+    },
+  );
   assert.equal(result.current, "waiting");
   rerender({ session: "running", phase: "command" });
   await waitFor(() => assert.equal(result.current, "tool"));
@@ -183,9 +231,12 @@ test("a card answered mid-turn still ends with done once the turn finishes", asy
 });
 
 test("a stopped turn settles quietly, and the next turn still ends with done", async () => {
-  const { result, rerender } = renderHook((input: BotAvatarActivityInput) => useBotAvatarState(input), {
-    initialProps: { session: "running", phase: "stopping" } as BotAvatarActivityInput,
-  });
+  const { result, rerender } = renderHook(
+    (input: BotAvatarActivityInput) => useBotAvatarState(input),
+    {
+      initialProps: { session: "running", phase: "stopping" } as BotAvatarActivityInput,
+    },
+  );
   assert.equal(result.current, "thinking");
   rerender({ session: "running", phase: null });
   rerender({ session: "idle", phase: null });

@@ -18,8 +18,6 @@
         "snippet": "This duplicate is discarded."
       }
     ],
-    "related_search": [
-      { "title": "Related query", "url": "https://example.test/related" }
-    ]
+    "related_search": [{ "title": "Related query", "url": "https://example.test/related" }]
   }
 }

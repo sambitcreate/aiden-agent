@@ -7,7 +7,11 @@ import * as React from "react";
 import { ChatApprovalCard } from "../../components/chat-approval-card";
 import { botsApi } from "../../lib/ipc";
 import { userFacingErrorMessage } from "../../lib/ipc-error";
-import { switchToAutoSuggestion, useSwitchToAutoOffer, type SwitchToAutoOffer } from "../../lib/switch-to-auto";
+import {
+  switchToAutoSuggestion,
+  useSwitchToAutoOffer,
+  type SwitchToAutoOffer,
+} from "../../lib/switch-to-auto";
 import { parseCommandReading } from "../../shared/command-reading";
 import { BOT_APPROVAL_REPEAT_COUNT, botAlwaysAllowLabel } from "../../shared/tool-approval-scope";
 import type { BotPendingQuestion } from "../../shared/bot-live";
@@ -31,16 +35,20 @@ export function useBotApprovals(botId: string | undefined, onWithdrawn?: (waitId
   React.useEffect(() => {
     if (!botId) return;
     let active = true;
-    void botsApi.pendingApprovals(botId).then((pending) => {
-      if (active) setPrompts((current) => mergePrompts(current, pending));
-    }).catch(() => undefined);
+    void botsApi
+      .pendingApprovals(botId)
+      .then((pending) => {
+        if (active) setPrompts((current) => mergePrompts(current, pending));
+      })
+      .catch(() => undefined);
     const offPrompt = botsApi.onApproval((prompt) => {
       if (prompt.botId === botId) setPrompts((current) => mergePrompts(current, [prompt]));
     });
     const offSettled = botsApi.onApprovalSettled((settled) => {
       if (settled.botId === botId) {
         // Still shown here, so nobody answered it on this device: it went away (answered elsewhere, expired, the run ended).
-        if (shown.current.some((prompt) => prompt.waitId === settled.waitId)) withdrawn.current?.(settled.waitId);
+        if (shown.current.some((prompt) => prompt.waitId === settled.waitId))
+          withdrawn.current?.(settled.waitId);
         setPrompts((current) => current.filter((prompt) => prompt.waitId !== settled.waitId));
       }
     });
@@ -51,7 +59,8 @@ export function useBotApprovals(botId: string | undefined, onWithdrawn?: (waitId
     };
   }, [botId]);
   const remove = React.useCallback(
-    (waitId: string) => setPrompts((current) => current.filter((prompt) => prompt.waitId !== waitId)),
+    (waitId: string) =>
+      setPrompts((current) => current.filter((prompt) => prompt.waitId !== waitId)),
     [],
   );
   /** Puts a prompt back after its answer failed to send, so it can be answered again. */
@@ -62,7 +71,10 @@ export function useBotApprovals(botId: string | undefined, onWithdrawn?: (waitId
   return { prompts, remove, restore };
 }
 
-function mergePrompts(current: BotApprovalPrompt[], next: BotApprovalPrompt[]): BotApprovalPrompt[] {
+function mergePrompts(
+  current: BotApprovalPrompt[],
+  next: BotApprovalPrompt[],
+): BotApprovalPrompt[] {
   const byId = new Map(current.map((prompt) => [prompt.waitId, prompt] as const));
   for (const prompt of next) byId.set(prompt.waitId, prompt);
   return [...byId.values()];
@@ -71,7 +83,14 @@ function mergePrompts(current: BotApprovalPrompt[], next: BotApprovalPrompt[]): 
 /** Which shared card a pending approval belongs to: the same for every identical call, the wait itself otherwise. */
 export function botApprovalGroupKey(prompt: BotApprovalPrompt): string {
   return prompt.argumentsHash && prompt.runHash
-    ? JSON.stringify([prompt.botId, prompt.runHash, prompt.argumentsHash, prompt.toolName, prompt.summary, prompt.always?.key ?? null])
+    ? JSON.stringify([
+        prompt.botId,
+        prompt.runHash,
+        prompt.argumentsHash,
+        prompt.toolName,
+        prompt.summary,
+        prompt.always?.key ?? null,
+      ])
     : JSON.stringify(["wait", prompt.botId, prompt.waitId]);
 }
 
@@ -80,7 +99,9 @@ export function botApprovalGroupKey(prompt: BotApprovalPrompt): string {
  * arguments) share one card. A wait without its arguments and run hashes is
  * never grouped: equal text is not the same action.
  */
-export function groupBotApprovalPrompts(prompts: readonly BotApprovalPrompt[]): BotApprovalPrompt[][] {
+export function groupBotApprovalPrompts(
+  prompts: readonly BotApprovalPrompt[],
+): BotApprovalPrompt[][] {
   const groups = new Map<string, BotApprovalPrompt[]>();
   for (const prompt of prompts) {
     const key = botApprovalGroupKey(prompt);
@@ -111,13 +132,19 @@ export interface BotApprovalCardProps {
 }
 
 export function BotApprovalCard({ offerAuto = true, ...props }: BotApprovalCardProps) {
-  return offerAuto ? <BotApprovalCardWithAutoOffer {...props} /> : <BotApprovalCardView {...props} autoOffer={undefined} />;
+  return offerAuto ? (
+    <BotApprovalCardWithAutoOffer {...props} />
+  ) : (
+    <BotApprovalCardView {...props} autoOffer={undefined} />
+  );
 }
 
 function BotApprovalCardWithAutoOffer(props: Omit<BotApprovalCardProps, "offerAuto">) {
   const { prompt, allowElsewhere } = props;
   const repeated = prompt.always !== undefined && prompt.always.count >= BOT_APPROVAL_REPEAT_COUNT;
-  const autoOffer = useSwitchToAutoOffer(repeated && prompt.autoWouldJudge === true && allowElsewhere === undefined);
+  const autoOffer = useSwitchToAutoOffer(
+    repeated && prompt.autoWouldJudge === true && allowElsewhere === undefined,
+  );
   return <BotApprovalCardView {...props} autoOffer={autoOffer} />;
 }
 
@@ -166,10 +193,17 @@ function BotApprovalCardView({
         })(),
       }}
       deciding={busy}
-      onDecide={(decision, options) => void respond(decision, options?.scope === "always" ? "always" : undefined)}
+      onDecide={(decision, options) =>
+        void respond(decision, options?.scope === "always" ? "always" : undefined)
+      }
       requester={name}
-      alwaysOption={{ label: botAlwaysAllowLabel(name), hint: `${name} won’t ask again for this. Undo in Settings → Approvals.` }}
-      notes={repeated ? [`You’ve allowed this ${prompt.always!.count} times in the last 2 weeks.`] : []}
+      alwaysOption={{
+        label: botAlwaysAllowLabel(name),
+        hint: `${name} won’t ask again for this. Undo in Settings → Approvals.`,
+      }}
+      notes={
+        repeated ? [`You’ve allowed this ${prompt.always!.count} times in the last 2 weeks.`] : []
+      }
       {...(autoOffer ? { suggestion: switchToAutoSuggestion(autoOffer) } : {})}
       {...(allowElsewhere ? { allowElsewhere } : {})}
       error={answerError}

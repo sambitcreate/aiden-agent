@@ -1,9 +1,6 @@
 import { assistantUsageRecord } from "../usage-accounting.js";
 import { usageStore } from "../usage-store.js";
-import {
-  runSubagentChild,
-  type RunSubagentChildInput,
-} from "./subagent-child-runner.js";
+import { runSubagentChild, type RunSubagentChildInput } from "./subagent-child-runner.js";
 import { productionSubagentWebProxyHost } from "./subagent-web-proxy-production.js";
 import { productionSubagentMcpReadHost } from "../mcp.js";
 import { buildProductionSubagentChildTools } from "./subagent-tool-assembly.js";
@@ -19,9 +16,7 @@ export function runProductionSubagentChild(input: RunSubagentChildInput) {
   const executeNested = input.executeNested
     ? (params: unknown, signal?: AbortSignal) => {
         if (!subagentChildDelegationEnabled()) {
-          throw new Error(
-            "Nested delegation is disabled by the host rollout flag.",
-          );
+          throw new Error("Nested delegation is disabled by the host rollout flag.");
         }
         return input.executeNested!(params, signal);
       }

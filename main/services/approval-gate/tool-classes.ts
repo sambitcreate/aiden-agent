@@ -64,7 +64,10 @@ const TAINT_SOURCE_TOOL_NAMES: ReadonlySet<string> = new Set([
 ]);
 
 /** Browser tools that only change the window, never read the page. */
-const BROWSER_WINDOW_ONLY_TOOL_NAMES: ReadonlySet<string> = new Set(["browser_resize", "browser_set_appearance"]);
+const BROWSER_WINDOW_ONLY_TOOL_NAMES: ReadonlySet<string> = new Set([
+  "browser_resize",
+  "browser_set_appearance",
+]);
 
 /** Whether a tool's result brings outside content into the run. Every browser tool reads or acts on a page. */
 export function bringsOutsideContent(toolName: string): boolean {
@@ -73,25 +76,143 @@ export function bringsOutsideContent(toolName: string): boolean {
 }
 
 /** Tools that fetch a URL the model chose: a destination once the run is tainted. */
-export const FETCH_TOOL_NAMES: ReadonlySet<string> = new Set(["web_fetch", "browser_open", "browser_navigate"]);
+export const FETCH_TOOL_NAMES: ReadonlySet<string> = new Set([
+  "web_fetch",
+  "browser_open",
+  "browser_navigate",
+]);
 
 /** Verbs that change or send something wherever they appear in a name. */
 const WRITE_VERBS: ReadonlySet<string> = new Set([
-  "send", "create", "delete", "pay", "remove", "update", "publish", "write", "edit", "modify", "set", "add",
-  "put", "patch", "upload", "share", "invite", "move", "archive", "cancel", "buy", "purchase", "transfer",
-  "submit", "reply", "forward", "approve", "reject", "merge", "execute", "insert", "replace", "rename", "trash",
-  "destroy", "revoke", "grant", "charge", "refund", "subscribe", "unsubscribe", "deploy", "restart", "kill",
-  "commit", "push", "assign", "accept", "decline", "withdraw", "deposit", "sell", "upsert", "erase", "purge",
+  "send",
+  "create",
+  "delete",
+  "pay",
+  "remove",
+  "update",
+  "publish",
+  "write",
+  "edit",
+  "modify",
+  "set",
+  "add",
+  "put",
+  "patch",
+  "upload",
+  "share",
+  "invite",
+  "move",
+  "archive",
+  "cancel",
+  "buy",
+  "purchase",
+  "transfer",
+  "submit",
+  "reply",
+  "forward",
+  "approve",
+  "reject",
+  "merge",
+  "execute",
+  "insert",
+  "replace",
+  "rename",
+  "trash",
+  "destroy",
+  "revoke",
+  "grant",
+  "charge",
+  "refund",
+  "subscribe",
+  "unsubscribe",
+  "deploy",
+  "restart",
+  "kill",
+  "commit",
+  "push",
+  "assign",
+  "accept",
+  "decline",
+  "withdraw",
+  "deposit",
+  "sell",
+  "upsert",
+  "erase",
+  "purge",
 ]);
 
 /** Words that are verbs at the front of a name but often nouns elsewhere ("get_order"). */
 const LEADING_WRITE_VERBS: ReadonlySet<string> = new Set([
-  "post", "order", "label", "star", "like", "comment", "draft", "block", "unblock", "message", "text", "email",
-  "call", "dial", "link", "unlink", "schedule", "run", "start", "stop", "mark", "book", "save", "sync", "import",
-  "apply", "close", "complete", "resolve", "reopen", "pin", "unpin", "mute", "notify", "tweet", "trade", "clear",
-  "reset", "enable", "disable", "toggle", "connect", "disconnect", "follow", "unfollow", "react", "drop", "play",
-  "record", "fill", "click", "type", "press", "open", "launch", "install", "uninstall", "restore", "duplicate",
-  "copy", "convert", "generate", "make", "do", "perform", "trigger", "invoke", "process", "handle", "request",
+  "post",
+  "order",
+  "label",
+  "star",
+  "like",
+  "comment",
+  "draft",
+  "block",
+  "unblock",
+  "message",
+  "text",
+  "email",
+  "call",
+  "dial",
+  "link",
+  "unlink",
+  "schedule",
+  "run",
+  "start",
+  "stop",
+  "mark",
+  "book",
+  "save",
+  "sync",
+  "import",
+  "apply",
+  "close",
+  "complete",
+  "resolve",
+  "reopen",
+  "pin",
+  "unpin",
+  "mute",
+  "notify",
+  "tweet",
+  "trade",
+  "clear",
+  "reset",
+  "enable",
+  "disable",
+  "toggle",
+  "connect",
+  "disconnect",
+  "follow",
+  "unfollow",
+  "react",
+  "drop",
+  "play",
+  "record",
+  "fill",
+  "click",
+  "type",
+  "press",
+  "open",
+  "launch",
+  "install",
+  "uninstall",
+  "restore",
+  "duplicate",
+  "copy",
+  "convert",
+  "generate",
+  "make",
+  "do",
+  "perform",
+  "trigger",
+  "invoke",
+  "process",
+  "handle",
+  "request",
 ]);
 
 /** Verbs that only read: Rakazo's list, deliberately short. */
@@ -119,7 +240,10 @@ export type ConnectorToolEffect = "read" | "write";
  *   never relaxes the name: `readOnlyHint: true` on `send_message` is still a
  *   write.
  */
-export function connectorToolEffect(name: string, declared?: { readOnlyHint?: unknown }): ConnectorToolEffect {
+export function connectorToolEffect(
+  name: string,
+  declared?: { readOnlyHint?: unknown },
+): ConnectorToolEffect {
   if (declared?.readOnlyHint === false) return "write";
   const words = nameWords(name);
   if (words.some((word) => WRITE_VERBS.has(word))) return "write";
@@ -130,7 +254,8 @@ export function connectorToolEffect(name: string, declared?: { readOnlyHint?: un
 
 /** The declared MCP annotations of a tools/list entry, read without trusting its shape. */
 export function declaredReadOnlyHint(annotations: unknown): { readOnlyHint?: boolean } {
-  if (annotations === null || typeof annotations !== "object" || Array.isArray(annotations)) return {};
+  if (annotations === null || typeof annotations !== "object" || Array.isArray(annotations))
+    return {};
   const descriptor = Object.getOwnPropertyDescriptor(annotations, "readOnlyHint");
   return descriptor !== undefined && "value" in descriptor && typeof descriptor.value === "boolean"
     ? { readOnlyHint: descriptor.value }

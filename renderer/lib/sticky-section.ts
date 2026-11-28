@@ -33,7 +33,10 @@ export function useStickySectionCollapse<
       if (!viewport || !header || viewport.dataset.follow === "true") return;
       const bounds = viewport.getBoundingClientRect();
       const position = header.getBoundingClientRect();
-      const toolbarInset = Number.parseFloat(getComputedStyle(viewport).getPropertyValue("--scroll-area-sticky-top")) || 0;
+      const toolbarInset =
+        Number.parseFloat(
+          getComputedStyle(viewport).getPropertyValue("--scroll-area-sticky-top"),
+        ) || 0;
       const readingTop = bounds.top + Math.max(0, toolbarInset);
       // A sticky header can remain displaced inside a section entirely above
       // the viewport or behind its toolbar. Only a header the person can see
@@ -42,11 +45,8 @@ export function useStickySectionCollapse<
     }
     restorePendingRef.current = Boolean(
       section &&
-        header &&
-        stickyHeaderIsStuck(
-          section.getBoundingClientRect().top,
-          header.getBoundingClientRect().top,
-        ),
+      header &&
+      stickyHeaderIsStuck(section.getBoundingClientRect().top, header.getBoundingClientRect().top),
     );
   }, []);
   const noteAutomaticCollapse = React.useCallback(() => noteCollapse(true), [noteCollapse]);
@@ -55,10 +55,12 @@ export function useStickySectionCollapse<
   const restoreAfterCollapse = React.useCallback(() => {
     const focused = focusedRef.current;
     const active = document.activeElement;
-    if (focused && focused !== headerRef.current && (
-      (active === focused && sectionRef.current?.contains(focused)) ||
-      (!focused.isConnected && active === document.body)
-    )) {
+    if (
+      focused &&
+      focused !== headerRef.current &&
+      ((active === focused && sectionRef.current?.contains(focused)) ||
+        (!focused.isConnected && active === document.body))
+    ) {
       headerRef.current?.focus({ preventScroll: true });
       focusedRef.current = null;
     }
@@ -67,5 +69,12 @@ export function useStickySectionCollapse<
     sectionRef.current?.scrollIntoView({ block: "start", behavior: "auto" });
   }, []);
 
-  return { sectionRef, headerRef, noteCollapse, noteAutomaticCollapse, restoreAfterCollapse, onFocusCapture };
+  return {
+    sectionRef,
+    headerRef,
+    noteCollapse,
+    noteAutomaticCollapse,
+    restoreAfterCollapse,
+    onFocusCapture,
+  };
 }

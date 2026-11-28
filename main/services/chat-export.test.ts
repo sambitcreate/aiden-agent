@@ -91,16 +91,13 @@ test("export rejects malformed visible fields and counts JSON escaping exactly",
   } as unknown as Chat;
   assert.throws(() => projectAidenChatExport(malformed), /timestamp/iu);
 
-  for (const sample of ["plain", "\0\n\"\\", "\ud800", "😀"]) {
+  for (const sample of ["plain", '\0\n"\\', "\ud800", "😀"]) {
     assert.equal(
       jsonStringBytesBounded(sample, Number.MAX_SAFE_INTEGER),
       Buffer.byteLength(JSON.stringify(sample), "utf8"),
     );
   }
-  assert.equal(
-    safeExportFileName(`${" ".repeat(639)}😀`),
-    "😀.aiden-chat.json",
-  );
+  assert.equal(safeExportFileName(`${" ".repeat(639)}😀`), "😀.aiden-chat.json");
 });
 
 test("renderer-facing export failures never reveal the main-owned save path", async () => {
@@ -122,7 +119,10 @@ test("suggested export filenames are capped by bytes, not characters, so they al
   assert.equal(name, `${"进".repeat(50)}.aiden-chat.json`);
   // Never a split character.
   assert.equal(safeExportFileName(`${"a".repeat(149)}😀`), `${"a".repeat(149)}.aiden-chat.json`);
-  assert.equal(safeExportFileName("", { fallback: "Aiden page", extension: ".aiden-page.json" }), "Aiden page.aiden-page.json");
+  assert.equal(
+    safeExportFileName("", { fallback: "Aiden page", extension: ".aiden-page.json" }),
+    "Aiden page.aiden-page.json",
+  );
 });
 
 test("suggested export filenames stay visible for dotfile and normalized-dot titles", () => {
@@ -149,10 +149,29 @@ test("a dotfile-titled chat exports under a visible name without changing its ti
   assert.equal(JSON.parse(await fs.readFile(target, "utf8")).chat.title, titledChat.title);
 });
 
-
 test("export keeps readable control fallback and strips interactive descriptors", () => {
-  const exported = projectAidenChatExport({ ...chat, messages: [{ id: "panel-message", role: "assistant", content: "Here are your settings.", createdAt: 3,
-    appPanels: [{ version: 1, id: "panel", topic: "memory", fallback: "Memory controls on this desktop." }] }] });
-  assert.equal(exported.chat.messages[0].content, "Here are your settings.\n\nMemory controls on this desktop.");
+  const exported = projectAidenChatExport({
+    ...chat,
+    messages: [
+      {
+        id: "panel-message",
+        role: "assistant",
+        content: "Here are your settings.",
+        createdAt: 3,
+        appPanels: [
+          {
+            version: 1,
+            id: "panel",
+            topic: "memory",
+            fallback: "Memory controls on this desktop.",
+          },
+        ],
+      },
+    ],
+  });
+  assert.equal(
+    exported.chat.messages[0].content,
+    "Here are your settings.\n\nMemory controls on this desktop.",
+  );
   assert.equal("appPanels" in exported.chat.messages[0], false);
 });

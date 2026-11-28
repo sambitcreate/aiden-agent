@@ -1,5 +1,11 @@
 import type { Page } from "@playwright/test";
-import { E2E_WORKSPACE_ID, expect, finishLmStudioOnboarding, test, waitForToastsToClear } from "./fixtures";
+import {
+  E2E_WORKSPACE_ID,
+  expect,
+  finishLmStudioOnboarding,
+  test,
+  waitForToastsToClear,
+} from "./fixtures";
 import type { LmStudioEndpoint } from "./fixtures";
 
 test.use({ workspaceSeed: true });
@@ -29,7 +35,9 @@ async function send(page: Page, text: string): Promise<void> {
   await page.locator("textarea").first().press("Enter");
 }
 
-test("a skill switched off in Workspace settings is gone from the next message", async ({ aiden }) => {
+test("a skill switched off in Workspace settings is gone from the next message", async ({
+  aiden,
+}) => {
   const { page, lmStudio } = aiden;
   await finishLmStudioOnboarding(page);
   await ipc(page, "skills:save", {
@@ -42,7 +50,9 @@ test("a skill switched off in Workspace settings is gone from the next message",
 
   await send(page, "Workspace settings check one");
   await expect(page.locator("[data-chat-title-menu]")).toBeVisible({ timeout: 20_000 });
-  await expect.poll(() => requestWith(lmStudio, "Workspace settings check one")).toContain("<name>Release notes</name>");
+  await expect
+    .poll(() => requestWith(lmStudio, "Workspace settings check one"))
+    .toContain("<name>Release notes</name>");
   await waitForToastsToClear(page);
 
   // The row's ⋯ button shows on hover.
@@ -55,7 +65,9 @@ test("a skill switched off in Workspace settings is gone from the next message",
     () =>
       new Promise<void>((resolve) => {
         const tick = () => {
-          const field = document.querySelector<HTMLInputElement>('[role="dialog"] input[aria-label="Workspace name"]');
+          const field = document.querySelector<HTMLInputElement>(
+            '[role="dialog"] input[aria-label="Workspace name"]',
+          );
           if (!field) return void requestAnimationFrame(tick);
           field.focus();
           field.select();
@@ -85,27 +97,44 @@ test("a skill switched off in Workspace settings is gone from the next message",
   await expect(releaseNotes).toBeChecked();
   await releaseNotes.click();
   await expect(releaseNotes).not.toBeChecked();
-  await expect(dialog.locator('[data-workspace-skill="release notes"]').getByText("Off here", { exact: true })).toBeVisible();
+  await expect(
+    dialog.locator('[data-workspace-skill="release notes"]').getByText("Off here", { exact: true }),
+  ).toBeVisible();
   await expect
-    .poll(async () => (await ipc<{ disabledSkills?: string[] }>(page, "workspaces:get", E2E_WORKSPACE_ID)).disabledSkills)
+    .poll(
+      async () =>
+        (await ipc<{ disabledSkills?: string[] }>(page, "workspaces:get", E2E_WORKSPACE_ID))
+          .disabledSkills,
+    )
     .toEqual(["release notes"]);
   // By now any save of the name would have landed: the half-typed name was never kept.
-  expect((await ipc<{ name: string }>(page, "workspaces:get", E2E_WORKSPACE_ID)).name).toBe("Aiden E2E workspace");
+  expect((await ipc<{ name: string }>(page, "workspaces:get", E2E_WORKSPACE_ID)).name).toBe(
+    "Aiden E2E workspace",
+  );
 
   // Arrow keys move between sections, and Done closes the dialog.
   await dialog.getByRole("tab", { name: "Skills" }).press("ArrowDown");
-  await expect(dialog.getByRole("tab", { name: "Connectors" })).toHaveAttribute("aria-selected", "true");
-  await expect(dialog.getByText("No connectors yet. Add one in Settings → Connectors.")).toBeVisible();
+  await expect(dialog.getByRole("tab", { name: "Connectors" })).toHaveAttribute(
+    "aria-selected",
+    "true",
+  );
+  await expect(
+    dialog.getByText("No connectors yet. Add one in Settings → Connectors."),
+  ).toBeVisible();
   await dialog.getByRole("button", { name: "Done", exact: true }).click();
   await expect(dialog).toHaveCount(0);
 
   await send(page, "Workspace settings check two");
   await expect.poll(() => requestWith(lmStudio, "Workspace settings check two")).not.toBe("");
-  expect(requestWith(lmStudio, "Workspace settings check two")).not.toContain("<name>Release notes</name>");
+  expect(requestWith(lmStudio, "Workspace settings check two")).not.toContain(
+    "<name>Release notes</name>",
+  );
 
   // The shortcut opens the same settings for the workspace in use.
   await page.locator("textarea").first().click();
-  await page.keyboard.press(process.platform === "darwin" ? "Meta+Shift+Comma" : "Control+Shift+Comma");
+  await page.keyboard.press(
+    process.platform === "darwin" ? "Meta+Shift+Comma" : "Control+Shift+Comma",
+  );
   await expect(dialog).toBeVisible();
   await page.keyboard.press("Escape");
   await expect(dialog).toHaveCount(0);

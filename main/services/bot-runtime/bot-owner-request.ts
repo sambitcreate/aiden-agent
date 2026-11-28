@@ -8,7 +8,11 @@
 import { BOT_ROUTINE_NOTES_HEADER } from "../bot-routine-notes.js";
 import { EVENT_TRIGGER_BLOCK_PATTERN } from "../event-trigger-block.js";
 import { botRoutinePromptOf } from "../scheduled-bot-routines.js";
-import { BOT_PERSON_INPUT_KIND, BOT_ROUTINE_INPUT_KIND, parseBotRoutineInputOrigin } from "./bot-input-entry.js";
+import {
+  BOT_PERSON_INPUT_KIND,
+  BOT_ROUTINE_INPUT_KIND,
+  parseBotRoutineInputOrigin,
+} from "./bot-input-entry.js";
 import { botTurnOf } from "./bot-tool-policy.js";
 
 export interface BotRunInputForJudge {
@@ -27,7 +31,13 @@ const EVENT_BLOCK = EVENT_TRIGGER_BLOCK_PATTERN;
 /** Whether a request id can carry the owner's words: not another Bot, Telegram, a peer, a self-introduction or a wake-up the Bot set. */
 function ownerRequestId(requestId: string | undefined): boolean {
   const turn = botTurnOf(requestId);
-  return !(turn.botMessage || turn.telegram || turn.peer || turn.intro || requestId?.startsWith("wake:"));
+  return !(
+    turn.botMessage ||
+    turn.telegram ||
+    turn.peer ||
+    turn.intro ||
+    requestId?.startsWith("wake:")
+  );
 }
 
 /**
@@ -37,9 +47,14 @@ function ownerRequestId(requestId: string | undefined): boolean {
  * no known inputs is not. A Bot's claim that "the person asked" for something
  * counts only in such a run.
  */
-export function botRunStartedByOwner(requestIds: readonly (string | undefined)[] | undefined): boolean {
+export function botRunStartedByOwner(
+  requestIds: readonly (string | undefined)[] | undefined,
+): boolean {
   if (!requestIds || requestIds.length === 0) return false;
-  return requestIds.every((requestId) => requestId !== undefined && ownerRequestId(requestId) && !botTurnOf(requestId).routine);
+  return requestIds.every(
+    (requestId) =>
+      requestId !== undefined && ownerRequestId(requestId) && !botTurnOf(requestId).routine,
+  );
 }
 
 /** The owner's own words in one input, or `undefined` when the input carries anyone else's. */
@@ -51,7 +66,8 @@ export function ownerWordsOf(input: BotRunInputForJudge): string | undefined {
     const origin = parseBotRoutineInputOrigin(data?.routineOrigin);
     // No accepted-routine origin: a wake-up the Bot set, or a labelled input.
     if (!origin || origin.kind === "event") return undefined;
-    if (input.text.startsWith(BOT_ROUTINE_NOTES_HEADER) || EVENT_BLOCK.test(input.text)) return undefined;
+    if (input.text.startsWith(BOT_ROUTINE_NOTES_HEADER) || EVENT_BLOCK.test(input.text))
+      return undefined;
     return botRoutinePromptOf(input.text);
   }
   if (input.kind === BOT_PERSON_INPUT_KIND || input.kind === "pi.user") {

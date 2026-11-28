@@ -2,23 +2,62 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import type { GalleryItem } from "../shared/images/ipc-types";
 import type { AttemptSnapshot, RunSnapshot, RunState } from "../shared/images/run-types";
-import { galleryRefreshKey, groupGalleryByRun, relativeTime, viewerItemsForOutputs, viewerPosition } from "./gallery-core";
+import {
+  galleryRefreshKey,
+  groupGalleryByRun,
+  relativeTime,
+  viewerItemsForOutputs,
+  viewerPosition,
+} from "./gallery-core";
 
 const item = (seed: string, runId: string, createdAt: number): GalleryItem => ({
-  assetId: seed.repeat(64), width: 8, height: 8, mediaType: "image/png", runId, runState: "succeeded", workflowId: "wf", nodeId: "g", variant: 0,
-  index: 0, provider: "openrouter", model: "m", createdAt, saved: true, thumbUrl: `thumb:${seed}`,
+  assetId: seed.repeat(64),
+  width: 8,
+  height: 8,
+  mediaType: "image/png",
+  runId,
+  runState: "succeeded",
+  workflowId: "wf",
+  nodeId: "g",
+  variant: 0,
+  index: 0,
+  provider: "openrouter",
+  model: "m",
+  createdAt,
+  saved: true,
+  thumbUrl: `thumb:${seed}`,
 });
 const snapshot = (state: RunState, workflowId = "wf", runId = "r1"): RunSnapshot => ({
   version: 3,
-  run: { runId, workflowId, workflowRevision: 1, scope: { kind: "all" }, state, requestLimit: 1, requestsSent: 1, createdAt: 1 },
+  run: {
+    runId,
+    workflowId,
+    workflowRevision: 1,
+    scope: { kind: "all" },
+    state,
+    requestLimit: 1,
+    requestsSent: 1,
+    createdAt: 1,
+  },
   attempts: [],
 });
 
 test("history groups a newest-first gallery by run and keeps each image's place in the whole list", () => {
-  const items = [item("a", "r2", 300), item("b", "r2", 290), item("c", "r1", 100), item("d", "r1", 90)];
+  const items = [
+    item("a", "r2", 300),
+    item("b", "r2", 290),
+    item("c", "r1", 100),
+    item("d", "r1", 90),
+  ];
   const groups = groupGalleryByRun(items);
-  assert.deepEqual(groups.map((group) => group.runId), ["r2", "r1"]);
-  assert.deepEqual(groups.map((group) => group.createdAt), [300, 100]);
+  assert.deepEqual(
+    groups.map((group) => group.runId),
+    ["r2", "r1"],
+  );
+  assert.deepEqual(
+    groups.map((group) => group.createdAt),
+    [300, 100],
+  );
   // The viewer opens over the whole history, so each thumbnail carries its global index.
   for (const group of groups) {
     for (const entry of group.entries) assert.equal(items[entry.index], entry.item);
@@ -53,11 +92,25 @@ test("an Output node's images use the gallery's records, and the run's attempt f
   const listed = item("a", "r1", 100);
   const fresh = { assetId: "b".repeat(64), width: 16, height: 9, mediaType: "image/jpeg" as const };
   const attempt: AttemptSnapshot = {
-    nodeId: "g", variant: 0, state: "succeeded", provider: "openrouter", model: "m2", finishedAt: 500, prompt: "A red kite",
-    cancelRequested: false, truncated: false, output: [fresh], mayHaveBeenBilled: false,
+    nodeId: "g",
+    variant: 0,
+    state: "succeeded",
+    provider: "openrouter",
+    model: "m2",
+    finishedAt: 500,
+    prompt: "A red kite",
+    cancelRequested: false,
+    truncated: false,
+    output: [fresh],
+    mayHaveBeenBilled: false,
   };
   const items = viewerItemsForOutputs([listed, fresh], {
-    gallery: [listed], workflowId: "wf", nodeId: "o", assetUrls: { [fresh.assetId]: "grant:b" }, attempts: [attempt], runId: "r2",
+    gallery: [listed],
+    workflowId: "wf",
+    nodeId: "o",
+    assetUrls: { [fresh.assetId]: "grant:b" },
+    attempts: [attempt],
+    runId: "r2",
   });
   assert.equal(items[0], listed);
   assert.equal(items[1]?.assetId, fresh.assetId);
@@ -68,7 +121,11 @@ test("an Output node's images use the gallery's records, and the run's attempt f
   assert.equal(items[1]?.saved, false);
   // A document id named like an Object.prototype member never reads an inherited value.
   const odd = viewerItemsForOutputs([{ ...fresh, assetId: "constructor" }], {
-    gallery: [], workflowId: "wf", nodeId: "o", assetUrls: {}, attempts: [],
+    gallery: [],
+    workflowId: "wf",
+    nodeId: "o",
+    assetUrls: {},
+    attempts: [],
   });
   assert.equal(odd[0]?.thumbUrl, "");
 });

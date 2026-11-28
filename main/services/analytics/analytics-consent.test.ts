@@ -20,18 +20,34 @@ test("analytics is on by default but nothing is sent before the notice", () => {
   const state = parseAnalyticsState(undefined);
 
   assert.equal(state.enabled, true);
-  assert.deepEqual(analyticsSendStatus(state, { env: {}, hasKey: true }), { canSend: false, reason: "notice_pending" });
-  assert.deepEqual(analyticsSendStatus(markNoticeShown(state, NOW), { env: {}, hasKey: true }), { canSend: true });
+  assert.deepEqual(analyticsSendStatus(state, { env: {}, hasKey: true }), {
+    canSend: false,
+    reason: "notice_pending",
+  });
+  assert.deepEqual(analyticsSendStatus(markNoticeShown(state, NOW), { env: {}, hasKey: true }), {
+    canSend: true,
+  });
 });
 
 test("builds without a key never send", () => {
-  assert.deepEqual(analyticsSendStatus(ready, { env: {}, hasKey: false }), { canSend: false, reason: "no_key" });
+  assert.deepEqual(analyticsSendStatus(ready, { env: {}, hasKey: false }), {
+    canSend: false,
+    reason: "no_key",
+  });
 });
 
 test("the environment overrides the saved setting", () => {
-  for (const env of [{ DO_NOT_TRACK: "1" }, { DO_NOT_TRACK: "true" }, { AIDEN_ANALYTICS: "0" }, { AIDEN_ANALYTICS: "off" }]) {
+  for (const env of [
+    { DO_NOT_TRACK: "1" },
+    { DO_NOT_TRACK: "true" },
+    { AIDEN_ANALYTICS: "0" },
+    { AIDEN_ANALYTICS: "off" },
+  ]) {
     assert.equal(envDisablesAnalytics(env), true, JSON.stringify(env));
-    assert.deepEqual(analyticsSendStatus(ready, { env, hasKey: true }), { canSend: false, reason: "environment" });
+    assert.deepEqual(analyticsSendStatus(ready, { env, hasKey: true }), {
+      canSend: false,
+      reason: "environment",
+    });
   }
   for (const env of [{}, { DO_NOT_TRACK: "0" }, { DO_NOT_TRACK: "" }, { AIDEN_ANALYTICS: "1" }]) {
     assert.equal(envDisablesAnalytics(env), false, JSON.stringify(env));
@@ -45,7 +61,10 @@ test("turning analytics off deletes the install id, and back on starts a new one
   const off = disableAnalytics(withId);
   assert.equal(off.enabled, false);
   assert.equal(off.installId, undefined);
-  assert.deepEqual(analyticsSendStatus(off, { env: {}, hasKey: true }), { canSend: false, reason: "disabled" });
+  assert.deepEqual(analyticsSendStatus(off, { env: {}, hasKey: true }), {
+    canSend: false,
+    reason: "disabled",
+  });
   assert.equal(ensureInstallId(off, () => INSTALL_ID).installId, undefined);
 
   const on = ensureInstallId(enableAnalytics(off), () => "6a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d");
@@ -62,13 +81,16 @@ test("an install id must be a random UUID v4", () => {
 });
 
 test("a damaged settings record falls back field by field", () => {
-  assert.deepEqual(parseAnalyticsState({
-    enabled: "nope",
-    installId: "not-a-uuid",
-    noticeShownAt: "yesterday-ish",
-    lastActiveDay: "2026-10-30",
-    lastVersion: "1.2.3",
-  }), { enabled: true, lastActiveDay: "2026-10-30", lastVersion: "1.2.3" });
+  assert.deepEqual(
+    parseAnalyticsState({
+      enabled: "nope",
+      installId: "not-a-uuid",
+      noticeShownAt: "yesterday-ish",
+      lastActiveDay: "2026-10-30",
+      lastVersion: "1.2.3",
+    }),
+    { enabled: true, lastActiveDay: "2026-10-30", lastVersion: "1.2.3" },
+  );
   assert.deepEqual(parseAnalyticsState([]), DEFAULT_ANALYTICS_STATE);
 });
 

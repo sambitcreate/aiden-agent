@@ -13,7 +13,18 @@
  */
 import { execFile, spawn } from "node:child_process";
 import { constants as fsConstants } from "node:fs";
-import { access, mkdir, mkdtemp, readdir, readFile, rename, realpath, rm, stat, writeFile } from "node:fs/promises";
+import {
+  access,
+  mkdir,
+  mkdtemp,
+  readdir,
+  readFile,
+  rename,
+  realpath,
+  rm,
+  stat,
+  writeFile,
+} from "node:fs/promises";
 import path from "node:path";
 
 export interface ToolSpec {
@@ -194,7 +205,10 @@ export function resolveNpm(deps: NpmResolutionDeps): Promise<string | null> {
   return resolveExecutable("npm", deps);
 }
 
-async function resolveExecutable(command: "npm" | "node", deps: NpmResolutionDeps): Promise<string | null> {
+async function resolveExecutable(
+  command: "npm" | "node",
+  deps: NpmResolutionDeps,
+): Promise<string | null> {
   for (const dir of (deps.env.PATH ?? "").split(path.delimiter)) {
     if (!path.isAbsolute(dir)) continue;
     const candidate = path.join(dir, command);
@@ -210,7 +224,10 @@ async function resolveExecutable(command: "npm" | "node", deps: NpmResolutionDep
       .find((line) => path.isAbsolute(line));
     if (candidate && (await deps.isExecutable(candidate))) return candidate;
   }
-  for (const candidate of [path.join("/opt/homebrew/bin", command), path.join("/usr/local/bin", command)]) {
+  for (const candidate of [
+    path.join("/opt/homebrew/bin", command),
+    path.join("/usr/local/bin", command),
+  ]) {
     if (await deps.isExecutable(candidate)) return candidate;
   }
   return null;
@@ -286,7 +303,10 @@ export function resolveDeviceNode(deps: NpmResolutionDeps): Promise<string | nul
 }
 
 export function deviceNodeEnvironment(env: NodeJS.ProcessEnv, nodePath: string): NodeJS.ProcessEnv {
-  const clean: NodeJS.ProcessEnv = { ...env, PATH: [path.dirname(nodePath), env.PATH ?? ""].join(path.delimiter) };
+  const clean: NodeJS.ProcessEnv = {
+    ...env,
+    PATH: [path.dirname(nodePath), env.PATH ?? ""].join(path.delimiter),
+  };
   delete clean.ELECTRON_RUN_AS_NODE;
   return clean;
 }
@@ -302,31 +322,61 @@ export async function isDeviceNodeExecutable(
     await access(candidate, fsConstants.X_OK);
     if (isElectron) {
       const [target, appTarget, targetStat, appStat] = await Promise.all([
-        realpath(candidate), realpath(appExecutable), stat(candidate), stat(appExecutable),
+        realpath(candidate),
+        realpath(appExecutable),
+        stat(candidate),
+        stat(appExecutable),
       ]);
-      if (target === appTarget || (targetStat.dev === appStat.dev && targetStat.ino === appStat.ino)) return false;
+      if (
+        target === appTarget ||
+        (targetStat.dev === appStat.dev && targetStat.ino === appStat.ino)
+      )
+        return false;
     }
     const output = await new Promise<string>((resolve, reject) => {
-      execFile(candidate, ["-p", 'JSON.stringify({node:process.versions.node,electron:!!process.versions.electron})'], {
-        env: deviceNodeEnvironment(env, candidate), timeout: 5_000, maxBuffer: 4096, encoding: "utf8",
-      }, (error, stdout) => error ? reject(error) : resolve(stdout));
+      execFile(
+        candidate,
+        ["-p", "JSON.stringify({node:process.versions.node,electron:!!process.versions.electron})"],
+        {
+          env: deviceNodeEnvironment(env, candidate),
+          timeout: 5_000,
+          maxBuffer: 4096,
+          encoding: "utf8",
+        },
+        (error, stdout) => (error ? reject(error) : resolve(stdout)),
+      );
     });
     const runtime = JSON.parse(output.trim()) as { node?: unknown; electron?: unknown };
-    return runtime.electron === false && typeof runtime.node === "string" && /^\d+\.\d+\.\d+$/u.test(runtime.node)
-      && Number(runtime.node.split(".")[0]) >= 22;
+    return (
+      runtime.electron === false &&
+      typeof runtime.node === "string" &&
+      /^\d+\.\d+\.\d+$/u.test(runtime.node) &&
+      Number(runtime.node.split(".")[0]) >= 22
+    );
   } catch {
     return false;
   }
 }
 
-export function defaultDeviceNodeResolutionDeps(env: NodeJS.ProcessEnv = process.env): NpmResolutionDeps {
+export function defaultDeviceNodeResolutionDeps(
+  env: NodeJS.ProcessEnv = process.env,
+): NpmResolutionDeps {
   return {
     env,
     isExecutable: (candidate) => isDeviceNodeExecutable(candidate, env),
-    loginShellLookup: (shell) => new Promise((resolve) => {
-      execFile(shell, ["-ilc", "command -v node"], {
-        timeout: 5_000, maxBuffer: 16_384, encoding: "utf8", env,
-      }, (error, stdout) => resolve(error ? null : stdout));
-    }),
+    loginShellLookup: (shell) =>
+      new Promise((resolve) => {
+        execFile(
+          shell,
+          ["-ilc", "command -v node"],
+          {
+            timeout: 5_000,
+            maxBuffer: 16_384,
+            encoding: "utf8",
+            env,
+          },
+          (error, stdout) => resolve(error ? null : stdout),
+        );
+      }),
   };
 }

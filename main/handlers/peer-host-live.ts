@@ -57,7 +57,10 @@ export function registerPeerHostLiveHandlers<Event>(
   };
 
   /** Run `work` with a signal aborted when the requesting document goes away. */
-  const bound = async <T>(owner: PeerHostLiveOwner, work: (signal: AbortSignal) => Promise<T>): Promise<T> => {
+  const bound = async <T>(
+    owner: PeerHostLiveOwner,
+    work: (signal: AbortSignal) => Promise<T>,
+  ): Promise<T> => {
     const controller = new AbortController();
     const detach = owner.onInvalidated(() => controller.abort());
     try {
@@ -89,18 +92,40 @@ export function registerPeerHostLiveHandlers<Event>(
 
   handle("remote:peerCall", (event, hostId, operation, admission) => {
     const owner = active(event);
-    return bound(owner, async signal => {
+    return bound(owner, async (signal) => {
       let credentialIdentity: string | undefined;
-      if (admission && typeof admission === "object" && "savedIntent" in admission && admission.savedIntent === true) {
+      if (
+        admission &&
+        typeof admission === "object" &&
+        "savedIntent" in admission &&
+        admission.savedIntent === true
+      ) {
         try {
-          if (!dependencies.intents || !operation || typeof operation !== "object" || !("idempotencyKey" in operation)) throw new Error("Missing saved request.");
-          credentialIdentity = await dependencies.intents().admissionIdentity(hostIdentifier(hostId), operation as PeerOperation);
+          if (
+            !dependencies.intents ||
+            !operation ||
+            typeof operation !== "object" ||
+            !("idempotencyKey" in operation)
+          )
+            throw new Error("Missing saved request.");
+          credentialIdentity = await dependencies
+            .intents()
+            .admissionIdentity(hostIdentifier(hostId), operation as PeerOperation);
         } catch {
-          return { ok: false, error: { code: "outcome_unknown", message: "The saved request or its pairing changed. Check delivery on that computer before dismissing it." } };
+          return {
+            ok: false,
+            error: {
+              code: "outcome_unknown",
+              message:
+                "The saved request or its pairing changed. Check delivery on that computer before dismissing it.",
+            },
+          };
         }
       }
       if (owner.isDestroyed()) throw new Error(INACTIVE);
-      const outcome = await dependencies.manager().call(hostId, operation, signal, credentialIdentity ? { credentialIdentity } : undefined);
+      const outcome = await dependencies
+        .manager()
+        .call(hostId, operation, signal, credentialIdentity ? { credentialIdentity } : undefined);
       // A local admission failure cannot settle the earlier request's delivery.
       if (credentialIdentity && !outcome.ok && !outcome.error.remoteCode) {
         return { ...outcome, error: { ...outcome.error, code: "outcome_unknown" } };

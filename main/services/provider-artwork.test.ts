@@ -89,7 +89,8 @@ const svgUpload = (svg: string) => ({
 
 test("an uploaded SVG is rasterized from its validated source into a 64px display PNG", () => {
   const { codec, calls } = fakeCodec();
-  const svg = '<svg xmlns="http://www.w3.org/2000/svg" width="256" height="128"><rect width="256" height="128"/></svg>';
+  const svg =
+    '<svg xmlns="http://www.w3.org/2000/svg" width="256" height="128"><rect width="256" height="128"/></svg>';
 
   const artwork = createProviderArtworkNormalizer(codec).normalizeInput(svgUpload(`\n  ${svg}\n`));
 
@@ -133,9 +134,15 @@ test("artwork the decoder cannot read or that stays too large after resizing is 
     /could not decode/u,
   );
 
-  const noisy = createProviderArtworkNormalizer(fakeCodec((w, h) => encodePng(w * 4, h * 4, true)).codec);
+  const noisy = createProviderArtworkNormalizer(
+    fakeCodec((w, h) => encodePng(w * 4, h * 4, true)).codec,
+  );
   assert.throws(
-    () => noisy.normalizeInput({ name: "icon.png", dataBase64: encodePng(512, 512).toString("base64") }),
+    () =>
+      noisy.normalizeInput({
+        name: "icon.png",
+        dataBase64: encodePng(512, 512).toString("base64"),
+      }),
     /too complex/u,
   );
 });
@@ -151,7 +158,11 @@ test("stored artwork that already meets the display contract is kept without re-
 test("oversize stored artwork is re-encoded to the display contract instead of dropped", () => {
   const { codec } = fakeCodec();
   const stored = { mimeType: "image/png", dataBase64: encodePng(512, 256).toString("base64") };
-  assert.equal(normalizeProviderArtwork(stored), undefined, "fixture must violate the display contract");
+  assert.equal(
+    normalizeProviderArtwork(stored),
+    undefined,
+    "fixture must violate the display contract",
+  );
 
   const recovered = createProviderArtworkNormalizer(codec).persistable(stored);
 

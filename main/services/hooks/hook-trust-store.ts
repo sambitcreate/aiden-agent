@@ -33,7 +33,9 @@ export interface HookApprovalRecord {
 
 /** Whether approving this hook makes it a guard that outlives an edit or removal. */
 export function hookBlocksWhenFailing(hook: Pick<HookDefinition, "event" | "handler">): boolean {
-  return hook.event === "PreToolUse" && hook.handler.failClosed === true && hook.handler.async !== true;
+  return (
+    hook.event === "PreToolUse" && hook.handler.failClosed === true && hook.handler.async !== true
+  );
 }
 
 export interface HookTrustState {
@@ -83,19 +85,30 @@ function isApprovalRecord(item: unknown): item is HookApprovalRecord {
 function sanitizeTrust(raw: unknown): HookTrustState {
   const state = emptyTrust();
   const approvals = (raw as { approvals?: unknown } | null | undefined)?.approvals;
-  if (!approvals || typeof approvals !== "object" || Array.isArray(approvals)) throw new Error("it has no approvals");
+  if (!approvals || typeof approvals !== "object" || Array.isArray(approvals))
+    throw new Error("it has no approvals");
   const record = raw as Record<string, unknown>;
   state.paused = record.paused === true;
   for (const [scope, list] of Object.entries(approvals as Record<string, unknown>)) {
     // A record skipped here could be a blocking hook's approval, and losing it
     // would lift the block, so anything unreadable fails the whole load.
-    if (!Array.isArray(list)) throw new Error(`the approvals for ${JSON.stringify(scope)} are not a list`);
-    if (!list.every(isApprovalRecord)) throw new Error(`an approval for ${JSON.stringify(scope)} is unreadable`);
-    if (list.length > 0) state.approvals[scope] = list.map((item) => ({ ...item, approvedAt: Number(item.approvedAt) || 0 }));
+    if (!Array.isArray(list))
+      throw new Error(`the approvals for ${JSON.stringify(scope)} are not a list`);
+    if (!list.every(isApprovalRecord))
+      throw new Error(`an approval for ${JSON.stringify(scope)} is unreadable`);
+    if (list.length > 0)
+      state.approvals[scope] = list.map((item) => ({
+        ...item,
+        approvedAt: Number(item.approvedAt) || 0,
+      }));
   }
   // Flags saved under the older id keys are dropped: they could point at another hook now.
   if (Array.isArray(record.disabled)) {
-    state.disabled = [...new Set(record.disabled.filter((key): key is string => typeof key === "string" && isStateKey(key)))];
+    state.disabled = [
+      ...new Set(
+        record.disabled.filter((key): key is string => typeof key === "string" && isStateKey(key)),
+      ),
+    ];
   }
   if (record.failures && typeof record.failures === "object") {
     for (const [key, value] of Object.entries(record.failures as Record<string, unknown>)) {
@@ -103,7 +116,9 @@ function sanitizeTrust(raw: unknown): HookTrustState {
       const consecutive = Number((value as { consecutive?: unknown }).consecutive);
       state.failures[key] = {
         consecutive: Number.isFinite(consecutive) && consecutive > 0 ? Math.floor(consecutive) : 0,
-        ...((value as { autoDisabled?: unknown }).autoDisabled === true ? { autoDisabled: true as const } : {}),
+        ...((value as { autoDisabled?: unknown }).autoDisabled === true
+          ? { autoDisabled: true as const }
+          : {}),
       };
     }
   }
@@ -114,8 +129,15 @@ export class HookTrustStore {
   private state: HookTrustState = emptyTrust();
   private readonly file: HookJsonFile<HookTrustState>;
 
-  constructor(root: () => string, private readonly now: () => number = Date.now) {
-    this.file = new HookJsonFile(() => path.join(root(), "hooks-trust.json"), sanitizeTrust, emptyTrust);
+  constructor(
+    root: () => string,
+    private readonly now: () => number = Date.now,
+  ) {
+    this.file = new HookJsonFile(
+      () => path.join(root(), "hooks-trust.json"),
+      sanitizeTrust,
+      emptyTrust,
+    );
   }
 
   async load(): Promise<void> {
@@ -146,7 +168,9 @@ export class HookTrustStore {
   verdict(hook: Pick<HookDefinition, "id" | "digest" | "scope">): HookTrustVerdict {
     const approvals = this.approvalsFor(hook.scope);
     if (approvals.some((record) => record.digest === hook.digest)) return "approved";
-    return approvals.some((record) => record.hookId === hook.id) ? "changed" : "waiting-for-approval";
+    return approvals.some((record) => record.hookId === hook.id)
+      ? "changed"
+      : "waiting-for-approval";
   }
 
   /**
@@ -158,7 +182,10 @@ export class HookTrustStore {
    * being dropped.
    */
   approve(
-    hook: Pick<HookDefinition, "id" | "name" | "digest" | "scope" | "event" | "matcher" | "handler">,
+    hook: Pick<
+      HookDefinition,
+      "id" | "name" | "digest" | "scope" | "event" | "matcher" | "handler"
+    >,
     current: ReadonlyArray<Pick<HookDefinition, "id" | "digest">> = [],
   ): Promise<void> {
     const key = hookScopeKey(hook.scope);
@@ -170,11 +197,26 @@ export class HookTrustStore {
         others.push(record);
         continue;
       }
-      const moved = current.find((candidate) => candidate.digest === record.digest && candidate.id !== hook.id);
-      if (moved && !existing.some((other) => other.hookId === moved.id)) others.push({ ...record, hookId: moved.id });
+      const moved = current.find(
+        (candidate) => candidate.digest === record.digest && candidate.id !== hook.id,
+      );
+      if (moved && !existing.some((other) => other.hookId === moved.id))
+        others.push({ ...record, hookId: moved.id });
     }
-    const guard = hookBlocksWhenFailing(hook) ? { name: hook.name, blocksWhenFailing: true as const } : {};
-    this.state.approvals[key] = [...others, { hookId: hook.id, digest: hook.digest, event: hook.event, matcher: hook.matcher, approvedAt: this.now(), ...guard }];
+    const guard = hookBlocksWhenFailing(hook)
+      ? { name: hook.name, blocksWhenFailing: true as const }
+      : {};
+    this.state.approvals[key] = [
+      ...others,
+      {
+        hookId: hook.id,
+        digest: hook.digest,
+        event: hook.event,
+        matcher: hook.matcher,
+        approvedAt: this.now(),
+        ...guard,
+      },
+    ];
     this.clearFlags(hook);
     return this.save();
   }
@@ -194,11 +236,13 @@ export class HookTrustStore {
   ): Promise<void> {
     const key = hookScopeKey(hook.scope);
     const all = this.state.approvals[key] ?? [];
-    const heldElsewhere = (digest: string) => current.some((candidate) => candidate.digest === digest && candidate.id !== hook.id);
+    const heldElsewhere = (digest: string) =>
+      current.some((candidate) => candidate.digest === digest && candidate.id !== hook.id);
     const revoked = (record: HookApprovalRecord) =>
       record.digest === hook.digest || (record.hookId === hook.id && !heldElsewhere(record.digest));
     const remaining = all.filter((record) => !revoked(record));
-    for (const record of all) if (revoked(record)) this.clearFlags({ scope: hook.scope, digest: record.digest });
+    for (const record of all)
+      if (revoked(record)) this.clearFlags({ scope: hook.scope, digest: record.digest });
     this.clearFlags(hook);
     if (remaining.length > 0) this.state.approvals[key] = remaining;
     else delete this.state.approvals[key];
@@ -232,7 +276,10 @@ export class HookTrustStore {
    * it exists for), in which case it keeps counting. `autoDisabled` is true
    * only for the failure that turned it off.
    */
-  async recordFailure(hook: HookStateTarget, options: { canDisable?: boolean } = {}): Promise<{ autoDisabled: boolean; consecutive: number }> {
+  async recordFailure(
+    hook: HookStateTarget,
+    options: { canDisable?: boolean } = {},
+  ): Promise<{ autoDisabled: boolean; consecutive: number }> {
     const key = hookStateKey(hook);
     const entry = this.state.failures[key] ?? { consecutive: 0 };
     if (entry.autoDisabled) return { autoDisabled: false, consecutive: entry.consecutive };

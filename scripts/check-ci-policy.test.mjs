@@ -12,10 +12,7 @@ import { readRegistry } from "./ci-test-registry.mjs";
 
 const workflowUrl = new URL("../.github/workflows/ci.yml", import.meta.url);
 const releaseWorkflowUrl = new URL("../.github/workflows/release.yml", import.meta.url);
-const pullfrogWorkflowUrl = new URL(
-  "../.github/workflows/pullfrog.yml",
-  import.meta.url,
-);
+const pullfrogWorkflowUrl = new URL("../.github/workflows/pullfrog.yml", import.meta.url);
 
 function workflowStep(workflow, name) {
   const marker = `      - name: ${name}`;
@@ -40,7 +37,9 @@ test("CI assigns platform work conservatively and exposes one complete required 
       // Every area that can select a job must appear in its run condition, so
       // the aggregate never treats a selected job's skip as intentional.
       assert.ok([jobs[name].needs].flat().includes("changes"), name);
-      const condition = rule.areas.map((area) => `needs.changes.outputs.${area} == 'true'`).join(" || ");
+      const condition = rule.areas
+        .map((area) => `needs.changes.outputs.${area} == 'true'`)
+        .join(" || ");
       assert.equal(jobs[name].if, `\${{ ${condition} }}`, name);
     } else {
       assert.equal(jobs[name].if, undefined, name);
@@ -48,15 +47,24 @@ test("CI assigns platform work conservatively and exposes one complete required 
   }
   const filter = jobs.changes.steps.find((step) => step.id === "filter");
   assert.equal(filter.run, "node scripts/ci-changes.mjs");
-  assert.equal(filter.env.FORCE_FULL, "${{ (github.event_name == 'push' || github.event_name == 'merge_group') && 'true' || 'false' }}");
+  assert.equal(
+    filter.env.FORCE_FULL,
+    "${{ (github.event_name == 'push' || github.event_name == 'merge_group') && 'true' || 'false' }}",
+  );
   assert.equal(jobs.changes.steps[0].with["fetch-depth"], 0);
   assert.deepEqual(
     Object.keys(jobs.changes.outputs).toSorted(),
     [...AREA_NAMES, ...PLAN_DECISIONS, "mac-e2e-shards", "selection-artifact"].toSorted(),
   );
-  assert.equal(jobs.changes.outputs["selection-artifact"], "${{ steps.selection.outputs.artifact }}");
+  assert.equal(
+    jobs.changes.outputs["selection-artifact"],
+    "${{ steps.selection.outputs.artifact }}",
+  );
   assert.equal(jobs.changes.outputs["mac-e2e"], "${{ steps.selection.outputs.mac_e2e }}");
-  assert.equal(jobs.changes.outputs["mac-e2e-shards"], "${{ steps.selection.outputs.mac_e2e_shards }}");
+  assert.equal(
+    jobs.changes.outputs["mac-e2e-shards"],
+    "${{ steps.selection.outputs.mac_e2e_shards }}",
+  );
   // Linux packaging still follows its own area, but the branch ruleset
   // requires its per-arch checks. A skipped matrix job reports under the
   // unexpanded name, so the job always starts and every step carries the gate.
@@ -118,8 +126,11 @@ test("Fedora installs the baseline-verified RPM instead of rebuilding native mod
 
   assert.ok(linuxJob, "Linux package job is missing");
   assert.ok(rpmJob, "Linux RPM job is missing");
-  assert.match(rpmJob, /dnf install --assumeyes[^\n]*\bdbus-daemon\b/u,
-    "Fedora native portal tests require dbus-run-session from dbus-daemon");
+  assert.match(
+    rpmJob,
+    /dnf install --assumeyes[^\n]*\bdbus-daemon\b/u,
+    "Fedora native portal tests require dbus-run-session from dbus-daemon",
+  );
   assert.match(linuxJob, /sha256sum "\$rpm_name" > rpm\.sha256/u);
   const verifier = linuxJob.indexOf("node scripts/verify-linux-package.mjs");
   const upload = linuxJob.indexOf("Upload baseline-verified RPM for Fedora acceptance");
@@ -135,7 +146,10 @@ test("Fedora installs the baseline-verified RPM instead of rebuilding native mod
     /- name: Upload baseline-verified RPM for Fedora acceptance\n[\s\S]*?(?=\n {6}- name:|$)/u,
   )?.[0];
   assert.ok(uploadStep, "Baseline RPM upload step is missing");
-  assert.match(uploadStep, /if: \$\{\{ needs\.changes\.outputs\.linux == 'true' && matrix\.arch == 'x64' \}\}/u);
+  assert.match(
+    uploadStep,
+    /if: \$\{\{ needs\.changes\.outputs\.linux == 'true' && matrix\.arch == 'x64' \}\}/u,
+  );
   assert.match(uploadStep, /actions\/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02/u);
   assert.match(rpmJob, /^ {4}needs: \[changes, linux\]$/mu);
   assert.match(rpmJob, /actions\/download-artifact@95815c38cf2ff2164869cbab79da8d1f422bc89e/u);
@@ -171,12 +185,16 @@ test("Linux pull-request E2E never grants privileges to checkout content", async
     assert.doesNotMatch(job, /sudo (chown|chmod)[^\n]*node_modules/u);
     assert.doesNotMatch(job, /chmod [0-7]*[4-7][0-7]{3}\b[^\n]*node_modules/u);
   }
-  const e2e = e2eJob.match(/- name: Run deterministic Electron E2E gate\n[\s\S]*?(?=\n {6}- name:)/u)?.[0];
+  const e2e = e2eJob.match(
+    /- name: Run deterministic Electron E2E gate\n[\s\S]*?(?=\n {6}- name:)/u,
+  )?.[0];
   assert.ok(e2e, "Linux E2E gate is missing");
   assert.match(e2e, /sudo sysctl -w kernel\.apparmor_restrict_unprivileged_userns=0/u);
   // Dumpable namespace-sandboxed renderers must not stall on apport core dumps.
   const commands = e2e.replace(/^\s*#.*$/gmu, "");
-  const e2eRun = commands.indexOf("xvfb-run --auto-servernum node scripts/ci-e2e-shards.mjs ${{ matrix.shard }}/3");
+  const e2eRun = commands.indexOf(
+    "xvfb-run --auto-servernum node scripts/ci-e2e-shards.mjs ${{ matrix.shard }}/3",
+  );
   assert.ok(e2eRun >= 0);
   assert.ok(commands.indexOf("sudo sysctl -w kernel.core_pattern=core") >= 0);
   assert.ok(commands.indexOf("sudo sysctl -w kernel.core_pattern=core") < e2eRun);
@@ -205,71 +223,151 @@ test("Linux GUI smokes force teardown without masking startup failures", async (
 test("desktop E2E and unit work are sharded with independent Apple and iOS checks", async () => {
   const { jobs } = parse(await readFile(workflowUrl, "utf8"));
   // The changes job plans the macOS shards: all five off pull requests, one or none on them.
-  assert.equal(jobs.e2e.strategy.matrix.shard, "${{ fromJSON(needs.changes.outputs.mac-e2e-shards) }}");
+  assert.equal(
+    jobs.e2e.strategy.matrix.shard,
+    "${{ fromJSON(needs.changes.outputs.mac-e2e-shards) }}",
+  );
   assert.equal(jobs.e2e.name, "Electron E2E (${{ matrix.shard }}/${{ strategy.job-total }})");
-  for (const step of jobs.e2e.steps.filter((entry) => String(entry.run ?? "").includes("scripts/ci-e2e-shards.mjs"))) {
+  for (const step of jobs.e2e.steps.filter((entry) =>
+    String(entry.run ?? "").includes("scripts/ci-e2e-shards.mjs"),
+  )) {
     assert.equal(step.env.AIDEN_E2E_RUNNER, "macos", step.name);
   }
   assert.equal(jobs.e2e["timeout-minutes"], 20);
   assert.equal(jobs.e2e.strategy["fail-fast"], false);
   assert.equal(jobs.unit.strategy["fail-fast"], false);
-  assert.deepEqual(jobs.unit.strategy.matrix.lane, readRegistry().lanes.map((lane) => lane.name));
+  assert.deepEqual(
+    jobs.unit.strategy.matrix.lane,
+    readRegistry().lanes.map((lane) => lane.name),
+  );
   // Pull requests keep one lane on the scarce macOS runners; main runs them all there.
   assert.deepEqual(
-    jobs.unit.strategy.matrix.include.filter((entry) => entry.runner.startsWith("macos-")).map((entry) => entry.lane),
+    jobs.unit.strategy.matrix.include
+      .filter((entry) => entry.runner.startsWith("macos-"))
+      .map((entry) => entry.lane),
     ["macos"],
   );
-  assert.equal(jobs.unit["runs-on"], "${{ github.event_name == 'pull_request' && matrix.runner || 'macos-26' }}");
-  const browserInstall = jobs.unit.steps.find((step) => step.run === "npx playwright install --with-deps chromium");
+  assert.equal(
+    jobs.unit["runs-on"],
+    "${{ github.event_name == 'pull_request' && matrix.runner || 'macos-26' }}",
+  );
+  const browserInstall = jobs.unit.steps.find(
+    (step) => step.run === "npx playwright install --with-deps chromium",
+  );
   assert.equal(browserInstall.if, "${{ matrix.chromium == true }}");
   const registry = readRegistry();
-  const browserModes = new Set(registry.preserved.filter((entry) => ["browser", "chromium"].includes(entry.kind)).map((entry) => entry.id));
-  const browserLanes = registry.lanes.filter((lane) => lane.preserved.some((id) => browserModes.has(id))).map((lane) => lane.name);
-  assert.deepEqual(jobs.unit.strategy.matrix.include.filter((entry) => entry.chromium).map((entry) => entry.lane).toSorted(), browserLanes.toSorted());
+  const browserModes = new Set(
+    registry.preserved
+      .filter((entry) => ["browser", "chromium"].includes(entry.kind))
+      .map((entry) => entry.id),
+  );
+  const browserLanes = registry.lanes
+    .filter((lane) => lane.preserved.some((id) => browserModes.has(id)))
+    .map((lane) => lane.name);
+  assert.deepEqual(
+    jobs.unit.strategy.matrix.include
+      .filter((entry) => entry.chromium)
+      .map((entry) => entry.lane)
+      .toSorted(),
+    browserLanes.toSorted(),
+  );
   const runner = jobs.unit.steps.find((step) => step.run?.includes("scripts/run-ci-tests.mjs"));
   assert.equal(runner.run, "node scripts/run-ci-tests.mjs --lane ${{ matrix.lane }} --summary");
-  assert.equal(runner.env.AIDEN_CI_TEST_SELECTION, "${{ runner.temp }}/ci-test-selection/ci-test-selection.json");
-  assert.ok(jobs.changes.steps.some((step) => String(step.run ?? "").includes("node scripts/ci-select-tests.mjs")));
-  const selectionUpload = jobs.changes.steps.find((step) => step.uses?.startsWith("actions/upload-artifact@") && String(step.with?.path ?? "").includes("ci-test-selection.json"));
+  assert.equal(
+    runner.env.AIDEN_CI_TEST_SELECTION,
+    "${{ runner.temp }}/ci-test-selection/ci-test-selection.json",
+  );
+  assert.ok(
+    jobs.changes.steps.some((step) =>
+      String(step.run ?? "").includes("node scripts/ci-select-tests.mjs"),
+    ),
+  );
+  const selectionUpload = jobs.changes.steps.find(
+    (step) =>
+      step.uses?.startsWith("actions/upload-artifact@") &&
+      String(step.with?.path ?? "").includes("ci-test-selection.json"),
+  );
   assert.equal(selectionUpload.with.name, "${{ steps.selection.outputs.artifact }}");
   for (const name of ["unit", "e2e", "linux-e2e"]) {
-    const download = jobs[name].steps.find((step) => step.uses?.startsWith("actions/download-artifact@") && String(step.with?.path ?? "").includes("ci-test-selection"));
+    const download = jobs[name].steps.find(
+      (step) =>
+        step.uses?.startsWith("actions/download-artifact@") &&
+        String(step.with?.path ?? "").includes("ci-test-selection"),
+    );
     assert.equal(download?.with.name, "${{ needs.changes.outputs.selection-artifact }}", name);
   }
   assert.ok(jobs.e2e.steps.some((step) => step.uses?.startsWith("actions/cache/restore@")));
   assert.equal(jobs["e2e-spec-timings"]["runs-on"], "ubuntu-24.04");
   assert.ok(!jobs.required.needs.includes("e2e-spec-timings"));
   for (const lane of jobs.unit.strategy.matrix.lane) {
-    const result = spawnSync(process.execPath, ["scripts/run-ci-tests.mjs", "--lane", lane, "--dry-run"], {
-      cwd: fileURLToPath(new URL("../", import.meta.url)), encoding: "utf8", maxBuffer: 2 * 1024 * 1024,
-    });
+    const result = spawnSync(
+      process.execPath,
+      ["scripts/run-ci-tests.mjs", "--lane", lane, "--dry-run"],
+      {
+        cwd: fileURLToPath(new URL("../", import.meta.url)),
+        encoding: "utf8",
+        maxBuffer: 2 * 1024 * 1024,
+      },
+    );
     assert.equal(result.status, 0, `${lane}: ${result.stderr}`);
   }
-  assert.ok(jobs.e2e.steps.some((step) => step.run === "node scripts/ci-e2e-shards.mjs ${{ matrix.shard }}/${{ strategy.job-total }}"));
+  assert.ok(
+    jobs.e2e.steps.some(
+      (step) =>
+        step.run === "node scripts/ci-e2e-shards.mjs ${{ matrix.shard }}/${{ strategy.job-total }}",
+    ),
+  );
   const receipt = jobs.e2e.steps.find((step) => step.uses?.startsWith("actions/upload-artifact@"));
   assert.ok(receipt.with.name.includes("${{ matrix.shard }}"));
   assert.ok(jobs.apple.steps.some((step) => step.run === "npm run test:native"));
-  const iosBuilds = jobs.ios.steps.filter((step) => step.run?.includes("xcodebuild build-for-testing"));
-  assert.ok(iosBuilds.some((step) => step.run.includes("generic/platform=iOS")), "device build must stay covered");
-  const simulatorTest = jobs.ios.steps.find((step) => step.run?.includes("xcodebuild test-without-building"));
-  const simulatorResults = jobs.ios.steps.find((step) => step.uses?.startsWith("actions/upload-artifact@"));
+  const iosBuilds = jobs.ios.steps.filter((step) =>
+    step.run?.includes("xcodebuild build-for-testing"),
+  );
+  assert.ok(
+    iosBuilds.some((step) => step.run.includes("generic/platform=iOS")),
+    "device build must stay covered",
+  );
+  const simulatorTest = jobs.ios.steps.find((step) =>
+    step.run?.includes("xcodebuild test-without-building"),
+  );
+  const simulatorResults = jobs.ios.steps.find((step) =>
+    step.uses?.startsWith("actions/upload-artifact@"),
+  );
   assert.ok(jobs.ios.steps.indexOf(simulatorTest) > jobs.ios.steps.indexOf(iosBuilds.at(-1)));
-  assert.ok(simulatorTest.run.includes("-resultBundlePath '${{ runner.temp }}/AidenOnTheGoSimulator.xcresult'"));
+  assert.ok(
+    simulatorTest.run.includes(
+      "-resultBundlePath '${{ runner.temp }}/AidenOnTheGoSimulator.xcresult'",
+    ),
+  );
   assert.equal(simulatorTest["continue-on-error"], undefined);
   assert.equal(simulatorResults.if, "failure()");
-  assert.equal(simulatorResults.uses, "actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02");
-  assert.ok(simulatorTest.run.includes("-skip-testing:AidenOnTheGoUITests"), "the unit run must not launch the UI target");
+  assert.equal(
+    simulatorResults.uses,
+    "actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02",
+  );
+  assert.ok(
+    simulatorTest.run.includes("-skip-testing:AidenOnTheGoUITests"),
+    "the unit run must not launch the UI target",
+  );
   for (const job of ["ios", "ios-27"]) {
-    const unitRun = jobs[job].steps.find((step) => step.run?.includes("-skip-testing:AidenOnTheGoUITests"));
+    const unitRun = jobs[job].steps.find((step) =>
+      step.run?.includes("-skip-testing:AidenOnTheGoUITests"),
+    );
     assert.ok(
       unitRun?.run.includes("-parallel-testing-enabled NO"),
       `${job}: simulator clones stall and hang the hosted runner; the unit run uses one simulator`,
     );
   }
-  const shellSmoke = jobs.ios.steps.find((step) => step.run?.includes("-only-testing:AidenOnTheGoUITests/AidenShellUITests/testShellLaunchesForEveryScenario"));
+  const shellSmoke = jobs.ios.steps.find((step) =>
+    step.run?.includes(
+      "-only-testing:AidenOnTheGoUITests/AidenShellUITests/testShellLaunchesForEveryScenario",
+    ),
+  );
   assert.ok(shellSmoke, "the shell UI smoke step is missing");
   assert.ok(jobs.ios.steps.indexOf(shellSmoke) > jobs.ios.steps.indexOf(simulatorTest));
-  assert.ok(shellSmoke.run.includes("-resultBundlePath '${{ runner.temp }}/AidenOnTheGoShellUI.xcresult'"));
+  assert.ok(
+    shellSmoke.run.includes("-resultBundlePath '${{ runner.temp }}/AidenOnTheGoShellUI.xcresult'"),
+  );
   assert.equal(shellSmoke["continue-on-error"], undefined);
   assert.equal(
     simulatorResults.with.path.trim(),
@@ -290,12 +388,19 @@ test("desktop E2E and unit work are sharded with independent Apple and iOS check
   assert.ok(jobs.build.steps.some((step) => step.id === "bundle"));
   for (const consumer of ["e2e", "verify"]) {
     assert.ok(jobs[consumer].needs.includes("build"), consumer);
-    const download = jobs[consumer].steps.find((step) => step.with?.name === "${{ needs.build.outputs.artifact-name }}");
+    const download = jobs[consumer].steps.find(
+      (step) => step.with?.name === "${{ needs.build.outputs.artifact-name }}",
+    );
     assert.ok(download, consumer);
   }
-  assert.ok(jobs.verify.steps.some((step) => step.run === "npm run test:e2e:diagnostics:production:run"));
+  assert.ok(
+    jobs.verify.steps.some((step) => step.run === "npm run test:e2e:diagnostics:production:run"),
+  );
   const manifest = JSON.parse(await readFile(new URL("../package.json", import.meta.url), "utf8"));
-  assert.match(manifest.scripts["test:e2e:diagnostics:production:run"], /^AIDEN_E2E_RUNTIME_PROFILE=production playwright test tests\/e2e\/diagnostics-production\.spec\.ts /u);
+  assert.match(
+    manifest.scripts["test:e2e:diagnostics:production:run"],
+    /^AIDEN_E2E_RUNTIME_PROFILE=production playwright test tests\/e2e\/diagnostics-production\.spec\.ts /u,
+  );
   assert.match(manifest.scripts["test:e2e:diagnostics:production:run"], /--fail-on-flaky-tests/u);
   assert.ok(!manifest.scripts["test:e2e:diagnostics:production:run"].includes("npm run build"));
   assert.ok(!jobs.verify.steps.some((step) => step.run === "npm test"));
@@ -338,24 +443,39 @@ test("coverage collection is enabled before positional test paths", async () => 
 function assertLinuxReleaseProvenance(workflow) {
   const linuxJob = workflow.match(/^ {2}linux-release:\n[\s\S]*?(?=^ {2}\S|(?![\s\S]))/mu)?.[0];
   assert.ok(linuxJob, "Linux release job is missing");
-  assert.match(linuxJob,
+  assert.match(
+    linuxJob,
     /^ {4}if: \$\{\{ vars\.RELEASES_ENABLED == 'true' && github\.ref == 'refs\/heads\/main' \}\}$/mu,
-    "Non-main dispatches must not bypass provenance by skipping attestation");
+    "Non-main dispatches must not bypass provenance by skipping attestation",
+  );
   const permissions = linuxJob.match(/^ {4}permissions:\n((?: {6}[^\n]+\n)+)/mu)?.[1];
   assert.ok(permissions, "Linux release must override inherited write permissions");
-  assert.deepEqual(permissions.trim().split("\n").map(line => line.trim()).sort(),
-    ["attestations: write", "contents: read", "id-token: write"]);
+  assert.deepEqual(
+    permissions
+      .trim()
+      .split("\n")
+      .map((line) => line.trim())
+      .sort(),
+    ["attestations: write", "contents: read", "id-token: write"],
+  );
 
   const name = "Attest verified Linux packages and update feeds";
   const attestation = workflowStep(linuxJob, name);
-  assert.match(attestation,
-    /^ {8}uses: actions\/attest@1e69f48acb82d1966a394da916b4c1698aa569d6(?: # v4\.2\.2)?$/mu);
-  assert.match(attestation,
-    /^ {8}if: \$\{\{ github\.ref == 'refs\/heads\/main' && steps\.version\.outputs\.publish == 'true' \}\}$/mu);
+  assert.match(
+    attestation,
+    /^ {8}uses: actions\/attest@1e69f48acb82d1966a394da916b4c1698aa569d6(?: # v4\.2\.2)?$/mu,
+  );
+  assert.match(
+    attestation,
+    /^ {8}if: \$\{\{ github\.ref == 'refs\/heads\/main' && steps\.version\.outputs\.publish == 'true' \}\}$/mu,
+  );
   assert.match(attestation, /^ {10}create-storage-record: false$/mu);
   assert.match(attestation, /^ {10}push-to-registry: false$/mu);
-  assert.doesNotMatch(attestation, /(?:predicate(?:-type|-path)?|sbom-path|subject-digest|subject-checksums):/u,
-    "Automatic SLSA provenance must hash the verified files, not accept supplied predicates or digests");
+  assert.doesNotMatch(
+    attestation,
+    /(?:predicate(?:-type|-path)?|sbom-path|subject-digest|subject-checksums):/u,
+    "Automatic SLSA provenance must hash the verified files, not accept supplied predicates or digests",
+  );
   assert.doesNotMatch(attestation, /continue-on-error:/u);
 
   const expectedSubjects = [
@@ -366,12 +486,24 @@ function assertLinuxReleaseProvenance(workflow) {
   ];
   const subjects = attestation.match(/^ {10}subject-path: \|\n((?: {12}[^\n]+\n)+)/mu)?.[1];
   assert.ok(subjects, "Explicit attestation subjects are required");
-  assert.deepEqual(subjects.trim().split("\n").map(line => line.trim()), expectedSubjects);
+  assert.deepEqual(
+    subjects
+      .trim()
+      .split("\n")
+      .map((line) => line.trim()),
+    expectedSubjects,
+  );
   const staging = workflowStep(linuxJob, "Stage verified Linux release assets");
   const staged = staging.match(/^ {10}path: \|\n((?: {12}[^\n]+\n)+)/mu)?.[1];
   assert.ok(staged);
-  assert.deepEqual(staged.trim().split("\n").map(line => line.trim()), expectedSubjects,
-    "Staged Linux assets must exactly match the attested subject classes");
+  assert.deepEqual(
+    staged
+      .trim()
+      .split("\n")
+      .map((line) => line.trim()),
+    expectedSubjects,
+    "Staged Linux assets must exactly match the attested subject classes",
+  );
   const attestationPosition = linuxJob.indexOf(`- name: ${name}`);
   for (const predecessor of [
     "Verify Linux contracts, diagnostics, and native helpers",
@@ -379,7 +511,10 @@ function assertLinuxReleaseProvenance(workflow) {
     "Smoke the exact release GUI without a keyring session",
   ]) {
     const position = linuxJob.indexOf(`- name: ${predecessor}`);
-    assert.ok(position >= 0 && position < attestationPosition, `${predecessor} must precede attestation`);
+    assert.ok(
+      position >= 0 && position < attestationPosition,
+      `${predecessor} must precede attestation`,
+    );
   }
   assert.ok(linuxJob.indexOf("- name: Stage verified Linux release assets") > attestationPosition);
   assert.match(staging, /^ {8}if: \$\{\{ steps\.version\.outputs\.publish == 'true' \}\}$/mu);
@@ -393,35 +528,114 @@ test("Linux release attestations cover verified packages and feeds with scoped m
 test("Linux provenance policy rejects bypasses, incomplete subjects, and custom claims", async () => {
   const workflow = await readFile(releaseWorkflowUrl, "utf8");
   for (const [name, mutate] of [
-    ["moving action ref", source => source.replace("actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6", "actions/attest@v4")],
-    ["branch dispatch bypass", source => source.replace(/( {2}linux-release:\n[\s\S]*? {4}if: \$\{\{ )vars\.RELEASES_ENABLED == 'true' && github\.ref == 'refs\/heads\/main'/u, "$1vars.RELEASES_ENABLED == 'true'")],
-    ["missing publish gate", source => source.replace("github.ref == 'refs/heads/main' && steps.version.outputs.publish == 'true'", "github.ref == 'refs/heads/main'")],
-    ["unnecessary content writes", source => source.replace("      contents: read", "      contents: write")],
-    ["extra metadata permission", source => source.replace("      attestations: write", "      attestations: write\n      artifact-metadata: write")],
-    ["missing RPM subject", source => source.replace("            release/linux-distribution/*.rpm\n", "")],
-    ["broad subject wildcard", source => source.replace("            release/linux-distribution/*.AppImage", "            release/linux-distribution/*")],
-    ["custom predicate", source => source.replace("          create-storage-record: false", "          predicate-type: https://example.invalid/custom\n          predicate: '{}'\n          create-storage-record: false")],
-    ["registry publication", source => source.replace("          push-to-registry: false", "          push-to-registry: true")],
-    ["ignored attestation failure", source => source.replace("        uses: actions/attest@", "        continue-on-error: true\n        uses: actions/attest@")],
-    ["missing smoke gate", source => source.replace("      - name: Smoke the exact release GUI without a keyring session", "      - name: Removed smoke")],
-    ["attestation before smoke", source => {
-      const step = workflowStep(source, "Attest verified Linux packages and update feeds");
-      return source.replace(step, "").replace(
-        "      - name: Smoke the exact release GUI without a keyring session",
-        `${step}      - name: Smoke the exact release GUI without a keyring session`,
-      );
-    }],
-  ]) assert.throws(() => assertLinuxReleaseProvenance(mutate(workflow)), undefined, name);
+    [
+      "moving action ref",
+      (source) =>
+        source.replace(
+          "actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6",
+          "actions/attest@v4",
+        ),
+    ],
+    [
+      "branch dispatch bypass",
+      (source) =>
+        source.replace(
+          /( {2}linux-release:\n[\s\S]*? {4}if: \$\{\{ )vars\.RELEASES_ENABLED == 'true' && github\.ref == 'refs\/heads\/main'/u,
+          "$1vars.RELEASES_ENABLED == 'true'",
+        ),
+    ],
+    [
+      "missing publish gate",
+      (source) =>
+        source.replace(
+          "github.ref == 'refs/heads/main' && steps.version.outputs.publish == 'true'",
+          "github.ref == 'refs/heads/main'",
+        ),
+    ],
+    [
+      "unnecessary content writes",
+      (source) => source.replace("      contents: read", "      contents: write"),
+    ],
+    [
+      "extra metadata permission",
+      (source) =>
+        source.replace(
+          "      attestations: write",
+          "      attestations: write\n      artifact-metadata: write",
+        ),
+    ],
+    [
+      "missing RPM subject",
+      (source) => source.replace("            release/linux-distribution/*.rpm\n", ""),
+    ],
+    [
+      "broad subject wildcard",
+      (source) =>
+        source.replace(
+          "            release/linux-distribution/*.AppImage",
+          "            release/linux-distribution/*",
+        ),
+    ],
+    [
+      "custom predicate",
+      (source) =>
+        source.replace(
+          "          create-storage-record: false",
+          "          predicate-type: https://example.invalid/custom\n          predicate: '{}'\n          create-storage-record: false",
+        ),
+    ],
+    [
+      "registry publication",
+      (source) =>
+        source.replace("          push-to-registry: false", "          push-to-registry: true"),
+    ],
+    [
+      "ignored attestation failure",
+      (source) =>
+        source.replace(
+          "        uses: actions/attest@",
+          "        continue-on-error: true\n        uses: actions/attest@",
+        ),
+    ],
+    [
+      "missing smoke gate",
+      (source) =>
+        source.replace(
+          "      - name: Smoke the exact release GUI without a keyring session",
+          "      - name: Removed smoke",
+        ),
+    ],
+    [
+      "attestation before smoke",
+      (source) => {
+        const step = workflowStep(source, "Attest verified Linux packages and update feeds");
+        return source
+          .replace(step, "")
+          .replace(
+            "      - name: Smoke the exact release GUI without a keyring session",
+            `${step}      - name: Smoke the exact release GUI without a keyring session`,
+          );
+      },
+    ],
+  ])
+    assert.throws(() => assertLinuxReleaseProvenance(mutate(workflow)), undefined, name);
 });
 
 test("CI supersedes older PR and main runs, keeps dispatches independent, and keeps portable static checks on Linux", async () => {
   const workflow = parse(await readFile(workflowUrl, "utf8"));
-  assert.equal(workflow.concurrency["cancel-in-progress"], "${{ github.event_name != 'workflow_dispatch' }}");
-  assert.equal(workflow.concurrency.group, "ci-${{ github.event_name == 'workflow_dispatch' && github.run_id || github.ref }}");
+  assert.equal(
+    workflow.concurrency["cancel-in-progress"],
+    "${{ github.event_name != 'workflow_dispatch' }}",
+  );
+  assert.equal(
+    workflow.concurrency.group,
+    "ci-${{ github.event_name == 'workflow_dispatch' && github.run_id || github.ref }}",
+  );
   assert.equal(workflow.jobs.static["runs-on"], "ubuntu-24.04");
   assert.ok(workflow.jobs.static.steps.some((step) => step.run?.includes("npm run type-check")));
   assert.ok(workflow.jobs.static.steps.some((step) => step.run === "npm run lint"));
-  for (const [name, job] of Object.entries(workflow.jobs)) assert.ok(job["timeout-minutes"] > 0, name);
+  for (const [name, job] of Object.entries(workflow.jobs))
+    assert.ok(job["timeout-minutes"] > 0, name);
   assert.equal(workflow.jobs.timings["continue-on-error"], true);
   assert.equal(workflow.jobs.timings.permissions.actions, "read");
 });
@@ -450,17 +664,32 @@ test("the Xcode 27 iOS check never gates a PR or release builds", async () => {
   assert.equal(preview.env.DEVELOPER_DIR, "/Applications/Xcode_27.1.app/Contents/Developer");
   assert.equal(preview["continue-on-error"], true, "the preview image must not block");
   assert.equal(preview.if, jobs.ios.if, "both iOS jobs run for the same changes");
-  assert.ok(!jobs.required.needs.includes("ios-27"), "the required gate must not wait on the preview job");
+  assert.ok(
+    !jobs.required.needs.includes("ios-27"),
+    "the required gate must not wait on the preview job",
+  );
   assert.ok(!("ios-27" in REQUIRED_JOB_RULES));
-  const commands = (job) => job.steps.filter((step) => step.run?.includes("xcodebuild")).map((step) => step.run);
-  assert.deepEqual(commands(preview), commands(jobs.ios), "the preview runs the same xcodebuild steps");
-  const upload = (job) => job.steps.find((step) => step.uses?.startsWith("actions/upload-artifact@"));
+  const commands = (job) =>
+    job.steps.filter((step) => step.run?.includes("xcodebuild")).map((step) => step.run);
+  assert.deepEqual(
+    commands(preview),
+    commands(jobs.ios),
+    "the preview runs the same xcodebuild steps",
+  );
+  const upload = (job) =>
+    job.steps.find((step) => step.uses?.startsWith("actions/upload-artifact@"));
   assert.equal(upload(preview).uses, upload(jobs.ios).uses);
-  assert.notEqual(upload(preview).with.name, upload(jobs.ios).with.name, "result artifacts must not collide");
+  assert.notEqual(
+    upload(preview).with.name,
+    upload(jobs.ios).with.name,
+    "result artifacts must not collide",
+  );
 });
 
 test("foreground Electron smoke is a required package command in desktop verification", async () => {
-  const { scripts } = JSON.parse(await readFile(new URL("../package.json", import.meta.url), "utf8"));
+  const { scripts } = JSON.parse(
+    await readFile(new URL("../package.json", import.meta.url), "utf8"),
+  );
   const { jobs } = parse(await readFile(workflowUrl, "utf8"));
   const command = "test:foreground-file-tools:electron";
   assert.ok(scripts[command], "Electron smoke must be runnable from the package manifest");
@@ -469,7 +698,6 @@ test("foreground Electron smoke is a required package command in desktop verific
   assert.notEqual(smoke["continue-on-error"], true, "Smoke failures must fail CI");
   assert.equal(smoke.if, undefined, "Every desktop verification run must execute the smoke");
 });
-
 
 test("Linux required contexts exist for scoped PRs and fail closed", async () => {
   const { jobs } = parse(await readFile(workflowUrl, "utf8"));
@@ -518,12 +746,23 @@ test("Linux required contexts exist for scoped PRs and fail closed", async () =>
       },
       encoding: "utf8",
     });
-    assert.equal(run.status, expected, `${detection}/${selected}/${result}/${e2e}: ${run.stdout}${run.stderr}`);
+    assert.equal(
+      run.status,
+      expected,
+      `${detection}/${selected}/${result}/${e2e}: ${run.stdout}${run.stderr}`,
+    );
   }
 });
 
 const ISSUE_TEMPLATE_DIR = new URL("../.github/ISSUE_TEMPLATE/", import.meta.url);
-const VALID_ISSUE_FORM_TYPES = new Set(["markdown", "textarea", "input", "dropdown", "checkboxes", "upload"]);
+const VALID_ISSUE_FORM_TYPES = new Set([
+  "markdown",
+  "textarea",
+  "input",
+  "dropdown",
+  "checkboxes",
+  "upload",
+]);
 
 function isPlainObject(value) {
   return value !== null && typeof value === "object" && !Array.isArray(value);
@@ -534,7 +773,9 @@ function isNonEmptyString(value) {
 }
 
 test("GitHub issue forms and chooser config are valid YAML matching GitHub's required schema", async () => {
-  const entries = (await readdir(ISSUE_TEMPLATE_DIR)).filter((name) => /\.ya?ml$/u.test(name)).sort();
+  const entries = (await readdir(ISSUE_TEMPLATE_DIR))
+    .filter((name) => /\.ya?ml$/u.test(name))
+    .sort();
   assert.ok(entries.length > 0, "expected at least one YAML file in .github/ISSUE_TEMPLATE/");
 
   for (const name of entries) {
@@ -544,15 +785,28 @@ test("GitHub issue forms and chooser config are valid YAML matching GitHub's req
 
     if (name === "config.yml" || name === "config.yaml") {
       if (doc.blank_issues_enabled !== undefined) {
-        assert.equal(typeof doc.blank_issues_enabled, "boolean", `${name}: blank_issues_enabled must be boolean`);
+        assert.equal(
+          typeof doc.blank_issues_enabled,
+          "boolean",
+          `${name}: blank_issues_enabled must be boolean`,
+        );
       }
       if (doc.contact_links !== undefined) {
         assert.ok(Array.isArray(doc.contact_links), `${name}: contact_links must be an array`);
         for (const [index, link] of doc.contact_links.entries()) {
           assert.ok(isPlainObject(link), `${name}: contact_links[${index}] must be a mapping`);
-          assert.ok(isNonEmptyString(link.name), `${name}: contact_links[${index}].name is required`);
-          assert.ok(isNonEmptyString(link.about), `${name}: contact_links[${index}].about is required`);
-          assert.ok(isNonEmptyString(link.url) && /^https:\/\//u.test(link.url), `${name}: contact_links[${index}].url must be https://`);
+          assert.ok(
+            isNonEmptyString(link.name),
+            `${name}: contact_links[${index}].name is required`,
+          );
+          assert.ok(
+            isNonEmptyString(link.about),
+            `${name}: contact_links[${index}].about is required`,
+          );
+          assert.ok(
+            isNonEmptyString(link.url) && /^https:\/\//u.test(link.url),
+            `${name}: contact_links[${index}].url must be https://`,
+          );
         }
       }
       continue;
@@ -567,28 +821,49 @@ test("GitHub issue forms and chooser config are valid YAML matching GitHub's req
       const validLabels =
         isNonEmptyString(doc.labels) ||
         (Array.isArray(doc.labels) && doc.labels.every((label) => isNonEmptyString(label)));
-      assert.ok(validLabels, `${name}: 'labels' must be a non-empty string or array of non-empty strings`);
+      assert.ok(
+        validLabels,
+        `${name}: 'labels' must be a non-empty string or array of non-empty strings`,
+      );
     }
-    assert.ok(Array.isArray(doc.body) && doc.body.length > 0, `${name}: missing required non-empty 'body' array`);
+    assert.ok(
+      Array.isArray(doc.body) && doc.body.length > 0,
+      `${name}: missing required non-empty 'body' array`,
+    );
 
     const seenIds = new Set();
     let inputCount = 0;
     for (const [index, item] of doc.body.entries()) {
       assert.ok(isPlainObject(item), `${name}: body[${index}] must be a mapping`);
-      assert.ok(VALID_ISSUE_FORM_TYPES.has(item.type), `${name}: body[${index}].type '${item.type}' is not a valid GitHub issue form type`);
-      assert.ok(isPlainObject(item.attributes), `${name}: body[${index}].attributes must be a mapping`);
+      assert.ok(
+        VALID_ISSUE_FORM_TYPES.has(item.type),
+        `${name}: body[${index}].type '${item.type}' is not a valid GitHub issue form type`,
+      );
+      assert.ok(
+        isPlainObject(item.attributes),
+        `${name}: body[${index}].attributes must be a mapping`,
+      );
 
       if (item.id !== undefined) {
-        assert.ok(isNonEmptyString(item.id), `${name}: body[${index}].id must be a non-empty string`);
+        assert.ok(
+          isNonEmptyString(item.id),
+          `${name}: body[${index}].id must be a non-empty string`,
+        );
         assert.equal(seenIds.has(item.id), false, `${name}: duplicate field id '${item.id}'`);
         seenIds.add(item.id);
       }
 
       if (item.type === "markdown") {
-        assert.ok(isNonEmptyString(item.attributes.value), `${name}: body[${index}] markdown requires attributes.value`);
+        assert.ok(
+          isNonEmptyString(item.attributes.value),
+          `${name}: body[${index}] markdown requires attributes.value`,
+        );
       } else {
         inputCount += 1;
-        assert.ok(isNonEmptyString(item.attributes.label), `${name}: body[${index}] (${item.type}) requires attributes.label`);
+        assert.ok(
+          isNonEmptyString(item.attributes.label),
+          `${name}: body[${index}] (${item.type}) requires attributes.label`,
+        );
         if (item.type === "dropdown") {
           assert.ok(
             Array.isArray(item.attributes.options) &&
@@ -601,14 +876,23 @@ test("GitHub issue forms and chooser config are valid YAML matching GitHub's req
           assert.ok(
             Array.isArray(item.attributes.options) &&
               item.attributes.options.length > 0 &&
-              item.attributes.options.every((option) => isPlainObject(option) && isNonEmptyString(option.label)),
+              item.attributes.options.every(
+                (option) => isPlainObject(option) && isNonEmptyString(option.label),
+              ),
             `${name}: body[${index}] checkboxes require options with non-empty label`,
           );
         }
         if (item.validations !== undefined) {
-          assert.ok(isPlainObject(item.validations), `${name}: body[${index}].validations must be a mapping`);
+          assert.ok(
+            isPlainObject(item.validations),
+            `${name}: body[${index}].validations must be a mapping`,
+          );
           if (item.validations.required !== undefined) {
-            assert.equal(typeof item.validations.required, "boolean", `${name}: body[${index}].validations.required must be boolean`);
+            assert.equal(
+              typeof item.validations.required,
+              "boolean",
+              `${name}: body[${index}].validations.required must be boolean`,
+            );
           }
         }
       }
@@ -616,4 +900,3 @@ test("GitHub issue forms and chooser config are valid YAML matching GitHub's req
     assert.ok(inputCount > 0, `${name}: issue form must contain at least one non-markdown input`);
   }
 });
-

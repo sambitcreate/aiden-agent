@@ -316,7 +316,16 @@ function customBinding(
   if (!admission.effectiveCustom) fail("access_unavailable");
   try {
     return bindBotCustomSelection({
-      selection: { ...admission.effectiveCustom, ...(!skillsEnabled ? { skillIds: [] } : {}), ...(routineModelGrant ? { providerId: inspectBotRoutineModelGrant(routineModelGrant).binding.providerOption.id, modelId: inspectBotRoutineModelGrant(routineModelGrant).binding.modelOption.id } : {}) },
+      selection: {
+        ...admission.effectiveCustom,
+        ...(!skillsEnabled ? { skillIds: [] } : {}),
+        ...(routineModelGrant
+          ? {
+              providerId: inspectBotRoutineModelGrant(routineModelGrant).binding.providerOption.id,
+              modelId: inspectBotRoutineModelGrant(routineModelGrant).binding.modelOption.id,
+            }
+          : {}),
+      },
       catalogRevision: snapshot.catalog.revision,
       snapshot,
     });
@@ -394,7 +403,12 @@ function buildAuthority(input: {
       )
       .map(otherAuthority);
   } else {
-    const binding = customBinding(admission, snapshot, input.skillsEnabled, input.routineModelGrant);
+    const binding = customBinding(
+      admission,
+      snapshot,
+      input.skillsEnabled,
+      input.routineModelGrant,
+    );
     files = fileAuthority(binding.fileScopes);
     shell = binding.shell
       ? {
@@ -543,7 +557,12 @@ export class BotRuntimeAuthorityResolver {
   }
 
   private async admitOnce(
-    input: { audienceId: string; botId: string; chatId: string; routineModelGrant?: BotRoutineModelGrant },
+    input: {
+      audienceId: string;
+      botId: string;
+      chatId: string;
+      routineModelGrant?: BotRoutineModelGrant;
+    },
     canRetry: boolean,
   ): Promise<BotRuntimeAuthorityAdmission> {
     let lease: BotCapabilityAuthorityLease | undefined;
@@ -553,8 +572,13 @@ export class BotRuntimeAuthorityResolver {
       const skillsEnabled = await (this.deps.skillsEnabled?.() ?? Promise.resolve(true));
       inventoryLease.assertCurrent();
       const { bot, chat } = await resolveIdentities(this.deps, input.botId, input.chatId);
-      const routine = input.routineModelGrant ? inspectBotRoutineModelGrant(input.routineModelGrant) : undefined;
-      if (routine) { if (routine.claim.botId !== input.botId) fail("provider_mismatch"); await routine.assertCurrent(); }
+      const routine = input.routineModelGrant
+        ? inspectBotRoutineModelGrant(input.routineModelGrant)
+        : undefined;
+      if (routine) {
+        if (routine.claim.botId !== input.botId) fail("provider_mismatch");
+        await routine.assertCurrent();
+      }
       let workspace: BotManagedWorkspaceResolution;
       try {
         workspace = await this.deps.managedWorkspace.resolve(input.botId);
@@ -569,7 +593,17 @@ export class BotRuntimeAuthorityResolver {
         snapshot = await this.deps.catalog.snapshotForRuntime({
           botId: input.botId,
           retainedBindings: await retainedBinding(this.deps, input.botId),
-          retainedProviders: [...await retainedProviders(this.deps, input.botId, chat), ...(routine ? [{ sourceProviderId: routine.binding.sourceProviderId, sourceModelId: routine.binding.sourceModelId }] : [])],
+          retainedProviders: [
+            ...(await retainedProviders(this.deps, input.botId, chat)),
+            ...(routine
+              ? [
+                  {
+                    sourceProviderId: routine.binding.sourceProviderId,
+                    sourceModelId: routine.binding.sourceModelId,
+                  },
+                ]
+              : []),
+          ],
         });
       } catch {
         fail("capability_changed");
@@ -629,8 +663,16 @@ export class BotRuntimeAuthorityResolver {
             const current = await resolveIdentities(this.deps, input.botId, input.chatId);
             if (routine) {
               await routine.assertCurrent();
-              if (current.bot.id !== bot.id || current.chat.id !== chat.id || current.chat.botId !== bot.id || current.chat.providerId !== chat.providerId || current.chat.model !== chat.model) fail("capability_changed");
-            } else if (!sameIdentity(current.bot, current.chat, authority)) fail("capability_changed");
+              if (
+                current.bot.id !== bot.id ||
+                current.chat.id !== chat.id ||
+                current.chat.botId !== bot.id ||
+                current.chat.providerId !== chat.providerId ||
+                current.chat.model !== chat.model
+              )
+                fail("capability_changed");
+            } else if (!sameIdentity(current.bot, current.chat, authority))
+              fail("capability_changed");
             const [botPolicy, chatPolicy] = await Promise.all([
               this.deps.capabilityStore.getBotPolicy(input.botId),
               this.deps.capabilityStore.getChatPolicy(input.chatId),
@@ -644,7 +686,17 @@ export class BotRuntimeAuthorityResolver {
             const currentSnapshot = await this.deps.catalog.snapshotForRuntime({
               botId: input.botId,
               retainedBindings: await retainedBinding(this.deps, input.botId),
-              retainedProviders: [...await retainedProviders(this.deps, input.botId, current.chat), ...(routine ? [{ sourceProviderId: routine.binding.sourceProviderId, sourceModelId: routine.binding.sourceModelId }] : [])],
+              retainedProviders: [
+                ...(await retainedProviders(this.deps, input.botId, current.chat)),
+                ...(routine
+                  ? [
+                      {
+                        sourceProviderId: routine.binding.sourceProviderId,
+                        sourceModelId: routine.binding.sourceModelId,
+                      },
+                    ]
+                  : []),
+              ],
             });
             if (currentSnapshot.catalog.revision !== authority.catalogRevision) {
               fail("capability_changed");

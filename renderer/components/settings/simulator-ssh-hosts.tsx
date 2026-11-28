@@ -96,7 +96,12 @@ export function SimulatorSshHostsView({
         description="Reach a Mac you can already SSH into. It needs Xcode, Node.js 22 or newer, and npm. Aiden uses your SSH keys and config, never stores passwords, and connects only when you ask."
       >
         <div className="flex justify-end">
-          <Button size="small" variant="muted" disabled={busy || state.hostStatus === "disabled"} onClick={onAdd}>
+          <Button
+            size="small"
+            variant="muted"
+            disabled={busy || state.hostStatus === "disabled"}
+            onClick={onAdd}
+          >
             <Plus aria-hidden />
             Add SSH host
           </Button>
@@ -135,7 +140,8 @@ export function SimulatorSshHostsView({
               </Text>
               {(["hub", "agent"] as const).map((tool) => (
                 <Text key={tool} variant="small" color="secondary" className="block">
-                  {DEVICE_TOOL_LABELS[tool]}: <span className="font-mono">{toolVersionSummary(info?.tools?.[tool])}</span>
+                  {DEVICE_TOOL_LABELS[tool]}:{" "}
+                  <span className="font-mono">{toolVersionSummary(info?.tools?.[tool])}</span>
                 </Text>
               ))}
               {info?.toolInspectionError ? (
@@ -158,11 +164,21 @@ export function SimulatorSshHostsView({
               {badge.label}
             </Badge>
             {info?.status === "needs-consent" ? (
-              <Button size="small" variant="filled" disabled={busy || !streaming} onClick={() => onInstall(host, "hub")}>
+              <Button
+                size="small"
+                variant="filled"
+                disabled={busy || !streaming}
+                onClick={() => onInstall(host, "hub")}
+              >
                 Install…
               </Button>
             ) : agentMissing ? (
-              <Button size="small" variant="filled" disabled={busy} onClick={() => onInstall(host, "agent")}>
+              <Button
+                size="small"
+                variant="filled"
+                disabled={busy}
+                onClick={() => onInstall(host, "agent")}
+              >
                 Install agent tools…
               </Button>
             ) : (
@@ -173,13 +189,25 @@ export function SimulatorSshHostsView({
                 aria-label={`${info?.status === "error" ? "Retry" : info?.status === "ready" ? "Refresh" : "Connect"} ${host.label}`}
                 onClick={() => onConnect(host)}
               >
-                {working || progress ? <LoaderCircle className="animate-spin motion-reduce:animate-none" aria-hidden /> : null}
-                {info?.status === "error" ? "Retry" : info?.status === "ready" ? "Refresh" : "Connect"}
+                {working || progress ? (
+                  <LoaderCircle className="animate-spin motion-reduce:animate-none" aria-hidden />
+                ) : null}
+                {info?.status === "error"
+                  ? "Retry"
+                  : info?.status === "ready"
+                    ? "Refresh"
+                    : "Connect"}
               </Button>
             )}
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
-                <Button iconOnly size="small" variant="transparent" disabled={busy} aria-label={`More for ${host.label}`}>
+                <Button
+                  iconOnly
+                  size="small"
+                  variant="transparent"
+                  disabled={busy}
+                  aria-label={`More for ${host.label}`}
+                >
                   <MoreHorizontal />
                 </Button>
               </DropdownMenuTrigger>
@@ -218,8 +246,18 @@ export interface SshHostEditorProps {
 
 const FIELDS = [
   { key: "label", label: "Name", placeholder: "Mac mini", hint: "Shown in the Simulator tab." },
-  { key: "target", label: "SSH target", placeholder: "user@host or an SSH config alias", hint: undefined },
-  { key: "identityFile", label: "Identity file", placeholder: "Optional, e.g. ~/.ssh/id_ed25519", hint: "Leave empty to use your SSH config." },
+  {
+    key: "target",
+    label: "SSH target",
+    placeholder: "user@host or an SSH config alias",
+    hint: undefined,
+  },
+  {
+    key: "identityFile",
+    label: "Identity file",
+    placeholder: "Optional, e.g. ~/.ssh/id_ed25519",
+    hint: "Leave empty to use your SSH config.",
+  },
   { key: "port", label: "Port", placeholder: "22", hint: undefined },
 ] as const;
 
@@ -235,12 +273,21 @@ export interface SshHostEditorFormProps {
 }
 
 /** The editor's fields, each problem beside its input, and Test connection. */
-export function SshHostEditorForm({ draft, attempted, check, saving, error, onChange, onTest }: SshHostEditorFormProps) {
+export function SshHostEditorForm({
+  draft,
+  attempted,
+  check,
+  saving,
+  error,
+  onChange,
+  onTest,
+}: SshHostEditorFormProps) {
   const formId = React.useId();
   const result = validateSshDeviceHostDraft(draft);
   const problems: Partial<Record<keyof SshDeviceHostDraft, string>> = {};
   for (const [key, message] of Object.entries(result.errors ?? {})) {
-    if (attempted || draft[key as keyof SshDeviceHostDraft].trim()) problems[key as keyof SshDeviceHostDraft] = message;
+    if (attempted || draft[key as keyof SshDeviceHostDraft].trim())
+      problems[key as keyof SshDeviceHostDraft] = message;
   }
   const checking = check?.status === "pending";
   return (
@@ -287,7 +334,9 @@ export function SshHostEditorForm({ draft, attempted, check, saving, error, onCh
           role="status"
           className="min-w-0 break-words"
         >
-          {check ? describeDeviceHostCheck(check) : "Check access before saving. Nothing is installed."}
+          {check
+            ? describeDeviceHostCheck(check)
+            : "Check access before saving. Nothing is installed."}
         </Text>
         <Button
           size="small"
@@ -297,7 +346,9 @@ export function SshHostEditorForm({ draft, attempted, check, saving, error, onCh
             if (result.config) onTest(result.config);
           }}
         >
-          {checking ? <LoaderCircle className="animate-spin motion-reduce:animate-none" aria-hidden /> : null}
+          {checking ? (
+            <LoaderCircle className="animate-spin motion-reduce:animate-none" aria-hidden />
+          ) : null}
           Test connection
         </Button>
       </div>
@@ -311,7 +362,17 @@ export function SshHostEditorForm({ draft, attempted, check, saving, error, onCh
 }
 
 /** Adds or edits a host. Test connection checks the draft without saving it. */
-export function SshHostEditor({ open, isNew, initial, check, saving, error, onTest, onSave, onClose }: SshHostEditorProps) {
+export function SshHostEditor({
+  open,
+  isNew,
+  initial,
+  check,
+  saving,
+  error,
+  onTest,
+  onSave,
+  onClose,
+}: SshHostEditorProps) {
   const [draft, setDraft] = React.useState(initial);
   const [attempted, setAttempted] = React.useState(false);
   React.useEffect(() => {
@@ -355,12 +416,26 @@ function newSshHostId(): string {
   return `ssh-${random}`;
 }
 
-const EMPTY_DRAFT = (): SshDeviceHostDraft => ({ id: newSshHostId(), label: "", target: "", identityFile: "", port: "" });
+const EMPTY_DRAFT = (): SshDeviceHostDraft => ({
+  id: newSshHostId(),
+  label: "",
+  target: "",
+  identityFile: "",
+  port: "",
+});
 
 /** Install copy names exactly what runs on the host and what it needs there. */
-export function sshInstallDescription(host: SshDeviceHostConfig, tool: "hub" | "agent", agentAccess: boolean): string {
+export function sshInstallDescription(
+  host: SshDeviceHostConfig,
+  tool: "hub" | "agent",
+  agentAccess: boolean,
+): string {
   const tools =
-    tool === "agent" ? "agent-device" : agentAccess ? "expo-device-hub and agent-device" : "expo-device-hub";
+    tool === "agent"
+      ? "agent-device"
+      : agentAccess
+        ? "expo-device-hub and agent-device"
+        : "expo-device-hub";
   return (
     `Aiden connects to ${host.target} over SSH and runs npm there to install the pinned ${tools} into ~/.aiden/devices. ` +
     "The host needs Node.js 22 or newer and npm. Later Aiden releases update these helpers when you connect, " +
@@ -373,9 +448,14 @@ export function SimulatorSshHosts({ state }: { state: DeviceServiceState }) {
   const [pending, setPending] = React.useState<string | null>(null);
   const [error, setError] = React.useState<string | null>(null);
   const [checks, setChecks] = React.useState<Record<string, DeviceHostCheck>>({});
-  const [editor, setEditor] = React.useState<{ isNew: boolean; draft: SshDeviceHostDraft } | null>(null);
+  const [editor, setEditor] = React.useState<{ isNew: boolean; draft: SshDeviceHostDraft } | null>(
+    null,
+  );
   const [editorError, setEditorError] = React.useState<string | null>(null);
-  const [installing, setInstalling] = React.useState<{ host: SshDeviceHostConfig; tool: "hub" | "agent" } | null>(null);
+  const [installing, setInstalling] = React.useState<{
+    host: SshDeviceHostConfig;
+    tool: "hub" | "agent";
+  } | null>(null);
   const [removing, setRemoving] = React.useState<SshDeviceHostConfig | null>(null);
 
   const run = async (key: string, task: () => Promise<unknown>): Promise<boolean> => {
@@ -397,10 +477,12 @@ export function SimulatorSshHosts({ state }: { state: DeviceServiceState }) {
     setChecks((current) => ({ ...current, [config.id]: { status: "pending" } }));
     devicesApi
       .testSshHost(config)
-      .catch((reason: unknown): DeviceHostCheck => ({
-        status: "failed",
-        error: reason instanceof Error ? reason.message : "The connection check failed.",
-      }))
+      .catch(
+        (reason: unknown): DeviceHostCheck => ({
+          status: "failed",
+          error: reason instanceof Error ? reason.message : "The connection check failed.",
+        }),
+      )
       .then((result) => setChecks((current) => ({ ...current, [config.id]: result })));
   };
 
@@ -439,7 +521,9 @@ export function SimulatorSshHosts({ state }: { state: DeviceServiceState }) {
             .saveSshHost(config)
             .then(() => setEditor(null))
             .catch((reason: unknown) =>
-              setEditorError(reason instanceof Error ? reason.message : "The host could not be saved."),
+              setEditorError(
+                reason instanceof Error ? reason.message : "The host could not be saved.",
+              ),
             )
             .finally(() => setPending(null));
         }}
@@ -455,7 +539,11 @@ export function SimulatorSshHosts({ state }: { state: DeviceServiceState }) {
             ? `Install agent tools on ${installing.host.label}?`
             : `Install simulator helpers on ${installing?.host.label ?? "this host"}?`
         }
-        description={installing ? sshInstallDescription(installing.host, installing.tool, state.consent.agentAccess) : ""}
+        description={
+          installing
+            ? sshInstallDescription(installing.host, installing.tool, state.consent.agentAccess)
+            : ""
+        }
         confirmLabel="Install"
         busy={pending !== null}
         keepOpenOnConfirm

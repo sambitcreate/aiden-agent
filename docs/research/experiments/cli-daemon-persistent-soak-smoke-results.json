@@ -161,12 +161,7 @@
   ],
   "stopReason": "bounded-cycle-cap",
   "finishedAt": "2026-10-11T20:43:13.903Z",
-  "finalResources": [
-    "PipeWrap",
-    "PipeWrap",
-    "TCPServerWrap",
-    "TCPSocketWrap"
-  ],
+  "finalResources": ["PipeWrap", "PipeWrap", "TCPServerWrap", "TCPSocketWrap"],
   "finalMemory": {
     "rss": 203046912,
     "heapTotal": 102023168,

@@ -2,11 +2,18 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { Box3, Mesh, PerspectiveCamera, Texture, Vector3 } from "three";
-import { createAndroidFoldScene, DEFAULT_FOLD_INNER_ASPECT, isFoldInnerAspect } from "./android-fold-scene.js";
+import {
+  createAndroidFoldScene,
+  DEFAULT_FOLD_INNER_ASPECT,
+  isFoldInnerAspect,
+} from "./android-fold-scene.js";
 import { phoneDisplayLayout } from "./phone-scene.js";
 
 const close = (actual: number, expected: number, epsilon: number) =>
-  assert.ok(Math.abs(actual - expected) <= epsilon, `${actual} is not within ${epsilon} of ${expected}`);
+  assert.ok(
+    Math.abs(actual - expected) <= epsilon,
+    `${actual} is not within ${epsilon} of ${expected}`,
+  );
 
 test("one half turns about the hinge while both screen halves stay joined at the crease", () => {
   const texture = new Texture();
@@ -22,7 +29,9 @@ test("one half turns about the hinge while both screen halves stay joined at the
   const rightScreen = scene.root.getObjectByName("right-inner-screen") as Mesh;
   leftScreen.geometry.computeBoundingBox();
   rightScreen.geometry.computeBoundingBox();
-  assert.ok(rightScreen.geometry.boundingBox!.min.x - leftScreen.geometry.boundingBox!.max.x < 0.01);
+  assert.ok(
+    rightScreen.geometry.boundingBox!.min.x - leftScreen.geometry.boundingBox!.max.x < 0.01,
+  );
   const continuous = scene.root.getObjectByName("continuous-inner-screen") as Mesh;
   const positions = continuous.geometry.getAttribute("position");
   assert.notEqual(continuous.geometry.index, null);
@@ -63,7 +72,12 @@ test("the inner display takes the raw frame's shape, portrait or landscape; cove
     [2076, 2152],
     [2208, 1840],
   ] as const) {
-    const scene = createAndroidFoldScene(texture, phoneDisplayLayout(null, width, height), 180, width / height);
+    const scene = createAndroidFoldScene(
+      texture,
+      phoneDisplayLayout(null, width, height),
+      180,
+      width / height,
+    );
     const screen = scene.root.getObjectByName("continuous-inner-screen") as Mesh;
     screen.geometry.computeBoundingBox();
     const size = screen.geometry.boundingBox!.getSize(new Vector3());

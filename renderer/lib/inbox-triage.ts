@@ -68,7 +68,17 @@ export interface InboxTriageOffer {
 
 /** What a row's menu offers, by the rules that place it (`inboxState`). */
 export function inboxTriageOffer(
-  signals: Pick<InboxSignals, "rowState" | "attention" | "failed" | "unread" | "isOpen" | "doneAt" | "snoozedUntil" | "lastAssistantAt">,
+  signals: Pick<
+    InboxSignals,
+    | "rowState"
+    | "attention"
+    | "failed"
+    | "unread"
+    | "isOpen"
+    | "doneAt"
+    | "snoozedUntil"
+    | "lastAssistantAt"
+  >,
   now: number,
 ): InboxTriageOffer {
   const holdsRow =
@@ -94,12 +104,17 @@ export function predictTriage(
   patch: ChatTriagePatch,
   now: number,
 ): ChatTriageEntry {
-  const next: ChatTriageEntry = { ...(before ?? {}), revision: triageRevision(before) + 1, updatedAt: now };
+  const next: ChatTriageEntry = {
+    ...(before ?? {}),
+    revision: triageRevision(before) + 1,
+    updatedAt: now,
+  };
   if (patch.pinned === true) next.pinnedAt = before?.pinnedAt ?? now;
   else if (patch.pinned === false) delete next.pinnedAt;
   if (patch.done === true) next.doneAt = patch.restoreDoneAt ?? now;
   else if (patch.done === false) delete next.doneAt;
-  if (typeof patch.snoozeUntil === "number" && patch.snoozeUntil > now) next.snoozedUntil = patch.snoozeUntil;
+  if (typeof patch.snoozeUntil === "number" && patch.snoozeUntil > now)
+    next.snoozedUntil = patch.snoozeUntil;
   else if (patch.snoozeUntil !== undefined) delete next.snoozedUntil;
   return next;
 }
@@ -132,7 +147,8 @@ export function settledTriageOverlayKeys(
   return [...overlay].flatMap(([key, entry]) => {
     const parsed = parseProjectOrderKey(key);
     if (!parsed) return [];
-    const known = parsed.hostId === LOCAL_SIDEBAR_HOST_ID ? local?.[parsed.projectId] : reported?.get(key);
+    const known =
+      parsed.hostId === LOCAL_SIDEBAR_HOST_ID ? local?.[parsed.projectId] : reported?.get(key);
     return known !== undefined && known.revision >= entry.revision ? [key] : [];
   });
 }
@@ -148,10 +164,17 @@ type ReadSignals = InboxReadBoundary & Pick<InboxSignals, "unread" | "isOpen">;
 
 function readCovers(through: InboxReadBoundary | undefined, signals: ReadSignals): boolean {
   if (!through) return false;
-  if (through.lastAssistantAt === signals.lastAssistantAt && through.lastAssistantMessageId && signals.lastAssistantMessageId) {
+  if (
+    through.lastAssistantAt === signals.lastAssistantAt &&
+    through.lastAssistantMessageId &&
+    signals.lastAssistantMessageId
+  ) {
     return through.lastAssistantMessageId === signals.lastAssistantMessageId;
   }
-  return (signals.lastAssistantAt ?? Number.NEGATIVE_INFINITY) <= (through.lastAssistantAt ?? Number.NEGATIVE_INFINITY);
+  return (
+    (signals.lastAssistantAt ?? Number.NEGATIVE_INFINITY) <=
+    (through.lastAssistantAt ?? Number.NEGATIVE_INFINITY)
+  );
 }
 
 /**
@@ -184,7 +207,8 @@ export function settledInboxReads(
   const byKey = new Map(rows.map((row) => [row.key, row.signals] as const));
   return [...pending].flatMap(([key, through]) => {
     const signals = byKey.get(key);
-    if (!signals || !signals.unread || signals.isOpen || !readCovers(through, signals)) return [key];
+    if (!signals || !signals.unread || signals.isOpen || !readCovers(through, signals))
+      return [key];
     return [];
   });
 }
@@ -224,7 +248,8 @@ export function mergeInboxTriageUndo(
   current: InboxTriageUndoBatch | null,
   next: InboxTriageUndoBatch,
 ): InboxTriageUndoBatch {
-  if (!current || current.kind !== next.kind || next.at - current.at >= INBOX_TRIAGE_UNDO_MS) return next;
+  if (!current || current.kind !== next.kind || next.at - current.at >= INBOX_TRIAGE_UNDO_MS)
+    return next;
   const items = current.items.map((item) => ({ ...item }));
   for (const item of next.items) {
     const existing = items.find((candidate) => candidate.target.key === item.target.key);
@@ -237,14 +262,20 @@ export function mergeInboxTriageUndo(
   }
   // Chats snoozed to different times share one toast that names no time.
   const wakes = new Set(items.map((item) => item.patch.snoozeUntil));
-  const until = next.until !== undefined && wakes.size === 1 && wakes.has(next.until) ? next.until : undefined;
+  const until =
+    next.until !== undefined && wakes.size === 1 && wakes.has(next.until) ? next.until : undefined;
   return { kind: next.kind, items, at: next.at, ...(until !== undefined ? { until } : {}) };
 }
 
 /** Undo's writes: the inverse of each chat's patch, guarded by the revision its last write left. */
 export function inboxTriageUndoWrites(
   batch: InboxTriageUndoBatch,
-): { target: InboxTriageTarget; patch: ChatTriagePatch; ifRevision: number; before: ChatTriageEntry | null }[] {
+): {
+  target: InboxTriageTarget;
+  patch: ChatTriagePatch;
+  ifRevision: number;
+  before: ChatTriageEntry | null;
+}[] {
   return batch.items.map((item) => ({
     target: item.target,
     patch: inverseTriagePatch(item.before, item.patch, item.lastAssistantAt),
@@ -254,7 +285,9 @@ export function inboxTriageUndoWrites(
 }
 
 /** Writes grouped by host, in first-seen order, so each host gets one connection. */
-export function groupByHost<T extends { target: InboxTriageTarget }>(writes: readonly T[]): Map<string, T[]> {
+export function groupByHost<T extends { target: InboxTriageTarget }>(
+  writes: readonly T[],
+): Map<string, T[]> {
   const groups = new Map<string, T[]>();
   for (const write of writes) {
     const group = groups.get(write.target.hostId);
@@ -271,7 +304,8 @@ function snoozeTime(at: Date, locale?: string): string {
 /** Whole calendar days from `now` to `until` on this device's clock. */
 function calendarDaysAhead(until: Date, now: number): number {
   const today = new Date(now);
-  const dayStart = (date: Date) => new Date(date.getFullYear(), date.getMonth(), date.getDate()).getTime();
+  const dayStart = (date: Date) =>
+    new Date(date.getFullYear(), date.getMonth(), date.getDate()).getTime();
   return Math.round((dayStart(until) - dayStart(today)) / 86_400_000);
 }
 

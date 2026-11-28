@@ -12,15 +12,22 @@ import { NOTE_FOLLOW_UP_INSTRUCTIONS, createNoteFollowUpTool } from "./tool.js";
 
 const timeZone = () => Intl.DateTimeFormat().resolvedOptions().timeZone;
 
-export const botCommitments = createBotCommitmentStore({ profileDir: () => app.getPath("userData"), timeZone });
+export const botCommitments = createBotCommitmentStore({
+  profileDir: () => app.getPath("userData"),
+  timeZone,
+});
 
 export const botCommitmentProposer = createBotCommitmentProposer({
   commitments: botCommitments,
   proposals: {
-    propose: async (botId, input) => (await import("../bot-routine-proposals-main.js")).botRoutineProposals.propose(botId, input),
-    pendingCount: async (botId) => (await import("../bot-routine-proposals-main.js")).botRoutineProposals.pendingCount(botId),
+    propose: async (botId, input) =>
+      (await import("../bot-routine-proposals-main.js")).botRoutineProposals.propose(botId, input),
+    pendingCount: async (botId) =>
+      (await import("../bot-routine-proposals-main.js")).botRoutineProposals.pendingCount(botId),
     dismiss: async (botId, proposalId) => {
-      await (await import("../bot-routine-proposals-main.js")).botRoutineProposals.respond({ botId, proposalId, decision: "dismiss", settledBy: "host" });
+      await (
+        await import("../bot-routine-proposals-main.js")
+      ).botRoutineProposals.respond({ botId, proposalId, decision: "dismiss", settledBy: "host" });
     },
   },
   pendingLimit: BOT_ROUTINE_PROPOSAL_PENDING_LIMIT,
@@ -29,8 +36,11 @@ export const botCommitmentProposer = createBotCommitmentProposer({
 });
 
 function pump(botId: string): void {
-  void botCommitmentProposer.pump(botId).catch((error: unknown) =>
-    logger.warn("bots", `Bot ${botId} follow-up proposal failed.`, error));
+  void botCommitmentProposer
+    .pump(botId)
+    .catch((error: unknown) =>
+      logger.warn("bots", `Bot ${botId} follow-up proposal failed.`, error),
+    );
 }
 
 /** The memory review's follow-up tool for one Bot, with today's date so due dates are real. */
@@ -39,18 +49,35 @@ export function commitmentReviewExtras(botId: string): MemoryReviewExtras {
   const weekday = today.toLocaleDateString("en-US", { weekday: "long", timeZone: timeZone() });
   return {
     tools: [createNoteFollowUpTool({ botId, store: botCommitments, onAdded: pump })],
-    instructions: [`Today is ${weekday}, ${localDate(today.getTime(), timeZone())}.`, ...NOTE_FOLLOW_UP_INSTRUCTIONS],
+    instructions: [
+      `Today is ${weekday}, ${localDate(today.getTime(), timeZone())}.`,
+      ...NOTE_FOLLOW_UP_INSTRUCTIONS,
+    ],
   };
 }
 
 /** A routine proposal was answered: settle its follow-up and propose the next one. */
-export function commitmentProposalSettled(botId: string, proposalId: string, status: "accepted" | "dismissed"): void {
-  void botCommitmentProposer.onProposalSettled(botId, proposalId, status).catch((error: unknown) =>
-    logger.warn("bots", `Bot ${botId} follow-up bookkeeping failed.`, error));
+export function commitmentProposalSettled(
+  botId: string,
+  proposalId: string,
+  status: "accepted" | "dismissed",
+): void {
+  void botCommitmentProposer
+    .onProposalSettled(botId, proposalId, status)
+    .catch((error: unknown) =>
+      logger.warn("bots", `Bot ${botId} follow-up bookkeeping failed.`, error),
+    );
 }
 
 /** A follow-up's card was revised: keep the follow-up on the card that replaced it. */
-export function commitmentProposalRevised(botId: string, replacedId: string, replacement: BotCommitmentRevisedCard): void {
-  void botCommitmentProposer.onProposalRevised(botId, replacedId, replacement).catch((error: unknown) =>
-    logger.warn("bots", `Bot ${botId} follow-up bookkeeping failed.`, error));
+export function commitmentProposalRevised(
+  botId: string,
+  replacedId: string,
+  replacement: BotCommitmentRevisedCard,
+): void {
+  void botCommitmentProposer
+    .onProposalRevised(botId, replacedId, replacement)
+    .catch((error: unknown) =>
+      logger.warn("bots", `Bot ${botId} follow-up bookkeeping failed.`, error),
+    );
 }

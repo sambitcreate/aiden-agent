@@ -34,16 +34,28 @@ test("an answer evicted while running keeps the agent's comments its own until t
   begin("run-1", "chat-1");
   begin("run-2", "chat-2");
   begin("run-3", "chat-3");
-  assert.equal(registry.summary("run-1"), undefined, "the registry evicted chat-1's running answer");
+  assert.equal(
+    registry.summary("run-1"),
+    undefined,
+    "the registry evicted chat-1's running answer",
+  );
 
   advanceMinutes(30);
-  assert.equal(answering.wasAnswering("chat-1", Date.now()), true, "a comment the answer posts now is its own");
+  assert.equal(
+    answering.wasAnswering("chat-1", Date.now()),
+    true,
+    "a comment the answer posts now is its own",
+  );
 
   // The answer ends; the registry no longer knows the run and reports nothing.
   busy.delete("chat-1");
   const endedAt = Date.now();
   advanceMinutes(1);
-  assert.equal(answering.wasAnswering("chat-1", endedAt), true, "comments posted while it ran stay its own");
+  assert.equal(
+    answering.wasAnswering("chat-1", endedAt),
+    true,
+    "comments posted while it ran stay its own",
+  );
   advanceMinutes(10);
   assert.equal(
     answering.wasAnswering("chat-1", Date.now()),
@@ -63,7 +75,11 @@ test("a finished answer counts from its start to its end, with a minute's slack"
   assert.equal(answering.wasAnswering("chat-1", startedAt + 2 * MINUTE), true);
   assert.equal(answering.wasAnswering("chat-1", endedAt + MINUTE / 2), true);
   assert.equal(answering.wasAnswering("chat-1", endedAt + 2 * MINUTE), false);
-  assert.equal(answering.wasAnswering("chat-2", startedAt + 2 * MINUTE), false, "other chats were not answering");
+  assert.equal(
+    answering.wasAnswering("chat-2", startedAt + 2 * MINUTE),
+    false,
+    "other chats were not answering",
+  );
 });
 
 test("deleting a chat forgets an evicted answer that was still running", (t) => {

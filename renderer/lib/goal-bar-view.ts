@@ -18,13 +18,17 @@ export interface GoalBarView {
 }
 
 /** What the bar says when a round off screen needed the chat's window. */
-export const GOAL_WINDOW_WANTED_DETAIL = "Open this chat to let Aiden use the browser or Computer Use";
+export const GOAL_WINDOW_WANTED_DETAIL =
+  "Open this chat to let Aiden use the browser or Computer Use";
 
 /** What the bar shows for a goal: its state line, the detail under it, and the actions it offers. */
 export function goalBarView(goal: GoalView): GoalBarView {
   // A round off screen needed the window (the browser, Computer Use): Continue
   // here starts the next round from this window, which then has those tools.
-  if (goal.windowWanted === true && (goal.status === "needs-you" || (goal.status === "paused" && goal.cause !== "person"))) {
+  if (
+    goal.windowWanted === true &&
+    (goal.status === "needs-you" || (goal.status === "paused" && goal.cause !== "person"))
+  ) {
     return {
       title: goal.status === "needs-you" ? "Needs you" : "Paused",
       detail: GOAL_WINDOW_WANTED_DETAIL,
@@ -36,12 +40,25 @@ export function goalBarView(goal: GoalView): GoalBarView {
   }
   switch (goal.status) {
     case "active":
-      return { title: `Working · ${goalRoundLabel(goal)}`, detail: goal.objective, tone: "neutral", icon: "working", actions: ["pause", "clear"] };
+      return {
+        title: `Working · ${goalRoundLabel(goal)}`,
+        detail: goal.objective,
+        tone: "neutral",
+        icon: "working",
+        actions: ["pause", "clear"],
+      };
     case "paused":
       // The person's own pause resumes; a pause the loop chose (a limit, a
       // stall, a restart) is "Keep going". Both start again from round 1.
       return goal.cause === "person"
-        ? { title: "Paused", detail: goal.objective, tone: "neutral", icon: "paused", actions: ["resume", "clear"], primary: "resume" }
+        ? {
+            title: "Paused",
+            detail: goal.objective,
+            tone: "neutral",
+            icon: "paused",
+            actions: ["resume", "clear"],
+            primary: "resume",
+          }
         : {
             title: "Paused",
             detail: goal.reason ?? goal.objective,
@@ -60,12 +77,22 @@ export function goalBarView(goal: GoalView): GoalBarView {
         primary: "keep-going",
       };
     case "done":
-      return { title: "Done", detail: goal.reason ?? goal.objective, tone: "green", icon: "done", actions: ["clear"] };
+      return {
+        title: "Done",
+        detail: goal.reason ?? goal.objective,
+        tone: "green",
+        icon: "done",
+        actions: ["clear"],
+      };
   }
 }
 
 /** What the bar shows the moment the person taps, before main answers. */
-export function optimisticGoal(goal: GoalView, action: GoalBarAction, now: number): GoalView | null {
+export function optimisticGoal(
+  goal: GoalView,
+  action: GoalBarAction,
+  now: number,
+): GoalView | null {
   if (action === "clear") return null;
   if (action === "pause") {
     if (goal.status !== "active") return goal;

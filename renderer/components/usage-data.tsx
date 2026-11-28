@@ -18,7 +18,8 @@ import { Button, Dialog, type DialogLayer, Field, FieldSet, Switch, Text, toast 
 export const USAGE_DATA_LABEL = "Share anonymous usage and crash data";
 export const USAGE_DATA_SUMMARY = "Helps improve Aiden. Never includes your chats, files or keys.";
 const NOTICE_ANSWERED_EVENT = "aiden:usage-notice-answered";
-export const USAGE_DATA_ENV_DISABLED = "Turned off by your environment (DO_NOT_TRACK or AIDEN_ANALYTICS)";
+export const USAGE_DATA_ENV_DISABLED =
+  "Turned off by your environment (DO_NOT_TRACK or AIDEN_ANALYTICS)";
 const SAVE_FAILED = "Aiden could not save the usage data setting.";
 
 export interface UsageDataSetting {
@@ -90,13 +91,18 @@ function describeProperty(property: AnalyticsPropertyView): string {
 
 function PropertyList({ properties }: { properties: readonly AnalyticsPropertyView[] }) {
   if (properties.length === 0) {
-    return <Text variant="small" color="tertiary">Only the fields sent with every event.</Text>;
+    return (
+      <Text variant="small" color="tertiary">
+        Only the fields sent with every event.
+      </Text>
+    );
   }
   return (
     <ul className="flex flex-col gap-0.5">
       {properties.map((property) => (
         <li key={property.name} className="text-small text-secondary">
-          <code className="font-mono text-primary">{property.name}</code>: {describeProperty(property)}
+          <code className="font-mono text-primary">{property.name}</code>:{" "}
+          {describeProperty(property)}
         </li>
       ))}
     </ul>
@@ -178,7 +184,9 @@ export function UsageDataSheet({
               .filter((event) => event.name !== "app_crashed")
               .map((event) => (
                 <SheetRow key={event.name}>
-                  <div className="mb-1 font-mono text-small-strong font-medium text-primary">{event.name}</div>
+                  <div className="mb-1 font-mono text-small-strong font-medium text-primary">
+                    {event.name}
+                  </div>
                   <PropertyList properties={event.properties} />
                 </SheetRow>
               ))}
@@ -186,8 +194,9 @@ export function UsageDataSheet({
           <SheetSection title="Crash and error reports">
             <SheetRow>
               <Text as="p" variant="small" color="secondary" className="mb-1">
-                The error type and its stack trace inside Aiden. Only messages written by the JavaScript runtime are
-                kept; every other message is withheld, and paths outside Aiden are removed.
+                The error type and its stack trace inside Aiden. Only messages written by the
+                JavaScript runtime are kept; every other message is withheld, and paths outside
+                Aiden are removed.
               </Text>
               <PropertyList properties={registry.exceptionProperties} />
             </SheetRow>
@@ -195,14 +204,16 @@ export function UsageDataSheet({
               .filter((event) => event.name === "app_crashed")
               .map((event) => (
                 <SheetRow key={event.name}>
-                  <div className="mb-1 font-mono text-small-strong font-medium text-primary">{event.name}</div>
+                  <div className="mb-1 font-mono text-small-strong font-medium text-primary">
+                    {event.name}
+                  </div>
                   <PropertyList properties={event.properties} />
                 </SheetRow>
               ))}
           </SheetSection>
           <Text as="p" variant="small" color="secondary">
-            Never sent: chats, prompts, replies, file names or contents, paths, API keys, or the names and URLs of
-            custom providers.
+            Never sent: chats, prompts, replies, file names or contents, paths, API keys, or the
+            names and URLs of custom providers.
           </Text>
         </div>
       ) : (
@@ -231,12 +242,20 @@ export function UsageDataSheetLink({
       <button
         ref={triggerRef}
         type="button"
-        className={cn("rounded-sm text-small-strong font-medium text-accent-text hover:underline", className)}
+        className={cn(
+          "rounded-sm text-small-strong font-medium text-accent-text hover:underline",
+          className,
+        )}
         onClick={() => setOpen(true)}
       >
         What’s sent
       </button>
-      <UsageDataSheet open={open} onOpenChange={setOpen} layer={layer} returnFocus={() => triggerRef.current} />
+      <UsageDataSheet
+        open={open}
+        onOpenChange={setOpen}
+        layer={layer}
+        returnFocus={() => triggerRef.current}
+      />
     </>
   );
 }
@@ -295,7 +314,13 @@ export function UsageDataNotice() {
             </p>
             <UsageDataSheetLink className="mt-2" />
           </div>
-          <Button variant="transparent" size="small" iconOnly aria-label="Dismiss" onClick={() => answer("ok")}>
+          <Button
+            variant="transparent"
+            size="small"
+            iconOnly
+            aria-label="Dismiss"
+            onClick={() => answer("ok")}
+          >
             <X />
           </Button>
         </div>
@@ -329,8 +354,8 @@ export function UsageDataSettings() {
         label={USAGE_DATA_LABEL}
         description={
           <>
-            App launches, daily use, setup, updates, which big features you use and crash reports, with a random
-            install ID. Never your chats, files, keys or paths.
+            App launches, daily use, setup, updates, which big features you use and crash reports,
+            with a random install ID. Never your chats, files, keys or paths.
             {caption ? <span className="mt-1 block text-tertiary">{caption}</span> : null}
           </>
         }
@@ -343,14 +368,21 @@ export function UsageDataSettings() {
           onCheckedChange={setEnabled}
         />
       </Field>
-      <Field label="What’s sent" description="Every event and field Aiden can send, straight from the app’s own list.">
+      <Field
+        label="What’s sent"
+        description="Every event and field Aiden can send, straight from the app’s own list."
+      >
         <div className="flex justify-end max-[540px]:justify-start">
           <Button ref={viewRef} size="small" variant="filled" onClick={() => setSheetOpen(true)}>
             View
           </Button>
         </div>
       </Field>
-      <UsageDataSheet open={sheetOpen} onOpenChange={setSheetOpen} returnFocus={() => viewRef.current} />
+      <UsageDataSheet
+        open={sheetOpen}
+        onOpenChange={setSheetOpen}
+        returnFocus={() => viewRef.current}
+      />
     </FieldSet>
   );
 }

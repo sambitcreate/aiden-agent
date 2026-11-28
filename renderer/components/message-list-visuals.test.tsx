@@ -7,7 +7,12 @@ import { installBotTestIpc } from "../main/bots/test-dom";
 import { MessageList } from "./message-list";
 import { Toaster } from "./ui";
 import { KeepVisualChatContext } from "../lib/visual-menu-actions";
-import { DesignModeControlsContext, noteDesignCanvasView, type DesignModeControls, type DesignModeSource } from "../lib/design-mode";
+import {
+  DesignModeControlsContext,
+  noteDesignCanvasView,
+  type DesignModeControls,
+  type DesignModeSource,
+} from "../lib/design-mode";
 import type { AgentToolStep, GenerationTimeline } from "../shared/generation-timeline";
 import { mapRemoteMessage } from "../lib/hosts/remote-chat-mapper";
 
@@ -23,16 +28,33 @@ const visual = {
   mediaId: "media-live",
 };
 
-function toolStep(id: string, toolCallId: string, toolName: string, contentOffset: number): AgentToolStep {
+function toolStep(
+  id: string,
+  toolCallId: string,
+  toolName: string,
+  contentOffset: number,
+): AgentToolStep {
   return {
-    id, order: 0, kind: "tool", toolCallId, toolName, label: toolName,
-    status: "running", startedAt: 1, updatedAt: 1, contentOffset,
+    id,
+    order: 0,
+    kind: "tool",
+    toolCallId,
+    toolName,
+    label: toolName,
+    status: "running",
+    startedAt: 1,
+    updatedAt: 1,
+    contentOffset,
   };
 }
 
 function liveList(text: string, steps: AgentToolStep[]) {
   const timeline: GenerationTimeline = {
-    version: 3, generationId: "generation-1", status: "running", startedAt: 1, steps,
+    version: 3,
+    generationId: "generation-1",
+    status: "running",
+    startedAt: 1,
+    steps,
   };
   return (
     <MessageList
@@ -57,7 +79,11 @@ test("a streaming draft renders in its tool row and yields to the presented visu
   const intro = "Before chart.";
   const renderStep = toolStep("tool-1", "call-render", "render_artifact", intro.length);
   const timeline: GenerationTimeline = {
-    version: 3, generationId: "generation-1", status: "running", startedAt: 1, steps: [renderStep],
+    version: 3,
+    generationId: "generation-1",
+    status: "running",
+    startedAt: 1,
+    steps: [renderStep],
   };
   const draftSrc = `aiden-genui://preview/${"d".repeat(64)}`;
   const list = (presented: boolean) => (
@@ -68,7 +94,9 @@ test("a streaming draft renders in its tool row and yields to the presented visu
       streamingReasoning={null}
       streamingArtifacts={presented ? [visual] : []}
       streamingArtifactPlacements={new Map([[visual.mediaId, "call-render"]])}
-      streamingVisualDrafts={presented ? new Map() : new Map([["call-render", { src: draftSrc, title: "Chart" }]])}
+      streamingVisualDrafts={
+        presented ? new Map() : new Map([["call-render", { src: draftSrc, title: "Chart" }]])
+      }
       timeline={timeline}
       liveSubagents={[]}
       subagentsEnabled={false}
@@ -83,7 +111,10 @@ test("a streaming draft renders in its tool row and yields to the presented visu
   const activityAt = html.indexOf("render_artifact");
   const draftAt = html.indexOf("data-inline-visual-draft");
   assert.ok(activityAt >= 0 && draftAt > activityAt, "the draft follows its tool's activity row");
-  assert.equal(view.container.querySelector("[data-inline-visual-draft] iframe")?.getAttribute("src"), draftSrc);
+  assert.equal(
+    view.container.querySelector("[data-inline-visual-draft] iframe")?.getAttribute("src"),
+    draftSrc,
+  );
 
   view.rerender(list(true));
   assert.equal(view.container.querySelector("[data-inline-visual-draft]"), null);
@@ -94,7 +125,11 @@ test("visuals the model asked to make wide render wide, live and once saved", ()
   installBotTestIpc({ "chats:htmlArtifactSrcdoc": () => new Promise(() => undefined) });
   const renderStep = toolStep("tool-1", "call-render", "render_artifact", 0);
   const timeline: GenerationTimeline = {
-    version: 3, generationId: "generation-1", status: "running", startedAt: 1, steps: [renderStep],
+    version: 3,
+    generationId: "generation-1",
+    status: "running",
+    startedAt: 1,
+    steps: [renderStep],
   };
   const live = render(
     <MessageList
@@ -113,7 +148,10 @@ test("visuals the model asked to make wide render wide, live and once saved", ()
       error={null}
     />,
   );
-  assert.equal(live.container.querySelector('[data-html-artifact="media-live"]')?.getAttribute("data-layout"), "wide");
+  assert.equal(
+    live.container.querySelector('[data-html-artifact="media-live"]')?.getAttribute("data-layout"),
+    "wide",
+  );
   live.unmount();
 
   const saved = render(
@@ -125,8 +163,13 @@ test("visuals the model asked to make wide render wide, live and once saved", ()
           role: "assistant",
           content: "Board.",
           createdAt: 1,
-          htmlArtifacts: [visual, { ...visual, id: "html-2", mediaId: "media-column", title: "Card" }],
-          htmlArtifactPlacements: [{ mediaId: visual.mediaId, toolCallId: "call-render", layout: "wide" }],
+          htmlArtifacts: [
+            visual,
+            { ...visual, id: "html-2", mediaId: "media-column", title: "Card" },
+          ],
+          htmlArtifactPlacements: [
+            { mediaId: visual.mediaId, toolCallId: "call-render", layout: "wide" },
+          ],
         },
       ]}
       streamingText={null}
@@ -139,8 +182,16 @@ test("visuals the model asked to make wide render wide, live and once saved", ()
       error={null}
     />,
   );
-  assert.equal(saved.container.querySelector('[data-html-artifact="media-live"]')?.getAttribute("data-layout"), "wide");
-  assert.equal(saved.container.querySelector('[data-html-artifact="media-column"]')?.hasAttribute("data-layout"), false);
+  assert.equal(
+    saved.container.querySelector('[data-html-artifact="media-live"]')?.getAttribute("data-layout"),
+    "wide",
+  );
+  assert.equal(
+    saved.container
+      .querySelector('[data-html-artifact="media-column"]')
+      ?.hasAttribute("data-layout"),
+    false,
+  );
 });
 
 test("a live visual keeps its node when a later tool step outruns the buffered text", () => {
@@ -153,7 +204,12 @@ test("a live visual keeps its node when a later tool step outruns the buffered t
 
   // Main stamps the next step at the full text length before the renderer's
   // buffered delta lands, so the step briefly points past the visible text.
-  const ahead = toolStep("tool-2", "call-read", "read_file", `${intro} After chart, more text`.length);
+  const ahead = toolStep(
+    "tool-2",
+    "call-read",
+    "read_file",
+    `${intro} After chart, more text`.length,
+  );
   view.rerender(liveList(`${intro} After`, [renderStep, ahead]));
   const during = view.container.querySelector('[data-html-artifact="media-live"]');
   // Compare identities as booleans: printing happy-dom nodes in a diff hangs.
@@ -186,7 +242,11 @@ const NATIVE = {
 
 test("a saved native visual renders after its tool row and sends follow-ups through the shared handler", async () => {
   const intro = "Before the board.";
-  const step = { ...toolStep("tool-1", "call-ui", "render_ui", intro.length), status: "completed" as const, finishedAt: 2 };
+  const step = {
+    ...toolStep("tool-1", "call-ui", "render_ui", intro.length),
+    status: "completed" as const,
+    finishedAt: 2,
+  };
   const prompts: string[] = [];
   const view = render(
     <MessageList
@@ -197,7 +257,14 @@ test("a saved native visual renders after its tool row and sends follow-ups thro
           role: "assistant",
           content: `${intro} After the board.`,
           createdAt: 1,
-          timeline: { version: 3, generationId: "g", status: "completed", startedAt: 1, finishedAt: 3, steps: [step] },
+          timeline: {
+            version: 3,
+            generationId: "g",
+            status: "completed",
+            startedAt: 1,
+            finishedAt: 3,
+            steps: [step],
+          },
           uiVisuals: [NATIVE],
         },
       ]}
@@ -216,7 +283,10 @@ test("a saved native visual renders after its tool row and sends follow-ups thro
   const activityAt = html.indexOf("render_ui");
   const visualAt = html.indexOf('data-aiden-ui="ui-board"');
   const afterAt = html.indexOf("After the board.");
-  assert.ok(activityAt >= 0 && visualAt > activityAt && afterAt > visualAt, "tool row → visual → later prose");
+  assert.ok(
+    activityAt >= 0 && visualAt > activityAt && afterAt > visualAt,
+    "tool row → visual → later prose",
+  );
   fireEvent.click(view.getByRole("button", { name: "More" }));
   assert.deepEqual(prompts, [], "a follow-up waits for confirmation");
   fireEvent.click(view.getByRole("button", { name: "Send" }));
@@ -227,7 +297,9 @@ test("a reply starting or ending updates a saved visual's pending follow-up", ()
   const list = (busy: boolean) => (
     <MessageList
       chatId="chat-saved"
-      messages={[{ id: "m-1", role: "assistant", content: "Board.", createdAt: 1, uiVisuals: [NATIVE] }]}
+      messages={[
+        { id: "m-1", role: "assistant", content: "Board.", createdAt: 1, uiVisuals: [NATIVE] },
+      ]}
       streamingText={null}
       streamingReasoning={null}
       timeline={null}
@@ -252,7 +324,13 @@ test("a reply starting or ending updates a saved visual's pending follow-up", ()
 
 test("a streaming native draft is inert in its row and the presented visual replaces it", () => {
   const step = toolStep("tool-1", "call-ui", "render_ui", 0);
-  const timeline: GenerationTimeline = { version: 3, generationId: "g", status: "running", startedAt: 1, steps: [step] };
+  const timeline: GenerationTimeline = {
+    version: 3,
+    generationId: "g",
+    status: "running",
+    startedAt: 1,
+    steps: [step],
+  };
   const list = (presented: boolean) => (
     <MessageList
       chatId="chat-live"
@@ -260,7 +338,9 @@ test("a streaming native draft is inert in its row and the presented visual repl
       streamingText="Board."
       streamingReasoning={null}
       streamingUiVisuals={presented ? [NATIVE] : []}
-      streamingUiDrafts={presented ? new Map() : new Map([["call-ui", { ...NATIVE, id: "draft-call-ui" }]])}
+      streamingUiDrafts={
+        presented ? new Map() : new Map([["call-ui", { ...NATIVE, id: "draft-call-ui" }]])
+      }
       timeline={timeline}
       liveSubagents={[]}
       subagentsEnabled={false}
@@ -280,11 +360,34 @@ test("a streaming native draft is inert in its row and the presented visual repl
 
 test("a remote chat draws another computer's native visual as its text, after its tool row, with nothing to press inside", () => {
   const intro = "Before the board.";
-  const step = { ...toolStep("tool-1", "call-1", "render_ui", intro.length), status: "completed" as const, finishedAt: 2 };
+  const step = {
+    ...toolStep("tool-1", "call-1", "render_ui", intro.length),
+    status: "completed" as const,
+    finishedAt: 2,
+  };
   const message = mapRemoteMessage({
-    id: "m-1", role: "assistant", text: `${intro} After the board.`, createdAt: new Date(1).toISOString(),
-    timeline: { version: 3, generationId: "g", status: "completed", startedAt: 1, finishedAt: 3, steps: [step] },
-    visuals: [{ id: "ui-remote", kind: "ui", title: "Revenue", toolCallId: "call-1", fallbackText: "By month (bar chart, 2 points)\nmonth: Jan · revenue: $1,200.00\n<Button label=\"Approve\" />" }],
+    id: "m-1",
+    role: "assistant",
+    text: `${intro} After the board.`,
+    createdAt: new Date(1).toISOString(),
+    timeline: {
+      version: 3,
+      generationId: "g",
+      status: "completed",
+      startedAt: 1,
+      finishedAt: 3,
+      steps: [step],
+    },
+    visuals: [
+      {
+        id: "ui-remote",
+        kind: "ui",
+        title: "Revenue",
+        toolCallId: "call-1",
+        fallbackText:
+          'By month (bar chart, 2 points)\nmonth: Jan · revenue: $1,200.00\n<Button label="Approve" />',
+      },
+    ],
   });
   assert.ok(message);
   const view = render(
@@ -305,16 +408,27 @@ test("a remote chat draws another computer's native visual as its text, after it
   const block = view.container.querySelector('[data-aiden-ui="ui-remote"]');
   assert.ok(block, "the visual is drawn");
   const html = view.container.innerHTML;
-  assert.ok(html.indexOf("render_ui") < html.indexOf('data-aiden-ui="ui-remote"') && html.indexOf('data-aiden-ui="ui-remote"') < html.indexOf("After the board."));
+  assert.ok(
+    html.indexOf("render_ui") < html.indexOf('data-aiden-ui="ui-remote"') &&
+      html.indexOf('data-aiden-ui="ui-remote"') < html.indexOf("After the board."),
+  );
   // Each line is its own paragraph, markup in the text included, and there is nothing to act on inside it.
-  assert.deepEqual([...block.querySelectorAll("p")].map((line) => line.textContent), [
-    "By month (bar chart, 2 points)", "month: Jan · revenue: $1,200.00", "<Button label=\"Approve\" />",
-  ]);
+  assert.deepEqual(
+    [...block.querySelectorAll("p")].map((line) => line.textContent),
+    [
+      "By month (bar chart, 2 points)",
+      "month: Jan · revenue: $1,200.00",
+      '<Button label="Approve" />',
+    ],
+  );
   assert.equal(view.queryByRole("button", { name: "Approve" }), null);
   assert.ok(view.getByRole("button", { name: "Copy Revenue as text" }));
 });
 
-function savedList(message: Record<string, unknown>, wrap: (list: React.ReactElement) => React.ReactElement = (list) => list) {
+function savedList(
+  message: Record<string, unknown>,
+  wrap: (list: React.ReactElement) => React.ReactElement = (list) => list,
+) {
   return wrap(
     <>
       <MessageList
@@ -335,7 +449,10 @@ function savedList(message: Record<string, unknown>, wrap: (list: React.ReactEle
 }
 
 async function openVisualMenu(title: string) {
-  fireEvent.pointerDown(screen.getByRole("button", { name: `Actions for ${title}` }), { button: 0, pointerType: "mouse" });
+  fireEvent.pointerDown(screen.getByRole("button", { name: `Actions for ${title}` }), {
+    button: 0,
+    pointerType: "mouse",
+  });
   await screen.findByRole("menu");
 }
 
@@ -362,7 +479,13 @@ test("a native visual offers Keep in Artifacts from its caption menu only once s
         streamingText="Board."
         streamingReasoning={null}
         streamingUiVisuals={[NATIVE]}
-        timeline={{ version: 3, generationId: "g", status: "running", startedAt: 1, steps: [toolStep("tool-1", "call-ui", "render_ui", 0)] }}
+        timeline={{
+          version: 3,
+          generationId: "g",
+          status: "running",
+          startedAt: 1,
+          steps: [toolStep("tool-1", "call-ui", "render_ui", 0)],
+        }}
         liveSubagents={[]}
         subagentsEnabled={false}
         onOpenSubagent={() => undefined}
@@ -374,29 +497,48 @@ test("a native visual offers Keep in Artifacts from its caption menu only once s
   assert.ok(screen.getByRole("button", { name: "Copy Board as text" }));
   live.unmount();
 
-  render(savedList({ uiVisuals: [NATIVE] }, (list) => <KeepVisualChatContext.Provider value="chat-saved">{list}</KeepVisualChatContext.Provider>));
+  render(
+    savedList({ uiVisuals: [NATIVE] }, (list) => (
+      <KeepVisualChatContext.Provider value="chat-saved">{list}</KeepVisualChatContext.Provider>
+    )),
+  );
   assert.equal(screen.queryByRole("button", { name: "Copy Board as text" }), null);
   await openVisualMenu("Board");
-  assert.ok(screen.getByRole("menuitem", { name: "Copy as text" }), "the visual's own action stays in the menu");
+  assert.ok(
+    screen.getByRole("menuitem", { name: "Copy as text" }),
+    "the visual's own action stays in the menu",
+  );
   fireEvent.click(screen.getByRole("menuitem", { name: "Keep in Artifacts" }));
   await screen.findByText("Kept in Artifacts.");
   assert.deepEqual(kept, [["chat-saved", "m-1", "ui-board"]]);
-  assert.equal(calls.filter((call) => call.channel === "workspaces:artifacts:keepVisual").length, 1);
+  assert.equal(
+    calls.filter((call) => call.channel === "workspaces:artifacts:keepVisual").length,
+    1,
+  );
 });
 
 test("a refused keep tells the person why without the IPC wrapper", async () => {
   installBotTestIpc({
     "workspaces:artifacts:keepVisual": () => {
-      throw new Error("Error invoking remote method 'workspaces:artifacts:keepVisual': Error: This workspace already has 20 artifacts.");
+      throw new Error(
+        "Error invoking remote method 'workspaces:artifacts:keepVisual': Error: This workspace already has 20 artifacts.",
+      );
     },
   });
-  render(savedList({ uiVisuals: [NATIVE] }, (list) => <KeepVisualChatContext.Provider value="chat-saved">{list}</KeepVisualChatContext.Provider>));
+  render(
+    savedList({ uiVisuals: [NATIVE] }, (list) => (
+      <KeepVisualChatContext.Provider value="chat-saved">{list}</KeepVisualChatContext.Provider>
+    )),
+  );
   await openVisualMenu("Board");
   fireEvent.click(screen.getByRole("menuitem", { name: "Keep in Artifacts" }));
   await screen.findByText("This workspace already has 20 artifacts.");
 });
 
-function designControls(on: boolean, changes: Array<[boolean, DesignModeSource]>): DesignModeControls {
+function designControls(
+  on: boolean,
+  changes: Array<[boolean, DesignModeSource]>,
+): DesignModeControls {
   return {
     chatId: "chat-saved",
     on,
@@ -422,7 +564,11 @@ test("an HTML visual offers Send to canvas only where design mode is available, 
   // Design mode belongs to another chat: this one cannot send there.
   const other = render(
     savedList({ htmlArtifacts: [visual] }, (list) => (
-      <DesignModeControlsContext.Provider value={{ ...designControls(false, []), chatId: "chat-other" }}>{list}</DesignModeControlsContext.Provider>
+      <DesignModeControlsContext.Provider
+        value={{ ...designControls(false, []), chatId: "chat-other" }}
+      >
+        {list}
+      </DesignModeControlsContext.Provider>
     )),
   );
   assert.ok(screen.getByRole("button", { name: "Export Chart" }));
@@ -431,7 +577,9 @@ test("an HTML visual offers Send to canvas only where design mode is available, 
   const changes: Array<[boolean, DesignModeSource]> = [];
   render(
     savedList({ htmlArtifacts: [visual] }, (list) => (
-      <DesignModeControlsContext.Provider value={designControls(false, changes)}>{list}</DesignModeControlsContext.Provider>
+      <DesignModeControlsContext.Provider value={designControls(false, changes)}>
+        {list}
+      </DesignModeControlsContext.Provider>
     )),
   );
   await openVisualMenu("Chart");
@@ -458,7 +606,9 @@ test("Send to canvas leaves design mode alone when it is on, and a canvas with n
   const changes: Array<[boolean, DesignModeSource]> = [];
   render(
     savedList({ htmlArtifacts: [visual] }, (list) => (
-      <DesignModeControlsContext.Provider value={designControls(true, changes)}>{list}</DesignModeControlsContext.Provider>
+      <DesignModeControlsContext.Provider value={designControls(true, changes)}>
+        {list}
+      </DesignModeControlsContext.Provider>
     )),
   );
   await openVisualMenu("Chart");

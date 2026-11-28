@@ -23,17 +23,19 @@ import {
   Text,
   toast,
 } from "./ui";
-import {
-  ChatPullRequestStateIcon,
-  chatPullRequestStateLabel,
-} from "./chat-pull-requests";
+import { ChatPullRequestStateIcon, chatPullRequestStateLabel } from "./chat-pull-requests";
 import { useLinkOpener } from "../lib/link-opener";
 import { GitBranchPicker } from "./git-branch-picker";
 import { GitCommitDialog } from "./git-commit-dialog";
 import { GitPushDialog } from "./git-push-dialog";
 import { usePreferredEditor } from "./open-in-editor-picker";
 import { workspacesApi } from "../lib/ipc";
-import { useChatCurrentPullRequest, useGitInfo, useGitPushCapability, useGitReview } from "../lib/queries";
+import {
+  useChatCurrentPullRequest,
+  useGitInfo,
+  useGitPushCapability,
+  useGitReview,
+} from "../lib/queries";
 import { truncatePathMiddle } from "../lib/truncate-path";
 import { cn } from "../lib/ui-utils";
 import type { GitPushCapability, GitReview, GitReviewSummary, Workspace } from "../lib/types";
@@ -70,7 +72,6 @@ function ChangesMeta({ summary }: { summary: GitReviewSummary }) {
     </span>
   );
 }
-
 
 const IS_MAC = typeof navigator !== "undefined" && /Mac/u.test(navigator.userAgent);
 
@@ -109,9 +110,13 @@ function FolderRow({
   onBrowseFiles: () => void;
   browseDisabled: boolean;
 }) {
-  const { preferredEditor, openPreferredEditor } = usePreferredEditor(workspace.id, workspace.folderPath, {
-    silentDiscoveryErrors: true,
-  });
+  const { preferredEditor, openPreferredEditor } = usePreferredEditor(
+    workspace.id,
+    workspace.folderPath,
+    {
+      silentDiscoveryErrors: true,
+    },
+  );
   if (!workspace.folderPath) return null;
   const disabled = workspace.permission === "none";
   return (
@@ -159,9 +164,10 @@ function fileCountLabel(count: number): string {
 /** Spoken summary of the working tree, shared by the Changes row and its collapsed header. */
 function changesSummaryLabel(summary: GitReviewSummary): string {
   if (summary.fileCount === 0) return "working tree is clean";
-  const excluded = summary.unavailableStats > 0
-    ? `, line totals exclude ${fileCountLabel(summary.unavailableStats)}`
-    : "";
+  const excluded =
+    summary.unavailableStats > 0
+      ? `, line totals exclude ${fileCountLabel(summary.unavailableStats)}`
+      : "";
   return `${fileCountLabel(summary.fileCount)}, ${summary.additions} known additions, ${summary.deletions} known deletions${excluded}`;
 }
 
@@ -233,7 +239,7 @@ export function useChangesVisibility(
   const push = useGitPushCapability(workspaceId, active);
   const currentPullRequest = useChatCurrentPullRequest(chatId, active);
   if (!review.data?.isRepo) return false;
-  const pullRequest = chatId ? currentPullRequest.data?.pullRequest ?? null : null;
+  const pullRequest = chatId ? (currentPullRequest.data?.pullRequest ?? null) : null;
   return review.data.summary.fileCount > 0 || (push.data?.ahead ?? 0) > 0 || pullRequest !== null;
 }
 
@@ -247,7 +253,7 @@ export function useEnvironmentSummary(
   const label = git.data.isRepo
     ? git.data.detached
       ? "Detached HEAD"
-      : git.data.branch ?? "Local"
+      : (git.data.branch ?? "Local")
     : "Local";
   return {
     node: <span className="min-w-0 truncate text-small text-tertiary">{label}</span>,
@@ -281,7 +287,13 @@ export function EnvironmentRows({
 
   return (
     <div className="flex flex-col">
-      {workspace.folderPath ? <FolderRow workspace={workspace} onBrowseFiles={onBrowseFiles} browseDisabled={toolsDisabled} /> : null}
+      {workspace.folderPath ? (
+        <FolderRow
+          workspace={workspace}
+          onBrowseFiles={onBrowseFiles}
+          browseDisabled={toolsDisabled}
+        />
+      ) : null}
 
       <div
         className="grid min-h-9 grid-cols-[18px_minmax(0,1fr)_auto] items-center gap-2.5 px-2.5"
@@ -380,16 +392,17 @@ export function ChangesRows({
   const push = useGitPushCapability(workspace.id, active && available);
   const git = useGitInfo(workspace.id);
   const currentPullRequest = useChatCurrentPullRequest(chatId, active);
-  const pullRequest = chatId ? currentPullRequest.data?.pullRequest ?? null : null;
+  const pullRequest = chatId ? (currentPullRequest.data?.pullRequest ?? null) : null;
   const branchLabel = git.data?.detached
     ? "Detached HEAD"
-    : git.data?.branch ?? review.data?.branch;
+    : (git.data?.branch ?? review.data?.branch);
   const reviewError = review.error instanceof Error ? review.error.message : null;
-  const pushError = push.error instanceof Error
-    ? push.error.message
-    : push.error
-      ? "Aiden could not load the push state."
-      : null;
+  const pushError =
+    push.error instanceof Error
+      ? push.error.message
+      : push.error
+        ? "Aiden could not load the push state."
+        : null;
   const isRepo = Boolean(review.data?.isRepo || git.data?.isRepo);
   const dialogOpen = commitOpen || pushOpen;
   React.useEffect(() => {
@@ -400,13 +413,14 @@ export function ChangesRows({
 
   if (!available || knownNotRepo) return null;
 
-  const changesLabel = review.isLoading && !review.data
-    ? "Changes, loading working tree status"
-    : reviewError && !review.data
-      ? `Changes unavailable, ${reviewError}`
-      : review.data?.isRepo
-        ? `Changes, ${changesSummaryLabel(review.data.summary)}`
-        : "Changes, loading working tree status";
+  const changesLabel =
+    review.isLoading && !review.data
+      ? "Changes, loading working tree status"
+      : reviewError && !review.data
+        ? `Changes unavailable, ${reviewError}`
+        : review.data?.isRepo
+          ? `Changes, ${changesSummaryLabel(review.data.summary)}`
+          : "Changes, loading working tree status";
   const fileCount = review.data?.summary.fileCount ?? 0;
   const ahead = push.data?.ahead ?? 0;
   const returnFocus = () => {
@@ -429,14 +443,20 @@ export function ChangesRows({
           <GitCompareArrows className="size-4.5 text-secondary" aria-hidden="true" />
           <span className="min-w-0 truncate">Changes</span>
           {reviewError && !review.data ? (
-            <span className="flex items-center gap-1.5 text-small text-support-red" title={reviewError}>
+            <span
+              className="flex items-center gap-1.5 text-small text-support-red"
+              title={reviewError}
+            >
               <AlertCircle className="size-3.5" aria-hidden="true" />
               Unavailable
             </span>
           ) : review.data?.isRepo ? (
             <ChangesMeta summary={review.data.summary} />
           ) : (
-            <span className="h-2.5 w-20 animate-pulse rounded-pill bg-control" aria-label="Loading changes" />
+            <span
+              className="h-2.5 w-20 animate-pulse rounded-pill bg-control"
+              aria-label="Loading changes"
+            />
           )}
         </button>
 
@@ -457,7 +477,9 @@ export function ChangesRows({
                   {fileCount ? fileCountLabel(fileCount) : null}
                   {fileCount && ahead ? <span aria-hidden="true">·</span> : null}
                   {ahead ? `↑${ahead}` : null}
-                  {!fileCount && !ahead ? <ChevronRight className="size-3.5" aria-hidden="true" /> : null}
+                  {!fileCount && !ahead ? (
+                    <ChevronRight className="size-3.5" aria-hidden="true" />
+                  ) : null}
                 </span>
               </button>
             </DropdownMenuTrigger>
@@ -476,8 +498,10 @@ export function ChangesRows({
                   <span className="mt-0.5 block text-small text-tertiary">
                     {review.data?.commit.allowed
                       ? `${review.data.summary.fileCount} reviewed ${review.data.summary.fileCount === 1 ? "file" : "files"}`
-                      : review.data?.commit.reason
-                        ?? (reviewError ? "Review unavailable · open Changes to retry" : "Loading Review…")}
+                      : (review.data?.commit.reason ??
+                        (reviewError
+                          ? "Review unavailable · open Changes to retry"
+                          : "Loading Review…"))}
                   </span>
                 </span>
               </DropdownMenuItem>
@@ -504,7 +528,8 @@ export function ChangesRows({
                         ? "Last push snapshot · refresh failed"
                         : push.data?.allowed
                           ? `${push.data.suggestedRemote ?? "remote"}/${push.data.destinationBranch ?? push.data.branch}`
-                          : push.data?.reason ?? (push.isLoading ? "Loading push state…" : "Push unavailable")}
+                          : (push.data?.reason ??
+                            (push.isLoading ? "Loading push state…" : "Push unavailable"))}
                   </span>
                 </span>
               </DropdownMenuItem>
@@ -533,7 +558,9 @@ export function ChangesRows({
         <Text as="p" variant="small" color="tertiary" className="mt-2 px-2.5" role="status">
           {mutationBlockedReason}
         </Text>
-      ) : review.data?.isRepo && review.data.summary.fileCount > 0 && !review.data.commit.allowed ? (
+      ) : review.data?.isRepo &&
+        review.data.summary.fileCount > 0 &&
+        !review.data.commit.allowed ? (
         <Text as="p" variant="small" className="mt-2 px-2.5 text-support-warning" role="status">
           {review.data.commit.reason ?? "Refresh Review before committing these changes."}
         </Text>
@@ -543,7 +570,9 @@ export function ChangesRows({
         </Text>
       ) : pushError ? (
         <Text as="p" variant="small" className="mt-2 px-2.5 text-support-warning" role="status">
-          {push.data ? "Push refresh failed. The last local snapshot is shown." : `Push state unavailable: ${pushError}`}
+          {push.data
+            ? "Push refresh failed. The last local snapshot is shown."
+            : `Push state unavailable: ${pushError}`}
         </Text>
       ) : null}
 

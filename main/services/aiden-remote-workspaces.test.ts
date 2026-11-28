@@ -5,7 +5,10 @@ import {
   AidenRemoteWorkspaceService,
   projectAidenRemoteWorkspace,
 } from "./aiden-remote-workspaces.js";
-import { createWorkspaceApplicationService, type WorkspaceApplicationDependencies } from "./workspace-application-service.js";
+import {
+  createWorkspaceApplicationService,
+  type WorkspaceApplicationDependencies,
+} from "./workspace-application-service.js";
 import { WorkspaceMutationGate } from "./workspace-mutation-gate.js";
 import { WorkspaceOperationRegistry } from "./workspace-operation-registry.js";
 import { workspaceApprovalPolicy } from "../../renderer/shared/approval-mode.js";
@@ -38,7 +41,8 @@ function fixture(
   const service = new AidenRemoteWorkspaceService({
     application: {
       list: async () => structuredClone(workspaces),
-      get: async (id: string) => structuredClone(workspaces.find((value) => value.id === id) ?? null),
+      get: async (id: string) =>
+        structuredClone(workspaces.find((value) => value.id === id) ?? null),
       create: async (input: unknown) => {
         createCalls += 1;
         const value = workspace({
@@ -50,14 +54,24 @@ function fixture(
       },
       createScratch: async () => {
         createCalls += 1;
-        const value = workspace({ id: `workspace-${createCalls + 1}`, name: "Scratch", folderPath: "/private/scratch" });
+        const value = workspace({
+          id: `workspace-${createCalls + 1}`,
+          name: "Scratch",
+          folderPath: "/private/scratch",
+        });
         workspaces.push(value);
         return structuredClone(value);
       },
       createFromFolder: async (
         folderPath: string,
         name?: string,
-        options?: { assertCurrent?: (identity: { canonicalPath: string; filesystemDevice: string; filesystemInode: string }) => Promise<void> | void },
+        options?: {
+          assertCurrent?: (identity: {
+            canonicalPath: string;
+            filesystemDevice: string;
+            filesystemInode: string;
+          }) => Promise<void> | void;
+        },
       ) => {
         await options?.assertCurrent?.({
           canonicalPath: folderPath,
@@ -65,19 +79,28 @@ function fixture(
           filesystemInode: "2",
         });
         createCalls += 1;
-        const value = workspace({ id: `workspace-${createCalls + 1}`, name: name ?? "Selected", folderPath });
+        const value = workspace({
+          id: `workspace-${createCalls + 1}`,
+          name: name ?? "Selected",
+          folderPath,
+        });
         workspaces.push(value);
         return structuredClone(value);
       },
       update: async (id: string, patch: unknown) => {
         const index = workspaces.findIndex((value) => value.id === id);
         if (index < 0) throw new Error("missing");
-        workspaces[index] = { ...workspaces[index]!, ...(patch as Partial<Workspace>), updatedAt: workspaces[index]!.updatedAt + 1 };
+        workspaces[index] = {
+          ...workspaces[index]!,
+          ...(patch as Partial<Workspace>),
+          updatedAt: workspaces[index]!.updatedAt + 1,
+        };
         return structuredClone(workspaces[index]!);
       },
       remove: async (id: string) => {
         const existing = workspaces.find((value) => value.id === id);
-        if (existing?.managedWorktree) throw new Error("Delete worktree through the managed worktree workflow.");
+        if (existing?.managedWorktree)
+          throw new Error("Delete worktree through the managed worktree workflow.");
         workspaces = workspaces.filter((value) => value.id !== id);
       },
     },
@@ -97,7 +120,9 @@ function fixture(
       revalidateConsumedSelection: async (_deviceId, claims) => claims,
     },
     ...options,
-    notifyChanged: () => { notifications += 1; },
+    notifyChanged: () => {
+      notifications += 1;
+    },
   });
   return {
     service,
@@ -107,17 +132,19 @@ function fixture(
 }
 
 test("workspace projections omit local paths and internal managed-worktree identity", () => {
-  const projected = projectAidenRemoteWorkspace(workspace({
-    folderPath: "/private/repository/worktree",
-    managedWorktree: {
-      repositoryPath: "/private/repository",
-      worktreePath: "/private/repository/worktree",
-      branch: "feature/mobile",
-      worktreeGitDir: "/private/repository/.git/worktrees/mobile",
-      ownershipToken: "secret-token",
-      createdFromHead: "abc123",
-    },
-  }));
+  const projected = projectAidenRemoteWorkspace(
+    workspace({
+      folderPath: "/private/repository/worktree",
+      managedWorktree: {
+        repositoryPath: "/private/repository",
+        worktreePath: "/private/repository/worktree",
+        branch: "feature/mobile",
+        worktreeGitDir: "/private/repository/.git/worktrees/mobile",
+        ownershipToken: "secret-token",
+        createdFromHead: "abc123",
+      },
+    }),
+  );
   const serialized = JSON.stringify(projected);
   assert.equal(projected.hasFolder, true);
   assert.equal(projected.isManagedWorktree, true);
@@ -129,15 +156,20 @@ test("workspace projections omit local paths and internal managed-worktree ident
 });
 
 test("a hidden No workspace folder is marked for phones and ordinary workspaces are not (revision 51)", () => {
-  const hidden = projectAidenRemoteWorkspace(workspace({
-    name: "No workspace",
-    folderPath: "/private/app-data/chat-folders/quiet-otter",
-    noWorkspace: true,
-  }));
+  const hidden = projectAidenRemoteWorkspace(
+    workspace({
+      name: "No workspace",
+      folderPath: "/private/app-data/chat-folders/quiet-otter",
+      noWorkspace: true,
+    }),
+  );
   assert.equal(hidden.noWorkspace, true);
   assert.equal(hidden.hasFolder, true);
   assert.equal(JSON.stringify(hidden).includes("/private/"), false);
-  assert.equal("noWorkspace" in projectAidenRemoteWorkspace(workspace({ folderPath: "/code/project" })), false);
+  assert.equal(
+    "noWorkspace" in projectAidenRemoteWorkspace(workspace({ folderPath: "/code/project" })),
+    false,
+  );
 });
 
 test("workspace creates are exact, idempotent per device, and notify Electron once", async () => {
@@ -208,7 +240,10 @@ test("a request whose durable admission failed never ran, so the same key can st
   );
   assert.equal(app.createCalls(), 0);
 
-  const created = await app.service.create("device-1", key, { mode: "folderless", name: "Retried" });
+  const created = await app.service.create("device-1", key, {
+    mode: "folderless",
+    name: "Retried",
+  });
   assert.equal(created.name, "Retried");
   assert.equal(app.createCalls(), 1);
 });
@@ -221,10 +256,16 @@ test("a replay answers from the ledger even while the disk refuses writes", asyn
     },
   });
   const key = "durable-replay-key-0001";
-  const created = await app.service.create("device-1", key, { mode: "folderless", name: "Replayed" });
+  const created = await app.service.create("device-1", key, {
+    mode: "folderless",
+    name: "Replayed",
+  });
 
   failSaves = true;
-  const replay = await app.service.create("device-1", key, { mode: "folderless", name: "Replayed" });
+  const replay = await app.service.create("device-1", key, {
+    mode: "folderless",
+    name: "Replayed",
+  });
   assert.deepEqual(replay, created);
   assert.equal(app.createCalls(), 1);
 });
@@ -259,7 +300,8 @@ test("workspace update and removal require the exact current revision", async ()
     }),
     (error: unknown) =>
       (error as { code?: string }).code === "revision_conflict" &&
-      (error as { details?: { currentRevision?: string } }).details?.currentRevision === current.revision,
+      (error as { details?: { currentRevision?: string } }).details?.currentRevision ===
+        current.revision,
   );
   const updated = await app.service.update("workspace-1", current.revision, {
     confirmedForeground: true,
@@ -278,14 +320,16 @@ test("workspace update and removal require the exact current revision", async ()
 });
 
 test("managed worktrees cannot be unregistered through generic workspace CRUD", async () => {
-  const app = fixture([workspace({
-    managedWorktree: {
-      repositoryPath: "/repo",
-      worktreePath: "/repo/worktree",
-      branch: "feature",
-      createdFromHead: "abc123",
-    },
-  })]);
+  const app = fixture([
+    workspace({
+      managedWorktree: {
+        repositoryPath: "/repo",
+        worktreePath: "/repo/worktree",
+        branch: "feature",
+        createdFromHead: "abc123",
+      },
+    }),
+  ]);
   const current = await app.service.get("workspace-1");
   await assert.rejects(
     app.service.remove("workspace-1", current.revision),
@@ -301,20 +345,34 @@ test("a phone sees the access tier that never reads narrower than what runs", ()
   assert.equal(tier({}, "never"), "full");
   assert.equal(tier({ approvalMode: "never" }, "ask"), "full");
   assert.equal(tier({ approvalMode: "ask" }, "never"), "ask");
-  assert.equal(tier({ approvalMode: "ask", macGrants: { shell: true } }, "ask"), "full", "commands run without a card");
+  assert.equal(
+    tier({ approvalMode: "ask", macGrants: { shell: true } }, "ask"),
+    "full",
+    "commands run without a card",
+  );
   assert.equal(tier({ permission: "full" }, "ask"), "full");
   assert.equal(tier({ permission: "none" }, "never"), "none");
   // The revision is the stored workspace's, whatever the mode.
-  assert.equal(projectAidenRemoteWorkspace(workspace(), "auto").revision, projectAidenRemoteWorkspace(workspace(), "ask").revision);
+  assert.equal(
+    projectAidenRemoteWorkspace(workspace(), "auto").revision,
+    projectAidenRemoteWorkspace(workspace(), "ask").revision,
+  );
 });
 
 test("a phone choosing Ask on a customized workspace makes it Ask with nothing allowed", async () => {
-  let stored: Workspace = workspace({ folderPath: "/work/p", approvalMode: "never", macGrants: { shell: true, files: true } });
+  let stored: Workspace = workspace({
+    folderPath: "/work/p",
+    approvalMode: "never",
+    macGrants: { shell: true, files: true },
+  });
   const application = createWorkspaceApplicationService({
     configStore: {
       listWorkspaces: async () => [stored],
       getWorkspace: async () => stored,
-      saveWorkspace: async (value: Workspace, guard?: (current: Workspace | undefined) => void | Promise<void>) => {
+      saveWorkspace: async (
+        value: Workspace,
+        guard?: (current: Workspace | undefined) => void | Promise<void>,
+      ) => {
         await guard?.(stored);
         stored = { ...value, updatedAt: stored.updatedAt + 1 };
         return stored;
@@ -322,7 +380,10 @@ test("a phone choosing Ask on a customized workspace makes it Ask with nothing a
       removeWorkspace: async () => undefined,
     },
     llmClient: { cancelWorkspaceAndSettle: async () => undefined },
-    scheduleService: { cancelWorkspace: async () => undefined, resumeWorkspace: async () => undefined },
+    scheduleService: {
+      cancelWorkspace: async () => undefined,
+      resumeWorkspace: async () => undefined,
+    },
     terminalService: { closeForWorkspace: () => undefined },
     workspaceMutationGate: new WorkspaceMutationGate(),
     workspaceOperationRegistry: new WorkspaceOperationRegistry(),
@@ -336,12 +397,22 @@ test("a phone choosing Ask on a customized workspace makes it Ask with nothing a
   } as unknown as WorkspaceApplicationDependencies);
   const service = new AidenRemoteWorkspaceService({
     application,
-    browser: { consumeSelection: async () => { throw new Error("unused"); }, revalidateConsumedSelection: async () => { throw new Error("unused"); } },
+    browser: {
+      consumeSelection: async () => {
+        throw new Error("unused");
+      },
+      revalidateConsumedSelection: async () => {
+        throw new Error("unused");
+      },
+    },
     approvalMode: () => "auto",
   });
   const before = await service.get("workspace-1");
   assert.equal(before.permission, "full");
-  const after = await service.update("workspace-1", before.revision, { confirmedForeground: true, permission: "ask" });
+  const after = await service.update("workspace-1", before.revision, {
+    confirmedForeground: true,
+    permission: "ask",
+  });
   assert.equal(after.permission, "ask");
   const policy = workspaceApprovalPolicy(stored, "auto");
   assert.equal(policy.mode, "ask");

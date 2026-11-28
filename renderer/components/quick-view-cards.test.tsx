@@ -173,7 +173,10 @@ test("when the focused card goes away, focus moves to the first remaining card",
   update({ pressure: null });
   assert.deepEqual(cardTitles(), ["Environment"]);
   await waitFor(() => {
-    const environmentHeader = screen.getByRole("button", { name: /^Environment/u, expanded: false });
+    const environmentHeader = screen.getByRole("button", {
+      name: /^Environment/u,
+      expanded: false,
+    });
     assert.equal(document.activeElement === environmentHeader, true);
   });
 });
@@ -185,7 +188,11 @@ test("the grip picks a card up with Space, moves it with the arrows and Home, an
   const status = () => screen.getByRole("status").textContent;
   act(() => grip().focus());
   fireEvent.keyDown(grip(), { key: "ArrowUp" });
-  assert.deepEqual(cardTitles(), ["Environment", "Context", "Subagents"], "arrows do nothing until the card is picked up");
+  assert.deepEqual(
+    cardTitles(),
+    ["Environment", "Context", "Subagents"],
+    "arrows do nothing until the card is picked up",
+  );
 
   fireEvent.keyDown(grip(), { key: " " });
   assert.equal(status(), "Picked up Subagents, position 3 of 3.");
@@ -196,7 +203,10 @@ test("the grip picks a card up with Space, moves it with the arrows and Home, an
   fireEvent.keyDown(grip(), { key: "Home" });
   assert.deepEqual(cardTitles(), ["Subagents", "Environment", "Context"]);
   // Nothing is saved while the card is held.
-  const saved = () => parseQuickViewLayout(window.localStorage.getItem(QUICK_VIEW_LAYOUT_STORAGE_KEY)).order.filter((id) => id !== "changes");
+  const saved = () =>
+    parseQuickViewLayout(window.localStorage.getItem(QUICK_VIEW_LAYOUT_STORAGE_KEY)).order.filter(
+      (id) => id !== "changes",
+    );
   assert.deepEqual(saved(), ["environment", "context", "subagents"]);
 
   fireEvent.keyDown(grip(), { key: "Enter" });
@@ -215,7 +225,10 @@ test("Escape puts a held card back where it was and keeps focus on its grip", ()
   assert.deepEqual(cardTitles(), ["Context", "Subagents", "Environment"]);
   fireEvent.keyDown(grip(), { key: "Escape" });
   assert.deepEqual(cardTitles(), ["Environment", "Context", "Subagents"]);
-  assert.equal(screen.getByRole("status").textContent, "Moved Environment back to position 1 of 3.");
+  assert.equal(
+    screen.getByRole("status").textContent,
+    "Moved Environment back to position 1 of 3.",
+  );
   assert.equal(document.activeElement, grip());
   // Released: the arrows no longer move it.
   fireEvent.keyDown(grip(), { key: "ArrowDown" });

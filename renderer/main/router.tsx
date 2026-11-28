@@ -35,8 +35,14 @@ const BotsView = lazyRouteComponent(() => import("./bots-view"), "BotsView");
 const BotChatRouteView = lazyRouteComponent(() => import("./bot-chat-route"), "BotChatRoute");
 const ImagesView = lazyRouteComponent(() => import("../images/images-route"), "ImagesRoute");
 const RemoteChatView = lazyRouteComponent(() => import("./remote-chat-view"), "RemoteChatView");
-const RemoteNewChatView = lazyRouteComponent(() => import("./remote-new-chat-view"), "RemoteNewChatView");
-const RemoteBotChatView = lazyRouteComponent(() => import("./remote-bot-chat-view"), "RemoteBotChatView");
+const RemoteNewChatView = lazyRouteComponent(
+  () => import("./remote-new-chat-view"),
+  "RemoteNewChatView",
+);
+const RemoteBotChatView = lazyRouteComponent(
+  () => import("./remote-bot-chat-view"),
+  "RemoteBotChatView",
+);
 
 /** Let the router preload the lazy view a wrapper route component renders. */
 function preloadsWith<P>(

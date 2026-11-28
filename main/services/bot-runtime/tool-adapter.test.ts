@@ -16,11 +16,18 @@ import { createFauxModels, FAUX_MODEL_REF, waitFor } from "./test-support/faux.j
 
 const ctx = BACKGROUND_CONTEXT;
 
-async function harnessWith(tool: ReturnType<typeof adaptAidenTool>, responses: Parameters<typeof createFauxModels>[0]) {
+async function harnessWith(
+  tool: ReturnType<typeof adaptAidenTool>,
+  responses: Parameters<typeof createFauxModels>[0],
+) {
   const fauxModels = createFauxModels(responses);
   const registry = createRegistry();
   registry.install(defineExtension({ name: "adapter-test", tools: [tool] }));
-  const harness = await Harness.open(new MemoryStorage(), { models: fauxModels.models, registry }, ctx);
+  const harness = await Harness.open(
+    new MemoryStorage(),
+    { models: fauxModels.models, registry },
+    ctx,
+  );
   const root = await harness.root(ctx, { agent: { model: FAUX_MODEL_REF } });
   return { harness, root, fauxModels };
 }
@@ -29,15 +36,25 @@ async function toolResults(root: Conversation) {
   const view = await root.context(ctx);
   return view.entries
     .filter((entry) => entry.kind === ToolResultEntry.kind)
-    .map((entry) => (entry as unknown as { model: Array<{ isError: boolean; content: Array<{ text?: string }> }> }).model[0]!);
+    .map(
+      (entry) =>
+        (
+          entry as unknown as {
+            model: Array<{ isError: boolean; content: Array<{ text?: string }> }>;
+          }
+        ).model[0]!,
+    );
 }
 
 test("an adapted tool receives its validated arguments and its result reaches the model", async () => {
   const echo = countingTool("echo");
-  const { harness, root, fauxModels } = await harnessWith(adaptAidenTool(echo, { replay: "unsafe" }), [
-    fauxAssistantMessage([fauxToolCall("echo", { text: "hello" })], { stopReason: "toolUse" }),
-    fauxAssistantMessage("done"),
-  ]);
+  const { harness, root, fauxModels } = await harnessWith(
+    adaptAidenTool(echo, { replay: "unsafe" }),
+    [
+      fauxAssistantMessage([fauxToolCall("echo", { text: "hello" })], { stopReason: "toolUse" }),
+      fauxAssistantMessage("done"),
+    ],
+  );
   try {
     const settled = await (await root.submit({ type: "input", content: "go" }, ctx)).wait(ctx);
     assert.equal(settled.status, "done");
@@ -54,7 +71,9 @@ test("an adapted tool receives its validated arguments and its result reaches th
 test("arguments that fail the TypeBox schema never reach the Aiden tool", async () => {
   const echo = countingTool("echo");
   const { harness, root } = await harnessWith(adaptAidenTool(echo, { replay: "unsafe" }), [
-    fauxAssistantMessage([fauxToolCall("echo", { text: { nested: true } })], { stopReason: "toolUse" }),
+    fauxAssistantMessage([fauxToolCall("echo", { text: { nested: true } })], {
+      stopReason: "toolUse",
+    }),
     fauxAssistantMessage("done"),
   ]);
   try {
@@ -84,10 +103,20 @@ test("onUpdate snapshots stream into the live tool output", async () => {
     const submission = await root.submit({ type: "input", content: "go" }, ctx);
     const view = await root.watch(ctx);
     view.start(async () => undefined);
-    const slot = () => (view.value.docs["pi.live"] as { tools?: Array<{ output?: string; details?: unknown }> } | undefined)?.tools?.[0];
-    await waitFor(() => slot()?.output === "line one\nline two\n" && JSON.stringify(slot()?.details) === '{"step":2}', {
-      what: "streamed tool output",
-    });
+    const slot = () =>
+      (
+        view.value.docs["pi.live"] as
+          | { tools?: Array<{ output?: string; details?: unknown }> }
+          | undefined
+      )?.tools?.[0];
+    await waitFor(
+      () =>
+        slot()?.output === "line one\nline two\n" &&
+        JSON.stringify(slot()?.details) === '{"step":2}',
+      {
+        what: "streamed tool output",
+      },
+    );
     release();
     assert.equal((await submission.wait(ctx)).status, "done");
     await view.stop();

@@ -32,7 +32,9 @@ export const BOT_CAPABILITY_LIMITS = {
 } as const;
 
 /** The Full Access and Custom summaries; Full names the computer the Bot runs on. */
-export function botAccessSummaries(platform: string | null | undefined = runtimeComputerPlatform()) {
+export function botAccessSummaries(
+  platform: string | null | undefined = runtimeComputerPlatform(),
+) {
   return {
     full: `Can use your ${localComputerNoun(platform)}, shell, enabled connections, and skills.`,
     custom: "Uses only the access you select. This chat can reduce it further.",
@@ -40,7 +42,9 @@ export function botAccessSummaries(platform: string | null | undefined = runtime
 }
 
 /** The whole-computer file scope's label: "Full Mac" on macOS, "Full computer" elsewhere. */
-export function botFullComputerLabel(platform: string | null | undefined = runtimeComputerPlatform()): string {
+export function botFullComputerLabel(
+  platform: string | null | undefined = runtimeComputerPlatform(),
+): string {
   return `Full ${localComputerNoun(platform)}`;
 }
 
@@ -464,7 +468,9 @@ export function cloneBotCustomSelection(selection: BotCustomSelection): BotCusto
   };
 }
 
-export function botFileScopeSelectionGuidance(platform: string | null | undefined = runtimeComputerPlatform()): string {
+export function botFileScopeSelectionGuidance(
+  platform: string | null | undefined = runtimeComputerPlatform(),
+): string {
   return `Choose ${botFullComputerLabel(platform)}, Bot folder, approved locations with the Bot folder, or Files Off.`;
 }
 
@@ -622,12 +628,15 @@ export function validateSelectionAgainstCatalog(
   }
   requireOptions(selection.fileScopeIds, catalog.fileScopes, "file scope");
   requireOptions(selection.connectionIds, catalog.connections, "connection");
-  const skillsToValidate = catalog.skillsEnabled === false
-    ? selection.skillIds.filter((id) => !options.retainedSkillIds?.includes(id))
-    : selection.skillIds;
+  const skillsToValidate =
+    catalog.skillsEnabled === false
+      ? selection.skillIds.filter((id) => !options.retainedSkillIds?.includes(id))
+      : selection.skillIds;
   // Even a malformed disabled catalog cannot authorize a new skill grant.
   if (catalog.skillsEnabled === false && skillsToValidate.length > 0) {
-    throw new BotCapabilityValidationError("Skills are disabled. Only saved skill grants may be retained.");
+    throw new BotCapabilityValidationError(
+      "Skills are disabled. Only saved skill grants may be retained.",
+    );
   }
   requireOptions(skillsToValidate, catalog.skills, "skill");
   requireOptions(selection.otherCapabilityIds, catalog.otherCapabilities, "capability");

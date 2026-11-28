@@ -67,7 +67,11 @@ export function DeviceEventLogSection(props: {
           if (message) setError(message);
         };
         stop = android
-          ? subscribeAndroidLogcat({ hostId, deviceId, grant, ...(onlyApp ? { packageName: onlyApp } : {}) }, onEvents, onEnd)
+          ? subscribeAndroidLogcat(
+              { hostId, deviceId, grant, ...(onlyApp ? { packageName: onlyApp } : {}) },
+              onEvents,
+              onEnd,
+            )
           : subscribeDeviceEventLog({ hostId, deviceId, grant }, onEvents, onEnd);
       })
       .catch(() => {
@@ -117,7 +121,11 @@ export function DeviceEventLogSection(props: {
         onClick={() => setOpen((value) => !value)}
       >
         <span>Event log</span>
-        <ChevronDown aria-hidden data-open={open || undefined} className="device-event-log-chevron" />
+        <ChevronDown
+          aria-hidden
+          data-open={open || undefined}
+          className="device-event-log-chevron"
+        />
       </Button>
       {open ? (
         <>
@@ -197,7 +205,9 @@ export function DeviceEventLogSection(props: {
             }}
           >
             {shown.length === 0 ? (
-              <li className="device-event-log-empty">{query.trim() ? "No matching events." : "No events yet."}</li>
+              <li className="device-event-log-empty">
+                {query.trim() ? "No matching events." : "No events yet."}
+              </li>
             ) : (
               shown.map((entry) => (
                 <li key={entry.id} className="device-event-log-entry">

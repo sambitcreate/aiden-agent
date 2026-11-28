@@ -166,7 +166,12 @@ function composioInventory(service: boolean): BotCapabilityInventory {
 function withLegacyConnectionId(bound: BoundBotCustomSelection): BoundBotCustomSelection {
   const legacy = structuredClone(bound);
   const connection = legacy.connections[0]!;
-  connection.option.id = mintLegacyBotCapabilityOpaqueId(key, "connection", connection.sourceId, connection.exactFingerprint);
+  connection.option.id = mintLegacyBotCapabilityOpaqueId(
+    key,
+    "connection",
+    connection.sourceId,
+    connection.exactFingerprint,
+  );
   legacy.selection.connectionIds = [connection.option.id];
   return parseBoundBotCustomSelection(legacy);
 }
@@ -193,12 +198,7 @@ test("opaque ids stay stable across fingerprint churn and do not reveal source i
     "other-private-skill-id",
     digest("facts"),
   );
-  const legacy = mintLegacyBotCapabilityOpaqueId(
-    key,
-    "skill",
-    "private-skill-id",
-    digest("facts"),
-  );
+  const legacy = mintLegacyBotCapabilityOpaqueId(key, "skill", "private-skill-id", digest("facts"));
   assert.equal(restarted, first);
   assert.notEqual(changedKey, first);
   assert.equal(changedFacts, first);
@@ -246,10 +246,7 @@ test("a closed global Skills gate suppresses only skill drift validation", () =>
   assert.doesNotThrow(() =>
     assertBoundBotCustomSelectionCurrent(bound, disabledSnapshot, { skillsEnabled: false }),
   );
-  assert.deepEqual(
-    botCustomSelectionDrift(bound, disabledSnapshot, { skillsEnabled: false }),
-    [],
-  );
+  assert.deepEqual(botCustomSelectionDrift(bound, disabledSnapshot, { skillsEnabled: false }), []);
 });
 
 test("file choices enforce Full Mac exclusivity and approved-location Bot folder pairing", () => {
@@ -324,7 +321,10 @@ test("MCP schema/effect drift keeps the public id and fail-closes the stored gra
   assert.doesNotThrow(() =>
     validateSelectionAgainstCatalog(bound.selection, result.catalogSnapshot.catalog),
   );
-  assert.throws(() => assertBoundBotCustomSelectionCurrent(bound, changed), BotCapabilityBindingDriftError);
+  assert.throws(
+    () => assertBoundBotCustomSelectionCurrent(bound, changed),
+    BotCapabilityBindingDriftError,
+  );
   const publicJson = JSON.stringify(result.catalogSnapshot.catalog);
   assert.equal(publicJson.includes("private-connection-id"), false);
   assert.equal(publicJson.includes("calendar_events"), false);
@@ -335,23 +335,54 @@ test("Composio raw access stays an unavailable old choice until explicitly repla
   const state = { inventory: composioInventory(false), keyLoads: 0, noticeLoads: [] as string[] };
   const service = new BotCapabilityCatalogMainService(mainPorts(state));
   const before = await service.snapshot({ audienceId: "device_a" });
-  const old = await service.bindCustom({ audienceId: "device_a", selection: fullSelection(before), catalogRevision: before.catalog.revision });
+  const old = await service.bindCustom({
+    audienceId: "device_a",
+    selection: fullSelection(before),
+    catalogRevision: before.catalog.revision,
+  });
   state.inventory = composioInventory(true);
   const result = await service.reconcile(old, { audienceId: "device_a", botId: "bot:one" });
   assert.equal(result.state, "drifted");
-  const oldRow = result.catalogSnapshot.catalog.connections.find(({ id }) => id === old.selection.connectionIds[0]);
+  const oldRow = result.catalogSnapshot.catalog.connections.find(
+    ({ id }) => id === old.selection.connectionIds[0],
+  );
   const newRow = result.catalogSnapshot.catalog.connections.find(({ available }) => available);
   assert.equal(result.catalogSnapshot.catalog.connections.length, 2);
-  assert.deepEqual(oldRow, { ...old.connections[0]!.option, available: false, label: "Previous Composio access" });
-  assert.ok(newRow); assert.notEqual(newRow.id, oldRow!.id);
+  assert.deepEqual(oldRow, {
+    ...old.connections[0]!.option,
+    available: false,
+    label: "Previous Composio access",
+  });
+  assert.ok(newRow);
+  assert.notEqual(newRow.id, oldRow!.id);
   assert.equal(newRow.label, "Composio");
   const unrelatedEdit = { ...old.selection, shellEnabled: false };
-  await assert.rejects(service.bindCustom({ audienceId: "device_a", selection: unrelatedEdit, catalogRevision: result.catalogSnapshot.catalog.revision, retainedBindings: [old] }), /unavailable/u);
-  const explicit = await service.bindCustom({ audienceId: "device_a", selection: { ...unrelatedEdit, connectionIds: [newRow.id] }, catalogRevision: result.catalogSnapshot.catalog.revision, retainedBindings: [old] });
+  await assert.rejects(
+    service.bindCustom({
+      audienceId: "device_a",
+      selection: unrelatedEdit,
+      catalogRevision: result.catalogSnapshot.catalog.revision,
+      retainedBindings: [old],
+    }),
+    /unavailable/u,
+  );
+  const explicit = await service.bindCustom({
+    audienceId: "device_a",
+    selection: { ...unrelatedEdit, connectionIds: [newRow.id] },
+    catalogRevision: result.catalogSnapshot.catalog.revision,
+    retainedBindings: [old],
+  });
   assert.equal(explicit.connections[0]!.accessIdentity, COMPOSIO_SERVICE_ACCESS_IDENTITY);
-  assert.equal(explicit.connections[0]!.sourceId, "preset-composio", "runtime transport identity stays unchanged");
+  assert.equal(
+    explicit.connections[0]!.sourceId,
+    "preset-composio",
+    "runtime transport identity stays unchanged",
+  );
   assert.equal(explicit.connections[0]!.tools[0]!.name, "composio");
-  assertBoundBotCustomSelectionOpaqueIds(parseBoundBotCustomSelection(JSON.parse(JSON.stringify(explicit))), createBotCapabilityOpaqueIdMint(key));
+  assertBoundBotCustomSelectionOpaqueIds(
+    parseBoundBotCustomSelection(JSON.parse(JSON.stringify(explicit))),
+    createBotCapabilityOpaqueIdMint(key),
+  );
   await service.assertCurrent(explicit, { mode: "runtime", botId: "bot:one" });
   assert.equal(JSON.stringify(result.catalogSnapshot.catalog).includes("accessIdentity"), false);
 });
@@ -362,30 +393,55 @@ test("Composio migration preserves distinct legacy ids and rejects collisions wi
   assertBoundBotCustomSelectionOpaqueIds(legacy, createBotCapabilityOpaqueIdMint(key));
   const current = snapshot(composioInventory(true));
   const allowed = binding(current);
-  for (const retained of [[old, legacy, allowed], [allowed, legacy, old]]) {
+  for (const retained of [
+    [old, legacy, allowed],
+    [allowed, legacy, old],
+  ]) {
     const migrated = withBotCapabilityTombstones(current, retained);
     const rows = migrated.catalog.connections;
     assert.equal(rows.length, 3);
-    assert.deepEqual(rows.filter(({ available }) => available).map(({ id }) => id), [allowed.selection.connectionIds[0]]);
-    assert.deepEqual(new Set(rows.filter(({ available }) => !available).map(({ id }) => id)), new Set([old.selection.connectionIds[0], legacy.selection.connectionIds[0]]));
-    assert.deepEqual(withBotCapabilityTombstones(migrated, retained).catalog, migrated.catalog, "repeated reconciliation retains all old choices without renaming them");
+    assert.deepEqual(
+      rows.filter(({ available }) => available).map(({ id }) => id),
+      [allowed.selection.connectionIds[0]],
+    );
+    assert.deepEqual(
+      new Set(rows.filter(({ available }) => !available).map(({ id }) => id)),
+      new Set([old.selection.connectionIds[0], legacy.selection.connectionIds[0]]),
+    );
+    assert.deepEqual(
+      withBotCapabilityTombstones(migrated, retained).catalog,
+      migrated.catalog,
+      "repeated reconciliation retains all old choices without renaming them",
+    );
   }
   const collision = structuredClone(old);
   collision.connections[0]!.option.id = allowed.selection.connectionIds[0]!;
   collision.selection.connectionIds = [allowed.selection.connectionIds[0]!];
   assert.throws(() => withBotCapabilityTombstones(current, [collision]), /collision/u);
-  assert.equal(current.catalog.connections[0]!.available, true, "failed migration does not mutate the input snapshot");
+  assert.equal(
+    current.catalog.connections[0]!.available,
+    true,
+    "failed migration does not mutate the input snapshot",
+  );
 });
 
 test("ordinary MCP retains legacy identity adoption while accepted Composio service grants stay stable", () => {
   const generic = withLegacyConnectionId(binding());
   const changedInventory = inventory();
-  changedInventory.connections[0]!.tools[0]!.inputSchemaFingerprint = digest("updated generic schema");
+  changedInventory.connections[0]!.tools[0]!.inputSchemaFingerprint =
+    digest("updated generic schema");
   const genericCatalog = withBotCapabilityTombstones(snapshot(changedInventory), [generic]);
   assert.equal(genericCatalog.catalog.connections[0]!.id, generic.selection.connectionIds[0]);
   assert.equal(genericCatalog.catalog.connections[0]!.available, true);
-  const rebound = bindBotCustomSelection({ selection: generic.selection, catalogRevision: genericCatalog.catalog.revision, snapshot: genericCatalog });
-  assert.notEqual(rebound.connections[0]!.exactFingerprint, generic.connections[0]!.exactFingerprint);
+  const rebound = bindBotCustomSelection({
+    selection: generic.selection,
+    catalogRevision: genericCatalog.catalog.revision,
+    snapshot: genericCatalog,
+  });
+  assert.notEqual(
+    rebound.connections[0]!.exactFingerprint,
+    generic.connections[0]!.exactFingerprint,
+  );
   const serviceInventory = composioInventory(true);
   const accepted = binding(snapshot(serviceInventory));
   serviceInventory.connections[0]!.label = "Renamed apps";
@@ -393,8 +449,14 @@ test("ordinary MCP retains legacy identity adoption while accepted Composio serv
   const reconciled = reconcileBoundBotCustomSelection(accepted, refreshed);
   assert.equal(reconciled.state, "ready");
   assert.equal(reconciled.catalogSnapshot.catalog.connections.length, 1);
-  assert.equal(reconciled.catalogSnapshot.catalog.connections[0]!.id, accepted.selection.connectionIds[0]);
-  assert.deepEqual(reconciled.catalogSnapshot.resources.connections[0]!.tools, accepted.connections[0]!.tools);
+  assert.equal(
+    reconciled.catalogSnapshot.catalog.connections[0]!.id,
+    accepted.selection.connectionIds[0],
+  );
+  assert.deepEqual(
+    reconciled.catalogSnapshot.resources.connections[0]!.tools,
+    accepted.connections[0]!.tools,
+  );
 });
 
 test("a raw tool copying the service descriptor cannot acquire its selection or exact grant identity", () => {
@@ -404,11 +466,19 @@ test("a raw tool copying the service descriptor cannot acquire its selection or 
   const service = snapshot(composioInventory(true));
   assert.deepEqual(raw.resources.connections[0]!.tools, service.resources.connections[0]!.tools);
   assert.notEqual(raw.catalog.connections[0]!.id, service.catalog.connections[0]!.id);
-  assert.notEqual(raw.resources.connections[0]!.exactFingerprint, service.resources.connections[0]!.exactFingerprint);
+  assert.notEqual(
+    raw.resources.connections[0]!.exactFingerprint,
+    service.resources.connections[0]!.exactFingerprint,
+  );
   const retained = binding(raw);
   const reconciled = reconcileBoundBotCustomSelection(retained, service);
   assert.equal(reconciled.state, "drifted");
-  assert.equal(reconciled.catalogSnapshot.catalog.connections.find(({ id }) => id === retained.selection.connectionIds[0])!.available, false);
+  assert.equal(
+    reconciled.catalogSnapshot.catalog.connections.find(
+      ({ id }) => id === retained.selection.connectionIds[0],
+    )!.available,
+    false,
+  );
   const invalidMarker = composioInventory(true);
   invalidMarker.connections[0]!.sourceId = "custom-composio";
   assert.throws(() => snapshot(invalidMarker), /host-owned/u);
@@ -560,9 +630,7 @@ test("removed sources keep unavailable tombstones with the stored public id", ()
   removedInventory.skills = [];
   const withoutSkill = snapshot(removedInventory);
   const withTombstones = withBotCapabilityTombstones(withoutSkill, [bound]);
-  const option = withTombstones.catalog.skills.find(
-    ({ id }) => id === bound.selection.skillIds[0],
-  );
+  const option = withTombstones.catalog.skills.find(({ id }) => id === bound.selection.skillIds[0]);
   assert.equal(option?.available, false);
   assert.deepEqual(botCustomSelectionDrift(bound, withoutSkill), [
     {
@@ -788,14 +856,21 @@ test("main catalog service isolates notice state by paired audience", async () =
   assert.deepEqual(state.noticeLoads, ["device_a", "device_b"]);
 });
 
-function countingPorts(state: { inventory: BotCapabilityInventory; keyLoads: number; noticeLoads: string[] }) {
+function countingPorts(state: {
+  inventory: BotCapabilityInventory;
+  keyLoads: number;
+  noticeLoads: string[];
+}) {
   const reads = { providers: 0, fail: false };
   const ports = mainPorts(state);
   return {
     reads,
     ports: {
       ...ports,
-      async listProviders(signal: AbortSignal, retained?: readonly { sourceProviderId: string; sourceModelId: string }[]) {
+      async listProviders(
+        signal: AbortSignal,
+        retained?: readonly { sourceProviderId: string; sourceModelId: string }[],
+      ) {
         reads.providers += 1;
         await new Promise((resolve) => setTimeout(resolve, 5));
         if (reads.fail) throw new Error("provider list unavailable");
@@ -809,7 +884,9 @@ test("runtime reads at one inventory revision share one inspection, and a moved 
   const state = { inventory: inventory(), keyLoads: 0, noticeLoads: [] as string[] };
   const { reads, ports } = countingPorts(state);
   let revision = 1;
-  const service = new BotCapabilityCatalogMainService(ports, { runtimeReuse: { revision: () => revision, ttlMs: 60_000 } });
+  const service = new BotCapabilityCatalogMainService(ports, {
+    runtimeReuse: { revision: () => revision, ttlMs: 60_000 },
+  });
 
   // One turn's admissions and pre-effect checks, some at the same moment.
   const [first, second] = await Promise.all([
@@ -823,7 +900,10 @@ test("runtime reads at one inventory revision share one inspection, and a moved 
 
   // Each caller owns its copy.
   first.catalog.providers.length = 0;
-  assert.equal((await service.snapshotForRuntime({ botId: "bot:one" })).catalog.providers.length, 1);
+  assert.equal(
+    (await service.snapshotForRuntime({ botId: "bot:one" })).catalog.providers.length,
+    1,
+  );
 
   // Another Bot's read is its own.
   await service.snapshotForRuntime({ botId: "bot:two" });
@@ -841,21 +921,38 @@ test("runtime reads at one inventory revision share one inspection, and a moved 
 test("a turn's bare provider choice and its full provider authority share one runtime inspection", async () => {
   const state = { inventory: inventory(), keyLoads: 0, noticeLoads: [] as string[] };
   const { reads, ports } = countingPorts(state);
-  const service = new BotCapabilityCatalogMainService(ports, { runtimeReuse: { revision: () => 1, ttlMs: 60_000 } });
+  const service = new BotCapabilityCatalogMainService(ports, {
+    runtimeReuse: { revision: () => 1, ttlMs: 60_000 },
+  });
   const providerId = state.inventory.providers[0]!.sourceId;
   const modelId = state.inventory.providers[0]!.models[0]!.sourceId;
   // Admission and revalidation retain the bare pair; tool assembly passes the
   // admitted authority, which also carries its fingerprints.
   const bare: BotRetainedProvider = { sourceProviderId: providerId, sourceModelId: modelId };
-  const authority = { ...bare, connectionFingerprint: "c", providerExactFingerprint: "p", modelFingerprint: "m", modelExactFingerprint: "x" };
+  const authority = {
+    ...bare,
+    connectionFingerprint: "c",
+    providerExactFingerprint: "p",
+    modelFingerprint: "m",
+    modelExactFingerprint: "x",
+  };
 
-  const fromAdmission = await service.snapshotForRuntime({ botId: "bot:one", retainedProviders: [bare] });
-  const fromTools = await service.snapshotForRuntime({ botId: "bot:one", retainedProviders: [authority] });
+  const fromAdmission = await service.snapshotForRuntime({
+    botId: "bot:one",
+    retainedProviders: [bare],
+  });
+  const fromTools = await service.snapshotForRuntime({
+    botId: "bot:one",
+    retainedProviders: [authority],
+  });
   assert.equal(reads.providers, 1);
   assert.deepEqual(fromTools, fromAdmission);
 
   // A different retained model is a different read.
-  await service.snapshotForRuntime({ botId: "bot:one", retainedProviders: [{ ...bare, sourceModelId: `${modelId}-other` }] });
+  await service.snapshotForRuntime({
+    botId: "bot:one",
+    retainedProviders: [{ ...bare, sourceModelId: `${modelId}-other` }],
+  });
   assert.equal(reads.providers, 2);
 });
 
@@ -863,13 +960,18 @@ test("an expired runtime read inspects again, a failed one is never reused, and 
   const state = { inventory: inventory(), keyLoads: 0, noticeLoads: [] as string[] };
   const { reads, ports } = countingPorts(state);
   let now = 1_000;
-  const service = new BotCapabilityCatalogMainService(ports, { runtimeReuse: { revision: () => 1, ttlMs: 3_000, now: () => now } });
+  const service = new BotCapabilityCatalogMainService(ports, {
+    runtimeReuse: { revision: () => 1, ttlMs: 3_000, now: () => now },
+  });
 
   const original = await service.snapshotForRuntime({ botId: "bot:one" });
   // Unhooked drift, such as a server changing its tools on its own, shows within the bound.
   state.inventory.providers[0]!.label = "Renamed provider";
   now += 2_999;
-  assert.equal((await service.snapshotForRuntime({ botId: "bot:one" })).catalog.revision, original.catalog.revision);
+  assert.equal(
+    (await service.snapshotForRuntime({ botId: "bot:one" })).catalog.revision,
+    original.catalog.revision,
+  );
   assert.equal(reads.providers, 1);
   now += 1;
   const drifted = await service.snapshotForRuntime({ botId: "bot:one" });
@@ -878,7 +980,10 @@ test("an expired runtime read inspects again, a failed one is never reused, and 
 
   reads.fail = true;
   now += 3_000;
-  await assert.rejects(service.snapshotForRuntime({ botId: "bot:one" }), /provider list unavailable/u);
+  await assert.rejects(
+    service.snapshotForRuntime({ botId: "bot:one" }),
+    /provider list unavailable/u,
+  );
   reads.fail = false;
   const recovered = await service.snapshotForRuntime({ botId: "bot:one" });
   assert.equal(reads.providers, 4);

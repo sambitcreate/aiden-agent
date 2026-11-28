@@ -15,8 +15,16 @@ import * as React from "react";
 import { LiveGuard } from "../../components/live-guard";
 import { CalendarClock, Files, Globe, ListChecks, Monitor, SlidersHorizontal } from "lucide-react";
 import { MemoryCardIcon } from "../../components/memory-card-icon";
-import { WorkbenchPanel, useWorkbenchWidth, type WorkbenchTab, type WorkbenchView } from "../../components/workbench-panel";
-import { BOT_PANEL_WIDTH_BOUNDS, resolveEnvironmentPanelLayout } from "../../lib/environment-panel-layout";
+import {
+  WorkbenchPanel,
+  useWorkbenchWidth,
+  type WorkbenchTab,
+  type WorkbenchView,
+} from "../../components/workbench-panel";
+import {
+  BOT_PANEL_WIDTH_BOUNDS,
+  resolveEnvironmentPanelLayout,
+} from "../../lib/environment-panel-layout";
 import { useLayer } from "../../lib/layer-stack";
 import { useBot } from "../../lib/queries";
 import { cn } from "../../lib/ui-utils";
@@ -27,17 +35,31 @@ import { BotAdvancedTab } from "./bot-advanced";
 import { BotComputerFloat } from "./bot-computer-float";
 import { BotConnectorWatches } from "./bot-connector-watches";
 import { BotEventRoutines } from "./bot-event-routines";
-import { BotComputerSignInReveal, BotComputerTab, useBotComputer, useBotComputerStart } from "./bot-computer-tab";
+import {
+  BotComputerSignInReveal,
+  BotComputerTab,
+  useBotComputer,
+  useBotComputerStart,
+} from "./bot-computer-tab";
 import { BotMemoryContent } from "./bot-memory-page";
 import { BotPanelActivity } from "./bot-panel-activity";
-import { BOT_PANEL_ID, BOT_PANEL_TABS, BOT_PANEL_WIDTH_KEY, useBotPanel, type BotPanelTab } from "./bot-panel-context";
+import {
+  BOT_PANEL_ID,
+  BOT_PANEL_TABS,
+  BOT_PANEL_WIDTH_KEY,
+  useBotPanel,
+  type BotPanelTab,
+} from "./bot-panel-context";
 import { BotPanelFiles } from "./bot-panel-files";
 import { BotPanelHandoff } from "./bot-panel-handoff";
 import { useBotChatHome } from "./bot-bubble-card";
 import { BotRoutines } from "./bot-routines";
 import { BotOpenWorkPanelRow } from "./bot-open-work-page";
 
-const TAB_META: Record<BotPanelTab, { label: string; icon: React.ComponentType<{ className?: string }> }> = {
+const TAB_META: Record<
+  BotPanelTab,
+  { label: string; icon: React.ComponentType<{ className?: string }> }
+> = {
   activity: { label: "Activity", icon: ListChecks },
   files: { label: "Files", icon: Files },
   memory: { label: "Memory", icon: MemoryCardIcon },
@@ -59,22 +81,30 @@ const NO_ENTRIES: readonly BotTranscriptEntry[] = [];
  * re-renders this subtree and not the rest of the panel. It shares the Bot's
  * one live subscription with the chat beside it.
  */
-function ActivityTab({ botId, botName, liveHere }: { botId: string; botName: string; liveHere: boolean }) {
+function ActivityTab({
+  botId,
+  botName,
+  liveHere,
+}: {
+  botId: string;
+  botName: string;
+  liveHere: boolean;
+}) {
   // A bubbled Bot's feed belongs to its bubble: this window must not subscribe.
   const live = useBotLive(liveHere ? botId : undefined);
   // Always the full log: Show tool activity (Appearance) shapes only the in-chat
   // recap, and opening this tab is the person asking to see every step.
   return (
     <>
-    <BotOpenWorkPanelRow botId={botId} />
-    <MemoBotPanelActivity
-      botName={botName}
-      entries={live.snapshot?.entries ?? NO_ENTRIES}
-      running={live.snapshot?.state.kind === "running"}
-      loading={liveHere && live.snapshot === null && !live.failed}
-      failed={live.snapshot === null && live.failed}
-      onRetry={live.reload}
-    />
+      <BotOpenWorkPanelRow botId={botId} />
+      <MemoBotPanelActivity
+        botName={botName}
+        entries={live.snapshot?.entries ?? NO_ENTRIES}
+        running={live.snapshot?.state.kind === "running"}
+        loading={liveHere && live.snapshot === null && !live.failed}
+        failed={live.snapshot === null && live.failed}
+        onRetry={live.reload}
+      />
     </>
   );
 }
@@ -84,7 +114,18 @@ function ActivityTab({ botId, botName, liveHere }: { botId: string; botName: str
  * subscription for as long as it is shown; the Activity tab shares it.
  */
 export function BotWorkbench({ botId, children }: React.PropsWithChildren<{ botId: string }>) {
-  const { open, tab: storedTab, fileRequest, sectionRequest, focusRequest, close, consumeFocusRequest, setTab, reveal, show } = useBotPanel();
+  const {
+    open,
+    tab: storedTab,
+    fileRequest,
+    sectionRequest,
+    focusRequest,
+    close,
+    consumeFocusRequest,
+    setTab,
+    reveal,
+    show,
+  } = useBotPanel();
   const bot = useBot(botId).data ?? null;
   // While the Bot is bubbled its chat lives in the bubble: nothing here reads its live feed.
   const { liveHere } = useBotChatHome(botId);
@@ -95,15 +136,19 @@ export function BotWorkbench({ botId, children }: React.PropsWithChildren<{ botI
   const [browserSeen, setBrowserSeen] = React.useState(false);
   if (browser.hasTabs && !browserSeen) setBrowserSeen(true);
   const browserShown =
-    (browser.workspaceId !== null && (browser.hasTabs || browserSeen)) || (!browser.resolved && storedTab === "browser");
+    (browser.workspaceId !== null && (browser.hasTabs || browserSeen)) ||
+    (!browser.resolved && storedTab === "browser");
   const computer = useBotComputer(botId);
   // Never on a Mac without Bot computers; a stored Computer tab waits for the status before falling back.
   const computerShown =
-    computer.supported && (computer.computer !== undefined || (!computer.loaded && !computer.failed && storedTab === "computer"));
+    computer.supported &&
+    (computer.computer !== undefined ||
+      (!computer.loaded && !computer.failed && storedTab === "computer"));
   const computerStart = useBotComputerStart({ id: botId, name: bot?.name ?? "this Bot" });
   const [computerFloating, setComputerFloating] = React.useState(false);
   if (computerFloating && !computer.computer) setComputerFloating(false);
-  const hidden = (id: BotPanelTab) => (id === "browser" && !browserShown) || (id === "computer" && !computerShown);
+  const hidden = (id: BotPanelTab) =>
+    (id === "browser" && !browserShown) || (id === "computer" && !computerShown);
   const tab: BotPanelTab = hidden(storedTab) ? "activity" : storedTab;
   const shownTabs = BOT_PANEL_TABS.filter((id) => !hidden(id));
   const containerRef = React.useRef<HTMLDivElement>(null);
@@ -111,7 +156,11 @@ export function BotWorkbench({ botId, children }: React.PropsWithChildren<{ botI
   const [containerWidth, setContainerWidth] = React.useState(() => window.innerWidth);
   const panelWidth = useWorkbenchWidth(BOT_PANEL_WIDTH_KEY, BOT_PANEL_WIDTH_BOUNDS);
   // Beside the chat, reflowing it, wherever the chat keeps a usable column.
-  const { width, inline } = resolveEnvironmentPanelLayout(panelWidth.preferredWidth, containerWidth, BOT_PANEL_WIDTH_BOUNDS);
+  const { width, inline } = resolveEnvironmentPanelLayout(
+    panelWidth.preferredWidth,
+    containerWidth,
+    BOT_PANEL_WIDTH_BOUNDS,
+  );
   const [visited, setVisited] = React.useState<ReadonlySet<BotPanelTab>>(() => new Set());
   // Mark the shown tab visited in the same render, so its body never paints a blank frame.
   if (open && !visited.has(tab)) setVisited(new Set([...visited, tab]));
@@ -174,7 +223,9 @@ export function BotWorkbench({ botId, children }: React.PropsWithChildren<{ botI
       case "activity":
         return <ActivityTab botId={bot.id} botName={bot.name} liveHere={liveHere} />;
       case "files":
-        return <BotPanelFiles botId={bot.id} botName={bot.name} active={active} request={fileRequest} />;
+        return (
+          <BotPanelFiles botId={bot.id} botName={bot.name} active={active} request={fileRequest} />
+        );
       case "memory":
         // Editing or deleting what the Bot remembers is the person's to do.
         return (
@@ -207,15 +258,15 @@ export function BotWorkbench({ botId, children }: React.PropsWithChildren<{ botI
         // The VM's screen, sign-in and hand-back are the person's own.
         return computer.computer ? (
           <LiveGuard guard="you">
-          <BotComputerTab
-            bot={bot}
-            computer={computer.computer}
-            active={active}
-            floating={computerFloating}
-            onFloat={() => setComputerFloating(true)}
-            onDock={() => setComputerFloating(false)}
-            start={computerStart}
-          />
+            <BotComputerTab
+              bot={bot}
+              computer={computer.computer}
+              active={active}
+              floating={computerFloating}
+              onFloat={() => setComputerFloating(true)}
+              onDock={() => setComputerFloating(false)}
+              start={computerStart}
+            />
           </LiveGuard>
         ) : null;
     }
@@ -225,7 +276,9 @@ export function BotWorkbench({ botId, children }: React.PropsWithChildren<{ botI
     render: ({ presented, selected }) =>
       id === "browser" || id === "computer" ? (
         // The page owns the whole area: no padding or scroller of its own.
-        visited.has(id) ? <div className="flex h-full min-h-0 flex-col">{body(id, presented && selected)}</div> : null
+        visited.has(id) ? (
+          <div className="flex h-full min-h-0 flex-col">{body(id, presented && selected)}</div>
+        ) : null
       ) : visited.has(id) ? (
         <div
           // The log has no controls of its own, so its scroller takes a tab stop to scroll by
@@ -276,7 +329,11 @@ export function BotWorkbench({ botId, children }: React.PropsWithChildren<{ botI
         views={views}
         selectedViewId={tab}
         // Floating, the panel covers the hand-off card above the composer; it carries the card's buttons instead.
-        notice={open && !inline && bot && liveHere ? <BotPanelHandoff botId={bot.id} name={bot.name} avatar={bot.avatar} /> : null}
+        notice={
+          open && !inline && bot && liveHere ? (
+            <BotPanelHandoff botId={bot.id} name={bot.name} avatar={bot.avatar} />
+          ) : null
+        }
         activeTabRef={activeTabRef}
         tabs={tabs}
         idPrefix={BOT_PANEL_ID}
@@ -286,7 +343,8 @@ export function BotWorkbench({ botId, children }: React.PropsWithChildren<{ botI
         onSelectTab={(entry) => {
           const next = entry.viewId as BotPanelTab;
           // The person switching to Computer starts a stopped computer; a tab restored at launch never does.
-          if (next === "computer" && tab !== "computer" && computer.computer?.state === "stopped") computerStart.start();
+          if (next === "computer" && tab !== "computer" && computer.computer?.state === "stopped")
+            computerStart.start();
           setTab(next);
         }}
         onCloseTab={() => undefined}
@@ -296,16 +354,16 @@ export function BotWorkbench({ botId, children }: React.PropsWithChildren<{ botI
       />
       {bot && computer.computer && computerFloating ? (
         <LiveGuard guard="you">
-        <BotComputerFloat
-          bot={bot}
-          computer={computer.computer}
-          start={computerStart}
-          onDock={() => {
-            setComputerFloating(false);
-            show("computer");
-          }}
-          onClose={() => setComputerFloating(false)}
-        />
+          <BotComputerFloat
+            bot={bot}
+            computer={computer.computer}
+            start={computerStart}
+            onDock={() => {
+              setComputerFloating(false);
+              show("computer");
+            }}
+            onClose={() => setComputerFloating(false)}
+          />
         </LiveGuard>
       ) : null}
     </div>

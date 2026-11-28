@@ -6,7 +6,13 @@ import { Text } from "./ui";
  * as a shell command. The well takes keyboard focus so a long command can be
  * scrolled without a pointer, and it is named by its visible label.
  */
-export function ApprovalCodeWell({ label, children }: { label: string; children: string }): React.ReactElement {
+export function ApprovalCodeWell({
+  label,
+  children,
+}: {
+  label: string;
+  children: string;
+}): React.ReactElement {
   const labelId = React.useId();
   return (
     <div>

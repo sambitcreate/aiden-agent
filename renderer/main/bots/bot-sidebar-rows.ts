@@ -47,7 +47,10 @@ function botSidebarRows(
         ...(summary?.lastTurnEnd ? { lastTurnEnd: summary.lastTurnEnd } : {}),
       };
     })
-    .sort((left, right) => right.activityAt - left.activityAt || left.bot.name.localeCompare(right.bot.name));
+    .sort(
+      (left, right) =>
+        right.activityAt - left.activityAt || left.bot.name.localeCompare(right.bot.name),
+    );
 }
 
 export function matchesBotSearch(row: BotSidebarRow, query: string): boolean {
@@ -93,7 +96,10 @@ type SummaryResult = { data?: BotLiveSummary; isPending: boolean };
 
 // Kept at module level so useQueries can hand back the same object until a summary changes.
 function combineSummaries(results: readonly SummaryResult[]) {
-  return { data: results.map((result) => result.data), settled: results.every((result) => !result.isPending) };
+  return {
+    data: results.map((result) => result.data),
+    settled: results.every((result) => !result.isPending),
+  };
 }
 
 /**
@@ -118,7 +124,8 @@ export function useBotRows({ enabled = true }: { enabled?: boolean } = {}) {
     // Forget read numbers of Bots no longer listed, so the map tracks only live Bots.
     if (!bots.data) return;
     const live = new Set(bots.data.map((bot) => bot.id));
-    for (const botId of latestSummaryRead.keys()) if (!live.has(botId)) latestSummaryRead.delete(botId);
+    for (const botId of latestSummaryRead.keys())
+      if (!live.has(botId)) latestSummaryRead.delete(botId);
   }, [bots.data]);
   const rows = React.useMemo(() => botSidebarRows(list, summaries.data), [list, summaries.data]);
   return { bots, rows, summariesSettled: summaries.settled };

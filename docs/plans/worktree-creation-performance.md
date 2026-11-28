@@ -8,14 +8,14 @@ Make managed worktree creation and worktree-on-send feel instantaneous and smoot
 
 ## Measured Head-to-Head Results (`aiden-macos`, 6,497 tracked files, Apple Silicon APFS, 5-run medians)
 
-| Operation | Before (`origin/main`) | After (this PR) | Saved | % Reduction | Speedup |
-| :--- | ---: | ---: | ---: | ---: | ---: |
-| Explicit Create (`createIn` + `createWorktree`) | **1,417 ms** (1.42 s, 127 git spawns) | **744 ms** (0.74 s, 8 git spawns) | **−673 ms** (−0.67 s) | **−47.5%** (−93.7% spawns) | **1.90×** |
-| Worktree-on-Send Backend (local base → ready for LLM) | **1,915 ms** (1.92 s, 144 git spawns) | **711 ms** (0.71 s, 12 git spawns) | **−1,204 ms** (−1.20 s) | **−62.9%** (−91.7% spawns) | **2.69×** |
-| Post-Create `git.info(worktreePath)` | **172.82 ms** (6 git spawns) | **0.77 ms** (0 git spawns) | **−172.05 ms** | **−99.6%** (−100% spawns) | **224×** |
-| Per-Op Admission (`managedWorktreeUsable`) | **15.28 ms** (4 git spawns) | **0.58 ms** (0 git spawns) | **−14.70 ms** | **−96.2%** (−100% spawns) | **26.3×** |
-| `.worktreeinclude` (31 ignored files, clean repo) | **100 ms** (31 helper spawns + 62 fsyncs) | **40 ms** (1 batched CoW helper spawn) | **−60 ms** | **−60.0%** | **2.50×** |
-| `.worktreeinclude` (31 files + 5,000-file `node_modules`) | **Crashed** (`output_limit` > 1 MiB) | **44 ms** (0 crashes) | Fixed crash | **100% crash fix** | ∞ |
+| Operation                                                 |                    Before (`origin/main`) |                        After (this PR) |                   Saved |                % Reduction |   Speedup |
+| :-------------------------------------------------------- | ----------------------------------------: | -------------------------------------: | ----------------------: | -------------------------: | --------: |
+| Explicit Create (`createIn` + `createWorktree`)           |     **1,417 ms** (1.42 s, 127 git spawns) |      **744 ms** (0.74 s, 8 git spawns) |   **−673 ms** (−0.67 s) | **−47.5%** (−93.7% spawns) | **1.90×** |
+| Worktree-on-Send Backend (local base → ready for LLM)     |     **1,915 ms** (1.92 s, 144 git spawns) |     **711 ms** (0.71 s, 12 git spawns) | **−1,204 ms** (−1.20 s) | **−62.9%** (−91.7% spawns) | **2.69×** |
+| Post-Create `git.info(worktreePath)`                      |              **172.82 ms** (6 git spawns) |             **0.77 ms** (0 git spawns) |          **−172.05 ms** |  **−99.6%** (−100% spawns) |  **224×** |
+| Per-Op Admission (`managedWorktreeUsable`)                |               **15.28 ms** (4 git spawns) |             **0.58 ms** (0 git spawns) |           **−14.70 ms** |  **−96.2%** (−100% spawns) | **26.3×** |
+| `.worktreeinclude` (31 ignored files, clean repo)         | **100 ms** (31 helper spawns + 62 fsyncs) | **40 ms** (1 batched CoW helper spawn) |              **−60 ms** |                 **−60.0%** | **2.50×** |
+| `.worktreeinclude` (31 files + 5,000-file `node_modules`) |      **Crashed** (`output_limit` > 1 MiB) |                  **44 ms** (0 crashes) |             Fixed crash |         **100% crash fix** |         ∞ |
 
 ## As-Built Deviations & Refinements from Adversarial Reviews
 
@@ -36,6 +36,7 @@ Make managed worktree creation and worktree-on-send feel instantaneous and smoot
 ## Phases
 
 ### Phase 1 — Backend Git Core & `.worktreeinclude` Fix (Tier 1 Backend)
+
 - Collapse `GitService.repository()` from 3 `rev-parse` spawns (2 serial rounds) to 1 spawn (`git rev-parse --is-inside-work-tree --show-toplevel --git-common-dir`).
 - Replace the 128-file sequential `git check-attr` loop in `managedWorktreeCheckoutBytes` with a single streaming `git check-attr --cached -z --all --stdin` parser (no 1 MiB overflow; same-commit + attribute-file-mtime memoization safe across `info/attributes` and global config).
 - Deduplicate outer vs. inner `managedWorktreeCheckoutBytes` and `checkWorktreeAllocation` via `additionalAllocationBytes` passed into `git.createWorktree`; remove redundant post-create `repositoryPaths` call in `createIn`.
@@ -44,19 +45,22 @@ Make managed worktree creation and worktree-on-send feel instantaneous and smoot
 - Fix `.worktreeinclude` `node_modules` `output_limit` crash: invert to `git ls-files -z -o -i --exclude-from=<includeFile> --full-name` → short-circuit if empty → `git check-ignore -z --stdin` with `allowExitCodes: [1]`.
 
 ### Phase 2 — Main Process 0-Spawn Admission, Skill Cache, Pi Fast-Path & Store Gating (Tier 2 Main)
+
 - Live 0-spawn pure-FS verification + in-flight coalescing in `managedWorktreeUsable` / `assertManagedWorktreeAdmission`.
 - Split global vs. workspace skill candidate discovery cache in `skills-discovery.ts` / `skill-registry.ts` (preserving `isEnabled()` check first and `O_NOFOLLOW` workspace checks); avoid double `resolveFresh` on slash-skill worktree sends.
 - Fast-path brand-new chats in `piCompactionSessionStore.openChatIfEligible` (in-memory index of existing journals & legacy migration candidates scanned once on store init, updated on create/delete).
 - Gate `protectLocal()` on warm `localStore.load()` cache hits when directory/publication state is unchanged; make `FirstMessageWorktreeLedger`'s `ready` transition non-blocking/no-fsync (since `pending` is already crash-safe); seed short-TTL display-only `GitInfo` cache on newly created worktrees and suppress `GitRepoWatcher` self-echo for Aiden's own ref creation.
 
 ### Phase 3 — Renderer Perceived Speed, IPC Coalescing & Parallel Flow-B Warmup (Tier 1 + 2 UI & IPC)
+
 - Enrich `FirstMessageWorktreeResult` (and `git:createWorktree` if additive/safe for desktop/Remote/mobile) with `{ workspace, initialGitInfo }` so `chat-pane.tsx` seeds caches and selects the workspace synchronously instead of blocking `runGeneration` on `await qc.invalidateQueries(workspaces)`.
 - Pipeline read-only workspace-independent Flow-B LLM warm-up (`resolveModelRuntime`, global skills, `webSearchService.availability`) in parallel with `firstMessageWorktrees.ensure()`.
-- Narrow `workspaces:changed` so workspace *addition* updates `queryKeys.workspaces` without blindly refetching `chats:list` (keeping full invalidation for removals/reconciliation).
+- Narrow `workspaces:changed` so workspace _addition_ updates `queryKeys.workspaces` without blindly refetching `chats:list` (keeping full invalidation for removals/reconciliation).
 - Mount `DraftWorktreeSendView` on frame 1 for draft worktree sends; seed draft `worktree.baseRef`/`fromOrigin` immediately from `GitInfo` (fixing `⌥↵` double-stall); gate `useGitWorktrees` in `git-branch-picker.tsx`; suppress one-shot post-promotion `chats:get` refetch while keeping global `staleTime: 0`.
 - Render pending worktree-send state seamlessly inside `MessageList` (no bubble remount flash); isolate `artifacts`/`editorState`/`gitOperationBusy` from monolithic `EnvironmentPanelContext`; wrap non-urgent workspace-switch updates in `React.startTransition`; use `requestChatDraftComposerFocus` in `createGitWorktree`.
 
 ### Phase 4 — Native Batched `provision` (`native/worktree-file-io/main.c`), Benchmarks, Docs & CI
+
 - Add dedicated batched `provision` subcommand in `native/worktree-file-io/main.c` (using APFS `fclonefileat` when same-volume + `openat`/`S_ISREG`/`same_source`/`mode & 0777`/`fchflags(0)` + `EXDEV`/`ENOTSUP` fallback, single directory `fsync`, leaving `copy` + SHA-256 intact for snapshots) and wire `managed-worktree-provisioner.ts` to use it.
 - Re-run uncontended benchmarks, verify all unit/contract/typecheck/lint/mobile/E2E suites, update `.memory/` and `docs/plans/README.md`, open PR, and watch CI until green.
 

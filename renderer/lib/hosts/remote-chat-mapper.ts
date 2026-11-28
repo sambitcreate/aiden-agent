@@ -1,11 +1,20 @@
 import type { Attachment, Chat, ChatMessage } from "../types";
 import { parseChatInputSource } from "../../shared/chat-input-source";
 import type { ChatImagePlacementV1 } from "../../shared/chat-artifacts";
-import { AIDEN_UI_CATALOG_VERSION, AIDEN_UI_LIMITS, type AidenUiNodeV1, type ChatUiVisualV1 } from "../../shared/aiden-ui/types";
+import {
+  AIDEN_UI_CATALOG_VERSION,
+  AIDEN_UI_LIMITS,
+  type AidenUiNodeV1,
+  type ChatUiVisualV1,
+} from "../../shared/aiden-ui/types";
 import { parseChatUiVisualV1 } from "../../shared/aiden-ui/visual";
 import { cleanPrefix, clipUnits } from "../../shared/aiden-ui/fallback-text";
 import { MAX_HTML_ARTIFACT_TITLE_CHARS } from "../../shared/generative-ui";
-import { isToolStep, parseGenerationTimeline, type GenerationTimeline } from "../../shared/generation-timeline";
+import {
+  isToolStep,
+  parseGenerationTimeline,
+  type GenerationTimeline,
+} from "../../shared/generation-timeline";
 import {
   parseProviderFailureV1,
   PROVIDER_FAILURE_VERSION,
@@ -95,7 +104,8 @@ const MAX_REMOTE_VISUAL_LINES = 400;
 // separates lines. The zero-width joiner and non-joiner stay: they shape emoji
 // and the spelling of Persian and Indic words.
 /* eslint-disable no-control-regex */
-const REMOTE_VISUAL_HIDDEN = /[\u0000-\u0008\u000b-\u001f\u007f-\u009f\u061c\u200b\u200e\u200f\u202a-\u202e\u2060-\u2064\u2066-\u2069\ufeff\ufff9-\ufffb]|\p{Cs}/gu;
+const REMOTE_VISUAL_HIDDEN =
+  /[\u0000-\u0008\u000b-\u001f\u007f-\u009f\u061c\u200b\u200e\u200f\u202a-\u202e\u2060-\u2064\u2066-\u2069\ufeff\ufff9-\ufffb]|\p{Cs}/gu;
 /* eslint-enable no-control-regex */
 
 // A line or paragraph separator would break a line where the host's text has no
@@ -107,9 +117,16 @@ function remoteVisualTitle(value: unknown): string {
   // Hidden characters are removed before the title is clipped, so they never use
   // up its length, and only as much is read as the clip can show (two more units
   // allow for the space a collapsed run can leave at either end).
-  const title = cleanPrefix(text(value) ?? "", REMOTE_VISUAL_HIDDEN, MAX_HTML_ARTIFACT_TITLE_CHARS + 2, /\s+/gu).trim();
+  const title = cleanPrefix(
+    text(value) ?? "",
+    REMOTE_VISUAL_HIDDEN,
+    MAX_HTML_ARTIFACT_TITLE_CHARS + 2,
+    /\s+/gu,
+  ).trim();
   if (!title) return "Visual";
-  return title.length > MAX_HTML_ARTIFACT_TITLE_CHARS ? `${clipUnits(title, MAX_HTML_ARTIFACT_TITLE_CHARS - 1).trimEnd()}…` : title;
+  return title.length > MAX_HTML_ARTIFACT_TITLE_CHARS
+    ? `${clipUnits(title, MAX_HTML_ARTIFACT_TITLE_CHARS - 1).trimEnd()}…`
+    : title;
 }
 
 /**
@@ -124,31 +141,53 @@ function mapRemoteTextVisual(value: unknown): ChatUiVisualV1 | null {
   if (input?.kind !== "ui" || input.snapshotAttachmentId !== undefined) return null;
   const raw = text(input.fallbackText);
   // Only as much of the text is read as the cap can show, after hidden characters are dropped.
-  const fallbackText = raw === undefined ? "" : clipUnits(cleanPrefix(raw, REMOTE_VISUAL_HIDDEN, AIDEN_UI_LIMITS.fallbackChars).replace(REMOTE_VISUAL_SEPARATOR, " "), AIDEN_UI_LIMITS.fallbackChars).trim();
+  const fallbackText =
+    raw === undefined
+      ? ""
+      : clipUnits(
+          cleanPrefix(raw, REMOTE_VISUAL_HIDDEN, AIDEN_UI_LIMITS.fallbackChars).replace(
+            REMOTE_VISUAL_SEPARATOR,
+            " ",
+          ),
+          AIDEN_UI_LIMITS.fallbackChars,
+        ).trim();
   if (!fallbackText) return null;
-  const lines = fallbackText.split("\n").map((line) => line.trim()).filter(Boolean);
-  const shown = lines.length > MAX_REMOTE_VISUAL_LINES
-    ? [...lines.slice(0, MAX_REMOTE_VISUAL_LINES - 1), lines.slice(MAX_REMOTE_VISUAL_LINES - 1).join(" ")]
-    : lines;
+  const lines = fallbackText
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean);
+  const shown =
+    lines.length > MAX_REMOTE_VISUAL_LINES
+      ? [
+          ...lines.slice(0, MAX_REMOTE_VISUAL_LINES - 1),
+          lines.slice(MAX_REMOTE_VISUAL_LINES - 1).join(" "),
+        ]
+      : lines;
   const title = remoteVisualTitle(input.title);
   const tree: AidenUiNodeV1 = {
     t: "Visual",
     k: "0",
     p: { title: { op: "lit", v: title } },
-    c: shown.map((line, index) => ({ t: "Text", k: `0.${index}`, c: [{ t: "#text", k: `0.${index}.0`, s: line }] })),
+    c: shown.map((line, index) => ({
+      t: "Text",
+      k: `0.${index}`,
+      c: [{ t: "#text", k: `0.${index}.0`, s: line }],
+    })),
   };
   const toolCallId = text(input.toolCallId);
-  return parseChatUiVisualV1({
-    version: 1,
-    kind: "ui",
-    id: input.id,
-    ...(toolCallId && /^call-[1-9][0-9]{0,8}$/u.test(toolCallId) ? { toolCallId } : {}),
-    title,
-    catalogVersion: AIDEN_UI_CATALOG_VERSION,
-    tree,
-    fallbackText,
-    ...(input.layout === "wide" ? { layout: "wide" } : {}),
-  }) ?? null;
+  return (
+    parseChatUiVisualV1({
+      version: 1,
+      kind: "ui",
+      id: input.id,
+      ...(toolCallId && /^call-[1-9][0-9]{0,8}$/u.test(toolCallId) ? { toolCallId } : {}),
+      title,
+      catalogVersion: AIDEN_UI_CATALOG_VERSION,
+      tree,
+      fallbackText,
+      ...(input.layout === "wide" ? { layout: "wide" } : {}),
+    }) ?? null
+  );
 }
 
 /** Maps one projected message; returns null for a row the transcript cannot show. */
@@ -159,7 +198,12 @@ export function mapRemoteMessage(value: unknown): ChatMessage | null {
   const role = input.role;
   const content = text(input.text);
   const createdAt = millis(input.createdAt);
-  if (!id || (role !== "user" && role !== "assistant") || content === undefined || createdAt === undefined)
+  if (
+    !id ||
+    (role !== "user" && role !== "assistant") ||
+    content === undefined ||
+    createdAt === undefined
+  )
     return null;
   const message: ChatMessage = { id, role, content, createdAt };
   const reasoning = text(input.reasoning);
@@ -172,8 +216,13 @@ export function mapRemoteMessage(value: unknown): ChatMessage | null {
       if (!attachment) continue;
       attachments.push(attachment);
       const toolCallId = record(value)?.toolCallId;
-      if (role === "assistant" && attachment.kind === "image" &&
-          typeof toolCallId === "string" && toolCallId.length <= 128 && /^call-[1-9][0-9]*$/u.test(toolCallId)) {
+      if (
+        role === "assistant" &&
+        attachment.kind === "image" &&
+        typeof toolCallId === "string" &&
+        toolCallId.length <= 128 &&
+        /^call-[1-9][0-9]*$/u.test(toolCallId)
+      ) {
         placements.push({ attachmentId: attachment.id, toolCallId });
       }
     }
@@ -185,7 +234,11 @@ export function mapRemoteMessage(value: unknown): ChatMessage | null {
   const failure = mapOutcome(input.outcome);
   if (failure) message.providerFailure = failure;
   if (role === "assistant") {
-    const timeline = parseGenerationTimeline(input.timeline, content.length, reasoning?.length ?? 0);
+    const timeline = parseGenerationTimeline(
+      input.timeline,
+      content.length,
+      reasoning?.length ?? 0,
+    );
     if (timeline) message.timeline = withoutHostLocalRecaps(timeline);
     if (Array.isArray(input.visuals)) {
       const visuals: ChatUiVisualV1[] = [];
@@ -224,7 +277,13 @@ export function mapRemoteMessagesWindow(value: unknown): RemoteMessagesWindow {
   const input = record(value);
   const chatId = text(input?.chatId);
   const revision = text(input?.revision);
-  if (!input || !chatId || !revision || !Array.isArray(input.messages) || typeof input.hasOlder !== "boolean")
+  if (
+    !input ||
+    !chatId ||
+    !revision ||
+    !Array.isArray(input.messages) ||
+    typeof input.hasOlder !== "boolean"
+  )
     throw new Error("That computer returned an unreadable transcript page.");
   const providerId = text(input.providerId);
   const modelId = text(input.modelId);
@@ -272,20 +331,37 @@ export function emptyRemoteTranscript(chatId: string): RemoteTranscript {
  * Applies a fresh newest window. Older pages already loaded are kept when the
  * new window still overlaps them; otherwise the window replaces the transcript.
  */
-export function mergeNewestWindow(current: RemoteTranscript, window: RemoteMessagesWindow): RemoteTranscript {
+export function mergeNewestWindow(
+  current: RemoteTranscript,
+  window: RemoteMessagesWindow,
+): RemoteTranscript {
   const first = window.messages[0];
   // The newest window is the current word on the chat's model.
   const model = window.model ? { model: window.model } : {};
   if (!first) {
     // An empty newest window means the chat has no visible messages at all.
-    return { chatId: window.chatId, revision: window.revision, messages: [], hasOlder: false, ...model };
+    return {
+      chatId: window.chatId,
+      revision: window.revision,
+      messages: [],
+      hasOlder: false,
+      ...model,
+    };
   }
   const overlap = current.messages.findIndex((message) => message.id === first.id);
   if (overlap <= 0 || !window.hasOlder) {
-    return { chatId: window.chatId, revision: window.revision, messages: window.messages, hasOlder: window.hasOlder, ...model };
+    return {
+      chatId: window.chatId,
+      revision: window.revision,
+      messages: window.messages,
+      hasOlder: window.hasOlder,
+      ...model,
+    };
   }
   const latestIds = new Set(window.messages.map((message) => message.id));
-  const earlier = current.messages.slice(0, overlap).filter((message) => !latestIds.has(message.id));
+  const earlier = current.messages
+    .slice(0, overlap)
+    .filter((message) => !latestIds.has(message.id));
   return {
     chatId: window.chatId,
     revision: window.revision,
@@ -296,7 +372,10 @@ export function mergeNewestWindow(current: RemoteTranscript, window: RemoteMessa
 }
 
 /** Prepends an older page read with `before = current.messages[0].id`. */
-export function mergeOlderWindow(current: RemoteTranscript, window: RemoteMessagesWindow): RemoteTranscript {
+export function mergeOlderWindow(
+  current: RemoteTranscript,
+  window: RemoteMessagesWindow,
+): RemoteTranscript {
   const known = new Set(current.messages.map((message) => message.id));
   const older = window.messages.filter((message) => !known.has(message.id));
   return {

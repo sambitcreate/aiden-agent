@@ -72,7 +72,10 @@ function unwrapConstAssertion(expression: ts.Expression): ts.Expression {
 }
 
 /** Resolve a channel template only when every interpolation has a literal, bounded loop domain. */
-function channelValues(expression: ts.Expression | undefined, constants: ReadonlyMap<string, string>): string[] {
+function channelValues(
+  expression: ts.Expression | undefined,
+  constants: ReadonlyMap<string, string>,
+): string[] {
   const literal = literalValue(expression, constants);
   if (literal !== undefined) return [literal];
   if (!expression || !ts.isTemplateExpression(expression)) return [];
@@ -82,11 +85,18 @@ function channelValues(expression: ts.Expression | undefined, constants: Readonl
     if (ts.isIdentifier(span.expression)) {
       const name = span.expression.text;
       for (let parent: ts.Node | undefined = expression.parent; parent; parent = parent.parent) {
-        if (!ts.isForOfStatement(parent) || !ts.isVariableDeclarationList(parent.initializer)) continue;
+        if (!ts.isForOfStatement(parent) || !ts.isVariableDeclarationList(parent.initializer))
+          continue;
         const declaration = parent.initializer.declarations[0];
-        if (!declaration || !ts.isIdentifier(declaration.name) || declaration.name.text !== name) continue;
+        if (!declaration || !ts.isIdentifier(declaration.name) || declaration.name.text !== name)
+          continue;
         const array = unwrapConstAssertion(parent.expression);
-        if (ts.isArrayLiteralExpression(array) && array.elements.length <= 64 && array.elements.every(ts.isStringLiteralLike)) domain = array.elements.map((entry) => (entry as ts.StringLiteralLike).text);
+        if (
+          ts.isArrayLiteralExpression(array) &&
+          array.elements.length <= 64 &&
+          array.elements.every(ts.isStringLiteralLike)
+        )
+          domain = array.elements.map((entry) => (entry as ts.StringLiteralLike).text);
         break;
       }
     }
@@ -150,7 +160,8 @@ function collectInventory(
       if (ts.isCallExpression(node)) {
         const name = calleeName(node.expression);
         if (name === "handle") {
-          for (const channel of channelValues(node.arguments[0], channelConstants)) inventory.handlers.add(channel);
+          for (const channel of channelValues(node.arguments[0], channelConstants))
+            inventory.handlers.add(channel);
         } else if (name === "send" || name === "broadcast") {
           const channel = literalValue(node.arguments[0], channelConstants);
           if (channel) inventory.notifications.add(channel);
@@ -176,7 +187,8 @@ function collectRendererInvokes(
   for (const sourceFile of sourceFiles) {
     const visit = (node: ts.Node): void => {
       if (ts.isCallExpression(node) && calleeName(node.expression) === "invoke") {
-        for (const channel of channelValues(node.arguments[0], channelConstants)) invokes.add(channel);
+        for (const channel of channelValues(node.arguments[0], channelConstants))
+          invokes.add(channel);
       }
       ts.forEachChild(node, visit);
     };
@@ -191,7 +203,8 @@ async function productionSourceFiles(directory: string): Promise<ts.SourceFile[]
   for (const entry of entries) {
     const target = path.join(directory, entry.name);
     if (entry.isDirectory()) {
-      if (entry.name !== "fixtures" && entry.name !== "test-support") sourceFiles.push(...(await productionSourceFiles(target)));
+      if (entry.name !== "fixtures" && entry.name !== "test-support")
+        sourceFiles.push(...(await productionSourceFiles(target)));
       continue;
     }
     if (!entry.isFile() || !entry.name.endsWith(".ts") || entry.name.endsWith(".test.ts")) {
@@ -211,7 +224,8 @@ async function botBubbleRendererSources(): Promise<ts.SourceFile[]> {
   const overlayRoot = path.join(REPO_ROOT, "renderer", "bot-bubbles");
   const entries = await fs.readdir(overlayRoot, { recursive: true }).catch(() => [] as string[]);
   for (const entry of entries) {
-    if (/\.tsx?$/u.test(entry) && !/\.test\.tsx?$/u.test(entry)) files.push(path.join(overlayRoot, entry));
+    if (/\.tsx?$/u.test(entry) && !/\.test\.tsx?$/u.test(entry))
+      files.push(path.join(overlayRoot, entry));
   }
   return Promise.all(
     files.map(async (file) =>
@@ -272,7 +286,13 @@ test("source inventory detects literal handler and notification additions", () =
 });
 
 test("source inventory expands literal channel families and refuses unbounded caller interpolation", () => {
-  const source = ts.createSourceFile("family.ts", 'for (const action of ["read", "save"] as const) ports.handle(`family:${action}`, () => {}); ports.handle(`family:${caller}`, () => {});', ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
+  const source = ts.createSourceFile(
+    "family.ts",
+    'for (const action of ["read", "save"] as const) ports.handle(`family:${action}`, () => {}); ports.handle(`family:${caller}`, () => {});',
+    ts.ScriptTarget.Latest,
+    true,
+    ts.ScriptKind.TS,
+  );
   assert.deepEqual(sorted(collectInventory([source]).handlers), ["family:read", "family:save"]);
 });
 
@@ -309,7 +329,10 @@ test("source inventory resolves channel tables and renderer invoke call sites", 
   const mutation = collectInventory([handlers], [shared]);
   assert.deepEqual(sorted(mutation.handlers), ["surface:read"]);
   assert.deepEqual(sorted(mutation.notifications), ["surface:changed"]);
-  assert.deepEqual(sorted(collectRendererInvokes([client], [shared])), ["surface:read", "surface:write"]);
+  assert.deepEqual(sorted(collectRendererInvokes([client], [shared])), [
+    "surface:read",
+    "surface:write",
+  ]);
 });
 
 test("Bot IPC handlers and renderer Bot invokes match exactly", () => {
@@ -319,7 +342,11 @@ test("Bot IPC handlers and renderer Bot invokes match exactly", () => {
   const botHandlers = rendererHandlers.filter((channel) => channel.startsWith("bots:"));
   const botInvokes = [...rendererInvokes].filter((channel) => channel.startsWith("bots:"));
   assert.ok(botHandlers.length > 20, "IPC source scan found too few Bot handlers");
-  assert.deepEqual(sorted(botInvokes), sorted(botHandlers), "Bot handlers and renderer/lib/ipc.ts drifted");
+  assert.deepEqual(
+    sorted(botInvokes),
+    sorted(botHandlers),
+    "Bot handlers and renderer/lib/ipc.ts drifted",
+  );
 });
 
 test("workspace artifact IPC handlers and renderer invokes match exactly", () => {
@@ -327,7 +354,11 @@ test("workspace artifact IPC handlers and renderer invokes match exactly", () =>
   const handlers = rendererHandlers.filter((channel) => channel.startsWith(prefix));
   const invokes = [...rendererInvokes].filter((channel) => channel.startsWith(prefix));
   assert.ok(handlers.length > 0, "workspace artifact handlers were not found");
-  assert.deepEqual(sorted(invokes), sorted(handlers), "Workspace artifact handlers and renderer/lib/ipc.ts drifted");
+  assert.deepEqual(
+    sorted(invokes),
+    sorted(handlers),
+    "Workspace artifact handlers and renderer/lib/ipc.ts drifted",
+  );
 });
 
 test("every live renderer-facing handler is covered by an INVOKE_PREFIX", () => {
@@ -469,12 +500,22 @@ test("every Quick Chat preload invoke and notification channel exists in live ma
 });
 
 test("every Bot bubble overlay preload channel exists in live main inventory", () => {
-  const missingHandlers = [...BOT_BUBBLES_INVOKE_CHANNELS].filter((channel) => !inventory.handlers.has(channel));
-  assert.deepEqual(missingHandlers, [], "Bot bubble overlay invoke channels missing from main handlers");
+  const missingHandlers = [...BOT_BUBBLES_INVOKE_CHANNELS].filter(
+    (channel) => !inventory.handlers.has(channel),
+  );
+  assert.deepEqual(
+    missingHandlers,
+    [],
+    "Bot bubble overlay invoke channels missing from main handlers",
+  );
   const missingNotifications = [...BOT_BUBBLES_NOTIFICATION_CHANNELS].filter(
     (channel) => !inventory.notifications.has(channel),
   );
-  assert.deepEqual(missingNotifications, [], "Bot bubble overlay notification channels missing from main notification sites");
+  assert.deepEqual(
+    missingNotifications,
+    [],
+    "Bot bubble overlay notification channels missing from main notification sites",
+  );
 });
 
 test("handler bootstrap registers every dedicated handler surface", async () => {

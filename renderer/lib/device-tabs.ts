@@ -90,7 +90,10 @@ export function visibleDeviceTabs(
 }
 
 /** The selected device tab key, falling back to the first tab; null selects the picker. */
-export function selectedDeviceTab(tabs: ChatDeviceTabs, visible: readonly DeviceTab[]): string | null {
+export function selectedDeviceTab(
+  tabs: ChatDeviceTabs,
+  visible: readonly DeviceTab[],
+): string | null {
   if (tabs.active && visible.some((tab) => tab.key === tabs.active)) return tabs.active;
   if (tabs.picker || visible.length === 0) return null;
   return visible[0].key;

@@ -4,7 +4,10 @@ import assert from "node:assert/strict";
 import type * as React from "react";
 import { afterEach, test } from "node:test";
 import { cleanup, render } from "@testing-library/react";
-import { AIDEN_ELEMENT_FACTS_SOURCE, type AidenElementFacts } from "../../main/services/gemini-live/app-control/page-action";
+import {
+  AIDEN_ELEMENT_FACTS_SOURCE,
+  type AidenElementFacts,
+} from "../../main/services/gemini-live/app-control/page-action";
 import { idleLiveController } from "./assistant/assistant-live-test-fixture";
 import { LiveRibbon } from "./assistant/live-ribbon";
 import { isLiveConfirmAnswerTarget } from "../lib/live-app-control";
@@ -53,7 +56,12 @@ test("a guarded region's menu, dialog and popover carry its guard through the po
             <DropdownMenuItem>Always in this workspace</DropdownMenuItem>
           </DropdownMenuContent>
         </DropdownMenu>
-        <AlertDialog open onOpenChange={() => undefined} title="Turn on Computer Use?" confirmLabel="Turn on" />
+        <AlertDialog
+          open
+          onOpenChange={() => undefined}
+          title="Turn on Computer Use?"
+          confirmLabel="Turn on"
+        />
       </LiveGuard>
       <LiveGuard guard="confirm">
         <Popover open>
@@ -77,8 +85,15 @@ test("a guarded region's menu, dialog and popover carry its guard through the po
   const confirm = byText("Turn on");
   assert.equal(container.contains(confirm), false);
   assert.equal(facts(confirm, "button", "Turn on")?.guard, "you");
-  assert.equal(facts(byText("Sign out everywhere"), "button", "Sign out everywhere")?.guard, "confirm");
-  assert.equal(facts(byText("Rename"), "menuitem", "Rename")?.guard, null, "unguarded menus stay usable");
+  assert.equal(
+    facts(byText("Sign out everywhere"), "button", "Sign out everywhere")?.guard,
+    "confirm",
+  );
+  assert.equal(
+    facts(byText("Rename"), "menuitem", "Rename")?.guard,
+    null,
+    "unguarded menus stay usable",
+  );
 });
 
 test("an inner confirm region never weakens an outer you region", () => {
@@ -112,7 +127,12 @@ test("a menu that marks itself the user's stays so inside a confirm region", () 
 });
 
 test("the Live ribbon's Take over, Confirm and Cancel are the user's alone by main's own rule", () => {
-  const live = { ...idleLiveController, active: true, state: "open" as const, microphoneActive: true };
+  const live = {
+    ...idleLiveController,
+    active: true,
+    state: "open" as const,
+    microphoneActive: true,
+  };
   const ribbon = (activity: React.ComponentProps<typeof LiveRibbon>["activity"]) => (
     <LiveRibbon
       live={live}
@@ -123,26 +143,49 @@ test("the Live ribbon's Take over, Confirm and Cancel are the user's alone by ma
     />
   );
   render(ribbon({ kind: "acting", label: "Pressing “Settings”", takeOver: () => undefined }));
-  const takeOver = Array.from(document.querySelectorAll("button")).find((button) => /Take over/u.test(button.textContent ?? ""));
+  const takeOver = Array.from(document.querySelectorAll("button")).find((button) =>
+    /Take over/u.test(button.textContent ?? ""),
+  );
   assert.ok(takeOver, "Take over is shown");
   assert.equal(facts(takeOver, "button", "Take over")?.guard, "you");
   cleanup();
-  render(ribbon({ kind: "confirm", id: "c1", label: "Delete chat", confirm: () => undefined, cancel: () => undefined }));
+  render(
+    ribbon({
+      kind: "confirm",
+      id: "c1",
+      label: "Delete chat",
+      confirm: () => undefined,
+      cancel: () => undefined,
+    }),
+  );
   for (const name of ["Confirm", "Cancel"]) {
-    const button = Array.from(document.querySelectorAll("button")).find((entry) => entry.textContent?.trim() === name);
+    const button = Array.from(document.querySelectorAll("button")).find(
+      (entry) => entry.textContent?.trim() === name,
+    );
     assert.ok(button, `${name} is shown`);
     assert.equal(facts(button, "button", name)?.guard, "you", name);
   }
 });
 
 test("the user's input on the ribbon's Confirm or Cancel answers the question; any other control is a take-over", () => {
-  const live = { ...idleLiveController, active: true, state: "open" as const, microphoneActive: true };
+  const live = {
+    ...idleLiveController,
+    active: true,
+    state: "open" as const,
+    microphoneActive: true,
+  };
   render(
     <>
       <LiveRibbon
         live={live}
         markState="listening"
-        activity={{ kind: "confirm", id: "c1", label: "Delete chat", confirm: () => undefined, cancel: () => undefined }}
+        activity={{
+          kind: "confirm",
+          id: "c1",
+          label: "Delete chat",
+          confirm: () => undefined,
+          cancel: () => undefined,
+        }}
         preferences={{ voice: "Puck", speed: 1, ribbonColors: "spectrum" }}
         onPreferencesChange={() => undefined}
       />
@@ -157,8 +200,15 @@ test("the user's input on the ribbon's Confirm or Cancel answers the question; a
     assert.equal(isLiveConfirmAnswerTarget(button), true, name);
   }
   assert.equal(isLiveConfirmAnswerTarget(named("Delete")), false, "the guarded control itself");
-  const others = buttons.filter((entry) => !["Confirm", "Cancel"].includes(entry.textContent?.trim() ?? ""));
-  for (const other of others) assert.equal(isLiveConfirmAnswerTarget(other), false, other.getAttribute("aria-label") ?? other.textContent ?? "");
+  const others = buttons.filter(
+    (entry) => !["Confirm", "Cancel"].includes(entry.textContent?.trim() ?? ""),
+  );
+  for (const other of others)
+    assert.equal(
+      isLiveConfirmAnswerTarget(other),
+      false,
+      other.getAttribute("aria-label") ?? other.textContent ?? "",
+    );
   assert.equal(isLiveConfirmAnswerTarget(document.body), false);
   assert.equal(isLiveConfirmAnswerTarget(window), false, "a window-level event has no control");
 });
@@ -197,7 +247,10 @@ test("erasing a simulator is the user's, in the panel and in the confirmation it
       deviceName="iPhone 17"
       onReconnect={() => undefined}
       onCloseSession={() => undefined}
-      api={{ erase: async () => ({ wasBooted: false, deviceId: "sim-1" }), open: async () => undefined }}
+      api={{
+        erase: async () => ({ wasBooted: false, deviceId: "sim-1" }),
+        open: async () => undefined,
+      }}
       defaultConfirmOpen
     />,
   );

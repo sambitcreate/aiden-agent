@@ -4,7 +4,13 @@ import test from "node:test";
 import { LiveAudioDeviceFields } from "../settings/live-audio-settings.js";
 
 test("Live settings expose labeled input and output selectors with system defaults", () => {
-  const html = renderToStaticMarkup(<LiveAudioDeviceFields value={{ input: "default", output: "default" }} devices={[]} onChange={() => undefined} />);
+  const html = renderToStaticMarkup(
+    <LiveAudioDeviceFields
+      value={{ input: "default", output: "default" }}
+      devices={[]}
+      onChange={() => undefined}
+    />,
+  );
   assert.match(html, /Live input device/);
   assert.match(html, /Live output device/);
   assert.match(html, /System default/);
@@ -13,11 +19,18 @@ test("Live settings expose labeled input and output selectors with system defaul
 
 test("Live audio player ownership survives asynchronous capability refresh", () => {
   const source = readFileSync(new URL("./use-assistant-live.ts", import.meta.url), "utf8");
-  assert.match(source, /\[audioDependencies\] = React\.useState\(\(\) => defaultDependencies\(false\)\)/);
+  assert.match(
+    source,
+    /\[audioDependencies\] = React\.useState\(\(\) => defaultDependencies\(false\)\)/,
+  );
   assert.match(source, /\.\.\.audioDependencies,\s+geminiLive,/);
 });
 import { renderToStaticMarkup } from "react-dom/server";
-import { AssistantDockPresentation, liveDockClickAction, liveTriggerLabel } from "./assistant-dock.js";
+import {
+  AssistantDockPresentation,
+  liveDockClickAction,
+  liveTriggerLabel,
+} from "./assistant-dock.js";
 import { AidenLiveSwitches } from "../settings/gemini-live-settings.js";
 import { aidenLiveMark, AidenLiveMark } from "./aiden-live-mark.js";
 import { assistantLiveMarkState, assistantLiveTranscriptFollowsLatest } from "./assistant-live.js";
@@ -39,8 +52,14 @@ test("Live voice and action states share the animated duplex helix", () => {
     assert.doesNotMatch(markup, /data-paused/);
     assert.doesNotMatch(markup, /NaN/);
   }
-  assert.equal(assistantLiveMarkState({ ...idleLive, active: true, state: "open", microphoneActive: false }), "listening");
-  assert.equal(assistantLiveMarkState({ ...idleLive, active: true, busy: true, state: "closing" }), "ready");
+  assert.equal(
+    assistantLiveMarkState({ ...idleLive, active: true, state: "open", microphoneActive: false }),
+    "listening",
+  );
+  assert.equal(
+    assistantLiveMarkState({ ...idleLive, active: true, busy: true, state: "closing" }),
+    "ready",
+  );
 });
 
 test("dock requires reveal then stop, including mic-off and first-session startup", () => {
@@ -48,7 +67,10 @@ test("dock requires reveal then stop, including mic-off and first-session startu
   assert.equal(liveDockClickAction(active, true, false), "reveal-stop");
   assert.equal(liveDockClickAction(active, true, true), "stop");
   assert.equal(liveDockClickAction(active, false, false), "reveal-stop");
-  assert.equal(liveDockClickAction({ ...active, state: "closing", busy: true }, true, true), "none");
+  assert.equal(
+    liveDockClickAction({ ...active, state: "closing", busy: true }, true, true),
+    "none",
+  );
   assert.equal(liveDockClickAction({ ...idleLive, busy: true }, true, false), "none");
   assert.equal(liveDockClickAction(idleLive, true, false), "start");
   assert.equal(liveDockClickAction(idleLive, false, false), "setup");
@@ -97,7 +119,9 @@ test("an active output caption moves the mark to speaking", () => {
       active: true,
       state: "open",
       microphoneActive: true,
-      captions: [{ id: 1, direction: "output", text: "Opening Settings", final: false, sealed: false }],
+      captions: [
+        { id: 1, direction: "output", text: "Opening Settings", final: false, sealed: false },
+      ],
     }),
     "speaking",
   );
@@ -195,17 +219,32 @@ test("a disabled Live capability renders no dock or setup affordance", () => {
 });
 
 test("a disconnected Live error stays visible and microphone status is screen-reader-only", () => {
-  const render = (live: AssistantLiveController) => renderToStaticMarkup(
-    <AssistantDockPresentation
-      chat={{ approvals: [], decidingApprovalId: null, decideApproval: async () => undefined }}
-      live={live}
-      useCommand={() => undefined}
-    />,
+  const render = (live: AssistantLiveController) =>
+    renderToStaticMarkup(
+      <AssistantDockPresentation
+        chat={{ approvals: [], decidingApprovalId: null, decideApproval: async () => undefined }}
+        live={live}
+        useCommand={() => undefined}
+      />,
+    );
+  assert.match(
+    render({ ...idleLive, state: "failed", error: "The Live provider sent an invalid event." }),
+    /The Live provider sent an invalid event\./,
   );
-  assert.match(render({ ...idleLive, state: "failed", error: "The Live provider sent an invalid event." }), /The Live provider sent an invalid event\./);
-  assert.equal(ribbonStatus(render({ ...idleLive, state: "open", active: true, microphoneActive: true })), "Listening");
   assert.equal(
-    ribbonStatus(render({ ...idleLive, state: "open", active: true, microphoneActive: true, microphoneMuted: true })),
+    ribbonStatus(render({ ...idleLive, state: "open", active: true, microphoneActive: true })),
+    "Listening",
+  );
+  assert.equal(
+    ribbonStatus(
+      render({
+        ...idleLive,
+        state: "open",
+        active: true,
+        microphoneActive: true,
+        microphoneMuted: true,
+      }),
+    ),
     "Live · mic off",
   );
 });
@@ -241,7 +280,11 @@ function renderDock(
 
 /** The running session's screen-reader status, read from the floating ribbon. */
 function ribbonStatus(markup: string): string | null {
-  return /<section class="live-ribbon"[\s\S]*<span role="status"[^>]*class="sr-only">([^<]*)</u.exec(markup)?.[1] ?? null;
+  return (
+    /<section class="live-ribbon"[\s\S]*<span role="status"[^>]*class="sr-only">([^<]*)</u.exec(
+      markup,
+    )?.[1] ?? null
+  );
 }
 
 function triggerLabel(markup: string): string | null {
@@ -253,7 +296,10 @@ test("an idle Live shows no corner pill: the send button starts it, and the shor
   assert.equal(triggerLabel(markup), null);
   assert.doesNotMatch(markup, /aria-label="Set up Aiden Live"/u);
   assert.equal(commandEnabled, true);
-  assert.equal(triggerLabel(renderDock({ ...idleLive, available: false, setupComplete: false }).markup), null);
+  assert.equal(
+    triggerLabel(renderDock({ ...idleLive, available: false, setupComplete: false }).markup),
+    null,
+  );
 });
 
 test("the Live pill names each state outside a session, and the ribbon names each state in one", () => {
@@ -267,8 +313,13 @@ test("the Live pill names each state outside a session, and the ribbon names eac
     assert.equal(triggerLabel(markup), label, label);
     assert.equal(ribbonStatus(markup), null, `${label}: no ribbon outside a session`);
     // Label in name: voice control must be able to target what the pill shows.
-    const name = /<button[^>]*class="aiden-live-trigger[^"]*"[^>]*aria-label="([^"]*)"/u.exec(markup)?.[1] ?? "";
-    assert.ok(name.toLowerCase().includes(label.toLowerCase()), `${label} not in accessible name "${name}"`);
+    const name =
+      /<button[^>]*class="aiden-live-trigger[^"]*"[^>]*aria-label="([^"]*)"/u.exec(markup)?.[1] ??
+      "";
+    assert.ok(
+      name.toLowerCase().includes(label.toLowerCase()),
+      `${label} not in accessible name "${name}"`,
+    );
   }
   assert.match(
     renderDock({ ...idleLive, busy: true, state: "closing" }).markup,
@@ -278,8 +329,20 @@ test("the Live pill names each state outside a session, and the ribbon names eac
   const open = { ...idleLive, active: true, state: "open" as const, microphoneActive: true };
   const sessionCases: Array<[string, AssistantLiveController, boolean?]> = [
     ["Listening", open],
-    ["Thinking", { ...open, captions: [{ id: 1, direction: "input", text: "Hi", final: true, sealed: false }] }],
-    ["Speaking", { ...open, captions: [{ id: 1, direction: "output", text: "Hi", final: false, sealed: false }] }],
+    [
+      "Thinking",
+      {
+        ...open,
+        captions: [{ id: 1, direction: "input", text: "Hi", final: true, sealed: false }],
+      },
+    ],
+    [
+      "Speaking",
+      {
+        ...open,
+        captions: [{ id: 1, direction: "output", text: "Hi", final: false, sealed: false }],
+      },
+    ],
     ["Working", { ...open, computerUseActing: true }],
     ["Needs you", open, true],
     ["Connecting…", { ...open, state: "resuming" }],
@@ -304,13 +367,20 @@ test("with the send-button switch off, sessions, approvals and errors still show
     ["connecting", { ...idleLive, busy: true, state: "connecting" as const }, false],
     ["closing", { ...idleLive, active: true, busy: true, state: "closing" as const }, false],
     ["approval", active, true],
-    ["error", { ...idleLive, state: "failed" as const, error: "The Live provider sent an invalid event." }, false],
+    [
+      "error",
+      { ...idleLive, state: "failed" as const, error: "The Live provider sent an invalid event." },
+      false,
+    ],
   ] as const) {
     const { markup } = renderDock(live, { buttonVisible: false, approvalPending });
     assert.ok(triggerLabel(markup) !== null || ribbonStatus(markup) !== null, name);
   }
   assert.match(
-    renderDock({ ...idleLive, state: "failed", error: "The Live provider sent an invalid event." }, { buttonVisible: false }).markup,
+    renderDock(
+      { ...idleLive, state: "failed", error: "The Live provider sent an invalid event." },
+      { buttonVisible: false },
+    ).markup,
     /The Live provider sent an invalid event\./u,
   );
 });
@@ -359,7 +429,10 @@ test("screen sharing is opt-in, source-labelled, and visibly active in the HUD",
   assert.match(live, /live\.releaseScreen/u);
   assert.match(live, /busy=\{live\.screenBusy \|\| live\.busy\}/u);
   assert.match(live, /disabled=\{live\.screenBusy \|\| live\.busy\}/u);
-  assert.match(live, /confirmDisabled=\{\s*!live\.setupComplete \|\| live\.busy \|\| live\.screenBusy/u);
+  assert.match(
+    live,
+    /confirmDisabled=\{\s*!live\.setupComplete \|\| live\.busy \|\| live\.screenBusy/u,
+  );
   assert.match(live, /Sharing \{live\.screenSourceLabel \?\? "screen"\}/u);
   assert.match(live, /role="alert"[\s\S]*live\.screenError/u);
 });

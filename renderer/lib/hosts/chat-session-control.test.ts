@@ -14,7 +14,17 @@ import {
   type HostChatTurnReceipt,
 } from "./host-chat-adapter";
 
-const ALL: HostChatCapability[] = ["send", "cancel", "respondApproval", "answerQuestion", "steer", "rename", "remove", "attach", "skills"];
+const ALL: HostChatCapability[] = [
+  "send",
+  "cancel",
+  "respondApproval",
+  "answerQuestion",
+  "steer",
+  "rename",
+  "remove",
+  "attach",
+  "skills",
+];
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
@@ -35,7 +45,10 @@ class FakeHost implements HostChatAdapter {
   readonly hostId = "host-b";
   current: HostChatStatus = { availability: "online", generation: 1 };
   granted = new Set<HostChatCapability>(ALL);
-  readonly turns = new Map<string, { chatId: string; text: string; attachmentIds?: string[]; skill?: string }>();
+  readonly turns = new Map<
+    string,
+    { chatId: string; text: string; attachmentIds?: string[]; skill?: string }
+  >();
   readonly staged = new Map<string, { chatId: string; name: string }>();
   readonly calls: string[] = [];
   loseNextAck = false;
@@ -49,9 +62,10 @@ class FakeHost implements HostChatAdapter {
   /** The next send is lost on the way: the host never sees it and the answer never arrives. */
   dropNextSend = false;
   private uploads = 0;
-  approval: (chatId: string, input: HostChatApprovalInput) => Promise<HostChatApprovalResult> = async () => ({
-    resolution: "applied",
-  });
+  approval: (chatId: string, input: HostChatApprovalInput) => Promise<HostChatApprovalResult> =
+    async () => ({
+      resolution: "applied",
+    });
   private readonly listeners = new Set<(status: HostChatStatus) => void>();
 
   capabilities() {
@@ -85,14 +99,21 @@ class FakeHost implements HostChatAdapter {
   }
   async uploadAttachment(chatId: string, upload: HostChatAttachmentUpload) {
     await this.uploadGate;
-    if ([...this.staged.values()].filter((entry) => entry.chatId === chatId).length >= this.uploadLimit) {
-      throw new HostChatControlError({ code: "rate_limited", message: "Too many unused attachments." });
+    if (
+      [...this.staged.values()].filter((entry) => entry.chatId === chatId).length >=
+      this.uploadLimit
+    ) {
+      throw new HostChatControlError({
+        code: "rate_limited",
+        message: "Too many unused attachments.",
+      });
     }
     this.uploads += 1;
     const id = `att-${this.uploads}`;
     this.calls.push(`upload:${chatId}:${upload.name}`);
     this.staged.set(id, { chatId, name: upload.name });
-    if (this.lostUploads.has(this.uploads)) throw new HostChatControlError({ code: "outcome_unknown", message: "lost" });
+    if (this.lostUploads.has(this.uploads))
+      throw new HostChatControlError({ code: "outcome_unknown", message: "lost" });
     return { id, name: upload.name, size: 1 };
   }
   async removeAttachment(chatId: string, attachmentId: string) {
@@ -159,7 +180,11 @@ class FakeHost implements HostChatAdapter {
 }
 
 function session(host = new FakeHost(), chatId = "chat-1") {
-  const control = new ChatSessionControl(host, { hostId: host.hostId, chatId }, new ChatIntentLedger());
+  const control = new ChatSessionControl(
+    host,
+    { hostId: host.hostId, chatId },
+    new ChatIntentLedger(),
+  );
   const detach = control.attach();
   return { host, control, detach };
 }
@@ -180,7 +205,11 @@ test("a lost send acknowledgement is held for a same-key retry and never resent 
   await control.retryUnresolved();
   assert.equal(control.getSnapshot().unresolved, null);
   assert.equal(host.calls.length, 2);
-  assert.deepEqual([...host.turns.values()], [{ chatId: "chat-1", text: "Ship it" }], "the retry reused the key: one turn");
+  assert.deepEqual(
+    [...host.turns.values()],
+    [{ chatId: "chat-1", text: "Ship it" }],
+    "the retry reused the key: one turn",
+  );
 });
 
 test("a retry whose answer is lost again keeps the same key for the next try", async () => {
@@ -216,9 +245,12 @@ test("an offline or blocked host refuses every mutation with a reason and queues
   assert.match(control.refusal("send") ?? "", /offline/i);
   await assert.rejects(control.send("Hello"), { code: "host_unavailable" });
   await assert.rejects(control.cancel("run-1"), { code: "host_unavailable" });
-  await assert.rejects(control.respondApproval({ runId: "run-1", approvalId: "a1", decision: "allow" }), {
-    code: "host_unavailable",
-  });
+  await assert.rejects(
+    control.respondApproval({ runId: "run-1", approvalId: "a1", decision: "allow" }),
+    {
+      code: "host_unavailable",
+    },
+  );
 
   host.setStatus({ availability: "blocked", blockedReason: "auth", generation: 3 });
   await assert.rejects(control.rename("Title", "rev-1"), { code: "host_unavailable" });
@@ -233,7 +265,10 @@ test("an action the host does not grant is refused instead of running on this Ma
   host.granted = new Set<HostChatCapability>(["send"]);
   const { control } = session(host);
   assert.match(control.refusal("respondApproval") ?? "", /other computer/);
-  await assert.rejects(control.respondApproval({ runId: "run-1", approvalId: "a1", decision: "deny" }), { code: "unsupported" });
+  await assert.rejects(
+    control.respondApproval({ runId: "run-1", approvalId: "a1", decision: "deny" }),
+    { code: "unsupported" },
+  );
   await assert.rejects(control.submitInput("run-1", "steer", "left"), { code: "unsupported" });
   assert.deepEqual(host.calls, []);
 });
@@ -241,9 +276,17 @@ test("an action the host does not grant is refused instead of running on this Ma
 test("a lost approval race shows who answered first", async () => {
   const { host, control } = session();
   host.approval = async () => ({ resolution: "elsewhere", decision: "deny" });
-  const result = await control.respondApproval({ runId: "run-1", approvalId: "a1", decision: "allow" });
+  const result = await control.respondApproval({
+    runId: "run-1",
+    approvalId: "a1",
+    decision: "allow",
+  });
   assert.deepEqual(result, { resolution: "elsewhere", decision: "deny" });
-  assert.deepEqual(control.getSnapshot().elsewhere, { kind: "approval", id: "a1", decision: "deny" });
+  assert.deepEqual(control.getSnapshot().elsewhere, {
+    kind: "approval",
+    id: "a1",
+    decision: "deny",
+  });
   assert.equal(control.getSnapshot().decidingApprovalId, null);
 
   const question = await control.answerQuestion({
@@ -261,7 +304,10 @@ test("only one approval decision is in flight at a time", async () => {
   host.approval = () => pending.promise;
   const first = control.respondApproval({ runId: "run-1", approvalId: "a1", decision: "allow" });
   assert.equal(control.getSnapshot().decidingApprovalId, "a1");
-  assert.equal(await control.respondApproval({ runId: "run-1", approvalId: "a1", decision: "deny" }), null);
+  assert.equal(
+    await control.respondApproval({ runId: "run-1", approvalId: "a1", decision: "deny" }),
+    null,
+  );
   pending.resolve({ resolution: "applied" });
   assert.deepEqual(await first, { resolution: "applied" });
   assert.deepEqual(host.calls, ["approval:chat-1:a1"]);
@@ -272,7 +318,11 @@ test("switching chats never retargets in-flight work or lets it touch the new ch
   const first = session(host, "chat-1");
   const pending = deferred<HostChatApprovalResult>();
   host.approval = () => pending.promise;
-  const decision = first.control.respondApproval({ runId: "run-1", approvalId: "a1", decision: "allow" });
+  const decision = first.control.respondApproval({
+    runId: "run-1",
+    approvalId: "a1",
+    decision: "allow",
+  });
 
   // The pane moves to another chat on the same host while the decision is in flight.
   first.detach();
@@ -281,32 +331,60 @@ test("switching chats never retargets in-flight work or lets it touch the new ch
 
   pending.resolve({ resolution: "elsewhere", decision: "deny" });
   await decision;
-  assert.deepEqual(host.calls, ["approval:chat-1:a1"], "the decision went to the chat it started on");
-  assert.equal(second.control.getSnapshot().elsewhere, null, "the late answer did not land on the new chat");
+  assert.deepEqual(
+    host.calls,
+    ["approval:chat-1:a1"],
+    "the decision went to the chat it started on",
+  );
+  assert.equal(
+    second.control.getSnapshot().elsewhere,
+    null,
+    "the late answer did not land on the new chat",
+  );
 
   await second.control.cancel("run-2");
   assert.equal(host.calls[host.calls.length - 1], "cancel:chat-2:run-2");
 });
 
 test("a session refuses an adapter for another host", () => {
-  assert.throws(() => new ChatSessionControl(new FakeHost(), { hostId: "host-c", chatId: "chat-1" }));
+  assert.throws(
+    () => new ChatSessionControl(new FakeHost(), { hostId: "host-c", chatId: "chat-1" }),
+  );
 });
 
-const notes: HostChatAttachmentUpload = { name: "notes.md", mimeType: "text/markdown", kind: "text", text: "# Notes" };
-const shot: HostChatAttachmentUpload = { name: "shot.png", mimeType: "image/png", kind: "image", data: "iVBORw0KGgo=" };
+const notes: HostChatAttachmentUpload = {
+  name: "notes.md",
+  mimeType: "text/markdown",
+  kind: "text",
+  text: "# Notes",
+};
+const shot: HostChatAttachmentUpload = {
+  name: "shot.png",
+  mimeType: "image/png",
+  kind: "image",
+  data: "iVBORw0KGgo=",
+};
 
 test("attachments are staged on the chat's host and consumed by the turn they were sent with", async () => {
   const { host, control } = session();
   const gate = deferred<void>();
   host.uploadGate = gate.promise;
   const sent = control.send("Read these", { attachments: [notes, shot] });
-  assert.equal(control.getSnapshot().sending, true, "the composer shows the send as in progress while files upload");
+  assert.equal(
+    control.getSnapshot().sending,
+    true,
+    "the composer shows the send as in progress while files upload",
+  );
   gate.resolve();
   await sent;
   assert.equal(control.getSnapshot().sending, false);
 
   const [turn] = [...host.turns.values()];
-  assert.deepEqual(turn, { chatId: "chat-1", text: "Read these", attachmentIds: ["att-1", "att-2"] });
+  assert.deepEqual(turn, {
+    chatId: "chat-1",
+    text: "Read these",
+    attachmentIds: ["att-1", "att-2"],
+  });
   assert.equal(host.staged.size, 0, "the turn consumed every upload");
   assert.deepEqual(host.calls, ["upload:chat-1:notes.md", "upload:chat-1:shot.png", "send:chat-1"]);
 });
@@ -347,7 +425,11 @@ test("a lost upload releases the files already confirmed and sends nothing", asy
   assert.equal(host.turns.size, 0);
   // The first upload is released; the one whose answer was lost has no known id and expires on the host.
   assert.deepEqual([...host.staged.keys()], ["att-2"]);
-  assert.equal(control.getSnapshot().unresolved, null, "an upload failure is a plain retryable error, not an unresolved send");
+  assert.equal(
+    control.getSnapshot().unresolved,
+    null,
+    "an upload failure is a plain retryable error, not an unresolved send",
+  );
   assert.equal(control.getSnapshot().sending, false, "the composer can send again");
 });
 
@@ -359,8 +441,14 @@ test("a turn the host refuses releases its uploads, while a lost turn keeps them
   assert.equal(host.staged.size, 0);
 
   host.loseNextAck = true;
-  await assert.rejects(control.send("Second", { attachments: [notes] }), { code: "outcome_unknown" });
-  assert.equal(host.staged.size, 0, "the host consumed the upload with the turn whose answer was lost");
+  await assert.rejects(control.send("Second", { attachments: [notes] }), {
+    code: "outcome_unknown",
+  });
+  assert.equal(
+    host.staged.size,
+    0,
+    "the host consumed the upload with the turn whose answer was lost",
+  );
   await control.retryUnresolved();
   assert.equal(host.turns.size, 1, "the retry replayed the same turn");
   assert.deepEqual([...host.turns.values()][0]?.attachmentIds, ["att-2"]);
@@ -370,12 +458,17 @@ test("dismissing a send that never arrived frees its uploads, so the next attach
   const { host, control } = session();
   host.uploadLimit = 1;
   host.dropNextSend = true;
-  await assert.rejects(control.send("First", { attachments: [notes] }), { code: "outcome_unknown" });
+  await assert.rejects(control.send("First", { attachments: [notes] }), {
+    code: "outcome_unknown",
+  });
   assert.equal(host.staged.size, 1, "the host still holds the upload the lost turn never used");
 
   await control.dismissUnresolved();
   await control.send("Second", { attachments: [notes] });
-  assert.deepEqual([...host.turns.values()].map((turn) => turn.text), ["Second"]);
+  assert.deepEqual(
+    [...host.turns.values()].map((turn) => turn.text),
+    ["Second"],
+  );
   assert.equal(host.staged.size, 0);
 });
 
@@ -383,13 +476,18 @@ test("a retry the host refuses frees the original uploads, so the next attachmen
   const { host, control } = session();
   host.uploadLimit = 1;
   host.dropNextSend = true;
-  await assert.rejects(control.send("First", { attachments: [notes] }), { code: "outcome_unknown" });
+  await assert.rejects(control.send("First", { attachments: [notes] }), {
+    code: "outcome_unknown",
+  });
 
   host.refuseNextSend = true;
   await assert.rejects(control.retryUnresolved(), { code: "busy" });
   assert.equal(control.getSnapshot().unresolved, null);
   await control.send("Second", { attachments: [notes] });
-  assert.deepEqual([...host.turns.values()].map((turn) => turn.text), ["Second"]);
+  assert.deepEqual(
+    [...host.turns.values()].map((turn) => turn.text),
+    ["Second"],
+  );
 });
 
 test("attachments and skills are refused when the host does not grant them, before anything is uploaded", async () => {
@@ -397,7 +495,9 @@ test("attachments and skills are refused when the host does not grant them, befo
   host.granted = new Set<HostChatCapability>(["send"]);
   await assert.rejects(control.send("Read", { attachments: [notes] }), { code: "unsupported" });
   await assert.rejects(
-    control.send("Run", { skill: { version: 1, invocationId: "skl_review", displayName: "review", source: "workspace" } }),
+    control.send("Run", {
+      skill: { version: 1, invocationId: "skl_review", displayName: "review", source: "workspace" },
+    }),
     { code: "unsupported" },
   );
   assert.deepEqual(host.calls, []);
@@ -407,7 +507,11 @@ test("an acknowledged host turn with a lost response cannot be replayed after re
   const host = new FakeHost();
   let now = Date.parse("2026-10-06T12:00:00Z");
   const ledger = new ChatIntentLedger(undefined, () => now);
-  const control = new ChatSessionControl(host, { hostId: host.hostId, chatId: "chat-expired" }, ledger);
+  const control = new ChatSessionControl(
+    host,
+    { hostId: host.hostId, chatId: "chat-expired" },
+    ledger,
+  );
   control.attach();
   host.loseNextAck = true;
   await assert.rejects(control.send("Run the deployment"), { code: "outcome_unknown" });
@@ -423,14 +527,33 @@ test("an acknowledged host turn with a lost response cannot be replayed after re
 test("saved ambiguous sends restore after renderer loss with exact attachment, skill and key identity", async () => {
   const { PeerIntentStore } = await import("../../../main/services/peer-intent-store");
   let disk: import("../../../main/services/peer-intent-store").BoundIntent[] = [];
-  const store = new PeerIntentStore({ load: async () => structuredClone(disk), save: async rows => { disk = structuredClone(rows); } }, async () => "paired-device-1");
-  const persistence = { list: store.list.bind(store), put: store.put.bind(store), remove: store.remove.bind(store) };
+  const store = new PeerIntentStore(
+    {
+      load: async () => structuredClone(disk),
+      save: async (rows) => {
+        disk = structuredClone(rows);
+      },
+    },
+    async () => "paired-device-1",
+  );
+  const persistence = {
+    list: store.list.bind(store),
+    put: store.put.bind(store),
+    remove: store.remove.bind(store),
+  };
   const host = new FakeHost();
   const ref = { hostId: host.hostId, chatId: "chat-restored" };
   const first = new ChatSessionControl(host, ref, new ChatIntentLedger(persistence));
   const detach = first.attach();
   host.loseNextAck = true;
-  await assert.rejects(first.send("Inspect the attached notes", { attachments: [{ kind: "text", name: "notes.txt", mimeType: "text/plain", text: "Release notes" }] }), { code: "outcome_unknown" });
+  await assert.rejects(
+    first.send("Inspect the attached notes", {
+      attachments: [
+        { kind: "text", name: "notes.txt", mimeType: "text/plain", text: "Release notes" },
+      ],
+    }),
+    { code: "outcome_unknown" },
+  );
   assert.equal(disk.length, 1);
   const originalKey = disk[0]!.intent.idempotencyKey;
   detach();
@@ -450,12 +573,27 @@ test("durable admission fails closed before sending and pairing replacement inva
   let disk: import("../../../main/services/peer-intent-store").BoundIntent[] = [];
   let identity = "first-device";
   let failSave = true;
-  const store = new PeerIntentStore({ load: async () => structuredClone(disk), save: async rows => {
-    if (failSave) throw new Error("disk full"); disk = structuredClone(rows);
-  } }, async () => identity);
+  const store = new PeerIntentStore(
+    {
+      load: async () => structuredClone(disk),
+      save: async (rows) => {
+        if (failSave) throw new Error("disk full");
+        disk = structuredClone(rows);
+      },
+    },
+    async () => identity,
+  );
   const host = new FakeHost();
   const ref = { hostId: host.hostId, chatId: "chat-pairing" };
-  const control = new ChatSessionControl(host, ref, new ChatIntentLedger({ list: store.list.bind(store), put: store.put.bind(store), remove: store.remove.bind(store) }));
+  const control = new ChatSessionControl(
+    host,
+    ref,
+    new ChatIntentLedger({
+      list: store.list.bind(store),
+      put: store.put.bind(store),
+      remove: store.remove.bind(store),
+    }),
+  );
   control.attach();
   await assert.rejects(control.send("Do work"), /disk full/);
   assert.equal(host.calls.length, 0);
@@ -466,27 +604,61 @@ test("durable admission fails closed before sending and pairing replacement inva
   const calls = host.calls.length;
   await assert.rejects(control.retryUnresolved(), /pairing/);
   assert.equal(host.calls.length, calls);
-  assert.ok(control.getSnapshot().unresolved, "keep the uncertainty visible until explicitly dismissed");
+  assert.ok(
+    control.getSnapshot().unresolved,
+    "keep the uncertainty visible until explicitly dismissed",
+  );
 });
 
 test("a second fork cannot replace an uncertain fork and restart retries the original key", async () => {
   const { PeerIntentStore } = await import("../../../main/services/peer-intent-store");
   let disk: import("../../../main/services/peer-intent-store").BoundIntent[] = [];
-  const store = new PeerIntentStore({ load: async () => structuredClone(disk), save: async rows => { disk = structuredClone(rows); } }, async () => "paired-device-1");
-  const persistence = { list: store.list.bind(store), put: store.put.bind(store), remove: store.remove.bind(store) };
+  const store = new PeerIntentStore(
+    {
+      load: async () => structuredClone(disk),
+      save: async (rows) => {
+        disk = structuredClone(rows);
+      },
+    },
+    async () => "paired-device-1",
+  );
+  const persistence = {
+    list: store.list.bind(store),
+    put: store.put.bind(store),
+    remove: store.remove.bind(store),
+  };
   const keys: string[] = [];
   let lose = true;
-  const host = Object.assign(new FakeHost(), { fork: async (_chatId: string, input: import("./host-chat-adapter").HostChatForkInput) => {
-    keys.push(input.idempotencyKey);
-    if (lose) { lose = false; throw new HostChatControlError({ code: "outcome_unknown", message: "Lost response" }); }
-    return { id: "fork_1", title: "Fork", forkedFrom: { chatId: "chat_1", messageId: input.messageId, position: input.position, at: Date.now() } };
-  } });
+  const host = Object.assign(new FakeHost(), {
+    fork: async (_chatId: string, input: import("./host-chat-adapter").HostChatForkInput) => {
+      keys.push(input.idempotencyKey);
+      if (lose) {
+        lose = false;
+        throw new HostChatControlError({ code: "outcome_unknown", message: "Lost response" });
+      }
+      return {
+        id: "fork_1",
+        title: "Fork",
+        forkedFrom: {
+          chatId: "chat_1",
+          messageId: input.messageId,
+          position: input.position,
+          at: Date.now(),
+        },
+      };
+    },
+  });
   host.granted.add("fork");
   const ref = { hostId: host.hostId, chatId: "chat_1" };
   const first = new ChatSessionControl(host, ref, new ChatIntentLedger(persistence));
   first.attach();
-  await assert.rejects(first.fork({ messageId: "message_a", position: "after" }, "rev1"), { code: "outcome_unknown" });
-  await assert.rejects(first.fork({ messageId: "message_b", position: "after" }, "rev1"), /earlier fork/);
+  await assert.rejects(first.fork({ messageId: "message_a", position: "after" }, "rev1"), {
+    code: "outcome_unknown",
+  });
+  await assert.rejects(
+    first.fork({ messageId: "message_b", position: "after" }, "rev1"),
+    /earlier fork/,
+  );
   assert.equal(keys.length, 1);
   const restored = new ChatSessionControl(host, ref, new ChatIntentLedger(persistence));
   restored.attach();
@@ -502,7 +674,10 @@ test("a retried send repeats the model and effort it was first sent with", async
   const { host, control } = session();
   host.loseNextAck = true;
   await assert.rejects(
-    control.send("Go deeper", { model: { providerId: "acme", modelId: "deep" }, thinkingLevel: "high" }),
+    control.send("Go deeper", {
+      model: { providerId: "acme", modelId: "deep" },
+      thinkingLevel: "high",
+    }),
     { code: "outcome_unknown" },
   );
   await control.retryUnresolved();
@@ -511,13 +686,23 @@ test("a retried send repeats the model and effort it was first sent with", async
     assert.deepEqual(body.model, { providerId: "acme", modelId: "deep" });
     assert.equal(body.thinkingLevel, "high");
   }
-  assert.equal(host.sendBodies[0]?.idempotencyKey, host.sendBodies[1]?.idempotencyKey, "one turn, same key");
+  assert.equal(
+    host.sendBodies[0]?.idempotencyKey,
+    host.sendBodies[1]?.idempotencyKey,
+    "one turn, same key",
+  );
 });
 
 test("a lost voice steer is retried with its By voice marker", async () => {
   const { host, control } = session();
   host.loseNextInputAck = true;
-  await assert.rejects(control.submitInput("run-1", "steer", "Use staging", { inputSource: "voice" }), { code: "outcome_unknown" });
+  await assert.rejects(
+    control.submitInput("run-1", "steer", "Use staging", { inputSource: "voice" }),
+    { code: "outcome_unknown" },
+  );
   await control.retryUnresolved();
-  assert.deepEqual(host.inputBodies.map((body) => body.inputSource), ["voice", "voice"]);
+  assert.deepEqual(
+    host.inputBodies.map((body) => body.inputSource),
+    ["voice", "voice"],
+  );
 });

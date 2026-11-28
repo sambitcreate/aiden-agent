@@ -56,10 +56,7 @@ const THINKING_LEVELS = new Set<ThinkingLevel>([
   "xhigh",
   "max",
 ]);
-const EXECUTION_MODES = new Set<SubagentExecutionModeV2>([
-  "foreground",
-  "background",
-]);
+const EXECUTION_MODES = new Set<SubagentExecutionModeV2>(["foreground", "background"]);
 const CONTEXT_MODES = new Set<SubagentContextModeV2>(["fresh", "fork"]);
 const TOOL_NAME = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/u;
 const MINTED_TREE_NODES = new WeakSet<object>();
@@ -80,9 +77,10 @@ function exactPlainRecord(
   }
   const prototype = Object.getPrototypeOf(value);
   if (prototype !== Object.prototype && prototype !== null) return undefined;
-  const descriptors = Object.getOwnPropertyDescriptors(
-    value,
-  ) as unknown as Record<PropertyKey, PropertyDescriptor>;
+  const descriptors = Object.getOwnPropertyDescriptors(value) as unknown as Record<
+    PropertyKey,
+    PropertyDescriptor
+  >;
   const actual = Reflect.ownKeys(descriptors);
   if (
     actual.length !== keys.length ||
@@ -97,39 +95,23 @@ function exactPlainRecord(
   ) {
     return undefined;
   }
-  return Object.fromEntries(
-    (actual as string[]).map((key) => [key, descriptors[key]!.value]),
-  );
+  return Object.fromEntries((actual as string[]).map((key) => [key, descriptors[key]!.value]));
 }
 
 function privateText(value: unknown, field: string): string {
-  if (
-    typeof value !== "string" ||
-    value.length < 1 ||
-    value.length > 256 ||
-    value.includes("\0")
-  ) {
+  if (typeof value !== "string" || value.length < 1 || value.length > 256 || value.includes("\0")) {
     throw new Error(`Invalid subagent tree ${field}.`);
   }
   return value;
 }
 
 function treeIdentifier(value: unknown, field: string): string {
-  if (!isSafeSubagentIdentifier(value))
-    throw new Error(`Invalid subagent tree ${field}.`);
+  if (!isSafeSubagentIdentifier(value)) throw new Error(`Invalid subagent tree ${field}.`);
   return value;
 }
 
-function positiveInteger(
-  value: unknown,
-  maximum: number,
-  field: string,
-): number {
-  if (
-    !Number.isSafeInteger(value) ||
-    (value as number) < 1 ||
-    (value as number) > maximum
-  ) {
+function positiveInteger(value: unknown, maximum: number, field: string): number {
+  if (!Number.isSafeInteger(value) || (value as number) < 1 || (value as number) > maximum) {
     throw new Error(`Invalid subagent tree ${field}.`);
   }
   return value as number;
@@ -139,9 +121,10 @@ function exactToolNames(value: unknown): readonly string[] {
   if (!Array.isArray(value) || utilTypes.isProxy(value) || value.length > 128) {
     throw new Error("Invalid subagent tree tool ceiling.");
   }
-  const descriptors = Object.getOwnPropertyDescriptors(
-    value,
-  ) as unknown as Record<PropertyKey, PropertyDescriptor>;
+  const descriptors = Object.getOwnPropertyDescriptors(value) as unknown as Record<
+    PropertyKey,
+    PropertyDescriptor
+  >;
   const names: string[] = [];
   for (let index = 0; index < value.length; index += 1) {
     const descriptor = descriptors[String(index)];
@@ -158,8 +141,7 @@ function exactToolNames(value: unknown): readonly string[] {
   }
   if (
     Reflect.ownKeys(descriptors).some(
-      (key) =>
-        key !== "length" && (typeof key !== "string" || !/^\d+$/u.test(key)),
+      (key) => key !== "length" && (typeof key !== "string" || !/^\d+$/u.test(key)),
     ) ||
     new Set(names).size !== names.length
   ) {
@@ -168,26 +150,18 @@ function exactToolNames(value: unknown): readonly string[] {
   return Object.freeze(names);
 }
 
-function exactDenseArray(
-  value: unknown,
-  maximum: number,
-  field: string,
-): unknown[] {
-  if (
-    !Array.isArray(value) ||
-    utilTypes.isProxy(value) ||
-    value.length > maximum
-  ) {
+function exactDenseArray(value: unknown, maximum: number, field: string): unknown[] {
+  if (!Array.isArray(value) || utilTypes.isProxy(value) || value.length > maximum) {
     throw new Error(`Invalid subagent tree ${field}.`);
   }
-  const descriptors = Object.getOwnPropertyDescriptors(
-    value,
-  ) as unknown as Record<PropertyKey, PropertyDescriptor>;
+  const descriptors = Object.getOwnPropertyDescriptors(value) as unknown as Record<
+    PropertyKey,
+    PropertyDescriptor
+  >;
   if (
     Reflect.ownKeys(descriptors).length !== value.length + 1 ||
     Reflect.ownKeys(descriptors).some(
-      (key) =>
-        key !== "length" && (typeof key !== "string" || !/^\d+$/u.test(key)),
+      (key) => key !== "length" && (typeof key !== "string" || !/^\d+$/u.test(key)),
     )
   ) {
     throw new Error(`Invalid subagent tree ${field}.`);
@@ -195,11 +169,7 @@ function exactDenseArray(
   const values: unknown[] = [];
   for (let index = 0; index < value.length; index += 1) {
     const descriptor = descriptors[String(index)];
-    if (
-      !descriptor ||
-      !("value" in descriptor) ||
-      descriptor.enumerable !== true
-    ) {
+    if (!descriptor || !("value" in descriptor) || descriptor.enumerable !== true) {
       throw new Error(`Invalid subagent tree ${field}.`);
     }
     values.push(descriptor.value);
@@ -218,39 +188,28 @@ function safeCapabilitySnapshot(value: unknown): Record<string, unknown> {
   ]);
   if (!top) throw new Error("Invalid subagent tree capability ceiling.");
   const mcp = exactDenseArray(top.mcp, 16, "MCP ceiling").map((scopeValue) => {
-    const scope = exactPlainRecord(scopeValue, [
-      "serverId",
-      "connectionFingerprint",
-      "tools",
-    ]);
+    const scope = exactPlainRecord(scopeValue, ["serverId", "connectionFingerprint", "tools"]);
     if (!scope) throw new Error("Invalid subagent tree MCP scope.");
-    const tools = exactDenseArray(scope.tools, 32, "MCP tool ceiling").map(
-      (toolValue) => {
-        const read = exactPlainRecord(toolValue, [
-          "toolName",
-          "schemaHash",
-          "effect",
-        ]);
-        if (read) return read;
-        const mutation = exactPlainRecord(toolValue, [
-          "toolName",
-          "schemaHash",
-          "effect",
-          "effectProfile",
-        ]);
-        const profile = exactPlainRecord(mutation?.effectProfile, [
-          "classification",
-          "destructive",
-          "idempotency",
-          "openWorld",
-          "taskSupport",
-          "fingerprint",
-        ]);
-        if (!mutation || !profile)
-          throw new Error("Invalid subagent tree MCP tool ceiling.");
-        return { ...mutation, effectProfile: profile };
-      },
-    );
+    const tools = exactDenseArray(scope.tools, 32, "MCP tool ceiling").map((toolValue) => {
+      const read = exactPlainRecord(toolValue, ["toolName", "schemaHash", "effect"]);
+      if (read) return read;
+      const mutation = exactPlainRecord(toolValue, [
+        "toolName",
+        "schemaHash",
+        "effect",
+        "effectProfile",
+      ]);
+      const profile = exactPlainRecord(mutation?.effectProfile, [
+        "classification",
+        "destructive",
+        "idempotency",
+        "openWorld",
+        "taskSupport",
+        "fingerprint",
+      ]);
+      if (!mutation || !profile) throw new Error("Invalid subagent tree MCP tool ceiling.");
+      return { ...mutation, effectProfile: profile };
+    });
     return { ...scope, tools };
   });
   return { ...top, mcp };
@@ -285,11 +244,7 @@ function parseFixedCeiling(value: unknown): SubagentTreeFixedCeilingV2 {
     "execution",
     "thinkingLevel",
   ]);
-  const context = exactPlainRecord(fixed?.context, [
-    "mode",
-    "revision",
-    "maxInputTokens",
-  ]);
+  const context = exactPlainRecord(fixed?.context, ["mode", "revision", "maxInputTokens"]);
   if (
     !workspace ||
     !runtime ||
@@ -305,45 +260,27 @@ function parseFixedCeiling(value: unknown): SubagentTreeFixedCeilingV2 {
   }
   return Object.freeze({
     workspace: Object.freeze({
-      generationId: treeIdentifier(
-        workspace.generationId,
-        "generation identity",
-      ),
+      generationId: treeIdentifier(workspace.generationId, "generation identity"),
       chatId: treeIdentifier(workspace.chatId, "chat identity"),
       workspaceId: treeIdentifier(workspace.workspaceId, "workspace identity"),
-      workspaceRevision: privateText(
-        workspace.workspaceRevision,
-        "workspace revision",
-      ),
+      workspaceRevision: privateText(workspace.workspaceRevision, "workspace revision"),
       ownerDocumentId: privateText(workspace.ownerDocumentId, "renderer owner"),
     }),
     runtime: Object.freeze({
-      providerFingerprint: privateText(
-        runtime.providerFingerprint,
-        "provider fingerprint",
-      ),
-      modelFingerprint: privateText(
-        runtime.modelFingerprint,
-        "model fingerprint",
-      ),
+      providerFingerprint: privateText(runtime.providerFingerprint, "provider fingerprint"),
+      modelFingerprint: privateText(runtime.modelFingerprint, "model fingerprint"),
       execution: runtime.execution as SubagentExecutionModeV2,
       thinkingLevel: runtime.thinkingLevel as ThinkingLevel,
     }),
     context: Object.freeze({
       mode: context.mode as SubagentContextModeV2,
       revision: privateText(context.revision, "context revision"),
-      maxInputTokens: positiveInteger(
-        context.maxInputTokens,
-        10_000_000,
-        "context ceiling",
-      ),
+      maxInputTokens: positiveInteger(context.maxInputTokens, 10_000_000, "context ceiling"),
     }),
   });
 }
 
-function freezeIdentity(
-  identity: SubagentTreeIdentityV2,
-): SubagentTreeIdentityV2 {
+function freezeIdentity(identity: SubagentTreeIdentityV2): SubagentTreeIdentityV2 {
   return Object.freeze(identity);
 }
 
@@ -365,8 +302,7 @@ export function createSubagentTreeRootV2(input: unknown): SubagentTreeNodeV2 {
   if (!root) throw new Error("Invalid subagent tree root fields.");
   const treeRootId = treeIdentifier(root.treeRootId, "root identity");
   const runId = treeIdentifier(root.runId, "root run identity");
-  if (treeRootId !== runId)
-    throw new Error("A subagent tree root must identify itself.");
+  if (treeRootId !== runId) throw new Error("A subagent tree root must identify itself.");
   return mintNode({
     identity: freezeIdentity({ treeRootId, runId, depth: 0 }),
     fixedCeiling: parseFixedCeiling(root.fixedCeiling),
@@ -380,34 +316,25 @@ export function createSubagentTreeDescendantV2(
   parent: SubagentTreeNodeV2,
   input: unknown,
 ): SubagentTreeNodeV2 {
-  if (!MINTED_TREE_NODES.has(parent))
-    throw new Error("Invalid subagent tree parent authority.");
+  if (!MINTED_TREE_NODES.has(parent)) throw new Error("Invalid subagent tree parent authority.");
   const child = exactPlainRecord(input, ["runId", "capabilities", "toolNames"]);
   if (!child) throw new Error("Invalid subagent tree descendant fields.");
   const depth = parent.identity.depth + 1;
   if (depth > MAX_SUBAGENT_TREE_DEPTH) {
-    throw new Error(
-      `Subagent nesting cannot exceed depth ${MAX_SUBAGENT_TREE_DEPTH}.`,
-    );
+    throw new Error(`Subagent nesting cannot exceed depth ${MAX_SUBAGENT_TREE_DEPTH}.`);
   }
   const runId = treeIdentifier(child.runId, "run identity");
   if (runId === parent.identity.runId || runId === parent.identity.treeRootId) {
-    throw new Error(
-      "A subagent tree descendant requires a fresh run identity.",
-    );
+    throw new Error("A subagent tree descendant requires a fresh run identity.");
   }
   const capabilities = freezeCapabilities(child.capabilities);
   if (!subagentCapabilitiesAreSubsetV2(capabilities, parent.capabilities)) {
-    throw new Error(
-      "A subagent tree descendant cannot widen its capability ceiling.",
-    );
+    throw new Error("A subagent tree descendant cannot widen its capability ceiling.");
   }
   const toolNames = exactToolNames(child.toolNames);
   const parentTools = new Set(parent.toolNames);
   if (toolNames.some((name) => !parentTools.has(name))) {
-    throw new Error(
-      "A subagent tree descendant cannot widen its tool ceiling.",
-    );
+    throw new Error("A subagent tree descendant cannot widen its tool ceiling.");
   }
   return mintNode({
     identity: freezeIdentity({
@@ -502,36 +429,20 @@ function parseBudgetLimits(value: unknown): SubagentTreeBudgetLimitsV2 {
   ]);
   if (!limits) throw new Error("Invalid subagent tree budget fields.");
   return Object.freeze({
-    maxDepth: positiveInteger(
-      limits.maxDepth,
-      MAX_SUBAGENT_TREE_DEPTH,
-      "depth budget",
-    ),
+    maxDepth: positiveInteger(limits.maxDepth, MAX_SUBAGENT_TREE_DEPTH, "depth budget"),
     maxLaunches: positiveInteger(limits.maxLaunches, 64, "launch budget"),
     maxActive: positiveInteger(limits.maxActive, 32, "active budget"),
     maxQueued: positiveInteger(limits.maxQueued, 64, "queue budget"),
     maxTokens: positiveInteger(limits.maxTokens, 10_000_000, "token budget"),
     maxToolCalls: positiveInteger(limits.maxToolCalls, 512, "tool-call budget"),
-    maxTurns: positiveInteger(
-      limits.maxTurns,
-      MAX_SUBAGENT_TREE_TURN_BUDGET,
-      "turn budget",
-    ),
+    maxTurns: positiveInteger(limits.maxTurns, MAX_SUBAGENT_TREE_TURN_BUDGET, "turn budget"),
     maxNetworkOperations: positiveInteger(
       limits.maxNetworkOperations,
       MAX_SUBAGENT_TREE_NETWORK_OPERATION_BUDGET,
       "network-operation budget",
     ),
-    maxWallTimeMs: positiveInteger(
-      limits.maxWallTimeMs,
-      24 * 60 * 60_000,
-      "wall-time budget",
-    ),
-    maxOutputChars: positiveInteger(
-      limits.maxOutputChars,
-      1_000_000,
-      "output budget",
-    ),
+    maxWallTimeMs: positiveInteger(limits.maxWallTimeMs, 24 * 60 * 60_000, "wall-time budget"),
+    maxOutputChars: positiveInteger(limits.maxOutputChars, 1_000_000, "output budget"),
   });
 }
 
@@ -588,8 +499,7 @@ export class SubagentTreeBudgetLedgerV2 {
     this.treeRootId = treeIdentifier(treeRootId, "budget root identity");
     this.currentLimits = parseBudgetLimits(limits);
     this.createdAt = this.clock();
-    if (!Number.isFinite(this.createdAt))
-      throw new Error("Invalid subagent tree clock.");
+    if (!Number.isFinite(this.createdAt)) throw new Error("Invalid subagent tree clock.");
   }
 
   get limits(): SubagentTreeBudgetLimitsV2 {
@@ -601,10 +511,7 @@ export class SubagentTreeBudgetLedgerV2 {
    * children do not spend their depth-1 parent's allowance. Both stay within
    * the tree bound; an invalid or over-bound extension changes nothing.
    */
-  extendAllowance(value: {
-    readonly turns: number;
-    readonly networkOperations: number;
-  }): void {
+  extendAllowance(value: { readonly turns: number; readonly networkOperations: number }): void {
     this.assertLive();
     const maxTurns =
       this.limits.maxTurns +
@@ -647,9 +554,7 @@ export class SubagentTreeBudgetLedgerV2 {
     expectedDepth: number,
   ): void {
     if (nodes.length < 1 || nodes.length > 32) {
-      throw new Error(
-        "A subagent tree reservation requires 1 to 32 descendants.",
-      );
+      throw new Error("A subagent tree reservation requires 1 to 32 descendants.");
     }
     const ids = new Set<string>();
     for (const node of nodes) {
@@ -663,9 +568,7 @@ export class SubagentTreeBudgetLedgerV2 {
         ids.has(identity.runId) ||
         this.runs.has(identity.runId)
       ) {
-        throw new Error(
-          "Invalid, duplicate, or over-depth subagent tree reservation.",
-        );
+        throw new Error("Invalid, duplicate, or over-depth subagent tree reservation.");
       }
       ids.add(identity.runId);
     }
@@ -684,9 +587,7 @@ export class SubagentTreeBudgetLedgerV2 {
     });
   }
 
-  reserveLaunches(
-    nodes: readonly SubagentTreeNodeV2[],
-  ): SubagentTreeLaunchReservationV2 {
+  reserveLaunches(nodes: readonly SubagentTreeNodeV2[]): SubagentTreeLaunchReservationV2 {
     this.assertLive();
     this.validateNodes(nodes, undefined, 1);
     if (this.launched + nodes.length > this.limits.maxLaunches) {
@@ -821,9 +722,7 @@ export interface SubagentTreeSchedulerTaskV2 {
 export interface SubagentTreeExecutionLeaseV2 {
   readonly node: SubagentTreeNodeV2;
   readonly signal: AbortSignal;
-  runDescendants(
-    tasks: readonly SubagentTreeSchedulerTaskV2[],
-  ): Promise<readonly unknown[]>;
+  runDescendants(tasks: readonly SubagentTreeSchedulerTaskV2[]): Promise<readonly unknown[]>;
   cancelRun(runId: string, reason?: Error): boolean;
 }
 
@@ -848,9 +747,7 @@ interface DispatchItem {
 }
 
 function cancellationError(signal: AbortSignal): Error {
-  return signal.reason instanceof Error
-    ? signal.reason
-    : new Error("Subagent tree cancelled.");
+  return signal.reason instanceof Error ? signal.reason : new Error("Subagent tree cancelled.");
 }
 
 /** Production-inert scheduler core. Waiting parents hold a reserved resume slot, not execution. */
@@ -886,8 +783,7 @@ export class SubagentTreeSchedulerV2 {
   }
 
   private validateTasks(tasks: readonly SubagentTreeSchedulerTaskV2[]): void {
-    if (tasks.length < 1 || tasks.length > 32)
-      throw new Error("Invalid subagent tree task batch.");
+    if (tasks.length < 1 || tasks.length > 32) throw new Error("Invalid subagent tree task batch.");
     for (const task of tasks) {
       if (
         (task.deployment !== "hosted" && task.deployment !== "local") ||
@@ -899,9 +795,7 @@ export class SubagentTreeSchedulerV2 {
     }
   }
 
-  private createEntries(
-    tasks: readonly SubagentTreeSchedulerTaskV2[],
-  ): SchedulerEntry[] {
+  private createEntries(tasks: readonly SubagentTreeSchedulerTaskV2[]): SchedulerEntry[] {
     return tasks.map((task) => {
       let resolve!: (value: unknown) => void;
       let reject!: (reason: Error) => void;
@@ -944,9 +838,7 @@ export class SubagentTreeSchedulerV2 {
         this.ledger.activate(item.entry.task.node.identity.runId);
       } catch (error) {
         const reason =
-          error instanceof Error
-            ? error
-            : new Error("Subagent tree activation failed.");
+          error instanceof Error ? error : new Error("Subagent tree activation failed.");
         this.ledger.finish(item.entry.task.node.identity.runId);
         item.entry.state = "settled";
         item.resumeReject?.(reason);
@@ -970,20 +862,14 @@ export class SubagentTreeSchedulerV2 {
       signal: this.controller.signal,
       runDescendants: (tasks: readonly SubagentTreeSchedulerTaskV2[]) =>
         this.runDescendants(entry, tasks),
-      cancelRun: (runId: string, reason?: Error) =>
-        this.cancelRun(runId, reason),
+      cancelRun: (runId: string, reason?: Error) => this.cancelRun(runId, reason),
     });
     try {
       const result = await entry.task.execute(lease);
-      if (this.controller.signal.aborted)
-        throw cancellationError(this.controller.signal);
+      if (this.controller.signal.aborted) throw cancellationError(this.controller.signal);
       entry.resolve(result);
     } catch (error) {
-      entry.reject(
-        error instanceof Error
-          ? error
-          : new Error("Subagent tree task failed."),
-      );
+      entry.reject(error instanceof Error ? error : new Error("Subagent tree task failed."));
     } finally {
       if (entry.holdsCapacity) {
         this.active[entry.task.deployment] -= 1;
@@ -999,17 +885,10 @@ export class SubagentTreeSchedulerV2 {
     parent: SchedulerEntry,
     tasks: readonly SubagentTreeSchedulerTaskV2[],
   ): Promise<readonly unknown[]> {
-    if (
-      parent.state !== "running" ||
-      !parent.holdsCapacity ||
-      parent.delegating
-    ) {
-      throw new Error(
-        "A subagent may wait on only one descendant batch at a time.",
-      );
+    if (parent.state !== "running" || !parent.holdsCapacity || parent.delegating) {
+      throw new Error("A subagent may wait on only one descendant batch at a time.");
     }
-    if (this.controller.signal.aborted)
-      throw cancellationError(this.controller.signal);
+    if (this.controller.signal.aborted) throw cancellationError(this.controller.signal);
     this.validateTasks(tasks);
     this.ledger.reserveDescendantsAndSuspendParent(
       parent.task.node.identity.runId,
@@ -1029,9 +908,7 @@ export class SubagentTreeSchedulerV2 {
     parent: SchedulerEntry,
     children: readonly SchedulerEntry[],
   ): Promise<readonly unknown[]> {
-    const settled = await Promise.allSettled(
-      children.map(({ promise }) => promise),
-    );
+    const settled = await Promise.allSettled(children.map(({ promise }) => promise));
     if (this.controller.signal.aborted) {
       this.ledger.finish(parent.task.node.identity.runId);
       parent.delegating = false;
@@ -1056,37 +933,25 @@ export class SubagentTreeSchedulerV2 {
         ? failure.reason
         : new Error("A subagent descendant failed.");
     }
-    return settled.map(
-      (result) => (result as PromiseFulfilledResult<unknown>).value,
-    );
+    return settled.map((result) => (result as PromiseFulfilledResult<unknown>).value);
   }
 
-  async run(
-    tasks: readonly SubagentTreeSchedulerTaskV2[],
-  ): Promise<readonly unknown[]> {
-    if (this.controller.signal.aborted)
-      throw cancellationError(this.controller.signal);
+  async run(tasks: readonly SubagentTreeSchedulerTaskV2[]): Promise<readonly unknown[]> {
+    if (this.controller.signal.aborted) throw cancellationError(this.controller.signal);
     this.validateTasks(tasks);
     this.ledger.reserveLaunches(tasks.map(({ node }) => node));
     const entries = this.createEntries(tasks);
     this.enqueue(entries);
-    const settled = await Promise.allSettled(
-      entries.map(({ promise }) => promise),
-    );
+    const settled = await Promise.allSettled(entries.map(({ promise }) => promise));
     const failure = settled.find(
       (result): result is PromiseRejectedResult => result.status === "rejected",
     );
     if (failure) throw failure.reason;
-    return settled.map(
-      (result) => (result as PromiseFulfilledResult<unknown>).value,
-    );
+    return settled.map((result) => (result as PromiseFulfilledResult<unknown>).value);
   }
 
   /** Remove one exact queued child without cancelling or delaying its siblings. */
-  cancelRun(
-    runId: string,
-    reason: Error = new Error("Subagent run cancelled."),
-  ): boolean {
+  cancelRun(runId: string, reason: Error = new Error("Subagent run cancelled.")): boolean {
     const entry = this.entries.get(runId);
     if (!entry || entry.state !== "queued") return false;
     for (let index = this.queue.length - 1; index >= 0; index -= 1) {
@@ -1108,9 +973,7 @@ export class SubagentTreeSchedulerV2 {
   cancel(reason: Error = new Error("Subagent tree cancelled.")): void {
     if (this.controller.signal.aborted) return;
     this.controller.abort(reason);
-    for (const item of this.queue
-      .splice(0)
-      .sort((a, b) => a.entry.sequence - b.entry.sequence)) {
+    for (const item of this.queue.splice(0).sort((a, b) => a.entry.sequence - b.entry.sequence)) {
       item.resumeReject?.(reason);
       const entry = item.entry;
       if (item.resume || entry.state !== "queued") continue;

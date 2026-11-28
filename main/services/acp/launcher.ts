@@ -59,7 +59,11 @@ export class AcpRuntimeLauncher implements AcpProcessLauncher {
 
   constructor(private readonly options: AcpLauncherOptions) {}
 
-  launch(purpose: AcpLaunchPurpose, cwd: string, observers: AcpLaunchObservers = {}): Promise<AcpLaunchedProcess> {
+  launch(
+    purpose: AcpLaunchPurpose,
+    cwd: string,
+    observers: AcpLaunchObservers = {},
+  ): Promise<AcpLaunchedProcess> {
     return this.launchWith(purpose, cwd, observers);
   }
 
@@ -69,7 +73,10 @@ export class AcpRuntimeLauncher implements AcpProcessLauncher {
     observers: AcpLaunchObservers = {},
     leaseOverride?: LeaseOverride,
   ): Promise<AcpLaunchedProcess> {
-    if (this.closed) return Promise.reject(new AcpHarnessError("unavailable", "The agent runtime is shutting down."));
+    if (this.closed)
+      return Promise.reject(
+        new AcpHarnessError("unavailable", "The agent runtime is shutting down."),
+      );
     const started = this.start(purpose, cwd, observers, leaseOverride).then(async (launched) => {
       // Shutdown may have begun while this process was starting.
       if (!this.closed) return launched;
@@ -163,7 +170,11 @@ export class AcpRuntimeLauncher implements AcpProcessLauncher {
     await Promise.all(
       entries
         .filter((entry) => entry.startsWith("run-"))
-        .map((entry) => rm(path.join(this.options.tmpRoot, entry), { recursive: true, force: true }).catch(() => undefined)),
+        .map((entry) =>
+          rm(path.join(this.options.tmpRoot, entry), { recursive: true, force: true }).catch(
+            () => undefined,
+          ),
+        ),
     );
   }
 
@@ -179,7 +190,9 @@ export class AcpRuntimeLauncher implements AcpProcessLauncher {
       await mkdir(directory, { recursive: true, mode: 0o700 });
       const file = path.join(directory, "capture-browser-url.sh");
       // Print, never open: the URL is shown by Aiden's own sign-in flow.
-      await writeFile(file, `#!/bin/sh\nprintf '%s%s\\n' '${marker}' "$1" >&2\nexit 0\n`, { mode: 0o700 });
+      await writeFile(file, `#!/bin/sh\nprintf '%s%s\\n' '${marker}' "$1" >&2\nexit 0\n`, {
+        mode: 0o700,
+      });
       await chmod(file, 0o700);
       return file;
     } catch {

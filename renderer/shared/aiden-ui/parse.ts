@@ -22,7 +22,10 @@ export interface AumElement {
   closed: boolean;
 }
 
-export type AumNode = AumElement | { kind: "text"; text: string } | { kind: "expr"; source: string };
+export type AumNode =
+  | AumElement
+  | { kind: "text"; text: string }
+  | { kind: "expr"; source: string };
 
 const NAME_START = /[A-Za-z]/u;
 const NAME_CHAR = /[A-Za-z0-9_.-]/u;
@@ -49,7 +52,8 @@ export function parseAum(markup: string): { nodes: AumNode[]; diagnostics: Aiden
     text = "";
   };
   const recovered = (message: string, at?: string) => {
-    if (diagnostics.length < MAX_DIAGNOSTICS) diagnostics.push({ code: "recovered", message, ...(at ? { at } : {}) });
+    if (diagnostics.length < MAX_DIAGNOSTICS)
+      diagnostics.push({ code: "recovered", message, ...(at ? { at } : {}) });
   };
 
   /** Reads `{…}` starting at `start` (the `{`); returns the inner source and end, or null at EOF. */
@@ -86,7 +90,9 @@ export function parseAum(markup: string): { nodes: AumNode[]; diagnostics: Aiden
   };
 
   /** Parses an open tag at `start` (the `<`). Returns null when the input ends before the name is known. */
-  const readOpenTag = (start: number): { element: AumElement; end: number; selfClosing: boolean } | null => {
+  const readOpenTag = (
+    start: number,
+  ): { element: AumElement; end: number; selfClosing: boolean } | null => {
     const { name, end: nameEnd } = readName(start + 1);
     // A name running into EOF may still be growing (`<Sta` → `<Stat`).
     if (nameEnd >= markup.length) return null;
@@ -97,8 +103,10 @@ export function parseAum(markup: string): { nodes: AumNode[]; diagnostics: Aiden
       if (cursor >= markup.length) return { element, end: cursor, selfClosing: false };
       const char = markup[cursor]!;
       if (char === ">") return { element, end: cursor + 1, selfClosing: false };
-      if (char === "/" && markup[cursor + 1] === ">") return { element, end: cursor + 2, selfClosing: true };
-      if (char === "/" && cursor + 1 >= markup.length) return { element, end: cursor + 1, selfClosing: false };
+      if (char === "/" && markup[cursor + 1] === ">")
+        return { element, end: cursor + 2, selfClosing: true };
+      if (char === "/" && cursor + 1 >= markup.length)
+        return { element, end: cursor + 1, selfClosing: false };
       if (!NAME_START.test(char)) {
         recovered(`Unexpected "${char}" in <${name}>`, name);
         cursor += 1;
@@ -119,7 +127,10 @@ export function parseAum(markup: string): { nodes: AumNode[]; diagnostics: Aiden
           recovered(`Unterminated value for ${attr.name}`, name);
           return { element, end: markup.length, selfClosing: false };
         }
-        element.attrs.push({ name: attr.name, value: { kind: "string", text: markup.slice(cursor + 1, close) } });
+        element.attrs.push({
+          name: attr.name,
+          value: { kind: "string", text: markup.slice(cursor + 1, close) },
+        });
         cursor = close + 1;
       } else if (opener === "{") {
         const braced = readBraced(cursor);
@@ -127,14 +138,20 @@ export function parseAum(markup: string): { nodes: AumNode[]; diagnostics: Aiden
           recovered(`Unterminated expression for ${attr.name}`, name);
           return { element, end: markup.length, selfClosing: false };
         }
-        element.attrs.push({ name: attr.name, value: { kind: "expr", source: braced.source.trim() } });
+        element.attrs.push({
+          name: attr.name,
+          value: { kind: "expr", source: braced.source.trim() },
+        });
         cursor = braced.end;
       } else if (opener === undefined) {
         return { element, end: markup.length, selfClosing: false };
       } else {
         recovered(`Unquoted value for ${attr.name}`, name);
         const valueEnd = readName(cursor).end;
-        element.attrs.push({ name: attr.name, value: { kind: "string", text: markup.slice(cursor, valueEnd) } });
+        element.attrs.push({
+          name: attr.name,
+          value: { kind: "string", text: markup.slice(cursor, valueEnd) },
+        });
         cursor = Math.max(valueEnd, cursor + 1);
       }
     }

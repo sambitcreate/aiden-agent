@@ -37,7 +37,10 @@ export function botServiceProtectedRoot(directory: string): BotFileToolProtected
  * homes), `authority/` (access rollback anchors), `~/.aiden/config.json`, and
  * the CLI's settings files.
  */
-export function cliBotProtectedRoots(agentDir: string, configDir = aidenConfigDir()): BotFileToolProtectedRoot[] {
+export function cliBotProtectedRoots(
+  agentDir: string,
+  configDir = aidenConfigDir(),
+): BotFileToolProtectedRoot[] {
   return [
     path.join(agentDir, "bots"),
     botServiceProtectedRoot(path.join(agentDir, "bot-service")),

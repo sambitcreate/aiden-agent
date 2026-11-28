@@ -16,7 +16,19 @@ import {
 import { emptyDesignCanvas, type DesignCanvas, type DesignFrame } from "./schema.js";
 
 function item(id: string, overrides: Partial<DesignFrame> = {}): DesignFrame {
-  return { id, kind: "shape", shape: "rect", title: id, x: 0, y: 0, w: 100, h: 60, pageId: "page-1", createdBy: "person", ...overrides };
+  return {
+    id,
+    kind: "shape",
+    shape: "rect",
+    title: id,
+    x: 0,
+    y: 0,
+    w: 100,
+    h: 60,
+    pageId: "page-1",
+    createdBy: "person",
+    ...overrides,
+  };
 }
 
 const canvas = (...frames: DesignFrame[]): DesignCanvas => ({ ...emptyDesignCanvas(), frames });
@@ -28,7 +40,12 @@ test("a drag draws the same box whichever way it goes, and Shift keeps it square
   assert.deepEqual(boxFromDrag({ x: 100, y: 60 }, { x: 10, y: 20 }), expected);
   assert.deepEqual(boxFromDrag({ x: 100, y: 20 }, { x: 10, y: 60 }), expected);
   // Square grows from where the drag started, towards the pointer.
-  assert.deepEqual(boxFromDrag({ x: 100, y: 60 }, { x: 10, y: 20 }, { square: true }), { x: 10, y: -30, w: 90, h: 90 });
+  assert.deepEqual(boxFromDrag({ x: 100, y: 60 }, { x: 10, y: 20 }, { square: true }), {
+    x: 10,
+    y: -30,
+    w: 90,
+    h: 90,
+  });
 });
 
 test("Shift turns a line to the nearest 45° and keeps its length", () => {
@@ -39,15 +56,24 @@ test("Shift turns a line to the nearest 45° and keeps its length", () => {
 });
 
 test("a pencil line keeps its corners, drops jitter along straight runs, and never passes 2 000 points", () => {
-  const run = Array.from({ length: 50 }, (_, index) => ({ x: index * 2, y: index % 2 === 0 ? 0 : 0.3 }));
+  const run = Array.from({ length: 50 }, (_, index) => ({
+    x: index * 2,
+    y: index % 2 === 0 ? 0 : 0.3,
+  }));
   const corner = [...run, ...Array.from({ length: 50 }, (_, index) => ({ x: 98, y: index * 2 }))];
   const simplified = simplifyStroke(corner, 1);
   assert.deepEqual(simplified[0], corner[0]);
   assert.deepEqual(simplified[simplified.length - 1], corner[corner.length - 1]);
   assert.ok(simplified.length <= 4, `kept ${simplified.length} points`);
-  assert.ok(simplified.some((point) => point.x === 98 && point.y === 0), "the corner stays");
+  assert.ok(
+    simplified.some((point) => point.x === 98 && point.y === 0),
+    "the corner stays",
+  );
 
-  const scribble = Array.from({ length: 6000 }, (_, index) => ({ x: index, y: (index * 37) % 101 }));
+  const scribble = Array.from({ length: 6000 }, (_, index) => ({
+    x: index,
+    y: (index * 37) % 101,
+  }));
   assert.ok(simplifyStroke(scribble).length <= 2000);
 });
 
@@ -94,25 +120,62 @@ test("a pen path follows its curve handles, and a closed one returns to its star
 test("an item drawn or dropped in an artboard belongs to it; dragged out, it leaves", () => {
   const board = item("board", { kind: "frame", shape: undefined, x: 0, y: 0, w: 800, h: 600 });
   const group = item("group", { kind: "group", shape: undefined, x: 2000, y: 0, w: 800, h: 600 });
-  const doc = canvas(board, group, item("card", { x: 100, y: 100 }), item("far", { x: 5000, y: 0, groupId: "board" }));
+  const doc = canvas(
+    board,
+    group,
+    item("card", { x: 100, y: 100 }),
+    item("far", { x: 5000, y: 0, groupId: "board" }),
+  );
   assert.equal(containerAt(doc, "page-1", { x: 100, y: 100, w: 100, h: 60 })?.id, "board");
   assert.equal(containerAt(doc, "page-1", { x: 2100, y: 100, w: 100, h: 60 })?.id, "group");
 
   const regrouped = regroupFrames(doc, ["card", "far"]);
   assert.equal(regrouped.frames.find((frame) => frame.id === "card")!.groupId, "board");
   assert.equal(regrouped.frames.find((frame) => frame.id === "far")!.groupId, undefined);
-  assert.equal(regroupFrames(regrouped, ["card", "far"]), regrouped, "nothing to change returns the same document");
+  assert.equal(
+    regroupFrames(regrouped, ["card", "far"]),
+    regrouped,
+    "nothing to change returns the same document",
+  );
 });
 
 test("a locked group or artboard takes no new drawn or dropped items, but its own members stay in it", () => {
-  const locked = item("locked", { kind: "group", shape: undefined, x: 0, y: 0, w: 800, h: 600, locked: true });
-  const under = item("under", { kind: "frame", shape: undefined, x: -100, y: -100, w: 1200, h: 1000 });
-  const doc = canvas(under, locked, item("member", { x: 100, y: 100, groupId: "locked" }), item("loose", { x: 200, y: 200 }));
+  const locked = item("locked", {
+    kind: "group",
+    shape: undefined,
+    x: 0,
+    y: 0,
+    w: 800,
+    h: 600,
+    locked: true,
+  });
+  const under = item("under", {
+    kind: "frame",
+    shape: undefined,
+    x: -100,
+    y: -100,
+    w: 1200,
+    h: 1000,
+  });
+  const doc = canvas(
+    under,
+    locked,
+    item("member", { x: 100, y: 100, groupId: "locked" }),
+    item("loose", { x: 200, y: 200 }),
+  );
   // Drawn inside the locked group, an item lands in the open artboard beneath it instead.
   assert.equal(containerAt(doc, "page-1", { x: 300, y: 300, w: 100, h: 60 })?.id, "under");
   const regrouped = regroupFrames(doc, ["member", "loose"]);
-  assert.equal(regrouped.frames.find((frame) => frame.id === "member")!.groupId, "locked", "a member moved inside its locked group stays");
-  assert.equal(regrouped.frames.find((frame) => frame.id === "loose")!.groupId, "under", "a dropped item does not join the locked group");
+  assert.equal(
+    regrouped.frames.find((frame) => frame.id === "member")!.groupId,
+    "locked",
+    "a member moved inside its locked group stays",
+  );
+  assert.equal(
+    regrouped.frames.find((frame) => frame.id === "loose")!.groupId,
+    "under",
+    "a dropped item does not join the locked group",
+  );
   const box = regrouped.frames.find((frame) => frame.id === "locked")!;
   assert.deepEqual([box.x, box.y, box.w, box.h], [0, 0, 800, 600]);
 });

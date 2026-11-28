@@ -11,7 +11,9 @@ interface MaybePaused {
 export function githubPausedUntil(status: unknown, now: number): number | undefined {
   if (!status || typeof status !== "object") return undefined;
   const { availability, retryAt } = status as MaybePaused;
-  return availability === "rate-limited" && typeof retryAt === "number" && retryAt > now ? retryAt : undefined;
+  return availability === "rate-limited" && typeof retryAt === "number" && retryAt > now
+    ? retryAt
+    : undefined;
 }
 
 /** The poll interval, stretched so the next poll lands after a pause ends. */
@@ -21,11 +23,11 @@ export function pausedPollInterval(status: unknown, now: number, intervalMs: num
 }
 
 /** While paused, keep showing the pull request from the last good answer. */
-export function keepPullRequestWhilePaused<T extends { availability?: string; pullRequest?: unknown }>(
-  previous: T | undefined,
-  next: T,
-): T {
-  if (next.availability !== "rate-limited" || next.pullRequest || !previous?.pullRequest) return next;
+export function keepPullRequestWhilePaused<
+  T extends { availability?: string; pullRequest?: unknown },
+>(previous: T | undefined, next: T): T {
+  if (next.availability !== "rate-limited" || next.pullRequest || !previous?.pullRequest)
+    return next;
   return { ...next, pullRequest: previous.pullRequest };
 }
 

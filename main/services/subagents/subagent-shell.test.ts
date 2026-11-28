@@ -4,7 +4,10 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import type { BeforeToolCallContext } from "@earendil-works/pi-agent-core";
-import { isSubagentShellApprovalDetails, isSubagentRunGrantApprovalDetails } from "../../../renderer/shared/assistant.js";
+import {
+  isSubagentShellApprovalDetails,
+  isSubagentRunGrantApprovalDetails,
+} from "../../../renderer/shared/assistant.js";
 import type { Workspace } from "../types.js";
 import { WorkspaceOperationRegistry } from "../workspace-operation-registry.js";
 import { SubagentApprovalLedgerV2 } from "./approval-v2.js";
@@ -191,7 +194,9 @@ function harness(
           }
         : {
             outcome: options.outcome ?? "exited",
-            ...(options.outcome === undefined || options.outcome === "exited" ? { exitCode: options.exitCode ?? 0 } : {}),
+            ...(options.outcome === undefined || options.outcome === "exited"
+              ? { exitCode: options.exitCode ?? 0 }
+              : {}),
             cleanupConfirmed: true,
             stdout: options.longOutput ? `HEAD${"x".repeat(30_000)}TAIL` : "one two",
             stderr: "warning",
@@ -287,7 +292,11 @@ test("stored Full shell authority uses Ask when the active turn is narrowed", as
   const run = harness(workspace, { implementerRunGrant: true, parentPermission: "ask" });
   const command = "printf 'one'\nprintf 'two'";
   assert.equal(await run.gate.beforeToolCall(call(command)), undefined);
-  await run.gate.execute({ toolCallId: "call-shell", toolName: "run_command", arguments: { command } });
+  await run.gate.execute({
+    toolCallId: "call-shell",
+    toolName: "run_command",
+    arguments: { command },
+  });
   assert.equal(run.prompts.length, 1);
   await run.gate.shutdown();
 });
@@ -357,14 +366,35 @@ test("shell result error flags agree with durable exit and termination outcomes 
     const run = harness(workspace, scenario);
     const command = "printf 'one'\nprintf 'two'";
     await run.gate.beforeToolCall(call(command));
-    const result = await run.gate.execute({ toolCallId: "call-shell", toolName: "run_command", arguments: { command } });
-    assert.equal(result.isError === true, scenario.expectedError, `${scenario.outcome}/${scenario.exitCode ?? "none"}`);
-    assert.deepEqual(run.transitions, ["prepared", "authorized", "dispatch_started", scenario.expectedState]);
+    const result = await run.gate.execute({
+      toolCallId: "call-shell",
+      toolName: "run_command",
+      arguments: { command },
+    });
+    assert.equal(
+      result.isError === true,
+      scenario.expectedError,
+      `${scenario.outcome}/${scenario.exitCode ?? "none"}`,
+    );
+    assert.deepEqual(run.transitions, [
+      "prepared",
+      "authorized",
+      "dispatch_started",
+      scenario.expectedState,
+    ]);
     const text = result.content[0]?.type === "text" ? result.content[0].text : "";
     assert.ok(text.includes(`Shell outcome: ${scenario.outcome}`));
-    if (scenario.exitCode !== undefined) assert.ok(text.includes(`Exit code: ${scenario.exitCode}`));
+    if (scenario.exitCode !== undefined)
+      assert.ok(text.includes(`Exit code: ${scenario.exitCode}`));
     assert.equal(run.rawCalls(), 1);
-    await assert.rejects(run.gate.execute({ toolCallId: "call-shell", toolName: "run_command", arguments: { command } }), /no live one-shot/u);
+    await assert.rejects(
+      run.gate.execute({
+        toolCallId: "call-shell",
+        toolName: "run_command",
+        arguments: { command },
+      }),
+      /no live one-shot/u,
+    );
     assert.equal(run.rawCalls(), 1);
     await run.gate.shutdown();
   }
@@ -436,21 +466,29 @@ const dispatch = (gate: ReturnType<typeof harness>["gate"]) =>
 test("shutdown reports stopped only after a dispatched helper exits and its outcome is durable", async (t) => {
   const workspace = await fixture(t);
   let helperStarted!: () => void;
-  const started = new Promise<void>((resolve) => { helperStarted = resolve; });
+  const started = new Promise<void>((resolve) => {
+    helperStarted = resolve;
+  });
   let helperExits!: () => void;
   let journalSaves!: () => void;
   const run = harness(workspace, {
     waitForAbort: true,
     onRunShellStart: helperStarted,
-    helperExit: new Promise<void>((resolve) => { helperExits = resolve; }),
-    finishJournal: new Promise<void>((resolve) => { journalSaves = resolve; }),
+    helperExit: new Promise<void>((resolve) => {
+      helperExits = resolve;
+    }),
+    finishJournal: new Promise<void>((resolve) => {
+      journalSaves = resolve;
+    }),
   });
   await run.gate.beforeToolCall(call(shellCommand));
   const pending = dispatch(run.gate).catch(() => undefined);
   await started;
 
   let stopped = false;
-  const shutdown = run.gate.shutdown().then(() => { stopped = true; });
+  const shutdown = run.gate.shutdown().then(() => {
+    stopped = true;
+  });
   await new Promise<void>((resolve) => setImmediate(resolve));
   assert.equal(stopped, false, "the helper has not exited");
 
@@ -464,48 +502,66 @@ test("shutdown reports stopped only after a dispatched helper exits and its outc
   assert.equal(run.transitions[run.transitions.length - 1], "remote_error");
 });
 
-test("shutdown during authorization frees the workspace and leaves nothing to dispatch", { timeout: 5_000 }, async (t) => {
-  const workspace = await fixture(t);
-  let authorizing!: () => void;
-  const reached = new Promise<void>((resolve) => { authorizing = resolve; });
-  let authorized!: () => void;
-  const run = harness(workspace, {
-    onAuthorize: authorizing,
-    authorizeJournal: new Promise<void>((resolve) => { authorized = resolve; }),
-  });
-  const preparing = run.gate.beforeToolCall(call(shellCommand));
-  await reached;
-  const shutdown = run.gate.shutdown();
-  authorized();
-  assert.equal((await preparing)?.block, true);
-  await shutdown;
-  await run.registry.cancelAndSettle(workspace.id);
-  await assert.rejects(dispatch(run.gate), /no live one-shot approval/u);
-  assert.equal(run.rawCalls(), 0);
-  assert.equal(run.transitions[run.transitions.length - 1], "cancelled_before_dispatch");
-});
+test(
+  "shutdown during authorization frees the workspace and leaves nothing to dispatch",
+  { timeout: 5_000 },
+  async (t) => {
+    const workspace = await fixture(t);
+    let authorizing!: () => void;
+    const reached = new Promise<void>((resolve) => {
+      authorizing = resolve;
+    });
+    let authorized!: () => void;
+    const run = harness(workspace, {
+      onAuthorize: authorizing,
+      authorizeJournal: new Promise<void>((resolve) => {
+        authorized = resolve;
+      }),
+    });
+    const preparing = run.gate.beforeToolCall(call(shellCommand));
+    await reached;
+    const shutdown = run.gate.shutdown();
+    authorized();
+    assert.equal((await preparing)?.block, true);
+    await shutdown;
+    await run.registry.cancelAndSettle(workspace.id);
+    await assert.rejects(dispatch(run.gate), /no live one-shot approval/u);
+    assert.equal(run.rawCalls(), 0);
+    assert.equal(run.transitions[run.transitions.length - 1], "cancelled_before_dispatch");
+  },
+);
 
-test("shutdown ends a pending approval instead of waiting for an answer", { timeout: 5_000 }, async (t) => {
-  const workspace = await fixture(t);
-  let asked!: () => void;
-  const reached = new Promise<void>((resolve) => { asked = resolve; });
-  const run = harness(workspace, { approvalWaitsForAbort: true, onApprovalRequest: asked });
-  const preparing = run.gate.beforeToolCall(call(shellCommand));
-  await reached;
-  await run.gate.shutdown();
-  assert.equal((await preparing)?.block, true);
-  assert.equal(run.rawCalls(), 0);
-  assert.equal(run.transitions[run.transitions.length - 1], "cancelled_before_dispatch");
-});
+test(
+  "shutdown ends a pending approval instead of waiting for an answer",
+  { timeout: 5_000 },
+  async (t) => {
+    const workspace = await fixture(t);
+    let asked!: () => void;
+    const reached = new Promise<void>((resolve) => {
+      asked = resolve;
+    });
+    const run = harness(workspace, { approvalWaitsForAbort: true, onApprovalRequest: asked });
+    const preparing = run.gate.beforeToolCall(call(shellCommand));
+    await reached;
+    await run.gate.shutdown();
+    assert.equal((await preparing)?.block, true);
+    assert.equal(run.rawCalls(), 0);
+    assert.equal(run.transitions[run.transitions.length - 1], "cancelled_before_dispatch");
+  },
+);
 
 test("an approved call cancelled by shutdown is cancelled once, even if it is dispatched during shutdown", async (t) => {
   const workspace = await fixture(t);
   let cancelling!: () => void;
-  const reached = new Promise<void>((resolve) => { cancelling = resolve; });
+  const reached = new Promise<void>((resolve) => {
+    cancelling = resolve;
+  });
   let cancelled!: () => void;
   const run = harness(workspace, {
     onCancel: cancelling,
-    cancelJournal: new Promise<void>((resolve) => { cancelled = resolve; }),
+    cancelJournal: new Promise<void>((resolve) => {
+      cancelled = resolve;
+    }),
   });
   await run.gate.beforeToolCall(call(shellCommand));
   const shutdown = run.gate.shutdown();
@@ -520,17 +576,23 @@ test("an approved call cancelled by shutdown is cancelled once, even if it is di
 test("every shutdown caller waits for the same cancellation", async (t) => {
   const workspace = await fixture(t);
   let cancelling!: () => void;
-  const reached = new Promise<void>((resolve) => { cancelling = resolve; });
+  const reached = new Promise<void>((resolve) => {
+    cancelling = resolve;
+  });
   let cancelled!: () => void;
   const run = harness(workspace, {
     onCancel: cancelling,
-    cancelJournal: new Promise<void>((resolve) => { cancelled = resolve; }),
+    cancelJournal: new Promise<void>((resolve) => {
+      cancelled = resolve;
+    }),
   });
   await run.gate.beforeToolCall(call(shellCommand));
   const first = run.gate.shutdown();
   await reached;
   let secondDone = false;
-  const second = run.gate.shutdown().then(() => { secondDone = true; });
+  const second = run.gate.shutdown().then(() => {
+    secondDone = true;
+  });
   await new Promise<void>((resolve) => setImmediate(resolve));
   assert.equal(secondDone, false, "the cancellation has not been recorded");
   cancelled();

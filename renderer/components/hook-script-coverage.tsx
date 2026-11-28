@@ -23,9 +23,15 @@ export function HookScriptCoverage({
           <Text as="p" variant="small-strong" id={labelId}>
             Script files
           </Text>
-          <ul aria-labelledby={labelId} className="flex flex-col gap-1 rounded-control bg-well px-3 py-2">
+          <ul
+            aria-labelledby={labelId}
+            className="flex flex-col gap-1 rounded-control bg-well px-3 py-2"
+          >
             {listed.map((file, index) => (
-              <li key={`${index}:${file}`} className="min-w-0 break-all font-mono text-small text-primary">
+              <li
+                key={`${index}:${file}`}
+                className="min-w-0 break-all font-mono text-small text-primary"
+              >
                 {file}
               </li>
             ))}
@@ -39,8 +45,8 @@ export function HookScriptCoverage({
         <Callout color="warning" role="note">
           <Text variant="small-strong">Aiden can’t check every file this command runs</Text>
           <Text variant="small">
-            It also runs something Aiden can’t follow to a file, such as a script started through cd, source, npx or npm run.
-            Editing that won’t ask you to approve the hook again.
+            It also runs something Aiden can’t follow to a file, such as a script started through
+            cd, source, npx or npm run. Editing that won’t ask you to approve the hook again.
           </Text>
         </Callout>
       ) : null}

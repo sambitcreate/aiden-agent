@@ -19,7 +19,8 @@ const SHAPES: Record<ActivityMark, { circle: number; rect: number }> = {
   "helix-flat": { circle: 10, rect: 0 },
 };
 
-const count = (markup: string, tag: string) => (markup.match(new RegExp(`<${tag}\\b`, "gu")) ?? []).length;
+const count = (markup: string, tag: string) =>
+  (markup.match(new RegExp(`<${tag}\\b`, "gu")) ?? []).length;
 
 test("every activity mark renders as a decorative vector, never a canvas", () => {
   for (const mark of ACTIVITY_MARKS) {
@@ -44,10 +45,22 @@ test("marks size to the requested pixels and freeze when inactive", () => {
 });
 
 test("only an explicit voice level picks a swell step, clamped to its range", () => {
-  assert.doesNotMatch(renderToStaticMarkup(<AidenActivityMark mark="helix-swell" />), /data-level/u);
-  assert.match(renderToStaticMarkup(<AidenActivityMark mark="helix-swell" level={0.5} />), /data-level="2"/u);
-  assert.match(renderToStaticMarkup(<AidenActivityMark mark="helix-swell" level={-2} />), /data-level="0"/u);
-  assert.doesNotMatch(renderToStaticMarkup(<AidenActivityMark mark="helix-swell" level={NaN} />), /data-level|NaN/u);
+  assert.doesNotMatch(
+    renderToStaticMarkup(<AidenActivityMark mark="helix-swell" />),
+    /data-level/u,
+  );
+  assert.match(
+    renderToStaticMarkup(<AidenActivityMark mark="helix-swell" level={0.5} />),
+    /data-level="2"/u,
+  );
+  assert.match(
+    renderToStaticMarkup(<AidenActivityMark mark="helix-swell" level={-2} />),
+    /data-level="0"/u,
+  );
+  assert.doesNotMatch(
+    renderToStaticMarkup(<AidenActivityMark mark="helix-swell" level={NaN} />),
+    /data-level|NaN/u,
+  );
 });
 
 test("phase offsets are plain inline delays, so marks mount without custom properties", () => {
@@ -58,7 +71,11 @@ test("phase offsets are plain inline delays, so marks mount without custom prope
   assert.match(helix, /animation-delay:0s, -1\.125s/u);
   // Swell's second wave sits on a wrapper per circle, so it adds to the braid rather than scaling with depth.
   const swell = renderToStaticMarkup(<AidenActivityMark mark="helix-swell" />);
-  assert.equal((swell.match(/<g class="aiden-mark-wave" style="animation-delay:[^"]*"><circle/gu) ?? []).length, 10);
+  assert.equal(
+    (swell.match(/<g class="aiden-mark-wave" style="animation-delay:[^"]*"><circle/gu) ?? [])
+      .length,
+    10,
+  );
 });
 
 test("every phase offset starts mid-cycle like the native (t − d) mod D, never as a startup wait", () => {
@@ -67,17 +84,24 @@ test("every phase offset starts mid-cycle like the native (t − d) mod D, never
     const delays = [...markup.matchAll(/animation-delay:([^;"]+)/gu)].flatMap((match) =>
       match[1].split(",").map((value) => Number.parseFloat(value)),
     );
-    for (const seconds of delays) assert.ok(seconds <= 0, `${mark} has a positive delay ${seconds}s`);
+    for (const seconds of delays)
+      assert.ok(seconds <= 0, `${mark} has a positive delay ${seconds}s`);
   }
   // Bounce dot 2 trails dot 1 by 0.13s of a 1.2s cycle: −1.07s, as on iOS and Android.
-  assert.match(renderToStaticMarkup(<AidenActivityMark mark="bounce" />), /animation-delay:-1\.07s/u);
+  assert.match(
+    renderToStaticMarkup(<AidenActivityMark mark="bounce" />),
+    /animation-delay:-1\.07s/u,
+  );
 });
 
 test("a mark that freezes mid-cycle rewinds to its t = 0 still pose, and a running one is left alone", () => {
   const globals = globalThis as { document?: unknown; window?: unknown };
   const saved = { document: globals.document, window: globals.window };
   const fakeMark = (paused: boolean) => {
-    const animations = [{ currentTime: 3600 as number | null }, { currentTime: 900 as number | null }];
+    const animations = [
+      { currentTime: 3600 as number | null },
+      { currentTime: 900 as number | null },
+    ];
     const node = {
       hasAttribute: (name: string) => paused && name === "data-paused",
       getAnimations: () => animations,
@@ -92,16 +116,25 @@ test("a mark that freezes mid-cycle rewinds to its t = 0 still pose, and a runni
     setReduceMotion(false);
     const running = fakeMark(false);
     rewindWhenFrozen(running.node);
-    assert.deepEqual(running.animations.map((a) => a.currentTime), [3600, 900]);
+    assert.deepEqual(
+      running.animations.map((a) => a.currentTime),
+      [3600, 900],
+    );
 
     const inactive = fakeMark(true);
     rewindWhenFrozen(inactive.node);
-    assert.deepEqual(inactive.animations.map((a) => a.currentTime), [0, 0]);
+    assert.deepEqual(
+      inactive.animations.map((a) => a.currentTime),
+      [0, 0],
+    );
 
     setReduceMotion(true);
     const reduced = fakeMark(false);
     rewindWhenFrozen(reduced.node);
-    assert.deepEqual(reduced.animations.map((a) => a.currentTime), [0, 0]);
+    assert.deepEqual(
+      reduced.animations.map((a) => a.currentTime),
+      [0, 0],
+    );
   } finally {
     globals.document = saved.document;
     globals.window = saved.window;

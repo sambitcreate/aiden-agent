@@ -1,6 +1,16 @@
 import * as React from "react";
 import { useQueryClient } from "@tanstack/react-query";
-import { Callout, Field, FieldSet, Select, SelectContent, SelectItem, SelectTrigger, SelectValue, toast } from "../ui";
+import {
+  Callout,
+  Field,
+  FieldSet,
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+  toast,
+} from "../ui";
 import { InfoHint } from "../ui-info-hint";
 import { settingsApi } from "../../lib/ipc";
 import { queryKeys, useProviders, useSettings } from "../../lib/queries";
@@ -17,7 +27,11 @@ import {
 import { SpendingAmountSelect } from "../spending/spending-amount-select";
 import { useAppCapabilities } from "../../lib/app-capabilities";
 import { localComputerNoun } from "../../shared/computer-noun";
-import { AutomaticCompactionGroup, CompactionBudgetGroup, PromptCacheGroup } from "./context-settings";
+import {
+  AutomaticCompactionGroup,
+  CompactionBudgetGroup,
+  PromptCacheGroup,
+} from "./context-settings";
 import {
   DEFAULT_USAGE_LIMIT_WAIT_HOURS,
   isUsageLimitWaitHours,
@@ -49,7 +63,8 @@ export function LimitsSettings() {
   });
   const stored = settings.data?.usageLimitWaitHours;
   const waitHours = isUsageLimitWaitHours(stored) ? stored : DEFAULT_USAGE_LIMIT_WAIT_HOURS;
-  const limits: SpendingLimitsSettings = parseSpendingLimitsSettings(settings.data?.spendingLimits) ?? {};
+  const limits: SpendingLimitsSettings =
+    parseSpendingLimitsSettings(settings.data?.spendingLimits) ?? {};
   const monthStartDay = limits.monthStartDay ?? DEFAULT_SPENDING_MONTH_START_DAY;
 
   // Instant: a choice shows at once. Saves run one at a time, so a quick second change is kept and the controls
@@ -63,7 +78,8 @@ export function LimitsSettings() {
     }
     run.pending += 1;
     for (const key of Object.keys(patch)) run.changed.add(key as keyof AppSettings);
-    if (previous) queryClient.setQueryData<AppSettings>(queryKeys.settings, { ...previous, ...patch });
+    if (previous)
+      queryClient.setQueryData<AppSettings>(queryKeys.settings, { ...previous, ...patch });
     run.queue = run.queue.then(async () => {
       try {
         const saved = await settingsApi.set(patch);
@@ -74,7 +90,10 @@ export function LimitsSettings() {
         // Put back only what these saves changed: another group on the page may have saved meanwhile.
         if (run.pending === 1 && confirmed) {
           const restored = Object.fromEntries([...run.changed].map((key) => [key, confirmed[key]]));
-          queryClient.setQueryData<AppSettings>(queryKeys.settings, (current) => ({ ...(current ?? confirmed), ...restored }));
+          queryClient.setQueryData<AppSettings>(queryKeys.settings, (current) => ({
+            ...(current ?? confirmed),
+            ...restored,
+          }));
         }
         toast.error(failure);
       } finally {
@@ -84,7 +103,8 @@ export function LimitsSettings() {
   };
 
   const setWaitHours = (hours: UsageLimitWaitHours) => {
-    if (hours !== waitHours) save({ usageLimitWaitHours: hours }, "Couldn’t change how long Aiden waits.");
+    if (hours !== waitHours)
+      save({ usageLimitWaitHours: hours }, "Couldn’t change how long Aiden waits.");
   };
 
   const setLimit = (key: "chatUsd" | "botMonthUsd" | "routineRunUsd", value: string) => {
@@ -102,11 +122,16 @@ export function LimitsSettings() {
   };
   // Spending limits save as a whole, so nothing can change until they've loaded.
   const locked = !settings.data;
-  const amountValue = (amount: number | undefined) => (amount === undefined ? "none" : String(amount));
+  const amountValue = (amount: number | undefined) =>
+    amount === undefined ? "none" : String(amount);
   // Only API key requests cost money, so the limits wait for a provider that bills by the request. A limit
   // already set keeps them in reach, and settings or a provider list that can't be read show them rather than
   // hiding one. "Nothing here costs money yet" needs both read: until then, neither shows.
-  const showSpending = providers.isError || settings.isError || meteredProviderConnected(providers.data ?? []) || anySpendingLimitSet(limits);
+  const showSpending =
+    providers.isError ||
+    settings.isError ||
+    meteredProviderConnected(providers.data ?? []) ||
+    anySpendingLimitSet(limits);
   const nothingCosts = !showSpending && providers.isSuccess && settings.data !== undefined;
 
   return (
@@ -123,7 +148,8 @@ export function LimitsSettings() {
         title="Usage limits"
         hint={
           <InfoHint topic="usage limits">
-            Aiden tries once when the limit resets, then lets waiting replies go one at a time. Weekly caps and billing problems fail right away.
+            Aiden tries once when the limit resets, then lets waiting replies go one at a time.
+            Weekly caps and billing problems fail right away.
           </InfoHint>
         }
       >
@@ -139,7 +165,10 @@ export function LimitsSettings() {
               if (isUsageLimitWaitHours(hours)) void setWaitHours(hours);
             }}
           >
-            <SelectTrigger aria-label="Longest wait for a usage limit" className="justify-self-end sm:max-w-48">
+            <SelectTrigger
+              aria-label="Longest wait for a usage limit"
+              className="justify-self-end sm:max-w-48"
+            >
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
@@ -157,7 +186,8 @@ export function LimitsSettings() {
           title="Spending limits"
           hint={
             <InfoHint topic="spending limits">
-              Only API key requests count; sign-ins and local models are $0. At a limit, the reply finishes its step and stops until you allow more.
+              Only API key requests count; sign-ins and local models are $0. At a limit, the reply
+              finishes its step and stops until you allow more.
             </InfoHint>
           }
         >
@@ -169,7 +199,10 @@ export function LimitsSettings() {
               onChange={(value) => setLimit("chatUsd", value)}
             />
           </Field>
-          <Field label="Each Bot, per month" description="A Bot can set its own limit on its Profile.">
+          <Field
+            label="Each Bot, per month"
+            description="A Bot can set its own limit on its Profile."
+          >
             <SpendingAmountSelect
               label="Spending limit for each Bot per month"
               value={amountValue(limits.botMonthUsd)}
@@ -194,7 +227,10 @@ export function LimitsSettings() {
                 if (Number.isInteger(day)) setMonthStartDay(day);
               }}
             >
-              <SelectTrigger aria-label="The day a Bot’s month starts" className="justify-self-end sm:max-w-48">
+              <SelectTrigger
+                aria-label="The day a Bot’s month starts"
+                className="justify-self-end sm:max-w-48"
+              >
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>

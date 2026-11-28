@@ -4,7 +4,12 @@ import {
   type SidebarChatSummary,
   type SidebarProjectSummary,
 } from "./sidebar-organization";
-import { isNoWorkspace, NO_WORKSPACE_GROUP_LABEL, noWorkspaceHome, sidebarGroupWorkspaceId } from "./no-workspace";
+import {
+  isNoWorkspace,
+  NO_WORKSPACE_GROUP_LABEL,
+  noWorkspaceHome,
+  sidebarGroupWorkspaceId,
+} from "./no-workspace";
 import type { ChatMeta, Workspace } from "./types";
 
 /**
@@ -86,7 +91,8 @@ export function scopedLocalSidebar(
   projects: readonly LocalSidebarProject[],
   chats: readonly LocalSidebarChat[],
 ): { project: LocalSidebarProject; chats: LocalSidebarChat[] } | null {
-  if (!scopeWorkspaceId || !workspaces.some((workspace) => workspace.id === scopeWorkspaceId)) return null;
+  if (!scopeWorkspaceId || !workspaces.some((workspace) => workspace.id === scopeWorkspaceId))
+    return null;
   const key = localSidebarProjectKey(sidebarGroupWorkspaceId(scopeWorkspaceId, workspaces));
   const project = projects.find((entry) => entry.key === key);
   if (!project) return null;

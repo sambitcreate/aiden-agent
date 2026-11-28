@@ -82,7 +82,10 @@ export type AidenAppPlace = (typeof AIDEN_APP_DESTINATIONS)[number];
 export interface AidenAppControlOptions {
   port: AidenWindowPort;
   renderer: Pick<LiveRendererToolBroker, "request">;
-  open(place: AidenAppPlace, signal: AbortSignal): Promise<{ status: "opened" | "blocked" | "unavailable" }>;
+  open(
+    place: AidenAppPlace,
+    signal: AbortSignal,
+  ): Promise<{ status: "opened" | "blocked" | "unavailable" }>;
   /** Wait after an action before the fresh look, so the page can settle. */
   settleMs?: number;
   /** How long the outline stays after the last action. */
@@ -101,7 +104,14 @@ export interface AidenAppControlOptions {
   enabled?(): boolean | Promise<boolean>;
 }
 
-const APP_CONTROL_ACTIONS: readonly AidenPageActionName[] = ["press", "type", "toggle", "select", "scroll", "key"];
+const APP_CONTROL_ACTIONS: readonly AidenPageActionName[] = [
+  "press",
+  "type",
+  "toggle",
+  "select",
+  "scroll",
+  "key",
+];
 const MAX_TEXT = 2_000;
 const FRESH_LOOK_LIMITS: AidenScreenLimits = { elements: 120, characters: 8_000 };
 const DEFAULT_SESSION_CALLS = 120;
@@ -129,7 +139,10 @@ export const AIDEN_APP_CONTROL_ERRORS = {
   stale: liveToolError("stale_element", "That number isn't on the latest look. Look again first."),
   gone: liveToolError("stale_element", "That element is gone. Look again first."),
   busy: liveToolError("busy", "Another action is still running. Wait for its result."),
-  waiting: liveToolError("waiting_for_user", "Still waiting for the user's OK. Don't act until they answer."),
+  waiting: liveToolError(
+    "waiting_for_user",
+    "Still waiting for the user's OK. Don't act until they answer.",
+  ),
   takenOver: liveToolError("taken_over", "The user took over. Stop and wait until they ask again."),
   inspected: liveToolError(
     "window_inspected",
@@ -150,7 +163,9 @@ export const AIDEN_APP_CONTROL_ERRORS = {
 } as const;
 
 function stopped(abort: AbortController): LiveToolResponse {
-  return abort.signal.reason === STOPPED_BY_USER ? AIDEN_APP_CONTROL_ERRORS.takenOver : AIDEN_APP_CONTROL_ERRORS.cancelled;
+  return abort.signal.reason === STOPPED_BY_USER
+    ? AIDEN_APP_CONTROL_ERRORS.takenOver
+    : AIDEN_APP_CONTROL_ERRORS.cancelled;
 }
 
 const PAGE_ERRORS: Partial<Record<AidenPageActionResult["status"], LiveToolResponse>> = {
@@ -160,8 +175,14 @@ const PAGE_ERRORS: Partial<Record<AidenPageActionResult["status"], LiveToolRespo
   readonly: liveToolError("read_only", "That field can't be changed."),
   unsupported: liveToolError("unsupported", "That action doesn't work on this element. Try press."),
   no_option: liveToolError("no_option", "No option there has that name."),
-  content: liveToolError("untrusted_content", "That is inside chat or page content, which Live doesn't use."),
-  external: liveToolError("external_link", "That link leads outside Aiden. Live doesn't open links; tell the user instead."),
+  content: liveToolError(
+    "untrusted_content",
+    "That is inside chat or page content, which Live doesn't use.",
+  ),
+  external: liveToolError(
+    "external_link",
+    "That link leads outside Aiden. Live doesn't open links; tell the user instead.",
+  ),
 };
 
 export const AIDEN_APP_CONTROL_DECLARATIONS: readonly FunctionDeclaration[] = [
@@ -175,7 +196,8 @@ export const AIDEN_APP_CONTROL_DECLARATIONS: readonly FunctionDeclaration[] = [
         focus: {
           type: "string",
           maxLength: 80,
-          description: "Optional words to look at first, such as a section, dialog or control name.",
+          description:
+            "Optional words to look at first, such as a section, dialog or control name.",
         },
       },
       additionalProperties: false,
@@ -253,7 +275,9 @@ function raceAbort<T>(promise: Promise<T>, signal: AbortSignal): Promise<T> {
 }
 
 function record(value: unknown): Record<string, unknown> {
-  return value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : {};
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : {};
 }
 
 function quoted(name: string, role: string): string {
@@ -280,10 +304,16 @@ function actingLabel(action: AidenPageActionName, element: AidenScreenElement): 
 
 function confirmLabel(element: AidenScreenElement): string {
   const target = quoted(element.name, element.role);
-  return element.dialog && element.dialog !== element.name ? `${element.dialog} — ${target}` : `Press ${target}`;
+  return element.dialog && element.dialog !== element.name
+    ? `${element.dialog} — ${target}`
+    : `Press ${target}`;
 }
 
-function outcome(action: AidenPageActionName, element: AidenScreenElement, result: AidenPageActionResult): string {
+function outcome(
+  action: AidenPageActionName,
+  element: AidenScreenElement,
+  result: AidenPageActionResult,
+): string {
   const target = quoted(element.name, element.role);
   const done = result.status === "done" ? result : {};
   const state =
@@ -304,9 +334,13 @@ function outcome(action: AidenPageActionName, element: AidenScreenElement, resul
     case "toggle":
       return `Switched ${target}.${state}`;
     case "select":
-      return "opened" in done && done.opened ? `Opened ${target}; press the option you want.` : `Chose in ${target}.${state}`;
+      return "opened" in done && done.opened
+        ? `Opened ${target}; press the option you want.`
+        : `Chose in ${target}.${state}`;
     case "scroll":
-      return "moved" in done && done.moved === false ? `${target} didn't move further.` : `Scrolled ${target}.`;
+      return "moved" in done && done.moved === false
+        ? `${target} didn't move further.`
+        : `Scrolled ${target}.`;
     case "key":
       return `Sent the key to ${target}.${state}`;
     default:
@@ -323,14 +357,16 @@ function parseUse(args: Record<string, unknown>): ParsedUse | null {
   const element = args.element;
   const action = args.action;
   if (typeof element !== "number" || !Number.isInteger(element) || element < 1) return null;
-  if (typeof action !== "string" || !APP_CONTROL_ACTIONS.includes(action as AidenPageActionName)) return null;
+  if (typeof action !== "string" || !APP_CONTROL_ACTIONS.includes(action as AidenPageActionName))
+    return null;
   const request: AidenPageActionRequest = { action: action as AidenPageActionName };
   if (args.text !== undefined) {
     if (typeof args.text !== "string" || args.text.length > MAX_TEXT) return null;
     request.text = args.text;
   }
   if (args.key !== undefined) {
-    if (typeof args.key !== "string" || !(AIDEN_PAGE_KEYS as readonly string[]).includes(args.key)) return null;
+    if (typeof args.key !== "string" || !(AIDEN_PAGE_KEYS as readonly string[]).includes(args.key))
+      return null;
     request.key = args.key as AidenPageKey;
   }
   if (request.action === "type" && request.text === undefined) return null;
@@ -371,7 +407,8 @@ export class AidenAppControlProvider implements LiveToolProvider {
     // The session may have closed while the switch check was awaited.
     if (this.closed) return AIDEN_APP_CONTROL_ERRORS.unreadable;
     this.calls += 1;
-    if (this.calls > (this.options.sessionCalls ?? DEFAULT_SESSION_CALLS)) return AIDEN_APP_CONTROL_ERRORS.budget;
+    if (this.calls > (this.options.sessionCalls ?? DEFAULT_SESSION_CALLS))
+      return AIDEN_APP_CONTROL_ERRORS.budget;
     switch (call.name) {
       case "look_at_aiden":
         return this.handleLook(call.args, context.signal);
@@ -380,7 +417,10 @@ export class AidenAppControlProvider implements LiveToolProvider {
       case "open_in_aiden":
         return this.handleOpen(call.args, context.signal);
       default:
-        return liveToolError("tool_unavailable", "That tool is not available in this Live session.");
+        return liveToolError(
+          "tool_unavailable",
+          "That tool is not available in this Live session.",
+        );
     }
   }
 
@@ -472,7 +512,9 @@ export class AidenAppControlProvider implements LiveToolProvider {
     ]);
     const facts = record(record(factsResponse).result).value;
     if (!Array.isArray(facts)) return regions;
-    const entries = (Array.isArray(record(properties).result) ? (record(properties).result as unknown[]) : [])
+    const entries = (
+      Array.isArray(record(properties).result) ? (record(properties).result as unknown[]) : []
+    )
       .map(record)
       .filter((entry) => typeof entry.name === "string" && /^\d+$/u.test(entry.name));
     await Promise.all(
@@ -496,10 +538,14 @@ export class AidenAppControlProvider implements LiveToolProvider {
    * Reads the accessibility tree level by level from the root, without going
    * into content regions, so a long chat never makes a look large or slow.
    */
-  private async axNodes(regions: ReadonlyMap<number, AidenContentRegionFacts>): Promise<CdpAxNode[]> {
+  private async axNodes(
+    regions: ReadonlyMap<number, AidenContentRegionFacts>,
+  ): Promise<CdpAxNode[]> {
     const maxNodes = this.options.maxAxNodes ?? DEFAULT_MAX_AX_NODES;
     await this.call("Accessibility.enable");
-    const root = record(record(await this.call("Accessibility.getRootAXNode")).node) as unknown as CdpAxNode;
+    const root = record(
+      record(await this.call("Accessibility.getRootAXNode")).node,
+    ) as unknown as CdpAxNode;
     if (typeof root.nodeId !== "string") return [];
     const byId = new Map<string, CdpAxNode>([[root.nodeId, root]]);
     const skipped = new Set<string>();
@@ -528,7 +574,11 @@ export class AidenAppControlProvider implements LiveToolProvider {
       }
     }
     return [...byId.values()].filter(
-      (node) => !(skipped.has(node.nodeId) && !(node.backendDOMNodeId !== undefined && regions.has(node.backendDOMNodeId))),
+      (node) =>
+        !(
+          skipped.has(node.nodeId) &&
+          !(node.backendDOMNodeId !== undefined && regions.has(node.backendDOMNodeId))
+        ),
     );
   }
 
@@ -551,12 +601,18 @@ export class AidenAppControlProvider implements LiveToolProvider {
           );
           return typeof object.objectId === "string" ? { node, objectId: object.objectId } : null;
         } catch (error) {
-          if (error instanceof AidenWindowInspectedError || error instanceof AidenWindowTimeoutError) throw error;
+          if (
+            error instanceof AidenWindowInspectedError ||
+            error instanceof AidenWindowTimeoutError
+          )
+            throw error;
           return null;
         }
       }),
     );
-    const found = resolved.filter((entry): entry is { node: CdpAxNode; objectId: string } => entry !== null);
+    const found = resolved.filter(
+      (entry): entry is { node: CdpAxNode; objectId: string } => entry !== null,
+    );
     if (found.length === 0) return facts;
     const response = record(
       await this.call("Runtime.callFunctionOn", {
@@ -570,15 +626,21 @@ export class AidenAppControlProvider implements LiveToolProvider {
       }),
     );
     const values = record(response.result).value;
-    if (response.exceptionDetails || !Array.isArray(values)) throw new Error("The page couldn't be read.");
+    if (response.exceptionDetails || !Array.isArray(values))
+      throw new Error("The page couldn't be read.");
     found.forEach(({ node }, index) => {
       const value = values[index];
-      if (value && typeof value === "object") facts.set(node.backendDOMNodeId!, value as AidenElementFacts);
+      if (value && typeof value === "object")
+        facts.set(node.backendDOMNodeId!, value as AidenElementFacts);
     });
     return facts;
   }
 
-  private async look(focus: string | undefined, limits: AidenScreenLimits, markNew: boolean): Promise<AidenScreen> {
+  private async look(
+    focus: string | undefined,
+    limits: AidenScreenLimits,
+    markNew: boolean,
+  ): Promise<AidenScreen> {
     try {
       const regions = await this.contentRegions();
       const nodes = await this.axNodes(regions);
@@ -601,9 +663,13 @@ export class AidenAppControlProvider implements LiveToolProvider {
     }
   }
 
-  private async handleLook(args: Record<string, unknown>, signal: AbortSignal): Promise<LiveToolResponse> {
+  private async handleLook(
+    args: Record<string, unknown>,
+    signal: AbortSignal,
+  ): Promise<LiveToolResponse> {
     const focus = args.focus;
-    if (focus !== undefined && (typeof focus !== "string" || focus.length > 80)) return AIDEN_APP_CONTROL_ERRORS.invalid;
+    if (focus !== undefined && (typeof focus !== "string" || focus.length > 80))
+      return AIDEN_APP_CONTROL_ERRORS.invalid;
     // A new look moves on: a pending OK no longer applies.
     this.pendingConfirm?.abort(CONFIRM_PAGE_CHANGED);
     try {
@@ -617,7 +683,11 @@ export class AidenAppControlProvider implements LiveToolProvider {
   /** Asks the renderer to count one action toward this request's limit. */
   private async admit(label: string, signal: AbortSignal): Promise<LiveToolResponse | null> {
     const answer = record(
-      await this.options.renderer.request(LIVE_APP_CONTROL_RENDERER_TOOL, { op: "admit", label }, signal),
+      await this.options.renderer.request(
+        LIVE_APP_CONTROL_RENDERER_TOOL,
+        { op: "admit", label },
+        signal,
+      ),
     );
     if (answer.ok === true) return null;
     const error = record(answer.error);
@@ -677,7 +747,9 @@ export class AidenAppControlProvider implements LiveToolProvider {
     const forward = () => abort.abort();
     if (signal.aborted) abort.abort();
     else signal.addEventListener("abort", forward, { once: true });
-    abort.signal.addEventListener("abort", () => signal.removeEventListener("abort", forward), { once: true });
+    abort.signal.addEventListener("abort", () => signal.removeEventListener("abort", forward), {
+      once: true,
+    });
     this.busy = true;
     this.current = abort;
     return abort;
@@ -704,8 +776,14 @@ export class AidenAppControlProvider implements LiveToolProvider {
       let objectId: string | undefined;
       try {
         const [partial, resolved] = await Promise.all([
-          this.call("Accessibility.getPartialAXTree", { backendNodeId: element.backendNodeId, fetchRelatives: false }),
-          this.call("DOM.resolveNode", { backendNodeId: element.backendNodeId, objectGroup: ACTION_OBJECT_GROUP }),
+          this.call("Accessibility.getPartialAXTree", {
+            backendNodeId: element.backendNodeId,
+            fetchRelatives: false,
+          }),
+          this.call("DOM.resolveNode", {
+            backendNodeId: element.backendNodeId,
+            objectGroup: ACTION_OBJECT_GROUP,
+          }),
         ]);
         const nodes = record(partial).nodes;
         now = Array.isArray(nodes)
@@ -714,11 +792,18 @@ export class AidenAppControlProvider implements LiveToolProvider {
         const object = record(record(resolved).object);
         objectId = typeof object.objectId === "string" ? object.objectId : undefined;
       } catch (error) {
-        if (error instanceof AidenWindowInspectedError || error instanceof AidenWindowTimeoutError) throw error;
+        if (error instanceof AidenWindowInspectedError || error instanceof AidenWindowTimeoutError)
+          throw error;
         return { status: "gone" };
       }
       // The number now points at something else: what was confirmed or asked for isn't this.
-      if (!now || now.ignored || !objectId || axRole(now) !== element.role || axName(now) !== element.name) {
+      if (
+        !now ||
+        now.ignored ||
+        !objectId ||
+        axRole(now) !== element.role ||
+        axName(now) !== element.name
+      ) {
         return { status: "gone" };
       }
       // The user took over or interrupted while the element was found: don't act.
@@ -739,13 +824,18 @@ export class AidenAppControlProvider implements LiveToolProvider {
       );
       if (response.exceptionDetails) throw new Error("The page action failed.");
       const value = record(record(response.result).value);
-      return typeof value.status === "string" ? (value as AidenPageActionResult) : { status: "gone" };
+      return typeof value.status === "string"
+        ? (value as AidenPageActionResult)
+        : { status: "gone" };
     } finally {
       this.release(ACTION_OBJECT_GROUP);
     }
   }
 
-  private async handleUse(args: Record<string, unknown>, signal: AbortSignal): Promise<LiveToolResponse> {
+  private async handleUse(
+    args: Record<string, unknown>,
+    signal: AbortSignal,
+  ): Promise<LiveToolResponse> {
     const parsed = parseUse(args);
     if (!parsed) return AIDEN_APP_CONTROL_ERRORS.invalid;
     if (this.confirming) return AIDEN_APP_CONTROL_ERRORS.waiting;
@@ -759,7 +849,10 @@ export class AidenAppControlProvider implements LiveToolProvider {
       if (refused) return refused;
       if (abort.signal.aborted) return stopped(abort);
       this.startActing();
-      const result = await raceAbort(this.runPageAction(element, parsed.request, abort.signal), abort.signal);
+      const result = await raceAbort(
+        this.runPageAction(element, parsed.request, abort.signal),
+        abort.signal,
+      );
       if (result.status === "confirm") {
         void this.confirmThenAct(element, parsed.request);
         return {
@@ -770,7 +863,8 @@ export class AidenAppControlProvider implements LiveToolProvider {
         };
       }
       if (abort.signal.aborted) return stopped(abort);
-      if (result.status !== "done") return PAGE_ERRORS[result.status] ?? AIDEN_APP_CONTROL_ERRORS.unreadable;
+      if (result.status !== "done")
+        return PAGE_ERRORS[result.status] ?? AIDEN_APP_CONTROL_ERRORS.unreadable;
       const summary = outcome(parsed.request.action, element, result);
       await sleep(this.options.settleMs ?? 300, abort.signal);
       if (abort.signal.aborted) return { ok: true, result: summary };
@@ -790,7 +884,10 @@ export class AidenAppControlProvider implements LiveToolProvider {
   }
 
   /** Waits for the user's spoken or tapped OK, then acts; Live hears the outcome as a note. */
-  private async confirmThenAct(element: AidenScreenElement, request: AidenPageActionRequest): Promise<void> {
+  private async confirmThenAct(
+    element: AidenScreenElement,
+    request: AidenPageActionRequest,
+  ): Promise<void> {
     this.confirming = true;
     this.endActing();
     const pending = new AbortController();
@@ -832,13 +929,17 @@ export class AidenAppControlProvider implements LiveToolProvider {
       this.confirming = false;
       // Taking over also means waiting until they ask again.
       const after = answer.reason === "taken_over" ? " Wait until they ask again." : "";
-      await this.note(`${reason}, so ${quoted(element.name, element.role)} was not used. Nothing changed.${after}`);
+      await this.note(
+        `${reason}, so ${quoted(element.name, element.role)} was not used. Nothing changed.${after}`,
+      );
       return;
     }
     // The switch may have been turned off while the user was answering.
     if (!(await this.enabled())) {
       this.confirming = false;
-      await this.note(`Let Live move through Aiden was turned off, so ${quoted(element.name, element.role)} was not used.`);
+      await this.note(
+        `Let Live move through Aiden was turned off, so ${quoted(element.name, element.role)} was not used.`,
+      );
       return;
     }
     if (this.closed) {
@@ -878,9 +979,15 @@ export class AidenAppControlProvider implements LiveToolProvider {
       .catch(() => undefined);
   }
 
-  private async handleOpen(args: Record<string, unknown>, signal: AbortSignal): Promise<LiveToolResponse> {
+  private async handleOpen(
+    args: Record<string, unknown>,
+    signal: AbortSignal,
+  ): Promise<LiveToolResponse> {
     const place = args.place;
-    if (typeof place !== "string" || !(AIDEN_APP_DESTINATIONS as readonly string[]).includes(place)) {
+    if (
+      typeof place !== "string" ||
+      !(AIDEN_APP_DESTINATIONS as readonly string[]).includes(place)
+    ) {
       return AIDEN_APP_CONTROL_ERRORS.invalid;
     }
     if (this.confirming) return AIDEN_APP_CONTROL_ERRORS.waiting;
@@ -895,13 +1002,20 @@ export class AidenAppControlProvider implements LiveToolProvider {
       const opened = await raceAbort(this.options.open(target, abort.signal), abort.signal);
       if (abort.signal.aborted) return stopped(abort);
       if (opened.status === "blocked") {
-        return liveToolError("blocked", "Aiden can't open that right now; setup or a dialog is in the way.");
+        return liveToolError(
+          "blocked",
+          "Aiden can't open that right now; setup or a dialog is in the way.",
+        );
       }
-      if (opened.status !== "opened") return liveToolError("unavailable", "Aiden couldn't open that place.");
+      if (opened.status !== "opened")
+        return liveToolError("unavailable", "Aiden couldn't open that place.");
       this.refs = new Map();
       await sleep(this.options.settleMs ?? 300, abort.signal);
       try {
-        const screen = await raceAbort(this.look(undefined, FRESH_LOOK_LIMITS, false), abort.signal);
+        const screen = await raceAbort(
+          this.look(undefined, FRESH_LOOK_LIMITS, false),
+          abort.signal,
+        );
         return { ok: true, result: `Opened ${PLACE_LABELS[target]}.`, screen: screen.text };
       } catch {
         return { ok: true, result: `Opened ${PLACE_LABELS[target]}. Look before the next step.` };

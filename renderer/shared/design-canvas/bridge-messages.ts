@@ -12,7 +12,12 @@ import { DESIGN_TEXT_EDIT_LIMITS, type DesignTextChange } from "./text-edit.js";
 export type DesignBridgeMessage =
   | { type: "ready" | "resize"; docHeight: number }
   | { type: "scroll"; x: number; y: number }
-  | { type: "picked"; requestId: string; element: DesignPageElement | null; point: [number, number] }
+  | {
+      type: "picked";
+      requestId: string;
+      element: DesignPageElement | null;
+      point: [number, number];
+    }
   | { type: "anchors"; requestId: string; results: Record<string, DesignLocateResult> }
   | { type: "edit-start"; element: DesignPageElement }
   | {
@@ -36,15 +41,21 @@ const MAX_RESULTS = 200;
 const MAX_CANDIDATES = 150;
 
 function record(value: unknown): Record<string, unknown> | null {
-  return value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : null;
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : null;
 }
 
 function coord(value: unknown): number | null {
-  return typeof value === "number" && Number.isFinite(value) && Math.abs(value) <= MAX_COORD ? value : null;
+  return typeof value === "number" && Number.isFinite(value) && Math.abs(value) <= MAX_COORD
+    ? value
+    : null;
 }
 
 function id(value: unknown): string | null {
-  return typeof value === "string" && value.length > 0 && value.length <= MAX_ID_CHARS ? value : null;
+  return typeof value === "string" && value.length > 0 && value.length <= MAX_ID_CHARS
+    ? value
+    : null;
 }
 
 function rect(value: unknown): DesignRect | null {
@@ -62,7 +73,13 @@ function element(value: unknown): DesignPageElement | null {
   const raw = record(value);
   if (!raw) return null;
   const box = rect(raw.rect);
-  if (!box || typeof raw.selector !== "string" || typeof raw.text !== "string" || typeof raw.tag !== "string") return null;
+  if (
+    !box ||
+    typeof raw.selector !== "string" ||
+    typeof raw.text !== "string" ||
+    typeof raw.tag !== "string"
+  )
+    return null;
   if (!/^[a-z][a-z0-9-]*$/u.test(raw.tag) || raw.tag.length > MAX_TAG_CHARS) return null;
   const found: DesignPageElement = {
     selector: clippedUnicode(raw.selector, MAX_SELECTOR_CHARS, ""),
@@ -70,10 +87,12 @@ function element(value: unknown): DesignPageElement | null {
     tag: raw.tag,
     rect: box,
   };
-  if (typeof raw.sourcePath === "string" && isSourceStamp(raw.sourcePath)) found.sourcePath = raw.sourcePath;
+  if (typeof raw.sourcePath === "string" && isSourceStamp(raw.sourcePath))
+    found.sourcePath = raw.sourcePath;
   const commentId = id(raw.commentId);
   if (commentId) found.commentId = commentId;
-  if (typeof raw.html === "string" && raw.html) found.html = clippedUnicode(raw.html, DESIGN_CANVAS_LIMITS.anchorHtmlChars, "");
+  if (typeof raw.html === "string" && raw.html)
+    found.html = clippedUnicode(raw.html, DESIGN_CANVAS_LIMITS.anchorHtmlChars, "");
   return found;
 }
 
@@ -88,7 +107,11 @@ function locateResult(value: unknown): DesignLocateResult | null {
   if (Array.isArray(raw.candidates)) {
     for (const candidate of raw.candidates.slice(0, MAX_CANDIDATES)) {
       const found = element(candidate);
-      if (found) result.candidates.push({ ...found, selectorMatch: record(candidate)?.selectorMatch === true });
+      if (found)
+        result.candidates.push({
+          ...found,
+          selectorMatch: record(candidate)?.selectorMatch === true,
+        });
     }
   }
   return result;
@@ -109,7 +132,10 @@ export function parseDesignBridgeMessage(data: unknown): DesignBridgeMessage | n
   }
   if (type === "picked") {
     const requestId = id(raw.requestId);
-    const point = Array.isArray(raw.point) && raw.point.length === 2 ? [coord(raw.point[0]), coord(raw.point[1])] : null;
+    const point =
+      Array.isArray(raw.point) && raw.point.length === 2
+        ? [coord(raw.point[0]), coord(raw.point[1])]
+        : null;
     if (!requestId || !point || point[0] === null || point[1] === null) return null;
     const picked = raw.element === null ? null : element(raw.element);
     if (raw.element !== null && !picked) return null;
@@ -120,18 +146,25 @@ export function parseDesignBridgeMessage(data: unknown): DesignBridgeMessage | n
     return found ? { type, element: found } : null;
   }
   if (type === "edit-end") {
-    if (typeof raw.cancelled !== "boolean" || typeof raw.plain !== "boolean" || !Array.isArray(raw.changes)) return null;
+    if (
+      typeof raw.cancelled !== "boolean" ||
+      typeof raw.plain !== "boolean" ||
+      !Array.isArray(raw.changes)
+    )
+      return null;
     if (raw.changes.length > DESIGN_TEXT_EDIT_LIMITS.changes) return null;
     const changes: DesignTextChange[] = [];
     for (const entry of raw.changes) {
       const change = record(entry);
-      if (!change || typeof change.before !== "string" || typeof change.after !== "string") return null;
+      if (!change || typeof change.before !== "string" || typeof change.after !== "string")
+        return null;
       changes.push({
         before: change.before.slice(0, DESIGN_TEXT_EDIT_LIMITS.chars),
         after: change.after.slice(0, DESIGN_TEXT_EDIT_LIMITS.chars),
       });
     }
-    const html = (value: unknown) => (typeof value === "string" ? value.slice(0, DESIGN_TEXT_EDIT_LIMITS.chars) : "");
+    const html = (value: unknown) =>
+      typeof value === "string" ? value.slice(0, DESIGN_TEXT_EDIT_LIMITS.chars) : "";
     return {
       type,
       cancelled: raw.cancelled,
@@ -161,7 +194,11 @@ export type DesignBridgeCommand =
   | { type: "hover-at"; x: number; y: number; wide?: boolean }
   | { type: "hover-at"; clear: true }
   | { type: "pick-at"; requestId: string; x: number; y: number; wide?: boolean }
-  | { type: "locate"; requestId: string; items: { commentId: string; selector: string; text: string; tag: string }[] }
+  | {
+      type: "locate";
+      requestId: string;
+      items: { commentId: string; selector: string; text: string; tag: string }[];
+    }
   | { type: "highlight"; commentId: string; selector?: string }
   | { type: "highlight"; clear: true }
   | ({ type: "set-tweaks" } & DesignTweakState)
@@ -183,7 +220,10 @@ export type DesignTextCommand =
   | "block";
 
 /** Posts a command to a page. Pages are sandboxed without an origin, so the target is `*`. */
-export function postToDesignPage(target: Window | null | undefined, command: DesignBridgeCommand): void {
+export function postToDesignPage(
+  target: Window | null | undefined,
+  command: DesignBridgeCommand,
+): void {
   if (!target) return;
   try {
     target.postMessage({ ...command, type: `${PREFIX}${command.type}` }, "*");

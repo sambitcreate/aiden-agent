@@ -15,13 +15,20 @@ const github = { id: "srv-github", name: "GitHub" };
 const linear = { id: "srv-linear", name: "Linear" };
 
 test("plain names are <server>__<tool> and already valid codemode identifiers", () => {
-  const names = mcpAgentToolNames(github, [github, linear], ["create_issue", "list-repos", "search.code"]);
+  const names = mcpAgentToolNames(
+    github,
+    [github, linear],
+    ["create_issue", "list-repos", "search.code"],
+  );
   assert.equal(names.get("create_issue"), "github__create_issue");
   assert.equal(names.get("list-repos"), "github__list_repos");
   assert.equal(names.get("search.code"), "github__search_code");
   for (const name of names.values()) assert.equal(toCodemodeIdentifier(name), name);
   // A server name starting with a digit still yields a script identifier.
-  const digits = mcpAgentToolName({ id: "x", name: "1Password" }, "get item", { configured: [], inventory: ["get item"] });
+  const digits = mcpAgentToolName({ id: "x", name: "1Password" }, "get item", {
+    configured: [],
+    inventory: ["get item"],
+  });
   assert.equal(digits, "mcp_1password__get_item");
   assert.equal(toCodemodeIdentifier(digits), digits);
 });
@@ -52,19 +59,31 @@ test("long names are cut to 64 characters with a suffix bound to the exact raw t
     assert.equal(toCodemodeIdentifier(name), name);
   }
   assert.notEqual(names.get(first), names.get(second));
-  assert.equal(mcpAgentToolNames({ id: "long", name: "x".repeat(200) }, [], [first]).get(first), names.get(first));
+  assert.equal(
+    mcpAgentToolNames({ id: "long", name: "x".repeat(200) }, [], [first]).get(first),
+    names.get(first),
+  );
 });
 
 test("servers whose prefixes collide are each disambiguated by their own id", () => {
   const work = { id: "github-work", name: "GitHub" };
   const personal = { id: "github-personal", name: "github" };
   const configured = [work, personal, linear];
-  const workName = mcpAgentToolName(work, "create_issue", { configured, inventory: ["create_issue"] });
-  const personalName = mcpAgentToolName(personal, "create_issue", { configured, inventory: ["create_issue"] });
+  const workName = mcpAgentToolName(work, "create_issue", {
+    configured,
+    inventory: ["create_issue"],
+  });
+  const personalName = mcpAgentToolName(personal, "create_issue", {
+    configured,
+    inventory: ["create_issue"],
+  });
   assert.notEqual(workName, personalName);
   assert.match(workName, /^github_[0-9a-f]{6}__create_issue$/u);
   assert.equal(
-    mcpAgentToolName(work, "create_issue", { configured: [linear, personal, work], inventory: ["create_issue"] }),
+    mcpAgentToolName(work, "create_issue", {
+      configured: [linear, personal, work],
+      inventory: ["create_issue"],
+    }),
     workName,
   );
   assert.equal(mcpAgentToolName(linear, "x", { configured, inventory: ["x"] }), "linear__x");
@@ -91,8 +110,14 @@ test("scoped (subagent) names need no inventory and never collide across approve
 });
 
 test("built tools carry their real MCP identity through object copies", () => {
-  const tool = markMcpAgentTool({ name: "github__create_issue" }, { serverId: github.id, toolName: "create_issue" });
-  assert.deepEqual(mcpAgentToolIdentity({ ...tool }), { serverId: github.id, toolName: "create_issue" });
+  const tool = markMcpAgentTool(
+    { name: "github__create_issue" },
+    { serverId: github.id, toolName: "create_issue" },
+  );
+  assert.deepEqual(mcpAgentToolIdentity({ ...tool }), {
+    serverId: github.id,
+    toolName: "create_issue",
+  });
   assert.equal(mcpAgentToolIdentity({ name: "a__b" }), undefined);
   assert.throws(() => assertUniqueMcpAgentToolNames([tool, { ...tool }]), /identity collision/iu);
 });
@@ -111,7 +136,8 @@ test("every name a connection's tool can get keeps the MCP shape without the ser
         mcpAgentToolName(server, tool, { configured: odd, inventory: ["create_issue", tool] }),
         mcpScopedAgentToolName(server, tool, odd),
       ];
-      for (const name of names) assert.equal(hasMcpAgentToolNameShape(name), true, `${server.name} / ${tool} -> ${name}`);
+      for (const name of names)
+        assert.equal(hasMcpAgentToolNameShape(name), true, `${server.name} / ${tool} -> ${name}`);
     }
   }
   for (const builtIn of ["read_file", "web_fetch", "browser_snapshot", "subagent", "bot_memory"]) {

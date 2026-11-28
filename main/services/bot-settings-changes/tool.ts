@@ -3,10 +3,7 @@
 import { Type } from "typebox";
 import type { AgentTool } from "@earendil-works/pi-agent-core";
 import type { JsonValue } from "@earendil-works/chord/json";
-import {
-  BOT_AVATAR_COLORS,
-  BOT_AVATAR_SHAPES,
-} from "../../../renderer/shared/bots.js";
+import { BOT_AVATAR_COLORS, BOT_AVATAR_SHAPES } from "../../../renderer/shared/bots.js";
 import { UPDATE_BOT_TOOL_NAME } from "../../../renderer/shared/bot-settings-changes.js";
 import type { BotToolCandidate } from "../bot-runtime/bot-tool-assembly.js";
 import type { BotToolCall } from "../bot-runtime/tool-adapter.js";
@@ -23,7 +20,10 @@ export function updateBotOwnerStarted(
   scopeRequestIds: readonly (string | undefined)[] | undefined,
   runRequestIds: readonly (string | undefined)[] | undefined,
 ): boolean {
-  return botRunStartedByOwner(scopeRequestIds) && (runRequestIds === undefined || botRunStartedByOwner(runRequestIds));
+  return (
+    botRunStartedByOwner(scopeRequestIds) &&
+    (runRequestIds === undefined || botRunStartedByOwner(runRequestIds))
+  );
 }
 
 /**
@@ -36,7 +36,12 @@ export async function updateBotReadOutside(call: Pick<BotToolCall, "entries">): 
   try {
     for (const entry of await call.entries()) {
       for (const message of entry.model ?? []) {
-        if (message.role === "toolResult" && typeof message.toolName === "string" && botHistoryToolTaints(message.toolName)) return true;
+        if (
+          message.role === "toolResult" &&
+          typeof message.toolName === "string" &&
+          botHistoryToolTaints(message.toolName)
+        )
+          return true;
       }
     }
     return false;
@@ -71,21 +76,45 @@ export function updateBotCandidate(
       {
         name: Type.Optional(Type.String()),
         description: Type.Optional(Type.String()),
-        look: Type.Optional(Type.Object({
-          color: Type.Optional(Type.Union(BOT_AVATAR_COLORS.map((color) => Type.Literal(color)))),
-          shape: Type.Optional(Type.Union(BOT_AVATAR_SHAPES.map((shape) => Type.Literal(shape)))),
-        }, { additionalProperties: false })),
+        look: Type.Optional(
+          Type.Object(
+            {
+              color: Type.Optional(
+                Type.Union(BOT_AVATAR_COLORS.map((color) => Type.Literal(color))),
+              ),
+              shape: Type.Optional(
+                Type.Union(BOT_AVATAR_SHAPES.map((shape) => Type.Literal(shape))),
+              ),
+            },
+            { additionalProperties: false },
+          ),
+        ),
         instructions: Type.Optional(Type.String()),
         dailyCheckIns: Type.Optional(Type.Boolean()),
-        notifications: Type.Optional(Type.Object({
-          perDay: Type.Optional(Type.Integer({ minimum: 0, maximum: 20 })),
-          quietHours: Type.Optional(Type.Object({
-            enabled: Type.Optional(Type.Boolean()),
-            start: Type.Optional(Type.String()),
-            end: Type.Optional(Type.String()),
-          }, { additionalProperties: false })),
-        }, { additionalProperties: false })),
-        model: Type.Optional(Type.Object({ providerId: Type.String(), modelId: Type.String() }, { additionalProperties: false })),
+        notifications: Type.Optional(
+          Type.Object(
+            {
+              perDay: Type.Optional(Type.Integer({ minimum: 0, maximum: 20 })),
+              quietHours: Type.Optional(
+                Type.Object(
+                  {
+                    enabled: Type.Optional(Type.Boolean()),
+                    start: Type.Optional(Type.String()),
+                    end: Type.Optional(Type.String()),
+                  },
+                  { additionalProperties: false },
+                ),
+              ),
+            },
+            { additionalProperties: false },
+          ),
+        ),
+        model: Type.Optional(
+          Type.Object(
+            { providerId: Type.String(), modelId: Type.String() },
+            { additionalProperties: false },
+          ),
+        ),
       },
       { additionalProperties: false },
     ),

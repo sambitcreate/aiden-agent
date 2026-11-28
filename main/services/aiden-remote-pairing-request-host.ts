@@ -21,11 +21,13 @@ function isSettingsDocument(value: unknown): value is AidenPairingRequestSetting
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
   const record = value as Record<string, unknown>;
   const keys = Object.keys(record).sort();
-  return keys.length === 2
-    && keys[0] === "acceptPairingRequests"
-    && keys[1] === "version"
-    && record.version === 1
-    && typeof record.acceptPairingRequests === "boolean";
+  return (
+    keys.length === 2 &&
+    keys[0] === "acceptPairingRequests" &&
+    keys[1] === "version" &&
+    record.version === 1 &&
+    typeof record.acceptPairingRequests === "boolean"
+  );
 }
 
 export interface AidenPairingRequestSettingsStore {
@@ -49,9 +51,10 @@ export function createAidenPairingRequestSettingsStore(
       maxBytes: MAX_SETTINGS_BYTES,
       fileMode: 0o600,
       preserveCorruptFile: true,
-      normalize: (value) => isSettingsDocument(value)
-        ? { version: 1, acceptPairingRequests: value.acceptPairingRequests }
-        : { version: 1, acceptPairingRequests: false },
+      normalize: (value) =>
+        isSettingsDocument(value)
+          ? { version: 1, acceptPairingRequests: value.acceptPairingRequests }
+          : { version: 1, acceptPairingRequests: false },
       isSafe: isSettingsDocument,
     },
   );

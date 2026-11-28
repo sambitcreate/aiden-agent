@@ -20,5 +20,8 @@ test("latest exchange includes assistant continuations and refines a partial his
   ];
   assert.equal(latestWorkDetailsStart(history), 2);
   assert.equal(latestWorkDetailsStart(history.slice(3)), 0);
-  assert.equal(latestWorkDetailsStart([...history, { role: "user", content: "Next accepted request" }]), 5);
+  assert.equal(
+    latestWorkDetailsStart([...history, { role: "user", content: "Next accepted request" }]),
+    5,
+  );
 });

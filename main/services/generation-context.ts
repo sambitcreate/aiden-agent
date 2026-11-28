@@ -8,7 +8,12 @@ import {
   type UserMessage,
 } from "@earendil-works/pi-ai";
 import { type AgentMessage, type AgentTool } from "@earendil-works/pi-agent-core";
-import { DEFAULT_COMPACTION_SETTINGS, estimateContextTokens, estimateTokens, shouldCompact } from "./pi-legacy-harness.js";
+import {
+  DEFAULT_COMPACTION_SETTINGS,
+  estimateContextTokens,
+  estimateTokens,
+  shouldCompact,
+} from "./pi-legacy-harness.js";
 import type {
   ChatContextPressureV1,
   ContextBreakdownV1,
@@ -184,7 +189,9 @@ const PROMPT_SECTION_IDS: readonly ContextPromptSectionId[] = [
 ];
 
 function isMcpTool(tool: EstimatedTool): boolean {
-  return (tool as PiRuntimeTool).codemode === true && Boolean((tool as PiDiscoverableTool).discovery);
+  return (
+    (tool as PiRuntimeTool).codemode === true && Boolean((tool as PiDiscoverableTool).discovery)
+  );
 }
 
 /**
@@ -193,7 +200,9 @@ function isMcpTool(tool: EstimatedTool): boolean {
  * go to the categories with the largest fractional remainders (ties favour the
  * earlier category, so the system prompt first).
  */
-function apportionTokens<T extends string>(chars: readonly (readonly [T, number])[]): Map<T, number> {
+function apportionTokens<T extends string>(
+  chars: readonly (readonly [T, number])[],
+): Map<T, number> {
   const total = chars.reduce((sum, [, value]) => sum + value, 0);
   const tokens = new Map<T, number>();
   let leftover = Math.ceil(total / 4);
@@ -228,7 +237,8 @@ export function estimateContextBreakdown(options: GenerationContextOptions): Con
   const promptChars = options.systemPrompt.length;
   const withoutProject = withoutAgentsInstructions(options.systemPrompt);
   const projectChars = promptChars - withoutProject.length;
-  const mcpInstructionChars = withoutProject.length - withoutMcpServersSection(withoutProject).length;
+  const mcpInstructionChars =
+    withoutProject.length - withoutMcpServersSection(withoutProject).length;
   const recorded = PROMPT_SECTION_IDS.map(
     (id) => [id, options.promptSections?.[id]?.length ?? 0] as const,
   );
@@ -254,7 +264,11 @@ export function estimateContextBreakdown(options: GenerationContextOptions): Con
     if (declared.has(tool.name)) continue;
     const discovery = (tool as PiDiscoverableTool).discovery;
     const key = discovery?.namespace ?? "";
-    const server = servers.get(key) ?? { name: discovery?.label || "MCP service", count: 0, chars: 0 };
+    const server = servers.get(key) ?? {
+      name: discovery?.label || "MCP service",
+      count: 0,
+      chars: 0,
+    };
     server.count += 1;
     server.chars += toolChars(tool);
     servers.set(key, server);
@@ -263,12 +277,14 @@ export function estimateContextBreakdown(options: GenerationContextOptions): Con
     .map(({ name, count, chars }) => ({ name, count, tokens: Math.ceil(chars / 4) }))
     .sort((left, right) => right.tokens - left.tokens);
   const deferred = deferredServers.length
-    ? [{
-        id: "mcp-tools" as const,
-        tokens: deferredServers.reduce((sum, server) => sum + server.tokens, 0),
-        count: deferredServers.reduce((sum, server) => sum + server.count, 0),
-        servers: deferredServers,
-      }]
+    ? [
+        {
+          id: "mcp-tools" as const,
+          tokens: deferredServers.reduce((sum, server) => sum + server.tokens, 0),
+          count: deferredServers.reduce((sum, server) => sum + server.count, 0),
+          servers: deferredServers,
+        },
+      ]
     : [];
   return { categories, deferred };
 }
@@ -427,7 +443,10 @@ export function trimRequestScreenshots(messages: AgentMessage[]): AgentMessage[]
   return trimScreenshots(messages) as AgentMessage[];
 }
 
-function projectRequestMessages(messages: readonly AgentMessage[], supportsImages: boolean): AgentMessage[] {
+function projectRequestMessages(
+  messages: readonly AgentMessage[],
+  supportsImages: boolean,
+): AgentMessage[] {
   return trimRequestScreenshots(projectMessagesForModel(messages, supportsImages));
 }
 
@@ -519,7 +538,8 @@ function truncateToolResult(message: ToolResultMessage): {
     const markerIndex = text.lastIndexOf(marker);
     const start = markerIndex > 0 && text[markerIndex - 1] === "\n" ? markerIndex - 1 : markerIndex;
     const withoutMarker = text.slice(0, start) + text.slice(markerIndex + marker.length);
-    truncatedText = truncateText(withoutMarker, TOOL_RESULT_TEXT_LIMIT_CHARS - recovery.length) + recovery;
+    truncatedText =
+      truncateText(withoutMarker, TOOL_RESULT_TEXT_LIMIT_CHARS - recovery.length) + recovery;
   }
   return {
     message: {
@@ -598,8 +618,7 @@ export function projectNextContextUsage(
     ),
   );
   const currentUser = lastUserIndex(projected);
-  const compressibleHistoryMessages =
-    currentUser < 0 ? projected.length : Math.max(0, currentUser);
+  const compressibleHistoryMessages = currentUser < 0 ? projected.length : Math.max(0, currentUser);
   const limits = contextLimits(options);
   return {
     contextTokens,
@@ -649,9 +668,7 @@ export function chatContextPressureFromProjection(
     inputBudgetTokens: limits.inputBudgetTokens,
     reservedTokens: limits.reserveTokens,
     percentOfWindow:
-      limits.contextWindow > 0
-        ? (projection.contextTokens / limits.contextWindow) * 100
-        : 0,
+      limits.contextWindow > 0 ? (projection.contextTokens / limits.contextWindow) * 100 : 0,
     percentOfUsableInput:
       limits.inputBudgetTokens > 0
         ? (projection.contextTokens / limits.inputBudgetTokens) * 100
@@ -665,9 +682,7 @@ export function chatContextPressureFromProjection(
     source: anchored ? "provider-anchored" : "estimated",
     computedAt,
     ...(anchored ? { providerUsageTokens: projection.providerUsageTokens } : {}),
-    ...(anchored
-      ? { addedAfterUsageAnchorTokens: projection.addedAfterUsageAnchorTokens }
-      : {}),
+    ...(anchored ? { addedAfterUsageAnchorTokens: projection.addedAfterUsageAnchorTokens } : {}),
     // Options that changed after the projection describe a different request.
     ...(breakdownTokens === projection.staticTokens ? { breakdown } : {}),
   };
@@ -700,7 +715,10 @@ export function promptCacheWindow(
   retention?: PromptCacheRetentionRecord,
 ): PromptCacheWindowV1 | undefined {
   // Another model's retention says nothing about this model's cache.
-  const kept = retention?.provider === model.provider && retention.model === model.id ? retention.retention : "short";
+  const kept =
+    retention?.provider === model.provider && retention.model === model.id
+      ? retention.retention
+      : "short";
   const ttlMs = promptCacheTtlMs(model, kept);
   if (ttlMs === 0) return undefined;
   for (let index = messages.length - 1; index >= 0; index--) {
@@ -710,7 +728,9 @@ export function promptCacheWindow(
     const usage = message.usage;
     if (usage && usage.cacheRead + usage.cacheWrite > 0 && Number.isFinite(message.timestamp)) {
       const refreshed =
-        refresh?.provider === model.provider && refresh.model === model.id && refresh.requestStartedAt > message.timestamp;
+        refresh?.provider === model.provider &&
+        refresh.model === model.id &&
+        refresh.requestStartedAt > message.timestamp;
       return { ttlMs, lastRequestAt: refreshed ? refresh.requestStartedAt : message.timestamp };
     }
   }
@@ -783,10 +803,7 @@ function protectedRecentToolResults(
     const message = messages[index];
     if (!message || !isToolResult(message)) continue;
     const nextTokens = tokens + estimateTokens(message);
-    if (
-      protectedIndexes.size < MIN_RECENT_TOOL_RESULTS ||
-      nextTokens <= budgetTokens
-    ) {
+    if (protectedIndexes.size < MIN_RECENT_TOOL_RESULTS || nextTokens <= budgetTokens) {
       protectedIndexes.add(index);
       tokens = nextTokens;
       continue;
@@ -813,7 +830,8 @@ function removeOldestCurrentTurnBatches(
   let low = 1;
   let high = assistantIndexes.length - 1;
   if (usageAnchor && messages.indexOf(usageAnchor) !== messages.lastIndexOf(usageAnchor)) {
-    while (low < high && overBudget([...prefix, ...messages.slice(assistantIndexes[low])])) low += 1;
+    while (low < high && overBudget([...prefix, ...messages.slice(assistantIndexes[low])]))
+      low += 1;
   } else {
     while (low < high) {
       const middle = Math.floor((low + high) / 2);
@@ -833,7 +851,10 @@ interface ActiveMessageCosts {
 }
 
 /** Only after system consolidation: retained system-update surcharges are zero. */
-function activeMessageCosts(messages: AgentMessage[], anchor: AgentMessage | undefined): ActiveMessageCosts | undefined {
+function activeMessageCosts(
+  messages: AgentMessage[],
+  anchor: AgentMessage | undefined,
+): ActiveMessageCosts | undefined {
   const anchorIndex = anchor ? messages.indexOf(anchor) : -1;
   let total = 0;
   let prefix = 0;
@@ -857,19 +878,14 @@ interface GenerationContextLimits {
   inputBudgetTokens: number;
 }
 
-function contextLimits(
-  options: GenerationContextOptions,
-): GenerationContextLimits {
+function contextLimits(options: GenerationContextOptions): GenerationContextLimits {
   const contextWindow =
     Number.isFinite(options.contextWindow) && options.contextWindow > 0
       ? Math.max(1, Math.floor(options.contextWindow))
       : 1;
   const responseReserve = Math.min(
     DEFAULT_COMPACTION_SETTINGS.reserveTokens,
-    Math.max(
-      MIN_RESERVE_TOKENS,
-      Math.floor(contextWindow * RESPONSE_RESERVE_RATIO),
-    ),
+    Math.max(MIN_RESERVE_TOKENS, Math.floor(contextWindow * RESPONSE_RESERVE_RATIO)),
   );
   const safetyReserve = Math.max(
     MIN_RESERVE_TOKENS,
@@ -892,13 +908,9 @@ function contextLimits(
  * system prompt or tool schemas. Fail before provider I/O when even Aiden's
  * bounded recovery notice cannot fit beside that static context.
  */
-export function assertGenerationContextCapacity(
-  options: GenerationContextOptions,
-): void {
+export function assertGenerationContextCapacity(options: GenerationContextOptions): void {
   if (!Number.isFinite(options.contextWindow) || options.contextWindow <= 0) {
-    throw new Error(
-      "The selected model does not report a usable context window.",
-    );
+    throw new Error("The selected model does not report a usable context window.");
   }
   const limits = contextLimits(options);
   const fallbackTokens = estimateTokens(contextFallback([]));
@@ -929,8 +941,7 @@ export function compactGenerationContext(
   options: GenerationContextOptions,
 ): GenerationContextCompaction {
   const retained = projectRequestMessages(messages, options.supportsImages !== false);
-  const { contextWindow, reserveTokens, staticTokens, inputBudgetTokens } =
-    contextLimits(options);
+  const { contextWindow, reserveTokens, staticTokens, inputBudgetTokens } = contextLimits(options);
   const estimatedMessageTokensBefore = transcriptMessageTokens(retained, options);
   const providerEstimate = estimateContextTokens(retained);
   const candidateUsageAnchor =
@@ -971,10 +982,7 @@ export function compactGenerationContext(
       : staticTokens;
   const providerPrefixRatio =
     usageAnchorIsCurrent && providerEstimate.usageTokens > 0 && estimatedPrefixTokens > 0
-      ? Math.max(
-          1,
-          (providerEstimate.usageTokens - anchorStaticTokens) / estimatedPrefixTokens,
-        )
+      ? Math.max(1, (providerEstimate.usageTokens - anchorStaticTokens) / estimatedPrefixTokens)
       : 1;
   const estimatedTotalTokens = (candidate: AgentMessage[]) => {
     const estimatedMessages = transcriptMessageTokens(candidate, options);
@@ -987,16 +995,12 @@ export function compactGenerationContext(
       // measurement no longer describes this outbound request.
       return Math.ceil(heuristicTotal);
     }
-    const retainedPrefixTokens = messageTokens(
-      candidate.slice(0, anchorIndex + 1),
-    );
+    const retainedPrefixTokens = messageTokens(candidate.slice(0, anchorIndex + 1));
     const trailingTokens = staticAnchoredTailTokens(candidate, anchorIndex, options);
     return Math.ceil(
       Math.max(
         heuristicTotal,
-        staticTokens +
-          retainedPrefixTokens * providerPrefixRatio +
-          trailingTokens,
+        staticTokens + retainedPrefixTokens * providerPrefixRatio + trailingTokens,
       ),
     );
   };
@@ -1036,10 +1040,15 @@ export function compactGenerationContext(
   const overBudget = () => {
     if (!activeCosts) return estimatedTotalTokens(transformed) > inputBudgetTokens;
     const heuristic = staticTokens + activeCosts.total;
-    const tokens = activeCosts.anchorIndex < 0 ? heuristic : Math.max(
-      heuristic,
-      staticTokens + activeCosts.prefix * providerPrefixRatio + (activeCosts.total - activeCosts.prefix),
-    );
+    const tokens =
+      activeCosts.anchorIndex < 0
+        ? heuristic
+        : Math.max(
+            heuristic,
+            staticTokens +
+              activeCosts.prefix * providerPrefixRatio +
+              (activeCosts.total - activeCosts.prefix),
+          );
     return Math.ceil(tokens) > inputBudgetTokens;
   };
   const replaceResult = (index: number): boolean => {
@@ -1059,8 +1068,7 @@ export function compactGenerationContext(
   if (overBudget()) {
     const currentSystem = getCurrentSystemMessage(transformed);
     if (currentSystem) {
-      transformed = [currentSystem,
-        ...transformed.filter((message) => message.role !== "system")];
+      transformed = [currentSystem, ...transformed.filter((message) => message.role !== "system")];
     }
   }
   let removedHistoryMessages = 0;
@@ -1085,11 +1093,7 @@ export function compactGenerationContext(
       RECENT_TOOL_OUTPUT_BUDGET_TOKENS,
       Math.max(MIN_RESERVE_TOKENS, Math.floor(messageBudgetTokens * 0.45)),
     );
-    const protectedIndexes = protectedRecentToolResults(
-      transformed,
-      toolIndexes,
-      recentBudget,
-    );
+    const protectedIndexes = protectedRecentToolResults(transformed, toolIndexes, recentBudget);
 
     for (const index of toolIndexes) {
       if (!overBudget()) break;
@@ -1097,9 +1101,7 @@ export function compactGenerationContext(
       if (replaceResult(index)) compactedToolResults += 1;
     }
 
-    const newestProtected = [...protectedIndexes].sort(
-      (left, right) => left - right,
-    );
+    const newestProtected = [...protectedIndexes].sort((left, right) => left - right);
     let protectedCursor = 0;
     while (overBudget() && newestProtected.length - protectedCursor > MIN_RECENT_TOOL_RESULTS) {
       const index = newestProtected[protectedCursor++];

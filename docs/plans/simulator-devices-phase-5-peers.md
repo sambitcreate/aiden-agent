@@ -16,7 +16,7 @@ When Mac B has shared its simulators, Mac A's Simulator tab lists them under B's
 
 ## Authority model
 
-Two independent gates must both hold, following the multi-host plan: *"neither client type nor an old broad chat grant silently implies new authority."*
+Two independent gates must both hold, following the multi-host plan: _"neither client type nor an old broad chat grant silently implies new authority."_
 
 1. **Owner consent on the serving Mac.** A new device-local consent, `peerSharing` ("Share with paired Macs"), sits in B's Simulator tab. It requires `streaming` and is cleared whenever streaming is revoked. When it is off, every simulator route answers `{sharing: false}` or refuses, and the relay closes.
 2. **Negotiated capability on the client device.** This is a new capability, `simulators:control`, in its own negotiable vocabulary.
@@ -30,14 +30,14 @@ Pairing direction stays explicit: A controlling B's simulators does not let B re
 
 Every route below requires a bearer credential, `Aiden-Protocol-Version: 1`, and `simulators:control`. When the serving app has no simulator service (flag off or not macOS), each route answers `404 not_found`.
 
-| Route | Body | Response |
-| --- | --- | --- |
-| `GET /simulators` | — | `{sharing, status, detail?, devices[]}`. Lists the devices, starting an already-installed hub but never installing. |
-| `POST /simulators/open` | `{deviceId}` | `{device}`. Boots the simulator if needed and attaches the stream helper. The client allows 200 s for this. |
-| `POST /simulators/shutdown` | `{deviceId}` | `{ok: true}` |
-| `POST /simulators/settings` | `{deviceId}` | `DeviceSettings` |
-| `POST /simulators/action` | `DeviceActionInput` without `hostId` | `DeviceSettings` |
-| `GET, HEAD, POST /simulators/hub/<hub path>` and WebSocket upgrade | — | The hub response, streamed without buffering |
+| Route                                                              | Body                                 | Response                                                                                                            |
+| ------------------------------------------------------------------ | ------------------------------------ | ------------------------------------------------------------------------------------------------------------------- |
+| `GET /simulators`                                                  | —                                    | `{sharing, status, detail?, devices[]}`. Lists the devices, starting an already-installed hub but never installing. |
+| `POST /simulators/open`                                            | `{deviceId}`                         | `{device}`. Boots the simulator if needed and attaches the stream helper. The client allows 200 s for this.         |
+| `POST /simulators/shutdown`                                        | `{deviceId}`                         | `{ok: true}`                                                                                                        |
+| `POST /simulators/settings`                                        | `{deviceId}`                         | `DeviceSettings`                                                                                                    |
+| `POST /simulators/action`                                          | `DeviceActionInput` without `hostId` | `DeviceSettings`                                                                                                    |
+| `GET, HEAD, POST /simulators/hub/<hub path>` and WebSocket upgrade | —                                    | The hub response, streamed without buffering                                                                        |
 
 - The relay applies **the same allowlist** as the local proxy, `DEVICE_HUB_HTTP_PATHS`, `DEVICE_HUB_WS_PATHS`, and the mutable screenshot route, through one exported function, `decideDeviceHubRoute`. serve-sim's exec route can never be reached.
 - The relay strips `Authorization`, cookies, and the protocol header before forwarding, and it forwards only to the serving Mac's own loopback hub.
@@ -62,7 +62,7 @@ Every route below requires a bearer credential, `Aiden-Protocol-Version: 1`, and
   - For a peer upstream it uses HTTPS or TLS with the pinned SPKI and adds the bearer header.
   - It drops `Origin`, which Aiden Remote refuses, and the renderer never sees the credential.
 - The UI groups simulators by host: "This Mac" and then each paired Mac. Each group shows its own status, for example "Simulator sharing is off on Studio." The ready state gains a "Share with paired Macs" switch.
-- Agent device tools stay **local-only** in this phase. B's owner shared simulators with paired *people's Macs*, not with A's agent. `device_list` shows only local simulators, and `device_open` refuses peer hosts. Agent control of peer simulators is a follow-up and needs its own consent.
+- Agent device tools stay **local-only** in this phase. B's owner shared simulators with paired _people's Macs_, not with A's agent. `device_list` shows only local simulators, and `device_open` refuses peer hosts. Agent control of peer simulators is a follow-up and needs its own consent.
 
 ## Tests
 

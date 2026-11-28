@@ -31,5 +31,7 @@ export function BotBubbleWindowHost() {
   const state = useBotBubbles();
   const area = useViewportArea();
   if (state.host !== "window" || state.bubbles.length === 0) return null;
-  return <BotBubbleHeads bubbles={state.bubbles} openBotId={state.openBotId} area={area} host="window" />;
+  return (
+    <BotBubbleHeads bubbles={state.bubbles} openBotId={state.openBotId} area={area} host="window" />
+  );
 }

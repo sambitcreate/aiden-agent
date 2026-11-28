@@ -66,9 +66,7 @@ export function sealAesGcm(
     authTagLength: AES_GCM_TAG_BYTES,
   });
   cipher.setAAD(
-    typeof additionalData === "string"
-      ? Buffer.from(additionalData, "utf8")
-      : additionalData,
+    typeof additionalData === "string" ? Buffer.from(additionalData, "utf8") : additionalData,
   );
   const ciphertext = Buffer.concat([cipher.update(plaintext), cipher.final()]);
   return { ciphertext, tag: cipher.getAuthTag() };
@@ -93,9 +91,7 @@ export function openAesGcm(
     authTagLength: AES_GCM_TAG_BYTES,
   });
   decipher.setAAD(
-    typeof additionalData === "string"
-      ? Buffer.from(additionalData, "utf8")
-      : additionalData,
+    typeof additionalData === "string" ? Buffer.from(additionalData, "utf8") : additionalData,
   );
   decipher.setAuthTag(tag);
   return Buffer.concat([decipher.update(ciphertext), decipher.final()]);
@@ -175,9 +171,8 @@ function requireRequestId(requestId: string): Buffer {
 }
 
 function requireNonce(value: Buffer | string, name: string): Buffer {
-  const bytes = typeof value === "string"
-    ? decodeBase64UrlExact(value, PAIRING_NONCE_BYTES)
-    : value;
+  const bytes =
+    typeof value === "string" ? decodeBase64UrlExact(value, PAIRING_NONCE_BYTES) : value;
   if (!bytes || bytes.length !== PAIRING_NONCE_BYTES) {
     throw new Error(`Invalid ${name}.`);
   }
@@ -189,10 +184,7 @@ function requireNonce(value: Buffer | string, name: string): Buffer {
  * reveals its own nonce, as base64url of
  * SHA-256("aiden-pairing-commit-v1" ‖ 0x00 ‖ requestId ‖ hostNonce).
  */
-export function pairingRequestCommitment(
-  requestId: string,
-  hostNonce: Buffer | string,
-): string {
+export function pairingRequestCommitment(requestId: string, hostNonce: Buffer | string): string {
   return createHash("sha256")
     .update(COMMITMENT_LABEL, "ascii")
     .update(Buffer.of(0))
@@ -240,7 +232,11 @@ export interface AidenPairingRequestEnvelope {
   tag: string;
 }
 
-function envelopeInfo(requestId: string, requesterPublicKey: string, hostPublicKey: string): string {
+function envelopeInfo(
+  requestId: string,
+  requesterPublicKey: string,
+  hostPublicKey: string,
+): string {
   return `${AIDEN_PAIRING_REQUEST_ENVELOPE_KIND}\n${requestId}\n${requesterPublicKey}\n${hostPublicKey}`;
 }
 

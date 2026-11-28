@@ -36,7 +36,8 @@ function pullRequestTone(pullRequest: SidebarRowPullRequest): PullRequestTone {
 function PullRequestIcon({ pullRequest }: { pullRequest: SidebarRowPullRequest }) {
   const className = "size-3.5";
   if (pullRequest.state === "merged") return <GitMerge className={className} aria-hidden="true" />;
-  if (pullRequest.state === "closed") return <GitPullRequestClosed className={className} aria-hidden="true" />;
+  if (pullRequest.state === "closed")
+    return <GitPullRequestClosed className={className} aria-hidden="true" />;
   if (pullRequest.isDraft) return <GitPullRequestDraft className={className} aria-hidden="true" />;
   return <GitPullRequest className={className} aria-hidden="true" />;
 }
@@ -70,7 +71,11 @@ export function ChatRowContext({
         <span
           role="img"
           aria-label={rowPullRequestLabel(pullRequest)}
-          title={pullRequest.title ? `${rowPullRequestLabel(pullRequest)}\n${pullRequest.title}` : rowPullRequestLabel(pullRequest)}
+          title={
+            pullRequest.title
+              ? `${rowPullRequestLabel(pullRequest)}\n${pullRequest.title}`
+              : rowPullRequestLabel(pullRequest)
+          }
           data-chat-row-pull-request={pullRequest.state}
           data-tone={pullRequestTone(pullRequest)}
           className={cn(GLYPH, TONE_CLASS[pullRequestTone(pullRequest)])}
@@ -102,10 +107,10 @@ export function ChatRowContextGlyphs({
   const linked = pullRequests?.pullRequest;
   const readsBranch = Boolean(
     live &&
-      worktree &&
-      workspace?.folderPath &&
-      workspace.permission !== "none" &&
-      linked?.state !== "merged",
+    worktree &&
+    workspace?.folderPath &&
+    workspace.permission !== "none" &&
+    linked?.state !== "merged",
   );
   const status = useGitPullRequestStatus(workspace?.id, readsBranch);
   const pullRequest = sidebarRowPullRequest(

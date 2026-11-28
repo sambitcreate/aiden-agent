@@ -4,13 +4,13 @@ Recorded 2026-09-25 on macOS 27.0, Xcode 27.1 (27A9269), Electron 43 (bundled No
 
 ## Decisions
 
-| Question | Decision |
-| --- | --- |
-| Runtime for the pinned tools | **Electron-as-Node.** Spawn `process.execPath` with `ELECTRON_RUN_AS_NODE=1`. The user does not need their own Node. |
-| Install mechanism | Use **the user's `npm`**. Resolve it from `PATH`, then from `$SHELL -ilc 'command -v npm'`, then from `/opt/homebrew/bin/npm` or `/usr/local/bin/npm`. Run npm with its own directory prepended to `PATH`. If none of these is found, show a "Node.js/npm is required for setup" state. The registry-tarball fallback is deferred. |
-| Tool location | `app.getPath("userData")/devices/tools/<name>/<version>`. These installs are machine-local, contain native modules, and are pinned. They are not portable user config, so they do not go under `aidenConfigDir()`. |
-| Decoder path | **WebCodecs H.264 (AVCC)** is the primary path. The MJPEG `<img>` is the fallback. |
-| agent-device quick-start | `open <bundleId>` must run before `snapshot`. The first `open` also builds the Apple runner. |
+| Question                     | Decision                                                                                                                                                                                                                                                                                                                           |
+| ---------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Runtime for the pinned tools | **Electron-as-Node.** Spawn `process.execPath` with `ELECTRON_RUN_AS_NODE=1`. The user does not need their own Node.                                                                                                                                                                                                               |
+| Install mechanism            | Use **the user's `npm`**. Resolve it from `PATH`, then from `$SHELL -ilc 'command -v npm'`, then from `/opt/homebrew/bin/npm` or `/usr/local/bin/npm`. Run npm with its own directory prepended to `PATH`. If none of these is found, show a "Node.js/npm is required for setup" state. The registry-tarball fallback is deferred. |
+| Tool location                | `app.getPath("userData")/devices/tools/<name>/<version>`. These installs are machine-local, contain native modules, and are pinned. They are not portable user config, so they do not go under `aidenConfigDir()`.                                                                                                                 |
+| Decoder path                 | **WebCodecs H.264 (AVCC)** is the primary path. The MJPEG `<img>` is the fallback.                                                                                                                                                                                                                                                 |
+| agent-device quick-start     | `open <bundleId>` must run before `snapshot`. The first `open` also builds the Apple runner.                                                                                                                                                                                                                                       |
 
 ## Task 0.1: Node runtime
 
@@ -39,14 +39,14 @@ Recorded 2026-09-25 on macOS 27.0, Xcode 27.1 (27A9269), Electron 43 (bundled No
 
 ## Hub HTTP surface (expo-device-hub 0.12.0)
 
-| Route | Result |
-| --- | --- |
-| `GET /api/devices` | `{ simulators: [{ id, name, version: "iOS 27.0", platform: "ios", booted, physical, supported, deviceFrame, lastUsedAt }], emulators: [], errors?: [{ message }] }`. iPads report `supported: false`. |
-| `POST /api/devices/boot` `{ platform, id, name }` | `{ ok, id?, error? }`. A cold boot can take minutes, so allow 3 minutes. |
-| `POST /vendor/serve-sim/grid/api/start` `{ udid }` | `{ ok: true }`. This attaches the stream helper. It is required even for an already-booted device. **Main calls it directly on the hub. It is never proxied.** |
-| `GET /vendor/serve-sim/api` | `{ pid, port, device, url, streamUrl: …/helper/<udid>/stream.mjpeg, wsUrl: …/helper/<udid>/ws, basePath }` |
-| `POST /vendor/serve-sim/api/screenshot` `{ udid }` | `200 image/png` |
-| `GET /vendor/serve-sim/helper/<udid>/{config,health,stream.mjpeg,stream.avcc}` | All work. The MJPEG stream is `multipart/x-mixed-replace` with a `--frame` boundary. |
+| Route                                                                          | Result                                                                                                                                                                                                |
+| ------------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `GET /api/devices`                                                             | `{ simulators: [{ id, name, version: "iOS 27.0", platform: "ios", booted, physical, supported, deviceFrame, lastUsedAt }], emulators: [], errors?: [{ message }] }`. iPads report `supported: false`. |
+| `POST /api/devices/boot` `{ platform, id, name }`                              | `{ ok, id?, error? }`. A cold boot can take minutes, so allow 3 minutes.                                                                                                                              |
+| `POST /vendor/serve-sim/grid/api/start` `{ udid }`                             | `{ ok: true }`. This attaches the stream helper. It is required even for an already-booted device. **Main calls it directly on the hub. It is never proxied.**                                        |
+| `GET /vendor/serve-sim/api`                                                    | `{ pid, port, device, url, streamUrl: …/helper/<udid>/stream.mjpeg, wsUrl: …/helper/<udid>/ws, basePath }`                                                                                            |
+| `POST /vendor/serve-sim/api/screenshot` `{ udid }`                             | `200 image/png`                                                                                                                                                                                       |
+| `GET /vendor/serve-sim/helper/<udid>/{config,health,stream.mjpeg,stream.avcc}` | All work. The MJPEG stream is `multipart/x-mixed-replace` with a `--frame` boundary.                                                                                                                  |
 
 **Correction (Phase 3 manual test):** serve-sim's config reports a per-device `wsUrl` (`/vendor/serve-sim/helper/<udid>/ws`). That is the standalone serve-sim path. expo-device-hub routes WebSockets by exact path and destroys that upgrade. Under the hub, the input socket is `/vendor/serve-sim/helper/ws?device=<udid>`, as T3 uses. The proxy allows only that path and requires a well-formed `device`.
 

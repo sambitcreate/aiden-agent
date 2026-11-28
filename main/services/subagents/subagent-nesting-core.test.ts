@@ -11,9 +11,7 @@ import {
   type SubagentTreeSchedulerTaskV2,
 } from "./subagent-nesting-core.js";
 
-function capabilities(
-  overrides: Partial<SubagentCapabilitySetV2> = {},
-): SubagentCapabilitySetV2 {
+function capabilities(overrides: Partial<SubagentCapabilitySetV2> = {}): SubagentCapabilitySetV2 {
   return {
     workspaceRead: true,
     workspaceWrite: false,
@@ -25,9 +23,7 @@ function capabilities(
   };
 }
 
-function rootNode(
-  overrides: { capabilities?: SubagentCapabilitySetV2; tools?: string[] } = {},
-) {
+function rootNode(overrides: { capabilities?: SubagentCapabilitySetV2; tools?: string[] } = {}) {
   return createSubagentTreeRootV2({
     treeRootId: "generation-root",
     runId: "generation-root",
@@ -80,16 +76,10 @@ function limits(overrides: Partial<SubagentTreeBudgetLimitsV2> = {}) {
   };
 }
 
-async function withDeadline<T>(
-  promise: Promise<T>,
-  milliseconds = 1_000,
-): Promise<T> {
+async function withDeadline<T>(promise: Promise<T>, milliseconds = 1_000): Promise<T> {
   let timer: ReturnType<typeof setTimeout> | undefined;
   const timeout = new Promise<never>((_, reject) => {
-    timer = setTimeout(
-      () => reject(new Error("test deadline exceeded")),
-      milliseconds,
-    );
+    timer = setTimeout(() => reject(new Error("test deadline exceeded")), milliseconds);
   });
   try {
     return await Promise.race([promise, timeout]);
@@ -130,10 +120,7 @@ test("tree identity derives exact depth-0, depth-1, and depth-2 lineage and free
   assert.ok(Object.isFrozen(root.fixedCeiling.workspace));
   assert.ok(Object.isFrozen(grandchild.capabilities));
   assert.ok(Object.isFrozen(grandchild.toolNames));
-  assert.throws(
-    () => childNode(grandchild, "too-deep"),
-    /cannot exceed depth 2/u,
-  );
+  assert.throws(() => childNode(grandchild, "too-deep"), /cannot exceed depth 2/u);
 });
 
 test("descendants can only narrow exact tool and capability ceilings", () => {
@@ -146,8 +133,7 @@ test("descendants can only narrow exact tool and capability ceilings", () => {
     /cannot widen its capability/u,
   );
   assert.throws(
-    () =>
-      childNode(root, "tool-widen", { tools: ["read_file", "run_command"] }),
+    () => childNode(root, "tool-widen", { tools: ["read_file", "run_command"] }),
     /cannot widen its tool/u,
   );
   assert.throws(
@@ -260,19 +246,12 @@ test("tree ledger reserves fan-out and usage atomically across every budget", ()
   ledger.activate(parent.identity.runId);
   const beforeFanout = ledger.snapshot();
   assert.throws(
-    () =>
-      ledger.reserveDescendantsAndSuspendParent(parent.identity.runId, [
-        first,
-        second,
-      ]),
+    () => ledger.reserveDescendantsAndSuspendParent(parent.identity.runId, [first, second]),
     /launch budget exhausted/u,
   );
   assert.deepEqual(ledger.snapshot(), beforeFanout);
 
-  const reservation = ledger.reserveDescendantsAndSuspendParent(
-    parent.identity.runId,
-    [first],
-  );
+  const reservation = ledger.reserveDescendantsAndSuspendParent(parent.identity.runId, [first]);
   assert.deepEqual(reservation.runIds, ["nested-1"]);
   assert.equal(reservation.parentRunId, "parent-1");
   assert.deepEqual(ledger.snapshot(), {
@@ -445,17 +424,13 @@ test("ledger rejects hostile budget and usage getters without partial mutation",
 
   const ledger = new SubagentTreeBudgetLedgerV2("generation-root", limits());
   let usageReads = 0;
-  const hostileUsage = Object.defineProperty(
-    { tokens: 1, toolCalls: 1 },
-    "outputChars",
-    {
-      enumerable: true,
-      get() {
-        usageReads += 1;
-        return 1;
-      },
+  const hostileUsage = Object.defineProperty({ tokens: 1, toolCalls: 1 }, "outputChars", {
+    enumerable: true,
+    get() {
+      usageReads += 1;
+      return 1;
     },
-  );
+  });
   assert.throws(() => ledger.consumeUsage(hostileUsage), /usage fields/u);
   assert.equal(usageReads, 0);
   assert.equal(ledger.snapshot().tokens, 0);
@@ -467,10 +442,7 @@ test("local limit one releases a waiting parent so its descendant can run", asyn
   const nested = childNode(parent, "local-nested", {
     capabilities: capabilities({ delegation: false }),
   });
-  const ledger = new SubagentTreeBudgetLedgerV2(
-    root.identity.treeRootId,
-    limits({ maxActive: 1 }),
-  );
+  const ledger = new SubagentTreeBudgetLedgerV2(root.identity.treeRootId, limits({ maxActive: 1 }));
   const scheduler = new SubagentTreeSchedulerV2(ledger, {
     local: 1,
     hosted: 2,
@@ -504,12 +476,7 @@ test("local limit one releases a waiting parent so its descendant can run", asyn
   );
 
   assert.deepEqual(results, ["nested-result"]);
-  assert.deepEqual(events, [
-    "parent:start",
-    "nested:start",
-    "nested:end",
-    "parent:resume",
-  ]);
+  assert.deepEqual(events, ["parent:start", "nested:start", "nested:end", "parent:resume"]);
   assert.equal(ledger.snapshot().active, 0);
   assert.equal(ledger.snapshot().queued, 0);
 });
@@ -518,10 +485,7 @@ test("scheduler removes one exact queued run without activating it", async () =>
   const root = rootNode();
   const first = childNode(root, "cancel-first");
   const queued = childNode(root, "cancel-queued");
-  const ledger = new SubagentTreeBudgetLedgerV2(
-    root.identity.treeRootId,
-    limits({ maxActive: 1 }),
-  );
+  const ledger = new SubagentTreeBudgetLedgerV2(root.identity.treeRootId, limits({ maxActive: 1 }));
   const scheduler = new SubagentTreeSchedulerV2(ledger, {
     local: 1,
     hosted: 2,
@@ -570,10 +534,7 @@ test("scheduler removes one exact queued run without activating it", async () =>
 
 test("hosted limit two releases simultaneous waiting parents and preserves request order", async () => {
   const root = rootNode();
-  const parents = [
-    childNode(root, "hosted-parent-1"),
-    childNode(root, "hosted-parent-2"),
-  ];
+  const parents = [childNode(root, "hosted-parent-1"), childNode(root, "hosted-parent-2")];
   const nested = [
     childNode(parents[0]!, "hosted-nested-1", {
       capabilities: capabilities({ delegation: false }),
@@ -582,10 +543,7 @@ test("hosted limit two releases simultaneous waiting parents and preserves reque
       capabilities: capabilities({ delegation: false }),
     }),
   ];
-  const ledger = new SubagentTreeBudgetLedgerV2(
-    root.identity.treeRootId,
-    limits({ maxActive: 2 }),
-  );
+  const ledger = new SubagentTreeBudgetLedgerV2(root.identity.treeRootId, limits({ maxActive: 2 }));
   const scheduler = new SubagentTreeSchedulerV2(ledger, {
     local: 1,
     hosted: 2,
@@ -630,10 +588,7 @@ test("hosted limit two releases simultaneous waiting parents and preserves reque
 test("scheduler fan-out failure is atomic and leaves the parent execution lease live", async () => {
   const root = rootNode();
   const parent = childNode(root, "atomic-parent");
-  const nested = [
-    childNode(parent, "atomic-child-1"),
-    childNode(parent, "atomic-child-2"),
-  ];
+  const nested = [childNode(parent, "atomic-child-1"), childNode(parent, "atomic-child-2")];
   const ledger = new SubagentTreeBudgetLedgerV2(
     root.identity.treeRootId,
     limits({ maxLaunches: 2, maxActive: 1 }),
@@ -740,10 +695,7 @@ test("root cancellation drains running top-level siblings after rejecting queued
   const root = rootNode();
   const active = childNode(root, "root-active");
   const queued = childNode(root, "root-queued");
-  const ledger = new SubagentTreeBudgetLedgerV2(
-    root.identity.treeRootId,
-    limits({ maxActive: 1 }),
-  );
+  const ledger = new SubagentTreeBudgetLedgerV2(root.identity.treeRootId, limits({ maxActive: 1 }));
   const scheduler = new SubagentTreeSchedulerV2(ledger, {
     local: 1,
     hosted: 2,

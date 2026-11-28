@@ -45,7 +45,7 @@ test("child environment keeps PATH but strips credentials, Electron switches and
 
 test("redaction removes tokens, keys and OAuth parameters", () => {
   const redacted = redactSecrets(
-    "Bearer abcdefghijklmnop ya29.a0AbC AIzaSyD-abcdefghijklmnopqrstu https://x/?code=4/abc&state=xyz refresh_token\":\"1//0gAbCdEfGhIjKlMnOpQrStUv",
+    'Bearer abcdefghijklmnop ya29.a0AbC AIzaSyD-abcdefghijklmnopqrstu https://x/?code=4/abc&state=xyz refresh_token":"1//0gAbCdEfGhIjKlMnOpQrStUv',
   );
   assert.doesNotMatch(redacted, /abcdefghijklmnop|ya29\.a0|AIzaSyD|4\/abc|state=xyz|1\/\/0gAb/u);
 });
@@ -159,7 +159,12 @@ test("an oversized protocol line fails the input stream and closes the agent wit
     });
     const reader = child.input.getReader();
     const read = reader.read();
-    fake.stdout.write(Buffer.concat([Buffer.from('{"jsonrpc":"2.0","id":1,"result":"'), Buffer.alloc(17 * 1024 * 1024, 0x61)]));
+    fake.stdout.write(
+      Buffer.concat([
+        Buffer.from('{"jsonrpc":"2.0","id":1,"result":"'),
+        Buffer.alloc(17 * 1024 * 1024, 0x61),
+      ]),
+    );
     await assert.rejects(read, /oversized protocol line/u);
     const exit = await child.exited;
     assert.equal(exit.signal, "SIGTERM");
@@ -171,53 +176,62 @@ test("an oversized protocol line fails the input stream and closes the agent wit
   }
 });
 
-test("closing a process stops its whole group, including children that ignore TERM", { skip: process.platform === "win32" }, async () => {
-  const dir = tempDir();
-  const pidFile = path.join(dir, "grandchild.pid");
-  const child = new AcpProcess({
-    command: process.execPath,
-    args: [
-      "-e",
-      `const {spawn}=require('node:child_process');const c=spawn(process.execPath,['-e',"process.on('SIGTERM',()=>{});setInterval(()=>{},1000)"],{stdio:'ignore'});require('node:fs').writeFileSync(${JSON.stringify(pidFile)},String(c.pid));process.on('SIGTERM',()=>{});setInterval(()=>{},1000);`,
-    ],
-    cwd: dir,
-    env: { PATH: process.env.PATH ?? "" },
-  });
-  const { readFileSync, existsSync } = await import("node:fs");
-  for (let attempt = 0; attempt < 50 && !existsSync(pidFile); attempt += 1) {
-    await new Promise((resolve) => setTimeout(resolve, 50));
-  }
-  const grandchild = Number(readFileSync(pidFile, "utf8"));
-  await child.close();
-  assert.equal(child.alive, false);
-  // A killed process can linger briefly as a zombie until it is reaped; it
-  // no longer runs, so treat that state as stopped.
-  const stopped = () => {
-    try {
-      process.kill(grandchild, 0);
-    } catch {
-      return true;
+test(
+  "closing a process stops its whole group, including children that ignore TERM",
+  { skip: process.platform === "win32" },
+  async () => {
+    const dir = tempDir();
+    const pidFile = path.join(dir, "grandchild.pid");
+    const child = new AcpProcess({
+      command: process.execPath,
+      args: [
+        "-e",
+        `const {spawn}=require('node:child_process');const c=spawn(process.execPath,['-e',"process.on('SIGTERM',()=>{});setInterval(()=>{},1000)"],{stdio:'ignore'});require('node:fs').writeFileSync(${JSON.stringify(pidFile)},String(c.pid));process.on('SIGTERM',()=>{});setInterval(()=>{},1000);`,
+      ],
+      cwd: dir,
+      env: { PATH: process.env.PATH ?? "" },
+    });
+    const { readFileSync, existsSync } = await import("node:fs");
+    for (let attempt = 0; attempt < 50 && !existsSync(pidFile); attempt += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 50));
     }
-    try {
-      return execFileSync("ps", ["-o", "stat=", "-p", String(grandchild)], { encoding: "utf8" }).trim().startsWith("Z");
-    } catch {
-      return true;
+    const grandchild = Number(readFileSync(pidFile, "utf8"));
+    await child.close();
+    assert.equal(child.alive, false);
+    // A killed process can linger briefly as a zombie until it is reaped; it
+    // no longer runs, so treat that state as stopped.
+    const stopped = () => {
+      try {
+        process.kill(grandchild, 0);
+      } catch {
+        return true;
+      }
+      try {
+        return execFileSync("ps", ["-o", "stat=", "-p", String(grandchild)], { encoding: "utf8" })
+          .trim()
+          .startsWith("Z");
+      } catch {
+        return true;
+      }
+    };
+    for (let attempt = 0; attempt < 150 && !stopped(); attempt += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 20));
     }
-  };
-  for (let attempt = 0; attempt < 150 && !stopped(); attempt += 1) {
-    await new Promise((resolve) => setTimeout(resolve, 20));
-  }
-  assert.ok(stopped(), "the grandchild that ignored TERM was killed with its group");
-});
+    assert.ok(stopped(), "the grandchild that ignored TERM was killed with its group");
+  },
+);
 
-test("an agent still running when Aiden exits is killed with the app", { skip: process.platform === "win32" }, async () => {
-  const dir = tempDir();
-  const script = path.join(dir, "app.mts");
-  const processModule = new URL("./process.ts", import.meta.url).href;
-  // The app starts an agent that ignores TERM and exits before any async teardown runs.
-  writeFileSync(
-    script,
-    `import { AcpProcess } from ${JSON.stringify(processModule)};
+test(
+  "an agent still running when Aiden exits is killed with the app",
+  { skip: process.platform === "win32" },
+  async () => {
+    const dir = tempDir();
+    const script = path.join(dir, "app.mts");
+    const processModule = new URL("./process.ts", import.meta.url).href;
+    // The app starts an agent that ignores TERM and exits before any async teardown runs.
+    writeFileSync(
+      script,
+      `import { AcpProcess } from ${JSON.stringify(processModule)};
 const agent = new AcpProcess({
   command: process.execPath,
   args: ["-e", "process.on('SIGTERM', () => {}); setInterval(() => {}, 1000)"],
@@ -227,38 +241,46 @@ const agent = new AcpProcess({
 process.stdout.write(String(agent.pid));
 setTimeout(() => process.exit(0), 200);
 `,
-  );
-  const agentPid = Number(
-    execFileSync(process.execPath, ["--import", "tsx", script], { encoding: "utf8", timeout: 30_000 }).trim(),
-  );
-  assert.ok(Number.isSafeInteger(agentPid) && agentPid > 1);
-  const running = () => {
+    );
+    const agentPid = Number(
+      execFileSync(process.execPath, ["--import", "tsx", script], {
+        encoding: "utf8",
+        timeout: 30_000,
+      }).trim(),
+    );
+    assert.ok(Number.isSafeInteger(agentPid) && agentPid > 1);
+    const running = () => {
+      try {
+        process.kill(agentPid, 0);
+      } catch {
+        return false;
+      }
+      try {
+        return !execFileSync("ps", ["-o", "stat=", "-p", String(agentPid)], { encoding: "utf8" })
+          .trim()
+          .startsWith("Z");
+      } catch {
+        return false;
+      }
+    };
     try {
-      process.kill(agentPid, 0);
-    } catch {
-      return false;
+      for (let attempt = 0; attempt < 100 && running(); attempt += 1) {
+        await new Promise((resolve) => setTimeout(resolve, 20));
+      }
+      assert.equal(running(), false, "the agent did not outlive the app");
+    } finally {
+      try {
+        process.kill(agentPid, "SIGKILL");
+      } catch {
+        // Already stopped.
+      }
     }
-    try {
-      return !execFileSync("ps", ["-o", "stat=", "-p", String(agentPid)], { encoding: "utf8" }).trim().startsWith("Z");
-    } catch {
-      return false;
-    }
-  };
-  try {
-    for (let attempt = 0; attempt < 100 && running(); attempt += 1) {
-      await new Promise((resolve) => setTimeout(resolve, 20));
-    }
-    assert.equal(running(), false, "the agent did not outlive the app");
-  } finally {
-    try {
-      process.kill(agentPid, "SIGKILL");
-    } catch {
-      // Already stopped.
-    }
-  }
-});
+  },
+);
 
-function fakeLedgerSystem(processes: Record<number, { group: number; command: string; env?: string[] }>) {
+function fakeLedgerSystem(
+  processes: Record<number, { group: number; command: string; env?: string[] }>,
+) {
   const killed: number[] = [];
   const alive = new Set(Object.keys(processes).map(Number));
   const dependencies = {
@@ -266,11 +288,15 @@ function fakeLedgerSystem(processes: Record<number, { group: number; command: st
     commandOf: async (pid: number) => (alive.has(pid) ? processes[pid]!.command : undefined),
     killGroup: (pgid: number) => {
       killed.push(pgid);
-      for (const pid of [...alive]) if (processes[pid]!.group === pgid && !processes[pid]!.env?.includes("IGNORES_KILL=1")) alive.delete(pid);
+      for (const pid of [...alive])
+        if (processes[pid]!.group === pgid && !processes[pid]!.env?.includes("IGNORES_KILL=1"))
+          alive.delete(pid);
     },
     groupExists: (pgid: number) => [...alive].some((pid) => processes[pid]!.group === pgid),
-    groupMembers: async (pgid: number) => [...alive].filter((pid) => processes[pid]!.group === pgid),
-    hasEnvironment: async (pid: number, entry: string) => alive.has(pid) && !!processes[pid]!.env?.includes(entry),
+    groupMembers: async (pgid: number) =>
+      [...alive].filter((pid) => processes[pid]!.group === pgid),
+    hasEnvironment: async (pid: number, entry: string) =>
+      alive.has(pid) && !!processes[pid]!.env?.includes(entry),
   };
   return { dependencies, killed };
 }
@@ -287,9 +313,11 @@ test("finished requests to a running agent are not kept alive until it exits", a
   const connection = new AcpConnection(agent);
 
   // The type-check lib predates WeakRef; Node has had it since 14.6.
-  const WeakReference = (globalThis as unknown as {
-    WeakRef: new <T extends object>(target: T) => { deref(): T | undefined };
-  }).WeakRef;
+  const WeakReference = (
+    globalThis as unknown as {
+      WeakRef: new <T extends object>(target: T) => { deref(): T | undefined };
+    }
+  ).WeakRef;
   const signals: Array<{ deref(): AbortSignal | undefined }> = [];
   for (let index = 0; index < 20; index += 1) {
     const controller = new AbortController();
@@ -353,70 +381,87 @@ test("the pid ledger stops tools an agent left behind when the agent itself is g
 test("the pid ledger keeps a group that outlived the kill for the next sweep", async () => {
   const file = path.join(tempDir(), "processes.json");
   const { dependencies } = fakeLedgerSystem({
-    11: { group: 10, command: "node server.js", env: [`AIDEN_ACP_RUN=${MARKER_A}`, "IGNORES_KILL=1"] },
+    11: {
+      group: 10,
+      command: "node server.js",
+      env: [`AIDEN_ACP_RUN=${MARKER_A}`, "IGNORES_KILL=1"],
+    },
   });
   const ledger = new AcpPidLedger(file, dependencies);
   ledger.record(10, "/runtime/agy_acp_server.par", MARKER_A);
   await ledger.flush();
   const reopened = new AcpPidLedger(file, dependencies);
   assert.equal(await reopened.sweep(), 1);
-  assert.deepEqual(reopened.snapshot().map((entry) => entry.pid), [10]);
+  assert.deepEqual(
+    reopened.snapshot().map((entry) => entry.pid),
+    [10],
+  );
   assert.equal(new AcpPidLedger(file, dependencies).snapshot()[0]?.marker, MARKER_A);
 });
 
-test("a crash sweep stops a real tool process whose agent already exited", { skip: process.platform === "win32" }, async () => {
-  const dir = tempDir();
-  const pidFile = path.join(dir, "tool.pid");
-  const marker = "c".repeat(32);
-  const { spawn } = await import("node:child_process");
-  const { existsSync, readFileSync } = await import("node:fs");
-  // The agent starts a long-running tool in its own group, then exits as if
-  // Aiden had crashed underneath it.
-  const agent = spawn(
-    process.execPath,
-    [
-      "-e",
-      `const {spawn}=require('node:child_process');const c=spawn(process.execPath,['-e','setInterval(()=>{},1000)'],{stdio:'ignore'});require('node:fs').writeFileSync(${JSON.stringify(pidFile)},String(c.pid));process.exit(0);`,
-    ],
-    { detached: true, stdio: "ignore", env: { PATH: process.env.PATH ?? "", AIDEN_ACP_RUN: marker } },
-  );
-  const agentPid = agent.pid!;
-  await new Promise((resolve) => agent.once("exit", resolve));
-  for (let attempt = 0; attempt < 50 && !existsSync(pidFile); attempt += 1) {
-    await new Promise((resolve) => setTimeout(resolve, 50));
-  }
-  const tool = Number(readFileSync(pidFile, "utf8"));
-  const running = () => {
+test(
+  "a crash sweep stops a real tool process whose agent already exited",
+  { skip: process.platform === "win32" },
+  async () => {
+    const dir = tempDir();
+    const pidFile = path.join(dir, "tool.pid");
+    const marker = "c".repeat(32);
+    const { spawn } = await import("node:child_process");
+    const { existsSync, readFileSync } = await import("node:fs");
+    // The agent starts a long-running tool in its own group, then exits as if
+    // Aiden had crashed underneath it.
+    const agent = spawn(
+      process.execPath,
+      [
+        "-e",
+        `const {spawn}=require('node:child_process');const c=spawn(process.execPath,['-e','setInterval(()=>{},1000)'],{stdio:'ignore'});require('node:fs').writeFileSync(${JSON.stringify(pidFile)},String(c.pid));process.exit(0);`,
+      ],
+      {
+        detached: true,
+        stdio: "ignore",
+        env: { PATH: process.env.PATH ?? "", AIDEN_ACP_RUN: marker },
+      },
+    );
+    const agentPid = agent.pid!;
+    await new Promise((resolve) => agent.once("exit", resolve));
+    for (let attempt = 0; attempt < 50 && !existsSync(pidFile); attempt += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+    const tool = Number(readFileSync(pidFile, "utf8"));
+    const running = () => {
+      try {
+        process.kill(tool, 0);
+      } catch {
+        return false;
+      }
+      try {
+        return !execFileSync("ps", ["-o", "stat=", "-p", String(tool)], { encoding: "utf8" })
+          .trim()
+          .startsWith("Z");
+      } catch {
+        return false;
+      }
+    };
     try {
-      process.kill(tool, 0);
-    } catch {
-      return false;
+      assert.ok(running(), "the tool outlived its agent");
+      const file = path.join(dir, "processes.json");
+      const ledger = new AcpPidLedger(file);
+      ledger.record(agentPid, "/nonexistent/runtime/agent", marker);
+      await ledger.flush();
+      assert.equal(await new AcpPidLedger(file).sweep(), 1);
+      for (let attempt = 0; attempt < 100 && running(); attempt += 1) {
+        await new Promise((resolve) => setTimeout(resolve, 20));
+      }
+      assert.equal(running(), false, "the orphaned tool was stopped with its group");
+    } finally {
+      try {
+        process.kill(tool, "SIGKILL");
+      } catch {
+        // Already stopped.
+      }
     }
-    try {
-      return !execFileSync("ps", ["-o", "stat=", "-p", String(tool)], { encoding: "utf8" }).trim().startsWith("Z");
-    } catch {
-      return false;
-    }
-  };
-  try {
-    assert.ok(running(), "the tool outlived its agent");
-    const file = path.join(dir, "processes.json");
-    const ledger = new AcpPidLedger(file);
-    ledger.record(agentPid, "/nonexistent/runtime/agent", marker);
-    await ledger.flush();
-    assert.equal(await new AcpPidLedger(file).sweep(), 1);
-    for (let attempt = 0; attempt < 100 && running(); attempt += 1) {
-      await new Promise((resolve) => setTimeout(resolve, 20));
-    }
-    assert.equal(running(), false, "the orphaned tool was stopped with its group");
-  } finally {
-    try {
-      process.kill(tool, "SIGKILL");
-    } catch {
-      // Already stopped.
-    }
-  }
-});
+  },
+);
 
 test("session records persist, expire, and ignore corrupt files", async () => {
   const dir = tempDir();
@@ -475,8 +520,14 @@ test("schema sanitizing keeps literal values, so bridged tools advertise the arg
   const original = todo.parameters as JsonSchema;
   const sanitized = sanitizeSchema(todo.parameters)!;
   for (const property of ["action", "status"]) {
-    const literals = original.properties[property].anyOf.map((variant: JsonSchema) => variant.const);
-    assert.deepEqual(advertisedValues((sanitized.properties as JsonSchema)[property]), literals, property);
+    const literals = original.properties[property].anyOf.map(
+      (variant: JsonSchema) => variant.const,
+    );
+    assert.deepEqual(
+      advertisedValues((sanitized.properties as JsonSchema)[property]),
+      literals,
+      property,
+    );
   }
   for (const action of advertisedValues((sanitized.properties as JsonSchema).action)) {
     assert.equal(Value.Check(todo.parameters, { action }), true, `${String(action)} is accepted`);
@@ -488,9 +539,12 @@ test("schema sanitizing keeps literal values, so bridged tools advertise the arg
     supportsImages: true,
     port: {} as never,
   }).find((tool) => tool.name === "device_open")!;
-  const platforms = advertisedValues((sanitizeSchema(deviceOpen.parameters)!.properties as JsonSchema).platform);
+  const platforms = advertisedValues(
+    (sanitizeSchema(deviceOpen.parameters)!.properties as JsonSchema).platform,
+  );
   assert.deepEqual(platforms, ["ios", "android"]);
-  for (const platform of platforms) assert.equal(Value.Check(deviceOpen.parameters, { platform }), true);
+  for (const platform of platforms)
+    assert.equal(Value.Check(deviceOpen.parameters, { platform }), true);
 
   // Object variants told apart only by a literal `kind` keep it.
   const target = sanitizeSchema(
@@ -510,7 +564,10 @@ test("schema sanitizing never requires a property it does not describe", () => {
   const todo = createTodoExtensionRuntime({ tasks: [], nextId: 1 }).extension.tools![0]!;
   for (const node of [...objectNodes(sanitized), ...objectNodes(sanitizeSchema(todo.parameters))]) {
     for (const name of (node.required ?? []) as string[]) {
-      assert.ok(Object.prototype.hasOwnProperty.call(node.properties, name), `${name} is required and described`);
+      assert.ok(
+        Object.prototype.hasOwnProperty.call(node.properties, name),
+        `${name} is required and described`,
+      );
     }
   }
   assert.deepEqual((sanitized.required as string[]).sort(), ["name", "payload"]);
@@ -519,7 +576,9 @@ test("schema sanitizing never requires a property it does not describe", () => {
 test("the tool bridge requires its bearer token and validates arguments against the original schema", async () => {
   const calls: unknown[] = [];
   const bridge = new AcpMcpBridge({
-    tools: [{ name: "lookup", description: "d", parameters: Type.Object({ value: Type.String() }) }],
+    tools: [
+      { name: "lookup", description: "d", parameters: Type.Object({ value: Type.String() }) },
+    ],
     onCall: async (invocation) => {
       calls.push(invocation);
       return { content: [{ type: "text", text: "ok" }] };
@@ -535,8 +594,17 @@ test("the tool bridge requires its bearer token and validates arguments against 
   const call = async (args: unknown) => {
     const response = await fetch(url, {
       method: "POST",
-      headers: { authorization: auth, "content-type": "application/json", accept: "application/json, text/event-stream" },
-      body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "aiden_lookup", arguments: args } }),
+      headers: {
+        authorization: auth,
+        "content-type": "application/json",
+        accept: "application/json, text/event-stream",
+      },
+      body: JSON.stringify({
+        jsonrpc: "2.0",
+        id: 1,
+        method: "tools/call",
+        params: { name: "aiden_lookup", arguments: args },
+      }),
     });
     return response.text();
   };

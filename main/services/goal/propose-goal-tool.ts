@@ -20,7 +20,7 @@ const PARAMETERS = Type.Object(
 );
 
 export const PROPOSE_GOAL_DESCRIPTION =
-  "Suggest a keep-going goal for this chat: the person sees a card \"Keep going until: <objective>\" with Start and Not now, and only their Start sets it. " +
+  'Suggest a keep-going goal for this chat: the person sees a card "Keep going until: <objective>" with Start and Not now, and only their Start sets it. ' +
   "With a goal, Aiden keeps working in new rounds after each answer until the objective is met or the person is needed. " +
   "Suggest one when the request is a multi-step outcome that will clearly take several answers (fix a failing suite, finish a migration), not for a question or a quick change. " +
   "Suggest at most once per request; after Not now, don't suggest again unless the person asks. Carry on answering normally after suggesting.";
@@ -29,7 +29,10 @@ function text(value: string) {
   return { content: [{ type: "text" as const, text: value }], details: undefined };
 }
 
-export function createProposeGoalTool(context: { chatId: string; proposals: Pick<GoalProposals, "propose"> }): AgentTool {
+export function createProposeGoalTool(context: {
+  chatId: string;
+  proposals: Pick<GoalProposals, "propose">;
+}): AgentTool {
   return {
     name: PROPOSE_GOAL_TOOL_NAME,
     label: "Suggest a goal",
@@ -44,7 +47,9 @@ export function createProposeGoalTool(context: { chatId: string; proposals: Pick
           `The person now sees "Keep going until: ${proposal.objective}" with Start and Not now. Nothing starts unless they press Start. Don't repeat the suggestion; carry on with your answer.`,
         );
       } catch (error) {
-        return text(`The goal wasn't suggested: ${error instanceof Error ? error.message : "it couldn't be shown"}`);
+        return text(
+          `The goal wasn't suggested: ${error instanceof Error ? error.message : "it couldn't be shown"}`,
+        );
       }
     },
   };

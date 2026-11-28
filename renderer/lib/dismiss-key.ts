@@ -13,7 +13,9 @@ export interface DismissKeyEvent {
 
 /** An input method is composing; keyCode 229 is how Chromium marks its keys. */
 export function isComposingKey(event: DismissKeyEvent): boolean {
-  return event.isComposing === true || event.nativeEvent?.isComposing === true || event.keyCode === 229;
+  return (
+    event.isComposing === true || event.nativeEvent?.isComposing === true || event.keyCode === 229
+  );
 }
 
 /**

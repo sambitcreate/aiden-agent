@@ -47,8 +47,7 @@ test("subagent request parsing preserves the authored task exactly", () => {
 
 test("projected task previews and model identifiers preserve safe input exactly", () => {
   const task = "Investigate the provider boundary and report back";
-  const modelId =
-    "openrouter/deepseek/deepseek-v3.2-session-123e4567-e89b-12d3-a456-426614174000";
+  const modelId = "openrouter/deepseek/deepseek-v3.2-session-123e4567-e89b-12d3-a456-426614174000";
   const projector = new SubagentEventProjector({
     generationId: "generation-semantic-preservation",
     chatId: "chat-semantic-preservation",
@@ -107,10 +106,7 @@ test("actual credentials and private keys stay redacted at model and snapshot ex
   ];
 
   for (const value of unsafe) {
-    for (const sanitize of [
-      sanitizeSubagentText,
-      sanitizeSubagentSnapshotText,
-    ]) {
+    for (const sanitize of [sanitizeSubagentText, sanitizeSubagentSnapshotText]) {
       const safe = sanitize(value);
       assert.notEqual(safe, value);
       assert.match(safe, /REDACTED/u);
@@ -135,10 +131,7 @@ test("terminal controls cannot survive either exposure boundary", () => {
   ];
 
   for (const value of unsafe) {
-    for (const sanitize of [
-      sanitizeSubagentText,
-      sanitizeSubagentSnapshotText,
-    ]) {
+    for (const sanitize of [sanitizeSubagentText, sanitizeSubagentSnapshotText]) {
       const safe = sanitize(value);
       assert.doesNotMatch(safe, terminalControl);
       assert.doesNotMatch(safe, /actual-secret-value/u);
@@ -177,7 +170,10 @@ test("a task with JSON: and TASK: label blocks shows in full in the saved panel 
   );
   assert.equal(snapshot.projectionNotices, undefined);
   assert.deepEqual(parseSubagentRunSnapshotV1(snapshot), snapshot);
-  assert.equal(sanitizeSubagentText(IMPLEMENTER_TASK_WITH_LABEL_BLOCKS), IMPLEMENTER_TASK_WITH_LABEL_BLOCKS);
+  assert.equal(
+    sanitizeSubagentText(IMPLEMENTER_TASK_WITH_LABEL_BLOCKS),
+    IMPLEMENTER_TASK_WITH_LABEL_BLOCKS,
+  );
 });
 
 test("a real API_KEY: block stays hidden while the text around it survives", () => {
@@ -191,7 +187,11 @@ test("a real API_KEY: block stays hidden while the text around it survives", () 
 });
 
 const SECRET_NAMED_BLOCKS = [
-  { name: "PASSPHRASE", text: "Setup:\nPASSPHRASE:\n  correct-horse-battery\nDone.", secrets: ["correct-horse-battery"] },
+  {
+    name: "PASSPHRASE",
+    text: "Setup:\nPASSPHRASE:\n  correct-horse-battery\nDone.",
+    secrets: ["correct-horse-battery"],
+  },
   { name: "KEY", text: "Setup:\nKEY:\n  zq81LmPq0xWv\nDone.", secrets: ["zq81LmPq0xWv"] },
   { name: "APITOKEN", text: "Setup:\nAPITOKEN:\n  tok9vXaa71Rr\nDone.", secrets: ["tok9vXaa71Rr"] },
   { name: "API_KEY", text: "Setup:\nAPI_KEY:\n  mz71Qa0bWx4Kp\nDone.", secrets: ["mz71Qa0bWx4Kp"] },
@@ -237,13 +237,18 @@ for (const block of SECRET_NAMED_BLOCKS) {
       { role: "scout", label: "Secret block", task: block.text },
     );
     const preview = projector.snapshot()[0]?.taskPreview ?? "";
-    for (const safe of [sanitizeSubagentText(block.text), sanitizeSubagentSnapshotText(block.text)]) {
-      for (const secret of block.secrets) assert.ok(!safe.includes(secret), `${secret} leaked: ${safe}`);
+    for (const safe of [
+      sanitizeSubagentText(block.text),
+      sanitizeSubagentSnapshotText(block.text),
+    ]) {
+      for (const secret of block.secrets)
+        assert.ok(!safe.includes(secret), `${secret} leaked: ${safe}`);
       assert.match(safe, /^Setup:\n/u);
       assert.match(safe, /\nDone\.$/u);
     }
     // The one-line preview may hide more than the block, never less.
-    for (const secret of block.secrets) assert.ok(!preview.includes(secret), `${secret} leaked: ${preview}`);
+    for (const secret of block.secrets)
+      assert.ok(!preview.includes(secret), `${secret} leaked: ${preview}`);
     assert.match(preview, /^Setup: /u);
   });
 }
@@ -304,7 +309,10 @@ test("filtering already-filtered text changes nothing", () => {
 // Assembled at runtime so no key block sits in the source.
 const KEY_BEGIN = ["-----BEGIN", "OPENSSH", "PRIVATE", "KEY-----"].join(" ");
 const KEY_END = ["-----END", "OPENSSH", "PRIVATE", "KEY-----"].join(" ");
-const KEY_BODY = ["b3BlbnNzaC1rZXktdjEAAAAABG5vbmUAAAAEbm9uZQAAAAAAAAABAAAAMwAAAAtzc2gtZW", "QyNTUxOQAAACDhLz4wKzN0bXhyZWFsa2V5bWF0ZXJpYWxub3RmYWtlAAAAoHN0dWZm"];
+const KEY_BODY = [
+  "b3BlbnNzaC1rZXktdjEAAAAABG5vbmUAAAAEbm9uZQAAAAAAAAABAAAAMwAAAAtzc2gtZW",
+  "QyNTUxOQAAACDhLz4wKzN0bXhyZWFsa2V5bWF0ZXJpYWxub3RmYWtlAAAAoHN0dWZm",
+];
 
 test("a helper's saved words hide a whole private key block and keep the text around it", () => {
   const value = `Found this in ~/.ssh:\n${KEY_BEGIN}\n${KEY_BODY.join("\n")}\n${KEY_END}\nDone.`;
@@ -329,7 +337,10 @@ const SECRET_NAMED_SAME_LINE = [
   { text: "PASSCODE: 99812", secret: "99812" },
   { text: '{"cvv": "381"}', secret: "381" },
   { text: "CVV: 381", secret: "381" },
-  { text: "SEED: abandon ability able about above absent absorb abstract absurd abuse access accident", secret: "abandon ability" },
+  {
+    text: "SEED: abandon ability able about above absent absorb abstract absurd abuse access accident",
+    secret: "abandon ability",
+  },
   { text: "- TOTP_SECRET=JBSWY3DPEHPK3PXP", secret: "JBSWY3DPEHPK3PXP" },
 ];
 
@@ -360,11 +371,16 @@ test("labels without a secret name, and secret words used in prose, survive the 
 
 for (const name of ["OTP", "PASSCODE", "CVV", "SEED", "mnemonic", "signature"]) {
   test(`a ${name}: block on the next lines is hidden by the parent, snapshot and helper filters`, () => {
-    const secret = name === "SEED" || name === "mnemonic"
-      ? "abandon ability able about above absent absorb abstract absurd abuse access accident"
-      : "z8Kq2Lm0Px7Wv";
+    const secret =
+      name === "SEED" || name === "mnemonic"
+        ? "abandon ability able about above absent absorb abstract absurd abuse access accident"
+        : "z8Kq2Lm0Px7Wv";
     const value = `Setup:\n${name}:\n  ${secret}\nDone.`;
-    for (const safe of [sanitizeSubagentText(value), sanitizeSubagentSnapshotText(value), sanitizeSubagentWorkText(value)]) {
+    for (const safe of [
+      sanitizeSubagentText(value),
+      sanitizeSubagentSnapshotText(value),
+      sanitizeSubagentWorkText(value),
+    ]) {
       assert.ok(!safe.includes(secret), `${name} leaked: ${safe}`);
       assert.match(safe, /^Setup:\n/u);
       assert.match(safe, /\nDone\.$/u);
@@ -421,12 +437,21 @@ for (const { name, text, halves } of WRAPPED_SECRETS) {
 test("a value wrapped over three lines, or with a space or no digit in its tail, is hidden from the helper's words and the panel", () => {
   const key = ["sk", "proj", "FAKEFAKEFAKEFAKEFAKEFAKE0123456789abcdef"].join("-");
   for (const [text, pieces] of [
-    [`key ${key.slice(0, 16)}\n${key.slice(16, 32)}\n${key.slice(32)}`, [key.slice(16, 32), key.slice(32)]],
-    ["API_SECRET=FAKEabcd0123456789FAKE\nefgh9876543210FAKEt\nail0123456789FAKEFAKE", ["efgh9876", "ail0123"]],
+    [
+      `key ${key.slice(0, 16)}\n${key.slice(16, 32)}\n${key.slice(32)}`,
+      [key.slice(16, 32), key.slice(32)],
+    ],
+    [
+      "API_SECRET=FAKEabcd0123456789FAKE\nefgh9876543210FAKEt\nail0123456789FAKEFAKE",
+      ["efgh9876", "ail0123"],
+    ],
     ["API_SECRET=FAKEabcd0123456789FAKE\nefghijklmnopqrstuvwxyzFAKEtail", ["efghijklmnop"]],
     ["API_SECRET=FAKEabcd0123456789FAKE\nefgh9876 543210FAKEtail", ["efgh9876", "543210FAKE"]],
   ] as const) {
-    for (const safe of [sanitizeSubagentWorkText(`${text}\nDone.`), sanitizeSubagentSnapshotText(`${text}\nDone.`)]) {
+    for (const safe of [
+      sanitizeSubagentWorkText(`${text}\nDone.`),
+      sanitizeSubagentSnapshotText(`${text}\nDone.`),
+    ]) {
       for (const piece of pieces) assert.ok(!safe.includes(piece), `${piece} leaked: ${safe}`);
       assert.match(safe, /\nDone\.$/u);
     }
@@ -445,7 +470,8 @@ test("lines after a hidden path stay on the panel, while a wrapped key after a h
       assert.deepEqual(safe.split("\n").slice(1), value.split("\n").slice(1), safe);
     }
   }
-  const wrapped = "Repo at /Users/sam/projects/app\nAPI_SECRET=FAKEabcd0123456789FAKE\nefgh9876543210FAKEtail\nDone.";
+  const wrapped =
+    "Repo at /Users/sam/projects/app\nAPI_SECRET=FAKEabcd0123456789FAKE\nefgh9876543210FAKEtail\nDone.";
   for (const safe of [sanitizeSubagentSnapshotText(wrapped), sanitizeSubagentWorkText(wrapped)]) {
     assert.ok(!safe.includes("FAKEabcd0123") && !safe.includes("efgh9876"), safe);
     assert.match(safe, /\nDone\.$/u);
@@ -479,18 +505,23 @@ test("token counts stay readable in the helper's words and the panel, while a ke
   for (const safe of [
     sanitizeSubagentWorkText("max_tokens: sk-FAKEFAKEFAKEFAKEFAKE0123"),
     sanitizeSubagentSnapshotText("max_tokens: sk-FAKEFAKEFAKEFAKEFAKE0123"),
-  ]) assert.ok(!safe.includes("FAKEFAKEFAKE"), safe);
+  ])
+    assert.ok(!safe.includes("FAKEFAKEFAKE"), safe);
 });
 
 test("text after a hidden value keeps reading as text, including a closing code fence", () => {
-  assert.equal(sanitizeSubagentWorkText("API_SECRET=FAKEabcd0123456789FAKE\nDone."), "API_SECRET=[REDACTED]\nDone.");
+  assert.equal(
+    sanitizeSubagentWorkText("API_SECRET=FAKEabcd0123456789FAKE\nDone."),
+    "API_SECRET=[REDACTED]\nDone.",
+  );
   const fenced = sanitizeSubagentWorkText(
     "```\nAPI_SECRET=FAKEabcd0123456789FAKE\n```\nSee src/config.ts for the loader.",
   );
   assert.equal(fenced, "```\nAPI_SECRET=[REDACTED]\n```\nSee src/config.ts for the loader.");
 });
 
-const FAKE_PHRASE = "fake abandon ability able about above absent absorb abstract absurd abuse access";
+const FAKE_PHRASE =
+  "fake abandon ability able about above absent absorb abstract absurd abuse access";
 
 for (const text of [
   `Seed phrase: ${FAKE_PHRASE}`,
@@ -499,10 +530,15 @@ for (const text of [
   `seed phrase:\n  ${FAKE_PHRASE}`,
   `Seed: ${FAKE_PHRASE}.`,
   `recovery_phrase: ${FAKE_PHRASE}`,
-  `Recovery phrase: ${FAKE_PHRASE.split(" ").map((word, index) => `${index + 1}. ${word}`).join(" ")}`,
+  `Recovery phrase: ${FAKE_PHRASE.split(" ")
+    .map((word, index) => `${index + 1}. ${word}`)
+    .join(" ")}`,
 ]) {
   test(`a recovery phrase is hidden from the helper's words and the panel: ${JSON.stringify(text.slice(0, 18))}`, () => {
-    for (const safe of [sanitizeSubagentWorkText(`Wallet notes.\n${text}\nDone.`), sanitizeSubagentSnapshotText(`Wallet notes.\n${text}\nDone.`)]) {
+    for (const safe of [
+      sanitizeSubagentWorkText(`Wallet notes.\n${text}\nDone.`),
+      sanitizeSubagentSnapshotText(`Wallet notes.\n${text}\nDone.`),
+    ]) {
       for (const words of ["abandon ability", "absurd abuse", "access"]) {
         assert.ok(!safe.includes(words), `${words} leaked: ${safe}`);
       }
@@ -516,20 +552,31 @@ for (const text of [
   `Secret recovery phrase: ${FAKE_PHRASE}`,
   `My seed phrase: ${FAKE_PHRASE}`,
   `Your recovery phrase: ${FAKE_PHRASE}`,
-  `Seed phrase: ${FAKE_PHRASE.split(" ").map((word, index) => `${index + 1}.${word}`).join(" ")}`,
-  `Seed phrase: ${FAKE_PHRASE.split(" ").map((word, index) => `${index + 1}-${word}`).join(" ")}`,
+  `Seed phrase: ${FAKE_PHRASE.split(" ")
+    .map((word, index) => `${index + 1}.${word}`)
+    .join(" ")}`,
+  `Seed phrase: ${FAKE_PHRASE.split(" ")
+    .map((word, index) => `${index + 1}-${word}`)
+    .join(" ")}`,
   `Seed: ${FAKE_PHRASE.toUpperCase()}`,
-  `Seed: ${FAKE_PHRASE.split(" ").map((word) => `${word[0]!.toUpperCase()}${word.slice(1)}`).join(" ")}`,
+  `Seed: ${FAKE_PHRASE.split(" ")
+    .map((word) => `${word[0]!.toUpperCase()}${word.slice(1)}`)
+    .join(" ")}`,
   `Seed words: ${FAKE_PHRASE}`,
   `Mnemonic words: ${FAKE_PHRASE}`,
-  `Seed phrase:\n${FAKE_PHRASE.split(" ").map((word, index) => `${index + 1}. ${word}`).join("\n")}`,
+  `Seed phrase:\n${FAKE_PHRASE.split(" ")
+    .map((word, index) => `${index + 1}. ${word}`)
+    .join("\n")}`,
   `SEED_PHRASE:\n${FAKE_PHRASE.split(" ").join("\n")}`,
   `Seed phrase:\n${FAKE_PHRASE.split(" ").slice(0, 6).join(" ")}\n${FAKE_PHRASE.split(" ").slice(6).join(" ")}`,
   `Recovery phrase: ${FAKE_PHRASE.split(" ").slice(0, 6).join(" ")}\n${FAKE_PHRASE.split(" ").slice(6).join(" ")}`,
 ]) {
   test(`a recovery phrase after a leading word, in another case or layout is hidden: ${JSON.stringify(text.slice(0, 22))}`, () => {
     const label = text.slice(0, text.indexOf(":") + 1);
-    for (const safe of [sanitizeSubagentWorkText(`Wallet notes.\n${text}\n\nDone.`), sanitizeSubagentSnapshotText(`Wallet notes.\n${text}\n\nDone.`)]) {
+    for (const safe of [
+      sanitizeSubagentWorkText(`Wallet notes.\n${text}\n\nDone.`),
+      sanitizeSubagentSnapshotText(`Wallet notes.\n${text}\n\nDone.`),
+    ]) {
       for (const word of ["abandon", "absurd", "access"]) {
         assert.ok(!safe.toLowerCase().includes(word), `${word} leaked: ${safe}`);
       }
@@ -582,7 +629,10 @@ test("the panel hides the same one-line secret values as the helper's saved word
       assert.ok(!safe.includes(secret), `${secret} leaked: ${safe}`);
     }
   }
-  assert.equal(sanitizeSubagentSnapshotText("Passcode: 482913 then press OK"), "Passcode: [REDACTED] then press OK");
+  assert.equal(
+    sanitizeSubagentSnapshotText("Passcode: 482913 then press OK"),
+    "Passcode: [REDACTED] then press OK",
+  );
 });
 
 test("short secret names still hide real codes, wherever they sit on the line", () => {

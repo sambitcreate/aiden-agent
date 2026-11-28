@@ -12,7 +12,11 @@ import { writeJsonAtomic } from "./durable-fs.js";
 export const BOT_SKILL_APPROVALS_FILE = "skill-approvals.json";
 
 /** What is approved: the skill's name, description and instructions, exactly. */
-export function botSkillContentFingerprint(skill: { name: string; description: string; instructions: string }): string {
+export function botSkillContentFingerprint(skill: {
+  name: string;
+  description: string;
+  instructions: string;
+}): string {
   return createHash("sha256")
     .update("aiden-bot-home-skill-v1\0")
     .update(skill.name)
@@ -32,7 +36,8 @@ export interface BotSkillApprovals {
 
 export function createBotSkillApprovals(options: { profileDir(): string }): BotSkillApprovals {
   const serial = createKeyedSerial();
-  const fileOf = (botId: string) => path.join(botSessionDirectory(options.profileDir(), botId), BOT_SKILL_APPROVALS_FILE);
+  const fileOf = (botId: string) =>
+    path.join(botSessionDirectory(options.profileDir(), botId), BOT_SKILL_APPROVALS_FILE);
 
   async function load(botId: string): Promise<Record<string, string>> {
     try {
@@ -41,7 +46,8 @@ export function createBotSkillApprovals(options: { profileDir(): string }): BotS
       if (!approved || typeof approved !== "object" || Array.isArray(approved)) return {};
       return Object.fromEntries(
         Object.entries(approved as Record<string, unknown>).filter(
-          (entry): entry is [string, string] => typeof entry[1] === "string" && /^[a-f0-9]{64}$/u.test(entry[1]),
+          (entry): entry is [string, string] =>
+            typeof entry[1] === "string" && /^[a-f0-9]{64}$/u.test(entry[1]),
         ),
       );
     } catch {
@@ -50,7 +56,11 @@ export function createBotSkillApprovals(options: { profileDir(): string }): BotS
   }
 
   async function save(botId: string, approved: Record<string, string>): Promise<void> {
-    await writeJsonAtomic(fileOf(botId), { version: 1, approved }, { mode: 0o600, mkdirMode: 0o700 });
+    await writeJsonAtomic(
+      fileOf(botId),
+      { version: 1, approved },
+      { mode: 0o600, mkdirMode: 0o700 },
+    );
   }
 
   return {
@@ -58,7 +68,9 @@ export function createBotSkillApprovals(options: { profileDir(): string }): BotS
       return (await load(botId))[stableId] === contentFingerprint;
     },
     approve(botId, stableId, contentFingerprint) {
-      return serial(botId, async () => save(botId, { ...(await load(botId)), [stableId]: contentFingerprint }));
+      return serial(botId, async () =>
+        save(botId, { ...(await load(botId)), [stableId]: contentFingerprint }),
+      );
     },
     revoke(botId, stableId) {
       return serial(botId, async () => {

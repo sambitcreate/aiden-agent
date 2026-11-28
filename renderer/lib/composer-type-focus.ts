@@ -134,8 +134,8 @@ export function typingRedirectBlockedByOverlay(active: Element | null = null): b
 export function composerCanAcceptTyping(composer: HTMLTextAreaElement | null): boolean {
   return Boolean(
     composer?.isConnected &&
-      composer.getClientRects().length > 0 &&
-      !composer.closest("[inert], [aria-hidden='true']"),
+    composer.getClientRects().length > 0 &&
+    !composer.closest("[inert], [aria-hidden='true']"),
   );
 }
 
@@ -148,8 +148,7 @@ export function decideComposerTypeFocus(
   event: ComposerTypeFocusEvent,
   context: ComposerTypeFocusContext,
 ): ComposerTypeFocusDecision {
-  const altGr =
-    event.altGraph === true || (!context.macOS && event.ctrlKey && event.altKey);
+  const altGr = event.altGraph === true || (!context.macOS && event.ctrlKey && event.altKey);
   if (
     event.defaultPrevented ||
     event.isComposing ||

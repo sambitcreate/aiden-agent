@@ -2,13 +2,19 @@ import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { crashReporter } from "electron";
 
-import type { RendererDiagnosticKind, RendererDiagnosticPolicy } from "../../renderer/shared/diagnostics.js";
+import type {
+  RendererDiagnosticKind,
+  RendererDiagnosticPolicy,
+} from "../../renderer/shared/diagnostics.js";
 import { app, BrowserWindow, dialog, ipcMain, shell } from "../platform.js";
 import { currentRuntimeProfile } from "../runtime-profile.js";
 import { analyticsService } from "../services/analytics/analytics-main.js";
 import { chatStore } from "../services/chat-store.js";
 import { writeDiagnosticEvent } from "../services/diagnostic-journal.js";
-import { rendererDiagnosticClassification, type DiagnosticEventName } from "../services/diagnostics-contract.js";
+import {
+  rendererDiagnosticClassification,
+  type DiagnosticEventName,
+} from "../services/diagnostics-contract.js";
 import { rendererDocumentOwner } from "../services/renderer-document-owner.js";
 import { createRendererDiagnosticRateLimiter } from "../services/renderer-diagnostic-rate.js";
 import { parseRendererReport } from "../services/renderer-diagnostic-report.js";
@@ -58,7 +64,7 @@ export function registerDiagnosticHandlers(): void {
       runtimeProfile: profile.id,
       windowMs: MAIN_RATE_WINDOW_MS,
       maxPerKey: MAIN_MAX_PER_KEY,
-      errorDetails: rendererForwardingEnabled && await analyticsService().sendsErrorDetails(),
+      errorDetails: rendererForwardingEnabled && (await analyticsService().sendsErrorDetails()),
     };
   });
 
@@ -76,21 +82,29 @@ export function registerDiagnosticHandlers(): void {
       return { accepted: false, referenceId: report.referenceId };
     }
     const durableReferenceId = `RD-${randomUUID()}`;
-    writeDiagnosticEvent({
-      level: report.suppressed ? "warn" : "error",
-      area: "renderer",
-      event: RENDERER_EVENT_NAMES[report.kind],
-      ...rendererDiagnosticClassification(report.errorType, report.suppressed),
-      fields: {
-        errorType: report.errorType,
-        failurePhase: report.kind === "global-error" ? "renderer-script"
-          : report.kind === "unhandled-rejection" ? "renderer-promise"
-            : report.kind === "route-error" ? "renderer-route" : "renderer-react",
-        rendererContext: report.context,
-        referenceId: durableReferenceId,
-        suppressed: report.suppressed ?? 0,
+    writeDiagnosticEvent(
+      {
+        level: report.suppressed ? "warn" : "error",
+        area: "renderer",
+        event: RENDERER_EVENT_NAMES[report.kind],
+        ...rendererDiagnosticClassification(report.errorType, report.suppressed),
+        fields: {
+          errorType: report.errorType,
+          failurePhase:
+            report.kind === "global-error"
+              ? "renderer-script"
+              : report.kind === "unhandled-rejection"
+                ? "renderer-promise"
+                : report.kind === "route-error"
+                  ? "renderer-route"
+                  : "renderer-react",
+          rendererContext: report.context,
+          referenceId: durableReferenceId,
+          suppressed: report.suppressed ?? 0,
+        },
       },
-    }, errorDetails ? { rawError: errorDetails } : undefined);
+      errorDetails ? { rawError: errorDetails } : undefined,
+    );
     return { accepted: true, referenceId: durableReferenceId };
   });
 
@@ -111,14 +125,16 @@ export function registerDiagnosticHandlers(): void {
   });
   ipcMain.handle("diagnostics:export", async (event, includeCrashDumps: unknown) => {
     diagnosticOwner(event);
-    if (typeof includeCrashDumps !== "boolean") throw new Error("Invalid crash dump export choice.");
+    if (typeof includeCrashDumps !== "boolean")
+      throw new Error("Invalid crash dump export choice.");
     const parent = BrowserWindow.fromWebContents(event.sender);
     if (!parent) throw new Error("Diagnostics require the active Aiden window.");
     if (includeCrashDumps) {
       const confirmation = await dialog.showMessageBox(parent, {
         type: "warning",
         title: "Include sensitive crash dumps?",
-        message: "Crash memory may contain prompts, workspace content, credentials, or other in-memory data.",
+        message:
+          "Crash memory may contain prompts, workspace content, credentials, or other in-memory data.",
         detail: "The export stays on this device. Aiden will not upload it.",
         buttons: ["Cancel", "Include & export"],
         defaultId: 0,
@@ -130,12 +146,18 @@ export function registerDiagnosticHandlers(): void {
     const selection = parent
       ? await dialog.showSaveDialog(parent, {
           title: "Export Aiden diagnostics",
-          defaultPath: path.join(app.getPath("downloads"), `Aiden-Diagnostics-${Date.now()}.json.gz`),
+          defaultPath: path.join(
+            app.getPath("downloads"),
+            `Aiden-Diagnostics-${Date.now()}.json.gz`,
+          ),
           filters: [{ name: "Compressed JSON", extensions: ["gz"] }],
         })
       : await dialog.showSaveDialog({
           title: "Export Aiden diagnostics",
-          defaultPath: path.join(app.getPath("downloads"), `Aiden-Diagnostics-${Date.now()}.json.gz`),
+          defaultPath: path.join(
+            app.getPath("downloads"),
+            `Aiden-Diagnostics-${Date.now()}.json.gz`,
+          ),
           filters: [{ name: "Compressed JSON", extensions: ["gz"] }],
         });
     if (selection.canceled || !selection.filePath) return { exported: false as const };
@@ -159,14 +181,17 @@ export function registerDiagnosticHandlers(): void {
     const confirmation = await dialog.showMessageBox(parent, {
       type: "warning",
       title: "Enable local crash capture?",
-      message: "Crash memory may contain prompts, workspace content, credentials, or other in-memory data.",
-      detail: "Dumps stay on this device, are never uploaded automatically, and capture turns off when Aiden restarts.",
+      message:
+        "Crash memory may contain prompts, workspace content, credentials, or other in-memory data.",
+      detail:
+        "Dumps stay on this device, are never uploaded automatically, and capture turns off when Aiden restarts.",
       buttons: ["Cancel", "Enable until restart"],
       defaultId: 0,
       cancelId: 0,
       noLink: true,
     });
-    if (confirmation.response !== 1) return { enabled: false as const, expiresAt: null, disablesOnRestart: true as const };
+    if (confirmation.response !== 1)
+      return { enabled: false as const, expiresAt: null, disablesOnRestart: true as const };
     await pruneExpiredDiagnosticCrashDumps(profile.crashDumpsPath);
     const result = enableLocalCrashCapture(() => {
       crashReporter.start({

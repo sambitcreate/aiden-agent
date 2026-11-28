@@ -94,30 +94,30 @@ function Harness({
   return (
     <>
       {model ? (
-    <SubagentComposerPill
-      model={model}
-      open={open}
-      onOpenChange={setOpen}
-      stopPendingRunIds={stopPendingRunIds}
-      stopErrors={stopErrors}
-      returnFocus={() => calls.returnFocus ?? null}
-      onOpenRun={(runId, trigger) => {
-        calls.opened.push(runId);
-        calls.openedFrom.push(trigger);
-      }}
-      onOpenPanel={(returnTarget) => {
-        calls.panelOpenedFrom.push(returnTarget);
-      }}
-      onStop={(run) => {
-        calls.stopped.push(run);
-      }}
-      onShowInChat={(runIds) => {
-        calls.shownInChat.push([...runIds]);
-        return calls.revealable;
-      }}
-      onDismiss={dismiss}
-      shortcut="Command+Shift+S"
-    />
+        <SubagentComposerPill
+          model={model}
+          open={open}
+          onOpenChange={setOpen}
+          stopPendingRunIds={stopPendingRunIds}
+          stopErrors={stopErrors}
+          returnFocus={() => calls.returnFocus ?? null}
+          onOpenRun={(runId, trigger) => {
+            calls.opened.push(runId);
+            calls.openedFrom.push(trigger);
+          }}
+          onOpenPanel={(returnTarget) => {
+            calls.panelOpenedFrom.push(returnTarget);
+          }}
+          onStop={(run) => {
+            calls.stopped.push(run);
+          }}
+          onShowInChat={(runIds) => {
+            calls.shownInChat.push([...runIds]);
+            return calls.revealable;
+          }}
+          onDismiss={dismiss}
+          shortcut="Command+Shift+S"
+        />
       ) : null}
     </>
   );
@@ -214,7 +214,9 @@ test("the tray lists the batch, opens the headline run's live feed, and closes w
   });
   const tray = await screen.findByRole("dialog", { name: "Subagents" });
   assert.match(tray.textContent ?? "", /1 running · 1 done/u);
-  const rows = within(tray).getAllByRole("listitem").filter((item) => item.hasAttribute("data-subagent-pill-run-id"));
+  const rows = within(tray)
+    .getAllByRole("listitem")
+    .filter((item) => item.hasAttribute("data-subagent-pill-run-id"));
   assert.deepEqual(
     rows.map((row) => row.getAttribute("data-subagent-pill-run-id")),
     ["a", "b"],
@@ -226,7 +228,9 @@ test("the tray lists the batch, opens the headline run's live feed, and closes w
   // The last four milestones. The live step is read once, by the row above.
   assert.match(runA.textContent ?? "", /Searching workspace text/u);
   assert.deepEqual(
-    within(feed).getAllByRole("listitem").map((item) => item.textContent),
+    within(feed)
+      .getAllByRole("listitem")
+      .map((item) => item.textContent),
     ["Looked in a folder", "Found files by name", "Searched the files", "Read a file"],
   );
   assert.match(tray.textContent ?? "", /The parser lives in renderer\/lib\./u);
@@ -284,7 +288,10 @@ test("a run's feed names its model the way people see it, skips a zero tool coun
     }),
   ]);
   assert.deepEqual(steps(), ["Read a file", "Wrote its report"]);
-  assert.match(screen.getByRole("dialog", { name: "Subagents" }).textContent ?? "", /2 tool calls/u);
+  assert.match(
+    screen.getByRole("dialog", { name: "Subagents" }).textContent ?? "",
+    /2 tool calls/u,
+  );
 });
 
 test("tray actions open runs and the panel, reveal the transcript, and stop foreground runs", async () => {
@@ -335,7 +342,11 @@ test("tray actions open runs and the panel, reveal the transcript, and stop fore
     fireEvent.click(within(tray).getByRole("button", { name: "Open Subagents panel" }));
   });
   assert.equal(calls.panelOpenedFrom.length, 1);
-  assert.equal(calls.panelOpenedFrom[0] === pillTrigger(), true, "closing the panel returns to the pill");
+  assert.equal(
+    calls.panelOpenedFrom[0] === pillTrigger(),
+    true,
+    "closing the panel returns to the pill",
+  );
 });
 
 test("a run whose Stop is in flight cannot be stopped again", async () => {
@@ -425,7 +436,10 @@ test("closing a tray the shortcut opened puts focus back where the person was ty
       calls.setOpen?.((open) => !open);
     });
     const tray = await screen.findByRole("dialog", { name: "Subagents" });
-    assert.equal(document.activeElement === within(tray).getByRole("button", { name: /^Run a/u }), true);
+    assert.equal(
+      document.activeElement === within(tray).getByRole("button", { name: /^Run a/u }),
+      true,
+    );
     await act(async () => {
       calls.setOpen?.((open) => !open);
     });
@@ -464,12 +478,18 @@ test("a batch left with only background runs can be hidden until another run sta
   // A foreground run can still be stopped, so the pill stays.
   assert.equal(screen.queryByRole("button", { name: "Hide background subagents" }), null);
 
-  const backgroundOnly = [runView("fg", "completed"), runView("bg", "running", { execution: "background" })];
+  const backgroundOnly = [
+    runView("fg", "completed"),
+    runView("bg", "running", { execution: "background" }),
+  ];
   rerender(backgroundOnly);
   fireEvent.click(screen.getByRole("button", { name: "Hide background subagents" }));
   assert.equal(screen.queryByRole("button", { name: /subagent details/u }), null);
   // The background run keeps working without bringing the pill back.
-  rerender([runView("fg", "completed"), runView("bg", "running", { execution: "background", activity: "Reading" })]);
+  rerender([
+    runView("fg", "completed"),
+    runView("bg", "running", { execution: "background", activity: "Reading" }),
+  ]);
   assert.equal(screen.queryByRole("button", { name: /subagent details/u }), null);
 
   rerender([...backgroundOnly, runView("next", "running")]);
@@ -517,12 +537,18 @@ test("dismissing the pill from the keyboard hands focus to the composer", async 
 });
 
 test("a hidden background run that needs the person brings the pill back until it is answered", () => {
-  const { rerender } = mount([runView("fg", "running"), runView("bg", "running", { execution: "background" })]);
+  const { rerender } = mount([
+    runView("fg", "running"),
+    runView("bg", "running", { execution: "background" }),
+  ]);
   rerender([runView("fg", "completed"), runView("bg", "running", { execution: "background" })]);
   fireEvent.click(screen.getByRole("button", { name: "Hide background subagents" }));
   assert.equal(screen.queryByRole("button", { name: /subagent details/u }), null);
 
-  rerender([runView("fg", "completed"), runView("bg", "needs_attention", { execution: "background" })]);
+  rerender([
+    runView("fg", "completed"),
+    runView("bg", "needs_attention", { execution: "background" }),
+  ]);
   assert.match(pillTrigger().textContent ?? "", /^1 waiting on you/u);
   assert.match(pillTrigger().getAttribute("aria-label") ?? "", /Run bg needs your attention/u);
   assert.equal(screen.queryByRole("button", { name: "Hide background subagents" }), null);
@@ -530,8 +556,12 @@ test("a hidden background run that needs the person brings the pill back until i
 
 test("a running subagent from an older host counts as foreground, so the pill cannot be hidden", () => {
   const legacy = runView("legacy", "running");
-  const { execution: _execution, context: _context, authorityRevision: _authority, ...rest } =
-    legacy.snapshot as SubagentRunSnapshotV2;
+  const {
+    execution: _execution,
+    context: _context,
+    authorityRevision: _authority,
+    ...rest
+  } = legacy.snapshot as SubagentRunSnapshotV2;
   legacy.snapshot = { ...rest, version: 1 } as unknown as SubagentRunSnapshot;
   mount([legacy]);
   assert.ok(pillTrigger());

@@ -123,7 +123,11 @@ test("a chat with messages answers with its own model; an empty chat follows the
   const app = { providerId: "google", model: "gemini-flash" };
   const chat = { providerId: "anthropic", model: "claude-sonnet" };
   assert.deepEqual(chatModelSelection(chat, true, app), chat);
-  assert.deepEqual(chatModelSelection(chat, false, app), app, "an empty chat uses the new-chat model");
+  assert.deepEqual(
+    chatModelSelection(chat, false, app),
+    app,
+    "an empty chat uses the new-chat model",
+  );
   assert.deepEqual(
     chatModelSelection({ providerId: "anthropic" }, true, app),
     app,
@@ -133,7 +137,8 @@ test("a chat with messages answers with its own model; an empty chat follows the
 });
 
 test("leaving a chat cannot clear the model target of the chat opened after it", async () => {
-  const { readActiveChatModelTarget, setActiveChatModelTarget } = await import("./use-model-selection");
+  const { readActiveChatModelTarget, setActiveChatModelTarget } =
+    await import("./use-model-selection");
   const target = (chatId: string) => ({
     chatId,
     selection: { providerId: "google", model: "gemini-pro" },
@@ -144,7 +149,11 @@ test("leaving a chat cannot clear the model target of the chat opened after it",
   leaveA();
   assert.equal(readActiveChatModelTarget()?.chatId, "chat-b");
   leaveB();
-  assert.equal(readActiveChatModelTarget(), null, "with no chat open, a model change sets the new-chat model");
+  assert.equal(
+    readActiveChatModelTarget(),
+    null,
+    "with no chat open, a model change sets the new-chat model",
+  );
 });
 
 test("a new-chat model Aiden sets on the host reaches the window, and a pick here reaches the host once", async () => {
@@ -165,7 +174,14 @@ test("a new-chat model Aiden sets on the host reaches the window, and a pick her
       addEventListener: events.addEventListener.bind(events),
       removeEventListener: events.removeEventListener.bind(events),
       dispatchEvent: events.dispatchEvent.bind(events),
-      aidenAPI: { ipc: { invoke: async (...args: unknown[]) => { invoked.push(args); return {}; } } },
+      aidenAPI: {
+        ipc: {
+          invoke: async (...args: unknown[]) => {
+            invoked.push(args);
+            return {};
+          },
+        },
+      },
     },
   });
   const { persistModelSelection, readModelSelection, subscribeHostNewChatModel } =
@@ -174,13 +190,21 @@ test("a new-chat model Aiden sets on the host reaches the window, and a pick her
   persistModelSelection("lmstudio", "qwen3-8b");
   await new Promise((resolve) => setTimeout(resolve, 0));
   assert.deepEqual(invoked, [
-    ["settings:set", { lastProviderId: "lmstudio", lastModel: "qwen3-8b", lastThinkingLevel: null }],
+    [
+      "settings:set",
+      { lastProviderId: "lmstudio", lastModel: "qwen3-8b", lastThinkingLevel: null },
+    ],
   ]);
 
   let deliver: ((payload: unknown) => void) | undefined;
-  const unsubscribe = subscribeHostNewChatModel(((_channel: string, handler: (payload: unknown) => void) => {
+  const unsubscribe = subscribeHostNewChatModel(((
+    _channel: string,
+    handler: (payload: unknown) => void,
+  ) => {
     deliver = handler;
-    return () => { deliver = undefined; };
+    return () => {
+      deliver = undefined;
+    };
   }) as never);
   deliver?.({ providerId: "openai", model: "gpt-5.5" });
   assert.deepEqual(readModelSelection(), { providerId: "openai", model: "gpt-5.5" });
@@ -218,7 +242,11 @@ test("at startup the host's new-chat model is brought in line with this window's
     },
   };
   await mirrorNewChatModelToHost(api);
-  assert.deepEqual(host, { lastProviderId: "lmstudio", lastModel: "model-b", lastThinkingLevel: null });
+  assert.deepEqual(host, {
+    lastProviderId: "lmstudio",
+    lastModel: "model-b",
+    lastThinkingLevel: null,
+  });
   await mirrorNewChatModelToHost(api);
   assert.equal(writes.length, 1, "nothing is written when they already match");
   values.clear();
@@ -244,7 +272,10 @@ test("a pick made while the startup read is pending is the one the host keeps", 
   let host = { lastProviderId: "lmstudio", lastModel: "model-a" };
   let answer!: (value: typeof host) => void;
   const mirrored = mirrorNewChatModelToHost({
-    get: () => new Promise<typeof host>((resolve) => { answer = resolve; }),
+    get: () =>
+      new Promise<typeof host>((resolve) => {
+        answer = resolve;
+      }),
     set: async (patch) => {
       host = { ...host, ...(patch as typeof host) };
     },
@@ -255,7 +286,11 @@ test("a pick made while the startup read is pending is the one the host keeps", 
   host = { lastProviderId: "lmstudio", lastModel: "model-c" };
   answer(staleRead);
   await mirrored;
-  assert.deepEqual(host, { lastProviderId: "lmstudio", lastModel: "model-c", lastThinkingLevel: null });
+  assert.deepEqual(host, {
+    lastProviderId: "lmstudio",
+    lastModel: "model-c",
+    lastThinkingLevel: null,
+  });
   assert.equal(values.get("aiden-agent.model"), "model-c");
 });
 
@@ -277,18 +312,38 @@ test("a new-chat pick keeps its level until another model is picked, and the hos
       addEventListener: events.addEventListener.bind(events),
       removeEventListener: events.removeEventListener.bind(events),
       dispatchEvent: events.dispatchEvent.bind(events),
-      aidenAPI: { ipc: { invoke: async (...args: unknown[]) => { invoked.push(args); return {}; } } },
+      aidenAPI: {
+        ipc: {
+          invoke: async (...args: unknown[]) => {
+            invoked.push(args);
+            return {};
+          },
+        },
+      },
     },
   });
-  const { persistModelSelection, readModelSelection, chatModelSelection } = await import("./use-model-selection");
+  const { persistModelSelection, readModelSelection, chatModelSelection } =
+    await import("./use-model-selection");
   persistModelSelection("anthropic", "claude", "high");
-  assert.deepEqual(readModelSelection(), { providerId: "anthropic", model: "claude", thinkingLevel: "high" });
+  assert.deepEqual(readModelSelection(), {
+    providerId: "anthropic",
+    model: "claude",
+    thinkingLevel: "high",
+  });
   persistModelSelection("anthropic", "claude", "low");
   assert.equal(readModelSelection().thinkingLevel, "low", "a level-only change is a new pick");
   persistModelSelection("openai", "gpt");
-  assert.deepEqual(readModelSelection(), { providerId: "openai", model: "gpt" }, "a pick without a level clears it");
+  assert.deepEqual(
+    readModelSelection(),
+    { providerId: "openai", model: "gpt" },
+    "a pick without a level clears it",
+  );
   values.set("aiden-agent.thinkingLevel", "turbo");
-  assert.equal(readModelSelection().thinkingLevel, undefined, "an unknown stored level reads as none");
+  assert.equal(
+    readModelSelection().thinkingLevel,
+    undefined,
+    "an unknown stored level reads as none",
+  );
   await new Promise((resolve) => setTimeout(resolve, 0));
   assert.deepEqual(
     invoked.map(([, patch]) => patch),
@@ -300,7 +355,11 @@ test("a new-chat pick keeps its level until another model is picked, and the hos
   );
   const app = { providerId: "openai", model: "gpt", thinkingLevel: "low" as const };
   assert.deepEqual(
-    chatModelSelection({ providerId: "anthropic", model: "claude", thinkingLevel: "max" }, true, app),
+    chatModelSelection(
+      { providerId: "anthropic", model: "claude", thinkingLevel: "max" },
+      true,
+      app,
+    ),
     { providerId: "anthropic", model: "claude", thinkingLevel: "max" },
     "a chat that owns its model answers with its own level",
   );
@@ -308,5 +367,8 @@ test("a new-chat pick keeps its level until another model is picked, and the hos
     providerId: "anthropic",
     model: "claude",
   });
-  assert.deepEqual(chatModelSelection({ providerId: "anthropic", model: "claude" }, false, app), app);
+  assert.deepEqual(
+    chatModelSelection({ providerId: "anthropic", model: "claude" }, false, app),
+    app,
+  );
 });

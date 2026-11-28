@@ -53,23 +53,35 @@ export function ModelPicker({
       </div>
     );
   }
-  const current = value ? models.find((option) => option.provider === value.provider && option.model === value.id) : undefined;
+  const current = value
+    ? models.find((option) => option.provider === value.provider && option.model === value.id)
+    : undefined;
   const groups = new Map<string, ImageModelOption[]>();
-  for (const option of models) groups.set(option.providerLabel, [...(groups.get(option.providerLabel) ?? []), option]);
+  for (const option of models)
+    groups.set(option.providerLabel, [...(groups.get(option.providerLabel) ?? []), option]);
   const selectedKey = current ? keyOf(current.provider, current.model) : "";
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
-        <Button size="small" variant="muted" className="nodrag max-w-full justify-start" aria-label="Image model">
+        <Button
+          size="small"
+          variant="muted"
+          className="nodrag max-w-full justify-start"
+          aria-label="Image model"
+        >
           {current ? <OptionLogo option={current} /> : null}
-          <span className="truncate">{current?.label ?? (value ? `${value.id} (unavailable)` : "Choose a Model")}</span>
+          <span className="truncate">
+            {current?.label ?? (value ? `${value.id} (unavailable)` : "Choose a Model")}
+          </span>
         </Button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="start">
         <DropdownMenuRadioGroup
           value={selectedKey}
           onValueChange={(next) => {
-            const option = models.find((candidate) => keyOf(candidate.provider, candidate.model) === next);
+            const option = models.find(
+              (candidate) => keyOf(candidate.provider, candidate.model) === next,
+            );
             if (option) onChange({ provider: option.provider, id: option.model });
           }}
         >
@@ -77,7 +89,10 @@ export function ModelPicker({
             <React.Fragment key={providerLabel}>
               <DropdownMenuLabel>{providerLabel}</DropdownMenuLabel>
               {options.map((option) => (
-                <DropdownMenuRadioItem key={keyOf(option.provider, option.model)} value={keyOf(option.provider, option.model)}>
+                <DropdownMenuRadioItem
+                  key={keyOf(option.provider, option.model)}
+                  value={keyOf(option.provider, option.model)}
+                >
                   <OptionLogo option={option} />
                   <span className="min-w-0 truncate">{option.label}</span>
                 </DropdownMenuRadioItem>

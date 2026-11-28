@@ -18,16 +18,16 @@ The answer must stay true to Aiden's privacy posture: no content ever leaves the
 
 ## Decisions (owner)
 
-| Decision | Choice |
-| --- | --- |
-| Service | PostHog (one project) |
-| Consent | **On by default.** Onboarding states it plainly; Settings has a switch to turn it off. |
-| Platforms | Desktop now. The headless server as a second phase. Phones later, separately. |
-| Usage events | The list in [Events](#events), including web search and peer Mac pairing. |
-| Crashes | Every crash and every uncaught error, with a stack trace. |
-| Region and retention | PostHog US cloud; PostHog's default retention. |
-| Opt-out signal | Send one `analytics_disabled` event when someone turns it off. |
-| Soft errors | **Not collected.** Handled failures (provider request failed, key rejected, routine failed, tool error) stay out to keep the signal quiet. |
+| Decision             | Choice                                                                                                                                     |
+| -------------------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
+| Service              | PostHog (one project)                                                                                                                      |
+| Consent              | **On by default.** Onboarding states it plainly; Settings has a switch to turn it off.                                                     |
+| Platforms            | Desktop now. The headless server as a second phase. Phones later, separately.                                                              |
+| Usage events         | The list in [Events](#events), including web search and peer Mac pairing.                                                                  |
+| Crashes              | Every crash and every uncaught error, with a stack trace.                                                                                  |
+| Region and retention | PostHog US cloud; PostHog's default retention.                                                                                             |
+| Opt-out signal       | Send one `analytics_disabled` event when someone turns it off.                                                                             |
+| Soft errors          | **Not collected.** Handled failures (provider request failed, key rejected, routine failed, tool error) stay out to keep the signal quiet. |
 
 ## Goals
 
@@ -76,10 +76,12 @@ The answer must stay true to Aiden's privacy posture: no content ever leaves the
 **Default.** `analytics.enabled` defaults to `true`.
 
 **Nothing is sent until the notice has been shown.** `analytics.noticeShownAt` gates sending:
+
 - New installs: the notice is part of onboarding (below). Sending starts once `app:setOnboardingOutcome` records `completed` or `deferred` (`main/index.ts:987`).
 - Existing installs upgrading into this release: a one-time, dismissible notice card appears on first launch. Sending starts when the card has been shown. Events and crashes before that are not sent and are not queued.
 
 **Turning it off** (Settings switch, or `aiden telemetry off` for the server):
+
 1. Stop capture immediately; drop the in-memory queue without flushing.
 2. Delete `installId` and any pending crash record.
 3. Persist `enabled: false`.
@@ -107,10 +109,10 @@ All counts are "the moment it happened", fired from the main process unless note
 
 ### Who's using it
 
-| Event | When | Properties |
-| --- | --- | --- |
-| `app_opened` | `app.whenReady()` (`main/index.ts:1856`), once per launch, after consent gate | `launch_kind`: `cold` / `after_update` / `after_crash` |
-| `app_active` | Once per local calendar day while the app is running (timer checks hourly). Mac apps stay open for days, so this is what makes DAU accurate. | — |
+| Event        | When                                                                                                                                         | Properties                                             |
+| ------------ | -------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------ |
+| `app_opened` | `app.whenReady()` (`main/index.ts:1856`), once per launch, after consent gate                                                                | `launch_kind`: `cold` / `after_update` / `after_crash` |
+| `app_active` | Once per local calendar day while the app is running (timer checks hourly). Mac apps stay open for days, so this is what makes DAU accurate. | —                                                      |
 
 Dashboards count active users from both `app_active` and real actions (`chat_message_sent`), so a Mac left open for a week is not mistaken for engagement. Phone and peer reconnects never fire events by themselves. Phone use counts against the host Mac's install, with `origin: "phone"` on `chat_message_sent` as the phone signal; the phone apps have no analytics of their own.
 | `onboarding_finished` | `app:setOnboardingOutcome` (`main/index.ts:987`) | `outcome`: `completed` / `deferred`; `provider_id` |
@@ -119,32 +121,32 @@ Dashboards count active users from both `app_active` and real actions (`chat_mes
 
 ### Core use
 
-| Event | When | Properties |
-| --- | --- | --- |
-| `chat_message_sent` | `chat:start` returns `started` (`main/handlers/chat.ts:29`, `main/services/chat-generation-start.ts:10`) | `provider_id`, `model_id`, `in_workspace` (bool), `thinking` (`off`/`low`/`medium`/`high`/…), `origin` (`desktop`/`phone`/`bot`/`schedule`) |
-| `chat_created` | `chats:create*` (`main/handlers/chats.ts:154,280,289`) | `workspace_kind`: `folder` / `scratch` / `worktree` / `none` |
-| `provider_connected` | `providers:save` and OAuth completion (`main/handlers/providers.ts:157,197`) | `provider_id`, `auth`: `key` / `oauth` / `local` |
-| `workspace_added` | `workspaces:create*`, `openPath` (`main/handlers/workspaces.ts:164,168,199`, `workspace-intake.ts:66`) | `kind`: `folder` / `scratch` / `path` |
+| Event                | When                                                                                                     | Properties                                                                                                                                  |
+| -------------------- | -------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
+| `chat_message_sent`  | `chat:start` returns `started` (`main/handlers/chat.ts:29`, `main/services/chat-generation-start.ts:10`) | `provider_id`, `model_id`, `in_workspace` (bool), `thinking` (`off`/`low`/`medium`/`high`/…), `origin` (`desktop`/`phone`/`bot`/`schedule`) |
+| `chat_created`       | `chats:create*` (`main/handlers/chats.ts:154,280,289`)                                                   | `workspace_kind`: `folder` / `scratch` / `worktree` / `none`                                                                                |
+| `provider_connected` | `providers:save` and OAuth completion (`main/handlers/providers.ts:157,197`)                             | `provider_id`, `auth`: `key` / `oauth` / `local`                                                                                            |
+| `workspace_added`    | `workspaces:create*`, `openPath` (`main/handlers/workspaces.ts:164,168,199`, `workspace-intake.ts:66`)   | `kind`: `folder` / `scratch` / `path`                                                                                                       |
 
 ### Big features
 
-| Event | When | Properties |
-| --- | --- | --- |
-| `bot_created` | `bots:create`, `bots:createFromPreset` (`main/handlers/bot-access.ts:97`, `bots.ts:161`) | `preset_id` (bundled or `custom`), `bot_count` bucket (`1`, `2-3`, `4-10`, `11+`) |
-| `bot_routine_ran` | Routine executor (`main/services/scheduled-bot-routines.ts:242`) | `trigger`: `automatic` / `manual` / `catch_up` / `retry` / `file_change` / `webhook` (from `ScheduledRunTrigger`, `main/services/schedule-service-core.ts:16`; `event` is split by its source); `result`: `success` / `failed` |
-| `scheduled_task_ran` | `run()` (`main/services/schedule-execution.ts:352`) | `trigger` (same enum), `result`: `success` / `silent` / `failed` |
-| `subagent_launched` | `launch()` (`main/services/subagents/background-subagent-coordinator-v2.ts:111`) | `role`: `scout` / `planner` / `reviewer` / `implementer` / `other` |
-| `skill_used` | Skill turn commit (`main/services/skill-invocation-turn.ts:74`) | `source`: `builtin` / `user`. Built-in skill name only when `builtin`. |
-| `connector_added` | `mcp:save` (`main/handlers/phase2.ts:433`) | `preset_id` (bundled or `custom`), `transport`: `stdio` / `http` |
-| `web_search_used` | `search()` (`main/services/web-search.ts:292`) | `search_provider` |
-| `voice_used` | `assistant-live:start`, `dictation:result`, `tts:start` (`main/handlers/assistant-live.ts:39`, `dictation.ts:16`, `tts.ts:113`) | `mode`: `live` / `dictation` / `read_aloud`; `engine`: `local` / `cloud` |
-| `phone_paired` | Pairing **completes** in the Aiden Remote service (the async point where a device is added to the paired list; `remote:setupPairing` / `remote:beginPairing` at `main/handlers/aiden-remote.ts:162,186` only start it) | `transport`: `lan` / `tailscale`; `device_count` bucket |
-| `peer_mac_paired` | Peer pairing completes (`main/handlers/peer-pairing.ts:155`) | `method`: `discovery` / `code` / `link` |
-| `computer_use_enabled` | Global switch turned on: `computerUse:setEnabled(true)` (`main/handlers/computer-use.ts:53`). Per-chat access-card grants are not counted. | — |
-| `bot_computer_set_up` | Set up completes (`main/handlers/bot-computers.ts:97`) | `element_control` (bool) |
-| `terminal_opened` | `terminal:create` (`main/handlers/terminal.ts:91`) | — |
-| `git_commit` | `git:commit` succeeds (`main/handlers/workspaces.ts:299`) | — (`pushed` was dropped in PR 3: commit and push are separate service calls, so a commit can't honestly know it) |
-| `worktree_created` | `git:createWorktree` (`main/handlers/workspaces.ts:357`) | — |
+| Event                  | When                                                                                                                                                                                                                   | Properties                                                                                                                                                                                                                     |
+| ---------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `bot_created`          | `bots:create`, `bots:createFromPreset` (`main/handlers/bot-access.ts:97`, `bots.ts:161`)                                                                                                                               | `preset_id` (bundled or `custom`), `bot_count` bucket (`1`, `2-3`, `4-10`, `11+`)                                                                                                                                              |
+| `bot_routine_ran`      | Routine executor (`main/services/scheduled-bot-routines.ts:242`)                                                                                                                                                       | `trigger`: `automatic` / `manual` / `catch_up` / `retry` / `file_change` / `webhook` (from `ScheduledRunTrigger`, `main/services/schedule-service-core.ts:16`; `event` is split by its source); `result`: `success` / `failed` |
+| `scheduled_task_ran`   | `run()` (`main/services/schedule-execution.ts:352`)                                                                                                                                                                    | `trigger` (same enum), `result`: `success` / `silent` / `failed`                                                                                                                                                               |
+| `subagent_launched`    | `launch()` (`main/services/subagents/background-subagent-coordinator-v2.ts:111`)                                                                                                                                       | `role`: `scout` / `planner` / `reviewer` / `implementer` / `other`                                                                                                                                                             |
+| `skill_used`           | Skill turn commit (`main/services/skill-invocation-turn.ts:74`)                                                                                                                                                        | `source`: `builtin` / `user`. Built-in skill name only when `builtin`.                                                                                                                                                         |
+| `connector_added`      | `mcp:save` (`main/handlers/phase2.ts:433`)                                                                                                                                                                             | `preset_id` (bundled or `custom`), `transport`: `stdio` / `http`                                                                                                                                                               |
+| `web_search_used`      | `search()` (`main/services/web-search.ts:292`)                                                                                                                                                                         | `search_provider`                                                                                                                                                                                                              |
+| `voice_used`           | `assistant-live:start`, `dictation:result`, `tts:start` (`main/handlers/assistant-live.ts:39`, `dictation.ts:16`, `tts.ts:113`)                                                                                        | `mode`: `live` / `dictation` / `read_aloud`; `engine`: `local` / `cloud`                                                                                                                                                       |
+| `phone_paired`         | Pairing **completes** in the Aiden Remote service (the async point where a device is added to the paired list; `remote:setupPairing` / `remote:beginPairing` at `main/handlers/aiden-remote.ts:162,186` only start it) | `transport`: `lan` / `tailscale`; `device_count` bucket                                                                                                                                                                        |
+| `peer_mac_paired`      | Peer pairing completes (`main/handlers/peer-pairing.ts:155`)                                                                                                                                                           | `method`: `discovery` / `code` / `link`                                                                                                                                                                                        |
+| `computer_use_enabled` | Global switch turned on: `computerUse:setEnabled(true)` (`main/handlers/computer-use.ts:53`). Per-chat access-card grants are not counted.                                                                             | —                                                                                                                                                                                                                              |
+| `bot_computer_set_up`  | Set up completes (`main/handlers/bot-computers.ts:97`)                                                                                                                                                                 | `element_control` (bool)                                                                                                                                                                                                       |
+| `terminal_opened`      | `terminal:create` (`main/handlers/terminal.ts:91`)                                                                                                                                                                     | —                                                                                                                                                                                                                              |
+| `git_commit`           | `git:commit` succeeds (`main/handlers/workspaces.ts:299`)                                                                                                                                                              | — (`pushed` was dropped in PR 3: commit and push are separate service calls, so a commit can't honestly know it)                                                                                                               |
+| `worktree_created`     | `git:createWorktree` (`main/handlers/workspaces.ts:357`)                                                                                                                                                               | —                                                                                                                                                                                                                              |
 
 Only success moments are counted. Subagent turns are not `chat_message_sent` events; they are counted once by `subagent_launched`. Line numbers are as of the base commit; the implementer should hook the service function rather than the IPC wrapper where both exist, so CLI and phone-originated actions are counted once.
 
@@ -154,16 +156,16 @@ Deliberately left out (can be added later with one registry entry each): Telegra
 
 ### What is captured
 
-| Source | Hook (existing) | Sent as |
-| --- | --- | --- |
-| Main-process uncaught exception | `uncaughtExceptionMonitor` in `main/services/process-diagnostics.ts:75` | `$exception` via `captureException`, `level: fatal`, `source: main` |
-| Main-process unhandled rejection | `process.on("unhandledRejection")` in `installProcessDiagnostics`, journaled as `unhandled-rejection`. Corrected in PR 4: this plan first said the monitor already saw rejections and that a listener would change crash behaviour. Measured on Electron 43 (macOS, real process), Electron runs Node in warn mode, so the monitor never fires for a rejection and the process carries on with or without a listener. A listener silences Node's two warnings, so the code raises the one carrying the reason again. The CLI is plain Node, where a listener would change behaviour; it does not use this code. | `$exception`, `level: error` (the process survives), `source: main`, `origin: unhandled_rejection` |
-| Renderer uncaught error / rejection | Listeners exist (`renderer/lib/dev-log.ts:95,98`) and are rate-limited by main, but `reportRendererDiagnostic` (`dev-log.ts:59-89`) sends only `{kind, errorType, context, referenceId}`, with no message or stack. See [Renderer stacks](#renderer-stacks). | `$exception`, `source: renderer` |
-| Renderer process gone | `render-process-gone` (`main/index.ts:1249`) | `app_crashed` with `kind: renderer`, `reason`, `exit_code` (no stack exists) |
-| In-app browser tab process gone | `render-process-gone` (`main/services/browser/service.ts:850`) | `app_crashed` with `kind: browser_tab`, `reason`, `exit_code`. Decided in PR 4: a web page's crash is not an Aiden crash, so it does not share `kind: renderer`. |
-| Helper/GPU/utility process gone | `child-process-gone` (`main/index.ts:1720`) | `app_crashed` with `kind: <process type>`, `reason`, `exit_code` |
-| Renderer crash loop | existing `renderer-crash-loop` diagnostic event | `app_crashed` with `kind: renderer_loop` |
-| Native main-process crash (no JS runs) | **New** run marker: write `<userData>/analytics-run.marker` at launch, delete on clean quit; if present at next launch, the last run ended uncleanly | `app_crashed` with `kind: unclean_exit` on next launch, and `app_opened.launch_kind = after_crash` |
+| Source                                 | Hook (existing)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 | Sent as                                                                                                                                                          |
+| -------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Main-process uncaught exception        | `uncaughtExceptionMonitor` in `main/services/process-diagnostics.ts:75`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         | `$exception` via `captureException`, `level: fatal`, `source: main`                                                                                              |
+| Main-process unhandled rejection       | `process.on("unhandledRejection")` in `installProcessDiagnostics`, journaled as `unhandled-rejection`. Corrected in PR 4: this plan first said the monitor already saw rejections and that a listener would change crash behaviour. Measured on Electron 43 (macOS, real process), Electron runs Node in warn mode, so the monitor never fires for a rejection and the process carries on with or without a listener. A listener silences Node's two warnings, so the code raises the one carrying the reason again. The CLI is plain Node, where a listener would change behaviour; it does not use this code. | `$exception`, `level: error` (the process survives), `source: main`, `origin: unhandled_rejection`                                                               |
+| Renderer uncaught error / rejection    | Listeners exist (`renderer/lib/dev-log.ts:95,98`) and are rate-limited by main, but `reportRendererDiagnostic` (`dev-log.ts:59-89`) sends only `{kind, errorType, context, referenceId}`, with no message or stack. See [Renderer stacks](#renderer-stacks).                                                                                                                                                                                                                                                                                                                                                    | `$exception`, `source: renderer`                                                                                                                                 |
+| Renderer process gone                  | `render-process-gone` (`main/index.ts:1249`)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    | `app_crashed` with `kind: renderer`, `reason`, `exit_code` (no stack exists)                                                                                     |
+| In-app browser tab process gone        | `render-process-gone` (`main/services/browser/service.ts:850`)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  | `app_crashed` with `kind: browser_tab`, `reason`, `exit_code`. Decided in PR 4: a web page's crash is not an Aiden crash, so it does not share `kind: renderer`. |
+| Helper/GPU/utility process gone        | `child-process-gone` (`main/index.ts:1720`)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     | `app_crashed` with `kind: <process type>`, `reason`, `exit_code`                                                                                                 |
+| Renderer crash loop                    | existing `renderer-crash-loop` diagnostic event                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 | `app_crashed` with `kind: renderer_loop`                                                                                                                         |
+| Native main-process crash (no JS runs) | **New** run marker: write `<userData>/analytics-run.marker` at launch, delete on clean quit; if present at next launch, the last run ended uncleanly                                                                                                                                                                                                                                                                                                                                                                                                                                                            | `app_crashed` with `kind: unclean_exit` on next launch, and `app_opened.launch_kind = after_crash`                                                               |
 
 The best tap point is the diagnostics journal: these sources already flow through `writeDiagnosticEvent` (`main/services/diagnostic-journal.ts:549`) with typed names. The analytics sink subscribes to the fatal/crash subset there instead of adding parallel hooks everywhere. The raw `Error` (needed for the stack) is passed alongside where the journal only keeps the projected form.
 
@@ -172,6 +174,7 @@ Not crashes (decided in PR 4): a process that exited with code zero, a helper th
 ### Renderer stacks
 
 The owner wants to see every error with a stack, so the renderer-to-main diagnostics IPC is widened (a privacy-contract change, called out in PR 4):
+
 - Only while analytics is enabled and the notice has been shown (main tells the renderer via the status IPC), the renderer adds the raw `name`, `message` and `stack` (capped at 8 KiB) to the existing report.
 - **Main sanitizes**, using the same sanitizer as main-process errors. The renderer never sanitizes or decides what is safe.
 - The diagnostics journal keeps its current content-free projection; the raw fields go only to the analytics sink and are never written to disk.
@@ -181,6 +184,7 @@ The owner wants to see every error with a stack, so the renderer-to-main diagnos
 ### Fatal crashes survive the exit
 
 A fatal main-process exception may kill the process before an async flush finishes. So the sink:
+
 1. Builds the sanitized exception.
 2. Writes it synchronously to `<userData>/analytics-pending-crash.json` (one record, overwritten, small).
 3. Attempts to send that one event on its own request. Shutdown waits for it inside the existing usage-data deadline, not a separate cap.
@@ -189,6 +193,7 @@ A fatal main-process exception may kill the process before an async flush finish
 If analytics is off at next launch, the pending file is deleted unsent.
 
 Details settled in PR 4:
+
 - The SDK resolves a failed immediate send and reports it only through its `error` event, so acknowledgement comes from that, not from the promise. A record stays on disk until a send is acknowledged; a launch that is offline leaves it for the next one.
 - Both attempts use the record's ID as the event UUID, so a report that arrived without its acknowledgement is de-duplicated by the server.
 - A record carries the install ID it was captured under. One that does not match the current ID is discarded, so a failed delete cannot outlive an opt-out.
@@ -200,6 +205,7 @@ Details settled in PR 4:
 ### Sanitizing every exception
 
 Before an error reaches `captureException`, the sink rebuilds it as a new `Error`:
+
 - `name`: kept if it matches `/^[A-Za-z][A-Za-z0-9_]{0,63}$/`, else `Error`.
 - `message`: email addresses are redacted first, then the text runs through the existing `sanitizeDiagnosticText` (`main/services/diagnostics-contract.ts:403`), which already redacts credentials, tokens, authorization values, URLs, POSIX/Windows paths, UUIDs and long IDs, then capped at 300 characters. The result is kept only if it matches a fixed list of messages the runtime writes itself (`KNOWN_ENGINE_MESSAGES`), with every quoted name replaced by `[name]`; anything else becomes `[message withheld]`. This is stricter than the original plan, decided in PR 4: redaction cannot recognise chat text, an anti-goal forbids any reaching PostHog, and a quoted property can be a key from data. Add only messages that are fixed once their names are replaced.
 - `stack`: each frame's file path rewritten to an app-relative virtual path (e.g. `app:///main/services/foo.js`). Frames outside the app bundle become `<external>` (user workspace scripts, Pi extensions in the user's folders, node internals keep `node:` prefix). Function names are kept. Max 30 frames.
@@ -214,6 +220,7 @@ The SDK's `before_send` guard is the last check on every message. It drops every
 ### Flood control
 
 Per app session:
+
 - At most **25** exception events.
 - The same fingerprint (sanitized `name` + top 3 frames) at most **3** times; further repeats are counted and sent once as a property `repeat_count` on the session's last report, or dropped.
 - `app_crashed` and fatal exceptions bypass the per-fingerprint cap but count toward the session cap.
@@ -233,6 +240,7 @@ Finishing onboarding acknowledges sharing only if the row displayed it as on. Co
 **Existing installs (one-time).** A dismissible notice card on first launch after upgrading: same wording, buttons **OK** and **Turn off**. Dismissing it counts as shown.
 
 **Settings.** In **Settings → Diagnostics** (`renderer/components/settings/diagnostics-settings.tsx`), a new top group "Usage data" (my call; it sits with the existing local diagnostics controls):
+
 - Switch: "Share anonymous usage and crash data".
 - Subtitle explains what it is and is not.
 - Row: "What's sent" → a sheet listing every event and property, rendered from the same registry the code uses (so the list can never drift from reality).
@@ -280,6 +288,7 @@ Rewritten 2026-11-04 for the serve-only CLI, which arrived after this section wa
 ## Docs and policy changes
 
 Same PR as the first behaviour that sends data (PR 2):
+
 - `AGENTS.md`: new **Product analytics** section (fixed host, main-process only, registry-only events, no content, consent gate, kill switches, dev builds never send, no flags/replay/autocapture).
 - `docs/plans/logging-and-diagnostics-upgrade-plan.md`: add a dated note under Non-goals pointing here. Diagnostics itself still has no upload path; the journal is never sent. Existing text is history and is not rewritten.
 - `scripts/diagnostic-policy.test.mjs`: unchanged expectations (Crashpad stays upload-disabled); extend if it asserts there is no upload path at all, scoping that claim to diagnostics.
@@ -337,12 +346,14 @@ PostHog's free tier currently covers 1M product events and 100k exceptions per m
 At the owner's request we read how [pingdotgg/t3code](https://github.com/pingdotgg/t3code) sends PostHog analytics.
 
 What it does:
+
 - No PostHog SDK. A hand-written client in its Node server posts to `/batch/` through its own ingest proxy. Each event gets a UUIDv7; batches of 20 flush every 10 s; failures back off with jitter from 2 s to 5 min and are dropped after 30 min, or at once on 400, 401 or 413; a 1,000-event buffer drops the oldest.
 - Identity is a hash of the person's Codex `account_id` or Claude `userID`, read from `~/.codex/auth.json` and `~/.claude.json` with unsalted SHA-256. That is a pseudonymous identifier that links one person across installs and products.
 - On by default with only an environment-variable opt-out: no Settings switch, no `DO_NOT_TRACK`, and events are sent before any notice. The project key is hard-coded and dev builds send, labelled by a build-time channel.
 - Free-form event names with per-property allowlists; a model is reported only when it is a non-custom entry in a vendor catalog. No PostHog error tracking.
 
 What we adopted:
+
 - The retry and rejection rules above. `posthog-node` already implements them, so we document and test them (`analytics-client.test.ts` proves a rejected batch is dropped, not retried) instead of writing our own sender.
 - Counting active users from real actions as well as `app_active`, and never from reconnects.
 - Never reporting model names for providers whose model lists come from the person's own setup.

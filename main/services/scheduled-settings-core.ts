@@ -24,7 +24,8 @@ export function scheduledSettingsPatch(
   }
   if (typeof input.defaultNotify === "boolean") patch.scheduledDefaultNotify = input.defaultNotify;
   // On is the default, so only `false` is stored; turning one back on clears it.
-  if (typeof input.chatCheckBacks === "boolean") patch.chatCheckBacks = input.chatCheckBacks ? undefined : false;
+  if (typeof input.chatCheckBacks === "boolean")
+    patch.chatCheckBacks = input.chatCheckBacks ? undefined : false;
   if (typeof input.keepAwakeWhileWorking === "boolean") {
     patch.keepAwakeWhileWorking = input.keepAwakeWhileWorking ? undefined : false;
   }

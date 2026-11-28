@@ -1,4 +1,8 @@
-import { isProtectedCredentialPath, isEnvironmentSecretPath, type ProtectedPathFinalKind } from "./model-file-policy.js";
+import {
+  isProtectedCredentialPath,
+  isEnvironmentSecretPath,
+  type ProtectedPathFinalKind,
+} from "./model-file-policy.js";
 export { isEnvironmentSecretPath } from "./model-file-policy.js";
 import { markHostCommandObservation } from "./pi-host-command-observation.js";
 // Filesystem + shell tools that let the Pi agent operate on a workspace folder.
@@ -14,9 +18,17 @@ import { processGroupStillRuns } from "../shared/process-group.js";
 import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
 import type { Readable } from "node:stream";
-import { ForegroundReadOperations, ForegroundReadCleanupError, closeForegroundResource } from "./foreground-read-scope.js";
+import {
+  ForegroundReadOperations,
+  ForegroundReadCleanupError,
+  closeForegroundResource,
+} from "./foreground-read-scope.js";
 import { StringDecoder } from "node:string_decoder";
-import { CodingToolMatchTimeout, withCodingToolGlob, withCodingToolMatcher } from "./coding-tool-matcher.js";
+import {
+  CodingToolMatchTimeout,
+  withCodingToolGlob,
+  withCodingToolMatcher,
+} from "./coding-tool-matcher.js";
 import { agentShellCommandEnvironment } from "./agent-command-environment.js";
 import { runBoundedShellCommand } from "./bounded-shell-command.js";
 import {
@@ -70,7 +82,11 @@ let re2Constructor: typeof import("re2-wasm").RE2 | undefined;
 /** Tools whose effects mutate the folder or system — gated behind approval in "ask" mode. */
 export const APPROVAL_TOOL_NAMES = new Set(["write_file", "edit_file", "run_command"]);
 /** Outbound disclosure or paid model operations always need attended approval. */
-export const DISCLOSURE_APPROVAL_TOOL_NAMES = new Set(["share_image", "generate_image", "classify"]);
+export const DISCLOSURE_APPROVAL_TOOL_NAMES = new Set([
+  "share_image",
+  "generate_image",
+  "classify",
+]);
 
 function textResult(text: string): AgentToolResult<null> {
   return { content: [{ type: "text", text }], details: null };
@@ -95,10 +111,10 @@ function textLines(text: string): string[] {
 }
 
 /** Count a shortest line edit script without exposing file contents in tool details. */
-export function lineChangeCounts(before: string, after: string): Pick<
-  FileMutationDetailsV1,
-  "additions" | "deletions"
-> {
+export function lineChangeCounts(
+  before: string,
+  after: string,
+): Pick<FileMutationDetailsV1, "additions" | "deletions"> {
   const beforeLines = textLines(before);
   const afterLines = textLines(after);
   let prefix = 0;
@@ -137,7 +153,11 @@ export function lineChangeCounts(before: string, after: string): Pick<
   }
   const offset = maxDistance;
   const furthest = new Int32Array(maxDistance * 2 + 1);
-  for (let distance = 0; distance <= Math.min(maxDistance, MAX_EXACT_LINE_DIFF_DISTANCE); distance += 1) {
+  for (
+    let distance = 0;
+    distance <= Math.min(maxDistance, MAX_EXACT_LINE_DIFF_DISTANCE);
+    distance += 1
+  ) {
     for (let diagonal = -distance; diagonal <= distance; diagonal += 2) {
       const index = offset + diagonal;
       let oldIndex: number;
@@ -170,10 +190,7 @@ export function lineChangeCounts(before: string, after: string): Pick<
   return { additions: newCount, deletions: oldCount };
 }
 
-function fileMutationDetails(
-  before: string,
-  after: string,
-): FileMutationDetailsV1 {
+function fileMutationDetails(before: string, after: string): FileMutationDetailsV1 {
   const changes = lineChangeCounts(before, after);
   return { kind: "file_line_changes", version: 1, ...changes };
 }
@@ -224,14 +241,20 @@ async function readWritePreimage(
  * starts at the size the file had when it was checked and grows only if the
  * file grew since, so a small edit never allocates the whole limit.
  */
-async function readAtMost(handle: fs.FileHandle, limit: number, expectedSize: number): Promise<Buffer | undefined> {
+async function readAtMost(
+  handle: fs.FileHandle,
+  limit: number,
+  expectedSize: number,
+): Promise<Buffer | undefined> {
   // One spare byte shows whether the file ends where stat said it would.
   let buffer = Buffer.allocUnsafe(Math.min(limit, expectedSize) + 1);
   let length = 0;
   for (;;) {
     if (length === buffer.length) {
       // The file grew while being read; length <= limit here.
-      const grown = Buffer.allocUnsafe(Math.min(limit + 1, length + Math.max(length, FILE_READ_CHUNK_BYTES)));
+      const grown = Buffer.allocUnsafe(
+        Math.min(limit + 1, length + Math.max(length, FILE_READ_CHUNK_BYTES)),
+      );
       buffer.copy(grown, 0, 0, length);
       buffer = grown;
     }
@@ -726,7 +749,10 @@ async function readParentFile(
   throwIfAborted(signal, "File read cancelled.");
   await workspace.assertReadPath?.(canonical);
   rejectEnvironmentSecret(root, canonical);
-  const handle = await fs.open(canonical, fsConstants.O_RDONLY | (fsConstants.O_NOFOLLOW ?? 0) | (fsConstants.O_NONBLOCK ?? 0));
+  const handle = await fs.open(
+    canonical,
+    fsConstants.O_RDONLY | (fsConstants.O_NOFOLLOW ?? 0) | (fsConstants.O_NONBLOCK ?? 0),
+  );
   try {
     throwIfAborted(signal, "File read cancelled.");
     const stat = await handle.stat();
@@ -743,14 +769,23 @@ async function readParentFile(
     let bytesRead = 0;
     while (bytesRead < buffer.length) {
       throwIfAborted(signal, "File read cancelled.");
-      const result = await handle.read(buffer, bytesRead, Math.min(64 * 1024, buffer.length - bytesRead), bytesRead);
+      const result = await handle.read(
+        buffer,
+        bytesRead,
+        Math.min(64 * 1024, buffer.length - bytesRead),
+        bytesRead,
+      );
       onRead?.(result.bytesRead);
       workspace.testObserver?.onFileRead?.(result.bytesRead);
       if (!result.bytesRead) break;
       bytesRead += result.bytesRead;
     }
     await verifyWorkspaceRoot(workspace, signal);
-    return { buffer: buffer.subarray(0, Math.min(bytesRead, maxBytes)), truncated: bytesRead > maxBytes, bytesRead };
+    return {
+      buffer: buffer.subarray(0, Math.min(bytesRead, maxBytes)),
+      truncated: bytesRead > maxBytes,
+      bytesRead,
+    };
   } finally {
     await closeForegroundResource(handle);
   }
@@ -765,7 +800,13 @@ interface ParentScanBudget {
 }
 
 function parentScanBudget(): ParentScanBudget {
-  return { entries: 0, bytes: 0, deadline: Date.now() + MAX_GREP_DURATION_MS, stopped: false, warnings: new Set() };
+  return {
+    entries: 0,
+    bytes: 0,
+    deadline: Date.now() + MAX_GREP_DURATION_MS,
+    stopped: false,
+    warnings: new Set(),
+  };
 }
 
 function parentScanStopped(budget: ParentScanBudget, signal?: AbortSignal): boolean {
@@ -801,7 +842,8 @@ async function parentDirectoryEntries(
     const after = assertRealPathInRoot(root, await fs.realpath(full), full);
     throwIfAborted(signal, "Directory traversal cancelled.");
     await workspace.assertReadPath?.(after);
-    if (canonical !== after || !sameFile(before, await fs.stat(after))) throw new Error("Directory changed while opening.");
+    if (canonical !== after || !sameFile(before, await fs.stat(after)))
+      throw new Error("Directory changed while opening.");
     const entries: Dirent[] = [];
     while (!parentScanStopped(budget, signal)) {
       // No lookahead beyond the work budget: reaching it is conservatively incomplete.
@@ -817,7 +859,11 @@ async function parentDirectoryEntries(
       throwIfAborted(signal, "Directory traversal cancelled.");
       if (workspace.assertReadPath) {
         try {
-          const entryPath = assertRealPathInRoot(root, await fs.realpath(path.join(full, entry.name)), entry.name);
+          const entryPath = assertRealPathInRoot(
+            root,
+            await fs.realpath(path.join(full, entry.name)),
+            entry.name,
+          );
           await workspace.assertReadPath(entryPath);
         } catch {
           throwIfAborted(signal, "Directory traversal cancelled.");
@@ -853,12 +899,16 @@ function makeParentReadFile(workspace: WorkspaceRootGuard): AgentTool {
       const { path: p } = params as { path: string };
       const { root: realRoot, full } = await resolveExistingInRoot(workspace, p, signal);
       rejectEnvironmentSecret(realRoot, full);
-      const { buffer, truncated } = await readParentFile(workspace, realRoot, full, MAX_READ_BYTES, signal);
+      const { buffer, truncated } = await readParentFile(
+        workspace,
+        realRoot,
+        full,
+        MAX_READ_BYTES,
+        signal,
+      );
       const decoder = new StringDecoder("utf8");
       const text = decoder.write(buffer) + (truncated ? "" : decoder.end());
-      return textResult(
-        truncated ? `${text}\n… [truncated]` : text || "[empty file]",
-      );
+      return textResult(truncated ? `${text}\n… [truncated]` : text || "[empty file]");
     },
   };
 }
@@ -875,7 +925,10 @@ async function commitPinnedWrite(input: {
     throw new Error("The written file exceeds the safe write limit.");
   }
   const args = [
-    "write-file", input.root, input.rootIdentity.device, input.rootIdentity.inode,
+    "write-file",
+    input.root,
+    input.rootIdentity.device,
+    input.rootIdentity.inode,
     input.relativePath,
     ...(input.before
       ? ["existing", input.before.identity.device, input.before.identity.inode, input.before.sha256]
@@ -883,19 +936,28 @@ async function commitPinnedWrite(input: {
     String(input.updated.length),
   ];
   await new Promise<void>((resolve, reject) => {
-    const child = execFile(input.binary ?? resolveSubagentFileMutatorBinary(), args, {
-      encoding: "utf8",
-      maxBuffer: 1024,
-      timeout: 120_000,
-    }, (error, stdout, stderr) => {
-      if (error || stdout !== "written\n") {
-        reject(new Error(stderr.trim() === "conflict"
-          ? "The workspace file changed before the write could be committed."
-          : "The workspace write could not be completed safely; the target file may be incomplete."));
-      } else {
-        resolve();
-      }
-    });
+    const child = execFile(
+      input.binary ?? resolveSubagentFileMutatorBinary(),
+      args,
+      {
+        encoding: "utf8",
+        maxBuffer: 1024,
+        timeout: 120_000,
+      },
+      (error, stdout, stderr) => {
+        if (error || stdout !== "written\n") {
+          reject(
+            new Error(
+              stderr.trim() === "conflict"
+                ? "The workspace file changed before the write could be committed."
+                : "The workspace write could not be completed safely; the target file may be incomplete.",
+            ),
+          );
+        } else {
+          resolve();
+        }
+      },
+    );
     child.stdin?.on("error", () => undefined);
     child.stdin?.end(input.updated);
   });
@@ -910,13 +972,19 @@ async function readReplacedFile(
   full: string,
   suppliedPath: string,
   signal: AbortSignal | undefined,
-): Promise<{
-  source: { sha256: string; lines: number; text?: string };
-  preimage: { identity: PinnedWorkspaceRootIdentity; sha256: string };
-} | undefined> {
+): Promise<
+  | {
+      source: { sha256: string; lines: number; text?: string };
+      preimage: { identity: PinnedWorkspaceRootIdentity; sha256: string };
+    }
+  | undefined
+> {
   let handle: fs.FileHandle;
   try {
-    handle = await fs.open(full, fsConstants.O_RDONLY | (fsConstants.O_NOFOLLOW ?? 0) | (fsConstants.O_NONBLOCK ?? 0));
+    handle = await fs.open(
+      full,
+      fsConstants.O_RDONLY | (fsConstants.O_NOFOLLOW ?? 0) | (fsConstants.O_NONBLOCK ?? 0),
+    );
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
     throw error;
@@ -935,7 +1003,10 @@ async function readReplacedFile(
     const source = await readWritePreimage(handle, signal);
     return {
       source,
-      preimage: { identity: { device: stat.dev.toString(), inode: stat.ino.toString() }, sha256: source.sha256 },
+      preimage: {
+        identity: { device: stat.dev.toString(), inode: stat.ino.toString() },
+        sha256: source.sha256,
+      },
     };
   } finally {
     await handle.close();
@@ -968,14 +1039,18 @@ export async function writeWorkspaceBinaryFile(
   // The named file itself is never followed. The native writer gets the real
   // path and refuses a link that appears there later.
   if (await isSymbolicLink(resolveInRoot(workspace.lexical, suppliedPath))) {
-    throw new Error(`${suppliedPath} is a link, and a generated image is only written to a real file, never through a link.`);
+    throw new Error(
+      `${suppliedPath} is a link, and a generated image is only written to a real file, never through a link.`,
+    );
   }
   const existing = await readReplacedFile(full, suppliedPath, signal);
   // A create-only write never replaces a file; the native writer's "new" mode
   // also refuses one that appears after this check.
   if (existing && options.replace === false) {
     throw Object.assign(
-      new Error(`${suppliedPath} already exists, and only the file the approval named may be replaced.`),
+      new Error(
+        `${suppliedPath} already exists, and only the file the approval named may be replaced.`,
+      ),
       { code: "EEXIST" },
     );
   }
@@ -983,8 +1058,15 @@ export async function writeWorkspaceBinaryFile(
   const realRoot = await verifyWorkspaceRoot(workspace, signal);
   const relativePath = path.relative(realRoot, full).split(path.sep).join("/");
   // A linked folder can lead into .git or .ssh even when the named path has no hidden folder.
-  if (relativePath.split("/").slice(0, -1).some((segment) => segment.startsWith("."))) {
-    throw new Error(`${suppliedPath} leads into a hidden folder (one whose name starts with a dot), where a generated image is never written.`);
+  if (
+    relativePath
+      .split("/")
+      .slice(0, -1)
+      .some((segment) => segment.startsWith("."))
+  ) {
+    throw new Error(
+      `${suppliedPath} leads into a hidden folder (one whose name starts with a dot), where a generated image is never written.`,
+    );
   }
   await commitPinnedWrite({
     ...(options.fileMutatorBinary ? { binary: options.fileMutatorBinary } : {}),
@@ -1017,9 +1099,10 @@ function makeWriteFile(workspace: WorkspaceRootGuard, binary?: string): AgentToo
       content: Type.String({ description: "Full file content to write." }),
     }),
     execute: async (_id, params, signal): Promise<AgentToolResult<FileMutationDetailsV1>> => {
-      const activeWorkspace = workspace.exactIdentity === null
-        ? pinWorkspaceRoot(workspace.lexical, workspace.testObserver)
-        : workspace;
+      const activeWorkspace =
+        workspace.exactIdentity === null
+          ? pinWorkspaceRoot(workspace.lexical, workspace.testObserver)
+          : workspace;
       const { path: p, content } = params as { path: string; content: string };
       const full = await resolveWritableInRoot(activeWorkspace, p, signal);
       assertAgentMayWriteConfigPath(p, full);
@@ -1027,15 +1110,24 @@ function makeWriteFile(workspace: WorkspaceRootGuard, binary?: string): AgentToo
       const before: { text?: string; lines: number } = existing?.source ?? { text: "", lines: 0 };
       const preimage = existing?.preimage;
       throwIfAborted(signal, "File write cancelled.");
-      const details: FileMutationDetailsV1 = before.text === undefined
-        // Too large to diff: count the replacement as whole-file.
-        ? { kind: "file_line_changes", version: 1, additions: textLines(content).length, deletions: before.lines }
-        : fileMutationDetails(before.text, content);
+      const details: FileMutationDetailsV1 =
+        before.text === undefined
+          ? // Too large to diff: count the replacement as whole-file.
+            {
+              kind: "file_line_changes",
+              version: 1,
+              additions: textLines(content).length,
+              deletions: before.lines,
+            }
+          : fileMutationDetails(before.text, content);
       throwIfAborted(signal, "File write cancelled.");
       const root = await verifyWorkspaceRoot(activeWorkspace, signal);
       const relativePath = path.relative(root, full).split(path.sep).join("/");
       const updated = Buffer.from(content, "utf8");
-      details.producedFile = parseProducedFile({ relativePath, operation: "written", bytes: updated.length }, "write_file");
+      details.producedFile = parseProducedFile(
+        { relativePath, operation: "written", bytes: updated.length },
+        "write_file",
+      );
       await activeWorkspace.testObserver?.beforeFileWrite?.(full);
       throwIfAborted(signal, "File write cancelled.");
       await commitPinnedWrite({
@@ -1075,19 +1167,28 @@ async function commitPinnedEdit(input: {
     String(input.updated.length),
   ];
   await new Promise<void>((resolve, reject) => {
-    const child = execFile(input.binary ?? resolveSubagentFileMutatorBinary(), args, {
-      encoding: "utf8",
-      maxBuffer: 1024,
-      timeout: 120_000,
-    }, (error, stdout, stderr) => {
-      if (error || stdout !== "edited\n") {
-        reject(new Error(stderr.trim() === "conflict"
-          ? "The workspace file changed before the edit could be committed."
-          : "The workspace edit could not be completed safely."));
-      } else {
-        resolve();
-      }
-    });
+    const child = execFile(
+      input.binary ?? resolveSubagentFileMutatorBinary(),
+      args,
+      {
+        encoding: "utf8",
+        maxBuffer: 1024,
+        timeout: 120_000,
+      },
+      (error, stdout, stderr) => {
+        if (error || stdout !== "edited\n") {
+          reject(
+            new Error(
+              stderr.trim() === "conflict"
+                ? "The workspace file changed before the edit could be committed."
+                : "The workspace edit could not be completed safely.",
+            ),
+          );
+        } else {
+          resolve();
+        }
+      },
+    );
     // The callback owns child errors, including an early native rejection.
     child.stdin?.on("error", () => undefined);
     child.stdin?.end(input.updated);
@@ -1131,9 +1232,10 @@ function makeEditFile(workspace: WorkspaceRootGuard, binary?: string): AgentTool
           throw new Error(`Path "${p}" is not an exclusively linked regular file.`);
         }
         await workspace.testObserver?.afterFileStat?.(full);
-        const bounded = stat.size > BigInt(MAX_EDIT_SOURCE_BYTES)
-          ? undefined
-          : await readAtMost(handle, MAX_EDIT_SOURCE_BYTES, Number(stat.size));
+        const bounded =
+          stat.size > BigInt(MAX_EDIT_SOURCE_BYTES)
+            ? undefined
+            : await readAtMost(handle, MAX_EDIT_SOURCE_BYTES, Number(stat.size));
         if (!bounded) {
           throw new Error(
             `${p} is larger than edit_file's ${MAX_EDIT_SOURCE_BYTES / 1024 / 1024} MiB limit; use write_file or run_command for files this large.`,
@@ -1148,11 +1250,17 @@ function makeEditFile(workspace: WorkspaceRootGuard, binary?: string): AgentTool
       const original = source.toString("utf8");
       // Decoding is lossy for invalid sequences; never rewrite bytes we cannot round-trip.
       if (!Buffer.from(original, "utf8").equals(source)) {
-        throw new Error(`edit_file only edits valid UTF-8 text files; ${p} contains bytes that are not UTF-8.`);
+        throw new Error(
+          `edit_file only edits valid UTF-8 text files; ${p} contains bytes that are not UTF-8.`,
+        );
       }
       throwIfAborted(signal, "File edit cancelled.");
       let count = 0;
-      for (let at = original.indexOf(old_string); at !== -1; at = original.indexOf(old_string, at + old_string.length)) {
+      for (
+        let at = original.indexOf(old_string);
+        at !== -1;
+        at = original.indexOf(old_string, at + old_string.length)
+      ) {
         count += 1;
       }
       if (count === 0) throw new Error(`old_string not found in ${p}.`);
@@ -1161,15 +1269,18 @@ function makeEditFile(workspace: WorkspaceRootGuard, binary?: string): AgentTool
       await workspace.testObserver?.beforeWriteCommit?.(full);
       throwIfAborted(signal, "File edit cancelled.");
       const start = original.indexOf(old_string);
-      const updated = original.slice(0, start) + new_string + original.slice(start + old_string.length);
+      const updated =
+        original.slice(0, start) + new_string + original.slice(start + old_string.length);
       const details = fileMutationDetails(original, updated);
       throwIfAborted(signal, "File edit cancelled.");
       const relativePath = path.relative(root, full).split(path.sep).join("/");
       const updatedBytes = Buffer.from(updated, "utf8");
-      details.producedFile = parseProducedFile({ relativePath, operation: "edited", bytes: updatedBytes.length }, "edit_file");
-      const rootStat = workspace.exactIdentity === null
-        ? await fs.stat(root, { bigint: true })
-        : null;
+      details.producedFile = parseProducedFile(
+        { relativePath, operation: "edited", bytes: updatedBytes.length },
+        "edit_file",
+      );
+      const rootStat =
+        workspace.exactIdentity === null ? await fs.stat(root, { bigint: true }) : null;
       await commitPinnedEdit({
         binary,
         root,
@@ -1317,7 +1428,13 @@ function makeParentListDir(workspace: WorkspaceRootGuard): AgentTool {
       lines.sort();
       if (truncated) budget.warnings.add(`… [truncated at ${MAX_LIST_ENTRIES} entries]`);
       await verifyWorkspaceRoot(workspace, signal);
-      return textResult(formatBoundedSearchResult(lines, budget.stopped ? "[no entries returned]" : "[empty directory]", [...budget.warnings]));
+      return textResult(
+        formatBoundedSearchResult(
+          lines,
+          budget.stopped ? "[no entries returned]" : "[empty directory]",
+          [...budget.warnings],
+        ),
+      );
     },
   };
 }
@@ -1473,8 +1590,14 @@ function makeParentGlob(workspace: WorkspaceRootGuard): AgentTool {
   return {
     name: "glob",
     label: "Find Files",
-    description: 'Find files in the workspace folder matching a glob pattern, e.g. "src/**/*.ts". Large searches return an incomplete-result notice.',
-    parameters: Type.Object({ pattern: Type.String({ maxLength: MAX_SEARCH_PATTERN_CHARS, description: "Glob pattern relative to the workspace folder." }) }),
+    description:
+      'Find files in the workspace folder matching a glob pattern, e.g. "src/**/*.ts". Large searches return an incomplete-result notice.',
+    parameters: Type.Object({
+      pattern: Type.String({
+        maxLength: MAX_SEARCH_PATTERN_CHARS,
+        description: "Glob pattern relative to the workspace folder.",
+      }),
+    }),
     execute: async (_id, params, signal): Promise<AgentToolResult<null>> => {
       const { pattern } = params as { pattern: string };
       throwIfAborted(signal, "File search cancelled.");
@@ -1490,9 +1613,17 @@ function makeParentGlob(workspace: WorkspaceRootGuard): AgentTool {
               if (parentScanStopped(budget, signal)) break;
               if (matches.has(candidate)) continue;
               try {
-                const canonical = assertRealPathInRoot(root, await fs.realpath(resolveInRoot(workspace.lexical, candidate)), candidate);
+                const canonical = assertRealPathInRoot(
+                  root,
+                  await fs.realpath(resolveInRoot(workspace.lexical, candidate)),
+                  candidate,
+                );
                 await workspace.assertReadPath?.(canonical);
-                if (isEnvironmentSecretPath(candidate) || isEnvironmentSecretPath(path.relative(root, canonical))) continue;
+                if (
+                  isEnvironmentSecretPath(candidate) ||
+                  isEnvironmentSecretPath(path.relative(root, canonical))
+                )
+                  continue;
               } catch {
                 throwIfAborted(signal, "File search cancelled.");
                 continue;
@@ -1512,7 +1643,11 @@ function makeParentGlob(workspace: WorkspaceRootGuard): AgentTool {
             try {
               const resolved = await resolveExistingInRoot(workspace, task.path, signal);
               full = resolved.full;
-              if (isEnvironmentSecretPath(task.path) || isEnvironmentSecretPath(path.relative(root, full))) continue;
+              if (
+                isEnvironmentSecretPath(task.path) ||
+                isEnvironmentSecretPath(path.relative(root, full))
+              )
+                continue;
               throwIfAborted(signal, "File search cancelled.");
               directory = (await fs.stat(full)).isDirectory();
             } catch {
@@ -1532,19 +1667,34 @@ function makeParentGlob(workspace: WorkspaceRootGuard): AgentTool {
               }
               budget.entries++;
               try {
-                const lexical = resolveInRoot(workspace.lexical, path.join(task.path, prepared.literal));
+                const lexical = resolveInRoot(
+                  workspace.lexical,
+                  path.join(task.path, prepared.literal),
+                );
                 await workspace.testObserver?.beforeEntryAccess?.(lexical);
                 throwIfAborted(signal, "File search cancelled.");
                 const stat = await fs.lstat(lexical);
                 workspace.testObserver?.onDirectoryEntry?.(lexical);
-                entries = [{ name: prepared.literal, directory: stat.isDirectory(), link: stat.isSymbolicLink() }];
+                entries = [
+                  {
+                    name: prepared.literal,
+                    directory: stat.isDirectory(),
+                    link: stat.isSymbolicLink(),
+                  },
+                ];
               } catch {
                 throwIfAborted(signal, "File search cancelled.");
                 continue;
               }
             } else {
               try {
-                entries = (await parentDirectoryEntries(workspace, full, budget, signal)).map((entry) => ({ name: entry.name, directory: entry.isDirectory(), link: entry.isSymbolicLink() }));
+                entries = (await parentDirectoryEntries(workspace, full, budget, signal)).map(
+                  (entry) => ({
+                    name: entry.name,
+                    directory: entry.isDirectory(),
+                    link: entry.isSymbolicLink(),
+                  }),
+                );
               } catch (error) {
                 if (error instanceof ForegroundReadCleanupError) throw error;
                 throwIfAborted(signal, "File search cancelled.");
@@ -1563,7 +1713,9 @@ function makeParentGlob(workspace: WorkspaceRootGuard): AgentTool {
         budget.warnings.add(`… [search stopped after ${MAX_GREP_DURATION_MS} ms]`);
       }
       await verifyWorkspaceRoot(workspace, signal);
-      return textResult(formatBoundedSearchResult([...matches].sort(), "[no matches]", [...budget.warnings]));
+      return textResult(
+        formatBoundedSearchResult([...matches].sort(), "[no matches]", [...budget.warnings]),
+      );
     },
   };
 }
@@ -1774,10 +1926,16 @@ function makeParentGrep(workspace: WorkspaceRootGuard): AgentTool {
   return {
     name: "grep",
     label: "Search Files",
-    description: "Search the workspace folder for lines matching a JavaScript regular expression. Returns file:line: match, capped at 200 hits. Large searches return an incomplete-result notice.",
+    description:
+      "Search the workspace folder for lines matching a JavaScript regular expression. Returns file:line: match, capped at 200 hits. Large searches return an incomplete-result notice.",
     parameters: Type.Object({
-      pattern: Type.String({ maxLength: MAX_SEARCH_PATTERN_CHARS, description: "JavaScript regular expression to search for." }),
-      path: Type.Optional(Type.String({ description: "Subdirectory to limit the search to (default root)." })),
+      pattern: Type.String({
+        maxLength: MAX_SEARCH_PATTERN_CHARS,
+        description: "JavaScript regular expression to search for.",
+      }),
+      path: Type.Optional(
+        Type.String({ description: "Subdirectory to limit the search to (default root)." }),
+      ),
     }),
     execute: async (_id, params, signal): Promise<AgentToolResult<null>> => {
       const { pattern, path: p } = params as { pattern: string; path?: string };
@@ -1792,11 +1950,15 @@ function makeParentGrep(workspace: WorkspaceRootGuard): AgentTool {
           while (pending.length && !parentScanStopped(budget, signal)) {
             const full = pending.pop()!;
             const stat = await fs.lstat(full).catch(() => null);
-            if (!stat) { budget.warnings.add("… [search incomplete: unreadable paths skipped]"); continue; }
+            if (!stat) {
+              budget.warnings.add("… [search incomplete: unreadable paths skipped]");
+              continue;
+            }
             if (stat.isDirectory()) {
               let entries: Dirent[];
-              try { entries = await parentDirectoryEntries(workspace, full, budget, signal); }
-              catch (error) {
+              try {
+                entries = await parentDirectoryEntries(workspace, full, budget, signal);
+              } catch (error) {
                 if (error instanceof ForegroundReadCleanupError) throw error;
                 throwIfAborted(signal, "File search cancelled.");
                 await verifyWorkspaceRoot(workspace, signal);
@@ -1807,12 +1969,16 @@ function makeParentGrep(workspace: WorkspaceRootGuard): AgentTool {
               for (const entry of entries.reverse()) {
                 if (entry.name.startsWith(".") || entry.isSymbolicLink()) continue;
                 if (entry.isDirectory() && SKIP_DIRS.has(entry.name)) continue;
-                if (entry.isDirectory() || entry.isFile()) pending.push(path.join(full, entry.name));
+                if (entry.isDirectory() || entry.isFile())
+                  pending.push(path.join(full, entry.name));
               }
               continue;
             }
             if (!stat.isFile()) continue;
-            if (stat.size > 512_000) { budget.warnings.add("… [search incomplete: oversized files skipped]"); continue; }
+            if (stat.size > 512_000) {
+              budget.warnings.add("… [search incomplete: oversized files skipped]");
+              continue;
+            }
             const remaining = MAX_GREP_BYTES - budget.bytes;
             if (remaining <= 1) {
               budget.warnings.add(`… [scan stopped after ${MAX_GREP_BYTES} bytes]`);
@@ -1820,7 +1986,16 @@ function makeParentGrep(workspace: WorkspaceRootGuard): AgentTool {
             }
             let read: Awaited<ReturnType<typeof readParentFile>>;
             try {
-              read = await readParentFile(workspace, root, full, Math.min(512_000, remaining - 1), signal, (bytes) => { budget.bytes += bytes; });
+              read = await readParentFile(
+                workspace,
+                root,
+                full,
+                Math.min(512_000, remaining - 1),
+                signal,
+                (bytes) => {
+                  budget.bytes += bytes;
+                },
+              );
             } catch (error) {
               if (error instanceof ForegroundReadCleanupError) throw error;
               throwIfAborted(signal, "File search cancelled.");
@@ -1829,7 +2004,11 @@ function makeParentGrep(workspace: WorkspaceRootGuard): AgentTool {
               continue;
             }
             if (read.truncated) {
-              budget.warnings.add(remaining <= 512_001 ? `… [scan stopped after ${MAX_GREP_BYTES} bytes]` : "… [search incomplete: oversized files skipped]");
+              budget.warnings.add(
+                remaining <= 512_001
+                  ? `… [scan stopped after ${MAX_GREP_BYTES} bytes]`
+                  : "… [search incomplete: oversized files skipped]",
+              );
               if (remaining <= 512_001) break;
               continue;
             }
@@ -1841,7 +2020,9 @@ function makeParentGrep(workspace: WorkspaceRootGuard): AgentTool {
                 budget.stopped = true;
                 break;
               }
-              out.push(`${path.relative(root, full)}:${index + 1}: ${lines[index]!.trim().slice(0, 200)}`);
+              out.push(
+                `${path.relative(root, full)}:${index + 1}: ${lines[index]!.trim().slice(0, 200)}`,
+              );
             }
           }
         });
@@ -1902,7 +2083,8 @@ export function runCommandEnv(
   options: CodingToolOptions = {},
   environment: NodeJS.ProcessEnv = process.env,
 ): NodeJS.ProcessEnv {
-  const prefix = typeof options.pathPrefix === "function" ? options.pathPrefix() : options.pathPrefix;
+  const prefix =
+    typeof options.pathPrefix === "function" ? options.pathPrefix() : options.pathPrefix;
   if (!prefix) return environment;
   const current = environment.PATH;
   return { ...environment, PATH: current ? `${prefix}${path.delimiter}${current}` : prefix };
@@ -1955,7 +2137,8 @@ function makeRunCommand(workspace: WorkspaceRootGuard, options: CodingToolOption
       await verifyWorkspaceRoot(workspace, signal);
       const leftovers = options.leftovers?.begin();
       try {
-        if (leftovers?.signal) signal = signal ? AbortSignal.any([signal, leftovers.signal]) : leftovers.signal;
+        if (leftovers?.signal)
+          signal = signal ? AbortSignal.any([signal, leftovers.signal]) : leftovers.signal;
         const result = await runBoundedShellCommand({
           command,
           cwd: root,
@@ -1981,25 +2164,43 @@ function makeRunCommand(workspace: WorkspaceRootGuard, options: CodingToolOption
         }
         // Leftovers no job took (refused, unconfirmed, or a failed look) still run: say how to stop them.
         const untracked =
-          !handoff?.adopted && result.leftoverProcessGroup !== undefined && (await processGroupStillRuns(result.leftoverProcessGroup))
+          !handoff?.adopted &&
+          result.leftoverProcessGroup !== undefined &&
+          (await processGroupStillRuns(result.leftoverProcessGroup))
             ? handoff
               ? `[To stop them: kill -- -${result.leftoverProcessGroup}]`
               : untrackedLeftoversNote(result.leftoverProcessGroup)
             : undefined;
-        const output = [result.stdout, result.stderr, handoff?.note, untracked].filter(Boolean).join("\n").trim();
-        const combined = result.backgroundStopped ? [output, BACKGROUND_STOPPED_NOTE].filter(Boolean).join("\n\n") : output;
+        const output = [result.stdout, result.stderr, handoff?.note, untracked]
+          .filter(Boolean)
+          .join("\n")
+          .trim();
+        const combined = result.backgroundStopped
+          ? [output, BACKGROUND_STOPPED_NOTE].filter(Boolean).join("\n\n")
+          : output;
         if (result.exitCode === 0 && !result.timedOut && !result.outputLimitExceeded) {
-          return markHostCommandObservation(textResult(await boundedToolOutput(combined || "[no output]", MAX_OUTPUT_CHARS)), result);
+          return markHostCommandObservation(
+            textResult(await boundedToolOutput(combined || "[no output]", MAX_OUTPUT_CHARS)),
+            result,
+          );
         }
         const reason = result.timedOut
           ? "Command timed out."
           : result.outputLimitExceeded
             ? "Command exceeded the output limit."
             : `Command exited with error (code ${result.exitCode ?? "?"}).`;
-        return markHostCommandObservation({
-          ...textResult(await boundedToolOutput(`${reason}${combined ? `\n${combined}` : ""}`, MAX_OUTPUT_CHARS)),
-          isError: true,
-        }, result);
+        return markHostCommandObservation(
+          {
+            ...textResult(
+              await boundedToolOutput(
+                `${reason}${combined ? `\n${combined}` : ""}`,
+                MAX_OUTPUT_CHARS,
+              ),
+            ),
+            isError: true,
+          },
+          result,
+        );
       } finally {
         leftovers?.release?.();
         try {
@@ -2017,18 +2218,30 @@ const foregroundReads = new ForegroundReadOperations();
 function withForegroundReadScope(tool: AgentTool): AgentTool {
   return {
     ...tool,
-    execute: (id, params, signal, onUpdate) => foregroundReads.run(
-      signal,
-      tool.name === "read_file" ? undefined : MAX_GREP_DURATION_MS,
-      (operationSignal) => tool.execute(id, params, operationSignal, onUpdate ? (update) => {
-        if (!operationSignal.aborted) onUpdate(update);
-      } : undefined),
-      () => textResult(`… [search stopped after ${MAX_GREP_DURATION_MS} ms]`),
-    ),
+    execute: (id, params, signal, onUpdate) =>
+      foregroundReads.run(
+        signal,
+        tool.name === "read_file" ? undefined : MAX_GREP_DURATION_MS,
+        (operationSignal) =>
+          tool.execute(
+            id,
+            params,
+            operationSignal,
+            onUpdate
+              ? (update) => {
+                  if (!operationSignal.aborted) onUpdate(update);
+                }
+              : undefined,
+          ),
+        () => textResult(`… [search stopped after ${MAX_GREP_DURATION_MS} ms]`),
+      ),
   };
 }
 
-function buildParentCodingToolSet(workspace: WorkspaceRootGuard, options: CodingToolOptions = {}): AgentTool[] {
+function buildParentCodingToolSet(
+  workspace: WorkspaceRootGuard,
+  options: CodingToolOptions = {},
+): AgentTool[] {
   workspace.assertReadPath = options.assertReadPath;
   return [
     declarePiRuntimeReplay(withForegroundReadScope(makeParentReadFile(workspace)), "safe"),
@@ -2085,28 +2298,31 @@ export function buildSubagentCodingTools(
   if (permitted.has("grep")) tools.push(makeSubagentGrep(workspace));
   return tools.map((tool) => {
     const execute = tool.execute.bind(tool);
-    return declarePiRuntimeReplay({
-      ...tool,
-      execute: async (toolCallId, params, signal, onUpdate) => {
-        try {
-          return await execute(toolCallId, params, signal, onUpdate);
-        } catch (error) {
-          if (signal?.aborted) {
-            throw signal.reason instanceof Error
-              ? signal.reason
-              : new Error("Subagent workspace operation cancelled.");
+    return declarePiRuntimeReplay(
+      {
+        ...tool,
+        execute: async (toolCallId, params, signal, onUpdate) => {
+          try {
+            return await execute(toolCallId, params, signal, onUpdate);
+          } catch (error) {
+            if (signal?.aborted) {
+              throw signal.reason instanceof Error
+                ? signal.reason
+                : new Error("Subagent workspace operation cancelled.");
+            }
+            if (
+              typeof (error as NodeJS.ErrnoException | undefined)?.code === "string" ||
+              (error instanceof Error &&
+                (error.message.includes(workspace.lexical) ||
+                  (workspace.canonical !== null && error.message.includes(workspace.canonical))))
+            ) {
+              throw new Error("The requested workspace operation could not be completed safely.");
+            }
+            throw error;
           }
-          if (
-            typeof (error as NodeJS.ErrnoException | undefined)?.code === "string" ||
-            (error instanceof Error &&
-              (error.message.includes(workspace.lexical) ||
-                (workspace.canonical !== null && error.message.includes(workspace.canonical))))
-          ) {
-            throw new Error("The requested workspace operation could not be completed safely.");
-          }
-          throw error;
-        }
+        },
       },
-    }, "safe");
+      "safe",
+    );
   });
 }

@@ -43,23 +43,36 @@ export interface BackgroundJobToolOptions {
 }
 
 function textResult(text: string, isError = false): AgentToolResult<null> {
-  return { content: [{ type: "text", text }], details: null, ...(isError ? { isError: true } : {}) };
+  return {
+    content: [{ type: "text", text }],
+    details: null,
+    ...(isError ? { isError: true } : {}),
+  };
 }
 
 function statusLine(job: BackgroundJobView, now: number): string {
   const elapsed = formatDuration((job.endedAt ?? now) - job.startedAt);
-  const state = job.state === "running" ? `running for ${elapsed}` : `${describeJobEnd(job)} after ${elapsed}`;
-  const ports = job.ports?.length ? ` · listening on ${job.ports.map((port) => `localhost:${port}`).join(", ")}` : "";
+  const state =
+    job.state === "running" ? `running for ${elapsed}` : `${describeJobEnd(job)} after ${elapsed}`;
+  const ports = job.ports?.length
+    ? ` · listening on ${job.ports.map((port) => `localhost:${port}`).join(", ")}`
+    : "";
   return `${job.id} · ${state}${ports} · ${backgroundJobLabel(job)}`;
 }
 
 function outputBlock(output: string, truncated: boolean): string {
   if (!output.trim()) return "No output yet.";
-  return fenceAsData(truncated ? "Newest output (older output left out)" : "Output", output.trimEnd());
+  return fenceAsData(
+    truncated ? "Newest output (older output left out)" : "Output",
+    output.trimEnd(),
+  );
 }
 
 function requireJobId(value: unknown): string {
-  if (!isBackgroundJobId(value)) throw new Error('Give the job_id, for example "job_1a2b3c4d". Use action "list" to see this chat\'s jobs.');
+  if (!isBackgroundJobId(value))
+    throw new Error(
+      'Give the job_id, for example "job_1a2b3c4d". Use action "list" to see this chat\'s jobs.',
+    );
   return value;
 }
 
@@ -83,11 +96,19 @@ export function createBackgroundJobTool(options: BackgroundJobToolOptions): Agen
       "When you start a dev server, watcher or preview only to check the work you are doing now, set stop_when_chat_settles: Aiden then stops it 20 minutes after this chat goes quiet (no answer running and nothing waiting to be answered). Leave it unset for anything the person asked to keep running. " +
       "Use run_command for short commands whose result you need right away.",
     parameters: Type.Object({
-      action: Type.Union([Type.Literal("start"), Type.Literal("read"), Type.Literal("list"), Type.Literal("stop")]),
-      command: Type.Optional(Type.String({ description: 'The shell command to run (action "start").' })),
+      action: Type.Union([
+        Type.Literal("start"),
+        Type.Literal("read"),
+        Type.Literal("list"),
+        Type.Literal("stop"),
+      ]),
+      command: Type.Optional(
+        Type.String({ description: 'The shell command to run (action "start").' }),
+      ),
       description: Type.Optional(
         Type.String({
-          description: 'A short present-tense label for the job in 3-8 words, e.g. "Run the dev server" (action "start").',
+          description:
+            'A short present-tense label for the job in 3-8 words, e.g. "Run the dev server" (action "start").',
         }),
       ),
       stop_when_chat_settles: Type.Optional(
@@ -96,7 +117,9 @@ export function createBackgroundJobTool(options: BackgroundJobToolOptions): Agen
             'Stop this job 20 minutes after the chat goes quiet (action "start"). Set it for dev servers, watchers and previews you start only to verify the current task; leave it unset for jobs the person wants kept running.',
         }),
       ),
-      job_id: Type.Optional(Type.String({ description: 'The job to read or stop, e.g. "job_1a2b3c4d".' })),
+      job_id: Type.Optional(
+        Type.String({ description: 'The job to read or stop, e.g. "job_1a2b3c4d".' }),
+      ),
       max_chars: Type.Optional(
         Type.Integer({
           minimum: 200,
@@ -130,29 +153,48 @@ export function createBackgroundJobTool(options: BackgroundJobToolOptions): Agen
             env: options.env(),
             ...(input.stop_when_chat_settles === true ? { stopWhenChatSettles: true } : {}),
           });
-          const settled = await options.jobs.settle(options.chatId, started.id, options.startWaitMs ?? BACKGROUND_JOB_START_WAIT_MS);
-          const { output, truncated } = options.jobs.read(options.chatId, started.id, START_OUTPUT_CHARS);
+          const settled = await options.jobs.settle(
+            options.chatId,
+            started.id,
+            options.startWaitMs ?? BACKGROUND_JOB_START_WAIT_MS,
+          );
+          const { output, truncated } = options.jobs.read(
+            options.chatId,
+            started.id,
+            START_OUTPUT_CHARS,
+          );
           if (settled.state === "running") {
             return textResult(
               [
                 `Started ${statusLine(settled, now())}.`,
                 outputBlock(output, truncated),
                 ...(settled.stopWhenChatSettles
-                  ? ["Aiden stops it 20 minutes after this chat goes quiet; it is not reported to the chat when that happens."]
+                  ? [
+                      "Aiden stops it 20 minutes after this chat goes quiet; it is not reported to the chat when that happens.",
+                    ]
                   : []),
                 `You will get a message in this chat when it ends on its own. Read its output with action "read" and job_id "${settled.id}", or end it with action "stop".`,
               ].join("\n\n"),
             );
           }
           return textResult(
-            [`The job ended right away: ${statusLine(settled, now())}.`, outputBlock(output, truncated)].join("\n\n"),
+            [
+              `The job ended right away: ${statusLine(settled, now())}.`,
+              outputBlock(output, truncated),
+            ].join("\n\n"),
             settled.state !== "exited",
           );
         }
         case "read": {
           const jobId = requireJobId(input.job_id);
-          const { job, output, truncated } = options.jobs.read(options.chatId, jobId, input.max_chars ?? DEFAULT_READ_CHARS);
-          return textResult([`${statusLine(job, now())}.`, outputBlock(output, truncated)].join("\n\n"));
+          const { job, output, truncated } = options.jobs.read(
+            options.chatId,
+            jobId,
+            input.max_chars ?? DEFAULT_READ_CHARS,
+          );
+          return textResult(
+            [`${statusLine(job, now())}.`, outputBlock(output, truncated)].join("\n\n"),
+          );
         }
         case "list": {
           const jobs = options.jobs.list(options.chatId);
@@ -163,7 +205,9 @@ export function createBackgroundJobTool(options: BackgroundJobToolOptions): Agen
           const jobId = requireJobId(input.job_id);
           const stopped = await options.jobs.stop(options.chatId, jobId, "agent");
           const { output, truncated } = options.jobs.read(options.chatId, jobId, STOP_OUTPUT_CHARS);
-          return textResult([`${statusLine(stopped, now())}.`, outputBlock(output, truncated)].join("\n\n"));
+          return textResult(
+            [`${statusLine(stopped, now())}.`, outputBlock(output, truncated)].join("\n\n"),
+          );
         }
         default:
           throw new Error('Use action "start", "read", "list" or "stop".');

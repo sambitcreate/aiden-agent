@@ -108,7 +108,12 @@ export type BotClassifiableAction =
       remoteName: string;
       summary: string;
       description?: string;
-      annotations?: { title?: string; readOnlyHint?: boolean; destructiveHint?: boolean; openWorldHint?: boolean };
+      annotations?: {
+        title?: string;
+        readOnlyHint?: boolean;
+        destructiveHint?: boolean;
+        openWorldHint?: boolean;
+      };
       destructive: "destructive" | "additive" | "unknown";
       /**
        * A service tool's own operation names for this call (the app actions a
@@ -134,21 +139,39 @@ export interface BotActionClassification {
 }
 
 const ALL: ReadonlySet<BotActionClass> = new Set(BOT_ACTION_CLASSES);
-const NOT_LOCKED: ReadonlySet<BotActionClass> = new Set(BOT_ACTION_CLASSES.filter((entry) => !LOCKED_CLASSES.has(entry)));
-const WITHOUT_DELETE: ReadonlySet<BotActionClass> = new Set(BOT_ACTION_CLASSES.filter((entry) => entry !== "delete"));
+const NOT_LOCKED: ReadonlySet<BotActionClass> = new Set(
+  BOT_ACTION_CLASSES.filter((entry) => !LOCKED_CLASSES.has(entry)),
+);
+const WITHOUT_DELETE: ReadonlySet<BotActionClass> = new Set(
+  BOT_ACTION_CLASSES.filter((entry) => entry !== "delete"),
+);
 const MONEY_ONLY: ReadonlySet<BotActionClass> = new Set(["money"]);
 const NOT_LOCKED_WITHOUT_DELETE: ReadonlySet<BotActionClass> = new Set(
   [...NOT_LOCKED].filter((entry) => entry !== "delete"),
 );
 /** The Bot's own computer: everything but installing, which happens inside its own VM. */
-const COMPUTER_CLASSES: ReadonlySet<BotActionClass> = new Set(BOT_ACTION_CLASSES.filter((entry) => entry !== "install"));
+const COMPUTER_CLASSES: ReadonlySet<BotActionClass> = new Set(
+  BOT_ACTION_CLASSES.filter((entry) => entry !== "install"),
+);
 
 /** Actions that put text or keys into whatever has focus. */
 const TYPE_ACTIONS = new Set(["type", "type_text", "key", "press_key", "hotkey", "set_value"]);
 /** Actions that change nothing a rule covers. */
 const PASSIVE_ACTIONS = new Set([
-  "scroll", "move", "mouse_move", "hover", "wait", "capture", "screenshot", "zoom", "list_apps", "list_windows",
-  "verify", "set_window_frame", "focus_app", "cursor_position",
+  "scroll",
+  "move",
+  "mouse_move",
+  "hover",
+  "wait",
+  "capture",
+  "screenshot",
+  "zoom",
+  "list_apps",
+  "list_windows",
+  "verify",
+  "set_window_frame",
+  "focus_app",
+  "cursor_position",
 ]);
 
 /** The longest text a single signal is read from. */
@@ -176,7 +199,9 @@ class Collector {
     const others = new Set([...classes].filter((entry) => !LOCKED_CLASSES.has(entry)));
     const found = [
       ...(locked.size > 0 ? phraseMatches(phraseStems(bounded), locked) : []),
-      ...(others.size > 0 ? phraseMatches(phraseStems(bounded, { keepPastTense: true }), others) : []),
+      ...(others.size > 0
+        ? phraseMatches(phraseStems(bounded, { keepPastTense: true }), others)
+        : []),
     ];
     // A longer phrase wins over a shorter one inside it: "Post a message"
     // is a message ("post message"), not a public post ("post").
@@ -192,12 +217,17 @@ class Collector {
     );
     for (const match of matches) {
       this.classes.add(match.actionClass);
-      this.evidence.push({ actionClass: match.actionClass, kind: "word", source: `${source}: “${match.phrase}”` });
+      this.evidence.push({
+        actionClass: match.actionClass,
+        kind: "word",
+        source: `${source}: “${match.phrase}”`,
+      });
     }
   }
 
   text(...values: ReadonlyArray<string | undefined>): void {
-    for (const value of values) if (value !== undefined && value.length > 0) this.ruleText.push(value.slice(0, MAX_TEXT));
+    for (const value of values)
+      if (value !== undefined && value.length > 0) this.ruleText.push(value.slice(0, MAX_TEXT));
   }
 }
 
@@ -208,7 +238,12 @@ function lower(value: string | undefined): string {
 /** `AXSecureTextField`, a secure text field subrole, or a web password input role. */
 function isSecureRole(role: string | undefined): boolean {
   const value = lower(role).replace(/[^a-z]/gu, "");
-  return value.includes("securetextfield") || value === "secure" || value === "password" || value === "passwordfield";
+  return (
+    value.includes("securetextfield") ||
+    value === "secure" ||
+    value === "password" ||
+    value === "passwordfield"
+  );
 }
 
 function isCommunicationApp(app: string | undefined): boolean {
@@ -220,7 +255,9 @@ function isFinder(app: string | undefined): boolean {
   return value === "finder" || value === "com.apple.finder";
 }
 
-function chordOf(keys: string | undefined): { key: string; modifiers: readonly string[] } | undefined {
+function chordOf(
+  keys: string | undefined,
+): { key: string; modifiers: readonly string[] } | undefined {
   if (keys === undefined) return undefined;
   try {
     return parseComputerUseKeyChord(keys);
@@ -262,7 +299,12 @@ function autocompleteTokens(value: string | undefined): string[] {
     .split(/\s+/u)
     .filter((token) => token.length > 0)
     .filter((token) => !token.startsWith("section-"))
-    .filter((token) => !["shipping", "billing", "home", "work", "mobile", "fax", "pager", "webauthn"].includes(token));
+    .filter(
+      (token) =>
+        !["shipping", "billing", "home", "work", "mobile", "fax", "pager", "webauthn"].includes(
+          token,
+        ),
+    );
 }
 
 const CREDENTIAL_AUTOCOMPLETE = new Set(["current-password", "new-password", "one-time-code"]);
@@ -276,16 +318,30 @@ function hostOf(url: string | undefined): string | undefined {
   }
 }
 
-function classifyComputerUse(action: Extract<BotClassifiableAction, { surface: "computer_use" }>, out: Collector): void {
+function classifyComputerUse(
+  action: Extract<BotClassifiableAction, { surface: "computer_use" }>,
+  out: Collector,
+): void {
   const name = lower(action.action);
   if (PASSIVE_ACTIONS.has(name)) return;
-  out.text(action.app, action.windowTitle, action.element?.label, action.focusedElement?.label, ...(action.menuPath ?? []));
+  out.text(
+    action.app,
+    action.windowTitle,
+    action.element?.label,
+    action.focusedElement?.label,
+    ...(action.menuPath ?? []),
+  );
   const typing = TYPE_ACTIONS.has(name);
   const chord = name === "key" ? chordOf(action.keys) : undefined;
 
-  if (isSecureRole(action.element?.role)) out.strong("credentials", "the targeted element is a secure text field");
-  if (typing && isSecureRole(action.focusedElement?.role)) out.strong("credentials", "the focused element is a secure text field");
-  if (action.secureFieldInCapture === true && (name === "type" || (chord !== undefined && isPrintableChord(chord)))) {
+  if (isSecureRole(action.element?.role))
+    out.strong("credentials", "the targeted element is a secure text field");
+  if (typing && isSecureRole(action.focusedElement?.role))
+    out.strong("credentials", "the focused element is a secure text field");
+  if (
+    action.secureFieldInCapture === true &&
+    (name === "type" || (chord !== undefined && isPrintableChord(chord)))
+  ) {
     out.strong("credentials", "typing while the window shows a secure text field");
   }
 
@@ -310,19 +366,25 @@ function classifyComputerUse(action: Extract<BotClassifiableAction, { surface: "
   }
 }
 
-function classifyComputer(action: Extract<BotClassifiableAction, { surface: "computer" }>, out: Collector): void {
+function classifyComputer(
+  action: Extract<BotClassifiableAction, { surface: "computer" }>,
+  out: Collector,
+): void {
   const name = lower(action.action);
   if (PASSIVE_ACTIONS.has(name)) return;
   out.text(action.app, action.windowTitle, action.element?.label, action.intent);
   const typing = TYPE_ACTIONS.has(name);
-  if (isSecureRole(action.element?.role)) out.strong("credentials", "the targeted element is a secure text field");
+  if (isSecureRole(action.element?.role))
+    out.strong("credentials", "the targeted element is a secure text field");
   const classes = typing ? LOCKED_CLASSES : COMPUTER_CLASSES;
   out.words(action.element?.label, typing ? "field label" : "element label", classes);
   out.words(action.intent, "the Bot's stated intent", classes);
 }
 
 /** A `browser_press` key as one chord: `Control+Enter` is Enter with Control. */
-function browserChord(keys: string | undefined): { key: string; modifiers: readonly string[] } | undefined {
+function browserChord(
+  keys: string | undefined,
+): { key: string; modifiers: readonly string[] } | undefined {
   if (keys === undefined || keys.length === 0) return undefined;
   const parts = keys.split("+").map(lower);
   const key = parts.pop();
@@ -339,18 +401,25 @@ const BROWSER_TEXT_INPUT_TYPES = new Set(["", "text"]);
  * Shift- or Alt-Enter is a new line. In web mail only Control- or
  * Command-Enter sends.
  */
-function browserSendKey(action: Extract<BotClassifiableAction, { surface: "browser" }>, host: string | undefined): string | undefined {
+function browserSendKey(
+  action: Extract<BotClassifiableAction, { surface: "browser" }>,
+  host: string | undefined,
+): string | undefined {
   if (action.tool !== "browser_press") return undefined;
   const chord = browserChord(action.key);
   if (chord === undefined || !SUBMIT_KEYS.has(chord.key)) return undefined;
-  if (chord.modifiers.some((modifier) => modifier !== "control" && modifier !== "meta")) return undefined;
+  if (chord.modifiers.some((modifier) => modifier !== "control" && modifier !== "meta"))
+    return undefined;
   const field = action.field;
   if (field === undefined) return undefined;
   const role = lower(field.role);
   const tag = lower(field.tag);
   const type = lower(field.type);
   if (role === "searchbox" || role === "combobox" || type === "search") return undefined;
-  const editable = role === "textbox" || tag === "textarea" || (tag === "input" && BROWSER_TEXT_INPUT_TYPES.has(type));
+  const editable =
+    role === "textbox" ||
+    tag === "textarea" ||
+    (tag === "input" && BROWSER_TEXT_INPUT_TYPES.has(type));
   if (!editable) return undefined;
   const name = tokenize((field.accessibleName ?? "").slice(0, MAX_TEXT)).map(stem);
   if (name.some((word) => SEARCH_BOX_WORDS.has(word))) return undefined;
@@ -362,7 +431,10 @@ function browserSendKey(action: Extract<BotClassifiableAction, { surface: "brows
   return undefined;
 }
 
-function classifyBrowser(action: Extract<BotClassifiableAction, { surface: "browser" }>, out: Collector): void {
+function classifyBrowser(
+  action: Extract<BotClassifiableAction, { surface: "browser" }>,
+  out: Collector,
+): void {
   const field = action.field;
   const host = hostOf(action.url);
   out.text(field?.accessibleName, action.locator, action.selector, host?.split(".").join(" "));
@@ -384,7 +456,8 @@ function classifyBrowser(action: Extract<BotClassifiableAction, { surface: "brow
   }
   // Anything typed on a payment provider's own page is payment or account
   // details. Clicking around it (Activity, Help) is not.
-  if (typing && host !== undefined && isPaymentHost(host)) out.strong("money", "typing on a payment provider's page");
+  if (typing && host !== undefined && isPaymentHost(host))
+    out.strong("money", "typing on a payment provider's page");
 
   // A card field's "Security code" is the card's CVC, not a sign-in code.
   const classes = typing ? (cardField ? MONEY_ONLY : LOCKED_CLASSES) : ALL;
@@ -399,14 +472,32 @@ function classifyBrowser(action: Extract<BotClassifiableAction, { surface: "brow
 const POST = stem("post");
 const SEND = stem("send");
 /** Name words after `send` that make it a payment (`send_money`, `send_payment`). */
-const MCP_SEND_MONEY_WORDS: ReadonlySet<string> = new Set(["money", "payment", "fund", "cash"].map(stem));
+const MCP_SEND_MONEY_WORDS: ReadonlySet<string> = new Set(
+  ["money", "payment", "fund", "cash"].map(stem),
+);
 
-function classifyMcp(action: Extract<BotClassifiableAction, { surface: "mcp" }>, out: Collector): void {
+function classifyMcp(
+  action: Extract<BotClassifiableAction, { surface: "mcp" }>,
+  out: Collector,
+): void {
   const additive = action.destructive === "additive";
   const operations = (action.operations ?? []).slice(0, 20).map((name) => name.slice(0, MAX_TEXT));
-  out.text(action.modelName, action.remoteName, action.summary, action.annotations?.title, action.description, ...operations);
+  out.text(
+    action.modelName,
+    action.remoteName,
+    action.summary,
+    action.annotations?.title,
+    action.description,
+    ...operations,
+  );
 
-  classifyMcpName(tokenize(action.remoteName.slice(0, MAX_TEXT)).map(stem), additive, "tool name", 0, out);
+  classifyMcpName(
+    tokenize(action.remoteName.slice(0, MAX_TEXT)).map(stem),
+    additive,
+    "tool name",
+    0,
+    out,
+  );
   // `GMAIL_SEND_EMAIL`: the app's name leads, so its verb may stand second.
   for (const operation of operations) {
     classifyMcpName(tokenize(operation).map(stem), additive, "app action", 1, out);
@@ -425,7 +516,13 @@ function classifyMcp(action: Extract<BotClassifiableAction, { surface: "mcp" }>,
 }
 
 /** The classes a tool or operation name's verbs name; `lastLeading` is the last index a leading verb may sit at. */
-function classifyMcpName(nameStems: readonly string[], additive: boolean, source: string, lastLeading: number, out: Collector): void {
+function classifyMcpName(
+  nameStems: readonly string[],
+  additive: boolean,
+  source: string,
+  lastLeading: number,
+  out: Collector,
+): void {
   for (const verbs of MCP_NAME_VERBS) {
     if (verbs.actionClass === "delete" && additive) continue;
     const anywhere = verbs.anywhere.map(stem);
@@ -434,16 +531,21 @@ function classifyMcpName(nameStems: readonly string[], additive: boolean, source
       if (!anywhere.includes(word)) return false;
       const next = nameStems[index + 1] ?? "";
       // `post_message` posts into a conversation; it is not a public post.
-      if (verbs.actionClass === "publish" && word === POST && MCP_POST_MESSAGE_WORDS.has(next)) return false;
+      if (verbs.actionClass === "publish" && word === POST && MCP_POST_MESSAGE_WORDS.has(next))
+        return false;
       // `send_money` moves money; it is not a message.
-      if (verbs.actionClass === "communicate" && word === SEND && MCP_SEND_MONEY_WORDS.has(next)) return false;
+      if (verbs.actionClass === "communicate" && word === SEND && MCP_SEND_MONEY_WORDS.has(next))
+        return false;
       return true;
     });
-    if (matched === undefined) matched = nameStems.slice(0, lastLeading + 1).find((word) => leading.includes(word));
+    if (matched === undefined)
+      matched = nameStems.slice(0, lastLeading + 1).find((word) => leading.includes(word));
     if (matched === undefined) {
       for (const phrase of verbs.phrases ?? []) {
         const words = phraseStems(phrase);
-        const found = nameStems.some((_, start) => words.every((word, offset) => nameStems[start + offset] === word));
+        const found = nameStems.some((_, start) =>
+          words.every((word, offset) => nameStems[start + offset] === word),
+        );
         if (found) {
           matched = phrase;
           break;
@@ -460,7 +562,10 @@ function classifyMcpName(nameStems: readonly string[], additive: boolean, source
  * least one) appears in the action's labels, intent, tool name, title,
  * summary, window title, app or URL host. A passive action matches none.
  */
-export function classifyBotAction(action: BotClassifiableAction, customRules: readonly BotRule[]): BotActionClassification {
+export function classifyBotAction(
+  action: BotClassifiableAction,
+  customRules: readonly BotRule[],
+): BotActionClassification {
   const out = new Collector();
   switch (action.surface) {
     case "computer_use":
@@ -477,14 +582,20 @@ export function classifyBotAction(action: BotClassifiableAction, customRules: re
       break;
   }
   const customRuleIds = new Set<string>();
-  const custom = customRules.filter((rule) => rule.actionClass === undefined && typeof rule.text === "string");
+  const custom = customRules.filter(
+    (rule) => rule.actionClass === undefined && typeof rule.text === "string",
+  );
   if (custom.length > 0) {
     const words = new Set(out.ruleText.flatMap(actionStems));
     for (const rule of custom) {
       const needed = contentStems(rule.text!);
       if (needed.length === 0 || !needed.every((word) => words.has(word))) continue;
       customRuleIds.add(rule.id);
-      out.evidence.push({ ruleId: rule.id, kind: "word", source: `your rule's words: ${needed.join(", ")}` });
+      out.evidence.push({
+        ruleId: rule.id,
+        kind: "word",
+        source: `your rule's words: ${needed.join(", ")}`,
+      });
     }
   }
   return { classes: out.classes, customRuleIds, evidence: out.evidence };

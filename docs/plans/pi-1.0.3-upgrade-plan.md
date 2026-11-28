@@ -40,7 +40,7 @@ Live direct Pi dependencies move together to exact 1.0.3. The named `@aiden/pi-l
 ### 3. Azure identity migration
 
 - [x] Inventory all provider-keyed state before editing: encrypted desktop Pi credentials, Pi model cache, settings (last selection, hidden models and exact-model budgets), alias resolution, historical chats, Bots and schedules; CLI auth.json/models.json/settings.json under Aiden's actual configurable paths.
-- [x] Map the built-in provider `azure-openai-responses` to `azure`. Keep API id `azure-openai-responses`, AZURE_OPENAI_* variables, custom connection intent and custom: IDs unchanged. Existing custom alias routes take precedence.
+- [x] Map the built-in provider `azure-openai-responses` to `azure`. Keep API id `azure-openai-responses`, AZURE*OPENAI*\* variables, custom connection intent and custom: IDs unchanged. Existing custom alias routes take precedence.
 - [x] Define collision handling when both IDs exist; never overwrite a different credential/endpoint. Make migration restart-safe, idempotent and durable before consuming renamed identities; avoid partial updates or plaintext secret exposure.
 - [x] Test encrypted credential reload, restart/idempotence, both-ID collisions, model preferences, existing chat/schedule resolution, CLI auth/config migration and custom-provider preservation with real stores and fixtures.
 - [x] Update desktop/iOS/Android display aliases and subagent Azure environment selection. Inspect and run focused native suites; protocol revision changes only if the wire contract changes.

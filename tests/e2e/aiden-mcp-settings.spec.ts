@@ -4,7 +4,12 @@ import { expect, finishLmStudioOnboarding, test } from "./fixtures";
 test.use({ appEnvironment: { AIDEN_ANALYTICS: "0" } });
 
 /** One JSON-RPC call to Aiden's MCP endpoint, the way Claude Code or Codex sends it. */
-async function mcpCall(url: string, token: string, method: string, id: number): Promise<{ status: number; body: unknown }> {
+async function mcpCall(
+  url: string,
+  token: string,
+  method: string,
+  id: number,
+): Promise<{ status: number; body: unknown }> {
   const response = await fetch(url, {
     method: "POST",
     headers: {
@@ -16,9 +21,14 @@ async function mcpCall(url: string, token: string, method: string, id: number): 
       jsonrpc: "2.0",
       id,
       method,
-      params: method === "initialize"
-        ? { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "e2e", version: "1" } }
-        : {},
+      params:
+        method === "initialize"
+          ? {
+              protocolVersion: "2025-06-18",
+              capabilities: {},
+              clientInfo: { name: "e2e", version: "1" },
+            }
+          : {},
     }),
   });
   const text = await response.text();
@@ -33,13 +43,16 @@ async function mcpCall(url: string, token: string, method: string, id: number): 
 
 async function openAppsUsingAiden(page: Page): Promise<void> {
   await page.getByRole("button", { name: "Settings", exact: true }).click();
-  await page.getByRole("navigation", { name: "Settings" })
+  await page
+    .getByRole("navigation", { name: "Settings" })
     .getByRole("button", { name: "Connections", exact: true })
     .click();
   await page.getByRole("tab", { name: "Apps using Aiden", exact: true }).click();
 }
 
-test("an app added in Settings connects with its copied token and is refused once revoked", async ({ aiden }) => {
+test("an app added in Settings connects with its copied token and is refused once revoked", async ({
+  aiden,
+}) => {
   const { app, page } = aiden;
   await finishLmStudioOnboarding(page);
   await openAppsUsingAiden(page);
@@ -56,7 +69,10 @@ test("an app added in Settings connects with its copied token and is refused onc
   await page.getByRole("button", { name: "Add app", exact: true }).click();
   const addDialog = page.getByRole("dialog", { name: "Add an app" });
   await addDialog.getByRole("textbox").fill("E2E Client");
-  await expect(addDialog.getByRole("radio", { name: "Read only" })).toHaveAttribute("aria-checked", "true");
+  await expect(addDialog.getByRole("radio", { name: "Read only" })).toHaveAttribute(
+    "aria-checked",
+    "true",
+  );
   await addDialog.getByRole("button", { name: "Add app", exact: true }).click();
 
   const sheet = page.getByRole("dialog", { name: "Connect E2E Client" });
@@ -65,7 +81,11 @@ test("an app added in Settings connects with its copied token and is refused onc
   const readClipboard = () => app.evaluate(({ clipboard }) => clipboard.readText());
   await expect.poll(readClipboard).toMatch(/^[A-Za-z0-9_-]{43}$/u);
   const token = await readClipboard();
-  await expect(sheet.getByText(new RegExp(`^export AIDEN_MCP_TOKEN_E2E_CLIENT_[A-Z0-9]+='${token}'$`, "u")).first()).toBeVisible();
+  await expect(
+    sheet
+      .getByText(new RegExp(`^export AIDEN_MCP_TOKEN_E2E_CLIENT_[A-Z0-9]+='${token}'$`, "u"))
+      .first(),
+  ).toBeVisible();
   await sheet.getByRole("button", { name: "Done", exact: true }).click();
   await expect(sheet).toBeHidden();
 
@@ -78,7 +98,9 @@ test("an app added in Settings connects with its copied token and is refused onc
   expect(initialize.status).toBe(200);
   const tools = await mcpCall(address, token, "tools/list", 2);
   expect(tools.status).toBe(200);
-  const names = ((tools.body as { result?: { tools?: Array<{ name: string }> } }).result?.tools ?? []).map((tool) => tool.name);
+  const names = (
+    (tools.body as { result?: { tools?: Array<{ name: string }> } }).result?.tools ?? []
+  ).map((tool) => tool.name);
   expect(names).toContain("aiden_chat_list");
   expect(names).not.toContain("aiden_chat_start");
 
@@ -92,11 +114,13 @@ test("an app added in Settings connects with its copied token and is refused onc
 
   await toggle.click();
   await expect(page.getByText("Off", { exact: true })).toBeVisible();
-  await expect.poll(async () => {
-    try {
-      return (await mcpCall(address, token, "initialize", 4)).status;
-    } catch {
-      return "closed";
-    }
-  }).toBe("closed");
+  await expect
+    .poll(async () => {
+      try {
+        return (await mcpCall(address, token, "initialize", 4)).status;
+      } catch {
+        return "closed";
+      }
+    })
+    .toBe("closed");
 });

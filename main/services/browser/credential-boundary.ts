@@ -14,7 +14,11 @@
 //   page is zoomed, or the page navigated or scrolled during capture, the
 //   image is left out and the snapshot says why.
 
-import type { BrowserElement, BrowserImage, BrowserSnapshot } from "../../../renderer/shared/browser.js";
+import type {
+  BrowserElement,
+  BrowserImage,
+  BrowserSnapshot,
+} from "../../../renderer/shared/browser.js";
 import {
   isSensitiveField,
   sensitiveFieldBoxes,
@@ -52,8 +56,10 @@ export const BROWSER_IMAGE_OMITTED = Object.freeze({
   frame:
     "The screenshot was left out: part of this page is in a frame Aiden can't check for password, code or card fields. Use the page text instead.",
   zoom: "The screenshot was left out: the page is zoomed in, so password, code or card fields couldn't be covered. Use the page text instead.",
-  changed: "The screenshot was left out: the page changed while it was captured. Take another snapshot.",
-  unreadable: "The screenshot was left out: Aiden couldn't check this page for password, code or card fields. Use the page text instead.",
+  changed:
+    "The screenshot was left out: the page changed while it was captured. Take another snapshot.",
+  unreadable:
+    "The screenshot was left out: Aiden couldn't check this page for password, code or card fields. Use the page text instead.",
 });
 
 export const BROWSER_IMAGE_MASKED_NOTE =
@@ -64,7 +70,8 @@ export type MaskedSnapshotImage =
   | { omitted: string; sensitive: ReadonlySet<number> };
 
 function hull(left: CssRect, right: CssRect): CssRect {
-  const x = Math.min(left.x, right.x), y = Math.min(left.y, right.y);
+  const x = Math.min(left.x, right.x),
+    y = Math.min(left.y, right.y);
   return {
     x,
     y,
@@ -88,8 +95,13 @@ export function sensitiveAreas(before: SensitiveFieldBoxes, after: SensitiveFiel
 }
 
 function sameViewport(left: BoundaryViewport, right: BoundaryViewport): boolean {
-  return left.width === right.width && left.height === right.height && left.scale === right.scale
-    && left.scrollX === right.scrollX && left.scrollY === right.scrollY;
+  return (
+    left.width === right.width &&
+    left.height === right.height &&
+    left.scale === right.scale &&
+    left.scrollX === right.scrollX &&
+    left.scrollY === right.scrollY
+  );
 }
 
 /**
@@ -97,7 +109,9 @@ function sameViewport(left: BoundaryViewport, right: BoundaryViewport): boolean 
  * is left out. Never returns an unmasked capture of a page with a field it
  * couldn't place.
  */
-export async function maskBrowserSnapshotImage(port: CredentialBoundaryPort): Promise<MaskedSnapshotImage> {
+export async function maskBrowserSnapshotImage(
+  port: CredentialBoundaryPort,
+): Promise<MaskedSnapshotImage> {
   const revision = port.documentRevision();
   let viewport: BoundaryViewport;
   let before: SensitiveFieldBoxes;
@@ -107,8 +121,10 @@ export async function maskBrowserSnapshotImage(port: CredentialBoundaryPort): Pr
   } catch {
     return { omitted: BROWSER_IMAGE_OMITTED.unreadable, sensitive: new Set() };
   }
-  if (before.opaqueFrames > 0) return { omitted: BROWSER_IMAGE_OMITTED.frame, sensitive: new Set(before.sensitive) };
-  if (viewport.scale !== 1) return { omitted: BROWSER_IMAGE_OMITTED.zoom, sensitive: new Set(before.sensitive) };
+  if (before.opaqueFrames > 0)
+    return { omitted: BROWSER_IMAGE_OMITTED.frame, sensitive: new Set(before.sensitive) };
+  if (viewport.scale !== 1)
+    return { omitted: BROWSER_IMAGE_OMITTED.zoom, sensitive: new Set(before.sensitive) };
   const image = await port.capture();
   let after: SensitiveFieldBoxes;
   let afterViewport: BoundaryViewport;
@@ -165,7 +181,9 @@ interface AxSource {
 
 function related(source: AxSource): Array<{ backendDOMNodeId?: unknown }> {
   return [source.value, source.attributeValue, source.nativeSourceValue].flatMap((value) =>
-    Array.isArray(value?.relatedNodes) ? (value.relatedNodes as Array<{ backendDOMNodeId?: unknown }>) : [],
+    Array.isArray(value?.relatedNodes)
+      ? (value.relatedNodes as Array<{ backendDOMNodeId?: unknown }>)
+      : [],
   );
 }
 
@@ -175,13 +193,20 @@ function withoutRelatedText(value: unknown, reachesField: (id: unknown) => boole
   if (!value || typeof value !== "object") return value;
   const copy: Record<string, unknown> = {};
   for (const [key, item] of Object.entries(value)) {
-    copy[key] = key === "relatedNodes" && Array.isArray(item)
-      ? item.map((node) => {
-          if (!node || typeof node !== "object" || !("text" in node) || !reachesField((node as { backendDOMNodeId?: unknown }).backendDOMNodeId)) return node;
-          const { text: _text, ...rest } = node as Record<string, unknown>;
-          return rest;
-        })
-      : withoutRelatedText(item, reachesField);
+    copy[key] =
+      key === "relatedNodes" && Array.isArray(item)
+        ? item.map((node) => {
+            if (
+              !node ||
+              typeof node !== "object" ||
+              !("text" in node) ||
+              !reachesField((node as { backendDOMNodeId?: unknown }).backendDOMNodeId)
+            )
+              return node;
+            const { text: _text, ...rest } = node as Record<string, unknown>;
+            return rest;
+          })
+        : withoutRelatedText(item, reachesField);
   }
   return copy;
 }
@@ -196,16 +221,30 @@ function withoutRelatedText(value: unknown, reachesField: (id: unknown) => boole
  * field other than itself. The other sources Chromium lists, superseded ones
  * included, are dropped from a node that reaches a field.
  */
-function scrubAxName(name: AxValue, id: number, reach: SensitiveFieldReach, readsAny: (id: unknown) => boolean): AxValue {
+function scrubAxName(
+  name: AxValue,
+  id: number,
+  reach: SensitiveFieldReach,
+  readsAny: (id: unknown) => boolean,
+): AxValue {
   const readsOther = (node: unknown): boolean =>
-    typeof node !== "number" || !reach.known.has(node) || [...(reach.reads.get(node) ?? [])].some((field) => field !== id);
+    typeof node !== "number" ||
+    !reach.known.has(node) ||
+    [...(reach.reads.get(node) ?? [])].some((field) => field !== id);
   const sources = (Array.isArray(name.sources) ? name.sources : []) as AxSource[];
-  const involved = readsAny(id) || sources.some((source) => related(source).some((node) => readsAny(node.backendDOMNodeId)));
+  const involved =
+    readsAny(id) ||
+    sources.some((source) => related(source).some((node) => readsAny(node.backendDOMNodeId)));
   if (!involved) return name;
-  const used = sources.find((source) => source && source.value !== undefined && source.superseded !== true);
+  const used = sources.find(
+    (source) => source && source.value !== undefined && source.superseded !== true,
+  );
   const links = used ? related(used) : [];
-  const fixed = used !== undefined && links.length === 0
-    && ((used.type === "attribute" && used.attribute !== "aria-labelledby") || used.type === "placeholder");
+  const fixed =
+    used !== undefined &&
+    links.length === 0 &&
+    ((used.type === "attribute" && used.attribute !== "aria-labelledby") ||
+      used.type === "placeholder");
   const blank = fixed
     ? false
     : used?.type === "relatedElement" && links.length > 0
@@ -227,9 +266,12 @@ function scrubAccessibility(tree: unknown, reach: SensitiveFieldReach): unknown 
   const nodes = (tree as { nodes?: unknown } | undefined)?.nodes;
   if (!Array.isArray(nodes) || sensitive.size === 0) return tree;
   const byId = new Map<string, AxNode>();
-  for (const node of nodes as AxNode[]) if (node && typeof node.nodeId === "string") byId.set(node.nodeId, node);
+  for (const node of nodes as AxNode[])
+    if (node && typeof node.nodeId === "string") byId.set(node.nodeId, node);
   const childIds = (node: AxNode | undefined): string[] =>
-    node && Array.isArray(node.childIds) ? node.childIds.filter((id): id is string => typeof id === "string") : [];
+    node && Array.isArray(node.childIds)
+      ? node.childIds.filter((id): id is string => typeof id === "string")
+      : [];
   // Everything a sensitive field renders (its text and inline boxes) goes, as
   // does any node inside one (moved out by `aria-owns`) or unseen by the DOM read.
   const dropped = new Set<string>();
@@ -238,7 +280,8 @@ function scrubAccessibility(tree: unknown, reach: SensitiveFieldReach): unknown 
     if (!node || typeof node.backendDOMNodeId !== "number") continue;
     const id = node.backendDOMNodeId;
     if (sensitive.has(id)) queue.push(...childIds(node));
-    else if ((reach.inside.has(id) || !reach.known.has(id)) && typeof node.nodeId === "string") queue.push(node.nodeId);
+    else if ((reach.inside.has(id) || !reach.known.has(id)) && typeof node.nodeId === "string")
+      queue.push(node.nodeId);
   }
   while (queue.length > 0) {
     const id = queue.pop()!;
@@ -246,7 +289,8 @@ function scrubAccessibility(tree: unknown, reach: SensitiveFieldReach): unknown 
     dropped.add(id);
     queue.push(...childIds(byId.get(id)));
   }
-  const readsAny = (id: unknown): boolean => typeof id !== "number" || !reach.known.has(id) || (reach.reads.get(id)?.size ?? 0) > 0;
+  const readsAny = (id: unknown): boolean =>
+    typeof id !== "number" || !reach.known.has(id) || (reach.reads.get(id)?.size ?? 0) > 0;
   return {
     ...(tree as object),
     nodes: (nodes as AxNode[]).flatMap((node) => {
@@ -258,7 +302,9 @@ function scrubAccessibility(tree: unknown, reach: SensitiveFieldReach): unknown 
       if (sensitive.has(id) || [...(reach.holds.get(id) ?? [])].some((field) => field !== id)) {
         const { value: _value, ...rest } = next;
         const properties = Array.isArray(next.properties)
-          ? next.properties.filter((property) => (property as { name?: unknown })?.name !== "valuetext")
+          ? next.properties.filter(
+              (property) => (property as { name?: unknown })?.name !== "valuetext",
+            )
           : next.properties;
         next = { ...rest, ...(properties === undefined ? {} : { properties }) };
       }
@@ -266,9 +312,15 @@ function scrubAccessibility(tree: unknown, reach: SensitiveFieldReach): unknown 
         const { childIds: _children, ...rest } = next;
         next = rest;
       }
-      if (next.name && typeof next.name === "object") next = { ...next, name: scrubAxName(next.name as AxValue, id, reach, readsAny) };
+      if (next.name && typeof next.name === "object")
+        next = { ...next, name: scrubAxName(next.name as AxValue, id, reach, readsAny) };
       const description = next.description as AxValue | undefined;
-      if (description && typeof description === "object" && description.value && (reach.describedBy.get(id) ?? []).some(readsAny)) {
+      if (
+        description &&
+        typeof description === "object" &&
+        description.value &&
+        (reach.describedBy.get(id) ?? []).some(readsAny)
+      ) {
         next = { ...next, description: { type: description.type, value: "" } };
       }
       return [withoutRelatedText(next, readsAny) as AxNode];
@@ -285,7 +337,8 @@ function elementIsSensitive(element: BrowserElement): boolean {
 }
 
 /** Playwright engines that name an element by the text inside it (`internal:text="…"`, `:has-text(…)`). */
-const TEXT_ENGINE = /(?:^|>>|\s)\s*(?:internal:)?(?:has-)?text\s*=|:(?:has-)?text(?:-is|-matches)?\s*\(/iu;
+const TEXT_ENGINE =
+  /(?:^|>>|\s)\s*(?:internal:)?(?:has-)?text\s*=|:(?:has-)?text(?:-is|-matches)?\s*\(/iu;
 
 /** A locator for a field from its tag and the attributes a snapshot shows, never from its contents. */
 function structuralSelector(element: BrowserElement): string {
@@ -314,7 +367,10 @@ function scrubElement(element: BrowserElement): BrowserElement {
  * fields main found in the page's DOM and what reaches them, read after the
  * accessibility tree.
  */
-export function scrubBrowserSnapshot(snapshot: BrowserSnapshot, reach: SensitiveFieldReach): BrowserSnapshot {
+export function scrubBrowserSnapshot(
+  snapshot: BrowserSnapshot,
+  reach: SensitiveFieldReach,
+): BrowserSnapshot {
   return {
     ...snapshot,
     elements: snapshot.elements.map(scrubElement),
@@ -325,7 +381,8 @@ export function scrubBrowserSnapshot(snapshot: BrowserSnapshot, reach: Sensitive
 }
 
 /** A Bot's browser never runs these: page scripts, recording, local files, annotation, screenshot capture, DevTools. */
-export const BROWSER_BOUNDARY_ACTION_REFUSED = "A Bot's browser can't run page scripts, record, or open local files.";
+export const BROWSER_BOUNDARY_ACTION_REFUSED =
+  "A Bot's browser can't run page scripts, record, or open local files.";
 /** The agent's answer on a tab the person holds (a sign-in or hand-off card, or a takeover), snapshots included. */
 export const BROWSER_HELD_TAB_REFUSED = "The person is using this tab. Wait for them to finish.";
 export const BROWSER_SENSITIVE_TYPING_REFUSED =
@@ -341,7 +398,8 @@ export const BROWSER_XPATH_SELECTOR_REFUSED =
  * holding a comment opener can hide one of the refused tests from the
  * comment-stripped checks, which can't tell quoted text from code.
  */
-export const BROWSER_COMMENT_SELECTOR_REFUSED = "A Bot's locators can't contain CSS comments. Remove the /* */ part.";
+export const BROWSER_COMMENT_SELECTOR_REFUSED =
+  "A Bot's locators can't contain CSS comments. Remove the /* */ part.";
 /**
  * Playwright's attribute engines (`internal:attr`, `internal:testid` and the
  * role engines) read a quoted attribute name as the bare one, so
@@ -374,7 +432,8 @@ export const BROWSER_SENSITIVE_FIELD_SOURCE = `const __aidenSensitiveNow=(e)=>{i
  * that main remembers as sensitive though it no longer looks it, so the
  * in-page helpers treat it as sensitive too.
  */
-export const BROWSER_RECALL_FIELD_FUNCTION = "function(){(globalThis.__aidenRecalledFields??=new WeakSet()).add(this);}";
+export const BROWSER_RECALL_FIELD_FUNCTION =
+  "function(){(globalThis.__aidenRecalledFields??=new WeakSet()).add(this);}";
 
 /** A guard (for an isolated-world script) that refuses typing into `element` or whatever has focus. */
 export function browserTypingGuardSource(element: string): string {
@@ -417,7 +476,8 @@ const VALUE_ATTRIBUTE = /\[\s*(?:[\w*-]*\|)?value\b|\\/iu;
  * body of a nested selector (`internal:has="…"`, `left-of="…"`…). A quick
  * check in main; the page check is exact.
  */
-const XPATH_SELECTOR = /(?:^|>>|\*?\s*(?:internal:(?:has|has-not|and|or|chain)|left-of|right-of|above|below|near)\s*=\s*")\s*\*?\s*(?:xpath(?::light)?\s*=|\(*\/\/|\.\.)/iu;
+const XPATH_SELECTOR =
+  /(?:^|>>|\*?\s*(?:internal:(?:has|has-not|and|or|chain)|left-of|right-of|above|below|near)\s*=\s*")\s*\*?\s*(?:xpath(?::light)?\s*=|\(*\/\/|\.\.)/iu;
 /** An attribute name in quotes (`["checked"]`), which Playwright's attribute engines read as the bare name. */
 const QUOTED_ATTRIBUTE = /\[\s*["']/u;
 /** CSS comments, which a selector parser skips, so a comment can hide `[value`. */
@@ -452,9 +512,12 @@ const STATE_PSEUDO_CLASS =
 export function assertBoundarySelector(selector: string | undefined): void {
   if (selector === undefined) return;
   const uncommented = selector.replace(CSS_COMMENT, "");
-  if (VALUE_ATTRIBUTE.test(selector) || VALUE_ATTRIBUTE.test(uncommented)) throw new Error(BROWSER_VALUE_SELECTOR_REFUSED);
-  if (STATE_PSEUDO_CLASS.test(selector) || STATE_PSEUDO_CLASS.test(uncommented)) throw new Error(BROWSER_STATE_SELECTOR_REFUSED);
-  if (XPATH_SELECTOR.test(selector) || XPATH_SELECTOR.test(uncommented)) throw new Error(BROWSER_XPATH_SELECTOR_REFUSED);
+  if (VALUE_ATTRIBUTE.test(selector) || VALUE_ATTRIBUTE.test(uncommented))
+    throw new Error(BROWSER_VALUE_SELECTOR_REFUSED);
+  if (STATE_PSEUDO_CLASS.test(selector) || STATE_PSEUDO_CLASS.test(uncommented))
+    throw new Error(BROWSER_STATE_SELECTOR_REFUSED);
+  if (XPATH_SELECTOR.test(selector) || XPATH_SELECTOR.test(uncommented))
+    throw new Error(BROWSER_XPATH_SELECTOR_REFUSED);
   if (QUOTED_ATTRIBUTE.test(selector)) throw new Error(BROWSER_QUOTED_ATTRIBUTE_SELECTOR_REFUSED);
   if (selector.includes("/*")) throw new Error(BROWSER_COMMENT_SELECTOR_REFUSED);
 }
@@ -469,11 +532,54 @@ export function assertBoundarySelector(selector: string | undefined): void {
  * roles from content is still covered.
  */
 export const BROWSER_BOUNDARY_AUTHOR_NAMED_ROLES: readonly string[] = Object.freeze([
-  "alert", "alertdialog", "application", "article", "banner", "blockquote", "combobox", "complementary", "contentinfo",
-  "dialog", "document", "feed", "figure", "form", "grid", "group", "img", "list", "listbox", "listitem", "log", "main",
-  "marquee", "math", "menu", "menubar", "meter", "navigation", "note", "progressbar", "radiogroup", "region", "rowgroup",
-  "scrollbar", "search", "searchbox", "separator", "slider", "spinbutton", "status", "table", "tablist", "tabpanel",
-  "textbox", "timer", "toolbar", "tree", "treegrid",
+  "alert",
+  "alertdialog",
+  "application",
+  "article",
+  "banner",
+  "blockquote",
+  "combobox",
+  "complementary",
+  "contentinfo",
+  "dialog",
+  "document",
+  "feed",
+  "figure",
+  "form",
+  "grid",
+  "group",
+  "img",
+  "list",
+  "listbox",
+  "listitem",
+  "log",
+  "main",
+  "marquee",
+  "math",
+  "menu",
+  "menubar",
+  "meter",
+  "navigation",
+  "note",
+  "progressbar",
+  "radiogroup",
+  "region",
+  "rowgroup",
+  "scrollbar",
+  "search",
+  "searchbox",
+  "separator",
+  "slider",
+  "spinbutton",
+  "status",
+  "table",
+  "tablist",
+  "tabpanel",
+  "textbox",
+  "timer",
+  "toolbar",
+  "tree",
+  "treegrid",
 ]);
 
 /**
@@ -515,15 +621,56 @@ const __aidenBoundaryName=(e)=>__aidenNameReadsField(e,"name")?"":String(globalT
  * each new engine reads.
  */
 const BOUNDARY_SELECTOR_ENGINES: readonly string[] = [
-  "xpath", "xpath:light", "role", "text", "text:light", "id", "id:light", "data-testid", "data-testid:light",
-  "data-test-id", "data-test-id:light", "data-test", "data-test:light", "css", "nth", "visible", "internal:control",
-  "internal:has", "internal:has-not", "internal:and", "internal:or", "internal:chain", "internal:label", "internal:text",
-  "internal:has-text", "internal:has-not-text", "internal:attr", "internal:testid", "internal:role", "internal:describe",
+  "xpath",
+  "xpath:light",
+  "role",
+  "text",
+  "text:light",
+  "id",
+  "id:light",
+  "data-testid",
+  "data-testid:light",
+  "data-test-id",
+  "data-test-id:light",
+  "data-test",
+  "data-test:light",
+  "css",
+  "nth",
+  "visible",
+  "internal:control",
+  "internal:has",
+  "internal:has-not",
+  "internal:and",
+  "internal:or",
+  "internal:chain",
+  "internal:label",
+  "internal:text",
+  "internal:has-text",
+  "internal:has-not-text",
+  "internal:attr",
+  "internal:testid",
+  "internal:role",
+  "internal:describe",
   "aria-ref",
 ];
 const BOUNDARY_CSS_FUNCTIONS: readonly string[] = [
-  "not", "is", "where", "has", "scope", "light", "visible", "text", "text-is", "text-matches", "has-text",
-  "right-of", "left-of", "above", "below", "near", "nth-match",
+  "not",
+  "is",
+  "where",
+  "has",
+  "scope",
+  "light",
+  "visible",
+  "text",
+  "text-is",
+  "text-matches",
+  "has-text",
+  "right-of",
+  "left-of",
+  "above",
+  "below",
+  "near",
+  "nth-match",
 ];
 
 /**
@@ -583,13 +730,21 @@ return run();
  * which takes any attribute name, not only `data-testid`). A `value`,
  * `selected` or `checked` test in them reads what a field holds.
  */
-const BOUNDARY_ATTRIBUTE_TEST_ENGINES: readonly string[] = ["css", "internal:attr", "internal:testid"];
+const BOUNDARY_ATTRIBUTE_TEST_ENGINES: readonly string[] = [
+  "css",
+  "internal:attr",
+  "internal:testid",
+];
 /**
  * Those engines and the role engines, which also parse `[name=value]`
  * attributes (Playwright's `parseAttributeSelector`) and read a quoted name
  * or an escaped one as the bare name.
  */
-const BOUNDARY_ATTRIBUTE_NAME_ENGINES: readonly string[] = [...BOUNDARY_ATTRIBUTE_TEST_ENGINES, "role", "internal:role"];
+const BOUNDARY_ATTRIBUTE_NAME_ENGINES: readonly string[] = [
+  ...BOUNDARY_ATTRIBUTE_TEST_ENGINES,
+  "role",
+  "internal:role",
+];
 
 /**
  * Resolves a Bot's locator, after `BROWSER_BOUNDARY_SCOPE_SOURCE`.
@@ -659,6 +814,8 @@ export function browserKeyInsertsText(key: string, modifiers: readonly string[] 
   const last = parts.pop() ?? "";
   const names = new Set([...parts, ...modifiers].map((name) => name.toLowerCase()));
   if (names.size === 0) return [...last].length === 1;
-  const paste = (names.has("control") || names.has("ctrl") || names.has("meta") || names.has("command")) && last.toLowerCase() === "v";
+  const paste =
+    (names.has("control") || names.has("ctrl") || names.has("meta") || names.has("command")) &&
+    last.toLowerCase() === "v";
   return paste || (names.has("shift") && last === "Insert");
 }

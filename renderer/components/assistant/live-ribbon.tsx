@@ -32,10 +32,19 @@ import type { AssistantLiveCaption, AssistantLiveController } from "./use-assist
 import { useLiveRibbonPlacement } from "./use-live-ribbon-placement";
 import { isDismissKey } from "../../lib/dismiss-key";
 
-export type LiveRibbonState = "listening" | "thinking" | "speaking" | "acting" | "approval" | "confirm";
+export type LiveRibbonState =
+  | "listening"
+  | "thinking"
+  | "speaking"
+  | "acting"
+  | "approval"
+  | "confirm";
 
 /** What the pill shows: a request that needs you wins over what Live is doing. */
-export function liveRibbonState(markState: AidenLiveMarkState, activity: LiveActivity | null): LiveRibbonState {
+export function liveRibbonState(
+  markState: AidenLiveMarkState,
+  activity: LiveActivity | null,
+): LiveRibbonState {
   if (activity?.kind === "approval") return "approval";
   if (activity?.kind === "confirm") return "confirm";
   // The legacy Computer Use prompt shows above the pill.
@@ -68,7 +77,9 @@ export function LiveRibbonMenuItems({
         <DropdownMenuSubTrigger>
           <span className="flex min-w-0 flex-1 items-baseline gap-2">
             <span>Voice</span>
-            <span className="truncate text-small text-tertiary">{current?.id ?? preferences.voice}</span>
+            <span className="truncate text-small text-tertiary">
+              {current?.id ?? preferences.voice}
+            </span>
           </span>
         </DropdownMenuSubTrigger>
         <DropdownMenuSubContent
@@ -98,7 +109,11 @@ export function LiveRibbonMenuItems({
         onValueChange={(speed) => onChange({ aidenLiveSpeed: Number(speed) })}
       >
         {AIDEN_LIVE_SPEEDS.map((speed) => (
-          <DropdownMenuRadioItem key={speed} value={String(speed)} onSelect={(event) => event.preventDefault()}>
+          <DropdownMenuRadioItem
+            key={speed}
+            value={String(speed)}
+            onSelect={(event) => event.preventDefault()}
+          >
             {SPEED_LABEL(speed)}
           </DropdownMenuRadioItem>
         ))}
@@ -108,10 +123,16 @@ export function LiveRibbonMenuItems({
       <DropdownMenuRadioGroup
         aria-labelledby="live-ribbon-colors-label"
         value={preferences.ribbonColors}
-        onValueChange={(colors) => onChange({ aidenLiveRibbonColors: colors as AidenLiveRibbonColors })}
+        onValueChange={(colors) =>
+          onChange({ aidenLiveRibbonColors: colors as AidenLiveRibbonColors })
+        }
       >
         {(Object.keys(RIBBON_COLOR_LABEL) as AidenLiveRibbonColors[]).map((colors) => (
-          <DropdownMenuRadioItem key={colors} value={colors} onSelect={(event) => event.preventDefault()}>
+          <DropdownMenuRadioItem
+            key={colors}
+            value={colors}
+            onSelect={(event) => event.preventDefault()}
+          >
             {RIBBON_COLOR_LABEL[colors]}
           </DropdownMenuRadioItem>
         ))}
@@ -120,7 +141,10 @@ export function LiveRibbonMenuItems({
   );
 }
 
-function latestLine(captions: readonly AssistantLiveCaption[], direction: AssistantLiveCaption["direction"]) {
+function latestLine(
+  captions: readonly AssistantLiveCaption[],
+  direction: AssistantLiveCaption["direction"],
+) {
   for (let index = captions.length - 1; index >= 0; index -= 1) {
     const caption = captions[index]!;
     if (caption.direction === direction && caption.text.trim()) return caption.text;
@@ -128,7 +152,12 @@ function latestLine(captions: readonly AssistantLiveCaption[], direction: Assist
   return null;
 }
 
-function statusText(state: LiveRibbonState, activity: LiveActivity | null, muted: boolean, connecting: boolean): string {
+function statusText(
+  state: LiveRibbonState,
+  activity: LiveActivity | null,
+  muted: boolean,
+  connecting: boolean,
+): string {
   if (connecting) return "Connecting…";
   switch (state) {
     case "approval":
@@ -221,7 +250,12 @@ export function LiveRibbon({
       ) : hint ? (
         <p className="live-ribbon-card live-ribbon-hint">{hint}</p>
       ) : you || aiden ? (
-        <div className="live-ribbon-card live-ribbon-captions" role="log" aria-live="polite" aria-label="Live captions">
+        <div
+          className="live-ribbon-card live-ribbon-captions"
+          role="log"
+          aria-live="polite"
+          aria-label="Live captions"
+        >
           {you ? (
             <p>
               <span className="live-ribbon-speaker">You</span> {you}
@@ -264,14 +298,18 @@ export function LiveRibbon({
         />
         {state === "acting" ? (
           <span className="live-ribbon-text">
-            <span className="live-ribbon-title">{activity?.kind === "acting" ? activity.label : "Working on your screen"}</span>
+            <span className="live-ribbon-title">
+              {activity?.kind === "acting" ? activity.label : "Working on your screen"}
+            </span>
             <span className="live-ribbon-detail">Live is using Aiden</span>
           </span>
         ) : state === "approval" && activity?.kind === "approval" ? (
           <span className="live-ribbon-text">
             <span className="live-ribbon-title">{activity.title}</span>
             <span className="live-ribbon-detail">
-              {activity.allow ? `In ${activity.chatTitle}` : `Open “${activity.chatTitle}” to choose`}
+              {activity.allow
+                ? `In ${activity.chatTitle}`
+                : `Open “${activity.chatTitle}” to choose`}
             </span>
           </span>
         ) : state === "confirm" && activity?.kind === "confirm" ? (
@@ -283,17 +321,32 @@ export function LiveRibbon({
           <span className="live-ribbon-spacer" />
         )}
         {state === "acting" && activity?.kind === "acting" ? (
-          <Button size="medium" variant="filled" className="live-ribbon-action" onClick={activity.takeOver}>
+          <Button
+            size="medium"
+            variant="filled"
+            className="live-ribbon-action"
+            onClick={activity.takeOver}
+          >
             Take over
           </Button>
         ) : null}
         {state === "approval" && activity?.kind === "approval" ? (
           <>
-            <Button size="medium" variant="filled" className="live-ribbon-action" onClick={activity.deny}>
+            <Button
+              size="medium"
+              variant="filled"
+              className="live-ribbon-action"
+              onClick={activity.deny}
+            >
               Deny
             </Button>
             {activity.allow ? (
-              <Button size="medium" variant="accent" className="live-ribbon-action" onClick={activity.allow}>
+              <Button
+                size="medium"
+                variant="accent"
+                className="live-ribbon-action"
+                onClick={activity.allow}
+              >
                 Allow
               </Button>
             ) : null}
@@ -371,7 +424,12 @@ export function LiveRibbon({
         )}
       </div>
       <span role="status" aria-live="polite" className="sr-only">
-        {statusText(state, activity, muted, live.state === "connecting" || live.state === "resuming")}
+        {statusText(
+          state,
+          activity,
+          muted,
+          live.state === "connecting" || live.state === "resuming",
+        )}
       </span>
     </section>
   );

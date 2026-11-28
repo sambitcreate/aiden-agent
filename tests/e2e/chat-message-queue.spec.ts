@@ -42,9 +42,15 @@ test("composer squircle follows resizing and draft growth without clipping acces
   };
   await assertShape();
   const initial = await shell.boundingBox();
-  await composer.fill(Array.from({ length: 8 }, (_, index) => `Draft line ${index + 1}`).join("\n"));
-  await expect.poll(async () => (await shell.boundingBox())!.height).toBeGreaterThan(initial!.height);
-  await aiden.app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setSize(900, 720));
+  await composer.fill(
+    Array.from({ length: 8 }, (_, index) => `Draft line ${index + 1}`).join("\n"),
+  );
+  await expect
+    .poll(async () => (await shell.boundingBox())!.height)
+    .toBeGreaterThan(initial!.height);
+  await aiden.app.evaluate(({ BrowserWindow }) =>
+    BrowserWindow.getAllWindows()[0].setSize(900, 720),
+  );
   await expect.poll(async () => (await shell.boundingBox())!.width).toBeLessThan(initial!.width);
   await assertShape();
   await composer.fill("");
@@ -75,9 +81,7 @@ test("workspace bar auto-hides after sending and its appearance setting survives
   const transcriptMessage = (text: string) =>
     page.locator("[data-subagent-chip-focus-scope]").getByText(text, { exact: true });
   const sentChat = () =>
-    page
-      .locator("[data-sidebar]")
-      .getByRole("button", { name: /^Deterministic E2E response/u });
+    page.locator("[data-sidebar]").getByRole("button", { name: /^Deterministic E2E response/u });
   await expect(bar()).toBeVisible();
   await composer().fill(persistedMessage);
   await expect(bar()).toHaveAttribute("data-collapsed", "false");
@@ -165,9 +169,7 @@ test("workspace bar auto-hides after sending and its appearance setting survives
     autoHideComposerContext: true,
   });
   await patchAppearance({ autoHideComposerContext: false });
-  await expect
-    .poll(async () => (await storedAppearance())?.autoHideComposerContext)
-    .toBe(false);
+  await expect.poll(async () => (await storedAppearance())?.autoHideComposerContext).toBe(false);
 
   page = await aiden.relaunch();
   await openSentChat();
@@ -178,12 +180,8 @@ test("workspace bar auto-hides after sending and its appearance setting survives
   await expect(bar()).toHaveAttribute("data-collapsed", "false");
 
   await patchAppearance({ reduceMotion: "on", autoHideComposerContext: true });
-  await expect
-    .poll(async () => (await storedAppearance())?.autoHideComposerContext)
-    .toBe(true);
-  await expect
-    .poll(async () => (await storedAppearance())?.reduceMotion)
-    .toBe("on");
+  await expect.poll(async () => (await storedAppearance())?.autoHideComposerContext).toBe(true);
+  await expect.poll(async () => (await storedAppearance())?.reduceMotion).toBe("on");
 
   page = await aiden.relaunch();
   await expect(page.locator("html")).toHaveAttribute("data-reduce-motion", "true");
@@ -305,13 +303,19 @@ test("Stop pauses queued messages instead of erasing them, and Resume sends them
 
   lmStudio.releaseCompletions!();
   await queue.getByRole("button", { name: "Resume queue", exact: true }).click();
-  await expect.poll(() => lmStudio.requests.filter(
-    (request) => lastUserText(request) === "Keep me after Stop",
-  ).length).toBe(1);
+  await expect
+    .poll(
+      () =>
+        lmStudio.requests.filter((request) => lastUserText(request) === "Keep me after Stop")
+          .length,
+    )
+    .toBe(1);
   await expect(queue).toBeHidden();
 });
 
-test("the busy send pill offers only Steer and Queue, and hold-drag-release sends in the chosen mode", async ({ aiden }) => {
+test("the busy send pill offers only Steer and Queue, and hold-drag-release sends in the chosen mode", async ({
+  aiden,
+}) => {
   const { page, lmStudio } = aiden;
   await finishLmStudioOnboarding(page);
   lmStudio.holdCompletions!();
@@ -344,12 +348,17 @@ test("the busy send pill offers only Steer and Queue, and hold-drag-release send
   await expect(queue.getByRole("listitem")).toContainText("Queue me by holding");
   await expect(composer).toHaveValue("");
   await expect(page.getByRole("button", { name: "Queue message", exact: true })).toBeVisible();
-  expect(lmStudio.requests.filter((request) => lastUserText(request) === "Queue me by holding"))
-    .toHaveLength(0);
+  expect(
+    lmStudio.requests.filter((request) => lastUserText(request) === "Queue me by holding"),
+  ).toHaveLength(0);
   lmStudio.releaseCompletions!();
-  await expect.poll(() => lmStudio.requests.filter(
-    (request) => lastUserText(request) === "Queue me by holding",
-  ).length).toBe(1);
+  await expect
+    .poll(
+      () =>
+        lmStudio.requests.filter((request) => lastUserText(request) === "Queue me by holding")
+          .length,
+    )
+    .toBe(1);
 });
 
 test("Steer queues text guidance without stopping the active response", async ({ aiden }) => {
@@ -371,9 +380,13 @@ test("Steer queues text guidance without stopping the active response", async ({
   await expect(page.getByText("Use a shorter answer", { exact: true })).toHaveCount(1);
   await expect(page.getByRole("button", { name: "Stop generating" })).toBeVisible();
   lmStudio.releaseCompletions!();
-  await expect.poll(() => lmStudio.requests.some((request) =>
-    JSON.stringify(request.body).includes("Use a shorter answer"),
-  )).toBe(true);
+  await expect
+    .poll(() =>
+      lmStudio.requests.some((request) =>
+        JSON.stringify(request.body).includes("Use a shorter answer"),
+      ),
+    )
+    .toBe(true);
   await expect(composerPrimaryButton(page)).toBeVisible();
   await expect(page.getByText("Use a shorter answer", { exact: true })).toHaveCount(1);
 });
@@ -406,18 +419,24 @@ test("Steer on a queued message adds it to the running response once", async ({ 
   await expect(composer).toBeFocused();
   await expect(page.getByRole("button", { name: "Stop generating" })).toBeVisible();
   lmStudio.releaseCompletions!();
-  await expect.poll(() => lmStudio.requests.some((request) =>
-    lastUserText(request) === "Prefer bullet points",
-  )).toBe(true);
+  await expect
+    .poll(() =>
+      lmStudio.requests.some((request) => lastUserText(request) === "Prefer bullet points"),
+    )
+    .toBe(true);
   // The steered message is read by the same run; the other row runs as its own turn.
-  await expect.poll(() => lmStudio.requests.some((request) =>
-    lastUserText(request) === "Stay queued for later",
-  )).toBe(true);
+  await expect
+    .poll(() =>
+      lmStudio.requests.some((request) => lastUserText(request) === "Stay queued for later"),
+    )
+    .toBe(true);
   await expect(composerPrimaryButton(page)).toBeVisible();
   await expect(page.getByText("Prefer bullet points", { exact: true })).toHaveCount(1);
 });
 
-test("Stop before Aiden reads accepted Steer guidance keeps it once in the conversation", async ({ aiden }) => {
+test("Stop before Aiden reads accepted Steer guidance keeps it once in the conversation", async ({
+  aiden,
+}) => {
   const { page, lmStudio } = aiden;
   await finishLmStudioOnboarding(page);
   lmStudio.holdCompletions!();
@@ -444,7 +463,9 @@ test("Stop before Aiden reads accepted Steer guidance keeps it once in the conve
   ).toBe(false);
 });
 
-test("rejected and unknown Steer receipts keep the draft without replaying it", async ({ aiden }) => {
+test("rejected and unknown Steer receipts keep the draft without replaying it", async ({
+  aiden,
+}) => {
   const { page, lmStudio } = aiden;
   await finishLmStudioOnboarding(page);
   lmStudio.holdCompletions!();
@@ -453,9 +474,14 @@ test("rejected and unknown Steer receipts keep the draft without replaying it", 
   await composer.press("Enter");
   await expect(page.getByRole("button", { name: "Stop generating" })).toBeVisible();
   await aiden.app.evaluate(({ ipcMain }) => {
-    const handlers = (ipcMain as unknown as {
-      _invokeHandlers: Map<string, (event: Electron.IpcMainInvokeEvent, ...args: unknown[]) => unknown>;
-    })._invokeHandlers;
+    const handlers = (
+      ipcMain as unknown as {
+        _invokeHandlers: Map<
+          string,
+          (event: Electron.IpcMainInvokeEvent, ...args: unknown[]) => unknown
+        >;
+      }
+    )._invokeHandlers;
     const original = handlers.get("chat:admitRunInput")!;
     let attempts = 0;
     handlers.set("chat:admitRunInput", async (event, ...args) => {
@@ -477,13 +503,20 @@ test("rejected and unknown Steer receipts keep the draft without replaying it", 
   await expect(page.getByText(/couldn't confirm the guidance/u)).toBeVisible();
   await expect(composer).toHaveValue("Keep this guidance");
   lmStudio.releaseCompletions!();
-  await expect.poll(() => lmStudio.requests.filter((request) =>
-    JSON.stringify(request.body).includes("Keep this guidance"),
-  ).length).toBe(1);
+  await expect
+    .poll(
+      () =>
+        lmStudio.requests.filter((request) =>
+          JSON.stringify(request.body).includes("Keep this guidance"),
+        ).length,
+    )
+    .toBe(1);
   await expect(composer).toHaveValue("Keep this guidance");
 });
 
-test("a Steer that misses the finishing response is sent once as the next turn", async ({ aiden }) => {
+test("a Steer that misses the finishing response is sent once as the next turn", async ({
+  aiden,
+}) => {
   const { page, lmStudio } = aiden;
   await finishLmStudioOnboarding(page);
   lmStudio.holdCompletions!();
@@ -494,9 +527,14 @@ test("a Steer that misses the finishing response is sent once as the next turn",
   // The run is past taking input (finishing up after agent_end): main
   // refuses guidance as run_not_active and saves nothing.
   await aiden.app.evaluate(({ ipcMain }) => {
-    const handlers = (ipcMain as unknown as {
-      _invokeHandlers: Map<string, (event: Electron.IpcMainInvokeEvent, ...args: unknown[]) => unknown>;
-    })._invokeHandlers;
+    const handlers = (
+      ipcMain as unknown as {
+        _invokeHandlers: Map<
+          string,
+          (event: Electron.IpcMainInvokeEvent, ...args: unknown[]) => unknown
+        >;
+      }
+    )._invokeHandlers;
     handlers.set("chat:admitRunInput", async () => ({
       admitted: false,
       reason: "run_not_active",
@@ -509,16 +547,25 @@ test("a Steer that misses the finishing response is sent once as the next turn",
   lmStudio.releaseCompletions!();
   await expect(page.getByText(/It will send as your next message/u)).toBeVisible();
   await expect(composer).toHaveValue("");
-  await expect.poll(() => lmStudio.requests.filter((request) =>
-    JSON.stringify(request.body).includes("Late guidance becomes the next turn"),
-  ).length).toBe(1);
+  await expect
+    .poll(
+      () =>
+        lmStudio.requests.filter((request) =>
+          JSON.stringify(request.body).includes("Late guidance becomes the next turn"),
+        ).length,
+    )
+    .toBe(1);
   await expect(page.getByRole("button", { name: "Stop generating" })).toHaveCount(0);
-  await expect(page.getByText("Late guidance becomes the next turn", { exact: true })).toHaveCount(1);
+  await expect(page.getByText("Late guidance becomes the next turn", { exact: true })).toHaveCount(
+    1,
+  );
   await expect(page.getByRole("button", { name: /queued message/u })).toHaveCount(0);
   // Settled with an empty queue: still exactly one provider request carried it.
-  expect(lmStudio.requests.filter((request) =>
-    JSON.stringify(request.body).includes("Late guidance becomes the next turn"),
-  ).length).toBe(1);
+  expect(
+    lmStudio.requests.filter((request) =>
+      JSON.stringify(request.body).includes("Late guidance becomes the next turn"),
+    ).length,
+  ).toBe(1);
 });
 
 test("a response finishing while the queue editor is open waits for the saved edit", async ({
@@ -547,7 +594,8 @@ test("a response finishing while the queue editor is open waits for the saved ed
     page.getByRole("button", { name: "Fork from here", includeHidden: true }),
   ).toHaveCount(1);
   await expect(
-    page.getByRole("region", { name: "Queued messages", includeHidden: true })
+    page
+      .getByRole("region", { name: "Queued messages", includeHidden: true })
       .getByRole("status", { includeHidden: true }),
   ).toHaveText("1 queued");
   expect(
@@ -596,9 +644,13 @@ test("switching chats retains the queue without delivering it into another conve
   await queue.getByRole("button", { name: "Resume queue", exact: true }).click();
   await expect(queue).toBeHidden();
   // The queue clears after durable append; the provider request starts asynchronously.
-  await expect.poll(() => lmStudio.requests.some(
-    (request) => lastUserText(request) === "Only send in the original chat",
-  )).toBe(true);
+  await expect
+    .poll(() =>
+      lmStudio.requests.some(
+        (request) => lastUserText(request) === "Only send in the original chat",
+      ),
+    )
+    .toBe(true);
   const request = lmStudio.requests.find(
     (request) => lastUserText(request) === "Only send in the original chat",
   );
@@ -615,25 +667,31 @@ test("revisiting a running chat can queue and stop its exact response", async ({
   await composer.press("Enter");
   await expect(page.getByRole("button", { name: "Stop generating" })).toBeEnabled();
   await page.getByRole("button", { name: "New Agent", exact: true }).click();
-  await page.locator("[data-sidebar]")
-    .getByRole("button", { name: /^Revisited active response/u }).click();
+  await page
+    .locator("[data-sidebar]")
+    .getByRole("button", { name: /^Revisited active response/u })
+    .click();
   await expect(page.getByRole("button", { name: "Stop generating" })).toBeEnabled();
   await composer.fill("Queue after revisiting");
   await composer.press("Enter");
   const queue = page.getByRole("region", { name: "Queued messages", exact: true });
   await expect(queue).toContainText("Queue after revisiting");
-  expect(lmStudio.requests.filter((request) => lastUserText(request) === "Queue after revisiting"))
-    .toHaveLength(0);
+  expect(
+    lmStudio.requests.filter((request) => lastUserText(request) === "Queue after revisiting"),
+  ).toHaveLength(0);
   await expect(page.getByRole("button", { name: "Stop generating" })).toBeEnabled();
   await page.getByRole("button", { name: "Stop generating" }).click();
   await expect(page.getByRole("button", { name: "Stop generating" })).toBeHidden();
   await expect(queue.getByRole("status")).toContainText("Paused");
   await expect(queue.getByRole("listitem")).toContainText("Queue after revisiting");
-  expect(lmStudio.requests.filter((request) => lastUserText(request) === "Queue after revisiting"))
-    .toHaveLength(0);
+  expect(
+    lmStudio.requests.filter((request) => lastUserText(request) === "Queue after revisiting"),
+  ).toHaveLength(0);
 });
 
-test("Stop after revisiting cancels the detached response and permits a new message", async ({ aiden }) => {
+test("Stop after revisiting cancels the detached response and permits a new message", async ({
+  aiden,
+}) => {
   const { page, lmStudio } = aiden;
   await finishLmStudioOnboarding(page);
   lmStudio.holdCompletions!();
@@ -653,9 +711,11 @@ test("Stop after revisiting cancels the detached response and permits a new mess
   // Stop is enabled while provider initialization is still pending. This case
   // exercises a running, held response, so establish that phase before leaving.
   // The mock records the request and starts its held SSE response synchronously.
-  await expect.poll(() => lmStudio.requests.filter(
-    (request) => lastUserText(request) === originalMessage,
-  ).length).toBe(1);
+  await expect
+    .poll(
+      () => lmStudio.requests.filter((request) => lastUserText(request) === originalMessage).length,
+    )
+    .toBe(1);
   await page.getByRole("button", { name: "New Agent", exact: true }).click();
   // Wait for New Agent's draft route to replace the old chat selection before
   // navigating back; otherwise the two async route changes can overlap.
@@ -671,27 +731,37 @@ test("Stop after revisiting cancels the detached response and permits a new mess
   await expect(stop()).toBeHidden();
   await composer.fill("Fresh turn after returning and stopping");
   await composer.press("Enter");
-  await expect.poll(() => lmStudio.requests.filter(
-    (request) => lastUserText(request) === "Fresh turn after returning and stopping",
-  ).length).toBe(1);
+  await expect
+    .poll(
+      () =>
+        lmStudio.requests.filter(
+          (request) => lastUserText(request) === "Fresh turn after returning and stopping",
+        ).length,
+    )
+    .toBe(1);
 });
 
-test("Stop pauses queued image and text follow-ups without sending them", async ({
-  aiden,
-}) => {
+test("Stop pauses queued image and text follow-ups without sending them", async ({ aiden }) => {
   const { page, lmStudio } = aiden;
   await finishLmStudioOnboarding(page);
   lmStudio.holdCompletions!();
   await aiden.app.evaluate(({ ipcMain }) => {
     // Hold the saved first message's receipt, then the start receipt, so each
     // phase of a send that shows Stop early is observed deterministically.
-    const handlers = (ipcMain as unknown as {
-      _invokeHandlers: Map<string, (event: Electron.IpcMainInvokeEvent, ...args: unknown[]) => unknown>;
-    })._invokeHandlers;
+    const handlers = (
+      ipcMain as unknown as {
+        _invokeHandlers: Map<
+          string,
+          (event: Electron.IpcMainInvokeEvent, ...args: unknown[]) => unknown
+        >;
+      }
+    )._invokeHandlers;
     const hold = (channel: string, name: string) => {
       const original = handlers.get(channel)!;
       let release: () => void = () => {};
-      const gate = new Promise<void>((resolve) => { release = resolve; });
+      const gate = new Promise<void>((resolve) => {
+        release = resolve;
+      });
       (globalThis as unknown as Record<string, () => void>)[name] = release;
       handlers.set(channel, async (event, ...args) => {
         const receipt = await original(event, ...args);
@@ -702,9 +772,10 @@ test("Stop pauses queued image and text follow-ups without sending them", async 
     hold("chats:createWithFirstMessage", "releaseQueueSaveReceipt");
     hold("chat:start", "releaseQueueStartReceipt");
   });
-  const release = (name: string) => aiden.app.evaluate((_electron, key) => {
-    (globalThis as unknown as Record<string, () => void>)[key]!();
-  }, name);
+  const release = (name: string) =>
+    aiden.app.evaluate((_electron, key) => {
+      (globalThis as unknown as Record<string, () => void>)[key]!();
+    }, name);
   const composer = page.locator("textarea");
   await composer.fill("First response for stop and resume.");
   await composer.press("Enter");
@@ -718,9 +789,9 @@ test("Stop pauses queued image and text follow-ups without sending them", async 
   // intake reopens alongside Steer and Queue.
   await expect(attach).toBeEnabled();
   await expect(page.getByRole("button", { name: "Stop generating" })).toBeVisible();
-  const image = (
-    await readFile(path.join(REPOSITORY_ROOT, "resources/app-icon.png"))
-  ).toString("base64");
+  const image = (await readFile(path.join(REPOSITORY_ROOT, "resources/app-icon.png"))).toString(
+    "base64",
+  );
   await composer.evaluate((element, base64) => {
     const bytes = Uint8Array.from(atob(base64), (character) => character.charCodeAt(0));
     const data = new DataTransfer();
@@ -772,20 +843,17 @@ test("messages sent during compaction queue behind it and survive a failed compa
     const state = { finish: (_result: unknown) => {}, starts: 0, active: false };
     Object.assign(globalThis, { compactionQueueTest: state });
     ipcMain.removeHandler("chats:compact");
-    ipcMain.handle(
-      "chats:compact",
-      () => {
-        state.starts += 1;
-        if (state.active) return { compacted: false, reason: "busy" };
-        state.active = true;
-        return new Promise((resolve) => {
-          state.finish = (result) => {
-            state.active = false;
-            resolve(result);
-          };
-        });
-      },
-    );
+    ipcMain.handle("chats:compact", () => {
+      state.starts += 1;
+      if (state.active) return { compacted: false, reason: "busy" };
+      state.active = true;
+      return new Promise((resolve) => {
+        state.finish = (result) => {
+          state.active = false;
+          resolve(result);
+        };
+      });
+    });
   });
   const finishCompaction = (result: unknown) =>
     app.evaluate((_electron, value) => {
@@ -794,7 +862,11 @@ test("messages sent during compaction queue behind it and survive a failed compa
       ).compactionQueueTest.finish(value);
     }, result);
   const compactionStarts = () =>
-    app.evaluate(() => (globalThis as unknown as { compactionQueueTest: { starts: number } }).compactionQueueTest.starts);
+    app.evaluate(
+      () =>
+        (globalThis as unknown as { compactionQueueTest: { starts: number } }).compactionQueueTest
+          .starts,
+    );
   const startCompaction = async () => {
     await composer.fill("/compact");
     await expect(page.getByRole("listbox", { name: "Slash commands" })).toBeVisible();
@@ -813,16 +885,21 @@ test("messages sent during compaction queue behind it and survive a failed compa
   await expect.poll(compactionStarts).toBe(1);
   // Draft editing includes removing attachments while the local compaction
   // command is still pending, before a remount clears its local busy state.
-  const image = (
-    await readFile(path.join(REPOSITORY_ROOT, "resources/app-icon.png"))
-  ).toString("base64");
+  const image = (await readFile(path.join(REPOSITORY_ROOT, "resources/app-icon.png"))).toString(
+    "base64",
+  );
   await composer.evaluate((element, base64) => {
     const bytes = Uint8Array.from(atob(base64), (character) => character.charCodeAt(0));
     const data = new DataTransfer();
     data.items.add(new File([bytes], "clipboard.png", { type: "image/png" }));
-    element.dispatchEvent(new ClipboardEvent("paste", { bubbles: true, cancelable: true, clipboardData: data }));
+    element.dispatchEvent(
+      new ClipboardEvent("paste", { bubbles: true, cancelable: true, clipboardData: data }),
+    );
   }, image);
-  const removeAttachment = page.getByRole("button", { name: "Remove Pasted image.png", exact: true });
+  const removeAttachment = page.getByRole("button", {
+    name: "Remove Pasted image.png",
+    exact: true,
+  });
   await expect(removeAttachment).toBeEnabled();
   await removeAttachment.click();
   await expect(removeAttachment).toBeHidden();
@@ -948,9 +1025,12 @@ test("a blocked send explains itself beside the composer and clears when the dra
 
   await expect(composer).toHaveAccessibleDescription(new RegExp(reason.replace(/\./gu, "\\.")));
   await expect(page.getByRole("status").filter({ hasText: reason })).toBeVisible();
-  await expect(page.getByRole("region", { name: /Notifications/u }).getByText(reason)).toHaveCount(0);
-  expect(lmStudio.requests.filter((request) => (lastUserText(request)?.length ?? 0) > 1024 * 1024))
-    .toHaveLength(0);
+  await expect(page.getByRole("region", { name: /Notifications/u }).getByText(reason)).toHaveCount(
+    0,
+  );
+  expect(
+    lmStudio.requests.filter((request) => (lastUserText(request)?.length ?? 0) > 1024 * 1024),
+  ).toHaveLength(0);
 
   await composer.fill("A message that fits");
   await expect(page.getByText(reason)).toHaveCount(0);

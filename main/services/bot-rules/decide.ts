@@ -50,12 +50,14 @@ export function decideBotRule(
     if (
       strictest === undefined ||
       BOT_RULED_RANK[rule.behavior] > BOT_RULED_RANK[strictest.behavior] ||
-      (BOT_RULED_RANK[rule.behavior] === BOT_RULED_RANK[strictest.behavior] && tierOf(rule) < tierOf(strictest))
+      (BOT_RULED_RANK[rule.behavior] === BOT_RULED_RANK[strictest.behavior] &&
+        tierOf(rule) < tierOf(strictest))
     ) {
       strictest = rule;
     }
   }
   if (strictest === undefined) return { ruled: baseline, allMatchingAsk };
-  const ruled = BOT_RULED_RANK[strictest.behavior] > BOT_RULED_RANK[baseline] ? strictest.behavior : baseline;
+  const ruled =
+    BOT_RULED_RANK[strictest.behavior] > BOT_RULED_RANK[baseline] ? strictest.behavior : baseline;
   return { ruled, rule: strictest, allMatchingAsk };
 }

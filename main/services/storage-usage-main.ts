@@ -11,10 +11,7 @@ import { chatStore } from "./chat-store.js";
 import { chatApplicationService } from "./chat-application-service-main.js";
 import { configStore } from "./config-store.js";
 import { currentRuntimeProfile } from "../runtime-profile.js";
-import {
-  deleteAllDiagnosticData,
-  pruneExpiredDiagnosticCrashDumps,
-} from "./diagnostic-support.js";
+import { deleteAllDiagnosticData, pruneExpiredDiagnosticCrashDumps } from "./diagnostic-support.js";
 import { closeDeviceSessionsForChat } from "../handlers/devices.js";
 import { gitManagedWorktreeDirtyState, gitManagedWorktreeUnpushedCommits } from "./git.js";
 import { llmClient } from "./llm-client.js";

@@ -20,21 +20,47 @@ import {
   settingsTabLabel,
 } from "./settings-section.js";
 
-const APPLE_SILICON = { computerUse: true, devices: true, botComputers: true, hooks: true, mcpServer: true };
-const INTEL_MAC = { computerUse: true, devices: true, botComputers: false, hooks: true, mcpServer: true };
-const LINUX = { computerUse: false, devices: false, botComputers: false, hooks: true, mcpServer: true };
+const APPLE_SILICON = {
+  computerUse: true,
+  devices: true,
+  botComputers: true,
+  hooks: true,
+  mcpServer: true,
+};
+const INTEL_MAC = {
+  computerUse: true,
+  devices: true,
+  botComputers: false,
+  hooks: true,
+  mcpServer: true,
+};
+const LINUX = {
+  computerUse: false,
+  devices: false,
+  botComputers: false,
+  hooks: true,
+  mcpServer: true,
+};
 
 test("capability-aware settings destinations hide Computer Use everywhere", () => {
   assert.equal(
-    availableSettingsDestinations({ computerUse: false, devices: true, botComputers: true, hooks: true, mcpServer: true }).some(
-      (destination) => destination.id === "computerUse",
-    ),
+    availableSettingsDestinations({
+      computerUse: false,
+      devices: true,
+      botComputers: true,
+      hooks: true,
+      mcpServer: true,
+    }).some((destination) => destination.id === "computerUse"),
     false,
   );
   assert.equal(
-    availableSettingsDestinations({ computerUse: true, devices: true, botComputers: true, hooks: true, mcpServer: true }).some(
-      (destination) => destination.id === "computerUse",
-    ),
+    availableSettingsDestinations({
+      computerUse: true,
+      devices: true,
+      botComputers: true,
+      hooks: true,
+      mcpServer: true,
+    }).some((destination) => destination.id === "computerUse"),
     true,
   );
 });
@@ -42,9 +68,33 @@ test("capability-aware settings destinations hide Computer Use everywhere", () =
 test("capability-aware settings destinations hide Simulator without the devices capability", () => {
   const ids = (capabilities: Parameters<typeof availableSettingsDestinations>[0]) =>
     availableSettingsDestinations(capabilities).map((destination) => destination.id);
-  assert.equal(ids({ computerUse: true, devices: false, botComputers: true, hooks: true, mcpServer: true }).includes("simulator"), false);
-  assert.equal(ids({ computerUse: true, devices: true, botComputers: true, hooks: true, mcpServer: true }).includes("simulator"), true);
-  const linux = ids({ computerUse: false, devices: false, botComputers: false, hooks: true, mcpServer: true });
+  assert.equal(
+    ids({
+      computerUse: true,
+      devices: false,
+      botComputers: true,
+      hooks: true,
+      mcpServer: true,
+    }).includes("simulator"),
+    false,
+  );
+  assert.equal(
+    ids({
+      computerUse: true,
+      devices: true,
+      botComputers: true,
+      hooks: true,
+      mcpServer: true,
+    }).includes("simulator"),
+    true,
+  );
+  const linux = ids({
+    computerUse: false,
+    devices: false,
+    botComputers: false,
+    hooks: true,
+    mcpServer: true,
+  });
   assert.equal(linux.includes("simulator"), false);
   assert.equal(linux.includes("computerUse"), false);
   assert.equal(linux.includes("botComputers"), false);
@@ -53,8 +103,18 @@ test("capability-aware settings destinations hide Simulator without the devices 
 
 test("Bot computers appear only on Apple silicon and are found by VM words", () => {
   const ids = (botComputers: boolean) =>
-    availableSettingsDestinations({ computerUse: true, devices: true, botComputers, hooks: true, mcpServer: true }).map((destination) => destination.id);
-  assert.equal(ids(false).includes("botComputers"), false, "an Intel Mac has Computer Use but no Bot computers");
+    availableSettingsDestinations({
+      computerUse: true,
+      devices: true,
+      botComputers,
+      hooks: true,
+      mcpServer: true,
+    }).map((destination) => destination.id);
+  assert.equal(
+    ids(false).includes("botComputers"),
+    false,
+    "an Intel Mac has Computer Use but no Bot computers",
+  );
   assert.equal(ids(true).includes("botComputers"), true);
   const destination = SETTINGS_DESTINATIONS.find((entry) => entry.id === "botComputers");
   assert.ok(destination);
@@ -69,8 +129,18 @@ test("Bot computers appear only on Apple silicon and are found by VM words", () 
 
 test("Hooks appear only where the host can run them", () => {
   const ids = (hooks: boolean) =>
-    availableSettingsDestinations({ computerUse: true, devices: true, botComputers: true, hooks, mcpServer: true }).map((destination) => destination.id);
-  assert.equal(ids(false).includes("hooks"), false, "a host without process-group support has no Hooks page");
+    availableSettingsDestinations({
+      computerUse: true,
+      devices: true,
+      botComputers: true,
+      hooks,
+      mcpServer: true,
+    }).map((destination) => destination.id);
+  assert.equal(
+    ids(false).includes("hooks"),
+    false,
+    "a host without process-group support has no Hooks page",
+  );
   assert.equal(ids(true).includes("hooks"), true);
   // Only Hooks goes; every other page stays.
   assert.deepEqual(
@@ -85,7 +155,11 @@ test("Apps using Aiden appears only where the host offers the MCP server", () =>
     availableSettingsDestinations(capabilities(mcpServer)).map((destination) => destination.id);
   assert.equal(ids(false).includes("otherApps"), false);
   assert.equal(ids(true).includes("otherApps"), true);
-  assert.deepEqual(ids(true).filter((id) => id !== "otherApps"), ids(false), "only Apps using Aiden goes");
+  assert.deepEqual(
+    ids(true).filter((id) => id !== "otherApps"),
+    ids(false),
+    "only Apps using Aiden goes",
+  );
 
   // It is a Connections tab; without the server the page keeps its other tabs.
   const connections = (mcpServer: boolean) =>
@@ -100,8 +174,14 @@ test("Apps using Aiden appears only where the host offers the MCP server", () =>
   for (const term of ["mcp server", "claude code", "codex", "model context protocol"]) {
     assert.ok(searchIds(term).includes("otherApps"), term);
   }
-  assert.equal(assistantSettingsPages(capabilities(false)).join().includes("Apps using Aiden"), false);
-  assert.equal(assistantSettingsPages(capabilities(true)).join().includes("Apps using Aiden"), true);
+  assert.equal(
+    assistantSettingsPages(capabilities(false)).join().includes("Apps using Aiden"),
+    false,
+  );
+  assert.equal(
+    assistantSettingsPages(capabilities(true)).join().includes("Apps using Aiden"),
+    true,
+  );
 });
 
 test("Aiden Live appears only where the host has it", () => {
@@ -110,7 +190,11 @@ test("Aiden Live appears only where the host has it", () => {
     availableSettingsDestinations(capabilities(geminiLive)).map((destination) => destination.id);
   assert.equal(ids(false).includes("geminiLive"), false);
   assert.equal(ids(true).includes("geminiLive"), true);
-  assert.deepEqual(ids(true).filter((id) => id !== "geminiLive"), ids(false), "only Aiden Live goes");
+  assert.deepEqual(
+    ids(true).filter((id) => id !== "geminiLive"),
+    ids(false),
+    "only Aiden Live goes",
+  );
 
   // Voice & Speech keeps its other tabs and its name.
   const voiceSpeech = (geminiLive: boolean) =>
@@ -125,7 +209,10 @@ test("Aiden Live appears only where the host has it", () => {
   assert.equal(assistantSettingsPages(capabilities(false)).join().includes("Aiden Live"), false);
   assert.equal(assistantSettingsPages(capabilities(true)).join().includes("Aiden Live"), true);
   // A caller that doesn't know about Live keeps the tab.
-  assert.equal(availableSettingsDestinations(APPLE_SILICON).some((entry) => entry.id === "geminiLive"), true);
+  assert.equal(
+    availableSettingsDestinations(APPLE_SILICON).some((entry) => entry.id === "geminiLive"),
+    true,
+  );
 });
 
 test("accepts known settings deep links and rejects arbitrary search values", () => {
@@ -171,7 +258,8 @@ test("Connectors navigation is found by its name, MCP, and the apps it connects"
   assert.ok(destination);
   assert.equal(destination.title, "Connectors");
   // The former names stay findable.
-  for (const keyword of ["mcp", "plugins", "integrations", "composio"]) assert.ok(destination.keywords.includes(keyword), keyword);
+  for (const keyword of ["mcp", "plugins", "integrations", "composio"])
+    assert.ok(destination.keywords.includes(keyword), keyword);
 });
 
 test("Web Search navigation advertises provider routing and privacy controls", () => {
@@ -257,9 +345,13 @@ test("Image Generation is reachable by deep link and model names", () => {
   }
   // Every platform shows it; no capability gates image generation.
   assert.ok(
-    availableSettingsDestinations({ computerUse: false, devices: false, botComputers: false, hooks: false, mcpServer: false }).some(
-      (entry) => entry.id === "imageGeneration",
-    ),
+    availableSettingsDestinations({
+      computerUse: false,
+      devices: false,
+      botComputers: false,
+      hooks: false,
+      mcpServer: false,
+    }).some((entry) => entry.id === "imageGeneration"),
   );
 });
 
@@ -270,13 +362,19 @@ test("every section lives on exactly one page, and every destination has a secti
     );
     assert.equal(homes.length, 1, section);
     assert.equal(parseSettingsSection(section), section);
-    assert.ok(SETTINGS_DESTINATIONS.some((entry) => entry.id === section), section);
+    assert.ok(
+      SETTINGS_DESTINATIONS.some((entry) => entry.id === section),
+      section,
+    );
   }
 });
 
 test("every sidebar group holds a page", () => {
   for (const group of SETTINGS_GROUPS) {
-    assert.ok(SETTINGS_PAGES.some((page) => page.group === group), group);
+    assert.ok(
+      SETTINGS_PAGES.some((page) => page.group === group),
+      group,
+    );
   }
 });
 
@@ -304,7 +402,11 @@ test("Bot messaging is a spot on Approvals, which shows its Approvals tab", () =
   assert.equal(settingsTabFor(page, "appControls"), "appControls");
   assert.equal(resolveSettingsSection("bots", LINUX), "bots");
   // Asking for the spot again scrolls again; a tab carries no scroll request.
-  assert.equal(typeof (settingsLocation("bots") as { state?: { aidenSettingsAnchor?: number } }).state?.aidenSettingsAnchor, "number");
+  assert.equal(
+    typeof (settingsLocation("bots") as { state?: { aidenSettingsAnchor?: number } }).state
+      ?.aidenSettingsAnchor,
+    "number",
+  );
   assert.equal((settingsLocation("approvals") as { state?: unknown }).state, undefined);
 });
 
@@ -339,7 +441,11 @@ test("a section this host can't show opens the next tab on its page, then Provid
 test("the assistant names pages as people see them, and none this host hides", () => {
   const pages = assistantSettingsPages(APPLE_SILICON);
   assert.ok(pages.includes("Approvals (Approvals, Controls in chat, Bot messaging)"));
-  assert.ok(pages.includes("Connections (Control this device, Control other devices, Apps using Aiden, Telegram)"));
+  assert.ok(
+    pages.includes(
+      "Connections (Control this device, Control other devices, Apps using Aiden, Telegram)",
+    ),
+  );
   assert.ok(pages.includes("Appearance (Links)"));
   assert.ok(pages.includes("Memory"));
   assert.ok(assistantSettingsPages(INTEL_MAC).includes("Computer Use"));
@@ -374,11 +480,15 @@ test("sidebar search opens the tab that matched", () => {
 test("sidebar search on a page title's word prefers the tab that names it", () => {
   assert.ok(searchSidebar("approvals").some((row) => row.target === "approvals"));
   assert.deepEqual(searchSidebar("voice & speech"), [{ page: "voiceSpeech", target: "voice" }]);
-  assert.deepEqual(searchSidebar("connections telegram"), [{ page: "connections", target: "telegram" }]);
+  assert.deepEqual(searchSidebar("connections telegram"), [
+    { page: "connections", target: "telegram" },
+  ]);
 });
 
 test("sidebar search opens the links row from Appearance", () => {
-  assert.ok(searchSidebar("open links").some((row) => row.page === "appearance" && row.target === "links"));
+  assert.ok(
+    searchSidebar("open links").some((row) => row.page === "appearance" && row.target === "links"),
+  );
 });
 
 test("an empty sidebar search opens each page's first tab", () => {
@@ -394,7 +504,11 @@ test("sidebar search can't open a hidden tab", () => {
 
 test("sleep words find the keep-awake row on Scheduled tasks", () => {
   for (const term of ["awake", "sleep", "caffeinate", "keep awake"]) {
-    assert.deepEqual(searchSidebar(term), [{ page: "scheduledTasks", target: "scheduledTasks" }], term);
+    assert.deepEqual(
+      searchSidebar(term),
+      [{ page: "scheduledTasks", target: "scheduledTasks" }],
+      term,
+    );
   }
 });
 
@@ -404,10 +518,17 @@ test("Bots → Bubbles is its own page under Autonomy & Devices, found by bubble
   assert.equal(page?.group, "Autonomy & Devices");
   assert.deepEqual(page?.tabs, ["botBubbles"]);
   for (const term of ["bubbles", "chat heads", "float over apps"]) {
-    assert.deepEqual(searchSidebar(term, LINUX), [{ page: "botBubbles", target: "botBubbles" }], term);
+    assert.deepEqual(
+      searchSidebar(term, LINUX),
+      [{ page: "botBubbles", target: "botBubbles" }],
+      term,
+    );
   }
   assert.equal(parseSettingsSection("botBubbles"), "botBubbles");
   const noBots = { ...LINUX, bots: false };
-  assert.equal(availableSettingsPages(noBots).some((entry) => entry.id === "botBubbles"), false);
+  assert.equal(
+    availableSettingsPages(noBots).some((entry) => entry.id === "botBubbles"),
+    false,
+  );
   assert.equal(resolveSettingsSection("botBubbles", noBots), "providers");
 });

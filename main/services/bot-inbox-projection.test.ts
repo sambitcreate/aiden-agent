@@ -13,10 +13,7 @@ import {
 } from "./bot-inbox-projection.js";
 import type { ChatMeta } from "./types.js";
 
-function bot(
-  id: string,
-  overrides: Partial<BotDefinition> = {},
-): BotDefinition {
+function bot(id: string, overrides: Partial<BotDefinition> = {}): BotDefinition {
   return {
     id,
     revision: `bot_${id}`,
@@ -58,10 +55,7 @@ function fixture(
   } = {},
 ) {
   const bots = input.bots ?? [bot("bot-a"), bot("bot-b")];
-  const chats = input.chats ?? [
-    chat("chat-a", "bot-a", 30),
-    chat("chat-b", "bot-b", 20),
-  ];
+  const chats = input.chats ?? [chat("chat-a", "bot-a", 30), chat("chat-b", "bot-b", 20)];
   const calls = { bots: 0, metadata: 0, batch: 0, requested: [] as string[][] };
   const service = createBotInboxProjectionService({
     listBots: async () => {
@@ -170,18 +164,12 @@ test("normal pagination batches only the selected page and uses a stable keyset 
   assert.equal(second.conversations.length, 10);
   assert.equal(app.calls.requested[1]?.length, 10);
   assert.equal(
-    new Set(
-      [...first.conversations, ...second.conversations].map(
-        (entry) => entry.chatId,
-      ),
-    ).size,
+    new Set([...first.conversations, ...second.conversations].map((entry) => entry.chatId)).size,
     20,
   );
   assert.ok(
     Date.parse(second.conversations[0]!.updatedAt) <
-      Date.parse(
-        first.conversations[first.conversations.length - 1]!.updatedAt,
-      ),
+      Date.parse(first.conversations[first.conversations.length - 1]!.updatedAt),
   );
 });
 
@@ -193,10 +181,7 @@ test("search uses one bounded precomputed-preview batch and never requests full 
     chat(`chat-${String(index).padStart(3, "0")}`, entry.id, 1_000 - index),
   );
   const previews = Object.fromEntries(
-    chats.map((entry, index) => [
-      entry.id,
-      index === 199 ? "The unique needle" : "ordinary",
-    ]),
+    chats.map((entry, index) => [entry.id, index === 199 ? "The unique needle" : "ordinary"]),
   );
   const app = fixture({ chats, bots, previews });
 
@@ -207,14 +192,8 @@ test("search uses one bounded precomputed-preview batch and never requests full 
     ["chat-199"],
   );
   assert.equal(app.calls.batch, 1);
-  assert.equal(
-    app.calls.requested[0]?.length,
-    BOT_INBOX_PROJECTION_LIMITS.searchCandidates,
-  );
-  assert.ok(
-    page.nextCursor,
-    "a bounded scan exposes a continuation instead of scanning history",
-  );
+  assert.equal(app.calls.requested[0]?.length, BOT_INBOX_PROJECTION_LIMITS.searchCandidates);
+  assert.ok(page.nextCursor, "a bounded scan exposes a continuation instead of scanning history");
 
   const continued = await app.service.list({
     query: "needle",
@@ -222,10 +201,7 @@ test("search uses one bounded precomputed-preview batch and never requests full 
     cursor: page.nextCursor,
   });
   assert.equal(app.calls.batch, 2);
-  assert.ok(
-    app.calls.requested[1]!.length <=
-      BOT_INBOX_PROJECTION_LIMITS.searchCandidates,
-  );
+  assert.ok(app.calls.requested[1]!.length <= BOT_INBOX_PROJECTION_LIMITS.searchCandidates);
   assert.deepEqual(continued.conversations, []);
 });
 
@@ -245,35 +221,21 @@ test("search covers safe bot name, purpose, title, and precomputed preview", asy
   const previews = { "by-preview": "Make a latte" };
   const app = fixture({ bots, chats, previews });
 
-  assert.equal(
-    (await app.service.list({ query: "sherlock" })).conversations.length,
-    1,
-  );
-  assert.equal(
-    (await app.service.list({ query: "outbreak" })).conversations.length,
-    1,
-  );
+  assert.equal((await app.service.list({ query: "sherlock" })).conversations.length, 1);
+  assert.equal((await app.service.list({ query: "outbreak" })).conversations.length, 1);
   assert.deepEqual(
-    (await app.service.list({ query: "tokyo" })).conversations.map(
-      (entry) => entry.chatId,
-    ),
+    (await app.service.list({ query: "tokyo" })).conversations.map((entry) => entry.chatId),
     ["by-title"],
   );
   assert.deepEqual(
-    (await app.service.list({ query: "latte" })).conversations.map(
-      (entry) => entry.chatId,
-    ),
+    (await app.service.list({ query: "latte" })).conversations.map((entry) => entry.chatId),
     ["by-preview"],
   );
 });
 
 test("bot filters remain disjoint and a cursor is bound to its exact search scope", async () => {
   const app = fixture({
-    chats: [
-      chat("a-one", "bot-a", 30),
-      chat("b-one", "bot-b", 20),
-      chat("regular", undefined, 40),
-    ],
+    chats: [chat("a-one", "bot-a", 30), chat("b-one", "bot-b", 20), chat("regular", undefined, 40)],
   });
   const first = await app.service.list({ botId: "bot-a", limit: 1 });
   assert.deepEqual(
@@ -340,39 +302,21 @@ test("result strings, response bytes, query, cursor, index, and batch work stay 
   const app = fixture({
     bots: [bot("bot-a")],
     chats,
-    previews: Object.fromEntries(
-      chats.map((entry) => [entry.id, "🧪".repeat(1_000)]),
-    ),
+    previews: Object.fromEntries(chats.map((entry) => [entry.id, "🧪".repeat(1_000)])),
   });
   const page = await app.service.list({ limit: 50 });
   assert.ok(page.conversations.length > 0);
+  assert.ok(page.conversations.every((entry) => Array.from(entry.title).length <= 1_024));
+  assert.ok(page.conversations.every((entry) => Array.from(entry.preview ?? "").length <= 500));
   assert.ok(
-    page.conversations.every(
-      (entry) => Array.from(entry.title).length <= 1_024,
-    ),
-  );
-  assert.ok(
-    page.conversations.every(
-      (entry) => Array.from(entry.preview ?? "").length <= 500,
-    ),
-  );
-  assert.ok(
-    Buffer.byteLength(JSON.stringify(page), "utf8") <=
-      BOT_INBOX_PROJECTION_LIMITS.responseBytes,
+    Buffer.byteLength(JSON.stringify(page), "utf8") <= BOT_INBOX_PROJECTION_LIMITS.responseBytes,
   );
 
-  await assert.rejects(
-    app.service.list({ query: "x".repeat(201) }),
-    /search is invalid/u,
-  );
-  await assert.rejects(
-    app.service.list({ cursor: "x".repeat(129) }),
-    /cursor is invalid/u,
-  );
+  await assert.rejects(app.service.list({ query: "x".repeat(201) }), /search is invalid/u);
+  await assert.rejects(app.service.list({ cursor: "x".repeat(129) }), /cursor is invalid/u);
   const tooLarge = fixture({
-    chats: Array.from(
-      { length: BOT_INBOX_PROJECTION_LIMITS.indexEntries + 1 },
-      (_, index) => chat(`chat-${index}`, "bot-a", index + 1),
+    chats: Array.from({ length: BOT_INBOX_PROJECTION_LIMITS.indexEntries + 1 }, (_, index) =>
+      chat(`chat-${index}`, "bot-a", index + 1),
     ),
   });
   await assert.rejects(tooLarge.service.list(), /too large/u);

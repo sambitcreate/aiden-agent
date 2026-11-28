@@ -53,10 +53,12 @@ export class SubagentRunGrantV2 {
 
   /** The caller's live authority still names what this grant was minted for. */
   private bound(authority: SubagentAuthorityV2, permission: WorkspacePermission): boolean {
-    return !this.signal?.aborted &&
+    return (
+      !this.signal?.aborted &&
       permission === this.permission &&
       authority.expiresAt > this.now() &&
-      subagentAuthorityDigestV2(authority) === this.authorityDigest;
+      subagentAuthorityDigestV2(authority) === this.authorityDigest
+    );
   }
 
   private apply(event: SubagentRunGrantEventV2): void {
@@ -86,10 +88,12 @@ export class SubagentRunGrantV2 {
     if (decision.outcome !== "ask") return false;
     if (this.phase === "unrequested") {
       this.apply("request");
-      this.decision = Promise.resolve().then(request).then(
-        (allowed) => this.apply(allowed && !this.signal?.aborted ? "allow" : "deny"),
-        () => this.apply("deny"),
-      );
+      this.decision = Promise.resolve()
+        .then(request)
+        .then(
+          (allowed) => this.apply(allowed && !this.signal?.aborted ? "allow" : "deny"),
+          () => this.apply("deny"),
+        );
     }
     if (this.phase !== "requesting") return false;
     await this.decision;

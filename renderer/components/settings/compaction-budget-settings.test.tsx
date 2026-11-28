@@ -92,7 +92,13 @@ test("after saving a new override, choosing another unconfigured model starts bl
   fireEvent.click(screen.getByRole("button", { name: "Save budget" }));
   await waitFor(() => assert.equal(saves.length, 1));
   // The parent refreshes its overrides without remounting the form.
-  view.rerender(<CompactionBudgetSettings overrides={{ "a/x": { reserveTokens: 9000 } }} onSave={onSave} {...props} />);
+  view.rerender(
+    <CompactionBudgetSettings
+      overrides={{ "a/x": { reserveTokens: 9000 } }}
+      onSave={onSave}
+      {...props}
+    />,
+  );
 
   fireEvent.change(modelInput(), { target: { value: "b/y" } });
   assert.equal(reserveInput().value, "", "a/x's saved numbers do not carry over to b/y");
@@ -101,7 +107,12 @@ test("after saving a new override, choosing another unconfigured model starts bl
 
 const fold = () => screen.getByText("Model compaction budgets").closest("details")!;
 const budgets = (overrides: CompactionModelOverrides) => (
-  <CompactionBudgetSettings overrides={overrides} modelKeys={[]} disabled={false} onSave={async () => {}} />
+  <CompactionBudgetSettings
+    overrides={overrides}
+    modelKeys={[]}
+    disabled={false}
+    onSave={async () => {}}
+  />
 );
 
 test("with no overrides the form stays folded and the summary says defaults apply", () => {

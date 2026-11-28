@@ -10,7 +10,9 @@ function currentDocument(): WindowActivityTarget | undefined {
   return typeof document === "undefined" ? undefined : document;
 }
 
-export function isWindowActive(target: WindowActivityTarget | undefined = currentDocument()): boolean {
+export function isWindowActive(
+  target: WindowActivityTarget | undefined = currentDocument(),
+): boolean {
   if (!target) return true;
   return target.visibilityState === "visible" && target.hasFocus();
 }

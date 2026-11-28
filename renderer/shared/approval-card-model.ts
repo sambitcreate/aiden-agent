@@ -13,10 +13,18 @@ import type {
   SubagentShellApprovalDetails,
   SubagentWorkspaceWriteApprovalDetails,
 } from "./assistant";
-import type { HookProposalApprovalDetails, HookProposalApprovalHook } from "./hook-proposal-approval";
+import type {
+  HookProposalApprovalDetails,
+  HookProposalApprovalHook,
+} from "./hook-proposal-approval";
 import type { ToolApprovalPreview } from "./tool-approval-preview";
 import type { ToolApprovalScope } from "./tool-approval-scope";
-import { COMMAND_READING_LIMITS, parseCommandReading, type CommandReading, type CommandTag } from "./command-reading";
+import {
+  COMMAND_READING_LIMITS,
+  parseCommandReading,
+  type CommandReading,
+  type CommandTag,
+} from "./command-reading";
 
 const TOOL_LABELS: Record<string, string> = {
   edit_file: "Edit file",
@@ -79,7 +87,12 @@ export function approvalFilePath(pending: ApprovalCardSource): string | undefine
 }
 
 const MAC_COMMAND_TOOLS: ReadonlySet<string> = new Set(["run_command", "background_job"]);
-const MAC_FILE_TOOLS: ReadonlySet<string> = new Set(["edit_file", "write_file", "delete_file", "move_file"]);
+const MAC_FILE_TOOLS: ReadonlySet<string> = new Set([
+  "edit_file",
+  "write_file",
+  "delete_file",
+  "move_file",
+]);
 
 /** The site a generic card's call reaches, when its summary names one. */
 export function approvalTarget(summary: string): string | undefined {
@@ -94,8 +107,11 @@ export function approvalTarget(summary: string): string | undefined {
 }
 
 /** Which part of the Mac a Mac card is about, if it is one. */
-export function approvalMacPart(pending: ApprovalCardSource): "shell" | "files" | "computer_use" | undefined {
-  if (pending.preview?.kind === "command" || MAC_COMMAND_TOOLS.has(pending.toolName)) return "shell";
+export function approvalMacPart(
+  pending: ApprovalCardSource,
+): "shell" | "files" | "computer_use" | undefined {
+  if (pending.preview?.kind === "command" || MAC_COMMAND_TOOLS.has(pending.toolName))
+    return "shell";
   if (pending.preview?.kind === "file" || MAC_FILE_TOOLS.has(pending.toolName)) return "files";
   return pending.toolName === "computer_use" ? "computer_use" : undefined;
 }
@@ -124,7 +140,9 @@ export function approvalHeadline(pending: ApprovalCardSource): string {
   return `Review before ${toolLabel(pending.toolName)}${target ? ` → ${target}` : ""}`;
 }
 
-export type ScheduleApprovalDetails = ScheduledTaskApprovalDetails | AssistantAutomationApprovalDetails;
+export type ScheduleApprovalDetails =
+  | ScheduledTaskApprovalDetails
+  | AssistantAutomationApprovalDetails;
 
 const SCHEDULE_HEADLINES: Record<ScheduledTaskApprovalDetails["action"], string> = {
   create: "Save this scheduled task?",
@@ -142,7 +160,11 @@ export function scheduleApprovalHeadline(details: ScheduleApprovalDetails): stri
 }
 
 export function hookProposalHeadline(details: Pick<HookProposalApprovalDetails, "action">): string {
-  return details.action === "delete" ? "Delete this hook?" : details.action === "update" ? "Change this hook?" : "Add this hook?";
+  return details.action === "delete"
+    ? "Delete this hook?"
+    : details.action === "update"
+      ? "Change this hook?"
+      : "Add this hook?";
 }
 
 const SUBAGENT_WRITE_LABELS: Record<SubagentWorkspaceWriteApprovalDetails["operation"], string> = {
@@ -151,7 +173,9 @@ const SUBAGENT_WRITE_LABELS: Record<SubagentWorkspaceWriteApprovalDetails["opera
   edit: "Edit file",
 };
 
-export function subagentWorkspaceWriteOperationLabel(operation: SubagentWorkspaceWriteApprovalDetails["operation"]): string {
+export function subagentWorkspaceWriteOperationLabel(
+  operation: SubagentWorkspaceWriteApprovalDetails["operation"],
+): string {
   return SUBAGENT_WRITE_LABELS[operation];
 }
 
@@ -178,15 +202,17 @@ export function approvalStatusLabel(status: ApprovalStatus): string {
   if (status.decision === "stale") return "No longer active";
   if (status.scope === "chat") return "Allowed in this chat";
   if (status.scope === "workspace") return "Allowed in this workspace";
-  if (status.scope === "always") return status.always === "workspace" ? "Allowed in this workspace" : "Always allowed";
+  if (status.scope === "always")
+    return status.always === "workspace" ? "Allowed in this workspace" : "Always allowed";
   return "Allowed once";
 }
 
 /** The specialized question a details kind asks, or undefined for a plain card. */
 export function approvalDetailsHeadline(details: unknown): string | undefined {
-  const record = typeof details === "object" && details !== null && !Array.isArray(details)
-    ? (details as Record<string, unknown>)
-    : undefined;
+  const record =
+    typeof details === "object" && details !== null && !Array.isArray(details)
+      ? (details as Record<string, unknown>)
+      : undefined;
   switch (record?.kind) {
     case "subagent-workspace-write": {
       const write = record as unknown as SubagentWorkspaceWriteApprovalDetails;
@@ -216,7 +242,14 @@ export function approvalDetailsHeadline(details: unknown): string | undefined {
 // The typed card on the wire (Aiden Remote contract revision 61)
 // ---------------------------------------------------------------------------
 
-export const APPROVAL_CARD_KINDS = ["generic", "explicit", "mac", "batch", "held_change", "schedule"] as const;
+export const APPROVAL_CARD_KINDS = [
+  "generic",
+  "explicit",
+  "mac",
+  "batch",
+  "held_change",
+  "schedule",
+] as const;
 export type ApprovalCardKind = (typeof APPROVAL_CARD_KINDS)[number];
 
 export interface ApprovalCardArgument {
@@ -282,7 +315,9 @@ export const APPROVAL_CARD_LIMITS = {
 } as const;
 
 /** Rakazo's order: short values first (stable for equal lengths), so a recipient never hides behind a long body. */
-export function orderApprovalArguments(entries: readonly ApprovalCardArgument[]): ApprovalCardArgument[] {
+export function orderApprovalArguments(
+  entries: readonly ApprovalCardArgument[],
+): ApprovalCardArgument[] {
   return entries
     .map((entry, index) => ({ entry, index }))
     .sort((a, b) => [...a.entry.value].length - [...b.entry.value].length || a.index - b.index)
@@ -309,17 +344,25 @@ export interface ApprovalCardInput extends ApprovalCardSource {
   plainWords?: boolean;
 }
 
-const DENY: ApprovalCardButton = { label: "Deny", decision: "deny", answered: approvalStatusLabel({ decision: "deny" }) };
+const DENY: ApprovalCardButton = {
+  label: "Deny",
+  decision: "deny",
+  answered: approvalStatusLabel({ decision: "deny" }),
+};
 const ALLOW_ON_MAC = "Allow it on your Mac.";
 
 function clip(text: string, max: number): { text: string; complete: boolean } {
   const points = [...text];
-  return points.length <= max ? { text, complete: true } : { text: `${points.slice(0, max - 1).join("")}…`, complete: false };
+  return points.length <= max
+    ? { text, complete: true }
+    : { text: `${points.slice(0, max - 1).join("")}…`, complete: false };
 }
 
 function kindOf(details: unknown): string | undefined {
   return typeof details === "object" && details !== null && !Array.isArray(details)
-    ? (typeof (details as Record<string, unknown>).kind === "string" ? (details as { kind: string }).kind : undefined)
+    ? typeof (details as Record<string, unknown>).kind === "string"
+      ? (details as { kind: string }).kind
+      : undefined
     : undefined;
 }
 
@@ -381,120 +424,168 @@ export function buildApprovalCard(input: ApprovalCardInput): ApprovalCard {
   // Details the host could not keep, or that are not the shape their kind
   // promises, are reviewed on the Mac: the card fails closed, never open.
   try {
-  switch (input.detailsOmitted === true && detailsKind !== undefined ? "omitted" : detailsKind) {
-    case "omitted":
-      hostOnly = true;
-      break;
-    case undefined: {
-      const part = approvalMacPart(input);
-      const command = approvalCommand(input);
-      const path = approvalFilePath(input);
-      const site = approvalTarget(input.summary);
-      if (part) { kind = "mac"; mac = part; }
-      if (part === "computer_use") hostOnly = true;
-      if (input.toolName === "classify" || input.toolName === "generate_image") { kind = "explicit"; hostOnly = true; }
-      if (site) args.push({ key: "site", value: site });
-      if (path) args.push({ key: "path", value: path });
-      args.push({ key: "tool", value: toolLabel(input.toolName) });
-      body = command !== undefined ? text(command, "command") : text(input.summary);
-      // A command's plain words ride beside it, never instead of it.
-      if (input.plainWords === true && part === "shell" && command !== undefined) reading = parseCommandReading(input.reading);
-      break;
+    switch (input.detailsOmitted === true && detailsKind !== undefined ? "omitted" : detailsKind) {
+      case "omitted":
+        hostOnly = true;
+        break;
+      case undefined: {
+        const part = approvalMacPart(input);
+        const command = approvalCommand(input);
+        const path = approvalFilePath(input);
+        const site = approvalTarget(input.summary);
+        if (part) {
+          kind = "mac";
+          mac = part;
+        }
+        if (part === "computer_use") hostOnly = true;
+        if (input.toolName === "classify" || input.toolName === "generate_image") {
+          kind = "explicit";
+          hostOnly = true;
+        }
+        if (site) args.push({ key: "site", value: site });
+        if (path) args.push({ key: "path", value: path });
+        args.push({ key: "tool", value: toolLabel(input.toolName) });
+        body = command !== undefined ? text(command, "command") : text(input.summary);
+        // A command's plain words ride beside it, never instead of it.
+        if (input.plainWords === true && part === "shell" && command !== undefined)
+          reading = parseCommandReading(input.reading);
+        break;
+      }
+      case "scheduled-task":
+      case "assistant-automation": {
+        const schedule = details as ScheduleApprovalDetails;
+        kind = "schedule";
+        args.push(
+          { key: "name", value: schedule.name },
+          { key: "when", value: schedule.cron },
+          { key: "time zone", value: schedule.timezone },
+          { key: "access", value: schedule.permission === "full" ? "Full access" : "Read-only" },
+        );
+        const work =
+          schedule.kind === "scheduled-task"
+            ? (schedule.prompt ?? schedule.script ?? "")
+            : schedule.prompt;
+        if (work)
+          body = text(
+            work,
+            schedule.kind === "scheduled-task" && schedule.mode === "script" ? "command" : "text",
+          );
+        break;
+      }
+      case "hook-proposal": {
+        const hook = details as HookProposalApprovalDetails;
+        kind = "held_change";
+        allowLabel = "Apply";
+        denyLabel = "Dismiss";
+        args.push(
+          { key: "name", value: hook.name },
+          { key: "where", value: hook.scopeLabel },
+          { key: "event", value: hook.event },
+        );
+        body = text(hookText(hook), "command");
+        if (hook.previous) previous = text(hookText(hook.previous), "command");
+        notes.push(...hook.warnings);
+        if (hook.scriptCoverage === "partial")
+          notes.push("The command also runs something Aiden can’t follow to a file.");
+        break;
+      }
+      case "subagent-shell": {
+        const shell = details as SubagentShellApprovalDetails;
+        kind = "mac";
+        mac = "shell";
+        args.push(
+          { key: "who", value: shell.childLabel },
+          { key: "folder", value: shell.initialCwd },
+          { key: "workspace", value: shell.worktreeLabel ?? shell.workspaceLabel },
+        );
+        body = text(shell.command, "command");
+        break;
+      }
+      case "subagent-workspace-write": {
+        const write = details as SubagentWorkspaceWriteApprovalDetails;
+        kind = "mac";
+        mac = "files";
+        args.push(
+          { key: "who", value: write.childLabel },
+          { key: "path", value: write.path },
+          { key: "workspace", value: write.worktreeLabel ?? write.workspaceLabel },
+          { key: "size", value: `${write.beforeBytes} → ${write.afterBytes} bytes` },
+        );
+        // The change itself is what the person allows: a diff the host had to
+        // cut short, or one that does not fit, can only be allowed on the Mac.
+        body = text(requireText(write.diffPreview, "Diff preview"), "command");
+        if (!write.diffPreview.trim()) complete = false;
+        if (write.diffTruncated !== false) complete = false;
+        break;
+      }
+      case "subagent-mcp-mutation": {
+        const mutation = details as SubagentMcpMutationApprovalDetails;
+        args.push(
+          { key: "who", value: mutation.childLabel },
+          { key: "server", value: mutation.serverId },
+          { key: "tool", value: mutation.toolName },
+          { key: "effect", value: mutation.destructive },
+          {
+            key: "changes",
+            value:
+              mutation.classification === "declared_mutating" ? "declared" : "not proven read-only",
+          },
+        );
+        allowLabel = subagentMcpMutationAllowLabel(mutation);
+        body = text(requireText(mutation.canonicalArguments, "Tool arguments"), "command");
+        // Arguments that show nothing can't be reviewed here.
+        if (!mutation.canonicalArguments.trim()) complete = false;
+        break;
+      }
+      case "subagent-run-grant": {
+        const grant = details as SubagentRunGrantApprovalDetails;
+        kind = "explicit";
+        allowLabel = "Allow for run";
+        args.push(
+          { key: "who", value: grant.childLabel },
+          { key: "workspace", value: grant.worktreeLabel ?? grant.workspaceLabel },
+          { key: "reach", value: grant.fullHostAccess ? "Full host" : "This workspace" },
+        );
+        if (grant.noRollback) notes.push("Changes in this run can’t be rolled back.");
+        // A run-wide grant reaches more than one call; it is given on the Mac.
+        hostOnly = true;
+        break;
+      }
+      case "form-fill-batch": {
+        const form = details as FormFillBatchApprovalDetails;
+        kind = "batch";
+        denyLabel = "Cancel";
+        allowLabel = `Fill ${form.rows.length} field${form.rows.length === 1 ? "" : "s"}`;
+        args.push(
+          { key: "app", value: form.targetApp },
+          { key: "window", value: form.targetTitle },
+          { key: "from", value: form.sourceDocument },
+        );
+        complete &&= form.rows.length <= APPROVAL_CARD_LIMITS.rows;
+        rows = form.rows.slice(0, APPROVAL_CARD_LIMITS.rows).map((row) => {
+          const value = clip(row.value, APPROVAL_CARD_LIMITS.value);
+          complete &&= value.complete;
+          return { label: clip(row.label, APPROVAL_CARD_LIMITS.key * 2).text, value: value.text };
+        });
+        break;
+      }
+      case "model-classification":
+        kind = "explicit";
+        hostOnly = true;
+        break;
+      case "computer-use-access":
+        // The grant can be answered anywhere; macOS's own permission prompts
+        // (deviation d) are still set up on the Mac.
+        kind = "mac";
+        mac = "computer_use";
+        title = "Use your Mac with Computer Use?";
+        args.push({ key: "reach", value: "Every app" });
+        notes.push("macOS permissions for Computer Use are set up on the Mac.");
+        break;
+      default:
+        // A details kind this model does not know is reviewed on the Mac.
+        hostOnly = true;
     }
-    case "scheduled-task":
-    case "assistant-automation": {
-      const schedule = details as ScheduleApprovalDetails;
-      kind = "schedule";
-      args.push({ key: "name", value: schedule.name }, { key: "when", value: schedule.cron }, { key: "time zone", value: schedule.timezone },
-        { key: "access", value: schedule.permission === "full" ? "Full access" : "Read-only" });
-      const work = schedule.kind === "scheduled-task" ? schedule.prompt ?? schedule.script ?? "" : schedule.prompt;
-      if (work) body = text(work, schedule.kind === "scheduled-task" && schedule.mode === "script" ? "command" : "text");
-      break;
-    }
-    case "hook-proposal": {
-      const hook = details as HookProposalApprovalDetails;
-      kind = "held_change";
-      allowLabel = "Apply";
-      denyLabel = "Dismiss";
-      args.push({ key: "name", value: hook.name }, { key: "where", value: hook.scopeLabel }, { key: "event", value: hook.event });
-      body = text(hookText(hook), "command");
-      if (hook.previous) previous = text(hookText(hook.previous), "command");
-      notes.push(...hook.warnings);
-      if (hook.scriptCoverage === "partial") notes.push("The command also runs something Aiden can’t follow to a file.");
-      break;
-    }
-    case "subagent-shell": {
-      const shell = details as SubagentShellApprovalDetails;
-      kind = "mac"; mac = "shell";
-      args.push({ key: "who", value: shell.childLabel }, { key: "folder", value: shell.initialCwd },
-        { key: "workspace", value: shell.worktreeLabel ?? shell.workspaceLabel });
-      body = text(shell.command, "command");
-      break;
-    }
-    case "subagent-workspace-write": {
-      const write = details as SubagentWorkspaceWriteApprovalDetails;
-      kind = "mac"; mac = "files";
-      args.push({ key: "who", value: write.childLabel }, { key: "path", value: write.path },
-        { key: "workspace", value: write.worktreeLabel ?? write.workspaceLabel },
-        { key: "size", value: `${write.beforeBytes} → ${write.afterBytes} bytes` });
-      // The change itself is what the person allows: a diff the host had to
-      // cut short, or one that does not fit, can only be allowed on the Mac.
-      body = text(requireText(write.diffPreview, "Diff preview"), "command");
-      if (!write.diffPreview.trim()) complete = false;
-      if (write.diffTruncated !== false) complete = false;
-      break;
-    }
-    case "subagent-mcp-mutation": {
-      const mutation = details as SubagentMcpMutationApprovalDetails;
-      args.push({ key: "who", value: mutation.childLabel }, { key: "server", value: mutation.serverId }, { key: "tool", value: mutation.toolName },
-        { key: "effect", value: mutation.destructive }, { key: "changes", value: mutation.classification === "declared_mutating" ? "declared" : "not proven read-only" });
-      allowLabel = subagentMcpMutationAllowLabel(mutation);
-      body = text(requireText(mutation.canonicalArguments, "Tool arguments"), "command");
-      // Arguments that show nothing can't be reviewed here.
-      if (!mutation.canonicalArguments.trim()) complete = false;
-      break;
-    }
-    case "subagent-run-grant": {
-      const grant = details as SubagentRunGrantApprovalDetails;
-      kind = "explicit";
-      allowLabel = "Allow for run";
-      args.push({ key: "who", value: grant.childLabel }, { key: "workspace", value: grant.worktreeLabel ?? grant.workspaceLabel },
-        { key: "reach", value: grant.fullHostAccess ? "Full host" : "This workspace" });
-      if (grant.noRollback) notes.push("Changes in this run can’t be rolled back.");
-      // A run-wide grant reaches more than one call; it is given on the Mac.
-      hostOnly = true;
-      break;
-    }
-    case "form-fill-batch": {
-      const form = details as FormFillBatchApprovalDetails;
-      kind = "batch";
-      denyLabel = "Cancel";
-      allowLabel = `Fill ${form.rows.length} field${form.rows.length === 1 ? "" : "s"}`;
-      args.push({ key: "app", value: form.targetApp }, { key: "window", value: form.targetTitle }, { key: "from", value: form.sourceDocument });
-      complete &&= form.rows.length <= APPROVAL_CARD_LIMITS.rows;
-      rows = form.rows.slice(0, APPROVAL_CARD_LIMITS.rows).map((row) => {
-        const value = clip(row.value, APPROVAL_CARD_LIMITS.value);
-        complete &&= value.complete;
-        return { label: clip(row.label, APPROVAL_CARD_LIMITS.key * 2).text, value: value.text };
-      });
-      break;
-    }
-    case "model-classification":
-      kind = "explicit";
-      hostOnly = true;
-      break;
-    case "computer-use-access":
-      // The grant can be answered anywhere; macOS's own permission prompts
-      // (deviation d) are still set up on the Mac.
-      kind = "mac"; mac = "computer_use";
-      title = "Use your Mac with Computer Use?";
-      args.push({ key: "reach", value: "Every app" });
-      notes.push("macOS permissions for Computer Use are set up on the Mac.");
-      break;
-    default:
-      // A details kind this model does not know is reviewed on the Mac.
-      hostOnly = true;
-  }
   } catch {
     hostOnly = true;
     args.length = 0;
@@ -504,24 +595,55 @@ export function buildApprovalCard(input: ApprovalCardInput): ApprovalCard {
     reading = undefined;
   }
 
-  const bounded = orderApprovalArguments(args.filter((entry) => entry.value.trim() !== "").slice(0, APPROVAL_CARD_LIMITS.argumentCount).map((entry) => {
-    const value = clip(entry.value, APPROVAL_CARD_LIMITS.value);
-    complete &&= value.complete;
-    return { key: clip(entry.key, APPROVAL_CARD_LIMITS.key).text, value: value.text };
-  }));
+  const bounded = orderApprovalArguments(
+    args
+      .filter((entry) => entry.value.trim() !== "")
+      .slice(0, APPROVAL_CARD_LIMITS.argumentCount)
+      .map((entry) => {
+        const value = clip(entry.value, APPROVAL_CARD_LIMITS.value);
+        complete &&= value.complete;
+        return { key: clip(entry.key, APPROVAL_CARD_LIMITS.key).text, value: value.text };
+      }),
+  );
   title = clip(title, APPROVAL_CARD_LIMITS.title).text;
   const mayAllow = input.canAllow && complete && !hostOnly;
   const deny: ApprovalCardButton = denyLabel === DENY.label ? DENY : { ...DENY, label: denyLabel };
   const buttons: ApprovalCardButton[] = [deny];
   if (mayAllow) {
-    buttons.push({ label: allowLabel, decision: "allow", answered: allowLabel === "Apply" ? "Applied" : approvalStatusLabel({ decision: "allow" }) });
+    buttons.push({
+      label: allowLabel,
+      decision: "allow",
+      answered: allowLabel === "Apply" ? "Applied" : approvalStatusLabel({ decision: "allow" }),
+    });
     // Remembered allows exist only for plain cards, as on the desktop.
     if (detailsKind === undefined) {
-      if (scopes.has("chat")) buttons.push({ label: "Allow in this chat", decision: "allow", scope: "chat", answered: approvalStatusLabel({ decision: "allow", scope: "chat" }) });
+      if (scopes.has("chat"))
+        buttons.push({
+          label: "Allow in this chat",
+          decision: "allow",
+          scope: "chat",
+          answered: approvalStatusLabel({ decision: "allow", scope: "chat" }),
+        });
       if (scopes.has("always")) {
-        buttons.push(input.alwaysLabel
-          ? { label: input.alwaysLabel, decision: "allow", scope: "always", answered: approvalStatusLabel({ decision: "allow", scope: "always" }) }
-          : { label: "Allow in this workspace", decision: "allow", scope: "always", answered: approvalStatusLabel({ decision: "allow", scope: "always", always: "workspace" }) });
+        buttons.push(
+          input.alwaysLabel
+            ? {
+                label: input.alwaysLabel,
+                decision: "allow",
+                scope: "always",
+                answered: approvalStatusLabel({ decision: "allow", scope: "always" }),
+              }
+            : {
+                label: "Allow in this workspace",
+                decision: "allow",
+                scope: "always",
+                answered: approvalStatusLabel({
+                  decision: "allow",
+                  scope: "always",
+                  always: "workspace",
+                }),
+              },
+        );
       }
     }
   }
@@ -531,11 +653,21 @@ export function buildApprovalCard(input: ApprovalCardInput): ApprovalCard {
     title,
     arguments: bounded,
     ...(body && body.text.trim() ? { body } : {}),
-    ...(body && body.text.trim() && reading?.explanation ? { explanation: reading.explanation } : {}),
-    ...(body && body.text.trim() && reading && reading.tags.length > 0 ? { tags: reading.tags.map((tag) => ({ ...tag })) } : {}),
+    ...(body && body.text.trim() && reading?.explanation
+      ? { explanation: reading.explanation }
+      : {}),
+    ...(body && body.text.trim() && reading && reading.tags.length > 0
+      ? { tags: reading.tags.map((tag) => ({ ...tag })) }
+      : {}),
     ...(previous ? { previous } : {}),
     ...(rows ? { rows } : {}),
-    ...(notes.length > 0 ? { notes: notes.slice(0, APPROVAL_CARD_LIMITS.notes).map((note) => clip(note, APPROVAL_CARD_LIMITS.note).text) } : {}),
+    ...(notes.length > 0
+      ? {
+          notes: notes
+            .slice(0, APPROVAL_CARD_LIMITS.notes)
+            .map((note) => clip(note, APPROVAL_CARD_LIMITS.note).text),
+        }
+      : {}),
     buttons,
     ...(!mayAllow ? { allowOnMac: ALLOW_ON_MAC } : {}),
   };
@@ -543,5 +675,7 @@ export function buildApprovalCard(input: ApprovalCardInput): ApprovalCard {
 
 /** Whether a card lets this device allow (any allow button), the single answer the respond routes check. */
 export function approvalCardAllows(card: ApprovalCard, scope?: ToolApprovalScope): boolean {
-  return card.buttons.some((button) => button.decision === "allow" && (button.scope ?? "once") === (scope ?? "once"));
+  return card.buttons.some(
+    (button) => button.decision === "allow" && (button.scope ?? "once") === (scope ?? "once"),
+  );
 }

@@ -61,7 +61,8 @@ export function useComposerContextChips({
   const hasFolder = Boolean(workspace?.folderPath);
   const accessOff = workspace?.permission === "none";
   const gitRepo = Boolean(gitBranch);
-  const remoteReadable = started && gitRepo && hasFolder && !accessOff && gitStatus?.hasRemote === true;
+  const remoteReadable =
+    started && gitRepo && hasFolder && !accessOff && gitStatus?.hasRemote === true;
   const identity = useWorkspaceRepositoryIdentity(workspace?.id, remoteReadable);
   const links = useChatPullRequests(chatId, remoteReadable);
   const current = useChatCurrentPullRequest(chatId, remoteReadable);
@@ -70,7 +71,10 @@ export function useComposerContextChips({
   const startedChatsQuery = useStartedChats(chatId, started);
   const startedChats = startedChatsQuery.data ?? EMPTY_STARTED_CHATS;
   const scheduledTasks = useScheduledTasks();
-  const postingTasks = React.useMemo(() => tasksPostingInChat(scheduledTasks.data, chatId), [scheduledTasks.data, chatId]);
+  const postingTasks = React.useMemo(
+    () => tasksPostingInChat(scheduledTasks.data, chatId),
+    [scheduledTasks.data, chatId],
+  );
   const views = links.data?.links ?? [];
   const linked = views.length;
   const pendingCount = pending.data?.length ?? 0;
@@ -99,7 +103,8 @@ export function useComposerContextChips({
     startedChats: startedChats.length > 0,
   });
   const pullRequestSettled =
-    !remoteReadable || (!identity.isPending && !links.isPending && !current.isPending && !pending.isPending);
+    !remoteReadable ||
+    (!identity.isPending && !links.isPending && !current.isPending && !pending.isPending);
   const pullRequestLabel = currentView
     ? `Pull request #${currentView.number}`
     : chatPullRequestChipLabels({
@@ -114,7 +119,11 @@ export function useComposerContextChips({
     settled: pullRequestSettled,
     announcement: "",
   });
-  if (seen.chatId !== chatId || seen.visible !== chips.pullRequest || seen.settled !== pullRequestSettled) {
+  if (
+    seen.chatId !== chatId ||
+    seen.visible !== chips.pullRequest ||
+    seen.settled !== pullRequestSettled
+  ) {
     const appeared = seen.chatId === chatId && seen.settled && !seen.visible && chips.pullRequest;
     setSeen({
       chatId,

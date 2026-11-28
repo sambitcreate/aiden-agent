@@ -15,7 +15,9 @@ const require = createRequire(import.meta.url);
 
 function deferred() {
   let resolve!: () => void;
-  const promise = new Promise<void>((done) => { resolve = done; });
+  const promise = new Promise<void>((done) => {
+    resolve = done;
+  });
   return { promise, resolve };
 }
 
@@ -44,52 +46,60 @@ function harness() {
       timers.add(timer);
       return timer;
     },
-    clearTimeout: (timer: (typeof timers extends Set<infer T> ? T : never)) => timers.delete(timer),
+    clearTimeout: (timer: typeof timers extends Set<infer T> ? T : never) => timers.delete(timer),
     require: (specifier: string) => {
-      if (specifier === "../platform.js") return {
-        logger: { warn() {} },
-        nativeImage: { createFromBuffer: () => ({
-          isEmpty: () => state.decodeError,
-          getSize: () => ({ width: 1200, height: 1600 }),
-          toPNG: () => Buffer.from("synthetic PNG"),
-        }) },
-        ShareMenu: class {
-          constructor() {
-            if (state.constructorError) throw new Error("constructor failed");
-          }
-          popup(options: (typeof popups)[number]) {
-            if (state.popupError) throw new Error("popup failed");
-            // Electron 43.1.1 lib/browser/api/menu.ts:119-130 selects by
-            // BaseWindow.getAllWindows() membership, not isDestroyed().
-            let window = options.window;
-            const wins = state.liveWindows;
-            if (!wins.includes(window)) {
-              window = state.focusedWindow;
-              if (!window && wins.length > 0) window = wins[0];
-              if (!window) throw new Error("Cannot open Menu without a BaseWindow present");
+      if (specifier === "../platform.js")
+        return {
+          logger: { warn() {} },
+          nativeImage: {
+            createFromBuffer: () => ({
+              isEmpty: () => state.decodeError,
+              getSize: () => ({ width: 1200, height: 1600 }),
+              toPNG: () => Buffer.from("synthetic PNG"),
+            }),
+          },
+          ShareMenu: class {
+            constructor() {
+              if (state.constructorError) throw new Error("constructor failed");
             }
-            popups.push({ ...options, window });
-          }
-        },
-      };
-      if (specifier === "./profile-share-core.js") return {
-        decodeProfileSharePng: () => Buffer.from("synthetic PNG"),
-        PROFILE_SHARE_WIDTH: 1200,
-        PROFILE_SHARE_HEIGHT: 1600,
-        MAX_SHARE_IMAGE_BYTES: 16 * 1024 * 1024,
-      };
-      if (specifier === "./profile-share-files.js") return {
-        cleanupStaleProfileShareDirectories: () => state.cleanup(),
-        createProfileShareFile: async () => {
-          state.writes += 1;
-          await state.write();
-          return { directory: `/synthetic/share-${state.writes}`, filePath: "/synthetic/image.png" };
-        },
-        removeProfileShareDirectory: async (directory: string) => {
-          removed.push(directory);
-          if (state.removeError) throw new Error("remove failed");
-        },
-      };
+            popup(options: (typeof popups)[number]) {
+              if (state.popupError) throw new Error("popup failed");
+              // Electron 43.1.1 lib/browser/api/menu.ts:119-130 selects by
+              // BaseWindow.getAllWindows() membership, not isDestroyed().
+              let window = options.window;
+              const wins = state.liveWindows;
+              if (!wins.includes(window)) {
+                window = state.focusedWindow;
+                if (!window && wins.length > 0) window = wins[0];
+                if (!window) throw new Error("Cannot open Menu without a BaseWindow present");
+              }
+              popups.push({ ...options, window });
+            }
+          },
+        };
+      if (specifier === "./profile-share-core.js")
+        return {
+          decodeProfileSharePng: () => Buffer.from("synthetic PNG"),
+          PROFILE_SHARE_WIDTH: 1200,
+          PROFILE_SHARE_HEIGHT: 1600,
+          MAX_SHARE_IMAGE_BYTES: 16 * 1024 * 1024,
+        };
+      if (specifier === "./profile-share-files.js")
+        return {
+          cleanupStaleProfileShareDirectories: () => state.cleanup(),
+          createProfileShareFile: async () => {
+            state.writes += 1;
+            await state.write();
+            return {
+              directory: `/synthetic/share-${state.writes}`,
+              filePath: "/synthetic/image.png",
+            };
+          },
+          removeProfileShareDirectory: async (directory: string) => {
+            removed.push(directory);
+            if (state.removeError) throw new Error("remove failed");
+          },
+        };
       return require(specifier);
     },
   });
@@ -97,7 +107,9 @@ function harness() {
     const window = {
       name,
       destroyed: false,
-      isDestroyed() { return this.destroyed; },
+      isDestroyed() {
+        return this.destroyed;
+      },
       destroy() {
         this.destroyed = true;
         state.liveWindows = state.liveWindows.filter((live) => live !== this);
@@ -140,7 +152,10 @@ for (const boundary of ["cleanup", "write"] as const) {
       const h = harness();
       const entered = deferred();
       const release = deferred();
-      h.state[boundary] = async () => { entered.resolve(); await release.promise; };
+      h.state[boundary] = async () => {
+        entered.resolve();
+        await release.promise;
+      };
       const owner = h.windowOwner();
       const pending = h.share("synthetic", owner);
       await entered.promise;
@@ -150,10 +165,16 @@ for (const boundary of ["cleanup", "write"] as const) {
       h.state.focusedWindow = fallback === "focused" ? focused : null;
       const replacement = fallback === "focused" ? focused : first;
       release.resolve();
-      const error: unknown = await pending.then(() => undefined, (error: unknown) => error);
+      const error: unknown = await pending.then(
+        () => undefined,
+        (error: unknown) => error,
+      );
       // On the pre-fix service this reports which replacement received the
       // popup, proving both fallback paths before the owner-loss assertion.
-      assert.deepEqual(h.popups.map((popup) => popup.window), []);
+      assert.deepEqual(
+        h.popups.map((popup) => popup.window),
+        [],
+      );
       assert.match(String(error), /no longer available/u);
       assert.deepEqual(h.removed, boundary === "write" ? ["/synthetic/share-1"] : []);
       assert.equal(h.timers.size, 0);
@@ -167,7 +188,10 @@ for (const boundary of ["cleanup", "write"] as const) {
     const h = harness();
     const entered = deferred();
     const release = deferred();
-    h.state[boundary] = async () => { entered.resolve(); await release.promise; };
+    h.state[boundary] = async () => {
+      entered.resolve();
+      await release.promise;
+    };
     const owner = h.windowOwner();
     const pending = h.share("synthetic", owner);
     await entered.promise;
@@ -215,7 +239,9 @@ for (const failure of ["decodeError", "constructorError", "popupError"] as const
 
 test("a failed file write permits a subsequent share", async () => {
   const h = harness();
-  h.state.write = async () => { throw new Error("write failed"); };
+  h.state.write = async () => {
+    throw new Error("write failed");
+  };
   await assert.rejects(h.share("synthetic", h.windowOwner()), /write failed/u);
   assert.equal(h.popups.length, 0);
   h.state.write = async () => {};
@@ -226,7 +252,9 @@ test("a failed file write permits a subsequent share", async () => {
 test("cleanup failure does not mask owner loss or retain admission", async () => {
   const h = harness();
   const owner = h.windowOwner();
-  h.state.write = async () => { owner.destroy(); };
+  h.state.write = async () => {
+    owner.destroy();
+  };
   h.state.removeError = true;
   await assert.rejects(h.share("synthetic", owner), /no longer available/u);
   assert.deepEqual(h.removed, ["/synthetic/share-1"]);

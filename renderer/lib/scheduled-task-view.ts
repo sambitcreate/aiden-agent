@@ -145,7 +145,9 @@ export const formatSchedule = formatScheduledTaskCadence;
 
 /** When a task runs: its trigger ("Every 15 min, when … changes") or its schedule. */
 export function formatTaskWhen(task: Pick<ScheduledTask, "cron" | "timezone" | "trigger">): string {
-  return task.trigger ? formatScheduledTaskTriggerLabel(task.trigger) : formatScheduledTaskCadence(task.cron, task.timezone);
+  return task.trigger
+    ? formatScheduledTaskTriggerLabel(task.trigger)
+    : formatScheduledTaskCadence(task.cron, task.timezone);
 }
 
 export function filterScheduledTasks(
@@ -227,18 +229,14 @@ export function scheduledTaskProviderModelOptions(
   );
   if (pinnedModel !== undefined) {
     return {
-      models: visibleModels.includes(pinnedModel)
-        ? visibleModels
-        : [pinnedModel, ...visibleModels],
+      models: visibleModels.includes(pinnedModel) ? visibleModels : [pinnedModel, ...visibleModels],
       model: pinnedModel,
     };
   }
   const model =
     liveModel !== undefined && visibleModels.includes(liveModel)
       ? liveModel
-      : firstVisibleModelForProvider(hidden, provider.id, provider.models, [
-          provider.defaultModel,
-        ]);
+      : firstVisibleModelForProvider(hidden, provider.id, provider.models, [provider.defaultModel]);
   return { models: visibleModels, model };
 }
 
@@ -255,11 +253,15 @@ export function scheduledTaskProviderGuardrail(
   if (mode !== "llm" || providerId) return undefined;
   if (appDefaultProviderId && isAcpHarnessProvider(appDefaultProviderId)) {
     // The default exists and works in chats, so "no app default" would be wrong; say why it can't run here.
-    const label = providers?.find((provider) => provider.id === appDefaultProviderId)?.label ?? "an agent-backed model";
+    const label =
+      providers?.find((provider) => provider.id === appDefaultProviderId)?.label ??
+      "an agent-backed model";
     return `No provider pinned, and the app default (${label}) runs only in chats you have open. Pin a provider so this task can run.`;
   }
   const usableDefault =
     appDefaultProviderId !== undefined &&
     providers?.some((provider) => provider.id === appDefaultProviderId && isUsable(provider));
-  return usableDefault ? undefined : "No provider pinned. If no app default is available, this task cannot run.";
+  return usableDefault
+    ? undefined
+    : "No provider pinned. If no app default is available, this task cannot run.";
 }

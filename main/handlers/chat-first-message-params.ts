@@ -12,8 +12,17 @@ import {
 } from "../../renderer/shared/worktree-on-send.js";
 
 const KEYS = new Set([
-  "draftId", "workspaceId", "providerId", "model", "title",
-  "turnId", "message", "skillInvocation", "worktree", "inputSource", "ephemeral",
+  "draftId",
+  "workspaceId",
+  "providerId",
+  "model",
+  "title",
+  "turnId",
+  "message",
+  "skillInvocation",
+  "worktree",
+  "inputSource",
+  "ephemeral",
   "thinkingLevel",
 ]);
 
@@ -73,7 +82,11 @@ export function parseChatFirstMessage(input: unknown): ParsedChatFirstMessage {
   }
   // Checked like chats:setModel's level: a known level, or none (undefined or null).
   const thinkingLevel = record.thinkingLevel;
-  if (thinkingLevel !== undefined && thinkingLevel !== null && !isGenerationThinkingLevel(thinkingLevel)) {
+  if (
+    thinkingLevel !== undefined &&
+    thinkingLevel !== null &&
+    !isGenerationThinkingLevel(thinkingLevel)
+  ) {
     throw new Error("Invalid thinking level.");
   }
   let ephemeral: true | undefined;
@@ -106,6 +119,10 @@ export function parseChatFirstMessage(input: unknown): ParsedChatFirstMessage {
     ...(worktree ? { worktree } : {}),
     // The small, bounded worktree request is left out so the chat commit that
     // follows it fingerprints the same message whatever base was chosen.
-    retainedBytes: append.retainedBytes + Buffer.byteLength(create.workspaceId, "utf8") + Buffer.byteLength(create.title ?? "", "utf8") + 64,
+    retainedBytes:
+      append.retainedBytes +
+      Buffer.byteLength(create.workspaceId, "utf8") +
+      Buffer.byteLength(create.title ?? "", "utf8") +
+      64,
   };
 }

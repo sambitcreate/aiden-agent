@@ -36,7 +36,11 @@ export function remoteChatRowMenu(
             </Item>,
             ...(inbox
               ? [
-                  <Item key="inboxAction" icon={CHAT_ROW_INBOX_ACTIONS[inbox.kind].menuIcon} onSelect={inbox.onSelect}>
+                  <Item
+                    key="inboxAction"
+                    icon={CHAT_ROW_INBOX_ACTIONS[inbox.kind].menuIcon}
+                    onSelect={inbox.onSelect}
+                  >
                     {CHAT_ROW_INBOX_ACTIONS[inbox.kind].label}
                   </Item>,
                 ]
@@ -44,7 +48,9 @@ export function remoteChatRowMenu(
             ...(triage
               ? [
                   <React.Fragment key="triage">{triage(Item, Separator, SubMenu)}</React.Fragment>,
-                  ...(actions.some((other) => other.id === "rename") ? [<Separator key="triageSeparator" />] : []),
+                  ...(actions.some((other) => other.id === "rename")
+                    ? [<Separator key="triageSeparator" />]
+                    : []),
                 ]
               : []),
           ];
@@ -57,7 +63,12 @@ export function remoteChatRowMenu(
           ];
         case "rename":
           return [
-            <Item key="rename" icon="pencil" disabled={action.disabled} onSelect={handlers.onRename}>
+            <Item
+              key="rename"
+              icon="pencil"
+              disabled={action.disabled}
+              onSelect={handlers.onRename}
+            >
               Rename
             </Item>,
           ];

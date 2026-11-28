@@ -213,10 +213,7 @@ test("a FIFO destination fails closed without blocking reads or expected-generat
   await createFifo(target);
 
   const helper = startHelper(t, directory, productionBinary);
-  assert.equal(
-    await requestPromptly(helper.request("read"), "read"),
-    "error destination_changed",
-  );
+  assert.equal(await requestPromptly(helper.request("read"), "read"), "error destination_changed");
   assert.equal(
     await requestPromptly(
       helper.request(writeCommand(expectedGeneration, "unexpected replacement\n")),
@@ -225,7 +222,10 @@ test("a FIFO destination fails closed without blocking reads or expected-generat
     "error destination_changed",
   );
   assert.equal(
-    await requestPromptly(helper.request(writeCommand("missing", "unexpected create\n")), "missing write"),
+    await requestPromptly(
+      helper.request(writeCommand("missing", "unexpected create\n")),
+      "missing write",
+    ),
     "error destination_changed",
   );
 

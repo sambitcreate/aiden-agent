@@ -11,7 +11,11 @@ import { TooltipProvider, Toaster } from "../components/ui";
 import { applyCachedAppearance } from "../lib/appearance-runtime";
 import { startSecondaryWindowAppearanceSync } from "../lib/pill-appearance";
 import { installInputModality } from "../lib/input-modality";
-import { AppCapabilitiesProvider, DISABLED_APP_CAPABILITIES, parseAppCapabilities } from "../lib/app-capabilities";
+import {
+  AppCapabilitiesProvider,
+  DISABLED_APP_CAPABILITIES,
+  parseAppCapabilities,
+} from "../lib/app-capabilities";
 import { appApi } from "../lib/ipc";
 import { BotBubbleOverlayApp } from "./overlay-app";
 

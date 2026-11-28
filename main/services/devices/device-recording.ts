@@ -35,7 +35,10 @@ export interface RecorderChild {
   exitCode: number | null;
   signalCode: NodeJS.Signals | null;
   kill(signal: NodeJS.Signals): boolean;
-  once(event: "exit", listener: (code: number | null, signal: NodeJS.Signals | null) => void): unknown;
+  once(
+    event: "exit",
+    listener: (code: number | null, signal: NodeJS.Signals | null) => void,
+  ): unknown;
   /** A spawn failure: Node emits `error` (with the errno already in `exitCode`) and never `exit`. */
   once(event: "error", listener: (error: Error) => void): unknown;
 }
@@ -138,7 +141,8 @@ export function createDeviceRecorder(deps: DeviceRecorderDeps): DeviceRecorder {
     const snapshot = list();
     for (const listener of listeners) listener(snapshot);
   };
-  const deviceKey = (input: { hostId: string; deviceId: string }) => JSON.stringify([input.hostId, input.deviceId]);
+  const deviceKey = (input: { hostId: string; deviceId: string }) =>
+    JSON.stringify([input.hostId, input.deviceId]);
 
   const update = (entry: Entry, next: Partial<DeviceRecordingInfo>) => {
     entry.info = { ...entry.info, ...next };
@@ -160,7 +164,10 @@ export function createDeviceRecorder(deps: DeviceRecorderDeps): DeviceRecorder {
   };
 
   /** A child that exits on its own (the device shut down, or the recorder failed) settles its recording. */
-  const settle = async (entry: Entry, reason: DeviceRecordingStopReason): Promise<DeviceRecordingInfo> => {
+  const settle = async (
+    entry: Entry,
+    reason: DeviceRecordingStopReason,
+  ): Promise<DeviceRecordingInfo> => {
     const { code } = await entry.exited;
     if (entry.capTimer) deps.clearTimeout(entry.capTimer);
     entry.capTimer = null;
@@ -202,9 +209,13 @@ export function createDeviceRecorder(deps: DeviceRecorderDeps): DeviceRecorder {
     return { ...entry.info };
   };
 
-  const stopEntry = (entry: Entry, reason: DeviceRecordingStopReason): Promise<DeviceRecordingInfo> => {
+  const stopEntry = (
+    entry: Entry,
+    reason: DeviceRecordingStopReason,
+  ): Promise<DeviceRecordingInfo> => {
     if (entry.stopping) return entry.stopping;
-    if (entry.info.status !== "recording" || !entry.child) return Promise.resolve({ ...entry.info });
+    if (entry.info.status !== "recording" || !entry.child)
+      return Promise.resolve({ ...entry.info });
     const child = entry.child;
     update(entry, { status: "stopping", stoppedAt: deps.now(), reason });
     entry.stopping = (async () => {
@@ -258,7 +269,8 @@ export function createDeviceRecorder(deps: DeviceRecorderDeps): DeviceRecorder {
       const key = deviceKey(input);
       const busy = [...entries.values()].some(
         (entry) =>
-          deviceKey(entry.info) === key && (entry.info.status === "recording" || entry.info.status === "stopping"),
+          deviceKey(entry.info) === key &&
+          (entry.info.status === "recording" || entry.info.status === "stopping"),
       );
       if (busy || starting.has(key)) throw new Error("This simulator is already being recorded.");
       const id = deps.newId();
@@ -287,9 +299,11 @@ export function createDeviceRecorder(deps: DeviceRecorderDeps): DeviceRecorder {
         const child = deps.spawn(command, args, input.env);
         const startedAt = deps.now();
         let resolveExit!: (value: { code: number | null; signal: NodeJS.Signals | null }) => void;
-        const exited = new Promise<{ code: number | null; signal: NodeJS.Signals | null }>((resolve) => {
-          resolveExit = resolve;
-        });
+        const exited = new Promise<{ code: number | null; signal: NodeJS.Signals | null }>(
+          (resolve) => {
+            resolveExit = resolve;
+          },
+        );
         // A child that could not be spawned emits only `error`, so it settles the recording as an exit.
         child.once("error", () => resolveExit({ code: child.exitCode ?? 127, signal: null }));
         if (child.exitCode !== null || child.signalCode !== null) {
@@ -326,7 +340,8 @@ export function createDeviceRecorder(deps: DeviceRecorderDeps): DeviceRecorder {
         entries.set(id, entry);
         void exited.then(() => {
           // Only an exit nobody asked for settles here; stop() settles its own.
-          if (entry.info.status === "recording" && !entry.stopping) entry.settling = settle(entry, "exited");
+          if (entry.info.status === "recording" && !entry.stopping)
+            entry.settling = settle(entry, "exited");
         });
         emit();
         return { ...entry.info };
@@ -354,7 +369,9 @@ export function createDeviceRecorder(deps: DeviceRecorderDeps): DeviceRecorder {
       for (const pending of starting.values()) {
         if (match({ ...pending.info })) pending.cancelled = true;
       }
-      await Promise.all([...entries.values()].filter((entry) => match(entry.info)).map(removeEntry));
+      await Promise.all(
+        [...entries.values()].filter((entry) => match(entry.info)).map(removeEntry),
+      );
     },
     terminate() {
       for (const pending of starting.values()) pending.cancelled = true;

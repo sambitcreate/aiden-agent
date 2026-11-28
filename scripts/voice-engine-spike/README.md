@@ -27,21 +27,23 @@ Results go to `results/<time>.md` (tables) and `results/<time>.json` (every numb
 ## What it measures
 
 Clips:
+
 - three dictation-style phrases spoken by macOS `say` at about 3, 10 and 30 seconds;
 - two LibriSpeech recordings, about 7 and 17 seconds, with reference transcripts;
 - any recordings you add with `--clips`.
 
-| Config | What it is |
-|---|---|
-| `sherpa-v3-cpu2` | Aiden today: sherpa-onnx, Parakeet TDT v3 int8, 2 CPU threads |
-| `sherpa-v3-cpu4` | The same with 4 threads |
-| `sherpa-v3-coreml` | The same on sherpa's Core ML provider (may not load) |
-| `tcpp-v3-metal` / `tcpp-v3-cpu4` | transcribe.cpp, Parakeet TDT v3 Q8_0 (Handy's file), offline and with live re-decoding |
-| `tcpp-unified-en-metal` | transcribe.cpp, Parakeet Unified English (Handy's default English streaming model) |
-| `tcpp-nemotron35-metal` | transcribe.cpp, Nemotron 3.5 streaming, multilingual |
-| `sherpa-nemotron-en-cpu4` / `sherpa-nemotron35-cpu4` | sherpa-onnx streaming Nemotron (English, multilingual), 160 ms chunks |
+| Config                                               | What it is                                                                             |
+| ---------------------------------------------------- | -------------------------------------------------------------------------------------- |
+| `sherpa-v3-cpu2`                                     | Aiden today: sherpa-onnx, Parakeet TDT v3 int8, 2 CPU threads                          |
+| `sherpa-v3-cpu4`                                     | The same with 4 threads                                                                |
+| `sherpa-v3-coreml`                                   | The same on sherpa's Core ML provider (may not load)                                   |
+| `tcpp-v3-metal` / `tcpp-v3-cpu4`                     | transcribe.cpp, Parakeet TDT v3 Q8_0 (Handy's file), offline and with live re-decoding |
+| `tcpp-unified-en-metal`                              | transcribe.cpp, Parakeet Unified English (Handy's default English streaming model)     |
+| `tcpp-nemotron35-metal`                              | transcribe.cpp, Nemotron 3.5 streaming, multilingual                                   |
+| `sherpa-nemotron-en-cpu4` / `sherpa-nemotron35-cpu4` | sherpa-onnx streaming Nemotron (English, multilingual), 160 ms chunks                  |
 
 For each config it reports:
+
 - **Load:** time until the engine accepts audio (for transcribe.cpp, model load plus session setup), plus memory after load (RSS, and on macOS the physical footprint, which counts Metal buffers). The footprint after the whole run is shown too, since it includes inference buffers.
 - **Offline:** the median decode time per clip. This is the release-to-text cost on a warm model. The first decode after load is shown too.
 - **Live text, `stream`:** 100 ms chunks are fed into a streaming model as fast as it takes them. The cost per chunk must stay under 100 ms to keep up with the microphone. It also reports when the first word appears, how much of the text was on screen at release, and the finalize time. Finalize time is the release-to-text cost in live mode.

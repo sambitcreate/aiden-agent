@@ -8,7 +8,10 @@ const contrast = {
   help: "Elements must meet minimum color contrast ratio thresholds",
   helpUrl: "https://dequeuniversity.com/rules/axe/4.14/color-contrast",
   nodes: [
-    { target: [".muted-label"], failureSummary: "Fix any of the following:\n  Element has insufficient color contrast" },
+    {
+      target: [".muted-label"],
+      failureSummary: "Fix any of the following:\n  Element has insufficient color contrast",
+    },
     { target: ["#radix-_r3_ > .hint"] },
   ],
 };
@@ -29,13 +32,21 @@ test("lists every failing node with rule, impact, target, help and summary", () 
       " | Fix any of the following: Element has insufficient color contrast" +
       " | https://dequeuniversity.com/rules/axe/4.14/color-contrast",
   );
-  assert.match(problems[2], /^\[palette\] button-name \(critical\) at iframe#preview >> button\.close: /u);
+  assert.match(
+    problems[2],
+    /^\[palette\] button-name \(critical\) at iframe#preview >> button\.close: /u,
+  );
 });
 
 test("an exclusion excuses only its own rule and target on its own surface", () => {
   const exclusions: AxeExclusion[] = [
     { surface: "palette", rule: "color-contrast", target: ".muted-label", reason: "token" },
-    { surface: "palette", rule: "color-contrast", target: /^#radix-\S+ > \.hint$/u, reason: "token" },
+    {
+      surface: "palette",
+      rule: "color-contrast",
+      target: /^#radix-\S+ > \.hint$/u,
+      reason: "token",
+    },
   ];
   assert.deepEqual(axeProblems("palette", [contrast], exclusions), []);
   // The same violation on another surface is not excused, and those exclusions are not stale there.
@@ -48,9 +59,18 @@ test("an exclusion excuses only its own rule and target on its own surface", () 
 test("an exclusion that no longer matches fails the audit so the list only shrinks", () => {
   const exclusions: AxeExclusion[] = [
     { surface: "palette", rule: "color-contrast", target: ".muted-label", reason: "token" },
-    { surface: "palette", rule: "aria-required-children", target: "[role=listbox]", reason: "fixed since" },
+    {
+      surface: "palette",
+      rule: "aria-required-children",
+      target: "[role=listbox]",
+      reason: "fixed since",
+    },
   ];
-  const problems = axeProblems("palette", [{ ...contrast, nodes: [contrast.nodes[0]] }], exclusions);
+  const problems = axeProblems(
+    "palette",
+    [{ ...contrast, nodes: [contrast.nodes[0]] }],
+    exclusions,
+  );
   assert.deepEqual(problems, [
     "[palette] stale exclusion: aria-required-children at [role=listbox] no longer fails; delete it from AXE_EXCLUSIONS",
   ]);

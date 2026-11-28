@@ -11,9 +11,18 @@
  */
 
 import * as path from "node:path";
-import { runBoundedShellCommand, type BoundedShellCommandOptions, type BoundedShellCommandResult } from "../bounded-shell-command.js";
+import {
+  runBoundedShellCommand,
+  type BoundedShellCommandOptions,
+  type BoundedShellCommandResult,
+} from "../bounded-shell-command.js";
 import { clampHookTimeout, toolInputFile } from "./hook-config.js";
-import type { HookDefinition, HookEvent, HookPayload, HookPermissionDecision } from "./hook-types.js";
+import type {
+  HookDefinition,
+  HookEvent,
+  HookPayload,
+  HookPermissionDecision,
+} from "./hook-types.js";
 
 export const HOOK_OUTPUT_LIMIT_BYTES = 64 * 1024;
 const EXCERPT_CHARS = 2_000;
@@ -56,7 +65,9 @@ export function buildHookEnv(base: NodeJS.ProcessEnv, input: HookEnvInput): Node
   return env;
 }
 
-export type ShellRunner = (options: BoundedShellCommandOptions) => Promise<BoundedShellCommandResult>;
+export type ShellRunner = (
+  options: BoundedShellCommandOptions,
+) => Promise<BoundedShellCommandResult>;
 
 export interface HookRunInput {
   hook: Pick<HookDefinition, "event" | "handler">;
@@ -139,7 +150,12 @@ export interface HookHandlerResult {
 }
 
 const PLAIN_CONTEXT_EVENTS: ReadonlySet<HookEvent> = new Set(["SessionStart", "UserPromptSubmit"]);
-const BLOCKING_EVENTS: ReadonlySet<HookEvent> = new Set(["PostToolUse", "UserPromptSubmit", "Stop", "SubagentStop"]);
+const BLOCKING_EVENTS: ReadonlySet<HookEvent> = new Set([
+  "PostToolUse",
+  "UserPromptSubmit",
+  "Stop",
+  "SubagentStop",
+]);
 
 function excerptOf(run: HookRawRun): string {
   const text = [run.stdout.trim(), run.stderr.trim()].filter(Boolean).join("\n");
@@ -160,7 +176,9 @@ function parseJsonObject(text: string): Record<string, unknown> | undefined {
   if (!trimmed.startsWith("{")) return undefined;
   try {
     const value: unknown = JSON.parse(trimmed);
-    return value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : undefined;
+    return value && typeof value === "object" && !Array.isArray(value)
+      ? (value as Record<string, unknown>)
+      : undefined;
   } catch {
     return undefined;
   }
@@ -171,17 +189,35 @@ function parseJsonObject(text: string): Record<string, unknown> | undefined {
  * can't read: JSON that doesn't parse, or a decision that isn't one. Plain text
  * and JSON with no decision are fine: the hook has nothing to say.
  */
-function unreadableToolDecision(stdout: string, output: Record<string, unknown> | undefined): string | undefined {
-  if (!output) return stdout.trim().startsWith("{") ? "printed JSON Aiden couldn't read" : undefined;
+function unreadableToolDecision(
+  stdout: string,
+  output: Record<string, unknown> | undefined,
+): string | undefined {
+  if (!output)
+    return stdout.trim().startsWith("{") ? "printed JSON Aiden couldn't read" : undefined;
   const specific = output.hookSpecificOutput;
-  const given = specific && typeof specific === "object" ? (specific as Record<string, unknown>).permissionDecision : undefined;
-  if (given !== undefined && !isPermissionDecision(given)) return "gave a decision Aiden doesn't know";
-  if (given === undefined && output.decision !== undefined && output.decision !== "approve" && output.decision !== "block") return "gave a decision Aiden doesn't know";
+  const given =
+    specific && typeof specific === "object"
+      ? (specific as Record<string, unknown>).permissionDecision
+      : undefined;
+  if (given !== undefined && !isPermissionDecision(given))
+    return "gave a decision Aiden doesn't know";
+  if (
+    given === undefined &&
+    output.decision !== undefined &&
+    output.decision !== "approve" &&
+    output.decision !== "block"
+  )
+    return "gave a decision Aiden doesn't know";
   return undefined;
 }
 
 /** Apply Claude Code's exit-code and output protocol to one finished run. */
-export function interpretHookRun(event: HookEvent, run: HookRawRun, handler: { failClosed?: boolean }): HookHandlerResult {
+export function interpretHookRun(
+  event: HookEvent,
+  run: HookRawRun,
+  handler: { failClosed?: boolean },
+): HookHandlerResult {
   const excerpt = excerptOf(run);
   const failure =
     run.spawnError !== undefined
@@ -197,7 +233,13 @@ export function interpretHookRun(event: HookEvent, run: HookRawRun, handler: { f
               : undefined;
   if (failure !== undefined) {
     if (event === "PreToolUse" && handler.failClosed && !run.aborted) {
-      return { result: "error", decision: "deny", reason: `The hook ${failure}, and it is set to block when it fails.`, error: failure, excerpt };
+      return {
+        result: "error",
+        decision: "deny",
+        reason: `The hook ${failure}, and it is set to block when it fails.`,
+        error: failure,
+        excerpt,
+      };
     }
     return { result: "error", error: failure, excerpt };
   }
@@ -211,15 +253,26 @@ export function interpretHookRun(event: HookEvent, run: HookRawRun, handler: { f
   const output = parseJsonObject(run.stdout);
   if (event === "PreToolUse" && handler.failClosed) {
     const unreadable = unreadableToolDecision(run.stdout, output);
-    if (unreadable) return { result: "error", decision: "deny", reason: `The hook ${unreadable}, and it is set to block when it fails.`, error: unreadable, excerpt };
+    if (unreadable)
+      return {
+        result: "error",
+        decision: "deny",
+        reason: `The hook ${unreadable}, and it is set to block when it fails.`,
+        error: unreadable,
+        excerpt,
+      };
   }
   if (!output) {
     const text = run.stdout.trim();
-    return PLAIN_CONTEXT_EVENTS.has(event) && text ? { result: "ok", additionalContext: text, excerpt } : { result: "ok", excerpt };
+    return PLAIN_CONTEXT_EVENTS.has(event) && text
+      ? { result: "ok", additionalContext: text, excerpt }
+      : { result: "ok", excerpt };
   }
   const parsed: HookHandlerResult = { result: "ok", excerpt };
   const specific =
-    output.hookSpecificOutput && typeof output.hookSpecificOutput === "object" && !Array.isArray(output.hookSpecificOutput)
+    output.hookSpecificOutput &&
+    typeof output.hookSpecificOutput === "object" &&
+    !Array.isArray(output.hookSpecificOutput)
       ? (output.hookSpecificOutput as Record<string, unknown>)
       : {};
   const reason = stringField(specific, "permissionDecisionReason") ?? stringField(output, "reason");
@@ -232,15 +285,19 @@ export function interpretHookRun(event: HookEvent, run: HookRawRun, handler: { f
     parsed.stopReason = stringField(output, "stopReason");
   }
   if (event === "PreToolUse") {
-    const legacy = output.decision === "approve" ? "allow" : output.decision === "block" ? "deny" : undefined;
-    const decision = isPermissionDecision(specific.permissionDecision) ? specific.permissionDecision : legacy;
+    const legacy =
+      output.decision === "approve" ? "allow" : output.decision === "block" ? "deny" : undefined;
+    const decision = isPermissionDecision(specific.permissionDecision)
+      ? specific.permissionDecision
+      : legacy;
     if (decision) {
       parsed.decision = decision;
       parsed.result = decision === "deny" ? "blocked" : decision === "ask" ? "asked" : "ok";
       if (reason) parsed.reason = reason;
     }
     const updated = specific.updatedInput;
-    if (updated && typeof updated === "object" && !Array.isArray(updated)) parsed.updatedInput = updated as Record<string, unknown>;
+    if (updated && typeof updated === "object" && !Array.isArray(updated))
+      parsed.updatedInput = updated as Record<string, unknown>;
   } else if (BLOCKING_EVENTS.has(event) && output.decision === "block") {
     parsed.block = true;
     parsed.result = "blocked";

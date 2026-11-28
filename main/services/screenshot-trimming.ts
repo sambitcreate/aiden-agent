@@ -84,7 +84,10 @@ export function screenshotsLeftOut(
     bytes += sizes[index]!;
     const kept = index + 1 - first;
     if (kept <= limits.maxImages && bytes <= limits.maxBytes) continue;
-    while (index + 1 - first > 1 && (index + 1 - first > limits.keepImages || bytes > limits.keepBytes)) {
+    while (
+      index + 1 - first > 1 &&
+      (index + 1 - first > limits.keepImages || bytes > limits.keepBytes)
+    ) {
       bytes -= sizes[first]!;
       first += 1;
     }
@@ -111,7 +114,11 @@ export function trimScreenshots<M>(
   messages.forEach((value, message) => {
     const candidate = value as TrimmableMessage;
     if (candidate.role !== "toolResult" || typeof candidate.toolName !== "string") return;
-    if (!Object.prototype.hasOwnProperty.call(notes, candidate.toolName) || !Array.isArray(candidate.content)) return;
+    if (
+      !Object.prototype.hasOwnProperty.call(notes, candidate.toolName) ||
+      !Array.isArray(candidate.content)
+    )
+      return;
     (candidate.content as TrimmablePart[]).forEach((part, index) => {
       if (part?.type !== "image") return;
       positions.push({ message, part: index });
@@ -133,7 +140,9 @@ export function trimScreenshots<M>(
     const note = notes[candidate.toolName]!;
     return {
       ...candidate,
-      content: candidate.content.map((part, index) => (parts.has(index) ? { type: "text", text: note } : part)),
+      content: candidate.content.map((part, index) =>
+        parts.has(index) ? { type: "text", text: note } : part,
+      ),
     } as M;
   });
 }

@@ -19,7 +19,13 @@ interface ExpiredCacheReturnOptions {
  * keyed by chat, so this is opening the chat), the window coming back, and
  * the start of typing. Returns the LLM offer and the actions it needs.
  */
-export function useExpiredCacheReturn({ chatId, pressure, engine, idle, compact }: ExpiredCacheReturnOptions) {
+export function useExpiredCacheReturn({
+  chatId,
+  pressure,
+  engine,
+  idle,
+  compact,
+}: ExpiredCacheReturnOptions) {
   const [returns, setReturns] = React.useState(0);
   const markReturned = React.useCallback(() => {
     expiredCacheReturns.returned(chatId, Date.now());

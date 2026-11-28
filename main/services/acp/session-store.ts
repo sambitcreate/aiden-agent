@@ -84,7 +84,10 @@ export class AcpSessionStore {
 
 function read(file: string): AcpSessionRecord[] {
   try {
-    const parsed = JSON.parse(readFileSync(file, "utf8")) as { version?: unknown; records?: unknown };
+    const parsed = JSON.parse(readFileSync(file, "utf8")) as {
+      version?: unknown;
+      records?: unknown;
+    };
     if (parsed.version !== 1 || !Array.isArray(parsed.records)) return [];
     return parsed.records.filter(
       (record): record is AcpSessionRecord =>

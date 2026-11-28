@@ -31,7 +31,10 @@ import {
   planDesignTextEdit,
   type DesignTextChange,
 } from "../../renderer/shared/design-canvas/text-edit.js";
-import { canvasView, parseDesignViewState } from "../../renderer/shared/design-canvas/canvas-summary.js";
+import {
+  canvasView,
+  parseDesignViewState,
+} from "../../renderer/shared/design-canvas/canvas-summary.js";
 import { showPage } from "../../renderer/shared/design-canvas/pages.js";
 import { placeFrame } from "../../renderer/shared/design-canvas/placement.js";
 import { isHtmlArtifactMediaId } from "../../renderer/shared/generative-ui.js";
@@ -55,7 +58,12 @@ import type { ChatMeta } from "../services/types.js";
  * the person made through main (a Send to canvas that placed a frame): an
  * open canvas makes it an undo step of its own, so Cmd+Z takes it back.
  */
-export type DesignCanvasUpdated = { chatId: string; revision: number; aidenTurn?: string; step?: string };
+export type DesignCanvasUpdated = {
+  chatId: string;
+  revision: number;
+  aidenTurn?: string;
+  step?: string;
+};
 
 /** The chat fields the canvas handlers decide on. */
 export type DesignCanvasChat = Pick<
@@ -82,7 +90,11 @@ export type DesignCanvasGrantResult = { grant: string } | { error: "unavailable"
 export interface DesignCanvasCaptureImage {
   isEmpty(): boolean;
   getSize(): { width: number; height: number };
-  resize(options: { width: number; height: number; quality?: "good" | "better" | "best" }): DesignCanvasCaptureImage;
+  resize(options: {
+    width: number;
+    height: number;
+    quality?: "good" | "better" | "best";
+  }): DesignCanvasCaptureImage;
   /** A `data:image/png;base64,` URL. */
   toDataURL(): string;
 }
@@ -93,7 +105,12 @@ export interface DesignCanvasCaptureWindow {
   getContentSize(): number[];
   /** The page's zoom; a CSS pixel covers this many window points. */
   getZoomFactor?(): number;
-  capturePage(rect: { x: number; y: number; width: number; height: number }): Promise<DesignCanvasCaptureImage>;
+  capturePage(rect: {
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+  }): Promise<DesignCanvasCaptureImage>;
 }
 
 /** `designCanvas:capture` reply. */
@@ -162,14 +179,22 @@ export type DesignCanvasFileRewriteFailure =
   | "changed"
   | "words";
 
-export type DesignCanvasEditTextResult = { ok: true } | { ok: false; reason: DesignCanvasFileRewriteFailure };
+export type DesignCanvasEditTextResult =
+  | { ok: true }
+  | { ok: false; reason: DesignCanvasFileRewriteFailure };
 
 /**
  * `designCanvas:bakeTweaks` reply: `kept` names the targets whose words couldn't be placed in the page,
  * and `undoId` names this Make default, so its Undo can't undo a later one.
  */
 export type DesignCanvasBakeTweaksResult =
-  | { ok: true; written: Record<string, string>; previous: Record<string, string>; kept: string[]; undoId: string }
+  | {
+      ok: true;
+      written: Record<string, string>;
+      previous: Record<string, string>;
+      kept: string[];
+      undoId: string;
+    }
   | { ok: false; reason: DesignCanvasFileRewriteFailure };
 
 /** What the hidden export window draws: a page at its width, as a picture or a PDF. */
@@ -201,7 +226,10 @@ const UNAVAILABLE = "Design mode is not available.";
 /** The pages a save says the person's undo took off; anything malformed is refused. */
 function saveUndone(options: unknown): string[] {
   if (options === undefined || options === null) return [];
-  const undone = typeof options === "object" && !Array.isArray(options) ? (options as { undone?: unknown }).undone : null;
+  const undone =
+    typeof options === "object" && !Array.isArray(options)
+      ? (options as { undone?: unknown }).undone
+      : null;
   if (undone === undefined) return [];
   if (
     !Array.isArray(undone) ||
@@ -232,9 +260,17 @@ export function registerDesignCanvasHandlers<Event>(deps: {
   /** Draws a page in a hidden window and returns the PNG or PDF bytes. */
   renderFrame(request: DesignFrameRenderRequest): Promise<Uint8Array>;
   /** An artifact's preview address, or undefined when it is gone. */
-  artifactPreview(chatId: string, mediaId: string, theme?: unknown): Promise<{ src: string } | undefined>;
+  artifactPreview(
+    chatId: string,
+    mediaId: string,
+    theme?: unknown,
+  ): Promise<{ src: string } | undefined>;
   /** Saves an artifact as a standalone HTML file through its own save dialog. */
-  exportArtifactSource(event: Event, chatId: string, mediaId: string): Promise<{ saved: boolean; canceled: boolean }>;
+  exportArtifactSource(
+    event: Event,
+    chatId: string,
+    mediaId: string,
+  ): Promise<{ saved: boolean; canceled: boolean }>;
   /** An artifact's own HTML, or undefined when it is gone. */
   artifactHtml(chatId: string, mediaId: string): Promise<string | undefined>;
   /** An artifact's title, or undefined when this chat has no such artifact. */
@@ -295,64 +331,78 @@ export function registerDesignCanvasHandlers<Event>(deps: {
   // passes the visual checks. `options.viewSize` is the canvas's size on
   // screen, when the renderer knows it; a size that does not parse is ignored.
   const UNCHANGED = Symbol("unchanged");
-  deps.handle("designCanvas:placeArtifact", async (_event, chatId, mediaId, options): Promise<DesignCanvasPlaceArtifactResult> => {
-    const chat = await requireChat(chatId);
-    if (!isHtmlArtifactMediaId(mediaId)) throw new Error("Invalid visual.");
-    const viewSize =
-      typeof options === "object" && options !== null && "viewSize" in options
-        ? parseDesignViewState({ selection: [], viewSize: (options as { viewSize: unknown }).viewSize })?.viewSize
-        : undefined;
-    const [title, html] = await Promise.all([
-      deps.artifactTitle(chat.id, mediaId),
-      deps.artifactHtml(chat.id, mediaId),
-    ]);
-    if (title === undefined || html === undefined) return { error: "missing" };
-    try {
-      validateGenerativeUiHtml(html);
-    } catch {
-      return { error: "unsafe" };
-    }
-    const frameTitle = title.trim().slice(0, DESIGN_CANVAS_LIMITS.titleChars) || "Visual";
-    let outcome: DesignCanvasPlaceArtifactResult = { error: "full" };
-    // Only a placed frame is the person's undo step; showing the page a frame is on is not.
-    let placedFrame = false as boolean;
-    try {
-      const saved = await deps.store.update(chat.id, (doc) => {
-        const existing = doc.frames.find((frame) => frame.kind === "artifact" && frame.mediaId === mediaId);
-        if (existing) {
-          if (existing.pageId === doc.activePageId) {
-            outcome = { status: "already", frameId: existing.id };
+  deps.handle(
+    "designCanvas:placeArtifact",
+    async (_event, chatId, mediaId, options): Promise<DesignCanvasPlaceArtifactResult> => {
+      const chat = await requireChat(chatId);
+      if (!isHtmlArtifactMediaId(mediaId)) throw new Error("Invalid visual.");
+      const viewSize =
+        typeof options === "object" && options !== null && "viewSize" in options
+          ? parseDesignViewState({
+              selection: [],
+              viewSize: (options as { viewSize: unknown }).viewSize,
+            })?.viewSize
+          : undefined;
+      const [title, html] = await Promise.all([
+        deps.artifactTitle(chat.id, mediaId),
+        deps.artifactHtml(chat.id, mediaId),
+      ]);
+      if (title === undefined || html === undefined) return { error: "missing" };
+      try {
+        validateGenerativeUiHtml(html);
+      } catch {
+        return { error: "unsafe" };
+      }
+      const frameTitle = title.trim().slice(0, DESIGN_CANVAS_LIMITS.titleChars) || "Visual";
+      let outcome: DesignCanvasPlaceArtifactResult = { error: "full" };
+      // Only a placed frame is the person's undo step; showing the page a frame is on is not.
+      let placedFrame = false as boolean;
+      try {
+        const saved = await deps.store.update(chat.id, (doc) => {
+          const existing = doc.frames.find(
+            (frame) => frame.kind === "artifact" && frame.mediaId === mediaId,
+          );
+          if (existing) {
+            if (existing.pageId === doc.activePageId) {
+              outcome = { status: "already", frameId: existing.id };
+              throw UNCHANGED;
+            }
+            // It is on another page: show that page, so the person sees it.
+            const page = doc.pages.find((entry) => entry.id === existing.pageId)?.name;
+            outcome = { status: "already", frameId: existing.id, ...(page ? { page } : {}) };
+            return showPage(doc, existing.pageId);
+          }
+          const placed = placeFrame(
+            doc,
+            {
+              kind: "artifact",
+              title: frameTitle,
+              mediaId,
+              createdBy: "person",
+              ...ARTIFACT_FRAME_BOX,
+            },
+            canvasView(doc, viewSize),
+            deps.newId ?? randomUUID,
+          );
+          if ("error" in placed) {
+            outcome = { error: "full" };
             throw UNCHANGED;
           }
-          // It is on another page: show that page, so the person sees it.
-          const page = doc.pages.find((entry) => entry.id === existing.pageId)?.name;
-          outcome = { status: "already", frameId: existing.id, ...(page ? { page } : {}) };
-          return showPage(doc, existing.pageId);
-        }
-        const placed = placeFrame(
-          doc,
-          { kind: "artifact", title: frameTitle, mediaId, createdBy: "person", ...ARTIFACT_FRAME_BOX },
-          canvasView(doc, viewSize),
-          deps.newId ?? randomUUID,
-        );
-        if ("error" in placed) {
-          outcome = { error: "full" };
-          throw UNCHANGED;
-        }
-        outcome = { status: "placed", frameId: placed.id };
-        placedFrame = true;
-        return placed.doc;
-      });
-      deps.broadcast({
-        chatId: chat.id,
-        revision: saved.revision,
-        ...(placedFrame ? { step: `send-to-canvas:${saved.revision}` } : {}),
-      });
-    } catch (error) {
-      if (error !== UNCHANGED) throw error;
-    }
-    return outcome;
-  });
+          outcome = { status: "placed", frameId: placed.id };
+          placedFrame = true;
+          return placed.doc;
+        });
+        deps.broadcast({
+          chatId: chat.id,
+          revision: saved.revision,
+          ...(placedFrame ? { step: `send-to-canvas:${saved.revision}` } : {}),
+        });
+      } catch (error) {
+        if (error !== UNCHANGED) throw error;
+      }
+      return outcome;
+    },
+  );
 
   // Only an attended desktop chat in design mode may frame its own workspace
   // folder; Bot and routine chats never get a grant.
@@ -399,21 +449,24 @@ export function registerDesignCanvasHandlers<Event>(deps: {
 
   // Lets the person add a page or image from the chat's workspace. Only the
   // workspace-relative path comes back; the frame loads it through its grant.
-  deps.handle("designCanvas:pickFile", async (event, chatId, kind): Promise<DesignCanvasPickResult> => {
-    if (!deps.enabled()) throw new Error(UNAVAILABLE);
-    assertDesignCanvasChatId(chatId);
-    if (kind !== "file" && kind !== "image") throw new Error("Invalid design file kind.");
-    const chat = await deps.getChat(chatId);
-    const root = canFrame(chat) ? await deps.workspaceRoot(chat) : null;
-    if (!root) return { error: "unavailable" };
-    const chosen = await deps.pickFile(event, {
-      defaultPath: root,
-      kind,
-      filters: [{ name: PICK_FILTER_NAMES[kind], extensions: [...PICK_EXTENSIONS[kind]] }],
-    });
-    if (chosen === null) return { cancelled: true };
-    return validatePickedFile(root, chosen, kind);
-  });
+  deps.handle(
+    "designCanvas:pickFile",
+    async (event, chatId, kind): Promise<DesignCanvasPickResult> => {
+      if (!deps.enabled()) throw new Error(UNAVAILABLE);
+      assertDesignCanvasChatId(chatId);
+      if (kind !== "file" && kind !== "image") throw new Error("Invalid design file kind.");
+      const chat = await deps.getChat(chatId);
+      const root = canFrame(chat) ? await deps.workspaceRoot(chat) : null;
+      if (!root) return { error: "unavailable" };
+      const chosen = await deps.pickFile(event, {
+        defaultPath: root,
+        kind,
+        filters: [{ name: PICK_FILTER_NAMES[kind], extensions: [...PICK_EXTENSIONS[kind]] }],
+      });
+      if (chosen === null) return { cancelled: true };
+      return validatePickedFile(root, chosen, kind);
+    },
+  );
 
   // Saves one frame as a picture, a PDF or its original file, wherever the
   // person chooses. The frame is read from the stored canvas, never from the
@@ -426,7 +479,8 @@ export function registerDesignCanvasHandlers<Event>(deps: {
       if (typeof frameId !== "string" || frameId.length === 0 || frameId.length > 128) {
         throw new Error("Invalid design frame.");
       }
-      if (!(DESIGN_EXPORT_FORMATS as readonly unknown[]).includes(format)) throw new Error("Invalid export format.");
+      if (!(DESIGN_EXPORT_FORMATS as readonly unknown[]).includes(format))
+        throw new Error("Invalid export format.");
       const kind = format as DesignExportFormat;
       const chat = await deps.getChat(chatId);
       if (!chat || !attended(chat)) return { error: "unavailable" };
@@ -447,17 +501,27 @@ export function registerDesignCanvasHandlers<Event>(deps: {
           }
         }
         // The theme is the renderer's and untrusted; the preview reads only what it knows, and only for a dark frame.
-        const preview = await deps.artifactPreview(chat.id, frame.mediaId, frame.dark ? theme : undefined);
+        const preview = await deps.artifactPreview(
+          chat.id,
+          frame.mediaId,
+          frame.dark ? theme : undefined,
+        );
         if (!preview) return { error: "missing" };
         url = preview.src;
       } else {
         // Workspace files go out only while the chat may still frame its folder.
         const root = canFrame(chat) ? await deps.workspaceRoot(chat) : null;
         if (!root || !frame.path) return { error: "unavailable" };
-        const resolved = await resolveDesignFile(root, frame.path.split("/").map(encodeURIComponent).join("/"));
+        const resolved = await resolveDesignFile(
+          root,
+          frame.path.split("/").map(encodeURIComponent).join("/"),
+        );
         if (!resolved.ok) return { error: "missing" };
         source = resolved.absolute;
-        url = withDesignTweakQuery(designUrl(deps.grants.issue(chat.id, root), frame.path), designTweakState(frame));
+        url = withDesignTweakQuery(
+          designUrl(deps.grants.issue(chat.id, root), frame.path),
+          designTweakState(frame),
+        );
       }
 
       const name = designExportFileName(frame, kind);
@@ -493,42 +557,54 @@ export function registerDesignCanvasHandlers<Event>(deps: {
   // The Code tab: a page's file (read, never written) or an artifact's HTML,
   // cut at 512 KiB. Like export, a workspace file is read only while the
   // chat may still frame its folder.
-  deps.handle("designCanvas:source", async (_event, chatId, frameId): Promise<DesignCanvasSourceResult> => {
-    if (!deps.enabled()) throw new Error(UNAVAILABLE);
-    assertDesignCanvasChatId(chatId);
-    if (typeof frameId !== "string" || frameId.length === 0 || frameId.length > 128) {
-      throw new Error("Invalid design frame.");
-    }
-    const chat = await deps.getChat(chatId);
-    if (!chat || !attended(chat)) return { error: "unavailable" };
-    const doc = await deps.store.get(chat.id);
-    const frame = doc.frames.find((entry) => entry.id === frameId);
-    if (frame?.kind === "artifact" && frame.mediaId) {
-      const html = await deps.artifactHtml(chat.id, frame.mediaId).catch(() => undefined);
-      if (html === undefined) return { error: "missing" };
-      const bytes = Buffer.from(html, "utf8");
-      const truncated = bytes.length > DESIGN_SOURCE_MAX_BYTES;
-      return { text: truncated ? bytes.subarray(0, DESIGN_SOURCE_MAX_BYTES).toString("utf8") : html, truncated };
-    }
-    if (frame?.kind !== "file" || !frame.path) return { error: "unavailable" };
-    const root = canFrame(chat) ? await deps.workspaceRoot(chat) : null;
-    if (!root) return { error: "unavailable" };
-    const resolved = await resolveDesignFile(root, frame.path.split("/").map(encodeURIComponent).join("/"));
-    if (!resolved.ok) return { error: "missing" };
-    try {
-      const handle = await fs.open(resolved.absolute, "r");
-      try {
-        const buffer = Buffer.alloc(DESIGN_SOURCE_MAX_BYTES + 1);
-        const { bytesRead } = await handle.read(buffer, 0, buffer.length, 0);
-        const truncated = bytesRead > DESIGN_SOURCE_MAX_BYTES;
-        return { text: buffer.subarray(0, Math.min(bytesRead, DESIGN_SOURCE_MAX_BYTES)).toString("utf8"), truncated };
-      } finally {
-        await handle.close();
+  deps.handle(
+    "designCanvas:source",
+    async (_event, chatId, frameId): Promise<DesignCanvasSourceResult> => {
+      if (!deps.enabled()) throw new Error(UNAVAILABLE);
+      assertDesignCanvasChatId(chatId);
+      if (typeof frameId !== "string" || frameId.length === 0 || frameId.length > 128) {
+        throw new Error("Invalid design frame.");
       }
-    } catch {
-      return { error: "missing" };
-    }
-  });
+      const chat = await deps.getChat(chatId);
+      if (!chat || !attended(chat)) return { error: "unavailable" };
+      const doc = await deps.store.get(chat.id);
+      const frame = doc.frames.find((entry) => entry.id === frameId);
+      if (frame?.kind === "artifact" && frame.mediaId) {
+        const html = await deps.artifactHtml(chat.id, frame.mediaId).catch(() => undefined);
+        if (html === undefined) return { error: "missing" };
+        const bytes = Buffer.from(html, "utf8");
+        const truncated = bytes.length > DESIGN_SOURCE_MAX_BYTES;
+        return {
+          text: truncated ? bytes.subarray(0, DESIGN_SOURCE_MAX_BYTES).toString("utf8") : html,
+          truncated,
+        };
+      }
+      if (frame?.kind !== "file" || !frame.path) return { error: "unavailable" };
+      const root = canFrame(chat) ? await deps.workspaceRoot(chat) : null;
+      if (!root) return { error: "unavailable" };
+      const resolved = await resolveDesignFile(
+        root,
+        frame.path.split("/").map(encodeURIComponent).join("/"),
+      );
+      if (!resolved.ok) return { error: "missing" };
+      try {
+        const handle = await fs.open(resolved.absolute, "r");
+        try {
+          const buffer = Buffer.alloc(DESIGN_SOURCE_MAX_BYTES + 1);
+          const { bytesRead } = await handle.read(buffer, 0, buffer.length, 0);
+          const truncated = bytesRead > DESIGN_SOURCE_MAX_BYTES;
+          return {
+            text: buffer.subarray(0, Math.min(bytesRead, DESIGN_SOURCE_MAX_BYTES)).toString("utf8"),
+            truncated,
+          };
+        } finally {
+          await handle.close();
+        }
+      } catch {
+        return { error: "missing" };
+      }
+    },
+  );
 
   // Editing a page's words in place: a plain text change is written into the
   // page's own file, only where its old words are found exactly once (see
@@ -546,7 +622,10 @@ export function registerDesignCanvasHandlers<Event>(deps: {
   async function rewriteFrameFile<T extends { ok: true; source: string }>(
     chatId: string,
     frameId: string,
-    plan: (source: string, framePath: string) => T | { ok: false; reason: DesignCanvasFileRewriteFailure },
+    plan: (
+      source: string,
+      framePath: string,
+    ) => T | { ok: false; reason: DesignCanvasFileRewriteFailure },
   ): Promise<T | { ok: false; reason: DesignCanvasFileRewriteFailure }> {
     const chat = await deps.getChat(chatId);
     if (!chat || !attended(chat)) return { ok: false, reason: "unavailable" };
@@ -555,7 +634,10 @@ export function registerDesignCanvasHandlers<Event>(deps: {
     if (frame?.kind !== "file" || !frame.path) return { ok: false, reason: "unavailable" };
     const root = canFrame(chat) ? await deps.workspaceRoot(chat) : null;
     if (!root) return { ok: false, reason: "unavailable" };
-    const resolved = await resolveDesignFile(root, frame.path.split("/").map(encodeURIComponent).join("/"));
+    const resolved = await resolveDesignFile(
+      root,
+      frame.path.split("/").map(encodeURIComponent).join("/"),
+    );
     if (!resolved.ok) return { ok: false, reason: "missing" };
     if (!resolved.mimeType.startsWith("text/html")) return { ok: false, reason: "unavailable" };
     const framePath = frame.path;
@@ -585,7 +667,10 @@ export function registerDesignCanvasHandlers<Event>(deps: {
         tweakDefaultsUndo.delete(`${chat.id}\n${frameId}`);
         return planned;
       }
-      return { ok: false as const, reason: written === "changed" ? ("changed" as const) : ("missing" as const) };
+      return {
+        ok: false as const,
+        reason: written === "changed" ? ("changed" as const) : ("missing" as const),
+      };
     });
   }
 
@@ -602,9 +687,13 @@ export function registerDesignCanvasHandlers<Event>(deps: {
       }
       const parsed = parseTextChanges(changes);
       if (!parsed) throw new Error("Invalid text change.");
-      if (stamp !== undefined && (typeof stamp !== "string" || stamp.length > 1024)) throw new Error("Invalid stamp.");
+      if (stamp !== undefined && (typeof stamp !== "string" || stamp.length > 1024))
+        throw new Error("Invalid stamp.");
       const result = await rewriteFrameFile(chatId, frameId, (source, framePath) => {
-        const plan = planDesignTextEdit(source, parsed, { stamp: stamp as string | undefined, path: framePath });
+        const plan = planDesignTextEdit(source, parsed, {
+          stamp: stamp as string | undefined,
+          path: framePath,
+        });
         return plan.ok ? { ok: true as const, source: plan.source } : plan;
       });
       return result.ok ? { ok: true } : (result as DesignCanvasEditTextResult);
@@ -626,7 +715,8 @@ export function registerDesignCanvasHandlers<Event>(deps: {
         throw new Error("Invalid design frame.");
       }
       const tweaks = parseDesignTweakValues(values);
-      if (values !== undefined && values !== null && !tweaks) throw new Error("Invalid tweak values.");
+      if (values !== undefined && values !== null && !tweaks)
+        throw new Error("Invalid tweak values.");
       let before = "";
       const result = await rewriteFrameFile<{
         ok: true;
@@ -634,42 +724,51 @@ export function registerDesignCanvasHandlers<Event>(deps: {
         written: Record<string, string>;
         previous: Record<string, string>;
         kept: string[];
-      }>(
-        chatId,
-        frameId,
-        (source) => {
-          const baked = bakeDesignTweakDefaults(source, tweaks);
-          if (baked.ok) before = source;
-          return baked;
-        },
-      );
+      }>(chatId, frameId, (source) => {
+        const baked = bakeDesignTweakDefaults(source, tweaks);
+        if (baked.ok) before = source;
+        return baked;
+      });
       if (!result.ok) return result;
       const undoId = randomUUID();
       const key = `${chatId}\n${frameId}`;
       tweakDefaultsUndo.delete(key);
       tweakDefaultsUndo.set(key, { id: undoId, before, after: digest(result.source) });
-      while (tweakDefaultsUndo.size > TWEAK_UNDO_LIMIT) tweakDefaultsUndo.delete(tweakDefaultsUndo.keys().next().value as string);
-      return { ok: true, written: result.written, previous: result.previous, kept: result.kept, undoId };
+      while (tweakDefaultsUndo.size > TWEAK_UNDO_LIMIT)
+        tweakDefaultsUndo.delete(tweakDefaultsUndo.keys().next().value as string);
+      return {
+        ok: true,
+        written: result.written,
+        previous: result.previous,
+        kept: result.kept,
+        undoId,
+      };
     },
   );
 
-  deps.handle("designCanvas:undoBakeTweaks", async (_event, chatId, frameId, undoId): Promise<DesignCanvasEditTextResult> => {
-    if (!deps.enabled()) throw new Error(UNAVAILABLE);
-    assertDesignCanvasChatId(chatId);
-    if (typeof frameId !== "string" || frameId.length === 0 || frameId.length > 128) {
-      throw new Error("Invalid design frame.");
-    }
-    if (typeof undoId !== "string" || undoId.length === 0 || undoId.length > 64) throw new Error("Invalid undo.");
-    const key = `${chatId}\n${frameId}`;
-    const saved = tweakDefaultsUndo.get(key);
-    if (!saved) return { ok: false, reason: "unchanged" };
-    // An older Make default's Undo: a later one has changed the file since.
-    if (saved.id !== undoId) return { ok: false, reason: "changed" };
-    const result = await rewriteFrameFile(chatId, frameId, (source) =>
-      digest(source) === saved.after ? { ok: true as const, source: saved.before } : { ok: false as const, reason: "changed" as const },
-    );
-    return result.ok ? { ok: true } : (result as DesignCanvasEditTextResult);
-  });
+  deps.handle(
+    "designCanvas:undoBakeTweaks",
+    async (_event, chatId, frameId, undoId): Promise<DesignCanvasEditTextResult> => {
+      if (!deps.enabled()) throw new Error(UNAVAILABLE);
+      assertDesignCanvasChatId(chatId);
+      if (typeof frameId !== "string" || frameId.length === 0 || frameId.length > 128) {
+        throw new Error("Invalid design frame.");
+      }
+      if (typeof undoId !== "string" || undoId.length === 0 || undoId.length > 64)
+        throw new Error("Invalid undo.");
+      const key = `${chatId}\n${frameId}`;
+      const saved = tweakDefaultsUndo.get(key);
+      if (!saved) return { ok: false, reason: "unchanged" };
+      // An older Make default's Undo: a later one has changed the file since.
+      if (saved.id !== undoId) return { ok: false, reason: "changed" };
+      const result = await rewriteFrameFile(chatId, frameId, (source) =>
+        digest(source) === saved.after
+          ? { ok: true as const, source: saved.before }
+          : { ok: false as const, reason: "changed" as const },
+      );
+      return result.ok ? { ok: true } : (result as DesignCanvasEditTextResult);
+    },
+  );
 
   // Snapshots a frame's rectangle of the asking window's own page, so a frame
   // that leaves the live set keeps a picture instead of going blank. A window
@@ -702,7 +801,10 @@ export function registerDesignCanvasHandlers<Event>(deps: {
 function clampCaptureRect(
   rect: unknown,
   window: DesignCanvasCaptureWindow | null,
-): { window: DesignCanvasCaptureWindow; rect: { x: number; y: number; width: number; height: number } } | null {
+): {
+  window: DesignCanvasCaptureWindow;
+  rect: { x: number; y: number; width: number; height: number };
+} | null {
   if (!window || !rect || typeof rect !== "object") return null;
   const { x, y, width, height } = rect as Record<string, unknown>;
   const numbers = [x, y, width, height];
@@ -736,7 +838,8 @@ async function validatePickedFile(
   } catch {
     return { error: "outside-workspace" };
   }
-  if (!isPathInside(realRoot, realChosen, { allowRoot: false })) return { error: "outside-workspace" };
+  if (!isPathInside(realRoot, realChosen, { allowRoot: false }))
+    return { error: "outside-workspace" };
   // A link inside the folder may name a file of another type.
   if (!PICK_EXTENSIONS[kind].includes(path.extname(realChosen).slice(1).toLowerCase())) {
     return { error: "unsupported" };
@@ -753,13 +856,18 @@ async function validatePickedFile(
 }
 
 function parseTextChanges(value: unknown): DesignTextChange[] | null {
-  if (!Array.isArray(value) || value.length === 0 || value.length > DESIGN_TEXT_EDIT_LIMITS.changes) return null;
+  if (!Array.isArray(value) || value.length === 0 || value.length > DESIGN_TEXT_EDIT_LIMITS.changes)
+    return null;
   const changes: DesignTextChange[] = [];
   for (const entry of value) {
     if (!entry || typeof entry !== "object") return null;
     const { before, after } = entry as Record<string, unknown>;
     if (typeof before !== "string" || typeof after !== "string") return null;
-    if (before.length > DESIGN_TEXT_EDIT_LIMITS.chars || after.length > DESIGN_TEXT_EDIT_LIMITS.chars) return null;
+    if (
+      before.length > DESIGN_TEXT_EDIT_LIMITS.chars ||
+      after.length > DESIGN_TEXT_EDIT_LIMITS.chars
+    )
+      return null;
     changes.push({ before, after });
   }
   return changes;

@@ -59,13 +59,24 @@ function Helix({ mark }: { mark: HelixMark }) {
           const position = -(i * step) - (strand === "a" ? 0 : 0.5) * duration;
           const depth = position + duration / 4;
           const circle = (
-            <circle key={`${strand}${x}`} className={`aiden-mark-strand-${strand}`} cx={x} cy={12} r={1.8} style={delay([position, duration], [depth, duration])} />
+            <circle
+              key={`${strand}${x}`}
+              className={`aiden-mark-strand-${strand}`}
+              cx={x}
+              cy={12}
+              r={1.8}
+              style={delay([position, duration], [depth, duration])}
+            />
           );
           // Swell's second wave rides on a wrapper so it adds to the braid's
           // motion instead of being scaled by the circle's depth.
           return mark === "helix-swell" ? (
-            <g key={`${strand}${x}`} className="aiden-mark-wave" style={delay([i * -0.45, 2.3])}>{circle}</g>
-          ) : circle;
+            <g key={`${strand}${x}`} className="aiden-mark-wave" style={delay([i * -0.45, 2.3])}>
+              {circle}
+            </g>
+          ) : (
+            circle
+          );
         }),
       )}
     </g>
@@ -77,16 +88,32 @@ function MarkShapes({ mark }: { mark: ActivityMark }) {
     case "tri-step":
       return (
         <g className="aiden-mark-turn">
-          {TRIANGLE.map(([cx, cy]) => <circle key={`${cx}`} cx={cx} cy={cy} r={2.6} />)}
+          {TRIANGLE.map(([cx, cy]) => (
+            <circle key={`${cx}`} cx={cx} cy={cy} r={2.6} />
+          ))}
         </g>
       );
     case "quad-shuffle":
-      return <>{SHUFFLE_HOMES.map(([cx, cy]) => <circle key={`${cx}${cy}`} cx={cx} cy={cy} r={2.4} />)}</>;
+      return (
+        <>
+          {SHUFFLE_HOMES.map(([cx, cy]) => (
+            <circle key={`${cx}${cy}`} cx={cx} cy={cy} r={2.4} />
+          ))}
+        </>
+      );
     case "compose":
       return (
         <>
           {COMPOSE_LINES.map(({ y, width }, i) => (
-            <rect key={y} x={4} y={y} width={width} height={2.6} rx={1.3} style={delay([i * 0.16 - 1.1, 2.2])} />
+            <rect
+              key={y}
+              x={4}
+              y={y}
+              width={width}
+              height={2.6}
+              rx={1.3}
+              style={delay([i * 0.16 - 1.1, 2.2])}
+            />
           ))}
         </>
       );
@@ -94,7 +121,16 @@ function MarkShapes({ mark }: { mark: ActivityMark }) {
       return (
         <>
           {GRID.flatMap((cy) =>
-            GRID.map((cx, col) => <circle key={`${cx}${cy}`} cx={cx} cy={cy} r={1.9} opacity={0.2} style={delay([col * 0.18 - 0.45, 1.5])} />),
+            GRID.map((cx, col) => (
+              <circle
+                key={`${cx}${cy}`}
+                cx={cx}
+                cy={cy}
+                r={1.9}
+                opacity={0.2}
+                style={delay([col * 0.18 - 0.45, 1.5])}
+              />
+            )),
           )}
         </>
       );
@@ -106,7 +142,13 @@ function MarkShapes({ mark }: { mark: ActivityMark }) {
         </g>
       );
     case "bounce":
-      return <>{[5.5, 12, 18.5].map((cx, i) => <circle key={cx} cx={cx} cy={13} r={2.4} style={delay([i * 0.13, 1.2])} />)}</>;
+      return (
+        <>
+          {[5.5, 12, 18.5].map((cx, i) => (
+            <circle key={cx} cx={cx} cy={13} r={2.4} style={delay([i * 0.13, 1.2])} />
+          ))}
+        </>
+      );
     case "helix-calm":
     case "helix-twist":
     case "helix-swell":
@@ -171,7 +213,10 @@ export function AidenActivityMark({
 
   // The voice level picks one of five swell sizes in CSS rather than writing a
   // custom property on every microphone update.
-  const levelStep = level !== undefined && Number.isFinite(level) ? Math.round(Math.max(0, Math.min(1, level)) * 4) : undefined;
+  const levelStep =
+    level !== undefined && Number.isFinite(level)
+      ? Math.round(Math.max(0, Math.min(1, level)) * 4)
+      : undefined;
 
   return (
     <svg

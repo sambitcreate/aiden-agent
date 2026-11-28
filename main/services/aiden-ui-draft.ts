@@ -2,7 +2,11 @@ import { compileAum } from "../../renderer/shared/aiden-ui/compile.js";
 import { AIDEN_UI_CATALOG_VERSION } from "../../renderer/shared/aiden-ui/types.js";
 import { parseChatUiVisualV1 } from "../../renderer/shared/aiden-ui/visual.js";
 import type { ChatArtifactEventV1 } from "../../renderer/shared/chat-artifacts.js";
-import { GENERATIVE_UI_DRAFT_THROTTLE_MS, isHtmlArtifactTitle, RENDER_UI_TOOL_NAME } from "../../renderer/shared/generative-ui.js";
+import {
+  GENERATIVE_UI_DRAFT_THROTTLE_MS,
+  isHtmlArtifactTitle,
+  RENDER_UI_TOOL_NAME,
+} from "../../renderer/shared/generative-ui.js";
 
 /**
  * Streams in-flight `render_ui` calls as draft trees. Partial markup is
@@ -41,7 +45,9 @@ export function createUiDraftSession(options: UiDraftSessionOptions) {
     call.timer = undefined;
     call.publicId ??= options.publicToolCallId(rawToolCallId);
     if (!call.publicId) return;
-    const args = call.latestArgs as { title?: unknown; markup?: unknown; layout?: unknown } | undefined;
+    const args = call.latestArgs as
+      | { title?: unknown; markup?: unknown; layout?: unknown }
+      | undefined;
     if (!args || typeof args.markup !== "string" || !args.markup.trim()) return;
     // compileAum never throws, but a draft runs on a main-process timer:
     // nothing here may escape as an uncaught exception.
@@ -52,7 +58,10 @@ export function createUiDraftSession(options: UiDraftSessionOptions) {
       return;
     }
     if (!compiled.tree) return;
-    const title = typeof args.title === "string" && isHtmlArtifactTitle(args.title) ? args.title : compiled.title ?? "Visualizing";
+    const title =
+      typeof args.title === "string" && isHtmlArtifactTitle(args.title)
+        ? args.title
+        : (compiled.title ?? "Visualizing");
     const visual = parseChatUiVisualV1({
       version: 1,
       kind: "ui",

@@ -15,7 +15,11 @@ const SIDEBAR_VIEW_OPTIONS: ReadonlyArray<{ value: SidebarView; label: string; b
 /** A miniature sidebar for each view: grouped rows, one flat list, or sections led by a waiting row. */
 function SidebarViewPreview({ view }: { view: SidebarView }) {
   return (
-    <span className="appearance-width-preview appearance-sidebar-preview" data-sidebar-view={view} aria-hidden="true">
+    <span
+      className="appearance-width-preview appearance-sidebar-preview"
+      data-sidebar-view={view}
+      aria-hidden="true"
+    >
       <span className="appearance-sidebar-preview-column">
         {view === "projects" ? (
           <>
@@ -54,7 +58,11 @@ function SidebarViewPreview({ view }: { view: SidebarView }) {
 export function SidebarViewPicker({ labelledBy }: { labelledBy: string }) {
   const { view, setView } = useSidebarView();
   return (
-    <div className="appearance-width-picker appearance-sidebar-picker" role="radiogroup" aria-labelledby={labelledBy}>
+    <div
+      className="appearance-width-picker appearance-sidebar-picker"
+      role="radiogroup"
+      aria-labelledby={labelledBy}
+    >
       {SIDEBAR_VIEW_OPTIONS.map((option, index) => (
         <button
           key={option.value}
@@ -88,7 +96,10 @@ export function InboxDockBadgeSetting() {
   const { enabled, setEnabled } = useInboxDockBadge();
   const { platform, badgeCount } = useAppCapabilities();
   if (view !== "inbox" || !badgeCount) return null;
-  const label = platform === "darwin" ? "Show Needs you count on the Dock icon" : "Show Needs you count on the app icon";
+  const label =
+    platform === "darwin"
+      ? "Show Needs you count on the Dock icon"
+      : "Show Needs you count on the app icon";
   return (
     <FieldSet className="appearance-sidebar-badge mt-3 mb-0">
       <Field

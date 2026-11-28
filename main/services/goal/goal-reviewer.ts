@@ -33,9 +33,18 @@ import {
 
 import type { GoalRecordV1 } from "../../../renderer/shared/goal.js";
 import { projectAdvisorContext } from "../advisor-context.js";
-import { oneOffCallOptions, sideCallContinuation, sideCallModelKey, type SideCallPrefix } from "../side-call-prefix.js";
+import {
+  oneOffCallOptions,
+  sideCallContinuation,
+  sideCallModelKey,
+  type SideCallPrefix,
+} from "../side-call-prefix.js";
 import type { StoredProvider } from "../types.js";
-import { assistantUsageRecord, isLocalModelProvider, unreportedUsageRecord } from "../usage-accounting.js";
+import {
+  assistantUsageRecord,
+  isLocalModelProvider,
+  unreportedUsageRecord,
+} from "../usage-accounting.js";
 import type { UsageRequestRecord } from "../usage-store-core.js";
 import { goalReviewerPrompt } from "./goal-prompts.js";
 import { parseGoalVerdict, type GoalVerdict } from "./goal-verdict.js";
@@ -45,7 +54,12 @@ export const GOAL_REVIEW_MAX_TOKENS = 400;
 /** The most thinking a continued review makes room for on top of its answer. */
 export const GOAL_REVIEW_MAX_THINKING_TOKENS = 16_384;
 /** pi-ai's default thinking budgets, used when the chat's request named none. */
-const DEFAULT_THINKING_BUDGETS: Record<string, number> = { minimal: 1_024, low: 2_048, medium: 8_192, high: 16_384 };
+const DEFAULT_THINKING_BUDGETS: Record<string, number> = {
+  minimal: 1_024,
+  low: 2_048,
+  medium: 8_192,
+  high: 16_384,
+};
 export const GOAL_REVIEW_TIMEOUT_MS = 60_000;
 /** The isolated review's system prompt; the continuation keeps the chat's own. */
 export const GOAL_REVIEWER_SYSTEM_PROMPT =
@@ -95,13 +109,19 @@ type Sent =
 
 export async function reviewGoal(
   dependencies: GoalReviewerDependencies,
-  input: { goal: Pick<GoalRecordV1, "objective" | "rounds" | "maxRounds" | "check">; allowWait: boolean; signal: AbortSignal },
+  input: {
+    goal: Pick<GoalRecordV1, "objective" | "rounds" | "maxRounds" | "check">;
+    allowWait: boolean;
+    signal: AbortSignal;
+  },
 ): Promise<GoalReviewOutcome> {
   const { runtime } = dependencies;
   const now = dependencies.now ?? Date.now;
   const instruction: UserMessage = {
     role: "user",
-    content: [{ type: "text", text: goalReviewerPrompt(input.goal, { allowWait: input.allowWait }) }],
+    content: [
+      { type: "text", text: goalReviewerPrompt(input.goal, { allowWait: input.allowWait }) },
+    ],
     timestamp: now(),
   };
   const call = {
@@ -113,7 +133,10 @@ export async function reviewGoal(
     maxRetryDelayMs: 0,
   };
 
-  const send = async (request: { context: TranscriptContext; options: SimpleStreamOptions }): Promise<Sent | { state: "refused"; message: string }> => {
+  const send = async (request: {
+    context: TranscriptContext;
+    options: SimpleStreamOptions;
+  }): Promise<Sent | { state: "refused"; message: string }> => {
     const refusal = await dependencies.spendingRefusal();
     if (refusal) return { state: "refused", message: refusal };
     if (input.signal.aborted) return { state: "cancelled" };
@@ -124,32 +147,56 @@ export async function reviewGoal(
         .result();
     } catch (error) {
       dependencies.reportFailure?.("dispatch", error);
-      await record(dependencies, unreported(runtime, input.signal.aborted ? "cancelled" : "failed"));
+      await record(
+        dependencies,
+        unreported(runtime, input.signal.aborted ? "cancelled" : "failed"),
+      );
       return input.signal.aborted ? { state: "cancelled" } : { state: "failed" };
     }
     dependencies.countSpend(response);
-    await record(dependencies, assistantUsageRecord({ message: response, provider: runtime.provider, model: runtime.model, source: "goal-review" }));
+    await record(
+      dependencies,
+      assistantUsageRecord({
+        message: response,
+        provider: runtime.provider,
+        model: runtime.model,
+        source: "goal-review",
+      }),
+    );
     if (input.signal.aborted) return { state: "cancelled" };
     if (response.stopReason === "aborted") return { state: "timed-out" };
     if (response.stopReason === "error") return { state: "failed" };
     return { state: "completed", response };
   };
 
-  const answer = (sent: Sent | { state: "refused"; message: string }, via: GoalReviewPath): GoalReviewOutcome => {
+  const answer = (
+    sent: Sent | { state: "refused"; message: string },
+    via: GoalReviewPath,
+  ): GoalReviewOutcome => {
     if (sent.state === "refused") return { kind: "refused", message: sent.message };
     if (sent.state === "cancelled") return { kind: "cancelled" };
     if (sent.state !== "completed") return { kind: "unusable", why: "failed", via };
-    if (sent.response.content.some((part) => part.type === "toolCall")) return { kind: "unusable", why: "tool-call", via };
+    if (sent.response.content.some((part) => part.type === "toolCall"))
+      return { kind: "unusable", why: "tool-call", via };
     const verdict = parseGoalVerdict(replyText(sent.response), { allowWait: input.allowWait });
-    return verdict ? { kind: "verdict", verdict, via } : { kind: "unusable", why: "no-verdict", via };
+    return verdict
+      ? { kind: "verdict", verdict, via }
+      : { kind: "unusable", why: "no-verdict", via };
   };
 
   const prefix = await dependencies.prefix().catch(() => undefined);
   // A chat request that forced a tool call would force one in its continuation
   // too, and a tool call is never a verdict: such a review starts isolated.
-  if (prefix && prefix.modelKey === sideCallModelKey(runtime.model) && !forcesToolCall(prefix.options.toolChoice)) {
+  if (
+    prefix &&
+    prefix.modelKey === sideCallModelKey(runtime.model) &&
+    !forcesToolCall(prefix.options.toolChoice)
+  ) {
     const continued = await send(
-      sideCallContinuation(prefix, [instruction], { ...call, maxTokens: goalReviewMaxTokens(prefix.options, runtime.model) }),
+      sideCallContinuation(prefix, [instruction], {
+        ...call,
+        maxTokens: goalReviewMaxTokens(prefix.options, runtime.model),
+      }),
     );
     // A failed continuation falls back to the isolated review; anything else answers.
     if (continued.state !== "failed") return answer(continued, "continuation");
@@ -167,7 +214,11 @@ export async function reviewGoal(
       timestamp: now(),
     });
     isolated = {
-      context: normalizeContext({ systemPrompt: GOAL_REVIEWER_SYSTEM_PROMPT, messages: projection.messages, tools: [] }),
+      context: normalizeContext({
+        systemPrompt: GOAL_REVIEWER_SYSTEM_PROMPT,
+        messages: projection.messages,
+        tools: [],
+      }),
       options: oneOffCallOptions(call),
     };
   } catch (error) {
@@ -189,7 +240,10 @@ export function goalReviewMaxTokens(
   const level = replay.reasoning;
   if (!level || (level as string) === "off") return GOAL_REVIEW_MAX_TOKENS;
   const named = level === "xhigh" || (level as string) === "max" ? "high" : level;
-  const budgets = { ...DEFAULT_THINKING_BUDGETS, ...(replay.thinkingBudgets as Record<string, number> | undefined) };
+  const budgets = {
+    ...DEFAULT_THINKING_BUDGETS,
+    ...(replay.thinkingBudgets as Record<string, number> | undefined),
+  };
   const thinking = Math.min(Math.max(0, budgets[named] ?? 0), GOAL_REVIEW_MAX_THINKING_TOKENS);
   const cap = GOAL_REVIEW_MAX_TOKENS + thinking;
   return model.maxTokens > 0 ? Math.min(cap, model.maxTokens) : cap;
@@ -208,7 +262,10 @@ function replyText(message: AssistantMessage): string {
     .trim();
 }
 
-function unreported(runtime: GoalReviewerRuntime, status: "failed" | "cancelled"): UsageRequestRecord {
+function unreported(
+  runtime: GoalReviewerRuntime,
+  status: "failed" | "cancelled",
+): UsageRequestRecord {
   return unreportedUsageRecord({
     source: "goal-review",
     providerId: runtime.provider.id,
@@ -220,7 +277,10 @@ function unreported(runtime: GoalReviewerRuntime, status: "failed" | "cancelled"
   });
 }
 
-async function record(dependencies: GoalReviewerDependencies, usage: UsageRequestRecord): Promise<void> {
+async function record(
+  dependencies: GoalReviewerDependencies,
+  usage: UsageRequestRecord,
+): Promise<void> {
   try {
     await dependencies.recordUsage(usage);
   } catch (error) {

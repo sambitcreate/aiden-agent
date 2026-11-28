@@ -21,12 +21,20 @@ import { hostQueryKeys } from "../lib/hosts/host-query-keys";
 import type { ChatMessage } from "../lib/types";
 import type { SidebarHost } from "../lib/sidebar-remote-groups";
 import type { RemoteChatSnapshot } from "../lib/hosts/remote-chat-session";
-import { applyRemoteRunEvents, initialRemoteRunView, type RemoteRunView } from "../lib/hosts/remote-stream-translator";
+import {
+  applyRemoteRunEvents,
+  initialRemoteRunView,
+  type RemoteRunView,
+} from "../lib/hosts/remote-stream-translator";
 import type { ChatRunInputAdmissionResult } from "../shared/chat-run-input";
 import { chatMessageQueue, discardChatMessageQueue } from "../lib/chat-message-queue";
 import type { HostModelCatalog } from "../lib/hosts/host-resources";
 import { hostResourceKey } from "../shared/peer-host";
-import { forkSummaryHoldsSend, type ChatForkLineageV1, type ChatForkSummaryV1 } from "../shared/chat-copy-contract";
+import {
+  forkSummaryHoldsSend,
+  type ChatForkLineageV1,
+  type ChatForkSummaryV1,
+} from "../shared/chat-copy-contract";
 import {
   RemoteChatPane,
   RemoteChatRoute,
@@ -41,9 +49,18 @@ const reconnect = async () => undefined;
 
 const online: SidebarHost = { id: "host-b", label: "Studio", availability: "online" };
 const offline: SidebarHost = { id: "host-b", label: "Studio", availability: "offline" };
-const blocked: SidebarHost = { id: "host-b", label: "Studio", availability: "blocked", blockedReason: "auth" };
+const blocked: SidebarHost = {
+  id: "host-b",
+  label: "Studio",
+  availability: "blocked",
+  blockedReason: "auth",
+};
 
-function event(sequence: number, type: string, payload: Record<string, unknown> = {}): PeerRunEvent {
+function event(
+  sequence: number,
+  type: string,
+  payload: Record<string, unknown> = {},
+): PeerRunEvent {
   return {
     protocolVersion: 1,
     streamId: "run-1",
@@ -80,8 +97,21 @@ function snapshot(host: SidebarHost, patch: Partial<RemoteChatSnapshot> = {}): R
   };
 }
 
-const CONTROL: HostChatCapability[] = ["messagesWindow", "observe", "markRead", "send", "rename", "remove"];
-const RUN_CONTROL: HostChatCapability[] = [...CONTROL, "cancel", "respondApproval", "answerQuestion", "steer"];
+const CONTROL: HostChatCapability[] = [
+  "messagesWindow",
+  "observe",
+  "markRead",
+  "send",
+  "rename",
+  "remove",
+];
+const RUN_CONTROL: HostChatCapability[] = [
+  ...CONTROL,
+  "cancel",
+  "respondApproval",
+  "answerQuestion",
+  "steer",
+];
 
 /** A paired host as the pane's session control sees it. */
 class StubHost implements HostChatAdapter {
@@ -144,20 +174,34 @@ class StubHost implements HostChatAdapter {
   async rename() {}
   async remove() {}
   async contextPressure() {
-    return { ok: false as const, error: { code: "unused", message: "Read from the query cache in these tests." } };
+    return {
+      ok: false as const,
+      error: { code: "unused", message: "Read from the query cache in these tests." },
+    };
   }
   dispose() {}
 }
 
 function session(host: SidebarHost, granted: HostChatCapability[] = RUN_CONTROL) {
   const adapter = new StubHost(host, granted);
-  const control = new ChatSessionControl(adapter, { hostId: "host-b", chatId: "chat-1" }, new ChatIntentLedger());
+  const control = new ChatSessionControl(
+    adapter,
+    { hostId: "host-b", chatId: "chat-1" },
+    new ChatIntentLedger(),
+  );
   control.attach();
-  return { control, adapter, chat: (): ChatSession => ({ control, snapshot: control.getSnapshot() }) };
+  return {
+    control,
+    adapter,
+    chat: (): ChatSession => ({ control, snapshot: control.getSnapshot() }),
+  };
 }
 
 function parse(markup: string) {
-  const document = new DOMParser().parseFromString(`<!doctype html><html><body>${markup}</body></html>`, "text/html");
+  const document = new DOMParser().parseFromString(
+    `<!doctype html><html><body>${markup}</body></html>`,
+    "text/html",
+  );
   return (document.documentElement?.textContent ?? "").replace(/\s+/g, " ");
 }
 
@@ -180,7 +224,10 @@ function render(
       </CommandSystemProvider>
     </QueryClientProvider>,
   );
-  const document = new DOMParser().parseFromString(`<!doctype html><html><body>${markup}</body></html>`, "text/html");
+  const document = new DOMParser().parseFromString(
+    `<!doctype html><html><body>${markup}</body></html>`,
+    "text/html",
+  );
   const all = Array.from(document.getElementsByTagName("*"));
   const text = (document.documentElement?.textContent ?? "").replace(/\s+/g, " ");
   const buttons = all.filter((node) => node.tagName.toLowerCase() === "button");
@@ -192,11 +239,17 @@ function render(
         ? ""
         : Array.from(node.childNodes).map(buttonName).join("");
   const button = (label: RegExp) =>
-    buttons.find((node) => label.test(buttonName(node)) || label.test(node.getAttribute("aria-label") ?? ""));
+    buttons.find(
+      (node) => label.test(buttonName(node)) || label.test(node.getAttribute("aria-label") ?? ""),
+    );
   const typing = all.filter((node) => ["textarea", "input"].includes(node.tagName.toLowerCase()));
   // A question's options are the buttons in its labelled group.
   const inLabelledGroup = (node: Element) => {
-    for (let parent = node.parentNode as Element | null; parent?.getAttribute; parent = parent.parentNode as Element | null) {
+    for (
+      let parent = node.parentNode as Element | null;
+      parent?.getAttribute;
+      parent = parent.parentNode as Element | null
+    ) {
       if (parent.getAttribute("role") === "group" && parent.getAttribute("aria-label")) return true;
     }
     return false;
@@ -239,7 +292,11 @@ test("a run started on the host streams into the open chat, and its composer can
     event(1, "run.started", { runId: "run-1", chatId: "chat-1", origin: "device" }),
     event(2, "text_delta", { text: "Streaming from Studio" }),
   ]);
-  const view = render({ host: online, snapshot: snapshot(online, { run: live }), chat: session(online).chat() });
+  const view = render({
+    host: online,
+    snapshot: snapshot(online, { run: live }),
+    chat: session(online).chat(),
+  });
 
   assert.match(view.text, /Release notes/);
   const chip = view.all.find((node) => node.hasAttribute("data-remote-host-chip"));
@@ -252,7 +309,10 @@ test("a run started on the host streams into the open chat, and its composer can
   const stop = view.button(/Stop generating/);
   assert.ok(stop, "a run started on the host can be stopped from here");
   assert.equal(stop.hasAttribute("disabled"), false);
-  assert.ok(view.button(/Queue message|Steer response/), "typing while it runs goes to the host's run");
+  assert.ok(
+    view.button(/Queue message|Steer response/),
+    "typing while it runs goes to the host's run",
+  );
   // Nothing on this Mac is offered for a chat that runs elsewhere.
   for (const label of [/Attach files/i, /^Approvals:/i, /terminal/i, /Open in/i, /Reveal/i]) {
     assert.equal(view.button(label), undefined, `unexpected ${label} control`);
@@ -266,10 +326,19 @@ test("the composer sits on the transcript column once, as wide as a local chat's
   const view = render({ host: online, snapshot: snapshot(online), chat: session(online).chat() });
   const composer = view.all.find((node) => node.hasAttribute("data-browser-composer-inset"));
   assert.ok(composer, "the chat has a composer");
-  const columns = (node: Element) => (node.getAttribute("class") ?? "").split(/\s+/u).includes("chat-content-column");
+  const columns = (node: Element) =>
+    (node.getAttribute("class") ?? "").split(/\s+/u).includes("chat-content-column");
   assert.ok(columns(composer), "the composer centres itself on the column");
-  for (let parent = composer.parentNode as Element | null; parent?.getAttribute; parent = parent.parentNode as Element | null) {
-    assert.equal(columns(parent), false, "a second column around it would narrow it by another dock gutter");
+  for (
+    let parent = composer.parentNode as Element | null;
+    parent?.getAttribute;
+    parent = parent.parentNode as Element | null
+  ) {
+    assert.equal(
+      columns(parent),
+      false,
+      "a second column around it would narrow it by another dock gutter",
+    );
   }
 });
 
@@ -279,8 +348,23 @@ const hostModels: HostModelCatalog = {
       id: "acme",
       label: "Acme",
       models: [
-        { id: "deep", label: "Deep", supportsImages: false, thinkingLevels: ["low", "medium", "high"], defaultThinkingLevel: "medium", thinkingCanDisable: false, hidden: false },
-        { id: "fast", label: "Fast", supportsImages: true, thinkingLevels: [], thinkingCanDisable: true, hidden: false },
+        {
+          id: "deep",
+          label: "Deep",
+          supportsImages: false,
+          thinkingLevels: ["low", "medium", "high"],
+          defaultThinkingLevel: "medium",
+          thinkingCanDisable: false,
+          hidden: false,
+        },
+        {
+          id: "fast",
+          label: "Fast",
+          supportsImages: true,
+          thinkingLevels: [],
+          thinkingCanDisable: true,
+          hidden: false,
+        },
       ],
     },
   ],
@@ -288,29 +372,60 @@ const hostModels: HostModelCatalog = {
 };
 const onDeep = (patch: Partial<RemoteChatSnapshot> = {}) =>
   snapshot(online, {
-    transcript: { chatId: "chat-1", revision: "r1", messages, hasOlder: false, model: { providerId: "acme", modelId: "deep" } },
+    transcript: {
+      chatId: "chat-1",
+      revision: "r1",
+      messages,
+      hasOlder: false,
+      model: { providerId: "acme", modelId: "deep" },
+    },
     ...patch,
   });
 
 test("the composer shows the host's model for this chat and the effort levels that Mac runs it at", () => {
-  const view = render({ host: online, snapshot: onDeep(), chat: session(online).chat(), models: hostModels });
+  const view = render({
+    host: online,
+    snapshot: onDeep(),
+    chat: session(online).chat(),
+    models: hostModels,
+  });
   assert.ok(view.button(/^Model on Studio: Deep$/), "the chat's own model, read from its host");
-  const effort = view.all.find((node) => node.getAttribute("role") === "radiogroup" && /thinking level/u.test(node.getAttribute("aria-label") ?? ""));
+  const effort = view.all.find(
+    (node) =>
+      node.getAttribute("role") === "radiogroup" &&
+      /thinking level/u.test(node.getAttribute("aria-label") ?? ""),
+  );
   assert.ok(effort, "an effort control for a model with levels");
-  const radios = Array.from(effort.getElementsByTagName("*")).filter((node) => node.getAttribute("role") === "radio");
-  assert.equal(radios.find((node) => node.getAttribute("aria-checked") === "true")?.getAttribute("aria-label"), "Thinking: medium effort", "the host's default effort");
+  const radios = Array.from(effort.getElementsByTagName("*")).filter(
+    (node) => node.getAttribute("role") === "radio",
+  );
+  assert.equal(
+    radios.find((node) => node.getAttribute("aria-checked") === "true")?.getAttribute("aria-label"),
+    "Thinking: medium effort",
+    "the host's default effort",
+  );
 
   const fast = render({
     host: online,
     snapshot: snapshot(online, {
-      transcript: { chatId: "chat-1", revision: "r1", messages, hasOlder: false, model: { providerId: "acme", modelId: "fast" } },
+      transcript: {
+        chatId: "chat-1",
+        revision: "r1",
+        messages,
+        hasOlder: false,
+        model: { providerId: "acme", modelId: "fast" },
+      },
     }),
     chat: session(online).chat(),
     models: hostModels,
   });
   assert.ok(fast.button(/^Model on Studio: Fast$/));
   assert.equal(
-    fast.all.some((node) => node.getAttribute("role") === "radiogroup" && /thinking level/u.test(node.getAttribute("aria-label") ?? "")),
+    fast.all.some(
+      (node) =>
+        node.getAttribute("role") === "radiogroup" &&
+        /thinking level/u.test(node.getAttribute("aria-label") ?? ""),
+    ),
     false,
     "a model with no effort choice shows no control",
   );
@@ -332,22 +447,47 @@ test("the composer shows the context meter the chat's host projects for its next
     computedAt: 1,
   });
   const granted = render(
-    { host: online, snapshot: onDeep(), chat: session(online, [...RUN_CONTROL, "contextPressure"]).chat(), models: hostModels },
+    {
+      host: online,
+      snapshot: onDeep(),
+      chat: session(online, [...RUN_CONTROL, "contextPressure"]).chat(),
+      models: hostModels,
+    },
     client,
   );
   assert.ok(granted.button(/^Context usage, 25 percent$/), "the meter reads the host's projection");
-  const older = render({ host: online, snapshot: onDeep(), chat: session(online).chat(), models: hostModels }, client);
-  assert.equal(Boolean(older.button(/^Context usage/)), false, "a host without the projection shows no meter rather than a guess");
+  const older = render(
+    { host: online, snapshot: onDeep(), chat: session(online).chat(), models: hostModels },
+    client,
+  );
+  assert.equal(
+    Boolean(older.button(/^Context usage/)),
+    false,
+    "a host without the projection shows no meter rather than a guess",
+  );
 });
 
 test("a failed reply offers Try again, and a failure only that Mac can fix offers a model switch instead", () => {
   const failed = (category: "network" | "context_window"): ChatMessage[] => [
     ...messages,
-    { id: "m3", role: "assistant", content: "", createdAt: 3, providerFailure: { version: 1, category, attempts: 1, retryExhausted: true } },
+    {
+      id: "m3",
+      role: "assistant",
+      content: "",
+      createdAt: 3,
+      providerFailure: { version: 1, category, attempts: 1, retryExhausted: true },
+    },
   ];
   const network = render({
     host: online,
-    snapshot: onDeep({ transcript: { chatId: "chat-1", revision: "r1", messages: failed("network"), hasOlder: false } }),
+    snapshot: onDeep({
+      transcript: {
+        chatId: "chat-1",
+        revision: "r1",
+        messages: failed("network"),
+        hasOlder: false,
+      },
+    }),
     chat: session(online).chat(),
     models: hostModels,
   });
@@ -356,7 +496,14 @@ test("a failed reply offers Try again, and a failure only that Mac can fix offer
 
   const full = render({
     host: online,
-    snapshot: onDeep({ transcript: { chatId: "chat-1", revision: "r1", messages: failed("context_window"), hasOlder: false } }),
+    snapshot: onDeep({
+      transcript: {
+        chatId: "chat-1",
+        revision: "r1",
+        messages: failed("context_window"),
+        hasOlder: false,
+      },
+    }),
     chat: session(online).chat(),
     models: hostModels,
   });
@@ -368,7 +515,10 @@ test("messages queued while the host is replying wait on this Mac in the list a 
   const key = hostResourceKey({ hostId: "host-b", resourceId: "chat-1" });
   chatMessageQueue(key).add({ id: "q-1", text: "After this, run the tests", attachments: [] });
   try {
-    const live = run([event(1, "run.started", { runId: "run-1", chatId: "chat-1" }), event(2, "text_delta", { text: "Working" })]);
+    const live = run([
+      event(1, "run.started", { runId: "run-1", chatId: "chat-1" }),
+      event(2, "text_delta", { text: "Working" }),
+    ]);
     const { control, adapter, chat } = session(online);
     const view = render({ host: online, snapshot: snapshot(online, { run: live }), chat: chat() });
     assert.match(view.text, /1 queued/u);
@@ -387,7 +537,10 @@ test("a host that grants reading only shows no composer and says why", () => {
     chat: session(online, ["messagesWindow", "observe"]).chat(),
   });
   assert.equal(view.typing.length, 0);
-  assert.match(view.text, /This chat runs on Studio\. That computer doesn't allow sending from here\./);
+  assert.match(
+    view.text,
+    /This chat runs on Studio\. That computer doesn't allow sending from here\./,
+  );
   assert.equal(view.button(/Chat actions/), undefined);
 });
 
@@ -399,7 +552,10 @@ test("an offline host keeps the composer but refuses to send, stop or answer unt
   });
 
   assert.match(view.text, /That computer is offline\. Nothing is sent until it is back online\./);
-  assert.ok(view.button(/Stop generating/)?.hasAttribute("disabled"), "no stop is queued for later");
+  assert.ok(
+    view.button(/Stop generating/)?.hasAttribute("disabled"),
+    "no stop is queued for later",
+  );
   // The approval stays visible, disabled with the reason, never answered locally.
   assert.ok(view.button(/Allow once/)?.hasAttribute("disabled"));
   assert.ok(view.button(/^Deny$/)?.hasAttribute("disabled"));
@@ -420,13 +576,19 @@ test("an offline host keeps the last-known transcript visible and offers a recon
   assert.match(view.text, /Summarise the release notes/);
   assert.match(view.text, /Here is the summary so far/);
   assert.match(view.text, /Showing the last-known transcript/);
-  const status = view.all.find((node) => node.getAttribute("role") === "status" && node.getAttribute("data-host-availability"));
+  const status = view.all.find(
+    (node) => node.getAttribute("role") === "status" && node.getAttribute("data-host-availability"),
+  );
   assert.equal(status?.getAttribute("data-host-availability"), "offline");
   assert.ok(view.button(/Reconnect/), "the status row reconnects the host");
   // Older pages cannot be read while the host is away.
   assert.ok(view.button(/Load older messages/)?.hasAttribute("disabled"));
   const chip = view.all.find((node) => node.hasAttribute("data-remote-host-chip"));
-  assert.equal(chip?.textContent, "Runs on Studio · Offline", "the header chip says the host is away");
+  assert.equal(
+    chip?.textContent,
+    "Runs on Studio · Offline",
+    "the header chip says the host is away",
+  );
 });
 
 test("a host that needs re-pairing points to Connections instead of reconnecting", () => {
@@ -439,11 +601,16 @@ test("a host that needs re-pairing points to Connections instead of reconnecting
 
 test("Load older appears only while the host has older messages, and waits for the page in flight", () => {
   const more = { chatId: "chat-1", revision: "r1", messages, hasOlder: true };
-  const ready = render({ host: online, snapshot: snapshot(online, { transcript: more }) }).button(/Load older messages/);
+  const ready = render({ host: online, snapshot: snapshot(online, { transcript: more }) }).button(
+    /Load older messages/,
+  );
   assert.ok(ready);
   assert.equal(ready.hasAttribute("disabled"), false);
 
-  const loading = render({ host: online, snapshot: snapshot(online, { transcript: more, loadingOlder: true }) });
+  const loading = render({
+    host: online,
+    snapshot: snapshot(online, { transcript: more, loadingOlder: true }),
+  });
   assert.ok(loading.button(/Load older messages/)?.hasAttribute("disabled"));
 
   const complete = render({ host: online, snapshot: snapshot(online) });
@@ -467,7 +634,8 @@ test("a host that does not grant run control shows its prompts read-only, to be 
     assert.equal(view.button(label), undefined, `unexpected ${label} button`);
   }
   const cards = view.all.filter(
-    (node) => node.getAttribute("data-remote-approval") || node.getAttribute("data-remote-question"),
+    (node) =>
+      node.getAttribute("data-remote-approval") || node.getAttribute("data-remote-question"),
   );
   assert.equal(cards.length, 2);
   for (const card of cards) assert.equal(card.getElementsByTagName("button").length, 0);
@@ -479,7 +647,11 @@ test("a host that does not grant run control shows its prompts read-only, to be 
 });
 
 test("with run control, the approval and the question are answered from this Mac", () => {
-  const view = render({ host: online, snapshot: snapshot(online, { run: waitingRun() }), chat: session(online).chat() });
+  const view = render({
+    host: online,
+    snapshot: snapshot(online, { run: waitingRun() }),
+    chat: session(online).chat(),
+  });
 
   const allow = view.button(/Allow once/);
   assert.ok(allow);
@@ -493,12 +665,30 @@ test("with run control, the approval and the question are answered from this Mac
 test("several approvals are answered one at a time, the first with a count and the rest waiting behind it", () => {
   const two = run([
     event(1, "run.started", { runId: "run-1", chatId: "chat-1" }),
-    event(2, "approval_required", { approvalId: "ap-1", summary: "Run the release script", toolCallId: "c1", toolName: "run_shell" }),
-    event(3, "approval_required", { approvalId: "ap-2", summary: "Push the tag", toolCallId: "c2", toolName: "run_shell" }),
+    event(2, "approval_required", {
+      approvalId: "ap-1",
+      summary: "Run the release script",
+      toolCallId: "c1",
+      toolName: "run_shell",
+    }),
+    event(3, "approval_required", {
+      approvalId: "ap-2",
+      summary: "Push the tag",
+      toolCallId: "c2",
+      toolName: "run_shell",
+    }),
   ]);
-  const view = render({ host: online, snapshot: snapshot(online, { run: two }), chat: session(online).chat() });
+  const view = render({
+    host: online,
+    snapshot: snapshot(online, { run: two }),
+    chat: session(online).chat(),
+  });
 
-  assert.equal(view.buttons.filter((node) => /^Deny$/.test(view.buttonName(node))).length, 1, "one decision at a time");
+  assert.equal(
+    view.buttons.filter((node) => /^Deny$/.test(view.buttonName(node))).length,
+    1,
+    "one decision at a time",
+  );
   assert.match(view.text, /1 of 2/);
   const waiting = view.all.find((node) => node.getAttribute("data-remote-approval") === "ap-2");
   assert.ok(waiting, "the second approval stays visible");
@@ -518,14 +708,21 @@ test("an approval whose details the host left out can only be denied", () => {
       detailsOmitted: true,
     }),
   ]);
-  const view = render({ host: online, snapshot: snapshot(online, { run: omitted }), chat: session(online).chat() });
+  const view = render({
+    host: online,
+    snapshot: snapshot(online, { run: omitted }),
+    chat: session(online).chat(),
+  });
   assert.ok(view.button(/^Deny$/));
   assert.equal(view.button(/Allow/), undefined);
 });
 
 test("a lost send acknowledgement holds the message for a same-key retry and blocks new sends", async () => {
   const { control, adapter, chat } = session(online);
-  adapter.sendFails = new HostChatControlError({ code: "outcome_unknown", message: "The answer was lost." });
+  adapter.sendFails = new HostChatControlError({
+    code: "outcome_unknown",
+    message: "The answer was lost.",
+  });
   await assert.rejects(control.send("Tag the release"), { code: "outcome_unknown" });
 
   const view = render({ host: online, snapshot: snapshot(online), chat: chat() });
@@ -555,9 +752,18 @@ test("a reopened chat offers no composer until the host answers the message sent
 
   const reopened = new ChatSessionControl(adapter, ref, ledger);
   reopened.attach();
-  const view = () => render({ host: online, snapshot: snapshot(online), chat: { control: reopened, snapshot: reopened.getSnapshot() } });
+  const view = () =>
+    render({
+      host: online,
+      snapshot: snapshot(online),
+      chat: { control: reopened, snapshot: reopened.getSnapshot() },
+    });
   const waiting = view();
-  assert.equal(waiting.button(/Send message|Queue/), undefined, "the text cannot be sent again under a new key");
+  assert.equal(
+    waiting.button(/Send message|Queue/),
+    undefined,
+    "the text cannot be sent again under a new key",
+  );
   assert.match(waiting.text, /Waiting for Studio to confirm your last message\./);
 
   answer();
@@ -565,7 +771,11 @@ test("a reopened chat offers no composer until the host answers the message sent
   // A pane opened after the answer has nothing to wait for.
   const later = new ChatSessionControl(adapter, ref, ledger);
   later.attach();
-  const ready = render({ host: online, snapshot: snapshot(online), chat: { control: later, snapshot: later.getSnapshot() } });
+  const ready = render({
+    host: online,
+    snapshot: snapshot(online),
+    chat: { control: later, snapshot: later.getSnapshot() },
+  });
   assert.ok(ready.button(/Send message/));
   assert.doesNotMatch(ready.text, /Waiting for/);
 });
@@ -588,14 +798,21 @@ test("guidance keeps the composer's text only when the host did not save it", as
 test("an approval answered first on another device says so", async () => {
   const { control, adapter, chat } = session(online);
   adapter.approval = { resolution: "elsewhere", decision: "deny" };
-  const result = await control.respondApproval({ runId: "run-1", approvalId: "ap-1", decision: "allow" });
+  const result = await control.respondApproval({
+    runId: "run-1",
+    approvalId: "ap-1",
+    decision: "allow",
+  });
   assert.deepEqual(result, { resolution: "elsewhere", decision: "deny" });
 
   const view = render({ host: online, snapshot: snapshot(online), chat: chat() });
   const notice = view.all.find((node) => node.getAttribute("data-remote-elsewhere") === "approval");
   assert.ok(notice);
   assert.match(notice.textContent ?? "", /Already answered elsewhere/);
-  assert.match(notice.textContent ?? "", /Another device denied it first\. Your decision was not applied\./);
+  assert.match(
+    notice.textContent ?? "",
+    /Another device denied it first\. Your decision was not applied\./,
+  );
 });
 
 test("a run that has not started on the host shows no live row", () => {
@@ -606,7 +823,12 @@ test("a run that has not started on the host shows no live row", () => {
 test("a finished run leaves no prompts behind", () => {
   const settled = run([
     event(1, "run.started", { runId: "run-1", chatId: "chat-1" }),
-    event(2, "approval_required", { approvalId: "ap-1", summary: "Run it", toolCallId: "c1", toolName: "shell" }),
+    event(2, "approval_required", {
+      approvalId: "ap-1",
+      summary: "Run it",
+      toolCallId: "c1",
+      toolName: "shell",
+    }),
     { ...event(3, "done", { messageId: "m2" }), terminal: true },
   ]);
   const view = render({ host: online, snapshot: snapshot(online, { run: settled }) });
@@ -622,7 +844,13 @@ test("the pane shows loading before the first window and the read failure when n
       loaded: false,
       loading: true,
       transcript: { chatId: "chat-1", revision: null, messages: [], hasOlder: false },
-      run: run([event(90, "snapshot", { reason: "gap", state: "working", replyText: "Already built the level." })]),
+      run: run([
+        event(90, "snapshot", {
+          reason: "gap",
+          state: "working",
+          replyText: "Already built the level.",
+        }),
+      ]),
     }),
   });
   assert.match(replay.text, /Already built the level/);
@@ -691,11 +919,16 @@ test("a remote chat whose Mac is unpaired, turned off or unreadable says so once
   const unpaired = await route((client) => client.setQueryData(hostQueryKeys.list(), []));
   assert.match(unpaired, /That computer isn't connected/);
 
-  const off = await route((client) => client.setQueryData(hostQueryKeys.list(), [{ ...studioView, enabled: false }]));
+  const off = await route((client) =>
+    client.setQueryData(hostQueryKeys.list(), [{ ...studioView, enabled: false }]),
+  );
   assert.match(off, /That computer isn't connected/);
 
   const failed = await route((client) =>
-    client.prefetchQuery({ queryKey: hostQueryKeys.list(), queryFn: () => Promise.reject(new Error("Keychain locked")) }),
+    client.prefetchQuery({
+      queryKey: hostQueryKeys.list(),
+      queryFn: () => Promise.reject(new Error("Keychain locked")),
+    }),
   );
   assert.doesNotMatch(failed, /Loading…/);
   assert.match(failed, /Paired computers could not be read/);
@@ -709,25 +942,56 @@ function forkActions(view: ReturnType<typeof render>, label: string) {
 }
 
 test("a listed chat on a Mac that forks offers Fork from here on replies and Edit in fork past the first prompt", () => {
-  const forkable = render({ host: online, snapshot: snapshot(online), chat: session(online, FORKING).chat(), forkable: true });
-  assert.equal(forkActions(forkable, "Fork from here").length, 1, "the settled reply forks after itself");
-  assert.equal(forkActions(forkable, "Edit in fork").length, 0, "the host can't fork before a chat's first prompt");
+  const forkable = render({
+    host: online,
+    snapshot: snapshot(online),
+    chat: session(online, FORKING).chat(),
+    forkable: true,
+  });
+  assert.equal(
+    forkActions(forkable, "Fork from here").length,
+    1,
+    "the settled reply forks after itself",
+  );
+  assert.equal(
+    forkActions(forkable, "Edit in fork").length,
+    0,
+    "the host can't fork before a chat's first prompt",
+  );
 
   // With older messages above, the oldest prompt shown isn't the chat's first.
-  const paged = snapshot(online, { transcript: { chatId: "chat-1", revision: "r1", messages, hasOlder: true } });
-  const older = render({ host: online, snapshot: paged, chat: session(online, FORKING).chat(), forkable: true });
+  const paged = snapshot(online, {
+    transcript: { chatId: "chat-1", revision: "r1", messages, hasOlder: true },
+  });
+  const older = render({
+    host: online,
+    snapshot: paged,
+    chat: session(online, FORKING).chat(),
+    forkable: true,
+  });
   assert.equal(forkActions(older, "Edit in fork").length, 1);
   assert.equal(forkActions(older, "Fork from here")[0]?.hasAttribute("aria-disabled"), false);
 
   // Bot chats are never listed; a host without the feature offers nothing.
-  const unlisted = render({ host: online, snapshot: snapshot(online), chat: session(online, FORKING).chat() });
+  const unlisted = render({
+    host: online,
+    snapshot: snapshot(online),
+    chat: session(online, FORKING).chat(),
+  });
   assert.equal(forkActions(unlisted, "Fork from here").length, 0);
-  const plain = render({ host: online, snapshot: snapshot(online), chat: session(online).chat(), forkable: true });
+  const plain = render({
+    host: online,
+    snapshot: snapshot(online),
+    chat: session(online).chat(),
+    forkable: true,
+  });
   assert.equal(forkActions(plain, "Fork from here").length, 0);
 });
 
 test("forking waits while a run on the host is still going", () => {
-  const live = run([event(1, "run.started", { runId: "run-1", chatId: "chat-1", origin: "device" })]);
+  const live = run([
+    event(1, "run.started", { runId: "run-1", chatId: "chat-1", origin: "device" }),
+  ]);
   const view = render({
     host: online,
     snapshot: snapshot(online, { run: live }),
@@ -736,7 +1000,10 @@ test("forking waits while a run on the host is still going", () => {
   });
   const fork = forkActions(view, "Fork from here")[0];
   assert.equal(fork?.getAttribute("aria-disabled"), "true");
-  assert.equal(fork?.getAttribute("title"), "Finish the current response or approval before forking");
+  assert.equal(
+    fork?.getAttribute("title"),
+    "Finish the current response or approval before forking",
+  );
 });
 
 test("a fork shows where it came from, and a pending summary holds the composer", () => {
@@ -759,7 +1026,10 @@ test("a fork shows where it came from, and a pending summary holds the composer"
   });
   assert.ok(view.button(/Forked from “Release plan”/), "the source opens from the lineage row");
   assert.match(view.text, /Summarizing the original chat…/);
-  assert.ok(view.markup.indexOf('data-fork-summary="pending"') > view.markup.indexOf("Here is the summary so far"));
+  assert.ok(
+    view.markup.indexOf('data-fork-summary="pending"') >
+      view.markup.indexOf("Here is the summary so far"),
+  );
   assert.match(view.text, /This fork is waiting for its summary\./);
   assert.ok(view.button(/Send message/)?.hasAttribute("disabled"));
 
@@ -770,39 +1040,62 @@ test("a fork shows where it came from, and a pending summary holds the composer"
     lineage: { forkedFrom: { chatId: "chat-0", messageId: "m9", position: "after", at: 1 } },
   });
   assert.match(unlistedSource.text, /Forked from another chat/);
-  assert.equal(unlistedSource.button(/Forked from/), undefined, "a source the host doesn't list can't be opened");
+  assert.equal(
+    unlistedSource.button(/Forked from/),
+    undefined,
+    "a source the host doesn't list can't be opened",
+  );
   assert.doesNotMatch(unlistedSource.text, /waiting for its summary/);
 });
 
 test("a failed remote fork says what to do next", () => {
   assert.match(
-    remoteForkErrorMessage(new HostChatControlError({ code: "outcome_unknown", message: "lost" }), "Studio"),
+    remoteForkErrorMessage(
+      new HostChatControlError({ code: "outcome_unknown", message: "lost" }),
+      "Studio",
+    ),
     /Studio didn't confirm the fork\. Fork again to check; it won't make a second copy\./,
   );
   assert.equal(
     remoteForkErrorMessage(
-      new HostChatControlError({ code: "failed", message: "busy", remoteCode: "operation_in_progress", retryable: true }),
+      new HostChatControlError({
+        code: "failed",
+        message: "busy",
+        remoteCode: "operation_in_progress",
+        retryable: true,
+      }),
       "Studio",
     ),
     "Finish the current response or approval before copying this chat.",
   );
   assert.equal(
     remoteForkErrorMessage(
-      new HostChatControlError({ code: "failed", message: "Forking is turned off.", remoteCode: "operation_in_progress" }),
+      new HostChatControlError({
+        code: "failed",
+        message: "Forking is turned off.",
+        remoteCode: "operation_in_progress",
+      }),
       "Studio",
     ),
     "Forking is turned off.",
     "a fork the host won't make at all isn't blamed on a running response",
   );
   assert.match(
-    remoteForkErrorMessage(new HostChatControlError({ code: "failed", message: "x", remoteCode: "revision_conflict" }), "Studio"),
+    remoteForkErrorMessage(
+      new HostChatControlError({ code: "failed", message: "x", remoteCode: "revision_conflict" }),
+      "Studio",
+    ),
     /This chat changed on Studio\./,
   );
 });
 
 /** A minimal document for react-dom; the lineage harness renders nothing itself. */
 function installDocument() {
-  const document = new DOMImplementation().createDocument(null, "html", null) as unknown as Document;
+  const document = new DOMImplementation().createDocument(
+    null,
+    "html",
+    null,
+  ) as unknown as Document;
   const container = document.createElement("div");
   document.documentElement.appendChild(container);
   const elementPrototype = Object.getPrototypeOf(container) as Record<string, unknown>;
@@ -821,7 +1114,9 @@ function installDocument() {
   };
   Object.defineProperty(document, "defaultView", { configurable: true, value: windowValue });
   const keys = ["window", "document", "navigator", "Node", "Element", "HTMLElement"] as const;
-  const previous = new Map(keys.map((key) => [key, Object.getOwnPropertyDescriptor(globalThis, key)]));
+  const previous = new Map(
+    keys.map((key) => [key, Object.getOwnPropertyDescriptor(globalThis, key)]),
+  );
   const ElementConstructor = Object.getPrototypeOf(document.documentElement).constructor;
   Object.defineProperties(globalThis, {
     window: { configurable: true, value: windowValue },
@@ -852,7 +1147,10 @@ async function settle(): Promise<void> {
 }
 
 /** Mounts the fork-lineage hook for one chat; `show` renders it at a feed row revision. */
-async function mountForkLineage(host: Parameters<typeof useRemoteForkLineage>[0], listed: ChatForkLineageV1) {
+async function mountForkLineage(
+  host: Parameters<typeof useRemoteForkLineage>[0],
+  listed: ChatForkLineageV1,
+) {
   let latest: ReturnType<typeof useRemoteForkLineage> = { beginUpdate: () => noop };
   function Harness({ rowRevision }: { rowRevision: string }) {
     latest = useRemoteForkLineage(host, "chat-1", listed, rowRevision);
@@ -885,7 +1183,11 @@ async function mountForkLineage(host: Parameters<typeof useRemoteForkLineage>[0]
 
 test("a fork's summary changed on another device reaches the open pane when its feed row moves", async () => {
   const listed: ChatForkLineageV1 = { chatId: "chat-0", messageId: "m9", position: "after", at: 1 };
-  const failed: ChatForkSummaryV1 = { state: "failed", afterMessageId: "m2", error: "The model was unavailable." };
+  const failed: ChatForkSummaryV1 = {
+    state: "failed",
+    afterMessageId: "m2",
+    error: "The model was unavailable.",
+  };
   // The host's copy of the fork; each read returns its lineage under a content revision.
   let summary: ChatForkSummaryV1 | undefined = failed;
   let reads = 0;
@@ -894,7 +1196,13 @@ test("a fork's summary changed on another device reaches the open pane when its 
     capabilities: () => new Set<HostChatCapability>(["messagesWindow"]),
     async forkLineage(): Promise<{ ok: true; value: HostChatLineage }> {
       reads += 1;
-      return { ok: true, value: { revision: `content-${reads}`, forkedFrom: { ...listed, ...(summary ? { summary } : {}) } } };
+      return {
+        ok: true,
+        value: {
+          revision: `content-${reads}`,
+          forkedFrom: { ...listed, ...(summary ? { summary } : {}) },
+        },
+      };
     },
   };
   const mounted = await mountForkLineage(host, listed);
@@ -940,7 +1248,11 @@ test("a fork's summary changed on another device reaches the open pane when its 
   assert.ok(stale!.button(/^Retry$/), "the failed summary offers Retry");
   assert.match(stale!.text, /This fork is waiting for its summary\./);
   assert.match(retried!.text, /Summarizing the original chat…/);
-  assert.equal(retried!.button(/^Retry$/), undefined, "the stale Retry is gone once the summary is pending again");
+  assert.equal(
+    retried!.button(/^Retry$/),
+    undefined,
+    "the stale Retry is gone once the summary is pending again",
+  );
   assert.match(retried!.text, /This fork is waiting for its summary\./);
   assert.doesNotMatch(skipped!.markup, /data-fork-summary/);
   assert.doesNotMatch(skipped!.text, /waiting for its summary/, "the composer is no longer held");
@@ -948,14 +1260,21 @@ test("a fork's summary changed on another device reaches the open pane when its 
 
 test("a summary action's late answer does not replace a newer summary the pane already read", async () => {
   const listed: ChatForkLineageV1 = { chatId: "chat-0", messageId: "m9", position: "after", at: 1 };
-  let summary: ChatForkSummaryV1 = { state: "failed", afterMessageId: "m2", error: "The model was unavailable." };
+  let summary: ChatForkSummaryV1 = {
+    state: "failed",
+    afterMessageId: "m2",
+    error: "The model was unavailable.",
+  };
   let reads = 0;
   const host = {
     hostId: "host-b",
     capabilities: () => new Set<HostChatCapability>(["messagesWindow"]),
     async forkLineage(): Promise<{ ok: true; value: HostChatLineage }> {
       reads += 1;
-      return { ok: true, value: { revision: `content-${reads}`, forkedFrom: { ...listed, summary } } };
+      return {
+        ok: true,
+        value: { revision: `content-${reads}`, forkedFrom: { ...listed, summary } },
+      };
     },
   };
   const mounted = await mountForkLineage(host, listed);
@@ -969,12 +1288,20 @@ test("a summary action's late answer does not replace a newer summary the pane a
       forkedFrom: { ...listed, summary: { state: "pending", afterMessageId: "m2" } },
     };
     // Meanwhile the summary finishes and the feed brings the pane up to date.
-    summary = { state: "ready", afterMessageId: "m2", text: "Earlier, the user asked about the release." };
+    summary = {
+      state: "ready",
+      afterMessageId: "m2",
+      text: "Earlier, the user asked about the release.",
+    };
     assert.equal((await mounted.show("rev_3"))?.summary?.state, "ready");
 
     applyRetry(retryAnswer);
     const shown = await mounted.show("rev_3");
-    assert.equal(shown?.summary?.state, "ready", "the late pending answer does not bring the summary back");
+    assert.equal(
+      shown?.summary?.state,
+      "ready",
+      "the late pending answer does not bring the summary back",
+    );
     assert.equal(forkSummaryHoldsSend(shown), false, "the composer stays released");
 
     // An answer whose row has not moved since the action started applies as-is.

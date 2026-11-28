@@ -1,6 +1,11 @@
 import type * as React from "react";
 import type { Chat } from "../lib/types";
-import { describePromptCacheMissSource, formatContextTokenCount, type ChatContextPressureV1, type PromptCacheMissV1 } from "../shared/context-pressure";
+import {
+  describePromptCacheMissSource,
+  formatContextTokenCount,
+  type ChatContextPressureV1,
+  type PromptCacheMissV1,
+} from "../shared/context-pressure";
 import { parseAssistantTurnStatsV1 } from "../shared/assistant-turn-stats";
 import { ContextBreakdown } from "./context-breakdown";
 import { ProviderIcon } from "./provider-icon";
@@ -20,9 +25,7 @@ export interface ChatContextDetails {
 
 /** Only retained, reported turn totals; never mix the last Pi response into a turn total. */
 export function recordedChatUsage(chat: Pick<Chat, "messages">) {
-  const assistants = chat.messages.filter(
-    (message) => message.role === "assistant",
-  );
+  const assistants = chat.messages.filter((message) => message.role === "assistant");
   const seen = new Set<string>();
   const totals = {
     input: 0,
@@ -38,22 +41,14 @@ export function recordedChatUsage(chat: Pick<Chat, "messages">) {
     seen.add(message.id);
     const usage = parseAssistantTurnStatsV1(message.turnStats)?.usage;
     if (!usage) continue;
-    for (const key of [
-      "input",
-      "output",
-      "cacheRead",
-      "cacheWrite",
-      "total",
-      "requests",
-    ] as const)
+    for (const key of ["input", "output", "cacheRead", "cacheWrite", "total", "requests"] as const)
       totals[key] += usage[key];
     totals.turns++;
   }
   return {
     ...totals,
     assistantMessages: seen.size,
-    userMessages: chat.messages.filter((message) => message.role === "user")
-      .length,
+    userMessages: chat.messages.filter((message) => message.role === "user").length,
   };
 }
 
@@ -74,7 +69,11 @@ function Chip({ children, icon }: React.PropsWithChildren<{ icon?: React.ReactNo
 }
 
 const USAGE_PARTS = [
-  { key: "cacheRead", label: "Cache read", fill: "color-mix(in srgb, var(--chart-1) 40%, transparent)" },
+  {
+    key: "cacheRead",
+    label: "Cache read",
+    fill: "color-mix(in srgb, var(--chart-1) 40%, transparent)",
+  },
   { key: "input", label: "Input (excluding cache)", fill: "var(--chart-1)" },
   { key: "cacheWrite", label: "Cache write", fill: "var(--chart-6)" },
   { key: "output", label: "Output", fill: "var(--chart-5)" },
@@ -96,8 +95,12 @@ function UsageSection({
   // 0% is worth seeing only where a cache exists: one that reported activity,
   // a model with a documented cache, or a measured miss. A provider with no
   // cache shows no figure rather than a misleading 0%.
-  const cacheActive = usage.cacheRead + usage.cacheWrite > 0 || cacheKnown || lastCacheMiss !== undefined;
-  const cachePercent = reported && cacheable > 0 && cacheActive ? Math.round((usage.cacheRead / cacheable) * 100) : null;
+  const cacheActive =
+    usage.cacheRead + usage.cacheWrite > 0 || cacheKnown || lastCacheMiss !== undefined;
+  const cachePercent =
+    reported && cacheable > 0 && cacheActive
+      ? Math.round((usage.cacheRead / cacheable) * 100)
+      : null;
   const barTotal = USAGE_PARTS.reduce((sum, part) => sum + usage[part.key], 0);
   return (
     <section className="rounded-card bg-well p-4">
@@ -134,7 +137,9 @@ function UsageSection({
       {reported && barTotal > 0 ? (
         <div
           role="img"
-          aria-label={USAGE_PARTS.map((part) => `${part.label} ${usage[part.key].toLocaleString()}`).join(", ")}
+          aria-label={USAGE_PARTS.map(
+            (part) => `${part.label} ${usage[part.key].toLocaleString()}`,
+          ).join(", ")}
           className="mt-3 flex h-2 gap-0.5"
         >
           {USAGE_PARTS.filter((part) => usage[part.key] > 0).map((part) => (
@@ -157,7 +162,11 @@ function UsageSection({
           {USAGE_PARTS.map((part) => (
             <div className="flex items-center justify-between gap-4" key={part.key}>
               <dt className="flex items-center gap-2 text-secondary">
-                <span aria-hidden="true" className="size-2 rounded-full" style={{ background: part.fill }} />
+                <span
+                  aria-hidden="true"
+                  className="size-2 rounded-full"
+                  style={{ background: part.fill }}
+                />
                 {part.label}
               </dt>
               <dd className="tabular-nums">{token(usage[part.key])}</dd>
@@ -186,11 +195,7 @@ function UsageSection({
   );
 }
 
-export function ChatContextPanel({
-  details,
-}: {
-  details: ChatContextDetails | null;
-}) {
+export function ChatContextPanel({ details }: { details: ChatContextDetails | null }) {
   if (!details)
     return (
       <div className="p-6 text-small text-secondary">
@@ -205,10 +210,7 @@ export function ChatContextPanel({
     ["Last activity", new Date(chat.updatedAt).toLocaleString()],
   ];
   return (
-    <div
-      className="@container h-full overflow-y-auto p-5"
-      aria-label="Chat context details"
-    >
+    <div className="@container h-full overflow-y-auto p-5" aria-label="Chat context details">
       <div className="grid items-start gap-4 @min-[760px]:grid-cols-[minmax(0,1.2fr)_minmax(0,1fr)]">
         <section className="rounded-card bg-well p-4">
           <div className="mb-4 flex items-baseline justify-between gap-3">
@@ -241,27 +243,31 @@ export function ChatContextPanel({
             <div className="mt-2 flex flex-wrap gap-1.5">
               {/* The provider chip wears the provider's mark; the model chip wears the model's own (Claude, Grok). */}
               <Chip
-                icon={details.providerId ? (
-                  <ProviderIcon
-                    providerId={details.providerId}
-                    providerLabel={details.providerLabel}
-                    artwork={details.providerArtwork}
-                    className="size-3.5"
-                  />
-                ) : undefined}
+                icon={
+                  details.providerId ? (
+                    <ProviderIcon
+                      providerId={details.providerId}
+                      providerLabel={details.providerLabel}
+                      artwork={details.providerArtwork}
+                      className="size-3.5"
+                    />
+                  ) : undefined
+                }
               >
                 {details.providerLabel || "Unknown provider"}
               </Chip>
               <Chip
-                icon={details.providerId && details.modelId ? (
-                  <ProviderIcon
-                    providerId={details.providerId}
-                    providerLabel={details.providerLabel}
-                    modelId={details.modelId}
-                    artwork={details.providerArtwork}
-                    className="size-3.5"
-                  />
-                ) : undefined}
+                icon={
+                  details.providerId && details.modelId ? (
+                    <ProviderIcon
+                      providerId={details.providerId}
+                      providerLabel={details.providerLabel}
+                      modelId={details.modelId}
+                      artwork={details.providerArtwork}
+                      className="size-3.5"
+                    />
+                  ) : undefined
+                }
               >
                 {details.modelLabel || "Unknown model"}
               </Chip>
@@ -276,7 +282,11 @@ export function ChatContextPanel({
               ))}
             </dl>
           </section>
-          <UsageSection usage={usage} lastCacheMiss={details.pressure?.lastCacheMiss} cacheKnown={details.pressure?.promptCache !== undefined} />
+          <UsageSection
+            usage={usage}
+            lastCacheMiss={details.pressure?.lastCacheMiss}
+            cacheKnown={details.pressure?.promptCache !== undefined}
+          />
         </div>
       </div>
     </div>

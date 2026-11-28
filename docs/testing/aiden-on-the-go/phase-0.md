@@ -50,14 +50,14 @@ Signed Keychain result: PASS on the same device — the approved `sbtbiswas.Aide
 
 Expanded physical lifecycle result: PASS on `Sambit’s iPhone` (iPhone 13 Pro, iOS 27.0). A fresh signed payload first repeated the correct-pin health request and wrong-pin rejection, then completed this six-case matrix with one focused XCTest and zero failures per case:
 
-| Case | Separate server process | Expected result | Result |
-| --- | --- | --- | --- |
-| Original pairing | Yes | Current pin accepted; deliberately wrong pin rejected | PASS |
-| Process restart | Yes | Persisted installation key remains accepted; wrong pin rejected | PASS |
-| Same-key renewal | Yes | Renewed certificate remains accepted; wrong pin rejected | PASS |
-| Key rotation / repair | Yes | New pin accepted only after explicit repair; original pin rejected | PASS |
-| Wrong hostname | Yes | Normal hostname validation fails closed | PASS |
-| Expired certificate | Yes | Normal validity validation fails closed | PASS |
+| Case                  | Separate server process | Expected result                                                    | Result |
+| --------------------- | ----------------------- | ------------------------------------------------------------------ | ------ |
+| Original pairing      | Yes                     | Current pin accepted; deliberately wrong pin rejected              | PASS   |
+| Process restart       | Yes                     | Persisted installation key remains accepted; wrong pin rejected    | PASS   |
+| Same-key renewal      | Yes                     | Renewed certificate remains accepted; wrong pin rejected           | PASS   |
+| Key rotation / repair | Yes                     | New pin accepted only after explicit repair; original pin rejected | PASS   |
+| Wrong hostname        | Yes                     | Normal hostname validation fails closed                            | PASS   |
+| Expired certificate   | Yes                     | Normal validity validation fails closed                            | PASS   |
 
 The matrix used one private installation-identity directory across genuinely separate Node processes. Every process issued a new ephemeral pairing secret and port, while only the intended key/certificate lifecycle property persisted. After the final duplicate-key/ATS remediation, a new signed payload repeated the signed Keychain proof and the complete six-case matrix with the same passing results. That exact built app reported the approved team/bundle/Keychain identity and no `NSAppTransportSecurity` exception dictionary. Injected test-run files, pairing bootstraps, private keys, certificates, build products, and logs were kept under private temporary paths and removed after the summarized result was recorded.
 

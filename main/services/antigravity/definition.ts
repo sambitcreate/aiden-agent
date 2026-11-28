@@ -75,11 +75,15 @@ async function ensureSignedInSettings(stateDir: string): Promise<void> {
   let settings: Record<string, unknown> = {};
   try {
     const parsed = JSON.parse(await readFile(file, "utf8")) as unknown;
-    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) settings = parsed as Record<string, unknown>;
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed))
+      settings = parsed as Record<string, unknown>;
   } catch {
     // Missing or unreadable settings are rewritten below.
   }
-  const auth = settings.auth && typeof settings.auth === "object" ? (settings.auth as Record<string, unknown>) : {};
+  const auth =
+    settings.auth && typeof settings.auth === "object"
+      ? (settings.auth as Record<string, unknown>)
+      : {};
   if (auth.type === ANTIGRAVITY_SIGN_IN_METHOD) return;
   const temporary = `${file}.${process.pid}.tmp`;
   await writeFile(
@@ -93,9 +97,10 @@ async function ensureSignedInSettings(stateDir: string): Promise<void> {
 /** The Google authorization URL Antigravity printed, if this stderr line carries one. */
 export function authorizationUrlFromStderr(line: string): string | undefined {
   const marker = line.indexOf(AUTH_URL_MARKER);
-  const candidate = marker >= 0
-    ? line.slice(marker + AUTH_URL_MARKER.length)
-    : /Open the following link to authenticate[^:]*:\s*(\S+)/u.exec(line)?.[1];
+  const candidate =
+    marker >= 0
+      ? line.slice(marker + AUTH_URL_MARKER.length)
+      : /Open the following link to authenticate[^:]*:\s*(\S+)/u.exec(line)?.[1];
   return candidate?.trim() || undefined;
 }
 
@@ -107,7 +112,9 @@ export interface AntigravityDefinitionOptions {
   hasSignIn(): Promise<boolean>;
 }
 
-export function createAntigravityDefinition(options: AntigravityDefinitionOptions): AcpHarnessDefinition {
+export function createAntigravityDefinition(
+  options: AntigravityDefinitionOptions,
+): AcpHarnessDefinition {
   return {
     id: ANTIGRAVITY_PROVIDER_ID,
     label: ANTIGRAVITY_LABEL,
@@ -118,17 +125,21 @@ export function createAntigravityDefinition(options: AntigravityDefinitionOption
     fileSystem: true,
     validateInitialize(initialize, expectedVersion) {
       const info = initialize.agentInfo;
-      if (info?.name !== ANTIGRAVITY_AGENT_NAME) return "The installed runtime is not Google Antigravity.";
+      if (info?.name !== ANTIGRAVITY_AGENT_NAME)
+        return "The installed runtime is not Google Antigravity.";
       const version = (info.version ?? "").replace(/^agy_acp_server_/u, "");
       if (version !== expectedVersion) {
         return `The installed runtime is version ${version || "unknown"}, but Aiden expects ${expectedVersion}. Reinstall it in Settings.`;
       }
-      if (initialize.protocolVersion !== 1) return "The installed runtime speaks an unsupported protocol version.";
+      if (initialize.protocolVersion !== 1)
+        return "The installed runtime speaks an unsupported protocol version.";
       const capabilities = initialize.agentCapabilities;
       if (!capabilities?.sessionCapabilities?.resume && capabilities?.loadSession !== true) {
         return "The installed runtime cannot restore sessions.";
       }
-      if (!(initialize.authMethods ?? []).some((method) => method.id === ANTIGRAVITY_SIGN_IN_METHOD)) {
+      if (
+        !(initialize.authMethods ?? []).some((method) => method.id === ANTIGRAVITY_SIGN_IN_METHOD)
+      ) {
         return "The installed runtime does not offer Google sign-in.";
       }
       return undefined;
@@ -136,7 +147,10 @@ export function createAntigravityDefinition(options: AntigravityDefinitionOption
     async prepareLaunch(context: AcpLaunchContext) {
       const profile = antigravityProfileDir(context.stateDir);
       await mkdir(profile, { recursive: true, mode: 0o700 });
-      if ((context.purpose === "chat" || context.purpose === "catalog") && (await options.hasSignIn())) {
+      if (
+        (context.purpose === "chat" || context.purpose === "catalog") &&
+        (await options.hasSignIn())
+      ) {
         await ensureSignedInSettings(context.stateDir);
       }
       const env = buildChildEnvironment({
@@ -146,7 +160,9 @@ export function createAntigravityDefinition(options: AntigravityDefinitionOption
           AGY_ACP_FORCE_FILE_STORAGE: "1",
           ANTIGRAVITY_HARNESS_PATH: path.join(context.runtimeDir, ANTIGRAVITY_HARNESS_MEMBER),
           PYTHONUNBUFFERED: "1",
-          TMPDIR: context.tmpDir.endsWith(path.sep) ? context.tmpDir : `${context.tmpDir}${path.sep}`,
+          TMPDIR: context.tmpDir.endsWith(path.sep)
+            ? context.tmpDir
+            : `${context.tmpDir}${path.sep}`,
           TEMP: context.tmpDir,
           TMP: context.tmpDir,
           ...(context.browserHook ? { BROWSER: context.browserHook } : {}),
@@ -164,7 +180,10 @@ export function createAntigravityDefinition(options: AntigravityDefinitionOption
     fallbackModels: fallbackAntigravityModels,
     projectModels(configOptions) {
       const { configId, choices } = modelChoicesFromConfig(configOptions);
-      return { models: projectNativeModels(choices), ...(configId ? { modelConfigId: configId } : {}) };
+      return {
+        models: projectNativeModels(choices),
+        ...(configId ? { modelConfigId: configId } : {}),
+      };
     },
     nativeModelId: nativeAntigravityModelId,
     classifyPermission: classifyAntigravityPermission,
@@ -184,13 +203,18 @@ export function classifyAntigravityPermission(request: RequestPermissionRequest)
       kind: "question" as const,
       question: {
         title: (request.toolCall.title ?? "").trim().slice(0, 400) || "Choose an option.",
-        options: request.options.map((option) => ({ id: option.optionId, label: option.name.slice(0, 120) })),
+        options: request.options.map((option) => ({
+          id: option.optionId,
+          label: option.name.slice(0, 120),
+        })),
       },
     };
   }
   let warning: string | undefined;
   for (const option of request.options) {
-    const meta = option._meta?.[SECURITY_WARNING_META] as { title?: unknown; message?: unknown } | undefined;
+    const meta = option._meta?.[SECURITY_WARNING_META] as
+      | { title?: unknown; message?: unknown }
+      | undefined;
     if (typeof meta?.message === "string" && meta.message.trim()) {
       warning = meta.message.trim().slice(0, 600);
       break;

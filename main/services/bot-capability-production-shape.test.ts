@@ -91,13 +91,31 @@ test("Bot provider signatures survive an OAuth token refresh but not a different
     isBuiltin: true,
   };
 
-  stored = { type: "oauth", access: "access-1", refresh: "refresh-1", expires: 1_000, accountId: "account-a" };
+  stored = {
+    type: "oauth",
+    access: "access-1",
+    refresh: "refresh-1",
+    expires: 1_000,
+    accountId: "account-a",
+  };
   const signedIn = await sign(codex, key, signal);
   // Pi refreshes in place: every token field rotates, the account does not.
-  stored = { type: "oauth", access: "access-2", refresh: "refresh-2", expires: 4_600_000, accountId: "account-a" };
+  stored = {
+    type: "oauth",
+    access: "access-2",
+    refresh: "refresh-2",
+    expires: 4_600_000,
+    accountId: "account-a",
+  };
   assert.equal(await sign(codex, key, signal), signedIn);
 
-  stored = { type: "oauth", access: "access-3", refresh: "refresh-3", expires: 9_000, accountId: "account-b" };
+  stored = {
+    type: "oauth",
+    access: "access-3",
+    refresh: "refresh-3",
+    expires: 9_000,
+    accountId: "account-b",
+  };
   assert.notEqual(await sign(codex, key, signal), signedIn);
   stored = undefined;
   assert.equal(await sign(codex, key, signal), undefined);
@@ -327,26 +345,55 @@ test("global Skills pause preserves real incarnations and exact saved Bot grants
       mintIncarnation: () => Buffer.alloc(32, ++randomCounter).toString("base64url"),
     });
     await store.initialize();
-    const catalog = createBotCapabilityCatalogMainService(createBotCapabilityInventoryPorts({
-      loadOpaqueSelectionKey: async () => Buffer.alloc(32, 21),
-      loadNoticeStatus: (audience) => store.noticeStatus(audience),
-      listProviders: async () => [{ id: "provider", kind: "openai", label: "Provider", baseUrl: "", models: ["chat"], needsKey: false, hasKey: false }],
-      providerCredentialSignature: async () => hash("credential"),
-      listMcpServers: async () => [],
-      inspectMcpScopes: async () => [],
-      listSkills: async (target) => {
-        discoveries += 1;
-        return [
-          { sourceId: "global-skill", label: "Global", description: "Global skill", instructions: instruction, available: true },
-          ...(target ? [{ sourceId: `private-${target.botId}`, label: "Private", description: "Bot skill", instructions: instruction, available: true, incarnationPartition: `bot:${target.botId}` }] : []),
-        ];
-      },
-      listApprovedLocations: async () => [],
-      incarnations: createBotCapabilityIncarnationStore(store),
-      getSettings: async () => ({ skillsEnabled }),
-      webSearchAvailability: async () => ({ ready: false }),
-      subagentsAvailable: () => false,
-    }));
+    const catalog = createBotCapabilityCatalogMainService(
+      createBotCapabilityInventoryPorts({
+        loadOpaqueSelectionKey: async () => Buffer.alloc(32, 21),
+        loadNoticeStatus: (audience) => store.noticeStatus(audience),
+        listProviders: async () => [
+          {
+            id: "provider",
+            kind: "openai",
+            label: "Provider",
+            baseUrl: "",
+            models: ["chat"],
+            needsKey: false,
+            hasKey: false,
+          },
+        ],
+        providerCredentialSignature: async () => hash("credential"),
+        listMcpServers: async () => [],
+        inspectMcpScopes: async () => [],
+        listSkills: async (target) => {
+          discoveries += 1;
+          return [
+            {
+              sourceId: "global-skill",
+              label: "Global",
+              description: "Global skill",
+              instructions: instruction,
+              available: true,
+            },
+            ...(target
+              ? [
+                  {
+                    sourceId: `private-${target.botId}`,
+                    label: "Private",
+                    description: "Bot skill",
+                    instructions: instruction,
+                    available: true,
+                    incarnationPartition: `bot:${target.botId}`,
+                  },
+                ]
+              : []),
+          ];
+        },
+        listApprovedLocations: async () => [],
+        incarnations: createBotCapabilityIncarnationStore(store),
+        getSettings: async () => ({ skillsEnabled }),
+        webSearchAvailability: async () => ({ ready: false }),
+        subagentsAvailable: () => false,
+      }),
+    );
     return { store, catalog };
   };
   let { store, catalog } = await createServices();
@@ -367,9 +414,25 @@ test("global Skills pause preserves real incarnations and exact saved Bot grants
     skillIds: enabled.catalog.skills.map(({ id }) => id),
     otherCapabilityIds: [],
   };
-  const saved = await catalog.bindCustom({ audienceId, botId, selection: custom, catalogRevision: enabled.catalog.revision, snapshot: enabled });
-  const policy = await store.createBotPolicy({ botId, catalog: enabled.catalog, access: { accessMode: "custom", custom, catalogRevision: enabled.catalog.revision }, binding: saved });
-  const chat = await store.createChatPolicy({ botId, chatId: "chat:paused", expectedBotPolicyRevision: policy.revision, catalog: enabled.catalog });
+  const saved = await catalog.bindCustom({
+    audienceId,
+    botId,
+    selection: custom,
+    catalogRevision: enabled.catalog.revision,
+    snapshot: enabled,
+  });
+  const policy = await store.createBotPolicy({
+    botId,
+    catalog: enabled.catalog,
+    access: { accessMode: "custom", custom, catalogRevision: enabled.catalog.revision },
+    binding: saved,
+  });
+  const chat = await store.createChatPolicy({
+    botId,
+    chatId: "chat:paused",
+    expectedBotPolicyRevision: policy.revision,
+    catalog: enabled.catalog,
+  });
   const discoveryCount = discoveries;
   skillsEnabled = false;
   const paused = await catalog.snapshot({ audienceId, botId, retainedBindings: [saved] });
@@ -383,22 +446,76 @@ test("global Skills pause preserves real incarnations and exact saved Bot grants
   const admitted = await store.admit({ audienceId, botId, chatId: chat.chatId, snapshot: paused });
   admitted.lease.release();
   const edited = { ...custom, shellEnabled: true };
-  const retained = await catalog.bindCustom({ audienceId, botId, selection: edited, catalogRevision: paused.catalog.revision, snapshot: paused, retainedBindings: [saved] });
+  const retained = await catalog.bindCustom({
+    audienceId,
+    botId,
+    selection: edited,
+    catalogRevision: paused.catalog.revision,
+    snapshot: paused,
+    retainedBindings: [saved],
+  });
   assert.deepEqual(retained.skills, saved.skills, "unrelated edit retains exact fingerprints");
-  const updated = await store.updateBotPolicy({ botId, expectedRevision: policy.revision, catalog: paused.catalog, access: { accessMode: "custom", custom: edited, catalogRevision: paused.catalog.revision }, binding: retained });
-  await store.updateChatPolicy({ chatId: chat.chatId, expectedRevision: chat.revision, catalog: paused.catalog, access: { mode: "custom", custom, expectedBotPolicyRevision: updated.revision, catalogRevision: paused.catalog.revision } });
-  await assert.rejects(catalog.bindCustom({ audienceId, botId, selection: edited, catalogRevision: paused.catalog.revision, snapshot: paused }), /disabled/u);
-  await assert.rejects(catalog.bindCustom({ audienceId, botId, selection: { ...edited, skillIds: [...edited.skillIds, "skill:unknown"] }, catalogRevision: paused.catalog.revision, snapshot: paused, retainedBindings: [saved] }), /disabled/u);
+  const updated = await store.updateBotPolicy({
+    botId,
+    expectedRevision: policy.revision,
+    catalog: paused.catalog,
+    access: { accessMode: "custom", custom: edited, catalogRevision: paused.catalog.revision },
+    binding: retained,
+  });
+  await store.updateChatPolicy({
+    chatId: chat.chatId,
+    expectedRevision: chat.revision,
+    catalog: paused.catalog,
+    access: {
+      mode: "custom",
+      custom,
+      expectedBotPolicyRevision: updated.revision,
+      catalogRevision: paused.catalog.revision,
+    },
+  });
+  await assert.rejects(
+    catalog.bindCustom({
+      audienceId,
+      botId,
+      selection: edited,
+      catalogRevision: paused.catalog.revision,
+      snapshot: paused,
+    }),
+    /disabled/u,
+  );
+  await assert.rejects(
+    catalog.bindCustom({
+      audienceId,
+      botId,
+      selection: { ...edited, skillIds: [...edited.skillIds, "skill:unknown"] },
+      catalogRevision: paused.catalog.revision,
+      snapshot: paused,
+      retainedBindings: [saved],
+    }),
+    /disabled/u,
+  );
   ({ store, catalog } = await createServices());
   skillsEnabled = true;
   const resumed = await catalog.snapshot({ audienceId, botId, retainedBindings: [retained] });
-  assert.deepEqual(resumed.resources.skills, enabled.resources.skills, "disable/read/restart/enable must not churn incarnations");
-  const resumedAdmission = await store.admit({ audienceId, botId, chatId: chat.chatId, snapshot: resumed });
+  assert.deepEqual(
+    resumed.resources.skills,
+    enabled.resources.skills,
+    "disable/read/restart/enable must not churn incarnations",
+  );
+  const resumedAdmission = await store.admit({
+    audienceId,
+    botId,
+    chatId: chat.chatId,
+    snapshot: resumed,
+  });
   resumedAdmission.lease.release();
   skillsEnabled = false;
   await catalog.snapshot({ audienceId, botId, retainedBindings: [retained] });
   instruction = "Changed while paused";
   skillsEnabled = true;
   const changed = await catalog.snapshot({ audienceId, botId, retainedBindings: [retained] });
-  await assert.rejects(store.admit({ audienceId, botId, chatId: chat.chatId, snapshot: changed }), /changed|current|capabilit/iu);
+  await assert.rejects(
+    store.admit({ audienceId, botId, chatId: chat.chatId, snapshot: changed }),
+    /changed|current|capabilit/iu,
+  );
 });

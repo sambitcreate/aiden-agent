@@ -171,7 +171,9 @@ export function removeProviderWithCredentialCleanup(
   return mutatePortableConfigAndSync(() =>
     serialized(async () => {
       if (!isCurrent()) throw new Error("The renderer document is no longer active.");
-      if (!providerTransitionNeedsCredentialAccess(await configStore.getProvider(providerId), null)) {
+      if (
+        !providerTransitionNeedsCredentialAccess(await configStore.getProvider(providerId), null)
+      ) {
         // As when saving, a keyless local provider must be removable on a Linux
         // desktop with no keyring session, so this never reads or writes secrets.
         await configStore.removeProvider(providerId, isCurrent);
@@ -229,9 +231,7 @@ export function reconcileExternalProviderCredentialChanges(
       .filter(({ before, after }) =>
         after ? !sameProviderConnection(before, after) : Boolean(before),
       )
-      .filter(({ before, after }) =>
-        providerTransitionNeedsCredentialAccess(before, after),
-      );
+      .filter(({ before, after }) => providerTransitionNeedsCredentialAccess(before, after));
     if (transitions.length === 0) return;
 
     // The watcher already selected `current` from one authoritative reload.

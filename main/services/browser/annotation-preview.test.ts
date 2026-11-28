@@ -10,10 +10,7 @@ import {
 // A small CSSOM test boundary executes the actual emitted page expression. In
 // particular, shorthand declarations expand and can replace existing longhands.
 class InlineStyle {
-  private readonly values = new Map<
-    string,
-    { value: string; priority: string }
-  >();
+  private readonly values = new Map<string, { value: string; priority: string }>();
   get length() {
     return this.values.size;
   }
@@ -43,10 +40,7 @@ class InlineStyle {
   }
   get cssText() {
     return [...this.values]
-      .map(
-        ([property, item]) =>
-          `${property}: ${item.value}${item.priority ? " !important" : ""};`,
-      )
+      .map(([property, item]) => `${property}: ${item.value}${item.priority ? " !important" : ""};`)
       .join(" ");
   }
   set cssText(value: string) {
@@ -94,9 +88,7 @@ function fixture() {
     },
     getComputedStyle: (target: ReturnType<typeof element>) => ({
       getPropertyValue: (property: string) =>
-        target.style.getPropertyValue(property) ||
-        target.computed[property] ||
-        "",
+        target.style.getPropertyValue(property) || target.computed[property] || "",
     }),
     __aidenPlaywright: {
       parseSelector(selector: string) {
@@ -168,9 +160,7 @@ test("complete desired updates restore removed targets/properties and keep the f
   assert.equal(result[0].changes.color.previous, "blue");
   assert.equal(f.first.style.getPropertyValue("width"), "");
   assert.equal(f.second.style.getPropertyValue("color"), "green");
-  await f.service.apply([
-    { ref: "new-ref", selector: "#first", styles: { color: "" } },
-  ]);
+  await f.service.apply([{ ref: "new-ref", selector: "#first", styles: { color: "" } }]);
   assert.equal(f.first.style.getPropertyValue("color"), "blue");
 });
 
@@ -197,9 +187,7 @@ test("resolves strict Playwright selectors including shadow targets and refuses 
   const f = fixture();
   const shadowSelector = 'internal:role=button[name="Save"s]';
   f.targets.set(shadowSelector, [f.first]);
-  await f.service.apply([
-    { ref: "shadow", selector: shadowSelector, styles: { color: "red" } },
-  ]);
+  await f.service.apply([{ ref: "shadow", selector: shadowSelector, styles: { color: "red" } }]);
   assert.equal(f.parsed[0], shadowSelector);
   for (const selector of [".many", "#missing"]) {
     await assert.rejects(
@@ -220,9 +208,7 @@ test("resolves strict Playwright selectors including shadow targets and refuses 
   );
   f.first.isConnected = false;
   await assert.rejects(
-    f.service.apply([
-      { ref: "old", selector: "#first", styles: { color: "orange" } },
-    ]),
+    f.service.apply([{ ref: "old", selector: "#first", styles: { color: "orange" } }]),
     /no longer/,
   );
   await f.service.reset();
@@ -231,9 +217,7 @@ test("resolves strict Playwright selectors including shadow targets and refuses 
 
 test("invalid CSS never partially updates existing previews or a second element", async () => {
   const f = fixture();
-  await f.service.apply([
-    { ref: "first", selector: "#first", styles: { color: "red" } },
-  ]);
+  await f.service.apply([{ ref: "first", selector: "#first", styles: { color: "red" } }]);
   await assert.rejects(
     f.service.apply([
       { ref: "first", selector: "#first", styles: { color: "orange" } },
@@ -296,9 +280,7 @@ test("bounded builders reject invalid inputs and quote selectors instead of exec
       buildBrowserAnnotationPreviewApplyExpression([
         {
           ...input,
-          styles: Object.fromEntries(
-            Array.from({ length: 41 }, (_, i) => [`--x${i}`, "1"]),
-          ),
+          styles: Object.fromEntries(Array.from({ length: 41 }, (_, i) => [`--x${i}`, "1"])),
         },
       ]),
     /40/,
@@ -317,10 +299,7 @@ test("bounded builders reject invalid inputs and quote selectors instead of exec
       ]),
     /2000/,
   );
-  assert.throws(
-    () => buildBrowserAnnotationPreviewApplyExpression([input, input]),
-    /only once/,
-  );
+  assert.throws(() => buildBrowserAnnotationPreviewApplyExpression([input, input]), /only once/);
   const f = fixture();
   const quoted = '#first");globalThis.injected=true;//';
   f.targets.set(quoted, [f.first]);

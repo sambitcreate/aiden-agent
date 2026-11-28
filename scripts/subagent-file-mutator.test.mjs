@@ -70,10 +70,7 @@ function prepareCommand(id, expected, relativePath, contents) {
 }
 
 function recoveryPattern(id) {
-  return new RegExp(
-    `^\\.aiden-subagent-file-${id}-[a-f0-9-]{36}\\.tmp$`,
-    "u",
-  );
+  return new RegExp(`^\\.aiden-subagent-file-${id}-[a-f0-9-]{36}\\.tmp$`, "u");
 }
 
 async function rootIdentity(root) {
@@ -84,8 +81,14 @@ async function rootIdentity(root) {
 async function parentEdit(root, relativePath, fileIdentity, original, updated) {
   const rootStat = await rootIdentity(root);
   const args = [
-    "edit-file", root, rootStat.device, rootStat.inode, relativePath,
-    fileIdentity.device, fileIdentity.inode, sha256(original),
+    "edit-file",
+    root,
+    rootStat.device,
+    rootStat.inode,
+    relativePath,
+    fileIdentity.device,
+    fileIdentity.inode,
+    sha256(original),
     String(Buffer.byteLength(updated)),
   ];
   return new Promise((resolve, reject) => {
@@ -95,11 +98,13 @@ async function parentEdit(root, relativePath, fileIdentity, original, updated) {
     child.stdout.on("data", (chunk) => output.push(chunk));
     child.stderr.on("data", (chunk) => errors.push(chunk));
     child.on("error", reject);
-    child.on("close", (code) => resolve({
-      code,
-      stdout: Buffer.concat(output).toString("utf8"),
-      stderr: Buffer.concat(errors).toString("utf8"),
-    }));
+    child.on("close", (code) =>
+      resolve({
+        code,
+        stdout: Buffer.concat(output).toString("utf8"),
+        stderr: Buffer.concat(errors).toString("utf8"),
+      }),
+    );
     child.stdin.on("error", () => undefined);
     child.stdin.end(updated);
   });
@@ -108,7 +113,11 @@ async function parentEdit(root, relativePath, fileIdentity, original, updated) {
 async function parentWrite(root, relativePath, before, updated) {
   const rootStat = await rootIdentity(root);
   const args = [
-    "write-file", root, rootStat.device, rootStat.inode, relativePath,
+    "write-file",
+    root,
+    rootStat.device,
+    rootStat.inode,
+    relativePath,
     ...(before
       ? ["existing", before.identity.device, before.identity.inode, sha256(before.contents)]
       : ["new"]),
@@ -121,24 +130,19 @@ async function parentWrite(root, relativePath, before, updated) {
     child.stdout.on("data", (chunk) => output.push(chunk));
     child.stderr.on("data", (chunk) => errors.push(chunk));
     child.on("error", reject);
-    child.on("close", (code) => resolve({
-      code,
-      stdout: Buffer.concat(output).toString("utf8"),
-      stderr: Buffer.concat(errors).toString("utf8"),
-    }));
+    child.on("close", (code) =>
+      resolve({
+        code,
+        stdout: Buffer.concat(output).toString("utf8"),
+        stderr: Buffer.concat(errors).toString("utf8"),
+      }),
+    );
     child.stdin.on("error", () => undefined);
     child.stdin.end(updated);
   });
 }
 
-function startHelper(
-  t,
-  root,
-  executable = productionBinary,
-  environment = {},
-  uid,
-  gid,
-) {
+function startHelper(t, root, executable = productionBinary, environment = {}, uid, gid) {
   let child;
   let output = "";
   const lines = [];
@@ -148,21 +152,17 @@ function startHelper(
   let closed = Promise.resolve({ code: null, signal: null });
 
   const started = rootIdentity(root).then(({ device, inode }) => {
-    child = spawn(
-      executable,
-      ["serve", "--root", root, "--device", device, "--inode", inode],
-      {
-        ...(uid === undefined ? {} : { uid }),
-        ...(gid === undefined ? {} : { gid }),
-        env: {
-          PATH: "/usr/bin:/bin:/usr/sbin:/sbin",
-          LANG: "C",
-          LC_ALL: "C",
-          ...environment,
-        },
-        stdio: ["pipe", "pipe", "pipe"],
+    child = spawn(executable, ["serve", "--root", root, "--device", device, "--inode", inode], {
+      ...(uid === undefined ? {} : { uid }),
+      ...(gid === undefined ? {} : { gid }),
+      env: {
+        PATH: "/usr/bin:/bin:/usr/sbin:/sbin",
+        LANG: "C",
+        LC_ALL: "C",
+        ...environment,
       },
-    );
+      stdio: ["pipe", "pipe", "pipe"],
+    });
     child.stdout.on("data", (chunk) => {
       output += chunk.toString("utf8");
       for (;;) {
@@ -184,9 +184,7 @@ function startHelper(
       child.once("close", (code, signal) => {
         const detail = Buffer.concat(stderr).toString("utf8").trim();
         if ((code !== 0 || signal !== null) && !failure) {
-          failure = new Error(
-            detail || `File mutator exited with ${signal ?? code}.`,
-          );
+          failure = new Error(detail || `File mutator exited with ${signal ?? code}.`);
           for (const waiter of waiters.splice(0)) waiter.reject(failure);
         }
         resolve({ code, signal });
@@ -293,15 +291,10 @@ test("inspect pins descriptor-relative content before preparing a postimage", as
     "inspected inspect-create absent",
   );
   assert.equal(
-    await helper.request(
-      `prepare-inspected inspect-create absent ${encoded("created\n")}`,
-    ),
+    await helper.request(`prepare-inspected inspect-create absent ${encoded("created\n")}`),
     `prepared inspect-create ${sha256("created\n")} 8`,
   );
-  assert.match(
-    await helper.request("commit inspect-create"),
-    /^committed inspect-create /u,
-  );
+  assert.match(await helper.request("commit inspect-create"), /^committed inspect-create /u);
   assert.equal(await readFile(path.join(root, "new.txt"), "utf8"), "created\n");
   await helper.close();
 });
@@ -460,18 +453,11 @@ test("preserve and finalize reject recovery metadata drift", async (t) => {
     const helper = startHelper(t, root);
     assert.match(
       await helper.request(
-        prepareCommand(
-          `recovery-${variant}`,
-          sha256("original\n"),
-          "file.txt",
-          "replacement\n",
-        ),
+        prepareCommand(`recovery-${variant}`, sha256("original\n"), "file.txt", "replacement\n"),
       ),
       new RegExp(`^prepared recovery-${variant} `, "u"),
     );
-    const recoveryName = (
-      await helper.request(`commit recovery-${variant}`)
-    ).split(" ").at(-1);
+    const recoveryName = (await helper.request(`commit recovery-${variant}`)).split(" ").at(-1);
     assert.ok(recoveryName);
     const recovery = path.join(root, recoveryName);
     if (variant === "mode") {
@@ -479,30 +465,14 @@ test("preserve and finalize reject recovery metadata drift", async (t) => {
     } else if (variant === "user-xattr") {
       await setLinuxUserXattr(recovery, "changed");
     } else if (variant === "provenance") {
-      await execFileAsync("/usr/bin/xattr", [
-        "-w",
-        "com.apple.provenance",
-        "changed",
-        recovery,
-      ]);
+      await execFileAsync("/usr/bin/xattr", ["-w", "com.apple.provenance", "changed", recovery]);
     } else if (variant === "unknown-xattr") {
-      await execFileAsync("/usr/bin/xattr", [
-        "-w",
-        "user.aiden-test",
-        "value",
-        recovery,
-      ]);
+      await execFileAsync("/usr/bin/xattr", ["-w", "user.aiden-test", "value", recovery]);
     } else {
       await execFileAsync("/bin/chmod", ["+a", "everyone deny delete", recovery]);
     }
-    assert.equal(
-      await helper.request(`preserve recovery-${variant}`),
-      "error conflict",
-    );
-    assert.equal(
-      await helper.request(`finalize recovery-${variant}`),
-      "error conflict",
-    );
+    assert.equal(await helper.request(`preserve recovery-${variant}`), "error conflict");
+    assert.equal(await helper.request(`finalize recovery-${variant}`), "error conflict");
     if (variant === "acl") {
       await execFileAsync("/bin/chmod", ["-N", recovery]);
     }
@@ -544,12 +514,7 @@ test("replacement commit fsync failure requires a successful preserve sync", asy
   });
   assert.match(
     await helper.request(
-      prepareCommand(
-        "commit-fsync-1",
-        sha256("original\n"),
-        "file.txt",
-        "replacement\n",
-      ),
+      prepareCommand("commit-fsync-1", sha256("original\n"), "file.txt", "replacement\n"),
     ),
     /^prepared commit-fsync-1 /u,
   );
@@ -563,15 +528,10 @@ test("replacement commit fsync failure requires a successful preserve sync", asy
   assert.equal(await helper.request("preserve commit-fsync-1"), "preserved commit-fsync-1");
   assert.equal(await readFile(path.join(root, recoveryName), "utf8"), "original\n");
   assert.match(
-    await helper.request(
-      prepareCommand("after-commit-fsync", "absent", "next.txt", "next\n"),
-    ),
+    await helper.request(prepareCommand("after-commit-fsync", "absent", "next.txt", "next\n")),
     /^prepared after-commit-fsync /u,
   );
-  assert.equal(
-    await helper.request("cancel after-commit-fsync"),
-    "cancelled after-commit-fsync",
-  );
+  assert.equal(await helper.request("cancel after-commit-fsync"), "cancelled after-commit-fsync");
   await helper.close();
 });
 
@@ -607,27 +567,13 @@ test("a replayed replacement commit cannot clear its recovery transaction", asyn
   const helper = startHelper(t, root);
   assert.match(
     await helper.request(
-      prepareCommand(
-        "replay-replace",
-        sha256("original\n"),
-        "file.txt",
-        "replacement\n",
-      ),
+      prepareCommand("replay-replace", sha256("original\n"), "file.txt", "replacement\n"),
     ),
     /^prepared replay-replace /u,
   );
-  assert.match(
-    await helper.request("commit replay-replace"),
-    /^committed replay-replace /u,
-  );
-  assert.equal(
-    await helper.request("commit replay-replace"),
-    "error invalid_input",
-  );
-  assert.equal(
-    await helper.request("finalize replay-replace"),
-    "finalized replay-replace",
-  );
+  assert.match(await helper.request("commit replay-replace"), /^committed replay-replace /u);
+  assert.equal(await helper.request("commit replay-replace"), "error invalid_input");
+  assert.equal(await helper.request("finalize replay-replace"), "finalized replay-replace");
   await helper.close();
 });
 
@@ -645,7 +591,9 @@ test("rejects stale revisions, symlinks, and multiply-linked targets", async (t)
     "error conflict",
   );
   assert.equal(
-    await helper.request(prepareCommand("parent-link", sha256("current\n"), "linked-directory/file.txt", "new\n")),
+    await helper.request(
+      prepareCommand("parent-link", sha256("current\n"), "linked-directory/file.txt", "new\n"),
+    ),
     "error conflict",
   );
   assert.equal(
@@ -699,7 +647,13 @@ test("parent edit opens below the pinned root and refuses swapped symlinks", asy
 
   await rename(target, path.join(directory, "original.txt"));
   await symlink(outsideFile, target);
-  const rejectedTarget = await parentEdit(root, "nested/edit.txt", identity, "after\n", "changed\n");
+  const rejectedTarget = await parentEdit(
+    root,
+    "nested/edit.txt",
+    identity,
+    "after\n",
+    "changed\n",
+  );
   assert.equal(rejectedTarget.code, 1);
   assert.equal(rejectedTarget.stderr, "conflict\n");
   assert.equal(await readFile(outsideFile, "utf8"), "outside\n");
@@ -707,11 +661,20 @@ test("parent edit opens below the pinned root and refuses swapped symlinks", asy
   await rm(target);
   await rename(directory, path.join(root, "original-directory"));
   await symlink(outside, directory);
-  const rejectedAncestor = await parentEdit(root, "nested/original.txt", identity, "after\n", "changed\n");
+  const rejectedAncestor = await parentEdit(
+    root,
+    "nested/original.txt",
+    identity,
+    "after\n",
+    "changed\n",
+  );
   assert.equal(rejectedAncestor.code, 1);
   assert.equal(rejectedAncestor.stderr, "conflict\n");
   assert.equal(await readFile(outsideFile, "utf8"), "outside\n");
-  assert.equal(await readFile(path.join(root, "original-directory", "original.txt"), "utf8"), "after\n");
+  assert.equal(
+    await readFile(path.join(root, "original-directory", "original.txt"), "utf8"),
+    "after\n",
+  );
 });
 
 test("parent write creates directories and refuses changed or linked targets", async (t) => {
@@ -722,16 +685,22 @@ test("parent write creates directories and refuses changed or linked targets", a
   const target = path.join(root, relative);
   const outsideFile = path.join(outside, "write.txt");
   await writeFile(outsideFile, "outside\n");
-  assert.deepEqual(await parentWrite(root, relative, undefined, "created\n"),
-    { code: 0, stdout: "written\n", stderr: "" });
+  assert.deepEqual(await parentWrite(root, relative, undefined, "created\n"), {
+    code: 0,
+    stdout: "written\n",
+    stderr: "",
+  });
   assert.equal(await readFile(target, "utf8"), "created\n");
   const first = await stat(target, { bigint: true });
   const before = {
     identity: { device: first.dev.toString(), inode: first.ino.toString() },
     contents: "created\n",
   };
-  assert.deepEqual(await parentWrite(root, relative, before, "overwritten\n"),
-    { code: 0, stdout: "written\n", stderr: "" });
+  assert.deepEqual(await parentWrite(root, relative, before, "overwritten\n"), {
+    code: 0,
+    stdout: "written\n",
+    stderr: "",
+  });
   assert.equal(await readFile(target, "utf8"), "overwritten\n");
   assert.equal((await stat(target, { bigint: true })).ino, first.ino);
   const stale = await parentWrite(root, relative, before, "stale\n");
@@ -739,10 +708,15 @@ test("parent write creates directories and refuses changed or linked targets", a
   assert.equal(await readFile(target, "utf8"), "overwritten\n");
   const outsideLink = path.join(outside, "linked.txt");
   await link(target, outsideLink);
-  const linked = await parentWrite(root, relative, {
-    identity: before.identity,
-    contents: "overwritten\n",
-  }, "escaped\n");
+  const linked = await parentWrite(
+    root,
+    relative,
+    {
+      identity: before.identity,
+      contents: "overwritten\n",
+    },
+    "escaped\n",
+  );
   assert.equal(linked.stderr, "conflict\n");
   assert.equal(await readFile(outsideLink, "utf8"), "overwritten\n");
   await rm(outsideLink);
@@ -756,7 +730,10 @@ test("parent write creates directories and refuses changed or linked targets", a
   await symlink(outside, path.join(root, "nested"));
   assert.equal((await parentWrite(root, relative, undefined, "escaped\n")).stderr, "conflict\n");
   assert.equal(await readFile(outsideFile, "utf8"), "outside\n");
-  assert.equal(await readFile(path.join(root, "original-directory", "deeper", "original.txt"), "utf8"), "overwritten\n");
+  assert.equal(
+    await readFile(path.join(root, "original-directory", "deeper", "original.txt"), "utf8"),
+    "overwritten\n",
+  );
 });
 
 test("a replacement in the final install race is atomically rolled back", async (t) => {
@@ -801,20 +778,13 @@ test("a late mode change to the staged inode is rejected before install", async 
   });
   assert.match(
     await helper.request(
-      prepareCommand(
-        "mode-race",
-        sha256("original\n"),
-        "file.txt",
-        "replacement\n",
-      ),
+      prepareCommand("mode-race", sha256("original\n"), "file.txt", "replacement\n"),
     ),
     /^prepared mode-race /u,
   );
   const pendingCommit = helper.request("commit mode-race");
   await waitForFile(marker);
-  const stageName = (await readdir(root)).find((name) =>
-    recoveryPattern("mode-race").test(name),
-  );
+  const stageName = (await readdir(root)).find((name) => recoveryPattern("mode-race").test(name));
   assert.ok(stageName);
   await chmod(path.join(root, stageName), 0o777);
   await writeFile(`${marker}.continue`, "continue\n");
@@ -839,12 +809,7 @@ test("a late target mode change is rejected before staging", async (t) => {
   });
   assert.match(
     await helper.request(
-      prepareCommand(
-        "target-mode-race",
-        sha256("original\n"),
-        "file.txt",
-        "replacement\n",
-      ),
+      prepareCommand("target-mode-race", sha256("original\n"), "file.txt", "replacement\n"),
     ),
     /^prepared target-mode-race /u,
   );
@@ -879,12 +844,7 @@ test("metadata policy preserves provenance and rejects drift, unknown xattrs, an
   const ordinaryHelper = startHelper(t, root);
   assert.match(
     await ordinaryHelper.request(
-      prepareCommand(
-        "metadata-ordinary",
-        sha256("original\n"),
-        "ordinary.txt",
-        "replacement\n",
-      ),
+      prepareCommand("metadata-ordinary", sha256("original\n"), "ordinary.txt", "replacement\n"),
     ),
     /^prepared metadata-ordinary /u,
   );
@@ -910,23 +870,13 @@ test("metadata policy preserves provenance and rejects drift, unknown xattrs, an
   });
   assert.match(
     await driftHelper.request(
-      prepareCommand(
-        "metadata-drift",
-        sha256("original\n"),
-        "drift.txt",
-        "replacement\n",
-      ),
+      prepareCommand("metadata-drift", sha256("original\n"), "drift.txt", "replacement\n"),
     ),
     /^prepared metadata-drift /u,
   );
   const driftCommit = driftHelper.request("commit metadata-drift");
   await waitForFile(marker);
-  await execFileAsync("/usr/bin/xattr", [
-    "-w",
-    "com.apple.provenance",
-    "changed",
-    drift,
-  ]);
+  await execFileAsync("/usr/bin/xattr", ["-w", "com.apple.provenance", "changed", drift]);
   await writeFile(`${marker}.continue`, "continue\n");
   assert.equal(await driftCommit, "error conflict");
   await driftHelper.close();
@@ -937,12 +887,7 @@ test("metadata policy preserves provenance and rejects drift, unknown xattrs, an
   const unknownHelper = startHelper(t, root);
   assert.equal(
     await unknownHelper.request(
-      prepareCommand(
-        "metadata-unknown",
-        sha256("original\n"),
-        "unknown.txt",
-        "replacement\n",
-      ),
+      prepareCommand("metadata-unknown", sha256("original\n"), "unknown.txt", "replacement\n"),
     ),
     "error conflict",
   );
@@ -955,12 +900,7 @@ test("metadata policy preserves provenance and rejects drift, unknown xattrs, an
     const aclHelper = startHelper(t, root);
     assert.equal(
       await aclHelper.request(
-        prepareCommand(
-          "metadata-acl",
-          sha256("original\n"),
-          "acl.txt",
-          "replacement\n",
-        ),
+        prepareCommand("metadata-acl", sha256("original\n"), "acl.txt", "replacement\n"),
       ),
       "error conflict",
     );
@@ -1012,12 +952,7 @@ test("Linux metadata policy preserves user xattrs and rejects xattr drift", asyn
   });
   assert.match(
     await driftHelper.request(
-      prepareCommand(
-        "linux-metadata-drift",
-        sha256("original\n"),
-        "drift.txt",
-        "replacement\n",
-      ),
+      prepareCommand("linux-metadata-drift", sha256("original\n"), "drift.txt", "replacement\n"),
     ),
     /^prepared linux-metadata-drift /u,
   );
@@ -1055,20 +990,16 @@ test("enforcing SELinux preserves a non-default label when ownership matches", a
   await execFileAsync("/usr/bin/chcon", ["-t", "bin_t", ordinary]);
   const helper = startHelper(t, root, testingBinary, {}, 65534, 65534);
   assert.match(
-    await helper.request(prepareCommand("selinux-label", sha256("original\n"), "labelled.txt", "replacement\n")),
+    await helper.request(
+      prepareCommand("selinux-label", sha256("original\n"), "labelled.txt", "replacement\n"),
+    ),
     /^prepared selinux-label /u,
   );
-  assert.match(
-    await helper.request("commit selinux-label"),
-    /^committed selinux-label /u,
-  );
+  assert.match(await helper.request("commit selinux-label"), /^committed selinux-label /u);
   assert.equal(await readFile(ordinary, "utf8"), "replacement\n");
   const { stdout: label } = await execFileAsync("/usr/bin/ls", ["-Z", ordinary]);
   assert.match(label, /:bin_t:/u);
-  assert.equal(
-    await helper.request("finalize selinux-label"),
-    "finalized selinux-label",
-  );
+  assert.equal(await helper.request("finalize selinux-label"), "finalized selinux-label");
   await helper.close();
 });
 
@@ -1083,10 +1014,7 @@ test("Linux denied capability copying fails closed without changing the original
   await execFileAsync("/bin/chown", ["-R", "65534:65534", root]);
   await execFileAsync("/bin/chmod", ["700", root]);
   try {
-    await execFileAsync("/usr/sbin/setcap", [
-      "cap_net_bind_service=ep",
-      ordinary,
-    ]);
+    await execFileAsync("/usr/sbin/setcap", ["cap_net_bind_service=ep", ordinary]);
   } catch {
     t.skip("Linux file capabilities are unavailable on this filesystem.");
     return;
@@ -1094,12 +1022,7 @@ test("Linux denied capability copying fails closed without changing the original
   const helper = startHelper(t, root, testingBinary, {}, 65534, 65534);
   assert.match(
     await helper.request(
-      prepareCommand(
-        "linux-capability",
-        sha256("original\n"),
-        "capability.txt",
-        "replacement\n",
-      ),
+      prepareCommand("linux-capability", sha256("original\n"), "capability.txt", "replacement\n"),
     ),
     /^prepared linux-capability /u,
   );
@@ -1123,12 +1046,7 @@ test("moving a prepared parent directory makes commit roll back", async (t) => {
   });
   assert.match(
     await helper.request(
-      prepareCommand(
-        "parent-race",
-        sha256("original\n"),
-        "src/file.txt",
-        "authorized\n",
-      ),
+      prepareCommand("parent-race", sha256("original\n"), "src/file.txt", "authorized\n"),
     ),
     /^prepared parent-race /u,
   );
@@ -1369,15 +1287,7 @@ test("startup rejects non-canonical or overflowing identity numbers", async (t) 
   for (const invalidDevice of ["+1", " 1", "18446744073709551616"]) {
     const child = spawn(
       productionBinary,
-      [
-        "serve",
-        "--root",
-        root,
-        "--device",
-        invalidDevice,
-        "--inode",
-        identity.inode,
-      ],
+      ["serve", "--root", root, "--device", invalidDevice, "--inode", identity.inode],
       { stdio: ["ignore", "pipe", "pipe"] },
     );
     let stdout = "";
@@ -1417,7 +1327,6 @@ test("read-html rejects multiply-linked guidance and link changes after open", a
   assert.equal(await pending, "error conflict");
   await racing.close();
 });
-
 
 test("read-html rejects a hard-link replacement before descriptor open", async (t) => {
   if (process.platform !== "darwin") return;

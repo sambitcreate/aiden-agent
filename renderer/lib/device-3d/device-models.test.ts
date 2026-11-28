@@ -25,14 +25,25 @@ const PRO: DeviceModelSource = { id: "iphone-18-pro", url: "/pro.glb" };
 const MAX: DeviceModelSource = { id: "iphone-18-pro-max", url: "/max.glb" };
 const IPAD: DeviceModelSource = { id: "ipad-pro-13-m5", url: "/ipad.glb" };
 const DUO: DeviceModelSource = { id: "iphone-duo", url: "/duo.glb" };
-const KEYBOARD: DeviceAccessorySource = { id: "ipad-pro-13-m5-magic-keyboard", modelId: "ipad-pro-13-m5", url: "/keyboard.glb" };
+const KEYBOARD: DeviceAccessorySource = {
+  id: "ipad-pro-13-m5-magic-keyboard",
+  modelId: "ipad-pro-13-m5",
+  url: "/keyboard.glb",
+};
 
 test("only exact supported hardware gets a bundled model, including the iPad's size and generation", () => {
   assert.equal(resolveDeviceAssetModelId("ios", "iPhone 18 Pro"), "iphone-18-pro");
   assert.equal(resolveDeviceAssetModelId("ios", "iPhone 18 Pro Max"), "iphone-18-pro-max");
   assert.equal(resolveDeviceAssetModelId("ios", "iPhone Duo"), "iphone-duo");
   assert.equal(resolveDeviceAssetModelId("ios", "iPad Pro 13-inch (M5)"), "ipad-pro-13-m5");
-  for (const name of ["iPhone 17 Pro", "iPhone 18", "iPad Pro 11-inch (M5)", "iPad Pro 13-inch (M4)", "Pixel_10_Pro", "My iPhone 18 Pro"]) {
+  for (const name of [
+    "iPhone 17 Pro",
+    "iPhone 18",
+    "iPad Pro 11-inch (M5)",
+    "iPad Pro 13-inch (M4)",
+    "Pixel_10_Pro",
+    "My iPhone 18 Pro",
+  ]) {
     assert.equal(resolveDeviceAssetModelId("ios", name), null, name);
   }
   assert.equal(resolveDeviceAssetModelId("android", "iPhone 18 Pro"), null);
@@ -42,7 +53,12 @@ test("only exact supported hardware gets a bundled model, including the iPad's s
 });
 
 function deferredLoads<T>() {
-  const pending: Array<{ source: DeviceAssetSource; signal: AbortSignal; resolve(model: T): void; reject(error: Error): void }> = [];
+  const pending: Array<{
+    source: DeviceAssetSource;
+    signal: AbortSignal;
+    resolve(model: T): void;
+    reject(error: Error): void;
+  }> = [];
   const load = (source: DeviceAssetSource, signal: AbortSignal) =>
     new Promise<T>((resolve, reject) => pending.push({ source, signal, resolve, reject }));
   return { pending, load };
@@ -63,7 +79,12 @@ function slotFixture() {
       installs.push(model);
     },
   });
-  return { slot, pending: loads.pending, installs, failNextInstall: (error: Error) => (installError = error) };
+  return {
+    slot,
+    pending: loads.pending,
+    installs,
+    failNextInstall: (error: Error) => (installError = error),
+  };
 }
 
 const disposable = () => {
@@ -161,7 +182,11 @@ test("a bundled GLB is fetched, parsed by three's loader, and its named display 
   model.dispose();
   assert.equal(released, 2);
   await assert.rejects(
-    loadDeviceModel(PRO, new AbortController().signal, async () => new Response("missing", { status: 404 })),
+    loadDeviceModel(
+      PRO,
+      new AbortController().signal,
+      async () => new Response("missing", { status: 404 }),
+    ),
     /404/u,
   );
   const aborted = new AbortController();
@@ -169,7 +194,9 @@ test("a bundled GLB is fetched, parsed by three's loader, and its named display 
   await assert.rejects(parseDeviceModel(phoneGlb(), "/pro.glb", aborted.signal));
 });
 
-function phoneFixture(options: { asset?: DeviceModelSource | null; accessory?: DeviceAccessorySource | null } = {}) {
+function phoneFixture(
+  options: { asset?: DeviceModelSource | null; accessory?: DeviceAccessorySource | null } = {},
+) {
   const harness = createTestRuntime();
   const loads = deferredLoads<LoadedDeviceModel>();
   const errors: unknown[] = [];
@@ -189,7 +216,14 @@ function phoneFixture(options: { asset?: DeviceModelSource | null; accessory?: D
   viewer.frameUpdated();
   harness.draw();
   const root = () => last(harness.renderers[0]!.frames)!.root!;
-  return { ...harness, viewer, pending: loads.pending, errors, unavailable: () => unavailable, root };
+  return {
+    ...harness,
+    viewer,
+    pending: loads.pending,
+    errors,
+    unavailable: () => unavailable,
+    root,
+  };
 }
 
 /** Parses a minimal GLB as the real loader would hand it over. */
@@ -203,7 +237,10 @@ const contains = (root: Object3D, asset: Object3D) => {
 test("the procedural body shows at once, and the bundled GLB replaces it in place once it loads", async () => {
   const { viewer, draw, pending, root, renderers, errors } = phoneFixture({ asset: PRO });
   const procedural = root();
-  assert.ok(procedural.getObjectByName("device-screen"), "the procedural body has its own live display");
+  assert.ok(
+    procedural.getObjectByName("device-screen"),
+    "the procedural body has its own live display",
+  );
   assert.equal(pending[0]!.source, PRO);
   const glb = await parsed(phoneGlb());
   pending[0]!.resolve(glb);
@@ -215,7 +252,10 @@ test("the procedural body shows at once, and the bundled GLB replaces it in plac
   assert.equal(last(renderers[0]!.frames)!.scene.environment, null);
   viewer.setAsset(null);
   draw();
-  assert.ok(last(renderers[0]!.frames)!.scene.environment, "the procedural body gets its reflections back");
+  assert.ok(
+    last(renderers[0]!.frames)!.scene.environment,
+    "the procedural body gets its reflections back",
+  );
   assert.equal(renderers.length, 1);
   assert.deepEqual(errors, []);
   viewer.dispose();
@@ -236,7 +276,9 @@ test("a GLB that fails to load or validate leaves the procedural body, not the f
   const invalid = phoneFixture({ asset: PRO });
   const before = invalid.root();
   const unnormalized = new PlaneGeometry(1, 4);
-  invalid.pending[0]!.resolve(await parsed(minimalGlb([{ name: "device-screen", geometry: unnormalized }])));
+  invalid.pending[0]!.resolve(
+    await parsed(minimalGlb([{ name: "device-screen", geometry: unnormalized }])),
+  );
   await settle();
   invalid.draw();
   assert.ok(invalid.root() === before, "the visible body stays");
@@ -314,7 +356,10 @@ function duoFixture() {
   let unavailable = 0;
   const viewer = createDuoViewer({
     canvas: testCanvas(),
-    sources: { 1: { width: 1398, height: 2034 } as HTMLCanvasElement, 3: { width: 2007, height: 2853 } as HTMLCanvasElement },
+    sources: {
+      1: { width: 1398, height: 2034 } as HTMLCanvasElement,
+      3: { width: 2007, height: 2853 } as HTMLCanvasElement,
+    },
     onUnavailable: () => void unavailable++,
     asset: DUO,
     loadModel: loads.load,
@@ -322,10 +367,23 @@ function duoFixture() {
     runtime: harness.runtime,
   });
   viewer.resize(500, 700, 2);
-  viewer.setScreen({ width: 2007, height: 2853, orientation: "portrait", screenId: 3, hingeAngle: 90 });
+  viewer.setScreen({
+    width: 2007,
+    height: 2853,
+    orientation: "portrait",
+    screenId: 3,
+    hingeAngle: 90,
+  });
   harness.draw();
   const root = () => last(harness.renderers[0]!.frames)!.root!;
-  return { ...harness, viewer, pending: loads.pending, errors, unavailable: () => unavailable, root };
+  return {
+    ...harness,
+    viewer,
+    pending: loads.pending,
+    errors,
+    unavailable: () => unavailable,
+    root,
+  };
 }
 
 test("the bundled Duo GLB takes over the hinge from the procedural body at the same fold", async () => {

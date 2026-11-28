@@ -16,12 +16,19 @@ function key(chatId: string): string {
 
 function read(chatId: string): StoredComposerDraft {
   try {
-    const value = JSON.parse(localStorage.getItem(key(chatId)) ?? "null") as Partial<StoredComposerDraft> | null;
-    if (value?.version === 1 && typeof value.text === "string" &&
-        (value.unresolvedText === undefined || typeof value.unresolvedText === "string")) {
+    const value = JSON.parse(
+      localStorage.getItem(key(chatId)) ?? "null",
+    ) as Partial<StoredComposerDraft> | null;
+    if (
+      value?.version === 1 &&
+      typeof value.text === "string" &&
+      (value.unresolvedText === undefined || typeof value.unresolvedText === "string")
+    ) {
       return { version: 1, text: value.text, unresolvedText: value.unresolvedText };
     }
-  } catch { /* Corrupt or unavailable storage is treated as an empty draft. */ }
+  } catch {
+    /* Corrupt or unavailable storage is treated as an empty draft. */
+  }
   return { version: 1, text: "" };
 }
 
@@ -29,7 +36,9 @@ function write(chatId: string, record: StoredComposerDraft): void {
   try {
     if (!record.text && !record.unresolvedText) localStorage.removeItem(key(chatId));
     else localStorage.setItem(key(chatId), JSON.stringify(record));
-  } catch { /* Sending remains available when browser storage is unavailable. */ }
+  } catch {
+    /* Sending remains available when browser storage is unavailable. */
+  }
 }
 
 export function loadComposerDraft(chatId: string): StoredComposerDraft {
@@ -49,7 +58,11 @@ export function markComposerSubmission(chatId: string, text: string): void {
   }
 }
 
-export function settleComposerSubmission(chatId: string, accepted: boolean, currentText: string): void {
+export function settleComposerSubmission(
+  chatId: string,
+  accepted: boolean,
+  currentText: string,
+): void {
   const record = read(chatId);
   write(chatId, {
     version: 1,
@@ -60,7 +73,11 @@ export function settleComposerSubmission(chatId: string, accepted: boolean, curr
 export function discardComposerDraft(chatId: string): void {
   attachmentSeeds.delete(chatId);
   grabbedElementDrafts.delete(chatId);
-  try { localStorage.removeItem(key(chatId)); } catch { /* Deletion still proceeds. */ }
+  try {
+    localStorage.removeItem(key(chatId));
+  } catch {
+    /* Deletion still proceeds. */
+  }
 }
 
 // One-shot, in-memory attachment seeds for a composer that is about to open
@@ -88,7 +105,9 @@ export function saveComposerDraftGrabbedElements(
     return;
   }
   const thumbnailIds = new Set(
-    elements.map((element) => element.thumbnailAttachmentId).filter((id): id is string => Boolean(id)),
+    elements
+      .map((element) => element.thumbnailAttachmentId)
+      .filter((id): id is string => Boolean(id)),
   );
   const matchingThumbnails = thumbnails
     .filter((attachment) => thumbnailIds.has(attachment.id) && Boolean(attachment.data))
@@ -127,7 +146,11 @@ export function setActiveWorktreeGrabbedElements(
   elements: readonly GrabbedElementContextV1[] | undefined,
 ): void {
   if (!elements || elements.length === 0) activeWorktreeGrabbedElements.delete(draftId);
-  else activeWorktreeGrabbedElements.set(draftId, elements.map((element) => structuredClone(element)));
+  else
+    activeWorktreeGrabbedElements.set(
+      draftId,
+      elements.map((element) => structuredClone(element)),
+    );
 }
 
 export function getActiveWorktreeGrabbedElements(
@@ -141,7 +164,11 @@ export function seedComposerAttachments(chatId: string, attachments: readonly At
   const usable = attachments.filter((attachment) =>
     attachment.kind === "image" ? Boolean(attachment.data) : attachment.text !== undefined,
   );
-  if (usable.length > 0) attachmentSeeds.set(chatId, usable.map((attachment) => ({ ...attachment })));
+  if (usable.length > 0)
+    attachmentSeeds.set(
+      chatId,
+      usable.map((attachment) => ({ ...attachment })),
+    );
   else attachmentSeeds.delete(chatId);
 }
 
@@ -226,7 +253,11 @@ const stagedTextListeners = new Map<string, Set<StagedTextListener>>();
  * mounted composer merges it into its live text; otherwise the saved draft is
  * extended so the text is there when the chat is reopened.
  */
-export function stageComposerText(chatId: string, text: string, options: StageComposerTextOptions = {}): void {
+export function stageComposerText(
+  chatId: string,
+  text: string,
+  options: StageComposerTextOptions = {},
+): void {
   if (!text.trim()) return;
   const listeners = stagedTextListeners.get(chatId);
   if (listeners?.size) {

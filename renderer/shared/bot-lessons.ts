@@ -26,11 +26,23 @@ export interface BotLesson {
   retires?: string;
 }
 
-export const BOT_LESSON_LIMITS = { cueChars: 160, lessonChars: 300, evidence: 8, activePerRoutine: 6, activeBotWide: 12, proposedPerBot: 2 } as const;
+export const BOT_LESSON_LIMITS = {
+  cueChars: 160,
+  lessonChars: 300,
+  evidence: 8,
+  activePerRoutine: 6,
+  activeBotWide: 12,
+  proposedPerBot: 2,
+} as const;
 export const BOT_LESSON_PROPOSAL_ENTRY_KIND = "aiden.lesson-proposal";
 export const BOT_LESSON_STATUS_ENTRY_KIND = "aiden.lesson-status";
 export const BOT_LESSON_LEARNED_ENTRY_KIND = "aiden.lesson-learned";
-export const BOT_LESSON_COMPONENTS: readonly BotLessonComponent[] = ["routine_prompt", "procedure", "tool_use", "output_format"];
+export const BOT_LESSON_COMPONENTS: readonly BotLessonComponent[] = [
+  "routine_prompt",
+  "procedure",
+  "tool_use",
+  "output_format",
+];
 
 /** What a lesson card or Learned line shows. */
 export interface BotLessonCardData {
@@ -47,15 +59,20 @@ export function botLessonCardOf(value: unknown): BotLessonCardData | null {
   return {
     lessonId: data.lessonId,
     lesson: data.lesson.slice(0, 400),
-    ...(typeof data.routineName === "string" ? { routineName: data.routineName.slice(0, 200) } : {}),
+    ...(typeof data.routineName === "string"
+      ? { routineName: data.routineName.slice(0, 200) }
+      : {}),
     ...(typeof data.runs === "number" && Number.isInteger(data.runs) ? { runs: data.runs } : {}),
   };
 }
 
-export function botLessonStatusOf(value: unknown): { lessonId: string; status: "active" | "dismissed" | "retired" } | null {
+export function botLessonStatusOf(
+  value: unknown,
+): { lessonId: string; status: "active" | "dismissed" | "retired" } | null {
   if (!value || typeof value !== "object" || Array.isArray(value)) return null;
   const data = value as Record<string, unknown>;
   if (typeof data.lessonId !== "string") return null;
-  if (data.status !== "active" && data.status !== "dismissed" && data.status !== "retired") return null;
+  if (data.status !== "active" && data.status !== "dismissed" && data.status !== "retired")
+    return null;
   return { lessonId: data.lessonId, status: data.status };
 }

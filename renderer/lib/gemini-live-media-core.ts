@@ -15,8 +15,7 @@ const TARGET_SAMPLES_PER_CHUNK =
 
 /** Local-only normalized RMS used to render truthful microphone activity. */
 export function measureGeminiLivePcmLevel(pcm: Uint8Array): number {
-  if (!(pcm instanceof Uint8Array) || pcm.byteLength === 0 || pcm.byteLength % 2 !== 0)
-    return 0;
+  if (!(pcm instanceof Uint8Array) || pcm.byteLength === 0 || pcm.byteLength % 2 !== 0) return 0;
   const view = new DataView(pcm.buffer, pcm.byteOffset, pcm.byteLength);
   let squareSum = 0;
   for (let offset = 0; offset < pcm.byteLength; offset += 2) {
@@ -52,18 +51,10 @@ export function geminiLiveScaledFrameSize(
   width: number,
   height: number,
 ): { width: number; height: number } {
-  if (
-    !Number.isFinite(width) ||
-    !Number.isFinite(height) ||
-    width <= 0 ||
-    height <= 0
-  ) {
+  if (!Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0) {
     throw new Error("Live screen frame dimensions are invalid.");
   }
-  const scale = Math.min(
-    1,
-    GEMINI_LIVE_FRAME_MAX_DIMENSION / Math.max(width, height),
-  );
+  const scale = Math.min(1, GEMINI_LIVE_FRAME_MAX_DIMENSION / Math.max(width, height));
   return {
     width: Math.max(1, Math.round(width * scale)),
     height: Math.max(1, Math.round(height * scale)),

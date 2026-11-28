@@ -18,7 +18,9 @@ function setup(t: test.TestContext) {
   const globals = globalThis as { document?: unknown };
   const previous = globals.document;
   globals.document = {
-    get visibilityState() { return window.visibility; },
+    get visibilityState() {
+      return window.visibility;
+    },
     hasFocus: () => window.focused,
   };
   const client = new QueryClient();

@@ -24,21 +24,33 @@ export function sendToCanvasOutcome(result: PlaceResult): { ok: boolean; message
     if (result.status === "placed") return { ok: true, message: "Sent to the canvas." };
     return {
       ok: true,
-      message: result.page ? `That visual is already on the canvas, on the page “${result.page}”.` : "That visual is already on the canvas.",
+      message: result.page
+        ? `That visual is already on the canvas, on the page “${result.page}”.`
+        : "That visual is already on the canvas.",
     };
   }
   switch (result.error) {
     case "missing":
       return { ok: false, message: "That visual is no longer in this chat." };
     case "unsafe":
-      return { ok: false, message: "That visual can't go on the canvas because Aiden can't confirm it's safe." };
+      return {
+        ok: false,
+        message: "That visual can't go on the canvas because Aiden can't confirm it's safe.",
+      };
     case "full":
-      return { ok: false, message: "The canvas has no room for another frame. Remove one and try again." };
+      return {
+        ok: false,
+        message: "The canvas has no room for another frame. Remove one and try again.",
+      };
   }
 }
 
 /** Saves a settled native visual as a workspace artifact; Artifacts then shows it beside the chat. */
-export async function keepVisualInArtifacts(chatId: string, messageId: string, visualId: string): Promise<void> {
+export async function keepVisualInArtifacts(
+  chatId: string,
+  messageId: string,
+  visualId: string,
+): Promise<void> {
   try {
     await workspaceArtifactsApi.keepVisual(chatId, messageId, visualId);
     toast.success("Kept in Artifacts.");
@@ -48,11 +60,18 @@ export async function keepVisualInArtifacts(chatId: string, messageId: string, v
 }
 
 /** Puts an HTML visual on the chat's canvas, turning design mode on so the person sees it there. */
-export async function sendVisualToCanvas(controls: DesignModeControls, mediaId: string): Promise<void> {
+export async function sendVisualToCanvas(
+  controls: DesignModeControls,
+  mediaId: string,
+): Promise<void> {
   let result: PlaceResult;
   try {
     // The open canvas's size on screen, so the frame lands where the person is looking.
-    result = await designCanvasApi.placeDesignArtifact(controls.chatId, mediaId, designCanvasViewFor(controls.chatId)?.viewSize);
+    result = await designCanvasApi.placeDesignArtifact(
+      controls.chatId,
+      mediaId,
+      designCanvasViewFor(controls.chatId)?.viewSize,
+    );
   } catch (error) {
     toast.error(userFacingErrorMessage(error, SEND_TO_CANVAS_FAILED));
     return;
@@ -67,7 +86,10 @@ export async function sendVisualToCanvas(controls: DesignModeControls, mediaId: 
 }
 
 /** The Keep in Artifacts entry for a settled native visual, when this chat allows it. */
-export function useKeepVisualActions(messageId: string | undefined, visualId: string): VisualMenuAction[] | undefined {
+export function useKeepVisualActions(
+  messageId: string | undefined,
+  visualId: string,
+): VisualMenuAction[] | undefined {
   const chatId = React.useContext(KeepVisualChatContext);
   const [busy, setBusy] = React.useState(false);
   return React.useMemo(() => {
@@ -88,7 +110,10 @@ export function useKeepVisualActions(messageId: string | undefined, visualId: st
 }
 
 /** The Send to canvas entry for an HTML visual, when design mode is available to this chat. */
-export function useSendToCanvasActions(chatId: string, mediaId: string): VisualMenuAction[] | undefined {
+export function useSendToCanvasActions(
+  chatId: string,
+  mediaId: string,
+): VisualMenuAction[] | undefined {
   const controls = useDesignModeControls(chatId);
   const [busy, setBusy] = React.useState(false);
   return React.useMemo(() => {

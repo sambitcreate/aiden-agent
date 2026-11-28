@@ -13,7 +13,10 @@ import {
 } from "../services/design-canvas/main.js";
 import { chatApplicationService } from "../services/chat-application-service-main.js";
 import { renderDesignFrame } from "../services/design-canvas/frame-render.js";
-import { exportStoredHtmlArtifact, wrapStoredHtmlArtifact } from "../services/gui-artifact-recovery.js";
+import {
+  exportStoredHtmlArtifact,
+  wrapStoredHtmlArtifact,
+} from "../services/gui-artifact-recovery.js";
 import { generativeUiArtifactStore } from "../services/generative-ui-artifact-store.js";
 import { rendererDocumentOwner } from "../services/renderer-document-owner.js";
 import { designModeEnabled } from "../services/studio/feature-flags.js";
@@ -21,24 +24,33 @@ import { DESIGN_CANVAS_UPDATED_CHANNEL, registerDesignCanvasHandlers } from "./d
 
 export function registerDesignCanvasIpc(): void {
   // The canvas picture Aiden asked for with canvas_read {snapshot: true}.
-  ipcMain.handle("designCanvas:snapshotAnswer", (event, requestId: unknown, dataUrl: unknown) =>
-    designModeEnabled() &&
-    designCanvasSnapshots.answer(requestId, dataUrl, rendererDocumentOwner(event, () => new Error("Active renderer required."))),
+  ipcMain.handle(
+    "designCanvas:snapshotAnswer",
+    (event, requestId: unknown, dataUrl: unknown) =>
+      designModeEnabled() &&
+      designCanvasSnapshots.answer(
+        requestId,
+        dataUrl,
+        rendererDocumentOwner(event, () => new Error("Active renderer required.")),
+      ),
   );
   // The person's answer on Aiden's "Enter design mode?" card. Enter turns
   // design mode on the way the Design toggle does, then tells every window.
-  ipcMain.handle("designCanvas:consentAnswer", async (event, requestId: unknown, answer: unknown) => {
-    if (!designModeEnabled()) return false;
-    return designModeConsent.answer(
-      requestId,
-      answer,
-      rendererDocumentOwner(event, () => new Error("Active renderer required.")),
-      async (chatId) => {
-        await chatApplicationService.setDesignMode(chatId, true, { rejectFeatureOwned: true });
-        ipcMain.broadcast("chats:design-mode-changed", { chatId, designMode: true });
-      },
-    );
-  });
+  ipcMain.handle(
+    "designCanvas:consentAnswer",
+    async (event, requestId: unknown, answer: unknown) => {
+      if (!designModeEnabled()) return false;
+      return designModeConsent.answer(
+        requestId,
+        answer,
+        rendererDocumentOwner(event, () => new Error("Active renderer required.")),
+        async (chatId) => {
+          await chatApplicationService.setDesignMode(chatId, true, { rejectFeatureOwned: true });
+          ipcMain.broadcast("chats:design-mode-changed", { chatId, designMode: true });
+        },
+      );
+    },
+  );
   registerDesignCanvasHandlers<Electron.IpcMainInvokeEvent>({
     enabled: () => designModeEnabled(),
     handle: (channel, handler) => ipcMain.handle(channel, handler),
@@ -89,7 +101,8 @@ export function registerDesignCanvasIpc(): void {
     renderFrame: renderDesignFrame,
     artifactPreview: (chatId, mediaId, theme) => wrapStoredHtmlArtifact({ chatId, mediaId, theme }),
     artifactHtml: (chatId, mediaId) => generativeUiArtifactStore.htmlFor(chatId, mediaId),
-    artifactTitle: async (chatId, mediaId) => (await generativeUiArtifactStore.artifactFor(chatId, mediaId))?.title,
+    artifactTitle: async (chatId, mediaId) =>
+      (await generativeUiArtifactStore.artifactFor(chatId, mediaId))?.title,
     exportArtifactSource: async (event, chatId, mediaId) => {
       const parent = BrowserWindow.fromWebContents(event.sender);
       if (!parent || parent.isDestroyed()) throw new Error("The export window is unavailable.");

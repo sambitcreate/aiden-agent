@@ -99,7 +99,10 @@ test("settled cached receipts remain byte-budgeted while allowing generation han
   first.settleAsyncWork({ retainAppendPayloadUntilRelease: true });
   assert.equal(admission.owns("chat-1", "turn-1", "owner"), true);
   assert.throws(() => second.reserveAppendPayload(1), /Too many messages/u);
-  assert.equal(admission.handoff("chat-1", "turn-1", "owner", () => {}), true);
+  assert.equal(
+    admission.handoff("chat-1", "turn-1", "owner", () => {}),
+    true,
+  );
   second.reserveAppendPayload(100);
   second.settleAsyncWork({ retainAppendPayloadUntilRelease: true });
   second.release();
@@ -112,12 +115,20 @@ test("settled cached receipts remain byte-budgeted while allowing generation han
 
 test("a lease that ends before, during or after its append keeps bytes charged to the actual holder", (t) => {
   t.mock.timers.enable({ apis: ["setTimeout"] });
-  const admission = new ChatTurnAdmission({ leaseTtlMs: 10, maxAppendTurns: 1, maxAppendBytes: 10 });
+  const admission = new ChatTurnAdmission({
+    leaseTtlMs: 10,
+    maxAppendTurns: 1,
+    maxAppendBytes: 10,
+  });
   const probe = () => {
     const lease = admission.tryBegin("chat-probe", "turn-probe", "probe", false);
     assert.ok(lease);
     let admitted = true;
-    try { lease.reserveAppendPayload(10); } catch { admitted = false; }
+    try {
+      lease.reserveAppendPayload(10);
+    } catch {
+      admitted = false;
+    }
     lease.release();
     lease.settleAsyncWork();
     return admitted;
@@ -167,9 +178,12 @@ test("a stale lease cannot change the replacement turn on the same chat", () => 
   stale.settleAsyncWork();
   assert.throws(() => stale.reserveAppendPayload(1), /no longer available/u);
   assert.equal(admission.releaseMatching("chat-1", "turn-1", "owner-a"), false);
-  assert.equal(admission.handoff("chat-1", "turn-1", "owner-a", () => {
-    assert.fail("A stale identity cannot register a generation");
-  }), false);
+  assert.equal(
+    admission.handoff("chat-1", "turn-1", "owner-a", () => {
+      assert.fail("A stale identity cannot register a generation");
+    }),
+    false,
+  );
   assert.equal(replacement.isActive(), true);
   assert.equal(admission.isAdmitted("chat-1"), true);
   const rival = admission.tryBegin("chat-2", "turn-3", "owner-c", false);
@@ -188,10 +202,16 @@ test("competing owners for one chat get one lease and the loser disturbs nothing
   winner.settleAsyncWork();
   assert.equal(admission.owns("chat-1", "turn-renderer-b", "renderer-b"), false);
   assert.equal(admission.owns("chat-1", "turn-renderer-a", "renderer-b"), false);
-  assert.equal(admission.handoff("chat-1", "turn-renderer-a", "renderer-b", () => {
-    assert.fail("A mismatched owner cannot register a generation");
-  }), false);
-  assert.equal(admission.handoff("chat-1", "turn-renderer-a", "renderer-a", () => {}), true);
+  assert.equal(
+    admission.handoff("chat-1", "turn-renderer-a", "renderer-b", () => {
+      assert.fail("A mismatched owner cannot register a generation");
+    }),
+    false,
+  );
+  assert.equal(
+    admission.handoff("chat-1", "turn-renderer-a", "renderer-a", () => {}),
+    true,
+  );
   assert.equal(winner.isActive(), false);
   assert.equal(admission.isAdmitted("chat-1"), false);
 });
@@ -224,11 +244,12 @@ test("a failed registration leaves the turn and its skill charge with the lease"
 
   let failedRelease = () => {};
   assert.throws(
-    () => admission.handoff("chat-1", "turn-1", "owner", (_skill, release) => {
-      failedRelease = release;
-      release();
-      throw new Error("registration failed");
-    }),
+    () =>
+      admission.handoff("chat-1", "turn-1", "owner", (_skill, release) => {
+        failedRelease = release;
+        release();
+        throw new Error("registration failed");
+      }),
     /registration failed/u,
   );
   assert.equal(lease.isActive(), true);
@@ -244,18 +265,26 @@ test("a failed registration leaves the turn and its skill charge with the lease"
   );
 
   let seen: unknown;
-  assert.equal(admission.handoff("chat-1", "turn-1", "owner", (skill, release) => {
-    seen = skill;
-    release();
-  }), true, "The caller may retry while the lease is intact");
+  assert.equal(
+    admission.handoff("chat-1", "turn-1", "owner", (skill, release) => {
+      seen = skill;
+      release();
+    }),
+    true,
+    "The caller may retry while the lease is intact",
+  );
   assert.equal(seen, preparedSkill);
   failedRelease();
   rival.reserveSkillPreparation();
-  assert.throws(() => {
-    const third = admission.tryBegin("chat-3", "turn-3", "owner", false);
-    assert.ok(third);
-    third.reserveSkillPreparation();
-  }, /Too many skill messages/u, "The retry released the one slot exactly once");
+  assert.throws(
+    () => {
+      const third = admission.tryBegin("chat-3", "turn-3", "owner", false);
+      assert.ok(third);
+      third.reserveSkillPreparation();
+    },
+    /Too many skill messages/u,
+    "The retry released the one slot exactly once",
+  );
 });
 
 test("an ended turn reports itself unavailable before looking at the skill payload", () => {
@@ -265,7 +294,10 @@ test("an ended turn reports itself unavailable before looking at the skill paylo
   lease.release();
   lease.settleAsyncWork();
   assert.throws(
-    () => lease.prepareSkillInvocation({ formattedPrompt: undefined } as unknown as typeof preparedSkill),
+    () =>
+      lease.prepareSkillInvocation({
+        formattedPrompt: undefined,
+      } as unknown as typeof preparedSkill),
     /skill turn is no longer available/u,
   );
 });
@@ -278,10 +310,13 @@ test("a skill release requested during registration completes exactly once at tr
   lease.prepareSkillInvocation(preparedSkill);
   lease.settleAsyncWork();
   let release = () => {};
-  assert.equal(admission.handoff("chat-1", "turn-1", "owner", (_skill, releaseSkill) => {
-    release = releaseSkill;
-    releaseSkill();
-  }), true);
+  assert.equal(
+    admission.handoff("chat-1", "turn-1", "owner", (_skill, releaseSkill) => {
+      release = releaseSkill;
+      releaseSkill();
+    }),
+    true,
+  );
   release();
   const next = admission.tryBegin("chat-2", "turn-2", "owner", false);
   const rival = admission.tryBegin("chat-3", "turn-3", "owner", false);
@@ -291,18 +326,24 @@ test("a skill release requested during registration completes exactly once at tr
 });
 
 test("a release during registration leaves the skill charge with the generation, refunded once", () => {
-  const admission = new ChatTurnAdmission({ maxPreparedTurns: 2, maxPreparedBytes: 64 * 1024 * 1024 });
+  const admission = new ChatTurnAdmission({
+    maxPreparedTurns: 2,
+    maxPreparedBytes: 64 * 1024 * 1024,
+  });
   const lease = admission.tryBegin("chat-1", "turn-1", "owner", false);
   assert.ok(lease);
   lease.reserveSkillPreparation();
   lease.prepareSkillInvocation(preparedSkill);
   lease.settleAsyncWork();
   let releaseActiveSkill = () => {};
-  assert.equal(admission.handoff("chat-1", "turn-1", "owner", (_skill, release) => {
-    releaseActiveSkill = release;
-    admission.releaseChat("chat-1");
-    assert.equal(lease.isActive(), false);
-  }), true);
+  assert.equal(
+    admission.handoff("chat-1", "turn-1", "owner", (_skill, release) => {
+      releaseActiveSkill = release;
+      admission.releaseChat("chat-1");
+      assert.equal(lease.isActive(), false);
+    }),
+    true,
+  );
   assert.equal(admission.isAdmitted("chat-1"), false);
 
   const holders = ["a", "b"].map((id) => admission.tryBegin(`chat-${id}`, id, "owner", false));
@@ -412,23 +453,15 @@ test("handed-off skill prompts remain globally charged until generation cleanup"
   first.settleAsyncWork();
   let releaseActiveSkill = () => {};
   assert.equal(
-    admission.handoff(
-      "chat-1",
-      "turn-1",
-      "owner-1",
-      (_skill, releaseReservation) => {
-        releaseActiveSkill = releaseReservation;
-      },
-    ),
+    admission.handoff("chat-1", "turn-1", "owner-1", (_skill, releaseReservation) => {
+      releaseActiveSkill = releaseReservation;
+    }),
     true,
   );
 
   const second = admission.tryBegin("chat-2", "turn-2", "owner-2", false);
   assert.ok(second);
-  assert.throws(
-    () => second.reserveSkillPreparation(),
-    /Too many skill messages/u,
-  );
+  assert.throws(() => second.reserveSkillPreparation(), /Too many skill messages/u);
   releaseActiveSkill();
   releaseActiveSkill();
   second.reserveSkillPreparation();
@@ -442,12 +475,7 @@ test("lease expiry revokes authority without releasing retained append bytes ear
     maxAppendTurns: 1,
     maxAppendBytes: 10,
   });
-  const stalled = admission.tryBegin(
-    "chat-stalled",
-    "turn-stalled",
-    "owner-a",
-    false,
-  );
+  const stalled = admission.tryBegin("chat-stalled", "turn-stalled", "owner-a", false);
   assert.ok(stalled);
   stalled.reserveAppendPayload(10);
   await new Promise((resolve) => setTimeout(resolve, 40));
@@ -468,10 +496,7 @@ test("indeterminate append fences the renderer document until process restart", 
   admission.markAppendReconciliationRequired("owner-a");
   assert.equal(admission.requiresAppendReconciliation("owner-a"), true);
   assert.equal(admission.requiresAppendReconciliation("owner-b"), false);
-  assert.equal(
-    admission.tryBegin("chat-fenced", "turn-fenced", "owner-a", false),
-    null,
-  );
+  assert.equal(admission.tryBegin("chat-fenced", "turn-fenced", "owner-a", false), null);
 
   // Releasing ordinary turn state must not accidentally clear the durability
   // fence. Only constructing a new process-owned admission instance does.
@@ -479,8 +504,5 @@ test("indeterminate append fences the renderer document until process restart", 
   assert.equal(admission.requiresAppendReconciliation("owner-a"), true);
   admission.clearAppendReconciliationRequired("owner-a");
   assert.equal(admission.requiresAppendReconciliation("owner-a"), false);
-  assert.equal(
-    new ChatTurnAdmission().requiresAppendReconciliation("owner-a"),
-    false,
-  );
+  assert.equal(new ChatTurnAdmission().requiresAppendReconciliation("owner-a"), false);
 });

@@ -23,15 +23,16 @@ export const BOT_COMPUTER_ACTIONS = [
 export type BotComputerAction = (typeof BOT_COMPUTER_ACTIONS)[number];
 
 /** Actions that change the computer: each must say what it is doing (§8.7). */
-export const BOT_COMPUTER_MUTATING_ACTIONS: ReadonlySet<BotComputerAction> = new Set<BotComputerAction>([
-  "click",
-  "double_click",
-  "right_click",
-  "drag",
-  "scroll",
-  "type",
-  "key",
-]);
+export const BOT_COMPUTER_MUTATING_ACTIONS: ReadonlySet<BotComputerAction> =
+  new Set<BotComputerAction>([
+    "click",
+    "double_click",
+    "right_click",
+    "drag",
+    "scroll",
+    "type",
+    "key",
+  ]);
 
 export const BOT_COMPUTER_INTENT_MAX_CHARS = 120;
 export const BOT_COMPUTER_TEXT_MAX_CHARS = 4_000;
@@ -49,7 +50,9 @@ const Coordinate = Type.Unsafe<[number, number]>(
 );
 
 const Modifier = Type.Union(
-  ["cmd", "command", "shift", "option", "alt", "ctrl", "control"].map((modifier) => Type.Literal(modifier)),
+  ["cmd", "command", "shift", "option", "alt", "ctrl", "control"].map((modifier) =>
+    Type.Literal(modifier),
+  ),
 );
 
 export const BotComputerParameters = Type.Object(
@@ -74,7 +77,7 @@ export const BotComputerParameters = Type.Object(
         minLength: 1,
         maxLength: 256,
         description:
-          "capture only, with element control: also list this app's numbered elements (its name, such as \"Safari\", or its bundle id).",
+          'capture only, with element control: also list this app\'s numbered elements (its name, such as "Safari", or its bundle id).',
       }),
     ),
     element: Type.Optional(
@@ -96,10 +99,20 @@ export const BotComputerParameters = Type.Object(
       }),
     ),
     direction: Type.Optional(
-      Type.Union([Type.Literal("up"), Type.Literal("down"), Type.Literal("left"), Type.Literal("right")]),
+      Type.Union([
+        Type.Literal("up"),
+        Type.Literal("down"),
+        Type.Literal("left"),
+        Type.Literal("right"),
+      ]),
     ),
     amount: Type.Optional(
-      Type.Integer({ minimum: 1, maximum: 50, default: 3, description: "scroll only: wheel steps." }),
+      Type.Integer({
+        minimum: 1,
+        maximum: 50,
+        default: 3,
+        description: "scroll only: wheel steps.",
+      }),
     ),
     text: Type.Optional(
       Type.String({
@@ -113,11 +126,17 @@ export const BotComputerParameters = Type.Object(
       Type.String({
         minLength: 1,
         maxLength: 256,
-        description: 'key only: one key with optional modifiers joined by "+", e.g. "return", "tab" or "cmd+s".',
+        description:
+          'key only: one key with optional modifiers joined by "+", e.g. "return", "tab" or "cmd+s".',
       }),
     ),
     seconds: Type.Optional(
-      Type.Number({ minimum: 0, maximum: BOT_COMPUTER_WAIT_MAX_SECONDS, default: 1, description: "wait only." }),
+      Type.Number({
+        minimum: 0,
+        maximum: BOT_COMPUTER_WAIT_MAX_SECONDS,
+        default: 1,
+        description: "wait only.",
+      }),
     ),
     expect: Type.Optional(
       Type.String({
@@ -150,7 +169,9 @@ export function botComputerIntentOf(args: unknown): string | undefined {
   const clean = raw.replace(UNSAFE_CHARACTERS, " ").replace(/\s+/gu, " ").trim();
   if (!clean) return undefined;
   const points = [...clean];
-  return points.length > BOT_COMPUTER_INTENT_MAX_CHARS ? points.slice(0, BOT_COMPUTER_INTENT_MAX_CHARS).join("").trimEnd() : clean;
+  return points.length > BOT_COMPUTER_INTENT_MAX_CHARS
+    ? points.slice(0, BOT_COMPUTER_INTENT_MAX_CHARS).join("").trimEnd()
+    : clean;
 }
 
 export function isBotComputerAction(value: unknown): value is BotComputerAction {

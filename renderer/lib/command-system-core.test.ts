@@ -99,7 +99,10 @@ test("does not steal commands from editable controls except explicit commands", 
     "chat.jump.3",
   );
   assert.equal(
-    resolveCommandForKeyEvent(event("}", "BracketRight", true), bindings, { ...base, editable: true }),
+    resolveCommandForKeyEvent(event("}", "BracketRight", true), bindings, {
+      ...base,
+      editable: true,
+    }),
     "chat.next",
   );
   assert.equal(
@@ -168,11 +171,24 @@ test("modal, terminal, repeat, and composition guards are deterministic", () => 
 
 test("studio surfaces hide the Environment and terminal commands", () => {
   for (const pathname of ["/images", "/images/workflow-1"]) {
-    assert.deepEqual(workspaceCommandVisibility(pathname), { environment: false, terminal: false }, pathname);
+    assert.deepEqual(
+      workspaceCommandVisibility(pathname),
+      { environment: false, terminal: false },
+      pathname,
+    );
   }
-  assert.deepEqual(workspaceCommandVisibility("/chat/chat-1"), { environment: true, terminal: true });
-  assert.deepEqual(workspaceCommandVisibility("/settings"), { environment: false, terminal: false });
-  assert.deepEqual(workspaceCommandVisibility("/scheduled"), { environment: true, terminal: false });
+  assert.deepEqual(workspaceCommandVisibility("/chat/chat-1"), {
+    environment: true,
+    terminal: true,
+  });
+  assert.deepEqual(workspaceCommandVisibility("/settings"), {
+    environment: false,
+    terminal: false,
+  });
+  assert.deepEqual(workspaceCommandVisibility("/scheduled"), {
+    environment: true,
+    terminal: false,
+  });
 });
 
 test("palette omits studio commands while their capability is off", () => {
@@ -192,10 +208,19 @@ test("palette omits studio commands while their capability is off", () => {
 });
 
 test("the palette lists Toggle design mode only with the capability and a design-ready chat on screen", () => {
-  const listed = (capabilities: { createImages: boolean; designMode: boolean }, onScreen: boolean) =>
-    paletteCommands(capabilities, (id) => onScreen && id === "design.toggle").some(({ id }) => id === "design.toggle");
+  const listed = (
+    capabilities: { createImages: boolean; designMode: boolean },
+    onScreen: boolean,
+  ) =>
+    paletteCommands(capabilities, (id) => onScreen && id === "design.toggle").some(
+      ({ id }) => id === "design.toggle",
+    );
   assert.equal(listed({ createImages: false, designMode: false }, true), false, "flag off");
-  assert.equal(listed({ createImages: false, designMode: true }, false), false, "no eligible chat on screen");
+  assert.equal(
+    listed({ createImages: false, designMode: true }, false),
+    false,
+    "no eligible chat on screen",
+  );
   assert.equal(listed({ createImages: false, designMode: true }, true), true);
 });
 
@@ -222,7 +247,9 @@ test("chat actions show in the palette only while something on screen can run th
   assert.ok(nothingOnScreen.includes("settings.open"));
   assert.ok(nothingOnScreen.includes("chat.search"));
 
-  const renameOnly = paletteCommands(capabilities, (id) => id === "chat.rename").map(({ id }) => id);
+  const renameOnly = paletteCommands(capabilities, (id) => id === "chat.rename").map(
+    ({ id }) => id,
+  );
   assert.ok(renameOnly.includes("chat.rename"));
   assert.ok(!renameOnly.includes("chat.delete"));
 });
@@ -235,13 +262,23 @@ test("studio commands never reserve a shortcut", () => {
 test("a key that matches no binding never reads the page-dependent context", () => {
   const bindings = effectiveBindings(undefined);
   const reads: string[] = [];
-  const context = Object.defineProperties({ ...base }, Object.fromEntries(
-    (["editable", "fileEditor", "terminal", "modal"] as const).map((name) => [
-      name,
-      { get: () => (reads.push(name), false) },
-    ]),
-  )) as CommandDispatchContext;
-  const typed = { key: "a", code: "KeyA", metaKey: false, ctrlKey: false, altKey: false, shiftKey: false };
+  const context = Object.defineProperties(
+    { ...base },
+    Object.fromEntries(
+      (["editable", "fileEditor", "terminal", "modal"] as const).map((name) => [
+        name,
+        { get: () => (reads.push(name), false) },
+      ]),
+    ),
+  ) as CommandDispatchContext;
+  const typed = {
+    key: "a",
+    code: "KeyA",
+    metaKey: false,
+    ctrlKey: false,
+    altKey: false,
+    shiftKey: false,
+  };
   assert.equal(resolveCommandForKeyEvent(typed, bindings, context), null);
   assert.equal(reads.length, 0, reads.join(", "));
   // A real shortcut still consults the context before it runs.

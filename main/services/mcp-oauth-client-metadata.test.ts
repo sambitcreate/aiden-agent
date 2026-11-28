@@ -23,15 +23,32 @@ test("default MCP OAuth metadata is a native PKCE loopback client named Aiden Ag
 
 test("the checked-in client metadata document describes the client Aiden registers as", () => {
   // The document a hosted CIMD URL must serve (docs/mcp/aiden-agent-client-metadata.json).
-  const document = JSON.parse(readFileSync(new URL("../../docs/mcp/aiden-agent-client-metadata.json", import.meta.url), "utf8")) as Record<string, unknown>;
+  const document = JSON.parse(
+    readFileSync(
+      new URL("../../docs/mcp/aiden-agent-client-metadata.json", import.meta.url),
+      "utf8",
+    ),
+  ) as Record<string, unknown>;
   const registered = mcpOAuthClientMetadata();
-  for (const field of ["client_name", "redirect_uris", "grant_types", "response_types", "token_endpoint_auth_method", "application_type"] as const) {
+  for (const field of [
+    "client_name",
+    "redirect_uris",
+    "grant_types",
+    "response_types",
+    "token_endpoint_auth_method",
+    "application_type",
+  ] as const) {
     assert.deepEqual(document[field], registered[field], field);
   }
   const clientId = new URL(String(document.client_id));
   assert.equal(clientId.protocol, "https:", "a client ID metadata document URL must be HTTPS");
   assert.notEqual(clientId.pathname, "/", "and must have a path");
-  if (AIDEN_MCP_CLIENT_METADATA_URL !== undefined) assert.equal(document.client_id, AIDEN_MCP_CLIENT_METADATA_URL, "the document names the URL it is served from");
+  if (AIDEN_MCP_CLIENT_METADATA_URL !== undefined)
+    assert.equal(
+      document.client_id,
+      AIDEN_MCP_CLIENT_METADATA_URL,
+      "the document names the URL it is served from",
+    );
 });
 
 test("API-key header values accept a Bearer token with or without the prefix", () => {
@@ -44,7 +61,10 @@ test("a registration endpoint that answers 403 to dynamic registration gets a re
   const raw = await registerClient("https://figma.example.test", {
     clientMetadata: mcpOAuthClientMetadata(),
     fetch: async () => new Response("Forbidden", { status: 403 }),
-  }).then(() => assert.fail("registration must be rejected"), (error: unknown) => error);
+  }).then(
+    () => assert.fail("registration must be rejected"),
+    (error: unknown) => error,
+  );
   const explained = explainMcpOAuthFailure(raw);
   assert.match(explained.message, /only lets approved apps sign in, and it hasn’t approved Aiden/u);
   // The advice must not send people back to the page they are already on.
@@ -56,24 +76,47 @@ test("a registration endpoint that answers 403 to dynamic registration gets a re
   const notFound = await registerClient("https://other.example.test", {
     clientMetadata: mcpOAuthClientMetadata(),
     fetch: async () => new Response(`<html>${"Not found\n".repeat(500)}</html>`, { status: 404 }),
-  }).then(() => undefined, (error: unknown) => error);
+  }).then(
+    () => undefined,
+    (error: unknown) => error,
+  );
   const other = explainMcpOAuthFailure(notFound);
-  assert.equal(other.message, "This MCP server rejected OAuth client registration (HTTP 404).", "the server's body never reaches Settings");
+  assert.equal(
+    other.message,
+    "This MCP server rejected OAuth client registration (HTTP 404).",
+    "the server's body never reaches Settings",
+  );
   assert.equal(other.cause, notFound);
   const described = await registerClient("https://other.example.test", {
     clientMetadata: mcpOAuthClientMetadata(),
-    fetch: async () => Response.json({ error: "invalid_client_metadata", error_description: "redirect_uris\nmust be https" }, { status: 400 }),
-  }).then(() => undefined, (error: unknown) => error);
-  assert.equal(explainMcpOAuthFailure(described).message, "This MCP server rejected OAuth client registration (HTTP 400): redirect_uris must be https");
+    fetch: async () =>
+      Response.json(
+        { error: "invalid_client_metadata", error_description: "redirect_uris\nmust be https" },
+        { status: 400 },
+      ),
+  }).then(
+    () => undefined,
+    (error: unknown) => error,
+  );
+  assert.equal(
+    explainMcpOAuthFailure(described).message,
+    "This MCP server rejected OAuth client registration (HTTP 400): redirect_uris must be https",
+  );
 });
 
 test("authorization-server metadata with a mismatched issuer points at the metadata URL override", async () => {
   const raw = await discoverAuthorizationServerMetadata("https://login.example.test/tenant", {
-    fetch: async () => Response.json({
-      issuer: "https://login.example.test/other", authorization_endpoint: "https://login.example.test/authorize",
-      token_endpoint: "https://login.example.test/token", response_types_supported: ["code"],
-    }),
-  }).then(() => assert.fail("a mismatched issuer must be refused"), (error: unknown) => error);
+    fetch: async () =>
+      Response.json({
+        issuer: "https://login.example.test/other",
+        authorization_endpoint: "https://login.example.test/authorize",
+        token_endpoint: "https://login.example.test/token",
+        response_types_supported: ["code"],
+      }),
+  }).then(
+    () => assert.fail("a mismatched issuer must be refused"),
+    (error: unknown) => error,
+  );
   const explained = explainMcpOAuthFailure(raw);
   assert.match(explained.message, /Authorization metadata URL/u);
   assert.equal(explained.cause, raw);

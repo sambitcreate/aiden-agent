@@ -19,7 +19,10 @@ export interface GoalVerdictOptions {
   allowWait: boolean;
 }
 
-export function parseGoalVerdict(text: string, options: GoalVerdictOptions): GoalVerdict | undefined {
+export function parseGoalVerdict(
+  text: string,
+  options: GoalVerdictOptions,
+): GoalVerdict | undefined {
   for (const candidate of verdictCandidates(text)) {
     let value: unknown;
     try {
@@ -47,13 +50,16 @@ function readVerdict(value: unknown, options: GoalVerdictOptions): GoalVerdict |
 function cleanReason(value: string): string {
   const text = value.replace(/\s+/gu, " ").trim();
   const chars = [...text];
-  return chars.length > GOAL_REASON_MAX_CHARS ? `${chars.slice(0, GOAL_REASON_MAX_CHARS - 1).join("")}…` : text;
+  return chars.length > GOAL_REASON_MAX_CHARS
+    ? `${chars.slice(0, GOAL_REASON_MAX_CHARS - 1).join("")}…`
+    : text;
 }
 
 /** Fenced blocks first, then the widest brace span of the whole answer. */
 function verdictCandidates(text: string): string[] {
   const candidates: string[] = [];
-  for (const match of text.matchAll(/```[a-zA-Z]*[^\S\n]*\n([\s\S]*?)```/gu)) candidates.push(match[1]!.trim());
+  for (const match of text.matchAll(/```[a-zA-Z]*[^\S\n]*\n([\s\S]*?)```/gu))
+    candidates.push(match[1]!.trim());
   const start = text.indexOf("{");
   const end = text.lastIndexOf("}");
   if (start !== -1 && end > start) candidates.push(text.slice(start, end + 1));

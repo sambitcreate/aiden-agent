@@ -25,11 +25,25 @@ function names(nodes: readonly AumNode[]): string[] {
 test("the spec example parses into one Visual with its components in order", () => {
   const { nodes, diagnostics } = parseAum(SPEC_EXAMPLE);
   assert.deepEqual(diagnostics, []);
-  assert.deepEqual(names(nodes), ["Visual", "Row", "Stat", "Stat", "Segmented", "Chart", "Button", "Data"]);
+  assert.deepEqual(names(nodes), [
+    "Visual",
+    "Row",
+    "Stat",
+    "Stat",
+    "Segmented",
+    "Chart",
+    "Button",
+    "Data",
+  ]);
   const visual = elements(nodes)[0]!;
-  assert.deepEqual(visual.attrs.map((attr) => attr.name), ["title", "state"]);
+  assert.deepEqual(
+    visual.attrs.map((attr) => attr.name),
+    ["title", "state"],
+  );
   const data = elements(visual.children).find((node) => node.name === "Data")!;
-  assert.deepEqual(data.children, [{ kind: "text", text: `{ "totals": {"revenue": 6930, "margin": 0.31}, "byRegion": [] }` }]);
+  assert.deepEqual(data.children, [
+    { kind: "text", text: `{ "totals": {"revenue": 6930, "margin": 0.31}, "byRegion": [] }` },
+  ]);
   const button = elements(visual.children).find((node) => node.name === "Button")!;
   assert.deepEqual(button.children, [{ kind: "text", text: "Drill into EMEA" }]);
 });
@@ -46,10 +60,15 @@ test("every streaming prefix parses without throwing and only ever grows", () =>
 });
 
 test("a cut inside an attribute expression drops only that attribute", () => {
-  const { nodes, diagnostics } = parseAum(`<Visual title="T"><Stat label="Total" value={$data.totals[`);
+  const { nodes, diagnostics } = parseAum(
+    `<Visual title="T"><Stat label="Total" value={$data.totals[`,
+  );
   const stat = elements(elements(nodes)[0]!.children)[0]!;
   assert.equal(stat.name, "Stat");
-  assert.deepEqual(stat.attrs.map((attr) => attr.name), ["label"]);
+  assert.deepEqual(
+    stat.attrs.map((attr) => attr.name),
+    ["label"],
+  );
   assert.ok(diagnostics.some((diagnostic) => diagnostic.code === "recovered"));
 });
 
@@ -59,17 +78,26 @@ test("open elements are auto-closed at the end and stray closers are reported", 
   assert.equal(elements(cut.nodes)[0]!.closed, false);
   const stray = parseAum(`<Visual><Text>Hi</Text></Row></Visual>`);
   assert.deepEqual(names(stray.nodes), ["Visual", "Text"]);
-  assert.ok(stray.diagnostics.some((diagnostic) => diagnostic.code === "recovered" && diagnostic.at === "Row"));
+  assert.ok(
+    stray.diagnostics.some(
+      (diagnostic) => diagnostic.code === "recovered" && diagnostic.at === "Row",
+    ),
+  );
 });
 
 test("a mismatched closer closes back to its matching element", () => {
   const { nodes } = parseAum(`<Visual><Row><Text>a</Row><Text>b</Text></Visual>`);
   const visual = elements(nodes)[0]!;
-  assert.deepEqual(elements(visual.children).map((node) => node.name), ["Row", "Text"]);
+  assert.deepEqual(
+    elements(visual.children).map((node) => node.name),
+    ["Row", "Text"],
+  );
 });
 
 test("comments are skipped, a lone '<' stays text, and braces in strings do not end an expression", () => {
-  const { nodes } = parseAum(`<Visual><!-- note --><Text>a < b</Text><Text>{"}" + $x}</Text></Visual>`);
+  const { nodes } = parseAum(
+    `<Visual><!-- note --><Text>a < b</Text><Text>{"}" + $x}</Text></Visual>`,
+  );
   const [first, second] = elements(elements(nodes)[0]!.children);
   assert.deepEqual(first!.children, [{ kind: "text", text: "a < b" }]);
   assert.deepEqual(second!.children, [{ kind: "expr", source: `"}" + $x` }]);
@@ -94,7 +122,10 @@ test("expressions compile to a data AST", () => {
     key: { op: "var", name: "metric" },
   });
   assert.deepEqual(parseExpression(`"A" + $x`).expr, {
-    op: "bin", o: "+", l: { op: "lit", v: "A" }, r: { op: "var", name: "x" },
+    op: "bin",
+    o: "+",
+    l: { op: "lit", v: "A" },
+    r: { op: "var", name: "x" },
   });
   assert.deepEqual(parseExpression(`$m == "revenue" ? 1 : 2`).expr, {
     op: "if",
@@ -103,9 +134,17 @@ test("expressions compile to a data AST", () => {
     else: { op: "lit", v: 2 },
   });
   assert.deepEqual(parseExpression(`fmt($v, "currency")`).expr, {
-    op: "call", fn: "fmt", a: [{ op: "var", name: "v" }, { op: "lit", v: "currency" }],
+    op: "call",
+    fn: "fmt",
+    a: [
+      { op: "var", name: "v" },
+      { op: "lit", v: "currency" },
+    ],
   });
-  assert.deepEqual(parseExpression(`{value:"a",label:"A"}`).expr, { op: "json", v: { value: "a", label: "A" } });
+  assert.deepEqual(parseExpression(`{value:"a",label:"A"}`).expr, {
+    op: "json",
+    v: { value: "a", label: "A" },
+  });
   assert.deepEqual(parseExpression(`[1, -2, +0.5]`).expr, { op: "json", v: [1, -2, 0.5] });
   assert.deepEqual(parseExpression(`!$a && ($b || $c)`).expr, {
     op: "bin",
@@ -126,18 +165,34 @@ test("actions are recognised at the top level only", () => {
     text: { op: "bin", o: "+", l: { op: "lit", v: "Break down " }, r: { op: "var", name: "m" } },
   });
   assert.deepEqual(parseExpression(`setState("tab", "b")`).action, {
-    act: "set", key: "tab", value: { op: "lit", v: "b" },
+    act: "set",
+    key: "tab",
+    value: { op: "lit", v: "b" },
   });
   assert.deepEqual(parseExpression(`openUrl("https://example.com")`).action, {
-    act: "open", url: { op: "lit", v: "https://example.com" },
+    act: "open",
+    url: { op: "lit", v: "https://example.com" },
   });
-  assert.deepEqual(parseExpression(`copy($total)`).action, { act: "copy", text: { op: "var", name: "total" } });
+  assert.deepEqual(parseExpression(`copy($total)`).action, {
+    act: "copy",
+    text: { op: "var", name: "total" },
+  });
   assert.ok(parseExpression(`setState($k, 1)`).error);
   assert.ok(parseExpression(`fmt(sendPrompt("x"))`).error);
 });
 
 test("unsupported syntax is an error, never a throw", () => {
-  for (const source of ["eval(1)", "$a - 1", "$a = 1", "{value: $x}", "items.map(x => x)", "(", "$a ? 1", "`tpl`", ""]) {
+  for (const source of [
+    "eval(1)",
+    "$a - 1",
+    "$a = 1",
+    "{value: $x}",
+    "items.map(x => x)",
+    "(",
+    "$a ? 1",
+    "`tpl`",
+    "",
+  ]) {
     const parsed = parseExpression(source);
     assert.ok(parsed.error, source);
     assert.equal(parsed.expr, undefined, source);

@@ -1,13 +1,23 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { createScheduledTaskApplicationService, scheduledTaskRevision } from "./scheduled-task-application-service.js";
+import {
+  createScheduledTaskApplicationService,
+  scheduledTaskRevision,
+} from "./scheduled-task-application-service.js";
 import { scheduledSettingsPatch } from "./scheduled-settings-core.js";
-import type { AppSettings, McpServer, ScheduledRun, ScheduledTask, ScheduledTaskInput } from "./types.js";
+import type {
+  AppSettings,
+  McpServer,
+  ScheduledRun,
+  ScheduledTask,
+  ScheduledTaskInput,
+} from "./types.js";
 
 function fixture(
   mcpServers: McpServer[] = [],
-  settingsPatch: (input: Record<string, unknown>) => Partial<AppSettings> = (input) =>
-    ({ ...(typeof input.enabled === "boolean" ? { scheduledTasksEnabled: input.enabled } : {}) }),
+  settingsPatch: (input: Record<string, unknown>) => Partial<AppSettings> = (input) => ({
+    ...(typeof input.enabled === "boolean" ? { scheduledTasksEnabled: input.enabled } : {}),
+  }),
 ) {
   let clock = 10;
   let settings: AppSettings = {};
@@ -22,7 +32,10 @@ function fixture(
       runs: async (id) => runs.get(id) ?? [],
       clearOriginChat: async (id, options = {}) => {
         const existing = tasks.get(id);
-        if (options.expectedUpdatedAt !== undefined && existing?.updatedAt !== options.expectedUpdatedAt) {
+        if (
+          options.expectedUpdatedAt !== undefined &&
+          existing?.updatedAt !== options.expectedUpdatedAt
+        ) {
           throw new Error("This automation changed.");
         }
         if (!existing?.originChatId) return undefined;
@@ -37,17 +50,30 @@ function fixture(
       save: async (input: ScheduledTaskInput, options = {}) => {
         savedOptions.push({ expectedUpdatedAt: options.expectedUpdatedAt });
         const existing = input.id ? tasks.get(input.id) : undefined;
-        if (options.expectedUpdatedAt !== undefined && existing?.updatedAt !== options.expectedUpdatedAt) {
+        if (
+          options.expectedUpdatedAt !== undefined &&
+          existing?.updatedAt !== options.expectedUpdatedAt
+        ) {
           throw new Error("revision");
         }
         clock += 1;
         const task: ScheduledTask = {
-          id: existing?.id ?? "task-1", name: input.name, enabled: input.enabled ?? true,
-          mode: input.mode, cron: input.cron, timezone: input.timezone ?? "UTC",
-          workspaceId: input.workspaceId, providerId: input.providerId, model: input.model,
-          prompt: input.prompt, script: input.script, permission: input.permission ?? "read-only",
-          mcpServerIds: input.mcpServerIds, notify: input.notify ?? true,
-          createdAt: existing?.createdAt ?? clock, updatedAt: clock,
+          id: existing?.id ?? "task-1",
+          name: input.name,
+          enabled: input.enabled ?? true,
+          mode: input.mode,
+          cron: input.cron,
+          timezone: input.timezone ?? "UTC",
+          workspaceId: input.workspaceId,
+          providerId: input.providerId,
+          model: input.model,
+          prompt: input.prompt,
+          script: input.script,
+          permission: input.permission ?? "read-only",
+          mcpServerIds: input.mcpServerIds,
+          notify: input.notify ?? true,
+          createdAt: existing?.createdAt ?? clock,
+          updatedAt: clock,
         };
         tasks.set(task.id, task);
         return task;
@@ -74,10 +100,20 @@ function fixture(
       },
       runNow: async (id, options = {}) => {
         savedOptions.push({ runId: options.runId, expectedUpdatedAt: options.expectedUpdatedAt });
-        if (options.expectedUpdatedAt !== undefined && tasks.get(id)?.updatedAt !== options.expectedUpdatedAt) {
+        if (
+          options.expectedUpdatedAt !== undefined &&
+          tasks.get(id)?.updatedAt !== options.expectedUpdatedAt
+        ) {
           throw new Error("revision");
         }
-        const run: ScheduledRun = { id: options.runId ?? "run-local", taskId: id, startedAt: 1, finishedAt: 2, result: "success", output: "ok" };
+        const run: ScheduledRun = {
+          id: options.runId ?? "run-local",
+          taskId: id,
+          startedAt: 1,
+          finishedAt: 2,
+          result: "success",
+          output: "ok",
+        };
         runs.set(id, [run]);
         return run;
       },
@@ -86,7 +122,10 @@ function fixture(
     },
     getSettings: async () => settings,
     setSettings: async (patch) => (settings = { ...settings, ...patch }),
-    getWorkspace: async (id) => id === "workspace-1" ? ({ id, name: "One", permission: "full", folderPath: "/safe", createdAt: 1, updatedAt: 1 }) : undefined,
+    getWorkspace: async (id) =>
+      id === "workspace-1"
+        ? { id, name: "One", permission: "full", folderPath: "/safe", createdAt: 1, updatedAt: 1 }
+        : undefined,
     listMcpServers: async () => mcpServers,
     validateMcpSelection: () => undefined,
     listScripts: async () => ["safe.sh"],
@@ -105,24 +144,52 @@ function fixture(
 test("shared scheduled-task service validates inventory and carries revisions into lifecycle commits", async () => {
   const value = fixture();
   await assert.rejects(
-    value.service.save({ name: "Unsafe", mode: "script", cron: "* * * * *", timezone: "UTC", permission: "full", script: "raw.sh" }),
+    value.service.save({
+      name: "Unsafe",
+      mode: "script",
+      cron: "* * * * *",
+      timezone: "UTC",
+      permission: "full",
+      script: "raw.sh",
+    }),
     /inventory/u,
   );
-  const task = await value.service.save({ name: "Safe", mode: "script", cron: "* * * * *", timezone: "UTC", permission: "full", script: "safe.sh", workspaceId: "workspace-1" });
+  const task = await value.service.save({
+    name: "Safe",
+    mode: "script",
+    cron: "* * * * *",
+    timezone: "UTC",
+    permission: "full",
+    script: "safe.sh",
+    workspaceId: "workspace-1",
+  });
   const revision = scheduledTaskRevision(task);
   await assert.rejects(value.service.pause(task.id, "rev_stale"), /changed/u);
   const paused = await value.service.pause(task.id, revision);
   assert.equal(paused.enabled, false);
-  assert.equal(value.savedOptions[value.savedOptions.length - 1]?.expectedUpdatedAt, task.updatedAt);
+  assert.equal(
+    value.savedOptions[value.savedOptions.length - 1]?.expectedUpdatedAt,
+    task.updatedAt,
+  );
 });
 
 test("shared scheduled-task service carries a caller-owned run ID, task revision, and revision-checks settings", async () => {
   const value = fixture();
-  const task = await value.service.save({ name: "Run", mode: "llm", cron: "* * * * *", timezone: "UTC", permission: "read-only", prompt: "hello" });
+  const task = await value.service.save({
+    name: "Run",
+    mode: "llm",
+    cron: "* * * * *",
+    timezone: "UTC",
+    permission: "read-only",
+    prompt: "hello",
+  });
   await assert.rejects(value.service.runNow(task.id, undefined, "rev_stale"), /changed/u);
   await value.service.runNow(task.id, "run_remote", scheduledTaskRevision(task));
   assert.equal(value.savedOptions[value.savedOptions.length - 1]?.runId, "run_remote");
-  assert.equal(value.savedOptions[value.savedOptions.length - 1]?.expectedUpdatedAt, task.updatedAt);
+  assert.equal(
+    value.savedOptions[value.savedOptions.length - 1]?.expectedUpdatedAt,
+    task.updatedAt,
+  );
   const current = await value.service.settings();
   await assert.rejects(value.service.updateSettings("rev_stale", { enabled: false }), /changed/u);
   const updated = await value.service.updateSettings(current.revision, { enabled: false });
@@ -132,8 +199,12 @@ test("shared scheduled-task service carries a caller-owned run ID, task revision
 test("concurrent desktop and remote lifecycle edits admit only one revision", async () => {
   const value = fixture();
   const task = await value.service.save({
-    name: "Concurrent", mode: "llm", cron: "* * * * *", timezone: "UTC",
-    permission: "read-only", prompt: "hello",
+    name: "Concurrent",
+    mode: "llm",
+    cron: "* * * * *",
+    timezone: "UTC",
+    permission: "read-only",
+    prompt: "hello",
   });
   const revision = scheduledTaskRevision(task);
   const results = await Promise.allSettled([
@@ -146,7 +217,14 @@ test("concurrent desktop and remote lifecycle edits admit only one revision", as
 
 test("Use its own chat drops a task's chat binding only on the current revision", async () => {
   const value = fixture();
-  const task = await value.service.save({ name: "Chat task", mode: "llm", cron: "0 9 * * *", timezone: "UTC", permission: "read-only", prompt: "hello" });
+  const task = await value.service.save({
+    name: "Chat task",
+    mode: "llm",
+    cron: "0 9 * * *",
+    timezone: "UTC",
+    permission: "read-only",
+    prompt: "hello",
+  });
   value.tasks.set(task.id, { ...task, originChatId: "chat-1" });
   const bound = value.tasks.get(task.id)!;
   await assert.rejects(value.service.useOwnChat(task.id, "rev_stale"), /changed/u);
@@ -154,7 +232,11 @@ test("Use its own chat drops a task's chat binding only on the current revision"
   const moved = await value.service.useOwnChat(task.id, scheduledTaskRevision(bound));
   assert.equal(moved.originChatId, undefined);
   assert.equal(value.tasks.get(task.id)?.originChatId, undefined);
-  assert.notEqual(scheduledTaskRevision(moved), scheduledTaskRevision(bound), "the move is a new revision");
+  assert.notEqual(
+    scheduledTaskRevision(moved),
+    scheduledTaskRevision(bound),
+    "the move is a new revision",
+  );
   const again = await value.service.useOwnChat(task.id, scheduledTaskRevision(moved));
   assert.equal(again.originChatId, undefined, "moving an unbound task is a no-op");
 });
@@ -162,8 +244,12 @@ test("Use its own chat drops a task's chat binding only on the current revision"
 test("Bot routines stay out of the generic automation surfaces", async () => {
   const value = fixture();
   const ordinary = await value.service.save({
-    name: "Ordinary", mode: "llm", cron: "* * * * *", timezone: "UTC",
-    permission: "read-only", prompt: "hello",
+    name: "Ordinary",
+    mode: "llm",
+    cron: "* * * * *",
+    timezone: "UTC",
+    permission: "read-only",
+    prompt: "hello",
   });
   value.tasks.set("routine-1", {
     ...ordinary,
@@ -173,23 +259,47 @@ test("Bot routines stay out of the generic automation surfaces", async () => {
     routineSchedule: { kind: "weekly", days: [0], time: "08:41" },
   });
 
-  assert.deepEqual((await value.service.list()).map((task) => task.id), [ordinary.id]);
+  assert.deepEqual(
+    (await value.service.list()).map((task) => task.id),
+    [ordinary.id],
+  );
   await assert.rejects(value.service.get("routine-1"), /not found/u);
   await assert.rejects(value.service.runs("routine-1"), /not found/u);
   await assert.rejects(value.service.pause("routine-1"), /not found/u);
   await assert.rejects(value.service.remove("routine-1"), /not found/u);
   await assert.rejects(value.service.runNow("routine-1"), /not found/u);
   await assert.rejects(
-    value.service.save({ id: "routine-1", name: "Hijack", mode: "llm", cron: "* * * * *", prompt: "x" }),
+    value.service.save({
+      id: "routine-1",
+      name: "Hijack",
+      mode: "llm",
+      cron: "* * * * *",
+      prompt: "x",
+    }),
     /not found/u,
   );
   assert.equal(value.tasks.get("routine-1")?.name, "Weekly meal prep");
 });
 
 test("the schedule server picker (desktop and Remote) lists only servers a schedule can use", async () => {
-  const remote = (id: string, patch: Partial<McpServer> = {}): McpServer => ({ id, name: id, transport: "http", url: `https://${id}.test`, enabled: true, ...patch });
-  const value = fixture([remote("gmail"), remote("off", { enabled: false }), remote("hidden", { exposure: "hidden" }), remote("partial", { hiddenTools: ["send"] })]);
-  assert.deepEqual(await value.service.mcpServers(), [{ id: "gmail", name: "gmail" }, { id: "partial", name: "partial" }]);
+  const remote = (id: string, patch: Partial<McpServer> = {}): McpServer => ({
+    id,
+    name: id,
+    transport: "http",
+    url: `https://${id}.test`,
+    enabled: true,
+    ...patch,
+  });
+  const value = fixture([
+    remote("gmail"),
+    remote("off", { enabled: false }),
+    remote("hidden", { exposure: "hidden" }),
+    remote("partial", { hiddenTools: ["send"] }),
+  ]);
+  assert.deepEqual(await value.service.mcpServers(), [
+    { id: "gmail", name: "gmail" },
+    { id: "partial", name: "partial" },
+  ]);
 });
 
 test("check-backs are on by default, and only a change of the switch reaches follow-through", async () => {
@@ -213,7 +323,9 @@ test("keep this computer awake is on by default and only an off choice is stored
   const initial = await value.service.settings();
   assert.equal(initial.value.keepAwakeWhileWorking, true);
 
-  const off = await value.service.updateSettings(initial.revision, { keepAwakeWhileWorking: false });
+  const off = await value.service.updateSettings(initial.revision, {
+    keepAwakeWhileWorking: false,
+  });
   assert.equal(off.value.keepAwakeWhileWorking, false);
   assert.equal(value.storedSettings().keepAwakeWhileWorking, false);
   assert.notEqual(off.revision, initial.revision);

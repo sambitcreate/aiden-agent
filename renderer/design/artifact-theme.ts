@@ -2,17 +2,29 @@
 // follows Aiden's appearance, as artifacts do everywhere; on, it gets the
 // dark variant of the person's theme even while Aiden itself is light.
 
-import { getPresetVariant, resolveThemeTokens, themeVariantSafetyIssues } from "../shared/appearance";
-import { GENERATIVE_UI_THEME_VARIABLES, sanitizeGenerativeUiThemeVars } from "../shared/generative-ui-theme";
+import {
+  getPresetVariant,
+  resolveThemeTokens,
+  themeVariantSafetyIssues,
+} from "../shared/appearance";
+import {
+  GENERATIVE_UI_THEME_VARIABLES,
+  sanitizeGenerativeUiThemeVars,
+} from "../shared/generative-ui-theme";
 import { readCurrentAppearance } from "../lib/appearance-runtime";
-import { readGenerativeUiTheme, type GenerativeUiThemeSnapshot } from "../lib/generative-ui-theme-snapshot";
+import {
+  readGenerativeUiTheme,
+  type GenerativeUiThemeSnapshot,
+} from "../lib/generative-ui-theme-snapshot";
 
 export function readDesignArtifactTheme(dark: boolean): GenerativeUiThemeSnapshot {
   const current = readGenerativeUiTheme();
   if (!dark || current.colorScheme === "dark") return current;
   const config = readCurrentAppearance();
   const variant =
-    config && themeVariantSafetyIssues(config.dark, "dark").length === 0 ? config.dark : getPresetVariant("aiden", "dark");
+    config && themeVariantSafetyIssues(config.dark, "dark").length === 0
+      ? config.dark
+      : getPresetVariant("aiden", "dark");
   const tokens = resolveThemeTokens(variant, "dark");
   const raw: Record<string, string> = { ...current.vars };
   for (const name of GENERATIVE_UI_THEME_VARIABLES) {

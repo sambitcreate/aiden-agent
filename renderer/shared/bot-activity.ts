@@ -152,12 +152,16 @@ export function botToolApp(toolName: string): string | undefined {
     .join(" ");
   if (!label) return undefined;
   const points = [...label];
-  return points.length > BOT_APP_LABEL_CHARS ? points.slice(0, BOT_APP_LABEL_CHARS).join("").trimEnd() : label;
+  return points.length > BOT_APP_LABEL_CHARS
+    ? points.slice(0, BOT_APP_LABEL_CHARS).join("").trimEnd()
+    : label;
 }
 
 /** The phase an active tool puts its Bot in (§5.1). */
 export function botToolPhase(toolName: string, app?: string): BotToolPhase {
-  return TOOL_PHASES.get(BROWSER_TOOL.test(toolName) ? "browser" : toolName) ?? (app ? "app" : "working");
+  return (
+    TOOL_PHASES.get(BROWSER_TOOL.test(toolName) ? "browser" : toolName) ?? (app ? "app" : "working")
+  );
 }
 
 /** The status line's word for a phase; `app` fills "Using {app}". */
@@ -166,7 +170,11 @@ export function botPhaseWord(phase: BotActivityPhase, app?: string): string {
 }
 
 /** Phases that keep their own word under Always "Thinking": they change what the person should do. */
-const KEEPS_ITS_WORD: ReadonlySet<BotActivityPhase> = new Set(["waiting", "stopping", "reconnecting"]);
+const KEEPS_ITS_WORD: ReadonlySet<BotActivityPhase> = new Set([
+  "waiting",
+  "stopping",
+  "reconnecting",
+]);
 
 export interface BotActivityDisplay {
   phase: BotActivityPhase;
@@ -175,9 +183,14 @@ export interface BotActivityDisplay {
 }
 
 /** What the line shows for a phase id from any client: unknown ids read as `working` (§5.2). */
-export function botActivityDisplay(phase: string, wording: BotChatActivityWording, app?: string): BotActivityDisplay {
+export function botActivityDisplay(
+  phase: string,
+  wording: BotChatActivityWording,
+  app?: string,
+): BotActivityDisplay {
   const known: BotActivityPhase = isBotActivityPhase(phase) ? phase : "working";
-  const shown: BotActivityPhase = wording === "thinking" && !KEEPS_ITS_WORD.has(known) ? "thinking" : known;
+  const shown: BotActivityPhase =
+    wording === "thinking" && !KEEPS_ITS_WORD.has(known) ? "thinking" : known;
   return { phase: shown, word: botPhaseWord(shown, app), mark: PHASES[shown].mark };
 }
 
@@ -195,23 +208,59 @@ function stepPhrases(kind: BotToolPhase, app?: string): StepPhrases {
     case "editing":
       return { one: "Edited 1 file", many: (n) => `Edited ${n} files`, infinitive: "edit a file" };
     case "command":
-      return { one: "Ran a command", many: (n) => `Ran ${n} commands`, infinitive: "run a command" };
+      return {
+        one: "Ran a command",
+        many: (n) => `Ran ${n} commands`,
+        infinitive: "run a command",
+      };
     case "searching":
-      return { one: "Searched the web", many: (n) => `Searched the web ${n} times`, infinitive: "search the web" };
+      return {
+        one: "Searched the web",
+        many: (n) => `Searched the web ${n} times`,
+        infinitive: "search the web",
+      };
     case "photo":
-      return { one: "Looked at your photo", many: (n) => `Looked at ${n} photos`, infinitive: "look at your photo" };
+      return {
+        one: "Looked at your photo",
+        many: (n) => `Looked at ${n} photos`,
+        infinitive: "look at your photo",
+      };
     case "computer":
-      return { one: "Used your Mac", many: (n) => `Used your Mac ${n} times`, infinitive: "use your Mac" };
+      return {
+        one: "Used your Mac",
+        many: (n) => `Used your Mac ${n} times`,
+        infinitive: "use your Mac",
+      };
     case "helper":
-      return { one: "Asked a helper", many: (n) => `Asked ${n} helpers`, infinitive: "ask a helper" };
+      return {
+        one: "Asked a helper",
+        many: (n) => `Asked ${n} helpers`,
+        infinitive: "ask a helper",
+      };
     case "remembering":
-      return { one: "Updated its memory", many: () => "Updated its memory", infinitive: "update its memory" };
+      return {
+        one: "Updated its memory",
+        many: () => "Updated its memory",
+        infinitive: "update its memory",
+      };
     case "routine":
-      return { one: "Set up a routine", many: (n) => `Worked on ${n} routines`, infinitive: "set up a routine" };
+      return {
+        one: "Set up a routine",
+        many: (n) => `Worked on ${n} routines`,
+        infinitive: "set up a routine",
+      };
     case "app":
-      return { one: `Used ${name}`, many: (n) => `Used ${name} ${n} times`, infinitive: `use ${name}` };
+      return {
+        one: `Used ${name}`,
+        many: (n) => `Used ${name} ${n} times`,
+        infinitive: `use ${name}`,
+      };
     case "waiting":
-      return { one: "Asked you a question", many: (n) => `Asked you ${n} questions`, infinitive: "ask you a question" };
+      return {
+        one: "Asked you a question",
+        many: (n) => `Asked you ${n} questions`,
+        infinitive: "ask you a question",
+      };
     case "working":
       return { one: "Used a tool", many: (n) => `Used ${n} tools`, infinitive: "use a tool" };
   }
@@ -254,7 +303,9 @@ export function botDurationLabel(ms: number): string {
 /** The status line's elapsed time, once a turn has run for 20 seconds. */
 export function botElapsedLabel(startedAt: number, now: number): string | null {
   const elapsed = now - startedAt;
-  return Number.isFinite(elapsed) && elapsed >= BOT_ELAPSED_AFTER_MS ? botDurationLabel(elapsed) : null;
+  return Number.isFinite(elapsed) && elapsed >= BOT_ELAPSED_AFTER_MS
+    ? botDurationLabel(elapsed)
+    : null;
 }
 
 /** Screen readers hear a phase change at most this often (§14). */
@@ -285,7 +336,9 @@ export function nextBotAnnouncement(
  * calls start in that order, so the last running one started most recently;
  * with none running, the first one about to start.
  */
-export function pickActiveToolSlot<T extends { status: string }>(slots: readonly T[] | undefined): T | undefined {
+export function pickActiveToolSlot<T extends { status: string }>(
+  slots: readonly T[] | undefined,
+): T | undefined {
   if (!slots) return undefined;
   for (let index = slots.length - 1; index >= 0; index -= 1) {
     if (slots[index]!.status === "running") return slots[index];

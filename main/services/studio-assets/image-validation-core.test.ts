@@ -10,11 +10,25 @@ const code = (expected: StudioAssetError["code"]) => (error: unknown) =>
 test("magic bytes decide the type; a mismatched declaration is rejected", () => {
   const png = pngBytes(640, 480);
   assert.equal(sniffStudioImageType(png), "image/png");
-  assert.deepEqual(validateStudioImage(png, "image/png"), { mediaType: "image/png", width: 640, height: 480 });
-  assert.deepEqual(validateStudioImage(png, undefined), { mediaType: "image/png", width: 640, height: 480 });
+  assert.deepEqual(validateStudioImage(png, "image/png"), {
+    mediaType: "image/png",
+    width: 640,
+    height: 480,
+  });
+  assert.deepEqual(validateStudioImage(png, undefined), {
+    mediaType: "image/png",
+    width: 640,
+    height: 480,
+  });
   assert.throws(() => validateStudioImage(png, "image/jpeg"), code("invalid_image"));
-  assert.equal(sniffStudioImageType(new TextEncoder().encode("<svg xmlns='http://www.w3.org/2000/svg'/>")), undefined);
-  assert.throws(() => validateStudioImage(new TextEncoder().encode("GIF89a"), "image/gif"), code("invalid_image"));
+  assert.equal(
+    sniffStudioImageType(new TextEncoder().encode("<svg xmlns='http://www.w3.org/2000/svg'/>")),
+    undefined,
+  );
+  assert.throws(
+    () => validateStudioImage(new TextEncoder().encode("GIF89a"), "image/gif"),
+    code("invalid_image"),
+  );
 });
 
 test("valid JPEG and WebP images report their media type and dimensions", () => {
@@ -44,7 +58,14 @@ test("a WebP container with no image chunk is rejected", () => {
 test("a recognized signature with broken structure is rejected", () => {
   const truncated = pngBytes(10, 10).slice(0, 40);
   assert.throws(() => validateStudioImage(truncated, "image/png"), code("invalid_image"));
-  const fakeWebp = new Uint8Array([...new TextEncoder().encode("RIFF"), 4, 0, 0, 0, ...new TextEncoder().encode("WEBPVP8 ")]);
+  const fakeWebp = new Uint8Array([
+    ...new TextEncoder().encode("RIFF"),
+    4,
+    0,
+    0,
+    0,
+    ...new TextEncoder().encode("WEBPVP8 "),
+  ]);
   assert.equal(sniffStudioImageType(fakeWebp), "image/webp");
   assert.throws(() => validateStudioImage(fakeWebp, "image/webp"), code("invalid_image"));
 });
@@ -53,7 +74,8 @@ test("oversize dimensions are rejected before any decode", () => {
   assert.throws(() => validateStudioImage(pngBytes(20_000, 2), "image/png"), code("too_large"));
   assert.throws(() => validateStudioImage(pngBytes(5_000, 5_000), "image/png"), code("too_large"));
   assert.throws(
-    () => validateStudioImage(pngBytes(300, 300), "image/png", { maxEdge: 256, maxPixels: 1_000_000 }),
+    () =>
+      validateStudioImage(pngBytes(300, 300), "image/png", { maxEdge: 256, maxPixels: 1_000_000 }),
     code("too_large"),
   );
 });

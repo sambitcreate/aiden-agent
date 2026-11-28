@@ -1,5 +1,11 @@
 import { createModels } from "@earendil-works/pi-ai";
-import { compactionEngineFrom, parseCompactionModelOverrides, resolveCompactionModelBudget, type CompactionEngine, type CompactionModelOverrides } from "../../renderer/shared/compaction.js";
+import {
+  compactionEngineFrom,
+  parseCompactionModelOverrides,
+  resolveCompactionModelBudget,
+  type CompactionEngine,
+  type CompactionModelOverrides,
+} from "../../renderer/shared/compaction.js";
 import { randomUUID } from "node:crypto";
 import { type ThinkingLevel } from "@earendil-works/pi-agent-core";
 import { estimateTokens } from "./pi-legacy-harness.js";
@@ -46,7 +52,10 @@ export type CompactChatResult =
 
 export interface ContextLifecycleServiceDeps {
   getCompactionEngine?(): Promise<CompactionEngine>;
-  getCompactionPreferences?(): Promise<{ compactionEngine?: CompactionEngine; compactionModelOverrides?: CompactionModelOverrides }>;
+  getCompactionPreferences?(): Promise<{
+    compactionEngine?: CompactionEngine;
+    compactionModelOverrides?: CompactionModelOverrides;
+  }>;
   resolveLocalModel?(
     providerId: string,
     model: string,
@@ -74,7 +83,11 @@ export interface ContextLifecycleServiceDeps {
     audience: ContextLifecycleAudience,
     runtime: ResolvedModelRuntime,
   ): Promise<ThinkingLevel>;
-  recordUsage?(message: AssistantMessage, runtime: ResolvedModelRuntime, chatId: string): void | Promise<void>;
+  recordUsage?(
+    message: AssistantMessage,
+    runtime: ResolvedModelRuntime,
+    chatId: string,
+  ): void | Promise<void>;
   /**
    * The chat's PreCompact hooks, asked once the compaction starts. Returns
    * extra summary instructions, or nothing. It bounds its own wait; a throw
@@ -227,7 +240,9 @@ export class ContextLifecycleService {
           ? await this.deps.resolveThinkingLevel(chat, audience, runtime)
           : "off",
         signal: operationAbort.signal,
-        ...(runtime && cachedPrefix && !skillsProjected ? { cachedPrefix: () => cachedPrefix(chat.id) } : {}),
+        ...(runtime && cachedPrefix && !skillsProjected
+          ? { cachedPrefix: () => cachedPrefix(chat.id) }
+          : {}),
         ...(this.deps.preCompact
           ? {
               summaryInstructions: (_reason: unknown, signal: AbortSignal) =>

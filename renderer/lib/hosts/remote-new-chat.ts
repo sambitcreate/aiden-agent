@@ -1,5 +1,10 @@
 import { hostResourceKey, mintPeerIdempotencyKey } from "../../shared/peer-host";
-import { chatIntentLedger, type ChatIntent, type ChatIntentLedger, type ChatIntentRef } from "./chat-intent-ledger";
+import {
+  chatIntentLedger,
+  type ChatIntent,
+  type ChatIntentLedger,
+  type ChatIntentRef,
+} from "./chat-intent-ledger";
 import { chatControlRefusal, releaseAttachments, stageAttachments } from "./chat-session-control";
 import {
   HostChatControlError,
@@ -28,8 +33,16 @@ export function remoteNewChatDraftKey(hostId: string): string {
 }
 
 /** What starting new work on a paired host needs from its adapter. */
-export interface RemoteNewChatHost
-  extends Pick<HostChatAdapter, "hostId" | "capabilities" | "status" | "onStatus" | "send" | "uploadAttachment" | "removeAttachment"> {
+export interface RemoteNewChatHost extends Pick<
+  HostChatAdapter,
+  | "hostId"
+  | "capabilities"
+  | "status"
+  | "onStatus"
+  | "send"
+  | "uploadAttachment"
+  | "removeAttachment"
+> {
   createChat(input: HostNewChatInput, idempotencyKey: string): Promise<HostCreatedChat>;
   createWorkspace(body: HostWorkspaceCreate, idempotencyKey: string): Promise<HostCreatedWorkspace>;
   createBotChat(botId: string, idempotencyKey: string): Promise<HostCreatedChat>;
@@ -115,7 +128,10 @@ export const hostFolderPlaces = {
     return { location: { label: root.label, location: root.location }, trail: [root.id] };
   },
   entry(from: HostFolderPlace, entry: HostBrowserPage["entries"][number]): HostFolderPlace {
-    return { location: { label: entry.name, location: entry.location }, trail: [...from.trail, entry.id] };
+    return {
+      location: { label: entry.name, location: entry.location },
+      trail: [...from.trail, entry.id],
+    };
   },
   /** The ancestor at `index` of the open folder's breadcrumbs; index 0 is its root. */
   ancestor(from: HostFolderPlace, crumb: HostBrowserLocation, index: number): HostFolderPlace {
@@ -125,7 +141,10 @@ export const hostFolderPlaces = {
 
 /** The project request for an open folder, named by its root's ID and its own. */
 export function hostFolderChoice(place: HostFolderPlace): HostFolderChoice {
-  return { identity: JSON.stringify([place.trail[0], place.trail[place.trail.length - 1]]), location: place.location.location };
+  return {
+    identity: JSON.stringify([place.trail[0], place.trail[place.trail.length - 1]]),
+    location: place.location.location,
+  };
 }
 
 /**
@@ -181,11 +200,23 @@ export class RemoteNewChatMemory {
 export const remoteNewChatMemory = new RemoteNewChatMemory();
 
 function targetSignature(target: HostNewChatInput): string {
-  return JSON.stringify([target.workspaceId, target.model?.providerId ?? null, target.model?.modelId ?? null]);
+  return JSON.stringify([
+    target.workspaceId,
+    target.model?.providerId ?? null,
+    target.model?.modelId ?? null,
+  ]);
 }
 
-function firstTurnInput(text: string, idempotencyKey: string, attachmentIds: readonly string[]): HostChatSendInput {
-  return { text, idempotencyKey, ...(attachmentIds.length > 0 ? { attachmentIds: [...attachmentIds] } : {}) };
+function firstTurnInput(
+  text: string,
+  idempotencyKey: string,
+  attachmentIds: readonly string[],
+): HostChatSendInput {
+  return {
+    text,
+    idempotencyKey,
+    ...(attachmentIds.length > 0 ? { attachmentIds: [...attachmentIds] } : {}),
+  };
 }
 
 const FIRST_TURN_MESSAGE = "Your first message may not have been sent.";
@@ -216,13 +247,20 @@ export class RemoteNewChatControl {
 
   constructor(
     host: RemoteNewChatHost,
-    { ledger = chatIntentLedger, memory = remoteNewChatMemory }: { ledger?: ChatIntentLedger; memory?: RemoteNewChatMemory } = {},
+    {
+      ledger = chatIntentLedger,
+      memory = remoteNewChatMemory,
+    }: { ledger?: ChatIntentLedger; memory?: RemoteNewChatMemory } = {},
   ) {
     this.host = host;
     this.ledger = ledger;
     this.memory = memory;
     this.state = memory.state(host.hostId);
-    this.snapshot = { status: host.status(), starting: this.state.starting, unresolved: this.firstTurn() };
+    this.snapshot = {
+      status: host.status(),
+      starting: this.state.starting,
+      unresolved: this.firstTurn(),
+    };
   }
 
   attach(): () => void {
@@ -270,7 +308,12 @@ export class RemoteNewChatControl {
     if (!turn) return null;
     const recorded = this.ledger.unresolved(this.ref(turn.chatId));
     if (!recorded || recorded.intent.idempotencyKey !== turn.key) return null;
-    return { chatId: turn.chatId, text: recorded.intent.text ?? "", message: FIRST_TURN_MESSAGE, retrying: recorded.retrying };
+    return {
+      chatId: turn.chatId,
+      text: recorded.intent.text ?? "",
+      message: FIRST_TURN_MESSAGE,
+      retrying: recorded.retrying,
+    };
   }
 
   /** Follows the ledger entry of the current unresolved first turn, if any. */
@@ -300,7 +343,11 @@ export class RemoteNewChatControl {
   }
 
   /** Runs a keyed intent, keeping its key (and request) while the host's answer is unknown. */
-  private async keyed<T>(intent: string, run: (pending: PendingIntent) => Promise<T>, body?: () => Promise<HostWorkspaceCreate>): Promise<T> {
+  private async keyed<T>(
+    intent: string,
+    run: (pending: PendingIntent) => Promise<T>,
+    body?: () => Promise<HostWorkspaceCreate>,
+  ): Promise<T> {
     let pending = this.state.intents.get(intent);
     if (!pending) {
       pending = { key: mintPeerIdempotencyKey(), ...(body ? { body: await body() } : {}) };
@@ -311,7 +358,8 @@ export class RemoteNewChatControl {
       if (this.state.intents.get(intent) === pending) this.state.intents.delete(intent);
       return value;
     } catch (error) {
-      if (!isOutcomeUnknown(error) && this.state.intents.get(intent) === pending) this.state.intents.delete(intent);
+      if (!isOutcomeUnknown(error) && this.state.intents.get(intent) === pending)
+        this.state.intents.delete(intent);
       throw error;
     }
   }
@@ -321,15 +369,23 @@ export class RemoteNewChatControl {
    * definite failure rejects with the draft intact; the chat, once created,
    * is reused by the next attempt for the same project and model.
    */
-  async start(target: HostNewChatInput, text: string, uploads: readonly HostChatAttachmentUpload[] = []): Promise<RemoteNewChatStarted> {
+  async start(
+    target: HostNewChatInput,
+    text: string,
+    uploads: readonly HostChatAttachmentUpload[] = [],
+  ): Promise<RemoteNewChatStarted> {
     this.guard("createChat");
     this.guard("send");
     if (uploads.length > 0) this.guard("attach");
     if (this.firstTurn()) {
-      throw new HostChatControlError({ code: "unresolved", message: "Retry or dismiss the message that may not have been sent first." });
+      throw new HostChatControlError({
+        code: "unresolved",
+        message: "Retry or dismiss the message that may not have been sent first.",
+      });
     }
     // Shared with every control for this host, so a page rebuilt mid-start cannot send the first message again.
-    if (this.state.starting) throw new HostChatControlError({ code: "busy", message: "Your new chat is still starting." });
+    if (this.state.starting)
+      throw new HostChatControlError({ code: "busy", message: "Your new chat is still starting." });
     const signature = targetSignature(target);
     if (!this.state.pending || this.state.pending.signature !== signature) {
       this.state.pending = { signature, key: mintPeerIdempotencyKey() };
@@ -351,7 +407,8 @@ export class RemoteNewChatControl {
           // The key stays with this target, so sending again cannot create a second chat.
           throw new HostChatControlError({
             code: "create_unconfirmed",
-            message: "That computer didn't confirm the new chat. Send again to continue; it won't create a second one.",
+            message:
+              "That computer didn't confirm the new chat. Send again to continue; it won't create a second one.",
             retryable: true,
           });
         }
@@ -367,12 +424,16 @@ export class RemoteNewChatControl {
         text,
         request: { kind: "send", input: firstTurnInput(text, key, attachmentIds) },
         ...(attachmentIds.length > 0 ? { attachmentIds } : {}),
-        replay: (adapter, idempotencyKey) => adapter.send(chatId, firstTurnInput(text, idempotencyKey, attachmentIds)),
+        replay: (adapter, idempotencyKey) =>
+          adapter.send(chatId, firstTurnInput(text, idempotencyKey, attachmentIds)),
       };
       this.ledger.begin(ref, intent);
       try {
         await this.ledger.persist(ref, intent);
-        const receipt = await this.host.send(chatId, { ...firstTurnInput(text, key, attachmentIds), savedIntent: this.ledger.durable });
+        const receipt = await this.host.send(chatId, {
+          ...firstTurnInput(text, key, attachmentIds),
+          savedIntent: this.ledger.durable,
+        });
         await this.ledger.forgetSaved(ref, key).catch(() => {});
         this.ledger.settle(ref, key, "known");
         settle();
@@ -405,17 +466,28 @@ export class RemoteNewChatControl {
     const turn = this.state.firstTurn;
     const recorded = turn ? this.ledger.unresolved(this.ref(turn.chatId)) : null;
     if (!turn || !recorded || recorded.intent.idempotencyKey !== turn.key || recorded.retrying) {
-      throw new HostChatControlError({ code: "invalid", message: "Nothing is waiting to be retried." });
+      throw new HostChatControlError({
+        code: "invalid",
+        message: "Nothing is waiting to be retried.",
+      });
     }
     this.guard("send");
     const ref = this.ref(turn.chatId);
     const { intent } = recorded;
-    if (!this.ledger.retryAllowed(intent)) throw new HostChatControlError({ code: "retry_expired", message: "The safe retry window has ended. Open the conversation on that computer to review delivery before dismissing this request." });
+    if (!this.ledger.retryAllowed(intent))
+      throw new HostChatControlError({
+        code: "retry_expired",
+        message:
+          "The safe retry window has ended. Open the conversation on that computer to review delivery before dismissing this request.",
+      });
     this.ledger.retrying(ref, turn.key, true);
     try {
       await this.ledger.validateRetry(ref, intent);
       this.guard("send");
-      await this.host.send(turn.chatId, { ...firstTurnInput(intent.text ?? "", turn.key, intent.attachmentIds ?? []), savedIntent: this.ledger.durable });
+      await this.host.send(turn.chatId, {
+        ...firstTurnInput(intent.text ?? "", turn.key, intent.attachmentIds ?? []),
+        savedIntent: this.ledger.durable,
+      });
       await this.ledger.forgetSaved(ref, turn.key);
       this.ledger.resolve(ref, turn.key);
       return turn.chatId;
@@ -427,7 +499,11 @@ export class RemoteNewChatControl {
         await this.ledger.forgetSaved(ref, turn.key);
         this.ledger.resolve(ref, turn.key);
         releaseAttachments(this.host, turn.chatId, intent.attachmentIds ?? []);
-        this.state.pending = { signature: turn.signature, key: mintPeerIdempotencyKey(), chatId: turn.chatId };
+        this.state.pending = {
+          signature: turn.signature,
+          key: mintPeerIdempotencyKey(),
+          chatId: turn.chatId,
+        };
       }
       throw error;
     }
@@ -452,7 +528,9 @@ export class RemoteNewChatControl {
   /** Creates a project on the host. Retrying the same request after a lost answer reuses its key. */
   async createWorkspace(body: HostWorkspaceCreate): Promise<HostCreatedWorkspace> {
     this.guard("createWorkspace");
-    return this.keyed(`workspace:${JSON.stringify(body)}`, ({ key }) => this.host.createWorkspace(body, key));
+    return this.keyed(`workspace:${JSON.stringify(body)}`, ({ key }) =>
+      this.host.createWorkspace(body, key),
+    );
   }
 
   /**
@@ -468,7 +546,10 @@ export class RemoteNewChatControl {
     return this.keyed(
       `folder:${folder.identity}`,
       ({ key, body }) => this.host.createWorkspace(body!, key),
-      async () => ({ mode: "selected-folder", selection: (await this.host.selectFolder(folder.location)).selection }),
+      async () => ({
+        mode: "selected-folder",
+        selection: (await this.host.selectFolder(folder.location)).selection,
+      }),
     );
   }
 

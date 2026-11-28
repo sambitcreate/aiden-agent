@@ -28,9 +28,15 @@ export function parseVmStat(stdout: string): VmStatPages {
     return Number(match[1]);
   };
   if (!pageSize) throw new Error("vm_stat did not report its page size.");
-  const result = { pageSize: Number(pageSize), free: pages("free"), inactive: pages("inactive"), purgeable: pages("purgeable") };
+  const result = {
+    pageSize: Number(pageSize),
+    free: pages("free"),
+    inactive: pages("inactive"),
+    purgeable: pages("purgeable"),
+  };
   for (const value of Object.values(result)) {
-    if (!Number.isSafeInteger(value) || value < 0) throw new Error("vm_stat reported an unreadable number.");
+    if (!Number.isSafeInteger(value) || value < 0)
+      throw new Error("vm_stat reported an unreadable number.");
   }
   if (result.pageSize === 0) throw new Error("vm_stat reported a zero page size.");
   return result;
@@ -118,7 +124,10 @@ export async function requireResources(
       available = await probe.availableMemoryBytes(needs.signal);
     } catch (error) {
       if (error instanceof BotComputerError) throw error;
-      throw new BotComputerError("low_memory", "Aiden couldn't check this Mac's free memory, so it didn't start the computer.");
+      throw new BotComputerError(
+        "low_memory",
+        "Aiden couldn't check this Mac's free memory, so it didn't start the computer.",
+      );
     }
     if (available < needs.memoryBytes) {
       throw new BotComputerError(

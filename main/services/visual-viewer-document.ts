@@ -1,6 +1,10 @@
 import { createHash } from "node:crypto";
 import type { ChatUiVisualV1 } from "../../renderer/shared/aiden-ui/types.js";
-import { THEME_PRESETS, type AppearanceScheme, type ThemePresetId } from "../../renderer/shared/appearance.js";
+import {
+  THEME_PRESETS,
+  type AppearanceScheme,
+  type ThemePresetId,
+} from "../../renderer/shared/appearance.js";
 import type { GENERATIVE_UI_HOST_LIBS } from "../../renderer/shared/generative-ui.js";
 import {
   VISUAL_VIEWER_CSP,
@@ -47,13 +51,15 @@ const PRESET_IDS = new Set<string>(THEME_PRESETS.map((preset) => preset.id));
  */
 export function parseVisualViewerQuery(query: URLSearchParams): VisualViewerAppearance {
   for (const key of query.keys()) {
-    if (key !== "scheme" && key !== "theme") throw new Error(`Unknown visual document parameter ${key}.`);
+    if (key !== "scheme" && key !== "theme")
+      throw new Error(`Unknown visual document parameter ${key}.`);
   }
   if (query.getAll("scheme").length > 1 || query.getAll("theme").length > 1) {
     throw new Error("Visual document parameters may appear once.");
   }
   const scheme = query.get("scheme") ?? "light";
-  if (scheme !== "light" && scheme !== "dark") throw new Error("Visual document scheme must be light or dark.");
+  if (scheme !== "light" && scheme !== "dark")
+    throw new Error("Visual document scheme must be light or dark.");
   const theme = query.get("theme") ?? "aiden";
   if (!/^[a-z][a-z0-9-]{0,31}$/u.test(theme)) throw new Error("Visual document theme is invalid.");
   return { scheme, preset: PRESET_IDS.has(theme) ? (theme as ThemePresetId) : "aiden" };
@@ -64,7 +70,9 @@ export function parseVisualViewerQuery(query: URLSearchParams): VisualViewerAppe
  * several MB), so a phone document carries only those its source names. The
  * component kit stylesheet is small and always included.
  */
-export function referencedLibrary(html: string): (name: (typeof GENERATIVE_UI_HOST_LIBS)[number]) => boolean {
+export function referencedLibrary(
+  html: string,
+): (name: (typeof GENERATIVE_UI_HOST_LIBS)[number]) => boolean {
   const usesChart = /\bChart\b/u.test(html);
   const usesPlotly = /\bPlotly\b/u.test(html);
   const usesKatex = /katex/iu.test(html);
@@ -114,17 +122,23 @@ export function buildVisualViewerDocument(
     preset: appearance.preset,
     ...(source.layout === "wide" ? { layout: "wide" as const } : {}),
   };
-  const payload: VisualViewerPayload = source.kind === "ui"
-    ? { ...base, kind: "ui", visual: source.visual, attachments: source.attachments.map(({ id, mimeType, data }) => ({ id, mimeType, data })) }
-    : {
-        ...base,
-        kind: "html",
-        guest: inlineGenerativeUiHostLibraries(
-          wrapGenerativeUiHtml(source.html, source.title, undefined, { inline: true }),
-          libraries,
-          referencedLibrary(source.html),
-        ),
-      };
+  const payload: VisualViewerPayload =
+    source.kind === "ui"
+      ? {
+          ...base,
+          kind: "ui",
+          visual: source.visual,
+          attachments: source.attachments.map(({ id, mimeType, data }) => ({ id, mimeType, data })),
+        }
+      : {
+          ...base,
+          kind: "html",
+          guest: inlineGenerativeUiHostLibraries(
+            wrapGenerativeUiHtml(source.html, source.title, undefined, { inline: true }),
+            libraries,
+            referencedLibrary(source.html),
+          ),
+        };
   const document = `<!DOCTYPE html>
 <html lang="en" data-color-scheme="${appearance.scheme}">
 <head>

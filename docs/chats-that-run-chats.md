@@ -19,14 +19,14 @@ show started chats, and an unsaved one is deleted at the next launch.
 
 The lead's model gets one tool, `child_chats`, with one action per call:
 
-| Action | What it does |
-| --- | --- |
+| Action  | What it does                                                                                                                                                                           |
+| ------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `start` | Starts up to 20 chats per call, each `{title, task}`, in the lead's workspace or a new worktree of it (see below). The task is the chat's first message, after a line naming the lead. |
-| `send` | Sends a follow-up to a started chat. `auto` (the default) and `steer` steer a running turn, `queue` waits for it to end, and an idle chat starts a new turn. |
-| `wait` | Waits up to 600 seconds (default 120) for up to 8 started chats, until `any` or `all` of them end, and returns each chat's state and last reply. A timeout never stops anything. |
-| `read` | Reads a started chat's newest messages (up to 20, each cut at 20,000 characters). |
-| `list` | Lists every chat this chat started, with its state. |
-| `stop` | Stops the turn the lead started in a chat. |
+| `send`  | Sends a follow-up to a started chat. `auto` (the default) and `steer` steer a running turn, `queue` waits for it to end, and an idle chat starts a new turn.                           |
+| `wait`  | Waits up to 600 seconds (default 120) for up to 8 started chats, until `any` or `all` of them end, and returns each chat's state and last reply. A timeout never stops anything.       |
+| `read`  | Reads a started chat's newest messages (up to 20, each cut at 20,000 characters).                                                                                                      |
+| `list`  | Lists every chat this chat started, with its state.                                                                                                                                    |
+| `stop`  | Stops the turn the lead started in a chat.                                                                                                                                             |
 
 - **The lead reaches only the chats it started.** Any other chat id is refused.
 - **Replies are data.** Every reply and message the tool returns is fenced and

@@ -54,9 +54,12 @@ export function ChatLayout() {
   // chooses ‹ All workspaces for that chat, which holds for this window session
   // or until they choose "Show only <workspace>". Only the person changes this;
   // a scope with no chats in it right now falls back to the full list at render.
-  const [scopeClearedChatIds, setScopeClearedChatIds] = React.useState<ReadonlySet<string>>(() => new Set());
+  const [scopeClearedChatIds, setScopeClearedChatIds] = React.useState<ReadonlySet<string>>(
+    () => new Set(),
+  );
   const scopeCleared = Boolean(localChatId && scopeClearedChatIds.has(localChatId));
-  const scopeWorkspaceId = design.workspaceId && localChatId && !scopeCleared ? design.workspaceId : null;
+  const scopeWorkspaceId =
+    design.workspaceId && localChatId && !scopeCleared ? design.workspaceId : null;
   const restorableScopeWorkspaceId = design.workspaceId && scopeCleared ? design.workspaceId : null;
   const clearScope = React.useCallback(() => {
     if (!localChatId) return;
@@ -202,12 +205,15 @@ export function ChatIndex() {
       void navigate({ to: "/chat/$chatId", params: { chatId: list[0].id }, replace: true });
     } else {
       const draft = createChatDraft(activeId);
-      void navigate({ to: "/chat/$chatId", params: { chatId: draft.chat.id }, replace: true })
-        .catch((error: unknown) => {
-          discardChatDraft(draft.chat.id);
-          startedRef.current = false;
-          toast.error(error instanceof Error ? error.message : "Aiden could not open a new chat.");
-        });
+      void navigate({
+        to: "/chat/$chatId",
+        params: { chatId: draft.chat.id },
+        replace: true,
+      }).catch((error: unknown) => {
+        discardChatDraft(draft.chat.id);
+        startedRef.current = false;
+        toast.error(error instanceof Error ? error.message : "Aiden could not open a new chat.");
+      });
     }
   }, [
     appendReconciliationRequired,

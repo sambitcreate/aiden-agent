@@ -15,7 +15,11 @@ import {
   type InboxRow,
   type InboxSection,
 } from "./sidebar-inbox";
-import { LOCAL_SIDEBAR_HOST_ID, projectOrderKey, type SidebarMachineFilter } from "./sidebar-organization";
+import {
+  LOCAL_SIDEBAR_HOST_ID,
+  projectOrderKey,
+  type SidebarMachineFilter,
+} from "./sidebar-organization";
 import {
   localMachineLabel,
   UNNAMED_PAIRED_HOST_LABEL,
@@ -95,12 +99,15 @@ export interface LocalInboxInput {
  * The Assistant chat and workspace-less scheduled chats are listed.
  */
 export function localInboxProject(chat: ChatMeta, workspaces: readonly Workspace[]): string | null {
-  const workspace = chat.workspaceId === undefined
-    ? undefined
-    : workspaces.find((candidate) => candidate.id === chat.workspaceId);
+  const workspace =
+    chat.workspaceId === undefined
+      ? undefined
+      : workspaces.find((candidate) => candidate.id === chat.workspaceId);
   if (!isLocalInboxChat(chat, () => workspace !== undefined)) return null;
   if (workspace) return isNoWorkspace(workspace) ? NO_WORKSPACE_GROUP_LABEL : workspace.name;
-  return chat.workspaceId === ASSISTANT_WORKSPACE_ID ? INBOX_ASSISTANT_PROJECT_LABEL : INBOX_SCHEDULED_PROJECT_LABEL;
+  return chat.workspaceId === ASSISTANT_WORKSPACE_ID
+    ? INBOX_ASSISTANT_PROJECT_LABEL
+    : INBOX_SCHEDULED_PROJECT_LABEL;
 }
 
 export function localInboxEntries(input: LocalInboxInput): InboxEntry[] {
@@ -108,7 +115,10 @@ export function localInboxEntries(input: LocalInboxInput): InboxEntry[] {
     const project = localInboxProject(chat, input.workspaces);
     if (project === null) return [];
     const pending = input.pending.get(chat.id);
-    const attention = pending?.kind === "detached" || pending?.kind === "interrupted" || pending?.kind === "goal" ? pending.kind : undefined;
+    const attention =
+      pending?.kind === "detached" || pending?.kind === "interrupted" || pending?.kind === "goal"
+        ? pending.kind
+        : undefined;
     return [
       {
         key: projectOrderKey(LOCAL_SIDEBAR_HOST_ID, chat.id),
@@ -127,7 +137,9 @@ export function localInboxEntries(input: LocalInboxInput): InboxEntry[] {
           hostOnline: true,
           updatedAt: chat.updatedAt,
           ...(chat.lastAssistantAt !== undefined ? { lastAssistantAt: chat.lastAssistantAt } : {}),
-          ...(chat.lastAssistantMessageId ? { lastAssistantMessageId: chat.lastAssistantMessageId } : {}),
+          ...(chat.lastAssistantMessageId
+            ? { lastAssistantMessageId: chat.lastAssistantMessageId }
+            : {}),
           ...(pending?.since !== undefined ? { attentionSince: pending.since } : {}),
           ...(pending?.runStartedAt !== undefined ? { runStartedAt: pending.runStartedAt } : {}),
           ...triageSignals(input.triage?.(chat.id)),
@@ -333,8 +345,12 @@ export function remoteInboxEntries(
             // Revision 50 hosts report these; older hosts leave the row on updatedAt.
             ...(chat.attentionSince !== undefined ? { attentionSince: chat.attentionSince } : {}),
             ...(chat.runStartedAt !== undefined ? { runStartedAt: chat.runStartedAt } : {}),
-            ...(chat.lastAssistantAt !== undefined ? { lastAssistantAt: chat.lastAssistantAt } : {}),
-            ...(chat.lastAssistantMessageId ? { lastAssistantMessageId: chat.lastAssistantMessageId } : {}),
+            ...(chat.lastAssistantAt !== undefined
+              ? { lastAssistantAt: chat.lastAssistantAt }
+              : {}),
+            ...(chat.lastAssistantMessageId
+              ? { lastAssistantMessageId: chat.lastAssistantMessageId }
+              : {}),
             ...triageSignals(triage ? triage(chat) : chat.triage),
           },
         },
@@ -351,7 +367,10 @@ export function filterInboxEntries(
   const terms = options.search.trim().toLocaleLowerCase().split(/\s+/u).filter(Boolean);
   return entries.filter((entry) => {
     if (options.machineFilter === "local" && entry.hostId !== LOCAL_SIDEBAR_HOST_ID) return false;
-    if (options.machineFilter.startsWith("host:") && entry.hostId !== options.machineFilter.slice("host:".length)) {
+    if (
+      options.machineFilter.startsWith("host:") &&
+      entry.hostId !== options.machineFilter.slice("host:".length)
+    ) {
       return false;
     }
     if (terms.length === 0) return true;
@@ -373,7 +392,13 @@ export function formatInboxDuration(now: number, since: number): string {
 export type InboxStatusTone = "warning" | "danger" | "working" | "quiet";
 
 /** Why a row is in Needs you. A Bot is only ever `needs_you`: its row doesn't say which wait it is. */
-export type InboxNeedsYouKind = "approval" | "question" | "failed" | "interrupted" | "unavailable" | "needs_you";
+export type InboxNeedsYouKind =
+  | "approval"
+  | "question"
+  | "failed"
+  | "interrupted"
+  | "unavailable"
+  | "needs_you";
 
 export interface InboxRowStatus {
   /** "Approval", "Working 4m", or a bare age such as "2h". */
@@ -424,20 +449,30 @@ export function inboxNeedsYouKind(entry: InboxEntry, now: number): InboxNeedsYou
  * Line 1's trailing status. `now` is the row's own clock: a host that isn't
  * online passes the moment it went offline, so its waits stop counting.
  */
-export function inboxRowStatus(entry: InboxEntry, section: InboxSection, now: number): InboxRowStatus {
+export function inboxRowStatus(
+  entry: InboxEntry,
+  section: InboxSection,
+  now: number,
+): InboxRowStatus {
   const { signals } = entry;
   if (section === "needs_you") {
     const kind = inboxNeedsYouKind(entry, now) ?? "unavailable";
     return {
       label: NEEDS_YOU_LABELS[kind],
       tone: kind === "failed" ? "danger" : "warning",
-      wait: formatInboxDuration(now, signals.attentionSince ?? signals.lastAssistantAt ?? signals.updatedAt),
+      wait: formatInboxDuration(
+        now,
+        signals.attentionSince ?? signals.lastAssistantAt ?? signals.updatedAt,
+      ),
       needsYou: kind,
     };
   }
   if (section === "working") {
     return {
-      label: signals.runStartedAt === undefined ? "Working" : `Working ${formatInboxDuration(now, signals.runStartedAt)}`,
+      label:
+        signals.runStartedAt === undefined
+          ? "Working"
+          : `Working ${formatInboxDuration(now, signals.runStartedAt)}`,
       tone: "working",
     };
   }
@@ -452,7 +487,10 @@ export function inboxRowStatus(entry: InboxEntry, section: InboxSection, now: nu
     };
   }
   return {
-    label: formatInboxDuration(now, section === "updates" ? signals.lastAssistantAt ?? signals.updatedAt : signals.updatedAt),
+    label: formatInboxDuration(
+      now,
+      section === "updates" ? (signals.lastAssistantAt ?? signals.updatedAt) : signals.updatedAt,
+    ),
     tone: "quiet",
   };
 }
@@ -470,17 +508,26 @@ export function inboxRowDescription(entry: InboxEntry, status: InboxRowStatus): 
   if (entry.source.kind === "remote") {
     // Revision 50 hosts send what a waiting run asks, to devices that may observe runs.
     const asked = entry.source.chat.attentionSummary?.trim();
-    const prefix = status.needsYou === "approval" ? "Approve" : status.needsYou === "question" ? "Question" : null;
-    if (asked && prefix) return `${prefix}: ${asked}. On ${entry.hostLabel}, waiting ${status.wait}${offline}`;
+    const prefix =
+      status.needsYou === "approval"
+        ? "Approve"
+        : status.needsYou === "question"
+          ? "Question"
+          : null;
+    if (asked && prefix)
+      return `${prefix}: ${asked}. On ${entry.hostLabel}, waiting ${status.wait}${offline}`;
     return `${status.label} on ${entry.hostLabel}, waiting ${status.wait}${offline}`;
   }
-  if (entry.source.kind === "bot") return status.needsYou === "failed" ? "The last run failed" : INBOX_BOT_NEEDS_YOU_DESCRIPTION;
+  if (entry.source.kind === "bot")
+    return status.needsYou === "failed" ? "The last run failed" : INBOX_BOT_NEEDS_YOU_DESCRIPTION;
   if (entry.source.kind === "remoteBot") {
-    const what = status.needsYou === "failed" ? "The last run failed" : INBOX_BOT_NEEDS_YOU_DESCRIPTION;
+    const what =
+      status.needsYou === "failed" ? "The last run failed" : INBOX_BOT_NEEDS_YOU_DESCRIPTION;
     return `${what} on ${entry.hostLabel}${offline}`;
   }
   const summary = entry.pending?.summary.trim() ?? "";
-  const more = entry.pending && entry.pending.count > 1 ? ` (+${entry.pending.count - 1} more)` : "";
+  const more =
+    entry.pending && entry.pending.count > 1 ? ` (+${entry.pending.count - 1} more)` : "";
   switch (status.needsYou) {
     case "approval":
       return summary ? `Approve: ${summary}${more}` : "Waiting for your approval";
@@ -491,7 +538,9 @@ export function inboxRowDescription(entry: InboxEntry, status: InboxRowStatus): 
     case "interrupted":
       return summary ? `Interrupted — open to resume: ${summary}` : "Interrupted — open to resume";
     case "unavailable":
-      return summary ? `${INBOX_UNAVAILABLE_DESCRIPTION}: ${summary}` : INBOX_UNAVAILABLE_DESCRIPTION;
+      return summary
+        ? `${INBOX_UNAVAILABLE_DESCRIPTION}: ${summary}`
+        : INBOX_UNAVAILABLE_DESCRIPTION;
     case "needs_you":
       return summary ? `Keep-going goal: ${summary}` : "The keep-going goal needs you";
   }
@@ -511,10 +560,12 @@ export function inboxRowAction(
   status: InboxRowStatus,
   remoteCanMarkRead: boolean,
 ): InboxRowActionKind | null {
-  if (entry.source.kind === "remote" && (!remoteCanMarkRead || !entry.signals.hostOnline)) return null;
+  if (entry.source.kind === "remote" && (!remoteCanMarkRead || !entry.signals.hostOnline))
+    return null;
   // A paired host's Bot has no read state to acknowledge, and a failed Bot's failure
   // isn't a reply to mark seen: its next run clears it.
-  if (entry.source.kind === "remoteBot" || (entry.source.kind === "bot" && entry.signals.failed)) return null;
+  if (entry.source.kind === "remoteBot" || (entry.source.kind === "bot" && entry.signals.failed))
+    return null;
   if (section === "needs_you") return status.needsYou === "failed" ? "acknowledge" : null;
   if (section !== "updates" && section !== "earlier") return null;
   return entry.signals.unread && !entry.signals.isOpen ? "mark_read" : null;
@@ -551,7 +602,9 @@ export function pendingAttentionRequest(
   };
   for (const set of live) for (const id of [...set].sort()) take(id);
   const newest = [...listed].sort(
-    (left, right) => (right.updatedAt ?? right.createdAt) - (left.updatedAt ?? left.createdAt) || left.id.localeCompare(right.id),
+    (left, right) =>
+      (right.updatedAt ?? right.createdAt) - (left.updatedAt ?? left.createdAt) ||
+      left.id.localeCompare(right.id),
   );
   for (const chat of newest) take(chat.id);
   return { ids, key: `${ids.length}:${fnv1a32(ids.join("\n"))}` };
@@ -577,12 +630,18 @@ export function markReadThroughMessageId(
 ): string | null {
   if (renderedSequence !== undefined) {
     const reply = messages[renderedSequence];
-    return reply?.role === "assistant" && reply.createdAt === renderedLastAssistantAt ? reply.id : null;
+    return reply?.role === "assistant" && reply.createdAt === renderedLastAssistantAt
+      ? reply.id
+      : null;
   }
   if (renderedLastAssistantAt === undefined) return null;
   // Without a sequence, the first matching reply is the conservative
   // boundary when two replies share the same millisecond.
-  return messages.find((message) => message.role === "assistant" && message.createdAt === renderedLastAssistantAt)?.id ?? null;
+  return (
+    messages.find(
+      (message) => message.role === "assistant" && message.createdAt === renderedLastAssistantAt,
+    )?.id ?? null
+  );
 }
 
 export interface NeedsYouLeaveInput {
@@ -641,14 +700,23 @@ export function debounceNeedsYouLeave(input: NeedsYouLeaveInput): NeedsYouLeaveR
 }
 
 /** The sections the Inbox shows, top to bottom. */
-export const INBOX_VISIBLE_SECTIONS = ["needs_you", "pinned", "updates", "earlier", "working"] as const satisfies readonly InboxSection[];
+export const INBOX_VISIBLE_SECTIONS = [
+  "needs_you",
+  "pinned",
+  "updates",
+  "earlier",
+  "working",
+] as const satisfies readonly InboxSection[];
 
 /**
  * ⌘1–9 and previous/next follow the rows on screen, in the frozen order:
  * every visible section, the Working shelf only while expanded. Rows held
  * dimmed after leaving are skipped.
  */
-export function inboxShortcutOrder(held: HeldInboxOrder, options: { workingExpanded: boolean }): string[] {
+export function inboxShortcutOrder(
+  held: HeldInboxOrder,
+  options: { workingExpanded: boolean },
+): string[] {
   return INBOX_VISIBLE_SECTIONS.flatMap((section) =>
     section === "working" && !options.workingExpanded
       ? []
@@ -694,7 +762,10 @@ export function inboxShortcutTargets<Entry>(
   const was = current < 0 && activeKey && lastOrder ? lastOrder.indexOf(activeKey) : -1;
   if (was >= 0) {
     const listed = new Set(navigable);
-    previousKey = lastOrder!.slice(0, was).reverse().find((key) => listed.has(key));
+    previousKey = lastOrder!
+      .slice(0, was)
+      .reverse()
+      .find((key) => listed.has(key));
     nextKey = lastOrder!.slice(was + 1).find((key) => listed.has(key));
   }
   return {

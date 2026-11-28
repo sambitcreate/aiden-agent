@@ -103,7 +103,10 @@ export interface DeviceFeatures {
   discardRecording(id: string): Promise<void>;
   recordings(): DeviceRecordingInfo[];
   onRecordings(listener: (recordings: DeviceRecordingInfo[]) => void): () => void;
-  saveScreenshot(target: { hostId: string; deviceId: string }, choose: ChooseSavePath): Promise<DeviceSaveResult>;
+  saveScreenshot(
+    target: { hostId: string; deviceId: string },
+    choose: ChooseSavePath,
+  ): Promise<DeviceSaveResult>;
   /** Saves a PNG the renderer drew, such as the framed 3D device, through the same dialog. */
   saveFramedScreenshot(
     target: { hostId: string; deviceId: string },
@@ -124,10 +127,13 @@ export interface DeviceFeatures {
 const MAX_REMEMBERED_SAVES = 64;
 const ACTIVE = new Set<DeviceRecordingInfo["status"]>(["recording", "stopping"]);
 
-function deviceName(state: DeviceServiceState, target: { hostId: string; deviceId: string }): string {
+function deviceName(
+  state: DeviceServiceState,
+  target: { hostId: string; deviceId: string },
+): string {
   return (
-    state.devices.find((device) => device.hostId === target.hostId && device.id === target.deviceId)?.name ??
-    "Simulator"
+    state.devices.find((device) => device.hostId === target.hostId && device.id === target.deviceId)
+      ?.name ?? "Simulator"
   );
 }
 
@@ -142,7 +148,9 @@ export function createDeviceFeatures(deps: DeviceFeatureDeps): DeviceFeatures {
   // A simulator that shuts down or disappears (shut down, erased, streaming turned off) ends its recordings.
   const unsubscribe = service.onState((state) => {
     const live = new Set(
-      state.devices.filter((device) => device.booted).map((device) => JSON.stringify([device.hostId, device.id])),
+      state.devices
+        .filter((device) => device.booted)
+        .map((device) => JSON.stringify([device.hostId, device.id])),
     );
     void recorder.discardWhere(
       (info) => ACTIVE.has(info.status) && !live.has(JSON.stringify([info.hostId, info.deviceId])),
@@ -156,7 +164,8 @@ export function createDeviceFeatures(deps: DeviceFeatureDeps): DeviceFeatures {
       deviceId: target.deviceId,
       ...(booted ? { booted } : {}),
     });
-    if (resolved.device.platform !== target.platform) throw new Error("That device is no longer available.");
+    if (resolved.device.platform !== target.platform)
+      throw new Error("That device is no longer available.");
     return resolved;
   };
   /** AVD names being wiped, so a second Erase never races the first one's cold boot. */
@@ -167,7 +176,11 @@ export function createDeviceFeatures(deps: DeviceFeatureDeps): DeviceFeatures {
     for (const pending of resolvingStarts) if (match(pending.chatId)) pending.cancelled = true;
   };
 
-  const eraseAndroid = async (ready: DeviceHostReady, device: DeviceSummary, onPhase?: (phase: DeviceErasePhase) => void) => {
+  const eraseAndroid = async (
+    ready: DeviceHostReady,
+    device: DeviceSummary,
+    onPhase?: (phase: DeviceErasePhase) => void,
+  ) => {
     // A stopped AVD is listed under its name; a running one under its serial, with the AVD as its name.
     const avdName = device.booted ? device.name : device.id;
     if (erasing.has(avdName)) throw new Error("This emulator is already being erased.");
@@ -207,35 +220,42 @@ export function createDeviceFeatures(deps: DeviceFeatureDeps): DeviceFeatures {
         } catch {
           // The status alone is reported.
         }
-        throw new Error(`The emulator did not accept the text${detail ? `: ${detail}` : ` (HTTP ${response.status}).`}`);
+        throw new Error(
+          `The emulator did not accept the text${detail ? `: ${detail}` : ` (HTTP ${response.status}).`}`,
+        );
       }
     }
   };
 
   /** `adb shell screenrecord` writes on the emulator; these hooks stop it there, pull it here, and delete it there. */
-  const androidRecording = (ready: DeviceHostReady, serial: string) => (id: string): DeviceRecordingRemote => {
-    const remotePath = androidRecordingRemotePath(id);
-    const step = async (command: { command: string; args: string[] }, timeoutMs = ADB_RECORDING_STEP_TIMEOUT_MS) =>
-      ready.run(command.command, command.args, { timeoutMs });
-    return {
-      async stop() {
-        const stop = androidStopScreenrecordCommand(serial, remotePath);
-        const result = await step(stop);
-        // An unreached device never stopped its recorder, so its file may still be unfinished.
-        if (result.code !== 0) throw new Error("The emulator's recorder could not be stopped.");
-      },
-      async collect(file) {
-        const pull = androidPullCommand(serial, remotePath, file);
-        const result = await step(pull, ADB_PULL_TIMEOUT_MS);
-        if (result.code !== 0) throw new Error("The recording could not be copied from the emulator.");
-      },
-      async cleanup() {
-        // A recorder still running (its local adb was killed) stops before its file goes.
-        await step(androidStopScreenrecordCommand(serial, remotePath)).catch(() => undefined);
-        await step(androidRemoveRemoteFileCommand(serial, remotePath));
-      },
+  const androidRecording =
+    (ready: DeviceHostReady, serial: string) =>
+    (id: string): DeviceRecordingRemote => {
+      const remotePath = androidRecordingRemotePath(id);
+      const step = async (
+        command: { command: string; args: string[] },
+        timeoutMs = ADB_RECORDING_STEP_TIMEOUT_MS,
+      ) => ready.run(command.command, command.args, { timeoutMs });
+      return {
+        async stop() {
+          const stop = androidStopScreenrecordCommand(serial, remotePath);
+          const result = await step(stop);
+          // An unreached device never stopped its recorder, so its file may still be unfinished.
+          if (result.code !== 0) throw new Error("The emulator's recorder could not be stopped.");
+        },
+        async collect(file) {
+          const pull = androidPullCommand(serial, remotePath, file);
+          const result = await step(pull, ADB_PULL_TIMEOUT_MS);
+          if (result.code !== 0)
+            throw new Error("The recording could not be copied from the emulator.");
+        },
+        async cleanup() {
+          // A recorder still running (its local adb was killed) stops before its file goes.
+          await step(androidStopScreenrecordCommand(serial, remotePath)).catch(() => undefined);
+          await step(androidRemoveRemoteFileCommand(serial, remotePath));
+        },
+      };
     };
-  };
 
   return {
     async erase(target, onPhase) {
@@ -243,7 +263,9 @@ export function createDeviceFeatures(deps: DeviceFeatureDeps): DeviceFeatures {
       if (!deviceFeatureCapabilities(device.platform, { local: true }).erase) {
         throw new DeviceActionUnavailableError("Erasing is not available for this device.");
       }
-      await recorder.discardWhere((info) => info.hostId === target.hostId && info.deviceId === target.deviceId);
+      await recorder.discardWhere(
+        (info) => info.hostId === target.hostId && info.deviceId === target.deviceId,
+      );
       try {
         if (device.platform === "android") return await eraseAndroid(ready, device, onPhase);
         const result = await eraseDevice(
@@ -262,7 +284,11 @@ export function createDeviceFeatures(deps: DeviceFeatureDeps): DeviceFeatures {
       const text = deps.clipboard.readText();
       if (!text) {
         const formats = deps.clipboard.availableFormats();
-        throw new Error(formats.length > 0 ? "Only text can be pasted to the device." : "The clipboard has no text.");
+        throw new Error(
+          formats.length > 0
+            ? "Only text can be pasted to the device."
+            : "The clipboard has no text.",
+        );
       }
       if (device.platform === "android") {
         const checked = checkDeviceClipboardText(text);
@@ -270,26 +296,41 @@ export function createDeviceFeatures(deps: DeviceFeatureDeps): DeviceFeatures {
         await typeOnAndroid(ready, device.id, checked.text);
         return { bytes: checked.bytes };
       }
-      return writeDeviceClipboard(ready.run, { platform: device.platform, deviceId: device.id }, text);
+      return writeDeviceClipboard(
+        ready.run,
+        { platform: device.platform, deviceId: device.id },
+        text,
+      );
     },
     async copyToHost(target) {
       const { ready, device } = await resolve(target, true);
       const copy = deviceFeatureCapabilities(device.platform, { local: true }).clipboardCopy;
       if (!copy.available) throw new DeviceActionUnavailableError(copy.reason);
-      const { text, bytes } = await readDeviceClipboard(ready.run, { platform: device.platform, deviceId: device.id });
+      const { text, bytes } = await readDeviceClipboard(ready.run, {
+        platform: device.platform,
+        deviceId: device.id,
+      });
       deps.clipboard.writeText(text);
       return { bytes };
     },
     async startRecording(chatId, target) {
       const pending = { chatId, cancelled: false };
       resolvingStarts.add(pending);
-      const { ready, device } = await resolve(target, true).finally(() => resolvingStarts.delete(pending));
+      const { ready, device } = await resolve(target, true).finally(() =>
+        resolvingStarts.delete(pending),
+      );
       if (pending.cancelled) throw new Error("The recording was cancelled before it started.");
-      const base = { chatId, platform: device.platform, hostId: target.hostId, deviceId: device.id };
+      const base = {
+        chatId,
+        platform: device.platform,
+        hostId: target.hostId,
+        deviceId: device.id,
+      };
       if (device.platform === "android") {
         return recorder.start({
           ...base,
-          command: (_file, id) => androidScreenrecordCommand(device.id, androidRecordingRemotePath(id)),
+          command: (_file, id) =>
+            androidScreenrecordCommand(device.id, androidRecordingRemotePath(id)),
           ...(ready.env ? { env: ready.env } : {}),
           maxDurationMs: ANDROID_RECORDING_MAX_MS,
           remote: androidRecording(ready, device.id),
@@ -311,7 +352,11 @@ export function createDeviceFeatures(deps: DeviceFeatureDeps): DeviceFeatures {
       if (info.status !== "ready") throw new Error("Stop the recording before saving it.");
       const taken = recorder.take(id);
       if (!taken) throw new Error("That recording is no longer available.");
-      const name = deviceCaptureFileName(deviceName(service.state(), info), new Date(info.startedAt), "mp4");
+      const name = deviceCaptureFileName(
+        deviceName(service.state(), info),
+        new Date(info.startedAt),
+        "mp4",
+      );
       let destination: string | null;
       try {
         destination = await choose(name);
@@ -337,7 +382,9 @@ export function createDeviceFeatures(deps: DeviceFeatureDeps): DeviceFeatures {
     onRecordings: (listener) => recorder.onChange(listener),
     async saveScreenshot(target, choose) {
       const png = await service.screenshot(target);
-      const destination = await choose(deviceCaptureFileName(deviceName(service.state(), target), deps.now(), "png"));
+      const destination = await choose(
+        deviceCaptureFileName(deviceName(service.state(), target), deps.now(), "png"),
+      );
       if (!destination) return { status: "cancelled" };
       await deps.writeFile(destination, new Uint8Array(png));
       remember(destination);
@@ -359,10 +406,12 @@ export function createDeviceFeatures(deps: DeviceFeatureDeps): DeviceFeatures {
     async stop(options) {
       unsubscribe();
       cancelResolvingStarts(() => true);
-      const discarding = recorder.discardWhere(() => true).then(
-        () => true,
-        () => true,
-      );
+      const discarding = recorder
+        .discardWhere(() => true)
+        .then(
+          () => true,
+          () => true,
+        );
       const deadline = options?.deadline;
       if (!deadline) {
         await discarding;

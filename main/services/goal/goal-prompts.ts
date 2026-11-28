@@ -96,6 +96,8 @@ export function goalReminder(goal: Pick<GoalRecordV1, "objective">): string {
 }
 
 /** The reminder a chat's requests carry: from the goal's setting until it is done or cleared. */
-export function goalReminderFor(goal: Pick<GoalRecordV1, "objective" | "status"> | undefined): string | undefined {
+export function goalReminderFor(
+  goal: Pick<GoalRecordV1, "objective" | "status"> | undefined,
+): string | undefined {
   return goal && goal.status !== "done" ? goalReminder(goal) : undefined;
 }

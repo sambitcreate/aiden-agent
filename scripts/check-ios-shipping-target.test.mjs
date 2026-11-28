@@ -476,7 +476,10 @@ test("the demo machines stay out of Release builds", async () => {
         branches.pop();
       } else if (references.test(line) && !directive.startsWith("//")) {
         checked += 1;
-        assert.ok(branches.includes(true), `${path}:${lineIndex + 1} reaches the demo outside #if DEBUG`);
+        assert.ok(
+          branches.includes(true),
+          `${path}:${lineIndex + 1} reaches the demo outside #if DEBUG`,
+        );
       }
     });
   });
@@ -565,7 +568,9 @@ test("Bot Image Playground stays Apple-owned, non-personalized, and availability
   );
   assert.doesNotMatch(source, /imagePlaygroundPersonalizationPolicy\(\.(?:automatic|enabled)\)/u);
   assert.match(source, /may use Private Cloud Compute/u);
-  const profile = shippingSources.find(([path]) => path.endsWith("/AidenBotProfileView.swift"))?.[1];
+  const profile = shippingSources.find(([path]) =>
+    path.endsWith("/AidenBotProfileView.swift"),
+  )?.[1];
   assert.match(profile, /"Create with Apple Intelligence"/u);
   assert.match(profile, /Text\(AidenBotImagePlaygroundCopy\.privacyNote\)/u);
   for (const [path, shippingSource] of shippingSources) {
@@ -626,7 +631,10 @@ test("bot-first sources reuse the one reviewed chat implementation", async () =>
     chat,
     /init\(readOnlyFixture chat: AidenChat\) \{[\s\S]*?_coordinator = State\(initialValue: nil\)[\s\S]*?AidenChatViewModel\(readOnlyFixture: chat\)/u,
   );
-  assert.match(chat, /func load\(observeProgress: Bool = true\) async \{\s*guard !isReadOnlyFixture else \{ return \}/u);
+  assert.match(
+    chat,
+    /func load\(observeProgress: Bool = true\) async \{\s*guard !isReadOnlyFixture else \{ return \}/u,
+  );
   assert.match(
     chat,
     /var isReadOnlyPresentation: Bool \{ isReadOnlyFixture \|\| !allowsMutations \}/u,
@@ -647,10 +655,16 @@ test("bot-first sources reuse the one reviewed chat implementation", async () =>
     chat,
     /private func botAvatarHeader\([\s\S]*?AidenChatHeaderAvatar \{[\s\S]*?AidenBotCanonicalAvatarView\(/u,
   );
-  assert.match(chat, /(?:Image\(systemName:|Label\("More", systemImage:) AidenChromeSymbols\.overflowMenu\)/u);
+  assert.match(
+    chat,
+    /(?:Image\(systemName:|Label\("More", systemImage:) AidenChromeSymbols\.overflowMenu\)/u,
+  );
   assert.match(chat, /buttonBorderShape\(\.circle\)/u);
   assert.ok(chat.includes('"Message Aiden"'));
-  assert.match(chat, /padding\(\.horizontal, AidenSpacing\.l\)[\s\S]*?padding\(\.vertical, AidenSpacing\.s\)/u);
+  assert.match(
+    chat,
+    /padding\(\.horizontal, AidenSpacing\.l\)[\s\S]*?padding\(\.vertical, AidenSpacing\.s\)/u,
+  );
   assert.match(chat, /\.padding\(\.horizontal, 12\)[\s\S]*?\.aidenComposerGlass\(\)/u);
   assert.doesNotMatch(chat, /private var botMessageControls|aidenBotComposerCapsule/u);
   assert.match(chat, /Path\(roundedRect: rect, cornerRadius: 18, style: \.continuous\)/u);
@@ -660,9 +674,11 @@ test("bot-first sources reuse the one reviewed chat implementation", async () =>
     /AidenBotCanonicalAvatarMemoryCache[\s\S]*?assetRevision[\s\S]*?loadedCacheKey == cacheKey[\s\S]*?canonicalImage != nil[\s\S]*?return/u,
   );
   assert.doesNotMatch(botAvatar, /\.onDisappear \{ canonicalImage = nil \}/u);
-  assert.match(chat, /AidenApprovalCard\([\s\S]*?\.disabled\(!model\.isConnected \|\| model\.isReadOnlyPresentation \|\| model\.isRespondingToApproval \|\| model\.isStopping\)/u);
+  assert.match(
+    chat,
+    /AidenApprovalCard\([\s\S]*?\.disabled\(!model\.isConnected \|\| model\.isReadOnlyPresentation \|\| model\.isRespondingToApproval \|\| model\.isStopping\)/u,
+  );
 });
-
 
 test("both conversation screens draw their rows through the one transcript row stack", async () => {
   // On iOS 26.5 with the keyboard up, the end-of-transcript row as the last child of the
@@ -682,8 +698,15 @@ test("both conversation screens draw their rows through the one transcript row s
   assert.equal(count(scaffold, /LazyVStack\(/gu), 1);
   assert.equal(count(scaffold, /\.id\(bottomAnchorID\)/gu), 1);
 
-  for (const [name, source] of [["chat", chatScreen], ["Bot", botScreen]]) {
-    assert.equal(count(source, /AidenTranscriptRowStack\(/gu), 1, `${name} screen draws its rows through the stack`);
+  for (const [name, source] of [
+    ["chat", chatScreen],
+    ["Bot", botScreen],
+  ]) {
+    assert.equal(
+      count(source, /AidenTranscriptRowStack\(/gu),
+      1,
+      `${name} screen draws its rows through the stack`,
+    );
     assert.equal(count(source, /LazyVStack\(/gu), 0, `${name} screen has its own lazy stack`);
     assert.doesNotMatch(
       source,
@@ -781,7 +804,10 @@ test("the Aiden home, onboarding, composer, schedules, and activity retain the r
     /AidenWorkspacesDirectoryView[\s\S]*?Label\("New Workspace"[\s\S]*?Label\("Add Folder"/u,
   );
   // Compose's "Opening chat…" status floats on glass that never reacts to touch.
-  assert.match(shell, /if flow\.isCreating \{[\s\S]{0,800}?\.glassEffect\(\.regular, in: \.capsule\)/u);
+  assert.match(
+    shell,
+    /if flow\.isCreating \{[\s\S]{0,800}?\.glassEffect\(\.regular, in: \.capsule\)/u,
+  );
   assert.match(
     shell,
     /case \.existingWorkspace: "Existing Workspace"[\s\S]*?case \.newWorkspace: "New Workspace"[\s\S]*?case \.scratchWorkspace: "Managed Scratch Workspace"/u,
@@ -829,7 +855,10 @@ test("the Aiden home, onboarding, composer, schedules, and activity retain the r
   assert.doesNotMatch(chat, /PhotosPicker|AidenUIKitMenuButton|UIImagePickerController/u);
   assert.match(attachmentPicker, /PHPhotoLibrary\.requestAuthorization\(for: \.readWrite\)/u);
   assert.match(attachmentPicker, /PHAsset\.fetchAssets\(with: \.image/u);
-  assert.match(attachmentPicker, /guard isCurrentLibraryLoad\(generation\), !Task\.isCancelled else \{ return \}/u);
+  assert.match(
+    attachmentPicker,
+    /guard isCurrentLibraryLoad\(generation\), !Task\.isCancelled else \{ return \}/u,
+  );
   assert.match(attachmentPicker, /AidenWindowSizeReader \{ windowSize = \$0 \}/u);
   assert.match(attachmentPicker, /manager\.requestImage\(\s*for: asset,\s*targetSize:/u);
   assert.doesNotMatch(attachmentPicker, /requestImageDataAndOrientation/u);
@@ -855,14 +884,17 @@ test("the Aiden home, onboarding, composer, schedules, and activity retain the r
     chat,
     /coordinateSpace: AidenChatAttachmentCoordinateSpace\.name[\s\S]*?frame\(in: \.named\(coordinateSpace\)\)[\s\S]*?AidenAttachmentButtonCenterPreferenceKey[\s\S]*?CGPoint\(x: frame\.midX, y: frame\.midY\)/u,
   );
-  assert.match(chat, /AidenAttachmentPickerOverlay\([\s\S]*?\.allowsHitTesting\(attachmentPicker\.isPresented\)/u);
-  assert.match(chat, /canToggleAttachments: canToggleAttachmentPicker/u);
-  assert.match(chat, /private var canToggleAttachmentPicker: Bool \{\s*AidenAttachmentPickerPolicy\.canPresent/u);
-  assert.match(attachmentPicker, /committingAssets/u);
   assert.match(
-    attachmentPicker,
-    /withTaskCancellationHandler[\s\S]*?cancelImageRequest\(id\)/u,
+    chat,
+    /AidenAttachmentPickerOverlay\([\s\S]*?\.allowsHitTesting\(attachmentPicker\.isPresented\)/u,
   );
+  assert.match(chat, /canToggleAttachments: canToggleAttachmentPicker/u);
+  assert.match(
+    chat,
+    /private var canToggleAttachmentPicker: Bool \{\s*AidenAttachmentPickerPolicy\.canPresent/u,
+  );
+  assert.match(attachmentPicker, /committingAssets/u);
+  assert.match(attachmentPicker, /withTaskCancellationHandler[\s\S]*?cancelImageRequest\(id\)/u);
   assert.match(chat, /finishCommit\(commit\.id\)/u);
   assert.match(attachmentCamera, /AVCaptureSession\(\)/u);
   assert.match(attachmentCamera, /AVCapturePhotoOutput\(\)/u);
@@ -882,10 +914,7 @@ test("the Aiden home, onboarding, composer, schedules, and activity retain the r
     chat,
     /AidenComposerModelChipLabel\(\s*provider: model\.selectedProvider,\s*modelID: model\.selectedModel\?\.id/u,
   );
-  assert.match(
-    chat,
-    /if let provider \{[\s\S]*?AidenProviderIcon\([\s\S]*?modelID: modelID/u,
-  );
+  assert.match(chat, /if let provider \{[\s\S]*?AidenProviderIcon\([\s\S]*?modelID: modelID/u);
   assert.match(chat, /Section \{[\s\S]*?header: \{[\s\S]*?AidenProviderIcon/u);
   assert.match(chat, /contextMenu[\s\S]*?Label\("Copy", systemImage: "doc\.on\.doc"\)/u);
   assert.match(
@@ -908,7 +937,10 @@ test("the Aiden home, onboarding, composer, schedules, and activity retain the r
     scheduledTasks,
     /Picker\("Model"[\s\S]*?ForEach\(models\)[\s\S]*?Text\(candidate\.label\)\.tag/u,
   );
-  assert.match(chat, /AidenActivityMark\(mark: activity\.mark, size: 20, color: palette\.foreground\)/u);
+  assert.match(
+    chat,
+    /AidenActivityMark\(mark: activity\.mark, size: 20, color: palette\.foreground\)/u,
+  );
   assert.match(
     chat,
     /Text\(AidenApprovalPresentation\.detail\(for: kind\)\)[\s\S]*?font\(\.caption\)/u,
@@ -928,7 +960,10 @@ test("the Aiden home, onboarding, composer, schedules, and activity retain the r
   assert.doesNotMatch(chat, /Button\("Deny", role: \.destructive\)/u);
   assert.match(chat, /safeAreaBar\(edge: \.bottom, spacing: 0\) \{ dock \}/u);
   assert.match(chat, /AidenTranscriptScaffold\(dock: dock[,)]/u);
-  assert.match(chat, /private var dock: AidenChatDock \{[\s\S]*?composer: \{ config in[\s\S]*?AidenComposerView\(/u);
+  assert.match(
+    chat,
+    /private var dock: AidenChatDock \{[\s\S]*?composer: \{ config in[\s\S]*?AidenComposerView\(/u,
+  );
   assert.match(chat, /glassEffect\(\.regular, in: shape\)/u);
   assert.match(
     chat,
@@ -1053,7 +1088,10 @@ test("the Aiden MIT license, package graph, and bundled notices retain required 
   assert.match(notice, /swift-cmark 0\.8\.0/u);
   assert.match(notice, /Provider logos/u);
   assert.match(notice, /T3 Code \(adapted simulator device viewer logic\)/u);
-  assert.doesNotMatch(notice, /swift-eventsource|Splash|Highlightr|SwiftMath|Lucide|Thinking Orbs/u);
+  assert.doesNotMatch(
+    notice,
+    /swift-eventsource|Splash|Highlightr|SwiftMath|Lucide|Thinking Orbs/u,
+  );
 });
 
 test("the shipping app icon is the reviewed opaque RayChat artwork", async () => {
@@ -1094,30 +1132,60 @@ test("Bot catalog requests stay scoped through create, advanced settings, chat, 
     read("AidenOnTheGoTests/AidenRemoteClientTests.swift"),
     read("AidenOnTheGoTests/AidenBotCacheTests.swift"),
   ]);
-  assert.match(client, /func botCapabilityCatalog\(botId: String\? = nil\)[\s\S]*?validateBotIdentifier\(botId\)[\s\S]*?URLQueryItem\(name: "botId", value: \$0\)/u);
-  assert.equal((create.match(/botCapabilityCatalog\(\)/gu) ?? []).length, 1, "only new-Bot creation uses generic inventory");
+  assert.match(
+    client,
+    /func botCapabilityCatalog\(botId: String\? = nil\)[\s\S]*?validateBotIdentifier\(botId\)[\s\S]*?URLQueryItem\(name: "botId", value: \$0\)/u,
+  );
+  assert.equal(
+    (create.match(/botCapabilityCatalog\(\)/gu) ?? []).length,
+    1,
+    "only new-Bot creation uses generic inventory",
+  );
   assert.doesNotMatch(advanced, /botCapabilityCatalog\(\)/u);
   assert.doesNotMatch(chat, /botCapabilityCatalog\(\)/u);
   assert.match(advanced, /botCapabilityCatalog\(botId: botID\)/u);
   // Both the load and the Save path read the catalog scoped to this Bot.
-  assert.ok((advanced.match(/botCapabilityCatalog\(botId: botID\)/gu) ?? []).length >= 2, "Advanced load and Save both scope the catalog to the Bot");
+  assert.ok(
+    (advanced.match(/botCapabilityCatalog\(botId: botID\)/gu) ?? []).length >= 2,
+    "Advanced load and Save both scope the catalog to the Bot",
+  );
   assert.match(advanced, /cached\.catalog\(forBotID: botID\)/u);
   assert.match(chat, /botCapabilityCatalog\(botId: botID\)/u);
-  assert.equal((chat.match(/botCapabilityCatalog\(botId: grant\.botID\)/gu) ?? []).length, 2, "file load and pre-effect revalidation use the grant owner");
+  assert.equal(
+    (chat.match(/botCapabilityCatalog\(botId: grant\.botID\)/gu) ?? []).length,
+    2,
+    "file load and pre-effect revalidation use the grant owner",
+  );
   assert.match(chat, /cached\.catalog\(forBotID: botID\)/u);
   assert.match(cache, /if let botID \{ return catalogsByBotID\?\[botID\] \}/u);
   assert.match(cache, /maximumEnvelopeBytes = 4 \* 1_024 \* 1_024/u);
   assert.match(clientTests, /testBotCatalogRequestsUseExactTargetAndKeepLegacyCreateGeneric/u);
   assert.match(clientTests, /testBotCatalogRejectsInvalidTargetsBeforeIssuingAnyRequest/u);
   assert.match(cacheTests, /testTargetedCatalogsNeverOverwriteOrFallbackToGlobalOrAnotherBot/u);
-  assert.match(cacheTests, /testLegacyCacheDecodesWithoutScopedCatalogsAndListRefreshPrunesDeletedBotScopes/u);
+  assert.match(
+    cacheTests,
+    /testLegacyCacheDecodesWithoutScopedCatalogsAndListRefreshPrunesDeletedBotScopes/u,
+  );
 });
 
 test("workspace revision conflicts retain a visible reload action", async () => {
-  const source = await readFile(new URL("../ios/AidenOnTheGo/Features/Remote/AidenWorkspaceEnvironmentView.swift", import.meta.url), "utf8");
-  const conflictMessage = source.match(/body\.code\.rawValue == "revision_conflict"[\s\S]*?errorMessage = "([^"]+)"/u)?.[1];
-  const reloadCondition = source.match(/if message\.contains\("([^"]+)"\) \{\s*Button\("Reload from computer"/u)?.[1];
+  const source = await readFile(
+    new URL(
+      "../ios/AidenOnTheGo/Features/Remote/AidenWorkspaceEnvironmentView.swift",
+      import.meta.url,
+    ),
+    "utf8",
+  );
+  const conflictMessage = source.match(
+    /body\.code\.rawValue == "revision_conflict"[\s\S]*?errorMessage = "([^"]+)"/u,
+  )?.[1];
+  const reloadCondition = source.match(
+    /if message\.contains\("([^"]+)"\) \{\s*Button\("Reload from computer"/u,
+  )?.[1];
   assert.ok(conflictMessage, "revision conflicts must publish a recovery message");
   assert.ok(reloadCondition, "revision conflicts must offer a reload action");
-  assert.ok(conflictMessage.includes(reloadCondition), "the reload condition must match the actual conflict message");
+  assert.ok(
+    conflictMessage.includes(reloadCondition),
+    "the reload condition must match the actual conflict message",
+  );
 });

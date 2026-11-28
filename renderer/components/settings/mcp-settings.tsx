@@ -49,7 +49,14 @@ import {
   useMcpServers,
   useProviders,
 } from "../../lib/queries";
-import type { McpLiveStatus, McpPendingLaunchApproval, McpPresetState, McpServer, McpServerDependents, McpTransport } from "../../lib/types";
+import type {
+  McpLiveStatus,
+  McpPendingLaunchApproval,
+  McpPresetState,
+  McpServer,
+  McpServerDependents,
+  McpTransport,
+} from "../../lib/types";
 import {
   CONNECTOR_CATALOG,
   CONNECTOR_CATEGORIES,
@@ -67,17 +74,28 @@ import { McpExposureControls } from "./mcp-exposure-controls";
 import { McpSecretFields, mcpSecretFieldDrafts, mcpSecretFieldRecord } from "./mcp-secret-fields";
 import { McpProviderAuthFields, mcpShareableProviders } from "./mcp-provider-auth-fields";
 import { McpOAuthMetadataField, mcpOAuthMetadataFieldError } from "./mcp-oauth-metadata-field";
-import { McpOAuthClientFields, mcpOAuthClientSecretDraft, mcpOAuthClientSecretValue } from "./mcp-oauth-client-fields";
+import {
+  McpOAuthClientFields,
+  mcpOAuthClientSecretDraft,
+  mcpOAuthClientSecretValue,
+} from "./mcp-oauth-client-fields";
 import { isEscapeKey } from "../../lib/dismiss-key";
 
 /** Secret values typed into a custom connector never stay in config.json. */
-const STORED_SECRET_DESCRIPTION = "Stored encrypted on this device, never in config.json, and never shown again.";
+const STORED_SECRET_DESCRIPTION =
+  "Stored encrypted on this device, never in config.json, and never shown again.";
 
 /** DOM id of a directory card, so another card can move focus to it. */
 const connectorCardId = (id: string) => `connector-card-${id}`;
 
 function newServer(): McpServer {
-  return { id: `mcp-${Date.now().toString(36)}`, name: "", transport: "stdio", enabled: true, args: [] };
+  return {
+    id: `mcp-${Date.now().toString(36)}`,
+    name: "",
+    transport: "stdio",
+    enabled: true,
+    args: [],
+  };
 }
 
 /** One argument per line, so arguments that contain spaces survive editing unchanged. */
@@ -104,7 +122,13 @@ const LIVE_DOT: Record<McpLiveTone, string> = {
 };
 
 /** Row status: a soft semantic dot and label, then the last discovery's inventory. */
-function McpLiveIndicator({ server, status }: { server: McpServer; status: McpLiveStatus | undefined }) {
+function McpLiveIndicator({
+  server,
+  status,
+}: {
+  server: McpServer;
+  status: McpLiveStatus | undefined;
+}) {
   const view = mcpLiveStatusView(status, server.enabled);
   if (!view) return null;
   return (
@@ -147,27 +171,46 @@ function McpLaunchApproval({
     }
   };
   return (
-    <Callout color="warning" className="mt-2 flex-col items-start gap-2" role="group" aria-label={`${label} needs approval`}>
+    <Callout
+      color="warning"
+      className="mt-2 flex-col items-start gap-2"
+      role="group"
+      aria-label={`${label} needs approval`}
+    >
       <Text variant="small-strong">Added outside Aiden — Approve to run</Text>
       <Text variant="small" color="secondary" className="block">
-        This command was added or changed outside Aiden. Review opens the exact launch and saved environment values before you approve it.
+        This command was added or changed outside Aiden. Review opens the exact launch and saved
+        environment values before you approve it.
       </Text>
       <code className="block max-w-full whitespace-pre-wrap break-all rounded-control bg-well px-2 py-1 font-mono text-small text-primary">
         {[approval.command, ...approval.args].join("\n")}
       </code>
       {approval.env.length ? (
         <div className="flex max-w-full flex-col gap-1">
-          <Text variant="small" color="secondary">Environment</Text>
+          <Text variant="small" color="secondary">
+            Environment
+          </Text>
           {/* Generic cards keep saved values masked; explicit foreground review shows the effective launch. */}
-          <code aria-label={`${label} environment`} className="block max-w-full whitespace-pre-wrap break-all rounded-control bg-well px-2 py-1 font-mono text-small text-primary">
+          <code
+            aria-label={`${label} environment`}
+            className="block max-w-full whitespace-pre-wrap break-all rounded-control bg-well px-2 py-1 font-mono text-small text-primary"
+          >
             {approval.env
-              .map(({ name, value, unavailable }) =>
-                `${name}=${value ?? (unavailable ? "(not available — enter it again in Edit)" : "(saved value, not shown)")}`)
+              .map(
+                ({ name, value, unavailable }) =>
+                  `${name}=${value ?? (unavailable ? "(not available — enter it again in Edit)" : "(saved value, not shown)")}`,
+              )
               .join("\n")}
           </code>
         </div>
       ) : null}
-      <Button variant="filled" size="small" disabled={busy} aria-label={`Review and approve ${label} to run`} onClick={() => void approve()}>
+      <Button
+        variant="filled"
+        size="small"
+        disabled={busy}
+        aria-label={`Review and approve ${label} to run`}
+        onClick={() => void approve()}
+      >
         {busy ? "Reviewing…" : "Review and approve"}
       </Button>
     </Callout>
@@ -186,12 +229,11 @@ function McpDependentsNote({
   if (!summary) return null;
   return (
     <Text as="p" variant="small" className="mt-2 block" role="note">
-      {summary} {dependents!.schedules.length + dependents!.bots.length === 1 ? "uses" : "use"} this connector.{" "}
-      {consequence}
+      {summary} {dependents!.schedules.length + dependents!.bots.length === 1 ? "uses" : "use"} this
+      connector. {consequence}
     </Text>
   );
 }
-
 
 export function McpSettings() {
   const qc = useQueryClient();
@@ -199,12 +241,21 @@ export function McpSettings() {
   const servers = useMcpServers();
   const presets = useMcpPresets();
   const [editing, setEditing] = React.useState<McpServer | null>(null);
-  const [setup, setSetup] = React.useState<{ state: McpPresetState; server?: McpServer } | null>(null);
+  const [setup, setSetup] = React.useState<{ state: McpPresetState; server?: McpServer } | null>(
+    null,
+  );
   const [removing, setRemoving] = React.useState<McpServer | null>(null);
-  const [disabling, setDisabling] = React.useState<{ server: McpServer; dependents: McpServerDependents } | null>(null);
+  const [disabling, setDisabling] = React.useState<{
+    server: McpServer;
+    dependents: McpServerDependents;
+  } | null>(null);
   const live = useMcpLiveStatus();
   // Same cache entry as useMcpLiveStatus; only its load state is read here.
-  const liveLoaded = useQuery({ queryKey: queryKeys.mcpLiveStatus, queryFn: mcpApi.liveStatus, staleTime: Infinity }).isSuccess;
+  const liveLoaded = useQuery({
+    queryKey: queryKeys.mcpLiveStatus,
+    queryFn: mcpApi.liveStatus,
+    staleTime: Infinity,
+  }).isSuccess;
   const launchApprovals = useMcpLaunchApprovals();
   const removingDependents = useMcpDependents(removing?.id);
   const [search, setSearch] = React.useState("");
@@ -229,7 +280,11 @@ export function McpSettings() {
     if (!enabled && !confirmed) {
       // Disabling breaks schedules and Bots that rely on this server: confirm first.
       const dependents = await qc
-        .fetchQuery({ queryKey: queryKeys.mcpDependents(server.id), queryFn: () => mcpApi.dependents(server.id), staleTime: 0 })
+        .fetchQuery({
+          queryKey: queryKeys.mcpDependents(server.id),
+          queryFn: () => mcpApi.dependents(server.id),
+          staleTime: 0,
+        })
         .catch(() => null);
       if (dependents && mcpDependentsSummary(dependents)) {
         setToggling((current) => {
@@ -262,7 +317,9 @@ export function McpSettings() {
     try {
       await mcpApi.save(server);
     } catch (error) {
-      toast.error(`Couldn’t change model access for ${server.name || "this connector"}: ${errorMessage(error)}`);
+      toast.error(
+        `Couldn’t change model access for ${server.name || "this connector"}: ${errorMessage(error)}`,
+      );
     } finally {
       await invalidate().catch(() => undefined);
     }
@@ -344,9 +401,14 @@ export function McpSettings() {
       <div className="settings-page-heading flex items-start justify-between gap-4">
         <div className="min-w-0 flex-1">
           <span className="flex items-center gap-1.5">
-            <Text as="h1" variant="heading1">Connectors</Text>
+            <Text as="h1" variant="heading1">
+              Connectors
+            </Text>
             <InfoHint topic="connectors">
-              <p>Enabled connectors give the assistant their tools. Tool inputs are sent to that service.</p>
+              <p>
+                Enabled connectors give the assistant their tools. Tool inputs are sent to that
+                service.
+              </p>
               <p>Folder access in a workspace is a separate permission.</p>
             </InfoHint>
           </span>
@@ -361,7 +423,12 @@ export function McpSettings() {
           </Button>
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
-              <Button variant="transparent" size="small" iconOnly aria-label="More connector actions">
+              <Button
+                variant="transparent"
+                size="small"
+                iconOnly
+                aria-label="More connector actions"
+              >
                 <MoreHorizontal className="size-4" />
               </Button>
             </DropdownMenuTrigger>
@@ -375,7 +442,12 @@ export function McpSettings() {
       </div>
 
       {loadErrors.map(({ label, query }) => (
-        <Callout key={label} color="red" role="alert" className="flex-row items-center justify-between gap-3">
+        <Callout
+          key={label}
+          color="red"
+          role="alert"
+          className="flex-row items-center justify-between gap-3"
+        >
           <div className="min-w-0 flex-1">
             <Text variant="small-strong">Couldn’t load {label}</Text>
             <Text variant="small" className="mt-0.5 block">
@@ -415,7 +487,9 @@ export function McpSettings() {
                     {s.name || "Untitled connector"}
                   </Text>
                   <Text variant="small" color="tertiary" truncate className="mt-0.5 block">
-                    {s.transport === "stdio" ? [s.command, ...(s.args ?? [])].filter(Boolean).join(" ") || "No command" : s.url || "No URL"}
+                    {s.transport === "stdio"
+                      ? [s.command, ...(s.args ?? [])].filter(Boolean).join(" ") || "No command"
+                      : s.url || "No URL"}
                   </Text>
                   <div
                     className="mt-1 flex flex-wrap items-center gap-2"
@@ -424,15 +498,26 @@ export function McpSettings() {
                   >
                     <McpLiveIndicator server={s} status={live.get(s.id)} />
                   </div>
-                  {s.enabled && !launchApprovals.has(s.id) && live.get(s.id)?.state === "failed" && live.get(s.id)?.error ? (
+                  {s.enabled &&
+                  !launchApprovals.has(s.id) &&
+                  live.get(s.id)?.state === "failed" &&
+                  live.get(s.id)?.error ? (
                     <Text variant="small" color="red" className="mt-0.5 block break-words">
                       {live.get(s.id)!.error}
                     </Text>
                   ) : null}
                   {launchApprovals.get(s.id) ? (
-                    <McpLaunchApproval server={s} approval={launchApprovals.get(s.id)!} onApproved={invalidate} />
+                    <McpLaunchApproval
+                      server={s}
+                      approval={launchApprovals.get(s.id)!}
+                      onApproved={invalidate}
+                    />
                   ) : (
-                    <McpExposureControls server={s} toolsRevision={live.get(s.id)?.toolsRevision} onSave={saveExposure} />
+                    <McpExposureControls
+                      server={s}
+                      toolsRevision={live.get(s.id)?.toolsRevision}
+                      onSave={saveExposure}
+                    />
                   )}
                 </div>
                 <Button
@@ -469,11 +554,19 @@ export function McpSettings() {
         </FieldSet>
       ) : null}
 
-      <section className="settings-group flex flex-col gap-3" aria-labelledby="connector-directory-title">
+      <section
+        className="settings-group flex flex-col gap-3"
+        aria-labelledby="connector-directory-title"
+      >
         <div className="settings-group-title flex items-center gap-1.5 px-4">
-          <h2 id="connector-directory-title" className="text-large-strong text-primary">Directory</h2>
+          <h2 id="connector-directory-title" className="text-large-strong text-primary">
+            Directory
+          </h2>
           <InfoHint topic="the connector directory">
-            <p>Hosted connectors sign in with your account or use an API key. Aiden stores it encrypted on this device and sends it only to that service.</p>
+            <p>
+              Hosted connectors sign in with your account or use an API key. Aiden stores it
+              encrypted on this device and sends it only to that service.
+            </p>
             <p>Need something else? Add a custom connector for any MCP server.</p>
           </InfoHint>
         </div>
@@ -493,7 +586,11 @@ export function McpSettings() {
             className="h-full min-w-0 flex-1 bg-transparent text-regular text-primary outline-none placeholder:text-secondary"
           />
         </label>
-        <div className="flex flex-wrap gap-1.5" role="group" aria-label="Filter connectors by category">
+        <div
+          className="flex flex-wrap gap-1.5"
+          role="group"
+          aria-label="Filter connectors by category"
+        >
           {(["all", ...CONNECTOR_CATEGORIES] as const).map((option) => (
             <Button
               key={option}
@@ -524,7 +621,9 @@ export function McpSettings() {
                 catalogReady={catalogReady}
                 onSetup={() => {
                   if (!state) {
-                    toast.error("This connector’s details are unavailable. Reload Settings and try again.");
+                    toast.error(
+                      "This connector’s details are unavailable. Reload Settings and try again.",
+                    );
                     return;
                   }
                   setSetup({
@@ -595,7 +694,8 @@ export function McpSettings() {
         description={
           disabling ? (
             <>
-              The assistant stops using “{disabling.server.name || "Untitled connector"}” until you turn it on again.
+              The assistant stops using “{disabling.server.name || "Untitled connector"}” until you
+              turn it on again.
               <McpDependentsNote
                 dependents={disabling.dependents}
                 consequence="They cannot use it while it is off."
@@ -655,7 +755,9 @@ function ConnectorCard({
       >
         <McpPresetIcon presetId={entry.id} name={entry.name} className="size-5" />
       </div>
-      <Text variant="strong" id={`${connectorCardId(entry.id)}-name`}>{entry.name}</Text>
+      <Text variant="strong" id={`${connectorCardId(entry.id)}-name`}>
+        {entry.name}
+      </Text>
       <Text variant="small" color="secondary" className="block">
         {entry.tagline}
       </Text>
@@ -722,7 +824,9 @@ function McpEditor({
   const [name, setName] = React.useState(server.name);
   const [description, setDescription] = React.useState(server.description ?? "");
   const [oauthClientId, setOauthClientId] = React.useState(server.oauthClientId ?? "");
-  const [oauthClientSecret, setOauthClientSecret] = React.useState(() => mcpOAuthClientSecretDraft(server.oauthClientSecret));
+  const [oauthClientSecret, setOauthClientSecret] = React.useState(() =>
+    mcpOAuthClientSecretDraft(server.oauthClientSecret),
+  );
   const [transport, setTransport] = React.useState<McpTransport>(server.transport);
   const [command, setCommand] = React.useState(server.command ?? "");
   const [args, setArgs] = React.useState(argsToLines(server.args));
@@ -732,8 +836,11 @@ function McpEditor({
   const providerConnection = JSON.stringify([authProvider, url.trim(), transport]);
   const providerApproved = approvedProviderConnection === providerConnection;
   const [oauth, setOauth] = React.useState(Boolean(server.oauth));
-  const [authServerMetadataUrl, setAuthServerMetadataUrl] = React.useState(server.authServerMetadataUrl ?? "");
-  const metadataError = transport !== "stdio" && oauth ? mcpOAuthMetadataFieldError(authServerMetadataUrl) : undefined;
+  const [authServerMetadataUrl, setAuthServerMetadataUrl] = React.useState(
+    server.authServerMetadataUrl ?? "",
+  );
+  const metadataError =
+    transport !== "stdio" && oauth ? mcpOAuthMetadataFieldError(authServerMetadataUrl) : undefined;
   const [testing, setTesting] = React.useState(false);
   const [authorizing, setAuthorizing] = React.useState(false);
   const [authorized, setAuthorized] = React.useState(false);
@@ -776,7 +883,20 @@ function McpEditor({
       savedByUser.current = false;
       closed.current = false;
       if (server.authProvider) {
-        void mcpApi.oauthStatus(server.id).then((status) => setApprovedProviderConnection(status.providerAuthorized ? JSON.stringify([server.authProvider ?? "", server.url?.trim() ?? "", server.transport]) : undefined)).catch(() => setApprovedProviderConnection(undefined));
+        void mcpApi
+          .oauthStatus(server.id)
+          .then((status) =>
+            setApprovedProviderConnection(
+              status.providerAuthorized
+                ? JSON.stringify([
+                    server.authProvider ?? "",
+                    server.url?.trim() ?? "",
+                    server.transport,
+                  ])
+                : undefined,
+            ),
+          )
+          .catch(() => setApprovedProviderConnection(undefined));
       }
       if (server.oauth) {
         void mcpApi
@@ -795,8 +915,14 @@ function McpEditor({
     id: server.id,
     name: name.trim(),
     description: description.trim() || undefined,
-    oauthClientId: transport !== "stdio" && oauth && !authProvider ? oauthClientId.trim() || undefined : undefined,
-    oauthClientSecret: transport !== "stdio" && oauth && !authProvider ? mcpOAuthClientSecretValue(oauthClientId, oauthClientSecret) : undefined,
+    oauthClientId:
+      transport !== "stdio" && oauth && !authProvider
+        ? oauthClientId.trim() || undefined
+        : undefined,
+    oauthClientSecret:
+      transport !== "stdio" && oauth && !authProvider
+        ? mcpOAuthClientSecretValue(oauthClientId, oauthClientSecret)
+        : undefined,
     transport,
     enabled: server.enabled,
     command: transport === "stdio" ? command.trim() || undefined : undefined,
@@ -806,7 +932,8 @@ function McpEditor({
     headers: transport !== "stdio" ? mcpSecretFieldRecord(headers) : undefined,
     oauth: transport !== "stdio" && !authProvider ? oauth || undefined : undefined,
     authProvider: transport === "http" ? authProvider || undefined : undefined,
-    authServerMetadataUrl: transport !== "stdio" && oauth ? authServerMetadataUrl.trim() || undefined : undefined,
+    authServerMetadataUrl:
+      transport !== "stdio" && oauth ? authServerMetadataUrl.trim() || undefined : undefined,
     // Model access is chosen on the connector's row; saving the editor keeps it.
     exposure: server.exposure,
     hiddenTools: server.hiddenTools,
@@ -817,11 +944,23 @@ function McpEditor({
     try {
       const record = await mcpApi.save(build(), { fromEditor: true });
       await mcpApi.providerAuth(record, allowed);
-      setApprovedProviderConnection(allowed ? JSON.stringify([record.authProvider ?? "", record.url?.trim() ?? "", record.transport]) : undefined);
+      setApprovedProviderConnection(
+        allowed
+          ? JSON.stringify([record.authProvider ?? "", record.url?.trim() ?? "", record.transport])
+          : undefined,
+      );
       onSaved();
-      toast.success(allowed ? "Provider key approved for this connector on this device." : "Provider key sharing stopped.");
-    } catch (error) { setApprovedProviderConnection(undefined); toast.error(error instanceof Error ? error.message : String(error)); }
-    finally { setProviderAuthorizing(false); }
+      toast.success(
+        allowed
+          ? "Provider key approved for this connector on this device."
+          : "Provider key sharing stopped.",
+      );
+    } catch (error) {
+      setApprovedProviderConnection(undefined);
+      toast.error(error instanceof Error ? error.message : String(error));
+    } finally {
+      setProviderAuthorizing(false);
+    }
   };
 
   const handleAuthorize = async () => {
@@ -871,7 +1010,8 @@ function McpEditor({
       setNeedsSignIn(false);
       setHasSession(true);
       onSaved();
-      if (result.connectionError) toast.error(`Signed in, but connecting failed: ${result.connectionError}`);
+      if (result.connectionError)
+        toast.error(`Signed in, but connecting failed: ${result.connectionError}`);
       else toast.success("Authorized — you're signed in.");
     } catch (error) {
       if (!cancelledSignIn.current && !closed.current)
@@ -928,10 +1068,14 @@ function McpEditor({
     try {
       // Tests the draft as typed; nothing is saved until Save.
       const status = await mcpApi.testDraft(build());
-      if (oauth && status.authorized !== undefined) setAuthorized(status.authorized && !status.needsSignIn);
+      if (oauth && status.authorized !== undefined)
+        setAuthorized(status.authorized && !status.needsSignIn);
       if (status.needsSignIn) setNeedsSignIn(true);
       if (status.hasSession) setHasSession(true);
-      if (status.connected) toast.success(`Connected — ${status.toolCount} tool${status.toolCount === 1 ? "" : "s"} available.`);
+      if (status.connected)
+        toast.success(
+          `Connected — ${status.toolCount} tool${status.toolCount === 1 ? "" : "s"} available.`,
+        );
       else toast.error(`Connection failed: ${status.error ?? "unknown error"}`);
     } catch (error) {
       toast.error(error instanceof Error ? error.message : String(error));
@@ -949,7 +1093,11 @@ function McpEditor({
       size="large"
       confirmLabel={saving ? "Saving…" : "Save"}
       busy={saving}
-      confirmDisabled={Boolean(metadataError) || !name.trim() || (transport === "stdio" ? !command.trim() : !url.trim())}
+      confirmDisabled={
+        Boolean(metadataError) ||
+        !name.trim() ||
+        (transport === "stdio" ? !command.trim() : !url.trim())
+      }
       onConfirm={async () => {
         setSaving(true);
         setSaveError(null);
@@ -972,20 +1120,46 @@ function McpEditor({
       {!isNew && mcpConnectionChanged(server, build()) && mcpDependentsSummary(dependents.data) ? (
         <Callout color="warning" className="mb-3">
           <Text variant="small">
-            {mcpDependentsSummary(dependents.data)} {dependents.data!.schedules.length + dependents.data!.bots.length === 1 ? "uses" : "use"} this
-            server. Changing how Aiden connects to it asks for their approval again after you save.
+            {mcpDependentsSummary(dependents.data)}{" "}
+            {dependents.data!.schedules.length + dependents.data!.bots.length === 1
+              ? "uses"
+              : "use"}{" "}
+            this server. Changing how Aiden connects to it asks for their approval again after you
+            save.
           </Text>
         </Callout>
       ) : null}
       <FieldSet>
         <Field label="Name">
-          <Input aria-label="Name" value={name} onChange={(e) => setName(e.target.value)} placeholder="My connector" autoFocus />
+          <Input
+            aria-label="Name"
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            placeholder="My connector"
+            autoFocus
+          />
         </Field>
-        <Field label="Description" description="Optional context to help Aiden find this connector’s tools." orientation="vertical">
-          <Input aria-label="Connector description" value={description} onChange={(event) => setDescription(event.target.value)} maxLength={1024} />
+        <Field
+          label="Description"
+          description="Optional context to help Aiden find this connector’s tools."
+          orientation="vertical"
+        >
+          <Input
+            aria-label="Connector description"
+            value={description}
+            onChange={(event) => setDescription(event.target.value)}
+            maxLength={1024}
+          />
         </Field>
         <Field label="Connection">
-          <Select value={transport} onValueChange={(v) => { setTransport(v as McpTransport); setAuthProvider(""); setApprovedProviderConnection(undefined); }}>
+          <Select
+            value={transport}
+            onValueChange={(v) => {
+              setTransport(v as McpTransport);
+              setAuthProvider("");
+              setApprovedProviderConnection(undefined);
+            }}
+          >
             <SelectTrigger size="small" aria-label="Connection">
               <SelectValue />
             </SelectTrigger>
@@ -999,7 +1173,12 @@ function McpEditor({
         {transport === "stdio" ? (
           <>
             <Field label="Command">
-              <Input aria-label="Command" value={command} onChange={(e) => setCommand(e.target.value)} placeholder="npx" />
+              <Input
+                aria-label="Command"
+                value={command}
+                onChange={(e) => setCommand(e.target.value)}
+                placeholder="npx"
+              />
             </Field>
             <Field
               label="Arguments"
@@ -1015,17 +1194,34 @@ function McpEditor({
                 spellCheck={false}
               />
             </Field>
-            <Field label="Environment" description={STORED_SECRET_DESCRIPTION} orientation="vertical">
+            <Field
+              label="Environment"
+              description={STORED_SECRET_DESCRIPTION}
+              orientation="vertical"
+            >
               <McpSecretFields kind="env" fields={env} onChange={setEnv} />
             </Field>
           </>
         ) : (
           <>
             <Field label="Server URL">
-              <Input aria-label="Server URL" value={url} onChange={(e) => { setUrl(e.target.value); setApprovedProviderConnection(undefined); }} placeholder="https://example.com/mcp" />
+              <Input
+                aria-label="Server URL"
+                value={url}
+                onChange={(e) => {
+                  setUrl(e.target.value);
+                  setApprovedProviderConnection(undefined);
+                }}
+                placeholder="https://example.com/mcp"
+              />
             </Field>
             <Field label="Headers" description={STORED_SECRET_DESCRIPTION} orientation="vertical">
-              <McpSecretFields kind="headers" fields={headers} onChange={setHeaders} disabled={Boolean(authProvider)} />
+              <McpSecretFields
+                kind="headers"
+                fields={headers}
+                onChange={setHeaders}
+                disabled={Boolean(authProvider)}
+              />
             </Field>
             <Field
               label="OAuth sign-in"
@@ -1041,56 +1237,96 @@ function McpEditor({
                 }}
               />
             </Field>
-            {transport === "http" ? <McpProviderAuthFields providerId={authProvider} endpoint={url.trim()} approved={providerApproved} busy={providerAuthorizing}
-              disabled={!name.trim() || !url.trim() || !authProvider || (!providerApproved && !mcpShareableProviders(providers.data ?? [], "").some((provider) => provider.id === authProvider))}
-              providers={mcpShareableProviders(providers.data ?? [], authProvider)}
-              onProviderChange={(id) => { setAuthProvider(id); setApprovedProviderConnection(undefined); if (id) { setOauth(false); setHeaders([]); setAuthServerMetadataUrl(""); setOauthClientId(""); setOauthClientSecret({ value: "", saved: false }); } }}
-              onConsent={(allowed) => { void handleProviderConsent(allowed); }} /> : null}
+            {transport === "http" ? (
+              <McpProviderAuthFields
+                providerId={authProvider}
+                endpoint={url.trim()}
+                approved={providerApproved}
+                busy={providerAuthorizing}
+                disabled={
+                  !name.trim() ||
+                  !url.trim() ||
+                  !authProvider ||
+                  (!providerApproved &&
+                    !mcpShareableProviders(providers.data ?? [], "").some(
+                      (provider) => provider.id === authProvider,
+                    ))
+                }
+                providers={mcpShareableProviders(providers.data ?? [], authProvider)}
+                onProviderChange={(id) => {
+                  setAuthProvider(id);
+                  setApprovedProviderConnection(undefined);
+                  if (id) {
+                    setOauth(false);
+                    setHeaders([]);
+                    setAuthServerMetadataUrl("");
+                    setOauthClientId("");
+                    setOauthClientSecret({ value: "", saved: false });
+                  }
+                }}
+                onConsent={(allowed) => {
+                  void handleProviderConsent(allowed);
+                }}
+              />
+            ) : null}
             {oauth ? (
               <>
-              <McpOAuthClientFields
-                clientId={oauthClientId}
-                secret={oauthClientSecret}
-                onClientIdChange={(value) => {
-                  setOauthClientId(value);
-                  setAuthorized(false);
-                  // A saved secret belongs to the previous client: it is never sent with another client ID.
-                  setOauthClientSecret((secret) => (secret.saved ? { value: "", saved: false } : secret));
-                }}
-                onSecretChange={setOauthClientSecret}
-              />
-              <McpOAuthMetadataField value={authServerMetadataUrl} onChange={(value) => { setAuthServerMetadataUrl(value); setAuthorized(false); }} />
-              <Field
-                label="Authorize"
-                description={
-                  authorizing
-                    ? "Finish signing in in your browser, or cancel."
-                    : needsSignIn
-                      ? "Your sign-in expired or was revoked. Sign in again to reconnect."
-                      : authorized
-                        ? "Signed in. Re-run to refresh access."
-                        : "Opens your browser to sign in."
-                }
-              >
-                <McpSignInControls
-                  authorizing={authorizing}
-                  authorized={authorized}
-                  needsSignIn={needsSignIn}
-                  hasSession={hasSession}
-                  signingOut={signingOut}
-                  disabled={!url.trim() || Boolean(metadataError)}
-                  onAuthorize={() => void handleAuthorize()}
-                  onCancel={() => void cancelSignIn()}
-                  onSignOut={() => void handleSignOut()}
+                <McpOAuthClientFields
+                  clientId={oauthClientId}
+                  secret={oauthClientSecret}
+                  onClientIdChange={(value) => {
+                    setOauthClientId(value);
+                    setAuthorized(false);
+                    // A saved secret belongs to the previous client: it is never sent with another client ID.
+                    setOauthClientSecret((secret) =>
+                      secret.saved ? { value: "", saved: false } : secret,
+                    );
+                  }}
+                  onSecretChange={setOauthClientSecret}
                 />
-              </Field>
+                <McpOAuthMetadataField
+                  value={authServerMetadataUrl}
+                  onChange={(value) => {
+                    setAuthServerMetadataUrl(value);
+                    setAuthorized(false);
+                  }}
+                />
+                <Field
+                  label="Authorize"
+                  description={
+                    authorizing
+                      ? "Finish signing in in your browser, or cancel."
+                      : needsSignIn
+                        ? "Your sign-in expired or was revoked. Sign in again to reconnect."
+                        : authorized
+                          ? "Signed in. Re-run to refresh access."
+                          : "Opens your browser to sign in."
+                  }
+                >
+                  <McpSignInControls
+                    authorizing={authorizing}
+                    authorized={authorized}
+                    needsSignIn={needsSignIn}
+                    hasSession={hasSession}
+                    signingOut={signingOut}
+                    disabled={!url.trim() || Boolean(metadataError)}
+                    onAuthorize={() => void handleAuthorize()}
+                    onCancel={() => void cancelSignIn()}
+                    onSignOut={() => void handleSignOut()}
+                  />
+                </Field>
               </>
             ) : null}
           </>
         )}
 
         <Field label="Test">
-          <Button size="small" variant="filled" onClick={handleTest} disabled={testing || !name.trim() || Boolean(metadataError)}>
+          <Button
+            size="small"
+            variant="filled"
+            onClick={handleTest}
+            disabled={testing || !name.trim() || Boolean(metadataError)}
+          >
             {testing ? "Connecting…" : "Test connection"}
           </Button>
         </Field>
@@ -1103,4 +1339,3 @@ function McpEditor({
     </Dialog>
   );
 }
-

@@ -22,13 +22,19 @@ async function menuBarVisible(app: ElectronApplication): Promise<boolean> {
   return app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].isMenuBarVisible());
 }
 
-async function sendWindowState(app: ElectronApplication, state: { maximized: boolean; fullScreen: boolean }) {
+async function sendWindowState(
+  app: ElectronApplication,
+  state: { maximized: boolean; fullScreen: boolean },
+) {
   await app.evaluate(({ BrowserWindow }, payload) => {
     BrowserWindow.getAllWindows()[0].webContents.send("app:window-state", payload);
   }, state);
 }
 
-function overlaps(a: { x: number; y: number; width: number; height: number }, b: typeof a): boolean {
+function overlaps(
+  a: { x: number; y: number; width: number; height: number },
+  b: typeof a,
+): boolean {
   return a.x < b.x + b.width && b.x < a.x + a.width && a.y < b.y + b.height && b.y < a.y + a.height;
 }
 
@@ -43,7 +49,9 @@ async function startChat(page: Page): Promise<void> {
 test.describe("Aiden title bar", () => {
   test.use({ workspaceSeed: true });
 
-  test("draws the window controls in the top bar instead of a desktop title bar", async ({ aiden }) => {
+  test("draws the window controls in the top bar instead of a desktop title bar", async ({
+    aiden,
+  }) => {
     const { app, page } = aiden;
     await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setSize(1280, 800));
     await startChat(page);
@@ -72,7 +80,10 @@ test.describe("Aiden title bar", () => {
     const header = page.locator("header[data-toolbar]").first();
     for (const action of await header.getByRole("button").all()) {
       if (!(await action.isVisible())) continue;
-      expect(overlaps((await action.boundingBox())!, controlsBox), await action.getAttribute("aria-label") ?? "").toBe(false);
+      expect(
+        overlaps((await action.boundingBox())!, controlsBox),
+        (await action.getAttribute("aria-label")) ?? "",
+      ).toBe(false);
     }
 
     // A docked Environment panel takes the corner, so its tab strip makes room
@@ -83,13 +94,18 @@ test.describe("Aiden title bar", () => {
     await expect(strip).toBeVisible();
     const docked = await page.evaluate(() => {
       const strip = document.querySelector('[data-environment-surface="tools"] header');
-      return Math.round(strip!.getBoundingClientRect().right) === document.documentElement.clientWidth;
+      return (
+        Math.round(strip!.getBoundingClientRect().right) === document.documentElement.clientWidth
+      );
     });
     expect(docked, "at 1600px the Environment panel docks against the right edge").toBe(true);
     const dockedControls = (await controls.boundingBox())!;
     for (const action of await strip.getByRole("button").all()) {
       if (!(await action.isVisible())) continue;
-      expect(overlaps((await action.boundingBox())!, dockedControls), await action.getAttribute("aria-label") ?? "").toBe(false);
+      expect(
+        overlaps((await action.boundingBox())!, dockedControls),
+        (await action.getAttribute("aria-label")) ?? "",
+      ).toBe(false);
     }
     await page.getByRole("button", { name: "Hide Environment" }).first().click();
     await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setSize(1280, 800));
@@ -115,7 +131,11 @@ test.describe("Aiden title bar", () => {
     });
     await controls.getByRole("button", { name: "Minimize" }).click();
     await expect
-      .poll(() => app.evaluate(() => (globalThis as { __minimizeCalls?: { count: number } }).__minimizeCalls?.count))
+      .poll(() =>
+        app.evaluate(
+          () => (globalThis as { __minimizeCalls?: { count: number } }).__minimizeCalls?.count,
+        ),
+      )
       .toBe(1);
   });
 
@@ -123,7 +143,10 @@ test.describe("Aiden title bar", () => {
     let page = aiden.page;
     await finishLmStudioOnboarding(page);
     await page.getByRole("button", { name: "Settings", exact: true }).click();
-    await page.getByRole("navigation", { name: "Settings" }).getByRole("button", { name: "Appearance", exact: true }).click();
+    await page
+      .getByRole("navigation", { name: "Settings" })
+      .getByRole("button", { name: "Appearance", exact: true })
+      .click();
     const toggle = page.getByRole("switch", { name: "Use system title bar" });
     await expect(toggle).not.toBeChecked();
     await toggle.click();
@@ -135,7 +158,9 @@ test.describe("Aiden title bar", () => {
     await expect
       .poll(async () => {
         try {
-          const saved = JSON.parse(await readFile(path.join(aiden.userDataDir, "settings.json"), "utf8"));
+          const saved = JSON.parse(
+            await readFile(path.join(aiden.userDataDir, "settings.json"), "utf8"),
+          );
           return saved.settings?.appearance?.linuxTitleBar;
         } catch {
           return undefined;
@@ -170,7 +195,8 @@ test.describe("Aiden title bar during setup", () => {
     for (const label of ["Minimize", "Maximize", "Close"]) {
       const box = (await controls.locator(`button[aria-label="${label}"]`).boundingBox())!;
       const hit = await page.evaluate(
-        ({ x, y }) => document.elementFromPoint(x, y)?.closest("button")?.getAttribute("aria-label") ?? null,
+        ({ x, y }) =>
+          document.elementFromPoint(x, y)?.closest("button")?.getAttribute("aria-label") ?? null,
         { x: box.x + box.width / 2, y: box.y + box.height / 2 },
       );
       expect(hit, label).toBe(label);
@@ -186,7 +212,11 @@ test.describe("Aiden title bar during setup", () => {
     });
     await controls.locator('button[aria-label="Minimize"]').click();
     await expect
-      .poll(() => app.evaluate(() => (globalThis as { __minimizeCalls?: { count: number } }).__minimizeCalls?.count))
+      .poll(() =>
+        app.evaluate(
+          () => (globalThis as { __minimizeCalls?: { count: number } }).__minimizeCalls?.count,
+        ),
+      )
       .toBe(1);
     // A window action is not a press outside the dialog.
     await expect(sheet).toBeVisible();

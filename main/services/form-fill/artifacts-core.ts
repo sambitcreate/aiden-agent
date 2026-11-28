@@ -34,10 +34,7 @@ export interface FormFillArtifactStatus {
   error?: string;
 }
 
-const TOTAL_BYTES = FORM_FILL_ARTIFACT_FILES.reduce(
-  (sum, file) => sum + file.bytes,
-  0,
-);
+const TOTAL_BYTES = FORM_FILL_ARTIFACT_FILES.reduce((sum, file) => sum + file.bytes, 0);
 
 export function isFormFillSupported(
   options: {
@@ -67,8 +64,7 @@ export function isFormFillSupported(
       };
     }
   }
-  if (!match)
-    return { supported: false, reason: "Could not verify the macOS version." };
+  if (!match) return { supported: false, reason: "Could not verify the macOS version." };
   return { supported: true };
 }
 
@@ -95,8 +91,7 @@ export async function verifyFormFillPackage(
     const walk = (dir: string): void => {
       for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
         entryCount += 1;
-        if (entryCount > FORM_FILL_MAX_FILE_COUNT)
-          throw new Error("Too many entries");
+        if (entryCount > FORM_FILL_MAX_FILE_COUNT) throw new Error("Too many entries");
         const full = path.join(dir, entry.name);
         if (entry.isSymbolicLink()) {
           relativePaths.push(`symlink:${path.relative(rootResolved, full)}`);
@@ -135,14 +130,11 @@ export async function verifyFormFillPackage(
     } catch {
       return `The model file ${file.path} is missing.`;
     }
-    if (!stat.isFile())
-      return `The model file ${file.path} is not a regular file.`;
+    if (!stat.isFile()) return `The model file ${file.path} is not a regular file.`;
     if (stat.size !== file.bytes) {
       return `The model file ${file.path} has an unexpected size.`;
     }
-    const hash = createHash("sha256")
-      .update(fs.readFileSync(full))
-      .digest("hex");
+    const hash = createHash("sha256").update(fs.readFileSync(full)).digest("hex");
     if (hash !== file.sha256) {
       return `The model file ${file.path} failed its checksum.`;
     }
@@ -180,8 +172,7 @@ async function downloadToFile(
       const { done, value } = await reader.read();
       if (done) break;
       received += value.byteLength;
-      if (received > maxBytes)
-        throw new Error("The download exceeded its size limit.");
+      if (received > maxBytes) throw new Error("The download exceeded its size limit.");
       // writeFile on a FileHandle awaits every byte, including partial writes.
       await writer.writeFile(value);
       sink.onProgress?.(received, TOTAL_BYTES);
@@ -321,9 +312,7 @@ export class FormFillArtifactStore {
 
   private async doDownload(staging: string, now: () => number): Promise<void> {
     if (TOTAL_BYTES > FORM_FILL_MAX_TOTAL_BYTES) {
-      throw new Error(
-        "The pinned model manifest exceeds the download byte limit.",
-      );
+      throw new Error("The pinned model manifest exceeds the download byte limit.");
     }
     let downloaded = 0;
     for (const file of this.deps.files ?? FORM_FILL_ARTIFACT_FILES) {
@@ -389,7 +378,12 @@ export class FormFillArtifactStore {
     if (this.removing) return this.removing;
     this.lifecycleVersion++;
     this.cancel();
-    this.setStatus({ state: "not-downloaded", progress: 0, downloadedBytes: 0, totalBytes: TOTAL_BYTES });
+    this.setStatus({
+      state: "not-downloaded",
+      progress: 0,
+      downloadedBytes: 0,
+      totalBytes: TOTAL_BYTES,
+    });
     this.removing = this.finishRemoval(beforeDelete).finally(() => {
       this.removing = null;
     });

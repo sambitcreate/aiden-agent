@@ -177,10 +177,14 @@ test("writeJsonAtomic creates missing parents and round-trips JSON", async (t) =
   const directory = await scratch(t);
   const target = path.join(directory, "nested", "deeper", "doc.json");
 
-  await writeJsonAtomic(target, { version: 1, items: [1, 2] }, {
-    mkdirMode: 0o700,
-    trailingNewline: true,
-  });
+  await writeJsonAtomic(
+    target,
+    { version: 1, items: [1, 2] },
+    {
+      mkdirMode: 0o700,
+      trailingNewline: true,
+    },
+  );
 
   const text = await fs.readFile(target, "utf8");
   assert.ok(text.endsWith("\n"));
@@ -189,9 +193,32 @@ test("writeJsonAtomic creates missing parents and round-trips JSON", async (t) =
   assert.deepEqual(JSON.parse(await fs.readFile(target, "utf8")), { version: 1, items: [1, 2] });
 });
 
-test("the synchronous publication fence observes revocation queued by the last awaited validator",async t=>{
-  const root=await fs.mkdtemp(path.join(os.tmpdir(),"aiden-publish-fence-"));t.after(()=>fs.rm(root,{recursive:true,force:true}));
-  const target=path.join(root,"state.json");await fs.writeFile(target,"old");let current=true,published=0;
-  await assert.rejects(writeFileAtomic(target,"new",{beforePublish:async()=>{queueMicrotask(()=>{current=false;});},assertCurrent:()=>{if(!current)throw new Error("source revoked");},io:{rename:async(from,to)=>{published++;await fs.rename(from,to);}}}),/source revoked/u);
-  assert.equal(await fs.readFile(target,"utf8"),"old");assert.equal(published,0);
+test("the synchronous publication fence observes revocation queued by the last awaited validator", async (t) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-publish-fence-"));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const target = path.join(root, "state.json");
+  await fs.writeFile(target, "old");
+  let current = true,
+    published = 0;
+  await assert.rejects(
+    writeFileAtomic(target, "new", {
+      beforePublish: async () => {
+        queueMicrotask(() => {
+          current = false;
+        });
+      },
+      assertCurrent: () => {
+        if (!current) throw new Error("source revoked");
+      },
+      io: {
+        rename: async (from, to) => {
+          published++;
+          await fs.rename(from, to);
+        },
+      },
+    }),
+    /source revoked/u,
+  );
+  assert.equal(await fs.readFile(target, "utf8"), "old");
+  assert.equal(published, 0);
 });

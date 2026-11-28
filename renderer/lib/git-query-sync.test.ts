@@ -6,7 +6,8 @@ import type { QueryObserverOptions } from "@tanstack/react-query";
 // refetch intervals, so the stub must exist before query-core is evaluated.
 (globalThis as { window?: unknown }).window ??= {};
 const { QueryClient, QueryObserver } = await import("@tanstack/react-query");
-const { gitPullRequestStatusQueryOptions, gitSafetyPoll, GIT_SAFETY_POLL_MS, queryKeys } = await import("./queries.js");
+const { gitPullRequestStatusQueryOptions, gitSafetyPoll, GIT_SAFETY_POLL_MS, queryKeys } =
+  await import("./queries.js");
 const { subscribeGitQuerySync, TOOL_RESULT_REFRESH_MS } = await import("./git-query-sync.js");
 
 const flush = async () => {
@@ -24,7 +25,12 @@ function harness(t: test.TestContext) {
       handlers.set(channel, handler);
       return () => handlers.delete(channel);
     },
-    { onWindowActivated: (listener) => { activate = listener; return () => {}; } },
+    {
+      onWindowActivated: (listener) => {
+        activate = listener;
+        return () => {};
+      },
+    },
   );
   const unsubscribers: (() => void)[] = [];
   t.after(() => {
@@ -33,12 +39,18 @@ function harness(t: test.TestContext) {
     client.clear();
   });
   const reads = new Map<string, number>();
-  const mount = (key: readonly unknown[], options: Partial<QueryObserverOptions<unknown, Error>> = {}) => {
+  const mount = (
+    key: readonly unknown[],
+    options: Partial<QueryObserverOptions<unknown, Error>> = {},
+  ) => {
     const name = JSON.stringify(key);
     reads.set(name, 0);
     const observer = new QueryObserver(client, {
       queryKey: key,
-      queryFn: async () => { reads.set(name, (reads.get(name) ?? 0) + 1); return reads.get(name); },
+      queryFn: async () => {
+        reads.set(name, (reads.get(name) ?? 0) + 1);
+        return reads.get(name);
+      },
       staleTime: 5_000,
       ...options,
     } as QueryObserverOptions<unknown, Error>);
@@ -63,10 +75,7 @@ test("a repository change refreshes that workspace's mounted Git reads only", as
 
   h.emit("git:changed", { workspaceId: "ws-1", generation: 1 });
   await flush();
-  assert.deepEqual(
-    [info(), review(), push(), branches(), comparison()],
-    [2, 2, 2, 2, 2],
-  );
+  assert.deepEqual([info(), review(), push(), branches(), comparison()], [2, 2, 2, 2, 2]);
   assert.equal(otherInfo(), 1);
   assert.equal(unrelated(), 1);
   // A fresh pull-request answer is not re-requested from GitHub on every index write.
@@ -112,7 +121,8 @@ test("a burst of agent tool results refreshes working-tree reads at most once pe
   await flush();
   assert.equal(review(), 1, "tool starts do not change files yet");
 
-  for (let i = 0; i < 3; i++) h.emit("chat:tool", { streamId: "s", phase: "result", toolName: "edit" });
+  for (let i = 0; i < 3; i++)
+    h.emit("chat:tool", { streamId: "s", phase: "result", toolName: "edit" });
   t.mock.timers.tick(0);
   await flush();
   assert.equal(review(), 2);
@@ -133,7 +143,9 @@ test("safety-net polling stops while the window is inactive and resumes when it 
   const globals = globalThis as { document?: unknown };
   const previous = globals.document;
   globals.document = { visibilityState: "visible", hasFocus: () => focused };
-  t.after(() => { globals.document = previous; });
+  t.after(() => {
+    globals.document = previous;
+  });
 
   const h = harness(t);
   const info = h.mount(queryKeys.git("ws-1"), { refetchInterval: gitSafetyPoll(true) });
@@ -177,14 +189,22 @@ test("pull-request status polls GitHub every five minutes and repository changes
   const globals = globalThis as { document?: unknown };
   const previous = globals.document;
   globals.document = { visibilityState: "visible", hasFocus: () => true };
-  t.after(() => { globals.document = previous; });
+  t.after(() => {
+    globals.document = previous;
+  });
 
   const h = harness(t);
-  const { queryKey, refetchInterval, staleTime, enabled } = gitPullRequestStatusQueryOptions("ws-1");
-  const status = h.mount(queryKey, { refetchInterval, staleTime, enabled } as Partial<QueryObserverOptions<unknown, Error>>);
+  const { queryKey, refetchInterval, staleTime, enabled } =
+    gitPullRequestStatusQueryOptions("ws-1");
+  const status = h.mount(queryKey, { refetchInterval, staleTime, enabled } as Partial<
+    QueryObserverOptions<unknown, Error>
+  >);
   await flush();
   const minute = async (n = 1) => {
-    for (let i = 0; i < n; i++) { t.mock.timers.tick(60_000); await flush(); }
+    for (let i = 0; i < n; i++) {
+      t.mock.timers.tick(60_000);
+      await flush();
+    }
   };
 
   await minute(4);
@@ -208,19 +228,32 @@ test("a GitHub rate-limit pause holds pull-request polls and change refreshes un
   const globals = globalThis as { document?: unknown };
   const previous = globals.document;
   globals.document = { visibilityState: "visible", hasFocus: () => true };
-  t.after(() => { globals.document = previous; });
+  t.after(() => {
+    globals.document = previous;
+  });
 
   const h = harness(t);
   const start = Date.now();
-  const pullRequest = { number: 7, title: "Change", url: "https://github.com/acme/app/pull/7", state: "open", headBranch: "a", baseBranch: "main", checks: [] };
+  const pullRequest = {
+    number: 7,
+    title: "Change",
+    url: "https://github.com/acme/app/pull/7",
+    state: "open",
+    headBranch: "a",
+    baseBranch: "main",
+    checks: [],
+  };
   const retryAt = start + 20 * 60_000;
   let calls = 0;
-  const { queryKey, refetchInterval, staleTime, structuralSharing } = gitPullRequestStatusQueryOptions("ws-1");
+  const { queryKey, refetchInterval, staleTime, structuralSharing } =
+    gitPullRequestStatusQueryOptions("ws-1");
   const observer = new QueryObserver(h.client, {
     queryKey,
     queryFn: async () => {
       calls += 1;
-      return calls === 2 ? { availability: "rate-limited", retryAt, message: "paused" } : { availability: "ready", pullRequest };
+      return calls === 2
+        ? { availability: "rate-limited", retryAt, message: "paused" }
+        : { availability: "ready", pullRequest };
     },
     refetchInterval,
     staleTime,
@@ -230,12 +263,18 @@ test("a GitHub rate-limit pause holds pull-request polls and change refreshes un
   t.after(unsubscribe);
   await flush();
   const minute = async (n = 1) => {
-    for (let i = 0; i < n; i++) { t.mock.timers.tick(60_000); await flush(); }
+    for (let i = 0; i < n; i++) {
+      t.mock.timers.tick(60_000);
+      await flush();
+    }
   };
 
   await minute(5);
   assert.equal(calls, 2, "the five-minute poll hit the rate limit");
-  const paused = observer.getCurrentResult().data as { availability: string; pullRequest?: { number: number } };
+  const paused = observer.getCurrentResult().data as {
+    availability: string;
+    pullRequest?: { number: number };
+  };
   assert.equal(paused.availability, "rate-limited");
   assert.equal(paused.pullRequest?.number, 7, "the last pull request stays visible");
 

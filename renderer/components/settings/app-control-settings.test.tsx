@@ -28,8 +28,17 @@ test("changing the policy saves it", async () => {
   fireEvent.click(trigger);
   fireEvent.click(await screen.findByRole("option", { name: "Ask every time" }));
   await flush();
-  assert.ok(calls.some((call) => call.channel === "settings:set" && (call.args[0] as { appControlPolicy?: string }).appControlPolicy === "ask"));
-  assert.match(screen.getByRole("combobox", { name: "Agent app actions" }).textContent ?? "", /Ask every time/u);
+  assert.ok(
+    calls.some(
+      (call) =>
+        call.channel === "settings:set" &&
+        (call.args[0] as { appControlPolicy?: string }).appControlPolicy === "ask",
+    ),
+  );
+  assert.match(
+    screen.getByRole("combobox", { name: "Agent app actions" }).textContent ?? "",
+    /Ask every time/u,
+  );
 });
 
 test("paired-device controls turn on only after the confirmation", async () => {
@@ -38,11 +47,25 @@ test("paired-device controls turn on only after the confirmation", async () => {
   await flush();
   fireEvent.click(screen.getByRole("switch", { name: "Paired-device chat controls" }));
   await flush();
-  assert.equal(calls.some((call) => call.channel === "settings:set"), false);
+  assert.equal(
+    calls.some((call) => call.channel === "settings:set"),
+    false,
+  );
   fireEvent.click(await screen.findByRole("button", { name: "Allow chat controls" }));
   await flush();
-  assert.ok(calls.some((call) => call.channel === "settings:set" && (call.args[0] as { remoteAppControlsEnabled?: boolean }).remoteAppControlsEnabled === true));
-  assert.equal(screen.getByRole("switch", { name: "Paired-device chat controls" }).getAttribute("aria-checked"), "true");
+  assert.ok(
+    calls.some(
+      (call) =>
+        call.channel === "settings:set" &&
+        (call.args[0] as { remoteAppControlsEnabled?: boolean }).remoteAppControlsEnabled === true,
+    ),
+  );
+  assert.equal(
+    screen
+      .getByRole("switch", { name: "Paired-device chat controls" })
+      .getAttribute("aria-checked"),
+    "true",
+  );
 });
 
 test("paired-device controls turn off without a confirmation", async () => {
@@ -51,5 +74,11 @@ test("paired-device controls turn off without a confirmation", async () => {
   await flush();
   fireEvent.click(screen.getByRole("switch", { name: "Paired-device chat controls" }));
   await flush();
-  assert.ok(calls.some((call) => call.channel === "settings:set" && (call.args[0] as { remoteAppControlsEnabled?: boolean }).remoteAppControlsEnabled === false));
+  assert.ok(
+    calls.some(
+      (call) =>
+        call.channel === "settings:set" &&
+        (call.args[0] as { remoteAppControlsEnabled?: boolean }).remoteAppControlsEnabled === false,
+    ),
+  );
 });

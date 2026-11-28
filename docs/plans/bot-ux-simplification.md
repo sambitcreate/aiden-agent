@@ -12,18 +12,18 @@ Related plans this one supersedes in part or must stay consistent with: [bot han
 
 ## 1. Problem
 
-| Measure | Today | Target |
-| --- | --- | --- |
-| Distinct prompt surfaces | ~31 (14 workspace cards, 7 Bot cards, 10 modals, sheets, OS dialogs, toasts) | 11 |
-| Permission and trust settings | ~35 over 11 Settings pages, plus per-workspace and per-Bot pages | 1 mode and 1 rules list, the rest under Advanced |
-| Approval card systems | 2 (`ChatApprovalCard`, `BotApprovalCard`) with separate allow lists | 1 card model on every client |
-| Meanings of "Always allow" | 4 | 1 (a rule on the rules page) |
-| Lifetimes of "Allow for this chat" | 3 | 1 (Mac cards only, persisted) |
-| Pages that hold remembered grants | 6 or more | 1 |
-| Bot chat card, chip and line types | ~23 | 7 families |
-| Bot dialogs | ~22 (two-step create, 4+ "Discard changes?" guards) | about 10 |
-| Create a Bot | 2 screens, 1 required and 3+ optional decisions | 1 field |
-| Bot settings | 12-group Profile page plus an Advanced page with 3 save models | Side-panel tabs plus one Advanced tab |
+| Measure                            | Today                                                                        | Target                                           |
+| ---------------------------------- | ---------------------------------------------------------------------------- | ------------------------------------------------ |
+| Distinct prompt surfaces           | ~31 (14 workspace cards, 7 Bot cards, 10 modals, sheets, OS dialogs, toasts) | 11                                               |
+| Permission and trust settings      | ~35 over 11 Settings pages, plus per-workspace and per-Bot pages             | 1 mode and 1 rules list, the rest under Advanced |
+| Approval card systems              | 2 (`ChatApprovalCard`, `BotApprovalCard`) with separate allow lists          | 1 card model on every client                     |
+| Meanings of "Always allow"         | 4                                                                            | 1 (a rule on the rules page)                     |
+| Lifetimes of "Allow for this chat" | 3                                                                            | 1 (Mac cards only, persisted)                    |
+| Pages that hold remembered grants  | 6 or more                                                                    | 1                                                |
+| Bot chat card, chip and line types | ~23                                                                          | 7 families                                       |
+| Bot dialogs                        | ~22 (two-step create, 4+ "Discard changes?" guards)                          | about 10                                         |
+| Create a Bot                       | 2 screens, 1 required and 3+ optional decisions                              | 1 field                                          |
+| Bot settings                       | 12-group Profile page plus an Advanced page with 3 save models               | Side-panel tabs plus one Advanced tab            |
 
 Top eight pain points:
 
@@ -54,14 +54,14 @@ We take the model whole:
 
 Deliberate deviations, each an existing Aiden security decision:
 
-| | Deviation | Reason |
-| --- | --- | --- |
-| (a) | Migration never switches an existing user to Auto. Their behaviour maps to Ask or Never ask, and the repeat-approval nudge offers Auto. | A model starting to approve actions must be the person's choice, not an upgrade side effect. |
-| (b) | Schedule and automation mutations keep their foreground one-shot confirmation. Rakazo exempts a bot's schedules. | Audit fix recorded in `.memory/security-cli-schedule-approval-2026-10-27.md`: a schedule is unattended authority on the person's Mac. Owner confirmed 2026-11-12. |
-| (c) | Mac cards keep **Allow once** beside "Allow in this workspace". Rakazo offers only the space-wide grant. | Ask workspaces are used for coding, where reviewing each command is the point. |
-| (d) | Computer Use OS permissions (Accessibility, Screen Recording) are granted on the Mac only. | macOS owns those prompts; they cannot be answered remotely. |
-| (e) | Disclosure tools (`share_image`, `generate_image`, `classify`) ask in every mode, Never ask included, as explicit-only tools. Rakazo's Never ask would let them run. | Sending the person's data to another service stays their call, as today. Owner decision 2026-11-12. |
-| (f) | Computer Use keeps one grant for all apps: "Use your Mac with Computer Use?". Rakazo asks per app. | Fewer cards; matches today's grant. Owner decision 2026-11-12. |
+|     | Deviation                                                                                                                                                            | Reason                                                                                                                                                            |
+| --- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| (a) | Migration never switches an existing user to Auto. Their behaviour maps to Ask or Never ask, and the repeat-approval nudge offers Auto.                              | A model starting to approve actions must be the person's choice, not an upgrade side effect.                                                                      |
+| (b) | Schedule and automation mutations keep their foreground one-shot confirmation. Rakazo exempts a bot's schedules.                                                     | Audit fix recorded in `.memory/security-cli-schedule-approval-2026-10-27.md`: a schedule is unattended authority on the person's Mac. Owner confirmed 2026-11-12. |
+| (c) | Mac cards keep **Allow once** beside "Allow in this workspace". Rakazo offers only the space-wide grant.                                                             | Ask workspaces are used for coding, where reviewing each command is the point.                                                                                    |
+| (d) | Computer Use OS permissions (Accessibility, Screen Recording) are granted on the Mac only.                                                                           | macOS owns those prompts; they cannot be answered remotely.                                                                                                       |
+| (e) | Disclosure tools (`share_image`, `generate_image`, `classify`) ask in every mode, Never ask included, as explicit-only tools. Rakazo's Never ask would let them run. | Sending the person's data to another service stays their call, as today. Owner decision 2026-11-12.                                                               |
+| (f) | Computer Use keeps one grant for all apps: "Use your Mac with Computer Use?". Rakazo asks per app.                                                                   | Fewer cards; matches today's grant. Owner decision 2026-11-12.                                                                                                    |
 
 Aiden also keeps per-class "Hand off to me", which Rakazo lacks, as the row-menu option "Do it myself" on Always-ask rows (owner decision 2026-11-12).
 
@@ -73,11 +73,11 @@ Things Rakazo has that Aiden lacks are omitted, not invented: group chats (the C
 
 Settings → **Approvals**, one control:
 
-| Mode | Helper | 
-| --- | --- |
-| **Auto** (default when a usable model exists) | "A model approves routine actions and asks you about the rest." |
-| **Ask** | "Asks before sending, spending or changing anything." |
-| **Never ask** | "Asks only before purchases, sharing your data and the first use of your Mac. Only Block rules apply." ("computer" on Linux and on phones) |
+| Mode                                          | Helper                                                                                                                                     |
+| --------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
+| **Auto** (default when a usable model exists) | "A model approves routine actions and asks you about the rest."                                                                            |
+| **Ask**                                       | "Asks before sending, spending or changing anything."                                                                                      |
+| **Never ask**                                 | "Asks only before purchases, sharing your data and the first use of your Mac. Only Block rules apply." ("computer" on Linux and on phones) |
 
 - With no usable model, Auto is hidden and the mode is Ask.
 - There is no per-Bot mode. Every Bot follows the global mode.
@@ -100,13 +100,13 @@ One pure function, `planActionGate(context, action)`, called by workspace chats,
 
 Tool classes (fixed sets in code, not settings):
 
-| Class | Members | Behaviour |
-| --- | --- | --- |
-| **Exempt** | A Bot's own memory, its home folder, its schedules and wake-ups (subject to deviation b), its subagents, its Bot computer (Lume VM), its browser profile reads | Never asks |
-| **Mac** | Shell, files outside a Bot's home or inside a workspace, Computer Use (one grant for all apps, deviation f), ACP harness execute and edit | First use asks in every mode (§3.3) |
-| **Consequential** | Today's built-in rule classes (communicate, delete, publish, install), mutating connection tools, browser click and type that submit, forget memory, background jobs, device actions, app-control changes | Step 8 |
-| **Explicit-only** | Schedule mutations, MCP server connect, pairing-adjacent actions, whole-Mac folder access, disclosure tools (deviation e) | Step 3 |
-| **Held changes** | Hook proposals, access or rule changes | Never applied by the agent. Always a person's Apply / Dismiss. |
+| Class             | Members                                                                                                                                                                                                   | Behaviour                                                      |
+| ----------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------- |
+| **Exempt**        | A Bot's own memory, its home folder, its schedules and wake-ups (subject to deviation b), its subagents, its Bot computer (Lume VM), its browser profile reads                                            | Never asks                                                     |
+| **Mac**           | Shell, files outside a Bot's home or inside a workspace, Computer Use (one grant for all apps, deviation f), ACP harness execute and edit                                                                 | First use asks in every mode (§3.3)                            |
+| **Consequential** | Today's built-in rule classes (communicate, delete, publish, install), mutating connection tools, browser click and type that submit, forget memory, background jobs, device actions, app-control changes | Step 8                                                         |
+| **Explicit-only** | Schedule mutations, MCP server connect, pairing-adjacent actions, whole-Mac folder access, disclosure tools (deviation e)                                                                                 | Step 3                                                         |
+| **Held changes**  | Hook proposals, access or rule changes                                                                                                                                                                    | Never applied by the agent. Always a person's Apply / Dismiss. |
 
 Connector and MCP tools are classed by Rakazo's name heuristic: verbs such as send, create, delete, pay are writes; get, list, search, find, read are reads; unknown is a write. A tool declared `readOnly: false` always asks, and a declared read never relaxes anything. Aiden's Bot action classifier (`main/services/bot-rules/classify.ts`) stays as one extra input that can only raise an action to consequential.
 
@@ -127,17 +127,17 @@ Connector and MCP tools are classed by Rakazo's name heuristic: verbs such as se
 
 ### 3.3 One card
 
-| Card | Title | Buttons |
-| --- | --- | --- |
-| Generic | "Review before {tool → target}" | Allow once / Always allow this tool (or Always allow {site}) / Deny |
-| Explicit-only | Same | Allow once / Deny |
-| Mac, shell | "Run on your Mac?" with the command | Allow once / Allow in this workspace (workspace chat) or Allow in this chat (Bot chat) / Deny |
-| Mac, files | "Change files on your Mac?" with the path or diff | Same |
-| Mac, Computer Use | "Use your Mac with Computer Use?" (one grant covers every app) | Same |
-| Batch | "Approve this plan?" with one row per action | Allow once / Always allow (saves one rule per action) / Deny |
-| Held change | "Update instructions?", "Add this hook?" with the diff or command | Apply / Edit (where it makes sense) / Dismiss |
-| MCP connect | "Connect MCP server “{name}”" with the launch command | Approve / Not now |
-| Payment | Receipt card | Allow once / Deny |
+| Card              | Title                                                             | Buttons                                                                                       |
+| ----------------- | ----------------------------------------------------------------- | --------------------------------------------------------------------------------------------- |
+| Generic           | "Review before {tool → target}"                                   | Allow once / Always allow this tool (or Always allow {site}) / Deny                           |
+| Explicit-only     | Same                                                              | Allow once / Deny                                                                             |
+| Mac, shell        | "Run on your Mac?" with the command                               | Allow once / Allow in this workspace (workspace chat) or Allow in this chat (Bot chat) / Deny |
+| Mac, files        | "Change files on your Mac?" with the path or diff                 | Same                                                                                          |
+| Mac, Computer Use | "Use your Mac with Computer Use?" (one grant covers every app)    | Same                                                                                          |
+| Batch             | "Approve this plan?" with one row per action                      | Allow once / Always allow (saves one rule per action) / Deny                                  |
+| Held change       | "Update instructions?", "Add this hook?" with the diff or command | Apply / Edit (where it makes sense) / Dismiss                                                 |
+| MCP connect       | "Connect MCP server “{name}”" with the launch command             | Approve / Not now                                                                             |
+| Payment           | Receipt card                                                      | Allow once / Deny                                                                             |
 
 Rules for every card:
 
@@ -169,37 +169,37 @@ Settings → Approvals, under the mode. Three groups: **Always allow**, **Always
 
 ### 3.6 Mapping of today's 31 surfaces
 
-| # | Surface | Outcome |
-| --- | --- | --- |
-| 1 | Plain tool card | Merged (Mac card) |
-| 2 | Generic summary card | Merged (generic card) |
-| 3 | Classifier disclosure | Merged (explicit-only) |
-| 4 | Scheduled task | Merged (explicit-only, foreground confirmation kept) |
-| 5 | Computer Use access | Merged ("Use your Mac with Computer Use?", all apps); the OS checklist stays with 29 |
-| 6 | Form fill | Merged (batch card, one row per field) |
-| 7–9 | Subagent write, shell, MCP mutation | Merged (the parent's ordinary card) |
-| 10 | Subagent run grant | **Removed**: subagents inherit the parent's gate |
-| 11 | Hook proposal | Merged (held-change card) |
-| 12 | ACP harness permission | Merged (Mac card) |
-| 13 | Invalid privileged card | **Removed**: the card's deny-only error state |
-| 14 | Live voice overlay | **Kept**: another modality reading the same card |
-| 15 | Bot tool approval | Merged |
-| 16 | Bot folder or whole-Mac request | Merged (Mac card) |
-| 17 | Bot plan | Merged (batch card) |
-| 18 | Hand-off | **Kept**, as Take control |
-| 19 | Skill proposal | Merged (suggestion card) |
-| 20 | Needs-you issues | Merged (Needs-you slot) |
-| 21 | Connect card | **Kept**, as Rakazo's inline Connect card |
-| 22 | "Open this link?" modal | **Moved to Advanced**: new installs open links in Aiden's browser; existing users keep their stored choice |
-| 23 | Incoming pairing sheet | **Kept**: code match on the host |
-| 24 | Native "Approve Home Folder" | **Kept**: host-side trust anchor |
-| 25 | "Review connector launch" | Merged (MCP connect card) |
-| 26 | Hooks Settings approve, re-approve, run once | **Kept**: the canonical hook list |
-| 27 | App-control "Change {X}?" | Merged |
-| 28 | "Allow paired-device chat controls?" | **Moved to Advanced**: inline confirmation on the switch |
-| 29 | Enable Computer Use dialog and macOS TCC | **Kept**: OS-owned (deviation d) |
-| 30 | Live chat-access toast | **Removed**: its sentence moves into Live's first-start step |
-| 31 | Android new-chat-from-link consent | **Kept**: guards an external intent |
+| #   | Surface                                      | Outcome                                                                                                    |
+| --- | -------------------------------------------- | ---------------------------------------------------------------------------------------------------------- |
+| 1   | Plain tool card                              | Merged (Mac card)                                                                                          |
+| 2   | Generic summary card                         | Merged (generic card)                                                                                      |
+| 3   | Classifier disclosure                        | Merged (explicit-only)                                                                                     |
+| 4   | Scheduled task                               | Merged (explicit-only, foreground confirmation kept)                                                       |
+| 5   | Computer Use access                          | Merged ("Use your Mac with Computer Use?", all apps); the OS checklist stays with 29                       |
+| 6   | Form fill                                    | Merged (batch card, one row per field)                                                                     |
+| 7–9 | Subagent write, shell, MCP mutation          | Merged (the parent's ordinary card)                                                                        |
+| 10  | Subagent run grant                           | **Removed**: subagents inherit the parent's gate                                                           |
+| 11  | Hook proposal                                | Merged (held-change card)                                                                                  |
+| 12  | ACP harness permission                       | Merged (Mac card)                                                                                          |
+| 13  | Invalid privileged card                      | **Removed**: the card's deny-only error state                                                              |
+| 14  | Live voice overlay                           | **Kept**: another modality reading the same card                                                           |
+| 15  | Bot tool approval                            | Merged                                                                                                     |
+| 16  | Bot folder or whole-Mac request              | Merged (Mac card)                                                                                          |
+| 17  | Bot plan                                     | Merged (batch card)                                                                                        |
+| 18  | Hand-off                                     | **Kept**, as Take control                                                                                  |
+| 19  | Skill proposal                               | Merged (suggestion card)                                                                                   |
+| 20  | Needs-you issues                             | Merged (Needs-you slot)                                                                                    |
+| 21  | Connect card                                 | **Kept**, as Rakazo's inline Connect card                                                                  |
+| 22  | "Open this link?" modal                      | **Moved to Advanced**: new installs open links in Aiden's browser; existing users keep their stored choice |
+| 23  | Incoming pairing sheet                       | **Kept**: code match on the host                                                                           |
+| 24  | Native "Approve Home Folder"                 | **Kept**: host-side trust anchor                                                                           |
+| 25  | "Review connector launch"                    | Merged (MCP connect card)                                                                                  |
+| 26  | Hooks Settings approve, re-approve, run once | **Kept**: the canonical hook list                                                                          |
+| 27  | App-control "Change {X}?"                    | Merged                                                                                                     |
+| 28  | "Allow paired-device chat controls?"         | **Moved to Advanced**: inline confirmation on the switch                                                   |
+| 29  | Enable Computer Use dialog and macOS TCC     | **Kept**: OS-owned (deviation d)                                                                           |
+| 30  | Live chat-access toast                       | **Removed**: its sentence moves into Live's first-start step                                               |
+| 31  | Android new-chat-from-link consent           | **Kept**: guards an external intent                                                                        |
 
 Counts: **18 merged, 8 kept, 2 moved to Advanced, 3 removed.** What remains is the 8 kept surfaces, the ask card, the suggestion card and the Needs-you slot: 11.
 
@@ -244,15 +244,15 @@ Tool activity is hidden by default. One per-device switch, Settings → General 
 
 ### 4.7 Chat cards
 
-| Family | Replaces |
-| --- | --- |
-| Ask card (§3.3) | Both approval cards, access request, plan, form fill, hook proposal, connector launch |
-| Take control | Hand-off |
-| Connect card (logo, name, **Connect** → "Connected") and secret card | Connect card variants, sign-in prompts |
-| Suggestion card (Add / Not now) | Routine, skill and lesson proposals |
-| Receipt line | Learned, Tidied, Memory updated, Settings updated, wake-up chip, routines skipped |
-| Status card (one slot, highest priority wins) | Usage limit, spending, paused, interrupted, model error, saved Resume |
-| Question | A–E question, answered in the Needs-you slot |
+| Family                                                               | Replaces                                                                              |
+| -------------------------------------------------------------------- | ------------------------------------------------------------------------------------- |
+| Ask card (§3.3)                                                      | Both approval cards, access request, plan, form fill, hook proposal, connector launch |
+| Take control                                                         | Hand-off                                                                              |
+| Connect card (logo, name, **Connect** → "Connected") and secret card | Connect card variants, sign-in prompts                                                |
+| Suggestion card (Add / Not now)                                      | Routine, skill and lesson proposals                                                   |
+| Receipt line                                                         | Learned, Tidied, Memory updated, Settings updated, wake-up chip, routines skipped     |
+| Status card (one slot, highest priority wins)                        | Usage limit, spending, paused, interrupted, model error, saved Resume                 |
+| Question                                                             | A–E question, answered in the Needs-you slot                                          |
 
 - **Needs-you slot:** one slot above the composer holds everything waiting on the person, one item at a time with "1 of N", ordered take control, ask card, question. It feeds the Inbox sidebar's "needs you" state.
 - **Suggestions** are limited in the prompt as well as the UI: a Bot mentions a missing app once, and one suggestion is visible per chat. "Why not?" becomes an optional link on the dismissed line.
@@ -263,39 +263,39 @@ Tool activity is hidden by default. One per-device switch, Settings → General 
 
 Where each current capability goes:
 
-| Today | Goes to |
-| --- | --- |
-| Workspace Full / Ask / No access | Global mode; Workspace settings → Customize; access "Chat only" |
-| Tool approvals tab, per-Bot "Allowed without asking", Bot folder grants | Rules page (legacy-scoped rows) |
-| Bot Rules: 5 built-ins | The gate's consequential set. A built-in set to "Hand off to me" becomes an Always-ask row with a row-menu option "Do it myself" (take control). |
-| Bot Rules: custom rules | Natural-language rows under Always ask or Blocked |
-| Locked rules (passwords, 2FA, money) | Code constants in the gate, shown as a locked note on the rules page |
-| Bot access Everything / Only what I choose | Bot → Advanced → Tools → "Disable a tool" |
-| Bot model, model for photos, routine models | Bot → Advanced → Model and Thinking |
-| Interruptions (quiet hours, notifications a day) | Bot → Advanced → Notifications → "Quiet hours" row |
-| "Let {Bot} set its own wake-ups" | Bot → Advanced → Permissions → "Daily check-ins on unfinished work" |
-| Bot messaging direction switches and pairs | Bot → Advanced → Permissions |
-| Telegram connect | Bot → Advanced → Replies |
-| Subtitle | "How other Bots see it" |
-| Health "Check now" | Bot → Advanced → Model and Thinking |
-| Bot computer set up, reset, remove | Computer tab and Advanced → Computer |
-| Erase memory, delete | Advanced → Export / Clear, and the ••• menu |
-| Computer Use "always allow in every chat", Reset chat permissions | Approvals → Advanced (legacy switch, shown only if it was on), rules page |
-| Agent app actions policy, Paired-device chat controls, scheduled-task defaults, Live approval-by-voice, link opening, approval model | Approvals → Advanced |
-| Hooks, Connectors, Connections, Computers & VMs | Unchanged pages, linked from the rules page |
+| Today                                                                                                                                | Goes to                                                                                                                                          |
+| ------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Workspace Full / Ask / No access                                                                                                     | Global mode; Workspace settings → Customize; access "Chat only"                                                                                  |
+| Tool approvals tab, per-Bot "Allowed without asking", Bot folder grants                                                              | Rules page (legacy-scoped rows)                                                                                                                  |
+| Bot Rules: 5 built-ins                                                                                                               | The gate's consequential set. A built-in set to "Hand off to me" becomes an Always-ask row with a row-menu option "Do it myself" (take control). |
+| Bot Rules: custom rules                                                                                                              | Natural-language rows under Always ask or Blocked                                                                                                |
+| Locked rules (passwords, 2FA, money)                                                                                                 | Code constants in the gate, shown as a locked note on the rules page                                                                             |
+| Bot access Everything / Only what I choose                                                                                           | Bot → Advanced → Tools → "Disable a tool"                                                                                                        |
+| Bot model, model for photos, routine models                                                                                          | Bot → Advanced → Model and Thinking                                                                                                              |
+| Interruptions (quiet hours, notifications a day)                                                                                     | Bot → Advanced → Notifications → "Quiet hours" row                                                                                               |
+| "Let {Bot} set its own wake-ups"                                                                                                     | Bot → Advanced → Permissions → "Daily check-ins on unfinished work"                                                                              |
+| Bot messaging direction switches and pairs                                                                                           | Bot → Advanced → Permissions                                                                                                                     |
+| Telegram connect                                                                                                                     | Bot → Advanced → Replies                                                                                                                         |
+| Subtitle                                                                                                                             | "How other Bots see it"                                                                                                                          |
+| Health "Check now"                                                                                                                   | Bot → Advanced → Model and Thinking                                                                                                              |
+| Bot computer set up, reset, remove                                                                                                   | Computer tab and Advanced → Computer                                                                                                             |
+| Erase memory, delete                                                                                                                 | Advanced → Export / Clear, and the ••• menu                                                                                                      |
+| Computer Use "always allow in every chat", Reset chat permissions                                                                    | Approvals → Advanced (legacy switch, shown only if it was on), rules page                                                                        |
+| Agent app actions policy, Paired-device chat controls, scheduled-task defaults, Live approval-by-voice, link opening, approval model | Approvals → Advanced                                                                                                                             |
+| Hooks, Connectors, Connections, Computers & VMs                                                                                      | Unchanged pages, linked from the rules page                                                                                                      |
 
 **Removals**, with reasons:
 
-| Removed | Why | What remains |
-| --- | --- | --- |
-| Per-Bot chat-activity levels (Quiet / Summary / Detailed) and status-line choice | Tool activity is hidden by default; one per-device switch replaces three per-Bot levels | "Show tool activity"; the Activity tab |
-| Routines "Go ahead without asking" switch | Never ask covers it | Hidden legacy override for people who had it on |
-| Per-Bot Rules UI and per-Bot access picker | Replaced by the gate, the rules page and "Disable a tool" | Every stored rule and scope, as legacy rows |
-| Per-Bot spending limit as the primary control | One limit for the Mac | Existing per-Bot limits as overrides |
-| Plan card, subagent cards, form-fill card, hook-proposal card | One card model | Batch and held-change variants |
-| Profile and Advanced pages, their draft toolbar and Discard guards | Side panel and sticky Save | Every field, in the Advanced tab |
-| Create step 2, help field, model picker on create, starter carousel | One field; Templates | Connect cards, Instructions, the model row |
-| Onboarding Bots carousel step | Silent first Bot | Templates in the Create menu |
+| Removed                                                                          | Why                                                                                     | What remains                                    |
+| -------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------- | ----------------------------------------------- |
+| Per-Bot chat-activity levels (Quiet / Summary / Detailed) and status-line choice | Tool activity is hidden by default; one per-device switch replaces three per-Bot levels | "Show tool activity"; the Activity tab          |
+| Routines "Go ahead without asking" switch                                        | Never ask covers it                                                                     | Hidden legacy override for people who had it on |
+| Per-Bot Rules UI and per-Bot access picker                                       | Replaced by the gate, the rules page and "Disable a tool"                               | Every stored rule and scope, as legacy rows     |
+| Per-Bot spending limit as the primary control                                    | One limit for the Mac                                                                   | Existing per-Bot limits as overrides            |
+| Plan card, subagent cards, form-fill card, hook-proposal card                    | One card model                                                                          | Batch and held-change variants                  |
+| Profile and Advanced pages, their draft toolbar and Discard guards               | Side panel and sticky Save                                                              | Every field, in the Advanced tab                |
+| Create step 2, help field, model picker on create, starter carousel              | One field; Templates                                                                    | Connect cards, Instructions, the model row      |
+| Onboarding Bots carousel step                                                    | Silent first Bot                                                                        | Templates in the Create menu                    |
 
 ## 6. Cross-platform
 
@@ -313,27 +313,27 @@ Where each current capability goes:
 
 Principle: no stored grant gets a wider owner, key or lifetime, and no existing user starts being judged by a model without choosing it. Phase 1 records a decision table from the old code as the oracle.
 
-| Stored today | Becomes | Note |
-| --- | --- | --- |
-| Install with any workspace or Bot in use | Global mode **Ask** | Deviation (a). The nudge offers Auto. |
-| Fresh install with a usable model | Global mode **Auto** | Ask when no model |
-| Workspace Ask first | Follows global (Ask) | No change |
-| Workspace Full access | Customized: **Never ask**, with shell and files "Allowed in this workspace" | Same reach as today |
-| Workspace No access | Access Chat only | |
-| Tool rules `always` (per workspace) | Always-allow rows scoped to that workspace | Same file and keys; the workspace is marked customized only for its rules |
-| Tool rules `chat` (in memory) | Nothing | They ended at quit already |
-| Computer Use chat grant | "Allowed in this chat", any app, legacy row | Not widened to the workspace |
-| `computerUseAlwaysAllow` | Legacy "everywhere" row and Advanced switch | Not offered to new users |
-| Per-Bot allow-list rules | Always-allow rows with that Bot as legacy scope | Receipts, tombstones, tallies and the 50-rule cap preserved (`.memory/bot-allowed.md`) |
-| Bot folder grants (`bot-folder-grants.json`) | Mac-files rows with that Bot as legacy scope | |
-| Bot built-in rule set to Hand off to me | Always-ask row with "Do it myself", legacy-scoped to that Bot | |
-| Bot custom rules | Natural-language Always-ask rows, legacy-scoped to that Bot | Only tighten, as today |
-| Bot access "Only what I choose" | Disabled tools = everything the Bot did not have; its folders as legacy Mac-files rows | Exactly its current reach |
-| Bot access "Everything" | No disabled tools | |
-| Per-Bot spending limit | Per-Bot override | |
-| Routines "Go ahead without asking" on | Hidden legacy override | Off for everyone else |
-| Per-Bot chat activity level | Dropped; "Show tool activity" on for that device if any Bot was Detailed | |
-| Link choice, approved folders, hook approvals, MCP launch fingerprints | Unchanged | |
+| Stored today                                                           | Becomes                                                                                | Note                                                                                   |
+| ---------------------------------------------------------------------- | -------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------- |
+| Install with any workspace or Bot in use                               | Global mode **Ask**                                                                    | Deviation (a). The nudge offers Auto.                                                  |
+| Fresh install with a usable model                                      | Global mode **Auto**                                                                   | Ask when no model                                                                      |
+| Workspace Ask first                                                    | Follows global (Ask)                                                                   | No change                                                                              |
+| Workspace Full access                                                  | Customized: **Never ask**, with shell and files "Allowed in this workspace"            | Same reach as today                                                                    |
+| Workspace No access                                                    | Access Chat only                                                                       |                                                                                        |
+| Tool rules `always` (per workspace)                                    | Always-allow rows scoped to that workspace                                             | Same file and keys; the workspace is marked customized only for its rules              |
+| Tool rules `chat` (in memory)                                          | Nothing                                                                                | They ended at quit already                                                             |
+| Computer Use chat grant                                                | "Allowed in this chat", any app, legacy row                                            | Not widened to the workspace                                                           |
+| `computerUseAlwaysAllow`                                               | Legacy "everywhere" row and Advanced switch                                            | Not offered to new users                                                               |
+| Per-Bot allow-list rules                                               | Always-allow rows with that Bot as legacy scope                                        | Receipts, tombstones, tallies and the 50-rule cap preserved (`.memory/bot-allowed.md`) |
+| Bot folder grants (`bot-folder-grants.json`)                           | Mac-files rows with that Bot as legacy scope                                           |                                                                                        |
+| Bot built-in rule set to Hand off to me                                | Always-ask row with "Do it myself", legacy-scoped to that Bot                          |                                                                                        |
+| Bot custom rules                                                       | Natural-language Always-ask rows, legacy-scoped to that Bot                            | Only tighten, as today                                                                 |
+| Bot access "Only what I choose"                                        | Disabled tools = everything the Bot did not have; its folders as legacy Mac-files rows | Exactly its current reach                                                              |
+| Bot access "Everything"                                                | No disabled tools                                                                      |                                                                                        |
+| Per-Bot spending limit                                                 | Per-Bot override                                                                       |                                                                                        |
+| Routines "Go ahead without asking" on                                  | Hidden legacy override                                                                 | Off for everyone else                                                                  |
+| Per-Bot chat activity level                                            | Dropped; "Show tool activity" on for that device if any Bot was Detailed               |                                                                                        |
+| Link choice, approved folders, hook approvals, MCP launch fingerprints | Unchanged                                                                              |                                                                                        |
 
 Nothing is copied between owners. A legacy-scoped row answers only for its original Bot or workspace. Stored formats stay readable by the previous release. Because today's cards for exempt tools (a Bot's memory, subagent grants) stop appearing, a one-time "What changed" note in Settings → Approvals lists them.
 
@@ -347,7 +347,7 @@ Areas: `llm-client.ts`, `tool-approval.ts`, `coding-tools.ts`, `bot-rules/`, `re
 Tests: decision table recorded from the old code (about 200 context and action pairs) asserted against the gate; rendered card tests per kind; analytics registry test.
 Risk: medium. Metric: baseline prompts per 100 turns.
 
-*Phase 1 notes (where the plan met the code):*
+_Phase 1 notes (where the plan met the code):_
 
 - The gate (`main/services/approval-gate/gate.ts`) is pure and fact-based. Reads that cost something (a remembered workspace approval, a plan's cover, a Bot's allow list) come back as `lookup` at the step that needs them, and the caller asks again with the answer, so no read moves earlier than it used to. Today's workspace access stands in for the global mode until Phase 2.
 - Two pre-approvals that the plan files under "never ask" sit there: Full access, and the legacy routines "Go ahead without asking" switch (which may answer a rule's ask but never a hand-off, so hand-off rules are step 2). A plan's cover is also step 4. Computer Use on the Mac is never pre-approved there.
@@ -364,7 +364,7 @@ Areas: the gate, new `main/services/approval-judge/`, `config-store-core.ts`, Se
 Tests: gate order table (one case per step and per class); fail-closed table (no model, timeout, error, unsure, tainted run, unattended run); name-heuristic cases including unknown and `readOnly: false`; migration fixtures proving no existing install lands on Auto and Full workspaces keep their reach; a replay set of recorded actions with expected pass or defer; spend accounting.
 Risk: high (safety). Metric: prompts per 100 turns in Auto versus Ask; deferral rate; zero judged explicit-only actions.
 
-*Phase 2 notes (where the plan met the code):*
+_Phase 2 notes (where the plan met the code):_
 
 - The mode lives in `renderer/shared/approval-mode.ts` (`effectiveApprovalMode`, `workspaceApprovalPolicy`, `workspaceApprovalPatch`) and is read fresh before every call. Main treats a run as having a usable model (it has one), so only the renderer hides Auto.
 - Migration (§7) runs once at seed (`ensureApprovalModeSettings` in `config-store-core.ts`) and records `approvalModeOrigin`. An upgraded profile (`webSearchProfileKind: "upgrade"`), a finished onboarding, a `lastProviderId` or any real workspace means "in use" and writes Ask; anything else stays unset (Auto once a model works). `aidenDirMigratedAt` is set on every profile, so it is not evidence. A value that isn't a mode reads as Ask, never Auto, and so does an unset mode without the seed's `fresh` marker (settings that were never seeded, such as an unreadable file, may belong to an install in use).
@@ -386,7 +386,7 @@ Areas: `main/services/tool-approval-rules.ts`, `bot-rules/`, Bot access stores, 
 Tests: resolution (Block wins, site > tool > connector); legacy scope answers only for its owner; Custom-access Bot reach is identical before and after (fixtures); allow-list tombstones still prevent resurrection; register-and-invoke IPC for list, change, remove; Playwright from a card's Always to the row to Remove.
 Risk: high (stored authority). Metric: grant pages 6+ → 1; per-Bot permission controls → 1 list.
 
-*Phase 3 notes (where the plan met the code):*
+_Phase 3 notes (where the plan met the code):_
 
 - The page's own rules live in `approval-rules.json` (`main/services/approval-rules/store.ts`, a `DataStore`, at most 500 rules and 512 KiB), a new device-local file, so the previous release reads every older file unchanged and simply ignores the new one. The model and resolver are `renderer/shared/approval-rules.ts` (`resolveApprovalRule`): Block wins anywhere, then site > tool (an Aiden tool or one connector tool) > whole connector; a rule a workspace or Bot owns answers only for that owner and beats the Mac's at equal specificity. Words ("When a Bot wants to …") are Bots only and never Allow.
 - The gate gained `pageRule`: Block refuses at step 1 in every mode (reason `rule`); Ask asks at step 5 with Allow once (and refuses unattended as `unattended-rule`), and is skipped in Never ask; Allow passes at step 7 but never for the Mac class. Workspace chats read it in `llm-client.ts` (`pageRuleFor`) on every call, so a Block applies wherever the workspace gate runs, including a Bot-bound call and a call with no approval port; Allow and Ask apply only where the chat can show a card. Bots read it in `bot-tool-assembly.ts` through the `pageRules` port (the Mac's rules plus that Bot's own). A Bot's own built-in Ask rule still asks under a page Allow, and a page Ask on a step the Bot would otherwise run adds a "Rule · <rule>" card. Worded Ask rules join the Bot's prompt and classifier as synthetic custom rules; worded Block rules are enforced by the classifier but not yet described in the prompt.
@@ -411,7 +411,7 @@ Areas: `bot-chat-pane.tsx` and card components, proposal schedulers in `main/ser
 Tests: slot ordering and "1 of N" as rendered behaviour; suggestion budget with a fake clock; Playwright pile-up scenario showing one slot; activity hidden by default and shown by the switch.
 Risk: medium. Metric: cards above the composer 4+ → 1; card types 23 → 7.
 
-*Phase 4 notes (where the plan met the code):*
+_Phase 4 notes (where the plan met the code):_
 
 - **Needs-you slot** (`renderer/components/bots/needs-you-slot.tsx`): one slot above the composer in a Bot chat on this Mac and on a paired Mac, ordered take control, approval, folder or Mac request, plan, held change, open "Needs you" issue, question (equal kinds oldest first). With more than one item a header reads "Needs you · 1 of N" with Previous and Next inside a `nav` named "Needs you", and a polite live region (mounted with the chat's footer, empty until then) announces "Needs you, i of N" only when the item on show changes. The item on show stays put: an arriving item only raises the count, so a half-answered question keeps its typed answer. When the item on show is answered the slot moves to the first in priority order, and if this window's focus was inside the slot when the card went (the answer came from here), focus moves to the next card's heading or group, or to the composer when nothing is left (`NeedsYouFocusScope`). An answer from a phone or another window while focus was elsewhere, or on nothing, moves no focus. An approval group keeps one key while its prompts change (`botApprovalGroupKey`). The slot only arranges: every card keeps its answers and wire format. It does not yet feed the Inbox sidebar's "needs you" state. Since the 2026-11 calm-down, a Bot's open issues wait here too, and a settled issue leaves the chat entirely instead of staying in the transcript as a card, as on the phones. Only issues that ask something of the person notify (Mac, Telegram, phone); a heads-up raised `quiet` (a chat reply's "Review this run") only waits here. Nothing notifies while that Bot's chat is in a focused window and the Mac is in use (`botChatInFront`, from the live subscriptions), and an ask still open after 4 hours gets one "Reminder:" delivery (`BotIssueService.remind`, swept every 5 minutes by `startBotIssueReminders` beside the delivery flush).
 - **Take control in two steps** (§3.4): a hand-off or sign-in card first offers **Take control** alone (it opens the page, the sign-in or the Bot's own browser or computer when there is one, or Finish on <Mac>), then **I'm done** and **Skip** with Open again. Pressing Take control moves focus to I'm done (to Skip where that is the only answer). Whether control was taken is kept in memory per card (`handoff-taken.ts`), shared by the chat's slot and the floating Bot panel; a reload starts at Take control again. Wire answers are unchanged (`done`, `skipped`). The `sign_in` and `hand_off` tool descriptions now tell the model the person answers with I'm done or Skip.
@@ -430,7 +430,7 @@ Areas: `renderer/components/onboarding-bots-step.tsx`, `onboarding-feature-galle
 Tests: name plus Return creates a Bot; a stale template version refuses; re-creating opens the existing Bot; `update_bot` allowed and refused fields, compare-and-swap Undo, not-owner hold; onboarding art test; Playwright from onboarding to the first Bot message.
 Risk: medium. Metric: time and clicks to first Bot message; dialogs ~22 → ~10.
 
-*Phase 5 notes (where the plan met the code):*
+_Phase 5 notes (where the plan met the code):_
 
 - **Silent first Bot** (§4.1, `onboarding-bots-step.tsx`, `botStarter().startFirst`): when Bots are on and the store is empty, the last onboarding step makes "Chief" (random look, the starter instructions, no description) once per install under the first-Bot creation key, so a second run returns the same Bot. The card says in one sentence what a Bot is and that it gets Full access; nothing is accepted while the step shows. Pressing Start using Aiden accepts the Full-access notice (a person who chose earlier to review Bot access first keeps that choice, and that Bot waits for its access to be set) and only then sends the intro. A failure offers only Try again, and Finish waits while the Bot is being made. Finishing opens its chat, focused on the composer; its first message comes from the one-time intro and asks what it should help with. "No job yet" is the starter instructions rather than empty ones: the system prompt tells a Bot with them to write its own description and first instructions with `update_bot` as soon as the person says what they want. The gallery tile draws that first chat ("What should I help with?" and an "Instructions updated · Undo" receipt) and its description now starts with the first Bot; the starter carousel is deleted.
 - **New bot and Templates** (§4.2, §4.3): the sidebar's + and the empty Bots page open one Create menu (New bot, Templates). New bot is one field with a large preview, the colour and shape picker and Return to create; with no usable model it says so and offers Set up…, creating nothing. Templates are the four presets with a version and a faded sample; the detail lists Instructions and the routine ("…, paused until you turn it on", added paused only when the Bot was really made) and Works with apps (Connected or Not connected; nothing connects by itself). A detail from an older version refuses to create; a template whose Bot exists offers Open. There is no Skill row: no preset carries a skill. `bot_created` gained `source` (new, template, onboarding) in the registry and `docs/analytics.md`.
@@ -450,6 +450,7 @@ Tests: router and stream contract tests; fixture round-trips on both clients; na
 Risk: medium to high. Metric: share of approvals answerable on phones (target: all but the three host-only kinds); median time to answer.
 
 Phase 6a notes (2026-11-13, the wire and server half; provisional revision 61, claimed for real at merge):
+
 - **Capabilities.** Five opt-in capabilities, negotiated through `POST /device/capabilities` and advertised in `serverCapabilities` only where the host wires them, never issued at pairing and with no feature token: `approval:cards`, `approvals:settings`, `bot:settings-changes`, `bot:suggestions`, `bot:templates`. `approval:cards` is wired wherever runs or Bot sessions are, so `aiden serve` advertises it too; the other four are desktop-only (the CLI has no ports for them). An old client that never negotiates sees the unchanged projection.
 - **Typed card.** `renderer/shared/approval-card-model.ts` (`buildApprovalCard`) is the one card model for the desktop and the wire: kind, title, Deny-first buttons with their answered lines, arguments (short values first), body and previous, rows, notes. It is complete or Deny-only: a card whose body or rows do not fit, whose details were omitted or malformed, whose kind is unknown, or that the host marks `canAllow: false` carries no allow button and adds `allowOnMac`. A holder may allow only what its card offers (`approvalCardAllows`); anything else is refused. Stream approvals, run `approval_required` events and gap snapshots, and Bot approvals carry `card` for holders, and for stream and run approvals `canAllow` and `scopes` follow the card's buttons. A hook proposal is a held change (Apply / Dismiss) answerable only when its event, matcher and command are all in the body; a sub-agent's file change shows its diff and a connector call its arguments, deny-only when truncated or too long; a sub-agent's run-wide grant is host-only on every payload; Computer Use calls stay on the Mac except the access grant; form fill is answerable when every row fits.
 - **Needs-you items.** `bot:settings-changes` projects the held `update_bot` card (`settings_change` entries: held with the field diff against the instructions as they are now, or a receipt with Undo) and answers it at `POST /bots/{botId}/settings-changes/{changeId}/respond`. `bot:suggestions` projects skill proposals, lessons and tidy-ups with `POST /bots/{botId}/skill-proposals/{proposalId}/respond`, `/lessons/{lessonId}/respond`, `/lessons/{lessonId}/remove` and `/learning/{changeId}/undo`. A skill preview longer than 16,000 characters is cut and flagged `previewTruncated`, and Add on it from a device is 409 (add it on the Mac). Lesson routes answer 404 for a lesson that does not exist or is not in the state the route needs (respond: waiting; remove: active); learning undo answers 404 for an unknown change.
@@ -461,6 +462,7 @@ Phase 6a notes (2026-11-13, the wire and server half; provisional revision 61, c
 - **For 6b and 6c.** Negotiate each capability separately and fall back to today's screens without it. Render the card in its order (title, arguments, body and previous, rows, notes, then the buttons with Deny first) and send only the decision and scope a button offers; show `allowOnMac` instead of allow buttons (a sub-agent run grant always reads this way); show the answered line after a tap, optimistically, and roll back on refusal. Show `settings_change` held cards with the diff and Apply / Dismiss, receipts with Undo; skill, lesson and tidy-up cards with their routes (a skill with `previewTruncated` offers Not now only and says to add it on the Mac; treat 404 as the card being gone). Templates: show the version, Open for a template that already has a Bot, and refresh on 409. One-field New bot. An Approvals page with the mode (Auto disabled when unavailable) and the rules page with Add rule from the picker. The single messaging switch and Show tool activity per device.
 
 Phase 6b notes (2026-11-13, the iOS half):
+
 - **Negotiation.** `AidenHostConnection` asks for each of the five capabilities in its own `POST /device/capabilities` call after the existing opt-ins, only when the Mac lists it; `AidenInstallation.offersBotUX` (the Mac lists `approval:cards` in `serverCapabilities`) gates the client-only changes. Without a capability the matching screen is today's.
 - **Typed card.** `Models/AidenBotUX.swift` decodes the card strictly, mirroring the TypeScript parser (Deny first, every allow on a button, every offered scope on a button, `canAllow` equal to "has an allow button", unknown kinds refused). `Features/Chat/AidenTypedApprovalCard.swift` renders it in order for stream, run and Bot approvals (the primary allow as a button, others in a menu, `allowOnMac` instead of allow buttons). A button shows only when its route can send its scope (a run's offered scopes; for a Bot, Always only with `bot:allowed` and the Mac's count). A tap sends only that button's decision and scope, shows its answered line at once (a cross for Deny), and takes it back if the answer doesn't land, including an expired or already answered approval; the card returns while the Mac still waits. The line goes when the next approval arrives, a new turn starts or the run ends. A scheduled task on a device without `schedule:write` shows Deny only, with the reason.
 - **Bot cards.** `Features/Bots/AidenBotSuggestionCards.swift`: the held settings change (the Mac's held reason, the full new instructions, a line diff, Apply / Dismiss, "To edit it first, open this Bot on your Mac."), receipts with Undo while the receipt is still `pending` and `undoable`, skill proposals (Not now only and "Add it on your Mac" when `previewTruncated`), lessons (Not now / Add; Learned with Undo) and memory tidy-ups with Undo. `AidenBotSessionModel` answers through the six routes optimistically; 404 drops the card, other refusals roll back and show the Mac's message.
@@ -470,6 +472,7 @@ Phase 6b notes (2026-11-13, the iOS half):
 - **Tests.** `AidenBotUXTests` (22, with the `bot-ux-revision-61.json` resource): fixture round-trips and refusals (including an unknown card kind), fallback without the capabilities, an expired Bot approval leaving no answered line, optimistic answers with rollback and 404, the truncated skill, a Deny-only card never sending allow, Auto refused, rule rollback and Disable a tool. `AidenRemoteClientTests` drives the coordinator against a fake Mac (one call per opt-in, nothing the Mac doesn't list, a refusal keeps the other grants), and `AidenChatTests` covers the scheduled-task Deny and an unconfirmed answer taking its line back. `AidenBotUXUITests` captures every new or changed screen in light and dark on the `-AidenDemoBotUX` demo Mac (local only; CI runs only the shell smoke test). New files are in `scripts/check-ios-shipping-target.test.mjs`.
 
 Phase 6c notes (2026-11-13, the Android half):
+
 - **Negotiation.** `aidenBotUxCapabilitiesToRequest` asks for each of the five capabilities in its own `POST /device/capabilities` call, only when the Mac lists it; `AidenInstallation.offersBotUx` (the host lists `approval:cards`, which `aiden serve` does too; safe there, because the client-only changes use only routes and fields older hosts have) gates the client-only changes, and each screen checks its own negotiated capability. Without one the matching screen is today's.
 - **Typed card.** `models/AidenApprovalCard.kt` decodes the card strictly, mirroring the TypeScript parser; `AidenTypedApprovalCardContent` renders it in order for stream, run and Bot approvals with `allowOnMac` instead of allow buttons. A tap sends only that button's decision and scope, shows its answered line at once and puts the card back if the Mac refuses; the line clears when the next approval arrives, the run ends or another run starts. A Bot card keeps only the answers its route can send (once and Always); with no allow left it is Deny alone with `allowOnMac`, and an unsendable tap shows an error rather than nothing.
 - **Bot cards.** Held settings changes (diff, Apply / Dismiss), receipts with Undo, skill proposals (Not now only and "Add it on your Mac" when `previewTruncated`), lessons and tidy-ups, answered optimistically through the six routes; a 404 drops the entry, a 400 or 409 rolls back with the Mac's message, anything else with a generic one.

@@ -19,7 +19,9 @@ export class BtwOperationRegistry {
   ): (() => void) | null {
     if (this.active.has(chatId) || this.active.size >= this.globalLimit) return null;
     let settle!: () => void;
-    const settlement = new Promise<void>((resolve) => { settle = resolve; });
+    const settlement = new Promise<void>((resolve) => {
+      settle = resolve;
+    });
     this.active.set(chatId, { chatId, requestId, ownerDocumentId, controller, settlement });
     let released = false;
     return () => {
@@ -44,7 +46,8 @@ export class BtwOperationRegistry {
       !operation ||
       (requestId && operation.requestId !== requestId) ||
       (ownerDocumentId && operation.ownerDocumentId !== ownerDocumentId)
-    ) return false;
+    )
+      return false;
     operation.controller.abort(new Error("Side question cancelled."));
     return true;
   }

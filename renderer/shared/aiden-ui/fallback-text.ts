@@ -15,7 +15,18 @@ import { AIDEN_UI_LIMITS, type AidenUiNodeV1 } from "./types.js";
  */
 
 const MAX_TABLE_ROWS = 20;
-const SKIPPED = new Set(["Segmented", "Tabs", "Switch", "Checkbox", "RadioGroup", "Select", "Slider", "TextInput", "Separator", "Spacer"]);
+const SKIPPED = new Set([
+  "Segmented",
+  "Tabs",
+  "Switch",
+  "Checkbox",
+  "RadioGroup",
+  "Select",
+  "Slider",
+  "TextInput",
+  "Separator",
+  "Spacer",
+]);
 /** Every visited node and every expanded item costs one unit. Real visuals stay far below this. */
 const WORK_BUDGET = AIDEN_UI_LIMITS.nodes * 8;
 /** Loop iterations across one fallback (nested loops share it). */
@@ -92,7 +103,6 @@ class FallbackLines {
   }
 }
 
-
 function prop(node: AidenUiNodeV1, name: string, scope: AidenUiScope): unknown {
   const value = node.p?.[name];
   return isExpr(value) ? evaluate(value, scope) : undefined;
@@ -109,7 +119,8 @@ function formatted(value: unknown, format: unknown, scope: AidenUiScope): string
   if (format === "number" || format === "currency" || format === "percent" || format === "date") {
     return formatValue(value, format, scope.locale);
   }
-  if (typeof value === "number" && format !== "text") return formatValue(value, "number", scope.locale);
+  if (typeof value === "number" && format !== "text")
+    return formatValue(value, "number", scope.locale);
   return str(value);
 }
 
@@ -128,7 +139,8 @@ function inline(node: AidenUiNodeV1, scope: AidenUiScope): string {
 // U+2060-U+2064, the BOM, the interlinear annotation marks U+FFF9-U+FFFB, and a
 // lone half of a surrogate pair. The zero-width joiner and non-joiner stay: they
 // shape emoji and the spelling of Persian and Indic words.
-const INVISIBLE_IN_CELL = /[\u061c\u200b\u200e\u200f\u202a-\u202e\u2060-\u2064\u2066-\u2069\ufeff\ufff9-\ufffb]|\p{Cs}/gu;
+const INVISIBLE_IN_CELL =
+  /[\u061c\u200b\u200e\u200f\u202a-\u202e\u2060-\u2064\u2066-\u2069\ufeff\ufff9-\ufffb]|\p{Cs}/gu;
 
 const SPACE_RUN_IN_CELL = /[\p{Cc}\s]+/gu;
 
@@ -153,7 +165,7 @@ const CLEAN_SLICE = 1024;
  */
 export function cleanPrefix(text: string, hidden: RegExp, keep: number, spaces?: RegExp): string {
   let kept = "";
-  for (let start = 0; start < text.length && kept.length <= keep;) {
+  for (let start = 0; start < text.length && kept.length <= keep; ) {
     let end = Math.min(start + CLEAN_SLICE, text.length);
     const last = text.charCodeAt(end - 1);
     const next = text.charCodeAt(end);
@@ -191,7 +203,10 @@ function cleanCell(text: string, max: number, out: FallbackLines, escapePipes = 
   // Past 2 × max + 2 units, at least max + 1 characters are left after trimming
   // the one space a collapsed run can leave at either end, so the clip is decided.
   const units = Math.min(max, AIDEN_UI_LIMITS.fallbackChars + 1);
-  const flat = clipUnits(cleanPrefix(text, INVISIBLE_IN_CELL, units * 2 + 2, SPACE_RUN_IN_CELL).trim(), AIDEN_UI_LIMITS.fallbackChars + 1);
+  const flat = clipUnits(
+    cleanPrefix(text, INVISIBLE_IN_CELL, units * 2 + 2, SPACE_RUN_IN_CELL).trim(),
+    AIDEN_UI_LIMITS.fallbackChars + 1,
+  );
   const characters = [...flat];
   const clipped = characters.length > max ? `${characters.slice(0, max - 1).join("")}…` : flat;
   // Cells are clipped before escaping: nothing past the cap is ever kept.
@@ -211,19 +226,24 @@ function chartLabel(node: AidenUiNodeV1, scope: AidenUiScope, out: FallbackLines
 
 /** One table row as plain `Label: value` pairs, readable in any font with nothing to line up. */
 function plainRow(labels: readonly string[], cells: readonly string[]): string {
-  const row = cells.map((cell, index) => {
-    const value = cell || "—";
-    return labels[index] ? `${labels[index]}: ${value}` : value;
-  }).join(" · ");
+  const row = cells
+    .map((cell, index) => {
+      const value = cell || "—";
+      return labels[index] ? `${labels[index]}: ${value}` : value;
+    })
+    .join(" · ");
   const characters = [...row];
-  return characters.length > MAX_PLAIN_ROW ? `${characters.slice(0, MAX_PLAIN_ROW - 1).join("")}…` : row;
+  return characters.length > MAX_PLAIN_ROW
+    ? `${characters.slice(0, MAX_PLAIN_ROW - 1).join("")}…`
+    : row;
 }
 
 function table(rows: unknown, columns: unknown, scope: AidenUiScope, out: FallbackLines): void {
   if (!Array.isArray(rows) || rows.length === 0) return;
-  const columnList: Record<string, unknown>[] = Array.isArray(columns) && columns.length
-    ? columns.map((column) => record(column))
-    : Object.keys(record(rows[0])).map((key) => ({ key, label: key }));
+  const columnList: Record<string, unknown>[] =
+    Array.isArray(columns) && columns.length
+      ? columns.map((column) => record(column))
+      : Object.keys(record(rows[0])).map((key) => ({ key, label: key }));
   const header = columnList.map((column) => str(column.label) || str(column.key));
   const labels = out.plainTables ? header.map((cell) => plainCell(cell, out)) : [];
   if (!out.plainTables) {
@@ -254,20 +274,44 @@ function markdownCell(text: string, out: FallbackLines): string {
  * format. A scatter chart with no `x` keeps every numeric field, since its
  * points need at least two.
  */
-function chartColumns(rows: unknown[], kind: string, x: unknown, y: unknown, series: unknown, format: unknown): Record<string, unknown>[] {
+function chartColumns(
+  rows: unknown[],
+  kind: string,
+  x: unknown,
+  y: unknown,
+  series: unknown,
+  format: unknown,
+): Record<string, unknown>[] {
   const first = record(rows[0]);
   const xKey = str(x) || Object.keys(first).find((key) => typeof first[key] === "string") || "";
   const allNumeric = kind === "scatter" && !str(x);
   const keys: { key: string; label: string }[] = allNumeric
-    ? Object.keys(first).filter((key) => key !== xKey && typeof first[key] === "number").map((key) => ({ key, label: key }))
+    ? Object.keys(first)
+        .filter((key) => key !== xKey && typeof first[key] === "number")
+        .map((key) => ({ key, label: key }))
     : Array.isArray(series) && series.length
-    ? series.map((entry) => (typeof entry === "string" ? { key: entry, label: entry } : { key: str(record(entry).key), label: str(record(entry).label) || str(record(entry).key) }))
-    : Array.isArray(y)
-      ? y.filter((key): key is string => typeof key === "string").map((key) => ({ key, label: key }))
-      : typeof y === "string" && y
-        ? [{ key: y, label: y }]
-        : Object.keys(first).filter((key) => key !== xKey && typeof first[key] === "number").slice(0, 1).map((key) => ({ key, label: key }));
-  const values = keys.filter((entry) => entry.key && entry.key !== xKey).slice(0, 8).map((entry) => ({ ...entry, ...(format !== undefined ? { format } : {}) }));
+      ? series.map((entry) =>
+          typeof entry === "string"
+            ? { key: entry, label: entry }
+            : {
+                key: str(record(entry).key),
+                label: str(record(entry).label) || str(record(entry).key),
+              },
+        )
+      : Array.isArray(y)
+        ? y
+            .filter((key): key is string => typeof key === "string")
+            .map((key) => ({ key, label: key }))
+        : typeof y === "string" && y
+          ? [{ key: y, label: y }]
+          : Object.keys(first)
+              .filter((key) => key !== xKey && typeof first[key] === "number")
+              .slice(0, 1)
+              .map((key) => ({ key, label: key }));
+  const values = keys
+    .filter((entry) => entry.key && entry.key !== xKey)
+    .slice(0, 8)
+    .map((entry) => ({ ...entry, ...(format !== undefined ? { format } : {}) }));
   return [...(xKey ? [{ key: xKey, label: xKey, format: "text" }] : []), ...values];
 }
 
@@ -298,7 +342,11 @@ function lines(node: AidenUiNodeV1, scope: AidenUiScope, out: FallbackLines): vo
     }
     case "Stat": {
       const label = str(prop(node, "label", scope));
-      const value = formatted(prop(node, "value", scope), prop(node, "format", scope) as ValueFormat, scope);
+      const value = formatted(
+        prop(node, "value", scope),
+        prop(node, "format", scope) as ValueFormat,
+        scope,
+      );
       const caption = str(prop(node, "caption", scope));
       out.push(`${label}: ${value}${caption ? ` (${caption})` : ""}`);
       return;
@@ -339,7 +387,9 @@ function lines(node: AidenUiNodeV1, scope: AidenUiScope, out: FallbackLines): vo
         const entry = record(item);
         const time = str(entry.time);
         const description = str(entry.description);
-        out.push(`- ${time ? `${time}: ` : ""}${str(entry.title)}${description ? ` — ${description}` : ""}`);
+        out.push(
+          `- ${time ? `${time}: ` : ""}${str(entry.title)}${description ? ` — ${description}` : ""}`,
+        );
       }
       return;
     }
@@ -363,9 +413,23 @@ function lines(node: AidenUiNodeV1, scope: AidenUiScope, out: FallbackLines): vo
       const data = prop(node, "data", scope);
       const label = chartLabel(node, scope, out);
       const kind = str(prop(node, "kind", scope));
-      out.push(`${label || "Chart"} (${kind ? `${kind} chart` : "chart"}, ${Array.isArray(data) ? data.length : 0} points)`);
+      out.push(
+        `${label || "Chart"} (${kind ? `${kind} chart` : "chart"}, ${Array.isArray(data) ? data.length : 0} points)`,
+      );
       if (out.chartTables && Array.isArray(data) && data.length) {
-        table(data, chartColumns(data, kind, prop(node, "x", scope), prop(node, "y", scope), prop(node, "series", scope), prop(node, "format", scope)), scope, out);
+        table(
+          data,
+          chartColumns(
+            data,
+            kind,
+            prop(node, "x", scope),
+            prop(node, "y", scope),
+            prop(node, "series", scope),
+            prop(node, "format", scope),
+          ),
+          scope,
+          out,
+        );
       }
       return;
     }
@@ -377,14 +441,20 @@ function lines(node: AidenUiNodeV1, scope: AidenUiScope, out: FallbackLines): vo
       const format = prop(node, "format", scope);
       for (const item of items) {
         if (!out.take()) return;
-        out.push(`${str(record(item)[labelKey])}: ${formatted(record(item)[valueKey], format, scope)}`);
+        out.push(
+          `${str(record(item)[labelKey])}: ${formatted(record(item)[valueKey], format, scope)}`,
+        );
       }
       return;
     }
     case "Sparkline": {
       const label = chartLabel(node, scope, out);
       const values = prop(node, "values", scope);
-      const numbers = Array.isArray(values) ? values.filter((value): value is number => typeof value === "number" && Number.isFinite(value)) : [];
+      const numbers = Array.isArray(values)
+        ? values.filter(
+            (value): value is number => typeof value === "number" && Number.isFinite(value),
+          )
+        : [];
       if (out.chartTables && numbers.length) {
         // A trend's latest values matter most: past the cap, the first value
         // is kept for where it started, then the latest ones, with the count.
@@ -413,8 +483,13 @@ function lines(node: AidenUiNodeV1, scope: AidenUiScope, out: FallbackLines): vo
         for (const row of rows.slice(0, MAX_TABLE_ROWS)) {
           if (!out.take()) return;
           const cell = record(row);
-          const where = [cell[y], cell[x]].map((part) => plainCell(formatted(part, "text", scope), out)).filter(Boolean).join(" · ");
-          out.push(`${where || "—"}: ${plainCell(formatted(cell[value], undefined, scope), out) || "—"}`);
+          const where = [cell[y], cell[x]]
+            .map((part) => plainCell(formatted(part, "text", scope), out))
+            .filter(Boolean)
+            .join(" · ");
+          out.push(
+            `${where || "—"}: ${plainCell(formatted(cell[value], undefined, scope), out) || "—"}`,
+          );
         }
         if (rows.length > MAX_TABLE_ROWS) out.push(`(${rows.length - MAX_TABLE_ROWS} more cells)`);
       } else if (label) {
@@ -463,11 +538,17 @@ function lines(node: AidenUiNodeV1, scope: AidenUiScope, out: FallbackLines): vo
   }
 }
 
-export function fallbackTextFor(tree: AidenUiNodeV1, scope: AidenUiScope, options: FallbackTextOptions = {}): string {
+export function fallbackTextFor(
+  tree: AidenUiNodeV1,
+  scope: AidenUiScope,
+  options: FallbackTextOptions = {},
+): string {
   const out = new FallbackLines();
   out.chartTables = options.chartTables === true;
   out.plainTables = options.plainTables === true;
   lines(tree, scope, out);
   const text = out.lines.join("\n");
-  return text.length > AIDEN_UI_LIMITS.fallbackChars ? `${clipUnits(text, AIDEN_UI_LIMITS.fallbackChars - 1)}…` : text;
+  return text.length > AIDEN_UI_LIMITS.fallbackChars
+    ? `${clipUnits(text, AIDEN_UI_LIMITS.fallbackChars - 1)}…`
+    : text;
 }

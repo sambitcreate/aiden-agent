@@ -4,7 +4,10 @@ import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { buildCodingTools } from "../main/services/coding-tools.js";
-import { ForegroundReadCleanupError, ForegroundReadOperations } from "../main/services/foreground-read-scope.js";
+import {
+  ForegroundReadCleanupError,
+  ForegroundReadOperations,
+} from "../main/services/foreground-read-scope.js";
 
 // Caller cancellation deliberately precedes cleanup. Observe the original
 // operations so sequential smoke samples join cleanup rather than racing the
@@ -18,16 +21,24 @@ ForegroundReadOperations.prototype.run = function <T>(
   operation: (signal: AbortSignal) => Promise<T>,
   timeoutResult: () => T,
 ): Promise<T> {
-  return originalRun.call(this, signal, durationMs, async (ownedSignal) => {
-    const pending = operation(ownedSignal);
-    pendingOperations.add(pending);
-    try { return await pending; }
-    catch (error) {
-      if (error instanceof ForegroundReadCleanupError) cleanupFailures.push(error);
-      throw error;
-    }
-    finally { pendingOperations.delete(pending); }
-  }, timeoutResult) as Promise<T>;
+  return originalRun.call(
+    this,
+    signal,
+    durationMs,
+    async (ownedSignal) => {
+      const pending = operation(ownedSignal);
+      pendingOperations.add(pending);
+      try {
+        return await pending;
+      } catch (error) {
+        if (error instanceof ForegroundReadCleanupError) cleanupFailures.push(error);
+        throw error;
+      } finally {
+        pendingOperations.delete(pending);
+      }
+    },
+    timeoutResult,
+  ) as Promise<T>;
 };
 
 async function settleForegroundOperations() {

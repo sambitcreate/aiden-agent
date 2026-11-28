@@ -32,9 +32,7 @@ function validProviderId(providerId: string): boolean {
 }
 
 function timestamp(value: unknown): number | undefined {
-  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0
-    ? value
-    : undefined;
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? value : undefined;
 }
 
 export function normalizePiModelsDocument(value: unknown): PiModelsDocument {
@@ -96,11 +94,22 @@ function clone(entry: ModelsStoreEntry): ModelsStoreEntry {
  * and retry behavior; this store only gives it durable last-known snapshots.
  */
 interface CatalogBackingStore extends ModelsStore {
-  write(id: string, entry: ModelsStoreEntry, options?: ModelsStoreOperationOptions, receipt?: DataStorePublicationReceipt): Promise<void>;
-  delete(id: string, options?: ModelsStoreOperationOptions, receipt?: DataStorePublicationReceipt): Promise<void>;
+  write(
+    id: string,
+    entry: ModelsStoreEntry,
+    options?: ModelsStoreOperationOptions,
+    receipt?: DataStorePublicationReceipt,
+  ): Promise<void>;
+  delete(
+    id: string,
+    options?: ModelsStoreOperationOptions,
+    receipt?: DataStorePublicationReceipt,
+  ): Promise<void>;
 }
 
-export function createPiModelsBackingStore(store: DataStore<PiModelsDocument>): CatalogBackingStore {
+export function createPiModelsBackingStore(
+  store: DataStore<PiModelsDocument>,
+): CatalogBackingStore {
   async function migrateAzure() {
     if (!(await store.load()).entries["azure-openai-responses"]) return;
     await store.update((document) => {
@@ -108,13 +117,17 @@ export function createPiModelsBackingStore(store: DataStore<PiModelsDocument>): 
       if (!legacy) return;
       // Catalogs are disposable; a current Azure catalog wins in full. Custom
       // endpoints live in the separate portable provider configuration.
-      document.entries.azure ??= { ...legacy, models: legacy.models.map((model) => ({ ...model, provider: "azure" })) };
+      document.entries.azure ??= {
+        ...legacy,
+        models: legacy.models.map((model) => ({ ...model, provider: "azure" })),
+      };
       delete document.entries["azure-openai-responses"];
     });
   }
   return {
     async read(providerId) {
-      if (!validProviderId(providerId)) throw new Error("Invalid provider model catalog identifier.");
+      if (!validProviderId(providerId))
+        throw new Error("Invalid provider model catalog identifier.");
       if (providerId === "azure") await migrateAzure();
       const document = await store.load();
       const entry = document.entries[providerId];
@@ -123,20 +136,30 @@ export function createPiModelsBackingStore(store: DataStore<PiModelsDocument>): 
 
     async write(providerId, entry, _options, receipt) {
       if (receipt) receipt.state = "not-published";
-      if (!validProviderId(providerId)) throw new Error("Invalid provider model catalog identifier.");
-      await store.update((document) => {
-        document.version = 1;
-        document.entries[providerId] = clone(entry);
-      }, undefined, receipt);
+      if (!validProviderId(providerId))
+        throw new Error("Invalid provider model catalog identifier.");
+      await store.update(
+        (document) => {
+          document.version = 1;
+          document.entries[providerId] = clone(entry);
+        },
+        undefined,
+        receipt,
+      );
     },
 
     async delete(providerId, _options, receipt) {
       if (providerId === "azure") await migrateAzure();
       if (receipt) receipt.state = "not-published";
-      if (!validProviderId(providerId)) throw new Error("Invalid provider model catalog identifier.");
-      await store.update((document) => {
-        delete document.entries[providerId];
-      }, undefined, receipt);
+      if (!validProviderId(providerId))
+        throw new Error("Invalid provider model catalog identifier.");
+      await store.update(
+        (document) => {
+          delete document.entries[providerId];
+        },
+        undefined,
+        receipt,
+      );
     },
   };
 }
@@ -156,7 +179,10 @@ export interface ProviderModelsStore {
 class CatalogPublicationError extends Error {
   readonly cause: unknown;
 
-  constructor(message: string, readonly errors: readonly unknown[]) {
+  constructor(
+    message: string,
+    readonly errors: readonly unknown[],
+  ) {
     super(message);
     this.name = "CatalogPublicationError";
     this.cause = errors[0];
@@ -170,7 +196,9 @@ class CatalogPublicationError extends Error {
  * always carry `checkedAt` (Pi refreshes and Aiden's 404/501 negative cache).
  */
 function isRetirementTombstone(entry: ModelsStoreEntry): boolean {
-  return entry.models.length === 0 && entry.checkedAt === undefined && entry.lastModified === undefined;
+  return (
+    entry.models.length === 0 && entry.checkedAt === undefined && entry.lastModified === undefined
+  );
 }
 
 /**
@@ -195,7 +223,10 @@ export function createOwnedPiModelsStore(backing: CatalogBackingStore): {
         // Write an empty tombstone instead; reads treat it as absent.
         await backing.write(providerId, { models: [] });
       } catch (fallbackError) {
-        throw new CatalogPublicationError("Could not retire an obsolete model catalog.", [deleteError, fallbackError]);
+        throw new CatalogPublicationError("Could not retire an obsolete model catalog.", [
+          deleteError,
+          fallbackError,
+        ]);
       }
     }
     quarantined.delete(providerId);
@@ -203,18 +234,24 @@ export function createOwnedPiModelsStore(backing: CatalogBackingStore): {
   const serialized = <T>(providerId: string, action: () => Promise<T>): Promise<T> => {
     const previous = tails.get(providerId) ?? Promise.resolve();
     const result = previous.then(action);
-    const tail = result.then(() => undefined, () => undefined);
+    const tail = result.then(
+      () => undefined,
+      () => undefined,
+    );
     tails.set(providerId, tail);
-    void tail.then(() => { if (tails.get(providerId) === tail) tails.delete(providerId); });
+    void tail.then(() => {
+      if (tails.get(providerId) === tail) tails.delete(providerId);
+    });
     return result;
   };
   const modelsStore: ModelsStore = {
-    read: (id, options) => serialized(id, async () => {
-      options?.signal?.throwIfAborted();
-      if (quarantined.has(id)) return undefined;
-      const entry = await backing.read(id, options);
-      return entry === undefined || isRetirementTombstone(entry) ? undefined : entry;
-    }),
+    read: (id, options) =>
+      serialized(id, async () => {
+        options?.signal?.throwIfAborted();
+        if (quarantined.has(id)) return undefined;
+        const entry = await backing.read(id, options);
+        return entry === undefined || isRetirementTombstone(entry) ? undefined : entry;
+      }),
     write: (id, entry, options) => {
       const snapshot = clone(entry);
       return serialized(id, async () => {
@@ -223,11 +260,12 @@ export function createOwnedPiModelsStore(backing: CatalogBackingStore): {
         quarantined.delete(id);
       });
     },
-    delete: (id, options) => serialized(id, async () => {
-      options?.signal?.throwIfAborted();
-      await backing.delete(id, options);
-      quarantined.delete(id);
-    }),
+    delete: (id, options) =>
+      serialized(id, async () => {
+        options?.signal?.throwIfAborted();
+        await backing.delete(id, options);
+        quarantined.delete(id);
+      }),
   };
   return {
     modelsStore,
@@ -235,48 +273,55 @@ export function createOwnedPiModelsStore(backing: CatalogBackingStore): {
       read: () => modelsStore.read(providerId),
       write: (entry) => modelsStore.write(providerId, entry),
       delete: () => modelsStore.delete(providerId),
-      publish: (publication, canPublish, isCurrent) => serialized(providerId, async () => {
-        if (!isCurrent() || !await canPublish() || !isCurrent()) return false;
-        // Cloning is synchronous and cannot have published anything.
-        const snapshot = publication.persist == null ? publication.persist : clone(publication.persist);
-        let accepted = false;
-        let failed = false;
-        let failure: unknown;
-        // Generic stores cannot prove non-commit. The DataStore adapter records
-        // the exact pre-publication/entered-publication boundary for each call.
-        const receipt: DataStorePublicationReceipt = { state: "uncertain" };
-        try {
-          if (snapshot === null) await backing.delete(providerId, undefined, receipt);
-          else if (snapshot !== undefined) await backing.write(providerId, snapshot, undefined, receipt);
-          accepted = isCurrent() && await canPublish() && isCurrent();
-        } catch (error) {
-          // A rejected write may already have replaced the file. Keep ownership
-          // until that uncertain entry is retired, including on IO rejection.
-          failed = true;
-          failure = error;
-        }
-        let preservePrevious = false;
-        if (failed && receipt.state === "not-published") {
+      publish: (publication, canPublish, isCurrent) =>
+        serialized(providerId, async () => {
+          if (!isCurrent() || !(await canPublish()) || !isCurrent()) return false;
+          // Cloning is synchronous and cannot have published anything.
+          const snapshot =
+            publication.persist == null ? publication.persist : clone(publication.persist);
+          let accepted = false;
+          let failed = false;
+          let failure: unknown;
+          // Generic stores cannot prove non-commit. The DataStore adapter records
+          // the exact pre-publication/entered-publication boundary for each call.
+          const receipt: DataStorePublicationReceipt = { state: "uncertain" };
           try {
-            preservePrevious = isCurrent() && await canPublish() && isCurrent();
-          } catch {
-            // Without current ownership evidence, retain the fail-closed path.
+            if (snapshot === null) await backing.delete(providerId, undefined, receipt);
+            else if (snapshot !== undefined)
+              await backing.write(providerId, snapshot, undefined, receipt);
+            accepted = isCurrent() && (await canPublish()) && isCurrent();
+          } catch (error) {
+            // A rejected write may already have replaced the file. Keep ownership
+            // until that uncertain entry is retired, including on IO rejection.
+            failed = true;
+            failure = error;
           }
-        }
-        if (!accepted && !preservePrevious && publication.persist !== undefined) {
-          try {
-            await retire(providerId);
-          } catch (cleanupError) {
-            if (failed) throw new CatalogPublicationError("Catalog publication and retirement failed.", [failure, cleanupError]);
-            throw cleanupError;
+          let preservePrevious = false;
+          if (failed && receipt.state === "not-published") {
+            try {
+              preservePrevious = isCurrent() && (await canPublish()) && isCurrent();
+            } catch {
+              // Without current ownership evidence, retain the fail-closed path.
+            }
           }
-        }
-        if (failed) throw failure;
-        if (!accepted) return false;
-        if (publication.persist !== undefined) quarantined.delete(providerId);
-        publication.update?.();
-        return true;
-      }),
+          if (!accepted && !preservePrevious && publication.persist !== undefined) {
+            try {
+              await retire(providerId);
+            } catch (cleanupError) {
+              if (failed)
+                throw new CatalogPublicationError("Catalog publication and retirement failed.", [
+                  failure,
+                  cleanupError,
+                ]);
+              throw cleanupError;
+            }
+          }
+          if (failed) throw failure;
+          if (!accepted) return false;
+          if (publication.persist !== undefined) quarantined.delete(providerId);
+          publication.update?.();
+          return true;
+        }),
     }),
   };
 }

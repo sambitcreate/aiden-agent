@@ -153,11 +153,13 @@ test("a remounted volume keeps the same owned home without rewriting its receipt
       root: () => paths.root,
       mintWorkspaceId: () => WORKSPACE_B,
     });
-    assert.deepEqual(await restarted.listBindings(), [{
-      botId: "bot-1",
-      workspaceId: WORKSPACE_A,
-      createdAt: first.createdAt,
-    }]);
+    assert.deepEqual(await restarted.listBindings(), [
+      {
+        botId: "bot-1",
+        workspaceId: WORKSPACE_A,
+        createdAt: first.createdAt,
+      },
+    ]);
     assert.deepEqual(await restarted.resolve("bot-1"), first);
     assert.deepEqual(await restarted.revalidate(first), first);
     assert.equal(
@@ -168,8 +170,14 @@ test("a remounted volume keeps the same owned home without rewriting its receipt
 
     manifest.bindings[0]!.incarnation.device = first.incarnation.device;
     await writeFile(manifestPath, JSON.stringify(manifest), { mode: 0o600 });
-    const inconsistent = createBotManagedWorkspaceService({ root: () => paths.root, mintWorkspaceId: () => WORKSPACE_B });
-    await assert.rejects(inconsistent.resolve("bot-1"), /does not match its private ownership record/u);
+    const inconsistent = createBotManagedWorkspaceService({
+      root: () => paths.root,
+      mintWorkspaceId: () => WORKSPACE_B,
+    });
+    await assert.rejects(
+      inconsistent.resolve("bot-1"),
+      /does not match its private ownership record/u,
+    );
   } finally {
     await rm(paths.parent, { recursive: true, force: true });
   }
@@ -198,7 +206,9 @@ test("journal reconciliation after a remount publishes the receipt's durable tok
     });
     const recovered = await service.reconcileProvision(reservation);
     assert.deepEqual(recovered.incarnation, inspection.incarnation);
-    const manifest = JSON.parse(await readFile(join(paths.root, BOT_MANAGED_WORKSPACE_MANIFEST), "utf8")) as {
+    const manifest = JSON.parse(
+      await readFile(join(paths.root, BOT_MANAGED_WORKSPACE_MANIFEST), "utf8"),
+    ) as {
       bindings: Array<{ incarnation: { device: string; inode: string } }>;
     };
     assert.deepEqual(manifest.bindings[0]?.incarnation, receipt.incarnation);
@@ -503,7 +513,10 @@ test("Bot delete erases a nonempty home, its receipt and binding, and leaves oth
     await assert.rejects(lstat(receiptPath(paths.root, WORKSPACE_A)), { code: "ENOENT" });
     assert.deepEqual(await readdir(join(paths.root, "removed")), []);
     assert.equal(await readFile(outside, "utf8"), "keep me");
-    assert.deepEqual((await service.listBindings()).map(({ botId }) => botId), ["bot-2"]);
+    assert.deepEqual(
+      (await service.listBindings()).map(({ botId }) => botId),
+      ["bot-2"],
+    );
     assert.equal((await service.resolve("bot-2")).homePath, kept.homePath);
     await assert.rejects(service.resolve("bot-1"), /does not have a valid managed home/u);
 

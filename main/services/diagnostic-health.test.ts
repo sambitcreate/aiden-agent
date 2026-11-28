@@ -31,7 +31,10 @@ test("health normalization is content-free and keeps only 90 valid days", () => 
     })),
   });
   assert.equal(normalized.days.length, MAX_DIAGNOSTIC_HEALTH_DAYS);
-  assert.doesNotMatch(JSON.stringify(normalized), /privatePrompt|privateMessage|must disappear|not-an-area/u);
+  assert.doesNotMatch(
+    JSON.stringify(normalized),
+    /privatePrompt|privateMessage|must disappear|not-an-area/u,
+  );
 });
 
 test("health records closed outcomes and persists owner-only data", async () => {
@@ -40,13 +43,49 @@ test("health records closed outcomes and persists owner-only data", async () => 
   try {
     initDiagnosticHealth(target);
     const now = () => new Date("2026-08-27T12:00:00.000Z");
-    recordDiagnosticHealth(createDiagnosticEvent({ level: "info", area: "app", event: "electron-ready", outcome: "started" }, "session", now));
-    recordDiagnosticHealth(createDiagnosticEvent({ level: "error", area: "renderer", event: "renderer-failed", outcome: "failed" }, "session", now));
+    recordDiagnosticHealth(
+      createDiagnosticEvent(
+        { level: "info", area: "app", event: "electron-ready", outcome: "started" },
+        "session",
+        now,
+      ),
+    );
+    recordDiagnosticHealth(
+      createDiagnosticEvent(
+        { level: "error", area: "renderer", event: "renderer-failed", outcome: "failed" },
+        "session",
+        now,
+      ),
+    );
     await flushDiagnosticHealth();
     assert.equal((await fs.stat(target)).mode & 0o777, 0o600);
     assert.deepEqual(diagnosticHealthSnapshot().days[0]?.counts, [
-      { area: "app", started: 1, completed: 0, degraded: 0, failed: 0, cancelled: 0, timedOut: 0, success2xx: 0, clientError4xx: 0, serverError5xx: 0, slow: 0 },
-      { area: "renderer", started: 0, completed: 0, degraded: 0, failed: 1, cancelled: 0, timedOut: 0, success2xx: 0, clientError4xx: 0, serverError5xx: 0, slow: 0 },
+      {
+        area: "app",
+        started: 1,
+        completed: 0,
+        degraded: 0,
+        failed: 0,
+        cancelled: 0,
+        timedOut: 0,
+        success2xx: 0,
+        clientError4xx: 0,
+        serverError5xx: 0,
+        slow: 0,
+      },
+      {
+        area: "renderer",
+        started: 0,
+        completed: 0,
+        degraded: 0,
+        failed: 1,
+        cancelled: 0,
+        timedOut: 0,
+        success2xx: 0,
+        clientError4xx: 0,
+        serverError5xx: 0,
+        slow: 0,
+      },
     ]);
     await deleteDiagnosticHealth();
     await assert.rejects(fs.stat(target), { code: "ENOENT" });
@@ -72,32 +111,44 @@ test("deletion separates fresh health counts from an in-flight pre-delete snapsh
   const target = path.join(root, "diagnostic-health.json");
   const rename = fsPromises.rename;
   let releaseWrite!: () => void;
-  const writeHeld = new Promise<void>((resolve) => { releaseWrite = resolve; });
+  const writeHeld = new Promise<void>((resolve) => {
+    releaseWrite = resolve;
+  });
   let notifyWrite!: () => void;
-  const writeStarted = new Promise<void>((resolve) => { notifyWrite = resolve; });
+  const writeStarted = new Promise<void>((resolve) => {
+    notifyWrite = resolve;
+  });
   let deletion: Promise<void> | undefined;
   let flushBefore: Promise<boolean> | undefined;
   let flushAfter: Promise<boolean> | undefined;
   let renames = 0;
-  const renameMock = context.mock.method(fsPromises, "rename", async (...args: Parameters<typeof rename>) => {
-    const [, destination] = args;
-    if (destination === target) {
-      renames += 1;
-      if (renames === 1) {
-        notifyWrite();
-        await writeHeld;
-      } else {
-        // Deterministically publish the later snapshot after deletion finishes.
-        await deletion;
+  const renameMock = context.mock.method(
+    fsPromises,
+    "rename",
+    async (...args: Parameters<typeof rename>) => {
+      const [, destination] = args;
+      if (destination === target) {
+        renames += 1;
+        if (renames === 1) {
+          notifyWrite();
+          await writeHeld;
+        } else {
+          // Deterministically publish the later snapshot after deletion finishes.
+          await deletion;
+        }
       }
-    }
-    return rename(...args);
-  });
+      return rename(...args);
+    },
+  );
   syncBuiltinESMExports();
   try {
     initDiagnosticHealth(target);
     const now = () => new Date("2026-09-19T12:00:00.000Z");
-    const failure = createDiagnosticEvent({ level: "error", area: "renderer", event: "renderer-failed", outcome: "failed" }, "session", now);
+    const failure = createDiagnosticEvent(
+      { level: "error", area: "renderer", event: "renderer-failed", outcome: "failed" },
+      "session",
+      now,
+    );
     recordDiagnosticHealth(failure);
     recordDiagnosticHealth(failure);
     flushBefore = flushDiagnosticHealth();
@@ -110,8 +161,11 @@ test("deletion separates fresh health counts from an in-flight pre-delete snapsh
     releaseWrite();
     await Promise.all([flushBefore, deletion, flushAfter]);
 
-    assert.equal(JSON.parse(await fs.readFile(target, "utf8")).days[0].counts[0].failed, 1,
-      "a later flush must not resurrect the two deleted failures");
+    assert.equal(
+      JSON.parse(await fs.readFile(target, "utf8")).days[0].counts[0].failed,
+      1,
+      "a later flush must not resurrect the two deleted failures",
+    );
     assert.equal(freshSnapshot.days[0]?.counts[0]?.failed, 1);
     assert.deepEqual(diagnosticHealthSnapshot(), freshSnapshot);
     assert.deepEqual(JSON.parse(await fs.readFile(target, "utf8")), freshSnapshot);
@@ -133,7 +187,10 @@ test("back-to-back deletions discard only health history admitted before each ba
   const target = path.join(root, "diagnostic-health.json");
   try {
     initDiagnosticHealth(target);
-    const failure = createDiagnosticEvent({ level: "error", area: "app", event: "app-failed", outcome: "failed" }, "session");
+    const failure = createDiagnosticEvent(
+      { level: "error", area: "app", event: "app-failed", outcome: "failed" },
+      "session",
+    );
     recordDiagnosticHealth(failure);
     const firstWrite = flushDiagnosticHealth();
     const firstDelete = deleteDiagnosticHealth();
@@ -160,16 +217,24 @@ test("bounded health flush includes an in-flight deletion barrier", async (conte
   const target = path.join(root, "diagnostic-health.json");
   const remove = fsPromises.rm;
   let releaseRemoval!: () => void;
-  const removalHeld = new Promise<void>((resolve) => { releaseRemoval = resolve; });
-  let notifyRemoval!: () => void;
-  const removalStarted = new Promise<void>((resolve) => { notifyRemoval = resolve; });
-  const removeMock = context.mock.method(fsPromises, "rm", async (...args: Parameters<typeof remove>) => {
-    if (args[0] === target) {
-      notifyRemoval();
-      await removalHeld;
-    }
-    return remove(...args);
+  const removalHeld = new Promise<void>((resolve) => {
+    releaseRemoval = resolve;
   });
+  let notifyRemoval!: () => void;
+  const removalStarted = new Promise<void>((resolve) => {
+    notifyRemoval = resolve;
+  });
+  const removeMock = context.mock.method(
+    fsPromises,
+    "rm",
+    async (...args: Parameters<typeof remove>) => {
+      if (args[0] === target) {
+        notifyRemoval();
+        await removalHeld;
+      }
+      return remove(...args);
+    },
+  );
   syncBuiltinESMExports();
   let deletion: Promise<void> | undefined;
   // Production deadlines are unref'd; keep the synthetic blocked I/O alive.
@@ -198,17 +263,24 @@ test("a failed health deletion rejects without poisoning later persistence", asy
   const target = path.join(root, "diagnostic-health.json");
   const remove = fsPromises.rm;
   let failRemoval = true;
-  const removeMock = context.mock.method(fsPromises, "rm", async (...args: Parameters<typeof remove>) => {
-    const [candidate] = args;
-    if (candidate === target && failRemoval) {
-      throw Object.assign(new Error("Synthetic removal failure"), { code: "EACCES" });
-    }
-    return remove(...args);
-  });
+  const removeMock = context.mock.method(
+    fsPromises,
+    "rm",
+    async (...args: Parameters<typeof remove>) => {
+      const [candidate] = args;
+      if (candidate === target && failRemoval) {
+        throw Object.assign(new Error("Synthetic removal failure"), { code: "EACCES" });
+      }
+      return remove(...args);
+    },
+  );
   syncBuiltinESMExports();
   try {
     initDiagnosticHealth(target);
-    const failure = createDiagnosticEvent({ level: "error", area: "app", event: "app-failed", outcome: "failed" }, "session");
+    const failure = createDiagnosticEvent(
+      { level: "error", area: "app", event: "app-failed", outcome: "failed" },
+      "session",
+    );
     recordDiagnosticHealth(failure);
     recordDiagnosticHealth(failure);
     await flushDiagnosticHealth();
@@ -249,7 +321,12 @@ test("health persistence rejects symlinked roots and predictable temporary symli
     await fs.writeFile(victim, "keep", { mode: 0o644 });
     await fs.symlink(victim, `${target}.tmp`);
     initDiagnosticHealth(target);
-    recordDiagnosticHealth(createDiagnosticEvent({ level: "error", area: "app", event: "app-failed", outcome: "failed" }, "session"));
+    recordDiagnosticHealth(
+      createDiagnosticEvent(
+        { level: "error", area: "app", event: "app-failed", outcome: "failed" },
+        "session",
+      ),
+    );
     await flushDiagnosticHealth();
     assert.equal(await fs.readFile(victim, "utf8"), "keep");
     assert.equal((await fs.stat(victim)).mode & 0o777, 0o644);

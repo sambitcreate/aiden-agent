@@ -31,7 +31,10 @@ import {
   type BotSettingsField,
 } from "../../renderer/shared/bot-settings-changes.js";
 import type { BotPreset } from "../../renderer/shared/bot-presets.js";
-import { parseAidenRemoteBotPresetList, type AidenRemoteBotPreset } from "./aiden-remote-protocol.js";
+import {
+  parseAidenRemoteBotPresetList,
+  type AidenRemoteBotPreset,
+} from "./aiden-remote-protocol.js";
 
 // ---------------------------------------------------------------------------
 // Strict-parse helpers
@@ -39,24 +42,41 @@ import { parseAidenRemoteBotPresetList, type AidenRemoteBotPreset } from "./aide
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
-function exactKeys(value: Record<string, unknown>, allowed: readonly string[], label: string): void {
-  for (const key of Object.keys(value)) if (!allowed.includes(key)) throw new Error(`${label} has an unknown field: ${key}.`);
+function exactKeys(
+  value: Record<string, unknown>,
+  allowed: readonly string[],
+  label: string,
+): void {
+  for (const key of Object.keys(value))
+    if (!allowed.includes(key)) throw new Error(`${label} has an unknown field: ${key}.`);
 }
 function has(value: Record<string, unknown>, key: string): boolean {
   return Object.prototype.hasOwnProperty.call(value, key);
 }
-function text(value: unknown, label: string, max: number, options: { blank?: boolean } = {}): string {
+function text(
+  value: unknown,
+  label: string,
+  max: number,
+  options: { blank?: boolean } = {},
+): string {
   if (typeof value !== "string") throw new Error(`${label} must be a string.`);
   if ([...value].length > max) throw new Error(`${label} is too long.`);
   if (!options.blank && value.trim() === "") throw new Error(`${label} must not be blank.`);
   return value;
 }
 function member<T extends string>(value: unknown, values: readonly T[], label: string): T {
-  if (typeof value !== "string" || !values.includes(value as T)) throw new Error(`${label} is not a known value.`);
+  if (typeof value !== "string" || !values.includes(value as T))
+    throw new Error(`${label} is not a known value.`);
   return value as T;
 }
-function list<T>(value: unknown, label: string, max: number, item: (entry: unknown, index: number) => T): T[] {
-  if (!Array.isArray(value) || value.length > max) throw new Error(`${label} must be a list of at most ${max}.`);
+function list<T>(
+  value: unknown,
+  label: string,
+  max: number,
+  item: (entry: unknown, index: number) => T,
+): T[] {
+  if (!Array.isArray(value) || value.length > max)
+    throw new Error(`${label} must be a list of at most ${max}.`);
   return value.map(item);
 }
 function bool(value: unknown, label: string): boolean {
@@ -83,22 +103,36 @@ function clip(value: string, max: number): string {
 // ---------------------------------------------------------------------------
 // The typed approval card (`approval:cards`)
 
-function parseCardText(value: unknown, label: string): { format: "command" | "text"; text: string } {
+function parseCardText(
+  value: unknown,
+  label: string,
+): { format: "command" | "text"; text: string } {
   if (!isRecord(value)) throw new Error(`${label} must be an object.`);
   exactKeys(value, ["format", "text"], label);
-  return { format: member(value.format, ["command", "text"] as const, `${label} format`), text: text(value.text, `${label} text`, APPROVAL_CARD_LIMITS.body) };
+  return {
+    format: member(value.format, ["command", "text"] as const, `${label} format`),
+    text: text(value.text, `${label} text`, APPROVAL_CARD_LIMITS.body),
+  };
 }
 
 function parseCardButton(value: unknown, index: number): ApprovalCardButton {
   if (!isRecord(value)) throw new Error("Approval card button must be an object.");
   exactKeys(value, ["label", "decision", "scope", "answered"], "Approval card button");
-  const decision = member(value.decision, ["allow", "deny"] as const, "Approval card button decision");
-  if (has(value, "scope") && decision !== "allow") throw new Error("Only an allow button carries a scope.");
-  if (index === 0 && decision !== "deny") throw new Error("An approval card's first button is its deny.");
+  const decision = member(
+    value.decision,
+    ["allow", "deny"] as const,
+    "Approval card button decision",
+  );
+  if (has(value, "scope") && decision !== "allow")
+    throw new Error("Only an allow button carries a scope.");
+  if (index === 0 && decision !== "deny")
+    throw new Error("An approval card's first button is its deny.");
   return {
     label: text(value.label, "Approval card button label", 80),
     decision,
-    ...(has(value, "scope") ? { scope: member(value.scope, ["chat", "always"] as const, "Approval card button scope") } : {}),
+    ...(has(value, "scope")
+      ? { scope: member(value.scope, ["chat", "always"] as const, "Approval card button scope") }
+      : {}),
     answered: text(value.answered, "Approval card button answered", 80),
   };
 }
@@ -106,45 +140,96 @@ function parseCardButton(value: unknown, index: number): ApprovalCardButton {
 /** Strict parse of the typed card, as a revision-61 client decodes it. */
 export function parseAidenRemoteApprovalCard(value: unknown): ApprovalCard {
   if (!isRecord(value)) throw new Error("Approval card must be an object.");
-  exactKeys(value, ["kind", "mac", "title", "arguments", "body", "explanation", "tags", "previous", "rows", "notes", "buttons", "allowOnMac"], "Approval card");
+  exactKeys(
+    value,
+    [
+      "kind",
+      "mac",
+      "title",
+      "arguments",
+      "body",
+      "explanation",
+      "tags",
+      "previous",
+      "rows",
+      "notes",
+      "buttons",
+      "allowOnMac",
+    ],
+    "Approval card",
+  );
   const kind = member(value.kind, APPROVAL_CARD_KINDS, "Approval card kind");
-  if (has(value, "mac") && kind !== "mac") throw new Error("Only a Mac card names a part of the Mac.");
+  if (has(value, "mac") && kind !== "mac")
+    throw new Error("Only a Mac card names a part of the Mac.");
   const buttons = list(value.buttons, "Approval card buttons", 5, parseCardButton);
   if (buttons.length === 0) throw new Error("An approval card offers at least Deny.");
   const allows = buttons.some((button) => button.decision === "allow");
-  if (has(value, "allowOnMac") === allows) throw new Error("A card says where to allow it exactly when it offers no allow here.");
+  if (has(value, "allowOnMac") === allows)
+    throw new Error("A card says where to allow it exactly when it offers no allow here.");
   return {
     kind,
-    ...(has(value, "mac") ? { mac: member(value.mac, ["shell", "files", "computer_use"] as const, "Approval card mac") } : {}),
+    ...(has(value, "mac")
+      ? { mac: member(value.mac, ["shell", "files", "computer_use"] as const, "Approval card mac") }
+      : {}),
     title: text(value.title, "Approval card title", APPROVAL_CARD_LIMITS.title),
-    arguments: list(value.arguments, "Approval card arguments", APPROVAL_CARD_LIMITS.argumentCount, (entry) => {
-      if (!isRecord(entry)) throw new Error("Approval card argument must be an object.");
-      exactKeys(entry, ["key", "value"], "Approval card argument");
-      return { key: text(entry.key, "Approval card argument key", APPROVAL_CARD_LIMITS.key), value: text(entry.value, "Approval card argument value", APPROVAL_CARD_LIMITS.value) };
-    }),
+    arguments: list(
+      value.arguments,
+      "Approval card arguments",
+      APPROVAL_CARD_LIMITS.argumentCount,
+      (entry) => {
+        if (!isRecord(entry)) throw new Error("Approval card argument must be an object.");
+        exactKeys(entry, ["key", "value"], "Approval card argument");
+        return {
+          key: text(entry.key, "Approval card argument key", APPROVAL_CARD_LIMITS.key),
+          value: text(entry.value, "Approval card argument value", APPROVAL_CARD_LIMITS.value),
+        };
+      },
+    ),
     ...(has(value, "body") ? { body: parseCardText(value.body, "Approval card body") } : {}),
     // Revision 69 (`approval:plain-words`): a shell card's plain words, beside its command.
     ...(has(value, "explanation") ? { explanation: parseCardExplanation(value) } : {}),
     ...(has(value, "tags") ? { tags: parseCardTags(value) } : {}),
-    ...(has(value, "previous") ? { previous: parseCardText(value.previous, "Approval card previous") } : {}),
-    ...(has(value, "rows") ? {
-      rows: list(value.rows, "Approval card rows", APPROVAL_CARD_LIMITS.rows, (row) => {
-        if (!isRecord(row)) throw new Error("Approval card row must be an object.");
-        exactKeys(row, ["label", "value"], "Approval card row");
-        return { label: text(row.label, "Approval card row label", APPROVAL_CARD_LIMITS.key * 2), value: text(row.value, "Approval card row value", APPROVAL_CARD_LIMITS.value, { blank: true }) };
-      }),
-    } : {}),
-    ...(has(value, "notes") ? { notes: list(value.notes, "Approval card notes", APPROVAL_CARD_LIMITS.notes, (note) => text(note, "Approval card note", APPROVAL_CARD_LIMITS.note)) } : {}),
+    ...(has(value, "previous")
+      ? { previous: parseCardText(value.previous, "Approval card previous") }
+      : {}),
+    ...(has(value, "rows")
+      ? {
+          rows: list(value.rows, "Approval card rows", APPROVAL_CARD_LIMITS.rows, (row) => {
+            if (!isRecord(row)) throw new Error("Approval card row must be an object.");
+            exactKeys(row, ["label", "value"], "Approval card row");
+            return {
+              label: text(row.label, "Approval card row label", APPROVAL_CARD_LIMITS.key * 2),
+              value: text(row.value, "Approval card row value", APPROVAL_CARD_LIMITS.value, {
+                blank: true,
+              }),
+            };
+          }),
+        }
+      : {}),
+    ...(has(value, "notes")
+      ? {
+          notes: list(value.notes, "Approval card notes", APPROVAL_CARD_LIMITS.notes, (note) =>
+            text(note, "Approval card note", APPROVAL_CARD_LIMITS.note),
+          ),
+        }
+      : {}),
     buttons,
-    ...(has(value, "allowOnMac") ? { allowOnMac: text(value.allowOnMac, "Approval card allowOnMac", 120) } : {}),
+    ...(has(value, "allowOnMac")
+      ? { allowOnMac: text(value.allowOnMac, "Approval card allowOnMac", 120) }
+      : {}),
   };
 }
 
 /** A plain-words explanation: one bounded line, only on a shell card with a command body. */
 function parseCardExplanation(card: Record<string, unknown>): string {
   plainWordsCard(card);
-  const value = text(card.explanation, "Approval card explanation", APPROVAL_CARD_LIMITS.explanation);
-  if (commandExplanation(value) !== value) throw new Error("Approval card explanation must be one plain line.");
+  const value = text(
+    card.explanation,
+    "Approval card explanation",
+    APPROVAL_CARD_LIMITS.explanation,
+  );
+  if (commandExplanation(value) !== value)
+    throw new Error("Approval card explanation must be one plain line.");
   return value;
 }
 
@@ -153,7 +238,10 @@ function parseCardTags(card: Record<string, unknown>): CommandTag[] {
   const tags = list(card.tags, "Approval card tags", APPROVAL_CARD_LIMITS.tags, (entry) => {
     if (!isRecord(entry)) throw new Error("Approval card tag must be an object.");
     exactKeys(entry, ["label", "tone"], "Approval card tag");
-    return { label: text(entry.label, "Approval card tag label", APPROVAL_CARD_LIMITS.tagLabel), tone: member(entry.tone, ["calm", "risk"] as const, "Approval card tag tone") };
+    return {
+      label: text(entry.label, "Approval card tag label", APPROVAL_CARD_LIMITS.tagLabel),
+      tone: member(entry.tone, ["calm", "risk"] as const, "Approval card tag tone"),
+    };
   });
   if (tags.length === 0) throw new Error("Approval card tags, when sent, are not empty.");
   return tags;
@@ -175,7 +263,14 @@ export function botApprovalCardForAudience(card: ApprovalCard, allowed: boolean)
 // ---------------------------------------------------------------------------
 // Bot session entries (`bot:settings-changes`, `bot:suggestions`)
 
-export const BOT_SETTINGS_CHANGE_STATUSES = ["pending", "restored", "undo_refused", "applied", "edited", "dismissed"] as const;
+export const BOT_SETTINGS_CHANGE_STATUSES = [
+  "pending",
+  "restored",
+  "undo_refused",
+  "applied",
+  "edited",
+  "dismissed",
+] as const;
 export const BOT_SETTINGS_HELD_REASONS = ["not_owner", "outside_content", "widens"] as const;
 export const BOT_INSTRUCTIONS_MAX = 32_000;
 const DIFF_LINES_MAX = 2_000;
@@ -254,23 +349,41 @@ export const AIDEN_REMOTE_BOT_SETTINGS_CHANGE_ENTRY_TYPES = ["settings_change"] 
 /** A skill suggestion's preview on the wire, in code points; a longer one is cut and added on the Mac only. */
 export const AIDEN_REMOTE_BOT_SKILL_PREVIEW_MAX = 16_000;
 /** Refusal for Add on a skill whose preview the phone could not show in full. */
-export const BOT_SKILL_ADD_ON_MAC_MESSAGE = "This skill is too long to review here. Add it on your Mac.";
+export const BOT_SKILL_ADD_ON_MAC_MESSAGE =
+  "This skill is too long to review here. Add it on your Mac.";
 
-export const AIDEN_REMOTE_BOT_SUGGESTION_ENTRY_TYPES = ["skill_proposal", "lesson", "memory_tidy"] as const;
+export const AIDEN_REMOTE_BOT_SUGGESTION_ENTRY_TYPES = [
+  "skill_proposal",
+  "lesson",
+  "memory_tidy",
+] as const;
 
 /** The wire entry for one of the desktop's settings, suggestion or learning rows, or undefined. */
-export function projectBotUxEntry(entry: BotTranscriptEntry, id: string, createdAt: string | undefined): AidenRemoteBotUxEntry | undefined {
+export function projectBotUxEntry(
+  entry: BotTranscriptEntry,
+  id: string,
+  createdAt: string | undefined,
+): AidenRemoteBotUxEntry | undefined {
   const at = createdAt ? { createdAt } : {};
   switch (entry.type) {
     case "settings_change": {
       const change = entry.change;
       const held = change.mode === "held";
-      const previous = held && change.previousInstructions !== undefined ? clip(change.previousInstructions, BOT_INSTRUCTIONS_MAX) : undefined;
-      const proposed = held && change.instructions !== undefined ? clip(change.instructions, BOT_INSTRUCTIONS_MAX) : undefined;
-      const diff = proposed !== undefined && change.previousInstructions !== undefined
-        ? botInstructionsDiff(change.previousInstructions, change.instructions!)
-        : undefined;
-      const fields = change.fields.filter((field) => (BOT_SETTINGS_FIELDS as readonly string[]).includes(field));
+      const previous =
+        held && change.previousInstructions !== undefined
+          ? clip(change.previousInstructions, BOT_INSTRUCTIONS_MAX)
+          : undefined;
+      const proposed =
+        held && change.instructions !== undefined
+          ? clip(change.instructions, BOT_INSTRUCTIONS_MAX)
+          : undefined;
+      const diff =
+        proposed !== undefined && change.previousInstructions !== undefined
+          ? botInstructionsDiff(change.previousInstructions, change.instructions!)
+          : undefined;
+      const fields = change.fields.filter((field) =>
+        (BOT_SETTINGS_FIELDS as readonly string[]).includes(field),
+      );
       return {
         type: "settings_change",
         id,
@@ -280,10 +393,18 @@ export function projectBotUxEntry(entry: BotTranscriptEntry, id: string, created
         title: held ? botSettingsHeldTitle(fields) : botSettingsReceiptLabel(fields),
         fields,
         lines: change.lines.slice(0, 10).map((line) => clip(line, 400)),
-        ...(held && change.heldReason ? { heldReason: change.heldReason } : held ? { heldReason: "not_owner" as const } : {}),
+        ...(held && change.heldReason
+          ? { heldReason: change.heldReason }
+          : held
+            ? { heldReason: "not_owner" as const }
+            : {}),
         ...(proposed !== undefined ? { instructions: proposed } : {}),
         ...(previous !== undefined ? { previousInstructions: previous } : {}),
-        ...(diff && diff.length <= DIFF_LINES_MAX && diff.every((line) => [...line.text].length <= 4_000) ? { instructionsDiff: diff } : {}),
+        ...(diff &&
+        diff.length <= DIFF_LINES_MAX &&
+        diff.every((line) => [...line.text].length <= 4_000)
+          ? { instructionsDiff: diff }
+          : {}),
         undoable: change.undoable !== false,
         ...at,
       };
@@ -299,7 +420,9 @@ export function projectBotUxEntry(entry: BotTranscriptEntry, id: string, created
         ...(proposal.reason?.trim() ? { reason: clip(proposal.reason.trim(), 400) } : {}),
         update: proposal.update,
         preview: clip(proposal.preview, AIDEN_REMOTE_BOT_SKILL_PREVIEW_MAX),
-        ...([...proposal.preview].length > AIDEN_REMOTE_BOT_SKILL_PREVIEW_MAX ? { previewTruncated: true as const } : {}),
+        ...([...proposal.preview].length > AIDEN_REMOTE_BOT_SKILL_PREVIEW_MAX
+          ? { previewTruncated: true as const }
+          : {}),
         status: entry.status,
         ...at,
       };
@@ -313,12 +436,19 @@ export function projectBotUxEntry(entry: BotTranscriptEntry, id: string, created
         kind: entry.type === "lesson_proposal" ? "proposal" : "learned",
         text: clip(entry.lesson.lesson, 400).trim() || "Lesson",
         ...(entry.lesson.routineName ? { routineName: clip(entry.lesson.routineName, 200) } : {}),
-        ...(entry.lesson.runs !== undefined && entry.lesson.runs >= 0 ? { runs: entry.lesson.runs } : {}),
+        ...(entry.lesson.runs !== undefined && entry.lesson.runs >= 0
+          ? { runs: entry.lesson.runs }
+          : {}),
         status: entry.status,
         ...at,
       };
     case "memory_tidy":
-      return { type: "memory_tidy", id, ...(entry.changeId ? { changeId: entry.changeId } : {}), ...at };
+      return {
+        type: "memory_tidy",
+        id,
+        ...(entry.changeId ? { changeId: entry.changeId } : {}),
+        ...at,
+      };
     default:
       return undefined;
   }
@@ -329,12 +459,38 @@ export function parseAidenRemoteBotUxEntry(value: unknown): AidenRemoteBotUxEntr
   if (!isRecord(value)) throw new Error("Bot session entry must be an object.");
   const id = text(value.id, "Bot session entry id", 128);
   if (!ENTRY_ID.test(id)) throw new Error("Bot session entry id is invalid.");
-  const createdAt = has(value, "createdAt") ? { createdAt: iso(value.createdAt, "Bot session entry createdAt") } : {};
+  const createdAt = has(value, "createdAt")
+    ? { createdAt: iso(value.createdAt, "Bot session entry createdAt") }
+    : {};
   switch (value.type) {
     case "settings_change": {
-      exactKeys(value, ["type", "id", "changeId", "mode", "status", "title", "fields", "lines", "heldReason", "instructions", "previousInstructions", "instructionsDiff", "undoable", "createdAt"], "Settings change entry");
+      exactKeys(
+        value,
+        [
+          "type",
+          "id",
+          "changeId",
+          "mode",
+          "status",
+          "title",
+          "fields",
+          "lines",
+          "heldReason",
+          "instructions",
+          "previousInstructions",
+          "instructionsDiff",
+          "undoable",
+          "createdAt",
+        ],
+        "Settings change entry",
+      );
       const mode = member(value.mode, ["applied", "held"] as const, "Settings change mode");
-      if (mode === "applied" && (has(value, "heldReason") || has(value, "instructions") || has(value, "previousInstructions"))) {
+      if (
+        mode === "applied" &&
+        (has(value, "heldReason") ||
+          has(value, "instructions") ||
+          has(value, "previousInstructions"))
+      ) {
         throw new Error("Only a held change carries a reason and proposed instructions.");
       }
       return {
@@ -344,63 +500,154 @@ export function parseAidenRemoteBotUxEntry(value: unknown): AidenRemoteBotUxEntr
         mode,
         status: member(value.status, BOT_SETTINGS_CHANGE_STATUSES, "Settings change status"),
         title: text(value.title, "Settings change title", 80),
-        fields: list(value.fields, "Settings change fields", BOT_SETTINGS_FIELDS.length, (field) => member(field, BOT_SETTINGS_FIELDS, "Settings change field")),
-        lines: list(value.lines, "Settings change lines", 10, (line) => text(line, "Settings change line", 400)),
-        ...(has(value, "heldReason") ? { heldReason: member(value.heldReason, BOT_SETTINGS_HELD_REASONS, "Settings change heldReason") } : {}),
-        ...(has(value, "instructions") ? { instructions: text(value.instructions, "Settings change instructions", BOT_INSTRUCTIONS_MAX, { blank: true }) } : {}),
-        ...(has(value, "previousInstructions") ? { previousInstructions: text(value.previousInstructions, "Settings change previousInstructions", BOT_INSTRUCTIONS_MAX, { blank: true }) } : {}),
-        ...(has(value, "instructionsDiff") ? {
-          instructionsDiff: list(value.instructionsDiff, "Settings change instructionsDiff", DIFF_LINES_MAX, (line) => {
-            if (!isRecord(line)) throw new Error("Instructions diff line must be an object.");
-            exactKeys(line, ["kind", "text"], "Instructions diff line");
-            return { kind: member(line.kind, ["same", "added", "removed"] as const, "Instructions diff kind"), text: text(line.text, "Instructions diff text", 4_000, { blank: true }) };
-          }),
-        } : {}),
+        fields: list(value.fields, "Settings change fields", BOT_SETTINGS_FIELDS.length, (field) =>
+          member(field, BOT_SETTINGS_FIELDS, "Settings change field"),
+        ),
+        lines: list(value.lines, "Settings change lines", 10, (line) =>
+          text(line, "Settings change line", 400),
+        ),
+        ...(has(value, "heldReason")
+          ? {
+              heldReason: member(
+                value.heldReason,
+                BOT_SETTINGS_HELD_REASONS,
+                "Settings change heldReason",
+              ),
+            }
+          : {}),
+        ...(has(value, "instructions")
+          ? {
+              instructions: text(
+                value.instructions,
+                "Settings change instructions",
+                BOT_INSTRUCTIONS_MAX,
+                { blank: true },
+              ),
+            }
+          : {}),
+        ...(has(value, "previousInstructions")
+          ? {
+              previousInstructions: text(
+                value.previousInstructions,
+                "Settings change previousInstructions",
+                BOT_INSTRUCTIONS_MAX,
+                { blank: true },
+              ),
+            }
+          : {}),
+        ...(has(value, "instructionsDiff")
+          ? {
+              instructionsDiff: list(
+                value.instructionsDiff,
+                "Settings change instructionsDiff",
+                DIFF_LINES_MAX,
+                (line) => {
+                  if (!isRecord(line)) throw new Error("Instructions diff line must be an object.");
+                  exactKeys(line, ["kind", "text"], "Instructions diff line");
+                  return {
+                    kind: member(
+                      line.kind,
+                      ["same", "added", "removed"] as const,
+                      "Instructions diff kind",
+                    ),
+                    text: text(line.text, "Instructions diff text", 4_000, { blank: true }),
+                  };
+                },
+              ),
+            }
+          : {}),
         undoable: bool(value.undoable, "Settings change undoable"),
         ...createdAt,
       };
     }
     case "skill_proposal":
-      exactKeys(value, ["type", "id", "proposalId", "name", "description", "reason", "update", "preview", "previewTruncated", "status", "createdAt"], "Skill proposal entry");
-      if (has(value, "previewTruncated") && value.previewTruncated !== true) throw new Error("Skill proposal previewTruncated must be true when present.");
+      exactKeys(
+        value,
+        [
+          "type",
+          "id",
+          "proposalId",
+          "name",
+          "description",
+          "reason",
+          "update",
+          "preview",
+          "previewTruncated",
+          "status",
+          "createdAt",
+        ],
+        "Skill proposal entry",
+      );
+      if (has(value, "previewTruncated") && value.previewTruncated !== true)
+        throw new Error("Skill proposal previewTruncated must be true when present.");
       return {
         type: "skill_proposal",
         id,
         proposalId: opaque(value.proposalId, "Skill proposal proposalId"),
         name: text(value.name, "Skill proposal name", 120),
         description: text(value.description, "Skill proposal description", 400, { blank: true }),
-        ...(has(value, "reason") ? { reason: text(value.reason, "Skill proposal reason", 400) } : {}),
+        ...(has(value, "reason")
+          ? { reason: text(value.reason, "Skill proposal reason", 400) }
+          : {}),
         update: bool(value.update, "Skill proposal update"),
-        preview: text(value.preview, "Skill proposal preview", AIDEN_REMOTE_BOT_SKILL_PREVIEW_MAX, { blank: true }),
+        preview: text(value.preview, "Skill proposal preview", AIDEN_REMOTE_BOT_SKILL_PREVIEW_MAX, {
+          blank: true,
+        }),
         ...(value.previewTruncated === true ? { previewTruncated: true as const } : {}),
-        status: member(value.status, ["pending", "added", "dismissed"] as const, "Skill proposal status"),
+        status: member(
+          value.status,
+          ["pending", "added", "dismissed"] as const,
+          "Skill proposal status",
+        ),
         ...createdAt,
       };
     case "lesson": {
-      exactKeys(value, ["type", "id", "lessonId", "kind", "text", "routineName", "runs", "status", "createdAt"], "Lesson entry");
-      if (has(value, "runs") && (!Number.isSafeInteger(value.runs) || (value.runs as number) < 0)) throw new Error("Lesson runs must be a count.");
+      exactKeys(
+        value,
+        ["type", "id", "lessonId", "kind", "text", "routineName", "runs", "status", "createdAt"],
+        "Lesson entry",
+      );
+      if (has(value, "runs") && (!Number.isSafeInteger(value.runs) || (value.runs as number) < 0))
+        throw new Error("Lesson runs must be a count.");
       return {
         type: "lesson",
         id,
         lessonId: opaque(value.lessonId, "Lesson lessonId"),
         kind: member(value.kind, ["proposal", "learned"] as const, "Lesson kind"),
         text: text(value.text, "Lesson text", 400),
-        ...(has(value, "routineName") ? { routineName: text(value.routineName, "Lesson routineName", 200) } : {}),
+        ...(has(value, "routineName")
+          ? { routineName: text(value.routineName, "Lesson routineName", 200) }
+          : {}),
         ...(has(value, "runs") ? { runs: value.runs as number } : {}),
-        status: member(value.status, ["pending", "active", "dismissed", "retired"] as const, "Lesson status"),
+        status: member(
+          value.status,
+          ["pending", "active", "dismissed", "retired"] as const,
+          "Lesson status",
+        ),
         ...createdAt,
       };
     }
     case "memory_tidy":
       exactKeys(value, ["type", "id", "changeId", "createdAt"], "Memory tidy entry");
-      return { type: "memory_tidy", id, ...(has(value, "changeId") ? { changeId: opaque(value.changeId, "Memory tidy changeId") } : {}), ...createdAt };
+      return {
+        type: "memory_tidy",
+        id,
+        ...(has(value, "changeId")
+          ? { changeId: opaque(value.changeId, "Memory tidy changeId") }
+          : {}),
+        ...createdAt,
+      };
     default:
       throw new Error("Bot session entry type is not a revision-61 type.");
   }
 }
 
 /** Exactly `{decision}` from one of `decisions`. */
-export function parseBotUxDecision<T extends string>(value: unknown, decisions: readonly T[], label: string): T {
+export function parseBotUxDecision<T extends string>(
+  value: unknown,
+  decisions: readonly T[],
+  label: string,
+): T {
   if (!isRecord(value)) throw new Error(`${label} must be an object.`);
   exactKeys(value, ["decision"], label);
   return member(value.decision, decisions, `${label} decision`);
@@ -408,7 +655,8 @@ export function parseBotUxDecision<T extends string>(value: unknown, decisions: 
 
 /** Exactly `{}`. */
 export function parseEmptyBody(value: unknown, label: string): void {
-  if (!isRecord(value) || Object.keys(value).length > 0) throw new Error(`${label} must be an empty object.`);
+  if (!isRecord(value) || Object.keys(value).length > 0)
+    throw new Error(`${label} must be an empty object.`);
 }
 
 export const BOT_SETTINGS_CHANGE_REMOTE_DECISIONS = ["apply", "dismiss", "undo"] as const;
@@ -429,7 +677,10 @@ export interface AidenRemoteBotTemplateFields {
   existingBotId?: string;
 }
 
-export function botTemplateFields(preset: Pick<BotPreset, "version" | "instructions" | "sample">, existingBotId: string | undefined): AidenRemoteBotTemplateFields {
+export function botTemplateFields(
+  preset: Pick<BotPreset, "version" | "instructions" | "sample">,
+  existingBotId: string | undefined,
+): AidenRemoteBotTemplateFields {
   return {
     version: preset.version,
     instructions: clip(preset.instructions, BOT_INSTRUCTIONS_MAX),
@@ -438,13 +689,20 @@ export function botTemplateFields(preset: Pick<BotPreset, "version" | "instructi
   };
 }
 
-export function parseAidenRemoteBotTemplateFields(value: Record<string, unknown>): AidenRemoteBotTemplateFields {
-  if (!Number.isSafeInteger(value.version) || (value.version as number) < 1) throw new Error("Template version must be a positive integer.");
+export function parseAidenRemoteBotTemplateFields(
+  value: Record<string, unknown>,
+): AidenRemoteBotTemplateFields {
+  if (!Number.isSafeInteger(value.version) || (value.version as number) < 1)
+    throw new Error("Template version must be a positive integer.");
   return {
     version: value.version as number,
     instructions: text(value.instructions, "Template instructions", BOT_INSTRUCTIONS_MAX),
-    sample: list(value.sample, "Template sample", 8, (line) => text(line, "Template sample line", 280)),
-    ...(has(value, "existingBotId") ? { existingBotId: opaque(value.existingBotId, "Template existingBotId") } : {}),
+    sample: list(value.sample, "Template sample", 8, (line) =>
+      text(line, "Template sample line", 280),
+    ),
+    ...(has(value, "existingBotId")
+      ? { existingBotId: opaque(value.existingBotId, "Template existingBotId") }
+      : {}),
   };
 }
 
@@ -453,25 +711,47 @@ export function parseAidenRemoteBotTemplateFields(value: Record<string, unknown>
  * plus that template's `version`, `instructions`, `sample` and, when it already
  * made a Bot, `existingBotId`.
  */
-export function parseAidenRemoteBotTemplateList(value: unknown): { presets: Array<AidenRemoteBotPreset & AidenRemoteBotTemplateFields> } {
+export function parseAidenRemoteBotTemplateList(value: unknown): {
+  presets: Array<AidenRemoteBotPreset & AidenRemoteBotTemplateFields>;
+} {
   if (!isRecord(value)) throw new Error("Template list must be an object.");
   exactKeys(value, ["presets"], "Template list");
   if (!Array.isArray(value.presets)) throw new Error("Template list presets must be an array.");
   const rows = value.presets.map((row) => {
     if (!isRecord(row)) throw new Error("Template must be an object.");
     const { version, instructions, sample, existingBotId, ...base } = row;
-    return { base, fields: { version, instructions, sample, ...(has(row, "existingBotId") ? { existingBotId } : {}) } };
+    return {
+      base,
+      fields: {
+        version,
+        instructions,
+        sample,
+        ...(has(row, "existingBotId") ? { existingBotId } : {}),
+      },
+    };
   });
   const bases = parseAidenRemoteBotPresetList({ presets: rows.map((row) => row.base) }).presets;
-  return { presets: bases.map((base, index) => ({ ...base, ...parseAidenRemoteBotTemplateFields(rows[index]!.fields) })) };
+  return {
+    presets: bases.map((base, index) => ({
+      ...base,
+      ...parseAidenRemoteBotTemplateFields(rows[index]!.fields),
+    })),
+  };
 }
 
 /** `POST /bots/from-preset` for a `bot:templates` holder: `{presetId, version}`. */
-export function parseAidenRemoteBotTemplateCreateRequest(value: unknown): { presetId: string; version: number } {
+export function parseAidenRemoteBotTemplateCreateRequest(value: unknown): {
+  presetId: string;
+  version: number;
+} {
   if (!isRecord(value)) throw new Error("Template create request must be an object.");
   exactKeys(value, ["presetId", "version"], "Template create request");
-  if (!Number.isSafeInteger(value.version) || (value.version as number) < 1) throw new Error("Template version must be a positive integer.");
-  return { presetId: opaque(value.presetId, "Template presetId"), version: value.version as number };
+  if (!Number.isSafeInteger(value.version) || (value.version as number) < 1)
+    throw new Error("Template version must be a positive integer.");
+  return {
+    presetId: opaque(value.presetId, "Template presetId"),
+    version: value.version as number,
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -487,7 +767,10 @@ export interface AidenRemoteApprovalModeView {
 export function parseAidenRemoteApprovalModeView(value: unknown): AidenRemoteApprovalModeView {
   if (!isRecord(value)) throw new Error("Approval mode must be an object.");
   exactKeys(value, ["mode", "autoAvailable"], "Approval mode");
-  return { mode: member(value.mode, APPROVAL_MODES, "Approval mode"), autoAvailable: bool(value.autoAvailable, "Approval mode autoAvailable") };
+  return {
+    mode: member(value.mode, APPROVAL_MODES, "Approval mode"),
+    autoAvailable: bool(value.autoAvailable, "Approval mode autoAvailable"),
+  };
 }
 
 export function parseAidenRemoteApprovalModeRequest(value: unknown): ApprovalMode {

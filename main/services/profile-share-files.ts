@@ -35,10 +35,7 @@ export async function removeProfileShareDirectory(directory: string): Promise<vo
 export async function writeProfileShareExport(filePath: string, image: Buffer): Promise<void> {
   const handle = await fs.open(
     filePath,
-    fsConstants.O_WRONLY |
-      fsConstants.O_CREAT |
-      fsConstants.O_TRUNC |
-      fsConstants.O_NOFOLLOW,
+    fsConstants.O_WRONLY | fsConstants.O_CREAT | fsConstants.O_TRUNC | fsConstants.O_NOFOLLOW,
     0o600,
   );
   try {

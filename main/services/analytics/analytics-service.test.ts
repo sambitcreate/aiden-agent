@@ -13,7 +13,14 @@ import { reportChatMessageSent } from "./analytics-feature-reports.js";
 import { reportAnalyticsEvent, setAnalyticsReporter } from "./analytics-report.js";
 import { analyticsSettled } from "./test-support.js";
 
-const SUPER = { app_version: "1.40.0", platform: "darwin", arch: "arm64", os_major: 26, surface: "desktop", channel: "release" } as const;
+const SUPER = {
+  app_version: "1.40.0",
+  platform: "darwin",
+  arch: "arm64",
+  os_major: 26,
+  surface: "desktop",
+  channel: "release",
+} as const;
 
 function uuid(n: number): string {
   return `00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
@@ -27,7 +34,9 @@ function fakeTransport() {
   const immediate: AnalyticsMessage[] = [];
   let state: "open" | "shut" | "discarded" = "open";
   const transport: PostHogTransport = {
-    revokeQueue: () => { queued.length = 0; },
+    revokeQueue: () => {
+      queued.length = 0;
+    },
     capture: (message) => void (state === "open" && queued.push(message)),
     captureOptOut: async (message) => void immediate.push(message),
     captureNow: async (message) => {
@@ -47,7 +56,12 @@ function fakeTransport() {
   return { transport, queued, sent, immediate, state: () => state };
 }
 
-function harness(overrides: Partial<AnalyticsServiceOptions> & { initial?: AnalyticsState; keyless?: boolean } = {}) {
+function harness(
+  overrides: Partial<AnalyticsServiceOptions> & {
+    initial?: AnalyticsState;
+    keyless?: boolean;
+  } = {},
+) {
   const runDirectory = mkdtempSync(join(tmpdir(), "aiden-analytics-service-"));
   let stored: AnalyticsState = overrides.initial ?? { enabled: true };
   const transports: ReturnType<typeof fakeTransport>[] = [];
@@ -63,10 +77,10 @@ function harness(overrides: Partial<AnalyticsServiceOptions> & { initial?: Analy
     createTransport: overrides.keyless
       ? undefined
       : async () => {
-        const fake = fakeTransport();
-        transports.push(fake);
-        return fake.transport;
-      },
+          const fake = fakeTransport();
+          transports.push(fake);
+          return fake.transport;
+        },
     superProperties: { ...SUPER },
     appRoots: [],
     runDirectory,
@@ -83,7 +97,8 @@ function harness(overrides: Partial<AnalyticsServiceOptions> & { initial?: Analy
     ...overrides,
   };
   const service = createAnalyticsService(options);
-  const events = () => transports.flatMap((fake) => [...fake.queued, ...fake.sent, ...fake.immediate]);
+  const events = () =>
+    transports.flatMap((fake) => [...fake.queued, ...fake.sent, ...fake.immediate]);
   return {
     service,
     runDirectory,
@@ -110,7 +125,12 @@ test("nothing is created or sent before the person has seen the notice", async (
 
   assert.equal(h.transports.length, 0);
   assert.equal(h.stored().installId, undefined);
-  assert.deepEqual(await h.service.status(), { enabled: true, envDisabled: false, hasKey: true, noticePending: true });
+  assert.deepEqual(await h.service.status(), {
+    enabled: true,
+    envDisabled: false,
+    hasKey: true,
+    noticePending: true,
+  });
 
   await h.service.markNoticeShown();
 
@@ -118,14 +138,21 @@ test("nothing is created or sent before the person has seen the notice", async (
   const [opened] = h.events();
   assert.equal(opened!.distinctId, h.stored().installId);
   assert.deepEqual(
-    { launch_kind: opened!.properties.launch_kind, person: opened!.properties.$process_person_profile, channel: opened!.properties.channel },
+    {
+      launch_kind: opened!.properties.launch_kind,
+      person: opened!.properties.$process_person_profile,
+      channel: opened!.properties.channel,
+    },
     { launch_kind: "cold", person: false, channel: "release" },
   );
   assert.equal((await h.service.status()).noticePending, false);
 });
 
 test("a build without a key never creates a transport, even with the notice shown", async (t) => {
-  const h = harness({ keyless: true, initial: { enabled: true, noticeShownAt: "2026-10-01T00:00:00.000Z" } });
+  const h = harness({
+    keyless: true,
+    initial: { enabled: true, noticeShownAt: "2026-10-01T00:00:00.000Z" },
+  });
   t.after(h.cleanup);
 
   await h.service.start();
@@ -133,12 +160,20 @@ test("a build without a key never creates a transport, even with the notice show
 
   assert.equal(h.transports.length, 0);
   assert.equal(h.stored().installId, undefined);
-  assert.deepEqual(await h.service.status(), { enabled: true, envDisabled: false, hasKey: false, noticePending: false });
+  assert.deepEqual(await h.service.status(), {
+    enabled: true,
+    envDisabled: false,
+    hasKey: false,
+    noticePending: false,
+  });
 });
 
 test("DO_NOT_TRACK and AIDEN_ANALYTICS=0 override an enabled setting", async (t) => {
   for (const env of [{ DO_NOT_TRACK: "1" }, { AIDEN_ANALYTICS: "0" }]) {
-    const h = harness({ env, initial: { enabled: true, noticeShownAt: "2026-10-01T00:00:00.000Z" } });
+    const h = harness({
+      env,
+      initial: { enabled: true, noticeShownAt: "2026-10-01T00:00:00.000Z" },
+    });
     t.after(h.cleanup);
 
     await h.service.start();
@@ -156,7 +191,10 @@ test("a launch after an unclean exit or an update is labelled, and the update is
   t.after(crashed.cleanup);
   writeFileSync(join(crashed.runDirectory, RUN_MARKER_FILE), "");
   await crashed.service.start();
-  assert.equal(crashed.events().find((message) => message.event === "app_opened")!.properties.launch_kind, "after_crash");
+  assert.equal(
+    crashed.events().find((message) => message.event === "app_opened")!.properties.launch_kind,
+    "after_crash",
+  );
 
   const updated = harness({ initial: { ...shown, lastVersion: "1.39.2" } });
   t.after(updated.cleanup);
@@ -172,7 +210,10 @@ test("a launch after an unclean exit or an update is labelled, and the update is
   // The next launch of the same version, after a clean quit, is an ordinary one.
   updated.service.markCleanExit();
   const again = createAnalyticsService({
-    store: { read: async () => updated.stored(), update: async (mutate) => mutate(updated.stored()) },
+    store: {
+      read: async () => updated.stored(),
+      update: async (mutate) => mutate(updated.stored()),
+    },
     env: {},
     createTransport: async () => {
       const fake = fakeTransport();
@@ -189,7 +230,10 @@ test("a launch after an unclean exit or an update is labelled, and the update is
   });
   await again.start();
   const relaunch = updated.transports[updated.transports.length - 1]!;
-  assert.deepEqual(relaunch.queued.map((message) => [message.event, message.properties.launch_kind]), [["app_opened", "cold"]]);
+  assert.deepEqual(
+    relaunch.queued.map((message) => [message.event, message.properties.launch_kind]),
+    [["app_opened", "cold"]],
+  );
 });
 
 test("an update the person quits on before answering the notice is still reported, and turning off forgets it", async (t) => {
@@ -286,10 +330,17 @@ test("turning off says so once, drops the queue, and forgets the install id and 
 
   const status = await h.service.setEnabled(false);
 
-  assert.deepEqual(fake!.immediate.map((message) => [message.event, message.distinctId]), [["analytics_disabled", firstId]]);
+  assert.deepEqual(
+    fake!.immediate.map((message) => [message.event, message.distinctId]),
+    [["analytics_disabled", firstId]],
+  );
   assert.deepEqual(fake!.sent, [], "queued events were sent instead of dropped");
   assert.equal(fake!.state(), "discarded");
-  assert.deepEqual(h.stored(), { enabled: false, noticeShownAt: "2026-10-01T00:00:00.000Z", lastVersion: "1.40.0" });
+  assert.deepEqual(h.stored(), {
+    enabled: false,
+    noticeShownAt: "2026-10-01T00:00:00.000Z",
+    lastVersion: "1.40.0",
+  });
   assert.equal(existsSync(join(h.runDirectory, PENDING_CRASH_FILE)), false);
   assert.equal(status.enabled, false);
 
@@ -300,7 +351,10 @@ test("turning off says so once, drops the queue, and forgets the install id and 
   await h.service.setEnabled(true);
   const second = h.transports[1]!;
   assert.notEqual(h.stored().installId, firstId);
-  assert.deepEqual(second.queued.map((message) => message.event), ["app_active"]);
+  assert.deepEqual(
+    second.queued.map((message) => message.event),
+    ["app_active"],
+  );
   assert.equal(second.queued[0]!.distinctId, h.stored().installId);
 });
 
@@ -312,10 +366,11 @@ test("switching off then back on while the opt-out is still sending leaves it on
     createTransport: async () => {
       const fake = fakeTransport();
       if (created.length === 0) {
-        fake.transport.captureOptOut = (message) => new Promise((resolve) => {
-          fake.immediate.push(message);
-          releaseDisabled = () => resolve();
-        });
+        fake.transport.captureOptOut = (message) =>
+          new Promise((resolve) => {
+            fake.immediate.push(message);
+            releaseDisabled = () => resolve();
+          });
       }
       created.push(fake);
       return fake.transport;
@@ -353,11 +408,19 @@ test("quit drains queued consent changes and shuts down the re-enabled transport
 
   const newId = h.stored().installId;
   assert.ok(newId && newId !== originalId);
-  assert.deepEqual(h.transports.map(transport => transport.state()), ["discarded", "shut"]);
-  assert.deepEqual(h.transports.flatMap(transport => transport.immediate.map(m => [m.event, m.distinctId])),
-    [["analytics_disabled", originalId]]);
+  assert.deepEqual(
+    h.transports.map((transport) => transport.state()),
+    ["discarded", "shut"],
+  );
+  assert.deepEqual(
+    h.transports.flatMap((transport) => transport.immediate.map((m) => [m.event, m.distinctId])),
+    [["analytics_disabled", originalId]],
+  );
   assert.deepEqual(h.transports[0]!.sent, []);
-  assert.deepEqual(h.transports[1]!.sent.map(m => [m.event, m.distinctId]), [["app_active", newId]]);
+  assert.deepEqual(
+    h.transports[1]!.sent.map((m) => [m.event, m.distinctId]),
+    [["app_active", newId]],
+  );
 
   // No hourly callback should record another day once shutdown has finished.
   const lastActiveDay = h.stored().lastActiveDay;
@@ -403,7 +466,12 @@ test("switching usage data back on in Settings while the notice waits answers it
 
   const status = await h.service.setEnabled(true);
 
-  assert.deepEqual(status, { enabled: true, envDisabled: false, hasKey: true, noticePending: false });
+  assert.deepEqual(status, {
+    enabled: true,
+    envDisabled: false,
+    hasKey: true,
+    noticePending: false,
+  });
   assert.deepEqual(h.names(), ["app_opened", "app_active"]);
 });
 
@@ -415,7 +483,12 @@ test("the notice's Turn off records the notice as seen and sends nothing", async
   const status = await h.service.markNoticeShown({ enabled: false });
 
   assert.equal(h.transports.length, 0);
-  assert.deepEqual(status, { enabled: false, envDisabled: false, hasKey: true, noticePending: false });
+  assert.deepEqual(status, {
+    enabled: false,
+    envDisabled: false,
+    hasKey: true,
+    noticePending: false,
+  });
   assert.ok(h.stored().noticeShownAt);
 });
 
@@ -433,7 +506,10 @@ test("finishing onboarding starts sending and reports a custom provider without 
   await h.service.markNoticeShown();
   await h.service.onboardingFinished("completed", "my-company-gateway");
   const finished = h.events().find((message) => message.event === "onboarding_finished");
-  assert.deepEqual([finished!.properties.outcome, finished!.properties.provider_id], ["completed", "custom"]);
+  assert.deepEqual(
+    [finished!.properties.outcome, finished!.properties.provider_id],
+    ["completed", "custom"],
+  );
   assert.equal(JSON.stringify(h.events()).includes("my-company-gateway"), false);
 });
 
@@ -477,7 +553,10 @@ test("quitting flushes what is queued and a clean exit clears the run marker", a
   await h.service.shutdown();
   h.service.markCleanExit();
 
-  assert.deepEqual(h.transports[0]!.sent.map((message) => message.event), ["app_opened", "app_active"]);
+  assert.deepEqual(
+    h.transports[0]!.sent.map((message) => message.event),
+    ["app_opened", "app_active"],
+  );
   assert.equal(existsSync(join(h.runDirectory, RUN_MARKER_FILE)), false);
 });
 
@@ -505,16 +584,24 @@ test("a yes that arrives during start doesn't cover what was held before it", as
   t.after(h.cleanup);
   h.service.track("terminal_opened", {});
   await Promise.all([h.service.start(), h.service.markNoticeShown()]);
-  assert.deepEqual(h.names().filter((name) => name === "terminal_opened"), []);
+  assert.deepEqual(
+    h.names().filter((name) => name === "terminal_opened"),
+    [],
+  );
 });
 
 test("quitting during start still sends what was held", async (t) => {
   let release = () => {};
-  const ready = new Promise<void>((resolve) => { release = resolve; });
+  const ready = new Promise<void>((resolve) => {
+    release = resolve;
+  });
   const fake = fakeTransport();
   const h = harness({
     initial: { enabled: true, noticeShownAt: "2026-10-01T00:00:00.000Z" },
-    createTransport: async () => { await ready; return fake.transport; },
+    createTransport: async () => {
+      await ready;
+      return fake.transport;
+    },
   });
   t.after(h.cleanup);
   h.service.track("terminal_opened", {});
@@ -527,11 +614,16 @@ test("quitting during start still sends what was held", async (t) => {
 
 test("a startup that outlives quitting makes no transport and sends nothing", async (t) => {
   let release = () => {};
-  const ready = new Promise<void>((resolve) => { release = resolve; });
+  const ready = new Promise<void>((resolve) => {
+    release = resolve;
+  });
   const fake = fakeTransport();
   const h = harness({
     initial: { enabled: true, noticeShownAt: "2026-10-01T00:00:00.000Z" },
-    createTransport: async () => { await ready; return fake.transport; },
+    createTransport: async () => {
+      await ready;
+      return fake.transport;
+    },
   });
   t.after(h.cleanup);
   h.service.track("terminal_opened", {});
@@ -552,7 +644,10 @@ test("turning usage data off during start drops what was held", async (t) => {
   h.service.track("terminal_opened", {});
   await h.service.setEnabled(false);
   await h.service.start();
-  assert.deepEqual(h.names().filter((name) => name === "terminal_opened"), []);
+  assert.deepEqual(
+    h.names().filter((name) => name === "terminal_opened"),
+    [],
+  );
 });
 
 test("a burst before start is held only up to its limit", async (t) => {
@@ -573,25 +668,43 @@ test("a feature event reaches the transport only while sending is allowed", asyn
   await h.service.markNoticeShown();
   h.service.track("terminal_opened", {});
   h.service.track("provider_connected", { provider_id: "anthropic", auth: "key" });
-  assert.deepEqual(h.names(), ["app_opened", "app_active", "terminal_opened", "provider_connected"]);
+  assert.deepEqual(h.names(), [
+    "app_opened",
+    "app_active",
+    "terminal_opened",
+    "provider_connected",
+  ]);
   assert.ok(h.events().every((message) => message.properties.$process_person_profile === false));
 });
 
-
-function bindFeatureReports(t: { after(fn: () => void): void }, service: ReturnType<typeof createAnalyticsService>) {
-  setAnalyticsReporter((event, props) => service.track(event, props), () => service.actionReporter());
+function bindFeatureReports(
+  t: { after(fn: () => void): void },
+  service: ReturnType<typeof createAnalyticsService>,
+) {
+  setAnalyticsReporter(
+    (event, props) => service.track(event, props),
+    () => service.actionReporter(),
+  );
   t.after(() => setAnalyticsReporter(undefined));
 }
 
 function delayedMessageReport() {
   let finish!: (value: boolean) => void;
-  const workspace = new Promise<boolean>(resolve => { finish = resolve; });
-  reportChatMessageSent({ providerId: "custom:private", model: "private-model", origin: "desktop", inWorkspace: () => workspace });
+  const workspace = new Promise<boolean>((resolve) => {
+    finish = resolve;
+  });
+  reportChatMessageSent({
+    providerId: "custom:private",
+    model: "private-model",
+    origin: "desktop",
+    inWorkspace: () => workspace,
+  });
   return finish;
 }
 
-test("a pre-disclosure message cannot borrow a later notice while its metadata lookup waits", async t => {
-  const h = harness(); t.after(h.cleanup);
+test("a pre-disclosure message cannot borrow a later notice while its metadata lookup waits", async (t) => {
+  const h = harness();
+  t.after(h.cleanup);
   await h.service.start();
   bindFeatureReports(t, h.service);
   const finish = delayedMessageReport();
@@ -602,8 +715,9 @@ test("a pre-disclosure message cannot borrow a later notice while its metadata l
   assert.deepEqual(h.names(), ["app_opened", "app_active"]);
 });
 
-test("a disabled message cannot borrow a later opt-in while its metadata lookup waits", async t => {
-  const h = harness({ initial: { enabled: false, noticeShownAt: "2026-10-01T00:00:00.000Z" } }); t.after(h.cleanup);
+test("a disabled message cannot borrow a later opt-in while its metadata lookup waits", async (t) => {
+  const h = harness({ initial: { enabled: false, noticeShownAt: "2026-10-01T00:00:00.000Z" } });
+  t.after(h.cleanup);
   await h.service.start();
   bindFeatureReports(t, h.service);
   const finish = delayedMessageReport();
@@ -613,61 +727,77 @@ test("a disabled message cannot borrow a later opt-in while its metadata lookup 
   assert.deepEqual(h.names(), ["app_opened", "app_active"]);
 });
 
-test("an opt-out request invalidates held metadata immediately and a later opt-in cannot restore it", async t => {
-  const h = harness({ initial: { enabled: true, noticeShownAt: "2026-10-01T00:00:00.000Z" } }); t.after(h.cleanup);
+test("an opt-out request invalidates held metadata immediately and a later opt-in cannot restore it", async (t) => {
+  const h = harness({ initial: { enabled: true, noticeShownAt: "2026-10-01T00:00:00.000Z" } });
+  t.after(h.cleanup);
   await h.service.start();
   bindFeatureReports(t, h.service);
   const old = delayedMessageReport();
-  const off = h.service.setEnabled(false), on = h.service.setEnabled(true);
+  const off = h.service.setEnabled(false),
+    on = h.service.setEnabled(true);
   old(true);
   await Promise.all([off, on]);
   await analyticsSettled();
-  assert.equal(h.names().filter(name => name === "chat_message_sent").length, 0);
+  assert.equal(h.names().filter((name) => name === "chat_message_sent").length, 0);
   const fresh = delayedMessageReport();
   fresh(false);
   await analyticsSettled();
-  const sent = h.events().filter(message => message.event === "chat_message_sent");
+  const sent = h.events().filter((message) => message.event === "chat_message_sent");
   assert.equal(sent.length, 1);
   assert.equal(sent[0]!.properties.in_workspace, false);
   assert.equal(sent[0]!.properties.model_id, "custom");
 });
 
-test("a consented message begun during startup may finish its metadata after startup", async t => {
-  const h = harness({ initial: { enabled: true, noticeShownAt: "2026-10-01T00:00:00.000Z" } }); t.after(h.cleanup);
+test("a consented message begun during startup may finish its metadata after startup", async (t) => {
+  const h = harness({ initial: { enabled: true, noticeShownAt: "2026-10-01T00:00:00.000Z" } });
+  t.after(h.cleanup);
   bindFeatureReports(t, h.service);
   const finish = delayedMessageReport();
   await h.service.start();
   finish(true);
   await analyticsSettled();
-  const sent = h.events().filter(message => message.event === "chat_message_sent");
+  const sent = h.events().filter((message) => message.event === "chat_message_sent");
   assert.equal(sent.length, 1);
   assert.equal(sent[0]!.properties.in_workspace, true);
 });
 
-test("shutdown discards unfinished metadata without changing the action or sending after shutdown", async t => {
-  const h = harness({ initial: { enabled: true, noticeShownAt: "2026-10-01T00:00:00.000Z" } }); t.after(h.cleanup);
+test("shutdown discards unfinished metadata without changing the action or sending after shutdown", async (t) => {
+  const h = harness({ initial: { enabled: true, noticeShownAt: "2026-10-01T00:00:00.000Z" } });
+  t.after(h.cleanup);
   await h.service.start();
   bindFeatureReports(t, h.service);
   const finish = delayedMessageReport();
   await h.service.shutdown();
   finish(true);
   await analyticsSettled();
-  assert.equal(h.names().filter(name => name === "chat_message_sent").length, 0);
+  assert.equal(h.names().filter((name) => name === "chat_message_sent").length, 0);
 });
 
-
-test("a message after a queued disable cannot use the prior core while an earlier consent write is held", async t => {
+test("a message after a queued disable cannot use the prior core while an earlier consent write is held", async (t) => {
   let stored: AnalyticsState = { enabled: true, noticeShownAt: "2026-10-01T00:00:00.000Z" };
-  let hold = false, entered!: () => void, release!: () => void;
-  const writing = new Promise<void>(resolve => { entered = resolve; });
-  const gate = new Promise<void>(resolve => { release = resolve; });
-  const h = harness({ store: {
-    read: async () => stored,
-    update: async mutate => {
-      if (hold) { hold = false; entered(); await gate; }
-      return stored = mutate(stored);
+  let hold = false,
+    entered!: () => void,
+    release!: () => void;
+  const writing = new Promise<void>((resolve) => {
+    entered = resolve;
+  });
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const h = harness({
+    store: {
+      read: async () => stored,
+      update: async (mutate) => {
+        if (hold) {
+          hold = false;
+          entered();
+          await gate;
+        }
+        return (stored = mutate(stored));
+      },
     },
-  } }); t.after(h.cleanup);
+  });
+  t.after(h.cleanup);
   await h.service.start();
   bindFeatureReports(t, h.service);
   hold = true;
@@ -677,19 +807,28 @@ test("a message after a queued disable cannot use the prior core while an earlie
   const finish = delayedMessageReport();
   finish(true);
   await analyticsSettled();
-  assert.equal(h.names().filter(name => name === "chat_message_sent").length, 0);
+  assert.equal(h.names().filter((name) => name === "chat_message_sent").length, 0);
   release();
   await Promise.all([prior, disabled]);
   await h.service.setEnabled(true);
   await analyticsSettled();
-  assert.equal(h.names().filter(name => name === "chat_message_sent").length, 0);
+  assert.equal(h.names().filter((name) => name === "chat_message_sent").length, 0);
 });
 
-test("metadata completed under initial consent keeps the existing startup-and-quit flush", async t => {
+test("metadata completed under initial consent keeps the existing startup-and-quit flush", async (t) => {
   let release!: () => void;
-  const ready = new Promise<void>(resolve => { release = resolve; });
+  const ready = new Promise<void>((resolve) => {
+    release = resolve;
+  });
   const fake = fakeTransport();
-  const h = harness({ initial: { enabled: true, noticeShownAt: "2026-10-01T00:00:00.000Z" }, createTransport: async () => { await ready; return fake.transport; } }); t.after(h.cleanup);
+  const h = harness({
+    initial: { enabled: true, noticeShownAt: "2026-10-01T00:00:00.000Z" },
+    createTransport: async () => {
+      await ready;
+      return fake.transport;
+    },
+  });
+  t.after(h.cleanup);
   bindFeatureReports(t, h.service);
   const start = h.service.start();
   delayedMessageReport()(true);
@@ -697,21 +836,34 @@ test("metadata completed under initial consent keeps the existing startup-and-qu
   const quit = h.service.shutdown();
   release();
   await Promise.all([start, quit]);
-  assert.equal(fake.sent.filter(message => message.event === "chat_message_sent").length, 1);
+  assert.equal(fake.sent.filter((message) => message.event === "chat_message_sent").length, 1);
 });
 
-test("a direct feature hook cannot reach a background flush after a queued disable request", async t => {
+test("a direct feature hook cannot reach a background flush after a queued disable request", async (t) => {
   let stored: AnalyticsState = { enabled: true, noticeShownAt: "2026-10-01T00:00:00.000Z" };
-  let hold = false, entered!: () => void, release!: () => void;
-  const writing = new Promise<void>(resolve => { entered = resolve; });
-  const gate = new Promise<void>(resolve => { release = resolve; });
-  const h = harness({ store: {
-    read: async () => stored,
-    update: async mutate => {
-      if (hold) { hold = false; entered(); await gate; }
-      return stored = mutate(stored);
+  let hold = false,
+    entered!: () => void,
+    release!: () => void;
+  const writing = new Promise<void>((resolve) => {
+    entered = resolve;
+  });
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const h = harness({
+    store: {
+      read: async () => stored,
+      update: async (mutate) => {
+        if (hold) {
+          hold = false;
+          entered();
+          await gate;
+        }
+        return (stored = mutate(stored));
+      },
     },
-  } }); t.after(h.cleanup);
+  });
+  t.after(h.cleanup);
   await h.service.start();
   bindFeatureReports(t, h.service);
   const transport = h.transports[0]!;
@@ -723,7 +875,7 @@ test("a direct feature hook cannot reach a background flush after a queued disab
   try {
     reportAnalyticsEvent("terminal_opened", {});
     await transport.transport.flush();
-    assert.equal(transport.sent.filter(message => message.event === "terminal_opened").length, 0);
+    assert.equal(transport.sent.filter((message) => message.event === "terminal_opened").length, 0);
   } finally {
     release();
     await Promise.all([prior, disabled]);
@@ -731,16 +883,17 @@ test("a direct feature hook cannot reach a background flush after a queued disab
   await h.service.setEnabled(true);
   reportAnalyticsEvent("terminal_opened", {});
   await h.transports[h.transports.length - 1]!.transport.flush();
-  assert.equal(h.events().filter(message => message.event === "terminal_opened").length, 1);
+  assert.equal(h.events().filter((message) => message.event === "terminal_opened").length, 1);
 });
 
-test("shutdown immediately rejects new direct feature hooks while preserving the existing queued flush", async t => {
-  const h = harness({ initial: { enabled: true, noticeShownAt: "2026-10-01T00:00:00.000Z" } }); t.after(h.cleanup);
+test("shutdown immediately rejects new direct feature hooks while preserving the existing queued flush", async (t) => {
+  const h = harness({ initial: { enabled: true, noticeShownAt: "2026-10-01T00:00:00.000Z" } });
+  t.after(h.cleanup);
   await h.service.start();
   bindFeatureReports(t, h.service);
   reportAnalyticsEvent("terminal_opened", {});
   const quit = h.service.shutdown();
   reportAnalyticsEvent("terminal_opened", {});
   await quit;
-  assert.equal(h.events().filter(message => message.event === "terminal_opened").length, 1);
+  assert.equal(h.events().filter((message) => message.event === "terminal_opened").length, 1);
 });

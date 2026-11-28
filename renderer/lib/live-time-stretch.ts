@@ -53,7 +53,10 @@ export class LiveTimeStretcher {
     this.hop = frame / 2;
     this.seek = Math.max(0, Math.min(options.seekRange ?? DEFAULT_SEEK, this.hop));
     // A periodic Hann window: two copies shifted by half a frame sum to one.
-    this.window = Float32Array.from({ length: frame }, (_, n) => 0.5 - 0.5 * Math.cos((2 * Math.PI * n) / frame));
+    this.window = Float32Array.from(
+      { length: frame },
+      (_, n) => 0.5 - 0.5 * Math.cos((2 * Math.PI * n) / frame),
+    );
   }
 
   get speed(): number {
@@ -84,13 +87,19 @@ export class LiveTimeStretcher {
     for (;;) {
       const nominal = Math.round(this.nextAnalysis);
       if (nominal + this.seek + this.frame > this.bufferStart + this.buffer.length) break;
-      const start = this.previousStart === null ? nominal : this.bestStart(nominal, this.previousStart + this.hop);
+      const start =
+        this.previousStart === null
+          ? nominal
+          : this.bestStart(nominal, this.previousStart + this.hop);
       const head = new Float32Array(this.hop);
       const nextTail = new Float32Array(this.hop);
       const base = start - this.bufferStart;
       for (let n = 0; n < this.hop; n += 1) {
         // The very first frame is not faded in: speech starts at full level.
-        const rising = this.previousStart === null ? this.buffer[base + n]! : this.buffer[base + n]! * this.window[n]!;
+        const rising =
+          this.previousStart === null
+            ? this.buffer[base + n]!
+            : this.buffer[base + n]! * this.window[n]!;
         head[n] = rising + (this.tail[n] ?? 0);
         nextTail[n] = this.buffer[base + this.hop + n]! * this.window[this.hop + n]!;
       }

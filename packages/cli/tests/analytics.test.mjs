@@ -1,7 +1,15 @@
 import assert from "node:assert/strict";
 import { spawn, spawnSync } from "node:child_process";
 import { EventEmitter, once } from "node:events";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import test from "node:test";
@@ -31,10 +39,20 @@ const settle = () => new Promise((resolve) => setTimeout(resolve, 20));
 async function holdConsentLock(t, agentDir) {
   const entered = join(agentDir, "lock-entered");
   const resumeFile = join(agentDir, "lock-resume");
-  const child = spawn(process.execPath, [join(pkgDir, "tests", "fixtures", "analytics-hold-consent.mjs"), agentDir, INSTALL_ID, entered, resumeFile], { stdio: "inherit" });
+  const child = spawn(
+    process.execPath,
+    [
+      join(pkgDir, "tests", "fixtures", "analytics-hold-consent.mjs"),
+      agentDir,
+      INSTALL_ID,
+      entered,
+      resumeFile,
+    ],
+    { stdio: "inherit" },
+  );
   t.after(() => child.kill("SIGKILL"));
   const closed = once(child, "close");
-  for (const deadline = Date.now() + 30_000; !existsSync(entered);) {
+  for (const deadline = Date.now() + 30_000; !existsSync(entered); ) {
     assert.ok(Date.now() < deadline, "the holder took the lock");
     await settle();
   }
@@ -58,12 +76,25 @@ function fakeTransport(overrides = {}) {
   const sent = [];
   const calls = [];
   const transport = {
-    capture: (message) => { sent.push(message); },
-    revokeQueue: () => { calls.push("revokeQueue"); },
-    captureOptOut: async (message) => { sent.push(message); calls.push("captureOptOut"); },
-    flush: async () => { calls.push("flush"); },
-    shutdown: async () => { calls.push("shutdown"); },
-    discard: async () => { calls.push("discard"); },
+    capture: (message) => {
+      sent.push(message);
+    },
+    revokeQueue: () => {
+      calls.push("revokeQueue");
+    },
+    captureOptOut: async (message) => {
+      sent.push(message);
+      calls.push("captureOptOut");
+    },
+    flush: async () => {
+      calls.push("flush");
+    },
+    shutdown: async () => {
+      calls.push("shutdown");
+    },
+    discard: async () => {
+      calls.push("discard");
+    },
     ...overrides,
   };
   return { sent, calls, transport };
@@ -83,11 +114,21 @@ function harness(t, { state, env = {}, isTTY = false, transport = fakeTransport(
     agentDir,
     appDir,
     env,
-    stderr: { isTTY, write: (text) => { stderrText += text; } },
-    createTransport: async () => { created += 1; return transport.transport; },
+    stderr: {
+      isTTY,
+      write: (text) => {
+        stderrText += text;
+      },
+    },
+    createTransport: async () => {
+      created += 1;
+      return transport.transport;
+    },
     randomUUID: () => NEW_ID,
     crashHost,
-    rethrow: (error) => { rethrown.push(error); },
+    rethrow: (error) => {
+      rethrown.push(error);
+    },
     ...rest,
   };
   return {
@@ -129,7 +170,10 @@ test("a server with no terminal sends once the notice was shown earlier", async 
   const h = harness(t, { isTTY: false, state: allowed });
   await started(h, "service").finish();
   assert.equal(h.stderr(), "");
-  assert.deepEqual(h.sent.map((message) => message.properties.launch), ["service"]);
+  assert.deepEqual(
+    h.sent.map((message) => message.properties.launch),
+    ["service"],
+  );
 });
 
 test("the notice from a service install or a --daemon terminal lets the detached server send", async (t) => {
@@ -193,9 +237,16 @@ test("a server that fails before it is ready is not counted", async (t) => {
 
 test("how a server was started is read from its service manager", () => {
   assert.equal(api.runsUnderServiceManager({ XPC_SERVICE_NAME: api.LAUNCHD_LABEL }, false), true);
-  assert.equal(api.runsUnderServiceManager({ XPC_SERVICE_NAME: "application.com.apple.Terminal.1" }, true), false);
+  assert.equal(
+    api.runsUnderServiceManager({ XPC_SERVICE_NAME: "application.com.apple.Terminal.1" }, true),
+    false,
+  );
   assert.equal(api.runsUnderServiceManager({ INVOCATION_ID: "a1b2" }, false), true);
-  assert.equal(api.runsUnderServiceManager({ INVOCATION_ID: "a1b2" }, true), false, "a terminal opened from a unit is a person");
+  assert.equal(
+    api.runsUnderServiceManager({ INVOCATION_ID: "a1b2" }, true),
+    false,
+    "a terminal opened from a unit is a person",
+  );
   assert.equal(api.runsUnderServiceManager({}, false), false);
 });
 
@@ -203,22 +254,44 @@ test("the install ID is created on the first send, kept afterwards and stored in
   const h = harness(t, { state: allowed });
   await started(h).finish();
   assert.equal(readState(h.agentDir).installId, NEW_ID);
-  const next = harness(t, { agentDir: h.agentDir, randomUUID: () => { throw new Error("the existing ID must be kept"); } });
+  const next = harness(t, {
+    agentDir: h.agentDir,
+    randomUUID: () => {
+      throw new Error("the existing ID must be kept");
+    },
+  });
   await started(next).finish();
   assert.equal(next.sent[0].distinctId, NEW_ID);
-  assert.equal(existsSync(join(h.agentDir, "settings.json")), false, "Pi's settings file is not touched");
+  assert.equal(
+    existsSync(join(h.agentDir, "settings.json")),
+    false,
+    "Pi's settings file is not touched",
+  );
 });
 
 test("a damaged consent file counts as off, so it can never undo an opt-out", async (t) => {
-  for (const damaged of ['{"enabled":false,"noticeSh', '{"enabled":"false","noticeShownAt":"2026-11-01T00:00:00.000Z"}', "null", "[]", ""]) {
+  for (const damaged of [
+    '{"enabled":false,"noticeSh',
+    '{"enabled":"false","noticeShownAt":"2026-11-01T00:00:00.000Z"}',
+    "null",
+    "[]",
+    "",
+  ]) {
     const h = harness(t, { isTTY: true });
     writeFileSync(stateFile(h.agentDir), damaged);
     await started(h).finish();
     api.showServerNotice(h.context);
     assert.equal(h.stderr(), "", damaged);
     assert.equal(h.created(), 0, damaged);
-    assert.equal(readFileSync(stateFile(h.agentDir), "utf8"), damaged, "left for the person to see");
-    assert.equal((await api.telemetryCommand(h.agentDir, ["status"], h.context)).reason, "disabled");
+    assert.equal(
+      readFileSync(stateFile(h.agentDir), "utf8"),
+      damaged,
+      "left for the person to see",
+    );
+    assert.equal(
+      (await api.telemetryCommand(h.agentDir, ["status"], h.context)).reason,
+      "disabled",
+    );
 
     const report = await api.telemetryCommand(h.agentDir, ["on"], h.context);
     assert.equal(report.sending, true, "telemetry on replaces it");
@@ -235,7 +308,10 @@ test("DO_NOT_TRACK=1 and AIDEN_ANALYTICS=0 turn everything off", async (t) => {
     const shown = harness(t, { state: { ...allowed, installId: INSTALL_ID }, env });
     await started(shown).finish();
     assert.equal(shown.created(), 0);
-    assert.equal((await api.telemetryCommand(shown.agentDir, ["status"], shown.context)).reason, "environment");
+    assert.equal(
+      (await api.telemetryCommand(shown.agentDir, ["status"], shown.context)).reason,
+      "environment",
+    );
     await api.telemetryCommand(shown.agentDir, ["off"], shown.context);
     assert.equal(shown.created(), 0, "turning it off under a kill switch sends nothing");
     assert.equal(readState(shown.agentDir).enabled, false);
@@ -243,13 +319,20 @@ test("DO_NOT_TRACK=1 and AIDEN_ANALYTICS=0 turn everything off", async (t) => {
 });
 
 test("a build with no key never creates a transport and shows no notice", async (t) => {
-  const h = harness(t, { createTransport: undefined, buildConfig: { channel: "dev" }, isTTY: true });
+  const h = harness(t, {
+    createTransport: undefined,
+    buildConfig: { channel: "dev" },
+    isTTY: true,
+  });
   await started(h).finish();
   api.showServerNotice(h.context);
   assert.equal(h.stderr(), "");
   assert.equal(h.crashHost.listenerCount("uncaughtException"), 0);
   const status = await api.telemetryCommand(h.agentDir, ["status"], h.context);
-  assert.deepEqual({ sending: status.sending, reason: status.reason }, { sending: false, reason: "no_key" });
+  assert.deepEqual(
+    { sending: status.sending, reason: status.reason },
+    { sending: false, reason: "no_key" },
+  );
 });
 
 test("telemetry status names what is holding sending back", async (t) => {
@@ -258,7 +341,10 @@ test("telemetry status names what is holding sending back", async (t) => {
     return api.telemetryCommand(h.agentDir, [], h.context);
   };
   const pending = await report({});
-  assert.deepEqual([pending.enabled, pending.sending, pending.reason], [true, false, "notice_pending"]);
+  assert.deepEqual(
+    [pending.enabled, pending.sending, pending.reason],
+    [true, false, "notice_pending"],
+  );
   assert.equal((await report({ state: allowed, env: { CI: "1" } })).reason, "ci");
   assert.equal((await report({ state: { enabled: false } })).reason, "disabled");
   const sending = await report({ state: allowed });
@@ -308,8 +394,14 @@ test("telemetry on answers the notice and a later send uses a new install ID", a
 
 test("telemetry rejects anything but status, on and off", async (t) => {
   const h = harness(t);
-  await assert.rejects(api.telemetryCommand(h.agentDir, ["maybe"], h.context), /Usage: aiden telemetry/u);
-  await assert.rejects(api.telemetryCommand(h.agentDir, ["on", "now"], h.context), /Usage: aiden telemetry/u);
+  await assert.rejects(
+    api.telemetryCommand(h.agentDir, ["maybe"], h.context),
+    /Usage: aiden telemetry/u,
+  );
+  await assert.rejects(
+    api.telemetryCommand(h.agentDir, ["on", "now"], h.context),
+    /Usage: aiden telemetry/u,
+  );
 });
 
 test("turning it off from another process stops a running server at its next event or request", async (t) => {
@@ -344,14 +436,19 @@ test("an opt-out racing a server's first start stays off, and the server can't b
   const starting = join(h.agentDir, "opt-out-starting");
   const pause = new Int32Array(new SharedArrayBuffer(4));
   const blockFor = (done, ms) => {
-    for (const deadline = Date.now() + ms; !done() && Date.now() < deadline;) Atomics.wait(pause, 0, 0, 10);
+    for (const deadline = Date.now() + ms; !done() && Date.now() < deadline; )
+      Atomics.wait(pause, 0, 0, 10);
   };
   let optOut;
   let output = "";
   // Runs between the server's read of the file and its write: the race itself.
   h.context.randomUUID = () => {
-    optOut = spawn(process.execPath, [fixture, h.agentDir, h.appDir, starting], { stdio: ["ignore", "pipe", "inherit"] });
-    optOut.stdout.setEncoding("utf8").on("data", (chunk) => { output += chunk; });
+    optOut = spawn(process.execPath, [fixture, h.agentDir, h.appDir, starting], {
+      stdio: ["ignore", "pipe", "inherit"],
+    });
+    optOut.stdout.setEncoding("utf8").on("data", (chunk) => {
+      output += chunk;
+    });
     blockFor(() => existsSync(starting), 30_000);
     assert.ok(existsSync(starting), "the opt-out process started");
     // Without the lock the opt-out finishes here, and this write then undoes it.
@@ -372,7 +469,11 @@ test("an opt-out racing a server's first start stays off, and the server can't b
   const saved = readState(h.agentDir);
   assert.equal(saved.enabled, false);
   assert.equal(saved.installId, undefined);
-  assert.equal(JSON.parse(output).distinctId, NEW_ID, "the last event carries the ID the server had just saved");
+  assert.equal(
+    JSON.parse(output).distinctId,
+    NEW_ID,
+    "the last event carries the ID the server had just saved",
+  );
   await run.finish();
   assert.equal(h.allowSend(), false);
 });
@@ -381,8 +482,15 @@ test("an opt-out can't take the lock from a paused process, so its late write ca
   const h = harness(t, { state: allowed });
   const holder = await holdConsentLock(t, h.agentDir);
 
-  await assert.rejects(api.telemetryCommand(h.agentDir, ["off"], h.context), /Another Aiden process/u);
-  assert.equal(readState(h.agentDir).enabled, true, "a failed opt-out says so instead of claiming success");
+  await assert.rejects(
+    api.telemetryCommand(h.agentDir, ["off"], h.context),
+    /Another Aiden process/u,
+  );
+  assert.equal(
+    readState(h.agentDir).enabled,
+    true,
+    "a failed opt-out says so instead of claiming success",
+  );
 
   holder.resume();
   await holder.closed;
@@ -409,7 +517,11 @@ test("events shared services report reach the server's client, before and after 
   const run = api.startServerAnalytics("foreground", h.context);
   api.reportAnalyticsEvent("web_search_used", { search_provider: "brave" });
   await settle();
-  api.reportAnalyticsEvent("connector_added", { preset_id: "github", transport: "http", url: "https://private.example" });
+  api.reportAnalyticsEvent("connector_added", {
+    preset_id: "github",
+    transport: "http",
+    url: "https://private.example",
+  });
   assert.deepEqual(eventNames(h.sent), ["web_search_used", "connector_added"]);
   assert.equal(h.sent[0].properties.surface, "server");
   assert.doesNotMatch(JSON.stringify(h.sent), /private\.example/u);
@@ -434,7 +546,10 @@ test("starting never waits on the transport, and a hung client cannot hold a ser
   const stopping = Date.now();
   await run.finish();
   const took = Date.now() - stopping;
-  assert.ok(took >= api.SERVE_EXIT_FLUSH_CAP_MS - 20 && took < api.SERVE_EXIT_FLUSH_CAP_MS + 500, `took ${took} ms`);
+  assert.ok(
+    took >= api.SERVE_EXIT_FLUSH_CAP_MS - 20 && took < api.SERVE_EXIT_FLUSH_CAP_MS + 500,
+    `took ${took} ms`,
+  );
 });
 
 test("a shutdown flush that hangs is capped", async (t) => {
@@ -446,10 +561,19 @@ test("a shutdown flush that hangs is capped", async (t) => {
 });
 
 test("a failing client leaves the server and the crash path as they were", async (t) => {
-  const h = harness(t, { state: allowed, createTransport: async () => { throw new Error("no client"); } });
+  const h = harness(t, {
+    state: allowed,
+    createTransport: async () => {
+      throw new Error("no client");
+    },
+  });
   const run = started(h);
   await settle();
-  assert.equal(h.crashHost.listenerCount("uncaughtException"), 0, "without waiting for the server to stop");
+  assert.equal(
+    h.crashHost.listenerCount("uncaughtException"),
+    0,
+    "without waiting for the server to stop",
+  );
   await run.finish();
 });
 
@@ -459,7 +583,9 @@ test("an uncaught exception is sanitized, flushed with a cap, then rethrown", as
   started(h);
   await settle();
 
-  const failure = new Error("failed for jane@example.com in /Users/jane/secret/project.ts with sk-abcdefghijklmnopqrstuvwxyz012345");
+  const failure = new Error(
+    "failed for jane@example.com in /Users/jane/secret/project.ts with sk-abcdefghijklmnopqrstuvwxyz012345",
+  );
   h.crashHost.emit("uncaughtException", failure, "uncaughtException");
   // A second failure during the wait does not start a second report.
   h.crashHost.emit("uncaughtException", new Error("second"), "uncaughtException");
@@ -467,7 +593,11 @@ test("an uncaught exception is sanitized, flushed with a cap, then rethrown", as
   assert.deepEqual(h.rethrown, [], "the report still has time");
   await new Promise((resolve) => setTimeout(resolve, 80));
   assert.deepEqual(h.rethrown, [failure], "the original error ends the process");
-  assert.equal(h.crashHost.listenerCount("uncaughtException"), 0, "the rethrow reaches Node's default handling");
+  assert.equal(
+    h.crashHost.listenerCount("uncaughtException"),
+    0,
+    "the rethrow reaches Node's default handling",
+  );
 
   const report = h.sent.find((message) => message.event === "$exception");
   assert.equal(report.properties.source, "server");
@@ -483,16 +613,28 @@ test("a crash report keeps the error's type, frames and code, and never its mess
   started(h);
   await settle();
   // What PostHog receives: the real transport runs this guard on every message.
-  const value = (message) => api.validateOutgoingEvent(message).properties.$exception_list.map((entry) => entry.value);
+  const value = (message) =>
+    api.validateOutgoingEvent(message).properties.$exception_list.map((entry) => entry.value);
 
-  const unreadable = Object.assign(new TypeError("EACCES: permission denied, open 'acme-merger-q3.md'"), { code: "EACCES" });
-  unreadable.cause = new Error('Your prompt "fire Bob next Tuesday" was flagged by db.internal.acme.com');
+  const unreadable = Object.assign(
+    new TypeError("EACCES: permission denied, open 'acme-merger-q3.md'"),
+    { code: "EACCES" },
+  );
+  unreadable.cause = new Error(
+    'Your prompt "fire Bob next Tuesday" was flagged by db.internal.acme.com',
+  );
   h.crashHost.emit("uncaughtException", unreadable, "uncaughtException");
   await new Promise((resolve) => setTimeout(resolve, 60));
   const crash = h.sent.at(-1);
-  assert.deepEqual(crash.properties.$exception_list.map((entry) => entry.type), ["TypeError", "Error"]);
+  assert.deepEqual(
+    crash.properties.$exception_list.map((entry) => entry.type),
+    ["TypeError", "Error"],
+  );
   assert.deepEqual(value(crash), ["EACCES", ""]);
-  assert.ok(crash.properties.$exception_list[0].stacktrace.frames.length > 0, "frames still say where it failed");
+  assert.ok(
+    crash.properties.$exception_list[0].stacktrace.frames.length > 0,
+    "frames still say where it failed",
+  );
   assert.doesNotMatch(JSON.stringify(crash), /acme|Bob|prompt/u);
 
   const nested = harness(t, { state: allowed });
@@ -507,7 +649,13 @@ test("a crash report keeps the error's type, frames and code, and never its mess
   const logged = harness(t, { state: allowed });
   started(logged);
   await settle();
-  for (const reason of ["notes/board-minutes.pdf is gone", new Error("~/work/acme/plan.md failed"), Object.assign(new Error("hello my ssn"), { code: "not a code" }), Object.assign(new Error("hello my ssn"), { code: "ACME_MERGER_Q3" })]) api.reportServerRejection(reason);
+  for (const reason of [
+    "notes/board-minutes.pdf is gone",
+    new Error("~/work/acme/plan.md failed"),
+    Object.assign(new Error("hello my ssn"), { code: "not a code" }),
+    Object.assign(new Error("hello my ssn"), { code: "ACME_MERGER_Q3" }),
+  ])
+    api.reportServerRejection(reason);
   await settle();
   const reports = logged.sent.filter((message) => message.event === "$exception");
   assert.equal(reports.length, 4);
@@ -518,7 +666,8 @@ test("the lines of a crash's message can't pose as frames, on an error or its ca
   const h = harness(t, { state: allowed });
   started(h);
   await settle();
-  const posing = (name) => `save failed\n    at ${name} (${h.appDir}/chunks/server.js:7:9)\n    at /home/jane/notes.js:1:1`;
+  const posing = (name) =>
+    `save failed\n    at ${name} (${h.appDir}/chunks/server.js:7:9)\n    at /home/jane/notes.js:1:1`;
   const failure = new Error(posing("acme_merger_q3"));
   failure.cause = new Error(posing("fire_bob_tuesday"));
   const plain = new Error("save failed");
@@ -532,18 +681,25 @@ test("the lines of a crash's message can't pose as frames, on an error or its ca
 
   api.reportServerRejection(plain);
   await settle();
-  assert.deepEqual(posed.properties.$exception_list.map(framesOf), h.sent.at(-1).properties.$exception_list.map(framesOf), "only the error's real frames remain");
+  assert.deepEqual(
+    posed.properties.$exception_list.map(framesOf),
+    h.sent.at(-1).properties.$exception_list.map(framesOf),
+    "only the error's real frames remain",
+  );
 });
 
 test("a stack written before its error's message changed sends no frames", async (t) => {
   const h = harness(t, { state: allowed });
   started(h);
   await settle();
-  const posing = (name) => `save failed\n    at ${name} (${h.appDir}/chunks/server.js:7:9)\n    at /home/jane/notes.js:1:1`;
+  const posing = (name) =>
+    `save failed\n    at ${name} (${h.appDir}/chunks/server.js:7:9)\n    at /home/jane/notes.js:1:1`;
   const framesOf = async (error) => {
     api.reportServerRejection(error);
     await settle();
-    return h.sent.at(-1).properties.$exception_list.map((entry) => entry.stacktrace?.frames.length ?? 0);
+    return h.sent
+      .at(-1)
+      .properties.$exception_list.map((entry) => entry.stacktrace?.frames.length ?? 0);
   };
   const changed = (name, message) => {
     const error = new Error(posing(name));
@@ -552,15 +708,28 @@ test("a stack written before its error's message changed sends no frames", async
     return error;
   };
 
-  for (const [name, message] of [["replaced_q3", "could not save"], ["emptied_q3", ""], ["shortened_q3", "save"], ["tail_q3", "failed"]]) {
-    assert.deepEqual(await framesOf(changed(name, message)), [0], `message now ${JSON.stringify(message)}`);
+  for (const [name, message] of [
+    ["replaced_q3", "could not save"],
+    ["emptied_q3", ""],
+    ["shortened_q3", "save"],
+    ["tail_q3", "failed"],
+  ]) {
+    assert.deepEqual(
+      await framesOf(changed(name, message)),
+      [0],
+      `message now ${JSON.stringify(message)}`,
+    );
     assert.doesNotMatch(JSON.stringify(h.sent.at(-1)), new RegExp(`${name}|server\\.js`, "u"));
   }
 
   const cleared = new Error(`\n    at private_customer_name (${h.appDir}/chunks/server.js:7:9)`);
   void cleared.stack;
   cleared.message = "";
-  assert.deepEqual(await framesOf(cleared), [0], "a message that opened on a new line leaves a header with a colon");
+  assert.deepEqual(
+    await framesOf(cleared),
+    [0],
+    "a message that opened on a new line leaves a header with a colon",
+  );
   assert.doesNotMatch(JSON.stringify(h.sent.at(-1)), /private_customer_name|server\.js/u);
 
   const wrapper = new Error("save failed");
@@ -582,12 +751,17 @@ test("a stack written before its error's message changed sends no frames", async
 });
 
 test("a crash during the stop still ends the process with the crash, not a clean exit", async (t) => {
-  const slowStop = fakeTransport({ shutdown: () => new Promise((resolve) => setTimeout(resolve, 20)), flush: () => new Promise((resolve) => setTimeout(resolve, 60)) });
+  const slowStop = fakeTransport({
+    shutdown: () => new Promise((resolve) => setTimeout(resolve, 20)),
+    flush: () => new Promise((resolve) => setTimeout(resolve, 60)),
+  });
   const h = harness(t, { state: allowed, transport: slowStop, crashFlushCapMs: 500 });
   const run = started(h);
   await settle();
   let finished = false;
-  void run.finish().then(() => { finished = true; });
+  void run.finish().then(() => {
+    finished = true;
+  });
   const failure = new Error("failed while stopping");
   // The stop has already passed its first look at the crash path.
   await Promise.resolve();
@@ -603,7 +777,9 @@ test("a fatal rejection is reported as one, and a stop in progress waits for the
   await settle();
   h.crashHost.emit("uncaughtException", new Error("rejected"), "unhandledRejection");
   let finished = false;
-  void run.finish().then(() => { finished = true; });
+  void run.finish().then(() => {
+    finished = true;
+  });
   await new Promise((resolve) => setTimeout(resolve, 60));
   assert.equal(h.sent.at(-1).properties.origin, "unhandled_rejection");
   assert.equal(h.rethrown.length, 1);
@@ -620,7 +796,11 @@ test("when another listener owns uncaught exceptions the process keeps running",
   await run.finish();
   assert.deepEqual(h.rethrown, []);
   assert.equal(h.sent.at(-1).properties.level, "error");
-  assert.equal(existsSync(join(h.agentDir, api.SERVER_CRASH_COUNT_FILE)), false, "only a crash that ends the process counts towards the budget");
+  assert.equal(
+    existsSync(join(h.agentDir, api.SERVER_CRASH_COUNT_FILE)),
+    false,
+    "only a crash that ends the process counts towards the budget",
+  );
 });
 
 test("a crash loop stops reporting for the day instead of flooding the project", async (t) => {
@@ -632,13 +812,23 @@ test("a crash loop stops reporting for the day instead of flooding the project",
   const saved = JSON.parse(readFileSync(join(h.agentDir, api.SERVER_CRASH_COUNT_FILE), "utf8"));
   assert.equal(saved.count, 1);
 
-  writeFileSync(join(h.agentDir, api.SERVER_CRASH_COUNT_FILE), JSON.stringify({ ...saved, count: api.MAX_CRASH_REPORTS_PER_DAY }));
+  writeFileSync(
+    join(h.agentDir, api.SERVER_CRASH_COUNT_FILE),
+    JSON.stringify({ ...saved, count: api.MAX_CRASH_REPORTS_PER_DAY }),
+  );
   const restarted = harness(t, { agentDir: h.agentDir });
   await started(restarted).finish();
   assert.equal(restarted.created(), 0);
-  assert.equal(restarted.crashHost.listenerCount("uncaughtException"), 0, "the crash path stays Node's own");
+  assert.equal(
+    restarted.crashHost.listenerCount("uncaughtException"),
+    0,
+    "the crash path stays Node's own",
+  );
 
-  const tomorrow = harness(t, { agentDir: h.agentDir, now: () => new Date(Date.now() + 86_400_000) });
+  const tomorrow = harness(t, {
+    agentDir: h.agentDir,
+    now: () => new Date(Date.now() + 86_400_000),
+  });
   await started(tomorrow).finish();
   assert.deepEqual(eventNames(tomorrow.sent), ["server_started"]);
 });
@@ -667,9 +857,15 @@ test("a keyed client reaches only PostHog, and stops the moment the switch is of
     requests.push({ url: String(url), body: String(options.body ?? "") });
     return new Response("{}", { status: 200, headers: { "content-type": "application/json" } });
   };
-  t.after(() => { globalThis.fetch = originalFetch; });
+  t.after(() => {
+    globalThis.fetch = originalFetch;
+  });
 
-  const h = harness(t, { state: allowed, createTransport: undefined, buildConfig: { projectKey: KEY, channel: "release" } });
+  const h = harness(t, {
+    state: allowed,
+    createTransport: undefined,
+    buildConfig: { projectKey: KEY, channel: "release" },
+  });
   const run = started(h);
   for (let waited = 0; requests.length === 0 && waited < 3_000; waited += 20) await settle();
   assert.equal(requests.length, 1);
@@ -681,7 +877,11 @@ test("a keyed client reaches only PostHog, and stops the moment the switch is of
   const printed = t.mock.method(console, "error", () => {});
   await run.finish();
   assert.equal(requests.length, 1);
-  assert.equal(printed.mock.callCount(), 0, "turning it off leaves no stack trace in the server's log");
+  assert.equal(
+    printed.mock.callCount(),
+    0,
+    "turning it off leaves no stack trace in the server's log",
+  );
 });
 
 test("a keyed client starts a request only while it holds the consent lock, and sends nothing without it", async (t) => {
@@ -698,12 +898,22 @@ test("a keyed client starts a request only while it holds the consent lock, and 
     requests.push(locked);
     return new Response("{}", { status: 200, headers: { "content-type": "application/json" } });
   };
-  t.after(() => { globalThis.fetch = originalFetch; });
+  t.after(() => {
+    globalThis.fetch = originalFetch;
+  });
 
-  h = harness(t, { state: allowed, createTransport: undefined, buildConfig: { projectKey: KEY, channel: "release" } });
+  h = harness(t, {
+    state: allowed,
+    createTransport: undefined,
+    buildConfig: { projectKey: KEY, channel: "release" },
+  });
   const run = started(h);
   for (let waited = 0; requests.length === 0 && waited < 3_000; waited += 20) await settle();
-  assert.deepEqual(requests, [true], "`telemetry off` can't land between the consent check and the request");
+  assert.deepEqual(
+    requests,
+    [true],
+    "`telemetry off` can't land between the consent check and the request",
+  );
 
   // Another process is changing the switch, so this batch must not leave.
   const holder = await holdConsentLock(t, h.agentDir);
@@ -721,9 +931,15 @@ test("a keyed client delivers what is queued at exit while the switch stays on",
     requests.push(String(options.body ?? ""));
     return new Response("{}", { status: 200, headers: { "content-type": "application/json" } });
   };
-  t.after(() => { globalThis.fetch = originalFetch; });
+  t.after(() => {
+    globalThis.fetch = originalFetch;
+  });
 
-  const h = harness(t, { state: allowed, createTransport: undefined, buildConfig: { projectKey: KEY, channel: "release" } });
+  const h = harness(t, {
+    state: allowed,
+    createTransport: undefined,
+    buildConfig: { projectKey: KEY, channel: "release" },
+  });
   const run = started(h);
   api.reportAnalyticsEvent("web_search_used", { search_provider: "brave" });
   await run.finish();
@@ -733,20 +949,38 @@ test("a keyed client delivers what is queued at exit while the switch stays on",
 /** The real bundle, in a clean environment. Keyless, so AIDEN_ANALYTICS_DEBUG shows would-be events. */
 function bundleEnv(agentDir, env = {}) {
   const clean = { ...process.env };
-  for (const name of ["CI", "DO_NOT_TRACK", "AIDEN_ANALYTICS", "AIDEN_ANALYTICS_DEBUG", "INVOCATION_ID", "XPC_SERVICE_NAME"]) delete clean[name];
+  for (const name of [
+    "CI",
+    "DO_NOT_TRACK",
+    "AIDEN_ANALYTICS",
+    "AIDEN_ANALYTICS_DEBUG",
+    "INVOCATION_ID",
+    "XPC_SERVICE_NAME",
+  ])
+    delete clean[name];
   return { ...clean, AIDEN_CODING_AGENT_DIR: agentDir, PI_OFFLINE: "1", ...env };
 }
 
 function runBundle(args, agentDir, env = {}, nodeArgs = []) {
-  return spawnSync(process.execPath, [...nodeArgs, cli, ...args], { encoding: "utf8", timeout: 60_000, env: bundleEnv(agentDir, env) });
+  return spawnSync(process.execPath, [...nodeArgs, cli, ...args], {
+    encoding: "utf8",
+    timeout: 60_000,
+    env: bundleEnv(agentDir, env),
+  });
 }
 
 /** Runs `aiden serve` until `ready` appears on its output, then stops it with SIGTERM. */
 async function serveUntil(t, agentDir, env, ready, whileRunning = () => {}) {
-  const child = spawn(process.execPath, [cli, "serve", "--no-remote", "--no-pair"], { env: bundleEnv(agentDir, env), stdio: ["ignore", "pipe", "pipe"] });
+  const child = spawn(process.execPath, [cli, "serve", "--no-remote", "--no-pair"], {
+    env: bundleEnv(agentDir, env),
+    stdio: ["ignore", "pipe", "pipe"],
+  });
   t.after(() => child.kill("SIGKILL"));
   let output = "";
-  for (const stream of [child.stdout, child.stderr]) stream.setEncoding("utf8").on("data", (chunk) => { output += chunk; });
+  for (const stream of [child.stdout, child.stderr])
+    stream.setEncoding("utf8").on("data", (chunk) => {
+      output += chunk;
+    });
   const deadline = Date.now() + 30_000;
   while (!ready.test(output)) {
     assert.equal(child.exitCode, null, output);
@@ -762,9 +996,18 @@ async function serveUntil(t, agentDir, env, ready, whileRunning = () => {}) {
 
 test("a real server reports how it was started, and only when it may", async (t) => {
   const debug = { AIDEN_ANALYTICS_DEBUG: "1" };
-  for (const [env, launch] of [[{}, "foreground"], [{ AIDEN_SERVE_DETACHED: "1" }, "daemon"], [{ INVOCATION_ID: "a1b2" }, "service"]]) {
+  for (const [env, launch] of [
+    [{}, "foreground"],
+    [{ AIDEN_SERVE_DETACHED: "1" }, "daemon"],
+    [{ INVOCATION_ID: "a1b2" }, "service"],
+  ]) {
     const agentDir = agentDirFor(t, allowed);
-    const { code, output } = await serveUntil(t, agentDir, { ...debug, ...env }, /\[analytics debug\] server_started/u);
+    const { code, output } = await serveUntil(
+      t,
+      agentDir,
+      { ...debug, ...env },
+      /\[analytics debug\] server_started/u,
+    );
     assert.equal(code, 0, output);
     assert.match(output, new RegExp(`"launch":"${launch}"`, "u"));
     assert.match(output, /"surface":"server"/u);
@@ -774,8 +1017,17 @@ test("a real server reports how it was started, and only when it may", async (t)
 
 test("a real server with no terminal and no prior notice sends nothing, and neither does CI", async (t) => {
   const debug = { AIDEN_ANALYTICS_DEBUG: "1" };
-  for (const [state, env] of [[undefined, {}], [allowed, { CI: "true" }], [allowed, { DO_NOT_TRACK: "1" }]]) {
-    const { code, output } = await serveUntil(t, agentDirFor(t, state), { ...debug, ...env }, new RegExp(SERVER_READY, "u"));
+  for (const [state, env] of [
+    [undefined, {}],
+    [allowed, { CI: "true" }],
+    [allowed, { DO_NOT_TRACK: "1" }],
+  ]) {
+    const { code, output } = await serveUntil(
+      t,
+      agentDirFor(t, state),
+      { ...debug, ...env },
+      new RegExp(SERVER_READY, "u"),
+    );
     assert.equal(code, 0, output);
     assert.doesNotMatch(output, /analytics debug|anonymous usage/u);
   }
@@ -796,7 +1048,16 @@ test("a server that fails to start is not counted", async (t) => {
 test("admin commands, help and version send nothing, even when a server would", (t) => {
   const debug = { AIDEN_ANALYTICS_DEBUG: "1" };
   const agentDir = agentDirFor(t, allowed);
-  for (const args of [["workspace", "list"], ["schedule", "list"], ["serve", "status"], ["service", "status"], ["--version"], ["help"], ["serve", "--help"], ["service", "install", "--bogus"]]) {
+  for (const args of [
+    ["workspace", "list"],
+    ["schedule", "list"],
+    ["serve", "status"],
+    ["service", "status"],
+    ["--version"],
+    ["help"],
+    ["serve", "--help"],
+    ["service", "install", "--bogus"],
+  ]) {
     const result = runBundle(args, agentDir, debug);
     assert.doesNotMatch(result.stderr, /analytics debug|anonymous usage/u, args.join(" "));
   }
@@ -823,7 +1084,9 @@ test("aiden telemetry works end to end through the bundle", (t) => {
 
 test("the analytics core and client are not evaluated outside a server that may send", (t) => {
   const chunks = join(pkgDir, "dist", "app", "chunks");
-  const clientChunk = readdirSync(chunks).find((name) => readFileSync(join(chunks, name), "utf8").includes("us.i.posthog.com"));
+  const clientChunk = readdirSync(chunks).find((name) =>
+    readFileSync(join(chunks, name), "utf8").includes("us.i.posthog.com"),
+  );
   assert.ok(clientChunk, "the PostHog client sits in a chunk of its own");
   const hook = ["--import", join(pkgDir, "tests", "fixtures", "trace-loads.mjs")];
 
@@ -835,13 +1098,20 @@ test("the analytics core and client are not evaluated outside a server that may 
     return readFileSync(trace, "utf8");
   };
 
-  for (const args of [["--version"], ["workspace", "list"], ["telemetry", "status"], ["telemetry", "off"]]) {
+  for (const args of [
+    ["--version"],
+    ["workspace", "list"],
+    ["telemetry", "status"],
+    ["telemetry", "off"],
+  ]) {
     const urls = loaded(args);
     assert.ok(!urls.includes(clientChunk), args.join(" "));
     assert.ok(!urls.includes("analytics-core"), args.join(" "));
   }
   // The trace can see a load: an opt-out with something to send loads the core.
-  assert.ok(loaded(["telemetry", "off"], { AIDEN_ANALYTICS_DEBUG: "1" }).includes("analytics-core"));
+  assert.ok(
+    loaded(["telemetry", "off"], { AIDEN_ANALYTICS_DEBUG: "1" }).includes("analytics-core"),
+  );
 });
 
 function runCrashFixture(t, kind, mode) {
@@ -850,10 +1120,14 @@ function runCrashFixture(t, kind, mode) {
   t.after(() => rmSync(appDir, { recursive: true, force: true }));
   mkdirSync(appDir, { recursive: true });
   writeFileSync(join(appDir, "package.json"), JSON.stringify({ version: "0.1.0" }));
-  const result = spawnSync(process.execPath, [join(pkgDir, "tests", "fixtures", "analytics-crash.mjs"), agentDir, appDir, kind, mode], {
-    encoding: "utf8",
-    timeout: 60_000,
-  });
+  const result = spawnSync(
+    process.execPath,
+    [join(pkgDir, "tests", "fixtures", "analytics-crash.mjs"), agentDir, appDir, kind, mode],
+    {
+      encoding: "utf8",
+      timeout: 60_000,
+    },
+  );
   const ended = Date.now();
   const crashedAt = Number(/crashing (\d+)/u.exec(result.stdout)?.[1]);
   return { ...result, waited: ended - crashedAt };
@@ -869,7 +1143,13 @@ test("a real crash keeps its exit code and message, and waits at most the flush 
     assert.match(reported.stderr, /boom in/u);
     assert.match(reported.stdout, /"\$exception"/u);
     assert.doesNotMatch(reported.stdout, /jane/u);
-    assert.ok(reported.waited >= api.CRASH_FLUSH_CAP_MS - 50, `${kind} waited ${reported.waited} ms`);
-    assert.ok(reported.waited < api.CRASH_FLUSH_CAP_MS + 1_500, `${kind} waited ${reported.waited} ms`);
+    assert.ok(
+      reported.waited >= api.CRASH_FLUSH_CAP_MS - 50,
+      `${kind} waited ${reported.waited} ms`,
+    );
+    assert.ok(
+      reported.waited < api.CRASH_FLUSH_CAP_MS + 1_500,
+      `${kind} waited ${reported.waited} ms`,
+    );
   }
 });

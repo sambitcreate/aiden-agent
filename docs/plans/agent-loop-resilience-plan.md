@@ -24,12 +24,12 @@ Code: `main/services/model-call-retry.ts` (policy), `PiCompactionCoordinator.che
 
 When a reply still fails, the red card on the latest reply gets one button that fits the cause, plus Switch model (which opens the model list in the command palette):
 
-| Cause (`ProviderFailureV1.category`) | Button | What it does |
-| --- | --- | --- |
-| network, timeout, service unavailable, rate limit, interrupted, unknown | Try again | Sends a visible "Try that again." turn |
-| authentication, quota, invalid request | Open Providers | Opens Settings → Providers |
-| output limit | Continue | Sends a visible "Continue from where you stopped." turn |
-| context window, context management | Compact and try again | Compacts the chat, then sends "Try that again." if it compacted or was already compact. If the person left the chat before it finished, nothing is sent and the card stays |
+| Cause (`ProviderFailureV1.category`)                                    | Button                | What it does                                                                                                                                                               |
+| ----------------------------------------------------------------------- | --------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| network, timeout, service unavailable, rate limit, interrupted, unknown | Try again             | Sends a visible "Try that again." turn                                                                                                                                     |
+| authentication, quota, invalid request                                  | Open Providers        | Opens Settings → Providers                                                                                                                                                 |
+| output limit                                                            | Continue              | Sends a visible "Continue from where you stopped." turn                                                                                                                    |
+| context window, context management                                      | Compact and try again | Compacts the chat, then sends "Try that again." if it compacted or was already compact. If the person left the chat before it finished, nothing is sent and the card stays |
 
 Older failure cards keep their text but show no buttons, and the buttons wait while one action runs. Desktop only; the phones keep their current failure card.
 
@@ -91,4 +91,3 @@ Waiting prompts (added after the first release):
 Known limit: after a crash the text that was streaming had not been saved yet, so it is gone; the model writes the answer again from the start. After a quit the text written so far stays.
 
 Code: `main/services/interrupted-reply.ts` (with the saved waits in `interrupted-waits-main.ts`), `abortForShutdown` in `PiAgentRuntimeHarness` (called by `llmClient.cancel` for the app-shutdown origin), the `chats:replyInterrupted` and `chats:interruptedWait` handlers, and `InterruptedReplyCallout` in `message-list.tsx`. Tests: `interrupted-reply.test.ts`, the harness suite, `tests/e2e/interrupted-reply-resume.spec.ts` (crash, quit, and Stop in the real app), and `tests/e2e/interrupted-question-resume.spec.ts` (a question that comes back after a crash or quit, a reload that clears it, and a named approval).
-

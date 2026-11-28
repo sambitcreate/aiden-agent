@@ -37,7 +37,9 @@ async function openGeneral(settings: Partial<AppSettings>, workspace: Partial<Wo
 
 test("with memory on in Settings, a workspace's Memory switch can be changed", async () => {
   const { dialog } = await openGeneral({});
-  const toggle = await within(dialog).findByRole("switch", { name: "Use memory in this workspace" });
+  const toggle = await within(dialog).findByRole("switch", {
+    name: "Use memory in this workspace",
+  });
   assert.equal(toggle.getAttribute("aria-checked"), "true");
   assert.equal(toggle.hasAttribute("disabled"), false);
   assert.equal(within(dialog).queryByText(/Memory is off in Settings/u), null);
@@ -45,9 +47,15 @@ test("with memory on in Settings, a workspace's Memory switch can be changed", a
 
 test("with memory off in Settings, the workspace's choice is kept but locked, and Settings is one click away", async () => {
   const { dialog, router } = await openGeneral({ memoryEnabled: false }, { memoryEnabled: false });
-  const toggle = await within(dialog).findByRole("switch", { name: "Use memory in this workspace" });
+  const toggle = await within(dialog).findByRole("switch", {
+    name: "Use memory in this workspace",
+  });
   await waitFor(() => assert.equal(toggle.hasAttribute("disabled"), true));
-  assert.equal(toggle.getAttribute("aria-checked"), "false", "the workspace's own choice still shows");
+  assert.equal(
+    toggle.getAttribute("aria-checked"),
+    "false",
+    "the workspace's own choice still shows",
+  );
   within(dialog).getByText(/Memory is off in Settings\. This choice applies when it's back on\./u);
 
   fireEvent.click(within(dialog).getByRole("button", { name: "Open Memory settings" }));

@@ -16,8 +16,7 @@ export const PROVIDER_FAILURE_CATEGORIES = [
   "unknown",
 ] as const;
 
-export type ProviderFailureCategoryV1 =
-  (typeof PROVIDER_FAILURE_CATEGORIES)[number];
+export type ProviderFailureCategoryV1 = (typeof PROVIDER_FAILURE_CATEGORIES)[number];
 
 /**
  * Renderer-safe terminal failure metadata. Provider-authored text and
@@ -33,9 +32,7 @@ export interface ProviderFailureV1 {
 const CATEGORY_SET = new Set<string>(PROVIDER_FAILURE_CATEGORIES);
 
 /** Fail closed when persisted or IPC data does not match the closed schema. */
-export function parseProviderFailureV1(
-  value: unknown,
-): ProviderFailureV1 | undefined {
+export function parseProviderFailureV1(value: unknown): ProviderFailureV1 | undefined {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     return undefined;
   }
@@ -48,7 +45,7 @@ export function parseProviderFailureV1(
     (candidate.attempts as number) < 0 ||
     (candidate.attempts as number) > MAX_PROVIDER_FAILURE_ATTEMPTS ||
     typeof candidate.retryExhausted !== "boolean" ||
-    candidate.retryExhausted !== ((candidate.attempts as number) > 1)
+    candidate.retryExhausted !== (candidate.attempts as number) > 1
   ) {
     return undefined;
   }
@@ -69,16 +66,13 @@ export interface ProviderFailurePresentation {
 export function providerFailurePresentation(
   failure: ProviderFailureV1,
 ): ProviderFailurePresentation {
-  const retryDescriptions: Partial<
-    Record<ProviderFailureCategoryV1, string>
-  > = {
-    network: "Aiden still couldn’t reach the model provider after retrying. Check the connection and try again.",
+  const retryDescriptions: Partial<Record<ProviderFailureCategoryV1, string>> = {
+    network:
+      "Aiden still couldn’t reach the model provider after retrying. Check the connection and try again.",
     timeout: "The model provider still did not respond in time after retrying. Try again.",
     service_unavailable: "The model provider remained unavailable after retrying. Try again later.",
   };
-  const description = failure.retryExhausted
-    ? retryDescriptions[failure.category]
-    : undefined;
+  const description = failure.retryExhausted ? retryDescriptions[failure.category] : undefined;
 
   return {
     title: "Generation failed",
@@ -88,10 +82,13 @@ export function providerFailurePresentation(
         network: "Aiden couldn’t reach the model provider. Check the connection and try again.",
         timeout: "The model provider did not respond in time. Try again.",
         service_unavailable: "The model provider is unavailable. Try again later.",
-        rate_limit: "The model provider is receiving too many requests. Wait a moment and try again.",
-        authentication: "The model provider rejected the current authentication. Review the connection in Settings.",
+        rate_limit:
+          "The model provider is receiving too many requests. Wait a moment and try again.",
+        authentication:
+          "The model provider rejected the current authentication. Review the connection in Settings.",
         quota: "The model provider reported that this account has no available quota.",
-        invalid_request: "The model provider could not accept this request. Review the selected model and provider settings.",
+        invalid_request:
+          "The model provider could not accept this request. Review the selected model and provider settings.",
         context_window: "This conversation exceeded the model’s context window.",
         output_limit: "The model reached its output limit. Any partial response above was saved.",
         interrupted: "The model response was interrupted before it completed.",

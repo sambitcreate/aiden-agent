@@ -14,10 +14,7 @@ import {
   type ChatPullRequestCreateIntent,
   type ChatPullRequestRef,
 } from "../../renderer/shared/chat-pull-requests.js";
-import type {
-  GitHubPullRequestService,
-  GitHubPullRequestSummary,
-} from "./github-pull-request.js";
+import type { GitHubPullRequestService, GitHubPullRequestSummary } from "./github-pull-request.js";
 
 export interface PullRequestCreateCandidate {
   ref: ChatPullRequestRef;
@@ -43,12 +40,8 @@ function intentIdentityMatches(
 ): boolean {
   const ref = parseGitHubPullRequestUrl(summary.url);
   if (!ref || ref.number !== summary.number) return false;
-  if (ref.repository !== intent.repository || ref.host !== intent.host)
-    return false;
-  return (
-    summary.headBranch === intent.headBranch &&
-    summary.baseBranch === intent.baseBranch
-  );
+  if (ref.repository !== intent.repository || ref.host !== intent.host) return false;
+  return summary.headBranch === intent.headBranch && summary.baseBranch === intent.baseBranch;
 }
 
 /**
@@ -62,17 +55,11 @@ export function matchesCreateIntent(
 ): boolean {
   const normalized = normalizeChatPullRequestCreateIntent(intent);
   if (!normalized || !intentIdentityMatches(normalized, summary)) return false;
-  if (
-    normalized.expectedHeadSha &&
-    summary.headSha !== normalized.expectedHeadSha
-  )
-    return false;
+  if (normalized.expectedHeadSha && summary.headSha !== normalized.expectedHeadSha) return false;
   return true;
 }
 
-function toCandidate(
-  summary: GitHubPullRequestSummary,
-): PullRequestCreateCandidate | undefined {
+function toCandidate(summary: GitHubPullRequestSummary): PullRequestCreateCandidate | undefined {
   const ref = parseGitHubPullRequestUrl(summary.url);
   if (!ref) return undefined;
   return {
@@ -105,8 +92,7 @@ export async function reconcilePullRequestCreate(options: {
   if (!intent)
     return {
       kind: "unavailable",
-      message:
-        "The recorded create intent is invalid; it cannot be safely reconciled.",
+      message: "The recorded create intent is invalid; it cannot be safely reconciled.",
     };
   const found = await github.findForBranch(
     cwd,
@@ -118,16 +104,11 @@ export async function reconcilePullRequestCreate(options: {
     return {
       kind: "unavailable",
       message:
-        found.message ??
-        "Could not check GitHub for the pull request that may have been created.",
+        found.message ?? "Could not check GitHub for the pull request that may have been created.",
     };
   }
-  const onBranch = found.pullRequests.filter((summary) =>
-    intentIdentityMatches(intent, summary),
-  );
-  const verified = onBranch.filter((summary) =>
-    matchesCreateIntent(intent, summary),
-  );
+  const onBranch = found.pullRequests.filter((summary) => intentIdentityMatches(intent, summary));
+  const verified = onBranch.filter((summary) => matchesCreateIntent(intent, summary));
   // Same-branch/base PRs whose head SHA we could not read are unverifiable,
   // not absent: any of them could be the create GitHub actually applied.
   // A closed/merged match on the branch is still adoption-worthy — the create
@@ -139,10 +120,7 @@ export async function reconcilePullRequestCreate(options: {
   // A PR can advance after creation; a changed head is not proof of absence.
   const candidates = onBranch
     .map(toCandidate)
-    .filter(
-      (candidate): candidate is PullRequestCreateCandidate =>
-        candidate !== undefined,
-    );
+    .filter((candidate): candidate is PullRequestCreateCandidate => candidate !== undefined);
   // Handing candidates to the user beats clearing the intent into a retry —
   // or auto-adopting one — when the create may already have landed.
   if (candidates.length > 0) return { kind: "multiple", candidates };

@@ -72,7 +72,9 @@ function ChatList({
 
 const row = (title: string) => screen.getByRole("button", { name: title });
 const selectedTitles = () =>
-  Array.from(document.querySelectorAll<HTMLElement>("[data-in-selection='true']")).map((element) => element.textContent);
+  Array.from(document.querySelectorAll<HTMLElement>("[data-in-selection='true']")).map(
+    (element) => element.textContent,
+  );
 const focused = () => document.activeElement?.textContent;
 /** A click with the mouse: `detail` is 0 only for a click made with ↩ or Space. */
 const pointerClick = (element: HTMLElement, init: MouseEventInit = {}) =>
@@ -122,7 +124,11 @@ test("⌘-click toggles a chat without opening it, and two selected show the bar
   render(<ChatList chats={CHATS} onOpen={(id) => opened.push(id)} />);
   pointerClick(row("Alpha"), { metaKey: true });
   assert.deepEqual(selectedTitles(), ["Alpha"]);
-  assert.equal(screen.queryByRole("group", { name: "Selected chats" }), null, "one chat is not a bulk selection");
+  assert.equal(
+    screen.queryByRole("group", { name: "Selected chats" }),
+    null,
+    "one chat is not a bulk selection",
+  );
   pointerClick(row("Charlie"), { metaKey: true });
   assert.deepEqual(selectedTitles(), ["Alpha", "Charlie"]);
   assert.equal(screen.getByRole("status").textContent, "2 selected");
@@ -162,7 +168,12 @@ test("the bar's Delete acts on every selected chat, and deleted chats leave the 
   pointerClick(row("Charlie"), { shiftKey: true });
   fireEvent.click(screen.getByRole("button", { name: "Delete" }));
   assert.deepEqual([...deleted].sort(), ["a", "b", "c"]);
-  rerender(<ChatList chats={CHATS.filter((chat) => !deleted.includes(chat.id))} onBulkDelete={(ids) => (deleted = ids)} />);
+  rerender(
+    <ChatList
+      chats={CHATS.filter((chat) => !deleted.includes(chat.id))}
+      onBulkDelete={(ids) => (deleted = ids)}
+    />,
+  );
   assert.deepEqual(selectedTitles(), []);
   assert.equal(screen.queryByRole("group", { name: "Selected chats" }), null);
 });
@@ -185,7 +196,8 @@ test("a delete that fails part way stops there, says how many went, and keeps th
   };
   const onBulkDelete = async (ids: readonly string[]) => {
     const result = await runInOrder(ids, remove);
-    if (result.error) message = bulkFailureMessage("Deleted", result, ids.length, (result.error as Error).message);
+    if (result.error)
+      message = bulkFailureMessage("Deleted", result, ids.length, (result.error as Error).message);
     chats = chats.filter((chat) => !result.done.includes(chat.id));
   };
   const view = () => <ChatList chats={chats} onBulkDelete={(ids) => void onBulkDelete(ids)} />;

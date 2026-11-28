@@ -65,9 +65,14 @@ export const systemPidLedgerDependencies: PidLedgerDependencies = {
         .catch(() => undefined);
     }
     return new Promise((resolve) => {
-      execFile("/bin/ps", ["-o", "command=", "-p", String(pid)], { timeout: 5_000 }, (error, stdout) => {
-        resolve(error ? undefined : stdout.trim() || undefined);
-      });
+      execFile(
+        "/bin/ps",
+        ["-o", "command=", "-p", String(pid)],
+        { timeout: 5_000 },
+        (error, stdout) => {
+          resolve(error ? undefined : stdout.trim() || undefined);
+        },
+      );
     });
   },
   groupExists(pgid) {
@@ -96,15 +101,20 @@ export const systemPidLedgerDependencies: PidLedgerDependencies = {
       return members;
     }
     return new Promise((resolve) => {
-      execFile("/bin/ps", ["-A", "-o", "pid=,pgid="], { timeout: 5_000, maxBuffer: 4 * 1024 * 1024 }, (error, stdout) => {
-        if (error) return resolve([]);
-        const members: number[] = [];
-        for (const line of stdout.split("\n")) {
-          const [pid, group] = line.trim().split(/\s+/u).map(Number);
-          if (group === pgid && Number.isSafeInteger(pid) && pid! > 1) members.push(pid!);
-        }
-        resolve(members);
-      });
+      execFile(
+        "/bin/ps",
+        ["-A", "-o", "pid=,pgid="],
+        { timeout: 5_000, maxBuffer: 4 * 1024 * 1024 },
+        (error, stdout) => {
+          if (error) return resolve([]);
+          const members: number[] = [];
+          for (const line of stdout.split("\n")) {
+            const [pid, group] = line.trim().split(/\s+/u).map(Number);
+            if (group === pgid && Number.isSafeInteger(pid) && pid! > 1) members.push(pid!);
+          }
+          resolve(members);
+        },
+      );
     });
   },
   hasEnvironment(pid, entry) {
@@ -117,9 +127,14 @@ export const systemPidLedgerDependencies: PidLedgerDependencies = {
     // macOS prints the starting environment after the command. It hides it for
     // system binaries, so those members are recognised by command alone.
     return new Promise((resolve) => {
-      execFile("/bin/ps", ["-E", "-ww", "-o", "command=", "-p", String(pid)], { timeout: 5_000, maxBuffer: 4 * 1024 * 1024 }, (error, stdout) => {
-        resolve(!error && stdout.split(/\s+/u).includes(entry));
-      });
+      execFile(
+        "/bin/ps",
+        ["-E", "-ww", "-o", "command=", "-p", String(pid)],
+        { timeout: 5_000, maxBuffer: 4 * 1024 * 1024 },
+        (error, stdout) => {
+          resolve(!error && stdout.split(/\s+/u).includes(entry));
+        },
+      );
     });
   },
   killGroup(pid) {
@@ -149,7 +164,12 @@ export class AcpPidLedger {
   record(pid: number, executable: string, marker?: string): void {
     this.entries = [
       ...this.entries.filter((entry) => entry.pid !== pid),
-      { pid, executable, startedAt: Date.now(), ...(marker && MARKER_PATTERN.test(marker) ? { marker } : {}) },
+      {
+        pid,
+        executable,
+        startedAt: Date.now(),
+        ...(marker && MARKER_PATTERN.test(marker) ? { marker } : {}),
+      },
     ].slice(-MAX_ENTRIES);
     this.persist();
   }
@@ -235,7 +255,10 @@ export class AcpPidLedger {
 
 function readEntries(file: string): PidLedgerEntry[] {
   try {
-    const parsed = JSON.parse(readFileSync(file, "utf8")) as { version?: unknown; entries?: unknown };
+    const parsed = JSON.parse(readFileSync(file, "utf8")) as {
+      version?: unknown;
+      entries?: unknown;
+    };
     if (parsed.version !== 1 || !Array.isArray(parsed.entries)) return [];
     return parsed.entries
       .filter(

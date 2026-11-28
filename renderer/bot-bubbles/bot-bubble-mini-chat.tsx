@@ -21,11 +21,20 @@ import { botLastReplyAt, type BotPendingQuestion } from "../shared/bot-live";
 import type { AskUserQuestionResponseV1 } from "../shared/ask-user-question";
 import { botChatActivityOnDevice, showsBotToolActivity } from "../shared/bots";
 import type { BotApprovalPrompt } from "../../main/services/bot-runtime/bot-approvals";
-import { BotApprovalCard, groupBotApprovalPrompts, questionPrompt, useBotApprovals } from "../main/bots/bot-approvals";
+import {
+  BotApprovalCard,
+  groupBotApprovalPrompts,
+  questionPrompt,
+  useBotApprovals,
+} from "../main/bots/bot-approvals";
 import { botReplyQuote } from "../main/bots/bot-message-actions";
 import { botPausedText } from "../main/bots/bot-paused-card";
 import { BOT_UNAVAILABLE_LABEL } from "../main/bots/bot-session-state";
-import { BOT_WAITING_LINE, BOT_WORKING_LINE, useBotLiveSummary } from "../main/bots/bot-sidebar-rows";
+import {
+  BOT_WAITING_LINE,
+  BOT_WORKING_LINE,
+  useBotLiveSummary,
+} from "../main/bots/bot-sidebar-rows";
 import { BotStatusLine } from "../main/bots/bot-status-line";
 import { BOT_INTERRUPTED_TEXT, TranscriptEntries } from "../main/bots/bot-transcript-entries";
 import { botSidebarPreferenceActions } from "../main/bots/use-bot-sidebar-preferences";
@@ -115,12 +124,21 @@ export function BotBubbleMiniChat({
     if (botFound && !closing) markViewed(botId, replyAt);
   }, [botFound, closing, botId, replyAt, markViewed]);
 
-  const tuck = React.useCallback(() => report(applyBotBubbleChange(botBubblesApi.open(null)), "Aiden couldn’t tuck that chat away."), []);
+  const tuck = React.useCallback(
+    () =>
+      report(applyBotBubbleChange(botBubblesApi.open(null)), "Aiden couldn’t tuck that chat away."),
+    [],
+  );
   const openInAiden = React.useCallback(
-    () => report(applyBotBubbleChange(botBubblesApi.bringBack(botId, rectOf(chatRef.current))), `Aiden couldn’t open ${name}.`),
+    () =>
+      report(
+        applyBotBubbleChange(botBubblesApi.bringBack(botId, rectOf(chatRef.current))),
+        `Aiden couldn’t open ${name}.`,
+      ),
     [botId, name],
   );
-  const closeBubble = () => report(applyBotBubbleChange(botBubblesApi.close(botId)), "Aiden couldn’t close that bubble.");
+  const closeBubble = () =>
+    report(applyBotBubbleChange(botBubblesApi.close(botId)), "Aiden couldn’t close that bubble.");
   // Opening puts the cursor in the message box; closing while the chat held focus gives it back to the head.
   React.useEffect(() => {
     if (botFound && !closing) composerRef.current?.focus({ preventScroll: true });
@@ -130,7 +148,9 @@ export function BotBubbleMiniChat({
     const chat = chatRef.current;
     const giveFocusToHead = () => {
       if (!chat?.contains(document.activeElement)) return;
-      document.querySelector<HTMLElement>(`[data-bubble-head="${botId}"]`)?.focus({ preventScroll: true });
+      document
+        .querySelector<HTMLElement>(`[data-bubble-head="${botId}"]`)
+        ?.focus({ preventScroll: true });
     };
     if (closing) giveFocusToHead();
     return closing ? undefined : giveFocusToHead;
@@ -156,10 +176,21 @@ export function BotBubbleMiniChat({
   React.useLayoutEffect(() => {
     const scroller = scrollRef.current;
     if (scroller && pinnedToEnd.current) scroller.scrollTop = scroller.scrollHeight;
-  }, [entryCount, snapshot?.partial, approvals.prompts.length, question?.waitId, snapshot?.activity?.phase]);
+  }, [
+    entryCount,
+    snapshot?.partial,
+    approvals.prompts.length,
+    question?.waitId,
+    snapshot?.activity?.phase,
+  ]);
 
   const sendText = async (text: string, requestId: string) => {
-    await botsApi.send({ botId, text, requestId, ...(running ? { whenBusy: "followUp" as const } : {}) });
+    await botsApi.send({
+      botId,
+      text,
+      requestId,
+      ...(running ? { whenBusy: "followUp" as const } : {}),
+    });
   };
 
   const send = async () => {
@@ -167,7 +198,8 @@ export function BotBubbleMiniChat({
     if (!text || sending || !current) return;
     // The same words sent again after a failure replay under the first request id.
     const unsettled = unsettledSend.current;
-    const requestId = unsettled && unsettled.text === text ? unsettled.requestId : crypto.randomUUID();
+    const requestId =
+      unsettled && unsettled.text === text ? unsettled.requestId : crypto.randomUUID();
     unsettledSend.current = null;
     setSending(true);
     setSendError(null);
@@ -226,9 +258,15 @@ export function BotBubbleMiniChat({
   const stop = () => report(botsApi.stop(botId), `Aiden couldn’t stop ${name}.`);
 
   /** One answer for a group of identical waiting calls; only the waits it decided leave. */
-  const answerApprovalGroup = async (group: readonly BotApprovalPrompt[], decision: "allow" | "deny", scope?: "always") => {
+  const answerApprovalGroup = async (
+    group: readonly BotApprovalPrompt[],
+    decision: "allow" | "deny",
+    scope?: "always",
+  ) => {
     const results = await Promise.allSettled(
-      group.map((prompt, index) => botsApi.approve(prompt.waitId, decision, index === 0 ? scope : undefined)),
+      group.map((prompt, index) =>
+        botsApi.approve(prompt.waitId, decision, index === 0 ? scope : undefined),
+      ),
     );
     const decided = (index: number) => {
       const result = results[index];
@@ -244,7 +282,10 @@ export function BotBubbleMiniChat({
     });
   };
 
-  const answerQuestion = async (pending: BotPendingQuestion, response: AskUserQuestionResponseV1) => {
+  const answerQuestion = async (
+    pending: BotPendingQuestion,
+    response: AskUserQuestionResponseV1,
+  ) => {
     setAnswering(true);
     try {
       const { answered } = await botsApi.answerQuestion(botId, pending.waitId, response);
@@ -260,18 +301,21 @@ export function BotBubbleMiniChat({
     showsBotToolActivity(toolActivitySetting, current ? [current] : []),
     current?.chatActivity,
   );
-  const needsYou = summary.data?.needsYou === true || question !== null || approvalGroups.length > 0;
+  const needsYou =
+    summary.data?.needsYou === true || question !== null || approvalGroups.length > 0;
   // Waits the mini chat can't answer: the person finishes them in Aiden.
   const elsewhere = snapshot
     ? Boolean(
         snapshot.handoff ||
-          snapshot.accessRequest ||
-          snapshot.plan?.status === "pending" ||
-          snapshot.entries.some(
-            (entry) =>
-              (entry.type === "issue" && entry.status === "open") ||
-              (entry.type === "settings_change" && entry.change.mode === "held" && entry.status === "pending"),
-          ),
+        snapshot.accessRequest ||
+        snapshot.plan?.status === "pending" ||
+        snapshot.entries.some(
+          (entry) =>
+            (entry.type === "issue" && entry.status === "open") ||
+            (entry.type === "settings_change" &&
+              entry.change.mode === "held" &&
+              entry.status === "pending"),
+        ),
       )
     : false;
   const stateNotice =
@@ -287,7 +331,10 @@ export function BotBubbleMiniChat({
               ? BOT_INTERRUPTED_TEXT
               : null;
   const composerBlocked =
-    state?.kind === "paused" || state?.kind === "unavailable" || state?.kind === "needs_model" || Boolean(snapshot?.handoff);
+    state?.kind === "paused" ||
+    state?.kind === "unavailable" ||
+    state?.kind === "needs_model" ||
+    Boolean(snapshot?.handoff);
   const statusText = needsYou || elsewhere ? BOT_WAITING_LINE : running ? BOT_WORKING_LINE : null;
   const firstGroup = approvalGroups[0];
 
@@ -307,13 +354,30 @@ export function BotBubbleMiniChat({
         // Its own animation only: a card or a message inside animates too.
         if (closing && event.target === event.currentTarget) onClosed?.();
       }}
-      style={{ left: placement.x, top: placement.y, width: placement.width, height: placement.height }}
+      style={{
+        left: placement.x,
+        top: placement.y,
+        width: placement.width,
+        height: placement.height,
+      }}
     >
-      <span aria-hidden="true" className="bot-bubble-caret" data-side={placement.caretSide} style={{ top: placement.caretY }} />
+      <span
+        aria-hidden="true"
+        className="bot-bubble-caret"
+        data-side={placement.caretSide}
+        style={{ top: placement.caretY }}
+      />
       <div className="bot-bubble-chat-body">
         <header className="flex shrink-0 items-center gap-2 px-3 pb-2 pt-3">
           {current ? (
-            <BotAvatar avatar={current.avatar} botId={current.id} name={name} size="small" photoLoading="immediate" working={running} />
+            <BotAvatar
+              avatar={current.avatar}
+              botId={current.id}
+              name={name}
+              size="small"
+              photoLoading="immediate"
+              working={running}
+            />
           ) : (
             <span aria-hidden="true" className="size-7 shrink-0 rounded-card bg-control" />
           )}
@@ -332,13 +396,34 @@ export function BotBubbleMiniChat({
               </Text>
             ) : null}
           </div>
-          <Button iconOnly variant="bar" size="small" aria-label="Open in Aiden" title="Open in Aiden" onClick={openInAiden}>
+          <Button
+            iconOnly
+            variant="bar"
+            size="small"
+            aria-label="Open in Aiden"
+            title="Open in Aiden"
+            onClick={openInAiden}
+          >
             <Maximize2 aria-hidden="true" />
           </Button>
-          <Button iconOnly variant="bar" size="small" aria-label="Shrink" title="Shrink" onClick={tuck}>
+          <Button
+            iconOnly
+            variant="bar"
+            size="small"
+            aria-label="Shrink"
+            title="Shrink"
+            onClick={tuck}
+          >
             <Minus aria-hidden="true" />
           </Button>
-          <Button iconOnly variant="bar" size="small" aria-label="Close bubble" title="Close bubble" onClick={closeBubble}>
+          <Button
+            iconOnly
+            variant="bar"
+            size="small"
+            aria-label="Close bubble"
+            title="Close bubble"
+            onClick={closeBubble}
+          >
             <X aria-hidden="true" />
           </Button>
         </header>
@@ -347,12 +432,17 @@ export function BotBubbleMiniChat({
           className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto px-3 py-2"
           onScroll={(event) => {
             const scroller = event.currentTarget;
-            pinnedToEnd.current = scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight < 24;
+            pinnedToEnd.current =
+              scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight < 24;
           }}
         >
           {snapshot === null ? (
             live.failed ? (
-              <Callout color="red" role="alert" className="flex-row items-center justify-between gap-2">
+              <Callout
+                color="red"
+                role="alert"
+                className="flex-row items-center justify-between gap-2"
+              >
                 <Text variant="small" color="status-red">
                   Aiden couldn’t load {name}’s chat.
                 </Text>
@@ -429,7 +519,11 @@ export function BotBubbleMiniChat({
                 ref={composerRef}
                 rows={1}
                 aria-label={`Message ${name}`}
-                placeholder={composerBlocked ? (stateNotice ?? `Answer ${name} in Aiden first.`) : `Ask ${name}`}
+                placeholder={
+                  composerBlocked
+                    ? (stateNotice ?? `Answer ${name} in Aiden first.`)
+                    : `Ask ${name}`
+                }
                 disabled={composerBlocked || !current}
                 value={draft}
                 onChange={(event) => {
@@ -445,7 +539,14 @@ export function BotBubbleMiniChat({
                 className="bot-bubble-textarea field-sizing-content max-h-28 min-h-7 flex-1 py-1 text-regular text-primary placeholder:text-secondary"
               />
               {running && !draft.trim() ? (
-                <Button type="button" iconOnly variant="filled" size="small" aria-label={`Stop ${name}`} onClick={stop}>
+                <Button
+                  type="button"
+                  iconOnly
+                  variant="filled"
+                  size="small"
+                  aria-label={`Stop ${name}`}
+                  onClick={stop}
+                >
                   <Square aria-hidden="true" />
                 </Button>
               ) : (

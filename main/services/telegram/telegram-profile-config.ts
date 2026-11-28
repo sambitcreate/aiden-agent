@@ -9,7 +9,9 @@ const RESERVED_PROFILE_NAMES = new Set(["main", "active"]);
 export function normalizeTelegramProfileName(value: string): string {
   const profile = value.trim().toLowerCase();
   if (!PROFILE_PATTERN.test(profile) || RESERVED_PROFILE_NAMES.has(profile)) {
-    throw new Error("Telegram profile names use 1–32 lowercase letters or digits; main and active are reserved.");
+    throw new Error(
+      "Telegram profile names use 1–32 lowercase letters or digits; main and active are reserved.",
+    );
   }
   return profile;
 }
@@ -23,10 +25,7 @@ export function telegramProfileTokenKey(profile: string): string {
  * Telegram owner produces a different audience even when the profile name is
  * reused; reset/delete explicitly revoke the old audience as well.
  */
-export function telegramBotNoticeAudienceId(
-  profile: string,
-  ownerUserId: number,
-): string {
+export function telegramBotNoticeAudienceId(profile: string, ownerUserId: number): string {
   const normalized = normalizeTelegramProfileName(profile);
   if (!Number.isSafeInteger(ownerUserId) || ownerUserId <= 0) {
     throw new Error("Telegram Bot access requires a paired owner.");
@@ -40,8 +39,12 @@ export function telegramProfileRuntimeFile(profile: string): string {
     : `telegram-runtime-${profile}.json`;
 }
 
-export function telegramProfileFromSettings(settings: AppSettings, profile: string): TelegramProfileSettings {
-  if (profile !== DEFAULT_TELEGRAM_PROFILE) return { ...(settings.telegramProfiles?.[profile] ?? {}) };
+export function telegramProfileFromSettings(
+  settings: AppSettings,
+  profile: string,
+): TelegramProfileSettings {
+  if (profile !== DEFAULT_TELEGRAM_PROFILE)
+    return { ...(settings.telegramProfiles?.[profile] ?? {}) };
   return {
     enabled: settings.telegramEnabled,
     allowedUserId: settings.telegramAllowedUserId,
@@ -83,16 +86,30 @@ export function telegramProfilePatch(
   const next: TelegramProfileSettings = {
     ...telegramProfileFromSettings(settings, profile),
     ...(patch.telegramEnabled !== undefined ? { enabled: patch.telegramEnabled } : {}),
-    ...(Object.prototype.hasOwnProperty.call(patch, "telegramAllowedUserId") ? { allowedUserId: patch.telegramAllowedUserId } : {}),
-    ...(Object.prototype.hasOwnProperty.call(patch, "telegramProviderId") ? { providerId: patch.telegramProviderId } : {}),
-    ...(Object.prototype.hasOwnProperty.call(patch, "telegramModel") ? { model: patch.telegramModel } : {}),
-    ...(Object.prototype.hasOwnProperty.call(patch, "telegramThinkingLevel") ? { thinkingLevel: patch.telegramThinkingLevel } : {}),
-    ...(patch.telegramDraftPreviews !== undefined ? { draftPreviews: patch.telegramDraftPreviews } : {}),
+    ...(Object.prototype.hasOwnProperty.call(patch, "telegramAllowedUserId")
+      ? { allowedUserId: patch.telegramAllowedUserId }
+      : {}),
+    ...(Object.prototype.hasOwnProperty.call(patch, "telegramProviderId")
+      ? { providerId: patch.telegramProviderId }
+      : {}),
+    ...(Object.prototype.hasOwnProperty.call(patch, "telegramModel")
+      ? { model: patch.telegramModel }
+      : {}),
+    ...(Object.prototype.hasOwnProperty.call(patch, "telegramThinkingLevel")
+      ? { thinkingLevel: patch.telegramThinkingLevel }
+      : {}),
+    ...(patch.telegramDraftPreviews !== undefined
+      ? { draftPreviews: patch.telegramDraftPreviews }
+      : {}),
     ...(patch.telegramActivity !== undefined ? { activity: patch.telegramActivity } : {}),
     ...(patch.telegramRendering !== undefined ? { rendering: patch.telegramRendering } : {}),
     ...(patch.telegramVoiceMode !== undefined ? { voiceMode: patch.telegramVoiceMode } : {}),
-    ...(Object.prototype.hasOwnProperty.call(patch, "telegramWorkspaceId") ? { workspaceId: patch.telegramWorkspaceId } : {}),
-    ...(patch.telegramThreadedMode !== undefined ? { threadedMode: patch.telegramThreadedMode } : {}),
+    ...(Object.prototype.hasOwnProperty.call(patch, "telegramWorkspaceId")
+      ? { workspaceId: patch.telegramWorkspaceId }
+      : {}),
+    ...(patch.telegramThreadedMode !== undefined
+      ? { threadedMode: patch.telegramThreadedMode }
+      : {}),
   };
   if (profile !== DEFAULT_TELEGRAM_PROFILE) {
     return { telegramProfiles: { ...(settings.telegramProfiles ?? {}), [profile]: next } };
@@ -115,5 +132,7 @@ export function telegramProfilePatch(
 export function listTelegramProfileNames(settings: AppSettings): string[] {
   return [DEFAULT_TELEGRAM_PROFILE, ...Object.keys(settings.telegramProfiles ?? {})]
     .filter((value, index, values) => values.indexOf(value) === index)
-    .sort((a, b) => a === DEFAULT_TELEGRAM_PROFILE ? -1 : b === DEFAULT_TELEGRAM_PROFILE ? 1 : a.localeCompare(b));
+    .sort((a, b) =>
+      a === DEFAULT_TELEGRAM_PROFILE ? -1 : b === DEFAULT_TELEGRAM_PROFILE ? 1 : a.localeCompare(b),
+    );
 }

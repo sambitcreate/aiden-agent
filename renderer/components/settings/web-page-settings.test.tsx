@@ -16,10 +16,17 @@ afterEach(() => cleanup());
 const ACCOUNT_ID = "0123456789abcdef0123456789abcdef";
 
 /** A fake main process holding the settings document and a key count. */
-function webFetchServer(initial: { settings?: WebFetchSettingsV1; keys?: number; webSearchEnabled?: boolean } = {}) {
+function webFetchServer(
+  initial: { settings?: WebFetchSettingsV1; keys?: number; webSearchEnabled?: boolean } = {},
+) {
   let settings = initial.settings ?? defaultWebFetchSettings();
   const keys = initial.keys ?? 0;
-  const snapshot = () => webFetchRendererSnapshot({ settings, webSearchEnabled: initial.webSearchEnabled ?? true, keyCount: keys });
+  const snapshot = () =>
+    webFetchRendererSnapshot({
+      settings,
+      webSearchEnabled: initial.webSearchEnabled ?? true,
+      keyCount: keys,
+    });
   const calls = installBotTestIpc({
     "webSearch:pages:get": snapshot,
     "webSearch:pages:setEnabled": (enabled: unknown) => {
@@ -27,7 +34,10 @@ function webFetchServer(initial: { settings?: WebFetchSettingsV1; keys?: number;
       return snapshot();
     },
     "webSearch:pages:setExtractEnabled": (enabled: unknown) => {
-      if (enabled && !snapshot().extract.ready) throw new Error("Add the Cloudflare account ID and at least one API key before turning on extract mode.");
+      if (enabled && !snapshot().extract.ready)
+        throw new Error(
+          "Add the Cloudflare account ID and at least one API key before turning on extract mode.",
+        );
       settings = { ...settings, extract: { ...settings.extract, enabled: enabled as boolean } };
       return snapshot();
     },
@@ -35,7 +45,13 @@ function webFetchServer(initial: { settings?: WebFetchSettingsV1; keys?: number;
       settings = { ...settings, extract: { ...settings.extract, accountId: accountId as string } };
       return snapshot();
     },
-    "webSearch:keyPool:get": () => ({ providerId: "cloudflare-workers-ai", strategy: "ordered", maxEntries: 8, observedAt: 0, entries: [] }),
+    "webSearch:keyPool:get": () => ({
+      providerId: "cloudflare-workers-ai",
+      strategy: "ordered",
+      maxEntries: 8,
+      observedAt: 0,
+      entries: [],
+    }),
   });
   return { calls, current: () => settings };
 }
@@ -60,7 +76,8 @@ test("page reading is on, and extract mode cannot turn on until it is set up", a
   assert.ok(screen.getByRole("button", { name: "Set up Cloudflare…" }));
 });
 
-const startSetup = () => fireEvent.click(screen.getByRole("button", { name: "Set up Cloudflare…" }));
+const startSetup = () =>
+  fireEvent.click(screen.getByRole("button", { name: "Set up Cloudflare…" }));
 const setupForm = () => screen.queryByRole("textbox", { name: "Cloudflare account ID" });
 
 test("the setup form stays folded until asked for, and Cancel folds it again", async () => {
@@ -80,14 +97,20 @@ test("the setup form stays folded until asked for, and Cancel folds it again", a
   fireEvent.change(field as HTMLElement, { target: { value: "half-typed" } });
   fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
   assert.equal(setupForm() === null, true);
-  assert.equal(document.activeElement === screen.getByRole("button", { name: "Set up Cloudflare…" }), true);
+  assert.equal(
+    document.activeElement === screen.getByRole("button", { name: "Set up Cloudflare…" }),
+    true,
+  );
 
   startSetup();
   assert.equal((setupForm() as HTMLInputElement).value, "");
 });
 
 test("anything saved keeps the form open, even after the last of it is removed", async () => {
-  const settings = { ...defaultWebFetchSettings(), extract: { enabled: false, model: "cloudflare-clairic" as const, accountId: ACCOUNT_ID } };
+  const settings = {
+    ...defaultWebFetchSettings(),
+    extract: { enabled: false, model: "cloudflare-clairic" as const, accountId: ACCOUNT_ID },
+  };
   webFetchServer({ settings });
   await mount();
   const field = setupForm() as HTMLInputElement;
@@ -122,13 +145,18 @@ test("a malformed account ID is not sent; a valid one is saved lowercase", async
   });
   await waitFor(() => assert.ok(screen.getByText("Account ID saved.")));
   assert.deepEqual(
-    server.calls.filter((call) => call.channel === "webSearch:pages:setExtractAccountId").map((call) => call.args),
+    server.calls
+      .filter((call) => call.channel === "webSearch:pages:setExtractAccountId")
+      .map((call) => call.args),
     [[ACCOUNT_ID.toUpperCase()]],
   );
 });
 
 test("once set up, extract mode turns on and says so", async () => {
-  const settings = { ...defaultWebFetchSettings(), extract: { enabled: false, model: "cloudflare-clairic" as const, accountId: ACCOUNT_ID } };
+  const settings = {
+    ...defaultWebFetchSettings(),
+    extract: { enabled: false, model: "cloudflare-clairic" as const, accountId: ACCOUNT_ID },
+  };
   const server = webFetchServer({ settings, keys: 1 });
   await mount();
   const extract = screen.getByRole("switch", { name: "Extract only the values asked for" });
@@ -142,7 +170,10 @@ test("once set up, extract mode turns on and says so", async () => {
 });
 
 test("extract mode left on after its key is removed shows as paused and can be turned off", async () => {
-  const settings = { ...defaultWebFetchSettings(), extract: { enabled: true, model: "cloudflare-clairic" as const, accountId: ACCOUNT_ID } };
+  const settings = {
+    ...defaultWebFetchSettings(),
+    extract: { enabled: true, model: "cloudflare-clairic" as const, accountId: ACCOUNT_ID },
+  };
   const server = webFetchServer({ settings, keys: 0 });
   await mount();
   const extract = screen.getByRole("switch", { name: "Extract only the values asked for" });
@@ -166,7 +197,12 @@ test("turning page reading off hides the extract setup", async () => {
   await act(async () => {
     fireEvent.click(screen.getByRole("switch", { name: "Read web pages" }));
   });
-  await waitFor(() => assert.equal(screen.queryByRole("switch", { name: "Extract only the values asked for" }) === null, true));
+  await waitFor(() =>
+    assert.equal(
+      screen.queryByRole("switch", { name: "Extract only the values asked for" }) === null,
+      true,
+    ),
+  );
   assert.equal(server.current().enabled, false);
 });
 

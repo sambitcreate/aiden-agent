@@ -2,10 +2,7 @@ import { normalizeContext } from "@earendil-works/pi-ai";
 import assert from "node:assert/strict";
 import { createServer } from "node:http";
 import test from "node:test";
-import {
-  anthropicMessagesApi,
-  openAICompletionsApi,
-} from "@earendil-works/pi-ai/compat";
+import { anthropicMessagesApi, openAICompletionsApi } from "@earendil-works/pi-ai/compat";
 import type { Model, ProviderStreams } from "@earendil-works/pi-ai";
 import {
   PI_AUTH_COMPATIBILITY_TOKEN,
@@ -34,38 +31,57 @@ import {
 } from "./generation-runtime.js";
 
 test("canonical thinking spans keep separators and skip non-assistant boundaries", () => {
-  const message = { role: "assistant", content: [
-    { type: "thinking", thinking: "" },
-    { type: "thinking", thinking: "first" },
-    { type: "toolCall", name: "read_file" },
-    { type: "thinking", thinking: "second" },
-  ] };
+  const message = {
+    role: "assistant",
+    content: [
+      { type: "thinking", thinking: "" },
+      { type: "thinking", thinking: "first" },
+      { type: "toolCall", name: "read_file" },
+      { type: "thinking", thinking: "second" },
+    ],
+  };
   assert.equal(terminalAssistantReasoning(message), "\n\nfirst\n\nsecond");
   assert.deepEqual(terminalAssistantThinkingSegments(message), [
-    { start: 2, end: 7 }, { start: 9, end: 15 },
+    { start: 2, end: 7 },
+    { start: 9, end: 15 },
   ]);
   assert.equal(terminalAssistantThinkingSegments({ role: "toolResult", content: [] }), null);
-  assert.deepEqual(terminalAssistantThinkingSegments({ role: "assistant", content: [
-    { type: "thinking", thinking: "" },
-    { type: "toolCall", name: "read_file" },
-    { type: "thinking", thinking: "visible" },
-  ] }), [{ start: 0, end: 0 }, { start: 2, end: 9 }]);
-  const redacted = { role: "assistant", content: [
-    { type: "thinking", thinking: "visible first" },
-    { type: "thinking", thinking: "private", redacted: true },
-    { type: "thinking", thinking: "visible second" },
-  ] };
+  assert.deepEqual(
+    terminalAssistantThinkingSegments({
+      role: "assistant",
+      content: [
+        { type: "thinking", thinking: "" },
+        { type: "toolCall", name: "read_file" },
+        { type: "thinking", thinking: "visible" },
+      ],
+    }),
+    [
+      { start: 0, end: 0 },
+      { start: 2, end: 9 },
+    ],
+  );
+  const redacted = {
+    role: "assistant",
+    content: [
+      { type: "thinking", thinking: "visible first" },
+      { type: "thinking", thinking: "private", redacted: true },
+      { type: "thinking", thinking: "visible second" },
+    ],
+  };
   assert.equal(terminalAssistantReasoning(redacted), "visible first\n\nvisible second");
   assert.deepEqual(terminalAssistantThinkingSegments(redacted), [{ start: 0, end: 29 }]);
 });
 
 test("canonical Pi content anchors activity between rewritten text blocks", () => {
-  const anchors = terminalAssistantActivityAnchors({ role: "assistant", content: [
-    { type: "text", text: "a" },
-    { type: "toolCall", id: "call-a", name: "read_file" },
-    { type: "text", text: "XYZ" },
-    { type: "thinking", thinking: "later" },
-  ] });
+  const anchors = terminalAssistantActivityAnchors({
+    role: "assistant",
+    content: [
+      { type: "text", text: "a" },
+      { type: "toolCall", id: "call-a", name: "read_file" },
+      { type: "text", text: "XYZ" },
+      { type: "thinking", thinking: "later" },
+    ],
+  });
   assert.deepEqual(anchors?.thinkingOffsets, [4]);
   assert.equal(anchors?.toolOffsets.get("call-a"), 1);
 });
@@ -76,22 +92,10 @@ test("uses only the connection-bound runtime model as the image gate", () => {
 });
 
 test("model thinking preserves native normalization and honors generic Pi reasoning", () => {
-  assert.equal(
-    resolveGenerationThinkingLevel("google", { reasoning: true }, "high"),
-    "high",
-  );
-  assert.equal(
-    resolveGenerationThinkingLevel("google", { reasoning: true }, undefined),
-    "off",
-  );
-  assert.equal(
-    resolveGenerationThinkingLevel("google", { reasoning: false }, "high"),
-    "off",
-  );
-  assert.equal(
-    resolveGenerationThinkingLevel("openai", { reasoning: true }, "high"),
-    "high",
-  );
+  assert.equal(resolveGenerationThinkingLevel("google", { reasoning: true }, "high"), "high");
+  assert.equal(resolveGenerationThinkingLevel("google", { reasoning: true }, undefined), "off");
+  assert.equal(resolveGenerationThinkingLevel("google", { reasoning: false }, "high"), "off");
+  assert.equal(resolveGenerationThinkingLevel("openai", { reasoning: true }, "high"), "high");
   assert.equal(
     resolveGenerationThinkingLevel(
       "bedrock",
@@ -151,14 +155,7 @@ test("model thinking preserves native normalization and honors generic Pi reason
     ),
     "max",
   );
-  assert.equal(
-    resolveGenerationThinkingLevel(
-      "openai-codex",
-      { reasoning: false },
-      "high",
-    ),
-    "off",
-  );
+  assert.equal(resolveGenerationThinkingLevel("openai-codex", { reasoning: false }, "high"), "off");
   assert.equal(
     resolveGenerationThinkingLevel(
       "anthropic",
@@ -301,11 +298,9 @@ test("forwards the chat identity through Pi Agent options into the native stream
   assert.equal(agentOptions.sessionId, "chat-session-123");
   assert.throws(
     () =>
-      agentOptions.streamFn?.(
-        model,
-        normalizeContext({ messages: [] }),
-        { sessionId: agentOptions.sessionId },
-      ),
+      agentOptions.streamFn?.(model, normalizeContext({ messages: [] }), {
+        sessionId: agentOptions.sessionId,
+      }),
     /captured/u,
   );
   assert.equal(receivedSessionId, "chat-session-123");
@@ -314,10 +309,7 @@ test("forwards the chat identity through Pi Agent options into the native stream
 });
 
 test("uses an in-memory non-secret credential for an explicitly keyless provider", () => {
-  assert.equal(
-    resolveRuntimeApiKey({ needsKey: false }, null),
-    PI_AUTH_COMPATIBILITY_TOKEN,
-  );
+  assert.equal(resolveRuntimeApiKey({ needsKey: false }, null), PI_AUTH_COMPATIBILITY_TOKEN);
   assert.equal(
     resolveRuntimeApiKey({ needsKey: false }, "old saved key"),
     PI_AUTH_COMPATIBILITY_TOKEN,
@@ -325,17 +317,11 @@ test("uses an in-memory non-secret credential for an explicitly keyless provider
   assert.deepEqual(resolveRuntimeHeaders({ kind: "openai", needsKey: false }), {
     Authorization: null,
   });
-  assert.deepEqual(
-    resolveRuntimeHeaders({ kind: "anthropic", needsKey: false }),
-    {
-      Authorization: null,
-      "x-api-key": null,
-    },
-  );
-  assert.equal(
-    resolveRuntimeHeaders({ kind: "openai", needsKey: true }),
-    undefined,
-  );
+  assert.deepEqual(resolveRuntimeHeaders({ kind: "anthropic", needsKey: false }), {
+    Authorization: null,
+    "x-api-key": null,
+  });
+  assert.equal(resolveRuntimeHeaders({ kind: "openai", needsKey: true }), undefined);
 });
 
 test("keeps keyless auth off the wire and normalizes local reasoning", async (t) => {
@@ -352,9 +338,7 @@ test("keeps keyless auth off the wire and normalizes local reasoning", async (t)
         object: "chat.completion.chunk",
         created: 0,
         model: "local",
-        choices: [
-          { index: 0, delta: { role: "assistant" }, finish_reason: null },
-        ],
+        choices: [{ index: 0, delta: { role: "assistant" }, finish_reason: null }],
       })}\n\n`,
     );
     response.write(
@@ -490,10 +474,7 @@ test("uses Anthropic's single version path without sending keyless auth headers"
         },
         { event: "message_stop", data: { type: "message_stop" } },
       ]
-        .map(
-          ({ event, data }) =>
-            `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`,
-        )
+        .map(({ event, data }) => `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`)
         .join(""),
     );
   });
@@ -589,10 +570,7 @@ test("sends adaptive Claude thinking with the selected native effort", async (t)
           },
           { event: "message_stop", data: { type: "message_stop" } },
         ]
-          .map(
-            ({ event, data }) =>
-              `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`,
-          )
+          .map(({ event, data }) => `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`)
           .join(""),
       );
     });
@@ -644,10 +622,7 @@ test("sends adaptive Claude thinking with the selected native effort", async (t)
 });
 
 test("preserves normal API-key requirements for authenticated providers", () => {
-  assert.equal(
-    resolveRuntimeApiKey({ needsKey: true }, "  live-key  "),
-    "live-key",
-  );
+  assert.equal(resolveRuntimeApiKey({ needsKey: true }, "  live-key  "), "live-key");
   assert.equal(resolveRuntimeApiKey({ needsKey: true }, "   "), undefined);
   assert.equal(resolveRuntimeApiKey({ needsKey: true }, null), undefined);
 });
@@ -669,18 +644,9 @@ test("classifies terminal Pi errors without turning an aborted turn into an erro
     }),
     "The model couldn't complete this response.",
   );
-  assert.equal(
-    terminalGenerationError({ role: "assistant", stopReason: "aborted" }),
-    null,
-  );
-  assert.equal(
-    terminalGenerationWasAborted({ role: "assistant", stopReason: "aborted" }),
-    true,
-  );
-  assert.equal(
-    terminalGenerationWasAborted({ role: "toolResult", stopReason: "aborted" }),
-    false,
-  );
+  assert.equal(terminalGenerationError({ role: "assistant", stopReason: "aborted" }), null);
+  assert.equal(terminalGenerationWasAborted({ role: "assistant", stopReason: "aborted" }), true);
+  assert.equal(terminalGenerationWasAborted({ role: "toolResult", stopReason: "aborted" }), false);
 });
 
 test("surfaces output-limit stops as saved partial responses", () => {
@@ -691,10 +657,7 @@ test("surfaces output-limit stops as saved partial responses", () => {
     }) ?? "",
     /output limit.*partial response was saved/iu,
   );
-  assert.equal(
-    terminalGenerationLengthError({ role: "assistant", stopReason: "stop" }),
-    null,
-  );
+  assert.equal(terminalGenerationLengthError({ role: "assistant", stopReason: "stop" }), null);
 });
 
 test("surfaces a dependency abort unless the app explicitly requested cancellation", () => {
@@ -776,19 +739,13 @@ test("matches Pi reasoning display for hosted providers and the local visibility
       { type: "text", text: "Final answer." },
     ],
   };
-  assert.equal(
-    terminalAssistantReasoning(message),
-    "Inspect the request.\n\nDraft the answer.",
-  );
+  assert.equal(terminalAssistantReasoning(message), "Inspect the request.\n\nDraft the answer.");
   assert.equal(
     terminalAssistantReasoningFallback(message, false),
     terminalAssistantReasoning(message),
   );
   assert.equal(terminalAssistantReasoningFallback(message, true), "");
-  assert.equal(
-    terminalAssistantReasoning({ role: "user", content: message.content }),
-    "",
-  );
+  assert.equal(terminalAssistantReasoning({ role: "user", content: message.content }), "");
 });
 
 test("falls back per assistant turn instead of dropping a later terminal-only result", () => {
@@ -814,22 +771,10 @@ test("falls back per assistant turn instead of dropping a later terminal-only re
 });
 
 test("separates distinct assistant turns with one Markdown paragraph boundary", () => {
-  assert.equal(
-    assistantTurnTextSeparator("First turn.", "Second turn."),
-    "\n\n",
-  );
-  assert.equal(
-    assistantTurnTextSeparator("First turn.\n", "Second turn."),
-    "\n",
-  );
-  assert.equal(
-    assistantTurnTextSeparator("First turn.\n\n", "Second turn."),
-    "",
-  );
-  assert.equal(
-    assistantTurnTextSeparator("First turn.", "\nSecond turn."),
-    "\n",
-  );
+  assert.equal(assistantTurnTextSeparator("First turn.", "Second turn."), "\n\n");
+  assert.equal(assistantTurnTextSeparator("First turn.\n", "Second turn."), "\n");
+  assert.equal(assistantTurnTextSeparator("First turn.\n\n", "Second turn."), "");
+  assert.equal(assistantTurnTextSeparator("First turn.", "\nSecond turn."), "\n");
   assert.equal(assistantTurnTextSeparator("", "Second turn."), "");
 });
 
@@ -843,10 +788,7 @@ test("terminal reconciliation preserves paragraph boundaries across tool-separat
     },
     false,
   );
-  assert.equal(
-    projection.full,
-    "Before the tool.\n\nAfter the tool.",
-  );
+  assert.equal(projection.full, "Before the tool.\n\nAfter the tool.");
 });
 
 test("terminal reconciliation joins a continued cut-off reply without a paragraph break", () => {
@@ -878,14 +820,8 @@ test("reconciles interleaved streamed blocks to Pi terminal content order", () =
     },
     true,
   );
-  assert.equal(
-    projection.full,
-    "Earlier turn.\n\nFirst block. Second block.",
-  );
-  assert.equal(
-    projection.reasoning,
-    "Earlier reasoning.\n\nEarly thought.\n\nLate thought.",
-  );
+  assert.equal(projection.full, "Earlier turn.\n\nFirst block. Second block.");
+  assert.equal(projection.reasoning, "Earlier reasoning.\n\nEarly thought.\n\nLate thought.");
   assert.equal(projection.changed, true);
 });
 
@@ -907,10 +843,7 @@ test("terminal reconciliation exposes only readable Pi thinking and honors local
     true,
   );
   assert.equal(visible.full, "Final answer.");
-  assert.equal(
-    visible.reasoning,
-    "Readable first thought.\n\nReadable second thought.",
-  );
+  assert.equal(visible.reasoning, "Readable first thought.\n\nReadable second thought.");
   assert.equal(visible.reasoning.includes("Opaque provider payload."), false);
 
   const hidden = reconcileTerminalAssistantProjection(

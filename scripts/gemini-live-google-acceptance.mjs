@@ -29,10 +29,7 @@ import {
   parseGoogleLiveAppEvidence,
 } from "./gemini-live-google-acceptance-core.mjs";
 
-const repositoryRoot = path.resolve(
-  path.dirname(fileURLToPath(import.meta.url)),
-  "..",
-);
+const repositoryRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const packageJson = JSON.parse(
   await import("node:fs/promises").then(({ readFile }) =>
     readFile(path.join(repositoryRoot, "package.json"), "utf8"),
@@ -43,10 +40,7 @@ const TEMP_PREFIX = path.join(os.tmpdir(), "aiden-gemini-live-google-");
 
 async function installedVersion(packageName) {
   const manifest = JSON.parse(
-    await readFile(
-      path.join(repositoryRoot, "node_modules", packageName, "package.json"),
-      "utf8",
-    ),
+    await readFile(path.join(repositoryRoot, "node_modules", packageName, "package.json"), "utf8"),
   );
   return String(manifest.version);
 }
@@ -125,15 +119,7 @@ function gitValue(args, fallback) {
 
 function childEnvironment(root, evidencePath) {
   const environment = {};
-  for (const name of [
-    "HOME",
-    "LANG",
-    "LC_ALL",
-    "PATH",
-    "SHELL",
-    "TERM",
-    "TMPDIR",
-  ]) {
+  for (const name of ["HOME", "LANG", "LC_ALL", "PATH", "SHELL", "TERM", "TMPDIR"]) {
     if (process.env[name]) environment[name] = process.env[name];
   }
   return {
@@ -205,11 +191,7 @@ async function askExact(terminal, childExited, question, expected, deadlineAt) {
     }, remaining);
   });
   try {
-    const answer = await Promise.race([
-      terminal.question(question),
-      timeout,
-      childExited,
-    ]);
+    const answer = await Promise.race([terminal.question(question), timeout, childExited]);
     if (answer.trim() !== expected) {
       const error = new Error("Operator aborted acceptance.");
       error.code = "OPERATOR_ABORTED";
@@ -220,12 +202,7 @@ async function askExact(terminal, childExited, question, expected, deadlineAt) {
   }
 }
 
-async function requireAppEvidence(
-  evidencePath,
-  expectedEvent,
-  child,
-  deadlineAt,
-) {
+async function requireAppEvidence(evidencePath, expectedEvent, child, deadlineAt) {
   while (Date.now() < deadlineAt) {
     if (child.exitCode !== null || child.signalCode !== null) {
       const error = new Error("Aiden exited before acceptance completed.");
@@ -233,9 +210,7 @@ async function requireAppEvidence(
       throw error;
     }
     try {
-      const evidence = parseGoogleLiveAppEvidence(
-        await readFile(evidencePath, "utf8"),
-      );
+      const evidence = parseGoogleLiveAppEvidence(await readFile(evidencePath, "utf8"));
       if (evidence.has(expectedEvent)) return evidence.get(expectedEvent);
     } catch (error) {
       if (error?.code !== "ENOENT") throw error;
@@ -254,15 +229,8 @@ async function requirePinnedAppEvidence(
   child,
   deadlineAt,
 ) {
-  const elapsedMs = await requireAppEvidence(
-    evidencePath,
-    expectedEvent,
-    child,
-    deadlineAt,
-  );
-  const evidence = parseGoogleLiveAppEvidence(
-    await readFile(evidencePath, "utf8"),
-  );
+  const elapsedMs = await requireAppEvidence(evidencePath, expectedEvent, child, deadlineAt);
+  const evidence = parseGoogleLiveAppEvidence(await readFile(evidencePath, "utf8"));
   if (evidence.get("sessionId") !== expectedSessionId)
     throw new Error("Acceptance evidence changed Live sessions.");
   return elapsedMs;
@@ -275,8 +243,7 @@ async function stopChild(child) {
     new Promise((resolve) => child.once("exit", resolve)),
     new Promise((resolve) => setTimeout(resolve, 5_000)),
   ]);
-  if (child.exitCode === null && child.signalCode === null)
-    child.kill("SIGKILL");
+  if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
 }
 
 async function writeReceipt(receipt) {
@@ -305,15 +272,10 @@ try {
 }
 
 if (parsed && !googleLiveAcceptanceEnabled(process.env, parsed.confirmed)) {
-  console.error(
-    "Real Google Live acceptance is disabled without both explicit opt-ins.",
-  );
+  console.error("Real Google Live acceptance is disabled without both explicit opt-ins.");
   process.exitCode = 2;
 } else if (parsed) {
-  const gitDirty = gitValue(
-    ["status", "--porcelain", "--untracked-files=all"],
-    "unknown",
-  );
+  const gitDirty = gitValue(["status", "--porcelain", "--untracked-files=all"], "unknown");
   if (gitDirty !== "") {
     console.error(
       "Real Google Live acceptance requires a clean git tree so evidence is reproducible.",
@@ -328,9 +290,7 @@ if (parsed && !googleLiveAcceptanceEnabled(process.env, parsed.confirmed)) {
       stdio: "inherit",
     });
     if (build.status !== 0) {
-      console.error(
-        "A fresh Aiden build is required for real Google Live acceptance.",
-      );
+      console.error("A fresh Aiden build is required for real Google Live acceptance.");
       process.exitCode = 2;
     }
   }
@@ -344,10 +304,7 @@ if (parsed && !googleLiveAcceptanceEnabled(process.env, parsed.confirmed)) {
     const timing = fixedTiming();
     const temporary = await mkdtemp(TEMP_PREFIX);
     const userData = path.join(temporary, "user-data");
-    const appEvidencePath = path.join(
-      userData,
-      "gemini-live-acceptance-evidence.jsonl",
-    );
+    const appEvidencePath = path.join(userData, "gemini-live-acceptance-evidence.jsonl");
     await mkdir(userData, { recursive: true, mode: 0o700 });
     const environment = {
       appVersion: String(packageJson.version),
@@ -376,15 +333,11 @@ if (parsed && !googleLiveAcceptanceEnabled(process.env, parsed.confirmed)) {
       output: process.stdout,
     });
     try {
-      child = spawn(
-        electronPath,
-        [repositoryRoot, `--user-data-dir=${userData}`],
-        {
-          cwd: repositoryRoot,
-          env: childEnvironment(temporary, appEvidencePath),
-          stdio: "ignore",
-        },
-      );
+      child = spawn(electronPath, [repositoryRoot, `--user-data-dir=${userData}`], {
+        cwd: repositoryRoot,
+        env: childEnvironment(temporary, appEvidencePath),
+        stdio: "ignore",
+      });
       const childExited = new Promise((_, reject) => {
         child.once("error", () => {
           const error = new Error("Aiden failed to launch.");
@@ -398,9 +351,7 @@ if (parsed && !googleLiveAcceptanceEnabled(process.env, parsed.confirmed)) {
         });
       });
 
-      console.log(
-        "An isolated Aiden window is opening for the bounded real Google Live smoke.",
-      );
+      console.log("An isolated Aiden window is opening for the bounded real Google Live smoke.");
       console.log(
         "Enter the Google key only in Aiden Settings; never paste it into this terminal.",
       );
@@ -421,24 +372,12 @@ if (parsed && !googleLiveAcceptanceEnabled(process.env, parsed.confirmed)) {
         deadlineAt,
       );
       operatorEvidence.liveReadyObserved = true;
-      timing.appReadyMs = await requireAppEvidence(
-        appEvidencePath,
-        "ready",
-        child,
-        deadlineAt,
-      );
+      timing.appReadyMs = await requireAppEvidence(appEvidencePath, "ready", child, deadlineAt);
       appEvidence.ready = true;
-      const pinnedEvidence = parseGoogleLiveAppEvidence(
-        await readFile(appEvidencePath, "utf8"),
-      );
+      const pinnedEvidence = parseGoogleLiveAppEvidence(await readFile(appEvidencePath, "utf8"));
       const pinnedSessionId = pinnedEvidence.get("sessionId");
-      if (
-        typeof pinnedSessionId !== "string" ||
-        pinnedEvidence.has("stop_requested")
-      )
-        throw new Error(
-          "Live evidence was not a fresh active session at the ready gate.",
-        );
+      if (typeof pinnedSessionId !== "string" || pinnedEvidence.has("stop_requested"))
+        throw new Error("Live evidence was not a fresh active session at the ready gate.");
       timing.liveReadyMs = elapsed(started);
       await askExact(
         terminal,
@@ -517,9 +456,7 @@ if (parsed && !googleLiveAcceptanceEnabled(process.env, parsed.confirmed)) {
         operatorEvidence,
       });
       const receiptPath = await writeReceipt(receipt);
-      console.log(
-        `Google Live acceptance ${result}. Content-free receipt: ${receiptPath}`,
-      );
+      console.log(`Google Live acceptance ${result}. Content-free receipt: ${receiptPath}`);
       if (result !== "pass") process.exitCode = 1;
     } catch {
       console.error("Google Live acceptance receipt could not be written.");

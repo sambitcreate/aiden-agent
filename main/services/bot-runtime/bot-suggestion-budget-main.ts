@@ -3,4 +3,7 @@
 import { app } from "../../platform.js";
 import { createBotSuggestionBudget } from "./bot-suggestion-budget.js";
 
-export const botSuggestionBudget = createBotSuggestionBudget({ profileDir: () => app.getPath("userData"), now: Date.now });
+export const botSuggestionBudget = createBotSuggestionBudget({
+  profileDir: () => app.getPath("userData"),
+  now: Date.now,
+});

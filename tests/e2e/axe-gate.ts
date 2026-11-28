@@ -24,8 +24,7 @@ export type AxeExclusion = {
   reason: string;
 };
 
-export const AXE_EXCLUSIONS: readonly AxeExclusion[] = Object.freeze([
-]);
+export const AXE_EXCLUSIONS: readonly AxeExclusion[] = Object.freeze([]);
 
 export type AxeAuditOptions = {
   /** Names the surface for exclusions and failure messages. */
@@ -50,11 +49,7 @@ function nodeTarget(node: AxeNode): string {
     .join(" >> ");
 }
 
-function matches(
-  exclusion: AxeExclusion,
-  rule: string,
-  target: string,
-): boolean {
+function matches(exclusion: AxeExclusion, rule: string, target: string): boolean {
   if (exclusion.rule !== rule) return false;
   return typeof exclusion.target === "string"
     ? exclusion.target === target
@@ -76,9 +71,7 @@ export function axeProblems(
   for (const violation of violations) {
     for (const node of violation.nodes) {
       const target = nodeTarget(node);
-      const exclusion = own.find((candidate) =>
-        matches(candidate, violation.id, target),
-      );
+      const exclusion = own.find((candidate) => matches(candidate, violation.id, target));
       if (exclusion) {
         used.add(exclusion);
         continue;
@@ -105,18 +98,9 @@ export function axeProblems(
  * (empty when clean). Legacy mode runs axe inside the Electron page itself;
  * the default mode needs a second blank page, which Electron cannot open.
  */
-export async function auditAccessibility(
-  page: Page,
-  options: AxeAuditOptions,
-): Promise<string[]> {
-  let builder = new AxeBuilder({ page })
-    .withTags([...AXE_WCAG_TAGS])
-    .setLegacyMode(true);
+export async function auditAccessibility(page: Page, options: AxeAuditOptions): Promise<string[]> {
+  let builder = new AxeBuilder({ page }).withTags([...AXE_WCAG_TAGS]).setLegacyMode(true);
   if (options.include) builder = builder.include(options.include);
   const results = await builder.analyze();
-  return axeProblems(
-    options.surface,
-    results.violations as AxeViolation[],
-    options.exclusions,
-  );
+  return axeProblems(options.surface, results.violations as AxeViolation[], options.exclusions);
 }

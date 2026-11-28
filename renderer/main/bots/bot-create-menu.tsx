@@ -28,7 +28,11 @@ export function useBotCreateDialogs(onOpenChat: (bot: BotDefinition) => void) {
     openTemplates: () => setTemplates(true),
     dialogs: (
       <>
-        <BotCreateFlow open={creating} onOpenChange={setCreating} onCreated={(bot) => onOpenChat(bot)} />
+        <BotCreateFlow
+          open={creating}
+          onOpenChange={setCreating}
+          onCreated={(bot) => onOpenChat(bot)}
+        />
         <BotTemplatesDialog open={templates} onOpenChange={setTemplates} onOpenChat={onOpenChat} />
       </>
     ),

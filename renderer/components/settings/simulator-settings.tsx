@@ -1,6 +1,16 @@
 import * as React from "react";
 import { LoaderCircle } from "lucide-react";
-import { AlertDialog, Badge, Button, Callout, Field, FieldSet, SettingsDisclosure, Switch, Text } from "../ui";
+import {
+  AlertDialog,
+  Badge,
+  Button,
+  Callout,
+  Field,
+  FieldSet,
+  SettingsDisclosure,
+  Switch,
+  Text,
+} from "../ui";
 import { devicesApi } from "../../lib/ipc";
 import { useAppCapabilities } from "../../lib/app-capabilities";
 import {
@@ -10,11 +20,22 @@ import {
   type DeviceServiceState,
   type DeviceToolchainState,
 } from "../../shared/devices";
-import { previousToolVersion, toolNeedsUpdate, type DeviceToolVersion } from "../../shared/device-ssh-hosts";
+import {
+  previousToolVersion,
+  toolNeedsUpdate,
+  type DeviceToolVersion,
+} from "../../shared/device-ssh-hosts";
 import { DeviceHostUpdates, useDeviceHostRetry } from "../device-host-diagnostics";
 import { SimulatorSshHosts } from "./simulator-ssh-hosts";
 
-type Pending = DeviceConsentKind | "prune" | "remove" | "inspect" | "update-hub" | "update-agent" | null;
+type Pending =
+  | DeviceConsentKind
+  | "prune"
+  | "remove"
+  | "inspect"
+  | "update-hub"
+  | "update-agent"
+  | null;
 
 export interface SimulatorSettingsViewProps {
   state: DeviceServiceState | null;
@@ -39,32 +60,33 @@ export interface SimulatorSettingsViewProps {
   onRetry?(hostId: string): void;
 }
 
-const CONSENT_ROWS: ReadonlyArray<{ kind: DeviceConsentKind; label: string; description: string }> = [
-  {
-    kind: "streaming",
-    label: "Simulator streaming",
-    description:
-      "Run the pinned device hub on this Mac so you can view and control iOS Simulators in the Environment panel.",
-  },
-  {
-    kind: "agentAccess",
-    label: "Agent access",
-    description:
-      "In chats, Aiden can open a simulator and tap, type, and install apps with agent-device while you watch.",
-  },
-  {
-    kind: "peerSharing",
-    label: "Share with paired Macs",
-    description:
-      "Paired Macs that you granted simulator control can view and drive this Mac’s simulators. Nothing is shared until you turn this on.",
-  },
-  {
-    kind: "mobileSharing",
-    label: "Share with Aiden On The Go",
-    description:
-      "Your paired iPhone and Android phones can watch, tap, and shut down this Mac’s simulators. They can’t change simulator settings. Turning this off disconnects them.",
-  },
-];
+const CONSENT_ROWS: ReadonlyArray<{ kind: DeviceConsentKind; label: string; description: string }> =
+  [
+    {
+      kind: "streaming",
+      label: "Simulator streaming",
+      description:
+        "Run the pinned device hub on this Mac so you can view and control iOS Simulators in the Environment panel.",
+    },
+    {
+      kind: "agentAccess",
+      label: "Agent access",
+      description:
+        "In chats, Aiden can open a simulator and tap, type, and install apps with agent-device while you watch.",
+    },
+    {
+      kind: "peerSharing",
+      label: "Share with paired Macs",
+      description:
+        "Paired Macs that you granted simulator control can view and drive this Mac’s simulators. Nothing is shared until you turn this on.",
+    },
+    {
+      kind: "mobileSharing",
+      label: "Share with Aiden On The Go",
+      description:
+        "Your paired iPhone and Android phones can watch, tap, and shut down this Mac’s simulators. They can’t change simulator settings. Turning this off disconnects them.",
+    },
+  ];
 
 const CONFIRM_COPY = {
   streaming: {
@@ -94,7 +116,9 @@ function helperToolsSummary(toolchain: DeviceToolchainState | null): string {
       : "No pinned packages installed";
   }
   const noun = total === 1 ? "pinned package" : "pinned packages";
-  return installed === total ? `${total} ${noun} installed` : `${installed} of ${total} ${noun} installed`;
+  return installed === total
+    ? `${total} ${noun} installed`
+    : `${installed} of ${total} ${noun} installed`;
 }
 
 function statusLabel(state: DeviceServiceState): string {
@@ -155,13 +179,22 @@ export function SimulatorSettingsView({
   }
   const busy = pending !== null;
   const anyInstalled = toolchain?.tools.some((tool) => tool.installed.length > 0) ?? false;
-  const stale = toolchain?.tools.some((tool) => tool.installed.some((version) => version !== tool.pinned)) ?? false;
+  const stale =
+    toolchain?.tools.some((tool) => tool.installed.some((version) => version !== tool.pinned)) ??
+    false;
   const anyGranted =
-    state.consent.streaming || state.consent.agentAccess || state.consent.peerSharing || state.consent.mobileSharing === true;
-  const confirmCopy = confirming === "streaming" || confirming === "agentAccess" ? CONFIRM_COPY[confirming] : null;
+    state.consent.streaming ||
+    state.consent.agentAccess ||
+    state.consent.peerSharing ||
+    state.consent.mobileSharing === true;
+  const confirmCopy =
+    confirming === "streaming" || confirming === "agentAccess" ? CONFIRM_COPY[confirming] : null;
   const localTools = state.hosts.find((host) => host.id === LOCAL_DEVICE_HOST_ID)?.tools;
-  const updateAvailable = toolchain?.tools.some((tool) => toolNeedsUpdate(localTools?.[tool.id])) ?? false;
-  const upToDate = (toolchain?.tools.length ?? 0) > 0 && toolchain?.tools.every((tool) => tool.installed.includes(tool.pinned));
+  const updateAvailable =
+    toolchain?.tools.some((tool) => toolNeedsUpdate(localTools?.[tool.id])) ?? false;
+  const upToDate =
+    (toolchain?.tools.length ?? 0) > 0 &&
+    toolchain?.tools.every((tool) => tool.installed.includes(tool.pinned));
 
   return (
     <>
@@ -173,11 +206,18 @@ export function SimulatorSettingsView({
             <Field
               key={row.kind}
               label={row.label}
-              description={needsStreaming ? `${row.description} Requires simulator streaming.` : row.description}
+              description={
+                needsStreaming
+                  ? `${row.description} Requires simulator streaming.`
+                  : row.description
+              }
             >
               <div className="flex items-center justify-end gap-2">
                 {pending === row.kind ? (
-                  <LoaderCircle className="size-4 animate-spin text-secondary motion-reduce:animate-none" aria-hidden />
+                  <LoaderCircle
+                    className="size-4 animate-spin text-secondary motion-reduce:animate-none"
+                    aria-hidden
+                  />
                 ) : null}
                 <Switch
                   checked={granted}
@@ -189,12 +229,16 @@ export function SimulatorSettingsView({
             </Field>
           );
         })}
-        <Field label="Status" description="Checked when this page opens. Aiden never polls in the background.">
+        <Field
+          label="Status"
+          description="Checked when this page opens. Aiden never polls in the background."
+        >
           <Text variant="small" color="secondary" role="status" className="text-right">
             {statusLabel(state)}
           </Text>
         </Field>
-        {onRetry && state.hosts.some((host) => ["installing", "starting", "error"].includes(host.status)) ? (
+        {onRetry &&
+        state.hosts.some((host) => ["installing", "starting", "error"].includes(host.status)) ? (
           <Field label="Updates" orientation="vertical">
             <DeviceHostUpdates hosts={state.hosts} pending={retrying} onRetry={onRetry} />
           </Field>
@@ -204,11 +248,13 @@ export function SimulatorSettingsView({
       <SettingsDisclosure
         title="Helper tools"
         summary={helperToolsSummary(toolchain)}
-        badge={updateAvailable ? (
-          <Badge color="warning">Update available</Badge>
-        ) : upToDate ? (
-          <Badge color="green">Up to date</Badge>
-        ) : null}
+        badge={
+          updateAvailable ? (
+            <Badge color="warning">Update available</Badge>
+          ) : upToDate ? (
+            <Badge color="green">Up to date</Badge>
+          ) : null
+        }
         defaultOpen={updateAvailable}
         className="mb-3"
       >
@@ -234,10 +280,17 @@ export function SimulatorSettingsView({
                   : "Downloaded from npm only after you allow it.",
           ].filter(Boolean);
           return (
-            <Field key={tool.id} label={<span className="font-mono">{tool.name}</span>} description={notes.join(" ")}>
+            <Field
+              key={tool.id}
+              label={<span className="font-mono">{tool.name}</span>}
+              description={notes.join(" ")}
+            >
               <div className="flex flex-wrap items-center justify-end gap-2">
                 <Badge className="whitespace-nowrap">Pinned {tool.pinned}</Badge>
-                <Badge color={current ? "green" : update ? "warning" : undefined} className="whitespace-nowrap">
+                <Badge
+                  color={current ? "green" : update ? "warning" : undefined}
+                  className="whitespace-nowrap"
+                >
                   {current ? "Installed" : update ? "Update available" : "Not installed"}
                 </Badge>
                 {update && permitted && onUpdate ? (
@@ -329,11 +382,13 @@ export function SimulatorSettings() {
   const [toolchain, setToolchain] = React.useState<DeviceToolchainState | null>(null);
   const [pending, setPending] = React.useState<Pending>(null);
   const [error, setError] = React.useState<string | null>(null);
-  const [confirming, setConfirming] = React.useState<SimulatorSettingsViewProps["confirming"]>(null);
+  const [confirming, setConfirming] =
+    React.useState<SimulatorSettingsViewProps["confirming"]>(null);
   const retry = useDeviceHostRetry();
   const returnFocusRef = React.useRef<HTMLElement | null>(null);
   const confirm = (next: NonNullable<SimulatorSettingsViewProps["confirming"]>) => {
-    returnFocusRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    returnFocusRef.current =
+      document.activeElement instanceof HTMLElement ? document.activeElement : null;
     setConfirming(next);
   };
 
@@ -347,9 +402,12 @@ export function SimulatorSettings() {
       // Installs and removals elsewhere (the Simulator tab, another window) change what is on disk.
       // Re-read on status changes only: a disk read, never a poll.
       if (lastStatus !== null && next.hostStatus !== lastStatus) {
-        void devicesApi.toolchain().then((tools) => {
-          if (current) setToolchain(tools);
-        }, () => undefined);
+        void devicesApi.toolchain().then(
+          (tools) => {
+            if (current) setToolchain(tools);
+          },
+          () => undefined,
+        );
       }
       lastStatus = next.hostStatus;
     });
@@ -361,7 +419,8 @@ export function SimulatorSettings() {
         lastStatus ??= nextState.hostStatus;
       })
       .catch((reason: unknown) => {
-        if (current) setError(reason instanceof Error ? reason.message : "Could not read simulator settings.");
+        if (current)
+          setError(reason instanceof Error ? reason.message : "Could not read simulator settings.");
       });
     return () => {
       current = false;
@@ -411,7 +470,8 @@ export function SimulatorSettings() {
           else void run(kind, () => devicesApi.setConsent(kind, granted).then(setState));
         }}
         onConfirm={() => {
-          if (confirming === "remove") void run("remove", () => devicesApi.removeTools().then(setState));
+          if (confirming === "remove")
+            void run("remove", () => devicesApi.removeTools().then(setState));
           else if (confirming) {
             const kind = confirming;
             void run(kind, () => devicesApi.setConsent(kind, true).then(setState));
@@ -424,7 +484,11 @@ export function SimulatorSettings() {
         onPrune={() => void run("prune", () => devicesApi.pruneTools().then(setToolchain))}
         onRemove={() => confirm("remove")}
         onInspect={() => void run("inspect", () => devicesApi.inspectTools().then(setState))}
-        onUpdate={(tool) => void run(`update-${tool}`, () => devicesApi.updateTool({ hostId: LOCAL_DEVICE_HOST_ID, tool }).then(setState))}
+        onUpdate={(tool) =>
+          void run(`update-${tool}`, () =>
+            devicesApi.updateTool({ hostId: LOCAL_DEVICE_HOST_ID, tool }).then(setState),
+          )
+        }
         retrying={retry.pending}
         onRetry={retry.retry}
       />

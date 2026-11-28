@@ -479,4 +479,3 @@ export function parseParallelMcpResponse(
   }
   return { ok: false, error: closedError("invalid_response") };
 }
-

@@ -28,13 +28,18 @@ export interface RunApproval {
  * Aiden can ask, and a run answering a tainted lead may not pass a call on the
  * lead's word (Phase 5), so either shows the card instead.
  */
-export function runJudgeAvailable(input: { harnessProvider: boolean; leadRequestTrusted: boolean }): boolean {
+export function runJudgeAvailable(input: {
+  harnessProvider: boolean;
+  leadRequestTrusted: boolean;
+}): boolean {
   return !input.harnessProvider && input.leadRequestTrusted;
 }
 
 export function legacyAccessOf(policy: WorkspaceApprovalPolicy): "full" | "ask" | "none" {
   if (policy.chatOnly) return "none";
-  return policy.mode === "never" && policy.macGrants.has("shell") && policy.macGrants.has("files") ? "full" : "ask";
+  return policy.mode === "never" && policy.macGrants.has("shell") && policy.macGrants.has("files")
+    ? "full"
+    : "ask";
 }
 
 /**
@@ -61,7 +66,10 @@ export function approvalCeilingOf(policy: WorkspaceApprovalPolicy): ApprovalCeil
  * Both ceilings at once: the stricter mode, only the Mac grants both allow,
  * and Chat only if either is. Without `other`, `ceiling` is unchanged.
  */
-export function narrowApprovalCeiling(ceiling: ApprovalCeiling, other: ApprovalCeiling | undefined): ApprovalCeiling {
+export function narrowApprovalCeiling(
+  ceiling: ApprovalCeiling,
+  other: ApprovalCeiling | undefined,
+): ApprovalCeiling {
   if (!other) return ceiling;
   const allowed = new Set(other.macGrants);
   return {
@@ -80,11 +88,17 @@ export function withApprovalCeiling(
   ceiling: ApprovalCeiling | undefined,
 ): WorkspaceApprovalPolicy {
   if (!ceiling) return policy;
-  const mode = MODE_STRICTNESS[ceiling.mode] < MODE_STRICTNESS[policy.mode] ? ceiling.mode : policy.mode;
+  const mode =
+    MODE_STRICTNESS[ceiling.mode] < MODE_STRICTNESS[policy.mode] ? ceiling.mode : policy.mode;
   const allowed = new Set(ceiling.macGrants);
   const macGrants = new Set([...policy.macGrants].filter((grant) => allowed.has(grant)));
   const chatOnly = policy.chatOnly || ceiling.chatOnly;
-  const legacyFull = policy.legacyFull && mode === "never" && macGrants.has("shell") && macGrants.has("files") && !chatOnly;
+  const legacyFull =
+    policy.legacyFull &&
+    mode === "never" &&
+    macGrants.has("shell") &&
+    macGrants.has("files") &&
+    !chatOnly;
   return { ...policy, mode, macGrants, chatOnly, legacyFull };
 }
 
@@ -104,15 +118,24 @@ export async function currentWorkspaceApproval(
   /** A started chat's ceiling, applied again on every read so a mode change can't lift it. */
   ceiling?: ApprovalCeiling,
 ): Promise<WorkspaceApprovalPolicy | undefined> {
-  const [settings, workspace] = await Promise.all([ports.getSettings(), ports.getWorkspace(workspaceId)]);
+  const [settings, workspace] = await Promise.all([
+    ports.getSettings(),
+    ports.getWorkspace(workspaceId),
+  ]);
   if (!workspace) return undefined;
-  return withApprovalCeiling(workspaceApprovalPolicy(workspace, effectiveApprovalMode(settings, true)), ceiling);
+  return withApprovalCeiling(
+    workspaceApprovalPolicy(workspace, effectiveApprovalMode(settings, true)),
+    ceiling,
+  );
 }
 
 /** The workspace after "Allow in this workspace" on a Mac card. */
 export function workspaceWithMacGrant(workspace: Workspace, grant: MacGrantClass): Workspace {
   const patch = workspaceApprovalPatch(workspace, { grantMac: grant });
-  const next: Workspace = { ...workspace, ...(patch.permission ? { permission: patch.permission } : {}) };
+  const next: Workspace = {
+    ...workspace,
+    ...(patch.permission ? { permission: patch.permission } : {}),
+  };
   if (patch.approvalMode) next.approvalMode = patch.approvalMode;
   else delete next.approvalMode;
   if (patch.macGrants) next.macGrants = patch.macGrants;
@@ -144,7 +167,13 @@ export async function generationApprovalPolicy(
   input: GenerationApprovalInput,
   getSettings: () => Promise<ApprovalModeSettings>,
 ): Promise<WorkspaceApprovalPolicy | undefined> {
-  if (!input.workspace || input.botBound || input.mode !== undefined || input.permission !== undefined) return undefined;
+  if (
+    !input.workspace ||
+    input.botBound ||
+    input.mode !== undefined ||
+    input.permission !== undefined
+  )
+    return undefined;
   return withApprovalCeiling(
     workspaceApprovalPolicy(input.workspace, effectiveApprovalMode(await getSettings(), true)),
     input.ceiling,

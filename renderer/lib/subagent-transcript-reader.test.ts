@@ -14,7 +14,9 @@ function transcript(runId: string, revision: number, open = false): SubagentTran
     trimmed: false,
     entries: [
       { kind: "task", text: "Find the parser." },
-      ...(open ? [{ kind: "message" as const, text: "Still writ", steps: [], startedAt: 1_000 }] : []),
+      ...(open
+        ? [{ kind: "message" as const, text: "Still writ", steps: [], startedAt: 1_000 }]
+        : []),
     ],
   };
 }
@@ -107,7 +109,10 @@ test("each run has one read in flight and at most one trailing read, at most onc
   const h = harness();
   // A helper streaming to another window: its revision moves many times a second.
   for (let revision = 10; revision < 20; revision += 1) {
-    h.reader.request("chat-1", "run-a", { reason: `run:running:${revision}`, skipIfLoadedAt: revision });
+    h.reader.request("chat-1", "run-a", {
+      reason: `run:running:${revision}`,
+      skipIfLoadedAt: revision,
+    });
   }
   assert.equal(h.reads.length, 1, "one read in flight");
   h.reads[0]!.resolve(transcript("run-a", 5));
@@ -231,7 +236,11 @@ test("a failure clears once a newer request finds its copy already read", async 
   h.reader.request("chat-1", "run-a", { reason: "run:running:40", skipIfLoadedAt: 40 });
   h.reads[0]!.reject(new Error("busy"));
   await h.flush();
-  assert.deepEqual(last(h.settled), { chatId: "chat-1", runId: "run-a", failedReason: "run:running:40" });
+  assert.deepEqual(last(h.settled), {
+    chatId: "chat-1",
+    runId: "run-a",
+    failedReason: "run:running:40",
+  });
 
   h.reader.noteLoaded("chat-1", "run-a", 41);
   await h.advance(1_000);
@@ -246,15 +255,27 @@ test("a finished helper with nothing saved yet is read again until its final cop
   h.reader.finish("run-a");
   h.reads[0]!.resolve(null);
   await h.flush();
-  assert.deepEqual(last(h.settled), { chatId: "chat-1", runId: "run-a", failedReason: null }, "not a failure");
+  assert.deepEqual(
+    last(h.settled),
+    { chatId: "chat-1", runId: "run-a", failedReason: null },
+    "not a failure",
+  );
 
   // The run's own record asks again at the same revision: an empty answer did not count as read.
-  h.reader.request("chat-1", "run-a", { reason: "run:completed:7", skipIfLoadedAt: 7, final: true });
+  h.reader.request("chat-1", "run-a", {
+    reason: "run:completed:7",
+    skipIfLoadedAt: 7,
+    final: true,
+  });
   await h.advance(1_000);
   assert.equal(h.reads.length, 2);
   h.reads[1]!.resolve(transcript("run-a", 4, true));
   await h.flush();
-  assert.equal(last(h.transcripts)?.transcript.revision, 4, "the unfinished copy still shows meanwhile");
+  assert.equal(
+    last(h.transcripts)?.transcript.revision,
+    4,
+    "the unfinished copy still shows meanwhile",
+  );
 
   await h.advance(1_999);
   assert.equal(h.reads.length, 2, "each read waits longer than the one before");
@@ -280,11 +301,22 @@ test("a finished helper whose final copy never lands is read a bounded number of
     await h.flush();
     await h.advance(60_000);
   }
-  assert.equal(h.reads.length, SUBAGENT_TRANSCRIPT_FINAL_READ_ATTEMPTS, "the last copy is accepted");
-  assert.equal(h.settled.every((entry) => entry.failedReason === null), true);
+  assert.equal(
+    h.reads.length,
+    SUBAGENT_TRANSCRIPT_FINAL_READ_ATTEMPTS,
+    "the last copy is accepted",
+  );
+  assert.equal(
+    h.settled.every((entry) => entry.failedReason === null),
+    true,
+  );
 
   // Accepted at that revision, so the same ask is not read again.
-  h.reader.request("chat-1", "run-a", { reason: "run:completed:3", skipIfLoadedAt: 3, final: true });
+  h.reader.request("chat-1", "run-a", {
+    reason: "run:completed:3",
+    skipIfLoadedAt: 3,
+    final: true,
+  });
   await h.advance(60_000);
   assert.equal(h.reads.length, SUBAGENT_TRANSCRIPT_FINAL_READ_ATTEMPTS);
 });

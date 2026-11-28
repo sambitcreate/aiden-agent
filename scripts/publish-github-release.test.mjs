@@ -194,7 +194,9 @@ test("the workflow's relative invocation reads the release's checked-in notes", 
     env,
   });
   const state = JSON.parse(await readFile(setup.statePath, "utf8"));
-  const checkedIn = (await readFile(new URL("../docs/release-notes/v0.62.0.md", import.meta.url), "utf8")).trim();
+  const checkedIn = (
+    await readFile(new URL("../docs/release-notes/v0.62.0.md", import.meta.url), "utf8")
+  ).trim();
   assert.equal(state.createCalls, 1);
   assert.equal(
     state.notes,
@@ -252,7 +254,10 @@ test("fails closed when an ambiguous create resolves to a foreign release", asyn
 test("rejects mismatched Linux update feeds before creating a release", async () => {
   const setup = await fixture({});
   await writeFile(path.join(setup.distribution, "latest-linux-arm64.yml"), "version: 0.30.1\n");
-  await assert.rejects(execFileAsync("bash", [publisher.pathname, setup.distribution], { env: setup.env }), /does not match/u);
+  await assert.rejects(
+    execFileAsync("bash", [publisher.pathname, setup.distribution], { env: setup.env }),
+    /does not match/u,
+  );
   const state = JSON.parse(await readFile(setup.statePath, "utf8"));
   assert.equal(state.createCalls, 0);
   assert.equal(state.uploadCalls, 0);

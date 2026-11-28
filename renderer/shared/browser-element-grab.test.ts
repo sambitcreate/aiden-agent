@@ -28,11 +28,21 @@ function sampleElement(overrides: Partial<GrabbedElementContextV1> = {}): Grabbe
       {
         name: "LandingHeroClient",
         environment: "client",
-        source: { filePath: "src/components/LandingHeroClient.tsx", line: 42, column: 5, symbolicated: true },
+        source: {
+          filePath: "src/components/LandingHeroClient.tsx",
+          line: 42,
+          column: 5,
+          symbolicated: true,
+        },
       },
       { name: "LandingPage", environment: "server" },
     ],
-    source: { filePath: "src/components/LandingHeroClient.tsx", line: 42, column: 5, symbolicated: true },
+    source: {
+      filePath: "src/components/LandingHeroClient.tsx",
+      line: 42,
+      column: 5,
+      symbolicated: true,
+    },
     props: { variant: "primary", count: 3, disabled: false, note: null },
     tagName: "section",
     selector: "main > section.hero",
@@ -77,9 +87,15 @@ test("parseGrabbedElements append mode accepts valid elements and rejects invali
 
   assert.throws(() => parseGrabbedElements("not-an-array", "append"));
   assert.throws(() => parseGrabbedElements([{ ...valid, extraField: true }], "append"));
-  assert.throws(() => parseGrabbedElements([{ ...valid, thumbnailAttachmentId: "grab-thumb_other" }], "append"));
-  assert.throws(() => parseGrabbedElements([{ ...valid, attributes: { onclick: "alert(1)" } }], "append"));
-  assert.throws(() => parseGrabbedElements([{ ...valid, attributes: { value: "secret" } }], "append"));
+  assert.throws(() =>
+    parseGrabbedElements([{ ...valid, thumbnailAttachmentId: "grab-thumb_other" }], "append"),
+  );
+  assert.throws(() =>
+    parseGrabbedElements([{ ...valid, attributes: { onclick: "alert(1)" } }], "append"),
+  );
+  assert.throws(() =>
+    parseGrabbedElements([{ ...valid, attributes: { value: "secret" } }], "append"),
+  );
   assert.throws(() => parseGrabbedElements([valid, sampleElement({ id: valid.id })], "append"));
 
   const tooMany = Array.from({ length: MAX_GRABBED_ELEMENTS_PER_MESSAGE + 1 }, (_, i) =>

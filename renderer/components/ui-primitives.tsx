@@ -49,7 +49,10 @@ export function Segmented<T extends string>({
       orientation="horizontal"
       loop
       disabled={disabled}
-      className={cn("inline-flex max-w-full min-w-0 gap-0.5 rounded-control bg-control p-0.5", className)}
+      className={cn(
+        "inline-flex max-w-full min-w-0 gap-0.5 rounded-control bg-control p-0.5",
+        className,
+      )}
       {...aria}
     >
       {options.map((option) => (
@@ -97,7 +100,13 @@ export function Tabs<T extends string>({
           <TabsPrimitive.Trigger
             key={item.value}
             value={item.value}
-            {...(idBase !== undefined ? { id: tabIds(idBase, item.value).tab, "aria-controls": item.value === value ? tabIds(idBase, item.value).panel : undefined } : {})}
+            {...(idBase !== undefined
+              ? {
+                  id: tabIds(idBase, item.value).tab,
+                  "aria-controls":
+                    item.value === value ? tabIds(idBase, item.value).panel : undefined,
+                }
+              : {})}
             className="h-7 rounded-menu px-3 text-small text-secondary outline-none transition-[background-color,color] duration-(--motion-duration) ease-standard hover:bg-control hover:text-primary data-[state=active]:bg-control data-[state=active]:text-primary"
           >
             {item.label}
@@ -132,7 +141,11 @@ export function Checkbox({
         className="grid size-4 shrink-0 place-items-center rounded-md bg-control-hover shadow-control-pressed outline-none transition-[background-color,box-shadow] duration-(--motion-duration) ease-standard hover:bg-control-active disabled:pointer-events-none disabled:opacity-45 data-[state=checked]:bg-fill-accent data-[state=checked]:shadow-control"
       >
         <CheckboxPrimitive.Indicator>
-          <Check aria-hidden="true" className="size-3 text-fill-accent-foreground" strokeWidth={3} />
+          <Check
+            aria-hidden="true"
+            className="size-3 text-fill-accent-foreground"
+            strokeWidth={3}
+          />
         </CheckboxPrimitive.Indicator>
       </CheckboxPrimitive.Root>
       <label htmlFor={id} className="min-w-0 text-small text-primary">
@@ -230,7 +243,13 @@ export function Progress({
  * Shows nothing while its surface is covered (see `SurfaceCovered`), and
  * closes when an enclosing `DismissHoverSurfaces` fires.
  */
-export function Tooltip({ content, children }: { content: React.ReactNode; children: React.ReactElement }) {
+export function Tooltip({
+  content,
+  children,
+}: {
+  content: React.ReactNode;
+  children: React.ReactElement;
+}) {
   const covered = useSurfaceCovered();
   const [open, onOpenChange] = useDismissibleHoverOpen({});
   return (
@@ -274,30 +293,48 @@ export function Disclosure({
 }) {
   const [open, setOpen] = React.useState(defaultOpen);
   return (
-    <CollapsiblePrimitive.Root open={open} onOpenChange={setOpen} className={cn("flex min-w-0 flex-col gap-1", className)}>
+    <CollapsiblePrimitive.Root
+      open={open}
+      onOpenChange={setOpen}
+      className={cn("flex min-w-0 flex-col gap-1", className)}
+    >
       <CollapsiblePrimitive.Trigger asChild>
         <Button variant="transparent" size="small" className="self-start">
           <ChevronRight
             aria-hidden="true"
-            className={cn("size-3.5 transition-transform duration-(--motion-duration) ease-standard", open && "rotate-90")}
+            className={cn(
+              "size-3.5 transition-transform duration-(--motion-duration) ease-standard",
+              open && "rotate-90",
+            )}
           />
           {title}
         </Button>
       </CollapsiblePrimitive.Trigger>
-      <CollapsiblePrimitive.Content className={cn("min-w-0 pl-1", contentClassName)}>{children}</CollapsiblePrimitive.Content>
+      <CollapsiblePrimitive.Content className={cn("min-w-0 pl-1", contentClassName)}>
+        {children}
+      </CollapsiblePrimitive.Content>
     </CollapsiblePrimitive.Root>
   );
 }
 
 export function Kbd({ children, className }: { children: React.ReactNode; className?: string }) {
   return (
-    <kbd className={cn("inline-flex rounded-md bg-control px-1.5 py-0.5 font-sans text-mini text-secondary", className)}>
+    <kbd
+      className={cn(
+        "inline-flex rounded-md bg-control px-1.5 py-0.5 font-sans text-mini text-secondary",
+        className,
+      )}
+    >
       {children}
     </kbd>
   );
 }
 
-const PERCENT = new Intl.NumberFormat(undefined, { style: "percent", maximumFractionDigits: 1, signDisplay: "always" });
+const PERCENT = new Intl.NumberFormat(undefined, {
+  style: "percent",
+  maximumFractionDigits: 1,
+  signDisplay: "always",
+});
 
 export function Stat({
   label,
@@ -317,12 +354,23 @@ export function Stat({
   return (
     <div className={cn("flex min-w-0 flex-col gap-0.5", className)}>
       <span className="truncate text-small text-secondary">{label}</span>
-      <span className="truncate text-heading1 font-semibold tabular-nums text-primary">{value}</span>
+      <span className="truncate text-heading1 font-semibold tabular-nums text-primary">
+        {value}
+      </span>
       {trend !== undefined || caption ? (
         <span className="flex min-w-0 items-center gap-1 text-small text-secondary">
           {trend !== undefined ? (
-            <span className={cn("inline-flex items-center gap-0.5 tabular-nums", up ? "text-status-green" : "text-status-red")}>
-              {up ? <TrendingUp aria-hidden="true" className="size-3.5" /> : <TrendingDown aria-hidden="true" className="size-3.5" />}
+            <span
+              className={cn(
+                "inline-flex items-center gap-0.5 tabular-nums",
+                up ? "text-status-green" : "text-status-red",
+              )}
+            >
+              {up ? (
+                <TrendingUp aria-hidden="true" className="size-3.5" />
+              ) : (
+                <TrendingDown aria-hidden="true" className="size-3.5" />
+              )}
               {PERCENT.format(trend)}
             </span>
           ) : null}
@@ -376,7 +424,10 @@ export function DataTable({
               {columns.map((column) => (
                 <td
                   key={column.key}
-                  className={cn("px-2 py-1.5 text-primary", column.align === "end" ? "text-right tabular-nums" : "text-left")}
+                  className={cn(
+                    "px-2 py-1.5 text-primary",
+                    column.align === "end" ? "text-right tabular-nums" : "text-left",
+                  )}
                 >
                   {row[column.key]}
                 </td>

@@ -1,7 +1,12 @@
 import type { NodeProps } from "@xyflow/react";
 import type { ComponentType } from "react";
 import { IMAGE_NODE_DEFINITIONS } from "../../shared/images/ports";
-import type { ImageModelRef, ImageNodeType, WorkflowNode, WorkflowPosition } from "../../shared/images/schema";
+import type {
+  ImageModelRef,
+  ImageNodeType,
+  WorkflowNode,
+  WorkflowPosition,
+} from "../../shared/images/schema";
 import type { WorkflowFlowNode } from "../flow-adapter-core";
 import { GenerateImageNode } from "./generate-image-node";
 import { ImageInputNode } from "./image-input-node";
@@ -16,10 +21,12 @@ export const NODE_COMPONENTS: Record<ImageNodeType, ComponentType<NodeProps<Work
   output: OutputNode,
 };
 
-export const ADDABLE_NODES = (Object.keys(IMAGE_NODE_DEFINITIONS) as ImageNodeType[]).map((type) => ({
-  type,
-  label: IMAGE_NODE_DEFINITIONS[type].title,
-}));
+export const ADDABLE_NODES = (Object.keys(IMAGE_NODE_DEFINITIONS) as ImageNodeType[]).map(
+  (type) => ({
+    type,
+    label: IMAGE_NODE_DEFINITIONS[type].title,
+  }),
+);
 
 export function createWorkflowNode(
   type: ImageNodeType,
@@ -33,7 +40,12 @@ export function createWorkflowNode(
     case "image-input":
       return { id, type, position, data: {} };
     case "generate-image":
-      return { id, type, position, data: defaultModel ? { model: { ...defaultModel }, count: 1 } : { count: 1 } };
+      return {
+        id,
+        type,
+        position,
+        data: defaultModel ? { model: { ...defaultModel }, count: 1 } : { count: 1 },
+      };
     case "output":
       return { id, type, position, data: {} };
   }

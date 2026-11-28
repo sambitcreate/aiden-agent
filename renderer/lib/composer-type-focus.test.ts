@@ -93,48 +93,66 @@ test("Control+Option chords on macOS stay with the command system", () => {
 
 test("type-to-focus stays out of overlays, other editors, and an already focused composer", () => {
   assert.deepEqual(
-    decideComposerTypeFocus({ key: "a", metaKey: false, ctrlKey: false, altKey: false }, {
-      ...writable,
-      composerFocused: true,
-    }),
+    decideComposerTypeFocus(
+      { key: "a", metaKey: false, ctrlKey: false, altKey: false },
+      {
+        ...writable,
+        composerFocused: true,
+      },
+    ),
     { action: "ignore" },
   );
   assert.deepEqual(
-    decideComposerTypeFocus({ key: "a", metaKey: false, ctrlKey: false, altKey: false }, {
-      ...writable,
-      editable: true,
-    }),
+    decideComposerTypeFocus(
+      { key: "a", metaKey: false, ctrlKey: false, altKey: false },
+      {
+        ...writable,
+        editable: true,
+      },
+    ),
     { action: "ignore" },
   );
   assert.deepEqual(
-    decideComposerTypeFocus({ key: "a", metaKey: false, ctrlKey: false, altKey: false }, {
-      ...writable,
-      overlayOpen: true,
-    }),
+    decideComposerTypeFocus(
+      { key: "a", metaKey: false, ctrlKey: false, altKey: false },
+      {
+        ...writable,
+        overlayOpen: true,
+      },
+    ),
     { action: "ignore" },
   );
   assert.deepEqual(
-    decideComposerTypeFocus({ key: "a", metaKey: false, ctrlKey: false, altKey: false }, {
-      ...writable,
-      reservedSurface: true,
-    }),
+    decideComposerTypeFocus(
+      { key: "a", metaKey: false, ctrlKey: false, altKey: false },
+      {
+        ...writable,
+        reservedSurface: true,
+      },
+    ),
     { action: "ignore" },
   );
   assert.deepEqual(
-    decideComposerTypeFocus({ key: "a", metaKey: false, ctrlKey: false, altKey: false }, {
-      ...writable,
-      composerAvailable: false,
-    }),
+    decideComposerTypeFocus(
+      { key: "a", metaKey: false, ctrlKey: false, altKey: false },
+      {
+        ...writable,
+        composerAvailable: false,
+      },
+    ),
     { action: "ignore" },
   );
 });
 
 test("a read-only composer still receives focus so the user can see why typing is blocked", () => {
   assert.deepEqual(
-    decideComposerTypeFocus({ key: "a", metaKey: false, ctrlKey: false, altKey: false }, {
-      ...writable,
-      composerWritable: false,
-    }),
+    decideComposerTypeFocus(
+      { key: "a", metaKey: false, ctrlKey: false, altKey: false },
+      {
+        ...writable,
+        composerWritable: false,
+      },
+    ),
     { action: "focus" },
   );
 });
@@ -170,11 +188,20 @@ test("Escape stops a running response only from an empty composer", () => {
 test("keys already settled by the event never run the page checks", () => {
   const reads: string[] = [];
   const watched = Object.fromEntries(
-    Object.entries(writable).map(([name, value]) => [name, { get: () => (reads.push(name), value) }]),
+    Object.entries(writable).map(([name, value]) => [
+      name,
+      { get: () => (reads.push(name), value) },
+    ]),
   );
   const context = Object.defineProperties({}, watched) as ComposerTypeFocusContext;
-  const decide = (value: string, extras: Partial<Parameters<typeof decideComposerTypeFocus>[0]> = {}) =>
-    decideComposerTypeFocus({ key: value, metaKey: false, ctrlKey: false, altKey: false, ...extras }, context);
+  const decide = (
+    value: string,
+    extras: Partial<Parameters<typeof decideComposerTypeFocus>[0]> = {},
+  ) =>
+    decideComposerTypeFocus(
+      { key: value, metaKey: false, ctrlKey: false, altKey: false, ...extras },
+      context,
+    );
   for (const [value, extras] of [
     ["k", { metaKey: true }],
     ["k", { ctrlKey: true }],
@@ -187,10 +214,13 @@ test("keys already settled by the event never run the page checks", () => {
   assert.equal(reads.length, 0, reads.join(", "));
   // Typing in the focused composer, the common case, never pays for the
   // document-wide overlay search or the composer's layout read.
-  const focused = Object.defineProperties({}, {
-    ...watched,
-    composerFocused: { get: () => (reads.push("composerFocused"), true) },
-  }) as ComposerTypeFocusContext;
+  const focused = Object.defineProperties(
+    {},
+    {
+      ...watched,
+      composerFocused: { get: () => (reads.push("composerFocused"), true) },
+    },
+  ) as ComposerTypeFocusContext;
   assert.deepEqual(
     decideComposerTypeFocus({ key: "a", metaKey: false, ctrlKey: false, altKey: false }, focused),
     { action: "ignore" },

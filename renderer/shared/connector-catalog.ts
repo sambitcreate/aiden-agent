@@ -171,7 +171,8 @@ export const CONNECTOR_CATALOG: readonly ConnectorCatalogEntry[] = [
     tagline: "Work with Jira and Confluence from the conversation.",
     vendor: "By Atlassian",
     category: "Productivity",
-    docsUrl: "https://support.atlassian.com/atlassian-ai-gateway/docs/get-started-with-the-atlassian-remote-mcp-server/",
+    docsUrl:
+      "https://support.atlassian.com/atlassian-ai-gateway/docs/get-started-with-the-atlassian-remote-mcp-server/",
     url: "https://mcp.atlassian.com/v1/mcp/authv2",
     auth: oauth,
     searchAliases: ["Jira", "Confluence"],
@@ -217,7 +218,8 @@ export const CONNECTOR_CATALOG: readonly ConnectorCatalogEntry[] = [
   {
     id: "imcp",
     name: "iMCP",
-    tagline: "Calendar, Contacts, Messages, Reminders and more from this Mac, through the free iMCP app.",
+    tagline:
+      "Calendar, Contacts, Messages, Reminders and more from this Mac, through the free iMCP app.",
     vendor: "By Mattt",
     category: "Productivity",
     docsUrl: "https://github.com/mattt/iMCP#readme",
@@ -302,7 +304,8 @@ export const CONNECTOR_CATALOG: readonly ConnectorCatalogEntry[] = [
     tagline: "Workers, Wrangler and the Cloudflare API.",
     vendor: "By Cloudflare",
     category: "Developer Tools",
-    docsUrl: "https://developers.cloudflare.com/agents/model-context-protocol/cloudflare/servers-for-cloudflare/",
+    docsUrl:
+      "https://developers.cloudflare.com/agents/model-context-protocol/cloudflare/servers-for-cloudflare/",
     url: "https://mcp.cloudflare.com/mcp",
     auth: oauth,
   },
@@ -465,7 +468,9 @@ export function filterConnectorCatalog(
     const alias = entry.searchAliases?.find((name) => name.toLowerCase().includes(needle));
     if (alias) return [{ entry, matchedAlias: alias }];
     const where = entry.macApp ? entry.macApp.bundleName : entry.url;
-    const card = [entry.name, entry.tagline, entry.vendor, entry.category, where].join(" ").toLowerCase();
+    const card = [entry.name, entry.tagline, entry.vendor, entry.category, where]
+      .join(" ")
+      .toLowerCase();
     return card.includes(needle) ? [{ entry }] : [];
   });
 }

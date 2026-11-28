@@ -48,10 +48,7 @@ export function createSupersedingTaskGate() {
   const wait = async (): Promise<void> => {
     while (current) {
       const task = current;
-      await Promise.race([
-        task.promise.catch(() => undefined),
-        task.superseded,
-      ]);
+      await Promise.race([task.promise.catch(() => undefined), task.superseded]);
       if (current !== task) continue;
       if (task.state === "rejected") throw task.error;
       current = null;

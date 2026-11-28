@@ -23,7 +23,10 @@ export class LocalLivePreview {
   private constructor(private readonly onSnapshot: (snapshot: LiveTranscriptSnapshot) => void) {}
 
   /** Starts at once; audio pushed before main answers is held and sent after. */
-  static start(modelId: string, onSnapshot: (snapshot: LiveTranscriptSnapshot) => void): LocalLivePreview {
+  static start(
+    modelId: string,
+    onSnapshot: (snapshot: LiveTranscriptSnapshot) => void,
+  ): LocalLivePreview {
     const preview = new LocalLivePreview(onSnapshot);
     voiceApi.localLiveStart(modelId).then(
       (started) => preview.begin(started),

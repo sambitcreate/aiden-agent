@@ -17,8 +17,12 @@ const QUESTION = {
 function setup() {
   const questions = createBotQuestions();
   const handlers = new Map<string, (event: unknown, ...args: unknown[]) => unknown>();
-  registerBotQuestionHandlers({ handle: (channel, handler) => handlers.set(channel, handler), questions });
-  const invoke = (input: unknown) => Promise.resolve(handlers.get(BOT_ANSWER_QUESTION_CHANNEL)!({}, input));
+  registerBotQuestionHandlers({
+    handle: (channel, handler) => handlers.set(channel, handler),
+    questions,
+  });
+  const invoke = (input: unknown) =>
+    Promise.resolve(handlers.get(BOT_ANSWER_QUESTION_CHANNEL)!({}, input));
   const controller = new AbortController();
   const asked = questions.request({
     botId: "bot:chief",
@@ -47,9 +51,16 @@ test("bots:answerQuestion settles the waiting question once; a repeat or stale w
   const { invoke, asked, questions } = setup();
   assert.deepEqual(await invoke(answer("Red")), { answered: true });
   assert.deepEqual((await asked).answers, [{ questionIndex: 0, kind: "option", answer: "Red" }]);
-  assert.deepEqual(await invoke(answer("Blue")), { answered: false }, "the second answer is refused");
+  assert.deepEqual(
+    await invoke(answer("Blue")),
+    { answered: false },
+    "the second answer is refused",
+  );
   const stale = answer("Blue", { waitId: "0000-stale" });
-  assert.deepEqual(await invoke({ ...stale, answer: { ...stale.answer, promptId: "0000-stale" } }), { answered: false });
+  assert.deepEqual(
+    await invoke({ ...stale, answer: { ...stale.answer, promptId: "0000-stale" } }),
+    { answered: false },
+  );
   assert.deepEqual(questions.pending(), []);
 });
 
@@ -58,7 +69,11 @@ test("bots:answerQuestion refuses another Bot's wait id and an answer after the 
   assert.deepEqual(await invoke(answer("Red", { botId: "bot:other" })), { answered: false });
   assert.equal(questions.pending().length, 1, "another Bot cannot settle it");
   controller.abort();
-  assert.deepEqual(await invoke(answer("Red")), { answered: false }, "an answer after Stop/Dismiss records nothing");
+  assert.deepEqual(
+    await invoke(answer("Red")),
+    { answered: false },
+    "an answer after Stop/Dismiss records nothing",
+  );
 });
 
 test("bots:answerQuestion rejects malformed requests and answers the question does not accept", async () => {
@@ -72,9 +87,21 @@ test("bots:answerQuestion rejects malformed requests and answers the question do
     { ...base, answer: { ...base.answer, promptId: "q-other" } },
     { ...base, answer: { ...base.answer, version: 2 } },
     { ...base, answer: { ...base.answer, timedOut: true } },
-    { ...base, answer: { ...base.answer, answers: [{ questionIndex: -1, kind: "option", answer: "Red" }] } },
-    { ...base, answer: { ...base.answer, answers: [{ questionIndex: 0, kind: "option", answer: "Red", extra: 1 }] } },
-    { ...base, answer: { ...base.answer, answers: [{ questionIndex: 0, kind: "vote", answer: "Red" }] } },
+    {
+      ...base,
+      answer: { ...base.answer, answers: [{ questionIndex: -1, kind: "option", answer: "Red" }] },
+    },
+    {
+      ...base,
+      answer: {
+        ...base.answer,
+        answers: [{ questionIndex: 0, kind: "option", answer: "Red", extra: 1 }],
+      },
+    },
+    {
+      ...base,
+      answer: { ...base.answer, answers: [{ questionIndex: 0, kind: "vote", answer: "Red" }] },
+    },
   ];
   for (const input of malformed) {
     await assert.rejects(invoke(input), /Invalid bot/u, JSON.stringify(input));
@@ -82,7 +109,10 @@ test("bots:answerQuestion rejects malformed requests and answers the question do
   // Well-formed, but not an answer to this question.
   await assert.rejects(invoke(answer("Purple")), /doesn’t match/u);
   await assert.rejects(
-    invoke({ ...base, answer: { ...base.answer, answers: [{ questionIndex: 2, kind: "option", answer: "Red" }] } }),
+    invoke({
+      ...base,
+      answer: { ...base.answer, answers: [{ questionIndex: 2, kind: "option", answer: "Red" }] },
+    }),
     /doesn’t match/u,
     "a question index out of range",
   );

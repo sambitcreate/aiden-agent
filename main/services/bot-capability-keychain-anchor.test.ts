@@ -10,9 +10,7 @@ import {
   type BotCapabilitySecurityCommand,
 } from "./bot-capability-keychain-anchor.js";
 
-const TEST_ACCOUNT = botCapabilityKeychainAccountForCanonicalRoot(
-  "/private/aiden-test-profile",
-);
+const TEST_ACCOUNT = botCapabilityKeychainAccountForCanonicalRoot("/private/aiden-test-profile");
 const DEFAULT_KEYCHAIN = {
   exitCode: 0,
   stdout: '    "/Users/test/Library/Keychains/login.keychain-db"\n',
@@ -41,10 +39,11 @@ test("production Keychain writes use bounded interactive hex without argv secret
   assert.equal(command.includes(value), false);
   assert.equal(command.includes(Buffer.from(value, "utf8").toString("hex")), true);
   assert.throws(
-    () => botCapabilitySecurityInteractiveWrite(
-      ["add-generic-password", "-a", "unsafe account", "-w"],
-      value,
-    ),
+    () =>
+      botCapabilitySecurityInteractiveWrite(
+        ["add-generic-password", "-a", "unsafe account", "-w"],
+        value,
+      ),
     /write command is invalid/u,
   );
 });
@@ -78,9 +77,7 @@ test("Keychain authority sends its value only through bounded stdin", async () =
     false,
   );
   assert.deepEqual(
-    calls
-      .filter(({ args }) => args[0] === "add-generic-password")
-      .map(({ stdin }) => stdin),
+    calls.filter(({ args }) => args[0] === "add-generic-password").map(({ stdin }) => stdin),
     [value],
   );
 });
@@ -170,18 +167,12 @@ test("canonical user-data roots isolate distinct authority and bootstrap marker 
   const developmentProof = "b".repeat(64);
   await production.store("production-head", null);
   await development.store("development-head", null);
-  await productionMarker.store(
-    { phase: "pending", keyProof: productionProof },
-    null,
-  );
+  await productionMarker.store({ phase: "pending", keyProof: productionProof }, null);
   await productionMarker.store(
     { phase: "consumed", keyProof: productionProof },
     { phase: "pending", keyProof: productionProof },
   );
-  await developmentMarker.store(
-    { phase: "pending", keyProof: developmentProof },
-    null,
-  );
+  await developmentMarker.store({ phase: "pending", keyProof: developmentProof }, null);
   await telegramBindings.store("7:" + "c".repeat(64), null);
   await telegramBootstrap.store("consumed", null);
   await developmentMarker.store(
@@ -201,10 +192,7 @@ test("canonical user-data roots isolate distinct authority and bootstrap marker 
   assert.equal(await telegramBindings.load(), "7:" + "c".repeat(64));
   assert.equal(await telegramBootstrap.load(), "consumed");
   assert.equal(values.size, 6);
-  assert.equal(
-    new Set([...values.keys()].map((key) => key.split("/", 1)[0])).size,
-    4,
-  );
+  assert.equal(new Set([...values.keys()].map((key) => key.split("/", 1)[0])).size, 4);
   const secrets = [
     "production-head",
     "development-head",
@@ -215,17 +203,11 @@ test("canonical user-data roots isolate distinct authority and bootstrap marker 
     "7:" + "c".repeat(64),
     "consumed",
   ];
-  assert.ok(
-    calls.every(({ args }) =>
-      secrets.every((secret) => !args.includes(secret)),
-    ),
-  );
+  assert.ok(calls.every(({ args }) => secrets.every((secret) => !args.includes(secret))));
   assert.ok(
     calls
       .filter(({ args }) => args[0] === "add-generic-password")
-      .every(
-        ({ args, stdin }) => args[args.length - 1] === "-w" && Boolean(stdin),
-      ),
+      .every(({ args, stdin }) => args[args.length - 1] === "-w" && Boolean(stdin)),
   );
 });
 
@@ -267,7 +249,8 @@ test("Keychain writes fail closed without prompting when no default keychain exi
       defaultKeychain: {
         exitCode: 1,
         stdout: "",
-        stderr: "security: SecKeychainCopyDomainDefault user: A default keychain could not be found.",
+        stderr:
+          "security: SecKeychainCopyDomainDefault user: A default keychain could not be found.",
       },
       exists: true,
     },

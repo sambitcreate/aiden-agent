@@ -28,7 +28,12 @@ export function SpendingLimitNotice({
   if (status.state === "nearing") {
     return (
       <div className={className}>
-        <Text as="p" variant="small" color="secondary" className="flex items-center gap-1.5 px-1 text-pretty">
+        <Text
+          as="p"
+          variant="small"
+          color="secondary"
+          className="flex items-center gap-1.5 px-1 text-pretty"
+        >
           <CircleDollarSign aria-hidden="true" className="size-3.5 shrink-0 text-status-warning" />
           {notice.title}
         </Text>

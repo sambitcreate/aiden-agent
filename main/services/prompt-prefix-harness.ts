@@ -22,7 +22,13 @@
 // adapter takes no custom `fetch`, so while it renders the global one refuses.
 
 import { createHash } from "node:crypto";
-import type { AgentContext, AgentMessage, AgentState, AgentTool, StreamFn } from "@earendil-works/pi-agent-core";
+import type {
+  AgentContext,
+  AgentMessage,
+  AgentState,
+  AgentTool,
+  StreamFn,
+} from "@earendil-works/pi-agent-core";
 import {
   createInitialSystemMessage,
   createModels,
@@ -52,15 +58,31 @@ import {
 } from "./chat-frozen-state.js";
 import type { ChatPromptAssembly } from "./chat-prompt-assembly.js";
 import type { PiAgentRuntimeExtension } from "./pi-agent-runtime-harness.js";
-import { createChatAgentsInstructions, createChatMcpServersSection, journaledMcpServersSection } from "./chat-prompt-sections.js";
-import { createGenerationContextTransform, updateGenerationContextOptions, type GenerationContextOptions } from "./generation-context.js";
+import {
+  createChatAgentsInstructions,
+  createChatMcpServersSection,
+  journaledMcpServersSection,
+} from "./chat-prompt-sections.js";
+import {
+  createGenerationContextTransform,
+  updateGenerationContextOptions,
+  type GenerationContextOptions,
+} from "./generation-context.js";
 import { createMcpServersSectionRefresher } from "./mcp-server-instructions.js";
-import { diffPromptPrefix, fingerprintPromptPrefix, type PromptPrefixDifference, type PromptPrefixFingerprint } from "./pi-cache-telemetry.js";
+import {
+  diffPromptPrefix,
+  fingerprintPromptPrefix,
+  type PromptPrefixDifference,
+  type PromptPrefixFingerprint,
+} from "./pi-cache-telemetry.js";
 import { PiAgentRuntimeHarness } from "./pi-agent-runtime-harness.js";
 import type { PiCompactionCoordinatorOptions } from "./pi-compaction-core.js";
 import { convertToLlm } from "./pi-legacy-harness.js";
 import { chatMessageToPiMessage } from "./generation-messages.js";
-import { AIDEN_CHAT_MESSAGE_MARKER, syncChatMessagesToPiSession } from "./pi-compaction-session-store.js";
+import {
+  AIDEN_CHAT_MESSAGE_MARKER,
+  syncChatMessagesToPiSession,
+} from "./pi-compaction-session-store.js";
 import { createPiSessionPort, type PiSessionPort } from "./pi-session-port.js";
 import { InMemorySessionRepo } from "./pi-session-repository-port.js";
 import { createPiTurnContextPreparation } from "./pi-turn-context.js";
@@ -84,7 +106,9 @@ export interface PromptPrefixHarnessOptions {
    * the factory llm-client uses, with `userDataDir` standing in for the app
    * data folder that holds the device key. The harness is one chat.
    */
-  agentsInstructions?: Pick<AgentsInstructionOptions, "globalRoot" | "workspaceRoot" | "read"> & { userDataDir: string };
+  agentsInstructions?: Pick<AgentsInstructionOptions, "globalRoot" | "workspaceRoot" | "read"> & {
+    userDataDir: string;
+  };
   /** Renders the `mcp_servers` section; a fresh refresher is created each turn. */
   mcpServersSection?: () => string;
   /**
@@ -151,7 +175,11 @@ export interface PromptPrefixChatState {
   /** The turn's runtime extensions; the memory and canvas ones carry their current sections. */
   extensions: PiAgentRuntimeExtension[];
   /** Builds the head from the state system states, with the extensions frozen to it. */
-  assembly(head: { branch: string | null; permission: ChatTurnState["permission"]; extensions: PiAgentRuntimeExtension[] }): Promise<ChatPromptAssembly>;
+  assembly(head: {
+    branch: string | null;
+    permission: ChatTurnState["permission"];
+    extensions: PiAgentRuntimeExtension[];
+  }): Promise<ChatPromptAssembly>;
 }
 
 export interface RecordedPromptRequest {
@@ -208,7 +236,10 @@ export interface PromptPrefixHarness {
 }
 
 function hash(value: unknown): string {
-  return createHash("sha256").update(JSON.stringify(value) ?? "null").digest("hex").slice(0, 16);
+  return createHash("sha256")
+    .update(JSON.stringify(value) ?? "null")
+    .digest("hex")
+    .slice(0, 16);
 }
 
 /** Breakpoint markers move to the newest message each request; they are not prompt bytes. */
@@ -216,7 +247,9 @@ function withoutCacheMarkers(value: unknown): unknown {
   if (Array.isArray(value)) return value.map(withoutCacheMarkers);
   if (!value || typeof value !== "object") return value;
   return Object.fromEntries(
-    Object.entries(value).filter(([key]) => key !== "cache_control").map(([key, entry]) => [key, withoutCacheMarkers(entry)]),
+    Object.entries(value)
+      .filter(([key]) => key !== "cache_control")
+      .map(([key, entry]) => [key, withoutCacheMarkers(entry)]),
   );
 }
 
@@ -240,8 +273,11 @@ function segment(kind: PromptWireSegmentKind, value: unknown): PromptWireSegment
 /** A Google payload's `config`, which carries its system instruction and tools. */
 function googleConfig(payload: Record<string, unknown>): Record<string, unknown> | undefined {
   const config = payload.config;
-  return Array.isArray(payload.contents) && config && typeof config === "object" && !Array.isArray(config)
-    ? config as Record<string, unknown>
+  return Array.isArray(payload.contents) &&
+    config &&
+    typeof config === "object" &&
+    !Array.isArray(config)
+    ? (config as Record<string, unknown>)
     : undefined;
 }
 
@@ -251,23 +287,34 @@ export function promptWireSegments(payload: Record<string, unknown>): PromptWire
   const google = googleConfig(payload);
   const tools = google ? google.tools : payload.tools;
   if (Array.isArray(tools) && tools.length) segments.push(segment("tools", tools));
-  if (typeof payload.instructions === "string") segments.push(segment("system", payload.instructions));
-  if (google?.systemInstruction !== undefined) segments.push(segment("system", google.systemInstruction));
-  if (Array.isArray(payload.system)) for (const block of payload.system) segments.push(segment("system", block));
+  if (typeof payload.instructions === "string")
+    segments.push(segment("system", payload.instructions));
+  if (google?.systemInstruction !== undefined)
+    segments.push(segment("system", google.systemInstruction));
+  if (Array.isArray(payload.system))
+    for (const block of payload.system) segments.push(segment("system", block));
   else if (typeof payload.system === "string") segments.push(segment("system", payload.system));
   const items = Array.isArray(payload.messages)
     ? payload.messages
-    : Array.isArray(payload.input) ? payload.input : Array.isArray(payload.contents) ? payload.contents : [];
+    : Array.isArray(payload.input)
+      ? payload.input
+      : Array.isArray(payload.contents)
+        ? payload.contents
+        : [];
   for (const item of items as Record<string, unknown>[]) {
     if (item?.type === "additional_tools") segments.push(segment("tools", item));
-    else if (item?.role === "system" || item?.role === "developer") segments.push(segment("system", item));
+    else if (item?.role === "system" || item?.role === "developer")
+      segments.push(segment("system", item));
     else segments.push(segment("messages", item));
   }
   return segments;
 }
 
 /** Where `current` stopped extending `previous`, on the wire and in the telemetry's words. */
-export function comparePromptRequests(previous: RecordedPromptRequest, current: RecordedPromptRequest): PromptRequestComparison {
+export function comparePromptRequests(
+  previous: RecordedPromptRequest,
+  current: RecordedPromptRequest,
+): PromptRequestComparison {
   let wire: PromptRequestComparison["wire"];
   for (let index = 0; index < previous.wire.length; index += 1) {
     const after = current.wire[index];
@@ -287,17 +334,27 @@ export type PromptProviderContext = Parameters<ProviderStreams["streamSimple"]>[
 /** The request options that shape a rendered payload, without credentials or callbacks. */
 export type PromptRenderOptions = Pick<
   SimpleStreamOptions,
-  "reasoning" | "thinkingBudgets" | "maxTokens" | "toolChoice" | "cacheRetention" | "temperature" | "sessionId"
+  | "reasoning"
+  | "thinkingBudgets"
+  | "maxTokens"
+  | "toolChoice"
+  | "cacheRetention"
+  | "temperature"
+  | "sessionId"
 >;
 
 const PROMPT_FIELDS = new Set(["tools", "system", "instructions", "messages", "input", "contents"]);
 
 /** The payload's fields other than its prompt; a Google `config` keeps its own settings. */
 function payloadSettings(payload: Record<string, unknown>): Record<string, unknown> {
-  const settings = Object.fromEntries(Object.entries(payload).filter(([key]) => !PROMPT_FIELDS.has(key)));
+  const settings = Object.fromEntries(
+    Object.entries(payload).filter(([key]) => !PROMPT_FIELDS.has(key)),
+  );
   const google = googleConfig(payload);
   if (google) {
-    settings.config = Object.fromEntries(Object.entries(google).filter(([key]) => key !== "systemInstruction" && key !== "tools"));
+    settings.config = Object.fromEntries(
+      Object.entries(google).filter(([key]) => key !== "systemInstruction" && key !== "tools"),
+    );
   }
   return settings;
 }
@@ -320,7 +377,11 @@ export interface PromptRequestRecorder {
    * `tool_choice` and retention are rendered (on a reasoning model); without
    * them, short retention and no reasoning.
    */
-  record(context: PromptProviderContext, at: { turn: number; step: number }, options?: PromptRenderOptions): Promise<RecordedPromptRequest>;
+  record(
+    context: PromptProviderContext,
+    at: { turn: number; step: number },
+    options?: PromptRenderOptions,
+  ): Promise<RecordedPromptRequest>;
   /** Requests that reached `fetch`; always 0 unless the capture broke. */
   readonly networkCalls: number;
 }
@@ -350,22 +411,38 @@ export function createPromptRequestRecorder(
 ): PromptRequestRecorder {
   const wireApi = options.wire ?? "anthropic-messages";
   const midConversationSystem = options.midConversationSystem ?? false;
-  const streams: ProviderStreams = wireApi === "openai-responses"
-    ? openAIResponsesApi()
-    : wireApi === "google-generative-ai" ? googleGenerativeAIApi() : anthropicMessagesApi();
+  const streams: ProviderStreams =
+    wireApi === "openai-responses"
+      ? openAIResponsesApi()
+      : wireApi === "google-generative-ai"
+        ? googleGenerativeAIApi()
+        : anthropicMessagesApi();
   const renderModel = {
     ...options.model,
     api: wireApi,
-    baseUrl: wireApi === "openai-responses" ? "https://offline.invalid/v1" : "https://offline.invalid",
-    compat: wireApi === "openai-responses"
-      ? { supportsMidConvoSystemMessages: midConversationSystem, supportsAdditionalTools: midConversationSystem }
-      : { supportsMidConvoSystemMessages: midConversationSystem, supportsMidConvoToolChanges: midConversationSystem },
+    baseUrl:
+      wireApi === "openai-responses" ? "https://offline.invalid/v1" : "https://offline.invalid",
+    compat:
+      wireApi === "openai-responses"
+        ? {
+            supportsMidConvoSystemMessages: midConversationSystem,
+            supportsAdditionalTools: midConversationSystem,
+          }
+        : {
+            supportsMidConvoSystemMessages: midConversationSystem,
+            supportsMidConvoToolChanges: midConversationSystem,
+          },
   } as Model<Api>;
   let networkCalls = 0;
 
-  async function render(context: PromptProviderContext, request?: PromptRenderOptions): Promise<Record<string, unknown>> {
+  async function render(
+    context: PromptProviderContext,
+    request?: PromptRenderOptions,
+  ): Promise<Record<string, unknown>> {
     let payload: Record<string, unknown> | undefined;
-    const model = request?.reasoning ? ({ ...renderModel, reasoning: true } as Model<Api>) : renderModel;
+    const model = request?.reasoning
+      ? ({ ...renderModel, reasoning: true } as Model<Api>)
+      : renderModel;
     const refuse: typeof globalThis.fetch = async () => {
       networkCalls += 1;
       throw new Error("Prompt prefix harness never dispatches a request.");
@@ -377,11 +454,16 @@ export function createPromptRequestRecorder(
       // As the model runtime streams: the breakpoint wrapper looks up the
       // chat's stable head, and the adapter sees only the request's own session ID.
       const chatId = options.chatId ?? request?.sessionId;
-      const breakpointed = withPromptCacheBreakpoints((renderedModel, renderedContext, streamOptions) => {
-        const { sessionId: _chat, ...rest } = streamOptions ?? {};
-        return streams.streamSimple(renderedModel, renderedContext,
-          request?.sessionId !== undefined ? { ...rest, sessionId: request.sessionId } : rest);
-      });
+      const breakpointed = withPromptCacheBreakpoints(
+        (renderedModel, renderedContext, streamOptions) => {
+          const { sessionId: _chat, ...rest } = streamOptions ?? {};
+          return streams.streamSimple(
+            renderedModel,
+            renderedContext,
+            request?.sessionId !== undefined ? { ...rest, sessionId: request.sessionId } : rest,
+          );
+        },
+      );
       await breakpointed(model, context, {
         ...(request ? pickRenderOptions(request) : {}),
         ...(chatId !== undefined ? { sessionId: chatId } : {}),
@@ -410,19 +492,27 @@ export function createPromptRequestRecorder(
         settings: payloadSettings(payload),
         cacheMarkers: cacheMarkersIn(payload),
         ...at,
-        fingerprint: fingerprintPromptPrefix({ messages: context.messages, model: options.model, cacheRetention: "short" }),
+        fingerprint: fingerprintPromptPrefix({
+          messages: context.messages,
+          model: options.model,
+          cacheRetention: "short",
+        }),
         wire: promptWireSegments(payload),
         carries: (text) => rendered.includes(JSON.stringify(text).slice(1, -1)),
         messages: context.messages,
       };
     },
-    get networkCalls() { return networkCalls; },
+    get networkCalls() {
+      return networkCalls;
+    },
   };
 }
 
 const HARNESS_CHAT_ID = "prompt-prefix-harness";
 
-export function createPromptPrefixHarness(options: PromptPrefixHarnessOptions = {}): PromptPrefixHarness {
+export function createPromptPrefixHarness(
+  options: PromptPrefixHarnessOptions = {},
+): PromptPrefixHarness {
   const midConversationSystem = options.midConversationSystem ?? false;
   const core = createFauxCore({ provider: "prompt-prefix-harness" });
   const model = core.getModel();
@@ -432,7 +522,8 @@ export function createPromptPrefixHarness(options: PromptPrefixHarnessOptions = 
   let turnNumber = 0;
   let runtime: PiAgentRuntimeHarness | undefined;
   let lastPrompt: { id: string; content: string; createdAt: number } | undefined;
-  const scripted: StreamFn = (requestModel, context, streamOptions) => core.streamSimple(requestModel, context, streamOptions);
+  const scripted: StreamFn = (requestModel, context, streamOptions) =>
+    core.streamSimple(requestModel, context, streamOptions);
   const stream = options.wrapStream ? options.wrapStream(scripted) : scripted;
 
   async function turn(input: PromptPrefixTurnInput): Promise<RecordedPromptRequest[]> {
@@ -441,20 +532,27 @@ export function createPromptPrefixHarness(options: PromptPrefixHarnessOptions = 
     let step = 0;
     const recorded: RecordedPromptRequest[] = [];
     core.setResponses(input.responses);
-    journal ??= new InMemorySessionRepo().create({ id: "prompt-prefix-harness" }).then((native) => createPiSessionPort(native));
+    journal ??= new InMemorySessionRepo()
+      .create({ id: "prompt-prefix-harness" })
+      .then((native) => createPiSessionPort(native));
     let session = await journal;
-    if (input.retry && !lastPrompt) throw new Error("Prompt prefix harness has no earlier prompt to retry.");
-    const prompt = input.retry && lastPrompt
-      ? lastPrompt
-      : { id: `prompt-${thisTurn}`, content: input.prompt, createdAt: Date.now() };
+    if (input.retry && !lastPrompt)
+      throw new Error("Prompt prefix harness has no earlier prompt to retry.");
+    const prompt =
+      input.retry && lastPrompt
+        ? lastPrompt
+        : { id: `prompt-${thisTurn}`, content: input.prompt, createdAt: Date.now() };
     lastPrompt = prompt;
     if (input.retry) {
       // A regenerate: the journal returns to the held prompt, dropping the reply it got.
-      const marker = (await session.getBranch()).find((entry) =>
-        entry.type === "custom" &&
-        entry.customType === AIDEN_CHAT_MESSAGE_MARKER &&
-        (entry.data as { chatMessageId?: unknown } | undefined)?.chatMessageId === prompt.id);
-      if (!marker) throw new Error("Prompt prefix harness journal does not hold the prompt to retry.");
+      const marker = (await session.getBranch()).find(
+        (entry) =>
+          entry.type === "custom" &&
+          entry.customType === AIDEN_CHAT_MESSAGE_MARKER &&
+          (entry.data as { chatMessageId?: unknown } | undefined)?.chatMessageId === prompt.id,
+      );
+      if (!marker)
+        throw new Error("Prompt prefix harness journal does not hold the prompt to retry.");
       await session.moveTo(marker.id);
     }
     let following = input.following;
@@ -465,7 +563,11 @@ export function createPromptPrefixHarness(options: PromptPrefixHarnessOptions = 
       const { chatState } = input;
       const branch = await session.getBranch();
       const current: ChatTurnState = await withApprovedMemoryFacts(
-        { branch: chatState.branch, permission: chatState.permission, ...extensionChatState(chatState.extensions) },
+        {
+          branch: chatState.branch,
+          permission: chatState.permission,
+          ...extensionChatState(chatState.extensions),
+        },
         branch,
         chatState.extensions,
       );
@@ -494,13 +596,21 @@ export function createPromptPrefixHarness(options: PromptPrefixHarnessOptions = 
     }
     // llm-client reads the chat so far back from its Pi journal each turn.
     const history = (await session.buildContext()).messages;
-    const systemPrompt = "assembly" in resolved ? resolved.assembly.systemPrompt : resolved.systemPrompt;
+    const systemPrompt =
+      "assembly" in resolved ? resolved.assembly.systemPrompt : resolved.systemPrompt;
     // As llm-client: the turn registers its stable head for the breakpoints.
-    rememberStableHead(HARNESS_CHAT_ID, "assembly" in resolved ? resolved.assembly.stableHead : undefined);
+    rememberStableHead(
+      HARNESS_CHAT_ID,
+      "assembly" in resolved ? resolved.assembly.stableHead : undefined,
+    );
     const tools = "assembly" in resolved ? resolved.assembly.toolsFor(history) : resolved.tools;
     const onDemandTools = "assembly" in resolved ? resolved.assembly.onDemandTools : undefined;
     const agentsInstructions = options.agentsInstructions
-      ? await createChatAgentsInstructions({ ...options.agentsInstructions, chatId: HARNESS_CHAT_ID, revalidate: async () => {} })
+      ? await createChatAgentsInstructions({
+          ...options.agentsInstructions,
+          chatId: HARNESS_CHAT_ID,
+          revalidate: async () => {},
+        })
       : undefined;
     const deferredTools = "assembly" in resolved ? resolved.assembly.deferredTools : [];
     const codemode = tools.some((tool) => tool.name === "codemode");
@@ -509,15 +619,20 @@ export function createPromptPrefixHarness(options: PromptPrefixHarnessOptions = 
     // llm-client: the turn's admitted tools until the runtime exists, then its callable inventory.
     const chatMcpSection = lateMcp
       ? createChatMcpServersSection({
-          inventory: () => runtime?.getCallableTools() ?? ("assembly" in resolved ? resolved.assembly.contributions.tools : tools),
+          inventory: () =>
+            runtime?.getCallableTools() ??
+            ("assembly" in resolved ? resolved.assembly.contributions.tools : tools),
           declared: new Set(tools.map((tool) => tool.name)),
           latePending: () => lateMcp.pending(),
           journaled: journaledMcpServersSection(await session.getBranch()),
           connectorsWithheld: input.connectorsWithheld === true,
         })
       : undefined;
-    const mcpServersSection = chatMcpSection
-      ?? (options.mcpServersSection ? createMcpServersSectionRefresher(options.mcpServersSection) : undefined);
+    const mcpServersSection =
+      chatMcpSection ??
+      (options.mcpServersSection
+        ? createMcpServersSectionRefresher(options.mcpServersSection)
+        : undefined);
     const generationOptions: GenerationContextOptions = {
       contextWindow: model.contextWindow,
       systemPrompt,
@@ -530,11 +645,19 @@ export function createPromptPrefixHarness(options: PromptPrefixHarnessOptions = 
     };
     let initialMessages: AgentMessage[] = [...history];
     // llm-client: the head declares the chat's fixed tools, the journal the loaded ones.
-    const head = createInitialSystemMessage(systemPrompt, (onDemandTools && "assembly" in resolved ? resolved.assembly.headTools : tools).map(toToolDeclaration));
+    const head = createInitialSystemMessage(
+      systemPrompt,
+      (onDemandTools && "assembly" in resolved ? resolved.assembly.headTools : tools).map(
+        toToolDeclaration,
+      ),
+    );
     if (head) initialMessages = [head, ...initialMessages];
-    const prepare = async <C extends { messages: AgentMessage[]; tools?: AgentTool[] }>(context: C): Promise<C> => {
+    const prepare = async <C extends { messages: AgentMessage[]; tools?: AgentTool[] }>(
+      context: C,
+    ): Promise<C> => {
       let prepared = context;
-      if (agentsInstructions) prepared = (await agentsInstructions.apply(prepared as never)) as unknown as C;
+      if (agentsInstructions)
+        prepared = (await agentsInstructions.apply(prepared as never)) as unknown as C;
       if (mcpServersSection) prepared = mcpServersSection.apply(prepared);
       return prepared;
     };
@@ -551,13 +674,23 @@ export function createPromptPrefixHarness(options: PromptPrefixHarnessOptions = 
       const given = following;
       following = (timestamp) => [
         ...(given?.(timestamp) ?? []),
-        ...[turnNoteMessage([connectorNote], timestamp)].filter((note): note is AgentMessage => note !== undefined),
+        ...[turnNoteMessage([connectorNote], timestamp)].filter(
+          (note): note is AgentMessage => note !== undefined,
+        ),
       ];
     }
     runtime = new PiAgentRuntimeHarness({
       convertToLlm,
-      initialState: { systemPrompt, thinkingLevel: "off", tools: [...tools], messages: initialMessages, model },
-      ...(lateMcp ? { deferredTools, ...(codemode ? { lateDeferredTools: () => lateMcp.tools() } : {}) } : {}),
+      initialState: {
+        systemPrompt,
+        thinkingLevel: "off",
+        tools: [...tools],
+        messages: initialMessages,
+        model,
+      },
+      ...(lateMcp
+        ? { deferredTools, ...(codemode ? { lateDeferredTools: () => lateMcp.tools() } : {}) }
+        : {}),
       transformContext: createGenerationContextTransform(generationOptions),
       prepareNextTurnWithContext: createPiTurnContextPreparation({
         generationOptions,
@@ -565,13 +698,20 @@ export function createPromptPrefixHarness(options: PromptPrefixHarnessOptions = 
         // The order llm-client prepares a step in: instruction sections, then tools a step loaded.
         prepareContext: async (context) => {
           const prepared = await prepare(context);
-          return onDemandTools ? (await onDemandTools.prepare(prepared as AgentContext)) as typeof prepared : prepared;
+          return onDemandTools
+            ? ((await onDemandTools.prepare(prepared as AgentContext)) as typeof prepared)
+            : prepared;
         },
         onRecovery: () => {},
       }),
       durability: {
         session,
-        compaction: { models: createModels(), model, thinkingLevel: "off", ...options.compaction?.() },
+        compaction: {
+          models: createModels(),
+          model,
+          thinkingLevel: "off",
+          ...options.compaction?.(),
+        },
         // llm-client's sync: the prompt, its following messages and the head
         // entry in one append, skipped together when the journal holds it.
         appendInput: async (journalSession, _message, followingMessages) => {
@@ -594,13 +734,18 @@ export function createPromptPrefixHarness(options: PromptPrefixHarnessOptions = 
         return stream(requestModel, context, streamOptions);
       },
     });
-    const message = chatMessageToPiMessage({ id: prompt.id, role: "user", content: prompt.content, createdAt: prompt.createdAt }, model, true);
+    const message = chatMessageToPiMessage(
+      { id: prompt.id, role: "user", content: prompt.content, createdAt: prompt.createdAt },
+      model,
+      true,
+    );
     const outcome = await runtime.runManaged({
       kind: "append-and-run",
       message,
       ...(following ? { following: following(prompt.createdAt) } : {}),
     });
-    if (outcome.kind !== "completed") throw new Error(`Prompt prefix harness turn ${thisTurn} ended ${outcome.kind}.`);
+    if (outcome.kind !== "completed")
+      throw new Error(`Prompt prefix harness turn ${thisTurn} ended ${outcome.kind}.`);
     return recorded;
   }
 
@@ -608,11 +753,16 @@ export function createPromptPrefixHarness(options: PromptPrefixHarnessOptions = 
     turn,
     model,
     record: (context, at, request) => recorder.record(context, at, request),
-    get requests() { return requests; },
-    get networkCalls() { return recorder.networkCalls; },
+    get requests() {
+      return requests;
+    },
+    get networkCalls() {
+      return recorder.networkCalls;
+    },
     callableTools: () => runtime?.getCallableTools() ?? [],
     agentState: () => runtime?.state,
-    journaledChatState: async () => journaledChatState(journal ? await (await journal).getBranch() : []),
+    journaledChatState: async () =>
+      journaledChatState(journal ? await (await journal).getBranch() : []),
     journal: () => {
       if (!journal) throw new Error("No prompt prefix harness turn has run.");
       return journal;

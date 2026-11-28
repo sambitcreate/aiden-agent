@@ -84,9 +84,7 @@ function mountFloatingApp(overrides: Record<string, (...args: unknown[]) => unkn
         title: req.message.content,
         providerId: "lmstudio",
         model: "local-model",
-        messages: [
-          { id: "m-user-1", role: "user", content: req.message.content, createdAt: 10 },
-        ],
+        messages: [{ id: "m-user-1", role: "user", content: req.message.content, createdAt: 10 }],
         createdAt: 10,
         updatedAt: 10,
       } satisfies Chat;
@@ -97,9 +95,7 @@ function mountFloatingApp(overrides: Record<string, (...args: unknown[]) => unkn
       title: "Saved quick chat",
       providerId: "lmstudio",
       model: "local-model",
-      messages: [
-        { id: "m-user-1", role: "user", content: "Hello floating", createdAt: 10 },
-      ],
+      messages: [{ id: "m-user-1", role: "user", content: "Hello floating", createdAt: 10 }],
       createdAt: 10,
       updatedAt: 12,
     }),
@@ -136,7 +132,10 @@ test("State 1 starter defaults to Temporary, omits Share screen, and morphs to S
     // Wait for model resolution so Send is enabled.
     await waitFor(() => {
       fireEvent.change(input, { target: { value: "Explain event loop" } });
-      assert.equal((screen.getByTestId("quick-chat-send-btn") as HTMLButtonElement).disabled, false);
+      assert.equal(
+        (screen.getByTestId("quick-chat-send-btn") as HTMLButtonElement).disabled,
+        false,
+      );
     });
 
     await act(async () => {
@@ -181,7 +180,10 @@ test("State 1 starter defaults to Temporary, omits Share screen, and morphs to S
 
     // Promote Temporary chat to regular Chats via the unified header status pill menu.
     await act(async () => {
-      fireEvent.pointerDown(screen.getByTestId("quick-chat-status-pill"), { button: 0, ctrlKey: false });
+      fireEvent.pointerDown(screen.getByTestId("quick-chat-status-pill"), {
+        button: 0,
+        ctrlKey: false,
+      });
     });
     const saveItem = await screen.findByTestId("quick-chat-save-btn");
     await act(async () => {
@@ -199,7 +201,10 @@ test("Expand mid-stream hands off cleanly and quickChat:handoff-complete resets 
     const input = await screen.findByTestId("quick-chat-input");
     await waitFor(() => {
       fireEvent.change(input, { target: { value: "Stream then expand" } });
-      assert.equal((screen.getByTestId("quick-chat-send-btn") as HTMLButtonElement).disabled, false);
+      assert.equal(
+        (screen.getByTestId("quick-chat-send-btn") as HTMLButtonElement).disabled,
+        false,
+      );
     });
 
     await act(async () => {
@@ -261,7 +266,10 @@ test("createWithFirstMessage failure rolls back to State 1 and retrying Send suc
     const input = await screen.findByTestId("quick-chat-input");
     await waitFor(() => {
       fireEvent.change(input, { target: { value: "Retry this prompt" } });
-      assert.equal((screen.getByTestId("quick-chat-send-btn") as HTMLButtonElement).disabled, false);
+      assert.equal(
+        (screen.getByTestId("quick-chat-send-btn") as HTMLButtonElement).disabled,
+        false,
+      );
     });
 
     await act(async () => {
@@ -270,7 +278,10 @@ test("createWithFirstMessage failure rolls back to State 1 and retrying Send suc
     // Rolled back cleanly to State 1 starter with original text preserved.
     await waitFor(() => {
       assert.ok(screen.getByTestId("quick-chat-stage-starter"));
-      assert.equal((screen.getByTestId("quick-chat-input") as HTMLTextAreaElement).value, "Retry this prompt");
+      assert.equal(
+        (screen.getByTestId("quick-chat-input") as HTMLTextAreaElement).value,
+        "Retry this prompt",
+      );
     });
 
     // Retry Send -> uses createWithFirstMessage again (not appendMessage) and enters State 2.
@@ -299,7 +310,10 @@ test("rejected chat:start clears Thinking state and displays error, and Discard 
     const input = await screen.findByTestId("quick-chat-input");
     await waitFor(() => {
       fireEvent.change(input, { target: { value: "Trigger rejection" } });
-      assert.equal((screen.getByTestId("quick-chat-send-btn") as HTMLButtonElement).disabled, false);
+      assert.equal(
+        (screen.getByTestId("quick-chat-send-btn") as HTMLButtonElement).disabled,
+        false,
+      );
     });
 
     await act(async () => {
@@ -312,7 +326,10 @@ test("rejected chat:start clears Thinking state and displays error, and Discard 
 
     // Discard removes the ephemeral chat and resets to State 1 via the unified header status pill menu.
     await act(async () => {
-      fireEvent.pointerDown(screen.getByTestId("quick-chat-status-pill"), { button: 0, ctrlKey: false });
+      fireEvent.pointerDown(screen.getByTestId("quick-chat-status-pill"), {
+        button: 0,
+        ctrlKey: false,
+      });
     });
     const discardItem = await screen.findByTestId("quick-chat-discard-btn");
     await act(async () => {
@@ -338,7 +355,10 @@ test("failed expandToMain unlocks Expand button and Stop clears queued follow-up
     const input = await screen.findByTestId("quick-chat-input");
     await waitFor(() => {
       fireEvent.change(input, { target: { value: "First turn" } });
-      assert.equal((screen.getByTestId("quick-chat-send-btn") as HTMLButtonElement).disabled, false);
+      assert.equal(
+        (screen.getByTestId("quick-chat-send-btn") as HTMLButtonElement).disabled,
+        false,
+      );
     });
 
     await act(async () => {
@@ -351,7 +371,10 @@ test("failed expandToMain unlocks Expand button and Stop clears queued follow-up
       fireEvent.click(screen.getByTestId("quick-chat-expand-modal"));
     });
     await waitFor(() => {
-      assert.equal((screen.getByTestId("quick-chat-expand-modal") as HTMLButtonElement).disabled, false);
+      assert.equal(
+        (screen.getByTestId("quick-chat-expand-modal") as HTMLButtonElement).disabled,
+        false,
+      );
     });
 
     // Queue a follow-up while generating, then press Stop -> restores draft and does NOT auto-send.
@@ -400,7 +423,10 @@ test("State 1 draft Expand preserves ephemeral flag and Stop restores queued att
     const input = await screen.findByTestId("quick-chat-input");
     await waitFor(() => {
       fireEvent.change(input, { target: { value: "Keep me temporary" } });
-      assert.equal((screen.getByTestId("quick-chat-send-btn") as HTMLButtonElement).disabled, false);
+      assert.equal(
+        (screen.getByTestId("quick-chat-send-btn") as HTMLButtonElement).disabled,
+        false,
+      );
     });
 
     // Expanding State 1 Temporary draft must preserve ephemeral: true.
@@ -417,8 +443,13 @@ test("State 1 draft Expand preserves ephemeral flag and Stop restores queued att
       emitBotTestNotification("quickChat:handoff-complete", { kind: "draft" });
     });
     await waitFor(() => {
-      fireEvent.change(screen.getByTestId("quick-chat-input"), { target: { value: "Start stream" } });
-      assert.equal((screen.getByTestId("quick-chat-send-btn") as HTMLButtonElement).disabled, false);
+      fireEvent.change(screen.getByTestId("quick-chat-input"), {
+        target: { value: "Start stream" },
+      });
+      assert.equal(
+        (screen.getByTestId("quick-chat-send-btn") as HTMLButtonElement).disabled,
+        false,
+      );
     });
     await act(async () => {
       fireEvent.click(screen.getByTestId("quick-chat-send-btn"));
@@ -432,7 +463,9 @@ test("State 1 draft Expand preserves ephemeral flag and Stop restores queued att
     await waitFor(() => {
       assert.ok((document.body.textContent ?? "").includes("notes.txt"));
     });
-    fireEvent.change(screen.getByTestId("quick-chat-input"), { target: { value: "Follow-up with file" } });
+    fireEvent.change(screen.getByTestId("quick-chat-input"), {
+      target: { value: "Follow-up with file" },
+    });
     await act(async () => {
       fireEvent.click(screen.getByTestId("quick-chat-send-btn"));
     });
@@ -603,7 +636,9 @@ test("external hide and reopen close already-open starter pickers and restore st
     await screen.findByTestId("quick-chat-input");
     // Wait for initial model resolution so the model picker trigger is enabled.
     await waitFor(() => {
-      const modelTrigger = screen.getByRole("button", { name: /Selected model:/i }) as HTMLButtonElement;
+      const modelTrigger = screen.getByRole("button", {
+        name: /Selected model:/i,
+      }) as HTMLButtonElement;
       assert.equal(modelTrigger.disabled, false);
     });
 
@@ -672,7 +707,10 @@ test("external hide and reopen preserve State 2 mini-modal stage and draft witho
     const input = await screen.findByTestId("quick-chat-input");
     await waitFor(() => {
       fireEvent.change(input, { target: { value: "Keep modal alive across hide" } });
-      assert.equal((screen.getByTestId("quick-chat-send-btn") as HTMLButtonElement).disabled, false);
+      assert.equal(
+        (screen.getByTestId("quick-chat-send-btn") as HTMLButtonElement).disabled,
+        false,
+      );
     });
 
     await act(async () => {
@@ -695,7 +733,10 @@ test("external hide and reopen preserve State 2 mini-modal stage and draft witho
 
     assert.ok(screen.getByTestId("quick-chat-mini-modal"));
     assert.equal(screen.queryByTestId("quick-chat-stage-starter"), null);
-    assert.equal((screen.getByTestId("quick-chat-input") as HTMLTextAreaElement).value, "Unsent follow-up");
+    assert.equal(
+      (screen.getByTestId("quick-chat-input") as HTMLTextAreaElement).value,
+      "Unsent follow-up",
+    );
     const modeCallsAfterHide = calls
       .filter((c) => c.channel === "quickChat:setMode")
       .slice(modeCountBeforeHide);
@@ -745,7 +786,13 @@ test("an Agent Slider stop picked in Quick Chat sends its effort with the first 
         homeStopId: "quick",
         stops: [
           { id: "quick", label: "Quick", providerId: "lmstudio", model: "local-model" },
-          { id: "deep", label: "Deep", providerId: "lmstudio", model: "local-model", thinkingLevel: "high" },
+          {
+            id: "deep",
+            label: "Deep",
+            providerId: "lmstudio",
+            model: "local-model",
+            thinkingLevel: "high",
+          },
           { id: "spare", label: "Spare" },
         ],
       },
@@ -754,7 +801,9 @@ test("an Agent Slider stop picked in Quick Chat sends its effort with the first 
   try {
     const input = await screen.findByTestId("quick-chat-input");
     const trigger = await waitFor(() => {
-      const button = screen.getByRole("button", { name: /Quick on the Agent Slider/u }) as HTMLButtonElement;
+      const button = screen.getByRole("button", {
+        name: /Quick on the Agent Slider/u,
+      }) as HTMLButtonElement;
       assert.equal(button.disabled, false);
       return button;
     });
@@ -771,7 +820,10 @@ test("an Agent Slider stop picked in Quick Chat sends its effort with the first 
 
     await waitFor(() => {
       fireEvent.change(input, { target: { value: "Think hard" } });
-      assert.equal((screen.getByTestId("quick-chat-send-btn") as HTMLButtonElement).disabled, false);
+      assert.equal(
+        (screen.getByTestId("quick-chat-send-btn") as HTMLButtonElement).disabled,
+        false,
+      );
     });
     await act(async () => {
       fireEvent.click(screen.getByTestId("quick-chat-send-btn"));
@@ -783,7 +835,10 @@ test("an Agent Slider stop picked in Quick Chat sends its effort with the first 
     const start = calls.find((call) => call.channel === "chat:start");
     assert.ok(
       start?.args.some(
-        (arg) => typeof arg === "object" && arg !== null && (arg as { thinkingLevel?: string }).thinkingLevel === "high",
+        (arg) =>
+          typeof arg === "object" &&
+          arg !== null &&
+          (arg as { thinkingLevel?: string }).thinkingLevel === "high",
       ),
       "the turn asks for the stop's effort",
     );
@@ -792,10 +847,15 @@ test("an Agent Slider stop picked in Quick Chat sends its effort with the first 
     // or reopen sees it; a stop without a level clears the chat's own level.
     const chatId = String((create?.args[0] as { draftId: string }).draftId);
     await act(async () => {
-      emitBotTestNotification("chat:done", { streamId: String(start?.args[0]), fullContent: "Done." });
+      emitBotTestNotification("chat:done", {
+        streamId: String(start?.args[0]),
+        fullContent: "Done.",
+      });
     });
     const modalTrigger = await waitFor(() => {
-      const button = screen.getByRole("button", { name: /Deep on the Agent Slider/u }) as HTMLButtonElement;
+      const button = screen.getByRole("button", {
+        name: /Deep on the Agent Slider/u,
+      }) as HTMLButtonElement;
       assert.equal(button.disabled, false);
       return button;
     });
@@ -803,7 +863,9 @@ test("an Agent Slider stop picked in Quick Chat sends its effort with the first 
       fireEvent.click(modalTrigger);
     });
     await act(async () => {
-      fireEvent.keyDown(await screen.findByRole("slider", { name: "Agent Slider" }), { key: "ArrowLeft" });
+      fireEvent.keyDown(await screen.findByRole("slider", { name: "Agent Slider" }), {
+        key: "ArrowLeft",
+      });
     });
     await waitFor(() => {
       const save = calls.find((call) => call.channel === "chats:setModel");
@@ -847,7 +909,10 @@ test("an Agent Slider stop picked in Quick Chat sends its effort with the first 
     const followUp = screen.getByTestId("quick-chat-input");
     await waitFor(() => {
       fireEvent.change(followUp, { target: { value: "Now quickly" } });
-      assert.equal((screen.getByTestId("quick-chat-send-btn") as HTMLButtonElement).disabled, false);
+      assert.equal(
+        (screen.getByTestId("quick-chat-send-btn") as HTMLButtonElement).disabled,
+        false,
+      );
     });
     await act(async () => {
       fireEvent.click(screen.getByTestId("quick-chat-send-btn"));
@@ -862,7 +927,10 @@ test("an Agent Slider stop picked in Quick Chat sends its effort with the first 
     await act(async () => {
       fireEvent.keyDown(pickedQuick, { key: "ArrowRight" });
     });
-    assert.equal(calls.filter((call) => call.channel === "chats:setModel").length, savesBeforeLatePick);
+    assert.equal(
+      calls.filter((call) => call.channel === "chats:setModel").length,
+      savesBeforeLatePick,
+    );
     assert.match(modalTrigger.getAttribute("aria-label") ?? "", /Quick on the Agent Slider/u);
     // The trigger is off while sending; Escape still closes the open popover.
     assert.equal((modalTrigger as HTMLButtonElement).disabled, true);
@@ -881,19 +949,25 @@ test("an Agent Slider stop picked in Quick Chat sends its effort with the first 
     const lastTurn = turns[turns.length - 1];
     assert.equal(
       lastTurn?.args.some(
-        (arg: unknown) => typeof arg === "object" && arg !== null && "thinkingLevel" in (arg as object),
+        (arg: unknown) =>
+          typeof arg === "object" && arg !== null && "thinkingLevel" in (arg as object),
       ),
       false,
       "the follow-up runs on the stop just saved, which has no effort of its own",
     );
     await act(async () => {
-      emitBotTestNotification("chat:done", { streamId: String(lastTurn?.args[0]), fullContent: "Done." });
+      emitBotTestNotification("chat:done", {
+        streamId: String(lastTurn?.args[0]),
+        fullContent: "Done.",
+      });
     });
 
     // Main refuses a pick: the slider shows the chat's own selection again.
     refuseSave = true;
     const quickTrigger = await waitFor(() => {
-      const button = screen.getByRole("button", { name: /on the Agent Slider/u }) as HTMLButtonElement;
+      const button = screen.getByRole("button", {
+        name: /on the Agent Slider/u,
+      }) as HTMLButtonElement;
       assert.equal(button.disabled, false);
       return button;
     });
@@ -924,7 +998,9 @@ test("an Agent Slider stop picked in Quick Chat sends its effort with the first 
     await act(async () => {
       fireEvent.click(screen.getAllByRole("option")[0]!);
     });
-    await waitFor(() => assert.ok(calls.some((call) => call.channel === "settings:setAgentSlider")));
+    await waitFor(() =>
+      assert.ok(calls.some((call) => call.channel === "settings:setAgentSlider")),
+    );
     const appendCount = () => calls.filter((call) => call.channel === "chats:appendMessage").length;
     const appendsBefore = appendCount();
     const savesBeforeReassign = calls.filter((call) => call.channel === "chats:setModel").length;
@@ -944,10 +1020,16 @@ test("an Agent Slider stop picked in Quick Chat sends its effort with the first 
       holdSlider = undefined;
     });
     await waitFor(() =>
-      assert.equal(calls.filter((call) => call.channel === "chats:setModel").length, savesBeforeReassign + 1),
+      assert.equal(
+        calls.filter((call) => call.channel === "chats:setModel").length,
+        savesBeforeReassign + 1,
+      ),
     );
     await waitFor(() =>
-      assert.equal((screen.getByTestId("quick-chat-send-btn") as HTMLButtonElement).disabled, false),
+      assert.equal(
+        (screen.getByTestId("quick-chat-send-btn") as HTMLButtonElement).disabled,
+        false,
+      ),
     );
     await act(async () => {
       fireEvent.click(screen.getByTestId("quick-chat-send-btn"));

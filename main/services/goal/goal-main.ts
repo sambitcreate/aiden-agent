@@ -9,7 +9,10 @@ import { randomUUID } from "node:crypto";
 import { ipcMain, logger, powerMonitor } from "../../platform.js";
 import { goalLoopEnabled, type GoalView } from "../../../renderer/shared/goal.js";
 import { reportAnalyticsEvent } from "../analytics/analytics-report.js";
-import { ATTENDED_TURN_PROMPT_LIFETIME_MS, type OwedTurnPromptLifetime } from "../chat-owed-turn-prompts.js";
+import {
+  ATTENDED_TURN_PROMPT_LIFETIME_MS,
+  type OwedTurnPromptLifetime,
+} from "../chat-owed-turn-prompts.js";
 import { chatActivityRegistry } from "../chat-activity.js";
 import type { GoalNeedsYou } from "../chat-pending-attention.js";
 import { chatStore } from "../chat-store.js";
@@ -35,10 +38,19 @@ import type { OwedTurnContext } from "../chat-owed-turn-start.js";
 import type { Chat } from "../types.js";
 import { goalChatRefusal } from "./goal-core.js";
 import { GoalLoop, type GoalRoundStart } from "./goal-loop.js";
-import { createGoalRoundStarter, type GoalRoundMessage, type RoundStillCurrent, type WindowRoundPayload } from "./goal-round-starter.js";
+import {
+  createGoalRoundStarter,
+  type GoalRoundMessage,
+  type RoundStillCurrent,
+  type WindowRoundPayload,
+} from "./goal-round-starter.js";
 import { reviewGoal } from "./goal-reviewer.js";
 import { installGoalTurnHooks } from "./goal-turn-hooks.js";
-import { GoalWindowRounds, type GoalWindowDocument, type GoalWindowView } from "./goal-window-rounds.js";
+import {
+  GoalWindowRounds,
+  type GoalWindowDocument,
+  type GoalWindowView,
+} from "./goal-window-rounds.js";
 import { GoalProposals } from "./goal-proposals.js";
 
 const BOOT = randomUUID();
@@ -104,7 +116,8 @@ const goalWindowRounds = new GoalWindowRounds<WindowRoundPayload>({
 const { startAttendedRound, startGoalRound } = createGoalRoundStarter({
   offer: (chatId, payload) => goalWindowRounds.offer(chatId, payload),
   newStreamId: () => `goal-${Date.now().toString(36)}-${randomUUID().slice(0, 8)}`,
-  attendedTurnOwner: (chatId, streamId) => llmClient.attendedTurnOwner(chatId, `goal:${streamId}`, roundPromptLifetime),
+  attendedTurnOwner: (chatId, streamId) =>
+    llmClient.attendedTurnOwner(chatId, `goal:${streamId}`, roundPromptLifetime),
   beginChatTurn: (chatId, streamId, ownerId) => llmClient.beginChatTurn(chatId, streamId, ownerId),
   appendMessage: (chatId, message, options) => chatStore.appendMessage(chatId, message, options),
   start: (streamId, params, owner, options) => llmClient.start(streamId, params, owner, options),
@@ -145,18 +158,32 @@ export function reportGoalWindowView(
  * own run on `streamId`. Throws when the offer is gone (it timed out, or went
  * to another window), so the window drops it.
  */
-export async function startGoalWindowRound(owner: ChatGenerationOwner, token: string, streamId: string): Promise<StartTurnResult> {
+export async function startGoalWindowRound(
+  owner: ChatGenerationOwner,
+  token: string,
+  streamId: string,
+): Promise<StartTurnResult> {
   const claim = goalWindowRounds.claim(token, owner.documentId);
   if (!claim) throw new Error("This keep-going round is no longer waiting for this window.");
   let result: StartTurnResult = { kind: "unavailable", reason: "The round could not start." };
   try {
     // Its cards show in the window, and one unanswered for 30 minutes moves the goal to Needs you, as off screen.
     const roundOwner = llmClient.attendedWindowOwner(owner, claim.chatId, roundPromptLifetime);
-    result = await startAttendedRound(claim.chatId, claim.payload.context, claim.payload.round, { owner: roundOwner, streamId }, claim.payload.isCurrent);
+    result = await startAttendedRound(
+      claim.chatId,
+      claim.payload.context,
+      claim.payload.round,
+      { owner: roundOwner, streamId },
+      claim.payload.isCurrent,
+    );
     return result;
   } finally {
     claim.payload.outcome = result;
-    claim.settle(result.kind === "started" ? { kind: "started", streamId } : { kind: result.kind === "busy" ? "busy" : "unavailable" });
+    claim.settle(
+      result.kind === "started"
+        ? { kind: "started", streamId }
+        : { kind: result.kind === "busy" ? "busy" : "unavailable" },
+    );
     if (result.kind === "started") goalLoop.windowRoundStarted(claim.chatId);
   }
 }
@@ -174,10 +201,14 @@ export const goalLoop = new GoalLoop({
   delay: (ms, signal) =>
     new Promise<void>((resolve, reject) => {
       const timer = setTimeout(resolve, ms);
-      signal.addEventListener("abort", () => {
-        clearTimeout(timer);
-        reject(signal.reason);
-      }, { once: true });
+      signal.addEventListener(
+        "abort",
+        () => {
+          clearTimeout(timer);
+          reject(signal.reason);
+        },
+        { once: true },
+      );
     }),
   setTimer: (run, ms) => {
     const timer = setTimeout(run, ms);
@@ -198,32 +229,50 @@ export const goalLoop = new GoalLoop({
   fallbackContext: async (chatId) => {
     const chat = await chatStore.get(chatId);
     if (!chat?.providerId || !chat.model) return undefined;
-    return { ...(chat.workspaceId ? { workspaceId: chat.workspaceId } : {}), providerId: chat.providerId, model: chat.model };
+    return {
+      ...(chat.workspaceId ? { workspaceId: chat.workspaceId } : {}),
+      providerId: chat.providerId,
+      model: chat.model,
+    };
   },
   review: async (goal, input) => {
     const chat = await chatStore.get(goal.chatId);
-    if (!chat?.providerId || !chat.model) return { kind: "unusable", why: "failed", via: "isolated" };
+    if (!chat?.providerId || !chat.model)
+      return { kind: "unusable", why: "failed", via: "isolated" };
     const runtime = await resolveModelRuntime(chat.providerId, chat.model, input.signal, chat.id);
     const owner = { kind: "chat" as const, id: chat.id };
     const meter = createSpendingMeter({
       spending,
       owner,
-      counts: () => spendCounts({ local: isLocalModelProvider(runtime.provider), provider: runtime.provider, models: runtime.models }),
+      counts: () =>
+        spendCounts({
+          local: isLocalModelProvider(runtime.provider),
+          provider: runtime.provider,
+          models: runtime.models,
+        }),
     });
     const supportsImages = runtime.model.input.includes("image");
     const outcome = await reviewGoal(
       {
         runtime,
         prefix: () => chatSideCallPrefixes.latest(chat.id),
-        messages: async () => chat.messages.map((message) => chatMessageToPiMessage(message, runtime.model, supportsImages)),
+        messages: async () =>
+          chat.messages.map((message) =>
+            chatMessageToPiMessage(message, runtime.model, supportsImages),
+          ),
         spendingRefusal: () => spending.refusal(owner),
         countSpend: (message) => meter.count(message),
         recordUsage: (record) => usageStore.record(record),
-        reportFailure: (area, error) => logger.warn("goal", `The goal review's ${area} step failed.`, error),
+        reportFailure: (area, error) =>
+          logger.warn("goal", `The goal review's ${area} step failed.`, error),
       },
       { goal, allowWait: input.allowWait, signal: input.signal },
     );
-    await meter.settled().catch((error: unknown) => logger.warn("goal", "The goal review's cost could not be counted.", error));
+    await meter
+      .settled()
+      .catch((error: unknown) =>
+        logger.warn("goal", "The goal review's cost could not be counted.", error),
+      );
     return outcome;
   },
   runCheck: (goal, signal) => runGoalCheck(goal.chatId, goal.check!.command, signal),
@@ -234,7 +283,10 @@ export const goalLoop = new GoalLoop({
     // Whatever holds the chat may settle no run (a notice saved as a card, a
     // scheduled task's admission): poll until nothing does.
     while (!signal.aborted && (llmClient.isChatBusy(chatId) || noticeDelivery.hasPending(chatId))) {
-      if (!(await llmClient.waitForChatIdleWithin(chatId, IDLE_POLL_MS)) || noticeDelivery.hasPending(chatId)) {
+      if (
+        !(await llmClient.waitForChatIdleWithin(chatId, IDLE_POLL_MS)) ||
+        noticeDelivery.hasPending(chatId)
+      ) {
         await new Promise<void>((resolve) => {
           const timer = setTimeout(resolve, IDLE_POLL_MS);
           timer.unref?.();
@@ -255,11 +307,14 @@ export const goalLoop = new GoalLoop({
 /** Goals the agent suggested with `propose_goal`, waiting for Start or Not now. */
 export const goalProposals = new GoalProposals({
   now: Date.now,
-  onChange: (chatId, proposal) => ipcMain.broadcast("chats:goal-proposal-changed", { chatId, proposal }),
+  onChange: (chatId, proposal) =>
+    ipcMain.broadcast("chats:goal-proposal-changed", { chatId, proposal }),
   refusal: async (chatId) => {
     const refusal = await eligibility(chatId);
     if (refusal) return refusal;
-    return goalLoop.get(chatId)?.status === "active" ? "This chat already has a goal at work." : undefined;
+    return goalLoop.get(chatId)?.status === "active"
+      ? "This chat already has a goal at work."
+      : undefined;
   },
 });
 
@@ -293,7 +348,9 @@ export function startGoalLoop(): void {
 /** The chat's goal when it stopped at Needs you, for the Inbox. */
 export function goalNeedsYou(chatId: string): GoalNeedsYou | undefined {
   const goal = goalLoop.get(chatId);
-  return goal?.status === "needs-you" ? { since: goal.updatedAt, reason: goal.reason ?? "The keep-going goal needs you" } : undefined;
+  return goal?.status === "needs-you"
+    ? { since: goal.updatedAt, reason: goal.reason ?? "The keep-going goal needs you" }
+    : undefined;
 }
 
 export function shutdownGoalLoop(): void {

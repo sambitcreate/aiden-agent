@@ -21,7 +21,11 @@ import { ScheduledTasksSettings } from "./settings/scheduled-tasks-settings";
 afterEach(cleanup);
 
 const server = (id: string, name: string, enabled = true): McpServer => ({
-  id, name, enabled, transport: "http", url: `https://${id}.example/mcp`,
+  id,
+  name,
+  enabled,
+  transport: "http",
+  url: `https://${id}.example/mcp`,
 });
 
 const mail = server("mail", "Mail");
@@ -48,7 +52,11 @@ function mountEditor(
 ) {
   installBotTestIpc({ "schedule:preview": () => [1_900_000_000_000] });
   const saved: ScheduledTaskInput[] = [];
-  const onSave = props.onSave ?? (async (task: ScheduledTaskInput) => { saved.push(task); });
+  const onSave =
+    props.onSave ??
+    (async (task: ScheduledTaskInput) => {
+      saved.push(task);
+    });
   render(
     <QueryClientProvider client={createBotTestQueryClient()}>
       <ScheduledTaskEditor
@@ -67,7 +75,8 @@ function mountEditor(
   return saved;
 }
 
-const confirm = (name: RegExp | string) => screen.getByRole("button", { name }) as HTMLButtonElement;
+const confirm = (name: RegExp | string) =>
+  screen.getByRole("button", { name }) as HTMLButtonElement;
 const mcpSwitch = (name: string) => screen.getByRole("switch", { name }) as HTMLButtonElement;
 
 async function reviewAndSave() {
@@ -101,7 +110,9 @@ test("a disabled MCP server is listed only while selected and cannot be newly al
   fireEvent.click(mcpSwitch("Remove Archived CRM for this scheduled task"));
   await waitFor(() => assert.equal(confirm("Review task").disabled, false));
   // Unselected, a disabled server can only be re-enabled from Settings.
-  const allow = screen.queryByRole("switch", { name: "Allow Archived CRM for this scheduled task" });
+  const allow = screen.queryByRole("switch", {
+    name: "Allow Archived CRM for this scheduled task",
+  });
   assert.ok(allow === null || (allow as HTMLButtonElement).disabled);
   cleanup();
 
@@ -112,7 +123,11 @@ test("a disabled MCP server is listed only while selected and cannot be newly al
 test("allowing an MCP server grants Full permission, drops the workspace and saves the exact ids", async () => {
   const saved = mountEditor({ permission: "read-only", workspaceId: undefined });
   fireEvent.click(mcpSwitch("Allow Mail for this scheduled task"));
-  assert.ok(await screen.findByText(/may call 1 selected connector unattended\. Connector tools may read or change external data\./u));
+  assert.ok(
+    await screen.findByText(
+      /may call 1 selected connector unattended\. Connector tools may read or change external data\./u,
+    ),
+  );
 
   await reviewAndSave();
   await waitFor(() => assert.equal(saved.length, 1));
@@ -128,7 +143,10 @@ test("a workspace and MCP servers together, or more than 16 servers, cannot be s
   cleanup();
 
   const many = Array.from({ length: 17 }, (_, index) => server(`s${index}`, `Server ${index}`));
-  mountEditor({ permission: "full", mcpServerIds: many.map((entry) => entry.id) }, { mcpServers: many });
+  mountEditor(
+    { permission: "full", mcpServerIds: many.map((entry) => entry.id) },
+    { mcpServers: many },
+  );
   assert.ok(screen.getByText(/Choose at most 16 connectors/u));
   assert.equal(confirm("Review task").disabled, true);
 });
@@ -169,9 +187,15 @@ test("Web Search authority is explicit and saved with the task", async () => {
 
 test("saving goes through a review step and keeps choices when the save fails", async () => {
   let attempts = 0;
-  mountEditor({ permission: "full" }, {
-    onSave: async () => { attempts++; throw new Error("The scheduler is busy."); },
-  });
+  mountEditor(
+    { permission: "full" },
+    {
+      onSave: async () => {
+        attempts++;
+        throw new Error("The scheduler is busy.");
+      },
+    },
+  );
   assert.ok(screen.getByRole("combobox", { name: "Scheduled task frequency" }));
   assert.ok(screen.getByText("Advanced schedule"));
 
@@ -193,13 +217,28 @@ test("saving goes through a review step and keeps choices when the save fails", 
 
 const NOW = 1_800_000_000_000;
 const storedTask = (patch: Partial<ScheduledTask>): ScheduledTask => ({
-  id: "task-1", name: "Legacy brief", enabled: true, mode: "llm", cron: "0 9 * * 1-5",
-  timezone: "UTC", prompt: "Brief me.", permission: "full", notify: true,
-  createdAt: NOW, updatedAt: NOW, ...patch,
+  id: "task-1",
+  name: "Legacy brief",
+  enabled: true,
+  mode: "llm",
+  cron: "0 9 * * 1-5",
+  timezone: "UTC",
+  prompt: "Brief me.",
+  permission: "full",
+  notify: true,
+  createdAt: NOW,
+  updatedAt: NOW,
+  ...patch,
 });
 const scheduledSettings: ScheduledTaskSettings = {
-  enabled: true, defaultMode: "llm", defaultPermission: "full", defaultMcpEnabled: true,
-  defaultNotify: true, defaultTimezone: "UTC", keepAwakeWhileWorking: true, chatCheckBacks: true,
+  enabled: true,
+  defaultMode: "llm",
+  defaultPermission: "full",
+  defaultMcpEnabled: true,
+  defaultNotify: true,
+  defaultTimezone: "UTC",
+  keepAwakeWhileWorking: true,
+  chatCheckBacks: true,
 };
 
 /** The detail panel's Edit button (the task row's menu has its own). */
@@ -218,7 +257,12 @@ async function mountView(tasks: ScheduledTask[], mcpList: () => unknown) {
     "workspaces:list": () => [],
     "mcp:list": mcpList,
   });
-  await mountWithBotRouter(<WorkspaceProvider><ScheduledTasksView /></WorkspaceProvider>, { initialPath: "/" });
+  await mountWithBotRouter(
+    <WorkspaceProvider>
+      <ScheduledTasksView />
+    </WorkspaceProvider>,
+    { initialPath: "/" },
+  );
   return calls;
 }
 
@@ -231,16 +275,22 @@ test("a legacy task inherits every enabled server when edited, and says so in it
   await waitFor(() => assert.equal(edit.disabled, false));
   fireEvent.click(edit);
   // Only the enabled server is carried into the explicit selection.
-  assert.equal(mcpSwitch("Remove Mail for this scheduled task").getAttribute("aria-checked"), "true");
+  assert.equal(
+    mcpSwitch("Remove Mail for this scheduled task").getAttribute("aria-checked"),
+    "true",
+  );
   assert.equal(screen.queryByText("Archived CRM"), null);
   await reviewAndSave();
   await waitFor(() => assert.ok(calls.some((call) => call.channel === "schedule:save")));
-  const saved = calls.find((call) => call.channel === "schedule:save")!.args[0] as ScheduledTaskInput;
+  const saved = calls.find((call) => call.channel === "schedule:save")!
+    .args[0] as ScheduledTaskInput;
   assert.deepEqual(saved.mcpServerIds, ["mail"]);
 });
 
 test("a legacy task cannot be edited while MCP access failed to load", async () => {
-  await mountView([storedTask({ mcpServerIds: undefined })], () => { throw new Error("offline"); });
+  await mountView([storedTask({ mcpServerIds: undefined })], () => {
+    throw new Error("offline");
+  });
   fireEvent.click(await screen.findByRole("button", { name: /Legacy brief/u, pressed: false }));
   assert.ok(await screen.findByText(/editing is unavailable until access details load/u));
   const edit = lastEditButton();
@@ -251,12 +301,20 @@ test("Scheduled settings turn on default MCP access together with Full permissio
   const calls = installBotTestIpc({
     "schedule:list": () => [],
     "schedule:settings": (patch?: unknown) =>
-      patch ? { ...scheduledSettings, defaultPermission: "read-only", defaultMcpEnabled: false, ...(patch as object) }
+      patch
+        ? {
+            ...scheduledSettings,
+            defaultPermission: "read-only",
+            defaultMcpEnabled: false,
+            ...(patch as object),
+          }
         : { ...scheduledSettings, defaultPermission: "read-only", defaultMcpEnabled: false },
     "mcp:list": () => [mail],
   });
   await mountWithBotRouter(<ScheduledTasksSettings />, { initialPath: "/settings" });
-  const toggle = await screen.findByRole("switch", { name: "Enable connector access for new scheduled tasks" }) as HTMLButtonElement;
+  const toggle = (await screen.findByRole("switch", {
+    name: "Enable connector access for new scheduled tasks",
+  })) as HTMLButtonElement;
   await waitFor(() => assert.equal(toggle.disabled, false));
   assert.equal(toggle.getAttribute("aria-checked"), "false");
   fireEvent.click(toggle);

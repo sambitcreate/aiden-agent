@@ -62,6 +62,7 @@ npm run build
 For faster local iteration, run a scoped lane (`npm run test:ci:core-git`, `npm run test:ci:runtime-subagents`, or `npm run test:ci:renderer-other`).
 
 For Playwright Electron E2E runs:
+
 - On macOS, run window-opening E2E suites off-screen in a Cua Space with `npm run test:e2e:space -- [playwright args]`.
 - On Linux, run under `xvfb-run --auto-servernum npm run test:e2e` (with the CI prerequisites).
 

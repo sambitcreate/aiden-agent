@@ -121,7 +121,12 @@ export class PullRequestFollows {
 
   restore(records: readonly PullRequestFollowRecord[]): void {
     for (const record of records) {
-      if (record?.version !== 1 || typeof record.chatId !== "string" || typeof record.repository !== "string") continue;
+      if (
+        record?.version !== 1 ||
+        typeof record.chatId !== "string" ||
+        typeof record.repository !== "string"
+      )
+        continue;
       this.records.set(PullRequestFollows.id(record.chatId, followKey(record)), { ...record });
     }
   }
@@ -145,11 +150,18 @@ export class PullRequestFollows {
     const existing = this.records.get(id);
     if (existing?.state === "following") return followView(existing);
     const active = [...this.records.values()].filter((record) => record.state === "following");
-    if (active.filter((record) => record.chatId === input.chatId).length >= MAX_PULL_REQUEST_FOLLOWS_PER_CHAT) {
-      throw new Error(`This chat already follows ${MAX_PULL_REQUEST_FOLLOWS_PER_CHAT} pull requests. Stop one first.`);
+    if (
+      active.filter((record) => record.chatId === input.chatId).length >=
+      MAX_PULL_REQUEST_FOLLOWS_PER_CHAT
+    ) {
+      throw new Error(
+        `This chat already follows ${MAX_PULL_REQUEST_FOLLOWS_PER_CHAT} pull requests. Stop one first.`,
+      );
     }
     if (active.length >= MAX_PULL_REQUEST_FOLLOWS) {
-      throw new Error(`Aiden already follows ${MAX_PULL_REQUEST_FOLLOWS} pull requests. Stop one first.`);
+      throw new Error(
+        `Aiden already follows ${MAX_PULL_REQUEST_FOLLOWS} pull requests. Stop one first.`,
+      );
     }
     const record = newFollowRecord({ ...input, now: this.deps.now() });
     this.records.set(id, record);
@@ -159,7 +171,11 @@ export class PullRequestFollows {
     return followView(record);
   }
 
-  stop(chatId: string, key: { host: string; repository: string; number: number }, reason: "person" | "agent" | "access-changed"): boolean {
+  stop(
+    chatId: string,
+    key: { host: string; repository: string; number: number },
+    reason: "person" | "agent" | "access-changed",
+  ): boolean {
     const id = PullRequestFollows.id(chatId, followKey(key));
     const record = this.records.get(id);
     if (!record || record.state !== "following") return false;
@@ -221,7 +237,9 @@ export class PullRequestFollows {
   nudge(
     chatId: string,
     kind: FollowNudgeKind,
-    which: (follow: Pick<PullRequestFollowRecord, "host" | "repository" | "number">) => boolean = () => true,
+    which: (
+      follow: Pick<PullRequestFollowRecord, "host" | "repository" | "number">,
+    ) => boolean = () => true,
   ): number {
     return this.nudgeWhere((record) => record.chatId === chatId && which(record), kind);
   }
@@ -231,17 +249,24 @@ export class PullRequestFollows {
     return this.nudgeWhere(() => true, kind);
   }
 
-  private nudgeWhere(match: (record: PullRequestFollowRecord) => boolean, kind: FollowNudgeKind): number {
+  private nudgeWhere(
+    match: (record: PullRequestFollowRecord) => boolean,
+    kind: FollowNudgeKind,
+  ): number {
     if (this.closed) return 0;
     const now = this.deps.now();
-    const interval = kind === "action" ? FOLLOW_NUDGE_ACTION_INTERVAL_MS : FOLLOW_NUDGE_AMBIENT_INTERVAL_MS;
+    const interval =
+      kind === "action" ? FOLLOW_NUDGE_ACTION_INTERVAL_MS : FOLLOW_NUDGE_AMBIENT_INTERVAL_MS;
     let count = 0;
     for (const [id, record] of this.records) {
       if (record.state !== "following" || !match(record)) continue;
       const pending = this.nudges.get(id);
-      this.nudges.set(id, pending
-        ? { first: pending.first, last: now, interval: Math.min(pending.interval, interval) }
-        : { first: now, last: now, interval });
+      this.nudges.set(
+        id,
+        pending
+          ? { first: pending.first, last: now, interval: Math.min(pending.interval, interval) }
+          : { first: now, last: now, interval },
+      );
       count += 1;
     }
     if (count) this.armNudgeTimer();
@@ -260,7 +285,9 @@ export class PullRequestFollows {
   /** When this follow is next due: its timed read, or a nudge, whichever is first. */
   private dueAt(id: string, record: PullRequestFollowRecord): number {
     const nudge = this.nudges.get(id);
-    return nudge ? Math.min(record.nextCheckAt, this.nudgeDueAt(record, nudge)) : record.nextCheckAt;
+    return nudge
+      ? Math.min(record.nextCheckAt, this.nudgeDueAt(record, nudge))
+      : record.nextCheckAt;
   }
 
   /** One timer for the soonest nudge; nudges for ended or forgotten follows are dropped. */
@@ -281,10 +308,13 @@ export class PullRequestFollows {
     if (this.nudgeTimer) this.timers.clear(this.nudgeTimer.handle);
     this.nudgeTimer = undefined;
     if (!Number.isFinite(soonest)) return;
-    const handle = this.timers.set(() => {
-      if (this.nudgeTimer?.handle === handle) this.nudgeTimer = undefined;
-      void this.kick();
-    }, Math.max(0, soonest - this.deps.now()));
+    const handle = this.timers.set(
+      () => {
+        if (this.nudgeTimer?.handle === handle) this.nudgeTimer = undefined;
+        void this.kick();
+      },
+      Math.max(0, soonest - this.deps.now()),
+    );
     this.nudgeTimer = { handle, at: soonest };
   }
 
@@ -302,8 +332,16 @@ export class PullRequestFollows {
     for (;;) {
       const now = this.deps.now();
       const due = [...this.records.entries()]
-        .filter(([id, record]) => record.state === "following" && !this.pausedChats.has(record.chatId) && this.dueAt(id, record) <= now)
-        .sort(([leftId, left], [rightId, right]) => this.dueAt(leftId, left) - this.dueAt(rightId, right))[0];
+        .filter(
+          ([id, record]) =>
+            record.state === "following" &&
+            !this.pausedChats.has(record.chatId) &&
+            this.dueAt(id, record) <= now,
+        )
+        .sort(
+          ([leftId, left], [rightId, right]) =>
+            this.dueAt(leftId, left) - this.dueAt(rightId, right),
+        )[0];
       if (!due || this.closed) return;
       const [id, record] = due;
       const controller = new AbortController();
@@ -322,7 +360,10 @@ export class PullRequestFollows {
         this.deps.log?.("A followed pull request could not be read.", error);
         const current = this.records.get(id);
         if (current === record) {
-          this.records.set(id, followReadFailed(record, "Aiden could not read this pull request.", this.deps.now()));
+          this.records.set(
+            id,
+            followReadFailed(record, "Aiden could not read this pull request.", this.deps.now()),
+          );
           this.changed(record.chatId);
         }
       } finally {
@@ -331,19 +372,29 @@ export class PullRequestFollows {
     }
   }
 
-  private async poll(id: string, record: PullRequestFollowRecord, signal: AbortSignal): Promise<void> {
+  private async poll(
+    id: string,
+    record: PullRequestFollowRecord,
+    signal: AbortSignal,
+  ): Promise<void> {
     // While a check fails and a failure card may still be due, every read must
     // be a full one (the failure clock decides, not a change), so skip the
     // probe and its requests entirely. After the still-failing card, probe.
     const probe = followMayAskForChanges(record)
-      ? { ...(record.etags ? { etags: record.etags } : {}), skipIfUnchanged: followMayProbe(record, this.deps.now()) }
+      ? {
+          ...(record.etags ? { etags: record.etags } : {}),
+          skipIfUnchanged: followMayProbe(record, this.deps.now()),
+        }
       : undefined;
     const read: FollowReadResult = await this.deps.reader.read(record, signal, probe);
     // Stopped or deleted while the read was in flight.
     if (signal.aborted || this.records.get(id) !== record) return;
     if (read.kind === "unchanged") {
       // GitHub said nothing moved: no logs, no evaluation, no notices.
-      this.records.set(id, followUnchanged(record, this.deps.now(), probe?.skipIfUnchanged === true));
+      this.records.set(
+        id,
+        followUnchanged(record, this.deps.now(), probe?.skipIfUnchanged === true),
+      );
       this.changed(record.chatId);
       return;
     }
@@ -375,7 +426,8 @@ export class PullRequestFollows {
     const now = this.deps.now();
     const evaluation = evaluateFollow(record, observation, logs, now);
     // The probe said nothing moved and the full read agreed: still quiet.
-    let next = (read.probedUnchanged ? followStayedQuiet(record, evaluation, now) : evaluation).record;
+    let next = (read.probedUnchanged ? followStayedQuiet(record, evaluation, now) : evaluation)
+      .record;
     if (next.state === "following" && read.etags && Object.keys(read.etags).length) {
       next = { ...next, etags: read.etags, etagsAt: now };
     } else if (next.etags || next.etagsAt !== undefined) {

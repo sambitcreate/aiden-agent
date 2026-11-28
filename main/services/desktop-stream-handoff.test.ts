@@ -31,7 +31,10 @@ test("DesktopLiveStreamAccumulator retains >32 KiB text, reasoning, resets, and 
   const chunk = "a".repeat(20_000);
   acc.record("stream-1", "chat-1", "chat:delta", { streamId: "stream-1", delta: chunk });
   acc.record("stream-1", "chat-1", "chat:delta", { streamId: "stream-1", delta: chunk });
-  acc.record("stream-1", "chat-1", "chat:reasoning-delta", { streamId: "stream-1", delta: "thinking…" });
+  acc.record("stream-1", "chat-1", "chat:reasoning-delta", {
+    streamId: "stream-1",
+    delta: "thinking…",
+  });
 
   const snap = acc.snapshot(
     "stream-1",
@@ -56,7 +59,11 @@ test("DesktopLiveStreamAccumulator retains >32 KiB text, reasoning, resets, and 
   assert.equal(snap.pendingApprovals[0]?.autoWouldJudge, true);
 
   // Reset clears prior overflow text and reasoning.
-  acc.record("stream-1", "chat-1", "chat:delta", { streamId: "stream-1", delta: "retry", reset: true });
+  acc.record("stream-1", "chat-1", "chat:delta", {
+    streamId: "stream-1",
+    delta: "retry",
+    reset: true,
+  });
   const afterReset = acc.snapshot("stream-1", [], []);
   assert.equal(afterReset?.content, "retry");
   assert.equal(afterReset?.reasoning, "");
@@ -184,7 +191,9 @@ test("DesktopHandoffTicketStore enforces one-shot claims, TTL expiry, and queued
     fromDocumentId: "floating-doc",
     draftText: "follow-up",
     queuedMessages: [{ content: "next step" }],
-    onClaimed: () => { notified = true; },
+    onClaimed: () => {
+      notified = true;
+    },
   });
   const claimedChat = store.claimChat("chat-42");
   assert.equal(claimedChat?.draftText, "follow-up");

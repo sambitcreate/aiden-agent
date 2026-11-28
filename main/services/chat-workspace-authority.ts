@@ -31,14 +31,10 @@ export function authoritativeChatGenerationMode(
   persistedWorkspaceId: string | undefined,
   requestedMode: ChatStartParams["mode"],
 ): ChatStartParams["mode"] {
-  if (
-    requestedMode === "assistant-unattended" ||
-    requestedMode === "assistant-automation"
-  ) {
+  if (requestedMode === "assistant-unattended" || requestedMode === "assistant-automation") {
     return requestedMode;
   }
-  const isAssistantChat =
-    persistedChatWorkspaceId(persistedWorkspaceId) === ASSISTANT_WORKSPACE_ID;
+  const isAssistantChat = persistedChatWorkspaceId(persistedWorkspaceId) === ASSISTANT_WORKSPACE_ID;
   if (isAssistantChat) return "assistant";
   if (requestedMode === "assistant") {
     throw new Error("This chat is not an Aiden Assistant chat.");

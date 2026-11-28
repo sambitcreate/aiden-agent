@@ -7,7 +7,10 @@
 import { createInterface } from "node:readline";
 import type { UtilityProcess } from "electron";
 import type { SpeechModelFamily } from "./local-speech-catalog.js";
-import { LocalSpeechProcessClient, type LocalSpeechProcessPort } from "./local-speech-process-core.js";
+import {
+  LocalSpeechProcessClient,
+  type LocalSpeechProcessPort,
+} from "./local-speech-process-core.js";
 
 const DEFAULT_EXIT_WAIT_MS = 2_000;
 
@@ -25,7 +28,10 @@ export interface LoadedSpeechModel {
 }
 
 /** The language a recognizer was built for. Null-language SenseVoice builds as "auto". */
-export function speechLanguageKey(family: SpeechModelFamily, language: string | null): string | null {
+export function speechLanguageKey(
+  family: SpeechModelFamily,
+  language: string | null,
+): string | null {
   return family === "sense-voice" ? (language ?? "auto") : null;
 }
 
@@ -34,10 +40,16 @@ export function speechLanguageKey(family: SpeechModelFamily, language: string | 
  * SenseVoice recognizer is rebuilt in place for a language change, which keeps
  * the old native model allocated, so it also needs a new worker.
  */
-export function needsFreshWorker(loaded: LoadedSpeechModel | null, request: SpeechWorkerTarget): boolean {
+export function needsFreshWorker(
+  loaded: LoadedSpeechModel | null,
+  request: SpeechWorkerTarget,
+): boolean {
   if (!loaded) return false;
   if (loaded.modelId !== request.modelId) return true;
-  return request.family === "sense-voice" && loaded.languageKey !== speechLanguageKey(request.family, request.language);
+  return (
+    request.family === "sense-voice" &&
+    loaded.languageKey !== speechLanguageKey(request.family, request.language)
+  );
 }
 
 export interface LocalSpeechWorkerHostOptions {
@@ -66,7 +78,10 @@ function settlesWithin(promise: Promise<void>, waitMs: number): Promise<boolean>
   });
 }
 
-function attachUtilityProcess(processHandle: UtilityProcess, onHang: () => void): LocalSpeechProcessClient {
+function attachUtilityProcess(
+  processHandle: UtilityProcess,
+  onHang: () => void,
+): LocalSpeechProcessClient {
   return new LocalSpeechProcessClient(
     {
       postMessage: (message) => processHandle.postMessage(message),
@@ -141,7 +156,10 @@ export class LocalSpeechWorkerHost {
   async prepare(target: SpeechWorkerTarget): Promise<LocalSpeechProcessClient> {
     if (needsFreshWorker(this.loaded, target)) await this.retire();
     const client = await this.acquire();
-    this.loaded = { modelId: target.modelId, languageKey: speechLanguageKey(target.family, target.language) };
+    this.loaded = {
+      modelId: target.modelId,
+      languageKey: speechLanguageKey(target.family, target.language),
+    };
     return client;
   }
 
@@ -185,7 +203,10 @@ export class LocalSpeechWorkerHost {
       return;
     }
     try {
-      (this.options.signalPid ?? ((target, signal) => process.kill(target, signal)))(pid, "SIGKILL");
+      (this.options.signalPid ?? ((target, signal) => process.kill(target, signal)))(
+        pid,
+        "SIGKILL",
+      );
     } catch {
       // Already exited; retire() does not fail on a worker that is gone.
     }
@@ -225,7 +246,9 @@ export class LocalSpeechWorkerHost {
     // Retired while waiting for an old worker to exit: forking now would only start a worker to kill.
     if (generation !== this.generation) throw new Error("Local speech host was replaced.");
     const launched = await this.options.fork();
-    const created: LocalSpeechProcessClient = attachUtilityProcess(launched, () => this.disposeIfCurrent(created));
+    const created: LocalSpeechProcessClient = attachUtilityProcess(launched, () =>
+      this.disposeIfCurrent(created),
+    );
     if (launched.stderr) {
       createInterface({ input: launched.stderr }).on("line", (line) => created.pushStderr(line));
     }

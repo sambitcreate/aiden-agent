@@ -11,8 +11,14 @@ const read = (path: string) => readFileSync(new URL(path, import.meta.url), "utf
 
 test("Live device pickers keep chevrons on one line and truncate long device names", () => {
   const css = read("../../styles.css");
-  assert.match(css, /settings-field-control > \.live-audio-device-select\s*\{\s*flex-wrap: nowrap;/);
-  assert.match(css, /\.live-audio-device-select > span:first-child\s*\{[^}]*min-width: 0;[^}]*text-overflow: ellipsis;/);
+  assert.match(
+    css,
+    /settings-field-control > \.live-audio-device-select\s*\{\s*flex-wrap: nowrap;/,
+  );
+  assert.match(
+    css,
+    /\.live-audio-device-select > span:first-child\s*\{[^}]*min-width: 0;[^}]*text-overflow: ellipsis;/,
+  );
   assert.match(read("./live-audio-settings.tsx"), /title=\{selectedLabel\}/);
 });
 
@@ -39,15 +45,15 @@ test("every settings destination uses the shared page and grouped row system", (
   assert.match(ui, /settings-field-control/u);
   const css = read("../../styles.css");
   assert.match(css, /--settings-card-fill:/u);
-  assert.match(
-    css,
-    /settings-field-horizontal:has\(\.settings-field-control \[role="switch"\]\)/u,
-  );
+  assert.match(css, /settings-field-horizontal:has\(\.settings-field-control \[role="switch"\]\)/u);
   assert.doesNotMatch(
     css,
     /settings-field-control > \[role="switch"\][\s\S]{0,80}display:\s*flex/u,
   );
-  assert.match(css, /@container settings-content \(max-width: 540px\)[\s\S]*settings-field-horizontal:has\(\.settings-field-control \[role="switch"\]\)/u);
+  assert.match(
+    css,
+    /@container settings-content \(max-width: 540px\)[\s\S]*settings-field-horizontal:has\(\.settings-field-control \[role="switch"\]\)/u,
+  );
   assert.match(ui, /settings-group-card overflow-visible/u);
   assert.match(css, /outline: 2px solid var\(--focus-ring\)/u);
 });
@@ -70,6 +76,12 @@ test("Connectors settings render their title inside the shared settings page hea
   const { document } = new Window();
   document.body.innerHTML = markup;
   const headings = [...document.querySelectorAll("h1")];
-  assert.deepEqual(headings.map((heading) => heading.textContent), ["Connectors"]);
-  assert.ok(headings[0]!.closest(".settings-page-heading"), "the page title sits in the shared heading");
+  assert.deepEqual(
+    headings.map((heading) => heading.textContent),
+    ["Connectors"],
+  );
+  assert.ok(
+    headings[0]!.closest(".settings-page-heading"),
+    "the page title sits in the shared heading",
+  );
 });

@@ -24,14 +24,23 @@ const displays = [
   { id: 2, workArea: { x: 1440, y: -200, width: 1920, height: 1080 } },
 ];
 
-const state = (placements: Array<number | null>, host: BotBubbleState["host"] = "overlay"): BotBubbleState => ({
+const state = (
+  placements: Array<number | null>,
+  host: BotBubbleState["host"] = "overlay",
+): BotBubbleState => ({
   ...EMPTY_BOT_BUBBLE_STATE,
   host,
-  bubbles: placements.map((displayId, index) => ({ botId: `b${index}`, placement: { side: "right", y: 0.2, displayId } })),
+  bubbles: placements.map((displayId, index) => ({
+    botId: `b${index}`,
+    placement: { side: "right", y: 0.2, displayId },
+  })),
 });
 
 test("the overlay page is isolated, can't take focus from other apps, and covers its display's work area", () => {
-  const options = botBubbleOverlayWindowOptions({ preload: "/p.cjs", workArea: displays[1]!.workArea });
+  const options = botBubbleOverlayWindowOptions({
+    preload: "/p.cjs",
+    workArea: displays[1]!.workArea,
+  });
   // Security: a sandboxed, context-isolated page with no Node.
   assert.equal(options.webPreferences.sandbox, true);
   assert.equal(options.webPreferences.contextIsolation, true);
@@ -49,7 +58,11 @@ test("the overlay page is isolated, can't take focus from other apps, and covers
 test("only displays with heads get an overlay, and only while the host is the overlay", () => {
   assert.deepEqual([...displaysNeedingOverlay(state([2, 2]), displays, 1)], [2]);
   assert.deepEqual([...displaysNeedingOverlay(state([null, 2]), displays, 1)].sort(), [1, 2]);
-  assert.deepEqual([...displaysNeedingOverlay(state([9]), displays, 1)], [1], "a missing display falls back to the primary");
+  assert.deepEqual(
+    [...displaysNeedingOverlay(state([9]), displays, 1)],
+    [1],
+    "a missing display falls back to the primary",
+  );
   assert.equal(displaysNeedingOverlay(state([]), displays, 1).size, 0);
   assert.equal(displaysNeedingOverlay(state([1], "window"), displays, 1).size, 0);
   assert.equal(displaysNeedingOverlay(state([1], "off"), displays, 1).size, 0);
@@ -59,29 +72,51 @@ test("only displays with heads get an overlay, and only while the host is the ov
 
 test("a rect in the main window maps into the overlay's own pixels", () => {
   const content = { x: 1500, y: 0, width: 1200, height: 800 };
-  assert.deepEqual(windowRectToOverlay({ x: 300, y: 50, width: 600, height: 700 }, content, displays[1]!.workArea), {
-    x: 360,
-    y: 250,
-    width: 600,
-    height: 700,
+  assert.deepEqual(
+    windowRectToOverlay({ x: 300, y: 50, width: 600, height: 700 }, content, displays[1]!.workArea),
+    {
+      x: 360,
+      y: 250,
+      width: 600,
+      height: 700,
+    },
+  );
+  assert.deepEqual(
+    windowRectToOverlay(
+      { x: 10, y: 10, width: 100, height: 100 },
+      content,
+      displays[1]!.workArea,
+      1.25,
+    ),
+    {
+      x: 72.5,
+      y: 212.5,
+      width: 125,
+      height: 125,
+    },
+  );
+  assert.deepEqual(growTargetRect(content, displays[0]!.workArea), {
+    x: 1500,
+    y: -25,
+    width: 1200,
+    height: 800,
   });
-  assert.deepEqual(windowRectToOverlay({ x: 10, y: 10, width: 100, height: 100 }, content, displays[1]!.workArea, 1.25), {
-    x: 72.5,
-    y: 212.5,
-    width: 125,
-    height: 125,
-  });
-  assert.deepEqual(growTargetRect(content, displays[0]!.workArea), { x: 1500, y: -25, width: 1200, height: 800 });
 });
 
 test("the capture rect is clamped to the window and empty rects capture nothing", () => {
-  assert.deepEqual(captureRect({ x: -10, y: 20.4, width: 500, height: 5000 }, { width: 400, height: 600 }), {
-    x: 0,
-    y: 20,
-    width: 400,
-    height: 580,
-  });
-  assert.equal(captureRect({ x: 500, y: 0, width: 10, height: 10 }, { width: 400, height: 600 }), null);
+  assert.deepEqual(
+    captureRect({ x: -10, y: 20.4, width: 500, height: 5000 }, { width: 400, height: 600 }),
+    {
+      x: 0,
+      y: 20,
+      width: 400,
+      height: 580,
+    },
+  );
+  assert.equal(
+    captureRect({ x: 500, y: 0, width: 10, height: 10 }, { width: 400, height: 600 }),
+    null,
+  );
 });
 
 test("clicks pass through unless the pointer is over Aiden or a head is dragging", () => {
@@ -147,7 +182,11 @@ function fakeOverlayWindow(options: { focused: boolean; passes: boolean | "throw
 test("closing a mini chat hands the keyboard on without taking the overlay off screen", () => {
   const key = fakeOverlayWindow({ focused: true, passes: true });
   assert.equal(releaseOverlayFocus(key.port), "passed");
-  assert.deepEqual(key.log, ["focusable:false", "pass"], "unfocusable first, so the key window can't come back; never blurred");
+  assert.deepEqual(
+    key.log,
+    ["focusable:false", "pass"],
+    "unfocusable first, so the key window can't come back; never blurred",
+  );
 
   const idle = fakeOverlayWindow({ focused: false, passes: true });
   assert.equal(releaseOverlayFocus(idle.port), "idle");
@@ -183,9 +222,20 @@ test("main waits for the overlay that was asked to show the picture, and never f
 });
 
 test("overlay sizes and rects are reported in the page's CSS pixels", () => {
-  assert.deepEqual(overlayCssSize({ x: 0, y: 25, width: 1440, height: 875 }, 1.25), { width: 1152, height: 700 });
-  assert.deepEqual(scaleRect({ x: 10, y: 20, width: 100, height: 50 }, 2), { x: 5, y: 10, width: 50, height: 25 });
-  assert.deepEqual(overlayCssSize({ x: 0, y: 0, width: 100, height: 100 }, 0), { width: 100, height: 100 });
+  assert.deepEqual(overlayCssSize({ x: 0, y: 25, width: 1440, height: 875 }, 1.25), {
+    width: 1152,
+    height: 700,
+  });
+  assert.deepEqual(scaleRect({ x: 10, y: 20, width: 100, height: 50 }, 2), {
+    x: 5,
+    y: 10,
+    width: 50,
+    height: 25,
+  });
+  assert.deepEqual(overlayCssSize({ x: 0, y: 0, width: 100, height: 100 }, 0), {
+    width: 100,
+    height: 100,
+  });
 });
 
 test("zoom shortcuts are recognised, typing is not", () => {

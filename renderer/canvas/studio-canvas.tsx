@@ -168,7 +168,11 @@ function StudioCanvasInner<N extends Node, E extends Edge>({
           style={trailingClearance ? { right: trailingClearance } : undefined}
         >
           <div className="pointer-events-auto min-w-0">{toolbar}</div>
-          {actions ? <div className="pointer-events-auto ml-auto flex shrink-0 items-center gap-1">{actions}</div> : null}
+          {actions ? (
+            <div className="pointer-events-auto ml-auto flex shrink-0 items-center gap-1">
+              {actions}
+            </div>
+          ) : null}
         </div>
       )}
       {presenting ? null : (

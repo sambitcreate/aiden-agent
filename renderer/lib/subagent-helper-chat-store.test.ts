@@ -49,7 +49,9 @@ const live = (...updates: SubagentTranscriptUpdateV1[]): LiveSubagentTranscripts
   new Map(updates.map((value) => [value.runId, value]));
 
 function messageTexts(transcript: SubagentTranscriptV1 | null): string[] {
-  return (transcript?.entries ?? []).flatMap((entry) => (entry.kind === "message" ? [entry.text] : []));
+  return (transcript?.entries ?? []).flatMap((entry) =>
+    entry.kind === "message" ? [entry.text] : [],
+  );
 }
 
 test("a window that joins late merges what streamed after the saved copy", () => {
@@ -174,7 +176,10 @@ test("an answer from inside a helper chat goes to the main chat's approval handl
 
 test("the chat stream and a detached run's projection combine by newest revision", () => {
   const fromStream = live(update("run-1", 0, 2, 0, "stream"), update("run-2", 0, 5, 0, "stream"));
-  const fromProjection = live(update("run-1", 0, 3, 0, "projection"), update("run-2", 0, 4, 0, "projection"));
+  const fromProjection = live(
+    update("run-1", 0, 3, 0, "projection"),
+    update("run-2", 0, 4, 0, "projection"),
+  );
   const combined = combineLiveSubagentTranscripts(fromStream, fromProjection);
   assert.equal(combined.get("run-1")?.revision, 3);
   assert.equal(combined.get("run-2")?.revision, 5);
@@ -208,22 +213,46 @@ test("on a chat switch the old chat's live updates and approvals are not taken a
 });
 
 test("the main chat waits beyond a helper for a question or another approval, not the helper's own", () => {
-  const own: ApprovalPrompt = { approvalId: "own", toolCallId: "c1", toolName: "edit", summary: "Edit" };
-  const own2: ApprovalPrompt = { approvalId: "own-2", toolCallId: "c3", toolName: "bash", summary: "Run" };
-  const other: ApprovalPrompt = { approvalId: "other", toolCallId: "c2", toolName: "bash", summary: "Run" };
+  const own: ApprovalPrompt = {
+    approvalId: "own",
+    toolCallId: "c1",
+    toolName: "edit",
+    summary: "Edit",
+  };
+  const own2: ApprovalPrompt = {
+    approvalId: "own-2",
+    toolCallId: "c3",
+    toolName: "bash",
+    summary: "Run",
+  };
+  const other: ApprovalPrompt = {
+    approvalId: "other",
+    toolCallId: "c2",
+    toolName: "bash",
+    summary: "Run",
+  };
   const mine = new Set(["own", "own-2"]);
   const none = new Set<string>();
   assert.equal(mainChatWaitingFor({ approvals: [own], questionPending: false }, mine), null);
   // Two approvals from the same helper (parallel tool calls) are both its own.
   assert.equal(mainChatWaitingFor({ approvals: [own, own2], questionPending: false }, mine), null);
-  assert.equal(mainChatWaitingFor({ approvals: [own, other], questionPending: false }, mine), "approval");
-  assert.equal(mainChatWaitingFor({ approvals: [other], questionPending: false }, none), "approval");
+  assert.equal(
+    mainChatWaitingFor({ approvals: [own, other], questionPending: false }, mine),
+    "approval",
+  );
+  assert.equal(
+    mainChatWaitingFor({ approvals: [other], questionPending: false }, none),
+    "approval",
+  );
   assert.equal(mainChatWaitingFor({ approvals: [], questionPending: true }, none), "question");
   assert.equal(mainChatWaitingFor({ approvals: [], questionPending: false }, none), null);
   // The main card shows the helper's own approval first, so the question is what to go to.
   assert.equal(mainChatWaitingFor({ approvals: [own], questionPending: true }, mine), "question");
   // Another approval at the front of the queue is what the main card shows.
-  assert.equal(mainChatWaitingFor({ approvals: [other, own], questionPending: true }, mine), "approval");
+  assert.equal(
+    mainChatWaitingFor({ approvals: [other, own], questionPending: true }, mine),
+    "approval",
+  );
 });
 
 test("returning to what waits in the main chat closes the expanded chat, then focuses the waiting item", () => {
@@ -261,7 +290,11 @@ test("returning to what waits in the main chat closes the expanded chat, then fo
 
 test("closing the expanded chat focuses the side panel's new Expand button for the same helper, or else the message box", () => {
   const globals = globalThis as { window?: unknown; document?: unknown; Node?: unknown };
-  const had = { window: "window" in globals, document: "document" in globals, Node: "Node" in globals };
+  const had = {
+    window: "window" in globals,
+    document: "document" in globals,
+    Node: "Node" in globals,
+  };
   const previous = { window: globals.window, document: globals.document, Node: globals.Node };
   const frames: Array<() => void> = [];
   const focused: string[] = [];
@@ -275,7 +308,10 @@ test("closing the expanded chat focuses the side panel's new Expand button for t
     }) as unknown as HTMLElement;
   const expandFor = (runId: string, name: string, isConnected = true) =>
     element(name, { "data-subagent-helper-expand": runId }, isConnected);
-  const composer = element("composer", { "data-focus-region": "composer", "data-focus-region-entry": "" });
+  const composer = element("composer", {
+    "data-focus-region": "composer",
+    "data-focus-region-entry": "",
+  });
   // The side panel's Expand buttons on screen after the expanded chat closes.
   let panelButtons: HTMLElement[] = [];
   globals.window = { requestAnimationFrame: (callback: () => void) => frames.push(callback) };

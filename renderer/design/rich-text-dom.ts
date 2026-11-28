@@ -10,7 +10,20 @@ import {
   type RichMarks,
 } from "../shared/design-canvas/rich-text";
 
-const BLOCK_TAGS = new Set(["DIV", "P", "H1", "H2", "H3", "H4", "H5", "H6", "BLOCKQUOTE", "PRE", "SECTION", "ARTICLE"]);
+const BLOCK_TAGS = new Set([
+  "DIV",
+  "P",
+  "H1",
+  "H2",
+  "H3",
+  "H4",
+  "H5",
+  "H6",
+  "BLOCKQUOTE",
+  "PRE",
+  "SECTION",
+  "ARTICLE",
+]);
 const LIST_TAGS = new Set(["UL", "OL"]);
 const SKIPPED_TAGS = new Set(["SCRIPT", "STYLE", "TEMPLATE"]);
 
@@ -29,7 +42,8 @@ function marksOf(element: Element, marks: RichMarks): RichMarks {
     const weight = style.fontWeight;
     if (weight === "bold" || weight === "bolder" || Number(weight) >= 600) next.bold = true;
     if (style.fontStyle === "italic") next.italic = true;
-    if (`${style.textDecoration} ${style.textDecorationLine}`.includes("underline")) next.underline = true;
+    if (`${style.textDecoration} ${style.textDecorationLine}`.includes("underline"))
+      next.underline = true;
   }
   return next;
 }
@@ -49,7 +63,8 @@ function pushText(line: RichLine, text: string, marks: RichMarks) {
 
 function addBlock(blocks: RichBlock[], block: RichBlock) {
   const last = blocks[blocks.length - 1];
-  if (block.type !== "paragraph" && last && last.type === block.type) last.items.push(...block.items);
+  if (block.type !== "paragraph" && last && last.type === block.type)
+    last.items.push(...block.items);
   else blocks.push(block);
 }
 

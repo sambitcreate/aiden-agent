@@ -11,7 +11,12 @@ export function mcpProviderGrantKey(serverId: string): string {
 export function mcpProviderGrantBinding(server: McpServer): string {
   validateMcpServerMetadata(server);
   if (!server.authProvider) throw new Error("Select a provider for this MCP server first.");
-  return JSON.stringify({ version: 1, connection: createHash("sha256").update(JSON.stringify(mcpCredentialConnectionSnapshot(server))).digest("hex") });
+  return JSON.stringify({
+    version: 1,
+    connection: createHash("sha256")
+      .update(JSON.stringify(mcpCredentialConnectionSnapshot(server)))
+      .digest("hex"),
+  });
 }
 
 /**
@@ -37,7 +42,13 @@ export function parseMcpProviderKeySharing(value: string | null): McpProviderKey
     if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return result;
     for (const [id, fingerprint] of Object.entries(parsed)) {
       if (result.size >= MAX_SHARING_IDS) break;
-      if (id.length > 0 && id.length <= 200 && typeof fingerprint === "string" && FINGERPRINT.test(fingerprint)) result.set(id, fingerprint);
+      if (
+        id.length > 0 &&
+        id.length <= 200 &&
+        typeof fingerprint === "string" &&
+        FINGERPRINT.test(fingerprint)
+      )
+        result.set(id, fingerprint);
     }
   } catch {
     // Unreadable records share nothing.
@@ -46,7 +57,11 @@ export function parseMcpProviderKeySharing(value: string | null): McpProviderKey
 }
 
 export function serializeMcpProviderKeySharing(sharing: McpProviderKeySharing): string {
-  return JSON.stringify(Object.fromEntries([...sharing].sort(([a], [b]) => a.localeCompare(b)).slice(0, MAX_SHARING_IDS)));
+  return JSON.stringify(
+    Object.fromEntries(
+      [...sharing].sort(([a], [b]) => a.localeCompare(b)).slice(0, MAX_SHARING_IDS),
+    ),
+  );
 }
 
 /** The ChatGPT subscription provider: its sign-in is never an API key. */
@@ -83,33 +98,60 @@ export async function resolveMcpProviderSharedKey(
   options: { checkSharing?: boolean } = {},
 ): Promise<{ key: string; fingerprint: string }> {
   if (!source.isBuiltin(providerId) || SUBSCRIPTION_PROVIDER_IDS.has(providerId)) {
-    throw new McpProviderKeyRefusedError("Only a built-in provider’s API key can be shared with a custom connector.");
+    throw new McpProviderKeyRefusedError(
+      "Only a built-in provider’s API key can be shared with a custom connector.",
+    );
   }
   const credential = await source.storedCredential(providerId);
   if (credential?.type === "oauth") {
-    throw new McpProviderKeyRefusedError("Sign-in and subscription credentials are never shared with connectors. Use a provider with a saved API key.");
+    throw new McpProviderKeyRefusedError(
+      "Sign-in and subscription credentials are never shared with connectors. Use a provider with a saved API key.",
+    );
   }
   const key = credential?.type === "api_key" ? credential.key?.trim() : undefined;
   if (!key) throw new McpProviderKeyRefusedError("This provider has no saved API key to share.");
   const fingerprint = mcpProviderKeyFingerprint(key);
-  if (options.checkSharing !== false && (await source.sharedFingerprint(providerId)) !== fingerprint) {
-    throw new McpProviderKeyRefusedError("Turn on “Let custom connectors use this key” for this provider in Settings → Providers first.");
+  if (
+    options.checkSharing !== false &&
+    (await source.sharedFingerprint(providerId)) !== fingerprint
+  ) {
+    throw new McpProviderKeyRefusedError(
+      "Turn on “Let custom connectors use this key” for this provider in Settings → Providers first.",
+    );
   }
   return { key, fingerprint };
 }
 
 export function canUseProviderAuthenticatedMcp(input: {
-  rendererOwner: boolean; workspace: boolean; assistant: boolean; bot: boolean; permission: string;
-  usageSource?: string; interactionSurface?: string;
+  rendererOwner: boolean;
+  workspace: boolean;
+  assistant: boolean;
+  bot: boolean;
+  permission: string;
+  usageSource?: string;
+  interactionSurface?: string;
 }): boolean {
-  return input.rendererOwner && input.workspace && input.permission !== "none" && !input.assistant && !input.bot &&
+  return (
+    input.rendererOwner &&
+    input.workspace &&
+    input.permission !== "none" &&
+    !input.assistant &&
+    !input.bot &&
     (input.usageSource === undefined || input.usageSource === "chat") &&
-    (input.interactionSurface === undefined || input.interactionSurface === "desktop");
+    (input.interactionSurface === undefined || input.interactionSurface === "desktop")
+  );
 }
 
-export function admitMcpProviderAuthServers(servers: readonly McpServer[], allowed: boolean, strict: boolean): McpServer[] {
+export function admitMcpProviderAuthServers(
+  servers: readonly McpServer[],
+  allowed: boolean,
+  strict: boolean,
+): McpServer[] {
   const unavailable = servers.some((server) => server.authProvider !== undefined);
-  if (unavailable && !allowed && strict) throw new Error("Provider-authenticated MCP servers need a workspace chat you have open in Aiden Agent.");
+  if (unavailable && !allowed && strict)
+    throw new Error(
+      "Provider-authenticated MCP servers need a workspace chat you have open in Aiden Agent.",
+    );
   return servers.filter((server) => allowed || server.authProvider === undefined);
 }
 
@@ -137,28 +179,43 @@ export function createMcpProviderAuthenticatedFetch(options: {
     options.assertCurrent();
     const request = input instanceof Request ? input : undefined;
     const url = new URL(request?.url ?? String(input));
-    if (url.href !== endpoint) throw new Error("Provider credentials may only reach the exact approved MCP URL.");
+    if (url.href !== endpoint)
+      throw new Error("Provider credentials may only reach the exact approved MCP URL.");
     const signal = init?.signal ?? request?.signal;
     signal?.throwIfAborted();
     const verifyGrant = !grantVerified;
-    if (verifyGrant && await options.readGrant() !== binding) throw new Error("Approve this provider credential in Settings → Connectors on this device before connecting.");
+    if (verifyGrant && (await options.readGrant()) !== binding)
+      throw new Error(
+        "Approve this provider credential in Settings → Connectors on this device before connecting.",
+      );
     options.assertCurrent();
     let token: string | undefined;
-    try { token = await options.resolveToken(server.authProvider!); }
-    catch (error) {
+    try {
+      token = await options.resolveToken(server.authProvider!);
+    } catch (error) {
       if (error instanceof McpProviderKeyRefusedError) throw error;
-      throw new Error("The selected provider credential could not be read. Check it in Settings → Providers.");
+      throw new Error(
+        "The selected provider credential could not be read. Check it in Settings → Providers.",
+      );
     }
     signal?.throwIfAborted();
     options.assertCurrent();
     if (verifyGrant) {
-      if (await options.readGrant() !== binding) throw new Error("MCP provider credential approval was revoked.");
+      if ((await options.readGrant()) !== binding)
+        throw new Error("MCP provider credential approval was revoked.");
       grantVerified = true;
     }
     signal?.throwIfAborted();
     options.assertCurrent();
-    if (typeof token !== "string" || !token || token.length > 32_768 || [...token].some((char) => char.charCodeAt(0) <= 32 || char.charCodeAt(0) === 127)) {
-      throw new Error("The selected provider does not have a usable bearer credential. Sign in or choose another provider.");
+    if (
+      typeof token !== "string" ||
+      !token ||
+      token.length > 32_768 ||
+      [...token].some((char) => char.charCodeAt(0) <= 32 || char.charCodeAt(0) === 127)
+    ) {
+      throw new Error(
+        "The selected provider does not have a usable bearer credential. Sign in or choose another provider.",
+      );
     }
     const headers = new Headers(init?.headers ?? request?.headers);
     headers.set("Authorization", `Bearer ${token}`);
@@ -167,9 +224,15 @@ export function createMcpProviderAuthenticatedFetch(options: {
       if (response.ok) return response;
       await response.body?.cancel();
       // Remote error bodies can echo Authorization; never expose them in SDK errors.
-      return new Response("The MCP server rejected the authenticated request.", { status: response.status, headers: { "content-type": "text/plain" } });
+      return new Response("The MCP server rejected the authenticated request.", {
+        status: response.status,
+        headers: { "content-type": "text/plain" },
+      });
+    } catch {
+      throw new Error(
+        "The provider-authenticated MCP request failed. Check the server connection and try again.",
+      );
     }
-    catch { throw new Error("The provider-authenticated MCP request failed. Check the server connection and try again."); }
   };
 }
 
@@ -188,14 +251,25 @@ export async function withMcpProviderOperation<T, R>(options: {
   close(client: T): Promise<void>;
 }): Promise<R> {
   const lifetime = new AbortController();
-  const signal = AbortSignal.any([options.scope.signal, lifetime.signal, AbortSignal.timeout(60_000)]);
+  const signal = AbortSignal.any([
+    options.scope.signal,
+    lifetime.signal,
+    AbortSignal.timeout(60_000),
+  ]);
   const current = () => !signal.aborted && options.scope.isCurrent();
-  const assertCurrent = () => { signal.throwIfAborted(); if (!current()) throw new Error("This attended MCP operation is no longer active."); };
+  const assertCurrent = () => {
+    signal.throwIfAborted();
+    if (!current()) throw new Error("This attended MCP operation is no longer active.");
+  };
   assertCurrent();
   const client = options.create();
-  const abort = () => { void options.close(client).catch(() => undefined); };
+  const abort = () => {
+    void options.close(client).catch(() => undefined);
+  };
   signal.addEventListener("abort", abort, { once: true });
-  const unsubscribe = options.scope.onInvalidated?.(() => lifetime.abort(new Error("The attended MCP owner closed.")));
+  const unsubscribe = options.scope.onInvalidated?.(() =>
+    lifetime.abort(new Error("The attended MCP owner closed.")),
+  );
   try {
     assertCurrent();
     await options.connect(client, signal, current);

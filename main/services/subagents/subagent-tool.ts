@@ -61,8 +61,7 @@ function capabilitySchema(
   return Type.Object(
     {
       workspaceRead: Type.Boolean({
-        description:
-          "Request bounded read-only access to the selected workspace.",
+        description: "Request bounded read-only access to the selected workspace.",
       }),
       ...(writeEnabled
         ? {
@@ -95,8 +94,7 @@ function capabilitySchema(
           }
         : {}),
       web: Type.Boolean({
-        description:
-          "Request host-proxied web search. Every exact call still needs approval.",
+        description: "Request host-proxied web search. Every exact call still needs approval.",
       }),
       mcp: Type.Array(mcpScope, {
         maxItems: MAX_SUBAGENT_REQUESTED_MCP_SERVERS,
@@ -135,7 +133,10 @@ export function subagentToolInventory(
   return {
     status: "listed" as const,
     mcp: mcpInventory.map(({ serverId, tools }) => ({ serverId, tools: [...tools] })),
-    mcpMutations: mcpMutationInventory.map(({ serverId, tools }) => ({ serverId, tools: [...tools] })),
+    mcpMutations: mcpMutationInventory.map(({ serverId, tools }) => ({
+      serverId,
+      tools: [...tools],
+    })),
     ...(models.length > 0 ? { currentModel: subagentModelKey(models[0]!) } : {}),
     models: models.map((model) => ({
       model: subagentModelKey(model),
@@ -210,59 +211,70 @@ export function createSubagentTool(
           }),
         ),
         capabilities: Type.Optional(capabilities),
-        tasks: Type.Optional(Type.Array(
-          Type.Object(
+        tasks: Type.Optional(
+          Type.Array(
+            Type.Object(
+              {
+                // A flat enum is more reliably followed by OpenAI-compatible
+                // providers than TypeBox's equivalent `anyOf` + `const` union.
+                // `parseSubagentToolRequest` still independently enforces the
+                // exact role allowlist before any child can launch.
+                role: Type.String({
+                  enum: roles,
+                  description: `Exactly one of: ${roles.join(", ")}.`,
+                }),
+                label: Type.String({
+                  minLength: 1,
+                  maxLength: MAX_SUBAGENT_LABEL_CHARS,
+                  pattern: SUBAGENT_SAFE_LABEL_PATTERN,
+                  description: "Short user-facing label for this delegated task.",
+                }),
+                task: Type.String({
+                  minLength: 1,
+                  maxLength: MAX_SUBAGENT_TASK_CHARS,
+                  description: "One self-contained investigation for the child.",
+                }),
+                maxTurns: Type.Optional(
+                  Type.Integer({
+                    minimum: 1,
+                    maximum: MAX_SUBAGENT_REQUESTED_TURNS,
+                    description:
+                      "Read-only investigation turn budget; default 24. Other host limits still apply.",
+                  }),
+                ),
+                capabilities: Type.Optional(capabilities),
+                // Free strings: the requestable models and the effort ceiling
+                // come from action "list". `parseSubagentToolRequest` checks
+                // the shape and the child model resolver refuses any model or
+                // effort outside the live policy before a child launches.
+                ...(modelChoiceDeclared
+                  ? {
+                      model: Type.Optional(
+                        Type.String({
+                          minLength: 1,
+                          description:
+                            'Only when the user asks for a specific model: a model value from action "list". Omit to inherit the current model.',
+                        }),
+                      ),
+                      effort: Type.Optional(
+                        Type.String({
+                          enum: [...GENERATION_THINKING_LEVELS],
+                          description:
+                            'Only when the user asks for a reasoning effort, within the efforts action "list" returns. Omit to use the chosen model\'s default.',
+                        }),
+                      ),
+                    }
+                  : {}),
+              },
+              { additionalProperties: false },
+            ),
             {
-              // A flat enum is more reliably followed by OpenAI-compatible
-              // providers than TypeBox's equivalent `anyOf` + `const` union.
-              // `parseSubagentToolRequest` still independently enforces the
-              // exact role allowlist before any child can launch.
-              role: Type.String({
-                enum: roles,
-                description: `Exactly one of: ${roles.join(", ")}.`,
-              }),
-              label: Type.String({
-                minLength: 1,
-                maxLength: MAX_SUBAGENT_LABEL_CHARS,
-                pattern: SUBAGENT_SAFE_LABEL_PATTERN,
-                description: "Short user-facing label for this delegated task.",
-              }),
-              task: Type.String({
-                minLength: 1,
-                maxLength: MAX_SUBAGENT_TASK_CHARS,
-                description: "One self-contained investigation for the child.",
-              }),
-              maxTurns: Type.Optional(Type.Integer({
-                minimum: 1,
-                maximum: MAX_SUBAGENT_REQUESTED_TURNS,
-                description: "Read-only investigation turn budget; default 24. Other host limits still apply.",
-              })),
-              capabilities: Type.Optional(capabilities),
-              // Free strings: the requestable models and the effort ceiling
-              // come from action "list". `parseSubagentToolRequest` checks
-              // the shape and the child model resolver refuses any model or
-              // effort outside the live policy before a child launches.
-              ...(modelChoiceDeclared
-                ? {
-                    model: Type.Optional(Type.String({
-                      minLength: 1,
-                      description: 'Only when the user asks for a specific model: a model value from action "list". Omit to inherit the current model.',
-                    })),
-                    effort: Type.Optional(Type.String({
-                      enum: [...GENERATION_THINKING_LEVELS],
-                      description: 'Only when the user asks for a reasoning effort, within the efforts action "list" returns. Omit to use the chosen model\'s default.',
-                    })),
-                  }
-                : {}),
+              minItems: 1,
+              maxItems: MAX_SUBAGENT_TASKS_PER_CALL,
+              description: 'Required to delegate; omit with action "list".',
             },
-            { additionalProperties: false },
           ),
-          {
-            minItems: 1,
-            maxItems: MAX_SUBAGENT_TASKS_PER_CALL,
-            description: "Required to delegate; omit with action \"list\".",
-          },
-        )),
+        ),
       },
       { additionalProperties: false },
     ),

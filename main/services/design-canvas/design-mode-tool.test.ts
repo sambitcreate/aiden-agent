@@ -31,46 +31,87 @@ function windowOwner(id = 7, documentId = "doc-a") {
   };
 }
 
-const last = <T,>(list: T[]): T | undefined => list[list.length - 1];
-const requestIdOf = (sent: Sent[]) => sent.find((entry) => entry.channel === "designCanvas:consent")!.payload.requestId as string;
+const last = <T>(list: T[]): T | undefined => list[list.length - 1];
+const requestIdOf = (sent: Sent[]) =>
+  sent.find((entry) => entry.channel === "designCanvas:consent")!.payload.requestId as string;
 
 test("Enter on the card turns design mode on before Aiden hears entered, and closes the card", async (t) => {
   const events = captureAnalyticsEvents(t);
   const consent = new DesignModeConsent();
   const window = windowOwner();
-  const pending = consent.request({ chatId: "chat-1", reason: "Side by side is easier.", owner: window.owner });
-  assert.deepEqual(window.sent[0]?.payload, { requestId: requestIdOf(window.sent), chatId: "chat-1", reason: "Side by side is easier." });
+  const pending = consent.request({
+    chatId: "chat-1",
+    reason: "Side by side is easier.",
+    owner: window.owner,
+  });
+  assert.deepEqual(window.sent[0]?.payload, {
+    requestId: requestIdOf(window.sent),
+    chatId: "chat-1",
+    reason: "Side by side is easier.",
+  });
 
   const order: string[] = [];
-  const accepted = await consent.answer(requestIdOf(window.sent), "enter", window.owner, async (chatId) => {
-    order.push(`entered ${chatId}`);
-  });
+  const accepted = await consent.answer(
+    requestIdOf(window.sent),
+    "enter",
+    window.owner,
+    async (chatId) => {
+      order.push(`entered ${chatId}`);
+    },
+  );
   pending.then(() => order.push("tool heard"));
   assert.equal(accepted, true);
   assert.equal(await pending, "entered");
   assert.deepEqual(order, ["entered chat-1", "tool heard"]);
-  assert.deepEqual(last(window.sent), { channel: "designCanvas:consentClosed", payload: { requestId: requestIdOf(window.sent) } });
-  assert.deepEqual(events, [{ event: "design_mode_entered", props: { source: "aiden" } }], "counted once, as Aiden's ask");
+  assert.deepEqual(last(window.sent), {
+    channel: "designCanvas:consentClosed",
+    payload: { requestId: requestIdOf(window.sent) },
+  });
+  assert.deepEqual(
+    events,
+    [{ event: "design_mode_entered", props: { source: "aiden" } }],
+    "counted once, as Aiden's ask",
+  );
 });
 
 test("Not now declines without touching design mode; another window cannot answer", async (t) => {
   const events = captureAnalyticsEvents(t);
   const consent = new DesignModeConsent();
   const window = windowOwner();
-  const pending = consent.request({ chatId: "chat-1", reason: "Compare three directions.", owner: window.owner });
+  const pending = consent.request({
+    chatId: "chat-1",
+    reason: "Compare three directions.",
+    owner: window.owner,
+  });
   const id = requestIdOf(window.sent);
   let entered = false;
   const enter = async () => {
     entered = true;
   };
-  assert.equal(await consent.answer(id, "enter", windowOwner(8).owner, enter), false, "a different window");
-  assert.equal(await consent.answer(id, "enter", windowOwner(7, "doc-b").owner, enter), false, "the same window after a reload");
+  assert.equal(
+    await consent.answer(id, "enter", windowOwner(8).owner, enter),
+    false,
+    "a different window",
+  );
+  assert.equal(
+    await consent.answer(id, "enter", windowOwner(7, "doc-b").owner, enter),
+    false,
+    "the same window after a reload",
+  );
   assert.equal(await consent.answer(id, "maybe", window.owner, enter), false);
   assert.equal(await consent.answer(id, "decline", window.owner, enter), true);
   assert.equal(await pending, "declined");
   assert.equal(entered, false);
-  assert.equal(await consent.answer(id, "enter", window.owner, enter), false, "a closed card takes no second answer");
-  assert.deepEqual(events, [{ event: "design_mode_declined", props: {} }], "refused answers count for nothing");
+  assert.equal(
+    await consent.answer(id, "enter", window.owner, enter),
+    false,
+    "a closed card takes no second answer",
+  );
+  assert.deepEqual(
+    events,
+    [{ event: "design_mode_declined", props: {} }],
+    "refused answers count for nothing",
+  );
 });
 
 test("Not now holds for the rest of the chat, in that chat only, until the person opens design mode themselves", async () => {
@@ -80,8 +121,13 @@ test("Not now holds for the rest of the chat, in that chat only, until the perso
   await consent.answer(requestIdOf(window.sent), "decline", window.owner, async () => undefined);
   assert.equal(await first, "declined");
 
-  const cardsBefore = window.sent.filter((entry) => entry.channel === "designCanvas:consent").length;
-  assert.equal(await consent.request({ chatId: "chat-1", reason: "Next reply.", owner: window.owner }), "declined");
+  const cardsBefore = window.sent.filter(
+    (entry) => entry.channel === "designCanvas:consent",
+  ).length;
+  assert.equal(
+    await consent.request({ chatId: "chat-1", reason: "Next reply.", owner: window.owner }),
+    "declined",
+  );
   assert.equal(
     window.sent.filter((entry) => entry.channel === "designCanvas:consent").length,
     cardsBefore,
@@ -89,14 +135,28 @@ test("Not now holds for the rest of the chat, in that chat only, until the perso
   );
 
   const other = windowOwner(9);
-  const elsewhere = consent.request({ chatId: "chat-2", reason: "Another chat.", owner: other.owner });
-  assert.ok(other.sent.some((entry) => entry.channel === "designCanvas:consent"), "another chat still gets its card");
+  const elsewhere = consent.request({
+    chatId: "chat-2",
+    reason: "Another chat.",
+    owner: other.owner,
+  });
+  assert.ok(
+    other.sent.some((entry) => entry.channel === "designCanvas:consent"),
+    "another chat still gets its card",
+  );
   other.close();
   assert.equal(await elsewhere, "unavailable");
 
   consent.forgetDecline("chat-1");
-  const again = consent.request({ chatId: "chat-1", reason: "After they opened it.", owner: window.owner });
-  assert.equal(window.sent.filter((entry) => entry.channel === "designCanvas:consent").length, cardsBefore + 1);
+  const again = consent.request({
+    chatId: "chat-1",
+    reason: "After they opened it.",
+    owner: window.owner,
+  });
+  assert.equal(
+    window.sent.filter((entry) => entry.channel === "designCanvas:consent").length,
+    cardsBefore + 1,
+  );
   window.close();
   assert.equal(await again, "unavailable");
 });
@@ -105,7 +165,12 @@ test("a card stops waiting when the reply stops, the window closes, or a newer c
   const consent = new DesignModeConsent();
   const stopped = new AbortController();
   const a = windowOwner();
-  const first = consent.request({ chatId: "chat-1", reason: "One.", owner: a.owner, signal: stopped.signal });
+  const first = consent.request({
+    chatId: "chat-1",
+    reason: "One.",
+    owner: a.owner,
+    signal: stopped.signal,
+  });
   stopped.abort();
   assert.equal(await first, "unavailable");
   assert.equal(last(a.sent)?.channel, "designCanvas:consentClosed");
@@ -119,7 +184,8 @@ test("a card stops waiting when the reply stops, the window closes, or a newer c
   const older = consent.request({ chatId: "chat-1", reason: "Old.", owner: c.owner });
   const newer = consent.request({ chatId: "chat-1", reason: "New.", owner: c.owner });
   assert.equal(await older, "unavailable");
-  const newerId = c.sent.filter((entry) => entry.channel === "designCanvas:consent").slice(-1)[0]!.payload.requestId;
+  const newerId = c.sent.filter((entry) => entry.channel === "designCanvas:consent").slice(-1)[0]!
+    .payload.requestId;
   assert.equal(await consent.answer(newerId, "decline", c.owner, async () => undefined), true);
   assert.equal(await newer, "declined");
 });
@@ -128,10 +194,14 @@ test("a card nobody answers times out, and a failed enter tells Aiden it is unav
   const events = captureAnalyticsEvents(t);
   const consent = new DesignModeConsent(10);
   const window = windowOwner();
-  assert.equal(await consent.request({ chatId: "chat-1", reason: "Wait.", owner: window.owner }), "unavailable");
+  assert.equal(
+    await consent.request({ chatId: "chat-1", reason: "Wait.", owner: window.owner }),
+    "unavailable",
+  );
 
   const again = consent.request({ chatId: "chat-1", reason: "Try.", owner: window.owner });
-  const id = window.sent.filter((entry) => entry.channel === "designCanvas:consent").slice(-1)[0]!.payload.requestId;
+  const id = window.sent.filter((entry) => entry.channel === "designCanvas:consent").slice(-1)[0]!
+    .payload.requestId;
   await assert.rejects(
     consent.answer(id, "enter", window.owner, async () => {
       throw new Error("Design mode needs a project chat.");
@@ -171,16 +241,35 @@ test("design_mode asks only when design mode is off, and leaves without asking",
     exit: async () => {
       on = false;
     },
-    canvasToolNames: ["canvas_read", "canvas_place_frame", "canvas_arrange", "canvas_page", "canvas_focus"],
+    canvasToolNames: [
+      "canvas_read",
+      "canvas_place_frame",
+      "canvas_arrange",
+      "canvas_page",
+      "canvas_focus",
+    ],
   });
   assert.equal((await run(tool, { action: "exit", reason: "done" })).status, "already");
   assert.equal((await run(tool, { action: "enter", reason: "  " })).status, "error");
-  const entered = await run(tool, { action: "enter", reason: "Compare the three directions side by side." });
+  const entered = await run(tool, {
+    action: "enter",
+    reason: "Compare the three directions side by side.",
+  });
   assert.equal(entered.status, "entered");
-  for (const name of ["canvas_read", "canvas_place_frame", "canvas_arrange", "canvas_page", "canvas_focus"]) {
+  for (const name of [
+    "canvas_read",
+    "canvas_place_frame",
+    "canvas_arrange",
+    "canvas_page",
+    "canvas_focus",
+  ]) {
     assert.match(String(entered.next), new RegExp(name, "u"));
   }
-  assert.doesNotMatch(String(entered.next), /canvas_build|canvas_duplicate/u, "a tool this turn does not have is not named");
+  assert.doesNotMatch(
+    String(entered.next),
+    /canvas_build|canvas_duplicate/u,
+    "a tool this turn does not have is not named",
+  );
   assert.equal((await run(tool, { action: "enter", reason: "again" })).status, "already");
   assert.deepEqual(asked, ["Compare the three directions side by side."]);
   assert.equal((await run(tool, { action: "exit", reason: "done" })).status, "exited");
@@ -236,8 +325,16 @@ test("design_mode is offered only in a desktop project chat while inline visuals
   assert.equal(designModeToolAllowed({ ...turn, inlineVisuals: "automatic" }), true);
   assert.equal(designModeToolAllowed({ ...turn, inlineVisuals: "on_request" }), false);
   assert.equal(designModeToolAllowed({ ...turn, inlineVisuals: "off" }), false);
-  assert.equal(designModeToolAllowed({ ...turn, regularChat: false }), false, "a feature's own chat");
-  assert.equal(designModeToolAllowed({ ...turn, localRenderer: false }), false, "a phone or paired Mac");
+  assert.equal(
+    designModeToolAllowed({ ...turn, regularChat: false }),
+    false,
+    "a feature's own chat",
+  );
+  assert.equal(
+    designModeToolAllowed({ ...turn, localRenderer: false }),
+    false,
+    "a phone or paired Mac",
+  );
   assert.equal(designModeToolAllowed({ ...turn, botId: "bot-1" }), false);
   assert.equal(designModeToolAllowed({ ...turn, flagEnabled: false }), false);
 });

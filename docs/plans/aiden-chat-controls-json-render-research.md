@@ -16,15 +16,15 @@ The AI chooses the relevant controls and explains them. Aiden supplies their lab
 
 Examples of the intended interaction:
 
-| Request | Inline response and interaction |
-| --- | --- |
-| “How does memory work? Can I turn it off here?” | Short explanation, Memory group, current global and selected-workspace switches with separate scope labels. Turning one off preserves stored facts and reports the verified result. |
-| “Make this easier to read.” | Appearance group with supported theme choices and chat width. Desktop theme changes immediately. A phone explicitly distinguishes its own appearance from the paired host's appearance. |
-| “Can you search the web?” | Actual availability and Web Search switch for the executing host. Enabling preserves its configured route/key and makes no search or catalog request. If setup is missing, show that state and an owned setup destination. |
-| “What can Aiden do?” | Brief installed-feature overview with a few relevant feature groups; expand a group on demand rather than rendering every setting. |
-| “Turn off skills.” | Skills switch with its real scope. The action's independent receipt survives cancellation of the generating run. Product help remains available as a separately owned read function. |
-| “Use a different model.” | Later slice: a picker populated from the authorized configured inventory, labeled “This chat.” No invented models, provider defaults changed implicitly or background catalog fetch. |
-| “Enable Computer Use.” | Readiness and consent/setup control; the switch must not bypass that domain's existing gates. Supported desktop actions and phone limitations remain explicit. |
+| Request                                         | Inline response and interaction                                                                                                                                                                                            |
+| ----------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| “How does memory work? Can I turn it off here?” | Short explanation, Memory group, current global and selected-workspace switches with separate scope labels. Turning one off preserves stored facts and reports the verified result.                                        |
+| “Make this easier to read.”                     | Appearance group with supported theme choices and chat width. Desktop theme changes immediately. A phone explicitly distinguishes its own appearance from the paired host's appearance.                                    |
+| “Can you search the web?”                       | Actual availability and Web Search switch for the executing host. Enabling preserves its configured route/key and makes no search or catalog request. If setup is missing, show that state and an owned setup destination. |
+| “What can Aiden do?”                            | Brief installed-feature overview with a few relevant feature groups; expand a group on demand rather than rendering every setting.                                                                                         |
+| “Turn off skills.”                              | Skills switch with its real scope. The action's independent receipt survives cancellation of the generating run. Product help remains available as a separately owned read function.                                       |
+| “Use a different model.”                        | Later slice: a picker populated from the authorized configured inventory, labeled “This chat.” No invented models, provider defaults changed implicitly or background catalog fetch.                                       |
+| “Enable Computer Use.”                          | Readiness and consent/setup control; the switch must not bypass that domain's existing gates. Supported desktop actions and phone limitations remain explicit.                                                             |
 
 Direct instructions such as “turn memory off” may use the typed action immediately when existing policy permits it and then show the verified panel. Do not force every explicit command through a redundant second click. Questions and exploratory requests display controls without changing settings.
 
@@ -34,18 +34,18 @@ Inspected local checkout: `/Users/sambitbiswas/projects/opp/json-render`, origin
 
 json-render is a useful presentation foundation: define a catalog/schema, let a model produce a constrained JSON UI specification, and map its element types to application-owned components. Its flat tree uses `root` and an `elements` map. The state layer supports reads and bindings; registered handlers supply actions. Streaming can assemble partial specifications. None of this supplies Aiden's setting owners, consent, persistence or Remote protocol.
 
-| Inspected implementation | Finding and adoption consequence |
-| --- | --- |
-| `packages/core/src/schema.ts`, `types.ts` | Catalog/component/action descriptions and typed spec machinery can describe Aiden's restricted control vocabulary. Use a custom catalog, not the broad demonstration catalog. |
-| `packages/react/src/renderer.tsx` | Registry-backed React rendering and event dispatch fit Electron. It also executes `watch` bindings when state changes: exclude watchers from the Aiden settings profile. |
+| Inspected implementation                                                           | Finding and adoption consequence                                                                                                                                                                                                |
+| ---------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `packages/core/src/schema.ts`, `types.ts`                                          | Catalog/component/action descriptions and typed spec machinery can describe Aiden's restricted control vocabulary. Use a custom catalog, not the broad demonstration catalog.                                                   |
+| `packages/react/src/renderer.tsx`                                                  | Registry-backed React rendering and event dispatch fit Electron. It also executes `watch` bindings when state changes: exclude watchers from the Aiden settings profile.                                                        |
 | `packages/react/src/contexts/state.tsx`, `packages/react/src/contexts/actions.tsx` | State writes and action dispatch are presentation mechanisms. `setState`, array mutation and navigation are built-ins; unknown actions can warn and return. An Aiden allowlist and explicit failed outcomes are still required. |
-| `packages/core/src/actions.ts` | Bindings support model-provided confirmations and success/error actions. These cannot define permission or trusted confirmation text. Reject chaining and generated effect descriptions for settings controls. |
-| `packages/core/src/spec-validator.ts` | Useful structural checks for roots, references, misplaced fields and repeat context. This is not Aiden authorization or a complete resource/tree policy. Add explicit cycle, depth, count, bytes and allowed-binding checks. |
-| `packages/react/src/schema.ts` | Default prompt/rules include general data and action conventions. Do not let generated sample data represent real current settings. Supply an Aiden-specific schema/prompt. |
-| `packages/react-native` | React Native renderer exists, but Aiden's iOS app uses SwiftUI and Android uses Jetpack Compose. This does not provide drop-in renderers for either app. |
-| `packages/ink` | Terminal renderer exists for Ink. Aiden CLI owns its terminal through Pi's TUI; use a Pi TUI adapter rather than adding a second Ink terminal root. |
-| `examples/harness-chat/lib/agent.ts` and its catalog | Demonstrates agent prose plus structured reports with a Pi harness among the adapters. Its report catalog has no executable settings actions. It is evidence of presentation integration, not an existing Aiden control bridge. |
-| Experimental spec composition, WebMCP, Next.js and gateway examples | Not necessary for this feature. Keep Aiden's current Pi execution and local domain services; do not adopt an additional agent, gateway, sandbox or browser automation stack. |
+| `packages/core/src/actions.ts`                                                     | Bindings support model-provided confirmations and success/error actions. These cannot define permission or trusted confirmation text. Reject chaining and generated effect descriptions for settings controls.                  |
+| `packages/core/src/spec-validator.ts`                                              | Useful structural checks for roots, references, misplaced fields and repeat context. This is not Aiden authorization or a complete resource/tree policy. Add explicit cycle, depth, count, bytes and allowed-binding checks.    |
+| `packages/react/src/schema.ts`                                                     | Default prompt/rules include general data and action conventions. Do not let generated sample data represent real current settings. Supply an Aiden-specific schema/prompt.                                                     |
+| `packages/react-native`                                                            | React Native renderer exists, but Aiden's iOS app uses SwiftUI and Android uses Jetpack Compose. This does not provide drop-in renderers for either app.                                                                        |
+| `packages/ink`                                                                     | Terminal renderer exists for Ink. Aiden CLI owns its terminal through Pi's TUI; use a Pi TUI adapter rather than adding a second Ink terminal root.                                                                             |
+| `examples/harness-chat/lib/agent.ts` and its catalog                               | Demonstrates agent prose plus structured reports with a Pi harness among the adapters. Its report catalog has no executable settings actions. It is evidence of presentation integration, not an existing Aiden control bridge. |
+| Experimental spec composition, WebMCP, Next.js and gateway examples                | Not necessary for this feature. Keep Aiden's current Pi execution and local domain services; do not adopt an additional agent, gateway, sandbox or browser automation stack.                                                    |
 
 Pinned upstream source references: [catalog](https://github.com/vercel-labs/json-render/blob/fc2a696a50a30cb30c878ab1eb65e102487eea0f/packages/core/src/schema.ts), [React renderer](https://github.com/vercel-labs/json-render/blob/fc2a696a50a30cb30c878ab1eb65e102487eea0f/packages/react/src/renderer.tsx), [actions](https://github.com/vercel-labs/json-render/blob/fc2a696a50a30cb30c878ab1eb65e102487eea0f/packages/core/src/actions.ts), [structural validation](https://github.com/vercel-labs/json-render/blob/fc2a696a50a30cb30c878ab1eb65e102487eea0f/packages/core/src/spec-validator.ts), [Pi harness example](https://github.com/vercel-labs/json-render/blob/fc2a696a50a30cb30c878ab1eb65e102487eea0f/examples/harness-chat/lib/agent.ts). Product documentation: [registry](https://json-render.dev/docs/registry), [data binding](https://json-render.dev/docs/data-binding).
 
@@ -93,14 +93,14 @@ Versioned envelope: `kind: "aiden.controls"`, `schemaVersion: 1`, stable panel/m
 
 The normalized spec retains json-render's `root`/`elements` shape but allows only:
 
-| Component | Purpose | Owned facts |
-| --- | --- | --- |
-| `SettingsGroup` | Heading and stacked settings rows | Topic title, target/scope label, group help |
-| `SettingToggle` | One boolean setting | Label, current value, disabled/readiness reason, allowed operation |
-| `SettingSelect` | Small enum choice | Real options and labels; no generated provider/model inventory |
-| `SettingSlider` | Later numeric preference with a real domain range | Min/max/step/unit; commit on release/keyboard confirmation |
-| `SettingInfo` | Effective state, warning or application timing | Sanitized host facts |
-| `SettingAction` | Exact navigation, setup, refresh or domain confirmation | Closed action identity and trusted consequence copy |
+| Component       | Purpose                                                 | Owned facts                                                        |
+| --------------- | ------------------------------------------------------- | ------------------------------------------------------------------ |
+| `SettingsGroup` | Heading and stacked settings rows                       | Topic title, target/scope label, group help                        |
+| `SettingToggle` | One boolean setting                                     | Label, current value, disabled/readiness reason, allowed operation |
+| `SettingSelect` | Small enum choice                                       | Real options and labels; no generated provider/model inventory     |
+| `SettingSlider` | Later numeric preference with a real domain range       | Min/max/step/unit; commit on release/keyboard confirmation         |
+| `SettingInfo`   | Effective state, warning or application timing          | Sanitized host facts                                               |
+| `SettingAction` | Exact navigation, setup, refresh or domain confirmation | Closed action identity and trusted consequence copy                |
 
 Separate editable drafts from confirmed values. MVP elements reference `controlRef` objects resolved from a host-projected control table; they do not contain arbitrary settings paths, raw IPC channels, JavaScript or URLs. The AI cannot provide “current value,” a false label or a consent claim. Keep options, disabled states and permission consequences in the owned projection.
 
@@ -179,15 +179,15 @@ Existing foreground-confirmation contracts remain honest: a direct phone gesture
 
 Recommended new Remote vocabulary is `app-controls:read` and `app-controls:respond`, negotiated only after serving-owner consent, with a bounded per-device control/scope allowlist. Existing paired devices do not acquire it automatically. The respond grant covers foreground operations on admitted controls, not arbitrary preference keys or generation-time agent administration. Read projection requires chat access plus the relevant domain grant; simply supporting the panel schema gives neither grant.
 
-| MVP control | Target | Remote admission | Additional domain rule |
-| --- | --- | --- | --- |
-| Memory global/workspace | Explicit serving host or granted workspace | Preserve existing workspace read/manage requirements; panel operations may wrap that seam without expanding its scope | Existing foreground confirmation, workspace admission and gate effects |
-| Web Search | Serving host | New read/respond grant with exact Web Search control allowed | Preserve route/key; existing app policy/setup; no network effect from enablement |
-| Appearance theme | Explicit serving host | New read/respond grant with exact presentation control allowed | Reversible presentation; reflect that the paired host changes |
-| Desktop chat width | Serving desktop host | Same exact presentation grant | Render only if user is controlling that desktop preference; never label it phone width |
-| Skills | Serving host | Exact read/respond control allowlist | Disabling revokes existing authority; enabling respects app/domain confirmation and existing opt-out |
-| Mobile appearance | Current phone | Native preference service; no Remote grant or Mac write | Supported device-local values only |
-| Provider/Computer Use setup | Supported owned destination | Existing destination/read rights; any new open-on-host action needs its own admitted target | Navigation cannot fetch/authenticate/grant execution; sensitive setup remains trusted |
+| MVP control                 | Target                                     | Remote admission                                                                                                      | Additional domain rule                                                                               |
+| --------------------------- | ------------------------------------------ | --------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------- |
+| Memory global/workspace     | Explicit serving host or granted workspace | Preserve existing workspace read/manage requirements; panel operations may wrap that seam without expanding its scope | Existing foreground confirmation, workspace admission and gate effects                               |
+| Web Search                  | Serving host                               | New read/respond grant with exact Web Search control allowed                                                          | Preserve route/key; existing app policy/setup; no network effect from enablement                     |
+| Appearance theme            | Explicit serving host                      | New read/respond grant with exact presentation control allowed                                                        | Reversible presentation; reflect that the paired host changes                                        |
+| Desktop chat width          | Serving desktop host                       | Same exact presentation grant                                                                                         | Render only if user is controlling that desktop preference; never label it phone width               |
+| Skills                      | Serving host                               | Exact read/respond control allowlist                                                                                  | Disabling revokes existing authority; enabling respects app/domain confirmation and existing opt-out |
+| Mobile appearance           | Current phone                              | Native preference service; no Remote grant or Mac write                                                               | Supported device-local values only                                                                   |
+| Provider/Computer Use setup | Supported owned destination                | Existing destination/read rights; any new open-on-host action needs its own admitted target                           | Navigation cannot fetch/authenticate/grant execution; sensitive setup remains trusted                |
 
 Final protocol parsers may use different vocabulary if existing capability conventions require it, but preserve this authority separation. Validate migration with an old paired device that has broad workspace grants but no new app-controls consent: unrelated Web Search/appearance/Skills operations remain denied.
 
@@ -199,15 +199,15 @@ Print/JSON/RPC outputs serialize a static panel descriptor/text fallback; render
 
 ## Delivery and acceptance
 
-| Slice | Deliverable | Main acceptance gate | Estimate |
-| --- | --- | --- | --- |
-| A — package/profile spike | Dependency proof, bounded schema/catalog, one Memory control rendered through desktop/native/TUI seams | No side effects from render; same semantic descriptor; bundle/peer findings recorded | 1–2 days |
-| B — knowledge and shared services | Parent plan knowledge/built-in source, domain settings extraction, app policy, state/action receipts | Offline folderless help; real side effects; exact scope/revision; disabled skills stay disabled | 5–8 days |
-| C — desktop chat panels | `aiden_show_controls`, durable attachment, React registry, current-state subscriptions, chat/Settings consistency | Actual conversation-to-control test; keyboard/failure/replay/refresh behavior | 3–4 days |
-| D — Remote contract | Negotiated projections, grant matrix, typed operations/receipts, reconnect/invalidation | Old clients retain chat; denied/revoked/concurrent operations; no grant widening | 2–3 days |
-| E — native mobile renderers | SwiftUI and Compose views/adapters, host/device scope and native setup equivalents | Both native behavioral suites plus end-to-end paired-host operation on each platform | 4–6 days combined |
-| F — CLI TUI and packaging | Pi-native renderer, supported control adapters, relocated artifact tests | Full/Ask/None, TUI/headless distinction, no Ink root, reload timing | 2–3 days |
-| G — onboarding/release | Help/tour disclosures, artwork if advertised, installed offline and device accessibility matrix | Production/signed package and honest device evidence | 1–2 days plus operator time |
+| Slice                             | Deliverable                                                                                                       | Main acceptance gate                                                                            | Estimate                    |
+| --------------------------------- | ----------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------- | --------------------------- |
+| A — package/profile spike         | Dependency proof, bounded schema/catalog, one Memory control rendered through desktop/native/TUI seams            | No side effects from render; same semantic descriptor; bundle/peer findings recorded            | 1–2 days                    |
+| B — knowledge and shared services | Parent plan knowledge/built-in source, domain settings extraction, app policy, state/action receipts              | Offline folderless help; real side effects; exact scope/revision; disabled skills stay disabled | 5–8 days                    |
+| C — desktop chat panels           | `aiden_show_controls`, durable attachment, React registry, current-state subscriptions, chat/Settings consistency | Actual conversation-to-control test; keyboard/failure/replay/refresh behavior                   | 3–4 days                    |
+| D — Remote contract               | Negotiated projections, grant matrix, typed operations/receipts, reconnect/invalidation                           | Old clients retain chat; denied/revoked/concurrent operations; no grant widening                | 2–3 days                    |
+| E — native mobile renderers       | SwiftUI and Compose views/adapters, host/device scope and native setup equivalents                                | Both native behavioral suites plus end-to-end paired-host operation on each platform            | 4–6 days combined           |
+| F — CLI TUI and packaging         | Pi-native renderer, supported control adapters, relocated artifact tests                                          | Full/Ask/None, TUI/headless distinction, no Ink root, reload timing                             | 2–3 days                    |
+| G — onboarding/release            | Help/tour disclosures, artwork if advertised, installed offline and device accessibility matrix                   | Production/signed package and honest device evidence                                            | 1–2 days plus operator time |
 
 Expanded MVP is roughly **18–28 engineering days**, excluding existing Pi integration, CI queues, physical-device/operator delays and later model/schedule/Live actions. This replaces the parent plan's earlier local-only 8–14-day estimate. The ranges assume a bounded control vocabulary, not a universal generated app UI or reimplementation of all Settings.
 

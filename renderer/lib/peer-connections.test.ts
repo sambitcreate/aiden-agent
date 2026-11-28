@@ -30,7 +30,11 @@ function host(overrides: Partial<PeerHostView> = {}): PeerHostView {
   };
 }
 
-function status(state: PeerSupervisorState, generation = 1, hostId = "install_studio"): PeerHostStatus {
+function status(
+  state: PeerSupervisorState,
+  generation = 1,
+  hostId = "install_studio",
+): PeerHostStatus {
   return { hostId, generation, state, feed: "off", stale: false };
 }
 
@@ -66,16 +70,27 @@ test("only re-pairing is offered once access was revoked or the identity changed
     assert.equal(view.needsRepair, true);
     assert.equal(view.canReconnect, false, reason);
   }
-  const protocol = peerHostPresentation(host(), status({ kind: "blocked", reason: "protocol" }), NOW);
+  const protocol = peerHostPresentation(
+    host(),
+    status({ kind: "blocked", reason: "protocol" }),
+    NOW,
+  );
   assert.equal(protocol.needsRepair, false, "a version mismatch is fixed by updating, not pairing");
   assert.equal(protocol.canReconnect, true);
 });
 
 test("before the first status, the registry state decides and a live status overrides it", () => {
   assert.equal(peerHostPresentation(host({ state: "connected" }), undefined, NOW).tone, "green");
-  assert.equal(peerHostPresentation(host({ state: "unavailable" }), undefined, NOW).canReconnect, true);
   assert.equal(
-    peerHostPresentation(host({ state: "connected" }), status({ kind: "connecting", attempt: 1 }), NOW).label,
+    peerHostPresentation(host({ state: "unavailable" }), undefined, NOW).canReconnect,
+    true,
+  );
+  assert.equal(
+    peerHostPresentation(
+      host({ state: "connected" }),
+      status({ kind: "connecting", attempt: 1 }),
+      NOW,
+    ).label,
     "Connecting",
   );
 });
@@ -88,12 +103,16 @@ test("status broadcasts never move a host back to an older generation", () => {
   let statuses = mergePeerHostStatus(undefined, newer);
   statuses = mergePeerHostStatus(statuses, older);
   statuses = mergePeerHostStatus(statuses, other);
-  assert.equal(statuses.find((entry) => entry.hostId === "install_studio")?.state.kind, "connected");
+  assert.equal(
+    statuses.find((entry) => entry.hostId === "install_studio")?.state.kind,
+    "connected",
+  );
   assert.equal(statuses.length, 2);
 
   const later = status({ kind: "blocked", reason: "auth" }, 6);
   assert.equal(
-    mergePeerHostStatus(statuses, later).find((entry) => entry.hostId === "install_studio")?.state.kind,
+    mergePeerHostStatus(statuses, later).find((entry) => entry.hostId === "install_studio")?.state
+      .kind,
     "blocked",
   );
 });
@@ -115,15 +134,27 @@ test("a cancelled attempt needs no message and every other ending explains itsel
   assert.match(peerPairingOutcomeCopy({ status: "closed" })?.message ?? "", /setup code/u);
   assert.match(peerPairingOutcomeCopy({ status: "unsupported" })?.message ?? "", /setup code/u);
   assert.equal(
-    peerPairingOutcomeCopy({ status: "failed", message: "A different device answered this request." })?.message,
+    peerPairingOutcomeCopy({
+      status: "failed",
+      message: "A different device answered this request.",
+    })?.message,
     "A different device answered this request.",
   );
 });
 
 test("a rate limit names a readable wait", () => {
-  assert.match(peerPairingOutcomeCopy({ status: "rate_limited", retryAfterSeconds: 1 })?.message ?? "", /1 second\./u);
-  assert.match(peerPairingOutcomeCopy({ status: "rate_limited", retryAfterSeconds: 45 })?.message ?? "", /45 seconds/u);
-  assert.match(peerPairingOutcomeCopy({ status: "rate_limited", retryAfterSeconds: 90 })?.message ?? "", /2 minutes/u);
+  assert.match(
+    peerPairingOutcomeCopy({ status: "rate_limited", retryAfterSeconds: 1 })?.message ?? "",
+    /1 second\./u,
+  );
+  assert.match(
+    peerPairingOutcomeCopy({ status: "rate_limited", retryAfterSeconds: 45 })?.message ?? "",
+    /45 seconds/u,
+  );
+  assert.match(
+    peerPairingOutcomeCopy({ status: "rate_limited", retryAfterSeconds: 90 })?.message ?? "",
+    /2 minutes/u,
+  );
 });
 
 test("discovered devices offer a request only when it can be answered, and never pair twice", () => {
@@ -173,13 +204,20 @@ test("attempt IDs are fresh and accepted by main", () => {
   assert.notEqual(mintPeerPairingAttemptId(), first);
 });
 
-
 test("connection recovery names the failing step and suggests actions for the route it could have used", () => {
   const backoff = status({ kind: "backoff", attempt: 2, retryAt: NOW + 5_000 });
-  const dns = peerHostPresentation(host({ activeRouteKind: "tailscale" }), { ...backoff, failure: "dns" }, NOW);
+  const dns = peerHostPresentation(
+    host({ activeRouteKind: "tailscale" }),
+    { ...backoff, failure: "dns" },
+    NOW,
+  );
   assert.match(dns.detail!, /resolve.*address/);
   assert.match(dns.detail!, /Tailscale.*same tailnet/);
-  const network = peerHostPresentation(host({ activeRouteKind: "lan" }), { ...backoff, failure: "network" }, NOW);
+  const network = peerHostPresentation(
+    host({ activeRouteKind: "lan" }),
+    { ...backoff, failure: "network" },
+    NOW,
+  );
   assert.match(network.detail!, /no network route/);
   assert.match(network.detail!, /Local Network permission/);
   const refused = peerHostPresentation(host(), { ...backoff, failure: "refused" }, NOW);

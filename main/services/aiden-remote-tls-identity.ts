@@ -1,10 +1,5 @@
 import { execFile } from "node:child_process";
-import {
-  createHash,
-  createPublicKey,
-  randomBytes,
-  X509Certificate,
-} from "node:crypto";
+import { createHash, createPublicKey, randomBytes, X509Certificate } from "node:crypto";
 import * as fs from "node:fs/promises";
 import path from "node:path";
 import tls from "node:tls";
@@ -130,8 +125,8 @@ export function classifyAidenRemoteTlsEndpointFailure(error: unknown): AidenRemo
     );
   }
   if (
-    UNREACHABLE_SYSTEM_CODES.has(code)
-    || /ECONNREFUSED|ENOTFOUND|EHOSTUNREACH|ENETUNREACH|ECONNRESET/u.test(message)
+    UNREACHABLE_SYSTEM_CODES.has(code) ||
+    /ECONNREFUSED|ENOTFOUND|EHOSTUNREACH|ENETUNREACH|ECONNRESET/u.test(message)
   ) {
     return new AidenRemoteTlsEndpointError(
       "unreachable",
@@ -139,8 +134,10 @@ export function classifyAidenRemoteTlsEndpointFailure(error: unknown): AidenRemo
     );
   }
   if (
-    /certificate|UNABLE_TO_VERIFY|CERT_|ERR_TLS|altname|self[- ]signed/iu.test(`${code} ${message}`)
-    || /has no certificate/u.test(message)
+    /certificate|UNABLE_TO_VERIFY|CERT_|ERR_TLS|altname|self[- ]signed/iu.test(
+      `${code} ${message}`,
+    ) ||
+    /has no certificate/u.test(message)
   ) {
     return new AidenRemoteTlsEndpointError(
       "untrusted",
@@ -153,20 +150,14 @@ export function classifyAidenRemoteTlsEndpointFailure(error: unknown): AidenRemo
   );
 }
 
-export async function fetchTlsServerSpkiSha256(
-  hostname: string,
-  port = 443,
-): Promise<string> {
+export async function fetchTlsServerSpkiSha256(hostname: string, port = 443): Promise<string> {
   if (
     !/^[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?$/u.test(hostname) ||
     !Number.isInteger(port) ||
     port < 1 ||
     port > 65_535
   ) {
-    throw new AidenRemoteTlsEndpointError(
-      "invalid_endpoint",
-      "The Tailscale DNS name is invalid.",
-    );
+    throw new AidenRemoteTlsEndpointError("invalid_endpoint", "The Tailscale DNS name is invalid.");
   }
   return new Promise<string>((resolve, reject) => {
     const fail = (error: unknown) => {
@@ -179,10 +170,12 @@ export async function fetchTlsServerSpkiSha256(
       rejectUnauthorized: true,
     });
     const timeout = setTimeout(() => {
-      socket.destroy(new AidenRemoteTlsEndpointError(
-        "timed_out",
-        "The Tailscale HTTPS endpoint did not respond. Confirm Serve still points at this Aiden profile, then try pairing again.",
-      ));
+      socket.destroy(
+        new AidenRemoteTlsEndpointError(
+          "timed_out",
+          "The Tailscale HTTPS endpoint did not respond. Confirm Serve still points at this Aiden profile, then try pairing again.",
+        ),
+      );
     }, TLS_PROBE_TIMEOUT_MS);
     socket.once("secureConnect", () => {
       try {
@@ -228,8 +221,10 @@ function certificateNeedsRenewal(
 /** True when the certificate is valid for every name, without wildcards. */
 function certificateCoversHostnames(certificatePem: string, hostnames: string[]): boolean {
   const certificate = new X509Certificate(certificatePem);
-  return hostnames.every((hostname) =>
-    certificate.checkHost(hostname, { subject: "never", wildcards: false }) !== undefined);
+  return hostnames.every(
+    (hostname) =>
+      certificate.checkHost(hostname, { subject: "never", wildcards: false }) !== undefined,
+  );
 }
 
 async function secureFile(target: string): Promise<void> {
@@ -243,7 +238,9 @@ async function assertPairCompleteness(
 ): Promise<boolean> {
   const [hasFirst, hasSecond] = await Promise.all([exists(first), exists(second)]);
   if (hasFirst !== hasSecond) {
-    throw new Error(`Aiden Remote ${label} identity is incomplete; refusing to rotate it implicitly.`);
+    throw new Error(
+      `Aiden Remote ${label} identity is incomplete; refusing to rotate it implicitly.`,
+    );
   }
   return hasFirst;
 }
@@ -253,7 +250,13 @@ async function createCertificateAuthority(
   opensslPath: string,
 ): Promise<void> {
   await execFileAsync(opensslPath, [
-    "ecparam", "-name", "prime256v1", "-genkey", "-noout", "-out", paths.caKey,
+    "ecparam",
+    "-name",
+    "prime256v1",
+    "-genkey",
+    "-noout",
+    "-out",
+    paths.caKey,
   ]);
   await secureFile(paths.caKey);
   await issueCertificateAuthorityCertificate(paths, opensslPath);
@@ -264,19 +267,35 @@ async function issueCertificateAuthorityCertificate(
   opensslPath: string,
 ): Promise<void> {
   await execFileAsync(opensslPath, [
-    "req", "-x509", "-new", "-key", paths.caKey, "-sha256",
-    "-days", String(CA_CERTIFICATE_DAYS),
-    "-subj", "/CN=Aiden Agent Local CA",
-    "-addext", "basicConstraints=critical,CA:TRUE,pathlen:0",
-    "-addext", "keyUsage=critical,keyCertSign,cRLSign",
-    "-out", paths.caCertificate,
+    "req",
+    "-x509",
+    "-new",
+    "-key",
+    paths.caKey,
+    "-sha256",
+    "-days",
+    String(CA_CERTIFICATE_DAYS),
+    "-subj",
+    "/CN=Aiden Agent Local CA",
+    "-addext",
+    "basicConstraints=critical,CA:TRUE,pathlen:0",
+    "-addext",
+    "keyUsage=critical,keyCertSign,cRLSign",
+    "-out",
+    paths.caCertificate,
   ]);
   await secureFile(paths.caCertificate);
 }
 
 async function createServerKey(paths: IdentityPaths, opensslPath: string): Promise<void> {
   await execFileAsync(opensslPath, [
-    "ecparam", "-name", "prime256v1", "-genkey", "-noout", "-out", paths.serverKey,
+    "ecparam",
+    "-name",
+    "prime256v1",
+    "-genkey",
+    "-noout",
+    "-out",
+    paths.serverKey,
   ]);
   await secureFile(paths.serverKey);
 }
@@ -310,17 +329,35 @@ async function issueServerCertificate(
       { encoding: "utf8", mode: 0o600 },
     );
     await execFileAsync(opensslPath, [
-      "req", "-new", "-key", paths.serverKey,
-      "-subj", "/CN=Aiden Agent Local",
-      "-out", requestPath,
+      "req",
+      "-new",
+      "-key",
+      paths.serverKey,
+      "-subj",
+      "/CN=Aiden Agent Local",
+      "-out",
+      requestPath,
     ]);
     await execFileAsync(opensslPath, [
-      "x509", "-req", "-in", requestPath,
-      "-CA", paths.caCertificate, "-CAkey", paths.caKey,
-      "-set_serial", `0x${randomBytes(16).toString("hex")}`,
-      "-days", String(CERTIFICATE_DAYS), "-sha256",
-      "-extfile", extensionsPath, "-extensions", "server_ext",
-      "-out", certificatePath,
+      "x509",
+      "-req",
+      "-in",
+      requestPath,
+      "-CA",
+      paths.caCertificate,
+      "-CAkey",
+      paths.caKey,
+      "-set_serial",
+      `0x${randomBytes(16).toString("hex")}`,
+      "-days",
+      String(CERTIFICATE_DAYS),
+      "-sha256",
+      "-extfile",
+      extensionsPath,
+      "-extensions",
+      "server_ext",
+      "-out",
+      certificatePath,
     ]);
     await secureFile(certificatePath);
     await fs.rename(certificatePath, paths.serverCertificate);
@@ -393,12 +430,7 @@ export async function loadOrCreateAidenRemoteTlsIdentity(
     certificateNeedsRenewal(certificate, now, renewBeforeMs) ||
     !certificateCoversHostnames(certificate, hostnames)
   ) {
-    await issueServerCertificate(
-      options.directory,
-      paths,
-      opensslPath,
-      hostnames,
-    );
+    await issueServerCertificate(options.directory, paths, opensslPath, hostnames);
     certificate = await fs.readFile(paths.serverCertificate, "utf8");
   }
 

@@ -1,12 +1,6 @@
 import * as React from "react";
 import { useQueryClient } from "@tanstack/react-query";
-import {
-  AlertCircle,
-  Check,
-  GitPullRequest,
-  RefreshCw,
-  UploadCloud,
-} from "lucide-react";
+import { AlertCircle, Check, GitPullRequest, RefreshCw, UploadCloud } from "lucide-react";
 import { gitApi, pullRequestsApi } from "../lib/ipc";
 import { queryKeys } from "../lib/queries";
 import type { GitPushCapability, GitPushResult } from "../lib/types";
@@ -63,11 +57,8 @@ export function GitPushDialog({
   const [refreshing, setRefreshing] = React.useState(false);
   const [needsRefresh, setNeedsRefresh] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
-  const [pushedResult, setPushedResult] = React.useState<GitPushResult | null>(
-    null,
-  );
-  const [detect, setDetect] =
-    React.useState<ChatPullRequestDetectResult | null>(null);
+  const [pushedResult, setPushedResult] = React.useState<GitPushResult | null>(null);
+  const [detect, setDetect] = React.useState<ChatPullRequestDetectResult | null>(null);
   const [detecting, setDetecting] = React.useState(false);
   const [linkedRefs, setLinkedRefs] = React.useState<string[]>([]);
   const [createOpen, setCreateOpen] = React.useState(false);
@@ -105,15 +96,11 @@ export function GitPushDialog({
     }
     if (originWorkspaceRef.current === null) {
       originWorkspaceRef.current = workspaceId;
-      const nextRemote =
-        capability?.suggestedRemote ?? capability?.remotes[0] ?? "";
-      const nextDestination =
-        capability?.destinationBranch ?? capability?.branch ?? "";
+      const nextRemote = capability?.suggestedRemote ?? capability?.remotes[0] ?? "";
+      const nextDestination = capability?.destinationBranch ?? capability?.branch ?? "";
       setRemote(nextRemote);
       setDestinationBranch(nextDestination);
-      setSetUpstream(
-        capability?.upstream !== `${nextRemote}/${nextDestination}`,
-      );
+      setSetUpstream(capability?.upstream !== `${nextRemote}/${nextDestination}`);
       setBusy(false);
       setRefreshing(false);
       setNeedsRefresh(false);
@@ -125,8 +112,7 @@ export function GitPushDialog({
       setCreateOpen(false);
       return;
     }
-    if (originWorkspaceRef.current !== workspaceId && !busy)
-      onOpenChange(false);
+    if (originWorkspaceRef.current !== workspaceId && !busy) onOpenChange(false);
   }, [busy, capability, onOpenChange, open, workspaceId]);
 
   const refreshCapability = async () => {
@@ -134,15 +120,11 @@ export function GitPushDialog({
     setRefreshing(true);
     try {
       const latest = await gitApi.pushCapability(workspaceId);
-      queryClient.setQueryData(
-        queryKeys.gitPushCapability(workspaceId),
-        latest,
-      );
+      queryClient.setQueryData(queryKeys.gitPushCapability(workspaceId), latest);
       onCapabilityChange(latest);
       if (!latest.remotes.includes(remote))
         setRemote(latest.suggestedRemote ?? latest.remotes[0] ?? "");
-      if (!destinationBranch)
-        setDestinationBranch(latest.destinationBranch ?? latest.branch ?? "");
+      if (!destinationBranch) setDestinationBranch(latest.destinationBranch ?? latest.branch ?? "");
       setNeedsRefresh(false);
       setError(null);
       requestAnimationFrame(() => {
@@ -230,9 +212,7 @@ export function GitPushDialog({
         setUpstream,
       });
       await invalidateGitState();
-      toast.success(
-        `Pushed ${result.branch} to ${result.remote}/${result.destinationBranch}.`,
-      );
+      toast.success(`Pushed ${result.branch} to ${result.remote}/${result.destinationBranch}.`);
       if (result.warning) toast.warning(result.warning);
       if (chatId) {
         // Keep the dialog open: the pushed branch may already have a PR to
@@ -247,9 +227,7 @@ export function GitPushDialog({
       }
     } catch (pushError) {
       setError(
-        pushError instanceof Error
-          ? pushError.message
-          : "Aiden could not push this branch.",
+        pushError instanceof Error ? pushError.message : "Aiden could not push this branch.",
       );
       setNeedsRefresh(true);
       void invalidateGitState();
@@ -259,25 +237,16 @@ export function GitPushDialog({
     }
   };
 
-  const linkDetected = async (
-    view: ChatPullRequestDetectResult["matches"][number],
-  ) => {
+  const linkDetected = async (view: ChatPullRequestDetectResult["matches"][number]) => {
     if (!chatId) return;
     const ref = chatPullRequestRef(view);
     try {
-      const linked = await pullRequestsApi.linkRef(
-        chatId,
-        ref,
-        "branch-discovered",
-      );
+      const linked = await pullRequestsApi.linkRef(chatId, ref, "branch-discovered");
       if (!linked.ok) {
         toast.error(linked.message ?? "The pull request could not be linked.");
         return;
       }
-      setLinkedRefs((current) => [
-        ...current,
-        `${ref.host}/${ref.repository}#${ref.number}`,
-      ]);
+      setLinkedRefs((current) => [...current, `${ref.host}/${ref.repository}#${ref.number}`]);
       toast.success(`Linked pull request #${ref.number} to this chat.`);
       void queryClient.invalidateQueries({
         queryKey: queryKeys.chatPullRequests(chatId),
@@ -286,17 +255,11 @@ export function GitPushDialog({
         queryKey: queryKeys.chatCurrentPullRequest(chatId),
       });
     } catch (cause) {
-      toast.error(
-        cause instanceof Error
-          ? cause.message
-          : "The pull request could not be linked.",
-      );
+      toast.error(cause instanceof Error ? cause.message : "The pull request could not be linked.");
     }
   };
 
-  const disabledReason = busy
-    ? null
-    : (blockedReason ?? capability?.reason ?? null);
+  const disabledReason = busy ? null : (blockedReason ?? capability?.reason ?? null);
   const confirmDisabled =
     busy ||
     refreshing ||
@@ -355,10 +318,7 @@ export function GitPushDialog({
                 className="flex items-center gap-2 rounded-control bg-well px-3 py-2 text-small text-secondary"
                 role="status"
               >
-                <RefreshCw
-                  className="size-4 shrink-0 animate-spin"
-                  aria-hidden="true"
-                />
+                <RefreshCw className="size-4 shrink-0 animate-spin" aria-hidden="true" />
                 <span>Checking GitHub for a pull request on this branch…</span>
               </div>
             ) : detect ? (
@@ -377,8 +337,7 @@ export function GitPushDialog({
                         {view.title ? ` · ${view.title}` : ""}
                       </span>
                       <span className="shrink-0 text-mini text-tertiary">
-                        {chatPullRequestChecksLabel(view.checksState) ??
-                          "Linked"}
+                        {chatPullRequestChecksLabel(view.checksState) ?? "Linked"}
                       </span>
                     </button>
                   ))}
@@ -419,8 +378,7 @@ export function GitPushDialog({
                   <span className="min-w-0 text-small text-secondary">
                     {detect.availability === "ready"
                       ? `No pull request exists for ${pushedResult.destinationBranch} yet.`
-                      : (detect.message ??
-                        "Aiden could not check GitHub for a pull request.")}
+                      : (detect.message ?? "Aiden could not check GitHub for a pull request.")}
                   </span>
                   {detect.availability === "ready" ? (
                     <Button
@@ -442,11 +400,7 @@ export function GitPushDialog({
             <div className="grid grid-cols-[minmax(0,0.8fr)_minmax(0,1.2fr)] gap-3">
               <div>
                 <Label htmlFor="environment-push-remote">Remote</Label>
-                <Select
-                  value={remote}
-                  onValueChange={setRemote}
-                  disabled={busy || refreshing}
-                >
+                <Select value={remote} onValueChange={setRemote} disabled={busy || refreshing}>
                   <SelectTrigger
                     id="environment-push-remote"
                     className="mt-1.5"
@@ -464,9 +418,7 @@ export function GitPushDialog({
                 </Select>
               </div>
               <div>
-                <Label htmlFor="environment-push-destination">
-                  Destination branch
-                </Label>
+                <Label htmlFor="environment-push-destination">Destination branch</Label>
                 <Input
                   ref={destinationRef}
                   id="environment-push-destination"
@@ -483,12 +435,10 @@ export function GitPushDialog({
 
             <Label className="items-center justify-between rounded-control bg-well px-3 py-2.5">
               <span className="min-w-0 pr-3">
-                <span className="block text-regular text-primary">
-                  Remember as upstream
-                </span>
+                <span className="block text-regular text-primary">Remember as upstream</span>
                 <span className="mt-0.5 block text-small text-secondary">
-                  Future ahead/behind counts use the last-fetched tracking ref.
-                  Aiden still never fetches implicitly.
+                  Future ahead/behind counts use the last-fetched tracking ref. Aiden still never
+                  fetches implicitly.
                 </span>
               </span>
               <Switch
@@ -501,8 +451,8 @@ export function GitPushDialog({
             </Label>
 
             <div className="rounded-control bg-well px-3 py-2 text-small text-secondary">
-              Pre-push hooks and configured Git authentication may run. Force
-              push and submodule recursion are never used.
+              Pre-push hooks and configured Git authentication may run. Force push and submodule
+              recursion are never used.
             </div>
 
             {chatId ? (
@@ -529,20 +479,14 @@ export function GitPushDialog({
             role="status"
           >
             <UploadCloud className="size-4 shrink-0" aria-hidden="true" />
-            <span>
-              Pushing the frozen commit… Workspace switching and dismissal stay
-              locked.
-            </span>
+            <span>Pushing the frozen commit… Workspace switching and dismissal stay locked.</span>
           </div>
         ) : disabledReason ? (
           <div
             className="flex items-start gap-2 rounded-control bg-status-warning-surface px-3 py-2 text-small text-status-warning"
             role="status"
           >
-            <AlertCircle
-              className="mt-0.5 size-4 shrink-0"
-              aria-hidden="true"
-            />
+            <AlertCircle className="mt-0.5 size-4 shrink-0" aria-hidden="true" />
             <span>{disabledReason}</span>
           </div>
         ) : error ? (
@@ -551,10 +495,7 @@ export function GitPushDialog({
             role="alert"
           >
             <div className="flex items-start gap-2">
-              <AlertCircle
-                className="mt-0.5 size-4 shrink-0"
-                aria-hidden="true"
-              />
+              <AlertCircle className="mt-0.5 size-4 shrink-0" aria-hidden="true" />
               <span>{error}</span>
             </div>
             {needsRefresh ? (

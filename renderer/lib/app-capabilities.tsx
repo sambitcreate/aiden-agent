@@ -66,9 +66,7 @@ export function parseAppCapabilities(value: unknown): AppCapabilities {
   const record = value as Record<string, unknown>;
   return {
     platform:
-      record.platform === "darwin" || record.platform === "linux"
-        ? record.platform
-        : "other",
+      record.platform === "darwin" || record.platform === "linux" ? record.platform : "other",
     subagents: record.subagents === true,
     bots: record.bots === true,
     appUpdates: record.appUpdates === true,
@@ -83,7 +81,10 @@ export function parseAppCapabilities(value: unknown): AppCapabilities {
     accessibilityPaste: record.accessibilityPaste === true,
     dictationHoldToTalk: record.dictationHoldToTalk === true,
     dictationHoldSetup: record.dictationHoldSetup === true,
-    dictationHoldTrigger: typeof record.dictationHoldTrigger === "string" ? record.dictationHoldTrigger.slice(0, 128) : null,
+    dictationHoldTrigger:
+      typeof record.dictationHoldTrigger === "string"
+        ? record.dictationHoldTrigger.slice(0, 128)
+        : null,
     nativeShare: record.nativeShare === true,
     macAppConnectors: record.macAppConnectors === true,
     appleFoundationModels: record.appleFoundationModels === true,

@@ -48,7 +48,14 @@ test("reads and chats without a folder send nothing", () => {
 test("a skill the agent writes is in the catalog a window reads after the notice", async () => {
   let discovered: DiscoveredSkill[] = [];
   const registry = new SkillRegistry({
-    getWorkspace: async (id) => ({ id, name: id, folderPath: "/trusted/ws-a", permission: "ask", createdAt: 1, updatedAt: 1 }),
+    getWorkspace: async (id) => ({
+      id,
+      name: id,
+      folderPath: "/trusted/ws-a",
+      permission: "ask",
+      createdAt: 1,
+      updatedAt: 1,
+    }),
     listConfigured: async () => [],
     discover: async (root) => (root === undefined ? [] : structuredClone(discovered)),
     now: () => 100,
@@ -73,7 +80,11 @@ test("a skill the agent writes is in the catalog a window reads after the notice
     invalidate: (workspaceId) => registry.invalidate(workspaceId),
     // A window re-reads the catalog as soon as the notice arrives, inside the cache's lifetime.
     broadcast: (workspaceId) =>
-      read.push(registry.snapshot(workspaceId).then((snapshot) => snapshot.catalog.map((entry) => entry.name))),
+      read.push(
+        registry
+          .snapshot(workspaceId)
+          .then((snapshot) => snapshot.catalog.map((entry) => entry.name)),
+      ),
     schedule: (callback) => timers.push(callback),
   });
   notify("ws-a", "write_file");

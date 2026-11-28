@@ -364,7 +364,10 @@ test("GitService.managedWorktreeUsable verifies modern worktrees via 0-spawn pur
     ),
     /not a Git repository/u,
   );
-  assert.ok(gitSpawns > 0, "changed custom GIT_CONFIG_GLOBAL include target must fall back to Git discovery");
+  assert.ok(
+    gitSpawns > 0,
+    "changed custom GIT_CONFIG_GLOBAL include target must fall back to Git discovery",
+  );
   process.env.GIT_CONFIG_GLOBAL = "/dev/null";
 
   // Invalidating display cache after a WorktreeSetup hook modifies the checkout
@@ -442,7 +445,11 @@ test("GitService.managedWorktreeUsable tracks native Git system config origins, 
     ),
     true,
   );
-  assert.equal(spawns.count, 0, "verified native Git with explicit system config allows 0-spawn admission");
+  assert.equal(
+    spawns.count,
+    0,
+    "verified native Git with explicit system config allows 0-spawn admission",
+  );
 
   await fs.writeFile(altSystemConfig, "[core\n");
   spawns.count = 0;
@@ -576,7 +583,11 @@ test("GitService.managedWorktreeUsable tracks native Git system config origins, 
     ),
     true,
   );
-  assert.equal(linkSpawns.count, 0, "multi-hop symlink to real native Git allows 0-spawn admission");
+  assert.equal(
+    linkSpawns.count,
+    0,
+    "multi-hop symlink to real native Git allows 0-spawn admission",
+  );
 
   const corruptConfig = path.join(temp, "corrupt-gitconfig");
   await fs.writeFile(corruptConfig, "[core\n");
@@ -601,7 +612,10 @@ test("GitService.managedWorktreeUsable tracks native Git system config origins, 
     ),
     /not a Git repository/u,
   );
-  assert.ok(linkSpawns.count > 0, "repointing an intermediate symlink hop must force Git discovery");
+  assert.ok(
+    linkSpawns.count > 0,
+    "repointing an intermediate symlink hop must force Git discovery",
+  );
 
   // Case 5: Setting GIT_EXEC_PATH fails closed to Git-backed admission.
   const execPathOut = await runGit(repo, ["--exec-path"]);
@@ -706,11 +720,10 @@ test("GitService.managedWorktreeUsable fails closed for unchanged wrapper script
   // executable from clean config A to corrupt config B must never admit via
   // cached 0-spawn proof and must reject once B is corrupt.
   const outerWrapper = path.join(temp, "outer-wrapper.sh");
-  await fs.writeFile(
-    outerWrapper,
-    `#!/bin/sh\nexec ${JSON.stringify(nestedLink)} "$@"\n`,
-    { encoding: "utf8", mode: 0o700 },
-  );
+  await fs.writeFile(outerWrapper, `#!/bin/sh\nexec ${JSON.stringify(nestedLink)} "$@"\n`, {
+    encoding: "utf8",
+    mode: 0o700,
+  });
   const outerStatBefore = await fs.lstat(outerWrapper, { bigint: true });
 
   const wrapperService = new GitService({ gitBinary: outerWrapper, cacheTtlMs: 60_000 });
@@ -765,7 +778,10 @@ test("GitService.managedWorktreeUsable fails closed for unchanged wrapper script
     ),
     /not a Git repository/u,
   );
-  assert.ok(wrapperSpawns.count > 0, "unchanged wrapper swapping delegated target to corrupt config B must fail closed");
+  assert.ok(
+    wrapperSpawns.count > 0,
+    "unchanged wrapper swapping delegated target to corrupt config B must fail closed",
+  );
 
   // Case 2: Even when GIT_CONFIG_NOSYSTEM=1 is set in the parent environment,
   // a wrapper script that unsets it internally must still fail closed.
@@ -803,7 +819,10 @@ test("GitService.managedWorktreeUsable fails closed for unchanged wrapper script
     ),
     /not a Git repository/u,
   );
-  assert.ok(noSysWrapperSpawns.count > 0, "wrapper script must fail closed even with GIT_CONFIG_NOSYSTEM=1");
+  assert.ok(
+    noSysWrapperSpawns.count > 0,
+    "wrapper script must fail closed even with GIT_CONFIG_NOSYSTEM=1",
+  );
   delete process.env.GIT_CONFIG_NOSYSTEM;
 
   // Case 3: Unchanged compiled native Mach-O/ELF shim binary delegating to a
@@ -851,7 +870,10 @@ test("GitService.managedWorktreeUsable fails closed for unchanged wrapper script
       ),
       true,
     );
-    assert.ok(shimSpawns.count > 0, "compiled native shim binary must not publish or reuse a 0-spawn proof");
+    assert.ok(
+      shimSpawns.count > 0,
+      "compiled native shim binary must not publish or reuse a 0-spawn proof",
+    );
 
     await fs.writeFile(configB, "[core\n");
     await fs.rm(nestedLink);
@@ -874,7 +896,10 @@ test("GitService.managedWorktreeUsable fails closed for unchanged wrapper script
       ),
       /not a Git repository/u,
     );
-    assert.ok(shimSpawns.count > 0, "unchanged native shim swapping delegated target to corrupt config B must fail closed");
+    assert.ok(
+      shimSpawns.count > 0,
+      "unchanged native shim swapping delegated target to corrupt config B must fail closed",
+    );
 
     // Case 4: Even a compiled native shim that special-cases `--exec-path` to
     // report a directory containing a hard link to itself while delegating
@@ -923,7 +948,10 @@ test("GitService.managedWorktreeUsable fails closed for unchanged wrapper script
       ),
       true,
     );
-    assert.ok(spoofSpawns.count > 0, "native shim spoofing --exec-path must not publish a 0-spawn proof");
+    assert.ok(
+      spoofSpawns.count > 0,
+      "native shim spoofing --exec-path must not publish a 0-spawn proof",
+    );
 
     await fs.writeFile(configB, "[core\n");
     await fs.rm(nestedLink);
@@ -946,6 +974,9 @@ test("GitService.managedWorktreeUsable fails closed for unchanged wrapper script
       ),
       /not a Git repository/u,
     );
-    assert.ok(spoofSpawns.count > 0, "unchanged native shim spoofing --exec-path must fail closed when delegated target breaks");
+    assert.ok(
+      spoofSpawns.count > 0,
+      "unchanged native shim spoofing --exec-path must fail closed when delegated target breaks",
+    );
   }
 });

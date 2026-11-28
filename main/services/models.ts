@@ -125,11 +125,7 @@ export function normalizeProviderBaseUrl(value: string): string {
     hostname === "0.0.0.0" ||
     hostname === "[::]" ||
     /^\[fe[89ab][0-9a-f]:/u.test(hostname);
-  if (
-    literalMetadataTarget ||
-    hostname === "metadata.google.internal" ||
-    hostname === "metadata"
-  ) {
+  if (literalMetadataTarget || hostname === "metadata.google.internal" || hostname === "metadata") {
     throw new Error("Provider URL cannot target a host-local metadata service.");
   }
   if (url.username || url.password) {
@@ -157,10 +153,7 @@ export function assertOnboardingTailnetBaseUrl(value: string): void {
   const hostname = url.hostname.toLowerCase().replace(/\.$/u, "");
   const ipv4 = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/u.exec(hostname);
   const cgnat =
-    ipv4 !== null &&
-    Number(ipv4[1]) === 100 &&
-    Number(ipv4[2]) >= 64 &&
-    Number(ipv4[2]) <= 127;
+    ipv4 !== null && Number(ipv4[1]) === 100 && Number(ipv4[2]) >= 64 && Number(ipv4[2]) <= 127;
   const tailscaleIpv6 = /^\[fd7a:115c:a1e0:/u.test(hostname);
   if (!hostname.endsWith(".ts.net") && !cgnat && !tailscaleIpv6) {
     throw new Error("Use a Tailscale .ts.net name or Tailnet IP address for this connection.");
@@ -324,14 +317,12 @@ function capabilityFlags(value: unknown): {
       reasoning: capabilities.has("reasoning") || capabilities.has("thinking"),
       embedding: capabilities.has("embedding") || capabilities.has("embeddings"),
       reranking: capabilities.has("rerank") || capabilities.has("reranking"),
-      imageOutput:
-        capabilities.has("image_generation") || capabilities.has("text_to_image"),
+      imageOutput: capabilities.has("image_generation") || capabilities.has("text_to_image"),
       audioOutput:
         capabilities.has("audio_generation") ||
         capabilities.has("speech") ||
         capabilities.has("tts"),
-      videoOutput:
-        capabilities.has("video_generation") || capabilities.has("text_to_video"),
+      videoOutput: capabilities.has("video_generation") || capabilities.has("text_to_video"),
       completion: capabilities.has("completion"),
     };
   }
@@ -351,10 +342,8 @@ function capabilityFlags(value: unknown): {
         : typeof capabilities.thinking === "boolean"
           ? capabilities.thinking
           : undefined,
-    embedding:
-      typeof capabilities.embedding === "boolean" ? capabilities.embedding : undefined,
-    reranking:
-      typeof capabilities.reranking === "boolean" ? capabilities.reranking : undefined,
+    embedding: typeof capabilities.embedding === "boolean" ? capabilities.embedding : undefined,
+    reranking: typeof capabilities.reranking === "boolean" ? capabilities.reranking : undefined,
     imageOutput:
       typeof capabilities.image_generation === "boolean"
         ? capabilities.image_generation
@@ -374,7 +363,10 @@ function providerModelType(
   rawType: string | undefined,
   flags: ReturnType<typeof capabilityFlags>,
 ): ProviderModelType | undefined {
-  const type = rawType?.trim().toLocaleLowerCase().replace(/[\s_]+/gu, "-");
+  const type = rawType
+    ?.trim()
+    .toLocaleLowerCase()
+    .replace(/[\s_]+/gu, "-");
   if (flags.embedding || type?.includes("embed")) return "embedding";
   if (flags.reranking || type?.includes("rerank")) return "reranker";
   // Explicit output capabilities are stronger than a server's generic `llm`

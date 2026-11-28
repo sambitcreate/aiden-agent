@@ -10,9 +10,12 @@ const root = process.env.AIDEN_PI_UPGRADE_RECEIPT_DIR;
 const executable = process.env.AIDEN_PI_UPGRADE_EXECUTABLE;
 const target = process.argv[2];
 if (!root || !path.isAbsolute(root) || !executable || !path.isAbsolute(executable)) {
-  throw new Error("Absolute AIDEN_PI_UPGRADE_RECEIPT_DIR and AIDEN_PI_UPGRADE_EXECUTABLE are required.");
+  throw new Error(
+    "Absolute AIDEN_PI_UPGRADE_RECEIPT_DIR and AIDEN_PI_UPGRADE_EXECUTABLE are required.",
+  );
 }
-if (!PI_UPGRADE_ROLLOUT_STAGES.includes(target)) throw new Error("A valid next rollout stage is required.");
+if (!PI_UPGRADE_ROLLOUT_STAGES.includes(target))
+  throw new Error("A valid next rollout stage is required.");
 
 const store = new PiUpgradeRolloutStore({
   root: () => root,

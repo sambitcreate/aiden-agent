@@ -35,10 +35,29 @@ export const botIssues = createBotIssueService({
   funnel: { deliver: (input) => botDeliveryFunnel().deliver(input) },
   actions: {
     allowFolder: async (botId, access, operationId) => {
-      const [{ botApplicationService }, { BOT_DESKTOP_AUDIENCE_ID }] = await Promise.all([import("../bot-application-service-main.js"), import("../bot-runtime-authority-main.js")]);
+      const [{ botApplicationService }, { BOT_DESKTOP_AUDIENCE_ID }] = await Promise.all([
+        import("../bot-application-service-main.js"),
+        import("../bot-runtime-authority-main.js"),
+      ]);
       const auth = access.authorization;
-      if (auth.target !== "folder" || !auth.identity || !auth.choices.includes("always") || auth.root !== access.folderPath || auth.rootId !== access.rootId) throw new Error("This folder request is no longer valid.");
-      const outcome = await botApplicationService.grantBotFolder({ audienceId: BOT_DESKTOP_AUDIENCE_ID, botId, folderPath: auth.root, ...(auth.rootId ? { rootId: auth.rootId } : {}), expectedRevision: auth.policyRevision, expectedIdentity: auth.identity, ...(auth.inventoryRevision ? { expectedInventoryRevision: auth.inventoryRevision } : {}), operationId });
+      if (
+        auth.target !== "folder" ||
+        !auth.identity ||
+        !auth.choices.includes("always") ||
+        auth.root !== access.folderPath ||
+        auth.rootId !== access.rootId
+      )
+        throw new Error("This folder request is no longer valid.");
+      const outcome = await botApplicationService.grantBotFolder({
+        audienceId: BOT_DESKTOP_AUDIENCE_ID,
+        botId,
+        folderPath: auth.root,
+        ...(auth.rootId ? { rootId: auth.rootId } : {}),
+        expectedRevision: auth.policyRevision,
+        expectedIdentity: auth.identity,
+        ...(auth.inventoryRevision ? { expectedInventoryRevision: auth.inventoryRevision } : {}),
+        operationId,
+      });
       (await import("../../platform.js")).ipcMain.broadcast("bots:changed", { botId });
       return outcome;
     },
@@ -48,10 +67,17 @@ export const botIssues = createBotIssueService({
     // card settles instead of failing every time the person presses Resume.
     resumeRoutine: async (botId, id) => {
       const { botRoutineService } = await import("../scheduled-bot-routines-main.js");
-      const routine = (await botRoutineService.list(botId)).find((candidate) => candidate.id === id);
+      const routine = (await botRoutineService.list(botId)).find(
+        (candidate) => candidate.id === id,
+      );
       if (!routine) return "missing";
       if (routine.enabled) return "resumed";
-      await botRoutineService.update({ botId, id, expectedUpdatedAt: routine.updatedAt, enabled: true });
+      await botRoutineService.update({
+        botId,
+        id,
+        expectedUpdatedAt: routine.updatedAt,
+        enabled: true,
+      });
       return "resumed";
     },
     stopRun: async (botId) => {
@@ -61,11 +87,15 @@ export const botIssues = createBotIssueService({
         import("../bot-runtime/bot-turn-intents-main.js"),
       ]);
       // Same path as the Stop button, so every open chat says "Stopping" too.
-      await stopWithIntents(botTurnIntents, botId, async () => (await botSessionRuntime()).stop(botId));
+      await stopWithIntents(botTurnIntents, botId, async () =>
+        (await botSessionRuntime()).stop(botId),
+      );
     },
     // Keep waiting on a stuck-run card: the watchdog waits another window.
     snoozeStall: (botId) => {
-      void import("../bot-runtime/bot-session-main.js").then(({ snoozeBotRunWatchdog }) => snoozeBotRunWatchdog(botId));
+      void import("../bot-runtime/bot-session-main.js").then(({ snoozeBotRunWatchdog }) =>
+        snoozeBotRunWatchdog(botId),
+      );
     },
     openSettings: (botId, section) => {
       void requestAppPath(botIssueSettingsPath(botId, section)).catch((error: unknown) =>
@@ -74,7 +104,8 @@ export const botIssues = createBotIssueService({
     },
   },
   now: Date.now,
-  onError: (error) => logger.warn("bots", "A Bot issue transcript status could not be repaired.", error),
+  onError: (error) =>
+    logger.warn("bots", "A Bot issue transcript status could not be repaired.", error),
 });
 
 /**
@@ -98,7 +129,11 @@ let sweeping: Promise<void> | undefined;
 export async function remindWaitingBotIssues(): Promise<void> {
   const { botStore } = await import("../bot-store.js");
   for (const bot of await botStore.list()) {
-    await botIssues.remind(bot.id).catch((error: unknown) => logger.warn("bots", `Bot ${bot.id} reminder could not be sent.`, error));
+    await botIssues
+      .remind(bot.id)
+      .catch((error: unknown) =>
+        logger.warn("bots", `Bot ${bot.id} reminder could not be sent.`, error),
+      );
   }
 }
 
@@ -106,7 +141,9 @@ function sweep(): void {
   if (sweeping) return;
   sweeping = remindWaitingBotIssues()
     .catch((error: unknown) => logger.warn("bots", "Bot reminders could not be sent.", error))
-    .finally(() => { sweeping = undefined; });
+    .finally(() => {
+      sweeping = undefined;
+    });
 }
 
 /** Started with the other Bot background services; reads only local issue files. */

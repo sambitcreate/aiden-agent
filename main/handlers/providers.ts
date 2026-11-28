@@ -3,14 +3,21 @@ import { parseQuickChatDefaultPersistence } from "../../renderer/shared/quick-ch
 import { syncQuickChatSettings } from "../windows/quick-chat-window.js";
 import { createPendingLastWorkspaceTracker } from "../windows/quick-chat-window-core.js";
 import { customModelThinkingLevels } from "../../renderer/shared/custom-model-options.js";
-import { isCompactionEngine, parseCompactionModelOverrides } from "../../renderer/shared/compaction.js";
+import {
+  isCompactionEngine,
+  parseCompactionModelOverrides,
+} from "../../renderer/shared/compaction.js";
 import { parseModelPreferencesPatch } from "../../renderer/shared/model-preferences.js";
 import { parseAgentSliderSettingsPatch } from "../../renderer/shared/agent-slider.js";
 // Provider configuration + API key IPC handlers. Thin — logic lives in services.
 
 import { ipcMain, logger } from "../platform.js";
 import { hostPlatformCapabilities } from "../services/host-platform-capabilities.js";
-import { activeLinuxDictationHoldShortcut, bindLinuxDictationHoldShortcut, disableLinuxDictationHoldShortcut } from "../services/shortcut.js";
+import {
+  activeLinuxDictationHoldShortcut,
+  bindLinuxDictationHoldShortcut,
+  disableLinuxDictationHoldShortcut,
+} from "../services/shortcut.js";
 import { DictationHoldSettingsTransaction } from "../services/dictation-hold-settings.js";
 import { configStore } from "../services/config-store.js";
 import { canUseStoredProviderKey } from "../services/provider-key-policy.js";
@@ -27,12 +34,18 @@ import { providerRegistry } from "../services/provider-registry.js";
 import { projectPiCatalogRefreshErrors } from "../services/pi-catalog-refresh.js";
 import { isCustomProviderId } from "../services/custom-provider-id.js";
 import { GOOGLE_PROVIDER_ID, parseGoogleThinkingSelection } from "../services/google-provider.js";
-import { ANTHROPIC_PROVIDER_ID, parseAnthropicThinkingSelection } from "../services/anthropic-provider.js";
+import {
+  ANTHROPIC_PROVIDER_ID,
+  parseAnthropicThinkingSelection,
+} from "../services/anthropic-provider.js";
 import {
   assertMutableProviderId,
   forwardCodexProviderStatusChanges,
 } from "../services/provider-list-core.js";
-import { appearancePreview, applySettingsEffects } from "../services/settings-application-effects.js";
+import {
+  appearancePreview,
+  applySettingsEffects,
+} from "../services/settings-application-effects.js";
 import {
   removeProviderWithCredentialCleanup,
   saveProviderWithCredentialRotation,
@@ -42,7 +55,10 @@ import {
   providerConnectionSnapshot,
 } from "../services/provider-credential-rotation-core.js";
 import { listConfiguredProviders } from "../services/provider-list-main.js";
-import { mcpProviderKeySharingIds, setMcpProviderKeySharing } from "../services/mcp-provider-auth.js";
+import {
+  mcpProviderKeySharingIds,
+  setMcpProviderKeySharing,
+} from "../services/mcp-provider-auth.js";
 import { registerProviderKeySharingHandler } from "./mcp-provider-auth.js";
 import { invalidateBotRuntimeInventoryAuthority } from "../services/bot-runtime-inventory-lease.js";
 import { modelsDevCacheRuntime, modelsDevCacheStatus } from "../services/models-dev-cache.js";
@@ -65,7 +81,10 @@ import { isGeminiUsageScope } from "../../renderer/shared/gemini-usage-scope.js"
 import { isGeminiTranscriptionModel } from "../../renderer/shared/voice-models.js";
 import { parseDictationDictionary } from "../../renderer/shared/dictation-dictionary.js";
 import { parseDictationPreferencePatch } from "../../renderer/shared/dictation-preferences.js";
-import { parseVoicePreferencePatch, parseVoiceProviderPatch } from "../../renderer/shared/voice-preferences.js";
+import {
+  parseVoicePreferencePatch,
+  parseVoiceProviderPatch,
+} from "../../renderer/shared/voice-preferences.js";
 import { isUsageLimitWaitHours } from "../../renderer/shared/usage-limits.js";
 import { parseSpendingLimitsSettings } from "../../renderer/shared/spending.js";
 import { parseApprovalSettingsPatch } from "../../renderer/shared/approval-mode.js";
@@ -73,8 +92,9 @@ import { reportApprovalModeChanged } from "../services/approval-gate/approval-an
 import { spending } from "../services/spending-main.js";
 import { usageLimits } from "../services/usage-limit-main.js";
 
-
-const parseProvider = createProviderPayloadParser({ persistableArtwork: persistableProviderArtwork });
+const parseProvider = createProviderPayloadParser({
+  persistableArtwork: persistableProviderArtwork,
+});
 
 async function connectionKey(
   provider: StoredProvider,
@@ -292,10 +312,8 @@ export function registerProviderHandlers(): void {
     "settings:setGoogleThinking",
     async (_event, modelIdValue: unknown, levelValue: unknown) => {
       await providerRegistry.ensureBuiltinCatalogs();
-      const selection = parseGoogleThinkingSelection(
-        modelIdValue,
-        levelValue,
-        (modelId) => providerRegistry.getBuiltinModel(GOOGLE_PROVIDER_ID, modelId),
+      const selection = parseGoogleThinkingSelection(modelIdValue, levelValue, (modelId) =>
+        providerRegistry.getBuiltinModel(GOOGLE_PROVIDER_ID, modelId),
       );
       return configStore.setGoogleThinkingLevel(selection.modelId, selection.level);
     },
@@ -310,8 +328,10 @@ export function registerProviderHandlers(): void {
   ipcMain.handle(
     "settings:setCompactionModelBudget",
     async (_event, modelKeyValue: unknown, budgetValue: unknown) => {
-      if (typeof modelKeyValue !== "string") throw new Error("Choose an exact provider/model for the compaction budget.");
-      if (budgetValue === null || budgetValue === undefined) return configStore.setCompactionModelBudget(modelKeyValue, undefined);
+      if (typeof modelKeyValue !== "string")
+        throw new Error("Choose an exact provider/model for the compaction budget.");
+      if (budgetValue === null || budgetValue === undefined)
+        return configStore.setCompactionModelBudget(modelKeyValue, undefined);
       const parsed = parseCompactionModelOverrides({ [modelKeyValue]: budgetValue });
       return configStore.setCompactionModelBudget(modelKeyValue, parsed[modelKeyValue]);
     },
@@ -320,10 +340,8 @@ export function registerProviderHandlers(): void {
     "settings:setAnthropicThinking",
     async (_event, modelIdValue: unknown, levelValue: unknown) => {
       await providerRegistry.ensureBuiltinCatalogs();
-      const selection = parseAnthropicThinkingSelection(
-        modelIdValue,
-        levelValue,
-        (modelId) => providerRegistry.getBuiltinModel(ANTHROPIC_PROVIDER_ID, modelId),
+      const selection = parseAnthropicThinkingSelection(modelIdValue, levelValue, (modelId) =>
+        providerRegistry.getBuiltinModel(ANTHROPIC_PROVIDER_ID, modelId),
       );
       return configStore.setAnthropicThinkingLevel(selection.modelId, selection.level);
     },
@@ -339,7 +357,8 @@ export function registerProviderHandlers(): void {
       await providerRegistry.ensureBuiltinCatalogs();
       const builtin = providerRegistry.builtinProvider(providerId);
       const custom = builtin ? undefined : await configStore.getProvider(providerId);
-      const levels = builtin?.modelMetadata?.[modelId]?.thinkingLevels ??
+      const levels =
+        builtin?.modelMetadata?.[modelId]?.thinkingLevels ??
         (custom?.kind === "openai" && custom.models.includes(modelId)
           ? customModelThinkingLevels(custom.modelMetadata?.[modelId]?.overrides)
           : undefined);
@@ -406,12 +425,15 @@ export function registerProviderHandlers(): void {
     const p = patch as Record<string, unknown>;
     const next: Partial<import("../services/types.js").AppSettings> = {};
     if (p.remoteAppControlsEnabled !== undefined) {
-      if (typeof p.remoteAppControlsEnabled !== "boolean") throw new Error("Invalid paired controls setting.");
+      if (typeof p.remoteAppControlsEnabled !== "boolean")
+        throw new Error("Invalid paired controls setting.");
       next.remoteAppControlsEnabled = p.remoteAppControlsEnabled;
     }
     if (p.appControlPolicy !== undefined) {
-      if (!["disabled", "ask", "safe"].includes(p.appControlPolicy as string)) throw new Error("Invalid app controls policy.");
-      next.appControlPolicy = p.appControlPolicy as import("../../renderer/shared/app-controls.js").AppControlPolicy;
+      if (!["disabled", "ask", "safe"].includes(p.appControlPolicy as string))
+        throw new Error("Invalid app controls policy.");
+      next.appControlPolicy =
+        p.appControlPolicy as import("../../renderer/shared/app-controls.js").AppControlPolicy;
     }
     if (typeof p.lastProviderId === "string") next.lastProviderId = p.lastProviderId;
     if (typeof p.lastModel === "string") next.lastModel = p.lastModel;
@@ -444,17 +466,21 @@ export function registerProviderHandlers(): void {
       if (!isCompactionEngine(p.compactionEngine)) throw new Error("Invalid compaction engine.");
       next.compactionEngine = p.compactionEngine;
     }
-    if (p.compactionModelOverrides !== undefined) next.compactionModelOverrides = parseCompactionModelOverrides(p.compactionModelOverrides);
+    if (p.compactionModelOverrides !== undefined)
+      next.compactionModelOverrides = parseCompactionModelOverrides(p.compactionModelOverrides);
     if (p.longPromptCacheRetention !== undefined) {
-      if (typeof p.longPromptCacheRetention !== "boolean") throw new Error("Invalid prompt cache lifetime setting.");
+      if (typeof p.longPromptCacheRetention !== "boolean")
+        throw new Error("Invalid prompt cache lifetime setting.");
       next.longPromptCacheRetention = p.longPromptCacheRetention;
     }
     if (p.cacheWarmingEnabled !== undefined) {
-      if (typeof p.cacheWarmingEnabled !== "boolean") throw new Error("Invalid cache warming setting.");
+      if (typeof p.cacheWarmingEnabled !== "boolean")
+        throw new Error("Invalid cache warming setting.");
       next.cacheWarmingEnabled = p.cacheWarmingEnabled;
     }
     if (p.usageLimitWaitHours !== undefined) {
-      if (!isUsageLimitWaitHours(p.usageLimitWaitHours)) throw new Error("Invalid usage limit wait setting.");
+      if (!isUsageLimitWaitHours(p.usageLimitWaitHours))
+        throw new Error("Invalid usage limit wait setting.");
       next.usageLimitWaitHours = p.usageLimitWaitHours;
     }
     if (p.botRoutinesGoAhead !== undefined) {
@@ -464,7 +490,10 @@ export function registerProviderHandlers(): void {
     }
     const approval = parseApprovalSettingsPatch(p);
     Object.assign(next, approval);
-    const approvalModeBefore = approval.approvalMode !== undefined ? (await configStore.getSettings()).approvalMode : undefined;
+    const approvalModeBefore =
+      approval.approvalMode !== undefined
+        ? (await configStore.getSettings()).approvalMode
+        : undefined;
     if (p.botMessaging !== undefined) {
       if (typeof p.botMessaging !== "boolean") throw new Error("Invalid Bot messaging setting.");
       next.botMessaging = p.botMessaging;
@@ -480,7 +509,8 @@ export function registerProviderHandlers(): void {
     }
     if (typeof p.memoryEnabled === "boolean") next.memoryEnabled = p.memoryEnabled;
     if (p.computerUseAlwaysAllow !== undefined) {
-      if (typeof p.computerUseAlwaysAllow !== "boolean") throw new Error("Invalid Computer Use setting.");
+      if (typeof p.computerUseAlwaysAllow !== "boolean")
+        throw new Error("Invalid Computer Use setting.");
       next.computerUseAlwaysAllow = p.computerUseAlwaysAllow;
     }
     for (const key of ["aidenLiveEnabled", "aidenLiveButtonVisible"] as const) {
@@ -529,9 +559,12 @@ export function registerProviderHandlers(): void {
     }
     let saved: import("../services/types.js").AppSettings;
     try {
-      saved = process.platform === "linux" && next.dictationHoldToTalk !== undefined
-        ? await linuxHoldSettings.apply(next.dictationHoldToTalk, (isCurrent) => configStore.setSettings(next, isCurrent))
-        : await configStore.setSettings(next);
+      saved =
+        process.platform === "linux" && next.dictationHoldToTalk !== undefined
+          ? await linuxHoldSettings.apply(next.dictationHoldToTalk, (isCurrent) =>
+              configStore.setSettings(next, isCurrent),
+            )
+          : await configStore.setSettings(next);
     } finally {
       if (pendingWorkspaceToken !== undefined) {
         pendingLastWorkspace.settleWrite(pendingWorkspaceToken);
@@ -539,16 +572,22 @@ export function registerProviderHandlers(): void {
     }
     await applySettingsEffects(saved, next);
     if (next.quickChatKeepOpenOnBlur !== undefined) syncQuickChatSettings(saved);
-    if ((next.botBubblesEnabled !== undefined || next.botBubblesFloatOverApps !== undefined) && hostPlatformCapabilities().bots) {
+    if (
+      (next.botBubblesEnabled !== undefined || next.botBubblesFloatOverApps !== undefined) &&
+      hostPlatformCapabilities().bots
+    ) {
       // Loaded on demand: the bubble service pulls in the Bot application service.
       void import("../services/bot-bubbles/bot-bubbles-main.js")
         .then(({ botBubbleService }) => botBubbleService().syncSettings(saved))
-        .catch((error: unknown) => logger.warn("bot-bubbles", "Could not apply the Bot bubble settings.", error));
+        .catch((error: unknown) =>
+          logger.warn("bot-bubbles", "Could not apply the Bot bubble settings.", error),
+        );
     }
     if (next.quickChatDefaultPersistence !== undefined) {
       ipcMain.broadcast("settings:controls-changed", {});
     }
-    if (approval.approvalMode !== undefined) reportApprovalModeChanged("global", approvalModeBefore, saved.approvalMode);
+    if (approval.approvalMode !== undefined)
+      reportApprovalModeChanged("global", approvalModeBefore, saved.approvalMode);
     if (next.spendingLimits !== undefined) spending.settingsChanged();
     if (next.usageLimitWaitHours !== undefined) void usageLimits.waitSettingChanged();
     return saved;

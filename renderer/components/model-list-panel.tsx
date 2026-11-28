@@ -16,11 +16,7 @@ import {
   toast,
 } from "./ui";
 import { cn } from "../lib/ui-utils";
-import {
-  orderModelEntries,
-  recentModelsForList,
-  type ModelEntry,
-} from "../lib/model-picker-data";
+import { orderModelEntries, recentModelsForList, type ModelEntry } from "../lib/model-picker-data";
 import { formatListPrice, showsListPrice } from "../lib/model-details";
 import { useModelPreferences } from "../lib/model-preferences";
 import { recordRecentModel } from "../shared/model-preferences";
@@ -273,72 +269,72 @@ export function ModelHoverDetails({
   return (
     <aside className="pointer-events-auto flex h-[min(22.5rem,70vh)] w-56 shrink-0 flex-col overflow-hidden rounded-popover bg-popover p-3 text-primary shadow-popover">
       <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-y-auto overscroll-contain">
-      <div className="flex min-w-0 items-start gap-2">
-        <span className="mt-0.5 shrink-0 text-tertiary">
-          <ProviderIcon
-            providerId={model.providerId}
-            providerLabel={model.providerLabel}
-            modelId={model.model}
-            artwork={model.providerArtwork}
-            className="size-4"
-          />
-        </span>
-        <div className="min-w-0 flex-1">
-          <Text variant="small-strong" as="h3" truncate>
-            {model.label}
-          </Text>
-          <Text variant="small" color="tertiary" as="p" truncate>
-            {model.providerLabel}
-            {deploymentSuffix(model)}
-            {model.format ? ` · ${model.format}` : ""}
-          </Text>
-          {alsoVia ? (
-            <Text variant="small" color="tertiary" as="p" truncate>
-              {alsoVia}
+        <div className="flex min-w-0 items-start gap-2">
+          <span className="mt-0.5 shrink-0 text-tertiary">
+            <ProviderIcon
+              providerId={model.providerId}
+              providerLabel={model.providerLabel}
+              modelId={model.model}
+              artwork={model.providerArtwork}
+              className="size-4"
+            />
+          </span>
+          <div className="min-w-0 flex-1">
+            <Text variant="small-strong" as="h3" truncate>
+              {model.label}
             </Text>
-          ) : null}
+            <Text variant="small" color="tertiary" as="p" truncate>
+              {model.providerLabel}
+              {deploymentSuffix(model)}
+              {model.format ? ` · ${model.format}` : ""}
+            </Text>
+            {alsoVia ? (
+              <Text variant="small" color="tertiary" as="p" truncate>
+                {alsoVia}
+              </Text>
+            ) : null}
+          </div>
         </div>
-      </div>
 
-      {capabilities.length > 0 || detailRows.length > 0 ? (
-        <>
-          {capabilities.length > 0 ? (
-            <p className="mt-2 text-small text-secondary">{capabilities.join(" · ")}</p>
-          ) : null}
-          {detailRows.length > 0 ? (
-            <dl className="mt-2 grid gap-1 border-t border-separator pt-2 text-small">
-              {detailRows.map(([label, value]) => (
-                <div key={label} className="flex items-baseline justify-between gap-3">
-                  <dt className="shrink-0 text-tertiary">{label}</dt>
-                  {/* Values wrap rather than truncate: the tail of a long value
+        {capabilities.length > 0 || detailRows.length > 0 ? (
+          <>
+            {capabilities.length > 0 ? (
+              <p className="mt-2 text-small text-secondary">{capabilities.join(" · ")}</p>
+            ) : null}
+            {detailRows.length > 0 ? (
+              <dl className="mt-2 grid gap-1 border-t border-separator pt-2 text-small">
+                {detailRows.map(([label, value]) => (
+                  <div key={label} className="flex items-baseline justify-between gap-3">
+                    <dt className="shrink-0 text-tertiary">{label}</dt>
+                    {/* Values wrap rather than truncate: the tail of a long value
                       (such as a list price) is the part that matters. */}
-                  <dd className="min-w-0 break-words text-right text-secondary tabular-nums">
-                    {value}
-                  </dd>
-                </div>
-              ))}
-            </dl>
-          ) : null}
-        </>
-      ) : (
-        <Text
-          variant="small"
-          color="tertiary"
-          as="p"
-          className="mt-2 border-t border-separator pt-2"
-        >
-          {metadataLoading ? "Loading model details…" : "No additional model details."}
-        </Text>
-      )}
+                    <dd className="min-w-0 break-words text-right text-secondary tabular-nums">
+                      {value}
+                    </dd>
+                  </div>
+                ))}
+              </dl>
+            ) : null}
+          </>
+        ) : (
+          <Text
+            variant="small"
+            color="tertiary"
+            as="p"
+            className="mt-2 border-t border-separator pt-2"
+          >
+            {metadataLoading ? "Loading model details…" : "No additional model details."}
+          </Text>
+        )}
 
-      <div className="mt-2 border-t border-separator pt-2">
-        <div
-          className="truncate font-mono text-mini leading-4 text-quaternary"
-          title={model.model}
-        >
-          {model.model}
+        <div className="mt-2 border-t border-separator pt-2">
+          <div
+            className="truncate font-mono text-mini leading-4 text-quaternary"
+            title={model.model}
+          >
+            {model.model}
+          </div>
         </div>
-      </div>
       </div>
     </aside>
   );
@@ -546,7 +542,11 @@ export function ModelListPanel({
   );
 
   return (
-    <section ref={sectionRef} {...sectionProps} className={cn("min-w-0 pt-1", sectionProps?.className)}>
+    <section
+      ref={sectionRef}
+      {...sectionProps}
+      className={cn("min-w-0 pt-1", sectionProps?.className)}
+    >
       <Command
         label={label}
         // Models are filtered and ranked in listSections, in render order.

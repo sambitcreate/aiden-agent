@@ -48,13 +48,7 @@ export const terminal = (state: DurableJobSnapshot["state"]) =>
 
 export class JobError extends Error {
   constructor(
-    readonly code:
-      | "invalid"
-      | "conflict"
-      | "capacity"
-      | "lost_lease"
-      | "unsafe"
-      | "closed",
+    readonly code: "invalid" | "conflict" | "capacity" | "lost_lease" | "unsafe" | "closed",
     message: string = code,
   ) {
     super(message);
@@ -69,15 +63,13 @@ export function identifier(value: unknown): asserts value is string {
     value.length > 256 ||
     value.trim() !== value ||
     Array.from(value).some(
-      (character) =>
-        character.charCodeAt(0) < 32 || character.charCodeAt(0) === 127,
+      (character) => character.charCodeAt(0) < 32 || character.charCodeAt(0) === 127,
     )
   )
     throw new JobError("invalid");
 }
 export function integer(value: unknown): asserts value is number {
-  if (!Number.isSafeInteger(value) || (value as number) < 0)
-    throw new JobError("invalid");
+  if (!Number.isSafeInteger(value) || (value as number) < 0) throw new JobError("invalid");
 }
 export function record(
   value: unknown,
@@ -93,8 +85,7 @@ export function record(
   )
     throw new JobError("invalid");
   for (const key of keys) {
-    if (!("value" in Object.getOwnPropertyDescriptor(value, key)!))
-      throw new JobError("invalid");
+    if (!("value" in Object.getOwnPropertyDescriptor(value, key)!)) throw new JobError("invalid");
   }
 }
 const inputKeys = [
@@ -114,29 +105,17 @@ const inputKeys = [
 export function parseInput(value: unknown): DurableJobInput {
   record(value, inputKeys);
   for (const key of inputKeys) identifier(value[key]);
-  if (!/^[a-f0-9]{64}$/u.test(value.inputDigest as string))
-    throw new JobError("invalid");
+  if (!/^[a-f0-9]{64}$/u.test(value.inputDigest as string)) throw new JobError("invalid");
   return Object.fromEntries(
     inputKeys.map((key) => [key, value[key]]),
   ) as unknown as DurableJobInput;
 }
 export function parseCheckpoint(value: unknown): DurableJobCheckpoint {
-  record(value, [
-    "sessionId",
-    "headId",
-    "inputMessageId",
-    "operationIds",
-    "childRunIds",
-  ]);
-  for (const key of ["sessionId", "headId", "inputMessageId"])
-    identifier(value[key]);
+  record(value, ["sessionId", "headId", "inputMessageId", "operationIds", "childRunIds"]);
+  for (const key of ["sessionId", "headId", "inputMessageId"]) identifier(value[key]);
   for (const key of ["operationIds", "childRunIds"]) {
     const list = value[key];
-    if (
-      !Array.isArray(list) ||
-      list.length > 64 ||
-      new Set(list).size !== list.length
-    )
+    if (!Array.isArray(list) || list.length > 64 || new Set(list).size !== list.length)
       throw new JobError("invalid");
     list.forEach(identifier);
   }
@@ -178,15 +157,12 @@ export function parseSnapshot(value: unknown): DurableJobSnapshot {
     throw new JobError("invalid");
   identifier(value.id);
   parseInput(value.input);
-  for (const key of ["revision", "createdAt", "updatedAt", "executionCount"])
-    integer(value[key]);
+  for (const key of ["revision", "createdAt", "updatedAt", "executionCount"]) integer(value[key]);
   for (const key of ["resultRef", "waitId", "attemptId"])
     if (value[key] !== null) identifier(value[key]);
   if (value.checkpoint !== null) {
     const checkpoint = parseCheckpoint(value.checkpoint);
-    if (
-      checkpoint.inputMessageId !== (value.input as DurableJobInput).messageId
-    )
+    if (checkpoint.inputMessageId !== (value.input as DurableJobInput).messageId)
       throw new JobError("invalid");
   }
   if (
@@ -208,8 +184,7 @@ export function parseSnapshot(value: unknown): DurableJobSnapshot {
   return {
     ...structuredClone(value),
     input: parseInput(value.input),
-    checkpoint:
-      value.checkpoint === null ? null : parseCheckpoint(value.checkpoint),
+    checkpoint: value.checkpoint === null ? null : parseCheckpoint(value.checkpoint),
   } as unknown as DurableJobSnapshot;
 }
 export function digest(value: unknown): string {
@@ -225,27 +200,18 @@ export interface RecoveryEvidence {
 }
 export function parseEvidence(value: unknown): RecoveryEvidence {
   record(value, ["kind", "checkpoint", "resultRef", "waitId"]);
-  if (!RECOVERY_KINDS.includes(value.kind as never))
-    throw new JobError("invalid");
+  if (!RECOVERY_KINDS.includes(value.kind as never)) throw new JobError("invalid");
   if (value.checkpoint !== null) parseCheckpoint(value.checkpoint);
   if (value.resultRef !== null) identifier(value.resultRef);
   if (value.waitId !== null) identifier(value.waitId);
-  if (
-    (value.kind === "checkpoint" || value.kind === "failed_safe") &&
-    !value.checkpoint
-  )
+  if ((value.kind === "checkpoint" || value.kind === "failed_safe") && !value.checkpoint)
     throw new JobError("invalid");
-  if (value.kind === "completed" && !value.resultRef)
-    throw new JobError("invalid");
-  if (
-    (value.kind === "waiting_approval" || value.kind === "waiting_input") &&
-    !value.waitId
-  )
+  if (value.kind === "completed" && !value.resultRef) throw new JobError("invalid");
+  if ((value.kind === "waiting_approval" || value.kind === "waiting_input") && !value.waitId)
     throw new JobError("invalid");
   return {
     kind: value.kind as DurableJobRecovery,
-    checkpoint:
-      value.checkpoint === null ? null : parseCheckpoint(value.checkpoint),
+    checkpoint: value.checkpoint === null ? null : parseCheckpoint(value.checkpoint),
     resultRef: value.resultRef as string | null,
     waitId: value.waitId as string | null,
   };

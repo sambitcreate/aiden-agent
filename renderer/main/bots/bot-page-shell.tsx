@@ -34,28 +34,38 @@ export function BotPageShell({
   // never change them, including the dialogs and menus they open.
   return (
     <LiveGuard guard="you">
-    <ScrollArea
-      scrollRestorationId={scrollId}
-      title={title}
-      leading={
-        <Button iconOnly variant="toolbar" size="large" aria-label={backLabel} onClick={onBack}>
-          <ChevronLeft />
-        </Button>
-      }
-      actions={actions}
-    >
-      <div className="settings-responsive mx-auto w-full max-w-2xl px-5 pb-10 pt-4">
-        <SettingsPage title={heading ?? ""} description={description ?? ""} heading={Boolean(heading)}>
-          {children}
-        </SettingsPage>
-      </div>
-    </ScrollArea>
+      <ScrollArea
+        scrollRestorationId={scrollId}
+        title={title}
+        leading={
+          <Button iconOnly variant="toolbar" size="large" aria-label={backLabel} onClick={onBack}>
+            <ChevronLeft />
+          </Button>
+        }
+        actions={actions}
+      >
+        <div className="settings-responsive mx-auto w-full max-w-2xl px-5 pb-10 pt-4">
+          <SettingsPage
+            title={heading ?? ""}
+            description={description ?? ""}
+            heading={Boolean(heading)}
+          >
+            {children}
+          </SettingsPage>
+        </div>
+      </ScrollArea>
     </LiveGuard>
   );
 }
 
 /** Group-card placeholders shaped like the page that is loading. */
-export function BotPageSkeleton({ label, groups = [2, 3] }: { label: string; groups?: readonly number[] }) {
+export function BotPageSkeleton({
+  label,
+  groups = [2, 3],
+}: {
+  label: string;
+  groups?: readonly number[];
+}) {
   return (
     <div role="status" aria-label={label} className="space-y-7">
       {groups.map((rows, group) => (

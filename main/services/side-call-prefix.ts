@@ -38,14 +38,22 @@ import { promptCacheTtlMs } from "./prompt-cache-lifetimes.js";
  * Options for a call that runs once. Its prompt is never sent again, so a
  * cache write would only cost more; every one-off call goes through here.
  */
-export function oneOffCallOptions<T extends object>(options: T): Omit<T, "cacheRetention"> & { cacheRetention: "none" } {
+export function oneOffCallOptions<T extends object>(
+  options: T,
+): Omit<T, "cacheRetention"> & { cacheRetention: "none" } {
   return { ...options, cacheRetention: "none" };
 }
 
 /** Request fields that shape the cached prefix and are safe to replay. */
 export type SideCallReplayOptions = Pick<
   SimpleStreamOptions,
-  "sessionId" | "reasoning" | "thinkingBudgets" | "cacheRetention" | "temperature" | "transport" | "toolChoice"
+  | "sessionId"
+  | "reasoning"
+  | "thinkingBudgets"
+  | "cacheRetention"
+  | "temperature"
+  | "transport"
+  | "toolChoice"
 >;
 
 /** The chat's last completed foreground request, read by a side call. */
@@ -134,7 +142,8 @@ export function memoryFactLinesIn(context: TranscriptContext): string[] {
   for (const message of context.messages) {
     if (message.role === "system") {
       texts.push(...textsOf(message.content));
-      for (const section of Object.values(message.sections ?? {})) if (typeof section === "string") texts.push(section);
+      for (const section of Object.values(message.sections ?? {}))
+        if (typeof section === "string") texts.push(section);
     } else if (message.role === "user") {
       texts.push(...textsOf(message.content));
     }
@@ -148,7 +157,9 @@ function declaration(tool: Tool): Tool {
     name: tool.name,
     description: tool.description,
     parameters: tool.parameters,
-    ...(tool.constrainedSampling === undefined ? {} : { constrainedSampling: tool.constrainedSampling }),
+    ...(tool.constrainedSampling === undefined
+      ? {}
+      : { constrainedSampling: tool.constrainedSampling }),
   };
 }
 
@@ -208,7 +219,11 @@ function replayable(model: Model<Api>, options: SimpleStreamOptions | undefined)
 }
 
 export function createSideCallPrefixLedger(
-  settings: { maxChats?: number; now?: () => number; ttlMs?: (model: Model<Api>, retention?: CacheRetention) => number } = {},
+  settings: {
+    maxChats?: number;
+    now?: () => number;
+    ttlMs?: (model: Model<Api>, retention?: CacheRetention) => number;
+  } = {},
 ): SideCallPrefixLedger {
   const maxChats = settings.maxChats ?? 8;
   const now = settings.now ?? Date.now;
@@ -228,7 +243,13 @@ export function createSideCallPrefixLedger(
       // Without a documented lifetime there is no way to tell a warm prefix
       // from a cold one, and a cold continuation costs more than the
       // isolated call it replaces.
-      if (!Number.isFinite(ttl) || ttl <= 0 || options?.signal?.aborted || !replayable(model, options)) return () => {};
+      if (
+        !Number.isFinite(ttl) ||
+        ttl <= 0 ||
+        options?.signal?.aborted ||
+        !replayable(model, options)
+      )
+        return () => {};
       const requestStartedAt = now();
       const entry: PendingEntry = {
         conversationId: chatKey,
@@ -241,7 +262,9 @@ export function createSideCallPrefixLedger(
         options: {
           sessionId: options?.sessionId,
           reasoning: options?.reasoning,
-          thinkingBudgets: options?.thinkingBudgets ? structuredClone(options.thinkingBudgets) : undefined,
+          thinkingBudgets: options?.thinkingBudgets
+            ? structuredClone(options.thinkingBudgets)
+            : undefined,
           cacheRetention: options?.cacheRetention,
           temperature: options?.temperature,
           transport: options?.transport,
@@ -288,7 +311,11 @@ export function createSideCallPrefixLedger(
 /** Records each foreground request on the ledger as it is dispatched. */
 export function withSideCallPrefixLedger(
   streamFn: StreamFn,
-  { ledger, chatKey, approvedMemoryFacts }: {
+  {
+    ledger,
+    chatKey,
+    approvedMemoryFacts,
+  }: {
     ledger: SideCallPrefixLedger;
     chatKey: string;
     approvedMemoryFacts?: ApprovedMemoryFacts;
@@ -303,7 +330,10 @@ export function withSideCallPrefixLedger(
     }
     try {
       const stream = await streamFn(model, context, options);
-      void stream.result().then(finished).catch(() => ledger.forget(chatKey));
+      void stream
+        .result()
+        .then(finished)
+        .catch(() => ledger.forget(chatKey));
       return stream;
     } catch (error) {
       ledger.forget(chatKey);
@@ -349,10 +379,14 @@ export function sideCallContinuation(
     },
     options: {
       ...(replay.sessionId === undefined ? {} : { sessionId: replay.sessionId }),
-      ...(replay.thinkingBudgets ? { thinkingBudgets: structuredClone(replay.thinkingBudgets) } : {}),
+      ...(replay.thinkingBudgets
+        ? { thinkingBudgets: structuredClone(replay.thinkingBudgets) }
+        : {}),
       ...(replay.temperature === undefined ? {} : { temperature: replay.temperature }),
       ...(replay.transport === undefined ? {} : { transport: replay.transport }),
-      ...(replay.toolChoice === undefined ? {} : { toolChoice: structuredClone(replay.toolChoice) }),
+      ...(replay.toolChoice === undefined
+        ? {}
+        : { toolChoice: structuredClone(replay.toolChoice) }),
       cacheRetention: call.cacheRetention ?? "short",
       disableContinuation: true,
       ...(replay.reasoning ? { reasoning: replay.reasoning } : {}),

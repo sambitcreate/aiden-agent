@@ -1,7 +1,13 @@
 import type { QueryClient } from "@tanstack/react-query";
 import { botsApi } from "../../lib/ipc";
 import { queryKeys } from "../../lib/queries";
-import { resolveBotChatActivity, type BotAvatar, type BotChatActivity, type BotDefinition, type BotInterruptions } from "../../shared/bots";
+import {
+  resolveBotChatActivity,
+  type BotAvatar,
+  type BotChatActivity,
+  type BotDefinition,
+  type BotInterruptions,
+} from "../../shared/bots";
 import type { BotRoutineThinkingLevel } from "../../shared/bot-routine-models";
 
 export type BotIdentityPatch = Partial<{
@@ -25,9 +31,17 @@ export type BotIdentityPatch = Partial<{
 function patchedBot(base: BotDefinition, patch: BotIdentityPatch): BotDefinition {
   // A cleared subtitle must not fall through to the old one: main drops the
   // description when the update omits it, and the cache has to agree.
-  const { description: baseDescription, selfWakeUps: baseSelfWakeUps, acceptsBotMessages, messagesOtherBots, thinkingLevel: baseThinkingLevel, ...rest } = base;
+  const {
+    description: baseDescription,
+    selfWakeUps: baseSelfWakeUps,
+    acceptsBotMessages,
+    messagesOtherBots,
+    thinkingLevel: baseThinkingLevel,
+    ...rest
+  } = base;
   const thinkingLevel = patch.thinkingLevel ?? baseThinkingLevel;
-  const selfWakeUpsOff = patch.selfWakeUps === undefined ? baseSelfWakeUps === false : patch.selfWakeUps === false;
+  const selfWakeUpsOff =
+    patch.selfWakeUps === undefined ? baseSelfWakeUps === false : patch.selfWakeUps === false;
   const description = (patch.description ?? baseDescription ?? "").trim();
   return {
     ...rest,
@@ -39,8 +53,12 @@ function patchedBot(base: BotDefinition, patch: BotIdentityPatch): BotDefinition
       ? { chatActivity: { ...resolveBotChatActivity(base.chatActivity), ...patch.chatActivity } }
       : {}),
     ...(patch.interruptions ? { interruptions: structuredClone(patch.interruptions) } : {}),
-    ...((patch.acceptsBotMessages ?? acceptsBotMessages) === false ? {acceptsBotMessages: false} : {}),
-    ...((patch.messagesOtherBots ?? messagesOtherBots) === false ? {messagesOtherBots: false} : {}),
+    ...((patch.acceptsBotMessages ?? acceptsBotMessages) === false
+      ? { acceptsBotMessages: false }
+      : {}),
+    ...((patch.messagesOtherBots ?? messagesOtherBots) === false
+      ? { messagesOtherBots: false }
+      : {}),
     ...(selfWakeUpsOff ? { selfWakeUps: false as const } : {}),
     ...(thinkingLevel && thinkingLevel !== "off" ? { thinkingLevel } : {}),
   };
@@ -70,7 +88,9 @@ function presentEdits(qc: QueryClient, stack: BotEditStack): void {
 export function placeBotInCache(qc: QueryClient, bot: BotDefinition): void {
   qc.setQueryData(queryKeys.bot(bot.id), bot);
   qc.setQueriesData<BotDefinition[]>({ queryKey: queryKeys.bots }, (list) =>
-    list?.some((row) => row.id === bot.id) ? list.map((row) => (row.id === bot.id ? bot : row)) : list,
+    list?.some((row) => row.id === bot.id)
+      ? list.map((row) => (row.id === bot.id ? bot : row))
+      : list,
   );
 }
 
@@ -88,7 +108,10 @@ export function removeBotFromCache(qc: QueryClient, botId: string): () => void {
   for (const [key, list] of qc.getQueriesData<BotDefinition[]>({ queryKey: queryKeys.bots })) {
     if (!list?.some((row) => row.id === botId)) continue;
     removed.push([key, list]);
-    qc.setQueryData(key, list.filter((row) => row.id !== botId));
+    qc.setQueryData(
+      key,
+      list.filter((row) => row.id !== botId),
+    );
   }
   return () => {
     for (const [key, list] of removed) qc.setQueryData(key, list);
@@ -149,8 +172,12 @@ export async function updateBotIdentity(
       avatar: next.avatar,
       ...(patch.chatActivity ? { chatActivity: resolveBotChatActivity(next.chatActivity) } : {}),
       ...(patch.interruptions ? { interruptions: patch.interruptions } : {}),
-      ...(patch.acceptsBotMessages !== undefined ? {acceptsBotMessages: patch.acceptsBotMessages} : {}),
-      ...(patch.messagesOtherBots !== undefined ? {messagesOtherBots: patch.messagesOtherBots} : {}),
+      ...(patch.acceptsBotMessages !== undefined
+        ? { acceptsBotMessages: patch.acceptsBotMessages }
+        : {}),
+      ...(patch.messagesOtherBots !== undefined
+        ? { messagesOtherBots: patch.messagesOtherBots }
+        : {}),
       ...(patch.selfWakeUps !== undefined ? { selfWakeUps: patch.selfWakeUps } : {}),
       ...(patch.thinkingLevel !== undefined ? { thinkingLevel: patch.thinkingLevel } : {}),
     });

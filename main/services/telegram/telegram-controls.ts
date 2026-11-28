@@ -150,11 +150,7 @@ export function buildMainMenu(status: TelegramControlStatus): TelegramInlineKeyb
           { text: "⚙️ Settings", callback_data: "menu:settings" },
         ],
         ...(status.active
-          ? [
-              [
-                { text: "🛑 Stop (withdraws follow-ups)", callback_data: stopCallback },
-              ],
-            ]
+          ? [[{ text: "🛑 Stop (withdraws follow-ups)", callback_data: stopCallback }]]
           : []),
         ...(status.extensionSections ?? []).map((section) => [
           {

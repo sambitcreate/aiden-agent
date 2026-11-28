@@ -9,7 +9,12 @@ import {
   reportCustomProviderConnected,
   reportDesignCommentsSent,
 } from "./analytics-feature-reports.js";
-import { analyticsModelId, analyticsProviderId, analyticsRunTrigger, analyticsWorkspaceKind } from "./analytics-ids.js";
+import {
+  analyticsModelId,
+  analyticsProviderId,
+  analyticsRunTrigger,
+  analyticsWorkspaceKind,
+} from "./analytics-ids.js";
 import { analyticsSettled, captureAnalyticsEvents } from "./test-support.js";
 import { reportAnalyticsEvent, setAnalyticsReporter } from "./analytics-report.js";
 import { goalRoundBucket } from "../../../renderer/shared/goal.js";
@@ -18,14 +23,22 @@ test("a built-in provider and its catalog model are sent, folded to the registry
   assert.equal(analyticsProviderId("anthropic"), "anthropic");
   assert.equal(analyticsModelId("anthropic", "not-a-listed-model"), "custom");
   const listed = builtinProviders()
-    .flatMap((provider) => provider.getModels().map((model) => ({ provider: provider.id, id: model.id })))
+    .flatMap((provider) =>
+      provider.getModels().map((model) => ({ provider: provider.id, id: model.id })),
+    )
     .find((model) => /^[A-Z]/u.test(model.id) && model.id.length < 80);
   assert.ok(listed, "the bundled catalog carries a mixed-case model id");
   assert.equal(analyticsModelId(listed.provider, listed.id), listed.id.toLowerCase());
 });
 
 test("names and addresses a person chose never leave as an id", () => {
-  for (const value of ["my-private-gateway", "https://llm.example.test/v1", "/Users/person/model", "", undefined]) {
+  for (const value of [
+    "my-private-gateway",
+    "https://llm.example.test/v1",
+    "/Users/person/model",
+    "",
+    undefined,
+  ]) {
     assert.equal(analyticsProviderId(value as string), "custom");
     assert.equal(analyticsModelId("anthropic", value as string), "custom");
     assert.equal(analyticsModelId(value as string, "gpt-5.4"), "custom");
@@ -52,16 +65,27 @@ test("a sent message reports registry-valid properties and never waits on the wo
     model: "secret-model",
     thinkingLevel: "high",
     origin: "desktop",
-    inWorkspace: () => new Promise((resolve) => { finishLookup = resolve; }),
+    inWorkspace: () =>
+      new Promise((resolve) => {
+        finishLookup = resolve;
+      }),
   });
   await analyticsSettled();
   assert.deepEqual(sent, [], "the send has already returned; the report follows the lookup");
   finishLookup(true);
   await analyticsSettled();
-  assert.deepEqual(sent, [{
-    event: "chat_message_sent",
-    props: { provider_id: "custom", model_id: "custom", in_workspace: true, thinking: "high", origin: "desktop" },
-  }]);
+  assert.deepEqual(sent, [
+    {
+      event: "chat_message_sent",
+      props: {
+        provider_id: "custom",
+        model_id: "custom",
+        in_workspace: true,
+        thinking: "high",
+        origin: "desktop",
+      },
+    },
+  ]);
 });
 
 test("a workspace lookup that fails still counts the message, as outside a workspace", async (t) => {
@@ -75,24 +99,43 @@ test("a workspace lookup that fails still counts the message, as outside a works
     },
   });
   await analyticsSettled();
-  assert.deepEqual(sent, [{
-    event: "chat_message_sent",
-    props: { provider_id: "anthropic", model_id: "custom", in_workspace: false, thinking: "other", origin: "phone" },
-  }]);
+  assert.deepEqual(sent, [
+    {
+      event: "chat_message_sent",
+      props: {
+        provider_id: "anthropic",
+        model_id: "custom",
+        in_workspace: false,
+        thinking: "other",
+        origin: "phone",
+      },
+    },
+  ]);
 });
 
 test("a person's own provider is only ever custom, and a loopback or keyless one is local", (t) => {
   const sent = captureAnalyticsEvents(t);
   const provider = (fields: Partial<StoredProvider>) =>
-    ({ id: "p", kind: "openai", label: "Office gateway", baseUrl: "https://llm.example.test/v1", models: [], needsKey: true, ...fields }) as StoredProvider;
+    ({
+      id: "p",
+      kind: "openai",
+      label: "Office gateway",
+      baseUrl: "https://llm.example.test/v1",
+      models: [],
+      needsKey: true,
+      ...fields,
+    }) as StoredProvider;
   reportCustomProviderConnected(provider({}));
   reportCustomProviderConnected(provider({ baseUrl: "http://127.0.0.1:11434/v1" }));
   reportCustomProviderConnected(provider({ needsKey: false }));
-  assert.deepEqual(sent.map((entry) => entry.props), [
-    { provider_id: "custom", auth: "key" },
-    { provider_id: "custom", auth: "local" },
-    { provider_id: "custom", auth: "local" },
-  ]);
+  assert.deepEqual(
+    sent.map((entry) => entry.props),
+    [
+      { provider_id: "custom", auth: "key" },
+      { provider_id: "custom", auth: "local" },
+      { provider_id: "custom", auth: "local" },
+    ],
+  );
   assert.doesNotMatch(JSON.stringify(sent), /Office gateway|example\.test/u);
 });
 
@@ -107,15 +150,31 @@ test("a connector from the catalog sends its preset id, and a person's own sends
   ]);
 });
 
-
 /** Four stops: two efforts of one model, an unassigned stop and a second model. */
 const FOUR_STOP_SLIDER = {
   version: 1,
   stops: [
-    { id: "stop_00000001", label: "Quick", providerId: "anthropic", model: "claude-sonnet-4-5", thinkingLevel: "low" },
-    { id: "stop_00000002", label: "Careful", providerId: "anthropic", model: "claude-sonnet-4-5", thinkingLevel: "high" },
+    {
+      id: "stop_00000001",
+      label: "Quick",
+      providerId: "anthropic",
+      model: "claude-sonnet-4-5",
+      thinkingLevel: "low",
+    },
+    {
+      id: "stop_00000002",
+      label: "Careful",
+      providerId: "anthropic",
+      model: "claude-sonnet-4-5",
+      thinkingLevel: "high",
+    },
     { id: "stop_00000003", label: "Later" },
-    { id: "stop_00000004", label: "Private", providerId: "my-private-gateway", model: "secret-model" },
+    {
+      id: "stop_00000004",
+      label: "Private",
+      providerId: "my-private-gateway",
+      model: "secret-model",
+    },
   ],
   homeStopId: "stop_00000002",
 };
@@ -123,7 +182,9 @@ const FOUR_STOP_SLIDER = {
 async function sliderProps(
   t: Parameters<typeof captureAnalyticsEvents>[0],
   sent: { providerId: string; model: string; thinkingLevel?: "low" | "high" },
-  read: Awaited<ReturnType<NonNullable<Parameters<typeof reportChatMessageSent>[0]["agentSlider"]>>> | Error,
+  read:
+    | Awaited<ReturnType<NonNullable<Parameters<typeof reportChatMessageSent>[0]["agentSlider"]>>>
+    | Error,
 ) {
   const events = captureAnalyticsEvents(t);
   reportChatMessageSent({
@@ -176,36 +237,65 @@ test("without a readable slider the message is still counted, with no slider pro
   for (const read of [
     undefined,
     { slider: undefined },
-    { slider: { version: 1, stops: [{ id: "stop_00000001", label: "Only one" }], homeStopId: "stop_00000001" } },
+    {
+      slider: {
+        version: 1,
+        stops: [{ id: "stop_00000001", label: "Only one" }],
+        homeStopId: "stop_00000001",
+      },
+    },
     new Error("config unreadable"),
   ]) {
-    const props = await sliderProps(t, { providerId: "anthropic", model: "claude-sonnet-4-5" }, read);
+    const props = await sliderProps(
+      t,
+      { providerId: "anthropic", model: "claude-sonnet-4-5" },
+      read,
+    );
     assert.equal(props?.origin, "desktop");
     assert.equal("slider_stop" in (props ?? {}), false);
     assert.equal("slider_stop_count" in (props ?? {}), false);
   }
 });
 
-test("a delayed message cannot move to a replacement analytics sender", async t => {
+test("a delayed message cannot move to a replacement analytics sender", async (t) => {
   const first = captureAnalyticsEvents(t);
   let finish!: (value: boolean) => void;
-  const workspace = new Promise<boolean>(resolve => { finish = resolve; });
-  reportChatMessageSent({ providerId: "anthropic", model: "unlisted", origin: "desktop", inWorkspace: () => workspace });
+  const workspace = new Promise<boolean>((resolve) => {
+    finish = resolve;
+  });
+  reportChatMessageSent({
+    providerId: "anthropic",
+    model: "unlisted",
+    origin: "desktop",
+    inWorkspace: () => workspace,
+  });
   const replacement = captureAnalyticsEvents(t);
   finish(true);
   await analyticsSettled();
   assert.deepEqual(first, []);
   assert.deepEqual(replacement, []);
-  reportChatMessageSent({ providerId: "anthropic", model: "unlisted", origin: "desktop", inWorkspace: () => false });
+  reportChatMessageSent({
+    providerId: "anthropic",
+    model: "unlisted",
+    origin: "desktop",
+    inWorkspace: () => false,
+  });
   await analyticsSettled();
   assert.equal(replacement.length, 1);
 });
 
-test("an action before any sender exists cannot be reported by a sender registered later", async t => {
+test("an action before any sender exists cannot be reported by a sender registered later", async (t) => {
   setAnalyticsReporter(undefined);
   let finish!: (value: boolean) => void;
-  const workspace = new Promise<boolean>(resolve => { finish = resolve; });
-  reportChatMessageSent({ providerId: "anthropic", model: "unlisted", origin: "desktop", inWorkspace: () => workspace });
+  const workspace = new Promise<boolean>((resolve) => {
+    finish = resolve;
+  });
+  reportChatMessageSent({
+    providerId: "anthropic",
+    model: "unlisted",
+    origin: "desktop",
+    inWorkspace: () => workspace,
+  });
   const later = captureAnalyticsEvents(t);
   finish(true);
   await analyticsSettled();
@@ -216,7 +306,10 @@ test("a message carrying design comments reports only how many, from the person'
   const events = captureAnalyticsEvents(t);
   const block = (count: number) =>
     `<attached-design-comments>\nComments the person made.\n${JSON.stringify(
-      Array.from({ length: count }, (_, index) => ({ commentId: `c${index}`, note: "Make the button primary at /Users/person" })),
+      Array.from({ length: count }, (_, index) => ({
+        commentId: `c${index}`,
+        note: "Make the button primary at /Users/person",
+      })),
     )}\n</attached-design-comments>`;
   reportDesignCommentsSent([{ role: "user", content: `Fix these\n\n${block(3)}` }]);
   reportDesignCommentsSent([

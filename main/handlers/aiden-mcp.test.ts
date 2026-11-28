@@ -13,7 +13,9 @@ import { registerAidenMcpHandlers } from "./aiden-mcp.js";
  * The Settings channels over a real Remote registry, so issuing, listing,
  * revoking and authenticating an app all go through the stored records.
  */
-async function harness(options: { ownerActive?: () => boolean; destroyedAfterIssue?: boolean } = {}) {
+async function harness(
+  options: { ownerActive?: () => boolean; destroyedAfterIssue?: boolean } = {},
+) {
   let stored: unknown = createDefaultAidenRemoteState(() => Buffer.alloc(24, 7));
   let random = 0;
   let clock = 1_000_000;
@@ -35,17 +37,26 @@ async function harness(options: { ownerActive?: () => boolean; destroyedAfterIss
 
   let status: AidenMcpServerStatusView = { supported: true, enabled: false, running: false };
   let issued = false;
-  const provenance = new Map([["chat-1", { kind: "app" as const, name: "Claude Code", startedAt: 42 }]]);
+  const provenance = new Map([
+    ["chat-1", { kind: "app" as const, name: "Claude Code", startedAt: 42 }],
+  ]);
   const handlers = new Map<string, (event: unknown, ...args: unknown[]) => unknown>();
   registerAidenMcpHandlers<unknown>({
     handle: (channel, handler) => void handlers.set(channel, handler),
     owner: () => {
-      if (options.ownerActive && !options.ownerActive()) throw new Error("Apps using Aiden can be changed only from the active Aiden window.");
+      if (options.ownerActive && !options.ownerActive())
+        throw new Error("Apps using Aiden can be changed only from the active Aiden window.");
       return { isDestroyed: () => options.destroyedAfterIssue === true && issued };
     },
     service: {
       status: async () => status,
-      setEnabled: async (enabled) => (status = { ...status, enabled, running: enabled, ...(enabled ? { port: 49400, url: "http://127.0.0.1:49400/mcp" } : {}) }),
+      setEnabled: async (enabled) =>
+        (status = {
+          ...status,
+          enabled,
+          running: enabled,
+          ...(enabled ? { port: 49400, url: "http://127.0.0.1:49400/mcp" } : {}),
+        }),
       issueApp: async (input) => {
         const result = await registry.issueAgentApp(input);
         issued = true;
@@ -73,7 +84,10 @@ async function harness(options: { ownerActive?: () => boolean; destroyedAfterIss
 
 test("adding an app returns its token once, and nothing else ever carries it", async () => {
   const { invoke, registry } = await harness();
-  const added = (await invoke("remote:mcpIssueApp", { name: "  Claude Code  ", access: "supervised" })) as {
+  const added = (await invoke("remote:mcpIssueApp", {
+    name: "  Claude Code  ",
+    access: "supervised",
+  })) as {
     credential: string;
     app: { id: string; name: string; access: string; createdAt: number; lastSeenAt: number };
   };
@@ -112,18 +126,28 @@ test("an app needs a name of up to 80 characters and one of the two access level
     await assert.rejects(invoke("remote:mcpIssueApp", bad), JSON.stringify(bad));
   }
   assert.deepEqual(await invoke("remote:mcpListApps"), []);
-  const added = (await invoke("remote:mcpIssueApp", { name: "x".repeat(80), access: "read" })) as { app: { access: string } };
+  const added = (await invoke("remote:mcpIssueApp", { name: "x".repeat(80), access: "read" })) as {
+    app: { access: string };
+  };
   assert.equal(added.app.access, "read");
   // 80 emoji are 160 UTF-16 units but 80 characters, the same count the CLI and Remote state use.
-  const emoji = (await invoke("remote:mcpIssueApp", { name: "🤖".repeat(80), access: "read" })) as { app: { name: string } };
+  const emoji = (await invoke("remote:mcpIssueApp", { name: "🤖".repeat(80), access: "read" })) as {
+    app: { name: string };
+  };
   assert.equal([...emoji.app.name].length, 80);
 });
 
 test("the list shows live apps newest first, and a revoked app's token stops working", async () => {
   const { invoke, registry, tick } = await harness();
-  const first = (await invoke("remote:mcpIssueApp", { name: "Codex", access: "read" })) as { credential: string; app: { id: string } };
+  const first = (await invoke("remote:mcpIssueApp", { name: "Codex", access: "read" })) as {
+    credential: string;
+    app: { id: string };
+  };
   tick(1_000);
-  const second = (await invoke("remote:mcpIssueApp", { name: "Claude Code", access: "supervised" })) as { app: { id: string } };
+  const second = (await invoke("remote:mcpIssueApp", {
+    name: "Claude Code",
+    access: "supervised",
+  })) as { app: { id: string } };
   assert.deepEqual(
     ((await invoke("remote:mcpListApps")) as Array<{ name: string }>).map((app) => app.name),
     ["Claude Code", "Codex"],
@@ -136,16 +160,35 @@ test("the list shows live apps newest first, and a revoked app's token stops wor
     [second.app.id],
   );
   assert.deepEqual(await invoke("remote:mcpRevokeApp", first.app.id), { revoked: false });
-  for (const bad of [undefined, 7, "", "chat_1", "device_with spaces", `device_${"a".repeat(130)}`]) {
-    await assert.rejects(invoke("remote:mcpRevokeApp", bad), /Invalid app identifier/u, String(bad));
+  for (const bad of [
+    undefined,
+    7,
+    "",
+    "chat_1",
+    "device_with spaces",
+    `device_${"a".repeat(130)}`,
+  ]) {
+    await assert.rejects(
+      invoke("remote:mcpRevokeApp", bad),
+      /Invalid app identifier/u,
+      String(bad),
+    );
   }
 });
 
 test("when the asking window closes while an app is added, the app is taken back", async () => {
   const { invoke, registry } = await harness({ destroyedAfterIssue: true });
-  await assert.rejects(invoke("remote:mcpIssueApp", { name: "Codex", access: "read" }), /window that added this app closed/u);
+  await assert.rejects(
+    invoke("remote:mcpIssueApp", { name: "Codex", access: "read" }),
+    /window that added this app closed/u,
+  );
   assert.deepEqual(await invoke("remote:mcpListApps"), []);
-  assert.deepEqual(await registry.listAgentApps().then((apps) => apps.filter((app) => app.revokedAt === undefined)), []);
+  assert.deepEqual(
+    await registry
+      .listAgentApps()
+      .then((apps) => apps.filter((app) => app.revokedAt === undefined)),
+    [],
+  );
 });
 
 test("only the active Aiden window can use these channels", async () => {
@@ -161,7 +204,10 @@ test("only the active Aiden window can use these channels", async () => {
   ]);
   await assert.rejects(invoke("remote:mcpStatus"), /active Aiden window/u);
   await assert.rejects(invoke("remote:mcpSetEnabled", true), /active Aiden window/u);
-  await assert.rejects(invoke("remote:mcpIssueApp", { name: "Codex", access: "read" }), /active Aiden window/u);
+  await assert.rejects(
+    invoke("remote:mcpIssueApp", { name: "Codex", access: "read" }),
+    /active Aiden window/u,
+  );
   await assert.rejects(invoke("remote:mcpChatProvenance", "chat-1"), /active Aiden window/u);
   active = true;
   assert.deepEqual(await invoke("remote:mcpListApps"), [], "the refused add left no app behind");
@@ -170,16 +216,27 @@ test("only the active Aiden window can use these channels", async () => {
 test("the switch takes only a boolean and answers with the server's status", async () => {
   const { invoke } = await harness();
   for (const bad of ["true", 1, null, undefined]) {
-    await assert.rejects(invoke("remote:mcpSetEnabled", bad), /Invalid MCP server setting/u, String(bad));
+    await assert.rejects(
+      invoke("remote:mcpSetEnabled", bad),
+      /Invalid MCP server setting/u,
+      String(bad),
+    );
   }
-  assert.deepEqual(await invoke("remote:mcpStatus"), { supported: true, enabled: false, running: false });
+  assert.deepEqual(await invoke("remote:mcpStatus"), {
+    supported: true,
+    enabled: false,
+    running: false,
+  });
   const on = (await invoke("remote:mcpSetEnabled", true)) as AidenMcpServerStatusView;
   assert.equal(on.url, "http://127.0.0.1:49400/mcp");
 });
 
 test("a chat an app started names the app; other chats name none", async () => {
   const { invoke } = await harness();
-  assert.deepEqual(await invoke("remote:mcpChatProvenance", "chat-1"), { name: "Claude Code", startedAt: 42 });
+  assert.deepEqual(await invoke("remote:mcpChatProvenance", "chat-1"), {
+    name: "Claude Code",
+    startedAt: 42,
+  });
   assert.equal(await invoke("remote:mcpChatProvenance", "chat-2"), null);
   await assert.rejects(invoke("remote:mcpChatProvenance", ""), /Invalid chat identifier/u);
 });

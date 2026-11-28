@@ -88,7 +88,13 @@ export function newChatModelChoices(
       labels.set(newChatModelValue(provider.id, model), `${provider.label} · ${model}`);
     }
   }
-  const ordered = [...new Set([...(settings.pinnedModels ?? []), ...(settings.recentModels ?? []), ...labels.keys()])];
+  const ordered = [
+    ...new Set([
+      ...(settings.pinnedModels ?? []),
+      ...(settings.recentModels ?? []),
+      ...labels.keys(),
+    ]),
+  ];
   return {
     options: ordered
       .filter((value) => labels.has(value))
@@ -156,8 +162,16 @@ const GROUPS: Record<
         "Color theme",
         "Theme colors for light and dark. Custom colors are edited in Settings → Appearance.",
       ],
-      ["appearance.chatWidth", "Chat width", "Width of conversations in Aiden Agent on your computer."],
-      ["appearance.reduceMotion", "Reduce motion", "Prefer less motion in Aiden Agent on your computer."],
+      [
+        "appearance.chatWidth",
+        "Chat width",
+        "Width of conversations in Aiden Agent on your computer.",
+      ],
+      [
+        "appearance.reduceMotion",
+        "Reduce motion",
+        "Prefer less motion in Aiden Agent on your computer.",
+      ],
     ],
   },
   memory: {
@@ -284,11 +298,17 @@ export class AppControlsService {
         (context.allowedControls && !context.allowedControls.has(operation.control))
       )
         throw new Error("This control is not authorized.");
-      if (!context.humanGesture && (policy === "ask" || operation.value === true || operation.control === "memory.workspace"))
+      if (
+        !context.humanGesture &&
+        (policy === "ask" || operation.value === true || operation.control === "memory.workspace")
+      )
         throw new Error("Show this control for an explicit foreground confirmation.");
       if (operation.control === "memory.workspace" && !state.workspace)
         throw new Error("Select an existing workspace first.");
-      if (operation.control === "models.newChat" && !state.newChatModels?.selectable.has(String(operation.value)))
+      if (
+        operation.control === "models.newChat" &&
+        !state.newChatModels?.selectable.has(String(operation.value))
+      )
         throw new Error("That model is not available for new chats. Check Settings → Providers.");
       // Picking a preset replaces custom colors, which cannot be undone from chat.
       if (
@@ -296,7 +316,9 @@ export class AppControlsService {
         !context.humanGesture &&
         appControlValue(state, "appearance.theme") === "custom"
       )
-        throw new Error("Show this control for an explicit foreground confirmation: it replaces custom theme colors.");
+        throw new Error(
+          "Show this control for an explicit foreground confirmation: it replaces custom theme colors.",
+        );
       const key = `${context.actor}:${context.workspaceId ?? "host"}:${operation.operationId}`;
       const operations = (await this.deps.loadOperations()).filter(
         (item) =>

@@ -8,7 +8,13 @@ import { SettingsPageTabs } from "./settings-page";
 
 afterEach(cleanup);
 
-function Harness({ initial, onSelect }: { initial: SettingsSection; onSelect?: (section: SettingsSection) => void }) {
+function Harness({
+  initial,
+  onSelect,
+}: {
+  initial: SettingsSection;
+  onSelect?: (section: SettingsSection) => void;
+}) {
   const [section, setSection] = React.useState(initial);
   return (
     <SettingsPageTabs
@@ -29,7 +35,10 @@ test("a merged page names its tablist and links the selected tab to the panel", 
   const tablist = screen.getByRole("tablist", { name: "Connections" });
   assert.ok(tablist);
   const tabs = screen.getAllByRole("tab");
-  assert.deepEqual(tabs.map((tab) => tab.textContent), ["Control this device", "Control other devices", "Apps using Aiden", "Telegram"]);
+  assert.deepEqual(
+    tabs.map((tab) => tab.textContent),
+    ["Control this device", "Control other devices", "Apps using Aiden", "Telegram"],
+  );
   const selected = screen.getByRole("tab", { selected: true });
   assert.equal(selected.textContent, "Control other devices");
   const panel = screen.getByRole("tabpanel", { name: "Control other devices" });
@@ -52,9 +61,13 @@ test("clicking a tab selects its section and shows only that panel", () => {
 });
 
 test("a merged page left with one tab on this host drops the strip and takes the tab's name", () => {
-  const page = availableSettingsPages({ computerUse: true, devices: true, botComputers: false, hooks: true, mcpServer: true }).find(
-    (entry) => entry.id === pageFor("computerUse").id,
-  );
+  const page = availableSettingsPages({
+    computerUse: true,
+    devices: true,
+    botComputers: false,
+    hooks: true,
+    mcpServer: true,
+  }).find((entry) => entry.id === pageFor("computerUse").id);
   assert.ok(page);
   assert.equal(page.title, "Computer Use");
   render(

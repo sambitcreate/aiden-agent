@@ -19,7 +19,11 @@ import {
   parseComputerUseKeyChord,
   summarizeComputerUseApproval,
 } from "./safety.js";
-import type { FormFillBatchPlan, FormFillBatchResult, FormFillRowResult } from "../form-fill/batch-core.js";
+import type {
+  FormFillBatchPlan,
+  FormFillBatchResult,
+  FormFillRowResult,
+} from "../form-fill/batch-core.js";
 import { FORM_FILL_UNAVAILABLE_MESSAGE } from "../../../renderer/shared/form-fill-availability.js";
 import { COMPUTER_USE_SETUP_REASON } from "./access-gate.js";
 
@@ -212,7 +216,13 @@ interface DriverCall {
   args: Record<string, unknown>;
 }
 
-const ACTION_EFFECTS = new Set(["confirmed", "partial", "unverifiable", "suspected_noop", "refused"]);
+const ACTION_EFFECTS = new Set([
+  "confirmed",
+  "partial",
+  "unverifiable",
+  "suspected_noop",
+  "refused",
+]);
 const ACTION_ROUTES = new Set([
   "accessibility",
   "synthetic_events",
@@ -262,7 +272,10 @@ const READINESS_REFUSALS = new Set([
  * sends background_unavailable; electron_main_process_unavailable is a
  * forward-compatible mapping.
  */
-const FOREGROUND_REFUSALS = new Set(["background_unavailable", "electron_main_process_unavailable"]);
+const FOREGROUND_REFUSALS = new Set([
+  "background_unavailable",
+  "electron_main_process_unavailable",
+]);
 
 class ComputerUseDriverActionError extends Error {
   constructor(
@@ -604,7 +617,14 @@ function elementAt(target: ActiveTarget, coordinate: readonly number[]): Element
   let bestArea = Number.POSITIVE_INFINITY;
   for (const element of target.elements.values()) {
     const frame = element.screenshotFrame;
-    if (!frame || x < frame.x || y < frame.y || x >= frame.x + frame.width || y >= frame.y + frame.height) continue;
+    if (
+      !frame ||
+      x < frame.x ||
+      y < frame.y ||
+      x >= frame.x + frame.width ||
+      y >= frame.y + frame.height
+    )
+      continue;
     const area = frame.width * frame.height;
     if (area < bestArea) {
       best = element;
@@ -907,7 +927,10 @@ export class ComputerUseController {
   private approvalFacts(
     args: ComputerUseArgs,
     target: ActiveTarget,
-  ): Pick<ComputerUseApprovalDescriptor, "element" | "focusedElement" | "secureFieldInCapture" | "menuPath"> {
+  ): Pick<
+    ComputerUseApprovalDescriptor,
+    "element" | "focusedElement" | "secureFieldInCapture" | "menuPath"
+  > {
     const facts = this.factsFor(target);
     const element = this.actedElement(args, target);
     const typing = args.action === "type" || args.action === "key";
@@ -921,11 +944,16 @@ export class ComputerUseController {
 
   private factsFor(target: Pick<WindowRecord, "pid" | "windowId">): WindowFacts | undefined {
     const facts = this.windowFacts;
-    return facts && facts.pid === target.pid && facts.windowId === target.windowId ? facts : undefined;
+    return facts && facts.pid === target.pid && facts.windowId === target.windowId
+      ? facts
+      : undefined;
   }
 
   /** The captured element an action addresses: by number, or the innermost one under its pixel. */
-  private actedElement(args: ComputerUseArgs, target: ActiveTarget): ComputerUseApprovalElement | undefined {
+  private actedElement(
+    args: ComputerUseArgs,
+    target: ActiveTarget,
+  ): ComputerUseApprovalElement | undefined {
     let record: ElementRecord | undefined;
     if (args.action === "drag") {
       record =
@@ -947,7 +975,11 @@ export class ComputerUseController {
   }
 
   /** After a successful action: where focus went, as far as Aiden can tell. */
-  private recordFocus(args: ComputerUseArgs, target: ActiveTarget, acted: ComputerUseApprovalElement | undefined): void {
+  private recordFocus(
+    args: ComputerUseArgs,
+    target: ActiveTarget,
+    acted: ComputerUseApprovalElement | undefined,
+  ): void {
     const facts: WindowFacts = this.factsFor(target) ?? {
       pid: target.pid,
       windowId: target.windowId,
@@ -1445,12 +1477,7 @@ export class ComputerUseController {
     }
     const sinceStatus = changes ? safeString(result.structured?.since_status, 64) : undefined;
     if (changes && (sinceStatus === "no_change" || sinceStatus === "diff")) {
-      return this.captureChangesResult(
-        window,
-        requestedMode,
-        result,
-        sinceStatus === "no_change",
-      );
+      return this.captureChangesResult(window, requestedMode, result, sinceStatus === "no_change");
     }
     const elements = effectiveMode === "vision" ? [] : normalizeElements(result, maximumElements);
     const target = this.setTarget(window, elements);
@@ -2039,8 +2066,12 @@ export class ComputerUseController {
     this.grants.clear();
     this.clearTarget();
     await this.startup?.catch(() => {});
-    await this.session?.close().catch(() => { this.closeFailed = true; });
-    await this.host?.shutdown().catch(() => { this.closeFailed = true; });
+    await this.session?.close().catch(() => {
+      this.closeFailed = true;
+    });
+    await this.host?.shutdown().catch(() => {
+      this.closeFailed = true;
+    });
     await Promise.allSettled([...this.driverCalls]);
     this.session = null;
     this.host = null;

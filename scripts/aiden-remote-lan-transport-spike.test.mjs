@@ -7,7 +7,11 @@ import https from "node:https";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { generatePairingSecret, runLanTransportSpike, spkiSha256 } from "./aiden-remote-lan-transport-spike.mjs";
+import {
+  generatePairingSecret,
+  runLanTransportSpike,
+  spkiSha256,
+} from "./aiden-remote-lan-transport-spike.mjs";
 
 const physicalServerPath = path.resolve("scripts/aiden-remote-physical-device-spike-server.mjs");
 
@@ -20,9 +24,12 @@ async function launchPhysicalServer(
 ) {
   const arguments_ = [
     physicalServerPath,
-    "--host", "127.0.0.1",
-    "--identity-dir", identityDirectory,
-    "--mode", mode,
+    "--host",
+    "127.0.0.1",
+    "--identity-dir",
+    identityDirectory,
+    "--mode",
+    mode,
   ];
   if (initialize) arguments_.push("--initialize");
   if (phase7) arguments_.push("--phase7");
@@ -31,11 +38,16 @@ async function launchPhysicalServer(
   let stdout = "";
   let stderr = "";
   child.stderr.setEncoding("utf8");
-  child.stderr.on("data", (chunk) => { stderr += chunk; });
+  child.stderr.on("data", (chunk) => {
+    stderr += chunk;
+  });
   child.stdout.setEncoding("utf8");
   const expectsRepairPayload = extraArguments.includes("--repair-secret-file");
   const payloads = await new Promise((resolve, reject) => {
-    const timeout = setTimeout(() => reject(new Error("Physical spike server startup timed out.")), 10_000);
+    const timeout = setTimeout(
+      () => reject(new Error("Physical spike server startup timed out.")),
+      10_000,
+    );
     child.once("exit", (code) => {
       clearTimeout(timeout);
       reject(new Error(`Physical spike server exited with ${code}: ${stderr}`));
@@ -67,17 +79,23 @@ async function launchPhysicalServer(
 async function requestJSON(url, { method = "GET", headers = {}, body, ca } = {}) {
   const encodedBody = body === undefined ? undefined : Buffer.from(JSON.stringify(body));
   const response = await new Promise((resolve, reject) => {
-    const request = https.request(url, {
-      method,
-      ca,
-      headers: {
-        ...headers,
-        ...(encodedBody ? {
-          "content-type": "application/json",
-          "content-length": String(encodedBody.length),
-        } : {}),
+    const request = https.request(
+      url,
+      {
+        method,
+        ca,
+        headers: {
+          ...headers,
+          ...(encodedBody
+            ? {
+                "content-type": "application/json",
+                "content-length": String(encodedBody.length),
+              }
+            : {}),
+        },
       },
-    }, (incoming) => resolve(incoming));
+      (incoming) => resolve(incoming),
+    );
     request.once("error", reject);
     if (encodedBody) request.write(encodedBody);
     request.end();
@@ -126,7 +144,9 @@ test("physical identity survives process restart and encodes renewal, rotation, 
     const first = await launchPhysicalServer(identityDirectory, "original", true);
     assert.equal(first.pairingPayload.kind, "aiden-pairing-v1");
     assert.equal(first.pairingPayload.trust.mode, "private-ca");
-    assert.ok(Buffer.from(first.pairingPayload.trust.caCertificateDerBase64, "base64").length > 100);
+    assert.ok(
+      Buffer.from(first.pairingPayload.trust.caCertificateDerBase64, "base64").length > 100,
+    );
     const originalPin = first.bootstrap.serverSpkiSha256;
     await first.stop();
 
@@ -161,19 +181,15 @@ test("physical proof server can model a system-trusted Tailscale endpoint over a
   try {
     const endpoint = "https://aiden.tailnet.ts.net/api/aiden/v1";
     const fingerprint = `sha256/${randomBytes(32).toString("base64")}`;
-    server = await launchPhysicalServer(
-      identityDirectory,
-      "original",
-      true,
-      false,
-      [
-        "--phase6",
-        "--listen-http",
-        "--system-trust",
-        "--public-endpoint", endpoint,
-        "--public-spki-sha256", fingerprint,
-      ],
-    );
+    server = await launchPhysicalServer(identityDirectory, "original", true, false, [
+      "--phase6",
+      "--listen-http",
+      "--system-trust",
+      "--public-endpoint",
+      endpoint,
+      "--public-spki-sha256",
+      fingerprint,
+    ]);
     assert.equal(server.pairingPayload.trust.mode, "system");
     assert.deepEqual(Object.keys(server.pairingPayload.trust), ["mode"]);
     assert.equal(server.bootstrap.endpoint, endpoint);
@@ -185,7 +201,9 @@ test("physical proof server can model a system-trusted Tailscale endpoint over a
 });
 
 test("Phase 7 physical server consumes bounded attachment references exactly once", async () => {
-  const identityDirectory = await mkdtemp(path.join(os.tmpdir(), "aiden-physical-attachment-test-"));
+  const identityDirectory = await mkdtemp(
+    path.join(os.tmpdir(), "aiden-physical-attachment-test-"),
+  );
   let server;
   try {
     server = await launchPhysicalServer(identityDirectory, "original", true, true);
@@ -237,13 +255,15 @@ test("Phase 7 physical server consumes bounded attachment references exactly onc
       body: { text: "", attachmentIds: [uploaded.body.id] },
     });
     assert.equal(turn.status, 202);
-    assert.deepEqual(turn.body.message.attachments, [{
-      id: uploaded.body.id,
-      name: "proof.md",
-      mimeType: "text/markdown",
-      kind: "text",
-      size: 11,
-    }]);
+    assert.deepEqual(turn.body.message.attachments, [
+      {
+        id: uploaded.body.id,
+        name: "proof.md",
+        mimeType: "text/markdown",
+        kind: "text",
+        size: 11,
+      },
+    ]);
 
     const replay = await requestJSON(`${endpoint}/chats/${chat.body.id}/turns`, {
       ...authorized,
@@ -272,7 +292,9 @@ test("Phase 7 physical server consumes bounded attachment references exactly onc
 });
 
 test("physical auth revocation and re-pair rotation survive same-identity restarts", async () => {
-  const identityDirectory = await mkdtemp(path.join(os.tmpdir(), "aiden-physical-auth-restart-test-"));
+  const identityDirectory = await mkdtemp(
+    path.join(os.tmpdir(), "aiden-physical-auth-restart-test-"),
+  );
   const repairSecretPath = path.join(identityDirectory, "physical-repair-secret");
   await writeFile(repairSecretPath, randomBytes(32).toString("base64url"), {
     encoding: "utf8",
@@ -282,16 +304,17 @@ test("physical auth revocation and re-pair rotation survive same-identity restar
   let first;
   let restarted;
   try {
-    first = await launchPhysicalServer(
-      identityDirectory,
-      "original",
-      true,
-      true,
-      ["--persist-auth", "--repair-secret-file", repairSecretPath],
-    );
+    first = await launchPhysicalServer(identityDirectory, "original", true, true, [
+      "--persist-auth",
+      "--repair-secret-file",
+      repairSecretPath,
+    ]);
     assert.equal(first.repairPairingPayload.kind, "aiden-pairing-v1");
     assert.equal(first.repairPairingPayload.bootstrap.endpoint, first.bootstrap.endpoint);
-    assert.equal(first.repairPairingPayload.bootstrap.serverSpkiSha256, first.bootstrap.serverSpkiSha256);
+    assert.equal(
+      first.repairPairingPayload.bootstrap.serverSpkiSha256,
+      first.bootstrap.serverSpkiSha256,
+    );
     assert.notEqual(first.repairPairingPayload.bootstrap.secret, first.bootstrap.secret);
     const ca = new X509Certificate(
       Buffer.from(first.pairingPayload.trust.caCertificateDerBase64, "base64"),
@@ -309,21 +332,22 @@ test("physical auth revocation and re-pair rotation survive same-identity restar
     const authStatePath = path.join(identityDirectory, "physical-auth-state.json");
     const authStateText = await readFile(authStatePath, "utf8");
     assert.doesNotMatch(authStateText, new RegExp(exchange.body.credential, "u"));
-    assert.deepEqual(
-      Object.keys(JSON.parse(authStateText)).sort(),
-      ["credentialSha256", "revokedCredentialSha256", "version"],
-    );
+    assert.deepEqual(Object.keys(JSON.parse(authStateText)).sort(), [
+      "credentialSha256",
+      "revokedCredentialSha256",
+      "version",
+    ]);
     assert.equal(JSON.parse(authStateText).version, 2);
     assert.deepEqual(JSON.parse(authStateText).revokedCredentialSha256, []);
     assert.equal((await stat(authStatePath)).mode & 0o777, 0o600);
 
-    restarted = await launchPhysicalServer(
-      identityDirectory,
-      "original",
-      false,
-      true,
-      ["--persist-auth", "--port", port, "--repair-secret-file", repairSecretPath],
-    );
+    restarted = await launchPhysicalServer(identityDirectory, "original", false, true, [
+      "--persist-auth",
+      "--port",
+      port,
+      "--repair-secret-file",
+      repairSecretPath,
+    ]);
     assert.equal(restarted.bootstrap.serverSpkiSha256, originalPin);
     const repairPairingPayload = restarted.repairPairingPayload;
     const authorized = await requestJSON(`${restarted.bootstrap.endpoint}/server`, {
@@ -406,13 +430,11 @@ test("physical auth revocation and re-pair rotation survive same-identity restar
     assert.equal(repaired.status, 200);
 
     await restarted.stop();
-    restarted = await launchPhysicalServer(
-      identityDirectory,
-      "original",
-      false,
-      true,
-      ["--persist-auth", "--port", port],
-    );
+    restarted = await launchPhysicalServer(identityDirectory, "original", false, true, [
+      "--persist-auth",
+      "--port",
+      port,
+    ]);
     const repairedAfterRestart = await requestJSON(`${restarted.bootstrap.endpoint}/server`, {
       ca,
       headers: {

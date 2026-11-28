@@ -804,7 +804,10 @@ export class CodexProviderService {
       const prepared = await this.prepareIsolatedStream(model, options);
       const source = provider.streamSimple(prepared.model, normalizeContext(context), {
         ...prepared.options,
-        transport: inProcessCodexTransport(options?.transport, { baseUrl: prepared.model.baseUrl, env: prepared.options.env }),
+        transport: inProcessCodexTransport(options?.transport, {
+          baseUrl: prepared.model.baseUrl,
+          env: prepared.options.env,
+        }),
       });
       void source
         .result()

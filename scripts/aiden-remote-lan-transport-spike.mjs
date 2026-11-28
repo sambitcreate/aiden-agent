@@ -30,8 +30,33 @@ export function assertCertificateCurrentlyValid(certificatePem, now = new Date()
 async function createCertificateAuthority(directory) {
   const keyPath = path.join(directory, "ca.key.pem");
   const certificatePath = path.join(directory, "ca.certificate.pem");
-  await execFileAsync("openssl", ["ecparam", "-name", "prime256v1", "-genkey", "-noout", "-out", keyPath]);
-  await execFileAsync("openssl", ["req", "-x509", "-new", "-key", keyPath, "-sha256", "-days", "3650", "-subj", "/CN=Aiden Phase 0 Local CA", "-addext", "basicConstraints=critical,CA:TRUE,pathlen:0", "-addext", "keyUsage=critical,keyCertSign,cRLSign", "-out", certificatePath]);
+  await execFileAsync("openssl", [
+    "ecparam",
+    "-name",
+    "prime256v1",
+    "-genkey",
+    "-noout",
+    "-out",
+    keyPath,
+  ]);
+  await execFileAsync("openssl", [
+    "req",
+    "-x509",
+    "-new",
+    "-key",
+    keyPath,
+    "-sha256",
+    "-days",
+    "3650",
+    "-subj",
+    "/CN=Aiden Phase 0 Local CA",
+    "-addext",
+    "basicConstraints=critical,CA:TRUE,pathlen:0",
+    "-addext",
+    "keyUsage=critical,keyCertSign,cRLSign",
+    "-out",
+    certificatePath,
+  ]);
   return { keyPath, certificatePath, certificate: await readFile(certificatePath, "utf8") };
 }
 
@@ -58,9 +83,27 @@ async function issueCertificate(directory, name, certificateAuthority, keyPath) 
     "keyUsage=critical,digitalSignature",
     "-addext",
     "extendedKeyUsage=serverAuth",
-    "-out", requestPath,
+    "-out",
+    requestPath,
   ]);
-  await execFileAsync("openssl", ["x509", "-req", "-in", requestPath, "-CA", certificateAuthority.certificatePath, "-CAkey", certificateAuthority.keyPath, "-CAcreateserial", "-days", "30", "-sha256", "-copy_extensions", "copy", "-out", certificatePath]);
+  await execFileAsync("openssl", [
+    "x509",
+    "-req",
+    "-in",
+    requestPath,
+    "-CA",
+    certificateAuthority.certificatePath,
+    "-CAkey",
+    certificateAuthority.keyPath,
+    "-CAcreateserial",
+    "-days",
+    "30",
+    "-sha256",
+    "-copy_extensions",
+    "copy",
+    "-out",
+    certificatePath,
+  ]);
   const [privateKey, certificate] = await Promise.all([
     readFile(resolvedKeyPath, "utf8"),
     readFile(certificatePath, "utf8"),
@@ -107,11 +150,19 @@ async function withHttpsServer(identity, body, action) {
   try {
     return await action(`https://127.0.0.1:${address.port}/health`);
   } finally {
-    await new Promise((resolve, reject) => server.close((error) => (error ? reject(error) : resolve())));
+    await new Promise((resolve, reject) =>
+      server.close((error) => (error ? reject(error) : resolve())),
+    );
   }
 }
 
-export async function pinnedJsonRequest(url, certificatePem, caCertificatePem, expectedFingerprint, options = {}) {
+export async function pinnedJsonRequest(
+  url,
+  certificatePem,
+  caCertificatePem,
+  expectedFingerprint,
+  options = {},
+) {
   assertCertificateCurrentlyValid(certificatePem, options.now);
   return new Promise((resolve, reject) => {
     const request = https.get(
@@ -124,7 +175,9 @@ export async function pinnedJsonRequest(url, certificatePem, caCertificatePem, e
           if (standardError) return standardError;
           const actual = spkiSha256(certificate.raw);
           if (actual === expectedFingerprint) return undefined;
-          const error = new Error("Aiden server public-key fingerprint changed; re-pairing is required.");
+          const error = new Error(
+            "Aiden server public-key fingerprint changed; re-pairing is required.",
+          );
           error.code = "ERR_AIDEN_PIN_MISMATCH";
           return error;
         },
@@ -164,7 +217,12 @@ export async function runLanTransportSpike() {
   try {
     const certificateAuthority = await createCertificateAuthority(directory);
     const original = await issueCertificate(directory, "original", certificateAuthority);
-    const renewed = await issueCertificate(directory, "renewed", certificateAuthority, original.keyPath);
+    const renewed = await issueCertificate(
+      directory,
+      "renewed",
+      certificateAuthority,
+      original.keyPath,
+    );
     const rotated = await issueCertificate(directory, "rotated", certificateAuthority);
     // Reload from persisted key/certificate files rather than retaining the issued object.
     // The companion process-spawn test proves this same identity survives a real process boundary.
@@ -175,29 +233,61 @@ export async function runLanTransportSpike() {
       original.keyPath,
     );
 
-    const originalResponse = await withHttpsServer(original, { ok: true, identity: "original" }, (url) =>
-      pinnedJsonRequest(url, original.certificate, original.caCertificate, original.fingerprint),
+    const originalResponse = await withHttpsServer(
+      original,
+      { ok: true, identity: "original" },
+      (url) =>
+        pinnedJsonRequest(url, original.certificate, original.caCertificate, original.fingerprint),
     );
-    const renewedResponse = await withHttpsServer(renewed, { ok: true, identity: "renewed" }, (url) =>
-      pinnedJsonRequest(url, renewed.certificate, renewed.caCertificate, original.fingerprint),
+    const renewedResponse = await withHttpsServer(
+      renewed,
+      { ok: true, identity: "renewed" },
+      (url) =>
+        pinnedJsonRequest(url, renewed.certificate, renewed.caCertificate, original.fingerprint),
     );
-    const restartedResponse = await withHttpsServer(restarted, { ok: true, identity: "restart" }, (url) =>
-      pinnedJsonRequest(url, restarted.certificate, restarted.caCertificate, original.fingerprint),
+    const restartedResponse = await withHttpsServer(
+      restarted,
+      { ok: true, identity: "restart" },
+      (url) =>
+        pinnedJsonRequest(
+          url,
+          restarted.certificate,
+          restarted.caCertificate,
+          original.fingerprint,
+        ),
     );
     const wrongPinRejected = await withHttpsServer(original, { ok: true }, (url) =>
-      rejected(() => pinnedJsonRequest(url, original.certificate, original.caCertificate, rotated.fingerprint)),
+      rejected(() =>
+        pinnedJsonRequest(url, original.certificate, original.caCertificate, rotated.fingerprint),
+      ),
     );
     const rotatedKeyRejected = await withHttpsServer(rotated, { ok: true }, (url) =>
-      rejected(() => pinnedJsonRequest(url, rotated.certificate, rotated.caCertificate, original.fingerprint)),
+      rejected(() =>
+        pinnedJsonRequest(url, rotated.certificate, rotated.caCertificate, original.fingerprint),
+      ),
     );
-    const repairedResponse = await withHttpsServer(rotated, { ok: true, identity: "repaired" }, (url) =>
-      pinnedJsonRequest(url, rotated.certificate, rotated.caCertificate, rotated.fingerprint),
+    const repairedResponse = await withHttpsServer(
+      rotated,
+      { ok: true, identity: "repaired" },
+      (url) =>
+        pinnedJsonRequest(url, rotated.certificate, rotated.caCertificate, rotated.fingerprint),
     );
     const wrongHostRejected = await withHttpsServer(original, { ok: true }, (url) =>
-      rejected(() => pinnedJsonRequest(url.replace("127.0.0.1", "localhost"), original.certificate, original.caCertificate, original.fingerprint)),
+      rejected(() =>
+        pinnedJsonRequest(
+          url.replace("127.0.0.1", "localhost"),
+          original.certificate,
+          original.caCertificate,
+          original.fingerprint,
+        ),
+      ),
     );
     const expiredCertificateRejected = await withHttpsServer(original, { ok: true }, (url) =>
-      rejected(() => pinnedJsonRequest(url, original.certificate, original.caCertificate, original.fingerprint, { now: new Date("2100-01-01T00:00:00Z") })),
+      rejected(() =>
+        pinnedJsonRequest(url, original.certificate, original.caCertificate, original.fingerprint, {
+          now: new Date("2100-01-01T00:00:00Z"),
+        }),
+      ),
     );
 
     return {
@@ -224,7 +314,11 @@ const isMain = process.argv[1] && fileURLToPath(import.meta.url) === path.resolv
 if (isMain) {
   const result = await runLanTransportSpike();
   process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
-  if (!Object.values(result).every((value) => value === true || typeof value === "string" || value === 1)) {
+  if (
+    !Object.values(result).every(
+      (value) => value === true || typeof value === "string" || value === 1,
+    )
+  ) {
     process.exitCode = 1;
   }
 }

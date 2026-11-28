@@ -37,7 +37,9 @@ function memoryStorageFactory(files: Map<string, MemoryFile>, generationFields =
       async write(expected, contents) {
         if (expected !== file.generation) throw new Error("destination changed");
         file.counter += 1;
-        file.generation = Array.from({ length: generationFields }, () => file.counter.toString(16)).join("-");
+        file.generation = Array.from({ length: generationFields }, () =>
+          file.counter.toString(16),
+        ).join("-");
         file.contents = Buffer.from(contents, "utf8");
         return file.generation;
       },
@@ -49,10 +51,7 @@ function memoryStorageFactory(files: Map<string, MemoryFile>, generationFields =
 
 test("production V2 switch is effective and either rollback switch selects only V1", () => {
   assert.equal(productionSubagentRunStoreSelection({}), "v2");
-  assert.equal(
-    productionSubagentRunStoreSelection({ AIDEN_SUBAGENTS_V2_ENABLED: " 0 " }),
-    "v1",
-  );
+  assert.equal(productionSubagentRunStoreSelection({ AIDEN_SUBAGENTS_V2_ENABLED: " 0 " }), "v1");
   assert.equal(
     productionSubagentRunStoreSelection({
       AIDEN_SUBAGENTS_ENABLED: "0",

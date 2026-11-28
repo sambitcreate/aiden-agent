@@ -96,7 +96,12 @@ test("computeThumbnailResizeTarget and finalizeGrabThumbnail cap longest edge at
   const factory: NativeImageFactory = {
     createFromBitmap: (_buf, opts) => {
       bitmapRecreated = true;
-      return makeMockImage(opts.width, opts.height, Buffer.alloc(MAX_GRABBED_ELEMENT_THUMBNAIL_BYTES + 100), Buffer.from("/9j/small"));
+      return makeMockImage(
+        opts.width,
+        opts.height,
+        Buffer.alloc(MAX_GRABBED_ELEMENT_THUMBNAIL_BYTES + 100),
+        Buffer.from("/9j/small"),
+      );
     },
   };
 

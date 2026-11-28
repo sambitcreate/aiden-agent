@@ -1,6 +1,18 @@
 import { InMemorySessionRepo } from "./pi-session-repository-port.js";
 import assert from "node:assert/strict";
-import { appendFile, chmod, mkdtemp, mkdir, readFile, readdir, rm, stat, symlink, unlink, writeFile } from "node:fs/promises";
+import {
+  appendFile,
+  chmod,
+  mkdtemp,
+  mkdir,
+  readFile,
+  readdir,
+  rm,
+  stat,
+  symlink,
+  unlink,
+  writeFile,
+} from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -25,8 +37,15 @@ import {
   type PiCompactionEvent,
 } from "./pi-compaction-core.js";
 import { VccError } from "./pi-vcc/errors.js";
-import { CompactionError, DEFAULT_COMPACTION_SETTINGS, prepareCompaction } from "./pi-legacy-harness.js";
-import { DEFAULT_COMPACTION_KEEP_RECENT_TOKENS, DEFAULT_COMPACTION_RESERVE_TOKENS } from "../../renderer/shared/compaction.js";
+import {
+  CompactionError,
+  DEFAULT_COMPACTION_SETTINGS,
+  prepareCompaction,
+} from "./pi-legacy-harness.js";
+import {
+  DEFAULT_COMPACTION_KEEP_RECENT_TOKENS,
+  DEFAULT_COMPACTION_RESERVE_TOKENS,
+} from "../../renderer/shared/compaction.js";
 import {
   AIDEN_CHAT_MESSAGE_MARKER,
   AIDEN_PI_TRANSACTION,
@@ -47,10 +66,19 @@ import { migratePiSessionJournal } from "./pi-session-migration.js";
 import { upgradeOldPiV4File } from "./pi-session-v4-upgrade.js";
 import { withJournaledCanvasStatusNote } from "./design-canvas/status-note.js";
 import { CANVAS_STATUS_SECTION } from "../../renderer/shared/design-canvas/canvas-summary.js";
-import { DESIGN_PAGE_INSPECT_SECTION, withDesignInspectNote } from "./design-canvas/inspect-note.js";
+import {
+  DESIGN_PAGE_INSPECT_SECTION,
+  withDesignInspectNote,
+} from "./design-canvas/inspect-note.js";
 import { ON_DEMAND_DECLARED_ENTRY, onDemandDeclaredOfBranch } from "./on-demand-tools.js";
 import { hookContextMessage } from "./workspace-chat-hooks.js";
-import { chatStateRecord, chatStateUpdateMessage, memoryFactLinesInBranch, withoutForgottenFactsSession, type ChatTurnState } from "./chat-frozen-state.js";
+import {
+  chatStateRecord,
+  chatStateUpdateMessage,
+  memoryFactLinesInBranch,
+  withoutForgottenFactsSession,
+  type ChatTurnState,
+} from "./chat-frozen-state.js";
 import { compileVcc } from "./pi-vcc/compiler.js";
 import { rememberStableHead, withPromptCacheBreakpoints } from "./prompt-cache-breakpoints.js";
 
@@ -177,17 +205,28 @@ test("Pi coordinator appends a native checkpoint and rebuilds from it", async ()
  * fact the person has since removed, and whose recent tail holds one that
  * added a fact still approved.
  */
-async function historyWithMemoryUpdates(session: PiSessionPort, model: Model<Api>): Promise<AssistantMessage> {
+async function historyWithMemoryUpdates(
+  session: PiSessionPort,
+  model: Model<Api>,
+): Promise<AssistantMessage> {
   const state: ChatTurnState = { branch: "main", permission: "ask", memory: "", canvas: "" };
   const withFact = (line: string): ChatTurnState => ({ ...state, memory: `Memory:\n${line}` });
   await session.appendMessage(user(`old: ${"x".repeat(1_200)}`, 1));
   await session.appendMessage(
-    chatStateUpdateMessage(chatStateRecord(state), withFact("- [memory:m2] REMOVED_FACT_CANARY deploys on Fridays."), 2),
+    chatStateUpdateMessage(
+      chatStateRecord(state),
+      withFact("- [memory:m2] REMOVED_FACT_CANARY deploys on Fridays."),
+      2,
+    ),
   );
   await session.appendMessage(assistant(model, { input: 400, text: "middle", timestamp: 3 }));
   await session.appendMessage(user(`latest: ${"y".repeat(500)}`, 4));
   await session.appendMessage(
-    chatStateUpdateMessage(chatStateRecord(state), withFact("- [memory:m3] KEPT_FACT_CANARY uses pnpm."), 5),
+    chatStateUpdateMessage(
+      chatStateRecord(state),
+      withFact("- [memory:m3] KEPT_FACT_CANARY uses pnpm."),
+      5,
+    ),
   );
   const last = assistant(model, { input: 950, text: "answer", timestamp: 6 });
   await session.appendMessage(last);
@@ -214,13 +253,16 @@ for (const trigger of ["automatic", "manual"] as const) {
       settings: { enabled: true, reserveTokens: 100, keepRecentTokens: 100 },
     });
 
-    const result = trigger === "automatic" ? await coordinator.check(last) : await coordinator.compact();
+    const result =
+      trigger === "automatic" ? await coordinator.check(last) : await coordinator.compact();
 
     assert.equal(result.compacted, true, result.errorMessage);
     assert.equal(requests.length, 1);
     assert.match(requests[0]!, /old: x/u, "the older history is summarized");
     assert.doesNotMatch(requests[0]!, /REMOVED_FACT_CANARY|KEPT_FACT_CANARY|\[memory:/u);
-    const checkpoint = [...(await session.getEntries())].reverse().find((entry) => entry.type === "compaction");
+    const checkpoint = [...(await session.getEntries())]
+      .reverse()
+      .find((entry) => entry.type === "compaction");
     assert.ok(checkpoint?.type === "compaction");
     assert.doesNotMatch(checkpoint.summary, /REMOVED_FACT_CANARY/u);
     assert.match(
@@ -234,10 +276,15 @@ for (const trigger of ["automatic", "manual"] as const) {
 test("a summary does not keep a removed fact the chat also stated, when the turn reads the journal with it projected out", async () => {
   const { faux, models, model } = compactionFixture();
   faux.setResponses([
-    () => fauxAssistantMessage(`${structuredSummary("Continue.")}\n- REMOVED_FACT_CANARY deploys on Fridays.`),
+    () =>
+      fauxAssistantMessage(
+        `${structuredSummary("Continue.")}\n- REMOVED_FACT_CANARY deploys on Fridays.`,
+      ),
   ]);
   const journal = await memorySession("memory-facts-forgotten");
-  await journal.appendMessage(user("REMOVED_FACT_CANARY deploys on Fridays, so plan around it.", 0));
+  await journal.appendMessage(
+    user("REMOVED_FACT_CANARY deploys on Fridays, so plan around it.", 0),
+  );
   await historyWithMemoryUpdates(journal, model);
   // The person removed m2; the turn reads the journal without it.
   const current: ChatTurnState = {
@@ -256,7 +303,9 @@ test("a summary does not keep a removed fact the chat also stated, when the turn
   }).compact();
 
   assert.equal(result.compacted, true, result.errorMessage);
-  const checkpoint = [...(await journal.getEntries())].reverse().find((entry) => entry.type === "compaction");
+  const checkpoint = [...(await journal.getEntries())]
+    .reverse()
+    .find((entry) => entry.type === "compaction");
   assert.ok(checkpoint?.type === "compaction");
   assert.doesNotMatch(checkpoint.summary, /REMOVED_FACT_CANARY/u);
   assert.match(checkpoint.summary, /Continue\./u, "the rest of the summary is kept");
@@ -273,14 +322,19 @@ test("a local compaction keeps a retained tail whose state update carries a memo
     thinkingLevel: "off",
     engine: "vcc",
     settings: { enabled: true, reserveTokens: 100, keepRecentTokens: 100 },
-    compileVcc: async (input) => compileVcc(input) as unknown as Awaited<
-      ReturnType<NonNullable<ConstructorParameters<typeof PiCompactionCoordinator>[0]["compileVcc"]>>
-    >,
+    compileVcc: async (input) =>
+      compileVcc(input) as unknown as Awaited<
+        ReturnType<
+          NonNullable<ConstructorParameters<typeof PiCompactionCoordinator>[0]["compileVcc"]>
+        >
+      >,
   }).check(last);
 
   assert.equal(result.compacted, true, result.errorMessage);
   assert.equal(faux.state.callCount, 0);
-  const checkpoint = [...(await session.getEntries())].reverse().find((entry) => entry.type === "compaction");
+  const checkpoint = [...(await session.getEntries())]
+    .reverse()
+    .find((entry) => entry.type === "compaction");
   assert.ok(checkpoint?.type === "compaction");
   assert.doesNotMatch(checkpoint.summary, /REMOVED_FACT_CANARY|KEPT_FACT_CANARY/u);
   assert.match(JSON.stringify(checkpoint.retainedTail), /KEPT_FACT_CANARY/u);
@@ -573,9 +627,11 @@ test("raising the output limit does not compact a prior output-limited turn on C
   assert.equal(repaired.compacted, false);
   assert.equal(repaired.shouldRetry, false);
   assert.equal(repaired.errorMessage, undefined);
-  assert.ok(repaired.messages?.some(
-    (message) => message.role === "assistant" && message.stopReason === "length",
-  ));
+  assert.ok(
+    repaired.messages?.some(
+      (message) => message.role === "assistant" && message.stopReason === "length",
+    ),
+  );
   await session.appendMessage(user("Continue"));
   assert.equal((await coordinator.checkContextPressure()).compacted, false);
   assert.equal(faux.state.callCount, 0, "no summary request is needed at low context usage");
@@ -749,7 +805,13 @@ test("a usage limit the wait gave up on fails once with its reset time instead o
   const window = "429 You have hit your ChatGPT usage limit (plus plan). Try again in ~420 min.";
 
   // Seven hours away, past the six-hour longest wait: the wait gives up at once.
-  const gaveUp = await (await withUsageLimitWait(rejected(window), limits(6))(model, normalizeContext({ messages: [] }), {})).result();
+  const gaveUp = await (
+    await withUsageLimitWait(rejected(window), limits(6))(
+      model,
+      normalizeContext({ messages: [] }),
+      {},
+    )
+  ).result();
   const checked = await coordinator.check(gaveUp, { liveMessages: [request, gaveUp] });
   assert.equal(checked.shouldRetry, false);
   assert.notEqual(checked.failureCode, "retry-exhausted");
@@ -757,7 +819,13 @@ test("a usage limit the wait gave up on fails once with its reset time instead o
   assert.equal(sends, 1);
 
   // With waiting off the same rejection is an ordinary failure, retried as before.
-  const plain = await (await withUsageLimitWait(rejected(window), limits(0))(model, normalizeContext({ messages: [] }), {})).result();
+  const plain = await (
+    await withUsageLimitWait(rejected(window), limits(0))(
+      model,
+      normalizeContext({ messages: [] }),
+      {},
+    )
+  ).result();
   const retried = await coordinator.check(plain, { liveMessages: [request, plain] });
   assert.equal(retried.shouldRetry, true);
 });
@@ -769,7 +837,12 @@ test("a timed-out request is tried three times in all", async () => {
   await session.appendMessage(request);
   const coordinator = new PiCompactionCoordinator({ session, models, model, thinkingLevel: "off" });
   const timeout = (timestamp: number) =>
-    assistant(model, { stopReason: "error", errorMessage: "Request timed out.", input: 10, timestamp });
+    assistant(model, {
+      stopReason: "error",
+      errorMessage: "Request timed out.",
+      input: 10,
+      timestamp,
+    });
   const first = await coordinator.check(timeout(20), { liveMessages: [request, timeout(20)] });
   assert.deepEqual([first.shouldRetry, first.retryAttempt, first.maxAttempts], [true, 2, 3]);
   const second = await coordinator.check(timeout(21), { liveMessages: [request, timeout(21)] });
@@ -796,7 +869,12 @@ test("an answer between failures starts a fresh set of retries", async () => {
   const first = await coordinator.check(failure(20), { liveMessages: [request, failure(20)] });
   assert.equal(first.shouldRetry, true);
   // The retried request answered with a tool call, and a later request failed.
-  const step = assistant(model, { stopReason: "toolUse", text: "checking", input: 10, timestamp: 21 });
+  const step = assistant(model, {
+    stopReason: "toolUse",
+    text: "checking",
+    input: 10,
+    timestamp: 21,
+  });
   const later = await coordinator.check(failure(22), {
     liveMessages: [request, step, failure(22)],
   });
@@ -817,7 +895,12 @@ test("an answer between failures starts a fresh set of retries", async () => {
   });
   assert.equal(beforeCompaction.shouldRetry, true);
   const summary = user("Summary of the earlier conversation", 10);
-  const answered = assistant(model, { stopReason: "toolUse", text: "found it", input: 10, timestamp: 31 });
+  const answered = assistant(model, {
+    stopReason: "toolUse",
+    text: "found it",
+    input: 10,
+    timestamp: 31,
+  });
   const afterCompaction = await coordinator.check(failure(32), {
     liveMessages: [summary, answered, failure(32)],
   });
@@ -839,11 +922,16 @@ test("a new prompt starts with every retry even when the last one was stopped mi
   });
   const failure = (timestamp: number) =>
     assistant(model, { stopReason: "error", errorMessage: "fetch failed", input: 10, timestamp });
-  assert.equal((await coordinator.check(failure(20), { liveMessages: [request, failure(20)] })).shouldRetry, true);
+  assert.equal(
+    (await coordinator.check(failure(20), { liveMessages: [request, failure(20)] })).shouldRetry,
+    true,
+  );
   // Stop during the wait: no answer and no give-up reaches the coordinator.
   coordinator.beginPrompt();
   const next = user("second question", 10);
-  const result = await coordinator.check(failure(30), { liveMessages: [request, next, failure(30)] });
+  const result = await coordinator.check(failure(30), {
+    liveMessages: [request, next, failure(30)],
+  });
   assert.equal(result.shouldRetry, true);
   assert.equal(result.retryAttempt, 2);
 });
@@ -865,7 +953,12 @@ test("text kept from a dropped stream is not an answer that starts fresh retries
   const first = await coordinator.check(failure(20), { liveMessages: [request, failure(20)] });
   assert.equal(first.shouldRetry, true);
   // The dropped stream's text was kept as a cut-off reply, then the continuation failed too.
-  const kept = assistant(model, { stopReason: "length", text: "half of it", input: 10, timestamp: 21 });
+  const kept = assistant(model, {
+    stopReason: "length",
+    text: "half of it",
+    input: 10,
+    timestamp: 21,
+  });
   const continued = user("continue", 22);
   const again = await coordinator.check(failure(23), {
     liveMessages: [request, kept, continued, failure(23)],
@@ -956,11 +1049,7 @@ test("transient hidden summary failure retries once with upstream request isolat
   );
   assert.equal(typeof requestOptions[0]?.sessionId, "string");
   assert.equal(requestOptions[1]?.sessionId, requestOptions[0]?.sessionId);
-  assert.deepEqual(retryEvents, [
-    "scheduled:1:1:0:terminated",
-    "started",
-    "finished:true:1:",
-  ]);
+  assert.deepEqual(retryEvents, ["scheduled:1:1:0:terminated", "started", "finished:true:1:"]);
 });
 
 test("transient hidden summary retry exhaustion is bounded and non-destructive", async () => {
@@ -1334,7 +1423,9 @@ test("retained system updates after the usage anchor count toward pre-prompt and
       const session = await memorySession(id);
       await session.appendMessage(user(`old ${"x".repeat(1_200)}`, 10));
       // Threshold is 900 (window 1,000, reserve 100); the anchor sits under it.
-      await session.appendMessage(assistant(pressureModel, { input: 700, output: 0, timestamp: 20 }));
+      await session.appendMessage(
+        assistant(pressureModel, { input: 700, output: 0, timestamp: 20 }),
+      );
       await session.appendMessage(agentsRevision("A".repeat(1_000), 30));
       let last: AssistantMessage | undefined;
       if (zeroUsageTail) {
@@ -1365,10 +1456,16 @@ test("retained system updates after the usage anchor count toward pre-prompt and
 
   // Direct usage from the previous assistant, then two revisions.
   assert.deepEqual(await pressure(model, false), { preCompacted: false, postCompacted: false });
-  assert.deepEqual(await pressure(retainingModel, false), { preCompacted: true, postCompacted: true });
+  assert.deepEqual(await pressure(retainingModel, false), {
+    preCompacted: true,
+    postCompacted: true,
+  });
   // A zero-usage response leaves the 700-token anchor stale before both revisions.
   assert.deepEqual(await pressure(model, true), { preCompacted: false, postCompacted: false });
-  assert.deepEqual(await pressure(retainingModel, true), { preCompacted: true, postCompacted: true });
+  assert.deepEqual(await pressure(retainingModel, true), {
+    preCompacted: true,
+    postCompacted: true,
+  });
 });
 
 test("feasible default compaction settings keep Pi's fixed 16384 token reserve", async () => {
@@ -1496,16 +1593,26 @@ test("cancellation racing checkpoint append restores the exact prior branch leaf
 
   assert.equal(result.compacted, false);
   assert.equal(await session.getLeafId(), priorLeaf);
-  assert.equal((await session.getBranch()).some((entry) => entry.type === "compaction"), false);
+  assert.equal(
+    (await session.getBranch()).some((entry) => entry.type === "compaction"),
+    false,
+  );
 });
 
-for (const failure of ["before-append", "after-append", "reconstruction", "cancelled-reconstruction"] as const) {
+for (const failure of [
+  "before-append",
+  "after-append",
+  "reconstruction",
+  "cancelled-reconstruction",
+] as const) {
   test(`failed checkpoint publication restores durable context: ${failure}`, async (t) => {
     const root = await mkdtemp(path.join(os.tmpdir(), "aiden-checkpoint-rollback-"));
     t.after(() => rm(root, { recursive: true, force: true }));
     const { faux, models, model } = compactionFixture();
     faux.setResponses([fauxAssistantMessage(structuredSummary("must not become active"))]);
-    const session = await new PiCompactionSessionStore({ root: async () => root }).openChat("rollback-test");
+    const session = await new PiCompactionSessionStore({ root: async () => root }).openChat(
+      "rollback-test",
+    );
     await appendCompressibleHistory(session, model);
     const priorLeaf = await session.getLeafId();
     const priorContext = await session.buildContext();
@@ -1523,7 +1630,10 @@ for (const failure of ["before-append", "after-append", "reconstruction", "cance
     };
     const events: PiCompactionEvent[] = [];
     coordinator = new PiCompactionCoordinator({
-      session, models, model, thinkingLevel: "off",
+      session,
+      models,
+      model,
+      thinkingLevel: "off",
       settings: { enabled: true, reserveTokens: 100, keepRecentTokens: 100 },
       onEvent: (event) => events.push(event),
     });
@@ -1535,10 +1645,15 @@ for (const failure of ["before-append", "after-append", "reconstruction", "cance
     assert.equal(result.failureCode, "session-failed");
     assert.doesNotMatch(JSON.stringify({ result, events }), /private /u);
     assert.equal(await session.getLeafId(), priorLeaf);
-    const reopened = await new PiCompactionSessionStore({ root: async () => root }).openChat("rollback-test");
+    const reopened = await new PiCompactionSessionStore({ root: async () => root }).openChat(
+      "rollback-test",
+    );
     assert.equal(await reopened.getLeafId(), priorLeaf);
     assert.deepEqual(await reopened.buildContext(), priorContext);
-    assert.equal((await reopened.getBranch()).some((entry) => entry.type === "compaction"), false);
+    assert.equal(
+      (await reopened.getBranch()).some((entry) => entry.type === "compaction"),
+      false,
+    );
     assert.equal(
       (await reopened.getEntries()).filter((entry) => entry.type === "compaction").length,
       failure === "before-append" ? 0 : 1,
@@ -1563,11 +1678,18 @@ test("failed checkpoint rollback preserves a newer journal leaf", async () => {
     newerLeaf = await session.appendMessage(user("newer durable evidence"));
     return checkpoint;
   };
-  session.buildContext = async () => { throw new Error("private reconstruction failure"); };
+  session.buildContext = async () => {
+    throw new Error("private reconstruction failure");
+  };
   let rollbackCalls = 0;
-  session.moveTo = async () => { rollbackCalls += 1; };
+  session.moveTo = async () => {
+    rollbackCalls += 1;
+  };
   const coordinator = new PiCompactionCoordinator({
-    session, models, model, thinkingLevel: "off",
+    session,
+    models,
+    model,
+    thinkingLevel: "off",
     settings: { enabled: true, reserveTokens: 100, keepRecentTokens: 100 },
   });
 
@@ -1584,14 +1706,19 @@ test("checkpoint rollback failure remains a closed session failure", async () =>
   faux.setResponses([fauxAssistantMessage(structuredSummary("checkpoint"))]);
   const session = await memorySession("checkpoint-rollback-failure");
   await appendCompressibleHistory(session, model);
-  session.buildContext = async () => { throw new Error("private reconstruction failure"); };
+  session.buildContext = async () => {
+    throw new Error("private reconstruction failure");
+  };
   let rollbackCalls = 0;
   session.moveTo = async () => {
     rollbackCalls += 1;
     throw new Error("private rollback failure");
   };
   const coordinator = new PiCompactionCoordinator({
-    session, models, model, thinkingLevel: "off",
+    session,
+    models,
+    model,
+    thinkingLevel: "off",
     settings: { enabled: true, reserveTokens: 100, keepRecentTokens: 100 },
   });
 
@@ -1638,8 +1765,14 @@ test("host messages that follow a chat message are journaled right after it, onc
   await syncChatMessagesToPiSession(session, [prompt], model, false, new Map(), following);
   await syncChatMessagesToPiSession(session, [prompt, reply], model, false);
 
-  const sent = (await session.buildContext()).messages.map((message) => [message.role, JSON.stringify(message)]);
-  assert.deepEqual(sent.map(([role]) => role), ["user", "custom", "assistant"]);
+  const sent = (await session.buildContext()).messages.map((message) => [
+    message.role,
+    JSON.stringify(message),
+  ]);
+  assert.deepEqual(
+    sent.map(([role]) => role),
+    ["user", "custom", "assistant"],
+  );
   assert.match(sent[1]![1]!, /OPS-12/u);
 });
 
@@ -1648,7 +1781,10 @@ test("entries that precede a chat message share its append: before it, once, and
   const session = await memorySession();
   const prompt: ChatMessage = { id: "user-1", role: "user", content: "Hello", createdAt: 10 };
   const preceding = new Map([["user-1", [{ customType: "test.head", data: { n: 1 } }]]]);
-  const heads = async () => (await session.getBranch()).filter((entry) => entry.type === "custom" && entry.customType === "test.head");
+  const heads = async () =>
+    (await session.getBranch()).filter(
+      (entry) => entry.type === "custom" && entry.customType === "test.head",
+    );
 
   // The marker append fails: the head entry rolls back with the prompt.
   const appendCustom = session.appendCustomEntry.bind(session);
@@ -1656,17 +1792,41 @@ test("entries that precede a chat message share its append: before it, once, and
     if (customType === AIDEN_CHAT_MESSAGE_MARKER) throw new Error("injected marker failure");
     return appendCustom(customType, data);
   };
-  await assert.rejects(syncChatMessagesToPiSession(session, [prompt], model, false, new Map(), new Map(), preceding), /marker failure/u);
+  await assert.rejects(
+    syncChatMessagesToPiSession(session, [prompt], model, false, new Map(), new Map(), preceding),
+    /marker failure/u,
+  );
   assert.equal((await heads()).length, 0, "no head is left without its prompt");
   session.appendCustomEntry = appendCustom;
 
-  await syncChatMessagesToPiSession(session, [prompt], model, false, new Map(), new Map(), preceding);
+  await syncChatMessagesToPiSession(
+    session,
+    [prompt],
+    model,
+    false,
+    new Map(),
+    new Map(),
+    preceding,
+  );
   // A retry of the held prompt with a different head records neither.
-  await syncChatMessagesToPiSession(session, [prompt], model, false, new Map(), new Map(), new Map([["user-1", [{ customType: "test.head", data: { n: 2 } }]]]));
+  await syncChatMessagesToPiSession(
+    session,
+    [prompt],
+    model,
+    false,
+    new Map(),
+    new Map(),
+    new Map([["user-1", [{ customType: "test.head", data: { n: 2 } }]]]),
+  );
   const branch = await session.getBranch();
-  const head = branch.findIndex((entry) => entry.type === "custom" && entry.customType === "test.head");
+  const head = branch.findIndex(
+    (entry) => entry.type === "custom" && entry.customType === "test.head",
+  );
   const message = branch.findIndex((entry) => entry.type === "message");
-  assert.deepEqual((await heads()).map((entry) => (entry as { data: unknown }).data), [{ n: 1 }]);
+  assert.deepEqual(
+    (await heads()).map((entry) => (entry as { data: unknown }).data),
+    [{ n: 1 }],
+  );
   assert.ok(head >= 0 && head < message, "the head precedes its prompt");
 });
 
@@ -1824,43 +1984,76 @@ test("Stop's terminal never waits on an unresolved queued-guidance save", async 
 });
 
 test("compaction transport awaits exactly one usage record for success, errors and aborts", async () => {
-for (const registered of [false, true]) for (const reason of ["stop", "error", "aborted"] as const) {
-  let releaseAccounting!: () => void;
-  const gate = new Promise<void>((resolve) => { releaseAccounting = resolve; });
-  let started = 0;
-  let finished = 0;
-  let dispatched = 0;
-  const model = { id: "offline", provider: "offline", api: "openai-completions" } as ResolvedModelRuntime["model"];
-  const message: AssistantMessage = { ...fauxAssistantMessage("synthetic summary"), stopReason: reason,
-    usage: { input: 23, output: 7, cacheRead: 11, cacheWrite: 3, totalTokens: 44, cost: { input: 0.023, output: 0.007, cacheRead: 0.0011, cacheWrite: 0.003, total: 0.0341 } } };
-  const stream = (): AssistantMessageEventStream => {
-    dispatched += 1;
-    const result = createAssistantMessageEventStream();
-    if (reason === "stop") result.push({ type: "done", reason, message });
-    else result.push({ type: "error", reason, error: message });
-    result.end(message); return result;
-  };
-  const runtime = { model, models: { getModel: () => registered ? model : undefined, streamSimple: stream }, streams: { streamSimple: stream }, apiKey: "offline-noncredential" } as unknown as ResolvedModelRuntime;
-  const accounted = createPiCompactionModels(runtime, async (response) => {
-    started += 1;
-    assert.equal(response.usage.totalTokens, 44);
-    await gate;
-    finished += 1;
-  });
-  const result = accounted.streamSimple(model, { messages: [] });
-  let published = false;
-  const first = result.result().then((value) => { published = true; return value; });
-  const second = result.result();
-  await Promise.resolve(); await Promise.resolve();
-  assert.equal(started, 1);
-  assert.equal(published, false, "terminal result cannot finish before accounting completes");
-  releaseAccounting();
-  const messages = await Promise.all([first, second]);
-  assert.equal(messages[0], messages[1]);
-  assert.equal(messages[0].stopReason, reason);
-  assert.equal(dispatched, 1);
-  assert.equal(finished, 1);
-}
+  for (const registered of [false, true])
+    for (const reason of ["stop", "error", "aborted"] as const) {
+      let releaseAccounting!: () => void;
+      const gate = new Promise<void>((resolve) => {
+        releaseAccounting = resolve;
+      });
+      let started = 0;
+      let finished = 0;
+      let dispatched = 0;
+      const model = {
+        id: "offline",
+        provider: "offline",
+        api: "openai-completions",
+      } as ResolvedModelRuntime["model"];
+      const message: AssistantMessage = {
+        ...fauxAssistantMessage("synthetic summary"),
+        stopReason: reason,
+        usage: {
+          input: 23,
+          output: 7,
+          cacheRead: 11,
+          cacheWrite: 3,
+          totalTokens: 44,
+          cost: {
+            input: 0.023,
+            output: 0.007,
+            cacheRead: 0.0011,
+            cacheWrite: 0.003,
+            total: 0.0341,
+          },
+        },
+      };
+      const stream = (): AssistantMessageEventStream => {
+        dispatched += 1;
+        const result = createAssistantMessageEventStream();
+        if (reason === "stop") result.push({ type: "done", reason, message });
+        else result.push({ type: "error", reason, error: message });
+        result.end(message);
+        return result;
+      };
+      const runtime = {
+        model,
+        models: { getModel: () => (registered ? model : undefined), streamSimple: stream },
+        streams: { streamSimple: stream },
+        apiKey: "offline-noncredential",
+      } as unknown as ResolvedModelRuntime;
+      const accounted = createPiCompactionModels(runtime, async (response) => {
+        started += 1;
+        assert.equal(response.usage.totalTokens, 44);
+        await gate;
+        finished += 1;
+      });
+      const result = accounted.streamSimple(model, { messages: [] });
+      let published = false;
+      const first = result.result().then((value) => {
+        published = true;
+        return value;
+      });
+      const second = result.result();
+      await Promise.resolve();
+      await Promise.resolve();
+      assert.equal(started, 1);
+      assert.equal(published, false, "terminal result cannot finish before accounting completes");
+      releaseAccounting();
+      const messages = await Promise.all([first, second]);
+      assert.equal(messages[0], messages[1]);
+      assert.equal(messages[0].stopReason, reason);
+      assert.equal(dispatched, 1);
+      assert.equal(finished, 1);
+    }
 });
 
 test("a compaction summary sends the same split system blocks as the chat's turn", async (t) => {
@@ -1869,16 +2062,29 @@ test("a compaction summary sends the same split system blocks as the chat's turn
   const tail = "Frozen state for this chat.";
   rememberStableHead(chatId, head);
   t.after(() => rememberStableHead(chatId, undefined));
-  const model = { id: "offline-messages", provider: "offline", api: "anthropic-messages" } as ResolvedModelRuntime["model"];
+  const model = {
+    id: "offline-messages",
+    provider: "offline",
+    api: "anthropic-messages",
+  } as ResolvedModelRuntime["model"];
   for (const registered of [true, false]) {
     const sent: unknown[] = [];
     // The provider's transport: builds one cached system block, then lets the hook replace the payload.
-    const transport = (_model: Model<Api>, context: { systemPrompt?: string; messages: Array<{ role: string; content?: unknown }> }, options?: { onPayload?: (payload: unknown, model: Model<Api>) => unknown }) => {
+    const transport = (
+      _model: Model<Api>,
+      context: { systemPrompt?: string; messages: Array<{ role: string; content?: unknown }> },
+      options?: { onPayload?: (payload: unknown, model: Model<Api>) => unknown },
+    ) => {
       const stream = createAssistantMessageEventStream();
       void (async () => {
         const [first] = context.messages;
-        const systemPrompt = context.systemPrompt ?? (first?.role === "system" && typeof first.content === "string" ? first.content : "");
-        const payload = { system: [{ type: "text", text: systemPrompt, cache_control: { type: "ephemeral" } }], messages: [] };
+        const systemPrompt =
+          context.systemPrompt ??
+          (first?.role === "system" && typeof first.content === "string" ? first.content : "");
+        const payload = {
+          system: [{ type: "text", text: systemPrompt, cache_control: { type: "ephemeral" } }],
+          messages: [],
+        };
         sent.push((await options?.onPayload?.(payload, _model)) ?? payload);
         const message = fauxAssistantMessage("summary");
         stream.push({ type: "done", reason: "stop", message });
@@ -1893,12 +2099,20 @@ test("a compaction summary sends the same split system blocks as the chat's turn
       apiKey: "offline-noncredential",
     } as unknown as ResolvedModelRuntime;
     const context = { systemPrompt: `${head}\n\n${tail}`, messages: [] };
-    await runtime.streams.streamSimple(model, normalizeContext(context), { sessionId: chatId }).result();
+    await runtime.streams
+      .streamSimple(model, normalizeContext(context), { sessionId: chatId })
+      .result();
     await createPiCompactionModels(runtime).completeSimple(model, context, { sessionId: chatId });
-    const [turn, summary] = sent as Array<{ system: Array<{ text: string; cache_control?: unknown }> }>;
+    const [turn, summary] = sent as Array<{
+      system: Array<{ text: string; cache_control?: unknown }>;
+    }>;
     assert.equal(turn.system.length, 2, "the turn caches its stable head on its own");
     assert.equal(turn.system[0].text, `${head}\n\n`);
-    assert.deepEqual(summary.system, turn.system, registered ? "registered model" : "connection-bound model");
+    assert.deepEqual(
+      summary.system,
+      turn.system,
+      registered ? "registered model" : "connection-bound model",
+    );
   }
 });
 
@@ -1990,12 +2204,17 @@ test("private history inspection preserves indexed, current, legacy, and quarant
   const root = await mkdtemp(path.join(os.tmpdir(), "aiden-pi-history-"));
   t.after(() => rm(root, { recursive: true, force: true }));
   const store = new PiCompactionSessionStore({
-    root: async () => { throw new Error("inspection must not initialize the repository"); },
+    root: async () => {
+      throw new Error("inspection must not initialize the repository");
+    },
     readOnlyRoot: async () => root,
   });
   assert.equal(await store.hasChatHistory("empty"), false);
   assert.deepEqual(await readdir(root), []);
-  await writeFile(path.join(root, "aiden-journal-index.json"), JSON.stringify({ version: 1, chats: { indexed: [path.join(root, "old.jsonl.corrupt-1")] } }));
+  await writeFile(
+    path.join(root, "aiden-journal-index.json"),
+    JSON.stringify({ version: 1, chats: { indexed: [path.join(root, "old.jsonl.corrupt-1")] } }),
+  );
   assert.equal(await store.hasChatHistory("indexed"), true);
   await unlink(path.join(root, "aiden-journal-index.json"));
   for (const [chatId, file, version] of [
@@ -2005,19 +2224,33 @@ test("private history inspection preserves indexed, current, legacy, and quarant
     ["quarantine", "current.jsonl.corrupt-1", 4],
   ] as const) {
     const header = JSON.stringify({
-      ...(version === 4 ? { kind: "header" } : { type: "session" }), version, id: chatId,
+      ...(version === 4 ? { kind: "header" } : { type: "session" }),
+      version,
+      id: chatId,
       metadata: { kind: "aiden-chat-compaction-v1", chatId },
     });
     await writeFile(path.join(root, file), `${header}\n{"private":"untouched"}\n`);
     assert.equal(await store.hasChatHistory(chatId), true);
-    assert.equal(await readFile(path.join(root, file), "utf8"), `${header}\n{"private":"untouched"}\n`);
+    assert.equal(
+      await readFile(path.join(root, file), "utf8"),
+      `${header}\n{"private":"untouched"}\n`,
+    );
   }
   assert.equal(await store.hasChatHistory("unrelated-empty"), false);
   assert.equal((await readdir(root)).length, 4);
-  const header = JSON.stringify({ kind: "header", version: 4, id: "multibyte-body", metadata: { kind: "aiden-chat-compaction-v1", chatId: "multibyte-body" } });
+  const header = JSON.stringify({
+    kind: "header",
+    version: 4,
+    id: "multibyte-body",
+    metadata: { kind: "aiden-chat-compaction-v1", chatId: "multibyte-body" },
+  });
   const contents = `${header}\n${"x".repeat(65_536 - Buffer.byteLength(header) - 2)}€`;
   await writeFile(path.join(root, "multibyte.jsonl"), contents);
-  assert.equal(await store.hasChatHistory("multibyte-body"), true, "decode only the complete header when the scan ends inside a multibyte body character");
+  assert.equal(
+    await store.hasChatHistory("multibyte-body"),
+    true,
+    "decode only the complete header when the scan ends inside a multibyte body character",
+  );
   assert.equal(await store.hasChatHistory("still-unrelated"), false);
   store.quarantineChatUntilRecovered("recovering", new Promise<void>(() => {}));
   assert.equal(await store.hasChatHistory("recovering"), true);
@@ -2028,7 +2261,10 @@ test("private history inspection fails closed on corrupt index, malformed journa
   t.after(() => rm(root, { recursive: true, force: true }));
   const store = new PiCompactionSessionStore({ root: async () => root });
   const indexPath = path.join(root, "aiden-journal-index.json");
-  for (const contents of ["{broken", JSON.stringify({ version: 1, chats: { other: "not-an-array" } })]) {
+  for (const contents of [
+    "{broken",
+    JSON.stringify({ version: 1, chats: { other: "not-an-array" } }),
+  ]) {
     await writeFile(indexPath, contents);
     await assert.rejects(store.hasChatHistory("empty"));
     assert.equal(await readFile(indexPath, "utf8"), contents);
@@ -2042,7 +2278,10 @@ test("private history inspection fails closed on corrupt index, malformed journa
   await symlink(path.join(root, "missing-private-file"), journal);
   await assert.rejects(store.hasChatHistory("empty"), /symbolic link/u);
   const absentRoot = path.join(root, "absent");
-  assert.equal(await new PiCompactionSessionStore({ root: async () => absentRoot }).hasChatHistory("empty"), false);
+  assert.equal(
+    await new PiCompactionSessionStore({ root: async () => absentRoot }).hasChatHistory("empty"),
+    false,
+  );
   await assert.rejects(stat(absentRoot), { code: "ENOENT" });
 });
 
@@ -2051,9 +2290,18 @@ test("header-only sessions created by old empty-chat reads are empty, but privat
   t.after(() => rm(root, { recursive: true, force: true }));
   const original = new PiCompactionSessionStore({ root: async () => root });
   const session = await original.openChat("empty-chat-read");
-  assert.equal(await original.hasChatHistory("empty-chat-read"), true, "an active session stays protected");
-  const inspect = () => new PiCompactionSessionStore({ root: async () => root }).hasChatHistory("empty-chat-read");
-  assert.equal(await inspect(), false, "a persisted index plus valid header alone is not private history");
+  assert.equal(
+    await original.hasChatHistory("empty-chat-read"),
+    true,
+    "an active session stays protected",
+  );
+  const inspect = () =>
+    new PiCompactionSessionStore({ root: async () => root }).hasChatHistory("empty-chat-read");
+  assert.equal(
+    await inspect(),
+    false,
+    "a persisted index plus valid header alone is not private history",
+  );
   const metadata = await session.getMetadata();
   await appendFile(metadata.path, " \t\n\r\n");
   assert.equal(await inspect(), false, "trailing JSON whitespace is still empty");
@@ -2070,17 +2318,29 @@ test("completed migration of an empty legacy journal is disposable with indexed 
   const chatId = "empty-promoted-chat";
   const promoted = path.join(root, "empty.jsonl");
   const header = {
-    type: "session", version: 3, id: chatId, timestamp: "2026-08-31T12:00:00.000Z", cwd: root,
+    type: "session",
+    version: 3,
+    id: chatId,
+    timestamp: "2026-08-31T12:00:00.000Z",
+    cwd: root,
     metadata: { kind: "aiden-chat-compaction-v1", chatId },
   };
   await writeFile(promoted, `${JSON.stringify(header)}\n`);
   const migration = await migratePiSessionJournal(promoted, chatId);
   assert.equal(migration.receipt.counts.entries, 0);
-  const inspect = () => new PiCompactionSessionStore({ root: async () => root }).hasChatHistory(chatId);
+  const inspect = () =>
+    new PiCompactionSessionStore({ root: async () => root }).hasChatHistory(chatId);
   assert.equal(await inspect(), false, "discovery recognizes actual empty migration scaffolding");
-  const index = JSON.stringify({ version: 1, chats: { [chatId]: [promoted, migration.receipt.backupPath, migration.receiptPath] } });
+  const index = JSON.stringify({
+    version: 1,
+    chats: { [chatId]: [promoted, migration.receipt.backupPath, migration.receiptPath] },
+  });
   await writeFile(path.join(root, "aiden-journal-index.json"), index);
-  assert.equal(await inspect(), false, "indexed migration artifacts alone are not conversation history");
+  assert.equal(
+    await inspect(),
+    false,
+    "indexed migration artifacts alone are not conversation history",
+  );
   const originalPromoted = await readFile(promoted, "utf8");
   const originalBackup = await readFile(migration.receipt.backupPath, "utf8");
   const originalReceipt = await readFile(migration.receiptPath, "utf8");
@@ -2090,7 +2350,10 @@ test("completed migration of an empty legacy journal is disposable with indexed 
   await appendFile(migration.receipt.backupPath, '{"private":"preserve backup history"}\n');
   assert.equal(await inspect(), true);
   await writeFile(migration.receipt.backupPath, originalBackup);
-  await writeFile(migration.receiptPath, JSON.stringify({ ...migration.receipt, validation: "failed" }));
+  await writeFile(
+    migration.receiptPath,
+    JSON.stringify({ ...migration.receipt, validation: "failed" }),
+  );
   assert.equal(await inspect(), true);
   await writeFile(migration.receiptPath, originalReceipt);
   await unlink(migration.receipt.backupPath);
@@ -2104,21 +2367,40 @@ test("completed migration of an empty legacy journal is disposable with indexed 
 test("Pi 0.84.4 rollback backups count as history only when they hold conversation", async (t) => {
   const root = await mkdtemp(path.join(os.tmpdir(), "aiden-pi-084-backup-history-"));
   t.after(() => rm(root, { recursive: true, force: true }));
-  const inspect = (chatId: string) => new PiCompactionSessionStore({ root: async () => root }).hasChatHistory(chatId);
-  const oldHeader = (chatId: string) => JSON.stringify({ kind: "header", version: 4, id: chatId, createdAt: 1, cwd: root,
-    metadata: { kind: "aiden-chat-compaction-v1", chatId } });
+  const inspect = (chatId: string) =>
+    new PiCompactionSessionStore({ root: async () => root }).hasChatHistory(chatId);
+  const oldHeader = (chatId: string) =>
+    JSON.stringify({
+      kind: "header",
+      version: 4,
+      id: chatId,
+      createdAt: 1,
+      cwd: root,
+      metadata: { kind: "aiden-chat-compaction-v1", chatId },
+    });
 
   // An owned header-only journal promoted on open leaves a header-only backup.
   const empty = path.join(root, "empty.jsonl");
   await writeFile(empty, `${oldHeader("empty-084")}\n`, { mode: 0o600 });
   await upgradeOldPiV4File(empty);
   assert.equal(await readFile(`${empty}.pi084-backup`, "utf8"), `${oldHeader("empty-084")}\n`);
-  assert.equal(await inspect("empty-084"), false, "a header-only backup is not conversation history");
+  assert.equal(
+    await inspect("empty-084"),
+    false,
+    "a header-only backup is not conversation history",
+  );
 
   // A backup with a private body stays protected even when the promoted file is gone.
   const withBody = path.join(root, "body.jsonl");
-  const bodySource = `${oldHeader("body-084")}\n${JSON.stringify({ kind: "entry", seq: 1, id: "m", parentId: null,
-    timestamp: 2, type: "message", message: { role: "user", content: "private", timestamp: 2 } })}\n`;
+  const bodySource = `${oldHeader("body-084")}\n${JSON.stringify({
+    kind: "entry",
+    seq: 1,
+    id: "m",
+    parentId: null,
+    timestamp: 2,
+    type: "message",
+    message: { role: "user", content: "private", timestamp: 2 },
+  })}\n`;
   await writeFile(withBody, bodySource, { mode: 0o600 });
   await upgradeOldPiV4File(withBody);
   await unlink(withBody);
@@ -2129,20 +2411,47 @@ test("Pi 0.84.4 rollback backups count as history only when they hold conversati
   // keeps only migration scaffolding in both the promoted file and backup.
   const chatId = "empty-migrated-084";
   const promoted = path.join(root, "migrated.jsonl");
-  await writeFile(promoted, `${JSON.stringify({ type: "session", version: 3, id: chatId,
-    timestamp: "2026-08-31T12:00:00.000Z", cwd: root, metadata: { kind: "aiden-chat-compaction-v1", chatId } })}\n`);
+  await writeFile(
+    promoted,
+    `${JSON.stringify({
+      type: "session",
+      version: 3,
+      id: chatId,
+      timestamp: "2026-08-31T12:00:00.000Z",
+      cwd: root,
+      metadata: { kind: "aiden-chat-compaction-v1", chatId },
+    })}\n`,
+  );
   await migratePiSessionJournal(promoted, chatId);
-  const current = (await readFile(promoted, "utf8")).trim().split("\n").map((line) => JSON.parse(line));
+  const current = (await readFile(promoted, "utf8"))
+    .trim()
+    .split("\n")
+    .map((line) => JSON.parse(line));
   const [header, metadataValue, , started, finished] = current;
-  const v4 = [
-    { kind: "header", version: 4, id: chatId, createdAt: header.createdAt, cwd: header.cwd, metadata: metadataValue.value },
-    { kind: "lane", seq: 1, lane: "main", leafId: null }, started.value, finished.value,
-  ].map((item) => JSON.stringify(item)).join("\n") + "\n";
+  const v4 =
+    [
+      {
+        kind: "header",
+        version: 4,
+        id: chatId,
+        createdAt: header.createdAt,
+        cwd: header.cwd,
+        metadata: metadataValue.value,
+      },
+      { kind: "lane", seq: 1, lane: "main", leafId: null },
+      started.value,
+      finished.value,
+    ]
+      .map((item) => JSON.stringify(item))
+      .join("\n") + "\n";
   await writeFile(promoted, v4);
   await upgradeOldPiV4File(promoted);
   assert.equal(await readFile(`${promoted}.pi084-backup`, "utf8"), v4);
   assert.equal(await inspect(chatId), false, "0.84.4 migration scaffolding is disposable");
-  await appendFile(`${promoted}.pi084-backup`, `${JSON.stringify({ kind: "lane", seq: 4, lane: "main", leafId: null })}\n`);
+  await appendFile(
+    `${promoted}.pi084-backup`,
+    `${JSON.stringify({ kind: "lane", seq: 4, lane: "main", leafId: null })}\n`,
+  );
   assert.equal(await inspect(chatId), true, "any extra backup content is preserved");
 });
 
@@ -2153,10 +2462,9 @@ test("opening a chat promotes its legacy v3 journal before current repository di
   const directory = path.join(root, "--legacy--");
   await mkdir(directory, { recursive: true });
   const journalPath = path.join(directory, "legacy-chat.jsonl");
-  const fixture = (await readFile(
-    path.resolve("main/services/fixtures/pi-legacy/uncompacted.jsonl"),
-    "utf8",
-  )).split("\n");
+  const fixture = (
+    await readFile(path.resolve("main/services/fixtures/pi-legacy/uncompacted.jsonl"), "utf8")
+  ).split("\n");
   const header = JSON.parse(fixture[0]!) as Record<string, unknown>;
   header.id = "chat-v3-open";
   header.cwd = root;
@@ -2465,10 +2773,13 @@ test("newest corrupt duplicate is quarantined and older valid history reopens", 
     fileSystem: new NodeExecutionEnv({ cwd: root }),
     sessionsRoot: root,
   });
-  const older = await repo.create({
-    id: "chat-fallback-test",
-    cwd: root,
-  }, TODO_CONTEXT);
+  const older = await repo.create(
+    {
+      id: "chat-fallback-test",
+      cwd: root,
+    },
+    TODO_CONTEXT,
+  );
   const olderPort = createPiSessionPort(older);
   await older.setValue(
     { namespace: "aiden", key: "session-metadata", kind: "value" },
@@ -2568,7 +2879,9 @@ test("a torn journal index is set aside intact and indexed journals are still de
 
   // A later mutation must not discard the unreadable bytes it replaces.
   await store.openChat("chat-torn-index-b");
-  const preserved = (await readdir(root)).filter((name) => name.startsWith(".aiden-journal-index.json.") && name.endsWith(".corrupt"));
+  const preserved = (await readdir(root)).filter(
+    (name) => name.startsWith(".aiden-journal-index.json.") && name.endsWith(".corrupt"),
+  );
   assert.equal(preserved.length, 1);
   assert.equal(await readFile(path.join(root, preserved[0]!), "utf8"), torn);
   assert.equal(typeof JSON.parse(await readFile(indexPath, "utf8")).chats, "object");
@@ -2577,26 +2890,31 @@ test("a torn journal index is set aside intact and indexed journals are still de
   await assert.rejects(stat(doomedPath), { code: "ENOENT" });
 });
 
-test("an unreadable journal index fails closed instead of being replaced", { skip: process.platform === "win32" || process.getuid?.() === 0 }, async (t) => {
-  const temporary = await mkdtemp(path.join(os.tmpdir(), "aiden-pi-unreadable-index-"));
-  t.after(async () => {
-    await chmod(path.join(temporary, "sessions", "aiden-journal-index.json"), 0o600).catch(() => undefined);
-    await rm(temporary, { recursive: true, force: true });
-  });
-  const root = path.join(temporary, "sessions");
-  await mkdir(root, { recursive: true });
-  const store = new PiCompactionSessionStore({ root: async () => root });
-  await store.openChat("chat-unreadable-a");
-  const indexPath = path.join(root, "aiden-journal-index.json");
-  const before = await readFile(indexPath, "utf8");
-  await chmod(indexPath, 0o000);
+test(
+  "an unreadable journal index fails closed instead of being replaced",
+  { skip: process.platform === "win32" || process.getuid?.() === 0 },
+  async (t) => {
+    const temporary = await mkdtemp(path.join(os.tmpdir(), "aiden-pi-unreadable-index-"));
+    t.after(async () => {
+      await chmod(path.join(temporary, "sessions", "aiden-journal-index.json"), 0o600).catch(
+        () => undefined,
+      );
+      await rm(temporary, { recursive: true, force: true });
+    });
+    const root = path.join(temporary, "sessions");
+    await mkdir(root, { recursive: true });
+    const store = new PiCompactionSessionStore({ root: async () => root });
+    await store.openChat("chat-unreadable-a");
+    const indexPath = path.join(root, "aiden-journal-index.json");
+    const before = await readFile(indexPath, "utf8");
+    await chmod(indexPath, 0o000);
 
-  await assert.rejects(store.reconcileChats(new Set()), { code: "EACCES" });
-  await assert.rejects(store.openChat("chat-unreadable-b"), { code: "EACCES" });
-  await chmod(indexPath, 0o600);
-  assert.equal(await readFile(indexPath, "utf8"), before);
-});
-
+    await assert.rejects(store.reconcileChats(new Set()), { code: "EACCES" });
+    await assert.rejects(store.openChat("chat-unreadable-b"), { code: "EACCES" });
+    await chmod(indexPath, 0o600);
+    assert.equal(await readFile(indexPath, "utf8"), before);
+  },
+);
 
 test("disabled skills project visible history without old expanded inputs, results, or compactions", async () => {
   const { model } = compactionFixture();
@@ -2605,59 +2923,130 @@ test("disabled skills project visible history without old expanded inputs, resul
     { id: "skill-user", role: "user", content: "Review this code", createdAt: 10 },
     { id: "skill-answer", role: "assistant", content: "The code looks sound", createdAt: 20 },
   ];
-  await syncChatMessagesToPiSession(session, visible, model, false,
-    new Map([["skill-user", "HIDDEN_SKILL_INSTRUCTIONS Review this code"]]));
-  await session.appendMessage({ ...assistant(model), content: [{ type: "toolCall", id: "skill-call", name: "skill_review", arguments: {} }] });
-  await session.appendMessage({ role: "toolResult", toolCallId: "skill-call", toolName: "skill_review",
-    content: [{ type: "text", text: "HIDDEN_SKILL_RESULT" }], isError: false, timestamp: 30 });
-  await session.appendCompaction({ id: "old-compaction", summary: "HIDDEN_SKILL_SUMMARY", retainedTail: [], tokensBefore: 100 });
+  await syncChatMessagesToPiSession(
+    session,
+    visible,
+    model,
+    false,
+    new Map([["skill-user", "HIDDEN_SKILL_INSTRUCTIONS Review this code"]]),
+  );
+  await session.appendMessage({
+    ...assistant(model),
+    content: [{ type: "toolCall", id: "skill-call", name: "skill_review", arguments: {} }],
+  });
+  await session.appendMessage({
+    role: "toolResult",
+    toolCallId: "skill-call",
+    toolName: "skill_review",
+    content: [{ type: "text", text: "HIDDEN_SKILL_RESULT" }],
+    isError: false,
+    timestamp: 30,
+  });
+  await session.appendCompaction({
+    id: "old-compaction",
+    summary: "HIDDEN_SKILL_SUMMARY",
+    retainedTail: [],
+    tokensBefore: 100,
+  });
   const durableBefore = JSON.stringify(await session.getEntries());
   const projected = await projectVisibleHistoryWithoutSkills(session, visible, model);
-  for (const view of [await projected.buildContext(), await projected.getBranch(), await projected.getEntries()]) {
+  for (const view of [
+    await projected.buildContext(),
+    await projected.getBranch(),
+    await projected.getEntries(),
+  ]) {
     assert.doesNotMatch(JSON.stringify(view), /HIDDEN_SKILL/u);
     assert.match(JSON.stringify(view), /Review this code/u);
     assert.match(JSON.stringify(view), /The code looks sound/u);
   }
-  assert.equal(JSON.stringify(await session.getEntries()), durableBefore, "visible projection never deletes or rewrites durable history");
-  const call = { ...assistant(model), content: [{ type: "toolCall" as const, id: "normal-call", name: "read_file", arguments: {} }] };
+  assert.equal(
+    JSON.stringify(await session.getEntries()),
+    durableBefore,
+    "visible projection never deletes or rewrites durable history",
+  );
+  const call = {
+    ...assistant(model),
+    content: [{ type: "toolCall" as const, id: "normal-call", name: "read_file", arguments: {} }],
+  };
   await projected.appendMessage(call);
-  await projected.appendMessage({ role: "toolResult", toolCallId: "normal-call", toolName: "read_file",
-    content: [{ type: "text", text: "CURRENT_TOOL_RESULT" }], isError: false, timestamp: 40 });
+  await projected.appendMessage({
+    role: "toolResult",
+    toolCallId: "normal-call",
+    toolName: "read_file",
+    content: [{ type: "text", text: "CURRENT_TOOL_RESULT" }],
+    isError: false,
+    timestamp: 40,
+  });
   const context = JSON.stringify(await projected.buildContext());
   assert.doesNotMatch(context, /HIDDEN_SKILL/u);
   assert.match(context, /normal-call/u);
   assert.match(context, /CURRENT_TOOL_RESULT/u);
-  await projected.appendCompaction({ id: "new-compaction", summary: "CLEAN_CURRENT_SUMMARY", retainedTail: [], tokensBefore: 100 });
+  await projected.appendCompaction({
+    id: "new-compaction",
+    summary: "CLEAN_CURRENT_SUMMARY",
+    retainedTail: [],
+    tokensBefore: 100,
+  });
   assert.match(JSON.stringify(await projected.buildContext()), /CLEAN_CURRENT_SUMMARY/u);
   assert.doesNotMatch(JSON.stringify(await projected.buildContext()), /HIDDEN_SKILL/u);
   assert.match(JSON.stringify(await session.getEntries()), /HIDDEN_SKILL_INSTRUCTIONS/u);
 });
 
-
 test("with skills off, the design canvas notes a turn journaled are in the next turn's context, so unchanged counts add nothing", async () => {
   const { model } = compactionFixture();
   const session = await memorySession();
-  const notes = (messages: readonly AgentMessage[]) => messages.flatMap((message) => {
-    const sections = (message as { sections?: Record<string, string> }).sections;
-    return message.role === "system" && sections && CANVAS_STATUS_SECTION in sections ? [sections[CANVAS_STATUS_SECTION]!] : [];
-  });
-  const first: ChatMessage[] = [{ id: "u1", role: "user", content: "Sketch a pricing page", createdAt: 10 }];
+  const notes = (messages: readonly AgentMessage[]) =>
+    messages.flatMap((message) => {
+      const sections = (message as { sections?: Record<string, string> }).sections;
+      return message.role === "system" && sections && CANVAS_STATUS_SECTION in sections
+        ? [sections[CANVAS_STATUS_SECTION]!]
+        : [];
+    });
+  const first: ChatMessage[] = [
+    { id: "u1", role: "user", content: "Sketch a pricing page", createdAt: 10 },
+  ];
   await syncChatMessagesToPiSession(session, first, model, false);
   const turnOne = await projectVisibleHistoryWithoutSkills(session, first, model);
   const warnings: unknown[] = [];
   const line = "The canvas has 2 frames, 0 open comments.";
-  const sentFirst = await withJournaledCanvasStatusNote(turnOne, (await turnOne.buildContext()).messages, line, 11, (error) => warnings.push(error));
+  const sentFirst = await withJournaledCanvasStatusNote(
+    turnOne,
+    (await turnOne.buildContext()).messages,
+    line,
+    11,
+    (error) => warnings.push(error),
+  );
   assert.deepEqual(notes(sentFirst), [`Design canvas when this was noted: ${line}`]);
   // The reply, an old skill tool call, and the next request.
-  await session.appendMessage({ ...assistant(model), content: [{ type: "toolCall", id: "skill-call", name: "skill_review", arguments: {} }] });
-  await session.appendMessage({ role: "toolResult", toolCallId: "skill-call", toolName: "skill_review",
-    content: [{ type: "text", text: "HIDDEN_SKILL_RESULT" }], isError: false, timestamp: 12 });
+  await session.appendMessage({
+    ...assistant(model),
+    content: [{ type: "toolCall", id: "skill-call", name: "skill_review", arguments: {} }],
+  });
+  await session.appendMessage({
+    role: "toolResult",
+    toolCallId: "skill-call",
+    toolName: "skill_review",
+    content: [{ type: "text", text: "HIDDEN_SKILL_RESULT" }],
+    isError: false,
+    timestamp: 12,
+  });
   // Mid-reply, the report on a page the turn wrote is journaled as it is sent.
-  const [inspectNote] = withDesignInspectNote({ messages: [] }, [{ path: "design/pricing.html", findings: ["line 4 of design/pricing.html: ReferenceError: x is not defined"] }], 13).messages;
+  const [inspectNote] = withDesignInspectNote(
+    { messages: [] },
+    [
+      {
+        path: "design/pricing.html",
+        findings: ["line 4 of design/pricing.html: ReferenceError: x is not defined"],
+      },
+    ],
+    13,
+  ).messages;
   await session.appendMessage(inspectNote as AgentMessage);
-  const second: ChatMessage[] = [...first,
+  const second: ChatMessage[] = [
+    ...first,
     { id: "a1", role: "assistant", content: "Here is the layout", createdAt: 20 },
-    { id: "u2", role: "user", content: "Tighten it", createdAt: 30 }];
+    { id: "u2", role: "user", content: "Tighten it", createdAt: 30 },
+  ];
   await syncChatMessagesToPiSession(session, second, model, false);
 
   const turnTwo = await projectVisibleHistoryWithoutSkills(session, second, model);
@@ -2669,10 +3058,22 @@ test("with skills off, the design canvas notes a turn journaled are in the next 
     const sections = (message as { sections?: Record<string, string> }).sections;
     return message.role === "system" && sections && DESIGN_PAGE_INSPECT_SECTION in sections;
   });
-  assert.deepEqual(inspectNotes, [inspectNote], "the page report stays in the history the next turn sends");
-  const sentSecond = await withJournaledCanvasStatusNote(turnTwo, context, line, 31, (error) => warnings.push(error));
+  assert.deepEqual(
+    inspectNotes,
+    [inspectNote],
+    "the page report stays in the history the next turn sends",
+  );
+  const sentSecond = await withJournaledCanvasStatusNote(turnTwo, context, line, 31, (error) =>
+    warnings.push(error),
+  );
   assert.equal(sentSecond.length, context.length, "unchanged counts add no note");
-  const changed = await withJournaledCanvasStatusNote(turnTwo, context, "The canvas has 3 frames, 0 open comments.", 32, (error) => warnings.push(error));
+  const changed = await withJournaledCanvasStatusNote(
+    turnTwo,
+    context,
+    "The canvas has 3 frames, 0 open comments.",
+    32,
+    (error) => warnings.push(error),
+  );
   assert.equal(notes(changed).length, 2);
   assert.equal(warnings.length, 0);
 });
@@ -2680,25 +3081,51 @@ test("with skills off, the design canvas notes a turn journaled are in the next 
 test("with skills off, the on-demand tools a turn declared are still recorded for the next turn, and a newer record wins", async () => {
   const { model } = compactionFixture();
   const session = await memorySession();
-  const first: ChatMessage[] = [{ id: "u1", role: "user", content: "/visualize the funnel", createdAt: 10 }];
+  const first: ChatMessage[] = [
+    { id: "u1", role: "user", content: "/visualize the funnel", createdAt: 10 },
+  ];
   await syncChatMessagesToPiSession(session, first, model, false);
   const turnOne = await projectVisibleHistoryWithoutSkills(session, first, model);
-  assert.deepEqual(onDemandDeclaredOfBranch(await turnOne.getBranch()), [], "a chat with no record carries none");
+  assert.deepEqual(
+    onDemandDeclaredOfBranch(await turnOne.getBranch()),
+    [],
+    "a chat with no record carries none",
+  );
   // A /visualize turn preloads render_artifact and never calls it; the run records what it declared.
-  await turnOne.appendCustomEntry(ON_DEMAND_DECLARED_ENTRY, { names: ["render_ui", "render_artifact"] });
-  await session.appendMessage({ ...assistant(model), content: [{ type: "toolCall", id: "skill-call", name: "skill_review", arguments: {} }] });
-  await session.appendMessage({ role: "toolResult", toolCallId: "skill-call", toolName: "skill_review",
-    content: [{ type: "text", text: "HIDDEN_SKILL_RESULT" }], isError: false, timestamp: 12 });
-  const second: ChatMessage[] = [...first,
+  await turnOne.appendCustomEntry(ON_DEMAND_DECLARED_ENTRY, {
+    names: ["render_ui", "render_artifact"],
+  });
+  await session.appendMessage({
+    ...assistant(model),
+    content: [{ type: "toolCall", id: "skill-call", name: "skill_review", arguments: {} }],
+  });
+  await session.appendMessage({
+    role: "toolResult",
+    toolCallId: "skill-call",
+    toolName: "skill_review",
+    content: [{ type: "text", text: "HIDDEN_SKILL_RESULT" }],
+    isError: false,
+    timestamp: 12,
+  });
+  const second: ChatMessage[] = [
+    ...first,
     { id: "a1", role: "assistant", content: "Here is the funnel", createdAt: 20 },
-    { id: "u2", role: "user", content: "Thanks", createdAt: 30 }];
+    { id: "u2", role: "user", content: "Thanks", createdAt: 30 },
+  ];
   await syncChatMessagesToPiSession(session, second, model, false);
 
   const turnTwo = await projectVisibleHistoryWithoutSkills(session, second, model);
-  assert.deepEqual(onDemandDeclaredOfBranch(await turnTwo.getBranch()), ["render_ui", "render_artifact"],
-    "the next turn reads the list the last one declared, so it keeps declaring render_artifact in its place");
+  assert.deepEqual(
+    onDemandDeclaredOfBranch(await turnTwo.getBranch()),
+    ["render_ui", "render_artifact"],
+    "the next turn reads the list the last one declared, so it keeps declaring render_artifact in its place",
+  );
   const context = JSON.stringify(await turnTwo.buildContext());
-  assert.doesNotMatch(context, /HIDDEN_SKILL|render_artifact/u, "the record is never model context, and skill-era entries stay hidden");
+  assert.doesNotMatch(
+    context,
+    /HIDDEN_SKILL|render_artifact/u,
+    "the record is never model context, and skill-era entries stay hidden",
+  );
 
   // A turn that declares a different list journals a new record, and the turn after reads that one.
   await turnTwo.appendCustomEntry(ON_DEMAND_DECLARED_ENTRY, { names: ["render_ui"] });
@@ -2712,34 +3139,61 @@ test("skill-free visible context compacts and reopens through the real JSONL rep
   t.after(() => rm(root, { recursive: true, force: true }));
   const { model, models, faux } = compactionFixture();
   let compactedVisibleContext = false;
-  faux.setResponses([(context) => {
-    const text = JSON.stringify(context);
-    assert.doesNotMatch(text, /HIDDEN_SKILL/u);
-    assert.match(text, /Visible user request/u);
-    compactedVisibleContext = true;
-    return fauxAssistantMessage(structuredSummary("CLEAN_SKILL_FREE_CHECKPOINT"));
-  }]);
+  faux.setResponses([
+    (context) => {
+      const text = JSON.stringify(context);
+      assert.doesNotMatch(text, /HIDDEN_SKILL/u);
+      assert.match(text, /Visible user request/u);
+      compactedVisibleContext = true;
+      return fauxAssistantMessage(structuredSummary("CLEAN_SKILL_FREE_CHECKPOINT"));
+    },
+  ]);
   const store = new PiCompactionSessionStore({ root: async () => root });
   const session = await store.openChat("skill-free-persistent");
   const messages: ChatMessage[] = [
-    { id: "visible-one", role: "user", content: `Visible user request ${"x".repeat(2000)}`, createdAt: 10 },
-    { id: "visible-two", role: "assistant", content: `Visible response ${"y".repeat(1000)}`, createdAt: 20 },
+    {
+      id: "visible-one",
+      role: "user",
+      content: `Visible user request ${"x".repeat(2000)}`,
+      createdAt: 10,
+    },
+    {
+      id: "visible-two",
+      role: "assistant",
+      content: `Visible response ${"y".repeat(1000)}`,
+      createdAt: 20,
+    },
     { id: "visible-three", role: "user", content: "Continue with the next part", createdAt: 30 },
     { id: "visible-four", role: "assistant", content: "Current answer", createdAt: 40 },
   ];
-  await syncChatMessagesToPiSession(session, messages, model, false,
-    new Map([["visible-one", "HIDDEN_SKILL_EXPANSION"]]));
+  await syncChatMessagesToPiSession(
+    session,
+    messages,
+    model,
+    false,
+    new Map([["visible-one", "HIDDEN_SKILL_EXPANSION"]]),
+  );
   const projected = await projectVisibleHistoryWithoutSkills(session, messages, model);
-  const coordinator = new PiCompactionCoordinator({ session: projected, model, models, thinkingLevel: "off",
-    settings: { enabled: true, reserveTokens: 100, keepRecentTokens: 100 } });
+  const coordinator = new PiCompactionCoordinator({
+    session: projected,
+    model,
+    models,
+    thinkingLevel: "off",
+    settings: { enabled: true, reserveTokens: 100, keepRecentTokens: 100 },
+  });
   const result = await coordinator.compact();
   assert.equal(result.compacted, true, result.errorMessage);
   assert.equal(compactedVisibleContext, true);
   const expected = (await projected.buildContext()).messages;
-  const reopened = await new PiCompactionSessionStore({ root: async () => root }).openChat("skill-free-persistent");
+  const reopened = await new PiCompactionSessionStore({ root: async () => root }).openChat(
+    "skill-free-persistent",
+  );
   assert.deepEqual((await reopened.buildContext()).messages, expected);
-  assert.match(JSON.stringify(await reopened.getEntries()), /HIDDEN_SKILL_EXPANSION/u,
-    "rich history is still durable when the user re-enables skills");
+  assert.match(
+    JSON.stringify(await reopened.getEntries()),
+    /HIDDEN_SKILL_EXPANSION/u,
+    "rich history is still durable when the user re-enables skills",
+  );
   assert.doesNotMatch(JSON.stringify(await reopened.buildContext()), /HIDDEN_SKILL/u);
 });
 
@@ -2753,16 +3207,25 @@ for (const entryPoint of ["check", "pressure", "prepare"] as const) {
       const last = assistant(previous, { input: 999_999, timestamp: 20 });
       await session.appendMessage(last);
       const coordinator = new PiCompactionCoordinator({
-        session, models, model, thinkingLevel: "off",
+        session,
+        models,
+        model,
+        thinkingLevel: "off",
         settings: { enabled: true, reserveTokens: 100, keepRecentTokens: 100 },
       });
-      const result = entryPoint === "check" ? await coordinator.check(last)
-        : entryPoint === "pressure" ? await coordinator.checkContextPressure()
-        : await coordinator.prepareForPrompt();
+      const result =
+        entryPoint === "check"
+          ? await coordinator.check(last)
+          : entryPoint === "pressure"
+            ? await coordinator.checkContextPressure()
+            : await coordinator.prepareForPrompt();
       assert.equal(result.compacted, false);
       assert.equal(result.shouldRetry, false);
       assert.equal(result.errorMessage, undefined);
-      assert.equal((await session.getEntries()).some((entry) => entry.type === "compaction"), false);
+      assert.equal(
+        (await session.getEntries()).some((entry) => entry.type === "compaction"),
+        false,
+      );
     });
   }
 }
@@ -2770,7 +3233,9 @@ for (const entryPoint of ["check", "pressure", "prepare"] as const) {
 for (const entryPoint of ["check", "pressure"] as const) {
   test(`model ownership: ${entryPoint} measures content after switching to a smaller model`, async () => {
     const { faux, models, model } = compactionFixture();
-    faux.setResponses(Array.from({ length: 10 }, () => fauxAssistantMessage(structuredSummary("switched model"))));
+    faux.setResponses(
+      Array.from({ length: 10 }, () => fauxAssistantMessage(structuredSummary("switched model"))),
+    );
     const session = await memorySession();
     const previous = { ...model, id: "previous" };
     await session.appendMessage(user("large history " + "x".repeat(8_000), 10));
@@ -2779,10 +3244,16 @@ for (const entryPoint of ["check", "pressure"] as const) {
     const last = assistant(previous, { input: 1, output: 0, timestamp: 40 });
     await session.appendMessage(last);
     const coordinator = new PiCompactionCoordinator({
-      session, models, model, thinkingLevel: "off",
+      session,
+      models,
+      model,
+      thinkingLevel: "off",
       settings: { enabled: true, reserveTokens: 100, keepRecentTokens: 100 },
     });
-    const result = entryPoint === "check" ? await coordinator.check(last) : await coordinator.checkContextPressure();
+    const result =
+      entryPoint === "check"
+        ? await coordinator.check(last)
+        : await coordinator.checkContextPressure();
     assert.equal(result.compacted, true);
     assert.equal(result.shouldRetry, false);
   });
@@ -2793,15 +3264,23 @@ for (const entryPoint of ["check", "pressure"] as const) {
     const { models, model } = compactionFixture();
     const session = await memorySession();
     await session.appendMessage(user("old", 10));
-    await session.appendMessage(assistant({ ...model, provider: "previous-provider" }, { input: 999_999, timestamp: 20 }));
+    await session.appendMessage(
+      assistant({ ...model, provider: "previous-provider" }, { input: 999_999, timestamp: 20 }),
+    );
     await session.appendMessage(user("new", 30));
     const last = assistant(model, { input: 0, output: 0, timestamp: 40 });
     await session.appendMessage(last);
     const coordinator = new PiCompactionCoordinator({
-      session, models, model, thinkingLevel: "off",
+      session,
+      models,
+      model,
+      thinkingLevel: "off",
       settings: { enabled: true, reserveTokens: 100, keepRecentTokens: 100 },
     });
-    const result = entryPoint === "check" ? await coordinator.check(last) : await coordinator.checkContextPressure();
+    const result =
+      entryPoint === "check"
+        ? await coordinator.check(last)
+        : await coordinator.checkContextPressure();
     assert.equal(result.compacted, false);
     assert.equal(result.errorMessage, undefined);
   });
@@ -2810,20 +3289,36 @@ for (const entryPoint of ["check", "pressure"] as const) {
     const directory = await mkdtemp(path.join(os.tmpdir(), "aiden-model-switch-"));
     t.after(() => rm(directory, { recursive: true, force: true }));
     const { faux, models, model } = compactionFixture();
-    faux.setResponses(Array.from({ length: 10 }, () => fauxAssistantMessage(structuredSummary("new model checkpoint"))));
-    const initial = await new PiCompactionSessionStore({ root: async () => directory }).openChat("switch");
+    faux.setResponses(
+      Array.from({ length: 10 }, () =>
+        fauxAssistantMessage(structuredSummary("new model checkpoint")),
+      ),
+    );
+    const initial = await new PiCompactionSessionStore({ root: async () => directory }).openChat(
+      "switch",
+    );
     const last = assistant({ ...model, id: "previous" }, { input: 1, output: 0, timestamp: 20 });
     await initial.appendCompaction({
-      id: "prior-checkpoint", summary: "old summary", tokensBefore: 10,
+      id: "prior-checkpoint",
+      summary: "old summary",
+      tokensBefore: 10,
       retainedTail: [user("retained " + "x".repeat(8_000), 10), last],
     });
     await initial.appendMessage(user("new turn", 30));
-    const session = await new PiCompactionSessionStore({ root: async () => directory }).openChat("switch");
+    const session = await new PiCompactionSessionStore({ root: async () => directory }).openChat(
+      "switch",
+    );
     const coordinator = new PiCompactionCoordinator({
-      session, models, model, thinkingLevel: "off",
+      session,
+      models,
+      model,
+      thinkingLevel: "off",
       settings: { enabled: true, reserveTokens: 100, keepRecentTokens: 100 },
     });
-    const result = entryPoint === "check" ? await coordinator.check(last) : await coordinator.checkContextPressure();
+    const result =
+      entryPoint === "check"
+        ? await coordinator.check(last)
+        : await coordinator.checkContextPressure();
     assert.equal(result.compacted, true);
     assert.equal(result.shouldRetry, false);
   });
@@ -2834,11 +3329,19 @@ test("foreign response labels preserve transient retry and success resets its al
   const session = await memorySession();
   await session.appendMessage(user("work", 10));
   const coordinator = new PiCompactionCoordinator({
-    session, models, model, thinkingLevel: "off",
+    session,
+    models,
+    model,
+    thinkingLevel: "off",
     settings: { enabled: true, reserveTokens: 100, keepRecentTokens: 100 },
   });
   const foreign = { ...model, id: "provider-response-alias" };
-  const failed = assistant(foreign, { stopReason: "error", errorMessage: "503 Service Unavailable", input: 0, output: 0 });
+  const failed = assistant(foreign, {
+    stopReason: "error",
+    errorMessage: "503 Service Unavailable",
+    input: 0,
+    output: 0,
+  });
   for (let retry = 1; retry <= 5; retry += 1) {
     assert.equal((await coordinator.check(failed)).shouldRetry, true);
   }
@@ -2853,21 +3356,33 @@ for (const contextWindow of [8_192, 16_384, 16_385, 20_000, 32_000]) {
     const { faux, models, model } = compactionFixture();
     const smallModel = { ...model, contextWindow };
     let summaryRequests = 0;
-    faux.setResponses(Array.from({ length: 10 }, () => () => {
-      summaryRequests += 1;
-      return fauxAssistantMessage(structuredSummary("unnecessary summary"));
-    }));
+    faux.setResponses(
+      Array.from({ length: 10 }, () => () => {
+        summaryRequests += 1;
+        return fauxAssistantMessage(structuredSummary("unnecessary summary"));
+      }),
+    );
     const session = await memorySession();
     await session.appendMessage(user("short request", 10));
-    const last = assistant(smallModel, { input: Math.floor(contextWindow / 2), output: 20, timestamp: 20 });
+    const last = assistant(smallModel, {
+      input: Math.floor(contextWindow / 2),
+      output: 20,
+      timestamp: 20,
+    });
     await session.appendMessage(last);
     const result = await new PiCompactionCoordinator({
-      session, models, model: smallModel, thinkingLevel: "off",
+      session,
+      models,
+      model: smallModel,
+      thinkingLevel: "off",
     }).check(last);
     assert.equal(result.errorMessage, undefined);
     assert.equal(result.compacted, false);
     assert.equal(summaryRequests, 0);
-    assert.equal((await session.getEntries()).filter((entry) => entry.type === "compaction").length, 0);
+    assert.equal(
+      (await session.getEntries()).filter((entry) => entry.type === "compaction").length,
+      0,
+    );
   });
 }
 
@@ -2877,7 +3392,9 @@ for (const mode of ["manual", "automatic"] as const) {
     t.after(() => rm(directory, { recursive: true, force: true }));
     const { faux, models, model } = compactionFixture();
     const smallModel = { ...model, contextWindow: 8_192 };
-    faux.setResponses(Array.from({ length: 10 }, () => fauxAssistantMessage(structuredSummary("small model"))));
+    faux.setResponses(
+      Array.from({ length: 10 }, () => fauxAssistantMessage(structuredSummary("small model"))),
+    );
     const store = new PiCompactionSessionStore({ root: async () => directory });
     const session = await store.openChat("small-budget");
     await session.appendMessage(user("OLD_PAYLOAD " + "x".repeat(8_000), 10));
@@ -2887,21 +3404,36 @@ for (const mode of ["manual", "automatic"] as const) {
     await session.appendMessage(user("recent request", 30));
     const last = assistant(smallModel, { input: 7_000, timestamp: 40 });
     await session.appendMessage(last);
-    const coordinator = new PiCompactionCoordinator({ session, models, model: smallModel, thinkingLevel: "off" });
+    const coordinator = new PiCompactionCoordinator({
+      session,
+      models,
+      model: smallModel,
+      thinkingLevel: "off",
+    });
     const result = mode === "manual" ? await coordinator.compact() : await coordinator.check(last);
     assert.equal(result.errorMessage, undefined);
     assert.equal(result.compacted, true);
     assert.equal(result.shouldRetry, false);
-    const reopened = await new PiCompactionSessionStore({ root: async () => directory }).openChat("small-budget");
+    const reopened = await new PiCompactionSessionStore({ root: async () => directory }).openChat(
+      "small-budget",
+    );
     const messages = (await reopened.buildContext()).messages;
     assert.equal(JSON.stringify(messages).includes("OLD_PAYLOAD"), false);
     assert.equal(JSON.stringify(messages).includes("recent request"), true);
     await reopened.appendMessage(user("next request", Date.now() + 1_000));
     const next = assistant(smallModel, { input: 300, timestamp: Date.now() + 2_000 });
     await reopened.appendMessage(next);
-    const afterRestart = await new PiCompactionCoordinator({ session: reopened, models, model: smallModel, thinkingLevel: "off" }).check(next);
+    const afterRestart = await new PiCompactionCoordinator({
+      session: reopened,
+      models,
+      model: smallModel,
+      thinkingLevel: "off",
+    }).check(next);
     assert.equal(afterRestart.compacted, false);
-    assert.equal((await reopened.getEntries()).filter((entry) => entry.type === "compaction").length, 1);
+    assert.equal(
+      (await reopened.getEntries()).filter((entry) => entry.type === "compaction").length,
+      1,
+    );
   });
 }
 
@@ -2909,12 +3441,25 @@ for (const contextWindow of [1, 7]) {
   test(`an enabled ${contextWindow}-token model fails before creating a zero-output summary`, async () => {
     const { models, model } = compactionFixture();
     const session = await memorySession();
-    assert.throws(() => new PiCompactionCoordinator({
-      session, models, model: { ...model, contextWindow }, thinkingLevel: "off",
-    }), /insufficient output reserve for compaction/u);
-    assert.equal((await session.getEntries()).some((entry) => entry.type === "compaction"), false);
+    assert.throws(
+      () =>
+        new PiCompactionCoordinator({
+          session,
+          models,
+          model: { ...model, contextWindow },
+          thinkingLevel: "off",
+        }),
+      /insufficient output reserve for compaction/u,
+    );
+    assert.equal(
+      (await session.getEntries()).some((entry) => entry.type === "compaction"),
+      false,
+    );
     const disabled = new PiCompactionCoordinator({
-      session, models, model: { ...model, contextWindow }, thinkingLevel: "off",
+      session,
+      models,
+      model: { ...model, contextWindow },
+      thinkingLevel: "off",
       settings: { enabled: false, reserveTokens: 16_384, keepRecentTokens: 20_000 },
     });
     assert.equal((await disabled.check(assistant(model))).compacted, false);
@@ -2930,7 +3475,10 @@ test("budgets that exactly fit the window keep the upstream threshold", async ()
   const last = assistant(exactModel, { input: 20_000, output: 1, timestamp: 20 });
   await session.appendMessage(last);
   const result = await new PiCompactionCoordinator({
-    session, models, model: exactModel, thinkingLevel: "off",
+    session,
+    models,
+    model: exactModel,
+    thinkingLevel: "off",
   }).check(last);
   assert.equal(result.compacted, true);
 });
@@ -2940,15 +3488,29 @@ for (const reserveTokens of [0, 1]) {
     const { models, model } = compactionFixture();
     const session = await memorySession();
     const settings = { enabled: true, reserveTokens, keepRecentTokens: 1 };
-    assert.throws(() => new PiCompactionCoordinator({
-      session, models, model: { ...model, contextWindow: 8_192 }, thinkingLevel: "off", settings,
-    }), /insufficient output reserve for compaction/u);
+    assert.throws(
+      () =>
+        new PiCompactionCoordinator({
+          session,
+          models,
+          model: { ...model, contextWindow: 8_192 },
+          thinkingLevel: "off",
+          settings,
+        }),
+      /insufficient output reserve for compaction/u,
+    );
     const disabled = new PiCompactionCoordinator({
-      session, models, model: { ...model, contextWindow: 8_192 }, thinkingLevel: "off",
+      session,
+      models,
+      model: { ...model, contextWindow: 8_192 },
+      thinkingLevel: "off",
       settings: { ...settings, enabled: false },
     });
     assert.equal((await disabled.check(assistant(model))).compacted, false);
-    assert.equal((await session.getEntries()).some((entry) => entry.type === "compaction"), false);
+    assert.equal(
+      (await session.getEntries()).some((entry) => entry.type === "compaction"),
+      false,
+    );
   });
 }
 
@@ -2957,11 +3519,16 @@ for (const mode of ["manual", "automatic"] as const) {
     const { faux, models, model } = compactionFixture();
     const smallModel = { ...model, contextWindow: 8_192 };
     let providerRequests = 0;
-    faux.setResponses([(context) => {
-      providerRequests += 1;
-      assert.ok(JSON.stringify(context).length < 20_000, "the provider receives the reduced summary, not the full history");
-      return fauxAssistantMessage(structuredSummary("bounded-recovery"));
-    }]);
+    faux.setResponses([
+      (context) => {
+        providerRequests += 1;
+        assert.ok(
+          JSON.stringify(context).length < 20_000,
+          "the provider receives the reduced summary, not the full history",
+        );
+        return fauxAssistantMessage(structuredSummary("bounded-recovery"));
+      },
+    ]);
     const session = await memorySession();
     for (let turn = 0; turn < 10; turn += 1) {
       await session.appendMessage(user("old context " + "x".repeat(8_000), turn * 2));
@@ -2972,14 +3539,20 @@ for (const mode of ["manual", "automatic"] as const) {
     await session.appendMessage(last);
     const entriesBefore = await session.getEntries();
     const coordinator = new PiCompactionCoordinator({
-      session, models, model: smallModel, thinkingLevel: "off",
+      session,
+      models,
+      model: smallModel,
+      thinkingLevel: "off",
     });
     const result = mode === "manual" ? await coordinator.compact() : await coordinator.check(last);
     assert.equal(result.compacted, true, result.errorMessage);
     assert.equal(result.shouldRetry, false);
     assert.equal(providerRequests, 1);
     assert.deepEqual((await session.getEntries()).slice(0, entriesBefore.length), entriesBefore);
-    assert.equal((await session.getEntries()).filter((entry) => entry.type === "compaction").length, 1);
+    assert.equal(
+      (await session.getEntries()).filter((entry) => entry.type === "compaction").length,
+      1,
+    );
     assert.match(JSON.stringify(result.messages), /bounded-recovery/u);
   });
 }
@@ -2989,23 +3562,37 @@ test("summary preflight includes output reserve and fails closed when no channel
   let providerRequests = 0;
   let retries = 0;
   let localCompiles = 0;
-  faux.setResponses([() => {
-    providerRequests += 1;
-    return fauxAssistantMessage(structuredSummary("must not be requested"));
-  }]);
+  faux.setResponses([
+    () => {
+      providerRequests += 1;
+      return fauxAssistantMessage(structuredSummary("must not be requested"));
+    },
+  ]);
   const session = await memorySession();
   await session.appendMessage(user("short old request", 10));
   await session.appendMessage(assistant(model, { timestamp: 20 }));
   const events: PiCompactionEvent[] = [];
   const result = await new PiCompactionCoordinator({
-    session, models, model: { ...model, maxTokens: 1_000 }, thinkingLevel: "off",
+    session,
+    models,
+    model: { ...model, maxTokens: 1_000 },
+    thinkingLevel: "off",
     settings: { enabled: true, reserveTokens: 900, keepRecentTokens: 100 },
-    compileVcc: async () => { localCompiles += 1; throw new Error("Local compiler unavailable."); },
+    compileVcc: async () => {
+      localCompiles += 1;
+      throw new Error("Local compiler unavailable.");
+    },
     onEvent: (event) => events.push(event),
     summaryRetryCallbacks: {
-      onRetryScheduled: () => { retries += 1; },
-      onRetryAttemptStart: () => { retries += 1; },
-      onRetryFinished: () => { retries += 1; },
+      onRetryScheduled: () => {
+        retries += 1;
+      },
+      onRetryAttemptStart: () => {
+        retries += 1;
+      },
+      onRetryFinished: () => {
+        retries += 1;
+      },
     },
   }).compact();
   assert.equal(result.failureCode, "compaction-failed");
@@ -3015,18 +3602,26 @@ test("summary preflight includes output reserve and fails closed when no channel
   assert.equal(localCompiles, 0);
   assert.equal(providerRequests, 0);
   assert.equal(retries, 0);
-  assert.deepEqual(events.map((event) => event.type), ["start", "end"]);
-  assert.equal((await session.getEntries()).some((entry) => entry.type === "compaction"), false);
+  assert.deepEqual(
+    events.map((event) => event.type),
+    ["start", "end"],
+  );
+  assert.equal(
+    (await session.getEntries()).some((entry) => entry.type === "compaction"),
+    false,
+  );
 });
 
 test("oversized recovery keeps the journal intact when local reduction fails", async () => {
   const { faux, models, model } = compactionFixture();
   const smallModel = { ...model, contextWindow: 8_192 };
   let providerRequests = 0;
-  faux.setResponses([() => {
-    providerRequests += 1;
-    return fauxAssistantMessage(structuredSummary("must not be requested"));
-  }]);
+  faux.setResponses([
+    () => {
+      providerRequests += 1;
+      return fauxAssistantMessage(structuredSummary("must not be requested"));
+    },
+  ]);
   const session = await memorySession();
   await session.appendMessage(user(`old ${"x".repeat(40_000)}`, 10));
   await session.appendMessage(assistant(smallModel, { timestamp: 11 }));
@@ -3034,9 +3629,14 @@ test("oversized recovery keeps the journal intact when local reduction fails", a
   await session.appendMessage(assistant(smallModel, { timestamp: 21 }));
   const before = await session.getEntries();
   const result = await new PiCompactionCoordinator({
-    session, models, model: smallModel, thinkingLevel: "off",
+    session,
+    models,
+    model: smallModel,
+    thinkingLevel: "off",
     settings: { enabled: true, reserveTokens: 1_000, keepRecentTokens: 200 },
-    compileVcc: async () => { throw new Error("Local compiler unavailable."); },
+    compileVcc: async () => {
+      throw new Error("Local compiler unavailable.");
+    },
   }).compact();
   assert.equal(result.failureCode, "compaction-failed");
   assert.match(result.errorMessage ?? "", /Local compiler unavailable/u);
@@ -3047,11 +3647,13 @@ test("oversized recovery keeps the journal intact when local reduction fails", a
 test("summary preflight reduces high-density Unicode before the provider call", async () => {
   const { faux, models, model } = compactionFixture();
   let providerRequests = 0;
-  faux.setResponses([(context) => {
-    providerRequests += 1;
-    assert.ok(JSON.stringify(context).length < 20_000);
-    return fauxAssistantMessage(structuredSummary("unicode-recovery"));
-  }]);
+  faux.setResponses([
+    (context) => {
+      providerRequests += 1;
+      assert.ok(JSON.stringify(context).length < 20_000);
+      return fauxAssistantMessage(structuredSummary("unicode-recovery"));
+    },
+  ]);
   const session = await memorySession();
   const smallModel = { ...model, contextWindow: 8_192 };
   await session.appendMessage(user("漢".repeat(20_000), 10));
@@ -3059,11 +3661,17 @@ test("summary preflight reduces high-density Unicode before the provider call", 
   await session.appendMessage(user("retained suffix " + "x".repeat(16_000), 30));
   await session.appendMessage(assistant(smallModel, { timestamp: 40 }));
   const result = await new PiCompactionCoordinator({
-    session, models, model: smallModel, thinkingLevel: "off",
+    session,
+    models,
+    model: smallModel,
+    thinkingLevel: "off",
   }).compact();
   assert.equal(result.compacted, true, result.errorMessage);
   assert.equal(providerRequests, 1);
-  assert.equal((await session.getEntries()).filter((entry) => entry.type === "compaction").length, 1);
+  assert.equal(
+    (await session.getEntries()).filter((entry) => entry.type === "compaction").length,
+    1,
+  );
 });
 
 test("switching a long chat from a million-token model to a 272k model compacts before provider I/O", async () => {
@@ -3076,15 +3684,27 @@ test("switching a long chat from a million-token model to a 272k model compacts 
     await session.appendMessage(assistant(oldModel, { timestamp: turn * 2 + 1 }));
   }
   let providerRequests = 0;
-  faux.setResponses([(context) => {
-    providerRequests += 1;
-    assert.ok(JSON.stringify(context).length < 30_000, "the oversized old history stays out of the new-model request");
-    return fauxAssistantMessage(structuredSummary("model-switch-recovered"));
-  }]);
+  faux.setResponses([
+    (context) => {
+      providerRequests += 1;
+      assert.ok(
+        JSON.stringify(context).length < 30_000,
+        "the oversized old history stays out of the new-model request",
+      );
+      return fauxAssistantMessage(structuredSummary("model-switch-recovered"));
+    },
+  ]);
   const before = await session.getEntries();
   const result = await new PiCompactionCoordinator({
-    session, models, model: currentModel, thinkingLevel: "off",
-  }).checkContextPressure({ contextTokens: 260_000, compressibleHistoryMessages: 40, shouldCompact: true });
+    session,
+    models,
+    model: currentModel,
+    thinkingLevel: "off",
+  }).checkContextPressure({
+    contextTokens: 260_000,
+    compressibleHistoryMessages: 40,
+    shouldCompact: true,
+  });
   assert.equal(result.compacted, true, result.errorMessage);
   assert.equal(providerRequests, 1);
   const entries = await session.getEntries();
@@ -3098,7 +3718,12 @@ function requestText(context: unknown): string {
 }
 
 /** Deterministic local reducer: shrinks channels carrying the oversized marker only. */
-type ReducerCall = { texts: string; previousSummary?: string; isSplitTurn: boolean; contextWindow: number };
+type ReducerCall = {
+  texts: string;
+  previousSummary?: string;
+  isSplitTurn: boolean;
+  contextWindow: number;
+};
 
 /**
  * Deterministic local reducer. With `fill`, it returns the largest summary the
@@ -3106,7 +3731,11 @@ type ReducerCall = { texts: string; previousSummary?: string; isSplitTurn: boole
  * (`summary + 64 < contextWindow - reserveTokens`).
  */
 function channelReducer(seen: ReducerCall[], options: { fill?: boolean } = {}) {
-  return async (input: Parameters<NonNullable<ConstructorParameters<typeof PiCompactionCoordinator>[0]["compileVcc"]>>[0]) => {
+  return async (
+    input: Parameters<
+      NonNullable<ConstructorParameters<typeof PiCompactionCoordinator>[0]["compileVcc"]>
+    >[0],
+  ) => {
     const texts = JSON.stringify(input.preparation.messagesToSummarize);
     seen.push({
       texts,
@@ -3123,7 +3752,11 @@ function channelReducer(seen: ReducerCall[], options: { fill?: boolean } = {}) {
       retainedTail: [],
       tokensBefore: input.preparation.tokensBefore,
       details: { engine: "vcc" as const, version: 1 },
-    } as unknown as Awaited<ReturnType<NonNullable<ConstructorParameters<typeof PiCompactionCoordinator>[0]["compileVcc"]>>>;
+    } as unknown as Awaited<
+      ReturnType<
+        NonNullable<ConstructorParameters<typeof PiCompactionCoordinator>[0]["compileVcc"]>
+      >
+    >;
   };
 }
 
@@ -3145,12 +3778,20 @@ test("oversized recovery keeps the split-turn prefix in its own Pi summary chann
   await session.appendMessage(user(`OVERSIZED_HISTORY ${"x".repeat(40_000)}`, 10));
   await session.appendMessage(assistant(smallModel, { timestamp: 11 }));
   await session.appendMessage(user("PREFIX_REQUEST_CANARY please continue the work", 20));
-  await session.appendMessage(assistant(smallModel, { text: `prefix progress ${"p".repeat(1_600)}`, timestamp: 21 }));
-  const last = assistant(smallModel, { text: `retained suffix ${"s".repeat(2_400)}`, timestamp: 22 });
+  await session.appendMessage(
+    assistant(smallModel, { text: `prefix progress ${"p".repeat(1_600)}`, timestamp: 21 }),
+  );
+  const last = assistant(smallModel, {
+    text: `retained suffix ${"s".repeat(2_400)}`,
+    timestamp: 22,
+  });
   await session.appendMessage(last);
   const seen: ReducerCall[] = [];
   const result = await new PiCompactionCoordinator({
-    session, models, model: smallModel, thinkingLevel: "off",
+    session,
+    models,
+    model: smallModel,
+    thinkingLevel: "off",
     settings: { enabled: true, reserveTokens: 1_000, keepRecentTokens: 500 },
     compileVcc: channelReducer(seen),
   }).compact();
@@ -3166,7 +3807,9 @@ test("oversized recovery keeps the split-turn prefix in its own Pi summary chann
   assert.doesNotMatch(requests[0]!, /PREFIX_REQUEST_CANARY/u);
   assert.match(requests[1]!, /PREFIX of a turn/u);
   assert.match(requests[1]!, /PREFIX_REQUEST_CANARY/u);
-  const checkpoint = [...(await session.getEntries())].reverse().find((entry) => entry.type === "compaction");
+  const checkpoint = [...(await session.getEntries())]
+    .reverse()
+    .find((entry) => entry.type === "compaction");
   const summary = checkpoint?.type === "compaction" ? checkpoint.summary : "";
   assert.match(summary, /history-half/u);
   assert.match(summary, /Turn Context \(split turn\)/u);
@@ -3192,7 +3835,11 @@ test("oversized recovery merges the prior checkpoint through Pi's previous-summa
   await session.appendMessage(assistant(smallModel, { timestamp: 13 }));
   const seen: ReducerCall[] = [];
   const coordinator = new PiCompactionCoordinator({
-    session, models, model: smallModel, thinkingLevel: "off", settings,
+    session,
+    models,
+    model: smallModel,
+    thinkingLevel: "off",
+    settings,
     compileVcc: channelReducer(seen),
   });
   assert.equal((await coordinator.compact()).compacted, true);
@@ -3204,13 +3851,20 @@ test("oversized recovery merges the prior checkpoint through Pi's previous-summa
   const result = await coordinator.compact();
   assert.equal(result.compacted, true, result.errorMessage);
   assert.equal(seen.length, 1);
-  assert.equal(seen[0]!.previousSummary, undefined, "the local reducer never re-embeds the prior checkpoint");
+  assert.equal(
+    seen[0]!.previousSummary,
+    undefined,
+    "the local reducer never re-embeds the prior checkpoint",
+  );
   assert.equal(requests.length, 1);
   assert.match(requests[0]!, /REDUCED_HISTORY_CANARY/u);
   assert.match(requests[0]!, /<previous-summary>[\s\S]*PRIOR_GOAL_CANARY/u);
   const compactions = (await session.getEntries()).filter((entry) => entry.type === "compaction");
   assert.equal(compactions.length, 2);
-  assert.match(compactions[1]?.type === "compaction" ? compactions[1].summary : "", /updated-after-recovery/u);
+  assert.match(
+    compactions[1]?.type === "compaction" ? compactions[1].summary : "",
+    /updated-after-recovery/u,
+  );
 });
 
 test("oversized recovery budgets the reduction against the prior checkpoint and final request reserves", async () => {
@@ -3233,7 +3887,11 @@ test("oversized recovery budgets the reduction against the prior checkpoint and 
   await session.appendMessage(assistant(smallModel, { timestamp: 13 }));
   const seen: ReducerCall[] = [];
   const coordinator = new PiCompactionCoordinator({
-    session, models, model: smallModel, thinkingLevel: "off", settings,
+    session,
+    models,
+    model: smallModel,
+    thinkingLevel: "off",
+    settings,
     compileVcc: channelReducer(seen, { fill: true }),
   });
   assert.equal((await coordinator.compact()).compacted, true);
@@ -3246,7 +3904,10 @@ test("oversized recovery budgets the reduction against the prior checkpoint and 
   assert.equal(seen.length, 1, "the first budgeted reduction already fits");
   // Reserve-only budgeting would allow ~7,100 reduced tokens beside a ~3,500
   // token prior checkpoint, which the final 8,192-token request cannot hold.
-  assert.ok(seen[0]!.contextWindow - settings.reserveTokens < 4_500, `budget ${seen[0]!.contextWindow}`);
+  assert.ok(
+    seen[0]!.contextWindow - settings.reserveTokens < 4_500,
+    `budget ${seen[0]!.contextWindow}`,
+  );
   assert.equal(requests.length, 1);
   assert.match(requests[0]!, /<previous-summary>[\s\S]*PRIOR_GOAL_CANARY/u);
   assert.match(requests[0]!, /REDUCED_HISTORY_CANARY/u);
@@ -3258,10 +3919,12 @@ test("oversized recovery fails closed as a local-compiler cause when no reductio
   const { faux, models, model } = compactionFixture();
   const smallModel = { ...model, contextWindow: 8_192 };
   let providerRequests = 0;
-  faux.setResponses([() => {
-    providerRequests += 1;
-    return fauxAssistantMessage(structuredSummary("must not be requested"));
-  }]);
+  faux.setResponses([
+    () => {
+      providerRequests += 1;
+      return fauxAssistantMessage(structuredSummary("must not be requested"));
+    },
+  ]);
   const session = await memorySession("oversized-no-fit");
   await session.appendMessage(user(`OVERSIZED_HISTORY ${"x".repeat(40_000)}`, 10));
   await session.appendMessage(assistant(smallModel, { timestamp: 11 }));
@@ -3270,7 +3933,10 @@ test("oversized recovery fails closed as a local-compiler cause when no reductio
   const before = await session.getEntries();
   let compiles = 0;
   const result = await new PiCompactionCoordinator({
-    session, models, model: smallModel, thinkingLevel: "off",
+    session,
+    models,
+    model: smallModel,
+    thinkingLevel: "off",
     settings: { enabled: true, reserveTokens: 1_000, keepRecentTokens: 200 },
     // Ignores the window it is given, as a pathological estimate mismatch would.
     compileVcc: async (input) => {
@@ -3280,7 +3946,11 @@ test("oversized recovery fails closed as a local-compiler cause when no reductio
         retainedTail: [],
         tokensBefore: input.preparation.tokensBefore,
         details: { engine: "vcc" as const, version: 1 },
-      } as unknown as Awaited<ReturnType<NonNullable<ConstructorParameters<typeof PiCompactionCoordinator>[0]["compileVcc"]>>>;
+      } as unknown as Awaited<
+        ReturnType<
+          NonNullable<ConstructorParameters<typeof PiCompactionCoordinator>[0]["compileVcc"]>
+        >
+      >;
     },
   }).compact();
   assert.equal(result.compacted, false);
@@ -3294,33 +3964,63 @@ test("compaction failure diagnostics keep the later cause after budget recovery 
   const budget = new CompactionSummaryBudgetError(9_000, 800, 410, 8_192);
   const base = { reason: "manual", sessionFailed: false, budgetFailure: budget };
   const local = compactionFailureDiagnosticFields({
-    ...base, error: new VccError("timeout"), recoveryStage: "local-compiler",
+    ...base,
+    error: new VccError("timeout"),
+    recoveryStage: "local-compiler",
   });
   assert.equal(local.compactionFailure, "local-compiler");
   assert.equal(local.localCompilerCause, "timeout");
   assert.equal(local.recoveryStage, "local-compiler");
   assert.equal(local.overBudgetTokens, 2_018);
   const provider = compactionFailureDiagnosticFields({
-    ...base, error: new CompactionError("summarization_failed", "Summarization failed"), recoveryStage: "semantic-summary",
+    ...base,
+    error: new CompactionError("summarization_failed", "Summarization failed"),
+    recoveryStage: "semantic-summary",
   });
   assert.equal(provider.compactionFailure, "summary-provider");
   assert.equal(provider.recoveryStage, "semantic-summary");
   const again = new CompactionSummaryBudgetError(8_000, 800, 410, 8_192);
-  const stillOver = compactionFailureDiagnosticFields({ ...base, error: again, recoveryStage: "semantic-summary" });
+  const stillOver = compactionFailureDiagnosticFields({
+    ...base,
+    error: again,
+    recoveryStage: "semantic-summary",
+  });
   assert.equal(stillOver.compactionFailure, "summary-budget");
   assert.equal(stillOver.inputTokens, 8_000);
-  assert.equal(compactionFailureDiagnosticFields({
-    ...base, error: new Error("hook"), hostFailure: "policy", recoveryStage: "semantic-summary",
-  }).compactionFailure, "host-policy");
-  assert.equal(compactionFailureDiagnosticFields({
-    ...base, error: new Error("journal"), sessionFailed: true, recoveryStage: "checkpoint",
-  }).compactionFailure, "journal");
-  assert.equal(compactionFailureDiagnosticFields({
-    ...base, error: new Error("unclassified"), recoveryStage: "local-compiler",
-  }).compactionFailure, "budget-recovery");
-  assert.equal(compactionFailureDiagnosticFields({
-    reason: "manual", sessionFailed: false, error: new Error("unclassified"),
-  }).compactionFailure, "other");
+  assert.equal(
+    compactionFailureDiagnosticFields({
+      ...base,
+      error: new Error("hook"),
+      hostFailure: "policy",
+      recoveryStage: "semantic-summary",
+    }).compactionFailure,
+    "host-policy",
+  );
+  assert.equal(
+    compactionFailureDiagnosticFields({
+      ...base,
+      error: new Error("journal"),
+      sessionFailed: true,
+      recoveryStage: "checkpoint",
+    }).compactionFailure,
+    "journal",
+  );
+  assert.equal(
+    compactionFailureDiagnosticFields({
+      ...base,
+      error: new Error("unclassified"),
+      recoveryStage: "local-compiler",
+    }).compactionFailure,
+    "budget-recovery",
+  );
+  assert.equal(
+    compactionFailureDiagnosticFields({
+      reason: "manual",
+      sessionFailed: false,
+      error: new Error("unclassified"),
+    }).compactionFailure,
+    "other",
+  );
 });
 
 test("renderer compaction defaults match the pi runtime defaults they describe", () => {
@@ -3336,38 +4036,84 @@ test("proactive LLM compaction skips system-only input without changing manual c
   await session.appendMessage(user("Keep this current request", 2));
   const before = await session.getEntries();
   const coordinator = new PiCompactionCoordinator({
-    session, models, model, thinkingLevel: "off",
+    session,
+    models,
+    model,
+    thinkingLevel: "off",
     settings: { enabled: true, reserveTokens: 100, keepRecentTokens: 100 },
   });
-  const result = await coordinator.checkContextPressure({ contextTokens: 950, compressibleHistoryMessages: 1, shouldCompact: true });
+  const result = await coordinator.checkContextPressure({
+    contextTokens: 950,
+    compressibleHistoryMessages: 1,
+    shouldCompact: true,
+  });
   assert.equal(result.compacted, false);
-  assert.equal(faux.state.callCount, 0, "system instructions are excluded from the serialized summary conversation");
-  assert.deepEqual(await session.getEntries(), before, "no checkpoint or journal rewrite for empty conversation");
+  assert.equal(
+    faux.state.callCount,
+    0,
+    "system instructions are excluded from the serialized summary conversation",
+  );
+  assert.deepEqual(
+    await session.getEntries(),
+    before,
+    "no checkpoint or journal rewrite for empty conversation",
+  );
   const manual = await coordinator.compact();
   assert.equal(manual.compacted, true);
-  assert.equal(faux.state.callCount, 1, "explicit manual operation preserves its existing semantics");
+  assert.equal(
+    faux.state.callCount,
+    1,
+    "explicit manual operation preserves its existing semantics",
+  );
 });
 
 test("proactive empty-input handling leaves a previous checkpoint and its current tail intact", async () => {
   const { faux, models, model } = compactionFixture();
   faux.setResponses([fauxAssistantMessage(structuredSummary("unexpected replacement"))]);
   const session = await memorySession("system-only-prior-checkpoint");
-  await session.appendCompaction({ id: "prior-system-checkpoint", summary: "PRIOR_DECISION_73", tokensBefore: 900,
-    retainedTail: [{ role: "system", content: "Required policy", timestamp: 1 }, user("Current request", 2)] });
+  await session.appendCompaction({
+    id: "prior-system-checkpoint",
+    summary: "PRIOR_DECISION_73",
+    tokensBefore: 900,
+    retainedTail: [
+      { role: "system", content: "Required policy", timestamp: 1 },
+      user("Current request", 2),
+    ],
+  });
   // A trailing checkpoint alone short-circuits prepareCompaction; exercise an
   // actual subsequent preparation carrying the existing previousSummary.
   await session.appendMessage({ role: "system", content: "Updated required policy", timestamp: 3 });
-  const prepared = prepareCompaction(await session.getBranch(), { ...DEFAULT_COMPACTION_SETTINGS, reserveTokens: 100, keepRecentTokens: 100 });
-  assert.ok(prepared.ok && prepared.value, "the fixture reaches a real preparation after the checkpoint");
+  const prepared = prepareCompaction(await session.getBranch(), {
+    ...DEFAULT_COMPACTION_SETTINGS,
+    reserveTokens: 100,
+    keepRecentTokens: 100,
+  });
+  assert.ok(
+    prepared.ok && prepared.value,
+    "the fixture reaches a real preparation after the checkpoint",
+  );
   assert.equal(prepared.value.previousSummary, "PRIOR_DECISION_73");
   const before = await session.getEntries();
-  const coordinator = new PiCompactionCoordinator({ session, models, model, thinkingLevel: "off",
-    settings: { enabled: true, reserveTokens: 100, keepRecentTokens: 100 } });
-  const result = await coordinator.checkContextPressure({ contextTokens: 950, compressibleHistoryMessages: 1, shouldCompact: true });
+  const coordinator = new PiCompactionCoordinator({
+    session,
+    models,
+    model,
+    thinkingLevel: "off",
+    settings: { enabled: true, reserveTokens: 100, keepRecentTokens: 100 },
+  });
+  const result = await coordinator.checkContextPressure({
+    contextTokens: 950,
+    compressibleHistoryMessages: 1,
+    shouldCompact: true,
+  });
   assert.equal(result.compacted, false);
   assert.equal(faux.state.callCount, 0);
   assert.deepEqual(await session.getEntries(), before);
-  assert.ok((await session.buildContext()).messages.some((message) => message.role === "compactionSummary" && message.summary === "PRIOR_DECISION_73"));
+  assert.ok(
+    (await session.buildContext()).messages.some(
+      (message) => message.role === "compactionSummary" && message.summary === "PRIOR_DECISION_73",
+    ),
+  );
 });
 
 test("system-only proactive input retains local VCC compaction behavior", async () => {
@@ -3377,46 +4123,107 @@ test("system-only proactive input retains local VCC compaction behavior", async 
   await session.appendMessage({ role: "system", content: "Required policy", timestamp: 1 });
   await session.appendMessage(current);
   let localCompiles = 0;
-  const result = await new PiCompactionCoordinator({ session, models, model, thinkingLevel: "off", engine: "vcc",
+  const result = await new PiCompactionCoordinator({
+    session,
+    models,
+    model,
+    thinkingLevel: "off",
+    engine: "vcc",
     settings: { enabled: true, reserveTokens: 100, keepRecentTokens: 100 },
     compileVcc: async (input) => {
       localCompiles += 1;
-      return { summary: "LOCAL_POLICY_STATE", retainedTail: [current], tokensBefore: input.preparation.tokensBefore,
-        details: { engine: "vcc" as const, version: 1 } } as unknown as Awaited<ReturnType<NonNullable<ConstructorParameters<typeof PiCompactionCoordinator>[0]["compileVcc"]>>>;
+      return {
+        summary: "LOCAL_POLICY_STATE",
+        retainedTail: [current],
+        tokensBefore: input.preparation.tokensBefore,
+        details: { engine: "vcc" as const, version: 1 },
+      } as unknown as Awaited<
+        ReturnType<
+          NonNullable<ConstructorParameters<typeof PiCompactionCoordinator>[0]["compileVcc"]>
+        >
+      >;
     },
-  }).checkContextPressure({ contextTokens: 950, compressibleHistoryMessages: 1, shouldCompact: true });
+  }).checkContextPressure({
+    contextTokens: 950,
+    compressibleHistoryMessages: 1,
+    shouldCompact: true,
+  });
   assert.equal(result.compacted, true);
   assert.equal(localCompiles, 1);
   assert.equal(faux.state.callCount, 0);
-  assert.ok((await session.buildContext()).messages.some((message) => message.role === "user" && message.content === current.content));
+  assert.ok(
+    (await session.buildContext()).messages.some(
+      (message) => message.role === "user" && message.content === current.content,
+    ),
+  );
 });
 
 test("proactive LLM compaction still summarizes a genuine active-turn prefix beside system history", async () => {
-  const faux = fauxProvider({ api: "openai-completions", provider: "active-prefix-summary",
-    models: [{ id: "summary", contextWindow: 16_000, maxTokens: 4_000 }] });
-  const models = createModels(); models.setProvider(faux.provider);
+  const faux = fauxProvider({
+    api: "openai-completions",
+    provider: "active-prefix-summary",
+    models: [{ id: "summary", contextWindow: 16_000, maxTokens: 4_000 }],
+  });
+  const models = createModels();
+  models.setProvider(faux.provider);
   const model = faux.getModel();
   const requests: string[] = [];
-  faux.setResponses(Array.from({ length: 4 }, () => (context) => {
-    requests.push(JSON.stringify(context));
-    return fauxAssistantMessage(structuredSummary("preserve active evidence"));
-  }));
+  faux.setResponses(
+    Array.from({ length: 4 }, () => (context) => {
+      requests.push(JSON.stringify(context));
+      return fauxAssistantMessage(structuredSummary("preserve active evidence"));
+    }),
+  );
   const session = await memorySession("system-plus-active-prefix");
   await session.appendMessage({ role: "system", content: "Required policy", timestamp: 1 });
   await session.appendMessage(user("ACTIVE_REQUEST_91", 2));
   for (let index = 0; index < 100; index += 1) {
-    const response = assistant(model, { input: 0, output: 0, timestamp: index * 2 + 3, stopReason: "toolUse" });
-    response.content = [{ type: "toolCall", id: `active-${index}`, name: "read_file", arguments: {} }];
+    const response = assistant(model, {
+      input: 0,
+      output: 0,
+      timestamp: index * 2 + 3,
+      stopReason: "toolUse",
+    });
+    response.content = [
+      { type: "toolCall", id: `active-${index}`, name: "read_file", arguments: {} },
+    ];
     await session.appendMessage(response);
-    await session.appendMessage({ role: "toolResult", toolCallId: `active-${index}`, toolName: "read_file", isError: false,
-      content: [{ type: "text", text: `EVIDENCE_${index}`.padEnd(512, "x") }], timestamp: index * 2 + 4 });
+    await session.appendMessage({
+      role: "toolResult",
+      toolCallId: `active-${index}`,
+      toolName: "read_file",
+      isError: false,
+      content: [{ type: "text", text: `EVIDENCE_${index}`.padEnd(512, "x") }],
+      timestamp: index * 2 + 4,
+    });
   }
   const before = await session.getEntries();
-  const result = await new PiCompactionCoordinator({ session, models, model, thinkingLevel: "off" })
-    .checkContextPressure({ contextTokens: 13_000, compressibleHistoryMessages: 1, shouldCompact: true });
+  const result = await new PiCompactionCoordinator({
+    session,
+    models,
+    model,
+    thinkingLevel: "off",
+  }).checkContextPressure({
+    contextTokens: 13_000,
+    compressibleHistoryMessages: 1,
+    shouldCompact: true,
+  });
   assert.equal(result.compacted, true);
-  assert.equal(faux.state.callCount, 2, "mixed channels preserve the existing history and split-prefix summary operations");
-  assert.ok(requests.some((request) => request.includes("ACTIVE_REQUEST_91") && request.includes("EVIDENCE_0")));
+  assert.equal(
+    faux.state.callCount,
+    2,
+    "mixed channels preserve the existing history and split-prefix summary operations",
+  );
+  assert.ok(
+    requests.some(
+      (request) => request.includes("ACTIVE_REQUEST_91") && request.includes("EVIDENCE_0"),
+    ),
+  );
   assert.deepEqual((await session.getEntries()).slice(0, before.length), before);
-  assert.ok(result.messages?.some((message) => message.role === "toolResult" && message.toolCallId === "active-99"), "latest complete tool evidence remains in retained tail");
+  assert.ok(
+    result.messages?.some(
+      (message) => message.role === "toolResult" && message.toolCallId === "active-99",
+    ),
+    "latest complete tool evidence remains in retained tail",
+  );
 });

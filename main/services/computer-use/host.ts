@@ -451,7 +451,10 @@ export class CuaDriverHost {
     this.manifest = null;
     if (this.unconfirmedExits.size > 0) {
       this.reclaimWhenExited();
-      throw new CuaDriverError("cleanup_unconfirmed", "A Computer Use process may still be running.");
+      throw new CuaDriverError(
+        "cleanup_unconfirmed",
+        "A Computer Use process may still be running.",
+      );
     }
   }
 

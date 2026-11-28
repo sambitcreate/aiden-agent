@@ -20,7 +20,13 @@ const DRAFT_TTL_MS = 2 * 60 * 1000;
 
 type PreviewEntry =
   | { kind: "static"; body: string; expiresAt: number }
-  | { kind: "draft"; stream: ReadableStream<Uint8Array>; csp: string; expiresAt: number; close: () => void };
+  | {
+      kind: "draft";
+      stream: ReadableStream<Uint8Array>;
+      csp: string;
+      expiresAt: number;
+      close: () => void;
+    };
 
 const previews = new Map<string, PreviewEntry>();
 

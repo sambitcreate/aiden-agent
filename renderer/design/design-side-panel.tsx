@@ -27,7 +27,15 @@ import {
 } from "lucide-react";
 import * as React from "react";
 import { CopyButton } from "../components/copy-button";
-import { Button, Input, Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../components/ui";
+import {
+  Button,
+  Input,
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "../components/ui";
 import { Segmented } from "../components/ui-primitives";
 import {
   highlightCode,
@@ -51,13 +59,24 @@ import {
   type DesignGuide,
   type DesignWidth,
 } from "../shared/design-canvas/schema";
-import { DesignTweakDark, DesignTweaksEditor, useDesignTweakControls, type DesignTweakOps } from "./design-tweaks-panel";
+import {
+  DesignTweakDark,
+  DesignTweaksEditor,
+  useDesignTweakControls,
+  type DesignTweakOps,
+} from "./design-tweaks-panel";
 import { useFrameSource, type DesignReadSource } from "./frame-source";
 import { designLayers, type DesignLayer, type DesignLayerPlace } from "./layers-core";
 import { designColorVar, designFillVar, DESIGN_COLOR_NAMES } from "./nodes/draw-style";
 import { DESIGN_DEFAULT_WIDTH, type DesignFramePatch } from "./nodes/design-node-context";
 import { isEscapeKey } from "../lib/dismiss-key";
-import { arrangeByDraft, ReorderAnnouncer, scrollParentOf, usePointerReorder, useReorderDraft } from "../lib/reorder-draft";
+import {
+  arrangeByDraft,
+  ReorderAnnouncer,
+  scrollParentOf,
+  usePointerReorder,
+  useReorderDraft,
+} from "../lib/reorder-draft";
 
 export type DesignPanelTab = "properties" | "layers" | "code" | "tweaks";
 
@@ -131,10 +150,18 @@ function kindIcon(frame: DesignFrame): LucideIcon {
  */
 export function designItemName(frame: DesignFrame): string {
   const title = frame.title.trim();
-  if ((frame.kind === "note" || frame.kind === "text") && (title === "" || title === designKindName(frame))) {
+  if (
+    (frame.kind === "note" || frame.kind === "text") &&
+    (title === "" || title === designKindName(frame))
+  ) {
     const words = (frame.text ?? "")
       .split("\n")
-      .map((line) => line.replace(/^\s*(?:[-*]|\d+\.)\s+/u, "").replace(/<\/?u>|\*\*?|\[|\]\([^)]*\)/gu, "").trim())
+      .map((line) =>
+        line
+          .replace(/^\s*(?:[-*]|\d+\.)\s+/u, "")
+          .replace(/<\/?u>|\*\*?|\[|\]\([^)]*\)/gu, "")
+          .trim(),
+      )
       .find((line) => line.length > 0);
     if (words) return words.length > 40 ? `${words.slice(0, 39)}…` : words;
   }
@@ -165,7 +192,9 @@ export type DesignSidePanelProps = {
 
 export function DesignSidePanel(props: DesignSidePanelProps) {
   const { doc, selection, tab, onTab, onClose } = props;
-  const selected = doc.frames.filter((frame) => selection.has(frame.id) && frame.pageId === doc.activePageId);
+  const selected = doc.frames.filter(
+    (frame) => selection.has(frame.id) && frame.pageId === doc.activePageId,
+  );
   // On Linux without a desktop title bar, Aiden's window buttons sit at the top
   // right; the panel starts below them instead of under them.
   const asideRef = React.useRef<HTMLElement>(null);
@@ -179,8 +208,21 @@ export function DesignSidePanel(props: DesignSidePanelProps) {
       data-typing-surface="canvas"
     >
       <div className="flex shrink-0 items-center gap-1 p-2">
-        <Segmented value={tab} onValueChange={onTab} options={TABS} aria-label="Side panel" className="min-w-0 flex-1 [&>*]:flex-auto [&>*]:px-2" />
-        <Button iconOnly size="small" variant="transparent" aria-label="Close side panel" title="Close (I)" onClick={onClose}>
+        <Segmented
+          value={tab}
+          onValueChange={onTab}
+          options={TABS}
+          aria-label="Side panel"
+          className="min-w-0 flex-1 [&>*]:flex-auto [&>*]:px-2"
+        />
+        <Button
+          iconOnly
+          size="small"
+          variant="transparent"
+          aria-label="Close side panel"
+          title="Close (I)"
+          onClick={onClose}
+        >
           <X aria-hidden />
         </Button>
       </div>
@@ -206,7 +248,10 @@ function PanelNote({ children }: { children: React.ReactNode }) {
 function PanelSection({ title, children }: { title: string; children: React.ReactNode }) {
   const id = React.useId();
   return (
-    <section aria-labelledby={id} className="flex flex-col gap-2 border-t border-separator py-3 first:border-t-0">
+    <section
+      aria-labelledby={id}
+      className="flex flex-col gap-2 border-t border-separator py-3 first:border-t-0"
+    >
       <h3 id={id} className="text-small-strong text-secondary">
         {title}
       </h3>
@@ -247,11 +292,13 @@ function PropertiesTab({
     const count = doc.frames.filter((frame) => frame.pageId === doc.activePageId).length;
     return (
       <PanelNote>
-        {page?.name ?? "This page"} has {count === 1 ? "1 item" : `${count} items`}. Select one to see its properties.
+        {page?.name ?? "This page"} has {count === 1 ? "1 item" : `${count} items`}. Select one to
+        see its properties.
       </PanelNote>
     );
   }
-  if (selected.length > 1) return <PanelNote>{selected.length} items selected. Select one to change it.</PanelNote>;
+  if (selected.length > 1)
+    return <PanelNote>{selected.length} items selected. Select one to change it.</PanelNote>;
   const frame = selected[0]!;
   const locked = frame.locked === true;
   const set = (patch: DesignFramePatch) => update(frame.id, patch, { record: true });
@@ -259,21 +306,49 @@ function PropertiesTab({
   return (
     <div className="flex flex-col">
       <div className="flex items-center gap-2 py-2">
-        <span className="min-w-0 flex-1 truncate text-strong text-primary">{designItemName(frame)}</span>
+        <span className="min-w-0 flex-1 truncate text-strong text-primary">
+          {designItemName(frame)}
+        </span>
         {designItemName(frame).toLowerCase() !== designKindName(frame).toLowerCase() ? (
           <span className="shrink-0 text-small text-secondary">{designKindName(frame)}</span>
         ) : null}
       </div>
-      {locked ? <p className="pb-2 text-small text-secondary">Locked. Unlock it in Layers to change it.</p> : null}
+      {locked ? (
+        <p className="pb-2 text-small text-secondary">Locked. Unlock it in Layers to change it.</p>
+      ) : null}
 
       <PanelSection title={frame.kind === "connector" ? "Position" : "Position and size"}>
         <div className="grid grid-cols-2 gap-2">
-          <NumberField label="X" value={frame.x} disabled={locked} onCommit={(x) => moveTo(frame.id, x, frame.y)} />
-          <NumberField label="Y" value={frame.y} disabled={locked} onCommit={(y) => moveTo(frame.id, frame.x, y)} />
+          <NumberField
+            label="X"
+            value={frame.x}
+            disabled={locked}
+            onCommit={(x) => moveTo(frame.id, x, frame.y)}
+          />
+          <NumberField
+            label="Y"
+            value={frame.y}
+            disabled={locked}
+            onCommit={(y) => moveTo(frame.id, frame.x, y)}
+          />
           {frame.kind === "connector" ? null : (
             <>
-              <NumberField label="W" title="Width" value={frame.w} min={1} disabled={locked} onCommit={(w) => resizeTo(frame.id, w, frame.h)} />
-              <NumberField label="H" title="Height" value={frame.h} min={1} disabled={locked} onCommit={(h) => resizeTo(frame.id, frame.w, h)} />
+              <NumberField
+                label="W"
+                title="Width"
+                value={frame.w}
+                min={1}
+                disabled={locked}
+                onCommit={(w) => resizeTo(frame.id, w, frame.h)}
+              />
+              <NumberField
+                label="H"
+                title="Height"
+                value={frame.h}
+                min={1}
+                disabled={locked}
+                onCommit={(h) => resizeTo(frame.id, frame.w, h)}
+              />
             </>
           )}
         </div>
@@ -287,7 +362,10 @@ function PropertiesTab({
               const width = Number(value) as DesignWidth;
               const from = frame.designWidth ?? DESIGN_DEFAULT_WIDTH;
               // The page keeps its scale on the canvas, so a phone width makes a narrower frame.
-              set({ designWidth: width, w: Math.max(DESIGN_CANVAS_LIMITS.minSize, Math.round((frame.w * width) / from)) });
+              set({
+                designWidth: width,
+                w: Math.max(DESIGN_CANVAS_LIMITS.minSize, Math.round((frame.w * width) / from)),
+              });
             }}
             options={DESIGN_WIDTHS.map((width) => ({ value: String(width), label: String(width) }))}
             aria-label="Design width"
@@ -300,7 +378,15 @@ function PropertiesTab({
       {frame.kind === "frame" || (frame.kind === "shape" && frame.shape === "rect") ? (
         <PanelSection title={frame.kind === "frame" ? "Background" : "Corners"}>
           {frame.kind === "frame" ? (
-            <ColorField label="Background" value={frame.fill} swatch={designFillVar} allowNone noneLabel="Plain" disabled={locked} onChange={(fill) => set({ fill })} />
+            <ColorField
+              label="Background"
+              value={frame.fill}
+              swatch={designFillVar}
+              allowNone
+              noneLabel="Plain"
+              disabled={locked}
+              onChange={(fill) => set({ fill })}
+            />
           ) : null}
           <NumberField
             label="Radius"
@@ -316,7 +402,15 @@ function PropertiesTab({
       {frame.kind === "shape" || line ? (
         <PanelSection title={frame.kind === "shape" ? "Fill and outline" : "Stroke"}>
           {frame.kind === "shape" ? (
-            <ColorField label="Fill" value={frame.fill} swatch={designFillVar} allowNone noneLabel="None" disabled={locked} onChange={(fill) => set({ fill })} />
+            <ColorField
+              label="Fill"
+              value={frame.fill}
+              swatch={designFillVar}
+              allowNone
+              noneLabel="None"
+              disabled={locked}
+              onChange={(fill) => set({ fill })}
+            />
           ) : null}
           <ColorField
             label={frame.kind === "shape" ? "Outline" : "Colour"}
@@ -480,7 +574,11 @@ function ColorField({
           {DESIGN_COLORS.map((color) => (
             <SelectItem key={color} value={color}>
               <span className="flex items-center gap-2">
-                <span aria-hidden className="size-3.5 rounded-full" style={{ background: swatch(color) }} />
+                <span
+                  aria-hidden
+                  className="size-3.5 rounded-full"
+                  style={{ background: swatch(color) }}
+                />
                 {DESIGN_COLOR_NAMES[color]}
               </span>
             </SelectItem>
@@ -509,7 +607,11 @@ function GuideField({
   onChange(guide: DesignGuide | undefined): void;
 }) {
   return (
-    <Select value={value ?? "none"} disabled={disabled} onValueChange={(next) => onChange(next === "none" ? undefined : (next as DesignGuide))}>
+    <Select
+      value={value ?? "none"}
+      disabled={disabled}
+      onValueChange={(next) => onChange(next === "none" ? undefined : (next as DesignGuide))}
+    >
       <SelectTrigger size="small" aria-label="Layout guide">
         <SelectValue />
       </SelectTrigger>
@@ -531,7 +633,9 @@ function layerGroups(layers: readonly DesignLayer[]): Map<string, string[]> {
   const groups = new Map<string, string[]>();
   const visit = (list: readonly DesignLayer[]) => {
     for (const container of [false, true]) {
-      const ids = list.filter((layer) => isDesignContainer(layer.frame.kind) === container).map((layer) => layer.frame.id);
+      const ids = list
+        .filter((layer) => isDesignContainer(layer.frame.kind) === container)
+        .map((layer) => layer.frame.id);
       for (const id of ids) groups.set(id, ids);
     }
     for (const layer of list) visit(layer.children);
@@ -546,7 +650,12 @@ function LayersTab({ doc, selection, onSelect, update, reorder, step }: DesignSi
   const [renaming, setRenaming] = React.useState<string | null>(null);
   const listRef = React.useRef<HTMLUListElement>(null);
   const rowsById = () =>
-    new Map([...(listRef.current?.querySelectorAll<HTMLElement>("[data-layer-id]") ?? [])].map((row) => [row.dataset.layerId, row]));
+    new Map(
+      [...(listRef.current?.querySelectorAll<HTMLElement>("[data-layer-id]") ?? [])].map((row) => [
+        row.dataset.layerId,
+        row,
+      ]),
+    );
   const keyboard = useReorderDraft({
     groupOf: (id) => groups.get(id) ?? [],
     label: (id) => {
@@ -599,7 +708,10 @@ function LayersTab({ doc, selection, onSelect, update, reorder, step }: DesignSi
           {drop?.id === frame.id ? (
             <span
               aria-hidden
-              className={cn("pointer-events-none absolute inset-x-1 h-0.5 rounded-full bg-fill-accent", drop.place === "before" ? "top-0" : "bottom-0")}
+              className={cn(
+                "pointer-events-none absolute inset-x-1 h-0.5 rounded-full bg-fill-accent",
+                drop.place === "before" ? "top-0" : "bottom-0",
+              )}
             />
           ) : null}
           <Icon aria-hidden className="size-4 shrink-0 text-secondary" />
@@ -608,7 +720,8 @@ function LayersTab({ doc, selection, onSelect, update, reorder, step }: DesignSi
               name={frame.title}
               onDone={(title) => {
                 setRenaming(null);
-                if (title !== null && title !== frame.title) update(frame.id, { title }, { record: true });
+                if (title !== null && title !== frame.title)
+                  update(frame.id, { title }, { record: true });
               }}
             />
           ) : (
@@ -648,8 +761,12 @@ function LayersTab({ doc, selection, onSelect, update, reorder, step }: DesignSi
             aria-label={`${frame.hidden ? "Show" : "Hide"} ${name}`}
             aria-pressed={frame.hidden === true}
             title={frame.hidden ? "Show" : "Hide"}
-            className={cn(!frame.hidden && "opacity-0 group-hover/layer:opacity-100 focus-visible:opacity-100")}
-            onClick={() => update(frame.id, { hidden: frame.hidden ? undefined : true }, { record: true })}
+            className={cn(
+              !frame.hidden && "opacity-0 group-hover/layer:opacity-100 focus-visible:opacity-100",
+            )}
+            onClick={() =>
+              update(frame.id, { hidden: frame.hidden ? undefined : true }, { record: true })
+            }
           >
             {frame.hidden ? <EyeOff aria-hidden /> : <Eye aria-hidden />}
           </Button>
@@ -660,8 +777,12 @@ function LayersTab({ doc, selection, onSelect, update, reorder, step }: DesignSi
             aria-label={`${frame.locked ? "Unlock" : "Lock"} ${name}`}
             aria-pressed={frame.locked === true}
             title={frame.locked ? "Unlock" : "Lock"}
-            className={cn(!frame.locked && "opacity-0 group-hover/layer:opacity-100 focus-visible:opacity-100")}
-            onClick={() => update(frame.id, { locked: frame.locked ? undefined : true }, { record: true })}
+            className={cn(
+              !frame.locked && "opacity-0 group-hover/layer:opacity-100 focus-visible:opacity-100",
+            )}
+            onClick={() =>
+              update(frame.id, { locked: frame.locked ? undefined : true }, { record: true })
+            }
           >
             {frame.locked ? <Lock aria-hidden /> : <LockOpen aria-hidden />}
           </Button>
@@ -680,7 +801,11 @@ function LayersTab({ doc, selection, onSelect, update, reorder, step }: DesignSi
           </Button>
         </div>
         {layer.children.length > 0 ? (
-          <ul aria-label={`In ${name}`}>{arrangeByDraft(layer.children, byFrame, keyboard.draft).map((child) => row(child, depth + 1))}</ul>
+          <ul aria-label={`In ${name}`}>
+            {arrangeByDraft(layer.children, byFrame, keyboard.draft).map((child) =>
+              row(child, depth + 1),
+            )}
+          </ul>
         ) : null}
       </li>
     );
@@ -738,30 +863,39 @@ function codeLanguage(frame: DesignFrame): string {
   return "xml";
 }
 
-
 /** The one selected page or artifact, the frames Code and Tweaks are about. */
 function selectedPage(selected: DesignFrame[]): DesignFrame | null {
   return selected.length === 1 && isDesignPrintable(selected[0]!.kind) ? selected[0]! : null;
 }
 
-function CodeTab({ readSource, selected, versionOf }: DesignSidePanelProps & { selected: DesignFrame[] }) {
+function CodeTab({
+  readSource,
+  selected,
+  versionOf,
+}: DesignSidePanelProps & { selected: DesignFrame[] }) {
   const frame = selectedPage(selected);
   const current = useFrameSource(readSource, frame, versionOf);
   if (!frame) return <PanelNote>Select a page or an artifact to see its code.</PanelNote>;
   return (
     <div className="flex flex-col gap-2 pt-1">
       <div className="flex items-center gap-2">
-        <span className="min-w-0 flex-1 truncate font-mono text-small text-secondary">{frame.path ?? designItemName(frame)}</span>
+        <span className="min-w-0 flex-1 truncate font-mono text-small text-secondary">
+          {frame.path ?? designItemName(frame)}
+        </span>
         {current && "text" in current ? <CopyButton text={current.text} label="Copy code" /> : null}
       </div>
-      <p className="text-small text-secondary">Read only. Ask Aiden for changes, or open the file in your editor.</p>
+      <p className="text-small text-secondary">
+        Read only. Ask Aiden for changes, or open the file in your editor.
+      </p>
       {current === null ? (
         <PanelNote>Loading…</PanelNote>
       ) : "error" in current ? (
         <PanelNote>{current.error}</PanelNote>
       ) : (
         <>
-          {current.truncated ? <p className="text-small text-secondary">Showing the first 512 KB.</p> : null}
+          {current.truncated ? (
+            <p className="text-small text-secondary">Showing the first 512 KB.</p>
+          ) : null}
           <HighlightedCode code={current.text} language={codeLanguage(frame)} />
         </>
       )}
@@ -770,13 +904,21 @@ function CodeTab({ readSource, selected, versionOf }: DesignSidePanelProps & { s
 }
 
 function HighlightedCode({ code, language }: { code: string; language: string }) {
-  const grammars = React.useSyncExternalStore(subscribeHighlightLanguages, highlightLanguagesVersion, highlightLanguagesVersion);
+  const grammars = React.useSyncExternalStore(
+    subscribeHighlightLanguages,
+    highlightLanguagesVersion,
+    highlightLanguagesVersion,
+  );
   React.useEffect(() => {
     void loadHighlightLanguage(language);
   }, [language]);
   const html = React.useMemo(() => highlightCode(code, language), [code, language, grammars]);
   return (
-    <pre aria-label="Code" tabIndex={0} className="overflow-x-auto rounded-lg bg-well p-3 leading-relaxed outline-none focus-visible:ring-2 focus-visible:ring-focus-ring">
+    <pre
+      aria-label="Code"
+      tabIndex={0}
+      className="overflow-x-auto rounded-lg bg-well p-3 leading-relaxed outline-none focus-visible:ring-2 focus-visible:ring-focus-ring"
+    >
       {html ? (
         <code className="hljs font-mono text-small" dangerouslySetInnerHTML={{ __html: html }} />
       ) : (
@@ -788,7 +930,12 @@ function HighlightedCode({ code, language }: { code: string; language: string })
 
 // ---- Tweaks ---------------------------------------------------------------
 
-function TweaksTab({ readSource, selected, versionOf, tweaks }: DesignSidePanelProps & { selected: DesignFrame[] }) {
+function TweaksTab({
+  readSource,
+  selected,
+  versionOf,
+  tweaks,
+}: DesignSidePanelProps & { selected: DesignFrame[] }) {
   const frame = selectedPage(selected);
   const { source, controls } = useDesignTweakControls(readSource, frame, versionOf);
   if (!frame) return <PanelNote>Select a page or an artifact to change how it looks.</PanelNote>;
@@ -809,7 +956,10 @@ function TweaksTab({ readSource, selected, versionOf, tweaks }: DesignSidePanelP
           ) : "error" in source ? (
             <PanelNote>{source.error}</PanelNote>
           ) : controls.length === 0 ? (
-            <p className="text-small text-secondary">This page has no tweaks. Ask Aiden to add some, like an accent colour or a density switch.</p>
+            <p className="text-small text-secondary">
+              This page has no tweaks. Ask Aiden to add some, like an accent colour or a density
+              switch.
+            </p>
           ) : (
             <DesignTweaksEditor frame={frame} controls={controls} ops={tweaks} />
           )}

@@ -32,7 +32,9 @@ function fakeClock() {
     advance(ms: number) {
       const end = now + ms;
       for (;;) {
-        const due = [...timers].filter(([, timer]) => timer.at <= end).sort((a, b) => a[1].at - b[1].at)[0];
+        const due = [...timers]
+          .filter(([, timer]) => timer.at <= end)
+          .sort((a, b) => a[1].at - b[1].at)[0];
         if (!due) break;
         timers.delete(due[0]);
         now = due[1].at;
@@ -60,7 +62,10 @@ const tick = async () => {
 
 function harness(options: { writeIgnoresAbort?: boolean } = {}) {
   const clock = fakeClock();
-  const reads: Array<{ signal: AbortSignal; result: ReturnType<typeof deferred<AndroidFoldState>> }> = [];
+  const reads: Array<{
+    signal: AbortSignal;
+    result: ReturnType<typeof deferred<AndroidFoldState>>;
+  }> = [];
   const writes: Array<{
     posture: AndroidFoldPosture;
     signal: AbortSignal;
@@ -77,7 +82,8 @@ function harness(options: { writeIgnoresAbort?: boolean } = {}) {
       const result = deferred<AndroidFoldState>();
       writes.push({ posture, signal, result });
       // A write stuck minting its grant never sees the signal.
-      if (!options.writeIgnoresAbort) signal.addEventListener("abort", () => result.reject(new Error("aborted")));
+      if (!options.writeIgnoresAbort)
+        signal.addEventListener("abort", () => result.reject(new Error("aborted")));
       return result.promise;
     },
     onChange: (snapshot) => snapshots.push(snapshot),
@@ -89,11 +95,14 @@ function harness(options: { writeIgnoresAbort?: boolean } = {}) {
 
 test("fold responses parse fail-closed, and the angle falls back on the posture", () => {
   assert.deepEqual(parseAndroidFold({ ok: true, fold: OPEN }), OPEN);
-  assert.deepEqual(parseAndroidFold({ ok: true, fold: { supported: false, posture: null, hingeAngle: null } }), {
-    supported: false,
-    posture: null,
-    hingeAngle: null,
-  });
+  assert.deepEqual(
+    parseAndroidFold({ ok: true, fold: { supported: false, posture: null, hingeAngle: null } }),
+    {
+      supported: false,
+      posture: null,
+      hingeAngle: null,
+    },
+  );
   for (const invalid of [
     null,
     { ok: false, fold: OPEN },
@@ -116,15 +125,34 @@ test("fold requests go through the proxy with the grant, the device, and only a 
     fetch: async (url: string, init: Record<string, unknown>) => {
       calls.push({ url, init });
       return url.includes("emulator-5556")
-        ? new Response(JSON.stringify({ ok: false, error: "Selected emulator does not support folding" }), { status: 400 })
+        ? new Response(
+            JSON.stringify({ ok: false, error: "Selected emulator does not support folding" }),
+            { status: 400 },
+          )
         : new Response(JSON.stringify({ ok: true, fold: CLOSED }), { status: 200 });
     },
   };
   const grant = { origin: "http://127.0.0.1:4100", token: "tok", expiresAt: Date.now() + 60_000 };
   const signal = new AbortController().signal;
-  assert.deepEqual(await requestAndroidFold({ hostId: "local", deviceId: "emulator-5554", grant }, "closed", signal, runtime), CLOSED);
-  await requestAndroidFold({ hostId: "peer:studio", deviceId: "emulator-5554", grant }, null, signal, runtime);
-  assert.equal(calls[0]!.url, "http://127.0.0.1:4100/vendor/serve-emu/api/fold?device=emulator-5554&t=tok&host=local");
+  assert.deepEqual(
+    await requestAndroidFold(
+      { hostId: "local", deviceId: "emulator-5554", grant },
+      "closed",
+      signal,
+      runtime,
+    ),
+    CLOSED,
+  );
+  await requestAndroidFold(
+    { hostId: "peer:studio", deviceId: "emulator-5554", grant },
+    null,
+    signal,
+    runtime,
+  );
+  assert.equal(
+    calls[0]!.url,
+    "http://127.0.0.1:4100/vendor/serve-emu/api/fold?device=emulator-5554&t=tok&host=local",
+  );
   assert.equal(calls[0]!.init.method, "POST");
   assert.equal(calls[0]!.init.body, JSON.stringify({ posture: "closed" }));
   assert.equal(calls[0]!.init.credentials, "omit");
@@ -132,7 +160,12 @@ test("fold requests go through the proxy with the grant, the device, and only a 
   assert.equal(calls[1]!.init.body, undefined);
   assert.match(calls[1]!.url, /host=peer%3Astudio/u);
   await assert.rejects(
-    requestAndroidFold({ hostId: "local", deviceId: "emulator-5556", grant }, "closed", signal, runtime),
+    requestAndroidFold(
+      { hostId: "local", deviceId: "emulator-5556", grant },
+      "closed",
+      signal,
+      runtime,
+    ),
     /Selected emulator does not support folding/u,
   );
 });
@@ -149,7 +182,12 @@ test("a failed read retries every 3 seconds until one lands, and pausing stops i
   assert.equal(h.reads.length, 2);
   h.reads[1]!.result.resolve(OPEN);
   await tick();
-  assert.deepEqual(h.controller.snapshot(), { fold: OPEN, angle: 180, pending: false, error: null });
+  assert.deepEqual(h.controller.snapshot(), {
+    fold: OPEN,
+    angle: 180,
+    pending: false,
+    error: null,
+  });
 
   h.controller.watch();
   h.reads[2]!.result.reject(new Error("offline"));
@@ -169,7 +207,10 @@ test("a screen-size change re-reads and drops the stale read", async () => {
   h.reads[1]!.result.resolve(CLOSED);
   await tick();
   assert.deepEqual(h.controller.snapshot().fold, CLOSED);
-  assert.ok(!h.snapshots.some((snapshot) => snapshot.fold === OPEN), "the stale answer is never shown");
+  assert.ok(
+    !h.snapshots.some((snapshot) => snapshot.fold === OPEN),
+    "the stale answer is never shown",
+  );
 });
 
 test("folding moves the angle ahead of the device, then confirms and re-reads", async () => {
@@ -184,7 +225,12 @@ test("folding moves the angle ahead of the device, then confirms and re-reads", 
   assert.equal(h.writes.length, 1);
   h.writes[0]!.result.resolve(CLOSED);
   await changing;
-  assert.deepEqual(h.controller.snapshot(), { fold: CLOSED, angle: 0, pending: false, error: null });
+  assert.deepEqual(h.controller.snapshot(), {
+    fold: CLOSED,
+    angle: 0,
+    pending: false,
+    error: null,
+  });
   assert.equal(h.reads.length, 2, "the confirmed posture is read back");
   assert.equal(h.clock.pending(), 0, "the timeout is cleared");
 });
@@ -199,7 +245,12 @@ test("a fold command times out after 12 seconds and restores the last known angl
   assert.equal(h.writes[0]!.signal.aborted, false);
   h.clock.advance(1);
   await changing;
-  assert.deepEqual(h.controller.snapshot(), { fold: OPEN, angle: 180, pending: false, error: "Fold command timed out." });
+  assert.deepEqual(h.controller.snapshot(), {
+    fold: OPEN,
+    angle: 180,
+    pending: false,
+    error: "Fold command timed out.",
+  });
 });
 
 test("the timeout also covers a command whose grant never arrives, and dispose aborts a command in flight", async () => {
@@ -210,7 +261,12 @@ test("the timeout also covers a command whose grant never arrives, and dispose a
   const changing = h.controller.change("closed");
   h.clock.advance(ANDROID_FOLD_TIMEOUT_MS);
   await changing;
-  assert.deepEqual(h.controller.snapshot(), { fold: OPEN, angle: 180, pending: false, error: "Fold command timed out." });
+  assert.deepEqual(h.controller.snapshot(), {
+    fold: OPEN,
+    angle: 180,
+    pending: false,
+    error: "Fold command timed out.",
+  });
   // The device can be folded again.
   h.reads[1]!.result.resolve(OPEN);
   await tick();

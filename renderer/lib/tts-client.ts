@@ -171,8 +171,14 @@ export class ReadAloudController {
     const waiting =
       !!job && (job.phase !== "completed" || this.scheduledSegments.size < job.readySegments);
     this.patch({ playing, busy: !this.state.paused && !playing && waiting });
-    if (job?.phase === "completed" && !playing && !this.state.paused &&
-      this.player && this.player.segmentsPlayed >= job.totalSegments && this.finishedEpoch !== this.epoch) {
+    if (
+      job?.phase === "completed" &&
+      !playing &&
+      !this.state.paused &&
+      this.player &&
+      this.player.segmentsPlayed >= job.totalSegments &&
+      this.finishedEpoch !== this.epoch
+    ) {
       this.finishedEpoch = this.epoch;
       // Release the shared playback slot after audible completion, preserving
       // server-retained replay bytes so a phone can start next.

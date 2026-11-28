@@ -97,7 +97,9 @@ export function mcpAgentToolName(
   toolName: string,
   scope: { configured: readonly McpToolNamingServer[]; inventory: readonly string[] },
 ): string {
-  const inventory = scope.inventory.includes(toolName) ? scope.inventory : [...scope.inventory, toolName];
+  const inventory = scope.inventory.includes(toolName)
+    ? scope.inventory
+    : [...scope.inventory, toolName];
   return mcpAgentToolNames(server, scope.configured, inventory).get(toolName)!;
 }
 
@@ -132,7 +134,10 @@ export function hasMcpAgentToolNameShape(name: string): boolean {
 
 /** Fold case and treat any run of separators (`-`, `_`, spaces) as one, for alias lookups. */
 export function normalizeMcpNamespaceAlias(value: string): string {
-  return value.toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_|_$/g, "");
+  return value
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "_")
+    .replace(/^_|_$/g, "");
 }
 
 export function assertUniqueMcpAgentToolNames(tools: readonly { name: string }[]): void {
@@ -155,7 +160,12 @@ const MCP_TOOL_IDENTITY = Symbol.for("aiden.mcpAgentToolIdentity");
 
 /** Tag a built MCP agent tool with its real identity (survives object spread). */
 export function markMcpAgentTool<T extends object>(tool: T, identity: McpAgentToolIdentity): T {
-  return Object.assign(tool, { [MCP_TOOL_IDENTITY]: Object.freeze({ serverId: identity.serverId, toolName: identity.toolName }) });
+  return Object.assign(tool, {
+    [MCP_TOOL_IDENTITY]: Object.freeze({
+      serverId: identity.serverId,
+      toolName: identity.toolName,
+    }),
+  });
 }
 
 /** The identity of an MCP agent tool, or undefined for any other tool. */

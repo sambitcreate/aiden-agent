@@ -59,8 +59,13 @@ export interface OnboardingFeature {
 }
 
 /** A tile's description as this platform reads it. */
-export function onboardingFeatureDescription(feature: Pick<OnboardingFeature, "description">, platform: string): string {
-  return typeof feature.description === "function" ? feature.description(localComputerNoun(platform)) : feature.description;
+export function onboardingFeatureDescription(
+  feature: Pick<OnboardingFeature, "description">,
+  platform: string,
+): string {
+  return typeof feature.description === "function"
+    ? feature.description(localComputerNoun(platform))
+    : feature.description;
 }
 
 const featureGroups: ReadonlyArray<{ id: FeatureGroupId; title: string }> = [
@@ -83,7 +88,8 @@ export const onboardingFeatures: OnboardingFeature[] = [
     id: "computerUse",
     group: "create",
     title: "Computer Use",
-    description: "Inspect and operate Mac apps. Aiden asks once in each chat before it uses your computer.",
+    description:
+      "Inspect and operate Mac apps. Aiden asks once in each chat before it uses your computer.",
     icon: MousePointer2,
     size: "tall",
   },
@@ -136,7 +142,8 @@ export const onboardingFeatures: OnboardingFeature[] = [
     id: "filesEditor",
     group: "create",
     title: "Files & Text Editor",
-    description: "Open Files from the workspace tools launcher to browse, search, edit, and safely save text files beside the chat. On your phone, expand folders on demand and preview source before editing. Activity confirms files written or edited. Large workspace tool outputs can be recovered in the same chat for up to seven days.",
+    description:
+      "Open Files from the workspace tools launcher to browse, search, edit, and safely save text files beside the chat. On your phone, expand folders on demand and preview source before editing. Activity confirms files written or edited. Large workspace tool outputs can be recovered in the same chat for up to seven days.",
     icon: Files,
     size: "standard",
   },
@@ -223,7 +230,8 @@ export const onboardingFeatures: OnboardingFeature[] = [
     id: "skills",
     group: "extend",
     title: "Reusable Skills",
-    description: "Use your local skill folders and enabled installed Claude Code plugin skills. Skills can allow automatic use, explicit attachment with $, or both. Turn all skills off anytime in Settings → Skills.",
+    description:
+      "Use your local skill folders and enabled installed Claude Code plugin skills. Skills can allow automatic use, explicit attachment with $, or both. Turn all skills off anytime in Settings → Skills.",
     icon: Wand2,
     size: "wide",
   },
@@ -231,7 +239,8 @@ export const onboardingFeatures: OnboardingFeature[] = [
     id: "mcp",
     group: "extend",
     title: "Connectors",
-    description: "Connect apps like Linear, Notion and GitHub, or any MCP server, to use their tools and read the resources they share. Connected services may also provide guidance for using those tools.",
+    description:
+      "Connect apps like Linear, Notion and GitHub, or any MCP server, to use their tools and read the resources they share. Connected services may also provide guidance for using those tools.",
     icon: Plug,
     size: "wide",
   },
@@ -275,7 +284,8 @@ export const onboardingFeatures: OnboardingFeature[] = [
     id: "botWatches",
     group: "control",
     title: "Connected-app watches",
-    description: "Watch upcoming Calendar events on Mac or Linux, or a Mail mailbox on Mac. Choose the connected source in a Bot’s Profile, preview its matching metadata, and tell the Bot what to do. Checks continue while Aiden is running and the computer is awake. Manage them from Aiden Agent or a paired phone.",
+    description:
+      "Watch upcoming Calendar events on Mac or Linux, or a Mail mailbox on Mac. Choose the connected source in a Bot’s Profile, preview its matching metadata, and tell the Bot what to do. Checks continue while Aiden is running and the computer is awake. Manage them from Aiden Agent or a paired phone.",
     icon: CalendarClock,
     size: "standard",
   },
@@ -283,7 +293,8 @@ export const onboardingFeatures: OnboardingFeature[] = [
     id: "botOpenWork",
     group: "control",
     title: "Open work",
-    description: "Bots keep track of tasks they accept. See what is open or waiting, edit a note, mark work done, dismiss it or undo a change from Aiden Agent or a paired phone.",
+    description:
+      "Bots keep track of tasks they accept. See what is open or waiting, edit a note, mark work done, dismiss it or undo a change from Aiden Agent or a paired phone.",
     icon: ListTodo,
     size: "standard",
   },
@@ -291,7 +302,8 @@ export const onboardingFeatures: OnboardingFeature[] = [
     id: "botRoutineModels",
     group: "control",
     title: "Models for each routine",
-    description: "Choose a model, thinking level and optional fallback for each Bot routine. Each accepted run keeps its choice, including after a restart. Manage these choices from Aiden Agent or a paired phone.",
+    description:
+      "Choose a model, thinking level and optional fallback for each Bot routine. Each accepted run keeps its choice, including after a restart. Manage these choices from Aiden Agent or a paired phone.",
     icon: Blocks,
     size: "standard",
   },
@@ -299,7 +311,8 @@ export const onboardingFeatures: OnboardingFeature[] = [
     id: "botPeers",
     group: "control",
     title: "Bot messaging",
-    description: "Approve named Bot pairs to exchange requests. Each Bot keeps its own rules and access. Inspect exchanges and ask its computer to stop linked work from Aiden Agent or a paired phone.",
+    description:
+      "Approve named Bot pairs to exchange requests. Each Bot keeps its own rules and access. Inspect exchanges and ask its computer to stop linked work from Aiden Agent or a paired phone.",
     icon: UsersRound,
     size: "standard",
   },
@@ -387,7 +400,8 @@ export const onboardingFeatures: OnboardingFeature[] = [
     id: "peerProjects",
     group: "control",
     title: "Projects on paired computers",
-    description: "Clone a local repository onto a paired computer from the new-chat computer menu. Choose an approved destination and optionally copy selected environment files. Git credentials stay on each computer; environment files are never selected automatically.",
+    description:
+      "Clone a local repository onto a paired computer from the new-chat computer menu. Choose an approved destination and optionally copy selected environment files. Git credentials stay on each computer; environment files are never selected automatically.",
     icon: FolderGit2,
     size: "standard",
   },
@@ -489,7 +503,10 @@ export function OnboardingFeatureGallery({
                       aria-hidden="true"
                       className="relative flex min-h-full flex-col justify-end bg-popover p-3 opacity-0 transition-opacity duration-150 group-hover:opacity-100 group-focus:opacity-100 motion-reduce:transition-none"
                     >
-                      <Icon aria-hidden="true" className="absolute right-3 top-3 size-4 text-accent-text" />
+                      <Icon
+                        aria-hidden="true"
+                        className="absolute right-3 top-3 size-4 text-accent-text"
+                      />
                       <div className="mt-5">
                         <Text variant="small-strong" className="block leading-4">
                           {feature.title}

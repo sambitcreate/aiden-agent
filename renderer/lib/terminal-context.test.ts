@@ -1,10 +1,18 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { MAX_ATTACHMENTS_PER_MESSAGE, MAX_ATTACHMENT_INLINE_BYTES } from "../shared/attachment-contract";
+import {
+  MAX_ATTACHMENTS_PER_MESSAGE,
+  MAX_ATTACHMENT_INLINE_BYTES,
+} from "../shared/attachment-contract";
 import { terminalContextAttachment, terminalContextText } from "./terminal-context";
 import type { Attachment } from "./types";
 
-const selection = { label: "Terminal 2", lineStart: 12, lineEnd: 20, text: "npm ERR! missing script\n" };
+const selection = {
+  label: "Terminal 2",
+  lineStart: 12,
+  lineEnd: 20,
+  text: "npm ERR! missing script\n",
+};
 
 test("a selection becomes a named text attachment sized by its encoded bytes", () => {
   const attachment = terminalContextAttachment({ ...selection, text: "café" }, [], "id-1");
@@ -43,7 +51,14 @@ test("an oversized selection keeps its end, where a run reports what failed", ()
 
 test("nothing is attached for an empty selection or a full message", () => {
   assert.equal(terminalContextAttachment({ ...selection, text: "\n\n" }, [], "id"), null);
-  const small: Attachment = { id: "a", name: "a.txt", kind: "text", mimeType: "text/plain", text: "a", size: 1 };
+  const small: Attachment = {
+    id: "a",
+    name: "a.txt",
+    kind: "text",
+    mimeType: "text/plain",
+    text: "a",
+    size: 1,
+  };
   const full = Array.from({ length: MAX_ATTACHMENTS_PER_MESSAGE }, () => small);
   assert.equal(terminalContextAttachment(selection, full, "id"), null);
   const noRoom: Attachment = { ...small, kind: "image", size: MAX_ATTACHMENT_INLINE_BYTES - 4 };

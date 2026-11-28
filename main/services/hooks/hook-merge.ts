@@ -7,7 +7,13 @@
 import { fenceAsData } from "../../../renderer/shared/agent-notices.js";
 import { aidenToolInput } from "./hook-aliases.js";
 import type { HookHandlerResult } from "./hook-runner.js";
-import type { HookDefinition, HookEvent, HookOutcome, HookPayload, HookPermissionDecision } from "./hook-types.js";
+import type {
+  HookDefinition,
+  HookEvent,
+  HookOutcome,
+  HookPayload,
+  HookPermissionDecision,
+} from "./hook-types.js";
 
 export const MAX_HOOK_CONTEXT_CHARS = 10_000;
 export const MAX_EVENT_CONTEXT_CHARS = 20_000;
@@ -20,7 +26,13 @@ const RANK: Record<HookPermissionDecision, number> = { allow: 1, ask: 2, deny: 3
  * Tools whose input a hook may never rewrite: each one takes a shell command
  * or code to run, and the person approves what the agent asked for.
  */
-const NO_UPDATED_INPUT_TOOLS: ReadonlySet<string> = new Set(["run_command", "background_job", "computer_shell", "codemode", "workspace_artifact"]);
+const NO_UPDATED_INPUT_TOOLS: ReadonlySet<string> = new Set([
+  "run_command",
+  "background_job",
+  "computer_shell",
+  "codemode",
+  "workspace_artifact",
+]);
 
 /** Whether a hook's `updatedInput` may replace this tool's input. */
 export function hookMayRewriteInput(toolName: string): boolean {
@@ -37,7 +49,10 @@ function cap(text: string, max: number): string {
 }
 
 /** The stricter of two decisions. */
-export function stricterDecision(a: HookPermissionDecision | undefined, b: HookPermissionDecision | undefined): HookPermissionDecision | undefined {
+export function stricterDecision(
+  a: HookPermissionDecision | undefined,
+  b: HookPermissionDecision | undefined,
+): HookPermissionDecision | undefined {
   if (!a) return b;
   if (!b) return a;
   return RANK[b] > RANK[a] ? b : a;
@@ -64,7 +79,11 @@ function contextBlocks(entries: readonly HookMergeEntry[]): string | undefined {
  * Merge per-hook results (in definition order) into one outcome for `event`.
  * `payload` supplies the tool name and original input for `updatedInput`.
  */
-export function mergeHookResults(event: HookEvent, entries: readonly HookMergeEntry[], payload?: HookPayload): HookOutcome {
+export function mergeHookResults(
+  event: HookEvent,
+  entries: readonly HookMergeEntry[],
+  payload?: HookPayload,
+): HookOutcome {
   const outcome: HookOutcome = { ranHooks: entries.map((entry) => entry.hook.name) };
   if (event === "PreToolUse") {
     let decision: HookPermissionDecision | undefined;
@@ -77,16 +96,27 @@ export function mergeHookResults(event: HookEvent, entries: readonly HookMergeEn
       if (reasons.length > 0) outcome.reason = reasons.join("\n");
       if (decision === "allow") {
         const toolName = payload?.aiden_tool_name ?? payload?.tool_name;
-        const winner = entries.find((entry) => entry.result.decision === "allow" && entry.result.updatedInput);
+        const winner = entries.find(
+          (entry) => entry.result.decision === "allow" && entry.result.updatedInput,
+        );
         if (winner?.result.updatedInput && toolName && hookMayRewriteInput(toolName)) {
-          outcome.updatedInput = aidenToolInput(toolName, winner.result.updatedInput, payload?.tool_input);
+          outcome.updatedInput = aidenToolInput(
+            toolName,
+            winner.result.updatedInput,
+            payload?.tool_input,
+          );
         }
       }
     }
   } else {
     const blocking = entries.filter((entry) => entry.result.block);
     if (blocking.length > 0) {
-      outcome.reason = blocking.map((entry) => `${entry.hook.name}: ${cap(entry.result.reason ?? "Blocked by hook.", MAX_REASON_CHARS)}`).join("\n");
+      outcome.reason = blocking
+        .map(
+          (entry) =>
+            `${entry.hook.name}: ${cap(entry.result.reason ?? "Blocked by hook.", MAX_REASON_CHARS)}`,
+        )
+        .join("\n");
       if (event === "UserPromptSubmit") outcome.blockPrompt = true;
       else if (event === "Stop" || event === "SubagentStop") outcome.continueTurn = true;
       else if (event === "PostToolUse") outcome.flaggedResult = true;
@@ -98,12 +128,18 @@ export function mergeHookResults(event: HookEvent, entries: readonly HookMergeEn
   const stopping = entries.filter((entry) => entry.result.stopTurn);
   if (stopping.length > 0) {
     outcome.stopTurn = true;
-    const reasons = stopping.filter((entry) => entry.result.stopReason).map((entry) => `${entry.hook.name}: ${cap(entry.result.stopReason ?? "", MAX_REASON_CHARS)}`);
+    const reasons = stopping
+      .filter((entry) => entry.result.stopReason)
+      .map(
+        (entry) => `${entry.hook.name}: ${cap(entry.result.stopReason ?? "", MAX_REASON_CHARS)}`,
+      );
     if (reasons.length > 0) outcome.stopReason = reasons.join("\n");
   }
   const messages = entries
     .filter((entry) => entry.result.systemMessage)
-    .map((entry) => `${entry.hook.name}: ${cap(entry.result.systemMessage ?? "", MAX_MESSAGE_CHARS)}`);
+    .map(
+      (entry) => `${entry.hook.name}: ${cap(entry.result.systemMessage ?? "", MAX_MESSAGE_CHARS)}`,
+    );
   if (messages.length > 0) outcome.systemMessages = messages;
   const notices = entries
     .filter((entry) => entry.result.result === "error" && entry.result.error)

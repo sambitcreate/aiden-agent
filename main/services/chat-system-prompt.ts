@@ -41,7 +41,9 @@ export async function buildSystemPromptWithSections(
   /** The folder is the hidden one behind a "No workspace" chat, not a user project. */
   noWorkspace = false,
 ): Promise<ChatSystemPromptWithSections> {
-  const base = PI_CHAT_SYSTEM_PROMPT + (availableToolNames?.has("aiden_help") ? `\n\n${aidenAppGuidance(availableToolNames)}` : "");
+  const base =
+    PI_CHAT_SYSTEM_PROMPT +
+    (availableToolNames?.has("aiden_help") ? `\n\n${aidenAppGuidance(availableToolNames)}` : "");
   const skillsText =
     skillsAvailable && skillSnapshot
       ? formatAvailableSkills(skillSnapshot, availableToolNames, permission !== "none")
@@ -71,7 +73,9 @@ export async function buildSystemPromptWithSections(
       ? "All file paths are relative to this folder. If the request requires a mutation, explain that this scheduled run is read-only."
       : "All file paths are relative to this folder. Prefer editing existing files over creating new ones, read a file before editing it, and keep changes surgical. ";
   const followThrough =
-    permission !== "read-only" && availableToolNames?.has("follow_pull_request") ? FOLLOW_PULL_REQUEST_GUIDANCE : "";
+    permission !== "read-only" && availableToolNames?.has("follow_pull_request")
+      ? FOLLOW_PULL_REQUEST_GUIDANCE
+      : "";
   const delegation = subagentsAvailable
     ? ` Use the subagent tool for independent bounded investigation, comparison, planning, or fresh review—not trivial work—and always reconcile its ordered results yourself. ${SUBAGENT_PARENT_SECURITY_GUIDANCE}`
     : "";

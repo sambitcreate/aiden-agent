@@ -14,7 +14,11 @@ import type { PostHogTransport } from "./analytics-client.js";
 import { parseAnalyticsState, type AnalyticsState } from "./analytics-consent.js";
 import type { AnalyticsSuperProperties } from "./analytics-events.js";
 import { setAnalyticsReporter } from "./analytics-report.js";
-import { createAnalyticsService, createLoggingTransport, type AnalyticsService } from "./analytics-service.js";
+import {
+  createAnalyticsService,
+  createLoggingTransport,
+  type AnalyticsService,
+} from "./analytics-service.js";
 
 // macOS reports its own major (26); elsewhere this is the kernel major, which
 // docs/analytics.md says for Linux.
@@ -27,7 +31,10 @@ function osMajor(): number {
 function superProperties(): AnalyticsSuperProperties {
   return {
     app_version: app.getVersion(),
-    platform: process.platform === "darwin" || process.platform === "linux" || process.platform === "win32" ? process.platform : "other",
+    platform:
+      process.platform === "darwin" || process.platform === "linux" || process.platform === "win32"
+        ? process.platform
+        : "other",
     arch: process.arch === "arm64" || process.arch === "x64" ? process.arch : "other",
     os_major: osMajor(),
     surface: "desktop",
@@ -44,7 +51,10 @@ function transportFactory(): (() => Promise<PostHogTransport>) | undefined {
       const { createPostHogTransport } = await import("./analytics-client.js");
       return createPostHogTransport({
         apiKey,
-        onError: (error) => logger.warn("analytics", "Usage data could not be sent.", { errorType: error instanceof Error ? error.name : typeof error }),
+        onError: (error) =>
+          logger.warn("analytics", "Usage data could not be sent.", {
+            errorType: error instanceof Error ? error.name : typeof error,
+          }),
       });
     };
   }
@@ -58,7 +68,9 @@ function transportFactory(): (() => Promise<PostHogTransport>) | undefined {
 // unreadable means no consent, so nothing is captured.
 function readStateSync(): AnalyticsState | undefined {
   try {
-    const document = JSON.parse(readFileSync(join(app.getPath("userData"), SETTINGS_FILENAME), "utf8")) as { analytics?: unknown };
+    const document = JSON.parse(
+      readFileSync(join(app.getPath("userData"), SETTINGS_FILENAME), "utf8"),
+    ) as { analytics?: unknown };
     return document.analytics === undefined ? undefined : parseAnalyticsState(document.analytics);
   } catch {
     return undefined;
@@ -84,11 +96,16 @@ export function analyticsService(): AnalyticsService {
     readStateSync,
     onSendingChanged: (sending) => ipcMain.broadcast("analytics:sending-changed", { sending }),
     log: (message, error) =>
-      logger.warn("analytics", message, { errorType: error instanceof Error ? error.name : typeof error }),
+      logger.warn("analytics", message, {
+        errorType: error instanceof Error ? error.name : typeof error,
+      }),
   });
   service = created;
   // Shared services report through the seam, so they never import this file.
-  setAnalyticsReporter((event, props) => created.track(event, props), () => created.actionReporter());
+  setAnalyticsReporter(
+    (event, props) => created.track(event, props),
+    () => created.actionReporter(),
+  );
   return created;
 }
 

@@ -187,11 +187,15 @@ async function seedCycle({ root, port, capability }) {
     privateDirectory(chats),
     privateDirectory(portableConfig),
   ]);
-  await writeFile(path.join(workspace, "README.md"), "# Disposable packaged subagent soak workspace\n", {
-    encoding: "utf8",
-    flag: "wx",
-    mode: PRIVATE_FILE_MODE,
-  });
+  await writeFile(
+    path.join(workspace, "README.md"),
+    "# Disposable packaged subagent soak workspace\n",
+    {
+      encoding: "utf8",
+      flag: "wx",
+      mode: PRIVATE_FILE_MODE,
+    },
+  );
   const fixture = subagentPackagedSoakFixture({
     port,
     capability,
@@ -201,10 +205,7 @@ async function seedCycle({ root, port, capability }) {
     writePrivateJson(path.join(portableConfig, "config.json"), fixture.portableConfig),
     writePrivateJson(path.join(userData, "config.json"), fixture.localConfig),
     writePrivateJson(path.join(userData, "settings.json"), fixture.settings),
-    writePrivateJson(
-      path.join(userData, "provider-model-cache.json"),
-      fixture.providerModelCache,
-    ),
+    writePrivateJson(path.join(userData, "provider-model-cache.json"), fixture.providerModelCache),
     writePrivateJson(path.join(chats, "index.json"), fixture.chatIndex),
     writePrivateJson(path.join(chats, `${SUBAGENT_PACKAGED_SOAK_CHAT_ID}.json`), fixture.chat),
   ]);
@@ -411,10 +412,17 @@ async function waitForReceipt(receiptPath, control, deadline, { signal } = {}) {
     if (signal?.aborted) throw receiptWaitAborted();
     try {
       const stat = await lstat(receiptPath);
-      if (!stat.isFile() || stat.isSymbolicLink() || stat.nlink !== 1 || (stat.mode & 0o777) !== 0o600) {
+      if (
+        !stat.isFile() ||
+        stat.isSymbolicLink() ||
+        stat.nlink !== 1 ||
+        (stat.mode & 0o777) !== 0o600
+      ) {
         throw new Error("Packaged subagent soak receipt is not a private regular file.");
       }
-      const parsed = parseSubagentPackagedSoakReceipt(JSON.parse(await readFile(receiptPath, "utf8")));
+      const parsed = parseSubagentPackagedSoakReceipt(
+        JSON.parse(await readFile(receiptPath, "utf8")),
+      );
       return assertSubagentPackagedSoakReceipt(parsed, control);
     } catch (caught) {
       if (caught?.code !== "ENOENT" && !(caught instanceof SyntaxError)) {
@@ -432,12 +440,7 @@ async function waitForReceipt(receiptPath, control, deadline, { signal } = {}) {
 async function waitForStableNoOwnedSubagentPackagedSoakProcesses(
   appPath,
   timeoutMs,
-  {
-    listPackageProcesses = packageOwnedProcesses,
-    onActive,
-    sleepFn = sleep,
-    now = Date.now,
-  } = {},
+  { listPackageProcesses = packageOwnedProcesses, onActive, sleepFn = sleep, now = Date.now } = {},
 ) {
   const deadline = now() + timeoutMs;
   let zeroSamples = 0;
@@ -458,7 +461,9 @@ async function waitForStableNoOwnedSubagentPackagedSoakProcesses(
   if (active.length > 0) {
     throw new Error("A process owned by the target Aiden package remained after the soak cycle.");
   }
-  throw new Error("Target Aiden package processes did not remain absent across the stable clean interval.");
+  throw new Error(
+    "Target Aiden package processes did not remain absent across the stable clean interval.",
+  );
 }
 
 /** Require a short stable-zero process interval so late Electron helpers cannot escape a cycle. */
@@ -509,7 +514,9 @@ export async function terminateLingeringSubagentPackagedSoakProcesses(
 async function assertNoRunningPackagedAiden(appPath) {
   const active = await packageOwnedProcesses(appPath);
   if (active.length > 0) {
-    throw new Error("Quit every process from the targeted packaged Aiden app before starting the isolated subagent soak.");
+    throw new Error(
+      "Quit every process from the targeted packaged Aiden app before starting the isolated subagent soak.",
+    );
   }
 }
 
@@ -517,10 +524,7 @@ async function assertNoRunningPackagedAiden(appPath) {
 export async function assertSubagentPackagedSoakArtifactStable(
   appPath,
   expectedArtifact,
-  {
-    verifyPackage = verifyMacPackage,
-    getIdentity = packagedArtifactIdentity,
-  } = {},
+  { verifyPackage = verifyMacPackage, getIdentity = packagedArtifactIdentity } = {},
 ) {
   // A bundle's outer identity cannot prove that nested signed helpers and
   // resources are unchanged. Re-run the complete package verifier before
@@ -539,10 +543,7 @@ export async function assertSubagentPackagedSoakArtifactStable(
 export async function verifySubagentPackagedSoakArtifact(
   appPath,
   expectedArtifact,
-  {
-    verifyPackage = verifyMacPackage,
-    getIdentity = packagedArtifactIdentity,
-  } = {},
+  { verifyPackage = verifyMacPackage, getIdentity = packagedArtifactIdentity } = {},
 ) {
   await verifyPackage(appPath);
   const actualArtifact = await getIdentity(appPath);
@@ -576,19 +577,23 @@ async function runCycle({ appPath, artifact, cycle, cycles }) {
     await writePrivateJson(controlPath, control);
     await assertSubagentPackagedSoakArtifactStable(appPath, artifact);
 
-    const child = spawn(executable, [
-      `--user-data-dir=${seeded.userData}`,
-      `${SUBAGENT_PACKAGED_SOAK_CONTROL_SWITCH}=${controlPath}`,
-    ], {
-      env: {
-        ...process.env,
-        AIDEN_CONFIG_DIR: seeded.portableConfig,
-        AIDEN_SUBAGENTS_ENABLED: "1",
-        AIDEN_ANALYTICS: "0",
-        [SUBAGENT_PACKAGED_SOAK_ENV]: "1",
+    const child = spawn(
+      executable,
+      [
+        `--user-data-dir=${seeded.userData}`,
+        `${SUBAGENT_PACKAGED_SOAK_CONTROL_SWITCH}=${controlPath}`,
+      ],
+      {
+        env: {
+          ...process.env,
+          AIDEN_CONFIG_DIR: seeded.portableConfig,
+          AIDEN_SUBAGENTS_ENABLED: "1",
+          AIDEN_ANALYTICS: "0",
+          [SUBAGENT_PACKAGED_SOAK_ENV]: "1",
+        },
+        stdio: ["ignore", "pipe", "pipe"],
       },
-      stdio: ["ignore", "pipe", "pipe"],
-    });
+    );
     if (!child.pid) throw new Error("The packaged Aiden process did not start.");
     aidenProcess = { pid: child.pid, executable };
     childDiagnosticOutput = captureChildDiagnosticOutput(child);
@@ -675,7 +680,9 @@ async function writeAggregateReceipt(root, aggregate) {
   return receiptPath;
 }
 
-export async function runSubagentPackagedSoak(options = parseSubagentPackagedSoakArguments(process.argv.slice(2))) {
+export async function runSubagentPackagedSoak(
+  options = parseSubagentPackagedSoakArguments(process.argv.slice(2)),
+) {
   if (process.platform !== "darwin") {
     throw new Error("Packaged subagent soak is macOS-only.");
   }
@@ -685,7 +692,8 @@ export async function runSubagentPackagedSoak(options = parseSubagentPackagedSoa
     );
   }
   const appPath = path.resolve(
-    options.appPath ?? (await discoverPackagedApp(path.join(repositoryRoot, "release", "development"))),
+    options.appPath ??
+      (await discoverPackagedApp(path.join(repositoryRoot, "release", "development"))),
   );
   await assertNoRunningPackagedAiden(appPath);
   const [artifact, reportRoot] = await Promise.all([

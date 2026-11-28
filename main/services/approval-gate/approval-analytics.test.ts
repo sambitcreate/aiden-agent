@@ -7,7 +7,11 @@ import test from "node:test";
 import { captureAnalyticsEvents } from "../analytics/test-support.js";
 import { createBotApprovals } from "../bot-runtime/bot-approvals.js";
 import type { BotApprovalRequest } from "../bot-runtime/bot-extension.js";
-import { ToolApprovalCoordinator, toolCallApprovalEffect, type ToolApprovalPrompt } from "../tool-approval.js";
+import {
+  ToolApprovalCoordinator,
+  toolCallApprovalEffect,
+  type ToolApprovalPrompt,
+} from "../tool-approval.js";
 import { ApprovalAnalytics } from "./approval-analytics.js";
 
 function workspaceCoordinator(mode: "ask" | "full" = "ask") {
@@ -31,11 +35,17 @@ test("a shown command card and its remembered answer are counted by kind, mode a
     summary: "Run command: rm -rf ~/secret-project",
     scopes: ["once", "chat", "always"],
   });
-  assert.equal(coordinator.decide(prompts[0]!.approvalId, true, undefined, { scope: "always" }), true);
+  assert.equal(
+    coordinator.decide(prompts[0]!.approvalId, true, undefined, { scope: "always" }),
+    true,
+  );
   assert.equal(await pending, "allowed");
   assert.deepEqual(events, [
     { event: "approval_shown", props: { kind: "command", mode: "ask", chat: "workspace" } },
-    { event: "approval_answered", props: { kind: "command", mode: "ask", chat: "workspace", scope: "workspace" } },
+    {
+      event: "approval_answered",
+      props: { kind: "command", mode: "ask", chat: "workspace", scope: "workspace" },
+    },
   ]);
   assert.doesNotMatch(JSON.stringify(events), /secret-project|rm -rf/u);
 });
@@ -43,10 +53,20 @@ test("a shown command card and its remembered answer are counted by kind, mode a
 test("a scope the card never offered is counted as once, and a deny as deny", async (t) => {
   const events = captureAnalyticsEvents(t);
   const { coordinator, prompts } = workspaceCoordinator();
-  const allowed = coordinator.request({ streamId: "s1", toolCallId: "c1", toolName: "edit_file", summary: "Edit file: a.ts" });
+  const allowed = coordinator.request({
+    streamId: "s1",
+    toolCallId: "c1",
+    toolName: "edit_file",
+    summary: "Edit file: a.ts",
+  });
   coordinator.decide(prompts[0]!.approvalId, true, undefined, { scope: "always" });
   await allowed;
-  const denied = coordinator.request({ streamId: "s1", toolCallId: "c2", toolName: "write_file", summary: "Create or replace file: b.ts" });
+  const denied = coordinator.request({
+    streamId: "s1",
+    toolCallId: "c2",
+    toolName: "write_file",
+    summary: "Create or replace file: b.ts",
+  });
   coordinator.decide(prompts[1]!.approvalId, false);
   await denied;
   assert.deepEqual(
@@ -68,7 +88,9 @@ test("a card that leaves without the person's answer is shown but never answered
   );
   controller.abort();
   assert.equal(await pending, "cancelled");
-  assert.deepEqual(events, [{ event: "approval_shown", props: { kind: "computer_use", mode: "full", chat: "workspace" } }]);
+  assert.deepEqual(events, [
+    { event: "approval_shown", props: { kind: "computer_use", mode: "full", chat: "workspace" } },
+  ]);
 });
 
 test("identical parallel calls share one counted card, and a re-ask after Deny is not counted", async (t) => {
@@ -85,7 +107,10 @@ test("identical parallel calls share one counted card, and a re-ask after Deny i
   coordinator.decide(prompts[0]!.approvalId, false);
   assert.deepEqual([await first, await second], ["denied", "denied"]);
   assert.equal(await coordinator.request({ ...card, toolCallId: "c3" }), "denied");
-  assert.deepEqual(events.map((entry) => entry.event), ["approval_shown", "approval_answered"]);
+  assert.deepEqual(
+    events.map((entry) => entry.event),
+    ["approval_shown", "approval_answered"],
+  );
 });
 
 test("a subagent's card is counted as the subagent's", async (t) => {
@@ -100,7 +125,10 @@ test("a subagent's card is counted as the subagent's", async (t) => {
   });
   coordinator.decide(prompts[0]!.approvalId, true);
   await pending;
-  assert.deepEqual(events[0], { event: "approval_shown", props: { kind: "subagent", mode: "ask", chat: "subagent" } });
+  assert.deepEqual(events[0], {
+    event: "approval_shown",
+    props: { kind: "subagent", mode: "ask", chat: "subagent" },
+  });
 });
 
 const botRequest = (waitId: string): BotApprovalRequest => ({

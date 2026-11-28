@@ -54,18 +54,16 @@ class FakeController implements FormFillControllerLike {
       revision: 3,
     };
   }
-  async executeFormFillBatch(
-    plan: FormFillBatchPlan,
-  ): Promise<FormFillBatchResult> {
+  async executeFormFillBatch(plan: FormFillBatchPlan): Promise<FormFillBatchResult> {
     this.executed.push(plan);
     if (this.result) return this.result;
     const rows = plan.actions.map((action) => ({
       order: action.order,
       elementIndex: action.elementIndex,
       label: action.label,
-      status: (plan.excludedOrders?.includes(action.order)
-        ? "untouched"
-        : "filled") as "untouched" | "filled",
+      status: (plan.excludedOrders?.includes(action.order) ? "untouched" : "filled") as
+        | "untouched"
+        | "filled",
     }));
     return {
       planId: plan.planId,
@@ -149,16 +147,9 @@ test("approvalFor extracts, captures, scores, and builds a provenanced plan", as
   assert.equal(descriptor.details.fillCount, 2);
   assert.equal(descriptor.details.submitExcluded, true);
   assert.equal(descriptor.details.sourceDocument, "patient.txt");
-  assert.equal(
-    descriptor.details.sourceHashPrefix,
-    formFillContentHash(DOCUMENT).slice(0, 12),
-  );
+  assert.equal(descriptor.details.sourceHashPrefix, formFillContentHash(DOCUMENT).slice(0, 12));
   assert.deepEqual(
-    descriptor.details.rows.map((row) => [
-      row.label,
-      row.value,
-      row.sourceLine,
-    ]),
+    descriptor.details.rows.map((row) => [row.label, row.value, row.sourceLine]),
     [
       ["First name", "Ada", 1],
       ["Last name", "Lovelace", 2],
@@ -175,8 +166,7 @@ test("the review card is the digest surface: value edits invalidate authorize", 
   const descriptor = await service.approvalFor(ARGS);
   assert.throws(
     () => service.authorize("tc-1", descriptor.planId, "0".repeat(64)),
-    (error: unknown) =>
-      error instanceof FormFillBatchError && error.code === "plan_mismatch",
+    (error: unknown) => error instanceof FormFillBatchError && error.code === "plan_mismatch",
   );
 });
 
@@ -198,8 +188,7 @@ test("authorize + execute runs the approved plan once through the controller", a
   // Second execution is impossible — the authority was consumed.
   await assert.rejects(
     () => service.execute("tc-1", ARGS),
-    (error: unknown) =>
-      error instanceof FormFillBatchError && error.code === "not_authorized",
+    (error: unknown) => error instanceof FormFillBatchError && error.code === "not_authorized",
   );
 });
 
@@ -207,8 +196,7 @@ test("execution requires approval", async () => {
   const { service } = makeService({});
   await assert.rejects(
     () => service.execute("tc-never", ARGS),
-    (error: unknown) =>
-      error instanceof FormFillBatchError && error.code === "not_authorized",
+    (error: unknown) => error instanceof FormFillBatchError && error.code === "not_authorized",
   );
 });
 
@@ -218,8 +206,7 @@ test("tool args cannot repoint the approved plan", async () => {
   service.authorize("tc-1", descriptor.planId, descriptor.digest);
   await assert.rejects(
     () => service.execute("tc-1", { ...ARGS, window_id: 99 }),
-    (error: unknown) =>
-      error instanceof FormFillBatchError && error.code === "plan_mismatch",
+    (error: unknown) => error instanceof FormFillBatchError && error.code === "plan_mismatch",
   );
 });
 
@@ -240,8 +227,7 @@ test("revoke drops pending plans and outstanding authority", async () => {
   service.revoke();
   await assert.rejects(
     () => service.execute("tc-1", ARGS),
-    (error: unknown) =>
-      error instanceof FormFillBatchError && error.code === "plan_revoked",
+    (error: unknown) => error instanceof FormFillBatchError && error.code === "plan_revoked",
   );
 });
 
@@ -250,32 +236,23 @@ test("the source must be an attachment on the triggering message", async () => {
   await assert.rejects(
     () => service.approvalFor(ARGS),
     (error: unknown) =>
-      error instanceof FormFillServiceError &&
-      error.code === "attachment_not_found",
+      error instanceof FormFillServiceError && error.code === "attachment_not_found",
   );
   const { service: imageOnly } = makeService({
-    attachments: [
-      makeAttachment({ kind: "image", text: undefined, mimeType: "image/png" }),
-    ],
+    attachments: [makeAttachment({ kind: "image", text: undefined, mimeType: "image/png" })],
   });
   await assert.rejects(
     () => imageOnly.approvalFor(ARGS),
     (error: unknown) =>
-      error instanceof FormFillServiceError &&
-      error.code === "attachment_unsupported",
+      error instanceof FormFillServiceError && error.code === "attachment_unsupported",
   );
 });
 
 test("extraction failures fail closed before any mutation", async () => {
   const { service } = makeService({
-    attachments: [
-      makeAttachment({ text: "# only comments\n// none\n", size: 30 }),
-    ],
+    attachments: [makeAttachment({ text: "# only comments\n// none\n", size: 30 })],
   });
-  await assert.rejects(
-    () => service.approvalFor(ARGS),
-    /no.*label.*value|entities/i,
-  );
+  await assert.rejects(() => service.approvalFor(ARGS), /no.*label.*value|entities/i);
 });
 
 test("changed attachment bytes cannot execute an approved plan", async () => {
@@ -292,9 +269,7 @@ test("skip-only plans never create executable approval", async () => {
   const scorer = makeScorer();
   scorer.score = async (_context, options) => ({
     selectedIndex: options.length - 1,
-    probabilities: options.map((_, i) =>
-      i === options.length - 1 ? 0.99 : 0.001,
-    ),
+    probabilities: options.map((_, i) => (i === options.length - 1 ? 0.99 : 0.001)),
     contextWasTruncated: false,
     truncatedOptionIndices: [],
   });
@@ -302,8 +277,7 @@ test("skip-only plans never create executable approval", async () => {
   await assert.rejects(
     () => service.approvalFor(ARGS),
     (error: unknown) =>
-      error instanceof FormFillServiceError &&
-      error.code === "no_fillable_fields",
+      error instanceof FormFillServiceError && error.code === "no_fillable_fields",
   );
   assert.equal(controller.executed.length, 0);
 });
@@ -350,10 +324,7 @@ test("oversized forms fail before scoring and sources enforce supported text typ
   const unsupported = makeService({
     attachments: [makeAttachment({ name: "source.csv" })],
   });
-  await assert.rejects(
-    () => unsupported.service.approvalFor(ARGS),
-    /txt or .md/,
-  );
+  await assert.rejects(() => unsupported.service.approvalFor(ARGS), /txt or .md/);
 });
 
 test("the source pool never falls back to an earlier attached turn", async () => {
@@ -368,10 +339,7 @@ test("the source pool never falls back to an earlier attached turn", async () =>
     [],
   );
   assert.deepEqual(
-    currentFormFillAttachments([
-      { role: "user", attachments },
-      { role: "assistant" },
-    ]),
+    currentFormFillAttachments([{ role: "user", attachments }, { role: "assistant" }]),
     attachments,
   );
 });
@@ -379,8 +347,13 @@ test("the source pool never falls back to an earlier attached turn", async () =>
 test("the tool is declared the same for every message; the message's sources ride in its note", async () => {
   const { createFormFillAgentTool, formFillTurnNote } = await import("./tool.js");
   const first = makeService({ attachments: [makeAttachment()] }).service;
-  const second = makeService({ attachments: [makeAttachment({ id: "att-2", name: "intake.txt" })] }).service;
-  assert.equal(createFormFillAgentTool(first).description, createFormFillAgentTool(second).description);
+  const second = makeService({
+    attachments: [makeAttachment({ id: "att-2", name: "intake.txt" })],
+  }).service;
+  assert.equal(
+    createFormFillAgentTool(first).description,
+    createFormFillAgentTool(second).description,
+  );
   assert.doesNotMatch(createFormFillAgentTool(second).description, /att-2|intake\.txt/u);
   const note = formFillTurnNote(second);
   assert.match(note, /"attachment_id":"att-2"/u);

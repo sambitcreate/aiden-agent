@@ -61,8 +61,15 @@ function s256(verifier: string): string {
 
 export async function startFakeOAuthServer(options: FakeOAuthServerOptions = {}) {
   const clients = new Map<string, Client>();
-  if (options.preRegistered) clients.set(options.preRegistered.clientId, { secret: options.preRegistered.clientSecret, redirectUris: [] });
-  const codes = new Map<string, { clientId: string; challenge: string; redirectUri: string; scope?: string }>();
+  if (options.preRegistered)
+    clients.set(options.preRegistered.clientId, {
+      secret: options.preRegistered.clientSecret,
+      redirectUris: [],
+    });
+  const codes = new Map<
+    string,
+    { clientId: string; challenge: string; redirectUri: string; scope?: string }
+  >();
   const accessTokens = new Set<string>();
   const refreshTokens = new Map<string, { clientId: string; scope?: string }>();
   const seen = {
@@ -83,7 +90,9 @@ export async function startFakeOAuthServer(options: FakeOAuthServerOptions = {})
     /** Runs once an authorization code was exchanged, before the response is sent. */
     afterCodeExchange: undefined as (() => void) | undefined,
     /** Answer code exchanges with this response instead of tokens. */
-    codeExchangeResponse: undefined as { status: number; contentType: string; body: string } | undefined,
+    codeExchangeResponse: undefined as
+      | { status: number; contentType: string; body: string }
+      | undefined,
     /** Answer refresh requests with this response instead of tokens (`refreshStatus` sends a plain-text body). */
     refreshResponse: undefined as { status: number; contentType: string; body: string } | undefined,
     /** `expires_in` of issued tokens. */
@@ -95,7 +104,9 @@ export async function startFakeOAuthServer(options: FakeOAuthServerOptions = {})
      * and the new tokens are issued), before the response is sent; a returned
      * promise holds the response until it settles.
      */
-    beforeRefreshResponse: undefined as ((tokens: { access_token: string; refresh_token?: string }) => Promise<void> | void) | undefined,
+    beforeRefreshResponse: undefined as
+      | ((tokens: { access_token: string; refresh_token?: string }) => Promise<void> | void)
+      | undefined,
   };
   let issued = 0;
   let base = "";
@@ -140,13 +151,23 @@ export async function startFakeOAuthServer(options: FakeOAuthServerOptions = {})
     let authMethod: FakeTokenRequest["authMethod"] = secret ? "post" : "none";
     const basic = /^Basic\s+(.+)$/iu.exec(req.headers.authorization ?? "")?.[1];
     if (basic) {
-      const [id, value] = Buffer.from(basic, "base64").toString("utf8").split(":").map(decodeURIComponent);
+      const [id, value] = Buffer.from(basic, "base64")
+        .toString("utf8")
+        .split(":")
+        .map(decodeURIComponent);
       clientId = id ?? null;
       secret = value ?? null;
       authMethod = "basic";
     }
     const record = (status: number, error?: string) => {
-      seen.tokenRequests.push({ grant, clientId, presentedSecret: Boolean(secret), authMethod, status, ...(error ? { error } : {}) });
+      seen.tokenRequests.push({
+        grant,
+        clientId,
+        presentedSecret: Boolean(secret),
+        authMethod,
+        status,
+        ...(error ? { error } : {}),
+      });
     };
     const fail = (status: number, error: string, description?: string) => {
       record(status, error);
@@ -154,8 +175,14 @@ export async function startFakeOAuthServer(options: FakeOAuthServerOptions = {})
     };
     const client = knownClient(clientId);
     if (!client) return fail(401, "invalid_client", "Unknown client");
-    if (options.requireSecret && (!secret || secret !== client.secret)) return fail(401, "invalid_client", "Client ID and client secret are required");
-    const canned = grant === "authorization_code" ? control.codeExchangeResponse : grant === "refresh_token" ? control.refreshResponse : undefined;
+    if (options.requireSecret && (!secret || secret !== client.secret))
+      return fail(401, "invalid_client", "Client ID and client secret are required");
+    const canned =
+      grant === "authorization_code"
+        ? control.codeExchangeResponse
+        : grant === "refresh_token"
+          ? control.refreshResponse
+          : undefined;
     if (canned) {
       record(canned.status);
       res.writeHead(canned.status, { "content-type": canned.contentType });
@@ -165,8 +192,10 @@ export async function startFakeOAuthServer(options: FakeOAuthServerOptions = {})
       const code = codes.get(form.get("code") ?? "");
       codes.delete(form.get("code") ?? "");
       if (!code || code.clientId !== clientId) return fail(400, "invalid_grant");
-      if (s256(form.get("code_verifier") ?? "") !== code.challenge) return fail(400, "invalid_grant", "PKCE verification failed");
-      if (form.get("redirect_uri") !== code.redirectUri) return fail(400, "invalid_grant", "redirect_uri mismatch");
+      if (s256(form.get("code_verifier") ?? "") !== code.challenge)
+        return fail(400, "invalid_grant", "PKCE verification failed");
+      if (form.get("redirect_uri") !== code.redirectUri)
+        return fail(400, "invalid_grant", "redirect_uri mismatch");
       record(200);
       control.afterCodeExchange?.();
       return json(res, 200, issueTokens(clientId!, code.scope));
@@ -185,7 +214,10 @@ export async function startFakeOAuthServer(options: FakeOAuthServerOptions = {})
       const tokens = issueTokens(clientId!, owner.scope);
       const hold = control.beforeRefreshResponse?.(tokens);
       if (!hold) return json(res, 200, tokens);
-      return void hold.then(() => json(res, 200, tokens), () => json(res, 200, tokens));
+      return void hold.then(
+        () => json(res, 200, tokens),
+        () => json(res, 200, tokens),
+      );
     }
     return fail(400, "unsupported_grant_type");
   };
@@ -204,7 +236,9 @@ export async function startFakeOAuthServer(options: FakeOAuthServerOptions = {})
     if (!authorized && !options.anonymousInitialize) {
       const scope = options.emptyChallengeScope ? ', scope=""' : "";
       seen.unauthorized.push(token);
-      res.writeHead(401, { "www-authenticate": `Bearer resource_metadata="${base}/.well-known/oauth-protected-resource/mcp"${scope}` });
+      res.writeHead(401, {
+        "www-authenticate": `Bearer resource_metadata="${base}/.well-known/oauth-protected-resource/mcp"${scope}`,
+      });
       return res.end();
     }
     if (control.mcpStatus !== 200) {
@@ -216,9 +250,16 @@ export async function startFakeOAuthServer(options: FakeOAuthServerOptions = {})
       res.writeHead(202);
       return res.end();
     }
-    const result = message.method === "initialize"
-      ? { protocolVersion: "2025-11-25", capabilities: { tools: {} }, serverInfo: { name: "fake", version: "1" } }
-      : message.method === "tools/list" ? { tools: [{ name: "echo", inputSchema: { type: "object", properties: {} } }] } : {};
+    const result =
+      message.method === "initialize"
+        ? {
+            protocolVersion: "2025-11-25",
+            capabilities: { tools: {} },
+            serverInfo: { name: "fake", version: "1" },
+          }
+        : message.method === "tools/list"
+          ? { tools: [{ name: "echo", inputSchema: { type: "object", properties: {} } }] }
+          : {};
     return json(res, 200, { jsonrpc: "2.0", id: message.id, result });
   };
 
@@ -265,7 +306,11 @@ export async function startFakeOAuthServer(options: FakeOAuthServerOptions = {})
         const clientId = `client-${seen.registrations.length}`;
         const secret = options.issueSecret ? `secret-${seen.registrations.length}` : undefined;
         clients.set(clientId, { secret, redirectUris: (metadata.redirect_uris as string[]) ?? [] });
-        return json(res, 201, { ...metadata, client_id: clientId, ...(secret ? { client_secret: secret, client_secret_expires_at: 0 } : {}) });
+        return json(res, 201, {
+          ...metadata,
+          client_id: clientId,
+          ...(secret ? { client_secret: secret, client_secret_expires_at: 0 } : {}),
+        });
       }
       if (url.pathname === "/authorize") {
         seen.authorizations.push(url);
@@ -273,7 +318,10 @@ export async function startFakeOAuthServer(options: FakeOAuthServerOptions = {})
         const redirectUri = url.searchParams.get("redirect_uri") ?? "";
         const client = knownClient(clientId);
         // A server that does not know the client shows an error page and never calls back.
-        if (!client || (client.redirectUris.length > 0 && !client.redirectUris.includes(redirectUri))) {
+        if (
+          !client ||
+          (client.redirectUris.length > 0 && !client.redirectUris.includes(redirectUri))
+        ) {
           res.writeHead(400, { "content-type": "text/plain" });
           return res.end("Unknown client");
         }
@@ -281,7 +329,8 @@ export async function startFakeOAuthServer(options: FakeOAuthServerOptions = {})
         callback.searchParams.set("state", url.searchParams.get("state") ?? "");
         if (options.denyAuthorization) {
           callback.searchParams.set("error", options.denyAuthorization.error);
-          if (options.denyAuthorization.description) callback.searchParams.set("error_description", options.denyAuthorization.description);
+          if (options.denyAuthorization.description)
+            callback.searchParams.set("error_description", options.denyAuthorization.description);
         } else {
           const code = `code-${++issued}`;
           codes.set(code, {
@@ -313,13 +362,18 @@ export async function startFakeOAuthServer(options: FakeOAuthServerOptions = {})
     revokeRefreshTokens: () => refreshTokens.clear(),
     /** The server drops every registered client (a stale client_id). */
     forgetClients: () => {
-      for (const id of [...clients.keys()]) if (id !== options.preRegistered?.clientId) clients.delete(id);
+      for (const id of [...clients.keys()])
+        if (id !== options.preRegistered?.clientId) clients.delete(id);
     },
-    requestsTo: (path: string | RegExp) => seen.requests.filter((request) => (typeof path === "string" ? request.path === path : path.test(request.path))),
-    close: () => new Promise<void>((resolve) => {
-      server.closeAllConnections();
-      server.close(() => resolve());
-    }),
+    requestsTo: (path: string | RegExp) =>
+      seen.requests.filter((request) =>
+        typeof path === "string" ? request.path === path : path.test(request.path),
+      ),
+    close: () =>
+      new Promise<void>((resolve) => {
+        server.closeAllConnections();
+        server.close(() => resolve());
+      }),
   };
 }
 

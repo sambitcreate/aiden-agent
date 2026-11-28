@@ -84,10 +84,7 @@ export function packagedResourcesDirectory(appPath, platform = "darwin") {
 
 export function packagedElectronExecutable(context) {
   if (context.electronPlatformName === "darwin") {
-    return path.join(
-      context.appOutDir,
-      `${context.packager.appInfo.productFilename}.app`,
-    );
+    return path.join(context.appOutDir, `${context.packager.appInfo.productFilename}.app`);
   }
   if (context.electronPlatformName === "linux") {
     const executableName =
@@ -185,10 +182,7 @@ export async function configureElectronFuses(context) {
   if (!executable) return;
   await flipFuses(executable, AIDEN_FUSE_CONFIG);
   await verifyAidenFuses(executable);
-  const packageRoot =
-    context.electronPlatformName === "darwin"
-      ? executable
-      : context.appOutDir;
+  const packageRoot = context.electronPlatformName === "darwin" ? executable : context.appOutDir;
   await makeSpawnHelpersExecutable(packageRoot, context.electronPlatformName);
   if (context.electronPlatformName === "linux") await removeSharedWriteAccess(context.appOutDir);
 }

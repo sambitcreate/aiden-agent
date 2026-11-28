@@ -47,14 +47,21 @@ import {
   type DeviceFramePreference,
 } from "../lib/device-3d/frame-mode";
 import { isDuoDevice, resolveDeviceModelId } from "../lib/device-3d/model-registry";
-import { deviceHasKeyboardAccessory, resolveDeviceAssetModelId } from "../lib/device-3d/model-source";
+import {
+  deviceHasKeyboardAccessory,
+  resolveDeviceAssetModelId,
+} from "../lib/device-3d/model-source";
 import { resolveDeviceShape } from "../lib/device-3d/shape-profile";
 import { DeviceDuoControls } from "./device-duo-controls";
 import { DeviceDuoViewport } from "./device-duo-viewport";
 import { DeviceAndroidFoldControls } from "./device-android-fold-controls";
 import { useAndroidFold } from "../lib/device-fold";
 import { DevicePhoneViewport } from "./device-phone-viewport";
-import { DEVICE_ORIENTATION_OPTIONS, DEVICE_TEXT_SIZE_OPTIONS, DeviceToolsPanel } from "./device-tools-panel";
+import {
+  DEVICE_ORIENTATION_OPTIONS,
+  DEVICE_TEXT_SIZE_OPTIONS,
+  DeviceToolsPanel,
+} from "./device-tools-panel";
 import { DeviceAxOverlay, type DeviceAxStatus } from "./device-ax-overlay";
 import { pasteToDeviceWithFeedback } from "./device-clipboard-controls";
 import { DeviceFeatureSections } from "./device-feature-sections";
@@ -76,7 +83,12 @@ import {
   fittedScreenStyle,
   rotatedMediaStyle,
 } from "../lib/device-display-rotation";
-import { LOCAL_DEVICE_HOST_ID, type DeviceSession, type DeviceStreamGrant, type DeviceSummary } from "../shared/devices";
+import {
+  LOCAL_DEVICE_HOST_ID,
+  type DeviceSession,
+  type DeviceStreamGrant,
+  type DeviceSummary,
+} from "../shared/devices";
 import { isDismissKey } from "../lib/dismiss-key";
 
 /** A burst of rejected grants means the proxy is refusing us, not that one grant expired. */
@@ -119,7 +131,15 @@ function framePoint(element: HTMLElement, event: React.PointerEvent): { x: numbe
   };
 }
 
-export function DeviceViewer({ chatId, session, device, active, compact, onClose, onFloat }: DeviceViewerProps) {
+export function DeviceViewer({
+  chatId,
+  session,
+  device,
+  active,
+  compact,
+  onClose,
+  onFloat,
+}: DeviceViewerProps) {
   const canvasRef = React.useRef<HTMLCanvasElement | null>(null);
   const clientRef = React.useRef<DeviceStreamClient | null>(null);
   const renewalsRef = React.useRef<number[]>([]);
@@ -136,7 +156,9 @@ export function DeviceViewer({ chatId, session, device, active, compact, onClose
   const toolsTriggerRef = React.useRef<HTMLButtonElement | null>(null);
   const toolsRef = React.useRef<HTMLDivElement | null>(null);
   const frameBlockerId = React.useId();
-  const [framePreference, setFramePreference] = React.useState<DeviceFramePreference>(() => readFramePreference());
+  const [framePreference, setFramePreference] = React.useState<DeviceFramePreference>(() =>
+    readFramePreference(),
+  );
   const [frameFailed, setFrameFailed] = React.useState(false);
   /** Sticky once a frame lands, so the 3D frame never loads for a stream that turns out flat-only. */
   const [framed, setFramed] = React.useState(false);
@@ -150,7 +172,9 @@ export function DeviceViewer({ chatId, session, device, active, compact, onClose
   /** Draws the framed device while the 3D view is mounted. */
   /** The iPad Pro's bundled Magic Keyboard, shown with its 3D body. */
   const [keyboardAttached, setKeyboardAttached] = React.useState(false);
-  const [captureFramed, setCaptureFramed] = React.useState<(() => Promise<Blob | null>) | null>(null);
+  const [captureFramed, setCaptureFramed] = React.useState<(() => Promise<Blob | null>) | null>(
+    null,
+  );
   /** Cancels a captured 3D touch or pinch before a command moves the device under it. */
   const cancelFrameInputRef = React.useRef<(() => void) | null>(null);
   const screenRef = React.useRef<HTMLDivElement | null>(null);
@@ -158,7 +182,10 @@ export function DeviceViewer({ chatId, session, device, active, compact, onClose
   const [axOverlay, setAxOverlay] = React.useState(false);
   const [axStatus, setAxStatus] = React.useState<DeviceAxStatus | null>(null);
   const [axRefresh, setAxRefresh] = React.useState(0);
-  const featureGrants = React.useMemo(() => createDeviceGrantSource(() => devicesApi.streamGrant()), []);
+  const featureGrants = React.useMemo(
+    () => createDeviceGrantSource(() => devicesApi.streamGrant()),
+    [],
+  );
   const featureTarget = React.useMemo<DeviceFeatureTarget>(
     () => ({ platform: device.platform, hostId: session.hostId, deviceId: session.deviceId }),
     [device.platform, session.hostId, session.deviceId],
@@ -170,7 +197,10 @@ export function DeviceViewer({ chatId, session, device, active, compact, onClose
     [device.platform, localDevice],
   );
   const multiTouchSink = React.useMemo<MultiTouchSink>(
-    () => ({ sendMultiTouch: (phase, first, second) => clientRef.current?.sendMultiTouch(phase, first, second) }),
+    () => ({
+      sendMultiTouch: (phase, first, second) =>
+        clientRef.current?.sendMultiTouch(phase, first, second),
+    }),
     [],
   );
   const sendDeviceKey = React.useCallback(
@@ -245,7 +275,13 @@ export function DeviceViewer({ chatId, session, device, active, compact, onClose
     // Frames always land in the flat canvas; a mounted 3D frame samples it as a texture.
     const canvasSink = createCanvasFrameSink(canvas);
     const client = createDeviceStreamClient(
-      { hostId: session.hostId, deviceId: session.deviceId, platform: device.platform, grant, grants: featureGrants },
+      {
+        hostId: session.hostId,
+        deviceId: session.deviceId,
+        platform: device.platform,
+        grant,
+        grants: featureGrants,
+      },
       {
         present(source, width, height) {
           const presented = canvasSink.present(source, width, height);
@@ -320,8 +356,13 @@ export function DeviceViewer({ chatId, session, device, active, compact, onClose
 
   const screenshotToChat = () =>
     run("take a screenshot", async () => {
-      const png = await devicesApi.screenshot({ hostId: session.hostId, deviceId: session.deviceId });
-      const file = new File([png as BlobPart], `${device.name} screenshot.png`, { type: "image/png" });
+      const png = await devicesApi.screenshot({
+        hostId: session.hostId,
+        deviceId: session.deviceId,
+      });
+      const file = new File([png as BlobPart], `${device.name} screenshot.png`, {
+        type: "image/png",
+      });
       if (!composerImageAttach.deliver(chatId, [file])) toast.info(COMPOSER_IMAGE_UNAVAILABLE);
     });
 
@@ -348,7 +389,11 @@ export function DeviceViewer({ chatId, session, device, active, compact, onClose
     if (phase === "down" && event.repeat) return;
     if (phase === "down") pressedKeysRef.current.add(event.code);
     else pressedKeysRef.current.delete(event.code);
-    clientRef.current?.sendKey(event.code, phase, { key: event.key, metaKey: event.metaKey, ctrlKey: event.ctrlKey });
+    clientRef.current?.sendKey(event.code, phase, {
+      key: event.key,
+      metaKey: event.metaKey,
+      ctrlKey: event.ctrlKey,
+    });
   };
   const releaseKeys = React.useCallback(() => {
     for (const code of pressedKeysRef.current) clientRef.current?.sendKey(code, "up");
@@ -369,7 +414,13 @@ export function DeviceViewer({ chatId, session, device, active, compact, onClose
     frameFailed,
   });
   // Element frames draw over the flat screen, so the 3D frame steps aside while they show.
-  const frame3d = active && framePreference === "3d" && blocker === null && screen !== null && framed && !axOverlay;
+  const frame3d =
+    active &&
+    framePreference === "3d" &&
+    blocker === null &&
+    screen !== null &&
+    framed &&
+    !axOverlay;
   // Switching surfaces unmounts or hides the focused one: release its keys and keep focus on the device.
   React.useLayoutEffect(() => {
     releaseKeys();
@@ -388,7 +439,8 @@ export function DeviceViewer({ chatId, session, device, active, compact, onClose
         kind: device.kind,
         name: device.name,
         portraitAspect: screen
-          ? Math.min(screen.width, screen.height) / Math.max(1, Math.max(screen.width, screen.height))
+          ? Math.min(screen.width, screen.height) /
+            Math.max(1, Math.max(screen.width, screen.height))
           : Number.NaN,
       }),
     [device.platform, device.kind, device.name, screen],
@@ -427,12 +479,16 @@ export function DeviceViewer({ chatId, session, device, active, compact, onClose
   };
   const toggleKeyboard = () => {
     // The keyboard holds the iPad in landscape, with its camera edge up.
-    if (!keyboardAttached && screen?.orientation !== "landscape_right") clientRef.current?.setOrientation("landscape_right");
+    if (!keyboardAttached && screen?.orientation !== "landscape_right")
+      clientRef.current?.setOrientation("landscape_right");
     setKeyboardAttached(!keyboardAttached);
   };
-  const touch3d = React.useCallback((phase: "begin" | "move" | "end", point: { x: number; y: number }) => {
-    clientRef.current?.sendTouch(phase, point.x, point.y);
-  }, []);
+  const touch3d = React.useCallback(
+    (phase: "begin" | "move" | "end", point: { x: number; y: number }) => {
+      clientRef.current?.sendTouch(phase, point.x, point.y);
+    },
+    [],
+  );
   const errorOverlay =
     status === "error" ? (
       <div className="device-viewer-overlay">
@@ -454,7 +510,9 @@ export function DeviceViewer({ chatId, session, device, active, compact, onClose
   React.useEffect(() => {
     if (!toolsOpen) return;
     toolsRef.current
-      ?.querySelector<HTMLElement>("button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), [tabindex]:not([tabindex='-1'])")
+      ?.querySelector<HTMLElement>(
+        "button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), [tabindex]:not([tabindex='-1'])",
+      )
       ?.focus();
   }, [toolsOpen]);
   const closeTools = () => {
@@ -503,11 +561,20 @@ export function DeviceViewer({ chatId, session, device, active, compact, onClose
           <Text id="device-viewer-title" variant="small-strong" className="block truncate">
             {device.name}
           </Text>
-          <Text variant="small" color="secondary" className={compact ? "sr-only" : "block truncate"}>
+          <Text
+            variant="small"
+            color="secondary"
+            className={compact ? "sr-only" : "block truncate"}
+          >
             {device.version}
           </Text>
         </div>
-        <span className="device-viewer-status" data-status={status} role="status" aria-live="polite">
+        <span
+          className="device-viewer-status"
+          data-status={status}
+          role="status"
+          aria-live="polite"
+        >
           {label}
         </span>
       </header>
@@ -522,7 +589,11 @@ export function DeviceViewer({ chatId, session, device, active, compact, onClose
         }}
         onBlur={(event) => {
           releaseKeys();
-          if (event.relatedTarget instanceof Node && event.currentTarget.contains(event.relatedTarget)) return;
+          if (
+            event.relatedTarget instanceof Node &&
+            event.currentTarget.contains(event.relatedTarget)
+          )
+            return;
           // A surface that is removed or hidden while focused loses focus to nothing; the switch refocuses.
           const target = event.target;
           if (!target.isConnected || target.closest("[hidden]")) return;
@@ -550,7 +621,9 @@ export function DeviceViewer({ chatId, session, device, active, compact, onClose
                 source={canvasRef}
                 client={clientRef}
                 screen={screen}
-                hingePreview={duoState.requested?.control === "angle" ? duoState.requested.value : null}
+                hingePreview={
+                  duoState.requested?.control === "angle" ? duoState.requested.value : null
+                }
                 controlError={duoState.error}
                 onFrameListener={onFrameListener}
                 onResetReady={onResetReady}
@@ -583,7 +656,11 @@ export function DeviceViewer({ chatId, session, device, active, compact, onClose
           className="device-viewer-screen"
           data-typing-surface="device"
           hidden={frame3d}
-          style={{ ...DEVICE_SCREEN_CONTAINER_STYLE, ...fittedScreenStyle(aspect), aspectRatio: String(aspect) }}
+          style={{
+            ...DEVICE_SCREEN_CONTAINER_STYLE,
+            ...fittedScreenStyle(aspect),
+            aspectRatio: String(aspect),
+          }}
           tabIndex={0}
           role="application"
           aria-roledescription={`${noun} screen`}
@@ -636,13 +713,37 @@ export function DeviceViewer({ chatId, session, device, active, compact, onClose
           />
         ) : null}
       </div>
-      <div className="device-viewer-rail" role="toolbar" aria-label={android ? "Emulator controls" : "Simulator controls"}>
+      <div
+        className="device-viewer-rail"
+        role="toolbar"
+        aria-label={android ? "Emulator controls" : "Simulator controls"}
+      >
         {android ? (
           <>
-            {railButton("Back", <ArrowLeft aria-hidden />, () => clientRef.current?.pressButton("back"), !streaming)}
-            {railButton("Home", <House aria-hidden />, () => clientRef.current?.pressButton("home"), !streaming)}
-            {railButton("Recents", <Square aria-hidden />, () => clientRef.current?.pressButton("recents"), !streaming)}
-            {railButton("Power", <Lock aria-hidden />, () => clientRef.current?.pressButton("power"), !streaming)}
+            {railButton(
+              "Back",
+              <ArrowLeft aria-hidden />,
+              () => clientRef.current?.pressButton("back"),
+              !streaming,
+            )}
+            {railButton(
+              "Home",
+              <House aria-hidden />,
+              () => clientRef.current?.pressButton("home"),
+              !streaming,
+            )}
+            {railButton(
+              "Recents",
+              <Square aria-hidden />,
+              () => clientRef.current?.pressButton("recents"),
+              !streaming,
+            )}
+            {railButton(
+              "Power",
+              <Lock aria-hidden />,
+              () => clientRef.current?.pressButton("power"),
+              !streaming,
+            )}
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
                 <Button
@@ -663,9 +764,11 @@ export function DeviceViewer({ chatId, session, device, active, compact, onClose
                     key={option.value}
                     checked={
                       screen !== null &&
-                      (option.value === "portrait") === (screen.width <= screen.height)
+                      (option.value === "portrait") === screen.width <= screen.height
                     }
-                    onSelect={() => void controls.act({ type: "setOrientation", value: option.value })}
+                    onSelect={() =>
+                      void controls.act({ type: "setOrientation", value: option.value })
+                    }
                   >
                     {option.label}
                   </DropdownMenuCheckboxItem>
@@ -675,9 +778,24 @@ export function DeviceViewer({ chatId, session, device, active, compact, onClose
           </>
         ) : (
           <>
-            {railButton("Home", <House aria-hidden />, () => clientRef.current?.pressButton("home"), !streaming)}
-            {railButton("Lock", <Lock aria-hidden />, () => clientRef.current?.pressButton("lock"), !streaming)}
-            {railButton("Rotate", <RotateCw aria-hidden />, () => clientRef.current?.rotate(), !streaming)}
+            {railButton(
+              "Home",
+              <House aria-hidden />,
+              () => clientRef.current?.pressButton("home"),
+              !streaming,
+            )}
+            {railButton(
+              "Lock",
+              <Lock aria-hidden />,
+              () => clientRef.current?.pressButton("lock"),
+              !streaming,
+            )}
+            {railButton(
+              "Rotate",
+              <RotateCw aria-hidden />,
+              () => clientRef.current?.rotate(),
+              !streaming,
+            )}
           </>
         )}
         {railButton(
@@ -728,12 +846,17 @@ export function DeviceViewer({ chatId, session, device, active, compact, onClose
             frame3d && captureFramed
               ? () =>
                   void run("save a framed screenshot", () =>
-                    saveFramedScreenshotWithFeedback({ hostId: session.hostId, deviceId: session.deviceId }, captureFramed),
+                    saveFramedScreenshotWithFeedback(
+                      { hostId: session.hostId, deviceId: session.deviceId },
+                      captureFramed,
+                    ),
                   )
               : undefined
           }
         />
-        {capabilities.recording ? <DeviceRecordControl chatId={chatId} target={featureTarget} disabled={!streaming} /> : null}
+        {capabilities.recording ? (
+          <DeviceRecordControl chatId={chatId} target={featureTarget} disabled={!streaming} />
+        ) : null}
         <Button
           variant={showing3d ? "muted" : "transparent"}
           size="small"
@@ -779,7 +902,9 @@ export function DeviceViewer({ chatId, session, device, active, compact, onClose
             <Keyboard aria-hidden />
           </Button>
         ) : null}
-        {frame3d && resetPose ? railButton("Restore 3D view", <Rotate3d aria-hidden />, restoreView) : null}
+        {frame3d && resetPose
+          ? railButton("Restore 3D view", <Rotate3d aria-hidden />, restoreView)
+          : null}
         <Button
           variant={toolsOpen ? "muted" : "transparent"}
           size="small"
@@ -832,7 +957,9 @@ export function DeviceViewer({ chatId, session, device, active, compact, onClose
               disabled={!streaming}
               onReconnect={reconnect}
               onCloseSession={() => onClose(false)}
-              {...(controls.settings?.foregroundApp ? { foregroundApp: controls.settings.foregroundApp } : {})}
+              {...(controls.settings?.foregroundApp
+                ? { foregroundApp: controls.settings.foregroundApp }
+                : {})}
             />
           </DeviceToolsPanel>
         </div>

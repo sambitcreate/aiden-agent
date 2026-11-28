@@ -57,7 +57,11 @@ export class PipFeed {
       return;
     }
     if (holdAck) this.heldAcks.push(sessionId);
-    if (typeof base64Jpeg === "string" && base64Jpeg.length > 0 && base64Jpeg.length <= PIP_MAX_FRAME_CHARS)
+    if (
+      typeof base64Jpeg === "string" &&
+      base64Jpeg.length > 0 &&
+      base64Jpeg.length <= PIP_MAX_FRAME_CHARS
+    )
       this.latest = base64Jpeg;
     this.pump();
   }
@@ -81,7 +85,8 @@ export class PipFeed {
     if (this.disposed) return;
     this.disposed = true;
     this.latest = null;
-    if (this.timer !== null) (this.options.clearTimer ?? clearTimeout)(this.timer as ReturnType<typeof setTimeout>);
+    if (this.timer !== null)
+      (this.options.clearTimer ?? clearTimeout)(this.timer as ReturnType<typeof setTimeout>);
     this.timer = null;
     this.releaseAcks();
   }

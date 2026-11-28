@@ -66,12 +66,14 @@ interface SharedApproval {
  */
 /** JSON with object keys sorted, so equal values read the same; throws on a value JSON can't hold. */
 export function canonicalJson(value: unknown): string {
-  if (value === null || typeof value === "string" || typeof value === "boolean") return JSON.stringify(value);
+  if (value === null || typeof value === "string" || typeof value === "boolean")
+    return JSON.stringify(value);
   if (typeof value === "number") {
     if (!Number.isFinite(value)) throw new Error("not JSON");
     return JSON.stringify(value);
   }
-  if (Array.isArray(value)) return `[${value.map((item) => (item === undefined ? "null" : canonicalJson(item))).join(",")}]`;
+  if (Array.isArray(value))
+    return `[${value.map((item) => (item === undefined ? "null" : canonicalJson(item))).join(",")}]`;
   if (typeof value !== "object") throw new Error("not JSON");
   const entries = Object.entries(value as Record<string, unknown>)
     .filter(([, child]) => child !== undefined)
@@ -80,7 +82,11 @@ export function canonicalJson(value: unknown): string {
   return `{${entries.join(",")}}`;
 }
 
-export function toolCallApprovalEffect(toolName: string, args: unknown, target?: unknown): string | undefined {
+export function toolCallApprovalEffect(
+  toolName: string,
+  args: unknown,
+  target?: unknown,
+): string | undefined {
   try {
     return createHash("sha256")
       .update(canonicalJson({ toolName, args: args ?? null, target: target ?? null }))
@@ -229,7 +235,8 @@ export class ToolApprovalCoordinator {
       if (closedOutcome === "detached") this.shortCircuited({ ...descriptor, approvalId });
       return Promise.resolve(closedOutcome);
     }
-    const effect = descriptor.approvalId === undefined ? approvalEffectKey(descriptor, callEffect) : undefined;
+    const effect =
+      descriptor.approvalId === undefined ? approvalEffectKey(descriptor, callEffect) : undefined;
     if (effect !== undefined) {
       if (this.denied.get(descriptor.streamId)?.has(effect)) return Promise.resolve("denied");
       const leader = this.shared.get(descriptor.streamId)?.get(effect);
@@ -256,12 +263,19 @@ export class ToolApprovalCoordinator {
     try {
       const outcome = await Promise.race([leader.result, aborted]);
       if (outcome === "aborted") {
-        leader.entry.followers = leader.entry.followers.filter((id) => id !== descriptor.toolCallId);
+        leader.entry.followers = leader.entry.followers.filter(
+          (id) => id !== descriptor.toolCallId,
+        );
         this.decisionPayloads.delete(this.payloadKey(descriptor.streamId, descriptor.toolCallId));
         return "cancelled";
       }
       // The shared card went away for its own call only: this call still waits.
-      if (outcome === "cancelled" && !signal?.aborted && !this.stopped && !this.closedStreams.has(descriptor.streamId)) {
+      if (
+        outcome === "cancelled" &&
+        !signal?.aborted &&
+        !this.stopped &&
+        !this.closedStreams.has(descriptor.streamId)
+      ) {
         return this.request(descriptor, signal, leader.entry.ownerDocumentId ?? ownerDocumentId);
       }
       return outcome;
@@ -302,7 +316,11 @@ export class ToolApprovalCoordinator {
             streamShared.delete(effect);
             if (streamShared.size === 0) this.shared.delete(descriptor.streamId);
           }
-          if (outcome === "denied" && !this.closedStreams.has(descriptor.streamId) && !this.stopped) {
+          if (
+            outcome === "denied" &&
+            !this.closedStreams.has(descriptor.streamId) &&
+            !this.stopped
+          ) {
             const streamDenied = this.denied.get(descriptor.streamId) ?? new Set<string>();
             streamDenied.add(effect);
             this.denied.set(descriptor.streamId, streamDenied);
@@ -365,7 +383,8 @@ export class ToolApprovalCoordinator {
       else if (!publication.replaced) withdrawPrompt(settledWhilePublishing);
     });
     if (effect !== undefined && this.pending.get(approvalId) === entry) {
-      const streamShared = this.shared.get(descriptor.streamId) ?? new Map<string, SharedApproval>();
+      const streamShared =
+        this.shared.get(descriptor.streamId) ?? new Map<string, SharedApproval>();
       streamShared.set(effect, { entry, result });
       this.shared.set(descriptor.streamId, streamShared);
     }

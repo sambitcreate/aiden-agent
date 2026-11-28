@@ -15,7 +15,8 @@ export const SAVE_PATH_EXTENSION = /\.(png|jpe?g|gif|webp)$/iu;
 // same way twice, the object replacement character U+FFFC, the line and
 // paragraph separators, the braille blank U+2800, and every space other than
 // the ordinary one (the no-break, thin, hair and ideographic spaces among them).
-const SAVE_PATH_HIDDEN_CHARACTER = /[\p{Cc}\p{Cf}\p{Co}\p{Cn}\p{Cs}\p{Default_Ignorable_Code_Point}\u2028\u2029\u2800\ufffc]|(?! )\p{Zs}/u;
+const SAVE_PATH_HIDDEN_CHARACTER =
+  /[\p{Cc}\p{Cf}\p{Co}\p{Cn}\p{Cs}\p{Default_Ignorable_Code_Point}\u2028\u2029\u2800\ufffc]|(?! )\p{Zs}/u;
 
 // An assigned pictographic code point. Unicode reserves whole unassigned blocks as
 // Extended_Pictographic (U+1FC00-U+1FFFD among them); no font draws those, so
@@ -38,7 +39,8 @@ const EMOJI_SEQUENCE = new RegExp(
   "gv",
 );
 
-const hasHiddenCharacter = (value: string) => SAVE_PATH_HIDDEN_CHARACTER.test(value.replace(EMOJI_SEQUENCE, "e"));
+const hasHiddenCharacter = (value: string) =>
+  SAVE_PATH_HIDDEN_CHARACTER.test(value.replace(EMOJI_SEQUENCE, "e"));
 
 /**
  * Checks a generate_image `savePath` before anything is sent to a provider: a
@@ -53,20 +55,31 @@ const hasHiddenCharacter = (value: string) => SAVE_PATH_HIDDEN_CHARACTER.test(va
 export function checkImageSavePath(value: unknown): string {
   // Control, format and invisible characters could make the approval card
   // show one path while another is written.
-  if (typeof value !== "string" || !value.trim() || Buffer.byteLength(value, "utf8") > 512 || hasHiddenCharacter(value))
+  if (
+    typeof value !== "string" ||
+    !value.trim() ||
+    Buffer.byteLength(value, "utf8") > 512 ||
+    hasHiddenCharacter(value)
+  )
     throw new Error("Invalid savePath.");
   // A leading ~ is a home folder to a person reading the card, but a folder named ~ to the workspace.
   if (/^(?:[\\/~]|[A-Za-z]:)/u.test(value))
-    throw new Error("savePath must be a path inside the workspace folder, such as design/assets/hero.png.");
+    throw new Error(
+      "savePath must be a path inside the workspace folder, such as design/assets/hero.png.",
+    );
   const segments = value.split(/[\\/]/u).filter((segment) => segment !== "" && segment !== ".");
   if (segments.length === 0 || segments.includes(".."))
-    throw new Error("savePath must be a path inside the workspace folder, such as design/assets/hero.png.");
+    throw new Error(
+      "savePath must be a path inside the workspace folder, such as design/assets/hero.png.",
+    );
   // A trailing space is invisible on the card, and Windows drops it from the name it writes.
   if (segments.some((segment) => segment.endsWith(" ")))
     throw new Error("savePath must not end a folder or file name with a space.");
   // Hidden folders (.git, .ssh, .aiden, .vscode) hold settings and hooks, never pictures.
   if (segments.slice(0, -1).some((segment) => segment.startsWith(".")))
-    throw new Error("savePath must not be inside a hidden folder (one whose name starts with a dot).");
+    throw new Error(
+      "savePath must not be inside a hidden folder (one whose name starts with a dot).",
+    );
   const name = segments[segments.length - 1]!;
   const dot = name.lastIndexOf(".");
   if (dot === 0 || (dot > 0 && !SAVE_PATH_EXTENSION.test(name)))

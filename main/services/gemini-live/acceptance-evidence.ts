@@ -1,13 +1,14 @@
 import { appendFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 
-export const GEMINI_LIVE_ACCEPTANCE_EVIDENCE_ENV =
-  "AIDEN_GEMINI_LIVE_ACCEPTANCE_EVIDENCE_PATH";
-export const GEMINI_LIVE_ACCEPTANCE_EVIDENCE_FILE =
-  "gemini-live-acceptance-evidence.jsonl";
+export const GEMINI_LIVE_ACCEPTANCE_EVIDENCE_ENV = "AIDEN_GEMINI_LIVE_ACCEPTANCE_EVIDENCE_PATH";
+export const GEMINI_LIVE_ACCEPTANCE_EVIDENCE_FILE = "gemini-live-acceptance-evidence.jsonl";
 
 export type GeminiLiveAcceptanceEvidenceEvent =
-  "ready" | "provider_response" | "stop_requested" | "stopped";
+  | "ready"
+  | "provider_response"
+  | "stop_requested"
+  | "stopped";
 
 export interface GeminiLiveAcceptanceEvidenceRecorder {
   record(event: GeminiLiveAcceptanceEvidenceEvent, sessionId: string): void;
@@ -22,15 +23,10 @@ export function createGeminiLiveAcceptanceEvidenceRecorder(
   userDataPath: string,
   now: () => number = Date.now,
 ): GeminiLiveAcceptanceEvidenceRecorder | null {
-  if (environment.AIDEN_GEMINI_LIVE_REAL_ACCEPTANCE?.trim() !== "1")
-    return null;
-  const configuredPath =
-    environment[GEMINI_LIVE_ACCEPTANCE_EVIDENCE_ENV]?.trim();
+  if (environment.AIDEN_GEMINI_LIVE_REAL_ACCEPTANCE?.trim() !== "1") return null;
+  const configuredPath = environment[GEMINI_LIVE_ACCEPTANCE_EVIDENCE_ENV]?.trim();
   if (!configuredPath || !path.isAbsolute(configuredPath)) return null;
-  const expectedPath = path.join(
-    path.resolve(userDataPath),
-    GEMINI_LIVE_ACCEPTANCE_EVIDENCE_FILE,
-  );
+  const expectedPath = path.join(path.resolve(userDataPath), GEMINI_LIVE_ACCEPTANCE_EVIDENCE_FILE);
   if (path.resolve(configuredPath) !== expectedPath) return null;
 
   try {

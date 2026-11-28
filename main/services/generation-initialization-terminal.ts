@@ -31,12 +31,20 @@ export function chatStoreInitializationTerminalAppend(
     appendMessage(
       chatId: string,
       message: GenerationInitializationTerminalMessage,
-      meta: { expectedWorkspaceId: string; isCurrent: () => boolean; providerId?: string; model?: string },
+      meta: {
+        expectedWorkspaceId: string;
+        isCurrent: () => boolean;
+        providerId?: string;
+        model?: string;
+      },
     ): Promise<unknown>;
   },
   chatId: string,
   keepChatModel: boolean | undefined,
-): (message: GenerationInitializationTerminalMessage, meta: GenerationInitializationTerminalMeta) => Promise<unknown> {
+): (
+  message: GenerationInitializationTerminalMessage,
+  meta: GenerationInitializationTerminalMeta,
+) => Promise<unknown> {
   return (message, meta) =>
     chatStore.appendMessage(chatId, message, {
       expectedWorkspaceId: meta.expectedWorkspaceId,

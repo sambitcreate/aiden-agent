@@ -146,8 +146,15 @@ function exactKeys(value: Record<string, unknown>, keys: readonly string[]): boo
 }
 
 function isSafeIdentifier(value: unknown, max = 160): value is string {
-  return typeof value === "string" && value.length > 0 && value.length <= max &&
-    value.normalize("NFKC") === value && value !== "." && value !== ".." && SAFE_IDENTIFIER.test(value);
+  return (
+    typeof value === "string" &&
+    value.length > 0 &&
+    value.length <= max &&
+    value.normalize("NFKC") === value &&
+    value !== "." &&
+    value !== ".." &&
+    SAFE_IDENTIFIER.test(value)
+  );
 }
 
 function isTimestamp(value: unknown): value is number {
@@ -155,18 +162,29 @@ function isTimestamp(value: unknown): value is number {
 }
 
 function isIncarnation(value: unknown): value is BotAvatarAssetIncarnation {
-  return isRecord(value) && exactKeys(value, ["device", "inode"]) &&
-    typeof value.device === "string" && DECIMAL.test(value.device) &&
-    typeof value.inode === "string" && /^[1-9][0-9]*$/u.test(value.inode);
+  return (
+    isRecord(value) &&
+    exactKeys(value, ["device", "inode"]) &&
+    typeof value.device === "string" &&
+    DECIMAL.test(value.device) &&
+    typeof value.inode === "string" &&
+    /^[1-9][0-9]*$/u.test(value.inode)
+  );
 }
 
 function parseAsset(value: unknown): BotAvatarStoredAsset {
-  if (!isRecord(value) || !exactKeys(value, ["assetId", "byteSize", "digest", "incarnation"]) ||
-      typeof value.assetId !== "string" || !ASSET_ID.test(value.assetId) ||
-      !Number.isSafeInteger(value.byteSize) || (value.byteSize as number) < 1 ||
-      (value.byteSize as number) > BOT_AVATAR_CANONICAL_MAX_BYTES ||
-      typeof value.digest !== "string" || !SHA256.test(value.digest) ||
-      !isIncarnation(value.incarnation)) {
+  if (
+    !isRecord(value) ||
+    !exactKeys(value, ["assetId", "byteSize", "digest", "incarnation"]) ||
+    typeof value.assetId !== "string" ||
+    !ASSET_ID.test(value.assetId) ||
+    !Number.isSafeInteger(value.byteSize) ||
+    (value.byteSize as number) < 1 ||
+    (value.byteSize as number) > BOT_AVATAR_CANONICAL_MAX_BYTES ||
+    typeof value.digest !== "string" ||
+    !SHA256.test(value.digest) ||
+    !isIncarnation(value.incarnation)
+  ) {
     throw new BotAvatarStateError("Bot avatar asset metadata is corrupt.");
   }
   return {
@@ -178,10 +196,15 @@ function parseAsset(value: unknown): BotAvatarStoredAsset {
 }
 
 function parseRecord(value: unknown): BotAvatarRecord {
-  if (!isRecord(value) || !exactKeys(value, ["ownerId", "botId", "assetRevision", "asset", "updatedAt"]) ||
-      !isSafeIdentifier(value.ownerId, 160) || !isSafeIdentifier(value.botId, 160) ||
-      typeof value.assetRevision !== "string" || !ASSET_REVISION.test(value.assetRevision) ||
-      !isTimestamp(value.updatedAt)) {
+  if (
+    !isRecord(value) ||
+    !exactKeys(value, ["ownerId", "botId", "assetRevision", "asset", "updatedAt"]) ||
+    !isSafeIdentifier(value.ownerId, 160) ||
+    !isSafeIdentifier(value.botId, 160) ||
+    typeof value.assetRevision !== "string" ||
+    !ASSET_REVISION.test(value.assetRevision) ||
+    !isTimestamp(value.updatedAt)
+  ) {
     throw new BotAvatarStateError("Bot avatar metadata is corrupt.");
   }
   return {
@@ -194,35 +217,62 @@ function parseRecord(value: unknown): BotAvatarRecord {
 }
 
 function parseReceipt(value: unknown): BotAvatarMutationReceipt {
-  if (!isRecord(value) || !exactKeys(value, [
-    "operationId", "ownerId", "botId", "kind", "expectedAssetRevision", "inputDigest",
-    "resultAssetRevision", "completedAt",
-  ]) || !isSafeIdentifier(value.operationId, 128) || !isSafeIdentifier(value.ownerId, 160) ||
-      !isSafeIdentifier(value.botId, 160) || (value.kind !== "put" && value.kind !== "delete") ||
-      !(value.expectedAssetRevision === null || (typeof value.expectedAssetRevision === "string" &&
-        ASSET_REVISION.test(value.expectedAssetRevision))) ||
-      typeof value.inputDigest !== "string" || !SHA256.test(value.inputDigest) ||
-      !(value.resultAssetRevision === null || (typeof value.resultAssetRevision === "string" &&
-        ASSET_REVISION.test(value.resultAssetRevision))) || !isTimestamp(value.completedAt)) {
+  if (
+    !isRecord(value) ||
+    !exactKeys(value, [
+      "operationId",
+      "ownerId",
+      "botId",
+      "kind",
+      "expectedAssetRevision",
+      "inputDigest",
+      "resultAssetRevision",
+      "completedAt",
+    ]) ||
+    !isSafeIdentifier(value.operationId, 128) ||
+    !isSafeIdentifier(value.ownerId, 160) ||
+    !isSafeIdentifier(value.botId, 160) ||
+    (value.kind !== "put" && value.kind !== "delete") ||
+    !(
+      value.expectedAssetRevision === null ||
+      (typeof value.expectedAssetRevision === "string" &&
+        ASSET_REVISION.test(value.expectedAssetRevision))
+    ) ||
+    typeof value.inputDigest !== "string" ||
+    !SHA256.test(value.inputDigest) ||
+    !(
+      value.resultAssetRevision === null ||
+      (typeof value.resultAssetRevision === "string" &&
+        ASSET_REVISION.test(value.resultAssetRevision))
+    ) ||
+    !isTimestamp(value.completedAt)
+  ) {
     throw new BotAvatarStateError("Bot avatar mutation receipt is corrupt.");
   }
   return value as unknown as BotAvatarMutationReceipt;
 }
 
 export function parseBotAvatarStoreDocument(value: unknown): BotAvatarStoreDocument {
-  if (!isRecord(value) || !exactKeys(value, ["version", "records", "receipts"]) ||
-      value.version !== BOT_AVATAR_STORE_VERSION || !Array.isArray(value.records) ||
-      value.records.length > BOT_AVATAR_MAX_RECORDS || !Array.isArray(value.receipts) ||
-      value.receipts.length > BOT_AVATAR_MAX_RECEIPTS) {
+  if (
+    !isRecord(value) ||
+    !exactKeys(value, ["version", "records", "receipts"]) ||
+    value.version !== BOT_AVATAR_STORE_VERSION ||
+    !Array.isArray(value.records) ||
+    value.records.length > BOT_AVATAR_MAX_RECORDS ||
+    !Array.isArray(value.receipts) ||
+    value.receipts.length > BOT_AVATAR_MAX_RECEIPTS
+  ) {
     throw new BotAvatarStateError("Bot avatar store metadata is corrupt.");
   }
   const records = value.records.map(parseRecord);
   const receipts = value.receipts.map(parseReceipt);
   const keys = records.map((record) => `${record.ownerId}\u0000${record.botId}`);
-  if (new Set(keys).size !== keys.length ||
-      new Set(records.map(({ assetRevision }) => assetRevision)).size !== records.length ||
-      new Set(records.map(({ asset }) => asset.assetId)).size !== records.length ||
-      new Set(receipts.map(({ operationId }) => operationId)).size !== receipts.length) {
+  if (
+    new Set(keys).size !== keys.length ||
+    new Set(records.map(({ assetRevision }) => assetRevision)).size !== records.length ||
+    new Set(records.map(({ asset }) => asset.assetId)).size !== records.length ||
+    new Set(receipts.map(({ operationId }) => operationId)).size !== receipts.length
+  ) {
     throw new BotAvatarStateError("Bot avatar store metadata contains duplicate identities.");
   }
   return { version: BOT_AVATAR_STORE_VERSION, records, receipts };
@@ -233,16 +283,23 @@ function uint32(bytes: Buffer, offset: number): number {
 }
 
 export function inspectBotAvatarSource(source: BotAvatarSource): BotAvatarDimensions {
-  if ((source.mimeType !== "image/png" && source.mimeType !== "image/jpeg") ||
-      !Buffer.isBuffer(source.bytes) || source.bytes.length === 0 ||
-      source.bytes.length > BOT_AVATAR_SOURCE_MAX_BYTES) {
+  if (
+    (source.mimeType !== "image/png" && source.mimeType !== "image/jpeg") ||
+    !Buffer.isBuffer(source.bytes) ||
+    source.bytes.length === 0 ||
+    source.bytes.length > BOT_AVATAR_SOURCE_MAX_BYTES
+  ) {
     throw new BotAvatarInputError("The Bot photo must be a bounded PNG or JPEG.");
   }
   let dimensions: BotAvatarDimensions | null = null;
   if (source.mimeType === "image/png") {
     const bytes = source.bytes;
-    if (bytes.length < 33 || !bytes.subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10])) ||
-        uint32(bytes, 8) !== 13 || bytes.subarray(12, 16).toString("ascii") !== "IHDR") {
+    if (
+      bytes.length < 33 ||
+      !bytes.subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10])) ||
+      uint32(bytes, 8) !== 13 ||
+      bytes.subarray(12, 16).toString("ascii") !== "IHDR"
+    ) {
       throw new BotAvatarInputError("The Bot photo does not match its PNG type.");
     }
     dimensions = { width: uint32(bytes, 16), height: uint32(bytes, 20) };
@@ -261,17 +318,29 @@ export function inspectBotAvatarSource(source: BotAvatarSource): BotAvatarDimens
       if (offset + 2 > bytes.length) break;
       const length = bytes.readUInt16BE(offset);
       if (length < 2 || offset + length > bytes.length) break;
-      if ([0xc0, 0xc1, 0xc2, 0xc3, 0xc5, 0xc6, 0xc7, 0xc9, 0xca, 0xcb, 0xcd, 0xce, 0xcf].includes(marker) && length >= 7) {
-        dimensions = { height: bytes.readUInt16BE(offset + 3), width: bytes.readUInt16BE(offset + 5) };
+      if (
+        [0xc0, 0xc1, 0xc2, 0xc3, 0xc5, 0xc6, 0xc7, 0xc9, 0xca, 0xcb, 0xcd, 0xce, 0xcf].includes(
+          marker,
+        ) &&
+        length >= 7
+      ) {
+        dimensions = {
+          height: bytes.readUInt16BE(offset + 3),
+          width: bytes.readUInt16BE(offset + 5),
+        };
         break;
       }
       offset += length;
     }
     if (!dimensions) throw new BotAvatarInputError("The JPEG dimensions are unavailable.");
   }
-  if (dimensions.width < 1 || dimensions.height < 1 ||
-      dimensions.width > BOT_AVATAR_MAX_SOURCE_EDGE || dimensions.height > BOT_AVATAR_MAX_SOURCE_EDGE ||
-      dimensions.width * dimensions.height > BOT_AVATAR_MAX_SOURCE_PIXELS) {
+  if (
+    dimensions.width < 1 ||
+    dimensions.height < 1 ||
+    dimensions.width > BOT_AVATAR_MAX_SOURCE_EDGE ||
+    dimensions.height > BOT_AVATAR_MAX_SOURCE_EDGE ||
+    dimensions.width * dimensions.height > BOT_AVATAR_MAX_SOURCE_PIXELS
+  ) {
     throw new BotAvatarInputError("The Bot photo dimensions are outside the safe limit.");
   }
   return dimensions;
@@ -279,8 +348,11 @@ export function inspectBotAvatarSource(source: BotAvatarSource): BotAvatarDimens
 
 export function inspectCanonicalBotAvatarPng(bytes: Buffer): void {
   const dimensions = inspectBotAvatarSource({ mimeType: "image/png", bytes });
-  if (dimensions.width !== BOT_AVATAR_CANONICAL_EDGE || dimensions.height !== BOT_AVATAR_CANONICAL_EDGE ||
-      bytes.length > BOT_AVATAR_CANONICAL_MAX_BYTES) {
+  if (
+    dimensions.width !== BOT_AVATAR_CANONICAL_EDGE ||
+    dimensions.height !== BOT_AVATAR_CANONICAL_EDGE ||
+    bytes.length > BOT_AVATAR_CANONICAL_MAX_BYTES
+  ) {
     throw new BotAvatarInputError("The normalized Bot photo is invalid.");
   }
 }
@@ -300,9 +372,12 @@ function recordKey(ownerId: string, botId: string): string {
 }
 
 function validateScope(scope: BotAvatarMutationScope): void {
-  if (!isSafeIdentifier(scope.ownerId, 160) || !isSafeIdentifier(scope.botId, 160) ||
-      !isSafeIdentifier(scope.operationId, 128) ||
-      !(scope.expectedAssetRevision === null || ASSET_REVISION.test(scope.expectedAssetRevision))) {
+  if (
+    !isSafeIdentifier(scope.ownerId, 160) ||
+    !isSafeIdentifier(scope.botId, 160) ||
+    !isSafeIdentifier(scope.operationId, 128) ||
+    !(scope.expectedAssetRevision === null || ASSET_REVISION.test(scope.expectedAssetRevision))
+  ) {
     throw new BotAvatarInputError("The Bot avatar mutation scope is invalid.");
   }
 }
@@ -310,24 +385,28 @@ function validateScope(scope: BotAvatarMutationScope): void {
 export function createBotAvatarStore(options: BotAvatarStoreOptions) {
   const now = options.now ?? Date.now;
   const mintAssetId = options.mintAssetId ?? randomUUID;
-  const mintAssetRevision = options.mintAssetRevision ?? (() =>
-    `avatar_revision_${randomUUID().replace(/-/gu, "")}`);
+  const mintAssetRevision =
+    options.mintAssetRevision ?? (() => `avatar_revision_${randomUUID().replace(/-/gu, "")}`);
   let document: BotAvatarStoreDocument | null = null;
   let initialization: Promise<void> | null = null;
   let tail: Promise<void> = Promise.resolve();
 
   const serialized = <T>(operation: () => Promise<T>): Promise<T> => {
     const result = tail.then(operation, operation);
-    tail = result.then(() => undefined, () => undefined);
+    tail = result.then(
+      () => undefined,
+      () => undefined,
+    );
     return result;
   };
 
   const initialize = (): Promise<void> => {
     initialization ??= (async () => {
       const raw = await options.storage.readManifest();
-      document = raw === null
-        ? { version: BOT_AVATAR_STORE_VERSION, records: [], receipts: [] }
-        : parseBotAvatarStoreDocument(raw);
+      document =
+        raw === null
+          ? { version: BOT_AVATAR_STORE_VERSION, records: [], receipts: [] }
+          : parseBotAvatarStoreDocument(raw);
       const referenced = new Set(document.records.map(({ asset }) => asset.assetId));
       for (const assetId of await options.storage.listAssetIds()) {
         if (ASSET_ID.test(assetId) && !referenced.has(assetId)) {
@@ -336,8 +415,11 @@ export function createBotAvatarStore(options: BotAvatarStoreOptions) {
       }
       for (const record of document.records) {
         const bytes = await options.storage.readAsset(record.asset);
-        if (!bytes || bytes.length !== record.asset.byteSize ||
-            createHash("sha256").update(bytes).digest("hex") !== record.asset.digest) {
+        if (
+          !bytes ||
+          bytes.length !== record.asset.byteSize ||
+          createHash("sha256").update(bytes).digest("hex") !== record.asset.digest
+        ) {
           throw new BotAvatarStateError("A canonical Bot avatar asset is missing or changed.");
         }
         inspectCanonicalBotAvatarPng(bytes);
@@ -347,7 +429,9 @@ export function createBotAvatarStore(options: BotAvatarStoreOptions) {
   };
 
   const findRecord = (ownerId: string, botId: string): BotAvatarRecord | undefined =>
-    document!.records.find((record) => recordKey(record.ownerId, record.botId) === recordKey(ownerId, botId));
+    document!.records.find(
+      (record) => recordKey(record.ownerId, record.botId) === recordKey(ownerId, botId),
+    );
 
   const verifyExpected = (scope: BotAvatarMutationScope): BotAvatarRecord | undefined => {
     const current = findRecord(scope.ownerId, scope.botId);
@@ -364,8 +448,13 @@ export function createBotAvatarStore(options: BotAvatarStoreOptions) {
   ): BotAvatarMutationReceipt | null => {
     const receipt = document!.receipts.find(({ operationId }) => operationId === scope.operationId);
     if (!receipt) return null;
-    if (receipt.ownerId !== scope.ownerId || receipt.botId !== scope.botId || receipt.kind !== kind ||
-        receipt.expectedAssetRevision !== scope.expectedAssetRevision || receipt.inputDigest !== inputDigest) {
+    if (
+      receipt.ownerId !== scope.ownerId ||
+      receipt.botId !== scope.botId ||
+      receipt.kind !== kind ||
+      receipt.expectedAssetRevision !== scope.expectedAssetRevision ||
+      receipt.inputDigest !== inputDigest
+    ) {
       throw new BotAvatarReplayError("The Bot avatar operation identity was reused.");
     }
     const current = findRecord(scope.ownerId, scope.botId)?.assetRevision ?? null;
@@ -383,16 +472,19 @@ export function createBotAvatarStore(options: BotAvatarStoreOptions) {
     resultAssetRevision: string | null,
   ): BotAvatarStoreDocument => ({
     ...next,
-    receipts: [...next.receipts, {
-      operationId: scope.operationId,
-      ownerId: scope.ownerId,
-      botId: scope.botId,
-      kind,
-      expectedAssetRevision: scope.expectedAssetRevision,
-      inputDigest,
-      resultAssetRevision,
-      completedAt: now(),
-    }].slice(-BOT_AVATAR_MAX_RECEIPTS),
+    receipts: [
+      ...next.receipts,
+      {
+        operationId: scope.operationId,
+        ownerId: scope.ownerId,
+        botId: scope.botId,
+        kind,
+        expectedAssetRevision: scope.expectedAssetRevision,
+        inputDigest,
+        resultAssetRevision,
+        completedAt: now(),
+      },
+    ].slice(-BOT_AVATAR_MAX_RECEIPTS),
   });
 
   return {
@@ -408,7 +500,11 @@ export function createBotAvatarStore(options: BotAvatarStoreOptions) {
     },
 
     async read(ownerId: string, botId: string, assetRevision: string): Promise<BotAvatarContent> {
-      if (!isSafeIdentifier(ownerId, 160) || !isSafeIdentifier(botId, 160) || !ASSET_REVISION.test(assetRevision)) {
+      if (
+        !isSafeIdentifier(ownerId, 160) ||
+        !isSafeIdentifier(botId, 160) ||
+        !ASSET_REVISION.test(assetRevision)
+      ) {
         throw new BotAvatarUnavailableError("Bot avatar unavailable.");
       }
       await initialize();
@@ -422,8 +518,11 @@ export function createBotAvatarStore(options: BotAvatarStoreOptions) {
       } catch {
         throw new BotAvatarUnavailableError("Bot avatar unavailable.");
       }
-      if (!bytes || bytes.length !== record.asset.byteSize ||
-          createHash("sha256").update(bytes).digest("hex") !== record.asset.digest) {
+      if (
+        !bytes ||
+        bytes.length !== record.asset.byteSize ||
+        createHash("sha256").update(bytes).digest("hex") !== record.asset.digest
+      ) {
         throw new BotAvatarUnavailableError("Bot avatar unavailable.");
       }
       inspectCanonicalBotAvatarPng(bytes);
@@ -435,7 +534,10 @@ export function createBotAvatarStore(options: BotAvatarStoreOptions) {
         validateScope(input);
         await initialize();
         const dimensions = inspectBotAvatarSource(input.source);
-        const sourceDigest = createHash("sha256").update(input.source.mimeType).update(input.source.bytes).digest("hex");
+        const sourceDigest = createHash("sha256")
+          .update(input.source.mimeType)
+          .update(input.source.bytes)
+          .digest("hex");
         const replay = checkReplay(input, "put", sourceDigest);
         if (replay) return metadata(findRecord(input.ownerId, input.botId)!);
         const current = verifyExpected(input);
@@ -453,8 +555,12 @@ export function createBotAvatarStore(options: BotAvatarStoreOptions) {
           throw new BotAvatarStateError("The Bot avatar identity generator is invalid.");
         }
         const asset = await options.storage.writeAsset(assetId, canonical);
-        if (asset.assetId !== assetId || asset.byteSize !== canonical.length ||
-            asset.digest !== createHash("sha256").update(canonical).digest("hex") || !isIncarnation(asset.incarnation)) {
+        if (
+          asset.assetId !== assetId ||
+          asset.byteSize !== canonical.length ||
+          asset.digest !== createHash("sha256").update(canonical).digest("hex") ||
+          !isIncarnation(asset.incarnation)
+        ) {
           throw new BotAvatarStateError("The Bot avatar storage receipt is invalid.");
         }
         const record: BotAvatarRecord = {
@@ -464,11 +570,23 @@ export function createBotAvatarStore(options: BotAvatarStoreOptions) {
           asset,
           updatedAt: now(),
         };
-        const next = withReceipt({
-          ...document!,
-          records: [...document!.records.filter((candidate) =>
-            recordKey(candidate.ownerId, candidate.botId) !== recordKey(input.ownerId, input.botId)), record],
-        }, input, "put", sourceDigest, assetRevision);
+        const next = withReceipt(
+          {
+            ...document!,
+            records: [
+              ...document!.records.filter(
+                (candidate) =>
+                  recordKey(candidate.ownerId, candidate.botId) !==
+                  recordKey(input.ownerId, input.botId),
+              ),
+              record,
+            ],
+          },
+          input,
+          "put",
+          sourceDigest,
+          assetRevision,
+        );
         try {
           await options.storage.writeManifest(next);
         } catch (error) {
@@ -489,11 +607,20 @@ export function createBotAvatarStore(options: BotAvatarStoreOptions) {
         if (checkReplay(input, "delete", inputDigest)) return;
         const current = verifyExpected(input);
         if (!current) throw new BotAvatarUnavailableError("Bot avatar unavailable.");
-        const next = withReceipt({
-          ...document!,
-          records: document!.records.filter((candidate) =>
-            recordKey(candidate.ownerId, candidate.botId) !== recordKey(input.ownerId, input.botId)),
-        }, input, "delete", inputDigest, null);
+        const next = withReceipt(
+          {
+            ...document!,
+            records: document!.records.filter(
+              (candidate) =>
+                recordKey(candidate.ownerId, candidate.botId) !==
+                recordKey(input.ownerId, input.botId),
+            ),
+          },
+          input,
+          "delete",
+          inputDigest,
+          null,
+        );
         await options.storage.writeManifest(next);
         document = next;
         await options.storage.removeAsset(current.asset).catch(() => false);

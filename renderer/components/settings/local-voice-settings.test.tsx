@@ -54,7 +54,9 @@ test("choosing a model in the manager keeps the provider choice untouched", asyn
   const use = await screen.findAllByRole("button", { name: "Use" });
   fireEvent.click(use[1]!);
   await waitFor(() => assert.ok(calls.some((call) => call.channel === "settings:set")));
-  const patches = calls.filter((call) => call.channel === "settings:set").map((call) => call.args[0]);
+  const patches = calls
+    .filter((call) => call.channel === "settings:set")
+    .map((call) => call.args[0]);
   assert.deepEqual(patches, [{ localVoiceModel: "whisper-turbo" }]);
 });
 
@@ -107,9 +109,13 @@ test("on Apple silicon, a chosen Parakeet v3 is offered Metal, and the choice fo
   });
   fireEvent.click(await screen.findByRole("button", { name: /Download and Use/ }));
   await waitFor(() => assert.ok(calls.some((call) => call.channel === "localModels:download")));
-  assert.deepEqual(calls.find((call) => call.channel === "localModels:download")?.args, ["parakeet-v3-metal"]);
+  assert.deepEqual(calls.find((call) => call.channel === "localModels:download")?.args, [
+    "parakeet-v3-metal",
+  ]);
   await screen.findByText("Parakeet TDT 0.6B v3 · Metal");
-  const patches = calls.filter((call) => call.channel === "settings:set").map((call) => call.args[0]);
+  const patches = calls
+    .filter((call) => call.channel === "settings:set")
+    .map((call) => call.args[0]);
   assert.deepEqual(patches, [{ localVoiceModel: "parakeet-v3-metal" }]);
   assert.equal(screen.queryByRole("button", { name: /Download and Use/ }), null);
 });
@@ -123,11 +129,17 @@ test("on Apple silicon, Automatic stays Automatic and simply picks the Metal bui
   });
   fireEvent.click(await screen.findByRole("button", { name: /Download and Use/ }));
   await waitFor(() => assert.ok(calls.some((call) => call.channel === "localModels:download")));
-  assert.equal(calls.some((call) => call.channel === "settings:set"), false);
+  assert.equal(
+    calls.some((call) => call.channel === "settings:set"),
+    false,
+  );
 });
 
 test("a model without a faster build gets no offer, even on Apple silicon", async () => {
-  mount({ localVoiceModel: "whisper-turbo" }, localModelsTestCatalog(["parakeet-v3", "whisper-turbo"], { appleSilicon: true }));
+  mount(
+    { localVoiceModel: "whisper-turbo" },
+    localModelsTestCatalog(["parakeet-v3", "whisper-turbo"], { appleSilicon: true }),
+  );
   await screen.findByText("Whisper Large v3 Turbo");
   assert.equal(screen.queryByRole("button", { name: /Download and Use/ }), null);
 });
@@ -138,7 +150,9 @@ test("Download and Use keeps the faster build chosen when the model list answers
   const models = () => {
     const list = localModelsTestCatalog(installed, { appleSilicon: true });
     // After the download, main is slow to list models while settings answer at once.
-    return downloaded ? new Promise<LocalVoiceModel[]>((resolve) => setTimeout(() => resolve(list), 60)) : list;
+    return downloaded
+      ? new Promise<LocalVoiceModel[]>((resolve) => setTimeout(() => resolve(list), 60))
+      : list;
   };
   const calls = mount({ localVoiceModel: "parakeet-v3" }, models as () => LocalVoiceModel[], {
     "localModels:download": (id: unknown) => {
@@ -150,7 +164,9 @@ test("Download and Use keeps the faster build chosen when the model list answers
   await screen.findByText("Parakeet TDT 0.6B v3 · Metal");
   // Let any late effect run against the settled lists.
   await new Promise((resolve) => setTimeout(resolve, 120));
-  const patches = calls.filter((call) => call.channel === "settings:set").map((call) => call.args[0]);
+  const patches = calls
+    .filter((call) => call.channel === "settings:set")
+    .map((call) => call.args[0]);
   assert.deepEqual(patches, [{ localVoiceModel: "parakeet-v3-metal" }]);
   screen.getByText("Parakeet TDT 0.6B v3 · Metal");
 });

@@ -72,7 +72,9 @@ export function DraftWorktreeSendStatus({
       <Text
         variant="small"
         color="secondary"
-        ref={view.progress.phase === "ready" && view.status === "running" ? undefined : pauseWhenUnseen}
+        ref={
+          view.progress.phase === "ready" && view.status === "running" ? undefined : pauseWhenUnseen
+        }
         className={
           view.progress.phase === "ready" && view.status === "running"
             ? "min-w-0 truncate"

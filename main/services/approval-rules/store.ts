@@ -60,7 +60,9 @@ function keyOf(owner: ApprovalRuleOwner, target: ApprovalRuleTarget): string {
 }
 
 function assertBudget(document: ApprovalRulesDocument): void {
-  if (Buffer.byteLength(JSON.stringify(document, null, 2) + "\n", "utf8") > APPROVAL_RULES_MAX_BYTES) {
+  if (
+    Buffer.byteLength(JSON.stringify(document, null, 2) + "\n", "utf8") > APPROVAL_RULES_MAX_BYTES
+  ) {
     throw new ApprovalRuleLimitError();
   }
 }
@@ -86,7 +88,8 @@ export class ApprovalRuleBook {
   /** Every rule. Throws `ApprovalRulesUnreadableError` when the file can't be read exactly. */
   async list(): Promise<ApprovalRule[]> {
     const document = await this.store.load();
-    if (this.store.readable && !(await this.store.readable())) throw new ApprovalRulesUnreadableError();
+    if (this.store.readable && !(await this.store.readable()))
+      throw new ApprovalRulesUnreadableError();
     return structuredClone(document.rules);
   }
 
@@ -116,8 +119,10 @@ export class ApprovalRuleBook {
     // The rule as it will read back: a target the reader would drop or change
     // is refused here, so a rule is never saved that later reads as nothing.
     const target = parseApprovalRuleTarget(input.target);
-    if (!target || approvalRuleTargetKey(target) !== approvalRuleTargetKey(input.target)) throw new Error("This rule can’t be saved as written.");
-    if (!approvalRuleDecisionsFor(target).includes(input.decision)) throw new Error("Invalid rule.");
+    if (!target || approvalRuleTargetKey(target) !== approvalRuleTargetKey(input.target))
+      throw new Error("This rule can’t be saved as written.");
+    if (!approvalRuleDecisionsFor(target).includes(input.decision))
+      throw new Error("Invalid rule.");
     const key = keyOf(input.owner, target);
     const handOff = input.handOff === true && input.decision === "ask" && target.kind === "text";
     const saved = await this.store.update((draft) => {
@@ -149,15 +154,23 @@ export class ApprovalRuleBook {
   }
 
   /** Change a rule's decision or its "Do it myself". Returns false when the rule is gone. */
-  async change(id: string, change: { decision?: ApprovalRuleDecision; handOff?: boolean }): Promise<boolean> {
+  async change(
+    id: string,
+    change: { decision?: ApprovalRuleDecision; handOff?: boolean },
+  ): Promise<boolean> {
     const changed = await this.store.update((draft) => {
       const rule = draft.rules.find((candidate) => candidate.id === id);
       if (!rule) return false;
       const decision = change.decision ?? rule.decision;
-      if (!approvalRuleDecisionsFor(rule.target).includes(decision)) throw new Error("That rule can’t be set to this.");
+      if (!approvalRuleDecisionsFor(rule.target).includes(decision))
+        throw new Error("That rule can’t be set to this.");
       rule.decision = decision;
-      const handOff = (change.handOff ?? rule.handOff === true) && decision === "ask" && rule.target.kind === "text";
-      if (change.handOff === true && !handOff) throw new Error("Only an Always ask rule in your own words can be done by you.");
+      const handOff =
+        (change.handOff ?? rule.handOff === true) &&
+        decision === "ask" &&
+        rule.target.kind === "text";
+      if (change.handOff === true && !handOff)
+        throw new Error("Only an Always ask rule in your own words can be done by you.");
       if (handOff) rule.handOff = true;
       else delete rule.handOff;
       return true;
@@ -206,7 +219,9 @@ export class ApprovalRuleBook {
 }
 
 /** An in-memory store for tests and the CLI daemon, which has no rules page. */
-export function memoryApprovalRuleStore(initial: ApprovalRulesDocument = emptyApprovalRulesDocument()): ApprovalRuleStore {
+export function memoryApprovalRuleStore(
+  initial: ApprovalRulesDocument = emptyApprovalRulesDocument(),
+): ApprovalRuleStore {
   let document = structuredClone(initial);
   let tail: Promise<unknown> = Promise.resolve();
   return {

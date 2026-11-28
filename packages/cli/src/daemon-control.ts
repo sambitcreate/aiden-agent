@@ -2,19 +2,26 @@ import { ensurePrivateDirectory } from "../../../main/services/private-storage.t
 import { join } from "node:path";
 import { createConnection } from "node:net";
 export const daemonSocket = (agentDir: string) => join(agentDir, "serve.sock");
-export async function remoteDaemonCommand(agentDir: string, command: string, args: string[]): Promise<unknown> {
+export async function remoteDaemonCommand(
+  agentDir: string,
+  command: string,
+  args: string[],
+): Promise<unknown> {
   ensurePrivateDirectory(agentDir, "reject");
   return new Promise((resolve, reject) => {
     const socket = createConnection(daemonSocket(agentDir));
     // Decode across chunk boundaries so a multi-byte character split by the kernel is not mangled.
     socket.setEncoding("utf8");
-    let buffer = "", framed = false;
+    let buffer = "",
+      framed = false;
     socket.setTimeout(610_000, () => socket.destroy(new Error("Daemon response timed out.")));
     socket.on("connect", () => socket.write(JSON.stringify({ command, args }) + "\n"));
     socket.on("error", (error) => {
       const code = (error as NodeJS.ErrnoException).code;
       if (code === "ENOENT" || code === "ECONNREFUSED") {
-        const friendly = new Error("The Aiden daemon is not running. Start it with `aiden serve` (or `aiden serve --daemon` to run it in the background).");
+        const friendly = new Error(
+          "The Aiden daemon is not running. Start it with `aiden serve` (or `aiden serve --daemon` to run it in the background).",
+        );
         Object.assign(friendly, { code });
         reject(friendly);
         return;
@@ -26,14 +33,24 @@ export async function remoteDaemonCommand(agentDir: string, command: string, arg
       buffer += data;
       const end = buffer.indexOf("\n");
       // The ceiling is on the frame: bytes after its newline are ignored, not counted.
-      if (Buffer.byteLength(end < 0 ? buffer : buffer.slice(0, end)) > 8 * 1024 * 1024) { socket.destroy(new Error("Daemon response is too large.")); return; }
+      if (Buffer.byteLength(end < 0 ? buffer : buffer.slice(0, end)) > 8 * 1024 * 1024) {
+        socket.destroy(new Error("Daemon response is too large."));
+        return;
+      }
       if (end < 0) return;
       // The first frame is the whole answer, so nothing a peer sends after it is read.
       framed = true;
       socket.destroy();
-      try { const response = JSON.parse(buffer.slice(0, end)); if (response.error) reject(new Error(response.error)); else resolve(response.result); }
-      catch (error) { reject(error); }
+      try {
+        const response = JSON.parse(buffer.slice(0, end));
+        if (response.error) reject(new Error(response.error));
+        else resolve(response.result);
+      } catch (error) {
+        reject(error);
+      }
     });
-    socket.on("end", () => { if (!buffer.includes("\n")) reject(new Error("Daemon closed without a response.")); });
+    socket.on("end", () => {
+      if (!buffer.includes("\n")) reject(new Error("Daemon closed without a response."));
+    });
   });
 }

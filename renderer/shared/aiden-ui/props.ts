@@ -26,7 +26,9 @@ export function parseAidenUiData(dataJson: string | undefined): Record<string, u
   if (!dataJson) return {};
   try {
     const parsed = JSON.parse(dataJson) as unknown;
-    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? (parsed as Record<string, unknown>) : {};
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed)
+      ? (parsed as Record<string, unknown>)
+      : {};
   } catch {
     return {};
   }

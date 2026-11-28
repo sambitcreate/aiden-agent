@@ -243,7 +243,8 @@ class NativeSubagentRunStoreStorage implements SubagentRunStoreStorage {
     }
     if (response.startsWith("oversize ")) {
       const generation = response.slice(9);
-      if (!isSubagentRunStoreGeneration(generation)) throw new SubagentRunStoreStorageError("io_failed");
+      if (!isSubagentRunStoreGeneration(generation))
+        throw new SubagentRunStoreStorageError("io_failed");
       return { status: "oversized", contents: undefined, generation };
     }
     const match = /^data (\S+) ([A-Za-z0-9+/]*={0,2})$/u.exec(response);
@@ -258,7 +259,8 @@ class NativeSubagentRunStoreStorage implements SubagentRunStoreStorage {
   }
 
   async write(expected: SubagentRunStoreGeneration, contents: string): Promise<string> {
-    if (!isSubagentRunStoreGeneration(expected)) throw new SubagentRunStoreStorageError("invalid_input");
+    if (!isSubagentRunStoreGeneration(expected))
+      throw new SubagentRunStoreStorageError("invalid_input");
     const response = await this.request(
       `write ${expected} ${Buffer.from(contents, "utf8").toString("base64")}`,
     );

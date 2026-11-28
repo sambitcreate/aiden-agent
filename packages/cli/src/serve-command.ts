@@ -1,8 +1,17 @@
-import type { AidenRemoteDesktopPairing, AidenRemotePairingWindowStatus } from "../../../main/services/aiden-remote-pairing.js";
-import { reportServerRejection, serverAnalyticsContext, showServerNoticeInTerminal, startServerAnalytics } from "./server-analytics.ts";
+import type {
+  AidenRemoteDesktopPairing,
+  AidenRemotePairingWindowStatus,
+} from "../../../main/services/aiden-remote-pairing.js";
+import {
+  reportServerRejection,
+  serverAnalyticsContext,
+  showServerNoticeInTerminal,
+  startServerAnalytics,
+} from "./server-analytics.ts";
 import { remoteDaemonCommand } from "./daemon-control.ts";
 
-export const SERVE_USAGE = "Usage: aiden serve [--no-remote] [--pair lan|tailscale | --no-pair] [--daemon] | serve stop | serve status";
+export const SERVE_USAGE =
+  "Usage: aiden serve [--no-remote] [--pair lan|tailscale | --no-pair] [--daemon] | serve stop | serve status";
 
 type PairTransport = "lan" | "tailscale";
 
@@ -28,14 +37,22 @@ export function parseServeFlags(args: readonly string[]): ServeFlags {
     const arg = args[index]!;
     if (arg === "--remote" || arg === "--no-remote") {
       const value = arg === "--remote";
-      if (remote !== undefined && remote !== value) throw new Error("Choose one of --remote and --no-remote.");
+      if (remote !== undefined && remote !== value)
+        throw new Error("Choose one of --remote and --no-remote.");
       remote = value;
     } else if (arg === "--daemon") {
       daemon = true;
     } else if (arg === "--no-pair" || arg === "--pair" || arg.startsWith("--pair=")) {
-      const value = arg === "--no-pair" ? "off" : arg === "--pair" ? args[(index += 1)] : arg.slice("--pair=".length);
-      if (value !== "off" && value !== "lan" && value !== "tailscale") throw new Error("Usage: aiden serve --pair lan|tailscale");
-      if (pair !== undefined && pair !== value) throw new Error("Choose one of --pair lan, --pair tailscale and --no-pair.");
+      const value =
+        arg === "--no-pair"
+          ? "off"
+          : arg === "--pair"
+            ? args[(index += 1)]
+            : arg.slice("--pair=".length);
+      if (value !== "off" && value !== "lan" && value !== "tailscale")
+        throw new Error("Usage: aiden serve --pair lan|tailscale");
+      if (pair !== undefined && pair !== value)
+        throw new Error("Choose one of --pair lan, --pair tailscale and --no-pair.");
       pair = value;
     } else {
       throw new Error(SERVE_USAGE);
@@ -43,21 +60,33 @@ export function parseServeFlags(args: readonly string[]): ServeFlags {
   }
   const pairRequested = pair === "lan" || pair === "tailscale";
   if (remote === false && pairRequested) throw new Error("--pair needs Remote. Drop --no-remote.");
-  if (daemon && pairRequested) throw new Error("--pair shows a code in the foreground. After `aiden serve --daemon`, run `aiden remote pair lan|tailscale`.");
+  if (daemon && pairRequested)
+    throw new Error(
+      "--pair shows a code in the foreground. After `aiden serve --daemon`, run `aiden remote pair lan|tailscale`.",
+    );
   return { remote: remote !== false, daemon, pair: pair ?? "lan", pairRequested };
 }
 
 /** The running daemon's Remote summary, `{ on: false }` when Remote is off, or `{ on: "unknown" }` when the daemon does not answer. */
 const STATUS_TIMEOUT_MS = 5_000;
 
-export async function daemonRemoteSummary(agentDir: string, timeoutMs = STATUS_TIMEOUT_MS): Promise<Record<string, unknown>> {
+export async function daemonRemoteSummary(
+  agentDir: string,
+  timeoutMs = STATUS_TIMEOUT_MS,
+): Promise<Record<string, unknown>> {
   let timer: NodeJS.Timeout | undefined;
   // A wedged daemon must not hold `serve status` for the control socket's long command timeout.
   const timedOut = new Promise<never>((_, reject) => {
-    timer = setTimeout(() => reject(new Error(`The server did not answer within ${timeoutMs / 1000}s.`)), timeoutMs);
+    timer = setTimeout(
+      () => reject(new Error(`The server did not answer within ${timeoutMs / 1000}s.`)),
+      timeoutMs,
+    );
   });
   try {
-    const reply = await Promise.race([remoteDaemonCommand(agentDir, "serve", ["status"]), timedOut]) as { remote?: Record<string, unknown> };
+    const reply = (await Promise.race([
+      remoteDaemonCommand(agentDir, "serve", ["status"]),
+      timedOut,
+    ])) as { remote?: Record<string, unknown> };
     return reply.remote ?? { on: false };
   } catch (error) {
     return { on: "unknown", error: error instanceof Error ? error.message : String(error) };
@@ -70,8 +99,15 @@ const POLL_MS = 2_000;
 
 function wait(ms: number, signal: AbortSignal): Promise<void> {
   return new Promise((resolve) => {
-    if (signal.aborted) { resolve(); return; }
-    const done = () => { clearTimeout(timer); signal.removeEventListener("abort", done); resolve(); };
+    if (signal.aborted) {
+      resolve();
+      return;
+    }
+    const done = () => {
+      clearTimeout(timer);
+      signal.removeEventListener("abort", done);
+      resolve();
+    };
     const timer = setTimeout(done, ms);
     signal.addEventListener("abort", done, { once: true });
   });
@@ -84,7 +120,14 @@ function wait(ms: number, signal: AbortSignal): Promise<void> {
  * over Tailscale and every other server pairs over LAN. Resolves the opened
  * window's session id, so a caller whose server keeps running can close it.
  */
-export async function showStartupPairing(agentDir: string, requested: PairTransport | undefined, signal: AbortSignal, out: NodeJS.WritableStream = process.stdout, err: NodeJS.WritableStream = process.stderr, waitForAddress?: typeof import("./reachability.ts").waitForTailscaleAddress): Promise<string | undefined> {
+export async function showStartupPairing(
+  agentDir: string,
+  requested: PairTransport | undefined,
+  signal: AbortSignal,
+  out: NodeJS.WritableStream = process.stdout,
+  err: NodeJS.WritableStream = process.stderr,
+  waitForAddress?: typeof import("./reachability.ts").waitForTailscaleAddress,
+): Promise<string | undefined> {
   const mode = requested ? undefined : (await daemonRemoteSummary(agentDir)).connectionMode;
   // An unanswered status leaves the mode unknown; LAN is then a guess, and a failure names both commands.
   const guessed = !requested && mode === undefined;
@@ -93,16 +136,33 @@ export async function showStartupPairing(agentDir: string, requested: PairTransp
   let pairing: AidenRemoteDesktopPairing;
   try {
     if (transport === "tailscale") {
-      const { prepareTailscalePairing, waitForTailscaleAddress } = await import("./reachability.ts");
-      await prepareTailscalePairing(agentDir, signal, out, err, waitForAddress ?? waitForTailscaleAddress);
+      const { prepareTailscalePairing, waitForTailscaleAddress } =
+        await import("./reachability.ts");
+      await prepareTailscalePairing(
+        agentDir,
+        signal,
+        out,
+        err,
+        waitForAddress ?? waitForTailscaleAddress,
+      );
       if (signal.aborted) return;
     }
-    pairing = await remoteDaemonCommand(agentDir, "remote", ["pair", transport]) as AidenRemoteDesktopPairing;
+    pairing = (await remoteDaemonCommand(agentDir, "remote", [
+      "pair",
+      transport,
+    ])) as AidenRemoteDesktopPairing;
   } catch (error) {
     // Tailscale failures already name the setup step and the command to retry with.
     const message = (error instanceof Error ? error.message : String(error)).replace(/\.*$/u, ".");
-    const retry = guessed ? " Run `aiden remote pair lan` or `aiden remote pair tailscale` to try again." : transport === "lan" ? " Run `aiden remote pair lan` to try again." : "";
-    if (!signal.aborted) err.write(`aiden: Could not open a ${transport === "lan" ? "LAN" : "Tailscale"} pairing window. ${message}${retry}\n`);
+    const retry = guessed
+      ? " Run `aiden remote pair lan` or `aiden remote pair tailscale` to try again."
+      : transport === "lan"
+        ? " Run `aiden remote pair lan` to try again."
+        : "";
+    if (!signal.aborted)
+      err.write(
+        `aiden: Could not open a ${transport === "lan" ? "LAN" : "Tailscale"} pairing window. ${message}${retry}\n`,
+      );
     return;
   }
   if (signal.aborted) return pairing.sessionId;
@@ -116,13 +176,31 @@ export async function showStartupPairing(agentDir: string, requested: PairTransp
     await wait(Math.min(POLL_MS, Math.max(0, expiresAt - Date.now())), signal);
     if (signal.aborted) return pairing.sessionId;
     let status: AidenRemotePairingWindowStatus | { state: "none" };
-    try { status = await remoteDaemonCommand(agentDir, "remote", ["pair-status"]) as typeof status; } catch { return pairing.sessionId; }
+    try {
+      status = (await remoteDaemonCommand(agentDir, "remote", ["pair-status"])) as typeof status;
+    } catch {
+      return pairing.sessionId;
+    }
     if (signal.aborted) return pairing.sessionId;
     // Someone opened or closed a window from another shell: that one is theirs to report.
-    if (!("sessionId" in status) || status.sessionId !== pairing.sessionId) return pairing.sessionId;
-    if (status.state === "failed") { err.write(`aiden: Pairing failed. Run \`aiden remote pair ${transport}\` to try again.\n`); return pairing.sessionId; }
-    if (status.state === "finishing" && status.deviceId) { out.write("A device paired. Run `aiden remote pair lan` (or `aiden remote pair tailscale`) to add another.\n"); return pairing.sessionId; }
-    if (status.state === "expired" || Date.now() >= expiresAt) { out.write("The pairing code expired. Run `aiden remote pair lan` (or `aiden remote pair tailscale`) for a new code.\n"); return pairing.sessionId; }
+    if (!("sessionId" in status) || status.sessionId !== pairing.sessionId)
+      return pairing.sessionId;
+    if (status.state === "failed") {
+      err.write(`aiden: Pairing failed. Run \`aiden remote pair ${transport}\` to try again.\n`);
+      return pairing.sessionId;
+    }
+    if (status.state === "finishing" && status.deviceId) {
+      out.write(
+        "A device paired. Run `aiden remote pair lan` (or `aiden remote pair tailscale`) to add another.\n",
+      );
+      return pairing.sessionId;
+    }
+    if (status.state === "expired" || Date.now() >= expiresAt) {
+      out.write(
+        "The pairing code expired. Run `aiden remote pair lan` (or `aiden remote pair tailscale`) for a new code.\n",
+      );
+      return pairing.sessionId;
+    }
   }
   return pairing.sessionId;
 }
@@ -133,14 +211,18 @@ export async function serveCommand(agentDir: string, args: string[]): Promise<vo
     process.stdout.write(`${SERVE_USAGE}\n`);
     return;
   }
-  const { DETACHED_SERVE_ENV, daemonStatus, startDaemon, stopDaemon } = await import("./serve-lifecycle.ts");
+  const { DETACHED_SERVE_ENV, daemonStatus, startDaemon, stopDaemon } =
+    await import("./serve-lifecycle.ts");
   if (args[0] === "stop" || args[0] === "status") {
     if (args.length !== 1) throw new Error(`Usage: aiden serve ${args[0]}`);
     let result: unknown;
     if (args[0] === "stop") result = await stopDaemon(agentDir);
     else {
       const status = daemonStatus(agentDir);
-      result = { ...status, remote: status.running ? await daemonRemoteSummary(agentDir) : { on: false } };
+      result = {
+        ...status,
+        remote: status.running ? await daemonRemoteSummary(agentDir) : { on: false },
+      };
     }
     process.stdout.write(JSON.stringify(result, null, 2) + "\n");
     return;
@@ -151,18 +233,27 @@ export async function serveCommand(agentDir: string, args: string[]): Promise<vo
     // The detached child has no terminal, so the notice belongs here, before it starts.
     showServerNoticeInTerminal(analyticsContext);
     const started = await startDaemon(agentDir, { remote: flags.remote });
-    process.stdout.write(JSON.stringify({ ...started, remote: await daemonRemoteSummary(agentDir) }, null, 2) + "\n");
+    process.stdout.write(
+      JSON.stringify({ ...started, remote: await daemonRemoteSummary(agentDir) }, null, 2) + "\n",
+    );
     return;
   }
   const { runsUnderServiceManager } = await import("./service.ts");
-  const launch = process.env[DETACHED_SERVE_ENV] === "1" ? "daemon" : runsUnderServiceManager(process.env, process.stderr.isTTY === true) ? "service" : "foreground";
+  const launch =
+    process.env[DETACHED_SERVE_ENV] === "1"
+      ? "daemon"
+      : runsUnderServiceManager(process.env, process.stderr.isTTY === true)
+        ? "service"
+        : "foreground";
   const analytics = startServerAnalytics(launch, analyticsContext);
   const controller = new AbortController();
   const stop = () => controller.abort();
   // SIGHUP (terminal or ssh pane closed) drains like SIGINT/SIGTERM instead of killing live turns.
   // A stray rejection in one turn is logged rather than crashing every other turn the daemon serves.
   const rejected = (reason: unknown) => {
-    process.stderr.write(`aiden: Unhandled daemon rejection: ${reason instanceof Error ? reason.stack ?? reason.message : String(reason)}\n`);
+    process.stderr.write(
+      `aiden: Unhandled daemon rejection: ${reason instanceof Error ? (reason.stack ?? reason.message) : String(reason)}\n`,
+    );
     reportServerRejection(reason);
   };
   const signals = ["SIGINT", "SIGTERM", "SIGHUP"] as const;
@@ -172,18 +263,29 @@ export async function serveCommand(agentDir: string, args: string[]): Promise<vo
   const onReady = () => {
     analytics.ready();
     // Delete-only, local and never awaited: the retired `aiden insights` leftovers.
-    void import("./credentials.ts").then(({ cleanUpRetiredInsights }) => cleanUpRetiredInsights(agentDir)).catch(() => undefined);
+    void import("./credentials.ts")
+      .then(({ cleanUpRetiredInsights }) => cleanUpRetiredInsights(agentDir))
+      .catch(() => undefined);
     if (!flags.remote || flags.pair === "off") return;
     // The QR and manual code carry a single-use secret: show them only to a
     // person at a terminal, never to a log (Docker, systemd, redirected output).
     if (!process.stdout.isTTY) {
-      if (flags.pairRequested) process.stderr.write(`aiden: Not showing a pairing code because output is not a terminal. Run \`aiden remote pair ${flags.pair}\` from an interactive shell.\n`);
+      if (flags.pairRequested)
+        process.stderr.write(
+          `aiden: Not showing a pairing code because output is not a terminal. Run \`aiden remote pair ${flags.pair}\` from an interactive shell.\n`,
+        );
       return;
     }
-    pairing = showStartupPairing(agentDir, flags.pairRequested ? flags.pair : undefined, controller.signal).catch(() => undefined);
+    pairing = showStartupPairing(
+      agentDir,
+      flags.pairRequested ? flags.pair : undefined,
+      controller.signal,
+    ).catch(() => undefined);
   };
   try {
-    await (await import("./serve.ts")).serve(agentDir, controller.signal, { remote: flags.remote, onReady });
+    await (
+      await import("./serve.ts")
+    ).serve(agentDir, controller.signal, { remote: flags.remote, onReady });
   } finally {
     controller.abort();
     await pairing;

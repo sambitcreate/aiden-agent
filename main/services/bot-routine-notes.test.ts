@@ -68,7 +68,11 @@ test("routine notes are offered only to runs made entirely of routine inputs", (
     [[], false],
   ];
   for (const [requestIds, allowed] of cases) {
-    assert.equal(botIngressAllowsTool(ROUTINE_NOTES_TOOL_NAME, requestIds), allowed, JSON.stringify(requestIds));
+    assert.equal(
+      botIngressAllowsTool(ROUTINE_NOTES_TOOL_NAME, requestIds),
+      allowed,
+      JSON.stringify(requestIds),
+    );
   }
   // Other tools keep their ingress rules.
   assert.equal(botIngressAllowsTool("routines", ["routine:task-1:1"]), false);
@@ -86,7 +90,11 @@ test("notes round-trip through the file and render only for their own routine", 
     await notes.render("bot-a", "task-1"),
     "Notes you kept from earlier runs of this routine:\n- last headline: Rates held at 5%\n- week: Oct 6 second line",
   );
-  assert.equal(await notes.render("bot-b", "task-1"), "", "another Bot's routine has its own notes");
+  assert.equal(
+    await notes.render("bot-b", "task-1"),
+    "",
+    "another Bot's routine has its own notes",
+  );
 
   assert.equal((await notes.delete("bot-a", "task-1", "week")).ok, true);
   assert.deepEqual(Object.keys(await notes.read("bot-a", "task-1")), ["last headline"]);
@@ -119,7 +127,12 @@ test("a write over a cap returns notes_full and changes nothing", async () => {
 
   const invalid = await bytes.set("bot-a", "task-1", "", "x");
   assert.equal(invalid.ok === false && invalid.code, "invalid");
-  const tooLong = await bytes.set("bot-a", "task-1", "fine", "y".repeat(BOT_ROUTINE_NOTES_LIMITS.valueChars + 1));
+  const tooLong = await bytes.set(
+    "bot-a",
+    "task-1",
+    "fine",
+    "y".repeat(BOT_ROUTINE_NOTES_LIMITS.valueChars + 1),
+  );
   assert.equal(tooLong.ok === false && tooLong.code, "invalid");
 });
 
@@ -128,14 +141,25 @@ test("the tool writes the calling run's routine and nothing outside a routine ru
   const bound = (taskId: string | undefined) =>
     routineNotesCandidate("bot-a", { notes, taskIdOf: async () => taskId }).bind!(fakeCall());
 
-  const saved = text(await bound("task-7").execute("c1", { action: "set", key: "seen", value: "Story 42" }));
+  const saved = text(
+    await bound("task-7").execute("c1", { action: "set", key: "seen", value: "Story 42" }),
+  );
   assert.deepEqual(saved, { ok: true, notes: { seen: "Story 42" } });
-  assert.equal(await notes.render("bot-a", "task-7"), "Notes you kept from earlier runs of this routine:\n- seen: Story 42");
+  assert.equal(
+    await notes.render("bot-a", "task-7"),
+    "Notes you kept from earlier runs of this routine:\n- seen: Story 42",
+  );
 
-  const outside = text(await bound(undefined).execute("c2", { action: "set", key: "seen", value: "x" }));
+  const outside = text(
+    await bound(undefined).execute("c2", { action: "set", key: "seen", value: "x" }),
+  );
   assert.equal(outside.ok, false);
   assert.equal(outside.code, "unavailable");
-  assert.equal((await notes.read("bot-a", "task-7")).seen?.value, "Story 42", "nothing was written");
+  assert.equal(
+    (await notes.read("bot-a", "task-7")).seen?.value,
+    "Story 42",
+    "nothing was written",
+  );
 
   const deleted = text(await bound("task-7").execute("c3", { action: "delete", key: "seen" }));
   assert.deepEqual(deleted, { ok: true, notes: {} });
@@ -143,28 +167,64 @@ test("the tool writes the calling run's routine and nothing outside a routine ru
 
 test("a call is bound to the routine whose input its run serves, not the newest routine", async () => {
   const notice = (id: number, requestId: string) =>
-    ({ id, kind: "aiden.bot-notice", data: { notice: "routine", label: "R", requestId } }) as unknown as EntryRecord;
+    ({
+      id,
+      kind: "aiden.bot-notice",
+      data: { notice: "routine", label: "R", requestId },
+    }) as unknown as EntryRecord;
   const A = "routine:task-a:1700000000000";
   const B = "routine:task-b:1700000000000";
   // Newest first, as a call reads them: a second routine queued behind the first while it runs.
-  const entries = [notice(3, B), { id: 2, kind: "pi.user" } as unknown as EntryRecord, notice(1, A)];
-  const callWith = (log: readonly EntryRecord[], statuses: Record<string, SubmissionRecord["status"]>) => ({
+  const entries = [
+    notice(3, B),
+    { id: 2, kind: "pi.user" } as unknown as EntryRecord,
+    notice(1, A),
+  ];
+  const callWith = (
+    log: readonly EntryRecord[],
+    statuses: Record<string, SubmissionRecord["status"]>,
+  ) => ({
     entries: async () => [...log],
     submissions: async (requestIds: readonly string[]) =>
       requestIds.map((requestId) =>
-        statuses[requestId] === undefined ? undefined : ({ requestId, status: statuses[requestId] } as SubmissionRecord),
+        statuses[requestId] === undefined
+          ? undefined
+          : ({ requestId, status: statuses[requestId] } as SubmissionRecord),
       ),
   });
-  assert.equal(await routineTaskIdOfCall(callWith(entries, { [A]: "placed", [B]: "queued" })), "task-a");
-  assert.equal(await routineTaskIdOfCall(callWith(entries, { [A]: "done", [B]: "placed" })), "task-b");
-  assert.equal(await routineTaskIdOfCall(callWith(entries, { [A]: "done", [B]: "done" })), undefined, "a person's run has no routine");
-  assert.equal(await routineTaskIdOfCall(callWith([], {})), undefined, "a conversation without routines");
+  assert.equal(
+    await routineTaskIdOfCall(callWith(entries, { [A]: "placed", [B]: "queued" })),
+    "task-a",
+  );
+  assert.equal(
+    await routineTaskIdOfCall(callWith(entries, { [A]: "done", [B]: "placed" })),
+    "task-b",
+  );
+  assert.equal(
+    await routineTaskIdOfCall(callWith(entries, { [A]: "done", [B]: "done" })),
+    undefined,
+    "a person's run has no routine",
+  );
+  assert.equal(
+    await routineTaskIdOfCall(callWith([], {})),
+    undefined,
+    "a conversation without routines",
+  );
 
   // A Bot that has run routines many times still finds the run under way, the newest.
   const current = "routine:task-now:1700000000000";
-  const history = Array.from({ length: 40 }, (_, index) => notice(99 - index, `routine:task-${index}:1700000000000`));
-  const done = Object.fromEntries(history.map((entry) => [(entry.data as { requestId: string }).requestId, "done" as const]));
-  assert.equal(await routineTaskIdOfCall(callWith([notice(100, current), ...history], { ...done, [current]: "placed" })), "task-now");
+  const history = Array.from({ length: 40 }, (_, index) =>
+    notice(99 - index, `routine:task-${index}:1700000000000`),
+  );
+  const done = Object.fromEntries(
+    history.map((entry) => [(entry.data as { requestId: string }).requestId, "done" as const]),
+  );
+  assert.equal(
+    await routineTaskIdOfCall(
+      callWith([notice(100, current), ...history], { ...done, [current]: "placed" }),
+    ),
+    "task-now",
+  );
 });
 
 class MemoryPersistence<T> {
@@ -181,19 +241,23 @@ class MemoryPersistence<T> {
 }
 
 function routineHarness(notes: ReturnType<typeof notesStore>) {
-  const store = createScheduleStore(new MemoryPersistence<unknown[]>([]), new MemoryPersistence<unknown[]>([]));
+  const store = createScheduleStore(
+    new MemoryPersistence<unknown[]>([]),
+    new MemoryPersistence<unknown[]>([]),
+  );
   const sends: Array<{ text: string; requestId: string }> = [];
-  const ports: BotRoutinePorts & { routineNotes(botId: string, taskId: string): Promise<string> } = {
-    state: async () => ({ kind: "idle" }),
-    submissionForRequest: async () => undefined,
-    send: async (_botId, input) => {
-      sends.push(input);
-      return { submissionId: `sub-${sends.length}`, deduped: false };
-    },
-    awaitReply: async () => ({ kind: "completed", text: "Done." }),
-    markSilent: async () => undefined,
-    routineNotes: (botId, taskId) => notes.render(botId, taskId),
-  };
+  const ports: BotRoutinePorts & { routineNotes(botId: string, taskId: string): Promise<string> } =
+    {
+      state: async () => ({ kind: "idle" }),
+      submissionForRequest: async () => undefined,
+      send: async (_botId, input) => {
+        sends.push(input);
+        return { submissionId: `sub-${sends.length}`, deduped: false };
+      },
+      awaitReply: async () => ({ kind: "completed", text: "Done." }),
+      markSilent: async () => undefined,
+      routineNotes: (botId, taskId) => notes.render(botId, taskId),
+    };
   const executor = createBotRoutineExecutor({
     store,
     ports: () => ports,
@@ -226,14 +290,31 @@ function routineHarness(notes: ReturnType<typeof notesStore>) {
 test("a routine's notes open its own input message, and deleting the routine clears them", async () => {
   const notes = notesStore();
   const { sends, scheduler, routines } = routineHarness(notes);
-  const brief = await routines.create({ botId: "bot-a", name: "Brief", schedule: { kind: "daily", time: "08:00" }, prompt: "Brief me." });
-  const plan = await routines.create({ botId: "bot-a", name: "Plan", schedule: { kind: "daily", time: "09:00" }, prompt: "Plan the day." });
+  const brief = await routines.create({
+    botId: "bot-a",
+    name: "Brief",
+    schedule: { kind: "daily", time: "08:00" },
+    prompt: "Brief me.",
+  });
+  const plan = await routines.create({
+    botId: "bot-a",
+    name: "Plan",
+    schedule: { kind: "daily", time: "09:00" },
+    prompt: "Plan the day.",
+  });
   await notes.set("bot-a", brief.id, "last story", "Rates held");
 
   await scheduler.runNow(brief.id);
   await scheduler.runNow(plan.id);
-  assert.match(sends[0]!.text, /^Notes you kept from earlier runs of this routine:\n- last story: Rates held\n\nBrief me\./u);
-  assert.equal(botRoutinePromptOf(sends[0]!.text), "Brief me.", "chats show only the person's prompt");
+  assert.match(
+    sends[0]!.text,
+    /^Notes you kept from earlier runs of this routine:\n- last story: Rates held\n\nBrief me\./u,
+  );
+  assert.equal(
+    botRoutinePromptOf(sends[0]!.text),
+    "Brief me.",
+    "chats show only the person's prompt",
+  );
   assert.doesNotMatch(sends[1]!.text, /Notes you kept/u, "another routine never sees these notes");
 
   await routines.delete({ botId: "bot-a", id: brief.id });

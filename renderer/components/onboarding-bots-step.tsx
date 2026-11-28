@@ -56,7 +56,9 @@ export function OnboardingBotsStep({
       ]);
       const access: FirstBotAccess = !notice
         ? "unknown"
-        : !notice.requiresAcknowledgement && notice.acceptedDecision === "customize_first" ? "review_first" : "full";
+        : !notice.requiresAcknowledgement && notice.acceptedDecision === "customize_first"
+          ? "review_first"
+          : "full";
       addBotToCache(qc, bot);
       void qc.invalidateQueries({ queryKey: queryKeys.bots });
       setState({ kind: "ready", bot, access });
@@ -72,11 +74,18 @@ export function OnboardingBotsStep({
   }, [make]);
 
   return (
-    <section aria-label="Your first Bot" className="settings-card mt-4 flex items-start gap-3 px-4 py-3" data-onboarding-first-bot={state.kind}>
+    <section
+      aria-label="Your first Bot"
+      className="settings-card mt-4 flex items-start gap-3 px-4 py-3"
+      data-onboarding-first-bot={state.kind}
+    >
       {state.kind === "ready" ? (
         <BotAvatar avatar={state.bot.avatar} name={state.bot.name} size="medium" />
       ) : (
-        <span aria-hidden="true" className="size-9 shrink-0 rounded-card bg-control motion-safe:animate-pulse" />
+        <span
+          aria-hidden="true"
+          className="size-9 shrink-0 rounded-card bg-control motion-safe:animate-pulse"
+        />
       )}
       <div className="min-w-0 flex-1">
         <Text as="p" variant="small-strong" role="status">
@@ -88,7 +97,9 @@ export function OnboardingBotsStep({
         </Text>
         <Text as="p" variant="small" color="secondary" className="mt-0.5 text-pretty">
           A Bot is a helper with its own chat, memory and routines.
-          {state.kind === "ready" ? ` Its chat opens when you finish, and it will ask what you’d like help with.` : ""}
+          {state.kind === "ready"
+            ? ` Its chat opens when you finish, and it will ask what you’d like help with.`
+            : ""}
         </Text>
         {state.kind === "ready" ? (
           <Text as="p" variant="small" color="secondary" className="mt-1.5 text-pretty">

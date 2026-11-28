@@ -7,8 +7,7 @@ import { build } from "esbuild";
 import playwrightTest from "@playwright/test";
 import type * as PlaywrightTestModule from "@playwright/test";
 
-const { expect, test } =
-  playwrightTest as unknown as typeof PlaywrightTestModule;
+const { expect, test } = playwrightTest as unknown as typeof PlaywrightTestModule;
 
 // A standalone native guest avoids starting unrelated application services.
 test("hidden browser scheduling is owned by active automation and capture", async () => {
@@ -63,14 +62,21 @@ test("hidden browser scheduling is owned by active automation and capture", asyn
     },
   );
   expect(JSON.parse(result)).toMatchObject({
-    idlePolicy: true, timerResult: "timer", cancellationRestored: true,
-    failureRestored: true, crashRestored: true,
+    idlePolicy: true,
+    timerResult: "timer",
+    cancellationRestored: true,
+    failureRestored: true,
+    crashRestored: true,
     attachedWindow: {
       duringRecordingPolicies: [true, true, false],
       afterRecordingPolicies: [true, true, true],
-      stayedBackgrounded: true, preservedAttachments: true, automaticStopDelayMs: 300_000,
+      stayedBackgrounded: true,
+      preservedAttachments: true,
+      automaticStopDelayMs: 300_000,
     },
     // Linux keeps the capture loop for Picture in Picture; elsewhere it paints from the screencast.
-    ...(process.platform === "linux" ? {} : { pictureInPicture: { paintedWhileMinimized: 0, captures: 1 } }),
+    ...(process.platform === "linux"
+      ? {}
+      : { pictureInPicture: { paintedWhileMinimized: 0, captures: 1 } }),
   });
 });

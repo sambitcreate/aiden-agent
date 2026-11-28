@@ -97,7 +97,9 @@ export function pickDefaultImageModel(
 ): ImageModelRef | undefined {
   const match =
     models.find((option) => option.isDefault) ??
-    models.find((option) => option.provider === preferred.provider && option.model === preferred.id) ??
+    models.find(
+      (option) => option.provider === preferred.provider && option.model === preferred.id,
+    ) ??
     models[0];
   return match ? { provider: match.provider, id: match.model } : undefined;
 }

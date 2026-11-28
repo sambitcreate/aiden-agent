@@ -12,7 +12,10 @@ export type SubagentModelCatalog = Readonly<
 type SubagentModelRef = Pick<SubagentRunSnapshot, "modelId" | "providerId">;
 type SubagentModelLineRef = SubagentModelRef & Pick<SubagentRunSnapshot, "thinkingLevel">;
 
-const EFFORT_LABELS: Record<NonNullable<SubagentRunSnapshot["thinkingLevel"]>, string | undefined> = {
+const EFFORT_LABELS: Record<
+  NonNullable<SubagentRunSnapshot["thinkingLevel"]>,
+  string | undefined
+> = {
   off: undefined,
   low: "Low",
   medium: "Medium",
@@ -31,12 +34,17 @@ export function subagentModelName(run: SubagentModelRef, catalog?: SubagentModel
 }
 
 /** "GLM 5.3 Flash · Max"; the effort is left out when it is off or was not recorded. */
-export function subagentModelLine(run: SubagentModelLineRef, catalog?: SubagentModelCatalog): string {
+export function subagentModelLine(
+  run: SubagentModelLineRef,
+  catalog?: SubagentModelCatalog,
+): string {
   const effort = run.thinkingLevel ? EFFORT_LABELS[run.thinkingLevel] : undefined;
   return [subagentModelName(run, catalog), effort].filter(Boolean).join(" · ");
 }
 
-const SubagentModelCatalogContext = React.createContext<SubagentModelCatalog | undefined>(undefined);
+const SubagentModelCatalogContext = React.createContext<SubagentModelCatalog | undefined>(
+  undefined,
+);
 
 /** Shares the picker's offline model catalog with every helper surface below it. */
 export function SubagentModelCatalogProvider({ children }: { children: React.ReactNode }) {

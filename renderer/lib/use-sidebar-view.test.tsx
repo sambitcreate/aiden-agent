@@ -81,7 +81,10 @@ test("a write keeps fields another window changed, even before its storage event
 
   const shelf = renderHook(() => useWorkingShelfCollapsed());
   act(() => shelf.result.current.setCollapsed(true));
-  assert.deepEqual([stored().view, stored().chatSort, stored().workingShelfCollapsed], ["recent", "created", true]);
+  assert.deepEqual(
+    [stored().view, stored().chatSort, stored().workingShelfCollapsed],
+    ["recent", "created", true],
+  );
 });
 
 test("the Working shelf state is stored and shared across windows", async () => {
@@ -96,7 +99,13 @@ test("the Working shelf state is stored and shared across windows", async () => 
 
 test("a patch prunes removed local workspaces, and a write that changes nothing is skipped", async () => {
   const { readSidebarPreferences, writeSidebarPreferences } = await loadStore();
-  stub.data.set(KEY, JSON.stringify({ expandedWorkspaceIds: ["alpha", "gone"], projectOrder: ["local:gone", "studio:p"] }));
+  stub.data.set(
+    KEY,
+    JSON.stringify({
+      expandedWorkspaceIds: ["alpha", "gone"],
+      projectOrder: ["local:gone", "studio:p"],
+    }),
+  );
   writeSidebarPreferences({}, ["alpha"]);
   assert.deepEqual(stored().expandedWorkspaceIds, ["alpha"]);
   assert.deepEqual(stored().projectOrder, ["studio:p"]);
@@ -119,14 +128,25 @@ test("a window's own copies of stored fields hear another window's write, and on
   const heard: { projectOrder: string[]; expandedWorkspaceIds: string[]; chatSort: string }[] = [];
   const { unmount } = renderHook(() =>
     useSidebarPreferencesFromOtherWindows(({ projectOrder, expandedWorkspaceIds, chatSort }) =>
-      heard.push({ projectOrder, expandedWorkspaceIds, chatSort })),
+      heard.push({ projectOrder, expandedWorkspaceIds, chatSort }),
+    ),
   );
   // This window's own write raises no storage event here.
   act(() => writeSidebarPreferences({ projectOrder: ["local:alpha"] }));
   assert.equal(heard.length, 0);
 
-  otherWindowWrites({ ...stored(), projectOrder: ["studio:p", "local:alpha"], expandedWorkspaceIds: ["alpha"] });
-  assert.deepEqual(heard, [{ projectOrder: ["studio:p", "local:alpha"], expandedWorkspaceIds: ["alpha"], chatSort: "last_activity" }]);
+  otherWindowWrites({
+    ...stored(),
+    projectOrder: ["studio:p", "local:alpha"],
+    expandedWorkspaceIds: ["alpha"],
+  });
+  assert.deepEqual(heard, [
+    {
+      projectOrder: ["studio:p", "local:alpha"],
+      expandedWorkspaceIds: ["alpha"],
+      chatSort: "last_activity",
+    },
+  ]);
 
   // Another key's event is not a sidebar write; after unmount nothing is heard.
   act(() => {

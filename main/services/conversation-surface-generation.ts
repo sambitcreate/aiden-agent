@@ -1,6 +1,10 @@
 import type { InlineVisualsMode } from "../../renderer/shared/appearance.js";
 import type { ChatGenerationOwner } from "./chat-generation-owner.js";
-import type { ChatStartParams, ScheduledMcpServerBinding, ScheduledTaskPermission } from "./types.js";
+import type {
+  ChatStartParams,
+  ScheduledMcpServerBinding,
+  ScheduledTaskPermission,
+} from "./types.js";
 
 export interface ScheduledGenerationSurfaceInput {
   chatId: string;
@@ -105,7 +109,9 @@ export function remoteGenerationSurface(input: RemoteGenerationSurfaceInput) {
       visualAudience: "remote" as const,
       ...(input.botAudienceId ? { botAudienceId: input.botAudienceId } : {}),
       ...(input.excludeToolNames ? { excludeToolNames: input.excludeToolNames } : {}),
-      ...(input.questionPromptsUnavailable === true ? { questionPromptsUnavailable: true as const } : {}),
+      ...(input.questionPromptsUnavailable === true
+        ? { questionPromptsUnavailable: true as const }
+        : {}),
       ...(input.leadChatTurn === true ? { leadChatTurn: true as const } : {}),
       onTurnAccepted: input.onTurnAccepted,
     },

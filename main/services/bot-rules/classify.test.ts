@@ -1,7 +1,11 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { test } from "node:test";
-import { BOT_ACTION_CLASSES, type BotActionClass, type BotRule } from "../../../renderer/shared/bot-rules.js";
+import {
+  BOT_ACTION_CLASSES,
+  type BotActionClass,
+  type BotRule,
+} from "../../../renderer/shared/bot-rules.js";
 import { classifyBotAction, type BotClassifiableAction } from "./classify.js";
 
 interface CorpusRow {
@@ -14,7 +18,9 @@ interface CorpusRow {
   expectedCustom?: string[];
 }
 
-const corpus = JSON.parse(readFileSync(new URL("./fixtures/actions.json", import.meta.url), "utf8")) as {
+const corpus = JSON.parse(
+  readFileSync(new URL("./fixtures/actions.json", import.meta.url), "utf8"),
+) as {
   version: number;
   rows: CorpusRow[];
 };
@@ -34,15 +40,30 @@ test("the corpus covers every surface and class with enough rows to mean somethi
       `fewer than five ${actionClass} rows`,
     );
   }
-  assert.ok(corpus.rows.filter((row) => row.expected.length === 0).length >= 20, "too few negatives");
+  assert.ok(
+    corpus.rows.filter((row) => row.expected.length === 0).length >= 20,
+    "too few negatives",
+  );
   // Password, one-time-code and card fields on every surface (for connection
   // tools: tools that take or change them).
   for (const surface of ["browser", "computer", "computer_use", "mcp"]) {
-    const sensitive = corpus.rows.filter((row) => row.action.surface === surface && row.tags?.includes("sensitive_field"));
-    assert.ok(sensitive.some((row) => row.expected.includes("credentials")), `${surface}: no credential field`);
-    assert.ok(sensitive.some((row) => row.expected.includes("money")), `${surface}: no card field`);
+    const sensitive = corpus.rows.filter(
+      (row) => row.action.surface === surface && row.tags?.includes("sensitive_field"),
+    );
+    assert.ok(
+      sensitive.some((row) => row.expected.includes("credentials")),
+      `${surface}: no credential field`,
+    );
+    assert.ok(
+      sensitive.some((row) => row.expected.includes("money")),
+      `${surface}: no card field`,
+    );
   }
-  assert.equal(new Set(corpus.rows.map((row) => row.id)).size, corpus.rows.length, "row ids repeat");
+  assert.equal(
+    new Set(corpus.rows.map((row) => row.id)).size,
+    corpus.rows.length,
+    "row ids repeat",
+  );
 });
 
 test("precision and recall against the labelled corpus, reported per class", (t) => {
@@ -61,12 +82,15 @@ test("precision and recall against the labelled corpus, reported per class", (t)
       else if (expected) count.fn += 1;
     }
     const got = [...classes].sort().join(",");
-    if (got !== [...row.expected].sort().join(",")) mismatches.push(`${row.id}: got [${got}], labelled [${row.expected.join(",")}]`);
+    if (got !== [...row.expected].sort().join(","))
+      mismatches.push(`${row.id}: got [${got}], labelled [${row.expected.join(",")}]`);
   }
   for (const [actionClass, { tp, fp, fn }] of counts) {
     const precision = tp + fp === 0 ? 1 : tp / (tp + fp);
     const recall = tp + fn === 0 ? 1 : tp / (tp + fn);
-    t.diagnostic(`${actionClass}: precision ${precision.toFixed(2)}, recall ${recall.toFixed(2)} (tp ${tp}, fp ${fp}, fn ${fn})`);
+    t.diagnostic(
+      `${actionClass}: precision ${precision.toFixed(2)}, recall ${recall.toFixed(2)} (tp ${tp}, fp ${fp}, fn ${fn})`,
+    );
     if (LOCKED.includes(actionClass)) {
       // A missed password or card hands the step to the Bot instead of the person.
       assert.equal(fn, 0, `${actionClass} missed ${fn} labelled rows`);
@@ -115,7 +139,10 @@ test("a custom rule needs every one of its content words, in any form", () => {
     0,
   );
   // Stop words are ignored; a rule of only stop words never matches anything.
-  assert.equal(classifyBotAction(action, [custom("custom.s", "do something for me")]).customRuleIds.size, 0);
+  assert.equal(
+    classifyBotAction(action, [custom("custom.s", "do something for me")]).customRuleIds.size,
+    0,
+  );
   // Words are whole stems, not prefixes: "post" is not "postal".
   const postal: BotClassifiableAction = {
     surface: "browser",
@@ -144,7 +171,10 @@ test("a custom rule can name the app, the site or the connection tool", () => {
     url: "https://www.YouTube.com/upload",
     field: { accessibleName: "Publish" },
   };
-  assert.deepEqual([...classifyBotAction(site, [custom("custom.yt", "publish on YouTube")]).customRuleIds], ["custom.yt"]);
+  assert.deepEqual(
+    [...classifyBotAction(site, [custom("custom.yt", "publish on YouTube")]).customRuleIds],
+    ["custom.yt"],
+  );
 });
 
 test("built-in and locked rules in the list are not custom rules", () => {
@@ -191,45 +221,102 @@ test("every class decision carries evidence naming the signal, never a field val
   assert.deepEqual([...result.classes], ["money"]);
   const forMoney = result.evidence.filter((entry) => entry.actionClass === "money");
   assert.ok(forMoney.some((entry) => entry.kind === "strong"));
-  for (const entry of result.evidence) assert.ok(entry.source.length > 0 && entry.source.length < 120);
+  for (const entry of result.evidence)
+    assert.ok(entry.source.length > 0 && entry.source.length < 120);
 });
 
 test("the key that sends a web message is communicating; a new line, a search or an unknown box is not", () => {
-  const press = (key: string, url: string, field?: Extract<BotClassifiableAction, { surface: "browser" }>["field"]) =>
-    [...classifyBotAction({ surface: "browser", tool: "browser_press", url, key, ...(field ? { field } : {}) }, []).classes];
+  const press = (
+    key: string,
+    url: string,
+    field?: Extract<BotClassifiableAction, { surface: "browser" }>["field"],
+  ) => [
+    ...classifyBotAction(
+      { surface: "browser", tool: "browser_press", url, key, ...(field ? { field } : {}) },
+      [],
+    ).classes,
+  ];
   const reply = { tag: "textarea", accessibleName: "Reply to Ada" };
   // A message box anywhere, by its name; the numeric keypad's Enter too.
   assert.deepEqual(press("Enter", "https://forum.example.org/t/42", reply), ["communicate"]);
   assert.deepEqual(press("NumpadEnter", "https://forum.example.org/t/42", reply), ["communicate"]);
-  assert.deepEqual(press("Control+Enter", "https://forum.example.org/t/42", reply), ["communicate"]);
+  assert.deepEqual(press("Control+Enter", "https://forum.example.org/t/42", reply), [
+    "communicate",
+  ]);
   // A new line, another key, or a box the probe couldn't read.
   assert.deepEqual(press("Alt+Enter", "https://forum.example.org/t/42", reply), []);
   assert.deepEqual(press("Shift+Control+Enter", "https://forum.example.org/t/42", reply), []);
   assert.deepEqual(press("ArrowUp", "https://forum.example.org/t/42", reply), []);
   assert.deepEqual(press("Enter", "https://app.slack.com/client/T1/C2"), []);
   // A search box is never a message box, even on a chat site or named for messages.
-  assert.deepEqual(press("Enter", "https://app.slack.com/client/T1/C2", { tag: "input", type: "search" }), []);
-  assert.deepEqual(press("Enter", "https://discord.com/channels/1/2", { tag: "div", role: "searchbox" }), []);
-  assert.deepEqual(press("Enter", "https://example.com/", { tag: "input", type: "text", accessibleName: "Search messages" }), []);
+  assert.deepEqual(
+    press("Enter", "https://app.slack.com/client/T1/C2", { tag: "input", type: "search" }),
+    [],
+  );
+  assert.deepEqual(
+    press("Enter", "https://discord.com/channels/1/2", { tag: "div", role: "searchbox" }),
+    [],
+  );
+  assert.deepEqual(
+    press("Enter", "https://example.com/", {
+      tag: "input",
+      type: "text",
+      accessibleName: "Search messages",
+    }),
+    [],
+  );
   // A button or checkbox with focus is not a text box.
-  assert.deepEqual(press("Enter", "https://app.slack.com/client/T1/C2", { tag: "button", accessibleName: "Message" }), []);
+  assert.deepEqual(
+    press("Enter", "https://app.slack.com/client/T1/C2", {
+      tag: "button",
+      accessibleName: "Message",
+    }),
+    [],
+  );
   // An unnamed text box sends only on a chat site, and in web mail only with Control or Command.
   assert.deepEqual(press("Enter", "https://example.com/", { tag: "input", type: "text" }), []);
-  assert.deepEqual(press("Enter", "https://teams.microsoft.com/v2/", { tag: "div", role: "textbox" }), ["communicate"]);
-  assert.deepEqual(press("Enter", "https://outlook.live.com/mail/0/", { tag: "div", role: "textbox", accessibleName: "Reply" }), []);
-  assert.deepEqual(press("Meta+Enter", "https://outlook.live.com/mail/0/", { tag: "div", role: "textbox" }), ["communicate"]);
+  assert.deepEqual(
+    press("Enter", "https://teams.microsoft.com/v2/", { tag: "div", role: "textbox" }),
+    ["communicate"],
+  );
+  assert.deepEqual(
+    press("Enter", "https://outlook.live.com/mail/0/", {
+      tag: "div",
+      role: "textbox",
+      accessibleName: "Reply",
+    }),
+    [],
+  );
+  assert.deepEqual(
+    press("Meta+Enter", "https://outlook.live.com/mail/0/", { tag: "div", role: "textbox" }),
+    ["communicate"],
+  );
 
   const evidence = classifyBotAction(
-    { surface: "browser", tool: "browser_press", url: "https://web.whatsapp.com/", key: "Enter", field: { role: "textbox", accessibleName: "Type a message" } },
+    {
+      surface: "browser",
+      tool: "browser_press",
+      url: "https://web.whatsapp.com/",
+      key: "Enter",
+      field: { role: "textbox", accessibleName: "Type a message" },
+    },
     [],
   ).evidence;
-  assert.ok(evidence.some((entry) => entry.actionClass === "communicate" && entry.kind === "strong"));
+  assert.ok(
+    evidence.some((entry) => entry.actionClass === "communicate" && entry.kind === "strong"),
+  );
 });
 
 test("hostile input is bounded and never throws", () => {
   const huge = "send ".repeat(50_000);
   const result = classifyBotAction(
-    { surface: "computer_use", action: "key", keys: "cmd+cmd+", app: "Mail", element: { label: huge } },
+    {
+      surface: "computer_use",
+      action: "key",
+      keys: "cmd+cmd+",
+      app: "Mail",
+      element: { label: huge },
+    },
     [custom("custom.x", "send")],
   );
   assert.ok(result.evidence.length < 50);

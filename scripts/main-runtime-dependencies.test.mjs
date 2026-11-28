@@ -22,7 +22,8 @@ const RUNTIME_LOADED = new Map([
 const BUILTINS = new Set([...builtinModules, "electron"]);
 
 function packageName(specifier) {
-  if (specifier.startsWith(".") || specifier.startsWith("/") || specifier.startsWith("node:")) return null;
+  if (specifier.startsWith(".") || specifier.startsWith("/") || specifier.startsWith("node:"))
+    return null;
   const segments = specifier.split("/");
   const name = specifier.startsWith("@") ? segments.slice(0, 2).join("/") : segments[0];
   return BUILTINS.has(name) || BUILTINS.has(specifier) ? null : name;
@@ -51,14 +52,21 @@ test("every package main and preload load at runtime is installed for production
     mainProcessGraph(),
     readFile(path.join(repositoryRoot, "package-lock.json"), "utf8").then(JSON.parse),
   ]);
-  assert.ok(externals.has("@earendil-works/pi-agent-core"), "the analysis sees main's external imports");
+  assert.ok(
+    externals.has("@earendil-works/pi-agent-core"),
+    "the analysis sees main's external imports",
+  );
 
   const missing = [];
   for (const name of [...externals, ...RUNTIME_LOADED.keys()]) {
     const installed = lockfile.packages?.[`node_modules/${name}`];
     if (!installed || installed.dev === true) missing.push(name);
   }
-  assert.deepEqual(missing, [], "packages main needs must not be dev-only, or app.asar will omit them");
+  assert.deepEqual(
+    missing,
+    [],
+    "packages main needs must not be dev-only, or app.asar will omit them",
+  );
 });
 
 test("production dependencies hold only what the main process reaches", async () => {

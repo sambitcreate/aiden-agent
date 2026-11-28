@@ -1,6 +1,9 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { resolveSubagentMcpCredentialBoundary, type SubagentMcpCredentialSources } from "./subagent-mcp-credential-resolve.js";
+import {
+  resolveSubagentMcpCredentialBoundary,
+  type SubagentMcpCredentialSources,
+} from "./subagent-mcp-credential-resolve.js";
 import { mcpFieldSecretDestination, resolveMcpFieldSecrets } from "../mcp-field-secrets-core.js";
 import type { McpServer } from "../types.js";
 import {
@@ -22,9 +25,7 @@ const HEADER = "custom-header-private";
 const HEADER_TOKEN = "authorization-token-private";
 
 function boundary(
-  overrides: Partial<
-    Parameters<typeof createSubagentMcpCredentialBoundary>[0]
-  > = {},
+  overrides: Partial<Parameters<typeof createSubagentMcpCredentialBoundary>[0]> = {},
 ) {
   return createSubagentMcpCredentialBoundary({
     revisionKey: REVISION_KEY,
@@ -55,19 +56,10 @@ function boundary(
 test("preset API-key rotation changes only the non-secret credential revision", () => {
   const first = boundary();
   assert.equal(boundary().revision, first.revision);
-  assert.notEqual(
-    boundary({ presetApiKey: PRESET_KEY_B }).revision,
-    first.revision,
-  );
+  assert.notEqual(boundary({ presetApiKey: PRESET_KEY_B }).revision, first.revision);
   assert.match(first.revision, /^[a-f0-9]{64}$/u);
   const serialized = JSON.stringify(first);
-  for (const secret of [
-    PRESET_KEY_A,
-    ACCESS_A,
-    REFRESH_A,
-    HEADER,
-    HEADER_TOKEN,
-  ]) {
+  for (const secret of [PRESET_KEY_A, ACCESS_A, REFRESH_A, HEADER, HEADER_TOKEN]) {
     assert.doesNotMatch(first.revision, new RegExp(secret, "u"));
     assert.doesNotMatch(serialized, new RegExp(secret, "u"));
   }
@@ -130,10 +122,7 @@ test("transport token redactors retain only credential fields and their encoded 
   assert.doesNotMatch(output, /transport-(?:access|refresh)-private/u);
   assert.doesNotMatch(output, new RegExp(encoded, "u"));
   assert.match(output, /Bearer read/u);
-  assert.throws(
-    () => createSubagentMcpOAuthTokenRedactor({ access_token: "x" }),
-    /too short/u,
-  );
+  assert.throws(() => createSubagentMcpOAuthTokenRedactor({ access_token: "x" }), /too short/u);
 });
 
 test("OAuth observation deduplicates token sets and fails closed at its fixed ceiling", () => {
@@ -148,17 +137,10 @@ test("OAuth observation deduplicates token sets and fails closed at its fixed ce
   observe(tokens(0));
   observe(tokens(0));
   assert.equal(redactors.length, 1);
-  for (
-    let index = 1;
-    index < MAX_SUBAGENT_MCP_OBSERVED_OAUTH_TOKEN_SETS;
-    index += 1
-  ) {
+  for (let index = 1; index < MAX_SUBAGENT_MCP_OBSERVED_OAUTH_TOKEN_SETS; index += 1) {
     observe(tokens(index));
   }
-  assert.equal(
-    redactors.length,
-    MAX_SUBAGENT_MCP_OBSERVED_OAUTH_TOKEN_SETS,
-  );
+  assert.equal(redactors.length, MAX_SUBAGENT_MCP_OBSERVED_OAUTH_TOKEN_SETS);
   assert.throws(
     () => observe(tokens(MAX_SUBAGENT_MCP_OBSERVED_OAUTH_TOKEN_SETS)),
     /observation limit/u,
@@ -212,9 +194,7 @@ test("host redactor removes standard URL, query, JSON, and base64 credential for
     assert.equal(value.redactText(`echo=${form}`).includes(form), false);
   }
   const encoded = encodeURIComponent(secret);
-  const lowerPercent = encoded.replace(/%[0-9A-F]{2}/gu, (escape) =>
-    escape.toLowerCase(),
-  );
+  const lowerPercent = encoded.replace(/%[0-9A-F]{2}/gu, (escape) => escape.toLowerCase());
   let alternate = false;
   const mixedPercent = encoded.replace(/%[0-9A-F]{2}/gu, (escape) => {
     alternate = !alternate;
@@ -236,14 +216,8 @@ test("ordinary headers do not poison schemas and weak credentials fail closed", 
     value.redactText("schema accepts application/json and language en"),
     "schema accepts application/json and language en",
   );
-  assert.throws(
-    () => boundary({ endpointCredentials: ["u"] }),
-    /too short/u,
-  );
-  assert.throws(
-    () => boundary({ configuredHeaders: { authorization: "1" } }),
-    /too short/u,
-  );
+  assert.throws(() => boundary({ endpointCredentials: ["u"] }), /too short/u);
+  assert.throws(() => boundary({ configuredHeaders: { authorization: "1" } }), /too short/u);
 });
 
 test("opaque custom header values are always treated as credential material", () => {
@@ -259,10 +233,7 @@ test("opaque custom header values are always treated as credential material", ()
     "service-key-private subscription-key-private client-credential-private signature-private",
   );
   assert.doesNotMatch(echoed, /(?:service|subscription|client|signature)-/u);
-  assert.throws(
-    () => boundary({ configuredHeaders: { "x-service-key": "abc" } }),
-    /too short/u,
-  );
+  assert.throws(() => boundary({ configuredHeaders: { "x-service-key": "abc" } }), /too short/u);
 });
 
 test("opaque endpoint query values are credentials except fixed public selectors", () => {
@@ -284,17 +255,35 @@ const markerServer: McpServer = {
   headers: { Authorization: markerAuthorization, "X-Api-Key": markerApiKey },
   enabled: true,
 };
-const markerValues = { [markerAuthorization]: "Bearer real-bearer-secret", [markerApiKey]: "real-api-key-secret" };
+const markerValues = {
+  [markerAuthorization]: "Bearer real-bearer-secret",
+  [markerApiKey]: "real-api-key-secret",
+};
 /** A stored record holding `values` for the marker server's headers, bound to `destination`. */
 function markerRecord(destination: string, values: Record<string, string>) {
-  const fields: Record<string, string> = { [markerAuthorization]: "headers:Authorization", [markerApiKey]: "headers:X-Api-Key" };
-  return { bindings: { [destination]: Object.fromEntries(Object.entries(values).map(([marker, value]) => [marker, { field: fields[marker]!, value }])) } };
+  const fields: Record<string, string> = {
+    [markerAuthorization]: "headers:Authorization",
+    [markerApiKey]: "headers:X-Api-Key",
+  };
+  return {
+    bindings: {
+      [destination]: Object.fromEntries(
+        Object.entries(values).map(([marker, value]) => [
+          marker,
+          { field: fields[marker]!, value },
+        ]),
+      ),
+    },
+  };
 }
 
-function markerSources(destination = mcpFieldSecretDestination(markerServer)): SubagentMcpCredentialSources {
+function markerSources(
+  destination = mcpFieldSecretDestination(markerServer),
+): SubagentMcpCredentialSources {
   return {
     revisionKey: Buffer.alloc(32, 3),
-    resolveFieldSecrets: async (configured) => resolveMcpFieldSecrets(configured, markerRecord(destination, markerValues)),
+    resolveFieldSecrets: async (configured) =>
+      resolveMcpFieldSecrets(configured, markerRecord(destination, markerValues)),
     presetKey: async () => null,
     oauthSession: async () => ({}),
     oauthGeneration: () => 0,
@@ -302,35 +291,83 @@ function markerSources(destination = mcpFieldSecretDestination(markerServer)): S
 }
 
 test("a server echoing its marker-backed headers never shows the real values to a child", async () => {
-  const boundary = await resolveSubagentMcpCredentialBoundary(markerServer, new AbortController().signal, markerSources());
-  const echoed = boundary.redactText(JSON.stringify({ seen: { authorization: "Bearer real-bearer-secret", "x-api-key": "real-api-key-secret" } }));
+  const boundary = await resolveSubagentMcpCredentialBoundary(
+    markerServer,
+    new AbortController().signal,
+    markerSources(),
+  );
+  const echoed = boundary.redactText(
+    JSON.stringify({
+      seen: { authorization: "Bearer real-bearer-secret", "x-api-key": "real-api-key-secret" },
+    }),
+  );
   assert.doesNotMatch(echoed, /real-bearer-secret|real-api-key-secret/u);
   // Rotating a stored value is a new credential revision for the child's authority.
-  const rotated = await resolveSubagentMcpCredentialBoundary(markerServer, new AbortController().signal, {
-    ...markerSources(),
-    resolveFieldSecrets: async (configured) => resolveMcpFieldSecrets(configured, markerRecord(mcpFieldSecretDestination(markerServer), { ...markerValues, [markerApiKey]: "rotated" })),
-  });
+  const rotated = await resolveSubagentMcpCredentialBoundary(
+    markerServer,
+    new AbortController().signal,
+    {
+      ...markerSources(),
+      resolveFieldSecrets: async (configured) =>
+        resolveMcpFieldSecrets(
+          configured,
+          markerRecord(mcpFieldSecretDestination(markerServer), {
+            ...markerValues,
+            [markerApiKey]: "rotated",
+          }),
+        ),
+    },
+  );
   assert.notEqual(rotated.revision, boundary.revision);
 });
 
 test("values saved for another address fail closed instead of reaching a child's connection", async () => {
   await assert.rejects(
-    resolveSubagentMcpCredentialBoundary(markerServer, new AbortController().signal, markerSources("0".repeat(64))),
+    resolveSubagentMcpCredentialBoundary(
+      markerServer,
+      new AbortController().signal,
+      markerSources("0".repeat(64)),
+    ),
     /changed outside Aiden/u,
   );
 });
 
 test("a pre-registered OAuth client secret echoed by a server never reaches a child, and rotating it is a new revision", async () => {
   const secretMarker = `aiden-secret:v1:${"c".repeat(32)}`;
-  const server: McpServer = { id: "docs", name: "Docs", transport: "http", url: "https://docs.example.test/mcp", oauth: true, oauthClientId: "app", oauthClientSecret: secretMarker, enabled: true };
+  const server: McpServer = {
+    id: "docs",
+    name: "Docs",
+    transport: "http",
+    url: "https://docs.example.test/mcp",
+    oauth: true,
+    oauthClientId: "app",
+    oauthClientSecret: secretMarker,
+    enabled: true,
+  };
   const sources = (value: string): SubagentMcpCredentialSources => ({
     ...markerSources(),
-    resolveFieldSecrets: async (configured) => resolveMcpFieldSecrets(configured, {
-      bindings: { [mcpFieldSecretDestination(server)]: { [secretMarker]: { field: "oauth:client_secret", value } } },
-    }),
+    resolveFieldSecrets: async (configured) =>
+      resolveMcpFieldSecrets(configured, {
+        bindings: {
+          [mcpFieldSecretDestination(server)]: {
+            [secretMarker]: { field: "oauth:client_secret", value },
+          },
+        },
+      }),
   });
-  const boundary = await resolveSubagentMcpCredentialBoundary(server, new AbortController().signal, sources("pre-registered-client-secret"));
-  assert.doesNotMatch(boundary.redactText("echo: pre-registered-client-secret"), /pre-registered-client-secret/u);
-  const rotated = await resolveSubagentMcpCredentialBoundary(server, new AbortController().signal, sources("rotated-client-secret"));
+  const boundary = await resolveSubagentMcpCredentialBoundary(
+    server,
+    new AbortController().signal,
+    sources("pre-registered-client-secret"),
+  );
+  assert.doesNotMatch(
+    boundary.redactText("echo: pre-registered-client-secret"),
+    /pre-registered-client-secret/u,
+  );
+  const rotated = await resolveSubagentMcpCredentialBoundary(
+    server,
+    new AbortController().signal,
+    sources("rotated-client-secret"),
+  );
   assert.notEqual(rotated.revision, boundary.revision);
 });

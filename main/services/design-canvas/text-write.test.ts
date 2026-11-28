@@ -43,7 +43,11 @@ test("an edit that never reached the file is reported as failed and leaves it as
   });
   assert.equal(result, "failed");
   assert.equal(await fs.readFile(file, "utf8"), "<h1>Ship faster</h1>");
-  assert.deepEqual(await fs.readdir(path.dirname(file)), ["hero.html"], "no staged file is left behind");
+  assert.deepEqual(
+    await fs.readdir(path.dirname(file)),
+    ["hero.html"],
+    "no staged file is left behind",
+  );
 });
 
 test("a change another writer makes while the edit is being saved is kept, and the edit says so", async (t) => {

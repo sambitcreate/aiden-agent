@@ -47,7 +47,10 @@ export interface AnalyticsLimits {
   readonly maxPerFingerprint: number;
 }
 
-export const DEFAULT_ANALYTICS_LIMITS: AnalyticsLimits = { maxExceptionsPerSession: 25, maxPerFingerprint: 3 };
+export const DEFAULT_ANALYTICS_LIMITS: AnalyticsLimits = {
+  maxExceptionsPerSession: 25,
+  maxPerFingerprint: 3,
+};
 
 export interface ExceptionContext {
   readonly source: AnalyticsExceptionProps["source"];
@@ -84,7 +87,10 @@ const EXCEPTION_PLATFORMS = new Set(["node:javascript", "web:javascript"]);
 const EXCEPTION_LEVELS = new Set(["fatal", "error"]);
 const FINGERPRINT = /^[0-9a-f]{32}$/u;
 
-function exceptionList(exception: SanitizedException, context: ExceptionContext): Record<string, unknown>[] {
+function exceptionList(
+  exception: SanitizedException,
+  context: ExceptionContext,
+): Record<string, unknown>[] {
   return buildExceptionList(
     exception.errors,
     context.source === "renderer" ? "web:javascript" : "node:javascript",
@@ -93,13 +99,24 @@ function exceptionList(exception: SanitizedException, context: ExceptionContext)
   );
 }
 
-function buildExceptionList(errors: readonly SanitizedError[], platform: string, handled: boolean): Record<string, unknown>[] {
+function buildExceptionList(
+  errors: readonly SanitizedError[],
+  platform: string,
+  handled: boolean,
+): Record<string, unknown>[] {
   return errors.map((error, index) => ({
     type: error.type,
     value: error.value,
-    mechanism: index === 0
-      ? { type: "generic", handled, synthetic: false, exception_id: 0 }
-      : { type: "chained", source: "cause", synthetic: false, exception_id: index, parent_id: index - 1 },
+    mechanism:
+      index === 0
+        ? { type: "generic", handled, synthetic: false, exception_id: 0 }
+        : {
+            type: "chained",
+            source: "cause",
+            synthetic: false,
+            exception_id: index,
+            parent_id: index - 1,
+          },
     stacktrace: {
       type: "raw",
       // PostHog expects the outermost caller first, the reverse of a V8 stack.
@@ -136,10 +153,14 @@ export function createAnalyticsCore(options: AnalyticsCoreOptions): AnalyticsCor
     if (!superProperties) return false;
     const distinctId = options.getDistinctId();
     if (!distinctId) return false;
-    const appVersion = overrides?.appVersion !== undefined
-      && pickValidProps({ app_version: SUPER_PROPERTIES.app_version }, { app_version: overrides.appVersion })
-      ? overrides.appVersion
-      : superProperties.app_version;
+    const appVersion =
+      overrides?.appVersion !== undefined &&
+      pickValidProps(
+        { app_version: SUPER_PROPERTIES.app_version },
+        { app_version: overrides.appVersion },
+      )
+        ? overrides.appVersion
+        : superProperties.app_version;
     options.transport.capture({
       distinctId,
       event,
@@ -161,7 +182,10 @@ export function createAnalyticsCore(options: AnalyticsCoreOptions): AnalyticsCor
     return true;
   }
 
-  function captureSanitizedException(exception: SanitizedException, context: ExceptionContext): boolean {
+  function captureSanitizedException(
+    exception: SanitizedException,
+    context: ExceptionContext,
+  ): boolean {
     try {
       if (!options.getDistinctId()) return false;
       if (!admitException(exception.fingerprint, context.level === "fatal")) return false;
@@ -170,15 +194,24 @@ export function createAnalyticsCore(options: AnalyticsCoreOptions): AnalyticsCor
         level: context.level,
         process_type: context.processType,
         origin: context.origin,
-        uptime_bucket: context.uptimeSeconds === undefined ? undefined : uptimeBucket(context.uptimeSeconds),
+        uptime_bucket:
+          context.uptimeSeconds === undefined ? undefined : uptimeBucket(context.uptimeSeconds),
       });
       if (!props) return false;
-      return send(EXCEPTION_EVENT, {
-        ...props,
-        $exception_list: exceptionList(exception, context),
-        $exception_level: context.level,
-        $exception_fingerprint: exception.fingerprint,
-      }, { appVersion: context.appVersion, eventId: context.eventId, occurredAt: context.occurredAt });
+      return send(
+        EXCEPTION_EVENT,
+        {
+          ...props,
+          $exception_list: exceptionList(exception, context),
+          $exception_level: context.level,
+          $exception_fingerprint: exception.fingerprint,
+        },
+        {
+          appVersion: context.appVersion,
+          eventId: context.eventId,
+          occurredAt: context.occurredAt,
+        },
+      );
     } catch (error) {
       reportInternal(error);
       return false;
@@ -202,7 +235,10 @@ export function createAnalyticsCore(options: AnalyticsCoreOptions): AnalyticsCor
     captureException(error, context) {
       try {
         if (!options.getDistinctId()) return false;
-        return captureSanitizedException(sanitizeException(error, { appRoots: options.appRoots }), context);
+        return captureSanitizedException(
+          sanitizeException(error, { appRoots: options.appRoots }),
+          context,
+        );
       } catch (internal) {
         reportInternal(internal);
         return false;
@@ -217,13 +253,19 @@ export function createAnalyticsCore(options: AnalyticsCoreOptions): AnalyticsCor
 }
 
 function recordOf(value: unknown): Record<string, unknown> | undefined {
-  return typeof value === "object" && value !== null && !Array.isArray(value) ? (value as Record<string, unknown>) : undefined;
+  return typeof value === "object" && value !== null && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : undefined;
 }
 
 // Rebuilds a `$exception_list` from scratch, admitting only what
 // exceptionList could have produced from a sanitized exception.
-function validExceptionList(value: unknown, source: unknown): Record<string, unknown>[] | undefined {
-  if (!Array.isArray(value) || value.length === 0 || value.length > MAX_CAUSE_DEPTH + 1) return undefined;
+function validExceptionList(
+  value: unknown,
+  source: unknown,
+): Record<string, unknown>[] | undefined {
+  if (!Array.isArray(value) || value.length === 0 || value.length > MAX_CAUSE_DEPTH + 1)
+    return undefined;
   let platform: string | undefined;
   let handled = true;
   const errors: SanitizedError[] = [];
@@ -239,25 +281,39 @@ function validExceptionList(value: unknown, source: unknown): Record<string, unk
     const v8Frames: unknown[] = [];
     for (const rawFrame of [...frames].reverse()) {
       const frame = recordOf(rawFrame);
-      if (!frame || typeof frame.platform !== "string" || !EXCEPTION_PLATFORMS.has(frame.platform)) return undefined;
+      if (!frame || typeof frame.platform !== "string" || !EXCEPTION_PLATFORMS.has(frame.platform))
+        return undefined;
       if (platform !== undefined && frame.platform !== platform) return undefined;
       platform = frame.platform;
-      v8Frames.push({ filename: frame.filename, function: frame.function, lineno: frame.lineno, colno: frame.colno, inApp: frame.in_app });
+      v8Frames.push({
+        filename: frame.filename,
+        function: frame.function,
+        lineno: frame.lineno,
+        colno: frame.colno,
+        inApp: frame.in_app,
+      });
     }
-    const error = parseSanitizedError({ type: entry.type, value: entry.value, frames: v8Frames }, { allowSystemErrorCode: source === "server" });
+    const error = parseSanitizedError(
+      { type: entry.type, value: entry.value, frames: v8Frames },
+      { allowSystemErrorCode: source === "server" },
+    );
     if (!error) return undefined;
     errors.push(error);
   }
-  return buildExceptionList(errors, platform ?? (source === "renderer" ? "web:javascript" : "node:javascript"), handled);
+  return buildExceptionList(
+    errors,
+    platform ?? (source === "renderer" ? "web:javascript" : "node:javascript"),
+    handled,
+  );
 }
 
 // The last line of defence, run by the SDK on every outgoing message: only
 // registry events, only their declared properties plus super properties,
 // validated exception fields on `$exception`, and never person, group or any
 // other `$` data. The SDK adds its own library metadata after this runs.
-export function validateOutgoingEvent<M extends { event: string; properties?: Record<string, unknown> }>(
-  message: M,
-): M | null {
+export function validateOutgoingEvent<
+  M extends { event: string; properties?: Record<string, unknown> },
+>(message: M): M | null {
   const allowed = isAnalyticsEventName(message.event)
     ? ANALYTICS_EVENTS[message.event]
     : message.event === EXCEPTION_EVENT
@@ -269,8 +325,16 @@ export function validateOutgoingEvent<M extends { event: string; properties?: Re
   if (message.event === EXCEPTION_EVENT) {
     const list = validExceptionList(source.$exception_list, source.source);
     if (!list) return null;
-    if (typeof source.$exception_level !== "string" || !EXCEPTION_LEVELS.has(source.$exception_level)) return null;
-    if (typeof source.$exception_fingerprint !== "string" || !FINGERPRINT.test(source.$exception_fingerprint)) return null;
+    if (
+      typeof source.$exception_level !== "string" ||
+      !EXCEPTION_LEVELS.has(source.$exception_level)
+    )
+      return null;
+    if (
+      typeof source.$exception_fingerprint !== "string" ||
+      !FINGERPRINT.test(source.$exception_fingerprint)
+    )
+      return null;
     properties.$exception_list = list;
     properties.$exception_level = source.$exception_level;
     properties.$exception_fingerprint = source.$exception_fingerprint;

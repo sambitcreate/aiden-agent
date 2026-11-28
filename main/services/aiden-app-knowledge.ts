@@ -9,7 +9,8 @@ const STOP_WORDS = new Set(
     " ",
   ),
 );
-const singular = (word: string) => (word.length > 3 && word.endsWith("s") ? word.slice(0, -1) : word);
+const singular = (word: string) =>
+  word.length > 3 && word.endsWith("s") ? word.slice(0, -1) : word;
 const tokens = (text: string) =>
   text
     .toLowerCase()
@@ -27,7 +28,8 @@ export function readAidenHelp(query: unknown): {
     throw new Error("Use a product topic or a short search query.");
   const available = TOPICS.map(([id]) => id);
   const exact = TOPICS.find(([id]) => id === query.trim().toLowerCase());
-  if (exact) return { version: manifest.version, topics: [{ id: exact[0], text: exact[1] }], available };
+  if (exact)
+    return { version: manifest.version, topics: [{ id: exact[0], text: exact[1] }], available };
   const words = [...new Set(tokens(query).filter((word) => !STOP_WORDS.has(word)))];
   // A topic matches when at least half of the meaningful words appear in its
   // id, keywords or text; keyword hits rank above passing mentions.
@@ -48,7 +50,11 @@ export function readAidenHelp(query: unknown): {
     .filter((topic) => words.length > 0 && topic.hits >= needed)
     .sort((a, b) => b.score - a.score)
     .slice(0, 3);
-  return { version: manifest.version, topics: found.map(({ id, text }) => ({ id, text })), available };
+  return {
+    version: manifest.version,
+    topics: found.map(({ id, text }) => ({ id, text })),
+    available,
+  };
 }
 
 /**
@@ -60,9 +66,13 @@ export function aidenAppGuidance(tools?: ReadonlySet<string>): string {
   const has = (name: string) => !tools || tools.has(name);
   const parts = ["You can answer questions about Aiden using aiden_help."];
   if (has("aiden_get_state"))
-    parts.push("Read current preferences and the app control policy with aiden_get_state before stating a value.");
+    parts.push(
+      "Read current preferences and the app control policy with aiden_get_state before stating a value.",
+    );
   if (has("aiden_show_controls"))
-    parts.push("Use aiden_show_controls to show the relevant real settings in chat; showing them changes nothing.");
+    parts.push(
+      "Use aiden_show_controls to show the relevant real settings in chat; showing them changes nothing.",
+    );
   if (has("aiden_get_state"))
     parts.push(
       "A request from a paired device can use only aiden_help and aiden_show_controls with the panels phones show; the other Aiden tools are refused there.",

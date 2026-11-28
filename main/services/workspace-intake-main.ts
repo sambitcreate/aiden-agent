@@ -27,6 +27,9 @@ export const workspaceIntakeService = createWorkspaceIntakeService({
   listWorkspaces: () => configStore.listWorkspaces(),
   getWorkspace: async (id) => (await configStore.getWorkspace(id)) ?? null,
   createFromFolder: (folderPath, options) =>
-    workspaceApplicationService.createFromFolder(folderPath, undefined, { ...options, fromPath: true }),
+    workspaceApplicationService.createFromFolder(folderPath, undefined, {
+      ...options,
+      fromPath: true,
+    }),
   runClone: createGitCloneRunner(),
 });

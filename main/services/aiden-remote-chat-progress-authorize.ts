@@ -46,10 +46,7 @@ export function createChatProgressAuthorizer(
   chatId: string,
   capability: Extract<AidenRemoteCapability, "tasks:read" | "agents:read" | "app-controls:read">,
 ) => Promise<ChatProgressAuthorizedChat> {
-  const latestGenerations = new Map<
-    string,
-    { updatedAt: number; generationId?: string }
-  >();
+  const latestGenerations = new Map<string, { updatedAt: number; generationId?: string }>();
   return async (deviceId, chatId, capability) => {
     const release = ports.acquireDeviceAuthorization(deviceId);
     try {
@@ -71,9 +68,7 @@ export function createChatProgressAuthorizer(
           403,
         );
       }
-      const metadata = (await ports.chatMetadata()).find(
-        (entry) => entry.id === chatId,
-      );
+      const metadata = (await ports.chatMetadata()).find((entry) => entry.id === chatId);
       const surface = metadata ? chatSurface(metadata) : undefined;
       // The Assistant workspace stays refused even for a Bot-tagged record.
       if (
@@ -81,11 +76,7 @@ export function createChatProgressAuthorizer(
         (surface !== "regular" && surface !== "bot") ||
         persistedChatWorkspaceId(metadata.workspaceId) === ASSISTANT_WORKSPACE_ID
       ) {
-        throw new AidenRemoteServiceError(
-          "not_found",
-          "This chat is unavailable.",
-          404,
-        );
+        throw new AidenRemoteServiceError("not_found", "This chat is unavailable.", 404);
       }
       if (capability === "app-controls:read" && metadata.botId)
         throw new AidenRemoteServiceError("not_found", "This chat is unavailable.", 404);
@@ -99,40 +90,25 @@ export function createChatProgressAuthorizer(
             access: "read",
           })))
       ) {
-        throw new AidenRemoteServiceError(
-          "not_found",
-          "This chat is unavailable.",
-          404,
-        );
+        throw new AidenRemoteServiceError("not_found", "This chat is unavailable.", 404);
       }
       // Reading the ordinary chat service can wait for an inactive renderer's
       // generation to finish. Progress must observe that generation
       // immediately, without reading its whole transcript.
       let latest = latestGenerations.get(chatId);
-      if (
-        !ports.events.current(chatId) &&
-        latest?.updatedAt !== metadata.updatedAt
-      ) {
+      if (!ports.events.current(chatId) && latest?.updatedAt !== metadata.updatedAt) {
         const readRevision = ports.events.revision(chatId);
         const chat = await ports.readChat(chatId);
-        if (!chat)
-          throw new AidenRemoteServiceError(
-            "not_found",
-            "This chat is unavailable.",
-            404,
-          );
+        if (!chat) throw new AidenRemoteServiceError("not_found", "This chat is unavailable.", 404);
         // Discard an idle read if a generation began or settled while it was
         // pending. The projection's revision fence retries it.
-        if (
-          readRevision === ports.events.revision(chatId) &&
-          !ports.events.current(chatId)
-        ) {
+        if (readRevision === ports.events.revision(chatId) && !ports.events.current(chatId)) {
           latest = {
             updatedAt: metadata.updatedAt,
             generationId: [...chat.messages]
               .reverse()
-              .find((message) => message.role === "assistant" && message.timeline)
-              ?.timeline?.generationId,
+              .find((message) => message.role === "assistant" && message.timeline)?.timeline
+              ?.generationId,
           };
           if (latestGenerations.size >= 128)
             latestGenerations.delete(latestGenerations.keys().next().value!);

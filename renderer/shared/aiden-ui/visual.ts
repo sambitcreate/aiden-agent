@@ -13,19 +13,74 @@ import {
  * carrying one would make an older phone reject the whole chat.
  */
 const PRIVATE_KEYS = new Set([
-  "credential", "credentials", "secret", "secrets", "apikey", "token", "accesstoken",
-  "refreshtoken", "header", "headers", "endpoint", "path", "prompt", "instructions",
-  "openinggreeting", "argument", "arguments", "args", "toolargument", "toolarguments",
-  "toolargs", "result", "results", "toolresult", "toolresults", "reasoning",
-  "reasoningcontent", "authorization", "credentialdigest", "providerfingerprint",
-  "mcpserverbindings", "folderpath", "repositorypath", "worktreepath", "worktreegitdir",
-  "ownershiptoken", "worktreedevice", "worktreeinode", "createdfromhead", "canonicalpath",
-  "absolutepath", "scriptpath", "environment", "stdout", "stderr", "managedhomepath",
-  "managedworkspacepath", "workspacepath", "bothomepath", "systemprompt", "skillcontent",
-  "skillcontents", "skillpath", "skillpaths", "providercredential", "mcpcredential",
-  "connectioncredential", "authorizationheader", "providerheaders", "mcpheaders",
-  "connectionheaders", "providerapikey", "mcpapikey", "connectionapikey",
-  "credentialmaterial", "assetfilename", "avatarassetfilename", "temporaryasseturl",
+  "credential",
+  "credentials",
+  "secret",
+  "secrets",
+  "apikey",
+  "token",
+  "accesstoken",
+  "refreshtoken",
+  "header",
+  "headers",
+  "endpoint",
+  "path",
+  "prompt",
+  "instructions",
+  "openinggreeting",
+  "argument",
+  "arguments",
+  "args",
+  "toolargument",
+  "toolarguments",
+  "toolargs",
+  "result",
+  "results",
+  "toolresult",
+  "toolresults",
+  "reasoning",
+  "reasoningcontent",
+  "authorization",
+  "credentialdigest",
+  "providerfingerprint",
+  "mcpserverbindings",
+  "folderpath",
+  "repositorypath",
+  "worktreepath",
+  "worktreegitdir",
+  "ownershiptoken",
+  "worktreedevice",
+  "worktreeinode",
+  "createdfromhead",
+  "canonicalpath",
+  "absolutepath",
+  "scriptpath",
+  "environment",
+  "stdout",
+  "stderr",
+  "managedhomepath",
+  "managedworkspacepath",
+  "workspacepath",
+  "bothomepath",
+  "systemprompt",
+  "skillcontent",
+  "skillcontents",
+  "skillpath",
+  "skillpaths",
+  "providercredential",
+  "mcpcredential",
+  "connectioncredential",
+  "authorizationheader",
+  "providerheaders",
+  "mcpheaders",
+  "connectionheaders",
+  "providerapikey",
+  "mcpapikey",
+  "connectionapikey",
+  "credentialmaterial",
+  "assetfilename",
+  "avatarassetfilename",
+  "temporaryasseturl",
   "temporaryurl",
 ]);
 
@@ -97,16 +152,26 @@ export function parseChatUiVisualV1(value: unknown): ChatUiVisualV1 | undefined 
   if (typeof value.id !== "string" || !VISUAL_ID.test(value.id)) return undefined;
   if (!isHtmlArtifactTitle(value.title)) return undefined;
   if (value.catalogVersion !== AIDEN_UI_CATALOG_VERSION) return undefined;
-  if (value.toolCallId !== undefined && (typeof value.toolCallId !== "string" || !TOOL_CALL_ID.test(value.toolCallId))) {
+  if (
+    value.toolCallId !== undefined &&
+    (typeof value.toolCallId !== "string" || !TOOL_CALL_ID.test(value.toolCallId))
+  ) {
     return undefined;
   }
-  if (typeof value.fallbackText !== "string" || value.fallbackText.length > AIDEN_UI_LIMITS.fallbackChars) {
+  if (
+    typeof value.fallbackText !== "string" ||
+    value.fallbackText.length > AIDEN_UI_LIMITS.fallbackChars
+  ) {
     return undefined;
   }
   if (!isTree(value.tree, 0, { nodes: 0 }) || !keysAreWireSafe(value.tree)) return undefined;
   if (byteLength(JSON.stringify(value.tree)) > AIDEN_UI_LIMITS.treeBytes) return undefined;
   if (value.dataJson !== undefined) {
-    if (typeof value.dataJson !== "string" || byteLength(value.dataJson) > AIDEN_UI_LIMITS.dataBytes) return undefined;
+    if (
+      typeof value.dataJson !== "string" ||
+      byteLength(value.dataJson) > AIDEN_UI_LIMITS.dataBytes
+    )
+      return undefined;
   }
   if (value.state !== undefined) {
     if (!isRecord(value.state) || !keysAreWireSafe(value.state)) return undefined;

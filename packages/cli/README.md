@@ -51,16 +51,16 @@ aiden serve
 
 When `aiden serve` runs in the foreground in an interactive terminal, it prints a pairing QR code, the server's address and a setup code at startup, so you can scan it from the phone app right away. It pairs over the local network by default (over Tailscale when the server is set to Tailscale only, `remote mode tailscale`); `--pair tailscale` pairs over Tailscale instead, and `--no-pair` skips the code. No code is printed under `--daemon` or when output is not a terminal (a log, a pipe, a service manager), because the code is a single-use secret.
 
-| Command | What it does |
-| --- | --- |
-| `aiden serve` | Run in the foreground; Ctrl-C, SIGTERM or a closed terminal (SIGHUP) stops it after active work settles |
-| `aiden serve --daemon` | Run in the background, logging to `<agentDir>/serve.log` |
-| `aiden serve status` | Report the running server's PID and control socket |
-| `aiden serve stop` | Stop the running server; one still running 15 seconds later is force-killed |
-| `aiden remote pair lan\|tailscale` | Open a new ~5-minute pairing window and print its QR code, address and setup code |
-| `aiden remote pair-status`, `remote pair-cancel <session-id>` | Inspect or cancel the pairing window |
-| `aiden remote devices`, `remote revoke <id>` | List or revoke paired devices. Revoking a device closes its open Bot session streams before the command returns. |
-| `aiden remote roots`, `remote approve-root <path>` | Folders that paired devices may open |
+| Command                                                       | What it does                                                                                                     |
+| ------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------- |
+| `aiden serve`                                                 | Run in the foreground; Ctrl-C, SIGTERM or a closed terminal (SIGHUP) stops it after active work settles          |
+| `aiden serve --daemon`                                        | Run in the background, logging to `<agentDir>/serve.log`                                                         |
+| `aiden serve status`                                          | Report the running server's PID and control socket                                                               |
+| `aiden serve stop`                                            | Stop the running server; one still running 15 seconds later is force-killed                                      |
+| `aiden remote pair lan\|tailscale`                            | Open a new ~5-minute pairing window and print its QR code, address and setup code                                |
+| `aiden remote pair-status`, `remote pair-cancel <session-id>` | Inspect or cancel the pairing window                                                                             |
+| `aiden remote devices`, `remote revoke <id>`                  | List or revoke paired devices. Revoking a device closes its open Bot session streams before the command returns. |
+| `aiden remote roots`, `remote approve-root <path>`            | Folders that paired devices may open                                                                             |
 
 **Stopping.** Once shutdown starts, the server takes no new connections, requests or chat turns, cancels running ones and drains. Control commands it already accepted finish and get their reply first. A stop during startup ends startup at the next step. `aiden serve stop` force-kills a server still running 15 seconds after SIGTERM, after checking the PID is still that server: a `--daemon` server together with its process group (its Remote advertiser), a foreground `aiden serve` on its own so the rest of its shell job (`aiden serve | tee`) survives. Either way, its stdio MCP servers (each in a process group of its own, recorded in the lease directory) are killed too, but only groups that still contain a process the server started. A foreground server logs a stray unhandled rejection instead of exiting. Aiden commands exit 0 quietly when their reader closes early (`aiden schedule list | head -1`).
 
@@ -97,12 +97,12 @@ The service runs the built `dist/app/cli.js` of this checkout with the current N
 
 The login service is shared by this OS user, even when different `AIDEN_CODING_AGENT_DIR` profiles are used. Uninstall identifies the installed service's profile and removes only that profile's owned route, regardless of the profile used to invoke the command. If the service manager or its effective profile cannot be identified, the command leaves the service and route in place. On Linux, service definitions that use environment files or unset environment variables need to be simplified before Aiden can safely identify the profile. Install and uninstall operations for this user's service are serialized.
 
-| Command | What it does |
-| --- | --- |
-| `aiden service install [--network local\|tailscale\|both] [--no-pair]` | Install (or reinstall) and start the service |
-| `aiden service status` | Whether the service is installed and running, and where its logs are |
-| `aiden service uninstall` | Stop the service and remove it, then take down Aiden's Tailscale Serve route (through Tailscale directly once the server has stopped; a route that is no longer Aiden's, or one with an unfinished change, is left alone with the command to remove it by hand). If the service can't be stopped, the route is left in place so the still-running server stays reachable |
-| `aiden remote network local\|tailscale\|both` | Change who can reach a running server; Tailscale is set up for you |
+| Command                                                                | What it does                                                                                                                                                                                                                                                                                                                                                             |
+| ---------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `aiden service install [--network local\|tailscale\|both] [--no-pair]` | Install (or reinstall) and start the service                                                                                                                                                                                                                                                                                                                             |
+| `aiden service status`                                                 | Whether the service is installed and running, and where its logs are                                                                                                                                                                                                                                                                                                     |
+| `aiden service uninstall`                                              | Stop the service and remove it, then take down Aiden's Tailscale Serve route (through Tailscale directly once the server has stopped; a route that is no longer Aiden's, or one with an unfinished change, is left alone with the command to remove it by hand). If the service can't be stopped, the route is left in place so the still-running server stays reachable |
+| `aiden remote network local\|tailscale\|both`                          | Change who can reach a running server; Tailscale is set up for you                                                                                                                                                                                                                                                                                                       |
 
 `aiden serve stop` stops the server without removing the service; it starts again at the next boot or login.
 
@@ -196,31 +196,31 @@ The desktop's per-workspace skill and connector switches (Workspace settings) ar
 
 `aiden help` (or bare `aiden`) prints the full list; `serve` comes first.
 
-| Command | Purpose |
-| --- | --- |
-| `serve [--no-remote] [--daemon] [--pair lan\|tailscale] [--no-pair]`, `serve stop\|status`, `serve --help` | Run, background, inspect or stop the server |
-| `service install [--network local\|tailscale\|both] [--no-pair]\|uninstall\|status` | Run the server at login and boot (systemd or launchd) |
-| `remote status\|devices\|pair lan\|tailscale\|pair-status\|pair-cancel <id>\|revoke <id>\|roots\|approve-root <path>` | Pairing and paired-device administration (server must be running) |
-| `remote network local\|tailscale\|both` | Who can reach the server; Tailscale is set up for you (server must be running) |
-| `remote check` | Check each step a phone needs to reach the server, with fixes |
+| Command                                                                                                                                                          | Purpose                                                                                                                            |
+| ---------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------- |
+| `serve [--no-remote] [--daemon] [--pair lan\|tailscale] [--no-pair]`, `serve stop\|status`, `serve --help`                                                       | Run, background, inspect or stop the server                                                                                        |
+| `service install [--network local\|tailscale\|both] [--no-pair]\|uninstall\|status`                                                                              | Run the server at login and boot (systemd or launchd)                                                                              |
+| `remote status\|devices\|pair lan\|tailscale\|pair-status\|pair-cancel <id>\|revoke <id>\|roots\|approve-root <path>`                                            | Pairing and paired-device administration (server must be running)                                                                  |
+| `remote network local\|tailscale\|both`                                                                                                                          | Who can reach the server; Tailscale is set up for you (server must be running)                                                     |
+| `remote check`                                                                                                                                                   | Check each step a phone needs to reach the server, with fixes                                                                      |
 | `remote remove-root <id>\|mode lan\|tailscale\|both\|tailscale-connect\|tailscale-disconnect\|tailscale-review\|tailscale-takeover <token>\|tailscale-reconcile` | Advanced: remove an approved folder, set the listeners directly, and manage Aiden's Tailscale Serve route (server must be running) |
-| `apps list\|connect <name> [--access read\|supervised]\|revoke <id>\|on\|off` | Outside apps (Claude Code, Codex) on the local `/mcp` endpoint (server must be running) |
-| `auth list\|login\|logout` | Provider credentials (OAuth or API key) |
-| `workspace list\|add\|remove\|access\|scratch` | Workspace registry and tool access tiers |
-| `mcp list\|presets\|add\|preset\|login\|logout\|remove` | MCP connectors and their OAuth sign-ins |
-| `provider list\|import <models.json>` | Custom OpenAI-compatible, Ollama or LM Studio providers |
-| `catalog refresh\|models-dev fetch\|models-dev status` | Inference catalog refresh; models.dev is an explicit display-only fetch |
-| `web-search show\|import <settings.json>` | Web Search provider routing; keys from environment variables |
-| `schedule list\|status\|save <file>\|preview <cron> [timezone]\|runs\|notifications [since-ms]\|run\|pause\|resume\|remove <id>` | Scheduled tasks; extra arguments are refused |
-| `bots …`, `bots enable-durable` | Bot administration (server must be running) |
-| `hooks list\|approve <id> <digest>\|disable <id>\|enable <id>\|pause\|resume\|test <id> <digest>` | Hooks: list, approve, switch off or test (macOS and Linux) |
-| `telegram status\|connect\|configure <file>\|disable\|disconnect` | Telegram bridge |
-| `speech status\|download\|select\|delete <id>\|transcribe <pcm16-file> <model-id>` | On-device transcription models used by Remote dictation |
-| `search <query>`, `import <file>`, `export <session.jsonl> [output]` | Find, import and export conversations |
-| `files list\|read`, `git status\|review\|branches\|worktrees`, `worktree list\|create\|remove` | Workspace files, Git and managed worktrees |
-| `app help [query]\|status\|get <topic>\|set <control> <value> <revision> [operation-id]` | Product help; shows Memory, Web Search and Skills settings and changes Memory and Web Search (Skills are read-only on the server) |
-| `telemetry status\|on\|off` | Anonymous usage and crash data; see Privacy |
-| `help`, `--version` | Command list and version |
+| `apps list\|connect <name> [--access read\|supervised]\|revoke <id>\|on\|off`                                                                                    | Outside apps (Claude Code, Codex) on the local `/mcp` endpoint (server must be running)                                            |
+| `auth list\|login\|logout`                                                                                                                                       | Provider credentials (OAuth or API key)                                                                                            |
+| `workspace list\|add\|remove\|access\|scratch`                                                                                                                   | Workspace registry and tool access tiers                                                                                           |
+| `mcp list\|presets\|add\|preset\|login\|logout\|remove`                                                                                                          | MCP connectors and their OAuth sign-ins                                                                                            |
+| `provider list\|import <models.json>`                                                                                                                            | Custom OpenAI-compatible, Ollama or LM Studio providers                                                                            |
+| `catalog refresh\|models-dev fetch\|models-dev status`                                                                                                           | Inference catalog refresh; models.dev is an explicit display-only fetch                                                            |
+| `web-search show\|import <settings.json>`                                                                                                                        | Web Search provider routing; keys from environment variables                                                                       |
+| `schedule list\|status\|save <file>\|preview <cron> [timezone]\|runs\|notifications [since-ms]\|run\|pause\|resume\|remove <id>`                                 | Scheduled tasks; extra arguments are refused                                                                                       |
+| `bots …`, `bots enable-durable`                                                                                                                                  | Bot administration (server must be running)                                                                                        |
+| `hooks list\|approve <id> <digest>\|disable <id>\|enable <id>\|pause\|resume\|test <id> <digest>`                                                                | Hooks: list, approve, switch off or test (macOS and Linux)                                                                         |
+| `telegram status\|connect\|configure <file>\|disable\|disconnect`                                                                                                | Telegram bridge                                                                                                                    |
+| `speech status\|download\|select\|delete <id>\|transcribe <pcm16-file> <model-id>`                                                                               | On-device transcription models used by Remote dictation                                                                            |
+| `search <query>`, `import <file>`, `export <session.jsonl> [output]`                                                                                             | Find, import and export conversations                                                                                              |
+| `files list\|read`, `git status\|review\|branches\|worktrees`, `worktree list\|create\|remove`                                                                   | Workspace files, Git and managed worktrees                                                                                         |
+| `app help [query]\|status\|get <topic>\|set <control> <value> <revision> [operation-id]`                                                                         | Product help; shows Memory, Web Search and Skills settings and changes Memory and Web Search (Skills are read-only on the server)  |
+| `telemetry status\|on\|off`                                                                                                                                      | Anonymous usage and crash data; see Privacy                                                                                        |
+| `help`, `--version`                                                                                                                                              | Command list and version                                                                                                           |
 
 Notes:
 
@@ -235,11 +235,11 @@ Notes:
 
 ## Where state lives
 
-| Path | Contents |
-| --- | --- |
-| `~/.aiden/agent/` | Server state: `settings.json`, `auth.json`, `aiden.json` (device-local feature settings), `aiden-mcp.json`, `web-search.json`, `remote.json` (Remote identity, paired devices, connected apps and the MCP server setting), `aiden-mcp-chat-provenance.json` (which app started a chat, local only), `chat-read-markers.json` and `chat-triage.json` (Inbox read state and Pin, Done and Snooze), `schedules.json`, `hooks/` (hooks, approvals and run log), `sessions/`, `bots/`, `bot-service/`, `artifacts/`, `credentials/`, `serve.log` and the private control socket |
-| `~/.aiden/` | Shared Aiden home (the desktop's portable `config.json`, `skills/`, `scripts/`; `memory/` is the shared desktop and server memory store, `ws-<folder-hash>` scopes) |
-| `AIDEN_CODING_AGENT_DIR` | Environment override for the agent directory (mirrors Pi's `PI_CODING_AGENT_DIR`; use it for tests and for running more than one server) |
+| Path                     | Contents                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
+| ------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `~/.aiden/agent/`        | Server state: `settings.json`, `auth.json`, `aiden.json` (device-local feature settings), `aiden-mcp.json`, `web-search.json`, `remote.json` (Remote identity, paired devices, connected apps and the MCP server setting), `aiden-mcp-chat-provenance.json` (which app started a chat, local only), `chat-read-markers.json` and `chat-triage.json` (Inbox read state and Pin, Done and Snooze), `schedules.json`, `hooks/` (hooks, approvals and run log), `sessions/`, `bots/`, `bot-service/`, `artifacts/`, `credentials/`, `serve.log` and the private control socket |
+| `~/.aiden/`              | Shared Aiden home (the desktop's portable `config.json`, `skills/`, `scripts/`; `memory/` is the shared desktop and server memory store, `ws-<folder-hash>` scopes)                                                                                                                                                                                                                                                                                                                                                                                                        |
+| `AIDEN_CODING_AGENT_DIR` | Environment override for the agent directory (mirrors Pi's `PI_CODING_AGENT_DIR`; use it for tests and for running more than one server)                                                                                                                                                                                                                                                                                                                                                                                                                                   |
 
 New Memory databases support bounded incremental space reclamation on open and close. Existing databases keep their format. See [SQLite storage maintenance](../../docs/sqlite-storage.md).
 

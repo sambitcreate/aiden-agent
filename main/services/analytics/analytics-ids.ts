@@ -58,7 +58,12 @@ export function analyticsProviderId(providerId: unknown): string {
 }
 
 export function analyticsModelId(providerId: unknown, modelId: unknown): string {
-  if (typeof providerId !== "string" || typeof modelId !== "string" || isCustomProviderId(providerId)) return CUSTOM;
+  if (
+    typeof providerId !== "string" ||
+    typeof modelId !== "string" ||
+    isCustomProviderId(providerId)
+  )
+    return CUSTOM;
   return catalog().get(providerId)?.has(modelId) ? registryId(modelId) : CUSTOM;
 }
 
@@ -73,7 +78,10 @@ export function analyticsConnectorPresetId(presetId: unknown): string {
   return normalizeKnownId(presetId, CONNECTOR_PRESET_IDS);
 }
 
-type SliderStopProps = Pick<AnalyticsEventProps<"chat_message_sent">, "slider_stop" | "slider_stop_count">;
+type SliderStopProps = Pick<
+  AnalyticsEventProps<"chat_message_sent">,
+  "slider_stop" | "slider_stop_count"
+>;
 
 const SLIDER_STOP_NUMBERS = ["1", "2", "3", "4", "5", "6", "7"] as const;
 
@@ -82,7 +90,10 @@ const SLIDER_STOP_NUMBERS = ["1", "2", "3", "4", "5", "6", "7"] as const;
  * composer derives it: 1-based, or custom when no stop matches. Nothing when
  * the slider is absent or unreadable. Never a label, model or provider.
  */
-export function analyticsSliderStop(slider: unknown, selection: AgentSliderSelection): SliderStopProps {
+export function analyticsSliderStop(
+  slider: unknown,
+  selection: AgentSliderSelection,
+): SliderStopProps {
   const normalized = normalizeAgentSlider(slider);
   if (!normalized) return {};
   const index = activeStopIndex(normalized, selection);
@@ -107,6 +118,8 @@ export function analyticsWorkspaceKind(
   return workspace.scratch ? "scratch" : "folder";
 }
 
-export function analyticsRunTrigger(trigger: ScheduledRunTrigger): AnalyticsEventProps<"scheduled_task_ran">["trigger"] {
+export function analyticsRunTrigger(
+  trigger: ScheduledRunTrigger,
+): AnalyticsEventProps<"scheduled_task_ran">["trigger"] {
   return trigger.kind === "event" ? trigger.source : trigger.kind;
 }

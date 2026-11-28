@@ -10,7 +10,11 @@ import { setBotRoutineAfterPersonFailure } from "../bot-routine-recovery-main.js
 import { scheduleStore } from "../schedule-store.js";
 import { providerFailureFromLegacyPiMessage } from "../provider-failure.js";
 import { runBotHealthChecks, type BotHealthCheckDeps } from "./checks.js";
-import { createBotHealthReports, createBotRoutinePreflight, reconcileHealthIssues } from "./preflight.js";
+import {
+  createBotHealthReports,
+  createBotRoutinePreflight,
+  reconcileHealthIssues,
+} from "./preflight.js";
 
 /** How often the timers are re-read from the schedule (local file only). */
 const REARM_INTERVAL_MS = 5 * 60_000;
@@ -29,7 +33,9 @@ const checks: BotHealthCheckDeps = {
       return "current";
     } catch (error) {
       // Only a real authority drift is the person's to fix; anything else is unknown.
-      return error instanceof Error && error.name === "BotRuntimeAuthorityError" ? "drifted" : "unknown";
+      return error instanceof Error && error.name === "BotRuntimeAuthorityError"
+        ? "drifted"
+        : "unknown";
     }
   },
   providerAuth: async (botId, signal) => {
@@ -51,7 +57,9 @@ const checks: BotHealthCheckDeps = {
       // Signed out only when the credential is gone or refused; offline is unknown.
       const message = error instanceof Error ? error.message : String(error);
       if (/no longer configured/iu.test(message)) return "signed_out";
-      return providerFailureFromLegacyPiMessage(message)?.category === "authentication" ? "signed_out" : "unknown";
+      return providerFailureFromLegacyPiMessage(message)?.category === "authentication"
+        ? "signed_out"
+        : "unknown";
     }
   },
   // Only a Custom grant names the connections a Bot relies on. Under Full
@@ -60,16 +68,26 @@ const checks: BotHealthCheckDeps = {
   connections: async (botId, signal) => {
     const binding = await botCapabilityStore.getBotBinding(botId);
     if (!binding) return { degraded: [] };
-    const reconciled = await botCapabilityCatalog.reconcile(binding, { audienceId: BOT_DESKTOP_AUDIENCE_ID, botId, signal });
-    const labels = new Map(binding.connections.map(({ option }) => [option.id, option.label] as const));
+    const reconciled = await botCapabilityCatalog.reconcile(binding, {
+      audienceId: BOT_DESKTOP_AUDIENCE_ID,
+      botId,
+      signal,
+    });
+    const labels = new Map(
+      binding.connections.map(({ option }) => [option.id, option.label] as const),
+    );
     return {
       degraded: reconciled.issues
         .filter(({ group, selectionId }) => group === "connection" && selectionId !== undefined)
-        .map(({ selectionId }) => ({ id: selectionId!, label: labels.get(selectionId!) ?? "A connection" })),
+        .map(({ selectionId }) => ({
+          id: selectionId!,
+          label: labels.get(selectionId!) ?? "A connection",
+        })),
     };
   },
   computer: async (botId) => {
-    const { botComputers, botComputersEnabled } = await import("../bot-computers/bot-computers-main.js");
+    const { botComputers, botComputersEnabled } =
+      await import("../bot-computers/bot-computers-main.js");
     if (!botComputersEnabled()) return "none";
     const status = await botComputers().host.computer(botId);
     if (!status) return "none";
@@ -97,7 +115,9 @@ export async function checkBotHealth(
   const routineName = routineId ? (await scheduleStore.get(routineId))?.name : undefined;
   // After a failure the routine's own card already says what's wrong: only
   // clear what now passes, never raise a second card for the same cause.
-  await reconcileHealthIssues(await issues(), report, routineName?.trim() || undefined, { raise: trigger !== "after_failure" });
+  await reconcileHealthIssues(await issues(), report, routineName?.trim() || undefined, {
+    raise: trigger !== "after_failure",
+  });
   return report;
 }
 
@@ -107,12 +127,19 @@ let onResume: (() => void) | undefined;
 
 export function startBotHealth(): void {
   if (preflight) return;
-  void import("../bot-delivery/funnel-main.js").then(({ startBotDeliveryFlush }) => startBotDeliveryFlush());
-  void import("../bot-issues/service-main.js").then(({ startBotIssueReminders }) => startBotIssueReminders());
-  void import("../bot-routine-events/sources-main.js").then(({ startBotEventRoutines }) => startBotEventRoutines());
+  void import("../bot-delivery/funnel-main.js").then(({ startBotDeliveryFlush }) =>
+    startBotDeliveryFlush(),
+  );
+  void import("../bot-issues/service-main.js").then(({ startBotIssueReminders }) =>
+    startBotIssueReminders(),
+  );
+  void import("../bot-routine-events/sources-main.js").then(({ startBotEventRoutines }) =>
+    startBotEventRoutines(),
+  );
   preflight = createBotRoutinePreflight({
     routines: () => scheduleStore.list(),
-    run: (botId, routineId, signal) => runBotHealthChecks(botId, checks, { trigger: "pre_fire", routineId, signal, now: Date.now }),
+    run: (botId, routineId, signal) =>
+      runBotHealthChecks(botId, checks, { trigger: "pre_fire", routineId, signal, now: Date.now }),
     issues: {
       raise: async (input) => (await issues()).raise(input),
       resolve: async (botId, key, resolution) => (await issues()).resolve(botId, key, resolution),
@@ -126,7 +153,10 @@ export function startBotHealth(): void {
     },
     onError: (error) => logger.warn("bots", "A Bot pre-fire check failed.", error),
   });
-  const rearm = () => void preflight?.rearm().catch((error: unknown) => logger.warn("bots", "Could not arm Bot pre-fire checks.", error));
+  const rearm = () =>
+    void preflight
+      ?.rearm()
+      .catch((error: unknown) => logger.warn("bots", "Could not arm Bot pre-fire checks.", error));
   rearm();
   rearmTimer = setInterval(rearm, REARM_INTERVAL_MS);
   rearmTimer.unref?.();
@@ -134,7 +164,8 @@ export function startBotHealth(): void {
   powerMonitor.on("resume", onResume);
   setBotRoutineAfterPersonFailure((botId, routineId) => {
     void checkBotHealth(botId, "after_failure", routineId).catch((error: unknown) =>
-      logger.warn("bots", `Bot ${botId} re-check after a failure did not finish.`, error));
+      logger.warn("bots", `Bot ${botId} re-check after a failure did not finish.`, error),
+    );
   });
 }
 
@@ -156,9 +187,15 @@ export async function stopBotHealth(): Promise<void> {
   setBotRoutineAfterPersonFailure(undefined);
   // Awaited, so shutdown closes the stores only after nothing can still flush or rearm.
   const stopped = Promise.allSettled([
-    import("../bot-delivery/funnel-main.js").then(({ stopBotDeliveryFlush }) => stopBotDeliveryFlush()),
-    import("../bot-issues/service-main.js").then(({ stopBotIssueReminders }) => stopBotIssueReminders()),
-    import("../bot-routine-events/sources-main.js").then(({ stopBotEventRoutines }) => stopBotEventRoutines()),
+    import("../bot-delivery/funnel-main.js").then(({ stopBotDeliveryFlush }) =>
+      stopBotDeliveryFlush(),
+    ),
+    import("../bot-issues/service-main.js").then(({ stopBotIssueReminders }) =>
+      stopBotIssueReminders(),
+    ),
+    import("../bot-routine-events/sources-main.js").then(({ stopBotEventRoutines }) =>
+      stopBotEventRoutines(),
+    ),
   ]);
   let deadline: ReturnType<typeof setTimeout> | undefined;
   const timedOut = new Promise<"timed_out">((resolve) => {
@@ -168,10 +205,14 @@ export async function stopBotHealth(): Promise<void> {
   const outcome = await Promise.race([stopped, timedOut]);
   if (deadline) clearTimeout(deadline);
   if (outcome === "timed_out") {
-    logger.warn("bots", "Bot background services were still stopping at the deadline; continuing shutdown.");
+    logger.warn(
+      "bots",
+      "Bot background services were still stopping at the deadline; continuing shutdown.",
+    );
     return;
   }
   for (const result of outcome) {
-    if (result.status === "rejected") logger.warn("bots", "A Bot background service did not stop cleanly.", result.reason);
+    if (result.status === "rejected")
+      logger.warn("bots", "A Bot background service did not stop cleanly.", result.reason);
   }
 }

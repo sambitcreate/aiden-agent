@@ -20,11 +20,7 @@ import { AlertDialog, Button, EmptyState, Input, Text, toast } from "./ui";
 import { browserApi, onNotification, workspacesApi } from "../lib/ipc";
 import { queryKeys } from "../lib/queries";
 import { cn } from "../lib/ui-utils";
-import {
-  useCommandHandler,
-  useShortcutBinding,
-  useShortcutLabel,
-} from "../lib/command-system";
+import { useCommandHandler, useShortcutBinding, useShortcutLabel } from "../lib/command-system";
 import { ariaKeyShortcut } from "../shared/keybindings";
 import { workspaceFileOpenErrorPresentation } from "../lib/workspace-file-open-error";
 import type {
@@ -106,7 +102,7 @@ function useFileIndex(workspaceId: string | undefined, active: boolean) {
   React.useEffect(() => {
     if (active) return;
     requestRef.current += 1;
-    setState((current) => current.loading ? { ...current, loading: false } : current);
+    setState((current) => (current.loading ? { ...current, loading: false } : current));
   }, [active]);
   return { ...state, refresh };
 }
@@ -135,9 +131,16 @@ function FileIndexSkeleton() {
   return (
     <div className="space-y-1 p-2" aria-label="Loading workspace files">
       {[62, 78, 54, 84, 68, 58].map((width, index) => (
-        <div key={index} className="flex h-7 items-center gap-2 px-2" style={{ paddingLeft: 8 + (index % 3) * 12 }}>
+        <div
+          key={index}
+          className="flex h-7 items-center gap-2 px-2"
+          style={{ paddingLeft: 8 + (index % 3) * 12 }}
+        >
           <span className="size-3.5 animate-pulse rounded bg-control" />
-          <span className="h-2 animate-pulse rounded-pill bg-control" style={{ width: `${width}%` }} />
+          <span
+            className="h-2 animate-pulse rounded-pill bg-control"
+            style={{ width: `${width}%` }}
+          />
         </div>
       ))}
     </div>
@@ -150,7 +153,10 @@ function EditorSkeleton() {
       {[88, 66, 94, 58, 74, 82, 52, 90].map((width, index) => (
         <div key={index} className="flex items-center gap-3">
           <span className="h-2 w-5 animate-pulse rounded-pill bg-control" />
-          <span className="h-2 animate-pulse rounded-pill bg-control" style={{ width: `${width}%` }} />
+          <span
+            className="h-2 animate-pulse rounded-pill bg-control"
+            style={{ width: `${width}%` }}
+          />
         </div>
       ))}
     </div>
@@ -172,10 +178,7 @@ export function FilesPanel({
   requestedPathKey: number;
   compact: boolean;
   interactionBlockedReason?: string | null;
-  onEditorStateChange?: (
-    state: FilesEditorState,
-    options?: FilesEditorStateChangeOptions,
-  ) => void;
+  onEditorStateChange?: (state: FilesEditorState, options?: FilesEditorStateChangeOptions) => void;
 }) {
   const queryClient = useQueryClient();
   const available = Boolean(workspace?.folderPath) && workspace?.permission !== "none";
@@ -259,12 +262,9 @@ export function FilesPanel({
         },
       });
     }
-    const restored = nextWorkspaceId
-      ? sessionCacheRef.current.get(nextWorkspaceId)
-      : undefined;
+    const restored = nextWorkspaceId ? sessionCacheRef.current.get(nextWorkspaceId) : undefined;
     const restoredDirty = Boolean(
-      restored?.documentState.data &&
-      restored.draft !== restored.documentState.data.content,
+      restored?.documentState.data && restored.draft !== restored.documentState.data.content,
     );
     sessionWorkspaceIdRef.current = nextWorkspaceId;
     setReportedWorkspaceId(nextWorkspaceId);
@@ -285,7 +285,7 @@ export function FilesPanel({
     setSaved(false);
     setSaving(false);
     setWrap(restored?.wrap ?? false);
-    loadedPathRef.current = restoredDirty ? restored?.selectedPath ?? null : null;
+    loadedPathRef.current = restoredDirty ? (restored?.selectedPath ?? null) : null;
   }, [workspace?.id]);
 
   // Re-read the open file after the agent may have changed it. A file with
@@ -306,7 +306,16 @@ export function FilesPanel({
     } catch {
       // Keep showing what was loaded; opening the file again reports the error.
     }
-  }, [active, dirty, documentState.data, documentState.error, interactionBlocked, saving, selectedPath, workspace?.id]);
+  }, [
+    active,
+    dirty,
+    documentState.data,
+    documentState.error,
+    interactionBlocked,
+    saving,
+    selectedPath,
+    workspace?.id,
+  ]);
 
   const chooseFile = React.useCallback(
     (path: string) => {
@@ -323,9 +332,10 @@ export function FilesPanel({
         return;
       }
       if (dirty) {
-        alertReturnFocusRef.current = document.activeElement instanceof HTMLElement
-          ? document.activeElement
-          : textareaRef.current;
+        alertReturnFocusRef.current =
+          document.activeElement instanceof HTMLElement
+            ? document.activeElement
+            : textareaRef.current;
         setPendingPath(path);
         return;
       }
@@ -351,7 +361,12 @@ export function FilesPanel({
     else searchRef.current?.focus();
   }, [compact, selectedPath]);
 
-  const { data: indexData, error: indexError, loading: indexLoading, refresh: refreshIndex } = index;
+  const {
+    data: indexData,
+    error: indexError,
+    loading: indexLoading,
+    refresh: refreshIndex,
+  } = index;
   const revealFolder = React.useCallback(
     (path: string) => {
       setQuery("");
@@ -393,7 +408,18 @@ export function FilesPanel({
     consumedRequestKeyRef.current = requestedPathKey;
     if (entry?.kind === "directory") revealFolder(requestedPath);
     else chooseFile(requestedPath);
-  }, [available, chooseFile, indexData, indexError, indexLoading, interactionBlocked, refreshIndex, requestedPath, requestedPathKey, revealFolder]);
+  }, [
+    available,
+    chooseFile,
+    indexData,
+    indexError,
+    indexLoading,
+    interactionBlocked,
+    refreshIndex,
+    requestedPath,
+    requestedPathKey,
+    revealFolder,
+  ]);
 
   const loadFile = React.useCallback(async () => {
     if (!workspace?.id || !selectedPath || !active || interactionBlocked) return;
@@ -424,13 +450,13 @@ export function FilesPanel({
   React.useEffect(() => {
     if (active) return;
     loadRequestRef.current += 1;
-    setDocumentState((current) => current.loading ? { ...current, loading: false } : current);
+    setDocumentState((current) => (current.loading ? { ...current, loading: false } : current));
   }, [active]);
 
   React.useEffect(() => {
     if (!interactionBlocked) return;
     loadRequestRef.current += 1;
-    setDocumentState((current) => current.loading ? { ...current, loading: false } : current);
+    setDocumentState((current) => (current.loading ? { ...current, loading: false } : current));
     if (!dirty) loadedPathRef.current = null;
   }, [dirty, interactionBlocked]);
 
@@ -449,10 +475,11 @@ export function FilesPanel({
   const alertReturnFocus = React.useCallback(() => {
     const preferred = alertReturnFocusRef.current;
     if (preferred?.isConnected && preferred.getClientRects().length > 0) return preferred;
-    const fallback = backButtonRef.current
-      ?? (selectedPath ? fileButtonRefs.current.get(selectedPath) : undefined)
-      ?? searchRef.current
-      ?? document.querySelector<HTMLElement>("[data-app-focus-root]");
+    const fallback =
+      backButtonRef.current ??
+      (selectedPath ? fileButtonRefs.current.get(selectedPath) : undefined) ??
+      searchRef.current ??
+      document.querySelector<HTMLElement>("[data-app-focus-root]");
     return fallback?.isConnected ? fallback : null;
   }, [selectedPath]);
 
@@ -521,7 +548,18 @@ export function FilesPanel({
         });
       }
     }
-  }, [dirty, documentState.data, index, interactionBlockedReason, onEditorStateChange, queryClient, reportedWorkspaceId, saving, selectedPath, workspace?.id]);
+  }, [
+    dirty,
+    documentState.data,
+    index,
+    interactionBlockedReason,
+    onEditorStateChange,
+    queryClient,
+    reportedWorkspaceId,
+    saving,
+    selectedPath,
+    workspace?.id,
+  ]);
 
   useCommandHandler(
     "file.save",
@@ -640,8 +678,12 @@ export function FilesPanel({
           ) : index.error && !index.data ? (
             <div className="flex h-full flex-col items-center justify-center gap-2 px-4 text-center">
               <AlertCircle className="size-5 text-red" />
-              <Text variant="small" color="secondary" as="p">{index.error}</Text>
-              <Button size="small" onClick={() => void index.refresh()}>Try again</Button>
+              <Text variant="small" color="secondary" as="p">
+                {index.error}
+              </Text>
+              <Button size="small" onClick={() => void index.refresh()}>
+                Try again
+              </Button>
             </div>
           ) : allEntries.length === 0 ? (
             <EmptyState
@@ -674,17 +716,25 @@ export function FilesPanel({
                   title={interactionBlockedReason ?? entry.path}
                   className={cn(
                     "flex h-7 w-full items-center gap-1 rounded-lg pr-1.5 text-left text-small outline-none transition-colors duration-150 focus-visible:bg-list-selection focus-visible:outline-none disabled:opacity-45",
-                    selected ? "bg-list-selection text-primary" : "text-secondary hover:bg-list-hover hover:text-primary active:bg-list-selection",
+                    selected
+                      ? "bg-list-selection text-primary"
+                      : "text-secondary hover:bg-list-hover hover:text-primary active:bg-list-selection",
                   )}
                   style={{ paddingLeft: 4 + (normalizedQuery ? 0 : entry.depth * 12) }}
                 >
                   <span className="grid size-4 shrink-0 place-items-center text-tertiary">
                     {entry.kind === "directory" ? (
-                      isExpanded ? <ChevronDown className="size-3" /> : <ChevronRight className="size-3" />
+                      isExpanded ? (
+                        <ChevronDown className="size-3" />
+                      ) : (
+                        <ChevronRight className="size-3" />
+                      )
                     ) : null}
                   </span>
                   <span className="shrink-0 text-tertiary">{fileIcon(entry, isExpanded)}</span>
-                  <span className="min-w-0 flex-1 truncate">{normalizedQuery ? entry.path : entry.name}</span>
+                  <span className="min-w-0 flex-1 truncate">
+                    {normalizedQuery ? entry.path : entry.name}
+                  </span>
                 </button>
               );
             })
@@ -725,8 +775,7 @@ export function FilesPanel({
                     if (dirty) {
                       alertReturnFocusRef.current = event.currentTarget;
                       setPendingPath("");
-                    }
-                    else {
+                    } else {
                       focusTreePathRef.current = selectedPath;
                       setSelectedPath(null);
                     }
@@ -746,23 +795,40 @@ export function FilesPanel({
                 className="shrink-0"
                 role="status"
               >
-                {saving ? "Saving…" : interactionBlocked ? "Git operation…" : saveError ? "Save failed" : dirty ? "Edited" : saved ? "Saved" : ""}
+                {saving
+                  ? "Saving…"
+                  : interactionBlocked
+                    ? "Git operation…"
+                    : saveError
+                      ? "Save failed"
+                      : dirty
+                        ? "Edited"
+                        : saved
+                          ? "Saved"
+                          : ""}
               </Text>
-              {/\.(?:html?|pdf)$/iu.test(selectedPath) ? <Button
-                variant="transparent"
-                size="small"
-                iconOnly
-                disabled={openingBrowser || saving || interactionBlocked || !workspace?.id}
-                aria-label="Open in Browser"
-                title={dirty ? "Open the saved file in Browser" : "Open in Browser"}
-                onClick={() => {
-                  if (!workspace?.id) return;
-                  setOpeningBrowser(true);
-                  void browserApi.command(workspace.id, { action: "open_file", path: selectedPath })
-                    .catch((error) => toast.error(errorMessage(error, "Could not open this file in Browser.")))
-                    .finally(() => setOpeningBrowser(false));
-                }}
-              ><Globe /></Button> : null}
+              {/\.(?:html?|pdf)$/iu.test(selectedPath) ? (
+                <Button
+                  variant="transparent"
+                  size="small"
+                  iconOnly
+                  disabled={openingBrowser || saving || interactionBlocked || !workspace?.id}
+                  aria-label="Open in Browser"
+                  title={dirty ? "Open the saved file in Browser" : "Open in Browser"}
+                  onClick={() => {
+                    if (!workspace?.id) return;
+                    setOpeningBrowser(true);
+                    void browserApi
+                      .command(workspace.id, { action: "open_file", path: selectedPath })
+                      .catch((error) =>
+                        toast.error(errorMessage(error, "Could not open this file in Browser.")),
+                      )
+                      .finally(() => setOpeningBrowser(false));
+                  }}
+                >
+                  <Globe />
+                </Button>
+              ) : null}
               <Button
                 variant="transparent"
                 size="small"
@@ -789,7 +855,12 @@ export function FilesPanel({
             {saveError ? (
               <div className="flex shrink-0 items-start gap-2 bg-status-red-surface px-3 py-2">
                 <AlertCircle className="mt-0.5 size-3.5 shrink-0 text-status-red" />
-                <Text variant="small" color="status-red" as="p" className="min-w-0 flex-1 select-text">
+                <Text
+                  variant="small"
+                  color="status-red"
+                  as="p"
+                  className="min-w-0 flex-1 select-text"
+                >
                   {saveError.message}
                 </Text>
                 <Button
@@ -800,8 +871,7 @@ export function FilesPanel({
                     if (saveError.code === "changed_on_disk") {
                       alertReturnFocusRef.current = event.currentTarget;
                       setReloadConfirmOpen(true);
-                    }
-                    else void saveFile();
+                    } else void saveFile();
                   }}
                 >
                   {saveError.code === "changed_on_disk" ? "Reload" : "Retry"}
@@ -816,8 +886,15 @@ export function FilesPanel({
                 <div className="flex h-full flex-col items-center justify-center gap-3 px-6 text-center">
                   <AlertCircle className="size-5 text-tertiary" />
                   <div>
-                    <Text variant="strong" as="p">File unavailable</Text>
-                    <Text variant="small" color="secondary" as="p" className="mt-1 max-w-sm select-text">
+                    <Text variant="strong" as="p">
+                      File unavailable
+                    </Text>
+                    <Text
+                      variant="small"
+                      color="secondary"
+                      as="p"
+                      className="mt-1 max-w-sm select-text"
+                    >
                       {documentState.error}
                     </Text>
                     {openErrorPresentation?.guidance ? (
@@ -827,14 +904,22 @@ export function FilesPanel({
                     ) : null}
                   </div>
                   {openErrorPresentation?.retryable !== false ? (
-                    <Button size="small" disabled={interactionBlocked} onClick={() => void loadFile()}>Try again</Button>
+                    <Button
+                      size="small"
+                      disabled={interactionBlocked}
+                      onClick={() => void loadFile()}
+                    >
+                      Try again
+                    </Button>
                   ) : null}
                 </div>
               ) : documentState.data ? (
-                <div className={cn(
-                  "code-font-sized grid h-full min-h-0 overflow-hidden bg-background font-mono leading-5",
-                  wrap ? "grid-cols-1" : "grid-cols-[auto_minmax(0,1fr)]",
-                )}>
+                <div
+                  className={cn(
+                    "code-font-sized grid h-full min-h-0 overflow-hidden bg-background font-mono leading-5",
+                    wrap ? "grid-cols-1" : "grid-cols-[auto_minmax(0,1fr)]",
+                  )}
+                >
                   <pre
                     ref={gutterRef}
                     aria-hidden="true"
@@ -853,18 +938,26 @@ export function FilesPanel({
                       if (interactionBlocked) return;
                       const nextDraft = event.target.value;
                       draftRef.current = nextDraft;
-                      onEditorStateChange?.({
-                        workspaceId: reportedWorkspaceId,
-                        path: selectedPath,
-                        dirty: Boolean(documentState.data && nextDraft !== documentState.data.content),
-                        saving,
-                      }, { touch: true });
+                      onEditorStateChange?.(
+                        {
+                          workspaceId: reportedWorkspaceId,
+                          path: selectedPath,
+                          dirty: Boolean(
+                            documentState.data && nextDraft !== documentState.data.content,
+                          ),
+                          saving,
+                        },
+                        { touch: true },
+                      );
                       setDraft(nextDraft);
-                      setSaveError((current) => current?.code === "changed_on_disk" ? current : null);
+                      setSaveError((current) =>
+                        current?.code === "changed_on_disk" ? current : null,
+                      );
                       setSaved(false);
                     }}
                     onScroll={(event) => {
-                      if (gutterRef.current) gutterRef.current.scrollTop = event.currentTarget.scrollTop;
+                      if (gutterRef.current)
+                        gutterRef.current.scrollTop = event.currentTarget.scrollTop;
                     }}
                     aria-label={`Edit ${selectedPath}`}
                     aria-readonly={saving || interactionBlocked}
@@ -901,12 +994,15 @@ export function FilesPanel({
           setDraft("");
           setSaveError(null);
           setSaved(false);
-          onEditorStateChange?.({
-            workspaceId: reportedWorkspaceId,
-            path: nextPath || null,
-            dirty: false,
-            saving: false,
-          }, { touch: true });
+          onEditorStateChange?.(
+            {
+              workspaceId: reportedWorkspaceId,
+              path: nextPath || null,
+              dirty: false,
+              saving: false,
+            },
+            { touch: true },
+          );
           if (nextPath) {
             if (compact) focusDetailRef.current = true;
             setSelectedPath(nextPath);

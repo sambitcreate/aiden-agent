@@ -47,7 +47,9 @@ export interface McpRejectedRefresh {
 }
 
 /** The tokens a provider last read or received, and the grant they belonged to. */
-export type McpObservedTokens = Pick<OAuthTokens, "access_token" | "refresh_token"> & { grantId?: string };
+export type McpObservedTokens = Pick<OAuthTokens, "access_token" | "refresh_token"> & {
+  grantId?: string;
+};
 
 /**
  * How long after a rejected refresh a concurrent rotation of the same refresh
@@ -87,15 +89,24 @@ export function parseMcpOAuthSession(value: unknown): McpOAuthSession {
     // Advisory only: a malformed marker is dropped rather than failing the session.
     if (
       !isRecord(marker) ||
-      typeof marker.refreshTokenHash !== "string" || !/^[0-9a-f]{64}$/u.test(marker.refreshTokenHash) ||
+      typeof marker.refreshTokenHash !== "string" ||
+      !/^[0-9a-f]{64}$/u.test(marker.refreshTokenHash) ||
       (marker.grantId !== undefined && (typeof marker.grantId !== "string" || !marker.grantId)) ||
-      typeof marker.at !== "number" || !Number.isFinite(marker.at)
+      typeof marker.at !== "number" ||
+      !Number.isFinite(marker.at)
     ) {
       delete session.rejectedRefresh;
     }
   }
   // Advisory too: a malformed expiry is dropped, and the token refreshes after a 401.
-  if (session.expiresAt !== undefined && !(typeof session.expiresAt === "number" && Number.isFinite(session.expiresAt) && session.expiresAt >= 0)) {
+  if (
+    session.expiresAt !== undefined &&
+    !(
+      typeof session.expiresAt === "number" &&
+      Number.isFinite(session.expiresAt) &&
+      session.expiresAt >= 0
+    )
+  ) {
     delete session.expiresAt;
   }
   if (session.clientInformation !== undefined) {
@@ -111,10 +122,12 @@ export function parseMcpOAuthSession(value: unknown): McpOAuthSession {
     ) {
       throw new Error("MCP OAuth client information is malformed.");
     }
-    const { client_secret: secret, client_secret_expires_at: secretExpiry } = session.clientInformation;
+    const { client_secret: secret, client_secret_expires_at: secretExpiry } =
+      session.clientInformation;
     if (
       (secret !== undefined && (typeof secret !== "string" || !secret)) ||
-      (secretExpiry !== undefined && (typeof secretExpiry !== "number" || !Number.isFinite(secretExpiry) || secretExpiry < 0))
+      (secretExpiry !== undefined &&
+        (typeof secretExpiry !== "number" || !Number.isFinite(secretExpiry) || secretExpiry < 0))
     ) {
       throw new Error("MCP OAuth client secret is malformed.");
     }
@@ -146,12 +159,24 @@ export function parseMcpOAuthSession(value: unknown): McpOAuthSession {
  * (`clientIdentity`, see `mcpOAuthClientIdentityKey`). Changing any of them
  * leaves the old session unmatched, so it is never reused.
  */
-export function mcpAuthorizationBinding(url: string, authServerMetadataUrl?: string, clientIdentity?: string): string {
+export function mcpAuthorizationBinding(
+  url: string,
+  authServerMetadataUrl?: string,
+  clientIdentity?: string,
+): string {
   const parsed = new URL(url);
   parsed.hash = "";
   parsed.pathname = parsed.pathname.replace(/\/+$/, "") || "/";
   const resource = parsed.toString();
-  return authServerMetadataUrl === undefined && clientIdentity === undefined ? resource : JSON.stringify([resource, authServerMetadataUrl === undefined ? null : parseMcpOAuthMetadataUrl(authServerMetadataUrl), clientIdentity ?? null]);
+  return authServerMetadataUrl === undefined && clientIdentity === undefined
+    ? resource
+    : JSON.stringify([
+        resource,
+        authServerMetadataUrl === undefined
+          ? null
+          : parseMcpOAuthMetadataUrl(authServerMetadataUrl),
+        clientIdentity ?? null,
+      ]);
 }
 
 export function sessionMatchesMcpBinding(session: McpOAuthSession, binding: string): boolean {
@@ -170,7 +195,12 @@ export function usableMcpClientInformation(
   nowMs: number = Date.now(),
 ): OAuthClientInformationMixed | undefined {
   const expiresAt = information?.client_secret_expires_at;
-  if (information?.client_secret && typeof expiresAt === "number" && expiresAt > 0 && expiresAt * 1000 <= nowMs) {
+  if (
+    information?.client_secret &&
+    typeof expiresAt === "number" &&
+    expiresAt > 0 &&
+    expiresAt * 1000 <= nowMs
+  ) {
     return undefined;
   }
   return information;
@@ -190,7 +220,10 @@ export function sessionWithMcpClientInformation(
     delete clientInformation.client_secret_expires_at;
   } else {
     const expiry: unknown = clientInformation.client_secret_expires_at;
-    if (expiry !== undefined && (typeof expiry !== "number" || !Number.isFinite(expiry) || expiry < 0)) {
+    if (
+      expiry !== undefined &&
+      (typeof expiry !== "number" || !Number.isFinite(expiry) || expiry < 0)
+    ) {
       delete clientInformation.client_secret_expires_at;
     }
   }
@@ -236,15 +269,22 @@ export function sessionWithSavedMcpTokens(
   requestedScope?: string,
   nowMs: number = Date.now(),
 ): McpOAuthSession {
-  const grantedScope = tokens.scope || requestedScope || session.tokens?.scope || session.grantedScope;
-  const { rejectedRefresh: _supersededByNewTokens, expiresAt: _previousTokensExpiry, ...rest } = session;
+  const grantedScope =
+    tokens.scope || requestedScope || session.tokens?.scope || session.grantedScope;
+  const {
+    rejectedRefresh: _supersededByNewTokens,
+    expiresAt: _previousTokensExpiry,
+    ...rest
+  } = session;
   const lifetime = tokens.expires_in;
   return {
     ...rest,
     authorizationBinding: binding,
     tokens,
     ...(grantedScope ? { grantedScope } : {}),
-    ...(typeof lifetime === "number" && Number.isFinite(lifetime) && lifetime >= 0 ? { expiresAt: nowMs + lifetime * 1000 } : {}),
+    ...(typeof lifetime === "number" && Number.isFinite(lifetime) && lifetime >= 0
+      ? { expiresAt: nowMs + lifetime * 1000 }
+      : {}),
   };
 }
 
@@ -262,7 +302,8 @@ export const MCP_TOKEN_REFRESH_SKEW_MS = 30_000;
 export function mcpTokenRefreshDueAt(session: McpOAuthSession): number | undefined {
   const { tokens, expiresAt } = session;
   if (!tokens?.refresh_token || expiresAt === undefined) return undefined;
-  const lifetimeMs = typeof tokens.expires_in === "number" ? tokens.expires_in * 1000 : Number.POSITIVE_INFINITY;
+  const lifetimeMs =
+    typeof tokens.expires_in === "number" ? tokens.expires_in * 1000 : Number.POSITIVE_INFINITY;
   return expiresAt - Math.min(MCP_TOKEN_REFRESH_SKEW_MS, lifetimeMs / 2);
 }
 
@@ -274,13 +315,21 @@ export function mcpTokenRefreshDueAt(session: McpOAuthSession): number | undefin
  * within the restore window. A sign-out clears the whole session and a
  * re-authorization mints a new grant, so neither leaves a matching marker.
  */
-function mayRestoreRejectedRefresh(session: McpOAuthSession, observed: McpObservedTokens, nowMs: number): boolean {
+function mayRestoreRejectedRefresh(
+  session: McpOAuthSession,
+  observed: McpObservedTokens,
+  nowMs: number,
+): boolean {
   const marker = session.rejectedRefresh;
   return Boolean(
-    marker && !session.tokens && observed.refresh_token &&
+    marker &&
+    !session.tokens &&
+    observed.refresh_token &&
     marker.refreshTokenHash === refreshTokenHash(observed.refresh_token) &&
-    marker.grantId === observed.grantId && session.grantId === observed.grantId &&
-    nowMs >= marker.at && nowMs - marker.at <= MCP_REJECTED_REFRESH_RESTORE_MS,
+    marker.grantId === observed.grantId &&
+    session.grantId === observed.grantId &&
+    nowMs >= marker.at &&
+    nowMs - marker.at <= MCP_REJECTED_REFRESH_RESTORE_MS,
   );
 }
 
@@ -304,8 +353,12 @@ export function sessionWithRefreshedMcpTokens(
   nowMs: number = Date.now(),
 ): McpOAuthSession | undefined {
   const stored = session.tokens;
-  if (observed && (stored?.access_token !== observed.access_token || stored?.refresh_token !== observed.refresh_token) &&
-      !mayRestoreRejectedRefresh(session, observed, nowMs)) {
+  if (
+    observed &&
+    (stored?.access_token !== observed.access_token ||
+      stored?.refresh_token !== observed.refresh_token) &&
+    !mayRestoreRejectedRefresh(session, observed, nowMs)
+  ) {
     return undefined;
   }
   return sessionWithSavedMcpTokens(session, binding, tokens, requestedScope, nowMs);
@@ -348,12 +401,22 @@ export function mcpOAuthGrantIdentity(session: McpOAuthSession): McpOAuthGrantId
 }
 
 export function sameMcpOAuthGrant(left: McpOAuthSession, right: McpOAuthSession): boolean {
-  return JSON.stringify(mcpOAuthGrantIdentity(left)) === JSON.stringify(mcpOAuthGrantIdentity(right));
+  return (
+    JSON.stringify(mcpOAuthGrantIdentity(left)) === JSON.stringify(mcpOAuthGrantIdentity(right))
+  );
 }
 
 /** Scope tokens from challenges or saved grants; quote-only remnants such as `""` are not scopes. */
 export function mcpScopeTokens(...scopes: ReadonlyArray<string | null | undefined>): string[] {
-  return [...new Set(scopes.filter(Boolean).join(" ").split(/\s+/u).filter((token) => token && !/^["']*$/u.test(token)))];
+  return [
+    ...new Set(
+      scopes
+        .filter(Boolean)
+        .join(" ")
+        .split(/\s+/u)
+        .filter((token) => token && !/^["']*$/u.test(token)),
+    ),
+  ];
 }
 
 /**
@@ -368,13 +431,19 @@ export function sameMcpOAuthIssuer(left: string | undefined, right: string | und
   const root = (value: string) => {
     try {
       const url = new URL(value);
-      return (url.pathname === "/" || url.pathname === "") && !url.search && !url.hash ? `${url.protocol}//${url.host}` : undefined;
+      return (url.pathname === "/" || url.pathname === "") && !url.search && !url.hash
+        ? `${url.protocol}//${url.host}`
+        : undefined;
     } catch {
       return undefined;
     }
   };
   const a = root(left);
-  return a !== undefined && a === root(right) && [left, right].every((value) => value === a || value === `${a}/`);
+  return (
+    a !== undefined &&
+    a === root(right) &&
+    [left, right].every((value) => value === a || value === `${a}/`)
+  );
 }
 
 /**
@@ -387,7 +456,11 @@ const MAX_STEP_UP_SERVERS = 64;
 const stepUpScopes = new Map<string, string>();
 
 function stepUpKey(serviceUrl: string): string | undefined {
-  try { return mcpAuthorizationBinding(serviceUrl); } catch { return undefined; }
+  try {
+    return mcpAuthorizationBinding(serviceUrl);
+  } catch {
+    return undefined;
+  }
 }
 
 export function recordMcpStepUpScope(serviceUrl: string, scope: string): void {
@@ -397,13 +470,19 @@ export function recordMcpStepUpScope(serviceUrl: string, scope: string): void {
   const merged = mcpScopeTokens(stepUpScopes.get(key), ...tokens).join(" ");
   stepUpScopes.delete(key);
   stepUpScopes.set(key, merged);
-  while (stepUpScopes.size > MAX_STEP_UP_SERVERS) stepUpScopes.delete(stepUpScopes.keys().next().value!);
+  while (stepUpScopes.size > MAX_STEP_UP_SERVERS)
+    stepUpScopes.delete(stepUpScopes.keys().next().value!);
 }
 
 /** Granted scopes plus any recorded step-up challenge, for an interactive authorization. */
-export function mcpInteractiveAuthorizationScope(serviceUrl: string | undefined, grantedScope: string | undefined): string | undefined {
+export function mcpInteractiveAuthorizationScope(
+  serviceUrl: string | undefined,
+  grantedScope: string | undefined,
+): string | undefined {
   const key = serviceUrl === undefined ? undefined : stepUpKey(serviceUrl);
-  return mcpScopeTokens(grantedScope, key ? stepUpScopes.get(key) : undefined).join(" ") || undefined;
+  return (
+    mcpScopeTokens(grantedScope, key ? stepUpScopes.get(key) : undefined).join(" ") || undefined
+  );
 }
 
 /** Forget a step-up challenge once an interactive authorization has committed. */
@@ -426,7 +505,11 @@ export function sessionAfterTokenInvalidation(
 ): McpOAuthSession | undefined {
   const stored = session.tokens;
   if (!stored) return undefined;
-  if (observed && (stored.access_token !== observed.access_token || stored.refresh_token !== observed.refresh_token)) {
+  if (
+    observed &&
+    (stored.access_token !== observed.access_token ||
+      stored.refresh_token !== observed.refresh_token)
+  ) {
     return undefined;
   }
   const next = structuredClone(session);
@@ -465,7 +548,8 @@ export class McpOAuthAuthorizationFlow {
 
   saveDiscovery(state: OAuthDiscoveryState): void {
     const metadata = state.authorizationServerMetadata;
-    if (metadata && !sameMcpOAuthIssuer(metadata.issuer, state.authorizationServerUrl)) throw new Error("OAuth metadata issuer does not match the selected authorization server.");
+    if (metadata && !sameMcpOAuthIssuer(metadata.issuer, state.authorizationServerUrl))
+      throw new Error("OAuth metadata issuer does not match the selected authorization server.");
     this.discovery = structuredClone(state);
   }
 
@@ -478,7 +562,8 @@ export class McpOAuthAuthorizationFlow {
   }
 
   authorizationUrl(url: URL, grantedScope?: string): URL {
-    if (url.searchParams.get("state") !== this.state) throw new Error("MCP OAuth state was not bound to this sign-in.");
+    if (url.searchParams.get("state") !== this.state)
+      throw new Error("MCP OAuth state was not bound to this sign-in.");
     const result = new URL(url);
     const scopes = mcpScopeTokens(grantedScope, result.searchParams.get("scope"));
     this.requestedScope = scopes.join(" ") || undefined;
@@ -486,10 +571,13 @@ export class McpOAuthAuthorizationFlow {
     else result.searchParams.delete("scope");
     // Pi asks for consent when its own scope includes offline_access; a
     // granted scope merged in here can add it, so apply the same rule.
-    if (scopes.includes("offline_access") && !result.searchParams.has("prompt")) result.searchParams.set("prompt", "consent");
+    if (scopes.includes("offline_access") && !result.searchParams.has("prompt"))
+      result.searchParams.set("prompt", "consent");
     const metadata = this.discovery?.authorizationServerMetadata;
     this.expectedIssuer = metadata?.issuer ?? this.discovery?.authorizationServerUrl;
-    this.issuerRequired = metadata !== undefined && "authorization_response_iss_parameter_supported" in metadata &&
+    this.issuerRequired =
+      metadata !== undefined &&
+      "authorization_response_iss_parameter_supported" in metadata &&
       metadata.authorization_response_iss_parameter_supported === true;
     this.started = true;
     return result;
@@ -510,21 +598,36 @@ export class McpOAuthAuthorizationFlow {
   }
 
   callback(url: URL): { code: string } | { error: Error } {
-    if (!this.started || this.consumed || url.searchParams.getAll("state").length !== 1 || url.searchParams.get("state") !== this.state) {
+    if (
+      !this.started ||
+      this.consumed ||
+      url.searchParams.getAll("state").length !== 1 ||
+      url.searchParams.get("state") !== this.state
+    ) {
       throw new Error("Invalid OAuth callback state.");
     }
     const issuers = url.searchParams.getAll("iss");
-    if (issuers.length > 1 || (this.issuerRequired && issuers.length !== 1) ||
-        (issuers.length === 1 && !sameMcpOAuthIssuer(issuers[0], this.expectedIssuer))) {
+    if (
+      issuers.length > 1 ||
+      (this.issuerRequired && issuers.length !== 1) ||
+      (issuers.length === 1 && !sameMcpOAuthIssuer(issuers[0], this.expectedIssuer))
+    ) {
       throw new Error("Invalid OAuth callback issuer.");
     }
     const codes = url.searchParams.getAll("code");
     const errors = url.searchParams.getAll("error");
-    if (codes.length + errors.length !== 1 || !(codes[0] || errors[0])) throw new Error("Invalid OAuth callback result.");
+    if (codes.length + errors.length !== 1 || !(codes[0] || errors[0]))
+      throw new Error("Invalid OAuth callback result.");
     this.consumed = true;
-    this.responseIssuer = issuers.length === 1 ? this.discovery?.authorizationServerMetadata?.issuer : undefined;
+    this.responseIssuer =
+      issuers.length === 1 ? this.discovery?.authorizationServerMetadata?.issuer : undefined;
     return errors.length
-      ? { error: new McpOAuthCallbackError(errors[0], url.searchParams.get("error_description") ?? undefined) }
+      ? {
+          error: new McpOAuthCallbackError(
+            errors[0],
+            url.searchParams.get("error_description") ?? undefined,
+          ),
+        }
       : { code: codes[0] };
   }
 }
@@ -532,10 +635,21 @@ export class McpOAuthAuthorizationFlow {
 const MAX_CALLBACK_DESCRIPTION_CHARS = 300;
 
 /** Text from an OAuth server shown to the user: one line, no control characters, bounded. */
-export function mcpOAuthDisplayText(value: string | undefined, maximum: number = MAX_CALLBACK_DESCRIPTION_CHARS): string | undefined {
-  const line = value === undefined ? undefined : [...value]
-    .map((char) => { const code = char.charCodeAt(0); return code < 32 || (code >= 127 && code <= 159) ? " " : char; })
-    .join("").replace(/\s+/gu, " ").trim();
+export function mcpOAuthDisplayText(
+  value: string | undefined,
+  maximum: number = MAX_CALLBACK_DESCRIPTION_CHARS,
+): string | undefined {
+  const line =
+    value === undefined
+      ? undefined
+      : [...value]
+          .map((char) => {
+            const code = char.charCodeAt(0);
+            return code < 32 || (code >= 127 && code <= 159) ? " " : char;
+          })
+          .join("")
+          .replace(/\s+/gu, " ")
+          .trim();
   if (!line) return undefined;
   return line.length > maximum ? `${line.slice(0, maximum - 1)}…` : line;
 }
@@ -586,13 +700,20 @@ export interface McpOAuthSignInState {
   hasSession: boolean;
 }
 
-export function mcpOAuthSignInState(session: McpOAuthSession, binding: string | undefined): McpOAuthSignInState {
+export function mcpOAuthSignInState(
+  session: McpOAuthSession,
+  binding: string | undefined,
+): McpOAuthSignInState {
   const hasSession = hasMcpOAuthSessionData(session);
   if (binding === undefined || !sessionMatchesMcpBinding(session, binding)) {
     return { authorized: false, needsSignIn: false, hasSession };
   }
   const authorized = Boolean(session.tokens);
-  return { authorized, needsSignIn: !authorized && Boolean(session.grantId || session.grantedScope), hasSession };
+  return {
+    authorized,
+    needsSignIn: !authorized && Boolean(session.grantId || session.grantedScope),
+    hasSession,
+  };
 }
 
 /** Keep an interactive replacement session private until verification succeeds. */

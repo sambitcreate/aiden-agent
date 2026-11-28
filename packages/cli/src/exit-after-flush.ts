@@ -12,7 +12,10 @@ export async function exitAfterFlush(code: number): Promise<never> {
 
 function flush(stream: NodeJS.WriteStream): Promise<void> {
   return new Promise((resolve) => {
-    if (stream.destroyed || stream.writableEnded) { resolve(); return; }
+    if (stream.destroyed || stream.writableEnded) {
+      resolve();
+      return;
+    }
     stream.write("", () => resolve());
   });
 }
@@ -24,5 +27,11 @@ function flush(stream: NodeJS.WriteStream): Promise<void> {
  * `set -o pipefail` scripts from failing on a reader that stopped early)
  * instead of printing an unhandled 'error' stack.
  */
-const closedStdout = (error: NodeJS.ErrnoException) => { if (error.code !== "EPIPE") throw error; process.exit(0); };
-export function exitQuietlyOnClosedStdout(): void { if (!process.stdout.listeners("error").includes(closedStdout)) process.stdout.on("error", closedStdout); }
+const closedStdout = (error: NodeJS.ErrnoException) => {
+  if (error.code !== "EPIPE") throw error;
+  process.exit(0);
+};
+export function exitQuietlyOnClosedStdout(): void {
+  if (!process.stdout.listeners("error").includes(closedStdout))
+    process.stdout.on("error", closedStdout);
+}

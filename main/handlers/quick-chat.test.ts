@@ -7,9 +7,11 @@ import {
   type QuickChatWindowControlPort,
 } from "./quick-chat-core.js";
 
-function createTestHarness(options: {
-  navigateMainWindow?: (path: string) => Promise<void>;
-} = {}) {
+function createTestHarness(
+  options: {
+    navigateMainWindow?: (path: string) => Promise<void>;
+  } = {},
+) {
   const handlers = new Map<string, (event: IpcMainInvokeEvent, ...args: unknown[]) => unknown>();
   const tickets = new DesktopHandoffTicketStore();
   const mainEvent = { sender: { id: 1 } } as unknown as IpcMainInvokeEvent;
@@ -32,7 +34,11 @@ function createTestHarness(options: {
 
   registerQuickChatHandlersCore({
     isMainWindow: (event) => event === mainEvent,
-    navigateMainWindow: options.navigateMainWindow ?? (async (p) => { log.push(`nav:${p}`); }),
+    navigateMainWindow:
+      options.navigateMainWindow ??
+      (async (p) => {
+        log.push(`nav:${p}`);
+      }),
     handle: (channel, listener) => {
       handlers.set(channel, listener);
     },
@@ -53,9 +59,18 @@ test("quickChat handlers enforce sender gates across toggle, hide, setMode, supp
   await assert.rejects(async () => handlers.get("quickChat:toggle")!(untrustedEvent), /Untrusted/);
 
   // quickChat-only handlers reject BOTH mainWindow and untrusted senders.
-  for (const channel of ["quickChat:hide", "quickChat:setMode", "quickChat:suppressBlur", "quickChat:openSettings", "quickChat:expandToMain"]) {
+  for (const channel of [
+    "quickChat:hide",
+    "quickChat:setMode",
+    "quickChat:suppressBlur",
+    "quickChat:openSettings",
+    "quickChat:expandToMain",
+  ]) {
     await assert.rejects(async () => handlers.get(channel)!(mainEvent, "starter"), /Untrusted/);
-    await assert.rejects(async () => handlers.get(channel)!(untrustedEvent, "starter"), /Untrusted/);
+    await assert.rejects(
+      async () => handlers.get(channel)!(untrustedEvent, "starter"),
+      /Untrusted/,
+    );
   }
 
   // Valid quickChat calls succeed.
@@ -153,7 +168,11 @@ test("quickChat:expandToMain creates tickets, notifies on claim, and cleans up t
   assert.deepEqual(failedChat, { ok: false });
   assert.equal(registeredDeferred, true, "deferred detach must register for pending ticket");
   assert.equal(deferredDetachRan, true, "failed chat expand must run deferred detach immediately");
-  assert.equal(failing.tickets.claimChat("chat-fail"), null, "failed expand must clean up its ticket");
+  assert.equal(
+    failing.tickets.claimChat("chat-fail"),
+    null,
+    "failed expand must clean up its ticket",
+  );
   assert.ok(failing.log.includes("reset-suppress"), "failed expand must reset blur suppression");
 });
 

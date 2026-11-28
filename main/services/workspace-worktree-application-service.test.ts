@@ -1,12 +1,18 @@
 import { MAX_PROVISIONED_BYTES } from "./managed-worktree-provisioner.js";
-import { WorktreeCapacityUnavailableError, WORKTREE_GIT_METADATA_BYTES } from "./managed-worktree-capacity.js";
+import {
+  WorktreeCapacityUnavailableError,
+  WORKTREE_GIT_METADATA_BYTES,
+} from "./managed-worktree-capacity.js";
 import assert from "node:assert/strict";
 import test from "node:test";
 import { DesignGrantRegistry } from "./design-canvas/grants.js";
 import { captureAnalyticsEvents } from "./analytics/test-support.js";
 import type { Workspace } from "./types.js";
 import { workspaceApprovalPolicy } from "../../renderer/shared/approval-mode.js";
-import { createWorkspaceWorktreeApplicationService, type WorkspaceWorktreeApplicationDependencies } from "./workspace-worktree-application-service.js";
+import {
+  createWorkspaceWorktreeApplicationService,
+  type WorkspaceWorktreeApplicationDependencies,
+} from "./workspace-worktree-application-service.js";
 import { runWorktreeSetupHooks } from "./agent-surface-hooks.js";
 import type { HookDispatcher, HookPayload, HookScope } from "./hooks/hook-types.js";
 
@@ -40,11 +46,12 @@ test("shared managed-worktree workflow preserves creation rollback gates and des
   const service = createWorkspaceWorktreeApplicationService({
     designGrants,
     environment: {
-      resolve: async (id) => id === source.id
-        ? { folderPath: source.folderPath!, workspace: source }
-        : managed
-          ? { folderPath: managed.folderPath!, workspace: managed }
-          : undefined,
+      resolve: async (id) =>
+        id === source.id
+          ? { folderPath: source.folderPath!, workspace: source }
+          : managed
+            ? { folderPath: managed.folderPath!, workspace: managed }
+            : undefined,
       run: async (_owner, id, operation) => {
         assert.equal(id, source.id);
         return operation({ folderPath: source.folderPath!, workspace: source }, signal);
@@ -57,8 +64,12 @@ test("shared managed-worktree workflow preserves creation rollback gates and des
     ensureWorktreeRoot: async () => "/aiden/worktrees",
     ensureSnapshotRoot: async () => "/aiden/worktree-snapshots",
     checkoutBytes: async () => 1_024,
-    checkCreateCapacity: async (root, bytes) => { createAdmissions.push([root, bytes]); },
-    checkWorktreeAllocation: async (root, common, bytes) => { allocations.push([root, common, bytes]); },
+    checkCreateCapacity: async (root, bytes) => {
+      createAdmissions.push([root, bytes]);
+    },
+    checkWorktreeAllocation: async (root, common, bytes) => {
+      allocations.push([root, common, bytes]);
+    },
     checkSnapshotCapacity: async () => undefined,
     provisionIncludedFiles: async () => {
       if (failProvisioning) throw new Error("provisioning failed");
@@ -107,7 +118,9 @@ test("shared managed-worktree workflow preserves creation rollback gates and des
         current: false,
       };
     },
-    rollbackWorktree: async () => { events.push("rollback"); },
+    rollbackWorktree: async () => {
+      events.push("rollback");
+    },
     deleteManagedWorktree: async () => {
       events.push("delete-git");
       if (failGitDeletion) throw new Error("git worktree remove failed");
@@ -116,7 +129,9 @@ test("shared managed-worktree workflow preserves creation rollback gates and des
     managedWorktreeDeletionPending: async () => false,
     managedWorktreeRegistered: async () => false,
     managedWorktreeUsable: async () => false,
-    finalizeManagedWorktreeDeletion: async () => { events.push("finalize"); },
+    finalizeManagedWorktreeDeletion: async () => {
+      events.push("finalize");
+    },
     workspacePathExists: async () => false,
     saveWorkspace: async (workspace) => {
       events.push("save");
@@ -129,25 +144,39 @@ test("shared managed-worktree workflow preserves creation rollback gates and des
     },
     beginWorkspaceMutation: () => {
       events.push("begin-mutation");
-      return () => { events.push("finish-mutation"); };
+      return () => {
+        events.push("finish-mutation");
+      };
     },
     workspaceIsChanging: () => false,
-    cancelWorkspaceOperations: async () => { events.push("cancel-operations"); },
+    cancelWorkspaceOperations: async () => {
+      events.push("cancel-operations");
+    },
     closeWorkspaceTerminals: async () => {
       events.push("close-terminals");
       await terminalDrain;
     },
-    closeWorkspaceGitWatcher: (id) => { events.push(`close-git-watcher:${id}`); },
-    cancelWorkspaceGeneration: async () => { events.push("cancel-generation"); },
+    closeWorkspaceGitWatcher: (id) => {
+      events.push(`close-git-watcher:${id}`);
+    },
+    cancelWorkspaceGeneration: async () => {
+      events.push("cancel-generation");
+    },
     closeWorkspaceFollowThrough: async () => {
       events.push("stop-jobs");
       if (jobsStillRunning) throw new Error("A job is still running");
     },
-    cancelWorkspaceSchedules: async () => { events.push("cancel-schedules"); },
-    resumeWorkspaceSchedules: async () => { events.push("resume-schedules"); },
+    cancelWorkspaceSchedules: async () => {
+      events.push("cancel-schedules");
+    },
+    resumeWorkspaceSchedules: async () => {
+      events.push("resume-schedules");
+    },
     createWorkspaceId: () => "workspace-managed",
     now: () => 3,
-    notifyChanged: () => { events.push("notify"); },
+    notifyChanged: () => {
+      events.push("notify");
+    },
     logError: () => undefined,
   });
 
@@ -165,17 +194,18 @@ test("shared managed-worktree workflow preserves creation rollback gates and des
   events.length = 0;
   const worktreeGrant = designGrants.issue("chat-in-worktree", created.folderPath!);
   const sourceGrant = designGrants.issue("chat-in-source", source.folderPath!);
-  terminalDrain = new Promise<void>((resolve) => { releaseTerminals = resolve; });
+  terminalDrain = new Promise<void>((resolve) => {
+    releaseTerminals = resolve;
+  });
   const removal = service.remove(owner, created.id, (workspace) => {
     events.push(`validate:${workspace.id}`);
   });
   await new Promise<void>((resolve) => setImmediate(resolve));
-  assert.deepEqual(events, [
-    "validate:workspace-managed",
-    "begin-mutation",
-    "cancel-operations",
-    "close-terminals",
-  ], "Git deletion must wait for terminal exit");
+  assert.deepEqual(
+    events,
+    ["validate:workspace-managed", "begin-mutation", "cancel-operations", "close-terminals"],
+    "Git deletion must wait for terminal exit",
+  );
   releaseTerminals();
   const removed = await removal;
   assert.equal(removed.branchDeleted, true);
@@ -194,10 +224,18 @@ test("shared managed-worktree workflow preserves creation rollback gates and des
     "finish-mutation",
     "close-git-watcher:workspace-managed",
   ]);
-  assert.equal(designGrants.resolve(worktreeGrant), null, "deleting the worktree ends its design grants");
+  assert.equal(
+    designGrants.resolve(worktreeGrant),
+    null,
+    "deleting the worktree ends its design grants",
+  );
   assert.notEqual(designGrants.resolve(sourceGrant), null);
   const expectedReserve = process.platform === "darwin" ? MAX_PROVISIONED_BYTES : 0;
-  assert.deepEqual(allocations, [], "create delegates combined allocation admission to createWorktree");
+  assert.deepEqual(
+    allocations,
+    [],
+    "create delegates combined allocation admission to createWorktree",
+  );
   assert.deepEqual(createReserves, [expectedReserve > 0 ? expectedReserve : undefined]);
   assert.deepEqual(createAdmissions, [["/aiden/worktrees/mobile", expectedReserve]]);
 
@@ -210,22 +248,30 @@ test("shared managed-worktree workflow preserves creation rollback gates and des
   jobsStillRunning = false;
   failGitDeletion = true;
   await assert.rejects(service.remove(owner, again.id), /git worktree remove failed/u);
-  assert.equal(events.includes(`remove:${again.id}`), false, "the record stays when Git deletion fails");
+  assert.equal(
+    events.includes(`remove:${again.id}`),
+    false,
+    "the record stays when Git deletion fails",
+  );
   assert.equal(events[events.length - 1], `close-git-watcher:${again.id}`);
 
   sent.length = 0;
   failProvisioning = true;
-  await assert.rejects(service.create(owner, source.id, "feature/rolled-back"), /provisioning failed/u);
+  await assert.rejects(
+    service.create(owner, source.id, "feature/rolled-back"),
+    /provisioning failed/u,
+  );
   assert.deepEqual(sent, [], "a rolled-back checkout was never created");
 });
-
 
 test("dirty removal snapshots before deletion, admits Git objects on the object store volume, and lets force skip the advisory ignored scan", async (t) => {
   const { mkdtemp, mkdir, readdir, readFile, stat, writeFile } = await import("node:fs/promises");
   const os = await import("node:os");
   const nodePath = await import("node:path");
   const base = await mkdtemp(nodePath.join(os.tmpdir(), "aiden-svc-test-"));
-  t.after(() => import("node:fs/promises").then((fs) => fs.rm(base, { force: true, recursive: true })));
+  t.after(() =>
+    import("node:fs/promises").then((fs) => fs.rm(base, { force: true, recursive: true })),
+  );
   const worktreePath = nodePath.join(base, "managed");
   const repositoryPath = nodePath.join(base, "repository");
   const snapshotRoot = nodePath.join(base, "snapshots");
@@ -269,10 +315,14 @@ test("dirty removal snapshots before deletion, admits Git objects on the object 
   const service = createWorkspaceWorktreeApplicationService({
     environment: {
       resolve: async () => ({ folderPath: worktreePath, workspace: managed }),
-      run: async (_owner, _id, operation) => operation({
-        folderPath: repositoryPath,
-        workspace: { ...managed, folderPath: repositoryPath, managedWorktree: undefined },
-      }, signal),
+      run: async (_owner, _id, operation) =>
+        operation(
+          {
+            folderPath: repositoryPath,
+            workspace: { ...managed, folderPath: repositoryPath, managedWorktree: undefined },
+          },
+          signal,
+        ),
       runRecord: async (_owner, id, operation) => {
         assert.equal(id, managed.id);
         return operation(managed, signal);
@@ -284,7 +334,9 @@ test("dirty removal snapshots before deletion, admits Git objects on the object 
       estimateCalls.push(commit);
       return commit === "b".repeat(40) ? 100 : 200;
     },
-    checkCreateCapacity: async (root, bytes) => { restoreAdmissions.push([root, bytes]); },
+    checkCreateCapacity: async (root, bytes) => {
+      restoreAdmissions.push([root, bytes]);
+    },
     checkWorktreeAllocation: async (root, common, bytes) => {
       restoreAdmissions.push([root, bytes], [common, WORKTREE_GIT_METADATA_BYTES]);
       throw new WorktreeCapacityUnavailableError();
@@ -381,10 +433,7 @@ test("dirty removal snapshots before deletion, admits Git objects on the object 
     provisionedIgnored: readonly string[];
   };
   const snapshotId = lifecycle.snapshot.id;
-  assert.equal(
-    lifecycle.snapshot.ref,
-    `refs/aiden/snapshots/${snapshotId}`,
-  );
+  assert.equal(lifecycle.snapshot.ref, `refs/aiden/snapshots/${snapshotId}`);
   assert.equal(lifecycle.snapshot.tree, "d".repeat(40));
   assert.deepEqual(lifecycle.provisionedIgnored, [".env"]);
 
@@ -401,36 +450,55 @@ test("dirty removal snapshots before deletion, admits Git objects on the object 
 
   // Restore budgets both captured trees and the private payload on their own
   // volumes before any journal/checkout write. A denial preserves recovery.
-  await assert.rejects(service.restore(owner, "source", snapshotId), WorktreeCapacityUnavailableError);
+  await assert.rejects(
+    service.restore(owner, "source", snapshotId),
+    WorktreeCapacityUnavailableError,
+  );
   assert.deepEqual(restoreAdmissions, [
     [nodePath.join(base, "worktrees"), 300 + manifest.provisionedFiles[0].size],
     [`${repositoryPath}/.git`, WORKTREE_GIT_METADATA_BYTES],
   ]);
-  assert.equal(JSON.parse(await readFile(nodePath.join(snapshotRoot, snapshotId, "manifest.json"), "utf8")).state, "ready");
-  await assert.rejects(readFile(nodePath.join(snapshotRoot, snapshotId, "restore.json")), { code: "ENOENT" });
+  assert.equal(
+    JSON.parse(await readFile(nodePath.join(snapshotRoot, snapshotId, "manifest.json"), "utf8"))
+      .state,
+    "ready",
+  );
+  await assert.rejects(readFile(nodePath.join(snapshotRoot, snapshotId, "restore.json")), {
+    code: "ENOENT",
+  });
 
   // A crash after applying the Git tree only needs private payload capacity.
   // Even though the fake Git volume always refuses admission, this retry reaches
   // ownership validation without querying its capacity or re-estimating trees.
   restoreAdmissions.length = 0;
   estimateCalls.length = 0;
-  await writeFile(nodePath.join(snapshotRoot, snapshotId, "restore.json"), JSON.stringify({
-    version: 1, phase: "snapshot_applied", snapshotId, workspaceId: "restored",
-    worktreePath, worktreeGitDir: managed.managedWorktree!.worktreeGitDir,
-    ownershipToken: managed.managedWorktree!.ownershipToken,
-    worktreeDevice: worktreeIdentity.dev, worktreeInode: worktreeIdentity.ino,
-  }));
-  await assert.rejects(service.restore(owner, "source", snapshotId), /partially restored managed worktree could not be verified/);
-  assert.deepEqual(restoreAdmissions, [[nodePath.dirname(worktreePath), manifest.provisionedFiles[0].size]]);
+  await writeFile(
+    nodePath.join(snapshotRoot, snapshotId, "restore.json"),
+    JSON.stringify({
+      version: 1,
+      phase: "snapshot_applied",
+      snapshotId,
+      workspaceId: "restored",
+      worktreePath,
+      worktreeGitDir: managed.managedWorktree!.worktreeGitDir,
+      ownershipToken: managed.managedWorktree!.ownershipToken,
+      worktreeDevice: worktreeIdentity.dev,
+      worktreeInode: worktreeIdentity.ino,
+    }),
+  );
+  await assert.rejects(
+    service.restore(owner, "source", snapshotId),
+    /partially restored managed worktree could not be verified/,
+  );
+  assert.deepEqual(restoreAdmissions, [
+    [nodePath.dirname(worktreePath), manifest.provisionedFiles[0].size],
+  ]);
   assert.deepEqual(estimateCalls, []);
 
   // An unknown ignored file blocks safe removal before any snapshot work.
   dirty = { head: "b".repeat(40), uncommitted: 0, ignored: 1, ignoredPaths: ["unknown.env"] };
   lifecycleSeen = undefined;
-  await assert.rejects(
-    service.remove(owner, managed.id),
-    /ignored files Aiden did not provision/u,
-  );
+  await assert.rejects(service.remove(owner, managed.id), /ignored files Aiden did not provision/u);
   assert.equal(lifecycleSeen, undefined);
 
   // Force still snapshots when it can, and it must not run the advisory
@@ -475,7 +543,8 @@ test("dirty removal snapshots before deletion, admits Git objects on the object 
 test("snapshot transfers canonicalize aliased identity paths without accepting replacement roots", async (t) => {
   const fs = await import("node:fs/promises");
   const path = await import("node:path");
-  const { transferManagedWorktreeFile, ManagedWorktreeFileIoError } = await import("./managed-worktree-file-io.js");
+  const { transferManagedWorktreeFile, ManagedWorktreeFileIoError } =
+    await import("./managed-worktree-file-io.js");
   const base = await fs.mkdtemp(path.join("/tmp", "aiden-transfer-alias-"));
   t.after(() => fs.rm(base, { recursive: true, force: true }));
   const original = path.join(base, "original");
@@ -488,54 +557,126 @@ test("snapshot transfers canonicalize aliased identity paths without accepting r
   const metadata = await fs.stat(original, { bigint: true });
   const identity = { path: original, device: String(metadata.dev), inode: String(metadata.ino) };
   const copied = await transferManagedWorktreeFile({
-    operation: "copy", sourceRoot: alias, sourceIdentity: identity, sourceRelativePath: ".env",
-    destinationRoot: snapshot, destinationRelativePath: "blob", byteLimit: 1024, mode: 0o600,
+    operation: "copy",
+    sourceRoot: alias,
+    sourceIdentity: identity,
+    sourceRelativePath: ".env",
+    destinationRoot: snapshot,
+    destinationRelativePath: "blob",
+    byteLimit: 1024,
+    mode: 0o600,
   });
   assert.equal(await fs.readFile(path.join(snapshot, "blob"), "utf8"), "SECRET=1\n");
   await transferManagedWorktreeFile({
-    operation: "restore", sourceRoot: snapshot, sourceRelativePath: "blob",
-    destinationRoot: alias, destinationIdentity: identity, destinationRelativePath: "restored.env",
-    byteLimit: copied.size, digest: copied.digest, mode: 0o600,
+    operation: "restore",
+    sourceRoot: snapshot,
+    sourceRelativePath: "blob",
+    destinationRoot: alias,
+    destinationIdentity: identity,
+    destinationRelativePath: "restored.env",
+    byteLimit: copied.size,
+    digest: copied.digest,
+    mode: 0o600,
   });
   assert.equal(await fs.readFile(path.join(original, "restored.env"), "utf8"), "SECRET=1\n");
   // An arbitrary alias to the SAME inode must fail in the wrapper too.
   const ancestor = path.join(base, "ancestor");
   await fs.symlink(base, ancestor);
   for (const unsafePath of [alias, path.join(ancestor, "original")]) {
-    await assert.rejects(transferManagedWorktreeFile({
-      operation: "copy", sourceRoot: unsafePath, sourceIdentity: { ...identity, path: unsafePath }, sourceRelativePath: ".env",
-      destinationRoot: snapshot, destinationRelativePath: "unsafe", byteLimit: 1024, mode: 0o600,
-    }), (error: unknown) => error instanceof ManagedWorktreeFileIoError && error.code === "unsafe_source");
-    await assert.rejects(transferManagedWorktreeFile({
-      operation: "restore", sourceRoot: snapshot, sourceRelativePath: "blob",
-      destinationRoot: unsafePath, destinationIdentity: { ...identity, path: unsafePath }, destinationRelativePath: "unsafe.env",
-      byteLimit: copied.size, digest: copied.digest, mode: 0o600,
-    }), (error: unknown) => error instanceof ManagedWorktreeFileIoError && error.code === "unsafe_destination");
+    await assert.rejects(
+      transferManagedWorktreeFile({
+        operation: "copy",
+        sourceRoot: unsafePath,
+        sourceIdentity: { ...identity, path: unsafePath },
+        sourceRelativePath: ".env",
+        destinationRoot: snapshot,
+        destinationRelativePath: "unsafe",
+        byteLimit: 1024,
+        mode: 0o600,
+      }),
+      (error: unknown) =>
+        error instanceof ManagedWorktreeFileIoError && error.code === "unsafe_source",
+    );
+    await assert.rejects(
+      transferManagedWorktreeFile({
+        operation: "restore",
+        sourceRoot: snapshot,
+        sourceRelativePath: "blob",
+        destinationRoot: unsafePath,
+        destinationIdentity: { ...identity, path: unsafePath },
+        destinationRelativePath: "unsafe.env",
+        byteLimit: copied.size,
+        digest: copied.digest,
+        mode: 0o600,
+      }),
+      (error: unknown) =>
+        error instanceof ManagedWorktreeFileIoError && error.code === "unsafe_destination",
+    );
   }
   await fs.rename(original, path.join(base, "held"));
   await fs.mkdir(original);
   await fs.writeFile(path.join(original, ".env"), "OUTSIDE=1\n");
-  await assert.rejects(transferManagedWorktreeFile({
-    operation: "copy", sourceRoot: alias, sourceIdentity: identity, sourceRelativePath: ".env",
-    destinationRoot: snapshot, destinationRelativePath: "outside", byteLimit: 1024, mode: 0o600,
-  }), (error: unknown) => error instanceof ManagedWorktreeFileIoError && error.code === "unsafe_source");
-  await assert.rejects(transferManagedWorktreeFile({
-    operation: "restore", sourceRoot: snapshot, sourceRelativePath: "blob",
-    destinationRoot: alias, destinationIdentity: identity, destinationRelativePath: "outside.env",
-    byteLimit: copied.size, digest: copied.digest, mode: 0o600,
-  }), (error: unknown) => error instanceof ManagedWorktreeFileIoError && error.code === "unsafe_destination");
+  await assert.rejects(
+    transferManagedWorktreeFile({
+      operation: "copy",
+      sourceRoot: alias,
+      sourceIdentity: identity,
+      sourceRelativePath: ".env",
+      destinationRoot: snapshot,
+      destinationRelativePath: "outside",
+      byteLimit: 1024,
+      mode: 0o600,
+    }),
+    (error: unknown) =>
+      error instanceof ManagedWorktreeFileIoError && error.code === "unsafe_source",
+  );
+  await assert.rejects(
+    transferManagedWorktreeFile({
+      operation: "restore",
+      sourceRoot: snapshot,
+      sourceRelativePath: "blob",
+      destinationRoot: alias,
+      destinationIdentity: identity,
+      destinationRelativePath: "outside.env",
+      byteLimit: copied.size,
+      digest: copied.digest,
+      mode: 0o600,
+    }),
+    (error: unknown) =>
+      error instanceof ManagedWorktreeFileIoError && error.code === "unsafe_destination",
+  );
   assert.deepEqual(await fs.readdir(original), [".env"]);
   assert.deepEqual(await fs.readdir(snapshot), ["blob"]);
   await fs.rm(original, { recursive: true });
-  await assert.rejects(transferManagedWorktreeFile({
-    operation: "copy", sourceRoot: alias, sourceIdentity: identity, sourceRelativePath: ".env",
-    destinationRoot: snapshot, destinationRelativePath: "missing", byteLimit: 1024, mode: 0o600,
-  }), (error: unknown) => error instanceof ManagedWorktreeFileIoError && error.code === "unsafe_source");
-  await assert.rejects(transferManagedWorktreeFile({
-    operation: "restore", sourceRoot: snapshot, sourceRelativePath: "blob",
-    destinationRoot: alias, destinationIdentity: identity, destinationRelativePath: "missing.env",
-    byteLimit: copied.size, digest: copied.digest, mode: 0o600,
-  }), (error: unknown) => error instanceof ManagedWorktreeFileIoError && error.code === "unsafe_destination");
+  await assert.rejects(
+    transferManagedWorktreeFile({
+      operation: "copy",
+      sourceRoot: alias,
+      sourceIdentity: identity,
+      sourceRelativePath: ".env",
+      destinationRoot: snapshot,
+      destinationRelativePath: "missing",
+      byteLimit: 1024,
+      mode: 0o600,
+    }),
+    (error: unknown) =>
+      error instanceof ManagedWorktreeFileIoError && error.code === "unsafe_source",
+  );
+  await assert.rejects(
+    transferManagedWorktreeFile({
+      operation: "restore",
+      sourceRoot: snapshot,
+      sourceRelativePath: "blob",
+      destinationRoot: alias,
+      destinationIdentity: identity,
+      destinationRelativePath: "missing.env",
+      byteLimit: copied.size,
+      digest: copied.digest,
+      mode: 0o600,
+    }),
+    (error: unknown) =>
+      error instanceof ManagedWorktreeFileIoError && error.code === "unsafe_destination",
+  );
 });
 
 test("restore through the real environment settles, serializes same-snapshot restores, and releases source admission", async (t) => {
@@ -544,11 +685,14 @@ test("restore through the real environment settles, serializes same-snapshot res
   const path = await import("node:path");
   const { randomUUID } = await import("node:crypto");
   const { persistManagedWorktreeSnapshot } = await import("./managed-worktree-snapshot.js");
-  const { createWorkspaceEnvironmentApplicationService } = await import("./workspace-environment-application-service.js");
+  const { createWorkspaceEnvironmentApplicationService } =
+    await import("./workspace-environment-application-service.js");
   const { WorkspaceMutationGate } = await import("./workspace-mutation-gate.js");
   const { WorkspaceOperationRegistry } = await import("./workspace-operation-registry.js");
 
-  const base = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "aiden-restore-admission-")));
+  const base = await fs.realpath(
+    await fs.mkdtemp(path.join(os.tmpdir(), "aiden-restore-admission-")),
+  );
   t.after(() => fs.rm(base, { recursive: true, force: true }));
   const repositoryPath = path.join(base, "repository");
   const snapshotRoot = path.join(base, "snapshots");
@@ -586,7 +730,7 @@ test("restore through the real environment settles, serializes same-snapshot res
   // before the restore callback runs.
   const registry = new WorkspaceOperationRegistry();
   const environment = createWorkspaceEnvironmentApplicationService({
-    configStore: { getWorkspace: async (id) => id === source.id ? source : undefined },
+    configStore: { getWorkspace: async (id) => (id === source.id ? source : undefined) },
     workspaceMutationGate: new WorkspaceMutationGate(),
     workspaceOperationRegistry: registry,
     assertManagedWorktreeAdmission: async () => undefined,
@@ -612,10 +756,16 @@ test("restore through the real environment settles, serializes same-snapshot res
       topLevel: await fs.realpath(folderPath),
       commonDir: path.join(repositoryPath, ".git"),
     }),
-    dirtyState: async () => { throw new Error("unexpected dirty state"); },
-    expandIgnoredPaths: async () => { throw new Error("unexpected expansion"); },
+    dirtyState: async () => {
+      throw new Error("unexpected dirty state");
+    },
+    expandIgnoredPaths: async () => {
+      throw new Error("unexpected expansion");
+    },
     snapshotContentBytes: async () => 0,
-    captureWorktreeSnapshot: async () => { throw new Error("unexpected snapshot"); },
+    captureWorktreeSnapshot: async () => {
+      throw new Error("unexpected snapshot");
+    },
     snapshotRefCommit: async () => "c".repeat(40),
     deleteSnapshotRef: async () => true,
     restoreManagedCheckout: async (repository, _root, worktreePath, branch, baseCommit) => {
@@ -640,11 +790,17 @@ test("restore through the real environment settles, serializes same-snapshot res
         current: false,
       };
     },
-    resumeManagedCheckout: async () => { throw new Error("unexpected resume"); },
+    resumeManagedCheckout: async () => {
+      throw new Error("unexpected resume");
+    },
     applyWorktreeSnapshot: async () => undefined,
-    createWorktree: async () => { throw new Error("unexpected create"); },
+    createWorktree: async () => {
+      throw new Error("unexpected create");
+    },
     rollbackWorktree: async () => undefined,
-    deleteManagedWorktree: async () => { throw new Error("unexpected delete"); },
+    deleteManagedWorktree: async () => {
+      throw new Error("unexpected delete");
+    },
     managedWorktreeDeletionPending: async () => false,
     managedWorktreeRegistered: async () => false,
     // A converged retry re-verifies the journaled checkout it adopts.
@@ -681,8 +837,12 @@ test("restore through the real environment settles, serializes same-snapshot res
 
   // Two concurrent restores of one snapshot: the second waits for the first
   // instead of planning its own checkout, then converges on the same result.
-  checkoutGate = new Promise<void>((resolve) => { releaseCheckout = resolve; });
-  const reached = new Promise<void>((resolve) => { checkoutReached = resolve; });
+  checkoutGate = new Promise<void>((resolve) => {
+    releaseCheckout = resolve;
+  });
+  const reached = new Promise<void>((resolve) => {
+    checkoutReached = resolve;
+  });
   const first = service.restore(owner, source.id, snapshotId);
   const second = service.restore(owner, source.id, snapshotId);
   await settledWithin(reached, "the first restore");
@@ -690,11 +850,18 @@ test("restore through the real environment settles, serializes same-snapshot res
   assert.equal(checkouts.length, 1);
   assert.deepEqual(saved, [], "the second restore must not run while the first holds the snapshot");
   releaseCheckout();
-  const [restored, converged] = await settledWithin(Promise.all([first, second]), "concurrent restores");
+  const [restored, converged] = await settledWithin(
+    Promise.all([first, second]),
+    "concurrent restores",
+  );
   assert.equal(restored.id, "workspace-restored");
   assert.equal(restored.folderPath, checkouts[0]);
   assert.equal(restored.managedWorktree?.branch, "codex/restored");
-  assert.equal(restored.approvalMode, "ask", "a restored worktree keeps its workspace's approval mode");
+  assert.equal(
+    restored.approvalMode,
+    "ask",
+    "a restored worktree keeps its workspace's approval mode",
+  );
   assert.deepEqual(restored.macGrants, { shell: true });
   assert.equal(converged.id, restored.id);
   assert.equal(converged.folderPath, restored.folderPath);
@@ -719,11 +886,15 @@ function creationOnlyDeps(
   overrides: Partial<WorkspaceWorktreeApplicationDependencies>,
 ): WorkspaceWorktreeApplicationDependencies {
   const signal = new AbortController().signal;
-  const unexpected = (name: string) => async (): Promise<never> => { throw new Error(`unexpected ${name}`); };
+  const unexpected = (name: string) => async (): Promise<never> => {
+    throw new Error(`unexpected ${name}`);
+  };
   return {
     environment: {
-      resolve: async (id) => (id === source.id ? { folderPath: source.folderPath!, workspace: source } : undefined),
-      run: async (_owner, _id, operation) => operation({ folderPath: source.folderPath!, workspace: source }, signal),
+      resolve: async (id) =>
+        id === source.id ? { folderPath: source.folderPath!, workspace: source } : undefined,
+      run: async (_owner, _id, operation) =>
+        operation({ folderPath: source.folderPath!, workspace: source }, signal),
       runRecord: unexpected("runRecord"),
     },
     ensureWorktreeRoot: async () => "/aiden/worktrees",
@@ -733,7 +904,10 @@ function creationOnlyDeps(
     checkWorktreeAllocation: async () => undefined,
     checkSnapshotCapacity: async () => undefined,
     provisionIncludedFiles: async () => [],
-    repositoryPaths: async (folderPath) => ({ topLevel: folderPath, commonDir: `${folderPath}/.git` }),
+    repositoryPaths: async (folderPath) => ({
+      topLevel: folderPath,
+      commonDir: `${folderPath}/.git`,
+    }),
     dirtyState: unexpected("dirtyState"),
     expandIgnoredPaths: unexpected("expandIgnoredPaths"),
     snapshotContentBytes: async () => 0,
@@ -758,15 +932,22 @@ function creationOnlyDeps(
       detached: false,
       current: false,
     }),
-    rollbackWorktree: async () => { events.push("rollback"); },
+    rollbackWorktree: async () => {
+      events.push("rollback");
+    },
     deleteManagedWorktree: unexpected("delete"),
     managedWorktreeDeletionPending: async () => false,
     managedWorktreeRegistered: async () => false,
     managedWorktreeUsable: async () => false,
     finalizeManagedWorktreeDeletion: async () => undefined,
     workspacePathExists: async () => false,
-    saveWorkspace: async (workspace) => { events.push("save"); return workspace; },
-    removeWorkspace: async () => { events.push("remove"); },
+    saveWorkspace: async (workspace) => {
+      events.push("save");
+      return workspace;
+    },
+    removeWorkspace: async () => {
+      events.push("remove");
+    },
     beginWorkspaceMutation: () => () => undefined,
     workspaceIsChanging: () => false,
     cancelWorkspaceOperations: async () => undefined,
@@ -776,8 +957,12 @@ function creationOnlyDeps(
     resumeWorkspaceSchedules: async () => undefined,
     createWorkspaceId: () => "workspace-managed",
     now: () => 3,
-    notifyChanged: () => { events.push("notify"); },
-    logError: (area) => { events.push(`log:${area}`); },
+    notifyChanged: () => {
+      events.push("notify");
+    },
+    logError: (area) => {
+      events.push(`log:${area}`);
+    },
     ...overrides,
   };
 }
@@ -792,9 +977,14 @@ const hookSource: Workspace = {
 };
 
 test("a new worktree keeps its workspace's approval settings, and an uncustomized one follows the global mode", async () => {
-  const askSource: Workspace = { ...hookSource, approvalMode: "ask", macGrants: { shell: true, "computer-use": true } };
-  const created = await createWorkspaceWorktreeApplicationService(creationOnlyDeps(askSource, [], {}))
-    .create(owner, askSource.id, "feature/ask", "Ask Workspace");
+  const askSource: Workspace = {
+    ...hookSource,
+    approvalMode: "ask",
+    macGrants: { shell: true, "computer-use": true },
+  };
+  const created = await createWorkspaceWorktreeApplicationService(
+    creationOnlyDeps(askSource, [], {}),
+  ).create(owner, askSource.id, "feature/ask", "Ask Workspace");
   assert.equal(created.approvalMode, "ask");
   assert.deepEqual(created.macGrants, { shell: true, "computer-use": true });
   // On a Mac set to Never ask, the worktree of an Ask workspace still asks.
@@ -803,8 +993,9 @@ test("a new worktree keeps its workspace's approval settings, and an uncustomize
   assert.equal(policy.customized, true);
   assert.deepEqual([...policy.macGrants].sort(), ["computer-use", "shell"]);
 
-  const plain = await createWorkspaceWorktreeApplicationService(creationOnlyDeps(hookSource, [], {}))
-    .create(owner, hookSource.id, "feature/plain", "Plain Workspace");
+  const plain = await createWorkspaceWorktreeApplicationService(
+    creationOnlyDeps(hookSource, [], {}),
+  ).create(owner, hookSource.id, "feature/plain", "Plain Workspace");
   assert.equal("approvalMode" in plain, false);
   assert.equal("macGrants" in plain, false);
   assert.equal(workspaceApprovalPolicy(plain, "never").mode, "never");
@@ -820,12 +1011,19 @@ test("a source workspace whose approval mode changes mid-create rolls the worktr
     environment: {
       ...deps.environment,
       // The re-read just before saving sees the person switch to Never ask.
-      resolve: async (id) => id === askSource.id
-        ? { folderPath: askSource.folderPath!, workspace: { ...askSource, approvalMode: "never" } }
-        : undefined,
+      resolve: async (id) =>
+        id === askSource.id
+          ? {
+              folderPath: askSource.folderPath!,
+              workspace: { ...askSource, approvalMode: "never" },
+            }
+          : undefined,
     },
   });
-  await assert.rejects(service.create(owner, askSource.id, "feature/raced"), /source workspace changed/u);
+  await assert.rejects(
+    service.create(owner, askSource.id, "feature/raced"),
+    /source workspace changed/u,
+  );
   assert.equal(events.includes("save"), false, "the stale approval settings are never saved");
 });
 
@@ -841,25 +1039,39 @@ test("a new managed worktree runs the source workspace's WorktreeSetup hooks ins
     },
   };
   const notices: string[] = [];
-  const service = createWorkspaceWorktreeApplicationService(creationOnlyDeps(hookSource, events, {
-    onWorktreeCreated: async (event) => {
-      notices.push(...await runWorktreeSetupHooks({
-        sourceFolderPath: event.sourceFolderPath,
-        sourceRoot: event.sourceRoot,
-        worktreePath: event.worktreePath,
-        workspacePath: event.workspacePath,
-        workspaceId: event.workspace.id,
-        branch: event.branch,
-      }, () => dispatcher));
-    },
-  }));
+  const service = createWorkspaceWorktreeApplicationService(
+    creationOnlyDeps(hookSource, events, {
+      onWorktreeCreated: async (event) => {
+        notices.push(
+          ...(await runWorktreeSetupHooks(
+            {
+              sourceFolderPath: event.sourceFolderPath,
+              sourceRoot: event.sourceRoot,
+              worktreePath: event.worktreePath,
+              workspacePath: event.workspacePath,
+              workspaceId: event.workspace.id,
+              branch: event.branch,
+            },
+            () => dispatcher,
+          )),
+        );
+      },
+    }),
+  );
 
   const created = await service.create(owner, hookSource.id, "feature/mobile", "Mobile Workspace");
   assert.equal(created.id, "workspace-managed");
-  assert.deepEqual(events, ["save", "notify", "hook"], "the hook runs once the worktree is saved, before create returns");
+  assert.deepEqual(
+    events,
+    ["save", "notify", "hook"],
+    "the hook runs once the worktree is saved, before create returns",
+  );
   const [run] = runs;
   assert.equal(run!.cwd, "/aiden/worktrees/mobile");
-  assert.deepEqual(run!.scopes, [{ kind: "global" }, { kind: "workspace", workspaceRoot: "/canonical/source" }]);
+  assert.deepEqual(run!.scopes, [
+    { kind: "global" },
+    { kind: "workspace", workspaceRoot: "/canonical/source" },
+  ]);
   assert.equal(run!.payload.worktree_path, "/aiden/worktrees/mobile");
   assert.equal(run!.payload.branch, "feature/mobile");
   assert.equal(run!.payload.source_root, "/canonical/source");
@@ -869,9 +1081,13 @@ test("a new managed worktree runs the source workspace's WorktreeSetup hooks ins
 
 test("a WorktreeSetup hook that fails never rolls back the new worktree", async () => {
   const events: string[] = [];
-  const service = createWorkspaceWorktreeApplicationService(creationOnlyDeps(hookSource, events, {
-    onWorktreeCreated: async () => { throw new Error("npm install failed"); },
-  }));
+  const service = createWorkspaceWorktreeApplicationService(
+    creationOnlyDeps(hookSource, events, {
+      onWorktreeCreated: async () => {
+        throw new Error("npm install failed");
+      },
+    }),
+  );
   const created = await service.create(owner, hookSource.id, "feature/mobile", "Mobile Workspace");
   assert.equal(created.id, "workspace-managed");
   assert.deepEqual(events, ["save", "notify", "log:hooks"]);
@@ -903,13 +1119,21 @@ test("restoring a deleted worktree on a nearly full disk brings the checkout bac
   let saved: Workspace | undefined;
   const service = createWorkspaceWorktreeApplicationService({
     environment: {
-      runRecord: async (_owner: unknown, _id: string, operation: (record: Workspace, signal: AbortSignal) => Promise<Workspace>) =>
-        operation(workspace, new AbortController().signal),
+      runRecord: async (
+        _owner: unknown,
+        _id: string,
+        operation: (record: Workspace, signal: AbortSignal) => Promise<Workspace>,
+      ) => operation(workspace, new AbortController().signal),
     },
     beginWorkspaceMutation: () => () => undefined,
     workspacePathExists: async () => false,
     ensureWorktreeRoot: async () => "/aiden/worktrees",
-    restoreDeletedCheckout: async (_managed: unknown, _root: string, _subpath: string, commit: (restored: unknown) => Promise<void>) => {
+    restoreDeletedCheckout: async (
+      _managed: unknown,
+      _root: string,
+      _subpath: string,
+      commit: (restored: unknown) => Promise<void>,
+    ) => {
       const restored = {
         path: worktreePath,
         workspacePath: worktreePath,
@@ -940,16 +1164,27 @@ test("restoring a deleted worktree on a nearly full disk brings the checkout bac
       provisioned += 1;
       return [];
     },
-    repositoryPaths: async (folderPath: string) => ({ topLevel: folderPath, commonDir: `${folderPath}/.git` }),
-    logError: (_scope: string, message: string) => { logged.push(message); },
+    repositoryPaths: async (folderPath: string) => ({
+      topLevel: folderPath,
+      commonDir: `${folderPath}/.git`,
+    }),
+    logError: (_scope: string, message: string) => {
+      logged.push(message);
+    },
     now: () => 5,
     notifyChanged: () => undefined,
   } as unknown as Parameters<typeof createWorkspaceWorktreeApplicationService>[0]);
 
   const restored = await service.restoreDeleted(owner, workspace.id);
-  assert.equal(restored.managedWorktree?.ownershipToken, "c".repeat(64), "the checkout is back under its new identity");
+  assert.equal(
+    restored.managedWorktree?.ownershipToken,
+    "c".repeat(64),
+    "the checkout is back under its new identity",
+  );
   assert.equal(saved?.managedWorktree?.ownershipToken, "c".repeat(64));
-  assert.deepEqual(admissions, [[worktreePath, process.platform === "darwin" ? MAX_PROVISIONED_BYTES : 0]]);
+  assert.deepEqual(admissions, [
+    [worktreePath, process.platform === "darwin" ? MAX_PROVISIONED_BYTES : 0],
+  ]);
   assert.equal(provisioned, 0, "nothing is copied without room for it");
   assert.equal(logged.length, 1, "the skipped copies are logged");
 });

@@ -23,14 +23,17 @@ test("remote approval reconciliation preserves local prompts and replaces stale 
   const staleRemote = { ...local, approvalId: "approval-old", source: "remote" as const };
   assert.deepEqual(
     mergeRemoteApproval([local, staleRemote], remote, Date.parse("2026-08-22T19:00:00.000Z")),
-    [local, {
-      approvalId: "approval-remote",
-      toolCallId: "tool-1",
-      toolName: "run_command",
-      summary: "Run this command?",
-      canAllow: true,
-      source: "remote",
-    }],
+    [
+      local,
+      {
+        approvalId: "approval-remote",
+        toolCallId: "tool-1",
+        toolName: "run_command",
+        summary: "Run this command?",
+        canAllow: true,
+        source: "remote",
+      },
+    ],
   );
   assert.deepEqual(
     mergeRemoteApproval([local, staleRemote], remote, Date.parse(remote.expiresAt)),
@@ -44,7 +47,11 @@ test("remote approval reconciliation keeps offered scopes only while the approva
   const scopes = ["once", "chat", "always"] as const;
   const [allowable] = mergeRemoteApproval([], { ...remote, scopes: [...scopes] }, now);
   assert.deepEqual(allowable?.scopes, [...scopes]);
-  const [denyOnly] = mergeRemoteApproval([], { ...remote, canAllow: false, scopes: [...scopes] }, now);
+  const [denyOnly] = mergeRemoteApproval(
+    [],
+    { ...remote, canAllow: false, scopes: [...scopes] },
+    now,
+  );
   assert.equal(denyOnly?.scopes, undefined);
   const [legacy] = mergeRemoteApproval([], remote, now);
   assert.equal(legacy?.scopes, undefined);
@@ -74,16 +81,22 @@ test("remote approval reconciliation preserves validated privileged details and 
     detachedProcessesMaySurvive: true as const,
   };
   assert.deepEqual(
-    mergeRemoteApproval([], { ...remote, canAllow: false, details }, Date.parse("2026-08-22T19:00:00.000Z")),
-    [{
-      approvalId: remote.approvalId,
-      toolCallId: remote.toolCallId,
-      toolName: remote.toolName,
-      summary: remote.summary,
-      canAllow: false,
-      details,
-      source: "remote",
-    }],
+    mergeRemoteApproval(
+      [],
+      { ...remote, canAllow: false, details },
+      Date.parse("2026-08-22T19:00:00.000Z"),
+    ),
+    [
+      {
+        approvalId: remote.approvalId,
+        toolCallId: remote.toolCallId,
+        toolName: remote.toolName,
+        summary: remote.summary,
+        canAllow: false,
+        details,
+        source: "remote",
+      },
+    ],
   );
 });
 

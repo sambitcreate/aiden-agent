@@ -32,7 +32,11 @@ export function parseLocalRunCursor(value: unknown): LocalRunCursor | undefined 
   if (value === undefined || value === null) return undefined;
   if (typeof value !== "object" || Array.isArray(value)) throw new Error("Invalid run cursor.");
   const { runId, sequence } = value as Record<string, unknown>;
-  if (!isSafeSubagentIdentifier(runId) || !Number.isSafeInteger(sequence) || (sequence as number) < 0) {
+  if (
+    !isSafeSubagentIdentifier(runId) ||
+    !Number.isSafeInteger(sequence) ||
+    (sequence as number) < 0
+  ) {
     throw new Error("Invalid run cursor.");
   }
   return { runId, sequence: sequence as number };

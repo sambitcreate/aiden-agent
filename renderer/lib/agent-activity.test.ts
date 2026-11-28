@@ -27,14 +27,11 @@ test("maps each active generation phase to a purposeful activity mark", () => {
     label: "Thinking",
     mark: "tri-step",
   });
-  assert.deepEqual(
-    resolveAgentActivity({ ...idle, streamingText: "Hello", textStreaming: true }),
-    {
-      phase: "responding",
-      label: "Responding…",
-      mark: "compose",
-    },
-  );
+  assert.deepEqual(resolveAgentActivity({ ...idle, streamingText: "Hello", textStreaming: true }), {
+    phase: "responding",
+    label: "Responding…",
+    mark: "compose",
+  });
 });
 
 test("stale prose does not pin the row while the model works elsewhere", () => {
@@ -177,12 +174,22 @@ test("transcript-owned reasoning and visualization replace the generic activity 
     toolActivity: { state: "running", label: "Read file", toolName: "read_file" },
   });
   assert.equal(reading?.phase, "searching");
-  assert.equal(resolveVisibleAgentActivity(reading, {
-    reasoningVisible: false, visualizingVisible: false, toolVisible: true,
-  }), null);
-  assert.equal(resolveVisibleAgentActivity(reading, {
-    reasoningVisible: false, visualizingVisible: false, toolVisible: false,
-  }), reading);
+  assert.equal(
+    resolveVisibleAgentActivity(reading, {
+      reasoningVisible: false,
+      visualizingVisible: false,
+      toolVisible: true,
+    }),
+    null,
+  );
+  assert.equal(
+    resolveVisibleAgentActivity(reading, {
+      reasoningVisible: false,
+      visualizingVisible: false,
+      toolVisible: false,
+    }),
+    reading,
+  );
 });
 
 test("stopping and approval take precedence over other live signals", () => {
@@ -225,9 +232,14 @@ test("terminal tool states do not keep the activity animation running", () => {
 
 test("phase smoothing keeps first feedback and approval immediate", () => {
   const thinking = resolveAgentActivity({ ...idle, streamingText: "" })!;
-  const working = resolveAgentActivity({ ...idle, toolActivity: {
-    state: "running", label: "Reading", toolName: "read_file",
-  } })!;
+  const working = resolveAgentActivity({
+    ...idle,
+    toolActivity: {
+      state: "running",
+      label: "Reading",
+      toolName: "read_file",
+    },
+  })!;
   const waiting = resolveAgentActivity({ ...idle, pendingApproval: true })!;
   assert.equal(activityPresentationDelay(null, thinking), 0);
   assert.equal(activityPresentationDelay(thinking, working), 120);

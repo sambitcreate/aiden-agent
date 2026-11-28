@@ -6,14 +6,18 @@ import type { FalAspectRatioSupport, ImageAspectRatio } from "./aspect-ratio.js"
 export const IMAGE_GENERATION_PROVIDER_IDS = ["openrouter", "replicate", "fal"] as const;
 export type ImageGenerationProviderId = (typeof IMAGE_GENERATION_PROVIDER_IDS)[number];
 
-export const IMAGE_GENERATION_PROVIDER_NAMES: Readonly<Record<ImageGenerationProviderId, string>> = {
-  openrouter: "OpenRouter",
-  replicate: "Replicate",
-  fal: "fal",
-};
+export const IMAGE_GENERATION_PROVIDER_NAMES: Readonly<Record<ImageGenerationProviderId, string>> =
+  {
+    openrouter: "OpenRouter",
+    replicate: "Replicate",
+    fal: "fal",
+  };
 
 export function isImageGenerationProviderId(value: unknown): value is ImageGenerationProviderId {
-  return typeof value === "string" && (IMAGE_GENERATION_PROVIDER_IDS as readonly string[]).includes(value);
+  return (
+    typeof value === "string" &&
+    (IMAGE_GENERATION_PROVIDER_IDS as readonly string[]).includes(value)
+  );
 }
 
 /** Replicate input fields that carry reference images, with how many each holds. */

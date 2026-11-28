@@ -38,7 +38,11 @@ function credentialStore(initial: Record<string, string>) {
 
 test("removes the retired caches and keys and keeps everything else", async () => {
   await withDirectory(async (directory) => {
-    for (const name of [...RETIRED_DESKTOP_MODEL_SCORING.files, "settings.json", "pi-provider-credentials.json"]) {
+    for (const name of [
+      ...RETIRED_DESKTOP_MODEL_SCORING.files,
+      "settings.json",
+      "pi-provider-credentials.json",
+    ]) {
       await writeFile(path.join(directory, name), "{}\n");
     }
     const store = credentialStore({
@@ -55,7 +59,10 @@ test("removes the retired caches and keys and keeps everything else", async () =
     });
 
     assert.deepEqual(result.failed, []);
-    assert.deepEqual((await readdir(directory)).sort(), ["pi-provider-credentials.json", "settings.json"]);
+    assert.deepEqual((await readdir(directory)).sort(), [
+      "pi-provider-credentials.json",
+      "settings.json",
+    ]);
     assert.deepEqual([...store.entries.keys()].sort(), ["aiden-internal:image-gen:fal", "openai"]);
   });
 });
@@ -85,14 +92,17 @@ test("a failed deletion is reported without throwing and the other deletions sti
       directory,
       ...RETIRED_DESKTOP_MODEL_SCORING,
       credentials: {
-        has: async (id) => id === "aiden-internal:model-pad-openrouter-benchmarks-v1" || store.api.has(id),
+        has: async (id) =>
+          id === "aiden-internal:model-pad-openrouter-benchmarks-v1" || store.api.has(id),
         delete: async (id) => {
-          if (id === "aiden-internal:model-pad-openrouter-benchmarks-v1") throw new Error("keychain locked");
+          if (id === "aiden-internal:model-pad-openrouter-benchmarks-v1")
+            throw new Error("keychain locked");
           await store.api.delete(id);
         },
       },
       removeFile: async (filePath) => {
-        if (path.basename(filePath) === "model-pace.json") throw Object.assign(new Error("busy"), { code: "EBUSY" });
+        if (path.basename(filePath) === "model-pace.json")
+          throw Object.assign(new Error("busy"), { code: "EBUSY" });
         await rm(filePath, { force: true });
       },
       onFailure: (item) => {
@@ -101,7 +111,10 @@ test("a failed deletion is reported without throwing and the other deletions sti
       },
     });
 
-    assert.deepEqual(result.failed.sort(), ["aiden-internal:model-pad-openrouter-benchmarks-v1", "model-pace.json"]);
+    assert.deepEqual(result.failed.sort(), [
+      "aiden-internal:model-pad-openrouter-benchmarks-v1",
+      "model-pace.json",
+    ]);
     assert.deepEqual(reported.sort(), result.failed);
     assert.deepEqual(await readdir(directory), ["model-pace.json"]);
     assert.equal(store.entries.has("artificial-analysis"), false);
@@ -115,7 +128,11 @@ test("a second run after a full cleanup removes nothing and fails nothing", asyn
     }
     const store = credentialStore({ aa: "aa-key", openrouter: "or-key", telegram: "bot-token" });
     const run = () =>
-      removeRetiredModelScoringData({ directory, ...RETIRED_SERVER_MODEL_SCORING, credentials: store.api });
+      removeRetiredModelScoringData({
+        directory,
+        ...RETIRED_SERVER_MODEL_SCORING,
+        credentials: store.api,
+      });
 
     assert.deepEqual((await run()).failed, []);
     const deletesAfterFirstRun = store.deletes();

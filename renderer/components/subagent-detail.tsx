@@ -261,7 +261,9 @@ export const SubagentDetail = React.forwardRef<HTMLHeadingElement, SubagentDetai
                 <Text as="p" variant="small" color="secondary" className="mt-0.5">
                   {role ? `${role} · ` : ""}
                   {presentation?.label ?? state} ·{" "}
-                  <span className="tabular-nums">{formatSubagentElapsed(run.startedAt, endedAt)}</span>
+                  <span className="tabular-nums">
+                    {formatSubagentElapsed(run.startedAt, endedAt)}
+                  </span>
                 </Text>
                 <Text
                   as="p"

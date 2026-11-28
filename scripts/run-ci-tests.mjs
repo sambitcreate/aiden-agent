@@ -7,16 +7,14 @@ import { createRequire } from "node:module";
 import path from "node:path";
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
-import {
-  PROJECT_ROOT,
-  readRegistry,
-  validateRegistry,
-} from "./ci-test-registry.mjs";
+import { PROJECT_ROOT, readRegistry, validateRegistry } from "./ci-test-registry.mjs";
 import { readTestSelection } from "./ci-e2e-shards.mjs";
 
 const require = createRequire(import.meta.url);
 const tsxCli = require.resolve("tsx/cli");
-const failureDigestReporter = fileURLToPath(new URL("./ci-failure-digest-reporter.mjs", import.meta.url));
+const failureDigestReporter = fileURLToPath(
+  new URL("./ci-failure-digest-reporter.mjs", import.meta.url),
+);
 const nodeExecutable = process.execPath;
 const LANE_ALIASES = new Map([
   ["core", "core-git"],
@@ -140,7 +138,11 @@ function parallelTestFlags(laneCount) {
   // TAP reporter. They also share one machine: split Node's default per-process
   // file concurrency between them so wall-clock budget tests are not starved.
   const workers = Math.max(1, Math.floor((os.availableParallelism() - 1) / Math.max(1, laneCount)));
-  return ["--test-reporter=spec", "--test-reporter-destination=stdout", `--test-concurrency=${workers}`];
+  return [
+    "--test-reporter=spec",
+    "--test-reporter-destination=stdout",
+    `--test-concurrency=${workers}`,
+  ];
 }
 
 function reporterFlags(options, laneCount, digest) {
@@ -148,27 +150,36 @@ function reporterFlags(options, laneCount, digest) {
   // (spec on a terminal, TAP otherwise) unless the lanes run side by side.
   const output = options.parallel
     ? parallelTestFlags(laneCount)
-    : [`--test-reporter=${process.stdout.isTTY ? "spec" : "tap"}`, "--test-reporter-destination=stdout"];
-  return [...output, `--test-reporter=${failureDigestReporter}`, `--test-reporter-destination=${digest}`];
+    : [
+        `--test-reporter=${process.stdout.isTTY ? "spec" : "tap"}`,
+        "--test-reporter-destination=stdout",
+      ];
+  return [
+    ...output,
+    `--test-reporter=${failureDigestReporter}`,
+    `--test-reporter-destination=${digest}`,
+  ];
 }
 
 function unitCommands(lane, options, laneCount) {
   // Some .mjs tests import TypeScript with .js specifiers. Preserve the tsx
   // resolver used by the original npm test graph for the whole ordinary lane.
   const digest = path.join(os.tmpdir(), `aiden-ci-failures-${lane.name}-${process.pid}.txt`);
-  return [{
-    id: `${lane.name}:tests`,
-    lane: lane.name,
-    files: lane.files,
-    digest,
-    command: [
-      nodeExecutable,
-      tsxCli,
-      ...reporterFlags(options, laneCount, digest),
-      "--test",
-      ...lane.files,
-    ],
-  }];
+  return [
+    {
+      id: `${lane.name}:tests`,
+      lane: lane.name,
+      files: lane.files,
+      digest,
+      command: [
+        nodeExecutable,
+        tsxCli,
+        ...reporterFlags(options, laneCount, digest),
+        "--test",
+        ...lane.files,
+      ],
+    },
+  ];
 }
 
 export function applyUnitSelection(files, selection) {
@@ -180,11 +191,12 @@ export function applyUnitSelection(files, selection) {
 export function buildPlan(registry, options) {
   const lanesByName = new Map((registry.lanes ?? []).map((lane) => [lane.name, lane]));
   const preservedById = new Map((registry.preserved ?? []).map((entry) => [entry.id, entry]));
-  const laneNames = options.lanes.length > 0
-    ? [...new Set(options.lanes.map((name) => LANE_ALIASES.get(name) ?? name))]
-    : options.allPreserved || options.preserved.length > 0
-      ? []
-      : (registry.lanes ?? []).map((lane) => lane.name);
+  const laneNames =
+    options.lanes.length > 0
+      ? [...new Set(options.lanes.map((name) => LANE_ALIASES.get(name) ?? name))]
+      : options.allPreserved || options.preserved.length > 0
+        ? []
+        : (registry.lanes ?? []).map((lane) => lane.name);
   for (const name of laneNames) {
     if (!lanesByName.has(name)) throw new Error(`Unknown CI unit lane: ${name}`);
   }
@@ -195,21 +207,27 @@ export function buildPlan(registry, options) {
     return { ...lane, files: applyUnitSelection(lane.files ?? [], selection) };
   });
   const lanePreservedIds = selectedLanes.flatMap((lane) => lane.preserved ?? []);
-  const preservedIds = options.allPreserved || options.defaultAll
-    ? [...preservedById.keys()]
-    : [...new Set([...lanePreservedIds, ...options.preserved])];
+  const preservedIds =
+    options.allPreserved || options.defaultAll
+      ? [...preservedById.keys()]
+      : [...new Set([...lanePreservedIds, ...options.preserved])];
   for (const id of preservedIds) {
     if (!preservedById.has(id)) throw new Error(`Unknown preserved CI command: ${id}`);
   }
 
   const selectedPreserved = preservedIds.map((id) => preservedById.get(id));
   const prerequisiteIds = new Set();
-  for (const lane of selectedLanes) for (const id of lane.prerequisites ?? []) prerequisiteIds.add(id);
-  for (const entry of selectedPreserved) for (const id of entry.requires ?? []) prerequisiteIds.add(id);
-  const prerequisites = (registry.prerequisites ?? []).filter((entry) => prerequisiteIds.has(entry.id));
+  for (const lane of selectedLanes)
+    for (const id of lane.prerequisites ?? []) prerequisiteIds.add(id);
+  for (const entry of selectedPreserved)
+    for (const id of entry.requires ?? []) prerequisiteIds.add(id);
+  const prerequisites = (registry.prerequisites ?? []).filter((entry) =>
+    prerequisiteIds.has(entry.id),
+  );
   const declaredPrerequisites = new Set((registry.prerequisites ?? []).map((entry) => entry.id));
   for (const id of prerequisiteIds) {
-    if (!declaredPrerequisites.has(id)) throw new Error(`CI registry references missing prerequisite: ${id}`);
+    if (!declaredPrerequisites.has(id))
+      throw new Error(`CI registry references missing prerequisite: ${id}`);
   }
 
   return {
@@ -246,28 +264,43 @@ function planSummary(plan) {
 function printPlan(plan, options, validation) {
   const summary = planSummary(plan);
   if (options.json) {
-    console.log(JSON.stringify({
-      sourceFiles: validation.sourceFiles.length,
-      unitFiles: validation.unitFiles.length,
-      preservedFiles: validation.preservedFiles.length,
-      ...summary,
-    }, null, 2));
+    console.log(
+      JSON.stringify(
+        {
+          sourceFiles: validation.sourceFiles.length,
+          unitFiles: validation.unitFiles.length,
+          preservedFiles: validation.preservedFiles.length,
+          ...summary,
+        },
+        null,
+        2,
+      ),
+    );
     return;
   }
-  console.log(`CI registry: ${validation.sourceFiles.length} source files, ${validation.unitFiles.length} unit files, ${validation.preservedFiles.length} preserved files`);
+  console.log(
+    `CI registry: ${validation.sourceFiles.length} source files, ${validation.unitFiles.length} unit files, ${validation.preservedFiles.length} preserved files`,
+  );
   for (const prerequisite of summary.prerequisites) {
-    console.log(`[prerequisite:${prerequisite.id}] ${commandText(resolveCommand(prerequisite.command))}`);
+    console.log(
+      `[prerequisite:${prerequisite.id}] ${commandText(resolveCommand(prerequisite.command))}`,
+    );
   }
   for (const lane of summary.lanes) {
-    console.log(`[lane:${lane.name}] ${lane.files} files (${lane.ts} ts/tsx, ${lane.node} node tests)`);
-    if (lane.files === 0) console.log(`[lane:${lane.name}] no files selected; skipping node --test`);
+    console.log(
+      `[lane:${lane.name}] ${lane.files} files (${lane.ts} ts/tsx, ${lane.node} node tests)`,
+    );
+    if (lane.files === 0)
+      console.log(`[lane:${lane.name}] no files selected; skipping node --test`);
     if (options.list) {
       const selected = plan.lanes.find((candidate) => candidate.name === lane.name);
       for (const file of selected.files) console.log(`  ${file}`);
     }
   }
   for (const entry of summary.preserved) {
-    console.log(`[preserved:${entry.id}] ${entry.kind ?? "command"}: ${commandText(resolveCommand(entry.command))}`);
+    console.log(
+      `[preserved:${entry.id}] ${entry.kind ?? "command"}: ${commandText(resolveCommand(entry.command))}`,
+    );
   }
   for (const command of plan.unitCommands) {
     console.log(`[command:${command.id}] ${commandText(command.command)}`);
@@ -290,7 +323,10 @@ function runCommand(command, label, { prefix } = {}) {
     });
     // Concurrent lanes share one terminal, so each output line names its lane.
     const drained = prefix
-      ? Promise.all([prefixLines(child.stdout, prefix, process.stdout), prefixLines(child.stderr, prefix, process.stderr)])
+      ? Promise.all([
+          prefixLines(child.stdout, prefix, process.stdout),
+          prefixLines(child.stderr, prefix, process.stderr),
+        ])
       : Promise.resolve();
     child.once("error", reject);
     child.once("exit", (code, signal) => {
@@ -308,7 +344,14 @@ async function timedRun(command, options, timings, runOptions) {
   if (options.dryRun) return;
   if (command.digest) rmSync(command.digest, { force: true });
   const started = Date.now();
-  const record = (status) => timings.push({ id: command.id, lane: command.lane, files: command.files.length, seconds: (Date.now() - started) / 1000, status });
+  const record = (status) =>
+    timings.push({
+      id: command.id,
+      lane: command.lane,
+      files: command.files.length,
+      seconds: (Date.now() - started) / 1000,
+      status,
+    });
   try {
     await runCommand(command.command, command.id, runOptions);
     record("passed");
@@ -342,10 +385,14 @@ export async function executePlan(plan, options) {
     if (options.parallel) {
       // Lanes share no build step, so they can overlap. Preserved commands
       // (browsers, coverage thresholds, Rust, the CLI package) stay serial.
-      const results = await Promise.allSettled(plan.unitCommands.map((command) =>
-        timedRun(command, options, timings, { prefix: `[${command.lane}]` })));
+      const results = await Promise.allSettled(
+        plan.unitCommands.map((command) =>
+          timedRun(command, options, timings, { prefix: `[${command.lane}]` }),
+        ),
+      );
       const failures = results.filter((result) => result.status === "rejected");
-      if (failures.length > 0) throw new Error(failures.map((failure) => failure.reason.message).join("; "));
+      if (failures.length > 0)
+        throw new Error(failures.map((failure) => failure.reason.message).join("; "));
     } else {
       for (const command of plan.unitCommands) await timedRun(command, options, timings);
     }
@@ -371,7 +418,10 @@ function printFailureDigests(commands) {
     if (!digest) continue;
     console.log(`\nFailed tests in ${command.id}:\n\n${digest}`);
     if (process.env.GITHUB_STEP_SUMMARY) {
-      appendFileSync(process.env.GITHUB_STEP_SUMMARY, `## Failed tests in ${command.id}\n\n\`\`\`\n${digest}\n\`\`\`\n\n`);
+      appendFileSync(
+        process.env.GITHUB_STEP_SUMMARY,
+        `## Failed tests in ${command.id}\n\n\`\`\`\n${digest}\n\`\`\`\n\n`,
+      );
     }
   }
 }
@@ -382,11 +432,23 @@ function printTimingSummary(timings) {
     return;
   }
   if (process.env.GITHUB_STEP_SUMMARY) {
-    appendFileSync(process.env.GITHUB_STEP_SUMMARY, "## Test lane execution\n\n" + timings.map((timing) => `- ${timing.id}: ${timing.status}, ${timing.files} files, ${timing.seconds.toFixed(1)}s`).join("\n") + "\n");
+    appendFileSync(
+      process.env.GITHUB_STEP_SUMMARY,
+      "## Test lane execution\n\n" +
+        timings
+          .map(
+            (timing) =>
+              `- ${timing.id}: ${timing.status}, ${timing.files} files, ${timing.seconds.toFixed(1)}s`,
+          )
+          .join("\n") +
+        "\n",
+    );
   }
   console.log("\nCI timing summary:");
   for (const timing of timings) {
-    console.log(`  ${timing.id}: ${timing.status}, ${timing.files} files, ${timing.seconds.toFixed(1)}s`);
+    console.log(
+      `  ${timing.id}: ${timing.status}, ${timing.files} files, ${timing.seconds.toFixed(1)}s`,
+    );
   }
 }
 

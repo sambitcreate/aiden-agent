@@ -74,7 +74,9 @@ export function createDuoPanelFeeds(host: DuoPanelHost): DuoPanelFeeds {
     // Physical handoff elects a native surface. Fixed-panel encoders can keep
     // an inactive shutdown frame after election, so one active feed is used
     // instead of decoding a third stream alongside the two fixed feeds.
-    const ids: ReadonlyArray<DuoPanelFeedId | null> = host.screen()?.supportsPhysicalOrientation ? [null] : [1, 3];
+    const ids: ReadonlyArray<DuoPanelFeedId | null> = host.screen()?.supportsPhysicalOrientation
+      ? [null]
+      : [1, 3];
     feeds = ids.map((id) =>
       host.openFeed(
         id,
@@ -83,7 +85,11 @@ export function createDuoPanelFeeds(host: DuoPanelHost): DuoPanelFeeds {
             if (id === null) return host.primary.present(source, width, height);
             // An inactive native LCD can emit its shutdown black frame. Retain its last useful image.
             if (host.screen()?.screenId !== id) return true;
-            const retained = (id === 1 ? panels.cover : panels.inner).present(source, width, height);
+            const retained = (id === 1 ? panels.cover : panels.inner).present(
+              source,
+              width,
+              height,
+            );
             const primary = host.primary.present(source, width, height);
             return retained && primary;
           },
@@ -116,7 +122,13 @@ export function createDuoPanelFeeds(host: DuoPanelHost): DuoPanelFeeds {
       // A surface election can leave an existing decoder on the former encoder
       // description. Reopen only video to acquire the elected surface's seed and
       // codec configuration; HID and the viewer stay.
-      if (sinks && next.supportsPhysicalOrientation && previous && next.screenId !== previous.screenId) start(sinks);
+      if (
+        sinks &&
+        next.supportsPhysicalOrientation &&
+        previous &&
+        next.screenId !== previous.screenId
+      )
+        start(sinks);
     },
     attached: () => sinks !== null,
     stop() {

@@ -17,8 +17,12 @@ export async function projectBotMessageRoster(
   },
 ): Promise<readonly BotRosterEntry[]> {
   const spendingRefusal = async (id: string, name: string) => {
-    try { return await deps.spendingRefusal(id, name); }
-    catch (error) { if (error instanceof SpendingDispatchError && error.code === "uncertain") return undefined; throw error; }
+    try {
+      return await deps.spendingRefusal(id, name);
+    } catch (error) {
+      if (error instanceof SpendingDispatchError && error.code === "uncertain") return undefined;
+      throw error;
+    }
   };
   return Promise.all(
     bots.map(async (bot): Promise<BotRosterEntry> => {

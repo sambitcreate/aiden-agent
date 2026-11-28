@@ -492,7 +492,10 @@ async function flushUpdater() {
 test("service defers loading the updater SDK until an update check needs it", async () => {
   const fixture = await simulatedService();
   try {
-    assert.ok(!fixture.loaded.includes("electron-updater"), "startup must not load electron-updater");
+    assert.ok(
+      !fixture.loaded.includes("electron-updater"),
+      "startup must not load electron-updater",
+    );
     const operation = fixture.service.checkNow(false);
     fixture.check.resolve({ isUpdateAvailable: false, updateInfo: { version: "0.28.31" } });
     assert.deepEqual(await operation, { outcome: "up-to-date" });
@@ -621,16 +624,40 @@ test("Linux install handoff reports swallowed installer failure so protected shu
     // Model BaseUpdater: install catches doInstall errors, while quitAndInstall
     // returns void and schedules quit only when install actually returned true.
     const installed = handoff.recordInstall(() => {
-      try { return install(); } catch { return false; }
+      try {
+        return install();
+      } catch {
+        return false;
+      }
     });
     if (installed) quitScheduled = true;
   };
-  for (const install of [() => false, () => { throw new Error("checksum changed"); }, () => { throw new Error("disk failure"); }, () => { throw new Error("inode changed"); }]) {
-    assert.equal(handoff.run(() => upstreamQuitAndInstall(install)), false);
+  for (const install of [
+    () => false,
+    () => {
+      throw new Error("checksum changed");
+    },
+    () => {
+      throw new Error("disk failure");
+    },
+    () => {
+      throw new Error("inode changed");
+    },
+  ]) {
+    assert.equal(
+      handoff.run(() => upstreamQuitAndInstall(install)),
+      false,
+    );
     assert.equal(quitScheduled, false);
   }
-  assert.equal(handoff.run(() => upstreamQuitAndInstall(() => true)), true);
+  assert.equal(
+    handoff.run(() => upstreamQuitAndInstall(() => true)),
+    true,
+  );
   assert.equal(quitScheduled, true);
   // A duplicate or early-return call must not reuse a previous success.
-  assert.equal(handoff.run(() => {}), false);
+  assert.equal(
+    handoff.run(() => {}),
+    false,
+  );
 });

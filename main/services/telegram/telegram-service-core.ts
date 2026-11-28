@@ -31,7 +31,11 @@ import {
   type QueuedTelegramTurn,
   type TelegramBotBindingSnapshot,
 } from "./telegram-queue.js";
-import { chunkRichMarkdown, markdownToTelegramHtml, chunkForTelegram } from "./telegram-markdown.js";
+import {
+  chunkRichMarkdown,
+  markdownToTelegramHtml,
+  chunkForTelegram,
+} from "./telegram-markdown.js";
 import {
   TELEGRAM_COMMANDS,
   buildDurableBotQueueMenu,
@@ -74,14 +78,15 @@ const MAX_UPDATE_RETRY_SLEEP_MS = 60_000;
 /** Attempts one update gets before it is reported to its chat and skipped. */
 const MAX_UPDATE_ATTEMPTS = 5;
 /** Bot session failures that recur on every redelivery until the person acts. */
-const TERMINAL_BOT_SESSION_REASONS: ReadonlySet<BotSessionErrorReason> = new Set<BotSessionErrorReason>([
-  "needs_model",
-  "model_error",
-  "unavailable",
-  "access_changed",
-  "bot_missing",
-  "bot_deleted",
-]);
+const TERMINAL_BOT_SESSION_REASONS: ReadonlySet<BotSessionErrorReason> =
+  new Set<BotSessionErrorReason>([
+    "needs_model",
+    "model_error",
+    "unavailable",
+    "access_changed",
+    "bot_missing",
+    "bot_deleted",
+  ]);
 
 /** Duck-typed so this module does not load the Bot runtime (the CLI bundles it without one). */
 /** An accepted Bot turn whose reply row is not yet durable; skipping its update would lose the answer. */
@@ -93,7 +98,9 @@ function isTerminalBotSessionError(cause: unknown): boolean {
   return (
     cause instanceof Error &&
     cause.name === "BotSessionError" &&
-    TERMINAL_BOT_SESSION_REASONS.has((cause as { reason?: BotSessionErrorReason }).reason as BotSessionErrorReason)
+    TERMINAL_BOT_SESSION_REASONS.has(
+      (cause as { reason?: BotSessionErrorReason }).reason as BotSessionErrorReason,
+    )
   );
 }
 const TYPING_INTERVAL_MS = 2_500;
@@ -127,7 +134,9 @@ export interface TelegramServiceDeps {
   /** Telegram profile namespace. Required by production wiring to isolate chats. */
   profile?: string;
   /** Resolve an exact private-chat/topic route after owner authorization. */
-  resolveBotBinding?(input: TelegramBotBindingLookup): Promise<TelegramBotBindingSnapshot | null | undefined>;
+  resolveBotBinding?(
+    input: TelegramBotBindingLookup,
+  ): Promise<TelegramBotBindingSnapshot | null | undefined>;
   /**
    * Durable Bot ingress. When present, a Bot-bound message is admitted to the
    * Bot's durable session (and its reply delivered through the outbox) before
@@ -144,9 +153,13 @@ export interface TelegramServiceDeps {
   /** Optional debounce timer scheduler (injectable for deterministic tests). */
   scheduleTimer?: (callback: () => void, ms: number) => { cancel(): void };
   /** Alias accepted by profile managers that name the resolver explicitly. */
-  resolveTelegramBotBinding?(input: TelegramBotBindingLookup): Promise<TelegramBotBindingSnapshot | null | undefined>;
+  resolveTelegramBotBinding?(
+    input: TelegramBotBindingLookup,
+  ): Promise<TelegramBotBindingSnapshot | null | undefined>;
   /** Validate that a resolved binding still points to a live, non-archived bot. */
-  validateBotBinding?(binding: TelegramBotBindingSnapshot): Promise<TelegramBotBindingValidation> | TelegramBotBindingValidation;
+  validateBotBinding?(
+    binding: TelegramBotBindingSnapshot,
+  ): Promise<TelegramBotBindingValidation> | TelegramBotBindingValidation;
   /** Fail closed before pairing or ordinary routing when the durable registry is not trustworthy. */
   assertBotBindingStoreHealthy?(): Promise<void>;
   getToken(): Promise<string | null>;
@@ -171,29 +184,50 @@ export interface TelegramServiceDeps {
     botId?: string;
   }): Promise<string>;
   listPromptCommands?(workspaceId?: string): Promise<readonly TelegramPromptCommand[]>;
-  validateSkillInvocation?(selection: NonNullable<QueuedTelegramTurn["skillInvocation"]>): Promise<void>;
-  readOutboundAttachment?(workspaceId: string | undefined, requestedPath: string): Promise<{
+  validateSkillInvocation?(
+    selection: NonNullable<QueuedTelegramTurn["skillInvocation"]>,
+  ): Promise<void>;
+  readOutboundAttachment?(
+    workspaceId: string | undefined,
+    requestedPath: string,
+  ): Promise<{
     bytes: Uint8Array;
     name: string;
     mimeType: string;
   }>;
   applyModelSelection?(choice: TelegramModelChoice): Promise<void>;
   mediaGroupDebounceMs?: number;
-  synthesizeVoice?(text: string, options: {
-    lang?: string;
-    rate?: string;
-    chatId: number;
-    threadId?: number;
-    ownerUserId: number;
-    workspaceId?: string;
-  }): Promise<{ bytes: Uint8Array; name?: string; mimeType?: "audio/ogg" | "audio/opus"; caption?: string } | undefined>;
+  synthesizeVoice?(
+    text: string,
+    options: {
+      lang?: string;
+      rate?: string;
+      chatId: number;
+      threadId?: number;
+      ownerUserId: number;
+      workspaceId?: string;
+    },
+  ): Promise<
+    | { bytes: Uint8Array; name?: string; mimeType?: "audio/ogg" | "audio/opus"; caption?: string }
+    | undefined
+  >;
   extensionStatus?(): Promise<{
     rows: readonly string[];
     sections: readonly { label: string; callbackData: string }[];
   }>;
-  handleExtensionCallback?(data: string, context: TelegramExtensionRuntimeContext): Promise<string | void>;
-  handleExtensionUpdate?(update: TelegramUpdate, context: TelegramExtensionRuntimeContext): Promise<boolean>;
-  transformInbound?(content: Awaited<ReturnType<typeof normalizeTelegramInbound>>, message: TelegramMessage, context: TelegramExtensionRuntimeContext): Promise<Awaited<ReturnType<typeof normalizeTelegramInbound>>>;
+  handleExtensionCallback?(
+    data: string,
+    context: TelegramExtensionRuntimeContext,
+  ): Promise<string | void>;
+  handleExtensionUpdate?(
+    update: TelegramUpdate,
+    context: TelegramExtensionRuntimeContext,
+  ): Promise<boolean>;
+  transformInbound?(
+    content: Awaited<ReturnType<typeof normalizeTelegramInbound>>,
+    message: TelegramMessage,
+    context: TelegramExtensionRuntimeContext,
+  ): Promise<Awaited<ReturnType<typeof normalizeTelegramInbound>>>;
   transformOutbound?(markdown: string, context: TelegramExtensionRuntimeContext): Promise<string>;
   resolveThreadWorkspace?(threadId: number): Promise<string | undefined>;
   ensureThreadTargets?(chatId: number): Promise<void>;
@@ -233,7 +267,11 @@ interface TelegramPromptCommand {
   description: string;
   expand?(argument: string): string;
   skillInvocation?: QueuedTelegramTurn["skillInvocation"];
-  handle?(argument: string, message: TelegramMessage, context: TelegramExtensionRuntimeContext): Promise<string | void>;
+  handle?(
+    argument: string,
+    message: TelegramMessage,
+    context: TelegramExtensionRuntimeContext,
+  ): Promise<string | void>;
 }
 
 const TELEGRAM_HELP_TEXT = [
@@ -297,18 +335,30 @@ export function telegramBotBindingKey(binding: TelegramBotBindingSnapshot | unde
 
 export function telegramCompactionCallback(binding?: TelegramBotBindingSnapshot): string {
   if (!binding) return "compact:yes";
-  return `compact:yes:${createHash("sha256").update(JSON.stringify([
-    binding.profile, binding.chatId, binding.threadId, binding.ownerUserId,
-    binding.botId, binding.backingWorkspaceId, binding.backingChatId,
-  ])).digest("hex").slice(0, 32)}`;
+  return `compact:yes:${createHash("sha256")
+    .update(
+      JSON.stringify([
+        binding.profile,
+        binding.chatId,
+        binding.threadId,
+        binding.ownerUserId,
+        binding.botId,
+        binding.backingWorkspaceId,
+        binding.backingChatId,
+      ]),
+    )
+    .digest("hex")
+    .slice(0, 32)}`;
 }
 
 export function createTelegramServiceCore(deps: TelegramServiceDeps) {
   const buttonStore = deps.buttonStore ?? createTelegramButtonStore(deps.now);
-  const startTimer = deps.scheduleTimer ?? ((callback: () => void, ms: number) => {
-    const timer = setTimeout(callback, ms);
-    return { cancel: () => clearTimeout(timer) };
-  });
+  const startTimer =
+    deps.scheduleTimer ??
+    ((callback: () => void, ms: number) => {
+      const timer = setTimeout(callback, ms);
+      return { cancel: () => clearTimeout(timer) };
+    });
   const queue: TelegramQueue = createTelegramQueue({
     isActive: () => activeTurn,
     hasPendingDispatch: () => dispatchPending,
@@ -327,16 +377,22 @@ export function createTelegramServiceCore(deps: TelegramServiceDeps) {
   /** The running Pi stream for activeInput, once its turn holds the chat. */
   let activeStream: { streamId: string; ownerDocumentId: string } | undefined;
   let dispatchCancellation: AbortController | undefined;
-  const mediaGroups = new Map<string, {
-    turn: QueuedTelegramTurn;
-    explicitText: string;
-    timer: { cancel(): void };
-  }>();
-  const retryingMediaGroups = new Map<symbol, {
-    turn: QueuedTelegramTurn;
-    controller: AbortController;
-    admitted: boolean;
-  }>();
+  const mediaGroups = new Map<
+    string,
+    {
+      turn: QueuedTelegramTurn;
+      explicitText: string;
+      timer: { cancel(): void };
+    }
+  >();
+  const retryingMediaGroups = new Map<
+    symbol,
+    {
+      turn: QueuedTelegramTurn;
+      controller: AbortController;
+      admitted: boolean;
+    }
+  >();
   const diagnostics: TelegramDiagnosticEvent[] = [];
 
   function isDurableBotRoute(binding?: TelegramBotBindingSnapshot): boolean {
@@ -344,7 +400,11 @@ export function createTelegramServiceCore(deps: TelegramServiceDeps) {
   }
 
   function recordDiagnostic(level: TelegramDiagnosticEvent["level"], message: string): void {
-    diagnostics.push({ at: deps.now(), level, message: message.replace(/\d{5,16}:[A-Za-z0-9_-]{20,}/gu, "[redacted-token]").slice(0, 500) });
+    diagnostics.push({
+      at: deps.now(),
+      level,
+      message: message.replace(/\d{5,16}:[A-Za-z0-9_-]{20,}/gu, "[redacted-token]").slice(0, 500),
+    });
     if (diagnostics.length > 50) diagnostics.splice(0, diagnostics.length - 50);
   }
 
@@ -411,11 +471,13 @@ export function createTelegramServiceCore(deps: TelegramServiceDeps) {
   ): Promise<void> {
     const message = cause instanceof Error ? cause.message : String(cause);
     deps.warn(`Telegram bot binding rejected: ${message}`);
-    await deps.api.sendMessage({
-      chatId,
-      threadId,
-      text: `⚠️ ${message}`,
-    }).catch(() => undefined);
+    await deps.api
+      .sendMessage({
+        chatId,
+        threadId,
+        text: `⚠️ ${message}`,
+      })
+      .catch(() => undefined);
   }
 
   function clearMediaGroups(): void {
@@ -462,7 +524,8 @@ export function createTelegramServiceCore(deps: TelegramServiceDeps) {
       recordDiagnostic("warning", lastError);
       return;
     }
-    if (ownership?.recovered) recordDiagnostic("recovery", "Recovered a stale Telegram transport owner lease.");
+    if (ownership?.recovered)
+      recordDiagnostic("recovery", "Recovered a stale Telegram transport owner lease.");
     beginPolling();
     deps.info("Telegram bridge started.");
     recordDiagnostic("info", "Telegram polling started.");
@@ -491,7 +554,9 @@ export function createTelegramServiceCore(deps: TelegramServiceDeps) {
       await deps.abortChat(chatId);
       return true;
     } catch (cause) {
-      deps.warn(`Telegram active turn did not settle cleanly: ${cause instanceof Error ? cause.message : String(cause)}`);
+      deps.warn(
+        `Telegram active turn did not settle cleanly: ${cause instanceof Error ? cause.message : String(cause)}`,
+      );
       return false;
     }
   }
@@ -502,8 +567,12 @@ export function createTelegramServiceCore(deps: TelegramServiceDeps) {
     if (!snap.hasToken) throw new Error("Cannot connect without a bot token.");
     if (started) return;
     const ownership = deps.acquireOwnership?.();
-    if (ownership && !ownership.acquired) throw new Error(`Telegram profile is already owned by process ${ownership.ownerPid ?? "unknown"}.`);
-    if (ownership?.recovered) recordDiagnostic("recovery", "Recovered a stale Telegram transport owner lease.");
+    if (ownership && !ownership.acquired)
+      throw new Error(
+        `Telegram profile is already owned by process ${ownership.ownerPid ?? "unknown"}.`,
+      );
+    if (ownership?.recovered)
+      recordDiagnostic("recovery", "Recovered a stale Telegram transport owner lease.");
     beginPolling();
     deps.info("Telegram bridge connected.");
   }
@@ -541,19 +610,24 @@ export function createTelegramServiceCore(deps: TelegramServiceDeps) {
   let commandRefresh: Promise<void> = Promise.resolve();
   function refreshCommands(): Promise<void> {
     // Serialize mutations so an older registration cannot restore disabled skills.
-    commandRefresh = commandRefresh.then(async () => {
-      if (!started) return;
-      const settings = await deps.config.getSettings();
-      const templates = await deps.listPromptCommands?.(settings.telegramWorkspaceId) ?? [];
-      if (!started) return;
-      await deps.api.setMyCommands?.([
-        ...TELEGRAM_COMMANDS,
-        ...templates.slice(0, Math.max(0, 100 - TELEGRAM_COMMANDS.length))
-          .map(({ command, description }) => ({ command, description })),
-      ]);
-    }).catch((cause) => {
-      deps.warn(`Telegram command registration failed: ${cause instanceof Error ? cause.message : String(cause)}`);
-    });
+    commandRefresh = commandRefresh
+      .then(async () => {
+        if (!started) return;
+        const settings = await deps.config.getSettings();
+        const templates = (await deps.listPromptCommands?.(settings.telegramWorkspaceId)) ?? [];
+        if (!started) return;
+        await deps.api.setMyCommands?.([
+          ...TELEGRAM_COMMANDS,
+          ...templates
+            .slice(0, Math.max(0, 100 - TELEGRAM_COMMANDS.length))
+            .map(({ command, description }) => ({ command, description })),
+        ]);
+      })
+      .catch((cause) => {
+        deps.warn(
+          `Telegram command registration failed: ${cause instanceof Error ? cause.message : String(cause)}`,
+        );
+      });
     return commandRefresh;
   }
 
@@ -566,10 +640,15 @@ export function createTelegramServiceCore(deps: TelegramServiceDeps) {
       deps.info(`Telegram bot connected as @${me.username}.`);
       const settings = await deps.config.getSettings();
       if (settings.telegramThreadedMode && !botTopicsEnabled) {
-        recordDiagnostic("warning", "Private-chat threads are enabled in Aiden but disabled for this bot. Enable Threaded Mode in BotFather.");
+        recordDiagnostic(
+          "warning",
+          "Private-chat threads are enabled in Aiden but disabled for this bot. Enable Threaded Mode in BotFather.",
+        );
       } else if (settings.telegramAllowedUserId !== undefined) {
         await deps.ensureThreadTargets?.(settings.telegramAllowedUserId).catch((cause) => {
-          deps.warn(`Telegram thread provisioning is unavailable: ${cause instanceof Error ? cause.message : String(cause)}`);
+          deps.warn(
+            `Telegram thread provisioning is unavailable: ${cause instanceof Error ? cause.message : String(cause)}`,
+          );
         });
       }
       await refreshCommands();
@@ -612,12 +691,21 @@ export function createTelegramServiceCore(deps: TelegramServiceDeps) {
           await handleUpdate(update);
           handled = true;
         } catch (cause) {
-          const capacityMessage = update.message ?? update.edited_message ?? update.callback_query?.message;
+          const capacityMessage =
+            update.message ?? update.edited_message ?? update.callback_query?.message;
           if (cause instanceof TelegramQueueCapacityError && capacityMessage) {
             if (update.callback_query) {
-              await deps.api.answerCallbackQuery(update.callback_query.id, cause.message.slice(0, 180)).catch(() => undefined);
+              await deps.api
+                .answerCallbackQuery(update.callback_query.id, cause.message.slice(0, 180))
+                .catch(() => undefined);
             }
-            await deps.api.sendMessage({ chatId: capacityMessage.chat.id, threadId: capacityMessage.message_thread_id, text: cause.message }).catch(() => undefined);
+            await deps.api
+              .sendMessage({
+                chatId: capacityMessage.chat.id,
+                threadId: capacityMessage.message_thread_id,
+                text: cause.message,
+              })
+              .catch(() => undefined);
             handled = true;
           } else {
             deps.error(`Telegram handleUpdate failed for ${update.update_id}.`, cause);
@@ -625,16 +713,28 @@ export function createTelegramServiceCore(deps: TelegramServiceDeps) {
             const attempts = (same?.attempts ?? 0) + 1;
             const admitted = (same?.admitted ?? false) || isAdmittedUnrecordedError(cause);
             failing = { updateId: update.update_id, attempts, admitted };
-            if (!admitted && (attempts >= MAX_UPDATE_ATTEMPTS || isTerminalBotSessionError(cause))) {
+            if (
+              !admitted &&
+              (attempts >= MAX_UPDATE_ATTEMPTS || isTerminalBotSessionError(cause))
+            ) {
               // The update fails the same way every time: tell the chat and move
               // past it, so one poison update cannot block the whole profile.
-              const message = update.message ?? update.edited_message ?? update.callback_query?.message;
+              const message =
+                update.message ?? update.edited_message ?? update.callback_query?.message;
               const text = `⚠️ Error: ${cause instanceof Error ? cause.message : String(cause)}`;
               if (update.callback_query) {
-                await deps.api.answerCallbackQuery(update.callback_query.id, text.slice(0, 180)).catch(() => undefined);
+                await deps.api
+                  .answerCallbackQuery(update.callback_query.id, text.slice(0, 180))
+                  .catch(() => undefined);
               }
               if (message) {
-                await deps.api.sendMessage({ chatId: message.chat.id, threadId: message.message_thread_id, text }).catch(() => undefined);
+                await deps.api
+                  .sendMessage({
+                    chatId: message.chat.id,
+                    threadId: message.message_thread_id,
+                    text,
+                  })
+                  .catch(() => undefined);
               }
               handled = true;
             }
@@ -643,7 +743,10 @@ export function createTelegramServiceCore(deps: TelegramServiceDeps) {
         if (!handled) {
           // Telegram answers the next poll at once while the update is pending,
           // so wait (longer each time) before asking for it again.
-          const pause = Math.min(ERROR_SLEEP_MS * 2 ** ((failing?.attempts ?? 1) - 1), MAX_UPDATE_RETRY_SLEEP_MS);
+          const pause = Math.min(
+            ERROR_SLEEP_MS * 2 ** ((failing?.attempts ?? 1) - 1),
+            MAX_UPDATE_RETRY_SLEEP_MS,
+          );
           await deps.sleep(pause, signal).catch(() => undefined);
           break;
         }
@@ -665,7 +768,10 @@ export function createTelegramServiceCore(deps: TelegramServiceDeps) {
               // rather than leave inference running while remote Stop is blocked.
               if (!dispatchCancellation?.signal.aborted) {
                 await abortCurrentTurn(activeInput?.binding).catch((abortCause) => {
-                  deps.error("Telegram could not stop work after offset storage failed.", abortCause);
+                  deps.error(
+                    "Telegram could not stop work after offset storage failed.",
+                    abortCause,
+                  );
                 });
               }
               await deps.sleep(ERROR_SLEEP_MS, signal).catch(() => undefined);
@@ -725,7 +831,9 @@ export function createTelegramServiceCore(deps: TelegramServiceDeps) {
         });
       } else {
         await deps.ensureThreadTargets?.(message.chat.id).catch((cause) => {
-          deps.warn(`Telegram thread provisioning is unavailable: ${cause instanceof Error ? cause.message : String(cause)}`);
+          deps.warn(
+            `Telegram thread provisioning is unavailable: ${cause instanceof Error ? cause.message : String(cause)}`,
+          );
         });
       }
       return;
@@ -746,10 +854,12 @@ export function createTelegramServiceCore(deps: TelegramServiceDeps) {
     }
 
     const settings = await deps.config.getSettings();
-    const threadWorkspaceId = message.message_thread_id !== undefined
-      ? await deps.resolveThreadWorkspace?.(message.message_thread_id)
-      : undefined;
-    const selectedWorkspaceId = binding?.backingWorkspaceId ?? threadWorkspaceId ?? settings.telegramWorkspaceId;
+    const threadWorkspaceId =
+      message.message_thread_id !== undefined
+        ? await deps.resolveThreadWorkspace?.(message.message_thread_id)
+        : undefined;
+    const selectedWorkspaceId =
+      binding?.backingWorkspaceId ?? threadWorkspaceId ?? settings.telegramWorkspaceId;
 
     if (deps.handleExtensionUpdate) {
       const handled = await deps.handleExtensionUpdate(update, {
@@ -772,25 +882,44 @@ export function createTelegramServiceCore(deps: TelegramServiceDeps) {
     if (rawText?.startsWith("/")) {
       if (update.edited_message && commandName(rawText) === "/steer") {
         // Guidance may already be in the transcript; an edit never resends it.
-        await deps.api.sendMessage({
-          chatId: message.chat.id, threadId: message.message_thread_id,
-          text: "Edited /steer commands are not sent. Send a new /steer message instead.",
-        }).catch(() => undefined);
+        await deps.api
+          .sendMessage({
+            chatId: message.chat.id,
+            threadId: message.message_thread_id,
+            text: "Edited /steer commands are not sent. Send a new /steer message instead.",
+          })
+          .catch(() => undefined);
         return;
       }
-      if (update.edited_message && ["/queue", "/continue", "/interrupt"].includes(commandName(rawText))) {
+      if (
+        update.edited_message &&
+        ["/queue", "/continue", "/interrupt"].includes(commandName(rawText))
+      ) {
         if (isDurableBotRoute(binding)) {
-          await deps.api.sendMessage({
-            chatId: message.chat.id, threadId: message.message_thread_id,
-            text: "Edited commands are not sent to this Bot. Send a new message instead.",
-          }).catch(() => undefined);
+          await deps.api
+            .sendMessage({
+              chatId: message.chat.id,
+              threadId: message.message_thread_id,
+              text: "Edited commands are not sent to this Bot. Send a new message instead.",
+            })
+            .catch(() => undefined);
           return;
         }
-        const pending = queue.findBySource(message.chat.id, message.message_id, message.message_thread_id, binding);
-        await deps.api.sendMessage({
-          chatId: message.chat.id, threadId: message.message_thread_id,
-          text: pending ? "This message is already queued; its saved text is unchanged. Use /queue to manage it." : "This command edit was not sent because the original message is not queued.",
-        }).catch(() => undefined);
+        const pending = queue.findBySource(
+          message.chat.id,
+          message.message_id,
+          message.message_thread_id,
+          binding,
+        );
+        await deps.api
+          .sendMessage({
+            chatId: message.chat.id,
+            threadId: message.message_thread_id,
+            text: pending
+              ? "This message is already queued; its saved text is unchanged. Use /queue to manage it."
+              : "This command edit was not sent because the original message is not queued.",
+          })
+          .catch(() => undefined);
         return;
       }
       await handleCommand(
@@ -804,7 +933,12 @@ export function createTelegramServiceCore(deps: TelegramServiceDeps) {
       return;
     }
 
-    if (settings.telegramThreadedMode && message.message_thread_id !== undefined && threadWorkspaceId === undefined && !binding) {
+    if (
+      settings.telegramThreadedMode &&
+      message.message_thread_id !== undefined &&
+      threadWorkspaceId === undefined &&
+      !binding
+    ) {
       await deps.api.sendMessage({
         chatId: message.chat.id,
         threadId: message.message_thread_id,
@@ -817,11 +951,12 @@ export function createTelegramServiceCore(deps: TelegramServiceDeps) {
         api: deps.api,
         transcribeAudio: deps.transcribeAudio,
         storeFile: deps.storeInboundFile
-          ? (input) => deps.storeInboundFile!({
-              ...input,
-              workspaceId: selectedWorkspaceId,
-              ...(binding ? { botId: binding.botId } : {}),
-            })
+          ? (input) =>
+              deps.storeInboundFile!({
+                ...input,
+                workspaceId: selectedWorkspaceId,
+                ...(binding ? { botId: binding.botId } : {}),
+              })
           : undefined,
       },
       message,
@@ -835,21 +970,36 @@ export function createTelegramServiceCore(deps: TelegramServiceDeps) {
       });
     }
     for (const notice of inbound.notices) {
-      await deps.api.sendMessage({ chatId: message.chat.id, threadId: message.message_thread_id, text: `⚠️ ${notice}` });
+      await deps.api.sendMessage({
+        chatId: message.chat.id,
+        threadId: message.message_thread_id,
+        text: `⚠️ ${notice}`,
+      });
     }
     if (!inbound.text && inbound.attachments.length === 0) return;
 
     if (update.edited_message) {
-      const existing = queue.list().find(
-        (turn) => turn.chatId === message.chat.id &&
-          turn.sourceMessageId === message.message_id &&
-          sameBinding(turn.binding, binding),
-      );
+      const existing = queue
+        .list()
+        .find(
+          (turn) =>
+            turn.chatId === message.chat.id &&
+            turn.sourceMessageId === message.message_id &&
+            sameBinding(turn.binding, binding),
+        );
       if (existing?.id !== undefined) {
-        const replacement = { ...existing, text: inbound.text || "Please review the attached file.", attachments: inbound.attachments };
+        const replacement = {
+          ...existing,
+          text: inbound.text || "Please review the attached file.",
+          attachments: inbound.attachments,
+        };
         checkPendingCapacity(replacement, existing.id);
         queue.replace(existing.id, replacement);
-        await deps.api.sendMessage({ chatId: message.chat.id, threadId: message.message_thread_id, text: "✏️ Updated the queued prompt." });
+        await deps.api.sendMessage({
+          chatId: message.chat.id,
+          threadId: message.message_thread_id,
+          text: "✏️ Updated the queued prompt.",
+        });
       }
       return;
     }
@@ -871,13 +1021,20 @@ export function createTelegramServiceCore(deps: TelegramServiceDeps) {
         pending.timer = scheduleMediaGroup(key);
         return;
       }
-      const existing = queue.list().find(
-        (turn) => turn.chatId === message.chat.id &&
-          turn.sourceMediaGroupId === message.media_group_id &&
-          sameBinding(turn.binding, binding),
-      );
+      const existing = queue
+        .list()
+        .find(
+          (turn) =>
+            turn.chatId === message.chat.id &&
+            turn.sourceMediaGroupId === message.media_group_id &&
+            sameBinding(turn.binding, binding),
+        );
       if (existing?.id !== undefined) {
-        const replacement = { ...existing, text: [existing.text, inbound.text].filter(Boolean).join("\n\n"), attachments: [...(existing.attachments ?? []), ...inbound.attachments] };
+        const replacement = {
+          ...existing,
+          text: [existing.text, inbound.text].filter(Boolean).join("\n\n"),
+          attachments: [...(existing.attachments ?? []), ...inbound.attachments],
+        };
         checkPendingCapacity(replacement, existing.id);
         queue.replace(existing.id, replacement);
         return;
@@ -942,10 +1099,21 @@ export function createTelegramServiceCore(deps: TelegramServiceDeps) {
       .map((attachment) => `<file name="${attachment.name}">\n${attachment.text}\n</file>`);
     const images = (turn.attachments ?? [])
       .filter((attachment) => attachment.kind === "image" && attachment.data !== undefined)
-      .map((attachment) => ({ type: "image" as const, mimeType: attachment.mimeType, data: attachment.data! }));
+      .map((attachment) => ({
+        type: "image" as const,
+        mimeType: attachment.mimeType,
+        data: attachment.data!,
+      }));
     const callbackQueryId = options?.callbackQueryId?.trim();
-    if (!callbackQueryId && (typeof turn.sourceMessageId !== "number" || !Number.isSafeInteger(turn.sourceMessageId) || turn.sourceMessageId <= 0)) {
-      throw new Error("Telegram Bot admission requires a positive source message ID or callback query ID.");
+    if (
+      !callbackQueryId &&
+      (typeof turn.sourceMessageId !== "number" ||
+        !Number.isSafeInteger(turn.sourceMessageId) ||
+        turn.sourceMessageId <= 0)
+    ) {
+      throw new Error(
+        "Telegram Bot admission requires a positive source message ID or callback query ID.",
+      );
     }
     const message: TelegramBotMessage = callbackQueryId
       ? {
@@ -1003,12 +1171,17 @@ export function createTelegramServiceCore(deps: TelegramServiceDeps) {
             attempts += 1;
             if (isAdmittedUnrecordedError(cause)) entry.admitted = true;
             deps.error("Telegram could not hand an album to its Bot.", cause);
-            if (!entry.admitted && (attempts >= MAX_UPDATE_ATTEMPTS || isTerminalBotSessionError(cause))) {
-              await deps.api.sendMessage({
-                chatId: frozenTurn.chatId,
-                threadId: frozenTurn.threadId,
-                text: `⚠️ Error: ${cause instanceof Error ? cause.message : String(cause)}`,
-              }).catch(() => undefined);
+            if (
+              !entry.admitted &&
+              (attempts >= MAX_UPDATE_ATTEMPTS || isTerminalBotSessionError(cause))
+            ) {
+              await deps.api
+                .sendMessage({
+                  chatId: frozenTurn.chatId,
+                  threadId: frozenTurn.threadId,
+                  text: `⚠️ Error: ${cause instanceof Error ? cause.message : String(cause)}`,
+                })
+                .catch(() => undefined);
               return;
             }
             const pause = Math.min(ERROR_SLEEP_MS * 2 ** (attempts - 1), MAX_UPDATE_RETRY_SLEEP_MS);
@@ -1040,7 +1213,13 @@ export function createTelegramServiceCore(deps: TelegramServiceDeps) {
         queue.enqueue(pending.turn);
         tryDispatch();
       } catch (cause) {
-        void deps.api.sendMessage({ chatId: pending.turn.chatId, threadId: pending.turn.threadId, text: cause instanceof Error ? cause.message : "Could not queue this album." }).catch(() => undefined);
+        void deps.api
+          .sendMessage({
+            chatId: pending.turn.chatId,
+            threadId: pending.turn.threadId,
+            text: cause instanceof Error ? cause.message : "Could not queue this album.",
+          })
+          .catch(() => undefined);
       }
     }, deps.mediaGroupDebounceMs ?? MEDIA_GROUP_DEBOUNCE_MS);
   }
@@ -1053,7 +1232,8 @@ export function createTelegramServiceCore(deps: TelegramServiceDeps) {
     } catch (cause) {
       await rejectBinding(
         reaction.chat.id,
-        (reaction as TelegramMessageReactionUpdated & { message_thread_id?: number }).message_thread_id,
+        (reaction as TelegramMessageReactionUpdated & { message_thread_id?: number })
+          .message_thread_id,
         cause,
       );
       return;
@@ -1064,40 +1244,53 @@ export function createTelegramServiceCore(deps: TelegramServiceDeps) {
     try {
       binding = await resolveBinding(
         reaction.chat.id,
-        (reaction as TelegramMessageReactionUpdated & { message_thread_id?: number }).message_thread_id,
+        (reaction as TelegramMessageReactionUpdated & { message_thread_id?: number })
+          .message_thread_id,
         from.id,
       );
     } catch (cause) {
       await rejectBinding(
         reaction.chat.id,
-        (reaction as TelegramMessageReactionUpdated & { message_thread_id?: number }).message_thread_id,
+        (reaction as TelegramMessageReactionUpdated & { message_thread_id?: number })
+          .message_thread_id,
         cause,
       );
       return;
     }
     if (deps.handleExtensionUpdate) {
       const settings = await deps.config.getSettings();
-      const reactionThreadId = (reaction as TelegramMessageReactionUpdated & { message_thread_id?: number }).message_thread_id;
-      const threadWorkspaceId = reactionThreadId === undefined
-        ? undefined
-        : await deps.resolveThreadWorkspace?.(reactionThreadId);
-      const handled = await deps.handleExtensionUpdate({ update_id: 0, message_reaction: reaction }, {
-        chatId: reaction.chat.id,
-        threadId: reactionThreadId,
-        ownerUserId: from.id,
-        workspaceId: binding?.backingWorkspaceId ?? threadWorkspaceId ?? settings.telegramWorkspaceId,
-      });
+      const reactionThreadId = (
+        reaction as TelegramMessageReactionUpdated & { message_thread_id?: number }
+      ).message_thread_id;
+      const threadWorkspaceId =
+        reactionThreadId === undefined
+          ? undefined
+          : await deps.resolveThreadWorkspace?.(reactionThreadId);
+      const handled = await deps.handleExtensionUpdate(
+        { update_id: 0, message_reaction: reaction },
+        {
+          chatId: reaction.chat.id,
+          threadId: reactionThreadId,
+          ownerUserId: from.id,
+          workspaceId:
+            binding?.backingWorkspaceId ?? threadWorkspaceId ?? settings.telegramWorkspaceId,
+        },
+      );
       if (handled) return;
     }
     const added = reaction.new_reaction
       .map((candidate) => candidate.emoji.replace(/[\uFE0E\uFE0F]/gu, ""))
-      .filter((emoji) => !reaction.old_reaction.some(
-        (candidate) => candidate.emoji.replace(/[\uFE0E\uFE0F]/gu, "") === emoji,
-      ));
+      .filter(
+        (emoji) =>
+          !reaction.old_reaction.some(
+            (candidate) => candidate.emoji.replace(/[\uFE0E\uFE0F]/gu, "") === emoji,
+          ),
+      );
     const item = queue.findBySource(
       reaction.chat.id,
       reaction.message_id,
-      (reaction as TelegramMessageReactionUpdated & { message_thread_id?: number }).message_thread_id,
+      (reaction as TelegramMessageReactionUpdated & { message_thread_id?: number })
+        .message_thread_id,
       binding,
     );
     if (!item?.id) return;
@@ -1114,7 +1307,11 @@ export function createTelegramServiceCore(deps: TelegramServiceDeps) {
    * Capture workspace authority before a prompt joins the queue. A later local
    * Settings or Telegram /workspace change must not retarget an accepted prompt.
    */
-  function checkPendingCapacity(turn: QueuedTelegramTurn, replacedId?: number, replacedGroup?: string): void {
+  function checkPendingCapacity(
+    turn: QueuedTelegramTurn,
+    replacedId?: number,
+    replacedGroup?: string,
+  ): void {
     assertTelegramQueueCapacity([
       ...queue.list().filter((item) => replacedId === undefined || item.id !== replacedId),
       ...[...mediaGroups].filter(([key]) => key !== replacedGroup).map(([, group]) => group.turn),
@@ -1130,16 +1327,34 @@ export function createTelegramServiceCore(deps: TelegramServiceDeps) {
     options: { acknowledgeBusy?: boolean } = {},
   ): Promise<boolean> {
     if (isDurableBotRoute(turn.binding)) {
-      throw new Error("Durable Bot turns must be admitted through botIngress, never the legacy Telegram queue.");
+      throw new Error(
+        "Durable Bot turns must be admitted through botIngress, never the legacy Telegram queue.",
+      );
     }
     const settings = workspaceCaptured ? undefined : await deps.config.getSettings();
-    const duplicate = turn.sourceMessageId === undefined ? undefined : queue.findBySource(turn.chatId, turn.sourceMessageId, turn.threadId, turn.binding);
+    const duplicate =
+      turn.sourceMessageId === undefined
+        ? undefined
+        : queue.findBySource(turn.chatId, turn.sourceMessageId, turn.threadId, turn.binding);
     if (duplicate) return false;
     checkPendingCapacity(turn);
-    queue.enqueue({ ...turn, workspaceId: workspaceCaptured ? workspaceId : settings?.telegramWorkspaceId });
-    if (options.acknowledgeBusy !== false && !turn.dispatchNext && (activeTurn || dispatchPending)) {
+    queue.enqueue({
+      ...turn,
+      workspaceId: workspaceCaptured ? workspaceId : settings?.telegramWorkspaceId,
+    });
+    if (
+      options.acknowledgeBusy !== false &&
+      !turn.dispatchNext &&
+      (activeTurn || dispatchPending)
+    ) {
       // Admission already succeeded; a failed acknowledgement must not replay it.
-      await deps.api.sendMessage({ chatId: turn.chatId, threadId: turn.threadId, text: "⏳ Queued for the next turn. Use /queue to manage pending prompts or /stop to clear them." }).catch(() => undefined);
+      await deps.api
+        .sendMessage({
+          chatId: turn.chatId,
+          threadId: turn.threadId,
+          text: "⏳ Queued for the next turn. Use /queue to manage pending prompts or /stop to clear them.",
+        })
+        .catch(() => undefined);
     }
     return true;
   }
@@ -1179,14 +1394,17 @@ export function createTelegramServiceCore(deps: TelegramServiceDeps) {
       deps.listModels?.() ?? Promise.resolve([]),
       deps.listWorkspaces(),
       deps.extensionStatus?.() ?? Promise.resolve({ rows: [], sections: [] }),
-      durableBot && binding && deps.botSession ? deps.botSession.state(binding.botId).catch(() => undefined) : Promise.resolve(undefined),
+      durableBot && binding && deps.botSession
+        ? deps.botSession.state(binding.botId).catch(() => undefined)
+        : Promise.resolve(undefined),
     ]);
     const providerId = settings.telegramProviderId ?? settings.lastProviderId;
     const model = settings.telegramModel ?? settings.lastModel;
     const choice = models.find(
       (candidate) => candidate.providerId === providerId && candidate.model === model,
     );
-    const effectiveWorkspaceId = binding?.workspaceId ?? workspaceOverride ?? settings.telegramWorkspaceId;
+    const effectiveWorkspaceId =
+      binding?.workspaceId ?? workspaceOverride ?? settings.telegramWorkspaceId;
     const workspace = workspaces.find((candidate) => candidate.id === effectiveWorkspaceId);
     const durableSummary = durableBot ? durableBotStatusSummary(botState) : undefined;
     return {
@@ -1197,12 +1415,16 @@ export function createTelegramServiceCore(deps: TelegramServiceDeps) {
       model,
       thinkingLevel: settings.telegramThinkingLevel ?? "medium",
       queueCount: queuedCount(binding, message),
-      active: durableSummary ? durableSummary.active : (activeTurn || dispatchPending) && matchesControl(activeInput, binding, message),
+      active: durableSummary
+        ? durableSummary.active
+        : (activeTurn || dispatchPending) && matchesControl(activeInput, binding, message),
       ...(durableSummary
         ? {
             durableBot: true,
             statusLabel: durableSummary.statusLabel,
-            ...(durableSummary.activeSubmissionId ? { activeSubmissionId: durableSummary.activeSubmissionId } : {}),
+            ...(durableSummary.activeSubmissionId
+              ? { activeSubmissionId: durableSummary.activeSubmissionId }
+              : {}),
           }
         : {}),
       workspaceLabel: workspace?.name ?? (effectiveWorkspaceId ? "Unavailable" : "Assistant only"),
@@ -1243,9 +1465,10 @@ export function createTelegramServiceCore(deps: TelegramServiceDeps) {
     edit = false,
     binding?: TelegramBotBindingSnapshot,
   ): Promise<void> {
-    const threadWorkspaceId = message.message_thread_id !== undefined
-      ? await deps.resolveThreadWorkspace?.(message.message_thread_id)
-      : undefined;
+    const threadWorkspaceId =
+      message.message_thread_id !== undefined
+        ? await deps.resolveThreadWorkspace?.(message.message_thread_id)
+        : undefined;
     const status = await controlStatus(threadWorkspaceId, binding, message);
     await renderControl(message, buildStatusText(status), buildMainMenu(status), edit);
   }
@@ -1292,9 +1515,11 @@ export function createTelegramServiceCore(deps: TelegramServiceDeps) {
       deps.config.getSettings(),
       deps.listWorkspaces(),
     ]);
-    const threadWorkspaceId = binding?.workspaceId ?? (message.message_thread_id !== undefined
-      ? await deps.resolveThreadWorkspace?.(message.message_thread_id)
-      : undefined);
+    const threadWorkspaceId =
+      binding?.workspaceId ??
+      (message.message_thread_id !== undefined
+        ? await deps.resolveThreadWorkspace?.(message.message_thread_id)
+        : undefined);
     if (threadWorkspaceId !== undefined) {
       const workspace = workspaces.find((candidate) => candidate.id === threadWorkspaceId);
       await renderControl(
@@ -1333,9 +1558,16 @@ export function createTelegramServiceCore(deps: TelegramServiceDeps) {
     return binding?.backingChatId ?? telegramChatId(ownerUserId, workspaceId, deps.profile);
   }
 
-  function matchesControl(turn: QueuedTelegramTurn | undefined, binding?: TelegramBotBindingSnapshot, message?: TelegramMessage): boolean {
-    return !!turn && sameBinding(turn.binding, binding) && (!message ||
-      (turn.chatId === message.chat.id && turn.threadId === message.message_thread_id));
+  function matchesControl(
+    turn: QueuedTelegramTurn | undefined,
+    binding?: TelegramBotBindingSnapshot,
+    message?: TelegramMessage,
+  ): boolean {
+    return (
+      !!turn &&
+      sameBinding(turn.binding, binding) &&
+      (!message || (turn.chatId === message.chat.id && turn.threadId === message.message_thread_id))
+    );
   }
 
   /**
@@ -1348,11 +1580,14 @@ export function createTelegramServiceCore(deps: TelegramServiceDeps) {
     message: TelegramMessage,
     binding?: TelegramBotBindingSnapshot,
   ): Promise<void> {
-    const reply = (text: string) => deps.api
-      .sendMessage({ chatId: message.chat.id, threadId: message.message_thread_id, text })
-      .catch(() => undefined);
+    const reply = (text: string) =>
+      deps.api
+        .sendMessage({ chatId: message.chat.id, threadId: message.message_thread_id, text })
+        .catch(() => undefined);
     if (isDurableBotRoute(binding)) {
-      await reply("Steering is unavailable on Bot-bound Telegram chats. Use /queue to send a follow-up instead.");
+      await reply(
+        "Steering is unavailable on Bot-bound Telegram chats. Use /queue to send a follow-up instead.",
+      );
       return;
     }
     if (!guidance.trim()) {
@@ -1365,8 +1600,15 @@ export function createTelegramServiceCore(deps: TelegramServiceDeps) {
     }
     const stream = activeStream;
     const chatId = activeChatId;
-    if (!deps.admitRunInput || !activeTurn || !stream || !matchesControl(activeInput, binding, message)) {
-      await reply("No response here is accepting guidance right now. Send a message, or use /queue to save a follow-up.");
+    if (
+      !deps.admitRunInput ||
+      !activeTurn ||
+      !stream ||
+      !matchesControl(activeInput, binding, message)
+    ) {
+      await reply(
+        "No response here is accepting guidance right now. Send a message, or use /queue to save a follow-up.",
+      );
       return;
     }
     let receipt: ChatRunInputAdmissionResult;
@@ -1380,23 +1622,36 @@ export function createTelegramServiceCore(deps: TelegramServiceDeps) {
       });
     } catch (cause) {
       deps.error("Telegram: steer admission outcome is unknown.", cause);
-      await reply("⚠️ Aiden couldn't confirm the guidance. Check the conversation before sending it again.");
+      await reply(
+        "⚠️ Aiden couldn't confirm the guidance. Check the conversation before sending it again.",
+      );
       return;
     }
     if (receipt.admitted) {
       await reply("🧭 Guidance accepted. Aiden will read it at the next step.");
     } else if (receipt.committed) {
-      await reply("The response ended before reading your guidance, so it was saved to the conversation. Send a message to continue.");
+      await reply(
+        "The response ended before reading your guidance, so it was saved to the conversation. Send a message to continue.",
+      );
     } else if (receipt.reason === "capacity") {
-      await reply("This response already has the maximum pending guidance. Use /queue to save a follow-up.");
+      await reply(
+        "This response already has the maximum pending guidance. Use /queue to save a follow-up.",
+      );
     } else if (receipt.reason === "cancelled") {
-      await reply("This response is stopping, so it can't take guidance. Use /queue to save a follow-up.");
+      await reply(
+        "This response is stopping, so it can't take guidance. Use /queue to save a follow-up.",
+      );
     } else {
-      await reply("No response here is accepting guidance right now. Send a message, or use /queue to save a follow-up.");
+      await reply(
+        "No response here is accepting guidance right now. Send a message, or use /queue to save a follow-up.",
+      );
     }
   }
 
-  async function abortCurrentTurn(binding?: TelegramBotBindingSnapshot, message?: TelegramMessage): Promise<boolean> {
+  async function abortCurrentTurn(
+    binding?: TelegramBotBindingSnapshot,
+    message?: TelegramMessage,
+  ): Promise<boolean> {
     if (isDurableBotRoute(binding)) return false;
     if ((!activeTurn && !dispatchPending) || !activeInput) return false;
     if (!matchesControl(activeInput, binding, message)) return false;
@@ -1409,7 +1664,8 @@ export function createTelegramServiceCore(deps: TelegramServiceDeps) {
   function clearQueued(binding?: TelegramBotBindingSnapshot, message?: TelegramMessage): number {
     let count = 0;
     for (const turn of queue.list()) {
-      if (matchesControl(turn, binding, message) && turn.id !== undefined && queue.remove(turn.id)) count += 1;
+      if (matchesControl(turn, binding, message) && turn.id !== undefined && queue.remove(turn.id))
+        count += 1;
     }
     for (const [key, group] of mediaGroups) {
       if (!matchesControl(group.turn, binding, message)) continue;
@@ -1445,9 +1701,10 @@ export function createTelegramServiceCore(deps: TelegramServiceDeps) {
     explicitSubmissionId?: string,
     clearedAlbums = 0,
   ): Promise<string> {
-    const albumSuffix = clearedAlbums > 0
-      ? ` Cleared ${clearedAlbums} buffered album${clearedAlbums === 1 ? "" : "s"}.`
-      : "";
+    const albumSuffix =
+      clearedAlbums > 0
+        ? ` Cleared ${clearedAlbums} buffered album${clearedAlbums === 1 ? "" : "s"}.`
+        : "";
     if (!deps.botSession) {
       return `Stopping this Bot from Telegram is unavailable in this runtime. Stop it in Aiden instead.${albumSuffix}`;
     }
@@ -1498,7 +1755,9 @@ export function createTelegramServiceCore(deps: TelegramServiceDeps) {
       return `That Bot reply already finished.${albumSuffix}`;
     }
 
-    const after = await deps.botSession.stop(binding.botId, { expectedSubmissionId: targetSubmissionId });
+    const after = await deps.botSession.stop(binding.botId, {
+      expectedSubmissionId: targetSubmissionId,
+    });
     if (after.kind === "running" && after.submissionId !== targetSubmissionId) {
       return `That Bot reply already finished.${albumSuffix}`;
     }
@@ -1527,7 +1786,9 @@ export function createTelegramServiceCore(deps: TelegramServiceDeps) {
       };
       const prepared = await buttonStore.prepareCallback(callback.id, data, scope);
       if (!prepared) {
-        await deps.api.answerCallbackQuery(callback.id, "This action has expired.").catch(() => undefined);
+        await deps.api
+          .answerCallbackQuery(callback.id, "This action has expired.")
+          .catch(() => undefined);
         return;
       }
       const { action, alreadyCompleted } = prepared;
@@ -1549,35 +1810,40 @@ export function createTelegramServiceCore(deps: TelegramServiceDeps) {
         );
       } else if (!alreadyCompleted) {
         const settings = await deps.config.getSettings();
-        const threadWorkspaceId = message.message_thread_id !== undefined
-          ? await deps.resolveThreadWorkspace?.(message.message_thread_id)
-          : undefined;
-        await enqueuePrompt({
-          lane: "priority",
-          text: action.prompt,
-          chatId: message.chat.id,
-          threadId: message.message_thread_id,
-          ownerUserId: callback.from.id,
-          fromUsername: callback.from.username,
-          binding,
-        }, threadWorkspaceId ?? settings.telegramWorkspaceId, true);
+        const threadWorkspaceId =
+          message.message_thread_id !== undefined
+            ? await deps.resolveThreadWorkspace?.(message.message_thread_id)
+            : undefined;
+        await enqueuePrompt(
+          {
+            lane: "priority",
+            text: action.prompt,
+            chatId: message.chat.id,
+            threadId: message.message_thread_id,
+            ownerUserId: callback.from.id,
+            fromUsername: callback.from.username,
+            binding,
+          },
+          threadWorkspaceId ?? settings.telegramWorkspaceId,
+          true,
+        );
       }
       await buttonStore.completeCallback(callback.id, data).catch((cause) => {
-        deps.warn(`Telegram button completion state could not be saved: ${cause instanceof Error ? cause.message : String(cause)}`);
+        deps.warn(
+          `Telegram button completion state could not be saved: ${cause instanceof Error ? cause.message : String(cause)}`,
+        );
       });
       const selectedMarkup = callback.message?.reply_markup
-        ? markTelegramButtonSelected(
-            callback.message.reply_markup,
-            data,
-            action.selectedStyle,
-          )
+        ? markTelegramButtonSelected(callback.message.reply_markup, data, action.selectedStyle)
         : undefined;
       if (selectedMarkup) {
-        await deps.api.editMessageReplyMarkup({
-          chatId: message.chat.id,
-          messageId: message.message_id,
-          replyMarkup: selectedMarkup,
-        }).catch(() => undefined);
+        await deps.api
+          .editMessageReplyMarkup({
+            chatId: message.chat.id,
+            messageId: message.message_id,
+            replyMarkup: selectedMarkup,
+          })
+          .catch(() => undefined);
       }
       await deps.api.answerCallbackQuery(callback.id, action.label).catch(() => undefined);
       return;
@@ -1656,19 +1922,24 @@ export function createTelegramServiceCore(deps: TelegramServiceDeps) {
       } else if (/^model:page:\d+$/u.test(data)) {
         await openModelMenu(message, Number(data.slice("model:page:".length)), true);
       } else if (/^model:set:\d+$/u.test(data)) {
-        const models = await deps.listModels?.() ?? [];
+        const models = (await deps.listModels?.()) ?? [];
         const choice = models[Number(data.slice("model:set:".length))];
         if (!choice) throw new Error("That model is no longer available.");
         if (activeTurn && !deps.abortChat) {
-          throw new Error("Wait for the active turn to finish or abort it before switching models.");
+          throw new Error(
+            "Wait for the active turn to finish or abort it before switching models.",
+          );
         }
-        await (deps.applyModelSelection?.(choice) ?? deps.config.setSettings({
-          telegramProviderId: choice.providerId,
-          telegramModel: choice.model,
-          lastProviderId: choice.providerId,
-          lastModel: choice.model,
-          telegramThinkingLevel: choice.reasoning ? undefined : "off",
-        }).then(() => undefined));
+        await (deps.applyModelSelection?.(choice) ??
+          deps.config
+            .setSettings({
+              telegramProviderId: choice.providerId,
+              telegramModel: choice.model,
+              lastProviderId: choice.providerId,
+              lastModel: choice.model,
+              telegramThinkingLevel: choice.reasoning ? undefined : "off",
+            })
+            .then(() => undefined));
         if (activeTurn && activeInput && matchesControl(activeInput, binding, message)) {
           const continuation: QueuedTelegramTurn = {
             ...activeInput,
@@ -1689,12 +1960,22 @@ export function createTelegramServiceCore(deps: TelegramServiceDeps) {
         if (!GENERATION_THINKING_LEVELS.includes(level as never)) {
           throw new Error("Unknown thinking level.");
         }
-        await deps.config.setSettings({ telegramThinkingLevel: level as typeof GENERATION_THINKING_LEVELS[number] });
+        await deps.config.setSettings({
+          telegramThinkingLevel: level as (typeof GENERATION_THINKING_LEVELS)[number],
+        });
         await openMainMenu(message, true, binding);
       } else if (data.startsWith("workspace:set:")) {
-        if (binding) throw new Error("This bot's workspace is fixed. Rebind it from Bots to change workspace.");
-        if (message.message_thread_id !== undefined && await deps.resolveThreadWorkspace?.(message.message_thread_id) !== undefined) {
-          throw new Error("Thread workspace routing is fixed. Change thread targets from Aiden Settings.");
+        if (binding)
+          throw new Error(
+            "This bot's workspace is fixed. Rebind it from Bots to change workspace.",
+          );
+        if (
+          message.message_thread_id !== undefined &&
+          (await deps.resolveThreadWorkspace?.(message.message_thread_id)) !== undefined
+        ) {
+          throw new Error(
+            "Thread workspace routing is fixed. Change thread targets from Aiden Settings.",
+          );
         }
         const selection = data.slice("workspace:set:".length);
         const workspaces = await deps.listWorkspaces();
@@ -1704,14 +1985,23 @@ export function createTelegramServiceCore(deps: TelegramServiceDeps) {
         await deps.config.setSettings({ telegramWorkspaceId: workspace?.id });
         await openMainMenu(message, true, binding);
         if (cleared > 0) {
-          await deps.api.sendMessage({ chatId: message.chat.id, threadId: message.message_thread_id, text: `Cleared ${cleared} queued prompt(s) because the workspace changed.` });
+          await deps.api.sendMessage({
+            chatId: message.chat.id,
+            threadId: message.message_thread_id,
+            text: `Cleared ${cleared} queued prompt(s) because the workspace changed.`,
+          });
         }
       } else if (
         isDurableBotRoute(binding) &&
-        (/^queue:(?:item|priority|delete):\d+$/u.test(data) || data === "queue:clear:ask" || data === "queue:clear:yes")
+        (/^queue:(?:item|priority|delete):\d+$/u.test(data) ||
+          data === "queue:clear:ask" ||
+          data === "queue:clear:yes")
       ) {
         await openQueueMenu(message, true, binding);
-        await deps.api.answerCallbackQuery(callback.id, "Per-item queue editing is unavailable on durable Bot chats.");
+        await deps.api.answerCallbackQuery(
+          callback.id,
+          "Per-item queue editing is unavailable on durable Bot chats.",
+        );
         return;
       } else if (/^queue:item:\d+$/u.test(data)) {
         const item = queue.find(Number(data.slice("queue:item:".length)));
@@ -1745,15 +2035,20 @@ export function createTelegramServiceCore(deps: TelegramServiceDeps) {
         clearQueued(binding, message);
         await openQueueMenu(message, true, binding);
       } else if (data === "compact:ask") {
-        const menu = confirmationMenu("Compact the current Aiden session?", telegramCompactionCallback(binding));
+        const menu = confirmationMenu(
+          "Compact the current Aiden session?",
+          telegramCompactionCallback(binding),
+        );
         await renderControl(message, menu.text, menu.markup, true);
       } else if (data === "compact:yes" || data.startsWith("compact:yes:")) {
-        if (data !== telegramCompactionCallback(binding)) throw new Error("This compaction confirmation has expired. Open /compact again.");
+        if (data !== telegramCompactionCallback(binding))
+          throw new Error("This compaction confirmation has expired. Open /compact again.");
         if (activeTurn) throw new Error("Wait for the active turn to finish or abort it first.");
         const settings = await deps.config.getSettings();
-        const threadWorkspaceId = message.message_thread_id !== undefined
-          ? await deps.resolveThreadWorkspace?.(message.message_thread_id)
-          : undefined;
+        const threadWorkspaceId =
+          message.message_thread_id !== undefined
+            ? await deps.resolveThreadWorkspace?.(message.message_thread_id)
+            : undefined;
         if (!deps.compactChat) throw new Error("Manual compaction is unavailable in this runtime.");
         const result = await deps.compactChat(
           currentSessionChatId(
@@ -1771,14 +2066,22 @@ export function createTelegramServiceCore(deps: TelegramServiceDeps) {
         await openMainMenu(message, true, binding);
       } else if (data === "turn:abort" || data.startsWith("turn:abort:")) {
         if (binding && isDurableBotRoute(binding)) {
-          const explicitSubmissionId = data.startsWith("turn:abort:") ? data.slice("turn:abort:".length) || undefined : undefined;
+          const explicitSubmissionId = data.startsWith("turn:abort:")
+            ? data.slice("turn:abort:".length) || undefined
+            : undefined;
           const stopIdentity = `cb:${binding.botId}:${message.chat.id}:${message.message_thread_id ?? 0}:${callback.id}`;
           const text = await stopDurableBotTurn(binding, stopIdentity, explicitSubmissionId);
-          await deps.api.sendMessage({ chatId: message.chat.id, threadId: message.message_thread_id, text }).catch(() => undefined);
+          await deps.api
+            .sendMessage({ chatId: message.chat.id, threadId: message.message_thread_id, text })
+            .catch(() => undefined);
           await openMainMenu(message, true, binding).catch(() => undefined);
         } else {
           const aborted = await abortCurrentTurn(binding, message);
-          await deps.api.sendMessage({ chatId: message.chat.id, threadId: message.message_thread_id, text: aborted ? "⏹ Active turn aborted." : "No turn is active." });
+          await deps.api.sendMessage({
+            chatId: message.chat.id,
+            threadId: message.message_thread_id,
+            text: aborted ? "⏹ Active turn aborted." : "No turn is active.",
+          });
           await openMainMenu(message, true, binding);
         }
       } else if (data === "turn:next") {
@@ -1790,34 +2093,58 @@ export function createTelegramServiceCore(deps: TelegramServiceDeps) {
           });
         } else {
           const aborted = await abortCurrentTurn(binding, message);
-          await deps.api.sendMessage({ chatId: message.chat.id, threadId: message.message_thread_id, text: aborted ? "⏭ Moving to the next queued prompt." : "No turn is active." });
+          await deps.api.sendMessage({
+            chatId: message.chat.id,
+            threadId: message.message_thread_id,
+            text: aborted ? "⏭ Moving to the next queued prompt." : "No turn is active.",
+          });
         }
       } else if (data === "turn:stop" || data.startsWith("turn:stop:")) {
         if (binding && isDurableBotRoute(binding)) {
-          const explicitSubmissionId = data.startsWith("turn:stop:") ? data.slice("turn:stop:".length) || undefined : undefined;
+          const explicitSubmissionId = data.startsWith("turn:stop:")
+            ? data.slice("turn:stop:".length) || undefined
+            : undefined;
           const cleared = clearQueued(binding, message);
           const stopIdentity = `cb:${binding.botId}:${message.chat.id}:${message.message_thread_id ?? 0}:${callback.id}`;
-          const text = await stopDurableBotTurn(binding, stopIdentity, explicitSubmissionId, cleared);
-          await deps.api.sendMessage({ chatId: message.chat.id, threadId: message.message_thread_id, text }).catch(() => undefined);
+          const text = await stopDurableBotTurn(
+            binding,
+            stopIdentity,
+            explicitSubmissionId,
+            cleared,
+          );
+          await deps.api
+            .sendMessage({ chatId: message.chat.id, threadId: message.message_thread_id, text })
+            .catch(() => undefined);
           await openMainMenu(message, true, binding).catch(() => undefined);
         } else {
           const cleared = clearQueued(binding, message);
           const aborted = await abortCurrentTurn(binding, message);
-          await deps.api.sendMessage({ chatId: message.chat.id, threadId: message.message_thread_id, text: `🛑 ${aborted ? "Active turn aborted. " : ""}Cleared ${cleared} queued prompt(s).` });
+          await deps.api.sendMessage({
+            chatId: message.chat.id,
+            threadId: message.message_thread_id,
+            text: `🛑 ${aborted ? "Active turn aborted. " : ""}Cleared ${cleared} queued prompt(s).`,
+          });
           await openMainMenu(message, true, binding);
         }
       } else if (data.startsWith("ext:") && deps.handleExtensionCallback) {
         const settings = await deps.config.getSettings();
-        const threadWorkspaceId = message.message_thread_id !== undefined
-          ? await deps.resolveThreadWorkspace?.(message.message_thread_id)
-          : undefined;
+        const threadWorkspaceId =
+          message.message_thread_id !== undefined
+            ? await deps.resolveThreadWorkspace?.(message.message_thread_id)
+            : undefined;
         const reply = await deps.handleExtensionCallback(data, {
           chatId: message.chat.id,
           threadId: message.message_thread_id,
           ownerUserId: callback.from.id,
-          workspaceId: binding?.backingWorkspaceId ?? threadWorkspaceId ?? settings.telegramWorkspaceId,
+          workspaceId:
+            binding?.backingWorkspaceId ?? threadWorkspaceId ?? settings.telegramWorkspaceId,
         });
-        if (reply) await deps.api.sendMessage({ chatId: message.chat.id, threadId: message.message_thread_id, text: reply });
+        if (reply)
+          await deps.api.sendMessage({
+            chatId: message.chat.id,
+            threadId: message.message_thread_id,
+            text: reply,
+          });
       } else {
         await deps.api.answerCallbackQuery(callback.id, "This control is no longer available.");
         return;
@@ -1825,8 +2152,16 @@ export function createTelegramServiceCore(deps: TelegramServiceDeps) {
       await deps.api.answerCallbackQuery(callback.id);
     } catch (cause) {
       const messageText = cause instanceof Error ? cause.message : String(cause);
-      await deps.api.answerCallbackQuery(callback.id, messageText.slice(0, 180)).catch(() => undefined);
-      await deps.api.sendMessage({ chatId: message.chat.id, threadId: message.message_thread_id, text: `⚠️ ${messageText}` }).catch(() => undefined);
+      await deps.api
+        .answerCallbackQuery(callback.id, messageText.slice(0, 180))
+        .catch(() => undefined);
+      await deps.api
+        .sendMessage({
+          chatId: message.chat.id,
+          threadId: message.message_thread_id,
+          text: `⚠️ ${messageText}`,
+        })
+        .catch(() => undefined);
     }
   }
 
@@ -1887,7 +2222,12 @@ export function createTelegramServiceCore(deps: TelegramServiceDeps) {
       }
       if (!prompt) {
         if (cmd === "/queue") await openQueueMenu(message, false, binding);
-        else await deps.api.sendMessage({ chatId, threadId: message.message_thread_id, text: "Use /interrupt followed by the replacement prompt." });
+        else
+          await deps.api.sendMessage({
+            chatId,
+            threadId: message.message_thread_id,
+            text: "Use /interrupt followed by the replacement prompt.",
+          });
         return;
       }
       if (isDurableBotRoute(binding)) {
@@ -1905,39 +2245,80 @@ export function createTelegramServiceCore(deps: TelegramServiceDeps) {
           { whenBusy: "followUp" },
         );
         if (!admitted.paused && !admitted.deduped) {
-          await deps.api.sendMessage({ chatId, threadId: message.message_thread_id, text: "Follow-up accepted." }).catch(() => undefined);
+          await deps.api
+            .sendMessage({
+              chatId,
+              threadId: message.message_thread_id,
+              text: "Follow-up accepted.",
+            })
+            .catch(() => undefined);
         }
         return;
       }
-      if (cmd === "/interrupt" && activeTurn && matchesControl(activeInput, binding, message) && !deps.abortChat) {
-        await deps.api.sendMessage({ chatId, threadId: message.message_thread_id, text: "Interrupt is unavailable for this turn. Use /queue to save a follow-up." });
+      if (
+        cmd === "/interrupt" &&
+        activeTurn &&
+        matchesControl(activeInput, binding, message) &&
+        !deps.abortChat
+      ) {
+        await deps.api.sendMessage({
+          chatId,
+          threadId: message.message_thread_id,
+          text: "Interrupt is unavailable for this turn. Use /queue to save a follow-up.",
+        });
         return;
       }
       const interruptedDispatch = dispatchCancellation;
-      const admitted = await enqueuePrompt({
-        lane: cmd === "/interrupt" ? "priority" : "default",
-        dispatchNext: cmd === "/interrupt",
-        text: prompt,
-        chatId,
-        threadId: message.message_thread_id,
-        sourceMessageId: message.message_id,
-        ownerUserId: message.from?.id ?? chatId,
-        fromUsername: message.from?.username,
-        binding,
-      }, effectiveWorkspaceId, true, { acknowledgeBusy: false });
+      const admitted = await enqueuePrompt(
+        {
+          lane: cmd === "/interrupt" ? "priority" : "default",
+          dispatchNext: cmd === "/interrupt",
+          text: prompt,
+          chatId,
+          threadId: message.message_thread_id,
+          sourceMessageId: message.message_id,
+          ownerUserId: message.from?.id ?? chatId,
+          fromUsername: message.from?.username,
+          binding,
+        },
+        effectiveWorkspaceId,
+        true,
+        { acknowledgeBusy: false },
+      );
       if (!admitted) {
-        await deps.api.sendMessage({ chatId, threadId: message.message_thread_id, text: "This message is already queued; its saved text is unchanged. Use /queue to manage it." }).catch(() => undefined);
+        await deps.api
+          .sendMessage({
+            chatId,
+            threadId: message.message_thread_id,
+            text: "This message is already queued; its saved text is unchanged. Use /queue to manage it.",
+          })
+          .catch(() => undefined);
         return;
       }
       if (cmd === "/interrupt" && dispatchCancellation === interruptedDispatch) {
         try {
           await abortCurrentTurn(binding, message);
         } catch {
-          await deps.api.sendMessage({ chatId, threadId: message.message_thread_id, text: "The replacement is queued, but the active turn has not stopped yet." }).catch(() => undefined);
+          await deps.api
+            .sendMessage({
+              chatId,
+              threadId: message.message_thread_id,
+              text: "The replacement is queued, but the active turn has not stopped yet.",
+            })
+            .catch(() => undefined);
           return;
         }
       }
-      await deps.api.sendMessage({ chatId, threadId: message.message_thread_id, text: cmd === "/interrupt" ? "Replacement accepted as a priority follow-up." : "Follow-up accepted." }).catch(() => undefined);
+      await deps.api
+        .sendMessage({
+          chatId,
+          threadId: message.message_thread_id,
+          text:
+            cmd === "/interrupt"
+              ? "Replacement accepted as a priority follow-up."
+              : "Follow-up accepted.",
+        })
+        .catch(() => undefined);
       return;
     }
 
@@ -1954,11 +2335,20 @@ export function createTelegramServiceCore(deps: TelegramServiceDeps) {
     }
 
     if (cmd === "/new" && !binding) {
-      await deps.api.sendMessage({ chatId, threadId: message.message_thread_id, text: "This route is not bound to a Bot. Use /compact to reduce context without replacing the conversation." });
+      await deps.api.sendMessage({
+        chatId,
+        threadId: message.message_thread_id,
+        text: "This route is not bound to a Bot. Use /compact to reduce context without replacing the conversation.",
+      });
       return;
     }
     if (cmd === "/compact" || (cmd === "/new" && binding)) {
-      const menu = confirmationMenu(cmd === "/new" ? "This Bot keeps one permanent conversation. Compact its context while preserving its identity and history?" : "Compact the current Aiden session?", telegramCompactionCallback(binding));
+      const menu = confirmationMenu(
+        cmd === "/new"
+          ? "This Bot keeps one permanent conversation. Compact its context while preserving its identity and history?"
+          : "Compact the current Aiden session?",
+        telegramCompactionCallback(binding),
+      );
       await renderControl(message, menu.text, menu.markup);
       return;
     }
@@ -1979,25 +2369,48 @@ export function createTelegramServiceCore(deps: TelegramServiceDeps) {
           { whenBusy: "followUp" },
         );
         if (!admitted.paused && !admitted.deduped) {
-          await deps.api.sendMessage({ chatId, threadId: message.message_thread_id, text: "▶️ Continuation queued." }).catch(() => undefined);
+          await deps.api
+            .sendMessage({
+              chatId,
+              threadId: message.message_thread_id,
+              text: "▶️ Continuation queued.",
+            })
+            .catch(() => undefined);
         }
         return;
       }
-      const admitted = await enqueuePrompt({
-        lane: "priority",
-        text: commandArgument(command) || "Continue.",
-        chatId,
-        threadId: message.message_thread_id,
-        sourceMessageId: message.message_id,
-        ownerUserId: message.from?.id ?? chatId,
-        fromUsername: message.from?.username,
-        binding,
-      }, effectiveWorkspaceId, true, { acknowledgeBusy: false });
+      const admitted = await enqueuePrompt(
+        {
+          lane: "priority",
+          text: commandArgument(command) || "Continue.",
+          chatId,
+          threadId: message.message_thread_id,
+          sourceMessageId: message.message_id,
+          ownerUserId: message.from?.id ?? chatId,
+          fromUsername: message.from?.username,
+          binding,
+        },
+        effectiveWorkspaceId,
+        true,
+        { acknowledgeBusy: false },
+      );
       if (!admitted) {
-        await deps.api.sendMessage({ chatId, threadId: message.message_thread_id, text: "This message is already queued; its saved text is unchanged. Use /queue to manage it." }).catch(() => undefined);
+        await deps.api
+          .sendMessage({
+            chatId,
+            threadId: message.message_thread_id,
+            text: "This message is already queued; its saved text is unchanged. Use /queue to manage it.",
+          })
+          .catch(() => undefined);
         return;
       }
-      await deps.api.sendMessage({ chatId, threadId: message.message_thread_id, text: "▶️ Continuation queued." }).catch(() => undefined);
+      await deps.api
+        .sendMessage({
+          chatId,
+          threadId: message.message_thread_id,
+          text: "▶️ Continuation queued.",
+        })
+        .catch(() => undefined);
       return;
     }
 
@@ -2065,7 +2478,9 @@ export function createTelegramServiceCore(deps: TelegramServiceDeps) {
       if (binding && isDurableBotRoute(binding)) {
         const stopIdentity = `msg:${binding.botId}:${chatId}:${message.message_thread_id ?? 0}:${message.message_id}`;
         const text = await stopDurableBotTurn(binding, stopIdentity);
-        await deps.api.sendMessage({ chatId, threadId: message.message_thread_id, text }).catch(() => undefined);
+        await deps.api
+          .sendMessage({ chatId, threadId: message.message_thread_id, text })
+          .catch(() => undefined);
         return;
       }
       const aborted = await abortCurrentTurn(binding, message);
@@ -2105,7 +2520,9 @@ export function createTelegramServiceCore(deps: TelegramServiceDeps) {
         const cleared = clearQueued(binding, message);
         const stopIdentity = `msg:${binding.botId}:${chatId}:${message.message_thread_id ?? 0}:${message.message_id}`;
         const text = await stopDurableBotTurn(binding, stopIdentity, undefined, cleared);
-        await deps.api.sendMessage({ chatId, threadId: message.message_thread_id, text }).catch(() => undefined);
+        await deps.api
+          .sendMessage({ chatId, threadId: message.message_thread_id, text })
+          .catch(() => undefined);
         return;
       }
       const hadQueued = clearQueued(binding, message);
@@ -2114,11 +2531,15 @@ export function createTelegramServiceCore(deps: TelegramServiceDeps) {
         hadQueued > 0 ? `🧹 Cleared ${hadQueued} queued message(s).` : "No messages were queued.",
       ];
       if (aborted) lines.push("The active turn was aborted.");
-      await deps.api.sendMessage({ chatId, threadId: message.message_thread_id, text: lines.join("\n") });
+      await deps.api.sendMessage({
+        chatId,
+        threadId: message.message_thread_id,
+        text: lines.join("\n"),
+      });
       return;
     }
 
-    const templates = await deps.listPromptCommands?.(effectiveWorkspaceId) ?? [];
+    const templates = (await deps.listPromptCommands?.(effectiveWorkspaceId)) ?? [];
     const template = templates.find((candidate) => `/${candidate.command}` === cmd);
     if (template) {
       if (template.handle) {
@@ -2128,27 +2549,38 @@ export function createTelegramServiceCore(deps: TelegramServiceDeps) {
           ownerUserId: message.from?.id ?? chatId,
           workspaceId: effectiveWorkspaceId,
         });
-        if (reply) await deps.api.sendMessage({ chatId, threadId: message.message_thread_id, text: reply });
+        if (reply)
+          await deps.api.sendMessage({ chatId, threadId: message.message_thread_id, text: reply });
         return;
       }
-      if (!template.expand && !template.skillInvocation) throw new Error(`Telegram command /${template.command} has no handler.`);
+      if (!template.expand && !template.skillInvocation)
+        throw new Error(`Telegram command /${template.command} has no handler.`);
       if (isEdited) {
         if (isDurableBotRoute(binding)) {
-          await deps.api.sendMessage({
-            chatId,
-            threadId: message.message_thread_id,
-            text: "Edited commands are not sent to this Bot. Send a new command instead.",
-          }).catch(() => undefined);
+          await deps.api
+            .sendMessage({
+              chatId,
+              threadId: message.message_thread_id,
+              text: "Edited commands are not sent to this Bot. Send a new command instead.",
+            })
+            .catch(() => undefined);
           return;
         }
-        const pending = queue.findBySource(chatId, message.message_id, message.message_thread_id, binding);
-        await deps.api.sendMessage({
+        const pending = queue.findBySource(
           chatId,
-          threadId: message.message_thread_id,
-          text: pending
-            ? "This message is already queued; its saved text is unchanged. Use /queue to manage it."
-            : "This command edit was not sent because the original message is not queued.",
-        }).catch(() => undefined);
+          message.message_id,
+          message.message_thread_id,
+          binding,
+        );
+        await deps.api
+          .sendMessage({
+            chatId,
+            threadId: message.message_thread_id,
+            text: pending
+              ? "This message is already queued; its saved text is unchanged. Use /queue to manage it."
+              : "This command edit was not sent because the original message is not queued.",
+          })
+          .catch(() => undefined);
         return;
       }
       if (isDurableBotRoute(binding)) {
@@ -2175,19 +2607,23 @@ export function createTelegramServiceCore(deps: TelegramServiceDeps) {
         );
         return;
       }
-      await enqueuePrompt({
-        lane: "default",
-        text: template.skillInvocation
-          ? commandArgument(command) || `Use the ${template.command} skill.`
-          : template.expand!(commandArgument(command)),
-        ...(template.skillInvocation ? { skillInvocation: template.skillInvocation } : {}),
-        chatId,
-        threadId: message.message_thread_id,
-        sourceMessageId: message.message_id,
-        ownerUserId: message.from?.id ?? chatId,
-        fromUsername: message.from?.username,
-        binding,
-      }, effectiveWorkspaceId, true);
+      await enqueuePrompt(
+        {
+          lane: "default",
+          text: template.skillInvocation
+            ? commandArgument(command) || `Use the ${template.command} skill.`
+            : template.expand!(commandArgument(command)),
+          ...(template.skillInvocation ? { skillInvocation: template.skillInvocation } : {}),
+          chatId,
+          threadId: message.message_thread_id,
+          sourceMessageId: message.message_id,
+          ownerUserId: message.from?.id ?? chatId,
+          fromUsername: message.from?.username,
+          binding,
+        },
+        effectiveWorkspaceId,
+        true,
+      );
       return;
     }
 
@@ -2213,7 +2649,9 @@ export function createTelegramServiceCore(deps: TelegramServiceDeps) {
     dispatchCancellation = cancellation;
     try {
       if (isDurableBotRoute(turn.binding)) {
-        throw new Error("Durable Bot turns must be admitted through botIngress, never executed on backingChatId.");
+        throw new Error(
+          "Durable Bot turns must be admitted through botIngress, never executed on backingChatId.",
+        );
       }
       if (turn.binding) {
         const validation = await deps.validateBotBinding?.(turn.binding);
@@ -2229,11 +2667,12 @@ export function createTelegramServiceCore(deps: TelegramServiceDeps) {
       const backingChat = turn.binding
         ? await deps.turn.chatStore.get(turn.binding.backingChatId)
         : undefined;
-      if (turn.binding && (
-        !backingChat ||
-        backingChat.botId !== turn.binding.botId ||
-        backingChat.workspaceId !== turn.binding.backingWorkspaceId
-      )) {
+      if (
+        turn.binding &&
+        (!backingChat ||
+          backingChat.botId !== turn.binding.botId ||
+          backingChat.workspaceId !== turn.binding.backingWorkspaceId)
+      ) {
         throw new Error("This bot's Telegram conversation no longer matches its binding.");
       }
       const workspace = turn.binding
@@ -2246,11 +2685,8 @@ export function createTelegramServiceCore(deps: TelegramServiceDeps) {
         }
         await deps.validateSkillInvocation(turn.skillInvocation);
       }
-      const chatId = turn.binding?.backingChatId ?? telegramChatId(
-        turn.ownerUserId,
-        workspaceId,
-        deps.profile,
-      );
+      const chatId =
+        turn.binding?.backingChatId ?? telegramChatId(turn.ownerUserId, workspaceId, deps.profile);
 
       if (workspace.kind !== "stale") {
         try {
@@ -2281,7 +2717,8 @@ export function createTelegramServiceCore(deps: TelegramServiceDeps) {
       dispatchPending = false;
 
       const settings = await deps.config.getSettings();
-      const automaticVoice = (settings.telegramVoiceMode === "always") ||
+      const automaticVoice =
+        settings.telegramVoiceMode === "always" ||
         (settings.telegramVoiceMode === "mirror" && (turn.hasVoiceInput ?? false));
       const activity = createTelegramActivityProjector({
         api: deps.api,
@@ -2350,7 +2787,9 @@ export function createTelegramServiceCore(deps: TelegramServiceDeps) {
     queue.clear();
     clearMediaGroups();
     await abortCurrentTurn(activeInput?.binding).catch((cause) => {
-      deps.warn(`Telegram active turn could not be aborted during pairing reset: ${cause instanceof Error ? cause.message : String(cause)}`);
+      deps.warn(
+        `Telegram active turn could not be aborted during pairing reset: ${cause instanceof Error ? cause.message : String(cause)}`,
+      );
     });
     await deps.clearThreadTargets?.();
     await deps.config.setSettings({ telegramAllowedUserId: undefined });
@@ -2364,7 +2803,9 @@ export function createTelegramServiceCore(deps: TelegramServiceDeps) {
       botTopicsEnabled = me.has_topics_enabled === true;
     }
     if (!botTopicsEnabled) {
-      throw new Error("Enable Threaded Mode for this bot in @BotFather before turning on private-chat threads.");
+      throw new Error(
+        "Enable Threaded Mode for this bot in @BotFather before turning on private-chat threads.",
+      );
     }
     if (settings.telegramAllowedUserId !== undefined) {
       await deps.ensureThreadTargets?.(settings.telegramAllowedUserId);
@@ -2389,7 +2830,9 @@ export function createTelegramServiceCore(deps: TelegramServiceDeps) {
   ): Promise<void> {
     if (!result.ok) {
       if (result.error) {
-        await deps.api.sendMessage({ chatId, threadId, text: `⚠️ ${result.error}` }).catch(() => undefined);
+        await deps.api
+          .sendMessage({ chatId, threadId, text: `⚠️ ${result.error}` })
+          .catch(() => undefined);
       }
       return;
     }
@@ -2415,10 +2858,19 @@ export function createTelegramServiceCore(deps: TelegramServiceDeps) {
         buttonStore.bindMessage(registeredButtonIds, messageId);
       }
     };
-    const automaticVoice = Boolean(plan.markdown) && plan.voices.length === 0 &&
+    const automaticVoice =
+      Boolean(plan.markdown) &&
+      plan.voices.length === 0 &&
       (voiceMode === "always" || (voiceMode === "mirror" && hasVoiceInput));
     const automaticVoiceDelivered = automaticVoice
-      ? await deliverVoiceRequests(chatId, threadId, workspaceId, ownerUserId, [{ text: plan.markdown }], false)
+      ? await deliverVoiceRequests(
+          chatId,
+          threadId,
+          workspaceId,
+          ownerUserId,
+          [{ text: plan.markdown }],
+          false,
+        )
       : false;
     let deliveredText = false;
     if (!automaticVoiceDelivered && rendering === "rich" && plan.markdown) {
@@ -2436,7 +2888,9 @@ export function createTelegramServiceCore(deps: TelegramServiceDeps) {
           deliveredText = true;
         } catch (cause) {
           if (!(cause instanceof TelegramApiError) || cause.code !== 400) throw cause;
-          deps.warn(`Telegram Rich Markdown chunk ${index + 1} was rejected; falling back to HTML: ${cause.message}`);
+          deps.warn(
+            `Telegram Rich Markdown chunk ${index + 1} was rejected; falling back to HTML: ${cause.message}`,
+          );
           await deliverHtmlReply(
             chatId,
             threadId,
@@ -2450,16 +2904,30 @@ export function createTelegramServiceCore(deps: TelegramServiceDeps) {
         }
       }
     } else if (!automaticVoiceDelivered && plan.markdown) {
-      await deliverHtmlReply(chatId, threadId, plan.markdown, draftMessageId, plan.replyMarkup, bindButtonsToMessage);
+      await deliverHtmlReply(
+        chatId,
+        threadId,
+        plan.markdown,
+        draftMessageId,
+        plan.replyMarkup,
+        bindButtonsToMessage,
+      );
       deliveredText = true;
     }
     if (!deliveredText && plan.replyMarkup) {
-      const sent = await deps.api.sendMessage({ chatId, threadId, text: "Choose an option:", replyMarkup: plan.replyMarkup });
+      const sent = await deps.api.sendMessage({
+        chatId,
+        threadId,
+        text: "Choose an option:",
+        replyMarkup: plan.replyMarkup,
+      });
       bindButtonsToMessage(sent.message_id);
     }
     if (registeredButtonIds.length > 0) {
       await buttonStore.flush().catch((cause) => {
-        deps.warn(`Telegram button state could not be flushed: ${cause instanceof Error ? cause.message : String(cause)}`);
+        deps.warn(
+          `Telegram button state could not be flushed: ${cause instanceof Error ? cause.message : String(cause)}`,
+        );
       });
     }
     await deliverAttachments(chatId, workspaceId, plan.attachments, threadId);
@@ -2502,7 +2970,8 @@ export function createTelegramServiceCore(deps: TelegramServiceDeps) {
           }
           // Replace only a definitively unavailable preview. Retrying unknown
           // transport failures as sends could duplicate a successful edit.
-          if (!/\bmessage (?:to edit not found|can't be edited)\b/iu.test(cause.message)) throw cause;
+          if (!/\bmessage (?:to edit not found|can't be edited)\b/iu.test(cause.message))
+            throw cause;
         }
       }
       const sent = await deps.api.sendMessage({
@@ -2527,7 +2996,12 @@ export function createTelegramServiceCore(deps: TelegramServiceDeps) {
   ): Promise<boolean> {
     if (requests.length === 0) return false;
     if (!deps.synthesizeVoice) {
-      if (explicit) await deps.api.sendMessage({ chatId, threadId, text: "⚠️ No Telegram voice synthesis provider is registered." });
+      if (explicit)
+        await deps.api.sendMessage({
+          chatId,
+          threadId,
+          text: "⚠️ No Telegram voice synthesis provider is registered.",
+        });
       return false;
     }
     let delivered = false;
@@ -2542,7 +3016,12 @@ export function createTelegramServiceCore(deps: TelegramServiceDeps) {
           workspaceId,
         });
         if (!voice) {
-          if (explicit) await deps.api.sendMessage({ chatId, threadId, text: "⚠️ Telegram voice synthesis was unavailable." });
+          if (explicit)
+            await deps.api.sendMessage({
+              chatId,
+              threadId,
+              text: "⚠️ Telegram voice synthesis was unavailable.",
+            });
           continue;
         }
         await deps.api.sendVoice({
@@ -2555,8 +3034,15 @@ export function createTelegramServiceCore(deps: TelegramServiceDeps) {
         });
         delivered = true;
       } catch (cause) {
-        deps.warn(`Telegram voice delivery failed: ${cause instanceof Error ? cause.message : String(cause)}`);
-        if (explicit) await deps.api.sendMessage({ chatId, threadId, text: "⚠️ Telegram voice synthesis failed." });
+        deps.warn(
+          `Telegram voice delivery failed: ${cause instanceof Error ? cause.message : String(cause)}`,
+        );
+        if (explicit)
+          await deps.api.sendMessage({
+            chatId,
+            threadId,
+            text: "⚠️ Telegram voice synthesis failed.",
+          });
       }
     }
     return delivered;
@@ -2570,7 +3056,11 @@ export function createTelegramServiceCore(deps: TelegramServiceDeps) {
   ): Promise<void> {
     for (const attachment of attachments) {
       if (!deps.readOutboundAttachment) {
-        await deps.api.sendMessage({ chatId, threadId, text: "⚠️ Outbound file delivery is unavailable." });
+        await deps.api.sendMessage({
+          chatId,
+          threadId,
+          text: "⚠️ Outbound file delivery is unavailable.",
+        });
         continue;
       }
       try {

@@ -68,7 +68,10 @@ export function BtwCard({
 }) {
   const [draft, setDraft] = React.useState("");
   const running = view.status === "starting" || view.status === "running";
-  const response = view.answer || view.message || (running ? "Thinking alongside this chat…" : "No answer was returned.");
+  const response =
+    view.answer ||
+    view.message ||
+    (running ? "Thinking alongside this chat…" : "No answer was returned.");
 
   const submit = React.useCallback(() => {
     const question = draft.trim();
@@ -135,11 +138,16 @@ export function BtwCard({
           <p className="rounded-2xl bg-control/55 px-3 py-2 text-regular text-secondary">
             {view.question}
           </p>
-          <div className="mt-3 whitespace-pre-wrap text-regular leading-relaxed text-primary" aria-live="polite">
+          <div
+            className="mt-3 whitespace-pre-wrap text-regular leading-relaxed text-primary"
+            aria-live="polite"
+          >
             {response}
           </div>
           {view.contextTrimmed ? (
-            <p className="mt-2 text-small text-secondary">Older chat context was trimmed to fit this model.</p>
+            <p className="mt-2 text-small text-secondary">
+              Older chat context was trimmed to fit this model.
+            </p>
           ) : null}
         </div>
 
@@ -178,7 +186,8 @@ export function BtwCard({
             </button>
           </div>
           <p className="mt-2 px-1 text-small text-secondary">
-            Uses this chat as read-only context. Questions and answers are not added to the transcript.
+            Uses this chat as read-only context. Questions and answers are not added to the
+            transcript.
           </p>
         </footer>
       </section>

@@ -74,11 +74,14 @@ export interface BotConnectorWatchIdentityInput {
   expectedRevision: string;
   mutationId: string;
 }
-export interface BotConnectorWatchUpdateInput extends BotConnectorWatchIdentityInput, BotConnectorWatchConfig {
+export interface BotConnectorWatchUpdateInput
+  extends BotConnectorWatchIdentityInput, BotConnectorWatchConfig {
   /** Omit to retain the current privately bound source. */
   sourceChoiceId?: string;
 }
-export interface BotConnectorWatchEnableInput extends BotConnectorWatchIdentityInput { enabled: boolean }
+export interface BotConnectorWatchEnableInput extends BotConnectorWatchIdentityInput {
+  enabled: boolean;
+}
 export type BotConnectorWatchTestInput =
   | { botId: string; id: string; expectedRevision: string }
   | { botId: string; sourceChoiceId: string; condition: BotConnectorWatchCondition };
@@ -90,8 +93,16 @@ export interface BotConnectorWatchTestResult {
   /** Bounded data labels; this preview never advances the saved baseline or runs the Bot. */
   preview: string[];
 }
-export interface BotConnectorWatchRemoval { id: string; revision: string; removed: boolean }
-export interface BotConnectorWatchRunResult { id: string; revision: string; admitted: boolean }
+export interface BotConnectorWatchRemoval {
+  id: string;
+  revision: string;
+  removed: boolean;
+}
+export interface BotConnectorWatchRunResult {
+  id: string;
+  revision: string;
+  admitted: boolean;
+}
 
 export const BOT_CONNECTOR_WATCH_CHANNELS = {
   list: "bots:connectorWatches:list",
@@ -106,20 +117,52 @@ export const BOT_CONNECTOR_WATCH_CHANNELS = {
 } as const;
 
 export const BOT_CONNECTOR_WATCH_TEMPLATES: readonly BotConnectorWatchTemplate[] = [
-  { id: "mail_messages", kind: "email", title: "Mail messages", description: "Watch a selected local Mail mailbox for new messages and meaningful changes.", available: true, intervals: [15, 30, 60] },
-  { id: "calendar_upcoming", kind: "calendar", title: "Upcoming calendar events", description: "Watch timed events entering an upcoming window.", available: false, unavailableReason: "This connector cannot safely bind an exact calendar account or report every recurrence and cancellation. Calendar watches are not available yet.", intervals: [15, 30, 60] },
+  {
+    id: "mail_messages",
+    kind: "email",
+    title: "Mail messages",
+    description: "Watch a selected local Mail mailbox for new messages and meaningful changes.",
+    available: true,
+    intervals: [15, 30, 60],
+  },
+  {
+    id: "calendar_upcoming",
+    kind: "calendar",
+    title: "Upcoming calendar events",
+    description: "Watch timed events entering an upcoming window.",
+    available: false,
+    unavailableReason:
+      "This connector cannot safely bind an exact calendar account or report every recurrence and cancellation. Calendar watches are not available yet.",
+    intervals: [15, 30, 60],
+  },
 ];
 
 export const BOT_CONNECTOR_WATCH_LIMITS = {
-  watches: 16, sources: 500, templates: 2,
-  nameChars: 120, promptChars: 32_768, labelChars: 500, errorChars: 200,
-  filterChars: 200, timezoneChars: 100, previewItems: 8, previewChars: 500,
-  lookAheadMinMinutes: 15, lookAheadMaxMinutes: 1_440,
+  watches: 16,
+  sources: 500,
+  templates: 2,
+  nameChars: 120,
+  promptChars: 32_768,
+  labelChars: 500,
+  errorChars: 200,
+  filterChars: 200,
+  timezoneChars: 100,
+  previewItems: 8,
+  previewChars: 500,
+  lookAheadMinMinutes: 15,
+  lookAheadMaxMinutes: 1_440,
 } as const;
 
 export interface BotConnectorWatchRejection {
   ok: false;
-  code: "invalid_request" | "not_found" | "revision_conflict" | "idempotency_conflict" | "idempotency_capacity" | "capability_denied" | "unavailable";
+  code:
+    | "invalid_request"
+    | "not_found"
+    | "revision_conflict"
+    | "idempotency_conflict"
+    | "idempotency_capacity"
+    | "capability_denied"
+    | "unavailable";
   message: string;
   currentRevision?: string;
   current?: BotConnectorWatchView;

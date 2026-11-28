@@ -78,8 +78,7 @@ export class DurableJobStore {
     identifier(options.profileId);
     if (!path.isAbsolute(options.root)) throw new JobError("invalid");
     const limit = options.maxConcurrent ?? 3;
-    if (!Number.isSafeInteger(limit) || limit < 1 || limit > 16)
-      throw new JobError("invalid");
+    if (!Number.isSafeInteger(limit) || limit < 1 || limit > 16) throw new JobError("invalid");
     mkdirSync(options.root, { recursive: true, mode: 0o700 });
     this.rootIdentity = this.privatePath(options.root, true);
     this.file = path.join(options.root, "jobs-v1.sqlite");
@@ -90,11 +89,7 @@ export class DurableJobStore {
     );
     try {
       const stat = fstatSync(fd);
-      if (
-        !stat.isFile() ||
-        stat.nlink !== 1 ||
-        (process.getuid && stat.uid !== process.getuid())
-      )
+      if (!stat.isFile() || stat.nlink !== 1 || (process.getuid && stat.uid !== process.getuid()))
         throw new JobError("unsafe");
       this.fileIdentity = { dev: stat.dev, ino: stat.ino };
     } finally {
@@ -117,14 +112,10 @@ export class DurableJobStore {
         throw new JobError("unsafe", "Unsupported durable-job schema.");
       if (
         version === 0 &&
-        this.db
-          .prepare("SELECT name FROM sqlite_master WHERE type='table'")
-          .get()
+        this.db.prepare("SELECT name FROM sqlite_master WHERE type='table'").get()
       )
         throw new JobError("unsafe", "Unversioned durable-job database.");
-      this.db.exec(
-        "PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL; BEGIN IMMEDIATE;",
-      );
+      this.db.exec("PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL; BEGIN IMMEDIATE;");
       try {
         if (version === 0)
           this.db.exec(`
@@ -142,12 +133,10 @@ export class DurableJobStore {
           PRAGMA user_version=1;
         `);
         if (version === 0)
-          this.db
-            .prepare("INSERT INTO metadata VALUES(1,?,0)")
-            .run(options.profileId);
-        const metadata = this.db
-          .prepare("SELECT profile FROM metadata WHERE id=1")
-          .get() as { profile: string } | undefined;
+          this.db.prepare("INSERT INTO metadata VALUES(1,?,0)").run(options.profileId);
+        const metadata = this.db.prepare("SELECT profile FROM metadata WHERE id=1").get() as
+          | { profile: string }
+          | undefined;
         if (metadata?.profile !== options.profileId)
           throw new JobError("unsafe", "Job profile mismatch.");
         this.db.exec("COMMIT");
@@ -228,9 +217,9 @@ export class DurableJobStore {
   }
   private row(id: string): Row {
     identifier(id);
-    const row = this.db
-      .prepare("SELECT * FROM jobs WHERE id=?")
-      .get(id) as unknown as Row | undefined;
+    const row = this.db.prepare("SELECT * FROM jobs WHERE id=?").get(id) as unknown as
+      | Row
+      | undefined;
     if (!row) throw new JobError("invalid", "Unknown durable job.");
     return row;
   }
@@ -256,8 +245,7 @@ export class DurableJobStore {
     job.revision++;
     job.updatedAt = now;
     const data = JSON.stringify(parseSnapshot(job));
-    if (Buffer.byteLength(data) > JOB_LIMITS.recordBytes)
-      throw new JobError("capacity");
+    if (Buffer.byteLength(data) > JOB_LIMITS.recordBytes) throw new JobError("capacity");
     const updated = this.db
       .prepare(
         `UPDATE jobs SET state=?, revision=?, data=? ${release ? ",lease_id=NULL,lease_owner=NULL,lease_until=NULL" : ""} WHERE id=? AND revision=?`,
@@ -274,9 +262,7 @@ export class DurableJobStore {
       .run(job.id, job.id, JOB_LIMITS.eventsPerJob);
     if (finishAttempt && job.attemptId)
       this.db
-        .prepare(
-          "UPDATE attempts SET finished_at=?,outcome=? WHERE id=? AND finished_at IS NULL",
-        )
+        .prepare("UPDATE attempts SET finished_at=?,outcome=? WHERE id=? AND finished_at IS NULL")
         .run(now, job.state, job.attemptId);
     return structuredClone(job);
   }
@@ -309,21 +295,14 @@ export class DurableJobStore {
   attempts(id: string) {
     identifier(id);
     return this.transaction(() =>
-      this.db
-        .prepare("SELECT * FROM attempts WHERE job_id=? ORDER BY started_at,id")
-        .all(id),
+      this.db.prepare("SELECT * FROM attempts WHERE job_id=? ORDER BY started_at,id").all(id),
     );
   }
-  enqueue(
-    inputValue: DurableJobInput,
-    actor: string,
-    key: string,
-  ): DurableJobSnapshot {
+  enqueue(inputValue: DurableJobInput, actor: string, key: string): DurableJobSnapshot {
     const input = parseInput(inputValue);
     identifier(actor);
     identifier(key);
-    if (input.profileId !== this.options.profileId)
-      throw new JobError("unsafe");
+    if (input.profileId !== this.options.profileId) throw new JobError("unsafe");
     return this.transaction((now) => {
       const fingerprint = digest(input);
       const previous = this.db
@@ -335,9 +314,7 @@ export class DurableJobStore {
       }
       if (
         this.db
-          .prepare(
-            "SELECT id FROM jobs WHERE chat_id=? AND state NOT IN ('succeeded','cancelled')",
-          )
+          .prepare("SELECT id FROM jobs WHERE chat_id=? AND state NOT IN ('succeeded','cancelled')")
           .get(input.chatId)
       )
         throw new JobError("conflict", "Chat already has unresolved work.");
@@ -376,13 +353,7 @@ export class DurableJobStore {
       };
       this.db
         .prepare("INSERT INTO jobs VALUES(?,?,?,?,NULL,NULL,NULL,0,?)")
-        .run(
-          job.id,
-          input.chatId,
-          job.state,
-          job.revision,
-          JSON.stringify(job),
-        );
+        .run(job.id, input.chatId, job.state, job.revision, JSON.stringify(job));
       this.db
         .prepare("INSERT INTO admissions VALUES(?,?,?,?)")
         .run(actor, key, fingerprint, job.id);
@@ -394,9 +365,9 @@ export class DurableJobStore {
     return this.transaction((now) => {
       const active = Number(
         (
-          this.db
-            .prepare("SELECT count(*) AS n FROM jobs WHERE lease_until>?")
-            .get(now) as { n: number }
+          this.db.prepare("SELECT count(*) AS n FROM jobs WHERE lease_until>?").get(now) as {
+            n: number;
+          }
         ).n,
       );
       if (active >= (this.options.maxConcurrent ?? 3)) return null;
@@ -422,15 +393,7 @@ export class DurableJobStore {
           .prepare(
             "UPDATE jobs SET lease_id=?,lease_owner=?,lease_until=?,fence=? WHERE id=? AND fence=? AND (lease_until IS NULL OR lease_until<=?)",
           )
-          .run(
-            lease.leaseId,
-            owner,
-            now + LEASE_MS,
-            fence,
-            job.id,
-            row.fence,
-            now,
-          );
+          .run(lease.leaseId, owner, now + LEASE_MS, fence, job.id, row.fence, now);
         if (changed.changes !== 1) continue;
         job.pendingReconciliation = true;
         return { lease, job: this.save(job, now) };
@@ -450,9 +413,7 @@ export class DurableJobStore {
       this.owned(lease, now);
       integer(now + LEASE_MS);
       this.db
-        .prepare(
-          "UPDATE jobs SET lease_until=? WHERE id=? AND lease_id=? AND fence=?",
-        )
+        .prepare("UPDATE jobs SET lease_until=? WHERE id=? AND lease_id=? AND fence=?")
         .run(now + LEASE_MS, lease.jobId, lease.leaseId, lease.fence);
     });
   }
@@ -472,10 +433,7 @@ export class DurableJobStore {
       this.save(job, now);
     });
   }
-  beginExecution(
-    lease: JobLease,
-    mode: "start" | "resume" | "retry",
-  ): DurableJobSnapshot {
+  beginExecution(lease: JobLease, mode: "start" | "resume" | "retry"): DurableJobSnapshot {
     return this.transaction((now) => {
       const job = this.owned(lease, now);
       if (
@@ -485,8 +443,7 @@ export class DurableJobStore {
         (mode === "start" ? job.dispatched : job.continuation !== mode)
       )
         throw new JobError("unsafe");
-      if (job.executionCount >= JOB_LIMITS.attemptsPerJob)
-        throw new JobError("capacity");
+      if (job.executionCount >= JOB_LIMITS.attemptsPerJob) throw new JobError("capacity");
       job.state = "running";
       job.dispatched = true;
       job.continuation = "none";
@@ -502,10 +459,8 @@ export class DurableJobStore {
     const checkpoint = parseCheckpoint(value);
     this.transaction((now) => {
       const job = this.owned(lease, now);
-      if (job.state !== "running" || job.intent !== "none")
-        throw new JobError("lost_lease");
-      if (checkpoint.inputMessageId !== job.input.messageId)
-        throw new JobError("unsafe");
+      if (job.state !== "running" || job.intent !== "none") throw new JobError("lost_lease");
+      if (checkpoint.inputMessageId !== job.input.messageId) throw new JobError("unsafe");
       job.checkpoint = checkpoint;
       this.save(job, now);
     });
@@ -514,10 +469,7 @@ export class DurableJobStore {
     const evidence = parseEvidence(evidenceValue);
     return this.transaction((now) => {
       const job = this.owned(lease, now);
-      if (
-        evidence.checkpoint &&
-        evidence.checkpoint.inputMessageId !== job.input.messageId
-      )
+      if (evidence.checkpoint && evidence.checkpoint.inputMessageId !== job.input.messageId)
         throw new JobError("unsafe");
       job.recovery = evidence.kind;
       job.resultRef = evidence.resultRef;
@@ -525,22 +477,14 @@ export class DurableJobStore {
       if (evidence.checkpoint) job.checkpoint = evidence.checkpoint;
       job.pendingReconciliation = false;
       job.continuation = "none";
-      const unsafe = [
-        "unknown",
-        "missing",
-        "stale_authority",
-        "unsettled",
-      ].includes(evidence.kind);
+      const unsafe = ["unknown", "missing", "stale_authority", "unsettled"].includes(evidence.kind);
       if (evidence.kind === "completed") job.state = "succeeded";
       else if (unsafe || (evidence.kind === "not_started" && job.dispatched))
         job.state = "needs_attention";
       else if (job.intent === "cancel") job.state = "cancelled";
       else if (job.intent === "stop") job.state = "interrupted";
       else if (job.intent === "pause") job.state = "paused";
-      else if (
-        evidence.kind === "waiting_approval" ||
-        evidence.kind === "waiting_input"
-      )
+      else if (evidence.kind === "waiting_approval" || evidence.kind === "waiting_input")
         job.state = evidence.kind;
       else if (evidence.kind === "failed_safe") job.state = "failed";
       else job.state = "interrupted";
@@ -566,9 +510,7 @@ export class DurableJobStore {
   control(request: JobControl): DurableJobSnapshot {
     return this.applyControl(request);
   }
-  interrupt(
-    request: Omit<JobControl, "action"> & { turnId: string },
-  ): DurableJobSnapshot {
+  interrupt(request: Omit<JobControl, "action"> & { turnId: string }): DurableJobSnapshot {
     identifier(request.turnId);
     return this.applyControl({ ...request, action: "stop" }, request.turnId);
   }
@@ -580,9 +522,7 @@ export class DurableJobStore {
     identifier(request.key);
     identifier(request.jobId);
     integer(request.expectedRevision);
-    if (
-      !["pause", "resume", "cancel", "retry", "stop"].includes(request.action)
-    )
+    if (!["pause", "resume", "cancel", "retry", "stop"].includes(request.action))
       throw new JobError("invalid");
     const fingerprint = digest([
       request.jobId,
@@ -593,9 +533,7 @@ export class DurableJobStore {
     return this.transaction((now) => {
       const previous = this.db
         .prepare("SELECT digest,response FROM controls WHERE actor=? AND key=?")
-        .get(request.actor, request.key) as
-        | { digest: string; response: string }
-        | undefined;
+        .get(request.actor, request.key) as { digest: string; response: string } | undefined;
       if (previous) {
         if (previous.digest !== fingerprint) throw new JobError("conflict");
         return parseSnapshot(JSON.parse(previous.response));
@@ -637,11 +575,7 @@ export class DurableJobStore {
         job.pendingReconciliation = true;
       } else {
         job.intent =
-          request.action === "pause"
-            ? "pause"
-            : request.action === "stop"
-              ? "stop"
-              : "cancel";
+          request.action === "pause" ? "pause" : request.action === "stop" ? "stop" : "cancel";
         job.continuation = "none";
         job.pendingReconciliation = true;
         job.state =

@@ -23,7 +23,9 @@ export interface ExpiredCacheInput {
 }
 
 /** When the chat's prompt cache lapses, or undefined when no lifetime is known. */
-export function promptCacheExpiresAt(pressure: ChatContextPressureV1 | null | undefined): number | undefined {
+export function promptCacheExpiresAt(
+  pressure: ChatContextPressureV1 | null | undefined,
+): number | undefined {
   const cache = pressure?.promptCache;
   return cache ? cache.lastRequestAt + cache.ttlMs : undefined;
 }
@@ -34,7 +36,10 @@ export function promptCacheExpiresAt(pressure: ChatContextPressureV1 | null | un
  * request is large, and compacting could shrink it. A chat the runtime already
  * compacts before its next request is left to that.
  */
-function expiredWindow(pressure: ChatContextPressureV1 | null | undefined, returnedAt: number): number | undefined {
+function expiredWindow(
+  pressure: ChatContextPressureV1 | null | undefined,
+  returnedAt: number,
+): number | undefined {
   const expiresAt = promptCacheExpiresAt(pressure);
   if (!pressure?.promptCache || expiresAt === undefined || returnedAt < expiresAt) return undefined;
   if (pressure.shouldCompact || pressure.compressibleHistoryMessages === 0) return undefined;
@@ -50,10 +55,14 @@ interface HandledStore {
 const localHandledStore: HandledStore = {
   load() {
     try {
-      const parsed: unknown = JSON.parse(globalThis.localStorage?.getItem(HANDLED_STORAGE_KEY) ?? "{}");
+      const parsed: unknown = JSON.parse(
+        globalThis.localStorage?.getItem(HANDLED_STORAGE_KEY) ?? "{}",
+      );
       if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return {};
       return Object.fromEntries(
-        Object.entries(parsed).filter((entry): entry is [string, number] => Number.isSafeInteger(entry[1])),
+        Object.entries(parsed).filter((entry): entry is [string, number] =>
+          Number.isSafeInteger(entry[1]),
+        ),
       );
     } catch {
       return {};
@@ -99,7 +108,8 @@ export class ExpiredCacheReturns {
   takeAutomatic(chatId: string, input: ExpiredCacheInput): boolean {
     if (input.engine !== "vcc" || !input.idle) return false;
     const returnedAt = this.returnedAt.get(chatId);
-    if (returnedAt === undefined || input.now - returnedAt > EXPIRED_CACHE_RETURN_GRACE_MS) return false;
+    if (returnedAt === undefined || input.now - returnedAt > EXPIRED_CACHE_RETURN_GRACE_MS)
+      return false;
     const window = expiredWindow(input.pressure, returnedAt);
     if (window === undefined || this.handledMap().get(chatId) === window) return false;
     this.returnedAt.delete(chatId);
@@ -107,7 +117,10 @@ export class ExpiredCacheReturns {
   }
 
   /** The "Compact first?" offer for LLM compaction, if one stands. */
-  offer(chatId: string, input: Omit<ExpiredCacheInput, "now">): { contextTokens: number } | undefined {
+  offer(
+    chatId: string,
+    input: Omit<ExpiredCacheInput, "now">,
+  ): { contextTokens: number } | undefined {
     if (input.engine !== "llm" || !input.idle || !input.pressure) return undefined;
     const returnedAt = this.returnedAt.get(chatId);
     if (returnedAt === undefined) return undefined;

@@ -84,7 +84,10 @@ test("concurrent updates serialize the revision check with the write", async () 
   assert.equal((await first).enabled, false);
   const conflict = await secondOutcome;
   assert.equal(conflict instanceof AidenRemoteServiceError, true);
-  assert.equal(conflict instanceof AidenRemoteServiceError ? conflict.code : undefined, "revision_conflict");
+  assert.equal(
+    conflict instanceof AidenRemoteServiceError ? conflict.code : undefined,
+    "revision_conflict",
+  );
   assert.equal(writes, 1);
 });
 
@@ -92,16 +95,22 @@ test("remote Memory updates invalidate controls only after persistence succeeds"
   let settings: AppSettings = { memoryEnabled: true };
   let failWrite = true;
   const publishedValues: boolean[] = [];
-  const service = new AidenRemoteMemorySettingsService({
-    getSettings: async () => structuredClone(settings),
-    setSettings: async (patch) => {
-      if (failWrite) throw new Error("Disk unavailable");
-      settings = { ...settings, ...patch };
-      return structuredClone(settings);
+  const service = new AidenRemoteMemorySettingsService(
+    {
+      getSettings: async () => structuredClone(settings),
+      setSettings: async (patch) => {
+        if (failWrite) throw new Error("Disk unavailable");
+        settings = { ...settings, ...patch };
+        return structuredClone(settings);
+      },
     },
-  }, () => publishedValues.push(settings.memoryEnabled !== false));
+    () => publishedValues.push(settings.memoryEnabled !== false),
+  );
   const current = await service.get();
-  await assert.rejects(service.update(current.revision, { enabled: false, confirmedForeground: true }), /Disk unavailable/u);
+  await assert.rejects(
+    service.update(current.revision, { enabled: false, confirmedForeground: true }),
+    /Disk unavailable/u,
+  );
   assert.deepEqual(publishedValues, []);
   failWrite = false;
   await service.update(current.revision, { enabled: false, confirmedForeground: true });

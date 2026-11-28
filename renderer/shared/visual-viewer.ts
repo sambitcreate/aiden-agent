@@ -59,7 +59,10 @@ interface NativeChannels {
  * Sends a message to whichever native host loaded the page. Returns false in a
  * plain browser (no channel), so callers can fall back or do nothing.
  */
-export function postVisualViewerMessage(message: VisualViewerNativeMessage, target: unknown = globalThis): boolean {
+export function postVisualViewerMessage(
+  message: VisualViewerNativeMessage,
+  target: unknown = globalThis,
+): boolean {
   const channels = target as NativeChannels;
   const ios = channels.webkit?.messageHandlers?.[VISUAL_VIEWER_IOS_HANDLER];
   if (ios) {

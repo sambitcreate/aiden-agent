@@ -44,7 +44,8 @@ export function parseStoredSshHosts(text: string): StoredSshHosts {
   const hosts = parseSshDeviceHostConfigs(record.hosts);
   if (!hosts) return { hosts: [], toolConsent: {} };
   const toolConsent: Record<string, SshHostToolConsent> = {};
-  const consent = typeof record.toolConsent === "object" && record.toolConsent !== null ? record.toolConsent : {};
+  const consent =
+    typeof record.toolConsent === "object" && record.toolConsent !== null ? record.toolConsent : {};
   for (const host of hosts) {
     const entry = (consent as Record<string, unknown>)[host.id];
     if (typeof entry !== "object" || entry === null) continue;
@@ -62,7 +63,9 @@ export async function readSshHosts(baseDir: string): Promise<StoredSshHosts> {
 export async function writeSshHosts(baseDir: string, stored: StoredSshHosts): Promise<void> {
   await mkdir(baseDir, { recursive: true });
   const ids = new Set(stored.hosts.map((host) => host.id));
-  const toolConsent = Object.fromEntries(Object.entries(stored.toolConsent).filter(([id]) => ids.has(id)));
+  const toolConsent = Object.fromEntries(
+    Object.entries(stored.toolConsent).filter(([id]) => ids.has(id)),
+  );
   await writeJsonAtomic(
     sshHostsPath(baseDir),
     { version: 1, hosts: stored.hosts, toolConsent },

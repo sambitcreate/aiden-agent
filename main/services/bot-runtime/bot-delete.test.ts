@@ -27,11 +27,25 @@ import { createBotManagedWorkspaceService } from "../bot-managed-workspace.js";
 import { BotMutationGate } from "../bot-mutation-gate.js";
 import { createBotStore } from "../bot-store-core.js";
 import { createChatStore } from "../chat-store-core.js";
-import { BotRulesUnavailableError, createBotRuleStore, type BotRuleStore } from "../bot-rules/store.js";
-import { BotSessionError, createBotSessionService, type BotSessionRuntime } from "./bot-session-service.js";
+import {
+  BotRulesUnavailableError,
+  createBotRuleStore,
+  type BotRuleStore,
+} from "../bot-rules/store.js";
+import {
+  BotSessionError,
+  createBotSessionService,
+  type BotSessionRuntime,
+} from "./bot-session-service.js";
 import { botDirectoryName } from "./harness-host.js";
 import { recordingDeps } from "./test-support/fixtures.js";
-import { createFauxModels, FAUX_MODEL_REF, slowAnswer, waitFor, type FauxModels } from "./test-support/faux.js";
+import {
+  createFauxModels,
+  FAUX_MODEL_REF,
+  slowAnswer,
+  waitFor,
+  type FauxModels,
+} from "./test-support/faux.js";
 
 const OWNER = "owner:local-aiden";
 const AUDIENCE = "desktop:local";
@@ -61,7 +75,11 @@ function png(width: number, height: number): Buffer {
   return bytes;
 }
 
-const normalizer: BotAvatarNormalizer = { async normalize() { return png(512, 512); } };
+const normalizer: BotAvatarNormalizer = {
+  async normalize() {
+    return png(512, 512);
+  },
+};
 
 /** Stands in for the Bot's browser partition on disk (Electron's `Partitions/aiden-bot-<dir>`). */
 function browserPartitionPath(profile: string, botId: string): string {
@@ -85,16 +103,19 @@ function openProfile(
         acceptedAt: "2026-10-07T00:00:00.000Z",
         acceptedDecision: "continue_full",
       }),
-      listProviders: async () => [{
-        id: "provider",
-        kind: "openai",
-        label: "Provider",
-        baseUrl: "https://provider.invalid/v1",
-        models: ["chat"],
-        needsKey: true,
-        hasKey: true,
-      }],
-      providerCredentialSignature: async () => createHash("sha256").update("credential").digest("hex"),
+      listProviders: async () => [
+        {
+          id: "provider",
+          kind: "openai",
+          label: "Provider",
+          baseUrl: "https://provider.invalid/v1",
+          models: ["chat"],
+          needsKey: true,
+          hasKey: true,
+        },
+      ],
+      providerCredentialSignature: async () =>
+        createHash("sha256").update("credential").digest("hex"),
       listMcpServers: async () => [],
       inspectMcpScopes: async () => [],
       listSkills: async () => [],
@@ -106,8 +127,14 @@ function openProfile(
     }),
   );
   const managedWorkspace = createBotManagedWorkspaceService({ root: () => service });
-  const chatStore = createChatStore(async () => path.join(profile, "chats"), async (id) => id);
-  const avatars = createFileBotAvatarStore({ root: () => path.join(profile, "bot-avatar-store"), normalizer });
+  const chatStore = createChatStore(
+    async () => path.join(profile, "chats"),
+    async (id) => id,
+  );
+  const avatars = createFileBotAvatarStore({
+    root: () => path.join(profile, "bot-avatar-store"),
+    normalizer,
+  });
   const clearedJournals: string[] = [];
   let photoFailures = options.failPhotoDeleteOnce ? 1 : 0;
   let browserFailures = options.failBrowserClearOnce ? 1 : 0;
@@ -143,7 +170,16 @@ function openProfile(
           },
         }),
   });
-  return { profile, app, botStore, capabilityStore, managedWorkspace, chatStore, avatars, clearedJournals };
+  return {
+    profile,
+    app,
+    botStore,
+    capabilityStore,
+    managedWorkspace,
+    chatStore,
+    avatars,
+    clearedJournals,
+  };
 }
 
 type Profile = ReturnType<typeof openProfile>;
@@ -153,7 +189,11 @@ async function sessionFor(
   opened: Profile,
   fauxModels: FauxModels,
   routines: Map<string, string[]>,
-  options: { quitAfterSessionDestroyed?: boolean; rules?: BotRuleStore; messages?: BotMessageLedger } = {},
+  options: {
+    quitAfterSessionDestroyed?: boolean;
+    rules?: BotRuleStore;
+    messages?: BotMessageLedger;
+  } = {},
 ): Promise<BotSessionRuntime> {
   return createBotSessionService({
     profileDir: profile,
@@ -164,11 +204,14 @@ async function sessionFor(
     // Production order: routines and bindings, then the Bot's stored data.
     deleteEffects: [
       async (botId) => {
-        if (options.quitAfterSessionDestroyed) throw new Error("Aiden quit right after erasing the session.");
+        if (options.quitAfterSessionDestroyed)
+          throw new Error("Aiden quit right after erasing the session.");
         routines.delete(botId);
       },
       async (botId) => options.rules?.forgetBot(botId),
-      async (botId) => { await options.messages?.forgetBot(botId); },
+      async (botId) => {
+        await options.messages?.forgetBot(botId);
+      },
       (botId) => opened.app.deleteBot({ botId }),
     ],
   });
@@ -177,7 +220,11 @@ async function sessionFor(
 async function createBotWithData(opened: Profile, name: string) {
   const bot = await opened.app.createBot({
     audienceId: AUDIENCE,
-    bot: { name, instructions: `Help as ${name}.`, avatar: { version: 1, shape: "orb", color: "sky" } },
+    bot: {
+      name,
+      instructions: `Help as ${name}.`,
+      avatar: { version: 1, shape: "orb", color: "sky" },
+    },
   });
   const chat = await opened.app.createChat({ audienceId: AUDIENCE, botId: bot.id });
   await opened.avatars.put({
@@ -203,14 +250,22 @@ async function assertErased(profile: string, botId: string, homePath: string, ch
   assert.equal(await fresh.botStore.get(botId), null, "record");
   assert.equal((await fresh.botStore.storedIds()).includes(botId), false, "record on disk");
   assert.equal(existsSync(homePath), false, "managed home directory");
-  assert.equal((await fresh.managedWorkspace.listBindings()).some((home) => home.botId === botId), false, "home binding");
+  assert.equal(
+    (await fresh.managedWorkspace.listBindings()).some((home) => home.botId === botId),
+    false,
+    "home binding",
+  );
   await assert.rejects(fresh.capabilityStore.getBotPolicy(botId), "access policy");
   await assert.rejects(fresh.capabilityStore.getChatPolicy(chatId), "chat access policy");
   assert.equal(await fresh.chatStore.get(chatId), null, "chat row");
   assert.deepEqual(await fresh.chatStore.listByBot(botId), [], "chat rows");
   assert.equal(await fresh.avatars.metadata(OWNER, botId), null, "photo");
   assert.equal(existsSync(browserPartitionPath(profile, botId)), false, "browser sign-ins");
-  assert.equal(existsSync(path.join(profile, "bots", botDirectoryName(botId))), false, "session directory");
+  assert.equal(
+    existsSync(path.join(profile, "bots", botDirectoryName(botId))),
+    false,
+    "session directory",
+  );
 }
 
 test("deleting a Bot mid-turn stops the provider and erases its session, photo, home, access, routines, chats and record", async () => {
@@ -219,15 +274,28 @@ test("deleting a Bot mid-turn stops the provider and erases its session, photo, 
   await opened.app.initialize();
   const doomed = await createBotWithData(opened, "Doomed");
   const survivor = await createBotWithData(opened, "Survivor");
-  const routines = new Map([[doomed.bot.id, ["routine-1"]], [survivor.bot.id, ["routine-2"]]]);
-  const fauxModels = createFauxModels([slowAnswer(), fauxAssistantMessage("never")], { tokensPerSecond: 40 });
+  const routines = new Map([
+    [doomed.bot.id, ["routine-1"]],
+    [survivor.bot.id, ["routine-2"]],
+  ]);
+  const fauxModels = createFauxModels([slowAnswer(), fauxAssistantMessage("never")], {
+    tokensPerSecond: 40,
+  });
   const session = await sessionFor(profile, opened, fauxModels, routines);
   try {
     const sent = await session.send(doomed.bot.id, { text: "write a lot", requestId: "desk-1" });
-    await waitFor(async () => (await session.state(doomed.bot.id)).kind === "running" && fauxModels.calls() === 1, {
-      what: "turn start",
-    });
-    const waiting = session.awaitReply(doomed.bot.id, sent.submissionId, new AbortController().signal);
+    await waitFor(
+      async () =>
+        (await session.state(doomed.bot.id)).kind === "running" && fauxModels.calls() === 1,
+      {
+        what: "turn start",
+      },
+    );
+    const waiting = session.awaitReply(
+      doomed.bot.id,
+      sent.submissionId,
+      new AbortController().signal,
+    );
 
     await session.deleteBot(doomed.bot.id);
 
@@ -235,7 +303,10 @@ test("deleting a Bot mid-turn stops the provider and erases its session, photo, 
     await new Promise((resolve) => setTimeout(resolve, 200));
     assert.equal(fauxModels.calls(), 1, "the provider stops receiving requests");
     assert.equal(routines.has(doomed.bot.id), false);
-    assert.deepEqual((await opened.app.list()).map(({ id }) => id), [survivor.bot.id]);
+    assert.deepEqual(
+      (await opened.app.list()).map(({ id }) => id),
+      [survivor.bot.id],
+    );
     await assertErased(profile, doomed.bot.id, doomed.homePath, doomed.chat.id);
 
     // Idempotent: deleting again, through either layer, changes nothing.
@@ -244,8 +315,14 @@ test("deleting a Bot mid-turn stops the provider and erases its session, photo, 
 
     // The other Bot keeps everything.
     assert.equal(routines.has(survivor.bot.id), true);
-    assert.equal(await fs.readFile(path.join(survivor.homePath, "memory.md"), "utf8"), "Survivor remembers.");
-    assert.equal(await fs.readFile(path.join(survivor.partition, "Cookies"), "utf8"), "Survivor-session=1");
+    assert.equal(
+      await fs.readFile(path.join(survivor.homePath, "memory.md"), "utf8"),
+      "Survivor remembers.",
+    );
+    assert.equal(
+      await fs.readFile(path.join(survivor.partition, "Cookies"), "utf8"),
+      "Survivor-session=1",
+    );
     assert.notEqual(await opened.avatars.metadata(OWNER, survivor.bot.id), null);
     assert.equal((await opened.app.getCanonicalChat(survivor.bot.id))?.id, survivor.chat.id);
   } finally {
@@ -272,7 +349,10 @@ test("a delete interrupted between steps leaves the Bot listed and finishes on r
 
     // Retry in the same process.
     await session.deleteBot(first.bot.id);
-    assert.deepEqual((await opened.app.list()).map(({ id }) => id), [second.bot.id]);
+    assert.deepEqual(
+      (await opened.app.list()).map(({ id }) => id),
+      [second.bot.id],
+    );
     await assertErased(profile, first.bot.id, first.homePath, first.chat.id);
   } finally {
     await session.shutdown();
@@ -281,7 +361,10 @@ test("a delete interrupted between steps leaves the Bot listed and finishes on r
   // Interrupted again, then the app restarts instead of retrying.
   const crashed = openProfile(profile, { failPhotoDeleteOnce: true });
   await crashed.app.initialize();
-  await assert.rejects(crashed.app.deleteBot({ botId: second.bot.id }), /quit while erasing the photo/u);
+  await assert.rejects(
+    crashed.app.deleteBot({ botId: second.bot.id }),
+    /quit while erasing the photo/u,
+  );
   assert.equal((await crashed.app.list()).length, 1);
 
   const restarted = openProfile(profile);
@@ -297,8 +380,15 @@ test("a delete that stops while clearing the Bot's browser keeps the Bot listed 
   const first = await createBotWithData(opened, "First");
   const second = await createBotWithData(opened, "Second");
 
-  await assert.rejects(opened.app.deleteBot({ botId: first.bot.id }), /clearing the Bot's browser/u);
-  assert.equal((await opened.app.list()).some(({ id }) => id === first.bot.id), true, "the Bot stays listed");
+  await assert.rejects(
+    opened.app.deleteBot({ botId: first.bot.id }),
+    /clearing the Bot's browser/u,
+  );
+  assert.equal(
+    (await opened.app.list()).some(({ id }) => id === first.bot.id),
+    true,
+    "the Bot stays listed",
+  );
   assert.equal(existsSync(first.partition), true, "its sign-ins are still there to clear");
 
   // Retry in the same process.
@@ -309,7 +399,10 @@ test("a delete that stops while clearing the Bot's browser keeps the Bot listed 
   // Interrupted again, then the app restarts instead of retrying.
   const crashed = openProfile(profile, { failBrowserClearOnce: true });
   await crashed.app.initialize();
-  await assert.rejects(crashed.app.deleteBot({ botId: second.bot.id }), /clearing the Bot's browser/u);
+  await assert.rejects(
+    crashed.app.deleteBot({ botId: second.bot.id }),
+    /clearing the Bot's browser/u,
+  );
   const restarted = openProfile(profile);
   await restarted.app.initialize();
   assert.deepEqual(await restarted.app.list(), []);
@@ -322,18 +415,30 @@ test("a delete cut short right after the session is erased finishes at the next 
   await opened.app.initialize();
   const doomed = await createBotWithData(opened, "Doomed");
   const survivor = await createBotWithData(opened, "Survivor");
-  const routines = new Map([[doomed.bot.id, ["routine-1"]], [survivor.bot.id, ["routine-2"]]]);
+  const routines = new Map([
+    [doomed.bot.id, ["routine-1"]],
+    [survivor.bot.id, ["routine-2"]],
+  ]);
   const fauxModels = createFauxModels([fauxAssistantMessage("hi")]);
-  const crashed = await sessionFor(profile, opened, fauxModels, routines, { quitAfterSessionDestroyed: true });
+  const crashed = await sessionFor(profile, opened, fauxModels, routines, {
+    quitAfterSessionDestroyed: true,
+  });
   await crashed.conversation(doomed.bot.id);
   await assert.rejects(crashed.deleteBot(doomed.bot.id), /quit right after erasing the session/u);
   await crashed.shutdown();
-  assert.equal(existsSync(path.join(profile, "bots", botDirectoryName(doomed.bot.id))), false, "the session is gone");
+  assert.equal(
+    existsSync(path.join(profile, "bots", botDirectoryName(doomed.bot.id))),
+    false,
+    "the session is gone",
+  );
 
   // Next start: the Bot is still listed, because only its session was erased.
   const restarted = openProfile(profile);
   await restarted.app.initialize();
-  assert.equal((await restarted.app.list()).some(({ id }) => id === doomed.bot.id), true);
+  assert.equal(
+    (await restarted.app.list()).some(({ id }) => id === doomed.bot.id),
+    true,
+  );
   const session = await sessionFor(profile, restarted, fauxModels, routines);
   try {
     await assert.rejects(
@@ -342,7 +447,10 @@ test("a delete cut short right after the session is erased finishes at the next 
       "a pending delete refuses to recreate the session before startup finishes it",
     );
     await session.initialize();
-    assert.deepEqual((await restarted.app.list()).map(({ id }) => id), [survivor.bot.id]);
+    assert.deepEqual(
+      (await restarted.app.list()).map(({ id }) => id),
+      [survivor.bot.id],
+    );
     assert.equal(routines.has(doomed.bot.id), false, "the remaining effects ran");
     assert.equal(routines.has(survivor.bot.id), true);
     await assert.rejects(
@@ -361,7 +469,10 @@ test("a delete cut short right after the session is erased finishes at the next 
   const later = await sessionFor(profile, again, fauxModels, routines);
   try {
     await later.initialize();
-    assert.equal((await later.send(survivor.bot.id, { text: "still here?", requestId: "after" })).deduped, false);
+    assert.equal(
+      (await later.send(survivor.bot.id, { text: "still here?", requestId: "after" })).deduped,
+      false,
+    );
   } finally {
     await later.shutdown();
   }
@@ -380,18 +491,26 @@ test("Bots archived by an older release are erased at startup with all their dat
 
   // An older release archived the Bot instead of deleting it.
   const botsFile = path.join(profile, "bots.json");
-  const disk = JSON.parse(await fs.readFile(botsFile, "utf8")) as { bots: Array<Record<string, unknown>> };
+  const disk = JSON.parse(await fs.readFile(botsFile, "utf8")) as {
+    bots: Array<Record<string, unknown>>;
+  };
   for (const entry of disk.bots) if (entry.id === archived.bot.id) entry.archivedAt = Date.now();
   await fs.writeFile(botsFile, JSON.stringify(disk));
 
   const after = openProfile(profile);
   await after.app.initialize();
-  assert.deepEqual((await after.app.list()).map(({ id }) => id), [live.bot.id]);
+  assert.deepEqual(
+    (await after.app.list()).map(({ id }) => id),
+    [live.bot.id],
+  );
   const session = await sessionFor(profile, after, fauxModels, new Map());
   try {
     await session.initialize();
     await assertErased(profile, archived.bot.id, archived.homePath, archived.chat.id);
-    assert.equal(await fs.readFile(path.join(live.homePath, "memory.md"), "utf8"), "Live remembers.");
+    assert.equal(
+      await fs.readFile(path.join(live.homePath, "memory.md"), "utf8"),
+      "Live remembers.",
+    );
   } finally {
     await session.shutdown();
   }
@@ -430,7 +549,11 @@ test("legacy Bot transcripts are wiped once, and the Bot keeps working afterward
   const upgraded = openProfile(profile);
   await upgraded.app.initialize();
   const canonical = await upgraded.chatStore.get(chat.id);
-  assert.deepEqual(canonical?.messages, [], "the canonical chat keeps its row with an empty transcript");
+  assert.deepEqual(
+    canonical?.messages,
+    [],
+    "the canonical chat keeps its row with an empty transcript",
+  );
   assert.equal(canonical?.botId, bot.id);
   assert.equal(await upgraded.chatStore.get(historical.id), null, "historical chats are removed");
   await assert.rejects(upgraded.capabilityStore.getChatPolicy(historical.id));
@@ -440,7 +563,12 @@ test("legacy Bot transcripts are wiped once, and the Bot keeps working afterward
   // The Bot still works: its authority admits against the same chat, and a turn runs.
   assert.equal((await upgraded.app.getCanonicalChat(bot.id))?.id, chat.id);
   assert.equal(
-    await upgraded.app.authorizeRetainedChat({ audienceId: AUDIENCE, botId: bot.id, chatId: chat.id, access: "write" }),
+    await upgraded.app.authorizeRetainedChat({
+      audienceId: AUDIENCE,
+      botId: bot.id,
+      chatId: chat.id,
+      access: "write",
+    }),
     true,
   );
   const fauxModels = createFauxModels([fauxAssistantMessage("fresh start")]);
@@ -469,9 +597,24 @@ test("deleting a Bot erases its rules; a later edit is refused and never brings 
   const survivor = await createBotWithData(opened, "Survivor");
   const knownBot = async (botId: string) => (await opened.botStore.get(botId)) != null;
   const rules = createBotRuleStore({ profileDir: profile, knownBot });
-  assert.equal((await rules.update(doomed.bot.id, 0, { type: "add_custom", text: "order food", behavior: "hand_off" })).ok, true);
   assert.equal(
-    (await rules.update(survivor.bot.id, 0, { type: "set_behavior", ruleId: "default.delete", behavior: "hand_off" })).ok,
+    (
+      await rules.update(doomed.bot.id, 0, {
+        type: "add_custom",
+        text: "order food",
+        behavior: "hand_off",
+      })
+    ).ok,
+    true,
+  );
+  assert.equal(
+    (
+      await rules.update(survivor.bot.id, 0, {
+        type: "set_behavior",
+        ruleId: "default.delete",
+        behavior: "hand_off",
+      })
+    ).ok,
     true,
   );
   const doomedDirectory = path.join(profile, "bots", botDirectoryName(doomed.bot.id));
@@ -481,16 +624,28 @@ test("deleting a Bot erases its rules; a later edit is refused and never brings 
     await session.deleteBot(doomed.bot.id);
     assert.equal(existsSync(doomedDirectory), false);
     await assert.rejects(
-      rules.update(doomed.bot.id, 1, { type: "add_custom", text: "book a flight", behavior: "ask" }),
+      rules.update(doomed.bot.id, 1, {
+        type: "add_custom",
+        text: "book a flight",
+        behavior: "ask",
+      }),
       BotRulesUnavailableError,
     );
     // After a restart the Bot store no longer knows it, so a fresh store refuses too.
     const restarted = createBotRuleStore({ profileDir: profile, knownBot });
     await assert.rejects(
-      restarted.update(doomed.bot.id, 0, { type: "add_custom", text: "book a flight", behavior: "ask" }),
+      restarted.update(doomed.bot.id, 0, {
+        type: "add_custom",
+        text: "book a flight",
+        behavior: "ask",
+      }),
       BotRulesUnavailableError,
     );
-    assert.equal(existsSync(doomedDirectory), false, "no edit brings the deleted Bot's directory back");
+    assert.equal(
+      existsSync(doomedDirectory),
+      false,
+      "no edit brings the deleted Bot's directory back",
+    );
     await assertErased(profile, doomed.bot.id, doomed.homePath, doomed.chat.id);
     const kept = await restarted.rules(survivor.bot.id);
     assert.equal(kept.find((rule) => rule.id === "default.delete")?.behavior, "hand_off");
@@ -499,17 +654,53 @@ test("deleting a Bot erases its rules; a later edit is refused and never brings 
   }
 });
 
-
 test("deleting a Bot forgets its message envelopes on either side", async () => {
- const profile=await tempProfile(),opened=openProfile(profile);await opened.app.initialize();
- const a=await createBotWithData(opened,"A"),b=await createBotWithData(opened,"B");
- const messages=createBotMessageLedger({file:()=>path.join(profile,"bots","bot-messages.json"),now:Date.now});
- const ids:string[]=[];
- for(const [from,to] of [[a.bot,b.bot],[b.bot,a.bot]]) {
-  const id=randomUUID();ids.push(id);const now=Date.now();
-  await messages.reserve({id,fromBotId:from!.id,toBotId:to!.id,fromName:from!.name,toName:to!.name,hop:1,targetRequestId:`bot:${from!.id}:1:${id}`,createdAt:now,deadline:now+60_000,status:"delivered",message:"help",waiting:[],effects:[{id:`${id}:target`,kind:"target",botId:to!.id,requestId:`bot:${from!.id}:1:${id}`,text:"help"}]});
- }
- const service=await sessionFor(profile,opened,createFauxModels(),new Map(),{messages});
- try {await service.deleteBot(a.bot.id);for(const id of ids)assert.equal(await messages.get(id),undefined);}
- finally {await service.shutdown();}
+  const profile = await tempProfile(),
+    opened = openProfile(profile);
+  await opened.app.initialize();
+  const a = await createBotWithData(opened, "A"),
+    b = await createBotWithData(opened, "B");
+  const messages = createBotMessageLedger({
+    file: () => path.join(profile, "bots", "bot-messages.json"),
+    now: Date.now,
+  });
+  const ids: string[] = [];
+  for (const [from, to] of [
+    [a.bot, b.bot],
+    [b.bot, a.bot],
+  ]) {
+    const id = randomUUID();
+    ids.push(id);
+    const now = Date.now();
+    await messages.reserve({
+      id,
+      fromBotId: from!.id,
+      toBotId: to!.id,
+      fromName: from!.name,
+      toName: to!.name,
+      hop: 1,
+      targetRequestId: `bot:${from!.id}:1:${id}`,
+      createdAt: now,
+      deadline: now + 60_000,
+      status: "delivered",
+      message: "help",
+      waiting: [],
+      effects: [
+        {
+          id: `${id}:target`,
+          kind: "target",
+          botId: to!.id,
+          requestId: `bot:${from!.id}:1:${id}`,
+          text: "help",
+        },
+      ],
+    });
+  }
+  const service = await sessionFor(profile, opened, createFauxModels(), new Map(), { messages });
+  try {
+    await service.deleteBot(a.bot.id);
+    for (const id of ids) assert.equal(await messages.get(id), undefined);
+  } finally {
+    await service.shutdown();
+  }
 });

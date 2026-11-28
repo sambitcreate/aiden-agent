@@ -108,12 +108,16 @@ export function createLiveChatController(read: () => LiveChatPaneState): LiveCha
         if (!receipt) return liveChatFailure(LIVE_CHAT_ERRORS.cannotSteer);
         if (receipt.admitted) return { ok: true, status: "steered", title: state.title };
         // A UserPromptSubmit hook refused it: saved and marked, never read.
-        if (receipt.committed && receipt.reason === "invalid") return liveChatFailure(LIVE_CHAT_ERRORS.hookBlocked);
+        if (receipt.committed && receipt.reason === "invalid")
+          return liveChatFailure(LIVE_CHAT_ERRORS.hookBlocked);
         if (receipt.committed) {
           // Saved in the transcript, but the reply ended before it read it.
           return { ok: true, status: "saved_not_read", title: state.title };
         }
-        return { ok: false, error: { code: "steer_rejected", message: steerRejectionMessage(receipt.reason) } };
+        return {
+          ok: false,
+          error: { code: "steer_rejected", message: steerRejectionMessage(receipt.reason) },
+        };
       }
       try {
         if (action === "send") {
@@ -127,7 +131,9 @@ export function createLiveChatController(read: () => LiveChatPaneState): LiveCha
           state.showError(LIVE_CHAT_ERRORS.sendOutcomeUnknown.message);
           return liveChatFailure(LIVE_CHAT_ERRORS.sendOutcomeUnknown);
         }
-        state.showError(error instanceof Error ? error.message : LIVE_CHAT_ERRORS.sendFailed.message);
+        state.showError(
+          error instanceof Error ? error.message : LIVE_CHAT_ERRORS.sendFailed.message,
+        );
         return liveChatFailure(LIVE_CHAT_ERRORS.sendFailed);
       }
     },
@@ -160,6 +166,9 @@ export function useLiveChatController(state: LiveChatPaneState): void {
   const { chatId, workspaceId, isDraft, reachable } = state;
   React.useEffect(() => {
     if (!reachable) return undefined;
-    return liveChatControl.register(owner, createLiveChatController(() => latest.current));
+    return liveChatControl.register(
+      owner,
+      createLiveChatController(() => latest.current),
+    );
   }, [chatId, isDraft, owner, reachable, workspaceId]);
 }

@@ -4,7 +4,11 @@ import assert from "node:assert/strict";
 import { afterEach, test } from "node:test";
 import * as React from "react";
 import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
-import { emptyDesignCanvas, type DesignCanvas, type DesignFrame } from "../shared/design-canvas/schema";
+import {
+  emptyDesignCanvas,
+  type DesignCanvas,
+  type DesignFrame,
+} from "../shared/design-canvas/schema";
 import { DesignSidePanel } from "./design-side-panel";
 import type { DesignTweakOps } from "./design-tweaks-panel";
 import { reorderLayer, stepLayer } from "./layers-core";
@@ -17,7 +21,18 @@ afterEach(() => {
 
 function note(id: string): DesignFrame {
   const page = emptyDesignCanvas().activePageId;
-  return { id, kind: "note", title: id, x: 0, y: 0, w: 200, h: 120, text: id, pageId: page, createdBy: "person" };
+  return {
+    id,
+    kind: "note",
+    title: id,
+    x: 0,
+    y: 0,
+    w: 200,
+    h: 120,
+    text: id,
+    pageId: page,
+    createdBy: "person",
+  };
 }
 
 /** Layers never reaches the Tweaks tab, so its operations are unused. */
@@ -55,7 +70,12 @@ function Harness({ initial, changes }: { initial: DesignCanvas; changes: string[
 /** The canvas draws Back first, so the list shows Front, Middle, Back. */
 function renderLayers() {
   const changes: string[] = [];
-  render(<Harness initial={{ ...emptyDesignCanvas(), frames: [note("Back"), note("Middle"), note("Front")] }} changes={changes} />);
+  render(
+    <Harness
+      initial={{ ...emptyDesignCanvas(), frames: [note("Back"), note("Middle"), note("Front")] }}
+      changes={changes}
+    />,
+  );
   return changes;
 }
 
@@ -99,7 +119,10 @@ test("Escape puts a held layer back and keeps focus on its grip", () => {
 
 test("Option-arrow on a layer's name still steps it at once", () => {
   const changes = renderLayers();
-  fireEvent.keyDown(screen.getByRole("button", { name: "Middle" }), { key: "ArrowUp", altKey: true });
+  fireEvent.keyDown(screen.getByRole("button", { name: "Middle" }), {
+    key: "ArrowUp",
+    altKey: true,
+  });
   assert.deepEqual(changes, ["Middle forward"]);
   assert.deepEqual(rows(), ["Middle", "Front", "Back"]);
 });
@@ -110,12 +133,23 @@ function stubRowRects() {
     const id = this.dataset.layerId;
     const index = id ? rows().indexOf(id) : -1;
     const top = index * 32;
-    return { top, bottom: top + 32, height: 32, left: 0, right: 300, width: 300, x: 0, y: top, toJSON: () => ({}) } as DOMRect;
+    return {
+      top,
+      bottom: top + 32,
+      height: 32,
+      left: 0,
+      right: 300,
+      width: 300,
+      x: 0,
+      y: top,
+      toJSON: () => ({}),
+    } as DOMRect;
   };
 }
 
 const rowOf = (id: string) => document.querySelector<HTMLElement>(`[data-layer-id="${id}"]`)!;
-const flushFrame = () => act(() => new Promise((resolve) => requestAnimationFrame(() => resolve(undefined))));
+const flushFrame = () =>
+  act(() => new Promise((resolve) => requestAnimationFrame(() => resolve(undefined))));
 
 test("a pointer drag starts past 3px, shows where it lands, and commits once on release", async () => {
   const changes = renderLayers();
@@ -123,7 +157,11 @@ test("a pointer drag starts past 3px, shows where it lands, and commits once on 
   fireEvent.pointerDown(rowOf("Front"), { button: 0, pointerId: 1, clientY: 10 });
   fireEvent.pointerMove(window, { pointerId: 1, clientY: 12, buttons: 1 });
   await flushFrame();
-  assert.equal(rowOf("Front").hasAttribute("data-dragging"), false, "under the threshold it is still a click");
+  assert.equal(
+    rowOf("Front").hasAttribute("data-dragging"),
+    false,
+    "under the threshold it is still a click",
+  );
   fireEvent.pointerMove(window, { pointerId: 1, clientY: 90, buttons: 1 });
   await flushFrame();
   assert.equal(rowOf("Front").hasAttribute("data-dragging"), true);

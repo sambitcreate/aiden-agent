@@ -17,12 +17,21 @@ import {
   type Group,
 } from "three";
 import type { DeviceScreenSize } from "../device-stream";
-import { createAndroidFoldScene, DEFAULT_FOLD_INNER_ASPECT, isFoldInnerAspect } from "./android-fold-scene";
+import {
+  createAndroidFoldScene,
+  DEFAULT_FOLD_INNER_ASPECT,
+  isFoldInnerAspect,
+} from "./android-fold-scene";
 import { createDeviceMotion } from "./device-motion";
 import { createDeviceFraming } from "./framing";
 import { buildHandsetModel } from "./hardware-models";
 import { createRenderScheduler } from "./interaction";
-import { createModelPhoneScene, disposeDeviceModel, loadDeviceModel, type LoadedDeviceModel } from "./model-scene";
+import {
+  createModelPhoneScene,
+  disposeDeviceModel,
+  loadDeviceModel,
+  type LoadedDeviceModel,
+} from "./model-scene";
 import type { DeviceModelId } from "./model-registry";
 import {
   createDeviceModelSlot,
@@ -53,7 +62,11 @@ export interface PhoneViewer {
   readonly setFoldAngle: (angle: number | null) => void;
   readonly resize: (width: number, height: number, pixelRatio: number) => void;
   /** Normalized viewport point to normalized device point, or null off the display. */
-  readonly screenPoint: (x: number, y: number, captured?: boolean) => { x: number; y: number } | null;
+  readonly screenPoint: (
+    x: number,
+    y: number,
+    captured?: boolean,
+  ) => { x: number; y: number } | null;
   /** Deltas in viewport fractions. */
   readonly orbit: (deltaX: number, deltaY: number) => void;
   /** Natural-log zoom step; positive moves closer. */
@@ -85,7 +98,10 @@ export function createPhoneViewer(options: {
   readonly foldAngle?: number | null;
   readonly runtime?: ViewerRuntime;
   /** Fetches and parses a bundled model; tests pass their own. */
-  readonly loadModel?: (source: DeviceModelSource | DeviceAccessorySource, signal: AbortSignal) => Promise<LoadedDeviceModel>;
+  readonly loadModel?: (
+    source: DeviceModelSource | DeviceAccessorySource,
+    signal: AbortSignal,
+  ) => Promise<LoadedDeviceModel>;
   readonly onModelError?: (cause: unknown) => void;
 }): PhoneViewer {
   const loadModel = options.loadModel ?? ((source, signal) => loadDeviceModel(source, signal));
@@ -171,14 +187,18 @@ export function createPhoneViewer(options: {
     | ReturnType<typeof createAndroidFoldScene>
     | ReturnType<typeof createModelPhoneScene>;
   const familyScene = (): AnyScene =>
-    foldAngle !== null && isAndroid(profile) ? createFoldScene(foldAngle) : createPhoneScene(texture, layout, profile);
+    foldAngle !== null && isAndroid(profile)
+      ? createFoldScene(foldAngle)
+      : createPhoneScene(texture, layout, profile);
   let phone: AnyScene = familyScene();
   scene.add(phone.root);
   let disposed = false;
   let failed = false;
   const rest = new Quaternion();
   const motion = createDeviceMotion({
-    choose: (rotation) => nearestDeviceView(rotation, [{ rotation: new Quaternion(), yawLimit: Math.PI / 3 }])!.rotation,
+    choose: (rotation) =>
+      nearestDeviceView(rotation, [{ rotation: new Quaternion(), yawLimit: Math.PI / 3 }])!
+        .rotation,
   });
   motion.setPose(rest, runtime.now(), true);
   const framing = createDeviceFraming();
@@ -208,7 +228,13 @@ export function createPhoneViewer(options: {
       options.onFramingAspect?.(aspect);
     }
     phone.root.updateMatrixWorld(true);
-    framing.setBounds(new Box3().setFromObject(phone.root), (camera.fov * Math.PI) / 360, camera.aspect, runtime.now(), immediate);
+    framing.setBounds(
+      new Box3().setFromObject(phone.root),
+      (camera.fov * Math.PI) / 360,
+      camera.aspect,
+      runtime.now(),
+      immediate,
+    );
     applyCamera();
   };
   const applyPose = () => {
@@ -246,9 +272,13 @@ export function createPhoneViewer(options: {
           fit(reduced);
         }
         if (orientationTurn) {
-          const progress = Math.min(1, (now - orientationTurn.startedAt) / ANDROID_ORIENTATION_TURN_MS);
+          const progress = Math.min(
+            1,
+            (now - orientationTurn.startedAt) / ANDROID_ORIENTATION_TURN_MS,
+          );
           const eased = progress * progress * (3 - 2 * progress);
-          orientationAngle = orientationTurn.from + (orientationTurn.to - orientationTurn.from) * eased;
+          orientationAngle =
+            orientationTurn.from + (orientationTurn.to - orientationTurn.from) * eased;
           if (progress === 1) orientationTurn = null;
           applyPose();
           fit(reduced);
@@ -263,7 +293,8 @@ export function createPhoneViewer(options: {
         framing.advance(now, reduced);
         applyCamera();
         draw();
-        if (motion.needsFrame() || framing.needsFrame() || orientationTurn || foldTurn) scheduler.invalidate();
+        if (motion.needsFrame() || framing.needsFrame() || orientationTurn || foldTurn)
+          scheduler.invalidate();
       } catch {
         fail();
       }
@@ -273,7 +304,8 @@ export function createPhoneViewer(options: {
   );
   const updateLayout = (nextProfile = profile) => {
     const next = phoneDisplayLayout(screen, sourceWidth(), sourceHeight());
-    const resized = textureWidth !== options.source.width || textureHeight !== options.source.height;
+    const resized =
+      textureWidth !== options.source.width || textureHeight !== options.source.height;
     if (
       resized ||
       nextProfile !== profile ||
@@ -302,7 +334,11 @@ export function createPhoneViewer(options: {
         phone.dispose();
         phone = createFoldScene(angle, next);
         scene.add(phone.root);
-      } else if (!imported && !("setAngle" in phone) && (nextProfile !== profile || next.aspect !== layout.aspect)) {
+      } else if (
+        !imported &&
+        !("setAngle" in phone) &&
+        (nextProfile !== profile || next.aspect !== layout.aspect)
+      ) {
         scene.remove(phone.root);
         phone.dispose();
         phone = createPhoneScene(texture, next, nextProfile);
@@ -312,8 +348,15 @@ export function createPhoneViewer(options: {
       }
       if (next.rotation !== layout.rotation) {
         if (isAndroid(nextProfile) && !("setAngle" in phone) && !runtime.reducedMotion()) {
-          const difference = Math.atan2(Math.sin(next.rotation - orientationAngle), Math.cos(next.rotation - orientationAngle));
-          orientationTurn = { from: orientationAngle, to: orientationAngle + difference, startedAt: runtime.now() };
+          const difference = Math.atan2(
+            Math.sin(next.rotation - orientationAngle),
+            Math.cos(next.rotation - orientationAngle),
+          );
+          orientationTurn = {
+            from: orientationAngle,
+            to: orientationAngle + difference,
+            startedAt: runtime.now(),
+          };
         } else {
           orientationTurn = null;
           orientationAngle = "setAngle" in phone ? 0 : next.rotation;
@@ -380,7 +423,11 @@ export function createPhoneViewer(options: {
     onError: options.onModelError,
     install(model) {
       const bounds = model ? new Box3().setFromObject(model.asset) : null;
-      if (bounds && (bounds.isEmpty() || ![...bounds.min.toArray(), ...bounds.max.toArray()].every(Number.isFinite))) {
+      if (
+        bounds &&
+        (bounds.isEmpty() ||
+          ![...bounds.min.toArray(), ...bounds.max.toArray()].every(Number.isFinite))
+      ) {
         throw new Error("Device accessory has invalid bounds");
       }
       accessory?.asset.removeFromParent();
@@ -473,7 +520,8 @@ export function createPhoneViewer(options: {
       if (disposed) return;
       if (![width, height, pixelRatio].every(Number.isFinite) || width <= 0 || height <= 0) return;
       const ratio = viewerPixelRatio(pixelRatio);
-      if (viewport.width === width && viewport.height === height && viewport.pixelRatio === ratio) return;
+      if (viewport.width === width && viewport.height === height && viewport.pixelRatio === ratio)
+        return;
       viewport = { width, height, pixelRatio: ratio };
       fit(true);
       scheduler.invalidate();
@@ -490,7 +538,10 @@ export function createPhoneViewer(options: {
     },
     zoomBy(logDelta) {
       if (disposed || !Number.isFinite(logDelta)) return;
-      const next = Math.min(PHONE_ZOOM_LIMITS.closer, Math.max(-PHONE_ZOOM_LIMITS.farther, zoom + logDelta));
+      const next = Math.min(
+        PHONE_ZOOM_LIMITS.closer,
+        Math.max(-PHONE_ZOOM_LIMITS.farther, zoom + logDelta),
+      );
       if (next === zoom) return;
       zoom = next;
       applyCamera();

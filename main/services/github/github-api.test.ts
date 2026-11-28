@@ -6,7 +6,10 @@ import { fixedCredentials, jsonResponse, recordingFetch } from "./github-test-fe
 
 const NOW = Date.parse("2026-10-07T20:00:00Z");
 
-function api(responder: Parameters<typeof recordingFetch>[0], tokens = { "github.com": "dotcom-token" } as Record<string, string>) {
+function api(
+  responder: Parameters<typeof recordingFetch>[0],
+  tokens = { "github.com": "dotcom-token" } as Record<string, string>,
+) {
   const recorded = recordingFetch(responder);
   const credentials = fixedCredentials(tokens);
   const client = new GitHubApi({ credentials, fetch: recorded.fetch, now: () => NOW });
@@ -51,7 +54,11 @@ test("an unauthorized discovered host never receives the enterprise token", asyn
     },
   });
   const client = new GitHubApi({ credentials, fetch: recorded.fetch, now: () => NOW });
-  const attacker = await client.graphql({ ...read, host: "attacker.example", query: "query { viewer { login } }" });
+  const attacker = await client.graphql({
+    ...read,
+    host: "attacker.example",
+    query: "query { viewer { login } }",
+  });
   assert.equal(attacker.kind, "unavailable");
   assert.equal(recorded.requests.length, 0);
 
@@ -63,7 +70,11 @@ test("an unauthorized discovered host never receives the enterprise token", asyn
     fetch: recorded.fetch,
     now: () => NOW,
   });
-  const accepted = await configured.graphql({ ...read, host: "git.corp.example", query: "query { viewer { login } }" });
+  const accepted = await configured.graphql({
+    ...read,
+    host: "git.corp.example",
+    query: "query { viewer { login } }",
+  });
   assert.equal(accepted.kind, "ok");
   assert.equal(recorded.requests.length, 1);
   assert.equal(recorded.requests[0]!.url, "https://git.corp.example/api/graphql");
@@ -100,7 +111,12 @@ test("a credential issued for another host is refused before sending", async () 
     credentials: {
       resolve: async () => ({
         ok: true,
-        credential: { host: "github.com", token: "dotcom-secret", fingerprint: "x", source: "environment" },
+        credential: {
+          host: "github.com",
+          token: "dotcom-secret",
+          fingerprint: "x",
+          source: "environment",
+        },
       }),
       invalidate: () => undefined,
     },
@@ -113,18 +129,26 @@ test("a credential issued for another host is refused before sending", async () 
 test("rate limits are recognized in every shape GitHub uses, with the right retry time", async () => {
   const resetSeconds = NOW / 1000 + 600;
   const cases: Array<[string, () => Response, number | undefined]> = [
-    ["429 with retry-after seconds", () => jsonResponse({ message: "Too many" }, 429, { "retry-after": "60" }), NOW + 60_000],
+    [
+      "429 with retry-after seconds",
+      () => jsonResponse({ message: "Too many" }, 429, { "retry-after": "60" }),
+      NOW + 60_000,
+    ],
     [
       "403 with remaining 0",
-      () => jsonResponse({ message: "API rate limit exceeded" }, 403, {
-        "x-ratelimit-remaining": "0",
-        "x-ratelimit-reset": String(resetSeconds),
-      }),
+      () =>
+        jsonResponse({ message: "API rate limit exceeded" }, 403, {
+          "x-ratelimit-remaining": "0",
+          "x-ratelimit-reset": String(resetSeconds),
+        }),
       resetSeconds * 1000,
     ],
     [
       "403 with an HTTP-date retry-after",
-      () => jsonResponse({ message: "slow down" }, 403, { "retry-after": new Date(NOW + 120_000).toUTCString() }),
+      () =>
+        jsonResponse({ message: "slow down" }, 403, {
+          "retry-after": new Date(NOW + 120_000).toUTCString(),
+        }),
       NOW + 120_000,
     ],
     [
@@ -153,10 +177,14 @@ test("rate limits are recognized in every shape GitHub uses, with the right retr
 test("GraphQL rate limits are recognized from typed, header and untyped errors", async () => {
   const resetSeconds = NOW / 1000 + 300;
   const responses = [
-    jsonResponse({ errors: [{ type: "RATE_LIMITED", message: "API rate limit exceeded for user." }] }, 200, {
-      "x-ratelimit-reset": String(resetSeconds),
-      "x-ratelimit-remaining": "0",
-    }),
+    jsonResponse(
+      { errors: [{ type: "RATE_LIMITED", message: "API rate limit exceeded for user." }] },
+      200,
+      {
+        "x-ratelimit-reset": String(resetSeconds),
+        "x-ratelimit-remaining": "0",
+      },
+    ),
     jsonResponse({ data: null, errors: [{ message: "Something went wrong" }] }, 200, {
       "x-ratelimit-remaining": "0",
       "x-ratelimit-reset": String(resetSeconds),
@@ -165,36 +193,70 @@ test("GraphQL rate limits are recognized from typed, header and untyped errors",
   ];
   for (const response of responses) {
     const { client } = api(() => response);
-    const result = await client.graphql({ ...read, host: "github.com", query: "query { viewer { login } }" });
+    const result = await client.graphql({
+      ...read,
+      host: "github.com",
+      query: "query { viewer { login } }",
+    });
     assert.equal(result.kind, "rate-limited");
   }
 });
 
 test("a permission 403 is a failure, not a rate limit", async () => {
-  const { client } = api(() => jsonResponse({ message: "Resource not accessible by integration" }, 403, { "x-ratelimit-remaining": "4999" }));
+  const { client } = api(() =>
+    jsonResponse({ message: "Resource not accessible by integration" }, 403, {
+      "x-ratelimit-remaining": "4999",
+    }),
+  );
   const result = await client.rest({ ...read, host: "github.com", path: "/repos/a/b" });
-  assert.deepEqual(result, { kind: "failed", status: 403, message: "Resource not accessible by integration" });
+  assert.deepEqual(result, {
+    kind: "failed",
+    status: 403,
+    message: "Resource not accessible by integration",
+  });
 });
 
 test("304 is a success only when the request was conditional", async () => {
   const { client } = api(() => new Response(null, { status: 304, headers: { etag: '"abc"' } }));
-  const conditional = await client.rest({ ...read, host: "github.com", path: "/repos/a/b/pulls/1", ifNoneMatch: '"abc"' });
+  const conditional = await client.rest({
+    ...read,
+    host: "github.com",
+    path: "/repos/a/b/pulls/1",
+    ifNoneMatch: '"abc"',
+  });
   assert.deepEqual(conditional, { kind: "not-modified", etag: '"abc"' });
-  const unconditional = await client.rest({ ...read, host: "github.com", path: "/repos/a/b/pulls/1" });
+  const unconditional = await client.rest({
+    ...read,
+    host: "github.com",
+    path: "/repos/a/b/pulls/1",
+  });
   assert.equal(unconditional.kind, "failed");
 });
 
 test("GraphQL errors fail with GitHub's message; NOT_FOUND keeps partial data", async () => {
   const { client } = api((request) =>
     request.json?.query?.includes("partial")
-      ? jsonResponse({ data: { a: { id: 1 }, b: null }, errors: [{ type: "NOT_FOUND", message: "Could not resolve to a PullRequest." }] })
-      : jsonResponse({ data: null, errors: [{ type: "FORBIDDEN", message: "Resource not accessible" }] }),
+      ? jsonResponse({
+          data: { a: { id: 1 }, b: null },
+          errors: [{ type: "NOT_FOUND", message: "Could not resolve to a PullRequest." }],
+        })
+      : jsonResponse({
+          data: null,
+          errors: [{ type: "FORBIDDEN", message: "Resource not accessible" }],
+        }),
   );
   const failed = await client.graphql({ ...read, host: "github.com", query: "query { x }" });
   assert.deepEqual(failed, { kind: "failed", status: 200, message: "Resource not accessible" });
-  const partial = await client.graphql<{ a: unknown; b: unknown }>({ ...read, host: "github.com", query: "query partial { x }" });
+  const partial = await client.graphql<{ a: unknown; b: unknown }>({
+    ...read,
+    host: "github.com",
+    query: "query partial { x }",
+  });
   assert.equal(partial.kind, "not-found");
-  assert.deepEqual(partial.kind === "not-found" ? partial.data : undefined, { a: { id: 1 }, b: null });
+  assert.deepEqual(partial.kind === "not-found" ? partial.data : undefined, {
+    a: { id: 1 },
+    b: null,
+  });
 });
 
 test("errors scoped to one field leave the rest of a GraphQL answer usable", async () => {
@@ -206,7 +268,10 @@ test("errors scoped to one field leave the rest of a GraphQL answer usable", asy
   );
   const result = await client.graphql({ ...read, host: "github.com", query: "query { e0 e1 }" });
   assert.equal(result.kind, "ok");
-  assert.deepEqual(result.kind === "ok" ? result.data : undefined, { e0: { nameWithOwner: "a/b" }, e1: null });
+  assert.deepEqual(result.kind === "ok" ? result.data : undefined, {
+    e0: { nameWithOwner: "a/b" },
+    e1: null,
+  });
   assert.deepEqual(result.kind === "ok" ? result.errors : undefined, [
     { type: "FORBIDDEN", message: "Resource not accessible", path: ["e1"] },
   ]);
@@ -219,13 +284,19 @@ test("a 401 drops the token so the next request asks the credential source again
       ? jsonResponse({ message: "Bad credentials" }, 401)
       : jsonResponse({ full_name: "a/b" }),
   );
-  const credentials = new GitHubCredentialSource({ env: () => ({}), ghAuthToken: async () => `token-${++issued}` });
+  const credentials = new GitHubCredentialSource({
+    env: () => ({}),
+    ghAuthToken: async () => `token-${++issued}`,
+  });
   const client = new GitHubApi({ credentials, fetch: recorded.fetch });
   const refused = await client.rest({ ...read, host: "github.com", path: "/repos/a/b" });
   assert.equal(refused.kind, "unauthorized");
   const retried = await client.rest({ ...read, host: "github.com", path: "/repos/a/b" });
   assert.equal(retried.kind, "ok");
-  assert.deepEqual(recorded.requests.map((request) => request.headers.Authorization), ["Bearer token-1", "Bearer token-2"]);
+  assert.deepEqual(
+    recorded.requests.map((request) => request.headers.Authorization),
+    ["Bearer token-1", "Bearer token-2"],
+  );
 });
 
 test("a missing credential is reported without contacting GitHub", async () => {
@@ -237,7 +308,11 @@ test("a missing credential is reported without contacting GitHub", async () => {
 
 test("oversized responses and timeouts fail without hanging", async () => {
   const big = recordingFetch(() => new Response("x".repeat(2_048)));
-  const capped = new GitHubApi({ credentials: fixedCredentials({ "github.com": "t" }), fetch: big.fetch, maxResponseBytes: 1_024 });
+  const capped = new GitHubApi({
+    credentials: fixedCredentials({ "github.com": "t" }),
+    fetch: big.fetch,
+    maxResponseBytes: 1_024,
+  });
   assert.equal((await capped.rest({ ...read, host: "github.com", path: "/x" })).kind, "failed");
 
   const slow = new GitHubApi({
@@ -245,7 +320,9 @@ test("oversized responses and timeouts fail without hanging", async () => {
     timeoutMs: 20,
     fetch: (_url, init) =>
       new Promise((_resolve, reject) =>
-        init.signal.addEventListener("abort", () => reject(Object.assign(new Error("aborted"), { name: "AbortError" }))),
+        init.signal.addEventListener("abort", () =>
+          reject(Object.assign(new Error("aborted"), { name: "AbortError" })),
+        ),
       ),
   });
   const result = await slow.rest({ ...read, host: "github.com", path: "/x" });
@@ -259,11 +336,16 @@ test("a caller abort rejects instead of becoming a GitHub failure", async () => 
     credentials: fixedCredentials({ "github.com": "t" }),
     fetch: (_url, init) =>
       new Promise((_resolve, reject) => {
-        init.signal.addEventListener("abort", () => reject(Object.assign(new Error("aborted"), { name: "AbortError" })));
+        init.signal.addEventListener("abort", () =>
+          reject(Object.assign(new Error("aborted"), { name: "AbortError" })),
+        );
         setTimeout(() => controller.abort(), 5);
       }),
   });
-  await assert.rejects(() => client.rest({ ...read, host: "github.com", path: "/x", signal: controller.signal }), /aborted/u);
+  await assert.rejects(
+    () => client.rest({ ...read, host: "github.com", path: "/x", signal: controller.signal }),
+    /aborted/u,
+  );
 });
 
 test("no more than eight requests are in flight at once", async () => {
@@ -283,7 +365,8 @@ test("no more than eight requests are in flight at once", async () => {
       }),
   });
   const all: Array<Promise<GitHubApiResult<unknown>>> = [];
-  for (let index = 0; index < 12; index += 1) all.push(client.rest({ ...read, host: "github.com", path: `/x/${index}` }));
+  for (let index = 0; index < 12; index += 1)
+    all.push(client.rest({ ...read, host: "github.com", path: `/x/${index}` }));
   while (release.length < 8) await new Promise((resolve) => setImmediate(resolve));
   await new Promise((resolve) => setTimeout(resolve, 5));
   assert.equal(peak, 8);

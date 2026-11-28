@@ -38,28 +38,51 @@ const digest = (value: string) => createHash("sha256").update(value).digest("hex
 
 function inventory(): BotCapabilityInventory {
   return {
-    providers: [{
-      sourceId: "private-provider",
-      label: "Provider",
-      available: true,
-      connectionFingerprint: digest("provider"),
-      models: [{
-        sourceId: "private-model",
-        label: "Model",
+    providers: [
+      {
+        sourceId: "private-provider",
+        label: "Provider",
         available: true,
-        modelFingerprint: digest("model"),
-      }, {
-        sourceId: "private-model-next",
-        label: "Model Next",
-        available: true,
-        supportsImages: true,
-        modelFingerprint: digest("model-next"),
-      }],
-    }],
+        connectionFingerprint: digest("provider"),
+        models: [
+          {
+            sourceId: "private-model",
+            label: "Model",
+            available: true,
+            modelFingerprint: digest("model"),
+          },
+          {
+            sourceId: "private-model-next",
+            label: "Model Next",
+            available: true,
+            supportsImages: true,
+            modelFingerprint: digest("model-next"),
+          },
+        ],
+      },
+    ],
     fileScopes: [
-      { sourceId: "private-full", label: "Full Mac", available: true, kind: "full_mac", scopeFingerprint: digest("full") },
-      { sourceId: "private-home", label: "Bot folder", available: true, kind: "bot_home", scopeFingerprint: digest("home") },
-      { sourceId: "private-chosen", label: "Chosen folder", available: true, kind: "approved_location", scopeFingerprint: digest("chosen") },
+      {
+        sourceId: "private-full",
+        label: "Full Mac",
+        available: true,
+        kind: "full_mac",
+        scopeFingerprint: digest("full"),
+      },
+      {
+        sourceId: "private-home",
+        label: "Bot folder",
+        available: true,
+        kind: "bot_home",
+        scopeFingerprint: digest("home"),
+      },
+      {
+        sourceId: "private-chosen",
+        label: "Chosen folder",
+        available: true,
+        kind: "approved_location",
+        scopeFingerprint: digest("chosen"),
+      },
     ],
     shell: { available: true, shellFingerprint: digest("shell") },
     connections: ["Mail", "Calendar"].map((label) => ({
@@ -67,13 +90,15 @@ function inventory(): BotCapabilityInventory {
       label,
       available: true,
       connectionFingerprint: digest(`connection-${label}`),
-      tools: [{
-        name: `${label.toLowerCase()}_tool`,
-        inputSchemaFingerprint: digest(`input-${label}`),
-        outputSchemaFingerprint: digest(`output-${label}`),
-        effect: "mutating" as const,
-        effectFingerprint: digest(`effect-${label}`),
-      }],
+      tools: [
+        {
+          name: `${label.toLowerCase()}_tool`,
+          inputSchemaFingerprint: digest(`input-${label}`),
+          outputSchemaFingerprint: digest(`output-${label}`),
+          effect: "mutating" as const,
+          effectFingerprint: digest(`effect-${label}`),
+        },
+      ],
     })),
     skills: ["Writing", "Review"].map((label) => ({
       sourceId: `private-${label.toLowerCase()}`,
@@ -187,7 +212,10 @@ test("Bot delete removes its policy and chat reductions, leaves other Bots, and 
 
   assert.equal(editor.deleteBotAuthority("bot:doomed"), true);
   assert.throws(() => projectBotAccessView(state, "bot:doomed"), BotCapabilityUnavailableError);
-  assert.throws(() => projectBotChatAccessView(state, "chat:doomed"), BotCapabilityUnavailableError);
+  assert.throws(
+    () => projectBotChatAccessView(state, "chat:doomed"),
+    BotCapabilityUnavailableError,
+  );
   assert.equal(projectBotAccessView(state, "bot:kept").botId, "bot:kept");
   assert.equal(projectBotChatAccessView(state, "chat:kept").botId, "bot:kept");
   assert.deepEqual(editor.auditBotInventory(["bot:kept"]).orphanedBotIds, []);
@@ -217,9 +245,7 @@ test("Custom policy bindings are mandatory, private in projections, strict on di
   });
   const publicJson = JSON.stringify(view);
   assert.doesNotMatch(publicJson, /binding|sourceId|fingerprint|private-/iu);
-  assert.doesNotThrow(() =>
-    editor.assertAuthorityBindingsCurrent({ botId: "bot:one", snapshot }),
-  );
+  assert.doesNotThrow(() => editor.assertAuthorityBindingsCurrent({ botId: "bot:one", snapshot }));
 
   const changedInventory = inventory();
   changedInventory.skills[0]!.contentFingerprint = digest("changed-skill-content");
@@ -260,8 +286,14 @@ test("legacy migration writes explicit Full records once and never repairs a lat
     catalogRevision,
     confirmedExplicitFull: true,
   });
-  assert.deepEqual(migrated.map(({ accessMode }) => accessMode), ["full", "full"]);
-  assert.equal(state.policies.every(({ accessMode }) => accessMode === "full"), true);
+  assert.deepEqual(
+    migrated.map(({ accessMode }) => accessMode),
+    ["full", "full"],
+  );
+  assert.equal(
+    state.policies.every(({ accessMode }) => accessMode === "full"),
+    true,
+  );
   assert.equal(
     state.policies.every(
       (policy) => policy.accessMode !== "full" || policy.webSearchEnabled === false,
@@ -319,7 +351,10 @@ test("Full Bot Web Search is a durable explicit grant and legacy omission normal
   });
   assert.equal(revoked.narrowed, true);
   assert.equal(revoked.authorityChanged, true);
-  assert.equal(state.policies[0]?.accessMode === "full" && state.policies[0].webSearchEnabled, false);
+  assert.equal(
+    state.policies[0]?.accessMode === "full" && state.policies[0].webSearchEnabled,
+    false,
+  );
 
   const legacy = structuredClone(state) as unknown as {
     policies: Array<Record<string, unknown>>;
@@ -327,8 +362,7 @@ test("Full Bot Web Search is a durable explicit grant and legacy omission normal
   delete legacy.policies[0]!.webSearchEnabled;
   const normalized = parseBotCapabilityState(legacy);
   assert.equal(
-    normalized.policies[0]?.accessMode === "full" &&
-      normalized.policies[0].webSearchEnabled,
+    normalized.policies[0]?.accessMode === "full" && normalized.policies[0].webSearchEnabled,
     false,
   );
 });
@@ -349,12 +383,13 @@ test("legacy migration atomically seals historical chat policies and never widen
   // Custom reduction, so restart repair must fail closed instead of inheriting.
   state.chats = [];
   assert.throws(
-    () => editor.migrateLegacyBotsToFull({
-      botIds: ["bot:legacy"],
-      chats: [{ botId: "bot:legacy", chatId: "chat:legacy" }],
-      catalogRevision,
-      confirmedExplicitFull: true,
-    }),
+    () =>
+      editor.migrateLegacyBotsToFull({
+        botIds: ["bot:legacy"],
+        chats: [{ botId: "bot:legacy", chatId: "chat:legacy" }],
+        catalogRevision,
+        confirmedExplicitFull: true,
+      }),
     /already sealed/u,
   );
 });
@@ -477,7 +512,10 @@ test("catalog and optimistic revisions are exact and forged chat widening is rej
     binding: binding(narrowedBotCustom),
   });
   assert.equal(narrowBot.narrowed, true);
-  assert.deepEqual(narrowBot.narrowedChats.map(({ chatId }) => chatId), ["chat:one"]);
+  assert.deepEqual(
+    narrowBot.narrowedChats.map(({ chatId }) => chatId),
+    ["chat:one"],
+  );
   const reduced = narrowBot.narrowedChats[0];
   assert.ok(reduced);
   const reducedView = projectBotChatAccessView(state, "chat:one");
@@ -544,7 +582,10 @@ test("Full model authority bumps revisions and rebases only the canonical reduce
   assert.equal(updated.authorityChanged, true);
   assert.notEqual(updated.view.revision, initial.revision);
   assert.notEqual(updated.view.policyEpoch, initial.policyEpoch);
-  assert.deepEqual(updated.narrowedChats.map(({ chatId }) => chatId), [canonical.chatId]);
+  assert.deepEqual(
+    updated.narrowedChats.map(({ chatId }) => chatId),
+    [canonical.chatId],
+  );
   assert.deepEqual(editor.getBotModelAuthority(initial.botId)?.selection, {
     providerId: nextSelection.providerId,
     modelId: nextSelection.modelId,
@@ -559,19 +600,18 @@ test("Full model authority bumps revisions and rebases only the canonical reduce
   assert.deepEqual(canonicalAfter.custom.skillIds, [writingId]);
   assert.deepEqual(canonicalAfter.custom.otherCapabilityIds, []);
   assert.notEqual(canonicalAfter.revision, canonical.revision);
-  assert.equal(
-    state.chats.find(({ chatId }) => chatId === canonical.chatId)?.policyEpoch,
-    2,
-  );
+  assert.equal(state.chats.find(({ chatId }) => chatId === canonical.chatId)?.policyEpoch, 2);
   assert.deepEqual(
     state.chats.find(({ chatId }) => chatId === legacy.chatId),
     legacyBefore,
   );
-  assert.doesNotThrow(() => editor.assertAuthorityBindingsCurrent({
-    botId: initial.botId,
-    chatId: canonical.chatId,
-    snapshot,
-  }));
+  assert.doesNotThrow(() =>
+    editor.assertAuthorityBindingsCurrent({
+      botId: initial.botId,
+      chatId: canonical.chatId,
+      snapshot,
+    }),
+  );
   const changedSnapshot = buildBotCapabilityCatalogSnapshot({
     inventory: {
       ...inventory(),
@@ -584,29 +624,31 @@ test("Full model authority bumps revisions and rebases only the canonical reduce
     mintOpaqueId: createBotCapabilityOpaqueIdMint(Buffer.alloc(32, 7)),
   });
   assert.throws(
-    () => editor.assertAuthorityBindingsCurrent({
-      botId: initial.botId,
-      chatId: canonical.chatId,
-      snapshot: changedSnapshot,
-    }),
+    () =>
+      editor.assertAuthorityBindingsCurrent({
+        botId: initial.botId,
+        chatId: canonical.chatId,
+        snapshot: changedSnapshot,
+      }),
     BotCapabilityBindingDriftError,
   );
   assert.doesNotThrow(() => parseBotCapabilityState(structuredClone(state)));
   assert.throws(
-    () => editor.updateBotPolicy({
-      botId: initial.botId,
-      expectedRevision: initial.revision,
-      catalog: catalog(),
-      access: {
-        accessMode: "full",
-        catalogRevision,
-        confirmedForeground: true,
-        providerId: initialSelection.providerId,
-        modelId: initialSelection.modelId,
-      },
-      modelBinding: modelBinding(0),
-      canonicalChatId: canonical.chatId,
-    }),
+    () =>
+      editor.updateBotPolicy({
+        botId: initial.botId,
+        expectedRevision: initial.revision,
+        catalog: catalog(),
+        access: {
+          accessMode: "full",
+          catalogRevision,
+          confirmedForeground: true,
+          providerId: initialSelection.providerId,
+          modelId: initialSelection.modelId,
+        },
+        modelBinding: modelBinding(0),
+        canonicalChatId: canonical.chatId,
+      }),
     BotCapabilityRevisionConflictError,
   );
 });
@@ -619,13 +661,14 @@ test("companion vision authority is exact, revisioned, preserved when omitted, a
   const primary = selection({ modelId: textModel.id });
   const vision = selection({ modelId: visionModel.id });
   assert.throws(
-    () => bindBotProviderModel({
-      providerId: primary.providerId,
-      modelId: primary.modelId,
-      catalogRevision,
-      snapshot,
-      requireImages: true,
-    }),
+    () =>
+      bindBotProviderModel({
+        providerId: primary.providerId,
+        modelId: primary.modelId,
+        catalogRevision,
+        snapshot,
+        requireImages: true,
+      }),
     /must support image input/u,
   );
   const created = editor.createBotPolicy({
@@ -663,10 +706,11 @@ test("companion vision authority is exact, revisioned, preserved when omitted, a
     mintOpaqueId: createBotCapabilityOpaqueIdMint(opaqueKey),
   });
   assert.throws(
-    () => editor.assertAuthorityBindingsCurrent({
-      botId: created.botId,
-      snapshot: lostVisionSnapshot,
-    }),
+    () =>
+      editor.assertAuthorityBindingsCurrent({
+        botId: created.botId,
+        snapshot: lostVisionSnapshot,
+      }),
     BotCapabilityBindingDriftError,
   );
 
@@ -744,7 +788,10 @@ test("create rollback removes only an uncommitted identity policy and its imposs
     editor.rollbackUncommittedBotPolicy({ botId: "bot:first", identityCommitted: false }),
     true,
   );
-  assert.deepEqual(state.policies.map(({ botId }) => botId), ["bot:second"]);
+  assert.deepEqual(
+    state.policies.map(({ botId }) => botId),
+    ["bot:second"],
+  );
   assert.deepEqual(state.chats, []);
 });
 
@@ -864,22 +911,46 @@ test("notice acknowledgement is isolated by stable audience and action admission
 });
 
 test("an app's revoke skips Bot notices only while Bot storage waits for repair", async () => {
-  const unavailable = () => { throw new BotCapabilityUnavailableError(); };
+  const unavailable = () => {
+    throw new BotCapabilityUnavailableError();
+  };
   let skipped = 0;
-  await revokeBotNoticeAudience(unavailable, "when-available", () => { skipped += 1; });
+  await revokeBotNoticeAudience(unavailable, "when-available", () => {
+    skipped += 1;
+  });
   assert.equal(skipped, 1, "the app's revoke goes through and the skip is reported");
 
   // A phone's revoke still fails, so a retry removes the acceptance later.
-  await assert.rejects(revokeBotNoticeAudience(unavailable, "required", () => { skipped += 1; }), BotCapabilityUnavailableError);
+  await assert.rejects(
+    revokeBotNoticeAudience(unavailable, "required", () => {
+      skipped += 1;
+    }),
+    BotCapabilityUnavailableError,
+  );
   // Any other failure is not Bot storage waiting for repair.
   await assert.rejects(
-    revokeBotNoticeAudience(() => Promise.reject(new Error("disk full")), "when-available", () => { skipped += 1; }),
+    revokeBotNoticeAudience(
+      () => Promise.reject(new Error("disk full")),
+      "when-available",
+      () => {
+        skipped += 1;
+      },
+    ),
     /disk full/u,
   );
   assert.equal(skipped, 1);
 
   let cleared = 0;
-  await revokeBotNoticeAudience(async () => { cleared += 1; return true; }, "required", () => { skipped += 1; });
+  await revokeBotNoticeAudience(
+    async () => {
+      cleared += 1;
+      return true;
+    },
+    "required",
+    () => {
+      skipped += 1;
+    },
+  );
   assert.equal(cleared, 1);
   assert.equal(skipped, 1, "a revoke that clears its notices reports no skip");
 });

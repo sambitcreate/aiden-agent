@@ -30,12 +30,17 @@ const validTime = (value: unknown): value is number =>
 function newest(times: Record<string, number>): Record<string, number> {
   const entries = Object.entries(times);
   if (entries.length <= REMOTE_BOT_SEEN_LIMIT) return times;
-  return Object.fromEntries(entries.sort((left, right) => right[1] - left[1]).slice(0, REMOTE_BOT_SEEN_LIMIT));
+  return Object.fromEntries(
+    entries.sort((left, right) => right[1] - left[1]).slice(0, REMOTE_BOT_SEEN_LIMIT),
+  );
 }
 
 const validBaseline = (value: unknown): value is number => value === 0 || validTime(value);
 
-function times(value: unknown, valid: (at: unknown) => at is number = validTime): Record<string, number> {
+function times(
+  value: unknown,
+  valid: (at: unknown) => at is number = validTime,
+): Record<string, number> {
   const out: Record<string, number> = {};
   if (!value || typeof value !== "object" || Array.isArray(value)) return out;
   for (const [key, at] of Object.entries(value as Record<string, unknown>)) {
@@ -56,7 +61,10 @@ export function parseRemoteBotSeen(raw: string | null): RemoteBotSeen {
   if (!value || typeof value !== "object" || Array.isArray(value)) return fresh;
   const record = value as Record<string, unknown>;
   if (record.version !== 2) return fresh;
-  return { hostSince: times(record.hostSince, validBaseline), seenReplyAt: times(record.seenReplyAt) };
+  return {
+    hostSince: times(record.hostSince, validBaseline),
+    seenReplyAt: times(record.seenReplyAt),
+  };
 }
 
 export function serializeRemoteBotSeen(seen: RemoteBotSeen): string {
@@ -97,8 +105,13 @@ export function withRemoteBotHostListed(
 }
 
 /** The remote Bot's chat showed the reply at `replyAt`; the seen time only moves forward. */
-export function withRemoteBotSeen(seen: RemoteBotSeen, key: string, replyAt: number | undefined): RemoteBotSeen {
-  if (replyAt === undefined || !validTime(replyAt) || replyAt <= (seen.seenReplyAt[key] ?? 0)) return seen;
+export function withRemoteBotSeen(
+  seen: RemoteBotSeen,
+  key: string,
+  replyAt: number | undefined,
+): RemoteBotSeen {
+  if (replyAt === undefined || !validTime(replyAt) || replyAt <= (seen.seenReplyAt[key] ?? 0))
+    return seen;
   return { ...seen, seenReplyAt: newest({ ...seen.seenReplyAt, [key]: replyAt }) };
 }
 
@@ -129,7 +142,8 @@ export function remoteBotShownReplyAt(
     const at = (entry as { at?: number }).at;
     if (at !== undefined && at > reached) reached = at;
   }
-  if (feedLastReplyAt !== undefined && validTime(feedLastReplyAt) && reached >= feedLastReplyAt) return feedLastReplyAt;
+  if (feedLastReplyAt !== undefined && validTime(feedLastReplyAt) && reached >= feedLastReplyAt)
+    return feedLastReplyAt;
   return botLastReplyAt(entries);
 }
 

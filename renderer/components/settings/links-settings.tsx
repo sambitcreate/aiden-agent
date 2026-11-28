@@ -4,7 +4,16 @@ import type { BrowserLinkOpening } from "../../shared/browser";
 import { prefersReducedMotion } from "../../lib/appearance-runtime";
 import { glideIntoView } from "../../lib/scroll-into-view";
 import { isMacPlatform } from "../../lib/ghostty-terminal/host-platform";
-import { Field, FieldSet, Select, SelectContent, SelectItem, SelectTrigger, SelectValue, toast } from "../ui";
+import {
+  Field,
+  FieldSet,
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+  toast,
+} from "../ui";
 import { SettingsAnchorContext } from "./settings-page";
 
 const LABELS: Record<BrowserLinkOpening, string> = {
@@ -34,8 +43,12 @@ export function LinksSettings({ embedded = false }: { embedded?: boolean }) {
       .then((next) => live && reading === revision.current && setValue(next))
       .catch(() => live && reading === revision.current && setValue("ask"));
     const off = browserApi.onEvent((event) => {
-      const next = event.type === "state" ? event.state.defaults?.linkOpening
-        : event.type === "link-preference" ? event.linkOpening : undefined;
+      const next =
+        event.type === "state"
+          ? event.state.defaults?.linkOpening
+          : event.type === "link-preference"
+            ? event.linkOpening
+            : undefined;
       if (next !== undefined) {
         revision.current += 1;
         setValue(next);
@@ -59,29 +72,32 @@ export function LinksSettings({ embedded = false }: { embedded?: boolean }) {
   };
 
   const field = (
-      <Field
-        label={embedded ? "Open chat links in" : "Open links in"}
-        description={`Local dev servers always open in Aiden. ${MOD}-click a link to open it in the other browser.`}
-      >
-        <div ref={row}>
-          <Select
-            value={value ?? undefined}
-            onValueChange={(next) => change(next as BrowserLinkOpening)}
-            disabled={value === null}
+    <Field
+      label={embedded ? "Open chat links in" : "Open links in"}
+      description={`Local dev servers always open in Aiden. ${MOD}-click a link to open it in the other browser.`}
+    >
+      <div ref={row}>
+        <Select
+          value={value ?? undefined}
+          onValueChange={(next) => change(next as BrowserLinkOpening)}
+          disabled={value === null}
+        >
+          <SelectTrigger
+            size="small"
+            aria-label={embedded ? "Open chat links in" : "Open links in"}
           >
-            <SelectTrigger size="small" aria-label={embedded ? "Open chat links in" : "Open links in"}>
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              {(Object.keys(LABELS) as BrowserLinkOpening[]).map((key) => (
-                <SelectItem key={key} value={key}>
-                  {LABELS[key]}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-        </div>
-      </Field>
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            {(Object.keys(LABELS) as BrowserLinkOpening[]).map((key) => (
+              <SelectItem key={key} value={key}>
+                {LABELS[key]}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      </div>
+    </Field>
   );
   return embedded ? field : <FieldSet>{field}</FieldSet>;
 }

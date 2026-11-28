@@ -40,7 +40,7 @@ export const BOT_HANDOFF_MEMO = "aiden.handoff";
 const DESCRIPTION =
   "Hand one step of the task to the person when you must not or cannot do it yourself: entering a password or " +
   "2FA code, changing account security, a payment, a CAPTCHA, a legal sign-off, or anything your rules hand to " +
-  "them. `action` is the step as a short imperative (\"Enter the 2FA code for your bank\"); `why` says in a " +
+  'them. `action` is the step as a short imperative ("Enter the 2FA code for your bank"); `why` says in a ' +
   "sentence why it needs them; `open.url` is an https page that helps them do it. The app shows a card: the person " +
   "takes control, then answers I'm done or Skip, and their answer comes back as this tool's result: wait for it, then check the result before you " +
   "continue. Never ask for passwords or codes in the chat.";
@@ -52,7 +52,9 @@ export interface BotHandoffTargets {
 }
 
 /** The tool's description, with `where` explained only for what the Bot has. */
-export function botHandoffDescription(targets: BotHandoffTargets = { browser: false, computer: false }): string {
+export function botHandoffDescription(
+  targets: BotHandoffTargets = { browser: false, computer: false },
+): string {
   const where = [
     targets.browser ? 'where: "browser" for a page in your browser' : undefined,
     targets.computer ? 'where: "computer" for a step on your own computer' : undefined,
@@ -93,8 +95,14 @@ export function handoffWhyOf(value: unknown): string | undefined {
 
 /** The model's arguments, checked again here: the harness's schema check cannot see https or blank text. */
 function parseParams(params: unknown, targets: BotHandoffTargets): HandoffParams {
-  const record = (params ?? {}) as { action?: unknown; why?: unknown; open?: unknown; where?: unknown };
-  if (typeof record.action !== "string") throw new Error("A hand-off needs an action: the step the person should do.");
+  const record = (params ?? {}) as {
+    action?: unknown;
+    why?: unknown;
+    open?: unknown;
+    where?: unknown;
+  };
+  if (typeof record.action !== "string")
+    throw new Error("A hand-off needs an action: the step the person should do.");
   const action = normalizeBotHandoffAction(record.action);
   if (!action) throw new Error("A hand-off needs an action: the step the person should do.");
   if (!isBoundedBotText(action, BOT_HANDOFF_ACTION_MAX_CHARS)) {
@@ -105,20 +113,25 @@ function parseParams(params: unknown, targets: BotHandoffTargets): HandoffParams
   if (record.open !== undefined) {
     const url = (record.open as { url?: unknown } | null)?.url;
     // Checked again once normalized: percent-encoding can lengthen it.
-    const href = typeof url === "string" && isBotHandoffOpenUrl(url) ? new URL(url).href : undefined;
+    const href =
+      typeof url === "string" && isBotHandoffOpenUrl(url) ? new URL(url).href : undefined;
     if (href === undefined || !isBotHandoffOpenUrl(href)) {
-      throw new Error("`open.url` must be an https:// web address without a user name or password.");
+      throw new Error(
+        "`open.url` must be an https:// web address without a user name or password.",
+      );
     }
     open = { url: href };
   }
   let target: BotHandoffTarget | undefined;
   if (record.where !== undefined) {
     if (record.where !== "browser" && record.where !== "computer") {
-      throw new Error("`where` must be \"browser\" or \"computer\".");
+      throw new Error('`where` must be "browser" or "computer".');
     }
     if (!targets[record.where]) {
       throw new Error(
-        record.where === "browser" ? "You have no browser to hand a step over in." : "You have no computer to hand a step over on.",
+        record.where === "browser"
+          ? "You have no browser to hand a step over in."
+          : "You have no computer to hand a step over on.",
       );
     }
     target = record.where;
@@ -131,7 +144,11 @@ function parseParams(params: unknown, targets: BotHandoffTargets): HandoffParams
   };
 }
 
-export function botHandoffCandidate(botId: string, handoffs: BotHandoffs, deps: BotHandoffDeps = {}): BotToolCandidate {
+export function botHandoffCandidate(
+  botId: string,
+  handoffs: BotHandoffs,
+  deps: BotHandoffDeps = {},
+): BotToolCandidate {
   const targets = deps.targets ?? { browser: false, computer: false };
   const schema: AgentTool = {
     name: BOT_HANDOFF_TOOL_NAME,
@@ -146,7 +163,10 @@ export function botHandoffCandidate(botId: string, handoffs: BotHandoffs, deps: 
         description: "The step for the person, as a short imperative. Shown as the card's title.",
       }),
       why: Type.Optional(
-        Type.String({ maxLength: BOT_HANDOFF_WHY_MAX_CHARS, description: "Why this step needs the person." }),
+        Type.String({
+          maxLength: BOT_HANDOFF_WHY_MAX_CHARS,
+          description: "Why this step needs the person.",
+        }),
       ),
       open: Type.Optional(
         Type.Object({
@@ -164,7 +184,9 @@ export function botHandoffCandidate(botId: string, handoffs: BotHandoffs, deps: 
                   ...(targets.browser ? [Type.Literal("browser")] : []),
                   ...(targets.computer ? [Type.Literal("computer")] : []),
                 ],
-                { description: "Set when the step is in your own browser or on your own computer." },
+                {
+                  description: "Set when the step is in your own browser or on your own computer.",
+                },
               ),
             ),
           }
@@ -182,7 +204,9 @@ export function botHandoffCandidate(botId: string, handoffs: BotHandoffs, deps: 
       ...schema,
       async execute(_toolCallId, params): Promise<AgentToolResult<BotHandoffResultDetails>> {
         const { action, why, open, target } = parseParams(params, targets);
-        const memo = await call.memo<{ waitId: string }>(BOT_HANDOFF_MEMO, { waitId: randomUUID() });
+        const memo = await call.memo<{ waitId: string }>(BOT_HANDOFF_MEMO, {
+          waitId: randomUUID(),
+        });
         const answer = await handoffs.request({
           botId,
           waitId: memo.waitId,
@@ -195,7 +219,10 @@ export function botHandoffCandidate(botId: string, handoffs: BotHandoffs, deps: 
           source: "tool",
           signal: call.signal,
         });
-        const text = answer.outcome === "done" ? handoffDoneText(action, answer.note) : handoffSkippedText(action, answer.note);
+        const text =
+          answer.outcome === "done"
+            ? handoffDoneText(action, answer.note)
+            : handoffSkippedText(action, answer.note);
         return {
           content: [{ type: "text", text }],
           details: {

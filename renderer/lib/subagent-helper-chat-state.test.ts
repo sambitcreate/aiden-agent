@@ -28,7 +28,10 @@ import {
   type SavedSubagentHelperTranscripts,
 } from "./subagent-helper-chat-state";
 
-function toolStep(id: string, extra: Partial<Extract<AgentStep, { kind: "tool" }>> = {}): AgentStep {
+function toolStep(
+  id: string,
+  extra: Partial<Extract<AgentStep, { kind: "tool" }>> = {},
+): AgentStep {
   return {
     id,
     order: 1,
@@ -123,8 +126,14 @@ test("only a helper that ended without finishing gets a problem, explained in pl
     { steps: 1, changedFiles: [] },
   );
   assert.equal(timedOut?.tone, "failed");
-  assert.equal(timedOut?.text, "This helper ran out of time after 1 step. It didn't change any files.");
-  assert.match(timedOut?.retryText ?? "", /It timed out after 1 step and didn't change any files\.$/u);
+  assert.equal(
+    timedOut?.text,
+    "This helper ran out of time after 1 step. It didn't change any files.",
+  );
+  assert.match(
+    timedOut?.retryText ?? "",
+    /It timed out after 1 step and didn't change any files\.$/u,
+  );
 });
 
 test("a failed helper says it couldn't finish, adding the reason only when it tells the person something", () => {
@@ -139,7 +148,10 @@ test("a failed helper says it couldn't finish, adding the reason only when it te
   assert.match(failed?.retryText ?? "", /It failed and changed README\.md\.$/u);
 
   // Host fallbacks that only restate the failure are not repeated, old or new.
-  for (const error of ["This helper couldn't finish.", "The child model could not complete this task."]) {
+  for (const error of [
+    "This helper couldn't finish.",
+    "The child model could not complete this task.",
+  ]) {
     const generic = subagentHelperProblem(
       { state: "failed", label: "Scout", tools: 2, error },
       { steps: 2, changedFiles: [] },
@@ -156,14 +168,20 @@ test("a trimmed transcript counts steps from the run and claims nothing about un
     { trimmed: true },
   );
   assert.equal(trimmed?.text, "You stopped this helper after 6 steps.");
-  assert.equal(trimmed?.retryText, "Please retry the helper \u201cScout\u201d. It was stopped after 6 steps.");
+  assert.equal(
+    trimmed?.retryText,
+    "Please retry the helper \u201cScout\u201d. It was stopped after 6 steps.",
+  );
 
   const trimmedWithFiles = subagentHelperProblem(
     { state: "stopped", label: "Scout", tools: 6 },
     { steps: 3, changedFiles: ["a.html", "b.css"] },
     { trimmed: true },
   );
-  assert.equal(trimmedWithFiles?.text, "You stopped this helper after 6 steps. It changed a.html and b.css.");
+  assert.equal(
+    trimmedWithFiles?.text,
+    "You stopped this helper after 6 steps. It changed a.html and b.css.",
+  );
 });
 
 test("a saved transcript is kept only when newer, and the oldest helpers drop past the cap", () => {
@@ -186,7 +204,13 @@ test("a saved transcript is kept only when newer, and the oldest helpers drop pa
 });
 
 function approval(approvalId: string, details: ApprovalPrompt["details"]): ApprovalPrompt {
-  return { approvalId, toolCallId: `call-${approvalId}`, toolName: "edit", summary: "Edit", details };
+  return {
+    approvalId,
+    toolCallId: `call-${approvalId}`,
+    toolName: "edit",
+    summary: "Edit",
+    details,
+  };
 }
 
 const writeDetails = (childLabel: string): SubagentWorkspaceWriteApprovalDetails => ({
@@ -229,7 +253,10 @@ test("a helper chat shows only the approval that belongs to its helper", () => {
   const plain = approval("plain", undefined);
 
   // A run grant names its run, so it matches even when labels repeat.
-  assert.equal(subagentHelperApprovalFor(scout, [plain, grant], [scout, twin])?.approvalId, "grant");
+  assert.equal(
+    subagentHelperApprovalFor(scout, [plain, grant], [scout, twin])?.approvalId,
+    "grant",
+  );
   assert.equal(subagentHelperApprovalFor(twin, [grant], [scout, twin]), null);
   // A write names only the label: it matches a unique label, never an ambiguous one.
   assert.equal(subagentHelperApprovalFor(scout, [write], [scout, fixer])?.approvalId, "write");
@@ -287,7 +314,9 @@ test("consecutive tool-only messages read as one block of steps, and a written m
 
 test("the runner's reasons for a failed helper read as plain sentences, and other text passes through", () => {
   assert.equal(
-    subagentFailureReason("The child reached its turn limit. These are incomplete, unverified partial findings."),
+    subagentFailureReason(
+      "The child reached its turn limit. These are incomplete, unverified partial findings.",
+    ),
     "It ran out of turns. Its findings so far may be incomplete.",
   );
   assert.equal(
@@ -304,10 +333,15 @@ test("the runner's reasons for a failed helper read as plain sentences, and othe
   );
   // A reason cut short upstream still reads plainly from its start.
   assert.equal(
-    subagentFailureReason("The child reached its turn limit. These are incomplete, unverified par\u2026"),
+    subagentFailureReason(
+      "The child reached its turn limit. These are incomplete, unverified par\u2026",
+    ),
     "It ran out of turns. Its findings so far may be incomplete.",
   );
-  assert.equal(subagentFailureReason("The child reached its tool-ca"), "It used all of its allowed steps.");
+  assert.equal(
+    subagentFailureReason("The child reached its tool-ca"),
+    "It used all of its allowed steps.",
+  );
   // A short fragment is not guessed at.
   assert.equal(subagentFailureReason("The child reac..."), "The child reac...");
   // Two runner phrases that mean the same thing are said once.
@@ -344,29 +378,49 @@ test("every approval a helper is waiting on belongs to it, in queue order", () =
     owned.map((prompt) => prompt.approvalId),
     ["first", "second"],
   );
-  assert.equal(subagentHelperApprovalFor(scout, [other, second, first], [scout, fixer])?.approvalId, "second");
+  assert.equal(
+    subagentHelperApprovalFor(scout, [other, second, first], [scout, fixer])?.approvalId,
+    "second",
+  );
 });
 
 test("a write that names a label is the helper's only while no other active helper has that label", () => {
   const scout = { runId: "run-1", label: "Scout", state: "running" as const };
   const write = approval("write", writeDetails("Scout"));
   const grant = approval("grant", grantDetails("run-1", "Scout"));
-  const twin = (state: "queued" | "completed" | "failed" | "unknown") => ({ runId: "run-2", label: "Scout", state });
+  const twin = (state: "queued" | "completed" | "failed" | "unknown") => ({
+    runId: "run-2",
+    label: "Scout",
+    state,
+  });
   // A finished helper of the same name can't be asking, so the write is this one's.
   for (const state of ["completed", "failed", "unknown"] as const) {
-    assert.equal(subagentHelperApprovalFor(scout, [write], [scout, twin(state)])?.approvalId, "write", state);
+    assert.equal(
+      subagentHelperApprovalFor(scout, [write], [scout, twin(state)])?.approvalId,
+      "write",
+      state,
+    );
   }
   // Another active one could be, so neither claims it; a run grant still names its run.
   assert.equal(subagentHelperApprovalFor(scout, [write], [scout, twin("queued")]), null);
-  assert.equal(subagentHelperApprovalFor(scout, [write, grant], [scout, twin("queued")])?.approvalId, "grant");
+  assert.equal(
+    subagentHelperApprovalFor(scout, [write, grant], [scout, twin("queued")])?.approvalId,
+    "grant",
+  );
 
   // A finished helper can't be asking either, even with the label to itself.
   const finished = { ...scout, state: "completed" as const };
   assert.equal(subagentHelperApprovalFor(finished, [write], [finished]), null);
-  assert.equal(subagentHelperApprovalFor(finished, [write, grant], [finished])?.approvalId, "grant");
+  assert.equal(
+    subagentHelperApprovalFor(finished, [write, grant], [finished])?.approvalId,
+    "grant",
+  );
 });
 
-function snapshot(runId: string, extra: Partial<SubagentRunSnapshotV2> = {}): SubagentRunSnapshotV2 {
+function snapshot(
+  runId: string,
+  extra: Partial<SubagentRunSnapshotV2> = {},
+): SubagentRunSnapshotV2 {
   return {
     version: 2,
     runId,
@@ -456,11 +510,23 @@ test("a window reads a helper's saved conversation again only for a new reason",
 
   // Another window runs the chat: each move of the run is its own reason, including the end.
   const moved = subagentHelperTranscriptRefetchReason(running, complete, false);
-  const movedAgain = subagentHelperTranscriptRefetchReason({ ...running, revision: 5 }, complete, false);
-  const finished = subagentHelperTranscriptRefetchReason({ state: "completed", revision: 5 }, complete, false);
+  const movedAgain = subagentHelperTranscriptRefetchReason(
+    { ...running, revision: 5 },
+    complete,
+    false,
+  );
+  const finished = subagentHelperTranscriptRefetchReason(
+    { state: "completed", revision: 5 },
+    complete,
+    false,
+  );
   assert.ok(moved && movedAgain && finished);
   assert.equal(new Set([moved, movedAgain, finished]).size, 3);
-  assert.equal(subagentHelperTranscriptRefetchReason(running, complete, false), moved, "the same run reads once");
+  assert.equal(
+    subagentHelperTranscriptRefetchReason(running, complete, false),
+    moved,
+    "the same run reads once",
+  );
 
   // A gap in the streamed updates is read even while they stream here.
   const gap = mergeSubagentTranscript(saved, {
@@ -480,8 +546,15 @@ test("a window reads a helper's saved conversation again only for a new reason",
   // final copy that is saved just after it ends.
   const empty = mergeSubagentTranscript(null, null);
   assert.ok(subagentHelperTranscriptRefetchReason(running, empty, true));
-  assert.equal(subagentHelperTranscriptRefetchReason({ state: "completed", revision: 2 }, empty, true), null);
-  const endedElsewhere = subagentHelperTranscriptRefetchReason({ state: "completed", revision: 2 }, empty, false);
+  assert.equal(
+    subagentHelperTranscriptRefetchReason({ state: "completed", revision: 2 }, empty, true),
+    null,
+  );
+  const endedElsewhere = subagentHelperTranscriptRefetchReason(
+    { state: "completed", revision: 2 },
+    empty,
+    false,
+  );
   assert.ok(endedElsewhere);
   assert.equal(subagentHelperRefetchAwaitsFinal(endedElsewhere), true);
 
@@ -489,7 +562,11 @@ test("a window reads a helper's saved conversation again only for a new reason",
   // read again as it moves, so its first saved copy is picked up.
   const queued = snapshot("run-1", { state: "queued", revision: 1 });
   const joinFirst = subagentHelperTranscriptRefetchReason(queued, empty, false);
-  const joinLater = subagentHelperTranscriptRefetchReason({ ...queued, state: "running", revision: 2 }, empty, false);
+  const joinLater = subagentHelperTranscriptRefetchReason(
+    { ...queued, state: "running", revision: 2 },
+    empty,
+    false,
+  );
   assert.ok(joinFirst && joinLater);
   assert.notEqual(joinFirst, joinLater);
 });
@@ -524,7 +601,10 @@ test("a read that follows the run can be skipped once its revision was read", ()
 test("only a finished helper's reads wait for its final saved copy", () => {
   const empty = mergeSubagentTranscript(null, null);
   const saved = mergeSubagentTranscript(transcript("run-1", 3, [{ text: "Looking." }]), null);
-  const awaits = (run: Parameters<typeof subagentHelperTranscriptRefetchReason>[0], merged = saved) => {
+  const awaits = (
+    run: Parameters<typeof subagentHelperTranscriptRefetchReason>[0],
+    merged = saved,
+  ) => {
     const reason = subagentHelperTranscriptRefetchReason(run, merged, false);
     assert.ok(reason);
     return subagentHelperRefetchAwaitsFinal(reason);
@@ -539,19 +619,32 @@ test("only a finished helper's reads wait for its final saved copy", () => {
 });
 
 test("a saved copy is final once its last message is closed and no step is still going", () => {
-  assert.equal(subagentTranscriptIsFinal(transcript("run-1", 1)), false, "the copy saved at the start holds only the task");
-  assert.equal(subagentTranscriptIsFinal(transcript("run-1", 4, [{ text: "Done.", finishedAt: 2_000 }])), true);
   assert.equal(
-    subagentTranscriptIsFinal(transcript("run-1", 4, [{ text: "Done.", finishedAt: 2_000 }, { text: "Still writ" }])),
+    subagentTranscriptIsFinal(transcript("run-1", 1)),
+    false,
+    "the copy saved at the start holds only the task",
+  );
+  assert.equal(
+    subagentTranscriptIsFinal(transcript("run-1", 4, [{ text: "Done.", finishedAt: 2_000 }])),
+    true,
+  );
+  assert.equal(
+    subagentTranscriptIsFinal(
+      transcript("run-1", 4, [{ text: "Done.", finishedAt: 2_000 }, { text: "Still writ" }]),
+    ),
     false,
     "the last message is open",
   );
   for (const status of ["pending", "awaiting_approval", "running"] as const) {
-    const copy = transcript("run-1", 4, [{ text: "", finishedAt: 2_000, steps: [toolStep("s1", { status })] }]);
+    const copy = transcript("run-1", 4, [
+      { text: "", finishedAt: 2_000, steps: [toolStep("s1", { status })] },
+    ]);
     assert.equal(subagentTranscriptIsFinal(copy), false, status);
   }
   for (const status of ["completed", "failed", "blocked", "cancelled"] as const) {
-    const copy = transcript("run-1", 4, [{ text: "", finishedAt: 2_000, steps: [toolStep("s1", { status })] }]);
+    const copy = transcript("run-1", 4, [
+      { text: "", finishedAt: 2_000, steps: [toolStep("s1", { status })] },
+    ]);
     assert.equal(subagentTranscriptIsFinal(copy), true, status);
   }
 });

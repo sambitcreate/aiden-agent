@@ -31,9 +31,17 @@ export function canAddPage(doc: DesignCanvas): boolean {
 /** Adds an empty page after the one on screen and shows it. */
 export function addPage(doc: DesignCanvas, id: string, name?: string): DesignCanvas {
   if (!canAddPage(doc) || doc.pages.some((page) => page.id === id)) return doc;
-  const page: DesignPage = { id, name: cleanName(name) || nextPageName(doc), viewport: { ...FRESH_VIEWPORT } };
+  const page: DesignPage = {
+    id,
+    name: cleanName(name) || nextPageName(doc),
+    viewport: { ...FRESH_VIEWPORT },
+  };
   const at = doc.pages.findIndex((entry) => entry.id === doc.activePageId) + 1;
-  return { ...doc, pages: [...doc.pages.slice(0, at), page, ...doc.pages.slice(at)], activePageId: id };
+  return {
+    ...doc,
+    pages: [...doc.pages.slice(0, at), page, ...doc.pages.slice(at)],
+    activePageId: id,
+  };
 }
 
 /** Renames a page. An empty name is refused. */
@@ -41,7 +49,10 @@ export function renamePage(doc: DesignCanvas, id: string, name: string): DesignC
   const clean = cleanName(name);
   const page = doc.pages.find((entry) => entry.id === id);
   if (!clean || !page || page.name === clean) return doc;
-  return { ...doc, pages: doc.pages.map((entry) => (entry.id === id ? { ...entry, name: clean } : entry)) };
+  return {
+    ...doc,
+    pages: doc.pages.map((entry) => (entry.id === id ? { ...entry, name: clean } : entry)),
+  };
 }
 
 /** Shows a page. */
@@ -55,7 +66,12 @@ export function showPage(doc: DesignCanvas, id: string): DesignCanvas {
  * it, named "<name> copy", and shows the copy. All or nothing: a copy that
  * would pass the page or frame limit returns `doc`.
  */
-export function duplicatePage(doc: DesignCanvas, id: string, pageId: string, newFrameId: () => string): DesignCanvas {
+export function duplicatePage(
+  doc: DesignCanvas,
+  id: string,
+  pageId: string,
+  newFrameId: () => string,
+): DesignCanvas {
   const source = doc.pages.find((page) => page.id === id);
   if (!source || !canAddPage(doc) || doc.pages.some((page) => page.id === pageId)) return doc;
   const frames = doc.frames.filter((frame) => frame.pageId === id);
@@ -69,7 +85,13 @@ export function duplicatePage(doc: DesignCanvas, id: string, pageId: string, new
       const target = end.frameId !== undefined ? ids.get(end.frameId) : undefined;
       return target ? { ...end, frameId: target } : { x: end.x, y: end.y };
     }) as DesignFrame["ends"];
-    return { ...rest, id: ids.get(frame.id)!, pageId, ...(groupId ? { groupId } : {}), ...(ends ? { ends } : {}) };
+    return {
+      ...rest,
+      id: ids.get(frame.id)!,
+      pageId,
+      ...(groupId ? { groupId } : {}),
+      ...(ends ? { ends } : {}),
+    };
   });
   const page: DesignPage = {
     id: pageId,
@@ -119,7 +141,11 @@ export function movePage(doc: DesignCanvas, id: string, step: -1 | 1): DesignCan
  * members; a member moved without its group leaves the group. Comments on a
  * moved frame go with it.
  */
-export function moveFramesToPage(doc: DesignCanvas, ids: readonly string[], pageId: string): DesignCanvas {
+export function moveFramesToPage(
+  doc: DesignCanvas,
+  ids: readonly string[],
+  pageId: string,
+): DesignCanvas {
   if (!doc.pages.some((page) => page.id === pageId)) return doc;
   const chosen = new Set(ids);
   for (const frame of doc.frames) {
@@ -133,11 +159,19 @@ export function moveFramesToPage(doc: DesignCanvas, ids: readonly string[], page
     changed = true;
     const keepsGroup = frame.groupId !== undefined && chosen.has(frame.groupId);
     const { groupId: _groupId, ...rest } = frame;
-    return { ...rest, pageId, x: clampCoord(frame.x), y: clampCoord(frame.y), ...(keepsGroup ? { groupId: frame.groupId } : {}) };
+    return {
+      ...rest,
+      pageId,
+      x: clampCoord(frame.x),
+      y: clampCoord(frame.y),
+      ...(keepsGroup ? { groupId: frame.groupId } : {}),
+    };
   });
   if (!changed) return doc;
   const comments = doc.comments.map((comment) =>
-    comment.frameId !== undefined && chosen.has(comment.frameId) && comment.pageId !== pageId ? { ...comment, pageId } : comment,
+    comment.frameId !== undefined && chosen.has(comment.frameId) && comment.pageId !== pageId
+      ? { ...comment, pageId }
+      : comment,
   );
   // An arrow left behind lets go of the frames that moved away, and one that moved lets go of those left.
   return syncConnectors({ ...doc, frames, comments });

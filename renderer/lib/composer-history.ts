@@ -263,7 +263,8 @@ export function composerHistoryFromBotEntries(
 
     if (
       lastFailedTurn ||
-      (lastAssistant && (lastAssistant.stopReason === "error" || Boolean(lastAssistant.errorMessage)))
+      (lastAssistant &&
+        (lastAssistant.stopReason === "error" || Boolean(lastAssistant.errorMessage)))
     ) {
       replyStatus = "failed";
       const source =
@@ -391,9 +392,10 @@ export function selectComposerHistoryEntry(
   };
 }
 
-export function dismissComposerHistory(
-  state: ComposerHistoryState,
-): { state: ComposerHistoryState; text: string } {
+export function dismissComposerHistory(state: ComposerHistoryState): {
+  state: ComposerHistoryState;
+  text: string;
+} {
   return {
     state: CLOSED_COMPOSER_HISTORY,
     text: state.savedDraft,

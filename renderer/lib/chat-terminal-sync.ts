@@ -8,7 +8,11 @@ import {
   type SubagentRunSnapshot,
 } from "../shared/subagent-runs";
 import { parseGenerationTimeline, type GenerationTimeline } from "../shared/generation-timeline";
-import { chatArtifactIdentity, parseChatArtifactEventV1, type ChatArtifactV1 } from "../shared/chat-artifacts";
+import {
+  chatArtifactIdentity,
+  parseChatArtifactEventV1,
+  type ChatArtifactV1,
+} from "../shared/chat-artifacts";
 import type { ChatUiVisualV1 } from "../shared/aiden-ui/types";
 import { reduceUiVisuals } from "./ui-visual-transcript";
 import { mergeSubagentSnapshots } from "./subagent-view-state";
@@ -311,7 +315,10 @@ function parseTerminalChatNotification(payload: unknown): TerminalChatNotificati
 }
 
 /** Validate the bounded, content-free reconciliation metadata from main. */
-export function parseChatReadResponse(payload: unknown, requestedId: string): ChatReadResponse | null {
+export function parseChatReadResponse(
+  payload: unknown,
+  requestedId: string,
+): ChatReadResponse | null {
   if (typeof payload !== "object" || payload === null || Array.isArray(payload)) return null;
   const candidate = payload as Record<string, unknown>;
   if (
@@ -340,7 +347,8 @@ export function parseChatReadResponse(payload: unknown, requestedId: string): Ch
   if (
     !isReadChatId(reconciliation.chatId, requestedId) ||
     !isSafeSubagentIdentifier(reconciliation.workspaceId) ||
-    (candidate.chat !== null && persistedChatWorkspaceId((candidate.chat as Chat).workspaceId) !== reconciliation.workspaceId)
+    (candidate.chat !== null &&
+      persistedChatWorkspaceId((candidate.chat as Chat).workspaceId) !== reconciliation.workspaceId)
   ) {
     return null;
   }
@@ -456,7 +464,9 @@ export function detachedLifecycleChatProjection(
 ): DetachedLifecycleProjection | null {
   const expectedWorkspaceId = persistedChatWorkspaceId(workspaceId);
   // The observed run is the chat's current one on this Mac, so it is the newest.
-  const observed = observedRunProjections.get(chatReadReconciliationKey({ chatId, workspaceId: expectedWorkspaceId }));
+  const observed = observedRunProjections.get(
+    chatReadReconciliationKey({ chatId, workspaceId: expectedWorkspaceId }),
+  );
   if (observed) return observed;
   for (const projection of detachedLifecycleProjections.values()) {
     if (projection.chatId === chatId && projection.workspaceId === expectedWorkspaceId) {
@@ -497,7 +507,9 @@ export function visibleDetachedLifecycleProjection(
  * run is shown complete, as it always has been; a mirrored run (a phone's turn)
  * streams live, with the paced reveal, until the run finishes.
  */
-export function detachedProjectionStreamComplete(projection: DetachedLifecycleProjection | null): boolean {
+export function detachedProjectionStreamComplete(
+  projection: DetachedLifecycleProjection | null,
+): boolean {
   if (!projection) return false;
   return projection.observed !== true || projection.finished === true;
 }
@@ -514,7 +526,9 @@ export function isDetachedLifecycleChatDraining(
     [...chatReadReconciliations.values()].some(
       (owner) => owner.chatId === chatId && owner.workspaceId === expectedWorkspaceId,
     ) ||
-    observedRunProjections.has(chatReadReconciliationKey({ chatId, workspaceId: expectedWorkspaceId }))
+    observedRunProjections.has(
+      chatReadReconciliationKey({ chatId, workspaceId: expectedWorkspaceId }),
+    )
   );
 }
 
@@ -545,7 +559,11 @@ export function publishObservedRunProjection(
     detachedLifecycleStreams.has(normalized.streamId) ||
     ownGenerationStreams.has(normalized.streamId)
   ) {
-    return clearObservedRunProjection(normalized.chatId, normalized.workspaceId, normalized.streamId);
+    return clearObservedRunProjection(
+      normalized.chatId,
+      normalized.workspaceId,
+      normalized.streamId,
+    );
   }
   const previous = observedRunProjections.get(key);
   const sameRun = previous?.streamId === normalized.streamId;
@@ -597,7 +615,10 @@ export function clearObservedRunProjection(
   workspaceId: string | undefined,
   streamId?: string,
 ): boolean {
-  const key = chatReadReconciliationKey({ chatId, workspaceId: persistedChatWorkspaceId(workspaceId) });
+  const key = chatReadReconciliationKey({
+    chatId,
+    workspaceId: persistedChatWorkspaceId(workspaceId),
+  });
   const current = observedRunProjections.get(key);
   if (!current || (streamId !== undefined && current.streamId !== streamId)) return false;
   observedRunProjections.delete(key);
@@ -677,7 +698,10 @@ export function clearSettledDetachedLifecycleStreams(
     return false;
   }
   const settled = new Set(settledStreamIds);
-  return clearCapturedStreams(owner, owner.streamIds.filter((streamId) => settled.has(streamId)));
+  return clearCapturedStreams(
+    owner,
+    owner.streamIds.filter((streamId) => settled.has(streamId)),
+  );
 }
 
 export interface SettledStreamRelease {
@@ -795,7 +819,10 @@ function requestChatReadReconciliation(owner: ChatReadReconciliation): void {
  * completed an exact authoritative cache refetch. This closes the gap where a
  * settlement broadcast predates passive listener registration.
  */
-export function rememberChatReadReconciliation(owner: ChatReadReconciliation, requestedId: string): void {
+export function rememberChatReadReconciliation(
+  owner: ChatReadReconciliation,
+  requestedId: string,
+): void {
   if (!isReadChatId(owner.chatId, requestedId) || !isSafeSubagentIdentifier(owner.workspaceId)) {
     return;
   }
@@ -944,27 +971,38 @@ export function subscribeDetachedTerminalChats(
     const delta = parsed.payload.delta;
     const reset = parsed.payload.reset === true;
     if (!reset && typeof delta !== "string") return;
-    updateDetachedProjection(parsed.streamId, (current) => ({
-      ...current,
-      content: reset
-        ? ""
-        : appendBounded(current.content, delta as string, MAX_DETACHED_CONTENT_CHARS),
-      reasoning: reset ? "" : current.reasoning,
-      lastTextDeltaAt:
-        reset ? null : (delta as string).length > 0 ? Date.now() : current.lastTextDeltaAt,
-    }), reset ? "now" : "frame");
+    updateDetachedProjection(
+      parsed.streamId,
+      (current) => ({
+        ...current,
+        content: reset
+          ? ""
+          : appendBounded(current.content, delta as string, MAX_DETACHED_CONTENT_CHARS),
+        reasoning: reset ? "" : current.reasoning,
+        lastTextDeltaAt: reset
+          ? null
+          : (delta as string).length > 0
+            ? Date.now()
+            : current.lastTextDeltaAt,
+      }),
+      reset ? "now" : "frame",
+    );
   });
   const unsubscribeReasoning = subscribe("chat:reasoning-delta", (payload) => {
     const parsed = streamPayload(payload);
     if (!parsed || typeof parsed.payload.delta !== "string") return;
-    updateDetachedProjection(parsed.streamId, (current) => ({
-      ...current,
-      reasoning: appendBounded(
-        current.reasoning,
-        parsed.payload.delta as string,
-        MAX_DETACHED_REASONING_CHARS,
-      ),
-    }), "frame");
+    updateDetachedProjection(
+      parsed.streamId,
+      (current) => ({
+        ...current,
+        reasoning: appendBounded(
+          current.reasoning,
+          parsed.payload.delta as string,
+          MAX_DETACHED_REASONING_CHARS,
+        ),
+      }),
+      "frame",
+    );
   });
   const unsubscribeTimeline = subscribe("chat:timeline", (payload) => {
     const parsed = streamPayload(payload);
@@ -1022,15 +1060,19 @@ export function subscribeDetachedTerminalChats(
   const unsubscribeSubagentTranscripts = subscribe("chat:subagent-transcript", (payload) => {
     const notification = parseSubagentTranscriptNotification(payload);
     if (!notification) return;
-    updateDetachedProjection(notification.streamId, (current) => {
-      const subagentTranscripts = foldLiveSubagentTranscript(
-        current.subagentTranscripts,
-        notification.update,
-      );
-      return subagentTranscripts === current.subagentTranscripts
-        ? current
-        : { ...current, subagentTranscripts };
-    }, "frame");
+    updateDetachedProjection(
+      notification.streamId,
+      (current) => {
+        const subagentTranscripts = foldLiveSubagentTranscript(
+          current.subagentTranscripts,
+          notification.update,
+        );
+        return subagentTranscripts === current.subagentTranscripts
+          ? current
+          : { ...current, subagentTranscripts };
+      },
+      "frame",
+    );
   });
   const handle = (payload: unknown) => {
     const terminal = parseTerminalChatNotification(payload);

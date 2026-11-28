@@ -25,8 +25,14 @@ import { compactionEngineFrom } from "../../../renderer/shared/compaction.js";
 import { resolveBotRuntimeSkills } from "../bot-capability-services-main.js";
 import type { BotConnectionDismissalStore } from "../bot-connection-dismissals.js";
 import type { BotFileToolLocation } from "../bot-file-tool-router.js";
-import { resolveBotRuntimeApprovedRoots, resolveBotRuntimeCatalogSnapshot } from "../bot-runtime-authority-main.js";
-import { connectionSourceIdFor, isBotConnectionReady } from "../bot-runtime-tools/suggest-connection.js";
+import {
+  resolveBotRuntimeApprovedRoots,
+  resolveBotRuntimeCatalogSnapshot,
+} from "../bot-runtime-authority-main.js";
+import {
+  connectionSourceIdFor,
+  isBotConnectionReady,
+} from "../bot-runtime-tools/suggest-connection.js";
 import { buildPinnedCodingTools } from "../coding-tools.js";
 import { createComputerUseController } from "../computer-use/runtime.js";
 import { computerUseSupported } from "../computer-use/platform.js";
@@ -56,7 +62,12 @@ import { botMcpLiveToolMatchesGrant } from "../bot-tool-authority.js";
 import { collectMcpAgentTools } from "../mcp.js";
 import { mcpAgentToolDescriptor } from "../mcp-agent-tool-descriptor.js";
 import type { BotTurnContext } from "./bot-extension.js";
-import type { BotAdmission, BotCandidateSet, BotToolCandidate, BotToolSources } from "./bot-tool-assembly.js";
+import type {
+  BotAdmission,
+  BotCandidateSet,
+  BotToolCandidate,
+  BotToolSources,
+} from "./bot-tool-assembly.js";
 import {
   routineNotesCandidate,
   botOpenWorkCandidate,
@@ -81,8 +92,14 @@ import { isBrowserToolName } from "../browser-tools.js";
 import { botBrowser } from "./bot-browser-main.js";
 import { BOT_BROWSER_GATEWAY_TOOL } from "./bot-tool-disclosure.js";
 import { botComputerAction } from "./bot-computer-approval.js";
-import { botComputerCandidates, botHasComputer as hasOwnComputer } from "./bot-computer-candidates.js";
-import { createBotComputerToolState, type BotComputerToolState } from "../bot-computers/computer-tool.js";
+import {
+  botComputerCandidates,
+  botHasComputer as hasOwnComputer,
+} from "./bot-computer-candidates.js";
+import {
+  createBotComputerToolState,
+  type BotComputerToolState,
+} from "../bot-computers/computer-tool.js";
 import { BOT_COMPUTER_SHELL_TOOL_NAME, BOT_COMPUTER_TOOL_NAME } from "../bot-computers/types.js";
 import { botOwnWrites } from "../bot-routine-events/own-writes.js";
 import { botFileCandidates } from "./bot-file-candidates.js";
@@ -135,7 +152,11 @@ export async function botFileLocations(admission: BotAdmission): Promise<BotFile
     });
   }
   if (authority.files.fullMac) {
-    locations.push({ id: authority.files.fullMac.sourceId, label: botFullComputerLabel(process.platform), root: "/" });
+    locations.push({
+      id: authority.files.fullMac.sourceId,
+      label: botFullComputerLabel(process.platform),
+      root: "/",
+    });
   }
   for (const { device, inode, ...location } of await resolveBotRuntimeApprovedRoots(authority)) {
     locations.push({ ...location, expectedIdentity: { device, inode } });
@@ -155,14 +176,18 @@ export function isConnected(pluginId: string): Promise<boolean> {
         ),
       ),
     hasOAuthTokens: (server, preset) =>
-      hasOAuthTokens({ ...server, url: server.url ?? (preset.transport === "http" ? preset.url : undefined) }),
+      hasOAuthTokens({
+        ...server,
+        url: server.url ?? (preset.transport === "http" ? preset.url : undefined),
+      }),
   });
 }
 
 /** Where a call a rule handed to the person would have acted: the Bot's own browser or computer, else nowhere. */
 export function ruleHandoffTarget(toolName: string): BotHandoffTarget | undefined {
   if (toolName === BOT_BROWSER_GATEWAY_TOOL || isBrowserToolName(toolName)) return "browser";
-  if (toolName === BOT_COMPUTER_TOOL_NAME || toolName === BOT_COMPUTER_SHELL_TOOL_NAME) return "computer";
+  if (toolName === BOT_COMPUTER_TOOL_NAME || toolName === BOT_COMPUTER_SHELL_TOOL_NAME)
+    return "computer";
   return undefined;
 }
 
@@ -174,21 +199,29 @@ const eventRoutineServices = () => import("../bot-routine-events/sources-main.js
 
 const botRoutineToolDependencies: Parameters<typeof routinesCandidate>[1] = {
   list: async (botId) => (await routineServices()).botRoutineService.list(botId),
-  pause: async (botId, routineId) => (await routineServices()).botRoutineService.pause(botId, routineId),
+  pause: async (botId, routineId) =>
+    (await routineServices()).botRoutineService.pause(botId, routineId),
   propose: async (botId, input, append, entries) => {
-    const outcome = await (await proposalServices()).botRoutineProposals.propose(botId, input, append, entries);
+    const outcome = await (
+      await proposalServices()
+    ).botRoutineProposals.propose(botId, input, append, entries);
     return outcome.ok ? { ok: true, proposalId: outcome.proposal.proposalId } : outcome;
   },
   revise: async (botId, proposalId, input, append, entries) => {
-    const outcome = await (await proposalServices()).botRoutineProposals.revise(botId, proposalId, input, append, entries);
-    return outcome.ok ? { ok: true, proposalId: outcome.proposal.proposalId, replaced: outcome.replaced } : outcome;
+    const outcome = await (
+      await proposalServices()
+    ).botRoutineProposals.revise(botId, proposalId, input, append, entries);
+    return outcome.ok
+      ? { ok: true, proposalId: outcome.proposal.proposalId, replaced: outcome.replaced }
+      : outcome;
   },
   pending: async (botId) => (await proposalServices()).botRoutineProposals.pending(botId),
   eventRoutines: eventRoutinesToolSource(async () => {
     const services = await eventRoutineServices();
     return { store: services.botEventRoutines, changed: services.botEventRoutinesChanged };
   }),
-  recentDecisions: async (botId) => (await proposalServices()).botRoutineProposals.recentDecisions(botId),
+  recentDecisions: async (botId) =>
+    (await proposalServices()).botRoutineProposals.recentDecisions(botId),
 };
 
 const lazyRoutineNotes = {
@@ -204,7 +237,8 @@ const lazyWakeUps = {
   set: async (...args: Parameters<import("../bot-wake-ups/wake-ups.js").BotWakeUps["set"]>) =>
     (await wakeUpServices()).botWakeUps.set(...args),
   pending: async (botId: string) => (await wakeUpServices()).botWakeUps.pending(botId),
-  cancel: async (botId: string, id: string) => (await wakeUpServices()).botWakeUps.cancel(botId, id),
+  cancel: async (botId: string, id: string) =>
+    (await wakeUpServices()).botWakeUps.cancel(botId, id),
 };
 
 function once<T>(load: () => Promise<T>): () => Promise<T> {
@@ -258,25 +292,36 @@ export function createBotToolSources(deps: BotToolSourceDeps): BotToolSourcesMai
     );
   }
 
-  async function computerUseFor(botId: string, supportsImages: boolean): Promise<ComputerUseController | undefined> {
+  async function computerUseFor(
+    botId: string,
+    supportsImages: boolean,
+  ): Promise<ComputerUseController | undefined> {
     if (!(await computerUseGranted(botId))) {
       await closeController(botId);
       return undefined;
     }
     const status = await computerUseStatus.status({});
     if (!status.ready) {
-      logger.warn("bots", `Computer Use is allowed for Bot ${botId} but is not ready. ${status.detail}`);
+      logger.warn(
+        "bots",
+        `Computer Use is allowed for Bot ${botId} but is not ready. ${status.detail}`,
+      );
       await closeController(botId);
       return undefined;
     }
     const current = controllers.get(botId);
-    if (current && current.lifecycleState !== "closed" && current.lifecycleState !== "poisoned") return current;
+    if (current && current.lifecycleState !== "closed" && current.lifecycleState !== "poisoned")
+      return current;
     const controller = createComputerUseController(`bot:${botId}`, supportsImages);
     controllers.set(botId, controller);
     return controller;
   }
 
-  function subagentCandidate(botId: string, admission: BotAdmission, schema: AgentTool): BotToolCandidate {
+  function subagentCandidate(
+    botId: string,
+    admission: BotAdmission,
+    schema: AgentTool,
+  ): BotToolCandidate {
     const authority = admission.authority;
     return {
       tool: schema,
@@ -289,8 +334,19 @@ export function createBotToolSources(deps: BotToolSourceDeps): BotToolSourcesMai
             const execution = botExecutionScope(botId);
             const helpers = execution ? await import("./bot-session-main.js") : undefined;
             const runtime = helpers
-              ? await helpers.resolveBotExecutionHelperRuntime(botId, "primary", authority.provider.sourceProviderId, authority.provider.sourceModelId, signal)
-              : await resolveBotModelRuntime(authority.provider.sourceProviderId, authority.provider.sourceModelId, signal, authority.chatId);
+              ? await helpers.resolveBotExecutionHelperRuntime(
+                  botId,
+                  "primary",
+                  authority.provider.sourceProviderId,
+                  authority.provider.sourceModelId,
+                  signal,
+                )
+              : await resolveBotModelRuntime(
+                  authority.provider.sourceProviderId,
+                  authority.provider.sourceModelId,
+                  signal,
+                  authority.chatId,
+                );
             // Children belong to this exact parent call, in the Bot's own chat
             // and folder. Nothing is persisted that could relaunch them: the
             // tool is `unsafe`, so a replayed parent call never reruns.
@@ -301,11 +357,28 @@ export function createBotToolSources(deps: BotToolSourceDeps): BotToolSourcesMai
               chatId: await deps.canonicalChatId(botId),
               workspaceId: authority.managedHome.workspaceId,
               runtime,
-              ...(helpers ? { transformRuntime: (isolated, context) => helpers.bindBotExecutionHelperRuntime(botId, `subagent:${context.childId}`, isolated, runtime) } : {}),
-              thinkingLevel: execution ? (execution.claim.actual === "fallback" ? execution.claim.fallback! : execution.claim.primary).thinkingLevel : "off",
+              ...(helpers
+                ? {
+                    transformRuntime: (isolated, context) =>
+                      helpers.bindBotExecutionHelperRuntime(
+                        botId,
+                        `subagent:${context.childId}`,
+                        isolated,
+                        runtime,
+                      ),
+                  }
+                : {}),
+              thinkingLevel: execution
+                ? (execution.claim.actual === "fallback"
+                    ? execution.claim.fallback!
+                    : execution.claim.primary
+                  ).thinkingLevel
+                : "off",
               workspaceRoot: authority.workingDirectory,
               permission: "full",
-              inheritedCeiling: authority.files.botHome ? inheritedSubagentReadToolCeiling(undefined) : [],
+              inheritedCeiling: authority.files.botHome
+                ? inheritedSubagentReadToolCeiling(undefined)
+                : [],
               healthMetrics: subagentHealthMetrics,
               // The tools are rebuilt for every task phase, so the clock is held
               // per execution claim: every helper call in this reply shares 60
@@ -318,7 +391,8 @@ export function createBotToolSources(deps: BotToolSourceDeps): BotToolSourcesMai
               // Each helper's conversation is saved under the Bot's chat and
               // removed with it. Nothing is streamed: no window owns this run.
               transcripts: createSubagentTranscriptFactory(subagentTranscriptStore, {
-                onError: (error) => logger.warn("subagents", "Could not save a Bot helper conversation.", error),
+                onError: (error) =>
+                  logger.warn("subagents", "Could not save a Bot helper conversation.", error),
               }),
             });
             return createSubagentTool(supervisor).execute(toolCallId, params, signal, onUpdate);
@@ -335,7 +409,9 @@ export function createBotToolSources(deps: BotToolSourceDeps): BotToolSourcesMai
     async facts(botId, admission): Promise<ProductionFacts> {
       const authority = admission.authority;
       const catalog = once(() => resolveBotRuntimeCatalogSnapshot(authority));
-      const computerGranted = authority.otherCapabilities.some((grant) => grant.kind === "computer");
+      const computerGranted = authority.otherCapabilities.some(
+        (grant) => grant.kind === "computer",
+      );
       return createBotToolFacts({
         admission,
         supportsImages: await deps.imageInput(botId),
@@ -352,7 +428,9 @@ export function createBotToolSources(deps: BotToolSourceDeps): BotToolSourcesMai
           return new Map(
             tools.flatMap((tool) => {
               const descriptor = mcpAgentToolDescriptor(tool);
-              return descriptor && mcpAgentToolIdentity(tool) ? [[tool.name, descriptor] as const] : [];
+              return descriptor && mcpAgentToolIdentity(tool)
+                ? [[tool.name, descriptor] as const]
+                : [];
             }),
           );
         },
@@ -377,8 +455,12 @@ export function createBotToolSources(deps: BotToolSourceDeps): BotToolSourcesMai
       // serves (`botIngressAllowsTool`, `botToolVerdict`) before it runs.
       const routineRun = turn.requestId?.startsWith("routine:") ?? false;
       const peerRun = botExecutionScope(botId)?.claim.peer !== undefined;
-      const has = (kind: string) => authority.otherCapabilities.some((grant) => grant.kind === kind);
-      const workspace = { id: authority.managedHome.workspaceId, folderPath: authority.workingDirectory };
+      const has = (kind: string) =>
+        authority.otherCapabilities.some((grant) => grant.kind === kind);
+      const workspace = {
+        id: authority.managedHome.workspaceId,
+        folderPath: authority.workingDirectory,
+      };
       const skillSnapshot = await production.skillSnapshot();
       const subagentsAllowed =
         has("subagents") &&
@@ -391,7 +473,9 @@ export function createBotToolSources(deps: BotToolSourceDeps): BotToolSourcesMai
           folderPath: workspace.folderPath,
           permission: "full",
         });
-      const computerUse = has("computer_use") ? await computerUseFor(botId, facts.supportsImages) : undefined;
+      const computerUse = has("computer_use")
+        ? await computerUseFor(botId, facts.supportsImages)
+        : undefined;
       if (!has("computer_use")) await closeController(botId);
       const connectionIds = authority.connections.map(({ sourceId }) => sourceId);
       const subagentSchema = createSubagentTool({
@@ -414,14 +498,19 @@ export function createBotToolSources(deps: BotToolSourceDeps): BotToolSourcesMai
         ...(subagentsAllowed ? { createSubagentTool: () => subagentSchema } : {}),
         includeCodingTools: false,
       });
-      builtMcpTools.set(botId, built.filter((tool) => mcpAgentToolIdentity(tool) !== undefined));
+      builtMcpTools.set(
+        botId,
+        built.filter((tool) => mcpAgentToolIdentity(tool) !== undefined),
+      );
       const mcpNames = await facts.mcpTools();
       const tools: BotToolCandidate[] = built.flatMap((tool): BotToolCandidate[] => {
         if (tool.name === SUBAGENT_TOOL) return [subagentCandidate(botId, admission, tool)];
         const grant = mcpNames.get(tool.name);
         if (!grant) return [{ tool }];
         // The built tool itself must be the granted tool, not only a same-named one.
-        return botMcpLiveToolMatchesGrant(grant, mcpAgentToolDescriptor(tool)) ? [{ tool, mcp: true }] : [];
+        return botMcpLiveToolMatchesGrant(grant, mcpAgentToolDescriptor(tool))
+          ? [{ tool, mcp: true }]
+          : [];
       });
       // The Bot's own computer. Routines may use it unattended (§8.7); the
       // screen is vision only, so a model without image input gets the shell alone.
@@ -459,73 +548,140 @@ export function createBotToolSources(deps: BotToolSourceDeps): BotToolSourcesMai
         ...botFileCandidates(boundFileLocations, {
           routine: routineRun || peerRun,
           recordOwnWrite: (written) => botOwnWrites.record(botId, written),
-          ...(authority.accessMode === "custom" && authority.files.mode === "scoped" ? { runAccess: { resolve: async (call: import("./tool-adapter.js").BotToolCall) => {
-            await call.assertRunActive?.();
-            // Named ingress IDs remain unchanged; unnamed person inputs use
-            // the same durable host identities as their plan-owned grant.
-            const ids = call.runInputIds ? await call.runInputIds() : await call.runRequestIds?.() ?? [];
-            return botRunAccess.location(botId, ids, await deps.policyRevision(botId));
-          } }, savedAccess: { resolve: (call: import("./tool-adapter.js").BotToolCall) =>
-            botSavedLocationForCall(botId, { runAccess: botRunAccess, policyRevision: deps.policyRevision }, call) } } : {}),
+          ...(authority.accessMode === "custom" && authority.files.mode === "scoped"
+            ? {
+                runAccess: {
+                  resolve: async (call: import("./tool-adapter.js").BotToolCall) => {
+                    await call.assertRunActive?.();
+                    // Named ingress IDs remain unchanged; unnamed person inputs use
+                    // the same durable host identities as their plan-owned grant.
+                    const ids = call.runInputIds
+                      ? await call.runInputIds()
+                      : ((await call.runRequestIds?.()) ?? []);
+                    return botRunAccess.location(botId, ids, await deps.policyRevision(botId));
+                  },
+                },
+                savedAccess: {
+                  resolve: (call: import("./tool-adapter.js").BotToolCall) =>
+                    botSavedLocationForCall(
+                      botId,
+                      { runAccess: botRunAccess, policyRevision: deps.policyRevision },
+                      call,
+                    ),
+                },
+              }
+            : {}),
         }),
       );
       if (authority.files.botHome) tools.push(shareImageCandidate(authority));
       if (authority.shell.enabled) {
-        const shell = buildPinnedCodingTools(authority.workingDirectory).find(({ name }) => name === "run_command");
+        const shell = buildPinnedCodingTools(authority.workingDirectory).find(
+          ({ name }) => name === "run_command",
+        );
         if (shell) tools.push({ tool: shell });
       }
       if (!facts.supportsImages) {
-        const execution = botExecutionScope(botId), savedVision = execution?.claim.vision, currentVision = authority.visionProvider;
-        const matchingVision = !execution || Boolean(savedVision && currentVision && savedVision.sourceProviderId === currentVision.sourceProviderId && savedVision.sourceModelId === currentVision.sourceModelId && savedVision.connectionFingerprint === currentVision.connectionFingerprint && savedVision.providerExactFingerprint === currentVision.providerExactFingerprint && savedVision.modelExactFingerprint === currentVision.modelExactFingerprint);
-        const vision = matchingVision ? visionCandidate(authority, {
-          revalidateBeforeEffect: async () => {
-            const fresh = await deps.admit(botId);
-            try {
-              await fresh.revalidateBeforeEffect();
-            } finally {
-              fresh.release();
-            }
-          },
-          dependencies: {
-            resolveRuntime: async (providerId, modelId, signal) => {
-              if (!botExecutionScope(botId)) return resolveBotModelRuntime(providerId, modelId, signal, authority.chatId);
-              const helpers = await import("./bot-session-main.js");
-              const runtime = await helpers.resolveBotExecutionHelperRuntime(botId, "vision", providerId, modelId, signal);
-              return helpers.bindBotExecutionHelperRuntime(botId, "vision", runtime);
-            },
-            recordUsage: async (record) => {
-              const { usageStore } = await import("../usage-store.js");
-              await usageStore.record(record);
-            },
-          },
-        }) : undefined;
+        const execution = botExecutionScope(botId),
+          savedVision = execution?.claim.vision,
+          currentVision = authority.visionProvider;
+        const matchingVision =
+          !execution ||
+          Boolean(
+            savedVision &&
+            currentVision &&
+            savedVision.sourceProviderId === currentVision.sourceProviderId &&
+            savedVision.sourceModelId === currentVision.sourceModelId &&
+            savedVision.connectionFingerprint === currentVision.connectionFingerprint &&
+            savedVision.providerExactFingerprint === currentVision.providerExactFingerprint &&
+            savedVision.modelExactFingerprint === currentVision.modelExactFingerprint,
+          );
+        const vision = matchingVision
+          ? visionCandidate(authority, {
+              revalidateBeforeEffect: async () => {
+                const fresh = await deps.admit(botId);
+                try {
+                  await fresh.revalidateBeforeEffect();
+                } finally {
+                  fresh.release();
+                }
+              },
+              dependencies: {
+                resolveRuntime: async (providerId, modelId, signal) => {
+                  if (!botExecutionScope(botId))
+                    return resolveBotModelRuntime(providerId, modelId, signal, authority.chatId);
+                  const helpers = await import("./bot-session-main.js");
+                  const runtime = await helpers.resolveBotExecutionHelperRuntime(
+                    botId,
+                    "vision",
+                    providerId,
+                    modelId,
+                    signal,
+                  );
+                  return helpers.bindBotExecutionHelperRuntime(botId, "vision", runtime);
+                },
+                recordUsage: async (record) => {
+                  const { usageStore } = await import("../usage-store.js");
+                  await usageStore.record(record);
+                },
+              },
+            })
+          : undefined;
         if (vision) tools.push(vision);
       }
       // Both are always installed; ingress (`botIngressAllowsTool`) keeps
       // `routines` off routine and Telegram runs and `routine_notes` on routine runs only.
       tools.push(routinesCandidate(botId, botRoutineToolDependencies));
-      tools.push(proposeSkillCandidate(botId, async (id, input, append) =>
-        (await import("../bot-skills/skill-proposals-main.js")).botSkillProposals.propose(id, input, append)));
-      tools.push(routineNotesCandidate(botId, { notes: lazyRoutineNotes, taskIdOf: routineTaskIdOfCall }));
+      tools.push(
+        proposeSkillCandidate(botId, async (id, input, append) =>
+          (await import("../bot-skills/skill-proposals-main.js")).botSkillProposals.propose(
+            id,
+            input,
+            append,
+          ),
+        ),
+      );
+      tools.push(
+        routineNotesCandidate(botId, { notes: lazyRoutineNotes, taskIdOf: routineTaskIdOfCall }),
+      );
       const peers = await import("../bot-peers/host-main.js");
       const { botPeerCandidate } = await import("../bot-peers/tool.js");
-      tools.push(botPeerCandidate(botId, {service:peers.botPeerHost,source:peers.botPeerToolSource,wake:peers.wakeBotPeers}));
+      tools.push(
+        botPeerCandidate(botId, {
+          service: peers.botPeerHost,
+          source: peers.botPeerToolSource,
+          wake: peers.wakeBotPeers,
+        }),
+      );
       const settings = await import("../bot-settings-changes/service-main.js");
-      const { updateBotCandidate, updateBotOwnerStarted } = await import("../bot-settings-changes/tool.js");
-      tools.push(updateBotCandidate(botId, {
-        service: settings.botSettingsChanges,
-        ownerStarted: async (call) =>
-          updateBotOwnerStarted(botExecutionScope(botId)?.requestIds, call.runRequestIds ? await call.runRequestIds() : undefined),
-      }));
+      const { updateBotCandidate, updateBotOwnerStarted } =
+        await import("../bot-settings-changes/tool.js");
+      tools.push(
+        updateBotCandidate(botId, {
+          service: settings.botSettingsChanges,
+          ownerStarted: async (call) =>
+            updateBotOwnerStarted(
+              botExecutionScope(botId)?.requestIds,
+              call.runRequestIds ? await call.runRequestIds() : undefined,
+            ),
+        }),
+      );
       const openWork = await import("../bot-open-work/service-main.js");
-      tools.push(botOpenWorkCandidate(botId, { service: openWork.botOpenWork, routineOrigin: openWork.resolveBotOpenWorkRoutineOrigin, peerOrigin: peers.botPeerOpenWorkOrigin }));
+      tools.push(
+        botOpenWorkCandidate(botId, {
+          service: openWork.botOpenWork,
+          routineOrigin: openWork.resolveBotOpenWorkRoutineOrigin,
+          peerOrigin: peers.botPeerOpenWorkOrigin,
+        }),
+      );
       // This turn's own authority: Custom access (and any chat reduction) that leaves the app out.
       const turnLacksConnection = (sourceId: string) =>
         authority.accessMode === "custom" &&
         !authority.connections.some((connection) => connection.sourceId === sourceId);
       // Only the Bot's own access can be widened from a card; a chat reduction stays as it is.
       const botLacksConnection = async (id: string, sourceId: string) =>
-        deps.botLacksConnection ? deps.botLacksConnection(id, sourceId) : turnLacksConnection(sourceId);
+        deps.botLacksConnection
+          ? deps.botLacksConnection(id, sourceId)
+          : turnLacksConnection(sourceId);
       tools.push(
         suggestConnectionCandidate(botId, {
           isConnected,
@@ -536,7 +692,11 @@ export function createBotToolSources(deps: BotToolSourceDeps): BotToolSourcesMai
           },
           chatLacksConnection: async (id, pluginId) => {
             const sourceId = connectionSourceIdFor(pluginId);
-            return sourceId !== undefined && turnLacksConnection(sourceId) && !(await botLacksConnection(id, sourceId));
+            return (
+              sourceId !== undefined &&
+              turnLacksConnection(sourceId) &&
+              !(await botLacksConnection(id, sourceId))
+            );
           },
         }),
       );
@@ -554,25 +714,60 @@ export function createBotToolSources(deps: BotToolSourceDeps): BotToolSourcesMai
       if (messageBot) tools.push(messageBot);
       const signInOnComputer = has("computer") && facts.hasComputer;
       // A step in the Bot's own browser or on its computer: Open brings that forward, and phones finish it on the Mac.
-      tools.push(botHandoffCandidate(botId, botHandoffs, { targets: { browser: has("browser"), computer: signInOnComputer } }));
-      if (deps.planTools) tools.push(
-        proposePlanCandidate(botId, deps.planTools),
-        planStepCandidate(botId, deps.planTools.plans),
+      tools.push(
+        botHandoffCandidate(botId, botHandoffs, {
+          targets: { browser: has("browser"), computer: signInOnComputer },
+        }),
       );
-      if (authority.accessMode === "custom" && authority.files.mode === "scoped") tools.push(botAccessRequestCandidate(botId, {
-        requests: botAccessRequests, runAccess: botRunAccess, policyRevision: deps.policyRevision, boundLocations: boundFileLocations,
-        ...(deps.folderOffer ? { folderOffer: deps.folderOffer } : {}),
-        resolveTarget: (requested) => resolveBotAccessTarget(requested, { homeDirectory: os.homedir, privateRoots: () => botAccessPrivateRoots(app.getPath("userData"), aidenConfigDir()), approvedRoots: async () => (await (await import("../aiden-remote-service-main.js")).getAidenRemoteRuntime()).state.snapshot().then((state) => state.approvedRoots) }),
-        currentLocations: async () => {
-          const fresh = await deps.admit(botId);
-          try {
-            if (fresh.authority.accessMode !== "custom" || fresh.authority.files.mode !== "scoped") throw new Error("This Bot's access changed. Ask for access again.");
-            await fresh.revalidateBeforeEffect(); return await botFileLocations(fresh);
-          } finally { fresh.release(); }
-        },
-        raiseIssue: async (input) => (await import("../bot-issues/service-main.js")).botIssues.raise(input),
-        resolveIssue: async (id, key, resolution) => (await import("../bot-issues/service-main.js")).botIssues.resolve(id, key, resolution),
-      }));
+      if (deps.planTools)
+        tools.push(
+          proposePlanCandidate(botId, deps.planTools),
+          planStepCandidate(botId, deps.planTools.plans),
+        );
+      if (authority.accessMode === "custom" && authority.files.mode === "scoped")
+        tools.push(
+          botAccessRequestCandidate(botId, {
+            requests: botAccessRequests,
+            runAccess: botRunAccess,
+            policyRevision: deps.policyRevision,
+            boundLocations: boundFileLocations,
+            ...(deps.folderOffer ? { folderOffer: deps.folderOffer } : {}),
+            resolveTarget: (requested) =>
+              resolveBotAccessTarget(requested, {
+                homeDirectory: os.homedir,
+                privateRoots: () =>
+                  botAccessPrivateRoots(app.getPath("userData"), aidenConfigDir()),
+                approvedRoots: async () =>
+                  (
+                    await (await import("../aiden-remote-service-main.js")).getAidenRemoteRuntime()
+                  ).state
+                    .snapshot()
+                    .then((state) => state.approvedRoots),
+              }),
+            currentLocations: async () => {
+              const fresh = await deps.admit(botId);
+              try {
+                if (
+                  fresh.authority.accessMode !== "custom" ||
+                  fresh.authority.files.mode !== "scoped"
+                )
+                  throw new Error("This Bot's access changed. Ask for access again.");
+                await fresh.revalidateBeforeEffect();
+                return await botFileLocations(fresh);
+              } finally {
+                fresh.release();
+              }
+            },
+            raiseIssue: async (input) =>
+              (await import("../bot-issues/service-main.js")).botIssues.raise(input),
+            resolveIssue: async (id, key, resolution) =>
+              (await import("../bot-issues/service-main.js")).botIssues.resolve(
+                id,
+                key,
+                resolution,
+              ),
+          }),
+        );
       // Needs the Browser or a computer in the Bot's access; the verdict keeps it off otherwise.
       tools.push(
         signInCandidate(botId, botHandoffs, {
@@ -633,7 +828,11 @@ export function createBotToolSources(deps: BotToolSourceDeps): BotToolSourcesMai
       // The host deletes the Bot's computer on its own Delete Bot step.
       botComputerToolState?.forget(botId);
       // Bot delete clears the browser profile, closing any tab left, on its own step.
-      await botBrowser.forget(botId).catch((error: unknown) => logger.warn("bots", `Could not close Bot ${botId}'s browser tabs.`, error));
+      await botBrowser
+        .forget(botId)
+        .catch((error: unknown) =>
+          logger.warn("bots", `Could not close Bot ${botId}'s browser tabs.`, error),
+        );
     },
   };
   return sources;

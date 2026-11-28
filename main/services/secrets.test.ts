@@ -92,7 +92,9 @@ function fakeSafeStorage(): FakeSafeStorage {
     decryptString(value) {
       if (!this.available) throw new Error("fake safeStorage is locked");
       if (!value.subarray(0, CIPHER_PREFIX.length).equals(CIPHER_PREFIX)) {
-        throw new Error("Error while decrypting the ciphertext provided to safeStorage.decryptString.");
+        throw new Error(
+          "Error while decrypting the ciphertext provided to safeStorage.decryptString.",
+        );
       }
       return Buffer.from(value.subarray(CIPHER_PREFIX.length).map((byte) => byte ^ 0x5a)).toString(
         "utf8",
@@ -285,7 +287,10 @@ test("a non-string entry is treated as absent rather than decrypted", async () =
 
 test("length bounds and a stale mutation guard refuse the write without touching disk", async () => {
   const h = await harness();
-  await assert.rejects(h.secrets.setInternalKey("aiden-internal:tts", "x".repeat(17), 16), /16 characters/);
+  await assert.rejects(
+    h.secrets.setInternalKey("aiden-internal:tts", "x".repeat(17), 16),
+    /16 characters/,
+  );
   await assert.rejects(
     h.secrets.setKey("openrouter", SENTINEL, () => false),
     /no longer active/,
@@ -368,7 +373,10 @@ test("quarantining an unbound legacy key hides it from every active read", async
   await h.secrets.quarantineUnboundProviderKey("bound");
 
   assert.equal(await h.secrets.getKey("legacy"), null);
-  assert.equal(await h.secrets.getOrBindLegacyProviderKey("legacy", "https://x.example.test"), null);
+  assert.equal(
+    await h.secrets.getOrBindLegacyProviderKey("legacy", "https://x.example.test"),
+    null,
+  );
   assert.equal(await h.secrets.getProviderKey("bound", "https://bound.example.test"), SENTINEL);
   assertNoPlaintext(await h.diskContents(), SENTINEL);
 });
@@ -434,7 +442,11 @@ test("alias migration moves and binds a key, and leaves the map untouched on con
   const before = await fs.readFile(h.file, "utf8");
   assert.equal(
     await h.secrets.migrateProviderKeysWithBindings([
-      { legacyProviderId: "second-alias", providerId: "new-id", binding: "https://new.example.test" },
+      {
+        legacyProviderId: "second-alias",
+        providerId: "new-id",
+        binding: "https://new.example.test",
+      },
     ]),
     false,
   );

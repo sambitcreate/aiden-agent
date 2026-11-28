@@ -68,6 +68,8 @@ export function isBackgroundJobId(value: unknown): value is string {
 }
 
 /** The name the person sees: the agent's label, else the command. */
-export function backgroundJobLabel(job: Pick<BackgroundJobView, "description" | "command">): string {
+export function backgroundJobLabel(
+  job: Pick<BackgroundJobView, "description" | "command">,
+): string {
   return job.description?.trim() || job.command;
 }

@@ -1,5 +1,12 @@
 import { MoreHorizontal, type LucideIcon } from "lucide-react";
-import { Button, DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "./ui";
+import {
+  Button,
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "./ui";
 
 /** One more thing the person can do with an inline visual, from its caption's menu. */
 export interface VisualMenuAction {
@@ -22,13 +29,26 @@ export function VisualCaptionActions({
   extras,
 }: {
   title: string;
-  primary: { ariaLabel: string; menuLabel: string; icon: LucideIcon; onSelect: () => void; disabled?: boolean };
+  primary: {
+    ariaLabel: string;
+    menuLabel: string;
+    icon: LucideIcon;
+    onSelect: () => void;
+    disabled?: boolean;
+  };
   extras?: readonly VisualMenuAction[] | undefined;
 }) {
   const PrimaryIcon = primary.icon;
   if (!extras?.length) {
     return (
-      <Button iconOnly size="small" variant="transparent" aria-label={primary.ariaLabel} disabled={primary.disabled} onClick={primary.onSelect}>
+      <Button
+        iconOnly
+        size="small"
+        variant="transparent"
+        aria-label={primary.ariaLabel}
+        disabled={primary.disabled}
+        onClick={primary.onSelect}
+      >
         <PrimaryIcon aria-hidden="true" />
       </Button>
     );
@@ -49,7 +69,11 @@ export function VisualCaptionActions({
         {extras.map((action) => {
           const Icon = action.icon;
           return (
-            <DropdownMenuItem key={action.key} disabled={action.disabled} onSelect={action.onSelect}>
+            <DropdownMenuItem
+              key={action.key}
+              disabled={action.disabled}
+              onSelect={action.onSelect}
+            >
               <Icon aria-hidden="true" />
               {action.label}
             </DropdownMenuItem>

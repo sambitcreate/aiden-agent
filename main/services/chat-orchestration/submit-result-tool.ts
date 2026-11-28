@@ -28,7 +28,10 @@ export function createSubmitResultTool(options: {
       "Hand your result back to the chat that started this one, as JSON matching the schema it gave (below). " +
       "Call it again to replace an earlier result; a result that doesn't match is refused, naming the fields to fix.\n\nSchema:\n" +
       JSON.stringify(options.schema),
-    parameters: Type.Object({ result: Type.Unknown({ description: "The result, matching the schema." }) }, { additionalProperties: false }),
+    parameters: Type.Object(
+      { result: Type.Unknown({ description: "The result, matching the schema." }) },
+      { additionalProperties: false },
+    ),
     execute: async (_toolCallId, rawParams, signal) => {
       signal?.throwIfAborted();
       const params = rawParams as { result?: unknown };
@@ -36,7 +39,8 @@ export function createSubmitResultTool(options: {
         await options.childChats.submitResult(options.chatId, params.result);
         return respond({ ok: true, accepted: true });
       } catch (error) {
-        if (error instanceof ChildChatRefusal || error instanceof AidenRemoteServiceError) return respond({ ok: false, error: error.message }, true);
+        if (error instanceof ChildChatRefusal || error instanceof AidenRemoteServiceError)
+          return respond({ ok: false, error: error.message }, true);
         throw error;
       }
     },

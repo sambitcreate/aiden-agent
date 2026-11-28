@@ -20,11 +20,11 @@ downgrading.
 
 All data is synthetic and contains no private chat content.
 
-| Fixture | Chats | Messages/chat | Purpose |
-| --- | ---: | ---: | --- |
-| Small | 50 | 10 | Normal installation |
-| Medium | 250 | 50 | Heavy user |
-| Large | 1,000 | 100 | Stress case |
+| Fixture      | Chats |                          Messages/chat | Purpose                     |
+| ------------ | ----: | -------------------------------------: | --------------------------- |
+| Small        |    50 |                                     10 | Normal installation         |
+| Medium       |   250 |                                     50 | Heavy user                  |
+| Large        | 1,000 |                                    100 | Stress case                 |
 | Pathological | 2,000 | Mixed, including maximum-size messages | Bounds and failure behavior |
 
 TypeScript, Swift, and Kotlin tests construct this matrix. The canonical wire
@@ -39,12 +39,12 @@ pathological fixture does not need to allocate more than a terabyte of synthetic
 text. Heap deltas are retained-heap observations from one run and are diagnostic,
 not stable acceptance thresholds.
 
-| Fixture | Full `/chats` bytes | Summary-page bytes | Projection | JSON decode | Retained heap delta | Transcript opens |
-| --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| Small | 91,361 | 12,565 | 2.964 ms | 0.049 ms | 4,864,488 B | 0 |
-| Medium | 4,446,761 | 50,394 | 9.947 ms | 0.191 ms | 3,282,680 B | 0 |
-| Large | 112,137,011 | 50,394 | 13.166 ms | 0.138 ms | 4,675,584 B | 0 |
-| Pathological | 1,332,707,874,676 | 50,394 | 13.898 ms | 0.130 ms | 7,078,200 B | 0 |
+| Fixture      | Full `/chats` bytes | Summary-page bytes | Projection | JSON decode | Retained heap delta | Transcript opens |
+| ------------ | ------------------: | -----------------: | ---------: | ----------: | ------------------: | ---------------: |
+| Small        |              91,361 |             12,565 |   2.964 ms |    0.049 ms |         4,864,488 B |                0 |
+| Medium       |           4,446,761 |             50,394 |   9.947 ms |    0.191 ms |         3,282,680 B |                0 |
+| Large        |         112,137,011 |             50,394 |  13.166 ms |    0.138 ms |         4,675,584 B |                0 |
+| Pathological |   1,332,707,874,676 |             50,394 |  13.898 ms |    0.130 ms |         7,078,200 B |                0 |
 
 Command:
 
@@ -63,12 +63,12 @@ recovery bounded. The Swift cache is actor-isolated, atomic, and bounded to
 10,000 items/80 MiB; both clients publish pagination state only after the cache
 commit succeeds.
 
-| Android path | Elapsed | Allocated |
-| --- | ---: | ---: |
-| Full chat list | 14,616,250 ns | 32,383,248 B |
-| First summary page | 344,250 ns | 481,608 B |
-| All summary pages | 940,000 ns | 1,204,080 B |
-| Cached summary hydration | 1,413,459 ns | 1,441,696 B |
+| Android path             |       Elapsed |    Allocated |
+| ------------------------ | ------------: | -----------: |
+| Full chat list           | 14,616,250 ns | 32,383,248 B |
+| First summary page       |    344,250 ns |    481,608 B |
+| All summary pages        |    940,000 ns |  1,204,080 B |
+| Cached summary hydration |  1,413,459 ns |  1,441,696 B |
 
 The Swift XCTest harness covers the same four paths with `JSONDecoder`,
 `XCTClockMetric`, and `XCTMemoryMetric`. It compiles in generic-device

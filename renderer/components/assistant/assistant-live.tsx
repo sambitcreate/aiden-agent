@@ -133,7 +133,9 @@ export function AssistantLiveSetupDialog({
       title="Set up Aiden Live"
       description="Give Aiden only the access it needs. Nothing is captured until you start a Live session."
       confirmLabel={live.busy ? "Starting…" : "Start Live"}
-      confirmDisabled={!live.setupComplete || live.busy || live.screenBusy || Boolean(live.startBlockedReason)}
+      confirmDisabled={
+        !live.setupComplete || live.busy || live.screenBusy || Boolean(live.startBlockedReason)
+      }
       cancelLabel={live.busy ? "Stop" : "Not now"}
       allowCancelWhileBusy
       actionClassName={ASSISTANT_LIVE_FOCUS_CLASS}
@@ -265,7 +267,9 @@ export function AssistantLiveSetupDialog({
               className={`size-7 text-tertiary ${ASSISTANT_LIVE_FOCUS_CLASS}`}
               aria-label="About Aiden Live privacy"
             >
-              <span aria-hidden className="text-xs font-semibold leading-none">i</span>
+              <span aria-hidden className="text-xs font-semibold leading-none">
+                i
+              </span>
             </Button>
           </HoverCardTrigger>
           <HoverCardContent align="end" className="w-80">
@@ -274,7 +278,8 @@ export function AssistantLiveSetupDialog({
               {live.computerUseReady && live.computerUseEnabled
                 ? "Starting Live enables screen actions without per-action prompts until you stop. "
                 : null}
-              Audio and captions remain in memory for this Live session and are not added to chat history.
+              Audio and captions remain in memory for this Live session and are not added to chat
+              history.
             </p>
           </HoverCardContent>
         </HoverCard>
@@ -327,18 +332,35 @@ export function LiveScreenSourcePicker({
           >
             <span className="block aspect-[16/10] overflow-hidden rounded-control bg-secondary">
               {source.thumbnail ? (
-                <img src={source.thumbnail} alt="" className="size-full object-contain" draggable={false} />
+                <img
+                  src={source.thumbnail}
+                  alt=""
+                  className="size-full object-contain"
+                  draggable={false}
+                />
               ) : (
-                <span className="grid size-full place-items-center text-tertiary" aria-hidden="true">
-                  {source.kind === "screen" ? <Monitor className="size-6" /> : <AppWindow className="size-6" />}
+                <span
+                  className="grid size-full place-items-center text-tertiary"
+                  aria-hidden="true"
+                >
+                  {source.kind === "screen" ? (
+                    <Monitor className="size-6" />
+                  ) : (
+                    <AppWindow className="size-6" />
+                  )}
                 </span>
               )}
             </span>
             <span className="flex min-w-0 items-center gap-2">
-              <RadioGroupItem value={source.id} className={`shrink-0 ${ASSISTANT_LIVE_FOCUS_CLASS}`} />
+              <RadioGroupItem
+                value={source.id}
+                className={`shrink-0 ${ASSISTANT_LIVE_FOCUS_CLASS}`}
+              />
               <span className="min-w-0">
                 <span className="block truncate text-sm text-primary">{source.name}</span>
-                <span className="block text-xs text-secondary">{source.kind === "screen" ? "Screen" : "Window"}</span>
+                <span className="block text-xs text-secondary">
+                  {source.kind === "screen" ? "Screen" : "Window"}
+                </span>
               </span>
             </span>
           </Label>

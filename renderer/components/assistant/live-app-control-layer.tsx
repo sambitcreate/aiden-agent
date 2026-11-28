@@ -19,7 +19,10 @@ export function LiveAppControlLayer(): React.ReactElement | null {
     () => new LiveAppControlController({ bus: liveSessionBus, activity: liveActivity }),
   );
   React.useEffect(() => {
-    const unregister = liveSessionBus.registerTool(LIVE_APP_CONTROL_RENDERER_TOOL, controller.handle);
+    const unregister = liveSessionBus.registerTool(
+      LIVE_APP_CONTROL_RENDERER_TOOL,
+      controller.handle,
+    );
     const stopSession = liveSessionBus.onSession((sessionId) => {
       if (!sessionId) controller.reset();
     });
@@ -30,7 +33,8 @@ export function LiveAppControlLayer(): React.ReactElement | null {
         key: event instanceof KeyboardEvent ? event.key : undefined,
         answersConfirmation: isLiveConfirmAnswerTarget(event.target),
       });
-    for (const name of INPUT_EVENTS) window.addEventListener(name, onInput, { capture: true, passive: true });
+    for (const name of INPUT_EVENTS)
+      window.addEventListener(name, onInput, { capture: true, passive: true });
     return () => {
       for (const name of INPUT_EVENTS) window.removeEventListener(name, onInput, { capture: true });
       stopSession();

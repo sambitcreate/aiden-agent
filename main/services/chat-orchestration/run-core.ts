@@ -11,12 +11,18 @@
  * today). The core admits everything: rate limits, run caps and pending-request
  * caps belong to the caller, which can read the counts it needs from here.
  */
-import type { AidenRemoteChatService, AidenRemoteMessageProjection } from "../aiden-remote-chats.js";
+import type {
+  AidenRemoteChatService,
+  AidenRemoteMessageProjection,
+} from "../aiden-remote-chats.js";
 import type { AidenRemoteStreamService, AidenRemoteStreamState } from "../aiden-remote-streams.js";
 
 export interface ChatRunCoreServices {
   chats: Pick<AidenRemoteChatService, "messagesWindow">;
-  streams: Pick<AidenRemoteStreamService, "status" | "pendingApproval" | "pendingQuestion" | "watch">;
+  streams: Pick<
+    AidenRemoteStreamService,
+    "status" | "pendingApproval" | "pendingQuestion" | "watch"
+  >;
 }
 
 export interface ChatRunCoreDependencies {
@@ -57,7 +63,13 @@ export type ChatRunSnapshot =
       approveIn: string;
       approval?: { toolName: string; summary: string; expiresAt: string };
     }
-  | { chatId: string; runId: string; state: "done"; outcome: "completed" | "stopped"; reply?: ChatRunMessage }
+  | {
+      chatId: string;
+      runId: string;
+      state: "done";
+      outcome: "completed" | "stopped";
+      reply?: ChatRunMessage;
+    }
   | { chatId: string; runId: string; state: "failed"; reason: "interrupted" | "error" };
 
 export type ChatRunWaitOutcome =
@@ -101,7 +113,8 @@ export class ChatRunCore {
     if (!runs) return 0;
     for (const runId of [...runs]) {
       try {
-        if (CHAT_RUN_TERMINAL_STATES.has(services.streams.status(owner, runId).state)) runs.delete(runId);
+        if (CHAT_RUN_TERMINAL_STATES.has(services.streams.status(owner, runId).state))
+          runs.delete(runId);
       } catch {
         runs.delete(runId);
       }
@@ -143,14 +156,23 @@ export class ChatRunCore {
           state: "waiting_for_approval",
           approveIn: answerIn,
           ...(approval
-            ? { approval: { toolName: approval.toolName, summary: approval.summary, expiresAt: approval.expiresAt } }
+            ? {
+                approval: {
+                  toolName: approval.toolName,
+                  summary: approval.summary,
+                  expiresAt: approval.expiresAt,
+                },
+              }
             : {}),
         };
       }
       return { ...base, state: "running" };
     }
     if (status.state === "done" || status.state === "cancelled") {
-      const reply = options.withReply === false ? undefined : await lastAssistantMessage(services, chatId).catch(() => undefined);
+      const reply =
+        options.withReply === false
+          ? undefined
+          : await lastAssistantMessage(services, chatId).catch(() => undefined);
       return {
         ...base,
         state: "done",
@@ -158,7 +180,11 @@ export class ChatRunCore {
         ...(reply ? { reply } : {}),
       };
     }
-    return { ...base, state: "failed", reason: status.state === "interrupted" ? "interrupted" : "error" };
+    return {
+      ...base,
+      state: "failed",
+      reason: status.state === "interrupted" ? "interrupted" : "error",
+    };
   }
 
   /**
@@ -204,7 +230,10 @@ export class ChatRunCore {
             .catch(() => resolve("changed"));
         };
         try {
-          detach = services.streams.watch(owner, runId, { onChange: look, onClose: () => resolve("closed") });
+          detach = services.streams.watch(owner, runId, {
+            onChange: look,
+            onClose: () => resolve("closed"),
+          });
         } catch {
           resolve("changed");
           return;
@@ -215,7 +244,10 @@ export class ChatRunCore {
       });
       if (outcome === "closed") return { kind: "closed" };
       if (outcome === "aborted") return { kind: "aborted" };
-      return { kind: "snapshot", snapshot: observed ?? (await this.snapshot(services, owner, chatId, runId)) };
+      return {
+        kind: "snapshot",
+        snapshot: observed ?? (await this.snapshot(services, owner, chatId, runId)),
+      };
     } finally {
       if (timer) clearTimeout(timer);
       detach?.();
@@ -242,7 +274,12 @@ export class ChatRunCore {
    * request or replays its answer. `admit` runs only for a new request, before
    * it is cached; whatever it throws rejects the request uncached.
    */
-  request<T>(owner: string, requestId: string, run: () => Promise<T>, admit?: () => void): Promise<T> {
+  request<T>(
+    owner: string,
+    requestId: string,
+    run: () => Promise<T>,
+    admit?: () => void,
+  ): Promise<T> {
     const key = `${requestPrefix(owner)}${requestId}`;
     const existing = this.requests.get(key);
     if (existing) return existing.promise as Promise<T>;
@@ -305,6 +342,8 @@ function requestPrefix(owner: string): string {
 
 async function lastAssistantMessage(services: ChatRunCoreServices, chatId: string) {
   const window = await services.chats.messagesWindow(chatId, { limit: 5 });
-  const message = [...window.messages].reverse().find((candidate) => candidate.role === "assistant");
+  const message = [...window.messages]
+    .reverse()
+    .find((candidate) => candidate.role === "assistant");
   return message ? projectRunMessage(message) : undefined;
 }

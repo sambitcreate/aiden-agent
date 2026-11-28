@@ -19,7 +19,9 @@ export type DesignPresentation = {
 export type DesignPresentKey = "next" | "previous" | "first" | "last" | "exit";
 
 /** What a key does while presenting, or null when it does nothing. */
-export function presentationKey(event: Pick<CanvasKeyEvent, "key" | "metaKey" | "ctrlKey" | "altKey" | "isComposing">): DesignPresentKey | null {
+export function presentationKey(
+  event: Pick<CanvasKeyEvent, "key" | "metaKey" | "ctrlKey" | "altKey" | "isComposing">,
+): DesignPresentKey | null {
   if (event.isComposing || event.metaKey || event.ctrlKey || event.altKey) return null;
   switch (event.key) {
     case "Escape":

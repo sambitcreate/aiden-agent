@@ -43,7 +43,11 @@ const SHUT_DOWN = "MCP connections are shut down.";
  * Settle with `operation`, or reject after `ms` and run `onTimeout` so the
  * caller can cancel the attempt. A late settlement is still observed.
  */
-function withinDeadline<T>(operation: Promise<T>, ms: number | undefined, onTimeout: () => void): Promise<T> {
+function withinDeadline<T>(
+  operation: Promise<T>,
+  ms: number | undefined,
+  onTimeout: () => void,
+): Promise<T> {
   if (ms === undefined) return operation;
   operation.catch(() => undefined);
   return new Promise<T>((resolve, reject) => {
@@ -52,19 +56,33 @@ function withinDeadline<T>(operation: Promise<T>, ms: number | undefined, onTime
       reject(new McpDeadlineError("The MCP connection", ms));
     }, ms);
     operation.then(
-      (value) => { clearTimeout(timer); resolve(value); },
-      (error: unknown) => { clearTimeout(timer); reject(error); },
+      (value) => {
+        clearTimeout(timer);
+        resolve(value);
+      },
+      (error: unknown) => {
+        clearTimeout(timer);
+        reject(error);
+      },
     );
   });
 }
 
 /** Wait for an attempt to settle, but never longer than `ms`. */
-async function settledWithin(operation: Promise<unknown> | null | undefined, ms: number): Promise<void> {
+async function settledWithin(
+  operation: Promise<unknown> | null | undefined,
+  ms: number,
+): Promise<void> {
   if (!operation) return;
   let timer: ReturnType<typeof setTimeout> | undefined;
   await Promise.race([
-    operation.then(() => undefined, () => undefined),
-    new Promise<void>((resolve) => { timer = setTimeout(resolve, ms); }),
+    operation.then(
+      () => undefined,
+      () => undefined,
+    ),
+    new Promise<void>((resolve) => {
+      timer = setTimeout(resolve, ms);
+    }),
   ]);
   clearTimeout(timer);
 }
@@ -129,11 +147,7 @@ export class GenerationBoundConnectionCache<T> {
   async getOrConnect(
     id: string,
     create: () => T,
-    connect: (
-      value: T,
-      isCurrent: () => boolean,
-      onClosed: () => void,
-    ) => Promise<void>,
+    connect: (value: T, isCurrent: () => boolean, onClosed: () => void) => Promise<void>,
     close: (value: T) => Promise<void>,
     expectedGeneration: number = this.generation(id),
   ): Promise<T> {
@@ -179,7 +193,8 @@ export class GenerationBoundConnectionCache<T> {
       // SDK close callbacks must not recursively close the transport, and a
       // delayed callback from an old client must not evict its replacement.
       cancelled = true;
-      const wasCurrent = this.pending.get(id) === attempt || this.connected.get(id) === connectedRecord;
+      const wasCurrent =
+        this.pending.get(id) === attempt || this.connected.get(id) === connectedRecord;
       if (this.pending.get(id) === attempt) this.pending.delete(id);
       if (this.connected.get(id) === connectedRecord) this.connected.delete(id);
       if (wasCurrent) this.lifecycle(id, { type: "closed" });
@@ -232,7 +247,10 @@ export class GenerationBoundConnectionCache<T> {
     await Promise.all([pending?.cancel(), connected?.close()]);
     // Let a cancelled attempt finish its own teardown, so a caller that
     // disconnects and then exits does not leave a half-open transport behind.
-    await settledWithin(pending?.promise, this.bounds.disconnectWaitMs ?? DEFAULT_DISCONNECT_WAIT_MS);
+    await settledWithin(
+      pending?.promise,
+      this.bounds.disconnectWaitMs ?? DEFAULT_DISCONNECT_WAIT_MS,
+    );
   }
 
   /** Close everything and refuse any later connection (application shutdown). */
@@ -267,7 +285,9 @@ export class GenerationBoundConnectionCache<T> {
   }
 
   /** Observe an already initialized client without starting or repairing a connection. */
-  peekConnected(id: string): T | undefined { return this.connected.get(id)?.value; }
+  peekConnected(id: string): T | undefined {
+    return this.connected.get(id)?.value;
+  }
 
   connectedIds(): string[] {
     return [...this.connected.keys()];

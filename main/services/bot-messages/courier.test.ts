@@ -4,15 +4,22 @@ import { mkdtemp, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { test, type TestContext } from "node:test";
-import type { BotReplyOutcome, BotSendInput, BotSessionState } from "../bot-runtime/bot-session-service.js";
+import type {
+  BotReplyOutcome,
+  BotSendInput,
+  BotSessionState,
+} from "../bot-runtime/bot-session-service.js";
 import { createBotApprovals } from "../bot-runtime/bot-approvals.js";
 import { createBotMessageLedger } from "./ledger.js";
 import { createBotMessageCourier, type BotRosterEntry } from "./courier.js";
 import { waitFor } from "../bot-runtime/test-support/faux.js";
-async function setup(t: TestContext, options: {
-  botExists?(botId: string): Promise<boolean>;
-  beforeRoster?(): void;
-} = {}) {
+async function setup(
+  t: TestContext,
+  options: {
+    botExists?(botId: string): Promise<boolean>;
+    beforeRoster?(): void;
+  } = {},
+) {
   const dir = await mkdtemp(path.join(os.tmpdir(), "bot-courier-"));
   let now = 1000,
     enabled = true;
@@ -64,7 +71,11 @@ async function setup(t: TestContext, options: {
     },
     state: async (id: string) => states.get(id) ?? { kind: "idle" as const },
     submissionForRequest: async (botId: string, id: string) => submissions.get(`${botId}:${id}`),
-    awaitReply: async (_botId: string, id: string, signal: AbortSignal): Promise<BotReplyOutcome> => {
+    awaitReply: async (
+      _botId: string,
+      id: string,
+      signal: AbortSignal,
+    ): Promise<BotReplyOutcome> => {
       assert.equal(activeWaits.has(id), false, "only one active wait owns a submission");
       activeWaits.add(id);
       if (!answers.has(id) && !signal.aborted)
@@ -108,7 +119,10 @@ async function setup(t: TestContext, options: {
     createBotMessageCourier({
       ledger,
       sessions,
-      roster: async () => { options.beforeRoster?.(); return roster; },
+      roster: async () => {
+        options.beforeRoster?.();
+        return roster;
+      },
       ...(options.botExists ? { botExists: options.botExists } : {}),
       enabled: async () => enabled,
       approvals,
@@ -254,10 +268,11 @@ test("post accepts durably without any session call and later carries one final 
   assert.equal(f.sends.length, 2);
   assert.equal(f.deliveries.length, 1);
 });
-test("accepted relays use identity reads after the posting roster check", async t => {
-  let accepted = false, rosterReads = 0;
+test("accepted relays use identity reads after the posting roster check", async (t) => {
+  let accepted = false,
+    rosterReads = 0;
   const f = await setup(t, {
-    botExists: async id => ["A", "B", "C"].includes(id),
+    botExists: async (id) => ["A", "B", "C"].includes(id),
     beforeRoster: () => {
       rosterReads++;
       if (accepted) throw new Error("injected full-roster failure");
@@ -265,8 +280,14 @@ test("accepted relays use identity reads after the posting roster check", async 
   });
   assert.equal((await f.post()).status, "sent");
   accepted = true;
-  await waitFor(() => f.sends.length > 0 || f.errors.length > 0, { what: "identity-only target dispatch" });
-  assert.deepEqual(f.errors, [], "the identity-only relay ignores the injected full-roster failure");
+  await waitFor(() => f.sends.length > 0 || f.errors.length > 0, {
+    what: "identity-only target dispatch",
+  });
+  assert.deepEqual(
+    f.errors,
+    [],
+    "the identity-only relay ignores the injected full-roster failure",
+  );
   assert.equal(f.sends[0]!.botId, "B");
   f.finish(0, "Pong");
   await f.until(() => f.sends.length === 2);
@@ -277,38 +298,63 @@ test("accepted relays use identity reads after the posting roster check", async 
 });
 
 for (const unavailable of ["missing", "read error"] as const) {
-  test(`identity-only dispatch refuses ${unavailable} without invoking a session`, async t => {
+  test(`identity-only dispatch refuses ${unavailable} without invoking a session`, async (t) => {
     const failure = new Error("Bot identity store unavailable");
-    const f = await setup(t, { botExists: async id => {
-      if (id !== "B") return true;
-      if (unavailable === "read error") throw failure;
-      return false;
-    } });
+    const f = await setup(t, {
+      botExists: async (id) => {
+        if (id !== "B") return true;
+        if (unavailable === "read error") throw failure;
+        return false;
+      },
+    });
     const result = await f.post();
     assert.equal(result.status, "sent");
-    await waitFor(() => f.notices.length > 0 || f.errors.length > 0 || f.sends.length > 0, { what: "missing identity dispatch" });
-    assert.deepEqual(f.sends, [], "existence never authorizes sending to an absent or unreadable Bot");
+    await waitFor(() => f.notices.length > 0 || f.errors.length > 0 || f.sends.length > 0, {
+      what: "missing identity dispatch",
+    });
+    assert.deepEqual(
+      f.sends,
+      [],
+      "existence never authorizes sending to an absent or unreadable Bot",
+    );
     if (unavailable === "read error") {
       assert.deepEqual(f.errors, [failure]);
-      assert.equal((await f.ledger.get((result as { deliveryId: string }).deliveryId))!.status, "delivered");
+      assert.equal(
+        (await f.ledger.get((result as { deliveryId: string }).deliveryId))!.status,
+        "delivered",
+      );
     } else {
       assert.deepEqual(f.errors, []);
-      assert.equal((await f.ledger.get((result as { deliveryId: string }).deliveryId))!.status, "failed");
+      assert.equal(
+        (await f.ledger.get((result as { deliveryId: string }).deliveryId))!.status,
+        "failed",
+      );
     }
   });
 }
 for (const leg of ["target", "reply"] as const) {
-  test(`deletion during the final ${leg} identity read fences a late positive result`, async t => {
-    let entered!: () => void, release!: () => void, reads = 0;
-    const checking = new Promise<void>(resolve => { entered = resolve; });
-    const held = new Promise<void>(resolve => { release = resolve; });
+  test(`deletion during the final ${leg} identity read fences a late positive result`, async (t) => {
+    let entered!: () => void,
+      release!: () => void,
+      reads = 0;
+    const checking = new Promise<void>((resolve) => {
+      entered = resolve;
+    });
+    const held = new Promise<void>((resolve) => {
+      release = resolve;
+    });
     const removedBot = leg === "target" ? "B" : "A";
-    const f = await setup(t, { botExists: async id => {
-      // Hold the second read, immediately before send. Holding the first
-      // would let the next read independently observe the deletion.
-      if (id === removedBot && ++reads === 2) { entered(); await held; }
-      return true;
-    } });
+    const f = await setup(t, {
+      botExists: async (id) => {
+        // Hold the second read, immediately before send. Holding the first
+        // would let the next read independently observe the deletion.
+        if (id === removedBot && ++reads === 2) {
+          entered();
+          await held;
+        }
+        return true;
+      },
+    });
     const posted = await f.post();
     assert.equal(posted.status, "sent");
     if (posted.status !== "sent") return;
@@ -322,8 +368,8 @@ for (const leg of ["target", "reply"] as const) {
       await f.courier.forgetBot(removedBot);
       // Observe the worker's final durable read after its held lookup resumes.
       // Disposing to drain it would add another fence and mask deletion bugs.
-      const finished = new Promise<void>(resolve => {
-        f.ledger.get = async id => {
+      const finished = new Promise<void>((resolve) => {
+        f.ledger.get = async (id) => {
           const row = await read(id);
           if (id === posted.deliveryId) resolve();
           return row;
@@ -331,13 +377,19 @@ for (const leg of ["target", "reply"] as const) {
       });
       release();
       await finished;
-      assert.deepEqual(f.sends.map(send => send.botId), leg === "target" ? [] : ["B"],
-        "the final identity result cannot start a deleted target or reply turn");
-    } finally { f.ledger.get = read; release(); }
+      assert.deepEqual(
+        f.sends.map((send) => send.botId),
+        leg === "target" ? [] : ["B"],
+        "the final identity result cannot start a deleted target or reply turn",
+      );
+    } finally {
+      f.ledger.get = read;
+      release();
+    }
   });
 }
 
-test("a positive identity read still submits through the fresh session refusal", async t => {
+test("a positive identity read still submits through the fresh session refusal", async (t) => {
   const f = await setup(t, { botExists: async () => true });
   let checked = 0;
   f.sessions.send = async () => {
@@ -348,7 +400,10 @@ test("a positive identity read still submits through the fresh session refusal",
   await f.until(() => f.notices.length === 1);
   assert.equal(checked, 1);
   assert.deepEqual(f.sends, []);
-  assert.equal((await f.ledger.get((result as { deliveryId: string }).deliveryId))!.status, "failed");
+  assert.equal(
+    (await f.ledger.get((result as { deliveryId: string }).deliveryId))!.status,
+    "failed",
+  );
 });
 test("busy targets expire with one notice and no queued session input", async (t) => {
   const f = await setup(t);
@@ -473,7 +528,16 @@ test("all owned approvals are denied by expiry, and waiting notices publish whil
   );
   await f.until(() => f.notices.length === 2);
   await f.advance(1800001);
-  assert.deepEqual((await Promise.all(outcomes)).map(outcome => ({ answer: outcome.answer, source: outcome.source })), [{ answer: "deny", source: "expiry" }, { answer: "deny", source: "expiry" }]);
+  assert.deepEqual(
+    (await Promise.all(outcomes)).map((outcome) => ({
+      answer: outcome.answer,
+      source: outcome.source,
+    })),
+    [
+      { answer: "deny", source: "expiry" },
+      { answer: "deny", source: "expiry" },
+    ],
+  );
   await f.until(() => f.notices.length === 3);
   assert.equal(
     (
@@ -550,14 +614,30 @@ test("a claimed delivery is never an unlimited approval wait after terminal expi
   if (result.status !== "sent") throw new Error("not accepted");
   await f.until(() => f.sends.length === 1);
   await f.advance(1800001);
-  const window = await f.courier.announceWaiting("B", [f.sends[0]!.input.requestId], "late", "late-card");
+  const window = await f.courier.announceWaiting(
+    "B",
+    [f.sends[0]!.input.requestId],
+    "late",
+    "late-card",
+  );
   assert.equal(window?.expired, true);
-  await assert.rejects(f.courier.announceWaiting("B", ["bot:broken"], "bad", "bad-card"), /unavailable/);
   await assert.rejects(
-    f.courier.announceWaiting("B", ["bot:J:1:11111111-2222-4333-8444-555555555555"], "missing", "missing-card"),
+    f.courier.announceWaiting("B", ["bot:broken"], "bad", "bad-card"),
     /unavailable/,
   );
-  assert.equal(await f.courier.announceWaiting("B", ["person"], "ordinary", "person-card"), undefined);
+  await assert.rejects(
+    f.courier.announceWaiting(
+      "B",
+      ["bot:J:1:11111111-2222-4333-8444-555555555555"],
+      "missing",
+      "missing-card",
+    ),
+    /unavailable/,
+  );
+  assert.equal(
+    await f.courier.announceWaiting("B", ["person"], "ordinary", "person-card"),
+    undefined,
+  );
 });
 test("deleting the target retains one surviving peer failure notice", async (t) => {
   const f = await setup(t);
@@ -632,7 +712,10 @@ for (const after of [false, true])
     f.ledger.update = async (id, change) => {
       if (!crashed) {
         const current = await f.ledger.get(id);
-        if (current?.status === "delivered" && change(structuredClone(current)).status === "answered") {
+        if (
+          current?.status === "delivered" &&
+          change(structuredClone(current)).status === "answered"
+        ) {
           crashed = true;
           if (after) await update(id, change);
           void f.courier.dispose();
@@ -780,11 +863,15 @@ test("current roster resolution and cached availability give precise refusals", 
       sendsMessages: true,
     },
   ]);
-  const code = (r: Awaited<ReturnType<typeof f.post>>) => (r.status === "refused" ? r.code : "sent");
+  const code = (r: Awaited<ReturnType<typeof f.post>>) =>
+    r.status === "refused" ? r.code : "sent";
   assert.equal(code(await f.post("A", "Bee")), "ambiguous_bot");
   assert.equal(code(await f.post("A", "missing")), "unknown_bot");
   assert.equal(code(await f.post("A", "A")), "self");
-  assert.equal(code(await f.post("A", "B", ["bot:J:2:00112233-4455-4677-8899-aabbccddeeff"])), "chain_too_deep");
+  assert.equal(
+    code(await f.post("A", "B", ["bot:J:2:00112233-4455-4677-8899-aabbccddeeff"])),
+    "chain_too_deep",
+  );
   f.setRoster([
     {
       id: "A",
@@ -821,7 +908,9 @@ for (const outcome of ["silent", "failed"] as const) {
     await f.until(() => f.sends.length === 2);
     f.finishOutcome(
       1,
-      outcome === "silent" ? { kind: "completed", text: "[SILENT]" } : { kind: "failed", error: "failed" },
+      outcome === "silent"
+        ? { kind: "completed", text: "[SILENT]" }
+        : { kind: "failed", error: "failed" },
     );
     await f.until(async () => (await f.ledger.get(root.deliveryId))?.childOutcome === outcome);
     assert.equal((await f.ledger.get(root.deliveryId))?.status, "delivered");
@@ -1042,7 +1131,11 @@ for (const turn of ["request", "reply"] as const) {
       owner: {
         runId: "run",
         inputs: [
-          { submissionId: sent.submissionId, requestId: sent.input.requestId, botMessage: sent.input.botMessage },
+          {
+            submissionId: sent.submissionId,
+            requestId: sent.input.requestId,
+            botMessage: sent.input.botMessage,
+          },
         ],
       },
     };
@@ -1053,17 +1146,31 @@ for (const turn of ["request", "reply"] as const) {
     controller.abort();
     await withdrawn;
     await f.until(async () => (await f.ledger.get(accepted.deliveryId))!.waiting.length === 0);
-    const window = await f.courier.announceWaiting(sent.botId, [sent.input.requestId], request.summary, request.waitId);
+    const window = await f.courier.announceWaiting(
+      sent.botId,
+      [sent.input.requestId],
+      request.summary,
+      request.waitId,
+    );
     assert.equal(window?.expired, false);
     const second = f.approvals.requestOutcome({ ...request, signal: undefined });
     await f.until(
       async () =>
-        f.approvals.pending(sent.botId).length === 1 && (await f.ledger.get(accepted.deliveryId))!.waiting.length === 1,
+        f.approvals.pending(sent.botId).length === 1 &&
+        (await f.ledger.get(accepted.deliveryId))!.waiting.length === 1,
     );
     const row = (await f.ledger.get(accepted.deliveryId))!;
-    assert.equal(row.effects.filter((e) => e.kind === "notice" && e.data?.waitId === "same").length, 1);
+    assert.equal(
+      row.effects.filter((e) => e.kind === "notice" && e.data?.waitId === "same").length,
+      1,
+    );
     await f.advance(1800001);
-    assert.deepEqual(await second, { id: "same", authorizationFingerprint: "courier-approval-fingerprint", answer: "deny", source: "expiry" });
+    assert.deepEqual(await second, {
+      id: "same",
+      authorizationFingerprint: "courier-approval-fingerprint",
+      answer: "deny",
+      source: "expiry",
+    });
     if (turn === "request")
       await f.until(() => f.notices.some((n) => (n as { outcome: string }).outcome === "gave_up"));
   });
@@ -1084,18 +1191,28 @@ test("parallel approval publication preserves a preannounced second card without
     signal: undefined,
     owner: {
       runId: "run",
-      inputs: [{ submissionId: sent.submissionId, requestId: sent.input.requestId, botMessage: sent.input.botMessage }],
+      inputs: [
+        {
+          submissionId: sent.submissionId,
+          requestId: sent.input.requestId,
+          botMessage: sent.input.botMessage,
+        },
+      ],
     },
   };
   await f.courier.announceWaiting("B", [sent.input.requestId], request.summary, "two");
   const one = f.approvals.requestOutcome({ ...request, waitId: "one" });
   await f.until(async () => {
     const row = (await f.ledger.get(accepted.deliveryId))!;
-    return row.waiting.some((w) => w.waitId === "one") && !row.waiting.some((w) => w.waitId === "two");
+    return (
+      row.waiting.some((w) => w.waitId === "one") && !row.waiting.some((w) => w.waitId === "two")
+    );
   });
   const two = f.approvals.requestOutcome({ ...request, waitId: "two" });
   await f.until(
-    async () => f.approvals.pending().length === 2 && (await f.ledger.get(accepted.deliveryId))!.waiting.length === 2,
+    async () =>
+      f.approvals.pending().length === 2 &&
+      (await f.ledger.get(accepted.deliveryId))!.waiting.length === 2,
   );
   assert.equal(
     f.approvals.pending().some((p) => p.decisionSource === "expiry"),
@@ -1103,8 +1220,18 @@ test("parallel approval publication preserves a preannounced second card without
   );
   await f.advance(1800001);
   assert.deepEqual(await Promise.all([one, two]), [
-    { id: "one", authorizationFingerprint: "courier-approval-fingerprint", answer: "deny", source: "expiry" },
-    { id: "two", authorizationFingerprint: "courier-approval-fingerprint", answer: "deny", source: "expiry" },
+    {
+      id: "one",
+      authorizationFingerprint: "courier-approval-fingerprint",
+      answer: "deny",
+      source: "expiry",
+    },
+    {
+      id: "two",
+      authorizationFingerprint: "courier-approval-fingerprint",
+      answer: "deny",
+      source: "expiry",
+    },
   ]);
   await f.until(() => f.notices.some((n) => (n as { outcome: string }).outcome === "gave_up"));
 });
@@ -1157,8 +1284,13 @@ for (const kind of ["failed", "interrupted"] as const) {
     if (child.status !== "sent") throw new Error("not admitted");
     await f.until(() => f.sends.length === 2);
     f.finish(1, "C answered already");
-    await f.until(async () => (await f.ledger.get(child.deliveryId))?.initialAnswer === "C answered already");
-    f.finishOutcome(0, kind === "failed" ? { kind, error: "parent failed" } : { kind, settled: true });
+    await f.until(
+      async () => (await f.ledger.get(child.deliveryId))?.initialAnswer === "C answered already",
+    );
+    f.finishOutcome(
+      0,
+      kind === "failed" ? { kind, error: "parent failed" } : { kind, settled: true },
+    );
     await f.until(async () => (await f.ledger.get(child.deliveryId))?.status === "answered");
     await f.until(async () => (await f.ledger.open()).length === 0);
     assert.equal(
@@ -1166,7 +1298,8 @@ for (const kind of ["failed", "interrupted"] as const) {
       false,
     );
     assert.equal(f.sends.length, 2);
-    for (let i = 0; i < 3; i++) assert.equal((await f.post("B", "A")).status, "sent", "child no longer holds capacity");
+    for (let i = 0; i < 3; i++)
+      assert.equal((await f.post("B", "A")).status, "sent", "child no longer holds capacity");
   });
 }
 
@@ -1244,7 +1377,11 @@ for (const parentOutcome of ["expired", "gave_up", "live", "live_card"] as const
         owner: {
           runId: "parent",
           inputs: [
-            { submissionId: sent.submissionId, requestId: sent.input.requestId, botMessage: sent.input.botMessage },
+            {
+              submissionId: sent.submissionId,
+              requestId: sent.input.requestId,
+              botMessage: sent.input.botMessage,
+            },
           ],
         },
       });
@@ -1258,11 +1395,21 @@ for (const parentOutcome of ["expired", "gave_up", "live", "live_card"] as const
       }));
     }
     await f.advance(1800001);
-    if (card) assert.deepEqual(await card, { id: "parent", authorizationFingerprint: "courier-approval-fingerprint", answer: "deny", source: "expiry" });
+    if (card)
+      assert.deepEqual(await card, {
+        id: "parent",
+        authorizationFingerprint: "courier-approval-fingerprint",
+        answer: "deny",
+        source: "expiry",
+      });
     await f.until(async () => (await f.ledger.open()).length === 0);
     assert.equal(
       (await f.ledger.get(root.deliveryId))!.outcome,
-      parentOutcome === "live_card" ? "gave_up" : parentOutcome === "live" ? "expired" : parentOutcome,
+      parentOutcome === "live_card"
+        ? "gave_up"
+        : parentOutcome === "live"
+          ? "expired"
+          : parentOutcome,
     );
     const rows = f.notices.filter((n) => (n as { botName: string }).botName === "C") as Array<{
       outcome: string;
@@ -1302,7 +1449,11 @@ for (const ownCard of [false, true]) {
         owner: {
           runId: "child",
           inputs: [
-            { submissionId: sent.submissionId, requestId: sent.input.requestId, botMessage: sent.input.botMessage },
+            {
+              submissionId: sent.submissionId,
+              requestId: sent.input.requestId,
+              botMessage: sent.input.botMessage,
+            },
           ],
         },
       });
@@ -1315,7 +1466,13 @@ for (const ownCard of [false, true]) {
       effects: row.effects.map((e) => ({ ...e, acknowledgedAt: 1000 })),
     }));
     await f.advance(1800001);
-    if (card) assert.deepEqual(await card, { id: "child", authorizationFingerprint: "courier-approval-fingerprint", answer: "deny", source: "expiry" });
+    if (card)
+      assert.deepEqual(await card, {
+        id: "child",
+        authorizationFingerprint: "courier-approval-fingerprint",
+        answer: "deny",
+        source: "expiry",
+      });
     await f.until(async () => (await f.ledger.open()).length === 0);
     assert.equal((await f.ledger.get(child.deliveryId))!.outcome, ownCard ? "gave_up" : "expired");
     assert.equal(f.approvals.pending().length, 0);
@@ -1379,7 +1536,11 @@ for (const checkpoint of ["acknowledged_reply", "terminal_fallback"] as const) {
       return {
         ...row,
         ...(checkpoint === "terminal_fallback"
-          ? ({ status: "answered", outcome: "replied_while_paused", parentFallbackOutcome: "failed" } as const)
+          ? ({
+              status: "answered",
+              outcome: "replied_while_paused",
+              parentFallbackOutcome: "failed",
+            } as const)
           : {}),
         effects: [
           ...row.effects.map((e) => (e.kind === "reply" ? { ...e, acknowledgedAt: 1000 } : e)),

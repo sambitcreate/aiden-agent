@@ -11,7 +11,9 @@ const INSTRUCTION =
  * tool: it lets the goodbye finish playing (bounded), then stops the session,
  * so main only forwards the call. The user talking over the goodbye cancels it.
  */
-export function createEndSessionToolProvider(input: Pick<LiveToolPrepareInput, "renderer">): LiveToolProvider {
+export function createEndSessionToolProvider(
+  input: Pick<LiveToolPrepareInput, "renderer">,
+): LiveToolProvider {
   const pending = new Set<AbortController>();
   return {
     declarations: [
@@ -48,4 +50,3 @@ export function createEndSessionToolProvider(input: Pick<LiveToolPrepareInput, "
     },
   };
 }
-

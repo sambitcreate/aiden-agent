@@ -17,7 +17,10 @@ test("rms is zero for silence and rises for a peak", () => {
 test("silence stop waits for speech, hangover, and the arming window", () => {
   const stops: number[] = [];
   let now = 1_000;
-  const detector = new SilenceStopDetector(() => stops.push(now), () => now);
+  const detector = new SilenceStopDetector(
+    () => stops.push(now),
+    () => now,
+  );
   detector.reset(now);
   detector.sample(0.2, now);
   assert.deepEqual(stops, []);

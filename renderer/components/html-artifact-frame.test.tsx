@@ -68,14 +68,17 @@ async function waitForFrame(container: HTMLElement): Promise<HTMLIFrameElement> 
 }
 
 async function mountedFrame(onGuestPrompt?: GuestPromptHandler) {
-  const view = render(<HtmlArtifactFrame chatId="chat-1" artifact={artifact()} onGuestPrompt={onGuestPrompt} />);
+  const view = render(
+    <HtmlArtifactFrame chatId="chat-1" artifact={artifact()} onGuestPrompt={onGuestPrompt} />,
+  );
   const iframe = await waitForFrame(view.container);
   const guest = attachGuest(iframe);
   return { view, iframe, guest };
 }
 
 function postFrom(source: unknown, data: unknown) {
-  const MessageEventCtor = (window as unknown as { MessageEvent: typeof MessageEvent }).MessageEvent;
+  const MessageEventCtor = (window as unknown as { MessageEvent: typeof MessageEvent })
+    .MessageEvent;
   act(() => {
     window.dispatchEvent(new MessageEventCtor("message", { data, source: source as Window }));
   });
@@ -93,7 +96,9 @@ test("a draft visual shows its streaming preview without expand or export action
 });
 
 test("inline visual renders without card chrome and keeps an accessible title", () => {
-  const html = renderToStaticMarkup(<HtmlArtifactFrame chatId="c1" artifact={artifact("Revenue")} />);
+  const html = renderToStaticMarkup(
+    <HtmlArtifactFrame chatId="c1" artifact={artifact("Revenue")} />,
+  );
   assert.match(html, /data-inline-visual="media-\d+"/u);
   assert.match(html, /aria-label="Expand Revenue"/u);
   assert.match(html, /aria-label="Export Revenue"/u);
@@ -107,7 +112,10 @@ test("the inline visual is a named figure whose actions sit below the content, n
   const caption = figure.querySelector("[data-inline-visual-caption]");
   assert.ok(frame && caption);
   // The caption follows the content box in flow instead of overlaying it.
-  assert.equal(frame.compareDocumentPosition(caption) & Node.DOCUMENT_POSITION_FOLLOWING, Node.DOCUMENT_POSITION_FOLLOWING);
+  assert.equal(
+    frame.compareDocumentPosition(caption) & Node.DOCUMENT_POSITION_FOLLOWING,
+    Node.DOCUMENT_POSITION_FOLLOWING,
+  );
   assert.equal(frame.contains(caption), false);
   assert.ok(within(caption as HTMLElement).getByRole("button", { name: "Expand Revenue" }));
   view.unmount();
@@ -163,9 +171,16 @@ test("a wide visual is marked so it can span the chat pane", () => {
   view.rerender(<HtmlArtifactFrame chatId="c1" artifact={artifact("Card")} />);
   assert.equal(screen.getByRole("figure", { name: "Card" }).hasAttribute("data-layout"), false);
   const draft = render(
-    <HtmlArtifactDraftFrame src={`aiden-genui://preview/${"d".repeat(64)}`} title="Board" layout="wide" />,
+    <HtmlArtifactDraftFrame
+      src={`aiden-genui://preview/${"d".repeat(64)}`}
+      title="Board"
+      layout="wide"
+    />,
   );
-  assert.equal(draft.container.querySelector("[data-inline-visual-draft]")?.getAttribute("data-layout"), "wide");
+  assert.equal(
+    draft.container.querySelector("[data-inline-visual-draft]")?.getAttribute("data-layout"),
+    "wide",
+  );
 });
 
 test("the preview loads in a unique-origin frame and asks main for the full token kit", async () => {
@@ -239,7 +254,9 @@ test("a visual's follow-up waits on an Aiden-drawn confirmation and only its but
   act(() => {
     within(chip).getByRole("button", { name: "Send" }).click();
   });
-  const mediaId = view.container.querySelector("[data-inline-visual]")!.getAttribute("data-inline-visual");
+  const mediaId = view.container
+    .querySelector("[data-inline-visual]")!
+    .getAttribute("data-inline-visual");
   assert.deepEqual(sent, [["Drill into EMEA", mediaId]]);
   assert.equal(screen.queryByRole("group", { name: /follow-up/iu }), null);
 });
@@ -249,7 +266,9 @@ test("dismissing a visual's follow-up discards it", async () => {
   const { guest } = await mountedFrame((text) => sent.push(text));
   postFrom(guest, { type: GENERATIVE_UI_PROMPT_MESSAGE, text: "Delete my files" });
   act(() => {
-    within(screen.getByRole("group", { name: /follow-up/iu })).getByRole("button", { name: /Dismiss/u }).click();
+    within(screen.getByRole("group", { name: /follow-up/iu }))
+      .getByRole("button", { name: /Dismiss/u })
+      .click();
   });
   assert.equal(screen.queryByRole("group", { name: /follow-up/iu }), null);
   assert.deepEqual(sent, []);
@@ -258,7 +277,12 @@ test("dismissing a visual's follow-up discards it", async () => {
 test("while a reply runs, the confirmation adds the follow-up to the draft instead", async () => {
   const sent: string[] = [];
   const view = render(
-    <HtmlArtifactFrame chatId="chat-1" artifact={artifact()} onGuestPrompt={(text) => sent.push(text)} followUpBusy />,
+    <HtmlArtifactFrame
+      chatId="chat-1"
+      artifact={artifact()}
+      onGuestPrompt={(text) => sent.push(text)}
+      followUpBusy
+    />,
   );
   const guest = attachGuest(await waitForFrame(view.container));
   postFrom(guest, { type: GENERATIVE_UI_PROMPT_MESSAGE, text: "Later" });
@@ -318,21 +342,39 @@ test("a presented visual replaces its draft at the draft's height with a ready p
   rememberDraftHeight("call-7", 333);
   primeInlineVisualPreview("chat-1", visual, src);
   const fetchesBefore = calls.filter((call) => call.channel === "chats:htmlArtifactSrcdoc").length;
-  const view = render(<HtmlArtifactFrame chatId="chat-1" artifact={visual} placementCallId="call-7" />);
+  const view = render(
+    <HtmlArtifactFrame chatId="chat-1" artifact={visual} placementCallId="call-7" />,
+  );
   // No loading placeholder and no round trip: the iframe is there on first render.
   assert.equal(view.container.querySelector("iframe")?.getAttribute("src"), src);
-  assert.equal(view.container.querySelector<HTMLElement>("[data-inline-visual-frame]")!.style.height, "333px");
-  assert.equal(calls.filter((call) => call.channel === "chats:htmlArtifactSrcdoc").length, fetchesBefore);
+  assert.equal(
+    view.container.querySelector<HTMLElement>("[data-inline-visual-frame]")!.style.height,
+    "333px",
+  );
+  assert.equal(
+    calls.filter((call) => call.channel === "chats:htmlArtifactSrcdoc").length,
+    fetchesBefore,
+  );
 });
 
 test("a draft's height seeds only the one frame that replaces it", () => {
   rememberDraftHeight("call-9", 377);
-  const first = render(<HtmlArtifactFrame chatId="chat-1" artifact={artifact()} placementCallId="call-9" />);
-  assert.equal(first.container.querySelector<HTMLElement>("[data-inline-visual-frame]")!.style.height, "377px");
+  const first = render(
+    <HtmlArtifactFrame chatId="chat-1" artifact={artifact()} placementCallId="call-9" />,
+  );
+  assert.equal(
+    first.container.querySelector<HTMLElement>("[data-inline-visual-frame]")!.style.height,
+    "377px",
+  );
   first.unmount();
   // call-N ids repeat across turns; a later, unrelated visual must not inherit it.
-  const later = render(<HtmlArtifactFrame chatId="chat-2" artifact={artifact()} placementCallId="call-9" />);
-  assert.equal(later.container.querySelector<HTMLElement>("[data-inline-visual-frame]")!.style.height, "160px");
+  const later = render(
+    <HtmlArtifactFrame chatId="chat-2" artifact={artifact()} placementCallId="call-9" />,
+  );
+  assert.equal(
+    later.container.querySelector<HTMLElement>("[data-inline-visual-frame]")!.style.height,
+    "160px",
+  );
 });
 
 test("a same-title replace navigates the mounted frame to the replacement's preview", () => {
@@ -378,7 +420,8 @@ test("the preview cache keeps the visuals used most recently and fetches an evic
   primeInlineVisualPreview("chat-lru", reused, PREVIEW);
   primeInlineVisualPreview("chat-lru", unseen, PREVIEW);
   render(<HtmlArtifactFrame chatId="chat-lru" artifact={reused} />).unmount();
-  for (let index = 0; index < 63; index += 1) primeInlineVisualPreview("chat-lru", artifact(), PREVIEW);
+  for (let index = 0; index < 63; index += 1)
+    primeInlineVisualPreview("chat-lru", artifact(), PREVIEW);
 
   const before = fetches();
   render(<HtmlArtifactFrame chatId="chat-lru" artifact={reused} />).unmount();

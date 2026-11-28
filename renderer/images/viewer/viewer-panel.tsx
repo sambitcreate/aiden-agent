@@ -33,12 +33,26 @@ function ViewerPrompt({ prompt }: { prompt: string }) {
   }, [prompt, expanded]);
   return (
     <section aria-label="Prompt" className="flex flex-col items-start gap-1">
-      <Text variant="small" color="secondary">Prompt</Text>
-      <p ref={text} id={id} className="image-viewer-prompt" data-expanded={expanded ? "true" : undefined}>
+      <Text variant="small" color="secondary">
+        Prompt
+      </Text>
+      <p
+        ref={text}
+        id={id}
+        className="image-viewer-prompt"
+        data-expanded={expanded ? "true" : undefined}
+      >
         {prompt}
       </p>
       {clamped || expanded ? (
-        <Button size="small" variant="transparent" className="-ml-3" aria-expanded={expanded} aria-controls={id} onClick={() => setExpanded((open) => !open)}>
+        <Button
+          size="small"
+          variant="transparent"
+          className="-ml-3"
+          aria-expanded={expanded}
+          aria-controls={id}
+          onClick={() => setExpanded((open) => !open)}
+        >
           {expanded ? "Show less" : "Show full prompt"}
         </Button>
       ) : null}
@@ -75,11 +89,19 @@ export function ViewerPanel({
   const rows = detailRows(item, models, formatTime);
   return (
     <aside aria-label="Image details" className="image-viewer-panel flex flex-col gap-4">
-      <Text variant="small-strong" color="secondary">{positionLabel(index, count)}</Text>
+      <Text variant="small-strong" color="secondary">
+        {positionLabel(index, count)}
+      </Text>
       {item.prompt ? <ViewerPrompt key={item.assetId} prompt={item.prompt} /> : null}
       <div className="flex flex-wrap gap-2">
         {actions.map((action) => (
-          <Button key={action.id} size="small" variant="filled" disabled={action.disabled?.(item) ?? false} onClick={() => action.onSelect(item)}>
+          <Button
+            key={action.id}
+            size="small"
+            variant="filled"
+            disabled={action.disabled?.(item) ?? false}
+            onClick={() => action.onSelect(item)}
+          >
             {action.icon}
             {action.label}
           </Button>
@@ -100,11 +122,15 @@ export function ViewerPanel({
       <Text variant="small" color="secondary" className="flex items-start gap-1.5">
         {item.saved ? <Check aria-hidden="true" className="mt-0.5 size-3.5 shrink-0" /> : null}
         {item.saved
-          ? saveFolderLabel ? `Saved to ${saveFolderLabel}` : "Saved"
+          ? saveFolderLabel
+            ? `Saved to ${saveFolderLabel}`
+            : "Saved"
           : "Not saved to your images folder yet"}
       </Text>
       <section aria-label="Details" className="flex flex-col gap-1">
-        <Text variant="small" color="secondary">Details</Text>
+        <Text variant="small" color="secondary">
+          Details
+        </Text>
         <dl className="image-viewer-details">
           {rows.map((row) => (
             <React.Fragment key={row.label}>
@@ -136,7 +162,8 @@ export function ViewerFilmstrip({
   // Whether a thumbnail has focus, read before this render commits: a jump (Home, End) can
   // slide the window past the focused thumbnail and remove it, which drops focus to the body.
   const focusInStrip = React.useRef(false);
-  focusInStrip.current = typeof document !== "undefined" && Boolean(list.current?.contains(document.activeElement));
+  focusInStrip.current =
+    typeof document !== "undefined" && Boolean(list.current?.contains(document.activeElement));
   React.useEffect(() => {
     const active = list.current?.querySelector<HTMLButtonElement>('[aria-current="true"]');
     if (!active) return;

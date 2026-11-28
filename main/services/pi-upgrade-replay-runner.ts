@@ -50,7 +50,11 @@ function user(content: UserMessage["content"]): UserMessage {
   return { role: "user", content, timestamp: 1 };
 }
 
-function assistantText(text: string, provider = options.providerId!, model = options.modelId!): AssistantMessage {
+function assistantText(
+  text: string,
+  provider = options.providerId!,
+  model = options.modelId!,
+): AssistantMessage {
   return {
     role: "assistant",
     content: [{ type: "text", text }],
@@ -58,7 +62,11 @@ function assistantText(text: string, provider = options.providerId!, model = opt
     provider,
     model,
     usage: {
-      input: 950, output: 20, cacheRead: 0, cacheWrite: 0, totalTokens: 970,
+      input: 950,
+      output: 20,
+      cacheRead: 0,
+      cacheWrite: 0,
+      totalTokens: 970,
       cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
     },
     stopReason: "stop",
@@ -75,15 +83,23 @@ function toolCall(id: string): AssistantMessage {
 
 function toolResult(id: string, text: string): ToolResultMessage {
   return {
-    role: "toolResult", toolCallId: id, toolName: "read_file",
-    content: [{ type: "text", text }], details: null, isError: false, timestamp: 3,
+    role: "toolResult",
+    toolCallId: id,
+    toolName: "read_file",
+    content: [{ type: "text", text }],
+    details: null,
+    isError: false,
+    timestamp: 3,
   };
 }
 
 function historicalTurns(prefix: string, count: number, chars = 1_200): AgentMessage[] {
   const messages: AgentMessage[] = [];
   for (let index = 0; index < count; index += 1) {
-    messages.push(user(`${prefix}-request-${index}`), assistantText(`${prefix}-answer-${index}-${"x".repeat(chars)}`));
+    messages.push(
+      user(`${prefix}-request-${index}`),
+      assistantText(`${prefix}-answer-${index}-${"x".repeat(chars)}`),
+    );
   }
   return messages;
 }
@@ -100,29 +116,37 @@ function baseExecutableCase(caseId: PiUpgradeReplayCaseId): ExecutableCase {
   switch (caseId) {
     case "long_coding_chat":
       return {
-        messages: [...historicalTurns("coding", 12), user("continue with exact identifier BUILD-417")],
+        messages: [
+          ...historicalTurns("coding", 12),
+          user("continue with exact identifier BUILD-417"),
+        ],
         markers: ["BUILD-417"],
       };
     case "tool_heavy_turn": {
       const id = "tool-call-991";
       return {
         messages: [
-          ...historicalTurns("tool-history", 5), user("inspect result"), toolCall(id),
-          toolResult(id, `${id}-${"y".repeat(90_000)}`), user("continue after tool with ISSUE-882"),
+          ...historicalTurns("tool-history", 5),
+          user("inspect result"),
+          toolCall(id),
+          toolResult(id, `${id}-${"y".repeat(90_000)}`),
+          user("continue after tool with ISSUE-882"),
         ],
         markers: ["ISSUE-882", id],
       };
     }
     case "attachment_heavy_first_prompt":
       return {
-        messages: [user([
-          { type: "text", text: `ATTACHMENT-204 ${"z".repeat(100_000)}` },
-          ...Array.from({ length: 8 }, (_, index) => ({
-            type: "image" as const,
-            data: Buffer.from(`image-${index}`).toString("base64"),
-            mimeType: "image/png",
-          })),
-        ])],
+        messages: [
+          user([
+            { type: "text", text: `ATTACHMENT-204 ${"z".repeat(100_000)}` },
+            ...Array.from({ length: 8 }, (_, index) => ({
+              type: "image" as const,
+              data: Buffer.from(`image-${index}`).toString("base64"),
+              mimeType: "image/png",
+            })),
+          ]),
+        ],
         markers: [],
         expectedFallback: true,
       };
@@ -145,7 +169,8 @@ function baseExecutableCase(caseId: PiUpgradeReplayCaseId): ExecutableCase {
       return {
         messages,
         markers: ["SWITCH-55"],
-        projectionCheck: (candidate) => projectNextContextUsage(candidate, options).usageAnchorIndex === null,
+        projectionCheck: (candidate) =>
+          projectNextContextUsage(candidate, options).usageAnchorIndex === null,
       };
     }
     case "bot_mac_telegram_alternation":
@@ -210,8 +235,13 @@ function replayRuntime(
   return {
     models: createModels(),
     provider: {
-      id: model.provider, kind: "openai", label: "Replay provider", baseUrl: model.baseUrl,
-      models: [model.id], needsKey: false, deployment: "hosted",
+      id: model.provider,
+      kind: "openai",
+      label: "Replay provider",
+      baseUrl: model.baseUrl,
+      models: [model.id],
+      needsKey: false,
+      deployment: "hosted",
     },
     model,
     apiKey: undefined,
@@ -227,15 +257,19 @@ async function childSurfaceReplay(): Promise<boolean> {
   });
   let providerContext = "";
   let summaryCalls = 0;
-  core.setResponses(Array.from({ length: 32 }, () => async (context) => {
-    const serialized = JSON.stringify(context);
-    if (/context summarization assistant/u.test(serialized)) {
-      summaryCalls += 1;
-      return fauxAssistantMessage(summary(serialized.includes("CHILD-909") ? ["CHILD-909"] : []));
-    }
-    providerContext = serialized;
-    return fauxAssistantMessage(serialized.includes("CHILD-909") ? "continued CHILD-909" : "continuity missing");
-  }));
+  core.setResponses(
+    Array.from({ length: 32 }, () => async (context) => {
+      const serialized = JSON.stringify(context);
+      if (/context summarization assistant/u.test(serialized)) {
+        summaryCalls += 1;
+        return fauxAssistantMessage(summary(serialized.includes("CHILD-909") ? ["CHILD-909"] : []));
+      }
+      providerContext = serialized;
+      return fauxAssistantMessage(
+        serialized.includes("CHILD-909") ? "continued CHILD-909" : "continuity missing",
+      );
+    }),
+  );
   const model = core.getModel() as Model<Api>;
   const registry = new SubagentRuntimeRegistry();
   const child = registry.create({
@@ -260,37 +294,64 @@ async function botTelegramSurfaceReplay(): Promise<boolean> {
     provider: "aiden-phase7-bot-surface",
     models: [{ id: "phase7-bot", contextWindow: 8_000, maxTokens: 200 }],
   });
-  core.setResponses(Array.from({ length: 4 }, () => async (context) => {
-    const serialized = JSON.stringify(context);
-    return fauxAssistantMessage(summary(serialized.includes("BOT-314") ? ["BOT-314"] : []));
-  }));
+  core.setResponses(
+    Array.from({ length: 4 }, () => async (context) => {
+      const serialized = JSON.stringify(context);
+      return fauxAssistantMessage(summary(serialized.includes("BOT-314") ? ["BOT-314"] : []));
+    }),
+  );
   const model = core.getModel() as Model<Api>;
   const runtime = replayRuntime(model, core.streamSimple);
   const session = createPiSessionPort(await new InMemorySessionRepo().create({ id: "phase7-bot" }));
   const chat = {
-    id: "phase7-bot", title: "Bot replay", botId: "bot-314", providerId: model.provider,
-    model: model.id, workspaceId: "workspace", createdAt: 1, updatedAt: 2,
+    id: "phase7-bot",
+    title: "Bot replay",
+    botId: "bot-314",
+    providerId: model.provider,
+    model: model.id,
+    workspaceId: "workspace",
+    createdAt: 1,
+    updatedAt: 2,
     messages: Array.from({ length: 8 }, (_, index) => [
-      { id: `u-${index}`, role: "user", content: `Mac ${index} ${"x".repeat(1_000)}`, createdAt: index * 2 + 1 },
-      { id: `a-${index}`, role: "assistant", content: `Telegram ${index} BOT-314`, createdAt: index * 2 + 2 },
+      {
+        id: `u-${index}`,
+        role: "user",
+        content: `Mac ${index} ${"x".repeat(1_000)}`,
+        createdAt: index * 2 + 1,
+      },
+      {
+        id: `a-${index}`,
+        role: "assistant",
+        content: `Telegram ${index} BOT-314`,
+        createdAt: index * 2 + 2,
+      },
     ]).flat(),
   } as Chat;
   const service = new ContextLifecycleService({
     getChat: async () => chat,
     listChatsByBot: async () => [chat],
     beginChatTurn: () => ({
-      chatId: chat.id, turnId: "phase7", ownerId: "telegram:phase7", isActive: () => true,
-      reserveAppendPayload: () => undefined, reserveSkillPreparation: () => undefined,
-      prepareSkillInvocation: () => undefined, settleAsyncWork: () => undefined,
-      onReleased: () => undefined, release: () => undefined,
+      chatId: chat.id,
+      turnId: "phase7",
+      ownerId: "telegram:phase7",
+      isActive: () => true,
+      reserveAppendPayload: () => undefined,
+      reserveSkillPreparation: () => undefined,
+      prepareSkillInvocation: () => undefined,
+      settleAsyncWork: () => undefined,
+      onReleased: () => undefined,
+      release: () => undefined,
     }),
     openSession: async () => session,
     resolveRuntime: async () => runtime,
     resolveThinkingLevel: async () => "off",
   });
   const result = await createTelegramLifecycleAdapter(service, "phase7").compactChat(chat.id);
-  return result.compacted && core.state.callCount > 0 &&
-    JSON.stringify((await session.buildContext()).messages).includes("BOT-314");
+  return (
+    result.compacted &&
+    core.state.callCount > 0 &&
+    JSON.stringify((await session.buildContext()).messages).includes("BOT-314")
+  );
 }
 
 /**
@@ -325,25 +386,35 @@ async function semanticReplay(
   // Split-turn compaction can perform both a history and a turn-prefix summary.
   // Queue enough deterministic provider responses for both calls at each checkpoint.
   const responseCount = caseId === "repeated_compaction" ? 8 : 4;
-  const responses = Array.from(
-    { length: responseCount },
-    () => replayResponse(fixture.markers, providerObservedMarkers, replayOptions.transformSummary ?? ((text) => text)),
+  const responses = Array.from({ length: responseCount }, () =>
+    replayResponse(
+      fixture.markers,
+      providerObservedMarkers,
+      replayOptions.transformSummary ?? ((text) => text),
+    ),
   );
   // The recorded turn's reply observes no marker: only summaries count.
   const summaryResponses = responses.map((respond) => (context: TranscriptContext) => {
     recorded?.summaryRequests?.push(context);
     return respond(context);
   });
-  provider.setResponses(recorded
-    ? [(context: TranscriptContext) => {
-      if (recorded.turnRequest === undefined) recorded.turnRequest = context;
-      return fauxAssistantMessage("Replay continuation acknowledged.");
-    }, ...summaryResponses]
-    : responses);
+  provider.setResponses(
+    recorded
+      ? [
+          (context: TranscriptContext) => {
+            if (recorded.turnRequest === undefined) recorded.turnRequest = context;
+            return fauxAssistantMessage("Replay continuation acknowledged.");
+          },
+          ...summaryResponses,
+        ]
+      : responses,
+  );
   const models = createModels();
   models.setProvider(provider.provider);
   const model = provider.getModel() as Model<Api>;
-  const session = createPiSessionPort(await new InMemorySessionRepo().create({ id: `replay-${caseId}` }));
+  const session = createPiSessionPort(
+    await new InMemorySessionRepo().create({ id: `replay-${caseId}` }),
+  );
   const events: PiCompactionEvent[] = [];
   const chatKey = `replay-${caseId}`;
   // The replay's clock is synthetic, so the recorded prefix stays live for the whole case.
@@ -367,12 +438,14 @@ async function semanticReplay(
     const isTerminal = index === all.length - 1;
     return {
       ...message,
-      ...(caseId === "provider_model_switch" && !isTerminal ? {} : {
-        api: model.api,
-        provider: model.provider,
-        model: model.id,
-        usage: { ...message.usage, input: 63_950, totalTokens: 63_970 },
-      }),
+      ...(caseId === "provider_model_switch" && !isTerminal
+        ? {}
+        : {
+            api: model.api,
+            provider: model.provider,
+            model: model.id,
+            usage: { ...message.usage, input: 63_950, totalTokens: 63_970 },
+          }),
       timestamp,
     };
   });
@@ -381,10 +454,17 @@ async function semanticReplay(
   // reports the synthetic usage that crosses the trigger.
   const recordedTurn = async (messages: AgentMessage[], synthetic: AssistantMessage) => {
     for (const message of messages) await session.appendMessage(message);
-    const send: StreamFn = (requestModel, context, streamOptions) => models.streamSimple(requestModel, context, streamOptions);
-    const context = { systemPrompt: options.systemPrompt, messages: (await session.buildContext()).messages, tools: [] };
+    const send: StreamFn = (requestModel, context, streamOptions) =>
+      models.streamSimple(requestModel, context, streamOptions);
+    const context = {
+      systemPrompt: options.systemPrompt,
+      messages: (await session.buildContext()).messages,
+      tools: [],
+    };
     const stream = await withSideCallPrefixLedger(send, { ledger, chatKey })(
-      model, context as unknown as TranscriptContext, { sessionId: chatKey, cacheRetention: "short" },
+      model,
+      context as unknown as TranscriptContext,
+      { sessionId: chatKey, cacheRetention: "short" },
     );
     const reply = await stream.result();
     // Await the ledger's own read of the reply before the compaction asks for it.
@@ -407,8 +487,12 @@ async function semanticReplay(
     primaryChecks.push(check);
   };
   if (recorded) {
-    if (caseId === "repeated_compaction") throw new Error("A recorded replay covers one checkpoint.");
-    await recordedTurn(replayMessages.slice(0, -1), replayMessages[replayMessages.length - 1] as AssistantMessage);
+    if (caseId === "repeated_compaction")
+      throw new Error("A recorded replay covers one checkpoint.");
+    await recordedTurn(
+      replayMessages.slice(0, -1),
+      replayMessages[replayMessages.length - 1] as AssistantMessage,
+    );
   } else if (caseId === "repeated_compaction") {
     const firstCheckpointEnd = 14;
     await appendAndCheck(replayMessages.slice(0, firstCheckpointEnd));
@@ -416,8 +500,12 @@ async function semanticReplay(
   } else {
     await appendAndCheck(replayMessages);
   }
-  const primaryResults = events.flatMap((event) => event.type === "end" && event.result ? [event.result] : []);
-  recorded?.usages?.push(...primaryResults.flatMap((result) => result.usage ? [result.usage] : []));
+  const primaryResults = events.flatMap((event) =>
+    event.type === "end" && event.result ? [event.result] : [],
+  );
+  recorded?.usages?.push(
+    ...primaryResults.flatMap((result) => (result.usage ? [result.usage] : [])),
+  );
   const context = await session.buildContext();
   const serialized = JSON.stringify(context.messages);
   const retained = fixture.markers.filter((marker) => serialized.includes(marker)).length;
@@ -426,7 +514,10 @@ async function semanticReplay(
   for (const inputTokens of [44_800, 63_950, 63_950]) {
     turnsUntilNextCompaction += 1;
     const timestamp = Date.now() + 20_000 + turnsUntilNextCompaction;
-    await session.appendMessage({ ...user(`observed follow-up ${turnsUntilNextCompaction}`), timestamp });
+    await session.appendMessage({
+      ...user(`observed follow-up ${turnsUntilNextCompaction}`),
+      timestamp,
+    });
     const next = {
       ...assistantText(`observed answer ${turnsUntilNextCompaction}`, model.provider, model.id),
       api: model.api,
@@ -443,21 +534,26 @@ async function semanticReplay(
     const after = events.filter((event) => event.type === "end" && event.result).length;
     if (after > before) break;
   }
-  const usage = primaryResults.reduce((total, result) => ({
-    cacheRead: total.cacheRead + (result.usage?.cacheRead ?? 0),
-    cacheWrite: total.cacheWrite + (result.usage?.cacheWrite ?? 0),
-    cost: total.cost + (result.usage?.cost.total ?? 0),
-  }), { cacheRead: 0, cacheWrite: 0, cost: 0 });
-  const surfaceCorrect = caseId === "child_initial_fork"
-    ? await childSurfaceReplay()
-    : caseId === "bot_mac_telegram_alternation"
-      ? await botTelegramSurfaceReplay()
-      : true;
+  const usage = primaryResults.reduce(
+    (total, result) => ({
+      cacheRead: total.cacheRead + (result.usage?.cacheRead ?? 0),
+      cacheWrite: total.cacheWrite + (result.usage?.cacheWrite ?? 0),
+      cost: total.cost + (result.usage?.cost.total ?? 0),
+    }),
+    { cacheRead: 0, cacheWrite: 0, cost: 0 },
+  );
+  const surfaceCorrect =
+    caseId === "child_initial_fork"
+      ? await childSurfaceReplay()
+      : caseId === "bot_mac_telegram_alternation"
+        ? await botTelegramSurfaceReplay()
+        : true;
   return {
     caseId,
     continuationCorrect:
       retained === fixture.markers.length &&
-      fixture.historicalMarker !== undefined && providerObservedMarkers.has(fixture.historicalMarker) &&
+      fixture.historicalMarker !== undefined &&
+      providerObservedMarkers.has(fixture.historicalMarker) &&
       surfaceCorrect &&
       primaryResults.length === (caseId === "repeated_compaction" ? 2 : 1) &&
       (fixture.projectionCheck?.(fixture.messages) ?? true),
@@ -471,7 +567,8 @@ async function semanticReplay(
     cacheWriteTokens: usage.cacheWrite,
     turnsUntilNextCompaction,
     emergencyProjections: 0,
-    noOpAttempts: primaryChecks.filter((check) => !check.compacted).length +
+    noOpAttempts:
+      primaryChecks.filter((check) => !check.compacted).length +
       Math.max(0, primaryResultCount - primaryChecks.length),
     migrationFailures: 0,
   };
@@ -480,7 +577,10 @@ async function semanticReplay(
 /** The share of a request's prompt tokens read from the provider's cache. */
 function cacheReadShare(usages: readonly Usage[]): number {
   const read = usages.reduce((total, usage) => total + usage.cacheRead, 0);
-  const prompt = usages.reduce((total, usage) => total + usage.input + usage.cacheRead + usage.cacheWrite, 0);
+  const prompt = usages.reduce(
+    (total, usage) => total + usage.input + usage.cacheRead + usage.cacheWrite,
+    0,
+  );
   return prompt === 0 ? 0 : read / prompt;
 }
 
@@ -509,7 +609,12 @@ export async function runPiUpgradeCachedPrefixReplay(
   const caseId = "long_coding_chat" satisfies PiUpgradeReplayCaseId;
   const isolatedTurn: RecordedTurn = { cachedPrefix: false, usages: [] };
   const cachedTurn: RecordedTurn = { cachedPrefix: true, usages: [], summaryRequests: [] };
-  const isolated = await semanticReplay(caseId, executableCase(caseId), replayOptions, isolatedTurn);
+  const isolated = await semanticReplay(
+    caseId,
+    executableCase(caseId),
+    replayOptions,
+    isolatedTurn,
+  );
   const cached = await semanticReplay(caseId, executableCase(caseId), replayOptions, cachedTurn);
   if (!cachedTurn.turnRequest) throw new Error("The cached-prefix replay sent no turn.");
   return {
@@ -522,12 +627,16 @@ export async function runPiUpgradeCachedPrefixReplay(
   };
 }
 
-export async function runPiUpgradeReplayCases(replayOptions: PiUpgradeReplayOptions = {}): Promise<PiUpgradeReplayMeasurement[]> {
+export async function runPiUpgradeReplayCases(
+  replayOptions: PiUpgradeReplayOptions = {},
+): Promise<PiUpgradeReplayMeasurement[]> {
   let migrationFailures = 0;
   const migrationRoot = await mkdtemp(path.join(os.tmpdir(), "aiden-pi-evaluation-migration-"));
   try {
     const journal = path.join(migrationRoot, "replay-migration.jsonl");
-    const lines = (await readFile(path.resolve("main/services/fixtures/pi-legacy/uncompacted.jsonl"), "utf8")).split("\n");
+    const lines = (
+      await readFile(path.resolve("main/services/fixtures/pi-legacy/uncompacted.jsonl"), "utf8")
+    ).split("\n");
     const header = JSON.parse(lines[0]!) as Record<string, unknown>;
     header.id = "replay-migration";
     header.cwd = migrationRoot;
@@ -535,8 +644,11 @@ export async function runPiUpgradeReplayCases(replayOptions: PiUpgradeReplayOpti
     lines[0] = JSON.stringify(header);
     await writeFile(journal, lines.join("\n"), { mode: 0o600 });
     const migrated = await migratePiSessionJournal(journal, "replay-migration");
-    if (migrated.receipt.validation !== "passed" || migrated.receipt.newFormat !== "pi-session-v4" ||
-      JSON.parse((await readFile(journal, "utf8")).split("\n")[0]!).v !== 4) {
+    if (
+      migrated.receipt.validation !== "passed" ||
+      migrated.receipt.newFormat !== "pi-session-v4" ||
+      JSON.parse((await readFile(journal, "utf8")).split("\n")[0]!).v !== 4
+    ) {
       migrationFailures += 1;
     }
   } catch {
@@ -544,45 +656,51 @@ export async function runPiUpgradeReplayCases(replayOptions: PiUpgradeReplayOpti
   } finally {
     await rm(migrationRoot, { recursive: true, force: true });
   }
-  return Promise.all(PI_UPGRADE_REPLAY_CASE_IDS.map(async (caseId, caseIndex) => {
-    const fixture = executableCase(caseId);
-    if (caseId !== "attachment_heavy_first_prompt") {
-      const measurement = await semanticReplay(caseId, fixture, replayOptions);
-      return { ...measurement, migrationFailures: caseIndex === 0 ? migrationFailures : 0 };
-    }
-    const started = performance.now();
-    const result = compactGenerationContext(fixture.messages, options);
-    const serialized = JSON.stringify(result.messages);
-    const retained = fixture.markers.filter((marker) => serialized.includes(marker)).length;
-    const fallbackCorrect = fixture.expectedFallback === undefined || result.usedContextFallback === fixture.expectedFallback;
-    const projectionCorrect = fixture.projectionCheck?.(fixture.messages) ?? true;
-    let turnsUntilNextCompaction = 0;
-    const probe = [...result.messages];
-    for (const inputTokens of [8_000, 15_500, 15_500]) {
-      turnsUntilNextCompaction += 1;
-      const next = assistantText(`attachment follow-up ${turnsUntilNextCompaction}`);
-      next.usage.input = inputTokens;
-      next.usage.totalTokens = inputTokens + next.usage.output;
-      probe.push(user(`attachment follow-up ${turnsUntilNextCompaction}`), next);
-      if (projectNextContextUsage(probe, options).shouldCompact) break;
-    }
-    return {
-      caseId,
-      continuationCorrect: fallbackCorrect && projectionCorrect && retained === fixture.markers.length,
-      pendingReferencesExpected: fixture.markers.length,
-      pendingReferencesRetained: retained,
-      tokensBefore: result.estimatedTokensBefore,
-      tokensAfter: result.estimatedTokensAfter,
-      durationMs: performance.now() - started,
-      costMicros: 0,
-      cacheReadTokens: 0,
-      cacheWriteTokens: 0,
-      turnsUntilNextCompaction,
-      emergencyProjections: result.emergencyProjection.kind === "none" ? 0 : 1,
-      noOpAttempts: result.compacted && result.estimatedTokensAfter >= result.estimatedTokensBefore ? 1 : 0,
-      migrationFailures: caseIndex === 0 ? migrationFailures : 0,
-    };
-  }));
+  return Promise.all(
+    PI_UPGRADE_REPLAY_CASE_IDS.map(async (caseId, caseIndex) => {
+      const fixture = executableCase(caseId);
+      if (caseId !== "attachment_heavy_first_prompt") {
+        const measurement = await semanticReplay(caseId, fixture, replayOptions);
+        return { ...measurement, migrationFailures: caseIndex === 0 ? migrationFailures : 0 };
+      }
+      const started = performance.now();
+      const result = compactGenerationContext(fixture.messages, options);
+      const serialized = JSON.stringify(result.messages);
+      const retained = fixture.markers.filter((marker) => serialized.includes(marker)).length;
+      const fallbackCorrect =
+        fixture.expectedFallback === undefined ||
+        result.usedContextFallback === fixture.expectedFallback;
+      const projectionCorrect = fixture.projectionCheck?.(fixture.messages) ?? true;
+      let turnsUntilNextCompaction = 0;
+      const probe = [...result.messages];
+      for (const inputTokens of [8_000, 15_500, 15_500]) {
+        turnsUntilNextCompaction += 1;
+        const next = assistantText(`attachment follow-up ${turnsUntilNextCompaction}`);
+        next.usage.input = inputTokens;
+        next.usage.totalTokens = inputTokens + next.usage.output;
+        probe.push(user(`attachment follow-up ${turnsUntilNextCompaction}`), next);
+        if (projectNextContextUsage(probe, options).shouldCompact) break;
+      }
+      return {
+        caseId,
+        continuationCorrect:
+          fallbackCorrect && projectionCorrect && retained === fixture.markers.length,
+        pendingReferencesExpected: fixture.markers.length,
+        pendingReferencesRetained: retained,
+        tokensBefore: result.estimatedTokensBefore,
+        tokensAfter: result.estimatedTokensAfter,
+        durationMs: performance.now() - started,
+        costMicros: 0,
+        cacheReadTokens: 0,
+        cacheWriteTokens: 0,
+        turnsUntilNextCompaction,
+        emergencyProjections: result.emergencyProjection.kind === "none" ? 0 : 1,
+        noOpAttempts:
+          result.compacted && result.estimatedTokensAfter >= result.estimatedTokensBefore ? 1 : 0,
+        migrationFailures: caseIndex === 0 ? migrationFailures : 0,
+      };
+    }),
+  );
 }
 
 /** Separate opt-in report; does not change installed Pi rollout receipts. */

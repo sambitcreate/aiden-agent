@@ -55,10 +55,15 @@ let persistenceFailed = false;
 function ensurePrivateHealthDirectory(directory: string): void {
   mkdirSync(directory, { recursive: true, mode: 0o700 });
   const metadata = lstatSync(directory);
-  if (!metadata.isDirectory() || metadata.isSymbolicLink()) throw new Error("Invalid diagnostic health directory.");
-  const descriptor = openSync(directory, fsConstants.O_RDONLY | fsConstants.O_DIRECTORY | fsConstants.O_NOFOLLOW);
+  if (!metadata.isDirectory() || metadata.isSymbolicLink())
+    throw new Error("Invalid diagnostic health directory.");
+  const descriptor = openSync(
+    directory,
+    fsConstants.O_RDONLY | fsConstants.O_DIRECTORY | fsConstants.O_NOFOLLOW,
+  );
   try {
-    if (!fstatSync(descriptor).isDirectory()) throw new Error("Diagnostic health directory changed.");
+    if (!fstatSync(descriptor).isDirectory())
+      throw new Error("Diagnostic health directory changed.");
     fchmodSync(descriptor, 0o700);
   } finally {
     closeSync(descriptor);
@@ -69,7 +74,8 @@ function readHealthFile(file: string): string {
   const descriptor = openSync(file, fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW);
   try {
     const metadata = fstatSync(descriptor);
-    if (!metadata.isFile() || metadata.nlink !== 1) throw new Error("Invalid diagnostic health file.");
+    if (!metadata.isFile() || metadata.nlink !== 1)
+      throw new Error("Invalid diagnostic health file.");
     fchmodSync(descriptor, 0o600);
     return readFileSync(descriptor, "utf8");
   } finally {
@@ -98,7 +104,11 @@ function emptyCount(area: DiagnosticArea): DiagnosticHealthCount {
 }
 
 function validDate(value: unknown): value is string {
-  return typeof value === "string" && /^\d{4}-\d{2}-\d{2}$/u.test(value) && !Number.isNaN(Date.parse(`${value}T00:00:00.000Z`));
+  return (
+    typeof value === "string" &&
+    /^\d{4}-\d{2}-\d{2}$/u.test(value) &&
+    !Number.isNaN(Date.parse(`${value}T00:00:00.000Z`))
+  );
 }
 
 export function normalizeDiagnosticHealth(value: unknown): DiagnosticHealthDatabase {
@@ -129,7 +139,12 @@ export function normalizeDiagnosticHealth(value: unknown): DiagnosticHealthDatab
         slow: safeCount(count.slow),
       });
     }
-    return [{ date: candidate.date, counts: [...byArea.values()].sort((a, b) => a.area.localeCompare(b.area)) }];
+    return [
+      {
+        date: candidate.date,
+        counts: [...byArea.values()].sort((a, b) => a.area.localeCompare(b.area)),
+      },
+    ];
   });
   return {
     version: DIAGNOSTIC_HEALTH_VERSION,
@@ -188,16 +203,24 @@ export function recordDiagnosticHealth(event: DiagnosticEventV1): void {
     day.counts.sort((a, b) => a.area.localeCompare(b.area));
   }
   if (event.outcome === "started") count.started = increment(count.started);
-  else if (event.outcome === "completed" || event.outcome === "recovered") count.completed = increment(count.completed);
-  else if (event.outcome === "degraded" || event.outcome === "unavailable") count.degraded = increment(count.degraded);
-  else if (event.outcome === "cancelled" || event.outcome === "rejected") count.cancelled = increment(count.cancelled);
+  else if (event.outcome === "completed" || event.outcome === "recovered")
+    count.completed = increment(count.completed);
+  else if (event.outcome === "degraded" || event.outcome === "unavailable")
+    count.degraded = increment(count.degraded);
+  else if (event.outcome === "cancelled" || event.outcome === "rejected")
+    count.cancelled = increment(count.cancelled);
   else if (event.outcome === "timed-out") count.timedOut = increment(count.timedOut);
-  else if (event.outcome === "failed" || event.level === "error" || event.level === "fatal") count.failed = increment(count.failed);
+  else if (event.outcome === "failed" || event.level === "error" || event.level === "fatal")
+    count.failed = increment(count.failed);
   else return;
   persistSoon();
 }
 
-export function recordRemoteRequestHealth(status: number, latencyMs: number, at = new Date()): void {
+export function recordRemoteRequestHealth(
+  status: number,
+  latencyMs: number,
+  at = new Date(),
+): void {
   if (!targetPath || !Number.isFinite(status) || !Number.isFinite(latencyMs)) return;
   const event = {
     version: 1,
@@ -248,7 +271,8 @@ export async function flushDiagnosticHealth(timeoutMs?: number): Promise<boolean
         );
         try {
           const metadata = await handle.stat();
-          if (!metadata.isFile() || metadata.nlink !== 1) throw new Error("Invalid diagnostic health temporary file.");
+          if (!metadata.isFile() || metadata.nlink !== 1)
+            throw new Error("Invalid diagnostic health temporary file.");
           await handle.writeFile(snapshot, "utf8");
           await handle.chmod(0o600);
           await handle.sync();
@@ -306,6 +330,8 @@ export async function deleteDiagnosticHealth(): Promise<void> {
   });
   // Reserve deletion's place in the same queue as snapshot publication. Keep
   // the queue usable on failure, but report the rejection to the delete caller.
-  queue = deletion.catch(() => { persistenceFailed = true; });
+  queue = deletion.catch(() => {
+    persistenceFailed = true;
+  });
   await deletion;
 }

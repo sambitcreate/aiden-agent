@@ -118,7 +118,7 @@ export function createAskUserQuestionExtension(options: {
       name: ASK_USER_QUESTION_TOOL_NAME,
       label: "Ask User Question",
       description:
-        "Ask the user 1-4 concise structured questions when a material choice cannot be inferred safely. Each question needs 2-5 distinct options with short labels and useful descriptions. The UI automatically offers a custom answer and Skip, so do not add Other or a skip option. If you recommend an option, list it first and end its label with \"(Recommended)\"; the app preselects it so the user can accept it with one key (in a multi-select, mark each option you recommend). The marker counts toward the 60-character label limit. Set timeoutSeconds when the task can reasonably continue without an answer (for example, state a default in the question): after that long you receive a no-answer result and should proceed with your best judgement. Some unattended surfaces always apply a short deadline.",
+        'Ask the user 1-4 concise structured questions when a material choice cannot be inferred safely. Each question needs 2-5 distinct options with short labels and useful descriptions. The UI automatically offers a custom answer and Skip, so do not add Other or a skip option. If you recommend an option, list it first and end its label with "(Recommended)"; the app preselects it so the user can accept it with one key (in a multi-select, mark each option you recommend). The marker counts toward the 60-character label limit. Set timeoutSeconds when the task can reasonably continue without an answer (for example, state a default in the question): after that long you receive a no-answer result and should proceed with your best judgement. Some unattended surfaces always apply a short deadline.',
       // A second questionnaire cannot replace the first composer surface while
       // it is awaiting its owner. Serialize calls so every prompt is answered
       // or cancelled before another questionnaire can be published.
@@ -129,8 +129,7 @@ export function createAskUserQuestionExtension(options: {
           Type.Integer({
             minimum: ASK_USER_MIN_TIMEOUT_SECONDS,
             maximum: ASK_USER_MAX_TIMEOUT_SECONDS,
-            description:
-              "Optional. Seconds to wait for an answer before continuing without one.",
+            description: "Optional. Seconds to wait for an answer before continuing without one.",
           }),
         ),
       }),
@@ -149,7 +148,9 @@ export function createAskUserQuestionExtension(options: {
           content: [{ type: "text", text: formatAskUserQuestionResponse(questions, response) }],
           // The transcript recap of what the owner chose. A stopped run settles
           // as cancelled too, but nobody skipped anything, so it gets none.
-          details: signal?.aborted ? null : (buildAskUserQuestionRecap(questions, response) ?? null),
+          details: signal?.aborted
+            ? null
+            : (buildAskUserQuestionRecap(questions, response) ?? null),
         };
       },
     },

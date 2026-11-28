@@ -17,7 +17,13 @@
 import type { Context } from "@earendil-works/chord/context";
 import type { JsonValue } from "@earendil-works/chord/json";
 import type { AgentTool, AgentToolResult } from "@earendil-works/pi-agent-core";
-import type { EntryRecord, SubmissionRecord, ToolExecutionApi, ToolExecutionResult, ToolRegistration } from "@earendil-works/pi-durable";
+import type {
+  EntryRecord,
+  SubmissionRecord,
+  ToolExecutionApi,
+  ToolExecutionResult,
+  ToolRegistration,
+} from "@earendil-works/pi-durable";
 
 export type DurableTool = ToolRegistration;
 export type ToolReplay = "safe" | "unsafe";
@@ -41,7 +47,7 @@ export interface BotToolCall {
   /** Append a display/bookkeeping entry to the calling conversation. */
   appendEntry(kind: string, data: JsonValue): Promise<void>;
   /** Atomic metadata write using this task's conversation, without reopening a host or scheduling input. */
-  appendEntryOnce?(requestId:string,kind:string,data:JsonValue):Promise<void>;
+  appendEntryOnce?(requestId: string, kind: string, data: JsonValue): Promise<void>;
   /**
    * The tool task's memo: the first `candidate` for `name` is stored and
    * returned on every later call of the same task, including after a restart.
@@ -61,7 +67,12 @@ export interface BotToolCall {
 export interface AdaptOptions {
   assertRunActive?(api: ToolExecutionApi, context: Context): Promise<void>;
   prepareExecution?(api: ToolExecutionApi, context: Context, args: unknown): Promise<void>;
-  admitEffect?<T>(api: ToolExecutionApi, context: Context, args: unknown, start: () => Promise<T>): Promise<BotEffectAdmission<T>>;
+  admitEffect?<T>(
+    api: ToolExecutionApi,
+    context: Context,
+    args: unknown,
+    start: () => Promise<T>,
+  ): Promise<BotEffectAdmission<T>>;
   reauthorize?(api: ToolExecutionApi, context: Context, args: unknown): Promise<void>;
   settled?(api: ToolExecutionApi): void;
   replay: ToolReplay;
@@ -74,11 +85,21 @@ export interface AdaptOptions {
 
 const ENTRY_PAGE = 500;
 
-function callApi(api: ToolExecutionApi, context: Context, signal: AbortSignal, opts: AdaptOptions, args: unknown): BotToolCall {
+function callApi(
+  api: ToolExecutionApi,
+  context: Context,
+  signal: AbortSignal,
+  opts: AdaptOptions,
+  args: unknown,
+): BotToolCall {
   const runRequestIds = opts.runRequestIds;
   return {
-    ...(opts.assertRunActive ? {assertRunActive: () => opts.assertRunActive!(api, context)} : {}),
-    ...(opts.admitEffect ? { admitEffect: <T>(start: () => Promise<T>) => opts.admitEffect!(api, context, args, start) } : {}),
+    ...(opts.assertRunActive ? { assertRunActive: () => opts.assertRunActive!(api, context) } : {}),
+    ...(opts.admitEffect
+      ? {
+          admitEffect: <T>(start: () => Promise<T>) => opts.admitEffect!(api, context, args, start),
+        }
+      : {}),
     ...(opts.reauthorize ? { reauthorize: () => opts.reauthorize!(api, context, args) } : {}),
     ...(runRequestIds === undefined ? {} : { runRequestIds: () => runRequestIds(api, context) }),
     ...(opts.runInputIds ? { runInputIds: () => opts.runInputIds!(api, context) } : {}),
@@ -91,18 +112,40 @@ function callApi(api: ToolExecutionApi, context: Context, signal: AbortSignal, o
         const entries: EntryRecord[] = [];
         let cursor: Parameters<typeof tx.scanEntries>[2];
         do {
-          const page = await tx.scanEntries({ conversationId: api.conversationId }, ENTRY_PAGE, cursor);
+          const page = await tx.scanEntries(
+            { conversationId: api.conversationId },
+            ENTRY_PAGE,
+            cursor,
+          );
           entries.push(...page.items);
           cursor = page.next;
         } while (cursor !== undefined);
         return entries;
       }, context),
     submissions: (requestIds) =>
-      api.commit((tx) => Promise.all(requestIds.map((requestId) => tx.submissionByRequest(api.conversationId, requestId))), context),
+      api.commit(
+        (tx) =>
+          Promise.all(
+            requestIds.map((requestId) => tx.submissionByRequest(api.conversationId, requestId)),
+          ),
+        context,
+      ),
     appendEntry: async (kind, data) => {
       await api.commit((tx) => tx.appendEntry(api.conversationId, { kind, data }), context);
     },
-    appendEntryOnce: async (requestId,kind,data) => {await api.commit(async tx=>{if(await tx.submissionByRequest(api.conversationId,requestId))return;const submission=await tx.createSubmission({conversationId:api.conversationId,requestId,type:"write",status:"queued"}),entry=await tx.appendEntry(api.conversationId,{kind,data});await tx.placeSubmission(submission.id,entry.id);},context);},
+    appendEntryOnce: async (requestId, kind, data) => {
+      await api.commit(async (tx) => {
+        if (await tx.submissionByRequest(api.conversationId, requestId)) return;
+        const submission = await tx.createSubmission({
+            conversationId: api.conversationId,
+            requestId,
+            type: "write",
+            status: "queued",
+          }),
+          entry = await tx.appendEntry(api.conversationId, { kind, data });
+        await tx.placeSubmission(submission.id, entry.id);
+      }, context);
+    },
     memo: (name, candidate) => api.memo(name, candidate, context),
   };
 }
@@ -175,7 +218,12 @@ export function adaptAidenTool(tool: AgentTool, opts: AdaptOptions): DurableTool
         await opts.prepareExecution?.(api, context, args);
         const target = opts.bind ? opts.bind(callApi(api, context, signal, opts, args)) : tool;
         await opts.assertRunActive?.(api, context);
-        const result = await target.execute(api.callId, args, signal, createUpdateForwarder(api, context));
+        const result = await target.execute(
+          api.callId,
+          args,
+          signal,
+          createUpdateForwarder(api, context),
+        );
         const details = toJson(result.details);
         return {
           output: result.content,

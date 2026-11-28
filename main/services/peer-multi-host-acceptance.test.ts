@@ -1,6 +1,9 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { AidenRemoteHostFeedService, type AidenRemoteHostFeedState } from "./aiden-remote-host-feed.js";
+import {
+  AidenRemoteHostFeedService,
+  type AidenRemoteHostFeedState,
+} from "./aiden-remote-host-feed.js";
 import { AidenRemoteHostRunService } from "./aiden-remote-host-runs.js";
 import {
   projectAidenRemoteChat,
@@ -15,7 +18,12 @@ import { PeerBootstrapTransport } from "./peer-bootstrap-transport.js";
 import { PeerHostManager } from "./peer-host-manager.js";
 import { PeerHostRegistry, type StoredPeerHost } from "./peer-host-registry.js";
 import { startPeerTestHost, type PeerTestHost } from "./peer-pairing-test-host.js";
-import { FakeTimers, hostControls, rendererIpc, type FakeHostEffects } from "./peer-remote-chat-test-host.js";
+import {
+  FakeTimers,
+  hostControls,
+  rendererIpc,
+  type FakeHostEffects,
+} from "./peer-remote-chat-test-host.js";
 import { PeerTransport } from "./peer-transport.js";
 import type { Workspace } from "./types.js";
 import type { Chat, ChatMessage } from "../../renderer/lib/types.js";
@@ -38,7 +46,12 @@ import { remoteSidebarRows, sidebarHosts } from "../../renderer/lib/sidebar-remo
  * failure modes; this pass proves the pieces meet.
  */
 
-const APPROVAL = { approvalId: "ap-1", summary: "Run the release script", toolCallId: "call-1", toolName: "shell" };
+const APPROVAL = {
+  approvalId: "ap-1",
+  summary: "Run the release script",
+  toolCallId: "call-1",
+  toolName: "shell",
+};
 
 /** Mac B: one project in a repository, two chats, a Bot, and a real run journal. */
 class StudioMac {
@@ -89,7 +102,9 @@ class StudioMac {
   }
 
   /** What B's router serves besides pairing. */
-  services(): Partial<Pick<AidenRemoteRouterDependencies, "chats" | "bots" | "hostFeed" | "hostRuns">> {
+  services(): Partial<
+    Pick<AidenRemoteRouterDependencies, "chats" | "bots" | "hostFeed" | "hostRuns">
+  > {
     const chats = {
       list: async () => [],
       classify: async (chatId: string) => {
@@ -97,18 +112,34 @@ class StudioMac {
         return chat.botId ? { botId: chat.botId } : {};
       },
       authorizeRetainedBotChat: async () => true,
-      runMutation: async <T>(_device: string, _chat: string, _classification: unknown, action: () => Promise<T>) =>
-        action(),
+      runMutation: async <T>(
+        _device: string,
+        _chat: string,
+        _classification: unknown,
+        action: () => Promise<T>,
+      ) => action(),
       get: async (chatId: string) => projectAidenRemoteChat(this.chat(chatId)),
       messagesWindow: async (chatId: string, input: { before?: string; limit: number }) =>
         projectAidenRemoteChatMessagesWindow(this.chat(chatId), input),
-      create: async (_device: string, _key: string, body: { workspaceId?: string; title?: string }) =>
-        projectAidenRemoteChat(this.add({ workspaceId: body.workspaceId ?? this.workspace.id })),
+      create: async (
+        _device: string,
+        _key: string,
+        body: { workspaceId?: string; title?: string },
+      ) => projectAidenRemoteChat(this.add({ workspaceId: body.workspaceId ?? this.workspace.id })),
       startTurn: async (_device: string, chatId: string, _key: string, body: { text: string }) => {
         const chat = this.chat(chatId);
         const turn = this.turns.push({ chatId, text: body.text });
-        const message: ChatMessage = { id: `sent-${turn}`, role: "user", content: body.text, createdAt: 9_000 + turn };
-        this.chats.set(chatId, { ...chat, messages: [...chat.messages, message], updatedAt: chat.updatedAt + 1 });
+        const message: ChatMessage = {
+          id: `sent-${turn}`,
+          role: "user",
+          content: body.text,
+          createdAt: 9_000 + turn,
+        };
+        this.chats.set(chatId, {
+          ...chat,
+          messages: [...chat.messages, message],
+          updatedAt: chat.updatedAt + 1,
+        });
         this.runs.begin({ runId: `run-turn-${turn}`, chatId, origin: "remote" });
         return {
           turnId: `turn_${turn}`,
@@ -121,7 +152,9 @@ class StudioMac {
     const bots = {
       createChat: async (_device: string, botId: string) => {
         const existing = this.created.get(botId);
-        const chat = existing ? this.chat(existing) : this.add({ workspaceId: this.workspace.id, botId });
+        const chat = existing
+          ? this.chat(existing)
+          : this.add({ workspaceId: this.workspace.id, botId });
         this.created.set(botId, chat.id);
         return projectAidenRemoteChat(chat);
       },
@@ -137,8 +170,17 @@ class StudioMac {
   /** Persists an assistant reply, as the host does before announcing `done`. */
   reply(chatId: string, content: string): void {
     const chat = this.chat(chatId);
-    const message: ChatMessage = { id: `reply-${chat.messages.length}`, role: "assistant", content, createdAt: 9_500 };
-    this.chats.set(chatId, { ...chat, messages: [...chat.messages, message], updatedAt: chat.updatedAt + 1 });
+    const message: ChatMessage = {
+      id: `reply-${chat.messages.length}`,
+      role: "assistant",
+      content,
+      createdAt: 9_500,
+    };
+    this.chats.set(chatId, {
+      ...chat,
+      messages: [...chat.messages, message],
+      updatedAt: chat.updatedAt + 1,
+    });
     this.feed.invalidate();
   }
 
@@ -149,7 +191,12 @@ class StudioMac {
   private messages(chatId: string): ChatMessage[] {
     return [
       { id: `${chatId}-q`, role: "user", content: `What is left for ${chatId}?`, createdAt: 1_100 },
-      { id: `${chatId}-a`, role: "assistant", content: `Two items for ${chatId}.`, createdAt: 1_200 },
+      {
+        id: `${chatId}-a`,
+        role: "assistant",
+        content: `Two items for ${chatId}.`,
+        createdAt: 1_200,
+      },
     ];
   }
 
@@ -190,7 +237,9 @@ class StudioMac {
       }));
     return {
       summaries,
-      botChatIds: new Set([...this.chats.values()].filter((chat) => chat.botId).map((chat) => chat.id)),
+      botChatIds: new Set(
+        [...this.chats.values()].filter((chat) => chat.botId).map((chat) => chat.id),
+      ),
       workspaces: [
         {
           ...projectAidenRemoteWorkspace(this.workspace),
@@ -227,7 +276,11 @@ function registryFor(host: PeerTestHost): PeerHostRegistry {
 }
 
 /** Wait on real network I/O, letting the supervisor's backoff timers run as time passes. */
-async function until(check: () => boolean, timers?: FakeTimers, label = "the expected state"): Promise<void> {
+async function until(
+  check: () => boolean,
+  timers?: FakeTimers,
+  label = "the expected state",
+): Promise<void> {
   for (let attempt = 0; attempt < 400; attempt += 1) {
     if (check()) return;
     await new Promise((resolve) => setTimeout(resolve, 10));
@@ -250,10 +303,19 @@ test("a Mac paired by setup code finds, follows and controls another Mac's work,
   });
 
   // Pair: the setup code shown on B, typed on this Mac.
-  const paired = await registry.pairWithSetupCode({ endpoint: host.lanEndpoint, code: host.openSetupCode("lan") });
+  const paired = await registry.pairWithSetupCode({
+    endpoint: host.lanEndpoint,
+    code: host.openSetupCode("lan"),
+  });
   assert.equal(paired.id, host.instanceId);
 
-  manager = new PeerHostManager({ registry, broadcast: ipc.broadcast, now: () => timers.now, random: () => 0.5, timers });
+  manager = new PeerHostManager({
+    registry,
+    broadcast: ipc.broadcast,
+    now: () => timers.now,
+    random: () => 0.5,
+    timers,
+  });
   const { transport } = ipc.attach(manager);
   const supervisor = manager;
   const status = (): PeerHostStatus["state"] | undefined =>
@@ -262,22 +324,42 @@ test("a Mac paired by setup code finds, follows and controls another Mac's work,
     const views = await registry.list();
     const [entry] = sidebarHosts(views, supervisor.statuses());
     assert.ok(entry);
-    return { host: entry, ...remoteSidebarRows(entry, supervisor.feedSnapshot(paired.id) ?? undefined) };
+    return {
+      host: entry,
+      ...remoteSidebarRows(entry, supervisor.feedSnapshot(paired.id) ?? undefined),
+    };
   };
-  await until(() => (supervisor.feedSnapshot(paired.id)?.summaries.length ?? 0) === 2, undefined, "B's feed");
+  await until(
+    () => (supervisor.feedSnapshot(paired.id)?.summaries.length ?? 0) === 2,
+    undefined,
+    "B's feed",
+  );
 
   // The sidebar shows B's project with its repository and both chats inside it, from the feed alone.
   const first = await sidebar();
   assert.equal(first.host.availability, "online");
   assert.deepEqual(
-    first.projects.map((project) => [project.name, project.repository?.canonicalKey, project.stale]),
+    first.projects.map((project) => [
+      project.name,
+      project.repository?.canonicalKey,
+      project.stale,
+    ]),
     [["Site", "github.com/b/site", false]],
   );
   assert.deepEqual(
-    first.chats.map((chat) => [chat.title, chat.projectKey === first.projects[0]!.key, chat.rowState]).sort(),
-    [["Bug triage", true, "idle"], ["Release notes", true, "idle"]],
+    first.chats
+      .map((chat) => [chat.title, chat.projectKey === first.projects[0]!.key, chat.rowState])
+      .sort(),
+    [
+      ["Bug triage", true, "idle"],
+      ["Release notes", true, "idle"],
+    ],
   );
-  assert.equal(host.seen.filter((line) => line.includes("/messages")).length, 0, "the sidebar reads no transcript");
+  assert.equal(
+    host.seen.filter((line) => line.includes("/messages")).length,
+    0,
+    "the sidebar reads no transcript",
+  );
 
   // Open a chat and read its transcript.
   const [view] = await registry.list();
@@ -289,7 +371,11 @@ test("a Mac paired by setup code finds, follows and controls another Mac's work,
     adapter.dispose();
   });
   session.start();
-  await until(() => session.getSnapshot().transcript.messages.length === 2, undefined, "the transcript");
+  await until(
+    () => session.getSnapshot().transcript.messages.length === 2,
+    undefined,
+    "the transcript",
+  );
   assert.deepEqual(
     session.getSnapshot().transcript.messages.map((message) => message.content),
     ["What is left for chat-notes?", "Two items for chat-notes."],
@@ -303,19 +389,41 @@ test("a Mac paired by setup code finds, follows and controls another Mac's work,
   studio.runs.publish("run-1", "chat:approval", APPROVAL);
   await until(() => session.getSnapshot().run.approvals.length === 1, undefined, "the approval");
   await until(
-    () => supervisor.feedSnapshot(paired.id)?.runs.some((run) => run.runId === "run-1" && run.state === "needs_approval") === true,
+    () =>
+      supervisor
+        .feedSnapshot(paired.id)
+        ?.runs.some((run) => run.runId === "run-1" && run.state === "needs_approval") === true,
     undefined,
     "the run state in the feed",
   );
   const waiting = await sidebar();
-  assert.equal(waiting.chats.find((chat) => chat.chatId === "chat-notes")?.rowState, "needs_approval");
-  const approved = await control.respondApproval({ runId: "run-1", approvalId: "ap-1", decision: "allow" });
+  assert.equal(
+    waiting.chats.find((chat) => chat.chatId === "chat-notes")?.rowState,
+    "needs_approval",
+  );
+  const approved = await control.respondApproval({
+    runId: "run-1",
+    approvalId: "ap-1",
+    decision: "allow",
+  });
   assert.equal(approved?.resolution, "applied");
-  await until(() => session.getSnapshot().run.approvals.length === 0, undefined, "the approval to clear");
+  await until(
+    () => session.getSnapshot().run.approvals.length === 0,
+    undefined,
+    "the approval to clear",
+  );
 
   // A second approval is denied, then the run is stopped.
-  studio.runs.publish("run-1", "chat:approval", { ...APPROVAL, approvalId: "ap-2", toolCallId: "call-2" });
-  await until(() => session.getSnapshot().run.approvals.length === 1, undefined, "the second approval");
+  studio.runs.publish("run-1", "chat:approval", {
+    ...APPROVAL,
+    approvalId: "ap-2",
+    toolCallId: "call-2",
+  });
+  await until(
+    () => session.getSnapshot().run.approvals.length === 1,
+    undefined,
+    "the second approval",
+  );
   await control.respondApproval({ runId: "run-1", approvalId: "ap-2", decision: "deny" });
   assert.equal(await control.cancel("run-1"), true);
   assert.deepEqual(studio.effects.approvals, ["ap-1:allow", "ap-2:deny"]);
@@ -325,7 +433,11 @@ test("a Mac paired by setup code finds, follows and controls another Mac's work,
   // Continue the chat: the turn runs on B and its reply appears here.
   await control.send("Ship the release");
   assert.deepEqual(studio.turns, [{ chatId: "chat-notes", text: "Ship the release" }]);
-  await until(() => session.getSnapshot().run.runId === "run-turn-1", undefined, "the new turn's run");
+  await until(
+    () => session.getSnapshot().run.runId === "run-turn-1",
+    undefined,
+    "the new turn's run",
+  );
   studio.reply("chat-notes", "Released.");
   studio.runs.publish("run-turn-1", "chat:done", {});
   await until(
@@ -341,11 +453,16 @@ test("a Mac paired by setup code finds, follows and controls another Mac's work,
   assert.equal(studio.chats.get(started.chatId)?.workspaceId, "ws-site");
   assert.deepEqual(studio.turns.slice(-1)[0], { chatId: started.chatId, text: "Plan the launch" });
   await until(
-    () => supervisor.feedSnapshot(paired.id)?.summaries.some((row) => row.id === started.chatId) === true,
+    () =>
+      supervisor.feedSnapshot(paired.id)?.summaries.some((row) => row.id === started.chatId) ===
+      true,
     undefined,
     "the new chat in the feed",
   );
-  assert.ok((await sidebar()).chats.some((chat) => chat.chatId === started.chatId), "the new chat is in the sidebar");
+  assert.ok(
+    (await sidebar()).chats.some((chat) => chat.chatId === started.chatId),
+    "the new chat is in the sidebar",
+  );
   const botChat = await starter.openBotChat("bot-reviewer");
   assert.equal(studio.chats.get(botChat)?.botId, "bot-reviewer");
   assert.equal(await starter.openBotChat("bot-reviewer"), botChat, "the Bot's chat is reused");
@@ -361,7 +478,11 @@ test("a Mac paired by setup code finds, follows and controls another Mac's work,
     host.received
       .slice(receivedBefore)
       .find((entry) => entry.line.startsWith("GET /api/aiden/v1/host/events"));
-  await until(() => status()?.kind === "connected" && feedResume() !== undefined, timers, "the reconnect");
+  await until(
+    () => status()?.kind === "connected" && feedResume() !== undefined,
+    timers,
+    "the reconnect",
+  );
   const resume = feedResume();
   assert.equal(
     resume?.headers["last-event-id"],
@@ -369,22 +490,32 @@ test("a Mac paired by setup code finds, follows and controls another Mac's work,
     "the feed resumes from where it was",
   );
   // B has nothing new to send, and its heartbeat is an hour away: the resumed feed is live at once.
-  await until(() => status()?.kind === "connected" && supervisor.feedSnapshot(paired.id)?.stale === false, undefined, "the live feed");
-  assert.ok((await sidebar()).chats.every((chat) => !chat.stale), "B's rows are current again");
+  await until(
+    () => status()?.kind === "connected" && supervisor.feedSnapshot(paired.id)?.stale === false,
+    undefined,
+    "the live feed",
+  );
+  assert.ok(
+    (await sidebar()).chats.every((chat) => !chat.stale),
+    "B's rows are current again",
+  );
 
   // B renews its key: the pin no longer matches and this Mac blocks rather than trusting it.
   await host.rotateLeaf();
-  await until(
-    () => status()?.kind === "blocked",
-    timers,
-    "the identity block",
-  );
+  await until(() => status()?.kind === "blocked", timers, "the identity block");
   assert.deepEqual(status(), { kind: "blocked", reason: "identity_changed" });
   const blocked = await sidebar();
   assert.equal(blocked.host.availability, "blocked");
-  assert.ok(blocked.chats.every((chat) => chat.stale), "B's rows stay visible but stale");
+  assert.ok(
+    blocked.chats.every((chat) => chat.stale),
+    "B's rows stay visible but stale",
+  );
   await supervisor.reconnect(paired.id);
-  assert.deepEqual(status(), { kind: "blocked", reason: "identity_changed" }, "a plain reconnect cannot clear it");
+  assert.deepEqual(
+    status(),
+    { kind: "blocked", reason: "identity_changed" },
+    "a plain reconnect cannot clear it",
+  );
 
   // Pairing again with a fresh setup code replaces the trust and supervision resumes.
   await registry.pairWithSetupCode(
@@ -394,7 +525,11 @@ test("a Mac paired by setup code finds, follows and controls another Mac's work,
   );
   await supervisor.reconnect(paired.id, { repaired: true });
   await until(() => status()?.kind === "connected", timers, "the repaired connection");
-  await until(() => supervisor.feedSnapshot(paired.id)?.stale === false, undefined, "the fresh feed");
+  await until(
+    () => supervisor.feedSnapshot(paired.id)?.stale === false,
+    undefined,
+    "the fresh feed",
+  );
   const repaired = await sidebar();
   assert.equal(repaired.host.availability, "online");
   assert.ok(repaired.chats.some((chat) => chat.chatId === "chat-notes" && !chat.stale));

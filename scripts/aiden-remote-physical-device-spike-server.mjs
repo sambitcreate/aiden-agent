@@ -29,23 +29,38 @@ const phase7Requested = process.argv.includes("--phase7");
 const phase6Requested = process.argv.includes("--phase6") || phase7Requested;
 const supportedModes = new Set(["original", "renewed", "rotated", "wrong-host", "expired"]);
 const requestedPort = requestedPortValue === undefined ? 0 : Number(requestedPortValue);
-const hasCompletePublicTransport = listenHttpRequested && systemTrustRequested &&
-  requestedPublicEndpoint !== undefined && requestedPublicSpkiSha256 !== undefined;
-const hasAnyPublicTransport = listenHttpRequested || systemTrustRequested ||
-  requestedPublicEndpoint !== undefined || requestedPublicSpkiSha256 !== undefined;
+const hasCompletePublicTransport =
+  listenHttpRequested &&
+  systemTrustRequested &&
+  requestedPublicEndpoint !== undefined &&
+  requestedPublicSpkiSha256 !== undefined;
+const hasAnyPublicTransport =
+  listenHttpRequested ||
+  systemTrustRequested ||
+  requestedPublicEndpoint !== undefined ||
+  requestedPublicSpkiSha256 !== undefined;
 
 let publicEndpoint;
 if (requestedPublicEndpoint !== undefined) {
   try {
     const parsed = new URL(requestedPublicEndpoint);
-    if (parsed.href !== requestedPublicEndpoint || parsed.protocol !== "https:" ||
-        parsed.username || parsed.password || parsed.port ||
-        parsed.pathname !== "/api/aiden/v1" || parsed.search || parsed.hash) {
+    if (
+      parsed.href !== requestedPublicEndpoint ||
+      parsed.protocol !== "https:" ||
+      parsed.username ||
+      parsed.password ||
+      parsed.port ||
+      parsed.pathname !== "/api/aiden/v1" ||
+      parsed.search ||
+      parsed.hash
+    ) {
       throw new Error("invalid");
     }
     publicEndpoint = parsed.href;
   } catch {
-    throw new Error("The public endpoint must be a canonical HTTPS Aiden API endpoint on port 443.");
+    throw new Error(
+      "The public endpoint must be a canonical HTTPS Aiden API endpoint on port 443.",
+    );
   }
 }
 let publicSpkiSha256;
@@ -59,10 +74,16 @@ if (requestedPublicSpkiSha256 !== undefined) {
   publicSpkiSha256 = requestedPublicSpkiSha256;
 }
 
-if (!advertisedHost || !/^[A-Za-z0-9.-]+$/.test(advertisedHost) || !supportedModes.has(requestedMode) ||
-    !Number.isSafeInteger(requestedPort) || requestedPort < 0 || requestedPort > 65_535 ||
-    (requestedRepairSecretFile !== undefined && (!persistAuthRequested || !phase6Requested)) ||
-    (hasAnyPublicTransport && (!hasCompletePublicTransport || !phase6Requested))) {
+if (
+  !advertisedHost ||
+  !/^[A-Za-z0-9.-]+$/.test(advertisedHost) ||
+  !supportedModes.has(requestedMode) ||
+  !Number.isSafeInteger(requestedPort) ||
+  requestedPort < 0 ||
+  requestedPort > 65_535 ||
+  (requestedRepairSecretFile !== undefined && (!persistAuthRequested || !phase6Requested)) ||
+  (hasAnyPublicTransport && (!hasCompletePublicTransport || !phase6Requested))
+) {
   throw new Error(
     "Usage: node scripts/aiden-remote-physical-device-spike-server.mjs --host <LAN IP or hostname> " +
       "[--identity-dir <private temporary directory> --initialize] " +
@@ -110,8 +131,10 @@ async function validityArguments(days) {
   const dayMs = 24 * 60 * 60 * 1000;
   const now = Date.now();
   return [
-    "-not_before", opensslTime(new Date(now - 2 * dayMs)),
-    "-not_after", opensslTime(new Date(now - dayMs)),
+    "-not_before",
+    opensslTime(new Date(now - 2 * dayMs)),
+    "-not_after",
+    opensslTime(new Date(now - dayMs)),
   ];
 }
 
@@ -120,19 +143,39 @@ async function issueCertificate(mode, keyPath, alternativeName, days) {
   const certificatePath = path.join(identityDirectory, `${mode}-certificate.pem`);
   const requestPath = path.join(identityDirectory, `${mode}-request.pem`);
   await execFileAsync("openssl", [
-    "req", "-new", "-key", keyPath,
-    "-subj", `/CN=Aiden Phase 0 Physical Device Spike/OU=${mode}`,
-    "-addext", `subjectAltName=${alternativeName}`,
-    "-addext", "basicConstraints=critical,CA:FALSE",
-    "-addext", "keyUsage=critical,digitalSignature",
-    "-addext", "extendedKeyUsage=serverAuth",
-    "-out", requestPath,
+    "req",
+    "-new",
+    "-key",
+    keyPath,
+    "-subj",
+    `/CN=Aiden Phase 0 Physical Device Spike/OU=${mode}`,
+    "-addext",
+    `subjectAltName=${alternativeName}`,
+    "-addext",
+    "basicConstraints=critical,CA:FALSE",
+    "-addext",
+    "keyUsage=critical,digitalSignature",
+    "-addext",
+    "extendedKeyUsage=serverAuth",
+    "-out",
+    requestPath,
   ]);
   await execFileAsync("openssl", [
-    "x509", "-req", "-in", requestPath,
-    "-CA", caCertificatePath, "-CAkey", caKeyPath, "-CAcreateserial",
-    ...(await validityArguments(days)), "-sha256", "-copy_extensions", "copy",
-    "-out", certificatePath,
+    "x509",
+    "-req",
+    "-in",
+    requestPath,
+    "-CA",
+    caCertificatePath,
+    "-CAkey",
+    caKeyPath,
+    "-CAcreateserial",
+    ...(await validityArguments(days)),
+    "-sha256",
+    "-copy_extensions",
+    "copy",
+    "-out",
+    certificatePath,
   ]);
 }
 
@@ -145,31 +188,60 @@ async function initializeIdentity() {
     if (error?.code !== "ENOENT") throw error;
   }
   await execFileAsync("openssl", [
-    "ecparam", "-name", "prime256v1", "-genkey", "-noout", "-out", stableKeyPath,
+    "ecparam",
+    "-name",
+    "prime256v1",
+    "-genkey",
+    "-noout",
+    "-out",
+    stableKeyPath,
   ]);
   await execFileAsync("openssl", [
-    "ecparam", "-name", "prime256v1", "-genkey", "-noout", "-out", rotatedKeyPath,
+    "ecparam",
+    "-name",
+    "prime256v1",
+    "-genkey",
+    "-noout",
+    "-out",
+    rotatedKeyPath,
   ]);
   await execFileAsync("openssl", [
-    "ecparam", "-name", "prime256v1", "-genkey", "-noout", "-out", caKeyPath,
+    "ecparam",
+    "-name",
+    "prime256v1",
+    "-genkey",
+    "-noout",
+    "-out",
+    caKeyPath,
   ]);
   await execFileAsync("openssl", [
-    "req", "-x509", "-new", "-key", caKeyPath, "-sha256", "-days", "3650",
-    "-subj", "/CN=Aiden Phase 0 Physical Local CA",
-    "-addext", "basicConstraints=critical,CA:TRUE,pathlen:0",
-    "-addext", "keyUsage=critical,keyCertSign,cRLSign",
-    "-out", caCertificatePath,
+    "req",
+    "-x509",
+    "-new",
+    "-key",
+    caKeyPath,
+    "-sha256",
+    "-days",
+    "3650",
+    "-subj",
+    "/CN=Aiden Phase 0 Physical Local CA",
+    "-addext",
+    "basicConstraints=critical,CA:TRUE,pathlen:0",
+    "-addext",
+    "keyUsage=critical,keyCertSign,cRLSign",
+    "-out",
+    caCertificatePath,
   ]);
   await issueCertificate("original", stableKeyPath, subjectAlternativeName, 1);
   await issueCertificate("renewed", stableKeyPath, subjectAlternativeName, 2);
   await issueCertificate("rotated", rotatedKeyPath, subjectAlternativeName, 1);
   await issueCertificate("wrong-host", stableKeyPath, "DNS:wrong-host.aiden.invalid", 1);
   await issueCertificate("expired", stableKeyPath, subjectAlternativeName, 0);
-  await writeFile(
-    manifestPath,
-    `${JSON.stringify({ version: 1, advertisedHost }, null, 2)}\n`,
-    { encoding: "utf8", mode: 0o600, flag: "wx" },
-  );
+  await writeFile(manifestPath, `${JSON.stringify({ version: 1, advertisedHost }, null, 2)}\n`, {
+    encoding: "utf8",
+    mode: 0o600,
+    flag: "wx",
+  });
 }
 
 if (shouldInitialize) await initializeIdentity();
@@ -191,26 +263,25 @@ const fingerprint = `sha256/${createHash("sha256")
   .digest("base64")}`;
 const pairingSecret = randomBytes(32).toString("base64url");
 const deviceCredential = randomBytes(32).toString("base64url");
-const repairSecretPath = requestedRepairSecretFile === undefined
-  ? undefined
-  : path.resolve(requestedRepairSecretFile);
+const repairSecretPath =
+  requestedRepairSecretFile === undefined ? undefined : path.resolve(requestedRepairSecretFile);
 if (repairSecretPath !== undefined) {
   const metadata = await stat(repairSecretPath);
   if (!metadata.isFile() || (metadata.mode & 0o077) !== 0) {
     throw new Error("The repair pairing secret file must be a regular owner-only file.");
   }
 }
-const repairPairingSecret = repairSecretPath === undefined
-  ? undefined
-  : (await readFile(repairSecretPath, "utf8")).trim();
+const repairPairingSecret =
+  repairSecretPath === undefined ? undefined : (await readFile(repairSecretPath, "utf8")).trim();
 if (repairPairingSecret !== undefined && !/^[A-Za-z0-9_-]{43}$/u.test(repairPairingSecret)) {
   throw new Error("The repair pairing secret must be exactly 32 bytes of base64url data.");
 }
-const repairedDeviceCredential = repairPairingSecret === undefined
-  ? undefined
-  : randomBytes(32).toString("base64url");
+const repairedDeviceCredential =
+  repairPairingSecret === undefined ? undefined : randomBytes(32).toString("base64url");
 const instanceId = phase6Requested
-  ? phase7Requested ? "phase7-physical-device-spike" : "phase6-physical-device-spike"
+  ? phase7Requested
+    ? "phase7-physical-device-spike"
+    : "phase6-physical-device-spike"
   : "phase0-physical-device-spike";
 let pairingConsumed = false;
 let repairPairingConsumed = false;
@@ -219,19 +290,23 @@ const revokedCredentialDigests = new Set();
 if (persistAuthRequested) {
   try {
     const persistedAuth = JSON.parse(await readFile(authStatePath, "utf8"));
-    if (Object.keys(persistedAuth).sort().join(",") !==
-          "credentialSha256,revokedCredentialSha256,version" ||
-        persistedAuth.version !== 2 ||
-        typeof persistedAuth.credentialSha256 !== "string" ||
-        !/^[a-f0-9]{64}$/u.test(persistedAuth.credentialSha256) ||
-        !Array.isArray(persistedAuth.revokedCredentialSha256) ||
-        persistedAuth.revokedCredentialSha256.length > 16 ||
-        persistedAuth.revokedCredentialSha256.some((value) =>
-          typeof value !== "string" || !/^[a-f0-9]{64}$/u.test(value) ||
-          value === persistedAuth.credentialSha256
-        ) ||
-        new Set(persistedAuth.revokedCredentialSha256).size !==
-          persistedAuth.revokedCredentialSha256.length) {
+    if (
+      Object.keys(persistedAuth).sort().join(",") !==
+        "credentialSha256,revokedCredentialSha256,version" ||
+      persistedAuth.version !== 2 ||
+      typeof persistedAuth.credentialSha256 !== "string" ||
+      !/^[a-f0-9]{64}$/u.test(persistedAuth.credentialSha256) ||
+      !Array.isArray(persistedAuth.revokedCredentialSha256) ||
+      persistedAuth.revokedCredentialSha256.length > 16 ||
+      persistedAuth.revokedCredentialSha256.some(
+        (value) =>
+          typeof value !== "string" ||
+          !/^[a-f0-9]{64}$/u.test(value) ||
+          value === persistedAuth.credentialSha256,
+      ) ||
+      new Set(persistedAuth.revokedCredentialSha256).size !==
+        persistedAuth.revokedCredentialSha256.length
+    ) {
       throw new Error("The persisted physical auth state is invalid.");
     }
     pairingConsumed = true;
@@ -292,7 +367,9 @@ function sendSSE(response, events) {
     "aiden-protocol-version": "1",
   });
   for (const event of events) {
-    response.write(`id: ${event.sequence}\nevent: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`);
+    response.write(
+      `id: ${event.sequence}\nevent: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`,
+    );
   }
   response.end();
 }
@@ -333,11 +410,15 @@ async function persistCredentialDigest(credentialSha256, replaceExisting) {
   if (replaceExisting && authorizedCredentialDigest !== undefined) {
     revokedCredentialDigests.add(authorizedCredentialDigest);
   }
-  const value = `${JSON.stringify({
-    version: 2,
-    credentialSha256,
-    revokedCredentialSha256: [...revokedCredentialDigests],
-  }, null, 2)}\n`;
+  const value = `${JSON.stringify(
+    {
+      version: 2,
+      credentialSha256,
+      revokedCredentialSha256: [...revokedCredentialDigests],
+    },
+    null,
+    2,
+  )}\n`;
   if (!replaceExisting) {
     await writeFile(authStatePath, value, { encoding: "utf8", mode: 0o600, flag: "wx" });
     return;
@@ -363,22 +444,38 @@ async function readJSON(request, maximumBytes = 1_048_576) {
 
 const attachmentIdPattern = /^att_[A-Za-z0-9_-]{43}$/u;
 const allowedTextMimeTypes = new Set([
-  "text/plain", "text/markdown", "text/csv", "application/json", "application/xml",
-  "application/yaml", "application/x-yaml", "application/javascript", "application/typescript",
+  "text/plain",
+  "text/markdown",
+  "text/csv",
+  "application/json",
+  "application/xml",
+  "application/yaml",
+  "application/x-yaml",
+  "application/javascript",
+  "application/typescript",
 ]);
 
 function validAttachmentName(value) {
-  return typeof value === "string" && value.length > 0 && [...value].length <= 255 &&
+  return (
+    typeof value === "string" &&
+    value.length > 0 &&
+    [...value].length <= 255 &&
     [...value].every((character) => {
       const scalar = character.codePointAt(0);
       return scalar > 0x1f && scalar !== 0x7f && character !== "/" && character !== "\\";
-    });
+    })
+  );
 }
 
 function attachmentReference(body) {
-  if (!validAttachmentName(body.name) || body.kind !== "text" ||
-      typeof body.mimeType !== "string" || !allowedTextMimeTypes.has(body.mimeType) ||
-      typeof body.text !== "string" || [...body.text].length > 100_000) {
+  if (
+    !validAttachmentName(body.name) ||
+    body.kind !== "text" ||
+    typeof body.mimeType !== "string" ||
+    !allowedTextMimeTypes.has(body.mimeType) ||
+    typeof body.text !== "string" ||
+    [...body.text].length > 100_000
+  ) {
     return undefined;
   }
   const size = Buffer.byteLength(body.text, "utf8");
@@ -414,13 +511,14 @@ async function handlePhase6Request(request, response, endpoint, advertisedFinger
   if (request.method === "POST" && pathName === "/api/aiden/v1/pairing/exchange") {
     const body = await readJSON(request);
     const isInitialPairing = !pairingConsumed && body.secret === pairingSecret;
-    const isRepairPairing = repairPairingSecret !== undefined &&
+    const isRepairPairing =
+      repairPairingSecret !== undefined &&
       repairedDeviceCredential !== undefined &&
       !repairPairingConsumed &&
       pairingConsumed &&
       body.secret === repairPairingSecret &&
-      await pathExists(repairWindowPath) &&
-      await isPersistedAuthRevoked();
+      (await pathExists(repairWindowPath)) &&
+      (await isPersistedAuthRevoked());
     if (!isInitialPairing && !isRepairPairing) {
       sendError(response, 401, "pairing_closed", "Pairing is unavailable.");
       return;
@@ -444,19 +542,26 @@ async function handlePhase6Request(request, response, endpoint, advertisedFinger
       instanceId,
       deviceId: isRepairPairing ? "physical-iphone-13-pro-repaired" : "physical-iphone-13-pro",
       credential: issuedCredential,
-      capabilities: ["server:read", "workspace:read", "workspace:manage", ...(phase7Requested ? chatCapabilities : [])],
+      capabilities: [
+        "server:read",
+        "workspace:read",
+        "workspace:manage",
+        ...(phase7Requested ? chatCapabilities : []),
+      ],
       endpoint,
       serverSpkiSha256: advertisedFingerprint,
     });
     return;
   }
   const authorization = request.headers.authorization;
-  const suppliedCredential = typeof authorization === "string" && authorization.startsWith("Bearer ")
-    ? authorization.slice("Bearer ".length)
-    : undefined;
-  const suppliedCredentialDigest = suppliedCredential === undefined
-    ? undefined
-    : createHash("sha256").update(suppliedCredential).digest("hex");
+  const suppliedCredential =
+    typeof authorization === "string" && authorization.startsWith("Bearer ")
+      ? authorization.slice("Bearer ".length)
+      : undefined;
+  const suppliedCredentialDigest =
+    suppliedCredential === undefined
+      ? undefined
+      : createHash("sha256").update(suppliedCredential).digest("hex");
   if (request.headers["aiden-protocol-version"] !== "1") {
     sendError(response, 400, "invalid_request", "Aiden-Protocol-Version must be 1.");
     return;
@@ -465,8 +570,10 @@ async function handlePhase6Request(request, response, endpoint, advertisedFinger
     sendError(response, 401, "authentication_required", "Pair this device again.");
     return;
   }
-  if (revokedCredentialDigests.has(suppliedCredentialDigest) ||
-      (suppliedCredentialDigest === authorizedCredentialDigest && await isPersistedAuthRevoked())) {
+  if (
+    revokedCredentialDigests.has(suppliedCredentialDigest) ||
+    (suppliedCredentialDigest === authorizedCredentialDigest && (await isPersistedAuthRevoked()))
+  ) {
     sendError(response, 403, "credential_revoked", "Pair this device again.");
     return;
   }
@@ -480,7 +587,12 @@ async function handlePhase6Request(request, response, endpoint, advertisedFinger
       instanceId,
       name: "Aiden Physical Device Spike",
       appVersion: "1.0.0",
-      capabilities: ["server:read", "workspace:read", "workspace:manage", ...(phase7Requested ? chatCapabilities : [])],
+      capabilities: [
+        "server:read",
+        "workspace:read",
+        "workspace:manage",
+        ...(phase7Requested ? chatCapabilities : []),
+      ],
       connectionMode: systemTrustRequested ? "tailscale" : "lan",
       serverTime: new Date().toISOString(),
     });
@@ -497,8 +609,11 @@ async function handlePhase6Request(request, response, endpoint, advertisedFinger
       created = workspace(body.name, false);
     } else if (body.mode === "scratch") {
       created = workspace("Scratch Workspace", true);
-    } else if (body.mode === "selected-folder" &&
-               body.selection === workspaceSelection && !selectionConsumed) {
+    } else if (
+      body.mode === "selected-folder" &&
+      body.selection === workspaceSelection &&
+      !selectionConsumed
+    ) {
       selectionConsumed = true;
       created = workspace(body.name ?? "Approved Project", true);
     } else {
@@ -511,12 +626,14 @@ async function handlePhase6Request(request, response, endpoint, advertisedFinger
   }
   if (request.method === "GET" && pathName === "/api/aiden/v1/workspace-browser/roots") {
     sendJSON(response, 200, {
-      roots: [{
-        id: "root-projects",
-        label: "Projects",
-        location: workspaceLocation,
-        policyRevision: "policy-1",
-      }],
+      roots: [
+        {
+          id: "root-projects",
+          label: "Projects",
+          location: workspaceLocation,
+          policyRevision: "policy-1",
+        },
+      ],
     });
     return;
   }
@@ -549,7 +666,9 @@ async function handlePhase6Request(request, response, endpoint, advertisedFinger
   if (phase7Requested && request.method === "GET" && pathName === "/api/aiden/v1/chats") {
     const workspaceId = url.searchParams.get("workspaceId");
     sendJSON(response, 200, {
-      chats: [...chats.values()].filter((candidate) => !workspaceId || candidate.workspaceId === workspaceId),
+      chats: [...chats.values()].filter(
+        (candidate) => !workspaceId || candidate.workspaceId === workspaceId,
+      ),
     });
     return;
   }
@@ -566,16 +685,20 @@ async function handlePhase6Request(request, response, endpoint, advertisedFinger
   }
   if (phase7Requested && request.method === "GET" && pathName === "/api/aiden/v1/models") {
     sendJSON(response, 200, {
-      providers: [{
-        id: "openai",
-        label: "OpenAI",
-        models: [{ id: "gpt-5.6", label: "GPT-5.6", thinkingLevels: ["high", "max"] }],
-      }],
+      providers: [
+        {
+          id: "openai",
+          label: "OpenAI",
+          models: [{ id: "gpt-5.6", label: "GPT-5.6", thinkingLevels: ["high", "max"] }],
+        },
+      ],
       defaults: { providerId: "openai", modelId: "gpt-5.6" },
     });
     return;
   }
-  const attachmentCollectionMatch = pathName.match(/^\/api\/aiden\/v1\/chats\/([^/]+)\/attachments$/u);
+  const attachmentCollectionMatch = pathName.match(
+    /^\/api\/aiden\/v1\/chats\/([^/]+)\/attachments$/u,
+  );
   if (phase7Requested && request.method === "POST" && attachmentCollectionMatch) {
     const existing = chats.get(attachmentCollectionMatch[1]);
     if (!existing) {
@@ -596,7 +719,7 @@ async function handlePhase6Request(request, response, endpoint, advertisedFinger
     /^\/api\/aiden\/v1\/chats\/([^/]+)\/attachments\/(att_[A-Za-z0-9_-]{43})$/u,
   );
   if (phase7Requested && request.method === "DELETE" && attachmentItemMatch) {
-    const [,, chatId, attachmentId] = attachmentItemMatch;
+    const [, , chatId, attachmentId] = attachmentItemMatch;
     const record = attachments.get(attachmentId);
     if (record?.chatId === chatId) attachments.delete(attachmentId);
     response.writeHead(204, { "cache-control": "no-store" }).end();
@@ -644,19 +767,34 @@ async function handlePhase6Request(request, response, endpoint, advertisedFinger
     }
     const body = await readJSON(request);
     const requestedAttachmentIds = body.attachmentIds === undefined ? [] : body.attachmentIds;
-    const validAttachmentIds = Array.isArray(requestedAttachmentIds) &&
+    const validAttachmentIds =
+      Array.isArray(requestedAttachmentIds) &&
       requestedAttachmentIds.length <= 10 &&
       new Set(requestedAttachmentIds).size === requestedAttachmentIds.length &&
       requestedAttachmentIds.every((id) => typeof id === "string" && attachmentIdPattern.test(id));
-    if (!validAttachmentIds || typeof body.text !== "string" ||
-        (body.text.trim().length === 0 && requestedAttachmentIds.length === 0)) {
+    if (
+      !validAttachmentIds ||
+      typeof body.text !== "string" ||
+      (body.text.trim().length === 0 && requestedAttachmentIds.length === 0)
+    ) {
       sendError(response, 400, "invalid_request", "Text or attachments are required.");
       return;
     }
     const attachmentRecords = requestedAttachmentIds.map((id) => attachments.get(id));
-    if (attachmentRecords.some((record) => !record || record.chatId !== existing.id ||
-        Date.parse(record.reference.expiresAt) <= Date.now())) {
-      sendError(response, 409, "handle_invalid", "An attachment is invalid, expired, or already used.");
+    if (
+      attachmentRecords.some(
+        (record) =>
+          !record ||
+          record.chatId !== existing.id ||
+          Date.parse(record.reference.expiresAt) <= Date.now(),
+      )
+    ) {
+      sendError(
+        response,
+        409,
+        "handle_invalid",
+        "An attachment is invalid, expired, or already used.",
+      );
       return;
     }
     const messageAttachments = attachmentRecords.map(({ reference }) => ({
@@ -705,7 +843,13 @@ async function handlePhase6Request(request, response, endpoint, advertisedFinger
       streamId: stream.streamId,
       chatId: stream.chatId,
       turnId: stream.turnId,
-      state: stream.cancelled ? "cancelled" : stream.completed ? "done" : stream.approved ? "running" : stream.state,
+      state: stream.cancelled
+        ? "cancelled"
+        : stream.completed
+          ? "done"
+          : stream.approved
+            ? "running"
+            : stream.state,
       lastSequence: stream.cancelled ? 2 : stream.completed ? 10 : stream.approved ? 10 : 7,
       updatedAt: new Date().toISOString(),
     });
@@ -720,32 +864,49 @@ async function handlePhase6Request(request, response, endpoint, advertisedFinger
     }
     const after = Number(url.searchParams.get("after") ?? request.headers["last-event-id"] ?? 0);
     if (stream.cancelled) {
-      sendSSE(response, [
-        streamEvent(stream.streamId, 1, "status", false, { state: "running" }),
-        streamEvent(stream.streamId, 2, "cancelled", true, { source: "device" }),
-      ].filter((event) => event.sequence > after));
+      sendSSE(
+        response,
+        [
+          streamEvent(stream.streamId, 1, "status", false, { state: "running" }),
+          streamEvent(stream.streamId, 2, "cancelled", true, { source: "device" }),
+        ].filter((event) => event.sequence > after),
+      );
       return;
     }
     if (after < 2) {
-      sendSSE(response, [
-        streamEvent(stream.streamId, 1, "status", false, { state: "running" }),
-        streamEvent(stream.streamId, 2, "text_delta", false, { text: "Hello " }),
-      ].filter((event) => event.sequence > after));
+      sendSSE(
+        response,
+        [
+          streamEvent(stream.streamId, 1, "status", false, { state: "running" }),
+          streamEvent(stream.streamId, 2, "text_delta", false, { text: "Hello " }),
+        ].filter((event) => event.sequence > after),
+      );
       return;
     }
     if (!stream.approved) {
       stream.state = "waiting_for_approval";
-      sendSSE(response, [
-        streamEvent(stream.streamId, 3, "reasoning_delta", false, { text: "Checking the workspace." }),
-        streamEvent(stream.streamId, 4, "tool_started", false, { toolId: "tool-1", name: "workspace_read" }),
-        streamEvent(stream.streamId, 5, "tool_finished", false, { toolId: "tool-1", status: "succeeded" }),
-        streamEvent(stream.streamId, 6, "timeline", false, { label: "Reviewed workspace" }),
-        streamEvent(stream.streamId, 7, "approval_required", false, {
-          approvalId: "approval-1",
-          summary: "Allow Aiden to finish this physical-device proof?",
-          expiresAt: new Date(Date.now() + 60_000).toISOString(),
-        }),
-      ].filter((event) => event.sequence > after));
+      sendSSE(
+        response,
+        [
+          streamEvent(stream.streamId, 3, "reasoning_delta", false, {
+            text: "Checking the workspace.",
+          }),
+          streamEvent(stream.streamId, 4, "tool_started", false, {
+            toolId: "tool-1",
+            name: "workspace_read",
+          }),
+          streamEvent(stream.streamId, 5, "tool_finished", false, {
+            toolId: "tool-1",
+            status: "succeeded",
+          }),
+          streamEvent(stream.streamId, 6, "timeline", false, { label: "Reviewed workspace" }),
+          streamEvent(stream.streamId, 7, "approval_required", false, {
+            approvalId: "approval-1",
+            summary: "Allow Aiden to finish this physical-device proof?",
+            expiresAt: new Date(Date.now() + 60_000).toISOString(),
+          }),
+        ].filter((event) => event.sequence > after),
+      );
       return;
     }
     const existing = chats.get(stream.chatId);
@@ -761,11 +922,14 @@ async function handlePhase6Request(request, response, endpoint, advertisedFinger
       existing.revision = `${existing.revision}-done`;
       stream.completed = true;
     }
-    sendSSE(response, [
-      streamEvent(stream.streamId, 8, "status", false, { state: "running" }),
-      streamEvent(stream.streamId, 9, "text_delta", false, { text: "from Aiden." }),
-      streamEvent(stream.streamId, 10, "done", true, { messageId: existing.messages.at(-1).id }),
-    ].filter((event) => event.sequence > after));
+    sendSSE(
+      response,
+      [
+        streamEvent(stream.streamId, 8, "status", false, { state: "running" }),
+        streamEvent(stream.streamId, 9, "text_delta", false, { text: "from Aiden." }),
+        streamEvent(stream.streamId, 10, "done", true, { messageId: existing.messages.at(-1).id }),
+      ].filter((event) => event.sequence > after),
+    );
     return;
   }
   const cancelMatch = pathName.match(/^\/api\/aiden\/v1\/streams\/([^/]+)\/cancel$/u);
@@ -786,9 +950,15 @@ async function handlePhase6Request(request, response, endpoint, advertisedFinger
     });
     return;
   }
-  if (phase7Requested && request.method === "POST" && pathName === "/api/aiden/v1/approvals/approval-1/respond") {
+  if (
+    phase7Requested &&
+    request.method === "POST" &&
+    pathName === "/api/aiden/v1/approvals/approval-1/respond"
+  ) {
     const body = await readJSON(request);
-    const stream = [...streams.values()].find((candidate) => candidate.state === "waiting_for_approval");
+    const stream = [...streams.values()].find(
+      (candidate) => candidate.state === "waiting_for_approval",
+    );
     if (!stream || !["allow", "deny"].includes(body.decision)) {
       sendError(response, 409, "approval_expired", "Approval is unavailable.");
       return;
@@ -858,13 +1028,17 @@ const requestHandler = async (request, response) => {
 };
 const server = listenHttpRequested
   ? http.createServer(requestHandler)
-  : https.createServer({ key: privateKey, cert: `${certificate}\n${caCertificate}` }, requestHandler);
+  : https.createServer(
+      { key: privateKey, cert: `${certificate}\n${caCertificate}` },
+      requestHandler,
+    );
 await new Promise((resolve, reject) => {
   server.once("error", reject);
   server.listen(requestedPort, "0.0.0.0", resolve);
 });
 const address = server.address();
-if (!address || typeof address === "string") throw new Error("Physical-device spike failed to bind TCP.");
+if (!address || typeof address === "string")
+  throw new Error("Physical-device spike failed to bind TCP.");
 const pairingBootstrap = {
   protocolVersion: 1,
   instanceId,

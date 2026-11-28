@@ -177,7 +177,11 @@ function mergeRanges(ranges: MatchRange[]): MatchRange[] {
  * A row's match: its shown title first (highlighted), then its keywords
  * (matched, never highlighted), then every typed word somewhere in either.
  */
-export function matchItem(title: string, keywords: readonly string[], query: string): TextMatch | null {
+export function matchItem(
+  title: string,
+  keywords: readonly string[],
+  query: string,
+): TextMatch | null {
   const titleMatch = matchText(title, query);
   if (titleMatch && titleMatch.score >= INITIALS) return titleMatch;
   const needle = foldQuery(query);

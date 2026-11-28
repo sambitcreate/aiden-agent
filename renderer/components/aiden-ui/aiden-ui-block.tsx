@@ -1,6 +1,12 @@
 import * as React from "react";
 import { Copy, X } from "lucide-react";
-import { AIDEN_UI_LIMITS, AIDEN_UI_RENDER_BUDGET, type AidenUiActionV1, type AidenUiNodeV1, type ChatUiVisualV1 } from "../../shared/aiden-ui/types";
+import {
+  AIDEN_UI_LIMITS,
+  AIDEN_UI_RENDER_BUDGET,
+  type AidenUiActionV1,
+  type AidenUiNodeV1,
+  type ChatUiVisualV1,
+} from "../../shared/aiden-ui/types";
 import { evaluate, truthy, type AidenUiScope } from "../../shared/aiden-ui/evaluate";
 import { ownEntry, ownField } from "../../shared/aiden-ui/own";
 import { parseAidenUiData } from "../../shared/aiden-ui/props";
@@ -32,17 +38,24 @@ function initialState(visual: ChatUiVisualV1): Record<string, unknown> {
   return { ...(visual.state ?? {}) };
 }
 
-function renderNodes(nodes: readonly AidenUiNodeV1[] | undefined, ctx: AidenUiRenderContext): React.ReactNode {
+function renderNodes(
+  nodes: readonly AidenUiNodeV1[] | undefined,
+  ctx: AidenUiRenderContext,
+): React.ReactNode {
   if (!nodes?.length) return null;
   return nodes.map((node) => renderNode(node, ctx, node.k));
 }
-
 
 function renderNode(node: AidenUiNodeV1, ctx: AidenUiRenderContext, key: string): React.ReactNode {
   if (ctx.budget.nodes <= 0) return null;
   ctx.budget.nodes -= 1;
   if (node.t === "#text") return <React.Fragment key={key}>{node.s}</React.Fragment>;
-  if (node.t === "#expr") return <React.Fragment key={key}>{node.e ? asString(evaluate(node.e, ctx.scope)) : null}</React.Fragment>;
+  if (node.t === "#expr")
+    return (
+      <React.Fragment key={key}>
+        {node.e ? asString(evaluate(node.e, ctx.scope)) : null}
+      </React.Fragment>
+    );
   if (node.t === "If") {
     const test = node.p?.test;
     const show = test && "op" in test ? truthy(evaluate(test, ctx.scope)) : false;
@@ -60,7 +73,10 @@ function renderNode(node: AidenUiNodeV1, ctx: AidenUiRenderContext, key: string)
       ctx.budget.iterations -= 1;
       items.push(
         <React.Fragment key={index}>
-          {ctx.renderChildren(node.c, { ...ctx.scope, vars: { ...ctx.scope.vars, [name]: item, [`${name}Index`]: index } })}
+          {ctx.renderChildren(node.c, {
+            ...ctx.scope,
+            vars: { ...ctx.scope.vars, [name]: item, [`${name}Index`]: index },
+          })}
         </React.Fragment>,
       );
     }
@@ -111,8 +127,15 @@ export function AidenUiBlock(props: AidenUiBlockProps) {
 
 function AidenUiFallback({ visual }: { visual: ChatUiVisualV1 }) {
   return (
-    <section role="figure" aria-label={visual.title} data-aiden-ui-failed="" className="aiden-inline-visual min-w-0 p-0 text-primary">
-      <p className="m-0 whitespace-pre-wrap break-words text-small text-secondary">{visual.fallbackText || visual.title}</p>
+    <section
+      role="figure"
+      aria-label={visual.title}
+      data-aiden-ui-failed=""
+      className="aiden-inline-visual min-w-0 p-0 text-primary"
+    >
+      <p className="m-0 whitespace-pre-wrap break-words text-small text-secondary">
+        {visual.fallbackText || visual.title}
+      </p>
     </section>
   );
 }
@@ -129,7 +152,9 @@ function AidenUiVisualBody({
   actions,
 }: AidenUiBlockProps) {
   const { openLink } = useLinkOpener();
-  const [state, setLocalState] = React.useState<Record<string, unknown>>(() => initialState(visual));
+  const [state, setLocalState] = React.useState<Record<string, unknown>>(() =>
+    initialState(visual),
+  );
   const stateRef = React.useRef(state);
   /** True once the user changed something here; saved state then merges instead of replacing. */
   const touchedRef = React.useRef(false);
@@ -203,12 +228,17 @@ function AidenUiVisualBody({
         }
         case "compose": {
           const text = asString(evaluate(action.text, scope)).trim();
-          if (text && text.length <= MAX_GUEST_PROMPT_CHARS) onActionRef.current?.({ kind: "compose", text });
+          if (text && text.length <= MAX_GUEST_PROMPT_CHARS)
+            onActionRef.current?.({ kind: "compose", text });
           return;
         }
         case "run":
           // The host confirms and runs the saved command; the page supplies only values.
-          onActionRef.current?.({ kind: "run", name: action.name, args: action.a.map((arg) => evaluate(arg, scope)) });
+          onActionRef.current?.({
+            kind: "run",
+            name: action.name,
+            args: action.a.map((arg) => evaluate(arg, scope)),
+          });
           return;
         case "open": {
           const url = asString(evaluate(action.url, scope));
@@ -238,7 +268,10 @@ function AidenUiVisualBody({
   );
 
   // A fresh budget per render: nested loops share it rather than multiply.
-  const budget = { iterations: AIDEN_UI_RENDER_BUDGET.iterations, nodes: AIDEN_UI_RENDER_BUDGET.nodes };
+  const budget = {
+    iterations: AIDEN_UI_RENDER_BUDGET.iterations,
+    nodes: AIDEN_UI_RENDER_BUDGET.nodes,
+  };
   const make = (scope: AidenUiScope): AidenUiRenderContext => {
     const context: AidenUiRenderContext = {
       scope,
@@ -248,7 +281,8 @@ function AidenUiVisualBody({
       setState,
       runAction,
       attachmentSource,
-      renderChildren: (nodes, childScope) => renderNodes(nodes, childScope ? make(childScope) : context),
+      renderChildren: (nodes, childScope) =>
+        renderNodes(nodes, childScope ? make(childScope) : context),
     };
     return context;
   };
@@ -265,7 +299,10 @@ function AidenUiVisualBody({
     >
       <TooltipProvider>
         <AidenUiContext.Provider value={ctx}>
-          <div className={cn("flex min-w-0 flex-col gap-3", draft && "opacity-80")} inert={draft || undefined}>
+          <div
+            className={cn("flex min-w-0 flex-col gap-3", draft && "opacity-80")}
+            inert={draft || undefined}
+          >
             {ctx.renderChildren(visual.tree.c)}
           </div>
         </AidenUiContext.Provider>

@@ -1,7 +1,11 @@
 // Test support: an in-memory GitHub that answers Aiden's pull request
 // GraphQL documents the way api.github.com does, and counts what it served.
 
-import { jsonResponse, type RecordedGitHubRequest, type ScriptedResponder } from "./github-test-fetch.js";
+import {
+  jsonResponse,
+  type RecordedGitHubRequest,
+  type ScriptedResponder,
+} from "./github-test-fetch.js";
 
 export interface FakeCheck {
   name: string;
@@ -61,7 +65,9 @@ export class FakeGitHub {
   }
 
   pullRequest(repository: string, number: number): FakePullRequest {
-    const found = this.pullRequests.find((entry) => entry.repository === repository && entry.number === number);
+    const found = this.pullRequests.find(
+      (entry) => entry.repository === repository && entry.number === number,
+    );
     if (!found) throw new Error(`No fake pull request ${repository}#${number}`);
     return found;
   }
@@ -82,10 +88,15 @@ export class FakeGitHub {
     const errors: Array<{ type: string; message: string; path: string[] }> = [];
     for (let index = 0; `o${index}` in variables; index += 1) {
       const alias = `e${index}`;
-      const nameWithOwner = `${String(variables[`o${index}`])}/${String(variables[`n${index}`])}`.toLowerCase();
+      const nameWithOwner =
+        `${String(variables[`o${index}`])}/${String(variables[`n${index}`])}`.toLowerCase();
       if (!this.repositories.has(nameWithOwner)) {
         data[alias] = null;
-        errors.push({ type: "NOT_FOUND", message: `Could not resolve to a Repository with the name '${nameWithOwner}'.`, path: [alias] });
+        errors.push({
+          type: "NOT_FOUND",
+          message: `Could not resolve to a Repository with the name '${nameWithOwner}'.`,
+          path: [alias],
+        });
         continue;
       }
       const repository: Record<string, unknown> = { nameWithOwner };
@@ -94,7 +105,11 @@ export class FakeGitHub {
         const found = inRepository.find((entry) => entry.number === variables[`p${index}`]);
         repository.pullRequest = found ? this.node(found) : null;
         if (!found) {
-          errors.push({ type: "NOT_FOUND", message: "Could not resolve to a PullRequest.", path: [alias, "pullRequest"] });
+          errors.push({
+            type: "NOT_FOUND",
+            message: "Could not resolve to a PullRequest.",
+            path: [alias, "pullRequest"],
+          });
         }
       } else if (`h${index}` in variables) {
         const nodes = inRepository
@@ -173,7 +188,8 @@ export class FakeGitHub {
 function fakeRollupState(checks: FakeCheck[]): string | undefined {
   if (checks.length === 0) return undefined;
   if (checks.some((check) => check.status !== "COMPLETED")) return "PENDING";
-  if (checks.some((check) => check.conclusion === "FAILURE" || check.conclusion === "CANCELLED")) return "FAILURE";
+  if (checks.some((check) => check.conclusion === "FAILURE" || check.conclusion === "CANCELLED"))
+    return "FAILURE";
   if (checks.some((check) => check.conclusion === "SUCCESS")) return "SUCCESS";
   return "PENDING";
 }

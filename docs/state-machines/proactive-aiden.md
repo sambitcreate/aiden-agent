@@ -72,12 +72,12 @@ Statuses: `active`, `paused`, `needs-you`, `done`. Every mutation increments `re
 
 Pure controller over injected `KeepAwakeInput`s, `KeepAwakeBlocker`, `KeepAwakeClock`, and `idleSeconds()`:
 
-| Condition | Blocker state | Timers |
-|---|---|---|
-| `!enabled` or `disposed` | Released immediately | Grace and idle poll cleared (`dispose` also clears `recheckTimer`). |
-| `reasons.length > 0`, idle cap reached (`>= 4 h`) and no exempt reason | Released (`pausedWhileIdle: true`) | Idle poll (`60 s`) keeps running to re-acquire when the person returns. |
-| `reasons.length > 0`, active or exempt (`check-back`, `wake-up`) | Acquired (`holding: true`, `pausedWhileIdle: false`) | Grace cleared; idle poll (`60 s`) active. |
-| `reasons.length === 0` while holding | Kept during `KEEP_AWAKE_GRACE_MS` (`60 s`), then released | Idle poll stopped; grace timer armed once. |
+| Condition                                                              | Blocker state                                             | Timers                                                                  |
+| ---------------------------------------------------------------------- | --------------------------------------------------------- | ----------------------------------------------------------------------- |
+| `!enabled` or `disposed`                                               | Released immediately                                      | Grace and idle poll cleared (`dispose` also clears `recheckTimer`).     |
+| `reasons.length > 0`, idle cap reached (`>= 4 h`) and no exempt reason | Released (`pausedWhileIdle: true`)                        | Idle poll (`60 s`) keeps running to re-acquire when the person returns. |
+| `reasons.length > 0`, active or exempt (`check-back`, `wake-up`)       | Acquired (`holding: true`, `pausedWhileIdle: false`)      | Grace cleared; idle poll (`60 s`) active.                               |
+| `reasons.length === 0` while holding                                   | Kept during `KEEP_AWAKE_GRACE_MS` (`60 s`), then released | Idle poll stopped; grace timer armed once.                              |
 
 `recheckAt` across inputs schedules one bounded `recheckTimer` clamped to `[1 s, 1 h]`. Status changes publish only when serialized `KeepAwakeStatus` changes.
 
@@ -89,15 +89,15 @@ Two-stage webhook gate (`admit` before body read, `tooLarge` on body abort, `del
 2. **Per-task admission bucket (`recent`):** `callsPerMinute` (60/min), reserved in `admit` with a unique admission ID **before** reading the task (so a disabled known token still consumes its link's 60/min and returns `404` without releasing its slot).
 3. **Per-task refusal bucket (`refused`):** `REFUSED_LINK_CALLS_PER_MINUTE` (30/min), completely separate from `recent`.
 
-| Response | Slot behavior (`recent`) | Refusal bucket (`refused`) & logging |
-|---|---|---|
-| `429` | Pre-slot refusal (no slot taken) | Not charged to `refused`. |
-| `404` (known disabled/non-webhook token) | **Retained** in `recent` (not released) | Not logged. |
-| `415` (wrong content type) | **Released** via `refuse(taskId, admission)` (or fast-rejected pre-slot if `refused >= 30/min`) | Charged to `refused`; not logged. |
-| `413` (body > 256 KB, via `tooLarge` or `deliver`) | **Released** via `refuse(taskId, admission)` | Charged to `refused`. |
-| `401` (bad/missing HMAC-SHA256 signature) | **Released** via `refuse(taskId, admission)` | Charged to `refused`; logs coalesced `bad_signature` only for first 30/min. |
-| `400` (invalid JSON or depth > `MAX_JSON_DEPTH` 32) | **Released** via `refuse(taskId, admission)` | Charged to `refused`; logs coalesced `invalid` only for first 30/min. |
-| `202` (filtered, duplicate, daily_limit, held, queued) | Kept in `recent` | Always answers `202` with empty body so callers learn nothing about the task. |
+| Response                                               | Slot behavior (`recent`)                                                                        | Refusal bucket (`refused`) & logging                                          |
+| ------------------------------------------------------ | ----------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------- |
+| `429`                                                  | Pre-slot refusal (no slot taken)                                                                | Not charged to `refused`.                                                     |
+| `404` (known disabled/non-webhook token)               | **Retained** in `recent` (not released)                                                         | Not logged.                                                                   |
+| `415` (wrong content type)                             | **Released** via `refuse(taskId, admission)` (or fast-rejected pre-slot if `refused >= 30/min`) | Charged to `refused`; not logged.                                             |
+| `413` (body > 256 KB, via `tooLarge` or `deliver`)     | **Released** via `refuse(taskId, admission)`                                                    | Charged to `refused`.                                                         |
+| `401` (bad/missing HMAC-SHA256 signature)              | **Released** via `refuse(taskId, admission)`                                                    | Charged to `refused`; logs coalesced `bad_signature` only for first 30/min.   |
+| `400` (invalid JSON or depth > `MAX_JSON_DEPTH` 32)    | **Released** via `refuse(taskId, admission)`                                                    | Charged to `refused`; logs coalesced `invalid` only for first 30/min.         |
+| `202` (filtered, duplicate, daily_limit, held, queued) | Kept in `recent`                                                                                | Always answers `202` with empty body so callers learn nothing about the task. |
 
 Batching helpers (`mergeLinkBatches`, `linkEventText`) hold up to 20 calls (`SCHEDULED_TASK_LINK_LIMITS.batch`), dropping oldest calls and trimming the longest entries to stay within `maxChars`.
 

@@ -577,9 +577,7 @@ export function GitBranchPicker({
                   className="gap-2 text-secondary"
                 >
                   <FolderGit2 className="size-4 shrink-0" />
-                  <span className="min-w-0 truncate text-small-strong">
-                    New isolated worktree…
-                  </span>
+                  <span className="min-w-0 truncate text-small-strong">New isolated worktree…</span>
                 </CommandItem>
               ) : null}
             </CommandList>

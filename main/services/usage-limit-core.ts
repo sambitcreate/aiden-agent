@@ -70,11 +70,15 @@ export function usageLimitMaxWaitMs(hours: unknown): number {
   return (isUsageLimitWaitHours(hours) ? hours : DEFAULT_USAGE_LIMIT_WAIT_HOURS) * 60 * 60_000;
 }
 
-function header(headers: Readonly<Record<string, string>> | undefined, name: string): string | undefined {
+function header(
+  headers: Readonly<Record<string, string>> | undefined,
+  name: string,
+): string | undefined {
   if (!headers) return undefined;
   const wanted = name.toLowerCase();
   for (const [key, value] of Object.entries(headers)) {
-    if (key.toLowerCase() === wanted && typeof value === "string" && value.trim()) return value.trim();
+    if (key.toLowerCase() === wanted && typeof value === "string" && value.trim())
+      return value.trim();
   }
   return undefined;
 }
@@ -107,7 +111,11 @@ const UNIT_MS: Record<string, number> = {
 export function parseUsageLimitDuration(text: string): number | undefined {
   const trimmed = text.trim().toLowerCase();
   if (/^\d+(?:\.\d+)?$/u.test(trimmed)) return Number(trimmed) * 1_000;
-  const parts = [...trimmed.matchAll(/(\d+(?:\.\d+)?)\s*(milliseconds?|ms|seconds?|secs?|sec|s|minutes?|mins?|min|m|hours?|hrs?|hr|h)(?![a-z])/gu)];
+  const parts = [
+    ...trimmed.matchAll(
+      /(\d+(?:\.\d+)?)\s*(milliseconds?|ms|seconds?|secs?|sec|s|minutes?|mins?|min|m|hours?|hrs?|hr|h)(?![a-z])/gu,
+    ),
+  ];
   if (parts.length === 0) return undefined;
   let total = 0;
   for (const [, amount, unit] of parts) total += Number(amount) * (UNIT_MS[unit] ?? 0);
@@ -148,7 +156,9 @@ function future(at: number | undefined, now: number): number | undefined {
 }
 
 function earliest(values: readonly (number | undefined)[], now: number): number | undefined {
-  const times = values.map((value) => future(value, now)).filter((value): value is number => value !== undefined);
+  const times = values
+    .map((value) => future(value, now))
+    .filter((value): value is number => value !== undefined);
   return times.length ? Math.min(...times) : undefined;
 }
 
@@ -168,12 +178,20 @@ function anthropicUnifiedVerdict(
     return value === undefined ? undefined : future(parseInstant(value), now);
   };
   if (rejected(weekly) || (!rejected(session) && /seven_day|7d|week/iu.test(claim))) {
-    return { kind: "stop", reason: "long-window", ...withReset(at("anthropic-ratelimit-unified-7d-reset") ?? at("anthropic-ratelimit-unified-reset")) };
+    return {
+      kind: "stop",
+      reason: "long-window",
+      ...withReset(
+        at("anthropic-ratelimit-unified-7d-reset") ?? at("anthropic-ratelimit-unified-reset"),
+      ),
+    };
   }
   return {
     kind: "wait",
     scope: "account",
-    ...withReset(at("anthropic-ratelimit-unified-5h-reset") ?? at("anthropic-ratelimit-unified-reset")),
+    ...withReset(
+      at("anthropic-ratelimit-unified-5h-reset") ?? at("anthropic-ratelimit-unified-reset"),
+    ),
   };
 }
 
@@ -190,7 +208,11 @@ function codexWindowVerdict(
     const afterSeconds = Number(header(headers, `x-codex-${window}-reset-after-seconds`));
     const resetAtHeader = header(headers, `x-codex-${window}-reset-at`);
     const resetAt = future(
-      Number.isFinite(afterSeconds) ? now + afterSeconds * 1_000 : resetAtHeader ? parseInstant(resetAtHeader) : undefined,
+      Number.isFinite(afterSeconds)
+        ? now + afterSeconds * 1_000
+        : resetAtHeader
+          ? parseInstant(resetAtHeader)
+          : undefined,
       now,
     );
     const minutes = Number(header(headers, `x-codex-${window}-window-minutes`));
@@ -208,9 +230,13 @@ function withReset(resetAt: number | undefined): { resetAt?: number } {
 }
 
 /** Reset times in standard and per-provider rate-limit headers. */
-function headerResetAt(headers: Readonly<Record<string, string>> | undefined, now: number): number | undefined {
+function headerResetAt(
+  headers: Readonly<Record<string, string>> | undefined,
+  now: number,
+): number | undefined {
   const retryAfterMs = header(headers, "retry-after-ms");
-  if (retryAfterMs !== undefined && Number.isFinite(Number(retryAfterMs))) return now + Number(retryAfterMs);
+  if (retryAfterMs !== undefined && Number.isFinite(Number(retryAfterMs)))
+    return now + Number(retryAfterMs);
   const retryAfter = header(headers, "retry-after");
   if (retryAfter !== undefined) {
     const at = retryAfterAt(retryAfter, now);
@@ -242,7 +268,8 @@ const BILLING =
 const BILLING_HINT = /billing|exceeded your current quota/iu;
 const LONG_WINDOW_TEXT =
   /\b(?:weekly|monthly|daily|7[- ]day|seven[_ -]day)\b[^\n.]{0,40}\b(?:usage|rate)?\s*(?:limit|cap|quota)|requests? per day|PerDay/iu;
-const PLAN_LIMIT = /subscription_sharing_usage_limit_exceeded|usage[_ ]limit[_ ]reached|usage limit has been reached|hit your [A-Za-z]+ usage limit/iu;
+const PLAN_LIMIT =
+  /subscription_sharing_usage_limit_exceeded|usage[_ ]limit[_ ]reached|usage limit has been reached|hit your [A-Za-z]+ usage limit/iu;
 const RATE_LIMITED =
   /\b429\b|\b529\b|Server requested \d+(?:\.\d+)?s retry delay|rate[_ -]?limit|too many requests|resource[_ ]?exhausted|overloaded|server[_ ]?busy|servers are currently busy|currently experiencing high demand|model is at capacity|usage[_ ]limit/iu;
 const CONTEXT_OVERFLOW =
@@ -261,7 +288,10 @@ export function textResetAt(text: string, now: number): number | undefined {
   if (resetsIn) return now + Number(resetsIn[1]) * 1_000;
   const retryDelay = /"retryDelay"\s*:\s*"(\d+(?:\.\d+)?)s"/iu.exec(text);
   if (retryDelay) return now + Number(retryDelay[1]) * 1_000;
-  const resetAtDate = /\breset(?:s)?\s+(?:at|on)\s+(\d{4}-\d{2}-\d{2}[T ][\d:.]+(?:Z|[+-]\d{2}:?\d{2})?)/iu.exec(text);
+  const resetAtDate =
+    /\breset(?:s)?\s+(?:at|on)\s+(\d{4}-\d{2}-\d{2}[T ][\d:.]+(?:Z|[+-]\d{2}:?\d{2})?)/iu.exec(
+      text,
+    );
   if (resetAtDate) {
     const at = Date.parse(resetAtDate[1]);
     if (Number.isFinite(at)) return at;
@@ -324,7 +354,8 @@ export function classifyUsageLimit(input: {
     return { kind: "none" };
   }
 
-  if (LONG_WINDOW_TEXT.test(text)) return { kind: "stop", reason: "long-window", ...withReset(resetAt) };
+  if (LONG_WINDOW_TEXT.test(text))
+    return { kind: "stop", reason: "long-window", ...withReset(resetAt) };
   const plan = PLAN_LIMIT.test(text);
   return {
     kind: "wait",
@@ -339,10 +370,15 @@ export function classifyUsageLimit(input: {
  * the same verdict. An isolated helper process redacts provider error text
  * before it reaches the app, and sends this instead so the wait still works.
  */
-export function usageLimitSafeErrorText(verdict: UsageLimitVerdict, now: number): string | undefined {
+export function usageLimitSafeErrorText(
+  verdict: UsageLimitVerdict,
+  now: number,
+): string | undefined {
   if (verdict.kind === "none") return undefined;
   const after =
-    verdict.resetAt !== undefined && verdict.resetAt > now ? ` Try again in ${Math.ceil((verdict.resetAt - now) / 1_000)}s.` : "";
+    verdict.resetAt !== undefined && verdict.resetAt > now
+      ? ` Try again in ${Math.ceil((verdict.resetAt - now) / 1_000)}s.`
+      : "";
   if (verdict.kind === "stop") {
     return verdict.reason === "billing"
       ? "The provider turned the request away: insufficient_quota."
@@ -427,7 +463,10 @@ export function parseUsageLimitEntries(value: unknown, now: number): UsageLimitE
 }
 
 /** Gate keys of one request: the account first, then its model. */
-export function usageLimitKeys(providerId: string, modelId: string): { account: string; model: string } {
+export function usageLimitKeys(
+  providerId: string,
+  modelId: string,
+): { account: string; model: string } {
   return { account: providerId, model: `${providerId}\u0000${modelId}` };
 }
 
@@ -454,7 +493,11 @@ export interface UsageLimitWait {
 
 export type UsageLimitDecision =
   | { kind: "wait"; entry: UsageLimitEntry }
-  | { kind: "give-up"; resetAt?: number; reason: "long-window" | "billing" | "beyond-max-wait" | "backoff-exhausted" | "off" };
+  | {
+      kind: "give-up";
+      resetAt?: number;
+      reason: "long-window" | "billing" | "beyond-max-wait" | "backoff-exhausted" | "off";
+    };
 
 /**
  * What to do with a waitable verdict for `entry` (the existing limit, if any).
@@ -472,11 +515,14 @@ export function decideUsageLimitWait(input: {
 }): UsageLimitDecision {
   const { verdict, now, maxWaitMs } = input;
   const random = input.random ?? Math.random;
-  if (verdict.kind === "stop") return { kind: "give-up", reason: verdict.reason, ...withReset(verdict.resetAt) };
+  if (verdict.kind === "stop")
+    return { kind: "give-up", reason: verdict.reason, ...withReset(verdict.resetAt) };
   if (maxWaitMs <= 0) return { kind: "give-up", reason: "off", ...withReset(verdict.resetAt) };
   // A limit left untried for a while (its waiters stopped) is a new hit, not a long wait.
   const existing =
-    input.existing && input.existing.refuseUntil === undefined && now - input.existing.nextTryAt <= USAGE_LIMIT_STALE_MS
+    input.existing &&
+    input.existing.refuseUntil === undefined &&
+    now - input.existing.nextTryAt <= USAGE_LIMIT_STALE_MS
       ? input.existing
       : undefined;
   const since = existing?.since ?? now;
@@ -484,11 +530,16 @@ export function decideUsageLimitWait(input: {
   const attempts = (existing?.attempts ?? 0) + 1;
   let nextTryAt: number;
   // Tests that keep meeting a reset a moment away mean the reset is wrong: back off instead.
-  const trustReset = verdict.resetAt !== undefined && !(attempts > 8 && verdict.resetAt - now < 120_000);
+  const trustReset =
+    verdict.resetAt !== undefined && !(attempts > 8 && verdict.resetAt - now < 120_000);
   if (verdict.resetAt !== undefined && trustReset) {
-    if (verdict.resetAt > deadline) return { kind: "give-up", reason: "beyond-max-wait", resetAt: verdict.resetAt };
+    if (verdict.resetAt > deadline)
+      return { kind: "give-up", reason: "beyond-max-wait", resetAt: verdict.resetAt };
     // A little after the reset, so the first try does not land a second early.
-    nextTryAt = Math.max(now + USAGE_LIMIT_MIN_WAIT_MS, verdict.resetAt + 5_000 + Math.floor(random() * 25_000));
+    nextTryAt = Math.max(
+      now + USAGE_LIMIT_MIN_WAIT_MS,
+      verdict.resetAt + 5_000 + Math.floor(random() * 25_000),
+    );
   } else if (verdict.plan) {
     nextTryAt = now + USAGE_LIMIT_PLAN_RETRY_MS;
     if (nextTryAt > deadline) return { kind: "give-up", reason: "beyond-max-wait" };
@@ -513,7 +564,6 @@ export function decideUsageLimitWait(input: {
   };
 }
 
-
 function hoursText(ms: number): string {
   const hours = Math.round(ms / 3_600_000);
   return hours === 1 ? "1 hour" : `${hours} hours`;
@@ -528,9 +578,10 @@ export function usageLimitGiveUpNote(
   decision: Extract<UsageLimitDecision, { kind: "give-up" }>,
   input: { maxWaitMs: number; now: number; locale?: string; timeZone?: string },
 ): string {
-  const at = decision.resetAt !== undefined && decision.resetAt > input.now
-    ? formatUsageLimitTime(decision.resetAt, input.now, input)
-    : undefined;
+  const at =
+    decision.resetAt !== undefined && decision.resetAt > input.now
+      ? formatUsageLimitTime(decision.resetAt, input.now, input)
+      : undefined;
   switch (decision.reason) {
     case "billing":
       return "";
@@ -564,7 +615,8 @@ export function usageLimitGiveUpNotification(input: {
   timeZone?: string;
 }): { title: string; body: string } | undefined {
   if (!input.waited) return undefined;
-  if (input.decision.reason !== "beyond-max-wait" && input.decision.reason !== "backoff-exhausted") return undefined;
+  if (input.decision.reason !== "beyond-max-wait" && input.decision.reason !== "backoff-exhausted")
+    return undefined;
   const provider = input.providerLabel.trim() || "the provider";
   return {
     title: `Stopped waiting for ${provider}`,
@@ -580,9 +632,10 @@ export function usageLimitRefusedMessage(input: {
   locale?: string;
   timeZone?: string;
 }): string {
-  const at = input.resetAt !== undefined && input.resetAt > input.now
-    ? ` It resets ${formatUsageLimitTime(input.resetAt, input.now, input)}.`
-    : "";
+  const at =
+    input.resetAt !== undefined && input.resetAt > input.now
+      ? ` It resets ${formatUsageLimitTime(input.resetAt, input.now, input)}.`
+      : "";
   return `${input.providerLabel} is still at its usage limit, and Aiden stopped waiting for it a few minutes ago.${at}`;
 }
 
@@ -726,7 +779,8 @@ export class UsageLimitGate {
         trying,
       });
     };
-    for (const waiter of this.waiters.values()) add(waiter, this.testers.get(waiter.key) === waiter.id, false);
+    for (const waiter of this.waiters.values())
+      add(waiter, this.testers.get(waiter.key) === waiter.id, false);
     for (const flight of this.flights.values()) add(flight, true, true);
     return result;
   }
@@ -785,7 +839,12 @@ export class UsageLimitGate {
         this.waiters.delete(id);
         if (waiter) this.leaveLine(waiter.key, id);
         if (ticket.kind === "send" && ticket.testing && waiter) {
-          this.flights.set(id, { owner: waiter.owner, providerLabel: waiter.providerLabel, modelId: waiter.modelId, key: waiter.key });
+          this.flights.set(id, {
+            owner: waiter.owner,
+            providerLabel: waiter.providerLabel,
+            modelId: waiter.modelId,
+            key: waiter.key,
+          });
         } else {
           this.leaveTesting(id);
         }
@@ -823,8 +882,17 @@ export class UsageLimitGate {
           return;
         }
         // A reset counts as the time the limit clears; the try lands a little after it.
-        if (maxWaitMs !== undefined && entry.nextTryAt > now && (entry.resetAt ?? entry.nextTryAt) > entry.since + maxWaitMs) {
-          finish({ kind: "too-long", ...withReset(entry.resetAt), maxWaitMs, waited: waiter !== undefined });
+        if (
+          maxWaitMs !== undefined &&
+          entry.nextTryAt > now &&
+          (entry.resetAt ?? entry.nextTryAt) > entry.since + maxWaitMs
+        ) {
+          finish({
+            kind: "too-long",
+            ...withReset(entry.resetAt),
+            maxWaitMs,
+            waited: waiter !== undefined,
+          });
           return;
         }
         if (waiter && waiter.key !== entry.key) {
@@ -962,7 +1030,10 @@ export class UsageLimitGate {
   ): void {
     const now = this.clock.now();
     const existing = this.entries.get(entry.key);
-    const refuseUntil = Math.min(resetAt ?? now + USAGE_LIMIT_REFUSE_MS, now + USAGE_LIMIT_REFUSE_MS);
+    const refuseUntil = Math.min(
+      resetAt ?? now + USAGE_LIMIT_REFUSE_MS,
+      now + USAGE_LIMIT_REFUSE_MS,
+    );
     this.stopDraining(entry.key);
     this.entries.set(entry.key, {
       key: entry.key,
@@ -1006,7 +1077,11 @@ export class UsageLimitGate {
     for (const key of keys) {
       const entry = this.entries.get(key);
       if (!entry || entry.refuseUntil !== undefined) continue;
-      if (now - (this.lastRetryNow.get(key) ?? Number.NEGATIVE_INFINITY) < USAGE_LIMIT_RETRY_NOW_INTERVAL_MS) continue;
+      if (
+        now - (this.lastRetryNow.get(key) ?? Number.NEGATIVE_INFINITY) <
+        USAGE_LIMIT_RETRY_NOW_INTERVAL_MS
+      )
+        continue;
       const tester = this.liveTester(key);
       // A test is already out: its answer comes first.
       if (tester !== undefined && this.flights.has(tester)) continue;

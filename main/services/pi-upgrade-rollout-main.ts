@@ -4,7 +4,8 @@ import { installedApplicationIdentity, PiUpgradeRolloutStore } from "./pi-upgrad
 
 const development = isDevelopmentRuntime(process.env, Boolean(process.versions.electron));
 
-const installedIdentity = () => installedApplicationIdentity(process.execPath, process.env.AIDEN_BUILD_ID);
+const installedIdentity = () =>
+  installedApplicationIdentity(process.execPath, process.env.AIDEN_BUILD_ID);
 
 export const piUpgradeRolloutStore = new PiUpgradeRolloutStore({
   root: () => ensureUserDataDir("pi-upgrade-rollout"),

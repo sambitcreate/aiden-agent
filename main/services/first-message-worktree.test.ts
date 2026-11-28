@@ -21,7 +21,10 @@ import {
 import { GitService } from "./git.js";
 import type { Workspace } from "./types.js";
 import type { RegisteredSkill } from "./skill-registry.js";
-import { WorkspaceOperationRegistry, admitOwnedWorkspaceOperation } from "./workspace-operation-registry.js";
+import {
+  WorkspaceOperationRegistry,
+  admitOwnedWorkspaceOperation,
+} from "./workspace-operation-registry.js";
 import { createWorkspaceWorktreeApplicationService } from "./workspace-worktree-application-service.js";
 import type { FirstMessageWorktreeProgress } from "../../renderer/shared/worktree-on-send.js";
 
@@ -42,7 +45,12 @@ async function temporaryDirectory(t: test.TestContext, prefix = "aiden-wt-send-"
   return directory;
 }
 
-async function commit(cwd: string, file: string, contents: string, message: string): Promise<string> {
+async function commit(
+  cwd: string,
+  file: string,
+  contents: string,
+  message: string,
+): Promise<string> {
   await fs.writeFile(path.join(cwd, file), contents, "utf8");
   await git(cwd, ["add", file]);
   await git(cwd, ["-c", "core.hooksPath=/dev/null", "commit", "-m", message]);
@@ -86,7 +94,9 @@ function documentOwner() {
     isDestroyed: () => destroyed,
     onInvalidated: (listener: () => void) => {
       listeners.add(listener);
-      return () => { listeners.delete(listener); };
+      return () => {
+        listeners.delete(listener);
+      };
     },
     invalidate: () => {
       destroyed = true;
@@ -124,7 +134,8 @@ async function harness(
   const resolve = async (id: string) => {
     const workspace = workspaces.get(id);
     if (!workspace?.folderPath) throw new Error(`Workspace ${id} was not found.`);
-    if (workspace.permission === "none") throw new Error(`${workspace.name} does not allow local file access.`);
+    if (workspace.permission === "none")
+      throw new Error(`${workspace.name} does not allow local file access.`);
     return { folderPath: await fs.realpath(workspace.folderPath), workspace };
   };
   const worktrees = createWorkspaceWorktreeApplicationService({
@@ -139,7 +150,9 @@ async function harness(
           detach();
         }
       },
-      runRecord: async () => { throw new Error("unexpected runRecord"); },
+      runRecord: async () => {
+        throw new Error("unexpected runRecord");
+      },
     },
     ensureWorktreeRoot: async () => {
       await fs.mkdir(worktreeRoot, { recursive: true });
@@ -150,37 +163,54 @@ async function harness(
       createCalls.push(branch);
       return service.createWorktree(folderPath, root, branch, signal, options);
     },
-    resolveWorktreeBase: (folderPath, baseRef, signal) => service.resolveWorktreeBase(folderPath, baseRef, signal),
-    fetchWorktreeBase: (folderPath, upstream, signal) => service.fetchWorktreeBase(folderPath, upstream, signal),
+    resolveWorktreeBase: (folderPath, baseRef, signal) =>
+      service.resolveWorktreeBase(folderPath, baseRef, signal),
+    fetchWorktreeBase: (folderPath, upstream, signal) =>
+      service.fetchWorktreeBase(folderPath, upstream, signal),
     localBranchNames: (folderPath, signal) => service.localBranchNames(folderPath, signal),
-    rollbackOwnedWorktree: (folderPath, branch, token, head) => service.rollbackOwnedWorktree(folderPath, branch, token, head),
-    rollbackWorktree: (folderPath, created, options) => service.rollbackWorktree(folderPath, created, options),
-    deleteManagedWorktree: async () => { throw new Error("unexpected delete"); },
+    rollbackOwnedWorktree: (folderPath, branch, token, head) =>
+      service.rollbackOwnedWorktree(folderPath, branch, token, head),
+    rollbackWorktree: (folderPath, created, options) =>
+      service.rollbackWorktree(folderPath, created, options),
+    deleteManagedWorktree: async () => {
+      throw new Error("unexpected delete");
+    },
     managedWorktreeDeletionPending: async () => false,
     managedWorktreeRegistered: async () => false,
     managedWorktreeUsable: async () => false,
     finalizeManagedWorktreeDeletion: async () => undefined,
     workspacePathExists: async () => false,
-    checkoutBytes: (folderPath, commitish) => service.managedWorktreeCheckoutBytes(folderPath, commitish),
+    checkoutBytes: (folderPath, commitish) =>
+      service.managedWorktreeCheckoutBytes(folderPath, commitish),
     checkCreateCapacity: async () => undefined,
     checkWorktreeAllocation: async () => undefined,
     checkSnapshotCapacity: async () => undefined,
     provisionIncludedFiles: async () => [],
     repositoryPaths: (folderPath) => service.repositoryPaths(folderPath),
-    dirtyState: async () => { throw new Error("unexpected dirty state"); },
+    dirtyState: async () => {
+      throw new Error("unexpected dirty state");
+    },
     expandIgnoredPaths: async () => [],
     snapshotContentBytes: async () => 0,
-    captureWorktreeSnapshot: async () => { throw new Error("unexpected snapshot"); },
+    captureWorktreeSnapshot: async () => {
+      throw new Error("unexpected snapshot");
+    },
     snapshotRefCommit: async () => undefined,
     deleteSnapshotRef: async () => true,
-    restoreManagedCheckout: async () => { throw new Error("unexpected restore"); },
+    restoreManagedCheckout: async () => {
+      throw new Error("unexpected restore");
+    },
     applyWorktreeSnapshot: async () => undefined,
-    resumeManagedCheckout: async () => { throw new Error("unexpected resume"); },
+    resumeManagedCheckout: async () => {
+      throw new Error("unexpected resume");
+    },
     saveWorkspace: async (workspace) => {
       workspaces.set(workspace.id, workspace);
       return workspace;
     },
-    removeWorkspace: async (id) => { workspaces.delete(id); },
+    removeWorkspace: async (id) => {
+      workspaces.delete(id);
+    },
     beginWorkspaceMutation: () => () => undefined,
     workspaceIsChanging: () => false,
     cancelWorkspaceOperations: async () => undefined,
@@ -194,15 +224,22 @@ async function harness(
     logError: () => undefined,
   });
   const ledgerFile = path.join(userData, "first-message-worktrees.json");
-  const coordinatorFor = (ledger: FirstMessageWorktreeLedger) => createFirstMessageWorktreeCoordinator({
-    ledger,
-    createFromBase: (owner, id, request) => worktrees.createFromBase(owner, id, request),
-    discardInterruptedWorktree: (owner, id, attempt) => worktrees.discardInterruptedWorktree(owner, id, attempt),
-    getWorkspace: async (id) => workspaces.get(id),
-  });
-  const fileLedger = () => createFileFirstMessageWorktreeLedger({ filePath: async () => ledgerFile });
+  const coordinatorFor = (ledger: FirstMessageWorktreeLedger) =>
+    createFirstMessageWorktreeCoordinator({
+      ledger,
+      createFromBase: (owner, id, request) => worktrees.createFromBase(owner, id, request),
+      discardInterruptedWorktree: (owner, id, attempt) =>
+        worktrees.discardInterruptedWorktree(owner, id, attempt),
+      getWorkspace: async (id) => workspaces.get(id),
+    });
+  const fileLedger = () =>
+    createFileFirstMessageWorktreeLedger({ filePath: async () => ledgerFile });
   const coordinator = coordinatorFor(options.ledger?.(ledgerFile) ?? fileLedger());
-  const resolveSkill = options.resolveSkill ?? (async () => { throw new Error("Skill is unavailable"); });
+  const resolveSkill =
+    options.resolveSkill ??
+    (async () => {
+      throw new Error("Skill is unavailable");
+    });
 
   const chatDirectory = path.join(userData, "chats");
   await fs.mkdir(chatDirectory);
@@ -215,20 +252,34 @@ async function harness(
     requiresReconciliation: (ownerId) => turns.requiresAppendReconciliation(ownerId),
     markReconciliation: (ownerId) => turns.markAppendReconciliationRequired(ownerId),
     clearReconciliation: (ownerId) => turns.clearAppendReconciliationRequired(ownerId),
-    admitWorkspace: (workspaceId, document) => admitOwnedWorkspaceOperation(registry, document, workspaceId),
+    admitWorkspace: (workspaceId, document) =>
+      admitOwnedWorkspaceOperation(registry, document, workspaceId),
     getWorkspace: async (workspaceId) => (workspaces.has(workspaceId) ? {} : undefined),
     resolveSkill,
   });
   const commitInWorktree = createWorktreeFirstMessageCommitter({
     commit: commitPlain,
-    ensureWorktree: (request, seed, owner, onProgress) => coordinator.ensure(request, seed, owner, onProgress),
+    ensureWorktree: (request, seed, owner, onProgress) =>
+      coordinator.ensure(request, seed, owner, onProgress),
     resolveSkill,
   });
   const owner = documentOwner();
   t.after(() => owner.invalidate());
   return {
-    service, worktrees, workspaces, source, coordinator, coordinatorFor, fileLedger, ledgerFile, store, turns,
-    commitInWorktree, owner, createCalls, worktreeRoot,
+    service,
+    worktrees,
+    workspaces,
+    source,
+    coordinator,
+    coordinatorFor,
+    fileLedger,
+    ledgerFile,
+    store,
+    turns,
+    commitInWorktree,
+    owner,
+    createCalls,
+    worktreeRoot,
   };
 }
 
@@ -303,12 +354,18 @@ test("from origin fetches only the base branch and starts at the remote commit, 
   assert.equal(result.startPoint, "origin/main");
   assert.equal(result.baseCommit, remoteMain);
   assert.equal(result.branch, "aiden/explicit");
-  assert.equal(await git(result.workspace.managedWorktree!.worktreePath, ["rev-parse", "HEAD"]), remoteMain);
+  assert.equal(
+    await git(result.workspace.managedWorktree!.worktreePath, ["rev-parse", "HEAD"]),
+    remoteMain,
+  );
   assert.deepEqual(progress, ["fetching:origin/main", "creating:origin/main"]);
   // Only main's tracking ref moved: no other branch, no tags, local main untouched.
   assert.equal(await git(repos.repository, ["rev-parse", "refs/remotes/origin/main"]), remoteMain);
   assert.equal(await git(repos.repository, ["rev-parse", "main"]), localMain);
-  assert.equal(await git(repos.repository, ["for-each-ref", "refs/remotes/origin/other", "refs/tags"]), "");
+  assert.equal(
+    await git(repos.repository, ["for-each-ref", "refs/remotes/origin/other", "refs/tags"]),
+    "",
+  );
   await assert.rejects(fs.readFile(repos.marker, "utf8"), { code: "ENOENT" });
 });
 
@@ -331,10 +388,14 @@ test("auto names avoid existing branches and invalid bases are refused before an
   await git(repos.repository, ["-c", "core.hooksPath=/dev/null", "branch", "aiden/fix-login"]);
   const h = await harness(t, repos.repository);
   const first = await h.worktrees.createFromBase(h.owner, h.source.id, {
-    baseRef: "main", fromOrigin: false, autoName: { seed: "Fix login" },
+    baseRef: "main",
+    fromOrigin: false,
+    autoName: { seed: "Fix login" },
   });
   const second = await h.worktrees.createFromBase(h.owner, h.source.id, {
-    baseRef: "origin/main", fromOrigin: false, autoName: { seed: "fix   LOGIN" },
+    baseRef: "origin/main",
+    fromOrigin: false,
+    autoName: { seed: "fix   LOGIN" },
   });
   assert.equal(first.branch, "aiden/fix-login-2");
   assert.equal(second.branch, "aiden/fix-login-3");
@@ -342,18 +403,29 @@ test("auto names avoid existing branches and invalid bases are refused before an
 
   for (const baseRef of ["does-not-exist", "-main", "main..x", "refs/heads/main"]) {
     await assert.rejects(
-      h.worktrees.createFromBase(h.owner, h.source.id, { baseRef, fromOrigin: false, autoName: { seed: "x" } }),
+      h.worktrees.createFromBase(h.owner, h.source.id, {
+        baseRef,
+        fromOrigin: false,
+        autoName: { seed: "x" },
+      }),
       /branch/iu,
       baseRef,
     );
   }
   await assert.rejects(
-    h.worktrees.createFromBase(h.owner, h.source.id, { baseRef: "main", fromOrigin: false, branchName: "aiden/fix-login" }),
+    h.worktrees.createFromBase(h.owner, h.source.id, {
+      baseRef: "main",
+      fromOrigin: false,
+      branchName: "aiden/fix-login",
+    }),
     /already exists/u,
   );
   // An existing explicit name is refused before Git is asked to create anything.
   assert.deepEqual(h.createCalls, ["aiden/fix-login-2", "aiden/fix-login-3"]);
-  assert.equal([...h.workspaces.values()].filter((workspace) => workspace.managedWorktree).length, 2);
+  assert.equal(
+    [...h.workspaces.values()].filter((workspace) => workspace.managedWorktree).length,
+    2,
+  );
 });
 
 test("first send in New worktree saves the chat in the new worktree workspace", async (t) => {
@@ -362,7 +434,9 @@ test("first send in New worktree saves the chat in the new worktree workspace", 
   const progress: FirstMessageWorktreeProgress[] = [];
   const input = firstMessage("Fix the login redirect", { baseRef: "main", fromOrigin: true });
 
-  const result = await h.commitInWorktree(parseChatFirstMessage(input), h.owner, (event) => progress.push(event));
+  const result = await h.commitInWorktree(parseChatFirstMessage(input), h.owner, (event) =>
+    progress.push(event),
+  );
 
   assert.equal(result.ok, true);
   if (!result.ok) return;
@@ -372,7 +446,10 @@ test("first send in New worktree saves the chat in the new worktree workspace", 
   assert.equal((await h.store.get(input.draftId))?.workspaceId, result.worktree.workspaceId);
   assert.equal(result.worktree.baseSource, "fetched");
   assert.equal(result.worktree.reused, false);
-  assert.deepEqual(progress.map((event) => event.phase), ["fetching", "creating", "ready"]);
+  assert.deepEqual(
+    progress.map((event) => event.phase),
+    ["fetching", "creating", "ready"],
+  );
   assert.ok(progress.every((event) => event.draftId === input.draftId));
 });
 
@@ -389,9 +466,12 @@ test("a worktree failure saves no chat and a retry with a usable base succeeds",
   if (failed.ok) return;
   assert.equal(failed.code, "worktree-failed");
   assert.match(failed.detail ?? "", /gone/u);
-  assert.equal(await h.store.get(draftId) ?? undefined, undefined);
+  assert.equal((await h.store.get(draftId)) ?? undefined, undefined);
   assert.deepEqual(await h.store.list(), []);
-  assert.equal([...h.workspaces.values()].some((workspace) => workspace.managedWorktree), false);
+  assert.equal(
+    [...h.workspaces.values()].some((workspace) => workspace.managedWorktree),
+    false,
+  );
 
   const retried = await h.commitInWorktree(
     parseChatFirstMessage(firstMessage("Ship it", { baseRef: "main", fromOrigin: false }, draftId)),
@@ -423,7 +503,9 @@ test("double sends and retries of one draft create exactly one worktree", async 
 
   assert.deepEqual(h.createCalls, ["aiden/refactor-the-parser"]);
   assert.equal(
-    (await git(repos.repository, ["worktree", "list", "--porcelain"])).split("\n").filter((line) => line.startsWith("worktree ")).length,
+    (await git(repos.repository, ["worktree", "list", "--porcelain"]))
+      .split("\n")
+      .filter((line) => line.startsWith("worktree ")).length,
     2,
   );
 });
@@ -447,12 +529,18 @@ test("after a restart, the attempt that saved its workspace but not its outcome 
   const input = firstMessage("Interrupted run", { baseRef: "main", fromOrigin: false });
   const first = await h.commitInWorktree(parseChatFirstMessage(input), h.owner);
   assert.ok(first.ok);
-  const persisted = JSON.parse(await fs.readFile(h.ledgerFile, "utf8")) as { records: Array<{ key: string; state: string }> };
+  const persisted = JSON.parse(await fs.readFile(h.ledgerFile, "utf8")) as {
+    records: Array<{ key: string; state: string }>;
+  };
   assert.equal(persisted.records.find((record) => record.key === input.draftId)?.state, "pending");
 
   // A fresh coordinator reads the ledger from disk, as after a restart.
   const restarted = h.coordinatorFor(h.fileLedger());
-  const adopted = await restarted.ensure(parseChatFirstMessage(input).worktree!, "Interrupted run", h.owner);
+  const adopted = await restarted.ensure(
+    parseChatFirstMessage(input).worktree!,
+    "Interrupted run",
+    h.owner,
+  );
   assert.equal(adopted.workspaceId, first.worktree.workspaceId);
   assert.equal(adopted.reused, true);
   assert.deepEqual(h.createCalls, ["aiden/interrupted-run"]);
@@ -464,28 +552,52 @@ test("a retry never adopts a worktree this draft did not create", async (t) => {
   // The user's own managed worktree on feature/x.
   const theirs = await h.worktrees.create(h.owner, h.source.id, "feature/x");
   const draftId = randomUUID();
-  const send = () => h.commitInWorktree(
-    parseChatFirstMessage(firstMessage("Use feature x", { baseRef: "main", fromOrigin: false, branchName: "feature/x" }, draftId)),
-    h.owner,
-  );
+  const send = () =>
+    h.commitInWorktree(
+      parseChatFirstMessage(
+        firstMessage(
+          "Use feature x",
+          { baseRef: "main", fromOrigin: false, branchName: "feature/x" },
+          draftId,
+        ),
+      ),
+      h.owner,
+    );
 
   const failed = await send();
   assert.equal(failed.ok, false);
-  assert.match(failed.ok ? "" : failed.code === "worktree-failed" ? failed.detail ?? "" : "", /already exists/u);
+  assert.match(
+    failed.ok ? "" : failed.code === "worktree-failed" ? (failed.detail ?? "") : "",
+    /already exists/u,
+  );
   const retried = await send();
   assert.equal(retried.ok, false, "the retry must not adopt the user's worktree");
-  assert.equal(await h.store.get(draftId) ?? undefined, undefined);
-  assert.equal(await h.fileLedger().get(draftId), undefined, "nothing is recorded for an existing branch");
+  assert.equal((await h.store.get(draftId)) ?? undefined, undefined);
+  assert.equal(
+    await h.fileLedger().get(draftId),
+    undefined,
+    "nothing is recorded for an existing branch",
+  );
 
   // Even a record naming that branch (but not that workspace's identity) is not adopted.
   await h.fileLedger().put({
-    key: draftId, sourceWorkspaceId: h.source.id, state: "pending", baseRef: "main", fromOrigin: false,
-    branch: "feature/x", workspaceId: "workspace-never-saved", ownershipToken: randomUUID(),
-    baseCommit: await git(repos.repository, ["rev-parse", "main"]), startPoint: "main", baseSource: "local",
+    key: draftId,
+    sourceWorkspaceId: h.source.id,
+    state: "pending",
+    baseRef: "main",
+    fromOrigin: false,
+    branch: "feature/x",
+    workspaceId: "workspace-never-saved",
+    ownershipToken: randomUUID(),
+    baseCommit: await git(repos.repository, ["rev-parse", "main"]),
+    startPoint: "main",
+    baseSource: "local",
     updatedAt: Date.now(),
   });
   const auto = await h.commitInWorktree(
-    parseChatFirstMessage(firstMessage("Use feature x", { baseRef: "main", fromOrigin: false }, draftId)),
+    parseChatFirstMessage(
+      firstMessage("Use feature x", { baseRef: "main", fromOrigin: false }, draftId),
+    ),
     h.owner,
   );
   assert.ok(auto.ok);
@@ -502,18 +614,40 @@ test("an interrupted attempt's unsaved worktree is rolled back, then created aga
   const mainCommit = await git(repos.repository, ["rev-parse", "main"]);
   await fs.mkdir(h.worktreeRoot, { recursive: true });
   // Git created and claimed the worktree, then Aiden quit before saving it.
-  const orphan = await h.service.createWorktree(repos.repository, h.worktreeRoot, "aiden/orphan", undefined, {
-    startPoint: mainCommit,
-    ownershipToken,
-  });
+  const orphan = await h.service.createWorktree(
+    repos.repository,
+    h.worktreeRoot,
+    "aiden/orphan",
+    undefined,
+    {
+      startPoint: mainCommit,
+      ownershipToken,
+    },
+  );
   await h.fileLedger().put({
-    key: draftId, sourceWorkspaceId: h.source.id, state: "pending", baseRef: "main", fromOrigin: false,
-    requestedBranchName: "aiden/orphan", branch: "aiden/orphan", workspaceId: "workspace-never-saved",
-    ownershipToken, baseCommit: mainCommit, startPoint: "main", baseSource: "local", updatedAt: Date.now(),
+    key: draftId,
+    sourceWorkspaceId: h.source.id,
+    state: "pending",
+    baseRef: "main",
+    fromOrigin: false,
+    requestedBranchName: "aiden/orphan",
+    branch: "aiden/orphan",
+    workspaceId: "workspace-never-saved",
+    ownershipToken,
+    baseCommit: mainCommit,
+    startPoint: "main",
+    baseSource: "local",
+    updatedAt: Date.now(),
   });
 
   const result = await h.commitInWorktree(
-    parseChatFirstMessage(firstMessage("Again", { baseRef: "main", fromOrigin: false, branchName: "aiden/orphan" }, draftId)),
+    parseChatFirstMessage(
+      firstMessage(
+        "Again",
+        { baseRef: "main", fromOrigin: false, branchName: "aiden/orphan" },
+        draftId,
+      ),
+    ),
     h.owner,
   );
 
@@ -521,7 +655,8 @@ test("an interrupted attempt's unsaved worktree is rolled back, then created aga
   assert.equal(result.worktree.branch, "aiden/orphan");
   await assert.rejects(fs.access(orphan.path), { code: "ENOENT" });
   const registered = (await git(repos.repository, ["worktree", "list", "--porcelain"]))
-    .split("\n").filter((line) => line.startsWith("worktree "));
+    .split("\n")
+    .filter((line) => line.startsWith("worktree "));
   assert.equal(registered.length, 2, "the checkout plus exactly one managed worktree");
 });
 
@@ -537,7 +672,11 @@ test("a removed worktree does not block the draft: the retry creates a fresh one
   await git(repos.repository, ["branch", "-D", managed.branch]);
   h.workspaces.delete(first.worktree.workspaceId);
 
-  const fresh = await h.coordinator.ensure(parseChatFirstMessage(input).worktree!, "Short lived", h.owner);
+  const fresh = await h.coordinator.ensure(
+    parseChatFirstMessage(input).worktree!,
+    "Short lived",
+    h.owner,
+  );
   assert.equal(fresh.reused, false);
   assert.notEqual(fresh.workspaceId, first.worktree.workspaceId);
   assert.equal(h.workspaces.get(fresh.workspaceId)?.managedWorktree?.branch, "aiden/short-lived");
@@ -548,20 +687,39 @@ test("a retry with different settings reports the existing worktree instead of r
   const h = await harness(t, repos.repository);
   const draftId = randomUUID();
   const first = await h.coordinator.ensure(
-    { sourceWorkspaceId: h.source.id, baseRef: "main", fromOrigin: false, idempotencyKey: draftId }, "Tune it", h.owner);
-  for (const changed of [{ baseRef: "origin/main" }, { fromOrigin: true }, { branchName: "aiden/custom" }]) {
+    { sourceWorkspaceId: h.source.id, baseRef: "main", fromOrigin: false, idempotencyKey: draftId },
+    "Tune it",
+    h.owner,
+  );
+  for (const changed of [
+    { baseRef: "origin/main" },
+    { fromOrigin: true },
+    { branchName: "aiden/custom" },
+  ]) {
     const result = await h.commitInWorktree(
-      parseChatFirstMessage(firstMessage("Tune it", { baseRef: "main", fromOrigin: false, ...changed }, draftId)),
+      parseChatFirstMessage(
+        firstMessage("Tune it", { baseRef: "main", fromOrigin: false, ...changed }, draftId),
+      ),
       h.owner,
     );
-    assert.deepEqual(result, {
-      ok: false,
-      code: "worktree-settings-changed",
-      reason: "This draft already created worktree aiden/tune-it from main. Send again with those settings, or start a new chat to use different ones.",
-      worktree: { workspaceId: first.workspaceId, branch: "aiden/tune-it", baseRef: "main", fromOrigin: false },
-    }, JSON.stringify(changed));
+    assert.deepEqual(
+      result,
+      {
+        ok: false,
+        code: "worktree-settings-changed",
+        reason:
+          "This draft already created worktree aiden/tune-it from main. Send again with those settings, or start a new chat to use different ones.",
+        worktree: {
+          workspaceId: first.workspaceId,
+          branch: "aiden/tune-it",
+          baseRef: "main",
+          fromOrigin: false,
+        },
+      },
+      JSON.stringify(changed),
+    );
   }
-  assert.equal(await h.store.get(draftId) ?? undefined, undefined);
+  assert.equal((await h.store.get(draftId)) ?? undefined, undefined);
   assert.deepEqual(h.createCalls, ["aiden/tune-it"]);
 });
 
@@ -573,11 +731,25 @@ test("a draft that failed in one workspace can send from another; a created work
     const draftId = randomUUID();
     // An attempt in the first workspace that never saved a worktree.
     await h.fileLedger().put({
-      key: draftId, sourceWorkspaceId: h.source.id, state, baseRef: "main", fromOrigin: false,
-      branch: `aiden/moved-${state}`, workspaceId: "workspace-never-saved", ownershipToken: randomUUID(),
-      baseCommit: mainCommit, startPoint: "main", baseSource: "local", updatedAt: Date.now(),
+      key: draftId,
+      sourceWorkspaceId: h.source.id,
+      state,
+      baseRef: "main",
+      fromOrigin: false,
+      branch: `aiden/moved-${state}`,
+      workspaceId: "workspace-never-saved",
+      ownershipToken: randomUUID(),
+      baseCommit: mainCommit,
+      startPoint: "main",
+      baseSource: "local",
+      updatedAt: Date.now(),
     });
-    const request = { sourceWorkspaceId: "workspace-other", baseRef: "main", fromOrigin: false, idempotencyKey: draftId };
+    const request = {
+      sourceWorkspaceId: "workspace-other",
+      baseRef: "main",
+      fromOrigin: false,
+      idempotencyKey: draftId,
+    };
     const moved = await h.coordinator.ensure(request, `Moved ${state}`, h.owner);
     assert.equal(moved.branch, `aiden/moved-${state}`, state);
 
@@ -592,9 +764,15 @@ test("a draft that failed in one workspace can send from another; a created work
 test("a slash skill chosen in the draft's workspace runs in the new worktree chat", async (t) => {
   const repos = await repositories(t);
   const skill: RegisteredSkill = {
-    stableId: "configured:review", invocationId: `sk1_${"a".repeat(43)}`,
-    toolKey: "skill_review", name: "Review", description: "Review changes",
-    instructions: "Inspect the diff carefully.", source: "configured", enabled: true, available: true,
+    stableId: "configured:review",
+    invocationId: `sk1_${"a".repeat(43)}`,
+    toolKey: "skill_review",
+    name: "Review",
+    description: "Review changes",
+    instructions: "Inspect the diff carefully.",
+    source: "configured",
+    enabled: true,
+    available: true,
   };
   const resolved: string[] = [];
   const h = await harness(t, repos.repository, {
@@ -607,23 +785,44 @@ test("a slash skill chosen in the draft's workspace runs in the new worktree cha
       return skill;
     },
   });
-  const skillInvocation = { version: 1, invocationId: skill.invocationId, displayName: "Review", source: "configured" };
-  const input = { ...firstMessage("Review the diff", { baseRef: "main", fromOrigin: false }), skillInvocation };
+  const skillInvocation = {
+    version: 1,
+    invocationId: skill.invocationId,
+    displayName: "Review",
+    source: "configured",
+  };
+  const input = {
+    ...firstMessage("Review the diff", { baseRef: "main", fromOrigin: false }),
+    skillInvocation,
+  };
 
   const result = await h.commitInWorktree(parseChatFirstMessage(input), h.owner);
 
   assert.ok(result.ok, JSON.stringify(result));
-  assert.deepEqual(result.chat.messages[0]?.skill, { version: 1, name: "Review", source: "configured" });
+  assert.deepEqual(result.chat.messages[0]?.skill, {
+    version: 1,
+    name: "Review",
+    source: "configured",
+  });
   assert.ok(resolved.every((workspaceId) => workspaceId === "workspace-source"));
   let preparedWorkspace: string | undefined;
-  assert.equal(h.turns.handoff(input.draftId, input.turnId, h.owner.documentId, (prepared) => {
-    preparedWorkspace = prepared?.workspaceId;
-  }), true);
-  assert.equal(preparedWorkspace, result.worktree.workspaceId, "generation runs in the worktree chat");
+  assert.equal(
+    h.turns.handoff(input.draftId, input.turnId, h.owner.documentId, (prepared) => {
+      preparedWorkspace = prepared?.workspaceId;
+    }),
+    true,
+  );
+  assert.equal(
+    preparedWorkspace,
+    result.worktree.workspaceId,
+    "generation runs in the worktree chat",
+  );
 
   // A stale selection fails before any worktree is created.
-  const stale = { ...firstMessage("Review again", { baseRef: "main", fromOrigin: false }),
-    skillInvocation: { ...skillInvocation, invocationId: `sk1_${"b".repeat(43)}` } };
+  const stale = {
+    ...firstMessage("Review again", { baseRef: "main", fromOrigin: false }),
+    skillInvocation: { ...skillInvocation, invocationId: `sk1_${"b".repeat(43)}` },
+  };
   await assert.rejects(h.commitInWorktree(parseChatFirstMessage(stale), h.owner), /expired/u);
   assert.deepEqual(h.createCalls, ["aiden/review-the-diff"]);
 });
@@ -646,6 +845,10 @@ test("the first-message parser ties a worktree request to its draft and workspac
     { ...valid.worktree, fromOrigin: "yes" },
     { ...valid.worktree, path: "/tmp" },
   ]) {
-    assert.throws(() => parseChatFirstMessage({ ...valid, worktree }), Error, JSON.stringify(worktree));
+    assert.throws(
+      () => parseChatFirstMessage({ ...valid, worktree }),
+      Error,
+      JSON.stringify(worktree),
+    );
   }
 });

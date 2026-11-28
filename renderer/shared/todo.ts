@@ -160,7 +160,10 @@ export function unavailableTodoSnapshot(
   unavailableReason?: TodoSnapshotViewV1["unavailableReason"],
 ): TodoSnapshotViewV1 {
   return {
-    version: TODO_VIEW_VERSION, chatId, availability: "unavailable", tasks: [],
+    version: TODO_VIEW_VERSION,
+    chatId,
+    availability: "unavailable",
+    tasks: [],
     ...(unavailableReason ? { unavailableReason } : {}),
   };
 }

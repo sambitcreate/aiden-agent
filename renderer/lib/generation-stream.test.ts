@@ -39,13 +39,17 @@ test("a subscriber sees only its own stream and releases every listener at the t
   try {
     const deltas: string[] = [];
     let done: string | undefined;
-    const stream = subscribeGenerationStream("design-stream-1", { chatId: "chat-1" }, {
-      onDelta: (delta) => deltas.push(delta),
-      onDone: (content) => {
-        done = content;
+    const stream = subscribeGenerationStream(
+      "design-stream-1",
+      { chatId: "chat-1" },
+      {
+        onDelta: (delta) => deltas.push(delta),
+        onDone: (content) => {
+          done = content;
+        },
+        onError: (message) => assert.fail(message),
       },
-      onError: (message) => assert.fail(message),
-    });
+    );
     assert.ok(bridge.listenerCount() > 0, "listeners exist before any invoke");
     bridge.emit("chat:delta", { streamId: "another-stream", delta: "ignored" });
     bridge.emit("chat:delta", { streamId: "design-stream-1", delta: "Hel" });
@@ -91,15 +95,22 @@ test("a subagent snapshot reaches the projection only for its own generation", (
   const bridge = installFakeBridge();
   try {
     const received: unknown[] = [];
-    const stream = subscribeGenerationStream("generation-1", { chatId: "chat-1", workspaceId: "workspace-1" }, {
-      onDelta: () => assert.fail("no text expected"),
-      onDone: () => assert.fail("no terminal expected"),
-      onError: (message) => assert.fail(message),
-      onSubagents: (snapshot) => received.push(snapshot),
-    });
+    const stream = subscribeGenerationStream(
+      "generation-1",
+      { chatId: "chat-1", workspaceId: "workspace-1" },
+      {
+        onDelta: () => assert.fail("no text expected"),
+        onDone: () => assert.fail("no terminal expected"),
+        onError: (message) => assert.fail(message),
+        onSubagents: (snapshot) => received.push(snapshot),
+      },
+    );
     const own = subagentSnapshot("generation-1");
     bridge.emit("chat:subagents", { streamId: "generation-1", snapshot: own });
-    bridge.emit("chat:subagents", { streamId: "generation-1", snapshot: subagentSnapshot("generation-2") });
+    bridge.emit("chat:subagents", {
+      streamId: "generation-1",
+      snapshot: subagentSnapshot("generation-2"),
+    });
     bridge.emit("chat:subagents", { streamId: "generation-2", snapshot: own });
     assert.deepEqual(received, [own]);
     assert.deepEqual(
@@ -116,12 +127,16 @@ test("a helper's live conversation reaches only its own stream and folds into th
   const bridge = installFakeBridge();
   try {
     const received: number[] = [];
-    const stream = subscribeGenerationStream("generation-1", { chatId: "chat-1", workspaceId: "workspace-1" }, {
-      onDelta: () => assert.fail("no text expected"),
-      onDone: () => assert.fail("no terminal expected"),
-      onError: (message) => assert.fail(message),
-      onSubagentTranscript: (update) => received.push(update.revision),
-    });
+    const stream = subscribeGenerationStream(
+      "generation-1",
+      { chatId: "chat-1", workspaceId: "workspace-1" },
+      {
+        onDelta: () => assert.fail("no text expected"),
+        onDone: () => assert.fail("no terminal expected"),
+        onError: (message) => assert.fail(message),
+        onSubagentTranscript: (update) => received.push(update.revision),
+      },
+    );
     const first = {
       version: 1,
       runId: "run-1",
@@ -136,16 +151,24 @@ test("a helper's live conversation reaches only its own stream and folds into th
       baseRevision: 1,
       revision: 2,
       entryCount: 2,
-      changes: [{ index: 1, entry: { kind: "message", text: "Found it.", steps: [], startedAt: 1_000 } }],
+      changes: [
+        { index: 1, entry: { kind: "message", text: "Found it.", steps: [], startedAt: 1_000 } },
+      ],
     };
     bridge.emit("chat:subagent-transcript", { streamId: "generation-2", update: first });
     bridge.emit("chat:subagent-transcript", { streamId: "generation-1", update: first });
-    bridge.emit("chat:subagent-transcript", { streamId: "generation-1", update: { ...second, changes: "junk" } });
+    bridge.emit("chat:subagent-transcript", {
+      streamId: "generation-1",
+      update: { ...second, changes: "junk" },
+    });
     bridge.emit("chat:subagent-transcript", { streamId: "generation-1", update: second });
     assert.deepEqual(received, [1, 2]);
     const live = stream.projection().subagentTranscripts?.get("run-1");
     assert.equal(live?.revision, 2);
-    assert.deepEqual(live?.changes.map((change) => change.entry.text), ["Look.", "Found it."]);
+    assert.deepEqual(
+      live?.changes.map((change) => change.entry.text),
+      ["Look.", "Found it."],
+    );
     stream.dispose();
   } finally {
     bridge.restore();
@@ -169,15 +192,21 @@ test("a handed-over helper conversation resumes from its seed and catches up on 
       baseRevision: 1,
       revision: 2,
       entryCount: 2,
-      changes: [{ index: 1, entry: { kind: "message", text: "Found it.", steps: [], startedAt: 1_000 } }],
+      changes: [
+        { index: 1, entry: { kind: "message", text: "Found it.", steps: [], startedAt: 1_000 } },
+      ],
     };
     // The previous view folded the first update before it let go of the run.
-    const previous = subscribeGenerationStream("generation-1", { chatId: "chat-1", workspaceId: "workspace-1" }, {
-      onDelta: () => undefined,
-      onDone: () => undefined,
-      onError: (message) => assert.fail(message),
-      onSubagentTranscript: () => undefined,
-    });
+    const previous = subscribeGenerationStream(
+      "generation-1",
+      { chatId: "chat-1", workspaceId: "workspace-1" },
+      {
+        onDelta: () => undefined,
+        onDone: () => undefined,
+        onError: (message) => assert.fail(message),
+        onSubagentTranscript: () => undefined,
+      },
+    );
     bridge.emit("chat:subagent-transcript", { streamId: "generation-1", update: first });
     const seed = previous.projection();
     previous.dispose();
@@ -201,7 +230,10 @@ test("a handed-over helper conversation resumes from its seed and catches up on 
     assert.deepEqual(received, [2]);
     const live = stream.projection().subagentTranscripts?.get("run-1");
     assert.equal(live?.revision, 2);
-    assert.deepEqual(live?.changes.map((change) => change.entry.text), ["Look.", "Found it."]);
+    assert.deepEqual(
+      live?.changes.map((change) => change.entry.text),
+      ["Look.", "Found it."],
+    );
     stream.dispose();
   } finally {
     bridge.restore();
@@ -213,16 +245,20 @@ test("only the first terminal event settles a run, even while its handler is sti
   try {
     const terminals: string[] = [];
     let finishDone = () => {};
-    subscribeGenerationStream("stream-1", { chatId: "chat-1" }, {
-      onDelta: () => {},
-      onDone: async () => {
-        terminals.push("done");
-        await new Promise<void>((resolve) => {
-          finishDone = resolve;
-        });
+    subscribeGenerationStream(
+      "stream-1",
+      { chatId: "chat-1" },
+      {
+        onDelta: () => {},
+        onDone: async () => {
+          terminals.push("done");
+          await new Promise<void>((resolve) => {
+            finishDone = resolve;
+          });
+        },
+        onError: (message) => terminals.push(`error:${message}`),
       },
-      onError: (message) => terminals.push(`error:${message}`),
-    });
+    );
     bridge.emit("chat:done", { streamId: "stream-1", content: "Saved" });
     bridge.emit("chat:error", { streamId: "stream-1", message: "late failure" });
     bridge.emit("chat:done", { streamId: "stream-1", content: "Saved again" });
@@ -240,13 +276,17 @@ test("a done handler that fails still reports through onError exactly once", asy
   const bridge = installFakeBridge();
   try {
     const errors: string[] = [];
-    subscribeGenerationStream("stream-1", { chatId: "chat-1" }, {
-      onDelta: () => {},
-      onDone: async () => {
-        throw new Error("could not settle");
+    subscribeGenerationStream(
+      "stream-1",
+      { chatId: "chat-1" },
+      {
+        onDelta: () => {},
+        onDone: async () => {
+          throw new Error("could not settle");
+        },
+        onError: (message) => errors.push(message),
       },
-      onError: (message) => errors.push(message),
-    });
+    );
     bridge.emit("chat:done", { streamId: "stream-1", content: "Saved" });
     await new Promise((resolve) => setImmediate(resolve));
     assert.deepEqual(errors, ["could not settle"]);
@@ -260,25 +300,33 @@ test("a terminal handler that throws synchronously still releases every listener
   const bridge = installFakeBridge();
   try {
     const errors: string[] = [];
-    subscribeGenerationStream("stream-1", { chatId: "chat-1" }, {
-      onDelta: () => {},
-      onDone: () => {
-        throw new Error("could not settle");
+    subscribeGenerationStream(
+      "stream-1",
+      { chatId: "chat-1" },
+      {
+        onDelta: () => {},
+        onDone: () => {
+          throw new Error("could not settle");
+        },
+        onError: (message) => errors.push(message),
       },
-      onError: (message) => errors.push(message),
-    });
+    );
     bridge.emit("chat:done", { streamId: "stream-1", content: "Saved" });
     await new Promise((resolve) => setImmediate(resolve));
     assert.deepEqual(errors, ["could not settle"]);
     assert.equal(bridge.listenerCount(), 0);
 
-    subscribeGenerationStream("stream-2", { chatId: "chat-1" }, {
-      onDelta: () => {},
-      onDone: () => {},
-      onError: () => {
-        throw new Error("could not report");
+    subscribeGenerationStream(
+      "stream-2",
+      { chatId: "chat-1" },
+      {
+        onDelta: () => {},
+        onDone: () => {},
+        onError: () => {
+          throw new Error("could not report");
+        },
       },
-    });
+    );
     assert.throws(
       () => bridge.emit("chat:error", { streamId: "stream-2", message: "failed" }),
       /could not report/u,
@@ -293,11 +341,15 @@ test("dispose stops delivery before any terminal event", () => {
   const bridge = installFakeBridge();
   try {
     const deltas: string[] = [];
-    const stream = subscribeGenerationStream("design-stream-2", { chatId: "chat-2" }, {
-      onDelta: (delta) => deltas.push(delta),
-      onDone: () => assert.fail("no terminal expected"),
-      onError: (message) => assert.fail(message),
-    });
+    const stream = subscribeGenerationStream(
+      "design-stream-2",
+      { chatId: "chat-2" },
+      {
+        onDelta: (delta) => deltas.push(delta),
+        onDone: () => assert.fail("no terminal expected"),
+        onError: (message) => assert.fail(message),
+      },
+    );
     stream.dispose();
     bridge.emit("chat:delta", { streamId: "design-stream-2", delta: "late" });
     assert.deepEqual(deltas, []);
@@ -310,12 +362,16 @@ test("dispose stops delivery before any terminal event", () => {
 test("native visuals ride the stream projection so a detached view keeps them", () => {
   const bridge = installFakeBridge();
   try {
-    const stream = subscribeGenerationStream("generation-ui", { chatId: "chat-1" }, {
-      onDelta: () => undefined,
-      onDone: () => undefined,
-      onError: (message) => assert.fail(message),
-      onArtifactEvent: () => undefined,
-    });
+    const stream = subscribeGenerationStream(
+      "generation-ui",
+      { chatId: "chat-1" },
+      {
+        onDelta: () => undefined,
+        onDone: () => undefined,
+        onError: (message) => assert.fail(message),
+        onArtifactEvent: () => undefined,
+      },
+    );
     const visual = {
       version: 1,
       kind: "ui",
@@ -326,10 +382,22 @@ test("native visuals ride the stream projection so a detached view keeps them", 
       tree: { t: "Visual", k: "0" },
       fallbackText: "Board",
     };
-    bridge.emit("chat:artifact", { streamId: "generation-ui", event: { version: 1, operation: "ui", visual } });
-    bridge.emit("chat:artifact", { streamId: "generation-ui", event: { version: 1, operation: "ui", visual: { ...visual, fallbackText: "Revised" } } });
-    assert.deepEqual(stream.projection().uiVisuals?.map((entry) => entry.fallbackText), ["Revised"]);
-    bridge.emit("chat:artifact", { streamId: "generation-ui", event: { version: 1, operation: "reset" } });
+    bridge.emit("chat:artifact", {
+      streamId: "generation-ui",
+      event: { version: 1, operation: "ui", visual },
+    });
+    bridge.emit("chat:artifact", {
+      streamId: "generation-ui",
+      event: { version: 1, operation: "ui", visual: { ...visual, fallbackText: "Revised" } },
+    });
+    assert.deepEqual(
+      stream.projection().uiVisuals?.map((entry) => entry.fallbackText),
+      ["Revised"],
+    );
+    bridge.emit("chat:artifact", {
+      streamId: "generation-ui",
+      event: { version: 1, operation: "reset" },
+    });
     assert.deepEqual(stream.projection().uiVisuals, []);
     stream.dispose();
   } finally {
@@ -342,13 +410,17 @@ test("a retry wait reaches its own stream only, and a malformed one is dropped",
   try {
     const retries: unknown[] = [];
     const statuses: string[] = [];
-    const stream = subscribeGenerationStream("retry-stream", { chatId: "chat-retry" }, {
-      onDelta: () => undefined,
-      onDone: () => undefined,
-      onError: (message) => assert.fail(message),
-      onStatus: (phase) => statuses.push(phase),
-      onRetrying: (retry) => retries.push(retry),
-    });
+    const stream = subscribeGenerationStream(
+      "retry-stream",
+      { chatId: "chat-retry" },
+      {
+        onDelta: () => undefined,
+        onDone: () => undefined,
+        onError: (message) => assert.fail(message),
+        onStatus: (phase) => statuses.push(phase),
+        onRetrying: (retry) => retries.push(retry),
+      },
+    );
     const retry = { attempt: 2, maxAttempts: 6, retryAt: 1_000 };
     bridge.emit("chat:status", { streamId: "other-stream", phase: "retrying", retry });
     bridge.emit("chat:status", { streamId: "retry-stream", phase: "retrying", retry });
@@ -370,20 +442,32 @@ test("hook messages reach their own stream as text, never as a status, and junk 
   try {
     const received: string[][] = [];
     const statuses: string[] = [];
-    const stream = subscribeGenerationStream("hook-stream", { chatId: "chat-hook" }, {
-      onDelta: () => undefined,
-      onDone: () => undefined,
-      onError: (message) => assert.fail(message),
-      onStatus: (phase) => statuses.push(phase),
-      onHookMessages: (messages) => received.push(messages),
+    const stream = subscribeGenerationStream(
+      "hook-stream",
+      { chatId: "chat-hook" },
+      {
+        onDelta: () => undefined,
+        onDone: () => undefined,
+        onError: (message) => assert.fail(message),
+        onStatus: (phase) => statuses.push(phase),
+        onHookMessages: (messages) => received.push(messages),
+      },
+    );
+    bridge.emit("chat:status", {
+      streamId: "other-stream",
+      phase: "hook_messages",
+      messages: ["elsewhere"],
     });
-    bridge.emit("chat:status", { streamId: "other-stream", phase: "hook_messages", messages: ["elsewhere"] });
     bridge.emit("chat:status", {
       streamId: "hook-stream",
       phase: "hook_messages",
       messages: ["Hook lint: formatted 3 files", 42, "", "x".repeat(2_000)],
     });
-    bridge.emit("chat:status", { streamId: "hook-stream", phase: "hook_messages", messages: "not a list" });
+    bridge.emit("chat:status", {
+      streamId: "hook-stream",
+      phase: "hook_messages",
+      messages: "not a list",
+    });
     assert.equal(received.length, 1);
     assert.equal(received[0]![0], "Hook lint: formatted 3 files");
     assert.equal(received[0]!.length, 2);

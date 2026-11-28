@@ -1,7 +1,11 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import type { BotPendingHandoff } from "../../../renderer/shared/bot-handoffs.js";
-import { openBotHandoff, type BotHandoffOpenFrom, type BotHandoffOpeners } from "./bot-handoff-open.js";
+import {
+  openBotHandoff,
+  type BotHandoffOpenFrom,
+  type BotHandoffOpeners,
+} from "./bot-handoff-open.js";
 
 function card(overrides: Partial<BotPendingHandoff> = {}): BotPendingHandoff {
   return {
@@ -16,7 +20,12 @@ function card(overrides: Partial<BotPendingHandoff> = {}): BotPendingHandoff {
 }
 
 const LINK = { url: "https://bank.example/verify" };
-const SIGN_IN = card({ kind: "sign_in", action: "Sign in to github.com", origin: "https://github.com", open: { url: "https://github.com/login" } });
+const SIGN_IN = card({
+  kind: "sign_in",
+  action: "Sign in to github.com",
+  origin: "https://github.com",
+  open: { url: "https://github.com/login" },
+});
 
 /** Records every opener call; `browser`/`computer` say whether the Bot has one (undefined: the feature is absent). */
 function openers(options: { browser?: boolean; computer?: boolean } = {}) {
@@ -40,7 +49,11 @@ function openers(options: { browser?: boolean; computer?: boolean } = {}) {
   return { openers: result, calls };
 }
 
-async function open(prompt: BotPendingHandoff, from: BotHandoffOpenFrom, options?: { browser?: boolean; computer?: boolean }) {
+async function open(
+  prompt: BotPendingHandoff,
+  from: BotHandoffOpenFrom,
+  options?: { browser?: boolean; computer?: boolean },
+) {
   const recorded = openers(options);
   const opened = await openBotHandoff(prompt, from, recorded.openers);
   return { opened, calls: recorded.calls };
@@ -53,18 +66,28 @@ test("Open on the Mac takes the person to the card's page: the Bot's own browser
   });
   assert.deepEqual(await open(card({ open: LINK }), "desktop", { browser: false }), {
     opened: "external",
-    calls: ["browser bot:ada w-1 https://bank.example/verify handoff", "external https://bank.example/verify"],
+    calls: [
+      "browser bot:ada w-1 https://bank.example/verify handoff",
+      "external https://bank.example/verify",
+    ],
   });
   assert.deepEqual(await open(card({ open: LINK }), "desktop", { browser: true }), {
     opened: "browser",
     calls: ["browser bot:ada w-1 https://bank.example/verify handoff"],
   });
-  assert.deepEqual(await open(card(), "desktop", { browser: true }), { opened: "none", calls: [] }, "a card without a page opens nothing");
+  assert.deepEqual(
+    await open(card(), "desktop", { browser: true }),
+    { opened: "none", calls: [] },
+    "a card without a page opens nothing",
+  );
 });
 
 test("Open from a phone brings the Bot's chat forward on the Mac and leaves the page to the phone", async () => {
   for (const prompt of [card({ open: LINK }), card()]) {
-    assert.deepEqual(await open(prompt, "phone", { browser: true }), { opened: "focused", calls: ["chat bot:ada"] });
+    assert.deepEqual(await open(prompt, "phone", { browser: true }), {
+      opened: "focused",
+      calls: ["chat bot:ada"],
+    });
   }
 });
 
@@ -73,15 +96,25 @@ test("a sign-in opens where the Bot will use it: its browser or its computer, an
     opened: "browser",
     calls: ["browser bot:ada w-1 https://github.com/login sign_in"],
   });
-  assert.deepEqual(await open({ ...SIGN_IN, target: "computer" }, "desktop", { browser: true, computer: true }), {
-    opened: "computer",
-    calls: ["computer bot:ada w-1 https://github.com/login"],
-  });
-  assert.deepEqual(await open(SIGN_IN, "desktop"), { opened: "none", calls: [] }, "never the system browser: the Bot could not use that sign-in");
-  assert.deepEqual(await open({ ...SIGN_IN, target: "computer" }, "desktop", { browser: true, computer: false }), {
-    opened: "none",
-    calls: ["computer bot:ada w-1 https://github.com/login"],
-  });
+  assert.deepEqual(
+    await open({ ...SIGN_IN, target: "computer" }, "desktop", { browser: true, computer: true }),
+    {
+      opened: "computer",
+      calls: ["computer bot:ada w-1 https://github.com/login"],
+    },
+  );
+  assert.deepEqual(
+    await open(SIGN_IN, "desktop"),
+    { opened: "none", calls: [] },
+    "never the system browser: the Bot could not use that sign-in",
+  );
+  assert.deepEqual(
+    await open({ ...SIGN_IN, target: "computer" }, "desktop", { browser: true, computer: false }),
+    {
+      opened: "none",
+      calls: ["computer bot:ada w-1 https://github.com/login"],
+    },
+  );
 });
 
 test("a sign-in from a phone brings the chat forward first, then opens on the Mac where the Bot can use it", async () => {
@@ -139,9 +172,22 @@ test("a step on the Bot's own screen opens there, never in the system browser, f
 });
 
 test("a link that is not a plain https page is never opened, whoever asks", async () => {
-  for (const url of ["http://bank.example/verify", "javascript:alert(1)", "https://ada:secret@bank.example/", "file:///etc/passwd"]) {
-    assert.deepEqual(await open(card({ open: { url } }), "desktop", { browser: true }), { opened: "none", calls: [] }, url);
-    assert.deepEqual(await open({ ...SIGN_IN, open: { url } }, "desktop", { browser: true }), { opened: "none", calls: [] }, url);
+  for (const url of [
+    "http://bank.example/verify",
+    "javascript:alert(1)",
+    "https://ada:secret@bank.example/",
+    "file:///etc/passwd",
+  ]) {
+    assert.deepEqual(
+      await open(card({ open: { url } }), "desktop", { browser: true }),
+      { opened: "none", calls: [] },
+      url,
+    );
+    assert.deepEqual(
+      await open({ ...SIGN_IN, open: { url } }, "desktop", { browser: true }),
+      { opened: "none", calls: [] },
+      url,
+    );
   }
 });
 
@@ -158,7 +204,10 @@ test("when the Bot's browser fails to open an action's page, the system browser 
   });
   assert.equal(opened, "external");
   assert.deepEqual(calls, ["external https://bank.example/verify"]);
-  assert.deepEqual(errors.map((error) => (error as Error).message), ["Close a browser tab before opening more than 20."]);
+  assert.deepEqual(
+    errors.map((error) => (error as Error).message),
+    ["Close a browser tab before opening more than 20."],
+  );
 });
 
 test("a sign-in the Bot's browser can't open says why on the Mac, and from a phone still brings the chat forward", async () => {
@@ -186,7 +235,12 @@ test("a sign-in the Bot's browser can't open says why on the Mac, and from a pho
 
 test("a rule's card opens the page only in the Bot's own tab: never the person's browser, where the step would act on their own session", async () => {
   // A rule handed the Bot's click on its cart to the person; the cart is the Bot's, in its own browser.
-  const ruled = card({ action: "Make a purchase", open: { url: "https://shop.example/cart" }, source: "rule", rule: { id: "default.purchase", label: "Make a purchase" } });
+  const ruled = card({
+    action: "Make a purchase",
+    open: { url: "https://shop.example/cart" },
+    source: "rule",
+    rule: { id: "default.purchase", label: "Make a purchase" },
+  });
   assert.deepEqual(await open(ruled, "desktop", { browser: true }), {
     opened: "browser",
     calls: ["browser bot:ada w-1 https://shop.example/cart handoff"],

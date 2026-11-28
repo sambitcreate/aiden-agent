@@ -24,7 +24,11 @@ import { AidenRemoteServiceError } from "./aiden-remote-errors.js";
 import type { AidenRemoteCapability } from "./aiden-remote-protocol.js";
 import type { AidenRemoteStreamService, AidenRemoteStreamState } from "./aiden-remote-streams.js";
 import type { AidenRemoteWorkspaceService } from "./aiden-remote-workspaces.js";
-import { CHAT_RUN_TERMINAL_STATES, ChatRunCore, projectRunMessage } from "./chat-orchestration/run-core.js";
+import {
+  CHAT_RUN_TERMINAL_STATES,
+  ChatRunCore,
+  projectRunMessage,
+} from "./chat-orchestration/run-core.js";
 
 export type AidenMcpToolLevel = "read" | "write";
 
@@ -36,8 +40,21 @@ export interface AidenMcpApp {
 }
 
 export interface AidenMcpServices {
-  chats: Pick<AidenRemoteChatService, "listSummaries" | "messagesWindow" | "classify" | "isListedChat" | "hasRecordedRequest" | "runMutation" | "create" | "startTurn">;
-  streams: Pick<AidenRemoteStreamService, "status" | "pendingApproval" | "pendingQuestion" | "cancel" | "watch">;
+  chats: Pick<
+    AidenRemoteChatService,
+    | "listSummaries"
+    | "messagesWindow"
+    | "classify"
+    | "isListedChat"
+    | "hasRecordedRequest"
+    | "runMutation"
+    | "create"
+    | "startTurn"
+  >;
+  streams: Pick<
+    AidenRemoteStreamService,
+    "status" | "pendingApproval" | "pendingQuestion" | "cancel" | "watch"
+  >;
   workspaces: Pick<AidenRemoteWorkspaceService, "list">;
 }
 
@@ -97,11 +114,20 @@ const CLIENT_REQUEST_ID = Type.String({
   pattern: "^[A-Za-z0-9._:-]{8,96}$",
   minLength: 8,
   maxLength: 96,
-  description: "A unique id you choose for this request. Retrying with the same id never starts a second turn.",
+  description:
+    "A unique id you choose for this request. Retrying with the same id never starts a second turn.",
 });
-const TURN_TEXT = Type.String({ minLength: 1, maxLength: TURN_TEXT_LIMIT, description: "The message to send." });
+const TURN_TEXT = Type.String({
+  minLength: 1,
+  maxLength: TURN_TEXT_LIMIT,
+  description: "The message to send.",
+});
 
-type ToolHandler = (app: AidenMcpApp, args: Record<string, unknown>, signal: AbortSignal) => Promise<CallToolResult>;
+type ToolHandler = (
+  app: AidenMcpApp,
+  args: Record<string, unknown>,
+  signal: AbortSignal,
+) => Promise<CallToolResult>;
 
 interface ToolDefinition {
   name: string;
@@ -136,7 +162,9 @@ export class AidenMcpToolRunner {
     this.core = new ChatRunCore({
       answerIn: async () => `Aiden on ${await dependencies.hostName()}`,
       untrackedRun: () =>
-        new ToolRefusal("Aiden no longer tracks this run. Read the chat with aiden_chat_read for its result."),
+        new ToolRefusal(
+          "Aiden no longer tracks this run. Read the chat with aiden_chat_read for its result.",
+        ),
     });
     this.tools = this.defineTools();
   }
@@ -160,7 +188,12 @@ export class AidenMcpToolRunner {
       }));
   }
 
-  async call(app: AidenMcpApp, name: string, args: unknown, signal: AbortSignal): Promise<CallToolResult> {
+  async call(
+    app: AidenMcpApp,
+    name: string,
+    args: unknown,
+    signal: AbortSignal,
+  ): Promise<CallToolResult> {
     const tool = this.tools.find((candidate) => candidate.name === name);
     if (!tool) return toolError("Aiden has no tool with that name.");
     if (!app.capabilities.has(tool.capability)) {
@@ -171,7 +204,12 @@ export class AidenMcpToolRunner {
       );
     }
     const input = args ?? {};
-    if (!input || typeof input !== "object" || Array.isArray(input) || !Value.Check(tool.schema, input)) {
+    if (
+      !input ||
+      typeof input !== "object" ||
+      Array.isArray(input) ||
+      !Value.Check(tool.schema, input)
+    ) {
       return toolError("The arguments do not match the tool's schema.");
     }
     let release: () => void;
@@ -198,7 +236,12 @@ export class AidenMcpToolRunner {
   }
 
   private defineTools(): ToolDefinition[] {
-    const read = { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false };
+    const read = {
+      readOnlyHint: true,
+      destructiveHint: false,
+      idempotentHint: true,
+      openWorldHint: false,
+    };
     return [
       {
         name: "aiden_server_info",
@@ -241,7 +284,8 @@ export class AidenMcpToolRunner {
         level: "read",
         capability: "chat:read",
         title: "Read a chat",
-        description: "Read a chat's most recent messages. Pass `before` (a message id) to read older ones.",
+        description:
+          "Read a chat's most recent messages. Pass `before` (a message id) to read older ones.",
         schema: Type.Object(
           {
             chatId: Type.String(ID),
@@ -264,7 +308,9 @@ export class AidenMcpToolRunner {
           {
             chatId: Type.String(ID),
             runId: Type.String(ID),
-            timeoutSeconds: Type.Optional(Type.Integer({ minimum: 1, maximum: this.limits.maxWaitSeconds })),
+            timeoutSeconds: Type.Optional(
+              Type.Integer({ minimum: 1, maximum: this.limits.maxWaitSeconds }),
+            ),
           },
           { additionalProperties: false },
         ),
@@ -288,7 +334,12 @@ export class AidenMcpToolRunner {
           },
           { additionalProperties: false },
         ),
-        annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: true },
+        annotations: {
+          readOnlyHint: false,
+          destructiveHint: false,
+          idempotentHint: true,
+          openWorldHint: true,
+        },
         handler: async (app, args) => this.turnRequest(app, args, () => this.chatStart(app, args)),
       },
       {
@@ -296,12 +347,18 @@ export class AidenMcpToolRunner {
         level: "write",
         capability: "chat:write",
         title: "Send a message",
-        description: "Send a follow-up message to an Aiden chat. Follow the run with aiden_chat_wait.",
+        description:
+          "Send a follow-up message to an Aiden chat. Follow the run with aiden_chat_wait.",
         schema: Type.Object(
           { clientRequestId: CLIENT_REQUEST_ID, chatId: Type.String(ID), text: TURN_TEXT },
           { additionalProperties: false },
         ),
-        annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: true },
+        annotations: {
+          readOnlyHint: false,
+          destructiveHint: false,
+          idempotentHint: true,
+          openWorldHint: true,
+        },
         handler: async (app, args) => this.turnRequest(app, args, () => this.chatSend(app, args)),
       },
       {
@@ -310,8 +367,16 @@ export class AidenMcpToolRunner {
         capability: "chat:write",
         title: "Stop a run",
         description: "Stop a run this app started. Stopping a finished run does nothing.",
-        schema: Type.Object({ chatId: Type.String(ID), runId: Type.String(ID) }, { additionalProperties: false }),
-        annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+        schema: Type.Object(
+          { chatId: Type.String(ID), runId: Type.String(ID) },
+          { additionalProperties: false },
+        ),
+        annotations: {
+          readOnlyHint: false,
+          destructiveHint: false,
+          idempotentHint: true,
+          openWorldHint: false,
+        },
         handler: async (app, args) => this.chatStop(app, args),
       },
     ];
@@ -329,12 +394,14 @@ export class AidenMcpToolRunner {
 
   private async workspaceList(): Promise<CallToolResult> {
     return toolResult({
-      workspaces: (await offeredWorkspaces(await this.dependencies.services())).map((workspace) => ({
-        id: workspace.id,
-        name: workspace.name,
-        hasFolder: workspace.hasFolder,
-        toolPermission: workspace.permission,
-      })),
+      workspaces: (await offeredWorkspaces(await this.dependencies.services())).map(
+        (workspace) => ({
+          id: workspace.id,
+          name: workspace.name,
+          hasFolder: workspace.hasFolder,
+          toolPermission: workspace.permission,
+        }),
+      ),
     });
   }
 
@@ -374,26 +441,39 @@ export class AidenMcpToolRunner {
     });
   }
 
-  private async chatWait(app: AidenMcpApp, args: Record<string, unknown>, signal: AbortSignal): Promise<CallToolResult> {
+  private async chatWait(
+    app: AidenMcpApp,
+    args: Record<string, unknown>,
+    signal: AbortSignal,
+  ): Promise<CallToolResult> {
     const services = await this.dependencies.services();
     const chatId = args.chatId as string;
     const runId = args.runId as string;
     await requireOrdinaryChat(services, chatId);
-    const timeoutMs = ((args.timeoutSeconds as number | undefined) ?? Math.min(WAIT_DEFAULT_SECONDS, this.limits.maxWaitSeconds)) * 1_000;
+    const timeoutMs =
+      ((args.timeoutSeconds as number | undefined) ??
+        Math.min(WAIT_DEFAULT_SECONDS, this.limits.maxWaitSeconds)) * 1_000;
     const outcome = await this.core.wait(services, app.id, chatId, runId, { timeoutMs, signal });
     if (outcome.kind === "closed") throw new ToolRefusal("This app was disconnected from Aiden.");
     if (outcome.kind === "aborted") return toolError("The wait ended because the request closed.");
     return toolResult(outcome.snapshot);
   }
 
-  private async chatStart(app: AidenMcpApp, args: Record<string, unknown>): Promise<CallToolResult> {
+  private async chatStart(
+    app: AidenMcpApp,
+    args: Record<string, unknown>,
+  ): Promise<CallToolResult> {
     const services = await this.dependencies.services();
     const clientRequestId = args.clientRequestId as string;
     const providerId = args.providerId as string | undefined;
     const modelId = args.modelId as string | undefined;
     // Only a workspace aiden_workspace_list offers: never a one-chat folder or the assistant's own.
-    if (!(await offeredWorkspaces(services)).some((workspace) => workspace.id === args.workspaceId)) {
-      throw new ToolRefusal("Aiden has no workspace with that id. List them with aiden_workspace_list.");
+    if (
+      !(await offeredWorkspaces(services)).some((workspace) => workspace.id === args.workspaceId)
+    ) {
+      throw new ToolRefusal(
+        "Aiden has no workspace with that id. List them with aiden_workspace_list.",
+      );
     }
     // A request Aiden already recorded replays its answer and is not counted
     // again, even after the in-memory request cache forgot it or a restart.
@@ -406,16 +486,19 @@ export class AidenMcpToolRunner {
       ...(providerId ? { providerId } : {}),
       ...(modelId ? { modelId } : {}),
     });
-    await this.dependencies.recordProvenance?.(chat.id, {
-      kind: "app",
-      appId: app.id,
-      name: app.name,
-      startedAt: this.now(),
-    }).catch(() => undefined);
+    await this.dependencies
+      .recordProvenance?.(chat.id, {
+        kind: "app",
+        appId: app.id,
+        name: app.name,
+        startedAt: this.now(),
+      })
+      .catch(() => undefined);
     // The first turn goes through the same mutation fence as any other turn.
     const classification = await requireOrdinaryChat(services, chat.id);
     const turnRecorded =
-      createRecorded && services.chats.hasRecordedRequest(app.id, { kind: "turn", chatId: chat.id }, turnKey);
+      createRecorded &&
+      services.chats.hasRecordedRequest(app.id, { kind: "turn", chatId: chat.id }, turnKey);
     if (createRecorded && !turnRecorded) this.admitTurn(services, app);
     const turn = await services.chats.runMutation(app.id, chat.id, classification, () =>
       services.chats.startTurn(app.id, chat.id, turnKey, { text: args.text }),
@@ -424,9 +507,16 @@ export class AidenMcpToolRunner {
     // Counted once, when the chat's first turn starts; a replay of a recorded
     // request was counted the first time. Never the prompt, chat or workspace.
     if (!turnRecorded) {
-      reportAnalyticsEvent("mcp_chat_started", { model_choice: providerId || modelId ? "chosen" : "default" });
+      reportAnalyticsEvent("mcp_chat_started", {
+        model_choice: providerId || modelId ? "chosen" : "default",
+      });
     }
-    return toolResult({ chatId: chat.id, turnId: turn.turnId, runId: turn.streamId, state: "running" });
+    return toolResult({
+      chatId: chat.id,
+      turnId: turn.turnId,
+      runId: turn.streamId,
+      state: "running",
+    });
   }
 
   private async chatSend(app: AidenMcpApp, args: Record<string, unknown>): Promise<CallToolResult> {
@@ -434,7 +524,8 @@ export class AidenMcpToolRunner {
     const chatId = args.chatId as string;
     const classification = await requireOrdinaryChat(services, chatId);
     const turnKey = `mcp-turn:${args.clientRequestId as string}`;
-    if (!services.chats.hasRecordedRequest(app.id, { kind: "turn", chatId }, turnKey)) this.admitTurn(services, app);
+    if (!services.chats.hasRecordedRequest(app.id, { kind: "turn", chatId }, turnKey))
+      this.admitTurn(services, app);
     const turn = await services.chats.runMutation(app.id, chatId, classification, () =>
       services.chats.startTurn(app.id, chatId, turnKey, { text: args.text }),
     );
@@ -478,7 +569,9 @@ export class AidenMcpToolRunner {
         );
       }
       if (pending.total >= this.limits.hostPendingRequests) {
-        throw new ToolRefusal("Aiden is still answering too many requests from apps. Try again in a moment.");
+        throw new ToolRefusal(
+          "Aiden is still answering too many requests from apps. Try again in a moment.",
+        );
       }
     });
   }
@@ -508,7 +601,9 @@ export class AidenMcpToolRunner {
 /** The workspaces an outside app may start chats in: the person's named ones. */
 async function offeredWorkspaces(services: AidenMcpServices) {
   const { workspaces } = await services.workspaces.list();
-  return workspaces.filter((workspace) => workspace.noWorkspace !== true && workspace.id !== ASSISTANT_WORKSPACE_ID);
+  return workspaces.filter(
+    (workspace) => workspace.noWorkspace !== true && workspace.id !== ASSISTANT_WORKSPACE_ID,
+  );
 }
 
 /**

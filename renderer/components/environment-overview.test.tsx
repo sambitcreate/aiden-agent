@@ -2,7 +2,15 @@ import "../main/bots/test-dom";
 import assert from "node:assert/strict";
 import * as React from "react";
 import { afterEach, mock, test } from "node:test";
-import { act, cleanup, fireEvent, render, renderHook, screen, waitFor } from "@testing-library/react";
+import {
+  act,
+  cleanup,
+  fireEvent,
+  render,
+  renderHook,
+  screen,
+  waitFor,
+} from "@testing-library/react";
 import { QueryClientProvider } from "@tanstack/react-query";
 import { installBotTestIpc } from "../main/bots/test-dom";
 import { createBotTestQueryClient } from "../main/bots/test-providers";
@@ -155,8 +163,14 @@ test("Changes rows show line totals, commit/push and compare for a repository", 
     push: pushFixture({ ahead: 1 }),
   });
   renderChangesRows();
-  assert.ok(await screen.findByRole("button", { name: /Changes, 2 files, 12 known additions, 3 known deletions/ }));
-  assert.ok(await screen.findByRole("button", { name: /Commit or push, 2 changed files, 1 commits ahead/ }));
+  assert.ok(
+    await screen.findByRole("button", {
+      name: /Changes, 2 files, 12 known additions, 3 known deletions/,
+    }),
+  );
+  assert.ok(
+    await screen.findByRole("button", { name: /Commit or push, 2 changed files, 1 commits ahead/ }),
+  );
   assert.ok(screen.getByRole("button", { name: /Compare branch/ }));
 });
 
@@ -193,10 +207,13 @@ const PR_VIEW: ChatPullRequestView = {
 };
 
 test("the Pull request row appears once the chat has a PR and opens it on GitHub", async () => {
-  const calls = installRepoIpc({}, {
-    [PULL_REQUEST_CURRENT_CHANNEL]: () => ({ pullRequest: PR_VIEW, reason: "created" }),
-    "browser:open-external": () => undefined,
-  });
+  const calls = installRepoIpc(
+    {},
+    {
+      [PULL_REQUEST_CURRENT_CHANNEL]: () => ({ pullRequest: PR_VIEW, reason: "created" }),
+      "browser:open-external": () => undefined,
+    },
+  );
   renderChangesRows({ chatId: "chat-1" });
   const row = await screen.findByRole("button", {
     name: "Pull request #42, Open. Opens on GitHub",
@@ -205,55 +222,89 @@ test("the Pull request row appears once the chat has a PR and opens it on GitHub
   fireEvent.click(row);
   // Outside the app-wide link router the PR opens in the system browser.
   await waitFor(() =>
-    assert.ok(calls.some((call) => call.channel === "browser:open-external" && call.args[0] === PR_VIEW.url)),
+    assert.ok(
+      calls.some(
+        (call) => call.channel === "browser:open-external" && call.args[0] === PR_VIEW.url,
+      ),
+    ),
   );
-  assert.ok(calls.some((call) => call.channel === PULL_REQUEST_CURRENT_CHANNEL && call.args[0] === "chat-1"));
+  assert.ok(
+    calls.some(
+      (call) => call.channel === PULL_REQUEST_CURRENT_CHANNEL && call.args[0] === "chat-1",
+    ),
+  );
 });
 
 test("a merged PR without a title, or with an empty one, is named by its branch", async () => {
   for (const title of [undefined, ""]) {
-    installRepoIpc({}, {
-      [PULL_REQUEST_CURRENT_CHANNEL]: () => ({
-        pullRequest: { ...PR_VIEW, title, state: "merged" },
-        reason: "recent-linked",
-      }),
-    });
+    installRepoIpc(
+      {},
+      {
+        [PULL_REQUEST_CURRENT_CHANNEL]: () => ({
+          pullRequest: { ...PR_VIEW, title, state: "merged" },
+          reason: "recent-linked",
+        }),
+      },
+    );
     const { unmount } = renderChangesRows({ chatId: "chat-1" });
-    const row = await screen.findByRole("button", { name: "Pull request #42, Merged. Opens on GitHub" });
-    assert.equal(row.textContent?.includes("#42 feature/x"), true, `title ${JSON.stringify(title)}`);
+    const row = await screen.findByRole("button", {
+      name: "Pull request #42, Merged. Opens on GitHub",
+    });
+    assert.equal(
+      row.textContent?.includes("#42 feature/x"),
+      true,
+      `title ${JSON.stringify(title)}`,
+    );
     unmount();
   }
 });
 
 test("no Pull request row until the chat has a PR, and never one without a chat", async () => {
-  const calls = installRepoIpc({}, {
-    [PULL_REQUEST_CURRENT_CHANNEL]: () => ({ pullRequest: undefined, reason: "none" }),
-  });
+  const calls = installRepoIpc(
+    {},
+    {
+      [PULL_REQUEST_CURRENT_CHANNEL]: () => ({ pullRequest: undefined, reason: "none" }),
+    },
+  );
   renderChangesRows({ chatId: "chat-1" });
   await screen.findByRole("button", { name: /Compare branch/ });
-  await waitFor(() => assert.ok(calls.some((call) => call.channel === PULL_REQUEST_CURRENT_CHANNEL)));
+  await waitFor(() =>
+    assert.ok(calls.some((call) => call.channel === PULL_REQUEST_CURRENT_CHANNEL)),
+  );
   // Let the resolved query render before asserting the row stays absent.
   await act(async () => {});
   assert.equal(screen.queryAllByRole("button", { name: /Pull request/ }).length, 0);
   cleanup();
 
-  const noChatCalls = installRepoIpc({}, {
-    [PULL_REQUEST_CURRENT_CHANNEL]: () => ({ pullRequest: PR_VIEW, reason: "created" }),
-  });
+  const noChatCalls = installRepoIpc(
+    {},
+    {
+      [PULL_REQUEST_CURRENT_CHANNEL]: () => ({ pullRequest: PR_VIEW, reason: "created" }),
+    },
+  );
   renderChangesRows();
   await screen.findByRole("button", { name: /Compare branch/ });
-  assert.equal(noChatCalls.some((call) => call.channel === PULL_REQUEST_CURRENT_CHANNEL), false);
+  assert.equal(
+    noChatCalls.some((call) => call.channel === PULL_REQUEST_CURRENT_CHANNEL),
+    false,
+  );
   assert.equal(screen.queryAllByRole("button", { name: /Pull request/ }).length, 0);
 });
 
 test("a closed Quick View does not ask for the chat's pull request", async () => {
-  const calls = installRepoIpc({}, {
-    [PULL_REQUEST_CURRENT_CHANNEL]: () => ({ pullRequest: PR_VIEW, reason: "created" }),
-  });
+  const calls = installRepoIpc(
+    {},
+    {
+      [PULL_REQUEST_CURRENT_CHANNEL]: () => ({ pullRequest: PR_VIEW, reason: "created" }),
+    },
+  );
   renderChangesRows({ chatId: "chat-1", active: false });
   await waitFor(() => assert.ok(calls.some((call) => call.channel === GIT_CHANNELS.info)));
   await act(async () => {});
-  assert.equal(calls.some((call) => call.channel === PULL_REQUEST_CURRENT_CHANNEL), false);
+  assert.equal(
+    calls.some((call) => call.channel === PULL_REQUEST_CURRENT_CHANNEL),
+    false,
+  );
 });
 
 test("a blocked mutation disables Commit or push and explains why", async () => {
@@ -292,17 +343,28 @@ test("Environment rows describe a managed worktree and a folder outside Git", as
 
 test("the Changes summary reports line totals, a clean tree, or nothing outside Git", async () => {
   installRepoIpc({ review: reviewFixture({ fileCount: 2, additions: 12, deletions: 3 }) });
-  const dirty = renderHook(() => useChangesSummary(WORKSPACE.id, true), { wrapper: wrapperWithClient() });
-  await waitFor(() => assert.match(dirty.result.current?.label ?? "", /2 files, 12 known additions, 3 known deletions/));
+  const dirty = renderHook(() => useChangesSummary(WORKSPACE.id, true), {
+    wrapper: wrapperWithClient(),
+  });
+  await waitFor(() =>
+    assert.match(
+      dirty.result.current?.label ?? "",
+      /2 files, 12 known additions, 3 known deletions/,
+    ),
+  );
   dirty.unmount();
 
   installRepoIpc({ review: reviewFixture() });
-  const clean = renderHook(() => useChangesSummary(WORKSPACE.id, true), { wrapper: wrapperWithClient() });
+  const clean = renderHook(() => useChangesSummary(WORKSPACE.id, true), {
+    wrapper: wrapperWithClient(),
+  });
   await waitFor(() => assert.match(clean.result.current?.label ?? "", /clean/i));
   clean.unmount();
 
   const calls = installNonRepoIpc();
-  const outside = renderHook(() => useChangesSummary(WORKSPACE.id, true), { wrapper: wrapperWithClient() });
+  const outside = renderHook(() => useChangesSummary(WORKSPACE.id, true), {
+    wrapper: wrapperWithClient(),
+  });
   await waitFor(() => assert.ok(calls.some((call) => call.channel === GIT_CHANNELS.review)));
   await waitFor(() => assert.equal(outside.result.current, null));
 });
@@ -313,7 +375,10 @@ test("the Changes card shows for working changes, unpushed commits, or the chat'
     pullRequest: ChatPullRequestView | undefined = undefined,
   ) => {
     const calls = installRepoIpc(repo, {
-      [PULL_REQUEST_CURRENT_CHANNEL]: () => ({ pullRequest, reason: pullRequest ? "created" : "none" }),
+      [PULL_REQUEST_CURRENT_CHANNEL]: () => ({
+        pullRequest,
+        reason: pullRequest ? "created" : "none",
+      }),
     });
     const hook = renderHook(() => useChangesVisibility(WORKSPACE.id, "chat-1", true), {
       wrapper: wrapperWithClient(),
@@ -321,7 +386,11 @@ test("the Changes card shows for working changes, unpushed commits, or the chat'
     return { calls, hook };
   };
   const settled = async ({ calls }: { calls: { channel: string }[] }) => {
-    for (const channel of [GIT_CHANNELS.review, GIT_CHANNELS.pushCapability, PULL_REQUEST_CURRENT_CHANNEL]) {
+    for (const channel of [
+      GIT_CHANNELS.review,
+      GIT_CHANNELS.pushCapability,
+      PULL_REQUEST_CURRENT_CHANNEL,
+    ]) {
       await waitFor(() => assert.ok(calls.some((call) => call.channel === channel)));
     }
     await act(async () => {});
@@ -370,7 +439,9 @@ test("the Environment summary names the branch, or Local outside Git", async () 
   repo.unmount();
 
   installNonRepoIpc();
-  const local = renderHook(() => useEnvironmentSummary(WORKSPACE), { wrapper: wrapperWithClient() });
+  const local = renderHook(() => useEnvironmentSummary(WORKSPACE), {
+    wrapper: wrapperWithClient(),
+  });
   await waitFor(() => assert.equal(local.result.current?.label, "Local"));
   local.unmount();
 
@@ -379,11 +450,15 @@ test("the Environment summary names the branch, or Local outside Git", async () 
 });
 
 test("Quick View explains a missing folder or disabled file access, and nothing otherwise", () => {
-  const missing = render(<QuickViewUnavailable workspace={{ ...WORKSPACE, folderPath: undefined }} />);
+  const missing = render(
+    <QuickViewUnavailable workspace={{ ...WORKSPACE, folderPath: undefined }} />,
+  );
   assert.ok(screen.getByText("No workspace folder"));
   missing.unmount();
 
-  const noAccess = render(<QuickViewUnavailable workspace={{ ...WORKSPACE, permission: "none" }} />);
+  const noAccess = render(
+    <QuickViewUnavailable workspace={{ ...WORKSPACE, permission: "none" }} />,
+  );
   assert.ok(screen.getByText("File access is off"));
   noAccess.unmount();
 
@@ -392,11 +467,14 @@ test("Quick View explains a missing folder or disabled file access, and nothing 
 });
 
 test("the folder row browses files and offers the preferred editor", async () => {
-  const calls = installRepoIpc({}, {
-    [EDITOR_CHANNELS.openFolder]: () => undefined,
-    [EDITOR_CHANNELS.list]: () => [{ id: "vscode", label: "VS Code" }],
-    [EDITOR_CHANNELS.open]: () => undefined,
-  });
+  const calls = installRepoIpc(
+    {},
+    {
+      [EDITOR_CHANNELS.openFolder]: () => undefined,
+      [EDITOR_CHANNELS.list]: () => [{ id: "vscode", label: "VS Code" }],
+      [EDITOR_CHANNELS.open]: () => undefined,
+    },
+  );
   const browsed: string[] = [];
   renderEnvironmentRows({ onBrowseFiles: () => browsed.push("files") });
   const browse = await screen.findByRole("button", { name: `Browse files in ${WORKSPACE.name}` });
@@ -410,7 +488,10 @@ test("the folder row browses files and offers the preferred editor", async () =>
   fireEvent.click(await screen.findByRole("button", { name: "Open in VS Code" }));
   await waitFor(() => {
     const opened = calls.filter((call) => call.channel === EDITOR_CHANNELS.open);
-    assert.deepEqual(opened.map((call) => call.args), [[WORKSPACE.id, "vscode"]]);
+    assert.deepEqual(
+      opened.map((call) => call.args),
+      [[WORKSPACE.id, "vscode"]],
+    );
   });
 });
 
@@ -432,11 +513,14 @@ test("the folder row hides the editor action when no editor is installed", async
 test("the folder row leaves editor discovery failures to the toolbar picker", async () => {
   const toastError = mock.method(toast, "error", () => "toast-id");
   try {
-    const calls = installRepoIpc({}, {
-      [EDITOR_CHANNELS.list]: () => {
-        throw new Error("Couldn't list editors");
+    const calls = installRepoIpc(
+      {},
+      {
+        [EDITOR_CHANNELS.list]: () => {
+          throw new Error("Couldn't list editors");
+        },
       },
-    });
+    );
     renderEnvironmentRows();
     assert.ok(await screen.findByRole("button", { name: `Browse files in ${WORKSPACE.name}` }));
     await waitFor(() => assert.ok(calls.some((call) => call.channel === EDITOR_CHANNELS.list)));
@@ -471,7 +555,10 @@ test("useShowWorkspaceFolder names the workspace and opens its folder", async ()
   act(() => result.current.show());
   await waitFor(() => {
     const opened = calls.filter((call) => call.channel === EDITOR_CHANNELS.openFolder);
-    assert.deepEqual(opened.map((call) => call.args), [[WORKSPACE.id]]);
+    assert.deepEqual(
+      opened.map((call) => call.args),
+      [[WORKSPACE.id]],
+    );
   });
 });
 
@@ -488,9 +575,14 @@ test("useShowWorkspaceFolder reports an open failure in a toast instead of throw
     });
     const { result } = renderHook(() => useShowWorkspaceFolder(WORKSPACE));
     assert.doesNotThrow(() => result.current.show());
-    await waitFor(() => assert.ok(calls.some((call) => call.channel === EDITOR_CHANNELS.openFolder)));
     await waitFor(() =>
-      assert.deepEqual(toastError.mock.calls.map((call) => call.arguments[0]), ["Folder is gone"]),
+      assert.ok(calls.some((call) => call.channel === EDITOR_CHANNELS.openFolder)),
+    );
+    await waitFor(() =>
+      assert.deepEqual(
+        toastError.mock.calls.map((call) => call.arguments[0]),
+        ["Folder is gone"],
+      ),
     );
     assert.equal(unhandled.length, 0);
   } finally {

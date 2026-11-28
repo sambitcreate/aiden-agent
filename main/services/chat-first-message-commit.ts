@@ -35,7 +35,9 @@ interface Dependencies {
   markReconciliation(ownerId: string): void;
   clearReconciliation(ownerId: string): void;
   admitWorkspace(workspaceId: string, owner: Owner): WorkspaceOperationAdmission;
-  getWorkspace(workspaceId: string): Promise<Pick<Workspace, "noWorkspace" | "managedWorktree" | "scratch"> | null | undefined>;
+  getWorkspace(
+    workspaceId: string,
+  ): Promise<Pick<Workspace, "noWorkspace" | "managedWorktree" | "scratch"> | null | undefined>;
   /** Main-owned assignment of a private No workspace folder before the first commit. */
   prepareWorkspace?(sourceWorkspaceId: string): Promise<WorkspaceChatAssignment>;
   releaseUnusedWorkspace?(workspaceId: string): Promise<void>;
@@ -47,10 +49,14 @@ export function createFirstMessageCommitter(deps: Dependencies) {
   // Entries live only as long as the bounded turn lease. Their append payload
   // reservation stays charged while the completed receipt is cached, so sends
   // that never hand off to generation cannot bypass the memory budget.
-  const pending = new Map<string, { ownerId: string; fingerprint: string; promise: Promise<Chat> }>();
+  const pending = new Map<
+    string,
+    { ownerId: string; fingerprint: string; promise: Promise<Chat> }
+  >();
 
   return (input: ParsedChatFirstMessage, owner: Owner): Promise<Chat> => {
-    if (input.worktree) throw new Error("A first message in a new worktree needs the worktree commit path.");
+    if (input.worktree)
+      throw new Error("A first message in a new worktree needs the worktree commit path.");
     if (owner.isDestroyed()) throw new Error("The renderer document is no longer active.");
     if (deps.requiresReconciliation(owner.documentId)) {
       throw new Error(appendReconciliationFailureMessage("blocked"));
@@ -64,7 +70,8 @@ export function createFirstMessageCommitter(deps: Dependencies) {
       return inFlight.promise;
     }
     const turn = deps.beginTurn(input.chatId, input.turnId, owner.documentId);
-    if (!turn) throw new Error("Wait for the previous response to finish saving before sending again.");
+    if (!turn)
+      throw new Error("Wait for the previous response to finish saving before sending again.");
     turn.onReleased(owner.onInvalidated(turn.release));
     try {
       turn.reserveAppendPayload(input.retainedBytes);
@@ -74,7 +81,11 @@ export function createFirstMessageCommitter(deps: Dependencies) {
       turn.settleAsyncWork();
       throw error;
     }
-    const entry = { ownerId: owner.documentId, fingerprint, promise: undefined as unknown as Promise<Chat> };
+    const entry = {
+      ownerId: owner.documentId,
+      fingerprint,
+      promise: undefined as unknown as Promise<Chat>,
+    };
     pending.set(input.chatId, entry);
     turn.onReleased(() => {
       if (pending.get(input.chatId) === entry) pending.delete(input.chatId);
@@ -104,9 +115,15 @@ export function createFirstMessageCommitter(deps: Dependencies) {
       };
       try {
         admit(input.workspaceId);
-        const isCurrent = () => turn.isActive() && !owner.isDestroyed() && workspaces.every((workspace) => !workspace.signal.aborted);
+        const isCurrent = () =>
+          turn.isActive() &&
+          !owner.isDestroyed() &&
+          workspaces.every((workspace) => !workspace.signal.aborted);
         const assertCurrent = () => {
-          if (!isCurrent()) throw new Error("The workspace or message turn changed before the chat could be saved.");
+          if (!isCurrent())
+            throw new Error(
+              "The workspace or message turn changed before the chat could be saved.",
+            );
           if (deps.requiresReconciliation(owner.documentId)) {
             throw new Error(appendReconciliationFailureMessage("blocked"));
           }
@@ -114,8 +131,10 @@ export function createFirstMessageCommitter(deps: Dependencies) {
         const existing = await deps.store.get(input.chatId);
         assertCurrent();
         if (existing) {
-          if (existing.firstMessageCommit?.turnId !== input.turnId ||
-              existing.firstMessageCommit.fingerprint !== fingerprint) {
+          if (
+            existing.firstMessageCommit?.turnId !== input.turnId ||
+            existing.firstMessageCommit.fingerprint !== fingerprint
+          ) {
             throw new Error("This draft identifier has already been used for a different message.");
           }
           // A replay after the original lease settled confirms delivery but
@@ -135,52 +154,58 @@ export function createFirstMessageCommitter(deps: Dependencies) {
         if (workspaceId !== input.workspaceId) admit(workspaceId);
         assertCurrent();
         const userMessageId = randomUUID();
-        const append = (prepared?: { provenance: SkillProvenanceV1 }) => deps.store.createWithFirstMessage({
-          id: input.chatId,
-          title: input.title,
-          workspaceId,
-          ...(input.ephemeral === true ? { ephemeral: true as const } : {}),
-          providerId: input.providerId,
-          model: input.metaModel,
-          ...(input.thinkingLevel ? { thinkingLevel: input.thinkingLevel } : {}),
-          turnId: input.turnId,
-          fingerprint,
-          message: {
-            id: userMessageId,
-            content: input.content,
-            model: input.messageModel,
-            attachments: input.attachments,
-            ...(input.grabbedElements ? { grabbedElements: input.grabbedElements } : {}),
-            skill: prepared?.provenance,
-            ...(input.inputSource ? { inputSource: input.inputSource } : {}),
-          },
-          assertCurrent,
-        });
-        const chat = input.skillReference
-          ? await commitSkillInvocationForAppend({
-              invocationId: input.skillReference.invocationId,
-              role: "user",
+        const append = (prepared?: { provenance: SkillProvenanceV1 }) =>
+          deps.store.createWithFirstMessage({
+            id: input.chatId,
+            title: input.title,
+            workspaceId,
+            ...(input.ephemeral === true ? { ephemeral: true as const } : {}),
+            providerId: input.providerId,
+            model: input.metaModel,
+            ...(input.thinkingLevel ? { thinkingLevel: input.thinkingLevel } : {}),
+            turnId: input.turnId,
+            fingerprint,
+            message: {
+              id: userMessageId,
               content: input.content,
+              model: input.messageModel,
               attachments: input.attachments,
-              grabbedElements: input.grabbedElements,
-              workspaceId,
-              userMessageId,
-            }, {
-              // Skills remain bound to the workspace where the person selected
-              // them; the prepared turn belongs to the new private folder/worktree.
-              resolveFresh: (_workspaceId, invocationId) =>
-                deps.resolveSkill(input.skillWorkspaceId ?? input.workspaceId, invocationId),
-              isCurrent,
-              prepareLease: (prepared) => turn.prepareSkillInvocation(prepared),
-              append,
-            })
+              ...(input.grabbedElements ? { grabbedElements: input.grabbedElements } : {}),
+              skill: prepared?.provenance,
+              ...(input.inputSource ? { inputSource: input.inputSource } : {}),
+            },
+            assertCurrent,
+          });
+        const chat = input.skillReference
+          ? await commitSkillInvocationForAppend(
+              {
+                invocationId: input.skillReference.invocationId,
+                role: "user",
+                content: input.content,
+                attachments: input.attachments,
+                grabbedElements: input.grabbedElements,
+                workspaceId,
+                userMessageId,
+              },
+              {
+                // Skills remain bound to the workspace where the person selected
+                // them; the prepared turn belongs to the new private folder/worktree.
+                resolveFresh: (_workspaceId, invocationId) =>
+                  deps.resolveSkill(input.skillWorkspaceId ?? input.workspaceId, invocationId),
+                isCurrent,
+                prepareLease: (prepared) => turn.prepareSkillInvocation(prepared),
+                append,
+              },
+            )
           : await append();
         committed = true;
         reportAnalyticsEvent("chat_created", { workspace_kind: analyticsWorkspaceKind(target) });
         if (input.grabbedElements?.length) {
           reportAnalyticsEvent("browser_grab_sent", {
             count_bucket: countBucket(input.grabbedElements.length),
-            with_screenshot: input.grabbedElements.some((element) => Boolean(element.thumbnailAttachmentId)),
+            with_screenshot: input.grabbedElements.some((element) =>
+              Boolean(element.thumbnailAttachmentId),
+            ),
           });
         }
         return chat;
@@ -278,15 +303,23 @@ export function createWorktreeFirstMessageCommitter(deps: WorktreeCommitDependen
     }
     let worktree: FirstMessageWorktreeInfo;
     try {
-      worktree = await deps.ensureWorktree(request, input.content || input.title || input.grabbedElements?.[0]?.label || "", owner, onProgress);
+      worktree = await deps.ensureWorktree(
+        request,
+        input.content || input.title || input.grabbedElements?.[0]?.label || "",
+        owner,
+        onProgress,
+      );
     } catch (error) {
       return worktreeFailure(error);
     }
-    const chat = await deps.commit({
-      ...plain,
-      workspaceId: worktree.workspaceId,
-      ...(input.skillReference ? { skillWorkspaceId: request.sourceWorkspaceId } : {}),
-    }, owner);
+    const chat = await deps.commit(
+      {
+        ...plain,
+        workspaceId: worktree.workspaceId,
+        ...(input.skillReference ? { skillWorkspaceId: request.sourceWorkspaceId } : {}),
+      },
+      owner,
+    );
     return { ok: true, chat, worktree };
   };
 }

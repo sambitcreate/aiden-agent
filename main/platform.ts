@@ -108,7 +108,8 @@ export function registerBroadcastReceiver(
 }
 
 function broadcastBotId(channel: NotificationChannel, payload: unknown): string | undefined {
-  if (!channel.startsWith("bots:") || typeof payload !== "object" || payload === null) return undefined;
+  if (!channel.startsWith("bots:") || typeof payload !== "object" || payload === null)
+    return undefined;
   const botId = (payload as { botId?: unknown }).botId;
   return typeof botId === "string" ? botId : undefined;
 }
@@ -160,9 +161,7 @@ export function registerNativeHandlers(): void {
     requireNativeSender(event);
     const options = parseOpenDialogOptions(input);
     const parent = BrowserWindow.fromWebContents(event.sender);
-    return parent
-      ? dialog.showOpenDialog(parent, options)
-      : dialog.showOpenDialog(options);
+    return parent ? dialog.showOpenDialog(parent, options) : dialog.showOpenDialog(options);
   });
 
   electronIpcMain.handle("aiden:theme:get", () => ({
@@ -188,9 +187,7 @@ export function registerNativeHandlers(): void {
   electronIpcMain.handle("aiden:media:request", (event, input: unknown) => {
     requireNativeSender(event);
     const mediaType = parseMediaRequestType(input);
-    return process.platform === "darwin"
-      ? systemPreferences.askForMediaAccess(mediaType)
-      : true;
+    return process.platform === "darwin" ? systemPreferences.askForMediaAccess(mediaType) : true;
   });
   electronIpcMain.handle("aiden:accessibility:status", () =>
     hostPlatformCapabilities().accessibilityPaste

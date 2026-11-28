@@ -8,7 +8,11 @@ import * as React from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { toast } from "../components/ui";
 import { isAcpHarnessProvider } from "../shared/acp-harness";
-import { effectiveApprovalMode, workspaceApprovalPolicy, type ApprovalWorkspaceFields } from "../shared/approval-mode";
+import {
+  effectiveApprovalMode,
+  workspaceApprovalPolicy,
+  type ApprovalWorkspaceFields,
+} from "../shared/approval-mode";
 import { settingsApi, type ApprovalPrompt } from "./ipc";
 import { isUsable } from "./model-picker-data";
 import { queryKeys, useProviders, useSettings } from "./queries";
@@ -36,7 +40,9 @@ export function noteWorkspaceAllow(workspaceId: string, toolName: string): void 
  * and every specialized review ask in Auto too, so they never count, and a
  * paired host's card answers to that host's mode.
  */
-export function repeatableApproval(prompt: Pick<ApprovalPrompt, "autoWouldJudge" | "source">): boolean {
+export function repeatableApproval(
+  prompt: Pick<ApprovalPrompt, "autoWouldJudge" | "source">,
+): boolean {
   return prompt.source !== "remote" && prompt.autoWouldJudge === true;
 }
 
@@ -67,7 +73,9 @@ export function useSwitchToAutoOffer(followsGlobalMode = true): SwitchToAutoOffe
   const providers = useProviders();
   const queryClient = useQueryClient();
   const [switching, setSwitching] = React.useState(false);
-  const usable = (providers.data ?? []).some((provider) => isUsable(provider) && !isAcpHarnessProvider(provider.id));
+  const usable = (providers.data ?? []).some(
+    (provider) => isUsable(provider) && !isAcpHarnessProvider(provider.id),
+  );
   const offered =
     followsGlobalMode &&
     settings.data !== undefined &&
@@ -81,7 +89,9 @@ export function useSwitchToAutoOffer(followsGlobalMode = true): SwitchToAutoOffe
       .set({ approvalMode: "auto" })
       .then((saved) => {
         queryClient.setQueryData<AppSettings>(queryKeys.settings, saved);
-        toast.success("Auto is on. This card still needs your answer; from now on a model checks routine actions like it. Change it in Settings → Approvals.");
+        toast.success(
+          "Auto is on. This card still needs your answer; from now on a model checks routine actions like it. Change it in Settings → Approvals.",
+        );
       })
       .catch(() => toast.error("Couldn’t switch to Auto."))
       .finally(() => setSwitching(false));
@@ -109,10 +119,16 @@ export function useWorkspaceRepeatNudge(
   workspace: (ApprovalWorkspaceFields & { id: string }) | undefined,
   pending: Pick<ApprovalPrompt, "toolName" | "autoWouldJudge" | "source"> | undefined,
 ): { notes?: string[]; suggestion?: ReturnType<typeof switchToAutoSuggestion> } {
-  const follows = workspace !== undefined && !workspaceApprovalPolicy(workspace, "ask").customized && workspace.permission !== "none";
+  const follows =
+    workspace !== undefined &&
+    !workspaceApprovalPolicy(workspace, "ask").customized &&
+    workspace.permission !== "none";
   const offer = useSwitchToAutoOffer(follows);
   if (!offer || !workspace || !pending || !repeatableApproval(pending)) return {};
   const allows = workspaceAllowCount(workspace.id, pending.toolName);
   if (allows < WORKSPACE_REPEAT_THRESHOLD) return {};
-  return { notes: [`You’ve allowed this ${allows} times since Aiden opened.`], suggestion: switchToAutoSuggestion(offer) };
+  return {
+    notes: [`You’ve allowed this ${allows} times since Aiden opened.`],
+    suggestion: switchToAutoSuggestion(offer),
+  };
 }

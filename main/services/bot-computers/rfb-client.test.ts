@@ -22,7 +22,8 @@ function replay(bytes: Buffer, chunk = bytes.length) {
     },
   });
   setImmediate(() => {
-    for (let offset = 0; offset < bytes.length; offset += chunk) socket.push(bytes.subarray(offset, offset + chunk));
+    for (let offset = 0; offset < bytes.length; offset += chunk)
+      socket.push(bytes.subarray(offset, offset + chunk));
   });
   return { socket, written: () => Buffer.concat(written) };
 }
@@ -36,7 +37,16 @@ function clientMessages(bytes: Buffer) {
   const messages: { type: number; body: Buffer }[] = [];
   while (offset < bytes.length) {
     const type = bytes[offset];
-    const length = type === 0 ? 20 : type === 2 ? 4 + bytes.readUInt16BE(offset + 2) * 4 : type === 3 ? 10 : type === 4 ? 8 : 6;
+    const length =
+      type === 0
+        ? 20
+        : type === 2
+          ? 4 + bytes.readUInt16BE(offset + 2) * 4
+          : type === 3
+            ? 10
+            : type === 4
+              ? 8
+              : 6;
     messages.push({ type, body: bytes.subarray(offset, offset + length) });
     offset += length;
   }
@@ -55,7 +65,10 @@ const BLUE = [255, 0, 0, 255];
 const WHITE = [255, 255, 255, 255];
 const BLACK = [0, 0, 0, 255];
 
-async function withServer(options: ConstructorParameters<typeof FakeRfbServer>[0], run: (server: FakeRfbServer, port: number) => Promise<void>) {
+async function withServer(
+  options: ConstructorParameters<typeof FakeRfbServer>[0],
+  run: (server: FakeRfbServer, port: number) => Promise<void>,
+) {
   const server = new FakeRfbServer(options);
   const port = await server.listen();
   try {
@@ -92,8 +105,13 @@ test("a 1024×768 ServerInit gives a shared client that asks for Raw, CopyRect a
     "the server already speaks BGRX, so no SetPixelFormat",
   );
   const encodings = sent.messages[0].body;
-  const listed = Array.from({ length: encodings.readUInt16BE(2) }, (_, index) => encodings.readInt32BE(4 + index * 4));
-  assert.deepEqual([...listed].sort((a, b) => a - b), [-223, 0, 1]);
+  const listed = Array.from({ length: encodings.readUInt16BE(2) }, (_, index) =>
+    encodings.readInt32BE(4 + index * 4),
+  );
+  assert.deepEqual(
+    [...listed].sort((a, b) => a - b),
+    [-223, 0, 1],
+  );
   const request = sent.messages[1].body;
   assert.equal(request[1], 0, "the first request is for the whole screen");
   assert.deepEqual([request.readUInt16BE(6), request.readUInt16BE(8)], [1024, 768]);
@@ -129,7 +147,15 @@ test("a CopyRect copies pixels the client already has", async () => {
   await client.nextUpdate({ timeoutMs: 2_000 });
   const copied = await client.nextUpdate({ timeoutMs: 2_000 });
   assert.deepEqual(copied.rects, [{ x: 500, y: 300, width: 2, height: 2 }]);
-  assert.deepEqual([bgra(client, 500, 300), bgra(client, 501, 300), bgra(client, 500, 301), bgra(client, 501, 301)], [RED, GREEN, BLUE, WHITE]);
+  assert.deepEqual(
+    [
+      bgra(client, 500, 300),
+      bgra(client, 501, 300),
+      bgra(client, 500, 301),
+      bgra(client, 501, 301),
+    ],
+    [RED, GREEN, BLUE, WHITE],
+  );
   client.close();
 });
 
@@ -150,12 +176,15 @@ test("a DesktopSize resizes the framebuffer and asks again for the whole new scr
 
 test("VNC auth with the run's password connects on RFB 3.3, 3.7 and 3.8", async () => {
   for (const version of ["3.3", "3.7", "3.8"] as const) {
-    await withServer({ password: "Kq7Lm2PzX9", version, width: 32, height: 24 }, async (server, port) => {
-      const client = await connectRfb(open(port), { password: "Kq7Lm2PzX9" });
-      assert.equal(server.connections[0].authenticated, true, version);
-      assert.deepEqual([client.width, client.height], [32, 24]);
-      client.close();
-    });
+    await withServer(
+      { password: "Kq7Lm2PzX9", version, width: 32, height: 24 },
+      async (server, port) => {
+        const client = await connectRfb(open(port), { password: "Kq7Lm2PzX9" });
+        assert.equal(server.connections[0].authenticated, true, version);
+        assert.deepEqual([client.width, client.height], [32, 24]);
+        client.close();
+      },
+    );
   }
 });
 
@@ -177,26 +206,38 @@ test("a wrong password is refused with the server's reason, and a missing one ne
       assert.match(error.message, /Authentication failed/u);
       return true;
     });
-    await assert.rejects(connectRfb(open(port)), (error: unknown) => error instanceof RfbError && error.code === "security");
+    await assert.rejects(
+      connectRfb(open(port)),
+      (error: unknown) => error instanceof RfbError && error.code === "security",
+    );
     assert.equal(server.connections.filter((connection) => connection.authenticated).length, 0);
   });
 });
 
 test("a server in another pixel format is asked for BGRX, and its pixels decode correctly", async () => {
-  await withServer({ nativeFormat: { bigEndian: true, redShift: 0, greenShift: 8, blueShift: 16 }, width: 16, height: 16 }, async (server, port) => {
-    const client = await connectRfb(open(port));
-    await client.nextUpdate({ full: true, timeoutMs: 2_000 });
-    assert.deepEqual(server.connections[0].setPixelFormats, [{ bigEndian: false, redShift: 16, greenShift: 8, blueShift: 0 }]);
-    await client.requestUpdate(true);
-    const painted = client.nextUpdate({ timeoutMs: 2_000 });
-    // The incremental request is held until something changes.
-    await until(() => server.connections[0].updateRequests.length === 2);
-    server.paint({ x: 3, y: 4, width: 2, height: 1 }, [10, 20, 30]);
-    const update = await painted;
-    assert.deepEqual(update.rects, [{ x: 3, y: 4, width: 2, height: 1 }]);
-    assert.deepEqual(bgra(client, 4, 4), [30, 20, 10, 255]);
-    client.close();
-  });
+  await withServer(
+    {
+      nativeFormat: { bigEndian: true, redShift: 0, greenShift: 8, blueShift: 16 },
+      width: 16,
+      height: 16,
+    },
+    async (server, port) => {
+      const client = await connectRfb(open(port));
+      await client.nextUpdate({ full: true, timeoutMs: 2_000 });
+      assert.deepEqual(server.connections[0].setPixelFormats, [
+        { bigEndian: false, redShift: 16, greenShift: 8, blueShift: 0 },
+      ]);
+      await client.requestUpdate(true);
+      const painted = client.nextUpdate({ timeoutMs: 2_000 });
+      // The incremental request is held until something changes.
+      await until(() => server.connections[0].updateRequests.length === 2);
+      server.paint({ x: 3, y: 4, width: 2, height: 1 }, [10, 20, 30]);
+      const update = await painted;
+      assert.deepEqual(update.rects, [{ x: 3, y: 4, width: 2, height: 1 }]);
+      assert.deepEqual(bgra(client, 4, 4), [30, 20, 10, 255]);
+      client.close();
+    },
+  );
 });
 
 test("a wait for a full picture skips partial updates", async () => {
@@ -251,7 +292,10 @@ function handshakeBytes(width: number, height: number, nameLength = 0): Buffer {
   return Buffer.concat([Buffer.from("RFB 003.008\n"), Buffer.from([1, 1, 0, 0, 0, 0]), init]);
 }
 
-async function refusal(bytes: Buffer, options: Parameters<typeof connectRfb>[1] = {}): Promise<RfbError> {
+async function refusal(
+  bytes: Buffer,
+  options: Parameters<typeof connectRfb>[1] = {},
+): Promise<RfbError> {
   const { socket } = replay(bytes);
   try {
     const client = await connectRfb(socket, options);
@@ -268,7 +312,14 @@ function update(...rects: Buffer[]): Buffer {
   return Buffer.concat([header, ...rects]);
 }
 
-function rect(x: number, y: number, width: number, height: number, encoding: number, body = Buffer.alloc(0)): Buffer {
+function rect(
+  x: number,
+  y: number,
+  width: number,
+  height: number,
+  encoding: number,
+  body = Buffer.alloc(0),
+): Buffer {
   const header = Buffer.alloc(12);
   header.writeUInt16BE(x, 0);
   header.writeUInt16BE(y, 2);
@@ -282,15 +333,42 @@ test("malformed and oversized servers are refused before anything is allocated f
   const cases: [string, Buffer, string][] = [
     ["not RFB", Buffer.from("HTTP/1.1 200\n"), "malformed"],
     ["RFB 4", Buffer.from("RFB 004.000\n"), "unsupported_version"],
-    ["only unknown security", Buffer.concat([Buffer.from("RFB 003.008\n"), Buffer.from([1, 16])]), "security"],
+    [
+      "only unknown security",
+      Buffer.concat([Buffer.from("RFB 003.008\n"), Buffer.from([1, 16])]),
+      "security",
+    ],
     ["9000 px wide", handshakeBytes(9000, 10), "too_large"],
     ["zero size", handshakeBytes(0, 10), "too_large"],
     ["a huge name", handshakeBytes(10, 10, 10_000_000), "too_large"],
-    ["a rect past the edge", Buffer.concat([handshakeBytes(10, 10), update(rect(8, 8, 4, 4, 0))]), "malformed"],
-    ["a copy from past the edge", Buffer.concat([handshakeBytes(10, 10), update(rect(0, 0, 2, 2, 1, Buffer.from([0, 9, 0, 9])))]), "malformed"],
-    ["an unrequested encoding", Buffer.concat([handshakeBytes(10, 10), update(rect(0, 0, 1, 1, 16))]), "malformed"],
-    ["a resize to 10000 px", Buffer.concat([handshakeBytes(10, 10), update(rect(0, 0, 10_000, 10, -223))]), "too_large"],
-    ["oversized clipboard", Buffer.concat([handshakeBytes(10, 10), Buffer.from([3, 0, 0, 0, 0x7f, 0, 0, 0])]), "too_large"],
+    [
+      "a rect past the edge",
+      Buffer.concat([handshakeBytes(10, 10), update(rect(8, 8, 4, 4, 0))]),
+      "malformed",
+    ],
+    [
+      "a copy from past the edge",
+      Buffer.concat([
+        handshakeBytes(10, 10),
+        update(rect(0, 0, 2, 2, 1, Buffer.from([0, 9, 0, 9]))),
+      ]),
+      "malformed",
+    ],
+    [
+      "an unrequested encoding",
+      Buffer.concat([handshakeBytes(10, 10), update(rect(0, 0, 1, 1, 16))]),
+      "malformed",
+    ],
+    [
+      "a resize to 10000 px",
+      Buffer.concat([handshakeBytes(10, 10), update(rect(0, 0, 10_000, 10, -223))]),
+      "too_large",
+    ],
+    [
+      "oversized clipboard",
+      Buffer.concat([handshakeBytes(10, 10), Buffer.from([3, 0, 0, 0, 0x7f, 0, 0, 0])]),
+      "too_large",
+    ],
     ["an unknown message", Buffer.concat([handshakeBytes(10, 10), Buffer.from([99])]), "malformed"],
   ];
   for (const [label, bytes, code] of cases) {
@@ -310,7 +388,15 @@ test("a bell and clipboard text are skipped without disturbing the picture", asy
   cut[0] = 3;
   cut.writeInt32BE(text.length, 4);
   const pixel = Buffer.from([0, 255, 0, 0]);
-  const { socket } = replay(Buffer.concat([handshakeBytes(4, 4), Buffer.from([2]), cut, text, update(rect(1, 1, 1, 1, 0, pixel))]));
+  const { socket } = replay(
+    Buffer.concat([
+      handshakeBytes(4, 4),
+      Buffer.from([2]),
+      cut,
+      text,
+      update(rect(1, 1, 1, 1, 0, pixel)),
+    ]),
+  );
   const client = await connectRfb(socket);
   await client.nextUpdate({ timeoutMs: 2_000 });
   assert.deepEqual(bgra(client, 1, 1), GREEN);
@@ -321,9 +407,12 @@ test("a bell and clipboard text are skipped without disturbing the picture", asy
 test("a handshake that stalls and a message that stops halfway both time out", async () => {
   const stalled = await refusal(Buffer.from("RFB 003.008\n"), { handshakeTimeoutMs: 50 });
   assert.equal(stalled.code, "timeout");
-  const halfway = await refusal(Buffer.concat([handshakeBytes(10, 10), update(rect(0, 0, 4, 4, 0, Buffer.alloc(10)))]), {
-    messageTimeoutMs: 50,
-  });
+  const halfway = await refusal(
+    Buffer.concat([handshakeBytes(10, 10), update(rect(0, 0, 4, 4, 0, Buffer.alloc(10)))]),
+    {
+      messageTimeoutMs: 50,
+    },
+  );
   assert.equal(halfway.code, "timeout");
 });
 
@@ -340,7 +429,10 @@ test("an abort during the handshake cancels it and closes the socket", async () 
   const { socket } = replay(Buffer.from("RFB 003.008\n"));
   const connecting = connectRfb(socket, { signal: controller.signal });
   setTimeout(() => controller.abort(), 10);
-  await assert.rejects(connecting, (error: unknown) => error instanceof RfbError && error.code === "cancelled");
+  await assert.rejects(
+    connecting,
+    (error: unknown) => error instanceof RfbError && error.code === "cancelled",
+  );
   assert.equal(socket.destroyed, true);
 });
 

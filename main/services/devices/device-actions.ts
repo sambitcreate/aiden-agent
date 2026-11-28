@@ -18,7 +18,10 @@ import {
   type DeviceTextSize,
   type DeviceToggle,
 } from "../../../renderer/shared/devices.js";
-import { DEVICE_CLIPBOARD_MAX_BYTES, checkDeviceClipboardText } from "../../../renderer/shared/device-features.js";
+import {
+  DEVICE_CLIPBOARD_MAX_BYTES,
+  checkDeviceClipboardText,
+} from "../../../renderer/shared/device-features.js";
 import type { DeviceCommandOptions, DeviceHostReady } from "./device-host.js";
 
 const SIMCTL_ACTION_TIMEOUT_MS = 30_000;
@@ -40,7 +43,9 @@ export function textSizeFromIos(category: string): DeviceTextSize {
   if (entry) return entry[0];
   if (category.startsWith("accessibility")) return "extra-large";
   if (category.includes("extra")) return "large";
-  return category === "extra-small" || category === "small" || category === "medium" ? "small" : "default";
+  return category === "extra-small" || category === "small" || category === "medium"
+    ? "small"
+    : "default";
 }
 
 // Aiden permission names -> the `simctl privacy` service. Notifications have none.
@@ -59,7 +64,10 @@ const IOS_PRIVACY_SERVICES: Record<Exclude<DevicePermission, "notifications">, s
 
 // Aiden toggle names -> `serve-sim-ax-settings` options. Increase Contrast uses `simctl ui`;
 // the network switch is Android-only.
-const IOS_AX_TOGGLES: Record<Exclude<DeviceToggle, "increaseContrast" | "networkEnabled">, string> = {
+const IOS_AX_TOGGLES: Record<
+  Exclude<DeviceToggle, "increaseContrast" | "networkEnabled">,
+  string
+> = {
   reduceMotion: "reduce-motion",
   reduceTransparency: "reduce-transparency",
   showBorders: "show-borders",
@@ -85,10 +93,16 @@ function simctl(udid: string, verb: string, ...rest: string[]): DeviceActionComm
   return { command: "xcrun", args: ["simctl", verb, udid, ...rest] };
 }
 
-function axSettings(ready: Pick<DeviceHostReady, "helpers">, udid: string, ...rest: string[]): DeviceActionCommand {
+function axSettings(
+  ready: Pick<DeviceHostReady, "helpers">,
+  udid: string,
+  ...rest: string[]
+): DeviceActionCommand {
   const helper = ready.helpers.axSettings;
   if (!helper) {
-    throw new DeviceActionUnavailableError("This simulator helper version cannot change accessibility settings.");
+    throw new DeviceActionUnavailableError(
+      "This simulator helper version cannot change accessibility settings.",
+    );
   }
   return { command: "xcrun", args: ["simctl", "spawn", udid, helper, ...rest] };
 }
@@ -119,7 +133,13 @@ export function iosActionCommand(
       if (input.setting === "networkEnabled") {
         throw new DeviceActionUnavailableError("iOS Simulators cannot turn the network off.");
       }
-      return axSettings(ready, udid, "set", IOS_AX_TOGGLES[input.setting], input.value ? "on" : "off");
+      return axSettings(
+        ready,
+        udid,
+        "set",
+        IOS_AX_TOGGLES[input.setting],
+        input.value ? "on" : "off",
+      );
     case "setLiquidGlass":
       return axSettings(ready, udid, "set", "liquid-glass", input.value);
     case "setColorFilter":
@@ -148,14 +168,22 @@ export function iosActionCommand(
           args: [cli, "permissions", input.decision, "notifications", input.appId, "-d", udid],
         };
       }
-      return simctl(udid, "privacy", input.decision, IOS_PRIVACY_SERVICES[input.permission], input.appId);
+      return simctl(
+        udid,
+        "privacy",
+        input.decision,
+        IOS_PRIVACY_SERVICES[input.permission],
+        input.appId,
+      );
     }
     case "setLocation":
       return simctl(udid, "location", "set", `${input.latitude},${input.longitude}`);
     case "clearLocation":
       return simctl(udid, "location", "clear");
     case "setOrientation":
-      throw new DeviceActionUnavailableError("Rotate an iOS Simulator with the rail's Rotate button.");
+      throw new DeviceActionUnavailableError(
+        "Rotate an iOS Simulator with the rail's Rotate button.",
+      );
   }
 }
 
@@ -175,16 +203,30 @@ const ACTION_LABELS: Record<DeviceActionInput["type"], string> = {
   setOrientation: "rotate",
 };
 
-export async function runDeviceAction(ready: DeviceHostReady, input: DeviceActionInput): Promise<void> {
+export async function runDeviceAction(
+  ready: DeviceHostReady,
+  input: DeviceActionInput,
+): Promise<void> {
   const { command, args, options } = iosActionCommand(ready, input);
-  const result = await ready.run(command, args, { timeoutMs: SIMCTL_ACTION_TIMEOUT_MS, ...options });
+  const result = await ready.run(command, args, {
+    timeoutMs: SIMCTL_ACTION_TIMEOUT_MS,
+    ...options,
+  });
   if (result.code !== 0) {
     const detail = result.stderr.trim().split("\n").slice(-1)[0]?.trim();
-    throw new Error(`The simulator could not ${ACTION_LABELS[input.type]}${detail ? `: ${detail}` : "."}`);
+    throw new Error(
+      `The simulator could not ${ACTION_LABELS[input.type]}${detail ? `: ${detail}` : "."}`,
+    );
   }
 }
 
-const COLOR_FILTERS: readonly DeviceColorFilter[] = ["none", "grayscale", "red-green", "green-red", "blue-yellow"];
+const COLOR_FILTERS: readonly DeviceColorFilter[] = [
+  "none",
+  "grayscale",
+  "red-green",
+  "green-red",
+  "blue-yellow",
+];
 
 function parseAxStatus(stdout: string): DeviceSettings {
   let status: unknown;
@@ -196,21 +238,30 @@ function parseAxStatus(stdout: string): DeviceSettings {
   if (typeof status !== "object" || status === null || Array.isArray(status)) return {};
   const record = status as Record<string, unknown>;
   const settings: DeviceSettings = {};
-  for (const [toggle, option] of Object.entries(IOS_AX_TOGGLES) as Array<[keyof typeof IOS_AX_TOGGLES, string]>) {
-    if (record[option] === "on" || record[option] === "off") settings[toggle] = record[option] === "on";
+  for (const [toggle, option] of Object.entries(IOS_AX_TOGGLES) as Array<
+    [keyof typeof IOS_AX_TOGGLES, string]
+  >) {
+    if (record[option] === "on" || record[option] === "off")
+      settings[toggle] = record[option] === "on";
   }
   const glass = record["liquid-glass"];
   if (glass === "clear" || glass === "tinted") settings.liquidGlass = glass;
   const filter = record["color-filter"];
-  if (COLOR_FILTERS.includes(filter as DeviceColorFilter)) settings.colorFilter = filter as DeviceColorFilter;
+  if (COLOR_FILTERS.includes(filter as DeviceColorFilter))
+    settings.colorFilter = filter as DeviceColorFilter;
   return settings;
 }
 
 /** Reads what `simctl ui` and the accessibility helper report. Each failed read just leaves its settings unknown. */
-export async function readDeviceSettings(ready: DeviceHostReady, udid: string): Promise<DeviceSettings> {
+export async function readDeviceSettings(
+  ready: DeviceHostReady,
+  udid: string,
+): Promise<DeviceSettings> {
   const read = async (command: DeviceActionCommand): Promise<string | undefined> => {
     try {
-      const result = await ready.run(command.command, command.args, { timeoutMs: SIMCTL_SETTINGS_TIMEOUT_MS });
+      const result = await ready.run(command.command, command.args, {
+        timeoutMs: SIMCTL_SETTINGS_TIMEOUT_MS,
+      });
       const value = result.stdout.trim();
       return result.code === 0 && value ? value : undefined;
     } catch {
@@ -218,7 +269,9 @@ export async function readDeviceSettings(ready: DeviceHostReady, udid: string): 
     }
   };
   const uiValue = async (option: string) => (await read(simctl(udid, "ui", option)))?.toLowerCase();
-  const axStatus = ready.helpers.axSettings ? read(axSettings(ready, udid, "status")) : Promise.resolve(undefined);
+  const axStatus = ready.helpers.axSettings
+    ? read(axSettings(ready, udid, "status"))
+    : Promise.resolve(undefined);
   const [appearance, contentSize, contrast, ax] = await Promise.all([
     uiValue("appearance"),
     uiValue("content_size"),
@@ -228,7 +281,9 @@ export async function readDeviceSettings(ready: DeviceHostReady, udid: string): 
   return {
     ...(appearance === "light" || appearance === "dark" ? { appearance } : {}),
     ...(contentSize ? { textSize: textSizeFromIos(contentSize) } : {}),
-    ...(contrast === "enabled" || contrast === "disabled" ? { increaseContrast: contrast === "enabled" } : {}),
+    ...(contrast === "enabled" || contrast === "disabled"
+      ? { increaseContrast: contrast === "enabled" }
+      : {}),
     ...(ax ? parseAxStatus(ax) : {}),
   };
 }
@@ -244,7 +299,8 @@ const SIMCTL_ERASE_TIMEOUT_MS = 120_000;
 const SIMCTL_CLIPBOARD_TIMEOUT_MS = 15_000;
 
 function requireIos(platform: DevicePlatform, feature: string): void {
-  if (platform !== "ios") throw new DeviceActionUnavailableError(`${feature} is not available for this device yet.`);
+  if (platform !== "ios")
+    throw new DeviceActionUnavailableError(`${feature} is not available for this device yet.`);
 }
 
 function lastLine(stderr: string): string | undefined {
@@ -260,20 +316,34 @@ export function deviceEraseCommands(
   return { shutdown: simctl(udid, "shutdown"), erase: simctl(udid, "erase") };
 }
 
-export function deviceClipboardWriteCommand(platform: DevicePlatform, udid: string, text: string): DeviceActionCommand {
+export function deviceClipboardWriteCommand(
+  platform: DevicePlatform,
+  udid: string,
+  text: string,
+): DeviceActionCommand {
   requireIos(platform, "Pasting");
   return { ...simctl(udid, "pbcopy"), options: { stdin: text } };
 }
 
-export function deviceClipboardReadCommand(platform: DevicePlatform, udid: string): DeviceActionCommand {
+export function deviceClipboardReadCommand(
+  platform: DevicePlatform,
+  udid: string,
+): DeviceActionCommand {
   requireIos(platform, "Copying");
   return simctl(udid, "pbpaste");
 }
 
 /** A long-running recorder. SIGINT makes simctl finalize the file; H.264 plays everywhere. */
-export function deviceRecordVideoCommand(platform: DevicePlatform, udid: string, file: string): DeviceActionCommand {
+export function deviceRecordVideoCommand(
+  platform: DevicePlatform,
+  udid: string,
+  file: string,
+): DeviceActionCommand {
   requireIos(platform, "Screen recording");
-  return { command: "xcrun", args: ["simctl", "io", udid, "recordVideo", "--codec=h264", "--force", file] };
+  return {
+    command: "xcrun",
+    args: ["simctl", "io", udid, "recordVideo", "--codec=h264", "--force", file],
+  };
 }
 
 export type DeviceErasePhase = "shutting-down" | "erasing" | "erased";
@@ -296,11 +366,15 @@ export async function eraseDevice(
     });
     if (result.code !== 0 && !/current state: Shutdown/iu.test(result.stderr)) {
       const detail = lastLine(result.stderr);
-      throw new Error(`The simulator did not shut down, so it was not erased${detail ? `: ${detail}` : "."}`);
+      throw new Error(
+        `The simulator did not shut down, so it was not erased${detail ? `: ${detail}` : "."}`,
+      );
     }
   }
   onPhase("erasing");
-  const result = await run(commands.erase.command, commands.erase.args, { timeoutMs: SIMCTL_ERASE_TIMEOUT_MS });
+  const result = await run(commands.erase.command, commands.erase.args, {
+    timeoutMs: SIMCTL_ERASE_TIMEOUT_MS,
+  });
   if (result.code !== 0) {
     const detail = lastLine(result.stderr);
     throw new Error(`The simulator could not be erased${detail ? `: ${detail}` : "."}`);
@@ -335,13 +409,18 @@ export async function readDeviceClipboard(
   input: { platform: DevicePlatform; deviceId: string },
 ): Promise<{ text: string; bytes: number }> {
   const command = deviceClipboardReadCommand(input.platform, input.deviceId);
-  const result = await run(command.command, command.args, { timeoutMs: SIMCTL_CLIPBOARD_TIMEOUT_MS });
+  const result = await run(command.command, command.args, {
+    timeoutMs: SIMCTL_CLIPBOARD_TIMEOUT_MS,
+  });
   if (result.code !== 0) {
     const detail = lastLine(result.stderr);
     throw new Error(`The simulator clipboard could not be read${detail ? `: ${detail}` : "."}`);
   }
   if (result.stdout.length === 0) throw new Error("The simulator clipboard has no text.");
   const checked = checkDeviceClipboardText(result.stdout);
-  if (!checked.ok) throw new Error(`The simulator clipboard text is larger than ${DEVICE_CLIPBOARD_MAX_BYTES / 1024} KB.`);
+  if (!checked.ok)
+    throw new Error(
+      `The simulator clipboard text is larger than ${DEVICE_CLIPBOARD_MAX_BYTES / 1024} KB.`,
+    );
   return { text: checked.text, bytes: checked.bytes };
 }

@@ -3,9 +3,16 @@
 // epoch or a reconnect's snapshot replaces the view, so it never drifts from
 // the host's durable transcript.
 
-import type { PeerBotSessionMessage, PeerBotSessionStreamState, PeerBotSessionSubscription } from "../../shared/peer-bot-session";
+import type {
+  PeerBotSessionMessage,
+  PeerBotSessionStreamState,
+  PeerBotSessionSubscription,
+} from "../../shared/peer-bot-session";
 import type { PeerOperationOutcome } from "../../shared/peer-host";
-import type { AidenRemoteBotSession, AidenRemoteBotSessionEvent } from "../../../main/services/aiden-remote-protocol";
+import type {
+  AidenRemoteBotSession,
+  AidenRemoteBotSessionEvent,
+} from "../../../main/services/aiden-remote-protocol";
 import {
   applyRemoteBotSessionEvent,
   carryOlderRemoteBotEntries,
@@ -28,7 +35,12 @@ export interface RemoteBotSessionTransport {
   /** `GET /bots/{botId}/session` through the host supervisor. */
   read(hostId: string, botId: string): Promise<PeerOperationOutcome>;
   /** Contract revision 67: `GET /bots/{botId}/session/entries?before=&limit=` through the host supervisor. */
-  older?(hostId: string, botId: string, before: string, limit?: number): Promise<PeerOperationOutcome>;
+  older?(
+    hostId: string,
+    botId: string,
+    before: string,
+    limit?: number,
+  ): Promise<PeerOperationOutcome>;
 }
 
 /**
@@ -36,7 +48,10 @@ export interface RemoteBotSessionTransport {
  * when the host is older than revision 67, `failed` with the host's reason.
  * A page the session moved past reads the session again and reports `loaded`.
  */
-export type RemoteBotOlderOutcome = { kind: "loaded" } | { kind: "unsupported" } | { kind: "failed"; message: string };
+export type RemoteBotOlderOutcome =
+  | { kind: "loaded" }
+  | { kind: "unsupported" }
+  | { kind: "failed"; message: string };
 
 export interface RemoteBotSessionState {
   view: RemoteBotSessionView | null;
@@ -97,7 +112,8 @@ export class RemoteBotSessionFollower {
     this.stopped = true;
     this.offMessages?.();
     this.offMessages = null;
-    if (this.subscriptionId) void this.transport.unsubscribe(this.subscriptionId).catch(() => undefined);
+    if (this.subscriptionId)
+      void this.transport.unsubscribe(this.subscriptionId).catch(() => undefined);
     this.subscriptionId = null;
     this.listeners.clear();
   }
@@ -168,7 +184,9 @@ export class RemoteBotSessionFollower {
       (error: unknown) => {
         this.subscribing = false;
         if (!this.stopped && this.state.view === null)
-          this.publish({ failed: error instanceof Error ? error.message : "This Bot's chat could not be opened." });
+          this.publish({
+            failed: error instanceof Error ? error.message : "This Bot's chat could not be opened.",
+          });
       },
     );
   }
@@ -186,7 +204,13 @@ export class RemoteBotSessionFollower {
     try {
       outcome = await this.transport.read(this.hostId, this.botId);
     } catch (error) {
-      outcome = { ok: false, error: { code: "failed", message: error instanceof Error ? error.message : "The request failed." } };
+      outcome = {
+        ok: false,
+        error: {
+          code: "failed",
+          message: error instanceof Error ? error.message : "The request failed.",
+        },
+      };
     }
     if (this.stopped || request !== this.reading) return;
     this.inFlight = false;
@@ -270,22 +294,24 @@ export class RemoteBotSessionFollower {
     const next = (before: string, total: number): void => {
       if (!transport.older) return settle(pages);
       const want = !bounded ? OLDER_PAGE_MAX : total < span ? span - total : bound - total;
-      transport.older(this.hostId, this.botId, before, Math.min(Math.max(want, 1), OLDER_PAGE_MAX)).then(
-        (outcome) => {
-          if (!current()) return;
-          if (!outcome.ok) return settle(pages);
-          const page = outcome.value as RemoteBotSessionEntriesPage;
-          pages.push(page);
-          for (const entry of page.entries) seen.add(entry.id);
-          // Counted in the host's entries, drawn or not, as the kept span was.
-          const after = total + (page.hostCount ?? page.entries.length);
-          const cursor = page.olderCursor ?? page.entries[0]?.id;
-          if (!page.hasOlder || !cursor || cursor === before) return settle(pages);
-          if (seen.has(target) || (bounded && after >= bound)) return ask(cursor, after);
-          next(cursor, after);
-        },
-        () => settle(pages),
-      );
+      transport
+        .older(this.hostId, this.botId, before, Math.min(Math.max(want, 1), OLDER_PAGE_MAX))
+        .then(
+          (outcome) => {
+            if (!current()) return;
+            if (!outcome.ok) return settle(pages);
+            const page = outcome.value as RemoteBotSessionEntriesPage;
+            pages.push(page);
+            for (const entry of page.entries) seen.add(entry.id);
+            // Counted in the host's entries, drawn or not, as the kept span was.
+            const after = total + (page.hostCount ?? page.entries.length);
+            const cursor = page.olderCursor ?? page.entries[0]?.id;
+            if (!page.hasOlder || !cursor || cursor === before) return settle(pages);
+            if (seen.has(target) || (bounded && after >= bound)) return ask(cursor, after);
+            next(cursor, after);
+          },
+          () => settle(pages),
+        );
     };
     // Asks for one entry before the next kept entry not yet read: the host
     // answers `operation_stale` when it no longer has it.

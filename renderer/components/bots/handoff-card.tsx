@@ -30,7 +30,11 @@ import { BotAvatar } from "../bot-avatar";
 import { Button } from "../ui";
 import { BotNoticeCard } from "./bot-notice-card";
 import type { BotAvatar as BotAvatarValue } from "../../shared/bots";
-import { botHandoffTakesNote, type BotHandoffOutcome, type BotPendingHandoff } from "../../shared/bot-handoffs";
+import {
+  botHandoffTakesNote,
+  type BotHandoffOutcome,
+  type BotPendingHandoff,
+} from "../../shared/bot-handoffs";
 
 /** The page Open goes to, as the card names it ("bank.example"). */
 function linkHost(url: string): string | undefined {
@@ -96,7 +100,9 @@ export function handoffNoNoteComposerText(name: string): string {
 
 /** The card's title: whose turn it is, or what to sign in to and for whom. */
 export function handoffCardTitle(name: string, handoff: ShownHandoff): string {
-  return handoff.kind === "sign_in" ? `Sign in to ${signInHost(handoff)} for ${name}` : `Needs you: ${handoff.action}`;
+  return handoff.kind === "sign_in"
+    ? `Sign in to ${signInHost(handoff)} for ${name}`
+    : `Needs you: ${handoff.action}`;
 }
 
 /**
@@ -152,12 +158,24 @@ export function HandoffActions({
   };
   const doneFirst = !(elsewhere && signIn);
   const done = (
-    <Button ref={doneFirst ? answerAfterTake : undefined} variant="accent" size="small" disabled={busy} onClick={() => onAnswer("done")}>
+    <Button
+      ref={doneFirst ? answerAfterTake : undefined}
+      variant="accent"
+      size="small"
+      disabled={busy}
+      onClick={() => onAnswer("done")}
+    >
       {IM_DONE}
     </Button>
   );
   const skip = (
-    <Button ref={doneFirst ? undefined : answerAfterTake} variant="transparent" size="small" disabled={busy} onClick={() => onAnswer("skipped")}>
+    <Button
+      ref={doneFirst ? undefined : answerAfterTake}
+      variant="transparent"
+      size="small"
+      disabled={busy}
+      onClick={() => onAnswer("skipped")}
+    >
       Skip
     </Button>
   );
@@ -187,17 +205,31 @@ export function HandoffActions({
     );
   }
   // What Take control opens, if anything, and how it is named and drawn.
-  const opens = signIn ? handoff.open !== undefined : onBotScreen(handoff) ? handoff.target !== undefined : handoff.open !== undefined;
+  const opens = signIn
+    ? handoff.open !== undefined
+    : onBotScreen(handoff)
+      ? handoff.target !== undefined
+      : handoff.open !== undefined;
   const takeLabel = signIn
-    ? onComputer(handoff) ? screenControlLabel(name, "computer") : `${TAKE_CONTROL} to sign in`
+    ? onComputer(handoff)
+      ? screenControlLabel(name, "computer")
+      : `${TAKE_CONTROL} to sign in`
     : onBotScreen(handoff) && handoff.target !== undefined
       ? screenControlLabel(name, handoff.target)
-      : host ? `${TAKE_CONTROL} at ${host}` : TAKE_CONTROL;
+      : host
+        ? `${TAKE_CONTROL} at ${host}`
+        : TAKE_CONTROL;
   const Icon = signIn
-    ? onComputer(handoff) ? Monitor : LogIn
+    ? onComputer(handoff)
+      ? Monitor
+      : LogIn
     : onBotScreen(handoff) && handoff.target !== undefined
-      ? handoff.target === "computer" ? Monitor : Globe
-      : handoff.open ? ExternalLink : null;
+      ? handoff.target === "computer"
+        ? Monitor
+        : Globe
+      : handoff.open
+        ? ExternalLink
+        : null;
   if (!taken) {
     return (
       <Button
@@ -218,7 +250,13 @@ export function HandoffActions({
   return (
     <>
       {opens ? (
-        <Button variant="transparent" size="small" disabled={busy} aria-label={`Open again: ${takeLabel}`} onClick={onOpen}>
+        <Button
+          variant="transparent"
+          size="small"
+          disabled={busy}
+          aria-label={`Open again: ${takeLabel}`}
+          onClick={onOpen}
+        >
           Open again
         </Button>
       ) : null}
@@ -289,7 +327,9 @@ export function HandoffCard({
       }
     >
       {handoff.why ? <p className="whitespace-pre-line">{handoff.why}</p> : null}
-      {handoff.rule ? <p className="mt-1 text-tertiary">From your rule: {handoff.rule.label}</p> : null}
+      {handoff.rule ? (
+        <p className="mt-1 text-tertiary">From your rule: {handoff.rule.label}</p>
+      ) : null}
       {host && !onBotScreen(handoff) ? <p className="mt-1 text-tertiary">Opens {host}</p> : null}
       {onBotScreen(handoff) && finishOn === undefined && handoff.target !== undefined ? (
         <p className="mt-1 text-tertiary">

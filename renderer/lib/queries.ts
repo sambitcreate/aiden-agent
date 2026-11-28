@@ -76,7 +76,8 @@ export const queryKeys = {
   botTelegramTargets: ["bot-telegram-targets"] as const,
   chatsIn: (workspaceId: string | undefined) => ["chats", workspaceId ?? "all"] as const,
   chat: (id: string) => ["chat", id] as const,
-  workspaceFolderPresence: (workspaceId: string) => ["workspace-folder-presence", workspaceId] as const,
+  workspaceFolderPresence: (workspaceId: string) =>
+    ["workspace-folder-presence", workspaceId] as const,
   settings: ["settings"] as const,
   shortcuts: ["shortcuts"] as const,
   scheduledTasks: ["scheduledTasks"] as const,
@@ -96,7 +97,8 @@ export const queryKeys = {
   mcpDependents: (serverId: string) => ["mcpDependents", serverId] as const,
   mcpLaunchApprovals: ["mcpLaunchApprovals"] as const,
   mcpMacAppStatus: (presetId: string) => ["mcpMacAppStatus", presetId] as const,
-  mcpToolList: (serverId: string, toolsRevision: string | undefined) => ["mcpToolList", serverId, toolsRevision ?? null] as const,
+  mcpToolList: (serverId: string, toolsRevision: string | undefined) =>
+    ["mcpToolList", serverId, toolsRevision ?? null] as const,
   webSearch: ["webSearch"] as const,
   webFetch: ["webFetch"] as const,
   telegram: ["telegram"] as const,
@@ -128,7 +130,8 @@ export const queryKeys = {
   chatCurrentPullRequest: (chatId: string | undefined) =>
     ["chat-current-pull-request", chatId ?? "none"] as const,
   chatGoal: (chatId: string | undefined) => ["chat-goal", chatId ?? "none"] as const,
-  chatGoalProposal: (chatId: string | undefined) => ["chat-goal-proposal", chatId ?? "none"] as const,
+  chatGoalProposal: (chatId: string | undefined) =>
+    ["chat-goal-proposal", chatId ?? "none"] as const,
   chatPullRequestsSidebar: (chatIds: readonly string[]) =>
     ["chat-pull-requests-sidebar", ...chatIds] as const,
   chatPullRequestCandidates: (chatId: string | undefined) =>
@@ -163,10 +166,7 @@ export async function installAppendedChatSnapshot(
  * an unhydrated cache is never overwritten with a single-element list and an
  * in-flight `workspaces:list` cannot clobber the new workspace.
  */
-export function upsertCreatedWorkspaceInCache(
-  queryClient: QueryClient,
-  created: Workspace,
-): void {
+export function upsertCreatedWorkspaceInCache(queryClient: QueryClient, created: Workspace): void {
   const current = queryClient.getQueryData<Workspace[]>(queryKeys.workspaces);
   const fetching = queryClient.isFetching({ queryKey: queryKeys.workspaces, exact: true }) > 0;
   if (current && !fetching) {
@@ -327,7 +327,9 @@ export function useBot(botId: string | undefined) {
     enabled: Boolean(botId),
     initialData: () => {
       if (!botId) return undefined;
-      for (const [, list] of queryClient.getQueriesData<BotDefinition[]>({ queryKey: queryKeys.bots })) {
+      for (const [, list] of queryClient.getQueriesData<BotDefinition[]>({
+        queryKey: queryKeys.bots,
+      })) {
         const found = list?.find((bot) => bot.id === botId);
         if (found) return found;
       }
@@ -336,7 +338,9 @@ export function useBot(botId: string | undefined) {
     initialDataUpdatedAt: () => {
       if (!botId) return undefined;
       let newest: number | undefined;
-      for (const [key, list] of queryClient.getQueriesData<BotDefinition[]>({ queryKey: queryKeys.bots })) {
+      for (const [key, list] of queryClient.getQueriesData<BotDefinition[]>({
+        queryKey: queryKeys.bots,
+      })) {
         if (!list?.some((bot) => bot.id === botId)) continue;
         const at = queryClient.getQueryState(key)?.dataUpdatedAt;
         if (at !== undefined && (newest === undefined || at > newest)) newest = at;
@@ -356,10 +360,15 @@ export function useBotCapabilityCatalog(enabled: boolean, botId?: string) {
 }
 
 /** The thinking levels one catalog model supports; rereads whenever the catalog does. */
-export function useBotModelThinkingLevels(botId: string, providerId: string | undefined, modelId: string | undefined) {
+export function useBotModelThinkingLevels(
+  botId: string,
+  providerId: string | undefined,
+  modelId: string | undefined,
+) {
   return useQuery({
     queryKey: [...queryKeys.botCapabilityCatalog, "thinking-levels", botId, providerId, modelId],
-    queryFn: () => botsApi.getModelThinkingLevels({ botId, providerId: providerId!, modelId: modelId! }),
+    queryFn: () =>
+      botsApi.getModelThinkingLevels({ botId, providerId: providerId!, modelId: modelId! }),
     enabled: Boolean(providerId && modelId),
   });
 }
@@ -496,13 +505,18 @@ export function gitPullRequestStatusQueryOptions(workspaceId: string | undefined
     // rate-limit pause instead of polling into it.
     refetchInterval: enabled
       ? (query) =>
-          isWindowActive() ? pausedPollInterval(query.state.data, Date.now(), PULL_REQUEST_POLL_MS) : false
+          isWindowActive()
+            ? pausedPollInterval(query.state.data, Date.now(), PULL_REQUEST_POLL_MS)
+            : false
       : false,
     staleTime: PULL_REQUEST_STALE_MS,
     structuralSharing: (previous, next) =>
       replaceEqualDeep(
         previous,
-        keepPullRequestWhilePaused(previous as GitHubPullRequestStatus | undefined, next as GitHubPullRequestStatus),
+        keepPullRequestWhilePaused(
+          previous as GitHubPullRequestStatus | undefined,
+          next as GitHubPullRequestStatus,
+        ),
       ),
   });
 }
@@ -598,7 +612,8 @@ export function useStartedChats(leadChatId: string | undefined, enabled = true) 
     staleTime: 15_000,
     // Main notifies on starts, endings and moves to or from "needs you"; a slow look while one
     // is running only backs that up. A chat waiting on the person needs no polling.
-    refetchInterval: (query) => (query.state.data?.some((view) => view.state === "running") ? 15_000 : false),
+    refetchInterval: (query) =>
+      query.state.data?.some((view) => view.state === "running") ? 15_000 : false,
   });
 }
 
@@ -783,14 +798,18 @@ export function useKeepAwakeStatus() {
   const queryClient = useQueryClient();
   useEffect(() => {
     const unsubscribe = scheduleApi.onKeepAwakeChanged((status) =>
-      queryClient.setQueryData(queryKeys.keepAwakeStatus, status));
+      queryClient.setQueryData(queryKeys.keepAwakeStatus, status),
+    );
     return () => {
       unsubscribe();
       // A push sent while nothing listens is lost, so the next mount reads again.
       void queryClient.invalidateQueries({ queryKey: queryKeys.keepAwakeStatus });
     };
   }, [queryClient]);
-  return useQuery({ queryKey: queryKeys.keepAwakeStatus, queryFn: () => scheduleApi.keepAwakeStatus() });
+  return useQuery({
+    queryKey: queryKeys.keepAwakeStatus,
+    queryFn: () => scheduleApi.keepAwakeStatus(),
+  });
 }
 
 /** How often a surface waiting on macOS permissions forces a fresh Computer Use probe. */
@@ -816,11 +835,14 @@ export function useComputerUseStatus(
     retry: false,
     staleTime: 5_000,
     refetchOnWindowFocus: live
-      ? (query) => (query.state.status === "error" ? false : query.state.data?.ready ? true : "always")
+      ? (query) =>
+          query.state.status === "error" ? false : query.state.data?.ready ? true : "always"
       : true,
     refetchInterval: live
       ? (query) =>
-          query.state.status === "error" || query.state.data?.ready ? false : COMPUTER_USE_LIVE_CHECK_MS
+          query.state.status === "error" || query.state.data?.ready
+            ? false
+            : COMPUTER_USE_LIVE_CHECK_MS
       : false,
   });
 }
@@ -910,10 +932,17 @@ export function useMcpLiveStatus() {
       // only trusted while subscribed: the next mount reads main's current one.
       // Main answers that read after any push it sent earlier, so the snapshot
       // is never older than the pushes that arrive before it.
-      void queryClient.invalidateQueries({ queryKey: queryKeys.mcpLiveStatus, refetchType: "none" });
+      void queryClient.invalidateQueries({
+        queryKey: queryKeys.mcpLiveStatus,
+        refetchType: "none",
+      });
     };
   }, [queryClient]);
-  const query = useQuery({ queryKey: queryKeys.mcpLiveStatus, queryFn: mcpApi.liveStatus, staleTime: Infinity });
+  const query = useQuery({
+    queryKey: queryKeys.mcpLiveStatus,
+    queryFn: mcpApi.liveStatus,
+    staleTime: Infinity,
+  });
   return useMemo(
     () => new Map((query.data ?? []).map((status) => [status.serverId, status] as const)),
     [query.data],
@@ -935,7 +964,11 @@ export function useMcpToolList(serverId: string, toolsRevision: string | undefin
 
 /** Local servers waiting for approval to run, keyed by server id. */
 export function useMcpLaunchApprovals() {
-  const query = useQuery({ queryKey: queryKeys.mcpLaunchApprovals, queryFn: mcpApi.launchApprovals, staleTime: 0 });
+  const query = useQuery({
+    queryKey: queryKeys.mcpLaunchApprovals,
+    queryFn: mcpApi.launchApprovals,
+    staleTime: 0,
+  });
   return useMemo(
     () => new Map((query.data ?? []).map((approval) => [approval.serverId, approval] as const)),
     [query.data],
@@ -985,7 +1018,9 @@ const TELEGRAM_PAIRING_POLL_MS = 3_000;
  */
 export function telegramStatusPollInterval(status: TelegramStatus | undefined): number | false {
   if (!status?.enabled || !status.polling) return false;
-  return status.allowedUserId === undefined || !status.botUsername ? TELEGRAM_PAIRING_POLL_MS : false;
+  return status.allowedUserId === undefined || !status.botUsername
+    ? TELEGRAM_PAIRING_POLL_MS
+    : false;
 }
 
 export function useTelegramSettings() {
@@ -1010,7 +1045,9 @@ export function aidenRemoteSettingsQueryOptions(live = false) {
     retry: false,
     refetchOnWindowFocus: true,
     staleTime: live ? 0 : AIDEN_REMOTE_IDLE_POLL_MS,
-    refetchInterval: live ? AIDEN_REMOTE_LIVE_POLL_MS : pollWhileWindowActive(AIDEN_REMOTE_IDLE_POLL_MS),
+    refetchInterval: live
+      ? AIDEN_REMOTE_LIVE_POLL_MS
+      : pollWhileWindowActive(AIDEN_REMOTE_IDLE_POLL_MS),
   });
 }
 

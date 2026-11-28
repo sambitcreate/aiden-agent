@@ -14,7 +14,8 @@ export async function runImageGenerationAction(
   try {
     return { ok: true, state: await operation() };
   } catch (error) {
-    if (error instanceof ImageGenerationError) return { ok: false, code: error.code, message: error.message };
+    if (error instanceof ImageGenerationError)
+      return { ok: false, code: error.code, message: error.message };
     if (error instanceof Error && error.message === INVALID_IMAGE_GENERATION_REQUEST) {
       return { ok: false, code: "invalid_request", message: INVALID_IMAGE_GENERATION_REQUEST };
     }
@@ -23,6 +24,10 @@ export async function runImageGenerationAction(
     } catch {
       /* diagnostics cannot change IPC output */
     }
-    return { ok: false, code: "storage_error", message: "Aiden couldn't save your Image Generation settings." };
+    return {
+      ok: false,
+      code: "storage_error",
+      message: "Aiden couldn't save your Image Generation settings.",
+    };
   }
 }

@@ -1,4 +1,11 @@
-import type { AssistantImages, ImageApi, ImageContent, ImageModel, Models, Usage } from "@earendil-works/pi-ai";
+import type {
+  AssistantImages,
+  ImageApi,
+  ImageContent,
+  ImageModel,
+  Models,
+  Usage,
+} from "@earendil-works/pi-ai";
 import type {
   GeneratedImage,
   ImageGenerationFailureCode,
@@ -32,7 +39,11 @@ export interface PiImagePortOptions {
 /** Consent must name the real model, so OpenRouter's routers are never offered. */
 const AUTO_ROUTER = /^openrouter\/auto(?:[-/].*)?$/u;
 
-function failed(code: ImageGenerationFailureCode, message: string, usage?: Usage): ImageGenerationResult & { kind: "failed" } {
+function failed(
+  code: ImageGenerationFailureCode,
+  message: string,
+  usage?: Usage,
+): ImageGenerationResult & { kind: "failed" } {
   return { kind: "failed", code, message: message.slice(0, 1_024), ...(usage ? { usage } : {}) };
 }
 
@@ -52,11 +63,17 @@ const MAX_REFUSAL_TEXT = 280;
 /** A model's caption as one bounded line, so a refusal can be shown without trusting its layout. */
 function oneLine(output: AssistantImages["output"]): string {
   const text = output
-    .flatMap((item) => (item && typeof item === "object" && item.type === "text" && typeof item.text === "string" ? [item.text] : []))
+    .flatMap((item) =>
+      item && typeof item === "object" && item.type === "text" && typeof item.text === "string"
+        ? [item.text]
+        : [],
+    )
     .join(" ")
     .replace(/[\p{Cc}\p{Cf}\s]+/gu, " ")
     .trim();
-  return text.length > MAX_REFUSAL_TEXT ? `${text.slice(0, MAX_REFUSAL_TEXT - 1).trimEnd()}…` : text;
+  return text.length > MAX_REFUSAL_TEXT
+    ? `${text.slice(0, MAX_REFUSAL_TEXT - 1).trimEnd()}…`
+    : text;
 }
 
 export function createPiImageGenerationPort(options: PiImagePortOptions): ImageGenerationPort {
@@ -72,11 +89,18 @@ export function createPiImageGenerationPort(options: PiImagePortOptions): ImageG
     let model: ImageModelEntry | undefined;
     try {
       await options.prepare?.();
-      const available = await options.models.getAvailableOfType("image", request.provider, { signal: request.signal });
-      model = available.find((entry) => entry.provider === request.provider && entry.id === request.model);
+      const available = await options.models.getAvailableOfType("image", request.provider, {
+        signal: request.signal,
+      });
+      model = available.find(
+        (entry) => entry.provider === request.provider && entry.id === request.model,
+      );
     } catch {
       if (request.signal.aborted) return failed("aborted", "Stopped before sending.");
-      return failed("unknown-model", "Image models could not be loaded. Check Settings → Image Generation.");
+      return failed(
+        "unknown-model",
+        "Image models could not be loaded. Check Settings → Image Generation.",
+      );
     }
     if (!model || AUTO_ROUTER.test(model.id)) {
       return failed("unknown-model", "This image model is not available. Choose another model.");
@@ -106,13 +130,19 @@ export function createPiImageGenerationPort(options: PiImagePortOptions): ImageG
       }));
       // The chat tool's exact bounds: at most 4 references, 8 MiB and 40 megapixels.
       ({ images: references } = await resolvePiModelImageInputs(
-        { resolveImages: async (ids) => ids.map((id) => ({ name: `Reference ${id}`, image: contents[Number(id) - 1]! })) },
+        {
+          resolveImages: async (ids) =>
+            ids.map((id) => ({ name: `Reference ${id}`, image: contents[Number(id) - 1]! })),
+        },
         contents.map((_, index) => String(index + 1)),
         request.signal,
       ));
     } catch (error) {
       if (request.signal.aborted) return failed("aborted", "Stopped before sending.");
-      return failed("references-unsupported", error instanceof Error ? error.message : "These reference images cannot be sent.");
+      return failed(
+        "references-unsupported",
+        error instanceof Error ? error.message : "These reference images cannot be sent.",
+      );
     }
     if (request.signal.aborted) return failed("aborted", "Stopped before sending.");
     return { kind: "ready", send: (claim) => send(model, request, references, claim) };
@@ -156,15 +186,24 @@ export function createPiImageGenerationPort(options: PiImagePortOptions): ImageG
       );
     } catch (error) {
       // Models.generateImages never rejects; this guards a regression without hiding the outcome.
-      if (dispatched) await account({ ...identity, status: request.signal.aborted ? "cancelled" : "failed" });
-      return failed(request.signal.aborted ? "aborted" : "provider-error", error instanceof Error ? error.message : "The image request failed.");
+      if (dispatched)
+        await account({ ...identity, status: request.signal.aborted ? "cancelled" : "failed" });
+      return failed(
+        request.signal.aborted ? "aborted" : "provider-error",
+        error instanceof Error ? error.message : "The image request failed.",
+      );
     }
     if (!dispatched) {
       if (request.signal.aborted) return failed("aborted", "Stopped before sending.");
-      if (denied) return failed("request-limit", "This run already used every request it was approved for.");
-      return failed("unknown-model", "This image model is unavailable. Check Settings → Image Generation.");
+      if (denied)
+        return failed("request-limit", "This run already used every request it was approved for.");
+      return failed(
+        "unknown-model",
+        "This image model is unavailable. Check Settings → Image Generation.",
+      );
     }
-    const stopped = result.stopReason === "aborted" || (result.stopReason !== "stop" && request.signal.aborted);
+    const stopped =
+      result.stopReason === "aborted" || (result.stopReason !== "stop" && request.signal.aborted);
     await account({
       ...identity,
       ...(result.usage ? { usage: result.usage } : {}),
@@ -173,28 +212,55 @@ export function createPiImageGenerationPort(options: PiImagePortOptions): ImageG
     if (result.stopReason !== "stop") {
       return stopped
         ? failed("aborted", "The image request was stopped.", result.usage)
-        : failed("provider-error", result.errorMessage ?? "The provider returned an error.", result.usage);
+        : failed(
+            "provider-error",
+            result.errorMessage ?? "The provider returned an error.",
+            result.usage,
+          );
     }
 
     // Only stored types count toward the 4-image cap, so an interim GIF cannot push out a valid image.
     const output = Array.isArray(result.output) ? result.output : [];
-    const kept = output.filter((item) => !(item && typeof item === "object" && item.type === "image" && !isStudioAssetMediaType(item.mimeType)));
+    const kept = output.filter(
+      (item) =>
+        !(
+          item &&
+          typeof item === "object" &&
+          item.type === "image" &&
+          !isStudioAssetMediaType(item.mimeType)
+        ),
+    );
     const droppedType = kept.length < output.length;
     const caption = oneLine(output);
     if (!kept.some((item) => item && typeof item === "object" && item.type === "image")) {
-      const none = droppedType ? "The model returned no PNG, JPEG or WebP images." : "The model returned no images.";
-      return failed("output-invalid", caption ? `${none} It said: “${caption}”` : none, result.usage);
+      const none = droppedType
+        ? "The model returned no PNG, JPEG or WebP images."
+        : "The model returned no images.";
+      return failed(
+        "output-invalid",
+        caption ? `${none} It said: “${caption}”` : none,
+        result.usage,
+      );
     }
     let parsed: ParsedGeneratedImages;
     try {
       parsed = parseGeneratedImages(kept, { overflow: "truncate" });
     } catch (error) {
       const message = error instanceof Error ? error.message : "The model returned no images.";
-      return failed("output-invalid", caption ? `${message} It said: “${caption}”` : message, result.usage);
+      return failed(
+        "output-invalid",
+        caption ? `${message} It said: “${caption}”` : message,
+        result.usage,
+      );
     }
     const images: GeneratedImage[] = parsed.images.map((image, index) => {
       const size = parsed.sizes[index]!;
-      return { mimeType: image.mimeType, bytes: new Uint8Array(Buffer.from(image.data, "base64")), width: size.width, height: size.height };
+      return {
+        mimeType: image.mimeType,
+        bytes: new Uint8Array(Buffer.from(image.data, "base64")),
+        width: size.width,
+        height: size.height,
+      };
     });
     return {
       kind: "images",
@@ -230,11 +296,17 @@ export function createPiImageGenerationPort(options: PiImagePortOptions): ImageG
             acceptsReferences,
             ...(acceptsReferences ? { maxReferences: modelReferenceLimit(model) } : {}),
             textOutput: model.output.includes("text"),
-            ...(preferred?.provider === model.provider && preferred.id === model.id ? { isDefault: true } : {}),
+            ...(preferred?.provider === model.provider && preferred.id === model.id
+              ? { isDefault: true }
+              : {}),
             ...(maker ? { maker } : {}),
           };
         })
-        .sort((left, right) => left.providerLabel.localeCompare(right.providerLabel) || left.label.localeCompare(right.label));
+        .sort(
+          (left, right) =>
+            left.providerLabel.localeCompare(right.providerLabel) ||
+            left.label.localeCompare(right.label),
+        );
     },
 
     preflight,

@@ -184,7 +184,11 @@ test("Settings offers the design mode shortcut only while design mode is on", as
       </QueryClientProvider>,
     );
     await screen.findByRole("heading", { name: "Built-in keys" });
-    assert.equal(screen.queryByText("Toggle design mode") !== null, designMode, `designMode: ${designMode}`);
+    assert.equal(
+      screen.queryByText("Toggle design mode") !== null,
+      designMode,
+      `designMode: ${designMode}`,
+    );
     view.unmount();
     queryClient.clear();
   }

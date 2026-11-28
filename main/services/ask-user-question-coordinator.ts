@@ -118,7 +118,10 @@ export class AskUserQuestionCoordinator {
         }
       };
       let entry!: PendingQuestionnaire;
-      const finish = (response: AskUserQuestionResponseV1, by: AskUserQuestionSettledBy = "host") => {
+      const finish = (
+        response: AskUserQuestionResponseV1,
+        by: AskUserQuestionSettledBy = "host",
+      ) => {
         if (phase === "settled") return;
         const priorPhase = phase;
         phase = "settled";

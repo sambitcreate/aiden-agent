@@ -35,7 +35,9 @@ export interface QuickChatHandlerCoreDependencies {
   tickets: DesktopHandoffTicketStore;
   resolveDocumentId: (event: IpcMainInvokeEvent) => string;
   assertChatAccess?: (event: IpcMainInvokeEvent, chatId: string) => void;
-  inspectChatExpansionState?: (chatId: string) => Promise<{ duringStream: boolean; wasEphemeral: boolean }>;
+  inspectChatExpansionState?: (
+    chatId: string,
+  ) => Promise<{ duringStream: boolean; wasEphemeral: boolean }>;
   beginExpansionReport?: () => (info: { duringStream: boolean; wasEphemeral: boolean }) => void;
   onWarning?: (message: string, error: unknown) => void;
 }

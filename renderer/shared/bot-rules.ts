@@ -17,7 +17,15 @@
 
 import { localComputerNoun, runtimeComputerPlatform } from "./computer-noun.js";
 
-export const BOT_ACTION_CLASSES = ["credentials", "money", "purchase", "communicate", "delete", "publish", "install"] as const;
+export const BOT_ACTION_CLASSES = [
+  "credentials",
+  "money",
+  "purchase",
+  "communicate",
+  "delete",
+  "publish",
+  "install",
+] as const;
 export type BotActionClass = (typeof BOT_ACTION_CLASSES)[number];
 
 /** What a rule asks for. "allowed" is only a baseline, never a rule. */
@@ -28,7 +36,11 @@ export type BotBaseline = "allowed" | "ask";
 export type BotRuled = "allowed" | "ask" | "hand_off";
 
 /** Strictness order: allowed < ask < hand_off. */
-export const BOT_RULED_RANK: Readonly<Record<BotRuled, number>> = Object.freeze({ allowed: 0, ask: 1, hand_off: 2 });
+export const BOT_RULED_RANK: Readonly<Record<BotRuled, number>> = Object.freeze({
+  allowed: 0,
+  ask: 1,
+  hand_off: 2,
+});
 
 export interface BotRule {
   id: string;
@@ -44,22 +56,29 @@ export interface BotRule {
 export const BOT_RULE_TEXT_MAX_CHARS = 120;
 export const BOT_CUSTOM_RULES_MAX = 20;
 /** Custom rule ids: `custom.` and a UUID. */
-export const BOT_CUSTOM_RULE_ID_PATTERN = /^custom\.[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/u;
+export const BOT_CUSTOM_RULE_ID_PATTERN =
+  /^custom\.[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/u;
 
 /** The rule labels, as the editor and the approval and hand-off cards show them (plan §6.1). */
-const ACTION_CLASS_LABELS: Readonly<Record<Exclude<BotActionClass, "install">, string>> = Object.freeze({
-  credentials: "Enter a password or 2FA code, or change account security",
-  money: "Move money or enter card details",
-  purchase: "Make a purchase or booking",
-  communicate: "Send a message or email to someone",
-  publish: "Post or publish something publicly",
-  delete: "Permanently delete something",
-  // `install` is named for the person's platform in `botRuleLabel`. It means
-  // the person's computer: inside a Bot's own computer, installing is not ruled (plan §8.7).
-});
+const ACTION_CLASS_LABELS: Readonly<Record<Exclude<BotActionClass, "install">, string>> =
+  Object.freeze({
+    credentials: "Enter a password or 2FA code, or change account security",
+    money: "Move money or enter card details",
+    purchase: "Make a purchase or booking",
+    communicate: "Send a message or email to someone",
+    publish: "Post or publish something publicly",
+    delete: "Permanently delete something",
+    // `install` is named for the person's platform in `botRuleLabel`. It means
+    // the person's computer: inside a Bot's own computer, installing is not ruled (plan §8.7).
+  });
 
 function rule(actionClass: BotActionClass, behavior: BotRuleBehavior, locked: boolean): BotRule {
-  return Object.freeze({ id: `${locked ? "locked" : "default"}.${actionClass}`, actionClass, behavior, locked });
+  return Object.freeze({
+    id: `${locked ? "locked" : "default"}.${actionClass}`,
+    actionClass,
+    behavior,
+    locked,
+  });
 }
 
 /** Always hand these to the person. */
@@ -78,7 +97,12 @@ export const BOT_DEFAULT_RULES: readonly BotRule[] = Object.freeze([
 ]);
 
 /** The built-in classes a person can change (Ask first or Hand off to me). */
-export type BotChangeableActionClass = "purchase" | "communicate" | "publish" | "delete" | "install";
+export type BotChangeableActionClass =
+  | "purchase"
+  | "communicate"
+  | "publish"
+  | "delete"
+  | "install";
 export const BOT_CHANGEABLE_ACTION_CLASSES: readonly BotChangeableActionClass[] = Object.freeze(
   BOT_DEFAULT_RULES.map((entry) => entry.actionClass as BotChangeableActionClass),
 );
@@ -89,7 +113,11 @@ export function isBotRuleBehavior(value: unknown): value is BotRuleBehavior {
 
 /** Collapses whitespace and drops trailing full stops, as a custom rule's text is stored. */
 export function normalizeBotRuleText(text: string): string {
-  return text.replace(/\s+/gu, " ").trim().replace(/[.。]+$/u, "").trimEnd();
+  return text
+    .replace(/\s+/gu, " ")
+    .trim()
+    .replace(/[.。]+$/u, "")
+    .trimEnd();
 }
 
 /**
@@ -101,7 +129,8 @@ export function botRuleLabel(
   entry: Pick<BotRule, "actionClass" | "text">,
   platform: string | null | undefined = runtimeComputerPlatform(),
 ): string {
-  if (entry.actionClass === "install") return `Install software on your ${localComputerNoun(platform)}`;
+  if (entry.actionClass === "install")
+    return `Install software on your ${localComputerNoun(platform)}`;
   if (entry.actionClass !== undefined) return ACTION_CLASS_LABELS[entry.actionClass];
   const text = normalizeBotRuleText(entry.text ?? "");
   return text.length === 0 ? "Your rule" : text.charAt(0).toLocaleUpperCase() + text.slice(1);
@@ -152,7 +181,9 @@ export interface BotRulesUpdateInput {
  * skipped (a rule) or waits (an approval), as before. It never lowers a Hand
  * off to me rule, the locked password and money rules, or a chat turn.
  */
-export function botRoutinesGoAhead(settings: { botRoutinesGoAhead?: unknown } | undefined): boolean {
+export function botRoutinesGoAhead(
+  settings: { botRoutinesGoAhead?: unknown } | undefined,
+): boolean {
   return settings?.botRoutinesGoAhead === true;
 }
 

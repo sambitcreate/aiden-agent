@@ -66,7 +66,11 @@ test("open dialog options reject unknown properties, malformed filters and overs
     { message: "x".repeat(201) },
   ];
   for (const value of invalid) {
-    assert.throws(() => parseOpenDialogOptions(value), /Invalid open dialog/u, JSON.stringify(value));
+    assert.throws(
+      () => parseOpenDialogOptions(value),
+      /Invalid open dialog/u,
+      JSON.stringify(value),
+    );
   }
 });
 

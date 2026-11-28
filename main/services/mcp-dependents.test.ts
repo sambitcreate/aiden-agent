@@ -28,8 +28,7 @@ test("only Bots whose Custom binding includes one of the server's connections de
     { id: "other", name: "Mailer" },
     { id: "full", name: "Everything" },
   ];
-  assert.deepEqual(
-    await botsGrantingMcpServer("linear", bots, async (id) => bindings[id]),
-    [{ id: "custom", name: "Planner" }],
-  );
+  assert.deepEqual(await botsGrantingMcpServer("linear", bots, async (id) => bindings[id]), [
+    { id: "custom", name: "Planner" },
+  ]);
 });

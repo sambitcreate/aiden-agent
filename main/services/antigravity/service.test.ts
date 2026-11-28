@@ -5,7 +5,14 @@ import type { AssistantMessage, AuthEvent } from "@earendil-works/pi-ai";
 
 import { currentPlatformKey, type AcpRelease } from "../acp/harness.js";
 import { acpHosts } from "../acp/hosts.js";
-import { FAKE_AGENT, RecordingHost, storedZip, tempDir, transcript, userMessage } from "../acp/test-support.js";
+import {
+  FAKE_AGENT,
+  RecordingHost,
+  storedZip,
+  tempDir,
+  transcript,
+  userMessage,
+} from "../acp/test-support.js";
 import { projectNativeModels } from "./models.js";
 import { AntigravityService } from "./service.js";
 
@@ -71,63 +78,79 @@ function approveRedirect(event: AuthEvent): void {
   void fetch(redirect).catch(() => undefined);
 }
 
-async function chat(target: AntigravityService, chatId: string, text: string): Promise<AssistantMessage> {
+async function chat(
+  target: AntigravityService,
+  chatId: string,
+  text: string,
+): Promise<AssistantMessage> {
   return target.runtime
     .stream(FAKE_MODEL, transcript([userMessage(text)]), { sessionId: chatId })
     .result();
 }
 
-test("install, sign in, restart, and chat without opening Settings first", { skip: process.platform === "win32" }, async () => {
-  const baseDir = tempDir();
-  const runtime = fakeRuntime();
-  const first = service(baseDir, runtime);
-  assert.equal((await first.service.status()).runtime.status, "not_installed");
-  assert.equal(first.fetches(), 0, "nothing downloads before Install");
-  await first.service.install();
-  assert.equal((await first.service.status()).runtime.status, "installed");
-  await first.service.signIn({
-    signal: new AbortController().signal,
-    notify: approveRedirect,
-    prompt: (prompt) =>
-      new Promise((_resolve, reject) => prompt.signal?.addEventListener("abort", () => reject(new Error("aborted")))),
-  });
-  assert.equal((await first.service.status()).signedIn, true);
-  await first.service.shutdown();
+test(
+  "install, sign in, restart, and chat without opening Settings first",
+  { skip: process.platform === "win32" },
+  async () => {
+    const baseDir = tempDir();
+    const runtime = fakeRuntime();
+    const first = service(baseDir, runtime);
+    assert.equal((await first.service.status()).runtime.status, "not_installed");
+    assert.equal(first.fetches(), 0, "nothing downloads before Install");
+    await first.service.install();
+    assert.equal((await first.service.status()).runtime.status, "installed");
+    await first.service.signIn({
+      signal: new AbortController().signal,
+      notify: approveRedirect,
+      prompt: (prompt) =>
+        new Promise((_resolve, reject) =>
+          prompt.signal?.addEventListener("abort", () => reject(new Error("aborted"))),
+        ),
+    });
+    assert.equal((await first.service.status()).signedIn, true);
+    await first.service.shutdown();
 
-  // A fresh process: the first thing that happens is a chat turn.
-  const second = service(baseDir, runtime);
-  const host = new RecordingHost("chat-restart", tempDir());
-  const unregister = acpHosts.register(host);
-  try {
-    const reply = await chat(second.service, "chat-restart", "echo:after restart");
-    assert.equal(reply.stopReason, "stop", reply.errorMessage);
-    const textBlock = reply.content.find((block) => block.type === "text");
-    assert.equal(textBlock?.type === "text" ? textBlock.text : undefined, "after restart");
+    // A fresh process: the first thing that happens is a chat turn.
+    const second = service(baseDir, runtime);
+    const host = new RecordingHost("chat-restart", tempDir());
+    const unregister = acpHosts.register(host);
+    try {
+      const reply = await chat(second.service, "chat-restart", "echo:after restart");
+      assert.equal(reply.stopReason, "stop", reply.errorMessage);
+      const textBlock = reply.content.find((block) => block.type === "text");
+      assert.equal(textBlock?.type === "text" ? textBlock.text : undefined, "after restart");
 
-    // Removing the runtime and installing again keeps Antigravity usable.
-    await second.service.removeRuntime();
-    assert.equal((await second.service.status()).runtime.status, "not_installed");
-    await second.service.install();
-    const again = await chat(second.service, "chat-restart", "echo:reinstalled");
-    assert.equal(again.stopReason, "stop", again.errorMessage);
-  } finally {
-    unregister();
-    await second.service.shutdown();
-  }
-});
+      // Removing the runtime and installing again keeps Antigravity usable.
+      await second.service.removeRuntime();
+      assert.equal((await second.service.status()).runtime.status, "not_installed");
+      await second.service.install();
+      const again = await chat(second.service, "chat-restart", "echo:reinstalled");
+      assert.equal(again.stopReason, "stop", again.errorMessage);
+    } finally {
+      unregister();
+      await second.service.shutdown();
+    }
+  },
+);
 
-test("signing out clears the agent's own credentials", { skip: process.platform === "win32" }, async () => {
-  const baseDir = tempDir();
-  const runtime = fakeRuntime();
-  const { service: target } = service(baseDir, runtime);
-  await target.install();
-  await target.signIn({
-    signal: new AbortController().signal,
-    notify: approveRedirect,
-    prompt: (prompt) =>
-      new Promise((_resolve, reject) => prompt.signal?.addEventListener("abort", () => reject(new Error("aborted")))),
-  });
-  await target.signOut();
-  assert.equal((await target.status()).signedIn, false);
-  await target.shutdown();
-});
+test(
+  "signing out clears the agent's own credentials",
+  { skip: process.platform === "win32" },
+  async () => {
+    const baseDir = tempDir();
+    const runtime = fakeRuntime();
+    const { service: target } = service(baseDir, runtime);
+    await target.install();
+    await target.signIn({
+      signal: new AbortController().signal,
+      notify: approveRedirect,
+      prompt: (prompt) =>
+        new Promise((_resolve, reject) =>
+          prompt.signal?.addEventListener("abort", () => reject(new Error("aborted"))),
+        ),
+    });
+    await target.signOut();
+    assert.equal((await target.status()).signedIn, false);
+    await target.shutdown();
+  },
+);

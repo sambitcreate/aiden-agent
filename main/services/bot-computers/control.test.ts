@@ -12,7 +12,9 @@ import {
 } from "./types.js";
 
 const abortable = (signal: AbortSignal) =>
-  new Promise<never>((_, reject) => signal.addEventListener("abort", () => reject(new Error("aborted")), { once: true }));
+  new Promise<never>((_, reject) =>
+    signal.addEventListener("abort", () => reject(new Error("aborted")), { once: true }),
+  );
 
 test("Take over aborts the Bot's in-flight action and refuses new ones until Give back", async () => {
   const control = createBotComputerControl();
@@ -21,7 +23,10 @@ test("Take over aborts the Bot's in-flight action and refuses new ones until Giv
   const inflight = control.run("ada", undefined, abortable);
   control.takeOver("ada", "viewer");
   await assert.rejects(inflight, BotComputerTakenOverError);
-  await assert.rejects(control.run("ada", undefined, async () => "capture"), BotComputerTakenOverError);
+  await assert.rejects(
+    control.run("ada", undefined, async () => "capture"),
+    BotComputerTakenOverError,
+  );
   assert.equal(control.controller("ada"), "person");
   assert.equal(control.controller("ben"), "bot", "other Bots keep their computers");
   assert.equal(await control.run("ben", undefined, async () => "ok"), "ok");
@@ -49,7 +54,10 @@ test("the caller's own cancellation is not mistaken for Take over", async () => 
   control.takeOver("ada", "sign_in");
   const waiting = control.waitForBot("ada", waitController.signal);
   waitController.abort();
-  await assert.rejects(waiting, (error: unknown) => error instanceof BotComputerError && error.code === "cancelled");
+  await assert.rejects(
+    waiting,
+    (error: unknown) => error instanceof BotComputerError && error.code === "cancelled",
+  );
   assert.equal(control.activeActions("ada"), 0);
 });
 
@@ -65,11 +73,21 @@ function fakeHost(state: { running: boolean; port: number }) {
       ensureRunning: async (): Promise<BotComputerConnection> => {
         starts += 1;
         state.running = true;
-        return { vmName: "aiden-bot-0123456789abcdef", ip: "192.168.64.7", vnc: { host: "127.0.0.1", port: state.port, password: "pw" }, ssh: { host: "192.168.64.7", user: "lume" } };
+        return {
+          vmName: "aiden-bot-0123456789abcdef",
+          ip: "192.168.64.7",
+          vnc: { host: "127.0.0.1", port: state.port, password: "pw" },
+          ssh: { host: "192.168.64.7", user: "lume" },
+        };
       },
       runningConnection: (): BotComputerConnection | undefined =>
         state.running
-          ? { vmName: "aiden-bot-0123456789abcdef", ip: "192.168.64.7", vnc: { host: "127.0.0.1", port: state.port, password: "pw" }, ssh: { host: "192.168.64.7", user: "lume" } }
+          ? {
+              vmName: "aiden-bot-0123456789abcdef",
+              ip: "192.168.64.7",
+              vnc: { host: "127.0.0.1", port: state.port, password: "pw" },
+              ssh: { host: "192.168.64.7", user: "lume" },
+            }
           : undefined,
       computer: async (botId: string): Promise<BotComputerStatus> => ({
         botId,
@@ -89,7 +107,14 @@ function fakeHost(state: { running: boolean; port: number }) {
 
 function screen(closed: string[], id: string): BotComputerScreen {
   return {
-    capture: async () => ({ image: Buffer.alloc(0), mimeType: "image/png", width: 1, height: 1, framebufferWidth: 1, framebufferHeight: 1 }),
+    capture: async () => ({
+      image: Buffer.alloc(0),
+      mimeType: "image/png",
+      width: 1,
+      height: 1,
+      framebufferWidth: 1,
+      framebufferHeight: 1,
+    }),
     pointer: async () => undefined,
     key: async () => undefined,
     close: async () => void closed.push(id),
@@ -98,8 +123,14 @@ function screen(closed: string[], id: string): BotComputerScreen {
 
 test("without P9's screen factory the screen says so, naming the Bot, and starts nothing", async () => {
   const fake = fakeHost({ running: false, port: 5900 });
-  const sessions = createBotComputerSessions({ host: fake.host, control: createBotComputerControl(), botName: () => "Ada" });
-  await assert.rejects(sessions.screen("ada"), (error: unknown) => String(error).includes("Ada's computer screen isn't available in this build."));
+  const sessions = createBotComputerSessions({
+    host: fake.host,
+    control: createBotComputerControl(),
+    botName: () => "Ada",
+  });
+  await assert.rejects(sessions.screen("ada"), (error: unknown) =>
+    String(error).includes("Ada's computer screen isn't available in this build."),
+  );
   assert.equal(fake.starts(), 0);
 });
 
@@ -108,7 +139,10 @@ test("one screen is cached per run and dropped when the computer stops or restar
   const fake = fakeHost(state);
   const closed: string[] = [];
   let opened = 0;
-  const sessions = createBotComputerSessions({ host: fake.host, control: createBotComputerControl() });
+  const sessions = createBotComputerSessions({
+    host: fake.host,
+    control: createBotComputerControl(),
+  });
   sessions.setScreenFactory(async () => screen(closed, `screen-${(opened += 1)}`));
   const first = await sessions.screen("ada");
   assert.equal(await sessions.screen("ada"), first);
@@ -128,12 +162,17 @@ test("a caller leaving a shared screen open cancels only its own wait; the open 
   const fake = fakeHost(state);
   const closed: string[] = [];
   const opens: Array<{ signal: AbortSignal | undefined; finish: () => void }> = [];
-  const sessions = createBotComputerSessions({ host: fake.host, control: createBotComputerControl() });
+  const sessions = createBotComputerSessions({
+    host: fake.host,
+    control: createBotComputerControl(),
+  });
   sessions.setScreenFactory(
     (_connection, signal) =>
       new Promise<BotComputerScreen>((resolve, reject) => {
         const id = `screen-${opens.length + 1}`;
-        signal?.addEventListener("abort", () => reject(new Error("open cancelled")), { once: true });
+        signal?.addEventListener("abort", () => reject(new Error("open cancelled")), {
+          once: true,
+        });
         opens.push({ signal, finish: () => resolve(screen(closed, id)) });
       }),
   );
@@ -146,7 +185,10 @@ test("a caller leaving a shared screen open cancels only its own wait; the open 
   await new Promise((resolve) => setImmediate(resolve));
   assert.equal(opens.length, 1, "one open for the run");
   tab.abort();
-  await assert.rejects(tabWait, (error: unknown) => error instanceof BotComputerError && error.code === "cancelled");
+  await assert.rejects(
+    tabWait,
+    (error: unknown) => error instanceof BotComputerError && error.code === "cancelled",
+  );
   assert.equal(opens[0].signal?.aborted, false, "the Bot is still waiting");
   opens[0].finish();
   const shared = await botWait;
@@ -158,7 +200,10 @@ test("a caller leaving a shared screen open cancels only its own wait; the open 
   const abandoned = sessions.screen("ada", only.signal);
   await new Promise((resolve) => setImmediate(resolve));
   only.abort();
-  await assert.rejects(abandoned, (error: unknown) => error instanceof BotComputerError && error.code === "cancelled");
+  await assert.rejects(
+    abandoned,
+    (error: unknown) => error instanceof BotComputerError && error.code === "cancelled",
+  );
   assert.equal(opens[1].signal?.aborted, true);
   const next = sessions.screen("ada");
   await new Promise((resolve) => setImmediate(resolve));
@@ -173,7 +218,11 @@ test("the pointer registry keeps the last valid action point and activity reache
   const activity = createBotComputerActivity();
   const heard: string[] = [];
   activity.onChange((botId) => heard.push(`${botId}:${activity.get(botId) ?? ""}`));
-  const sessions = createBotComputerSessions({ host: fake.host, control: createBotComputerControl(), activity });
+  const sessions = createBotComputerSessions({
+    host: fake.host,
+    control: createBotComputerControl(),
+    activity,
+  });
   sessions.recordPointer("ada", { x: 10, y: 20, width: 1024, height: 768 });
   sessions.recordPointer("ada", { x: Number.NaN, y: 0, width: 1024, height: 768 });
   assert.deepEqual(sessions.lastPointer("ada"), { x: 10, y: 20, width: 1024, height: 768 });

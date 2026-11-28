@@ -43,14 +43,34 @@ import { BuiltinProviderEditor } from "./builtin-provider-editor";
 import { GeminiVoiceSetupDialog } from "./gemini-voice-setup-dialog";
 import { LocalVoiceSettings } from "./local-voice-settings";
 import { automaticVoiceCaption, effectiveLocalModelId } from "../../shared/voice-provider";
-import { effectiveLanguage, effectiveTask, normalizeLanguageIntent } from "../../shared/voice-language";
+import {
+  effectiveLanguage,
+  effectiveTask,
+  normalizeLanguageIntent,
+} from "../../shared/voice-language";
 
 import { localComputerNoun } from "../../shared/computer-noun";
 const AUTOMATIC = "automatic";
 const AUTO_LANGUAGE = "auto";
 /** Languages offered for cloud transcription; both providers detect others. */
 const CLOUD_LANGUAGES = [
-  "en", "es", "fr", "de", "it", "pt", "nl", "ja", "ko", "zh", "hi", "ar", "ru", "pl", "tr", "uk", "sv",
+  "en",
+  "es",
+  "fr",
+  "de",
+  "it",
+  "pt",
+  "nl",
+  "ja",
+  "ko",
+  "zh",
+  "hi",
+  "ar",
+  "ru",
+  "pl",
+  "tr",
+  "uk",
+  "sv",
 ] as const;
 
 let languageNames: Intl.DisplayNames | null | undefined;
@@ -136,12 +156,15 @@ export function VoiceInputSettings() {
       ? offeredLanguages
       : [...offeredLanguages, language];
   const languageCaption =
-    activeLocal && language !== AUTO_LANGUAGE ? languageFallbackCaption(activeLocal, language) : null;
+    activeLocal && language !== AUTO_LANGUAGE
+      ? languageFallbackCaption(activeLocal, language)
+      : null;
   const canTranslate = activeLocal?.capabilities.translateToEnglish === true;
   // Translation runs only from a known non-English source, exactly as the worker decides.
   const translateApplies =
     activeLocal !== undefined &&
-    effectiveTask(activeLocal, true, effectiveLanguage(activeLocal, language).language) === "translate";
+    effectiveTask(activeLocal, true, effectiveLanguage(activeLocal, language).language) ===
+      "translate";
   const languageDescription = !activeLocal
     ? "The language you speak. Automatic lets the provider detect it."
     : activeLocal.capabilities.autoDetect
@@ -237,7 +260,10 @@ export function VoiceInputSettings() {
     else {
       const cloudProvider = p as CloudVoiceProvider;
       void savePreference(
-        { voiceProvider: cloudProvider, voiceModel: resolveCloudVoiceModel(cloudProvider, undefined) },
+        {
+          voiceProvider: cloudProvider,
+          voiceModel: resolveCloudVoiceModel(cloudProvider, undefined),
+        },
         failure,
       );
     }
@@ -287,15 +313,15 @@ export function VoiceInputSettings() {
             ) : null}
           </div>
         </Field>
-        <Field
-          label="Language"
-          description={languageDescription}
-        >
+        <Field label="Language" description={languageDescription}>
           <div className="flex w-full flex-col">
             <Select
               value={language}
               onValueChange={(value) =>
-                void savePreference({ voiceLanguage: value }, "Aiden couldn’t change the voice language.")
+                void savePreference(
+                  { voiceLanguage: value },
+                  "Aiden couldn’t change the voice language.",
+                )
               }
             >
               <SelectTrigger size="small" aria-label="Language">
@@ -344,7 +370,10 @@ export function VoiceInputSettings() {
             <Select
               value={model}
               onValueChange={(v) =>
-                void savePreference({ voiceModel: v }, "Aiden couldn’t change the transcription model.")
+                void savePreference(
+                  { voiceModel: v },
+                  "Aiden couldn’t change the transcription model.",
+                )
               }
             >
               <SelectTrigger size="small" aria-label="Model">

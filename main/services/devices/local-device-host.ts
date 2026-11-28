@@ -115,7 +115,14 @@ async function existingPath(candidate: string): Promise<string | null> {
 
 /** serve-sim ships these inside the hub package; T3 looks in the same place. */
 export async function findDeviceHostHelpers(hubInstallDir: string): Promise<DeviceHostHelpers> {
-  const dist = path.join(hubInstallDir, "node_modules", "expo-device-hub", "vendor", "serve-sim", "dist");
+  const dist = path.join(
+    hubInstallDir,
+    "node_modules",
+    "expo-device-hub",
+    "vendor",
+    "serve-sim",
+    "dist",
+  );
   const [axSettings, serveSimCli] = await Promise.all([
     existingPath(path.join(dist, "simax", "serve-sim-ax-settings")),
     existingPath(path.join(dist, "serve-sim.js")),
@@ -151,7 +158,9 @@ function isInstalledDaemonCommand(command: string, installDirs: readonly string[
   const normalized = command.replace(/\\/g, "/");
   return installDirs.some((dir) => {
     const prefix = `${dir.replace(/\\/g, "/")}/`.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-    return new RegExp(`${prefix}[^\\s"']*?/?dist/src/(?:internal/)?daemon\\.js(?:$|[\\s"'])`).test(normalized);
+    return new RegExp(`${prefix}[^\\s"']*?/?dist/src/(?:internal/)?daemon\\.js(?:$|[\\s"'])`).test(
+      normalized,
+    );
   });
 }
 
@@ -162,7 +171,8 @@ function parseDaemonProcess(text: string): { pid: number; processStartTime: stri
     return Number.isInteger(value.pid) && (value.pid as number) > 0
       ? {
           pid: value.pid as number,
-          processStartTime: typeof value.processStartTime === "string" ? value.processStartTime.trim() : null,
+          processStartTime:
+            typeof value.processStartTime === "string" ? value.processStartTime.trim() : null,
         }
       : null;
   } catch {
@@ -203,7 +213,9 @@ export async function findAndroidSdk(input: {
   const { env } = input;
   const home = env.HOME ?? "";
   const explicit = env.ANDROID_HOME?.trim() || env.ANDROID_SDK_ROOT?.trim();
-  const candidates = explicit ? [explicit] : [path.join(home, "Library", "Android", "sdk"), path.join(home, "Android", "Sdk")];
+  const candidates = explicit
+    ? [explicit]
+    : [path.join(home, "Library", "Android", "sdk"), path.join(home, "Android", "Sdk")];
   if (!explicit) {
     for (const directory of (env.PATH ?? "").split(":")) {
       if (!directory) continue;
@@ -215,8 +227,11 @@ export async function findAndroidSdk(input: {
     const adb = await input.pathExists(path.join(root, "platform-tools", "adb"));
     const emulator = await input.pathExists(path.join(root, "emulator", "emulator"));
     if (explicit || adb || emulator) {
-      const avdmanager = await input.pathExists(path.join(root, "cmdline-tools", "latest", "bin", "avdmanager"));
-      const legacyAvdmanager = !avdmanager && (await input.pathExists(path.join(root, "tools", "bin", "avdmanager")));
+      const avdmanager = await input.pathExists(
+        path.join(root, "cmdline-tools", "latest", "bin", "avdmanager"),
+      );
+      const legacyAvdmanager =
+        !avdmanager && (await input.pathExists(path.join(root, "tools", "bin", "avdmanager")));
       return { root, adb, emulator, avdmanager, legacyAvdmanager };
     }
   }
@@ -231,7 +246,8 @@ export function androidUnavailableReason(sdk: AndroidSdk): string | null {
   if (!sdk.adb) {
     return `Android SDK Platform-Tools are missing from ${sdk.root}. Install them in Android Studio's SDK Manager.`;
   }
-  if (!sdk.emulator) return `Android Emulator is missing from ${sdk.root}. Install it in Android Studio's SDK Manager.`;
+  if (!sdk.emulator)
+    return `Android Emulator is missing from ${sdk.root}. Install it in Android Studio's SDK Manager.`;
   if (!sdk.avdmanager) {
     return sdk.legacyAvdmanager
       ? `The Android SDK command-line tools in ${sdk.root} are too old. Install Android SDK Command-line Tools (latest) in Android Studio's SDK Manager.`
@@ -252,7 +268,10 @@ export async function findAndroidStudioJava(input: {
   pathExists(file: string): Promise<boolean>;
 }): Promise<string | null> {
   if (input.env.JAVA_HOME?.trim()) return null;
-  const apps = ["/Applications/Android Studio.app", path.join(input.env.HOME ?? "", "Applications", "Android Studio.app")];
+  const apps = [
+    "/Applications/Android Studio.app",
+    path.join(input.env.HOME ?? "", "Applications", "Android Studio.app"),
+  ];
   for (const app of apps) {
     const javaHome = path.join(app, "Contents", "jbr", "Contents", "Home");
     if (await input.pathExists(path.join(javaHome, "bin", "java"))) return javaHome;
@@ -261,7 +280,11 @@ export async function findAndroidStudioJava(input: {
 }
 
 /** The hub and every host command see the SDK: `ANDROID_HOME` set and its tools first on PATH, plus Java when found. */
-export function androidSdkEnv(env: NodeJS.ProcessEnv, root: string | null, javaHome: string | null = null): NodeJS.ProcessEnv {
+export function androidSdkEnv(
+  env: NodeJS.ProcessEnv,
+  root: string | null,
+  javaHome: string | null = null,
+): NodeJS.ProcessEnv {
   if (!root) return env;
   return {
     ...env,
@@ -287,7 +310,10 @@ export function nextHubRestartDelay(previousDelayMs: number, uptimeMs: number): 
 export function xcodeUnavailableReason(result: DeviceCommandResult): string | null {
   if (result.code === 0) return null;
   const output = `${result.stderr}\n${result.stdout}`;
-  if (result.code === 127 || /xcode-select: error|unable to find utility|invalid active developer path/iu.test(output)) {
+  if (
+    result.code === 127 ||
+    /xcode-select: error|unable to find utility|invalid active developer path/iu.test(output)
+  ) {
     return "Xcode was not found. Install Xcode from the App Store, open it once, then try again.";
   }
   if (/license/iu.test(output)) {
@@ -360,14 +386,23 @@ export function createLocalDeviceHost(deps: LocalDeviceHostDeps): DeviceHost {
     });
 
   const ready = (): DeviceHostReady | null =>
-    hub ? { nodePath: nodePath!, hub: { origin: hub.origin }, helpers: { ...hub.helpers }, run, env: deviceNodeEnvironment(sdkEnv, nodePath!) } : null;
+    hub
+      ? {
+          nodePath: nodePath!,
+          hub: { origin: hub.origin },
+          helpers: { ...hub.helpers },
+          run,
+          env: deviceNodeEnvironment(sdkEnv, nodePath!),
+        }
+      : null;
 
   async function install(
     spec: ToolSpec,
     onPhase: ((phase: DeviceHostPhase, detail?: string) => void) | undefined,
     allowInstall: boolean,
   ) {
-    if (await isToolInstalled(deps.baseDir, spec)) return deviceToolPaths(deps.baseDir, spec).entryPath;
+    if (await isToolInstalled(deps.baseDir, spec))
+      return deviceToolPaths(deps.baseDir, spec).entryPath;
     if (!allowInstall) throw new DeviceToolsMissingError(spec.name);
     onPhase?.("installing", `${spec.name}@${spec.version}`);
     const runNpm = await deps.resolveNpmRunner();
@@ -392,18 +427,26 @@ export function createLocalDeviceHost(deps: LocalDeviceHostDeps): DeviceHost {
     await rm(hubStatePath, { force: true });
   }
 
-  async function waitForHub(child: HostChildProcess, origin: string, signal: AbortSignal): Promise<void> {
+  async function waitForHub(
+    child: HostChildProcess,
+    origin: string,
+    signal: AbortSignal,
+  ): Promise<void> {
     const deadline = deps.now() + HUB_READY_TIMEOUT_MS;
     while (deps.now() < deadline) {
-      if (signal.aborted) throw new DeviceHostError(LOCAL_DEVICE_HOST_ID, "starting the device hub after it stopped");
+      if (signal.aborted)
+        throw new DeviceHostError(LOCAL_DEVICE_HOST_ID, "starting the device hub after it stopped");
       if (child.startupError) {
-        throw new DeviceHostError(LOCAL_DEVICE_HOST_ID, "starting the device hub", { cause: child.startupError });
+        throw new DeviceHostError(LOCAL_DEVICE_HOST_ID, "starting the device hub", {
+          cause: child.startupError,
+        });
       }
       if (child.exitCode !== null || child.signalCode !== null) {
         throw new DeviceHostError(LOCAL_DEVICE_HOST_ID, "starting the device hub");
       }
       const response = await deps.fetch(`${origin}/readyz`, { signal }).catch(() => null);
-      if (signal.aborted) throw new DeviceHostError(LOCAL_DEVICE_HOST_ID, "starting the device hub after it stopped");
+      if (signal.aborted)
+        throw new DeviceHostError(LOCAL_DEVICE_HOST_ID, "starting the device hub after it stopped");
       if (response?.ok) return;
       await deps.sleep(READY_POLL_MS);
     }
@@ -412,7 +455,8 @@ export function createLocalDeviceHost(deps: LocalDeviceHostDeps): DeviceHost {
 
   const isCurrent = (startedIn: number) => !stopped && generation === startedIn;
   const assertCurrent = (startedIn: number) => {
-    if (!isCurrent(startedIn)) throw new DeviceHostError(LOCAL_DEVICE_HOST_ID, "starting the device hub after it stopped");
+    if (!isCurrent(startedIn))
+      throw new DeviceHostError(LOCAL_DEVICE_HOST_ID, "starting the device hub after it stopped");
   };
 
   async function spawnHub(entryPath: string, startedIn: number): Promise<HubProcess> {
@@ -424,7 +468,15 @@ export function createLocalDeviceHost(deps: LocalDeviceHostDeps): DeviceHost {
     const origin = `http://127.0.0.1:${port}`;
     const child = deps.spawn(
       nodePath!,
-      [entryPath, "--port", String(port), "--host", "127.0.0.1", "--hide-sidebar", "--hide-boot-device"],
+      [
+        entryPath,
+        "--port",
+        String(port),
+        "--host",
+        "127.0.0.1",
+        "--hide-sidebar",
+        "--hide-boot-device",
+      ],
       nodeEnv(),
     );
     const controller = new AbortController();
@@ -435,10 +487,15 @@ export function createLocalDeviceHost(deps: LocalDeviceHostDeps): DeviceHost {
       if (child.pid !== undefined) {
         await mkdir(deps.baseDir, { recursive: true });
         assertCurrent(startedIn);
-        await writeFile(hubStatePath, JSON.stringify({ pid: child.pid, port, entryPath } satisfies HubStateFile));
+        await writeFile(
+          hubStatePath,
+          JSON.stringify({ pid: child.pid, port, entryPath } satisfies HubStateFile),
+        );
       }
       assertCurrent(startedIn);
-      const helpers = await findDeviceHostHelpers(deviceToolPaths(deps.baseDir, DEVICE_HUB).installDir);
+      const helpers = await findDeviceHostHelpers(
+        deviceToolPaths(deps.baseDir, DEVICE_HUB).installDir,
+      );
       assertCurrent(startedIn);
       const spawned: HubProcess = { child, origin, entryPath, startedAt: deps.now(), helpers };
       child.once("exit", () => void supervise(spawned));
@@ -477,7 +534,8 @@ export function createLocalDeviceHost(deps: LocalDeviceHostDeps): DeviceHost {
       });
       if (isCurrent(startedIn) && hub) emitHealth("ready");
     } catch (error) {
-      if (isCurrent(startedIn)) emitHealth("failed", error instanceof Error ? error.message : String(error));
+      if (isCurrent(startedIn))
+        emitHealth("failed", error instanceof Error ? error.message : String(error));
     }
   }
 
@@ -540,11 +598,16 @@ export function createLocalDeviceHost(deps: LocalDeviceHostDeps): DeviceHost {
       const existing = ready();
       if (existing) return existing;
       // The hub serves both platforms, so it starts when either one can run.
-      const [ios, android] = await Promise.all([platformAvailability("ios"), platformAvailability("android")]);
+      const [ios, android] = await Promise.all([
+        platformAvailability("ios"),
+        platformAvailability("android"),
+      ]);
       assertCurrent(startedIn);
       if (!ios.available && !android.available) {
         throw new DeviceHostUnavailableError(
-          deps.platform === "darwin" ? [ios.reason, android.reason].filter(Boolean).join(" ") : (ios.reason ?? ""),
+          deps.platform === "darwin"
+            ? [ios.reason, android.reason].filter(Boolean).join(" ")
+            : (ios.reason ?? ""),
         );
       }
       nodePath = await deps.resolveNodePath();
@@ -566,7 +629,9 @@ export function createLocalDeviceHost(deps: LocalDeviceHostDeps): DeviceHost {
     });
   }
 
-  async function platformAvailability(platform: DevicePlatform): Promise<DevicePlatformAvailability> {
+  async function platformAvailability(
+    platform: DevicePlatform,
+  ): Promise<DevicePlatformAvailability> {
     // Simulator devices are a macOS feature; the hub is never started elsewhere.
     if (deps.platform !== "darwin") {
       return platform === "ios"
@@ -582,7 +647,9 @@ export function createLocalDeviceHost(deps: LocalDeviceHostDeps): DeviceHost {
     }
     // Once Xcode answers it stays installed for this run; only a missing Xcode is checked again.
     if (iosAvailable) return { platform, available: true };
-    const reason = xcodeUnavailableReason(await run("xcrun", ["simctl", "help"], { timeoutMs: 15_000 }));
+    const reason = xcodeUnavailableReason(
+      await run("xcrun", ["simctl", "help"], { timeoutMs: 15_000 }),
+    );
     iosAvailable = reason === null;
     return reason ? { platform, available: false, reason } : { platform, available: true };
   }
@@ -621,19 +688,25 @@ export function createLocalDeviceHost(deps: LocalDeviceHostDeps): DeviceHost {
     agentDevice = null;
     let entryPath = endpoint?.entryPath;
     if (!entryPath) {
-      const leftover = await readFile(path.join(agentStateDir, "daemon.json"), "utf8").catch(() => null);
+      const leftover = await readFile(path.join(agentStateDir, "daemon.json"), "utf8").catch(
+        () => null,
+      );
       if (leftover === null) return;
       if (!(await isToolInstalled(deps.baseDir, AGENT_DEVICE))) return;
       entryPath = deviceToolPaths(deps.baseDir, AGENT_DEVICE).entryPath;
     }
     let stoppedByHelper = false;
     try {
-      const runtime = nodePath ?? await deps.resolveNodePath();
+      const runtime = nodePath ?? (await deps.resolveNodePath());
       nodePath = runtime;
-      const result = await deps.runCommand(runtime, [entryPath, "daemon", "stop", "--state-dir", agentStateDir], {
-        timeoutMs: DAEMON_STOP_TIMEOUT_MS,
-        env: agentEnv(),
-      });
+      const result = await deps.runCommand(
+        runtime,
+        [entryPath, "daemon", "stop", "--state-dir", agentStateDir],
+        {
+          timeoutMs: DAEMON_STOP_TIMEOUT_MS,
+          env: agentEnv(),
+        },
+      );
       stoppedByHelper = result.code === 0;
     } catch {
       // Discovery and daemon stop are both best effort. Revocation/removal must
@@ -719,9 +792,15 @@ export function defaultLocalDeviceHostDeps(
     resolveNodePath: options.resolveNodePath ?? (() => requireDeviceNode(options.env)),
     env: options.env ?? process.env,
     spawn: (command, args, env) => {
-      const child: HostChildProcess = nodeSpawn(command, [...args], { env, stdio: "ignore", detached: false });
+      const child: HostChildProcess = nodeSpawn(command, [...args], {
+        env,
+        stdio: "ignore",
+        detached: false,
+      });
       // Spawn errors do not emit exit. Record them so readiness fails without an unhandled event.
-      (child as ReturnType<typeof nodeSpawn>).once("error", (error) => { child.startupError = error; });
+      (child as ReturnType<typeof nodeSpawn>).once("error", (error) => {
+        child.startupError = error;
+      });
       return child;
     },
     runCommand: runChildCommand,
@@ -795,7 +874,11 @@ export function runChildCommand(
   options: Omit<DeviceCommandOptions, "env"> & { env: NodeJS.ProcessEnv },
 ): Promise<DeviceCommandResult> {
   if (commandsCancelledForQuit) {
-    return Promise.resolve({ stdout: "", stderr: "Aiden is quitting, so the device helper command did not start.", code: 124 });
+    return Promise.resolve({
+      stdout: "",
+      stderr: "Aiden is quitting, so the device helper command did not start.",
+      code: 124,
+    });
   }
   return new Promise((resolve) => {
     let stdout = "";
@@ -813,7 +896,10 @@ export function runChildCommand(
       stdio: [options.stdin === undefined ? "ignore" : "pipe", "pipe", "pipe"],
     });
     runningCommands.add(child);
-    const timer = setTimeout(() => child.kill("SIGTERM"), options.timeoutMs ?? DEFAULT_RUN_TIMEOUT_MS);
+    const timer = setTimeout(
+      () => child.kill("SIGTERM"),
+      options.timeoutMs ?? DEFAULT_RUN_TIMEOUT_MS,
+    );
     child.stdout?.setEncoding("utf8");
     child.stderr?.setEncoding("utf8");
     child.stdout?.on("data", (chunk: string) => {
@@ -840,7 +926,9 @@ export function reservePort(): Promise<number> {
     server.listen(0, "127.0.0.1", () => {
       const address = server.address();
       const port = typeof address === "object" && address ? address.port : 0;
-      server.close(() => (port ? resolve(port) : reject(new Error("No loopback port was available."))));
+      server.close(() =>
+        port ? resolve(port) : reject(new Error("No loopback port was available.")),
+      );
     });
   });
 }

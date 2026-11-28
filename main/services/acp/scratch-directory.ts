@@ -21,7 +21,9 @@ function safeName(chatId: string): string {
   return chatId.replace(/[^a-zA-Z0-9_-]/gu, "_").slice(0, 80) || "chat";
 }
 
-export function createAcpScratchDirectories(options: AcpScratchDirectoriesOptions): AcpScratchDirectories {
+export function createAcpScratchDirectories(
+  options: AcpScratchDirectoriesOptions,
+): AcpScratchDirectories {
   const tempRoot = options.tempRoot ?? tmpdir;
   const fallbacks = new Map<string, Promise<string>>();
   return {
@@ -55,7 +57,9 @@ export function createAcpScratchDirectories(options: AcpScratchDirectoriesOption
         if (directory !== tempRoot()) directories.push(directory);
       }
       await Promise.all(
-        directories.map((directory) => rm(directory, { recursive: true, force: true }).catch(() => undefined)),
+        directories.map((directory) =>
+          rm(directory, { recursive: true, force: true }).catch(() => undefined),
+        ),
       );
     },
   };

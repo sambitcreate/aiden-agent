@@ -291,7 +291,10 @@ const LINUX_FLATPAKS: Readonly<Record<string, readonly string[]>> = {
   vscodium: ["com.vscodium.codium"],
   zed: ["dev.zed.Zed"],
   "android-studio": ["com.google.AndroidStudio"],
-  "intellij-idea": ["com.jetbrains.IntelliJ-IDEA-Community", "com.jetbrains.IntelliJ-IDEA-Ultimate"],
+  "intellij-idea": [
+    "com.jetbrains.IntelliJ-IDEA-Community",
+    "com.jetbrains.IntelliJ-IDEA-Ultimate",
+  ],
   clion: ["com.jetbrains.CLion"],
   datagrip: ["com.jetbrains.DataGrip"],
   phpstorm: ["com.jetbrains.PhpStorm"],
@@ -574,7 +577,10 @@ async function loadNativeIcon(appPath: string): Promise<string> {
     const { app, nativeImage } = await import("electron");
     const fileIcon = await app.getFileIcon(appPath, { size: "normal" });
     try {
-      const thumbnail = await nativeImage.createThumbnailFromPath(appPath, { width: 32, height: 32 });
+      const thumbnail = await nativeImage.createThumbnailFromPath(appPath, {
+        width: 32,
+        height: 32,
+      });
       if (!thumbnail.isEmpty()) return thumbnail.toDataURL();
     } catch {
       // getFileIcon remains the native fallback when Quick Look cannot render the bundle artwork.

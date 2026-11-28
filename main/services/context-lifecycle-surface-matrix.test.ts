@@ -51,7 +51,10 @@ test("conversation surface matrix converges every authorized turn on the managed
   assert.match(telegram, /deps\.llmClient\.start\(/u);
   assert.match(remote, /startSurfaceGeneration\(/u);
   assert.match(remote, /authoritative\.botId \? \{ botAudienceId: deviceId \}/u);
-  assert.match(scheduled, /beginSurfaceGeneration\(llmClient\.beginChatTurn\.bind\(llmClient\), surface\)/u);
+  assert.match(
+    scheduled,
+    /beginSurfaceGeneration\(llmClient\.beginChatTurn\.bind\(llmClient\), surface\)/u,
+  );
   assert.match(scheduled, /startSurfaceGeneration\(/u);
   assert.match(child, /agent\.runManaged\(/u);
   assert.doesNotMatch(telegram, /new PiAgentRuntimeHarness|new PiCompactionCoordinator/u);
@@ -109,9 +112,10 @@ test("authorized persistent surfaces share admission, saved-model authority, and
   for (const [index, surface] of lifecycleCases.entries()) {
     const providerId = `matrix-provider-${index}`;
     const modelId = `matrix-model-${index}`;
-    const chatId = surface.name === "ordinary Telegram"
-      ? telegramChatId(42, "workspace-a", "work")
-      : `matrix-chat-${index}`;
+    const chatId =
+      surface.name === "ordinary Telegram"
+        ? telegramChatId(42, "workspace-a", "work")
+        : `matrix-chat-${index}`;
     const faux = fauxProvider({
       api: "openai-completions",
       provider: providerId,
@@ -156,10 +160,11 @@ test("authorized persistent surfaces share admission, saved-model authority, and
       updatedAt: 4,
     };
     const session = createPiSessionPort(await new InMemorySessionRepo().create({ id: chatId }));
-    const calls: Array<{ chatId: string; ownerId: string; providerId?: string; model?: string }> = [];
+    const calls: Array<{ chatId: string; ownerId: string; providerId?: string; model?: string }> =
+      [];
     const leaseEvents: string[] = [];
     const deps: ContextLifecycleServiceDeps = {
-      getChat: async (requestedChatId) => requestedChatId === chatId ? chat : null,
+      getChat: async (requestedChatId) => (requestedChatId === chatId ? chat : null),
       listChatsByBot: async () => [chat],
       beginChatTurn: (requestedChatId, _turnId, ownerId) => {
         calls.push({ chatId: requestedChatId, ownerId });
@@ -170,7 +175,12 @@ test("authorized persistent surfaces share admission, saved-model authority, and
         return session;
       },
       resolveRuntime: async (savedProviderId, savedModel) => {
-        calls.push({ chatId, ownerId: surface.audience.ownerId, providerId: savedProviderId, model: savedModel });
+        calls.push({
+          chatId,
+          ownerId: surface.audience.ownerId,
+          providerId: savedProviderId,
+          model: savedModel,
+        });
         return runtime;
       },
       resolveThinkingLevel: async () => "off",
@@ -191,7 +201,10 @@ test("authorized persistent surfaces share admission, saved-model authority, and
       model: modelId,
     });
     assert.deepEqual(leaseEvents, ["settled", "released"]);
-    assert.equal((await session.getBranch()).filter((entry) => entry.type === "compaction").length, 1);
+    assert.equal(
+      (await session.getBranch()).filter((entry) => entry.type === "compaction").length,
+      1,
+    );
   }
 });
 
@@ -282,7 +295,10 @@ test("production Mac and bound-Telegram adapters share one canonical Bot journal
   assert.equal(telegramResult.compacted, true, JSON.stringify(telegramResult));
   assert.deepEqual(admittedOwners, ["renderer:bot-window", "telegram:bot-profile"]);
   assert.deepEqual(resolved, [providerId, modelId, providerId, modelId]);
-  assert.equal((await session.getBranch()).filter((entry) => entry.type === "compaction").length, 2);
+  assert.equal(
+    (await session.getBranch()).filter((entry) => entry.type === "compaction").length,
+    2,
+  );
 });
 
 test("production scheduled and remote adapters enter the admitted generation boundary", async () => {
@@ -305,7 +321,10 @@ test("production scheduled and remote adapters enter the admitted generation bou
     generationOwner: ChatGenerationOwner,
     options: Record<string, unknown>,
   ) => {
-    records.push({ kind: "start", values: [streamId, params, generationOwner.documentId, options] });
+    records.push({
+      kind: "start",
+      values: [streamId, params, generationOwner.documentId, options],
+    });
     return true;
   };
   const scheduled = scheduledGenerationSurface({
@@ -371,35 +390,44 @@ test("ordinary Telegram journals remain profile/workspace scoped and distinct fr
 });
 
 test("mobile clients render lifecycle state but cannot author checkpoint or memory payloads", async () => {
-  const [protocol, iosContract, iosChat, iosClient, androidChat, androidClient] = await Promise.all([
-    readFile(new URL("../../protocol/aiden-remote/v1/openapi.json", import.meta.url), "utf8"),
-    readFile(
-      new URL("../../ios/AidenOnTheGo/Networking/AidenRemoteContract.swift", import.meta.url),
-      "utf8",
-    ),
-    readFile(new URL("../../ios/AidenOnTheGo/Models/AidenChat.swift", import.meta.url), "utf8"),
-    readFile(
-      new URL("../../ios/AidenOnTheGo/Networking/AidenRemoteClient.swift", import.meta.url),
-      "utf8",
-    ),
-    readFile(
-      new URL(
-        "../../android/app/src/main/java/sbtbiswas/AidenOnTheGo/models/AidenChat.kt",
-        import.meta.url,
+  const [protocol, iosContract, iosChat, iosClient, androidChat, androidClient] = await Promise.all(
+    [
+      readFile(new URL("../../protocol/aiden-remote/v1/openapi.json", import.meta.url), "utf8"),
+      readFile(
+        new URL("../../ios/AidenOnTheGo/Networking/AidenRemoteContract.swift", import.meta.url),
+        "utf8",
       ),
-      "utf8",
-    ),
-    readFile(
-      new URL(
-        "../../android/app/src/main/java/sbtbiswas/AidenOnTheGo/networking/AidenRemoteClient.kt",
-        import.meta.url,
+      readFile(new URL("../../ios/AidenOnTheGo/Models/AidenChat.swift", import.meta.url), "utf8"),
+      readFile(
+        new URL("../../ios/AidenOnTheGo/Networking/AidenRemoteClient.swift", import.meta.url),
+        "utf8",
       ),
-      "utf8",
-    ),
-  ]);
+      readFile(
+        new URL(
+          "../../android/app/src/main/java/sbtbiswas/AidenOnTheGo/models/AidenChat.kt",
+          import.meta.url,
+        ),
+        "utf8",
+      ),
+      readFile(
+        new URL(
+          "../../android/app/src/main/java/sbtbiswas/AidenOnTheGo/networking/AidenRemoteClient.kt",
+          import.meta.url,
+        ),
+        "utf8",
+      ),
+    ],
+  );
   const forbidden = /firstKeptEntryId|retainedTail|appendCompaction|compactionSummary/u;
 
-  for (const clientSource of [protocol, iosContract, iosChat, iosClient, androidChat, androidClient]) {
+  for (const clientSource of [
+    protocol,
+    iosContract,
+    iosChat,
+    iosClient,
+    androidChat,
+    androidClient,
+  ]) {
     assert.doesNotMatch(clientSource, forbidden);
   }
   assert.match(iosChat, /compact_context/u);

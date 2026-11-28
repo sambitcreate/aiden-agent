@@ -43,24 +43,29 @@ const opaqueKey = Buffer.alloc(32, 9);
 
 function inventory(): BotCapabilityInventory {
   return {
-    providers: [{
-      sourceId: "private-provider",
-      label: "Provider",
-      available: true,
-      connectionFingerprint: digest("provider"),
-      models: [{
-        sourceId: "private-model",
-        label: "Model",
+    providers: [
+      {
+        sourceId: "private-provider",
+        label: "Provider",
         available: true,
-        modelFingerprint: digest("model"),
-      }, {
-        sourceId: "private-model-next",
-        label: "Model Next",
-        available: true,
-        supportsImages: true,
-        modelFingerprint: digest("model-next"),
-      }],
-    }],
+        connectionFingerprint: digest("provider"),
+        models: [
+          {
+            sourceId: "private-model",
+            label: "Model",
+            available: true,
+            modelFingerprint: digest("model"),
+          },
+          {
+            sourceId: "private-model-next",
+            label: "Model Next",
+            available: true,
+            supportsImages: true,
+            modelFingerprint: digest("model-next"),
+          },
+        ],
+      },
+    ],
     fileScopes: [
       {
         sourceId: "private-full",
@@ -83,13 +88,15 @@ function inventory(): BotCapabilityInventory {
       label,
       available: true,
       connectionFingerprint: digest(`connection-${label}`),
-      tools: [{
-        name: `${label.toLowerCase()}_tool`,
-        inputSchemaFingerprint: digest(`input-${label}`),
-        outputSchemaFingerprint: digest(`output-${label}`),
-        effect: "mutating" as const,
-        effectFingerprint: digest(`effect-${label}`),
-      }],
+      tools: [
+        {
+          name: `${label.toLowerCase()}_tool`,
+          inputSchemaFingerprint: digest(`input-${label}`),
+          outputSchemaFingerprint: digest(`output-${label}`),
+          effect: "mutating" as const,
+          effectFingerprint: digest(`effect-${label}`),
+        },
+      ],
     })),
     skills: ["Writing", "Review"].map((label) => ({
       sourceId: `private-${label.toLowerCase()}`,
@@ -98,12 +105,14 @@ function inventory(): BotCapabilityInventory {
       identityFingerprint: digest(`identity-${label}`),
       contentFingerprint: digest(`content-${label}`),
     })),
-    otherCapabilities: [{
-      kind: "web",
-      label: "Web",
-      available: true,
-      capabilityFingerprint: digest("capability-web"),
-    }],
+    otherCapabilities: [
+      {
+        kind: "web",
+        label: "Web",
+        available: true,
+        capabilityFingerprint: digest("capability-web"),
+      },
+    ],
   };
 }
 
@@ -204,8 +213,12 @@ function stagedCapabilityPersistence(root: string) {
     persistence,
     arm() {
       armed = true;
-      enteredPromise = new Promise<void>((resolve) => { entered = resolve; });
-      releasePromise = new Promise<void>((resolve) => { release = resolve; });
+      enteredPromise = new Promise<void>((resolve) => {
+        entered = resolve;
+      });
+      releasePromise = new Promise<void>((resolve) => {
+        release = resolve;
+      });
       return {
         entered: enteredPromise,
         release: () => release(),
@@ -383,10 +396,7 @@ test("staged DataStore publication rechecks inventory leases for Bot and chat po
   botPublish.release();
 
   await assert.rejects(botPolicy, /capabilities changed/u);
-  await assert.rejects(
-    store.getBotPolicy("bot:staged"),
-    BotCapabilityUnavailableError,
-  );
+  await assert.rejects(store.getBotPolicy("bot:staged"), BotCapabilityUnavailableError);
   assert.deepEqual(
     parseBotCapabilityState(JSON.parse(await readFile(join(root, filename), "utf8"))).policies,
     [],
@@ -412,14 +422,12 @@ test("staged DataStore publication rechecks inventory leases for Bot and chat po
   chatPublish.release();
 
   await assert.rejects(chatPolicy, /capabilities changed/u);
-  await assert.rejects(
-    store.getChatPolicy("chat:staged"),
-    BotCapabilityUnavailableError,
+  await assert.rejects(store.getChatPolicy("chat:staged"), BotCapabilityUnavailableError);
+  const durable = parseBotCapabilityState(JSON.parse(await readFile(join(root, filename), "utf8")));
+  assert.deepEqual(
+    durable.policies.map(({ botId }) => botId),
+    ["bot:staged"],
   );
-  const durable = parseBotCapabilityState(
-    JSON.parse(await readFile(join(root, filename), "utf8")),
-  );
-  assert.deepEqual(durable.policies.map(({ botId }) => botId), ["bot:staged"]);
   assert.deepEqual(durable.chats, []);
 });
 
@@ -887,11 +895,15 @@ test("accepting Full access while keeping a review-first choice never overwrites
   const { store } = storeAt(root);
   await store.initialize();
   // No decision yet: it accepts Full access.
-  const accepted = await store.acknowledgeNotice("device:new", acknowledgement(), undefined, { keepReviewFirst: true });
+  const accepted = await store.acknowledgeNotice("device:new", acknowledgement(), undefined, {
+    keepReviewFirst: true,
+  });
   assert.equal(accepted.acceptedDecision, "continue_full");
   // A review-first choice stands, however often Full access is asked for.
   await store.acknowledgeNotice("device:careful", acknowledgement("customize_first"));
-  const kept = await store.acknowledgeNotice("device:careful", acknowledgement(), undefined, { keepReviewFirst: true });
+  const kept = await store.acknowledgeNotice("device:careful", acknowledgement(), undefined, {
+    keepReviewFirst: true,
+  });
   assert.equal(kept.acceptedDecision, "customize_first");
   assert.equal((await store.noticeStatus("device:careful")).acceptedDecision, "customize_first");
   // Without the option, the person's own explicit acceptance still widens it.
@@ -1061,10 +1073,15 @@ test("a stale model fingerprint is repaired at admission without widening or fen
   const current = firstModelSelection(snapshot);
   assert.deepEqual(current, chosen);
   assert.throws(
-    () => assertBoundBotProviderModelCurrent(
-      bindBotCustomSelection({ selection: chosen, catalogRevision: stale.catalog.revision, snapshot: stale }).provider,
-      snapshot,
-    ),
+    () =>
+      assertBoundBotProviderModelCurrent(
+        bindBotCustomSelection({
+          selection: chosen,
+          catalogRevision: stale.catalog.revision,
+          snapshot: stale,
+        }).provider,
+        snapshot,
+      ),
     BotCapabilityBindingDriftError,
   );
 
@@ -1130,7 +1147,9 @@ test("a Custom Bot's stale model fingerprint fails closed and keeps its legacy i
   await store.acknowledgeNotice("device:a", acknowledgement());
   // Legacy (v1) public ids embed the exact fingerprint they were minted with.
   const staleInventory = inventory();
-  staleInventory.providers[0]!.models[0]!.modelFingerprint = digest("model-with-old-context-window");
+  staleInventory.providers[0]!.models[0]!.modelFingerprint = digest(
+    "model-with-old-context-window",
+  );
   const legacyStale = buildBotCapabilityCatalogSnapshot({
     inventory: staleInventory,
     notice: { version: BOT_FULL_ACCESS_NOTICE_VERSION, requiresAcknowledgement: true },
@@ -1168,38 +1187,144 @@ test("a Custom Bot's stale model fingerprint fails closed and keeps its legacy i
   );
 });
 
-test("source-only admission ignores model availability but preserves Bot, chat, schedule and exact connection ceilings", async t => {
-  const sourceInventory = inventory(); sourceInventory.otherCapabilities.push({kind:"schedules",label:"Schedules",available:true,capabilityFingerprint:digest("schedules")});
-  const sourceSnapshot = snapshotFor(sourceInventory), sourceCatalog = sourceSnapshot.catalog;
-  const sourceSelection = (overrides:Partial<BotCustomSelection>={}) => ({...selection(),otherCapabilityIds:sourceCatalog.otherCapabilities.map(row=>row.id),...overrides});
-  const sourceBinding = (custom:BotCustomSelection) => bindBotCustomSelection({selection:custom,catalogRevision:sourceCatalog.revision,snapshot:sourceSnapshot});
-  const { store } = storeAt(await temporaryRoot(t)); await store.initialize(); await store.acknowledgeNotice("device:a", acknowledgement());
+test("source-only admission ignores model availability but preserves Bot, chat, schedule and exact connection ceilings", async (t) => {
+  const sourceInventory = inventory();
+  sourceInventory.otherCapabilities.push({
+    kind: "schedules",
+    label: "Schedules",
+    available: true,
+    capabilityFingerprint: digest("schedules"),
+  });
+  const sourceSnapshot = snapshotFor(sourceInventory),
+    sourceCatalog = sourceSnapshot.catalog;
+  const sourceSelection = (overrides: Partial<BotCustomSelection> = {}) => ({
+    ...selection(),
+    otherCapabilityIds: sourceCatalog.otherCapabilities.map((row) => row.id),
+    ...overrides,
+  });
+  const sourceBinding = (custom: BotCustomSelection) =>
+    bindBotCustomSelection({
+      selection: custom,
+      catalogRevision: sourceCatalog.revision,
+      snapshot: sourceSnapshot,
+    });
+  const { store } = storeAt(await temporaryRoot(t));
+  await store.initialize();
+  await store.acknowledgeNotice("device:a", acknowledgement());
   const chosen = sourceSelection();
-  const policy = await store.createBotPolicy({ botId: "bot:source", catalog: sourceCatalog, access: { accessMode: "custom", catalogRevision:sourceCatalog.revision, custom: chosen }, binding: sourceBinding(chosen) });
-  const chat = await store.createChatPolicy({ chatId: "chat:source", botId: policy.botId, expectedBotPolicyRevision: policy.revision, catalog: sourceCatalog });
+  const policy = await store.createBotPolicy({
+    botId: "bot:source",
+    catalog: sourceCatalog,
+    access: { accessMode: "custom", catalogRevision: sourceCatalog.revision, custom: chosen },
+    binding: sourceBinding(chosen),
+  });
+  const chat = await store.createChatPolicy({
+    chatId: "chat:source",
+    botId: policy.botId,
+    expectedBotPolicyRevision: policy.revision,
+    catalog: sourceCatalog,
+  });
   // Ordinary model admission still requires the current provider snapshot.
-  await assert.rejects(store.admit({ audienceId: "device:a", botId: policy.botId, chatId: chat.chatId }));
-  const source = { audienceId: "device:a", botId: policy.botId, chatId: chat.chatId, serverId: "private-mail" };
+  await assert.rejects(
+    store.admit({ audienceId: "device:a", botId: policy.botId, chatId: chat.chatId }),
+  );
+  const source = {
+    audienceId: "device:a",
+    botId: policy.botId,
+    chatId: chat.chatId,
+    serverId: "private-mail",
+  };
   const first = await store.admitConnectorSource(source);
-  assert.equal(first.connection?.sourceId, "private-mail"); first.lease.assertCurrent();
+  assert.equal(first.connection?.sourceId, "private-mail");
+  first.lease.assertCurrent();
   await assert.rejects(store.admitConnectorSource({ ...source, serverId: "unselected-server" }));
   await assert.rejects(store.admitConnectorSource({ ...source, audienceId: "unknown-person" }));
-  await store.updateChatPolicy({ chatId: chat.chatId, expectedRevision: chat.revision, catalog: sourceCatalog, access: { mode: "custom", catalogRevision:sourceCatalog.revision, expectedBotPolicyRevision: policy.revision, custom: sourceSelection({ connectionIds: [] }) } });
-  assert.equal(first.lease.signal.aborted, true); await assert.rejects(store.admitConnectorSource(source)); first.lease.release();
+  await store.updateChatPolicy({
+    chatId: chat.chatId,
+    expectedRevision: chat.revision,
+    catalog: sourceCatalog,
+    access: {
+      mode: "custom",
+      catalogRevision: sourceCatalog.revision,
+      expectedBotPolicyRevision: policy.revision,
+      custom: sourceSelection({ connectionIds: [] }),
+    },
+  });
+  assert.equal(first.lease.signal.aborted, true);
+  await assert.rejects(store.admitConnectorSource(source));
+  first.lease.release();
 });
 
-test("a Full Bot's chat reduction grants only its host-minted source and Schedules IDs", async t => {
-  const sourceInventory = inventory(); sourceInventory.otherCapabilities.push({kind:"schedules",label:"Schedules",available:true,capabilityFingerprint:digest("schedules")});
-  const sourceSnapshot = snapshotFor(sourceInventory), sourceCatalog = sourceSnapshot.catalog;
-  const sourceSelection = (overrides:Partial<BotCustomSelection>={}) => ({...selection(),otherCapabilityIds:sourceCatalog.otherCapabilities.map(row=>row.id),...overrides});
-  const { store } = storeAt(await temporaryRoot(t)); await store.initialize(); await store.acknowledgeNotice("device:a", acknowledgement());
-  const policy = await store.createBotPolicy({ botId: "bot:source-full", catalog: sourceCatalog, access: { accessMode: "full", catalogRevision:sourceCatalog.revision, confirmedForeground: true } });
+test("a Full Bot's chat reduction grants only its host-minted source and Schedules IDs", async (t) => {
+  const sourceInventory = inventory();
+  sourceInventory.otherCapabilities.push({
+    kind: "schedules",
+    label: "Schedules",
+    available: true,
+    capabilityFingerprint: digest("schedules"),
+  });
+  const sourceSnapshot = snapshotFor(sourceInventory),
+    sourceCatalog = sourceSnapshot.catalog;
+  const sourceSelection = (overrides: Partial<BotCustomSelection> = {}) => ({
+    ...selection(),
+    otherCapabilityIds: sourceCatalog.otherCapabilities.map((row) => row.id),
+    ...overrides,
+  });
+  const { store } = storeAt(await temporaryRoot(t));
+  await store.initialize();
+  await store.acknowledgeNotice("device:a", acknowledgement());
+  const policy = await store.createBotPolicy({
+    botId: "bot:source-full",
+    catalog: sourceCatalog,
+    access: {
+      accessMode: "full",
+      catalogRevision: sourceCatalog.revision,
+      confirmedForeground: true,
+    },
+  });
   const custom = sourceSelection({ connectionIds: [snapshot.catalog.connections[0]!.id] });
-  const chat = await store.createChatPolicy({ chatId: "chat:source-full", botId: policy.botId, expectedBotPolicyRevision: policy.revision, catalog: sourceCatalog, custom });
-  const schedules = sourceSnapshot.resources.otherCapabilities.find(row => row.kind === "schedules")!;
-  const input = { audienceId: "device:a", botId: policy.botId, chatId: chat.chatId, serverId: snapshot.resources.connections[0]!.sourceId, sourceSelectionIds: { connectionId: custom.connectionIds[0]!, schedulesId: schedules.option.id } };
-  const allowed = await store.admitConnectorSource(input); allowed.lease.release();
-  await assert.rejects(store.admitConnectorSource({ ...input, sourceSelectionIds: { ...input.sourceSelectionIds, connectionId: snapshot.catalog.connections[1]!.id } }));
-  const noSchedules = await store.updateChatPolicy({ chatId: chat.chatId, expectedRevision: chat.revision, catalog: sourceCatalog, access: { mode: "custom", catalogRevision:sourceCatalog.revision, expectedBotPolicyRevision: policy.revision, custom: { ...custom, otherCapabilityIds: [] } } });
-  assert.equal(noSchedules.mode, "custom"); await assert.rejects(store.admitConnectorSource(input));
+  const chat = await store.createChatPolicy({
+    chatId: "chat:source-full",
+    botId: policy.botId,
+    expectedBotPolicyRevision: policy.revision,
+    catalog: sourceCatalog,
+    custom,
+  });
+  const schedules = sourceSnapshot.resources.otherCapabilities.find(
+    (row) => row.kind === "schedules",
+  )!;
+  const input = {
+    audienceId: "device:a",
+    botId: policy.botId,
+    chatId: chat.chatId,
+    serverId: snapshot.resources.connections[0]!.sourceId,
+    sourceSelectionIds: {
+      connectionId: custom.connectionIds[0]!,
+      schedulesId: schedules.option.id,
+    },
+  };
+  const allowed = await store.admitConnectorSource(input);
+  allowed.lease.release();
+  await assert.rejects(
+    store.admitConnectorSource({
+      ...input,
+      sourceSelectionIds: {
+        ...input.sourceSelectionIds,
+        connectionId: snapshot.catalog.connections[1]!.id,
+      },
+    }),
+  );
+  const noSchedules = await store.updateChatPolicy({
+    chatId: chat.chatId,
+    expectedRevision: chat.revision,
+    catalog: sourceCatalog,
+    access: {
+      mode: "custom",
+      catalogRevision: sourceCatalog.revision,
+      expectedBotPolicyRevision: policy.revision,
+      custom: { ...custom, otherCapabilityIds: [] },
+    },
+  });
+  assert.equal(noSchedules.mode, "custom");
+  await assert.rejects(store.admitConnectorSource(input));
 });

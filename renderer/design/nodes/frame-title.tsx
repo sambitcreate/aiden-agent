@@ -35,7 +35,8 @@ function FrameTitleField({ frame, className }: { frame: DesignFrame; className?:
     if (done.current) return;
     done.current = true;
     const clean = value.replace(/\s+/gu, " ").trim();
-    if (save && clean && clean !== frame.title) canvas.update(frame.id, { title: clean }, { record: true });
+    if (save && clean && clean !== frame.title)
+      canvas.update(frame.id, { title: clean }, { record: true });
     canvas.rename(null);
   };
   return (

@@ -78,7 +78,8 @@ function arg(name: string): string | undefined {
 }
 
 function measure(label: string, wantsVisual: boolean, markup: string | undefined): Row {
-  if (markup === undefined) return { label, wantsVisual, usedVisual: false, parsed: false, repairs: 0, markupChars: 0 };
+  if (markup === undefined)
+    return { label, wantsVisual, usedVisual: false, parsed: false, repairs: 0, markupChars: 0 };
   const compiled = compileAum(markup);
   return {
     label,
@@ -117,33 +118,56 @@ async function askAnthropic(model: string, prompt: string): Promise<string | und
       model,
       max_tokens: 4096,
       system: SYSTEM,
-      tools: [{ name: "render_ui", description: "Draw an inline visual.", input_schema: RENDER_UI_SCHEMA }],
+      tools: [
+        {
+          name: "render_ui",
+          description: "Draw an inline visual.",
+          input_schema: RENDER_UI_SCHEMA,
+        },
+      ],
       messages: [{ role: "user", content: prompt }],
     }),
   });
   if (!response.ok) throw new Error(`Anthropic ${response.status}: ${await response.text()}`);
-  const body = (await response.json()) as { content: { type: string; name?: string; input?: { markup?: string } }[] };
-  return body.content.find((part) => part.type === "tool_use" && part.name === "render_ui")?.input?.markup;
+  const body = (await response.json()) as {
+    content: { type: string; name?: string; input?: { markup?: string } }[];
+  };
+  return body.content.find((part) => part.type === "tool_use" && part.name === "render_ui")?.input
+    ?.markup;
 }
 
 async function askOpenAi(model: string, prompt: string): Promise<string | undefined> {
   const response = await fetch("https://api.openai.com/v1/chat/completions", {
     method: "POST",
-    headers: { "content-type": "application/json", authorization: `Bearer ${process.env.OPENAI_API_KEY ?? ""}` },
+    headers: {
+      "content-type": "application/json",
+      authorization: `Bearer ${process.env.OPENAI_API_KEY ?? ""}`,
+    },
     body: JSON.stringify({
       model,
       messages: [
         { role: "system", content: SYSTEM },
         { role: "user", content: prompt },
       ],
-      tools: [{ type: "function", function: { name: "render_ui", description: "Draw an inline visual.", parameters: RENDER_UI_SCHEMA } }],
+      tools: [
+        {
+          type: "function",
+          function: {
+            name: "render_ui",
+            description: "Draw an inline visual.",
+            parameters: RENDER_UI_SCHEMA,
+          },
+        },
+      ],
     }),
   });
   if (!response.ok) throw new Error(`OpenAI ${response.status}: ${await response.text()}`);
   const body = (await response.json()) as {
     choices: { message: { tool_calls?: { function: { name: string; arguments: string } }[] } }[];
   };
-  const call = body.choices[0]?.message.tool_calls?.find((entry) => entry.function.name === "render_ui");
+  const call = body.choices[0]?.message.tool_calls?.find(
+    (entry) => entry.function.name === "render_ui",
+  );
   if (!call) return undefined;
   try {
     return (JSON.parse(call.function.arguments) as { markup?: string }).markup;
@@ -158,12 +182,18 @@ function report(rows: Row[]): void {
   const attempted = visualRows.filter((row) => row.usedVisual);
   const parsed = attempted.filter((row) => row.parsed).length;
   const parseRate = attempted.length ? (parsed / attempted.length) * 100 : 0;
-  const repairs = attempted.length ? attempted.reduce((sum, row) => sum + row.repairs, 0) / attempted.length : 0;
-  const chars = attempted.length ? attempted.reduce((sum, row) => sum + row.markupChars, 0) / attempted.length : 0;
+  const repairs = attempted.length
+    ? attempted.reduce((sum, row) => sum + row.repairs, 0) / attempted.length
+    : 0;
+  const chars = attempted.length
+    ? attempted.reduce((sum, row) => sum + row.markupChars, 0) / attempted.length
+    : 0;
   const falsePositives = plainRows.filter((row) => row.usedVisual).length;
   console.log("| Metric | Value | Gate |");
   console.log("|---|---|---|");
-  console.log(`| Visual prompts that drew a visual | ${attempted.length}/${visualRows.length} | — |`);
+  console.log(
+    `| Visual prompts that drew a visual | ${attempted.length}/${visualRows.length} | — |`,
+  );
   console.log(`| Parse success after repair | ${parseRate.toFixed(1)}% | ≥ 98% |`);
   console.log(`| Repairs per visual | ${repairs.toFixed(2)} | lower is better |`);
   console.log(`| Markup characters per visual | ${Math.round(chars)} | — |`);
@@ -184,14 +214,20 @@ async function main(): Promise<void> {
   const provider = arg("--provider");
   const model = arg("--model");
   if (!provider || !model) {
-    console.error("Usage: --dry-run, or --provider anthropic|openai --model <id> with the matching API key exported.");
+    console.error(
+      "Usage: --dry-run, or --provider anthropic|openai --model <id> with the matching API key exported.",
+    );
     process.exitCode = 2;
     return;
   }
-  const ask = provider === "anthropic" ? askAnthropic : provider === "openai" ? askOpenAi : undefined;
+  const ask =
+    provider === "anthropic" ? askAnthropic : provider === "openai" ? askOpenAi : undefined;
   if (!ask) throw new Error(`Unknown provider ${provider}`);
   const rows: Row[] = [];
-  for (const [prompts, wantsVisual] of [[VISUAL_PROMPTS, true], [PLAIN_PROMPTS, false]] as const) {
+  for (const [prompts, wantsVisual] of [
+    [VISUAL_PROMPTS, true],
+    [PLAIN_PROMPTS, false],
+  ] as const) {
     for (const prompt of prompts) {
       rows.push(measure(prompt, wantsVisual, await ask(model, prompt)));
       process.stderr.write(".");

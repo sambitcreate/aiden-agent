@@ -9,16 +9,30 @@ import { PlanCard } from "./plan-card";
 afterEach(cleanup);
 
 const PLAN: BotPlanView = {
-  botId: "bot-1", planId: "plan-1", revision: 1, status: "pending",
-  title: "Prepare the calendar", why: "Keep the team ready for next week.",
+  botId: "bot-1",
+  planId: "plan-1",
+  revision: 1,
+  status: "pending",
+  title: "Prepare the calendar",
+  why: "Keep the team ready for next week.",
   steps: [
     { text: "Read the brief", status: "done" },
     { text: "Skip the cancelled meeting", status: "skipped" },
     { text: "Create the team event", status: "pending" },
   ],
   items: [
-    { id: "i1", line: "Google Calendar · create events (up to 5)", details: ["Create a calendar event", "Update a calendar event"], used: 2, max: 5 },
-    { id: "i2", line: "Files · read ~/Documents/Team for this plan", details: ["~/Documents/Team", "Read only · allowed once, for this plan only"] },
+    {
+      id: "i1",
+      line: "Google Calendar · create events (up to 5)",
+      details: ["Create a calendar event", "Update a calendar event"],
+      used: 2,
+      max: 5,
+    },
+    {
+      id: "i2",
+      line: "Files · read ~/Documents/Team for this plan",
+      details: ["~/Documents/Team", "Read only · allowed once, for this plan only"],
+    },
     { id: "i3", line: "Commands · in its own folder", details: [] },
   ],
 };
@@ -26,10 +40,16 @@ const PLAN: BotPlanView = {
 function deferred() {
   let resolve!: () => void;
   let reject!: (error: Error) => void;
-  const promise = new Promise<void>((yes, no) => { resolve = yes; reject = no; });
+  const promise = new Promise<void>((yes, no) => {
+    resolve = yes;
+    reject = no;
+  });
   return { promise, resolve, reject };
 }
-function card(plan = PLAN, onRespond: (decision: BotPlanDecision) => Promise<void> = async () => {}) {
+function card(
+  plan = PLAN,
+  onRespond: (decision: BotPlanDecision) => Promise<void> = async () => {},
+) {
   return <PlanCard plan={plan} botName="Ada" avatar={DEFAULT_BOT_AVATAR} onRespond={onRespond} />;
 }
 
@@ -40,13 +60,23 @@ test("a pending plan shows its title, why, numbered steps and every coverage lin
   within(notice).getByText("Keep the team ready for next week.");
   const steps = within(notice).getByRole("list", { name: "Plan steps" });
   assert.equal(steps.tagName, "OL");
-  assert.deepEqual(within(steps).getAllByRole("listitem").map((item) => item.textContent), [
-    "Read the brief", "Skip the cancelled meeting", "Create the team event",
-  ]);
+  assert.deepEqual(
+    within(steps)
+      .getAllByRole("listitem")
+      .map((item) => item.textContent),
+    ["Read the brief", "Skip the cancelled meeting", "Create the team event"],
+  );
   const coverage = within(notice).getByRole("list", { name: "Plan coverage" });
-  assert.deepEqual(within(coverage).getAllByRole("listitem").map((item) => item.textContent), [
-    "Google Calendar · create events (up to 5)", "Files · read ~/Documents/Team for this plan", "Commands · in its own folder",
-  ]);
+  assert.deepEqual(
+    within(coverage)
+      .getAllByRole("listitem")
+      .map((item) => item.textContent),
+    [
+      "Google Calendar · create events (up to 5)",
+      "Files · read ~/Documents/Team for this plan",
+      "Commands · in its own folder",
+    ],
+  );
   assert.equal(screen.queryByText("2 of 5 used"), null);
 });
 
@@ -65,42 +95,70 @@ test("Show details reveals exact item details and controls the disclosure region
   fireEvent.click(toggle);
   assert.equal(toggle.getAttribute("aria-expanded"), "true");
   const details = document.getElementById(id)!;
-  assert.deepEqual(within(details).getAllByRole("listitem").map((item) => item.textContent), [
-    "Create a calendar event", "Update a calendar event", "~/Documents/Team", "Read only · allowed once, for this plan only",
-  ]);
+  assert.deepEqual(
+    within(details)
+      .getAllByRole("listitem")
+      .map((item) => item.textContent),
+    [
+      "Create a calendar event",
+      "Update a calendar event",
+      "~/Documents/Team",
+      "Read only · allowed once, for this plan only",
+    ],
+  );
   fireEvent.click(screen.getByRole("button", { name: "Hide details" }));
   assert.equal(toggle.getAttribute("aria-expanded"), "false");
   assert.equal(screen.queryByText("Create a calendar event"), null);
 });
 
 for (const [label, decision, status] of [
-  ["Allow once", "approve", "pending"], ["Deny", "not_now", "pending"], ["Stop plan", "stop", "active"],
+  ["Allow once", "approve", "pending"],
+  ["Deny", "not_now", "pending"],
+  ["Stop plan", "stop", "active"],
 ] as const) {
   test(`${label} forwards exactly one decision and shares the busy guard with every answer`, async () => {
     const pending = deferred();
     const decisions: BotPlanDecision[] = [];
-    render(card({ ...PLAN, status }, async (answer) => { decisions.push(answer); await pending.promise; }));
+    render(
+      card({ ...PLAN, status }, async (answer) => {
+        decisions.push(answer);
+        await pending.promise;
+      }),
+    );
     const button = screen.getByRole("button", { name: label });
     // One React batch: a state-only guard would still admit the second click.
     act(() => {
       button.dispatchEvent(new MouseEvent("click", { bubbles: true }));
       button.dispatchEvent(new MouseEvent("click", { bubbles: true }));
-      if (status === "pending") screen.getByRole("button", { name: label === "Allow once" ? "Deny" : "Allow once" }).dispatchEvent(new MouseEvent("click", { bubbles: true }));
+      if (status === "pending")
+        screen
+          .getByRole("button", { name: label === "Allow once" ? "Deny" : "Allow once" })
+          .dispatchEvent(new MouseEvent("click", { bubbles: true }));
     });
     assert.deepEqual(decisions, [decision]);
-    for (const answer of screen.getAllByRole("button").filter((node) => node.textContent !== "Show details")) {
+    for (const answer of screen
+      .getAllByRole("button")
+      .filter((node) => node.textContent !== "Show details")) {
       assert.equal((answer as HTMLButtonElement).disabled, true);
     }
     await act(async () => pending.resolve());
     assert.equal((button as HTMLButtonElement).disabled, false);
     screen.getByText("Prepare the calendar");
-    assert.equal(screen.queryByText(/Plan ended/u), null, "a response alone never settles the host-owned card");
+    assert.equal(
+      screen.queryByText(/Plan ended/u),
+      null,
+      "a response alone never settles the host-owned card",
+    );
   });
 }
 
 test("a failed answer exposes an inline error and permits a retry", async () => {
   let calls = 0;
-  render(card(PLAN, async () => { if (++calls === 1) throw new Error("The plan changed. Try again."); }));
+  render(
+    card(PLAN, async () => {
+      if (++calls === 1) throw new Error("The plan changed. Try again.");
+    }),
+  );
   fireEvent.click(screen.getByRole("button", { name: "Allow once" }));
   assert.equal((await screen.findByRole("alert")).textContent, "The plan changed. Try again.");
   const approve = screen.getByRole("button", { name: "Allow once" }) as HTMLButtonElement;
@@ -114,15 +172,30 @@ test("replacing a plan isolates its busy state, details and late failure", async
   const old = deferred();
   const current = deferred();
   const decisions: string[] = [];
-  const view = render(card(PLAN, async () => { await old.promise; }));
+  const view = render(
+    card(PLAN, async () => {
+      await old.promise;
+    }),
+  );
   fireEvent.click(screen.getByRole("button", { name: "Show details" }));
   fireEvent.click(screen.getByRole("button", { name: "Allow once" }));
-  view.rerender(card({ ...PLAN, planId: "plan-2", title: "A new plan" }, async (answer) => { decisions.push(answer); await current.promise; }));
-  assert.equal(screen.getByRole("button", { name: "Show details" }).getAttribute("aria-expanded"), "false");
+  view.rerender(
+    card({ ...PLAN, planId: "plan-2", title: "A new plan" }, async (answer) => {
+      decisions.push(answer);
+      await current.promise;
+    }),
+  );
+  assert.equal(
+    screen.getByRole("button", { name: "Show details" }).getAttribute("aria-expanded"),
+    "false",
+  );
   fireEvent.click(screen.getByRole("button", { name: "Deny" }));
   await act(async () => old.reject(new Error("Old failure")));
   assert.equal(screen.queryByRole("alert"), null);
-  assert.equal((screen.getByRole("button", { name: "Allow once" }) as HTMLButtonElement).disabled, true);
+  assert.equal(
+    (screen.getByRole("button", { name: "Allow once" }) as HTMLButtonElement).disabled,
+    true,
+  );
   assert.deepEqual(decisions, ["not_now"]);
   await act(async () => current.resolve());
 });
@@ -136,7 +209,9 @@ test("an active plan labels every step status, shows counted usage and the remai
   within(entries[0]!).getByRole("img", { name: "Done" });
   within(entries[1]!).getByRole("img", { name: "Skipped" });
   within(entries[2]!).getByRole("img", { name: "Pending" });
-  const coverage = within(screen.getByRole("list", { name: "Plan coverage" })).getAllByRole("listitem");
+  const coverage = within(screen.getByRole("list", { name: "Plan coverage" })).getAllByRole(
+    "listitem",
+  );
   within(coverage[0]!).getByText("2 of 5 used");
   assert.equal(within(coverage[1]!).queryByText(/used/u), null);
   screen.getByRole("button", { name: "Stop plan" });
@@ -145,7 +220,11 @@ test("an active plan labels every step status, shows counted usage and the remai
   act(() => t.mock.timers.tick(120_000));
   screen.getByText("Approved · ends in 0 min");
   screen.getByRole("button", { name: "Stop plan" });
-  assert.equal(screen.queryByText(/Plan ended/u), null, "local time does not invent host settlement");
+  assert.equal(
+    screen.queryByText(/Plan ended/u),
+    null,
+    "local time does not invent host settlement",
+  );
 });
 
 test("active countdown timers are cleared on replacement, settlement and unmount", (t) => {
@@ -170,12 +249,18 @@ for (const status of ["finished", "stopped", "expired"] as const) {
   });
 }
 
-test("keyboard: the batch card asks \"Approve this plan?\" and reads review, details, then Deny and Allow once, all native buttons", () => {
+test('keyboard: the batch card asks "Approve this plan?" and reads review, details, then Deny and Allow once, all native buttons', () => {
   render(card());
   screen.getByText("Approve this plan?");
   const buttons = screen.getAllByRole("button") as HTMLButtonElement[];
-  assert.deepEqual(buttons.map((button) => button.textContent), ["Show details", "Deny", "Allow once"]);
-  assert.deepEqual(buttons.map((button) => button.tabIndex), [0, 0, 0]);
+  assert.deepEqual(
+    buttons.map((button) => button.textContent),
+    ["Show details", "Deny", "Allow once"],
+  );
+  assert.deepEqual(
+    buttons.map((button) => button.tabIndex),
+    [0, 0, 0],
+  );
   const allow = buttons[2]!;
   assert.equal(allow.tagName, "BUTTON");
   assert.equal(allow.type, "button");
@@ -207,6 +292,10 @@ test("Home and End move the plan review to its top and bottom in one step", () =
   assert.equal(fireEvent.keyDown(review, { key: "Home" }), false, "Home is handled by the review");
   assert.equal(review.scrollTop, 0);
   review.scrollTop = 300;
-  assert.equal(fireEvent.keyDown(review, { key: "Home", metaKey: true }), true, "a modified Home is left to the browser");
+  assert.equal(
+    fireEvent.keyDown(review, { key: "Home", metaKey: true }),
+    true,
+    "a modified Home is left to the browser",
+  );
   assert.equal(review.scrollTop, 300);
 });

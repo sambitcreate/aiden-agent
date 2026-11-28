@@ -16,9 +16,7 @@ interface ScopeState {
   strikes: number;
 }
 
-export type RateLimitCheck =
-  | { ok: true; lease: RateLimitLease }
-  | { ok: false; retryAt: number };
+export type RateLimitCheck = { ok: true; lease: RateLimitLease } | { ok: false; retryAt: number };
 
 export class GitHubRateLimitGovernor {
   private readonly now: () => number;

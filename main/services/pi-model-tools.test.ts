@@ -6,12 +6,7 @@ import { writeWorkspaceBinaryFile } from "./coding-tools.js";
 import { createPiModelImageReferences } from "./pi-model-image-references.js";
 import type { Attachment } from "./types.js";
 import test from "node:test";
-import type {
-  AssistantImages,
-  ClassifierResult,
-  ImageContent,
-  Usage,
-} from "@earendil-works/pi-ai";
+import type { AssistantImages, ClassifierResult, ImageContent, Usage } from "@earendil-works/pi-ai";
 import {
   checkImageSavePath,
   createPiModelTools,
@@ -127,10 +122,7 @@ function fixture() {
       controls.spoof
         ? catalog[1]
         : catalog.find(
-            (entry) =>
-              entry.type === type &&
-              entry.provider === provider &&
-              entry.id === id,
+            (entry) => entry.type === type && entry.provider === provider && entry.id === id,
           ),
     generateImages: async (
       _model: unknown,
@@ -144,11 +136,7 @@ function fixture() {
       controls.imageEffect?.();
       return controls.imageResult;
     },
-    classify: async (
-      _model: unknown,
-      _context: unknown,
-      options: { signal?: AbortSignal },
-    ) => {
+    classify: async (_model: unknown, _context: unknown, options: { signal?: AbortSignal }) => {
       controls.classifyCalls++;
       controls.classifierContext = _context;
       controls.classifierSignal = options.signal;
@@ -198,18 +186,12 @@ test("operation inventory includes only projected image/classifier metadata, nev
     ],
     truncated: false,
   });
-  assert.doesNotMatch(
-    JSON.stringify(result),
-    /secret.invalid|Authorization|must-never-leak/,
-  );
+  assert.doesNotMatch(JSON.stringify(result), /secret.invalid|Authorization|must-never-leak/);
   assert.equal(controls.imageCalls + controls.classifyCalls, 0);
   const single = await get("list_operation_models").execute("list", {
     type: "classifier",
   });
-  assert.equal(
-    (single.structuredContent as { models: unknown[] }).models.length,
-    1,
-  );
+  assert.equal((single.structuredContent as { models: unknown[] }).models.length, 1);
   controls.catalog.push(
     ...Array.from({ length: 105 }, (_, i) => ({
       ...controls.catalog[0]!,
@@ -219,29 +201,16 @@ test("operation inventory includes only projected image/classifier metadata, nev
   const bounded = await get("list_operation_models").execute("list", {
     type: "image",
   });
-  assert.equal(
-    (bounded.structuredContent as { models: unknown[] }).models.length,
-    100,
-  );
-  assert.equal(
-    (bounded.structuredContent as { truncated: boolean }).truncated,
-    true,
-  );
+  assert.equal((bounded.structuredContent as { models: unknown[] }).models.length, 100);
+  assert.equal((bounded.structuredContent as { truncated: boolean }).truncated, true);
 });
 
 test("image generation validates an entire batch before staging and carries usage", async () => {
   const { get, staged, controls } = fixture();
   const signal = new AbortController().signal;
-  const result = await get("generate_image").execute(
-    "generate",
-    imageRequest,
-    signal,
-  );
+  const result = await get("generate_image").execute("generate", imageRequest, signal);
   assert.equal(result.isError, undefined);
-  assert.equal(
-    result.content.filter((part) => part.type === "image").length,
-    1,
-  );
+  assert.equal(result.content.filter((part) => part.type === "image").length, 1);
   assert.deepEqual(staged, [image]);
   assert.deepEqual(result.usage, usage);
   assert.equal(controls.imageSignal, signal);
@@ -250,11 +219,7 @@ test("image generation validates an entire batch before staging and carries usag
   const invalid = await get("generate_image").execute("invalid", imageRequest);
   assert.equal(invalid.isError, true);
   assert.deepEqual(invalid.usage, usage);
-  assert.deepEqual(
-    staged,
-    [],
-    "a later malformed image must not leave earlier images staged",
-  );
+  assert.deepEqual(staged, [], "a later malformed image must not leave earlier images staged");
 });
 
 test("a requested aspect ratio is validated and forwarded as request metadata", async () => {
@@ -262,10 +227,17 @@ test("a requested aspect ratio is validated and forwarded as request metadata", 
   await get("generate_image").execute("wide", { ...imageRequest, aspectRatio: "16:9" });
   assert.deepEqual(controls.imageMetadata, { aspectRatio: "16:9" });
   await get("generate_image").execute("default", imageRequest);
-  assert.equal(controls.imageMetadata, undefined, "no ratio means no metadata, so the model keeps its default");
+  assert.equal(
+    controls.imageMetadata,
+    undefined,
+    "no ratio means no metadata, so the model keeps its default",
+  );
   const calls = controls.imageCalls;
   for (const aspectRatio of ["21:9", "16x9", 1.5])
-    await assert.rejects(get("generate_image").execute("bad", { ...imageRequest, aspectRatio }), /Aspect ratio must be one of/);
+    await assert.rejects(
+      get("generate_image").execute("bad", { ...imageRequest, aspectRatio }),
+      /Aspect ratio must be one of/,
+    );
   assert.equal(controls.imageCalls, calls, "an unknown ratio never reaches a provider");
 });
 
@@ -304,10 +276,7 @@ test("image errors, cancellation, output limits and artifact failures retain bil
     [],
   ]) {
     controls.imageResult.output = output;
-    const result = await get("generate_image").execute(
-      "oversized",
-      imageRequest,
-    );
+    const result = await get("generate_image").execute("oversized", imageRequest);
     assert.equal(result.isError, true);
     assert.deepEqual(result.usage, usage);
     assert.equal(staged.length, 0);
@@ -338,11 +307,7 @@ test("image errors, cancellation, output limits and artifact failures retain bil
 test("classification supports choice, score and bool answers with bounded structured state and usage", async () => {
   const { get, controls } = fixture();
   const signal = new AbortController().signal;
-  const result = await get("classify").execute(
-    "classification",
-    classifierRequest,
-    signal,
-  );
+  const result = await get("classify").execute("classification", classifierRequest, signal);
   assert.deepEqual(result.structuredContent, {
     answers: controls.classifierResult.answers,
   });
@@ -367,9 +332,7 @@ test("malformed classifier questions/state cannot trigger requests or evaluate a
       },
     },
   ]) {
-    await assert.rejects(
-      get("classify").execute("invalid", { ...classifierRequest, state }),
-    );
+    await assert.rejects(get("classify").execute("invalid", { ...classifierRequest, state }));
   }
   for (const questions of [
     {},
@@ -385,9 +348,7 @@ test("malformed classifier questions/state cannot trigger requests or evaluate a
       },
     },
   ]) {
-    await assert.rejects(
-      get("classify").execute("invalid", { ...classifierRequest, questions }),
-    );
+    await assert.rejects(get("classify").execute("invalid", { ...classifierRequest, questions }));
   }
   assert.equal(accessed, false);
   assert.equal(controls.classifyCalls, 0);
@@ -445,10 +406,7 @@ test("provider accounting is once per paid call and survives failed rendering an
   models.classify = async () => {
     throw new Error("network failed");
   };
-  await assert.rejects(
-    tools[2]!.execute("network", classifierRequest),
-    /network failed/,
-  );
+  await assert.rejects(tools[2]!.execute("network", classifierRequest), /network failed/);
   assert.equal(records.length, 3);
   assert.equal(records[2]!.status, "failed");
   assert.equal(records[2]!.usage, undefined);
@@ -457,8 +415,7 @@ test("provider accounting is once per paid call and survives failed rendering an
 test("real codemode nested paid calls retain host disclosure admission and bill once", async () => {
   const { createFauxCore, fauxAssistantMessage, fauxToolCall } =
     await import("@earendil-works/pi-ai/providers/faux");
-  const { PiAgentRuntimeHarness } =
-    await import("./pi-agent-runtime-harness.js");
+  const { PiAgentRuntimeHarness } = await import("./pi-agent-runtime-harness.js");
   const { createPiCodemodeTool } = await import("./pi-codemode.js");
   const { DISCLOSURE_APPROVAL_TOOL_NAMES } = await import("./coding-tools.js");
   const { convertToLlm } = await import("./pi-legacy-harness.js");
@@ -503,16 +460,13 @@ test("real codemode nested paid calls retain host disclosure admission and bill 
       beforeToolCall: async ({ toolCall }) => {
         if (!DISCLOSURE_APPROVAL_TOOL_NAMES.has(toolCall.name)) return;
         prompts++;
-        return allow
-          ? undefined
-          : { block: true, reason: "User declined disclosure" };
+        return allow ? undefined : { block: true, reason: "User declined disclosure" };
       },
     });
     let countedTokens = 0;
     harness.subscribe((event) => {
       if (event.type === "tool_execution_end")
-        countedTokens +=
-          piModelOperationUsage(event.toolName, event.result)?.totalTokens ?? 0;
+        countedTokens += piModelOperationUsage(event.toolName, event.result)?.totalTokens ?? 0;
     });
     try {
       await harness.prompt("run");
@@ -521,14 +475,10 @@ test("real codemode nested paid calls retain host disclosure admission and bill 
       assert.equal(controls.imageCalls, allow ? 1 : 0);
       assert.equal(charged, allow ? 1 : 0);
       const parent = harness.state.messages.find(
-        (message) =>
-          message.role === "toolResult" && message.toolName === "codemode",
+        (message) => message.role === "toolResult" && message.toolName === "codemode",
       );
       assert.ok(parent?.role === "toolResult");
-      assert.equal(
-        (parent.content[0] as { text: string }).text,
-        allow ? "false" : "true",
-      );
+      assert.equal((parent.content[0] as { text: string }).text, allow ? "false" : "true");
     } finally {
       await harness.dispose();
     }
@@ -554,10 +504,7 @@ test("accounting failures cannot erase paid result usage or mask provider errors
   models.classify = async () => {
     throw new Error("original provider failure");
   };
-  await assert.rejects(
-    tools[2]!.execute("failed", classifierRequest),
-    /original provider failure/,
-  );
+  await assert.rejects(tools[2]!.execute("failed", classifierRequest), /original provider failure/);
 });
 
 function referenceAttachment(id = "chat-image"): Attachment {
@@ -598,9 +545,7 @@ test("image references list metadata only and edit with current-chat images afte
     .find((tool) => tool.name === "list_image_references")!
     .execute("list", {});
   assert.deepEqual(
-    (listed.structuredContent as { images: { id: string }[] }).images.map(
-      (item) => item.id,
-    ),
+    (listed.structuredContent as { images: { id: string }[] }).images.map((item) => item.id),
     ["chat-image", "generated-image"],
   );
   assert.doesNotMatch(JSON.stringify(listed), /iVBOR/);
@@ -621,10 +566,7 @@ test("image references list metadata only and edit with current-chat images afte
   });
   assert.equal(accounted, 1);
   current = [];
-  await assert.rejects(
-    tools[1]!.execute("removed-after-approval", args),
-    /missing, changed/,
-  );
+  await assert.rejects(tools[1]!.execute("removed-after-approval", args), /missing, changed/);
   assert.equal(controls.imageCalls, 1);
   assert.equal(accounted, 1);
 });
@@ -632,17 +574,34 @@ test("image references list metadata only and edit with current-chat images afte
 test("blank sanitized image names remain usable through listing, disclosure and image editing", async () => {
   for (const name of ["   ", "\u0000\t\n\u007f", " ".repeat(64) + "outside-truncation.png"]) {
     const attachment = { ...referenceAttachment(), name };
-    const references = createPiModelImageReferences({ snapshot: [attachment], readCurrent: async () => [attachment], generated: () => [] });
+    const references = createPiModelImageReferences({
+      snapshot: [attachment],
+      readCurrent: async () => [attachment],
+      generated: () => [],
+    });
     const { models, controls } = fixture();
-    const tools = createPiModelTools({ ...registries(models), ...references, onImage: async () => {} });
-    const listed = await tools.find(tool => tool.name === "list_image_references")!.execute("list", {});
-    assert.equal((listed.structuredContent as { images: { name: string }[] }).images[0]?.name, "Image");
+    const tools = createPiModelTools({
+      ...registries(models),
+      ...references,
+      onImage: async () => {},
+    });
+    const listed = await tools
+      .find((tool) => tool.name === "list_image_references")!
+      .execute("list", {});
+    assert.equal(
+      (listed.structuredContent as { images: { name: string }[] }).images[0]?.name,
+      "Image",
+    );
     const args = { ...imageRequest, referenceImageIds: [attachment.id] };
     assert.match(await references.disclosure(args), /Image \[chat-image\] — 70 bytes/u);
-    const result = await tools.find(tool => tool.name === "generate_image")!.execute("edit", args);
+    const result = await tools
+      .find((tool) => tool.name === "generate_image")!
+      .execute("edit", args);
     assert.equal(result.isError, undefined);
     assert.equal(controls.imageCalls, 1);
-    assert.deepEqual(controls.imageContext, { input: [{ type: "text", text: imageRequest.prompt }, image] });
+    assert.deepEqual(controls.imageContext, {
+      input: [{ type: "text", text: imageRequest.prompt }, image],
+    });
   }
 });
 
@@ -666,15 +625,10 @@ test("reference authority rejects foreign, changed, ambiguous or malformed image
     ["chat-image", "chat-image"],
     Array.from({ length: 5 }, (_, i) => `image-${i}`),
   ]) {
-    await assert.rejects(
-      tool.execute("invalid", { ...imageRequest, referenceImageIds }),
-    );
+    await assert.rejects(tool.execute("invalid", { ...imageRequest, referenceImageIds }));
   }
   current = [{ ...original, data: "AAAA" }];
-  await assert.rejects(
-    references.resolveImage(original.id),
-    /missing, changed/,
-  );
+  await assert.rejects(references.resolveImage(original.id), /missing, changed/);
   current = [original, { ...original, data: "AAAA" }];
   assert.deepEqual(await references.listImages(), []);
   const malformed = createPiModelTools({
@@ -702,10 +656,11 @@ test("reference decoding, aggregate pixels, cancellation and model input capabil
   bytes.writeUInt32BE(5000, 20);
   const large = { ...image, data: bytes.toString("base64") };
   await assert.rejects(
-    resolvePiModelImageInputs(
-      { resolveImage: async () => ({ name: "large.png", image: large }) },
-      ["a", "b", "c"],
-    ),
+    resolvePiModelImageInputs({ resolveImage: async () => ({ name: "large.png", image: large }) }, [
+      "a",
+      "b",
+      "c",
+    ]),
     /decoded-pixel limit/,
   );
   const tooBig = {
@@ -713,10 +668,9 @@ test("reference decoding, aggregate pixels, cancellation and model input capabil
     data: Buffer.alloc(8 * 1024 * 1024 + 1).toString("base64"),
   };
   await assert.rejects(
-    resolvePiModelImageInputs(
-      { resolveImage: async () => ({ name: "huge.png", image: tooBig }) },
-      ["large"],
-    ),
+    resolvePiModelImageInputs({ resolveImage: async () => ({ name: "huge.png", image: tooBig }) }, [
+      "large",
+    ]),
     /image/,
   );
   const controller = new AbortController();
@@ -729,11 +683,7 @@ test("reference decoding, aggregate pixels, cancellation and model input capabil
     onImage: async () => {},
   })[1]!;
   await assert.rejects(
-    aborting.execute(
-      "abort",
-      { ...imageRequest, referenceImageIds: ["one"] },
-      controller.signal,
-    ),
+    aborting.execute("abort", { ...imageRequest, referenceImageIds: ["one"] }, controller.signal),
     /abort/i,
   );
   (controls.catalog[0] as { input?: string[] }).input = ["text"];
@@ -752,61 +702,119 @@ test("reference decoding, aggregate pixels, cancellation and model input capabil
   assert.equal(controls.imageCalls, 0);
 });
 
-
 test("classification approval includes the exact complete dispatched state and questions", async () => {
   const { get, controls } = fixture();
-  const request = { ...classifierRequest, state: { first: "x".repeat(25_000), last: "PRIVATE-LATE-FIELD\u202e", html: "<script>private()</script>" } };
+  const request = {
+    ...classifierRequest,
+    state: {
+      first: "x".repeat(25_000),
+      last: "PRIVATE-LATE-FIELD\u202e",
+      html: "<script>private()</script>",
+    },
+  };
   const details = classifierApprovalFor(request, "Research provider");
   assert.equal(details.providerLabel, "Research provider");
   assert.ok(details.stateJson.includes("PRIVATE-LATE-FIELD"));
   assert.ok(!details.stateJson.includes("\u202e"));
   await get("classify").execute("complete", request);
-  assert.deepEqual(JSON.parse(JSON.stringify(controls.classifierContext)), { state: JSON.parse(details.stateJson), questions: JSON.parse(details.questionsJson) });
+  assert.deepEqual(JSON.parse(JSON.stringify(controls.classifierContext)), {
+    state: JSON.parse(details.stateJson),
+    questions: JSON.parse(details.questionsJson),
+  });
   assert.equal(details.stateBytes, Buffer.byteLength(JSON.stringify(request.state)));
-  assert.throws(() => classifierApprovalFor({ ...request, state: { data: "x".repeat(32_768) } }), /large|bytes|size|exceed/iu);
+  assert.throws(
+    () => classifierApprovalFor({ ...request, state: { data: "x".repeat(32_768) } }),
+    /large|bytes|size|exceed/iu,
+  );
 });
 
 test("cross-provider operation accounting uses configured or built-in display names", async () => {
   const { models } = fixture();
   const labels: string[] = [];
-  const tools = createPiModelTools({ ...registries(models), onImage: async () => {},
-    providerLabel: id => piModelOperationProviderLabel(id, [{ id: "fixture", label: "Research team" }], "Built-in name"),
-    onUsage: async record => { labels.push(record.providerLabel); } });
-  await tools.find(tool => tool.name === "classify")!.execute("paid", classifierRequest);
+  const tools = createPiModelTools({
+    ...registries(models),
+    onImage: async () => {},
+    providerLabel: (id) =>
+      piModelOperationProviderLabel(
+        id,
+        [{ id: "fixture", label: "Research team" }],
+        "Built-in name",
+      ),
+    onUsage: async (record) => {
+      labels.push(record.providerLabel);
+    },
+  });
+  await tools.find((tool) => tool.name === "classify")!.execute("paid", classifierRequest);
   assert.deepEqual(labels, ["Research team"]);
-  assert.equal(piModelOperationProviderLabel("builtin", [], "Readable provider"), "Readable provider");
+  assert.equal(
+    piModelOperationProviderLabel("builtin", [], "Readable provider"),
+    "Readable provider",
+  );
 });
 
 test("denying or cancelling full classifier approval dispatches no provider request", async () => {
-  const { createFauxCore, fauxAssistantMessage, fauxToolCall } = await import("@earendil-works/pi-ai/providers/faux");
+  const { createFauxCore, fauxAssistantMessage, fauxToolCall } =
+    await import("@earendil-works/pi-ai/providers/faux");
   const { PiAgentRuntimeHarness } = await import("./pi-agent-runtime-harness.js");
   const { ToolApprovalCoordinator } = await import("./tool-approval.js");
   const { convertToLlm } = await import("./pi-legacy-harness.js");
   for (const outcome of ["deny", "cancel"] as const) {
     const { tools, controls } = fixture();
     const core = createFauxCore({ provider: `classifier-${outcome}` });
-    core.setResponses([fauxAssistantMessage([fauxToolCall("classify", classifierRequest)], { stopReason: "toolUse" }), fauxAssistantMessage("done")]);
+    core.setResponses([
+      fauxAssistantMessage([fauxToolCall("classify", classifierRequest)], {
+        stopReason: "toolUse",
+      }),
+      fauxAssistantMessage("done"),
+    ]);
     let displayed = 0;
-    const coordinator = new ToolApprovalCoordinator(prompt => {
+    const coordinator = new ToolApprovalCoordinator((prompt) => {
       assert.equal(prompt.details?.kind, "model-classification");
-      if (prompt.details?.kind === "model-classification") assert.deepEqual(JSON.parse(prompt.details.stateJson), classifierRequest.state);
+      if (prompt.details?.kind === "model-classification")
+        assert.deepEqual(JSON.parse(prompt.details.stateJson), classifierRequest.state);
       displayed++;
-      queueMicrotask(() => outcome === "deny" ? coordinator.decide(prompt.approvalId, false) : coordinator.cancelStream("classification"));
+      queueMicrotask(() =>
+        outcome === "deny"
+          ? coordinator.decide(prompt.approvalId, false)
+          : coordinator.cancelStream("classification"),
+      );
     });
-    const harness = new PiAgentRuntimeHarness({ convertToLlm, streamFn: core.streamSimple,
-      initialState: { model: core.getModel(), systemPrompt: "Test", thinkingLevel: "off", messages: [], tools },
+    const harness = new PiAgentRuntimeHarness({
+      convertToLlm,
+      streamFn: core.streamSimple,
+      initialState: {
+        model: core.getModel(),
+        systemPrompt: "Test",
+        thinkingLevel: "off",
+        messages: [],
+        tools,
+      },
       beforeToolCall: async ({ toolCall, args }) => {
-        const approval = await coordinator.request({ streamId: "classification", toolCallId: toolCall.id, toolName: toolCall.name, summary: "Classification", details: classifierApprovalFor(args) });
-        return approval === "allowed" ? undefined : { block: true, reason: "User did not approve classification" };
-      } });
-    try { await harness.prompt("classify"); assert.equal(displayed, 1); assert.equal(controls.classifyCalls, 0); }
-    finally { await harness.dispose(); }
+        const approval = await coordinator.request({
+          streamId: "classification",
+          toolCallId: toolCall.id,
+          toolName: toolCall.name,
+          summary: "Classification",
+          details: classifierApprovalFor(args),
+        });
+        return approval === "allowed"
+          ? undefined
+          : { block: true, reason: "User did not approve classification" };
+      },
+    });
+    try {
+      await harness.prompt("classify");
+      assert.equal(displayed, 1);
+      assert.equal(controls.classifyCalls, 0);
+    } finally {
+      await harness.dispose();
+    }
   }
 });
 
-
 test("long image prompts are disclosed before approval and dispatched only after Allow", async () => {
-  const { createFauxCore, fauxAssistantMessage, fauxToolCall } = await import("@earendil-works/pi-ai/providers/faux");
+  const { createFauxCore, fauxAssistantMessage, fauxToolCall } =
+    await import("@earendil-works/pi-ai/providers/faux");
   const { PiAgentRuntimeHarness } = await import("./pi-agent-runtime-harness.js");
   const { ToolApprovalCoordinator } = await import("./tool-approval.js");
   const { summarizeToolCall } = await import("./coding-tools.js");
@@ -815,27 +823,58 @@ test("long image prompts are disclosed before approval and dispatched only after
   for (const outcome of ["allow", "deny", "cancel"] as const) {
     const { tools, controls } = fixture();
     const core = createFauxCore({ provider: `image-${outcome}` });
-    core.setResponses([fauxAssistantMessage([fauxToolCall("generate_image", { ...imageRequest, prompt })], { stopReason: "toolUse" }), fauxAssistantMessage("done")]);
+    core.setResponses([
+      fauxAssistantMessage([fauxToolCall("generate_image", { ...imageRequest, prompt })], {
+        stopReason: "toolUse",
+      }),
+      fauxAssistantMessage("done"),
+    ]);
     let displayed = 0;
-    const coordinator = new ToolApprovalCoordinator(approval => {
+    const coordinator = new ToolApprovalCoordinator((approval) => {
       assert.equal(controls.imageCalls, 0, "approval must precede any provider dispatch");
-      assert.ok(approval.summary.endsWith(JSON.stringify(prompt)), "the complete exact prompt must be inspectable");
+      assert.ok(
+        approval.summary.endsWith(JSON.stringify(prompt)),
+        "the complete exact prompt must be inspectable",
+      );
       assert.match(approval.summary, /fixture\/image.*charges/);
       displayed++;
-      queueMicrotask(() => outcome === "cancel" ? coordinator.cancelStream("image") : coordinator.decide(approval.approvalId, outcome === "allow"));
+      queueMicrotask(() =>
+        outcome === "cancel"
+          ? coordinator.cancelStream("image")
+          : coordinator.decide(approval.approvalId, outcome === "allow"),
+      );
     });
-    const harness = new PiAgentRuntimeHarness({ convertToLlm, streamFn: core.streamSimple,
-      initialState: { model: core.getModel(), systemPrompt: "Test", thinkingLevel: "off", messages: [], tools },
+    const harness = new PiAgentRuntimeHarness({
+      convertToLlm,
+      streamFn: core.streamSimple,
+      initialState: {
+        model: core.getModel(),
+        systemPrompt: "Test",
+        thinkingLevel: "off",
+        messages: [],
+        tools,
+      },
       beforeToolCall: async ({ toolCall, args }) => {
-        const approval = await coordinator.request({ streamId: "image", toolCallId: toolCall.id, toolName: toolCall.name, summary: summarizeToolCall(toolCall.name, args) });
-        return approval === "allowed" ? undefined : { block: true, reason: "User did not approve image generation" };
-      } });
+        const approval = await coordinator.request({
+          streamId: "image",
+          toolCallId: toolCall.id,
+          toolName: toolCall.name,
+          summary: summarizeToolCall(toolCall.name, args),
+        });
+        return approval === "allowed"
+          ? undefined
+          : { block: true, reason: "User did not approve image generation" };
+      },
+    });
     try {
       await harness.prompt("generate image");
       assert.equal(displayed, 1);
       assert.equal(controls.imageCalls, outcome === "allow" ? 1 : 0);
-      if (outcome === "allow") assert.deepEqual(controls.imageContext, { input: [{ type: "text", text: prompt }] });
-    } finally { await harness.dispose(); }
+      if (outcome === "allow")
+        assert.deepEqual(controls.imageContext, { input: [{ type: "text", text: prompt }] });
+    } finally {
+      await harness.dispose();
+    }
   }
 });
 
@@ -849,11 +888,20 @@ function registry(
       catalog.filter((entry) => entry.type === type && !options.keyless?.includes(entry.provider)),
     getModelOfType: (type: string, provider: string, id: string) => {
       calls.lookups.push(`${type}:${provider}/${id}`);
-      return catalog.find((entry) => entry.type === type && entry.provider === provider && entry.id === id);
+      return catalog.find(
+        (entry) => entry.type === type && entry.provider === provider && entry.id === id,
+      );
     },
     generateImages: async (model: { api?: string; provider: string; id: string }) => {
       calls.generate++;
-      return { api: "fixture-images", provider: model.provider, model: model.id, output: [image], stopReason: "stop", timestamp: 1 };
+      return {
+        api: "fixture-images",
+        provider: model.provider,
+        model: model.id,
+        output: [image],
+        stopReason: "stop",
+        timestamp: 1,
+      };
     },
     classify: async () => {
       calls.classify++;
@@ -864,8 +912,22 @@ function registry(
 }
 
 test("image operations use only the image registry and classification only the classifier registry", async () => {
-  const sharedImage = { type: "image", provider: "openrouter", id: "chat-only-image", name: "Chat registry image", input: ["text"] };
-  const images = registry([{ type: "image", provider: "fal", id: "fal-ai/flux/schnell", name: "FLUX schnell", input: ["text"] }]);
+  const sharedImage = {
+    type: "image",
+    provider: "openrouter",
+    id: "chat-only-image",
+    name: "Chat registry image",
+    input: ["text"],
+  };
+  const images = registry([
+    {
+      type: "image",
+      provider: "fal",
+      id: "fal-ai/flux/schnell",
+      name: "FLUX schnell",
+      input: ["text"],
+    },
+  ]);
   const classifiers = registry([
     sharedImage,
     { type: "classifier", provider: "custom:llama", id: "qwen", name: "Qwen classifier" },
@@ -883,27 +945,43 @@ test("image operations use only the image registry and classification only the c
 
   const listed = await get("list_operation_models").execute("list", {});
   assert.deepEqual(
-    (listed.structuredContent as { models: { provider: string; model: string; type: string }[] }).models.map(
-      (model) => `${model.type}:${model.provider}/${model.model}`,
-    ),
+    (
+      listed.structuredContent as { models: { provider: string; model: string; type: string }[] }
+    ).models.map((model) => `${model.type}:${model.provider}/${model.model}`),
     ["image:fal/fal-ai/flux/schnell", "classifier:custom:llama/qwen"],
     "a chat-registry image model is never offered",
   );
 
   await assert.rejects(
-    get("generate_image").execute("chat-image", { provider: "openrouter", model: "chat-only-image", prompt: "A fox" }),
+    get("generate_image").execute("chat-image", {
+      provider: "openrouter",
+      model: "chat-only-image",
+      prompt: "A fox",
+    }),
     /Unknown image model.*Settings → Image Generation/,
   );
   assert.equal(classifiers.calls.generate, 0);
-  const generated = await get("generate_image").execute("fal", { provider: "fal", model: "fal-ai/flux/schnell", prompt: "A fox" });
+  const generated = await get("generate_image").execute("fal", {
+    provider: "fal",
+    model: "fal-ai/flux/schnell",
+    prompt: "A fox",
+  });
   assert.equal(generated.isError, undefined);
   assert.equal(images.calls.generate, 1);
 
-  await get("classify").execute("classify", { ...classifierRequest, provider: "custom:llama", model: "qwen" });
+  await get("classify").execute("classify", {
+    ...classifierRequest,
+    provider: "custom:llama",
+    model: "qwen",
+  });
   assert.equal(classifiers.calls.classify, 1);
   assert.equal(images.calls.classify, 0);
   assert.ok(!images.calls.lookups.some((lookup) => lookup.startsWith("classifier:")));
-  assert.deepEqual(operations, ["image:fal", "classifier:custom:llama"], "accounting knows which registry billed");
+  assert.deepEqual(
+    operations,
+    ["image:fal", "classifier:custom:llama"],
+    "accounting knows which registry billed",
+  );
 });
 
 test("the operations prompt names the default image model, or says where image keys are added", () => {
@@ -921,20 +999,37 @@ test("the operations prompt names the default image model, or says where image k
 });
 
 test("without classifier models, only the image tools exist and listing is image-scoped", async () => {
-  const images = registry([{ type: "image", provider: "fal", id: "fal-ai/flux/schnell", name: "FLUX schnell", input: ["text"] }]);
+  const images = registry([
+    {
+      type: "image",
+      provider: "fal",
+      id: "fal-ai/flux/schnell",
+      name: "FLUX schnell",
+      input: ["text"],
+    },
+  ]);
   const tools = createPiModelTools({
     imageModels: images.models,
     onImage: async () => {},
     listImages: async () => [],
   });
-  assert.deepEqual(
-    tools.map((tool) => tool.name).sort(),
-    ["generate_image", "list_image_references", "list_operation_models"],
-  );
+  assert.deepEqual(tools.map((tool) => tool.name).sort(), [
+    "generate_image",
+    "list_image_references",
+    "list_operation_models",
+  ]);
   const list = tools.find((tool) => tool.name === "list_operation_models")!;
   const listed = await list.execute("list", {});
   assert.deepEqual(listed.structuredContent, {
-    models: [{ provider: "fal", model: "fal-ai/flux/schnell", label: "FLUX schnell", type: "image", acceptsReferenceImages: false }],
+    models: [
+      {
+        provider: "fal",
+        model: "fal-ai/flux/schnell",
+        label: "FLUX schnell",
+        type: "image",
+        acceptsReferenceImages: false,
+      },
+    ],
     truncated: false,
   });
   await assert.rejects(list.execute("list", { type: "classifier" }), /not available/);
@@ -942,15 +1037,34 @@ test("without classifier models, only the image tools exist and listing is image
 });
 
 test("an image model without a key, or no image model at all, points to Settings → Image Generation", async () => {
-  const keyless = registry([{ type: "image", provider: "replicate", id: "black-forest-labs/flux-schnell", name: "FLUX", input: ["text"] }], {
-    keyless: ["replicate"],
-  });
+  const keyless = registry(
+    [
+      {
+        type: "image",
+        provider: "replicate",
+        id: "black-forest-labs/flux-schnell",
+        name: "FLUX",
+        input: ["text"],
+      },
+    ],
+    {
+      keyless: ["replicate"],
+    },
+  );
   const empty = registry([]);
-  const tools = createPiModelTools({ imageModels: keyless.models, classifierModels: empty.models, onImage: async () => {} });
+  const tools = createPiModelTools({
+    imageModels: keyless.models,
+    classifierModels: empty.models,
+    onImage: async () => {},
+  });
   const get = (name: string) => tools.find((tool) => tool.name === name)!;
 
   await assert.rejects(
-    get("generate_image").execute("no-key", { provider: "replicate", model: "black-forest-labs/flux-schnell", prompt: "A fox" }),
+    get("generate_image").execute("no-key", {
+      provider: "replicate",
+      model: "black-forest-labs/flux-schnell",
+      prompt: "A fox",
+    }),
     /no image key\. Add an image key in Settings → Image Generation\./,
   );
   assert.equal(keyless.calls.generate, 0);
@@ -961,11 +1075,18 @@ test("an image model without a key, or no image model at all, points to Settings
     truncated: false,
     imageSetup: "No image model is available. Add an image key in Settings → Image Generation.",
   });
-  const classifiersOnly = await get("list_operation_models").execute("list", { type: "classifier" });
+  const classifiersOnly = await get("list_operation_models").execute("list", {
+    type: "classifier",
+  });
   assert.deepEqual(classifiersOnly.structuredContent, { models: [], truncated: false });
 });
 
-function savingTools(options: { save?: (path: string) => Promise<string>; placed?: { frameIds: string[] } | null } = {}) {
+function savingTools(
+  options: {
+    save?: (path: string) => Promise<string>;
+    placed?: { frameIds: string[] } | null;
+  } = {},
+) {
   const { controls, models } = fixture();
   const saves: { path: string; data: string }[] = [];
   const placements: PiModelSavedImage[][] = [];
@@ -978,7 +1099,9 @@ function savingTools(options: { save?: (path: string) => Promise<string>; placed
     },
     placeImages: async (images) => {
       placements.push([...images]);
-      return options.placed === undefined ? { frameIds: images.map((_, index) => `frame-${index + 1}`) } : options.placed;
+      return options.placed === undefined
+        ? { frameIds: images.map((_, index) => `frame-${index + 1}`) }
+        : options.placed;
     },
   });
   const generate = tools.find((tool) => tool.name === "generate_image")!;
@@ -986,27 +1109,49 @@ function savingTools(options: { save?: (path: string) => Promise<string>; placed
 }
 
 const resultText = (result: { content: readonly { type: string; text?: string }[] }) =>
-  result.content.flatMap((part) => (part.type === "text" && part.text ? [part.text] : [])).join("\n");
+  result.content
+    .flatMap((part) => (part.type === "text" && part.text ? [part.text] : []))
+    .join("\n");
 
 test("a generated image saved in the workspace and put on the canvas reports its path and frame", async () => {
   const { saves, placements, generate } = savingTools();
-  const result = await generate.execute("save", { ...imageRequest, savePath: "./design/assets/hero.png", placeOnCanvas: true });
+  const result = await generate.execute("save", {
+    ...imageRequest,
+    savePath: "./design/assets/hero.png",
+    placeOnCanvas: true,
+  });
   assert.equal(result.isError, undefined);
   assert.deepEqual(saves, [{ path: "design/assets/hero.png", data: PNG }]);
   assert.deepEqual(placements, [[{ path: "design/assets/hero.png", width: 1, height: 1 }]]);
   const text = resultText(result);
   assert.match(text, /Saved in the workspace as design\/assets\/hero\.png\./);
   assert.match(text, /On the design canvas as frame frame-1\./);
-  assert.equal(result.content.filter((part) => part.type === "image").length, 1, "the image is still shown in the chat");
+  assert.equal(
+    result.content.filter((part) => part.type === "image").length,
+    1,
+    "the image is still shown in the chat",
+  );
 });
 
 test("with design mode off the image is saved and the canvas left alone, and a failed save keeps what was paid for", async () => {
   const off = savingTools({ placed: null });
-  const kept = await off.generate.execute("off", { ...imageRequest, savePath: "logo", placeOnCanvas: true });
+  const kept = await off.generate.execute("off", {
+    ...imageRequest,
+    savePath: "logo",
+    placeOnCanvas: true,
+  });
   assert.match(resultText(kept), /Saved in the workspace as logo\.png\.[\s\S]*Design mode is off/);
 
-  const failing = savingTools({ save: async () => { throw new Error("Path is outside the workspace."); } });
-  const failed = await failing.generate.execute("fail", { ...imageRequest, savePath: "hero.png", placeOnCanvas: true });
+  const failing = savingTools({
+    save: async () => {
+      throw new Error("Path is outside the workspace.");
+    },
+  });
+  const failed = await failing.generate.execute("fail", {
+    ...imageRequest,
+    savePath: "hero.png",
+    placeOnCanvas: true,
+  });
   assert.equal(failed.isError, undefined);
   assert.deepEqual(failed.usage, usage);
   assert.match(resultText(failed), /Could not save hero\.png: Path is outside the workspace\./);
@@ -1015,54 +1160,125 @@ test("with design mode off the image is saved and the canvas left alone, and a f
 
 test("a save path that could never be written, or a canvas request without one, is refused before the paid request", async () => {
   const { controls, generate } = savingTools();
-  for (const savePath of ["../outside.png", "/Users/person/hero.png", "C:\\art\\hero.png", "design/../../hero.png", "notes.txt", ".png", "", "a\u0000.png",
-    ".ssh/id.png", ".git/hooks/pre-commit.png", "design/.hidden/hero.png", "~/hero.png", "~\\hero.png",
-    "design/hero\u202egnp.png", "design/he\u2066ro.png", "design/\nhero.png", "design/hero\u0085.png",
+  for (const savePath of [
+    "../outside.png",
+    "/Users/person/hero.png",
+    "C:\\art\\hero.png",
+    "design/../../hero.png",
+    "notes.txt",
+    ".png",
+    "",
+    "a\u0000.png",
+    ".ssh/id.png",
+    ".git/hooks/pre-commit.png",
+    "design/.hidden/hero.png",
+    "~/hero.png",
+    "~\\hero.png",
+    "design/hero\u202egnp.png",
+    "design/he\u2066ro.png",
+    "design/\nhero.png",
+    "design/hero\u0085.png",
     // Invisible on the card: a zero-width space and joiner, a soft hyphen, the BOM,
     // the line and paragraph separators, and the Hangul fillers.
-    "design/he\u200bro.png", "design/he\u200dro.png", "design/he\u00adro.png", "design/\ufeffhero.png",
-    "design/hero\u2028.png", "design/hero\u2029.png", "design/\u3164/hero.png", "design/he\u115fro.png", "design/he\u1160ro.png",
+    "design/he\u200bro.png",
+    "design/he\u200dro.png",
+    "design/he\u00adro.png",
+    "design/\ufeffhero.png",
+    "design/hero\u2028.png",
+    "design/hero\u2029.png",
+    "design/\u3164/hero.png",
+    "design/he\u115fro.png",
+    "design/he\u1160ro.png",
     // Drawn as nothing or as a blank: the half-width Hangul filler, a variation selector
     // and the combining grapheme joiner away from any emoji, a tag character, the
     // braille blank and the ideographic space.
-    "design/he\uffa0ro.png", "design/hero\ufe0f.png", "design/he\u034fro.png", "design/hero\u{e0041}.png",
-    "design/\u2800/hero.png", "design/hero\u3000.png",
+    "design/he\uffa0ro.png",
+    "design/hero\ufe0f.png",
+    "design/he\u034fro.png",
+    "design/hero\u{e0041}.png",
+    "design/\u2800/hero.png",
+    "design/hero\u3000.png",
     // A zero-width joiner counts as part of an emoji only between two emoji.
-    "design/\u{1f44d}\u200d.png", "design/\u200d\u{1f44d}.png", "design/a\u200d\u{1f44d}.png", "design/\u{1f44d}\u200d\u200d\u{1f44d}.png",
+    "design/\u{1f44d}\u200d.png",
+    "design/\u200d\u{1f44d}.png",
+    "design/a\u200d\u{1f44d}.png",
+    "design/\u{1f44d}\u200d\u200d\u{1f44d}.png",
     // ...and only between emoji drawn as emoji: two symbols drawn as text are not.
-    "design/\u00a9\u200d\u00ae.png", "design/\u2764\u200d\u{1f525}.png",
+    "design/\u00a9\u200d\u00ae.png",
+    "design/\u2764\u200d\u{1f525}.png",
     // Spaces other than the ordinary one: no-break, thin, narrow no-break and the Ogham space mark.
-    "design/hero\u00a0art.png", "design/hero\u2009art.png", "design/hero\u202fart.png", "design/hero\u1680art.png",
+    "design/hero\u00a0art.png",
+    "design/hero\u2009art.png",
+    "design/hero\u202fart.png",
+    "design/hero\u1680art.png",
     // Private-use, unassigned and noncharacter code points, a lone surrogate, and the object replacement character.
-    "design/hero\ue000.png", "design/hero\u{f0000}.png", "design/hero\u0378.png", "design/hero\uffff.png", "design/hero\ud800.png",
-    "design/hero\udc00.png", "design/hero\ufffc.png",
+    "design/hero\ue000.png",
+    "design/hero\u{f0000}.png",
+    "design/hero\u0378.png",
+    "design/hero\uffff.png",
+    "design/hero\ud800.png",
+    "design/hero\udc00.png",
+    "design/hero\ufffc.png",
     // Unicode reserves unassigned blocks as pictographic; they are still unassigned, alone, styled or joined.
-    "design/hero\u{1fc00}.png", "design/\u{1fffd}.png", "design/\u{1f8ff}.png", "design/\u{1fc00}\ufe0f.png",
+    "design/hero\u{1fc00}.png",
+    "design/\u{1fffd}.png",
+    "design/\u{1f8ff}.png",
+    "design/\u{1fc00}\ufe0f.png",
     "design/\u{1fc00}\ufe0f\u200d\u{1fc01}\ufe0f.png",
     // A selector after a skin tone styles nothing: the tone already draws the emoji.
-    "design/\u{1f44b}\u{1f3fd}\ufe0f.png", "design/\u{1f44b}\u{1f3fd}\ufe0e.png", "design/\u{1f468}\u{1f3fd}\ufe0f\u200d\u{1f4bb}.png",
+    "design/\u{1f44b}\u{1f3fd}\ufe0f.png",
+    "design/\u{1f44b}\u{1f3fd}\ufe0e.png",
+    "design/\u{1f468}\u{1f3fd}\ufe0f\u200d\u{1f4bb}.png",
     // A folder or file name that ends in a space.
-    "design /hero.png", "design/hero ", "design/art/hero.png ", "design/ /hero.png"]) {
-    await assert.rejects(generate.execute("bad", { ...imageRequest, savePath }), Error, JSON.stringify(savePath));
+    "design /hero.png",
+    "design/hero ",
+    "design/art/hero.png ",
+    "design/ /hero.png",
+  ]) {
+    await assert.rejects(
+      generate.execute("bad", { ...imageRequest, savePath }),
+      Error,
+      JSON.stringify(savePath),
+    );
   }
-  await assert.rejects(generate.execute("canvas", { ...imageRequest, placeOnCanvas: true }), /placeOnCanvas needs savePath/);
+  await assert.rejects(
+    generate.execute("canvas", { ...imageRequest, placeOnCanvas: true }),
+    /placeOnCanvas needs savePath/,
+  );
   assert.equal(controls.imageCalls, 0);
 });
 
 test("a save path in any script, or named with emoji sequences, is saved as written", async () => {
-  const names = ["デザイン/ヒーロー.png", "디자인/표지.png", "تصميم/غلاف.png", "дизайн/обложка.png", "设计/封面", "design/naïve café.png",
+  const names = [
+    "デザイン/ヒーロー.png",
+    "디자인/표지.png",
+    "تصميم/غلاف.png",
+    "дизайн/обложка.png",
+    "设计/封面",
+    "design/naïve café.png",
     // A family, a rainbow flag, a heart on fire and a toned hand: emoji joined or styled by joiners and selectors.
-    "design/\u{1f468}\u200d\u{1f469}\u200d\u{1f467}.png", "design/\u{1f3f3}\ufe0f\u200d\u{1f308}.png", "design/\u2764\ufe0f\u200d\u{1f525}.png", "design/\u{1f44b}\u{1f3fd}.png",
+    "design/\u{1f468}\u200d\u{1f469}\u200d\u{1f467}.png",
+    "design/\u{1f3f3}\ufe0f\u200d\u{1f308}.png",
+    "design/\u2764\ufe0f\u200d\u{1f525}.png",
+    "design/\u{1f44b}\u{1f3fd}.png",
     // A person at a laptop, a toned one, a runner joined to a symbol styled as emoji, and an ordinary space inside a name.
-    "design/\u{1f469}\u200d\u{1f4bb}.png", "design/\u{1f469}\u{1f3fd}\u200d\u{1f4bb}.png", "design/\u{1f3c3}\u200d\u2640\ufe0f.png", "design/my hero.png",
+    "design/\u{1f469}\u200d\u{1f4bb}.png",
+    "design/\u{1f469}\u{1f3fd}\u200d\u{1f4bb}.png",
+    "design/\u{1f3c3}\u200d\u2640\ufe0f.png",
+    "design/my hero.png",
     // A toned thumbs up, and a toned pointing finger whose plain form is drawn as text.
-    "design/\u{1f44d}\u{1f3fd}.png", "design/\u261d\u{1f3fd}.png"];
+    "design/\u{1f44d}\u{1f3fd}.png",
+    "design/\u261d\u{1f3fd}.png",
+  ];
   const { saves, generate } = savingTools();
   for (const savePath of names) {
     const result = await generate.execute("ok", { ...imageRequest, savePath });
     assert.equal(result.isError, undefined, JSON.stringify(savePath));
   }
-  assert.deepEqual(saves.map((save) => save.path), names.map((name) => (name.endsWith(".png") ? name : `${name}.png`)));
+  assert.deepEqual(
+    saves.map((save) => save.path),
+    names.map((name) => (name.endsWith(".png") ? name : `${name}.png`)),
+  );
 });
 
 test("savePath and placeOnCanvas exist only for a chat whose host can save and place", async () => {
@@ -1070,12 +1286,17 @@ test("savePath and placeOnCanvas exist only for a chat whose host can save and p
   const parameters = get("generate_image").parameters as { properties: Record<string, unknown> };
   assert.equal("savePath" in parameters.properties, false);
   assert.equal("placeOnCanvas" in parameters.properties, false);
-  await assert.rejects(get("generate_image").execute("save", { ...imageRequest, savePath: "hero.png" }));
+  await assert.rejects(
+    get("generate_image").execute("save", { ...imageRequest, savePath: "hero.png" }),
+  );
   assert.equal(controls.imageCalls, 0);
 
   const { models } = fixture();
-  const saveOnly = createPiModelTools({ ...registries(models), onImage: async () => {}, saveImage: async (path) => path })
-    .find((tool) => tool.name === "generate_image")!;
+  const saveOnly = createPiModelTools({
+    ...registries(models),
+    onImage: async () => {},
+    saveImage: async (path) => path,
+  }).find((tool) => tool.name === "generate_image")!;
   const saveOnlyParameters = saveOnly.parameters as { properties: Record<string, unknown> };
   assert.equal("savePath" in saveOnlyParameters.properties, true);
   assert.equal("placeOnCanvas" in saveOnlyParameters.properties, false);
@@ -1085,7 +1306,8 @@ test("only the file the approval named is replaced; another type or an extra ima
   const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "aiden-image-save-")));
   try {
     await fs.mkdir(path.join(root, "design"));
-    for (const name of ["hero.png", "hero-2.png", "logo.jpg"]) await fs.writeFile(path.join(root, "design", name), "old");
+    for (const name of ["hero.png", "hero-2.png", "logo.jpg"])
+      await fs.writeFile(path.join(root, "design", name), "old");
     const { controls, models } = fixture();
     const generate = createPiModelTools({
       ...registries(models),
@@ -1097,16 +1319,26 @@ test("only the file the approval named is replaced; another type or an extra ima
           ...(options ? { replace: options.replace } : {}),
         }),
     }).find((tool) => tool.name === "generate_image")!;
-    const read = (name: string) => fs.readFile(path.join(root, "design", name), "utf8").catch(() => "missing");
+    const read = (name: string) =>
+      fs.readFile(path.join(root, "design", name), "utf8").catch(() => "missing");
     const png = Buffer.from(PNG, "base64").toString("utf8");
 
     controls.imageResult.output = [image, image, image];
-    const named = resultText(await generate.execute("named", { ...imageRequest, savePath: "design/hero.png" }));
+    const named = resultText(
+      await generate.execute("named", { ...imageRequest, savePath: "design/hero.png" }),
+    );
     assert.equal(await read("hero.png"), png, "the named file is replaced");
-    assert.equal(await read("hero-2.png"), "old", "an extra image never overwrites a file the approval did not name");
+    assert.equal(
+      await read("hero-2.png"),
+      "old",
+      "an extra image never overwrites a file the approval did not name",
+    );
     assert.equal(await read("hero-3.png"), png, "an extra image with a free name is saved");
     assert.match(named, /Saved in the workspace as design\/hero\.png, design\/hero-3\.png\./);
-    assert.match(named, /Did not save design\/hero-2\.png: a file is already there.*Pass that path as savePath to replace it/);
+    assert.match(
+      named,
+      /Did not save design\/hero-2\.png: a file is already there.*Pass that path as savePath to replace it/,
+    );
 
     // A PNG asked for as logo.jpg becomes logo.png, a new file, and logo.jpg stays.
     controls.imageResult.output = [image];
@@ -1114,7 +1346,9 @@ test("only the file the approval named is replaced; another type or an extra ima
     assert.equal(await read("logo.jpg"), "old");
     assert.equal(await read("logo.png"), png);
     // An extensionless savePath names no file to replace either.
-    const bare = resultText(await generate.execute("bare", { ...imageRequest, savePath: "design/hero" }));
+    const bare = resultText(
+      await generate.execute("bare", { ...imageRequest, savePath: "design/hero" }),
+    );
     assert.equal(await read("hero.png"), png);
     assert.match(bare, /Did not save design\/hero\.png: a file is already there/);
   } finally {
@@ -1142,7 +1376,10 @@ test("saved file names follow each image's real type and number the extra images
   ]);
   assert.deepEqual(imageSavePaths("photo.jpeg", ["image/jpeg"]), ["photo.jpeg"]);
   // The person's spelling stays when the type matches, so the named file is the one replaced.
-  assert.deepEqual(imageSavePaths("Hero.PNG", ["image/png", "image/png"]), ["Hero.PNG", "Hero-2.PNG"]);
+  assert.deepEqual(imageSavePaths("Hero.PNG", ["image/png", "image/png"]), [
+    "Hero.PNG",
+    "Hero-2.PNG",
+  ]);
   assert.deepEqual(imageSavePaths("icons/star", ["image/gif"]), ["icons/star.gif"]);
   assert.equal(checkImageSavePath("design\\assets\\hero.webp"), "design/assets/hero.webp");
 });

@@ -30,7 +30,10 @@ test("a user cancel during a load never reports a failure", () => {
   model.markUnloaded(); // the cancel kills the worker mid-load
   request.fail(new Error("On-device transcription process closed."), { aborted: true });
   assert.deepEqual(seen(), ["parakeet:loading", "parakeet:unloaded"]);
-  assert.equal(events.some((event) => event.state === "failed" || event.error), false);
+  assert.equal(
+    events.some((event) => event.state === "failed" || event.error),
+    false,
+  );
 });
 
 test("a real load failure is reported with its message", () => {
@@ -38,7 +41,11 @@ test("a real load failure is reported with its message", () => {
   const request = model.request("parakeet");
   request.announceLoad();
   request.fail(new Error("bad model"), { aborted: false });
-  assert.deepEqual(events[events.length - 1], { modelId: "parakeet", state: "failed", error: "bad model" });
+  assert.deepEqual(events[events.length - 1], {
+    modelId: "parakeet",
+    state: "failed",
+    error: "bad model",
+  });
   assert.equal(model.loaded, null);
 });
 

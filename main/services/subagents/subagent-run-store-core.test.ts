@@ -1362,7 +1362,9 @@ test("projection provenance cannot disappear or change before terminal evidence"
   await store.upsert(running);
 
   await assert.rejects(
-    store.upsert(snapshot({ ...running, revision: 2, updatedAt: 21, projectionNotices: undefined })),
+    store.upsert(
+      snapshot({ ...running, revision: 2, updatedAt: 21, projectionNotices: undefined }),
+    ),
     /lifecycle cannot move backward/u,
   );
   await assert.rejects(

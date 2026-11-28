@@ -24,8 +24,7 @@ export function SubagentLiveAnnouncer({
   const summary = runs.length > 0 ? subagentSnapshotLiveSummary(runs) : "";
   const terminal = subagentSnapshotLiveSummaryIsTerminal(runs);
   const [announcement, setAnnouncement] = React.useState("");
-  const coordinatorRef =
-    React.useRef<SubagentLiveAnnouncementCoordinator | null>(null);
+  const coordinatorRef = React.useRef<SubagentLiveAnnouncementCoordinator | null>(null);
   const handledDetailRequestRef = React.useRef(0);
 
   React.useLayoutEffect(() => {
@@ -46,16 +45,9 @@ export function SubagentLiveAnnouncer({
   }, [ownerKey, summary, terminal]);
 
   React.useLayoutEffect(() => {
-    if (
-      !detailRequest ||
-      detailRequest.id <= handledDetailRequestRef.current
-    )
-      return;
+    if (!detailRequest || detailRequest.id <= handledDetailRequestRef.current) return;
     handledDetailRequestRef.current = detailRequest.id;
-    coordinatorRef.current?.announceDetail(
-      detailRequest.ownerKey,
-      detailRequest.message,
-    );
+    coordinatorRef.current?.announceDetail(detailRequest.ownerKey, detailRequest.message);
   }, [detailRequest]);
 
   // Keep the live region mounted outside panels that can become inert or hidden.

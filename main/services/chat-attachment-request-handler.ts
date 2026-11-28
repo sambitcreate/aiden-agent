@@ -16,7 +16,10 @@ const SAFE_CHAT_ID = /^[A-Za-z0-9._:-]{1,160}$/u;
 
 export interface ChatAttachmentSource {
   /** The type and size of an image file the chat lists, or undefined. */
-  findStoredImage(chatId: string, sha256: string): Promise<{ mimeType: string; size: number } | undefined>;
+  findStoredImage(
+    chatId: string,
+    sha256: string,
+  ): Promise<{ mimeType: string; size: number } | undefined>;
   readImage(sha256: string, size: number): Promise<Uint8Array | undefined>;
 }
 
@@ -57,10 +60,26 @@ export function parseChatImageUrl(url: string): { chatId: string; sha256: string
 }
 
 function failure(status: 304 | 404 | 405 | 500, headers: Record<string, string> = {}): Response {
-  return new Response(status === 304 ? null : status === 404 ? "Not found" : status === 405 ? "Method not allowed" : "Internal error", {
-    status,
-    headers: status === 304 ? headers : { "content-type": "text/plain; charset=utf-8", "cache-control": "no-store", ...headers },
-  });
+  return new Response(
+    status === 304
+      ? null
+      : status === 404
+        ? "Not found"
+        : status === 405
+          ? "Method not allowed"
+          : "Internal error",
+    {
+      status,
+      headers:
+        status === 304
+          ? headers
+          : {
+              "content-type": "text/plain; charset=utf-8",
+              "cache-control": "no-store",
+              ...headers,
+            },
+    },
+  );
 }
 
 export function createChatAttachmentRequestHandler(

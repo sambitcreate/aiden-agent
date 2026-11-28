@@ -51,7 +51,10 @@ test("local and custom endpoints never show an inherited list price", () => {
     metadataLoading: false,
   });
   assert.equal(local.has("List price"), false);
-  const privateOpenAi = render({ model: entry({ providerId: "openai", isLocal: true }, { cost }), metadataLoading: false });
+  const privateOpenAi = render({
+    model: entry({ providerId: "openai", isLocal: true }, { cost }),
+    metadataLoading: false,
+  });
   assert.equal(privateOpenAi.has("List price"), false);
   const custom = render({
     model: entry({ providerId: "my-gateway", providerLabel: "My Gateway" }, { cost }),

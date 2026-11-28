@@ -8,10 +8,10 @@ Keeping a separate `rememberUpdatedState(draft)` at screen scope made each edit 
 
 A debug build on the isolated `medium_phone` ARM64 emulator, Android 16/API 36, mounted the production `AidenChatDetailScreen` with temporary stores and no paired server. A temporary `SideEffect` counter at the screen's entry measured ten separate `performTextInput("word ")` actions, with `waitForIdle()` between actions. The counter was reset after initial composition.
 
-| Measurement | Before | After |
-| --- | ---: | ---: |
-| Root screen compositions during ten edits | 10 | 0 |
-| Final editor text | Ten copies of `word ` | Ten copies of `word ` |
+| Measurement                               |                Before |                 After |
+| ----------------------------------------- | --------------------: | --------------------: |
+| Root screen compositions during ten edits |                    10 |                     0 |
+| Final editor text                         | Ten copies of `word ` | Ten copies of `word ` |
 
 The diagnostic assertion requiring zero root compositions failed before the change and passed afterward. The counter and diagnostic test were removed after the measurement. A permanent tooling observer could not identify named scopes because this build omits scope source metadata; no production test hook or empty counter test was retained.
 

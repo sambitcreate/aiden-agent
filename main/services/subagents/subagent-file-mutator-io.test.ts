@@ -104,10 +104,7 @@ test("inspect, prepare, commit, finalize, and cancel stay on one pinned helper",
     })(),
   });
 
-  const createInspection = await client.inspect(
-    preparer.createEffectId(),
-    "file.txt",
-  );
+  const createInspection = await client.inspect(preparer.createEffectId(), "file.txt");
   assert.equal(createInspection.expectedRevision, "absent");
   const createEffect = preparer.prepareWrite({
     inspection: createInspection,
@@ -117,7 +114,10 @@ test("inspect, prepare, commit, finalize, and cancel stay on one pinned helper",
   const created = await client.commit(createEffect.effectId);
   assert.equal(created.effectDigest, createEffect.effectDigest);
   assert.equal(created.recoveryName, undefined);
-  assert.equal(await readFile(path.join(rootPath, "file.txt"), "utf8"), createEffect.postimage.content);
+  assert.equal(
+    await readFile(path.join(rootPath, "file.txt"), "utf8"),
+    createEffect.postimage.content,
+  );
 
   const editInspection = await client.inspect(preparer.createEffectId(), "file.txt");
   const editEffect = preparer.prepareEdit({
@@ -127,12 +127,12 @@ test("inspect, prepare, commit, finalize, and cancel stay on one pinned helper",
   });
   await client.prepare(editEffect);
   const edited = await client.commit(editEffect.effectId);
-  assert.match(
-    edited.recoveryName ?? "",
-    /^\.aiden-subagent-file-io-edit-[a-f0-9-]{36}\.tmp$/u,
-  );
+  assert.match(edited.recoveryName ?? "", /^\.aiden-subagent-file-io-edit-[a-f0-9-]{36}\.tmp$/u);
   await client.finalize(editEffect.effectId);
-  assert.equal(await readFile(path.join(rootPath, "file.txt"), "utf8"), "before replacement after\n");
+  assert.equal(
+    await readFile(path.join(rootPath, "file.txt"), "utf8"),
+    "before replacement after\n",
+  );
 
   const cancelled = await client.inspect(preparer.createEffectId(), "cancelled.txt");
   await client.cancel(cancelled.effectId);
@@ -153,10 +153,7 @@ test("HTML reads traverse beneath the pinned workspace root without following sy
     binary: productionBinary,
   });
 
-  assert.equal(
-    await client.readHtml("html-read", "nested/chart.html"),
-    "<p>workspace chart</p>",
-  );
+  assert.equal(await client.readHtml("html-read", "nested/chart.html"), "<p>workspace chart</p>");
   await client.close();
 
   const outside = await workspace(t);
@@ -227,15 +224,12 @@ test("stale prepare errors are fixed and do not expose path or content", async (
     content: "secret-postimage\n",
   });
   await writeFile(target, "external\n");
-  await assert.rejects(
-    client.prepare(effect),
-    (error) => {
-      assert.ok(error instanceof SubagentFileMutatorError);
-      assert.equal(error.failure, "conflict");
-      assert.doesNotMatch(error.message, /private-name|secret/u);
-      return true;
-    },
-  );
+  await assert.rejects(client.prepare(effect), (error) => {
+    assert.ok(error instanceof SubagentFileMutatorError);
+    assert.equal(error.failure, "conflict");
+    assert.doesNotMatch(error.message, /private-name|secret/u);
+    return true;
+  });
   await client.cancel(effect.effectId);
   await client.close();
 });
@@ -258,8 +252,7 @@ test("an aborted unsent commit remains cancellable", async (t) => {
   controller.abort();
   await assert.rejects(
     client.commit(effect.effectId, controller.signal),
-    (error) =>
-      error instanceof SubagentFileMutatorError && error.failure === "cancelled",
+    (error) => error instanceof SubagentFileMutatorError && error.failure === "cancelled",
   );
   assert.equal(client.currentState, "prepared");
   await client.cancel(effect.effectId);
@@ -298,8 +291,7 @@ test("an effectful timeout is indeterminate and kills the helper", async (t) => 
   await client.prepare(effect);
   await assert.rejects(
     client.commit(effect.effectId),
-    (error) =>
-      error instanceof SubagentFileMutatorError && error.failure === "indeterminate",
+    (error) => error instanceof SubagentFileMutatorError && error.failure === "indeterminate",
   );
   assert.equal(client.currentState, "indeterminate");
   await access(marker);
@@ -336,8 +328,7 @@ test("close kills and drains a helper when recovery reconciliation conflicts", a
   await chmod(path.join(rootPath, committed.recoveryName), 0o777);
   await assert.rejects(
     client.close(),
-    (error) =>
-      error instanceof SubagentFileMutatorError && error.failure === "conflict",
+    (error) => error instanceof SubagentFileMutatorError && error.failure === "conflict",
   );
   assert.equal(client.currentState, "closed");
   assert.ok(child);
@@ -481,8 +472,7 @@ test("a pre-aborted first request does not poison startup or close", async (t) =
   controller.abort();
   await assert.rejects(
     client.inspect("retry-start", "file.txt", controller.signal),
-    (error) =>
-      error instanceof SubagentFileMutatorError && error.failure === "cancelled",
+    (error) => error instanceof SubagentFileMutatorError && error.failure === "cancelled",
   );
   const inspection = await client.inspect("retry-start", "file.txt");
   assert.equal(inspection.expectedRevision, "absent");
@@ -562,8 +552,7 @@ test("chunked unsolicited response lines fail before the queue can grow", async 
   });
   await assert.rejects(
     client.inspect("flood-effect", "file.txt"),
-    (error) =>
-      error instanceof SubagentFileMutatorError && error.failure === "io_failed",
+    (error) => error instanceof SubagentFileMutatorError && error.failure === "io_failed",
   );
   assert.equal(killed, true);
   await client.close();

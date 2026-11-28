@@ -68,12 +68,16 @@ test("releasing Command or leaving a customized chord hides the hint", () => {
 test("a later keydown without Command clears a stuck Meta hold", () => {
   const required = [["Meta"]];
   const tracked = trackedModifiersFromSets(required);
-  const held = heldModifiersAfterKeydown(new Set(["Meta"]), {
-    key: "a",
-    metaKey: false,
-    ctrlKey: false,
-    altKey: false,
-    shiftKey: false,
-  }, tracked);
+  const held = heldModifiersAfterKeydown(
+    new Set(["Meta"]),
+    {
+      key: "a",
+      metaKey: false,
+      ctrlKey: false,
+      altKey: false,
+      shiftKey: false,
+    },
+    tracked,
+  );
   assert.equal(completeHeldModifierSet(held, required), false);
 });

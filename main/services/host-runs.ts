@@ -1,6 +1,10 @@
 import type { NotificationChannel } from "../../renderer/preload-channels.js";
 import type { ChatGenerationOwner } from "./chat-generation-owner.js";
-import type { HostRunOrigin, HostRunPromptResolution, HostRunRegistry } from "./host-run-registry.js";
+import type {
+  HostRunOrigin,
+  HostRunPromptResolution,
+  HostRunRegistry,
+} from "./host-run-registry.js";
 
 export function hostRunOriginFor(owner: Pick<ChatGenerationOwner, "kind" | "id">): HostRunOrigin {
   if (owner.kind === "remote") return "remote";

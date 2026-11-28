@@ -4,28 +4,45 @@
 
 import * as React from "react";
 import { detectedKeyboardPlatform, type KeyboardPlatform } from "../shared/keybindings";
-import { isEditableTypingTarget, isReservedTypingSurface, typingRedirectBlockedByOverlay } from "./composer-type-focus";
+import {
+  isEditableTypingTarget,
+  isReservedTypingSurface,
+  typingRedirectBlockedByOverlay,
+} from "./composer-type-focus";
 
 export type ApprovalShortcut = "allow" | "deny";
 
-type ShortcutKeyEvent = Pick<KeyboardEvent, "key" | "metaKey" | "ctrlKey" | "altKey" | "shiftKey" | "repeat">;
+type ShortcutKeyEvent = Pick<
+  KeyboardEvent,
+  "key" | "metaKey" | "ctrlKey" | "altKey" | "shiftKey" | "repeat"
+>;
 
-export function approvalShortcutForKey(event: ShortcutKeyEvent, platform: KeyboardPlatform): ApprovalShortcut | null {
+export function approvalShortcutForKey(
+  event: ShortcutKeyEvent,
+  platform: KeyboardPlatform,
+): ApprovalShortcut | null {
   if (event.repeat || event.altKey || event.shiftKey) return null;
-  const primary = platform === "darwin" ? event.metaKey && !event.ctrlKey : event.ctrlKey && !event.metaKey;
+  const primary =
+    platform === "darwin" ? event.metaKey && !event.ctrlKey : event.ctrlKey && !event.metaKey;
   if (!primary) return null;
   if (event.key === "Enter") return "allow";
   if (event.key === "Backspace") return "deny";
   return null;
 }
 
-export function approvalShortcutLabel(shortcut: ApprovalShortcut, platform: KeyboardPlatform): string {
+export function approvalShortcutLabel(
+  shortcut: ApprovalShortcut,
+  platform: KeyboardPlatform,
+): string {
   if (platform === "darwin") return shortcut === "allow" ? "⌘↩" : "⌘⌫";
   return shortcut === "allow" ? "Ctrl+Enter" : "Ctrl+Backspace";
 }
 
 /** The `aria-keyshortcuts` value for a shortcut on this platform. */
-export function approvalAriaKeyShortcut(shortcut: ApprovalShortcut, platform: KeyboardPlatform): string {
+export function approvalAriaKeyShortcut(
+  shortcut: ApprovalShortcut,
+  platform: KeyboardPlatform,
+): string {
   return `${platform === "darwin" ? "Meta" : "Control"}+${shortcut === "allow" ? "Enter" : "Backspace"}`;
 }
 
@@ -47,7 +64,10 @@ const holdsDraft = (element: Element) =>
  * the file editor or a device screen), the message box is empty (no text, not
  * even spaces, and nothing attached) even after focus moves to a button, and no dialog, menu or picker is open on top.
  */
-export function approvalShortcutTargetIsFree(target: EventTarget | null, root: ParentNode): boolean {
+export function approvalShortcutTargetIsFree(
+  target: EventTarget | null,
+  root: ParentNode,
+): boolean {
   const focused = target instanceof Element ? target : null;
   if (isReservedTypingSurface(focused)) return false;
   if (isEditableTypingTarget(focused) && !focused?.closest("[data-message-draft]")) return false;

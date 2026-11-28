@@ -29,7 +29,15 @@ const WORKSPACE: Workspace = {
 };
 
 function chat(overrides: Partial<Chat> = {}): Chat {
-  return { id: "chat-1", title: "Landing hero", workspaceId: "site", createdAt: 1, updatedAt: 5, messages: [], ...overrides };
+  return {
+    id: "chat-1",
+    title: "Landing hero",
+    workspaceId: "site",
+    createdAt: 1,
+    updatedAt: 5,
+    messages: [],
+    ...overrides,
+  };
 }
 
 let queryClient: QueryClient;
@@ -57,7 +65,10 @@ beforeEach(() => {
     defaultOptions: { queries: { retry: false, gcTime: Infinity, staleTime: Infinity } },
   });
   queryClient.setQueryData(queryKeys.chat("chat-1"), server);
-  queryClient.setQueryData<ChatMeta[]>(queryKeys.chats, [server, chat({ id: "chat-2", title: "Pricing" })]);
+  queryClient.setQueryData<ChatMeta[]>(queryKeys.chats, [
+    server,
+    chat({ id: "chat-2", title: "Pricing" }),
+  ]);
   queryClient.setQueryData(queryKeys.workspaces, [WORKSPACE]);
 });
 
@@ -77,14 +88,19 @@ function wrapper({ children }: { children: React.ReactNode }) {
   );
 }
 
-const listed = (id: string) => queryClient.getQueryData<ChatMeta[]>(queryKeys.chats)?.find((row) => row.id === id);
+const listed = (id: string) =>
+  queryClient.getQueryData<ChatMeta[]>(queryKeys.chats)?.find((row) => row.id === id);
 
 test("design mode is offered only for project chats while the capability is on", () => {
   const folder = { folderPath: "/Users/person/site" };
   assert.equal(designModeAvailable(chat(), OFF, folder), false, "the capability gates it");
   assert.equal(designModeAvailable(undefined, ON), false);
   assert.equal(designModeAvailable(chat({ botId: "bot-1" }), ON, folder), false, "a Bot chat");
-  assert.equal(designModeAvailable(chat({ workspaceId: "assistant" }), ON, folder), false, "an Assistant chat");
+  assert.equal(
+    designModeAvailable(chat({ workspaceId: "assistant" }), ON, folder),
+    false,
+    "an Assistant chat",
+  );
   assert.equal(
     designModeAvailable(chat({ owner: { kind: "design-project", projectId: "p" } }), ON, folder),
     false,
@@ -94,11 +110,18 @@ test("design mode is offered only for project chats while the capability is on",
   assert.equal(designModeAvailable(chat(), ON, null), false, "a workspace that no longer exists");
   assert.equal(designModeAvailable(chat(), ON, folder), true, "a folder workspace");
   assert.equal(
-    designModeAvailable(chat({ workspaceId: undefined }), ON, { noWorkspace: true, folderPath: "/tmp/chats/x" }),
+    designModeAvailable(chat({ workspaceId: undefined }), ON, {
+      noWorkspace: true,
+      folderPath: "/tmp/chats/x",
+    }),
     true,
     "a No workspace chat in Aiden's own folder",
   );
-  assert.equal(designModeAvailable(chat(), ON), true, "an unloaded workspace list does not hide it");
+  assert.equal(
+    designModeAvailable(chat(), ON),
+    true,
+    "an unloaded workspace list does not hide it",
+  );
 });
 
 test("toggling flips the layout before the save answers, then keeps the saved value", async () => {
@@ -124,10 +147,16 @@ test("a refused save puts the previous layout back and says why once", async () 
   };
   const { result } = renderHook(() => useDesignMode("chat-1"), { wrapper });
   act(() => result.current.set(true, "shortcut"));
-  assert.equal(queryClient.getQueryData<Chat>(queryKeys.chat("chat-1"))?.designMode, true, "flipped at once");
+  assert.equal(
+    queryClient.getQueryData<Chat>(queryKeys.chat("chat-1"))?.designMode,
+    true,
+    "flipped at once",
+  );
   await waitFor(() => assert.equal(result.current.on, false));
   assert.equal(listed("chat-1")?.designMode, undefined);
-  await waitFor(() => assert.equal(screen.getAllByText("Design mode is available in project chats only.").length, 1));
+  await waitFor(() =>
+    assert.equal(screen.getAllByText("Design mode is available in project chats only.").length, 1),
+  );
 });
 
 const savedAs = (on: boolean): Chat => (on ? { ...server, designMode: true } : chat());
@@ -148,20 +177,30 @@ test("another window turning design mode off reaches this one", async () => {
   queryClient.setQueryData(queryKeys.chat("chat-1"), chat({ designMode: true }));
   const { result } = renderHook(() => useOpenChat("chat-1"), { wrapper });
   assert.equal(result.current.on, true);
-  act(() => emitBotTestNotification("chats:design-mode-changed", { chatId: "chat-1", designMode: false }));
+  act(() =>
+    emitBotTestNotification("chats:design-mode-changed", { chatId: "chat-1", designMode: false }),
+  );
   await waitFor(() => assert.equal(result.current.on, false));
-  assert.equal(queryClient.getQueryData<Chat>(queryKeys.chat("chat-1"))?.title, "Landing hero", "the title stays");
+  assert.equal(
+    queryClient.getQueryData<Chat>(queryKeys.chat("chat-1"))?.title,
+    "Landing hero",
+    "the title stays",
+  );
 });
 
 test("a sidebar row follows another window's change even with no chat open", async () => {
   renderHook(() => useDesignModeBroadcasts(), { wrapper });
-  act(() => emitBotTestNotification("chats:design-mode-changed", { chatId: "chat-2", designMode: true }));
+  act(() =>
+    emitBotTestNotification("chats:design-mode-changed", { chatId: "chat-2", designMode: true }),
+  );
   await waitFor(() => assert.equal(listed("chat-2")?.designMode, true));
   assert.equal(listed("chat-2")?.title, "Pricing", "the rest of the row stays");
   assert.equal(listed("chat-1")?.designMode, undefined, "other rows are untouched");
 
   queryClient.setQueryData(queryKeys.chat("chat-2"), chat({ id: "chat-2", title: "Pricing" }));
-  act(() => emitBotTestNotification("chats:design-mode-changed", { chatId: "chat-2", designMode: false }));
+  act(() =>
+    emitBotTestNotification("chats:design-mode-changed", { chatId: "chat-2", designMode: false }),
+  );
   await waitFor(() => assert.equal(listed("chat-2")?.designMode, undefined));
   assert.equal(queryClient.getQueryData<Chat>(queryKeys.chat("chat-2"))?.designMode, undefined);
 });
@@ -198,7 +237,9 @@ test("a newer change of ours beats a broadcast that arrived before it", async ()
     answers[0]();
     answers[1]();
   });
-  await waitFor(() => assert.equal(queryClient.getQueryData<Chat>(queryKeys.chat("chat-1"))?.designMode, undefined));
+  await waitFor(() =>
+    assert.equal(queryClient.getQueryData<Chat>(queryKeys.chat("chat-1"))?.designMode, undefined),
+  );
   assert.equal(result.current.on, false, "the person's last choice stays");
 });
 
@@ -232,7 +273,9 @@ test("with the capability off nothing is offered and nothing is saved", () => {
   const { result } = renderHook(() => useDesignMode("chat-1"), {
     wrapper: ({ children }) => (
       <QueryClientProvider client={queryClient}>
-        <AppCapabilitiesProvider capabilities={DISABLED_APP_CAPABILITIES}>{children}</AppCapabilitiesProvider>
+        <AppCapabilitiesProvider capabilities={DISABLED_APP_CAPABILITIES}>
+          {children}
+        </AppCapabilitiesProvider>
       </QueryClientProvider>
     ),
   });

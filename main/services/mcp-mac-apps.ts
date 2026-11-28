@@ -10,7 +10,11 @@ import os from "node:os";
 import type { ConnectorMacApp } from "../../renderer/shared/connector-catalog.js";
 import type { McpMacAppStatus } from "../../renderer/shared/mcp-status.js";
 import type { McpServer } from "./types.js";
-import { assertMcpPresetServer, macAppServerCommands, type MacAppMcpPreset } from "./mcp-presets.js";
+import {
+  assertMcpPresetServer,
+  macAppServerCommands,
+  type MacAppMcpPreset,
+} from "./mcp-presets.js";
 
 export type { McpMacAppStatus };
 
@@ -48,7 +52,10 @@ interface InstalledMacApp {
  * server and declares the app's bundle identifier. An app with the same name
  * from someone else is not it.
  */
-async function findMacApp(app: ConnectorMacApp, probe: McpMacAppProbe): Promise<InstalledMacApp | undefined> {
+async function findMacApp(
+  app: ConnectorMacApp,
+  probe: McpMacAppProbe,
+): Promise<InstalledMacApp | undefined> {
   for (const command of macAppServerCommands(app, probe.homedir)) {
     const bundle = command.slice(0, -(app.serverPath.length + 1));
     if (!(await probe.isTrustedServer(command))) continue;
@@ -101,9 +108,14 @@ export async function openMcpMacApp(
 
 function run(file: string, args: readonly string[]): Promise<{ ok: boolean; stdout: string }> {
   return new Promise((resolve) => {
-    execFile(file, [...args], { encoding: "utf8", timeout: 5_000, maxBuffer: 64 * 1024 }, (error, stdout) => {
-      resolve({ ok: !error, stdout: typeof stdout === "string" ? stdout : "" });
-    });
+    execFile(
+      file,
+      [...args],
+      { encoding: "utf8", timeout: 5_000, maxBuffer: 64 * 1024 },
+      (error, stdout) => {
+        resolve({ ok: !error, stdout: typeof stdout === "string" ? stdout : "" });
+      },
+    );
   });
 }
 
@@ -122,13 +134,26 @@ export function nodeMacAppProbe(): McpMacAppProbe {
       }
     },
     async bundleInfo(bundle, key) {
-      const { ok, stdout } = await run("/usr/bin/plutil", ["-extract", key, "raw", "-o", "-", `${bundle}/Contents/Info.plist`]);
+      const { ok, stdout } = await run("/usr/bin/plutil", [
+        "-extract",
+        key,
+        "raw",
+        "-o",
+        "-",
+        `${bundle}/Contents/Info.plist`,
+      ]);
       const value = stdout.trim();
       return ok && value ? value : undefined;
     },
     async isRunning(processName) {
       const uid = process.getuid?.();
-      return (await run("/usr/bin/pgrep", [...(uid === undefined ? [] : ["-U", String(uid)]), "-x", processName])).ok;
+      return (
+        await run("/usr/bin/pgrep", [
+          ...(uid === undefined ? [] : ["-U", String(uid)]),
+          "-x",
+          processName,
+        ])
+      ).ok;
     },
     async open(bundle) {
       if (!(await run("/usr/bin/open", [bundle])).ok) throw new Error(`Couldn’t open ${bundle}.`);

@@ -35,8 +35,7 @@ function inspection(
     effectId,
     workspaceRoot: root,
     relativePath,
-    expectedRevision:
-      currentContent === undefined ? "absent" : sha256(currentContent),
+    expectedRevision: currentContent === undefined ? "absent" : sha256(currentContent),
     ...(currentContent === undefined ? {} : { currentContent }),
   });
 }
@@ -73,8 +72,7 @@ test("write preparation binds the full postimage and exact effect identity", asy
   };
   assert.throws(
     () => assertPreparedSubagentFileMutation(tampered),
-    (error) =>
-      error instanceof SubagentFilePreparationError && error.failure === "invalid_input",
+    (error) => error instanceof SubagentFilePreparationError && error.failure === "invalid_input",
   );
 });
 
@@ -86,10 +84,7 @@ test("effect digest changes with the path, revision, content, and effect ID", as
       content,
     });
   const baseline = prepare("effect-one", "file.txt", "one\n");
-  assert.equal(
-    baseline.effectDigest,
-    prepare("effect-one", "file.txt", "one\n").effectDigest,
-  );
+  assert.equal(baseline.effectDigest, prepare("effect-one", "file.txt", "one\n").effectDigest);
   assert.notEqual(baseline.effectDigest, prepare("effect-two", "file.txt", "one\n").effectDigest);
   assert.notEqual(baseline.effectDigest, prepare("effect-one", "other.txt", "one\n").effectDigest);
   assert.notEqual(baseline.effectDigest, prepare("effect-one", "file.txt", "two\n").effectDigest);
@@ -99,12 +94,7 @@ test("edit preparation requires the expected revision and one exact match", asyn
   const root = await pinSubagentWorkspaceRoot(await workspace(t));
   const current = "before\ntarget\nafter\n";
   const preparer = new SubagentFileMutationPreparer({ allocateEffectId: () => "effect-edit" });
-  const editInspection = inspection(
-    root,
-    preparer.createEffectId(),
-    "file.txt",
-    current,
-  );
+  const editInspection = inspection(root, preparer.createEffectId(), "file.txt", current);
   const effect = preparer.prepareEdit({
     inspection: editInspection,
     oldString: "target",
@@ -148,7 +138,6 @@ test("relative paths and text remain strictly bounded and canonical", async (t) 
         inspection: inspection(root, preparer.createEffectId(), "large.txt"),
         content: "x".repeat(MAX_SUBAGENT_FILE_CONTENT_BYTES + 1),
       }),
-    (error) =>
-      error instanceof SubagentFilePreparationError && error.failure === "invalid_input",
+    (error) => error instanceof SubagentFilePreparationError && error.failure === "invalid_input",
   );
 });

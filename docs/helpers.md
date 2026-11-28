@@ -4,9 +4,9 @@ A foreground chat can delegate up to four fresh `scout`, `planner`, `reviewer`, 
 
 ## What each role may do
 
-| Role defaults when capabilities are omitted | Full workspace access | Ask workspace access | None |
-| --- | --- | --- | --- |
-| Scout, planner, reviewer: read/search | Read/search | Read/search | No workspace tools |
+| Role defaults when capabilities are omitted | Full workspace access                                          | Ask workspace access                                                               | None                    |
+| ------------------------------------------- | -------------------------------------------------------------- | ---------------------------------------------------------------------------------- | ----------------------- |
+| Scout, planner, reviewer: read/search       | Read/search                                                    | Read/search                                                                        | No workspace tools      |
 | Implementer: read/search, write/edit, shell | Writes and shell run under this child run without another card | One write grant and one separate shell grant per child run, requested on first use | No write or shell tools |
 
 ## Time limits and partial work

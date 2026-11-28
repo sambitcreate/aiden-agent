@@ -120,7 +120,10 @@ export class LiveToolRegistry {
   async dispatch(call: LiveToolCall): Promise<LiveToolResponse> {
     const provider = this.byName.get(call.name);
     if (!provider || this.closed) {
-      return liveToolError(LIVE_TOOL_ERROR.unknown, "That tool is not available in this Live session.");
+      return liveToolError(
+        LIVE_TOOL_ERROR.unknown,
+        "That tool is not available in this Live session.",
+      );
     }
     const abort = new AbortController();
     this.inFlight.set(call.id, abort);
@@ -201,7 +204,11 @@ export class LiveRendererToolBroker {
 
   constructor(
     private readonly sessionId: string,
-    private readonly sendToRenderer: (request: LiveRendererToolRequest | { type: "tool_cancel"; sessionId: string; requestId: string }) => void,
+    private readonly sendToRenderer: (
+      request:
+        | LiveRendererToolRequest
+        | { type: "tool_cancel"; sessionId: string; requestId: string },
+    ) => void,
     private readonly timeoutMs = DEFAULT_RENDERER_TOOL_TIMEOUT_MS,
     private readonly cancelGraceMs = DEFAULT_RENDERER_CANCEL_GRACE_MS,
   ) {}
@@ -216,7 +223,9 @@ export class LiveRendererToolBroker {
       return Promise.resolve(liveToolError(LIVE_TOOL_ERROR.cancelled, "The Live session ended."));
     }
     if (this.pending.size >= MAX_PENDING_RENDERER_TOOLS) {
-      return Promise.resolve(liveToolError(LIVE_TOOL_ERROR.failed, "Too many requests are waiting."));
+      return Promise.resolve(
+        liveToolError(LIVE_TOOL_ERROR.failed, "Too many requests are waiting."),
+      );
     }
     this.sequence += 1;
     const requestId = `r${this.sequence}`;
@@ -258,9 +267,11 @@ export class LiveRendererToolBroker {
         clearTimeout(entry.timer);
         entry.timer = setTimeout(() => finish(liveToolOutcomeUnknown()), this.cancelGraceMs);
       };
-      const onAbort = () => giveUp(liveToolError(LIVE_TOOL_ERROR.cancelled, "The request was cancelled."));
+      const onAbort = () =>
+        giveUp(liveToolError(LIVE_TOOL_ERROR.cancelled, "The request was cancelled."));
       const timer = setTimeout(
-        () => giveUp(liveToolError(LIVE_TOOL_ERROR.timeout, "Aiden's window did not answer in time.")),
+        () =>
+          giveUp(liveToolError(LIVE_TOOL_ERROR.timeout, "Aiden's window did not answer in time.")),
         this.timeoutMs,
       );
       this.pending.set(requestId, { resolve: answer, timer });
@@ -270,7 +281,13 @@ export class LiveRendererToolBroker {
       }
       signal?.addEventListener("abort", onAbort, { once: true });
       try {
-        this.sendToRenderer({ type: "tool_request", sessionId: this.sessionId, requestId, name, args });
+        this.sendToRenderer({
+          type: "tool_request",
+          sessionId: this.sessionId,
+          requestId,
+          name,
+          args,
+        });
         forwarded = true;
       } catch {
         finish(liveToolError(LIVE_TOOL_ERROR.failed, "Aiden's window is not available."));

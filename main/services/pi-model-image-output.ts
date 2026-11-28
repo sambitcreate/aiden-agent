@@ -1,5 +1,8 @@
 import type { ImageContent } from "@earendil-works/pi-ai";
-import { hasCanonicalBase64Padding, validateDisplayImageDimensions } from "./display-image-extension.js";
+import {
+  hasCanonicalBase64Padding,
+  validateDisplayImageDimensions,
+} from "./display-image-extension.js";
 
 export const MAX_GENERATED_IMAGES = 4;
 export const MAX_GENERATED_IMAGE_BYTES = 8 * 1024 * 1024;
@@ -29,7 +32,8 @@ export function parseGeneratedImages(
 ): ParsedGeneratedImages {
   const name = options.name ?? "Generated image";
   const truncate = options.overflow === "truncate";
-  if (!Array.isArray(output) || output.length > 64) throw new Error("Invalid image-generation output.");
+  if (!Array.isArray(output) || output.length > 64)
+    throw new Error("Invalid image-generation output.");
   const images: ImageContent[] = [];
   const sizes: ParsedGeneratedImages["sizes"] = [];
   let bytes = 0;
@@ -61,9 +65,13 @@ export function parseGeneratedImages(
       ) {
         throw new Error("Invalid generated image data.");
       }
-      if (!hasCanonicalBase64Padding(raw.data)) throw new Error("Invalid generated image encoding.");
+      if (!hasCanonicalBase64Padding(raw.data))
+        throw new Error("Invalid generated image encoding.");
       const data = Buffer.from(raw.data, "base64");
-      if (bytes + data.length > MAX_GENERATED_IMAGE_BYTES || images.length >= MAX_GENERATED_IMAGES) {
+      if (
+        bytes + data.length > MAX_GENERATED_IMAGE_BYTES ||
+        images.length >= MAX_GENERATED_IMAGES
+      ) {
         if (truncate) {
           truncated = true;
           continue;
@@ -73,7 +81,12 @@ export function parseGeneratedImages(
       const size = validateDisplayImageDimensions(data, raw.mimeType, name);
       bytes += data.length;
       images.push({ type: "image", data: raw.data, mimeType: raw.mimeType });
-      sizes.push({ bytes: data.length, pixels: size.width * size.height, width: size.width, height: size.height });
+      sizes.push({
+        bytes: data.length,
+        pixels: size.width * size.height,
+        width: size.width,
+        height: size.height,
+      });
     } catch (error) {
       if (!truncate) throw error;
       // Truncate mode skips a malformed interim image instead of failing the paid result.

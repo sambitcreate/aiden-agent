@@ -79,8 +79,10 @@ const MAX_ALWAYS_ON = 12;
 const MAX_SCOPE_FACTS = 2_000;
 const MAX_SCOPE_DOCUMENTS = 5_000;
 const MAX_CHAT_DOCUMENTS = 1_000;
-const SECRET_LIKE = /(?:-----BEGIN [A-Z ]*PRIVATE KEY-----|\b(?:api[_ -]?key|secret|password)\s*[:=]|\bbearer(?:\s*[:=]\s*|\s+)[A-Za-z0-9._~+/-]{12,}|\bsk-[A-Za-z0-9_-]{16,}|\bgh[pousr]_[A-Za-z0-9]{20,}|\b(?:AKIA|ASIA)[A-Z0-9]{16}\b|\bAIza[A-Za-z0-9_-]{20,}|\bxox[baprs]-[A-Za-z0-9-]{10,}|\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}|https?:\/\/[^\s/:@]+:[^\s@/]+@)/iu;
-const FORBIDDEN_MEMORY_CONTENT = /(?:\bcompaction summary\b|<\/?(?:compaction_?summary|thinking|analysis|tool_(?:call|result))\b|(?:^|\s)##\s*(?:goal|progress|critical context|context for suffix|original request)\b|\b(?:chain[- ]of[- ]thought|internal reasoning|retained tail)\b|\b(?:toolCallId|tool_result|tool payload)\b|\b(?:system prompt|AGENTS\.md|SKILL\.md)\b|\bignore (?:all|any|the|previous) instructions\b|\byou are now\b)/iu;
+const SECRET_LIKE =
+  /(?:-----BEGIN [A-Z ]*PRIVATE KEY-----|\b(?:api[_ -]?key|secret|password)\s*[:=]|\bbearer(?:\s*[:=]\s*|\s+)[A-Za-z0-9._~+/-]{12,}|\bsk-[A-Za-z0-9_-]{16,}|\bgh[pousr]_[A-Za-z0-9]{20,}|\b(?:AKIA|ASIA)[A-Z0-9]{16}\b|\bAIza[A-Za-z0-9_-]{20,}|\bxox[baprs]-[A-Za-z0-9-]{10,}|\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}|https?:\/\/[^\s/:@]+:[^\s@/]+@)/iu;
+const FORBIDDEN_MEMORY_CONTENT =
+  /(?:\bcompaction summary\b|<\/?(?:compaction_?summary|thinking|analysis|tool_(?:call|result))\b|(?:^|\s)##\s*(?:goal|progress|critical context|context for suffix|original request)\b|\b(?:chain[- ]of[- ]thought|internal reasoning|retained tail)\b|\b(?:toolCallId|tool_result|tool payload)\b|\b(?:system prompt|AGENTS\.md|SKILL\.md)\b|\bignore (?:all|any|the|previous) instructions\b|\byou are now\b)/iu;
 
 function safeId(value: string, label: string): string {
   if (!SAFE_ID.test(value)) throw new Error(`The memory ${label} is invalid.`);
@@ -96,7 +98,9 @@ export function normalizeMemoryText(value: string): string {
     throw new Error("Memory facts cannot contain control text or secret-like material.");
   }
   if (FORBIDDEN_MEMORY_CONTENT.test(normalized)) {
-    throw new Error("Memory facts cannot contain internal reasoning, tool payloads, summaries, or authority instructions.");
+    throw new Error(
+      "Memory facts cannot contain internal reasoning, tool payloads, summaries, or authority instructions.",
+    );
   }
   return normalized;
 }
@@ -167,20 +171,21 @@ function factFromRow(row: FactRow): MemoryFact {
     id: row.id,
     scope: { kind: row.scope_kind, id: row.scope_id },
     text: row.normalized_text,
-    provenance: row.provenance_kind === "user_edit"
-      ? { kind: "user_edit", sourceId: row.source_id! }
-      : row.source_turn_id
-        ? {
-            kind: "model_proposal",
-            chatId: row.source_chat_id!,
-            turnId: row.source_turn_id,
-            anchorMessageId: row.source_message_id!,
-          }
-      : {
-          kind: "chat_message",
-          chatId: row.source_chat_id!,
-          messageId: row.source_message_id!,
-        },
+    provenance:
+      row.provenance_kind === "user_edit"
+        ? { kind: "user_edit", sourceId: row.source_id! }
+        : row.source_turn_id
+          ? {
+              kind: "model_proposal",
+              chatId: row.source_chat_id!,
+              turnId: row.source_turn_id,
+              anchorMessageId: row.source_message_id!,
+            }
+          : {
+              kind: "chat_message",
+              chatId: row.source_chat_id!,
+              messageId: row.source_message_id!,
+            },
     createdAt: row.created_at,
     updatedAt: row.updated_at,
     confidence: row.confidence,
@@ -336,7 +341,9 @@ export class MemoryStore {
           VALUES ('delete', old.rowid, old.normalized_text);
       END;
     `);
-    const factColumns = database.prepare("PRAGMA table_info(memory_facts)").all() as Array<{ name: string }>;
+    const factColumns = database.prepare("PRAGMA table_info(memory_facts)").all() as Array<{
+      name: string;
+    }>;
     if (!factColumns.some(({ name }) => name === "source_turn_id")) {
       try {
         database.exec("ALTER TABLE memory_facts ADD COLUMN source_turn_id TEXT");
@@ -381,7 +388,9 @@ export class MemoryStore {
       );
     `);
     const marker = database.prepare("SELECT 1 FROM memory_migrations WHERE key = ?");
-    const mark = database.prepare("INSERT OR IGNORE INTO memory_migrations (key, applied_at) VALUES (?, ?)");
+    const mark = database.prepare(
+      "INSERT OR IGNORE INTO memory_migrations (key, applied_at) VALUES (?, ?)",
+    );
     const imports = (await this.options.imports?.()) ?? [];
     const aliases = (await this.options.scopeAliases?.()) ?? [];
     if (imports.length === 0 && aliases.length === 0) return;
@@ -401,13 +410,17 @@ export class MemoryStore {
         // A cross-kind alias is meaningless — the copy selects the source
         // row's own scope_kind, so copying workspace rows under a bot id
         // would corrupt scoping. Skip it rather than poison the store.
-        if (to.kind !== from.kind) { mark.run(key, this.now()); continue; }
+        if (to.kind !== from.kind) {
+          mark.run(key, this.now());
+          continue;
+        }
         // Copied rows need derived ids — `id` is globally unique across
         // scopes, and supersedes_id is remapped to the same derived form so
         // the supersession chain stays inside the new scope. The ':'-joined
         // shape stays inside SAFE_ID and the 160-char bound so remove() keeps
         // accepting the copies.
-        database.prepare(`
+        database
+          .prepare(`
           INSERT OR IGNORE INTO memory_facts (
             id, scope_kind, scope_id, normalized_text, provenance_kind,
             source_id, source_chat_id, source_message_id, source_turn_id,
@@ -421,8 +434,10 @@ export class MemoryStore {
             CASE WHEN supersedes_id IS NULL THEN NULL ELSE substr(supersedes_id, 1, 128) || ':' || substr(?, 1, 31) END,
             always_on
           FROM memory_facts WHERE scope_kind = ? AND scope_id = ?
-        `).run(to.id, to.id, to.id, from.kind, from.id);
-        database.prepare(`
+        `)
+          .run(to.id, to.id, to.id, from.kind, from.id);
+        database
+          .prepare(`
           INSERT OR IGNORE INTO memory_documents (
             id, scope_kind, scope_id, kind, normalized_text,
             source_chat_id, source_id, updated_at
@@ -430,7 +445,8 @@ export class MemoryStore {
           SELECT substr(id, 1, 128) || ':' || substr(?, 1, 31), scope_kind, ?, kind, normalized_text,
             source_chat_id, source_id, updated_at
           FROM memory_documents WHERE scope_kind = ? AND scope_id = ?
-        `).run(to.id, to.id, from.kind, from.id);
+        `)
+          .run(to.id, to.id, from.kind, from.id);
         mark.run(key, this.now());
       }
       database.exec("COMMIT");
@@ -460,7 +476,9 @@ export class MemoryStore {
     if (sourceFile === this.databaseFile) return;
     try {
       if (this.databaseFile && realpathSync(sourceFile) === realpathSync(this.databaseFile)) return;
-    } catch { /* one side missing or unresolvable — the resolved-path check above stands */ }
+    } catch {
+      /* one side missing or unresolvable — the resolved-path check above stands */
+    }
     const info = await stat(sourceFile).catch(() => undefined);
     if (!info?.isFile()) return;
     const fingerprint = `${sourceFile}:${info.size}:${Math.trunc(info.mtimeMs)}`;
@@ -471,40 +489,60 @@ export class MemoryStore {
     } catch (error) {
       // stderr (not console): this module also loads in the Electron main
       // process, which bans console, and in the CLI under strip-types.
-      process.stderr.write(`[memory] Could not open legacy memory database ${sourceFile}: ${error instanceof Error ? error.message : error}\n`);
+      process.stderr.write(
+        `[memory] Could not open legacy memory database ${sourceFile}: ${error instanceof Error ? error.message : error}\n`,
+      );
       return;
     }
     try {
       // A downgraded surface may hold this file without a busy timeout.
       legacy.exec("PRAGMA busy_timeout = 2000");
       const tables = new Set(
-        (legacy.prepare("SELECT name FROM sqlite_master WHERE type = 'table'").all() as Array<{ name: string }>)
-          .map(({ name }) => name),
+        (
+          legacy.prepare("SELECT name FROM sqlite_master WHERE type = 'table'").all() as Array<{
+            name: string;
+          }>
+        ).map(({ name }) => name),
       );
       if (!tables.has("memory_facts") && !tables.has("memory_documents")) return;
       const factColumns = tables.has("memory_facts")
-        ? new Set((legacy.prepare("PRAGMA table_info(memory_facts)").all() as Array<{ name: string }>).map(({ name }) => name))
+        ? new Set(
+            (
+              legacy.prepare("PRAGMA table_info(memory_facts)").all() as Array<{ name: string }>
+            ).map(({ name }) => name),
+          )
         : new Set<string>();
-      const turnColumn = factColumns.has("source_turn_id") ? "source_turn_id" : "NULL AS source_turn_id";
+      const turnColumn = factColumns.has("source_turn_id")
+        ? "source_turn_id"
+        : "NULL AS source_turn_id";
       const factRows = tables.has("memory_facts")
-        ? legacy.prepare(`
+        ? (legacy
+            .prepare(`
             SELECT id, scope_kind, scope_id, normalized_text, provenance_kind,
               source_id, source_chat_id, source_message_id, ${turnColumn},
               created_at, updated_at, confidence, expires_at, review_state,
               state, supersedes_id, always_on
             FROM memory_facts
-          `).all() as unknown as FactRow[]
+          `)
+            .all() as unknown as FactRow[])
         : [];
       const documentRows = tables.has("memory_documents")
-        ? legacy.prepare(`
+        ? (legacy
+            .prepare(`
             SELECT id, scope_kind, scope_id, kind, normalized_text,
               source_chat_id, source_id, updated_at
             FROM memory_documents
-          `).all() as unknown as Array<{
-            id: string; scope_kind: string; scope_id: string;
-            kind: "transcript" | "artifact"; normalized_text: string;
-            source_chat_id: string; source_id: string; updated_at: number;
-          }>
+          `)
+            .all() as unknown as Array<{
+            id: string;
+            scope_kind: string;
+            scope_id: string;
+            kind: "transcript" | "artifact";
+            normalized_text: string;
+            source_chat_id: string;
+            source_id: string;
+            updated_at: number;
+          }>)
         : [];
       const sourceScopes = new Set<string>();
 
@@ -537,7 +575,8 @@ export class MemoryStore {
         const key = `import:${fingerprint}:${kind}:${sourceId}->${destinationId}`;
         if (marker.get(key)) continue;
         const remapped = destinationId !== sourceId;
-        const deriveId = (id: string): string => `${id.slice(0, 128)}:${destinationId.slice(0, 31)}`;
+        const deriveId = (id: string): string =>
+          `${id.slice(0, 128)}:${destinationId.slice(0, 31)}`;
         let skipped = 0;
         let deduped = 0;
         for (const row of factRows) {
@@ -548,12 +587,26 @@ export class MemoryStore {
             if (!SAFE_ID.test(row.id)) throw new Error("bad id");
             const text = normalizeMemoryText(row.normalized_text);
             const id = remapped ? deriveId(row.id) : row.id;
-            const supersedesId = row.supersedes_id && remapped ? deriveId(row.supersedes_id) : row.supersedes_id;
+            const supersedesId =
+              row.supersedes_id && remapped ? deriveId(row.supersedes_id) : row.supersedes_id;
             const outcome = insertFact.run(
-              id, kind, destinationId, text,
-              row.provenance_kind, row.source_id, row.source_chat_id, row.source_message_id,
-              row.source_turn_id, row.created_at, row.updated_at, row.confidence,
-              row.expires_at, row.review_state, row.state, supersedesId, row.always_on,
+              id,
+              kind,
+              destinationId,
+              text,
+              row.provenance_kind,
+              row.source_id,
+              row.source_chat_id,
+              row.source_message_id,
+              row.source_turn_id,
+              row.created_at,
+              row.updated_at,
+              row.confidence,
+              row.expires_at,
+              row.review_state,
+              row.state,
+              supersedesId,
+              row.always_on,
             );
             if (outcome.changes === 0) deduped += 1;
           } catch {
@@ -566,8 +619,14 @@ export class MemoryStore {
             if (!SAFE_ID.test(row.id)) throw new Error("bad id");
             const text = normalizeMemoryText(row.normalized_text);
             const outcome = insertDocument.run(
-              remapped ? deriveId(row.id) : row.id, kind, destinationId, row.kind,
-              text, row.source_chat_id, row.source_id, row.updated_at,
+              remapped ? deriveId(row.id) : row.id,
+              kind,
+              destinationId,
+              row.kind,
+              text,
+              row.source_chat_id,
+              row.source_id,
+              row.updated_at,
             );
             if (outcome.changes === 0) deduped += 1;
           } catch {
@@ -575,14 +634,18 @@ export class MemoryStore {
           }
         }
         if (skipped > 0 || deduped > 0) {
-          process.stderr.write(`[memory] Importing ${scopeKey} from ${sourceFile}: skipped ${skipped} invalid row(s), ${deduped} already present.\n`);
+          process.stderr.write(
+            `[memory] Importing ${scopeKey} from ${sourceFile}: skipped ${skipped} invalid row(s), ${deduped} already present.\n`,
+          );
         }
         mark.run(key, this.now());
       }
     } catch (error) {
       // A locked (SQLITE_BUSY) or corrupt legacy file must degrade to a skipped
       // source, not abort the whole store open — it self-heals next open.
-      process.stderr.write(`[memory] Could not import legacy memory database ${sourceFile}: ${error instanceof Error ? error.message : error}\n`);
+      process.stderr.write(
+        `[memory] Could not import legacy memory database ${sourceFile}: ${error instanceof Error ? error.message : error}\n`,
+      );
     } finally {
       legacy.close();
     }
@@ -606,13 +669,15 @@ export class MemoryStore {
   private async repairPrivateModes(): Promise<void> {
     if (!this.databaseFile) return;
     await Promise.all(
-      [this.databaseFile, `${this.databaseFile}-wal`, `${this.databaseFile}-shm`].map(async (file) => {
-        try {
-          await chmod(file, 0o600);
-        } catch (error) {
-          if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-        }
-      }),
+      [this.databaseFile, `${this.databaseFile}-wal`, `${this.databaseFile}-shm`].map(
+        async (file) => {
+          try {
+            await chmod(file, 0o600);
+          } catch (error) {
+            if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+          }
+        },
+      ),
     );
   }
 
@@ -625,9 +690,8 @@ export class MemoryStore {
     if (!Number.isFinite(confidence) || confidence < 0 || confidence > 1) {
       throw new Error("Memory confidence must be between 0 and 1.");
     }
-    const supersedesId = input.supersedesId === undefined
-      ? undefined
-      : safeId(input.supersedesId, "superseded fact");
+    const supersedesId =
+      input.supersedesId === undefined ? undefined : safeId(input.supersedesId, "superseded fact");
     const id = safeId(input.id ?? `memory-${randomUUID()}`, "fact ID");
     // All conflict/capacity reads run under the write transaction so two
     // concurrent surfaces cannot both pass the gates.
@@ -636,23 +700,32 @@ export class MemoryStore {
       // Lock acquisition may wait for another writer. Use the admitted time
       // consistently for expiry, capacity, retirement, and the new record.
       const now = this.now();
-      if (input.expiresAt !== undefined && (!Number.isSafeInteger(input.expiresAt) || input.expiresAt <= now)) {
+      if (
+        input.expiresAt !== undefined &&
+        (!Number.isSafeInteger(input.expiresAt) || input.expiresAt <= now)
+      ) {
         throw new Error("Memory expiry must be a future millisecond timestamp.");
       }
       const prior = supersedesId
-        ? this.statement(database, `
+        ? (this.statement(
+            database,
+            `
             SELECT * FROM memory_facts WHERE id = ? AND scope_kind = ? AND scope_id = ? AND state = 'active'
-          `).get(supersedesId, scope.kind, scope.id) as unknown as FactRow | undefined
+          `,
+          ).get(supersedesId, scope.kind, scope.id) as unknown as FactRow | undefined)
         : undefined;
       if (supersedesId && !prior) {
         throw new Error("The superseded memory fact is unavailable in this scope.");
       }
-      const existing = this.statement(database, `
+      const existing = this.statement(
+        database,
+        `
         SELECT * FROM memory_facts
         WHERE scope_kind = ? AND scope_id = ? AND normalized_text = ? AND state = 'active'
-      `).get(scope.kind, scope.id, text) as unknown as FactRow | undefined;
-      const existingExpired = existing !== undefined
-        && existing.expires_at !== null && existing.expires_at <= now;
+      `,
+      ).get(scope.kind, scope.id, text) as unknown as FactRow | undefined;
+      const existingExpired =
+        existing !== undefined && existing.expires_at !== null && existing.expires_at <= now;
       if (existing && !existingExpired && !supersedesId) {
         database.exec("COMMIT");
         return factFromRow(existing);
@@ -660,20 +733,30 @@ export class MemoryStore {
       if (existing && !existingExpired && existing.id !== supersedesId) {
         throw new Error("The replacement duplicates another active fact in this scope.");
       }
-      const count = this.statement(database, `
+      const count = this.statement(
+        database,
+        `
         SELECT count(*) AS count FROM memory_facts
         WHERE scope_kind = ? AND scope_id = ? AND state = 'active'
           AND (expires_at IS NULL OR expires_at > ?)
           AND (? IS NULL OR id <> ?)
-      `).get(scope.kind, scope.id, now, supersedesId ?? null, supersedesId ?? null) as { count: number };
+      `,
+      ).get(scope.kind, scope.id, now, supersedesId ?? null, supersedesId ?? null) as {
+        count: number;
+      };
       if (Number(count.count) >= MAX_SCOPE_FACTS) throw new Error("This memory scope is full.");
       if (input.alwaysOn) {
-        const alwaysOn = this.statement(database, `
+        const alwaysOn = this.statement(
+          database,
+          `
           SELECT count(*) AS count FROM memory_facts
           WHERE scope_kind = ? AND scope_id = ? AND state = 'active' AND always_on = 1
             AND (expires_at IS NULL OR expires_at > ?)
             AND (? IS NULL OR id <> ?)
-        `).get(scope.kind, scope.id, now, supersedesId ?? null, supersedesId ?? null) as { count: number };
+        `,
+        ).get(scope.kind, scope.id, now, supersedesId ?? null, supersedesId ?? null) as {
+          count: number;
+        };
         if (Number(alwaysOn.count) >= MAX_ALWAYS_ON) {
           throw new Error("This memory scope already has the maximum always-on facts.");
         }
@@ -681,23 +764,31 @@ export class MemoryStore {
       // Expired rows still occupy the active-text unique index. Keep their
       // history, but free the text atomically with the newly approved insert.
       if (existing && existingExpired) {
-        this.statement(database, `
+        this.statement(
+          database,
+          `
           UPDATE memory_facts SET state = 'superseded', updated_at = ?
           WHERE id = ? AND scope_kind = ? AND scope_id = ? AND normalized_text = ?
             AND state = 'active' AND expires_at <= ?
-        `).run(now, existing.id, scope.kind, scope.id, text, now);
+        `,
+        ).run(now, existing.id, scope.kind, scope.id, text, now);
       }
       if (supersedesId) {
-        this.statement(database, "UPDATE memory_facts SET state = 'superseded', updated_at = ? WHERE id = ?")
-          .run(now, supersedesId);
+        this.statement(
+          database,
+          "UPDATE memory_facts SET state = 'superseded', updated_at = ? WHERE id = ?",
+        ).run(now, supersedesId);
       }
-      this.statement(database, `
+      this.statement(
+        database,
+        `
         INSERT INTO memory_facts (
           id, scope_kind, scope_id, normalized_text, provenance_kind,
           source_id, source_chat_id, source_message_id, source_turn_id, created_at, updated_at,
           confidence, expires_at, review_state, state, supersedes_id, always_on
         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'approved', 'active', ?, ?)
-      `).run(
+      `,
+      ).run(
         id,
         scope.kind,
         scope.id,
@@ -707,7 +798,9 @@ export class MemoryStore {
         provenance.kind === "user_edit" ? null : provenance.chatId,
         provenance.kind === "chat_message"
           ? provenance.messageId
-          : provenance.kind === "model_proposal" ? provenance.anchorMessageId : null,
+          : provenance.kind === "model_proposal"
+            ? provenance.anchorMessageId
+            : null,
         provenance.kind === "model_proposal" ? provenance.turnId : null,
         now,
         now,
@@ -722,7 +815,11 @@ export class MemoryStore {
       throw error;
     }
     await this.repairPrivateModes();
-    return factFromRow(this.statement(database, "SELECT * FROM memory_facts WHERE id = ?").get(id) as unknown as FactRow);
+    return factFromRow(
+      this.statement(database, "SELECT * FROM memory_facts WHERE id = ?").get(
+        id,
+      ) as unknown as FactRow,
+    );
   }
 
   async alwaysOn(scope: MemoryScope, limit = 6): Promise<MemoryFact[]> {
@@ -730,12 +827,17 @@ export class MemoryStore {
     const valid = validateScope(scope);
     const now = this.now();
     const capped = Math.max(0, Math.min(MAX_ALWAYS_ON, Math.trunc(limit)));
-    return (this.statement(database, `
+    return (
+      this.statement(
+        database,
+        `
       SELECT * FROM memory_facts
       WHERE scope_kind = ? AND scope_id = ? AND state = 'active' AND always_on = 1
         AND (expires_at IS NULL OR expires_at > ?)
       ORDER BY updated_at DESC, id ASC LIMIT ?
-    `).all(valid.kind, valid.id, now, capped) as unknown as FactRow[]).map(factFromRow);
+    `,
+      ).all(valid.kind, valid.id, now, capped) as unknown as FactRow[]
+    ).map(factFromRow);
   }
 
   async search(scope: MemoryScope, query: string, limit = 8): Promise<MemorySearchResult[]> {
@@ -744,7 +846,9 @@ export class MemoryStore {
     const match = ftsQuery(query);
     if (!match) return [];
     const capped = Math.max(1, Math.min(8, Math.trunc(limit)));
-    const rows = this.statement(database, `
+    const rows = this.statement(
+      database,
+      `
       SELECT memory_facts.*, bm25(memory_facts_fts) AS rank
       FROM memory_facts_fts
       JOIN memory_facts ON memory_facts.rowid = memory_facts_fts.rowid
@@ -754,7 +858,10 @@ export class MemoryStore {
         AND (memory_facts.expires_at IS NULL OR memory_facts.expires_at > ?)
       ORDER BY rank ASC, memory_facts.updated_at DESC, memory_facts.id ASC
       LIMIT ?
-    `).all(match, valid.kind, valid.id, this.now(), capped) as unknown as Array<FactRow & { rank: number }>;
+    `,
+    ).all(match, valid.kind, valid.id, this.now(), capped) as unknown as Array<
+      FactRow & { rank: number }
+    >;
     return rows.map((row) => ({
       ...factFromRow(row),
       citation: `memory:${row.id}`,
@@ -772,15 +879,22 @@ export class MemoryStore {
     const sourceChatId = safeId(chatId, "source chat");
     const prepared = documents.slice(-MAX_CHAT_DOCUMENTS).flatMap((document) => {
       try {
-        if (document.chatId !== sourceChatId || !["transcript", "artifact"].includes(document.kind)) return [];
-        if (document.createdAt !== undefined && (!Number.isSafeInteger(document.createdAt) || document.createdAt < 0)) return [];
-        return [{
-          id: safeId(document.id, "document ID"),
-          kind: document.kind,
-          text: normalizeMemoryText(document.text),
-          sourceId: safeId(document.sourceId, "document source"),
-          createdAt: document.createdAt,
-        }];
+        if (document.chatId !== sourceChatId || !["transcript", "artifact"].includes(document.kind))
+          return [];
+        if (
+          document.createdAt !== undefined &&
+          (!Number.isSafeInteger(document.createdAt) || document.createdAt < 0)
+        )
+          return [];
+        return [
+          {
+            id: safeId(document.id, "document ID"),
+            kind: document.kind,
+            text: normalizeMemoryText(document.text),
+            sourceId: safeId(document.sourceId, "document source"),
+            createdAt: document.createdAt,
+          },
+        ];
       } catch {
         // Secret-like, internal, oversized, or malformed source material is not indexed.
         return [];
@@ -792,31 +906,50 @@ export class MemoryStore {
     let atCapacity = false;
     try {
       const now = this.now();
-      const previousAges = new Map((this.statement(database, `
+      const previousAges = new Map(
+        (
+          this.statement(
+            database,
+            `
         SELECT id, updated_at FROM memory_documents
         WHERE source_chat_id = ? AND scope_kind = ? AND scope_id = ?
-      `).all(sourceChatId, valid.kind, valid.id) as Array<{ id: string; updated_at: number }>).
-        map((row) => [row.id, row.updated_at]));
+      `,
+          ).all(sourceChatId, valid.kind, valid.id) as Array<{ id: string; updated_at: number }>
+        ).map((row) => [row.id, row.updated_at]),
+      );
       // Scoped delete: legacy-scope copies of this chat's documents (imported
       // for downgrade compatibility) must not be wiped by a new-scope write.
-      this.statement(database, "DELETE FROM memory_documents WHERE source_chat_id = ? AND scope_kind = ? AND scope_id = ?")
-        .run(sourceChatId, valid.kind, valid.id);
-      const existing = this.statement(database, `
+      this.statement(
+        database,
+        "DELETE FROM memory_documents WHERE source_chat_id = ? AND scope_kind = ? AND scope_id = ?",
+      ).run(sourceChatId, valid.kind, valid.id);
+      const existing = this.statement(
+        database,
+        `
         SELECT count(*) AS count FROM memory_documents WHERE scope_kind = ? AND scope_id = ?
-      `).get(valid.kind, valid.id) as { count: number };
+      `,
+      ).get(valid.kind, valid.id) as { count: number };
       const excess = Math.max(0, Number(existing.count) + prepared.length - MAX_SCOPE_DOCUMENTS);
-      evicted = Number(this.statement(database, `
+      evicted = Number(
+        this.statement(
+          database,
+          `
         DELETE FROM memory_documents WHERE rowid IN (
           SELECT rowid FROM memory_documents WHERE scope_kind = ? AND scope_id = ?
           ORDER BY updated_at ASC, source_chat_id ASC, id ASC LIMIT ?
         )
-      `).run(valid.kind, valid.id, excess).changes);
+      `,
+        ).run(valid.kind, valid.id, excess).changes,
+      );
       atCapacity = Number(existing.count) - evicted + prepared.length >= MAX_SCOPE_DOCUMENTS;
-      const insert = this.statement(database, `
+      const insert = this.statement(
+        database,
+        `
         INSERT INTO memory_documents (
           id, scope_kind, scope_id, kind, normalized_text, source_chat_id, source_id, updated_at
         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-      `);
+      `,
+      );
       for (const document of prepared) {
         insert.run(
           document.id,
@@ -849,7 +982,9 @@ export class MemoryStore {
     if (facts.length >= capped) {
       return facts.map(({ text, citation, rank }) => ({ kind: "fact", text, citation, rank }));
     }
-    const rows = this.statement(database, `
+    const rows = this.statement(
+      database,
+      `
       SELECT memory_documents.*, bm25(memory_documents_fts) AS rank
       FROM memory_documents_fts
       JOIN memory_documents ON memory_documents.rowid = memory_documents_fts.rowid
@@ -857,7 +992,8 @@ export class MemoryStore {
         AND memory_documents.scope_kind = ? AND memory_documents.scope_id = ?
       ORDER BY rank ASC, memory_documents.updated_at DESC, memory_documents.id ASC
       LIMIT ?
-    `).all(match, valid.kind, valid.id, capped - facts.length) as unknown as Array<{
+    `,
+    ).all(match, valid.kind, valid.id, capped - facts.length) as unknown as Array<{
       kind: "transcript" | "artifact";
       normalized_text: string;
       source_chat_id: string;
@@ -878,10 +1014,15 @@ export class MemoryStore {
   async list(scope: MemoryScope): Promise<MemoryFact[]> {
     const database = await this.db();
     const valid = validateScope(scope);
-    return (this.statement(database, `
+    return (
+      this.statement(
+        database,
+        `
       SELECT * FROM memory_facts WHERE scope_kind = ? AND scope_id = ?
       ORDER BY state ASC, updated_at DESC, id ASC
-    `).all(valid.kind, valid.id) as unknown as FactRow[]).map(factFromRow);
+    `,
+      ).all(valid.kind, valid.id) as unknown as FactRow[]
+    ).map(factFromRow);
   }
 
   async remove(scope: MemoryScope, id: string): Promise<boolean> {
@@ -891,13 +1032,17 @@ export class MemoryStore {
     database.exec("BEGIN IMMEDIATE");
     let removed = false;
     try {
-      this.statement(database, `
+      this.statement(
+        database,
+        `
         UPDATE memory_facts SET supersedes_id = NULL
         WHERE supersedes_id IN (
           SELECT id FROM memory_facts WHERE id = ? AND scope_kind = ? AND scope_id = ?
         )
-      `).run(factId, valid.kind, valid.id);
-      const result = this.statement(database, 
+      `,
+      ).run(factId, valid.kind, valid.id);
+      const result = this.statement(
+        database,
         "DELETE FROM memory_facts WHERE id = ? AND scope_kind = ? AND scope_id = ?",
       ).run(factId, valid.kind, valid.id);
       removed = Number(result.changes) === 1;
@@ -916,17 +1061,23 @@ export class MemoryStore {
     database.exec("BEGIN IMMEDIATE");
     let removed = 0;
     try {
-      this.statement(database, `
+      this.statement(
+        database,
+        `
         UPDATE memory_facts SET supersedes_id = NULL
         WHERE supersedes_id IN (
           SELECT id FROM memory_facts WHERE provenance_kind = 'chat_message' AND source_chat_id = ?
         )
-      `).run(sourceChatId);
-      const facts = this.statement(database, 
+      `,
+      ).run(sourceChatId);
+      const facts = this.statement(
+        database,
         "DELETE FROM memory_facts WHERE provenance_kind = 'chat_message' AND source_chat_id = ?",
       ).run(sourceChatId);
       removed = Number(facts.changes);
-      this.statement(database, "DELETE FROM memory_documents WHERE source_chat_id = ?").run(sourceChatId);
+      this.statement(database, "DELETE FROM memory_documents WHERE source_chat_id = ?").run(
+        sourceChatId,
+      );
       database.exec("COMMIT");
     } catch (error) {
       database.exec("ROLLBACK");
@@ -942,18 +1093,24 @@ export class MemoryStore {
     database.exec("BEGIN IMMEDIATE");
     let removed = 0;
     try {
-      this.statement(database, `
+      this.statement(
+        database,
+        `
         UPDATE memory_facts SET supersedes_id = NULL
         WHERE supersedes_id IN (
           SELECT id FROM memory_facts WHERE scope_kind = ? AND scope_id = ?
         )
-      `).run(valid.kind, valid.id);
-      const facts = this.statement(database, 
+      `,
+      ).run(valid.kind, valid.id);
+      const facts = this.statement(
+        database,
         "DELETE FROM memory_facts WHERE scope_kind = ? AND scope_id = ?",
       ).run(valid.kind, valid.id);
       removed = Number(facts.changes);
-      this.statement(database, "DELETE FROM memory_documents WHERE scope_kind = ? AND scope_id = ?")
-        .run(valid.kind, valid.id);
+      this.statement(
+        database,
+        "DELETE FROM memory_documents WHERE scope_kind = ? AND scope_id = ?",
+      ).run(valid.kind, valid.id);
       database.exec("COMMIT");
     } catch (error) {
       database.exec("ROLLBACK");

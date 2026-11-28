@@ -11,9 +11,7 @@ const config: PlaywrightTestConfig = {
   testDir: "./tests/e2e",
   globalSetup: "./tests/e2e/global-setup.ts",
   testMatch: liveLmStudioAcceptance ? "**/*.live.spec.ts" : "**/*.spec.ts",
-  testIgnore: liveLmStudioAcceptance
-    ? "**/._*"
-    : ["**/*.live.spec.ts", "**/._*"],
+  testIgnore: liveLmStudioAcceptance ? "**/._*" : ["**/*.live.spec.ts", "**/._*"],
   outputDir: "./test-results/e2e",
   fullyParallel: false,
   workers: 1,

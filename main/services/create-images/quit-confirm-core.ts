@@ -45,7 +45,10 @@ export class ImageQuitCoverage {
 
   /** The close prompt was answered "quit" (or was not needed). It covers requests only when the close quits the app. */
   recordWindowCloseConfirmation(closeQuitsApp: boolean, confirmedInFlight: number): void {
-    this.covered = closeQuitsApp && Number.isSafeInteger(confirmedInFlight) && confirmedInFlight > 0 ? confirmedInFlight : 0;
+    this.covered =
+      closeQuitsApp && Number.isSafeInteger(confirmedInFlight) && confirmedInFlight > 0
+        ? confirmedInFlight
+        : 0;
   }
 
   /** The close or quit that was confirmed did not happen (declined, vetoed, retried): nothing stays confirmed. */

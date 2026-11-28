@@ -5,7 +5,11 @@ import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-libra
 import { QueryClientProvider } from "@tanstack/react-query";
 import { installBotTestIpc } from "../../main/bots/test-dom";
 import { createBotTestQueryClient } from "../../main/bots/test-providers";
-import { AppCapabilitiesProvider, DISABLED_APP_CAPABILITIES, type AppCapabilities } from "../../lib/app-capabilities";
+import {
+  AppCapabilitiesProvider,
+  DISABLED_APP_CAPABILITIES,
+  type AppCapabilities,
+} from "../../lib/app-capabilities";
 import type { AppSettings } from "../../lib/types";
 import { LimitsSettings } from "./limits-settings";
 
@@ -15,11 +19,22 @@ type Held = { patch: Partial<AppSettings>; finish(): void; fail(): void };
 
 /** Holds every settings save open until the test finishes or fails it, like a slow disk. */
 /** A provider billed by the request: an API key for a hosted endpoint. */
-const METERED = { id: "openai", models: ["fast"], baseUrl: "https://api.openai.com/v1", hasKey: true, credentialType: "api_key" };
+const METERED = {
+  id: "openai",
+  models: ["fast"],
+  baseUrl: "https://api.openai.com/v1",
+  hasKey: true,
+  credentialType: "api_key",
+};
 
 async function mount(
   settings: Partial<AppSettings> = {},
-  options: { hold?: boolean; settingsFail?: boolean; providers?: unknown[]; platform?: AppCapabilities["platform"] } = {},
+  options: {
+    hold?: boolean;
+    settingsFail?: boolean;
+    providers?: unknown[];
+    platform?: AppCapabilities["platform"];
+  } = {},
 ) {
   let stored: Partial<AppSettings> = { ...settings };
   const held: Held[] = [];
@@ -58,21 +73,27 @@ async function mount(
     },
   });
   render(
-    <AppCapabilitiesProvider capabilities={{ ...DISABLED_APP_CAPABILITIES, platform: options.platform ?? "darwin" }}>
+    <AppCapabilitiesProvider
+      capabilities={{ ...DISABLED_APP_CAPABILITIES, platform: options.platform ?? "darwin" }}
+    >
       <QueryClientProvider client={createBotTestQueryClient()}>
         <LimitsSettings />
       </QueryClientProvider>
     </AppCapabilitiesProvider>,
   );
   // Controls stay disabled until settings have loaded.
-  const warming = await screen.findByRole("switch", { name: "Warm prompt caches during active chats" });
+  const warming = await screen.findByRole("switch", {
+    name: "Warm prompt caches during active chats",
+  });
   await waitFor(() => assert.equal(warming.hasAttribute("disabled"), false));
-  const saves = () => calls.filter((call) => call.channel === "settings:set").map((call) => call.args[0]);
+  const saves = () =>
+    calls.filter((call) => call.channel === "settings:set").map((call) => call.args[0]);
   return { calls, held, saves, stored: () => stored };
 }
 
 const engineRadio = (name: RegExp) => screen.findByRole("radio", { name });
-const warmingSwitch = () => screen.findByRole("switch", { name: "Warm prompt caches during active chats" });
+const warmingSwitch = () =>
+  screen.findByRole("switch", { name: "Warm prompt caches during active chats" });
 
 async function chooseOption(trigger: string, option: string) {
   fireEvent.click(await screen.findByRole("combobox", { name: trigger }));
@@ -82,17 +103,36 @@ async function chooseOption(trigger: string, option: string) {
 test("the page leads with context settings, then usage and spending limits", async () => {
   await mount();
   await screen.findByRole("radiogroup", { name: "Automatic compaction engine" });
-  const titles = ["Automatic compaction", "Prompt cache", "Cache lifetime", "Model compaction budgets", "Usage limits", "Spending limits"];
+  const titles = [
+    "Automatic compaction",
+    "Prompt cache",
+    "Cache lifetime",
+    "Model compaction budgets",
+    "Usage limits",
+    "Spending limits",
+  ];
   const text = document.body.textContent ?? "";
   const positions = titles.map((title) => text.indexOf(title));
-  assert.ok(positions.every((position) => position >= 0), `missing a group: ${positions.join(", ")}`);
-  assert.deepEqual([...positions].sort((a, b) => a - b), positions);
+  assert.ok(
+    positions.every((position) => position >= 0),
+    `missing a group: ${positions.join(", ")}`,
+  );
+  assert.deepEqual(
+    [...positions].sort((a, b) => a - b),
+    positions,
+  );
 });
 
 test("spending limits wait for a provider that bills by the request; a sign-in or a model on this Mac costs nothing", async () => {
   const free = [
     { id: "ollama", models: ["llama"], baseUrl: "http://127.0.0.1:11434/v1", hasKey: true },
-    { id: "anthropic", models: ["claude"], baseUrl: "https://api.anthropic.com", hasKey: true, credentialType: "oauth" },
+    {
+      id: "anthropic",
+      models: ["claude"],
+      baseUrl: "https://api.anthropic.com",
+      hasKey: true,
+      credentialType: "oauth",
+    },
     { id: "groq", models: ["fast"], baseUrl: "https://api.groq.com/openai/v1", hasKey: false },
   ];
   await mount({}, { providers: free });
@@ -102,7 +142,9 @@ test("spending limits wait for a provider that bills by the request; a sign-in o
 });
 
 test("on Linux the no-cost note names the computer, not a Mac", async () => {
-  const local = [{ id: "ollama", models: ["llama"], baseUrl: "http://127.0.0.1:11434/v1", hasKey: true }];
+  const local = [
+    { id: "ollama", models: ["llama"], baseUrl: "http://127.0.0.1:11434/v1", hasKey: true },
+  ];
   await mount({}, { providers: local, platform: "linux" });
   await screen.findByText(/models on this computer are \$0/u);
   assert.equal(screen.queryByText(/\bMac\b/u), null);
@@ -141,11 +183,17 @@ test("spending limits stay locked when settings can't be read, so a save can't w
 });
 
 test("settings that can't be read never claim nothing costs money: the limits show, locked", async () => {
-  const free = [{ id: "ollama", models: ["llama"], baseUrl: "http://127.0.0.1:11434/v1", hasKey: true }];
+  const free = [
+    { id: "ollama", models: ["llama"], baseUrl: "http://127.0.0.1:11434/v1", hasKey: true },
+  ];
   await mount({}, { settingsFail: true, providers: free });
   const trigger = await screen.findByRole("combobox", { name: "Spending limit for each chat" });
   assert.equal(trigger.hasAttribute("disabled"), true);
-  assert.equal(screen.queryByText("Nothing here costs money yet"), null, "a limit set there may be the one not shown");
+  assert.equal(
+    screen.queryByText("Nothing here costs money yet"),
+    null,
+    "a limit set there may be the one not shown",
+  );
 });
 
 test("a settings read failure says why the limits can't change", async () => {
@@ -157,7 +205,10 @@ test("a second limit change during a slow save waits its turn and keeps both", a
   const { held, stored } = await mount({}, { hold: true });
   await chooseOption("Longest wait for a usage limit", "Up to 1 hour");
   await waitFor(() => assert.equal(held.length, 1));
-  assert.equal(screen.getByRole("combobox", { name: /longest wait/iu }).hasAttribute("disabled"), false);
+  assert.equal(
+    screen.getByRole("combobox", { name: /longest wait/iu }).hasAttribute("disabled"),
+    false,
+  );
 
   await chooseOption("Spending limit for each chat", "$5.00");
   assert.equal(held.length, 1);
@@ -174,7 +225,10 @@ test("a failed limit change puts the page back to what was stored", async () => 
   const before = (await screen.findByRole("combobox", { name: /longest wait/iu })).textContent;
   await chooseOption("Longest wait for a usage limit", "Up to 1 hour");
   await waitFor(() => assert.equal(held.length, 1));
-  assert.match(screen.getByRole("combobox", { name: /longest wait/iu }).textContent ?? "", /Up to 1 hour/u);
+  assert.match(
+    screen.getByRole("combobox", { name: /longest wait/iu }).textContent ?? "",
+    /Up to 1 hour/u,
+  );
   held[0]!.fail();
   await waitFor(() =>
     assert.equal(screen.getByRole("combobox", { name: /longest wait/iu }).textContent, before),
@@ -190,14 +244,20 @@ test("choosing an engine saves only that choice", async () => {
 });
 
 test("cache warming can change while an engine save is still running, and both are kept", async () => {
-  const { held, stored } = await mount({ compactionEngine: "llm", cacheWarmingEnabled: false }, { hold: true });
+  const { held, stored } = await mount(
+    { compactionEngine: "llm", cacheWarmingEnabled: false },
+    { hold: true },
+  );
   fireEvent.click(await engineRadio(/pi-vcc Compaction/u));
   await waitFor(() => assert.equal(held.length, 1));
 
   const warming = await warmingSwitch();
   fireEvent.click(warming);
   await waitFor(() => assert.equal(held.length, 2));
-  assert.deepEqual(held.map((save) => save.patch), [{ compactionEngine: "vcc" }, { cacheWarmingEnabled: true }]);
+  assert.deepEqual(
+    held.map((save) => save.patch),
+    [{ compactionEngine: "vcc" }, { cacheWarmingEnabled: true }],
+  );
 
   await act(async () => {
     held[0]?.finish();
@@ -232,27 +292,40 @@ test("a failed limit save puts back the limit without undoing an engine saved me
 
   await act(async () => held[0]?.fail());
   await waitFor(() =>
-    assert.match(screen.getByRole("combobox", { name: "Longest wait for a usage limit" }).textContent ?? "", /Up to 1 hour/u),
+    assert.match(
+      screen.getByRole("combobox", { name: "Longest wait for a usage limit" }).textContent ?? "",
+      /Up to 1 hour/u,
+    ),
   );
   assert.equal(local.getAttribute("aria-checked"), "true");
 });
 
 test("a model budget saves through its own call, without touching other settings", async () => {
   const { calls, saves } = await mount();
-  fireEvent.change(await screen.findByLabelText("Model for compaction budget"), { target: { value: "local/fast" } });
-  fireEvent.change(screen.getByLabelText("Compaction reserved tokens"), { target: { value: "5000" } });
+  fireEvent.change(await screen.findByLabelText("Model for compaction budget"), {
+    target: { value: "local/fast" },
+  });
+  fireEvent.change(screen.getByLabelText("Compaction reserved tokens"), {
+    target: { value: "5000" },
+  });
   fireEvent.click(screen.getByRole("button", { name: "Save budget" }));
   await waitFor(() =>
-    assert.deepEqual(calls.find((call) => call.channel === "settings:setCompactionModelBudget")?.args, [
-      "local/fast",
-      { reserveTokens: 5000 },
-    ]),
+    assert.deepEqual(
+      calls.find((call) => call.channel === "settings:setCompactionModelBudget")?.args,
+      ["local/fast", { reserveTokens: 5000 }],
+    ),
   );
   assert.deepEqual(saves(), []);
 });
 
 const hourSwitch = () => screen.findByRole("switch", { name: "Keep chat caches for an hour" });
-const ANTHROPIC = { id: "anthropic", models: ["claude"], baseUrl: "https://api.anthropic.com", hasKey: true, credentialType: "api_key" };
+const ANTHROPIC = {
+  id: "anthropic",
+  models: ["claude"],
+  baseUrl: "https://api.anthropic.com",
+  hasKey: true,
+  credentialType: "api_key",
+};
 
 test("an hour-long cache can be chosen only with a provider that keeps one, and saves just that choice", async () => {
   await mount({}, { providers: [METERED] });
@@ -268,7 +341,11 @@ test("an hour-long cache can be chosen only with a provider that keeps one, and 
   fireEvent.click(available);
   await waitFor(() => assert.deepEqual(saves(), [{ longPromptCacheRetention: true }]));
   await waitFor(() => assert.equal(available.getAttribute("aria-checked"), "true"));
-  assert.equal(stored().cacheWarmingEnabled, undefined, "keeping the hour leaves warming as it was");
+  assert.equal(
+    stored().cacheWarmingEnabled,
+    undefined,
+    "keeping the hour leaves warming as it was",
+  );
 });
 
 test("an hour-long cache left on after its provider is removed reads as paused and can still be turned off", async () => {
@@ -302,9 +379,18 @@ test("warming and the hour save independently while either is still saving", asy
 test("the warming note sits with warming, and the hour-long cache is its own group", async () => {
   await mount();
   const group = (element: Element) => element.closest("section");
-  const warmingGroup = group(await screen.findByRole("switch", { name: "Warm prompt caches during active chats" }));
+  const warmingGroup = group(
+    await screen.findByRole("switch", { name: "Warm prompt caches during active chats" }),
+  );
   const hourGroup = group(await hourSwitch());
-  assert.ok(warmingGroup && hourGroup && warmingGroup !== hourGroup, "the two switches are in separate groups");
+  assert.ok(
+    warmingGroup && hourGroup && warmingGroup !== hourGroup,
+    "the two switches are in separate groups",
+  );
   assert.match(warmingGroup.textContent ?? "", /refreshes at most three times/u);
-  assert.doesNotMatch(hourGroup.textContent ?? "", /refreshes at most three times/u, "the warming limits are not read as the hour's");
+  assert.doesNotMatch(
+    hourGroup.textContent ?? "",
+    /refreshes at most three times/u,
+    "the warming limits are not read as the hour's",
+  );
 });

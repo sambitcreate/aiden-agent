@@ -19,10 +19,7 @@ export class TelegramProfileMutationFence {
     return this.incarnations.get(profile) ?? 0;
   }
 
-  private runSerialized<Result>(
-    profile: string,
-    action: () => Promise<Result>,
-  ): Promise<Result> {
+  private runSerialized<Result>(profile: string, action: () => Promise<Result>): Promise<Result> {
     const previous = this.tails.get(profile) ?? Promise.resolve();
     const result = previous.then(action, action);
     this.tails.set(profile, result);
@@ -56,10 +53,7 @@ export class TelegramProfileMutationFence {
     });
   }
 
-  runDestructive<Result>(
-    profile: string,
-    action: () => Promise<Result>,
-  ): Promise<Result> {
+  runDestructive<Result>(profile: string, action: () => Promise<Result>): Promise<Result> {
     // Invalidate before waiting for the serialized lane. An active binding
     // must not publish after reset/delete has already been requested.
     this.incarnations.set(profile, this.current(profile) + 1);

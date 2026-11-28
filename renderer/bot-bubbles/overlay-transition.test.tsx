@@ -2,7 +2,11 @@ import "../main/bots/test-dom";
 import assert from "node:assert/strict";
 import { afterEach, beforeEach, test } from "node:test";
 import { act, cleanup, render, waitFor } from "@testing-library/react";
-import { BotBubbleTransitionView, SHRINK_HEAD_WAIT_MS, type OverlayTransition } from "./overlay-app";
+import {
+  BotBubbleTransitionView,
+  SHRINK_HEAD_WAIT_MS,
+  type OverlayTransition,
+} from "./overlay-app";
 
 /** One animation the view started, as the test's stand-in for Web Animations recorded it. */
 interface Played {
@@ -18,7 +22,11 @@ beforeEach(() => {
   Object.defineProperty(HTMLElement.prototype, "animate", {
     configurable: true,
     value(keyframes: Keyframe[]) {
-      const animation = { onfinish: null as (() => void) | null, oncancel: null as (() => void) | null, cancel() {} };
+      const animation = {
+        onfinish: null as (() => void) | null,
+        oncancel: null as (() => void) | null,
+        cancel() {},
+      };
       played.push({ keyframes, finish: () => animation.onfinish?.() });
       return animation;
     },
@@ -80,7 +88,10 @@ test("a shrink whose head never comes fades out instead of staying over the chat
   let done = 0;
   render(<BotBubbleTransitionView transition={shrink()} head={null} onDone={() => (done += 1)} />);
   await waitFor(() => assert.equal(played.length, 1), { timeout: SHRINK_HEAD_WAIT_MS + 1_500 });
-  assert.ok(played[0]!.keyframes.every((frame) => frame.transform === undefined), "a fade in place: nowhere to fly to");
+  assert.ok(
+    played[0]!.keyframes.every((frame) => frame.transform === undefined),
+    "a fade in place: nowhere to fly to",
+  );
   act(() => played[0]!.finish());
   assert.equal(done, 1);
 });
@@ -94,22 +105,35 @@ test("with Reduce Motion a shrink is a fade in place once the head is there", as
 });
 
 test("a grow leaves from its head; with Reduce Motion or no head it draws nothing and ends at once", async () => {
-  const grow = (head: typeof HEAD | null): OverlayTransition => ({ botId: "bot-1", kind: "grow", rect: RECT, image: null, key: 2, head });
+  const grow = (head: typeof HEAD | null): OverlayTransition => ({
+    botId: "bot-1",
+    kind: "grow",
+    rect: RECT,
+    image: null,
+    key: 2,
+    head,
+  });
   let done = 0;
-  const first = render(<BotBubbleTransitionView transition={grow(HEAD)} head={HEAD} onDone={() => (done += 1)} />);
+  const first = render(
+    <BotBubbleTransitionView transition={grow(HEAD)} head={HEAD} onDone={() => (done += 1)} />,
+  );
   await waitFor(() => assert.equal(played.length, 1));
   assert.ok(picture() !== null);
   assert.equal(done, 0);
   first.unmount();
 
   played = [];
-  render(<BotBubbleTransitionView transition={grow(null)} head={null} onDone={() => (done += 1)} />);
+  render(
+    <BotBubbleTransitionView transition={grow(null)} head={null} onDone={() => (done += 1)} />,
+  );
   await waitFor(() => assert.equal(done, 1));
   assert.ok(picture() === null, "no window-sized sheet flashes");
 
   cleanup();
   document.documentElement.dataset.reduceMotion = "true";
-  render(<BotBubbleTransitionView transition={grow(HEAD)} head={HEAD} onDone={() => (done += 1)} />);
+  render(
+    <BotBubbleTransitionView transition={grow(HEAD)} head={HEAD} onDone={() => (done += 1)} />,
+  );
   await waitFor(() => assert.equal(done, 2));
   assert.ok(picture() === null);
   assert.equal(played.length, 0);

@@ -15,7 +15,11 @@ import {
 } from "./web-search-key-pool-core.js";
 import type { WebSearchFetch } from "./web-search-provider-registry.js";
 import { cancelWebSearchResponse, readBoundedWebSearchResponse } from "./web-search-response.js";
-import { WebExtractError, type WebExtractModel, type WebExtractModelResponse } from "./web-extract-core.js";
+import {
+  WebExtractError,
+  type WebExtractModel,
+  type WebExtractModelResponse,
+} from "./web-extract-core.js";
 
 export interface WebExtractModelContext {
   readonly accountId: string;
@@ -91,14 +95,23 @@ export function createClairicExtractModel(context: WebExtractModelContext): WebE
               cancelWebSearchResponse(response.body);
               throw new WebExtractError("unavailable");
             }
-            const bytes = await readBoundedWebSearchResponse(response, request.signal, CLAIRIC_MAX_RESPONSE_BYTES);
+            const bytes = await readBoundedWebSearchResponse(
+              response,
+              request.signal,
+              CLAIRIC_MAX_RESPONSE_BYTES,
+            );
             let parsed: unknown;
             try {
               parsed = JSON.parse(new TextDecoder().decode(bytes));
             } catch {
               throw new WebExtractError("invalid-response");
             }
-            if (!isRecord(parsed) || parsed.success !== true || !isRecord(parsed.result) || !isRecord(parsed.result.answers)) {
+            if (
+              !isRecord(parsed) ||
+              parsed.success !== true ||
+              !isRecord(parsed.result) ||
+              !isRecord(parsed.result.answers)
+            ) {
               throw new WebExtractError("invalid-response");
             }
             return { answers: parsed.result.answers, truncated: parsed.result.truncated === true };
@@ -111,7 +124,8 @@ export function createClairicExtractModel(context: WebExtractModelContext): WebE
   };
 }
 
-export const WEB_EXTRACT_MODEL_FACTORIES: Readonly<Record<WebExtractModelId, WebExtractModelFactory>> =
-  Object.freeze({
-    "cloudflare-clairic": createClairicExtractModel,
-  });
+export const WEB_EXTRACT_MODEL_FACTORIES: Readonly<
+  Record<WebExtractModelId, WebExtractModelFactory>
+> = Object.freeze({
+  "cloudflare-clairic": createClairicExtractModel,
+});

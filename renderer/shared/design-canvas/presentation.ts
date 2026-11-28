@@ -9,7 +9,9 @@ type Box = Pick<DesignFrame, "id" | "kind" | "x" | "y" | "w" | "h" | "groupId" |
 
 /** The ids of the frames Present shows, in the order it shows them. */
 export function presentationOrder(frames: readonly Box[]): string[] {
-  const shown = frames.filter((frame) => frame.groupId === undefined && !frame.hidden && !isDesignLine(frame.kind));
+  const shown = frames.filter(
+    (frame) => frame.groupId === undefined && !frame.hidden && !isDesignLine(frame.kind),
+  );
   const byTop = [...shown].sort((a, b) => a.y - b.y || a.x - b.x);
   const rows: Box[][] = [];
   let row: Box[] = [];

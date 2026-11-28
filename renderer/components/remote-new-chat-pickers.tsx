@@ -1,5 +1,14 @@
 import * as React from "react";
-import { Check, ChevronDown, Folder, FolderOpen, FolderX, Globe, Loader2, Monitor } from "lucide-react";
+import {
+  Check,
+  ChevronDown,
+  Folder,
+  FolderOpen,
+  FolderX,
+  Globe,
+  Loader2,
+  Monitor,
+} from "lucide-react";
 import type { NewChatMachine, RemoteProjectChoice } from "../lib/hosts/new-chat-targets";
 import type { HostModelCatalog, HostModelChoice } from "../lib/hosts/host-resources";
 import { useAppCapabilities } from "../lib/app-capabilities";
@@ -35,7 +44,8 @@ import { ProviderIcon } from "./provider-icon";
 /** `"local"` is this Mac; any other value is a paired host's ID. */
 export type NewChatMachineId = "local" | (string & {});
 
-const TRIGGER_CLASS = "h-7 min-w-0 max-w-[14rem] shrink gap-1.5 px-2 text-secondary max-[520px]:max-w-[9rem]";
+const TRIGGER_CLASS =
+  "h-7 min-w-0 max-w-[14rem] shrink gap-1.5 px-2 text-secondary max-[520px]:max-w-[9rem]";
 
 export function RemoteMachinePicker({
   machines,
@@ -92,14 +102,23 @@ export function RemoteMachinePicker({
                 <span className="flex min-w-0 flex-col">
                   <span className="truncate">{machine.label}</span>
                   {machine.disabledReason ? (
-                    <span className="max-w-64 text-small text-tertiary">{machine.disabledReason}</span>
+                    <span className="max-w-64 text-small text-tertiary">
+                      {machine.disabledReason}
+                    </span>
                   ) : null}
                 </span>
               </span>
             </DropdownMenuRadioItem>
           ))}
         </DropdownMenuRadioGroup>
-        {onAddProject ? <><DropdownMenuSeparator /><DropdownMenuItem onSelect={onAddProject}>Add this project to another computer…</DropdownMenuItem></> : null}
+        {onAddProject ? (
+          <>
+            <DropdownMenuSeparator />
+            <DropdownMenuItem onSelect={onAddProject}>
+              Add this project to another computer…
+            </DropdownMenuItem>
+          </>
+        ) : null}
       </DropdownMenuContent>
     </DropdownMenu>
   );
@@ -176,7 +195,9 @@ export function RemoteProjectPicker({
                 <Folder className="size-4.5 shrink-0 text-secondary" aria-hidden="true" />
                 <span className="flex min-w-0 flex-1 flex-col">
                   <span className="truncate text-regular">{project.name}</span>
-                  {project.detail ? <span className="truncate text-small text-tertiary">{project.detail}</span> : null}
+                  {project.detail ? (
+                    <span className="truncate text-small text-tertiary">{project.detail}</span>
+                  ) : null}
                 </span>
                 {project.id === selected ? (
                   <Check className="size-4 shrink-0 text-secondary" aria-label="Current project" />
@@ -210,7 +231,10 @@ export function RemoteProjectPicker({
                     <span className="truncate text-small text-tertiary">{`Use a new scratch folder on ${hostLabel}`}</span>
                   </span>
                   {selected === SCRATCH_PROJECT ? (
-                    <Check className="size-4 shrink-0 text-secondary" aria-label="Current project" />
+                    <Check
+                      className="size-4 shrink-0 text-secondary"
+                      aria-label="Current project"
+                    />
                   ) : null}
                 </CommandItem>
               </>
@@ -249,20 +273,34 @@ export function RemoteModelPicker({
   // A hidden model is listed only for the chat already on it.
   const providers = (catalog?.providers ?? []).flatMap((provider) => {
     const models = provider.models.filter(
-      (entry) => !entry.hidden || (selected?.providerId === provider.id && selected.modelId === entry.id),
+      (entry) =>
+        !entry.hidden || (selected?.providerId === provider.id && selected.modelId === entry.id),
     );
     return models.length > 0 ? [{ ...provider, models }] : [];
   });
-  const selectedProvider = selected ? providers.find((provider) => provider.id === selected.providerId) : undefined;
-  const model = selected ? selectedProvider?.models.find((entry) => entry.id === selected.modelId) : undefined;
+  const selectedProvider = selected
+    ? providers.find((provider) => provider.id === selected.providerId)
+    : undefined;
+  const model = selected
+    ? selectedProvider?.models.find((entry) => entry.id === selected.modelId)
+    : undefined;
   const label = model?.label ?? (loading ? "Loading models…" : "Computer default");
   const byValue = new Map(
     providers.flatMap((provider) =>
-      provider.models.map((entry) => [choiceValue({ providerId: provider.id, modelId: entry.id }), { providerId: provider.id, modelId: entry.id }] as const),
+      provider.models.map(
+        (entry) =>
+          [
+            choiceValue({ providerId: provider.id, modelId: entry.id }),
+            { providerId: provider.id, modelId: entry.id },
+          ] as const,
+      ),
     ),
   );
   return (
-    <DropdownMenu {...(open !== undefined ? { open } : {})} {...(onOpenChange ? { onOpenChange } : {})}>
+    <DropdownMenu
+      {...(open !== undefined ? { open } : {})}
+      {...(onOpenChange ? { onOpenChange } : {})}
+    >
       <DropdownMenuTrigger asChild>
         <Button
           variant="transparent"
@@ -285,7 +323,11 @@ export function RemoteModelPicker({
           <ChevronDown className="size-3.5 shrink-0 text-tertiary" aria-hidden="true" />
         </Button>
       </DropdownMenuTrigger>
-      <DropdownMenuContent side="top" align="end" className="max-h-80 w-[min(18rem,calc(100vw-2rem))] overflow-y-auto">
+      <DropdownMenuContent
+        side="top"
+        align="end"
+        className="max-h-80 w-[min(18rem,calc(100vw-2rem))] overflow-y-auto"
+      >
         <DropdownMenuRadioGroup
           value={selected ? choiceValue(selected) : ""}
           onValueChange={(value) => {
@@ -298,7 +340,10 @@ export function RemoteModelPicker({
               {index > 0 ? <DropdownMenuSeparator /> : null}
               <DropdownMenuLabel>{provider.label}</DropdownMenuLabel>
               {provider.models.map((entry) => (
-                <DropdownMenuRadioItem key={entry.id} value={choiceValue({ providerId: provider.id, modelId: entry.id })}>
+                <DropdownMenuRadioItem
+                  key={entry.id}
+                  value={choiceValue({ providerId: provider.id, modelId: entry.id })}
+                >
                   <ProviderIcon
                     providerId={provider.id}
                     providerLabel={provider.label}

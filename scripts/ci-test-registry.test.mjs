@@ -43,7 +43,10 @@ test("Bot lease consumers stage the native guard before their CI lanes", () => {
   ]) {
     const lane = lanes.get(name);
     assert.ok(lane?.files.includes(consumer), `${consumer} must be assigned to ${name}`);
-    assert.ok(lane.prerequisites.includes("lease-flock-build"), `${name} must stage the guard helper`);
+    assert.ok(
+      lane.prerequisites.includes("lease-flock-build"),
+      `${name} must stage the guard helper`,
+    );
   }
 });
 
@@ -54,10 +57,7 @@ test("malformed npm multi-script invocations fail closed", () => {
     "npm run test:custom-model-options test:telegram",
   );
 
-  assert.throws(
-    () => collectSourceTests({ packageManifest }),
-    /malformed npm invocation/u,
-  );
+  assert.throws(() => collectSourceTests({ packageManifest }), /malformed npm invocation/u);
 });
 
 test("npm package commands are accepted only for the audited standalone CLI suite", () => {
@@ -113,7 +113,10 @@ test("new npm post-test lifecycle coverage also requires a lane assignment", () 
   for (const script of ["posttest:serial", "posttest:telegram"]) {
     const packageManifest = structuredClone(readPackageManifest());
     packageManifest.scripts[script] = "tsx --test main/services/diagnostics-contract.test.ts";
-    assert.throws(() => validateRegistry({ registry: readRegistry(), packageManifest }), /unassigned/u);
+    assert.throws(
+      () => validateRegistry({ registry: readRegistry(), packageManifest }),
+      /unassigned/u,
+    );
   }
 });
 
@@ -122,22 +125,34 @@ test("npm test hooks cannot run tests outside the registry runner", () => {
   for (const hook of ["pretest", "posttest"]) {
     const packageManifest = structuredClone(readPackageManifest());
     packageManifest.scripts[hook] = "tsx --test main/services/diagnostics-contract.test.ts";
-    assert.throws(() => validateRegistry({ registry: readRegistry(), packageManifest }), /would bypass the CI registry/u);
+    assert.throws(
+      () => validateRegistry({ registry: readRegistry(), packageManifest }),
+      /would bypass the CI registry/u,
+    );
   }
 });
 
 test("unit lanes cannot overlap and preserved modes stay explicit", () => {
   const registry = structuredClone(readRegistry());
   registry.lanes[1].files.push(registry.lanes[0].files[0]);
-  assert.throws(
-    () => validateRegistry({ registry }),
-    /assigned to multiple lanes/u,
-  );
+  assert.throws(() => validateRegistry({ registry }), /assigned to multiple lanes/u);
 
   const preserved = new Map(readRegistry().preserved.map((entry) => [entry.id, entry]));
-  assert.deepEqual(preserved.get("terminal-coverage").command, ["npm", "run", "test:terminal:coverage"]);
-  assert.deepEqual(preserved.get("generative-ui-chromium").command, ["npm", "run", "test:generative-ui"]);
-  assert.deepEqual(preserved.get("computer-use-rust-native").command, ["npm", "run", "test:computer-use:native"]);
+  assert.deepEqual(preserved.get("terminal-coverage").command, [
+    "npm",
+    "run",
+    "test:terminal:coverage",
+  ]);
+  assert.deepEqual(preserved.get("generative-ui-chromium").command, [
+    "npm",
+    "run",
+    "test:generative-ui",
+  ]);
+  assert.deepEqual(preserved.get("computer-use-rust-native").command, [
+    "npm",
+    "run",
+    "test:computer-use:native",
+  ]);
   assert.ok(preserved.get("generative-ui-chromium").kind === "chromium");
   assert.ok(preserved.get("terminal-coverage").kind === "coverage");
 
@@ -150,11 +165,26 @@ test("native helper and compaction regression files run in a lane that builds th
   const registry = readRegistry();
   for (const [file, required] of [
     ["main/services/subagents/agent-compatibility.test.ts", ["vcc-build"]],
-    ["scripts/worktree-file-io.test.mjs", ["worktree-file-io-build", "worktree-file-io-test-build"]],
-    ["main/services/managed-worktree-lifecycle.test.ts", ["worktree-file-io-build", "worktree-remover-build"]],
-    ["scripts/bot-inbox-writer.test.mjs", ["bot-inbox-writer-build", "bot-inbox-writer-test-build"]],
-    ["scripts/subagent-run-store.test.mjs", ["subagent-run-store-build", "subagent-run-store-test-build"]],
-    ["main/services/subagents/subagent-shell-runner-io.test.ts", ["subagent-shell-runner-build", "subagent-shell-runner-test-build"]],
+    [
+      "scripts/worktree-file-io.test.mjs",
+      ["worktree-file-io-build", "worktree-file-io-test-build"],
+    ],
+    [
+      "main/services/managed-worktree-lifecycle.test.ts",
+      ["worktree-file-io-build", "worktree-remover-build"],
+    ],
+    [
+      "scripts/bot-inbox-writer.test.mjs",
+      ["bot-inbox-writer-build", "bot-inbox-writer-test-build"],
+    ],
+    [
+      "scripts/subagent-run-store.test.mjs",
+      ["subagent-run-store-build", "subagent-run-store-test-build"],
+    ],
+    [
+      "main/services/subagents/subagent-shell-runner-io.test.ts",
+      ["subagent-shell-runner-build", "subagent-shell-runner-test-build"],
+    ],
   ]) {
     const lane = registry.lanes.find((candidate) => candidate.files.includes(file));
     assert.ok(lane, file);
@@ -162,7 +192,8 @@ test("native helper and compaction regression files run in a lane that builds th
       assert.ok(lane.prerequisites.includes(prerequisite), `${file}: ${prerequisite}`);
       const build = registry.prerequisites.find((entry) => entry.id === prerequisite);
       assert.ok(build, prerequisite);
-      if (build.for) assert.ok(build.for.includes(lane.name), `${prerequisite} must support ${lane.name}`);
+      if (build.for)
+        assert.ok(build.for.includes(lane.name), `${prerequisite} must support ${lane.name}`);
     }
   }
 });
@@ -173,48 +204,81 @@ test("non-file execution modes and native prerequisites cannot disappear behind 
   assert.throws(() => validateRegistry({ registry }), /Missing preserved execution mode/u);
   const withoutCli = structuredClone(readRegistry());
   withoutCli.preserved = withoutCli.preserved.filter((entry) => entry.kind !== "cli");
-  for (const lane of withoutCli.lanes) lane.preserved = (lane.preserved ?? []).filter((id) => id !== "cli-package");
-  assert.throws(() => validateRegistry({ registry: withoutCli }), /Missing preserved execution mode: test:cli/u);
+  for (const lane of withoutCli.lanes)
+    lane.preserved = (lane.preserved ?? []).filter((id) => id !== "cli-package");
+  assert.throws(
+    () => validateRegistry({ registry: withoutCli }),
+    /Missing preserved execution mode: test:cli/u,
+  );
   const missingBuild = structuredClone(readRegistry());
-  missingBuild.prerequisites = missingBuild.prerequisites.filter((entry) => entry.id !== "worktree-file-io-build");
-  assert.throws(() => validateRegistry({ registry: missingBuild }), /Unknown build prerequisite|Missing build prerequisite/u);
+  missingBuild.prerequisites = missingBuild.prerequisites.filter(
+    (entry) => entry.id !== "worktree-file-io-build",
+  );
+  assert.throws(
+    () => validateRegistry({ registry: missingBuild }),
+    /Unknown build prerequisite|Missing build prerequisite/u,
+  );
   const unassigned = structuredClone(readRegistry());
-  for (const lane of unassigned.lanes) lane.prerequisites = lane.prerequisites.filter((id) => id !== "worktree-file-io-build");
+  for (const lane of unassigned.lanes)
+    lane.prerequisites = lane.prerequisites.filter((id) => id !== "worktree-file-io-build");
   assert.throws(() => validateRegistry({ registry: unassigned }), /Unassigned build prerequisite/u);
 });
 
 test("every test file on disk runs in CI or is allowlisted as manual", () => {
   const validation = validateRegistry();
-  const accounted = new Set([...validation.sourceFiles, ...validation.workflowFiles, ...validation.manualFiles]);
+  const accounted = new Set([
+    ...validation.sourceFiles,
+    ...validation.workflowFiles,
+    ...validation.manualFiles,
+  ]);
   const discovered = discoverTestFiles();
   assert.ok(discovered.includes("main/services/concentrate-provider.test.ts"));
-  assert.deepEqual(discovered.filter((file) => !accounted.has(file)), []);
+  assert.deepEqual(
+    discovered.filter((file) => !accounted.has(file)),
+    [],
+  );
 
   // Unregistering a script orphans its files even when the serial graph and
   // lanes stay consistent with each other.
   const packageManifest = structuredClone(readPackageManifest());
-  packageManifest.scripts["test:serial"] = packageManifest.scripts["test:serial"].replace(" && npm run test:concentrate", "");
+  packageManifest.scripts["test:serial"] = packageManifest.scripts["test:serial"].replace(
+    " && npm run test:concentrate",
+    "",
+  );
   const registry = structuredClone(readRegistry());
-  for (const lane of registry.lanes) lane.files = lane.files.filter((file) => file !== "main/services/concentrate-provider.test.ts");
+  for (const lane of registry.lanes)
+    lane.files = lane.files.filter((file) => file !== "main/services/concentrate-provider.test.ts");
   assert.throws(
     () => validateRegistry({ registry, packageManifest }),
     /never run in CI: \["main\/services\/concentrate-provider\.test\.ts"\]/u,
   );
 
   assert.throws(
-    () => validateRegistry({ discoveredFiles: [...discovered, "renderer/lib/new-feature.test.ts"] }),
+    () =>
+      validateRegistry({ discoveredFiles: [...discovered, "renderer/lib/new-feature.test.ts"] }),
     /never run in CI: \["renderer\/lib\/new-feature\.test\.ts"\]/u,
   );
 });
 
 test("manual allowlist entries are required for intentionally manual suites and cannot go stale", () => {
   const withoutPerf = structuredClone(readRegistry());
-  withoutPerf.manual = withoutPerf.manual.filter((entry) => entry.file !== "main/services/create-images/run-ledger.perf.test.ts");
-  assert.throws(() => validateRegistry({ registry: withoutPerf }), /never run in CI: \["main\/services\/create-images\/run-ledger\.perf\.test\.ts"\]/u);
+  withoutPerf.manual = withoutPerf.manual.filter(
+    (entry) => entry.file !== "main/services/create-images/run-ledger.perf.test.ts",
+  );
+  assert.throws(
+    () => validateRegistry({ registry: withoutPerf }),
+    /never run in CI: \["main\/services\/create-images\/run-ledger\.perf\.test\.ts"\]/u,
+  );
 
   const stale = structuredClone(readRegistry());
-  stale.manual.push({ file: "main/services/concentrate-provider.test.ts", reason: "already in a lane" });
-  assert.throws(() => validateRegistry({ registry: stale }), /allowlist names files CI already runs/u);
+  stale.manual.push({
+    file: "main/services/concentrate-provider.test.ts",
+    reason: "already in a lane",
+  });
+  assert.throws(
+    () => validateRegistry({ registry: stale }),
+    /allowlist names files CI already runs/u,
+  );
 
   const missing = structuredClone(readRegistry());
   missing.manual.push({ file: "main/services/deleted.perf.test.ts", reason: "gone" });
@@ -222,16 +286,30 @@ test("manual allowlist entries are required for intentionally manual suites and 
 });
 
 test("workflow-owned scripts count only while a workflow still invokes them", () => {
-  const workflows = readWorkflows().replaceAll("npm run test:linux-native", "npm run test:linux-native-removed");
-  assert.throws(() => validateRegistry({ workflows }), /not invoked by any workflow: test:linux-native/u);
+  const workflows = readWorkflows().replaceAll(
+    "npm run test:linux-native",
+    "npm run test:linux-native-removed",
+  );
+  assert.throws(
+    () => validateRegistry({ workflows }),
+    /not invoked by any workflow: test:linux-native/u,
+  );
 });
 
 test("duplicate prerequisite and preserved ids are rejected", () => {
   const prerequisites = structuredClone(readRegistry());
-  prerequisites.prerequisites.push(structuredClone(prerequisites.prerequisites.find((entry) => entry.id === "vcc-build")));
-  assert.throws(() => validateRegistry({ registry: prerequisites }), /Duplicate prerequisite ids: vcc-build/u);
+  prerequisites.prerequisites.push(
+    structuredClone(prerequisites.prerequisites.find((entry) => entry.id === "vcc-build")),
+  );
+  assert.throws(
+    () => validateRegistry({ registry: prerequisites }),
+    /Duplicate prerequisite ids: vcc-build/u,
+  );
 
   const preserved = structuredClone(readRegistry());
   preserved.preserved.push(structuredClone(preserved.preserved[0]));
-  assert.throws(() => validateRegistry({ registry: preserved }), new RegExp(`Duplicate preserved ids: ${preserved.preserved[0].id}`, "u"));
+  assert.throws(
+    () => validateRegistry({ registry: preserved }),
+    new RegExp(`Duplicate preserved ids: ${preserved.preserved[0].id}`, "u"),
+  );
 });

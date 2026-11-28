@@ -22,17 +22,32 @@ import {
   type DeviceSummary,
 } from "../../../renderer/shared/devices.js";
 import { deviceCaptureFileName } from "../../../renderer/shared/device-features.js";
-import { resolveDeviceSavePath, writeDeviceSaveFile, type DeviceSaveRoots } from "./device-save-path.js";
+import {
+  resolveDeviceSavePath,
+  writeDeviceSaveFile,
+  type DeviceSaveRoots,
+} from "./device-save-path.js";
 
-export const DEVICE_TOOL_NAMES = ["device_list", "device_open", "device_screenshot", "device_close"] as const;
+export const DEVICE_TOOL_NAMES = [
+  "device_list",
+  "device_open",
+  "device_screenshot",
+  "device_close",
+] as const;
 /** Booting a simulator and powering one off change the user's machine; both need approval under "ask". */
-export const DEVICE_APPROVAL_TOOL_NAMES: ReadonlySet<string> = new Set(["device_open", "device_close"]);
+export const DEVICE_APPROVAL_TOOL_NAMES: ReadonlySet<string> = new Set([
+  "device_open",
+  "device_close",
+]);
 const deviceToolNames: ReadonlySet<string> = new Set(DEVICE_TOOL_NAMES);
 export const isDeviceToolName = (name: string): boolean => deviceToolNames.has(name);
 /** Under "ask", a screenshot that also writes a file needs approval too. */
 export function deviceToolRequiresApproval(name: string, args: unknown): boolean {
   if (DEVICE_APPROVAL_TOOL_NAMES.has(name)) return true;
-  const saveTo = typeof args === "object" && args !== null ? (args as Record<string, unknown>).saveTo : undefined;
+  const saveTo =
+    typeof args === "object" && args !== null
+      ? (args as Record<string, unknown>).saveTo
+      : undefined;
   return name === "device_screenshot" && saveTo !== undefined;
 }
 
@@ -67,7 +82,10 @@ export function canUseDeviceTools(input: {
   );
 }
 
-export function deviceToolApprovalSummary(name: string, args: Record<string, unknown> = {}): string {
+export function deviceToolApprovalSummary(
+  name: string,
+  args: Record<string, unknown> = {},
+): string {
   const target = typeof args.deviceId === "string" ? ` ${args.deviceId}` : "";
   if (name === "device_open") {
     const kind = args.platform === "android" ? "emulator" : "simulator";
@@ -145,8 +163,12 @@ export function pngDimensions(png: Uint8Array): { width: number; height: number 
   if (png.length < 24) return { width: 0, height: 0 };
   const view = new DataView(png.buffer, png.byteOffset, png.byteLength);
   const isPng =
-    view.getUint32(0) === 0x89504e47 && view.getUint32(4) === 0x0d0a1a0a && view.getUint32(12) === 0x49484452;
-  return isPng ? { width: view.getUint32(16), height: view.getUint32(20) } : { width: 0, height: 0 };
+    view.getUint32(0) === 0x89504e47 &&
+    view.getUint32(4) === 0x0d0a1a0a &&
+    view.getUint32(12) === 0x49484452;
+  return isPng
+    ? { width: view.getUint32(16), height: view.getUint32(20) }
+    : { width: 0, height: 0 };
 }
 
 /** Picks the explicit device, else a booted one, else the first listed. */
@@ -160,12 +182,18 @@ export function pickDevice(
 ): DeviceSummary {
   const hostId = input.hostId ?? LOCAL_DEVICE_HOST_ID;
   if (input.deviceId !== undefined) {
-    const match = devices.find((device) => device.hostId === hostId && device.id === input.deviceId);
+    const match = devices.find(
+      (device) => device.hostId === hostId && device.id === input.deviceId,
+    );
     if (match) return match;
-    throw new Error(`No device ${input.deviceId} on host ${hostId}. Call device_list for current ids.`);
+    throw new Error(
+      `No device ${input.deviceId} on host ${hostId}. Call device_list for current ids.`,
+    );
   }
   const candidates = devices.filter(
-    (device) => device.hostId === hostId && (input.platform === undefined || device.platform === input.platform),
+    (device) =>
+      device.hostId === hostId &&
+      (input.platform === undefined || device.platform === input.platform),
   );
   if (candidates.length === 0) {
     throw new Error(
@@ -174,7 +202,10 @@ export function pickDevice(
         : `No ${DEVICE_PLATFORM_LABELS[input.platform]} devices were found on host ${hostId}. Call device_list to see why.`,
     );
   }
-  if (input.platform === undefined && new Set(candidates.map((device) => device.platform)).size > 1) {
+  if (
+    input.platform === undefined &&
+    new Set(candidates.map((device) => device.platform)).size > 1
+  ) {
     throw new Error("Both iOS and Android devices are available; pass platform or deviceId.");
   }
   return candidates.find((device) => device.booted) ?? candidates[0]!;
@@ -185,11 +216,25 @@ export interface DeviceToolPort {
   /** Refreshes this Mac only; agent tools never contact paired Macs. */
   refreshLocal(): Promise<DeviceServiceState>;
   state(): DeviceServiceState;
-  open(input: { chatId: string; hostId: string; deviceId: string; openedBy: "agent" }): Promise<DeviceSession>;
-  close(input: { chatId: string; hostId: string; deviceId: string; shutdown?: boolean }): Promise<void>;
+  open(input: {
+    chatId: string;
+    hostId: string;
+    deviceId: string;
+    openedBy: "agent";
+  }): Promise<DeviceSession>;
+  close(input: {
+    chatId: string;
+    hostId: string;
+    deviceId: string;
+    shutdown?: boolean;
+  }): Promise<void>;
   screenshot(input: { hostId: string; deviceId: string }): Promise<Buffer>;
   /** Starts agent-device and returns the launcher path plus `--config`/`--session` flags for this chat. */
-  agentTarget(input: { chatId: string; hostId: string; deviceId: string }): Promise<{ command: string; args: string[] }>;
+  agentTarget(input: {
+    chatId: string;
+    hostId: string;
+    deviceId: string;
+  }): Promise<{ command: string; args: string[] }>;
   /** Shows the opened device for this chat: floating over it, or in its tab. */
   reveal(chatId: string, target?: { hostId: string; deviceId: string }): void;
 }
@@ -214,13 +259,21 @@ const text = (value: unknown): AgentToolResult<null> => ({
 });
 const id = (description: string) =>
   Type.Optional(
-    Type.String({ minLength: 1, maxLength: 128, pattern: "^[A-Za-z0-9][A-Za-z0-9._-]*$", description }),
+    Type.String({
+      minLength: 1,
+      maxLength: 128,
+      pattern: "^[A-Za-z0-9][A-Za-z0-9._-]*$",
+      description,
+    }),
   );
-const hostId = id("Device host from device_list. Defaults to this Mac (\"local\").");
-const deviceId = id("Simulator UDID or emulator serial (or AVD name while it is off) from device_list.");
+const hostId = id('Device host from device_list. Defaults to this Mac ("local").');
+const deviceId = id(
+  "Simulator UDID or emulator serial (or AVD name while it is off) from device_list.",
+);
 const platform = Type.Optional(
   Type.Union([Type.Literal("ios"), Type.Literal("android")], {
-    description: "ios or android. Needed when deviceId is omitted and both platforms are available.",
+    description:
+      "ios or android. Needed when deviceId is omitted and both platforms are available.",
   }),
 );
 
@@ -232,7 +285,9 @@ const platform = Type.Optional(
 function agentHostIds(state: DeviceServiceState): Set<string> {
   return new Set([
     LOCAL_DEVICE_HOST_ID,
-    ...state.hosts.filter((host) => host.kind === "ssh" && host.status === "ready").map((host) => host.id),
+    ...state.hosts
+      .filter((host) => host.kind === "ssh" && host.status === "ready")
+      .map((host) => host.id),
   ]);
 }
 
@@ -289,20 +344,29 @@ export function createDeviceAgentTools(context: DeviceToolContext): AgentTool[] 
       "device_close",
       "Close device",
       "Remove a simulator or emulator from this chat's Simulator tab. Pass shutdown=true to also power it off.",
-      Type.Object({ hostId, deviceId, shutdown: Type.Optional(Type.Boolean()) }, { additionalProperties: false }),
+      Type.Object(
+        { hostId, deviceId, shutdown: Type.Optional(Type.Boolean()) },
+        { additionalProperties: false },
+      ),
     ],
   ] as const;
 
-  const run = async (name: string, args: Args, signal: AbortSignal): Promise<AgentToolResult<null>> => {
+  const run = async (
+    name: string,
+    args: Args,
+    signal: AbortSignal,
+  ): Promise<AgentToolResult<null>> => {
     const live = () => {
-      if (signal.aborted) throw signal.reason instanceof Error ? signal.reason : new Error("Device tool cancelled.");
+      if (signal.aborted)
+        throw signal.reason instanceof Error ? signal.reason : new Error("Device tool cancelled.");
     };
     live();
     await context.revalidate?.();
     live();
     const requestedHost = typeof args.hostId === "string" ? args.hostId : undefined;
     const requestedDevice = typeof args.deviceId === "string" ? args.deviceId : undefined;
-    const requestedPlatform = args.platform === "ios" || args.platform === "android" ? args.platform : undefined;
+    const requestedPlatform =
+      args.platform === "ios" || args.platform === "android" ? args.platform : undefined;
 
     if (name === "device_list") {
       const state = requireState(await port.refreshLocal());
@@ -316,15 +380,25 @@ export function createDeviceAgentTools(context: DeviceToolContext): AgentTool[] 
         ...(platforms ? { platforms } : {}),
         devices: state.devices
           .filter((device) => !requestedHost || device.hostId === requestedHost)
-          .map(({ hostId: host, id: udid, name: deviceName, platform: devicePlatform, version, booted, kind }) => ({
-            hostId: host,
-            id: udid,
-            name: deviceName,
-            platform: devicePlatform,
-            version,
-            booted,
-            kind,
-          })),
+          .map(
+            ({
+              hostId: host,
+              id: udid,
+              name: deviceName,
+              platform: devicePlatform,
+              version,
+              booted,
+              kind,
+            }) => ({
+              hostId: host,
+              id: udid,
+              name: deviceName,
+              platform: devicePlatform,
+              version,
+              booted,
+              kind,
+            }),
+          ),
         open: state.sessions
           .filter((session) => session.chatId === chatId)
           .map((session) => ({ hostId: session.hostId, deviceId: session.deviceId })),
@@ -343,23 +417,34 @@ export function createDeviceAgentTools(context: DeviceToolContext): AgentTool[] 
       // Consent and agent readiness resolve before anything boots or a session registers.
       const agent = await port.agentTarget({ chatId, hostId: target.hostId, deviceId: target.id });
       live();
-      const alreadyOpen = requireState(port.state())
-        .sessions.some(
-          (candidate) =>
-            candidate.chatId === chatId && candidate.hostId === target.hostId && candidate.deviceId === target.id,
-        );
-      const session = await port.open({ chatId, hostId: target.hostId, deviceId: target.id, openedBy: "agent" });
+      const alreadyOpen = requireState(port.state()).sessions.some(
+        (candidate) =>
+          candidate.chatId === chatId &&
+          candidate.hostId === target.hostId &&
+          candidate.deviceId === target.id,
+      );
+      const session = await port.open({
+        chatId,
+        hostId: target.hostId,
+        deviceId: target.id,
+        openedBy: "agent",
+      });
       if (signal.aborted) {
         // A stopped generation leaves nothing behind: no new session and no tab jumping forward.
         if (!alreadyOpen) {
-          await port.close({ chatId, hostId: session.hostId, deviceId: session.deviceId }).catch(() => undefined);
+          await port
+            .close({ chatId, hostId: session.hostId, deviceId: session.deviceId })
+            .catch(() => undefined);
         }
         live();
       }
       port.reveal(chatId, { hostId: session.hostId, deviceId: session.deviceId });
       const device =
-        port.state().devices.find((candidate) => candidate.hostId === session.hostId && candidate.id === session.deviceId) ??
-        target;
+        port
+          .state()
+          .devices.find(
+            (candidate) => candidate.hostId === session.hostId && candidate.id === session.deviceId,
+          ) ?? target;
       const targetArgs = [...agentDeviceTargetArgs(device), ...agent.args];
       return text({
         device: {
@@ -377,7 +462,8 @@ export function createDeviceAgentTools(context: DeviceToolContext): AgentTool[] 
 
     const state = requireState(port.state());
     const sessions = state.sessions.filter(
-      (session) => session.chatId === chatId && (!requestedHost || session.hostId === requestedHost),
+      (session) =>
+        session.chatId === chatId && (!requestedHost || session.hostId === requestedHost),
     );
     const session = requestedDevice
       ? sessions.find((candidate) => candidate.deviceId === requestedDevice)
@@ -392,7 +478,9 @@ export function createDeviceAgentTools(context: DeviceToolContext): AgentTool[] 
     const target = { hostId: session.hostId, deviceId: session.deviceId };
 
     if (name === "device_screenshot") {
-      const device = state.devices.find((candidate) => candidate.hostId === target.hostId && candidate.id === target.deviceId);
+      const device = state.devices.find(
+        (candidate) => candidate.hostId === target.hostId && candidate.id === target.deviceId,
+      );
       // The path is checked before the capture, so a refused path never costs a screenshot.
       let save: { file: string; roots: DeviceSaveRoots } | null = null;
       if (args.saveTo !== undefined) {
@@ -421,9 +509,16 @@ export function createDeviceAgentTools(context: DeviceToolContext): AgentTool[] 
       const directory = context.screenshotDir
         ? await context.screenshotDir()
         : await mkdtemp(path.join(tmpdir(), "aiden-device-shot-"));
-      const file = path.join(directory, `${device?.platform === "android" ? "emulator" : "simulator"}-${Date.now()}.png`);
+      const file = path.join(
+        directory,
+        `${device?.platform === "android" ? "emulator" : "simulator"}-${Date.now()}.png`,
+      );
       await writeFile(file, png, { mode: 0o600 });
-      return text({ ...summary, path: file, note: "This model cannot view images; the screenshot was saved to path." });
+      return text({
+        ...summary,
+        path: file,
+        note: "This model cannot view images; the screenshot was saved to path.",
+      });
     }
 
     await port.close({ chatId, ...target, ...(args.shutdown === true ? { shutdown: true } : {}) });
@@ -437,7 +532,12 @@ export function createDeviceAgentTools(context: DeviceToolContext): AgentTool[] 
       description,
       parameters,
       execute: async (callId, raw, callSignal) => {
-        const args = validateToolArguments(tool, { type: "toolCall", id: callId, name, arguments: raw as Record<string, never> }) as Args;
+        const args = validateToolArguments(tool, {
+          type: "toolCall",
+          id: callId,
+          name,
+          arguments: raw as Record<string, never>,
+        }) as Args;
         const signal = callSignal ? AbortSignal.any([context.signal, callSignal]) : context.signal;
         return run(name, args, signal);
       },

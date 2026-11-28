@@ -24,12 +24,17 @@ import type { BotChatActivityWording } from "../../shared/bots";
 import { pauseWhenUnseen } from "../../lib/offscreen-pause";
 
 export const BOT_STILL_GOING_TEXT = "Still going. I'll message you when it's done.";
-export const BOT_TAKING_LONGER_TEXT = "This is taking longer than usual. You can stop it from the message box.";
+export const BOT_TAKING_LONGER_TEXT =
+  "This is taking longer than usual. You can stop it from the message box.";
 
 const SILENT: BotAnnouncement = { text: "", at: Number.NEGATIVE_INFINITY };
 
 /** Clearing is immediate and keeps the last announcement's time, so the gap still holds after it. */
-function settleAnnouncement(shown: BotAnnouncement, text: string, now: number): { shown: BotAnnouncement; retryInMs?: number } {
+function settleAnnouncement(
+  shown: BotAnnouncement,
+  text: string,
+  now: number,
+): { shown: BotAnnouncement; retryInMs?: number } {
   if (text === "") return { shown: shown.text === "" ? shown : { text: "", at: shown.at } };
   return nextBotAnnouncement(shown, text, now);
 }
@@ -60,12 +65,16 @@ function useAnnouncement(text: string): string {
 /** The line's word and mark, plus the step's detail on the Mac with Follows the work. */
 function botStatusParts(activity: BotLiveActivity, wording: BotChatActivityWording) {
   const display = botActivityDisplay(activity.phase, wording, activity.app);
-  const detail = wording === "follows" && display.phase !== "thinking" ? activity.step?.detail : undefined;
+  const detail =
+    wording === "follows" && display.phase !== "thinking" ? activity.step?.detail : undefined;
   return { display, detail };
 }
 
 /** What the line says to a screen reader: the word, plus the step on the Mac with Follows the work. */
-export function botStatusSpeech(activity: BotLiveActivity, wording: BotChatActivityWording): string {
+export function botStatusSpeech(
+  activity: BotLiveActivity,
+  wording: BotChatActivityWording,
+): string {
   const { display, detail } = botStatusParts(activity, wording);
   return detail ? `${display.word}, ${detail}` : display.word;
 }
@@ -106,7 +115,10 @@ export function BotStatusLine({
   // Waiting on the person, or already stopping: "I'll message you when it's done" would mislead.
   const working = display.phase !== "waiting" && display.phase !== "stopping";
   const stillGoing = working && now - activity.startedAt >= BOT_STILL_GOING_AFTER_MS;
-  const takingLonger = stillGoing && now - Math.max(quietSince ?? activity.startedAt, activity.startedAt) >= BOT_TAKING_LONGER_AFTER_MS;
+  const takingLonger =
+    stillGoing &&
+    now - Math.max(quietSince ?? activity.startedAt, activity.startedAt) >=
+      BOT_TAKING_LONGER_AFTER_MS;
   const layoutKey = `${elapsed ? "e" : ""}${stillGoing ? "s" : ""}${takingLonger ? "l" : ""}`;
   React.useEffect(() => {
     onLayoutChange?.(layoutKey);
@@ -123,14 +135,24 @@ export function BotStatusLine({
         className="group/status flex h-6 min-w-0 self-start max-w-full items-center gap-2 rounded-control outline-none focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
       >
         <AidenActivityMark mark={display.mark} size={20} className="shrink-0 text-primary" />
-        <span aria-hidden="true" className="flex min-w-0 items-center gap-1 text-small text-secondary">
-          <span ref={shimmer ? pauseWhenUnseen : undefined} className={`shrink-0 ${shimmer ? "agent-thinking-shimmer" : ""}`}>{display.word}</span>
+        <span
+          aria-hidden="true"
+          className="flex min-w-0 items-center gap-1 text-small text-secondary"
+        >
+          <span
+            ref={shimmer ? pauseWhenUnseen : undefined}
+            className={`shrink-0 ${shimmer ? "agent-thinking-shimmer" : ""}`}
+          >
+            {display.word}
+          </span>
           {detail ? (
             <span className="hidden min-w-0 truncate text-tertiary group-hover/status:inline group-focus-visible/status:inline">
               · {detail}
             </span>
           ) : null}
-          {elapsed ? <span className="shrink-0 tabular-nums text-tertiary">· {elapsed}</span> : null}
+          {elapsed ? (
+            <span className="shrink-0 tabular-nums text-tertiary">· {elapsed}</span>
+          ) : null}
         </span>
       </div>
       {stillGoing ? (

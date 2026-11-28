@@ -24,8 +24,14 @@ test("migration: no install already in use is moved to Auto", () => {
     assert.equal(approvalModeAfterUpgrade(evidence), "ask", JSON.stringify(evidence));
   }
   // A fresh install stays unset, and a stored choice is never rewritten.
-  assert.equal(approvalModeAfterUpgrade({ stored: false, upgradedProfile: false, inUse: false }), undefined);
-  assert.equal(approvalModeAfterUpgrade({ stored: true, upgradedProfile: true, inUse: true }), undefined);
+  assert.equal(
+    approvalModeAfterUpgrade({ stored: false, upgradedProfile: false, inUse: false }),
+    undefined,
+  );
+  assert.equal(
+    approvalModeAfterUpgrade({ stored: true, upgradedProfile: true, inUse: true }),
+    undefined,
+  );
 });
 
 test("a fresh install is Auto once a usable model exists, else Ask; a stored mode is kept", () => {
@@ -54,7 +60,8 @@ test("a Full workspace becomes customized Never ask with shell and files allowed
     { toolName: "write_file", args: { path: "src/b.ts", content: "x" } },
     { toolName: "browser_click", args: { ref: "e1" } },
   ]) {
-    const legacy = workspaceToolApproval({ ...call, permission: "full", workspaceId: "w" }).decision.outcome;
+    const legacy = workspaceToolApproval({ ...call, permission: "full", workspaceId: "w" }).decision
+      .outcome;
     const migrated = workspaceToolApproval({
       ...call,
       permission: "full",
@@ -78,9 +85,17 @@ test("Ask first follows the global mode; No access is Chat only", () => {
 
 test("changing a migrated Full workspace keeps its grants visible and is never read wider by the previous release", () => {
   const patch = workspaceApprovalPatch({ permission: "full" }, { mode: "ask" });
-  assert.deepEqual(patch, { permission: "ask", approvalMode: "ask", macGrants: { shell: true, files: true } });
+  assert.deepEqual(patch, {
+    permission: "ask",
+    approvalMode: "ask",
+    macGrants: { shell: true, files: true },
+  });
   // The previous release reads only `permission`: Ask first.
-  const stored = { permission: patch.permission!, approvalMode: patch.approvalMode, macGrants: patch.macGrants };
+  const stored = {
+    permission: patch.permission!,
+    approvalMode: patch.approvalMode,
+    macGrants: patch.macGrants,
+  };
   assert.equal(stored.permission, "ask");
   const after = workspaceApprovalPolicy(stored, "never");
   assert.equal(after.mode, "ask");
@@ -88,17 +103,27 @@ test("changing a migrated Full workspace keeps its grants visible and is never r
   // Back to the global mode, then a grant removed.
   const followGlobal = workspaceApprovalPatch(stored, { mode: null });
   assert.equal(followGlobal.approvalMode, null);
-  const revoked = workspaceApprovalPatch({ ...stored, approvalMode: undefined }, { revokeMac: "shell" });
+  const revoked = workspaceApprovalPatch(
+    { ...stored, approvalMode: undefined },
+    { revokeMac: "shell" },
+  );
   assert.deepEqual(revoked.macGrants, { files: true });
 });
 
 test("settings patches accept only the three modes and never the migration marker", () => {
-  assert.deepEqual(parseApprovalSettingsPatch({ approvalMode: "never" }), { approvalMode: "never" });
+  assert.deepEqual(parseApprovalSettingsPatch({ approvalMode: "never" }), {
+    approvalMode: "never",
+  });
   assert.throws(() => parseApprovalSettingsPatch({ approvalMode: "full" }));
   assert.deepEqual(parseApprovalSettingsPatch({ approvalModeOrigin: "upgrade" }), {});
-  assert.deepEqual(parseApprovalSettingsPatch({ approvalModel: { providerId: "ollama", model: "qwen3" } }), {
-    approvalModel: { providerId: "ollama", model: "qwen3" },
+  assert.deepEqual(
+    parseApprovalSettingsPatch({ approvalModel: { providerId: "ollama", model: "qwen3" } }),
+    {
+      approvalModel: { providerId: "ollama", model: "qwen3" },
+    },
+  );
+  assert.deepEqual(parseApprovalSettingsPatch({ approvalModel: null }), {
+    approvalModel: undefined,
   });
-  assert.deepEqual(parseApprovalSettingsPatch({ approvalModel: null }), { approvalModel: undefined });
   assert.throws(() => parseApprovalSettingsPatch({ approvalModel: { providerId: 3 } }));
 });

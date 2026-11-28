@@ -17,7 +17,11 @@ test("inspectReactElement extracts React 18 _debugSource, unwraps Memo/ForwardRe
   const heroFiber = {
     type: MemoHero,
     return: routerFiber,
-    _debugSource: { fileName: "webpack-internal:///(app-pages-browser)/./src/HeroSection.tsx", lineNumber: 18, columnNumber: 3 },
+    _debugSource: {
+      fileName: "webpack-internal:///(app-pages-browser)/./src/HeroSection.tsx",
+      lineNumber: 18,
+      columnNumber: 3,
+    },
     memoizedProps: { title: "Welcome" },
   };
   const portalFiber = { type: null, return: heroFiber };
@@ -102,7 +106,9 @@ test("inspectReactElement handles React 19 _debugStack, RSC Server components, m
   function a() {}
   function Le() {}
   const minFiber = { type: a, return: { type: Le, return: null } };
-  const minResult = inspectReactElement({ __reactFiber$prod: { type: "button", return: minFiber } });
+  const minResult = inspectReactElement({
+    __reactFiber$prod: { type: "button", return: minFiber },
+  });
   assert.ok(minResult);
   assert.equal(minResult.componentName, undefined);
   assert.equal(minResult.componentStack[0]?.minified, true);
@@ -153,12 +159,21 @@ test("inspectFrameworkElement detects Vue 3, Svelte, Astro, and Preact elements"
 });
 
 test("GrabSteppingState steps up/down ancestors and unlocks on pointer move > 6px", () => {
-  const makeFakeEl = (tag: string, rect: { x: number; y: number; width: number; height: number }, parent: Element | null) =>
+  const makeFakeEl = (
+    tag: string,
+    rect: { x: number; y: number; width: number; height: number },
+    parent: Element | null,
+  ) =>
     ({
       localName: tag,
       tagName: tag.toUpperCase(),
       parentElement: parent,
-      getBoundingClientRect: () => ({ left: rect.x, top: rect.y, width: rect.width, height: rect.height }),
+      getBoundingClientRect: () => ({
+        left: rect.x,
+        top: rect.y,
+        width: rect.width,
+        height: rect.height,
+      }),
       ownerDocument: null,
     }) as unknown as Element;
 
@@ -309,10 +324,22 @@ test("a grabbed credential field never carries its live value in props, whatever
   const otpFiber = {
     type: OtpField,
     return: null,
-    memoizedProps: { value: "493817", autoComplete: "one-time-code", code: "493817", label: "Code" },
+    memoizedProps: {
+      value: "493817",
+      autoComplete: "one-time-code",
+      code: "493817",
+      label: "Code",
+    },
   };
-  const otp = inspectReactElement({ __reactFiber$otp: { type: "input", return: otpFiber, _debugOwner: otpFiber } });
-  assert.deepEqual(otp?.props, { value: "[redacted]", autoComplete: "one-time-code", code: "[redacted]", label: "[redacted]" });
+  const otp = inspectReactElement({
+    __reactFiber$otp: { type: "input", return: otpFiber, _debugOwner: otpFiber },
+  });
+  assert.deepEqual(otp?.props, {
+    value: "[redacted]",
+    autoComplete: "one-time-code",
+    code: "[redacted]",
+    label: "[redacted]",
+  });
 
   // The page reports its own props, so the main process applies the same rule to whatever arrives.
   const raw = (props: Record<string, unknown>, sensitiveTarget?: boolean) => ({
@@ -328,22 +355,46 @@ test("a grabbed credential field never carries its live value in props, whatever
   });
   const options = { pageUrl: "http://localhost:3000/login", id: "credential_props", capturedAt: 1 };
 
-  const controlled = await sanitizeRawGrabPayload(raw({ value: "hunter2-secret-pass", placeholder: "Password" }), options);
+  const controlled = await sanitizeRawGrabPayload(
+    raw({ value: "hunter2-secret-pass", placeholder: "Password" }),
+    options,
+  );
   assert.equal(controlled.element.props?.value, "[redacted]");
   assert.equal(controlled.element.props?.placeholder, "Password");
 
-  const typed = await sanitizeRawGrabPayload(raw({ type: "password", draft: "hunter2-secret-pass", defaultValue: "x" }), options);
-  assert.deepEqual(typed.element.props, { type: "password", draft: "[redacted]", defaultValue: "[redacted]" });
+  const typed = await sanitizeRawGrabPayload(
+    raw({ type: "password", draft: "hunter2-secret-pass", defaultValue: "x" }),
+    options,
+  );
+  assert.deepEqual(typed.element.props, {
+    type: "password",
+    draft: "[redacted]",
+    defaultValue: "[redacted]",
+  });
 
   // A wrapper around a password input is sensitive even when its own props don't say so.
-  const wrapper = await sanitizeRawGrabPayload(raw({ current: "hunter2-secret-pass", pin: 4321, disabled: false }, true), options);
-  assert.deepEqual(wrapper.element.props, { current: "[redacted]", pin: "[redacted]", disabled: false });
-  assert.doesNotMatch(JSON.stringify([controlled.element, typed.element, wrapper.element]), /hunter2|4321/);
+  const wrapper = await sanitizeRawGrabPayload(
+    raw({ current: "hunter2-secret-pass", pin: 4321, disabled: false }, true),
+    options,
+  );
+  assert.deepEqual(wrapper.element.props, {
+    current: "[redacted]",
+    pin: "[redacted]",
+    disabled: false,
+  });
+  assert.doesNotMatch(
+    JSON.stringify([controlled.element, typed.element, wrapper.element]),
+    /hunter2|4321/,
+  );
 });
 
 test("a payload taken before the page moved to another origin carries no source hint and fetches nothing", async () => {
   const fetchedUrls: string[] = [];
-  const sourceMapJson = JSON.stringify({ version: 3, sources: ["src/components/Card.tsx"], mappings: "AAUI" });
+  const sourceMapJson = JSON.stringify({
+    version: 3,
+    sources: ["src/components/Card.tsx"],
+    mappings: "AAUI",
+  });
   const inlineMap = `data:application/json;base64,${Buffer.from(sourceMapJson, "utf8").toString("base64")}`;
   const resolver = new LocalGrabSourceMapResolver({
     fetchImpl: (async (input: RequestInfo | URL) => {
@@ -356,7 +407,10 @@ test("a payload taken before the page moved to another origin carries no source 
     framework: "react",
     componentName: "Card",
     componentStack: [
-      { name: "Card", source: { debugStack: "Error\n    at Card (http://localhost:5173/chunks/card.js:1:1)" } },
+      {
+        name: "Card",
+        source: { debugStack: "Error\n    at Card (http://localhost:5173/chunks/card.js:1:1)" },
+      },
       { name: "Shell", source: { fileName: "/Users/dev/app/src/Shell.tsx", lineNumber: 3 } },
     ],
     source: { debugStack: "Error\n    at Card (http://localhost:5173/chunks/card.js:1:1)" },
@@ -385,7 +439,16 @@ test("a payload taken before the page moved to another origin carries no source 
     pageUrl: "http://localhost:5173/settings",
     grabPageUrl: "http://localhost:5173/",
   });
-  assert.deepEqual(routed.element.source, { filePath: "src/components/Card.tsx", line: 11, column: 5, symbolicated: true });
-  assert.deepEqual(routed.element.componentStack?.[1]?.source, { filePath: "src/Shell.tsx", line: 3, symbolicated: false });
+  assert.deepEqual(routed.element.source, {
+    filePath: "src/components/Card.tsx",
+    line: 11,
+    column: 5,
+    symbolicated: true,
+  });
+  assert.deepEqual(routed.element.componentStack?.[1]?.source, {
+    filePath: "src/Shell.tsx",
+    line: 3,
+    symbolicated: false,
+  });
   assert.deepEqual(fetchedUrls, ["http://localhost:5173/chunks/card.js"]);
 });

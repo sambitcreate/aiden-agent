@@ -465,7 +465,7 @@ skipped, everything above applies unchanged.
   SSH with `sudo launchctl bootstrap gui/<uid>`, the guest's TCC prompts in the
   live view, the probe, and clones inheriting the grants are unproven until
   they are run on an Apple-silicon Mac: `launchctl print
-  gui/501/com.aiden.bot-computer.cua-driver` shows the agent, its socket exists,
+gui/501/com.aiden.bot-computer.cua-driver` shows the agent, its socket exists,
   and a `capture` with `app` lists elements that an element click then
   presses.
 

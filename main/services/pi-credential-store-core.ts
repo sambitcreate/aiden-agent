@@ -1,7 +1,12 @@
 import * as fs from "fs/promises";
 import * as path from "path";
 import { randomUUID } from "crypto";
-import type { AuthOperationOptions, Credential, CredentialInfo, CredentialStore } from "@earendil-works/pi-ai";
+import type {
+  AuthOperationOptions,
+  Credential,
+  CredentialInfo,
+  CredentialStore,
+} from "@earendil-works/pi-ai";
 import { readRegularUtf8File } from "./regular-file-read.js";
 import { syncDirectory } from "./durable-fs.js";
 
@@ -100,9 +105,15 @@ function carryPiCredentialGrant(current: Credential | undefined, next: Credentia
   return { ...next, [AIDEN_GRANT_ID_FIELD]: grantId } as Credential;
 }
 
-function samePiCredentialGrant(left: Credential | undefined, right: Credential | undefined): boolean {
+function samePiCredentialGrant(
+  left: Credential | undefined,
+  right: Credential | undefined,
+): boolean {
   if (left === undefined || right === undefined) return left === right;
-  return JSON.stringify(piCredentialGrantIdentity(left)) === JSON.stringify(piCredentialGrantIdentity(right));
+  return (
+    JSON.stringify(piCredentialGrantIdentity(left)) ===
+    JSON.stringify(piCredentialGrantIdentity(right))
+  );
 }
 
 class AsyncMutex {
@@ -144,19 +155,21 @@ function credentialOperation<T>(
       // persistence failure, must win over cancellation from this point on.
       signal.removeEventListener("abort", abort);
     };
-    void Promise.resolve().then(() => {
-      signal.throwIfAborted();
-      return operation(beginPublication);
-    }).then(
-      (value) => {
-        signal.removeEventListener("abort", abort);
-        resolve(value);
-      },
-      (error: unknown) => {
-        signal.removeEventListener("abort", abort);
-        reject(error);
-      },
-    );
+    void Promise.resolve()
+      .then(() => {
+        signal.throwIfAborted();
+        return operation(beginPublication);
+      })
+      .then(
+        (value) => {
+          signal.removeEventListener("abort", abort);
+          resolve(value);
+        },
+        (error: unknown) => {
+          signal.removeEventListener("abort", abort);
+          reject(error);
+        },
+      );
   });
 }
 
@@ -317,9 +330,13 @@ export class EncryptedPiCredentialStore implements CredentialStore {
       const legacy = document.entries["azure-openai-responses"];
       if (!legacy) return;
       if (document.entries.azure) {
-        if (document.retiredAzureCredential &&
-            JSON.stringify(document.retiredAzureCredential) !== JSON.stringify(legacy)) {
-          throw new Error("Azure credential migration has conflicting recovery data. Reconcile the credential store before continuing.");
+        if (
+          document.retiredAzureCredential &&
+          JSON.stringify(document.retiredAzureCredential) !== JSON.stringify(legacy)
+        ) {
+          throw new Error(
+            "Azure credential migration has conflicting recovery data. Reconcile the credential store before continuing.",
+          );
         }
         document.retiredAzureCredential = legacy;
       } else {
@@ -438,7 +455,10 @@ export class EncryptedPiCredentialStore implements CredentialStore {
             options?.signal?.throwIfAborted();
             if (!document.entries[providerId]) return;
             delete document.entries[providerId];
-            await this.writeDocument(document, beginPublication, { grantChanged: true, providerId });
+            await this.writeDocument(document, beginPublication, {
+              grantChanged: true,
+              providerId,
+            });
           });
         },
         () => this.options.onLockQueued?.(`provider:${providerId}`),

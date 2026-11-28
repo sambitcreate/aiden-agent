@@ -3,7 +3,11 @@
 import type { NotificationChannel } from "../../../renderer/preload-channels.js";
 import type { TelegramBotApi, TelegramMessage } from "./telegram-bot-api.js";
 import { escapeHtml } from "./telegram-controls.js";
-import { chunkForTelegram, markdownToTelegramHtml, safeRichDraftPrefix } from "./telegram-markdown.js";
+import {
+  chunkForTelegram,
+  markdownToTelegramHtml,
+  safeRichDraftPrefix,
+} from "./telegram-markdown.js";
 import { stripTelegramActionMarkupForPreview } from "./telegram-outbound.js";
 
 export type TelegramActivityVerbosity = "quiet" | "thinking" | "tools" | "verbose";
@@ -179,7 +183,13 @@ export function createTelegramActivityProjector(options: ActivityOptions) {
     finished = true;
   }
 
-  return { observe, settle, get draftMessageId() { return draftMessage?.message_id; } };
+  return {
+    observe,
+    settle,
+    get draftMessageId() {
+      return draftMessage?.message_id;
+    },
+  };
 }
 
 function titleCase(value: string): string {

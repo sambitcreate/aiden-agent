@@ -23,18 +23,25 @@ test("the feature tour explains Calendar watches on supported desktop hosts", as
   await next.click();
   await connectOnboardingLmStudio(onboarding);
   await onboarding.getByText("Explore Aiden’s features", { exact: true }).click();
-  const tile = onboarding.getByRole("article", { name: /^Connected-app watches\. Watch upcoming Calendar events on Mac or Linux/u });
+  const tile = onboarding.getByRole("article", {
+    name: /^Connected-app watches\. Watch upcoming Calendar events on Mac or Linux/u,
+  });
   await expect(tile).toBeVisible();
   await expect(tile.getByText("Calendar · Team events", { exact: true })).toBeVisible();
   await expect(tile.getByText("Next 2 hours", { exact: true })).toBeVisible();
   await tile.focus();
   await expect(tile.locator("[data-onboarding-feature-description]")).toBeVisible();
-  await expect(tile.locator("[data-onboarding-feature-description]")).toContainText("Mail mailbox on Mac");
+  await expect(tile.locator("[data-onboarding-feature-description]")).toContainText(
+    "Mail mailbox on Mac",
+  );
   await onboarding.getByRole("button", { name: "Start using Aiden" }).focus();
   await page.mouse.move(1, 1);
   await page.emulateMedia({ reducedMotion: "reduce" });
   await tile.scrollIntoViewIfNeeded();
-  await page.screenshot({ path: test.info().outputPath("calendar-watch-tour.png"), fullPage: true });
+  await page.screenshot({
+    path: test.info().outputPath("calendar-watch-tour.png"),
+    fullPage: true,
+  });
 });
 
 function record(value: unknown, label: string): Record<string, unknown> {
@@ -132,7 +139,10 @@ test.describe("fresh portable config", () => {
     await expect(page.locator('section[aria-label="Set up Aiden"]')).toHaveCount(0);
     await expect(
       page.getByRole("button", {
-        name: new RegExp(`^Selected model: ${E2E_MODEL_DISPLAY_NAME}(, .+ on the Agent Slider)?\\. Choose a model\\.$`, "u"),
+        name: new RegExp(
+          `^Selected model: ${E2E_MODEL_DISPLAY_NAME}(, .+ on the Agent Slider)?\\. Choose a model\\.$`,
+          "u",
+        ),
       }),
     ).toBeVisible();
     const afterRelaunch = await persistedProviderState(aiden);
@@ -197,7 +207,10 @@ test("onboarding preserves an existing keyless LM Studio profile across a full r
   await expect(page.locator('section[aria-label="Set up Aiden"]')).toHaveCount(0);
   await expect(
     page.getByRole("button", {
-      name: new RegExp(`^Selected model: ${E2E_MODEL_DISPLAY_NAME}(, .+ on the Agent Slider)?\\. Choose a model\\.$`, "u"),
+      name: new RegExp(
+        `^Selected model: ${E2E_MODEL_DISPLAY_NAME}(, .+ on the Agent Slider)?\\. Choose a model\\.$`,
+        "u",
+      ),
     }),
   ).toBeVisible();
   await expect

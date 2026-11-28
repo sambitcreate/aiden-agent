@@ -38,8 +38,14 @@ test("the fence lifts on news about that very run settling", () => {
 });
 
 test("a run never heard from stops holding the queue after the stall window", () => {
-  assert.equal(remoteQueueFenceHolds(fence, view({ now: fence.since + REMOTE_QUEUE_FENCE_STALL_MS - 1 })), true);
-  assert.equal(remoteQueueFenceHolds(fence, view({ now: fence.since + REMOTE_QUEUE_FENCE_STALL_MS })), false);
+  assert.equal(
+    remoteQueueFenceHolds(fence, view({ now: fence.since + REMOTE_QUEUE_FENCE_STALL_MS - 1 })),
+    true,
+  );
+  assert.equal(
+    remoteQueueFenceHolds(fence, view({ now: fence.since + REMOTE_QUEUE_FENCE_STALL_MS })),
+    false,
+  );
   assert.equal(remoteQueueFenceHolds(null, view()), false);
 });
 
@@ -59,21 +65,44 @@ test("any turn the host accepts fences its chat's queue, and one it didn't confi
   try {
     // Held while the send is in flight, before any receipt exists.
     let answer!: (receipt: { streamId: string }) => void;
-    const inFlight = sendFencedTurn("host-b:chat-9", () => new Promise((resolve) => { answer = resolve; }), () => 4_000);
-    assert.equal(remoteQueueFenceHolds(remoteQueueFence("host-b:chat-9"), view({ now: 4_001 })), true, "no gap before the receipt");
+    const inFlight = sendFencedTurn(
+      "host-b:chat-9",
+      () =>
+        new Promise((resolve) => {
+          answer = resolve;
+        }),
+      () => 4_000,
+    );
+    assert.equal(
+      remoteQueueFenceHolds(remoteQueueFence("host-b:chat-9"), view({ now: 4_001 })),
+      true,
+      "no gap before the receipt",
+    );
     answer({ streamId: "run-first" });
     await inFlight;
     assert.equal(remoteQueueFence("host-b:chat-9")?.runId, "run-first");
-    await sendFencedTurn("host-b:chat-9", async () => ({ streamId: "run-typed" }), () => 5_000);
+    await sendFencedTurn(
+      "host-b:chat-9",
+      async () => ({ streamId: "run-typed" }),
+      () => 5_000,
+    );
     assert.deepEqual(remoteQueueFence("host-b:chat-9"), { runId: "run-typed", since: 5_000 });
     // A Try again after it fences on the new run.
-    await sendFencedTurn("host-b:chat-9", async () => ({ streamId: "run-retry" }), () => 6_000);
+    await sendFencedTurn(
+      "host-b:chat-9",
+      async () => ({ streamId: "run-retry" }),
+      () => 6_000,
+    );
     assert.equal(remoteQueueFence("host-b:chat-9")?.runId, "run-retry");
     setRemoteQueueFence("host-b:chat-9", null);
     // An unresolved send is held by the reconciliation banner, which also blocks the queue.
     await sendFencedTurn("host-b:chat-9", async () => null);
     assert.equal(remoteQueueFence("host-b:chat-9"), null);
-    await assert.rejects(sendFencedTurn("host-b:chat-9", async () => { throw new Error("refused"); }));
+    await assert.rejects(
+      sendFencedTurn("host-b:chat-9", async () => {
+        throw new Error("refused");
+      }),
+    );
     assert.equal(remoteQueueFence("host-b:chat-9"), null);
   } finally {
     setRemoteQueueFence("host-b:chat-9", null);
@@ -82,12 +111,32 @@ test("any turn the host accepts fences its chat's queue, and one it didn't confi
 
 test("a refused attempt puts back the fence of the turn accepted before it", async () => {
   try {
-    await sendFencedTurn("host-b:chat-8", async () => ({ streamId: "run-a" }), () => 1_000);
+    await sendFencedTurn(
+      "host-b:chat-8",
+      async () => ({ streamId: "run-a" }),
+      () => 1_000,
+    );
     // Try again while A's run hasn't been seen: refused, A's fence must survive.
-    await assert.rejects(sendFencedTurn("host-b:chat-8", async () => { throw new Error("turn_already_active"); }, () => 1_500));
+    await assert.rejects(
+      sendFencedTurn(
+        "host-b:chat-8",
+        async () => {
+          throw new Error("turn_already_active");
+        },
+        () => 1_500,
+      ),
+    );
     assert.deepEqual(remoteQueueFence("host-b:chat-8"), { runId: "run-a", since: 1_000 });
-    await sendFencedTurn("host-b:chat-8", async () => null, () => 1_600);
-    assert.equal(remoteQueueFence("host-b:chat-8")?.runId, "run-a", "an unconfirmed attempt doesn't lift it either");
+    await sendFencedTurn(
+      "host-b:chat-8",
+      async () => null,
+      () => 1_600,
+    );
+    assert.equal(
+      remoteQueueFence("host-b:chat-8")?.runId,
+      "run-a",
+      "an unconfirmed attempt doesn't lift it either",
+    );
   } finally {
     setRemoteQueueFence("host-b:chat-8", null);
   }

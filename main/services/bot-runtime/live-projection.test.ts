@@ -8,7 +8,12 @@ import * as path from "node:path";
 import { after, test } from "node:test";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import type { WatchEnd } from "@earendil-works/chord/watch";
-import { fauxAssistantMessage, fauxText, fauxThinking, fauxToolCall } from "@earendil-works/pi-ai/providers/faux";
+import {
+  fauxAssistantMessage,
+  fauxText,
+  fauxThinking,
+  fauxToolCall,
+} from "@earendil-works/pi-ai/providers/faux";
 import {
   applyBotLiveEvent,
   botLastReplyAt,
@@ -21,7 +26,11 @@ import {
 } from "../../../renderer/shared/bot-live.js";
 import type { BotPendingHandoff } from "../../../renderer/shared/bot-handoffs.js";
 import { botTranscriptRows } from "../../../renderer/main/bots/bot-transcript-rows.js";
-import { createBotSessionService, type BotSessionRuntime, type BotSessionServiceDeps } from "./bot-session-service.js";
+import {
+  createBotSessionService,
+  type BotSessionRuntime,
+  type BotSessionServiceDeps,
+} from "./bot-session-service.js";
 import {
   BOT_CONNECT_CARD_ENTRY_KIND,
   createBotLiveProjection,
@@ -39,12 +48,31 @@ import { createBotIssueService, type BotIssueService } from "../bot-issues/servi
 import { BOT_ISSUES_FILE, createBotIssueStore, type BotIssueStore } from "../bot-issues/store.js";
 import { botSessionDirectory } from "../bot-routine-notes.js";
 import type { BotIssue } from "../../../renderer/shared/bot-issues.js";
-import { createBotTurnIntents, stopWithIntents, wireBotLiveTurnIntents } from "./bot-turn-intents.js";
+import {
+  createBotTurnIntents,
+  stopWithIntents,
+  wireBotLiveTurnIntents,
+} from "./bot-turn-intents.js";
 import { spawnHarnessChild } from "./test-support/child.js";
 import { countingTool, recordingDeps } from "./test-support/fixtures.js";
-import { optionAnswer, QUESTION_ARGS, QUESTION_TOOL_NAME, questionEntries } from "./test-support/question-fixtures.js";
-import { HANDOFF_ARGS, HANDOFF_TOOL_NAME, handoffEntries } from "./test-support/handoff-fixtures.js";
-import { createFauxModels, FAUX_MODEL_REF, slowAnswer, waitFor, type FauxModels } from "./test-support/faux.js";
+import {
+  optionAnswer,
+  QUESTION_ARGS,
+  QUESTION_TOOL_NAME,
+  questionEntries,
+} from "./test-support/question-fixtures.js";
+import {
+  HANDOFF_ARGS,
+  HANDOFF_TOOL_NAME,
+  handoffEntries,
+} from "./test-support/handoff-fixtures.js";
+import {
+  createFauxModels,
+  FAUX_MODEL_REF,
+  slowAnswer,
+  waitFor,
+  type FauxModels,
+} from "./test-support/faux.js";
 
 const ctx = BACKGROUND_CONTEXT;
 const roots: string[] = [];
@@ -65,7 +93,10 @@ interface Harness {
 
 async function start(
   fauxModels: FauxModels,
-  options: { service?: Partial<BotSessionServiceDeps>; projection?: Partial<BotLiveProjectionDeps> } = {},
+  options: {
+    service?: Partial<BotSessionServiceDeps>;
+    projection?: Partial<BotLiveProjectionDeps>;
+  } = {},
 ): Promise<Harness> {
   let projection: BotLiveProjection | undefined;
   const service = await createBotSessionService({
@@ -125,7 +156,9 @@ function recorder() {
 async function waitForStreamedText(service: BotSessionRuntime, botId: string): Promise<void> {
   const watch = await (await service.conversation(botId)).watch(ctx);
   const hasText = () => {
-    const live = watch.value.docs["pi.live"] as { generation?: { message?: { content?: Array<{ text?: string }> } } } | undefined;
+    const live = watch.value.docs["pi.live"] as
+      | { generation?: { message?: { content?: Array<{ text?: string }> } } }
+      | undefined;
     return (live?.generation?.message?.content ?? []).some((part) => (part.text ?? "").length > 0);
   };
   watch.start(async () => undefined);
@@ -139,7 +172,12 @@ async function waitForStreamedText(service: BotSessionRuntime, botId: string): P
 function observedPhases(events: readonly BotLiveEvent[]): Array<string | null> {
   const phases: Array<string | null> = [];
   for (const event of events) {
-    const activity = event.type === "activity" ? event.activity : event.type === "snapshot" ? event.snapshot.activity : undefined;
+    const activity =
+      event.type === "activity"
+        ? event.activity
+        : event.type === "snapshot"
+          ? event.snapshot.activity
+          : undefined;
     if (activity === undefined) continue;
     const phase = activity?.phase ?? null;
     if (phases[phases.length - 1] !== phase) phases.push(phase);
@@ -159,7 +197,7 @@ function inOrder(phases: ReadonlyArray<string | null>, allowed: readonly string[
   return true;
 }
 
-const visibleText =(snapshot: BotLiveSnapshot | null) =>
+const visibleText = (snapshot: BotLiveSnapshot | null) =>
   (snapshot?.entries ?? []).map((entry) =>
     entry.type === "user" || entry.type === "assistant"
       ? `${entry.type}:${entry.text}`
@@ -191,7 +229,10 @@ test("subscribing mid-stream returns a snapshot that already has the partial rep
 });
 
 test("events extend the snapshot, and a fresh subscription after a drop starts further along", async () => {
-  const fauxModels = createFauxModels([fauxAssistantMessage("first answer"), fauxAssistantMessage("second answer")]);
+  const fauxModels = createFauxModels([
+    fauxAssistantMessage("first answer"),
+    fauxAssistantMessage("second answer"),
+  ]);
   const live = await start(fauxModels);
   try {
     const tape = recorder();
@@ -199,9 +240,14 @@ test("events extend the snapshot, and a fresh subscription after a drop starts f
     tape.start(first.snapshot);
     const sent = await live.service.send("bot:a", { text: "one", requestId: "desk-1" });
     await live.service.awaitReply("bot:a", sent.submissionId, new AbortController().signal);
-    await waitFor(() => visibleText(tape.view).includes("assistant:first answer") && tape.view?.state.kind === "idle", {
-      what: "the reply to reach the subscriber",
-    });
+    await waitFor(
+      () =>
+        visibleText(tape.view).includes("assistant:first answer") &&
+        tape.view?.state.kind === "idle",
+      {
+        what: "the reply to reach the subscriber",
+      },
+    );
     assert.equal(tape.gaps, 0);
     assert.deepEqual(visibleText(tape.view), ["user:one", "assistant:first answer"]);
     assert.equal(tape.view?.partial, null);
@@ -214,7 +260,10 @@ test("events extend the snapshot, and a fresh subscription after a drop starts f
     const reloaded = recorder();
     const second = await live.projection.subscribe("bot:a", reloaded.sink);
     try {
-      assert.ok(second.snapshot.seq > tape.view!.seq, "a fresh snapshot is numbered after everything already seen");
+      assert.ok(
+        second.snapshot.seq > tape.view!.seq,
+        "a fresh snapshot is numbered after everything already seen",
+      );
       assert.deepEqual(visibleText(second.snapshot), [
         "user:one",
         "assistant:first answer",
@@ -230,7 +279,10 @@ test("events extend the snapshot, and a fresh subscription after a drop starts f
 });
 
 test("reopening the Bot's session starts a new epoch and re-sends a snapshot", async () => {
-  const fauxModels = createFauxModels([fauxAssistantMessage("before close"), fauxAssistantMessage("after reopen")]);
+  const fauxModels = createFauxModels([
+    fauxAssistantMessage("before close"),
+    fauxAssistantMessage("after reopen"),
+  ]);
   const live = await start(fauxModels, { service: { idleCloseMs: 80 } });
   try {
     const tape = recorder();
@@ -248,11 +300,20 @@ test("reopening the Bot's session starts a new epoch and re-sends a snapshot", a
     assert.equal(watchEnd, "ended");
     const second = await live.service.send("bot:a", { text: "again", requestId: "desk-2" });
     await live.service.awaitReply("bot:a", second.submissionId, new AbortController().signal);
-    await waitFor(() => visibleText(tape.view).includes("assistant:after reopen"), { what: "the reopened feed" });
+    await waitFor(() => visibleText(tape.view).includes("assistant:after reopen"), {
+      what: "the reopened feed",
+    });
     try {
       assert.notEqual(tape.view?.epoch, snapshot.epoch);
-      assert.ok(tape.events.some((event) => event.type === "snapshot" && event.epoch !== snapshot.epoch));
-      assert.deepEqual(visibleText(tape.view), ["user:hi", "assistant:before close", "user:again", "assistant:after reopen"]);
+      assert.ok(
+        tape.events.some((event) => event.type === "snapshot" && event.epoch !== snapshot.epoch),
+      );
+      assert.deepEqual(visibleText(tape.view), [
+        "user:hi",
+        "assistant:before close",
+        "user:again",
+        "assistant:after reopen",
+      ]);
     } finally {
       unsubscribe();
     }
@@ -264,7 +325,9 @@ test("reopening the Bot's session starts a new epoch and re-sends a snapshot", a
 test("more than 100 undelivered events collapse into one snapshot", async () => {
   const fauxModels = createFauxModels([]);
   const flushes: Array<() => void> = [];
-  const live = await start(fauxModels, { projection: { schedule: (flush) => flushes.push(flush) } });
+  const live = await start(fauxModels, {
+    projection: { schedule: (flush) => flushes.push(flush) },
+  });
   try {
     const tape = recorder();
     const { snapshot, unsubscribe } = await live.projection.subscribe("bot:a", tape.sink);
@@ -274,7 +337,15 @@ test("more than 100 undelivered events collapse into one snapshot", async () => 
       await conversation.submit(
         {
           type: "write",
-          entry: { kind: BOT_CONNECT_CARD_ENTRY_KIND, data: { type: "connect_card", pluginId: "notion", reason: `card ${index}`, status: "pending" } },
+          entry: {
+            kind: BOT_CONNECT_CARD_ENTRY_KIND,
+            data: {
+              type: "connect_card",
+              pluginId: "notion",
+              reason: `card ${index}`,
+              status: "pending",
+            },
+          },
         },
         ctx,
       );
@@ -317,7 +388,10 @@ test("a routine turn shows as its label, and a [SILENT] answer hides the whole t
     const tape = recorder();
     const { snapshot, unsubscribe } = await live.projection.subscribe("bot:a", tape.sink);
     unsubscribe();
-    assert.deepEqual(visibleText(snapshot), ["routine:Weekly meal plan", "assistant:Here is your meal plan."]);
+    assert.deepEqual(visibleText(snapshot), [
+      "routine:Weekly meal plan",
+      "assistant:Here is your meal plan.",
+    ]);
     const summary = await live.projection.summary("bot:a");
     assert.equal(summary.preview, "Here is your meal plan.");
   } finally {
@@ -345,7 +419,11 @@ test("a run that ends while its feed is still opening is reported settled, and n
   service = live.service;
   try {
     const sent = await live.service.send("bot:a", { text: "Quick one", requestId: "desk-1" });
-    const outcome = await live.service.awaitReply("bot:a", sent.submissionId, new AbortController().signal);
+    const outcome = await live.service.awaitReply(
+      "bot:a",
+      sent.submissionId,
+      new AbortController().signal,
+    );
     assert.equal(outcome.kind, "completed");
     assert.deepEqual(settled, [], "nothing is reported before the feed opens");
     held = false;
@@ -385,7 +463,11 @@ test("a run that ends after its opening feed read the state is reported settled 
   try {
     const sent = await live.service.send("bot:a", { text: "Quick one", requestId: "desk-1" });
     await atPlan;
-    const outcome = await live.service.awaitReply("bot:a", sent.submissionId, new AbortController().signal);
+    const outcome = await live.service.awaitReply(
+      "bot:a",
+      sent.submissionId,
+      new AbortController().signal,
+    );
     assert.equal(outcome.kind, "completed");
     held = false;
     release!();
@@ -465,7 +547,11 @@ test("a Bot paused after its opening feed read the state is still reported pause
     assert.deepEqual(settled, ["paused"], "one opening, one report");
     const view = await live.projection.subscribe("bot:a", recorder().sink);
     view.unsubscribe();
-    assert.equal(view.snapshot.state.kind, "paused", "the feed shows the pause, not the running state read before it");
+    assert.equal(
+      view.snapshot.state.kind,
+      "paused",
+      "the feed shows the pause, not the running state read before it",
+    );
   } finally {
     await live.close();
   }
@@ -474,7 +560,9 @@ test("a Bot paused after its opening feed read the state is still reported pause
 test("a running notice that joins a failed opening behind a notice that wasn't running still reports its run settled", async () => {
   const fauxModels = createFauxModels([fauxAssistantMessage("unused")]);
   let endFirstWatch: (() => void) | undefined;
-  const firstWatchEnded = new Promise<WatchEnd>((resolve) => (endFirstWatch = () => resolve({ kind: "ended" })));
+  const firstWatchEnded = new Promise<WatchEnd>(
+    (resolve) => (endFirstWatch = () => resolve({ kind: "ended" })),
+  );
   let failing = false;
   let failedOpens = 0;
   let failOpening: (() => void) | undefined;
@@ -532,10 +620,16 @@ test("a running notice that joins a failed opening behind a notice that wasn't r
     live.projection.notifyState("bot:a", { kind: "running", submissionId: "sub-joined" });
     assert.equal(failedOpens, 1, "both notices share one opening");
     failOpening!();
-    await waitFor(() => settled.length > 0, { what: "the joined running notice's run to be reported" });
+    await waitFor(() => settled.length > 0, {
+      what: "the joined running notice's run to be reported",
+    });
     // Give a second report, if any, time to arrive.
     await new Promise((resolve) => setTimeout(resolve, 200));
-    assert.deepEqual(settled, ["idle"], "the run the running notice named is reported settled, once");
+    assert.deepEqual(
+      settled,
+      ["idle"],
+      "the run the running notice named is reported settled, once",
+    );
     assert.equal(reports, 1, "the failed opening is reported once");
     watching.unsubscribe();
   } finally {
@@ -544,12 +638,17 @@ test("a running notice that joins a failed opening behind a notice that wasn't r
 });
 
 test("a failed reply is a typed failed turn, and Retry as a new submission answers after it", async () => {
-  const failure = fauxAssistantMessage("", { stopReason: "error", errorMessage: "provider is down" });
+  const failure = fauxAssistantMessage("", {
+    stopReason: "error",
+    errorMessage: "provider is down",
+  });
   const fauxModels = createFauxModels([failure, fauxAssistantMessage("Here it is.")]);
   const live = await start(fauxModels);
   try {
     const first = await live.service.send("bot:a", { text: "Plan dinner", requestId: "desk-1" });
-    await live.service.awaitReply("bot:a", first.submissionId, new AbortController().signal).catch(() => undefined);
+    await live.service
+      .awaitReply("bot:a", first.submissionId, new AbortController().signal)
+      .catch(() => undefined);
     const tape = recorder();
     const failed = await live.projection.subscribe("bot:a", tape.sink);
     failed.unsubscribe();
@@ -564,12 +663,18 @@ test("a failed reply is a typed failed turn, and Retry as a new submission answe
     assert.equal(failedSummary.lastTurnEnd, "failed");
 
     // Retry: the same text, a new request id.
-    const retry = await live.service.send("bot:a", { text: last.type === "failed_turn" ? last.retryText! : "", requestId: "desk-2" });
+    const retry = await live.service.send("bot:a", {
+      text: last.type === "failed_turn" ? last.retryText! : "",
+      requestId: "desk-2",
+    });
     assert.equal(retry.deduped, false);
     await live.service.awaitReply("bot:a", retry.submissionId, new AbortController().signal);
     const after = await live.projection.subscribe("bot:a", recorder().sink);
     after.unsubscribe();
-    assert.deepEqual(visibleText(after.snapshot).slice(-2), ["user:Plan dinner", "assistant:Here it is."]);
+    assert.deepEqual(visibleText(after.snapshot).slice(-2), [
+      "user:Plan dinner",
+      "assistant:Here it is.",
+    ]);
     assert.equal(botRetryableFailedTurn(after.snapshot.entries), null);
     assert.equal((await live.projection.summary("bot:a")).lastTurnEnd, undefined);
   } finally {
@@ -578,69 +683,147 @@ test("a failed reply is a typed failed turn, and Retry as a new submission answe
 });
 
 test("files the Bot wrote in its folder and images it shared become chips; failed or elsewhere writes do not", () => {
-  const call = (id: string, name: string, args: Record<string, unknown>) => ({ type: "toolCall", id, name, arguments: args });
-  const result = (id: number, toolCallId: string, toolName: string, details: unknown, isError = false) => ({
+  const call = (id: string, name: string, args: Record<string, unknown>) => ({
+    type: "toolCall",
+    id,
+    name,
+    arguments: args,
+  });
+  const result = (
+    id: number,
+    toolCallId: string,
+    toolName: string,
+    details: unknown,
+    isError = false,
+  ) => ({
     id,
     kind: "pi.tool-result",
-    model: [{ role: "toolResult", toolCallId, toolName, isError, details, content: [], timestamp: 5 }],
+    model: [
+      { role: "toolResult", toolCallId, toolName, isError, details, content: [], timestamp: 5 },
+    ],
   });
   const entries = projectBotTranscript([
-    { id: 1, kind: "pi.user", model: [{ role: "user", content: [{ type: "text", text: "Write my list" }], timestamp: 1 }] },
+    {
+      id: 1,
+      kind: "pi.user",
+      model: [{ role: "user", content: [{ type: "text", text: "Write my list" }], timestamp: 1 }],
+    },
     {
       id: 2,
       kind: "pi.assistant",
-      model: [{
-        role: "assistant",
-        stopReason: "toolUse",
-        timestamp: 2,
-        content: [
-          call("c1", "write_file", { path: "lists/groceries.md", content: "eggs" }),
-          call("c2", "edit_file", { path: "notes.md", old: "a", new: "b" }),
-          call("c3", "write_file", { path: "Desktop/x.md", content: "x", location: "full-mac" }),
-          call("c4", "write_file", { path: "broken.md", content: "x" }),
-        ],
-      }],
+      model: [
+        {
+          role: "assistant",
+          stopReason: "toolUse",
+          timestamp: 2,
+          content: [
+            call("c1", "write_file", { path: "lists/groceries.md", content: "eggs" }),
+            call("c2", "edit_file", { path: "notes.md", old: "a", new: "b" }),
+            call("c3", "write_file", { path: "Desktop/x.md", content: "x", location: "full-mac" }),
+            call("c4", "write_file", { path: "broken.md", content: "x" }),
+          ],
+        },
+      ],
     },
-    result(3, "c1", "write_file", { producedFile: { relativePath: "lists/groceries.md", operation: "written", bytes: 4 } }),
-    result(4, "c2", "edit_file", { producedFile: { relativePath: "notes.md", operation: "edited", bytes: 9 } }),
-    result(5, "c3", "write_file", { producedFile: { relativePath: "Desktop/x.md", operation: "written", bytes: 1 } }),
-    result(6, "c4", "write_file", { producedFile: { relativePath: "broken.md", operation: "written", bytes: 1 } }, true),
-    { id: 7, kind: "aiden.bot-shared-image", data: { id: "img-1", name: "chart.png", mimeType: "image/png", size: 3, data: "AAAA" } },
+    result(3, "c1", "write_file", {
+      producedFile: { relativePath: "lists/groceries.md", operation: "written", bytes: 4 },
+    }),
+    result(4, "c2", "edit_file", {
+      producedFile: { relativePath: "notes.md", operation: "edited", bytes: 9 },
+    }),
+    result(5, "c3", "write_file", {
+      producedFile: { relativePath: "Desktop/x.md", operation: "written", bytes: 1 },
+    }),
+    result(
+      6,
+      "c4",
+      "write_file",
+      { producedFile: { relativePath: "broken.md", operation: "written", bytes: 1 } },
+      true,
+    ),
+    {
+      id: 7,
+      kind: "aiden.bot-shared-image",
+      data: { id: "img-1", name: "chart.png", mimeType: "image/png", size: 3, data: "AAAA" },
+    },
   ] as never);
   assert.deepEqual(
     entries.filter((entry) => entry.type === "file" || entry.type === "shared_image"),
     [
       { id: "3:file", type: "file", path: "lists/groceries.md", operation: "written", at: 5 },
       { id: "4:file", type: "file", path: "notes.md", operation: "edited", at: 5 },
-      { id: "7", type: "shared_image", name: "chart.png", mimeType: "image/png", size: 3, data: "AAAA" },
+      {
+        id: "7",
+        type: "shared_image",
+        name: "chart.png",
+        mimeType: "image/png",
+        size: 3,
+        data: "AAAA",
+      },
     ],
   );
 });
 
 test("tool calls carry a kind, a past-tense label and a short safe detail; results say ok, failed or blocked", () => {
-  const result = (id: number, toolCallId: string, toolName: string, timestamp: number, code?: string) => ({
+  const result = (
+    id: number,
+    toolCallId: string,
+    toolName: string,
+    timestamp: number,
+    code?: string,
+  ) => ({
     id,
     kind: "pi.tool-result",
     data: { diagnostics: code ? [{ severity: "error", code, message: code }] : [] },
-    model: [{ role: "toolResult", toolCallId, toolName, isError: code !== undefined, content: [], timestamp }],
+    model: [
+      {
+        role: "toolResult",
+        toolCallId,
+        toolName,
+        isError: code !== undefined,
+        content: [],
+        timestamp,
+      },
+    ],
   });
   const entries = projectBotTranscript([
-    { id: 1, kind: "pi.user", model: [{ role: "user", content: [{ type: "text", text: "Plan dinners" }], timestamp: 900 }] },
+    {
+      id: 1,
+      kind: "pi.user",
+      model: [{ role: "user", content: [{ type: "text", text: "Plan dinners" }], timestamp: 900 }],
+    },
     {
       id: 2,
       kind: "pi.assistant",
-      model: [{
-        role: "assistant",
-        stopReason: "toolUse",
-        timestamp: 1_000,
-        content: [
-          { type: "toolCall", id: "c1", name: "read_file", arguments: { path: "/Users/sam/lists/grocery-list.md" } },
-          { type: "toolCall", id: "c2", name: "run_command", arguments: { command: "cat /Users/sam/.ssh/id_rsa" } },
-          { type: "toolCall", id: "c3", name: "web_search", arguments: { query: "lisbon trains" } },
-          { type: "toolCall", id: "c4", name: "web_search", arguments: { query: "slow thing" } },
-          { type: "toolCall", id: "c5", name: "read_file", arguments: { path: "restart.md" } },
-        ],
-      }],
+      model: [
+        {
+          role: "assistant",
+          stopReason: "toolUse",
+          timestamp: 1_000,
+          content: [
+            {
+              type: "toolCall",
+              id: "c1",
+              name: "read_file",
+              arguments: { path: "/Users/sam/lists/grocery-list.md" },
+            },
+            {
+              type: "toolCall",
+              id: "c2",
+              name: "run_command",
+              arguments: { command: "cat /Users/sam/.ssh/id_rsa" },
+            },
+            {
+              type: "toolCall",
+              id: "c3",
+              name: "web_search",
+              arguments: { query: "lisbon trains" },
+            },
+            { type: "toolCall", id: "c4", name: "web_search", arguments: { query: "slow thing" } },
+            { type: "toolCall", id: "c5", name: "read_file", arguments: { path: "restart.md" } },
+          ],
+        },
+      ],
     },
     result(3, "c1", "read_file", 1_400),
     result(4, "c2", "run_command", 1_050, "blocked"),
@@ -650,12 +833,31 @@ test("tool calls carry a kind, a past-tense label and a short safe detail; resul
   ] as never);
   const assistant = entries.find((entry) => entry.type === "assistant");
   assert.ok(assistant?.type === "assistant");
-  assert.deepEqual(assistant.toolCalls[0], { id: "c1", name: "read_file", kind: "reading", label: "Read 1 file", detail: "grocery-list.md" });
+  assert.deepEqual(assistant.toolCalls[0], {
+    id: "c1",
+    name: "read_file",
+    kind: "reading",
+    label: "Read 1 file",
+    detail: "grocery-list.md",
+  });
   // A command with no description shows no detail: the command itself never reaches the chat.
-  assert.deepEqual(assistant.toolCalls[1], { id: "c2", name: "run_command", kind: "command", label: "Ran a command" });
-  assert.deepEqual(assistant.toolCalls[2], { id: "c3", name: "web_search", kind: "searching", label: "Searched the web", detail: "lisbon trains" });
+  assert.deepEqual(assistant.toolCalls[1], {
+    id: "c2",
+    name: "run_command",
+    kind: "command",
+    label: "Ran a command",
+  });
+  assert.deepEqual(assistant.toolCalls[2], {
+    id: "c3",
+    name: "web_search",
+    kind: "searching",
+    label: "Searched the web",
+    detail: "lisbon trains",
+  });
   const results = entries.flatMap((entry) =>
-    entry.type === "tool_result" ? [[entry.toolCallId, entry.status, entry.durationMs, entry.at]] : [],
+    entry.type === "tool_result"
+      ? [[entry.toolCallId, entry.status, entry.durationMs, entry.at]]
+      : [],
   );
   assert.deepEqual(results, [
     ["c1", "ok", 400, 1_400],
@@ -673,9 +875,16 @@ test("a tool the Bot's access or the person refused is blocked, a tool that brok
     throw new Error("The search service is down.");
   });
   const fauxModels = createFauxModels([
-    fauxAssistantMessage([fauxToolCall("run_command", { text: "ls" }), fauxToolCall("web_search", { text: "trains" }), fauxToolCall("send_email", { text: "hi" })], {
-      stopReason: "toolUse",
-    }),
+    fauxAssistantMessage(
+      [
+        fauxToolCall("run_command", { text: "ls" }),
+        fauxToolCall("web_search", { text: "trains" }),
+        fauxToolCall("send_email", { text: "hi" }),
+      ],
+      {
+        stopReason: "toolUse",
+      },
+    ),
     fauxAssistantMessage("I couldn't do that one."),
   ]);
   const live = await start(fauxModels, {
@@ -701,11 +910,17 @@ test("a tool the Bot's access or the person refused is blocked, a tool that brok
     await live.service.awaitReply("bot:a", sent.submissionId, new AbortController().signal);
     const view = await (await live.service.conversation("bot:a")).context(ctx);
     const statuses = new Map(
-      projectBotTranscript(view.entries).flatMap((entry) => (entry.type === "tool_result" ? [[entry.toolName, entry] as const] : [])),
+      projectBotTranscript(view.entries).flatMap((entry) =>
+        entry.type === "tool_result" ? [[entry.toolName, entry] as const] : [],
+      ),
     );
     assert.equal(statuses.get("run_command")?.status, "blocked");
     assert.equal(statuses.get("web_search")?.status, "failed");
-    assert.equal(statuses.get("send_email")?.status, "blocked", "a declined approval is blocked, not failed");
+    assert.equal(
+      statuses.get("send_email")?.status,
+      "blocked",
+      "a declined approval is blocked, not failed",
+    );
     assert.deepEqual(shell.executions, [], "a refused tool never runs");
     assert.deepEqual(gated.executions, [], "a declined tool never runs");
     for (const entry of statuses.values()) {
@@ -720,22 +935,55 @@ test("memory saves show one quiet line each: in-turn saves that changed somethin
   const result = (id: number, toolCallId: string, details: unknown, isError = false) => ({
     id,
     kind: "pi.tool-result",
-    model: [{ role: "toolResult", toolCallId, toolName: "bot_memory", isError, details, content: [], timestamp: 5 }],
+    model: [
+      {
+        role: "toolResult",
+        toolCallId,
+        toolName: "bot_memory",
+        isError,
+        details,
+        content: [],
+        timestamp: 5,
+      },
+    ],
   });
   const entries = projectBotTranscript([
-    { id: 1, kind: "pi.user", model: [{ role: "user", content: [{ type: "text", text: "I have a dog" }], timestamp: 1 }] },
+    {
+      id: 1,
+      kind: "pi.user",
+      model: [{ role: "user", content: [{ type: "text", text: "I have a dog" }], timestamp: 1 }],
+    },
     {
       id: 2,
       kind: "pi.assistant",
-      model: [{ role: "assistant", stopReason: "toolUse", timestamp: 2, content: [{ type: "toolCall", id: "m1", name: "bot_memory", arguments: {} }] }],
+      model: [
+        {
+          role: "assistant",
+          stopReason: "toolUse",
+          timestamp: 2,
+          content: [{ type: "toolCall", id: "m1", name: "bot_memory", arguments: {} }],
+        },
+      ],
     },
     result(3, "m1", { changed: 1, targets: ["user"] }),
     result(4, "m2", { changed: 0, targets: [] }),
     result(5, "m3", { changed: 0, targets: [] }, true),
-    { id: 6, kind: "aiden.memory-review", data: { source: "review", added: 2, targets: ["user", "memory"] } },
+    {
+      id: 6,
+      kind: "aiden.memory-review",
+      data: { source: "review", added: 2, targets: ["user", "memory"] },
+    },
     { id: 7, kind: "aiden.memory-review", data: { source: "review", added: 0, targets: [] } },
-    { id: 8, kind: "aiden.memory-review", data: { source: "review", added: 0, targets: [], failed: true } },
-    { id: 9, kind: "aiden.memory-review", data: { source: "compaction", added: 1, targets: ["memory"] } },
+    {
+      id: 8,
+      kind: "aiden.memory-review",
+      data: { source: "review", added: 0, targets: [], failed: true },
+    },
+    {
+      id: 9,
+      kind: "aiden.memory-review",
+      data: { source: "compaction", added: 1, targets: ["memory"] },
+    },
   ] as never);
   assert.deepEqual(
     entries.filter((entry) => entry.type === "memory_update"),
@@ -763,12 +1011,28 @@ test("a routine proposal is one card that shows its newest decision", () => {
   const entries = projectBotTranscript([
     proposal(1, "p-1", "Weekly meal plan"),
     proposal(2, "p-2", "Daily check-in"),
-    { id: 3, kind: "aiden.routine-proposal-status", data: { proposalId: "p-1", status: "dismissed" } },
-    { id: 4, kind: "aiden.routine-proposal-status", data: { proposalId: "p-1", status: "accepted", routineId: "task-9" } },
-    { id: 5, kind: "aiden.routine-proposal-status", data: { proposalId: "unknown", status: "accepted" } },
+    {
+      id: 3,
+      kind: "aiden.routine-proposal-status",
+      data: { proposalId: "p-1", status: "dismissed" },
+    },
+    {
+      id: 4,
+      kind: "aiden.routine-proposal-status",
+      data: { proposalId: "p-1", status: "accepted", routineId: "task-9" },
+    },
+    {
+      id: 5,
+      kind: "aiden.routine-proposal-status",
+      data: { proposalId: "unknown", status: "accepted" },
+    },
   ] as never);
   assert.deepEqual(
-    entries.map((entry) => (entry.type === "routine_proposal" ? [entry.id, entry.proposal.name, entry.status, entry.routineId] : entry.type)),
+    entries.map((entry) =>
+      entry.type === "routine_proposal"
+        ? [entry.id, entry.proposal.name, entry.status, entry.routineId]
+        : entry.type,
+    ),
     [
       ["1", "Weekly meal plan", "accepted", "task-9"],
       ["2", "Daily check-in", "pending", undefined],
@@ -778,14 +1042,43 @@ test("a routine proposal is one card that shows its newest decision", () => {
 
 test("a settings change from chat is one row that shows its newest answer; a malformed one never shows", () => {
   const entries = projectBotTranscript([
-    { id: 1, kind: "aiden.bot-settings-change", data: { changeId: "c-1", mode: "applied", fields: ["name"], lines: ["Name: Chief → Planner"] } },
-    { id: 2, kind: "aiden.bot-settings-change", data: { changeId: "c-2", mode: "held", fields: ["instructions"], lines: ["Instructions"], instructions: "Be terse." } },
-    { id: 3, kind: "aiden.bot-settings-change", data: { changeId: "c-3", mode: "held", fields: ["access"], lines: [] } },
-    { id: 4, kind: "aiden.bot-settings-change-status", data: { changeId: "c-1", status: "restored" } },
+    {
+      id: 1,
+      kind: "aiden.bot-settings-change",
+      data: {
+        changeId: "c-1",
+        mode: "applied",
+        fields: ["name"],
+        lines: ["Name: Chief → Planner"],
+      },
+    },
+    {
+      id: 2,
+      kind: "aiden.bot-settings-change",
+      data: {
+        changeId: "c-2",
+        mode: "held",
+        fields: ["instructions"],
+        lines: ["Instructions"],
+        instructions: "Be terse.",
+      },
+    },
+    {
+      id: 3,
+      kind: "aiden.bot-settings-change",
+      data: { changeId: "c-3", mode: "held", fields: ["access"], lines: [] },
+    },
+    {
+      id: 4,
+      kind: "aiden.bot-settings-change-status",
+      data: { changeId: "c-1", status: "restored" },
+    },
     { id: 5, kind: "aiden.bot-settings-change-status", data: { changeId: "c-2", status: "bogus" } },
   ] as never);
   assert.deepEqual(
-    entries.map((entry) => (entry.type === "settings_change" ? [entry.id, entry.change.mode, entry.status] : entry.type)),
+    entries.map((entry) =>
+      entry.type === "settings_change" ? [entry.id, entry.change.mode, entry.status] : entry.type,
+    ),
     [
       ["1", "applied", "restored"],
       ["2", "held", "pending"],
@@ -808,13 +1101,27 @@ test("a host-raised issue is one card that settles by its newest status", () => 
   });
   const entries = projectBotTranscript([
     { id: 1, kind: "aiden.bot-issue", data: issue("i-1") },
-    { id: 2, kind: "aiden.bot-issue-status", data: { issueId: "i-1", resolution: "superseded", resolvedAt: 2_000 } },
-    { id: 3, kind: "aiden.bot-issue-status", data: { issueId: "i-1", resolution: "fixed", resolvedAt: 3_000 } },
-    { id: 4, kind: "aiden.bot-issue", data: issue("i-2", { dedupeKey: "routine:r2:failed", routineId: "r2" }) },
+    {
+      id: 2,
+      kind: "aiden.bot-issue-status",
+      data: { issueId: "i-1", resolution: "superseded", resolvedAt: 2_000 },
+    },
+    {
+      id: 3,
+      kind: "aiden.bot-issue-status",
+      data: { issueId: "i-1", resolution: "fixed", resolvedAt: 3_000 },
+    },
+    {
+      id: 4,
+      kind: "aiden.bot-issue",
+      data: issue("i-2", { dedupeKey: "routine:r2:failed", routineId: "r2" }),
+    },
     { id: 5, kind: "aiden.bot-issue", data: issue("i-3", { title: "x".repeat(81) }) },
   ] as never);
   assert.deepEqual(
-    entries.map((entry) => (entry.type === "issue" ? [entry.id, entry.issue.id, entry.status, entry.at] : entry.type)),
+    entries.map((entry) =>
+      entry.type === "issue" ? [entry.id, entry.issue.id, entry.status, entry.at] : entry.type,
+    ),
     [
       ["1", "i-1", "fixed", 1_000],
       ["4", "i-2", "open", 1_000],
@@ -866,9 +1173,17 @@ test("an open issue marks the Bot as needing the person; resolving it clears tha
       routineId: "r1",
       actions: [{ kind: "resume_routine", routineId: "r1" }],
     });
-    assert.equal((await live.projection.summary("bot:a")).needsYou, true, "the sidebar says Needs you");
+    assert.equal(
+      (await live.projection.summary("bot:a")).needsYou,
+      true,
+      "the sidebar says Needs you",
+    );
     await issues.resolve("bot:a", "routine:r1:failed", "fixed");
-    assert.equal((await live.projection.summary("bot:a")).needsYou, false, "settled, the row clears");
+    assert.equal(
+      (await live.projection.summary("bot:a")).needsYou,
+      false,
+      "settled, the row clears",
+    );
   } finally {
     await live.close();
   }
@@ -924,7 +1239,11 @@ test("a malformed or another Bot's issue row never breaks the Bot’s Needs you 
     },
   });
   try {
-    assert.equal((await live.projection.summary("bot:a")).needsYou, false, "unreadable rows never reach the sidebar");
+    assert.equal(
+      (await live.projection.summary("bot:a")).needsYou,
+      false,
+      "unreadable rows never reach the sidebar",
+    );
     assert.deepEqual(await issues.list("bot:a"), [], "and listing reads past them");
 
     const raised = await issues.raise({
@@ -936,7 +1255,11 @@ test("a malformed or another Bot's issue row never breaks the Bot’s Needs you 
       routineId: "r1",
       actions: [{ kind: "resume_routine", routineId: "r1" }],
     });
-    assert.equal((await live.projection.summary("bot:a")).needsYou, true, "a usable raise still needs the person");
+    assert.equal(
+      (await live.projection.summary("bot:a")).needsYou,
+      true,
+      "a usable raise still needs the person",
+    );
     assert.deepEqual(
       (JSON.parse(readFileSync(file, "utf8")) as Array<{ id: string }>).map((row) => row.id),
       [raised.id],
@@ -978,7 +1301,9 @@ test("Stop ends the running reply, keeps what was written, and the Bot is idle a
     live.projection.notifyStopping("bot:a");
     const state = await live.service.stop("bot:a");
     assert.equal(state.kind, "idle");
-    await waitFor(() => tape.view?.partial === null && tape.view.state.kind === "idle", { what: "the stop to land" });
+    await waitFor(() => tape.view?.partial === null && tape.view.state.kind === "idle", {
+      what: "the stop to land",
+    });
     const phases = observedPhases(tape.events);
     assert.ok(phases.includes("stopping"), phases.join(" → "));
     assert.equal(phases[phases.length - 1], null);
@@ -994,7 +1319,10 @@ test("Stop ends the running reply, keeps what was written, and the Bot is idle a
 });
 
 test("two windows on one Bot both follow the reply, and one leaving does not stop the other", async () => {
-  const fauxModels = createFauxModels([fauxAssistantMessage("first answer"), fauxAssistantMessage("second answer")]);
+  const fauxModels = createFauxModels([
+    fauxAssistantMessage("first answer"),
+    fauxAssistantMessage("second answer"),
+  ]);
   const live = await start(fauxModels);
   try {
     const left = recorder();
@@ -1007,7 +1335,9 @@ test("two windows on one Bot both follow the reply, and one leaving does not sto
     await live.service.awaitReply("bot:a", sent.submissionId, new AbortController().signal);
     const answered = (tape: ReturnType<typeof recorder>, text: string) =>
       visibleText(tape.view).includes(`assistant:${text}`) && tape.view?.state.kind === "idle";
-    await waitFor(() => answered(left, "first answer") && answered(right, "first answer"), { what: "both windows" });
+    await waitFor(() => answered(left, "first answer") && answered(right, "first answer"), {
+      what: "both windows",
+    });
 
     a.unsubscribe();
     const again = await live.service.send("bot:a", { text: "two", requestId: "desk-2" });
@@ -1024,7 +1354,9 @@ test("two windows on one Bot both follow the reply, and one leaving does not sto
 test("a Bot deleted while its chat is open sends that chat nothing more and cannot be reopened", async () => {
   const fauxModels = createFauxModels([fauxAssistantMessage("hello")]);
   const flushes: Array<() => void> = [];
-  const live = await start(fauxModels, { projection: { schedule: (flush) => flushes.push(flush) } });
+  const live = await start(fauxModels, {
+    projection: { schedule: (flush) => flushes.push(flush) },
+  });
   try {
     const tape = recorder();
     const { snapshot } = await live.projection.subscribe("bot:a", tape.sink);
@@ -1052,7 +1384,8 @@ test("connect cards carry their current status, and refresh re-sends a changed o
   const fauxModels = createFauxModels([]);
   const live = await start(fauxModels, {
     projection: {
-      connectCardStatus: async (_botId, card) => (dismissed.has(card.pluginId) ? "dismissed" : card.status),
+      connectCardStatus: async (_botId, card) =>
+        dismissed.has(card.pluginId) ? "dismissed" : card.status,
     },
   });
   try {
@@ -1060,7 +1393,10 @@ test("connect cards carry their current status, and refresh re-sends a changed o
     await conversation.submit(
       {
         type: "write",
-        entry: { kind: BOT_CONNECT_CARD_ENTRY_KIND, data: { type: "connect_card", pluginId: "notion", reason: "Notes", status: "pending" } },
+        entry: {
+          kind: BOT_CONNECT_CARD_ENTRY_KIND,
+          data: { type: "connect_card", pluginId: "notion", reason: "Notes", status: "pending" },
+        },
       },
       ctx,
     );
@@ -1086,7 +1422,8 @@ test("a pending connect card picks up its new status from a frame that only stre
   const fauxModels = createFauxModels([slowAnswer()], { tokensPerSecond: 40 });
   const live = await start(fauxModels, {
     projection: {
-      connectCardStatus: async (_botId, card) => (dismissed.has(card.pluginId) ? "dismissed" : card.status),
+      connectCardStatus: async (_botId, card) =>
+        dismissed.has(card.pluginId) ? "dismissed" : card.status,
     },
   });
   try {
@@ -1094,7 +1431,10 @@ test("a pending connect card picks up its new status from a frame that only stre
     await conversation.submit(
       {
         type: "write",
-        entry: { kind: BOT_CONNECT_CARD_ENTRY_KIND, data: { type: "connect_card", pluginId: "notion", reason: "Notes", status: "pending" } },
+        entry: {
+          kind: BOT_CONNECT_CARD_ENTRY_KIND,
+          data: { type: "connect_card", pluginId: "notion", reason: "Notes", status: "pending" },
+        },
       },
       ctx,
     );
@@ -1126,7 +1466,9 @@ test("a pending connect card picks up its new status from a frame that only stre
 test("a waiting question reaches subscribers and late joiners, and its answer replaces it with a reply", async () => {
   const questions = createBotQuestions();
   const fauxModels = createFauxModels([
-    fauxAssistantMessage([fauxToolCall(QUESTION_TOOL_NAME, QUESTION_ARGS)], { stopReason: "toolUse" }),
+    fauxAssistantMessage([fauxToolCall(QUESTION_TOOL_NAME, QUESTION_ARGS)], {
+      stopReason: "toolUse",
+    }),
     fauxAssistantMessage("Blue banner coming up."),
   ]);
   const live = await start(fauxModels, {
@@ -1145,12 +1487,18 @@ test("a waiting question reaches subscribers and late joiners, and its answer re
     assert.equal(tape.view!.question!.questions[0]!.question, QUESTION_ARGS.questions[0]!.question);
 
     const late = await live.projection.subscribe("bot:a", recorder().sink);
-    assert.equal(late.snapshot.question?.waitId, waitId, "a window opened later sees the same card");
+    assert.equal(
+      late.snapshot.question?.waitId,
+      waitId,
+      "a window opened later sees the same card",
+    );
     late.unsubscribe();
 
     assert.equal(questions.answer("bot:a", waitId, optionAnswer(waitId, "Blue")), "answered");
     await waitFor(
-      () => tape.view?.question === null && visibleText(tape.view).includes("assistant:Blue banner coming up."),
+      () =>
+        tape.view?.question === null &&
+        visibleText(tape.view).includes("assistant:Blue banner coming up."),
       { what: "the answer and the reply" },
     );
     assert.equal(tape.gaps, 0);
@@ -1174,7 +1522,10 @@ test("needsYou agrees with the summary, with or without an open feed, and never 
         transcriptReads += 1;
         return service!.conversation(botId);
       },
-      state: async (botId) => (unavailable ? { kind: "unavailable", reason: "held_by_live_process" } : service!.state(botId)),
+      state: async (botId) =>
+        unavailable
+          ? { kind: "unavailable", reason: "held_by_live_process" }
+          : service!.state(botId),
       issuePending: () => issueOpen,
     },
   });
@@ -1216,7 +1567,9 @@ test("needsYou agrees with the summary, with or without an open feed, and never 
     issueOpen = false;
     unavailable = false;
     await live.service.send("bot:a", { text: "hello", requestId: "feed-signals" });
-    await waitFor(() => visibleText(tape.view).includes("assistant:Hello."), { what: "the existing live feed's reply" });
+    await waitFor(() => visibleText(tape.view).includes("assistant:Hello."), {
+      what: "the existing live feed's reply",
+    });
     const before = transcriptReads;
     assert.notEqual((await live.projection.summary("bot:a")).lastReplyAt, null);
     assert.equal(transcriptReads, before, "an open feed reuses its admitted entries");
@@ -1232,7 +1585,9 @@ test("needsYou agrees with the summary, with or without an open feed, and never 
 test("a waiting hand-off reaches subscribers and late joiners, reads as waiting, and Done becomes the person's line before the reply", async () => {
   const handoffs = createBotHandoffs();
   const fauxModels = createFauxModels([
-    fauxAssistantMessage([fauxToolCall(HANDOFF_TOOL_NAME, HANDOFF_ARGS)], { stopReason: "toolUse" }),
+    fauxAssistantMessage([fauxToolCall(HANDOFF_TOOL_NAME, HANDOFF_ARGS)], {
+      stopReason: "toolUse",
+    }),
     fauxAssistantMessage("Thanks, the transfer is through."),
   ]);
   const live = await start(fauxModels, {
@@ -1251,29 +1606,51 @@ test("a waiting hand-off reaches subscribers and late joiners, reads as waiting,
     assert.equal(card.action, "Enter the 2FA code for your bank");
     assert.equal(card.open?.url, "https://bank.example/verify");
     await waitFor(() => tape.view?.activity?.phase === "waiting", { what: "the waiting line" });
-    assert.equal((await live.projection.summary("bot:a")).needsYou, true, "the Bot list shows it needs the person");
+    assert.equal(
+      (await live.projection.summary("bot:a")).needsYou,
+      true,
+      "the Bot list shows it needs the person",
+    );
 
     const late = await live.projection.subscribe("bot:a", recorder().sink);
-    assert.equal(late.snapshot.handoff?.waitId, card.waitId, "a window opened later sees the same card");
+    assert.equal(
+      late.snapshot.handoff?.waitId,
+      card.waitId,
+      "a window opened later sees the same card",
+    );
     late.unsubscribe();
 
-    assert.equal(handoffs.answer("bot:a", card.waitId, { outcome: "done", note: "Code entered." }), "answered");
+    assert.equal(
+      handoffs.answer("bot:a", card.waitId, { outcome: "done", note: "Code entered." }),
+      "answered",
+    );
     await waitFor(
-      () => tape.view?.handoff === null && visibleText(tape.view).includes("assistant:Thanks, the transfer is through."),
+      () =>
+        tape.view?.handoff === null &&
+        visibleText(tape.view).includes("assistant:Thanks, the transfer is through."),
       { what: "the answer and the reply" },
     );
     assert.equal(tape.gaps, 0);
     const shown = visibleText(tape.view);
-    assert.ok(shown.indexOf("handoff_result") < shown.indexOf("assistant:Thanks, the transfer is through."), shown.join(" | "));
+    assert.ok(
+      shown.indexOf("handoff_result") < shown.indexOf("assistant:Thanks, the transfer is through."),
+      shown.join(" | "),
+    );
     const result = tape.view!.entries.find((entry) => entry.type === "handoff_result");
-    assert.deepEqual(result?.type === "handoff_result" ? [result.kind, result.outcome, result.action, result.note] : undefined, [
-      "action",
-      "done",
-      "Enter the 2FA code for your bank",
-      "Code entered.",
-    ]);
+    assert.deepEqual(
+      result?.type === "handoff_result"
+        ? [result.kind, result.outcome, result.action, result.note]
+        : undefined,
+      ["action", "done", "Enter the 2FA code for your bank", "Code entered."],
+    );
     const rows = botTranscriptRows(tape.view!.entries, null, { running: false, level: "summary" });
-    assert.ok(rows.some((row) => row.kind === "handoff_result" && row.text === "You did this: Enter the 2FA code for your bank"));
+    assert.ok(
+      rows.some(
+        (row) =>
+          row.kind === "handoff_result" &&
+          row.text === "You did this: Enter the 2FA code for your bank",
+      ),
+    );
     assert.equal((await live.projection.summary("bot:a")).needsYou, false);
     first.unsubscribe();
   } finally {
@@ -1285,7 +1662,9 @@ test("a waiting hand-off reaches subscribers and late joiners, reads as waiting,
 test("a hand-off that opens or settles without a refresh reaching the open chat is caught up when the next window subscribes", async () => {
   const handoffs = createBotHandoffs();
   const fauxModels = createFauxModels([
-    fauxAssistantMessage([fauxToolCall(HANDOFF_TOOL_NAME, HANDOFF_ARGS)], { stopReason: "toolUse" }),
+    fauxAssistantMessage([fauxToolCall(HANDOFF_TOOL_NAME, HANDOFF_ARGS)], {
+      stopReason: "toolUse",
+    }),
     fauxAssistantMessage("Thanks, the transfer is through."),
   ]);
   // No `refreshHandoff` wiring: only a subscribe can bring the open feed up to date.
@@ -1303,13 +1682,26 @@ test("a hand-off that opens or settles without a refresh reaching the open chat 
     assert.equal(tape.view?.handoff ?? null, null, "nothing told the open chat yet");
 
     const opened = await live.projection.subscribe("bot:a", recorder().sink);
-    assert.equal(opened.snapshot.handoff?.waitId, card!.waitId, "the new window shows the waiting card");
-    await waitFor(() => tape.view?.handoff?.waitId === card!.waitId, { what: "the catch-up event in the open chat" });
+    assert.equal(
+      opened.snapshot.handoff?.waitId,
+      card!.waitId,
+      "the new window shows the waiting card",
+    );
+    await waitFor(() => tape.view?.handoff?.waitId === card!.waitId, {
+      what: "the catch-up event in the open chat",
+    });
     opened.unsubscribe();
 
     assert.equal(handoffs.answer("bot:a", card!.waitId, { outcome: "done" }), "answered");
-    await waitFor(() => visibleText(tape.view).includes("assistant:Thanks, the transfer is through."), { what: "the reply" });
-    assert.equal(tape.view?.handoff?.waitId, card!.waitId, "the settled card has not reached the open chat yet");
+    await waitFor(
+      () => visibleText(tape.view).includes("assistant:Thanks, the transfer is through."),
+      { what: "the reply" },
+    );
+    assert.equal(
+      tape.view?.handoff?.waitId,
+      card!.waitId,
+      "the settled card has not reached the open chat yet",
+    );
     const settled = await live.projection.subscribe("bot:a", recorder().sink);
     assert.equal(settled.snapshot.handoff, null, "a window opened after the answer shows no card");
     await waitFor(() => tape.view?.handoff === null, { what: "the open chat losing the card" });
@@ -1322,27 +1714,69 @@ test("a hand-off that opens or settles without a refresh reaching the open chat 
 });
 
 test("only a settled hand-off becomes the person's line; a stopped or refused one stays a tool result", () => {
-  const call = (id: string, name: string) => ({ type: "toolCall", id, name, arguments: { action: "Pay the invoice" } });
-  const result = (id: number, toolCallId: string, toolName: string, isError: boolean, details: unknown) => ({
+  const call = (id: string, name: string) => ({
+    type: "toolCall",
+    id,
+    name,
+    arguments: { action: "Pay the invoice" },
+  });
+  const result = (
+    id: number,
+    toolCallId: string,
+    toolName: string,
+    isError: boolean,
+    details: unknown,
+  ) => ({
     id,
     kind: "pi.tool-result",
-    data: { diagnostics: isError ? [{ severity: "error", code: "aborted", message: "stopped" }] : [] },
-    model: [{ role: "toolResult", toolCallId, toolName, isError, details, content: [{ type: "text", text: "…" }], timestamp: 2_000 + id }],
+    data: {
+      diagnostics: isError ? [{ severity: "error", code: "aborted", message: "stopped" }] : [],
+    },
+    model: [
+      {
+        role: "toolResult",
+        toolCallId,
+        toolName,
+        isError,
+        details,
+        content: [{ type: "text", text: "…" }],
+        timestamp: 2_000 + id,
+      },
+    ],
   });
   const entries = projectBotTranscript([
-    { id: 1, kind: "pi.user", model: [{ role: "user", content: [{ type: "text", text: "Pay it" }], timestamp: 900 }] },
+    {
+      id: 1,
+      kind: "pi.user",
+      model: [{ role: "user", content: [{ type: "text", text: "Pay it" }], timestamp: 900 }],
+    },
     {
       id: 2,
       kind: "pi.assistant",
-      model: [{
-        role: "assistant",
-        stopReason: "toolUse",
-        timestamp: 1_000,
-        content: [call("h1", "hand_off"), call("h2", "hand_off"), call("h3", "hand_off"), call("h4", "sign_in")],
-      }],
+      model: [
+        {
+          role: "assistant",
+          stopReason: "toolUse",
+          timestamp: 1_000,
+          content: [
+            call("h1", "hand_off"),
+            call("h2", "hand_off"),
+            call("h3", "hand_off"),
+            call("h4", "sign_in"),
+          ],
+        },
+      ],
     },
-    result(3, "h1", "hand_off", false, { kind: "action", outcome: "skipped", action: "Pay the invoice" }),
-    result(4, "h2", "hand_off", true, { kind: "action", outcome: "done", action: "Pay the invoice" }),
+    result(3, "h1", "hand_off", false, {
+      kind: "action",
+      outcome: "skipped",
+      action: "Pay the invoice",
+    }),
+    result(4, "h2", "hand_off", true, {
+      kind: "action",
+      outcome: "done",
+      action: "Pay the invoice",
+    }),
     result(5, "h3", "hand_off", false, { answerText: "not a hand-off" }),
     result(6, "h4", "sign_in", false, {
       kind: "sign_in",
@@ -1358,42 +1792,82 @@ test("only a settled hand-off becomes the person's line; a stopped or refused on
         ? [`tool ${entry.toolCallId} ${entry.status}`]
         : [],
   );
-  assert.deepEqual(lines, ["handoff:h1 skipped", "tool h2 stopped", "tool h3 ok", "handoff:h4 done"]);
+  assert.deepEqual(lines, [
+    "handoff:h1 skipped",
+    "tool h2 stopped",
+    "tool h3 ok",
+    "handoff:h4 done",
+  ]);
   const signIn = entries.find((entry) => entry.id === "handoff:h4");
   assert.equal(signIn?.type === "handoff_result" ? signIn.origin : undefined, "https://github.com");
   assert.deepEqual(
-    botTranscriptRows(entries, null, { running: false, level: "summary" }).flatMap((row) => (row.kind === "handoff_result" ? [row.text] : [])),
+    botTranscriptRows(entries, null, { running: false, level: "summary" }).flatMap((row) =>
+      row.kind === "handoff_result" ? [row.text] : [],
+    ),
     ["You skipped this: Pay the invoice", "You signed in to github.com"],
   );
-  assert.deepEqual(botTranscriptPreview(entries), { text: "You signed in to github.com", at: 2_006 }, "the Bot list previews the person's answer");
+  assert.deepEqual(
+    botTranscriptPreview(entries),
+    { text: "You signed in to github.com", at: 2_006 },
+    "the Bot list previews the person's answer",
+  );
 });
 
 test("a rule hand-off's answer reads right after the call it stopped; the last answer for a call wins and malformed ones never show", () => {
   const rule = { id: "default.purchase", label: "Make a purchase or booking" };
-  const call = (id: string) => ({ type: "toolCall", id, name: "computer_use", arguments: { action: "click", element: 3 } });
+  const call = (id: string) => ({
+    type: "toolCall",
+    id,
+    name: "computer_use",
+    arguments: { action: "click", element: 3 },
+  });
   const blocked = (id: number, toolCallId: string) => ({
     id,
     kind: "pi.tool-result",
     data: { diagnostics: [{ severity: "error", code: "blocked", message: "blocked" }] },
-    model: [{
-      role: "toolResult",
-      toolCallId,
-      toolName: "computer_use",
-      isError: true,
-      content: [{ type: "text", text: "Tool call blocked: The person did this themselves." }],
-      timestamp: 2_000 + id,
-    }],
+    model: [
+      {
+        role: "toolResult",
+        toolCallId,
+        toolName: "computer_use",
+        isError: true,
+        content: [{ type: "text", text: "Tool call blocked: The person did this themselves." }],
+        timestamp: 2_000 + id,
+      },
+    ],
   });
-  const answer = (id: number, data: Record<string, unknown>) => ({ id, kind: "aiden.handoff-result", data });
+  const answer = (id: number, data: Record<string, unknown>) => ({
+    id,
+    kind: "aiden.handoff-result",
+    data,
+  });
   const entries = projectBotTranscript([
-    { id: 1, kind: "pi.user", model: [{ role: "user", content: [{ type: "text", text: "Order it" }], timestamp: 900 }] },
+    {
+      id: 1,
+      kind: "pi.user",
+      model: [{ role: "user", content: [{ type: "text", text: "Order it" }], timestamp: 900 }],
+    },
     {
       id: 2,
       kind: "pi.assistant",
-      model: [{ role: "assistant", stopReason: "toolUse", timestamp: 1_000, content: [call("r1"), call("r2")] }],
+      model: [
+        {
+          role: "assistant",
+          stopReason: "toolUse",
+          timestamp: 1_000,
+          content: [call("r1"), call("r2")],
+        },
+      ],
     },
     answer(3, { kind: "action", outcome: "skipped", action: rule.label, toolCallId: "r1", rule }),
-    answer(4, { kind: "action", outcome: "done", action: rule.label, note: "Booked for two", toolCallId: "r1", rule }),
+    answer(4, {
+      kind: "action",
+      outcome: "done",
+      action: rule.label,
+      note: "Booked for two",
+      toolCallId: "r1",
+      rule,
+    }),
     blocked(5, "r1"),
     // Not a rule entry (no rule), and one with an overlong action: neither shows.
     answer(6, { kind: "action", outcome: "done", action: rule.label, toolCallId: "r2" }),
@@ -1409,7 +1883,12 @@ test("a rule hand-off's answer reads right after the call it stopped; the last a
         ? [`tool ${entry.toolCallId} ${entry.status}`]
         : [],
   );
-  assert.deepEqual(lines, ["tool r1 blocked", "handoff:r1 done", "handoff:r9 done", "tool r2 blocked"]);
+  assert.deepEqual(lines, [
+    "tool r1 blocked",
+    "handoff:r1 done",
+    "handoff:r9 done",
+    "tool r2 blocked",
+  ]);
   const r1 = entries.find((entry) => entry.id === "handoff:r1");
   assert.deepEqual(
     r1?.type === "handoff_result" ? { kind: r1.kind, note: r1.note, at: r1.at } : undefined,
@@ -1432,26 +1911,32 @@ test("a provider that reuses a call id in every turn still gives each hand-off a
   const calling = (id: number, name: string) => ({
     id,
     kind: "pi.assistant",
-    model: [{
-      role: "assistant",
-      stopReason: "toolUse",
-      timestamp: 1_000 * id,
-      content: [{ type: "toolCall", id: "call_0", name, arguments: { action: "Pay" } }],
-    }],
+    model: [
+      {
+        role: "assistant",
+        stopReason: "toolUse",
+        timestamp: 1_000 * id,
+        content: [{ type: "toolCall", id: "call_0", name, arguments: { action: "Pay" } }],
+      },
+    ],
   });
   const settled = (id: number, toolName: string, isError: boolean, details?: unknown) => ({
     id,
     kind: "pi.tool-result",
-    data: { diagnostics: isError ? [{ severity: "error", code: "blocked", message: "blocked" }] : [] },
-    model: [{
-      role: "toolResult",
-      toolCallId: "call_0",
-      toolName,
-      isError,
-      details,
-      content: [{ type: "text", text: "…" }],
-      timestamp: 1_000 * id,
-    }],
+    data: {
+      diagnostics: isError ? [{ severity: "error", code: "blocked", message: "blocked" }] : [],
+    },
+    model: [
+      {
+        role: "toolResult",
+        toolCallId: "call_0",
+        toolName,
+        isError,
+        details,
+        content: [{ type: "text", text: "…" }],
+        timestamp: 1_000 * id,
+      },
+    ],
   });
   const ruleAnswer = (id: number, outcome: string, note: string) => ({
     id,
@@ -1461,10 +1946,20 @@ test("a provider that reuses a call id in every turn still gives each hand-off a
   const entries = projectBotTranscript([
     ask(1, "Pay the invoice"),
     calling(2, "hand_off"),
-    settled(3, "hand_off", false, { kind: "action", outcome: "done", action: "Pay the invoice", note: "Invoice paid" }),
+    settled(3, "hand_off", false, {
+      kind: "action",
+      outcome: "done",
+      action: "Pay the invoice",
+      note: "Invoice paid",
+    }),
     ask(4, "Pay the rent"),
     calling(5, "hand_off"),
-    settled(6, "hand_off", false, { kind: "action", outcome: "skipped", action: "Pay the rent", note: "Rent later" }),
+    settled(6, "hand_off", false, {
+      kind: "action",
+      outcome: "skipped",
+      action: "Pay the rent",
+      note: "Rent later",
+    }),
     ask(7, "Book the table"),
     calling(8, "computer_use"),
     ruleAnswer(9, "done", "Table booked"),
@@ -1476,15 +1971,30 @@ test("a provider that reuses a call id in every turn still gives each hand-off a
   ] as never);
   const handoffRows = entries.filter((entry) => entry.type === "handoff_result");
   assert.deepEqual(
-    handoffRows.map((entry) => (entry.type === "handoff_result" ? `${entry.outcome} (${entry.note})` : "")),
-    ["done (Invoice paid)", "skipped (Rent later)", "done (Table booked)", "skipped (Flight later)"],
+    handoffRows.map((entry) =>
+      entry.type === "handoff_result" ? `${entry.outcome} (${entry.note})` : "",
+    ),
+    [
+      "done (Invoice paid)",
+      "skipped (Rent later)",
+      "done (Table booked)",
+      "skipped (Flight later)",
+    ],
     "every turn shows its own answer, once",
   );
   assert.equal(new Set(handoffRows.map((entry) => entry.id)).size, 4, "no two rows share an id");
-  assert.equal(handoffRows[0]!.id, "handoff:call_0", "the first answer keeps the id every client already has");
+  assert.equal(
+    handoffRows[0]!.id,
+    "handoff:call_0",
+    "the first answer keeps the id every client already has",
+  );
   // Each answer sits in its own turn: right after the person's ask (or the call it stopped) of that turn.
   const order = entries.flatMap((entry) =>
-    entry.type === "user" ? [entry.text] : entry.type === "handoff_result" ? [entry.note ?? ""] : [],
+    entry.type === "user"
+      ? [entry.text]
+      : entry.type === "handoff_result"
+        ? [entry.note ?? ""]
+        : [],
   );
   assert.deepEqual(order, [
     "Pay the invoice",
@@ -1508,7 +2018,9 @@ test("Stop pressed while a slow tool runs ends the chat with the person's stoppe
   );
   const fauxModels = createFauxModels(
     [
-      fauxAssistantMessage([fauxToolCall("read_file", { text: "groceries" })], { stopReason: "toolUse" }),
+      fauxAssistantMessage([fauxToolCall("read_file", { text: "groceries" })], {
+        stopReason: "toolUse",
+      }),
       fauxAssistantMessage("word ".repeat(40)),
     ],
     { tokensPerSecond: 40 },
@@ -1525,7 +2037,9 @@ test("Stop pressed while a slow tool runs ends the chat with the person's stoppe
     live.projection.notifyStopping("bot:a");
     const state = await live.service.stop("bot:a");
     assert.equal(state.kind, "idle");
-    await waitFor(() => tape.view?.activity === null && tape.view.state.kind === "idle", { what: "the stop to land" });
+    await waitFor(() => tape.view?.activity === null && tape.view.state.kind === "idle", {
+      what: "the stop to land",
+    });
     const entries = tape.view!.entries;
     const results = entries.filter((entry) => entry.type === "tool_result");
     assert.deepEqual(
@@ -1534,9 +2048,17 @@ test("Stop pressed while a slow tool runs ends the chat with the person's stoppe
     );
     for (const level of ["quiet", "summary"] as const) {
       const rows = botTranscriptRows(entries, tape.view!.partial, { running: false, level });
-      assert.equal(rows[rows.length - 1]?.kind, "stopped", `${level}: ${rows.map((row) => row.kind).join(", ")}`);
+      assert.equal(
+        rows[rows.length - 1]?.kind,
+        "stopped",
+        `${level}: ${rows.map((row) => row.kind).join(", ")}`,
+      );
       const recap = rows.find((row) => row.kind === "recap");
-      if (recap?.kind === "recap") assert.deepEqual(recap.steps.map((step) => step.status), ["stopped"]);
+      if (recap?.kind === "recap")
+        assert.deepEqual(
+          recap.steps.map((step) => step.status),
+          ["stopped"],
+        );
     }
     assert.equal(fauxModels.calls(), 1, "the second reply never ran");
     unsubscribe();
@@ -1554,7 +2076,9 @@ test("a reply's activity follows the work: getting ready, reading while a file t
   });
   const fauxModels = createFauxModels(
     [
-      fauxAssistantMessage([fauxToolCall("read_file", { text: "groceries" })], { stopReason: "toolUse" }),
+      fauxAssistantMessage([fauxToolCall("read_file", { text: "groceries" })], {
+        stopReason: "toolUse",
+      }),
       fauxAssistantMessage("word ".repeat(60)),
     ],
     { tokensPerSecond: 40 },
@@ -1567,15 +2091,23 @@ test("a reply's activity follows the work: getting ready, reading while a file t
     const { snapshot, unsubscribe } = await live.projection.subscribe("bot:a", tape.sink);
     tape.start(snapshot);
     assert.equal(snapshot.activity, null);
-    const sent = await live.service.send("bot:a", { text: "What's on my list?", requestId: "desk-1" });
+    const sent = await live.service.send("bot:a", {
+      text: "What's on my list?",
+      requestId: "desk-1",
+    });
     await waitFor(() => tape.view?.activity?.phase === "reading", { what: "the reading phase" });
     assert.deepEqual(tape.view?.activity?.step, { kind: "reading", label: "Reading" });
     assert.ok((tape.view?.activity?.startedAt ?? 0) > 0);
     release();
     await live.service.awaitReply("bot:a", sent.submissionId, new AbortController().signal);
-    await waitFor(() => tape.view?.activity === null && tape.view.state.kind === "idle", { what: "the line to clear" });
+    await waitFor(() => tape.view?.activity === null && tape.view.state.kind === "idle", {
+      what: "the line to clear",
+    });
     const phases = observedPhases(tape.events);
-    assert.ok(inOrder(phases, ["preparing", "thinking", "reading", "thinking", "writing"]), phases.join(" → "));
+    assert.ok(
+      inOrder(phases, ["preparing", "thinking", "reading", "thinking", "writing"]),
+      phases.join(" → "),
+    );
     assert.ok(phases.includes("writing"), phases.join(" → "));
     assert.equal(phases[phases.length - 1], null);
     unsubscribe();
@@ -1586,17 +2118,33 @@ test("a reply's activity follows the work: getting ready, reading while a file t
 
 test("thinking text is never projected, in the transcript or the live activity", () => {
   const entries = [
-    { id: 1, kind: "pi.user", model: [{ role: "user", content: [{ type: "text", text: "Hi" }], timestamp: 1 }] },
+    {
+      id: 1,
+      kind: "pi.user",
+      model: [{ role: "user", content: [{ type: "text", text: "Hi" }], timestamp: 1 }],
+    },
     {
       id: 2,
       kind: "pi.assistant",
-      model: [{ role: "assistant", stopReason: "stop", timestamp: 2, content: [fauxThinking("SECRET-PLAN"), fauxText("Done.")] }],
+      model: [
+        {
+          role: "assistant",
+          stopReason: "stop",
+          timestamp: 2,
+          content: [fauxThinking("SECRET-PLAN"), fauxText("Done.")],
+        },
+      ],
     },
   ];
   assert.doesNotMatch(JSON.stringify(projectBotTranscript(entries as never)), /SECRET-PLAN/u);
   const activity = liveBotActivity({
     entries: entries as never,
-    docs: { "pi.live": { run: { taskId: 1, inputs: [1] }, generation: { attempt: 1, message: { content: [fauxThinking("SECRET-PLAN")] } } } },
+    docs: {
+      "pi.live": {
+        run: { taskId: 1, inputs: [1] },
+        generation: { attempt: 1, message: { content: [fauxThinking("SECRET-PLAN")] } },
+      },
+    },
     waiting: false,
     stopping: false,
     resuming: false,
@@ -1610,53 +2158,93 @@ test("the live phase reads stop, a waiting card, compaction, the newest running 
   const calling = {
     id: 2,
     kind: "pi.assistant",
-    model: [{
-      role: "assistant",
-      stopReason: "toolUse",
-      timestamp: 2,
-      content: [
-        { type: "toolCall", id: "c1", name: "read_file", arguments: { path: "lists/a.md" } },
-        { type: "toolCall", id: "c2", name: "web_search", arguments: { query: "tofu bowls" } },
-      ],
-    }],
+    model: [
+      {
+        role: "assistant",
+        stopReason: "toolUse",
+        timestamp: 2,
+        content: [
+          { type: "toolCall", id: "c1", name: "read_file", arguments: { path: "lists/a.md" } },
+          { type: "toolCall", id: "c2", name: "web_search", arguments: { query: "tofu bowls" } },
+        ],
+      },
+    ],
   };
   const tools = [
     { callId: "c1", name: "read_file", status: "running" },
     { callId: "c2", name: "web_search", status: "running" },
   ];
-  const base = { entries: [user, calling] as never, waiting: false, stopping: false, resuming: false, startedAt: 9 };
-  const docs = (live: Record<string, unknown>) => ({ "pi.live": { run: { taskId: 1, inputs: [1] }, ...live } });
+  const base = {
+    entries: [user, calling] as never,
+    waiting: false,
+    stopping: false,
+    resuming: false,
+    startedAt: 9,
+  };
+  const docs = (live: Record<string, unknown>) => ({
+    "pi.live": { run: { taskId: 1, inputs: [1] }, ...live },
+  });
   assert.equal(liveBotActivity({ ...base, docs: {} }), null, "no run, no line");
   assert.deepEqual(liveBotActivity({ ...base, docs: docs({ tools }) }), {
     phase: "searching",
     startedAt: 9,
     step: { kind: "searching", label: "Searching the web", detail: "tofu bowls" },
   });
-  assert.equal(liveBotActivity({ ...base, docs: docs({ compactions: [{ blocking: true }], tools }) })?.phase, "tidying");
-  assert.equal(liveBotActivity({ ...base, waiting: true, docs: docs({ tools }) })?.phase, "waiting");
-  assert.equal(liveBotActivity({ ...base, waiting: true, stopping: true, docs: docs({ tools }) })?.phase, "stopping");
-  assert.equal(liveBotActivity({ ...base, entries: [user] as never, docs: docs({}) })?.phase, "preparing");
+  assert.equal(
+    liveBotActivity({ ...base, docs: docs({ compactions: [{ blocking: true }], tools }) })?.phase,
+    "tidying",
+  );
+  assert.equal(
+    liveBotActivity({ ...base, waiting: true, docs: docs({ tools }) })?.phase,
+    "waiting",
+  );
+  assert.equal(
+    liveBotActivity({ ...base, waiting: true, stopping: true, docs: docs({ tools }) })?.phase,
+    "stopping",
+  );
+  assert.equal(
+    liveBotActivity({ ...base, entries: [user] as never, docs: docs({}) })?.phase,
+    "preparing",
+  );
   assert.equal(liveBotActivity({ ...base, docs: docs({}) })?.phase, "thinking");
   assert.equal(liveBotActivity({ ...base, resuming: true, docs: docs({}) })?.phase, "resuming");
   // A paused run's text and tool, still in `pi.live` when the Resume began, are not the resumed run's work.
-  const paused = docs({ tools, generation: { attempt: 1, message: { content: [{ type: "text", text: "Half a" }] } } });
+  const paused = docs({
+    tools,
+    generation: { attempt: 1, message: { content: [{ type: "text", text: "Half a" }] } },
+  });
   const resumed = { ...base, resuming: true, resumedFrom: JSON.stringify(paused["pi.live"]) };
   assert.equal(liveBotActivity({ ...resumed, docs: paused })?.phase, "resuming");
   assert.equal(liveBotActivity({ ...resumed, stopping: true, docs: paused })?.phase, "stopping");
-  assert.equal(liveBotActivity({ ...resumed, docs: docs({ generation: { attempt: 1 } }) })?.phase, "resuming");
   assert.equal(
-    liveBotActivity({ ...resumed, docs: docs({ generation: { attempt: 1, message: { content: [{ type: "text", text: "Half a" }] } } }) })?.phase,
+    liveBotActivity({ ...resumed, docs: docs({ generation: { attempt: 1 } }) })?.phase,
+    "resuming",
+  );
+  assert.equal(
+    liveBotActivity({
+      ...resumed,
+      docs: docs({
+        generation: { attempt: 1, message: { content: [{ type: "text", text: "Half a" }] } },
+      }),
+    })?.phase,
     "writing",
     "once anything live happened, text is the resumed run's",
   );
   assert.equal(
-    liveBotActivity({ ...base, docs: docs({ generation: { attempt: 1, message: { content: [{ type: "text", text: "Here" }] } } }) })?.phase,
+    liveBotActivity({
+      ...base,
+      docs: docs({
+        generation: { attempt: 1, message: { content: [{ type: "text", text: "Here" }] } },
+      }),
+    })?.phase,
     "writing",
   );
 });
 
 test("Stop pressed while nothing runs is ignored, so the next reply never starts at Stopping", async () => {
-  const fauxModels = createFauxModels([fauxAssistantMessage("word ".repeat(40))], { tokensPerSecond: 40 });
+  const fauxModels = createFauxModels([fauxAssistantMessage("word ".repeat(40))], {
+    tokensPerSecond: 40,
+  });
   const live = await start(fauxModels);
   try {
     const tape = recorder();
@@ -1665,7 +2253,9 @@ test("Stop pressed while nothing runs is ignored, so the next reply never starts
     live.projection.notifyStopping("bot:a");
     const sent = await live.service.send("bot:a", { text: "hi", requestId: "desk-1" });
     await live.service.awaitReply("bot:a", sent.submissionId, new AbortController().signal);
-    await waitFor(() => tape.view?.activity === null && tape.view.state.kind === "idle", { what: "the reply to land" });
+    await waitFor(() => tape.view?.activity === null && tape.view.state.kind === "idle", {
+      what: "the reply to land",
+    });
     assert.equal(observedPhases(tape.events).includes("stopping"), false);
     unsubscribe();
   } finally {
@@ -1689,7 +2279,8 @@ function gatedAnswer(text: string) {
 test("each Stop and Resume intent reaches the desktop projection as its own call, until unwired", async () => {
   const reported: string[] = [];
   const intents = createBotTurnIntents({
-    onError: (botId, intent, error) => void reported.push(`${intent} ${botId}: ${(error as Error).message}`),
+    onError: (botId, intent, error) =>
+      void reported.push(`${intent} ${botId}: ${(error as Error).message}`),
   });
   const calls: string[] = [];
   const projection = {
@@ -1705,12 +2296,23 @@ test("each Stop and Resume intent reaches the desktop projection as its own call
 
   assert.equal(await stopWithIntents(intents, "bot:a", async () => "stopped"), "stopped");
   assert.deepEqual(calls, ["stopping bot:a"], "a Stop that took is never taken back");
-  assert.deepEqual(reported, ["stopping bot:a: a broken surface"], "the surface that missed it is reported");
+  assert.deepEqual(
+    reported,
+    ["stopping bot:a: a broken surface"],
+    "the surface that missed it is reported",
+  );
 
   calls.length = 0;
   const refused = new Error("The Bot is held by another Aiden.");
-  await assert.rejects(stopWithIntents(intents, "bot:b", async () => Promise.reject(refused)), (error) => error === refused);
-  assert.deepEqual(calls, ["stopping bot:b", "cancel bot:b"], "a Stop that failed takes Stopping back");
+  await assert.rejects(
+    stopWithIntents(intents, "bot:b", async () => Promise.reject(refused)),
+    (error) => error === refused,
+  );
+  assert.deepEqual(
+    calls,
+    ["stopping bot:b", "cancel bot:b"],
+    "a Stop that failed takes Stopping back",
+  );
 
   calls.length = 0;
   intents.announce("bot:c", "resuming");
@@ -1731,9 +2333,12 @@ test("each Stop and Resume intent reaches the desktop projection as its own call
 });
 
 test("a Stop for one Bot leaves another Bot's running reply on its work, never Stopping", async () => {
-  const live = await start(createFauxModels([slowAnswer(), slowAnswer()], { tokensPerSecond: 40 }), {
-    service: { knownBotIds: async () => new Set(["bot:a", "bot:b"]) },
-  });
+  const live = await start(
+    createFauxModels([slowAnswer(), slowAnswer()], { tokensPerSecond: 40 }),
+    {
+      service: { knownBotIds: async () => new Set(["bot:a", "bot:b"]) },
+    },
+  );
   const intents = createBotTurnIntents();
   const unwire = wireBotLiveTurnIntents({ intents, projection: () => live.projection });
   try {
@@ -1745,18 +2350,30 @@ test("a Stop for one Bot leaves another Bot's running reply on its work, never S
     tapeB.start(b.snapshot);
     await live.service.send("bot:a", { text: "tell me a story", requestId: "desk-a" });
     await live.service.send("bot:b", { text: "tell me another", requestId: "desk-b" });
-    await waitFor(() => tapeA.view?.activity?.phase === "writing" && tapeB.view?.activity?.phase === "writing", {
-      what: "both replies to stream",
-    });
+    await waitFor(
+      () => tapeA.view?.activity?.phase === "writing" && tapeB.view?.activity?.phase === "writing",
+      {
+        what: "both replies to stream",
+      },
+    );
 
     await stopWithIntents(intents, "bot:a", () => live.service.stop("bot:a"));
-    await waitFor(() => tapeA.view?.activity === null && tapeA.view.state.kind === "idle", { what: "Bot A to stop" });
-    assert.ok(observedPhases(tapeA.events).includes("stopping"), observedPhases(tapeA.events).join(" → "));
+    await waitFor(() => tapeA.view?.activity === null && tapeA.view.state.kind === "idle", {
+      what: "Bot A to stop",
+    });
+    assert.ok(
+      observedPhases(tapeA.events).includes("stopping"),
+      observedPhases(tapeA.events).join(" → "),
+    );
     // Bot B's feed has handled every intent by now: a refresh runs after it on the same queue.
     await live.projection.refreshActivity("bot:b");
     assert.equal(tapeB.view?.state.kind, "running");
     assert.equal(tapeB.view?.activity?.phase, "writing");
-    assert.equal(observedPhases(tapeB.events).includes("stopping"), false, observedPhases(tapeB.events).join(" → "));
+    assert.equal(
+      observedPhases(tapeB.events).includes("stopping"),
+      false,
+      observedPhases(tapeB.events).join(" → "),
+    );
     a.unsubscribe();
     b.unsubscribe();
   } finally {
@@ -1781,8 +2398,14 @@ test("a Stop announced while nothing runs changes nothing, and the next reply st
     assert.equal(tape.view?.activity?.phase, "preparing");
     answer.open();
     await live.service.awaitReply("bot:a", sent.submissionId, new AbortController().signal);
-    await waitFor(() => tape.view?.activity === null && tape.view.state.kind === "idle", { what: "the reply to land" });
-    assert.equal(observedPhases(tape.events).includes("stopping"), false, observedPhases(tape.events).join(" → "));
+    await waitFor(() => tape.view?.activity === null && tape.view.state.kind === "idle", {
+      what: "the reply to land",
+    });
+    assert.equal(
+      observedPhases(tape.events).includes("stopping"),
+      false,
+      observedPhases(tape.events).join(" → "),
+    );
     unsubscribe();
   } finally {
     answer.open();
@@ -1808,12 +2431,19 @@ test("a Stop that fails stops reading Stopping and the reply goes on; the Stop a
       }),
     );
     const sincePressed = () => observedPhases(tape.events.slice(pressed));
-    await waitFor(() => sincePressed()[sincePressed().length - 1] === "writing", { what: "the line to return to the work" });
+    await waitFor(() => sincePressed()[sincePressed().length - 1] === "writing", {
+      what: "the line to return to the work",
+    });
     assert.deepEqual(observedPhases(tape.events.slice(pressed)), ["stopping", "writing"]);
     assert.equal(tape.view?.state.kind, "running", "the reply goes on");
 
-    assert.equal((await stopWithIntents(intents, "bot:a", () => live.service.stop("bot:a"))).kind, "idle");
-    await waitFor(() => tape.view?.activity === null && tape.view.state.kind === "idle", { what: "the stop to land" });
+    assert.equal(
+      (await stopWithIntents(intents, "bot:a", () => live.service.stop("bot:a"))).kind,
+      "idle",
+    );
+    await waitFor(() => tape.view?.activity === null && tape.view.state.kind === "idle", {
+      what: "the stop to land",
+    });
     assert.ok(observedPhases(tape.events.slice(pressed)).lastIndexOf("stopping") > 0);
     unsubscribe();
   } finally {
@@ -1857,7 +2487,9 @@ test("Resume is announced only for a Resume the session carried out, and before 
     await live.service.resume("bot:killed", "desk-2");
     // Heard before the running state, so the projection marks the run it starts.
     assert.deepEqual(heard.slice(0, 2), ["resuming bot:killed", "running bot:killed"]);
-    await waitFor(async () => (await live.service.state("bot:killed")).kind === "idle", { what: "the resumed turn to finish" });
+    await waitFor(async () => (await live.service.state("bot:killed")).kind === "idle", {
+      what: "the resumed turn to finish",
+    });
     assert.equal(heard.filter((line) => line.startsWith("resuming")).length, 1, heard.join(", "));
     heard.length = 0;
     assert.equal((await live.service.resume("bot:killed", "desk-2")).kind, "idle");
@@ -1901,7 +2533,9 @@ test("a Resume after a crash mid-reply picks up where it left off; the killed ru
     await live.projection.refreshActivity("bot:killed");
     assert.equal(tape.view?.activity?.phase, "resuming", observedPhases(tape.events).join(" → "));
     answer.open();
-    await waitFor(() => tape.view?.activity === null && tape.view.state.kind === "idle", { what: "the resumed turn to land" });
+    await waitFor(() => tape.view?.activity === null && tape.view.state.kind === "idle", {
+      what: "the resumed turn to land",
+    });
     const phases = observedPhases(tape.events).filter((phase) => phase !== null);
     assert.equal(phases[0], "resuming", phases.join(" → "));
     assert.ok(inOrder(phases, ["resuming", "writing"]), phases.join(" → "));
@@ -1914,10 +2548,17 @@ test("a Resume after a crash mid-reply picks up where it left off; the killed ru
 });
 
 /** Every distinct (turn start, phase) the line showed, in order. */
-function observedTurns(events: readonly BotLiveEvent[]): Array<{ startedAt: number; phase: string }> {
+function observedTurns(
+  events: readonly BotLiveEvent[],
+): Array<{ startedAt: number; phase: string }> {
   const seen: Array<{ startedAt: number; phase: string }> = [];
   for (const event of events) {
-    const activity = event.type === "activity" ? event.activity : event.type === "snapshot" ? event.snapshot.activity : null;
+    const activity =
+      event.type === "activity"
+        ? event.activity
+        : event.type === "snapshot"
+          ? event.snapshot.activity
+          : null;
     if (!activity) continue;
     const last = seen[seen.length - 1];
     if (last?.startedAt !== activity.startedAt || last.phase !== activity.phase) {
@@ -1940,7 +2581,9 @@ test("a Resume marks the run it started, and the turn after it reads normally", 
     const reply = async (text: string, requestId: string) => {
       const sent = await live.service.send("bot:a", { text, requestId });
       await live.service.awaitReply("bot:a", sent.submissionId, new AbortController().signal);
-      await waitFor(() => tape.view?.activity === null && tape.view.state.kind === "idle", { what: "the reply to land" });
+      await waitFor(() => tape.view?.activity === null && tape.view.state.kind === "idle", {
+        what: "the reply to land",
+      });
     };
     live.projection.notifyResuming("bot:a");
     await reply("resumed turn", "desk-1");
@@ -1963,7 +2606,9 @@ test("a tool round hands the run to a new generation but is still one turn: one 
   });
   const fauxModels = createFauxModels(
     [
-      fauxAssistantMessage([fauxToolCall("read_file", { text: "groceries" })], { stopReason: "toolUse" }),
+      fauxAssistantMessage([fauxToolCall("read_file", { text: "groceries" })], {
+        stopReason: "toolUse",
+      }),
       fauxAssistantMessage("word ".repeat(40)),
     ],
     { tokensPerSecond: 40 },
@@ -1984,7 +2629,9 @@ test("a tool round hands the run to a new generation but is still one turn: one 
     const stoppedAt = tape.events.length;
     release();
     await live.service.awaitReply("bot:a", sent.submissionId, new AbortController().signal);
-    await waitFor(() => tape.view?.activity === null && tape.view.state.kind === "idle", { what: "the reply to land" });
+    await waitFor(() => tape.view?.activity === null && tape.view.state.kind === "idle", {
+      what: "the reply to land",
+    });
     const turns = observedTurns(tape.events);
     assert.equal(new Set(turns.map((turn) => turn.startedAt)).size, 1, JSON.stringify(turns));
     const after = observedPhases(tape.events.slice(stoppedAt)).filter((phase) => phase !== null);
@@ -1997,7 +2644,9 @@ test("a tool round hands the run to a new generation but is still one turn: one 
 });
 
 test("a follow-up turn queued behind a running one gets its own start time and a clean line", async () => {
-  const fauxModels = createFauxModels([slowAnswer(), fauxAssistantMessage("word ".repeat(20))], { tokensPerSecond: 40 });
+  const fauxModels = createFauxModels([slowAnswer(), fauxAssistantMessage("word ".repeat(20))], {
+    tokensPerSecond: 40,
+  });
   let tick = 1_000;
   const live = await start(fauxModels, { projection: { now: () => (tick += 1_000) } });
   try {
@@ -2005,12 +2654,16 @@ test("a follow-up turn queued behind a running one gets its own start time and a
     const { snapshot, unsubscribe } = await live.projection.subscribe("bot:a", tape.sink);
     tape.start(snapshot);
     await live.service.send("bot:a", { text: "tell me a story", requestId: "desk-1" });
-    await waitFor(() => tape.view?.activity?.phase === "writing", { what: "the first reply to stream" });
+    await waitFor(() => tape.view?.activity?.phase === "writing", {
+      what: "the first reply to stream",
+    });
     live.projection.notifyStopping("bot:a");
     await waitFor(() => tape.view?.activity?.phase === "stopping", { what: "the stopping line" });
     const queued = await live.service.send("bot:a", { text: "and another", requestId: "desk-2" });
     await live.service.awaitReply("bot:a", queued.submissionId, new AbortController().signal);
-    await waitFor(() => tape.view?.activity === null && tape.view.state.kind === "idle", { what: "the replies to land" });
+    await waitFor(() => tape.view?.activity === null && tape.view.state.kind === "idle", {
+      what: "the replies to land",
+    });
     const turns = observedTurns(tape.events);
     const starts = [...new Set(turns.map((turn) => turn.startedAt))];
     assert.ok(starts.length >= 2, JSON.stringify(turns));
@@ -2024,7 +2677,9 @@ test("a follow-up turn queued behind a running one gets its own start time and a
 });
 
 test("a follow-up sent while the Bot works shows as queued, and Remove withdraws it before it runs", async () => {
-  const fauxModels = createFauxModels([slowAnswer(), fauxAssistantMessage("never")], { tokensPerSecond: 40 });
+  const fauxModels = createFauxModels([slowAnswer(), fauxAssistantMessage("never")], {
+    tokensPerSecond: 40,
+  });
   const live = await start(fauxModels);
   try {
     const tape = recorder();
@@ -2032,11 +2687,22 @@ test("a follow-up sent while the Bot works shows as queued, and Remove withdraws
     tape.start(snapshot);
     assert.deepEqual(snapshot.queued, []);
     await live.service.send("bot:a", { text: "Plan dinners", requestId: "desk-1" });
-    await waitFor(() => (tape.view?.partial ?? "").length > 0, { what: "the first reply to stream" });
-    const queued = await live.service.send("bot:a", { text: "Also add dessert", requestId: "desk-2", whenBusy: "followUp" });
+    await waitFor(() => (tape.view?.partial ?? "").length > 0, {
+      what: "the first reply to stream",
+    });
+    const queued = await live.service.send("bot:a", {
+      text: "Also add dessert",
+      requestId: "desk-2",
+      whenBusy: "followUp",
+    });
     await waitFor(() => tape.view?.queued.length === 1, { what: "the queued message" });
     assert.deepEqual(tape.view?.queued, [
-      { submissionId: queued.submissionId, mode: "followUp", text: "Also add dessert", imageCount: 0 },
+      {
+        submissionId: queued.submissionId,
+        mode: "followUp",
+        text: "Also add dessert",
+        imageCount: 0,
+      },
     ]);
     assert.equal(await live.service.withdraw("bot:a", queued.submissionId), "withdrawn");
     await waitFor(() => tape.view?.queued.length === 0, { what: "the queued message to leave" });
@@ -2051,7 +2717,9 @@ test("a follow-up sent while the Bot works shows as queued, and Remove withdraws
 });
 
 test("Remove on a queued message whose turn already started withdraws nothing", async () => {
-  const fauxModels = createFauxModels([fauxAssistantMessage("word ".repeat(30)), slowAnswer()], { tokensPerSecond: 40 });
+  const fauxModels = createFauxModels([fauxAssistantMessage("word ".repeat(30)), slowAnswer()], {
+    tokensPerSecond: 40,
+  });
   const live = await start(fauxModels);
   try {
     const tape = recorder();
@@ -2059,8 +2727,14 @@ test("Remove on a queued message whose turn already started withdraws nothing", 
     tape.start(snapshot);
     await live.service.send("bot:a", { text: "one", requestId: "desk-1" });
     await waitFor(() => (tape.view?.partial ?? "").length > 0, { what: "the first reply" });
-    const second = await live.service.send("bot:a", { text: "two", requestId: "desk-2", whenBusy: "followUp" });
-    await waitFor(() => visibleText(tape.view).includes("user:two"), { what: "the follow-up to start" });
+    const second = await live.service.send("bot:a", {
+      text: "two",
+      requestId: "desk-2",
+      whenBusy: "followUp",
+    });
+    await waitFor(() => visibleText(tape.view).includes("user:two"), {
+      what: "the follow-up to start",
+    });
     assert.equal(await live.service.withdraw("bot:a", second.submissionId), "started");
     assert.equal(await live.service.withdraw("bot:a", "999999"), "gone");
     await live.service.stop("bot:a");
@@ -2071,14 +2745,25 @@ test("Remove on a queued message whose turn already started withdraws nothing", 
 });
 
 test("queued inputs are listed by the person's ids only; passive writes never show", () => {
-  const notice = (data: unknown) => ({ id: 1, mode: "write", entry: { kind: "aiden.bot-notice", data } });
+  const notice = (data: unknown) => ({
+    id: 1,
+    mode: "write",
+    entry: { kind: "aiden.bot-notice", data },
+  });
   const docs = {
     "pi.inbox": {
       items: [
         notice({ notice: "routine", label: "Morning check-in", requestId: "routine:r1:1" }),
         { id: 2, mode: "followUp", content: "Check in on today" },
         { id: 4, mode: "followUp", content: "Introduce yourself" },
-        { id: 5, mode: "steer", content: [{ type: "text", text: "Make it vegetarian" }, { type: "image", data: "AA", mimeType: "image/png" }] },
+        {
+          id: 5,
+          mode: "steer",
+          content: [
+            { type: "text", text: "Make it vegetarian" },
+            { type: "image", data: "AA", mimeType: "image/png" },
+          ],
+        },
       ],
     },
   };
@@ -2099,7 +2784,8 @@ async function waitForInbox(
   predicate: (items: Array<{ mode?: string }>) => boolean,
 ): Promise<void> {
   const watch = await (await service.conversation(botId)).watch(ctx);
-  const items = () => ((watch.value.docs["pi.inbox"] as { items?: Array<{ mode?: string }> } | undefined)?.items ?? []);
+  const items = () =>
+    (watch.value.docs["pi.inbox"] as { items?: Array<{ mode?: string }> } | undefined)?.items ?? [];
   watch.start(async () => undefined);
   try {
     await waitFor(() => predicate(items()), { what: "the inbox" });
@@ -2120,7 +2806,9 @@ test("a routine queued behind a reply that calls a tool is never listed, even on
   });
   const fauxModels = createFauxModels(
     [
-      fauxAssistantMessage([fauxToolCall("read_file", { text: "groceries" })], { stopReason: "toolUse" }),
+      fauxAssistantMessage([fauxToolCall("read_file", { text: "groceries" })], {
+        stopReason: "toolUse",
+      }),
       fauxAssistantMessage("word ".repeat(10)),
       fauxAssistantMessage("routine reply"),
     ],
@@ -2135,10 +2823,18 @@ test("a routine queued behind a reply that calls a tool is never listed, even on
     tape.start(snapshot);
     await live.service.send("bot:a", { text: "list?", requestId: "desk-1" });
     await waitFor(() => tape.view?.activity?.phase === "reading", { what: "the tool to run" });
-    await live.service.send("bot:a", { text: "Check in on today", requestId: "routine:r1:1", label: "Morning check-in" });
-    await waitForInbox(live.service, "bot:a", (items) => items.some((item) => item.mode === "followUp"));
+    await live.service.send("bot:a", {
+      text: "Check in on today",
+      requestId: "routine:r1:1",
+      label: "Morning check-in",
+    });
+    await waitForInbox(live.service, "bot:a", (items) =>
+      items.some((item) => item.mode === "followUp"),
+    );
     release();
-    await waitFor(() => visibleText(tape.view).includes("assistant:routine reply"), { what: "the routine's reply" });
+    await waitFor(() => visibleText(tape.view).includes("assistant:routine reply"), {
+      what: "the routine's reply",
+    });
     await waitFor(() => tape.view?.state.kind === "idle", { what: "the Bot to settle" });
     assert.deepEqual(queuedTexts(tape.events), []);
     assert.deepEqual(tape.view?.queued, []);
@@ -2149,21 +2845,33 @@ test("a routine queued behind a reply that calls a tool is never listed, even on
 });
 
 test("a notice left behind by Stop does not hide the person's next queued message", async () => {
-  const fauxModels = createFauxModels([slowAnswer(), slowAnswer(), fauxAssistantMessage("never")], { tokensPerSecond: 40 });
+  const fauxModels = createFauxModels([slowAnswer(), slowAnswer(), fauxAssistantMessage("never")], {
+    tokensPerSecond: 40,
+  });
   const live = await start(fauxModels);
   try {
     const tape = recorder();
     const { snapshot, unsubscribe } = await live.projection.subscribe("bot:a", tape.sink);
     tape.start(snapshot);
     await live.service.send("bot:a", { text: "one", requestId: "desk-1" });
-    await waitFor(() => (tape.view?.partial ?? "").length > 0, { what: "the first reply to stream" });
-    await live.service.send("bot:a", { text: "Check in on today", requestId: "routine:r1:1", label: "Morning check-in" });
+    await waitFor(() => (tape.view?.partial ?? "").length > 0, {
+      what: "the first reply to stream",
+    });
+    await live.service.send("bot:a", {
+      text: "Check in on today",
+      requestId: "routine:r1:1",
+      label: "Morning check-in",
+    });
     await live.service.stop("bot:a");
     await waitFor(() => tape.view?.state.kind === "idle", { what: "the stop" });
     await live.service.send("bot:a", { text: "two", requestId: "desk-2" });
-    await waitFor(() => (tape.view?.partial ?? "").length > 0, { what: "the next reply to stream" });
+    await waitFor(() => (tape.view?.partial ?? "").length > 0, {
+      what: "the next reply to stream",
+    });
     await live.service.send("bot:a", { text: "three", requestId: "desk-3", whenBusy: "followUp" });
-    await waitFor(() => tape.view?.queued.some((item) => item.text === "three") === true, { what: "the queued message" });
+    await waitFor(() => tape.view?.queued.some((item) => item.text === "three") === true, {
+      what: "the queued message",
+    });
     assert.equal(queuedTexts(tape.events).includes("Check in on today"), false);
     await live.service.stop("bot:a");
     unsubscribe();
@@ -2173,18 +2881,31 @@ test("a notice left behind by Stop does not hide the person's next queued messag
 });
 
 test("an intro prompt queued behind a running reply is not listed as the person's message", async () => {
-  const fauxModels = createFauxModels([slowAnswer(), fauxAssistantMessage("hello there")], { tokensPerSecond: 40 });
+  const fauxModels = createFauxModels([slowAnswer(), fauxAssistantMessage("hello there")], {
+    tokensPerSecond: 40,
+  });
   const live = await start(fauxModels);
   try {
     const tape = recorder();
     const { snapshot, unsubscribe } = await live.projection.subscribe("bot:a", tape.sink);
     tape.start(snapshot);
     await live.service.send("bot:a", { text: "one", requestId: "desk-1" });
-    await waitFor(() => (tape.view?.partial ?? "").length > 0, { what: "the first reply to stream" });
-    await live.service.send("bot:a", { text: "Introduce yourself", requestId: "intro:bot:a", hidden: true });
+    await waitFor(() => (tape.view?.partial ?? "").length > 0, {
+      what: "the first reply to stream",
+    });
+    await live.service.send("bot:a", {
+      text: "Introduce yourself",
+      requestId: "intro:bot:a",
+      hidden: true,
+    });
     await live.service.send("bot:a", { text: "two", requestId: "desk-2" });
-    await waitFor(() => tape.view?.queued.some((item) => item.text === "two") === true, { what: "the person's message" });
-    assert.deepEqual(tape.view?.queued.map((item) => item.text), ["two"]);
+    await waitFor(() => tape.view?.queued.some((item) => item.text === "two") === true, {
+      what: "the person's message",
+    });
+    assert.deepEqual(
+      tape.view?.queued.map((item) => item.text),
+      ["two"],
+    );
     assert.equal(queuedTexts(tape.events).includes("Introduce yourself"), false);
     await live.service.stop("bot:a");
     unsubscribe();
@@ -2195,8 +2916,15 @@ test("an intro prompt queued behind a running reply is not listed as the person'
 
 /** A projection whose classification can be made to fail or come back empty, with every call and report counted. */
 async function startFlaky() {
-  const fauxModels = createFauxModels([slowAnswer(), fauxAssistantMessage("never")], { tokensPerSecond: 40 });
-  const control = { mode: "ok" as "ok" | "throw" | "empty", calls: 0, reports: 0, callTimes: [] as number[] };
+  const fauxModels = createFauxModels([slowAnswer(), fauxAssistantMessage("never")], {
+    tokensPerSecond: 40,
+  });
+  const control = {
+    mode: "ok" as "ok" | "throw" | "empty",
+    calls: 0,
+    reports: 0,
+    callTimes: [] as number[],
+  };
   const live = await start(fauxModels, {
     projection: {
       classifyRetryMs: 150,
@@ -2222,10 +2950,18 @@ test("while classifying fails, a cached routine stays hidden and the person's cl
     const { snapshot, unsubscribe } = await live.projection.subscribe("bot:a", tape.sink);
     tape.start(snapshot);
     await live.service.send("bot:a", { text: "one", requestId: "desk-1" });
-    await waitFor(() => (tape.view?.partial ?? "").length > 0, { what: "the first reply to stream" });
-    await live.service.send("bot:a", { text: "Check in on today", requestId: "routine:r1:1", label: "Morning check-in" });
+    await waitFor(() => (tape.view?.partial ?? "").length > 0, {
+      what: "the first reply to stream",
+    });
+    await live.service.send("bot:a", {
+      text: "Check in on today",
+      requestId: "routine:r1:1",
+      label: "Morning check-in",
+    });
     await live.service.send("bot:a", { text: "dessert", requestId: "desk-2" });
-    await waitFor(() => tape.view?.queued.some((item) => item.text === "dessert") === true, { what: "dessert, classified" });
+    await waitFor(() => tape.view?.queued.some((item) => item.text === "dessert") === true, {
+      what: "dessert, classified",
+    });
     control.mode = "throw";
     control.calls = 0;
     control.callTimes = [];
@@ -2233,17 +2969,27 @@ test("while classifying fails, a cached routine stays hidden and the person's cl
     await live.service.send("bot:a", { text: "drinks", requestId: "desk-3" });
     // The first failure and two retries, while the reply keeps streaming frames.
     await waitFor(() => control.calls >= 3, { what: "two classification retries" });
-    assert.deepEqual(tape.view?.queued.map((item) => item.text), ["dessert"], "drinks waits; the routine never shows");
+    assert.deepEqual(
+      tape.view?.queued.map((item) => item.text),
+      ["dessert"],
+      "drinks waits; the routine never shows",
+    );
     assert.equal(queuedTexts(tape.events).includes("Check in on today"), false);
     assert.equal(control.reports, 1, "one report per failure streak");
     // Frames arrive every ~25 ms; retries wait out the 150 ms pause instead of following them.
     const [firstCall, , thirdCall] = control.callTimes;
-    assert.ok(thirdCall! - firstCall! >= 2 * 150 - 5, `retries are throttled, saw ${control.callTimes.length} calls`);
+    assert.ok(
+      thirdCall! - firstCall! >= 2 * 150 - 5,
+      `retries are throttled, saw ${control.callTimes.length} calls`,
+    );
     control.mode = "ok";
     await waitFor(() => tape.view?.queued.some((item) => item.text === "drinks") === true, {
       what: "drinks after the retry, with no new frame needed",
     });
-    assert.deepEqual(tape.view?.queued.map((item) => item.text), ["dessert", "drinks"]);
+    assert.deepEqual(
+      tape.view?.queued.map((item) => item.text),
+      ["dessert", "drinks"],
+    );
     await live.service.stop("bot:a");
     unsubscribe();
   } finally {
@@ -2297,7 +3043,9 @@ test("an id the session cannot find stays hidden and is retried", async () => {
     const { snapshot, unsubscribe } = await live.projection.subscribe("bot:a", tape.sink);
     tape.start(snapshot);
     await live.service.send("bot:a", { text: "one", requestId: "desk-1" });
-    await waitFor(() => (tape.view?.partial ?? "").length > 0, { what: "the first reply to stream" });
+    await waitFor(() => (tape.view?.partial ?? "").length > 0, {
+      what: "the first reply to stream",
+    });
     control.mode = "empty";
     control.calls = 0;
     await live.service.send("bot:a", { text: "dessert", requestId: "desk-2" });
@@ -2305,7 +3053,9 @@ test("an id the session cannot find stays hidden and is retried", async () => {
     await waitFor(() => control.calls >= 3, { what: "two classification retries" });
     assert.deepEqual(tape.view?.queued, []);
     control.mode = "ok";
-    await waitFor(() => tape.view?.queued.some((item) => item.text === "dessert") === true, { what: "dessert after the retry" });
+    await waitFor(() => tape.view?.queued.some((item) => item.text === "dessert") === true, {
+      what: "dessert after the retry",
+    });
     await live.service.stop("bot:a");
     unsubscribe();
   } finally {
@@ -2317,7 +3067,14 @@ test("the last reply time ignores the person's newer messages and replies with n
   assert.equal(botLastReplyAt([]), null);
   assert.equal(
     botLastReplyAt([
-      { id: "a1", type: "assistant", text: "Here you go.", toolCalls: [], stopReason: "stop", at: 10 },
+      {
+        id: "a1",
+        type: "assistant",
+        text: "Here you go.",
+        toolCalls: [],
+        stopReason: "stop",
+        at: 10,
+      },
       { id: "a2", type: "assistant", text: "  ", toolCalls: [], stopReason: "toolUse", at: 20 },
       { id: "u2", type: "user", text: "Thanks", imageCount: 0, at: 30 },
     ]),
@@ -2328,8 +3085,21 @@ test("the last reply time ignores the person's newer messages and replies with n
 test("the last reply time falls back past a reply that has no time", () => {
   assert.equal(
     botLastReplyAt([
-      { id: "a1", type: "assistant", text: "Older reply.", toolCalls: [], stopReason: "stop", at: 10 },
-      { id: "a2", type: "assistant", text: "Newer reply with no time.", toolCalls: [], stopReason: "stop" },
+      {
+        id: "a1",
+        type: "assistant",
+        text: "Older reply.",
+        toolCalls: [],
+        stopReason: "stop",
+        at: 10,
+      },
+      {
+        id: "a2",
+        type: "assistant",
+        text: "Newer reply with no time.",
+        toolCalls: [],
+        stopReason: "stop",
+      },
     ]),
     10,
   );
@@ -2366,7 +3136,11 @@ test("a Bot held by another process is never reported as needing the person", as
 });
 
 test("a message the person sent after the last reply does not move the last reply time", async () => {
-  const live = await start(createFauxModels([fauxAssistantMessage("First answer."), slowAnswer()], { tokensPerSecond: 40 }));
+  const live = await start(
+    createFauxModels([fauxAssistantMessage("First answer."), slowAnswer()], {
+      tokensPerSecond: 40,
+    }),
+  );
   try {
     const first = await live.service.send("bot:a", { text: "One", requestId: "desk-1" });
     await live.service.awaitReply("bot:a", first.submissionId, new AbortController().signal);
@@ -2382,7 +3156,12 @@ test("a message the person sent after the last reply does not move the last repl
 });
 
 test("list summaries of a closed Bot read its transcript again only once it has changed", async () => {
-  const live = await start(createFauxModels([fauxAssistantMessage("First answer."), fauxAssistantMessage("Second answer.")]));
+  const live = await start(
+    createFauxModels([
+      fauxAssistantMessage("First answer."),
+      fauxAssistantMessage("Second answer."),
+    ]),
+  );
   let contextReads = 0;
   const projection = createBotLiveProjection({
     conversation: async (botId) => {
@@ -2410,7 +3189,11 @@ test("list summaries of a closed Bot read its transcript again only once it has 
     assert.equal(answered.preview, "First answer.");
     const reads = contextReads;
     for (let refresh = 0; refresh < 5; refresh += 1) {
-      assert.deepEqual(await projection.summary("bot:a"), answered, "an unrelated refresh answers the same");
+      assert.deepEqual(
+        await projection.summary("bot:a"),
+        answered,
+        "an unrelated refresh answers the same",
+      );
     }
     assert.equal(contextReads, reads, "an unchanged transcript is not read again");
 
@@ -2453,7 +3236,11 @@ test("a list summary reads a waiting question, hand-off and approval whether or 
   let handoff: BotPendingHandoff | null = null;
   let approval = false;
   const live = await start(createFauxModels([fauxAssistantMessage("Hello.")]), {
-    projection: { question: () => question, handoff: () => handoff, approvalPending: () => approval },
+    projection: {
+      question: () => question,
+      handoff: () => handoff,
+      approvalPending: () => approval,
+    },
   });
   try {
     const closed = async () => (await live.projection.summary("bot:a")).needsYou;
@@ -2461,7 +3248,14 @@ test("a list summary reads a waiting question, hand-off and approval whether or 
     question = { botId: "bot:a", waitId: "w1", toolCallId: "t1", questions: [] };
     assert.equal(await closed(), true, "a question waits with no chat open");
     question = null;
-    handoff = { botId: "bot:a", waitId: "w2", toolCallId: "t2", kind: "action", action: "Pay the invoice", source: "tool" };
+    handoff = {
+      botId: "bot:a",
+      waitId: "w2",
+      toolCallId: "t2",
+      kind: "action",
+      action: "Pay the invoice",
+      source: "tool",
+    };
     assert.equal(await closed(), true, "a hand-off waits with no chat open");
     handoff = null;
     approval = true;
@@ -2484,66 +3278,278 @@ test("peer intermediates stay visible while only the initiating root's sealed fi
   const { parseBotPeerTranscriptData } = await import("../../../renderer/shared/bot-peers.js");
   const entries: import("../../../renderer/shared/bot-live.js").BotTranscriptEntry[] = [
     { id: "person", type: "user", text: "Please check the calendar", imageCount: 0, at: 10 },
-    { id: "ack", type: "assistant", text: "I will ask the calendar Bot", toolCalls: [], stopReason: "toolUse", at: 20 },
-    { id: "sent", type: "peer", exchangeId: "exchange", direction: "sent", peerBotId: "B", peerName: "Calendar", messageKind: "request", at: 25 },
-    { id: "waiting", type: "assistant", text: "Waiting for Calendar", toolCalls: [], stopReason: "stop", at: 30 },
-    { id: "received", type: "peer", exchangeId: "exchange", direction: "received", peerBotId: "B", peerName: "Calendar", messageKind: "result", at: 40 },
-    { id: "final-answer", type: "assistant", text: "Your meeting starts at 3pm", toolCalls: [], stopReason: "stop", at: 50 },
+    {
+      id: "ack",
+      type: "assistant",
+      text: "I will ask the calendar Bot",
+      toolCalls: [],
+      stopReason: "toolUse",
+      at: 20,
+    },
+    {
+      id: "sent",
+      type: "peer",
+      exchangeId: "exchange",
+      direction: "sent",
+      peerBotId: "B",
+      peerName: "Calendar",
+      messageKind: "request",
+      at: 25,
+    },
+    {
+      id: "waiting",
+      type: "assistant",
+      text: "Waiting for Calendar",
+      toolCalls: [],
+      stopReason: "stop",
+      at: 30,
+    },
+    {
+      id: "received",
+      type: "peer",
+      exchangeId: "exchange",
+      direction: "received",
+      peerBotId: "B",
+      peerName: "Calendar",
+      messageKind: "result",
+      at: 40,
+    },
+    {
+      id: "final-answer",
+      type: "assistant",
+      text: "Your meeting starts at 3pm",
+      toolCalls: [],
+      stopReason: "stop",
+      at: 50,
+    },
   ];
-  assert.equal(botLastReplyAt(entries), null); assert.deepEqual(botTranscriptPreview(entries), { text: "Please check the calendar", at: 10 }); assert.ok(entries.some((entry) => entry.type === "assistant" && entry.text === "Waiting for Calendar"));
-  entries.push({ id: "another-person-input", type: "user", text: "An unrelated next task", imageCount: 0, at: 55 });
-  entries.push({ id: "sealed-root-result", type: "peer", exchangeId: "exchange", direction: "received", peerBotId: "B", peerName: "Calendar", messageKind: "result", final: true, at: 60 });
-  assert.equal(botLastReplyAt(entries), 60); assert.deepEqual(botTranscriptPreview(entries), { text: "Your meeting starts at 3pm", at: 60 });
-  assert.throws(() => parseBotPeerTranscriptData({ exchangeId: "exchange", direction: "received", peerBotId: "B", peerName: "Calendar", messageKind: "result", final: false }));
-  assert.throws(() => parseBotPeerTranscriptData({ exchangeId: "exchange", direction: "received", peerBotId: "B", peerName: "Calendar", messageKind: "fyi", final: true }));
-  const recipient = entries.slice(4, 6); assert.equal(botLastReplyAt(recipient), null); assert.equal(botTranscriptPreview(recipient), null);
+  assert.equal(botLastReplyAt(entries), null);
+  assert.deepEqual(botTranscriptPreview(entries), { text: "Please check the calendar", at: 10 });
+  assert.ok(
+    entries.some((entry) => entry.type === "assistant" && entry.text === "Waiting for Calendar"),
+  );
+  entries.push({
+    id: "another-person-input",
+    type: "user",
+    text: "An unrelated next task",
+    imageCount: 0,
+    at: 55,
+  });
+  entries.push({
+    id: "sealed-root-result",
+    type: "peer",
+    exchangeId: "exchange",
+    direction: "received",
+    peerBotId: "B",
+    peerName: "Calendar",
+    messageKind: "result",
+    final: true,
+    at: 60,
+  });
+  assert.equal(botLastReplyAt(entries), 60);
+  assert.deepEqual(botTranscriptPreview(entries), { text: "Your meeting starts at 3pm", at: 60 });
+  assert.throws(() =>
+    parseBotPeerTranscriptData({
+      exchangeId: "exchange",
+      direction: "received",
+      peerBotId: "B",
+      peerName: "Calendar",
+      messageKind: "result",
+      final: false,
+    }),
+  );
+  assert.throws(() =>
+    parseBotPeerTranscriptData({
+      exchangeId: "exchange",
+      direction: "received",
+      peerBotId: "B",
+      peerName: "Calendar",
+      messageKind: "fyi",
+      final: true,
+    }),
+  );
+  const recipient = entries.slice(4, 6);
+  assert.equal(botLastReplyAt(recipient), null);
+  assert.equal(botTranscriptPreview(recipient), null);
 });
 
-
 test("Bot message projection uses clean text, preserves bounded status, and never offers Retry", () => {
-  const notice = { id: 1, kind: "aiden.bot-notice", data: { notice: "bot_message", requestId: "bot:j:1:d", kind: "request", deliveryId: "d", botId: "j", botName: "Jester", text: "Clean question" } };
-  const input = { id: 2, kind: "aiden.bot-message-input", data: {kind: "request", deliveryId: "d", botId: "j", botName: "Jester", text: "Clean question", deadline: 100}, model: [{ role: "user", content: '<bot_message from="Jester">private frame</bot_message>', timestamp: 1 }] };
-  const status = { id: 3, kind: "aiden.bot-message-status", data: { deliveryId: "d", botId: "c", botName: "COS", outcome: "replied_while_paused", text: "x".repeat(9000) } };
-  const failed = { id: 4, kind: "pi.assistant", model: [{role: "assistant", content: [], stopReason: "error", errorMessage: "failed", timestamp: 2}] };
-  const rows = projectBotTranscript([notice, input, status, {...status, id: 5}, failed] as never);
-  assert.deepEqual(rows[0], { id: "2", type: "bot_message", kind: "request", botId: "j", botName: "Jester", text: "Clean question", at: 1 });
-  assert.equal(rows.filter(r => r.type === "bot_message_status").length, 1);
-  assert.equal(rows.find(r => r.type === "bot_message_status")?.data.text?.length, 8000);
-  assert.equal(rows.find(r => r.type === "failed_turn")?.retryText, null);
-  const silent = projectBotTranscript([notice, input, status, {id: 6, kind: "pi.assistant", model: [fauxAssistantMessage("[SILENT]")]}] as never);
-  assert.deepEqual(silent.map(r => r.type), ["bot_message_status"]);
+  const notice = {
+    id: 1,
+    kind: "aiden.bot-notice",
+    data: {
+      notice: "bot_message",
+      requestId: "bot:j:1:d",
+      kind: "request",
+      deliveryId: "d",
+      botId: "j",
+      botName: "Jester",
+      text: "Clean question",
+    },
+  };
+  const input = {
+    id: 2,
+    kind: "aiden.bot-message-input",
+    data: {
+      kind: "request",
+      deliveryId: "d",
+      botId: "j",
+      botName: "Jester",
+      text: "Clean question",
+      deadline: 100,
+    },
+    model: [
+      {
+        role: "user",
+        content: '<bot_message from="Jester">private frame</bot_message>',
+        timestamp: 1,
+      },
+    ],
+  };
+  const status = {
+    id: 3,
+    kind: "aiden.bot-message-status",
+    data: {
+      deliveryId: "d",
+      botId: "c",
+      botName: "COS",
+      outcome: "replied_while_paused",
+      text: "x".repeat(9000),
+    },
+  };
+  const failed = {
+    id: 4,
+    kind: "pi.assistant",
+    model: [
+      { role: "assistant", content: [], stopReason: "error", errorMessage: "failed", timestamp: 2 },
+    ],
+  };
+  const rows = projectBotTranscript([notice, input, status, { ...status, id: 5 }, failed] as never);
+  assert.deepEqual(rows[0], {
+    id: "2",
+    type: "bot_message",
+    kind: "request",
+    botId: "j",
+    botName: "Jester",
+    text: "Clean question",
+    at: 1,
+  });
+  assert.equal(rows.filter((r) => r.type === "bot_message_status").length, 1);
+  assert.equal(rows.find((r) => r.type === "bot_message_status")?.data.text?.length, 8000);
+  assert.equal(rows.find((r) => r.type === "failed_turn")?.retryText, null);
+  const silent = projectBotTranscript([
+    notice,
+    input,
+    status,
+    { id: 6, kind: "pi.assistant", model: [fauxAssistantMessage("[SILENT]")] },
+  ] as never);
+  assert.deepEqual(
+    silent.map((r) => r.type),
+    ["bot_message_status"],
+  );
   const withoutNotice = projectBotTranscript([input, failed] as never);
-  assert.deepEqual(withoutNotice[0], rows[0], "the admitted input itself retains its clean display text");
-  const malformed = projectBotTranscript([{...input, data: undefined}, failed] as never);
-  assert.equal(malformed.some(r => r.type === "user" || r.type === "bot_message"), false, "missing metadata must never expose the frame");
-  assert.equal(malformed.find(r => r.type === "failed_turn")?.retryText, null);
+  assert.deepEqual(
+    withoutNotice[0],
+    rows[0],
+    "the admitted input itself retains its clean display text",
+  );
+  const malformed = projectBotTranscript([{ ...input, data: undefined }, failed] as never);
+  assert.equal(
+    malformed.some((r) => r.type === "user" || r.type === "bot_message"),
+    false,
+    "missing metadata must never expose the frame",
+  );
+  assert.equal(malformed.find((r) => r.type === "failed_turn")?.retryText, null);
 });
 
 test("stranded Bot notices preserve person messages and later inputs use their own metadata", () => {
-  const stranded = {id: 1, kind: "aiden.bot-notice", data: {notice: "bot_message", kind: "request", deliveryId: "old", botId: "old-bot", botName: "Old Bot", text: "Stale private text"}};
-  const person = {id: 2, kind: "pi.user", model: [{role: "user", content: "My own message", timestamp: 1}]};
-  const failed = {id: 3, kind: "pi.assistant", model: [{role: "assistant", content: [], stopReason: "error", errorMessage: "failed", timestamp: 2}]};
-  const input = {id: 4, kind: "aiden.bot-message-input", data: {kind: "reply", deliveryId: "new", botId: "cos", botName: "COS", text: "The current answer", deadline: 100}, model: [{role: "user", content: "<bot_message>private frame</bot_message>", timestamp: 3}]};
+  const stranded = {
+    id: 1,
+    kind: "aiden.bot-notice",
+    data: {
+      notice: "bot_message",
+      kind: "request",
+      deliveryId: "old",
+      botId: "old-bot",
+      botName: "Old Bot",
+      text: "Stale private text",
+    },
+  };
+  const person = {
+    id: 2,
+    kind: "pi.user",
+    model: [{ role: "user", content: "My own message", timestamp: 1 }],
+  };
+  const failed = {
+    id: 3,
+    kind: "pi.assistant",
+    model: [
+      { role: "assistant", content: [], stopReason: "error", errorMessage: "failed", timestamp: 2 },
+    ],
+  };
+  const input = {
+    id: 4,
+    kind: "aiden.bot-message-input",
+    data: {
+      kind: "reply",
+      deliveryId: "new",
+      botId: "cos",
+      botName: "COS",
+      text: "The current answer",
+      deadline: 100,
+    },
+    model: [{ role: "user", content: "<bot_message>private frame</bot_message>", timestamp: 3 }],
+  };
   const personOnly = projectBotTranscript([stranded, person, failed] as never);
   assert.equal(personOnly[0]?.type, "user");
   assert.equal(personOnly[0]?.type === "user" && personOnly[0].text, "My own message");
-  assert.equal(personOnly.find(r => r.type === "failed_turn")?.retryText, "My own message");
+  assert.equal(personOnly.find((r) => r.type === "failed_turn")?.retryText, "My own message");
   const all = projectBotTranscript([stranded, person, failed, input] as never);
   assert.deepEqual(all[0], personOnly[0]);
-  assert.deepEqual(all.find(r => r.type === "bot_message"), {id: "4", type: "bot_message", kind: "reply", botId: "cos", botName: "COS", text: "The current answer", at: 3});
+  assert.deepEqual(
+    all.find((r) => r.type === "bot_message"),
+    {
+      id: "4",
+      type: "bot_message",
+      kind: "reply",
+      botId: "cos",
+      botName: "COS",
+      text: "The current answer",
+      at: 3,
+    },
+  );
   assert.equal(JSON.stringify(all).includes("Stale private text"), false);
 });
 
 test("Bot statuses dedupe independently by delivery, outcome and approval wait", () => {
-  const data = { deliveryId: "d", botId: "c", botName: "COS", outcome: "waiting_approval", waitId: "one", summary: "Approve" };
-  const records = [data, data, {...data, waitId: "two"}, {...data, deliveryId: "other"}, {...data, outcome: "failed"}];
-  assert.equal(projectBotTranscript(records.map((data, id) => ({id, kind: "aiden.bot-message-status", data})) as never).length, 4);
+  const data = {
+    deliveryId: "d",
+    botId: "c",
+    botName: "COS",
+    outcome: "waiting_approval",
+    waitId: "one",
+    summary: "Approve",
+  };
+  const records = [
+    data,
+    data,
+    { ...data, waitId: "two" },
+    { ...data, deliveryId: "other" },
+    { ...data, outcome: "failed" },
+  ];
+  assert.equal(
+    projectBotTranscript(
+      records.map((data, id) => ({ id, kind: "aiden.bot-message-status", data })) as never,
+    ).length,
+    4,
+  );
 });
-
 
 test("a waiting access request reaches subscribers, needs-you and late joiners; a failed grant keeps it and an answer clears it", async () => {
   const requests = createBotAccessRequests();
-  const live = await start(createFauxModels([]), { projection: { accessRequest: (botId) => requests.pending(botId)[0] ?? null } });
+  const live = await start(createFauxModels([]), {
+    projection: { accessRequest: (botId) => requests.pending(botId)[0] ?? null },
+  });
   const stop = requests.onChange((botId) => void live.projection.refreshAccessRequest(botId));
   try {
     const tape = recorder();
@@ -2553,10 +3559,20 @@ test("a waiting access request reaches subscribers, needs-you and late joiners; 
     assert.equal(await live.projection.needsYou("bot:a"), false);
     const asked = requests.request(accessRequestPrompt());
     const card = requests.pending()[0]!;
-    await waitFor(() => tape.view?.accessRequest?.waitId === card.waitId, { what: "the public access event" });
+    await waitFor(() => tape.view?.accessRequest?.waitId === card.waitId, {
+      what: "the public access event",
+    });
     assert.equal((await live.projection.summary("bot:a")).needsYou, true);
-    assert.deepEqual(Object.keys(tape.view!.accessRequest!).sort(), ["botId", "waitId", "toolCallId", "target", "label", "place", "why", "choices"].sort());
-    await assert.rejects(requests.answer("bot:a", card.waitId, "always", async () => { throw new Error("Access changed"); }), /Access changed/u);
+    assert.deepEqual(
+      Object.keys(tape.view!.accessRequest!).sort(),
+      ["botId", "waitId", "toolCallId", "target", "label", "place", "why", "choices"].sort(),
+    );
+    await assert.rejects(
+      requests.answer("bot:a", card.waitId, "always", async () => {
+        throw new Error("Access changed");
+      }),
+      /Access changed/u,
+    );
     await live.projection.refreshAccessRequest("bot:a");
     assert.equal(tape.view?.accessRequest?.waitId, card.waitId);
     const late = await live.projection.subscribe("bot:a", recorder().sink);
@@ -2569,16 +3585,25 @@ test("a waiting access request reaches subscribers, needs-you and late joiners; 
     assert.equal(await live.projection.needsYou("bot:a"), false);
     assert.equal(tape.gaps, 0);
     first.unsubscribe();
-  } finally { stop(); await live.close(); }
+  } finally {
+    stop();
+    await live.close();
+  }
 });
 
 test("access requests opened without a feed and settled without refresh are caught up on subscribe", async () => {
   const requests = createBotAccessRequests();
-  const live = await start(createFauxModels([]), { projection: { accessRequest: (botId) => requests.pending(botId)[0] ?? null } });
+  const live = await start(createFauxModels([]), {
+    projection: { accessRequest: (botId) => requests.pending(botId)[0] ?? null },
+  });
   try {
     const asked = requests.request(accessRequestPrompt());
     const card = requests.pending()[0]!;
-    assert.equal(await live.projection.needsYou("bot:a"), true, "no feed is required for the badge");
+    assert.equal(
+      await live.projection.needsYou("bot:a"),
+      true,
+      "no feed is required for the badge",
+    );
     const tape = recorder();
     const first = await live.projection.subscribe("bot:a", tape.sink);
     tape.start(first.snapshot);
@@ -2588,25 +3613,64 @@ test("access requests opened without a feed and settled without refresh are caug
     const settled = await live.projection.subscribe("bot:a", recorder().sink);
     assert.equal(settled.snapshot.accessRequest, null);
     await waitFor(() => tape.view?.accessRequest === null, { what: "subscribe catch-up" });
-    first.unsubscribe(); settled.unsubscribe();
-  } finally { await live.close(); }
+    first.unsubscribe();
+    settled.unsubscribe();
+  } finally {
+    await live.close();
+  }
 });
 
-
 function planView(overrides: Partial<BotPlanView> = {}): BotPlanView {
-  return { planId: "p1", botId: "bot:a", status: "pending", title: "Organize the calendar", why: "Make time for the work",
-    steps: [{ text: "Create the events", status: "pending" }], items: [{ id: "i1", line: "Calendar · create events (up to 5)", details: ["Create event"], used: 0, max: 5 }], revision: 1, ...overrides };
+  return {
+    planId: "p1",
+    botId: "bot:a",
+    status: "pending",
+    title: "Organize the calendar",
+    why: "Make time for the work",
+    steps: [{ text: "Create the events", status: "pending" }],
+    items: [
+      {
+        id: "i1",
+        line: "Calendar · create events (up to 5)",
+        details: ["Create event"],
+        used: 0,
+        max: 5,
+      },
+    ],
+    revision: 1,
+    ...overrides,
+  };
 }
 
 test("plan events update only the plan and sequence, including clear and stale/gap handling", () => {
-  const snapshot: BotLiveSnapshot = { botId: "bot:a", epoch: "e1", seq: 10, entries: [{ id: "u1", type: "user", text: "Please help", imageCount: 0 }], partial: "Working", state: { kind: "idle" }, question: null, activity: null, queued: [] };
-  const event: BotLiveEvent = { botId: "bot:a", epoch: "e1", seq: 11, type: "plan", plan: planView() };
+  const snapshot: BotLiveSnapshot = {
+    botId: "bot:a",
+    epoch: "e1",
+    seq: 10,
+    entries: [{ id: "u1", type: "user", text: "Please help", imageCount: 0 }],
+    partial: "Working",
+    state: { kind: "idle" },
+    question: null,
+    activity: null,
+    queued: [],
+  };
+  const event: BotLiveEvent = {
+    botId: "bot:a",
+    epoch: "e1",
+    seq: 11,
+    type: "plan",
+    plan: planView(),
+  };
   const applied = applyBotLiveEvent(snapshot, event);
   assert.deepEqual(applied, { ...snapshot, seq: 11, plan: event.plan });
   assert.equal(applied!.entries, snapshot.entries);
   assert.equal(applyBotLiveEvent(applied!, event), applied);
   assert.equal(applyBotLiveEvent(snapshot, { ...event, seq: 12 }), null);
-  assert.deepEqual(applyBotLiveEvent(applied!, { ...event, seq: 12, plan: null }), { ...snapshot, seq: 12, plan: null });
+  assert.deepEqual(applyBotLiveEvent(applied!, { ...event, seq: 12, plan: null }), {
+    ...snapshot,
+    seq: 12,
+    plan: null,
+  });
 });
 
 test("a plan change pushes one event per identity or revision and clearing removes it", async () => {
@@ -2621,7 +3685,9 @@ test("a plan change pushes one event per identity or revision and clearing remov
     assert.equal(tape.events.filter((event) => event.type === "plan").length, 0);
     plan = planView({ revision: 2, status: "active" });
     await live.projection.refreshPlan("bot:a");
-    await waitFor(() => tape.events.filter((event) => event.type === "plan").length === 1, { what: "revised plan event" });
+    await waitFor(() => tape.events.filter((event) => event.type === "plan").length === 1, {
+      what: "revised plan event",
+    });
     assert.equal(tape.view?.plan?.status, "active");
     await live.projection.refreshPlan("bot:a");
     plan = planView({ planId: "p2", revision: 2 });
@@ -2629,10 +3695,14 @@ test("a plan change pushes one event per identity or revision and clearing remov
     plan = null;
     await live.projection.refreshPlan("bot:a");
     await live.projection.refreshPlan("bot:a");
-    await waitFor(() => tape.events.filter((event) => event.type === "plan").length === 3, { what: "replacement and clear" });
+    await waitFor(() => tape.events.filter((event) => event.type === "plan").length === 3, {
+      what: "replacement and clear",
+    });
     assert.equal(tape.view?.plan, null);
     assert.equal(tape.gaps, 0);
-  } finally { await live.close(); }
+  } finally {
+    await live.close();
+  }
 });
 
 test("pending plans need the person offscreen and subscribe catches unannounced changes", async () => {
@@ -2650,16 +3720,26 @@ test("pending plans need the person offscreen and subscribe catches unannounced 
     tape.start(first.snapshot);
     assert.equal(first.snapshot.plan?.status, "pending");
     plan = planView({ status: "active", revision: 2 });
-    assert.equal((await live.projection.summary("bot:a")).needsYou, false, "attention rereads even an open feed");
+    assert.equal(
+      (await live.projection.summary("bot:a")).needsYou,
+      false,
+      "attention rereads even an open feed",
+    );
     const late = await live.projection.subscribe("bot:a", { send() {} });
     assert.equal(late.snapshot.plan?.status, "active");
-    await waitFor(() => tape.view?.plan?.status === "active", { what: "subscribe catches the plan up" });
-  } finally { await live.close(); }
+    await waitFor(() => tape.view?.plan?.status === "active", {
+      what: "subscribe catches the plan up",
+    });
+  } finally {
+    await live.close();
+  }
 });
 
 test("a pending plan makes a running reply wait for the person until approved", async () => {
   let plan: BotPlanView | null = null;
-  const live = await start(createFauxModels([slowAnswer()], { tokensPerSecond: 40 }), { projection: { plan: async () => plan } });
+  const live = await start(createFauxModels([slowAnswer()], { tokensPerSecond: 40 }), {
+    projection: { plan: async () => plan },
+  });
   try {
     const tape = recorder();
     const subscription = await live.projection.subscribe("bot:a", tape.sink);
@@ -2668,9 +3748,15 @@ test("a pending plan makes a running reply wait for the person until approved", 
     await waitFor(() => tape.view?.activity !== null, { what: "running activity" });
     plan = planView();
     await live.projection.refreshPlan("bot:a");
-    await waitFor(() => tape.view?.activity?.phase === "waiting", { what: "plan waiting activity" });
+    await waitFor(() => tape.view?.activity?.phase === "waiting", {
+      what: "plan waiting activity",
+    });
     plan = planView({ status: "active", revision: 2 });
     await live.projection.refreshPlan("bot:a");
-    await waitFor(() => tape.view?.activity?.phase !== "waiting", { what: "approved plan releases activity" });
-  } finally { await live.close(); }
+    await waitFor(() => tape.view?.activity?.phase !== "waiting", {
+      what: "approved plan releases activity",
+    });
+  } finally {
+    await live.close();
+  }
 });

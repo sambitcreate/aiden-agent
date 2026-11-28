@@ -14,7 +14,8 @@ import { devicesApi } from "../lib/ipc";
 import { pasteHostClipboardToDevice } from "../lib/device-clipboard";
 import type { DeviceFeatureAvailability, DeviceFeatureTarget } from "../shared/device-features";
 
-const sizeLabel = (bytes: number) => (bytes < 1024 ? `${bytes} bytes` : `${(bytes / 1024).toFixed(1)} KB`);
+const sizeLabel = (bytes: number) =>
+  bytes < 1024 ? `${bytes} bytes` : `${(bytes / 1024).toFixed(1)} KB`;
 
 /** Paste with toasts for the outcome; shared by the drawer button and the Cmd+V shortcut. */
 export async function pasteToDeviceWithFeedback(
@@ -22,7 +23,11 @@ export async function pasteToDeviceWithFeedback(
   sendKey: ((code: string, phase: "down" | "up") => void) | null,
 ): Promise<void> {
   try {
-    await pasteHostClipboardToDevice({ target, copy: (value) => devicesApi.pasteClipboard(value), sendKey });
+    await pasteHostClipboardToDevice({
+      target,
+      copy: (value) => devicesApi.pasteClipboard(value),
+      sendKey,
+    });
   } catch (error) {
     toast.error(error instanceof Error ? error.message : "The clipboard could not be pasted.");
   }
@@ -50,7 +55,9 @@ export function DeviceClipboardSection(props: {
         toast.success(`Copied ${sizeLabel(bytes)} from the ${noun}.`);
       }
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : `The ${noun} clipboard could not be read.`);
+      toast.error(
+        error instanceof Error ? error.message : `The ${noun} clipboard could not be read.`,
+      );
     } finally {
       setBusy(null);
     }

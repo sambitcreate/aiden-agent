@@ -27,8 +27,22 @@ test("redactCredentialTokens removes every known credential shape", () => {
   for (const secret of secrets) {
     const output = redactCredentialTokens(`before ${secret} after`, MARK);
     assert.ok(output.includes(MARK), `not redacted: ${secret}`);
-    for (const fragment of ["b3BlbnNzaC1rZXktdjEAAAAA", "abc.def-123", "abc123", "s3cr3t", "quoted-value", "hunter2", "topsecret", "AAAAAAAAAAAAAAAAAAAA", "abcdef", "ABCDEFGHIJKLMNOP", "1234567890abcdefghij", "SflKxwRJSMeKKF2QT4fwpMeJf36"]) {
-      if (secret.includes(fragment)) assert.equal(output.includes(fragment), false, `${fragment} leaked from ${secret}`);
+    for (const fragment of [
+      "b3BlbnNzaC1rZXktdjEAAAAA",
+      "abc.def-123",
+      "abc123",
+      "s3cr3t",
+      "quoted-value",
+      "hunter2",
+      "topsecret",
+      "AAAAAAAAAAAAAAAAAAAA",
+      "abcdef",
+      "ABCDEFGHIJKLMNOP",
+      "1234567890abcdefghij",
+      "SflKxwRJSMeKKF2QT4fwpMeJf36",
+    ]) {
+      if (secret.includes(fragment))
+        assert.equal(output.includes(fragment), false, `${fragment} leaked from ${secret}`);
     }
     assert.ok(output.startsWith("before ") && output.endsWith(" after"));
   }
@@ -47,7 +61,9 @@ test("redactCredentialTokens leaves ordinary prose and short look-alikes alone",
 
 test("redactUrlCredentials masks userinfo and secret query values only", () => {
   assert.equal(
-    redactUrlCredentials("fatal: https://user:pa55@github.com/o/r.git?token=abc&ref=main&private_token=xyz"),
+    redactUrlCredentials(
+      "fatal: https://user:pa55@github.com/o/r.git?token=abc&ref=main&private_token=xyz",
+    ),
     "fatal: https://***@github.com/o/r.git?token=***&ref=main&private_token=***",
   );
   assert.equal(

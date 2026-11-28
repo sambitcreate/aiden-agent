@@ -1,10 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import type { SubagentRunSnapshotV2 } from "../../../renderer/shared/subagent-runs.js";
-import {
-  createSubagentAuthorityV2,
-  type SubagentAuthorityV2,
-} from "./authority-v2.js";
+import { createSubagentAuthorityV2, type SubagentAuthorityV2 } from "./authority-v2.js";
 import {
   BackgroundSubagentLifecycleV2,
   MAX_BACKGROUND_STEERS_V2,
@@ -39,9 +36,7 @@ class MemoryStore implements BackgroundSubagentStoreV2 {
   }
 }
 
-function authority(
-  extra: Partial<SubagentAuthorityV2> = {},
-): SubagentAuthorityV2 {
+function authority(extra: Partial<SubagentAuthorityV2> = {}): SubagentAuthorityV2 {
   return createSubagentAuthorityV2({
     grantId: "grant-background",
     treeRootId: "run-background",
@@ -124,9 +119,7 @@ function request(action: "status" | "wait" | "stop" | "steer", revision = 1) {
     authorityRevision: 3,
     expectedRevision: revision,
     ...(action === "wait" ? { timeoutMs: 100 } : {}),
-    ...(action === "steer"
-      ? { instruction: "Focus on the newest evidence." }
-      : {}),
+    ...(action === "steer" ? { instruction: "Focus on the newest evidence." } : {}),
   };
 }
 
@@ -156,10 +149,7 @@ test("acceptance is acknowledged only after durable queued evidence", async () =
       state: "queued",
     },
   );
-  assert.equal(
-    store.records.get("run-background")?.events[0]?.kind,
-    "accepted",
-  );
+  assert.equal(store.records.get("run-background")?.events[0]?.kind, "accepted");
 });
 
 test("Phase 7A denies fork, outbound, mutation, shell, write, and delegation authority", async () => {
@@ -223,20 +213,9 @@ test("state machine permits needs-attention recovery and terminal unknown but re
     snapshot: snapshot(),
     task: "Inspect later",
   });
-  await assert.rejects(
-    lifecycle.transition(request("status"), "running", "Running"),
-    /Invalid/u,
-  );
-  let run = await lifecycle.transition(
-    request("status"),
-    "starting",
-    "Starting",
-  );
-  run = await lifecycle.transition(
-    request("status", run.snapshot.revision),
-    "running",
-    "Running",
-  );
+  await assert.rejects(lifecycle.transition(request("status"), "running", "Running"), /Invalid/u);
+  let run = await lifecycle.transition(request("status"), "starting", "Starting");
+  run = await lifecycle.transition(request("status", run.snapshot.revision), "running", "Running");
   run = await lifecycle.transition(
     request("status", run.snapshot.revision),
     "needs_attention",
@@ -248,11 +227,7 @@ test("state machine permits needs-attention recovery and terminal unknown but re
     parseBackgroundSubagentRunV2(await store.get(run.snapshot.runId))?.snapshot.activity,
     "Should I overwrite the existing migration?",
   );
-  run = await lifecycle.transition(
-    request("status", run.snapshot.revision),
-    "running",
-    "Resumed",
-  );
+  run = await lifecycle.transition(request("status", run.snapshot.revision), "running", "Resumed");
   run = await lifecycle.transition(
     request("status", run.snapshot.revision),
     "needs_attention",
@@ -260,22 +235,14 @@ test("state machine permits needs-attention recovery and terminal unknown but re
   );
   assert.ok(run.snapshot.activity!.length <= 160);
   assert.match(run.snapshot.activity!, /^Approve a very long pending approval request .+\.\.\.$/u);
-  run = await lifecycle.transition(
-    request("status", run.snapshot.revision),
-    "running",
-    "Resumed",
-  );
+  run = await lifecycle.transition(request("status", run.snapshot.revision), "running", "Resumed");
   run = await lifecycle.transition(
     request("status", run.snapshot.revision),
     "needs_attention",
     "   ",
   );
   assert.equal(run.snapshot.activity, "Needs attention.");
-  run = await lifecycle.transition(
-    request("status", run.snapshot.revision),
-    "running",
-    "Resumed",
-  );
+  run = await lifecycle.transition(request("status", run.snapshot.revision), "running", "Resumed");
   run = await lifecycle.transition(
     request("status", run.snapshot.revision),
     "unknown",
@@ -293,20 +260,9 @@ test("wait and steer are durable, bounded, and state constrained", async () => {
     snapshot: snapshot(),
     task: "Inspect later",
   });
-  await assert.rejects(
-    lifecycle.manage(request("steer")),
-    /cannot be steered/u,
-  );
-  let run = await lifecycle.transition(
-    request("status"),
-    "starting",
-    "Starting",
-  );
-  run = await lifecycle.transition(
-    request("status", run.snapshot.revision),
-    "running",
-    "Running",
-  );
+  await assert.rejects(lifecycle.manage(request("steer")), /cannot be steered/u);
+  let run = await lifecycle.transition(request("status"), "starting", "Starting");
+  run = await lifecycle.transition(request("status", run.snapshot.revision), "running", "Running");
   run = await lifecycle.manage(request("wait", run.snapshot.revision));
   assert.equal(run.waitCount, 1);
   assert.equal(run.waitedMs, 100);
@@ -320,13 +276,7 @@ test("wait and steer are durable, bounded, and state constrained", async () => {
 });
 
 test("startup, deletion, revocation, shutdown, and explicit stop durably terminalize active work", async () => {
-  for (const action of [
-    "startup",
-    "chat",
-    "workspace",
-    "shutdown",
-    "stop",
-  ] as const) {
+  for (const action of ["startup", "chat", "workspace", "shutdown", "stop"] as const) {
     const store = new MemoryStore();
     const stopped: string[] = [];
     const lifecycle = new BackgroundSubagentLifecycleV2(store, {
@@ -339,15 +289,12 @@ test("startup, deletion, revocation, shutdown, and explicit stop durably termina
     });
     if (action === "startup") await lifecycle.reconcileStartup();
     if (action === "chat") await lifecycle.chatDeleted("chat-background");
-    if (action === "workspace")
-      await lifecycle.workspaceRevoked("workspace-background");
+    if (action === "workspace") await lifecycle.workspaceRevoked("workspace-background");
     if (action === "shutdown") await lifecycle.shutdown();
     if (action === "stop") await lifecycle.manage(request("stop"));
     const saved = store.records.get("run-background")!;
     assert.equal(
-      action === "startup" || action === "shutdown"
-        ? saved.snapshot.state
-        : saved.snapshot.state,
+      action === "startup" || action === "shutdown" ? saved.snapshot.state : saved.snapshot.state,
       action === "startup" || action === "shutdown" ? "interrupted" : "stopped",
     );
     assert.equal(stopped.length, 1);
@@ -368,16 +315,8 @@ test("CAS rejects stale concurrent management before hooks and hook failure beco
     snapshot: snapshot(),
     task: "Inspect later",
   });
-  let run = await lifecycle.transition(
-    request("status"),
-    "starting",
-    "Starting",
-  );
-  run = await lifecycle.transition(
-    request("status", run.snapshot.revision),
-    "running",
-    "Running",
-  );
+  let run = await lifecycle.transition(request("status"), "starting", "Starting");
+  run = await lifecycle.transition(request("status", run.snapshot.revision), "running", "Running");
   store.rejectCas = true;
   await assert.rejects(
     lifecycle.manage(request("steer", run.snapshot.revision)),
@@ -457,10 +396,7 @@ test("expiry blocks fresh execution transitions but never owner stop", async () 
     task: "Expire safely",
   });
   clock = 22;
-  await assert.rejects(
-    lifecycle.transition(request("status"), "starting", "Starting"),
-    /expired/u,
-  );
+  await assert.rejects(lifecycle.transition(request("status"), "starting", "Starting"), /expired/u);
   const stopped = await lifecycle.manage(request("stop"));
   assert.equal(stopped.snapshot.state, "stopped");
 });

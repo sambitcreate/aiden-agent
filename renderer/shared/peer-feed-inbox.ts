@@ -24,7 +24,8 @@ export function peerFeedTime(row: PeerFeedRow, field: string): number | undefine
  */
 export function reportedTriage(row: PeerFeedRow): ChatTriageEntry | undefined {
   const revision = row.triageRevision;
-  if (typeof revision !== "number" || !Number.isSafeInteger(revision) || revision < 1) return undefined;
+  if (typeof revision !== "number" || !Number.isSafeInteger(revision) || revision < 1)
+    return undefined;
   const pinnedAt = peerFeedTime(row, "pinnedAt");
   const doneAt = peerFeedTime(row, "doneAt");
   const snoozedUntil = peerFeedTime(row, "snoozedUntil");
@@ -37,7 +38,11 @@ export function reportedTriage(row: PeerFeedRow): ChatTriageEntry | undefined {
   };
 }
 
-export const PEER_LIVE_RUN_STATES: ReadonlySet<string> = new Set(["working", "needs_approval", "needs_input"]);
+export const PEER_LIVE_RUN_STATES: ReadonlySet<string> = new Set([
+  "working",
+  "needs_approval",
+  "needs_input",
+]);
 
 function moreUrgent(left: ChatRowState, right: ChatRowState): ChatRowState {
   return CHAT_ROW_STATES.indexOf(left) <= CHAT_ROW_STATES.indexOf(right) ? left : right;
@@ -78,7 +83,8 @@ export function peerFeedChatState(
     : row.activity === "active"
       ? "working"
       : "idle";
-  const runState = run && PEER_LIVE_RUN_STATES.has(run.state) && isChatRowState(run.state) ? run.state : "idle";
+  const runState =
+    run && PEER_LIVE_RUN_STATES.has(run.state) && isChatRowState(run.state) ? run.state : "idle";
   let rowState = moreUrgent(runState, summaryState);
   if (stale && rowState === "working") rowState = "idle";
   // The summary carries the host's current read marker, so it outranks the

@@ -60,7 +60,10 @@ test("design mode is on unless AIDEN_DESIGN_MODE turns it off", () => {
 
 test("design mode and Create Images are independent capabilities", () => {
   assert.deepEqual(studioCapabilities({}), { createImages: false, designMode: true });
-  assert.deepEqual(studioCapabilities({ [CREATE_IMAGES_FEATURE_FLAG]: "1" }), { createImages: true, designMode: true });
+  assert.deepEqual(studioCapabilities({ [CREATE_IMAGES_FEATURE_FLAG]: "1" }), {
+    createImages: true,
+    designMode: true,
+  });
   assert.deepEqual(studioCapabilities({ ...DESIGN_OFF, [CREATE_IMAGES_FEATURE_FLAG]: "1" }), {
     createImages: true,
     designMode: false,

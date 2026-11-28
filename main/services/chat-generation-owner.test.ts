@@ -24,7 +24,9 @@ test("remote generation ownership survives delivery disconnects until explicit i
   assert.equal(remote.owner.isDestroyed(), false);
 
   let invalidations = 0;
-  const remove = remote.owner.onInvalidated(() => { invalidations += 1; });
+  const remove = remote.owner.onInvalidated(() => {
+    invalidations += 1;
+  });
   remote.invalidate();
   remote.invalidate();
   remove();
@@ -38,15 +40,21 @@ test("remote generation ownership survives delivery disconnects until explicit i
 
 test("remote generation owners reject unbounded identities", () => {
   assert.throws(
-    () => createRemoteChatGenerationOwner({ deviceId: "", streamId: "stream", publish: () => undefined }),
+    () =>
+      createRemoteChatGenerationOwner({
+        deviceId: "",
+        streamId: "stream",
+        publish: () => undefined,
+      }),
     /device identity/u,
   );
   assert.throws(
-    () => createRemoteChatGenerationOwner({
-      deviceId: "device",
-      streamId: "s".repeat(129),
-      publish: () => undefined,
-    }),
+    () =>
+      createRemoteChatGenerationOwner({
+        deviceId: "device",
+        streamId: "s".repeat(129),
+        publish: () => undefined,
+      }),
     /stream identity/u,
   );
 });

@@ -23,7 +23,9 @@ interface DiagnosticProcess {
 const SIGNALS: readonly DiagnosticSignal[] = ["SIGHUP", "SIGINT", "SIGTERM"];
 const installedProcesses = new WeakSet<object>();
 
-export function processDiagnosticSnapshot(target: DiagnosticProcess = process): Record<string, unknown> {
+export function processDiagnosticSnapshot(
+  target: DiagnosticProcess = process,
+): Record<string, unknown> {
   const memory = target.memoryUsage();
   return {
     pid: target.pid,
@@ -75,19 +77,22 @@ export function installProcessDiagnostics(target: DiagnosticProcess = process): 
 
   target.on("uncaughtExceptionMonitor", (error: unknown, origin: unknown) => {
     const projected = projectDiagnosticError(error);
-    writeDiagnosticEventSync({
-      level: "fatal",
-      area: "app",
-      event: "uncaught-exception",
-      outcome: "failed",
-      code: projected.code,
-      fields: {
-        ...journalProcessFields(target),
-        origin: typeof origin === "string" ? origin : "unknown",
-        errorType: projected.errorType,
-        fingerprint: projected.fingerprint ?? null,
+    writeDiagnosticEventSync(
+      {
+        level: "fatal",
+        area: "app",
+        event: "uncaught-exception",
+        outcome: "failed",
+        code: projected.code,
+        fields: {
+          ...journalProcessFields(target),
+          origin: typeof origin === "string" ? origin : "unknown",
+          errorType: projected.errorType,
+          fingerprint: projected.fingerprint ?? null,
+        },
       },
-    }, { rawError: error });
+      { rawError: error },
+    );
   });
   // Electron runs Node with rejections in warn mode: a rejection never reaches
   // uncaughtExceptionMonitor and the process carries on, so this listener does
@@ -96,18 +101,24 @@ export function installProcessDiagnostics(target: DiagnosticProcess = process): 
   target.on("unhandledRejection", (reason: unknown) => {
     try {
       const projected = projectDiagnosticError(reason);
-      writeDiagnosticEvent({
-        level: "error",
-        area: "app",
-        event: "unhandled-rejection",
-        outcome: "failed",
-        code: projected.code,
-        fields: {
-          errorType: projected.errorType,
-          fingerprint: projected.fingerprint ?? null,
+      writeDiagnosticEvent(
+        {
+          level: "error",
+          area: "app",
+          event: "unhandled-rejection",
+          outcome: "failed",
+          code: projected.code,
+          fields: {
+            errorType: projected.errorType,
+            fingerprint: projected.fingerprint ?? null,
+          },
         },
-      }, { rawError: reason });
-      target.emitWarning(reason instanceof Error ? reason.stack ?? reason.message : String(reason), "UnhandledPromiseRejectionWarning");
+        { rawError: reason },
+      );
+      target.emitWarning(
+        reason instanceof Error ? (reason.stack ?? reason.message) : String(reason),
+        "UnhandledPromiseRejectionWarning",
+      );
     } catch {
       // A rejection whose value cannot be read must not become a second failure.
     }

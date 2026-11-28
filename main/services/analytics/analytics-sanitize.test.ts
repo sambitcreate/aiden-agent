@@ -86,30 +86,53 @@ test("chat text inside an error message never survives, however it got there", (
     for (const word of ["landlord", "mould", "diagnosis", "Dear Sam"]) {
       assert.equal(serialized.includes(word), false, `leaked "${word}" from: ${message}`);
     }
-    assert.equal(sanitizeException(new Error(message), { appRoots }).errors[0]!.value, WITHHELD_MESSAGE);
+    assert.equal(
+      sanitizeException(new Error(message), { appRoots }).errors[0]!.value,
+      WITHHELD_MESSAGE,
+    );
   }
   assert.equal(sanitizeException(prompt, { appRoots }).errors[0]!.value, WITHHELD_MESSAGE);
 });
 
 test("messages the runtime writes itself stay readable", () => {
   for (const [message, expected] of [
-    ["Cannot read properties of undefined (reading 'length')", "Cannot read properties of undefined (reading '[name]')"],
-    ["Cannot set properties of null (setting 'x')", "Cannot set properties of null (setting '[name]')"],
+    [
+      "Cannot read properties of undefined (reading 'length')",
+      "Cannot read properties of undefined (reading '[name]')",
+    ],
+    [
+      "Cannot set properties of null (setting 'x')",
+      "Cannot set properties of null (setting '[name]')",
+    ],
     ["model.getUsage is not a function", "[name] is not a function"],
     ["Maximum call stack size exceeded", undefined],
     ["Cannot access 'store' before initialization", "Cannot access '[name]' before initialization"],
-    ["EACCES: permission denied, rename '/Users/jane/a' -> '/Users/jane/b'", "EACCES: permission denied, rename '[REDACTED PATH]' -> '[REDACTED PATH]'"],
+    [
+      "EACCES: permission denied, rename '/Users/jane/a' -> '/Users/jane/b'",
+      "EACCES: permission denied, rename '[REDACTED PATH]' -> '[REDACTED PATH]'",
+    ],
     ["EIO: i/o error, read", undefined],
     ["Failed to fetch", undefined],
     ["connect ECONNREFUSED", undefined],
-    ["ENOENT: no such file or directory, open '/Users/jane/notes/plan.md'", "ENOENT: no such file or directory, open '[REDACTED PATH]'"],
+    [
+      "ENOENT: no such file or directory, open '/Users/jane/notes/plan.md'",
+      "ENOENT: no such file or directory, open '[REDACTED PATH]'",
+    ],
   ] as const) {
-    assert.equal(sanitizeException(new Error(message), { appRoots }).errors[0]!.value, expected ?? message);
+    assert.equal(
+      sanitizeException(new Error(message), { appRoots }).errors[0]!.value,
+      expected ?? message,
+    );
   }
 });
 
 test("a sanitized message reads back unchanged, and a forged one does not get through", () => {
-  for (const value of [WITHHELD_MESSAGE, "", "[non-string object]", "Maximum call stack size exceeded"]) {
+  for (const value of [
+    WITHHELD_MESSAGE,
+    "",
+    "[non-string object]",
+    "Maximum call stack size exceeded",
+  ]) {
     assert.equal(redactExceptionMessage(value), value);
   }
   // A kept message survives the second pass a pending record gets.
@@ -124,7 +147,11 @@ test("a sanitized message reads back unchanged, and a forged one does not get th
     assert.notEqual(once, WITHHELD_MESSAGE);
     assert.equal(redactExceptionMessage(once), once);
   }
-  const forged = parseSanitizedError({ type: "Error", value: "the person's private note", frames: [] });
+  const forged = parseSanitizedError({
+    type: "Error",
+    value: "the person's private note",
+    frames: [],
+  });
   assert.equal(forged?.value, WITHHELD_MESSAGE);
 });
 
@@ -132,7 +159,10 @@ test("text quoted in a message or forged into a stack cannot pass for frames", (
   const quoted = `please remember my pin\n    at my secret note (${APP_ROOT}/dist/main/index.js:1:1)`;
   const error = new Error(quoted);
   error.stack = `Error: ${quoted}\n    at realFrame (${APP_ROOT}/dist/main/index.js:9:9)`;
-  assert.deepEqual(sanitizeException(error, { appRoots }).errors[0]!.frames.map((frame) => frame.function), ["realFrame"]);
+  assert.deepEqual(
+    sanitizeException(error, { appRoots }).errors[0]!.frames.map((frame) => frame.function),
+    ["realFrame"],
+  );
 
   // A renderer's stack need not match its message at all.
   const forged = {
@@ -147,7 +177,10 @@ test("text quoted in a message or forged into a stack cannot pass for frames", (
     ].join("\n"),
   };
   const frames = sanitizeException(forged, { appRoots }).errors[0]!.frames;
-  assert.deepEqual(frames.map((frame) => frame.function), ["?", "?", "?", "Object.<anonymous>", "Foo.bar"]);
+  assert.deepEqual(
+    frames.map((frame) => frame.function),
+    ["?", "?", "?", "Object.<anonymous>", "Foo.bar"],
+  );
   assert.equal(frames[2]!.filename, "<external>");
   assert.equal(JSON.stringify(frames).includes("4921"), false);
   assert.equal(JSON.stringify(frames).includes("tax-return"), false);
@@ -197,8 +230,15 @@ test("an error's name is kept only when it is a known error type", () => {
     ["Xk9fQ2mZpL7vT3rB8nW4yH6jD1sA5gC0eU", "Error"],
     ["My_Custom_Provider_Acme", "Error"],
   ] as const) {
-    assert.equal(sanitizeException({ name, message: "hi" }, { appRoots }).errors[0]!.type, expected);
-    assert.equal(sanitizeException({ message: "x", cause: { name, message: "hi" } }, { appRoots }).errors[1]!.type, expected);
+    assert.equal(
+      sanitizeException({ name, message: "hi" }, { appRoots }).errors[0]!.type,
+      expected,
+    );
+    assert.equal(
+      sanitizeException({ message: "x", cause: { name, message: "hi" } }, { appRoots }).errors[1]!
+        .type,
+      expected,
+    );
   }
   assert.equal(parseSanitizedError({ type: "Project_Falcon", value: "", frames: [] }), undefined);
   assert.equal(parseSanitizedError({ type: "AliceCancerError", value: "", frames: [] }), undefined);
@@ -213,7 +253,11 @@ test("a folder named like the bundle, in any form, is not the bundle", () => {
     "\\\\server\\share\\app.asar\\Plan\\budget.js",
     "https://evil.example/app.asar/UserName/plan.js",
   ]) {
-    assert.deepEqual(rewriteFramePath(location, appRoots), { filename: "<external>", inApp: false }, location);
+    assert.deepEqual(
+      rewriteFramePath(location, appRoots),
+      { filename: "<external>", inApp: false },
+      location,
+    );
   }
 });
 
@@ -222,13 +266,18 @@ test("a message longer than any bound still cannot pass its tail off as frames",
   const message = `${"m".repeat(20_000)}${tail}`;
   const error = new Error(message);
   error.stack = `Error: ${message}\n    at realFrame (${APP_ROOT}/a.js:9:9)`;
-  assert.deepEqual(sanitizeException(error, { appRoots }).errors[0]!.frames.map((frame) => frame.function), ["realFrame"]);
+  assert.deepEqual(
+    sanitizeException(error, { appRoots }).errors[0]!.frames.map((frame) => frame.function),
+    ["realFrame"],
+  );
 
   // The same lines when the header does not match at all, as in a stack from
   // an error whose message was changed after it was created.
-  const frames = sanitizeException({ message: "other", stack: tail }, { appRoots }).errors[0]!.frames;
+  const frames = sanitizeException({ message: "other", stack: tail }, { appRoots }).errors[0]!
+    .frames;
   const sent = JSON.stringify(frames);
-  for (const leak of ["Acme", "patient", "cancer", "4111111111111111", "cardNumber"]) assert.equal(sent.includes(leak), false, leak);
+  for (const leak of ["Acme", "patient", "cancer", "4111111111111111", "cardNumber"])
+    assert.equal(sent.includes(leak), false, leak);
 });
 
 test("a read-back frame cannot carry what the sanitizer would have removed", () => {
@@ -236,8 +285,19 @@ test("a read-back frame cannot carry what the sanitizer would have removed", () 
   assert.ok(parseSanitizedFrame(base));
   assert.equal(parseSanitizedFrame({ ...base, function: "handleAcmeMerger" }), undefined);
   assert.equal(parseSanitizedFrame({ ...base, filename: "node:patient_has_cancer" }), undefined);
-  assert.equal(parseSanitizedFrame({ filename: "app:///a.js", function: "f", lineno: 4111111111111111, colno: 1, inApp: true }), undefined);
-  assert.ok(parseSanitizedFrame({ filename: "node:fs", function: "?", lineno: 1, colno: 1, inApp: false }));
+  assert.equal(
+    parseSanitizedFrame({
+      filename: "app:///a.js",
+      function: "f",
+      lineno: 4111111111111111,
+      colno: 1,
+      inApp: true,
+    }),
+    undefined,
+  );
+  assert.ok(
+    parseSanitizedFrame({ filename: "node:fs", function: "?", lineno: 1, colno: 1, inApp: false }),
+  );
 });
 
 test("a token-shaped error name falls back to Error", () => {
@@ -258,18 +318,33 @@ test("enormous messages and stacks finish quickly and stay bounded", () => {
 });
 
 test("frames inside the app bundle keep a relative path, function and position", () => {
-  const error = errorWithStack("Failed to fetch", [
-    `    at async handleTurn (${APP_ROOT}/dist/main/chat.js:42:7)`,
-    `    at runTool (${APP_ROOT}/node_modules/pi/agent.js:9:1)`,
-    "    at process.processTicksAndRejections (node:internal/process/task_queues:95:5)",
-    "    at userScript (/Users/someone/hook.js:1:1)",
-  ].join("\n"));
+  const error = errorWithStack(
+    "Failed to fetch",
+    [
+      `    at async handleTurn (${APP_ROOT}/dist/main/chat.js:42:7)`,
+      `    at runTool (${APP_ROOT}/node_modules/pi/agent.js:9:1)`,
+      "    at process.processTicksAndRejections (node:internal/process/task_queues:95:5)",
+      "    at userScript (/Users/someone/hook.js:1:1)",
+    ].join("\n"),
+  );
 
   const [primary] = sanitizeException(error, { appRoots }).errors;
 
   assert.deepEqual(primary!.frames, [
-    { filename: "app:///dist/main/chat.js", function: "handleTurn", lineno: 42, colno: 7, inApp: true },
-    { filename: "app:///node_modules/pi/agent.js", function: "runTool", lineno: 9, colno: 1, inApp: false },
+    {
+      filename: "app:///dist/main/chat.js",
+      function: "handleTurn",
+      lineno: 42,
+      colno: 7,
+      inApp: true,
+    },
+    {
+      filename: "app:///node_modules/pi/agent.js",
+      function: "runTool",
+      lineno: 9,
+      colno: 1,
+      inApp: false,
+    },
     { filename: "node:internal", function: "?", lineno: 95, colno: 5, inApp: false },
     { filename: "<external>", function: "?", inApp: false },
   ]);
@@ -283,15 +358,27 @@ test("a packaged build resolves frames under its own app path, wherever it is in
     ),
     { filename: "app:///dist/main/index.js", inApp: true },
   );
-  assert.deepEqual(rewriteFramePath(`${APP_ROOT}/../../../../Users/x/a.js`, appRoots), { filename: "<external>", inApp: false });
-  assert.deepEqual(rewriteFramePath("file:///Applications/Aiden.app/Contents/Resources/app.asar/renderer/app.js?v=1", appRoots), {
-    filename: "app:///renderer/app.js",
-    inApp: true,
+  assert.deepEqual(rewriteFramePath(`${APP_ROOT}/../../../../Users/x/a.js`, appRoots), {
+    filename: "<external>",
+    inApp: false,
   });
+  assert.deepEqual(
+    rewriteFramePath(
+      "file:///Applications/Aiden.app/Contents/Resources/app.asar/renderer/app.js?v=1",
+      appRoots,
+    ),
+    {
+      filename: "app:///renderer/app.js",
+      inApp: true,
+    },
+  );
 });
 
 test("long messages, deep stacks and cause chains are bounded", () => {
-  const frames = Array.from({ length: MAX_EXCEPTION_FRAMES + 20 }, (_, i) => `    at f${i} (${APP_ROOT}/a.js:${i + 1}:1)`);
+  const frames = Array.from(
+    { length: MAX_EXCEPTION_FRAMES + 20 },
+    (_, i) => `    at f${i} (${APP_ROOT}/a.js:${i + 1}:1)`,
+  );
   let error: Error = errorWithStack("x".repeat(5_000), frames.join("\n"));
   for (let depth = 0; depth < MAX_CAUSE_DEPTH + 5; depth += 1) {
     const outer = new Error(`level ${depth}`);
@@ -302,7 +389,8 @@ test("long messages, deep stacks and cause chains are bounded", () => {
   const result = sanitizeException(error, { appRoots });
 
   assert.equal(result.errors.length, MAX_CAUSE_DEPTH + 1);
-  const deep = sanitizeException(errorWithStack("x".repeat(5_000), frames.join("\n")), { appRoots }).errors[0]!;
+  const deep = sanitizeException(errorWithStack("x".repeat(5_000), frames.join("\n")), { appRoots })
+    .errors[0]!;
   assert.equal(deep.frames.length, MAX_EXCEPTION_FRAMES);
   assert.ok(deep.value.length <= MAX_EXCEPTION_MESSAGE_LENGTH);
 });
@@ -313,7 +401,10 @@ test("a cause cycle terminates", () => {
   (a as Error & { cause?: unknown }).cause = b;
   (b as Error & { cause?: unknown }).cause = a;
 
-  assert.deepEqual(sanitizeException(a, { appRoots }).errors.map((error) => error.value), ["Failed to fetch", "Load failed"]);
+  assert.deepEqual(
+    sanitizeException(a, { appRoots }).errors.map((error) => error.value),
+    ["Failed to fetch", "Load failed"],
+  );
 });
 
 test("thrown non-errors never stringify their contents", () => {
@@ -335,7 +426,10 @@ test("the fingerprint groups the same failure and separates different ones", () 
   const stack = `    at save (${APP_ROOT}/dist/main/store.js:1:1)`;
   const first = sanitizeException(errorWithStack("disk full at /Users/a", stack), { appRoots });
   const second = sanitizeException(errorWithStack("disk full at /Users/b", stack), { appRoots });
-  const other = sanitizeException(errorWithStack("x", `    at load (${APP_ROOT}/dist/main/store.js:1:1)`), { appRoots });
+  const other = sanitizeException(
+    errorWithStack("x", `    at load (${APP_ROOT}/dist/main/store.js:1:1)`),
+    { appRoots },
+  );
 
   assert.equal(first.fingerprint, second.fingerprint);
   assert.notEqual(first.fingerprint, other.fingerprint);
@@ -350,6 +444,22 @@ test("ids outside the bundled list are reported as custom", () => {
 });
 
 test("counts and uptimes fall into coarse buckets", () => {
-  assert.deepEqual([0, 1, 2, 3, 4, 10, 11, Number.NaN].map(countBucket), ["0", "1", "2-3", "2-3", "4-10", "4-10", "11+", "0"]);
-  assert.deepEqual([5, 60, 599, 600, 3_599, 3_600].map(uptimeBucket), ["<1m", "1-10m", "1-10m", "10-60m", "10-60m", "1h+"]);
+  assert.deepEqual([0, 1, 2, 3, 4, 10, 11, Number.NaN].map(countBucket), [
+    "0",
+    "1",
+    "2-3",
+    "2-3",
+    "4-10",
+    "4-10",
+    "11+",
+    "0",
+  ]);
+  assert.deepEqual([5, 60, 599, 600, 3_599, 3_600].map(uptimeBucket), [
+    "<1m",
+    "1-10m",
+    "1-10m",
+    "10-60m",
+    "10-60m",
+    "1h+",
+  ]);
 });

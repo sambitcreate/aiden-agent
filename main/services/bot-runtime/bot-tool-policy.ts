@@ -1,7 +1,18 @@
 import { calendarWatchCallAllowed } from "../bot-routine-events/connector-calendar-policy.js";
-import { BOT_MESSAGE_TOOL_NAME, botMessageChainOf, botMessageTurnOf, isBotMessageRequestId } from "../../../renderer/shared/bot-messages.js";
-import { BOT_PLAN_STEP_TOOL_NAME, BOT_PROPOSE_PLAN_TOOL_NAME } from "../../../renderer/shared/bot-plans.js";
-import { BOT_REQUEST_ACCESS_TOOL_NAME, botWholeComputerLabel } from "../../../renderer/shared/bot-access-requests.js";
+import {
+  BOT_MESSAGE_TOOL_NAME,
+  botMessageChainOf,
+  botMessageTurnOf,
+  isBotMessageRequestId,
+} from "../../../renderer/shared/bot-messages.js";
+import {
+  BOT_PLAN_STEP_TOOL_NAME,
+  BOT_PROPOSE_PLAN_TOOL_NAME,
+} from "../../../renderer/shared/bot-plans.js";
+import {
+  BOT_REQUEST_ACCESS_TOOL_NAME,
+  botWholeComputerLabel,
+} from "../../../renderer/shared/bot-access-requests.js";
 // Which tools a Bot may use, and which need the person's approval.
 //
 // This is the legacy Bot classification from `llm-client.ts`
@@ -20,10 +31,16 @@ import { botPeerIngress } from "../bot-peers/ingress.js";
 import { BOT_OPEN_WORK_TOOL } from "../bot-open-work/tool.js";
 import { UPDATE_BOT_TOOL_NAME } from "../../../renderer/shared/bot-settings-changes.js";
 import { BOT_ROUTINES_TOOL_NAME } from "../../../renderer/shared/bot-routine-proposals.js";
-import { composioServiceCallRequiresForeground, isComposioServiceToolDescriptor } from "../composio-service-tool.js";
+import {
+  composioServiceCallRequiresForeground,
+  isComposioServiceToolDescriptor,
+} from "../composio-service-tool.js";
 import { composioApprovalSummary } from "../composio-operation-text.js";
 import { BOT_FILE_TOOL_NAMES } from "../bot-file-tool-router.js";
-import type { BotRuntimeEffectiveAuthority, BotRuntimeMcpToolAuthority } from "../bot-runtime-authority.js";
+import type {
+  BotRuntimeEffectiveAuthority,
+  BotRuntimeMcpToolAuthority,
+} from "../bot-runtime-authority.js";
 import { isComputerUseCapabilityTool } from "../bot-tool-authority.js";
 import type { BotOrdinaryCapabilityKind } from "../bot-capability-catalog-core.js";
 import type { SubagentMcpRemoteTool } from "../subagents/subagent-mcp-read.js";
@@ -33,10 +50,17 @@ import { SKILL_TOOL_NAME } from "../skill-registry-core.js";
 import { INSPECT_IMAGE_TOOL_NAME } from "../vision-analysis-tool-core.js";
 import { SUGGEST_CONNECTION_TOOL_NAME } from "../bot-runtime-tools/suggest-connection.js";
 import { ASK_USER_QUESTION_TOOL_NAME } from "../../../renderer/shared/ask-user-question.js";
-import { BOT_HANDOFF_TOOL_NAME, BOT_SIGN_IN_TOOL_NAME } from "../../../renderer/shared/bot-handoffs.js";
+import {
+  BOT_HANDOFF_TOOL_NAME,
+  BOT_SIGN_IN_TOOL_NAME,
+} from "../../../renderer/shared/bot-handoffs.js";
 import { BOT_INTRO_REQUEST_PREFIX } from "./bot-intro.js";
 import { BOT_WAKE_UP_TOOL_NAME } from "../../../renderer/shared/bot-wake-ups.js";
-import { BROWSER_BOT_OMITTED_TOOLS, BROWSER_TOOL_NAMES, isBrowserToolName } from "../browser-tools.js";
+import {
+  BROWSER_BOT_OMITTED_TOOLS,
+  BROWSER_TOOL_NAMES,
+  isBrowserToolName,
+} from "../browser-tools.js";
 import { BOT_BROWSER_GATEWAY_TOOL } from "./bot-tool-disclosure.js";
 import { BOT_COMPUTER_SHELL_TOOL_NAME, BOT_COMPUTER_TOOL_NAME } from "../bot-computers/types.js";
 
@@ -94,7 +118,9 @@ export interface BotToolTurn {
 export type BotToolVerdict = { allowed: true } | { allowed: false; reason: string };
 
 /** The ingress rules of one input, from its request id. */
-export function botTurnOf(requestId: string | undefined): Required<Omit<BotToolTurn, "offer">> & { intro: boolean } {
+export function botTurnOf(
+  requestId: string | undefined,
+): Required<Omit<BotToolTurn, "offer">> & { intro: boolean } {
   return {
     botMessage: isBotMessageRequestId(requestId),
     telegram: requestId?.startsWith("tg:") ?? false,
@@ -106,7 +132,10 @@ export function botTurnOf(requestId: string | undefined): Required<Omit<BotToolT
 
 /** Use the shared turn classifier, including A's message and reply kinds. */
 export function botRunUnattended(requestIds: readonly (string | undefined)[]): boolean {
-  return requestIds.some((id) => { const turn = botTurnOf(id); return turn.routine || turn.telegram || turn.botMessage || turn.peer; });
+  return requestIds.some((id) => {
+    const turn = botTurnOf(id);
+    return turn.routine || turn.telegram || turn.botMessage || turn.peer;
+  });
 }
 
 /**
@@ -115,7 +144,11 @@ export function botRunUnattended(requestIds: readonly (string | undefined)[]): b
  * inputs is not.
  */
 export function botTurnAttended(requestIds: readonly (string | undefined)[]): boolean {
-  return requestIds.length > 0 && !botRunUnattended(requestIds) && requestIds.every((requestId) => !botTurnOf(requestId).intro);
+  return (
+    requestIds.length > 0 &&
+    !botRunUnattended(requestIds) &&
+    requestIds.every((requestId) => !botTurnOf(requestId).intro)
+  );
 }
 
 const UNATTENDED_WITHHELD = new Set<string>([
@@ -138,20 +171,40 @@ const UNATTENDED_WITHHELD = new Set<string>([
  * run that serves several inputs (a steer joined it) may use a tool only when
  * every input allows it.
  */
-export function botIngressAllowsTool(name: string, requestIds: readonly (string | undefined)[]): boolean {
+export function botIngressAllowsTool(
+  name: string,
+  requestIds: readonly (string | undefined)[],
+): boolean {
   if (requestIds.length === 0 && botPeerIngress()) requestIds = [undefined];
-  if (requestIds.some(id => botTurnOf(id).peer) && [BOT_MESSAGE_TOOL_NAME, BOT_REQUEST_ACCESS_TOOL_NAME, BOT_PROPOSE_PLAN_TOOL_NAME, BOT_PLAN_STEP_TOOL_NAME].includes(name)) return false;
+  if (
+    requestIds.some((id) => botTurnOf(id).peer) &&
+    [
+      BOT_MESSAGE_TOOL_NAME,
+      BOT_REQUEST_ACCESS_TOOL_NAME,
+      BOT_PROPOSE_PLAN_TOOL_NAME,
+      BOT_PLAN_STEP_TOOL_NAME,
+    ].includes(name)
+  )
+    return false;
   if (name === BOT_PEER_TOOL && requestIds.some(isBotMessageRequestId)) return false;
-  if (name === BOT_PROPOSE_PLAN_TOOL_NAME || name === BOT_PLAN_STEP_TOOL_NAME) return requestIds.length > 0 && requestIds.every(id => {
-    const kind = botMessageTurnOf(id).kind;
-    return kind === "person" || kind === "message";
-  });
-  if (name === BOT_REQUEST_ACCESS_TOOL_NAME) return requestIds.length > 0 && requestIds.every((id) => !botTurnOf(id).intro);
+  if (name === BOT_PROPOSE_PLAN_TOOL_NAME || name === BOT_PLAN_STEP_TOOL_NAME)
+    return (
+      requestIds.length > 0 &&
+      requestIds.every((id) => {
+        const kind = botMessageTurnOf(id).kind;
+        return kind === "person" || kind === "message";
+      })
+    );
+  if (name === BOT_REQUEST_ACCESS_TOOL_NAME)
+    return requestIds.length > 0 && requestIds.every((id) => !botTurnOf(id).intro);
   if (name === BOT_MESSAGE_TOOL_NAME) return botMessageChainOf(requestIds).canSend;
   // A routine's notepad belongs to routine runs alone: a person's turn, or a
   // run a person's message joined, never sees it.
   if (name === ROUTINE_NOTES_TOOL) {
-    return requestIds.length > 0 && requestIds.every((requestId) => botTurnOf(requestId).routine && !botTurnOf(requestId).peer);
+    return (
+      requestIds.length > 0 &&
+      requestIds.every((requestId) => botTurnOf(requestId).routine && !botTurnOf(requestId).peer)
+    );
   }
   // A wake-up is the Bot's answer to a person: no routine, event, catch-up or
   // wake-up run sets another one, so a Bot cannot keep itself awake.
@@ -164,7 +217,12 @@ export function botIngressAllowsTool(name: string, requestIds: readonly (string 
   return requestIds.every((requestId) => {
     const turn = botTurnOf(requestId);
     if (turn.intro) return false;
-    if (turn.peer) return name !== "bot_memory" && name !== SUGGEST_CONNECTION_TOOL_NAME && !UNATTENDED_WITHHELD.has(name);
+    if (turn.peer)
+      return (
+        name !== "bot_memory" &&
+        name !== SUGGEST_CONNECTION_TOOL_NAME &&
+        !UNATTENDED_WITHHELD.has(name)
+      );
     if (turn.telegram || turn.routine || turn.botMessage) return !UNATTENDED_WITHHELD.has(name);
     return true;
   });
@@ -177,13 +235,20 @@ export function botIngressAllowsTool(name: string, requestIds: readonly (string 
  * prompt cache warm); `botIngressAllowsTool` and the memory ingress decide,
  * and the call is refused before it runs. Call it only for a refused tool.
  */
-export function botIngressRefusal(name: string, requestIds: readonly (string | undefined)[]): string {
+export function botIngressRefusal(
+  name: string,
+  requestIds: readonly (string | undefined)[],
+): string {
   if (requestIds.length === 0 && botPeerIngress()) requestIds = [undefined];
   const turns = requestIds.map(botTurnOf);
   const unavailable = `${name} is not available on this turn`;
-  const unattended = turns.some((turn) => turn.routine || turn.telegram || turn.botMessage || turn.peer);
-  if (turns.some((turn) => turn.intro)) return `${unavailable}: the self-introduction uses no tools.`;
-  if (name === "bot_memory") return `${unavailable}: memory is saved only on turns that answer the person.`;
+  const unattended = turns.some(
+    (turn) => turn.routine || turn.telegram || turn.botMessage || turn.peer,
+  );
+  if (turns.some((turn) => turn.intro))
+    return `${unavailable}: the self-introduction uses no tools.`;
+  if (name === "bot_memory")
+    return `${unavailable}: memory is saved only on turns that answer the person.`;
   if (name === "bot_recall") return `${unavailable}: recall is not used on Bot-message turns.`;
   if (name === BOT_PROPOSE_PLAN_TOOL_NAME || name === BOT_PLAN_STEP_TOOL_NAME) {
     return `${unavailable}: plans are only for turns that answer the person or a Bot message.`;
@@ -193,7 +258,8 @@ export function botIngressRefusal(name: string, requestIds: readonly (string | u
   }
   if (name === BOT_PEER_TOOL) return `${unavailable}: a Bot-message turn cannot ask a peer.`;
   if (name === ROUTINE_NOTES_TOOL) return `${unavailable}: only a routine run has a notepad.`;
-  if (name === WAKE_UP_TOOL) return `${unavailable}: only a turn that answers the person can set a wake-up.`;
+  if (name === WAKE_UP_TOOL)
+    return `${unavailable}: only a turn that answers the person can set a wake-up.`;
   if (unattended) {
     return `${unavailable}: nobody is here to answer it on a routine, Telegram, Bot-message or peer turn. Continue without it.`;
   }
@@ -218,40 +284,83 @@ export async function botToolVerdict(
   args?: unknown,
 ): Promise<BotToolVerdict> {
   const { authority } = facts;
-  if (name === BOT_PEER_TOOL) return verdict(!turn.botMessage, "Approved-peer messaging is off for a Bot-message turn."); // The dedicated host service rechecks the exact named pair/source at every call.
-  if ((turn.peer || (!turn.offer && botPeerIngress())) && (UNATTENDED_WITHHELD.has(name) || [BOT_MESSAGE_TOOL_NAME, BOT_REQUEST_ACCESS_TOOL_NAME, BOT_PROPOSE_PLAN_TOOL_NAME, BOT_PLAN_STEP_TOOL_NAME, WAKE_UP_TOOL, ROUTINE_NOTES_TOOL, "bot_memory", SUGGEST_CONNECTION_TOOL_NAME].includes(name))) return { allowed: false, reason: "Peer work cannot request person approval, change routines or person memory, sign in, create wake-ups or spawn subagents." };
-  if (name === BOT_PROPOSE_PLAN_TOOL_NAME || name === BOT_PLAN_STEP_TOOL_NAME) return verdict(turn.telegram !== true && turn.routine !== true, "Plans are off for this Bot turn.");
+  if (name === BOT_PEER_TOOL)
+    return verdict(!turn.botMessage, "Approved-peer messaging is off for a Bot-message turn."); // The dedicated host service rechecks the exact named pair/source at every call.
+  if (
+    (turn.peer || (!turn.offer && botPeerIngress())) &&
+    (UNATTENDED_WITHHELD.has(name) ||
+      [
+        BOT_MESSAGE_TOOL_NAME,
+        BOT_REQUEST_ACCESS_TOOL_NAME,
+        BOT_PROPOSE_PLAN_TOOL_NAME,
+        BOT_PLAN_STEP_TOOL_NAME,
+        WAKE_UP_TOOL,
+        ROUTINE_NOTES_TOOL,
+        "bot_memory",
+        SUGGEST_CONNECTION_TOOL_NAME,
+      ].includes(name))
+  )
+    return {
+      allowed: false,
+      reason:
+        "Peer work cannot request person approval, change routines or person memory, sign in, create wake-ups or spawn subagents.",
+    };
+  if (name === BOT_PROPOSE_PLAN_TOOL_NAME || name === BOT_PLAN_STEP_TOOL_NAME)
+    return verdict(
+      turn.telegram !== true && turn.routine !== true,
+      "Plans are off for this Bot turn.",
+    );
   if (name === BOT_REQUEST_ACCESS_TOOL_NAME) {
-    if (authority.accessMode !== "custom" || authority.files.mode === "full_mac") return { allowed: false, reason: `This Bot can already use ${botWholeComputerLabel(process.platform)}.` };
+    if (authority.accessMode !== "custom" || authority.files.mode === "full_mac")
+      return {
+        allowed: false,
+        reason: `This Bot can already use ${botWholeComputerLabel(process.platform)}.`,
+      };
     return verdict(authority.files.mode === "scoped", "File access is off for this Bot.");
   }
-  if (name === BOT_MESSAGE_TOOL_NAME) return verdict(!turn.telegram && !turn.routine, "Messaging other Bots is off for this turn.");
-  if (turn.botMessage && (UNATTENDED_WITHHELD.has(name) || name === WAKE_UP_TOOL)) return {allowed: false, reason: "This tool is not available on a Bot-message turn."};
+  if (name === BOT_MESSAGE_TOOL_NAME)
+    return verdict(!turn.telegram && !turn.routine, "Messaging other Bots is off for this turn.");
+  if (turn.botMessage && (UNATTENDED_WITHHELD.has(name) || name === WAKE_UP_TOOL))
+    return { allowed: false, reason: "This tool is not available on a Bot-message turn." };
   if (name === INSPECT_IMAGE_TOOL_NAME) {
-    return verdict(!facts.supportsImages && authority.visionProvider !== undefined, "Image understanding is off for this Bot.");
+    return verdict(
+      !facts.supportsImages && authority.visionProvider !== undefined,
+      "Image understanding is off for this Bot.",
+    );
   }
-  if (name === BOT_OPEN_WORK_TOOL) return verdict(hasCapability(facts, "tasks"), "Task tracking is off for this Bot.");
+  if (name === BOT_OPEN_WORK_TOOL)
+    return verdict(hasCapability(facts, "tasks"), "Task tracking is off for this Bot.");
   // Its own name, look, instructions, check-ins, notifications and model only;
   // outside a run the owner started, every change waits on a card (§4.6).
   if (name === UPDATE_BOT_TOOL_NAME) return { allowed: true };
-  if (name === WEB_SEARCH_TOOL) return verdict(hasCapability(facts, "web"), "Web search is off for this Bot.");
+  if (name === WEB_SEARCH_TOOL)
+    return verdict(hasCapability(facts, "web"), "Web search is off for this Bot.");
   if (isComputerUseCapabilityTool(name)) {
     return verdict(hasCapability(facts, "computer_use"), "Computer Use is off for this Bot.");
   }
   if (name === BOT_COMPUTER_TOOL_NAME || name === BOT_COMPUTER_SHELL_TOOL_NAME) {
     // Inside the Bot's own computer: allowed on routine and Telegram turns too (§8.7).
-    if (!hasCapability(facts, "computer")) return { allowed: false, reason: "The computer is off for this Bot." };
-    if (!facts.hasComputer) return { allowed: false, reason: "This Bot doesn't have a computer yet." };
+    if (!hasCapability(facts, "computer"))
+      return { allowed: false, reason: "The computer is off for this Bot." };
+    if (!facts.hasComputer)
+      return { allowed: false, reason: "This Bot doesn't have a computer yet." };
     // The screen is vision only; a model without image input gets the shell alone.
     if (name === BOT_COMPUTER_TOOL_NAME && !facts.supportsImages) {
-      return { allowed: false, reason: "This Bot's model can't see images, so it can't use its computer's screen." };
+      return {
+        allowed: false,
+        reason: "This Bot's model can't see images, so it can't use its computer's screen.",
+      };
     }
     return { allowed: true };
   }
-  if (name === SUBAGENT_TOOL) return verdict(hasCapability(facts, "subagents"), "Subagents are off for this Bot.");
-  if (FILE_TOOLS.has(name)) return verdict(facts.fileLocations > 0, "File access is off for this Bot.");
-  if (name === "run_command") return verdict(authority.shell.enabled, "The shell is off for this Bot.");
-  if (name === SHARE_IMAGE_TOOL_NAME) return verdict(authority.files.botHome, "Sharing images is off for this Bot.");
+  if (name === SUBAGENT_TOOL)
+    return verdict(hasCapability(facts, "subagents"), "Subagents are off for this Bot.");
+  if (FILE_TOOLS.has(name))
+    return verdict(facts.fileLocations > 0, "File access is off for this Bot.");
+  if (name === "run_command")
+    return verdict(authority.shell.enabled, "The shell is off for this Bot.");
+  if (name === SHARE_IMAGE_TOOL_NAME)
+    return verdict(authority.files.botHome, "Sharing images is off for this Bot.");
   if (name === ROUTINE_TOOL) {
     return verdict(
       hasCapability(facts, "schedules") && turn.telegram !== true && turn.routine !== true,
@@ -259,15 +368,22 @@ export async function botToolVerdict(
     );
   }
   if (name === ASK_USER_QUESTION_TOOL_NAME) {
-    return verdict(turn.telegram !== true && turn.routine !== true, "Questions are off for this Bot.");
+    return verdict(
+      turn.telegram !== true && turn.routine !== true,
+      "Questions are off for this Bot.",
+    );
   }
   if (name === BOT_HANDOFF_TOOL_NAME) {
-    return verdict(turn.telegram !== true && turn.routine !== true, "Hand-offs are off for this Bot.");
+    return verdict(
+      turn.telegram !== true && turn.routine !== true,
+      "Hand-offs are off for this Bot.",
+    );
   }
   if (name === BOT_SIGN_IN_TOOL_NAME) {
     // The person signs in in the Bot's own browser or on its own computer, so
     // the Bot needs one of them, and someone there to sign in.
-    const where = hasCapability(facts, "browser") || (hasCapability(facts, "computer") && facts.hasComputer);
+    const where =
+      hasCapability(facts, "browser") || (hasCapability(facts, "computer") && facts.hasComputer);
     return verdict(
       where && turn.telegram !== true && turn.routine !== true,
       "Sign-in needs the Browser or a computer in this Bot's access.",
@@ -276,7 +392,8 @@ export async function botToolVerdict(
   if (name === BOT_BROWSER_GATEWAY_TOOL || isBrowserToolName(name)) {
     // A page script can read a field's value and a recording shows what the
     // person types: a Bot never gets either (plan §5.1.6).
-    if (BROWSER_BOT_OMITTED_TOOLS.has(name)) return { allowed: false, reason: "A Bot's browser can't run page scripts or record." };
+    if (BROWSER_BOT_OMITTED_TOOLS.has(name))
+      return { allowed: false, reason: "A Bot's browser can't run page scripts or record." };
     return verdict(
       hasCapability(facts, "browser") && turn.telegram !== true && turn.routine !== true,
       "The browser is off for this Bot.",
@@ -284,33 +401,74 @@ export async function botToolVerdict(
   }
   if (name === SUGGEST_CONNECTION_TOOL_NAME) return { allowed: true };
   // The per-Bot switch decides whether it is offered at all; ingress keeps it to a person's turns.
-  if (name === WAKE_UP_TOOL) return verdict(turn.routine !== true, "Wake-ups are off for this Bot turn.");
+  if (name === WAKE_UP_TOOL)
+    return verdict(turn.routine !== true, "Wake-ups are off for this Bot turn.");
   // Writes only the routine's own notes; ingress (`botIngressAllowsTool`) keeps it to routine runs.
   if (name === ROUTINE_NOTES_TOOL) return { allowed: true };
   // The one `skill` tool loads only the granted skills it was built from.
   if (name === SKILL_TOOL_NAME) {
     const granted = await facts.skillToolNames();
-    if (granted.size === 0) return { allowed: false, reason: "No skills are enabled for this Bot." };
+    if (granted.size === 0)
+      return { allowed: false, reason: "No skills are enabled for this Bot." };
     // At call time the named skill itself must still be granted.
     const requested = (args as { name?: unknown } | undefined)?.name;
     if (args === undefined || typeof requested !== "string") return { allowed: true };
     const key = await facts.skillToolKeyFor?.(requested);
-    return verdict(key !== undefined && granted.has(key), "This skill is not enabled for this Bot.");
+    return verdict(
+      key !== undefined && granted.has(key),
+      "This skill is not enabled for this Bot.",
+    );
   }
   if ((await facts.mcpTools()).has(name)) {
     const watch = botExecutionScope()?.claim.connectorRestriction;
     if (watch) {
-      const granted = (await facts.mcpTools()).get(name), raw = await facts.mcpToolDescriptor?.(name);
-      if(watch.binding.adapter==="composio-calendar-v1"){
-        if(!isComposioServiceToolDescriptor(raw)||!granted||!watch.binding.tools.some(tool=>tool.exactFingerprint===granted.exactFingerprint)||args!==undefined&&!calendarWatchCallAllowed(watch,args))return {allowed:false,reason:"This Calendar watch permits one verified read of its accepted account, calendar and window."};
-      }else{
-        if (raw?.name !== "mail_messages_search" || !granted || !watch.binding.tools.some(tool => tool.exactFingerprint === granted.exactFingerprint)) return {allowed:false,reason:"This watch may read only its accepted mailbox with its verified read operation."};
-        if (args !== undefined && (!args || typeof args !== "object" || Array.isArray(args) || (args as {mailbox?:unknown}).mailbox !== watch.binding.mailbox)) return {allowed:false,reason:"This watch cannot switch its accepted mailbox or account."};
+      const granted = (await facts.mcpTools()).get(name),
+        raw = await facts.mcpToolDescriptor?.(name);
+      if (watch.binding.adapter === "composio-calendar-v1") {
+        if (
+          !isComposioServiceToolDescriptor(raw) ||
+          !granted ||
+          !watch.binding.tools.some((tool) => tool.exactFingerprint === granted.exactFingerprint) ||
+          (args !== undefined && !calendarWatchCallAllowed(watch, args))
+        )
+          return {
+            allowed: false,
+            reason:
+              "This Calendar watch permits one verified read of its accepted account, calendar and window.",
+          };
+      } else {
+        if (
+          raw?.name !== "mail_messages_search" ||
+          !granted ||
+          !watch.binding.tools.some((tool) => tool.exactFingerprint === granted.exactFingerprint)
+        )
+          return {
+            allowed: false,
+            reason:
+              "This watch may read only its accepted mailbox with its verified read operation.",
+          };
+        if (
+          args !== undefined &&
+          (!args ||
+            typeof args !== "object" ||
+            Array.isArray(args) ||
+            (args as { mailbox?: unknown }).mailbox !== watch.binding.mailbox)
+        )
+          return {
+            allowed: false,
+            reason: "This watch cannot switch its accepted mailbox or account.",
+          };
       }
     }
-    if ((turn.routine || turn.telegram || turn.peer) && composioServiceCallRequiresForeground(args)
-      && isComposioServiceToolDescriptor(await facts.mcpToolDescriptor?.(name))) {
-      return { allowed: false, reason: "Composio connection setup needs the person in the foreground." };
+    if (
+      (turn.routine || turn.telegram || turn.peer) &&
+      composioServiceCallRequiresForeground(args) &&
+      isComposioServiceToolDescriptor(await facts.mcpToolDescriptor?.(name))
+    ) {
+      return {
+        allowed: false,
+        reason: "Composio connection setup needs the person in the foreground.",
+      };
     }
     return { allowed: true };
   }
@@ -329,15 +487,29 @@ export async function botToolApprovalSummary(
 ): Promise<string | undefined> {
   if (name === SHARE_IMAGE_TOOL_NAME) return summarizeToolCall(name, args);
   // `update_bot` asks through its own receipt (Undo) or held card (Apply).
-  if (FILE_TOOLS.has(name) || name === "run_command" || name === WEB_SEARCH_TOOL || name === BOT_OPEN_WORK_TOOL || name === UPDATE_BOT_TOOL_NAME) return undefined;
+  if (
+    FILE_TOOLS.has(name) ||
+    name === "run_command" ||
+    name === WEB_SEARCH_TOOL ||
+    name === BOT_OPEN_WORK_TOOL ||
+    name === UPDATE_BOT_TOOL_NAME
+  )
+    return undefined;
   // The browser asks through its live tab and page (`bot-browser-approval.ts`).
   if (name === BOT_BROWSER_GATEWAY_TOOL || isBrowserToolName(name)) return undefined;
   // Inside the Bot's own computer the baseline is allowed; rules read the intent (§8.7).
   if (name === BOT_COMPUTER_TOOL_NAME || name === BOT_COMPUTER_SHELL_TOOL_NAME) return undefined;
-  const watch=botExecutionScope()?.claim.connectorRestriction;
-  if(watch?.binding.adapter==="composio-calendar-v1"&&calendarWatchCallAllowed(watch,args)&&isComposioServiceToolDescriptor(await facts.mcpToolDescriptor?.(name)))return undefined;
+  const watch = botExecutionScope()?.claim.connectorRestriction;
+  if (
+    watch?.binding.adapter === "composio-calendar-v1" &&
+    calendarWatchCallAllowed(watch, args) &&
+    isComposioServiceToolDescriptor(await facts.mcpToolDescriptor?.(name))
+  )
+    return undefined;
   const grant = (await facts.mcpTools()).get(name);
   if (grant?.effect !== "mutating") return undefined;
   // One Composio tool runs every enabled app action: name the action, not "composio".
-  return isComposioServiceToolDescriptor(await facts.mcpToolDescriptor?.(name)) ? composioApprovalSummary(args) : summarizeToolCall(name, args);
+  return isComposioServiceToolDescriptor(await facts.mcpToolDescriptor?.(name))
+    ? composioApprovalSummary(args)
+    : summarizeToolCall(name, args);
 }

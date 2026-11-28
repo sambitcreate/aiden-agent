@@ -34,7 +34,12 @@ function mount(questions: AskUserQuestionV1[]) {
     toolCallId: "tool-1",
     questions,
   };
-  render(<AskUserQuestionComposer prompt={prompt} onRespond={(response) => void responses.push(response)} />);
+  render(
+    <AskUserQuestionComposer
+      prompt={prompt}
+      onRespond={(response) => void responses.push(response)}
+    />,
+  );
   const card = screen.getByRole("region");
   return { card, responses };
 }
@@ -53,13 +58,17 @@ test("a number picks an answer, Enter moves on, and Esc skips the last question"
   assert.equal(document.activeElement, chosen);
 
   fireEvent.keyDown(chosen, { key: "Enter" });
-  assert.equal(screen.getByRole("tab", { name: /2\. Region/u }).getAttribute("aria-selected"), "true");
+  assert.equal(
+    screen.getByRole("tab", { name: /2\. Region/u }).getAttribute("aria-selected"),
+    "true",
+  );
   assert.equal(hintText(), "1–2choose↵submitescskip");
 
   fireEvent.keyDown(screen.getByRole("region"), { key: "Escape" });
-  assert.deepEqual(responses.map((response) => [response.cancelled, response.answers]), [
-    [false, [{ questionIndex: 0, kind: "option", answer: "Database B" }]],
-  ]);
+  assert.deepEqual(
+    responses.map((response) => [response.cancelled, response.answers]),
+    [[false, [{ questionIndex: 0, kind: "option", answer: "Database B" }]]],
+  );
 });
 
 test("Enter on a row that is not the current answer chooses it instead of moving on", () => {
@@ -68,7 +77,10 @@ test("Enter on a row that is not the current answer chooses it instead of moving
   const other = screen.getByRole("button", { name: /Database B/u });
   // Enter on a button is a native click; the row handler must leave it alone.
   assert.equal(fireEvent.keyDown(other, { key: "Enter" }), true);
-  assert.equal(screen.getByRole("tab", { name: /1\. Database/u }).getAttribute("aria-selected"), "true");
+  assert.equal(
+    screen.getByRole("tab", { name: /1\. Database/u }).getAttribute("aria-selected"),
+    "true",
+  );
   assert.deepEqual(responses, []);
 });
 
@@ -78,9 +90,10 @@ test("multi-select toggles by number and submits with Command-Enter", () => {
   fireEvent.keyDown(card, { key: "1" });
   fireEvent.keyDown(card, { key: "2" });
   fireEvent.keyDown(card, { key: "Enter", metaKey: true });
-  assert.deepEqual(responses.map((response) => response.answers), [
-    [{ questionIndex: 0, kind: "multi", selected: ["Extras A", "Extras B"] }],
-  ]);
+  assert.deepEqual(
+    responses.map((response) => response.answers),
+    [[{ questionIndex: 0, kind: "multi", selected: ["Extras A", "Extras B"] }]],
+  );
 });
 
 test("the shortcut footnote steps aside while a custom answer is being written", () => {
@@ -89,7 +102,10 @@ test("the shortcut footnote steps aside while a custom answer is being written",
   assert.equal(hintText(), null);
   // Typing numbers and Esc belong to the text field, not the card.
   fireEvent.keyDown(card, { key: "1" });
-  assert.equal(screen.getByRole("button", { name: /Database A/u }).getAttribute("aria-pressed"), "false");
+  assert.equal(
+    screen.getByRole("button", { name: /Database A/u }).getAttribute("aria-pressed"),
+    "false",
+  );
   assert.deepEqual(responses, []);
 });
 
@@ -115,12 +131,15 @@ test("moving to the next question keeps focus in the card so shortcuts keep work
 
   fireEvent.keyDown(document.activeElement!, { key: "2" });
   fireEvent.keyDown(document.activeElement!, { key: "Enter" });
-  assert.deepEqual(responses.map((response) => response.answers), [
+  assert.deepEqual(
+    responses.map((response) => response.answers),
     [
-      { questionIndex: 0, kind: "option", answer: "Database A" },
-      { questionIndex: 1, kind: "option", answer: "Region B" },
+      [
+        { questionIndex: 0, kind: "option", answer: "Database A" },
+        { questionIndex: 1, kind: "option", answer: "Region B" },
+      ],
     ],
-  ]);
+  );
 });
 
 test("closing a custom answer with Esc hands focus back to the options", async () => {
@@ -131,7 +150,10 @@ test("closing a custom answer with Esc hands focus back to the options", async (
   fireEvent.keyDown(document.activeElement!, { key: "Escape" });
   await expectFocusOn("button", /Database A/u);
   fireEvent.keyDown(document.activeElement!, { key: "2" });
-  assert.equal(screen.getByRole("button", { name: /Database B/u }).getAttribute("aria-pressed"), "true");
+  assert.equal(
+    screen.getByRole("button", { name: /Database B/u }).getAttribute("aria-pressed"),
+    "true",
+  );
 });
 
 test("Enter that confirms an IME composition leaves the custom answer unsent", () => {
@@ -142,12 +164,16 @@ test("Enter that confirms an IME composition leaves the custom answer unsent", (
   // The IME's candidate confirmation arrives as Enter while still composing.
   fireEvent.keyDown(textarea, { key: "Enter", isComposing: true });
   assert.equal(responses.length, 0, "a composing Enter submitted the questionnaire");
-  assert.ok(screen.queryByRole("textbox", { name: /Custom answer/u }) !== null, "the custom answer stays open");
+  assert.ok(
+    screen.queryByRole("textbox", { name: /Custom answer/u }) !== null,
+    "the custom answer stays open",
+  );
 
   fireEvent.keyDown(textarea, { key: "Enter" });
-  assert.deepEqual(responses.map((response) => response.answers), [
-    [{ questionIndex: 0, kind: "custom", answer: "にほんご" }],
-  ]);
+  assert.deepEqual(
+    responses.map((response) => response.answers),
+    [[{ questionIndex: 0, kind: "custom", answer: "にほんご" }]],
+  );
 });
 
 function recommended(header: string, multiSelect = false): AskUserQuestionV1 {
@@ -167,7 +193,10 @@ test("the recommended option starts selected and focused, so Enter accepts it", 
   const { card, responses } = mount([recommended("Database")]);
   const row = screen.getByRole("button", { name: /Database B/u });
   assert.equal(row.getAttribute("aria-pressed"), "true");
-  assert.equal(screen.getByRole("button", { name: /Database C/u }).getAttribute("aria-pressed"), "false");
+  assert.equal(
+    screen.getByRole("button", { name: /Database C/u }).getAttribute("aria-pressed"),
+    "false",
+  );
   // The marker reads as a tag beside the label, not as part of it.
   assert.equal(card.textContent?.includes("(Recommended)"), false);
   within(row).getByText("Recommended");
@@ -175,9 +204,10 @@ test("the recommended option starts selected and focused, so Enter accepts it", 
 
   fireEvent.keyDown(document.activeElement!, { key: "Enter" });
   // The answer keeps the label the agent wrote, so it matches its option.
-  assert.deepEqual(responses.map((response) => response.answers), [
-    [{ questionIndex: 0, kind: "option", answer: "Database B (Recommended)" }],
-  ]);
+  assert.deepEqual(
+    responses.map((response) => response.answers),
+    [[{ questionIndex: 0, kind: "option", answer: "Database B (Recommended)" }]],
+  );
 });
 
 test("every recommended option of a multi-select starts checked and can be unchecked", async () => {
@@ -186,15 +216,19 @@ test("every recommended option of a multi-select starts checked and can be unche
   await expectFocusOn("checkbox", /Extras A/u);
   fireEvent.keyDown(card, { key: "3" });
   fireEvent.keyDown(card, { key: "Enter", metaKey: true });
-  assert.deepEqual(responses.map((response) => response.answers), [
-    [{ questionIndex: 0, kind: "multi", selected: ["Extras B (Recommended)"] }],
-  ]);
+  assert.deepEqual(
+    responses.map((response) => response.answers),
+    [[{ questionIndex: 0, kind: "multi", selected: ["Extras B (Recommended)"] }]],
+  );
 });
 
 test("Esc still skips a question that had a recommendation", () => {
   const { card, responses } = mount([recommended("Database")]);
   fireEvent.keyDown(card, { key: "Escape" });
-  assert.deepEqual(responses.map((response) => [response.cancelled, response.answers]), [[false, []]]);
+  assert.deepEqual(
+    responses.map((response) => [response.cancelled, response.answers]),
+    [[false, []]],
+  );
 });
 
 test("while a question waits, focus sent to the message box lands on the question's answers", () => {
@@ -207,5 +241,9 @@ test("while a question waits, focus sent to the message box lands on the questio
   fireEvent.keyDown(screen.getByRole("region"), { key: "2" });
   (document.activeElement as HTMLElement | null)?.blur();
   focusRegion("composer");
-  assert.equal(document.activeElement, screen.getByRole("button", { name: /Database B/u }), "the current answer");
+  assert.equal(
+    document.activeElement,
+    screen.getByRole("button", { name: /Database B/u }),
+    "the current answer",
+  );
 });

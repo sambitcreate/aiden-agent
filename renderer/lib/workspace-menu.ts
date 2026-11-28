@@ -35,7 +35,11 @@ export interface WorkspaceMenuList {
  */
 export function workspaceMenuList(
   choices: readonly NewChatWorkspaceChoice[],
-  { query, expanded, limit = RECENT_WORKSPACE_LIMIT }: { query: string; expanded: boolean; limit?: number },
+  {
+    query,
+    expanded,
+    limit = RECENT_WORKSPACE_LIMIT,
+  }: { query: string; expanded: boolean; limit?: number },
 ): WorkspaceMenuList {
   const search = query.trim();
   if (search && isWorkspacePathQuery(search)) return { heading: "Matches", rows: [], allCount: 0 };
@@ -44,7 +48,10 @@ export function workspaceMenuList(
     const rows = choices
       .map((choice) => ({
         choice,
-        score: defaultFilter(`${choice.workspace.name} ${choice.workspace.folderPath ?? ""}`, search),
+        score: defaultFilter(
+          `${choice.workspace.name} ${choice.workspace.folderPath ?? ""}`,
+          search,
+        ),
       }))
       .filter(({ score }) => score > 0)
       .sort((left, right) => right.score - left.score)
@@ -59,7 +66,14 @@ export function workspaceMenuList(
 
 /** What choosing the row for a typed path does. */
 export type WorkspacePathRow =
-  | { action: "select"; input: string; workspaceId: string; path: string; label: string; detail: string }
+  | {
+      action: "select";
+      input: string;
+      workspaceId: string;
+      path: string;
+      label: string;
+      detail: string;
+    }
   | { action: "open"; input: string; path: string; label: string; detail?: string }
   | { action: "create"; input: string; path: string; label: string }
   | { action: "invalid"; input: string; message: string };
@@ -102,7 +116,9 @@ export function workspacePathRow(
   }
 }
 
-const cloneFailureFallback = (computer: LocalComputerNoun): Readonly<Record<WorkspaceCloneFailureCode, string>> => ({
+const cloneFailureFallback = (
+  computer: LocalComputerNoun,
+): Readonly<Record<WorkspaceCloneFailureCode, string>> => ({
   "invalid-url": "Enter an https:// or SSH repository URL, or owner/repo for GitHub.",
   "invalid-destination": "Choose a different destination folder.",
   "destination-exists": "That destination already exists. Choose another folder.",
@@ -110,7 +126,8 @@ const cloneFailureFallback = (computer: LocalComputerNoun): Readonly<Record<Work
   cancelled: "Clone cancelled.",
   timeout: "The clone took too long and was stopped.",
   "auth-failed": "Git couldn't sign in. Check your Git credentials or SSH key for that host.",
-  "host-key": "The host's SSH key isn't trusted yet. Connect to it once from Terminal, then try again.",
+  "host-key":
+    "The host's SSH key isn't trusted yet. Connect to it once from Terminal, then try again.",
   "not-found": "That repository wasn't found, or you don't have access to it.",
   network: "Git couldn't reach that host. Check the URL and your connection.",
   "git-unavailable": `Git isn't available on this ${computer}.`,
@@ -129,7 +146,8 @@ export function cloneFailureMessage(
   platform: string | null | undefined,
 ): string | null {
   if (result.code === "cancelled") return null;
-  const reason = result.reason.trim() || cloneFailureFallback(localComputerNoun(platform))[result.code];
+  const reason =
+    result.reason.trim() || cloneFailureFallback(localComputerNoun(platform))[result.code];
   if (result.code === "register-failed" && result.destination) {
     return `${reason} It is in ${result.destination}.`;
   }
@@ -137,7 +155,9 @@ export function cloneFailureMessage(
 }
 
 /** "Receiving objects · 42%", or "Cloning…" before Git reports a phase. */
-export function cloneProgressLabel(progress: Pick<WorkspaceCloneProgress, "phase" | "percent"> | null): string {
+export function cloneProgressLabel(
+  progress: Pick<WorkspaceCloneProgress, "phase" | "percent"> | null,
+): string {
   if (!progress?.phase) return "Cloning…";
   return progress.percent === undefined
     ? progress.phase
@@ -161,6 +181,7 @@ export function workspaceChangeBusyReason(state: {
 }): string | undefined {
   if (state.sending) return "Wait for the message to finish sending before changing workspaces.";
   if (state.generating) return "Stop the current response before changing workspaces.";
-  if (state.gitBusy) return "Wait for the current Git operation to finish before switching workspaces.";
+  if (state.gitBusy)
+    return "Wait for the current Git operation to finish before switching workspaces.";
   return undefined;
 }

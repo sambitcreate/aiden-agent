@@ -61,7 +61,11 @@ test("a reply still running at a crash is offered for resume on the next launch"
     await before.startOperation(run("done", "chat"));
     await before.finishOperation("done", "completed");
     await before.startOperation(run("crashed", "chat"));
-    assert.equal(await chatReplyInterrupted(before, "chat"), false, "a running reply is not interrupted");
+    assert.equal(
+      await chatReplyInterrupted(before, "chat"),
+      false,
+      "a running reply is not interrupted",
+    );
 
     const after = await open();
     assert.equal(await chatReplyInterrupted(after, "chat"), true);
@@ -125,16 +129,26 @@ const questions = [
   },
 ];
 
-async function withWaitFile(body: (open: (now: () => number) => ReturnType<typeof createInterruptedWaitStore>, file: string) => Promise<void>) {
+async function withWaitFile(
+  body: (
+    open: (now: () => number) => ReturnType<typeof createInterruptedWaitStore>,
+    file: string,
+  ) => Promise<void>,
+) {
   const directory = await mkdtemp(path.join(os.tmpdir(), "aiden-interrupted-waits-"));
   try {
     // Each open is a fresh launch reading the same file.
     await body(
       (now) =>
         createInterruptedWaitStore(
-          new DataStore<InterruptedWaitDatabase>("interrupted-waits.json", emptyInterruptedWaits(), () => directory, {
-            normalize: normalizeInterruptedWaits,
-          }),
+          new DataStore<InterruptedWaitDatabase>(
+            "interrupted-waits.json",
+            emptyInterruptedWaits(),
+            () => directory,
+            {
+              normalize: normalizeInterruptedWaits,
+            },
+          ),
           now,
         ),
       path.join(directory, "interrupted-waits.json"),
@@ -148,10 +162,17 @@ test("a question asked during the interrupted run is offered after a relaunch, a
   await withWaitFile(async (open) => {
     const before = open(() => 5_000);
     await before.remember("chat", { kind: "question", waitId: "q-1", askedAt: 5_000, questions });
-    await before.remember("other-chat", { kind: "approval", waitId: "a-1", askedAt: 5_000, summary: "Run npm test" });
+    await before.remember("other-chat", {
+      kind: "approval",
+      waitId: "a-1",
+      askedAt: 5_000,
+      summary: "Run npm test",
+    });
 
     const after = open(() => 6_000);
-    assert.deepEqual(await after.forRun("chat", 4_000), [{ kind: "question", waitId: "q-1", askedAt: 5_000, questions }]);
+    assert.deepEqual(await after.forRun("chat", 4_000), [
+      { kind: "question", waitId: "q-1", askedAt: 5_000, questions },
+    ]);
     assert.deepEqual(await after.forRun("other-chat", 4_000), [
       { kind: "approval", waitId: "a-1", askedAt: 5_000, summary: "Run npm test" },
     ]);
@@ -174,12 +195,23 @@ test("a question asked during the interrupted run is offered after a relaunch, a
 test("a reply waiting on an approval and a question keeps both, question first, and week-old ones leave the disk", async () => {
   await withWaitFile(async (open, file) => {
     const store = open(() => 5_000);
-    await store.remember("chat", { kind: "approval", waitId: "a-1", askedAt: 4_900, summary: "Edit README.md" });
+    await store.remember("chat", {
+      kind: "approval",
+      waitId: "a-1",
+      askedAt: 4_900,
+      summary: "Edit README.md",
+    });
     await store.remember("chat", { kind: "question", waitId: "q-1", askedAt: 5_000, questions });
-    assert.deepEqual((await open(() => 5_200).forRun("chat", 0)).map((wait) => wait.waitId), ["q-1", "a-1"]);
+    assert.deepEqual(
+      (await open(() => 5_200).forRun("chat", 0)).map((wait) => wait.waitId),
+      ["q-1", "a-1"],
+    );
     // Settling one leaves the other.
     await store.forget("q-1", "chat");
-    assert.deepEqual((await open(() => 5_200).forRun("chat", 0)).map((wait) => wait.waitId), ["a-1"]);
+    assert.deepEqual(
+      (await open(() => 5_200).forRun("chat", 0)).map((wait) => wait.waitId),
+      ["a-1"],
+    );
 
     const weekLater = open(() => 4_900 + INTERRUPTED_WAIT_MAX_AGE_MS + 1);
     assert.deepEqual(await weekLater.forRun("chat", 0), []);
@@ -193,7 +225,19 @@ test("a damaged saved card is dropped instead of being offered", async () => {
     normalizeInterruptedWaits({
       version: 1,
       waits: [
-        { kind: "question", chatId: "chat", waitId: "q-1", askedAt: 1, questions: [{ question: "Only one option?", header: "One", options: [{ label: "A", description: "a" }] }] },
+        {
+          kind: "question",
+          chatId: "chat",
+          waitId: "q-1",
+          askedAt: 1,
+          questions: [
+            {
+              question: "Only one option?",
+              header: "One",
+              options: [{ label: "A", description: "a" }],
+            },
+          ],
+        },
         { kind: "approval", chatId: "chat", waitId: "a-1", askedAt: "soon", summary: "Run it" },
         { kind: "approval", chatId: "chat", waitId: "a-2", askedAt: 2, summary: "Run it" },
       ],

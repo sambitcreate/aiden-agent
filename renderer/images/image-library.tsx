@@ -1,7 +1,11 @@
 import { FolderOpen, Workflow } from "lucide-react";
 import * as React from "react";
 import { Button, EmptyState, Text } from "../components/ui";
-import { GALLERY_MAX_ITEMS, SAVE_ALL_MAX_IMAGES, type GalleryItem } from "../shared/images/ipc-types";
+import {
+  GALLERY_MAX_ITEMS,
+  SAVE_ALL_MAX_IMAGES,
+  type GalleryItem,
+} from "../shared/images/ipc-types";
 import type { ImageModelOption } from "../shared/images/port";
 import { imageCountLabel, viewerPosition } from "./gallery-core";
 import {
@@ -48,9 +52,18 @@ export function ImageLibrary({
   const grid = React.useRef<HTMLDivElement>(null);
   const { items, status, saveFolderLabel } = gallery;
 
-  const shown = React.useMemo(() => filterLibrary(items, filters, models), [items, filters, models]);
-  const facets = React.useMemo(() => libraryFacets(items, filters, models), [items, filters, models]);
-  const sections = React.useMemo(() => sectionByDay(shown, now, (timestamp) => dateFormat.format(timestamp)), [shown, now]);
+  const shown = React.useMemo(
+    () => filterLibrary(items, filters, models),
+    [items, filters, models],
+  );
+  const facets = React.useMemo(
+    () => libraryFacets(items, filters, models),
+    [items, filters, models],
+  );
+  const sections = React.useMemo(
+    () => sectionByDay(shown, now, (timestamp) => dateFormat.format(timestamp)),
+    [shown, now],
+  );
   const viewerIndex = viewerPosition(shown, viewing);
   // The viewer hands focus back to the thumbnail of the image it closed on, found by asset id:
   // a gallery refresh or a new run's images can move it to another position meanwhile.
@@ -67,7 +80,10 @@ export function ImageLibrary({
     setFocusIndex(0);
   };
   const clearFilters = () => changeFilters({ ...EMPTY_LIBRARY_FILTERS, sort: filters.sort });
-  const canOpenWorkflow = React.useCallback((item: GalleryItem) => workflowAvailable(item, liveWorkflowIds), [liveWorkflowIds]);
+  const canOpenWorkflow = React.useCallback(
+    (item: GalleryItem) => workflowAvailable(item, liveWorkflowIds),
+    [liveWorkflowIds],
+  );
   const openWorkflow = React.useCallback(
     (item: GalleryItem) => {
       if (!workflowAvailable(item, liveWorkflowIds)) return;
@@ -77,7 +93,15 @@ export function ImageLibrary({
     [liveWorkflowIds, onOpenWorkflow],
   );
   const viewerActions = React.useMemo<ViewerAction[]>(
-    () => [{ id: "open-workflow", label: "Open Workflow", icon: <Workflow aria-hidden="true" />, disabled: (item) => !canOpenWorkflow(item), onSelect: openWorkflow }],
+    () => [
+      {
+        id: "open-workflow",
+        label: "Open Workflow",
+        icon: <Workflow aria-hidden="true" />,
+        disabled: (item) => !canOpenWorkflow(item),
+        onSelect: openWorkflow,
+      },
+    ],
     [canOpenWorkflow, openWorkflow],
   );
 
@@ -86,7 +110,9 @@ export function ImageLibrary({
     <footer className="image-history-footer image-library-footer flex flex-wrap items-center gap-x-2">
       <Text variant="small" color="secondary" className="min-w-0">
         Saved to {saveFolderLabel}
-        {items.length >= GALLERY_MAX_ITEMS ? ` · Showing the newest ${numberFormat.format(GALLERY_MAX_ITEMS)} images` : ""}
+        {items.length >= GALLERY_MAX_ITEMS
+          ? ` · Showing the newest ${numberFormat.format(GALLERY_MAX_ITEMS)} images`
+          : ""}
       </Text>
       <Button size="small" variant="transparent" onClick={actions.revealFolder}>
         <FolderOpen aria-hidden="true" />
@@ -97,14 +123,23 @@ export function ImageLibrary({
 
   if (items.length === 0) {
     let body: React.ReactNode;
-    if (status === "loading") body = <Text variant="small" color="secondary" className="px-6 py-4">Loading images…</Text>;
+    if (status === "loading")
+      body = (
+        <Text variant="small" color="secondary" className="px-6 py-4">
+          Loading images…
+        </Text>
+      );
     else if (status === "error") {
       body = (
         <EmptyState
           role="alert"
           title="Images couldn't be loaded"
           description="Your images are still saved. Try again in a moment."
-          action={<Button size="small" variant="muted" onClick={gallery.refresh}>Try Again</Button>}
+          action={
+            <Button size="small" variant="muted" onClick={gallery.refresh}>
+              Try Again
+            </Button>
+          }
         />
       );
     } else {
@@ -124,21 +159,32 @@ export function ImageLibrary({
   }
 
   const selection = saveAllSelection(shown);
-  const countText = shown.length === items.length ? imageCountLabel(items.length) : `${numberFormat.format(shown.length)} of ${imageCountLabel(items.length)}`;
+  const countText =
+    shown.length === items.length
+      ? imageCountLabel(items.length)
+      : `${numberFormat.format(shown.length)} of ${imageCountLabel(items.length)}`;
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       <div className="flex shrink-0 flex-col gap-2 px-6 pb-3">
         <LibraryToolbar filters={filters} onFiltersChange={changeFilters} facets={facets} />
         <div className="flex min-h-7 items-center gap-2">
-          <Text variant="small" color="secondary" role="status" className="min-w-0 flex-1" truncate>{countText}</Text>
+          <Text variant="small" color="secondary" role="status" className="min-w-0 flex-1" truncate>
+            {countText}
+          </Text>
           {selection.capped ? (
-            <Text variant="small" color="secondary">Saves the first {SAVE_ALL_MAX_IMAGES} of {numberFormat.format(selection.total)}</Text>
+            <Text variant="small" color="secondary">
+              Saves the first {SAVE_ALL_MAX_IMAGES} of {numberFormat.format(selection.total)}
+            </Text>
           ) : null}
           {shown.length > 0 ? (
             <Button
               size="small"
               variant="muted"
-              aria-label={selection.capped ? `Save the first ${SAVE_ALL_MAX_IMAGES} of ${selection.total} images…` : `Save all ${imageCountLabel(selection.total)}…`}
+              aria-label={
+                selection.capped
+                  ? `Save the first ${SAVE_ALL_MAX_IMAGES} of ${selection.total} images…`
+                  : `Save all ${imageCountLabel(selection.total)}…`
+              }
               onClick={() => actions.saveAll(selection.assetIds)}
             >
               Save All…
@@ -151,7 +197,11 @@ export function ImageLibrary({
           <EmptyState
             title="No matching images"
             description="Nothing matches this search and these filters."
-            action={<Button size="small" variant="muted" onClick={clearFilters}>Clear Filters</Button>}
+            action={
+              <Button size="small" variant="muted" onClick={clearFilters}>
+                Clear Filters
+              </Button>
+            }
           />
         ) : (
           <LibraryGrid
@@ -186,7 +236,9 @@ export function ImageLibrary({
         models={models}
         saveFolderLabel={saveFolderLabel}
         extraActions={viewerActions}
-        returnFocus={() => (lastViewed.current === null ? null : libraryTileFor(grid.current, lastViewed.current))}
+        returnFocus={() =>
+          lastViewed.current === null ? null : libraryTileFor(grid.current, lastViewed.current)
+        }
       />
     </div>
   );

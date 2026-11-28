@@ -4,7 +4,10 @@ import type {
   ScheduledTaskPermission,
 } from "../services/types.js";
 import { validateScheduledMcpServerIds } from "../services/schedule-guard.js";
-import { parseScheduledTaskTrigger, type ScheduledTaskTrigger } from "../../renderer/shared/scheduled-task-trigger.js";
+import {
+  parseScheduledTaskTrigger,
+  type ScheduledTaskTrigger,
+} from "../../renderer/shared/scheduled-task-trigger.js";
 
 function requiredString(value: unknown, name: string): string {
   if (typeof value !== "string" || !value.trim()) {
@@ -52,7 +55,11 @@ export function parseScheduledTaskInput(value: unknown): ScheduledTaskInput {
     name: requiredString(input.name, "name"),
     enabled: typeof input.enabled === "boolean" ? input.enabled : undefined,
     mode,
-    cron: trigger ? (typeof input.cron === "string" ? input.cron : "") : requiredString(input.cron, "cron"),
+    cron: trigger
+      ? typeof input.cron === "string"
+        ? input.cron
+        : ""
+      : requiredString(input.cron, "cron"),
     ...(trigger !== undefined ? { trigger } : {}),
     timezone: optionalString(input.timezone),
     workspaceId: optionalString(input.workspaceId),

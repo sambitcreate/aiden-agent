@@ -15,11 +15,37 @@ import { CUA_DRIVER_UPSTREAM_PIN } from "../computer-use/binary.js";
 import { CUA_DRIVER_VERSION } from "../computer-use/contract.js";
 import type { CuaDriverHostFactory, CuaDriverSessionLike } from "../computer-use/controller.js";
 import { createBotComputerControl, type BotComputerControlRegistry } from "./control.js";
-import { createGuestCuaDriverHostFactory, guestDriverSshBridge, type GuestDriverBridgeCommand } from "./guest-driver.js";
-import { guestDriverRestartScript, installGuestDriver, type GuestDriverLocation } from "./guest-driver-install.js";
-import { guestDriverPermissions, guestDriverReady, probeGuestDriver, type GuestDriverPermissions } from "./guest-driver-readiness.js";
-import { lumeEnvironment, runLume, type LumeCommand, type LumeInvocation, type LumeRunResult } from "./lume-cli.js";
-import { classifyLumeError, isLoopbackHost, parseLumeVmInfo, parseLumeVmList, type LumeErrorKind, type LumeVmInfo } from "./lume-output.js";
+import {
+  createGuestCuaDriverHostFactory,
+  guestDriverSshBridge,
+  type GuestDriverBridgeCommand,
+} from "./guest-driver.js";
+import {
+  guestDriverRestartScript,
+  installGuestDriver,
+  type GuestDriverLocation,
+} from "./guest-driver-install.js";
+import {
+  guestDriverPermissions,
+  guestDriverReady,
+  probeGuestDriver,
+  type GuestDriverPermissions,
+} from "./guest-driver-readiness.js";
+import {
+  lumeEnvironment,
+  runLume,
+  type LumeCommand,
+  type LumeInvocation,
+  type LumeRunResult,
+} from "./lume-cli.js";
+import {
+  classifyLumeError,
+  isLoopbackHost,
+  parseLumeVmInfo,
+  parseLumeVmList,
+  type LumeErrorKind,
+  type LumeVmInfo,
+} from "./lume-output.js";
 import { buildBaseVm, generateGuestPassword, type ProvisionContext } from "./provision.js";
 import {
   BOT_COMPUTER_RESTORE_IMAGE,
@@ -27,7 +53,12 @@ import {
   BOT_COMPUTER_BASE_SIZE_BYTES,
   BOT_COMPUTER_VM_MEMORY_BYTES,
 } from "./release.js";
-import { allocatedBytes, requireResources, systemResourceProbe, type BotComputerResourceProbe } from "./resources.js";
+import {
+  allocatedBytes,
+  requireResources,
+  systemResourceProbe,
+  type BotComputerResourceProbe,
+} from "./resources.js";
 import { createRestoreImageDownloader, type RestoreImagePin } from "./restore-image-download.js";
 import { createBotComputerActivity, type BotComputerActivity } from "./sessions.js";
 import {
@@ -57,7 +88,12 @@ import {
   type BotComputerStopReason,
 } from "./types.js";
 import { vncReachableBeyondLoopback } from "./vnc-exposure.js";
-import { BOT_COMPUTER_BASE_VM, BOT_COMPUTER_STAGING_BASE_VM, botComputerVmName, isAidenVmName } from "./vm-names.js";
+import {
+  BOT_COMPUTER_BASE_VM,
+  BOT_COMPUTER_STAGING_BASE_VM,
+  botComputerVmName,
+  isAidenVmName,
+} from "./vm-names.js";
 
 export interface BotComputerSecrets {
   /** The stored value, or null when there is none. Throws when the store can't be read. */
@@ -153,7 +189,8 @@ const LOG_TAIL_BYTES = 16_384;
 
 function vncPassword(): string {
   let value = "";
-  for (let index = 0; index < 32; index += 1) value += VNC_PASSWORD_ALPHABET[randomInt(VNC_PASSWORD_ALPHABET.length)];
+  for (let index = 0; index < 32; index += 1)
+    value += VNC_PASSWORD_ALPHABET[randomInt(VNC_PASSWORD_ALPHABET.length)];
   return value;
 }
 
@@ -245,7 +282,9 @@ export function createBotComputerHost(deps: BotComputerHostDependencies): BotCom
    */
   const copies = new Set<Promise<unknown>>();
   const guestHostFor =
-    deps.guestDriverHost ?? ((bridge: () => Promise<GuestDriverBridgeCommand>) => createGuestCuaDriverHostFactory({ bridge }));
+    deps.guestDriverHost ??
+    ((bridge: () => Promise<GuestDriverBridgeCommand>) =>
+      createGuestCuaDriverHostFactory({ bridge }));
 
   const emit = (botId?: string) => {
     diskCache = undefined;
@@ -269,7 +308,8 @@ export function createBotComputerHost(deps: BotComputerHostDependencies): BotCom
     return found;
   };
   const occupied = () =>
-    [...runtimes.values()].filter((entry) => SLOT_STATES.has(entry.state)).length + (baseHoldsSlot ? 1 : 0);
+    [...runtimes.values()].filter((entry) => SLOT_STATES.has(entry.state)).length +
+    (baseHoldsSlot ? 1 : 0);
   const wakeSlotWaiters = () => {
     const waiters = [...slotWaiters];
     slotWaiters.clear();
@@ -300,13 +340,25 @@ export function createBotComputerHost(deps: BotComputerHostDependencies): BotCom
     const resolved = await invocation();
     await mkdir(dirs.vms, { recursive: true, mode: 0o700 });
     await mkdir(dirs.home, { recursive: true, mode: 0o700 });
-    return runLume(resolved, command, { storage: dirs.vms, env: lumeEnv(), timeoutMs, signal, onSpawn, killOnAbort });
+    return runLume(resolved, command, {
+      storage: dirs.vms,
+      env: lumeEnv(),
+      timeoutMs,
+      signal,
+      onSpawn,
+      killOnAbort,
+    });
   }
 
   const failureKind = (result: LumeRunResult): LumeErrorKind =>
     classifyLumeError(`${result.stderr}\n${result.stdout}`, result.exitCode);
 
-  async function lumeOrThrow(command: LumeCommand, timeoutMs: number, message: string, signal?: AbortSignal): Promise<LumeRunResult> {
+  async function lumeOrThrow(
+    command: LumeCommand,
+    timeoutMs: number,
+    message: string,
+    signal?: AbortSignal,
+  ): Promise<LumeRunResult> {
     const result = await lume(command, timeoutMs, signal);
     if (result.exitCode !== 0) {
       log(`lume ${command.op} failed: ${result.stderr.slice(-600)}`);
@@ -336,8 +388,15 @@ export function createBotComputerHost(deps: BotComputerHostDependencies): BotCom
    * `owner` ("Ada's") names the computer when even the forced stop fails, so a start that needed
    * its place says whose computer it was.
    */
-  async function stopVm(vmName: string, force: boolean, owner = "the"): Promise<"stopped" | "not_running" | "not_found"> {
-    const result = await lume({ op: "stop", name: vmName, force, timeoutSeconds: force ? 0 : 30 }, force ? 30_000 : 75_000);
+  async function stopVm(
+    vmName: string,
+    force: boolean,
+    owner = "the",
+  ): Promise<"stopped" | "not_running" | "not_found"> {
+    const result = await lume(
+      { op: "stop", name: vmName, force, timeoutSeconds: force ? 0 : 30 },
+      force ? 30_000 : 75_000,
+    );
     if (result.exitCode === 0) return "stopped";
     const kind = failureKind(result);
     if (kind === "not_running" || kind === "not_found") return kind;
@@ -381,7 +440,10 @@ export function createBotComputerHost(deps: BotComputerHostDependencies): BotCom
         );
       case "not_found":
       case "stale":
-        return new BotComputerError("stale", `${owner} computer is missing or incomplete. Reset it in the Bot's profile.`);
+        return new BotComputerError(
+          "stale",
+          `${owner} computer is missing or incomplete. Reset it in the Bot's profile.`,
+        );
       default:
         return new BotComputerError("start_failed", `${owner} computer didn't start.`);
     }
@@ -397,7 +459,10 @@ export function createBotComputerHost(deps: BotComputerHostDependencies): BotCom
    */
   async function stopFailedStart(vmName: string, launchLog?: string): Promise<boolean> {
     const watchUntil = launchLog === undefined ? 0 : performance.now() + launchSettleMs;
-    const watching = async () => launchLog !== undefined && performance.now() < watchUntil && !LUME_LOG_ERROR.test(await logTail(launchLog));
+    const watching = async () =>
+      launchLog !== undefined &&
+      performance.now() < watchUntil &&
+      !LUME_LOG_ERROR.test(await logTail(launchLog));
     for (;;) {
       try {
         // Lume turned off what came up, or has no such VM: nothing else this start launched can run.
@@ -428,7 +493,10 @@ export function createBotComputerHost(deps: BotComputerHostDependencies): BotCom
     signal: AbortSignal | undefined,
     requireSsh: boolean,
     onLeftRunning?: () => void,
-  ): Promise<{ info: LumeVmInfo & { ip: string; vnc: { host: string; port: number } }; password: string }> {
+  ): Promise<{
+    info: LumeVmInfo & { ip: string; vnc: { host: string; port: number } };
+    password: string;
+  }> {
     const password = vncPassword();
     await mkdir(dirs.logs, { recursive: true, mode: 0o700 });
     const logFile = path.join(dirs.logs, `${vmName}.log`);
@@ -437,7 +505,8 @@ export function createBotComputerHost(deps: BotComputerHostDependencies): BotCom
     /** `none` until Lume's `run` has started; `ended` once its launch is known to have failed. */
     let launch = "none" as "none" | "launching" | "ended";
     try {
-      if (signal?.aborted) throw new BotComputerError("cancelled", "Starting the computer was cancelled.");
+      if (signal?.aborted)
+        throw new BotComputerError("cancelled", "Starting the computer was cancelled.");
       // `run --detach` launches the VM in the background before it returns, and the VM can
       // come up after that. So a cancel doesn't cut it short, which could stop it partway
       // through launching: it is bounded, and the cancel is honoured once it returns. Quit does
@@ -456,8 +525,10 @@ export function createBotComputerHost(deps: BotComputerHostDependencies): BotCom
       const refusal = started.exitCode === 0 ? undefined : failureKind(started);
       // Lume refused this VM (it has none by that name, it is still being made, or macOS's limit
       // is reached): nothing is coming up. Any other failure may have launched it.
-      if (refusal === "not_found" || refusal === "stale" || refusal === "vm_limit") launch = "ended";
-      if (signal?.aborted) throw new BotComputerError("cancelled", "Starting the computer was cancelled.");
+      if (refusal === "not_found" || refusal === "stale" || refusal === "vm_limit")
+        launch = "ended";
+      if (signal?.aborted)
+        throw new BotComputerError("cancelled", "Starting the computer was cancelled.");
       if (refusal !== undefined) throw startFailure(refusal, owner);
       const deadline = now() + startTimeoutMs;
       for (;;) {
@@ -465,12 +536,23 @@ export function createBotComputerHost(deps: BotComputerHostDependencies): BotCom
         const info = await getVm(vmName, signal);
         if (!info) throw startFailure("not_found", owner);
         if (info.stale) throw startFailure("stale", owner);
-        if (info.state === "running" && info.ip && info.vnc && (!requireSsh || info.sshAvailable === true)) {
+        if (
+          info.state === "running" &&
+          info.ip &&
+          info.vnc &&
+          (!requireSsh || info.sshAvailable === true)
+        ) {
           if (!isLoopbackHost(info.vnc.host)) {
-            throw new BotComputerError("vnc_not_loopback", `${owner} computer offered its screen beyond this Mac, so Aiden stopped it.`);
+            throw new BotComputerError(
+              "vnc_not_loopback",
+              `${owner} computer offered its screen beyond this Mac, so Aiden stopped it.`,
+            );
           }
           if (await exposed(info.vnc.port)) {
-            throw new BotComputerError("vnc_not_loopback", `${owner} computer's screen was reachable from the network, so Aiden stopped it.`);
+            throw new BotComputerError(
+              "vnc_not_loopback",
+              `${owner} computer's screen was reachable from the network, so Aiden stopped it.`,
+            );
           }
           return { info: { ...info, ip: info.ip, vnc: info.vnc }, password };
         }
@@ -482,12 +564,17 @@ export function createBotComputerHost(deps: BotComputerHostDependencies): BotCom
             throw startFailure(classifyLumeError(tail, 1), owner);
           }
         }
-        if (now() > deadline) throw new BotComputerError("start_failed", `${owner} computer didn't start in time.`);
+        if (now() > deadline)
+          throw new BotComputerError("start_failed", `${owner} computer didn't start in time.`);
         await delay(pollMs, signal);
       }
     } catch (error) {
       // A Lume that never started (missing, or refused by the OS) launched nothing.
-      if (launch !== "none" && (await stopFailedStart(vmName, launch === "launching" ? logFile : undefined))) onLeftRunning?.();
+      if (
+        launch !== "none" &&
+        (await stopFailedStart(vmName, launch === "launching" ? logFile : undefined))
+      )
+        onLeftRunning?.();
       throw error;
     }
   }
@@ -505,9 +592,15 @@ export function createBotComputerHost(deps: BotComputerHostDependencies): BotCom
     return candidate?.botId;
   }
 
-  async function acquireSlot(botId: string, entry: Runtime, signal: AbortSignal, onProgress?: (text: string) => void): Promise<void> {
+  async function acquireSlot(
+    botId: string,
+    entry: Runtime,
+    signal: AbortSignal,
+    onProgress?: (text: string) => void,
+  ): Promise<void> {
     for (;;) {
-      if (signal.aborted) throw new BotComputerError("cancelled", "Starting the computer was cancelled.");
+      if (signal.aborted)
+        throw new BotComputerError("cancelled", "Starting the computer was cancelled.");
       if (shuttingDown) throw new BotComputerError("busy", "Aiden is quitting.");
       const { settings } = await store.read();
       if (occupied() < settings.maxRunning) {
@@ -548,7 +641,8 @@ export function createBotComputerHost(deps: BotComputerHostDependencies): BotCom
    */
   async function acquireBaseSlot(signal: AbortSignal): Promise<void> {
     for (;;) {
-      if (signal.aborted) throw new BotComputerError("cancelled", "Setting up Bot computers was cancelled.");
+      if (signal.aborted)
+        throw new BotComputerError("cancelled", "Setting up Bot computers was cancelled.");
       if (shuttingDown) throw new BotComputerError("busy", "Aiden is quitting.");
       const { settings } = await store.read();
       if (occupied() < settings.maxRunning) {
@@ -636,18 +730,27 @@ export function createBotComputerHost(deps: BotComputerHostDependencies): BotCom
     entry.cancelIdle = schedule(() => {
       entry.cancelIdle = undefined;
       if (entry.state !== "running") return;
-      if (entry.leases > 0 || control.controller(botId) === "person" || control.activeActions(botId) > 0) {
+      if (
+        entry.leases > 0 ||
+        control.controller(botId) === "person" ||
+        control.activeActions(botId) > 0
+      ) {
         armIdle(botId, entry, minutes);
         return;
       }
-      void stopComputer(botId, "idle").catch((error: unknown) => log("Idle stop did not finish.", error));
+      void stopComputer(botId, "idle").catch((error: unknown) =>
+        log("Idle stop did not finish.", error),
+      );
     }, minutes * 60_000);
   }
 
   async function sharedDirFor(botId: string): Promise<string> {
     const dir = await deps.botComputerDir(botId);
     if (!path.isAbsolute(dir) || dir.includes(":")) {
-      throw new BotComputerError("invalid", "The Bot's Computer folder path can't contain a colon.");
+      throw new BotComputerError(
+        "invalid",
+        "The Bot's Computer folder path can't contain a colon.",
+      );
     }
     await mkdir(dir, { recursive: true, mode: 0o700 });
     return dir;
@@ -657,7 +760,11 @@ export function createBotComputerHost(deps: BotComputerHostDependencies): BotCom
     botId: string,
     record: BotComputerRecord,
     entry: Runtime,
-    options: { reason: BotComputerStartReason; signal: AbortSignal; onProgress?(text: string): void },
+    options: {
+      reason: BotComputerStartReason;
+      signal: AbortSignal;
+      onProgress?(text: string): void;
+    },
   ): Promise<BotComputerConnection> {
     const owner = await possessive(botId);
     let leftRunning = false;
@@ -672,9 +779,16 @@ export function createBotComputerHost(deps: BotComputerHostDependencies): BotCom
       });
       options.onProgress?.(`Starting ${owner} computer…`);
       const sharedDir = await sharedDirFor(botId);
-      const { info, password } = await runAndWait(record.vmName, sharedDir, owner, options.signal, false, () => {
-        leftRunning = true;
-      });
+      const { info, password } = await runAndWait(
+        record.vmName,
+        sharedDir,
+        owner,
+        options.signal,
+        false,
+        () => {
+          leftRunning = true;
+        },
+      );
       const connection: BotComputerConnection = {
         vmName: record.vmName,
         ip: info.ip,
@@ -741,10 +855,18 @@ export function createBotComputerHost(deps: BotComputerHostDependencies): BotCom
         // Even a forced stop failed: count the computer as off only if Lume says it is. One
         // that is still on keeps its place (macOS's limit) and its connection, and its idle
         // timer tries again; an unreadable state counts as on.
-        stillRunning = vmName !== undefined && (await getVm(vmName).then((info) => info?.state === "running", () => true));
+        stillRunning =
+          vmName !== undefined &&
+          (await getVm(vmName).then(
+            (info) => info?.state === "running",
+            () => true,
+          ));
         // Named only on failure: the name waits on the Bot store, and almost every stop succeeds.
         if (error instanceof BotComputerError && error.code === "lume_failed") {
-          throw new BotComputerError("lume_failed", `Aiden couldn't stop ${await possessive(botId)} computer.`);
+          throw new BotComputerError(
+            "lume_failed",
+            `Aiden couldn't stop ${await possessive(botId)} computer.`,
+          );
         }
         throw error;
       } finally {
@@ -765,7 +887,8 @@ export function createBotComputerHost(deps: BotComputerHostDependencies): BotCom
           // Nobody uses a computer that is off. Control goes back to the Bot, so its next call
           // doesn't wait for a Give back the tab can't offer and a later run idles out as usual.
           // A sign-in card's hold lasts until the card settles or is withdrawn.
-          if (control.controller(botId) === "person" && control.takenOverBy(botId) !== "sign_in") control.giveBack(botId);
+          if (control.controller(botId) === "person" && control.takenOverBy(botId) !== "sign_in")
+            control.giveBack(botId);
           if (entry.lastUsedAt !== undefined) {
             const lastUsedAt = entry.lastUsedAt;
             await store
@@ -807,7 +930,8 @@ export function createBotComputerHost(deps: BotComputerHostDependencies): BotCom
   const turns = new Map<string | undefined, Promise<void>>();
 
   function inTurn<T>(botId: string | undefined, work: () => Promise<T>): Promise<T> {
-    const before = botId === undefined ? [...turns.values()] : [turns.get(undefined), turns.get(botId)];
+    const before =
+      botId === undefined ? [...turns.values()] : [turns.get(undefined), turns.get(botId)];
     const result = Promise.all(before).then(work);
     const done = result.then(
       () => undefined,
@@ -828,12 +952,14 @@ export function createBotComputerHost(deps: BotComputerHostDependencies): BotCom
    * Give back goes on at once: it must not start the old VM while that is deleted or copied over,
    * only the computer that is there afterwards.
    */
-  const startsHeld = (botId: string): Promise<void> | undefined => turns.get(undefined) ?? turns.get(botId);
+  const startsHeld = (botId: string): Promise<void> | undefined =>
+    turns.get(undefined) ?? turns.get(botId);
 
   function untilDone(gate: Promise<void>, signal?: AbortSignal): Promise<void> {
     if (!signal) return gate;
     return new Promise<void>((resolve, reject) => {
-      const cancel = () => reject(new BotComputerError("cancelled", "Starting the computer was cancelled."));
+      const cancel = () =>
+        reject(new BotComputerError("cancelled", "Starting the computer was cancelled."));
       if (signal.aborted) {
         cancel();
         return;
@@ -848,7 +974,11 @@ export function createBotComputerHost(deps: BotComputerHostDependencies): BotCom
 
   async function requireRecord(botId: string): Promise<BotComputerRecord> {
     const record = (await store.read()).computers[botId];
-    if (!record) throw new BotComputerError("no_computer", `${await name(botId)} doesn't have a computer yet.`);
+    if (!record)
+      throw new BotComputerError(
+        "no_computer",
+        `${await name(botId)} doesn't have a computer yet.`,
+      );
     return record;
   }
 
@@ -857,7 +987,9 @@ export function createBotComputerHost(deps: BotComputerHostDependencies): BotCom
     if (!support.ok) {
       throw new BotComputerError(
         "unsupported",
-        support.reason === "host_os" ? "Bot computers need macOS 26 or later." : "Bot computers need a Mac with Apple silicon.",
+        support.reason === "host_os"
+          ? "Bot computers need macOS 26 or later."
+          : "Bot computers need a Mac with Apple silicon.",
       );
     }
   }
@@ -884,7 +1016,11 @@ export function createBotComputerHost(deps: BotComputerHostDependencies): BotCom
     return { kind: "not_set_up" };
   }
 
-  function computerStatus(botId: string, record: BotComputerRecord, state: BotComputersState): BotComputerStatus {
+  function computerStatus(
+    botId: string,
+    record: BotComputerRecord,
+    state: BotComputersState,
+  ): BotComputerStatus {
     const entry = runtimes.get(botId);
     const lastUsedAt = entry?.lastUsedAt ?? record.lastUsedAt;
     const text = activity.get(botId);
@@ -900,11 +1036,18 @@ export function createBotComputerHost(deps: BotComputerHostDependencies): BotCom
     };
   }
 
-  async function cloneFromBase(botId: string, state: BotComputersState): Promise<BotComputerRecord> {
+  async function cloneFromBase(
+    botId: string,
+    state: BotComputersState,
+  ): Promise<BotComputerRecord> {
     const vmName = botComputerVmName(botId);
     await sharedDirFor(botId);
     await deleteVm(vmName);
-    await lumeOrThrow({ op: "clone", source: BOT_COMPUTER_BASE_VM, target: vmName }, 600_000, "Aiden couldn't make the computer from the base. Try again.");
+    await lumeOrThrow(
+      { op: "clone", source: BOT_COMPUTER_BASE_VM, target: vmName },
+      600_000,
+      "Aiden couldn't make the computer from the base. Try again.",
+    );
     // The clone is a copy of the base's disk, its guest driver and grants with it.
     const guestDriver = state.setup.guestDriver;
     return {
@@ -929,7 +1072,11 @@ export function createBotComputerHost(deps: BotComputerHostDependencies): BotCom
       publicKey,
       ...(guestDriver ? { guestDriver } : {}),
       lumeSsh: (command, timeoutSeconds) =>
-        lume({ op: "ssh", name: vmName, command, timeoutSeconds }, (timeoutSeconds + 15) * 1_000, signal),
+        lume(
+          { op: "ssh", name: vmName, command, timeoutSeconds },
+          (timeoutSeconds + 15) * 1_000,
+          signal,
+        ),
       guestSsh: (command, options) =>
         runSshCommand(
           { host: ip, user: BOT_COMPUTER_GUEST_USER },
@@ -949,18 +1096,34 @@ export function createBotComputerHost(deps: BotComputerHostDependencies): BotCom
   /** A clean guest shutdown, so the disk every clone copies is consistent. */
   async function shutDownBase(vmName: string, signal?: AbortSignal): Promise<void> {
     const result = await lume({ op: "stop", name: vmName, timeoutSeconds: 120 }, 180_000, signal);
-    if (result.exitCode !== 0) throw new BotComputerError("start_failed", "The base computer didn't shut down.");
+    if (result.exitCode !== 0)
+      throw new BotComputerError("start_failed", "The base computer didn't shut down.");
   }
 
-  const setupCancelled = () => new BotComputerError("cancelled", "Setting up Bot computers was cancelled.");
+  const setupCancelled = () =>
+    new BotComputerError("cancelled", "Setting up Bot computers was cancelled.");
 
   function guestSshTo(target: GuestSshTarget, signal: AbortSignal) {
-    return (command: string, options: { stdin?: string; stdinFile?: string; timeoutMs: number }): Promise<BotComputerGuestCommandResult> =>
+    return (
+      command: string,
+      options: { stdin?: string; stdinFile?: string; timeoutMs: number },
+    ): Promise<BotComputerGuestCommandResult> =>
       runSshCommand(
         target,
         command,
-        { timeoutMs: options.timeoutMs, maxOutputBytes: 64 * 1024, signal, stdin: options.stdin, stdinFile: options.stdinFile },
-        { paths: sshPaths, env: guestSshEnvironment(deps.env ?? process.env, dirs.home), sshCommand: deps.sshCommand, run: deps.runProcess },
+        {
+          timeoutMs: options.timeoutMs,
+          maxOutputBytes: 64 * 1024,
+          signal,
+          stdin: options.stdin,
+          stdinFile: options.stdinFile,
+        },
+        {
+          paths: sshPaths,
+          env: guestSshEnvironment(deps.env ?? process.env, dirs.home),
+          sshCommand: deps.sshCommand,
+          run: deps.runProcess,
+        },
       );
   }
 
@@ -979,7 +1142,10 @@ export function createBotComputerHost(deps: BotComputerHostDependencies): BotCom
     );
     const driverHost = await factory(signal);
     try {
-      return { session: await driverHost.createSession(signal), close: () => driverHost.shutdown() };
+      return {
+        session: await driverHost.createSession(signal),
+        close: () => driverHost.shutdown(),
+      };
     } catch (error) {
       await driverHost.shutdown().catch(() => undefined);
       throw error;
@@ -1042,7 +1208,8 @@ export function createBotComputerHost(deps: BotComputerHostDependencies): BotCom
           return undefined;
         }
         if (now() > deadline) {
-          elementControlNote = "The permissions weren't allowed in time, so Bots act on the screen only.";
+          elementControlNote =
+            "The permissions weren't allowed in time, so Bots act on the screen only.";
           return undefined;
         }
         permissions = await guestDriverPermissions(open.session, { prompt: false, signal: step });
@@ -1066,7 +1233,8 @@ export function createBotComputerHost(deps: BotComputerHostDependencies): BotCom
       }
       if (!probe.ready) {
         log(`The guest driver probe did not pass (${probe.reason}).`);
-        elementControlNote = "Aiden's helper in the base computer didn't pass its check, so Bots act on the screen only.";
+        elementControlNote =
+          "Aiden's helper in the base computer didn't pass its check, so Bots act on the screen only.";
         return undefined;
       }
       elementControlNote = undefined;
@@ -1078,7 +1246,8 @@ export function createBotComputerHost(deps: BotComputerHostDependencies): BotCom
         return undefined;
       }
       log("Waiting for the guest driver's permissions did not finish.", error);
-      elementControlNote = "Aiden couldn't check the permissions in the base computer, so Bots act on the screen only.";
+      elementControlNote =
+        "Aiden couldn't check the permissions in the base computer, so Bots act on the screen only.";
       return undefined;
     } finally {
       await open?.close().catch(() => undefined);
@@ -1118,8 +1287,12 @@ export function createBotComputerHost(deps: BotComputerHostDependencies): BotCom
           });
         } catch (error) {
           if (signal.aborted) throw setupCancelled();
-          log("Installing the guest driver did not finish; Bot computers act on the screen only.", error);
-          elementControlNote = "Aiden couldn't install its helper in the base computer, so Bots act on the screen only.";
+          log(
+            "Installing the guest driver did not finish; Bot computers act on the screen only.",
+            error,
+          );
+          elementControlNote =
+            "Aiden couldn't install its helper in the base computer, so Bots act on the screen only.";
         }
       },
       async grant(password) {
@@ -1135,20 +1308,34 @@ export function createBotComputerHost(deps: BotComputerHostDependencies): BotCom
     // A Bot's computer still being copied from the base finishes before the base boots.
     await copiesSettled();
     const state = await store.read();
-    if (!ready(state)) throw new BotComputerError("not_set_up", "Set up Bot computers in Settings first.");
+    if (!ready(state))
+      throw new BotComputerError("not_set_up", "Set up Bot computers in Settings first.");
     if (guestDriverReady(state.setup.guestDriver)) return false;
     const password = await deps.secrets.get(BOT_COMPUTER_GUEST_PASSWORD_SECRET);
     if (password === null || !/^[A-Za-z0-9]{16,128}$/u.test(password)) {
-      throw new BotComputerError("start_failed", "Aiden doesn't have the base computer's password. Update the base to set up element control.");
+      throw new BotComputerError(
+        "start_failed",
+        "Aiden doesn't have the base computer's password. Update the base to set up element control.",
+      );
     }
     setupState = { kind: "building_base", step: "guest_driver" };
     emit();
     let record: BotComputerGuestDriverRecord | undefined;
     await acquireBaseSlot(signal);
     try {
-      await requireResources(resources, { dir: root, memoryBytes: BOT_COMPUTER_VM_MEMORY_BYTES, signal });
+      await requireResources(resources, {
+        dir: root,
+        memoryBytes: BOT_COMPUTER_VM_MEMORY_BYTES,
+        signal,
+      });
       await mkdir(dirs.baseShared, { recursive: true, mode: 0o700 });
-      const { info, password: vncPassword } = await runAndWait(BOT_COMPUTER_BASE_VM, dirs.baseShared, "The base", signal, true);
+      const { info, password: vncPassword } = await runAndWait(
+        BOT_COMPUTER_BASE_VM,
+        dirs.baseShared,
+        "The base",
+        signal,
+        true,
+      );
       const base: BotComputerConnection = {
         vmName: BOT_COMPUTER_BASE_VM,
         ip: info.ip,
@@ -1189,33 +1376,54 @@ export function createBotComputerHost(deps: BotComputerHostDependencies): BotCom
     // download; with Bot computers running, their memory is not free yet (an idle
     // one may stop for the base), so only the check before the install applies.
     if (occupied() === 0) {
-      await requireResources(resources, { dir: root, memoryBytes: BOT_COMPUTER_VM_MEMORY_BYTES, signal });
+      await requireResources(resources, {
+        dir: root,
+        memoryBytes: BOT_COMPUTER_VM_MEMORY_BYTES,
+        signal,
+      });
     }
-    setupState = { kind: "downloading", receivedBytes: await downloader.partialBytes(), totalBytes: image.bytes };
+    setupState = {
+      kind: "downloading",
+      receivedBytes: await downloader.partialBytes(),
+      totalBytes: image.bytes,
+    };
     emit();
     const ipsw = await downloader.download({
       onProgress: (progress) => {
         setupState =
           progress.phase === "verifying"
             ? { kind: "verifying" }
-            : { kind: "downloading", receivedBytes: progress.receivedBytes, totalBytes: progress.totalBytes };
+            : {
+                kind: "downloading",
+                receivedBytes: progress.receivedBytes,
+                totalBytes: progress.totalBytes,
+              };
         emit();
       },
     });
-    if (signal.aborted) throw new BotComputerError("cancelled", "Setting up Bot computers was cancelled.");
+    if (signal.aborted)
+      throw new BotComputerError("cancelled", "Setting up Bot computers was cancelled.");
     await store.update((draft) => {
       draft.setup.ipswPath = ipsw;
     });
     await acquireBaseSlot(signal);
     let guestDriver: BotComputerGuestDriverRecord | undefined;
     try {
-      await requireResources(resources, { dir: root, memoryBytes: BOT_COMPUTER_VM_MEMORY_BYTES, signal });
+      await requireResources(resources, {
+        dir: root,
+        memoryBytes: BOT_COMPUTER_VM_MEMORY_BYTES,
+        signal,
+      });
       guestDriver = await buildAndInstallBase(mode, target, ipsw, signal);
     } finally {
       releaseBaseSlot();
     }
     await store.update((draft) => {
-      draft.setup = { baseBuild: image.build, baseVersion: image.version, ...(guestDriver ? { guestDriver } : {}) };
+      draft.setup = {
+        baseBuild: image.build,
+        baseVersion: image.version,
+        ...(guestDriver ? { guestDriver } : {}),
+      };
     });
     setupState = undefined;
     deps.onSetupReady?.();
@@ -1240,21 +1448,35 @@ export function createBotComputerHost(deps: BotComputerHostDependencies): BotCom
     });
     await mkdir(dirs.baseShared, { recursive: true, mode: 0o700 });
     const stored = await deps.secrets.get(BOT_COMPUTER_GUEST_PASSWORD_SECRET);
-    const guestPassword = stored !== null && /^[A-Za-z0-9]{16,128}$/u.test(stored) ? stored : undefined;
+    const guestPassword =
+      stored !== null && /^[A-Za-z0-9]{16,128}$/u.test(stored) ? stored : undefined;
     let driver: ReturnType<typeof guestDriverSetup> | undefined;
     await buildBaseVm({
       signal,
       deleteVm: () => deleteVm(target),
       create: async () => {
-        const result = await lume({ op: "create", name: target, ipsw, unattended: "tahoe" }, 3 * 60 * 60_000, signal);
+        const result = await lume(
+          { op: "create", name: target, ipsw, unattended: "tahoe" },
+          3 * 60 * 60_000,
+          signal,
+        );
         if (result.exitCode === 0) return;
         log(`lume create failed: ${result.stderr.slice(-600)}`);
         // The unattended install boots the VM, so another app's macOS VM can fill the last place.
         if (failureKind(result) === "vm_limit") throw startFailure("vm_limit", "The base");
-        throw new BotComputerError("lume_failed", "Installing macOS on the base computer failed. Choose Set up to try again.");
+        throw new BotComputerError(
+          "lume_failed",
+          "Installing macOS on the base computer failed. Choose Set up to try again.",
+        );
       },
       start: async () => {
-        const { info, password } = await runAndWait(target, dirs.baseShared, "The base", signal, true);
+        const { info, password } = await runAndWait(
+          target,
+          dirs.baseShared,
+          "The base",
+          signal,
+          true,
+        );
         driver = guestDriverSetup(
           {
             vmName: target,
@@ -1266,7 +1488,8 @@ export function createBotComputerHost(deps: BotComputerHostDependencies): BotCom
         );
         return { ip: info.ip };
       },
-      provisionContext: (ip) => provisionContext(target, ip, publicKey, guestPassword, signal, driver?.hooks),
+      provisionContext: (ip) =>
+        provisionContext(target, ip, publicKey, guestPassword, signal, driver?.hooks),
       stop: async () => {
         await stopVm(target, true);
       },
@@ -1304,19 +1527,25 @@ export function createBotComputerHost(deps: BotComputerHostDependencies): BotCom
         if (mode === "setup") {
           // In the background: a failed read must not turn a finished setup into a failure.
           void store.read().then(
-            ({ setup }) => reportAnalyticsEvent("bot_computer_set_up", { element_control: guestDriverReady(setup.guestDriver) }),
+            ({ setup }) =>
+              reportAnalyticsEvent("bot_computer_set_up", {
+                element_control: guestDriverReady(setup.guestDriver),
+              }),
             () => undefined,
           );
         }
       } catch (error) {
-        const resumable = (await downloader.partialBytes()) > 0 || existsSync(downloader.paths().final);
+        const resumable =
+          (await downloader.partialBytes()) > 0 || existsSync(downloader.paths().final);
         const cancelled = error instanceof BotComputerError && error.code === "cancelled";
         const state = await store.read();
         if (cancelled && (ready(state) || !resumable)) setupState = undefined;
         else {
           setupState = {
             kind: "failed",
-            message: cancelled ? "Set up was cancelled. Choose Set up to continue where it stopped." : errorMessage(error),
+            message: cancelled
+              ? "Set up was cancelled. Choose Set up to continue where it stopped."
+              : errorMessage(error),
             resumable,
           };
         }
@@ -1367,7 +1596,10 @@ export function createBotComputerHost(deps: BotComputerHostDependencies): BotCom
     return bytes;
   }
 
-  const host: BotComputerHost & { readonly control: BotComputerControlRegistry; readonly activity: BotComputerActivity } = {
+  const host: BotComputerHost & {
+    readonly control: BotComputerControlRegistry;
+    readonly activity: BotComputerActivity;
+  } = {
     control,
     activity,
 
@@ -1379,7 +1611,9 @@ export function createBotComputerHost(deps: BotComputerHostDependencies): BotCom
         settings: { ...state.settings },
         diskUsedBytes: await diskUsed(),
         ...(freeDiskBytes !== undefined ? { freeDiskBytes } : {}),
-        computers: Object.entries(state.computers).map(([botId, record]) => computerStatus(botId, record, state)),
+        computers: Object.entries(state.computers).map(([botId, record]) =>
+          computerStatus(botId, record, state),
+        ),
         requirements: {
           downloadBytes: image.bytes,
           baseDiskBytes: BOT_COMPUTER_BASE_SIZE_BYTES,
@@ -1434,7 +1668,9 @@ export function createBotComputerHost(deps: BotComputerHostDependencies): BotCom
             if (listed.exitCode === 0) {
               for (const info of parseLumeVmList(listed.stdout)) {
                 if (isAidenVmName(info.name) || info.name === BOT_COMPUTER_STAGING_BASE_VM) {
-                  await deleteVm(info.name).catch((error: unknown) => log("Deleting a VM did not finish.", error));
+                  await deleteVm(info.name).catch((error: unknown) =>
+                    log("Deleting a VM did not finish.", error),
+                  );
                 }
               }
             }
@@ -1444,7 +1680,8 @@ export function createBotComputerHost(deps: BotComputerHostDependencies): BotCom
         }
         await downloader.remove();
         for (const dir of Object.values(dirs)) await rm(dir, { recursive: true, force: true });
-        for (const file of [sshPaths.privateKey, sshPaths.publicKey, sshPaths.knownHosts]) await rm(file, { force: true });
+        for (const file of [sshPaths.privateKey, sshPaths.publicKey, sshPaths.knownHosts])
+          await rm(file, { force: true });
         await deps.secrets.deleteFamily(BOT_COMPUTER_SECRET_FAMILY);
         await store.clear();
         for (const botId of ids) control.forget(botId);
@@ -1461,7 +1698,8 @@ export function createBotComputerHost(deps: BotComputerHostDependencies): BotCom
         Object.assign(draft.settings, parsed);
       });
       if (parsed.idleStopMinutes !== undefined) {
-        for (const [botId, entry] of runtimes) if (entry.state === "running") armIdle(botId, entry, state.settings.idleStopMinutes);
+        for (const [botId, entry] of runtimes)
+          if (entry.state === "running") armIdle(botId, entry, state.settings.idleStopMinutes);
       }
       wakeSlotWaiters();
       emit();
@@ -1474,8 +1712,10 @@ export function createBotComputerHost(deps: BotComputerHostDependencies): BotCom
         const state = await store.read();
         const existing = state.computers[botId];
         if (existing) return computerStatus(botId, existing, state);
-        if (!ready(state)) throw new BotComputerError("not_set_up", "Set up Bot computers in Settings first.");
-        if (setupTask) throw new BotComputerError("busy", "Wait for the base computer to finish updating.");
+        if (!ready(state))
+          throw new BotComputerError("not_set_up", "Set up Bot computers in Settings first.");
+        if (setupTask)
+          throw new BotComputerError("busy", "Wait for the base computer to finish updating.");
         const record = await copyingBase(cloneFromBase(botId, state));
         const next = await store.update((draft) => {
           draft.computers[botId] = record;
@@ -1492,9 +1732,15 @@ export function createBotComputerHost(deps: BotComputerHostDependencies): BotCom
         // Read in its turn: a Delete or Remove everything asked for first has already finished.
         const state = await store.read();
         const record = state.computers[botId];
-        if (!record) throw new BotComputerError("no_computer", `${await name(botId)} doesn't have a computer yet.`);
-        if (!ready(state)) throw new BotComputerError("not_set_up", "Set up Bot computers in Settings first.");
-        if (setupTask) throw new BotComputerError("busy", "Wait for the base computer to finish updating.");
+        if (!record)
+          throw new BotComputerError(
+            "no_computer",
+            `${await name(botId)} doesn't have a computer yet.`,
+          );
+        if (!ready(state))
+          throw new BotComputerError("not_set_up", "Set up Bot computers in Settings first.");
+        if (setupTask)
+          throw new BotComputerError("busy", "Wait for the base computer to finish updating.");
         const fresh = await copyingBase(
           (async () => {
             await stopComputer(botId, "person");
@@ -1513,7 +1759,9 @@ export function createBotComputerHost(deps: BotComputerHostDependencies): BotCom
 
     deleteForBot: (botId) =>
       inTurn(botId, async () => {
-        await stopComputer(botId, "quit").catch((error: unknown) => log("Stopping a deleted Bot's computer did not finish.", error));
+        await stopComputer(botId, "quit").catch((error: unknown) =>
+          log("Stopping a deleted Bot's computer did not finish.", error),
+        );
         const record = (await store.read()).computers[botId];
         if (record) await deleteVm(record.vmName);
         else {
@@ -1540,12 +1788,16 @@ export function createBotComputerHost(deps: BotComputerHostDependencies): BotCom
 
     async ensureRunning(botId, options) {
       // Remove everything, or a Give, Reset or Delete of this computer, finishes first.
-      for (let held = startsHeld(botId); held; held = startsHeld(botId)) await untilDone(held, options.signal);
+      for (let held = startsHeld(botId); held; held = startsHeld(botId))
+        await untilDone(held, options.signal);
       if (shuttingDown) throw new BotComputerError("busy", "Aiden is quitting.");
       ensureSupported();
       const record = await requireRecord(botId);
       if (stale.has(botId)) {
-        throw new BotComputerError("stale", `${await possessive(botId)} computer didn't finish being made. Reset it in the Bot's profile.`);
+        throw new BotComputerError(
+          "stale",
+          `${await possessive(botId)} computer didn't finish being made. Reset it in the Bot's profile.`,
+        );
       }
       const entry = runtime(botId);
       for (;;) {
@@ -1617,14 +1869,21 @@ export function createBotComputerHost(deps: BotComputerHostDependencies): BotCom
     },
 
     async runGuestCommand(botId, command, options) {
-      const connection = await host.ensureRunning(botId, { reason: "tool", signal: options.signal });
+      const connection = await host.ensureRunning(botId, {
+        reason: "tool",
+        signal: options.signal,
+      });
       const entry = runtime(botId);
       entry.leases += 1;
       try {
         return await runSshCommand(
           connection.ssh,
           command,
-          { timeoutMs: options.timeoutMs, maxOutputBytes: options.maxOutputBytes, signal: options.signal },
+          {
+            timeoutMs: options.timeoutMs,
+            maxOutputBytes: options.maxOutputBytes,
+            signal: options.signal,
+          },
           {
             paths: sshPaths,
             env: guestSshEnvironment(deps.env ?? process.env, dirs.home),
@@ -1663,7 +1922,14 @@ export function createBotComputerHost(deps: BotComputerHostDependencies): BotCom
       permissionWait?.skip();
     },
 
-    baseView: () => (baseViewConnection ? { ...baseViewConnection, vnc: { ...baseViewConnection.vnc }, ssh: { ...baseViewConnection.ssh } } : undefined),
+    baseView: () =>
+      baseViewConnection
+        ? {
+            ...baseViewConnection,
+            vnc: { ...baseViewConnection.vnc },
+            ssh: { ...baseViewConnection.ssh },
+          }
+        : undefined,
 
     async reconcile() {
       if (!deps.support().ok || !existsSync(dirs.vms)) return;
@@ -1681,12 +1947,24 @@ export function createBotComputerHost(deps: BotComputerHostDependencies): BotCom
         if ((await vmsInUse()).has(info.name)) continue;
         if (info.state === "running") {
           // Left running by an earlier Aiden that quit or crashed.
-          await stopVm(info.name, true).catch((error: unknown) => log("Stopping an orphaned VM did not finish.", error));
+          await stopVm(info.name, true).catch((error: unknown) =>
+            log("Stopping an orphaned VM did not finish.", error),
+          );
         }
-        if (info.state === "provisioning" && info.stale && (info.name === BOT_COMPUTER_BASE_VM || info.name === BOT_COMPUTER_STAGING_BASE_VM)) {
-          await deleteVm(info.name).catch((error: unknown) => log("Deleting an interrupted base did not finish.", error));
+        if (
+          info.state === "provisioning" &&
+          info.stale &&
+          (info.name === BOT_COMPUTER_BASE_VM || info.name === BOT_COMPUTER_STAGING_BASE_VM)
+        ) {
+          await deleteVm(info.name).catch((error: unknown) =>
+            log("Deleting an interrupted base did not finish.", error),
+          );
           if (info.name === BOT_COMPUTER_BASE_VM && !ready(state)) {
-            setupState = { kind: "failed", message: "Set up was interrupted. Choose Set up to try again.", resumable: true };
+            setupState = {
+              kind: "failed",
+              message: "Set up was interrupted. Choose Set up to try again.",
+              resumable: true,
+            };
           }
         }
       }
@@ -1714,7 +1992,9 @@ export function createBotComputerHost(deps: BotComputerHostDependencies): BotCom
       host.beginQuit();
       host.cancelSetUp();
       for (const wake of [...slotWaiters]) wake();
-      const stops = [...runtimes.keys()].map((botId) => stopComputer(botId, "quit").catch(() => undefined));
+      const stops = [...runtimes.keys()].map((botId) =>
+        stopComputer(botId, "quit").catch(() => undefined),
+      );
       let timer: NodeJS.Timeout | undefined;
       await Promise.race([
         Promise.all([...stops, setupTask?.catch(() => undefined)]),

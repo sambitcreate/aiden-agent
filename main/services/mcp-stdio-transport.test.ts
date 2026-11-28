@@ -6,7 +6,12 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { McpClient } from "@earendil-works/pi-mcp";
-import { createMcpStdioTransport, watchMcpProcessGroupRecords, watchMcpProcessGroups, type McpProcessGroupRecord } from "./mcp-stdio-transport.js";
+import {
+  createMcpStdioTransport,
+  watchMcpProcessGroupRecords,
+  watchMcpProcessGroups,
+  type McpProcessGroupRecord,
+} from "./mcp-stdio-transport.js";
 
 /**
  * A wrapper-shaped server (like `npx`/`uvx`): it starts a long-lived
@@ -66,199 +71,281 @@ function alive(pid: number): boolean {
   }
 }
 
-test("stdio servers get only the safe default plus declared environment, and close ends their whole process tree", {
-  skip: process.platform === "win32" ? "POSIX process groups" : false,
-  timeout: 15_000,
-}, async (t) => {
-  const directory = await mkdtemp(join(tmpdir(), "aiden-mcp-stdio-"));
-  t.after(() => rm(directory, { recursive: true, force: true }));
-  const reportFile = join(directory, "report.json");
-  process.env.AIDEN_STDIO_INHERITED_MARKER = "must-not-leak";
-  t.after(() => { delete process.env.AIDEN_STDIO_INHERITED_MARKER; });
-  const transport = createMcpStdioTransport({
-    command: "node",
-    args: ["-e", SERVER],
-    env: { DECLARED_SETTING: "declared", REPORT_FILE: reportFile },
-    closeGraceMs: 500,
-  });
-  const client = new McpClient({ name: "stdio-regression", version: "1" });
-  await client.connect(transport);
-  assert.equal(client.serverInfo?.name, "wrapper", "framing round-trips over the transport");
-  const report = JSON.parse(await readFile(reportFile, "utf8")) as { grandchild: number; inherited: unknown; declared: unknown; hasPath: boolean };
-  assert.equal(report.inherited, null, "Aiden's own environment is not forwarded");
-  assert.equal(report.declared, "declared");
-  assert.equal(report.hasPath, true, "PATH still resolves commands like node, npx and uvx");
-  assert.equal(alive(report.grandchild), true);
-  await client.close();
-  for (let attempt = 0; attempt < 100 && alive(report.grandchild); attempt += 1) await delay(20);
-  assert.equal(alive(report.grandchild), false, "the grandchild left by the exited wrapper was terminated");
-});
+test(
+  "stdio servers get only the safe default plus declared environment, and close ends their whole process tree",
+  {
+    skip: process.platform === "win32" ? "POSIX process groups" : false,
+    timeout: 15_000,
+  },
+  async (t) => {
+    const directory = await mkdtemp(join(tmpdir(), "aiden-mcp-stdio-"));
+    t.after(() => rm(directory, { recursive: true, force: true }));
+    const reportFile = join(directory, "report.json");
+    process.env.AIDEN_STDIO_INHERITED_MARKER = "must-not-leak";
+    t.after(() => {
+      delete process.env.AIDEN_STDIO_INHERITED_MARKER;
+    });
+    const transport = createMcpStdioTransport({
+      command: "node",
+      args: ["-e", SERVER],
+      env: { DECLARED_SETTING: "declared", REPORT_FILE: reportFile },
+      closeGraceMs: 500,
+    });
+    const client = new McpClient({ name: "stdio-regression", version: "1" });
+    await client.connect(transport);
+    assert.equal(client.serverInfo?.name, "wrapper", "framing round-trips over the transport");
+    const report = JSON.parse(await readFile(reportFile, "utf8")) as {
+      grandchild: number;
+      inherited: unknown;
+      declared: unknown;
+      hasPath: boolean;
+    };
+    assert.equal(report.inherited, null, "Aiden's own environment is not forwarded");
+    assert.equal(report.declared, "declared");
+    assert.equal(report.hasPath, true, "PATH still resolves commands like node, npx and uvx");
+    assert.equal(alive(report.grandchild), true);
+    await client.close();
+    for (let attempt = 0; attempt < 100 && alive(report.grandchild); attempt += 1) await delay(20);
+    assert.equal(
+      alive(report.grandchild),
+      false,
+      "the grandchild left by the exited wrapper was terminated",
+    );
+  },
+);
 
-test("a wrapper that exits on its own does not leave its server running after the transport closes", {
-  skip: process.platform === "win32" ? "POSIX process groups" : false,
-  timeout: 15_000,
-}, async (t) => {
-  const directory = await mkdtemp(join(tmpdir(), "aiden-mcp-stdio-"));
-  t.after(() => rm(directory, { recursive: true, force: true }));
-  const reportFile = join(directory, "report.json");
-  const transport = createMcpStdioTransport({
-    command: "node",
-    args: ["-e", SERVER],
-    env: { REPORT_FILE: reportFile, EXIT_WHEN_INITIALIZED: "1" },
-    closeGraceMs: 500,
-  });
-  const client = new McpClient({ name: "stdio-natural-exit", version: "1" });
-  let closed = false;
-  client.onClose(() => { closed = true; });
-  await client.connect(transport);
-  const report = JSON.parse(await readFile(reportFile, "utf8")) as { grandchild: number };
-  t.after(() => { try { process.kill(report.grandchild, "SIGKILL"); } catch { /* already gone */ } });
-  for (let attempt = 0; attempt < 250 && !closed; attempt += 1) await delay(20);
-  assert.equal(closed, true, "the wrapper exited and the transport reported closure");
-  for (let attempt = 0; attempt < 150 && alive(report.grandchild); attempt += 1) await delay(20);
-  assert.equal(alive(report.grandchild), false, "the server the wrapper left behind was terminated without client.close()");
-  await client.close();
-});
+test(
+  "a wrapper that exits on its own does not leave its server running after the transport closes",
+  {
+    skip: process.platform === "win32" ? "POSIX process groups" : false,
+    timeout: 15_000,
+  },
+  async (t) => {
+    const directory = await mkdtemp(join(tmpdir(), "aiden-mcp-stdio-"));
+    t.after(() => rm(directory, { recursive: true, force: true }));
+    const reportFile = join(directory, "report.json");
+    const transport = createMcpStdioTransport({
+      command: "node",
+      args: ["-e", SERVER],
+      env: { REPORT_FILE: reportFile, EXIT_WHEN_INITIALIZED: "1" },
+      closeGraceMs: 500,
+    });
+    const client = new McpClient({ name: "stdio-natural-exit", version: "1" });
+    let closed = false;
+    client.onClose(() => {
+      closed = true;
+    });
+    await client.connect(transport);
+    const report = JSON.parse(await readFile(reportFile, "utf8")) as { grandchild: number };
+    t.after(() => {
+      try {
+        process.kill(report.grandchild, "SIGKILL");
+      } catch {
+        /* already gone */
+      }
+    });
+    for (let attempt = 0; attempt < 250 && !closed; attempt += 1) await delay(20);
+    assert.equal(closed, true, "the wrapper exited and the transport reported closure");
+    for (let attempt = 0; attempt < 150 && alive(report.grandchild); attempt += 1) await delay(20);
+    assert.equal(
+      alive(report.grandchild),
+      false,
+      "the server the wrapper left behind was terminated without client.close()",
+    );
+    await client.close();
+  },
+);
 
-test("a closed transport means the whole group is gone, even a descendant that ignores SIGTERM", {
-  skip: process.platform === "win32" ? "POSIX process groups" : false,
-  timeout: 15_000,
-}, async (t) => {
-  const directory = await mkdtemp(join(tmpdir(), "aiden-mcp-stdio-"));
-  t.after(() => rm(directory, { recursive: true, force: true }));
-  const reportFile = join(directory, "report.json");
-  const ready = join(directory, "ready");
-  const transport = createMcpStdioTransport({
-    command: "node",
-    args: ["-e", SERVER],
-    env: { REPORT_FILE: reportFile, STUBBORN_READY: ready },
-    closeGraceMs: 200,
-  });
-  const client = new McpClient({ name: "stdio-stubborn", version: "1" });
-  await client.connect(transport);
-  const report = JSON.parse(await readFile(reportFile, "utf8")) as { grandchild: number };
-  t.after(() => { try { process.kill(report.grandchild, "SIGKILL"); } catch { /* already gone */ } });
-  for (let attempt = 0; attempt < 250 && !existsSync(ready); attempt += 1) await delay(20);
-  assert.equal(existsSync(ready), true);
+test(
+  "a closed transport means the whole group is gone, even a descendant that ignores SIGTERM",
+  {
+    skip: process.platform === "win32" ? "POSIX process groups" : false,
+    timeout: 15_000,
+  },
+  async (t) => {
+    const directory = await mkdtemp(join(tmpdir(), "aiden-mcp-stdio-"));
+    t.after(() => rm(directory, { recursive: true, force: true }));
+    const reportFile = join(directory, "report.json");
+    const ready = join(directory, "ready");
+    const transport = createMcpStdioTransport({
+      command: "node",
+      args: ["-e", SERVER],
+      env: { REPORT_FILE: reportFile, STUBBORN_READY: ready },
+      closeGraceMs: 200,
+    });
+    const client = new McpClient({ name: "stdio-stubborn", version: "1" });
+    await client.connect(transport);
+    const report = JSON.parse(await readFile(reportFile, "utf8")) as { grandchild: number };
+    t.after(() => {
+      try {
+        process.kill(report.grandchild, "SIGKILL");
+      } catch {
+        /* already gone */
+      }
+    });
+    for (let attempt = 0; attempt < 250 && !existsSync(ready); attempt += 1) await delay(20);
+    assert.equal(existsSync(ready), true);
 
-  let listedWhileAlive = true;
-  let tracked = false;
-  const stop = watchMcpProcessGroups((groups) => {
-    if (groups.length > 0) tracked = true;
-    else if (tracked && alive(report.grandchild)) listedWhileAlive = false;
-  });
-  t.after(stop);
-  await client.close();
-  assert.equal(alive(report.grandchild), false, "close resolved with a descendant still running");
-  assert.equal(listedWhileAlive, true, "a running group left the list a force-stop owner reads");
-});
+    let listedWhileAlive = true;
+    let tracked = false;
+    const stop = watchMcpProcessGroups((groups) => {
+      if (groups.length > 0) tracked = true;
+      else if (tracked && alive(report.grandchild)) listedWhileAlive = false;
+    });
+    t.after(stop);
+    await client.close();
+    assert.equal(alive(report.grandchild), false, "close resolved with a descendant still running");
+    assert.equal(listedWhileAlive, true, "a running group left the list a force-stop owner reads");
+  },
+);
 
-test("watchMcpProcessGroupRecords captures surviving grandchild incarnation when a wrapper exits while pipes stay open", {
-  skip: process.platform === "win32" ? "POSIX process groups" : false,
-  timeout: 15_000,
-}, async (t) => {
-  const directory = await mkdtemp(join(tmpdir(), "aiden-mcp-stdio-"));
-  t.after(() => rm(directory, { recursive: true, force: true }));
-  const reportFile = join(directory, "report.json");
-  const wrapper = `
+test(
+  "watchMcpProcessGroupRecords captures surviving grandchild incarnation when a wrapper exits while pipes stay open",
+  {
+    skip: process.platform === "win32" ? "POSIX process groups" : false,
+    timeout: 15_000,
+  },
+  async (t) => {
+    const directory = await mkdtemp(join(tmpdir(), "aiden-mcp-stdio-"));
+    t.after(() => rm(directory, { recursive: true, force: true }));
+    const reportFile = join(directory, "report.json");
+    const wrapper = `
 const { spawn } = require("node:child_process");
 const { writeFileSync } = require("node:fs");
 const grandchild = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], { stdio: ["ignore", "inherit", "inherit"] });
 writeFileSync(${JSON.stringify(reportFile)}, JSON.stringify({ wrapper: process.pid, grandchild: grandchild.pid }));
 process.exit(0);
 `;
-  let latest: readonly McpProcessGroupRecord[] = [];
-  const stopWatching = watchMcpProcessGroupRecords((records) => { latest = records; });
-  t.after(stopWatching);
-  const transport = createMcpStdioTransport({
-    command: process.execPath,
-    args: ["-e", wrapper],
-    closeGraceMs: 300,
-    stderr: "pipe",
-  });
-  t.after(() => transport.close().catch(() => undefined));
-  await transport.start();
-  for (let attempt = 0; attempt < 200 && !existsSync(reportFile); attempt += 1) await delay(20);
-  const report = JSON.parse(await readFile(reportFile, "utf8")) as { wrapper: number; grandchild: number };
-  t.after(() => { try { process.kill(report.grandchild, "SIGKILL"); } catch { /* already gone */ } });
-  for (let attempt = 0; attempt < 200; attempt += 1) {
-    const record = latest.find((entry) => entry.pgid === report.wrapper);
-    if (record?.survivors.some((survivor) => survivor.pid === report.grandchild && survivor.startId.length > 0)) break;
-    await delay(20);
-  }
-  const captured = latest.find((entry) => entry.pgid === report.wrapper);
-  assert.ok(captured, "wrapper group record should still be tracked while grandchild holds pipes");
-  assert.ok(
-    captured.survivors.some((survivor) => survivor.pid === report.grandchild && survivor.startId.length > 0),
-    `expected grandchild ${report.grandchild} with startId in ${JSON.stringify(captured)}`,
-  );
-  await transport.close();
-  for (let attempt = 0; attempt < 150 && alive(report.grandchild); attempt += 1) await delay(20);
-  assert.equal(alive(report.grandchild), false, "transport.close() must reap the surviving grandchild");
-});
+    let latest: readonly McpProcessGroupRecord[] = [];
+    const stopWatching = watchMcpProcessGroupRecords((records) => {
+      latest = records;
+    });
+    t.after(stopWatching);
+    const transport = createMcpStdioTransport({
+      command: process.execPath,
+      args: ["-e", wrapper],
+      closeGraceMs: 300,
+      stderr: "pipe",
+    });
+    t.after(() => transport.close().catch(() => undefined));
+    await transport.start();
+    for (let attempt = 0; attempt < 200 && !existsSync(reportFile); attempt += 1) await delay(20);
+    const report = JSON.parse(await readFile(reportFile, "utf8")) as {
+      wrapper: number;
+      grandchild: number;
+    };
+    t.after(() => {
+      try {
+        process.kill(report.grandchild, "SIGKILL");
+      } catch {
+        /* already gone */
+      }
+    });
+    for (let attempt = 0; attempt < 200; attempt += 1) {
+      const record = latest.find((entry) => entry.pgid === report.wrapper);
+      if (
+        record?.survivors.some(
+          (survivor) => survivor.pid === report.grandchild && survivor.startId.length > 0,
+        )
+      )
+        break;
+      await delay(20);
+    }
+    const captured = latest.find((entry) => entry.pgid === report.wrapper);
+    assert.ok(
+      captured,
+      "wrapper group record should still be tracked while grandchild holds pipes",
+    );
+    assert.ok(
+      captured.survivors.some(
+        (survivor) => survivor.pid === report.grandchild && survivor.startId.length > 0,
+      ),
+      `expected grandchild ${report.grandchild} with startId in ${JSON.stringify(captured)}`,
+    );
+    await transport.close();
+    for (let attempt = 0; attempt < 150 && alive(report.grandchild); attempt += 1) await delay(20);
+    assert.equal(
+      alive(report.grandchild),
+      false,
+      "transport.close() must reap the surviving grandchild",
+    );
+  },
+);
 
-test("watchMcpProcessGroupRecords drops a wrapper PGID immediately when the leader exits with no proven survivors", {
-  skip: process.platform === "win32" ? "POSIX process groups" : false,
-  timeout: 15_000,
-}, async (t) => {
-  let latest: readonly McpProcessGroupRecord[] = [];
-  const stopWatching = watchMcpProcessGroupRecords((records) => { latest = records; });
-  t.after(stopWatching);
-  const transport = createMcpStdioTransport({
-    command: process.execPath,
-    args: ["-e", "setTimeout(() => process.exit(0), 50);"],
-    closeGraceMs: 300,
-    stderr: "pipe",
-  });
-  t.after(() => transport.close().catch(() => undefined));
-  await transport.start();
-  const groupPid = (transport as { pid?: number }).pid;
-  assert.ok(groupPid && groupPid > 0, "expected spawned transport PID");
-  assert.equal(
-    latest.some((entry) => entry.pgid === groupPid),
-    true,
-    `live wrapper group ${groupPid} should be tracked before exit`,
-  );
-  for (let attempt = 0; attempt < 200; attempt += 1) {
-    if (!latest.some((entry) => entry.pgid === groupPid)) break;
-    await delay(20);
-  }
-  assert.equal(
-    latest.some((entry) => entry.pgid === groupPid),
-    false,
-    `dead wrapper group ${groupPid} with no survivors must be removed immediately`,
-  );
-});
+test(
+  "watchMcpProcessGroupRecords drops a wrapper PGID immediately when the leader exits with no proven survivors",
+  {
+    skip: process.platform === "win32" ? "POSIX process groups" : false,
+    timeout: 15_000,
+  },
+  async (t) => {
+    let latest: readonly McpProcessGroupRecord[] = [];
+    const stopWatching = watchMcpProcessGroupRecords((records) => {
+      latest = records;
+    });
+    t.after(stopWatching);
+    const transport = createMcpStdioTransport({
+      command: process.execPath,
+      args: ["-e", "setTimeout(() => process.exit(0), 50);"],
+      closeGraceMs: 300,
+      stderr: "pipe",
+    });
+    t.after(() => transport.close().catch(() => undefined));
+    await transport.start();
+    const groupPid = (transport as { pid?: number }).pid;
+    assert.ok(groupPid && groupPid > 0, "expected spawned transport PID");
+    assert.equal(
+      latest.some((entry) => entry.pgid === groupPid),
+      true,
+      `live wrapper group ${groupPid} should be tracked before exit`,
+    );
+    for (let attempt = 0; attempt < 200; attempt += 1) {
+      if (!latest.some((entry) => entry.pgid === groupPid)) break;
+      await delay(20);
+    }
+    assert.equal(
+      latest.some((entry) => entry.pgid === groupPid),
+      false,
+      `dead wrapper group ${groupPid} with no survivors must be removed immediately`,
+    );
+  },
+);
 
-test("a group that survives close leaves the list once it is gone, so its ID is never signalled again", {
-  skip: process.platform === "win32" ? "POSIX process groups" : false,
-  timeout: 15_000,
-}, async (t) => {
-  const directory = await mkdtemp(join(tmpdir(), "aiden-mcp-stdio-"));
-  t.after(() => rm(directory, { recursive: true, force: true }));
-  const reportFile = join(directory, "report.json");
-  let survives = true;
-  const transport = createMcpStdioTransport({
-    command: "node",
-    args: ["-e", SERVER],
-    env: { REPORT_FILE: reportFile },
-    closeGraceMs: 100,
-    // SIGKILL cannot be ignored, so the survivor is reported by the probe.
-    groupStillRuns: async () => survives,
-  });
-  const client = new McpClient({ name: "stdio-survivor", version: "1" });
-  await client.connect(transport);
-  let latest: readonly number[] = [];
-  const stop = watchMcpProcessGroups((groups) => { latest = groups; });
-  t.after(stop);
-  const listed = latest.length;
-  assert.ok(listed > 0);
-  await client.close();
-  assert.equal(latest.length, listed, "a survivor stays where a force-stop owner can find it");
-  survives = false;
-  for (let attempt = 0; attempt < 150 && latest.length === listed; attempt += 1) await delay(20);
-  assert.equal(latest.length, listed - 1);
-});
+test(
+  "a group that survives close leaves the list once it is gone, so its ID is never signalled again",
+  {
+    skip: process.platform === "win32" ? "POSIX process groups" : false,
+    timeout: 15_000,
+  },
+  async (t) => {
+    const directory = await mkdtemp(join(tmpdir(), "aiden-mcp-stdio-"));
+    t.after(() => rm(directory, { recursive: true, force: true }));
+    const reportFile = join(directory, "report.json");
+    let survives = true;
+    const transport = createMcpStdioTransport({
+      command: "node",
+      args: ["-e", SERVER],
+      env: { REPORT_FILE: reportFile },
+      closeGraceMs: 100,
+      // SIGKILL cannot be ignored, so the survivor is reported by the probe.
+      groupStillRuns: async () => survives,
+    });
+    const client = new McpClient({ name: "stdio-survivor", version: "1" });
+    await client.connect(transport);
+    let latest: readonly number[] = [];
+    const stop = watchMcpProcessGroups((groups) => {
+      latest = groups;
+    });
+    t.after(stop);
+    const listed = latest.length;
+    assert.ok(listed > 0);
+    await client.close();
+    assert.equal(latest.length, listed, "a survivor stays where a force-stop owner can find it");
+    survives = false;
+    for (let attempt = 0; attempt < 150 && latest.length === listed; attempt += 1) await delay(20);
+    assert.equal(latest.length, listed - 1);
+  },
+);
 
 /** A newline-framed MCP server with one tool, `echo`, that returns its input as text and structured content. */
 const TOOL_SERVER = `
@@ -285,19 +372,44 @@ process.stdin.on("data", (chunk) => {
 process.stdin.on("end", () => process.exit(0));
 `;
 
-test("a stdio server's tools are listed and called end to end through the guarded inventory", { timeout: 15_000 }, async (t) => {
-  const { listMcpToolInventory, listMcpToolPage, createMcpToolCallGuard, guardedMcpToolCall } = await import("./mcp-tool-inventory.js");
-  const client = new McpClient({ name: "stdio-tools", version: "1" });
-  t.after(() => client.close());
-  await client.connect(createMcpStdioTransport({ command: process.execPath, args: ["-e", TOOL_SERVER], closeGraceMs: 500 }));
-  const tools = await listMcpToolInventory({ assertCurrent() {}, listPage: (cursor, signal) => listMcpToolPage(client, cursor, { signal }) });
-  assert.deepEqual(tools.map(({ name }) => name), ["echo"]);
-  const guard = createMcpToolCallGuard(tools);
-  const result = await guardedMcpToolCall(guard, client, { name: "echo", arguments: { text: "hello" } }, { timeoutMs: 5_000 });
-  assert.deepEqual(result.content, [{ type: "text", text: "hello" }]);
-  assert.deepEqual(result.structuredContent, { echoed: "hello" });
-  await assert.rejects(guardedMcpToolCall(guard, client, { name: "missing", arguments: {} }), /no longer offered/u);
-});
+test(
+  "a stdio server's tools are listed and called end to end through the guarded inventory",
+  { timeout: 15_000 },
+  async (t) => {
+    const { listMcpToolInventory, listMcpToolPage, createMcpToolCallGuard, guardedMcpToolCall } =
+      await import("./mcp-tool-inventory.js");
+    const client = new McpClient({ name: "stdio-tools", version: "1" });
+    t.after(() => client.close());
+    await client.connect(
+      createMcpStdioTransport({
+        command: process.execPath,
+        args: ["-e", TOOL_SERVER],
+        closeGraceMs: 500,
+      }),
+    );
+    const tools = await listMcpToolInventory({
+      assertCurrent() {},
+      listPage: (cursor, signal) => listMcpToolPage(client, cursor, { signal }),
+    });
+    assert.deepEqual(
+      tools.map(({ name }) => name),
+      ["echo"],
+    );
+    const guard = createMcpToolCallGuard(tools);
+    const result = await guardedMcpToolCall(
+      guard,
+      client,
+      { name: "echo", arguments: { text: "hello" } },
+      { timeoutMs: 5_000 },
+    );
+    assert.deepEqual(result.content, [{ type: "text", text: "hello" }]);
+    assert.deepEqual(result.structuredContent, { echoed: "hello" });
+    await assert.rejects(
+      guardedMcpToolCall(guard, client, { name: "missing", arguments: {} }),
+      /no longer offered/u,
+    );
+  },
+);
 
 /**
  * A wrapper that starts a server in its own session (`setsid`, outside the
@@ -326,35 +438,64 @@ process.stdin.on("data", (chunk) => {
 process.stdin.on("end", () => process.exit(0));
 `;
 
-test("close is bounded when a process outside the server's group holds its stdout", {
-  skip: process.platform === "win32" ? "POSIX sessions" : false,
-  timeout: 15_000,
-}, async (t) => {
-  const directory = await mkdtemp(join(tmpdir(), "aiden-mcp-stdio-"));
-  t.after(() => rm(directory, { recursive: true, force: true }));
-  const reportFile = join(directory, "report.json");
-  const client = new McpClient({ name: "stdio-escaped", version: "1" });
-  await client.connect(createMcpStdioTransport({
-    command: process.execPath, args: ["-e", ESCAPED_SERVER], env: { REPORT_FILE: reportFile }, closeGraceMs: 300,
-  }));
-  const { escaped } = JSON.parse(await readFile(reportFile, "utf8")) as { escaped: number };
-  t.after(() => { try { process.kill(escaped, "SIGKILL"); } catch { /* already gone */ } });
-  const started = Date.now();
-  await client.close();
-  assert.ok(Date.now() - started < 5_000, `close settled after ${Date.now() - started} ms`);
-});
+test(
+  "close is bounded when a process outside the server's group holds its stdout",
+  {
+    skip: process.platform === "win32" ? "POSIX sessions" : false,
+    timeout: 15_000,
+  },
+  async (t) => {
+    const directory = await mkdtemp(join(tmpdir(), "aiden-mcp-stdio-"));
+    t.after(() => rm(directory, { recursive: true, force: true }));
+    const reportFile = join(directory, "report.json");
+    const client = new McpClient({ name: "stdio-escaped", version: "1" });
+    await client.connect(
+      createMcpStdioTransport({
+        command: process.execPath,
+        args: ["-e", ESCAPED_SERVER],
+        env: { REPORT_FILE: reportFile },
+        closeGraceMs: 300,
+      }),
+    );
+    const { escaped } = JSON.parse(await readFile(reportFile, "utf8")) as { escaped: number };
+    t.after(() => {
+      try {
+        process.kill(escaped, "SIGKILL");
+      } catch {
+        /* already gone */
+      }
+    });
+    const started = Date.now();
+    await client.close();
+    assert.ok(Date.now() - started < 5_000, `close settled after ${Date.now() - started} ms`);
+  },
+);
 
-test("an oversized stdio message fails the pending call at once instead of at its timeout", { timeout: 15_000 }, async (t) => {
-  const server = TOOL_SERVER.replace(
-    "content: [{ type: \"text\", text: message.params.arguments.text }]",
-    "content: [{ type: \"text\", text: \"x\".repeat(4096) }]",
-  );
-  assert.notEqual(server, TOOL_SERVER);
-  const { callMcpTool } = await import("./mcp-tool-inventory.js");
-  const client = new McpClient({ name: "stdio-oversized", version: "1" });
-  t.after(() => client.close());
-  await client.connect(createMcpStdioTransport({ command: process.execPath, args: ["-e", server], maxBufferSize: 1024, closeGraceMs: 300 }));
-  const started = Date.now();
-  await assert.rejects(callMcpTool(client, { name: "echo", arguments: { text: "hi" } }, { timeoutMs: 10_000 }), /closed/iu);
-  assert.ok(Date.now() - started < 5_000, "the call failed when the oversized reply arrived");
-});
+test(
+  "an oversized stdio message fails the pending call at once instead of at its timeout",
+  { timeout: 15_000 },
+  async (t) => {
+    const server = TOOL_SERVER.replace(
+      'content: [{ type: "text", text: message.params.arguments.text }]',
+      'content: [{ type: "text", text: "x".repeat(4096) }]',
+    );
+    assert.notEqual(server, TOOL_SERVER);
+    const { callMcpTool } = await import("./mcp-tool-inventory.js");
+    const client = new McpClient({ name: "stdio-oversized", version: "1" });
+    t.after(() => client.close());
+    await client.connect(
+      createMcpStdioTransport({
+        command: process.execPath,
+        args: ["-e", server],
+        maxBufferSize: 1024,
+        closeGraceMs: 300,
+      }),
+    );
+    const started = Date.now();
+    await assert.rejects(
+      callMcpTool(client, { name: "echo", arguments: { text: "hi" } }, { timeoutMs: 10_000 }),
+      /closed/iu,
+    );
+    assert.ok(Date.now() - started < 5_000, "the call failed when the oversized reply arrived");
+  },
+);

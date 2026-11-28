@@ -36,7 +36,10 @@ test("a check that cannot answer is not reported as missing", async () => {
   const denied = Object.assign(new Error("permission denied"), { code: "EACCES" });
   assert.equal(await workspaceFolderPresence("/anywhere", () => Promise.reject(denied)), "unknown");
   assert.equal(
-    await workspaceFolderMissing({ name: "Locked", folderPath: "/anywhere", permission: "ask" }, () => Promise.reject(denied)),
+    await workspaceFolderMissing(
+      { name: "Locked", folderPath: "/anywhere", permission: "ask" },
+      () => Promise.reject(denied),
+    ),
     false,
   );
 });
@@ -58,13 +61,27 @@ test("starting in a missing folder is refused with the workspace and folder name
 
 test("only workspaces whose chats use their folder are checked", async () => {
   const gone = path.join(root, "never-there");
-  assert.equal(await workspaceFolderMissing({ name: "Website", folderPath: gone, permission: "ask" }), true);
+  assert.equal(
+    await workspaceFolderMissing({ name: "Website", folderPath: gone, permission: "ask" }),
+    true,
+  );
   // No folder, No Access (the folder is never touched) and a No workspace
   // chat's hidden folder (made again when the chat runs) are left alone.
-  assert.equal(await workspaceFolderMissing({ name: "No folder", folderPath: undefined, permission: "ask" }), false);
-  assert.equal(await workspaceFolderMissing({ name: "Website", folderPath: gone, permission: "none" }), false);
   assert.equal(
-    await workspaceFolderMissing({ name: "No workspace", folderPath: gone, permission: "ask", noWorkspace: true }),
+    await workspaceFolderMissing({ name: "No folder", folderPath: undefined, permission: "ask" }),
+    false,
+  );
+  assert.equal(
+    await workspaceFolderMissing({ name: "Website", folderPath: gone, permission: "none" }),
+    false,
+  );
+  assert.equal(
+    await workspaceFolderMissing({
+      name: "No workspace",
+      folderPath: gone,
+      permission: "ask",
+      noWorkspace: true,
+    }),
     false,
   );
 });
@@ -76,7 +93,12 @@ test("a deleted Aiden-managed worktree is checked at its checkout root and named
     // The workspace can point inside the checkout.
     folderPath: path.join(checkout, "packages", "site"),
     permission: "ask" as const,
-    managedWorktree: { repositoryPath: root, worktreePath: checkout, branch: "aiden/fix", createdFromHead: "abc123" },
+    managedWorktree: {
+      repositoryPath: root,
+      worktreePath: checkout,
+      branch: "aiden/fix",
+      createdFromHead: "abc123",
+    },
   };
   await mkdir(path.join(checkout, "packages"), { recursive: true });
   // The nested folder alone is gone: the checkout is still there, so this is not a deleted worktree.
@@ -84,8 +106,14 @@ test("a deleted Aiden-managed worktree is checked at its checkout root and named
   await rm(checkout, { recursive: true, force: true });
   assert.equal(await workspaceFolderMissing(managed), true);
   await assert.rejects(assertWorkspaceFolderPresent(managed), (error: Error) => {
-    assert.equal(error.message, "The worktree folder for “Website · aiden/fix” is missing. Restore it, or start the chat in another workspace.");
-    assert.ok(!error.message.includes(root), "Aiden picked the worktree's folder, so its path is left out");
+    assert.equal(
+      error.message,
+      "The worktree folder for “Website · aiden/fix” is missing. Restore it, or start the chat in another workspace.",
+    );
+    assert.ok(
+      !error.message.includes(root),
+      "Aiden picked the worktree's folder, so its path is left out",
+    );
     return true;
   });
   const refusal = await workspaceFolderRemoteRefusal(managed);
@@ -97,14 +125,31 @@ test("a deleted Aiden-managed worktree is checked at its checkout root and named
   assert.match(serverRefusal?.message ?? "", /worktree folder is missing on the server/u);
   assert.ok(!/Mac/u.test(serverRefusal?.message ?? ""), serverRefusal?.message);
   const gone = path.join(root, "gone");
-  assert.equal((await workspaceFolderRemoteRefusal({ name: "Gone", folderPath: gone, permission: "ask" }))?.reason, "folder_missing");
-  assert.equal(await workspaceFolderRemoteRefusal({ name: "Here", folderPath: root, permission: "ask" }), undefined);
-  assert.equal(await workspaceFolderRemoteRefusal({ name: "Here", folderPath: root, permission: "ask" }, undefined, "server"), undefined);
+  assert.equal(
+    (await workspaceFolderRemoteRefusal({ name: "Gone", folderPath: gone, permission: "ask" }))
+      ?.reason,
+    "folder_missing",
+  );
+  assert.equal(
+    await workspaceFolderRemoteRefusal({ name: "Here", folderPath: root, permission: "ask" }),
+    undefined,
+  );
+  assert.equal(
+    await workspaceFolderRemoteRefusal(
+      { name: "Here", folderPath: root, permission: "ask" },
+      undefined,
+      "server",
+    ),
+    undefined,
+  );
 });
 
 test("the home folder is shown as ~ and other paths are left alone", () => {
   assert.equal(displayWorkspaceFolder("/Users/sam/projects/site", "/Users/sam"), "~/projects/site");
-  assert.equal(displayWorkspaceFolder("/Users/samantha/site", "/Users/sam"), "/Users/samantha/site");
+  assert.equal(
+    displayWorkspaceFolder("/Users/samantha/site", "/Users/sam"),
+    "/Users/samantha/site",
+  );
   assert.equal(displayWorkspaceFolder("/opt/site", "/Users/sam"), "/opt/site");
 });
 
@@ -115,16 +160,30 @@ test("a deleted worktree offers Restore only while its branch is free, and a new
     folderPath: `${checkout}/packages/web`,
     permission: "ask" as const,
     managedWorktree: {
-      repositoryPath: repo, worktreePath: checkout, branch: "aiden/fix", createdFromHead: "abc123",
-      worktreeGitDir: `${repo}/.git/worktrees/fix`, ownershipToken: "token",
+      repositoryPath: repo,
+      worktreePath: checkout,
+      branch: "aiden/fix",
+      createdFromHead: "abc123",
+      worktreeGitDir: `${repo}/.git/worktrees/fix`,
+      ownershipToken: "token",
     },
   };
   const workspace = (id: string, folderPath: string, extra: Partial<Workspace> = {}): Workspace =>
-    ({ id, name: id, folderPath, permission: "ask", createdAt: 0, updatedAt: 0, ...extra }) as Workspace;
+    ({
+      id,
+      name: id,
+      folderPath,
+      permission: "ask",
+      createdAt: 0,
+      updatedAt: 0,
+      ...extra,
+    }) as Workspace;
   const all = [
     workspace("root", repo),
     workspace("web", `${repo}/packages/web`),
-    workspace("other-worktree", `${repo}/packages/web`, { managedWorktree: { ...worktreeWorkspace.managedWorktree, branch: "aiden/other" } }),
+    workspace("other-worktree", `${repo}/packages/web`, {
+      managedWorktree: { ...worktreeWorkspace.managedWorktree, branch: "aiden/other" },
+    }),
   ];
   const git = (
     head: string | undefined,
@@ -142,42 +201,94 @@ test("a deleted worktree offers Restore only while its branch is free, and a new
 
   // Its own stale record does not count as taking the branch; the nested main workspace is preferred.
   assert.deepEqual(
-    await missingWorktreeOptions(worktreeWorkspace, all, git("def456", [{ path: repo, branch: "main" }, { path: checkout, branch: "aiden/fix" }])),
+    await missingWorktreeOptions(
+      worktreeWorkspace,
+      all,
+      git("def456", [
+        { path: repo, branch: "main" },
+        { path: checkout, branch: "aiden/fix" },
+      ]),
+    ),
     { branch: "aiden/fix", restorable: true, mainWorkspaceId: "web", mainWorkspaceName: "web" },
   );
-  assert.equal((await missingWorktreeOptions(worktreeWorkspace, all, git(undefined)))?.restorable, false, "the branch is gone");
   assert.equal(
-    (await missingWorktreeOptions(worktreeWorkspace, all, git("def456", [{ path: "/elsewhere", branch: "aiden/fix" }])))?.restorable,
+    (await missingWorktreeOptions(worktreeWorkspace, all, git(undefined)))?.restorable,
+    false,
+    "the branch is gone",
+  );
+  assert.equal(
+    (
+      await missingWorktreeOptions(
+        worktreeWorkspace,
+        all,
+        git("def456", [{ path: "/elsewhere", branch: "aiden/fix" }]),
+      )
+    )?.restorable,
     false,
     "another worktree has the branch",
   );
   assert.equal(
-    (await missingWorktreeOptions(worktreeWorkspace, all, git("def456", [], { deletionPending: true })))?.restorable,
+    (
+      await missingWorktreeOptions(
+        worktreeWorkspace,
+        all,
+        git("def456", [], { deletionPending: true }),
+      )
+    )?.restorable,
     false,
     "Aiden was removing it: its files may be waiting in quarantine",
   );
   assert.equal(
-    (await missingWorktreeOptions(worktreeWorkspace, all, git("def456", [], { parentExists: false })))?.restorable,
+    (
+      await missingWorktreeOptions(
+        worktreeWorkspace,
+        all,
+        git("def456", [], { parentExists: false }),
+      )
+    )?.restorable,
     false,
     "the folder it lived in is gone too",
   );
   assert.equal(
-    (await missingWorktreeOptions({ ...worktreeWorkspace, permission: "none" }, all, git("def456")))?.restorable,
+    (await missingWorktreeOptions({ ...worktreeWorkspace, permission: "none" }, all, git("def456")))
+      ?.restorable,
     false,
     "No Access never touches the folder",
   );
-  const legacy = { ...worktreeWorkspace, managedWorktree: { ...worktreeWorkspace.managedWorktree, ownershipToken: undefined } };
-  assert.equal((await missingWorktreeOptions(legacy, all, git("def456")))?.restorable, false, "no ownership marker to check");
+  const legacy = {
+    ...worktreeWorkspace,
+    managedWorktree: { ...worktreeWorkspace.managedWorktree, ownershipToken: undefined },
+  };
+  assert.equal(
+    (await missingWorktreeOptions(legacy, all, git("def456")))?.restorable,
+    false,
+    "no ownership marker to check",
+  );
   const failing = {
     ...git("def456"),
     branchHead: async () => Promise.reject(new Error("not a repository")),
   };
-  assert.equal((await missingWorktreeOptions(worktreeWorkspace, all, failing))?.restorable, false, "a Git error only takes Restore away");
+  assert.equal(
+    (await missingWorktreeOptions(worktreeWorkspace, all, failing))?.restorable,
+    false,
+    "a Git error only takes Restore away",
+  );
   // Without a nested match, the repository root's workspace; No Access and scratch workspaces never count.
-  assert.equal((await missingWorktreeOptions(worktreeWorkspace, [all[0]!], git("def456")))?.mainWorkspaceId, "root");
-  const blocked = await missingWorktreeOptions(worktreeWorkspace, [workspace("locked", repo, { permission: "none" })], git("def456"));
+  assert.equal(
+    (await missingWorktreeOptions(worktreeWorkspace, [all[0]!], git("def456")))?.mainWorkspaceId,
+    "root",
+  );
+  const blocked = await missingWorktreeOptions(
+    worktreeWorkspace,
+    [workspace("locked", repo, { permission: "none" })],
+    git("def456"),
+  );
   assert.equal(blocked?.mainWorkspaceId, undefined);
-  assert.equal(await missingWorktreeOptions({ folderPath: repo, permission: "ask" }, all, git("def456")), undefined, "not a worktree");
+  assert.equal(
+    await missingWorktreeOptions({ folderPath: repo, permission: "ask" }, all, git("def456")),
+    undefined,
+    "not a worktree",
+  );
 });
 
 test("the main checkout is found when its workspace was added through a symlink", async () => {
@@ -190,10 +301,22 @@ test("the main checkout is found when its workspace was added through a symlink"
       folderPath: path.join(root, "gone-worktree"),
       permission: "ask",
       managedWorktree: {
-        repositoryPath: repo, worktreePath: path.join(root, "gone-worktree"), branch: "aiden/x", createdFromHead: "abc",
+        repositoryPath: repo,
+        worktreePath: path.join(root, "gone-worktree"),
+        branch: "aiden/x",
+        createdFromHead: "abc",
       },
     },
-    [{ id: "linked", name: "Site", folderPath: link, permission: "ask", createdAt: 0, updatedAt: 0 } as Workspace],
+    [
+      {
+        id: "linked",
+        name: "Site",
+        folderPath: link,
+        permission: "ask",
+        createdAt: 0,
+        updatedAt: 0,
+      } as Workspace,
+    ],
     {
       branchHead: async () => "abc",
       worktrees: async () => [],

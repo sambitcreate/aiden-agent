@@ -46,10 +46,7 @@ test("crash capture is off at bootstrap and only the explicit diagnostics handle
 });
 
 test("development shortcut registration is gated without removing in-app menu accelerators", () => {
-  const shortcut = readFileSync(
-    new URL("./services/shortcut.ts", import.meta.url),
-    "utf8",
-  );
+  const shortcut = readFileSync(new URL("./services/shortcut.ts", import.meta.url), "utf8");
   assert.match(shortcut, /currentRuntimeProfile\(\)\.globalShortcutsEnabled/u);
   assert.match(
     shortcut,
@@ -86,10 +83,7 @@ test("optional background services cannot close an already visible desktop windo
 
 test("Apple Foundation Models status probes remain behind the host capability policy", () => {
   const main = readFileSync(new URL("./index.ts", import.meta.url), "utf8");
-  const chatTitle = readFileSync(
-    new URL("./services/chat-title.ts", import.meta.url),
-    "utf8",
-  );
+  const chatTitle = readFileSync(new URL("./services/chat-title.ts", import.meta.url), "utf8");
   const titleProviders = readFileSync(
     new URL("./handlers/title-providers.ts", import.meta.url),
     "utf8",

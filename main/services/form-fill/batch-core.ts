@@ -81,9 +81,7 @@ function canonicalize(value: unknown): string {
   return JSON.stringify(value);
 }
 
-export function formFillPlanDigest(
-  plan: FormFillBatchPlan,
-): FormFillBatchDigest {
+export function formFillPlanDigest(plan: FormFillBatchPlan): FormFillBatchDigest {
   return createHash("sha256").update(canonicalize(plan), "utf8").digest("hex");
 }
 
@@ -170,11 +168,7 @@ export class FormFillBatchLedger {
     excludedOrders: readonly number[] = [],
   ): { token: string; plan: FormFillBatchPlan } {
     const entry = this.entries.get(planId);
-    if (!entry)
-      throw new FormFillBatchError(
-        "plan_unknown",
-        "The form-fill plan is unknown.",
-      );
+    if (!entry) throw new FormFillBatchError("plan_unknown", "The form-fill plan is unknown.");
     if (entry.digest !== expectedDigest) {
       throw new FormFillBatchError(
         "plan_mismatch",
@@ -183,22 +177,13 @@ export class FormFillBatchLedger {
     }
     if (entry.status === "expired" || entry.plan.expiresAt <= this.now()) {
       entry.status = "expired";
-      throw new FormFillBatchError(
-        "plan_expired",
-        "The form-fill plan expired.",
-      );
+      throw new FormFillBatchError("plan_expired", "The form-fill plan expired.");
     }
     if (entry.status === "revoked") {
-      throw new FormFillBatchError(
-        "plan_revoked",
-        "The form-fill plan was revoked.",
-      );
+      throw new FormFillBatchError("plan_revoked", "The form-fill plan was revoked.");
     }
     if (entry.status !== "pending") {
-      throw new FormFillBatchError(
-        "plan_consumed",
-        "The form-fill plan was already used.",
-      );
+      throw new FormFillBatchError("plan_consumed", "The form-fill plan was already used.");
     }
     let plan = entry.plan;
     const excluded = [...new Set(excludedOrders)].sort((a, b) => a - b);
@@ -229,23 +214,14 @@ export class FormFillBatchLedger {
   consume(token: string, plan: FormFillBatchPlan): FormFillBatchPlan {
     const planId = this.tokenIndex.get(token);
     if (!planId) {
-      throw new FormFillBatchError(
-        "not_authorized",
-        "The form-fill batch was not authorized.",
-      );
+      throw new FormFillBatchError("not_authorized", "The form-fill batch was not authorized.");
     }
     const entry = this.entries.get(planId);
     if (!entry || entry.plan.planId !== plan.planId) {
-      throw new FormFillBatchError(
-        "plan_unknown",
-        "The form-fill plan is unknown.",
-      );
+      throw new FormFillBatchError("plan_unknown", "The form-fill plan is unknown.");
     }
     if (formFillPlanDigest(plan) !== entry.digest) {
-      throw new FormFillBatchError(
-        "plan_mismatch",
-        "The form-fill plan changed after approval.",
-      );
+      throw new FormFillBatchError("plan_mismatch", "The form-fill plan changed after approval.");
     }
     if (entry.status === "authorized" && entry.plan.expiresAt <= this.now()) {
       entry.status = "expired";
@@ -259,10 +235,7 @@ export class FormFillBatchLedger {
             : entry.status === "expired"
               ? "plan_expired"
               : "not_authorized";
-      throw new FormFillBatchError(
-        code,
-        `The form-fill plan is ${entry.status}.`,
-      );
+      throw new FormFillBatchError(code, `The form-fill plan is ${entry.status}.`);
     }
     entry.status = "consumed";
     entry.consumedAt = this.now();
@@ -278,10 +251,7 @@ export class FormFillBatchLedger {
   /** Revoke every pending/authorized plan for a generation. */
   revokeGeneration(generationId: string): void {
     for (const entry of this.entries.values()) {
-      if (
-        entry.plan.generationId === generationId &&
-        entry.status !== "consumed"
-      ) {
+      if (entry.plan.generationId === generationId && entry.status !== "consumed") {
         entry.status = "revoked";
       }
     }
@@ -297,10 +267,20 @@ export class FormFillBatchLedger {
 
 /** Descriptive plan structure only; never proof of document continuity. */
 export function formFillStructureHash(elements: readonly FormFillElement[]): string {
-  return createHash("sha256").update(canonicalize(elements.map((element) => ({
-    index: element.index, role: element.role, label: element.label,
-    frame: element.frame, depth: element.depth, parentIndex: element.parentIndex,
-  })))).digest("hex");
+  return createHash("sha256")
+    .update(
+      canonicalize(
+        elements.map((element) => ({
+          index: element.index,
+          role: element.role,
+          label: element.label,
+          frame: element.frame,
+          depth: element.depth,
+          parentIndex: element.parentIndex,
+        })),
+      ),
+    )
+    .digest("hex");
 }
 
 export type FormFillRowResultStatus =

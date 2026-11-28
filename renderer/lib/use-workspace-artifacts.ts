@@ -1,5 +1,8 @@
 import * as React from "react";
-import type { WorkspaceArtifactsChangedEvent, WorkspaceArtifactView } from "../shared/workspace-artifacts";
+import type {
+  WorkspaceArtifactsChangedEvent,
+  WorkspaceArtifactView,
+} from "../shared/workspace-artifacts";
 import { workspaceArtifactsApi } from "./ipc";
 
 export interface WorkspaceArtifactsState {
@@ -22,7 +25,9 @@ export function useWorkspaceArtifacts(
   workspaceId: string | null,
   onChange?: (event: WorkspaceArtifactsChangedEvent) => void,
 ): WorkspaceArtifactsState {
-  const [state, setState] = React.useState<Omit<WorkspaceArtifactsState, "reload" | "rememberState">>({
+  const [state, setState] = React.useState<
+    Omit<WorkspaceArtifactsState, "reload" | "rememberState">
+  >({
     workspaceId,
     views: [],
     loaded: workspaceId === null,
@@ -66,7 +71,9 @@ export function useWorkspaceArtifacts(
   React.useEffect(() => {
     workspaceRef.current = workspaceId;
     setState((current) =>
-      current.workspaceId === workspaceId ? current : { workspaceId, views: [], loaded: false, error: null },
+      current.workspaceId === workspaceId
+        ? current
+        : { workspaceId, views: [], loaded: false, error: null },
     );
     load(workspaceId);
   }, [load, workspaceId]);
@@ -81,15 +88,24 @@ export function useWorkspaceArtifacts(
   );
 
   const reload = React.useCallback(() => load(workspaceRef.current), [load]);
-  const rememberState = React.useCallback((artifactId: string, revision: number, pageState: Record<string, unknown>) => {
-    setState((current) => ({
-      ...current,
-      views: current.views.map((view) =>
-        view.artifact.id === artifactId && view.artifact.revision === revision
-          ? { ...view, artifact: { ...view.artifact, visual: { ...view.artifact.visual, state: pageState } } }
-          : view,
-      ),
-    }));
-  }, []);
+  const rememberState = React.useCallback(
+    (artifactId: string, revision: number, pageState: Record<string, unknown>) => {
+      setState((current) => ({
+        ...current,
+        views: current.views.map((view) =>
+          view.artifact.id === artifactId && view.artifact.revision === revision
+            ? {
+                ...view,
+                artifact: {
+                  ...view.artifact,
+                  visual: { ...view.artifact.visual, state: pageState },
+                },
+              }
+            : view,
+        ),
+      }));
+    },
+    [],
+  );
   return React.useMemo(() => ({ ...state, reload, rememberState }), [reload, rememberState, state]);
 }

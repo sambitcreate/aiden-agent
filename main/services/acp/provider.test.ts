@@ -13,7 +13,14 @@ import { AcpHostRegistry } from "./host.js";
 import { ACP_MANAGED_CREDENTIAL, createAcpHarnessProvider } from "./provider.js";
 import { AcpHarnessRuntime } from "./runtime.js";
 import { AcpSessionStore } from "./session-store.js";
-import { FAKE_FLASH, FAKE_PRO, FakeLauncher, fakeAgentEnv, fakeDefinition, tempDir } from "./test-support.js";
+import {
+  FAKE_FLASH,
+  FAKE_PRO,
+  FakeLauncher,
+  fakeAgentEnv,
+  fakeDefinition,
+  tempDir,
+} from "./test-support.js";
 
 function setup(discovered: Model<Api>[] = [FAKE_PRO]) {
   const dir = tempDir();
@@ -44,13 +51,23 @@ function setup(discovered: Model<Api>[] = [FAKE_PRO]) {
   const store = new InMemoryModelsStore();
   const models = createModels({ credentials, modelsStore: store });
   models.setProvider(provider);
-  return { provider, models, credentials, store, runtime, counts: () => ({ discoveries, signIns }) };
+  return {
+    provider,
+    models,
+    credentials,
+    store,
+    runtime,
+    counts: () => ({ discoveries, signIns }),
+  };
 }
 
 test("before sign-in the provider is listed but unconfigured, with its fallback catalog", async () => {
   const { models, provider } = setup();
   assert.equal(await models.checkAuth(provider.id), undefined);
-  assert.deepEqual(provider.getModels().map((model) => model.id), [FAKE_FLASH.id, FAKE_PRO.id]);
+  assert.deepEqual(
+    provider.getModels().map((model) => model.id),
+    [FAKE_FLASH.id, FAKE_PRO.id],
+  );
   assert.deepEqual(Object.keys(provider.auth), ["oauth"]);
 });
 
@@ -81,7 +98,10 @@ test("background catalog refreshes never start the agent; sign-in or a forced re
 
   await models.refresh({ allowNetwork: true, providers: [provider.id], force: true });
   assert.equal(counts().discoveries, 1);
-  assert.deepEqual(provider.getModels().map((model) => model.id), [FAKE_PRO.id]);
+  assert.deepEqual(
+    provider.getModels().map((model) => model.id),
+    [FAKE_PRO.id],
+  );
 
   await provider.auth.oauth!.login!(
     { signal: new AbortController().signal, prompt: async () => "", notify() {} },
@@ -101,11 +121,17 @@ test("a discovered catalog survives a restart without starting the agent", async
   }));
   await first.models.refresh({ allowNetwork: true, providers: [first.provider.id], force: true });
   const persisted = await first.store.read(first.provider.id);
-  assert.deepEqual(persisted?.models.map((model) => model.id), [FAKE_PRO.id]);
+  assert.deepEqual(
+    persisted?.models.map((model) => model.id),
+    [FAKE_PRO.id],
+  );
 
   const second = setup();
   await second.store.write(second.provider.id, persisted!);
   await second.models.refresh({ allowNetwork: false, providers: [second.provider.id] });
-  assert.deepEqual(second.provider.getModels().map((model) => model.id), [FAKE_PRO.id]);
+  assert.deepEqual(
+    second.provider.getModels().map((model) => model.id),
+    [FAKE_PRO.id],
+  );
   assert.equal(second.counts().discoveries, 0);
 });

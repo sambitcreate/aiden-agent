@@ -78,36 +78,26 @@ test("canonicalization preserves a discovered native subset", () => {
     "medium",
     "high",
   ]);
-  assert.equal(
-    provider.modelMetadata?.["gemini-2.5-pro"]?.thinkingCanDisable,
-    true,
-  );
+  assert.equal(provider.modelMetadata?.["gemini-2.5-pro"]?.thinkingCanDisable, true);
 });
 
 test("native thinking metadata preserves only distinct choices", () => {
   const provider = canonicalGoogleProvider();
-  assert.deepEqual(
-    provider.modelMetadata?.["gemini-3.1-pro-preview"]?.thinkingLevels,
-    ["off", "low", "medium", "high"],
-  );
-  assert.equal(
-    provider.modelMetadata?.["gemini-3.1-pro-preview"]?.thinkingCanDisable,
-    false,
-  );
-  assert.deepEqual(
-    provider.modelMetadata?.["gemma-4-26b-a4b-it"]?.thinkingLevels,
-    ["off", "high"],
-  );
+  assert.deepEqual(provider.modelMetadata?.["gemini-3.1-pro-preview"]?.thinkingLevels, [
+    "off",
+    "low",
+    "medium",
+    "high",
+  ]);
+  assert.equal(provider.modelMetadata?.["gemini-3.1-pro-preview"]?.thinkingCanDisable, false);
+  assert.deepEqual(provider.modelMetadata?.["gemma-4-26b-a4b-it"]?.thinkingLevels, ["off", "high"]);
 });
 
 test("native thinking mutations reject unsupported or unknown selections", () => {
-  assert.deepEqual(
-    parseGoogleThinkingSelection("gemini-3.1-pro-preview", "low"),
-    {
-      modelId: "gemini-3.1-pro-preview",
-      level: "low",
-    },
-  );
+  assert.deepEqual(parseGoogleThinkingSelection("gemini-3.1-pro-preview", "low"), {
+    modelId: "gemini-3.1-pro-preview",
+    level: "low",
+  });
   assert.throws(
     () => parseGoogleThinkingSelection("gemini-3.1-pro-preview", "xhigh"),
     /not supported/u,
@@ -116,10 +106,7 @@ test("native thinking mutations reject unsupported or unknown selections", () =>
     () => parseGoogleThinkingSelection("gemini-2.0-flash", "high"),
     /does not support/u,
   );
-  assert.throws(
-    () => parseGoogleThinkingSelection("unknown", "high"),
-    /does not support/u,
-  );
+  assert.throws(() => parseGoogleThinkingSelection("unknown", "high"), /does not support/u);
   const remoteModels = new Map([
     [
       "gemini-4-hydrogen",
@@ -153,14 +140,14 @@ test("native thinking mutations reject unsupported or unknown selections", () =>
     ],
   ]);
   const resolveRemote = (modelId: string) => remoteModels.get(modelId);
-  assert.deepEqual(
-    parseGoogleThinkingSelection("gemini-4-hydrogen", "high", resolveRemote),
-    { modelId: "gemini-4-hydrogen", level: "high" },
-  );
-  assert.deepEqual(
-    parseGoogleThinkingSelection("gemini-4-hydrogen", "xhigh", resolveRemote),
-    { modelId: "gemini-4-hydrogen", level: "xhigh" },
-  );
+  assert.deepEqual(parseGoogleThinkingSelection("gemini-4-hydrogen", "high", resolveRemote), {
+    modelId: "gemini-4-hydrogen",
+    level: "high",
+  });
+  assert.deepEqual(parseGoogleThinkingSelection("gemini-4-hydrogen", "xhigh", resolveRemote), {
+    modelId: "gemini-4-hydrogen",
+    level: "xhigh",
+  });
   assert.throws(
     () => parseGoogleThinkingSelection("gemini-4-hydrogen", "max", resolveRemote),
     /not supported/u,
@@ -271,10 +258,7 @@ test("native Google streaming sends Gemini thinking through the google-generativ
     result.content[1]?.type === "text" ? result.content[1].text : "",
     "Native Google response",
   );
-  assert.match(
-    requestPath,
-    /\/v1beta\/models\/gemini-2\.5-flash:streamGenerateContent/u,
-  );
+  assert.match(requestPath, /\/v1beta\/models\/gemini-2\.5-flash:streamGenerateContent/u);
   assert.equal(apiKeyHeader, "native-test-key");
   const parsedRequest = JSON.parse(requestBody) as {
     systemInstruction?: unknown;
@@ -308,10 +292,7 @@ test("Google compatibility wrapper sends XHIGH thinkingLevel for Gemini 4 models
             {
               content: {
                 role: "model",
-                parts: [
-                  { text: "Deep reasoning", thought: true },
-                  { text: "Done" },
-                ],
+                parts: [{ text: "Deep reasoning", thought: true }, { text: "Done" }],
               },
               finishReason: "STOP",
             },
@@ -429,10 +410,9 @@ test("Google xhigh compatibility covers google-vertex, opencode, fallback levels
     model: "gemini-2.5-pro",
     config: { thinkingConfig: { includeThoughts: true, thinkingBudget: 8192 } },
   };
-  const untouched = await adaptGoogleXHighStreamOptions(vertexModel, { reasoning: "xhigh" })?.onPayload?.(
-    budgetPayload,
-    vertexModel,
-  );
+  const untouched = await adaptGoogleXHighStreamOptions(vertexModel, {
+    reasoning: "xhigh",
+  })?.onPayload?.(budgetPayload, vertexModel);
   assert.deepEqual(untouched, budgetPayload);
 
   // opencode and opencode-go also serve google-generative-ai models and receive xhigh compatibility.
@@ -454,7 +434,10 @@ test("Google xhigh compatibility covers google-vertex, opencode, fallback levels
       thinkingLevelMap: { low: "low", medium: "medium", high: "high", xhigh: "xhigh" },
     };
     assert.throws(
-      () => wrapped.streamSimple(opencodeGoogleModel, normalizeContext({ messages: [] }), { reasoning: "xhigh" }),
+      () =>
+        wrapped.streamSimple(opencodeGoogleModel, normalizeContext({ messages: [] }), {
+          reasoning: "xhigh",
+        }),
       /intercepted/u,
     );
     assert.equal(capturedReasoning, "high");

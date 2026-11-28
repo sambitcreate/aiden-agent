@@ -94,10 +94,15 @@ test("Telegram settings expose native rendering and voice policy controls", () =
   assert.ok(callbacks.includes("settings:voice:next"));
 });
 
-
 test("Telegram choices honor explicit custom reasoning overrides", () => {
   const provider = {
-    id: "custom:server", label: "Server", kind: "openai" as const, baseUrl: "http://localhost/v1", needsKey: false, hasKey: false, models: ["on", "off"],
+    id: "custom:server",
+    label: "Server",
+    kind: "openai" as const,
+    baseUrl: "http://localhost/v1",
+    needsKey: false,
+    hasKey: false,
+    models: ["on", "off"],
     modelMetadata: {
       on: { source: "provider" as const, reasoning: false, overrides: { reasoning: true } },
       off: { source: "provider" as const, reasoning: true, overrides: { reasoning: false } },
@@ -126,7 +131,10 @@ test("durable Bot menus show truthful session status, targeted Stop, and follow-
 
   const mainMenu = buildMainMenu(status);
   const callbacks = mainMenu.inline_keyboard.flat().map((button) => button.callback_data);
-  assert.ok(callbacks.includes("turn:stop:77"), "active durable Bot menu fences Stop to the active submission");
+  assert.ok(
+    callbacks.includes("turn:stop:77"),
+    "active durable Bot menu fences Stop to the active submission",
+  );
   assert.ok(!callbacks.includes("turn:next"), "durable Bot menu omits unsupported Next");
   assert.ok(!callbacks.includes("turn:abort"), "durable Bot menu omits misleading separate Abort");
 

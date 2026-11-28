@@ -4,7 +4,9 @@ import { BrowserPrivateSession } from "./private-session.js";
 
 const deferred = () => {
   let resolve!: () => void;
-  const promise = new Promise<void>((done) => { resolve = done; });
+  const promise = new Promise<void>((done) => {
+    resolve = done;
+  });
   return { promise, resolve };
 };
 
@@ -20,9 +22,15 @@ test("private browsing cycles reuse one session and remove the prior cycle's sta
       cookies,
       cache,
       auth,
-      clearStorageData: async () => { cookies.clear(); },
-      clearCache: async () => { cache.clear(); },
-      clearAuthCache: async () => { auth.clear(); },
+      clearStorageData: async () => {
+        cookies.clear();
+      },
+      clearCache: async () => {
+        cache.clear();
+      },
+      clearAuthCache: async () => {
+        auth.clear();
+      },
     };
   });
   let original: unknown;
@@ -48,7 +56,10 @@ test("opening waits for both private storage and cache cleanup", async () => {
   const cache = deferred();
   const cleanupStarted = deferred();
   const sessions = new BrowserPrivateSession(() => ({
-    clearStorageData: () => { cleanupStarted.resolve(); return storage.promise; },
+    clearStorageData: () => {
+      cleanupStarted.resolve();
+      return storage.promise;
+    },
     clearCache: () => cache.promise,
     clearAuthCache: async () => {},
   }));
@@ -56,7 +67,9 @@ test("opening waits for both private storage and cache cleanup", async () => {
   sessions.clear();
   await cleanupStarted.promise;
   let opened = false;
-  const opening = sessions.open(() => { opened = true; });
+  const opening = sessions.open(() => {
+    opened = true;
+  });
   storage.resolve();
   await new Promise<void>((resolve) => setImmediate(resolve));
   assert.equal(opened, false);
@@ -69,7 +82,9 @@ test("cleanup failure refuses reuse after both cleanup operations settle", async
   const cache = deferred();
   let fail = true;
   const sessions = new BrowserPrivateSession(() => ({
-    clearStorageData: async () => { if (fail) throw new Error("storage cleanup failed"); },
+    clearStorageData: async () => {
+      if (fail) throw new Error("storage cleanup failed");
+    },
     clearCache: () => cache.promise,
     clearAuthCache: async () => {},
   }));
@@ -77,7 +92,9 @@ test("cleanup failure refuses reuse after both cleanup operations settle", async
   sessions.clear();
   let settled = false;
   const opening = sessions.open(() => assert.fail("dirty session opened"));
-  const rejected = assert.rejects(opening, /storage cleanup failed/).then(() => { settled = true; });
+  const rejected = assert.rejects(opening, /storage cleanup failed/).then(() => {
+    settled = true;
+  });
   await new Promise<void>((resolve) => setImmediate(resolve));
   assert.equal(settled, false);
   cache.resolve();
@@ -96,7 +113,9 @@ test("a last-close cleanup that starts while opening waits is also awaited", asy
   }));
   await sessions.open(() => {});
   let opened = false;
-  const opening = sessions.open(() => { opened = true; });
+  const opening = sessions.open(() => {
+    opened = true;
+  });
   sessions.clear();
   await new Promise<void>((resolve) => setImmediate(resolve));
   assert.equal(opened, false);

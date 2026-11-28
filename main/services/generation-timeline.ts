@@ -26,10 +26,16 @@ import {
   parseAskUserQuestionRecap,
 } from "../../renderer/shared/ask-user-question.js";
 import { WEB_FETCH_TOOL_NAME, parseWebExtractRecap } from "../../renderer/shared/web-extract.js";
-import { BROWSER_RECORDING_STOP_TOOL_NAME, parseBrowserRecordingRecap } from "../../renderer/shared/browser-recording.js";
+import {
+  BROWSER_RECORDING_STOP_TOOL_NAME,
+  parseBrowserRecordingRecap,
+} from "../../renderer/shared/browser-recording.js";
 import { CHECK_BACK_TOOL_NAME, checkBackWhen } from "../../renderer/shared/check-backs.js";
 import { PROPOSE_GOAL_TOOL_NAME } from "../../renderer/shared/goal.js";
-import { CHILD_CHATS_TOOL_NAME, SUBMIT_RESULT_TOOL_NAME } from "../../renderer/shared/child-chats.js";
+import {
+  CHILD_CHATS_TOOL_NAME,
+  SUBMIT_RESULT_TOOL_NAME,
+} from "../../renderer/shared/child-chats.js";
 
 const MAX_TOOL_NAME_LENGTH = 80;
 const MAX_TARGET_LENGTH = 240;
@@ -219,7 +225,9 @@ function safeWebHost(value: unknown): string | undefined {
   if (typeof value !== "string") return undefined;
   const input = value.trim();
   try {
-    return safeDetail(new URL(/^[a-z][a-z\d+.-]*:\/\//iu.test(input) ? input : `https://${input}`).hostname);
+    return safeDetail(
+      new URL(/^[a-z][a-z\d+.-]*:\/\//iu.test(input) ? input : `https://${input}`).hostname,
+    );
   } catch {
     return undefined;
   }
@@ -233,7 +241,12 @@ const IMAGE_MODEL_ID = /^[A-Za-z0-9][A-Za-z0-9._:/-]*$/u;
  */
 function safeImageModelTarget(provider: unknown, model: unknown): string | undefined {
   if (!isImageGenerationProviderId(provider) || typeof model !== "string") return undefined;
-  if (!IMAGE_MODEL_ID.test(model) || model.includes("..") || model.includes("//") || model.endsWith("/")) {
+  if (
+    !IMAGE_MODEL_ID.test(model) ||
+    model.includes("..") ||
+    model.includes("//") ||
+    model.endsWith("/")
+  ) {
     return undefined;
   }
   const target = `${provider}/${model}`;
@@ -246,7 +259,9 @@ function safeLabel(value: string | undefined): string | undefined {
   const flat = Array.from(value)
     .map((character) => {
       const code = character.codePointAt(0) ?? 0;
-      return code < 32 || (code >= 127 && code < 160) || code === 0x2028 || code === 0x2029 ? " " : character;
+      return code < 32 || (code >= 127 && code < 160) || code === 0x2028 || code === 0x2029
+        ? " "
+        : character;
     })
     .join("")
     .replace(/\s+/gu, " ")
@@ -332,14 +347,21 @@ export function safeToolDescriptor(toolName: string, args: unknown): SafeToolDes
     case CHECK_BACK_TOOL_NAME:
       return {
         label:
-          values.action === "list" ? "List check-backs" : values.action === "cancel" ? "Cancel check-back" : "Set check-back",
+          values.action === "list"
+            ? "List check-backs"
+            : values.action === "cancel"
+              ? "Cancel check-back"
+              : "Set check-back",
       };
     // Only the action and how many chats: tasks and messages stay out of the feed.
     case CHILD_CHATS_TOOL_NAME: {
       const count = Array.isArray(values.chats) ? values.chats.length : 0;
       switch (values.action) {
         case "start":
-          return { label: count === 1 ? "Start a chat" : "Start chats", ...(count > 1 ? { detail: `${count} chats` } : {}) };
+          return {
+            label: count === 1 ? "Start a chat" : "Start chats",
+            ...(count > 1 ? { detail: `${count} chats` } : {}),
+          };
         case "send":
           return { label: "Send to a started chat" };
         case "wait":
@@ -528,8 +550,12 @@ export class GenerationTimelineProjector {
     if (this.timeline.status !== "running" || this.openThinking) return;
     const timestamp = this.now();
     const last = this.timeline.steps[this.timeline.steps.length - 1];
-    if (last && !isToolStep(last) && last.order >= this.thinkingMergeFloor &&
-      last.contentOffset === this.contentOffset) {
+    if (
+      last &&
+      !isToolStep(last) &&
+      last.order >= this.thinkingMergeFloor &&
+      last.contentOffset === this.contentOffset
+    ) {
       // The stretch reopened on the merged thinking step: mark it open again so
       // the live timeline reflects reasoning in progress.
       delete last.finishedAt;
@@ -577,7 +603,8 @@ export class GenerationTimelineProjector {
 
   /** Only readable reasoning deltas can open a public reasoning span. */
   reasoningDelta(start: number, end: number): void {
-    if (!Number.isSafeInteger(start) || !Number.isSafeInteger(end) || start < 0 || end < start) return;
+    if (!Number.isSafeInteger(start) || !Number.isSafeInteger(end) || start < 0 || end < start)
+      return;
     this.reasoningOffset = end;
     const open = this.openThinking;
     const step = open && this.timeline.steps[open.index];
@@ -594,14 +621,20 @@ export class GenerationTimelineProjector {
     segments: readonly { start: number; end: number }[],
     reasoningLength: number,
   ): void {
-    const steps = this.timeline.steps.slice(firstStepIndex).filter(
-      (step): step is AgentThinkingStep => !isToolStep(step),
-    );
-    const safe = steps.length === segments.length && segments.every(
-      (span, index) => Number.isSafeInteger(span.start) && Number.isSafeInteger(span.end) &&
-        span.start >= 0 && span.end >= span.start && span.end <= reasoningLength &&
-        (index === 0 || span.start >= segments[index - 1]!.end),
-    );
+    const steps = this.timeline.steps
+      .slice(firstStepIndex)
+      .filter((step): step is AgentThinkingStep => !isToolStep(step));
+    const safe =
+      steps.length === segments.length &&
+      segments.every(
+        (span, index) =>
+          Number.isSafeInteger(span.start) &&
+          Number.isSafeInteger(span.end) &&
+          span.start >= 0 &&
+          span.end >= span.start &&
+          span.end <= reasoningLength &&
+          (index === 0 || span.start >= segments[index - 1]!.end),
+      );
     let changed = false;
     for (const [index, step] of steps.entries()) {
       const span = safe ? segments[index] : undefined;
@@ -687,21 +720,31 @@ export class GenerationTimelineProjector {
     turnStart: number,
     streamedTurn: string,
     canonicalTurn: string,
-    anchors?: { stepStart: number; textStart: number; thinkingOffsets: number[]; toolOffsets: Map<string, number> },
+    anchors?: {
+      stepStart: number;
+      textStart: number;
+      thinkingOffsets: number[];
+      toolOffsets: Map<string, number>;
+    },
   ): void {
-    if (
-      !Number.isSafeInteger(turnStart) ||
-      turnStart < 0
-    ) {
+    if (!Number.isSafeInteger(turnStart) || turnStart < 0) {
       return;
     }
     const turnEnd = turnStart + canonicalTurn.length;
     let prefix = 0;
-    while (prefix < streamedTurn.length && prefix < canonicalTurn.length &&
-      streamedTurn[prefix] === canonicalTurn[prefix]) prefix += 1;
+    while (
+      prefix < streamedTurn.length &&
+      prefix < canonicalTurn.length &&
+      streamedTurn[prefix] === canonicalTurn[prefix]
+    )
+      prefix += 1;
     let suffix = 0;
-    while (suffix < streamedTurn.length - prefix && suffix < canonicalTurn.length - prefix &&
-      streamedTurn[streamedTurn.length - suffix - 1] === canonicalTurn[canonicalTurn.length - suffix - 1]) {
+    while (
+      suffix < streamedTurn.length - prefix &&
+      suffix < canonicalTurn.length - prefix &&
+      streamedTurn[streamedTurn.length - suffix - 1] ===
+        canonicalTurn[canonicalTurn.length - suffix - 1]
+    ) {
       suffix += 1;
     }
     let changed = false;
@@ -716,11 +759,12 @@ export class GenerationTimelineProjector {
     for (const [index, step] of this.timeline.steps.entries()) {
       if (step.contentOffset === undefined || step.contentOffset < turnStart) continue;
       const streamedOffset = Math.min(step.contentOffset - turnStart, streamedTurn.length);
-      const fallbackOffset = streamedOffset <= prefix
-        ? turnStart + streamedOffset
-        : streamedOffset >= streamedTurn.length - suffix
-          ? turnEnd - (streamedTurn.length - streamedOffset)
-          : turnStart + prefix;
+      const fallbackOffset =
+        streamedOffset <= prefix
+          ? turnStart + streamedOffset
+          : streamedOffset >= streamedTurn.length - suffix
+            ? turnEnd - (streamedTurn.length - streamedOffset)
+            : turnStart + prefix;
       let canonicalAnchor: number | undefined;
       if (anchors && index >= anchors.stepStart) {
         if (step.kind === "thinking") {
@@ -730,9 +774,10 @@ export class GenerationTimelineProjector {
           canonicalAnchor = toolAnchors.get(index);
         }
       }
-      const nextOffset = canonicalAnchor === undefined
-        ? fallbackOffset
-        : Math.min(turnEnd, turnStart + anchors!.textStart + canonicalAnchor);
+      const nextOffset =
+        canonicalAnchor === undefined
+          ? fallbackOffset
+          : Math.min(turnEnd, turnStart + anchors!.textStart + canonicalAnchor);
       if (step.contentOffset !== nextOffset) {
         step.contentOffset = nextOffset;
         changed = true;
@@ -879,7 +924,8 @@ export class GenerationTimelineProjector {
       if (status === "completed") {
         const lineChanges = safeLineChanges(step.toolName, resultDetails);
         if (lineChanges) step.lineChanges = lineChanges;
-        const producedFile = lineChanges && parseProducedFile(record(resultDetails).producedFile, step.toolName);
+        const producedFile =
+          lineChanges && parseProducedFile(record(resultDetails).producedFile, step.toolName);
         if (producedFile) step.producedFile = producedFile;
         if (step.toolName === "form_fill") {
           const outcome = safeFormFillOutcome(resultDetails);
@@ -895,7 +941,8 @@ export class GenerationTimelineProjector {
         }
         if (step.toolName === CHECK_BACK_TOOL_NAME) {
           const fireAt = record(record(resultDetails).checkBack).fireAt;
-          if (typeof fireAt === "number" && Number.isFinite(fireAt)) step.detail = checkBackWhen(fireAt, timestamp);
+          if (typeof fireAt === "number" && Number.isFinite(fireAt))
+            step.detail = checkBackWhen(fireAt, timestamp);
         }
         if (step.toolName === BROWSER_RECORDING_STOP_TOOL_NAME) {
           const recording = parseBrowserRecordingRecap(record(resultDetails).recording);

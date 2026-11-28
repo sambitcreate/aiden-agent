@@ -22,12 +22,15 @@ import {
 import { runArgvPlan } from "../../main/services/workspace-artifacts/argv-runner.js";
 
 // How the parser refuses a template that puts page data where it could do more than be one argument.
-const PLACEMENT_REFUSED = /\{\{\w+\}\} cannot (?:sit|be|follow)|runs without a shell, so it may not use|may not be passed/u;
+const PLACEMENT_REFUSED =
+  /\{\{\w+\}\} cannot (?:sit|be|follow)|runs without a shell, so it may not use|may not be passed/u;
 
 /** The argument lists an action with page data runs, one per command; it never goes through a shell. */
 function argvOf(resolved: ResolvedWorkspaceArtifactCommand): string[][] {
   assert.equal(resolved.kind, "argv", "a template with {{params}} runs without a shell");
-  return resolved.kind === "argv" ? resolved.steps.flatMap((step) => step.pipeline.map((command) => command.argv)) : [];
+  return resolved.kind === "argv"
+    ? resolved.steps.flatMap((step) => step.pipeline.map((command) => command.argv))
+    : [];
 }
 
 /** Runs a one-command argument list the way the runner does: no shell. */
@@ -47,39 +50,104 @@ test("sources accept shell commands and workspace files and reject paths outside
     ],
   );
   for (const file of ["/etc/passwd", "../secrets", "docs/../../x", "~/notes", "C:\\Windows\\x"]) {
-    assert.throws(() => parseWorkspaceArtifactSources([{ name: "x", kind: "file", file }]), /workspace/u, file);
+    assert.throws(
+      () => parseWorkspaceArtifactSources([{ name: "x", kind: "file", file }]),
+      /workspace/u,
+      file,
+    );
   }
-  assert.throws(() => parseWorkspaceArtifactSources([{ name: "a", kind: "shell", command: "x" }, { name: "a", kind: "shell", command: "y" }]), /twice/u);
-  assert.throws(() => parseWorkspaceArtifactSources([{ name: "pull-list", kind: "shell", command: "x" }]), /must be an identifier/u);
+  assert.throws(
+    () =>
+      parseWorkspaceArtifactSources([
+        { name: "a", kind: "shell", command: "x" },
+        { name: "a", kind: "shell", command: "y" },
+      ]),
+    /twice/u,
+  );
+  assert.throws(
+    () => parseWorkspaceArtifactSources([{ name: "pull-list", kind: "shell", command: "x" }]),
+    /must be an identifier/u,
+  );
   // A well-formed name that is reserved says so and offers a free one.
-  assert.throws(() => parseWorkspaceArtifactSources([{ name: "constructor", kind: "shell", command: "x" }]), /"constructor" is reserved .*try "myConstructor"/u);
-  assert.throws(() => parseWorkspaceArtifactSources([{ name: "path", kind: "shell", command: "x" }]), /"path" is reserved \(Aiden's phone apps .*try "myPath"/u);
-  assert.throws(() => parseWorkspaceArtifactSources([{ name: "childCount", kind: "shell", command: "x" }]), /reserved.*try "myChildCount"/u);
-  assert.deepEqual(parseWorkspaceArtifactSources([{ name: "myPath", kind: "shell", command: "x" }]).map((source) => source.name), ["myPath"]);
-  const withParam = (name: string) => [{ name: "go", label: "Go", command: "git show {{" + name + "}}", params: [{ name }] }];
-  assert.throws(() => parseWorkspaceArtifactActions(withParam("path")), /params\[0\]: the name "path" is reserved.*try "myPath"/u);
+  assert.throws(
+    () => parseWorkspaceArtifactSources([{ name: "constructor", kind: "shell", command: "x" }]),
+    /"constructor" is reserved .*try "myConstructor"/u,
+  );
+  assert.throws(
+    () => parseWorkspaceArtifactSources([{ name: "path", kind: "shell", command: "x" }]),
+    /"path" is reserved \(Aiden's phone apps .*try "myPath"/u,
+  );
+  assert.throws(
+    () => parseWorkspaceArtifactSources([{ name: "childCount", kind: "shell", command: "x" }]),
+    /reserved.*try "myChildCount"/u,
+  );
+  assert.deepEqual(
+    parseWorkspaceArtifactSources([{ name: "myPath", kind: "shell", command: "x" }]).map(
+      (source) => source.name,
+    ),
+    ["myPath"],
+  );
+  const withParam = (name: string) => [
+    { name: "go", label: "Go", command: "git show {{" + name + "}}", params: [{ name }] },
+  ];
+  assert.throws(
+    () => parseWorkspaceArtifactActions(withParam("path")),
+    /params\[0\]: the name "path" is reserved.*try "myPath"/u,
+  );
   assert.equal(parseWorkspaceArtifactActions(withParam("myPath"))[0]!.params[0]!.name, "myPath");
-  assert.throws(() => parseWorkspaceArtifactActions([{ name: "token", label: "Token", command: "x" }]), /actions\[0\]: the name "token" is reserved.*try "myToken"/u);
-  assert.throws(() => parseWorkspaceArtifactSources([{ name: "x", kind: "http", command: "x" }]), /kind/u);
+  assert.throws(
+    () => parseWorkspaceArtifactActions([{ name: "token", label: "Token", command: "x" }]),
+    /actions\[0\]: the name "token" is reserved.*try "myToken"/u,
+  );
+  assert.throws(
+    () => parseWorkspaceArtifactSources([{ name: "x", kind: "http", command: "x" }]),
+    /kind/u,
+  );
 });
 
 test("action templates may only name their own params", () => {
   assert.deepEqual(
     parseWorkspaceArtifactActions([
-      { name: "merge", label: "Merge pull request", command: "gh pr merge {{number}} --squash", params: [{ name: "number", type: "number" }] },
+      {
+        name: "merge",
+        label: "Merge pull request",
+        command: "gh pr merge {{number}} --squash",
+        params: [{ name: "number", type: "number" }],
+      },
     ]),
-    [{ name: "merge", label: "Merge pull request", command: "gh pr merge {{number}} --squash", params: [{ name: "number", type: "number" }] }],
+    [
+      {
+        name: "merge",
+        label: "Merge pull request",
+        command: "gh pr merge {{number}} --squash",
+        params: [{ name: "number", type: "number" }],
+      },
+    ],
   );
   assert.throws(
-    () => parseWorkspaceArtifactActions([{ name: "merge", label: "Merge", command: "gh pr merge {{id}}", params: [{ name: "number" }] }]),
+    () =>
+      parseWorkspaceArtifactActions([
+        {
+          name: "merge",
+          label: "Merge",
+          command: "gh pr merge {{id}}",
+          params: [{ name: "number" }],
+        },
+      ]),
     /\{\{id\}\} is not one of its params/u,
   );
-  assert.throws(() => parseWorkspaceArtifactActions([{ name: "merge", label: "", command: "x" }]), /label/u);
+  assert.throws(
+    () => parseWorkspaceArtifactActions([{ name: "merge", label: "", command: "x" }]),
+    /label/u,
+  );
 });
 
 test("refresh intervals are opt-in and never faster than a minute", () => {
   assert.deepEqual(parseWorkspaceArtifactRefresh(undefined), { onOpen: true });
-  assert.deepEqual(parseWorkspaceArtifactRefresh({ onOpen: false, intervalSeconds: 300 }), { onOpen: false, intervalSeconds: 300 });
+  assert.deepEqual(parseWorkspaceArtifactRefresh({ onOpen: false, intervalSeconds: 300 }), {
+    onOpen: false,
+    intervalSeconds: 300,
+  });
   assert.throws(() => parseWorkspaceArtifactRefresh({ intervalSeconds: 5 }), /60/u);
 });
 
@@ -94,36 +162,77 @@ const merge: WorkspaceArtifactActionV1 = {
 };
 
 test("filled-in values reach the program as single literal arguments, and the preview reads the same to a shell", () => {
-  const hostile = [`$(touch /tmp/aiden-pwned)`, `'; echo hi; '`, "a  b c", `"$HOME"`, "`id`", "plain", "x\"y", "subject\n\nbody; echo hi", "a\tb"];
+  const hostile = [
+    `$(touch /tmp/aiden-pwned)`,
+    `'; echo hi; '`,
+    "a  b c",
+    `"$HOME"`,
+    "`id`",
+    "plain",
+    'x"y',
+    "subject\n\nbody; echo hi",
+    "a\tb",
+  ];
   for (const value of hostile) {
     const resolved = resolveWorkspaceArtifactCommand(merge, [value, 3]);
     assert.deepEqual(argvOf(resolved), [["printf", "%s|%s", value, "3"]], value);
     assert.equal(runArgv(argvOf(resolved)[0]!), `${value}|3`, value);
     // The confirmation shows the preview; a shell reading it gets the same arguments.
-    assert.equal(execFileSync("/bin/sh", ["-c", resolved.preview], { encoding: "utf8" }), `${value}|3`, value);
+    assert.equal(
+      execFileSync("/bin/sh", ["-c", resolved.preview], { encoding: "utf8" }),
+      `${value}|3`,
+      value,
+    );
   }
   // A template without page data keeps the shell: it is shown and run as written.
-  const plain = resolveWorkspaceArtifactCommand({ name: "a", label: "A", command: "git status | head -n 1 && echo $HOME", params: [] }, []);
-  assert.deepEqual(plain, { kind: "shell", command: "git status | head -n 1 && echo $HOME", preview: "git status | head -n 1 && echo $HOME" });
+  const plain = resolveWorkspaceArtifactCommand(
+    { name: "a", label: "A", command: "git status | head -n 1 && echo $HOME", params: [] },
+    [],
+  );
+  assert.deepEqual(plain, {
+    kind: "shell",
+    command: "git status | head -n 1 && echo $HOME",
+    preview: "git status | head -n 1 && echo $HOME",
+  });
 });
 
 test("a value never runs as code, even where a template quotes its placeholder", () => {
   const marker = path.join(os.tmpdir(), `aiden-artifact-injection-${process.pid}`);
   fs.rmSync(marker, { force: true });
   const values = [`$(touch ${marker})`, `'; touch ${marker}; '`, `\`touch ${marker}\``];
-  const action = (command: string): WorkspaceArtifactActionV1 => ({ name: "a", label: "A", command, params: [{ name: "body", type: "string" }] });
+  const action = (command: string): WorkspaceArtifactActionV1 => ({
+    name: "a",
+    label: "A",
+    command,
+    params: [{ name: "body", type: "string" }],
+  });
   for (const value of values) {
     runArgv(argvOf(resolveWorkspaceArtifactCommand(action("printf '%s' {{body}}"), [value]))[0]!);
   }
   // Saving refuses these shapes, and one stored before a rule existed is turned off at run time too.
-  for (const template of [`printf '%s' "{{body}}"`, `printf '%s' '{{body}}'`, "printf '%s' `echo {{body}}`", `printf '%s' $(echo {{body}})`]) {
-    for (const value of values) assert.throws(() => resolveWorkspaceArtifactCommand(action(template), [value]), /A is turned off/u, template);
+  for (const template of [
+    `printf '%s' "{{body}}"`,
+    `printf '%s' '{{body}}'`,
+    "printf '%s' `echo {{body}}`",
+    `printf '%s' $(echo {{body}})`,
+  ]) {
+    for (const value of values)
+      assert.throws(
+        () => resolveWorkspaceArtifactCommand(action(template), [value]),
+        /A is turned off/u,
+        template,
+      );
   }
   assert.equal(fs.existsSync(marker), false);
 });
 
 test("a template cannot run with a different value from the one its confirmation shows", () => {
-  const action = (command: string): WorkspaceArtifactActionV1 => ({ name: "a", label: "A", command, params: [{ name: "target", type: "string" }] });
+  const action = (command: string): WorkspaceArtifactActionV1 => ({
+    name: "a",
+    label: "A",
+    command,
+    params: [{ name: "target", type: "string" }],
+  });
   // Each template tries to swap the value after it was bound; with no shell
   // there are no variables, functions or positional parameters to swap, and
   // the syntax that would make them is refused when saved and when run.
@@ -135,13 +244,23 @@ test("a template cannot run with a different value from the one its confirmation
     "unset AIDEN_ARG_1; printf '%s' {{target}}",
     "printf '%s' \"$1\" {{target}}",
   ]) {
-    assert.throws(() => parseWorkspaceArtifactActions([action(template)]), PLACEMENT_REFUSED, template);
-    assert.throws(() => resolveWorkspaceArtifactCommand(action(template), ["shown-target"]), /turned off/u, template);
+    assert.throws(
+      () => parseWorkspaceArtifactActions([action(template)]),
+      PLACEMENT_REFUSED,
+      template,
+    );
+    assert.throws(
+      () => resolveWorkspaceArtifactCommand(action(template), ["shown-target"]),
+      /turned off/u,
+      template,
+    );
   }
 });
 
 test("a placeholder must be its own unquoted word, or joined only to plain text", () => {
-  const action = (command: string) => [{ name: "a", label: "A", command, params: [{ name: "x" }, { name: "y" }] }];
+  const action = (command: string) => [
+    { name: "a", label: "A", command, params: [{ name: "x" }, { name: "y" }] },
+  ];
   for (const command of [
     `echo "{{x}}"`,
     `echo '{{x}}'`,
@@ -223,7 +342,9 @@ test("a placeholder must be its own unquoted word, or joined only to plain text"
 test("an option that takes its value only joined is refused with advice that saves when followed", async (t) => {
   const save = (command: string) => {
     const names = [...new Set([...command.matchAll(/\{\{(\w+)\}\}/gu)].map((match) => match[1]!))];
-    return parseWorkspaceArtifactActions([{ name: "a", label: "A", command, params: names.map((name) => ({ name })) }]);
+    return parseWorkspaceArtifactActions([
+      { name: "a", label: "A", command, params: names.map((name) => ({ name })) },
+    ]);
   };
   // Each template keeps a second placeholder, so the followed advice is still checked as a template with page data.
   for (const [command, written] of [
@@ -261,10 +382,30 @@ test("an option that takes its value only joined is refused with advice that sav
   // the option rather than only to save. git reads no config but the
   // repository's, so a user's log.decorate or diff.renames cannot change it,
   // and its errors are in English, as the assertions on them read.
-  const env = { ...process.env, GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_NOSYSTEM: "1", LC_ALL: "C", LANG: "C" };
+  const env = {
+    ...process.env,
+    GIT_CONFIG_GLOBAL: "/dev/null",
+    GIT_CONFIG_NOSYSTEM: "1",
+    LC_ALL: "C",
+    LANG: "C",
+  };
   const repo = fs.mkdtempSync(path.join(os.tmpdir(), "aiden-joined-option-"));
   const git = (...args: string[]) =>
-    execFileSync("git", ["-C", repo, "-c", "user.name=Test", "-c", "user.email=test@example.com", "-c", "commit.gpgsign=false", ...args], { encoding: "utf8", env });
+    execFileSync(
+      "git",
+      [
+        "-C",
+        repo,
+        "-c",
+        "user.name=Test",
+        "-c",
+        "user.email=test@example.com",
+        "-c",
+        "commit.gpgsign=false",
+        ...args,
+      ],
+      { encoding: "utf8", env },
+    );
   git("init", "-q");
   fs.writeFileSync(path.join(repo, "notes.md"), "one\n");
   git("add", "notes.md");
@@ -276,12 +417,22 @@ test("an option that takes its value only joined is refused with advice that sav
     const resolved = resolveWorkspaceArtifactCommand(save(command)[0]!, values);
     assert.equal(resolved.kind, "argv", command);
     if (resolved.kind !== "argv") throw new Error("unreachable");
-    return runArgvPlan({ steps: resolved.steps, cwd: repo, env, timeoutMs: 10_000, maxOutputBytes: 1_000_000 });
+    return runArgvPlan({
+      steps: resolved.steps,
+      cwd: repo,
+      env,
+      timeoutMs: 10_000,
+      maxOutputBytes: 1_000_000,
+    });
   };
   const hasRg = spawnSync("rg", ["--version"]).status === 0;
   try {
     for (const [command, values, expected] of [
-      ["git log -n{{n}} -- {{file}}", ["1", "notes.md"], (out: string) => out.match(/^commit /gmu)?.length === 1],
+      [
+        "git log -n{{n}} -- {{file}}",
+        ["1", "notes.md"],
+        (out: string) => out.match(/^commit /gmu)?.length === 1,
+      ],
       ["head -n{{n}} notes.md", ["1"], (out: string) => out === "one\n"],
       ["rg -C{{n}} {{p}} notes.md", ["0", "two"], (out: string) => out === "two\n"],
       ["git log -L{{n}},+3:notes.md", [], undefined],
@@ -304,7 +455,11 @@ test("an option that takes its value only joined is refused with advice that sav
       const separate = /Pass it as a separate word: (\S+ \{\{\w+\}\})\./u.exec(message)?.[1];
       const written = command.replace(/(-[\w-]+)=?(\{\{\w+\}\})/u, "$1 $2");
       if (separate === undefined) {
-        assert.match(message, /and page data may not be passed|page data cannot fill its value|starting from line N with page data is not supported/u, command);
+        assert.match(
+          message,
+          /and page data may not be passed|page data cannot fill its value|starting from line N with page data is not supported/u,
+          command,
+        );
         let saved = true;
         try {
           save(written);
@@ -316,7 +471,11 @@ test("an option that takes its value only joined is refused with advice that sav
           const value = values[0]!.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
           const result = await run(written, values);
           assert.notEqual(result.exitCode, 0, `${written} took the value as the option's`);
-          assert.match(result.stderr, new RegExp(`fatal: (?:bad revision|ambiguous argument) '${value}'`, "u"), written);
+          assert.match(
+            result.stderr,
+            new RegExp(`fatal: (?:bad revision|ambiguous argument) '${value}'`, "u"),
+            written,
+          );
         }
         continue;
       }
@@ -324,11 +483,18 @@ test("an option that takes its value only joined is refused with advice that sav
       const followed = command.replace(separate.replace(" ", ""), separate);
       assert.equal(followed, written, command);
       assert.equal(save(followed).length, 1, `${command} -> ${followed}`);
-      await t.test(followed, { skip: command.startsWith("rg ") && !hasRg ? "rg is not installed" : false }, async () => {
-        const result = await run(followed, values);
-        assert.equal(result.exitCode, 0, `${followed}: ${result.stderr}`);
-        assert.ok(expected(result.stdout), `${followed} printed ${JSON.stringify(result.stdout)}`);
-      });
+      await t.test(
+        followed,
+        { skip: command.startsWith("rg ") && !hasRg ? "rg is not installed" : false },
+        async () => {
+          const result = await run(followed, values);
+          assert.equal(result.exitCode, 0, `${followed}: ${result.stderr}`);
+          assert.ok(
+            expected(result.stdout),
+            `${followed} printed ${JSON.stringify(result.stdout)}`,
+          );
+        },
+      );
     }
     // That advice, followed with a fixed similarity score, saves, and git
     // takes the score: a rename that kept two of its three lines is one at
@@ -337,7 +503,16 @@ test("an option that takes its value only joined is refused with advice that sav
     fs.writeFileSync(path.join(repo, "moved.md"), "one\ntwo\nfour\n");
     git("commit", "-qam", "move");
     const renamed = /^R\d+\tnotes\.md\tmoved\.md$/mu;
-    for (const option of ["-M50%", "-M5", "-M.5", "-C50%", "-B50%/60% -M50%", "--find-renames=50%", "--find-copies=50%", "-pM50%"]) {
+    for (const option of [
+      "-M50%",
+      "-M5",
+      "-M.5",
+      "-C50%",
+      "-B50%/60% -M50%",
+      "--find-renames=50%",
+      "--find-copies=50%",
+      "-pM50%",
+    ]) {
       const result = await run(`git diff --name-status ${option} {{rev}}`, ["HEAD~1"]);
       assert.equal(result.exitCode, 0, `${option}: ${result.stderr}`);
       assert.match(result.stdout, renamed, option);
@@ -346,25 +521,61 @@ test("an option that takes its value only joined is refused with advice that sav
     assert.equal(strict.exitCode, 0, strict.stderr);
     assert.match(strict.stdout, /^D\tnotes\.md$/mu);
     assert.doesNotMatch(strict.stdout, renamed);
-    assert.throws(() => save("git diff -Mx {{rev}}"), /git diff with -Mx, an option Aiden does not check/u);
+    assert.throws(
+      () => save("git diff -Mx {{rev}}"),
+      /git diff with -Mx, an option Aiden does not check/u,
+    );
     // A joined score saves exactly when git itself takes it: digits with one
     // dot and a closing %, and a second score after a slash only for -B and
     // --break-rewrites, after `=` in the long forms as well.
     const scoreForms = [
-      "-M50%", "-M5.5", "-M.", "-M%", "-C5.", "-B50%/60%", "-B/60%", "-B50%/", "-B%/%",
-      "--find-renames=", "--find-renames=5.5", "--find-copies=.", "--break-rewrites=50%/60%", "--break-rewrites=/60%",
-      "-M50%%", "-M5.5.5", "-M5%5", "-M50%/60%", "-C5/5", "-B50%%", "-B50%/60%/", "-B50%x", "-M+5", "-M1e3",
-      "--find-renames=--output=/tmp/aiden-score-probe", "--find-renames=50%/60%", "--find-copies=5/5", "--break-rewrites=50%x",
-      "--find-copies-harder=", "--find-copies-harder=5",
+      "-M50%",
+      "-M5.5",
+      "-M.",
+      "-M%",
+      "-C5.",
+      "-B50%/60%",
+      "-B/60%",
+      "-B50%/",
+      "-B%/%",
+      "--find-renames=",
+      "--find-renames=5.5",
+      "--find-copies=.",
+      "--break-rewrites=50%/60%",
+      "--break-rewrites=/60%",
+      "-M50%%",
+      "-M5.5.5",
+      "-M5%5",
+      "-M50%/60%",
+      "-C5/5",
+      "-B50%%",
+      "-B50%/60%/",
+      "-B50%x",
+      "-M+5",
+      "-M1e3",
+      "--find-renames=--output=/tmp/aiden-score-probe",
+      "--find-renames=50%/60%",
+      "--find-copies=5/5",
+      "--break-rewrites=50%x",
+      "--find-copies-harder=",
+      "--find-copies-harder=5",
     ];
     let refusedScores = 0;
     for (const option of scoreForms) {
-      const taken = spawnSync("git", ["-C", repo, "diff", "--name-status", option, "HEAD~1"], { env }).status === 0;
+      const taken =
+        spawnSync("git", ["-C", repo, "diff", "--name-status", option, "HEAD~1"], { env })
+          .status === 0;
       let saved = true;
       try {
         save(`git diff --name-status ${option} {{rev}}`);
       } catch (error) {
-        assert.match((error as Error).message, new RegExp(`with ${option.replace(/[.+]/gu, "\\$&")}, an option Aiden does not check`, "u"));
+        assert.match(
+          (error as Error).message,
+          new RegExp(
+            `with ${option.replace(/[.+]/gu, "\\$&")}, an option Aiden does not check`,
+            "u",
+          ),
+        );
         saved = false;
       }
       assert.equal(saved, taken, `${option}: git ${taken ? "takes" : "refuses"} it`);
@@ -372,8 +583,17 @@ test("an option that takes its value only joined is refused with advice that sav
     }
     assert.equal(refusedScores, 16);
     // git log and show take the same detection options and scores, on the commit they print.
-    for (const command of ["git log -1 --format= --name-status", "git show --format= --name-status"]) {
-      for (const option of ["-M50%", "-C50%", "-B50%/60% -M50%", "--find-renames=50%", "--find-copies-harder"]) {
+    for (const command of [
+      "git log -1 --format= --name-status",
+      "git show --format= --name-status",
+    ]) {
+      for (const option of [
+        "-M50%",
+        "-C50%",
+        "-B50%/60% -M50%",
+        "--find-renames=50%",
+        "--find-copies-harder",
+      ]) {
         const result = await run(`${command} ${option} {{rev}}`, ["HEAD"]);
         assert.equal(result.exitCode, 0, `${command} ${option}: ${result.stderr}`);
         assert.match(result.stdout, renamed, `${command} ${option}`);
@@ -381,7 +601,10 @@ test("an option that takes its value only joined is refused with advice that sav
       const strictLog = await run(`${command} -M90% {{rev}}`, ["HEAD"]);
       assert.equal(strictLog.exitCode, 0, strictLog.stderr);
       assert.doesNotMatch(strictLog.stdout, renamed, `${command} -M90%`);
-      assert.throws(() => save(`${command} -MC {{rev}}`), /with -MC, an option Aiden does not check/u);
+      assert.throws(
+        () => save(`${command} -MC {{rev}}`),
+        /with -MC, an option Aiden does not check/u,
+      );
     }
     // --find-copies-harder goes with -C wherever -C does: a copy of a file the
     // commit left unchanged is found only with it.
@@ -409,36 +632,74 @@ test("an option that takes its value only joined is refused with advice that sav
 test("a misplaced placeholder is refused with the fix for where it sits", () => {
   const refusal = (command: string, param = "x") => {
     try {
-      parseWorkspaceArtifactActions([{ name: "a", label: "A", command, params: [{ name: param }] }]);
+      parseWorkspaceArtifactActions([
+        { name: "a", label: "A", command, params: [{ name: param }] },
+      ]);
     } catch (error) {
       return (error as Error).message;
     }
     return assert.fail(`${command} was accepted`);
   };
   // A joined option is answered with that same option as a separate word.
-  assert.match(refusal("head -n{{count}} notes.txt", "count"), /\{\{count\}\} cannot be joined to the option -n\. Pass it as a separate word: -n \{\{count\}\}\./u);
-  assert.match(refusal("cut -f{{col}} notes.txt", "col"), /joined to the option -f\. Pass it as a separate word: -f \{\{col\}\}\./u);
-  assert.match(refusal("gh pr comment 1 --body={{body}}", "body"), /joined to the option --body\. Pass it as a separate word: --body \{\{body\}\}\./u);
+  assert.match(
+    refusal("head -n{{count}} notes.txt", "count"),
+    /\{\{count\}\} cannot be joined to the option -n\. Pass it as a separate word: -n \{\{count\}\}\./u,
+  );
+  assert.match(
+    refusal("cut -f{{col}} notes.txt", "col"),
+    /joined to the option -f\. Pass it as a separate word: -f \{\{col\}\}\./u,
+  );
+  assert.match(
+    refusal("gh pr comment 1 --body={{body}}", "body"),
+    /joined to the option --body\. Pass it as a separate word: --body \{\{body\}\}\./u,
+  );
   // Each other kind names its own position and fix, not a generic "own unquoted word" line.
-  assert.match(refusal(`echo "{{x}}"`), /^actions\[0\]: \{\{x\}\} cannot sit inside double quotes\. Leave the quotes off/u);
+  assert.match(
+    refusal(`echo "{{x}}"`),
+    /^actions\[0\]: \{\{x\}\} cannot sit inside double quotes\. Leave the quotes off/u,
+  );
   assert.match(refusal(`echo '{{x}}'`), /cannot sit inside single quotes/u);
-  assert.match(refusal("{{x}} status"), /\{\{x\}\} cannot be the command itself\. Write the program literally/u);
-  assert.match(refusal("git {{x}}"), /cannot be the git subcommand\. Write the subcommand literally/u);
-  assert.match(refusal("git worktree {{x}}"), /cannot be the git worktree verb\. Write list, add or remove literally/u);
-  assert.match(refusal("gh {{x}} view 1"), /cannot be the gh command\. Write the command and its verb literally/u);
-  assert.match(refusal("gh pr {{x}} 1"), /cannot be the gh pr verb\. Write the verb literally, as in gh pr view \{\{x\}\}/u);
+  assert.match(
+    refusal("{{x}} status"),
+    /\{\{x\}\} cannot be the command itself\. Write the program literally/u,
+  );
+  assert.match(
+    refusal("git {{x}}"),
+    /cannot be the git subcommand\. Write the subcommand literally/u,
+  );
+  assert.match(
+    refusal("git worktree {{x}}"),
+    /cannot be the git worktree verb\. Write list, add or remove literally/u,
+  );
+  assert.match(
+    refusal("gh {{x}} view 1"),
+    /cannot be the gh command\. Write the command and its verb literally/u,
+  );
+  assert.match(
+    refusal("gh pr {{x}} 1"),
+    /cannot be the gh pr verb\. Write the verb literally, as in gh pr view \{\{x\}\}/u,
+  );
   assert.match(refusal("echo +{{x}}"), /cannot follow \+, which programs read as a command/u);
   // A count written as -{{n}} needs its option, and tail's +N (from line N) has no checked form.
-  assert.match(refusal("head -{{count}} notes.txt", "count"), /\{\{count\}\} cannot follow a bare -.*The number needs its option as a separate word, for example -n \{\{count\}\}\./u);
+  assert.match(
+    refusal("head -{{count}} notes.txt", "count"),
+    /\{\{count\}\} cannot follow a bare -.*The number needs its option as a separate word, for example -n \{\{count\}\}\./u,
+  );
   assert.doesNotMatch(refusal("git log -{{count}}", "count"), /- \{\{count\}\}/u);
   assert.match(
     refusal("tail -n +{{count}} notes.txt", "count"),
     /\{\{count\}\} cannot follow \+ there: use -n \{\{count\}\} \(last N lines\); starting from line N with page data is not supported\./u,
   );
-  assert.match(refusal("tail --bytes +{{count}} notes.txt", "count"), /use --bytes \{\{count\}\} \(last N bytes\); starting from byte N/u);
+  assert.match(
+    refusal("tail --bytes +{{count}} notes.txt", "count"),
+    /use --bytes \{\{count\}\} \(last N bytes\); starting from byte N/u,
+  );
   assert.match(refusal("cat a{{x}}'b'"), /cannot be joined to quoted text/u);
   // The -- Aiden adds after a branch goes before the files, so an option after them would become a file name.
-  assert.match(refusal("git checkout {{x}} notes.md -q"), /-q is written after the files of git checkout\..*Write -q before \{\{x\}\}\./u);
+  assert.match(
+    refusal("git checkout {{x}} notes.md -q"),
+    /-q is written after the files of git checkout\..*Write -q before \{\{x\}\}\./u,
+  );
   for (const command of ["head -n{{count}} notes.txt", `echo "{{count}}"`, "{{count}} status"]) {
     assert.doesNotMatch(refusal(command, "count"), /own unquoted word/u, command);
   }
@@ -482,14 +743,23 @@ test("a template with page data runs without a shell, so shell syntax the checke
   }
   // The operators the grammar does have keep their meaning.
   const [parsed] = parseWorkspaceArtifactActions([
-    { name: "a", label: "A", command: "git fetch -q 2>/dev/null || git status && git log -1 {{x}} 2>&1 | head -n 1; \\\n  git status >/dev/null", params: [{ name: "x" }] },
+    {
+      name: "a",
+      label: "A",
+      command:
+        "git fetch -q 2>/dev/null || git status && git log -1 {{x}} 2>&1 | head -n 1; \\\n  git status >/dev/null",
+      params: [{ name: "x" }],
+    },
   ]);
   const resolved = resolveWorkspaceArtifactCommand(parsed!, ["main"]);
   assert.ok(resolved.kind === "argv");
   // git reads no pathspec magic or glob from a value or the template.
   const GIT = { GIT_LITERAL_PATHSPECS: "1" };
   assert.deepEqual(resolved.steps, [
-    { connector: ";", pipeline: [{ argv: ["git", "fetch", "-q"], redirects: ["2>/dev/null"], env: GIT }] },
+    {
+      connector: ";",
+      pipeline: [{ argv: ["git", "fetch", "-q"], redirects: ["2>/dev/null"], env: GIT }],
+    },
     { connector: "||", pipeline: [{ argv: ["git", "status"], redirects: [], env: GIT }] },
     {
       connector: "&&",
@@ -499,26 +769,43 @@ test("a template with page data runs without a shell, so shell syntax the checke
         { argv: ["head", "-n", "1"], redirects: [] },
       ],
     },
-    { connector: ";", pipeline: [{ argv: ["git", "status"], redirects: [">/dev/null"], env: GIT }] },
+    {
+      connector: ";",
+      pipeline: [{ argv: ["git", "status"], redirects: [">/dev/null"], env: GIT }],
+    },
   ]);
   // A template without page data is not parsed this way: it runs in a shell, as written.
-  assert.equal(parseWorkspaceArtifactActions([{ name: "a", label: "A", command: "echo hi | ((sh) )" }]).length, 1);
+  assert.equal(
+    parseWorkspaceArtifactActions([{ name: "a", label: "A", command: "echo hi | ((sh) )" }]).length,
+    1,
+  );
 });
 
 test("a joined value reaches the program as part of one literal argument", () => {
   const action = parseWorkspaceArtifactActions([
-    { name: "a", label: "A", command: "printf '%s|' HEAD:{{x}} {{x}}.md", params: [{ name: "x", type: "string" }] },
+    {
+      name: "a",
+      label: "A",
+      command: "printf '%s|' HEAD:{{x}} {{x}}.md",
+      params: [{ name: "x", type: "string" }],
+    },
   ])[0]!;
   for (const value of ["main", "a b", "$(id)", "*", "x;y"]) {
     const resolved = resolveWorkspaceArtifactCommand(action, [value]);
     assert.deepEqual(argvOf(resolved), [["printf", "%s|", `HEAD:${value}`, `${value}.md`]], value);
     assert.equal(runArgv(argvOf(resolved)[0]!), `HEAD:${value}|${value}.md|`, value);
-    assert.equal(execFileSync("/bin/sh", ["-c", resolved.preview], { encoding: "utf8" }), `HEAD:${value}|${value}.md|`, value);
+    assert.equal(
+      execFileSync("/bin/sh", ["-c", resolved.preview], { encoding: "utf8" }),
+      `HEAD:${value}|${value}.md|`,
+      value,
+    );
   }
 });
 
 test("a placeholder cannot be run as a command or hidden from the check", () => {
-  const actions = (command: string, type: "string" | "number" = "string") => [{ name: "a", label: "A", command, params: [{ name: "x", type }] }];
+  const actions = (command: string, type: "string" | "number" = "string") => [
+    { name: "a", label: "A", command, params: [{ name: "x", type }] },
+  ];
   const refused = [
     "{{x}} --version",
     "echo ok; {{x}}",
@@ -667,7 +954,12 @@ test("a placeholder cannot be run as a command or hidden from the check", () => 
     "gh pr list -- {{x}}",
     "gh pr view 1 {{x}}",
   ];
-  for (const command of refused) assert.throws(() => parseWorkspaceArtifactActions(actions(command)), PLACEMENT_REFUSED, command);
+  for (const command of refused)
+    assert.throws(
+      () => parseWorkspaceArtifactActions(actions(command)),
+      PLACEMENT_REFUSED,
+      command,
+    );
   // Text is fine as a plain argument, between the operators the grammar has.
   for (const command of [
     "test {{x}} -gt 0 && echo big",
@@ -775,7 +1067,7 @@ test("a placeholder cannot be run as a command or hidden from the check", () => 
     "uv pip install {{x}}",
     "go test -run {{x}} ./...",
     // Shell builtins and keywords that run, store or redefine what comes next.
-    "set -- {{x}}; \"$@\"",
+    'set -- {{x}}; "$@"',
     "for f in {{x}}; do $f; done",
     "alias l={{x}}\nl",
     "let {{x}}",
@@ -834,43 +1126,76 @@ test("a placeholder cannot be run as a command or hidden from the check", () => 
     "rg --pre ./run-me {{x}}",
   ]) {
     for (const type of ["string", "number"] as const) {
-      assert.throws(() => parseWorkspaceArtifactActions(actions(command, type)), PLACEMENT_REFUSED, `${command} (${type})`);
+      assert.throws(
+        () => parseWorkspaceArtifactActions(actions(command, type)),
+        PLACEMENT_REFUSED,
+        `${command} (${type})`,
+      );
     }
   }
   // The refusal names the program and what page data may be passed to, and
   // that the same command without a {{param}} is not limited, which holds.
-  assert.throws(() => parseWorkspaceArtifactActions(actions("npm view {{x}} version")), (error: Error) => {
-    assert.match(error.message, /a command that uses npm\b/u);
-    assert.match(error.message, /\bgit status\b.*\bgh pr\b.*\bjq\b/u);
-    assert.match(error.message, /without \{\{params\}\} is not limited/u);
-    return true;
-  });
-  assert.equal(parseWorkspaceArtifactActions([{ name: "a", label: "A", command: "npm view aiden version", params: [] }]).length, 1);
+  assert.throws(
+    () => parseWorkspaceArtifactActions(actions("npm view {{x}} version")),
+    (error: Error) => {
+      assert.match(error.message, /a command that uses npm\b/u);
+      assert.match(error.message, /\bgit status\b.*\bgh pr\b.*\bjq\b/u);
+      assert.match(error.message, /without \{\{params\}\} is not limited/u);
+      return true;
+    },
+  );
+  assert.equal(
+    parseWorkspaceArtifactActions([
+      { name: "a", label: "A", command: "npm view aiden version", params: [] },
+    ]).length,
+    1,
+  );
 });
 
 test("filled-in values are checked against their declared types", () => {
   assert.throws(() => resolveWorkspaceArtifactCommand(merge, ["x", "not a number"]), /number/u);
   assert.throws(() => resolveWorkspaceArtifactCommand(merge, [{ nested: true }, 1]), /text/u);
-  assert.throws(() => resolveWorkspaceArtifactCommand(merge, ["a\u0000b", 1]), /Comment: who contains a control character/u);
-  assert.throws(() => resolveWorkspaceArtifactCommand(merge, ["a\rb", 1]), /contains a control character/u);
-  assert.throws(() => resolveWorkspaceArtifactCommand(merge, ["a\u001bb", 1]), /contains a control character/u);
+  assert.throws(
+    () => resolveWorkspaceArtifactCommand(merge, ["a\u0000b", 1]),
+    /Comment: who contains a control character/u,
+  );
+  assert.throws(
+    () => resolveWorkspaceArtifactCommand(merge, ["a\rb", 1]),
+    /contains a control character/u,
+  );
+  assert.throws(
+    () => resolveWorkspaceArtifactCommand(merge, ["a\u001bb", 1]),
+    /contains a control character/u,
+  );
   assert.throws(() => resolveWorkspaceArtifactCommand(merge, ["a\u202eb", 1]), /control/u);
-  assert.throws(() => resolveWorkspaceArtifactCommand(merge, ["--upload-pack=x", 1]), /cannot start with "-"/u);
+  assert.throws(
+    () => resolveWorkspaceArtifactCommand(merge, ["--upload-pack=x", 1]),
+    /cannot start with "-"/u,
+  );
   assert.throws(() => resolveWorkspaceArtifactCommand(merge, ["a", 1, "extra"]), /takes 2/u);
-  assert.equal(resolveWorkspaceArtifactCommand(merge, ["x", "42"]).preview, "printf '%s|%s' 'x' '42'");
+  assert.equal(
+    resolveWorkspaceArtifactCommand(merge, ["x", "42"]).preview,
+    "printf '%s|%s' 'x' '42'",
+  );
   assert.throws(() => resolveWorkspaceArtifactCommand(merge, ["x", -1]), /cannot be negative/u);
   assert.throws(() => resolveWorkspaceArtifactCommand(merge, ["x", "-1"]), /cannot be negative/u);
 });
 
 test("where a value lands decides what it may be: no option, no refspec, no file outside the workspace", () => {
   const run = (command: string, value: string | number, type: "string" | "number" = "string") => {
-    const resolved = resolveWorkspaceArtifactCommand({ name: "a", label: "A", command, params: [{ name: "x", type }] }, [value]);
+    const resolved = resolveWorkspaceArtifactCommand(
+      { name: "a", label: "A", command, params: [{ name: "x", type }] },
+      [value],
+    );
     assert.equal(resolved.kind, "argv");
     return resolved as Extract<typeof resolved, { kind: "argv" }>;
   };
   // A leading dash is read as an option, except as the separate-word value of
   // an option the program always takes as its value.
-  assert.throws(() => run("git log -1 {{x}}", "--output=/tmp/x"), /x cannot start with "-" there: the program would read it as an option\. Pass such a value as an option's value/u);
+  assert.throws(
+    () => run("git log -1 {{x}}", "--output=/tmp/x"),
+    /x cannot start with "-" there: the program would read it as an option\. Pass such a value as an option's value/u,
+  );
   // Not even after --: gh ignores it, and git grep -e -- or rg -e -- spend it as the pattern.
   for (const [command, value] of [
     ["grep -F -- {{x}} notes.txt", "-v"],
@@ -880,16 +1205,45 @@ test("where a value lands decides what it may be: no option, no refspec, no file
   ]) {
     assert.throws(() => run(command!, value!), /cannot start with "-"|may not be passed/u, command);
   }
-  assert.deepEqual(run("grep -F -e {{x}} notes.txt", "-v").steps[0]!.pipeline[0]!.argv, ["grep", "-F", "-e", "-v", "notes.txt"]);
-  assert.deepEqual(run("git commit -m {{x}}", "--amend").steps[0]!.pipeline[0]!.argv, ["git", "commit", "-m", "--amend"]);
-  assert.deepEqual(run("gh pr list --search {{x}}", "-label:bug").steps[0]!.pipeline[0]!.argv, ["gh", "pr", "list", "--search", "-label:bug"]);
+  assert.deepEqual(run("grep -F -e {{x}} notes.txt", "-v").steps[0]!.pipeline[0]!.argv, [
+    "grep",
+    "-F",
+    "-e",
+    "-v",
+    "notes.txt",
+  ]);
+  assert.deepEqual(run("git commit -m {{x}}", "--amend").steps[0]!.pipeline[0]!.argv, [
+    "git",
+    "commit",
+    "-m",
+    "--amend",
+  ]);
+  assert.deepEqual(run("gh pr list --search {{x}}", "-label:bug").steps[0]!.pipeline[0]!.argv, [
+    "gh",
+    "pr",
+    "list",
+    "--search",
+    "-label:bug",
+  ]);
   // A branch git pushes, fetches or pulls: + forces it, a leading : deletes it, a : maps it elsewhere.
   for (const value of ["+main", ":main", "main:other", "-main"]) {
-    assert.throws(() => run("git push origin {{x}}", value), /x cannot start with|x must be a branch or tag name there: no (leading - or \+|:)/u, value);
+    assert.throws(
+      () => run("git push origin {{x}}", value),
+      /x cannot start with|x must be a branch or tag name there: no (leading - or \+|:)/u,
+      value,
+    );
   }
-  assert.throws(() => run("git push origin HEAD:{{x}}", "a:b"), /x must be a branch or tag name there: no :/u);
+  assert.throws(
+    () => run("git push origin HEAD:{{x}}", "a:b"),
+    /x must be a branch or tag name there: no :/u,
+  );
   assert.throws(() => run("git pull origin {{x}}", "+main"), /a forced push/u);
-  assert.deepEqual(run("git push origin {{x}}", "feature/x").steps[0]!.pipeline[0]!.argv, ["git", "push", "origin", "feature/x"]);
+  assert.deepEqual(run("git push origin {{x}}", "feature/x").steps[0]!.pipeline[0]!.argv, [
+    "git",
+    "push",
+    "origin",
+    "feature/x",
+  ]);
   // A file a program reads stays inside the workspace, including when joined to text.
   for (const [command, value] of [
     ["cat {{x}}", "/etc/passwd"],
@@ -909,26 +1263,61 @@ test("where a value lands decides what it may be: no option, no refspec, no file
     ["test {{x}} -nt notes.txt", "/etc/hosts"],
     ["test notes.txt -ot {{x}}", "/etc/hosts"],
   ]) {
-    assert.throws(() => run(command!, value!), /x must name a file inside the workspace/u, `${command} ${value}`);
+    assert.throws(
+      () => run(command!, value!),
+      /x must name a file inside the workspace/u,
+      `${command} ${value}`,
+    );
   }
   // A value that starts with a drive letter is refused, and the refusal says why.
   for (const value of ["C:\\Windows\\win.ini", "a:b.txt"]) {
-    assert.throws(() => run("cat {{x}}", value), /x must name a file inside the workspace: .*drive letter/u, value);
+    assert.throws(
+      () => run("cat {{x}}", value),
+      /x must name a file inside the workspace: .*drive letter/u,
+      value,
+    );
   }
   // ~ alone or before a slash is the home folder; anywhere else it is part of a file name, which nothing expands without a shell.
   for (const value of ["~", "~/notes.md", "~\\notes.md"]) {
-    assert.throws(() => run("cat {{x}}", value), /x must name a file inside the workspace: .*home folder/u, value);
+    assert.throws(
+      () => run("cat {{x}}", value),
+      /x must name a file inside the workspace: .*home folder/u,
+      value,
+    );
   }
-  assert.throws(() => run("git show HEAD:{{x}}", "~/.netrc"), /x must name a file inside the workspace/u);
+  assert.throws(
+    () => run("git show HEAD:{{x}}", "~/.netrc"),
+    /x must name a file inside the workspace/u,
+  );
   for (const value of ["~notes.md", "~$report.docx", "drafts/~old.md"]) {
     assert.deepEqual(run("cat {{x}}", value).steps[0]!.pipeline[0]!.argv, ["cat", value], value);
   }
-  assert.deepEqual(run("git show HEAD:{{x}}", "~notes.md").steps[0]!.pipeline[0]!.argv, ["git", "show", "HEAD:./~notes.md"]);
-  assert.deepEqual(run("cat notes/{{x}}.md", "a/../b").steps[0]!.pipeline[0]!.argv, ["cat", "notes/a/../b.md"]);
+  assert.deepEqual(run("git show HEAD:{{x}}", "~notes.md").steps[0]!.pipeline[0]!.argv, [
+    "git",
+    "show",
+    "HEAD:./~notes.md",
+  ]);
+  assert.deepEqual(run("cat notes/{{x}}.md", "a/../b").steps[0]!.pipeline[0]!.argv, [
+    "cat",
+    "notes/a/../b.md",
+  ]);
   // test compares text as text.
-  assert.deepEqual(run("test {{x}} = main", "/etc/passwd").steps[0]!.pipeline[0]!.argv, ["test", "/etc/passwd", "=", "main"]);
-  assert.deepEqual(run("test -n {{x}}", "/etc/passwd").steps[0]!.pipeline[0]!.argv, ["test", "-n", "/etc/passwd"]);
-  assert.deepEqual(run("test -e {{x}}", "notes/today.md").steps[0]!.pipeline[0]!.argv, ["test", "-e", "notes/today.md"]);
+  assert.deepEqual(run("test {{x}} = main", "/etc/passwd").steps[0]!.pipeline[0]!.argv, [
+    "test",
+    "/etc/passwd",
+    "=",
+    "main",
+  ]);
+  assert.deepEqual(run("test -n {{x}}", "/etc/passwd").steps[0]!.pipeline[0]!.argv, [
+    "test",
+    "-n",
+    "/etc/passwd",
+  ]);
+  assert.deepEqual(run("test -e {{x}}", "notes/today.md").steps[0]!.pipeline[0]!.argv, [
+    "test",
+    "-e",
+    "notes/today.md",
+  ]);
   // A GitHub search stays in this repository: no repo:, org:, user: or owner: qualifier, in any case or place.
   for (const [command, value] of [
     ["gh pr list --search {{x}}", "repo:acme/secret is:open"],
@@ -940,28 +1329,73 @@ test("where a value lands decides what it may be: no option, no refspec, no file
     ["gh pr list --search {{x}}", "is:open owner:acme"],
     ["gh issue list --search {{x}}", "fix -Owner:acme"],
   ]) {
-    assert.throws(() => run(command!, value!), /x cannot hold a repo:, org:, user: or owner: qualifier there/u, `${command} ${value}`);
+    assert.throws(
+      () => run(command!, value!),
+      /x cannot hold a repo:, org:, user: or owner: qualifier there/u,
+      `${command} ${value}`,
+    );
   }
   // A word that only ends in one of those names is search text, as are other qualifiers.
-  for (const value of ["is:open label:bug author:@me", "Georg: fix the build", "superuser:x", "in:title reporg", "is:issue userland: crash"]) {
-    assert.deepEqual(run("gh pr list --search {{x}}", value).steps[0]!.pipeline[0]!.argv, ["gh", "pr", "list", "--search", value], value);
+  for (const value of [
+    "is:open label:bug author:@me",
+    "Georg: fix the build",
+    "superuser:x",
+    "in:title reporg",
+    "is:issue userland: crash",
+  ]) {
+    assert.deepEqual(
+      run("gh pr list --search {{x}}", value).steps[0]!.pipeline[0]!.argv,
+      ["gh", "pr", "list", "--search", value],
+      value,
+    );
   }
   // A grep pattern is not a file.
-  assert.deepEqual(run("grep -F {{x}} notes.txt", "/etc/hosts").steps[0]!.pipeline[0]!.argv, ["grep", "-F", "/etc/hosts", "notes.txt"]);
+  assert.deepEqual(run("grep -F {{x}} notes.txt", "/etc/hosts").steps[0]!.pipeline[0]!.argv, [
+    "grep",
+    "-F",
+    "/etc/hosts",
+    "notes.txt",
+  ]);
   // A gh number or branch cannot point at another repository or a URL; a count is a whole number.
   for (const value of ["https://example.com/o/r/pull/1", "other:branch", "me@host", "-1"]) {
-    assert.throws(() => run("gh pr view {{x}}", value), /x must be a number or a branch-like name there|cannot start with "-"/u, value);
+    assert.throws(
+      () => run("gh pr view {{x}}", value),
+      /x must be a number or a branch-like name there|cannot start with "-"/u,
+      value,
+    );
   }
-  assert.deepEqual(run("gh pr view {{x}}", "feature/x").steps[0]!.pipeline[0]!.argv, ["gh", "pr", "view", "feature/x"]);
-  assert.throws(() => run("gh release list --limit {{x}}", "5 or more"), /x must be a whole number there/u);
-  assert.deepEqual(run("gh release list --limit {{x}}", 5, "number").steps[0]!.pipeline[0]!.argv, ["gh", "release", "list", "--limit", "5"]);
+  assert.deepEqual(run("gh pr view {{x}}", "feature/x").steps[0]!.pipeline[0]!.argv, [
+    "gh",
+    "pr",
+    "view",
+    "feature/x",
+  ]);
+  assert.throws(
+    () => run("gh release list --limit {{x}}", "5 or more"),
+    /x must be a whole number there/u,
+  );
+  assert.deepEqual(run("gh release list --limit {{x}}", 5, "number").steps[0]!.pipeline[0]!.argv, [
+    "gh",
+    "release",
+    "list",
+    "--limit",
+    "5",
+  ]);
   // Where nothing is read as a path or ref, text is just text.
-  assert.deepEqual(run("git commit -m {{x}}", "fix: a/../b:c").steps[0]!.pipeline[0]!.argv, ["git", "commit", "-m", "fix: a/../b:c"]);
+  assert.deepEqual(run("git commit -m {{x}}", "fix: a/../b:c").steps[0]!.pipeline[0]!.argv, [
+    "git",
+    "commit",
+    "-m",
+    "fix: a/../b:c",
+  ]);
 });
 
 test("the display and filter options saved buttons use are read, and an unknown one says how to fix it", () => {
   const argv = (command: string, value: string) => {
-    const resolved = resolveWorkspaceArtifactCommand({ name: "a", label: "A", command, params: [{ name: "x", type: "string" }] }, [value]);
+    const resolved = resolveWorkspaceArtifactCommand(
+      { name: "a", label: "A", command, params: [{ name: "x", type: "string" }] },
+      [value],
+    );
     assert.equal(resolved.kind, "argv", command);
     return argvOf(resolved)[0]!;
   };
@@ -1023,19 +1457,41 @@ test("the display and filter options saved buttons use are read, and an unknown 
     return assert.fail(`${command} was accepted`);
   };
   const rebase = refusal("git rebase -i {{x}}");
-  assert.match(rebase, /git rebase with -i, an option Aiden does not check there \(remove it; the rest of the command still works\)/u);
+  assert.match(
+    rebase,
+    /git rebase with -i, an option Aiden does not check there \(remove it; the rest of the command still works\)/u,
+  );
   assert.match(rebase, /Options it checks: -q, -v, --abort, --continue\b/u);
   assert.match(refusal("git log --frobnicate {{x}}"), /Options it checks: .* and \d+ more/u);
 });
 
 test("commands and labels reject characters that hide what runs", () => {
-  assert.throws(() => parseWorkspaceArtifactSources([{ name: "a", kind: "shell", command: "ls \u202e-la" }]), /control/u);
-  assert.throws(() => parseWorkspaceArtifactActions([{ name: "a", label: "Me\u200brge", command: "x" }]), /label/u);
-  const shell = (command: string) => parseWorkspaceArtifactSources([{ name: "a", kind: "shell", command }]);
+  assert.throws(
+    () => parseWorkspaceArtifactSources([{ name: "a", kind: "shell", command: "ls \u202e-la" }]),
+    /control/u,
+  );
+  assert.throws(
+    () => parseWorkspaceArtifactActions([{ name: "a", label: "Me\u200brge", command: "x" }]),
+    /label/u,
+  );
+  const shell = (command: string) =>
+    parseWorkspaceArtifactSources([{ name: "a", kind: "shell", command }]);
   // Format, default-ignorable and bidi characters render as nothing or reorder text.
-  for (const hidden of ["\u2066", "\u061c", "\u00ad", "\u034f", "\u180e", "\ufeff", "\u{e0041}", "\u3164"]) {
+  for (const hidden of [
+    "\u2066",
+    "\u061c",
+    "\u00ad",
+    "\u034f",
+    "\u180e",
+    "\ufeff",
+    "\u{e0041}",
+    "\u3164",
+  ]) {
     assert.throws(() => shell(`ls ${hidden}-la`), /invisible/u, JSON.stringify(hidden));
-    assert.throws(() => parseWorkspaceArtifactActions([{ name: "a", label: `G${hidden}o`, command: "x" }]), /label/u);
+    assert.throws(
+      () => parseWorkspaceArtifactActions([{ name: "a", label: `G${hidden}o`, command: "x" }]),
+      /label/u,
+    );
   }
   // A carriage return can redraw a line over what came before it.
   assert.throws(() => shell("echo safe\rrm -rf ~"), /\\r/u);
@@ -1043,7 +1499,9 @@ test("commands and labels reject characters that hide what runs", () => {
   assert.throws(() => shell("echo a\n\n\nrm -rf ~"), /blank line/u);
   assert.throws(() => shell("echo a\n \t\n\nrm -rf ~"), /blank line/u);
   // Ordinary multi-line scripts still read as they run.
-  assert.deepEqual(shell("set -e\n\techo a\n\necho b"), [{ name: "a", kind: "shell", command: "set -e\n\techo a\n\necho b", parse: "json" }]);
+  assert.deepEqual(shell("set -e\n\techo a\n\necho b"), [
+    { name: "a", kind: "shell", command: "set -e\n\techo a\n\necho b", parse: "json" },
+  ]);
 });
 
 test("a title is one line of visible characters", () => {
@@ -1053,20 +1511,42 @@ test("a title is one line of visible characters", () => {
   assert.equal(isWorkspaceArtifactTitle("Open\u2028PRs"), false);
   assert.equal(isWorkspaceArtifactTitle("Open\u200bPRs"), false);
   // The invisible parts of a visible emoji are fine; the same characters alone are not.
-  for (const title of ["\u2764\ufe0f Alerts", "1\ufe0f\u20e3 First", "\u{1f468}\u200d\u{1f469}\u200d\u{1f467} Family", "\u{1f44b}\u{1f3fd}\u200d\u2642\ufe0f Hi"]) {
+  for (const title of [
+    "\u2764\ufe0f Alerts",
+    "1\ufe0f\u20e3 First",
+    "\u{1f468}\u200d\u{1f469}\u200d\u{1f467} Family",
+    "\u{1f44b}\u{1f3fd}\u200d\u2642\ufe0f Hi",
+  ]) {
     assert.equal(isWorkspaceArtifactTitle(title), true, title);
   }
-  for (const title of ["Open\ufe0fPRs", "Open\u200dPRs", "\u2764\ufe0f\ufe0f Alerts", "\u{1f468}\u200d"]) {
+  for (const title of [
+    "Open\ufe0fPRs",
+    "Open\u200dPRs",
+    "\u2764\ufe0f\ufe0f Alerts",
+    "\u{1f468}\u200d",
+  ]) {
     assert.equal(isWorkspaceArtifactTitle(title), false, JSON.stringify(title));
   }
 });
 
 test("output parses as JSON, non-empty lines or text, within the data cap", () => {
-  assert.deepEqual(parseWorkspaceArtifactOutput("json", '[{"n":1}]'), { ok: true, dataJson: '[{"n":1}]' });
-  assert.deepEqual(parseWorkspaceArtifactOutput("lines", "a\n\n  b  \r\nc\n"), { ok: true, dataJson: '["a","  b","c"]' });
+  assert.deepEqual(parseWorkspaceArtifactOutput("json", '[{"n":1}]'), {
+    ok: true,
+    dataJson: '[{"n":1}]',
+  });
+  assert.deepEqual(parseWorkspaceArtifactOutput("lines", "a\n\n  b  \r\nc\n"), {
+    ok: true,
+    dataJson: '["a","  b","c"]',
+  });
   // Output written with old Mac line endings (a lone carriage return) is still one entry per line.
-  assert.deepEqual(parseWorkspaceArtifactOutput("lines", "a\rb\r\rc\r"), { ok: true, dataJson: '["a","b","c"]' });
-  assert.deepEqual(parseWorkspaceArtifactOutput("text", "hello\n\n"), { ok: true, dataJson: '"hello"' });
+  assert.deepEqual(parseWorkspaceArtifactOutput("lines", "a\rb\r\rc\r"), {
+    ok: true,
+    dataJson: '["a","b","c"]',
+  });
+  assert.deepEqual(parseWorkspaceArtifactOutput("text", "hello\n\n"), {
+    ok: true,
+    dataJson: '"hello"',
+  });
   assert.equal(parseWorkspaceArtifactOutput("json", "not json").ok, false);
   const big = parseWorkspaceArtifactOutput("text", "x".repeat(70 * 1024));
   assert.equal(big.ok, false);
@@ -1080,7 +1560,10 @@ test("output that is not JSON names the line and column of the first fault, what
   };
   for (const eol of ["\n", "\r\n"]) {
     // The fault is the x: third line, eighth character, whichever line endings the output uses.
-    assert.match(error(["{", '  "a": 1,', '  "b": x', "}"].join(eol)), /at line 3, column 8, near ".*b\\": ⟨here⟩x \}"/u);
+    assert.match(
+      error(["{", '  "a": 1,', '  "b": x', "}"].join(eol)),
+      /at line 3, column 8, near ".*b\\": ⟨here⟩x \}"/u,
+    );
     assert.match(error(`[${eol}1,${eol}2,${eol}]`), /at line 4, column 1, near ".*⟨here⟩\]"/u);
     assert.match(error(`{${eol}"a":tru}`), /at line 2, column 8, near ".*tru⟨here⟩\}"/u);
   }
@@ -1093,7 +1576,10 @@ test("output that is not JSON names the line and column of the first fault, what
     assert.match(error(cut), /it ends early, near ".*⟨here⟩"\.$/u, cut);
   }
   // Columns count characters, so an emoji before the fault counts once and the excerpt never halves it.
-  assert.match(error(`{"${"😀".repeat(20)}":1 x}`), /at line 1, column 27, near "….*😀\\":1 ⟨here⟩x\}"/u);
+  assert.match(
+    error(`{"${"😀".repeat(20)}":1 x}`),
+    /at line 1, column 27, near "….*😀\\":1 ⟨here⟩x\}"/u,
+  );
   // Thirty code units either side of the fault would land inside an emoji here.
   for (const text of [`["${"😀".repeat(40)}"  x]`, `[x"${"😀".repeat(40)}"]`]) {
     assert.doesNotMatch(error(text), /[\uD800-\uDFFF]/u, "no lone surrogate");
@@ -1103,14 +1589,47 @@ test("output that is not JSON names the line and column of the first fault, what
 
 test("the JSON fault scan agrees with the parser on which texts are valid", () => {
   // An independent oracle: every mutation the scan calls valid must parse, and every one it faults must not.
-  const pieces = ["{", "}", "[", "]", ",", ":", '"', "a", "1", "0", "-", ".", "e", "+", " ", "\n", "t", "r", "u", "n", "l", "\\", "x"];
-  const bases = ['{"a":[1,2,{"b":null}],"c":"x\\u00e9"}', "[true,false,null,-0.5e+3]", '"\\n"', "0", "[[],{}]"];
+  const pieces = [
+    "{",
+    "}",
+    "[",
+    "]",
+    ",",
+    ":",
+    '"',
+    "a",
+    "1",
+    "0",
+    "-",
+    ".",
+    "e",
+    "+",
+    " ",
+    "\n",
+    "t",
+    "r",
+    "u",
+    "n",
+    "l",
+    "\\",
+    "x",
+  ];
+  const bases = [
+    '{"a":[1,2,{"b":null}],"c":"x\\u00e9"}',
+    "[true,false,null,-0.5e+3]",
+    '"\\n"',
+    "0",
+    "[[],{}]",
+  ];
   let seed = 7;
   const random = () => (seed = (seed * 1103515245 + 12345) & 0x7fffffff) / 0x7fffffff;
   for (let n = 0; n < 4_000; n += 1) {
     const base = bases[n % bases.length]!;
     const at = Math.floor(random() * base.length);
-    const text = base.slice(0, at) + pieces[Math.floor(random() * pieces.length)] + base.slice(at + (random() < 0.5 ? 1 : 0));
+    const text =
+      base.slice(0, at) +
+      pieces[Math.floor(random() * pieces.length)] +
+      base.slice(at + (random() < 0.5 ? 1 : 0));
     let parses = true;
     try {
       JSON.parse(text);
@@ -1122,8 +1641,18 @@ test("the JSON fault scan agrees with the parser on which texts are valid", () =
 });
 
 test("sources follow the workspace's access like a chat would", () => {
-  const shell: WorkspaceArtifactSourceV1 = { name: "a", kind: "shell", command: "ls", parse: "lines" };
-  const file: WorkspaceArtifactSourceV1 = { name: "b", kind: "file", file: "a.json", parse: "json" };
+  const shell: WorkspaceArtifactSourceV1 = {
+    name: "a",
+    kind: "shell",
+    command: "ls",
+    parse: "lines",
+  };
+  const file: WorkspaceArtifactSourceV1 = {
+    name: "b",
+    kind: "file",
+    file: "a.json",
+    parse: "json",
+  };
   assert.equal(workspaceArtifactSourceAccess("full", true, shell, false), "run");
   assert.equal(workspaceArtifactSourceAccess("ask", true, shell, false), "needs-approval");
   assert.equal(workspaceArtifactSourceAccess("ask", true, shell, true), "run");
@@ -1145,7 +1674,11 @@ test("page data binds each source by name, null until it first loads", () => {
     refreshedAt: 1,
     sources: { pulls: { status: "error", at: 1, dataJson: "[1,2]", error: "offline" } },
   });
-  assert.deepEqual(JSON.parse(workspaceArtifactDataJson(artifact, snapshot)!), { title: "PRs", pulls: [1, 2], todo: null });
+  assert.deepEqual(JSON.parse(workspaceArtifactDataJson(artifact, snapshot)!), {
+    title: "PRs",
+    pulls: [1, 2],
+    todo: null,
+  });
 });
 
 test("a saved read keeps the short folder key it was taken in and drops anything that could be a path", () => {

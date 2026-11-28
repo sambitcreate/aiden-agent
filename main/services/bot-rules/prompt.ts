@@ -16,7 +16,9 @@ function line(rule: BotRule): string {
 /** The `<bot_rules>` block for `name`'s effective rules (locked, built-in, custom). */
 export function renderBotRulesSection(name: string, rules: readonly BotRule[]): string {
   const builtIn = rules.filter((rule) => rule.actionClass !== undefined);
-  const custom = rules.filter((rule) => rule.actionClass === undefined && typeof rule.text === "string");
+  const custom = rules.filter(
+    (rule) => rule.actionClass === undefined && typeof rule.text === "string",
+  );
   const lines = [
     "<bot_rules>",
     `The person set these rules for ${escapePromptText(name)}. Aiden checks every tool call against them; they only ever make you stricter, never looser.`,

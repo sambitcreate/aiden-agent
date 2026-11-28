@@ -8,18 +8,19 @@ Reference: Handy (`cjpais/handy`, MIT) at `f6b3f82` (2026-10-08), local checkout
 
 The owner chose four bundles on 2026-10-09. Each gets its own spec, plan and PR, in this order:
 
-| # | Sub-project | Scope |
-|---|---|---|
+| #     | Sub-project                       | Scope                                                                                                                                                                                                                                                            |
+| ----- | --------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | **1** | **Engine foundation (this spec)** | Engine module layout; sherpa-onnx 1.13.8; curated six-model offline catalog with pinned SHA-256 and resumable downloads; language and translate; Silero VAD trimming and segmentation; worker hardening; local-first provider resolution; Telegram local routing |
-| 2 | Live & accuracy | Streaming models (Nemotron 3.5 Streaming, Parakeet Unified) with a live preview in the pill and composer; Silero-driven silence auto-stop; dictionary biasing (Whisper prompt, sherpa hotwords, OpenAI `prompt`) plus fuzzy custom-word correction |
-| 3 | Dictation UX | History with saved audio and retry; rule-based filler cleanup; paste hardening; mic picker; Esc cancel; mute-while-recording; dedicated LLM cleanup model and prompt |
-| 4 | Consistency & onboarding | Remote dictionary and warm-up; CLI `/voice` and `/dictate` defaults; onboarding voice step |
+| 2     | Live & accuracy                   | Streaming models (Nemotron 3.5 Streaming, Parakeet Unified) with a live preview in the pill and composer; Silero-driven silence auto-stop; dictionary biasing (Whisper prompt, sherpa hotwords, OpenAI `prompt`) plus fuzzy custom-word correction               |
+| 3     | Dictation UX                      | History with saved audio and retry; rule-based filler cleanup; paste hardening; mic picker; Esc cancel; mute-while-recording; dedicated LLM cleanup model and prompt                                                                                             |
+| 4     | Consistency & onboarding          | Remote dictionary and warm-up; CLI `/voice` and `/dictate` defaults; onboarding voice step                                                                                                                                                                       |
 
 A separate throwaway spike measures transcribe.cpp with Metal against sherpa-onnx on CPU. If the numbers justify it, transcribe.cpp can later slot in behind the engine boundary defined here. Nothing in this spec depends on the spike.
 
 Update (2026-10-22): the spike ran on the owner's Mac and picked transcribe.cpp on Metal with Parakeet TDT v3 for Apple silicon. It now sits behind this engine boundary as the `parakeet-gguf` family, and sherpa-onnx stays the engine everywhere else. See [voice dictation speed](voice-dictation-speed-plan.md#phase-2-build).
 
 **Standing rules:**
+
 - **UI stays Aiden.** Port Handy's behavior, never its visuals.
 - **Pre-1.0.** Replace old shapes instead of migrating them.
 - **Downloads are user-initiated only.**
@@ -74,19 +75,20 @@ Update (2026-10-22): the spike ran on the owner's Mac and picked transcribe.cpp 
 
 Rename the Parakeet-specific modules to engine-neutral names. There is no compatibility shim; importers update in the same change.
 
-| From | To |
-|---|---|
-| `parakeet.ts` | `local-speech.ts` (parent: lifecycle, lane, leases, supervisor wiring) |
-| `parakeet-engine.ts` | `local-speech-engine.ts` (Electron-free sherpa adapter; runs in the worker, the CLI worker thread, and the in-process fallback) |
-| `parakeet-worker.ts` | `local-speech-worker.ts` (build entry `build/main/local-speech-worker.js`; update `scripts/build-electron.mjs` and `scripts/verify-macos-package.mjs`) |
-| `parakeet-protocol.ts` | `local-speech-protocol.ts` (v2) |
-| `parakeet-process-core.ts` | `local-speech-process-core.ts` |
-| `parakeet-transcription-lane.ts` | `local-speech-lane.ts` |
-| `parakeet-idle-unload.ts` | `local-speech-idle-unload.ts` |
-| `local-models-core.ts` | split into `local-speech-catalog.ts` (pure data plus selectors) and `local-speech-downloads.ts` (downloader) |
-| `local-models.ts` | `local-speech-models.ts` (Electron wiring, IPC progress) |
+| From                             | To                                                                                                                                                     |
+| -------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `parakeet.ts`                    | `local-speech.ts` (parent: lifecycle, lane, leases, supervisor wiring)                                                                                 |
+| `parakeet-engine.ts`             | `local-speech-engine.ts` (Electron-free sherpa adapter; runs in the worker, the CLI worker thread, and the in-process fallback)                        |
+| `parakeet-worker.ts`             | `local-speech-worker.ts` (build entry `build/main/local-speech-worker.js`; update `scripts/build-electron.mjs` and `scripts/verify-macos-package.mjs`) |
+| `parakeet-protocol.ts`           | `local-speech-protocol.ts` (v2)                                                                                                                        |
+| `parakeet-process-core.ts`       | `local-speech-process-core.ts`                                                                                                                         |
+| `parakeet-transcription-lane.ts` | `local-speech-lane.ts`                                                                                                                                 |
+| `parakeet-idle-unload.ts`        | `local-speech-idle-unload.ts`                                                                                                                          |
+| `local-models-core.ts`           | split into `local-speech-catalog.ts` (pure data plus selectors) and `local-speech-downloads.ts` (downloader)                                           |
+| `local-models.ts`                | `local-speech-models.ts` (Electron wiring, IPC progress)                                                                                               |
 
 New pure modules:
+
 - `local-speech-language.ts` (language resolver)
 - `local-speech-vad.ts` (segmentation planning)
 - `renderer/shared/voice-provider.ts` (provider resolver; shared by main, renderer and CLI)
@@ -100,12 +102,17 @@ IPC channel names stay stable (`localVoice:*`, `localModels:*`, `voice:transcrib
 `local-speech-catalog.ts` exports a frozen `SPEECH_MODELS` array. Each entry is a `SpeechModelSpec`:
 
 ```ts
-type SpeechModelFamily = "nemo-transducer" | "nemo-canary" | "whisper" | "sense-voice" | "moonshine-v2";
+type SpeechModelFamily =
+  | "nemo-transducer"
+  | "nemo-canary"
+  | "whisper"
+  | "sense-voice"
+  | "moonshine-v2";
 
 interface SpeechModelSpec {
-  id: string;                        // stable, /^[a-z0-9-]{1,64}$/
+  id: string; // stable, /^[a-z0-9-]{1,64}$/
   name: string;
-  description: string;               // one plain sentence
+  description: string; // one plain sentence
   family: SpeechModelFamily;
   archive: { url: string; bytes: number; sha256: string };
   /** Role → path inside the extracted directory. Every role must exist for `installed`. */
@@ -113,8 +120,8 @@ interface SpeechModelSpec {
   /** ISO 639-1/3 base codes the model can transcribe. */
   languages: readonly string[];
   capabilities: {
-    autoDetect: boolean;             // model can pick the language itself
-    languageHint: boolean;           // model accepts an explicit source language
+    autoDetect: boolean; // model can pick the language itself
+    languageHint: boolean; // model accepts an explicit source language
     translateToEnglish: boolean;
     /** Longest single decode window; longer speech is VAD-segmented. */
     maxWindowSeconds: number | null;
@@ -122,23 +129,24 @@ interface SpeechModelSpec {
   /** 0..1, from Handy's catalog.json at f6b3f82 (score / 100). Relative, display-only. */
   accuracy: number;
   speed: number;
-  recommended: boolean;              // exactly one entry
+  recommended: boolean; // exactly one entry
   license: { name: string; url: string; attribution?: string };
 }
 ```
 
 **The six entries.** All archives come from `https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/`. Sizes and digests were read from the GitHub release asset API on 2026-10-09.
 
-| id | Archive | Bytes | sha256 | Family | Files kept | Languages | Auto | Hint | Translate | Window | Acc / Speed | License |
-|---|---|---|---|---|---|---|---|---|---|---|---|---|
-| `parakeet-v3` ★ | `sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8.tar.bz2` | 487170055 | `5793d0fd397c5778d2cf2126994d58e9d56b1be7c04d13c7a15bb1b4eafb16bf` | nemo-transducer | `encoder.int8.onnx`, `decoder.int8.onnx`, `joiner.int8.onnx`, `tokens.txt` | 25 European (bg hr cs da nl en et fi fr de el hu it lv lt mt pl pt ro ru sk sl es sv uk) | ✓ | – | – | null | 0.88 / 0.79 | CC-BY-4.0 (NVIDIA) |
-| `parakeet-v2` | `sherpa-onnx-nemo-parakeet-tdt-0.6b-v2-int8.tar.bz2` | 482468385 | `157c157bc51155e03e37d2466522a3a737dd9c72bb25f36eb18912964161e1ad` | nemo-transducer | same four | en | – | – | – | null | 0.89 / 0.85 | CC-BY-4.0 (NVIDIA) |
-| `canary-180m-flash` | `sherpa-onnx-nemo-canary-180m-flash-en-es-de-fr-int8.tar.bz2` | 153692328 | `7a38ed8b13f014ad632b09ff8d22e0c6f1359dd046af9235d281dfae841b9ab9` | nemo-canary | `encoder.int8.onnx`, `decoder.int8.onnx`, `tokens.txt` | en de es fr | – | ✓ | ✓ (de/es/fr → en) | null | 0.88 / 0.98 | CC-BY-4.0 (NVIDIA) |
-| `whisper-turbo` | `sherpa-onnx-whisper-turbo.tar.bz2` | 563790207 | **computed once at implementation** (GitHub publishes no digest for this asset) | whisper | `turbo-encoder.int8.onnx`, `turbo-decoder.int8.onnx`, `turbo-tokens.txt` | 99 (Whisper set) | ✓ | ✓ | – (turbo was trained without translation) | 30 | 0.88 / 0.35 | MIT (OpenAI) |
-| `sense-voice` | `sherpa-onnx-sense-voice-zh-en-ja-ko-yue-int8-2024-07-17.tar.bz2` | 163002883 | `7d1efa2138a65b0b488df37f8b89e3d91a60676e416f515b952358d83dfd347e` | sense-voice | `model.int8.onnx`, `tokens.txt` | zh yue en ja ko | ✓ | ✓ | – | 30 | 0.81 / 0.98 | FunASR Model License 1.1 (attribution: "SenseVoice Small, Alibaba FunAudioLLM") |
-| `moonshine-base-en` | `sherpa-onnx-moonshine-base-en-quantized-2026-02-27.tar.bz2` | 111266225 | `43232c1d13013d37317163baec3135bd771a186a4356f28c889bab453bb0e891` | moonshine-v2 | `encoder_model.ort`, `decoder_model_merged.ort`, `tokens.txt` | en | – | – | – | 30 | 0.80 / 0.99 | MIT (Moonshine English models) |
+| id                  | Archive                                                           | Bytes     | sha256                                                                          | Family          | Files kept                                                                 | Languages                                                                                | Auto | Hint | Translate                                 | Window | Acc / Speed | License                                                                         |
+| ------------------- | ----------------------------------------------------------------- | --------- | ------------------------------------------------------------------------------- | --------------- | -------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------- | ---- | ---- | ----------------------------------------- | ------ | ----------- | ------------------------------------------------------------------------------- |
+| `parakeet-v3` ★     | `sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8.tar.bz2`              | 487170055 | `5793d0fd397c5778d2cf2126994d58e9d56b1be7c04d13c7a15bb1b4eafb16bf`              | nemo-transducer | `encoder.int8.onnx`, `decoder.int8.onnx`, `joiner.int8.onnx`, `tokens.txt` | 25 European (bg hr cs da nl en et fi fr de el hu it lv lt mt pl pt ro ru sk sl es sv uk) | ✓    | –    | –                                         | null   | 0.88 / 0.79 | CC-BY-4.0 (NVIDIA)                                                              |
+| `parakeet-v2`       | `sherpa-onnx-nemo-parakeet-tdt-0.6b-v2-int8.tar.bz2`              | 482468385 | `157c157bc51155e03e37d2466522a3a737dd9c72bb25f36eb18912964161e1ad`              | nemo-transducer | same four                                                                  | en                                                                                       | –    | –    | –                                         | null   | 0.89 / 0.85 | CC-BY-4.0 (NVIDIA)                                                              |
+| `canary-180m-flash` | `sherpa-onnx-nemo-canary-180m-flash-en-es-de-fr-int8.tar.bz2`     | 153692328 | `7a38ed8b13f014ad632b09ff8d22e0c6f1359dd046af9235d281dfae841b9ab9`              | nemo-canary     | `encoder.int8.onnx`, `decoder.int8.onnx`, `tokens.txt`                     | en de es fr                                                                              | –    | ✓    | ✓ (de/es/fr → en)                         | null   | 0.88 / 0.98 | CC-BY-4.0 (NVIDIA)                                                              |
+| `whisper-turbo`     | `sherpa-onnx-whisper-turbo.tar.bz2`                               | 563790207 | **computed once at implementation** (GitHub publishes no digest for this asset) | whisper         | `turbo-encoder.int8.onnx`, `turbo-decoder.int8.onnx`, `turbo-tokens.txt`   | 99 (Whisper set)                                                                         | ✓    | ✓    | – (turbo was trained without translation) | 30     | 0.88 / 0.35 | MIT (OpenAI)                                                                    |
+| `sense-voice`       | `sherpa-onnx-sense-voice-zh-en-ja-ko-yue-int8-2024-07-17.tar.bz2` | 163002883 | `7d1efa2138a65b0b488df37f8b89e3d91a60676e416f515b952358d83dfd347e`              | sense-voice     | `model.int8.onnx`, `tokens.txt`                                            | zh yue en ja ko                                                                          | ✓    | ✓    | –                                         | 30     | 0.81 / 0.98 | FunASR Model License 1.1 (attribution: "SenseVoice Small, Alibaba FunAudioLLM") |
+| `moonshine-base-en` | `sherpa-onnx-moonshine-base-en-quantized-2026-02-27.tar.bz2`      | 111266225 | `43232c1d13013d37317163baec3135bd771a186a4356f28c889bab453bb0e891`              | moonshine-v2    | `encoder_model.ort`, `decoder_model_merged.ort`, `tokens.txt`              | en                                                                                       | –    | –    | –                                         | 30     | 0.80 / 0.99 | MIT (Moonshine English models)                                                  |
 
 Catalog notes:
+
 - **SenseVoice:** the 2024-07-17 build is the original FunAudioLLM SenseVoiceSmall. The 2025-09-09 int8 export is a Cantonese fine-tune (ASLP-lab WSYue) and is not used.
 - **Moonshine v2:** its config uses `moonshine: { encoder, mergedDecoder }`. The native addon in 1.13.x has supported `mergedDecoder` since before 1.13.4, even though `types.js` still documents only the v1 fields.
 - **Whisper turbo:** the implementer downloads the archive once, records its sha256 in the catalog, and notes the date in the plan. Every other digest above is final.
@@ -151,14 +159,15 @@ Catalog notes:
 
 The downloader is a port of Handy's hardened `managers/model/download.rs` behavior into Node `fetch` streams.
 
-- **Partial file.** Bytes go to `<root>/.partial/<id>.tar.bz2.part`. On start, an existing partial file of size *n* (0 < *n* < `bytes`) resumes with `Range: bytes=n-`.
+- **Partial file.** Bytes go to `<root>/.partial/<id>.tar.bz2.part`. On start, an existing partial file of size _n_ (0 < _n_ < `bytes`) resumes with `Range: bytes=n-`.
 - **Resume responses.**
 
-  | Response | Action |
-  |---|---|
-  | 206 | `Content-Range` must start at exactly *n*, or the partial is discarded and the download restarts. |
-  | 200 to a Range request | Truncate and restart from 0. |
-  | 416 | Accepted only when the partial size equals `bytes` and its hash matches. Otherwise discard and restart. |
+  | Response               | Action                                                                                                  |
+  | ---------------------- | ------------------------------------------------------------------------------------------------------- |
+  | 206                    | `Content-Range` must start at exactly _n_, or the partial is discarded and the download restarts.       |
+  | 200 to a Range request | Truncate and restart from 0.                                                                            |
+  | 416                    | Accepted only when the partial size equals `bytes` and its hash matches. Otherwise discard and restart. |
+
 - **Size bound.** The stream is cut at the first byte past `archive.bytes`, which fails the download. The final size must equal `bytes`. This replaces the global 800 MB cap.
 - **Timeouts.** Connect 15 s. A stall (no bytes for 60 s) aborts with a retryable error. There are no automatic retries; the user presses Download again and it resumes.
 - **Hashing.**
@@ -186,15 +195,16 @@ The downloader is a port of Handy's hardened `managers/model/download.rs` behavi
 - **One model slot.** The engine holds at most one loaded `OfflineRecognizer`. Loading a different model releases the current one first. This matches Handy's single-worker rule and bounds memory: Whisper turbo plus Parakeet together would exceed 1.5 GB.
 - **Family config builders.** A pure `buildRecognizerConfig(spec, dir, request)` returns the sherpa config. Shared fields are `featConfig { sampleRate: 16000, featureDim: 80 }`, `numThreads: 2` and `provider: "cpu"`.
 
-  | Family | Model config |
-  |---|---|
-  | nemo-transducer | `transducer { encoder, decoder, joiner }`, `modelType: "nemo_transducer"` |
-  | nemo-canary | `canary { encoder, decoder, srcLang, tgtLang, usePnc: 1 }` |
-  | whisper | `whisper { encoder, decoder, language, task: "transcribe" }` (sherpa's default `tailPaddings`) |
-  | sense-voice | `senseVoice { model, language, useInverseTextNormalization: 1 }` |
-  | moonshine-v2 | `moonshine { encoder, mergedDecoder }` |
+  | Family          | Model config                                                                                   |
+  | --------------- | ---------------------------------------------------------------------------------------------- |
+  | nemo-transducer | `transducer { encoder, decoder, joiner }`, `modelType: "nemo_transducer"`                      |
+  | nemo-canary     | `canary { encoder, decoder, srcLang, tgtLang, usePnc: 1 }`                                     |
+  | whisper         | `whisper { encoder, decoder, language, task: "transcribe" }` (sherpa's default `tailPaddings`) |
+  | sense-voice     | `senseVoice { model, language, useInverseTextNormalization: 1 }`                               |
+  | moonshine-v2    | `moonshine { encoder, mergedDecoder }`                                                         |
 
   Every family also sets `tokens`.
+
 - **Per-request language and task.**
   - Whisper's language is applied per stream via `OfflineStream.setOption("language", code)`.
   - Canary's `srcLang`/`tgtLang` and SenseVoice's `language` are applied with `OfflineRecognizer.setConfig(...)` only when they differ from the last request. Both are exposed by the 1.13.8 node API.
@@ -211,21 +221,23 @@ This runs inside the worker before decode, using sherpa's `Vad` with the bundled
 
 **Configuration.** Values are taken from Handy's `SmoothedVad` and adapted to sherpa's API.
 
-| Setting | Value | Note |
-|---|---|---|
-| `threshold` | 0.3 | |
+| Setting              | Value  | Note                     |
+| -------------------- | ------ | ------------------------ |
+| `threshold`          | 0.3    |                          |
 | `minSilenceDuration` | 0.45 s | Handy's offline hangover |
-| `minSpeechDuration` | 0.06 s | Handy's onset |
-| `windowSize` | 512 | |
-| `maxSpeechDuration` | 28 s | |
+| `minSpeechDuration`  | 0.06 s | Handy's onset            |
+| `windowSize`         | 512    |                          |
+| `maxSpeechDuration`  | 28 s   |                          |
 
 **Planning.** A pure `planSegments(regions, totalSamples, maxWindowSeconds)` takes the VAD speech regions and returns the sample ranges to decode:
+
 - add 450 ms pre-roll and 450 ms post-roll, clamped to the clip;
 - merge regions whose padded ranges overlap or are less than 300 ms apart;
 - for windowed families, greedily pack merged regions into windows of at most `maxWindowSeconds - 2` (28 s), splitting only at region boundaries. A single region longer than 28 s is split at the 28 s limit, which sherpa already enforces through `maxSpeechDuration`;
 - for unwindowed families (Parakeet, Canary), return one range from the first region's padded start to the last region's padded end, so silence is trimmed but the context is whole.
 
 **Edge cases.**
+
 - No speech regions: return `{ text: "", language: null }` without decoding. This is the guard against Whisper hallucinating on silence.
 - Clips shorter than 1 s are zero-padded to 1.25 s before VAD and decode, as Handy does.
 - VAD failure (model missing or a throw) fails open: decode the whole clip as one range (windowed families still get fixed 28 s chunks) and log a warning.
@@ -235,6 +247,7 @@ This runs inside the worker before decode, using sherpa's `Vad` with the bundled
 ### 7. Worker protocol v2 and supervision
 
 **Messages** (`local-speech-protocol.ts`, `version: 2`):
+
 - Parent to worker:
   - `status`
   - `load { modelId, modelDirectory, spec }` (replaces `warm`)
@@ -244,12 +257,14 @@ This runs inside the worker before decode, using sherpa's `Vad` with the bundled
 - `pcm` is sent as a typed array through Electron's structured clone, not base64.
 
 **PCM through the pipeline.**
+
 - The renderer produces PCM16 once, in `renderer/lib/voice-recorder-core.ts` (float32 → clamped Int16), and sends it over `voice:transcribeLocal` as an `ArrayBuffer`.
 - Remote and CLI already have PCM16; they decode base64 once in main.
 - Compared with today's float32 base64 per hop, this is about 2.7× less data.
-- *Implementation check:* confirm Electron 43 `UtilityProcess.postMessage` and `ipcRenderer.invoke` both structured-clone typed arrays. If either doesn't, fall back to base64 PCM16 on that hop only, which still halves today's payload.
+- _Implementation check:_ confirm Electron 43 `UtilityProcess.postMessage` and `ipcRenderer.invoke` both structured-clone typed arrays. If either doesn't, fall back to base64 PCM16 on that hop only, which still halves today's payload.
 
 **Validation.** Parsers in `local-speech-protocol.ts` validate:
+
 - `pcm` length ≤ 16000 × 60 × 30 samples (30 minutes);
 - `language` matches `/^[a-z]{2,3}$/` or is null;
 - `spec.id` equals `modelId`.
@@ -267,16 +282,19 @@ This runs inside the worker before decode, using sherpa's `Vad` with the bundled
 ### 8. Language resolution (`local-speech-language.ts`)
 
 **New settings** (§13):
+
 - `voiceLanguage`: `"auto"` or a base code, default `"auto"`.
 - `voiceTranslateToEnglish`: default `false`.
 
 **`effectiveLanguage(spec, intent)`** is a pure function that resolves at the point of use and is never written back:
+
 1. If `intent` is `"auto"`: return `null` (let the model detect) when `spec.capabilities.autoDetect`; otherwise `"en"` if supported, otherwise `spec.languages[0]`.
 2. If `intent` is in `spec.languages`, return it.
 3. Otherwise apply the aliases `nb→no`, `fil→tl`, `iw→he`, `in→id`, `zh-*→zh`, `yue-*→yue`, then retry step 2.
 4. Otherwise fall back as in step 1. The UI shows "This model doesn't support <language>; using <fallback>."
 
 **Per-family behavior:**
+
 - **nemo-transducer:** the hint is ignored, because Parakeet takes no language prompt. Parakeet v2 is English-only.
 - **Canary:** `srcLang` is the resolved code. When translating, `tgtLang = "en"`; otherwise `tgtLang = srcLang`.
 - **Whisper and SenseVoice:** the resolved code, or `""` for auto.
@@ -292,16 +310,17 @@ type VoiceProviderResolution =
   | { kind: "needs-setup"; reason: "no-local-model" | "no-provider" | "local-engine-unavailable" };
 
 function resolveVoiceProvider(input: {
-  explicit: VoiceProvider | undefined;     // settings.voiceProvider
-  localModelId: string | undefined;        // settings.localVoiceModel
+  explicit: VoiceProvider | undefined; // settings.voiceProvider
+  localModelId: string | undefined; // settings.localVoiceModel
   installedLocalModels: readonly string[]; // catalog order
   engineReady: boolean;
   hasOpenAIKey: boolean;
-  hasGeminiVoice: boolean;                 // Gemini key with voice scope
+  hasGeminiVoice: boolean; // Gemini key with voice scope
 }): VoiceProviderResolution;
 ```
 
 **Rules.**
+
 - **An explicit choice always wins.**
   - `local` with no installed model resolves to `needs-setup/no-local-model`; with the engine down, to `local-engine-unavailable`.
   - An explicit cloud provider resolves to `ready`, even without a key, so the existing key errors still surface.
@@ -312,6 +331,7 @@ function resolveVoiceProvider(input: {
 - **The local model** is `localVoiceModel` if it is installed. Otherwise it is the first installed model in catalog order, which puts the recommended model first.
 
 **Call sites.**
+
 - All six `voiceProvider ?? "openai"` sites use the resolver, as do Telegram (§11) and Remote.
 - Renderer callers get the resolution from a new `voice:resolveProvider` IPC. Main gathers the key presence and installed models; no secrets cross to the renderer.
 - Settings → Voice shows the effective provider when none is explicit: "Automatic — using On-device (Parakeet v3)".
@@ -339,7 +359,7 @@ function resolveVoiceProvider(input: {
   - `loading` is emitted when a `load` or a load-triggering `transcribe` starts.
   - Only `ready` or `failed` end a loading state in the UI. An `unloaded` from idle unload that races a load is ignored, following Handy 417dc6a.
 - **Slow-load notice.** When the user stops recording and the result is waiting on a load still in progress, the pill and composer show "Loading model…" only after 2 s (`SLOW_MODEL_LOAD_MS = 2000`). Warm loads never flash it. Once shown, it stays for that operation.
-- **No-model guard.** The resolver runs on the dictation shortcut press (`dictation-coordinator.ts` `press`) and on the composer mic press, *before* the mic is opened.
+- **No-model guard.** The resolver runs on the dictation shortcut press (`dictation-coordinator.ts` `press`) and on the composer mic press, _before_ the mic is opened.
   - `needs-setup` doesn't open the mic.
   - The pill shows an error with a Settings action: "Download a voice model in Settings → Voice" or "Set up a voice provider in Settings → Voice".
   - The composer shows the same copy in its existing voice error surface.
@@ -348,6 +368,7 @@ function resolveVoiceProvider(input: {
 ### 13. Settings
 
 **New keys** in `main/services/types.ts` `AppSettings`:
+
 - `voiceLanguage?: string` — `"auto"` or a base code; invalid values are dropped.
 - `voiceTranslateToEnglish?: boolean`
 - `voiceTrimSilence?: boolean` — default `true` when unset.
@@ -386,6 +407,7 @@ All changes extend existing components in `renderer/components/settings/`. They 
   - the download `phase: "verify"`
 
   The contract revision isn't bumped because no client needs the new fields. Check against main at merge time per AGENTS.md: if another PR has claimed a revision for a speech change, coordinate.
+
 - **Remote transcription** uses the resolved local model, `voiceLanguage`, task and trim. Its 60 s cap is unchanged.
 - **Native checks:**
   - iOS `AidenWorkspaceShellView.swift` and Android `AidenVoiceSettingsScreen.kt` render a six-row model list correctly, with long names and the new size labels.
@@ -410,26 +432,27 @@ All changes extend existing components in `renderer/components/settings/`. They 
 
 All tests are behavioral. They are registered in `test:voice`, and a new file added outside it is registered in the matching lane script. Test files are renamed with their modules (§1).
 
-| Area | Test | Oracle |
-|---|---|---|
-| Catalog | `local-speech-catalog.test.ts` | Every entry's `files` roles map to real config fields in `buildRecognizerConfig` output; exactly one `recommended`; ids are unique and valid; every sha256 is 64 lowercase hex characters; `sizeLabel` derives from bytes. These are independent invariants, not a list reflected through itself. |
-| Config builders | `local-speech-engine.test.ts` with a fake sherpa module | Canary translate sets `tgtLang: "en"`; Whisper auto passes `""` and sets the stream option; a `setConfig` throw triggers a rebuild; the single slot releases the previous recognizer; CJK segment joining. |
-| Downloader | `local-speech-downloads.test.ts` against a local `node:http` fixture | Resume with 206 at the right offset; 206 at a wrong offset restarts; 200 to Range restarts; 416 with a complete, valid partial succeeds; hash mismatch deletes the partial and errors; an oversize stream is cut; a stall times out using an injected clock; cancel keeps the partial; extraction prunes non-required files; leftovers are cleaned. Uses small synthetic tar.bz2 archives built in the test. |
-| Language | `local-speech-language.test.ts` | Resolution table across all six specs × {auto, en, de, yue, nb, unsupported}; `effectiveTask` matrix. |
-| VAD planning | `local-speech-vad.test.ts` | `planSegments` on synthetic region lists: padding, merging, 28 s packing, oversize split, empty result, unwindowed single range. |
-| VAD integration | Same file, real sherpa `Vad` on generated PCM (sine bursts plus silence) | Detects bursts within ±60 ms; all-silence returns no regions. Runs where `sherpa-onnx-node` loads; otherwise skips with a reason. |
-| Protocol | `local-speech-protocol.test.ts` | v2 round trip with an `Int16Array`; rejects oversize PCM, bad language codes and a mismatched spec id. |
-| Supervision | `local-speech-process-core.test.ts` with a fake child | Crash → one retry → success; second crash → `decode-failed`; hang beyond the scaled deadline → kill and retry; cancel → no retry; stderr tail captured. |
-| Provider resolver | `renderer/shared/voice-provider.test.ts` | Full decision table from §9. |
-| Telegram | Extend `aiden-remote-speech.test.ts` or a new `transcription-routing.test.ts` | Local resolution routes OGG/Opus through decode and the lane (fake decoder and lane); cloud resolution is unchanged. |
-| Settings | Extend `dictation-preferences.test.ts` or add `voice-preferences.test.ts` | Patch parsing and invalid-shape dropping for the three new keys. |
-| UI | Testing Library on `model-manager-view` and `voice-settings` | Rows render language, capability and licence text; the Translate switch appears only for Canary; Automatic shows the resolved caption; "Verifying…" appears in the verify phase. No className assertions. |
-| Pill | Extend pill tests | "Loading model…" appears only after 2 s on a fake clock; needs-setup never calls `getUserMedia`. |
-| Bundle | `scripts/verify-macos-package.test.mjs`, CLI `tests/bundle.test.mjs` | Worker entry renamed; `silero_vad.onnx` present with the pinned hash. |
-| Native | iOS and Android Remote client tests | Decode `/speech` with the additive fields. |
-| Smoke (opt-in) | `AIDEN_STT_SMOKE=1 npm run test:stt-smoke` (not in CI) | Downloads the six real archives on explicit opt-in, verifies hashes, and transcribes a `say`-generated WAV with each model, asserting key words. Used once before merge and recorded in the PR. |
+| Area              | Test                                                                          | Oracle                                                                                                                                                                                                                                                                                                                                                                                                       |
+| ----------------- | ----------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Catalog           | `local-speech-catalog.test.ts`                                                | Every entry's `files` roles map to real config fields in `buildRecognizerConfig` output; exactly one `recommended`; ids are unique and valid; every sha256 is 64 lowercase hex characters; `sizeLabel` derives from bytes. These are independent invariants, not a list reflected through itself.                                                                                                            |
+| Config builders   | `local-speech-engine.test.ts` with a fake sherpa module                       | Canary translate sets `tgtLang: "en"`; Whisper auto passes `""` and sets the stream option; a `setConfig` throw triggers a rebuild; the single slot releases the previous recognizer; CJK segment joining.                                                                                                                                                                                                   |
+| Downloader        | `local-speech-downloads.test.ts` against a local `node:http` fixture          | Resume with 206 at the right offset; 206 at a wrong offset restarts; 200 to Range restarts; 416 with a complete, valid partial succeeds; hash mismatch deletes the partial and errors; an oversize stream is cut; a stall times out using an injected clock; cancel keeps the partial; extraction prunes non-required files; leftovers are cleaned. Uses small synthetic tar.bz2 archives built in the test. |
+| Language          | `local-speech-language.test.ts`                                               | Resolution table across all six specs × {auto, en, de, yue, nb, unsupported}; `effectiveTask` matrix.                                                                                                                                                                                                                                                                                                        |
+| VAD planning      | `local-speech-vad.test.ts`                                                    | `planSegments` on synthetic region lists: padding, merging, 28 s packing, oversize split, empty result, unwindowed single range.                                                                                                                                                                                                                                                                             |
+| VAD integration   | Same file, real sherpa `Vad` on generated PCM (sine bursts plus silence)      | Detects bursts within ±60 ms; all-silence returns no regions. Runs where `sherpa-onnx-node` loads; otherwise skips with a reason.                                                                                                                                                                                                                                                                            |
+| Protocol          | `local-speech-protocol.test.ts`                                               | v2 round trip with an `Int16Array`; rejects oversize PCM, bad language codes and a mismatched spec id.                                                                                                                                                                                                                                                                                                       |
+| Supervision       | `local-speech-process-core.test.ts` with a fake child                         | Crash → one retry → success; second crash → `decode-failed`; hang beyond the scaled deadline → kill and retry; cancel → no retry; stderr tail captured.                                                                                                                                                                                                                                                      |
+| Provider resolver | `renderer/shared/voice-provider.test.ts`                                      | Full decision table from §9.                                                                                                                                                                                                                                                                                                                                                                                 |
+| Telegram          | Extend `aiden-remote-speech.test.ts` or a new `transcription-routing.test.ts` | Local resolution routes OGG/Opus through decode and the lane (fake decoder and lane); cloud resolution is unchanged.                                                                                                                                                                                                                                                                                         |
+| Settings          | Extend `dictation-preferences.test.ts` or add `voice-preferences.test.ts`     | Patch parsing and invalid-shape dropping for the three new keys.                                                                                                                                                                                                                                                                                                                                             |
+| UI                | Testing Library on `model-manager-view` and `voice-settings`                  | Rows render language, capability and licence text; the Translate switch appears only for Canary; Automatic shows the resolved caption; "Verifying…" appears in the verify phase. No className assertions.                                                                                                                                                                                                    |
+| Pill              | Extend pill tests                                                             | "Loading model…" appears only after 2 s on a fake clock; needs-setup never calls `getUserMedia`.                                                                                                                                                                                                                                                                                                             |
+| Bundle            | `scripts/verify-macos-package.test.mjs`, CLI `tests/bundle.test.mjs`          | Worker entry renamed; `silero_vad.onnx` present with the pinned hash.                                                                                                                                                                                                                                                                                                                                        |
+| Native            | iOS and Android Remote client tests                                           | Decode `/speech` with the additive fields.                                                                                                                                                                                                                                                                                                                                                                   |
+| Smoke (opt-in)    | `AIDEN_STT_SMOKE=1 npm run test:stt-smoke` (not in CI)                        | Downloads the six real archives on explicit opt-in, verifies hashes, and transcribes a `say`-generated WAV with each model, asserting key words. Used once before merge and recorded in the PR.                                                                                                                                                                                                              |
 
 **Suites before PR:**
+
 - `npm run test:voice`
 - `npm run test:aiden-remote-speech`
 - the serial lane for the renamed files
@@ -455,9 +478,9 @@ All tests are behavioral. They are registered in `test:voice`, and a new file ad
 
 - **Structured clone of typed arrays** over `utilityProcess` and `ipcRenderer.invoke` in Electron 43. There is a fallback in §7.
 - **Gemini batch language field** existence (§10). The fallback is no hint.
-- **Moonshine v2 `.ort` files** need ONNX Runtime ORT-format support in sherpa's bundled runtime. If loading fails on 1.13.8, drop Moonshine from the catalog for this sub-project and record why. The other five don't depend on it. *Verified 2026-10-09: Moonshine loads and transcribes on 1.13.8; it stays.*
+- **Moonshine v2 `.ort` files** need ONNX Runtime ORT-format support in sherpa's bundled runtime. If loading fails on 1.13.8, drop Moonshine from the catalog for this sub-project and record why. The other five don't depend on it. _Verified 2026-10-09: Moonshine loads and transcribes on 1.13.8; it stays._
 - **`ogg-opus-decoder` size** (§11) has a defined fallback.
-- **Memory:** Whisper turbo int8 is expected to peak around 1–1.5 GB RSS in the worker. The single-slot rule and idle unload bound it. Record the measured peak in the PR. *Measured 2026-10-09: about 2.5 GB after load and 2.8 GB peak in a fresh process (short clips); the Parakeet models are about 2 GB. Revisit in sub-project 2.*
+- **Memory:** Whisper turbo int8 is expected to peak around 1–1.5 GB RSS in the worker. The single-slot rule and idle unload bound it. Record the measured peak in the PR. _Measured 2026-10-09: about 2.5 GB after load and 2.8 GB peak in a fresh process (short clips); the Parakeet models are about 2 GB. Revisit in sub-project 2._
 - **Handy scores** were measured on transcribe.cpp. They are relative display hints only.
 
 ## Licensing and attribution

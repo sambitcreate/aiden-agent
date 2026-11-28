@@ -10,7 +10,10 @@
  * metadata is stale whenever its OS guard is free, even if the PID was reused.
  */
 
-import { ensurePrivateDirectory, hardenPrivateFile } from "../../../main/services/private-storage.ts";
+import {
+  ensurePrivateDirectory,
+  hardenPrivateFile,
+} from "../../../main/services/private-storage.ts";
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { closeSync, existsSync, openSync, readFileSync, realpathSync, rmSync } from "node:fs";
 import { createConnection } from "node:net";
@@ -20,7 +23,12 @@ import { acquireLease, atomicJson, cliLeaseHelperPath, leaseGuardPath, readJson 
 import { tryAcquireProcessLifetimeLock } from "../../../main/services/process-lifetime-lock.ts";
 import { watchMcpProcessGroupRecords } from "../../../main/services/mcp-stdio-transport.js";
 import { listObservedProcesses } from "../../../main/shared/process-group.js";
-import { decideServeStopDeadline, decideServeStopStart, type ServeOwnerObservation, type ServeProcessClass } from "./serve-ownership.ts";
+import {
+  decideServeStopDeadline,
+  decideServeStopStart,
+  type ServeOwnerObservation,
+  type ServeProcessClass,
+} from "./serve-ownership.ts";
 
 const SERVE_LOCK = "serve.lock";
 const SERVE_LOG = "serve.log";
@@ -46,7 +54,9 @@ function processGroupId(pid: number): number | undefined {
     const out = spawnSync("ps", ["-o", "pgid=", "-p", String(pid)], { encoding: "utf8" });
     const pgid = out.status === 0 ? Number(out.stdout.trim()) : NaN;
     return Number.isSafeInteger(pgid) && pgid > 0 ? pgid : undefined;
-  } catch { return undefined; }
+  } catch {
+    return undefined;
+  }
 }
 
 export interface ObservedProcess {
@@ -82,7 +92,8 @@ export function recordServeMcpGroups(agentDir: string): () => void {
     // Never recreate a lease directory that was already released.
     if (!existsSync(lock)) return;
     const owner = serveOwner(agentDir);
-    const token = owner?.pid === process.pid && typeof owner.token === "string" ? owner.token : undefined;
+    const token =
+      owner?.pid === process.pid && typeof owner.token === "string" ? owner.token : undefined;
     const groups = records.map((record) => record.pgid);
     try {
       atomicJson(join(lock, MCP_GROUPS), {
@@ -91,7 +102,9 @@ export function recordServeMcpGroups(agentDir: string): () => void {
         groups,
         groupRecords: records,
       });
-    } catch { /* best effort */ }
+    } catch {
+      /* best effort */
+    }
   });
 }
 
@@ -188,7 +201,11 @@ export function selectDaemonMcpGroups(
     for (const member of members) {
       if (daemonUid !== undefined && member.uid !== daemonUid) continue;
       if (typeof member.startId !== "string" || member.startId.length === 0) continue;
-      if (validSurvivors.some((survivor) => survivor.pid === member.pid && survivor.startId === member.startId)) {
+      if (
+        validSurvivors.some(
+          (survivor) => survivor.pid === member.pid && survivor.startId === member.startId,
+        )
+      ) {
         verifiedSurvivorPids.add(member.pid);
       }
     }
@@ -210,9 +227,10 @@ function parseRecordedMcpGroups(
       if (!item || typeof item !== "object") continue;
       const raw = item as { pgid?: unknown; leaderStartId?: unknown; survivors?: unknown };
       if (!validPid(raw.pgid) || raw.pgid === daemonPid) continue;
-      const leaderStartId = typeof raw.leaderStartId === "string" && raw.leaderStartId.length > 0
-        ? raw.leaderStartId
-        : undefined;
+      const leaderStartId =
+        typeof raw.leaderStartId === "string" && raw.leaderStartId.length > 0
+          ? raw.leaderStartId
+          : undefined;
       const survivors: RecordedMcpGroupSurvivor[] = [];
       if (Array.isArray(raw.survivors)) {
         for (const survivor of raw.survivors) {
@@ -243,18 +261,32 @@ function parseRecordedMcpGroups(
  * children and incarnation-verified orphaned grandchild servers whose wrapper exited.
  */
 function daemonMcpGroups(agentDir: string, pid: number, owner?: ServeOwner): number[] {
-  let recorded: { pid?: unknown; token?: unknown; groups?: unknown; groupRecords?: unknown } | undefined;
+  let recorded:
+    | { pid?: unknown; token?: unknown; groups?: unknown; groupRecords?: unknown }
+    | undefined;
   try {
-    recorded = readJson<{ pid?: unknown; token?: unknown; groups?: unknown; groupRecords?: unknown } | undefined>(
-      join(agentDir, SERVE_LOCK, MCP_GROUPS),
-      undefined,
-    );
-  } catch { return []; }
-  if (recorded?.pid !== pid || (!Array.isArray(recorded.groups) && !Array.isArray(recorded.groupRecords))) return [];
-  if (typeof recorded.token === "string" && typeof owner?.token === "string" && recorded.token !== owner.token) return [];
+    recorded = readJson<
+      { pid?: unknown; token?: unknown; groups?: unknown; groupRecords?: unknown } | undefined
+    >(join(agentDir, SERVE_LOCK, MCP_GROUPS), undefined);
+  } catch {
+    return [];
+  }
+  if (
+    recorded?.pid !== pid ||
+    (!Array.isArray(recorded.groups) && !Array.isArray(recorded.groupRecords))
+  )
+    return [];
+  if (
+    typeof recorded.token === "string" &&
+    typeof owner?.token === "string" &&
+    recorded.token !== owner.token
+  )
+    return [];
   const wanted = parseRecordedMcpGroups(recorded, pid);
   if (!wanted.length) return [];
-  const processes = listObservedProcesses({ exactStartIdForPgids: new Set(wanted.map((entry) => entry.pgid)) });
+  const processes = listObservedProcesses({
+    exactStartIdForPgids: new Set(wanted.map((entry) => entry.pgid)),
+  });
   if (!processes) return [];
   return selectDaemonMcpGroups(pid, wanted, processes, {
     daemonUid: typeof process.getuid === "function" ? process.getuid() : undefined,
@@ -289,11 +321,15 @@ function processCommandLine(pid: number): string | undefined {
   try {
     const proc = `/proc/${pid}/cmdline`;
     if (existsSync(proc)) return readFileSync(proc, "utf8").replaceAll("\0", " ");
-  } catch { /* fall through to ps */ }
+  } catch {
+    /* fall through to ps */
+  }
   try {
     const out = spawnSync("ps", ["-o", "args=", "-p", String(pid)], { encoding: "utf8" });
     if (out.status === 0 && out.stdout) return out.stdout;
-  } catch { /* ps unavailable */ }
+  } catch {
+    /* ps unavailable */
+  }
   return undefined;
 }
 
@@ -308,13 +344,21 @@ function cliEntryCandidates(): string[] {
   if (argv1) {
     const resolved = resolve(argv1);
     candidates.add(resolved);
-    try { candidates.add(realpathSync(resolved)); } catch { /* keep resolved */ }
+    try {
+      candidates.add(realpathSync(resolved));
+    } catch {
+      /* keep resolved */
+    }
     // A process launched with a relative entry (e.g. `node --test
     // tests/x.mjs`) shows the relative spelling in its cmdline.
     const relativeEntry = relative(process.cwd(), resolved);
     if (relativeEntry && !relativeEntry.startsWith("..") && relativeEntry !== resolved) {
       candidates.add(relativeEntry);
-      try { candidates.add(relative(process.cwd(), realpathSync(resolved))); } catch { /* keep */ }
+      try {
+        candidates.add(relative(process.cwd(), realpathSync(resolved)));
+      } catch {
+        /* keep */
+      }
     }
   }
   return [...candidates];
@@ -360,34 +404,51 @@ function classifyPid(pid: number, owner?: ServeOwner): ServeProcessClass {
   // happens to have `cli.js serve` among its arguments is not ours.
   const argv0 = command.split(/\s/, 1)[0] ?? "";
   const runtimeArgv0 = RUNTIME_ARGV0.test(argv0);
-  const matches = (suffix: string): boolean => candidates.some((candidate) => {
-    const found = command.match(new RegExp(`(?:^|\\s)${escapeRegExp(candidate)}${suffix}`));
-    return !!found && (found.index === 0 || runtimeArgv0);
-  });
+  const matches = (suffix: string): boolean =>
+    candidates.some((candidate) => {
+      const found = command.match(new RegExp(`(?:^|\\s)${escapeRegExp(candidate)}${suffix}`));
+      return !!found && (found.index === 0 || runtimeArgv0);
+    });
   if (matches("\\s+serve(?:\\s|$)")) return "daemon";
   return matches("(?:\\s|$)") ? "aiden" : "foreign";
 }
 
 function sameOwner(current: ServeOwner | undefined, expected: ServeOwner): boolean {
-  return current?.pid === expected.pid && current?.startedAt === expected.startedAt &&
-    current?.token === expected.token && current?.protocol === expected.protocol;
+  return (
+    current?.pid === expected.pid &&
+    current?.startedAt === expected.startedAt &&
+    current?.token === expected.token &&
+    current?.protocol === expected.protocol
+  );
 }
 
 /** Cleanup owns the same permanent guard as the daemon. Re-evaluate after taking it. */
 function clearServeArtifacts(agentDir: string, expected?: ServeOwner): boolean {
   ensurePrivateDirectory(agentDir, "reject");
   const lock = join(agentDir, SERVE_LOCK);
-  const release = tryAcquireProcessLifetimeLock(leaseGuardPath(join(agentDir, "serve")), cliLeaseHelperPath());
+  const release = tryAcquireProcessLifetimeLock(
+    leaseGuardPath(join(agentDir, "serve")),
+    cliLeaseHelperPath(),
+  );
   if (!release) return false;
   try {
     const current = serveOwner(agentDir);
     if (expected && !sameOwner(current, expected)) return false;
-    if (current && current.protocol !== "flock-v1" && validPid(current.pid) && pidAlive(current.pid) && classifyPid(current.pid, current) !== "foreign") return false;
+    if (
+      current &&
+      current.protocol !== "flock-v1" &&
+      validPid(current.pid) &&
+      pidAlive(current.pid) &&
+      classifyPid(current.pid, current) !== "foreign"
+    )
+      return false;
     if (!existsSync(lock)) return false;
     rmSync(lock, { recursive: true, force: true });
     rmSync(daemonSocket(agentDir), { force: true });
     return true;
-  } finally { release(); }
+  } finally {
+    release();
+  }
 }
 
 /**
@@ -402,13 +463,18 @@ export function recoverStaleServeLease(agentDir: string): boolean {
   return clearServeArtifacts(agentDir);
 }
 
-export function daemonStatus(agentDir: string): { running: boolean; pid?: number; startedAt?: number; socket: string; log: string } {
+export function daemonStatus(agentDir: string): {
+  running: boolean;
+  pid?: number;
+  startedAt?: number;
+  socket: string;
+  log: string;
+} {
   recoverStaleServeLease(agentDir);
   const owner = serveOwner(agentDir);
   const socket = daemonSocket(agentDir);
-  const klass = owner && validPid(owner.pid) && pidAlive(owner.pid)
-    ? classifyPid(owner.pid, owner)
-    : undefined;
+  const klass =
+    owner && validPid(owner.pid) && pidAlive(owner.pid) ? classifyPid(owner.pid, owner) : undefined;
   const running = !!klass && klass !== "foreign" && klass !== "aiden" && existsSync(socket);
   return {
     running,
@@ -419,26 +485,53 @@ export function daemonStatus(agentDir: string): { running: boolean; pid?: number
   };
 }
 
-async function waitForSocket(agentDir: string, child: Pick<ChildProcess, "pid" | "exitCode" | "once">, timeoutMs: number): Promise<void> {
+async function waitForSocket(
+  agentDir: string,
+  child: Pick<ChildProcess, "pid" | "exitCode" | "once">,
+  timeoutMs: number,
+): Promise<void> {
   const socket = daemonSocket(agentDir);
   const deadline = Date.now() + timeoutMs;
   let exited = false;
-  child.once("exit", () => { exited = true; });
+  child.once("exit", () => {
+    exited = true;
+  });
   // A spawn 'error' without 'exit' must not burn the whole timeout.
-  child.once("error", () => { exited = true; });
+  child.once("error", () => {
+    exited = true;
+  });
   while (Date.now() < deadline) {
     if (exited || child.exitCode !== null) {
-      throw new Error(`The daemon exited during startup (code ${child.exitCode ?? "unknown"}). See ${join(agentDir, SERVE_LOG)}.`);
+      throw new Error(
+        `The daemon exited during startup (code ${child.exitCode ?? "unknown"}). See ${join(agentDir, SERVE_LOG)}.`,
+      );
     }
-    if (existsSync(socket) && serveOwner(agentDir)?.pid === child.pid && await new Promise<boolean>((resolveReady) => {
-      const connection = createConnection(socket);
-      const timer = setTimeout(() => { connection.destroy(); resolveReady(false); }, 250);
-      connection.once("connect", () => { clearTimeout(timer); connection.destroy(); resolveReady(true); });
-      connection.once("error", () => { clearTimeout(timer); resolveReady(false); });
-    })) return;
+    if (
+      existsSync(socket) &&
+      serveOwner(agentDir)?.pid === child.pid &&
+      (await new Promise<boolean>((resolveReady) => {
+        const connection = createConnection(socket);
+        const timer = setTimeout(() => {
+          connection.destroy();
+          resolveReady(false);
+        }, 250);
+        connection.once("connect", () => {
+          clearTimeout(timer);
+          connection.destroy();
+          resolveReady(true);
+        });
+        connection.once("error", () => {
+          clearTimeout(timer);
+          resolveReady(false);
+        });
+      }))
+    )
+      return;
     await new Promise((resolveWait) => setTimeout(resolveWait, 150));
   }
-  throw new Error(`The daemon did not open its control socket within ${Math.round(timeoutMs / 1000)}s. See ${join(agentDir, SERVE_LOG)}.`);
+  throw new Error(
+    `The daemon did not open its control socket within ${Math.round(timeoutMs / 1000)}s. See ${join(agentDir, SERVE_LOG)}.`,
+  );
 }
 
 /**
@@ -460,11 +553,16 @@ function acquireStartLease(agentDir: string): () => void {
  * Spawn `aiden serve` detached and wait for its control socket. Remote is on
  * unless `remote` is false; the child never opens a startup pairing window.
  */
-export async function startDaemon(agentDir: string, options: { remote?: boolean; timeoutMs?: number } = {}): Promise<{ pid: number; log: string }> {
+export async function startDaemon(
+  agentDir: string,
+  options: { remote?: boolean; timeoutMs?: number } = {},
+): Promise<{ pid: number; log: string }> {
   // The control socket is a filesystem path — on Windows it becomes a named
   // pipe with no file, so readiness polling and PID classification cannot work.
   if (process.platform === "win32") {
-    throw new Error("`aiden serve --daemon` is not supported on Windows; run `aiden serve` in the foreground instead.");
+    throw new Error(
+      "`aiden serve --daemon` is not supported on Windows; run `aiden serve` in the foreground instead.",
+    );
   }
   ensurePrivateDirectory(agentDir, "reject");
   const releaseStart = acquireStartLease(agentDir);
@@ -473,19 +571,30 @@ export async function startDaemon(agentDir: string, options: { remote?: boolean;
     if (daemonStatus(agentDir).running) throw new Error("The Aiden daemon is already running.");
     // The child removes a leftover socket after it acquires the serve lease.
     const entry = process.argv[1];
-    if (!entry) throw new Error("Cannot determine the Aiden CLI entry point for a background daemon.");
+    if (!entry)
+      throw new Error("Cannot determine the Aiden CLI entry point for a background daemon.");
     const log = join(agentDir, SERVE_LOG);
     hardenPrivateFile(log);
     const logFd = openSync(log, "a", 0o600);
     let child: ChildProcess;
     try {
-      child = spawn(process.execPath, [
-        ...(entry.endsWith(".ts") || entry.endsWith(".mts") ? ["--experimental-strip-types"] : []),
-        resolve(entry),
-        "serve",
-        ...(options.remote === false ? ["--no-remote"] : []),
-        "--no-pair",
-      ], { detached: true, stdio: ["ignore", logFd, logFd], env: { ...process.env, [DETACHED_SERVE_ENV]: "1" } });
+      child = spawn(
+        process.execPath,
+        [
+          ...(entry.endsWith(".ts") || entry.endsWith(".mts")
+            ? ["--experimental-strip-types"]
+            : []),
+          resolve(entry),
+          "serve",
+          ...(options.remote === false ? ["--no-remote"] : []),
+          "--no-pair",
+        ],
+        {
+          detached: true,
+          stdio: ["ignore", logFd, logFd],
+          env: { ...process.env, [DETACHED_SERVE_ENV]: "1" },
+        },
+      );
     } catch (error) {
       closeSync(logFd);
       throw error;
@@ -499,8 +608,15 @@ export async function startDaemon(agentDir: string, options: { remote?: boolean;
     // The child is detached (its own process group) — signal the group so
     // early-spawned grandchildren (workers, MCP servers) are not orphaned.
     const killTree = (signal: "SIGTERM" | "SIGKILL"): void => {
-      try { process.kill(-childPid, signal); }
-      catch { try { child.kill(signal); } catch { /* already gone */ } }
+      try {
+        process.kill(-childPid, signal);
+      } catch {
+        try {
+          child.kill(signal);
+        } catch {
+          /* already gone */
+        }
+      }
     };
     try {
       await waitForSocket(agentDir, child, options.timeoutMs ?? 20_000);
@@ -525,7 +641,10 @@ export async function startDaemon(agentDir: string, options: { remote?: boolean;
  * the wait is stuck: it is then SIGKILLed, with its process group when
  * startDaemon spawned it detached, and with its recorded stdio MCP server groups.
  */
-export async function stopDaemon(agentDir: string, timeoutMs = 15_000): Promise<{ stopped: boolean; pid?: number; forced?: true }> {
+export async function stopDaemon(
+  agentDir: string,
+  timeoutMs = 15_000,
+): Promise<{ stopped: boolean; pid?: number; forced?: true }> {
   recoverStaleServeLease(agentDir);
   const owner = serveOwner(agentDir);
   if (!owner || !validPid(owner.pid)) {
@@ -538,13 +657,17 @@ export async function stopDaemon(agentDir: string, timeoutMs = 15_000): Promise<
     case "clear_stale":
       // A dead owner, or a PID recycled by an unrelated process that is never signalled.
       clearServeArtifacts(agentDir, owner);
-      throw new Error(`The Aiden daemon was not running; cleared the stale lock left by PID ${pid}.`);
+      throw new Error(
+        `The Aiden daemon was not running; cleared the stale lock left by PID ${pid}.`,
+      );
     case "refuse_aiden":
-      throw new Error(`PID ${pid} is a running Aiden command, not the daemon — its lock releases when the command exits.`);
+      throw new Error(
+        `PID ${pid} is a running Aiden command, not the daemon — its lock releases when the command exits.`,
+      );
     case "refuse_unverified":
       throw new Error(
         `Cannot verify that PID ${pid} is the Aiden daemon; refusing to signal it. ` +
-        `If it is, run kill ${pid} and remove ${join(agentDir, SERVE_LOCK)}.`,
+          `If it is, run kill ${pid} and remove ${join(agentDir, SERVE_LOCK)}.`,
       );
     case "signal":
   }
@@ -561,7 +684,8 @@ export async function stopDaemon(agentDir: string, timeoutMs = 15_000): Promise<
   const deadline = Date.now() + timeoutMs;
   let polls = 0;
   while (Date.now() < deadline) {
-    if (!existsSync(join(agentDir, SERVE_LOCK)) && !existsSync(daemonSocket(agentDir))) return { stopped: true, pid };
+    if (!existsSync(join(agentDir, SERVE_LOCK)) && !existsSync(daemonSocket(agentDir)))
+      return { stopped: true, pid };
     if (!sameOwner(serveOwner(agentDir), owner)) return { stopped: true, pid };
     if (!pidAlive(pid) || (polls % 10 === 9 && classifyPid(pid, owner) === "foreign")) {
       clearServeArtifacts(agentDir, owner);
@@ -579,7 +703,9 @@ export async function stopDaemon(agentDir: string, timeoutMs = 15_000): Promise<
   }
   if (atDeadline === "unconfirmed") {
     // The PID is alive but cannot be shown to be this daemon, so nothing may suggest signalling it.
-    throw new Error(`Could not confirm that PID ${pid} is still the Aiden daemon ${Math.round(timeoutMs / 1000)}s after asking it to stop. Check what that process is before acting on it; its lock stays at ${join(agentDir, SERVE_LOCK)}.`);
+    throw new Error(
+      `Could not confirm that PID ${pid} is still the Aiden daemon ${Math.round(timeoutMs / 1000)}s after asking it to stop. Check what that process is before acting on it; its lock stays at ${join(agentDir, SERVE_LOCK)}.`,
+    );
   }
   if (atDeadline === "force") {
     // A background daemon leads its own process group; killing the group also
@@ -589,14 +715,27 @@ export async function stopDaemon(agentDir: string, timeoutMs = 15_000): Promise<
     // a group of their own, which the daemon recorded, and are killed as well.
     const mcpGroups = daemonMcpGroups(agentDir, pid, owner);
     const ownGroup = owner.detached === true && processGroupId(pid) === pid;
-    try { process.kill(ownGroup ? -pid : pid, "SIGKILL"); } catch { /* already gone */ }
-    for (const group of mcpGroups) { try { process.kill(-group, "SIGKILL"); } catch { /* already gone */ } }
+    try {
+      process.kill(ownGroup ? -pid : pid, "SIGKILL");
+    } catch {
+      /* already gone */
+    }
+    for (const group of mcpGroups) {
+      try {
+        process.kill(-group, "SIGKILL");
+      } catch {
+        /* already gone */
+      }
+    }
     const killDeadline = Date.now() + 5_000;
-    while (pidAlive(pid) && Date.now() < killDeadline) await new Promise((resolveWait) => setTimeout(resolveWait, 50));
+    while (pidAlive(pid) && Date.now() < killDeadline)
+      await new Promise((resolveWait) => setTimeout(resolveWait, 50));
   }
   if (!pidAlive(pid)) {
     clearServeArtifacts(agentDir, owner);
     return { stopped: true, pid, forced: true };
   }
-  throw new Error(`The Aiden daemon (PID ${pid}) did not stop within ${Math.round(timeoutMs / 1000)}s — try kill -9 ${pid} and remove ${join(agentDir, SERVE_LOCK)}.`);
+  throw new Error(
+    `The Aiden daemon (PID ${pid}) did not stop within ${Math.round(timeoutMs / 1000)}s — try kill -9 ${pid} and remove ${join(agentDir, SERVE_LOCK)}.`,
+  );
 }
